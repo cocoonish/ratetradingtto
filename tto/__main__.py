@@ -29,7 +29,8 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--tick", type=float, default=2.0, help="canlı veride ekran yenileme aralığı (sn)")
     p.add_argument("--locale", choices=("tr", "en"), default="tr", help="varsayılan sayı biçimi")
     p.add_argument("--no-stream", action="store_true", help="fiyat alanlarını abonelik yerine sorguyla güncelle")
-    p.add_argument("--price-poll", type=float, default=30.0, help="abonelikle gelmeyen fiyatların sorgu aralığı (sn)")
+    p.add_argument("--price-poll", type=float, default=120.0,
+                   help="abonelikle gelmeyen fiyat alanlarının sorgu aralığı (sn); küçültmek günlük veri limitini tüketir")
     p.add_argument("--bfx", choices=("off", "approx"), default="off",
                    help="BFXFORWARD: off = #N/A (API karşılığı yok), approx = FWD_CURVE'den yaklaşık hesap")
     p.add_argument("--max-hits", type=int, default=400000, help="günlük referans/geçmiş veri isteği üst sınırı (0 = sınırsız)")

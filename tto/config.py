@@ -16,7 +16,7 @@ class Settings(object):
                  mode: str = "auto", bbg_host: str = "localhost", bbg_port: int = 8194,
                  tick_seconds: float = 2.0, locale: str = "tr", models_dir: Optional[str] = None,
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
-                 bbg_price_poll: float = 30.0):
+                 bbg_price_poll: float = 120.0):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")

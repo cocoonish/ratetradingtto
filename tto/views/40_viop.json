@@ -22,17 +22,17 @@
   },
   {
    "range": "AA9",
-   "scope": "user",
-   "group": "viop-2",
+   "scope": "shared",
+   "group": "manual-spot",
    "kind": "auto",
-   "label": "'Manuel SP' Bid — manual USDTRY spot bid"
+   "label": "Manuel spot bid (boş = Bloomberg)"
   },
   {
    "range": "AA10",
-   "scope": "user",
-   "group": "viop-3",
+   "scope": "shared",
+   "group": "manual-spot",
    "kind": "auto",
-   "label": "'Manuel SP' Ask — manual USDTRY spot ask"
+   "label": "Manuel spot ask (boş = Bloomberg)"
   },
   {
    "range": "C16:C35",

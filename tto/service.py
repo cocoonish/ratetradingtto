@@ -346,7 +346,12 @@ class Service(object):
         today = None
         if tto is not None:
             today = serial_to_date(tto.engine.clock.today()).isoformat()
+        ret = None
+        if tto is not None:
+            cells = ["Forward!%s%d" % (col, RET_FIRST_ROW + i) for i in range(len(RET_TENORS)) for col in ("W", "X")]
+            ret = self.store.shared_meta("tto", cells)
         return {"mode": self.mode, "note": self.mode_note, "provider": prov, "gen": self.gen, "today": today,
+                "ret": ret, "server_date": _dt.date.today().isoformat(),
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
                                 "source": b.model.meta.get("source")} for bid, b in self.books.items()},
                 "port": self.settings.port}

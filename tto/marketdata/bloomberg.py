@@ -1,4 +1,6 @@
-"""Live market data through the Bloomberg API (``blpapi``) - Desktop API (terminal) or B-PIPE / SAPI.
+"""Live market data through the Bloomberg Desktop API (``blpapi`` talking to the terminal on this machine,
+``localhost:8194``).  Server-side products (B-PIPE / SAPI) need an authorisation step that is not
+implemented here.
 
 What the workbook asks for                       how it is served
 -----------------------------------------------  ------------------------------------------------------------
@@ -91,7 +93,7 @@ class _Sub(object):
 class BloombergProvider(Provider):
     live = True
 
-    def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 30.0,
+    def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 120.0,
                  request_timeout: float = 45.0, max_hits_per_day: int = 400000, bfx: str = "off",
                  blpapi_module=None, reconnect_wait: float = 10.0):
         self.host = host

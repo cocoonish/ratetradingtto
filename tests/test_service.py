@@ -205,6 +205,7 @@ def test_ret_curve_is_shared_logged_and_survives_a_restart(tmp_path):
     try:
         a, b = login(svc, "RET A"), login(svc, "RET B")
         base = svc.ret()
+        assert svc.status()["ret"] is None                       # nothing loaded yet: the UI warns
         assert [r["tenor"] for r in base["rows"]] == ["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
         assert base["meta"] is None and svc.ret_history() == []
         fwd_before = cell(svc, "Forward!D33", b)
@@ -223,6 +224,8 @@ def test_ret_curve_is_shared_logged_and_survives_a_restart(tmp_path):
         assert svc.cell_info(b, "tto", "Forward!W38")["cell"]["i"] == "s"
         meta = svc.ret()["meta"]
         assert meta["updated_by"] == a
+        st = svc.status()
+        assert st["ret"]["updated_by"] == a and st["ret"]["updated_at"][:10] == st["server_date"]      # loaded today
         hist = svc.ret_history()
         assert len(hist) == 1 and hist[0]["user"] == a
         assert {r["tenor"]: r for r in hist[0]["rows"]}["1M"]["bid"] == pytest.approx(0.34)

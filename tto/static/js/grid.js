@@ -93,6 +93,7 @@ function isHeaderRow(row) {
   for (const cell of row) {
     if (cell.sk || !cell.t) continue;
     if (cell.k !== 's' || cell.i) return false;
+    if (cell.c || (cell.f && cell.f !== 'hd' && cell.f !== 'sub')) return false;      // status colours are data
     n += 1;
     if (cell.b || cell.f === 'hd') strong += 1;
   }
@@ -184,7 +185,7 @@ export class Grid {
     for (let i = 0; i < d.rows.length; i++) {
       const row = d.rows[i];
       const tr = h('tr');
-      if (headerRun && headerCount < 2 && isHeaderRow(row)) {
+      if (headerRun && headerCount < 2 && d.rows.length > 1 && isHeaderRow(row)) {
         tr.className = 'hd' + (headerCount === 1 ? ' hd2' : '');
         headerCount += 1;
       } else if (i > 0 || !this.opts.header) {

@@ -48,7 +48,7 @@ python -m tto check-bloomberg
 | `python -m tto --mode replay` | Bloomberg'e hiç dokunmaz; Excel dosyasındaki son kayıtlı piyasa verisi (değerleme tarihi 03.11.2026) |
 
 Diğer seçenekler: `--port 1060` (1055/1056 hariç), `--host 127.0.0.1`, `--data-dir D:\tto-data` (veritabanı klasörü),
-`--bbg-host`, `--bbg-port 8194`, `--tick 2` (ekran yenileme, sn), `--no-stream`, `--price-poll 30`, `--max-hits 400000`,
+`--bbg-host`, `--bbg-port 8194`, `--tick 2` (ekran yenileme, sn), `--no-stream`, `--price-poll 120`, `--max-hits 400000`,
 `--bfx approx`. Aynı ayarlar `TTO_PORT`, `TTO_HOST`, `TTO_MODE`, `TTO_DATA_DIR`, `TTO_BBG_HOST`, `TTO_BBG_PORT`
 ortam değişkenleriyle de verilebilir.
 
@@ -142,6 +142,10 @@ uzaktadır).
 | `BFXFORWARD` | **API karşılığı yok** → `#N/A BFXFORWARD` (aşağıya bakın) |
 | `RtGet` (Refinitiv) | Bloomberg fonksiyonu değil → `#N/A RTGET` |
 
+Bağlantı **Desktop API** içindir (terminalin açık olduğu makinede `localhost:8194`); B-PIPE / SAPI gibi sunucu
+ürünlerinin yetkilendirme adımı yazılmadı. Abonelikle hiç değer gelmeyen fiyat alanları (ör. işlem görmeyen bir
+kağıt) `--price-poll` (120 sn) arayla sorgulanır.
+
 Henüz gelmemiş bir değer Excel'deki gibi `#N/A Requesting Data...` görünür, yanıt gelince bağlı hücreler yeniden
 hesaplanır. Sunucu açılırken kitapların kullandığı tüm kalemler önceden istenir (~1.000 kalem, birkaç saniye).
 BDP tarihleri masadaki Excel'de olduğu gibi `4.11.2026` biçiminde metin olarak döner. Günlük referans/geçmiş veri
@@ -153,6 +157,15 @@ rozet uyarır. Bağlantı koparsa otomatik yeniden bağlanılır.
 > canlı kullanımdan önce `python -m tto check-bloomberg` çalıştırın ve birkaç hücreyi Excel'le karşılaştırın.
 
 ---
+
+## Canlıya geçmeden önce
+
+* **Manuel spot:** kaydedilmiş dosyada VİOP sayfasındaki "Manuel SP" hücreleri dolu (üst şeritte *Spot kaynağı:
+  MANUEL* yazar). Bloomberg spotunu kullanmak için VİOP sayfasında bu iki hücreyi (`AA9`, `AA10`) silin; hücreler
+  ortak girdidir, bir kişinin silmesi yeter.
+* **RET faizleri:** dosyadaki RET eğrisi 03.11.2026 tarihlidir. Her gün "RET faizleri" penceresinden güncel eğriyi
+  yapıştırın; bugün yüklenmediyse düğmenin yanında sarı nokta durur.
+* `python -m tto check-bloomberg` ile bağlantıyı sınayın, ardından birkaç hücreyi Excel'le karşılaştırın.
 
 ## Bilinen sınırlamalar
 

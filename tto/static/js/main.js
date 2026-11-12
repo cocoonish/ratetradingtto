@@ -22,7 +22,7 @@ function store(key, value) {
 }
 
 const ctx = {
-  refreshNow: () => { runRefresh(); },
+  refreshNow: () => { runRefresh(); pollStatus(); },
   displayName: (key) => state.users[key] || key || '',
 };
 
@@ -217,6 +217,14 @@ function applyStatus(status) {
     badge.title = status.note || 'Excel dosyasındaki son kayıtlı piyasa verisiyle çalışıyor';
   }
   $('asof').textContent = status.today ? 'Değerleme: ' + isoToTr(status.today) : '';
+  // RET curve freshness: typed by the desk, so remind when it was not loaded today
+  const ret = status.ret;
+  const fresh = !!(ret && ret.updated_at && status.server_date && ret.updated_at.slice(0, 10) === status.server_date);
+  $('btn-ret').classList.toggle('stale', !fresh);
+  $('btn-ret').title = ret && ret.updated_at
+    ? 'RET faizleri · son yükleme ' + ret.updated_at + (ret.updated_by ? ' (' + ctx.displayName(ret.updated_by) + ')' : '')
+      + (fresh ? '' : ' – bugün güncellenmedi')
+    : 'RET faizleri bugün yüklenmedi – dosyadaki eski değerler kullanılıyor. Tıklayıp Excel\'den yapıştırın.';
   $('foot-ver').textContent = 'port ' + status.port;
   if (status.note && !state.noteShown) {
     state.noteShown = true;
