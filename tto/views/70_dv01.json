@@ -1,0 +1,355 @@
+{
+ "id": "dv01",
+ "title": "DV01 Risk",
+ "group": "Risk",
+ "book": "tto",
+ "sheet": "DV01_RISK",
+ "order": 70,
+ "inputs": [
+  {
+   "range": "C6:C25",
+   "scope": "user",
+   "group": "dv01-0",
+   "kind": "auto",
+   "label": "PASTE: bucket par DV01 (ON, SN, 1W, 2W, 3W, 1M, 2M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, 5Y, 6Y, 7Y, 8Y, 9Y, 10Y), PV change for "
+  },
+  {
+   "range": "C3",
+   "scope": "user",
+   "group": "dv01-1",
+   "kind": "auto",
+   "label": "'İşaret çarpanı' sign multiplier"
+  },
+  {
+   "range": "F3",
+   "scope": "user",
+   "group": "dv01-2",
+   "kind": "text",
+   "label": "'Paralel pivot'"
+  },
+  {
+   "range": "V3",
+   "scope": "user",
+   "group": "dv01-3",
+   "kind": "text",
+   "label": "'Carry ON (1/2)'"
+  },
+  {
+   "range": "R3",
+   "scope": "user",
+   "group": "dv01-4",
+   "kind": "auto",
+   "label": "'Ufuk 1 (gün)', 'Ufuk 2 (gün)'"
+  },
+  {
+   "range": "T3",
+   "scope": "user",
+   "group": "dv01-4",
+   "kind": "auto",
+   "label": "'Ufuk 1 (gün)', 'Ufuk 2 (gün)'"
+  },
+  {
+   "range": "K6:K25",
+   "scope": "user",
+   "group": "dv01-5",
+   "kind": "text",
+   "label": "'Pivot (1/0)'"
+  },
+  {
+   "range": "Q6:Q25",
+   "scope": "user",
+   "group": "dv01-6",
+   "kind": "pct",
+   "label": "'Sabit faiz (ops.)' position fixed rate"
+  },
+  {
+   "range": "H6:H25",
+   "scope": "user",
+   "group": "dv01-7",
+   "kind": "auto",
+   "label": "bucket tenor months / type"
+  },
+  {
+   "range": "I6:I25",
+   "scope": "user",
+   "group": "dv01-7",
+   "kind": "auto",
+   "label": "bucket tenor months / type"
+  },
+  {
+   "range": "X33:Y52",
+   "scope": "user",
+   "group": "dv01-8",
+   "kind": "auto",
+   "label": "scratch paste 'Onshore' / 'TLREF'"
+  },
+  {
+   "range": "D69",
+   "scope": "user",
+   "group": "dv01-9",
+   "kind": "auto",
+   "label": "'Tek toplantı sürprizi' — MPC no"
+  },
+  {
+   "range": "E69",
+   "scope": "user",
+   "group": "dv01-10",
+   "kind": "auto",
+   "label": "surprise on top of implied"
+  },
+  {
+   "range": "E70",
+   "scope": "user",
+   "group": "dv01-11",
+   "kind": "auto",
+   "label": "TLREF fixing deviation"
+  },
+  {
+   "range": "E71",
+   "scope": "user",
+   "group": "dv01-12",
+   "kind": "auto",
+   "label": "parallel par shock"
+  },
+  {
+   "range": "C74:V74",
+   "scope": "user",
+   "group": "dv01-13",
+   "kind": "auto",
+   "label": "'Paralel +10' preset shock row"
+  },
+  {
+   "range": "C79:V79",
+   "scope": "user",
+   "group": "dv01-14",
+   "kind": "auto",
+   "label": "'Kullanıcı 1', 'Kullanıcı 2' shock rows"
+  },
+  {
+   "range": "C80:V80",
+   "scope": "user",
+   "group": "dv01-14",
+   "kind": "auto",
+   "label": "'Kullanıcı 1', 'Kullanıcı 2' shock rows"
+  },
+  {
+   "range": "C75:V78",
+   "scope": "user",
+   "group": "dv01-15",
+   "kind": "auto",
+   "label": "preset shaped shocks (formulas in input-styled cells)"
+  },
+  {
+   "range": "C85",
+   "scope": "user",
+   "group": "dv01-16",
+   "kind": "auto",
+   "label": "'Öncelikli dönem sayısı'"
+  },
+  {
+   "range": "E85",
+   "scope": "user",
+   "group": "dv01-17",
+   "kind": "auto",
+   "label": "'Öncelik ağırlığı'"
+  },
+  {
+   "range": "G85",
+   "scope": "user",
+   "group": "dv01-18",
+   "kind": "auto",
+   "label": "'Ridge'"
+  },
+  {
+   "range": "C88:C102",
+   "scope": "user",
+   "group": "dv01-19",
+   "kind": "text",
+   "label": "'Aktif (1/0)' per hedge instrument"
+  },
+  {
+   "range": "B88:B102",
+   "scope": "user",
+   "group": "dv01-20",
+   "kind": "text",
+   "label": "instrument names"
+  },
+  {
+   "range": "D88:D102",
+   "scope": "user",
+   "group": "dv01-21",
+   "kind": "auto",
+   "label": "instrument start / end month"
+  },
+  {
+   "range": "E88:E102",
+   "scope": "user",
+   "group": "dv01-21",
+   "kind": "auto",
+   "label": "instrument start / end month"
+  },
+  {
+   "range": "C112",
+   "scope": "user",
+   "group": "dv01-22",
+   "kind": "date",
+   "label": "'Dünkü tarih'"
+  },
+  {
+   "range": "I112",
+   "scope": "user",
+   "group": "dv01-23",
+   "kind": "pct",
+   "label": "'TLREF dün (manuel)'"
+  },
+  {
+   "range": "F120:F134",
+   "scope": "user",
+   "group": "dv01-24",
+   "kind": "pct",
+   "label": "'Dün (manuel)' yesterday quote 1M…10Y"
+  },
+  {
+   "range": "C140",
+   "scope": "user",
+   "group": "dv01-25",
+   "kind": "auto",
+   "label": "'Murex P&L'"
+  },
+  {
+   "range": "C141",
+   "scope": "user",
+   "group": "dv01-26",
+   "kind": "auto",
+   "label": "'Yeni işlem / day-1 P&L'"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "notes",
+   "title": "TRY DV01 ayrıştırma",
+   "range": "B1:B2",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Parameter strip",
+   "range": "B3:Y4",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Bucket DV01 table (paste area + pivot / spread decomposition)",
+   "range": "B5:O26",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "Carry / roll-down per bucket",
+   "range": "Q5:Y27",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "Yardımcı hesaplar' (per-bucket helper columns)",
+   "range": "Z5:AH25",
+   "hidden": true
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "Factor header + par→overnight-forward Jacobian (\"key-rate transform\")",
+   "range": "AI1:EA25",
+   "hidden": false
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "Özet",
+   "range": "B28:C35",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "Unlabelled side table 'Onshore' / 'TLREF' / 'Toplam",
+   "range": "W32:Z52",
+   "hidden": true
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "MPC decision-risk table",
+   "range": "B37:L63",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "FRA-window risk table",
+   "range": "N37:T53",
+   "hidden": false
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "Senaryo P&L",
+   "range": "B65:F71",
+   "hidden": false
+  },
+  {
+   "id": "B12",
+   "type": "table",
+   "title": "Scenario deviation rows (helper for C66:C68)",
+   "range": "AI66:DL68",
+   "hidden": true
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "Eğri şokları (bp)",
+   "range": "B73:W81",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "Hedge önerici",
+   "range": "B84:O102",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "Hedge helper matrices",
+   "range": "AF88:AH102",
+   "hidden": true
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "Hedge etkisi",
+   "range": "B104:D108",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "Günlük P&L açıklaması",
+   "range": "B111:I134",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "P&L özeti",
+   "range": "B136:D143",
+   "hidden": false
+  }
+ ]
+}

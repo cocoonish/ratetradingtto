@@ -1,0 +1,194 @@
+{
+ "id": "manuel",
+ "title": "Manuel Tahvil",
+ "group": "Tahvil",
+ "book": "tto",
+ "sheet": "Manuel Tahvil",
+ "order": 62,
+ "inputs": [
+  {
+   "range": "B3",
+   "scope": "user",
+   "group": "manuel-0",
+   "kind": "date",
+   "label": "'Valör' – value/settlement date"
+  },
+  {
+   "range": "B7",
+   "scope": "user",
+   "group": "manuel-1",
+   "kind": "date",
+   "label": "'Vade' – maturity"
+  },
+  {
+   "range": "B8",
+   "scope": "user",
+   "group": "manuel-2",
+   "kind": "auto",
+   "label": "'Kupon frekansı (yılda)'"
+  },
+  {
+   "range": "B10",
+   "scope": "user",
+   "group": "manuel-3",
+   "kind": "text",
+   "label": "'Varsayılan tip (S / D)'"
+  },
+  {
+   "range": "B11",
+   "scope": "user",
+   "group": "manuel-4",
+   "kind": "number",
+   "label": "'Varsayılan sabit kupon (yıllık %)'"
+  },
+  {
+   "range": "B12",
+   "scope": "user",
+   "group": "manuel-5",
+   "kind": "number",
+   "label": "'Varsayılan ek getiri (dönemsel %)'"
+  },
+  {
+   "range": "B13",
+   "scope": "user",
+   "group": "manuel-6",
+   "kind": "auto",
+   "label": "'TLREF gecikme (iş günü)'"
+  },
+  {
+   "range": "B14",
+   "scope": "user",
+   "group": "manuel-7",
+   "kind": "auto",
+   "label": "'Temiz fiyat' – clean price"
+  },
+  {
+   "range": "B15",
+   "scope": "user",
+   "group": "manuel-8",
+   "kind": "number",
+   "label": "'Cari dönem gerçekleşen endeks getirisi (%)'"
+  },
+  {
+   "range": "B16",
+   "scope": "user",
+   "group": "manuel-9",
+   "kind": "auto",
+   "label": "'İşlemiş faiz (manuel)'"
+  },
+  {
+   "range": "I8",
+   "scope": "user",
+   "group": "manuel-10",
+   "kind": "auto",
+   "label": "'Hedef DM (bp) – LT sütunu için'"
+  },
+  {
+   "range": "I10",
+   "scope": "user",
+   "group": "manuel-11",
+   "kind": "number",
+   "label": "target 'BIST basit getiri (%)'"
+  },
+  {
+   "range": "I11",
+   "scope": "user",
+   "group": "manuel-12",
+   "kind": "auto",
+   "label": "target 'ASW (bp)'"
+  },
+  {
+   "range": "I12",
+   "scope": "user",
+   "group": "manuel-13",
+   "kind": "auto",
+   "label": "target 'Z-spread (bp)'"
+  },
+  {
+   "range": "H24:H63",
+   "scope": "user",
+   "group": "manuel-14",
+   "kind": "number",
+   "label": "'Bilinen kupon (dönemsel %)' per period"
+  },
+  {
+   "range": "B24:C63",
+   "scope": "user",
+   "group": "manuel-15",
+   "kind": "date",
+   "label": "period start / payment date override"
+  },
+  {
+   "range": "D24:D63",
+   "scope": "user",
+   "group": "manuel-16",
+   "kind": "text",
+   "label": "'Tip (S/D)' per period override"
+  },
+  {
+   "range": "E24:G63",
+   "scope": "user",
+   "group": "manuel-17",
+   "kind": "auto",
+   "label": "fixed coupon / spread / principal per period override"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "notes",
+   "title": "MANUEL TAHVİL FİYATLAMA – sabit / TLREF değişken / karma kupon (her dönem S veya D), BIST getiri, OIS ASW / Z ",
+   "range": "A1",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Girdiler",
+   "range": "A2:C16",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Sonuç",
+   "range": "E2:F16",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "Ek sonuçlar",
+   "range": "H2:I8",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "Hedef → temiz fiyat",
+   "range": "H9:J13",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "Ara hesap",
+   "range": "AI17:AJ38",
+   "hidden": true
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "Dönem tablosu' (period table)",
+   "range": "A22",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "notes",
+   "title": "Method notes",
+   "range": "A65:A66",
+   "hidden": false
+  }
+ ]
+}

@@ -1,0 +1,1258 @@
+{
+ "id": "calc",
+ "title": "Hesaplayıcılar",
+ "group": "Araçlar",
+ "book": "tto",
+ "sheet": "Calculators",
+ "order": 90,
+ "inputs": [
+  {
+   "range": "AA3",
+   "scope": "user",
+   "group": "calc-0",
+   "kind": "date",
+   "label": "master 'Start Date' (top band)"
+  },
+  {
+   "range": "AA4",
+   "scope": "user",
+   "group": "calc-1",
+   "kind": "date",
+   "label": "master 'End Date' (top band)"
+  },
+  {
+   "range": "AA9",
+   "scope": "user",
+   "group": "calc-2",
+   "kind": "auto",
+   "label": "master 'Spot'"
+  },
+  {
+   "range": "AA10",
+   "scope": "user",
+   "group": "calc-3",
+   "kind": "auto",
+   "label": "master 'Forward' (outright)"
+  },
+  {
+   "range": "C7",
+   "scope": "user",
+   "group": "calc-4",
+   "kind": "number",
+   "label": "B1 USD / TRY rate"
+  },
+  {
+   "range": "C8",
+   "scope": "user",
+   "group": "calc-4",
+   "kind": "number",
+   "label": "B1 USD / TRY rate"
+  },
+  {
+   "range": "C12",
+   "scope": "user",
+   "group": "calc-5",
+   "kind": "number",
+   "label": "B1 'Margining'"
+  },
+  {
+   "range": "C14",
+   "scope": "user",
+   "group": "calc-6",
+   "kind": "auto",
+   "label": "B1 '360/365'"
+  },
+  {
+   "range": "F7",
+   "scope": "user",
+   "group": "calc-7",
+   "kind": "number",
+   "label": "B2 USD rate"
+  },
+  {
+   "range": "F9",
+   "scope": "user",
+   "group": "calc-8",
+   "kind": "auto",
+   "label": "B2 'SP'"
+  },
+  {
+   "range": "F12",
+   "scope": "user",
+   "group": "calc-9",
+   "kind": "number",
+   "label": "B2 'Margining'"
+  },
+  {
+   "range": "F14",
+   "scope": "user",
+   "group": "calc-10",
+   "kind": "auto",
+   "label": "B2 '360/365'"
+  },
+  {
+   "range": "I6",
+   "scope": "user",
+   "group": "calc-11",
+   "kind": "auto",
+   "label": "B3 'Spot'"
+  },
+  {
+   "range": "I7",
+   "scope": "user",
+   "group": "calc-12",
+   "kind": "number",
+   "label": "B3 EUR / TRY rate"
+  },
+  {
+   "range": "I8",
+   "scope": "user",
+   "group": "calc-12",
+   "kind": "number",
+   "label": "B3 EUR / TRY rate"
+  },
+  {
+   "range": "I12",
+   "scope": "user",
+   "group": "calc-13",
+   "kind": "number",
+   "label": "B3 'Margining'"
+  },
+  {
+   "range": "I14",
+   "scope": "user",
+   "group": "calc-14",
+   "kind": "auto",
+   "label": "B3 '360/365'"
+  },
+  {
+   "range": "L6",
+   "scope": "user",
+   "group": "calc-15",
+   "kind": "auto",
+   "label": "B4 'Spot'"
+  },
+  {
+   "range": "L7",
+   "scope": "user",
+   "group": "calc-16",
+   "kind": "number",
+   "label": "B4 EUR rate"
+  },
+  {
+   "range": "L9",
+   "scope": "user",
+   "group": "calc-17",
+   "kind": "auto",
+   "label": "B4 'SP'"
+  },
+  {
+   "range": "L12",
+   "scope": "user",
+   "group": "calc-18",
+   "kind": "number",
+   "label": "B4 'Margining'"
+  },
+  {
+   "range": "L14",
+   "scope": "user",
+   "group": "calc-19",
+   "kind": "auto",
+   "label": "B4 '360/365'"
+  },
+  {
+   "range": "O8",
+   "scope": "user",
+   "group": "calc-20",
+   "kind": "number",
+   "label": "B5 'Interest' (exponential)"
+  },
+  {
+   "range": "R9",
+   "scope": "user",
+   "group": "calc-21",
+   "kind": "auto",
+   "label": "B5 'Forward'"
+  },
+  {
+   "range": "U8",
+   "scope": "user",
+   "group": "calc-22",
+   "kind": "number",
+   "label": "B6 'Interest' (simple)"
+  },
+  {
+   "range": "X9",
+   "scope": "user",
+   "group": "calc-23",
+   "kind": "auto",
+   "label": "B6 'Forward'"
+  },
+  {
+   "range": "O12",
+   "scope": "user",
+   "group": "calc-24",
+   "kind": "number",
+   "label": "B8 'Basit', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "O13",
+   "scope": "user",
+   "group": "calc-24",
+   "kind": "number",
+   "label": "B8 'Basit', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "O14",
+   "scope": "user",
+   "group": "calc-24",
+   "kind": "number",
+   "label": "B8 'Basit', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "R12",
+   "scope": "user",
+   "group": "calc-25",
+   "kind": "number",
+   "label": "B9 'Bileşik', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "R13",
+   "scope": "user",
+   "group": "calc-25",
+   "kind": "number",
+   "label": "B9 'Bileşik', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "R14",
+   "scope": "user",
+   "group": "calc-25",
+   "kind": "number",
+   "label": "B9 'Bileşik', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "X17",
+   "scope": "user",
+   "group": "calc-26",
+   "kind": "auto",
+   "label": "B10 'Spot'"
+  },
+  {
+   "range": "X18",
+   "scope": "user",
+   "group": "calc-27",
+   "kind": "date",
+   "label": "B10 'Start', 'End'"
+  },
+  {
+   "range": "X19",
+   "scope": "user",
+   "group": "calc-27",
+   "kind": "date",
+   "label": "B10 'Start', 'End'"
+  },
+  {
+   "range": "X29",
+   "scope": "user",
+   "group": "calc-28",
+   "kind": "text",
+   "label": "B10 'B/S'"
+  },
+  {
+   "range": "X30",
+   "scope": "user",
+   "group": "calc-29",
+   "kind": "auto",
+   "label": "B10 'Tutar'"
+  },
+  {
+   "range": "C20",
+   "scope": "user",
+   "group": "calc-30",
+   "kind": "date",
+   "label": "B12 dates"
+  },
+  {
+   "range": "C21",
+   "scope": "user",
+   "group": "calc-30",
+   "kind": "date",
+   "label": "B12 dates"
+  },
+  {
+   "range": "C23",
+   "scope": "user",
+   "group": "calc-31",
+   "kind": "auto",
+   "label": "B12 'Spot'"
+  },
+  {
+   "range": "C24",
+   "scope": "user",
+   "group": "calc-32",
+   "kind": "number",
+   "label": "B12 'Base CCY', 'Other CCY' rates"
+  },
+  {
+   "range": "C25",
+   "scope": "user",
+   "group": "calc-32",
+   "kind": "number",
+   "label": "B12 'Base CCY', 'Other CCY' rates"
+  },
+  {
+   "range": "C29",
+   "scope": "user",
+   "group": "calc-33",
+   "kind": "number",
+   "label": "B12 'Margining'"
+  },
+  {
+   "range": "F20",
+   "scope": "user",
+   "group": "calc-34",
+   "kind": "date",
+   "label": "B13 dates"
+  },
+  {
+   "range": "F21",
+   "scope": "user",
+   "group": "calc-34",
+   "kind": "date",
+   "label": "B13 dates"
+  },
+  {
+   "range": "F23",
+   "scope": "user",
+   "group": "calc-35",
+   "kind": "auto",
+   "label": "B13 'Spot'"
+  },
+  {
+   "range": "F24",
+   "scope": "user",
+   "group": "calc-36",
+   "kind": "number",
+   "label": "B13 'Base CCY' rate"
+  },
+  {
+   "range": "F26",
+   "scope": "user",
+   "group": "calc-37",
+   "kind": "auto",
+   "label": "B13 'SP'"
+  },
+  {
+   "range": "F29",
+   "scope": "user",
+   "group": "calc-38",
+   "kind": "number",
+   "label": "B13 'Margining'"
+  },
+  {
+   "range": "I20",
+   "scope": "user",
+   "group": "calc-39",
+   "kind": "date",
+   "label": "B14 dates"
+  },
+  {
+   "range": "I21",
+   "scope": "user",
+   "group": "calc-39",
+   "kind": "date",
+   "label": "B14 dates"
+  },
+  {
+   "range": "I23",
+   "scope": "user",
+   "group": "calc-40",
+   "kind": "auto",
+   "label": "B14 'Spot'"
+  },
+  {
+   "range": "I24",
+   "scope": "user",
+   "group": "calc-41",
+   "kind": "number",
+   "label": "B14 'Base CCY', 'Other CCY' rates"
+  },
+  {
+   "range": "I25",
+   "scope": "user",
+   "group": "calc-41",
+   "kind": "number",
+   "label": "B14 'Base CCY', 'Other CCY' rates"
+  },
+  {
+   "range": "I29",
+   "scope": "user",
+   "group": "calc-42",
+   "kind": "number",
+   "label": "B14 'Margining'"
+  },
+  {
+   "range": "L20",
+   "scope": "user",
+   "group": "calc-43",
+   "kind": "date",
+   "label": "B15 dates"
+  },
+  {
+   "range": "L21",
+   "scope": "user",
+   "group": "calc-43",
+   "kind": "date",
+   "label": "B15 dates"
+  },
+  {
+   "range": "L23",
+   "scope": "user",
+   "group": "calc-44",
+   "kind": "auto",
+   "label": "B15 'Spot'"
+  },
+  {
+   "range": "L24",
+   "scope": "user",
+   "group": "calc-45",
+   "kind": "number",
+   "label": "B15 'Base CCY' rate"
+  },
+  {
+   "range": "L26",
+   "scope": "user",
+   "group": "calc-46",
+   "kind": "auto",
+   "label": "B15 'SP'"
+  },
+  {
+   "range": "L29",
+   "scope": "user",
+   "group": "calc-47",
+   "kind": "number",
+   "label": "B15 'Margining'"
+  },
+  {
+   "range": "O20",
+   "scope": "user",
+   "group": "calc-48",
+   "kind": "date",
+   "label": "B16 dates"
+  },
+  {
+   "range": "O21",
+   "scope": "user",
+   "group": "calc-48",
+   "kind": "date",
+   "label": "B16 dates"
+  },
+  {
+   "range": "O23",
+   "scope": "user",
+   "group": "calc-49",
+   "kind": "auto",
+   "label": "B16 'Spot'"
+  },
+  {
+   "range": "O24",
+   "scope": "user",
+   "group": "calc-50",
+   "kind": "number",
+   "label": "B16 'USD' rate"
+  },
+  {
+   "range": "O26",
+   "scope": "user",
+   "group": "calc-51",
+   "kind": "auto",
+   "label": "B16 'SP'"
+  },
+  {
+   "range": "O29",
+   "scope": "user",
+   "group": "calc-52",
+   "kind": "number",
+   "label": "B16 'Margining'"
+  },
+  {
+   "range": "R19",
+   "scope": "user",
+   "group": "calc-53",
+   "kind": "number",
+   "label": "B17 'Repo', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "R20",
+   "scope": "user",
+   "group": "calc-53",
+   "kind": "number",
+   "label": "B17 'Repo', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "R21",
+   "scope": "user",
+   "group": "calc-53",
+   "kind": "number",
+   "label": "B17 'Repo', 'Gün Basis', 'Gün'"
+  },
+  {
+   "range": "R25",
+   "scope": "user",
+   "group": "calc-54",
+   "kind": "number",
+   "label": "B18 'Gün Basis', 'Gün', 'Bileşik'"
+  },
+  {
+   "range": "R26",
+   "scope": "user",
+   "group": "calc-54",
+   "kind": "number",
+   "label": "B18 'Gün Basis', 'Gün', 'Bileşik'"
+  },
+  {
+   "range": "R27",
+   "scope": "user",
+   "group": "calc-54",
+   "kind": "number",
+   "label": "B18 'Gün Basis', 'Gün', 'Bileşik'"
+  },
+  {
+   "range": "C36",
+   "scope": "user",
+   "group": "calc-55",
+   "kind": "date",
+   "label": "B19 dates"
+  },
+  {
+   "range": "C37",
+   "scope": "user",
+   "group": "calc-55",
+   "kind": "date",
+   "label": "B19 dates"
+  },
+  {
+   "range": "C39",
+   "scope": "user",
+   "group": "calc-56",
+   "kind": "auto",
+   "label": "B19 'Spot'"
+  },
+  {
+   "range": "C40",
+   "scope": "user",
+   "group": "calc-57",
+   "kind": "number",
+   "label": "B19 'Base CCY', 'Other CCY' rates"
+  },
+  {
+   "range": "C41",
+   "scope": "user",
+   "group": "calc-57",
+   "kind": "number",
+   "label": "B19 'Base CCY', 'Other CCY' rates"
+  },
+  {
+   "range": "C45",
+   "scope": "user",
+   "group": "calc-58",
+   "kind": "number",
+   "label": "B19 'Margining'"
+  },
+  {
+   "range": "F36",
+   "scope": "user",
+   "group": "calc-59",
+   "kind": "date",
+   "label": "B20 dates"
+  },
+  {
+   "range": "F37",
+   "scope": "user",
+   "group": "calc-59",
+   "kind": "date",
+   "label": "B20 dates"
+  },
+  {
+   "range": "F39",
+   "scope": "user",
+   "group": "calc-60",
+   "kind": "auto",
+   "label": "B20 'Spot'"
+  },
+  {
+   "range": "F40",
+   "scope": "user",
+   "group": "calc-61",
+   "kind": "number",
+   "label": "B20 'USD' rate"
+  },
+  {
+   "range": "F42",
+   "scope": "user",
+   "group": "calc-62",
+   "kind": "auto",
+   "label": "B20 'SP'"
+  },
+  {
+   "range": "F45",
+   "scope": "user",
+   "group": "calc-63",
+   "kind": "number",
+   "label": "B20 'Margining'"
+  },
+  {
+   "range": "I36",
+   "scope": "user",
+   "group": "calc-64",
+   "kind": "auto",
+   "label": "B21 (duplicate of B19)"
+  },
+  {
+   "range": "I37",
+   "scope": "user",
+   "group": "calc-64",
+   "kind": "auto",
+   "label": "B21 (duplicate of B19)"
+  },
+  {
+   "range": "I39",
+   "scope": "user",
+   "group": "calc-64",
+   "kind": "auto",
+   "label": "B21 (duplicate of B19)"
+  },
+  {
+   "range": "I40",
+   "scope": "user",
+   "group": "calc-64",
+   "kind": "auto",
+   "label": "B21 (duplicate of B19)"
+  },
+  {
+   "range": "I41",
+   "scope": "user",
+   "group": "calc-64",
+   "kind": "auto",
+   "label": "B21 (duplicate of B19)"
+  },
+  {
+   "range": "I45",
+   "scope": "user",
+   "group": "calc-64",
+   "kind": "auto",
+   "label": "B21 (duplicate of B19)"
+  },
+  {
+   "range": "L36",
+   "scope": "user",
+   "group": "calc-65",
+   "kind": "auto",
+   "label": "B22 (duplicate of B20)"
+  },
+  {
+   "range": "L37",
+   "scope": "user",
+   "group": "calc-65",
+   "kind": "auto",
+   "label": "B22 (duplicate of B20)"
+  },
+  {
+   "range": "L39",
+   "scope": "user",
+   "group": "calc-65",
+   "kind": "auto",
+   "label": "B22 (duplicate of B20)"
+  },
+  {
+   "range": "L40",
+   "scope": "user",
+   "group": "calc-65",
+   "kind": "auto",
+   "label": "B22 (duplicate of B20)"
+  },
+  {
+   "range": "L42",
+   "scope": "user",
+   "group": "calc-65",
+   "kind": "auto",
+   "label": "B22 (duplicate of B20)"
+  },
+  {
+   "range": "L45",
+   "scope": "user",
+   "group": "calc-65",
+   "kind": "auto",
+   "label": "B22 (duplicate of B20)"
+  },
+  {
+   "range": "O36",
+   "scope": "user",
+   "group": "calc-66",
+   "kind": "auto",
+   "label": "B23 'Spot'"
+  },
+  {
+   "range": "O37",
+   "scope": "user",
+   "group": "calc-67",
+   "kind": "auto",
+   "label": "B23 'Gün', 'Gün Basis'"
+  },
+  {
+   "range": "O38",
+   "scope": "user",
+   "group": "calc-67",
+   "kind": "auto",
+   "label": "B23 'Gün', 'Gün Basis'"
+  },
+  {
+   "range": "O39",
+   "scope": "user",
+   "group": "calc-68",
+   "kind": "number",
+   "label": "B23 'Volatilite'"
+  },
+  {
+   "range": "R36",
+   "scope": "user",
+   "group": "calc-69",
+   "kind": "date",
+   "label": "B24 'Start', 'End'"
+  },
+  {
+   "range": "R37",
+   "scope": "user",
+   "group": "calc-69",
+   "kind": "date",
+   "label": "B24 'Start', 'End'"
+  },
+  {
+   "range": "R38",
+   "scope": "user",
+   "group": "calc-70",
+   "kind": "number",
+   "label": "B24 'DF'"
+  },
+  {
+   "range": "R41",
+   "scope": "user",
+   "group": "calc-71",
+   "kind": "auto",
+   "label": "B24 'Gün Basis'"
+  },
+  {
+   "range": "X40",
+   "scope": "user",
+   "group": "calc-72",
+   "kind": "number",
+   "label": "B25 unlabelled days / rate"
+  },
+  {
+   "range": "X41",
+   "scope": "user",
+   "group": "calc-72",
+   "kind": "number",
+   "label": "B25 unlabelled days / rate"
+  },
+  {
+   "range": "Z39:AA52",
+   "scope": "user",
+   "group": "calc-73",
+   "kind": "number",
+   "label": "B26 left 'Weighted Average' table (Amount, Rate), 14 rows"
+  },
+  {
+   "range": "AC39:AD52",
+   "scope": "user",
+   "group": "calc-74",
+   "kind": "number",
+   "label": "B26 right 'Weighted Average' table (Amount, Rate), 14 rows"
+  },
+  {
+   "range": "C53",
+   "scope": "user",
+   "group": "calc-75",
+   "kind": "date",
+   "label": "B27 'Tarih', 'Fiyat'"
+  },
+  {
+   "range": "C54",
+   "scope": "user",
+   "group": "calc-75",
+   "kind": "date",
+   "label": "B27 'Tarih', 'Fiyat'"
+  },
+  {
+   "range": "F52",
+   "scope": "user",
+   "group": "calc-76",
+   "kind": "number",
+   "label": "B28 'Start', 'End', 'Start Vol', 'End Vol'"
+  },
+  {
+   "range": "F53",
+   "scope": "user",
+   "group": "calc-76",
+   "kind": "number",
+   "label": "B28 'Start', 'End', 'Start Vol', 'End Vol'"
+  },
+  {
+   "range": "F54",
+   "scope": "user",
+   "group": "calc-76",
+   "kind": "number",
+   "label": "B28 'Start', 'End', 'Start Vol', 'End Vol'"
+  },
+  {
+   "range": "F55",
+   "scope": "user",
+   "group": "calc-76",
+   "kind": "number",
+   "label": "B28 'Start', 'End', 'Start Vol', 'End Vol'"
+  },
+  {
+   "range": "I52",
+   "scope": "user",
+   "group": "calc-77",
+   "kind": "date",
+   "label": "B29 'Valör', 'Tarih', 'Fiyat'"
+  },
+  {
+   "range": "I53",
+   "scope": "user",
+   "group": "calc-77",
+   "kind": "date",
+   "label": "B29 'Valör', 'Tarih', 'Fiyat'"
+  },
+  {
+   "range": "I54",
+   "scope": "user",
+   "group": "calc-77",
+   "kind": "date",
+   "label": "B29 'Valör', 'Tarih', 'Fiyat'"
+  },
+  {
+   "range": "L52",
+   "scope": "user",
+   "group": "calc-78",
+   "kind": "auto",
+   "label": "B30 (duplicate of B28)"
+  },
+  {
+   "range": "L53",
+   "scope": "user",
+   "group": "calc-78",
+   "kind": "auto",
+   "label": "B30 (duplicate of B28)"
+  },
+  {
+   "range": "L54",
+   "scope": "user",
+   "group": "calc-78",
+   "kind": "auto",
+   "label": "B30 (duplicate of B28)"
+  },
+  {
+   "range": "L55",
+   "scope": "user",
+   "group": "calc-78",
+   "kind": "auto",
+   "label": "B30 (duplicate of B28)"
+  },
+  {
+   "range": "O51",
+   "scope": "user",
+   "group": "calc-79",
+   "kind": "date",
+   "label": "B31 'Last Date', 'First Date'"
+  },
+  {
+   "range": "O52",
+   "scope": "user",
+   "group": "calc-79",
+   "kind": "date",
+   "label": "B31 'Last Date', 'First Date'"
+  },
+  {
+   "range": "O55",
+   "scope": "user",
+   "group": "calc-80",
+   "kind": "auto",
+   "label": "B31 'Spot'"
+  },
+  {
+   "range": "O56",
+   "scope": "user",
+   "group": "calc-81",
+   "kind": "number",
+   "label": "B31 'Ann. Yield'"
+  },
+  {
+   "range": "O60",
+   "scope": "user",
+   "group": "calc-82",
+   "kind": "date",
+   "label": "B32 'Last Date', 'First Date'"
+  },
+  {
+   "range": "O61",
+   "scope": "user",
+   "group": "calc-82",
+   "kind": "date",
+   "label": "B32 'Last Date', 'First Date'"
+  },
+  {
+   "range": "O64",
+   "scope": "user",
+   "group": "calc-83",
+   "kind": "auto",
+   "label": "B32 'First Price', 'Last Price'"
+  },
+  {
+   "range": "O66",
+   "scope": "user",
+   "group": "calc-83",
+   "kind": "auto",
+   "label": "B32 'First Price', 'Last Price'"
+  },
+  {
+   "range": "C62",
+   "scope": "user",
+   "group": "calc-84",
+   "kind": "auto",
+   "label": "B33 'Cash(MM)'"
+  },
+  {
+   "range": "C63",
+   "scope": "user",
+   "group": "calc-85",
+   "kind": "number",
+   "label": "B33 'T-2 Ay MoM', 'T-3 Ay MoM'"
+  },
+  {
+   "range": "C64",
+   "scope": "user",
+   "group": "calc-85",
+   "kind": "number",
+   "label": "B33 'T-2 Ay MoM', 'T-3 Ay MoM'"
+  },
+  {
+   "range": "C67",
+   "scope": "user",
+   "group": "calc-86",
+   "kind": "number",
+   "label": "B33 'CPI Coupon'"
+  },
+  {
+   "range": "I62",
+   "scope": "user",
+   "group": "calc-87",
+   "kind": "auto",
+   "label": "B34 (duplicate of B33)"
+  },
+  {
+   "range": "I63",
+   "scope": "user",
+   "group": "calc-87",
+   "kind": "auto",
+   "label": "B34 (duplicate of B33)"
+  },
+  {
+   "range": "I64",
+   "scope": "user",
+   "group": "calc-87",
+   "kind": "auto",
+   "label": "B34 (duplicate of B33)"
+  },
+  {
+   "range": "I67",
+   "scope": "user",
+   "group": "calc-87",
+   "kind": "auto",
+   "label": "B34 (duplicate of B33)"
+  },
+  {
+   "range": "X63",
+   "scope": "user",
+   "group": "calc-88",
+   "kind": "auto",
+   "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
+  },
+  {
+   "range": "X64",
+   "scope": "user",
+   "group": "calc-88",
+   "kind": "auto",
+   "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
+  },
+  {
+   "range": "X65",
+   "scope": "user",
+   "group": "calc-88",
+   "kind": "auto",
+   "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
+  },
+  {
+   "range": "X66",
+   "scope": "user",
+   "group": "calc-88",
+   "kind": "auto",
+   "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
+  },
+  {
+   "range": "Z63",
+   "scope": "user",
+   "group": "calc-89",
+   "kind": "auto",
+   "label": "B35 'SWAP' column, row 'USD'"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Interest 2 SP",
+   "range": "B2:C16",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "SP 2 Interest",
+   "range": "E2:F16",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Interest 2 SP",
+   "range": "H2:I16",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "SP 2 Interest",
+   "range": "K2:L16",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "Exponential",
+   "range": "N2:R9",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "Simple",
+   "range": "T2:X9",
+   "hidden": false
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "Master inputs for the top band (no title)",
+   "range": "Z3:AA12",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "Basit' → 'Bileşik' (no title)",
+   "range": "N12:O15",
+   "hidden": false
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "Bileşik' → 'Basit' (no title)",
+   "range": "Q12:R15",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "Forward DV01",
+   "range": "W16:X34",
+   "hidden": false
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "Scratch arithmetic (no label)",
+   "range": "AA18:AA19",
+   "hidden": true
+  },
+  {
+   "id": "B12",
+   "type": "table",
+   "title": "Interest 2 SP",
+   "range": "B19:C30",
+   "hidden": false
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "SP 2 Interest",
+   "range": "E19:F30",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "Interest 2 SP",
+   "range": "H19:I30",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "SP 2 Interest",
+   "range": "K19:L30",
+   "hidden": false
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "SP 2 Interest",
+   "range": "N19:O30",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "Repo' → 'Bileşik' (no title)",
+   "range": "Q19:R22",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "Bileşik' → 'Repo' (no title)",
+   "range": "Q24:R27",
+   "hidden": false
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "Interest 2 SP",
+   "range": "B35:C46",
+   "hidden": false
+  },
+  {
+   "id": "B20",
+   "type": "table",
+   "title": "SP 2 Interest",
+   "range": "E35:F46",
+   "hidden": false
+  },
+  {
+   "id": "B21",
+   "type": "table",
+   "title": "Interest 2 SP' (duplicate of B19)",
+   "range": "H35:I46",
+   "hidden": false
+  },
+  {
+   "id": "B22",
+   "type": "table",
+   "title": "SP 2 Interest' (duplicate of B20)",
+   "range": "K35:L46",
+   "hidden": false
+  },
+  {
+   "id": "B23",
+   "type": "table",
+   "title": "Implied Move",
+   "range": "N35:O43",
+   "hidden": false
+  },
+  {
+   "id": "B24",
+   "type": "table",
+   "title": "DF to Rate",
+   "range": "Q35:R41",
+   "hidden": false
+  },
+  {
+   "id": "B25",
+   "type": "table",
+   "title": "Unlabelled discount scratch",
+   "range": "X40:X44",
+   "hidden": true
+  },
+  {
+   "id": "B26",
+   "type": "table",
+   "title": "Weighted Average' (two tables) with 'Net' / 'Maliyet' / 'Realized P&L",
+   "range": "Z37:AD58",
+   "hidden": false
+  },
+  {
+   "id": "B27",
+   "type": "table",
+   "title": "TLREF Spread",
+   "range": "B51:C56",
+   "hidden": false
+  },
+  {
+   "id": "B28",
+   "type": "table",
+   "title": "Forward Volatility",
+   "range": "E51:F56",
+   "hidden": false
+  },
+  {
+   "id": "B29",
+   "type": "table",
+   "title": "TLREF Spread' (second copy)",
+   "range": "H51:I56",
+   "hidden": false
+  },
+  {
+   "id": "B30",
+   "type": "table",
+   "title": "Forward Volatility' (second copy)",
+   "range": "K51:L56",
+   "hidden": false
+  },
+  {
+   "id": "B31",
+   "type": "table",
+   "title": "Forward from annual yield (no title)",
+   "range": "N51:O57",
+   "hidden": false
+  },
+  {
+   "id": "B32",
+   "type": "table",
+   "title": "Annualised yield between two prices (no title)",
+   "range": "N60:O66",
+   "hidden": false
+  },
+  {
+   "id": "B33",
+   "type": "table",
+   "title": "CPI-linker monthly accrual (no title)",
+   "range": "B62:C71",
+   "hidden": false
+  },
+  {
+   "id": "B34",
+   "type": "table",
+   "title": "CPI-linker monthly accrual (duplicate of B33)",
+   "range": "H62:I71",
+   "hidden": false
+  },
+  {
+   "id": "B35",
+   "type": "table",
+   "title": "Limit' table",
+   "range": "W62:AA66",
+   "hidden": false
+  }
+ ]
+}

@@ -1,0 +1,103 @@
+{
+ "id": "tmois",
+ "title": "TM OIS",
+ "group": "TRY Faiz",
+ "book": "tto",
+ "sheet": "TM_OIS",
+ "order": 55,
+ "inputs": [
+  {
+   "range": "B3",
+   "scope": "user",
+   "group": "tmois-0",
+   "kind": "text",
+   "label": "'Yön (1 sabit al / −1 sabit öde)'"
+  },
+  {
+   "range": "D3",
+   "scope": "user",
+   "group": "tmois-1",
+   "kind": "pct",
+   "label": "'İşlem oranı (boş = par)'"
+  },
+  {
+   "range": "A10:A34",
+   "scope": "user",
+   "group": "tmois-2",
+   "kind": "date",
+   "label": "'Dönem başı'"
+  },
+  {
+   "range": "B10:B34",
+   "scope": "user",
+   "group": "tmois-3",
+   "kind": "date",
+   "label": "'Dönem sonu (ödeme)'"
+  },
+  {
+   "range": "C10:C34",
+   "scope": "user",
+   "group": "tmois-4",
+   "kind": "auto",
+   "label": "'Nominal (TL)'"
+  },
+  {
+   "range": "D10:D34",
+   "scope": "user",
+   "group": "tmois-5",
+   "kind": "pct",
+   "label": "'Sabit oran (ops.)'"
+  },
+  {
+   "range": "E10:E34",
+   "scope": "user",
+   "group": "tmois-6",
+   "kind": "auto",
+   "label": "'Gerç. endeks oranı (başlamış dönem)'"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "notes",
+   "title": "NAKİT AKIŞI BAZLI OIS FİYATLAYICI",
+   "range": "A2:J2",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Trade parameters",
+   "range": "A3:D3",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Result summary",
+   "range": "A4:J6",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "Schedule (input table)",
+   "range": "A9:E34",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "Market leg per period",
+   "range": "F9:J34",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "Scenario legs and helpers",
+   "range": "M9:AC34",
+   "hidden": true
+  }
+ ]
+}

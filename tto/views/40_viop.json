@@ -1,0 +1,453 @@
+{
+ "id": "viop",
+ "title": "VİOP",
+ "group": "TRY Faiz",
+ "book": "tto",
+ "sheet": "VIOP",
+ "order": 40,
+ "inputs": [
+  {
+   "range": "L1:W1",
+   "scope": "user",
+   "group": "viop-0",
+   "kind": "text",
+   "label": "VIOP USDTRY futures tickers (contract 1–12)"
+  },
+  {
+   "range": "K3",
+   "scope": "user",
+   "group": "viop-1",
+   "kind": "date",
+   "label": "spot value date used as 1st date everywhere (formula, overridable)"
+  },
+  {
+   "range": "AA9",
+   "scope": "user",
+   "group": "viop-2",
+   "kind": "auto",
+   "label": "'Manuel SP' Bid — manual USDTRY spot bid"
+  },
+  {
+   "range": "AA10",
+   "scope": "user",
+   "group": "viop-3",
+   "kind": "auto",
+   "label": "'Manuel SP' Ask — manual USDTRY spot ask"
+  },
+  {
+   "range": "C16:C35",
+   "scope": "user",
+   "group": "viop-4",
+   "kind": "text",
+   "label": "USD OIS tickers (without \" Curncy\")"
+  },
+  {
+   "range": "D16:D35",
+   "scope": "user",
+   "group": "viop-5",
+   "kind": "text",
+   "label": "USD OIS maturity labels"
+  },
+  {
+   "range": "B44",
+   "scope": "user",
+   "group": "viop-6",
+   "kind": "auto",
+   "label": "ON days for BISTTREF row"
+  },
+  {
+   "range": "C43:C52",
+   "scope": "user",
+   "group": "viop-7",
+   "kind": "text",
+   "label": "TRY OIS tickers"
+  },
+  {
+   "range": "C58:C69",
+   "scope": "user",
+   "group": "viop-8",
+   "kind": "text",
+   "label": "ICAP implied TRY tickers (full, incl. \" ICPL Curncy\")"
+  },
+  {
+   "range": "M37",
+   "scope": "user",
+   "group": "viop-9",
+   "kind": "pct",
+   "label": "'Interest 2 SP' calc 1 TRY rate (spot→contract 1)"
+  },
+  {
+   "range": "P37",
+   "scope": "user",
+   "group": "viop-10",
+   "kind": "pct",
+   "label": "calc 2 TRY rate (spot→contract 2)"
+  },
+  {
+   "range": "S37",
+   "scope": "user",
+   "group": "viop-11",
+   "kind": "pct",
+   "label": "calc 3 TRY forward rate (contract 1→2)"
+  },
+  {
+   "range": "M45:O45",
+   "scope": "user",
+   "group": "viop-12",
+   "kind": "text",
+   "label": "VIOP gold-TRY futures tickers"
+  },
+  {
+   "range": "M60:O60",
+   "scope": "user",
+   "group": "viop-13",
+   "kind": "text",
+   "label": "VIOP gold-USD futures tickers"
+  },
+  {
+   "range": "U63",
+   "scope": "user",
+   "group": "viop-14",
+   "kind": "auto",
+   "label": "unlabelled scratch constant (U64 = U63+418)"
+  },
+  {
+   "range": "AA110",
+   "scope": "user",
+   "group": "viop-15",
+   "kind": "auto",
+   "label": "'BFX kontrol' switch"
+  },
+  {
+   "range": "W321",
+   "scope": "user",
+   "group": "viop-16",
+   "kind": "auto",
+   "label": "'Vade sınırı (ilk N kontrat)' for DEALS"
+  },
+  {
+   "range": "L331:L338",
+   "scope": "user",
+   "group": "viop-17",
+   "kind": "text",
+   "label": "Target 'Yakın'"
+  },
+  {
+   "range": "M331:M338",
+   "scope": "user",
+   "group": "viop-18",
+   "kind": "date",
+   "label": "Target 'Uzak'"
+  },
+  {
+   "range": "N331:N338",
+   "scope": "user",
+   "group": "viop-19",
+   "kind": "text",
+   "label": "Target 'Yön (uzak USD)'"
+  },
+  {
+   "range": "O331:O338",
+   "scope": "user",
+   "group": "viop-20",
+   "kind": "text",
+   "label": "Target 'Hedef tipi'"
+  },
+  {
+   "range": "P331:P338",
+   "scope": "user",
+   "group": "viop-21",
+   "kind": "number",
+   "label": "Target 'Hedef değer'"
+  },
+  {
+   "range": "M340",
+   "scope": "user",
+   "group": "viop-22",
+   "kind": "auto",
+   "label": "'Geçmiş' — history look-back, business days"
+  },
+  {
+   "range": "S340",
+   "scope": "user",
+   "group": "viop-23",
+   "kind": "text",
+   "label": "'Spot ticker' for history / live spot"
+  },
+  {
+   "range": "R353",
+   "scope": "user",
+   "group": "viop-24",
+   "kind": "auto",
+   "label": "'Swap gün bazı' — day basis of the TRYSAQ1 1Y swap quote (used as ×360/$R$353)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Contract header strip (no title; L4 'BUY')",
+   "range": "K1:W5",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "USD OIS Start Date",
+   "range": "B14:G35",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "TRY OIS Simple Zero Rate Start",
+   "range": "B41:E52",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "ICAP Implied TL Curve",
+   "range": "B56:E69",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "VIOP BID",
+   "range": "K7:X18",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "Manuel SP",
+   "range": "Z8:AA11",
+   "hidden": false
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "VIOP ASK",
+   "range": "K19:X29",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "Interest 2 SP' (three what-if calculators)",
+   "range": "L31:S43",
+   "hidden": false
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "VIOP XAUTRY BID",
+   "range": "K45:O58",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "VIOP XAUTRY ASK",
+   "range": "Q45:U58",
+   "hidden": false
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "VIOP XAUUSD",
+   "range": "K60:O68",
+   "hidden": false
+  },
+  {
+   "id": "B12",
+   "type": "table",
+   "title": "OIS",
+   "range": "K71:X82",
+   "hidden": false
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "ICAP",
+   "range": "K84:X95",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "Matrix driver rows ('Kontrat' … 'DV01 USD')",
+   "range": "K97:X108",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "Offshore FX forward – eğriden (mid)",
+   "range": "Z96:AD109",
+   "hidden": true
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "BFX kontrol",
+   "range": "Z110:AE124",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "Uzak AL / Yakın SAT – spread fiyatı",
+   "range": "K110:X122",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "Uzak SAT / Yakın AL – spread fiyatı",
+   "range": "K124:X136",
+   "hidden": false
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "Uzak AL / Yakın SAT – ima TRY",
+   "range": "K138:X150",
+   "hidden": false
+  },
+  {
+   "id": "B20",
+   "type": "table",
+   "title": "Uzak SAT / Yakın AL – ima TRY",
+   "range": "K152:X164",
+   "hidden": false
+  },
+  {
+   "id": "B21",
+   "type": "table",
+   "title": "Alış−satış farkı (bp)",
+   "range": "K166:X178",
+   "hidden": false
+  },
+  {
+   "id": "B22",
+   "type": "table",
+   "title": "TRY OIS",
+   "range": "K180:X192",
+   "hidden": false
+  },
+  {
+   "id": "B23",
+   "type": "table",
+   "title": "Orta ima ff − OIS ff (bp)",
+   "range": "K194:X206",
+   "hidden": false
+  },
+  {
+   "id": "B24",
+   "type": "table",
+   "title": "OIS FRA",
+   "range": "K208:X220",
+   "hidden": false
+  },
+  {
+   "id": "B25",
+   "type": "table",
+   "title": "VİOP orta ima ff − OIS FRA (bp)",
+   "range": "K222:X234",
+   "hidden": false
+  },
+  {
+   "id": "B26",
+   "type": "table",
+   "title": "Uzak AL / Yakın SAT − OIS FRA (bp)",
+   "range": "K236:X248",
+   "hidden": false
+  },
+  {
+   "id": "B27",
+   "type": "table",
+   "title": "Uzak SAT / Yakın AL − OIS FRA (bp)",
+   "range": "K250:X262",
+   "hidden": false
+  },
+  {
+   "id": "B28",
+   "type": "table",
+   "title": "FX swap ima TRY ff",
+   "range": "K264:X276",
+   "hidden": false
+  },
+  {
+   "id": "B29",
+   "type": "table",
+   "title": "VİOP orta ima ff − FX swap ima ff (bp)",
+   "range": "K278:X290",
+   "hidden": false
+  },
+  {
+   "id": "B30",
+   "type": "table",
+   "title": "FX swap ima ff − OIS FRA (bp)",
+   "range": "K292:X304",
+   "hidden": false
+  },
+  {
+   "id": "B31",
+   "type": "table",
+   "title": "TRY ff DV01 (TL, 1mn USD)",
+   "range": "K306:X318",
+   "hidden": false
+  },
+  {
+   "id": "B32",
+   "type": "table",
+   "title": "DEALS",
+   "range": "K320:T328",
+   "hidden": false
+  },
+  {
+   "id": "B33",
+   "type": "table",
+   "title": "Target",
+   "range": "K330:Y338",
+   "hidden": false
+  },
+  {
+   "id": "B34",
+   "type": "table",
+   "title": "BAZ GEÇMİŞİ",
+   "range": "K340:X352",
+   "hidden": false
+  },
+  {
+   "id": "B35",
+   "type": "table",
+   "title": "FX SWAP BAZI",
+   "range": "K353:S365",
+   "hidden": false
+  },
+  {
+   "id": "B36",
+   "type": "table",
+   "title": "VİOP − FX SWAP",
+   "range": "K366:X378",
+   "hidden": false
+  },
+  {
+   "id": "B37",
+   "type": "table",
+   "title": "History table (BDH + derived daily series)",
+   "range": "K378:DD509",
+   "hidden": true
+  },
+  {
+   "id": "B38",
+   "type": "table",
+   "title": "Canlı son fiyat (geçmiş yöntemi)",
+   "range": "K510:DD511",
+   "hidden": true
+  }
+ ]
+}

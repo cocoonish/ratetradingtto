@@ -15,7 +15,7 @@ from .errors import XlError
 from .tokenizer import index_to_col, col_to_index
 
 COLS = 16384
-MODEL_VERSION = 3
+MODEL_VERSION = 5
 
 
 def pack(row: int, col: int) -> int:
@@ -53,7 +53,7 @@ def parse_range(ref: str) -> Tuple[int, int, int, int]:
 
 class Sheet(object):
     __slots__ = ("name", "index", "state", "consts", "fml", "arr", "members", "cached", "styles",
-                 "max_row", "max_col", "merges", "col_widths", "validations", "dyn")
+                 "max_row", "max_col", "merges", "col_widths", "validations", "dyn", "cf", "charts")
 
     def __init__(self, name: str, index: int, state: str = "visible"):
         self.name = name
@@ -71,6 +71,8 @@ class Sheet(object):
         self.col_widths: Dict[int, float] = {}
         self.validations: List[Dict[str, Any]] = []
         self.dyn: set = set()                     # anchors flagged as dynamic arrays (cm attribute)
+        self.cf: List[Dict[str, Any]] = []        # conditional-formatting rules
+        self.charts: List[Dict[str, Any]] = []    # charts drawn on the sheet (series are range references)
 
 
 class Model(object):
@@ -82,6 +84,8 @@ class Model(object):
         self.local_names: Dict[Tuple[int, str], str] = {}  # (sheet idx, UPPER name) -> template
         self.numfmts: List[str] = []                       # xf index -> number format code
         self.xf_flags: List[int] = []                      # xf index -> bit flags (1 = bold)
+        self.xfs: List[List[Any]] = []                     # xf index -> [fmt, bold, font colour, fill, align, italic]
+        self.dxfs: List[Dict[str, Any]] = []               # differential styles used by conditional formats
         self.date1904 = False
         self.meta: Dict[str, Any] = {}
 
@@ -126,6 +130,8 @@ class Model(object):
                 "col_widths": [[k, v] for k, v in s.col_widths.items()],
                 "validations": s.validations,
                 "dyn": sorted(s.dyn),
+                "cf": s.cf,
+                "charts": s.charts,
             })
         return {
             "version": MODEL_VERSION,
@@ -134,8 +140,8 @@ class Model(object):
             "templates": self.templates,
             "names": self.names,
             "local_names": [[k[0], k[1], v] for k, v in self.local_names.items()],
-            "numfmts": self.numfmts,
-            "xf_flags": self.xf_flags,
+            "xfs": self.xfs,
+            "dxfs": self.dxfs,
             "sheets": sheets,
         }
 
@@ -150,8 +156,10 @@ class Model(object):
         m.templates = list(data["templates"])
         m.names = dict(data["names"])
         m.local_names = {(int(a), b): c for a, b, c in data.get("local_names", [])}
-        m.numfmts = list(data["numfmts"])
-        m.xf_flags = list(data.get("xf_flags", []))
+        m.xfs = [list(x) for x in data["xfs"]]
+        m.dxfs = list(data.get("dxfs", []))
+        m.numfmts = [x[0] for x in m.xfs]
+        m.xf_flags = [x[1] for x in m.xfs]
         for sd in data["sheets"]:
             s = m.add_sheet(sd["name"], sd.get("state", "visible"))
             s.max_row = sd["max_row"]
@@ -166,6 +174,8 @@ class Model(object):
             s.col_widths = {int(k): v for k, v in sd.get("col_widths", [])}
             s.validations = list(sd.get("validations", []))
             s.dyn = set(sd.get("dyn", []))
+            s.cf = list(sd.get("cf", []))
+            s.charts = list(sd.get("charts", []))
         return m
 
     def save(self, path: str) -> None:

@@ -91,6 +91,10 @@ def export_xlsx(model: Model, path: str, pins: Optional[Dict[Tuple[int, int], An
                 rows.setdefault(r, {})[c] = '<c r="%s"><f t="array" ref="%s">%s</f></c>' % (addr, rng, text)
             else:
                 rows.setdefault(r, {})[c] = '<c r="%s"><f>%s</f></c>' % (addr, text)
+        for (psi, rc), pv in pins.items():
+            if psi == si and rc not in s.consts and rc not in s.fml and rc not in s.members:
+                r, c = divmod(rc, COLS)
+                rows.setdefault(r, {})[c] = _cell_xml(a1(rc), pv)
         for rc in s.members:
             key = (si, rc)
             src = pins if key in pins else (values if (values is not None and not formulas) else None)

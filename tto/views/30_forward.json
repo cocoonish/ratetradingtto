@@ -1,0 +1,782 @@
+{
+ "id": "forward",
+ "title": "Forward",
+ "group": "TRY Faiz",
+ "book": "tto",
+ "sheet": "Forward",
+ "order": 30,
+ "inputs": [
+  {
+   "range": "D2",
+   "scope": "user",
+   "group": "forward-0",
+   "kind": "date",
+   "label": "'Tarih' — forward value date for all single-date tables (B15–B20, B7–B10, B16, B18)"
+  },
+  {
+   "range": "W33:W47",
+   "scope": "user",
+   "group": "forward-1",
+   "kind": "pct",
+   "label": "'TRY RET' bid, 15 tenors ON…2Y (B19)"
+  },
+  {
+   "range": "X33:X47",
+   "scope": "user",
+   "group": "forward-2",
+   "kind": "pct",
+   "label": "'TRY RET' ask, 15 tenors"
+  },
+  {
+   "range": "U37",
+   "scope": "shared",
+   "group": "forward-3",
+   "kind": "auto",
+   "label": "RET 3W node day count"
+  },
+  {
+   "range": "AB79:AC93",
+   "scope": "shared",
+   "group": "forward-4",
+   "kind": "pct",
+   "label": "spread added to RET bid / ask per tenor (B26)"
+  },
+  {
+   "range": "N25",
+   "scope": "user",
+   "group": "forward-5",
+   "kind": "pct",
+   "label": "TRY OIS half bid/ask width (typed =0.2/100)"
+  },
+  {
+   "range": "O27",
+   "scope": "user",
+   "group": "forward-6",
+   "kind": "pct",
+   "label": "unlabelled shift applied to OIS mid in P27"
+  },
+  {
+   "range": "P58",
+   "scope": "user",
+   "group": "forward-7",
+   "kind": "auto",
+   "label": "'Spread' for 'TRY OIS w/Spread' and chart series 'OIS w/S'"
+  },
+  {
+   "range": "O44",
+   "scope": "user",
+   "group": "forward-8",
+   "kind": "text",
+   "label": "Forward DV01 'B/S'"
+  },
+  {
+   "range": "O45",
+   "scope": "user",
+   "group": "forward-9",
+   "kind": "auto",
+   "label": "Forward DV01 'Tutar'"
+  },
+  {
+   "range": "B144:B163",
+   "scope": "user",
+   "group": "forward-10",
+   "kind": "date",
+   "label": "bulk 'Valör' dates"
+  },
+  {
+   "range": "L144:L163",
+   "scope": "user",
+   "group": "forward-11",
+   "kind": "number",
+   "label": "bulk 'Manuel TRY %' (overrides RET mid)"
+  },
+  {
+   "range": "C167",
+   "scope": "user",
+   "group": "forward-12",
+   "kind": "date",
+   "label": "FSS 'Near valör'"
+  },
+  {
+   "range": "C168",
+   "scope": "user",
+   "group": "forward-13",
+   "kind": "date",
+   "label": "FSS 'Far valör'"
+  },
+  {
+   "range": "C169",
+   "scope": "user",
+   "group": "forward-14",
+   "kind": "number",
+   "label": "FSS 'Manuel TRY fwd faiz %'"
+  },
+  {
+   "range": "C170",
+   "scope": "user",
+   "group": "forward-15",
+   "kind": "number",
+   "label": "FSS 'Manuel USD fwd faiz % (boş = USD eğrisi)'"
+  },
+  {
+   "range": "C171",
+   "scope": "user",
+   "group": "forward-16",
+   "kind": "number",
+   "label": "FSS 'Manuel EUR fwd faiz % (boş = EUR eğrisi)'"
+  },
+  {
+   "range": "C197",
+   "scope": "user",
+   "group": "forward-17",
+   "kind": "text",
+   "label": "ÇAPRAZ 'Döviz' currency code"
+  },
+  {
+   "range": "B200:B205",
+   "scope": "user",
+   "group": "forward-18",
+   "kind": "date",
+   "label": "ÇAPRAZ preset valörs (formulas 1M, 2M, 3M, 6M, 9M, 12M)"
+  },
+  {
+   "range": "B206:B214",
+   "scope": "user",
+   "group": "forward-19",
+   "kind": "date",
+   "label": "ÇAPRAZ free valörs"
+  },
+  {
+   "range": "F200:F214",
+   "scope": "user",
+   "group": "forward-20",
+   "kind": "number",
+   "label": "ÇAPRAZ 'Manuel TRY %'"
+  },
+  {
+   "range": "AH10",
+   "scope": "user",
+   "group": "forward-21",
+   "kind": "pct",
+   "label": "'Interest 2 SP' TRY rate, USDTRY / EURTRY (B7)"
+  },
+  {
+   "range": "AK10",
+   "scope": "user",
+   "group": "forward-21",
+   "kind": "pct",
+   "label": "'Interest 2 SP' TRY rate, USDTRY / EURTRY (B7)"
+  },
+  {
+   "range": "AH15",
+   "scope": "user",
+   "group": "forward-22",
+   "kind": "auto",
+   "label": "'Gün Bazı' day basis of AH11"
+  },
+  {
+   "range": "AH25",
+   "scope": "user",
+   "group": "forward-23",
+   "kind": "auto",
+   "label": "'SP 2 Interest' swap points (B8); AK25 typed =22119-2540"
+  },
+  {
+   "range": "AK25",
+   "scope": "user",
+   "group": "forward-23",
+   "kind": "auto",
+   "label": "'SP 2 Interest' swap points (B8); AK25 typed =22119-2540"
+  },
+  {
+   "range": "AH40",
+   "scope": "user",
+   "group": "forward-24",
+   "kind": "auto",
+   "label": "'SP 2 Interest' all-in forward (B9)"
+  },
+  {
+   "range": "AK40",
+   "scope": "user",
+   "group": "forward-24",
+   "kind": "auto",
+   "label": "'SP 2 Interest' all-in forward (B9)"
+  },
+  {
+   "range": "AH56",
+   "scope": "user",
+   "group": "forward-25",
+   "kind": "pct",
+   "label": "'Interest 2 SP' O/N-equivalent rate (B10)"
+  },
+  {
+   "range": "AK56",
+   "scope": "user",
+   "group": "forward-25",
+   "kind": "pct",
+   "label": "'Interest 2 SP' O/N-equivalent rate (B10)"
+  },
+  {
+   "range": "AH60",
+   "scope": "user",
+   "group": "forward-26",
+   "kind": "number",
+   "label": "'Basit', 'Gün Basis', 'Gün' (B11)"
+  },
+  {
+   "range": "AH61",
+   "scope": "user",
+   "group": "forward-26",
+   "kind": "number",
+   "label": "'Basit', 'Gün Basis', 'Gün' (B11)"
+  },
+  {
+   "range": "AH62",
+   "scope": "user",
+   "group": "forward-26",
+   "kind": "number",
+   "label": "'Basit', 'Gün Basis', 'Gün' (B11)"
+  },
+  {
+   "range": "AH65",
+   "scope": "user",
+   "group": "forward-27",
+   "kind": "number",
+   "label": "'Bileşik', 'Gün Basis', 'Gün' (B11)"
+  },
+  {
+   "range": "AH66",
+   "scope": "user",
+   "group": "forward-27",
+   "kind": "number",
+   "label": "'Bileşik', 'Gün Basis', 'Gün' (B11)"
+  },
+  {
+   "range": "AH67",
+   "scope": "user",
+   "group": "forward-27",
+   "kind": "number",
+   "label": "'Bileşik', 'Gün Basis', 'Gün' (B11)"
+  },
+  {
+   "range": "AK61",
+   "scope": "user",
+   "group": "forward-28",
+   "kind": "number",
+   "label": "'Gün Basis', 'Gün', 'Bileşik' of the 'Repo' converter (B11)"
+  },
+  {
+   "range": "AK62",
+   "scope": "user",
+   "group": "forward-28",
+   "kind": "number",
+   "label": "'Gün Basis', 'Gün', 'Bileşik' of the 'Repo' converter (B11)"
+  },
+  {
+   "range": "AK63",
+   "scope": "user",
+   "group": "forward-28",
+   "kind": "number",
+   "label": "'Gün Basis', 'Gün', 'Bileşik' of the 'Repo' converter (B11)"
+  },
+  {
+   "range": "C21",
+   "scope": "user",
+   "group": "forward-29",
+   "kind": "auto",
+   "label": "days added to spot (B13)"
+  },
+  {
+   "range": "E20",
+   "scope": "user",
+   "group": "forward-30",
+   "kind": "date",
+   "label": "start / end date of the day counter (B13)"
+  },
+  {
+   "range": "E22",
+   "scope": "user",
+   "group": "forward-30",
+   "kind": "date",
+   "label": "start / end date of the day counter (B13)"
+  },
+  {
+   "range": "B25:D27",
+   "scope": "user",
+   "group": "forward-31",
+   "kind": "date",
+   "label": "ad-hoc forward list: Start, End, Spot, Major rate, Minor rate (B14)"
+  },
+  {
+   "range": "G25:H27",
+   "scope": "user",
+   "group": "forward-31",
+   "kind": "date",
+   "label": "ad-hoc forward list: Start, End, Spot, Major rate, Minor rate (B14)"
+  },
+  {
+   "range": "C59",
+   "scope": "user",
+   "group": "forward-32",
+   "kind": "date",
+   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+  },
+  {
+   "range": "C60",
+   "scope": "user",
+   "group": "forward-32",
+   "kind": "date",
+   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+  },
+  {
+   "range": "C61",
+   "scope": "user",
+   "group": "forward-32",
+   "kind": "date",
+   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+  },
+  {
+   "range": "C63",
+   "scope": "user",
+   "group": "forward-32",
+   "kind": "date",
+   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+  },
+  {
+   "range": "E59",
+   "scope": "user",
+   "group": "forward-33",
+   "kind": "date",
+   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+  },
+  {
+   "range": "E61",
+   "scope": "user",
+   "group": "forward-33",
+   "kind": "date",
+   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+  },
+  {
+   "range": "E63",
+   "scope": "user",
+   "group": "forward-33",
+   "kind": "date",
+   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+  },
+  {
+   "range": "E64",
+   "scope": "user",
+   "group": "forward-33",
+   "kind": "date",
+   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+  },
+  {
+   "range": "E67",
+   "scope": "user",
+   "group": "forward-33",
+   "kind": "date",
+   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+  },
+  {
+   "range": "V56",
+   "scope": "user",
+   "group": "forward-34",
+   "kind": "date",
+   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+  },
+  {
+   "range": "V57",
+   "scope": "user",
+   "group": "forward-34",
+   "kind": "date",
+   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+  },
+  {
+   "range": "V58",
+   "scope": "user",
+   "group": "forward-34",
+   "kind": "date",
+   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+  },
+  {
+   "range": "V61",
+   "scope": "user",
+   "group": "forward-34",
+   "kind": "date",
+   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+  },
+  {
+   "range": "V62",
+   "scope": "user",
+   "group": "forward-34",
+   "kind": "date",
+   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+  },
+  {
+   "range": "V73",
+   "scope": "user",
+   "group": "forward-35",
+   "kind": "date",
+   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+  },
+  {
+   "range": "V74",
+   "scope": "user",
+   "group": "forward-35",
+   "kind": "date",
+   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+  },
+  {
+   "range": "V78",
+   "scope": "user",
+   "group": "forward-35",
+   "kind": "date",
+   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+  },
+  {
+   "range": "V79",
+   "scope": "user",
+   "group": "forward-35",
+   "kind": "date",
+   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+  },
+  {
+   "range": "U6",
+   "scope": "user",
+   "group": "forward-36",
+   "kind": "auto",
+   "label": "ON day count of USD / EUR OIS tables"
+  },
+  {
+   "range": "AA6",
+   "scope": "user",
+   "group": "forward-36",
+   "kind": "auto",
+   "label": "ON day count of USD / EUR OIS tables"
+  },
+  {
+   "range": "AO6:AO26",
+   "scope": "shared",
+   "group": "forward-37",
+   "kind": "text",
+   "label": "Bloomberg tickers 'ICAP' (FX-swap implied yields + XCCY)"
+  },
+  {
+   "range": "AP6:AP7",
+   "scope": "shared",
+   "group": "forward-38",
+   "kind": "text",
+   "label": "TRY OIS 1W / 2W ticker roots"
+  },
+  {
+   "range": "AQ7:AQ26",
+   "scope": "shared",
+   "group": "forward-39",
+   "kind": "text",
+   "label": "USD OIS ticker roots"
+  },
+  {
+   "range": "AR7:AR26",
+   "scope": "shared",
+   "group": "forward-40",
+   "kind": "text",
+   "label": "EUR OIS ticker roots"
+  },
+  {
+   "range": "AB1",
+   "scope": "user",
+   "group": "forward-41",
+   "kind": "date",
+   "label": "scratch constants (see §6)"
+  },
+  {
+   "range": "AB2",
+   "scope": "user",
+   "group": "forward-41",
+   "kind": "date",
+   "label": "scratch constants (see §6)"
+  },
+  {
+   "range": "N71",
+   "scope": "user",
+   "group": "forward-41",
+   "kind": "date",
+   "label": "scratch constants (see §6)"
+  },
+  {
+   "range": "AA55",
+   "scope": "user",
+   "group": "forward-41",
+   "kind": "date",
+   "label": "scratch constants (see §6)"
+  },
+  {
+   "range": "AA56",
+   "scope": "user",
+   "group": "forward-41",
+   "kind": "date",
+   "label": "scratch constants (see §6)"
+  },
+  {
+   "range": "AA58",
+   "scope": "user",
+   "group": "forward-41",
+   "kind": "date",
+   "label": "scratch constants (see §6)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Tarih' / spot header",
+   "range": "C2:K2",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "VIOP Implied TL Curve",
+   "range": "B4:E18",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "ICAP Implied TL Curve",
+   "range": "G4:K22",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "TRY OIS Simple Zero Rates",
+   "range": "N4:P27",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "USD OIS",
+   "range": "U4:Y29",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "EUR OIS",
+   "range": "AA4:AE29",
+   "hidden": false
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "Interest 2 SP' (TRY rate → swap points)",
+   "range": "AG4:AH16",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "SP 2 Interest' (swap points → implied TRY rate)",
+   "range": "AG18:AH30",
+   "hidden": false
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "SP 2 Interest' (all-in outright → SP and implied TRY rate)",
+   "range": "AG32:AH44",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "Interest 2 SP' (O/N-equivalent rate → term rate → swap points)",
+   "range": "AG46:AH58",
+   "hidden": false
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "Simple ↔ compound converters",
+   "range": "AG60:AH68",
+   "hidden": false
+  },
+  {
+   "id": "B12",
+   "type": "table",
+   "title": "TICKER'LAR (BBG)\" ticker lists",
+   "range": "AO4:AR26",
+   "hidden": false
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "Start / Gün / End mini date helpers",
+   "range": "B20:E22",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "Ad-hoc forward list",
+   "range": "A24:H27",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "USDTRY",
+   "range": "B29:J39",
+   "hidden": false
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "XAUUSD' / 'XARTRY' / 'XARUSD' gold forward strip",
+   "range": "H29:J32",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "EURTRY",
+   "range": "B41:J51",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "Forward DV01",
+   "range": "N31:P49",
+   "hidden": false
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "TRY RET",
+   "range": "U31:Y50",
+   "hidden": false
+  },
+  {
+   "id": "B20",
+   "type": "table",
+   "title": "RET SP",
+   "range": "AA31:AE48",
+   "hidden": false
+  },
+  {
+   "id": "B21",
+   "type": "table",
+   "title": "XARTRY' customer gold-forward calculator",
+   "range": "B56:F73",
+   "hidden": false
+  },
+  {
+   "id": "B22",
+   "type": "table",
+   "title": "RET-derived DF / annuity / par \"OIS\" equivalents and 4M–5M interpolation check",
+   "range": "D74:J90",
+   "hidden": true
+  },
+  {
+   "id": "B23",
+   "type": "table",
+   "title": "TRY OIS w/Spread",
+   "range": "O57:P68",
+   "hidden": false
+  },
+  {
+   "id": "B24",
+   "type": "table",
+   "title": "Bond carry / break-even calculator",
+   "range": "U56:W70",
+   "hidden": false
+  },
+  {
+   "id": "B25",
+   "type": "table",
+   "title": "Forward-rate calculator",
+   "range": "U73:V80",
+   "hidden": false
+  },
+  {
+   "id": "B26",
+   "type": "table",
+   "title": "RET + spread (bid/ask add-on per tenor)",
+   "range": "AA79:AC110",
+   "hidden": false
+  },
+  {
+   "id": "B27",
+   "type": "table",
+   "title": "O/N Eq",
+   "range": "D99:N119",
+   "hidden": false
+  },
+  {
+   "id": "B28",
+   "type": "table",
+   "title": "USDTRY Offshore Zero Rate",
+   "range": "C123:K134",
+   "hidden": false
+  },
+  {
+   "id": "B29",
+   "type": "table",
+   "title": "Offshore FRAs",
+   "range": "N131:P140",
+   "hidden": false
+  },
+  {
+   "id": "B30",
+   "type": "table",
+   "title": "TRY OIS FRAs",
+   "range": "U131:X140",
+   "hidden": false
+  },
+  {
+   "id": "B31",
+   "type": "table",
+   "title": "Rate Comparison\" chart data",
+   "range": "AA122:AG137",
+   "hidden": true
+  },
+  {
+   "id": "B32",
+   "type": "table",
+   "title": "OFFSHORE TRY İSKONTO EĞRİSİ …",
+   "range": "AJ122:AN145",
+   "hidden": false
+  },
+  {
+   "id": "B33",
+   "type": "table",
+   "title": "BULK FORWARD FİYATLAMA",
+   "range": "B142:Q163",
+   "hidden": false
+  },
+  {
+   "id": "B34",
+   "type": "table",
+   "title": "FORWARD STARTING SWAP",
+   "range": "B166:O180",
+   "hidden": false
+  },
+  {
+   "id": "B35",
+   "type": "table",
+   "title": "Unlabelled copy-out list (valör, USDTRY fwd)",
+   "range": "G183:H193",
+   "hidden": true
+  },
+  {
+   "id": "B36",
+   "type": "table",
+   "title": "ÇAPRAZ FORWARD",
+   "range": "B196:Q217",
+   "hidden": false
+  }
+ ]
+}

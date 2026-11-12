@@ -59,34 +59,231 @@ def _shared_strings(zf: zipfile.ZipFile) -> List[str]:
     return out
 
 
-def _styles(zf: zipfile.ZipFile) -> Tuple[List[str], List[int]]:
+_INDEXED = [
+    "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF", "000000", "FFFFFF", "FF0000",
+    "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF", "800000", "008000", "000080", "808000", "800080", "008080",
+    "C0C0C0", "808080", "9999FF", "993366", "FFFFCC", "CCFFFF", "660066", "FF8080", "0066CC", "CCCCFF", "000080",
+    "FF00FF", "FFFF00", "00FFFF", "800080", "800000", "008080", "0000FF", "00CCFF", "CCFFFF", "CCFFCC", "FFFF99",
+    "99CCFF", "FF99CC", "CC99FF", "FFCC99", "3366FF", "33CCCC", "99CC00", "FFCC00", "FF9900", "FF6600", "666699",
+    "969696", "003366", "339966", "003300", "333300", "993300", "993366", "333399", "333333",
+]
+NS_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+
+def _theme_colors(zf: zipfile.ZipFile) -> List[str]:
+    """Theme palette in the order Excel indexes it (lt1, dk1, lt2, dk2, accent1..6, hlink, folHlink)."""
+    default = ["FFFFFF", "000000", "E7E6E6", "44546A", "4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47",
+               "0563C1", "954F72"]
+    try:
+        root = ET.fromstring(zf.read("xl/theme/theme1.xml"))
+    except KeyError:
+        return default
+    scheme = root.find(".//" + NS_A + "clrScheme")
+    if scheme is None:
+        return default
+    vals: Dict[str, str] = {}
+    for el in scheme:
+        tag = el.tag.replace(NS_A, "")
+        for ch in el:
+            v = ch.get("lastClr") or ch.get("val")
+            if v:
+                vals[tag] = v.upper()
+    order = ["lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink",
+             "folHlink"]
+    return [vals.get(k, d) for k, d in zip(order, default)]
+
+
+def _tint(hex6: str, tint: float) -> str:
+    import colorsys
+    r, g, b = (int(hex6[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    h, l, sat = colorsys.rgb_to_hls(r, g, b)
+    if tint < 0:
+        l = l * (1.0 + tint)
+    else:
+        l = l * (1.0 - tint) + tint
+    r, g, b = colorsys.hls_to_rgb(h, max(0.0, min(1.0, l)), sat)
+    return "%02X%02X%02X" % (int(round(r * 255)), int(round(g * 255)), int(round(b * 255)))
+
+
+def _color(el, theme: List[str]) -> Optional[str]:
+    if el is None:
+        return None
+    rgb = el.get("rgb")
+    if rgb:
+        return rgb[-6:].upper()
+    th = el.get("theme")
+    if th is not None:
+        idx = int(th)
+        base = theme[idx] if idx < len(theme) else "000000"
+        t = el.get("tint")
+        return _tint(base, float(t)) if t else base
+    ix = el.get("indexed")
+    if ix is not None:
+        i = int(ix)
+        if i < len(_INDEXED):
+            return _INDEXED[i]
+    return None
+
+
+def _font(el, theme) -> Tuple[bool, Optional[str], bool]:
+    if el is None:
+        return False, None, False
+    b = el.find(NS_MAIN + "b")
+    i = el.find(NS_MAIN + "i")
+    bold = b is not None and b.get("val", "1") not in ("0", "false")
+    ital = i is not None and i.get("val", "1") not in ("0", "false")
+    return bold, _color(el.find(NS_MAIN + "color"), theme), ital
+
+
+def _fill(el, theme) -> Optional[str]:
+    if el is None:
+        return None
+    pf = el.find(NS_MAIN + "patternFill")
+    if pf is None or pf.get("patternType") in (None, "none"):
+        return None
+    return _color(pf.find(NS_MAIN + "fgColor"), theme) or _color(pf.find(NS_MAIN + "bgColor"), theme)
+
+
+def _styles(zf: zipfile.ZipFile):
+    """-> (xfs, dxfs): xfs[i] = [numFmt, bold, font colour, fill colour, h-align, italic]."""
+    theme = _theme_colors(zf)
     try:
         root = ET.fromstring(zf.read("xl/styles.xml"))
     except KeyError:
-        return ["General"], [0]
+        return [["General", 0, None, None, None, 0]], []
     custom: Dict[int, str] = {}
     nf = root.find(NS_MAIN + "numFmts")
     if nf is not None:
         for el in nf:
             custom[int(el.get("numFmtId"))] = el.get("formatCode") or "General"
-    bold_fonts: List[bool] = []
-    fonts = root.find(NS_MAIN + "fonts")
-    if fonts is not None:
-        for f in fonts:
-            b = f.find(NS_MAIN + "b")
-            bold_fonts.append(b is not None and b.get("val", "1") not in ("0", "false"))
-    fmts: List[str] = []
-    flags: List[int] = []
-    xfs = root.find(NS_MAIN + "cellXfs")
-    if xfs is not None:
-        for xf in xfs:
+    fonts = [_font(f, theme) for f in (root.find(NS_MAIN + "fonts") or [])]
+    fills = [_fill(f, theme) for f in (root.find(NS_MAIN + "fills") or [])]
+    xfs: List[List[Any]] = []
+    cx = root.find(NS_MAIN + "cellXfs")
+    if cx is not None:
+        for xf in cx:
             fid = int(xf.get("numFmtId", "0"))
-            fmts.append(custom.get(fid) or BUILTIN_NUMFMTS.get(fid, "General"))
-            font = int(xf.get("fontId", "0"))
-            flags.append(1 if font < len(bold_fonts) and bold_fonts[font] else 0)
-    if not fmts:
-        fmts, flags = ["General"], [0]
-    return fmts, flags
+            fmt = custom.get(fid) or BUILTIN_NUMFMTS.get(fid, "General")
+            fi = int(xf.get("fontId", "0"))
+            bold, fcol, ital = fonts[fi] if fi < len(fonts) else (False, None, False)
+            li = int(xf.get("fillId", "0"))
+            fill = fills[li] if li < len(fills) else None
+            al = xf.find(NS_MAIN + "alignment")
+            xfs.append([fmt, 1 if bold else 0, fcol, fill, al.get("horizontal") if al is not None else None,
+                        1 if ital else 0])
+    if not xfs:
+        xfs = [["General", 0, None, None, None, 0]]
+    dxfs: List[Dict[str, Any]] = []
+    dx = root.find(NS_MAIN + "dxfs")
+    if dx is not None:
+        for d in dx:
+            bold, fcol, ital = _font(d.find(NS_MAIN + "font"), theme)
+            dxfs.append({"color": fcol, "fill": _fill(d.find(NS_MAIN + "fill"), theme), "bold": bold})
+    return xfs, dxfs
+
+
+NS_C = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+NS_XDR = "{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}"
+
+
+def _rels(zf: zipfile.ZipFile, part: str) -> Dict[str, str]:
+    """Relationship id -> absolute part name for ``part``."""
+    folder, _, name = part.rpartition("/")
+    rel_path = "%s/_rels/%s.rels" % (folder, name)
+    try:
+        root = ET.fromstring(zf.read(rel_path))
+    except KeyError:
+        return {}
+    out = {}
+    for r in root.iter(NS_PKG + "Relationship"):
+        target = r.get("Target") or ""
+        if target.startswith("/"):
+            path = target[1:]
+        else:
+            parts = (folder + "/" + target).split("/")
+            stack: List[str] = []
+            for p in parts:
+                if p == "..":
+                    if stack:
+                        stack.pop()
+                elif p and p != ".":
+                    stack.append(p)
+            path = "/".join(stack)
+        out[r.get("Id")] = path
+    return out
+
+
+def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
+    try:
+        root = ET.fromstring(zf.read(part))
+    except KeyError:
+        return None
+    plot = root.find(".//" + NS_C + "plotArea")
+    if plot is None:
+        return None
+
+    def text_of(el) -> str:
+        if el is None:
+            return ""
+        return "".join(t.text or "" for t in el.iter(NS_A + "t")).strip()
+
+    title = text_of(root.find(NS_C + "chart/" + NS_C + "title"))
+    series = []
+    kinds = []
+    for grp in plot:
+        tag = grp.tag.replace(NS_C, "")
+        if not tag.endswith("Chart"):
+            continue
+        kind = {"lineChart": "line", "barChart": "bar", "areaChart": "area", "scatterChart": "scatter",
+                "pieChart": "pie"}.get(tag, "line")
+        grouping = grp.find(NS_C + "grouping")
+        stacked = grouping is not None and grouping.get("val") in ("stacked", "percentStacked")
+        kinds.append(kind)
+        for ser in grp.findall(NS_C + "ser"):
+            def ref(path):
+                el = ser.find(path)
+                return el.text if el is not None else None
+            name_ref = ref(NS_C + "tx/" + NS_C + "strRef/" + NS_C + "f")
+            name_lit = ser.find(NS_C + "tx/" + NS_C + "v")
+            cat = ref(NS_C + "cat/" + NS_C + "strRef/" + NS_C + "f") or ref(NS_C + "cat/" + NS_C + "numRef/" + NS_C + "f") \
+                or ref(NS_C + "xVal/" + NS_C + "numRef/" + NS_C + "f") or ref(NS_C + "xVal/" + NS_C + "strRef/" + NS_C + "f")
+            val = ref(NS_C + "val/" + NS_C + "numRef/" + NS_C + "f") or ref(NS_C + "yVal/" + NS_C + "numRef/" + NS_C + "f")
+            if val is None:
+                continue
+            series.append({"name_ref": name_ref, "name": name_lit.text if name_lit is not None else None,
+                           "cat": cat, "val": val, "kind": kind, "stacked": stacked})
+    axes = [text_of(ax.find(NS_C + "title")) for ax in plot if ax.tag in (NS_C + "catAx", NS_C + "valAx", NS_C + "dateAx")]
+    return {"title": title, "kind": kinds[0] if kinds else "line", "series": series,
+            "axis_titles": [a for a in axes if a]}
+
+
+def _sheet_charts(zf: zipfile.ZipFile, sheet_part: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for rid, target in _rels(zf, sheet_part).items():
+        if "/drawings/drawing" not in target:
+            continue
+        try:
+            root = ET.fromstring(zf.read(target))
+        except KeyError:
+            continue
+        drels = _rels(zf, target)
+        for anchor in root:
+            frm = anchor.find(NS_XDR + "from")
+            to = anchor.find(NS_XDR + "to")
+            cref = None
+            for el in anchor.iter(NS_C + "chart"):
+                cref = el.get(NS_REL + "id")
+            if cref is None or cref not in drels or frm is None:
+                continue
+            ch = _chart(zf, drels[cref])
+            if ch is None:
+                continue
+            ch["anchor"] = [int(frm.find(NS_XDR + "row").text) + 1, int(frm.find(NS_XDR + "col").text) + 1,
+                            (int(to.find(NS_XDR + "row").text) + 1) if to is not None else 0,
+                            (int(to.find(NS_XDR + "col").text) + 1) if to is not None else 0]
+            out.append(ch)
+    out.sort(key=lambda c: (c["anchor"][0], c["anchor"][1]))
+    return out
 
 
 def _workbook(zf: zipfile.ZipFile):
@@ -149,11 +346,17 @@ def import_workbook(path: str, label: Optional[str] = None) -> Model:
     problems: List[str] = []
     with zipfile.ZipFile(path) as zf:
         sst = _shared_strings(zf)
-        model.numfmts, model.xf_flags = _styles(zf)
+        model.xfs, model.dxfs = _styles(zf)
+        model.numfmts = [x[0] for x in model.xfs]
+        model.xf_flags = [x[1] for x in model.xfs]
         sheet_defs, names, model.date1904 = _workbook(zf)
         for name, state, part in sheet_defs:
             sh = model.add_sheet(name, state)
             _read_sheet(zf, part, sh, sst, intern, problems)
+            try:
+                sh.charts = _sheet_charts(zf, part)
+            except Exception as exc:  # noqa: BLE001 - charts are decoration, never block an import
+                problems.append("%s: charts not imported (%s)" % (name, exc))
 
     for name, local, text in names:
         text = (text or "").strip()
@@ -254,6 +457,32 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
                 if w is not None:
                     for c in range(int(el.get("min")), min(int(el.get("max")), 400) + 1):
                         sh.col_widths[c] = float(w)
+            elif tag == NS_MAIN + "conditionalFormatting":
+                sqref = el.get("sqref") or ""
+                first = sqref.split()[0].split(":")[0] if sqref else "A1"
+                arc = _rc(first.replace("$", ""))
+                ar, ac = divmod(arc, COLS)
+                for rule in el.findall(NS_MAIN + "cfRule"):
+                    entry: Dict[str, Any] = {
+                        "sqref": sqref, "type": rule.get("type"), "op": rule.get("operator"),
+                        "priority": int(rule.get("priority", "0")), "dxf": rule.get("dxfId"),
+                        "text": rule.get("text"), "anchor": arc, "formulas": [], "stop": rule.get("stopIfTrue") == "1",
+                    }
+                    for fe in rule.findall(NS_MAIN + "formula"):
+                        try:
+                            entry["formulas"].append(to_template(fe.text or "", ar, ac))
+                        except FormulaSyntaxError as exc:
+                            problems.append("%s CF %s: %s" % (sh.name, sqref, exc))
+                    cs = rule.find(NS_MAIN + "colorScale")
+                    if cs is not None:
+                        entry["scale"] = {
+                            "cfvo": [[v.get("type"), v.get("val")] for v in cs.findall(NS_MAIN + "cfvo")],
+                            "colors": [(c.get("rgb") or "FFFFFF")[-6:] for c in cs.findall(NS_MAIN + "color")],
+                        }
+                    if entry["dxf"] is not None:
+                        entry["dxf"] = int(entry["dxf"])
+                    sh.cf.append(entry)
+                el.clear()
             elif tag == NS_MAIN + "dataValidation":
                 f1 = el.find(NS_MAIN + "formula1")
                 sh.validations.append({

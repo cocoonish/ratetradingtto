@@ -1,0 +1,166 @@
+{
+ "id": "carry",
+ "title": "Carry & Roll",
+ "group": "TRY Faiz",
+ "book": "tto",
+ "sheet": "C & R",
+ "order": 50,
+ "inputs": [
+  {
+   "range": "B202",
+   "scope": "user",
+   "group": "carry-0",
+   "kind": "text",
+   "label": "'Açılış vadesi T (ay)' – simulator opening tenor"
+  },
+  {
+   "range": "B203",
+   "scope": "user",
+   "group": "carry-1",
+   "kind": "text",
+   "label": "'Yön (1 rec / −1 pay)' – simulator direction"
+  },
+  {
+   "range": "B204",
+   "scope": "user",
+   "group": "carry-2",
+   "kind": "auto",
+   "label": "'Tutma h (ay)' – simulator holding months"
+  },
+  {
+   "range": "B205",
+   "scope": "user",
+   "group": "carry-3",
+   "kind": "text",
+   "label": "'Kapanış (1 broken / 2 yeni)' – closing method"
+  },
+  {
+   "range": "N24:N39",
+   "scope": "user",
+   "group": "carry-4",
+   "kind": "auto",
+   "label": "'Yıllık vol' per tenor (Ufuk B table)"
+  },
+  {
+   "range": "B4",
+   "scope": "user",
+   "group": "carry-5",
+   "kind": "auto",
+   "label": "'Ufuk A ay' (drives B2/B3, spread & fly \"A\")"
+  },
+  {
+   "range": "D4",
+   "scope": "user",
+   "group": "carry-6",
+   "kind": "auto",
+   "label": "'Ufuk B ay' (drives B4/B5, \"B\" columns, chart)"
+  },
+  {
+   "range": "J3",
+   "scope": "user",
+   "group": "carry-7",
+   "kind": "text",
+   "label": "'Yön C+R' (sign of outright tables, caption RECEIVER/PAYER)"
+  },
+  {
+   "range": "F4",
+   "scope": "user",
+   "group": "carry-8",
+   "kind": "text",
+   "label": "'PV=1 / FV=0' (Motor 'Rapor çarpanı', caption PV/FV)"
+  },
+  {
+   "range": "H3",
+   "scope": "user",
+   "group": "carry-9",
+   "kind": "auto",
+   "label": "'Nominal C+R' (TL columns, simulator DV01)"
+  },
+  {
+   "range": "F2",
+   "scope": "user",
+   "group": "carry-10",
+   "kind": "auto",
+   "label": "'DV01/bacak $' (sizes the $DV01 nominals)"
+  },
+  {
+   "range": "H2",
+   "scope": "user",
+   "group": "carry-11",
+   "kind": "auto",
+   "label": "'Yuvarlama TL' (nominal rounding)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "notes",
+   "title": "CARRY & ROLL-DOWN – eğri sabit, TLREF = senaryo patikası (iş günü bileşik)",
+   "range": "A1",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Ufuk A strip",
+   "range": "A3:F3",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Ufuk A outright table",
+   "range": "A4:M20",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "Ufuk B strip",
+   "range": "A22:F22",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "Ufuk B outright table",
+   "range": "A23:O39",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "CARRY & ROLL – spread (flattener) ve fly (gövde receive)",
+   "range": "A41",
+   "hidden": false
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "Fly table",
+   "range": "A165:F199",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "KAPANIŞ SİMÜLATÖRÜ (PV, orijinal DV01 bp) – nominal = H3",
+   "range": "A201",
+   "hidden": false
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "Simulator intermediates",
+   "range": "A208:B225",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "Simulator result table",
+   "range": "A227:C238",
+   "hidden": false
+  }
+ ]
+}

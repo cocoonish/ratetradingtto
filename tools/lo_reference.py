@@ -91,7 +91,15 @@ def run(args):
     numfmt.set_engine_locale("en")
     model = Model.load(args.model)
     today = args.today
-    pins = reference_pins(model)
+    extra = {}
+    if args.inputs:
+        import json
+        with open(args.inputs, encoding="utf-8") as fh:
+            for ref, val in json.load(fh).items():
+                if ref.startswith("_"):
+                    continue
+                extra[model.cell_ref(ref)] = float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else val
+    pins = reference_pins(model, extra)
     os.makedirs(args.work, exist_ok=True)
     src = os.path.join(args.work, "reference_input.xlsx")
     outdir = os.path.join(args.work, "out")
@@ -166,5 +174,6 @@ if __name__ == "__main__":
     ap.add_argument("--tol", type=float, default=1e-9)
     ap.add_argument("--today", type=float, default=46329.0)
     ap.add_argument("--reuse", action="store_true", help="reuse an existing LibreOffice result")
+    ap.add_argument("--inputs", help="JSON file {\"Sheet!A1\": value} with extra frozen inputs")
     a = ap.parse_args()
     run_with_big_stack(run, a)

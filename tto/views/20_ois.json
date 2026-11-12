@@ -1,0 +1,474 @@
+{
+ "id": "ois",
+ "title": "OIS · PPK",
+ "group": "TRY Faiz",
+ "book": "tto",
+ "sheet": "OIS_MAIN",
+ "order": 20,
+ "inputs": [
+  {
+   "range": "F2",
+   "scope": "user",
+   "group": "ois-0",
+   "kind": "auto",
+   "label": "'DV01/bacak $' – DV01 target per leg (fly wings ½)"
+  },
+  {
+   "range": "H2",
+   "scope": "user",
+   "group": "ois-1",
+   "kind": "auto",
+   "label": "'Yuvarlama TL' – nominal rounding lot"
+  },
+  {
+   "range": "J2",
+   "scope": "user",
+   "group": "ois-2",
+   "kind": "pct",
+   "label": "'TLREF bugün'"
+  },
+  {
+   "range": "B3",
+   "scope": "user",
+   "group": "ois-3",
+   "kind": "text",
+   "label": "'Senaryo tabanı' – default for blank steps"
+  },
+  {
+   "range": "D3",
+   "scope": "user",
+   "group": "ois-4",
+   "kind": "auto",
+   "label": "'Kaydırma bp' – added to blank steps"
+  },
+  {
+   "range": "F3",
+   "scope": "user",
+   "group": "ois-5",
+   "kind": "text",
+   "label": "'1M/2M kota' – quotes binding the solver"
+  },
+  {
+   "range": "H3",
+   "scope": "user",
+   "group": "ois-6",
+   "kind": "auto",
+   "label": "'Nominal C+R'"
+  },
+  {
+   "range": "J3",
+   "scope": "user",
+   "group": "ois-7",
+   "kind": "text",
+   "label": "'Yön C+R'"
+  },
+  {
+   "range": "B4",
+   "scope": "user",
+   "group": "ois-8",
+   "kind": "auto",
+   "label": "'Ufuk A ay'"
+  },
+  {
+   "range": "D4",
+   "scope": "user",
+   "group": "ois-9",
+   "kind": "auto",
+   "label": "'Ufuk B ay'"
+  },
+  {
+   "range": "F4",
+   "scope": "user",
+   "group": "ois-10",
+   "kind": "text",
+   "label": "'PV=1 / FV=0'"
+  },
+  {
+   "range": "H4",
+   "scope": "user",
+   "group": "ois-11",
+   "kind": "auto",
+   "label": "'Vade limiti (ay)' – EN İYİ filter"
+  },
+  {
+   "range": "J4",
+   "scope": "user",
+   "group": "ois-12",
+   "kind": "text",
+   "label": "'Eşit adım ≤' – solver bucket rule"
+  },
+  {
+   "range": "P3:P5",
+   "scope": "user",
+   "group": "ois-13",
+   "kind": "text",
+   "label": "scenario names"
+  },
+  {
+   "range": "Q3:Q5",
+   "scope": "user",
+   "group": "ois-14",
+   "kind": "number",
+   "label": "scenario probabilities"
+  },
+  {
+   "range": "U10:U89",
+   "scope": "user",
+   "group": "ois-15",
+   "kind": "auto",
+   "label": "step per meeting, S1"
+  },
+  {
+   "range": "V10:V89",
+   "scope": "user",
+   "group": "ois-16",
+   "kind": "auto",
+   "label": "step per meeting, S2"
+  },
+  {
+   "range": "W10:W89",
+   "scope": "user",
+   "group": "ois-17",
+   "kind": "auto",
+   "label": "step per meeting, S3"
+  },
+  {
+   "range": "P10:P89",
+   "scope": "shared",
+   "group": "ois-18",
+   "kind": "date",
+   "label": "MPC meeting dates"
+  },
+  {
+   "range": "O10:O89",
+   "scope": "shared",
+   "group": "ois-19",
+   "kind": "text",
+   "label": "meeting labels"
+  },
+  {
+   "range": "J9:J14",
+   "scope": "shared",
+   "group": "ois-20",
+   "kind": "text",
+   "label": "Bloomberg ticker roots"
+  },
+  {
+   "range": "J16",
+   "scope": "shared",
+   "group": "ois-20",
+   "kind": "text",
+   "label": "Bloomberg ticker roots"
+  },
+  {
+   "range": "J18:J26",
+   "scope": "shared",
+   "group": "ois-20",
+   "kind": "text",
+   "label": "Bloomberg ticker roots"
+  },
+  {
+   "range": "AU6",
+   "scope": "user",
+   "group": "ois-21",
+   "kind": "auto",
+   "label": "'Kota toleransı (bp)'"
+  },
+  {
+   "range": "AU7",
+   "scope": "user",
+   "group": "ois-22",
+   "kind": "auto",
+   "label": "'Stub adım ölçeği (bp)'"
+  },
+  {
+   "range": "AU8",
+   "scope": "user",
+   "group": "ois-23",
+   "kind": "auto",
+   "label": "'Adım ölçeği (bp)'"
+  },
+  {
+   "range": "AU9",
+   "scope": "user",
+   "group": "ois-24",
+   "kind": "number",
+   "label": "'Adım benzerliği ρ (kovalar arası)'"
+  },
+  {
+   "range": "AU10",
+   "scope": "user",
+   "group": "ois-25",
+   "kind": "auto",
+   "label": "'TLREF çapası (bp)'"
+  },
+  {
+   "range": "AU15",
+   "scope": "user",
+   "group": "ois-26",
+   "kind": "auto",
+   "label": "'Kova içi sapma σ (bp)'"
+  },
+  {
+   "range": "V444:V457",
+   "scope": "user",
+   "group": "ois-27",
+   "kind": "auto",
+   "label": "'Çözücüde' – quote included in solver"
+  },
+  {
+   "range": "B122",
+   "scope": "user",
+   "group": "ois-28",
+   "kind": "date",
+   "label": "'Başlangıç tarihi'"
+  },
+  {
+   "range": "B123",
+   "scope": "user",
+   "group": "ois-29",
+   "kind": "date",
+   "label": "'Bitiş tarihi'"
+  },
+  {
+   "range": "F122",
+   "scope": "user",
+   "group": "ois-30",
+   "kind": "pct",
+   "label": "'Spread'"
+  },
+  {
+   "range": "M336:N438",
+   "scope": "user",
+   "group": "ois-31",
+   "kind": "auto",
+   "label": "'Başlangıç (ay)', 'Bitiş (ay)' of each forward"
+  },
+  {
+   "range": "Q336:R438",
+   "scope": "user",
+   "group": "ois-32",
+   "kind": "pct",
+   "label": "'Başl. bacağı dolum', 'Bitiş bacağı dolum'"
+  },
+  {
+   "range": "AE81:AG81",
+   "scope": "shared",
+   "group": "ois-33",
+   "kind": "auto",
+   "label": "bucket days SN / 1W / 2W"
+  },
+  {
+   "range": "A30:A44",
+   "scope": "user",
+   "group": "ois-34",
+   "kind": "auto",
+   "label": "rank numbers"
+  },
+  {
+   "range": "A48:A62",
+   "scope": "user",
+   "group": "ois-34",
+   "kind": "auto",
+   "label": "rank numbers"
+  },
+  {
+   "range": "A66:A80",
+   "scope": "user",
+   "group": "ois-34",
+   "kind": "auto",
+   "label": "rank numbers"
+  },
+  {
+   "range": "B442:B457",
+   "scope": "user",
+   "group": "ois-35",
+   "kind": "auto",
+   "label": "bucket index, type, coupon count"
+  },
+  {
+   "range": "F442:F457",
+   "scope": "user",
+   "group": "ois-35",
+   "kind": "auto",
+   "label": "bucket index, type, coupon count"
+  },
+  {
+   "range": "G442:G457",
+   "scope": "user",
+   "group": "ois-35",
+   "kind": "auto",
+   "label": "bucket index, type, coupon count"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Parametre ve özet şeridi",
+   "range": "A2:J5",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "SENARYOLAR",
+   "range": "O1:T6",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "OUTRIGHT",
+   "range": "A7:L26",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "IMPLIED RATES",
+   "range": "N7:Z89",
+   "hidden": false
+  },
+  {
+   "id": "B5",
+   "type": "table",
+   "title": "O/N EŞLENİKLERİ (360)",
+   "range": "AD7:AH26",
+   "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "STUB İMA (spot → MPC1)",
+   "range": "AJ8:AN15",
+   "hidden": false
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "title": "KOTA ARALIKLARI · ima ortalama TLREF (kotaların sabitlediği)",
+   "range": "AJ17:AP35",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "Çözücü ayarları ve durum",
+   "range": "AT4:AU20",
+   "hidden": false
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "EN İYİ 15 SPREAD",
+   "range": "A28:L44",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "EN İYİ 15 FLY",
+   "range": "A46:L62",
+   "hidden": false
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "EN İYİ 15 FRA",
+   "range": "A64:L80",
+   "hidden": false
+  },
+  {
+   "id": "B12",
+   "type": "table",
+   "title": "Grafikler (6 floating charts)",
+   "range": "AE37:AQ79",
+   "hidden": true
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "MPC OIS",
+   "range": "A82:M99",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "MPC İŞLEMLERİ → KOVA DV01 ($)",
+   "range": "AD80:AQ99",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "MPC SPREAD – MPCk vs MPCk+1",
+   "range": "A101:K117",
+   "hidden": false
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "Spread · YÖN kova DV01",
+   "range": "AD102:AQ117",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "İKİ TARİH ARASI SIMPLE RATE",
+   "range": "A121:F129",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "STUB – Spot → yarından sonraki ilk MPC (etkin gün)",
+   "range": "H121:L127",
+   "hidden": false
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "TÜM SPREADLER",
+   "range": "A131:K285",
+   "hidden": false
+  },
+  {
+   "id": "B20",
+   "type": "table",
+   "title": "TÜM FLY'LAR",
+   "range": "A287:K332",
+   "hidden": false
+  },
+  {
+   "id": "B21",
+   "type": "table",
+   "title": "TÜM FORWARD / FRA",
+   "range": "A334:T438",
+   "hidden": false
+  },
+  {
+   "id": "B22",
+   "type": "table",
+   "title": "İMA PPK – kotalar ve global çözücü kontrolü (model − kota, bp)",
+   "range": "A440:W457",
+   "hidden": false
+  },
+  {
+   "id": "B23",
+   "type": "table",
+   "title": "(helper) P&L, yön ve sıralama sütunları",
+   "range": "AR9:BL438",
+   "hidden": true
+  },
+  {
+   "id": "B24",
+   "type": "table",
+   "title": "(helper) Adım S1–S3 and settle-date cell",
+   "range": "BM8:BO89",
+   "hidden": true
+  }
+ ]
+}

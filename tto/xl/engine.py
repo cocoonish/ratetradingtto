@@ -115,15 +115,22 @@ class Engine(object):
         return fn
 
     # ------------------------------------------------------------------ inputs
-    def declare_inputs(self, cells: Iterable[Tuple[int, int]]) -> None:
-        """Mark cells as inputs (they may later be overridden per user or globally)."""
+    def declare_inputs(self, cells: Iterable[Tuple[int, int]], group: Optional[str] = None) -> None:
+        """Mark cells as inputs (they may later be overridden per user or globally).
+
+        Cells declared with the same ``group`` share one dependency bit (e.g. a whole pasted table).
+        """
         fresh = False
         for si, rc in cells:
             if rc not in self.input_mask[si]:
-                self.input_mask[si][rc] = self.bit(("cell", si, rc))
+                key = ("group", group) if group else ("cell", si, rc)
+                self.input_mask[si][rc] = self.bit(key)
                 fresh = True
         if fresh:
             self.reset()
+
+    def is_input(self, si: int, rc: int) -> bool:
+        return rc in self.input_mask[si]
 
     def set_inputs(self, values: Dict[Tuple[int, int], Any]) -> None:
         """Set shared (all users) values of input cells and invalidate what depends on them."""
@@ -139,10 +146,15 @@ class Engine(object):
         if changed:
             self.invalidate(changed)
 
-    def clear_input(self, si: int, rc: int) -> None:
-        if rc in self.input_value[si]:
-            del self.input_value[si][rc]
-            self.invalidate(self.input_mask[si][rc])
+    def clear_inputs(self, cells: Iterable[Tuple[int, int]]) -> None:
+        """Remove shared overrides: the cells fall back to what the workbook itself holds."""
+        changed = 0
+        for si, rc in cells:
+            if rc in self.input_value[si]:
+                del self.input_value[si][rc]
+                changed |= self.input_mask[si][rc]
+        if changed:
+            self.invalidate(changed)
 
     def base_value(self, si: int, rc: int) -> Any:
         """The workbook's own constant in a cell (None when empty or a formula)."""
@@ -263,7 +275,19 @@ class Calc(object):
                 m.update(eng.pins[si])
                 m.update(eng.input_value[si])
                 self.memo.append(m)
-                self.maskd.append(dict(eng.input_mask[si]))
+                # every input cell carries its dependency bit - also when it is empty.  Inputs whose
+                # default is a formula get the bit when that formula is evaluated (see _eval).
+                md: Dict[int, int] = {}
+                fml = eng.fml[si]
+                iv = eng.input_value[si]
+                pins = eng.pins[si]
+                for rc, b in eng.input_mask[si].items():
+                    if rc in fml and rc not in iv and rc not in pins:
+                        continue
+                    if rc not in m:
+                        m[rc] = None
+                    md[rc] = b
+                self.maskd.append(md)
         else:
             self.memo = [dict() for _ in range(n)]
             self.maskd = [dict() for _ in range(n)]
@@ -310,20 +334,37 @@ class Calc(object):
                 continue
             memo = self.memo[si]
             inputs = eng.input_mask[si]
-            dead = [rc for rc, k in md.items() if k & changed and rc not in inputs]
+            fml = eng.fml[si]
+            iv = eng.input_value[si]
+            overlay = self.overlay
+            dead = []
+            for rc, k in md.items():
+                if k & changed:
+                    if rc in inputs:
+                        # an input keeps its value unless it is a formula default that must be recomputed
+                        if shared:
+                            if not (rc in fml and rc not in iv):
+                                continue
+                        elif (si, rc) in overlay:
+                            continue
+                    dead.append(rc)
             for rc in dead:
                 del md[rc]
                 memo.pop(rc, None)
             if shared:
+                fml = eng.fml[si]
                 for rc, bit in inputs.items():
                     if bit & changed:
                         v = eng.input_value[si].get(rc, _MISS)
                         if v is _MISS:
-                            v = eng.consts[si].get(rc)
-                            if v is None:
+                            if rc in fml:
+                                # an input holding a default formula: recompute it (it keeps its input bit)
                                 memo.pop(rc, None)
+                                md.pop(rc, None)
                                 continue
+                            v = eng.consts[si].get(rc)
                         memo[rc] = v
+                        md[rc] = bit
         if self.rcache:
             self.rcache = {k: e for k, e in self.rcache.items() if not (e[2] & changed)}
         if not shared:
@@ -466,6 +507,9 @@ class Calc(object):
             self.depth -= 1
         self.evals += 1
         k = self.cm
+        ib = eng.input_mask[si].get(rc)
+        if ib:
+            k |= ib
         self.cm = saved | k
         if v is None:
             v = 0.0                     # a formula that yields an empty cell shows 0

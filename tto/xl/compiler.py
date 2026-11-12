@@ -81,6 +81,15 @@ class Compiler(object):
             body = self.value(ast, "S")
         return "def f(X, S, r, c):\n    cv = X.cv\n    rg = X.rg\n    return " + body + "\n"
 
+    def compile_node(self, node, base: str = "S"):
+        """Compile one AST node (e.g. an argument of a call) into ``f(X, S, r, c)``; references are kept."""
+        self._scope = []
+        self._nlocal = 0
+        src = "def f(X, S, r, c):\n    cv = X.cv\n    rg = X.rg\n    return " + self.ref(node, base) + "\n"
+        loc: Dict[str, Any] = {}
+        exec(compile(src, "<formula-arg>", "exec"), self.ns, loc)
+        return loc["f"]
+
     def compile_expression(self, template: str, is_array: bool = False):
         """Compile an ad-hoc formula template (used for defined names / tests)."""
         return self._compile(template, is_array)
@@ -237,7 +246,8 @@ class Compiler(object):
         if special is not None:
             return special(args, base, want_ref)
         if addin or name in ADDINS:
-            codes = ", ".join(self.value(a, base) for a in args)
+            # add-in arguments keep references (BINTERPOL takes ranges); the provider scalarises the rest
+            codes = ", ".join("None" if a[0] == "missing" else self.ref(a, base) for a in args)
             code = "X.addin(%r, S, r, c, (%s%s))" % (name, codes, "," if len(args) == 1 else "")
             if want_ref:
                 return code

@@ -1,0 +1,138 @@
+{
+ "id": "mobil",
+ "title": "Mobil MK",
+ "group": "Araçlar",
+ "book": "tto",
+ "sheet": "MOBIL MK",
+ "order": 94,
+ "inputs": [
+  {
+   "range": "A2:A9",
+   "scope": "user",
+   "group": "mobil-0",
+   "kind": "text",
+   "label": "ISINs of table 1 (lookup keys)"
+  },
+  {
+   "range": "A11:A15",
+   "scope": "user",
+   "group": "mobil-0",
+   "kind": "text",
+   "label": "ISINs of table 1 (lookup keys)"
+  },
+  {
+   "range": "A17:A25",
+   "scope": "user",
+   "group": "mobil-0",
+   "kind": "text",
+   "label": "ISINs of table 1 (lookup keys)"
+  },
+  {
+   "range": "B2:B25",
+   "scope": "user",
+   "group": "mobil-1",
+   "kind": "text",
+   "label": "'DÖVİZ CİNSİ'"
+  },
+  {
+   "range": "C2:C25",
+   "scope": "user",
+   "group": "mobil-2",
+   "kind": "text",
+   "label": "'KIYMET CİNSİ'"
+  },
+  {
+   "range": "D2:D25",
+   "scope": "user",
+   "group": "mobil-3",
+   "kind": "date",
+   "label": "'VADE'"
+  },
+  {
+   "range": "E2:E25",
+   "scope": "user",
+   "group": "mobil-4",
+   "kind": "auto",
+   "label": "'STOK' requirement, table 1"
+  },
+  {
+   "range": "A29:D36",
+   "scope": "user",
+   "group": "mobil-5",
+   "kind": "date",
+   "label": "same security list repeated for table 2"
+  },
+  {
+   "range": "A38:D42",
+   "scope": "user",
+   "group": "mobil-5",
+   "kind": "date",
+   "label": "same security list repeated for table 2"
+  },
+  {
+   "range": "A44:D52",
+   "scope": "user",
+   "group": "mobil-5",
+   "kind": "date",
+   "label": "same security list repeated for table 2"
+  },
+  {
+   "range": "E29:E36",
+   "scope": "user",
+   "group": "mobil-6",
+   "kind": "auto",
+   "label": "'MIN STOK' requirement, table 2"
+  },
+  {
+   "range": "E38:E42",
+   "scope": "user",
+   "group": "mobil-6",
+   "kind": "auto",
+   "label": "'MIN STOK' requirement, table 2"
+  },
+  {
+   "range": "E44:E52",
+   "scope": "user",
+   "group": "mobil-6",
+   "kind": "auto",
+   "label": "'MIN STOK' requirement, table 2"
+  },
+  {
+   "range": "K2:K222",
+   "scope": "user",
+   "group": "mobil-7",
+   "kind": "text",
+   "label": "pasted ISIN list"
+  },
+  {
+   "range": "L2:L222",
+   "scope": "user",
+   "group": "mobil-8",
+   "kind": "auto",
+   "label": "pasted 'T0 Stok'"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Stock check against 'STOK' (no title)",
+   "range": "A1:G25",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Stock check against 'MIN STOK' (no title)",
+   "range": "A28:G52",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Inventory lookup list",
+   "range": "K1:L222",
+   "hidden": false
+  }
+ ]
+}

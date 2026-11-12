@@ -1,0 +1,341 @@
+{
+ "id": "masa",
+ "title": "Masa",
+ "group": "Masa",
+ "book": "tto",
+ "sheet": "MASA",
+ "order": 10,
+ "inputs": [
+  {
+   "range": "C60",
+   "scope": "user",
+   "group": "masa-0",
+   "kind": "date",
+   "label": "Başlangıç — start date of the date-to-date calculators (B9, B10)"
+  },
+  {
+   "range": "E60",
+   "scope": "user",
+   "group": "masa-1",
+   "kind": "date",
+   "label": "Bitiş — end date"
+  },
+  {
+   "range": "I60",
+   "scope": "user",
+   "group": "masa-2",
+   "kind": "number",
+   "label": "Spread (bp) — spread added to ACT/360 simple rates"
+  },
+  {
+   "range": "P94:P99",
+   "scope": "user",
+   "group": "masa-3",
+   "kind": "date",
+   "label": "Valör — six value dates of the forward pricing table (B14)"
+  },
+  {
+   "range": "W94:W99",
+   "scope": "user",
+   "group": "masa-4",
+   "kind": "date",
+   "label": "Manuel TRY % — manual TRY rate per value date"
+  },
+  {
+   "range": "Q100",
+   "scope": "user",
+   "group": "masa-5",
+   "kind": "text",
+   "label": "Döviz — foreign currency of the forward table"
+  },
+  {
+   "range": "AB129",
+   "scope": "user",
+   "group": "masa-6",
+   "kind": "auto",
+   "label": "\"YAKIN\" eşiği (bp) for the VİOP target status (B17)"
+  },
+  {
+   "range": "C156:C163",
+   "scope": "shared",
+   "group": "masa-7",
+   "kind": "text",
+   "label": "Ticker — Bloomberg tickers of the 8 macro indicators (B20)"
+  },
+  {
+   "range": "Q155",
+   "scope": "shared",
+   "group": "masa-8",
+   "kind": "number",
+   "label": "Politika faizi % — current policy rate"
+  },
+  {
+   "range": "S155",
+   "scope": "shared",
+   "group": "masa-9",
+   "kind": "date",
+   "label": "Anket ayı — survey month"
+  },
+  {
+   "range": "U155",
+   "scope": "shared",
+   "group": "masa-10",
+   "kind": "text",
+   "label": "ECO ticker — Bloomberg ECO ticker for the survey median"
+  },
+  {
+   "range": "Q157:Q159",
+   "scope": "shared",
+   "group": "masa-11",
+   "kind": "date",
+   "label": "dates of 1. toplantı, 2. toplantı, 3. toplantı"
+  },
+  {
+   "range": "R157:R159",
+   "scope": "shared",
+   "group": "masa-12",
+   "kind": "number",
+   "label": "Anket % for the three meetings"
+  },
+  {
+   "range": "R160",
+   "scope": "shared",
+   "group": "masa-13",
+   "kind": "number",
+   "label": "survey policy rate, current year end (P160 = YEAR(S155)&\" sonu\")"
+  },
+  {
+   "range": "R161",
+   "scope": "shared",
+   "group": "masa-14",
+   "kind": "number",
+   "label": "survey policy rate, 12 ay sonrası"
+  },
+  {
+   "range": "R162",
+   "scope": "shared",
+   "group": "masa-15",
+   "kind": "number",
+   "label": "survey policy rate, next year end"
+  },
+  {
+   "range": "R164",
+   "scope": "shared",
+   "group": "masa-16",
+   "kind": "auto",
+   "label": "12A TÜFE bekl. — survey 12M-ahead annual CPI"
+  },
+  {
+   "range": "C171",
+   "scope": "user",
+   "group": "masa-17",
+   "kind": "date",
+   "label": "Valör — value date of the broken-date converter (B22)"
+  },
+  {
+   "range": "G171",
+   "scope": "user",
+   "group": "masa-18",
+   "kind": "text",
+   "label": "Girdi tipi — convention of the typed quote"
+  },
+  {
+   "range": "J171",
+   "scope": "user",
+   "group": "masa-19",
+   "kind": "auto",
+   "label": "Girdi — the quote"
+  },
+  {
+   "range": "L171",
+   "scope": "user",
+   "group": "masa-20",
+   "kind": "auto",
+   "label": "Spot (ops.) — optional spot override"
+  },
+  {
+   "range": "Q171",
+   "scope": "user",
+   "group": "masa-21",
+   "kind": "auto",
+   "label": "z eşiği — z threshold (B23 direction/highlight, B20 highlight)"
+  },
+  {
+   "range": "S171",
+   "scope": "user",
+   "group": "masa-22",
+   "kind": "text",
+   "label": "Kaynak — Bloomberg source suffix for OIS history tickers"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "MASA header strip",
+   "range": "B1:AI2",
+   "hidden": false
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Status strip KONTROL",
+   "range": "B3:L3",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "ORANLAR  ·  kota ve 360 basit karşılaştırma",
+   "range": "B4:N21",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "O/N EŞLENİKLERİ  ·  360 bazında",
+   "range": "P4:AB21",
+   "hidden": false
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "RET BANDINA GÖRE PİYASA  ·  oranlar % (360 basit) ve bp: bant dışı 0 = RET bid–ask içinde, + ask üstü, − bid a",
+   "range": "P41:AB55",
+   "hidden": false
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "TARİH ARASI FAİZ  ·  OIS: MPC ima / senaryolar / bootstrap ve spread'li  (sarı hücreler girdi)",
+   "range": "B59:N70",
+   "hidden": false
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread soldan)",
+   "range": "P59:AB70",
+   "hidden": false
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "MPC İMA PATİKASI  ·  senaryolar",
+   "range": "B92:N106",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "FORWARD FİYATLAMA  ·  USDTRY  (döviz Q100; valör ve manuel faiz sarı hücreler)",
+   "range": "P92:AB103",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "VİOP  ·  kontratlar, ima TRY ve baz",
+   "range": "B108:N122",
+   "hidden": false
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "VİOP  ·  DEALS  (en iyi yakın/uzak; vade sınırı VIOP!W321)",
+   "range": "P108:AB117",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "VİOP  ·  TARGET  (girdiler VIOP!L331:P338)",
+   "range": "P119:AB129",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "SİNYALLER  ·  OIS en iyi 5  (OIS_MAIN sıralaması)",
+   "range": "B131:N147",
+   "hidden": false
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "SİNYALLER  ·  DİBS RV (OIS ve FX swap ASW eğrilerine göre)  ·  FX swap bazı",
+   "range": "P131:AB152",
+   "hidden": false
+  },
+  {
+   "id": "B20",
+   "type": "table",
+   "title": "MAKRO  ·  risk göstergeleri  (son = BDP PX_LAST, geçmiş = BDH 1Y iş günü; ticker sarı hücrede değiştirilebilir",
+   "range": "B154:N165",
+   "hidden": false
+  },
+  {
+   "id": "B21",
+   "type": "table",
+   "title": "PPK  ·  piyasa ima vs anket  (TCMB Piyasa Katılımcıları Anketi + Bloomberg medyan; sarı = girdi, aylık güncell",
+   "range": "P154:AB168",
+   "hidden": false
+  },
+  {
+   "id": "B22",
+   "type": "table",
+   "title": "KIRIK VADE & KARŞILIK  ·  forward ↔ basit ↔ OIS 3M ↔ XCCY yıllık  (piyasa = eğrilerden mid; sarı = girdi)",
+   "range": "B170:N185",
+   "hidden": false
+  },
+  {
+   "id": "B23",
+   "type": "table",
+   "title": "OIS EĞRİ RV  ·  geçmişe göre (BDH 1Y iş günü)  ·  z, yüzdelik ve C+R aynı satırda",
+   "range": "P170:AB190",
+   "hidden": false
+  },
+  {
+   "id": "B24",
+   "type": "table",
+   "title": "GRAFİK VERİSİ  ·  MASA grafikleri buradan okur (eksik değer = NA(), çizgide atlanır)",
+   "range": "AF3:AR74",
+   "hidden": true
+  },
+  {
+   "id": "B25",
+   "type": "table",
+   "title": "Sıra yardımcı",
+   "range": "AW132:AW151",
+   "hidden": true
+  },
+  {
+   "id": "B26",
+   "type": "table",
+   "title": "Forward-pricing helpers",
+   "range": "AX93:AZ99",
+   "hidden": true
+  },
+  {
+   "id": "B27",
+   "type": "table",
+   "title": "Kontrol kodları (0 tamam · 1 uyarı · 2 hata)",
+   "range": "AX2:BH3",
+   "hidden": true
+  },
+  {
+   "id": "B28",
+   "type": "table",
+   "title": "YARDIMCI · KIRIK VADE (MASA B170:N183)",
+   "range": "BK170:CC234",
+   "hidden": true
+  },
+  {
+   "id": "B29",
+   "type": "table",
+   "title": "YARDIMCI · GEÇMİŞ (BDH, Days=W, Fill=P)",
+   "range": "BK240:CR514",
+   "hidden": true
+  }
+ ]
+}

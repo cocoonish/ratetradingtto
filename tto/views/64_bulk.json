@@ -1,0 +1,89 @@
+{
+ "id": "bulk",
+ "title": "Bulk Bond",
+ "group": "Tahvil",
+ "book": "tto",
+ "sheet": "Bulk Bond",
+ "order": 64,
+ "inputs": [
+  {
+   "range": "A3:A6",
+   "scope": "user",
+   "group": "bulk-0",
+   "kind": "text",
+   "label": "ISIN list"
+  },
+  {
+   "range": "C3:C6",
+   "scope": "user",
+   "group": "bulk-1",
+   "kind": "auto",
+   "label": "own 'Bid'"
+  },
+  {
+   "range": "D3:D6",
+   "scope": "user",
+   "group": "bulk-2",
+   "kind": "auto",
+   "label": "own 'Ask'"
+  },
+  {
+   "range": "K1",
+   "scope": "user",
+   "group": "bulk-3",
+   "kind": "text",
+   "label": "pricing source codes"
+  },
+  {
+   "range": "M1",
+   "scope": "user",
+   "group": "bulk-3",
+   "kind": "text",
+   "label": "pricing source codes"
+  },
+  {
+   "range": "O1",
+   "scope": "user",
+   "group": "bulk-3",
+   "kind": "text",
+   "label": "pricing source codes"
+  },
+  {
+   "range": "Q1",
+   "scope": "user",
+   "group": "bulk-3",
+   "kind": "text",
+   "label": "pricing source codes"
+  },
+  {
+   "range": "S1",
+   "scope": "user",
+   "group": "bulk-3",
+   "kind": "text",
+   "label": "pricing source codes"
+  },
+  {
+   "range": "U1",
+   "scope": "user",
+   "group": "bulk-3",
+   "kind": "text",
+   "label": "pricing source codes"
+  },
+  {
+   "range": "K2:V2",
+   "scope": "user",
+   "group": "bulk-4",
+   "kind": "text",
+   "label": "BDP field names"
+  }
+ ],
+ "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Quote table",
+   "range": "A1:V6",
+   "hidden": false
+  }
+ ]
+}

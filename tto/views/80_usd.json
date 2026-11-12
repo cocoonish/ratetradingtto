@@ -1,0 +1,240 @@
+{
+ "id": "usd",
+ "title": "USD · FOMC",
+ "group": "USD Faiz",
+ "book": "sofr",
+ "sheet": "SOFR_FOMC",
+ "order": 80,
+ "inputs": [
+  {
+   "range": "C6",
+   "scope": "user",
+   "group": "usd-manual",
+   "kind": "number",
+   "label": "O/N fixing (%) – manuel"
+  },
+  {
+   "range": "C7",
+   "scope": "user",
+   "group": "usd-manual",
+   "kind": "number",
+   "label": "Güncel ima O/N (%) – manuel"
+  },
+  {
+   "range": "C16",
+   "scope": "user",
+   "group": "usd-manual",
+   "kind": "number",
+   "label": "O/N primi (bp) – manuel"
+  },
+  {
+   "range": "B9",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "number",
+   "label": "Adım (bp)"
+  },
+  {
+   "range": "B10",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "text",
+   "label": "İnterpolasyon"
+  },
+  {
+   "range": "B11",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "text",
+   "label": "Eğri kaynağı"
+  },
+  {
+   "range": "B12",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "number",
+   "label": "Hedef DV01 ($/bp)"
+  },
+  {
+   "range": "B13",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "number",
+   "label": "Min. fark (bp)"
+  },
+  {
+   "range": "B14",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "text",
+   "label": "Sıralama"
+  },
+  {
+   "range": "B17",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "number",
+   "label": "Spread/fly listesi maks vade (ay)"
+  },
+  {
+   "range": "B19",
+   "scope": "user",
+   "group": "usd-param",
+   "kind": "number",
+   "label": "Tolerans (bp)"
+  },
+  {
+   "range": "D49:D68",
+   "scope": "user",
+   "group": "usd-quotes",
+   "kind": "number",
+   "label": "Manuel kota (%)"
+  },
+  {
+   "range": "F49:F68",
+   "scope": "user",
+   "group": "usd-quotes",
+   "kind": "number",
+   "label": "Dahil (1/0)"
+  },
+  {
+   "range": "B74:B83",
+   "scope": "shared",
+   "group": "usd-fomc-dates",
+   "kind": "date",
+   "label": "FOMC toplantı tarihleri"
+  },
+  {
+   "range": "C74:C83",
+   "scope": "user",
+   "group": "usd-scn",
+   "kind": "number",
+   "label": "Karar (1/0)"
+  },
+  {
+   "range": "P74:P83",
+   "scope": "user",
+   "group": "usd-scn",
+   "kind": "number",
+   "label": "WIRP (manuel)"
+  },
+  {
+   "range": "R74:T83",
+   "scope": "user",
+   "group": "usd-scn",
+   "kind": "number",
+   "label": "Senaryo adımları (bp)"
+  },
+  {
+   "range": "R72:T72",
+   "scope": "user",
+   "group": "usd-scn",
+   "kind": "number",
+   "label": "Senaryo olasılıkları"
+  },
+  {
+   "range": "BO4:BO70",
+   "scope": "shared",
+   "group": "usd-holidays",
+   "kind": "date",
+   "label": "ABD tatilleri (SIFMA)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "top",
+   "type": "table",
+   "title": "En iyi işlemler",
+   "range": "F3:N14"
+  },
+  {
+   "id": "inp",
+   "type": "table",
+   "title": "Girdiler",
+   "range": "A3:C17"
+  },
+  {
+   "id": "chk",
+   "type": "table",
+   "title": "Kontroller",
+   "range": "A18:C24"
+  },
+  {
+   "id": "fomc",
+   "type": "table",
+   "title": "FOMC ima patikası · senaryo görüşü",
+   "range": "A71:Z83",
+   "wide": true
+  },
+  {
+   "id": "spr",
+   "type": "table",
+   "title": "En iyi 10 spread",
+   "range": "F18:N29"
+  },
+  {
+   "id": "fly",
+   "type": "table",
+   "title": "En iyi 10 fly",
+   "range": "F32:N43"
+  },
+  {
+   "id": "crv",
+   "type": "table",
+   "title": "OIS kotaları ve bootstrap eğrisi",
+   "range": "A45:T68",
+   "wide": true
+  },
+  {
+   "id": "t1",
+   "type": "table",
+   "title": "İşlem 1 · FOMC pencere OIS",
+   "range": "A86:R97",
+   "wide": true
+  },
+  {
+   "id": "t2",
+   "type": "table",
+   "title": "İşlem 2 · Outright OIS",
+   "range": "A100:P117",
+   "wide": true
+  },
+  {
+   "id": "t3",
+   "type": "table",
+   "title": "İşlem 3 · Ardışık toplantı spread",
+   "range": "A120:R130",
+   "wide": true
+  },
+  {
+   "id": "t4",
+   "type": "table",
+   "title": "İşlem 4 · Eğri spreadleri",
+   "range": "A134:R255",
+   "wide": true,
+   "collapsed": true
+  },
+  {
+   "id": "t5",
+   "type": "table",
+   "title": "İşlem 5 · Kelebekler",
+   "range": "A258:S284",
+   "wide": true,
+   "collapsed": true
+  },
+  {
+   "id": "hol",
+   "type": "table",
+   "title": "ABD tatilleri (SIFMA)",
+   "range": "BO3:BO70",
+   "hidden": true
+  },
+  {
+   "id": "aux",
+   "type": "table",
+   "title": "Yardımcı hesaplar",
+   "range": "AU47:BM123",
+   "hidden": true
+  }
+ ]
+}
