@@ -57,29 +57,29 @@
   },
   {
    "range": "K3:L11",
-   "scope": "user",
-   "group": "ypdibs-5",
+   "scope": "shared",
+   "group": "yp-stock",
    "kind": "text",
    "label": "stock list: ISIN / amount"
   },
   {
    "range": "O2:O3",
-   "scope": "user",
-   "group": "ypdibs-6",
+   "scope": "shared",
+   "group": "yp-t0",
    "kind": "text",
    "label": "T0 list ISINs"
   },
   {
    "range": "P2:P3",
-   "scope": "user",
-   "group": "ypdibs-7",
+   "scope": "shared",
+   "group": "yp-t0",
    "kind": "pct",
    "label": "'T0 Offer'"
   },
   {
    "range": "Q2:Q3",
-   "scope": "user",
-   "group": "ypdibs-8",
+   "scope": "shared",
+   "group": "yp-t0",
    "kind": "text",
    "label": "'Stok' (T0 list)"
   }

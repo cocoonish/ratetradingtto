@@ -93,7 +93,7 @@ class BloombergProvider(Provider):
 
     def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 30.0,
                  request_timeout: float = 45.0, max_hits_per_day: int = 400000, bfx: str = "off",
-                 blpapi_module=None):
+                 blpapi_module=None, reconnect_wait: float = 10.0):
         self.host = host
         self.port = int(port)
         self.stream = stream
@@ -101,6 +101,7 @@ class BloombergProvider(Provider):
         self.request_timeout = float(request_timeout)
         self.max_hits_per_day = int(max_hits_per_day)
         self.bfx_mode = bfx
+        self.reconnect_wait = float(reconnect_wait)
         self._bp = blpapi_module
         self._lock = threading.RLock()
         self._values: Dict[Tuple, Any] = {}
@@ -345,7 +346,7 @@ class BloombergProvider(Provider):
                 time.sleep(1.0)
 
     def _reconnect(self) -> None:
-        if self._stop.wait(10.0):
+        if self._stop.wait(self.reconnect_wait):
             return
         try:
             self._open_session()

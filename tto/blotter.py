@@ -258,6 +258,11 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         else:
             dv01 = mkt.default_dv01
     legs: List[Dict[str, Any]] = []
+    comma = str(payload.get("_lang") or "tr") != "en"
+
+    def fmt(x: float, digits: int) -> str:
+        text = "%.*f" % (digits, x)
+        return text.replace(".", ",") if comma else text
 
     def leg(tenor: str, receive: bool, rate: float, weight: float, role: str, annuity: Optional[float] = None,
             nominal: Optional[float] = None):
@@ -288,7 +293,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
             raise TradeError("yön PAY ya da RECEIVE olmalı")
         t = tenor_of("tenor")
         leg(t, side == "RECEIVE", level, 1.0, "outright")
-        label = "%s %s @ %.4f%%" % (side, t, level * 100.0)
+        label = "%s %s @ %s%%" % (side, t, fmt(level * 100.0, 4))
         mid = mkt.par(t)
         info = {"market": mid, "cost_bp": None if mid is None else
                 ((mid - level) if side == "RECEIVE" else (level - mid)) * 10000.0}
@@ -304,7 +309,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         flat = side == "FLATTENER"
         leg(ts, not flat, rs, 1.0, "short")
         leg(tl, flat, rl, 1.0, "long")
-        label = "%s %s/%s @ %.2f bp" % (side, ts, tl, level)
+        label = "%s %s/%s @ %s bp" % (side, ts, tl, fmt(level, 2))
         mkt_level = (market(tl) - market(ts)) * 10000.0
         info = {"market": mkt_level, "cost_bp": (mkt_level - level) if flat else (level - mkt_level)}
     elif strategy == "fly":
@@ -322,7 +327,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         leg(t1, not rec_body, r1, 0.5, "wing1")
         leg(tb, rec_body, rb, 1.0, "body")
         leg(t2, not rec_body, r2, 0.5, "wing2")
-        label = "%s %s/%s/%s @ %.2f bp" % ("REC GÖVDE" if rec_body else "PAY GÖVDE", t1, tb, t2, level)
+        label = "%s %s/%s/%s @ %s bp" % ("REC GÖVDE" if rec_body else "PAY GÖVDE", t1, tb, t2, fmt(level, 2))
         mkt_level = (2.0 * market(tb) - market(t1) - market(t2)) * 10000.0
         info = {"market": mkt_level, "cost_bp": (mkt_level - level) if rec_body else (level - mkt_level)}
     elif strategy == "fra":
@@ -356,7 +361,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
             leg(month_label(m1), not rec, q, 1.0, "start", annuity=a1, nominal=nominal)
             leg(month_label(m2), rec, r_end, 1.0, "end", annuity=a2, nominal=nominal)
             mkt_level = (end_par * a2 - start_par * a1) / fwd_annuity
-        label = "%s FRA %s→%s @ %.4f%%" % (side, "Spot" if m1 == 0 else month_label(m1), month_label(m2), level * 100.0)
+        label = "%s FRA %s→%s @ %s%%" % (side, "Spot" if m1 == 0 else month_label(m1), month_label(m2), fmt(level * 100.0, 4))
         info = {"market": mkt_level, "cost_bp": ((mkt_level - level) if rec else (level - mkt_level)) * 10000.0}
     else:
         raise TradeError("bilinmeyen strateji: %r" % strategy)

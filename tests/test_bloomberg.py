@@ -200,6 +200,34 @@ def test_daily_data_limit_guard(server):
         p.stop()
 
 
+def test_reconnects_and_resubscribes_after_the_terminal_drops(server):
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), reconnect_wait=0.05)
+    p.start()
+    try:
+        bid = bdp_key("USDTRY Curncy", "BID")
+        p.get_bdp(bid)
+        settle(p)
+        assert p.status()["connected"] and len(server.subscriptions) == 1
+        server.drop_sessions()
+        t0 = time.time()
+        while len(server.subscriptions) < 2 and time.time() - t0 < 10:
+            time.sleep(0.05)
+        assert len(server.subscriptions) == 2                      # subscribed again on the new session
+        assert p.status()["connected"]
+        assert p.get_bdp(bid) == 49.997                            # the last value stays on screen meanwhile
+        time.sleep(0.3)
+        p.drain_changes()
+        server.tick("USDTRY Curncy", {"BID": 50.5})
+        time.sleep(0.4)
+        assert p.get_bdp(bid) == 50.5 and p.drain_changes() == [bid]
+        ask = bdp_key("USDTRY Curncy", "ASK")                      # and new requests work on the new session
+        p.get_bdp(ask)
+        settle(p)
+        assert p.get_bdp(ask) == 49.9975
+    finally:
+        p.stop()
+
+
 def test_unreachable_bloomberg_is_reported(server):
     server.fail_start = True
     p = BloombergProvider(blpapi_module=fake_blpapi.module(server))

@@ -99,15 +99,15 @@
   },
   {
    "range": "K2:K222",
-   "scope": "user",
-   "group": "mobil-7",
+   "scope": "shared",
+   "group": "mk-stock",
    "kind": "text",
    "label": "pasted ISIN list"
   },
   {
    "range": "L2:L222",
-   "scope": "user",
-   "group": "mobil-8",
+   "scope": "shared",
+   "group": "mk-stock",
    "kind": "auto",
    "label": "pasted 'T0 Stok'"
   }

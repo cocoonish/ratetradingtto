@@ -212,6 +212,7 @@ export class Grid {
         if (cell.cs) td.colSpan = cell.cs;
         if (cell.heat) td.style.backgroundColor = heatStyle(cell.heat);
         if (cell.tip) td.title = cell.tip;
+        else if (cell.k === 's' && cell.t && cell.t.length > 28) td.title = cell.t;
         td.__i = i;
         td.__j = j;
         tr.appendChild(td);
@@ -226,6 +227,7 @@ export class Grid {
   _patch(data, flash) {
     const old = this.data;
     this.data = data;
+    const moved = [];
     for (let i = 0; i < data.rows.length; i++) {
       const row = data.rows[i], prev = old.rows[i], line = this.tds[i];
       for (let j = 0; j < row.length; j++) {
@@ -239,14 +241,17 @@ export class Grid {
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '');
         td.textContent = cell.t || '';
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
+        td.classList.remove('up', 'down');
         if (flash && cell.k === 'n' && before.k === 'n' && typeof cell.v === 'number' && typeof before.v === 'number'
             && cell.v !== before.v) {
-          const cls = cell.v > before.v ? 'up' : 'down';
-          td.classList.remove('up', 'down');
-          void td.offsetWidth;                       // restart the animation
-          td.classList.add(cls);
+          moved.push([td, cell.v > before.v ? 'up' : 'down']);
         }
       }
+    }
+    // highlight what moved - unless nearly everything did (a whole curve repricing is not news cell by cell)
+    if (moved.length && moved.length <= 120) {
+      void this.el.offsetWidth;                      // restart the animations
+      for (const [td, cls] of moved) td.classList.add(cls);
     }
     if (sel.grid === this) notifySelection();
   }

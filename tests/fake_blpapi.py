@@ -236,6 +236,12 @@ class Server(object):
         for s in list(self.sessions):
             s.push_tick(security, values)
 
+    def drop_sessions(self) -> None:
+        """The terminal goes away: every session is told it was terminated."""
+        for s in list(self.sessions):
+            s.subs.clear()
+            s.events.put(Event(Event.SESSION_STATUS, [Message("SessionTerminated", [], {})]))
+
     def hits(self) -> int:
         return sum(len(r["securities"]) * max(1, len(r["fields"])) for r in self.requests)
 

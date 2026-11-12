@@ -845,6 +845,7 @@ class Service(object):
     def _ois_payload(self, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         lang = lang or self.settings.locale
         p = dict(payload)
+        p["_lang"] = lang
         strategy = str(p.get("strategy", "outright")).lower()
         for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate",
                   "start_months", "end_months"):

@@ -115,7 +115,7 @@ export class ViewPage {
   panel(p) {
     const key = 'tto.col.' + this.id + '.' + p.id;
     const collapsed = pref(key, p.collapsed ? '1' : '0') === '1';
-    const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.type === 'chart' ? ' chart' : '')
+    const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
       + (p.hidden ? ' aux' : '') + (collapsed ? ' collapsed' : '') });
     el.dataset.panel = p.id;
     const it = { el, title: p.title || '', data: p.data };
