@@ -87,18 +87,75 @@ def same(a, b, tol):
     return False
 
 
+def load_inputs(model, path):
+    """``{"Sheet!A1": value}`` JSON -> {(sheet index, rc): value} (keys starting with "_" are comments)."""
+    import json
+    extra = {}
+    with open(path, encoding="utf-8") as fh:
+        for ref, val in json.load(fh).items():
+            if ref.startswith("_"):
+                continue
+            extra[model.cell_ref(ref)] = float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else val
+    return extra
+
+
+def reference_engine(model, today, extra=None):
+    """The engine set up exactly like the workbook handed to LibreOffice (frozen add-in cells, fixed clock)."""
+    pins = reference_pins(model, extra)
+    eng = Engine(model, clock=Clock(today + 0.5))
+    eng.clock.today = lambda: float(today)
+    eng.set_pins(pins)
+    return eng, pins
+
+
+def _enc(v):
+    if type(v) is XlError:
+        return {"e": v.code}
+    return v
+
+
+def _dec(v):
+    if isinstance(v, dict):
+        return XlError(v["e"])
+    if isinstance(v, int) and not isinstance(v, bool):
+        return float(v)
+    return v
+
+
+def save_golden(path, model, ref, pins, today, inputs=None):
+    """Store what LibreOffice calculated for every formula cell (tests compare against it without LibreOffice)."""
+    import gzip
+    import json
+    sheets = {}
+    for s in model.sheets:
+        rs = ref.sheet(s.name)
+        cells, values = [], []
+        for rc in list(s.fml.keys()) + list(s.members.keys()):
+            if (s.index, rc) in pins:
+                continue
+            cells.append(rc)
+            values.append(_enc(rs.cached.get(rc, rs.consts.get(rc))))
+        sheets[s.name] = [cells, values]
+    data = {"source": model.meta.get("source"), "today": today, "inputs": inputs or {}, "engine_locale": "en",
+            "reference": "LibreOffice headless full recalculation", "sheets": sheets}
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
+
+
+def load_golden(path):
+    import gzip
+    import json
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        data = json.load(fh)
+    data["sheets"] = {name: dict(zip(cells, [_dec(v) for v in values])) for name, (cells, values) in data["sheets"].items()}
+    return data
+
+
 def run(args):
     numfmt.set_engine_locale("en")
     model = Model.load(args.model)
     today = args.today
-    extra = {}
-    if args.inputs:
-        import json
-        with open(args.inputs, encoding="utf-8") as fh:
-            for ref, val in json.load(fh).items():
-                if ref.startswith("_"):
-                    continue
-                extra[model.cell_ref(ref)] = float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else val
+    extra = load_inputs(model, args.inputs) if args.inputs else {}
     pins = reference_pins(model, extra)
     os.makedirs(args.work, exist_ok=True)
     src = os.path.join(args.work, "reference_input.xlsx")
@@ -110,10 +167,16 @@ def run(args):
         log, secs = libreoffice(src, outdir, os.path.join(args.work, "profile"))
         print("LibreOffice: %.0fs  %s" % (secs, log.strip()[-200:]))
     ref = import_workbook(out)
+    if args.golden:
+        raw_inputs = {}
+        if args.inputs:
+            import json
+            with open(args.inputs, encoding="utf-8") as fh:
+                raw_inputs = {k: v for k, v in json.load(fh).items() if not k.startswith("_")}
+        save_golden(args.golden, model, ref, pins, today, raw_inputs)
+        print("golden values written to %s" % args.golden)
 
-    eng = Engine(model, clock=Clock(today + 0.5))
-    eng.clock.today = lambda: float(today)
-    eng.set_pins(pins)
+    eng, pins = reference_engine(model, today, extra)
     calc = eng.shared
     t0 = time.time()
     total = ok = 0
@@ -175,5 +238,6 @@ if __name__ == "__main__":
     ap.add_argument("--today", type=float, default=46329.0)
     ap.add_argument("--reuse", action="store_true", help="reuse an existing LibreOffice result")
     ap.add_argument("--inputs", help="JSON file {\"Sheet!A1\": value} with extra frozen inputs")
+    ap.add_argument("--golden", help="write LibreOffice's values to this .json.gz (used by tests/test_reference.py)")
     a = ap.parse_args()
     run_with_big_stack(run, a)

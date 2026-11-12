@@ -2,7 +2,7 @@
 import { api, session } from './api.js';
 import { settings, setLang, num, isoToTr } from './format.js';
 import { h, clear, toast, errorToast, debounce, menu } from './ui.js';
-import { configureGrid, clearSelection } from './grid.js';
+import { configureGrid, clearSelection, findCell, selectionText } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
 import { ExplorerPage } from './pages/explorer.js';
@@ -201,9 +201,16 @@ function applyStatus(status) {
     $('mode-text').textContent = 'Bağlantı yok';
     badge.title = 'Sunucuya ulaşılamıyor – yeniden bağlanılıyor';
   } else if (status.mode === 'live') {
-    badge.classList.add('live');
-    $('mode-text').textContent = 'CANLI · Bloomberg';
-    badge.title = 'Bloomberg (blpapi) canlı veri';
+    const p = status.provider || {};
+    if (p.connected === false) {
+      $('mode-text').textContent = 'Bloomberg bağlantısı yok';
+      badge.title = (p.error || 'Bloomberg bağlantısı koptu') + ' – yeniden bağlanılıyor';
+    } else {
+      badge.classList.add('live');
+      $('mode-text').textContent = p.pending ? 'CANLI · ' + p.pending + ' veri bekleniyor' : 'CANLI · Bloomberg';
+      badge.title = 'Bloomberg (blpapi) canlı veri · ' + (p.subscriptions || 0) + ' abonelik · bugün ' + (p.hits_today || 0)
+        + ' veri isteği' + (p.limit_reached ? ' · GÜNLÜK LİMİT KORUMASI DEVREDE' : '') + (p.error ? ' · ' + p.error : '');
+    }
   } else {
     badge.classList.add('replay');
     $('mode-text').textContent = 'KAYITLI VERİ';
@@ -211,6 +218,15 @@ function applyStatus(status) {
   }
   $('asof').textContent = status.today ? 'Değerleme: ' + isoToTr(status.today) : '';
   $('foot-ver').textContent = 'port ' + status.port;
+  if (status.note && !state.noteShown) {
+    state.noteShown = true;
+    toast(status.note, 'err', 9000);
+  }
+}
+
+function pollStatus() {
+  if (!session.user) return;
+  api.get('/api/status').then(applyStatus).catch(() => {});
 }
 
 async function loadHeader() {
@@ -321,6 +337,7 @@ function boot() {
     ]);
   });
   window.addEventListener('hashchange', () => { if (session.user) route(); });
+  setInterval(pollStatus, 15000);
 
   const saved = store('tto.user');
   if (saved) {
@@ -329,5 +346,8 @@ function boot() {
     showLogin('');
   }
 }
+
+// small debugging / testing surface
+window.tto = { findCell, selectionText, state, refresh: () => runRefresh() };
 
 boot();

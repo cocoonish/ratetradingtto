@@ -114,11 +114,26 @@ def snapshot_from_model(engine) -> Dict[Tuple, Any]:
         if type(key) is not tuple:
             continue
         value = sh.cached[rc]
-        ref = sh.arr.get(rc)
-        if root[1] in ("BDH", "BDS") and ref is not None and (ref[0] != ref[2] or ref[1] != ref[3]):
-            rows = []
-            for rr in range(ref[0], ref[2] + 1):
-                rows.append([sh.cached.get(rr * COLS + cc) for cc in range(ref[1], ref[3] + 1)])
-            value = XlArray(rows)
+        if root[1] in ("BDH", "BDS"):
+            # the block the call filled: its saved array range, or the area reserved for it below / right
+            # (the cells an add-in writes into are plain value cells in the file)
+            ref = sh.arr.get(rc)
+            zone = engine.spill_anchors[si].get(rc)
+            if ref is not None and (ref[0] != ref[2] or ref[1] != ref[3]):
+                r1, c1, r2, c2 = ref
+            elif zone is not None and (zone[0] > 1 or zone[1] > 1):
+                r1, c1, r2, c2 = r, c, r + zone[0] - 1, c + zone[1] - 1
+            else:
+                r1 = None
+            if r1 is not None:
+                rows = []
+                for rr in range(r1, r2 + 1):
+                    rows.append([sh.cached.get(rr * COLS + cc, sh.consts.get(rr * COLS + cc)) for cc in range(c1, c2 + 1)])
+                while len(rows) > 1 and all(x is None for x in rows[-1]):
+                    rows.pop()
+                width = max((max((j + 1 for j, x in enumerate(row) if x is not None), default=1) for row in rows), default=1)
+                rows = [row[:width] for row in rows]
+                if len(rows) > 1 or width > 1:
+                    value = XlArray(rows)
         snap[key] = value
     return snap

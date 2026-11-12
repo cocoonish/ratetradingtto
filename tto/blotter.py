@@ -104,13 +104,13 @@ def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: fl
             raise TradeError("TRY faizi girilmedi")
         fwd = _num(v("Forward!N163"), "forward")
         rate = float(manual)
-        usd = usd_mid
+        usd = _num(v("Forward!J163"), "USD faiz") / 100.0        # the USD mid the bulk row itself uses
     else:
         if manual is None or manual <= 0:
             raise TradeError("forward kur girilmedi")
         fwd = float(manual)
-        usd = usd_mid
-        rate = ((fwd / spot) * (1.0 + _num(usd_mid, "USD faiz") * days / 360.0) - 1.0) * 360.0 / days
+        usd = _num(v("Forward!J163"), "USD faiz") / 100.0        # same convention as the TRY-rate pricing
+        rate = ((fwd / spot) * (1.0 + usd * days / 360.0) - 1.0) * 360.0 / days
     out.update({
         "forward": fwd, "try_rate": rate, "usd_rate": usd if type(usd) is float else None,
         "points": (fwd - spot) * 10000.0, "daily_points": (fwd - spot) * 10000.0 / days,

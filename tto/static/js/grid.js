@@ -461,19 +461,31 @@ document.addEventListener('paste', (e) => {
 });
 
 export async function pasteText(grid, s, text) {
-  const anchor = grid.ref(s.top, s.left);
-  if (!anchor) return;
+  if (!grid.ref(s.top, s.left)) return;
   const clean = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n$/, '');
-  const single = !clean.includes('\t') && !clean.includes('\n');
+  const matrix = clean.split('\n').map((line) => line.split('\t'));
+  const single = matrix.length === 1 && matrix[0].length === 1;
   try {
-    let res;
+    let items = [];
+    let skipped = 0;
     if (single && (s.bottom > s.top || s.right > s.left)) {
-      const items = inputRefs(grid, s).map((x) => ({ ref: x.ref, value: clean }));
-      if (!items.length) { toast('Seçimde girdi hücresi yok', 'err'); return; }
-      res = await hooks.setInputs(grid.book, items, grid.opts.adhoc);
+      // one value onto a selection: fill every input cell of the selection (as Excel does)
+      items = inputRefs(grid, s).map((x) => ({ ref: x.ref, value: clean }));
     } else {
-      res = await hooks.paste(grid.book, anchor, clean, grid.opts.adhoc);
+      // a block: cell by cell onto what is on screen, starting at the top-left of the selection.
+      // Rows / columns the table does not show are never written to, and neither are non-input cells.
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[i].length; j++) {
+          const cell = grid.cell(s.top + i, s.left + j);
+          const ref = grid.ref(s.top + i, s.left + j);
+          if (cell && !cell.sk && ref && (cell.i || grid.opts.adhoc)) items.push({ ref, value: matrix[i][j] });
+          else skipped += 1;
+        }
+      }
     }
+    if (!items.length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
+    const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc);
+    if (res) res.skipped = skipped;
     reportApply(res, 'yapıştırıldı');
   } catch (err) {
     toast(err.message || String(err), 'err', 6000);
@@ -652,6 +664,23 @@ document.addEventListener('mousedown', (e) => {
   if (editing) commitEdit();
   clearSelection();
 });
+
+/** The <td> showing a workbook cell ("Forward!D2") if it is on screen (used by tests and deep links). */
+export function findCell(ref, root = document) {
+  const k = ref.lastIndexOf('!');
+  if (k < 0) return null;
+  const sheet = ref.slice(0, k);
+  const m = /^([A-Z]+)(\d+)$/.exec(ref.slice(k + 1).toUpperCase());
+  if (!m) return null;
+  for (const table of root.querySelectorAll('table.grid')) {
+    const g = table.__grid;
+    if (!g || !g.data || g.data.sheet !== sheet || !g.data.c || !g.data.r) continue;
+    const j = g.data.c.indexOf(m[1]);
+    const i = g.data.r.indexOf(Number(m[2]));
+    if (i >= 0 && j >= 0 && g.tds[i] && g.tds[i][j]) return g.tds[i][j];
+  }
+  return null;
+}
 
 /** Build grid data from plain rows (client-rendered tables such as the blotter lists). */
 export function plainData(header, rows) {

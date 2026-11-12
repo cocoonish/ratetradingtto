@@ -14,7 +14,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 class Settings(object):
     def __init__(self, host: str = "0.0.0.0", port: int = DEFAULT_PORT, data_dir: Optional[str] = None,
                  mode: str = "auto", bbg_host: str = "localhost", bbg_port: int = 8194,
-                 tick_seconds: float = 2.0, locale: str = "tr", models_dir: Optional[str] = None):
+                 tick_seconds: float = 2.0, locale: str = "tr", models_dir: Optional[str] = None,
+                 bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
+                 bbg_price_poll: float = 30.0):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -24,6 +26,10 @@ class Settings(object):
         self.tick_seconds = float(tick_seconds)
         self.locale = locale
         self.models_dir = models_dir or os.path.join(ROOT, "models")
+        self.bbg_stream = bool(bbg_stream)      # real-time fields by subscription (False: poll them)
+        self.bbg_bfx = bbg_bfx                  # "off" | "approx"  (BFXFORWARD has no API equivalent)
+        self.bbg_max_hits = int(bbg_max_hits)   # daily cap on reference/historical data points (0 = no cap)
+        self.bbg_price_poll = float(bbg_price_poll)
 
     @property
     def db_path(self) -> str:

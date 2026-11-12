@@ -28,6 +28,11 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--bbg-port", type=int, default=int(os.environ.get("TTO_BBG_PORT", 8194)))
     p.add_argument("--tick", type=float, default=2.0, help="canlı veride ekran yenileme aralığı (sn)")
     p.add_argument("--locale", choices=("tr", "en"), default="tr", help="varsayılan sayı biçimi")
+    p.add_argument("--no-stream", action="store_true", help="fiyat alanlarını abonelik yerine sorguyla güncelle")
+    p.add_argument("--price-poll", type=float, default=30.0, help="abonelikle gelmeyen fiyatların sorgu aralığı (sn)")
+    p.add_argument("--bfx", choices=("off", "approx"), default="off",
+                   help="BFXFORWARD: off = #N/A (API karşılığı yok), approx = FWD_CURVE'den yaklaşık hesap")
+    p.add_argument("--max-hits", type=int, default=400000, help="günlük referans/geçmiş veri isteği üst sınırı (0 = sınırsız)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def settings_from(args) -> Settings:
     return Settings(host=args.host, port=args.port, data_dir=args.data_dir, mode=args.mode, bbg_host=args.bbg_host,
-                    bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale)
+                    bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale, bbg_stream=not args.no_stream,
+                    bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll)
 
 
 def cmd_run(args) -> int:

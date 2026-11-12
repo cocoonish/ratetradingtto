@@ -1,0 +1,6 @@
+# Dashboard server
+starlette>=0.37
+uvicorn>=0.29
+
+# Bloomberg (only on the machine that has the terminal / B-PIPE):
+#   pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/simple/ blpapi

@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import blotter as bl
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
-from .inputs import InputError, parse_clipboard, parse_date, parse_input, parse_number
+from .inputs import InputError, parse_amount, parse_clipboard, parse_date, parse_input, parse_number
 from .marketdata import ReplayProvider
 from .marketdata.replay import snapshot_from_model
 from .render import Renderer
@@ -85,8 +85,10 @@ class EngineThread(object):
 
 
 class Service(object):
-    def __init__(self, settings: Optional[Settings] = None, provider=None, store: Optional[Store] = None):
+    def __init__(self, settings: Optional[Settings] = None, provider=None, store: Optional[Store] = None,
+                 clock: Optional[Clock] = None):
         self.settings = settings or Settings()
+        self._clock_override = clock
         self.store = store or Store(self.settings.db_path)
         self.et = EngineThread()
         self.gen = 1
@@ -107,7 +109,8 @@ class Service(object):
         if provider is None and s.mode in ("auto", "live"):
             try:
                 from .marketdata.bloomberg import BloombergProvider
-                provider = BloombergProvider(s.bbg_host, s.bbg_port)
+                provider = BloombergProvider(s.bbg_host, s.bbg_port, stream=s.bbg_stream, price_poll=s.bbg_price_poll,
+                                             max_hits_per_day=s.bbg_max_hits, bfx=s.bbg_bfx)
                 provider.start()
                 self.mode = "live"
             except Exception as exc:  # noqa: BLE001
@@ -129,6 +132,8 @@ class Service(object):
             if today is not None:
                 clock = Clock(today + 0.5)
                 clock.today = lambda: float(today)       # type: ignore[assignment]
+        if self._clock_override is not None:
+            clock = self._clock_override
         self.books: Dict[str, Book] = load_books(s.models_dir, provider=provider, clock=clock, replay=replay)
         if not self.books:
             raise ServiceError("model dosyaları bulunamadı: %s" % s.models_dir, 500)
@@ -178,6 +183,54 @@ class Service(object):
         if self._market_thread is None:
             self._market_thread = threading.Thread(target=self._market_loop, name="tto-market", daemon=True)
             self._market_thread.start()
+            if self.mode == "live":
+                threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
+
+    def _warmup_safe(self) -> None:
+        try:
+            self.warmup()
+        except Exception:  # noqa: BLE001 - warming up is an optimisation only
+            pass
+
+    def warmup(self, rounds: int = 30, timeout: float = 180.0) -> Dict[str, Any]:
+        """Live mode: ask Bloomberg for everything the workbooks use before the first page is opened.
+
+        Evaluating the add-in cells registers what is needed; when the answers arrive the cells that used
+        them are recalculated, which may ask for more (tickers built from other answers ...).  Repeats until
+        nothing is outstanding.
+        """
+        prov = self.provider
+        busy = getattr(prov, "busy", None)
+        drain = getattr(prov, "drain_changes", None)
+        t0 = time.time()
+        done = 0
+        total = 0
+        while done < rounds and time.time() - t0 < timeout and not self._stop.is_set():
+            done += 1
+            self.et.call(self._touch_addins)
+            while busy is not None and busy() and time.time() - t0 < timeout and not self._stop.is_set():
+                time.sleep(0.05)
+            keys = drain() if drain else []
+            if not keys:
+                break
+            total += len(keys)
+            self.et.call(self._apply_market, keys)
+        self.bump()
+        return {"rounds": done, "items": total, "seconds": round(time.time() - t0, 2)}
+
+    def _touch_addins(self) -> int:
+        from .xl.engine import addin_cells
+        n = 0
+        for b in self.books.values():
+            calc = b.engine.shared
+            for si, rc in addin_cells(b.model):
+                r, c = divmod(rc, COLS)
+                try:
+                    calc.get(si, r, c)
+                    n += 1
+                except Exception:  # noqa: BLE001
+                    continue
+        return n
 
     def stop(self) -> None:
         self._stop.set()
@@ -190,7 +243,8 @@ class Service(object):
 
     def _market_loop(self) -> None:
         last_day = None
-        while not self._stop.wait(self.settings.tick_seconds):
+        busy = getattr(self.provider, "busy", None)
+        while not self._stop.wait(0.3 if (busy is not None and busy()) else self.settings.tick_seconds):
             try:
                 drain = getattr(self.provider, "drain_changes", None)
                 keys = drain() if drain else []
@@ -738,7 +792,7 @@ class Service(object):
             p["value_date"] = float(vd)
         amt = p.get("amount")
         if isinstance(amt, str):
-            n = parse_number(amt, lang)
+            n = parse_amount(amt, lang)
             p["amount"] = n
         elif isinstance(amt, (int, float)):
             p["amount"] = float(amt)
@@ -798,7 +852,7 @@ class Service(object):
             if isinstance(v, str):
                 rate_like = k in ("short_rate", "wing1_rate", "wing2_rate", "start_rate") or \
                     (k == "level" and strategy in ("outright", "fra"))
-                n = parse_number(v, lang, prefer_decimal=k not in ("dv01", "nominal"))
+                n = parse_amount(v, lang) if k in ("dv01", "nominal") else parse_number(v, lang, prefer_decimal=True)
                 if n is not None and rate_like and not ("%" in v) and abs(n) >= 1.0:
                     n /= 100.0                    # 35,5 typed for 35,5 %
                 p[k] = n
@@ -874,7 +928,7 @@ class Service(object):
         if not inst:
             raise ServiceError("enstrüman gerekli")
         amount = payload.get("amount")
-        amount = parse_number(amount, lang) if isinstance(amount, str) else (float(amount) if isinstance(amount, (int, float)) else None)
+        amount = parse_amount(amount, lang) if isinstance(amount, str) else (float(amount) if isinstance(amount, (int, float)) else None)
         price = payload.get("price")
         price = parse_number(price, lang, prefer_decimal=True) if isinstance(price, str) else (float(price) if isinstance(price, (int, float)) else None)
         if amount is None or amount == 0:

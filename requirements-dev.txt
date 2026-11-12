@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8
+httpx>=0.27        # starlette's TestClient
+# browser test (optional): Node.js + `npm i -g playwright` + `npx playwright install chromium`

@@ -86,6 +86,21 @@ def parse_number(text: str, lang: str = "tr", prefer_decimal: bool = False) -> O
     return x
 
 
+_AMOUNT = re.compile(r"^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mio|milyon|b|bn|milyar)?\s*$", re.IGNORECASE)
+_UNITS = {"k": 1e3, "bin": 1e3, "m": 1e6, "mn": 1e6, "mio": 1e6, "milyon": 1e6, "b": 1e9, "bn": 1e9, "milyar": 1e9}
+
+
+def parse_amount(text: str, lang: str = "tr") -> Optional[float]:
+    """A trade size as a trader types it: ``10m``, ``2,5 mio``, ``500k``, ``1.000.000``."""
+    m = _AMOUNT.match(text or "")
+    if not m:
+        return None
+    x = parse_number(m.group(1), lang)
+    if x is None:
+        return None
+    return x * _UNITS.get((m.group(2) or "").lower(), 1.0)
+
+
 def parse_date(text: str) -> Optional[float]:
     """Date text -> Excel serial (``3.11.2026``, ``03/11/26``, ``2026-11-03``, ``3 Kas 2026``)."""
     s = text.strip()

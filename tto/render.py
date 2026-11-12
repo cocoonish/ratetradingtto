@@ -232,7 +232,8 @@ class Renderer(object):
             out["k"] = "d" if numfmt.is_date_format(fmt) else "n"
         elif tv is str:
             text, color = numfmt.render(v, fmt, loc)
-            out["t"] = text
+            # padding added by the number format ("_-@_-") is not content
+            out["t"] = text.strip() if v == v.strip() else text
             out["k"] = "s"
         elif tv is bool:
             out["t"] = "TRUE" if v else "FALSE"
@@ -335,8 +336,10 @@ class Renderer(object):
             keep_r = [i for i, row in enumerate(rows) if not all(empty(c) for c in row)]
             keep_c = [j for j in range(len(col_nums)) if not all(empty(row[j]) for row in rows)]
             if keep_r and keep_c:
-                # keep interior blank rows (they separate sub-tables) but drop leading / trailing ones
-                keep_r = list(range(keep_r[0], keep_r[-1] + 1))
+                # drop leading / trailing blank rows; a run of blank rows inside (they separate sub-tables)
+                # shrinks to a single one
+                filled = set(keep_r)
+                keep_r = [i for i in range(keep_r[0], keep_r[-1] + 1) if i in filled or (i - 1) in filled]
                 rows = [[rows[i][j] for j in keep_c] for i in keep_r]
                 row_nums = [row_nums[i] for i in keep_r]
                 col_nums = [col_nums[j] for j in keep_c]

@@ -433,7 +433,7 @@ def ADDT(a, b):
             ob = b if b >= 0.0 else -b
             if ob > big:
                 big = ob
-            if (r if r >= 0.0 else -r) < big * _EPS:
+            if (r if r >= 0.0 else -r) <= big * _EPS:
                 return 0.0
         return r
     return ADD(a, b)
@@ -448,7 +448,7 @@ def SUBT(a, b):
             ob = b if b >= 0.0 else -b
             if ob > big:
                 big = ob
-            if (r if r >= 0.0 else -r) < big * _EPS:
+            if (r if r >= 0.0 else -r) <= big * _EPS:
                 return 0.0
         return r
     return SUB(a, b)

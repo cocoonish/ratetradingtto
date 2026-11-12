@@ -38,8 +38,10 @@ def now_iso() -> str:
 
 
 def user_key(name: str) -> str:
-    """Canonical key of a user name (case / surrounding blanks do not create new users)."""
-    return " ".join(name.strip().split()).casefold()
+    """Canonical key of a user name: case, surrounding blanks and the Turkish dotted / dotless i do not
+    create new users ("AYŞE YILMAZ", "Ayşe Yılmaz" and "ayşe yilmaz" are one person)."""
+    key = " ".join(name.strip().split()).casefold()
+    return key.replace("\u0307", "").replace("\u0131", "i")
 
 
 class Store(object):
