@@ -81,7 +81,7 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Quote table",
+   "title": "Kotasyon tablosu",
    "range": "A1:V6",
    "hidden": false
   }

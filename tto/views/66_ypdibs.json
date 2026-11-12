@@ -86,30 +86,23 @@
  ],
  "panels": [
   {
-   "id": "B1",
-   "type": "table",
-   "title": "Settle date",
-   "range": "C1",
-   "hidden": false
-  },
-  {
    "id": "B2",
    "type": "table",
-   "title": "FX bond quote table",
+   "title": "YP DİBS kotasyon tablosu",
    "range": "B1:H10",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Stock list (lookup source)",
+   "title": "Stok listesi (ISIN · tutar)",
    "range": "K3:L11",
    "hidden": false
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "T0 Offer' list",
+   "title": "T0 offer listesi",
    "range": "O1:Q3",
    "hidden": false
   }

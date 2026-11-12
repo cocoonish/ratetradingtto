@@ -305,7 +305,7 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Parametre ve özet şeridi",
+   "title": "Parametreler",
    "range": "A2:J5",
    "hidden": false
   },
@@ -324,11 +324,31 @@
    "hidden": false
   },
   {
+   "id": "chart3",
+   "type": "chart",
+   "chart": 3
+  },
+  {
+   "id": "chart4",
+   "type": "chart",
+   "chart": 4
+  },
+  {
    "id": "B4",
    "type": "table",
    "title": "IMPLIED RATES",
    "range": "N7:Z89",
    "hidden": false
+  },
+  {
+   "id": "chart0",
+   "type": "chart",
+   "chart": 0
+  },
+  {
+   "id": "chart1",
+   "type": "chart",
+   "chart": 1
   },
   {
    "id": "B5",
@@ -380,11 +400,14 @@
    "hidden": false
   },
   {
-   "id": "B12",
-   "type": "table",
-   "title": "Grafikler (6 floating charts)",
-   "range": "AE37:AQ79",
-   "hidden": true
+   "id": "chart2",
+   "type": "chart",
+   "chart": 2
+  },
+  {
+   "id": "chart5",
+   "type": "chart",
+   "chart": 5
   },
   {
    "id": "B13",
@@ -433,21 +456,24 @@
    "type": "table",
    "title": "TÜM SPREADLER",
    "range": "A131:K285",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B20",
    "type": "table",
    "title": "TÜM FLY'LAR",
    "range": "A287:K332",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B21",
    "type": "table",
    "title": "TÜM FORWARD / FRA",
    "range": "A334:T438",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B22",
@@ -459,14 +485,14 @@
   {
    "id": "B23",
    "type": "table",
-   "title": "(helper) P&L, yön ve sıralama sütunları",
+   "title": "Yardımcı · P&L, yön ve sıralama sütunları",
    "range": "AR9:BL438",
    "hidden": true
   },
   {
    "id": "B24",
    "type": "table",
-   "title": "(helper) Adım S1–S3 and settle-date cell",
+   "title": "Yardımcı · senaryo adımları (S1–S3)",
    "range": "BM8:BO89",
    "hidden": true
   }

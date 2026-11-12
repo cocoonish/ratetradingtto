@@ -67,35 +67,35 @@
   {
    "id": "B2",
    "type": "table",
-   "title": "Trade parameters",
+   "title": "İşlem parametreleri",
    "range": "A3:D3",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Result summary",
+   "title": "Sonuç özeti",
    "range": "A4:J6",
    "hidden": false
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "Schedule (input table)",
+   "title": "Nakit akışı takvimi (girdi)",
    "range": "A9:E34",
    "hidden": false
   },
   {
    "id": "B5",
    "type": "table",
-   "title": "Market leg per period",
+   "title": "Piyasa bacağı (dönem bazında)",
    "range": "F9:J34",
    "hidden": false
   },
   {
    "id": "B6",
    "type": "table",
-   "title": "Scenario legs and helpers",
+   "title": "Yardımcı · senaryo bacakları",
    "range": "M9:AC34",
    "hidden": true
   }

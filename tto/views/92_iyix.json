@@ -25,14 +25,14 @@
   {
    "id": "B2",
    "type": "table",
-   "title": "TCMB' / 'TCMB EUR",
+   "title": "TCMB kurları",
    "range": "A18:D19",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Best' / 'Worst",
+   "title": "Best / Worst",
    "range": "A21:C22",
    "hidden": false
   },

@@ -1010,6 +1010,13 @@
  ],
  "panels": [
   {
+   "id": "B7",
+   "type": "table",
+   "title": "Ana girdiler (üst bant)",
+   "range": "Z3:AA12",
+   "hidden": false
+  },
+  {
    "id": "B1",
    "type": "table",
    "title": "Interest 2 SP",
@@ -1052,24 +1059,24 @@
    "hidden": false
   },
   {
-   "id": "B7",
-   "type": "table",
-   "title": "Master inputs for the top band (no title)",
-   "range": "Z3:AA12",
-   "hidden": false
-  },
-  {
    "id": "B8",
    "type": "table",
-   "title": "Basit' → 'Bileşik' (no title)",
+   "title": "Basit → Bileşik",
    "range": "N12:O15",
    "hidden": false
   },
   {
    "id": "B9",
    "type": "table",
-   "title": "Bileşik' → 'Basit' (no title)",
+   "title": "Bileşik → Basit",
    "range": "Q12:R15",
+   "hidden": false
+  },
+  {
+   "id": "B26",
+   "type": "table",
+   "title": "Ağırlıklı ortalama · Net / Maliyet / Gerçekleşen K/Z",
+   "range": "Z37:AD58",
    "hidden": false
   },
   {
@@ -1078,13 +1085,6 @@
    "title": "Forward DV01",
    "range": "W16:X34",
    "hidden": false
-  },
-  {
-   "id": "B11",
-   "type": "table",
-   "title": "Scratch arithmetic (no label)",
-   "range": "AA18:AA19",
-   "hidden": true
   },
   {
    "id": "B12",
@@ -1124,14 +1124,14 @@
   {
    "id": "B17",
    "type": "table",
-   "title": "Repo' → 'Bileşik' (no title)",
+   "title": "Repo → Bileşik",
    "range": "Q19:R22",
    "hidden": false
   },
   {
    "id": "B18",
    "type": "table",
-   "title": "Bileşik' → 'Repo' (no title)",
+   "title": "Bileşik → Repo",
    "range": "Q24:R27",
    "hidden": false
   },
@@ -1178,20 +1178,6 @@
    "hidden": false
   },
   {
-   "id": "B25",
-   "type": "table",
-   "title": "Unlabelled discount scratch",
-   "range": "X40:X44",
-   "hidden": true
-  },
-  {
-   "id": "B26",
-   "type": "table",
-   "title": "Weighted Average' (two tables) with 'Net' / 'Maliyet' / 'Realized P&L",
-   "range": "Z37:AD58",
-   "hidden": false
-  },
-  {
    "id": "B27",
    "type": "table",
    "title": "TLREF Spread",
@@ -1222,37 +1208,51 @@
   {
    "id": "B31",
    "type": "table",
-   "title": "Forward from annual yield (no title)",
+   "title": "Yıllık getiriden forward fiyat",
    "range": "N51:O57",
    "hidden": false
   },
   {
    "id": "B32",
    "type": "table",
-   "title": "Annualised yield between two prices (no title)",
+   "title": "İki fiyat arası yıllık getiri",
    "range": "N60:O66",
    "hidden": false
   },
   {
    "id": "B33",
    "type": "table",
-   "title": "CPI-linker monthly accrual (no title)",
+   "title": "TÜFE'ye endeksli · aylık tahakkuk",
    "range": "B62:C71",
    "hidden": false
   },
   {
    "id": "B34",
    "type": "table",
-   "title": "CPI-linker monthly accrual (duplicate of B33)",
+   "title": "TÜFE'ye endeksli · aylık tahakkuk (2)",
    "range": "H62:I71",
    "hidden": false
   },
   {
    "id": "B35",
    "type": "table",
-   "title": "Limit' table",
+   "title": "Limit",
    "range": "W62:AA66",
    "hidden": false
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "Yardımcı · karalama",
+   "range": "AA18:AA19",
+   "hidden": true
+  },
+  {
+   "id": "B25",
+   "type": "table",
+   "title": "Yardımcı · iskonto karalaması",
+   "range": "X40:X44",
+   "hidden": true
   }
  ]
 }

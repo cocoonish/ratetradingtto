@@ -343,18 +343,19 @@ class Service(object):
                 if p["type"] in ("table", "notes"):
                     entry["range"] = p["range"]
                     entry["data"] = R.table(calc, sheet, p["range"], loc, overlay)
-                    top = parse_range(p["range"])[0]
-                    left = parse_range(p["range"])[1]
-                    # charts anchored right above this block come first
-                    for i, ch in enumerate(charts):
-                        if i not in used_charts and "chart" not in p and ch["anchor"][0] < top \
-                                and not any(q.get("chart") == i for q in v["panels"]):
-                            pass
+                    if p.get("lift", True):
+                        own = _lift_title(entry["data"])
+                        if own and not p.get("keep_title"):
+                            entry["title"] = own
                 elif p["type"] == "chart":
-                    idx = p.get("chart", 0)
-                    if idx < len(charts):
-                        used_charts.add(idx)
-                        entry["data"] = R.chart(calc, charts[idx], loc)
+                    spec = p.get("spec")
+                    if spec is None:
+                        idx = p.get("chart", 0)
+                        if idx < len(charts):
+                            used_charts.add(idx)
+                            spec = charts[idx]
+                    if spec is not None:
+                        entry["data"] = R.chart(calc, spec, loc)
                         entry["title"] = p.get("title") or entry["data"]["title"]
                 elif p["type"] == "custom":
                     entry["component"] = p.get("component")
@@ -372,7 +373,7 @@ class Service(object):
                 panels.append({"id": "chart%d" % i, "type": "chart", "title": data["title"], "data": data,
                                "anchor": ch["anchor"], "hidden": False, "wide": False})
         return {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
-                "panels": panels, "ms": int((time.time() - t0) * 1000)}
+                "panels": panels, "ms": int((time.time() - t0) * 1000), "note": v.get("note")}
 
     def header(self, user: Optional[str], locale: Optional[str] = None) -> Dict[str, Any]:
         """Top strip: spot / TLREF / spot date ... read from MASA row 1-2 (labels) and its status row."""
@@ -449,15 +450,19 @@ class Service(object):
         return b
 
     # ================================================================== inputs
-    def set_inputs(self, user: str, book_id: str, items: List[Dict[str, Any]], allow_adhoc: bool = False) -> Dict[str, Any]:
-        """items: [{"ref": "Forward!D2", "value": "03.12.2026"} ...] (value None / "" clears)."""
+    def set_inputs(self, user: str, book_id: str, items: List[Dict[str, Any]], allow_adhoc: bool = False,
+                   lang: Optional[str] = None) -> Dict[str, Any]:
+        """items: [{"ref": "Forward!D2", "value": "03.12.2026"} ...] (value None / "" clears).
+
+        ``lang`` is the number format the texts were typed / copied in ("tr": 1.234,56 – "en": 1,234.56).
+        """
         user = self.require_user(user)
-        res = self.et.call(self._set_inputs, user, book_id, items, allow_adhoc)
+        res = self.et.call(self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale)
         self.bump()
         res["gen"] = self.gen
         return res
 
-    def _set_inputs(self, user, book_id, items, allow_adhoc) -> Dict[str, Any]:
+    def _set_inputs(self, user, book_id, items, allow_adhoc, lang="tr") -> Dict[str, Any]:
         book = self._book(book_id)
         if len(items) > 20000:
             raise ServiceError("çok fazla hücre")
@@ -483,7 +488,7 @@ class Service(object):
             fmt = book.model.numfmts[sheet.styles.get(rc, 0)] if sheet.styles.get(rc, 0) < len(book.model.numfmts) else "General"
             try:
                 val = parse_input(it.get("value"), numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
-                                  d.kind, book.options_for(si, rc))
+                                  d.kind, book.options_for(si, rc), lang)
             except InputError as exc:
                 errors.append("%s: %s" % (ref, exc))
                 continue
@@ -511,7 +516,8 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in user_clear])
         return {"applied": len(shared_vals) + len(user_vals) + len(user_clear), "errors": errors}
 
-    def paste(self, user: str, book_id: str, anchor: str, text: str, allow_adhoc: bool = False) -> Dict[str, Any]:
+    def paste(self, user: str, book_id: str, anchor: str, text: str, allow_adhoc: bool = False,
+              lang: Optional[str] = None) -> Dict[str, Any]:
         """Paste tab-separated text (copied from Excel) with its top-left corner at ``anchor``.
 
         Only input cells take values; everything else in the pasted block is skipped.
@@ -536,7 +542,7 @@ class Service(object):
                     skipped += 1
         if not items:
             raise ServiceError("yapıştırılan alanda girdi hücresi yok")
-        res = self.set_inputs(user, book_id, items, allow_adhoc)
+        res = self.set_inputs(user, book_id, items, allow_adhoc, lang)
         res["skipped"] = skipped
         res["rows"] = len(matrix)
         res["cols"] = len(matrix[0]) if matrix else 0
@@ -647,7 +653,7 @@ class Service(object):
         cells = ["Forward!%s%d" % (col, RET_FIRST_ROW + i) for i in range(len(RET_TENORS)) for col in ("W", "X")]
         return {"rows": self._ret_rows(book), "meta": self.store.shared_meta("tto", cells), "gen": self.gen}
 
-    def set_ret(self, user: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def set_ret(self, user: str, rows: List[Dict[str, Any]], lang: Optional[str] = None) -> Dict[str, Any]:
         """rows: [{"tenor": "1M", "bid": "34,45", "ask": "34,65"}, ...] - percent or fraction, any separator."""
         user = self.require_user(user)
         items = []
@@ -662,7 +668,7 @@ class Service(object):
                     items.append({"ref": "Forward!%s%d" % (col, r), "value": row[key]})
         if not items:
             raise ServiceError("RET faizi bulunamadı")
-        res = self.set_inputs(user, "tto", items)
+        res = self.set_inputs(user, "tto", items, False, lang)
         res["ret"] = self.ret()
         return res
 
@@ -703,8 +709,9 @@ class Service(object):
             for pid, title, rng in (("fwd", "USDTRY Forward · vade kovaları", "P1:W20"), ("ois", "OIS · vade özeti", "O22:W39"),
                                     ("bond", "Bonds", "P41:V84"), ("cpt", "OIS — CPT x VADE (DV01 USD)", "P87:V349")):
                 try:
-                    sheet_panels.append({"id": pid, "title": title, "range": rng,
-                                         "data": R.table(calc, bl.SHEET, rng, loc, None)})
+                    data = R.table(calc, bl.SHEET, rng, loc, None)
+                    _lift_title(data)
+                    sheet_panels.append({"id": pid, "title": title, "range": rng, "data": data})
                 except Exception as exc:  # noqa: BLE001
                     sheet_panels.append({"id": pid, "title": title, "error": str(exc)[:200]})
             out["sheet"] = sheet_panels
@@ -715,10 +722,11 @@ class Service(object):
             out["snapshot_at"] = snap.get("snapshot_at") if snap else None
         return out
 
-    def quote_forward(self, user: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.et.call(self._quote_forward, user, payload)
+    def quote_forward(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        return self.et.call(self._quote_forward, user, payload, lang)
 
-    def _fwd_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _fwd_payload(self, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        lang = lang or self.settings.locale
         p = dict(payload)
         vd = p.get("value_date")
         if isinstance(vd, str):
@@ -730,24 +738,24 @@ class Service(object):
             p["value_date"] = float(vd)
         amt = p.get("amount")
         if isinstance(amt, str):
-            n = parse_number(amt)
+            n = parse_number(amt, lang)
             p["amount"] = n
         elif isinstance(amt, (int, float)):
             p["amount"] = float(amt)
         man = p.get("manual")
         basis = str(p.get("basis", "RET_MID")).upper()
         if isinstance(man, str):
-            n = parse_number(man)
-            if n is not None and basis == "TRY" and not (man.strip().endswith("%") or man.strip().startswith("%")) and abs(n) >= 1.5:
+            n = parse_number(man, lang, prefer_decimal=True)
+            if n is not None and basis == "TRY" and not (man.strip().endswith("%") or man.strip().startswith("%")) and abs(n) >= 1.0:
                 n /= 100.0
             p["manual"] = n
         elif isinstance(man, (int, float)):
             p["manual"] = float(man)
         return p
 
-    def _quote_forward(self, user, payload) -> Dict[str, Any]:
+    def _quote_forward(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
-        p = self._fwd_payload(payload)
+        p = self._fwd_payload(payload, lang)
         if type(p.get("value_date")) is not float:
             raise ServiceError("valör tarihi gerekli")
         ov = self._overlay(user_key(user), book) if user else {}
@@ -763,16 +771,16 @@ class Service(object):
         q["value_date_iso"] = serial_to_date(q["value_date"]).isoformat()
         return q
 
-    def add_forward(self, user: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def add_forward(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
-        res = self.et.call(self._add_forward, user, payload)
+        res = self.et.call(self._add_forward, user, payload, lang)
         self.bump()
         return res
 
-    def _add_forward(self, user, payload) -> Dict[str, Any]:
+    def _add_forward(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
         try:
-            rec = bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload))
+            rec = bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload, lang))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         tid = self.store.add_trade(self.today_iso(), "fwd", rec, user)
@@ -780,36 +788,37 @@ class Service(object):
         rec["id"] = tid
         return rec
 
-    def _ois_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _ois_payload(self, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        lang = lang or self.settings.locale
         p = dict(payload)
         strategy = str(p.get("strategy", "outright")).lower()
         for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate",
                   "start_months", "end_months"):
             v = p.get(k)
             if isinstance(v, str):
-                n = parse_number(v)
                 rate_like = k in ("short_rate", "wing1_rate", "wing2_rate", "start_rate") or \
                     (k == "level" and strategy in ("outright", "fra"))
-                if n is not None and rate_like and not ("%" in v) and abs(n) >= 1.5:
+                n = parse_number(v, lang, prefer_decimal=k not in ("dv01", "nominal"))
+                if n is not None and rate_like and not ("%" in v) and abs(n) >= 1.0:
                     n /= 100.0                    # 35,5 typed for 35,5 %
                 p[k] = n
             elif isinstance(v, bool):
                 p[k] = None
             elif isinstance(v, (int, float)):
                 x = float(v)
-                if k == "level" and strategy in ("outright", "fra") and abs(x) >= 1.5:
+                if k == "level" and strategy in ("outright", "fra") and abs(x) >= 1.0:
                     x /= 100.0
                 p[k] = x
         return p
 
-    def quote_ois(self, user: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.et.call(self._quote_ois, user, payload)
+    def quote_ois(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        return self.et.call(self._quote_ois, user, payload, lang)
 
-    def _quote_ois(self, user, payload) -> Dict[str, Any]:
+    def _quote_ois(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
         calc = self._calc(user_key(user) if user else None, book)
         try:
-            return bl.ois_legs(bl.OisMarket(book, calc), self._ois_payload(payload))
+            return bl.ois_legs(bl.OisMarket(book, calc), self._ois_payload(payload, lang))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
 
@@ -833,16 +842,16 @@ class Service(object):
             pass
         return out
 
-    def add_ois(self, user: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def add_ois(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
-        res = self.et.call(self._add_ois, user, payload)
+        res = self.et.call(self._add_ois, user, payload, lang)
         self.bump()
         return res
 
-    def _add_ois(self, user, payload) -> Dict[str, Any]:
+    def _add_ois(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
         try:
-            q = bl.ois_legs(bl.OisMarket(book, self._calc(user, book)), self._ois_payload(payload))
+            q = bl.ois_legs(bl.OisMarket(book, self._calc(user, book)), self._ois_payload(payload, lang))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         package = uuid.uuid4().hex[:12] if len(q["legs"]) > 1 else None
@@ -858,15 +867,16 @@ class Service(object):
         q["ids"] = ids
         return q
 
-    def add_bond(self, user: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def add_bond(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
+        lang = lang or self.settings.locale
         inst = str(payload.get("instrument") or "").strip()[:60]
         if not inst:
             raise ServiceError("enstrüman gerekli")
         amount = payload.get("amount")
-        amount = parse_number(amount) if isinstance(amount, str) else (float(amount) if isinstance(amount, (int, float)) else None)
+        amount = parse_number(amount, lang) if isinstance(amount, str) else (float(amount) if isinstance(amount, (int, float)) else None)
         price = payload.get("price")
-        price = parse_number(price) if isinstance(price, str) else (float(price) if isinstance(price, (int, float)) else None)
+        price = parse_number(price, lang, prefer_decimal=True) if isinstance(price, str) else (float(price) if isinstance(price, (int, float)) else None)
         if amount is None or amount == 0:
             raise ServiceError("tutar gerekli (+ alış / − satış)")
         if price is None or price <= 0:
@@ -891,6 +901,30 @@ class Service(object):
         self.et.call(self._sync_blotter)
         self.bump()
         return {"deleted": ids}
+
+
+def _lift_title(data: Dict[str, Any]) -> Optional[str]:
+    """If the block starts with the sheet's own caption row (one bold / merged text cell above a header
+    row), take it out of the table and return it: it becomes the panel title."""
+    rows = data.get("rows") or []
+    if len(rows) < 2:
+        return None
+    filled = [c for c in rows[0] if not c.get("sk") and c.get("t")]
+    if len(filled) != 1:
+        return None
+    c = filled[0]
+    if c.get("k") != "s" or c.get("i"):
+        return None
+    if not (c.get("b") or c.get("f") == "hd" or c.get("cs", 1) > 1):
+        return None
+    if any(x.get("rs", 1) > 1 for x in rows[0]):
+        return None
+    if sum(1 for x in rows[1] if not x.get("sk") and x.get("t")) < 2:
+        return None
+    title = c["t"].strip()
+    del rows[0]
+    del data["r"][0]
+    return title or None
 
 
 def _to_json(v: Any) -> Any:

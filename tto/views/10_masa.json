@@ -170,16 +170,9 @@
  ],
  "panels": [
   {
-   "id": "B1",
-   "type": "table",
-   "title": "MASA header strip",
-   "range": "B1:AI2",
-   "hidden": false
-  },
-  {
    "id": "B2",
    "type": "table",
-   "title": "Status strip KONTROL",
+   "title": "Kontrol",
    "range": "B3:L3",
    "hidden": false
   },
@@ -198,11 +191,31 @@
    "hidden": false
   },
   {
+   "id": "chart0",
+   "type": "chart",
+   "chart": 0
+  },
+  {
+   "id": "chart1",
+   "type": "chart",
+   "chart": 1
+  },
+  {
    "id": "B8",
    "type": "table",
    "title": "RET BANDINA GÖRE PİYASA  ·  oranlar % (360 basit) ve bp: bant dışı 0 = RET bid–ask içinde, + ask üstü, − bid a",
    "range": "P41:AB55",
    "hidden": false
+  },
+  {
+   "id": "chart2",
+   "type": "chart",
+   "chart": 2
+  },
+  {
+   "id": "chart3",
+   "type": "chart",
+   "chart": 3
   },
   {
    "id": "B9",
@@ -217,6 +230,16 @@
    "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread soldan)",
    "range": "P59:AB70",
    "hidden": false
+  },
+  {
+   "id": "chart4",
+   "type": "chart",
+   "chart": 4
+  },
+  {
+   "id": "chart5",
+   "type": "chart",
+   "chart": 5
   },
   {
    "id": "B13",

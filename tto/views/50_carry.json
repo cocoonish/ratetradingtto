@@ -40,55 +40,6 @@
    "group": "carry-4",
    "kind": "auto",
    "label": "'Yıllık vol' per tenor (Ufuk B table)"
-  },
-  {
-   "range": "B4",
-   "scope": "user",
-   "group": "carry-5",
-   "kind": "auto",
-   "label": "'Ufuk A ay' (drives B2/B3, spread & fly \"A\")"
-  },
-  {
-   "range": "D4",
-   "scope": "user",
-   "group": "carry-6",
-   "kind": "auto",
-   "label": "'Ufuk B ay' (drives B4/B5, \"B\" columns, chart)"
-  },
-  {
-   "range": "J3",
-   "scope": "user",
-   "group": "carry-7",
-   "kind": "text",
-   "label": "'Yön C+R' (sign of outright tables, caption RECEIVER/PAYER)"
-  },
-  {
-   "range": "F4",
-   "scope": "user",
-   "group": "carry-8",
-   "kind": "text",
-   "label": "'PV=1 / FV=0' (Motor 'Rapor çarpanı', caption PV/FV)"
-  },
-  {
-   "range": "H3",
-   "scope": "user",
-   "group": "carry-9",
-   "kind": "auto",
-   "label": "'Nominal C+R' (TL columns, simulator DV01)"
-  },
-  {
-   "range": "F2",
-   "scope": "user",
-   "group": "carry-10",
-   "kind": "auto",
-   "label": "'DV01/bacak $' (sizes the $DV01 nominals)"
-  },
-  {
-   "range": "H2",
-   "scope": "user",
-   "group": "carry-11",
-   "kind": "auto",
-   "label": "'Yuvarlama TL' (nominal rounding)"
   }
  ],
  "panels": [
@@ -102,63 +53,66 @@
   {
    "id": "B2",
    "type": "table",
-   "title": "Ufuk A strip",
+   "title": "Ufuk A",
    "range": "A3:F3",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Ufuk A outright table",
+   "title": "Ufuk A · outright",
    "range": "A4:M20",
    "hidden": false
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "Ufuk B strip",
+   "title": "Ufuk B",
    "range": "A22:F22",
    "hidden": false
   },
   {
    "id": "B5",
    "type": "table",
-   "title": "Ufuk B outright table",
+   "title": "Ufuk B · outright",
    "range": "A23:O39",
    "hidden": false
   },
   {
    "id": "B6",
    "type": "table",
-   "title": "CARRY & ROLL – spread (flattener) ve fly (gövde receive)",
-   "range": "A41",
-   "hidden": false
+   "title": "Carry & roll · spread (flattener)",
+   "range": "A42:G162",
+   "hidden": false,
+   "keep_title": true,
+   "collapsed": true
   },
   {
    "id": "B7",
    "type": "table",
-   "title": "Fly table",
+   "title": "Carry & roll · fly (gövde receive)",
    "range": "A165:F199",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B8",
    "type": "table",
-   "title": "KAPANIŞ SİMÜLATÖRÜ (PV, orijinal DV01 bp) – nominal = H3",
-   "range": "A201",
+   "title": "Kapanış simülatörü · girdiler",
+   "range": "A201:C206",
    "hidden": false
   },
   {
    "id": "B9",
    "type": "table",
-   "title": "Simulator intermediates",
+   "title": "Kapanış simülatörü · ara değerler",
    "range": "A208:B225",
    "hidden": false
   },
   {
    "id": "B10",
    "type": "table",
-   "title": "Simulator result table",
+   "title": "Kapanış simülatörü · sonuç",
    "range": "A227:C238",
    "hidden": false
   }

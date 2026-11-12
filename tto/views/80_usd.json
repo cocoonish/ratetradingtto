@@ -167,6 +167,47 @@
    "wide": true
   },
   {
+   "id": "fomc-chart",
+   "type": "chart",
+   "spec": {
+    "title": "FOMC ima patikası ve senaryolar (O/N %)",
+    "kind": "line",
+    "series": [
+     {
+      "name_ref": "SOFR_FOMC!$K$73",
+      "cat": "SOFR_FOMC!$B$74:$B$83",
+      "val": "SOFR_FOMC!$K$74:$K$83",
+      "kind": "line"
+     },
+     {
+      "name_ref": "SOFR_FOMC!$U$73",
+      "cat": "SOFR_FOMC!$B$74:$B$83",
+      "val": "SOFR_FOMC!$U$74:$U$83",
+      "kind": "line"
+     },
+     {
+      "name_ref": "SOFR_FOMC!$V$73",
+      "cat": "SOFR_FOMC!$B$74:$B$83",
+      "val": "SOFR_FOMC!$V$74:$V$83",
+      "kind": "line"
+     },
+     {
+      "name_ref": "SOFR_FOMC!$W$73",
+      "cat": "SOFR_FOMC!$B$74:$B$83",
+      "val": "SOFR_FOMC!$W$74:$W$83",
+      "kind": "line"
+     },
+     {
+      "name_ref": "SOFR_FOMC!$X$73",
+      "cat": "SOFR_FOMC!$B$74:$B$83",
+      "val": "SOFR_FOMC!$X$74:$X$83",
+      "kind": "line",
+      "dash": true
+     }
+    ]
+   }
+  },
+  {
    "id": "spr",
    "type": "table",
    "title": "En iyi 10 spread",
@@ -184,6 +225,29 @@
    "title": "OIS kotaları ve bootstrap eğrisi",
    "range": "A45:T68",
    "wide": true
+  },
+  {
+   "id": "curve-chart",
+   "type": "chart",
+   "spec": {
+    "title": "SOFR OIS eğrisi · kota ve patika fiyatı (%)",
+    "kind": "line",
+    "series": [
+     {
+      "name_ref": "SOFR_FOMC!$E$47",
+      "cat": "SOFR_FOMC!$A$49:$A$68",
+      "val": "SOFR_FOMC!$E$49:$E$68",
+      "kind": "line"
+     },
+     {
+      "name_ref": "SOFR_FOMC!$O$47",
+      "cat": "SOFR_FOMC!$A$49:$A$68",
+      "val": "SOFR_FOMC!$O$49:$O$68",
+      "kind": "line",
+      "dash": true
+     }
+    ]
+   }
   },
   {
    "id": "t1",

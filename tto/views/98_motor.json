@@ -103,97 +103,13 @@
    "group": "motor-5",
    "kind": "auto",
    "label": "solver type codes, PPK order, zero prior means, 7/14-day points, instrument definitions, zero start steps"
-  },
-  {
-   "range": "P10:P89",
-   "scope": "user",
-   "group": "motor-6",
-   "kind": "date",
-   "label": "PPK/MPC meeting dates (→ Motor!B5:C84)"
-  },
-  {
-   "range": "U10:W34",
-   "scope": "user",
-   "group": "motor-7",
-   "kind": "auto",
-   "label": "scenario steps per meeting, 'Senaryo tabanı', 'Kaydırma bp' (→ OIS_MAIN!X10:Z89 → Motor!H5:H84, N5:N84, P5:P84)"
-  },
-  {
-   "range": "B3",
-   "scope": "user",
-   "group": "motor-7",
-   "kind": "auto",
-   "label": "scenario steps per meeting, 'Senaryo tabanı', 'Kaydırma bp' (→ OIS_MAIN!X10:Z89 → Motor!H5:H84, N5:N84, P5:P84)"
-  },
-  {
-   "range": "D3",
-   "scope": "user",
-   "group": "motor-7",
-   "kind": "auto",
-   "label": "scenario steps per meeting, 'Senaryo tabanı', 'Kaydırma bp' (→ OIS_MAIN!X10:Z89 → Motor!H5:H84, N5:N84, P5:P84)"
-  },
-  {
-   "range": "B4",
-   "scope": "user",
-   "group": "motor-8",
-   "kind": "auto",
-   "label": "'Ufuk A ay', 'Ufuk B ay', 'PV=1 / FV=0' (→ Motor!B134:B135, H134:H135)"
-  },
-  {
-   "range": "D4",
-   "scope": "user",
-   "group": "motor-8",
-   "kind": "auto",
-   "label": "'Ufuk A ay', 'Ufuk B ay', 'PV=1 / FV=0' (→ Motor!B134:B135, H134:H135)"
-  },
-  {
-   "range": "F4",
-   "scope": "user",
-   "group": "motor-8",
-   "kind": "auto",
-   "label": "'Ufuk A ay', 'Ufuk B ay', 'PV=1 / FV=0' (→ Motor!B134:B135, H134:H135)"
-  },
-  {
-   "range": "AU6:AU10",
-   "scope": "user",
-   "group": "motor-9",
-   "kind": "number",
-   "label": "solver tolerance / prior scales / ρ / anchor / in-bucket σ"
-  },
-  {
-   "range": "AU15",
-   "scope": "user",
-   "group": "motor-9",
-   "kind": "number",
-   "label": "solver tolerance / prior scales / ρ / anchor / in-bucket σ"
-  },
-  {
-   "range": "J4",
-   "scope": "user",
-   "group": "motor-10",
-   "kind": "text",
-   "label": "'Eşit adım ≤' limit, '1M/2M kota' switch (→ AU16:AU20, V442:V443)"
-  },
-  {
-   "range": "F3",
-   "scope": "user",
-   "group": "motor-10",
-   "kind": "text",
-   "label": "'Eşit adım ≤' limit, '1M/2M kota' switch (→ AU16:AU20, V442:V443)"
-  },
-  {
-   "range": "B202:B205",
-   "scope": "user",
-   "group": "motor-11",
-   "kind": "auto",
-   "label": "close-out simulator inputs (→ 'C & R'!B208, B209, B216 → Motor!F263:N302)"
   }
  ],
  "panels": [
   {
    "id": "B1",
    "type": "table",
-   "title": "MOTOR' / 'Toplantı yardımcı tablosu",
+   "title": "Toplantı yardımcı tablosu",
    "range": "A1:Q84",
    "hidden": false
   },
@@ -202,13 +118,6 @@
    "type": "table",
    "title": "Eğri (bootstrap) + zero simple rate",
    "range": "A86:S130",
-   "hidden": false
-  },
-  {
-   "id": "B3",
-   "type": "table",
-   "title": "Kova DV01 – her kota +1bp bootstrap (G′, H′, ΔlnDF)",
-   "range": "T86:AT130",
    "hidden": false
   },
   {
@@ -240,20 +149,6 @@
    "hidden": false
   },
   {
-   "id": "B8",
-   "type": "table",
-   "title": "Çeyreklik kupon takvimi (global çözücü kullanır)",
-   "range": "A218:D259",
-   "hidden": false
-  },
-  {
-   "id": "B9",
-   "type": "table",
-   "title": "Kapanış simülatörü takvimi",
-   "range": "A261:N302",
-   "hidden": false
-  },
-  {
    "id": "B10",
    "type": "table",
    "title": "Kota kopyası (bootstrap ve ima çözücü bunu okur)",
@@ -272,7 +167,51 @@
    "type": "table",
    "title": "TR resmi tatiller (girdi – değiştirilebilir; arife yarım günleri iş günü sayıldı)",
    "range": "A359:B523",
+   "hidden": false,
+   "collapsed": true
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "Çözücü enstrüman tablosu",
+   "range": "A4444:Y4462",
    "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "SONUÇ",
+   "range": "A5726:D5878",
+   "hidden": false,
+   "collapsed": true
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "KOTA ARALIKLARI – ima ortalama TLREF ve sonsal σ (OIS_MAIN!AD17)",
+   "range": "A5887:G5905",
+   "hidden": false
+  },
+  {
+   "id": "B3",
+   "type": "table",
+   "title": "Kova DV01 – her kota +1bp bootstrap (G′, H′, ΔlnDF)",
+   "range": "T86:AT130",
+   "hidden": true
+  },
+  {
+   "id": "B8",
+   "type": "table",
+   "title": "Çeyreklik kupon takvimi (global çözücü kullanır)",
+   "range": "A218:D259",
+   "hidden": true
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "Kapanış simülatörü takvimi",
+   "range": "A261:N302",
+   "hidden": true
   },
   {
    "id": "B13",
@@ -286,56 +225,36 @@
    "type": "table",
    "title": "GLOBAL İMA PPK v3 – stub (spot→MPC1) ayrı serbest seviyeler, toplantı adımları düzgünlük önceli, Gauss-Newton ",
    "range": "A4300:CX4390",
-   "hidden": false
+   "hidden": true
   },
   {
    "id": "B15",
    "type": "table",
-   "title": "Solver evaluation grid (no title)",
+   "title": "Yardımcı · çözücü değerlendirme ızgarası",
    "range": "A4394:D4439",
    "hidden": true
   },
   {
-   "id": "B16",
-   "type": "table",
-   "title": "Solver instrument table + Σ (no title)",
-   "range": "A4444:Y4462",
-   "hidden": false
-  },
-  {
    "id": "B17",
    "type": "table",
-   "title": "İterasyon 1' … 'İterasyon 7",
+   "title": "Yardımcı · Gauss-Newton iterasyonları 1–7",
    "range": "A4474:FC5699",
-   "hidden": false
-  },
-  {
-   "id": "B18",
-   "type": "table",
-   "title": "SONUÇ",
-   "range": "A5726:D5878",
-   "hidden": false
-  },
-  {
-   "id": "B19",
-   "type": "table",
-   "title": "KOTA ARALIKLARI – ima ortalama TLREF ve sonsal σ (OIS_MAIN!AD17)",
-   "range": "A5887:G5905",
-   "hidden": false
+   "hidden": true
   },
   {
    "id": "B20",
    "type": "table",
    "title": "Sonsal kovaryans P = A − (A·Jᵀ)·M⁻¹·(A·Jᵀ)ᵀ (iterasyon 7)",
    "range": "H5909:CP5995",
-   "hidden": false
+   "hidden": true
   },
   {
    "id": "B21",
    "type": "table",
    "title": "Aralık ağırlıkları V (86×16): x_j’nin aralık ortalamasına katsayısı",
    "range": "H5999:X6085",
-   "hidden": false
+   "hidden": true
   }
- ]
+ ],
+ "note": "Motor sayfası hesap makinesidir (bootstrap + ima PPK çözücüsü). Büyük ara tablolar \"Yardımcı tablolar\" ile ya da Sayfa gezgininden görülebilir."
 }

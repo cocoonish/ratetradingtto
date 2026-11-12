@@ -270,70 +270,70 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Offshore swap vs bank equity (no title)",
+   "title": "Offshore swap / banka özkaynakları",
    "range": "B2:E7",
    "hidden": false
   },
   {
    "id": "B2",
    "type": "table",
-   "title": "Bond price ⇄ yield ladder for 'TRT150328T24' (no title)",
+   "title": "Fiyat ⇄ getiri merdiveni (1)",
    "range": "G2:R9",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Bond price ⇄ yield ladder for 'TRT120929T12' (and 'TRT270934T18') (no title)",
+   "title": "Fiyat ⇄ getiri merdiveni (2)",
    "range": "G11:O19",
    "hidden": false
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "Nominal' / 'Parasal' split #1 (no title)",
+   "title": "Nominal / parasal dağılım (1)",
    "range": "B15:D19",
    "hidden": false
   },
   {
    "id": "B5",
    "type": "table",
-   "title": "Nominal' / 'Parasal' split #2 (no title)",
+   "title": "Nominal / parasal dağılım (2)",
    "range": "B21:D25",
    "hidden": false
   },
   {
    "id": "B6",
    "type": "table",
-   "title": "Fill table for the 2029-09-12 bond (no title)",
+   "title": "Dolum tablosu (1)",
    "range": "J28:M32",
    "hidden": false
   },
   {
    "id": "B7",
    "type": "table",
-   "title": "Fill table for the 2028-03-15 bond (no title)",
+   "title": "Dolum tablosu (2)",
    "range": "J33:M37",
    "hidden": false
   },
   {
    "id": "B8",
    "type": "table",
-   "title": "EURTRY forward list",
+   "title": "EURTRY forward listesi",
    "range": "B34:G46",
    "hidden": false
   },
   {
    "id": "B9",
    "type": "table",
-   "title": "Tenor ladder converted at a hard-coded rate (no title, no column headers)",
+   "title": "Vade merdiveni",
    "range": "B56:F71",
    "hidden": false
   },
   {
    "id": "B10",
    "type": "notes",
-   "title": "Limitler' note",
+   "title": "Limitler",
    "range": "K61:O63",
    "hidden": false
   }

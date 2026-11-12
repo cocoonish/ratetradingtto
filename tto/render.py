@@ -262,7 +262,10 @@ class Renderer(object):
             if st.get("color"):
                 tn = tone(st["color"]) or tn
             if st.get("fill"):
-                ft = fill_tone(st["fill"]) or ft
+                cft = fill_tone(st["fill"])
+                if cft == "in":
+                    cft = "note"                   # Excel's yellow "neutral" highlight, not an input cell
+                ft = cft or ft
             if st.get("bold"):
                 out["b"] = 1
         if tn:
@@ -353,7 +356,8 @@ class Renderer(object):
             return sheet.strip("'"), addr.replace("$", "")
 
         cats: List[str] = []
-        series = []
+        series: List[Dict[str, Any]] = []
+        slots: Dict[Any, int] = {}
         for s in chart["series"]:
             sh, addr = split(s["val"])
             vals = [v for row in self.values(calc, sh, addr) for v in row]
@@ -369,13 +373,34 @@ class Renderer(object):
                 for r in range(r1, r2 + 1):
                     for c in range(c1, c2 + 1):
                         cats.append(self.cell(calc, si, r, c, loc).get("t", ""))
-            series.append({"name": name, "kind": s.get("kind", "line"), "stacked": bool(s.get("stacked")),
-                           "data": [v if type(v) is float else None for v in vals]})
+            entry = {"name": name, "kind": s.get("kind", "line"), "stacked": bool(s.get("stacked")),
+                     "data": [v if type(v) is float else None for v in vals]}
+            if s.get("dash"):
+                entry["dash"] = 1
+            if s.get("noline"):
+                entry["noline"] = 1
+            # series drawn in one colour in the workbook are one entity (e.g. the two edges of a band)
+            src = s.get("color")
+            if src:
+                if src not in slots:
+                    slots[src] = len(slots)
+                entry["slot"] = slots[src]
+            else:
+                entry["slot"] = len(slots)
+                slots[("auto", len(series))] = entry["slot"]
+            series.append(entry)
         if not cats and series:
             cats = [str(i + 1) for i in range(len(series[0]["data"]))]
         # drop trailing categories for which no series has data
         n = len(cats)
         while n > 0 and all(n - 1 >= len(s["data"]) or s["data"][n - 1] is None for s in series) and not cats[n - 1]:
             n -= 1
-        return {"title": chart.get("title") or "", "kind": chart.get("kind", "line"), "cats": cats[:n],
-                "series": [dict(s, data=s["data"][:n]) for s in series], "axis": chart.get("axis_titles") or []}
+        out = {"title": chart.get("title") or "", "kind": chart.get("kind", "line"), "cats": cats[:n],
+               "series": [dict(s, data=s["data"][:n]) for s in series], "axis": chart.get("axis_titles") or []}
+        fmt = chart.get("value_format") or ""
+        if "%" in fmt:
+            out["unit"] = "pct"
+        for key in ("ymin", "ymax"):
+            if chart.get(key) is not None:
+                out[key] = chart[key]
+        return out

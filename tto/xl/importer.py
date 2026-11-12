@@ -135,11 +135,18 @@ def _font(el, theme) -> Tuple[bool, Optional[str], bool]:
     return bold, _color(el.find(NS_MAIN + "color"), theme), ital
 
 
-def _fill(el, theme) -> Optional[str]:
+def _fill(el, theme, dxf: bool = False) -> Optional[str]:
     if el is None:
         return None
     pf = el.find(NS_MAIN + "patternFill")
-    if pf is None or pf.get("patternType") in (None, "none"):
+    if pf is None:
+        return None
+    if dxf:
+        # differential formats (conditional formatting): no patternType means solid, colour is in bgColor
+        if pf.get("patternType") == "none":
+            return None
+        return _color(pf.find(NS_MAIN + "bgColor"), theme) or _color(pf.find(NS_MAIN + "fgColor"), theme)
+    if pf.get("patternType") in (None, "none"):
         return None
     return _color(pf.find(NS_MAIN + "fgColor"), theme) or _color(pf.find(NS_MAIN + "bgColor"), theme)
 
@@ -178,7 +185,7 @@ def _styles(zf: zipfile.ZipFile):
     if dx is not None:
         for d in dx:
             bold, fcol, ital = _font(d.find(NS_MAIN + "font"), theme)
-            dxfs.append({"color": fcol, "fill": _fill(d.find(NS_MAIN + "fill"), theme), "bold": bold})
+            dxfs.append({"color": fcol, "fill": _fill(d.find(NS_MAIN + "fill"), theme, dxf=True), "bold": bold})
     return xfs, dxfs
 
 
@@ -250,11 +257,40 @@ def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
             val = ref(NS_C + "val/" + NS_C + "numRef/" + NS_C + "f") or ref(NS_C + "yVal/" + NS_C + "numRef/" + NS_C + "f")
             if val is None:
                 continue
-            series.append({"name_ref": name_ref, "name": name_lit.text if name_lit is not None else None,
-                           "cat": cat, "val": val, "kind": kind, "stacked": stacked})
+            entry = {"name_ref": name_ref, "name": name_lit.text if name_lit is not None else None,
+                     "cat": cat, "val": val, "kind": kind, "stacked": stacked}
+            sp = ser.find(NS_C + "spPr")
+            if sp is not None:
+                ln = sp.find(NS_A + "ln")
+                clr = None
+                if ln is not None:
+                    if ln.find(NS_A + "noFill") is not None:
+                        entry["noline"] = True
+                    clr = ln.find(NS_A + "solidFill/" + NS_A + "srgbClr")
+                    dash = ln.find(NS_A + "prstDash")
+                    if dash is not None and dash.get("val") not in (None, "solid"):
+                        entry["dash"] = True
+                if clr is None:
+                    clr = sp.find(NS_A + "solidFill/" + NS_A + "srgbClr")
+                if clr is not None and clr.get("val"):
+                    entry["color"] = clr.get("val").upper()
+            series.append(entry)
     axes = [text_of(ax.find(NS_C + "title")) for ax in plot if ax.tag in (NS_C + "catAx", NS_C + "valAx", NS_C + "dateAx")]
-    return {"title": title, "kind": kinds[0] if kinds else "line", "series": series,
-            "axis_titles": [a for a in axes if a]}
+    out = {"title": title, "kind": kinds[0] if kinds else "line", "series": series,
+           "axis_titles": [a for a in axes if a]}
+    val_ax = plot.find(NS_C + "valAx")
+    if val_ax is not None:
+        for key in ("min", "max"):
+            el = val_ax.find(NS_C + "scaling/" + NS_C + key)
+            if el is not None and el.get("val") is not None:
+                try:
+                    out["y" + key] = float(el.get("val"))
+                except ValueError:
+                    pass
+        nf = val_ax.find(NS_C + "numFmt")
+        if nf is not None and nf.get("formatCode"):
+            out["value_format"] = nf.get("formatCode")
+    return out
 
 
 def _sheet_charts(zf: zipfile.ZipFile, sheet_part: str) -> List[Dict[str, Any]]:

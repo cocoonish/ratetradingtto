@@ -116,21 +116,21 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Settings row (no title; label → value pairs)",
+   "title": "Ayarlar",
    "range": "A2:Z2",
    "hidden": false
   },
   {
    "id": "B2",
    "type": "table",
-   "title": "ASW eğrisi (a + b·t + c·t²):",
+   "title": "ASW eğrisi",
    "range": "A3:G3",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Bond relative-value table (no title; header row 4)",
+   "title": "DİBS göreli değer tablosu",
    "range": "A4:BJ54",
    "hidden": false
   },
@@ -144,28 +144,28 @@
   {
    "id": "B5",
    "type": "table",
-   "title": "BDS cash-flow blocks ('BDS tarih · k' … 'Anapara · k')",
+   "title": "Yardımcı · BDS nakit akışı blokları",
    "range": "A200:KN261",
    "hidden": true
   },
   {
    "id": "B6",
    "type": "table",
-   "title": "Per-bond helper columns (hidden; header row 4)",
+   "title": "Yardımcı · kağıt bazında ara sütunlar",
    "range": "BR4:XE54",
    "hidden": true
   },
   {
    "id": "B7",
    "type": "table",
-   "title": "OIS ASW fit sums ('S0' … 'fc')",
+   "title": "Yardımcı · OIS ASW fit toplamları",
    "range": "BR2:CC3",
    "hidden": true
   },
   {
    "id": "B8",
    "type": "table",
-   "title": "FX-swap ASW fit sums ('FX S0' … 'FX fc')",
+   "title": "Yardımcı · FX swap ASW fit toplamları",
    "range": "XF2:XQ3",
    "hidden": true
   }

@@ -15,17 +15,17 @@
   },
   {
    "range": "W33:W47",
-   "scope": "user",
-   "group": "forward-1",
+   "scope": "shared",
+   "group": "ret",
    "kind": "pct",
-   "label": "'TRY RET' bid, 15 tenors ON…2Y (B19)"
+   "label": "TRY RET bid (ON … 2Y)"
   },
   {
    "range": "X33:X47",
-   "scope": "user",
-   "group": "forward-2",
+   "scope": "shared",
+   "group": "ret",
    "kind": "pct",
-   "label": "'TRY RET' ask, 15 tenors"
+   "label": "TRY RET ask (ON … 2Y)"
   },
   {
    "range": "U37",
@@ -37,9 +37,9 @@
   {
    "range": "AB79:AC93",
    "scope": "shared",
-   "group": "forward-4",
+   "group": "ret-spread",
    "kind": "pct",
-   "label": "spread added to RET bid / ask per tenor (B26)"
+   "label": "RET bid / ask spread eklentisi"
   },
   {
    "range": "N25",
@@ -529,8 +529,92 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Tarih' / spot header",
+   "title": "Valör tarihi ve spot",
    "range": "C2:K2",
+   "hidden": false
+  },
+  {
+   "id": "B15",
+   "type": "table",
+   "title": "USDTRY forward",
+   "range": "B29:F39",
+   "hidden": false
+  },
+  {
+   "id": "B17",
+   "type": "table",
+   "title": "EURTRY forward",
+   "range": "B41:J51",
+   "hidden": false
+  },
+  {
+   "id": "B16",
+   "type": "table",
+   "title": "Altın forward (XAUUSD · XARTRY · XARUSD)",
+   "range": "H29:J32",
+   "hidden": false
+  },
+  {
+   "id": "B19",
+   "type": "table",
+   "title": "TRY RET",
+   "range": "U31:Y50",
+   "hidden": false
+  },
+  {
+   "id": "B20",
+   "type": "table",
+   "title": "RET SP",
+   "range": "AA31:AE48",
+   "hidden": false
+  },
+  {
+   "id": "B26",
+   "type": "table",
+   "title": "RET + spread (vade bazında bid / ask eklentisi)",
+   "range": "AA79:AC110",
+   "hidden": false
+  },
+  {
+   "id": "B18",
+   "type": "table",
+   "title": "Forward DV01",
+   "range": "N31:P49",
+   "hidden": false
+  },
+  {
+   "id": "B33",
+   "type": "table",
+   "title": "BULK FORWARD FİYATLAMA",
+   "range": "B142:Q163",
+   "hidden": false
+  },
+  {
+   "id": "B34",
+   "type": "table",
+   "title": "FORWARD STARTING SWAP",
+   "range": "B166:O180",
+   "hidden": false
+  },
+  {
+   "id": "B36",
+   "type": "table",
+   "title": "ÇAPRAZ FORWARD",
+   "range": "B196:Q217",
+   "hidden": false
+  },
+  {
+   "id": "B14",
+   "type": "table",
+   "title": "Serbest forward listesi",
+   "range": "A24:H27",
+   "hidden": false
+  },
+  {
+   "id": "B13",
+   "type": "table",
+   "title": "Tarih yardımcısı (spot + gün)",
+   "range": "B20:E22",
    "hidden": false
   },
   {
@@ -555,6 +639,13 @@
    "hidden": false
   },
   {
+   "id": "B23",
+   "type": "table",
+   "title": "TRY OIS w/Spread",
+   "range": "O57:P68",
+   "hidden": false
+  },
+  {
    "id": "B5",
    "type": "table",
    "title": "USD OIS",
@@ -567,6 +658,51 @@
    "title": "EUR OIS",
    "range": "AA4:AE29",
    "hidden": false
+  },
+  {
+   "id": "B27",
+   "type": "table",
+   "title": "O/N eşlenikleri",
+   "range": "D99:N119",
+   "hidden": false
+  },
+  {
+   "id": "chart0",
+   "type": "chart",
+   "chart": 0
+  },
+  {
+   "id": "B28",
+   "type": "table",
+   "title": "USDTRY Offshore Zero Rate",
+   "range": "C123:K134",
+   "hidden": false
+  },
+  {
+   "id": "B29",
+   "type": "table",
+   "title": "Offshore FRAs",
+   "range": "N131:P140",
+   "hidden": false
+  },
+  {
+   "id": "B30",
+   "type": "table",
+   "title": "TRY OIS FRAs",
+   "range": "U131:X140",
+   "hidden": false
+  },
+  {
+   "id": "B32",
+   "type": "table",
+   "title": "OFFSHORE TRY İSKONTO EĞRİSİ …",
+   "range": "AJ122:AN145",
+   "hidden": false
+  },
+  {
+   "id": "chart1",
+   "type": "chart",
+   "chart": 1
   },
   {
    "id": "B7",
@@ -599,184 +735,58 @@
   {
    "id": "B11",
    "type": "table",
-   "title": "Simple ↔ compound converters",
+   "title": "Basit ↔ bileşik çevirici",
    "range": "AG60:AH68",
-   "hidden": false
-  },
-  {
-   "id": "B12",
-   "type": "table",
-   "title": "TICKER'LAR (BBG)\" ticker lists",
-   "range": "AO4:AR26",
-   "hidden": false
-  },
-  {
-   "id": "B13",
-   "type": "table",
-   "title": "Start / Gün / End mini date helpers",
-   "range": "B20:E22",
-   "hidden": false
-  },
-  {
-   "id": "B14",
-   "type": "table",
-   "title": "Ad-hoc forward list",
-   "range": "A24:H27",
-   "hidden": false
-  },
-  {
-   "id": "B15",
-   "type": "table",
-   "title": "USDTRY",
-   "range": "B29:J39",
-   "hidden": false
-  },
-  {
-   "id": "B16",
-   "type": "table",
-   "title": "XAUUSD' / 'XARTRY' / 'XARUSD' gold forward strip",
-   "range": "H29:J32",
-   "hidden": false
-  },
-  {
-   "id": "B17",
-   "type": "table",
-   "title": "EURTRY",
-   "range": "B41:J51",
-   "hidden": false
-  },
-  {
-   "id": "B18",
-   "type": "table",
-   "title": "Forward DV01",
-   "range": "N31:P49",
-   "hidden": false
-  },
-  {
-   "id": "B19",
-   "type": "table",
-   "title": "TRY RET",
-   "range": "U31:Y50",
-   "hidden": false
-  },
-  {
-   "id": "B20",
-   "type": "table",
-   "title": "RET SP",
-   "range": "AA31:AE48",
    "hidden": false
   },
   {
    "id": "B21",
    "type": "table",
-   "title": "XARTRY' customer gold-forward calculator",
+   "title": "XARTRY müşteri altın forward hesaplayıcı",
    "range": "B56:F73",
-   "hidden": false
-  },
-  {
-   "id": "B22",
-   "type": "table",
-   "title": "RET-derived DF / annuity / par \"OIS\" equivalents and 4M–5M interpolation check",
-   "range": "D74:J90",
-   "hidden": true
-  },
-  {
-   "id": "B23",
-   "type": "table",
-   "title": "TRY OIS w/Spread",
-   "range": "O57:P68",
    "hidden": false
   },
   {
    "id": "B24",
    "type": "table",
-   "title": "Bond carry / break-even calculator",
+   "title": "Tahvil carry / başabaş",
    "range": "U56:W70",
    "hidden": false
   },
   {
    "id": "B25",
    "type": "table",
-   "title": "Forward-rate calculator",
+   "title": "Forward faiz hesaplayıcı",
    "range": "U73:V80",
    "hidden": false
   },
   {
-   "id": "B26",
+   "id": "B12",
    "type": "table",
-   "title": "RET + spread (bid/ask add-on per tenor)",
-   "range": "AA79:AC110",
+   "title": "Bloomberg ticker'ları (ICAP · TRY OIS · USD OIS · EUR OIS)",
+   "range": "AO4:AR26",
    "hidden": false
   },
   {
-   "id": "B27",
+   "id": "B22",
    "type": "table",
-   "title": "O/N Eq",
-   "range": "D99:N119",
-   "hidden": false
-  },
-  {
-   "id": "B28",
-   "type": "table",
-   "title": "USDTRY Offshore Zero Rate",
-   "range": "C123:K134",
-   "hidden": false
-  },
-  {
-   "id": "B29",
-   "type": "table",
-   "title": "Offshore FRAs",
-   "range": "N131:P140",
-   "hidden": false
-  },
-  {
-   "id": "B30",
-   "type": "table",
-   "title": "TRY OIS FRAs",
-   "range": "U131:X140",
-   "hidden": false
+   "title": "Yardımcı · RET'ten türetilmiş DF / annuity",
+   "range": "D74:J90",
+   "hidden": true
   },
   {
    "id": "B31",
    "type": "table",
-   "title": "Rate Comparison\" chart data",
+   "title": "Yardımcı · 'Rate Comparison' grafik verisi",
    "range": "AA122:AG137",
    "hidden": true
   },
   {
-   "id": "B32",
-   "type": "table",
-   "title": "OFFSHORE TRY İSKONTO EĞRİSİ …",
-   "range": "AJ122:AN145",
-   "hidden": false
-  },
-  {
-   "id": "B33",
-   "type": "table",
-   "title": "BULK FORWARD FİYATLAMA",
-   "range": "B142:Q163",
-   "hidden": false
-  },
-  {
-   "id": "B34",
-   "type": "table",
-   "title": "FORWARD STARTING SWAP",
-   "range": "B166:O180",
-   "hidden": false
-  },
-  {
    "id": "B35",
    "type": "table",
-   "title": "Unlabelled copy-out list (valör, USDTRY fwd)",
+   "title": "Yardımcı · kopyalama listesi (valör, USDTRY fwd)",
    "range": "G183:H193",
    "hidden": true
-  },
-  {
-   "id": "B36",
-   "type": "table",
-   "title": "ÇAPRAZ FORWARD",
-   "range": "B196:Q217",
-   "hidden": false
   }
  ]
 }

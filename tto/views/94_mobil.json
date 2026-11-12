@@ -116,21 +116,21 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Stock check against 'STOK' (no title)",
+   "title": "Stok kontrolü (STOK)",
    "range": "A1:G25",
    "hidden": false
   },
   {
    "id": "B2",
    "type": "table",
-   "title": "Stock check against 'MIN STOK' (no title)",
+   "title": "Stok kontrolü (MIN STOK)",
    "range": "A28:G52",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Inventory lookup list",
+   "title": "Envanter listesi (ISIN → T0 stok)",
    "range": "K1:L222",
    "hidden": false
   }

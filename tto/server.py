@@ -20,6 +20,15 @@ from .service import Service, ServiceError
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
+class _Static(StaticFiles):
+    """Static files that the browser always revalidates (so an updated dashboard is picked up at once)."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 def _user(request: Request) -> Optional[str]:
     raw = request.headers.get("x-tto-user") or request.query_params.get("user")
     if not raw:
@@ -120,13 +129,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         if not isinstance(items, list):
             raise ServiceError("items listesi gerekli")
         return ok(await call(svc().set_inputs, _user(request), str(data.get("book", "tto")), items,
-                             bool(data.get("adhoc"))))
+                             bool(data.get("adhoc")), _lang(request)))
 
     @handler
     async def paste(request: Request):
         data = await _body(request)
         return ok(await call(svc().paste, _user(request), str(data.get("book", "tto")), str(data.get("anchor", "")),
-                             str(data.get("text", "")), bool(data.get("adhoc"))))
+                             str(data.get("text", "")), bool(data.get("adhoc")), _lang(request)))
 
     @handler
     async def reset(request: Request):
@@ -164,7 +173,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         rows = data.get("rows")
         if not isinstance(rows, list):
             raise ServiceError("rows listesi gerekli")
-        return ok(await call(svc().set_ret, _user(request), rows))
+        return ok(await call(svc().set_ret, _user(request), rows, _lang(request)))
 
     @handler
     async def ret_history(request: Request):
@@ -177,19 +186,19 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def quote_forward(request: Request):
-        return ok(await call(svc().quote_forward, _user(request), await _body(request)))
+        return ok(await call(svc().quote_forward, _user(request), await _body(request), _lang(request)))
 
     @handler
     async def add_forward(request: Request):
-        return ok(await call(svc().add_forward, _user(request), await _body(request)))
+        return ok(await call(svc().add_forward, _user(request), await _body(request), _lang(request)))
 
     @handler
     async def quote_ois(request: Request):
-        return ok(await call(svc().quote_ois, _user(request), await _body(request)))
+        return ok(await call(svc().quote_ois, _user(request), await _body(request), _lang(request)))
 
     @handler
     async def add_ois(request: Request):
-        return ok(await call(svc().add_ois, _user(request), await _body(request)))
+        return ok(await call(svc().add_ois, _user(request), await _body(request), _lang(request)))
 
     @handler
     async def ois_market(request: Request):
@@ -197,7 +206,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def add_bond(request: Request):
-        return ok(await call(svc().add_bond, _user(request), await _body(request)))
+        return ok(await call(svc().add_bond, _user(request), await _body(request), _lang(request)))
 
     @handler
     async def delete_trade(request: Request):
@@ -269,7 +278,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
         Route("/api/events", events),
-        Mount("/static", app=StaticFiles(directory=STATIC), name="static"),
+        Mount("/static", app=_Static(directory=STATIC), name="static"),
     ]
 
     async def on_startup():

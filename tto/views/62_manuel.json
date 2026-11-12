@@ -170,25 +170,25 @@
    "hidden": false
   },
   {
-   "id": "B6",
-   "type": "table",
-   "title": "Ara hesap",
-   "range": "AI17:AJ38",
-   "hidden": true
-  },
-  {
    "id": "B7",
    "type": "table",
-   "title": "Dönem tablosu' (period table)",
-   "range": "A22",
+   "title": "Dönem tablosu",
+   "range": "A22:L63",
    "hidden": false
   },
   {
    "id": "B8",
    "type": "notes",
-   "title": "Method notes",
+   "title": "Yöntem notları",
    "range": "A65:A66",
    "hidden": false
+  },
+  {
+   "id": "B6",
+   "type": "table",
+   "title": "Yardımcı · ara hesap",
+   "range": "AI17:AJ38",
+   "hidden": true
   }
  ]
 }

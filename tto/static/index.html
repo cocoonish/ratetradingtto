@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTO Masa</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233987e5'/%3E%3Cpath d='M6 22l6-7 5 4 9-11' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/css/app.css">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('tto.theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) { /* storage unavailable: default theme */ }
+})();
+</script>
+</head>
+<body>
+<div id="login" class="hidden">
+  <form class="box" id="login-form" autocomplete="off">
+    <div class="brand" style="padding:0"><div class="logo">TTO</div><div class="txt"><div class="name">TTO Masa</div><div class="sub">TRY · USD faiz masası</div></div></div>
+    <h1>Hoş geldiniz</h1>
+    <p>İsminizi yazıp girin. Senaryolarınız ve girdileriniz bu isimle saklanır.</p>
+    <input id="login-name" name="name" maxlength="40" placeholder="İsminiz" autofocus>
+    <div class="errtxt" id="login-err"></div>
+    <button class="btn primary" type="submit">Giriş</button>
+    <div class="known" id="login-known"></div>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <aside id="side">
+    <div class="brand"><div class="logo">TTO</div><div class="txt"><div class="name">TTO Masa</div><div class="sub">TRY · USD faiz</div></div></div>
+    <nav id="nav"></nav>
+    <div class="nav-foot">
+      <button class="btn ghost sm" id="btn-collapse" title="Menüyü daralt / genişlet">⇤</button>
+      <span class="lbl muted" id="foot-ver"></span>
+    </div>
+  </aside>
+  <section id="main">
+    <header id="top">
+      <h1 id="page-title">&nbsp;</h1>
+      <span class="badge" id="mode-badge"><span class="led"></span><span id="mode-text">…</span></span>
+      <span class="muted" id="asof"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="btn-ret" title="RET faizlerini gir / Excel'den yapıştır">RET faizleri</button>
+      <button class="btn" id="btn-scen" title="Senaryolarım">Senaryolar</button>
+      <button class="btn ghost" id="btn-lang" title="Sayı biçimi (kopyalama da bu biçimde yapılır)">1.234,56</button>
+      <button class="btn ghost" id="btn-theme" title="Açık / koyu tema">◐</button>
+      <button class="userchip" id="btn-user" title="Kullanıcı değiştir"><span class="av" id="user-av">?</span><span id="user-name"></span></button>
+    </header>
+    <div id="kpis"></div>
+    <main id="content" tabindex="-1"></main>
+    <footer id="statusbar">
+      <span class="addr" id="sb-addr">—</span>
+      <span class="fx" id="sb-fx"></span>
+      <span class="stat" id="sb-stat"></span>
+      <span class="hint" id="sb-hint">Ctrl+C kopyala · Ctrl+V yapıştır · Enter düzenle</span>
+    </footer>
+  </section>
+</div>
+<div id="toasts"></div>
+<script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

@@ -19,12 +19,24 @@ class InputError(ValueError):
     pass
 
 
-def parse_number(text: str) -> Optional[float]:
+_GROUP_DOT = re.compile(r"^[+-]?\d{1,3}(\.\d{3})+$")
+_GROUP_COMMA = re.compile(r"^[+-]?\d{1,3}(,\d{3})+$")
+_ONE_GROUP_DOT = re.compile(r"^[+-]?[1-9]\d{0,2}\.\d{3}$")
+_ONE_GROUP_COMMA = re.compile(r"^[+-]?[1-9]\d{0,2},\d{3}$")
+
+
+def parse_number(text: str, lang: str = "tr", prefer_decimal: bool = False) -> Optional[float]:
     """Number as a person writes it: ``35,55`` ``35.55`` ``1.234,56`` ``1,234.56`` ``%35`` ``35%`` ``(12,5)``.
 
     Returns ``None`` when the text is not a number.  A trailing / leading ``%`` divides by 100.
+
+    ``lang`` is the number format the user works in (the same one the dashboard displays and copies in):
+    with ``"tr"`` a lone ``12.345`` is twelve thousand ..., exactly as Turkish Excel reads it, and with
+    ``"en"`` a lone ``12,345`` is.  Everything that cannot be a grouped integer (``35.55``, ``0.355``,
+    ``1234.5``) is read as a decimal in either language.  ``prefer_decimal`` (rates, prices) switches the
+    grouped-integer reading off.
     """
-    s = text.strip().replace(" ", "").replace(" ", "")
+    s = text.strip().replace(" ", "").replace("\u00a0", "").replace("\u202f", "")
     if not s:
         return None
     pct = False
@@ -35,7 +47,7 @@ def parse_number(text: str) -> Optional[float]:
     neg = False
     if s.startswith("(") and s.endswith(")"):
         neg, s = True, s[1:-1]
-    if s.startswith("−") or s.startswith("–"):
+    if s.startswith("\u2212") or s.startswith("\u2013"):
         s = "-" + s[1:]
     has_dot, has_comma = "." in s, "," in s
     if has_dot and has_comma:
@@ -44,22 +56,28 @@ def parse_number(text: str) -> Optional[float]:
         else:                                    # 1,234.56
             s = s.replace(",", "")
     elif has_comma:
-        if s.count(",") > 1 and re.match(r"^[+-]?\d{1,3}(,\d{3})+$", s):
+        if s.count(",") > 1:
+            if not _GROUP_COMMA.match(s):
+                return None
             s = s.replace(",", "")               # 1,234,567
+        elif lang == "en" and not prefer_decimal and _ONE_GROUP_COMMA.match(s):
+            s = s.replace(",", "")               # 12,345 in an English workbook
         else:
             s = s.replace(",", ".")              # 35,55
-            if s.count(".") > 1:
+    elif has_dot:
+        if s.count(".") > 1:
+            if not _GROUP_DOT.match(s):
                 return None
-    elif has_dot and s.count(".") > 1:
-        if re.match(r"^[+-]?\d{1,3}(\.\d{3})+$", s):
             s = s.replace(".", "")               # 1.234.567
-        else:
-            return None
+        elif lang != "en" and not prefer_decimal and _ONE_GROUP_DOT.match(s):
+            s = s.replace(".", "")               # 12.345 in a Turkish workbook
     if not _NUM.match(s):
         return None
     try:
         x = float(s)
     except ValueError:
+        return None
+    if x != x or x in (float("inf"), float("-inf")):
         return None
     if neg:
         x = -x
@@ -93,12 +111,13 @@ def parse_date(text: str) -> Optional[float]:
 
 
 def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, kind: str = "auto",
-                options: Optional[List[str]] = None) -> Any:
+                options: Optional[List[str]] = None, lang: str = "tr") -> Any:
     """Convert user text to the value stored in the cell.
 
     * empty text -> ``None`` (blank cell)
     * date cells accept dates (or serial numbers)
-    * percent cells store a fraction: ``35,5`` / ``35,5%`` / ``0,355`` all give 0.355
+    * percent cells store a fraction: ``35,5`` / ``35,5%`` / ``0,355`` all give 0.355 (Excel's automatic
+      percent entry: a typed number of 1 or more is a percentage, a smaller one is the fraction itself)
     * anything that is not a number stays text
     """
     if raw is None:
@@ -118,20 +137,21 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
     if options:
         for o in options:
             if o.casefold() == s.casefold():
-                n = parse_number(o)
+                n = parse_number(o, lang)
                 return n if n is not None and re.match(r"^[+-]?[\d.,]+$", o) else o
     if date_cell or kind == "date":
         d = parse_date(s)
         if d is not None:
             return d
-        n = parse_number(s)
+        n = parse_number(s, lang)
         if n is not None and 20000 < n < 80000:
             return float(int(n))
         raise InputError("tarih anlaşılamadı: %r (örn. 03.11.2026)" % s)
     if kind == "text":
         return s
     explicit_pct = s.endswith("%") or s.startswith("%")
-    n = parse_number(s)
+    pct_cell = percent_cell or kind == "pct"
+    n = parse_number(s, lang, prefer_decimal=pct_cell)
     if n is None:
         d = parse_date(s) if re.search(r"\d[./-]\d{1,2}[./-]\d{2,4}$", s) else None
         if d is not None:
@@ -142,7 +162,7 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
         if up in ("FALSE", "YANLIŞ"):
             return False
         return s
-    if (percent_cell or kind == "pct") and not explicit_pct and abs(n) >= 1.5:
+    if pct_cell and not explicit_pct and abs(n) >= 1.0:
         n /= 100.0                      # typed as 35,5 meaning 35,5 %
     return n
 
