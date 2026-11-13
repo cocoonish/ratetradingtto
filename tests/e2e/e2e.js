@@ -515,6 +515,49 @@ async function shot(page, name) {
     await pick('EK_XAU!B11', 'Otomatik');
     await waitCell(page, 'EK_XAU!C11', 't.trim() === "Swap faizi · 1 vade"');
 
+    // ---- the manual spot: first table of the main page and of the VİOP page, and behind the header strip
+    const firstPanel = () => page.evaluate(() => {
+      const first = [...document.querySelectorAll('#content .panel')].find((p) => !p.classList.contains('hidden') && p.querySelector('table.grid'));
+      return first ? first.querySelector('header h2').textContent : '';
+    });
+    await open(page, 'viop');
+    check('VİOP page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
+    await open(page, 'masa');
+    check('main page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
+    const spotKpi = await page.evaluate(() => (document.querySelector('#kpi-spot') || {}).textContent || '');
+    check('header strip: "Spot kaynağı" says where the spot comes from', /Spot kaynağı/.test(spotKpi) && /MANUEL/.test(spotKpi), spotKpi);
+    await page.click('#kpi-spot');
+    await page.waitForSelector('#spot-bid');
+    const dlg = { bid: await page.inputValue('#spot-bid'), ask: await page.inputValue('#spot-ask'), src: await page.textContent('#spot-source') };
+    check('a click on it opens the manual spot: the two cells of the VİOP sheet', dlg.bid === '49,997' && dlg.ask === '49,9975' && dlg.src === 'MANUEL', dlg);
+    await page.fill('#spot-bid', '50,40');
+    await page.fill('#spot-ask', '50,30');
+    await page.click('.modal .btn.primary');
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Bid, ask/.test(t.textContent)));
+    check('manual spot: a bid above the ask is refused', await page.isVisible('#spot-bid'));
+    await page.fill('#spot-bid', '49,90');
+    await page.fill('#spot-ask', '49,91');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#spot-bid', { state: 'detached' });
+    await waitCell(page, 'VIOP!AA9', 't.trim() === "49,9000"');
+    check('manual spot typed in the dialog is in the cells (and stays "MANUEL")', (await cellText(page, 'VIOP!AA10')).trim() === '49,9100'
+      && /MANUEL/.test(await page.evaluate(() => document.querySelector('#kpi-spot').textContent)), await cellText(page, 'VIOP!AA10'));
+    await page.click('#kpi-spot');
+    await page.waitForSelector('#spot-bid');
+    await page.click('.modal .mfoot .btn:has-text("Bloomberg")');
+    await page.waitForSelector('#spot-bid', { state: 'detached' });
+    await page.waitForFunction(() => /BBG/.test(document.querySelector('#kpi-spot').textContent));
+    await waitCell(page, 'VIOP!AA9', 't.trim() === ""');
+    check('"Bloomberg\'e dön" empties the two cells: the source is Bloomberg again', (await cellText(page, 'VIOP!AA9')).trim() === ''
+      && (await cellText(page, 'VIOP!AA10')).trim() === '', [await cellText(page, 'VIOP!AA9'), await cellText(page, 'VIOP!AA10')]);
+    await page.click('#kpi-spot');                           // put the file's own manual spot back
+    await page.waitForSelector('#spot-bid');
+    await page.fill('#spot-bid', '49,997');
+    await page.fill('#spot-ask', '49,9975');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#spot-bid', { state: 'detached' });
+    await waitCell(page, 'VIOP!AA9', 't.trim() === "49,9970"');
+
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
       const num = (ref) => { const td = window.tto.findCell(ref); return td ? Number(td.textContent.replace('%', '').replace(/\./g, '').replace(',', '.')) : NaN; };
@@ -525,6 +568,13 @@ async function shot(page, name) {
     check('Borsa swap page says its offline quotes are examples', /ÖRNEK/.test(borsa.banner), borsa.banner.slice(0, 80));
     check('BIST swap table has the per-day points and the O/N equivalents', JSON.stringify(borsa.heads) === JSON.stringify(['BID SP / gün', 'ASK SP / gün', 'BID O/N', 'ASK O/N']), borsa.heads);
     check('O/N equivalent is below the simple rate of a longer maturity', borsa.days > 1 && borsa.on > 20 && borsa.on < borsa.bid && borsa.onAsk < borsa.ask, borsa);
+    const bist = await page.evaluate(() => ['t0', 't1'].map((id) => {
+      const cells = [...document.querySelectorAll('.panel[data-panel="' + id + '"] table.grid td')].map((td) => td.textContent.trim());
+      const note = (document.querySelector('.panel[data-panel="' + id + '"] .note') || {}).textContent || '';
+      return { errors: cells.filter((t) => t.startsWith('#')), n: cells.length, note };
+    }));
+    check('BIST swap tables hold quotes only: no error cells, and the rule is written under the table',
+      bist.every((b) => b.errors.length === 0 && b.n > 60) && /miktarı \(size\) sıfırdan büyük/.test(bist[0].note), bist.map((b) => [b.errors.slice(0, 3), b.n]));
 
     await open(page, 'asw');
     const asw = await page.evaluate(() => [...document.querySelectorAll('.panel.chart')].map((p) => {
@@ -631,6 +681,8 @@ async function shot(page, name) {
     const daily = await rowsOf('daily');
     check('daily history: newest first, the day of the meeting marked', daily[1][0] === '03.11.2026' && daily[1][1] === '35,8159' && daily[1][2] === '6'
       && daily.some((r) => r[0] === '22.10.2026 · PPK') && daily.length === 22, [daily[1], daily.length]);
+    check('daily history: what the workbook\'s own status says about each day', daily[0][3] === 'Durum' && daily.slice(1).every((r) => r[3] === 'eksik'),
+      daily.slice(0, 3).map((r) => r[3]));
     await shot(page, '14-mpc');
 
     await open(page, 'settings');

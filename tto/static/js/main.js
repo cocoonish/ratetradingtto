@@ -8,6 +8,7 @@ import { BlotterPage } from './pages/blotter.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
 import { openRetEditor } from './ret.js';
+import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
 
 const $ = (id) => document.getElementById(id);
@@ -24,6 +25,7 @@ function store(key, value) {
 
 const ctx = {
   refreshNow: () => { runRefresh(); pollStatus(); },
+  setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
   displayName: (key) => state.users[key] || key || '',
   /** Open a page and bring one of its panels into view (the workbook's "go to" hyperlinks). */
   goto: (pageId, panelId) => {
@@ -267,7 +269,19 @@ async function loadHeader() {
   const items = res.items || [];
   if (box.children.length !== items.length) {
     clear(box);
-    for (const it of items) box.appendChild(h('div', { class: 'kpi' }, h('div', { class: 'l' }, it.label), h('div', { class: 'v' }, it.text)));
+    for (const it of items) {
+      const el = h('div', { class: 'kpi' }, h('div', { class: 'l' }, it.label), h('div', { class: 'v' }, it.text));
+      if (it.edit === 'spot') {                       // the manual spot of the VİOP sheet: typed from any page
+        el.classList.add('edit');
+        el.id = 'kpi-spot';
+        el.tabIndex = 0;
+        el.setAttribute('role', 'button');
+        el.title = 'Manuel spot gir / Bloomberg spotuna dön';
+        el.addEventListener('click', () => openSpotEditor(ctx));
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSpotEditor(ctx); } });
+      }
+      box.appendChild(el);
+    }
     return;
   }
   items.forEach((it, i) => {

@@ -319,6 +319,64 @@ def test_reconnects_and_resubscribes_after_the_terminal_drops(server):
         p.stop()
 
 
+def test_identifiers_written_for_excel_are_sent_the_way_the_api_takes_them(provider, server):
+    """DİBS RV names a bond the way Excel's add-in accepts it - "TRT150328T24 @ISL1 ISIN", identifier type at
+    the end.  The API does not know that spelling (every bond of the page read "#N/A Invalid Security" on the
+    desk); it wants "/isin/TRT150328T24@ISL1".  The provider translates on the way out, for requests, history
+    and subscriptions alike, and the workbook keeps its own spelling."""
+    priced, plain = "TRT150328T24 @ISL1 ISIN", "TRT150328T24 ISIN"
+    assert server.unknown(priced) and server.unknown(plain)                 # what the API says to Excel's spelling
+    assert not server.unknown("/isin/TRT150328T24@ISL1")
+    server.ref[(plain, "NAME", ())] = "TURKIYE GOVERNMENT BOND"
+    server.ref[(plain, "CPN", ())] = 36.8
+    server.ref[(priced, "BID", ())] = 100.10
+    server.ref[(priced, "ASK", ())] = 100.125
+    server.ref[(priced, "YLD_YTM_MID", ())] = 39.7
+    server.rt[(priced, "BID")] = 100.10
+    server.history[(priced, "PX_LAST")] = [(dt.date(2026, 11, 2), 100.3), (dt.date(2026, 11, 3), 100.2)]
+    keys = [bdp_key(plain, "NAME"), bdp_key(plain, "CPN"), bdp_key(priced, "BID"), bdp_key(priced, "ASK"),
+            bdp_key(priced, "YLD_YTM_MID")]
+    for k in keys:
+        assert provider.get_bdp(k) == REQUESTING
+    bdh = ("BDH", priced, "PX_LAST", "20261102", "20261103", (("DATES", "H"),))
+    provider.get_bdh(bdh)
+    settle(provider)
+    assert [provider.get_bdp(k) for k in keys] == ["TURKIYE GOVERNMENT BOND", 36.8, 100.10, 100.125, 39.7]
+    assert provider.get_bdh(bdh).rows == [[100.3], [100.2]]
+    asked = {sec for r in server.requests for sec in r["securities"]}
+    assert asked == {"/isin/TRT150328T24", "/isin/TRT150328T24@ISL1"}        # never the Excel spelling
+    assert wait_for(lambda: provider.status()["subscriptions"] == 1)
+    assert server.subscriptions == [("/isin/TRT150328T24@ISL1", ["ASK", "BID"])]
+    provider.drain_changes()
+    server.tick(priced, {"BID": 100.2})
+    assert wait_for(lambda: provider.get_bdp(bdp_key(priced, "BID")) == 100.2)
+    assert provider.drain_changes() == [bdp_key(priced, "BID")]              # under the workbook's own name
+    rows = provider.history([(priced, "PX_LAST")], "20261101", "20261103", timeout=10)
+    assert rows == {(priced, "PX_LAST"): [("2026-11-02", 100.3), ("2026-11-03", 100.2)]}
+    st = provider.status()
+    assert st["subscriptions_invalid"] == 0 and st["subscriptions_failed"] == 0
+
+
+@pytest.mark.parametrize("excel, api", [
+    ("TRT150328T24 @ISL1 ISIN", "/isin/TRT150328T24@ISL1"),
+    ("TRT150328T24@ISL0 ISIN", "/isin/TRT150328T24@ISL0"),
+    ("TRT150328T24 ISIN", "/isin/TRT150328T24"),
+    ("trt150328t24 isin", "/isin/trt150328t24"),
+    ("912828U81 CUSIP", "/cusip/912828U81"),
+    ("B0YQ5W0 SEDOL", "/sedol1/B0YQ5W0"),
+    ("BBG000BLNNH6 FIGI", "/bbgid/BBG000BLNNH6"),
+    ("/isin/TRT150328T24@ISL1", "/isin/TRT150328T24@ISL1"),                  # already the API's way
+    ("USDTRY Curncy", "USDTRY Curncy"),                                      # ordinary tickers are left alone
+    ("TYB7D BFX0 Curncy", "TYB7D BFX0 Curncy"),
+    ("TRT150328T24 Govt", "TRT150328T24 Govt"),
+    ("XS1234567890 Corp", "XS1234567890 Corp"),
+    ("BISTTREF Index", "BISTTREF Index"),
+    ("ISIN", "ISIN"),
+])
+def test_api_security(excel, api):
+    assert bloomberg.api_security(excel) == api
+
+
 # ---------------------------------------------------------------------------------- keeping up with Bloomberg
 def wait_for(cond, timeout=10.0, step=0.02):
     t0 = time.time()
@@ -457,6 +515,29 @@ def test_ticks_without_a_number_are_ignored(provider, server):
     server.tick("USDTRY Curncy", {"BID_SIZE": 7})                           # an integer field
     assert wait_for(lambda: provider.get_bdp(size) == 7.0)
     assert type(provider.get_bdp(size)) is float and provider.drain_changes() == [size]
+
+
+def test_an_order_that_is_withdrawn_takes_its_size_with_it(provider, server):
+    """A tick that carries a size without a value says the order is gone.  Excel shows "#N/A N/A" then; kept
+    at its last value, the size would leave a quote on the BIST swap page that is no longer in the market."""
+    sec = "TYB30D BFX1 Curncy"
+    for f, v in (("BID", 12850.0), ("BID_SIZE", 5e6), ("ASK", 13100.0), ("ASK_SIZE", 2e7)):
+        server.ref[(sec, f, ())] = v
+    keys = {f: bdp_key(sec, f) for f in ("BID", "BID_SIZE", "ASK", "ASK_SIZE")}
+    for k in keys.values():
+        provider.get_bdp(k)
+    settle(provider)
+    assert wait_for(lambda: provider.status()["subscriptions"] == 1)
+    provider.drain_changes()
+    server.tick(sec, {"BID": None, "BID_SIZE": None, "ASK_SIZE": 1.5e7})     # the bid is pulled, the ask shrinks
+    assert wait_for(lambda: provider.get_bdp(keys["ASK_SIZE"]) == 1.5e7)
+    assert provider.get_bdp(keys["BID_SIZE"]) == NA_NA                       # no size: no quote
+    assert provider.get_bdp(keys["BID"]) == 12850.0                          # a price keeps its last value
+    assert sorted(provider.drain_changes()) == sorted([keys["BID_SIZE"], keys["ASK_SIZE"]])
+    hits = server.hits()
+    server.tick(sec, {"BID": 12800.0, "BID_SIZE": 2e6})                      # a new order
+    assert wait_for(lambda: provider.get_bdp(keys["BID_SIZE"]) == 2e6)
+    assert provider.get_bdp(keys["BID"]) == 12800.0 and server.hits() == hits
 
 
 def test_a_full_event_queue_is_reported_and_what_it_dropped_is_asked_again(server, monkeypatch):

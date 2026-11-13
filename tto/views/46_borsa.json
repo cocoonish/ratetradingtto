@@ -36,7 +36,7 @@
    "title": "BIST swap · T+0 valör (BFX0) — kota, ima TRY faizi ve O/N karşılığı",
    "range": "D8:P54",
    "keep_title": true,
-   "note": "BID % / ASK %: swap puanından ima edilen TRY basit faizi (ACT/360, USD OIS ile). O/N = 360·((1 + r·gün/360)^(1/gün) − 1). SP / gün = swap puanı ÷ vade günü. Yalnızca alış ya da satış miktarı olan vadeler listelenir."
+   "note": "BID % / ASK %: swap puanından ima edilen TRY basit faizi (ACT/360, USD OIS ile). O/N = 360·((1 + r·gün/360)^(1/gün) − 1). SP / gün = swap puanı ÷ vade günü. Yalnızca arkasında emir olan kota gösterilir: miktarı (size) sıfırdan büyük olan taraf. Bloomberg'in kotasız vadeler için döndürdüğü eski fiyatlar (miktar 0) listelenmez; tek taraflı kotada diğer taraf boş kalır."
   },
   {
    "id": "t1",

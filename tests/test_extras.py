@@ -628,6 +628,72 @@ def test_overnight_equivalents_of_the_bist_swap_quotes(service):
     assert days == sorted(days) and len(days) >= 9 and days[0] == 1.0
 
 
+def test_bist_quotes_without_an_order_behind_them_are_not_listed(tmp_path):
+    """What the desk saw live: a maturity that exists but is not quoted comes back from the API with a size
+    of 0 and an old price - the same on both sides - or with no price at all.  The workbook lists a maturity
+    whose size "is a number", so all of those were on the page.  Only a side with a size above zero is a
+    quote; a maturity is listed when it has one."""
+    from conftest import make_service
+    svc = make_service(tmp_path)
+    try:
+        assert svc.books["borsa"].left_out == []
+        prov = svc.provider
+        na = "#N/A N/A"
+        for k in list(prov.snapshot):                               # the offline example quotes
+            if k[0] == "BDP" and " BFX" in k[1]:
+                del prov.snapshot[k]
+
+        def quote(days, source, bid=na, bid_size=na, ask=na, ask_size=na):
+            for field, value in (("BID", bid), ("BID_SIZE", bid_size), ("ASK", ask), ("ASK_SIZE", ask_size)):
+                prov.snapshot[bdp_key("TYB%dD BFX%d Curncy" % (days, source), field)] = value
+
+        quote(1, 0, 434.0, 0.0, 434.0, 0.0)                         # an old price on both sides, no order
+        quote(2, 0, na, 0.0, na, 0.0)                               # exists, nothing at all
+        quote(7, 0, 3050.0, 5e6, 3100.0, 2e7)                       # a real two-sided quote
+        quote(10, 0, 4330.0, 1e6, 4330.0, 0.0)                      # a real bid, an old ask
+        quote(15, 0, 6575.0, 0.0, 6600.0, 3e6)                      # a real ask, an old bid
+        quote(20, 0, 9000.0, na, 9010.0, na)                        # prices without sizes
+        quote(30, 1, 12850.0, 5e6, 13100.0, 2e7)
+        quote(64, 1, 26700.0, 1e7, 27350.0, 2.5e7)
+        quote(92, 1, na, 0.0, na, 0.0)
+        svc.et.call(lambda: [book.engine.reset() for book in svc.books.values()])
+
+        def b(ref):
+            return cell(svc, ref, book="borsa")
+
+        t0 = [[b("bu!%s%d" % (c, r)) for c in "EGHIJKLMNOP"] for r in range(9, 14)]
+        assert [row[0] for row in t0] == [7.0, 10.0, 15.0, None, None]             # days of the listed maturities
+        both, bid_only, ask_only = t0[0], t0[1], t0[2]
+        #          days  size   bid%  /day  points | points /day ask%  size |  O/N bid, ask
+        assert both[1] == 5e6 and both[4] == 3050.0 and both[5] == 3100.0 and both[8] == 2e7
+        assert all(isinstance(x, float) for x in both)
+        assert both[3] == pytest.approx(3050.0 / 7) and both[6] == pytest.approx(3100.0 / 7)
+        assert bid_only[1] == 1e6 and bid_only[4] == 4330.0 and isinstance(bid_only[2], float) and isinstance(bid_only[9], float)
+        assert bid_only[5:9] == ["", "", "", ""] and bid_only[10] == ""            # no ask: not the old 4,330
+        assert ask_only[5] == 6600.0 and ask_only[8] == 3e6 and isinstance(ask_only[7], float) and isinstance(ask_only[10], float)
+        assert ask_only[1:5] == ["", "", "", ""] and ask_only[9] == ""
+        t1 = [[b("bu!%s%d" % (c, r)) for c in ("R", "T", "W", "X", "AA")] for r in range(9, 12)]
+        assert t1 == [[30.0, 5e6, 12850.0, 13100.0, 2e7], [64.0, 1e7, 26700.0, 27350.0, 2.5e7], [None, None, None, None, None]]
+        # nothing on the page is an error any more (the unquoted maturities used to show #VALUE!)
+        for panel in svc.view(None, "borsa")["panels"]:
+            if panel["id"] in ("t0", "t1"):
+                texts = [c.get("t", "") for row in panel["data"]["rows"] for c in row]
+                assert not [t for t in texts if t.startswith("#")], [t for t in texts if t.startswith("#")][:5]
+                assert len(panel["data"]["rows"]) >= 3
+        # the workbook file itself is untouched: without the dashboard's additions its own rule applies
+        from tto.books import load_books
+        import os
+        plain = load_books(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"), extras=False)
+        assert formula_text(plain["borsa"], *plain["borsa"].cell("Sheet2!E6")) == \
+            '=IF(OR(ISNUMBER(Sheet1!$D4),ISNUMBER(Sheet1!$G4)),Sheet1!E4,"")'
+        assert svc.cell_info(None, "borsa", "Sheet2!E6")["formula"] == \
+            '=IF(IF(ISNUMBER(Sheet1!$D4),Sheet1!$D4>0,FALSE),Sheet1!E4,"")'
+        assert svc.cell_info(None, "borsa", "Sheet2!B6")["formula"] == \
+            '=IF(OR(IF(ISNUMBER(Sheet1!$D4),Sheet1!$D4>0,FALSE),IF(ISNUMBER(Sheet1!$G4),Sheet1!$G4>0,FALSE)),Sheet1!B4,"")'
+    finally:
+        svc.stop()
+
+
 def test_offline_bist_quotes_are_derived_from_the_recorded_ret_curve(service):
     """The Borsa workbook holds no market data: offline its quotes are example points derived from the RET
     curve of the TRY workbook, so the implied TRY rates must come out at RET (to the rounding of a point)."""

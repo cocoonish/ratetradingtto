@@ -5,6 +5,7 @@
 * ``inputs``  cells the user may type into: ``{"range": "W33:X47", "scope": "user"|"shared", "group": "...",
   "kind": "auto|number|pct|date|text", "label": "..."}`` (ranges without a sheet refer to the page's sheet)
 * ``panels``  ``{"type": "table", "range": "B29:J39", "title": "...", "hidden": false}`` |
+              (``"sheet": "VIOP", "borrowed": true``: a few cells of another page's sheet, shown here as well) |
   ``{"type": "chart", "chart": <index of the chart on the sheet>}`` | ``{"type": "notes", "range": ...}`` |
   ``{"type": "custom", "component": "..."}``
 """

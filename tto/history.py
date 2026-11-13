@@ -136,6 +136,126 @@ def filled(points: Dict[str, float], axis: Sequence[_dt.date], stale: int = MAX_
     return out
 
 
+#: trading days a tenor without a close may go on from its last one
+CARRY_DAYS = 3
+#: percent points (25 bp): a close that leaves what its neighbours did by this much, and comes back the next day
+SPIKE = 0.25
+#: tenors (months) below this are not judged that way: the very front does jump on its own (meeting days, month ends)
+SPIKE_FROM_MONTHS = 2.0
+
+
+def curve_quotes(tenors: Sequence[Tuple[float, Dict[str, float]]], stale: int = CARRY_DAYS, spike: float = SPIKE,
+                 judge_from: float = SPIKE_FROM_MONTHS) -> Tuple[List[Dict[str, float]], Dict[str, Dict[str, List[int]]]]:
+    """The quotes of a curve for every day the market closed on, from the daily closes of its tenors.
+
+    ``tenors`` is ``[(maturity in months, {day: close in percent}), ...]``, shortest first.  The solver that reads
+    these quotes fits all of them at once and is thrown about by a single one that does not belong to its day
+    (a 3M quote 40 bp off moves the nearest meetings by a hundred basis points and more), so:
+
+    * a tenor that has **no close** on a day goes on from its last one (at most ``stale`` trading days old)
+      *by what its neighbours did since* - the nearest tenor on each side that closed on both days, weighted by
+      maturity.  Carrying the level alone, as a plain "previous value" fill does, leaves a stale point in a
+      curve that has moved; on a tenor that trades every other day that draws a zigzag;
+    * a close that **leaves both its neighbours and comes back**: against the tenor on either side, it moves
+      by ``spike`` or more into the day and by as much the other way out of it.  That is a quote that was not
+      updated that day, or a wrong print; it is not used, and the day is filled as above.  A move that a
+      neighbour shares - a segment of the curve, or all of it - is the market and is kept, however short
+      lived.  (The largest such close of a day is taken out first and the others are looked at again.  Tenors
+      shorter than ``judge_from`` months are left alone, and so is the latest day: it has no next day to
+      come back on yet.)
+
+    Returns ``(values, marks)``: ``values[i]`` = ``{day: quote}`` of tenor ``i``; ``marks[day]`` =
+    ``{"carried": [i, ...], "cleaned": [i, ...]}`` for the days on which a quote is not that day's own close.
+    """
+    n = len(tenors)
+    months = [float(m or 0.0) for m, _ in tenors]
+    src: List[Dict[str, float]] = [dict(points) for _, points in tenors]       # the closes that count
+    days = sorted({d for points in src for d in points})
+
+    def move(i: int, a: str, b: str) -> Optional[float]:
+        """What the neighbours of tenor ``i`` did between two days."""
+        lo = next((j for j in range(i - 1, -1, -1) if a in src[j] and b in src[j]), None)
+        hi = next((j for j in range(i + 1, n) if a in src[j] and b in src[j]), None)
+        if lo is None and hi is None:
+            return None
+        if lo is None or hi is None:
+            j = hi if lo is None else lo
+            return src[j][b] - src[j][a]
+        span = months[hi] - months[lo]
+        w = (months[i] - months[lo]) / span if span > 0 else 0.5
+        return (1.0 - w) * (src[lo][b] - src[lo][a]) + w * (src[hi][b] - src[hi][a])
+
+    def alone(i: int, a: str, t: str, b: str) -> float:
+        """How far tenor ``i`` left its neighbours on day ``t`` and came back on ``b`` (0: it did not)."""
+        sides = [next((j for j in range(i - 1, -1, -1) if a in src[j] and t in src[j] and b in src[j]), None),
+                 next((j for j in range(i + 1, n) if a in src[j] and t in src[j] and b in src[j]), None)]
+        size, sign = None, 0.0
+        for j in sides:
+            if j is None:
+                continue
+            into = (src[i][t] - src[i][a]) - (src[j][t] - src[j][a])
+            out = (src[i][b] - src[i][t]) - (src[j][b] - src[j][t])
+            if into * out >= 0 or (sign and into * sign < 0):
+                return 0.0                                 # it stayed there, or left the two sides in different directions
+            sign = into
+            size = min(abs(into), abs(out)) if size is None else min(size, abs(into), abs(out))
+        return size or 0.0
+
+    removed: Dict[str, List[int]] = {}
+    for k in range(1, len(days) - 1):
+        a, t, b = days[k - 1], days[k], days[k + 1]
+        while True:
+            worst, size = None, spike
+            for i in range(n):
+                if months[i] < judge_from or not (a in src[i] and t in src[i] and b in src[i]):
+                    continue
+                e = alone(i, a, t, b)
+                if e >= size:
+                    worst, size = i, e
+            if worst is None:
+                break
+            del src[worst][t]
+            removed.setdefault(t, []).append(worst)
+    values: List[Dict[str, float]] = [dict(points) for points in src]
+    marks: Dict[str, Dict[str, List[int]]] = {}
+    for i in range(n):
+        for k, t in enumerate(days):
+            if t in src[i]:
+                continue
+            back = next((days[j] for j in range(k - 1, max(-1, k - 1 - stale), -1) if days[j] in src[i]), None)
+            if back is None:
+                continue                                   # no close for longer than a quote may be carried
+            shift = move(i, back, t)
+            values[i][t] = src[i][back] + (shift or 0.0)
+            kind = "cleaned" if i in removed.get(t, ()) else "carried"
+            marks.setdefault(t, {"carried": [], "cleaned": []})[kind].append(i)
+    return values, marks
+
+
+def day_flag(meta: Dict[str, Any]) -> str:
+    """What is wrong with a computed day, by the workbook's own status of it (``OIS_MAIN!AU12``):
+
+    * ``""``              nothing: every tenor quoted and the solver matched the quotes;
+    * ``"missing"``       some tenors had no close ("Kota eksik: …"): solved with the rest, meetings beyond the
+                          quotes are not priced - a result to use;
+    * ``"inconsistent"``  the solver could not match the quotes within the sheet's tolerance ("Kota/takvim
+                          tutarsız – kontrolü incele"): typically one close of that day is stale or wrong, and
+                          the steps it gives are not to be trusted;
+    * ``"error"``         the day could not be computed at all.
+    """
+    status = meta.get("status") or ""
+    if status.startswith("HATA"):
+        return "error"
+    control, tolerance = meta.get("control"), meta.get("tolerance")
+    if status.startswith("Kota/takvim tutarsız") or (control is not None and tolerance is not None and control > tolerance):
+        return "inconsistent"
+    return "missing" if status and status != "OK" else ""
+
+
+#: days with these flags are kept in the database but left out of series, ranges and changes
+UNRELIABLE = ("inconsistent", "error")
+
+
 def align_meetings(old: Sequence[str], new: Sequence[str], tolerance: int = 45) -> Dict[int, Optional[int]]:
     """Which entry of the new list of meeting dates each entry of the old list became.
 
@@ -339,10 +459,12 @@ class MpcMachine(object):
                 decision = False
         status = calc.get(si, *divmod(parse_a1("AU12"), COLS))
         control = calc.get(si, *divmod(parse_a1("AU11"), COLS))
+        allowed = calc.get(si, *divmod(parse_a1("AU6"), COLS))         # the sheet's own rule: AU11 > 5·AU6 is "tutarsız"
         b2 = calc.get(si, *divmod(parse_a1("B2"), COLS))
         self.solves += 1
         return {"rows": rows, "status": status if isinstance(status, str) else "",
-                "control": control if type(control) is float else None, "base": base, "decision": decision,
+                "control": control if type(control) is float else None,
+                "tolerance": 5.0 * allowed if type(allowed) is float else None, "base": base, "decision": decision,
                 "spot": _iso(serial_to_date(b2)) if type(b2) is float and 20000 < b2 < 80000 else None,
                 "unknown": sorted(prov.unknown)}
 
@@ -816,15 +938,17 @@ class History(object):
         data = self.store.hist_many(ids, _iso(first - _dt.timedelta(days=12)), _iso(today))
         tlref = ref.pick(data)[1] if ref else {}
         serials, holidays = self._holidays(snap, tlref)
-        axis = weekdays_ending(today, int(look * 5 / 7) + 12)
-        picked = []
         own: Dict[str, int] = {}                               # day -> tenors with a close of that very day
+        closes = []
         for d in ois:
             points = d.pick(data)[1]
             for k in points:
                 own[k] = own.get(k, 0) + 1
-            vals = filled(points, axis, 3)
-            picked.append((d, {_iso(a): v for a, v in zip(axis, vals) if v is not None}))
+            closes.append((d.months or 0.0, points))
+        order = sorted(range(len(ois)), key=lambda i: closes[i][0])          # shortest first, as curve_quotes wants
+        values, marks = curve_quotes([closes[i] for i in order])
+        picked = [(ois[i], values[k]) for k, i in enumerate(order)]
+        roots = [ois[i].root for i in order]
         calendar = [_day(d) for d in self.meetings(snap)]
         shared = {"roots": snap["roots"], "holidays": serials, "tlref_ticker": snap["tlref"]}
         hol_mark = hashlib.sha1(repr(serials).encode()).hexdigest()[:12]
@@ -837,6 +961,9 @@ class History(object):
                 key = _iso(day)
                 quotes = {d.root: pts[key] for d, pts in picked if key in pts}
                 months = [d.months for d, pts in picked if key in pts and d.months]
+                mark = marks.get(key) or {}
+                carried = len(mark.get("carried", ())) + len(mark.get("cleaned", ()))
+                cleaned = ", ".join(roots[i] for i in mark.get("cleaned", ()))
                 # today's TLREF is the last fixing published by the close of the day
                 fix = None
                 for k in reversed(tl_days):
@@ -851,7 +978,7 @@ class History(object):
                     basis = hashlib.sha1(repr((METHOD, key, _iso(spot), fix, sorted(quotes.items()),
                                                [_iso(m) for m in meetings], hol_mark, roots_mark)).encode()).hexdigest()
                     plan.append({"day": day, "spot": spot, "tlref": fix, "quotes": quotes, "meetings": meetings,
-                                 "horizon": horizon, "basis": basis})
+                                 "horizon": horizon, "basis": basis, "carried": carried, "cleaned": cleaned})
             day -= _dt.timedelta(days=1)
         return plan, shared
 
@@ -889,7 +1016,9 @@ class History(object):
                 self.store.mpc_save(_iso(p["day"]), p["basis"],
                                     {"spot": _iso(p["spot"]), "tlref": p["tlref"], "quotes": len(p["quotes"]),
                                      "status": res["status"], "note": note, "base": res["base"],
-                                     "decision": res["decision"]}, res["rows"])
+                                     "decision": res["decision"], "control": res.get("control"),
+                                     "tolerance": res.get("tolerance"), "carried": p.get("carried"),
+                                     "cleaned": p.get("cleaned") or ""}, res["rows"])
             except Exception as exc:  # noqa: BLE001 - one bad day must not stop the others
                 self.store.mpc_save(_iso(p["day"]), p["basis"],
                                     {"spot": _iso(p["spot"]), "tlref": p["tlref"], "quotes": len(p["quotes"]),
@@ -918,11 +1047,14 @@ class History(object):
         bounds = self.store.hist_bounds()
         days = self.store.mpc_days()
         st = dict(self.state)
-        partial = sum(1 for d in days.values() if d.get("status") and d["status"] != "OK")
+        flags = [day_flag(d) for d in days.values()]
+        partial = sum(1 for f in flags if f)
         first = min((b[0] for b in bounds.values()), default=None)
         last = max((b[1] for b in bounds.values()), default=None)
         st.update({"rev": self.rev, "series": len(bounds), "first_day": first, "last_day": last, "mpc_days": len(days),
-                   "mpc_partial": partial, "mpc_first": min(days) if days else None, "mpc_last": max(days) if days else None,
+                   "mpc_partial": partial, "mpc_missing": flags.count("missing"),
+                   "mpc_unreliable": sum(1 for f in flags if f in UNRELIABLE),
+                   "mpc_first": min(days) if days else None, "mpc_last": max(days) if days else None,
                    "running": self._thread is not None and self._thread.is_alive(), "mode": self.svc.mode,
                    "auto": bool(getattr(self.svc.settings, "history", True)), "settings": self.settings(),
                    "refresh": float(getattr(self.svc.settings, "history_refresh", 900.0) or 0.0)})
@@ -1026,9 +1158,12 @@ class History(object):
 
     def _mpc_matrix(self, day: _dt.date, axis: List[_dt.date]) -> List[Dict[str, Any]]:
         rows = self.store.mpc_values(_iso(axis[0]), _iso(day))
+        meta = self.store.mpc_days(_iso(axis[0]), _iso(day))
+        unreliable = {d for d, x in meta.items() if day_flag(x) in UNRELIABLE}
         by_day: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for r in rows:
-            by_day.setdefault(r["day"], {})[r["meeting"]] = r
+            if r["day"] not in unreliable:
+                by_day.setdefault(r["day"], {})[r["meeting"]] = r
         if not by_day:
             return []
 
@@ -1072,9 +1207,15 @@ class History(object):
         cal = self.calendar()
         info = {m["date"]: m for m in cal["meetings"]}
         spot = _day(cal["spot"])
+        flags = {d: day_flag(x) for d, x in meta.items()}
+        unreliable = {d for d, f in flags.items() if f in UNRELIABLE}
         per: Dict[str, List[Dict[str, Any]]] = {}
+        flagged: Dict[str, Dict[str, Dict[str, Any]]] = {}     # what the solver gave on the days it does not stand behind
         for r in rows:
-            per.setdefault(r["meeting"], []).append(r)
+            if r["day"] in unreliable:
+                flagged.setdefault(r["day"], {})[r["meeting"]] = {k: r[k] for k in ("step", "level", "cum")}
+            else:
+                per.setdefault(r["meeting"], []).append(r)
         ahead = sorted(m for m in per if _day(m) >= spot)[:max(1, int(upcoming))]
         held = sorted(m for m in per if _day(m) < spot)
         ref = next((d for d in snap["defs"] if d.group == "ref"), None)
@@ -1113,11 +1254,24 @@ class History(object):
                 item["priced"] = last["step"]
                 item["surprise"] = None if item["realized"] is None or last["step"] is None else item["realized"] - last["step"]
             meetings.append(item)
-        partial = sorted(d for d, x in meta.items() if x.get("status") and x["status"] != "OK")
+        partial = sorted(d for d in axis if flags[d])
+        issues = []
+        for kind in ("inconsistent", "error", "missing"):
+            hit = [d for d in axis if flags[d] == kind]
+            if hit:
+                texts: Dict[str, int] = {}
+                for d in hit:
+                    texts[meta[d].get("status") or ""] = texts.get(meta[d].get("status") or "", 0) + 1
+                worst = max((meta[d]["control"] for d in hit if meta[d].get("control") is not None), default=None)
+                issues.append({"kind": kind, "count": len(hit), "days": hit[-12:], "status": max(texts, key=texts.get),
+                               "control": worst})
         return {"today": _iso(today), "spot": cal["spot"], "days": axis, "meetings": meetings, "series": series,
                 "decision_days": [d for d in axis if meta[d].get("decision")],
                 "tlref": [tl.get(d) if d in tl else next((tl[k] for k in reversed(tl_days) if k <= d), None) for d in axis],
                 "quotes": [meta[d].get("quotes") for d in axis], "partial": len(partial),
+                "flags": [flags[d] for d in axis], "control": [meta[d].get("control") for d in axis],
+                "carried": [meta[d].get("carried") for d in axis], "cleaned": [meta[d].get("cleaned") or "" for d in axis],
+                "issues": issues, "flagged": flagged,
                 "status": sorted({x.get("status") or "" for x in meta.values()} - {""}),
                 "notes": sorted({x.get("note") or "" for x in meta.values()} - {""})[:5],
                 "source": snap["src"], "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}

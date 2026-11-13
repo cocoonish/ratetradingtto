@@ -55,6 +55,11 @@ RT_FIELDS = {"BID": "BID", "ASK": "ASK", "MID": "MID", "LAST_PRICE": "LAST_PRICE
              "PX_BID": "BID", "PX_ASK": "ASK", "PX_MID": "MID", "HIGH": "HIGH", "LOW": "LOW",
              "BID_SIZE": "BID_SIZE", "ASK_SIZE": "ASK_SIZE"}      # order sizes of the BIST swap quotes
 
+#: Real-time fields that are gone when a tick carries them without a value: the size of an order.  Shown as
+#: "#N/A N/A" then, as in Excel, so that a quote which was withdrawn does not stay on the page.  (A price
+#: without a value is left at its last one: for a quote that updates rarely that is all there is.)
+CLEARED_WHEN_NULL = ("BID_SIZE", "ASK_SIZE")
+
 #: how often (seconds) reference values are asked again; real-time fields are streamed instead
 STATIC_FIELDS = {"NAME", "SECURITY_DES", "CPN", "CPN_TYP", "CPN_FREQ", "MATURITY", "FIRST_CPN_DT", "FLT_SPREAD",
                  "INFLATION_LINKED_INDICATOR", "LAST_TRADEABLE_DT"}
@@ -85,6 +90,25 @@ RESYNC_SETTLE = 2.0
 #: values asked again per day at most: a reader that keeps falling behind must not use up the terminal's
 #: daily data limit by repairing itself (the losses stay visible in the status)
 RESYNC_BUDGET = 20000
+
+#: Identifier types the Excel add-in accepts *after* an identifier - "TRT150328T24 ISIN", with a pricing source
+#: "TRT150328T24 @ISL1 ISIN" - and the prefix the API wants instead: "/isin/TRT150328T24@ISL1".  Sent to the
+#: API as typed in Excel, such a security comes back as "#N/A Invalid Security".
+ID_TYPES = {"ISIN": "isin", "CUSIP": "cusip", "CINS": "cins", "SEDOL": "sedol1", "SEDOL1": "sedol1",
+            "SEDOL2": "sedol2", "BUID": "buid", "WPK": "wpk", "COMMON": "common", "FIGI": "bbgid", "BBGID": "bbgid"}
+
+
+def api_security(sec: str) -> str:
+    """The security as the Bloomberg API takes it (the workbook writes it the way Excel's add-in does)."""
+    if sec.startswith("/"):
+        return sec
+    parts = sec.split()
+    if len(parts) >= 2:
+        kind = ID_TYPES.get(parts[-1].upper())
+        if kind is not None:
+            return "/%s/%s" % (kind, "".join(parts[:-1]))
+    return sec
+
 
 _PERIODICITY = {"D": "DAILY", "W": "WEEKLY", "M": "MONTHLY", "Q": "QUARTERLY", "S": "SEMI_ANNUALLY", "Y": "YEARLY"}
 _DAYS = {"W": "NON_TRADING_WEEKDAYS", "A": "ALL_CALENDAR_DAYS", "C": "ALL_CALENDAR_DAYS", "T": "ACTIVE_DAYS_ONLY"}
@@ -662,8 +686,12 @@ class BloombergProvider(Provider):
     def _reference(self, securities: List[str], fields: List[str], overrides: Tuple, kind: str,
                    wanted: Dict[str, List[Tuple]]) -> None:
         request = self._refdata.createRequest("ReferenceDataRequest")
+        by_name: Dict[str, List[Tuple]] = {}             # the answer names a security as it was asked for
         for s in securities:
-            request.append(self._name("securities"), s)
+            name = api_security(s)
+            if name not in by_name:
+                request.append(self._name("securities"), name)
+            by_name.setdefault(name, []).extend(wanted.get(s, []))
         for f in fields:
             request.append(self._name("fields"), f)
         if overrides:
@@ -672,15 +700,15 @@ class BloombergProvider(Provider):
                 item = ov.appendElement()
                 item.setElement(self._name("fieldId"), name)
                 item.setElement(self._name("value"), _override_value(name, value))
-        self._count(len(securities) * len(fields))
-        keys = [k for ks in wanted.values() for k in ks]
-        self._dispatch(request, _Request(kind, keys, wanted))
+        self._count(len(by_name) * len(fields))
+        keys = [k for ks in by_name.values() for k in ks]
+        self._dispatch(request, _Request(kind, keys, by_name))
 
     def _history(self, keys: List[Tuple], field: str, start: str, end: str, options: Tuple) -> None:
         request = self._refdata.createRequest("HistoricalDataRequest")
         wanted: Dict[str, List[Tuple]] = {}
         for k in keys:
-            wanted.setdefault(k[1], []).append(k)
+            wanted.setdefault(api_security(k[1]), []).append(k)
         for sec in wanted:
             request.append(self._name("securities"), sec)
         request.append(self._name("fields"), field)
@@ -745,7 +773,7 @@ class BloombergProvider(Provider):
             for i in range(0, len(group), 200):
                 lst = bp.SubscriptionList()
                 for sec, sub, fields, options in group[i:i + 200]:
-                    lst.add(sec, fields, options, bp.CorrelationId(sub.cid))
+                    lst.add(api_security(sec), fields, options, bp.CorrelationId(sub.cid))
                 try:
                     getattr(self._session, action)(lst)
                 except Exception as exc:  # noqa: BLE001
@@ -921,7 +949,8 @@ class BloombergProvider(Provider):
 
     def _on_tick(self, msg) -> None:
         """One market-data message.  Reading it takes as few calls into blpapi as possible (one per field
-        that is not in the message, three per field that is), and none of them while holding the lock."""
+        that is not in the message - two for a size - and three per field that is), and none of them while
+        holding the lock."""
         root = None
         now = time.time()
         for cid in self._cids(msg):
@@ -931,10 +960,12 @@ class BloombergProvider(Provider):
                 continue
             if root is None:
                 root = msg.asElement()
-            got = []
+            got: List[Tuple[str, Any]] = []
             for field, name in sub.names:
                 try:
                     if not root.hasElement(name, True):      # absent, or present without a value
+                        if field in CLEARED_WHEN_NULL and root.hasElement(name):
+                            got.append((field, NA_NA))       # in the message, emptied: the order is gone
                         continue
                     got.append((field, float(root.getElementAsFloat(name))))
                 except Exception:  # noqa: BLE001 - not a number: nothing a price field can use

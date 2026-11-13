@@ -10,9 +10,10 @@ import pytest
 import fake_blpapi
 from conftest import make_service
 from helpers import close
+from tto import history
 from tto.config import Settings
-from tto.history import (DEFAULT_PAST_MEETINGS, DayProvider, History, add_months, align_meetings, filled, next_business_day,
-                         tenor_months, weekdays_ending)
+from tto.history import (DEFAULT_PAST_MEETINGS, DayProvider, History, add_months, align_meetings, curve_quotes, filled,
+                         next_business_day, tenor_months, weekdays_ending)
 from tto.marketdata.base import bdp_key
 from tto.marketdata.bloomberg import BloombergProvider
 from tto.marketdata.replay import ReplayProvider, _recorded_rows
@@ -76,6 +77,108 @@ def test_meetings_are_matched_by_date_when_the_list_changes():
     assert align_meetings(["2027-01-21", "2027-02-11", "2027-03-25", "2027-04-22"], ["2027-01-21", "2027-03-18", "2027-04-22"]) == \
         {0: 0, 1: None, 2: 1, 3: 2}
     assert align_meetings(["2027-01-21", "2027-03-18"], ["2027-01-21", "2027-02-11", "2027-03-25"]) == {0: 0, 1: 2}
+
+
+# ====================================================================================== the quotes of a day
+CURVE_DAYS = ["2026-10-%02d" % d for d in (19, 20, 21, 22, 23, 26, 27, 28)]
+CURVE = {1.0: 36.4, 2.0: 36.6, 3.0: 36.9, 6.0: 36.4, 9.0: 36.0, 12.0: 35.5}
+
+
+def curve(drift=0.10):
+    """Six tenors that rise in parallel by ``drift`` a day: ``[(months, {day: close})]``."""
+    return [(m, {d: v + drift * k for k, d in enumerate(CURVE_DAYS)}) for m, v in CURVE.items()]
+
+
+def test_closes_that_belong_to_their_day_are_the_quotes():
+    tenors = curve()
+    values, marks = curve_quotes(tenors)
+    assert marks == {} and values == [p for _, p in tenors]
+    # a spike of the whole curve that comes back the next day is the market, not a wrong print
+    jumpy = curve()
+    for _, points in jumpy:
+        points["2026-10-22"] += 0.60
+    values, marks = curve_quotes(jumpy)
+    assert marks == {} and values == [p for _, p in jumpy]
+    # ... and so is a move of half the curve, or of two neighbouring tenors: a neighbour went along
+    half = curve()
+    for _, points in half[3:]:
+        points["2026-10-22"] += 0.60
+    assert curve_quotes(half)[1] == {}
+    pair = curve()
+    pair[2][1]["2026-10-22"] += 0.50
+    pair[3][1]["2026-10-22"] += 0.50
+    assert curve_quotes(pair)[1] == {}
+
+
+def test_a_tenor_without_a_close_goes_on_by_what_its_neighbours_did():
+    """A plain "previous value" fill leaves yesterday's level in a curve that has moved: on a tenor that
+    closes every other day, in a market that moves 10 bp a day, that is a zigzag of 10 bp in the quote - and
+    several times that in the meetings the solver hangs on it."""
+    tenors = curve()
+    true = dict(tenors[4][1])
+    for d in CURVE_DAYS[1::2]:
+        del tenors[4][1][d]                                               # the 9M closes every other day
+    values, marks = curve_quotes(tenors)
+    assert sorted(marks) == CURVE_DAYS[1::2] and all(m == {"carried": [4], "cleaned": []} for m in marks.values())
+    assert all(values[4][d] == pytest.approx(true[d], abs=1e-12) for d in CURVE_DAYS)        # no zigzag
+    plain = filled(tenors[4][1], [D(d) for d in CURVE_DAYS], 3)
+    assert max(abs(v - true[d]) for v, d in zip(plain, CURVE_DAYS)) == pytest.approx(0.10)   # what carrying the level does
+    # the neighbours are weighted by maturity: the 6M between a 3M that moved 20 bp and a 9M that moved 80 bp
+    tenors = curve(0.0)
+    del tenors[3][1]["2026-10-28"]
+    tenors[2][1]["2026-10-28"] += 0.20
+    tenors[4][1]["2026-10-28"] += 0.80
+    values, marks = curve_quotes(tenors)
+    assert values[3]["2026-10-28"] == pytest.approx(36.4 + 0.5 * 0.20 + 0.5 * 0.80)
+    # the shortest tenor has one neighbour only; a tenor alone is carried as it is
+    tenors = curve()
+    del tenors[0][1]["2026-10-27"]
+    assert curve_quotes(tenors)[0][0]["2026-10-27"] == pytest.approx(36.4 + 0.60)
+    alone = [(3.0, {"2026-10-19": 36.9, "2026-10-21": 37.0})]
+    values, marks = curve_quotes(alone + [(6.0, {"2026-10-20": 36.5})])
+    assert values[0]["2026-10-20"] == 36.9 and marks["2026-10-20"]["carried"] == [0]
+    # ... but not for ever: three trading days at most
+    tenors = curve()
+    for d in CURVE_DAYS[2:7]:
+        del tenors[5][1][d]
+    values, marks = curve_quotes(tenors)
+    assert [d for d in CURVE_DAYS if d in values[5]] == CURVE_DAYS[:2] + CURVE_DAYS[2:5] + CURVE_DAYS[7:]
+    assert "2026-10-26" not in values[5] and "2026-10-27" not in values[5]
+
+
+def test_a_close_that_leaves_its_neighbours_and_comes_back_is_not_used():
+    tenors = curve()
+    true = [dict(p) for _, p in tenors]
+    tenors[3][1]["2026-10-26"] += 0.45                                    # a wrong 6M print
+    tenors[2][1]["2026-10-22"] = tenors[2][1]["2026-10-20"]               # a 3M quote that was not updated for two days
+    tenors[2][1]["2026-10-21"] = tenors[2][1]["2026-10-20"]
+    values, marks = curve_quotes(tenors)
+    assert marks == {"2026-10-26": {"carried": [], "cleaned": [3]}}
+    assert values[3]["2026-10-26"] == pytest.approx(true[3]["2026-10-26"])                   # where it belongs
+    # the stale 3M is 10 and 20 bp behind and then catches up at once: below the 25 bp that count, left as it is
+    assert values[2]["2026-10-22"] == tenors[2][1]["2026-10-22"]
+    # a larger one of the same kind is caught: 30 bp behind for a day
+    stale = curve(0.30)
+    stale[2][1]["2026-10-22"] = stale[2][1]["2026-10-21"]
+    values, marks = curve_quotes(stale)
+    assert marks == {"2026-10-22": {"carried": [], "cleaned": [2]}}
+    assert values[2]["2026-10-22"] == pytest.approx(36.9 + 0.30 * 3)
+    # the neighbours of a wrong print are not thrown out with it (they left one side only)
+    wrong = curve()
+    wrong[2][1]["2026-10-23"] += 0.80
+    values, marks = curve_quotes(wrong)
+    assert marks == {"2026-10-23": {"carried": [], "cleaned": [2]}}
+    # the very front is left alone (it does jump on its own), and so is the last day (it may yet stay there)
+    front = curve()
+    front[0][1]["2026-10-22"] += 0.60
+    last = curve()
+    last[3][1]["2026-10-28"] += 0.60
+    assert curve_quotes(front)[1] == {} and curve_quotes(last)[1] == {}
+    # a level that stays is a move, not a print
+    moved = curve()
+    for d in CURVE_DAYS[4:]:
+        moved[3][1][d] += 0.50
+    assert curve_quotes(moved)[1] == {}
 
 
 def test_recorded_history_blocks_get_their_dates():
@@ -368,6 +471,183 @@ def test_meeting_pricing_time_series(hsvc):
     assert page["tlref"] == [36.8231, 36.8228, 36.8509, 36.8769, 35.8498, 35.8705, 35.8159, 35.8159] and page["quotes"] == [6] * 8
     assert hsvc.history.mpc(days=20)["days"] == DAYS[1:]                # a shorter window: from 14.10
     assert len(hsvc.history.mpc(upcoming=2)["meetings"]) == 3
+
+
+def test_days_are_judged_by_the_workbooks_own_status(hsvc):
+    flag = history.day_flag
+    assert flag({"status": "OK"}) == "" and flag({"status": "OK", "control": 0.6, "tolerance": 5.0}) == ""
+    assert flag({"status": "Kota eksik: 10 vade (BDP)", "control": 2.6, "tolerance": 5.0}) == "missing"
+    assert flag({"status": "Kota/takvim tutarsız – kontrolü incele"}) == "inconsistent"        # a day of an earlier version
+    assert flag({"status": "Kota eksik: 1 vade (BDP)", "control": 9.0, "tolerance": 5.0}) == "inconsistent"
+    assert flag({"status": "HATA", "note": "ZeroDivisionError"}) == "error" and flag({}) == ""
+    # what the recorded days say: six tenors only, but the solver matches them (the sheet tolerates 5 x 1 bp)
+    days = hsvc.store.mpc_days()
+    assert {flag(d) for d in days.values()} == {"missing"}
+    assert all(d["tolerance"] == 5.0 and 0 <= d["control"] < 5.0 and d["carried"] >= 0 for d in days.values())
+    st = hsvc.history.status()
+    assert st["mpc_partial"] == len(DAYS) and st["mpc_missing"] == len(DAYS) and st["mpc_unreliable"] == 0
+    page = hsvc.history.mpc()
+    assert page["flags"] == ["missing"] * len(DAYS) and page["flagged"] == {}
+    assert [(i["kind"], i["count"], i["status"]) for i in page["issues"]] == [("missing", len(DAYS), "Kota eksik: 10 vade (BDP)")]
+    assert page["control"] == [days[d]["control"] for d in DAYS] and page["carried"] == [days[d]["carried"] for d in DAYS]
+
+
+def test_a_day_the_solver_cannot_fit_is_reported_and_kept_out_of_the_series(tmp_path):
+    """On the desk the page said "8 günde eksik OIS kotası var (Kota/takvim tutarsız – kontrolü incele; OK)".
+    Nothing was missing on those days: the workbook's own check had failed - the solver could not match the
+    quotes, which is what one stale close does to it.  Such a day stays in the database and in the daily
+    table, but its steps are not drawn, do not set the range of a meeting and are not what a change is
+    measured against."""
+    svc = make_service(tmp_path)
+    try:
+        st, h = svc.store, svc.history
+        meeting = "2026-12-10"
+
+        def day(date, status, step, **more):
+            meta = {"spot": "2026-11-04", "tlref": 35.8, "quotes": 16, "status": status, "base": 0.358}
+            meta.update(more)
+            st.mpc_save(date, "b-" + date, meta, [{"meeting": meeting, "step": step, "level": 0.358 + step / 10000.0,
+                                                   "cum": step, "sigma": 5.0, "front": True}])
+
+        day("2026-10-29", "OK", -80.0, control=0.4, tolerance=5.0, carried=0)
+        day("2026-10-30", "Kota/takvim tutarsız – kontrolü incele", -480.0, control=37.5, tolerance=5.0, carried=2)
+        day("2026-11-02", "OK", -82.0)                                       # computed by an earlier version: no control
+        day("2026-11-03", "Kota eksik: 2 vade (BDP)", -85.0, control=1.1, tolerance=5.0, carried=0)
+        page = h.mpc()
+        assert page["days"] == ["2026-10-29", "2026-10-30", "2026-11-02", "2026-11-03"]
+        assert page["flags"] == ["", "inconsistent", "", "missing"]
+        assert page["control"] == [0.4, 37.5, None, 1.1] and page["carried"] == [0, 2, None, 0]
+        assert page["series"][meeting]["step"] == [-80.0, None, -82.0, -85.0]             # the spike is not drawn
+        m = next(x for x in page["meetings"] if x["date"] == meeting)
+        assert (m["min"], m["max"], m["n"]) == (-85.0, -80.0, 3)                         # ... and is not the range
+        assert m["last"]["step"] == -85.0 and m["d1"] == pytest.approx(-3.0)
+        assert page["flagged"] == {"2026-10-30": {meeting: {"step": -480.0, "level": pytest.approx(0.31), "cum": -480.0}}}
+        assert page["issues"] == [
+            {"kind": "inconsistent", "count": 1, "days": ["2026-10-30"], "status": "Kota/takvim tutarsız – kontrolü incele", "control": 37.5},
+            {"kind": "missing", "count": 1, "days": ["2026-11-03"], "status": "Kota eksik: 2 vade (BDP)", "control": 1.1}]
+        assert page["partial"] == 2
+        state = h.status()
+        assert (state["mpc_partial"], state["mpc_missing"], state["mpc_unreliable"]) == (2, 1, 1)
+        # a change is measured against the last day the solver stands behind: 02.11 against 29.10, not 30.10
+        day("2026-11-03", "Kota/takvim tutarsız – kontrolü incele", -300.0, control=11.0, tolerance=5.0)
+        m = next(x for x in h.mpc()["meetings"] if x["date"] == meeting)
+        assert m["last"]["step"] == -82.0 and m["last_day"] == "2026-11-02" and m["d1"] == pytest.approx(-2.0)
+        # the end-of-day matrix reads the meetings the same way: on the day that does not count the last good
+        # close is carried (as a close is over a holiday), and 02.11 is measured against 29.10, not 30.10
+        block = h.matrix("2026-11-03")["mpc"]
+        assert block[0]["meeting"] == meeting and block[0]["step"]["last"] == -82.0 and block[0]["step"]["d1"] == 0.0
+        block = h.matrix("2026-11-02")["mpc"]
+        assert block[0]["step"]["last"] == -82.0 and block[0]["step"]["d1"] == pytest.approx(-2.0)
+        # a day whose status only says that tenors are missing, but whose check failed all the same
+        day("2026-11-03", "Kota eksik: 1 vade (BDP)", -300.0, control=9.0, tolerance=5.0)
+        assert h.mpc()["flags"][-1] == "inconsistent"
+    finally:
+        svc.stop()
+
+
+def test_a_stale_close_is_what_the_solver_calls_inconsistent(tmp_path):
+    """The workbook's own curve of 03.11.2026 (16 tenors, live) through the history's machine: the status is
+    "OK" and the model is within a basis point of the quotes.  With one close 40 bp off - a quote that was not
+    updated that day - the sheet says "Kota/takvim tutarsız" and the steps move by hundreds of basis points."""
+    svc = make_service(tmp_path)
+    try:
+        h = svc.history
+        snap = h.snapshot()
+        quotes = {}
+        for d in snap["defs"]:
+            v = svc.provider.snapshot.get(bdp_key("%s GFOF Curncy" % d.root, "MID")) if d.group == "ois" else None
+            if isinstance(v, float):
+                quotes[d.root] = v
+        assert len(quotes) == 16
+        shared = h._plan(snap)[1]
+        today = D(TODAY)
+        calendar = [D(x) for x in h.meetings(snap)]
+
+        def solve(q):
+            p = {"day": today, "spot": next_business_day(today, set()), "tlref": 35.8159, "quotes": q,
+                 "meetings": [m for m in calendar if m >= today][:80], "horizon": add_months(today, 24)}
+            return h._het_call(h._solve, p, shared)
+
+        good = solve(quotes)
+        assert good["status"] == "OK" and good["tolerance"] == 5.0 and good["control"] < 1.0
+        assert history.day_flag(good) == ""
+        stale = dict(quotes, TYSOC=quotes["TYSOC"] + 0.40)                   # the 3M close, 40 bp too high
+        bad = solve(stale)
+        assert bad["status"].startswith("Kota/takvim tutarsız") and bad["control"] > bad["tolerance"]
+        assert history.day_flag(bad) == "inconsistent"
+        a = {r["meeting"]: r["step"] for r in good["rows"]}
+        b = {r["meeting"]: r["step"] for r in bad["rows"]}
+        assert max(abs(a[m] - b[m]) for m in list(a)[:4]) > 60               # the near meetings are thrown about
+    finally:
+        svc.stop()
+
+
+def test_a_wrong_close_does_not_reach_the_solver(tmp_path):
+    """The recorded month with one 3M close 40 bp too high: fed as it is, the nearest meetings jump by a
+    hundred basis points for that one day - while the workbook's status still says all is well, the model
+    being within its tolerance.  The close is told by its neighbours (2M and 6M did not go along, and it was
+    back the next day), is not used, and the day comes out in line with the days around it."""
+    svc = make_service(tmp_path)
+    try:
+        h, st = svc.history, svc.store
+        h._fetch()
+        series, day = "TYSOC Curncy|PX_LAST", "2026-10-27"
+        closes = dict(st.hist_series(series))
+        before = h._plan(h.snapshot())[0]
+        assert all(p["carried"] == 0 and p["cleaned"] == "" for p in before)             # the recording is clean
+        st.hist_upsert(series, [(day, closes[day] + 0.40)])
+        plan, shared = h._plan(h.snapshot())
+        p = next(x for x in plan if x["day"] == D(day))
+        assert p["cleaned"] == "TYSOC" and p["carried"] == 1
+        assert abs(p["quotes"]["TYSOC"] - closes[day]) < 0.12                            # near what it really was (7.5 bp off)
+        assert p["basis"] != next(x for x in before if x["day"] == D(day))["basis"]      # the day is computed again
+        others = [x for x in plan if x["day"] != D(day)]
+        assert all(x["cleaned"] == "" and x["carried"] == 0 for x in others)
+        assert [x["basis"] for x in others] == [x["basis"] for x in before if x["day"] != D(day)]   # ... and only that day
+
+        def front(result):
+            return next(r["step"] for r in result["rows"] if r["front"])
+
+        raw = h._het_call(h._solve, dict(p, quotes=dict(p["quotes"], TYSOC=closes[day] + 0.40)), shared)
+        fixed = h._het_call(h._solve, p, shared)
+        around = [front(h._het_call(h._solve, x, shared)) for x in plan if _iso_day(x["day"]) in ("2026-10-26", "2026-10-28")]
+        assert len(around) == 2
+        assert history.day_flag(raw) != "inconsistent"                                   # the sheet's own check does not see it
+        assert abs(front(raw) - sum(around) / 2) > 80                                    # what the wrong close does
+        assert abs(front(fixed) - sum(around) / 2) < 25                                  # ... and the day without it
+        # stored with the day, and shown on the page
+        assert h._compute(only=[day]) == 1
+        meta = st.mpc_days()[day]
+        assert meta["cleaned"] == "TYSOC" and meta["carried"] == 1
+        page = h.mpc()
+        assert page["cleaned"][page["days"].index(day)] == "TYSOC" and page["carried"][page["days"].index(day)] == 1
+    finally:
+        svc.stop()
+
+
+def _iso_day(d):
+    return d.isoformat()
+
+
+def test_a_database_of_the_previous_version_keeps_its_days(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE mpc_days (day TEXT PRIMARY KEY, basis TEXT NOT NULL, spot TEXT, tlref REAL, base REAL, "
+               "decision INTEGER NOT NULL DEFAULT 0, quotes INTEGER, status TEXT, note TEXT, computed_at TEXT NOT NULL)")
+    db.execute("INSERT INTO mpc_days VALUES ('2026-11-03', 'b', '2026-11-04', 35.8, 0.358, 0, 16, "
+               "'Kota/takvim tutarsız – kontrolü incele', '', '2026-11-13 14:24:00')")
+    db.commit()
+    db.close()
+    st = Store(path)
+    old = st.mpc_days()["2026-11-03"]
+    assert old["basis"] == "b" and old["control"] is None and old["tolerance"] is None and old["carried"] is None
+    assert history.day_flag(old) == "inconsistent"                           # told by its status text
+    st.mpc_save("2026-11-04", "b2", {"status": "OK", "quotes": 16, "control": 0.4, "tolerance": 5.0, "carried": 1}, [])
+    new = st.mpc_days()["2026-11-04"]
+    assert (new["control"], new["tolerance"], new["carried"]) == (0.4, 5.0, 1)
+    st.close()
+    assert sorted(Store(path).mpc_days()) == ["2026-11-03", "2026-11-04"]    # opening it again adds nothing twice
 
 
 def test_end_of_day_matrix(hsvc):
@@ -739,8 +1019,10 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         res = h.sync(only=[TODAY])
         first = asked()
         tickers = {s for r in first for s in r["securities"]}
+        # (the bonds go out the way the API names them: the sheet's "TRT150328T24 @ISL1 ISIN" is Excel's spelling)
         assert {"TYSOA Curncy", "TYSOA GFOF Curncy", "BISTTREF Index", "TRYI1M BGN Curncy", "TRYSAQ5 BGN Curncy",
-                "TRT150328T24 @ISL1 ISIN", "TRT150328T24 ISIN"} <= tickers
+                "/isin/TRT150328T24@ISL1", "/isin/TRT150328T24"} <= tickers
+        assert not [t for t in tickers if t.endswith(" ISIN")]
         assert len(tickers) == 96 and len(first) <= 5                        # 50 securities per request, one field each
         assert {r["options"]["startDate"] for r in first} == {"20251029"} and {r["options"]["endDate"] for r in first} == {"20261103"}
         assert all("nonTradingDayFillOption" not in r["options"] for r in first)          # trading days only, nothing filled in

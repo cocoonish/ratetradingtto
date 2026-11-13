@@ -34,12 +34,19 @@ CREATE TABLE IF NOT EXISTS hist_values (
     series TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, day)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS mpc_days (
     day TEXT PRIMARY KEY, basis TEXT NOT NULL, spot TEXT, tlref REAL, base REAL, decision INTEGER NOT NULL DEFAULT 0,
-    quotes INTEGER, status TEXT, note TEXT, computed_at TEXT NOT NULL);
+    quotes INTEGER, status TEXT, note TEXT, computed_at TEXT NOT NULL, control REAL, tolerance REAL, carried INTEGER,
+    cleaned TEXT);
 CREATE TABLE IF NOT EXISTS mpc_values (
     day TEXT NOT NULL, meeting TEXT NOT NULL, step REAL, level REAL, cum REAL, sigma REAL, front INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, meeting)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS mpc_values_meeting ON mpc_values (meeting, day);
 """
+
+
+#: table -> columns added after its first version: the solver's own check of a day (largest distance between
+#: model and quote in bp, and what the workbook tolerates), how many quotes were not that day's own close and
+#: which closes were not used (the roots of their tickers)
+_ADDED_COLUMNS = {"mpc_days": (("control", "REAL"), ("tolerance", "REAL"), ("carried", "INTEGER"), ("cleaned", "TEXT"))}
 
 
 def now_iso() -> str:
@@ -65,6 +72,14 @@ class Store(object):
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(_SCHEMA)
+            self._add_columns("mpc_days", _ADDED_COLUMNS["mpc_days"])
+
+    def _add_columns(self, table: str, columns) -> None:
+        """Columns that came after a table was first created (a database of an earlier version keeps its rows)."""
+        have = {r["name"] for r in self._db.execute("PRAGMA table_info(%s)" % table).fetchall()}
+        for name, kind in columns:
+            if name not in have:
+                self._db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, kind))
 
     def close(self) -> None:
         with self._lock:
@@ -408,13 +423,15 @@ class Store(object):
                     [(day, r["meeting"], r.get("step"), r.get("level"), r.get("cum"), r.get("sigma"), 1 if r.get("front") else 0)
                      for r in rows])
                 self._db.execute(
-                    "INSERT INTO mpc_days (day, basis, spot, tlref, base, decision, quotes, status, note, computed_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?) "
+                    "INSERT INTO mpc_days (day, basis, spot, tlref, base, decision, quotes, status, note, computed_at, "
+                    "control, tolerance, carried, cleaned) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(day) DO UPDATE SET basis=excluded.basis, spot=excluded.spot, tlref=excluded.tlref, "
                     "base=excluded.base, decision=excluded.decision, quotes=excluded.quotes, status=excluded.status, "
-                    "note=excluded.note, computed_at=excluded.computed_at",
+                    "note=excluded.note, computed_at=excluded.computed_at, control=excluded.control, "
+                    "tolerance=excluded.tolerance, carried=excluded.carried, cleaned=excluded.cleaned",
                     (day, basis, meta.get("spot"), meta.get("tlref"), meta.get("base"), 1 if meta.get("decision") else 0,
-                     meta.get("quotes"), meta.get("status"), meta.get("note"), now_iso()))
+                     meta.get("quotes"), meta.get("status"), meta.get("note"), now_iso(), meta.get("control"),
+                     meta.get("tolerance"), meta.get("carried"), meta.get("cleaned")))
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")

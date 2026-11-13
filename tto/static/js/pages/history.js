@@ -401,11 +401,31 @@ export class MpcPage extends HistoryPage {
     const notes = [];
     if (!d.days.length) {
       notes.push(d.state && d.state.phase !== 'idle' ? 'PPK fiyatlama geçmişi hesaplanıyor…' : 'Henüz hesaplanmış gün yok – Güncelle\'ye basın.');
-    } else if (d.partial) {
-      notes.push((d.partial === d.days.length ? 'Tüm günlerde' : d.partial + ' günde') + ' eksik OIS kotası var (' + d.status.join('; ')
-        + '): ' + (d.live ? 'eksik vadelerin ötesindeki toplantılar o günler için hesaplanmadı.'
-          : 'kayıtlı veride yalnızca 1Y\'ye kadar olan OIS vadeleri var, bu yüzden değerler OIS sayfasındaki tam çözümden birkaç bp farklı olabilir. '
-            + 'Bloomberg bağlıyken 16 vadenin tamamı bir yıl geriye kullanılır.'));
+    } else {
+      // what the workbook's own status cell said about the days, kind by kind
+      const when = (i) => (i.count === d.days.length ? 'Tüm günlerde' : i.count + ' günde');
+      const which = (i) => i.days.slice(-8).reverse().map(isoToTr).join(', ') + (i.count > 8 ? ' …' : '');
+      for (const i of d.issues || []) {
+        if (i.kind === 'inconsistent') {
+          notes.push(when(i) + ' çözücü OIS kotalarını tutturamadı' + (isNum(i.control) ? ' (model − kota farkı ' + num(i.control, 1, false) + ' bp\'ye kadar)' : '')
+            + ': ' + which(i) + '. Excel\'de "Kota/takvim tutarsız" yazan durumdur; çoğunlukla o günün kapanışlarından biri bayat ya da hatalıdır. '
+            + 'Bu günler grafiğe, min / maks\'a ve değişimlere alınmadı; Günlük geçmiş tablosunda ⚠ ile duruyor.');
+        } else if (i.kind === 'error') {
+          notes.push(when(i) + ' hesap yapılamadı: ' + which(i) + '.');
+        } else {
+          notes.push(when(i) + ' eksik OIS kotası var (' + i.status + '): ' + (d.live
+            ? 'o günlerde bazı vadelerin kapanışı yok; eksik vadelerin ötesindeki toplantılar hesaplanmadı.'
+            : 'kayıtlı veride yalnızca 1Y\'ye kadar olan OIS vadeleri var, bu yüzden değerler OIS sayfasındaki tam çözümden birkaç bp farklı olabilir. '
+              + 'Bloomberg bağlıyken 16 vadenin tamamı bir yıl geriye kullanılır.'));
+        }
+      }
+      // closes that were not used: they left their neighbours and came back the next day
+      const dropped = d.days.map((day, k) => [day, (d.cleaned || [])[k]]).filter((x) => x[1]);
+      if (dropped.length) {
+        notes.push(dropped.length + ' günde bir vadenin kapanışı kullanılmadı (komşu vadelerden 25 bp\'den fazla ayrılıp ertesi gün geri dönen, '
+          + 'yani bayat ya da hatalı kota): ' + dropped.slice(-6).reverse().map((x) => isoToTr(x[0]) + ' ' + x[1]).join('; ')
+          + (dropped.length > 6 ? ' …' : '') + '. Yerine vadenin önceki kapanışı, komşularının hareketi kadar kaydırılarak kondu.');
+      }
     }
     if (d.notes && d.notes.length) notes.push(d.notes.join(' · '));
     this.banner.textContent = notes.join(' ');
@@ -490,21 +510,43 @@ export class MpcPage extends HistoryPage {
   renderDaily(d, days, first) {
     const M = METRICS[this.metric];
     const cols = d.meetings.filter((m) => this.picked.has(m.date) || !m.passed).slice(0, 14);
-    const rows = [[HD('Tarih'), HD('TLREF %'), HD('Kota')].concat(cols.map((m) => HD(isoToTr(m.date))))];
+    const rows = [[HD('Tarih'), HD('TLREF %'), HD('Kota'), HD('Durum')].concat(cols.map((m) => HD(isoToTr(m.date))))];
     const decisions = new Set(d.decision_days || []);
+    const flags = d.flags || [], control = d.control || [], carried = d.carried || [], flagged = d.flagged || {};
+    const cleaned = d.cleaned || [];
+    const quoteTip = (k) => {
+      const parts = [];
+      if (carried[k]) parts.push(carried[k] + ' vadede o günün kapanışı kullanılmadı: önceki kapanış, komşu vadelerin hareketi kadar kaydırıldı');
+      if (cleaned[k]) parts.push('ayıklanan kapanış: ' + cleaned[k]);
+      return parts.length ? { tip: parts.join(' · ') } : null;
+    };
+    const state = (k) => {
+      const check = isNum(control[k]) ? 'model − kota farkı en çok ' + num(control[k], 2, false) + ' bp' : '';
+      if (flags[k] === 'inconsistent') return TXT('⚠ tutarsız', { c: 'mute', tip: 'Çözücü kotaları tutturamadı' + (check ? ' (' + check + ')' : '') + ': değerler güvenilir değil, grafikte yok' });
+      if (flags[k] === 'error') return TXT('⚠ hata', { c: 'mute', tip: 'Bu gün hesaplanamadı' });
+      if (flags[k] === 'missing') return TXT('eksik', { c: 'mute', tip: 'Bazı OIS vadelerinin kapanışı yok' + (check ? ' · ' + check : '') });
+      return TXT(isNum(control[k]) ? 'OK' : '', { c: 'mute', tip: check });
+    };
     for (let i = days.length - 1; i >= 0; i--) {
       const k = first + i;
       const mark = decisions.has(days[i]);
+      const off = flagged[days[i]];                    // a day the solver does not stand behind: its values, greyed
       rows.push([TXT(isoToTr(days[i]) + (mark ? ' · PPK' : ''), { cls: 'lab', tip: mark
         ? 'PPK günü: TLREF fixingi kararı ertesi gün yansıtır; o gün adımlar çözücünün karar sonrası ima ettiği seviyeden ölçülür' : '' }),
-      N(d.tlref[k], 4), N(d.quotes[k], 0)].concat(cols.map((m) => {
+      N(d.tlref[k], 4), N(d.quotes[k], 0, quoteTip(k)), state(k)].concat(cols.map((m) => {
+        if (off) {
+          const w = off[m.date] ? off[m.date][this.metric] : null;
+          return N(isNum(w) ? w * M.scale : null, M.digits, { c: 'mute', tip: 'Çözücü bu gün kotaları tutturamadı: güvenilir değil' });
+        }
         const v = d.series[m.date] ? d.series[m.date][this.metric][k] : null;
         return N(isNum(v) ? v * M.scale : null, M.digits);
       })));
     }
     this.daily.title.textContent = 'Günlük geçmiş · ' + M.label;
     this.daily.setData({ sheet: '', rows });
-    this.daily.setNote('Kota: o gün çözücüye giren OIS vadesi sayısı. Tabloyu Kopyala ile Excel\'e alabilirsiniz.');
+    this.daily.setNote('Kota: o gün çözücüye giren OIS vadesi sayısı (üzerine gelince kaçının o günün kendi kapanışı olmadığı). Durum: Excel\'deki '
+      + 'çözücü durumu (OIS · PPK sayfası, "Durum" hücresi); ⚠ işaretli günlerin değerleri gri yazılır ve grafikte yer almaz. '
+      + 'Tabloyu Kopyala ile Excel\'e alabilirsiniz.');
   }
 }
 
@@ -775,7 +817,8 @@ export class SettingsPage {
     this.histInfo.appendChild(line('Durum', st.phase === 'idle' ? (st.running ? 'güncel' : 'beklemede') : stateText(st)));
     this.histInfo.appendChild(line('Kapanışlar', st.first_day ? isoToTr(st.first_day) + ' – ' + isoToTr(st.last_day) + ' · ' + st.series + ' seri' : 'yok'));
     this.histInfo.appendChild(line('PPK geçmişi', st.mpc_days ? st.mpc_days + ' gün (' + isoToTr(st.mpc_first) + ' – ' + isoToTr(st.mpc_last) + ')'
-      + (st.mpc_partial ? ', ' + st.mpc_partial + ' günde eksik kota' : '') : 'yok'));
+      + (st.mpc_missing ? ', ' + st.mpc_missing + ' günde eksik kota' : '')
+      + (st.mpc_unreliable ? ', ' + st.mpc_unreliable + ' günde çözücü tutarsız' : '') : 'yok'));
     this.histInfo.appendChild(line('Kaynak', st.mode === 'live' ? 'Bloomberg geçmişi (her ' + Math.round(st.refresh / 60) + ' dk)' : 'Excel dosyasındaki kayıtlı geçmiş + TLREF'));
     if (st.last_sync) this.histInfo.appendChild(line('Son güncelleme', st.last_sync));
     if (st.error) this.histInfo.appendChild(h('span', { class: 'kv warn-text' }, 'Hata: ' + st.error));

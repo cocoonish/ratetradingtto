@@ -213,6 +213,17 @@
    "keep_title": true
   },
   {
+   "id": "SPOT",
+   "type": "table",
+   "sheet": "VIOP",
+   "range": "Z8:AA11",
+   "hidden": false,
+   "keep_title": true,
+   "title": "Manuel spot  ·  boş = Bloomberg (USDTRY Curncy)",
+   "note": "VİOP sayfasındaki \"Manuel SP\" hücreleri (ortak girdi). Boşken Bloomberg spotu kullanılır.",
+   "borrowed": true
+  },
+  {
    "id": "B2",
    "type": "table",
    "title": "Kontrol",

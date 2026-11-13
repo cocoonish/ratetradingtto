@@ -16,6 +16,10 @@ Two things the real library does that matter for keeping up with a busy market c
 * ``server.queue_limit = N``: the session holds at most N undelivered events, warns at 75 % of that
   (``SlowConsumerWarning``), drops what does not fit and reports it afterwards (``DataLoss`` per
   subscription, ``SlowConsumerWarningCleared`` with the number of events dropped).
+
+Like the real API - and unlike Excel's add-in - the pretend terminal does not know a security that is written
+with its identifier type at the end ("TRT150328T24 ISIN", "TRT150328T24 @ISL1 ISIN"): it wants
+"/isin/TRT150328T24@ISL1".  Test data may be stored under either spelling.
 """
 from __future__ import annotations
 
@@ -25,6 +29,35 @@ import threading
 import time
 import types
 from typing import Any, Dict, List, Optional, Tuple
+
+#: identifier types Excel's add-in accepts after an identifier, and the API's prefix for them
+_ID_SUFFIX = {"ISIN": "isin", "CUSIP": "cusip", "CINS": "cins", "SEDOL": "sedol1", "SEDOL1": "sedol1",
+              "SEDOL2": "sedol2", "BUID": "buid", "WPK": "wpk", "COMMON": "common", "FIGI": "bbgid", "BBGID": "bbgid"}
+
+
+def excel_only(sec: str) -> bool:
+    """A spelling only Excel's add-in understands (the API answers "invalid security")."""
+    parts = str(sec).split()
+    return not str(sec).startswith("/") and len(parts) >= 2 and parts[-1].upper() in _ID_SUFFIX
+
+
+def spellings(sec: str) -> List[str]:
+    """The names under which a test may have stored data for a security: as asked, and - for "/isin/ID@SRC" -
+    the ways a workbook writes it for Excel ("ID @SRC ISIN", "ID@SRC ISIN", "ID ISIN")."""
+    sec = str(sec)
+    out = [sec]
+    if excel_only(sec):                                   # stored the Excel way, asked the Excel way (ticks)
+        parts = sec.split()
+        out.append("/%s/%s" % (_ID_SUFFIX[parts[-1].upper()], "".join(parts[:-1])))
+    elif sec.startswith("/") and sec.count("/") >= 2:
+        kind, _, ident = sec[1:].partition("/")
+        base, at, source = ident.partition("@")
+        for suffix, prefix in _ID_SUFFIX.items():
+            if prefix == kind.lower():
+                out += ["%s @%s %s" % (base, source, suffix), "%s@%s %s" % (base, source, suffix)] if at \
+                    else ["%s %s" % (base, suffix)]
+    return out
+
 
 #: set by :class:`Server` (``release_gil``): accessors behave like calls into a C library
 _YIELD = {"on": False}
@@ -293,6 +326,7 @@ class Server(object):
         self.lock = threading.Lock()
         self.split_responses = False                              # answer with PARTIAL_RESPONSE + RESPONSE
         self.silent = False                                       # swallow requests (timeouts)
+        self.strict_ids = True                                    # refuse spellings only Excel understands
         self.subscription_options: List[Tuple[str, List[str]]] = []   # (topic, options) of every subscribe
         self.refuse_options = False                               # subscriptions that carry options fail
         self.queue_limit = 0                                      # undelivered events a session holds (0: no limit)
@@ -305,6 +339,21 @@ class Server(object):
     @release_gil.setter
     def release_gil(self, on: bool) -> None:
         _YIELD["on"] = bool(on)
+
+    # ---- securities
+    def unknown(self, sec: str) -> bool:
+        """Would the API say "invalid security"?"""
+        if self.strict_ids and excel_only(sec):
+            return True
+        return any(name in self.invalid for name in spellings(sec))
+
+    def stored(self, table: Dict, sec: str, *rest) -> Any:
+        """The entry of ``table`` for a security, whichever way the test spelled it."""
+        for name in spellings(sec):
+            v = table.get((name,) + rest)
+            if v is not None:
+                return v
+        return None
 
     # ---- helpers for tests
     def tick(self, security: str, values: Dict[str, Any]) -> None:
@@ -336,7 +385,7 @@ class Server(object):
         if request.operation == "ReferenceDataRequest":
             out = []
             for sec in d["securities"]:
-                if sec in self.invalid:
+                if self.unknown(sec):
                     out.append({"security": sec, "securityError": {"source": "fake", "code": 15, "category": "BAD_SEC",
                                                                     "message": "Unknown/Invalid security", "subcategory": "INVALID_SECURITY"},
                                 "fieldExceptions": [], "fieldData": {}})
@@ -344,12 +393,12 @@ class Server(object):
                 fd: Dict[str, Any] = {}
                 exc = []
                 for f in d["fields"]:
-                    if (sec, f) in self.not_applicable:
+                    if any((name, f) in self.not_applicable for name in spellings(sec)):
                         exc.append({"fieldId": f, "errorInfo": {"source": "fake", "code": 9, "category": "BAD_FLD",
                                                                 "message": "Field not applicable to security",
                                                                 "subcategory": "NOT_APPLICABLE_TO_REF_DATA"}})
                         continue
-                    v = self.ref.get((sec, f, ov))
+                    v = self.stored(self.ref, sec, f, ov)
                     if v is not None:
                         fd[f] = v
                 out.append({"security": sec, "fieldData": fd, "fieldExceptions": exc})
@@ -360,16 +409,16 @@ class Server(object):
             start = _dt.datetime.strptime(d["startDate"], "%Y%m%d").date()
             end = _dt.datetime.strptime(d["endDate"], "%Y%m%d").date()
             for sec in d["securities"]:
-                if sec in self.invalid:
+                if self.unknown(sec):
                     msgs.append(Message("HistoricalDataResponse", [], {"securityData": {
                         "security": sec, "securityError": {"category": "BAD_SEC", "subcategory": "INVALID_SECURITY"}, "fieldData": []}}))
                     continue
-                canned = self.history_exact.get((sec, field, d["startDate"], d["endDate"]))
+                canned = self.stored(self.history_exact, sec, field, d["startDate"], d["endDate"])
                 if canned is not None:
                     rows = [({"date": day} if value is None else {"date": day, field: value}) for day, value in canned]
                     msgs.append(Message("HistoricalDataResponse", [], {"securityData": {"security": sec, "fieldData": rows}}))
                     continue
-                known = dict(self.history.get((sec, field), []))
+                known = dict(self.stored(self.history, sec, field) or [])
                 rows = []
                 day = start
                 last = None
@@ -485,10 +534,11 @@ class Session(object):
     def _subscribe(self, topic, fields, cid, options=None):
         self.server.subscriptions.append((topic, list(fields)))
         self.server.subscription_options.append((topic, list(options or [])))
-        if topic in self.server.invalid or (options and self.server.refuse_options):
+        unknown = self.server.unknown(topic)
+        if unknown or (options and self.server.refuse_options):
             self._put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionFailure", [cid._value], {
-                "reason": {"category": "BAD_SEC" if topic in self.server.invalid else "NOT_AUTHORIZED",
-                           "description": "Invalid security" if topic in self.server.invalid else "option refused"}})]))
+                "reason": {"category": "BAD_SEC" if unknown else "NOT_AUTHORIZED",
+                           "description": "Invalid security" if unknown else "option refused"}})]))
             return
         self.subs[topic] = (list(fields), cid._value)
         bad = [f for f in fields if f in self.server.bad_rt_fields]
@@ -496,13 +546,14 @@ class Session(object):
         if bad:
             data["exceptions"] = [{"fieldId": f, "reason": {"category": "BAD_FLD", "description": "not a real-time field"}} for f in bad]
         self._put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionStarted", [cid._value], data)]))
-        first = {f: self.server.rt[(topic, f)] for f in fields if (topic, f) in self.server.rt and f not in bad}
+        first = {f: self.server.stored(self.server.rt, topic, f) for f in fields if f not in bad}
+        first = {f: v for f, v in first.items() if v is not None}
         if first:
             first["MKTDATA_EVENT_TYPE"] = "SUMMARY"
             self._put(Event(Event.SUBSCRIPTION_DATA, [Message("MarketDataEvents", [cid._value], first)]))
 
     def push_tick(self, security: str, values: Dict[str, Any]):
-        sub = self.subs.get(security)
+        sub = next((self.subs[name] for name in spellings(security) if name in self.subs), None)
         if sub is None:
             return
         self._put(Event(Event.SUBSCRIPTION_DATA, [Message("MarketDataEvents", [sub[1]], dict(values))]))

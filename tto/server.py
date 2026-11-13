@@ -100,6 +100,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def header(request: Request):
         return ok(await call(svc().header, _user(request), _lang(request)))
 
+    @handler
+    async def spot(request: Request):
+        return ok(await call(svc().manual_spot, _user(request)))
+
     # ------------------------------------------------------------------ views
     @handler
     async def view(request: Request):
@@ -324,6 +328,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/status", status),
         Route("/api/nav", nav),
         Route("/api/header", header),
+        Route("/api/spot", spot),
         Route("/api/view/{view_id}", view),
         Route("/api/image", image),
         Route("/api/cell", cell),

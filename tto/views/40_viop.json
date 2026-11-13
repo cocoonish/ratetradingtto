@@ -254,6 +254,15 @@
  ],
  "panels": [
   {
+   "id": "B6",
+   "type": "table",
+   "title": "Manuel spot  ·  boş = Bloomberg (USDTRY Curncy)",
+   "range": "Z8:AA11",
+   "hidden": false,
+   "keep_title": true,
+   "note": "Buraya girilen bid / ask herkes için geçerlidir (ortak girdi) ve tüm sayfalardaki USDTRY spotunun yerine geçer; boş bırakılırsa Bloomberg spotu kullanılır. Üst şeritteki \"Spot kaynağı\" kutusuna tıklayarak da girilebilir."
+  },
+  {
    "id": "B1",
    "type": "table",
    "title": "Kontratlar",
@@ -272,13 +281,6 @@
    "type": "table",
    "title": "VIOP ASK",
    "range": "K19:X29",
-   "hidden": false
-  },
-  {
-   "id": "B6",
-   "type": "table",
-   "title": "Manuel SP",
-   "range": "Z8:AA11",
    "hidden": false
   },
   {

@@ -12,6 +12,12 @@ the Excel files (parity and reference tests read those).
                                gold strip fed from them, and a "price it at this rate" calculator for the
                                VİOP XAUTRY contracts
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
+* ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
+
+The last one changes formulas of the workbook itself, which nothing else here does.  The workbook lists a
+maturity when its bid or ask size "is a number"; over the API Bloomberg answers a size of 0 - and an old
+price, the same on both sides - for a maturity nobody is quoting, where Excel's real-time link shows
+"#N/A N/A".  Listed by the workbook's rule, the page was full of quotes that do not exist.
 """
 from __future__ import annotations
 
@@ -234,6 +240,54 @@ def _borsa(model: Model) -> None:
         for r in range(9, 55):
             b.set("%s%d" % (on_bid, r), "=" + overnight("%s%d" % (bid, r), "%s%d" % (days, r)), like=bid + "9")
             b.set("%s%d" % (on_ask, r), "=" + overnight("%s%d" % (ask, r), "%s%d" % (days, r)), like=ask + "9")
+
+
+#: Sheet2 of the Borsa workbook: rows 6-366 repeat rows 4-364 of Sheet1 when the maturity is quoted
+BORSA_ROWS = (6, 366)
+#: per block: (columns of both sides, bid-side columns, ask-side columns, bid size column, ask size column)
+BORSA_BLOCKS = ((("B", "C", "H"), ("D", "E", "K", "L"), ("F", "G", "I", "J"), "D", "G"),        # T+0 (BFX0)
+                (("N", "O", "T"), ("P", "Q", "W", "X"), ("R", "S", "U", "V"), "P", "S"))        # T+1 (BFX1)
+
+
+def _borsa_filter_check(model: Model) -> None:
+    _need_sheets(model, "bu", "Sheet1", "Sheet2")
+    s1 = model.sheet("Sheet1")
+    for addr, text in (("D3", "BID_SIZE"), ("E3", "BID"), ("F3", "ASK"), ("G3", "ASK_SIZE"),
+                       ("P3", "BID_SIZE"), ("Q3", "BID"), ("R3", "ASK"), ("S3", "ASK_SIZE")):
+        if s1.consts.get(parse_a1(addr)) != text:
+            raise ValueError("Sheet1!%s başlığı '%s' değil" % (addr, text))
+    first, last = BORSA_ROWS
+    for both, bid, ask, bid_size, ask_size in BORSA_BLOCKS:
+        for r in (first, last):
+            for col in both + bid + ask:
+                want = "Sheet1!%s%d" % (col, r - 2)
+                text = _need_formula(model, "Sheet2", "%s%d" % (col, r), want)
+                if "ISNUMBER(Sheet1!$%s%d)" % (bid_size, r - 2) not in text or \
+                        "ISNUMBER(Sheet1!$%s%d)" % (ask_size, r - 2) not in text:
+                    raise ValueError("Sheet2!%s%d beklenen süzgeç formülü değil" % (col, r))
+    for addr, part in (("I9", "J9=0"), ("L9", "K9=0"), ("V9", "W9=0"), ("Y9", "X9=0")):
+        _need_formula(model, "bu", addr, part)
+
+
+def _borsa_filter(model: Model) -> None:
+    """Only quotes with an order behind them: a side is shown when its size is above zero, a maturity is
+    listed when one of its sides is."""
+    s2 = SheetBuilder(model, "Sheet2")
+    first, last = BORSA_ROWS
+    for both, bid, ask, bid_size, ask_size in BORSA_BLOCKS:
+        for r in range(first, last + 1):
+            s = r - 2
+            # (IF, not AND: a size may be a text such as "#N/A N/A" or, offline, an error value)
+            has_bid = "IF(ISNUMBER(Sheet1!$%(c)s%(r)d),Sheet1!$%(c)s%(r)d>0,FALSE)" % {"c": bid_size, "r": s}
+            has_ask = "IF(ISNUMBER(Sheet1!$%(c)s%(r)d),Sheet1!$%(c)s%(r)d>0,FALSE)" % {"c": ask_size, "r": s}
+            for cols, cond in ((both, "OR(%s,%s)" % (has_bid, has_ask)), (bid, has_bid), (ask, has_ask)):
+                for col in cols:
+                    s2.patch("%s%d" % (col, r), '=IF(%s,Sheet1!%s%d,"")' % (cond, col, s))
+    # points per day: an empty side stays empty (the workbook's ``IF(J9=0,…)`` divides a blank otherwise)
+    bu = SheetBuilder(model, "bu")
+    for per, points, days in (("I", "J", "E"), ("L", "K", "E"), ("V", "W", "R"), ("Y", "X", "R")):
+        for r in range(9, 55):
+            bu.patch("%s%d" % (per, r), '=IF(N(%s%d)=0,"",%s%d/%s%d)' % (points, r, points, r, days, r))
 
 
 # ---------------------------------------------------------------------------------------------- TRY workbook
@@ -584,7 +638,7 @@ def _tto_gold(model: Model) -> None:
 
 #: book -> (name, precondition, builder) of each addition
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
-    "borsa": (("Borsa O/N", _borsa_check, _borsa),),
+    "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold)),
 }
 

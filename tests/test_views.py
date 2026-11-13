@@ -19,8 +19,9 @@ def models():
 
 
 def sheets_of(view):
-    """The sheets a page shows: its own and those of panels that name another one."""
-    return {view["sheet"]} | {p["sheet"] for p in view["panels"] if p.get("sheet")}
+    """The sheets a page shows: its own and those of panels that name another one (not a "borrowed" panel:
+    a few cells of another page's sheet, such as the manual spot on the Masa page)."""
+    return {view["sheet"]} | {p["sheet"] for p in view["panels"] if p.get("sheet") and not p.get("borrowed")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):

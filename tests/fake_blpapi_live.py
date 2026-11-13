@@ -8,6 +8,9 @@ variable ``TTO_FAKE_BBG`` (JSON), which a spawned process inherits:
      "missing_maturities": true,   # ... and no "TYB<n>D BFX. Curncy" maturity but the ones they recorded
      "history": true,              # ... and the daily closes the replay mode has (the history layer then has
                                    #     a few weeks of meeting pricing to compute: a minute of solid work)
+     "idle_maturities": [1, 2, 9], # ... BIST swap maturities that exist but are not quoted: size 0 and an old
+                                   #     price, the same on both sides (what the desk's terminal answers)
+     "bad_close": ["TYSOC Curncy", "2026-10-27", 0.4],   # ... one close of the history that is off
      "release_gil": true,          # accessors let go of the interpreter lock (see fake_blpapi.py)
      "queue_limit": 10000,         # undelivered events a session holds
      "tick_rate": 2000,            # ticks per second pushed by a background thread (0: none)
@@ -76,9 +79,19 @@ def _workbook_server() -> "fake_blpapi.Server":
                 closes = svc.provider.history(items, "20250101", "20991231")
         finally:
             svc.stop()
+    extra = {}
+    for days in CONFIG.get("idle_maturities", []):
+        for source in (0, 1):
+            sec = "TYB%dD BFX%d Curncy" % (days, source)
+            for field, value in (("BID", 434.0 * days), ("ASK", 434.0 * days), ("BID_SIZE", 0.0), ("ASK_SIZE", 0.0)):
+                extra[("BDP", sec, field, ())] = value
+    snapshot.update(extra)
     srv = server_from_snapshot({k: v for k, v in snapshot.items() if k[0] not in ("BFX", "RT")})
     for (sec, field), rows in closes.items():
         srv.history[(sec, field)] = [(_dt.date.fromisoformat(day), value) for day, value in rows]
+    if CONFIG.get("bad_close"):
+        sec, day, add = CONFIG["bad_close"]
+        srv.history[(sec, "PX_LAST")] = [(d, v + add if d.isoformat() == day else v) for d, v in srv.history.get((sec, "PX_LAST"), [])]
     if CONFIG.get("missing_maturities"):
         # the BIST swap sheet asks for every maturity from 1 to 400 days on two sources; only a handful exist
         srv.invalid = _Missing({k[1] for k in snapshot if k[0] == "BDP"})

@@ -106,6 +106,34 @@ def test_a_tick_is_read_with_the_calls_the_provider_makes():
     assert other._values.get(bdp_key(sec, "BID")) == 51.0 and other.last_error == "" and text is not None
 
 
+def test_a_size_without_a_value_is_told_from_a_size_that_is_not_there():
+    """A withdrawn order: the tick carries the size, emptied.  The provider must see the difference between
+    "not in this message" (keep) and "in the message without a value" (gone)."""
+    prov = BloombergProvider(blpapi_module=blpapi)
+    sec = "TYB30D BFX1 Curncy"
+    sub = subscribed(prov, sec, ["BID", "BID_SIZE", "ASK", "ASK_SIZE"])
+    for msg in data_event(sub.cid, [{"BID": 12850.0, "BID_SIZE": 5000000, "ASK": 13100.0, "ASK_SIZE": 20000000}]):
+        prov._on_tick(msg)
+    get = lambda f: prov._values.get(bdp_key(sec, f))  # noqa: E731
+    assert (get("BID"), get("BID_SIZE"), get("ASK"), get("ASK_SIZE")) == (12850.0, 5e6, 13100.0, 2e7)
+    service = blpapi.test.deserializeService(SCHEMA)
+    definition = service.getEventDefinition(blpapi.Name("MarketDataEvents"))
+    event = blpapi.test.createEvent(blpapi.Event.SUBSCRIPTION_DATA)
+    props = blpapi.test.MessageProperties()
+    props.setCorrelationIds([blpapi.CorrelationId(sub.cid)])
+    fmt = blpapi.test.appendMessage(event, definition, props)
+    fmt.setElement(blpapi.Name("BID_SIZE"), None)                # the bid is withdrawn
+    fmt.setElement(blpapi.Name("BID"), None)
+    fmt.setElement(blpapi.Name("ASK_SIZE"), 15000000)
+    for msg in event:
+        root = msg.asElement()
+        assert root.hasElement(blpapi.Name("BID_SIZE")) and not root.hasElement(blpapi.Name("BID_SIZE"), True)
+        assert not root.hasElement(blpapi.Name("ASK"))
+        prov._on_tick(msg)
+    assert get("BID_SIZE") == "#N/A N/A" and get("ASK_SIZE") == 1.5e7
+    assert get("BID") == 12850.0 and get("ASK") == 13100.0      # prices keep their last value
+
+
 def test_what_the_session_says_about_its_queue_is_understood():
     prov = BloombergProvider(blpapi_module=blpapi)
     sub = subscribed(prov, "USDTRY Curncy", ["BID"])
@@ -151,6 +179,10 @@ def test_session_options_and_subscription_strings():
     assert lst.topicStringAt(0) == "USDTRY Curncy?fields=ASK,BID&interval=1"
     assert lst.topicStringAt(1) == "TYSO1 Curncy?fields=MID"
     assert lst.correlationIdAt(0).value() == 7
+    # a bond the workbook names the way Excel's add-in takes it goes out the API's way
+    from tto.marketdata.bloomberg import api_security
+    lst.add(api_security("TRT150328T24 @ISL1 ISIN"), ["BID"], [], blpapi.CorrelationId(9))
+    assert lst.topicStringAt(2) == "/isin/TRT150328T24@ISL1?fields=BID"
     assert blpapi.Event.ADMIN != blpapi.Event.SUBSCRIPTION_DATA      # the reader tells them apart by these
 
 

@@ -86,6 +86,10 @@ class EngineThread(object):
         self._q.put(None)
 
 
+#: the manual USDTRY spot of the workbook (VİOP sheet, "Manuel SP"): empty cells mean Bloomberg
+MANUAL_SPOT = {"book": "tto", "bid": "VIOP!AA9", "ask": "VIOP!AA10", "status": "VIOP!AA8", "shown_as": "VIOP!$AA$8"}
+
+
 class Service(object):
     def __init__(self, settings: Optional[Settings] = None, provider=None, store: Optional[Store] = None,
                  clock: Optional[Clock] = None):
@@ -552,7 +556,8 @@ class Service(object):
         book = self.books[v["book"]]
         sheets = [main] if main else []
         for p in v["panels"]:
-            if p.get("sheet") and p["sheet"] not in sheets and p["sheet"] in book.model.sheet_index:
+            # (a "borrowed" panel shows a few cells of another page's sheet: that sheet stays the other page's)
+            if p.get("sheet") and not p.get("borrowed") and p["sheet"] not in sheets and p["sheet"] in book.model.sheet_index:
                 sheets.append(p["sheet"])
         for sheet_name in sheets:
             sh = book.model.sheets[book.model.sheet_index[sheet_name]]
@@ -661,8 +666,40 @@ class Service(object):
                 lab = calc.get(si, 1, col)
                 cell = R.cell(calc, si, 2, col, loc)
                 if type(lab) is str and lab:
-                    items.append({"label": lab, "text": cell.get("t", ""), "v": cell.get("v")})
+                    item = {"label": lab, "text": cell.get("t", ""), "v": cell.get("v")}
+                    # "Spot kaynağı" shows VIOP!AA8 (MANUEL / BBG): a click on it opens the manual spot
+                    if MANUAL_SPOT["shown_as"] in formula_text(book, si, 2 * COLS + col):
+                        item["edit"] = "spot"
+                    items.append(item)
         return {"items": items, "gen": self.gen}
+
+    def manual_spot(self, user: Optional[str]) -> Dict[str, Any]:
+        """The manual USDTRY spot: what is typed (``None``: nothing, Bloomberg is used) and what the sheet says
+        about it ("MANUEL", "BBG", "HATA: Bid>Ask").  Set through :meth:`set_inputs` like any shared input."""
+        return self.et.call(self._manual_spot, user)
+
+    def _manual_spot(self, user) -> Dict[str, Any]:
+        book = self.books.get(MANUAL_SPOT["book"])
+        out: Dict[str, Any] = {"book": MANUAL_SPOT["book"], "refs": {"bid": MANUAL_SPOT["bid"], "ask": MANUAL_SPOT["ask"]},
+                               "bid": None, "ask": None, "source": "", "available": False}
+        if book is None:
+            return out
+        calc = self._calc(user, book)
+        try:
+            cells = {k: book.cell(MANUAL_SPOT[k]) for k in ("bid", "ask", "status")}
+        except (KeyError, ValueError):
+            return out
+        if not all(cells[k] in book.inputs for k in ("bid", "ask")):
+            return out
+        for k in ("bid", "ask"):
+            si, rc = cells[k]
+            v = calc.get(si, *divmod(rc, COLS))
+            out[k] = v if type(v) is float and v > 0 else None
+        si, rc = cells["status"]
+        text = calc.get(si, *divmod(rc, COLS))
+        out["source"] = text if isinstance(text, str) else ""
+        out["available"] = True
+        return out
 
     def cell_info(self, user: Optional[str], book_id: str, ref: str, locale: Optional[str] = None) -> Dict[str, Any]:
         return self.et.call(self._cell_info, user, book_id, ref, locale)

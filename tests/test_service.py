@@ -66,6 +66,71 @@ def test_header_strip(service):
     assert all(i["text"] for i in items)
 
 
+def test_manual_spot_is_at_the_top_and_can_be_typed_from_the_header(service, tmp_path):
+    """The manual USDTRY spot (VİOP sheet, "Manuel SP") replaces the Bloomberg spot on every page.  It is the
+    first table of the VİOP page and of the main page, and the "Spot kaynağı" box of the header strip opens
+    it from anywhere.  (Run live, as on the desk: offline the spot cells are frozen at what Excel recorded.)"""
+    from conftest import cell
+    from tto.config import Settings
+    from tto.marketdata.base import bdp_key
+    from tto.marketdata.replay import ReplayProvider
+    from tto.service import Service
+    from tto.xl.engine import Clock
+
+    class Direct(ReplayProvider):
+        """A connected Bloomberg that answers at once."""
+        live = True
+
+        def _get(self, key):
+            v = self.snapshot.get(key)
+            return "#N/A N/A" if v is None else v
+
+        get_bdp = get_bdh = get_bds = _get
+
+    today = service.books["tto"].engine.clock.today()
+    snapshot = {k: v for k, v in service.provider.snapshot.items() if k[0] not in ("BFX", "RT")}
+    snapshot.update({bdp_key("USDTRY Curncy", "BID"): 50.36, bdp_key("USDTRY Curncy", "ASK"): 50.37})
+    clock = Clock(today + 0.5)
+    clock.today = lambda: float(today)
+    svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=Direct(snapshot), clock=clock)
+    try:
+        user = login(svc, "Spot Giren")
+        for view_id in ("viop", "masa"):
+            first = next(p for p in svc.view(user, view_id)["panels"] if not p["hidden"])
+            assert first["title"].startswith("Manuel spot") and first["range"] == "Z8:AA11", view_id
+            texts = [c.get("t", "") for row in first["data"]["rows"] for c in row]
+            assert "Bid" in texts and "Ask" in texts and "MANUEL" in texts
+            inputs = [c for row in first["data"]["rows"] for c in row if c.get("i")]
+            assert len(inputs) == 2                                   # the two cells can be typed into right there
+        items = svc.header(user)["items"]
+        source = next(i for i in items if i["label"] == "Spot kaynağı")
+        assert source["edit"] == "spot" and source["text"] == "MANUEL"
+        assert [i["label"] for i in items if i.get("edit")] == ["Spot kaynağı"]
+
+        def shown():
+            return {i["label"]: i["v"] if isinstance(i["v"], float) else i["text"] for i in svc.header(None)["items"]}
+
+        # the file was saved with a manual spot
+        assert svc.manual_spot(user) == {"book": "tto", "refs": {"bid": "VIOP!AA9", "ask": "VIOP!AA10"}, "bid": 49.997,
+                                         "ask": 49.9975, "source": "MANUEL", "available": True}
+        assert (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (49.997, 49.9975)
+        # cleared: Bloomberg's spot, for everybody
+        res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": ""}, {"ref": "VIOP!AA10", "value": ""}])
+        assert res["errors"] == []
+        spot = svc.manual_spot(None)
+        assert (spot["bid"], spot["ask"], spot["source"]) == (None, None, "BBG")
+        assert shown()["Spot kaynağı"] == "BBG" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
+        # typed again (Turkish decimals): used on every page
+        res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": "50,3667"}, {"ref": "VIOP!AA10", "value": "50,3688"}], lang="tr")
+        assert res["errors"] == []
+        spot = svc.manual_spot(None)
+        assert (spot["bid"], spot["ask"], spot["source"]) == (50.3667, 50.3688, "MANUEL")
+        assert shown()["Spot kaynağı"] == "MANUEL" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.3667, 50.3688)
+        assert cell(svc, "VIOP!L99") == 50.3667 and cell(svc, "VIOP!L100") == 50.3688
+    finally:
+        svc.stop()
+
+
 def test_number_format_follows_the_requested_locale(service):
     tr = service.cell_info(None, "tto", "Forward!D33", "tr")["cell"]["t"]
     en = service.cell_info(None, "tto", "Forward!D33", "en")["cell"]["t"]
