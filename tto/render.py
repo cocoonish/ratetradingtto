@@ -486,6 +486,7 @@ class Renderer(object):
         blanks = chart.get("blanks") or "gap"
         empty = None if blanks == "gap" else (0.0 if blanks == "zero" else "c")
         missing = empty if chart.get("na_gap") else "c"
+        text_gap = chart.get("text") == "gap"
 
         def plot_value(v: Any) -> Any:
             tv = type(v)
@@ -497,6 +498,8 @@ class Renderer(object):
                 return missing
             if tv is bool:
                 return 0.0
+            if text_gap:
+                return empty                            # a chart of the dashboard's own: "" means "no value here"
             return 0.0                                  # text is plotted as zero
 
         def style_of(s: Dict[str, Any], entry: Dict[str, Any]) -> None:
@@ -563,6 +566,8 @@ class Renderer(object):
                     px.append(x)
                     py.append(plot_value(y))
                     pl.append(labels[i] if i < len(labels) else "")
+                if s.get("optional") and not any(type(y) is float for y in py):
+                    continue                            # a line of the dashboard's own that has nothing to draw (no contract chosen)
                 entry = {"name": name_of(s), "kind": "scatter", "stacked": False, "x": px, "data": py}
                 if labels:
                     entry["labels"] = pl

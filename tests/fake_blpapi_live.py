@@ -11,6 +11,8 @@ variable ``TTO_FAKE_BBG`` (JSON), which a spawned process inherits:
      "idle_maturities": [1, 2, 9], # ... BIST swap maturities that exist but are not quoted: size 0 and an old
                                    #     price, the same on both sides (what the desk's terminal answers)
      "bad_close": ["TYSOC Curncy", "2026-10-27", 0.4],   # ... one close of the history that is off
+     "viop_history": 90,           # ... and so many week days of made-up closes (up to yesterday) of the spot,
+                                   #     the twelve VİOP contracts and the OIS tenors the VİOP sheet's history asks for
      "release_gil": true,          # accessors let go of the interpreter lock (see fake_blpapi.py)
      "queue_limit": 10000,         # undelivered events a session holds
      "tick_rate": 2000,            # ticks per second pushed by a background thread (0: none)
@@ -70,10 +72,16 @@ def _workbook_server() -> "fake_blpapi.Server":
     from tto.service import Service
 
     closes = {}
+    viop = None
     with tempfile.TemporaryDirectory() as folder:
         svc = Service(Settings(data_dir=folder, mode="replay", history=False))
         try:
             snapshot = dict(svc.provider.snapshot)
+            if CONFIG.get("viop_history"):
+                from conftest import cell
+                viop = {"spot": cell(svc, "VIOP!S340"), "last": cell(svc, "VIOP!L511"),
+                        "contracts": [(cell(svc, "VIOP!%s1" % a), cell(svc, "VIOP!%s9" % b))
+                                      for a, b in zip("LMNOPQRSTUVW", "MNOPQRSTUVWX")]}
             if CONFIG.get("history"):
                 items = [(t, d.field) for d in svc.history.snapshot()["defs"] for t in [d.ticker] + d.alts]
                 closes = svc.provider.history(items, "20250101", "20991231")
@@ -89,6 +97,8 @@ def _workbook_server() -> "fake_blpapi.Server":
     srv = server_from_snapshot({k: v for k, v in snapshot.items() if k[0] not in ("BFX", "RT")})
     for (sec, field), rows in closes.items():
         srv.history[(sec, field)] = [(_dt.date.fromisoformat(day), value) for day, value in rows]
+    if viop:
+        srv.history.update(viop_history(viop, int(CONFIG["viop_history"]), _dt.date.today()))
     if CONFIG.get("bad_close"):
         sec, day, add = CONFIG["bad_close"]
         srv.history[(sec, "PX_LAST")] = [(d, v + add if d.isoformat() == day else v) for d, v in srv.history.get((sec, "PX_LAST"), [])]
@@ -96,6 +106,43 @@ def _workbook_server() -> "fake_blpapi.Server":
         # the BIST swap sheet asks for every maturity from 1 to 400 days on two sources; only a handful exist
         srv.invalid = _Missing({k[1] for k in snapshot if k[0] == "BDP"})
     return srv
+
+
+def viop_history(viop, n: int, today: "_dt.date"):
+    """Made-up daily closes for the VİOP sheet's history block: ``n`` week days up to yesterday.  The spot
+    drifts up to its last level, each contract is priced at an implied TRY rate that rises with its expiry and
+    wanders a little from day to day, the OIS and USD OIS tenors move slowly.  Stand-in data for the pretend
+    terminal - nothing of it is a real quote."""
+    import math
+
+    days = []
+    d = today - _dt.timedelta(days=1)
+    while len(days) < n:
+        if d.weekday() < 5:
+            days.append(d)
+        d -= _dt.timedelta(days=1)
+    days.reverse()
+    out = {}
+    last = viop["last"] if type(viop["last"]) is float else 50.0
+    spot = {d: last * math.exp(-0.0011 * (len(days) - 1 - i)) for i, d in enumerate(days)}
+    out[(viop["spot"], "PX_LAST")] = [(d, spot[d]) for d in days]
+    for name, level, drift in (("TYSOA", 36.6, 0.004), ("TYSOB", 36.9, 0.005), ("TYSOC", 37.1, 0.006), ("TYSOF", 37.5, 0.007),
+                               ("TYSOI", 37.4, 0.006), ("TYSO1", 36.9, 0.004), ("USSOA", 3.90, 0.0), ("USSOC", 3.95, 0.0005),
+                               ("USSOF", 4.05, 0.0008), ("USSO1", 4.20, 0.001)):
+        out[(name + " Curncy", "PX_LAST")] = [(d, level + drift * i + 0.06 * math.sin(i / 5.0 + len(name))) for i, d in enumerate(days)]
+    base = _dt.date(1899, 12, 30)
+    for k, (ticker, expiry) in enumerate(viop["contracts"]):
+        if not isinstance(ticker, str) or type(expiry) is not float:
+            continue
+        rows = []
+        for i, d in enumerate(days):
+            g = expiry - ((d - base).days + 1)
+            if g <= 0:
+                continue
+            rate = 0.335 + 0.0035 * k + 0.00012 * i + 0.004 * math.sin(i / 7.0 + k)
+            rows.append((d, spot[d] * (1 + rate * g / 360) / (1 + 0.04 * g / 360)))
+        out[(ticker, "PX_LAST")] = rows
+    return out
 
 
 class _Missing(set):

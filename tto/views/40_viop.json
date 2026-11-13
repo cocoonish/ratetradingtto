@@ -341,6 +341,20 @@
    "group": "xau-calc",
    "kind": "number",
    "label": "VİOP XAUTRY hesaplayıcısı: VİOP bid / ask fiyatı (boş = piyasa; kendi fiyatını yaz: ima faiz)"
+  },
+  {
+   "range": "EK_VIOP!B3:G3",
+   "scope": "user",
+   "group": "viop-hist",
+   "kind": "number",
+   "label": "Geçmiş grafiklerinde çizilen kontratların sırası (1 = en yakın vade; boş = çizilmez)"
+  },
+  {
+   "range": "EK_VIOP!B8",
+   "scope": "user",
+   "group": "viop-hist",
+   "kind": "number",
+   "label": "Geçmiş grafiklerinin uzunluğu (iş günü; en çok 240)"
   }
  ],
  "panels": [
@@ -551,6 +565,156 @@
    "hidden": false
   },
   {
+   "id": "VH1",
+   "type": "table",
+   "sheet": "EK_VIOP",
+   "range": "A1:G8",
+   "hidden": false,
+   "note_ref": "A9",
+   "title": "VİOP GEÇMİŞİ  ·  grafiklerde çizilen kontratlar ve geçmişin uzunluğu  (1 = en yakın vade; boş = çizilmez)",
+   "wide": true
+  },
+  {
+   "id": "VH2",
+   "type": "chart",
+   "wide": true,
+   "title": "VİOP ima TRY faizi  ·  geçmiş  (%, ACT/360; son nokta canlı)",
+   "spec": {
+    "title": "VİOP ima TRY faizi  ·  geçmiş  (%, ACT/360; son nokta canlı)",
+    "kind": "scatter",
+    "x_axis": "value",
+    "x_format": "dd.mm.yy",
+    "blanks": "span",
+    "value_format": "0.00",
+    "axis_titles": [
+     "ima TRY %"
+    ],
+    "y_title": "ima TRY %",
+    "aspect": 0.4,
+    "series": [
+     {
+      "name_ref": "EK_VIOP!$B$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AE$12:$AE$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$C$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AF$12:$AF$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$D$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AG$12:$AG$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$E$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AH$12:$AH$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$F$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AI$12:$AI$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$G$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AJ$12:$AJ$272",
+      "kind": "scatter",
+      "optional": true
+     }
+    ],
+    "text": "gap"
+   },
+   "sheet": "EK_VIOP"
+  },
+  {
+   "id": "VH3",
+   "type": "chart",
+   "wide": true,
+   "title": "VİOP − OIS  ·  geçmiş  (bp; son nokta canlı)",
+   "spec": {
+    "title": "VİOP − OIS  ·  geçmiş  (bp; son nokta canlı)",
+    "kind": "scatter",
+    "x_axis": "value",
+    "x_format": "dd.mm.yy",
+    "blanks": "span",
+    "value_format": "0",
+    "axis_titles": [
+     "VİOP − OIS (bp)"
+    ],
+    "y_title": "VİOP − OIS (bp)",
+    "aspect": 0.4,
+    "series": [
+     {
+      "name_ref": "EK_VIOP!$B$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AK$12:$AK$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$C$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AL$12:$AL$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$D$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AM$12:$AM$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$E$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AN$12:$AN$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$F$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AO$12:$AO$272",
+      "kind": "scatter",
+      "optional": true
+     },
+     {
+      "name_ref": "EK_VIOP!$G$6",
+      "cat": "EK_VIOP!$A$12:$A$272",
+      "val": "EK_VIOP!$AP$12:$AP$272",
+      "kind": "scatter",
+      "optional": true
+     }
+    ],
+    "text": "gap"
+   },
+   "sheet": "EK_VIOP"
+  },
+  {
+   "id": "VH4",
+   "type": "table",
+   "sheet": "EK_VIOP",
+   "range": "A11:AV272",
+   "hidden": true,
+   "keep_title": true,
+   "max_rows": 45,
+   "title": "Yardımcı · VİOP geçmiş serileri (tarih, spot, kontrat fiyatları, OIS ve USD OIS vadeleri, kontrat başına gün / ima % / baz bp / OIS %; son satır canlı)"
+  },
+  {
    "id": "B8",
    "type": "table",
    "title": "USDTRY VİOP  ·  Interest 2 SP: TRY faizinden kontrat fiyatı  (1. kontrat | 2. kontrat | takvim: 1. → 2. kontrat)",
@@ -747,13 +911,17 @@
   },
   {
    "id": "basis",
-   "title": "Baz",
+   "title": "Geçmiş · baz",
    "panels": [
+    "VH1",
+    "VH2",
+    "VH3",
     "B34",
     "B35",
     "B36",
     "B16"
-   ]
+   ],
+   "note": "Seçilen kontratların ima TRY faizi ve OIS'e göre farkı, gün gün. Çizilecek kontratlar ve geçmişin uzunluğu ilk tablodadır (BAZ GEÇMİŞİ tablosunun istatistik penceresinden bağımsız)."
   },
   {
    "id": "curves",

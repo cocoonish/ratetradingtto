@@ -239,11 +239,35 @@ async function shot(page, name) {
     await page.click('.panel[data-panel="B19"] header button[data-action="ret"]');
     await page.waitForSelector('#ret-shift');
     const bidBefore = await page.inputValue('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
+    const retRows = () => page.evaluate(() => [...document.querySelectorAll('.modal table.ret tbody tr')].map((tr) => ({
+      tenor: tr.children[0].textContent, bid: tr.children[2].querySelector('input').value, ask: tr.children[3].querySelector('input').value,
+      bp: tr.children[5].querySelector('input').value, next: tr.children[6].textContent })));
+    const ret0 = await retRows();
     await page.fill('#ret-shift', '25');
-    await page.click('#ret-shift-both');
-    const bidAfter = await page.inputValue('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
-    check('"Tümünü kaydır" moves every rate by the basis points typed', trNumber(bidAfter) === trNumber(bidBefore) + 0.25
-      && await page.inputValue('.modal table.ret tbody tr:nth-child(6) td:nth-child(4) input') === '34,45', [bidBefore, bidAfter]);
+    const retShown = await retRows();
+    check('"Tümünü kaydır" shows next to every maturity by how much it moves and what it becomes',
+      retShown.length === 15 && retShown.every((r) => r.bp === '25') && retShown[5].next === '34,25 / 34,45' && retShown[0].bid === ret0[0].bid, retShown.slice(0, 6));
+    // hold the overnight rate: blank its box; give 1W an amount of its own - neither follows "Tümünü kaydır" any more
+    await page.fill('.modal table.ret tbody tr:nth-child(1) input.ret-bp', '');
+    await page.fill('.modal table.ret tbody tr:nth-child(3) input.ret-bp', '10');
+    await page.fill('#ret-shift', '30');
+    const retHeld = await retRows();
+    check('a maturity blanked in its own row is held, one typed by hand keeps its amount',
+      retHeld[0].bp === '' && retHeld[0].next === 'sabit' && retHeld[2].bp === '10' && retHeld[1].bp === '30' && retHeld[5].next === '34,3 / 34,5'
+      && (await page.textContent('#ret-pending')) === '14 vade kayacak · 1 vade sabit', [retHeld.slice(0, 3), await page.textContent('#ret-pending')]);
+    await page.click('#ret-side-bid');
+    check('the side that moves can be the bid alone', (await retRows())[5].next === '34,3 / 34,2');
+    await page.click('#ret-side-both');
+    await page.fill('#ret-shift', '25');
+    await page.click('.modal .mfoot .btn.primary');                       // "Kaydet" with a shift that is only previewed
+    await page.waitForFunction(() => /henüz uygulanmadı/.test(document.getElementById('toasts').textContent));
+    check('a shift that is only previewed is not saved by accident', (await retRows())[5].ask === ret0[5].ask);
+    await page.click('#ret-shift-apply');
+    const retAfter = await retRows();
+    const bidBefore2 = ret0[1].bid, bidAfter = retAfter[1].bid;
+    check('"Uygula" moves the others and leaves the held maturity where it was', retAfter[0].bid === bidBefore && retAfter[0].ask === ret0[0].ask
+      && trNumber(bidAfter) === trNumber(bidBefore2) + 0.25 && trNumber(retAfter[2].bid) === trNumber(ret0[2].bid) + 0.10
+      && retAfter[5].ask === '34,45' && retAfter.every((r) => r.bp === '' && r.next === ''), [ret0.slice(0, 3), retAfter.slice(0, 3)]);
     await page.click('#ret-copy-msg');
     await page.waitForTimeout(300);
     const msg = await page.evaluate(() => navigator.clipboard.readText());
@@ -642,6 +666,20 @@ async function shot(page, name) {
     check('gold calculator, free column: price from a rate and the rate a price implies, all typed by hand',
       Math.abs(freeTeo - 3990 * freeFwd / 31.1035) < 0.02 && trNumber(await cellText(page, 'EK_XAU!E58')) > trNumber(await cellText(page, 'EK_XAU!E46')),
       [freeTeo, freeFwd, await cellText(page, 'EK_XAU!E58')]);
+    // the history of the implied rate and of the spread over OIS (offline only today's point is there)
+    await tab(page, 'basis');
+    const vh = await page.evaluate(() => ({ panels: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel).slice(0, 4),
+      rate: [...document.querySelectorAll('.panel[data-panel="VH2"] .chart-legend .key')].map((k) => k.textContent),
+      basis: [...document.querySelectorAll('.panel[data-panel="VH3"] .chart-legend .key')].map((k) => k.textContent),
+      charts: document.querySelectorAll('.panel[data-panel="VH2"] svg.chart, .panel[data-panel="VH3"] svg.chart').length,
+      days: (window.tto.findCell('EK_VIOP!B8') || {}).textContent }));
+    check('VİOP history tab: the contracts to draw, then the implied rate and the spread over OIS through time',
+      vh.panels.join(' ') === 'VH1 VH2 VH3 B34' && vh.charts === 2 && vh.rate.length === 4 && vh.rate[0] === '30.11.26 · A1X6'
+      && vh.basis.join() === vh.rate.join() && vh.days.trim() === '120', vh);
+    await pick('EK_VIOP!F3', '6');
+    await page.waitForFunction(() => document.querySelectorAll('.panel[data-panel="VH2"] .chart-legend .key').length === 5, null, { timeout: 20000 });
+    check('a contract picked for a free line is drawn in both charts',
+      await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="VH3"] .chart-legend .key')].map((k) => k.textContent).pop()) === '30.04.27 · A1J7');
     await ctxC.close();
     await pick('EK_XAU!B11', 'BFXFORWARD');
     await waitCell(page, 'VIOP!M58', 't.trim() === "' + xau0 + '"');

@@ -467,6 +467,12 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); b
 .section-title { color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin: 18px 2px 8px; }
 table.plain.ret td { padding: 3px 6px; }
 table.plain.ret input { width: 104px; padding: 4px 8px; text-align: right; }
+table.plain.ret input.ret-bp { width: 72px; }
+table.plain.ret tr.moved input.ret-bp { border-color: var(--accent); }
+table.plain.ret tr.own input.ret-bp { border-style: dashed; }          /* typed in the row: "Tümünü kaydır" leaves it alone */
+table.plain.ret td.ret-new { min-width: 118px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+table.plain.ret td.ret-new .chg { color: var(--accent-ink); font-weight: 650; }
+.ret-tools .seg button { padding: 4px 9px; font-size: 12px; }
 .ret-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--line);
   border-radius: 9px; background: var(--surface-2); }
 .ret-tools .grow { flex: 1; }

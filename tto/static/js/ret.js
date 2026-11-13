@@ -62,12 +62,33 @@ export function parseRetClipboard(text, tenors) {
   return out;
 }
 
+/**
+ * The curve after a shift.  ``rows`` = [{tenor, bid, ask}] as typed, ``shifts`` = {tenor: bp}, ``sides`` = which of
+ * 'bid' / 'ask' move.  A tenor without a shift keeps what it has - that is how some maturities are held while the
+ * others move.  Returns [{tenor, bid, ask, moved}] with bid / ask as text in percent.
+ */
+export function shiftedRows(rows, shifts, sides) {
+  return rows.map((r) => {
+    const bp = shifts && typeof shifts[r.tenor] === 'number' ? shifts[r.tenor] : 0;
+    const out = { tenor: r.tenor, bid: r.bid, ask: r.ask, moved: false };
+    if (!bp) return out;
+    for (const k of sides) {
+      const x = percent(r[k]);
+      if (x === null) continue;
+      out[k] = raw(Number((x + bp / 100).toPrecision(12)));
+      out.moved = true;
+    }
+    return out;
+  });
+}
+
 export async function openRetEditor(ctx) {
   let data;
   try { data = await api.get('/api/ret'); } catch (err) { errorToast(err); return; }
   const tenors = data.rows.map((r) => r.tenor);
-  const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 760 });
-  const inputs = {};
+  const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 1040 });
+  const inputs = {};                 // tenor -> {bid, ask, bp}
+  const mids = {}, news = {}, lines = {};
   const meta = h('div', { class: 'muted' });
   const setMeta = (mt) => {
     meta.textContent = mt && mt.updated_at ? 'Son güncelleme: ' + mt.updated_at + (mt.updated_by ? ' · ' + (ctx.displayName(mt.updated_by)) : '')
@@ -76,14 +97,34 @@ export async function openRetEditor(ctx) {
   setMeta(data.meta);
   const table = h('table', { class: 'plain ret' });
   table.appendChild(h('thead', null, h('tr', null, h('th', { class: 'l' }, 'Vade'), h('th', null, 'Gün'), h('th', null, 'Bid (%)'), h('th', null, 'Ask (%)'),
-    h('th', null, 'Mid (%)'))));
+    h('th', null, 'Mid (%)'), h('th', { title: 'Bu vade kaç baz puan kayacak. "Tümünü kaydır" hepsini doldurur; bir vadeyi sabit tutmak için kutusunu silin ya da 0 yazın.' }, 'Kaydır (bp)'),
+    h('th', { class: 'l' }, 'Yeni bid / ask'))));
   const tbody = h('tbody');
-  const mids = {};
   const updateMid = (t) => {
-    const b = parseNumber(inputs[t].bid.value, true), a = parseNumber(inputs[t].ask.value, true);
-    const pc = (x) => (Math.abs(x) < 1 ? x * 100 : x);
-    mids[t].textContent = b !== null && a !== null ? num((pc(b) + pc(a)) / 2, 3, false) : '';
+    const b = percent(inputs[t].bid.value), a = percent(inputs[t].ask.value);
+    mids[t].textContent = b !== null && a !== null ? num((b + a) / 2, 3, false) : '';
   };
+
+  // ---- shifting: every maturity shows by how much it will move; a maturity typed (or blanked) by hand is left alone
+  //      by "Tümünü kaydır", which is how some are held while the rest moves
+  let sides = ['bid', 'ask'];
+  const own = new Set();
+  const rowOf = (t) => ({ tenor: t, bid: inputs[t].bid.value.trim(), ask: inputs[t].ask.value.trim() });
+  const bpOf = (t) => { const x = parseNumber(inputs[t].bp.value, true); return x === null ? 0 : x; };
+  const preview = (t) => {
+    const bp = bpOf(t);
+    const el = news[t];
+    clear(el);
+    lines[t].classList.toggle('own', own.has(t));
+    lines[t].classList.toggle('moved', bp !== 0);
+    if (!bp) { el.className = 'l ret-new muted'; el.textContent = own.has(t) ? 'sabit' : ''; return; }
+    const out = shiftedRows([rowOf(t)], { [t]: bp }, sides)[0];
+    el.className = 'l ret-new';
+    el.appendChild(h('span', { class: sides.includes('bid') ? 'chg' : '' }, out.bid || '—'));
+    el.appendChild(document.createTextNode(' / '));
+    el.appendChild(h('span', { class: sides.includes('ask') ? 'chg' : '' }, out.ask || '—'));
+  };
+  const pending = () => tenors.filter((t) => bpOf(t) !== 0);
   const fillRows = (rows) => {
     for (const r of rows) {
       const t = tenorKey(r.tenor);
@@ -91,22 +132,29 @@ export async function openRetEditor(ctx) {
       inputs[t].bid.value = typeof r.bid === 'number' ? shown(r.bid) : (r.bid || '');
       inputs[t].ask.value = typeof r.ask === 'number' ? shown(r.ask) : (r.ask || '');
       updateMid(t);
+      preview(t);
     }
   };
   for (const r of data.rows) {
+    const t = r.tenor;
     const bid = h('input', { type: 'text', class: 'inp num', autocomplete: 'off' });
     const ask = h('input', { type: 'text', class: 'inp num', autocomplete: 'off' });
-    bid.dataset.tenor = r.tenor;
-    ask.dataset.tenor = r.tenor;
-    inputs[r.tenor] = { bid, ask };
-    mids[r.tenor] = h('td', { class: 'muted' });
-    bid.addEventListener('input', () => updateMid(r.tenor));
-    ask.addEventListener('input', () => updateMid(r.tenor));
-    tbody.appendChild(h('tr', null, h('td', { class: 'l' }, h('b', null, r.tenor)), h('td', { class: 'muted' }, typeof r.days === 'number' ? num(r.days, 0) : ''),
-      h('td', null, bid), h('td', null, ask), mids[r.tenor]));
+    const bp = h('input', { type: 'text', class: 'inp num ret-bp', autocomplete: 'off', placeholder: '—' });
+    bid.dataset.tenor = t;
+    ask.dataset.tenor = t;
+    bp.dataset.tenor = t;
+    inputs[t] = { bid, ask, bp };
+    mids[t] = h('td', { class: 'muted' });
+    news[t] = h('td', { class: 'l ret-new muted' });
+    news[t].dataset.tenor = t;
+    bid.addEventListener('input', () => { updateMid(t); preview(t); });
+    ask.addEventListener('input', () => { updateMid(t); preview(t); });
+    bp.addEventListener('input', () => { own.add(t); preview(t); showPending(); });
+    lines[t] = h('tr', null, h('td', { class: 'l' }, h('b', null, t)), h('td', { class: 'muted' }, typeof r.days === 'number' ? num(r.days, 0) : ''),
+      h('td', null, bid), h('td', null, ask), mids[t], h('td', null, bp), news[t]);
+    tbody.appendChild(lines[t]);
   }
   table.appendChild(tbody);
-  fillRows(data.rows);
 
   const onPaste = (e) => {
     const text = (e.clipboardData || window.clipboardData).getData('text/plain');
@@ -126,52 +174,89 @@ export async function openRetEditor(ctx) {
       inputs[t].bid.value = r.bid;
       inputs[t].ask.value = r.ask;
       updateMid(t);
+      preview(t);
       n += 1;
     }
     toast(n + ' vade yapıştırıldı – kontrol edip "Kaydet"e basın', 'ok', 3200);
   };
   m.box.addEventListener('paste', onPaste);
 
-  // ---- change the whole curve at once, and take it along
   const current = () => data.rows.map((r) => ({ tenor: r.tenor, days: r.days, bid: inputs[r.tenor].bid.value.trim(), ask: inputs[r.tenor].ask.value.trim() }));
-  let saved = JSON.stringify(current());
-  const shiftInp = h('input', { type: 'text', class: 'inp num', id: 'ret-shift', placeholder: 'bp, örn. 25 ya da -50', autocomplete: 'off', style: { width: '150px' } });
-  const shift = (sides) => {
+  let saved = '';
+  const shiftInp = h('input', { type: 'text', class: 'inp num', id: 'ret-shift', placeholder: 'bp, örn. 25 ya da -50', autocomplete: 'off', style: { width: '128px' } });
+  const pendingNote = h('span', { class: 'muted', id: 'ret-pending' });
+  const applyBtn = h('button', { class: 'btn sm primary', type: 'button', id: 'ret-shift-apply',
+    title: 'Önizlemedeki kaydırmayı bid / ask kutularına yaz (sonra "Kaydet")' }, 'Uygula');
+  const clearBtn = h('button', { class: 'btn sm', type: 'button', id: 'ret-shift-clear', title: 'Kaydırmayı ve elle tutulan vadeleri temizle' }, 'Temizle');
+  const showPending = () => {
+    const n = pending().length;
+    const held = tenors.filter((t) => own.has(t) && bpOf(t) === 0).length;
+    applyBtn.disabled = !n;
+    pendingNote.textContent = n ? n + ' vade kayacak' + (held ? ' · ' + held + ' vade sabit' : '') : (held ? held + ' vade sabit' : '');
+  };
+  const fillAll = () => {
     const bp = parseNumber(shiftInp.value, true);
-    if (bp === null || bp === 0) { toast('Kaydırma miktarını baz puan olarak yazın (örn. 25 ya da -50)', 'err'); shiftInp.focus(); return; }
-    let n = 0;
     for (const t of tenors) {
-      for (const k of sides) {
-        const x = percent(inputs[t][k].value);
-        if (x === null) continue;
-        inputs[t][k].value = raw(Number((x + bp / 100).toPrecision(12)));
-        n += 1;
-      }
-      updateMid(t);
+      if (own.has(t)) continue;                      // typed in its own row: "Tümünü kaydır" does not touch it
+      inputs[t].bp.value = bp !== null && bp !== 0 ? raw(bp) : '';
+      preview(t);
     }
-    toast(n + ' faiz ' + (bp > 0 ? '+' : '') + raw(bp) + ' bp kaydırıldı – uygulamak için "Kaydet"e basın', 'ok', 3600);
+    showPending();
   };
-  const shiftBtn = (label, sides, id) => {
-    const b = h('button', { class: 'btn sm', type: 'button', id }, label);
-    b.addEventListener('click', () => shift(sides));
-    return b;
+  const clearShift = () => {
+    shiftInp.value = '';
+    own.clear();
+    for (const t of tenors) { inputs[t].bp.value = ''; preview(t); }
+    showPending();
   };
+  const apply = () => {
+    const shifts = {};
+    for (const t of pending()) shifts[t] = bpOf(t);
+    if (!Object.keys(shifts).length) { toast('Kaydırma miktarını baz puan olarak yazın (örn. 25 ya da -50)', 'err'); shiftInp.focus(); return; }
+    let moved = 0, kept = 0;
+    for (const r of shiftedRows(tenors.map(rowOf), shifts, sides)) {
+      if (!r.moved) { if (r.bid || r.ask) kept += 1; continue; }
+      inputs[r.tenor].bid.value = r.bid;
+      inputs[r.tenor].ask.value = r.ask;
+      updateMid(r.tenor);
+      moved += 1;
+    }
+    clearShift();
+    toast(moved + ' vade kaydırıldı' + (kept ? ', ' + kept + ' vade sabit kaldı' : '') + ' – uygulamak için "Kaydet"e basın', 'ok', 4200);
+  };
+  shiftInp.addEventListener('input', fillAll);
+  shiftInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
+  applyBtn.addEventListener('click', apply);
+  clearBtn.addEventListener('click', clearShift);
+  const sideSeg = h('div', { class: 'seg' });
+  for (const [id, label, which] of [['ret-side-both', 'Bid + Ask', ['bid', 'ask']], ['ret-side-bid', 'Bid', ['bid']], ['ret-side-ask', 'Ask', ['ask']]]) {
+    const b = h('button', { type: 'button', id, class: which.length === 2 ? 'on' : '' }, label);
+    b.addEventListener('click', () => {
+      sides = which;
+      for (const x of sideSeg.children) x.classList.toggle('on', x === b);
+      for (const t of tenors) preview(t);
+    });
+    sideSeg.appendChild(b);
+  }
   const copyBtn = (label, kind, id, title) => {
     const b = h('button', { class: 'btn sm', type: 'button', id, title }, label);
     b.addEventListener('click', () => {
       const today = new Date();
       const date = String(today.getDate()).padStart(2, '0') + '.' + String(today.getMonth() + 1).padStart(2, '0') + '.' + today.getFullYear();
-      const unsaved = JSON.stringify(current()) !== saved;
-      copyText(retText(current(), kind, date), unsaved ? 'Kopyalandı – dikkat: tablodaki değerler henüz kaydedilmedi' : 'RET faizleri kopyalandı');
+      const note = pending().length ? 'Kopyalandı – dikkat: önizlemedeki kaydırma uygulanmadı (kutulardaki değerler kopyalandı)'
+        : (JSON.stringify(current()) !== saved ? 'Kopyalandı – dikkat: tablodaki değerler henüz kaydedilmedi' : 'RET faizleri kopyalandı');
+      copyText(retText(current(), kind, date), note);
     });
     return b;
   };
   const tools = h('div', { class: 'ret-tools' },
-    h('span', { class: 'muted' }, 'Tümünü kaydır'), shiftInp, shiftBtn('Bid + Ask', ['bid', 'ask'], 'ret-shift-both'), shiftBtn('Bid', ['bid'], 'ret-shift-bid'),
-    shiftBtn('Ask', ['ask'], 'ret-shift-ask'), h('span', { class: 'grow' }),
+    h('span', { class: 'muted' }, 'Tümünü kaydır'), shiftInp, sideSeg, applyBtn, clearBtn, pendingNote, h('span', { class: 'grow' }),
     copyBtn('Kopyala (tablo)', 'table', 'ret-copy', 'Vade · gün · bid · ask: Excel\'e ya da e-postaya yapıştırılabilir tablo'),
     copyBtn('Kopyala (mesaj)', 'message', 'ret-copy-msg', 'Sohbet penceresine atılacak hizalı metin: "1M   34,45 / 34,65"'));
-  shiftInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') shift(['bid', 'ask']); });
+
+  fillRows(data.rows);
+  saved = JSON.stringify(current());
+  showPending();
 
   const hist = h('div', { class: 'ret-hist' });
   const loadHistory = async () => {
@@ -192,12 +277,17 @@ export async function openRetEditor(ctx) {
 
   m.body.appendChild(h('p', { class: 'muted', style: { margin: '0 0 10px' } },
     'Excel\'de RET tablosunu (yalnızca bid–ask sütunları ya da vade etiketiyle birlikte) kopyalayın, aşağıdaki tabloda bir kutuya tıklayıp Ctrl+V ile yapıştırın. ',
-    'Değerler yüzde (34,45) ya da oran (0,3445) olabilir. Tek tek değiştirebilir ya da tüm eğriyi baz puanla kaydırabilirsiniz. ',
+    'Değerler yüzde (34,45) ya da oran (0,3445) olabilir. Kaydırma: "Tümünü kaydır"a baz puanı yazın – her vadenin yanında ne kadar kayacağı ve yeni ',
+    'bid / ask görünür; sabit kalacak vadelerin "Kaydır" kutusunu silin (ya da farklı bir miktar yazın), sonra "Uygula". ',
     'Kaydedilen eğri tüm kullanıcılar için geçerlidir ve sunucu yeniden başlasa da saklanır.'));
   m.body.appendChild(tools);
   m.body.appendChild(h('div', { class: 'ret-layout' }, h('div', null, table, meta), hist));
   const save = h('button', { class: 'btn primary', type: 'button' }, 'Kaydet');
   save.addEventListener('click', async () => {
+    if (pending().length) {
+      toast('Önizlemedeki kaydırma henüz uygulanmadı: önce "Uygula"ya basın (ya da "Temizle")', 'err', 5000);
+      return;
+    }
     const rows = [];
     for (const t of tenors) {
       const bid = inputs[t].bid.value.trim(), ask = inputs[t].ask.value.trim();

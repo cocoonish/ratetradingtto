@@ -86,8 +86,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     sofr = Model.load(os.path.join(root, "models", "sofr.json.gz"))                 # not the workbook they were written for
     n = sofr.formula_count()
     problems = extras.apply("tto", sofr)
-    assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU"]
-    assert sofr.formula_count() == n and "EK_FWD" not in sofr.sheet_index and "EK_XAU" not in sofr.sheet_index
+    assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU", "EK_VIOP"]
+    assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP"} & set(sofr.sheet_index)
     # the TRY workbook with one gold forward typed over by hand: the gold tables stay as they are in the file
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
     viop = tto.sheet("VIOP")
@@ -96,6 +96,13 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     formulas = dict(viop.fml)
     assert extras.apply("tto", tto) == ["EK_XAU: VIOP!M58 bir formül değil"]
     assert "EK_FWD" in tto.sheet_index and "EK_XAU" not in tto.sheet_index and viop.fml == formulas
+    assert "EK_VIOP" in tto.sheet_index                                             # the history charts do not need the gold tables
+    # the VİOP history block laid out differently: its charts are left out, the rest stays
+    tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
+    viop = tto.sheet("VIOP")
+    del viop.fml[parse_a1("AJ380")]
+    assert extras.apply("tto", tto) == ["EK_VIOP: VIOP!AJ380 bir formül değil"]
+    assert "EK_XAU" in tto.sheet_index and "EK_VIOP" not in tto.sheet_index
     # a discount factor that depends on another cell of the desk sheet cannot be moved to the matrix
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
     b = extras.SheetBuilder(tto, "MASA")
@@ -806,3 +813,170 @@ def test_asw_workbook_agrees_with_the_try_workbooks_bond_table(service):
         elif kind == "T":
             assert asw == ""                                        # floaters have no fixed-rate asset swap here
     assert n >= 15
+
+
+# ---------------------------------------------------------------------------------------------- VİOP history
+def _piecewise(g, nodes):
+    """The VİOP sheet's own interpolation: flat up to the first node and after the last, straight in between."""
+    if g <= nodes[0][0]:
+        return nodes[0][1]
+    for (xa, ya), (xb, yb) in zip(nodes, nodes[1:]):
+        if g <= xb:
+            return ya + (yb - ya) * (g - xa) / (xb - xa)
+    return nodes[-1][1]
+
+
+VH = extras.VH_COLS
+
+
+@pytest.fixture(scope="module")
+def viop_history(svc, tmp_path_factory):
+    """A connected Bloomberg that has a history for what the VİOP history asks for: the window of the charts
+    (120 business days) and the window of the sheet's own statistics (20).  Made up: the spot creeps up, every
+    contract is priced at a rate that rises with its expiry and from day to day, one close of the third contract
+    is missing."""
+    import datetime as dt
+
+    from tto.marketdata.base import bdh_key
+    from tto.xl.values import XlArray, serial_to_date
+
+    today = svc.books["tto"].engine.clock.today()
+    tickers = [cell(svc, "VIOP!%s1" % c) for c in "LMNOPQRSTUVW"]
+    expiry = [cell(svc, "VIOP!%s9" % c) for c in "MNOPQRSTUVWX"]
+    spot_ticker = cell(svc, "VIOP!S340")
+    end = cell(svc, "EK_VIOP!F8")
+    assert end == cell(svc, "VIOP!Q340") and cell(svc, "EK_VIOP!B8") == 120.0 == extras.VH_DAYS
+    snapshot = {k: v for k, v in svc.provider.snapshot.items() if k[0] != "BFX"}
+    week_day = lambda d: (dt.date(1899, 12, 30) + dt.timedelta(days=d)).weekday() < 5              # noqa: E731
+    days = [d for d in range(int(cell(svc, "EK_VIOP!D8")), int(end) + 1) if week_day(d)]
+    spot = {d: 46.00 + 0.03 * i for i, d in enumerate(days)}
+    levels = {"TYSOA": 37.0, "TYSOB": 37.2, "TYSOC": 37.4, "TYSOF": 37.9, "TYSOI": 38.3, "TYSO1": 38.6,
+              "USSOA": 3.90, "USSOC": 3.95, "USSOF": 4.05, "USSO1": 4.20}
+    series = {name + " Curncy": {d: lvl + 0.004 * i for i, d in enumerate(days)} for name, lvl in levels.items()}
+    price = {}
+    for k, ticker in enumerate(tickers):
+        series[ticker] = {}
+        for i, d in enumerate(days):
+            g = expiry[k] - (d + 1)
+            rate = 0.33 + 0.004 * k + 0.0002 * i
+            price[(k, d)] = None if (k == 2 and i == 5) else spot[d] * (1 + rate * g / 360) / (1 + 0.04 * g / 360)
+            series[ticker][d] = price[(k, d)]
+    dated = (("DATES", "S"), ("DAYS", "W"), ("FILL", "P"))
+    plain = (("DATES", "H"), ("DAYS", "W"), ("FILL", "P"))
+    for start in (cell(svc, "EK_VIOP!D8"), cell(svc, "VIOP!O340")):                  # the charts' window and the sheet's own
+        lo, hi = serial_to_date(start).strftime("%Y%m%d"), serial_to_date(end).strftime("%Y%m%d")
+        window = [d for d in days if d >= start]
+        snapshot[bdh_key(spot_ticker, "PX_LAST", lo, hi, dated)] = XlArray([[float(d), spot[d]] for d in window])
+        for ticker, points in series.items():
+            snapshot[bdh_key(ticker, "PX_LAST", lo, hi, plain)] = XlArray([[points[d]] for d in window])
+    clock = Clock(today + 0.5)
+    clock.today = lambda: float(today)
+    live = Service(Settings(data_dir=str(tmp_path_factory.mktemp("viop-hist")), mode="live", history=False), provider=_Direct(snapshot), clock=clock)
+    yield live, days, spot, price, expiry
+    live.stop()
+
+
+def test_viop_history_series_use_the_sheets_own_formulas(viop_history):
+    """EK_VIOP reads a history of its own (the contracts that are drawn, as long as its "Geçmiş" cell says) and
+    computes the implied TRY rate, the basis over OIS and the OIS rate that goes with them with the VİOP sheet's
+    formulas - checked against a calculation by hand and, where the two windows overlap, against the sheet."""
+    import datetime as dt
+
+    live, days, spot, price, expiry = viop_history
+    assert live.mode == "live" and not live.books["tto"].left_out
+    assert [cell(live, "EK_VIOP!%s3" % c) for c in "BCDEFG"] == [1.0, 2.0, 3.0, 4.0, None, None]
+    assert cell(live, "EK_VIOP!B4") == cell(live, "VIOP!L1") and cell(live, "EK_VIOP!C5") == cell(live, "VIOP!N9")
+    assert cell(live, "EK_VIOP!B6") == "30.11.26 · A1X6" and cell(live, "EK_VIOP!F6") == ""
+    holidays = {int(v) for v in (cell(live, "Motor!A%d" % r) for r in range(361, 524)) if isinstance(v, float)}
+
+    def next_business_day(d):
+        d = int(d) + 1
+        while (dt.date(1899, 12, 30) + dt.timedelta(days=d)).weekday() >= 5 or d in holidays:
+            d += 1
+        return d
+
+    r0 = extras.VH_FIRST
+    assert 120 < len(days) <= extras.VH_ROWS and extras.VH_LIVE == r0 + extras.VH_ROWS == 272
+    own = {int(cell(live, "VIOP!K%d" % R)): R for R in range(380, 380 + 25) if isinstance(cell(live, "VIOP!K%d" % R), float)}
+    assert len(own) == 21                                                   # the sheet's own, shorter history
+    checked = same_as_sheet = 0
+    for i, d in enumerate(days):
+        r = r0 + i
+        assert cell(live, "EK_VIOP!A%d" % r) == float(d) and cell(live, "EK_VIOP!B%d" % r) == spot[d]
+        val = lambda col: cell(live, "EK_VIOP!%s%d" % (col, r))                                   # noqa: E731
+        for slot in range(4):
+            k = int(cell(live, "EK_VIOP!%s3" % "BCDE"[slot])) - 1
+            g = expiry[k] - next_business_day(d)
+            assert val(VH["days"][slot]) == g
+            if price[(k, d)] is None:
+                # a day without a close for the contract is left out (not drawn as a rate of -333 %)
+                assert val(VH["imp"][slot]) == "" == val(VH["baz"][slot]) == val(VH["ois360"][slot])
+                continue
+            usd = _piecewise(g, [(x, val(c)) for x, c in zip((30, 91, 182, 365), VH["usd"])])
+            implied = ((price[(k, d)] / spot[d]) * (1 + usd / 100 * g / 360) - 1) * 360 / g * 100
+            ois = _piecewise(g, [(x, val(c)) for x, c in zip((30, 61, 91, 182, 273, 365), VH["ois"][:3] + VH["zero"][3:])]) * 360 / 365
+            assert val(VH["imp"][slot]) == pytest.approx(implied, rel=1e-11)
+            assert val(VH["baz"][slot]) == pytest.approx((implied - ois) * 100, abs=1e-7)
+            assert val(VH["ois360"][slot]) == pytest.approx(ois, rel=1e-11)
+            checked += 1
+            if d in own:                                                    # the same day in the sheet's own block: its "Baz"
+                assert val(VH["baz"][slot]) == pytest.approx(cell(live, "VIOP!%s%d" % (("AJ", "AK", "AL", "AM")[k], own[d])), abs=1e-9)
+                same_as_sheet += 1
+    assert checked == len(days) * 4 - 1 and same_as_sheet >= 80
+    # the zero rates of the day are the sheet's (6M from the 3M and 6M quotes ...)
+    R = own[days[-1]]
+    assert [cell(live, "EK_VIOP!%s%d" % (c, r0 + len(days) - 1)) for c in VH["zero"]] == \
+        pytest.approx([cell(live, "VIOP!%s%d" % (c, R)) for c in ("AW", "AX", "AY", "AZ", "BA", "BB")], rel=1e-13)
+    assert [cell(live, "EK_VIOP!%s7" % c) for c in "BCDEFG"] == [len(days), len(days), len(days) - 1.0, len(days), "", ""]
+    assert cell(live, "EK_VIOP!A%d" % (r0 + len(days))) is None                                  # nothing below the history
+    # the row after it is the sheet's live row: today's last prices, the same way
+    last = extras.VH_LIVE
+    assert cell(live, "EK_VIOP!A%d" % last) == cell(live, "VIOP!K511") > days[-1]
+    assert cell(live, "EK_VIOP!%s%d" % (VH["baz"][0], last)) == cell(live, "VIOP!AJ511") == pytest.approx(cell(live, "VIOP!M350"))
+    assert cell(live, "EK_VIOP!%s%d" % (VH["imp"][0], last)) == pytest.approx(
+        cell(live, "EK_VIOP!%s%d" % (VH["ois360"][0], last)) + cell(live, "VIOP!AJ511") / 100)
+
+
+def test_viop_history_charts(viop_history, svc):
+    live, days, spot, price, expiry = viop_history
+    page = live.view(None, "viop")
+    panels = {p["id"]: p for p in page["panels"]}
+    tab = next(s for s in page["sections"] if s["id"] == "basis")
+    assert tab["title"] == "Geçmiş · baz" and tab["panels"][:4] == ["VH1", "VH2", "VH3", "B34"]
+    rate, basis = panels["VH2"]["data"], panels["VH3"]["data"]
+    assert panels["VH2"]["title"].startswith("VİOP ima TRY faizi") and panels["VH3"]["title"].startswith("VİOP − OIS")
+    for chart in (rate, basis):
+        assert chart["kind"] == "scatter" and chart["xaxis"] == {"type": "date", "format": "dd.mm.yy"}
+        assert [s["name"] for s in chart["series"]] == ["30.11.26 · A1X6", "31.12.26 · A1Z6", "29.01.27 · A1F7", "26.02.27 · A1G7"]
+        for s in chart["series"]:
+            assert s["x"] == [float(d) for d in days] + [cell(live, "VIOP!K511")]             # the history, then today
+    r0 = extras.VH_FIRST
+    assert rate["series"][0]["data"][3] == cell(live, "EK_VIOP!%s%d" % (VH["imp"][0], r0 + 3))
+    assert basis["series"][1]["data"][-1] == cell(live, "VIOP!AK511")
+    # the missing close: a point the line passes over, not a zero
+    assert rate["series"][2]["data"][5] == "c" and basis["series"][2]["data"][5] == "c"
+    assert all(type(y) is float for y in rate["series"][0]["data"]) and rate["decimals"] == 2 and basis["decimals"] == 0
+    # the statistics of the sheet keep their own window: 20 days, whatever the charts draw
+    assert cell(live, "VIOP!M340") == 20.0 and cell(live, "VIOP!M349") == 21.0 and len(rate["series"][0]["x"]) > 120
+    # other contracts and another length: the user's own choice; a line without a contract is not drawn
+    u = live.login("Geçmiş çizgi")["user"]
+    put(live, u, {"EK_VIOP!B3": "", "EK_VIOP!F3": "12", "EK_VIOP!C3": "5"})
+    mine = next(p for p in live.view(u, "viop")["panels"] if p["id"] == "VH2")["data"]
+    assert [s["name"] for s in mine["series"]] == ["31.03.27 · A1H7", "29.01.27 · A1F7", "26.02.27 · A1G7", "27.10.27 · A1V7"]
+    assert mine["series"][3]["data"][0] == pytest.approx(cell(live, "EK_VIOP!%s%d" % (VH["imp"][4], r0), u))
+    assert cell(live, "EK_VIOP!%s%d" % (VH["imp"][0], r0), u) == ""
+    assert [s["name"] for s in next(p for p in live.view(None, "viop")["panels"] if p["id"] == "VH2")["data"]["series"]][0] == "30.11.26 · A1X6"
+    selector = panels["VH1"]["data"]
+    assert [c.get("i") for c in selector["rows"][1][1:]] == ["u"] * 6 and selector["rows"][1][1].get("o") == [str(i) for i in range(1, 13)]
+    assert selector["rows"][6][1]["i"] == "u" and selector["rows"][6][1]["v"] == 120.0                 # "Geçmiş (iş günü)"
+    assert panels["VH1"]["note"].startswith("Grafikler kendi geçmişini okur")
+    put(live, u, {"EK_VIOP!B8": "500"})                                         # more than the rows can hold: the most there is
+    from tto.xl.values import serial_to_date
+    span = (serial_to_date(cell(live, "EK_VIOP!F8", u)) - serial_to_date(cell(live, "EK_VIOP!D8", u))).days
+    assert cell(live, "EK_VIOP!D8", u) < cell(live, "EK_VIOP!D8") and span * 5 / 7 < extras.VH_ROWS and extras.VH_MAX_DAYS == 240
+    put(live, u, {"EK_VIOP!B8": "60"})
+    assert cell(live, "EK_VIOP!D8", u) > cell(live, "EK_VIOP!D8") and cell(live, "VIOP!O340", u) == cell(live, "VIOP!O340")
+    # offline nothing of the history is recorded: the charts show the live point alone, and say so
+    off = {p["id"]: p for p in svc.view(None, "viop")["panels"]}
+    assert [len([y for y in s["data"] if type(y) is float]) for s in off["VH2"]["data"]["series"]] == [1, 1, 1, 1]
+    assert "Kayıtlı veri modunda VİOP geçmişi kaydı yoktur" in off["VH1"]["note"]

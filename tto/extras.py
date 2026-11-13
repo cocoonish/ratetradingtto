@@ -12,6 +12,9 @@ the Excel files (parity and reference tests read those).
                                gold strip fed from them, and a calculator for the VİOP XAUTRY contracts: the
                                price at a given rate and the rates a price implies, every driver of which can
                                be typed by hand (dates, spots, rates, the gold forward, the VİOP price)
+* ``EK_VIOP`` (TRY workbook)  a history of the VİOP contracts for two charts: the implied TRY rate of up to six
+                               contracts and their spread over OIS, day by day, with the VİOP sheet's own
+                               formulas and a window of its own
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 * ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
 
@@ -662,10 +665,166 @@ def _tto_gold(model: Model) -> None:
            "kullanıldığından ima faiz birkaç baz puan farklı olabilir.)")
 
 
+# ---------------------------------------------------------------------------------------------- VİOP history
+VH_SHEET = "EK_VIOP"
+VH_SLOTS = 6                              # lines of a chart (the palette has six colours)
+VH_FIRST = 12                             # first row of the history here
+VH_ROWS = 260                             # rows kept for it (a BDH block of week days)
+VH_MAX_DAYS = 240                         # business days that can be asked for (their week days fit the rows)
+VH_DAYS = 120                             # ... and what is asked for at first
+VH_LIVE = VH_FIRST + VH_ROWS              # the row after the history: today's last prices
+VH_DEFAULT = (1, 2, 3, 4)                 # contracts drawn at first: the four nearest expiries
+VH_SOURCE = 380                           # first history row of the VİOP sheet: the formulas taken over from it
+VH_SOURCE_LIVE = 511                      # ... and its "live last price" row
+_VH_HOLIDAYS = "Motor!$A$361:$A$523"
+_VH_OIS = ("Y", "Z", "AA", "AB", "AC", "AD")          # TYSOA, TYSOB, TYSOC, TYSOF, TYSOI, TYSO1 on the VİOP sheet
+_VH_USD = ("AE", "AF", "AG", "AH")                    # USSOA, USSOC, USSOF, USSO1
+_VH_ZERO = ("AW", "AX", "AY", "AZ", "BA", "BB")       # DF 3A / 6A / 9A, zero 6A / 9A / 1Y
+
+
+def _vh_columns() -> Dict[str, List[str]]:
+    """Columns of the series block: A date, B spot, then one group per kind."""
+    out: Dict[str, List[str]] = {}
+    c = 3
+    for name, n in (("px", VH_SLOTS), ("ois", len(_VH_OIS)), ("usd", len(_VH_USD)), ("zero", len(_VH_ZERO)), ("days", VH_SLOTS),
+                    ("imp", VH_SLOTS), ("baz", VH_SLOTS), ("ois360", VH_SLOTS)):
+        out[name] = [index_to_col(c + k) for k in range(n)]
+        c += n
+    return out
+
+
+VH_COLS = _vh_columns()
+
+
+def _viop_hist_check(model: Model) -> None:
+    _need_sheets(model, "VIOP", "Motor")
+    R = VH_SOURCE
+    _need_formula(model, "VIOP", "K%d" % R, "BDH($S$340")
+    _need_formula(model, "VIOP", "M%d" % R, "BDH(L$1")
+    for col in _VH_OIS + _VH_USD:
+        _need_formula(model, "VIOP", "%s%d" % (col, R), "BDH(")
+    for col in _VH_ZERO:
+        _need_formula(model, "VIOP", "%s%d" % (col, R), "$K%d" % R)
+    text = _need_formula(model, "VIOP", "AJ%d" % R, "$M$9-WORKDAY($K%d,1,%s)" % (R, _VH_HOLIDAYS))
+    for piece in ("M%d/$L%d" % (R, R), "N($AE%d)" % R, "N($AH%d)" % R, "N($Y%d)" % R, "N($BB%d)" % R, "*10000"):
+        if piece not in text:
+            raise ValueError("VIOP!AJ%d beklenen baz formülü değil (%s yok)" % (R, piece))
+    for addr in ("K%d" % VH_SOURCE_LIVE, "M%d" % VH_SOURCE_LIVE, "AJ%d" % VH_SOURCE_LIVE, "M9"):
+        _need_formula(model, "VIOP", addr)
+    _need_formula(model, "VIOP", "O340", "$M$340")
+    _need_formula(model, "VIOP", "Q340", "TODAY()")
+    if not isinstance(model.sheet("VIOP").consts.get(parse_a1("L1")), str):
+        raise ValueError("VIOP!L1 kontrat ticker'ı değil")
+
+
+def _tto_viop_history(model: Model) -> None:
+    """The implied TRY rate of the VİOP contracts and their spread over OIS, day by day - what two charts of
+    the VİOP page draw.
+
+    The VİOP sheet keeps a history of its own (rows 380-509: spot, the twelve contracts and the OIS tenors from
+    ``BDH``) and computes the basis of every contract on every day - but only for an average and a z-score over
+    the last "Geçmiş" days (20).  A chart wants more days than a z-score does, and the two must not share a
+    window.  So this sheet asks for its own history, of the contracts that are drawn (up to six, chosen by their
+    order: 1 = nearest expiry) and as long as its own "Geçmiş" cell says, and computes with the sheet's own
+    formulas, taken over cell by cell:
+
+        implied TRY %  = ((price / spot) · (1 + USD · g/360) − 1) · 360/g      g = expiry − (day + 1 business day)
+        VİOP − OIS, bp = the sheet's "Baz" formula (``VIOP!AJ380``) on this sheet's rows
+        OIS % (360)    = implied − basis: the OIS rate of the same days the formula compared it with
+
+    The row after the history is the VİOP sheet's live row (today's last prices), so the lines end at "now".
+    """
+    b = SheetBuilder(model, VH_SHEET)
+    slots = [index_to_col(2 + k) for k in range(VH_SLOTS)]                     # B … G: one per line (settings table)
+    r0, r1, live = VH_FIRST, VH_FIRST + VH_ROWS - 1, VH_LIVE
+    C = VH_COLS
+    b.title("A1", "VİOP GEÇMİŞİ  ·  grafiklerde çizilen kontratlar ve geçmişin uzunluğu  (1 = en yakın vade; boş = çizilmez)")
+    b.head("A2", [""] + ["Çizgi %d" % (k + 1) for k in range(VH_SLOTS)])
+    for r, text in ((3, "Kontrat sırası"), (4, "Kontrat"), (5, "Vade"), (6, "Grafikteki adı"), (7, "Gün sayısı (çizilen)"),
+                    (8, "Geçmiş (iş günü)")):
+        b.set("A%d" % r, text, bold=True)
+    for k, c in enumerate(slots):
+        f = {"c": c, "imp": C["imp"][k], "a": r0, "z": r1}
+        b.input("%s3" % c, VH_DEFAULT[k] if k < len(VH_DEFAULT) else None, fmt="0", align="center")
+        b.dropdown("%s3" % c, [str(i) for i in range(1, 13)])
+        b.set("%s4" % c, '=IF(ISNUMBER(%(c)s3),IFERROR(INDEX(VIOP!$L$1:$W$1,%(c)s3),""),"")' % f, align="center")
+        b.set("%s5" % c, '=IF(ISNUMBER(%(c)s3),IFERROR(INDEX(VIOP!$M$9:$X$9,%(c)s3),""),"")' % f, fmt=DATE, align="center")
+        b.set("%s6" % c, ('=IF(ISNUMBER(%(c)s5),TEXT(%(c)s5,"dd.mm.yy")&" · "&TRIM(SUBSTITUTE(%(c)s4&""," Curncy","")),"")') % f, align="center")
+        b.set("%s7" % c, '=IF(ISNUMBER(%(c)s5),COUNT($%(imp)s$%(a)d:$%(imp)s$%(z)d),"")' % f, fmt="0", align="center")
+    b.input("B8", VH_DAYS, fmt="0", align="center")
+    b.set("C8", "Başlangıç", bold=True, align="right")
+    b.set("D8", "=WORKDAY(TODAY(),-MIN(MAX(N($B$8),1),%d),%s)" % (VH_MAX_DAYS, _VH_HOLIDAYS), fmt=DATE, align="center")
+    b.set("E8", "Bitiş", bold=True, align="right")
+    b.set("F8", "=" + formula_of(model, "VIOP", "Q340"), fmt=DATE, align="center")       # yesterday, as the sheet's own history ends
+    b.note("A9", "Grafikler kendi geçmişini okur (Bloomberg BDH, son işlem): 'Geçmiş' kaç iş günü geriye gidileceğidir (en çok %d) ve "
+                 "BAZ GEÇMİŞİ tablosunun istatistik penceresinden (z-skor, ortalama) bağımsızdır. Çizgilerin son noktası bugünün canlı son "
+                 "fiyatıdır. Kontratın fiyatı olmayan gün çizilmez. Kayıtlı veri modunda VİOP geçmişi kaydı yoktur: yalnızca canlı nokta "
+                 "görünür." % VH_MAX_DAYS)
+
+    head = r0 - 1
+    b.head("A%d" % head, ["Tarih", "Spot"] + ["Fiyat · %d" % (k + 1) for k in range(VH_SLOTS)]
+           + ["TYSOA", "TYSOB", "TYSOC", "TYSOF", "TYSOI", "TYSO1", "USSOA", "USSOC", "USSOF", "USSO1", "DF 3A", "DF 6A", "DF 9A",
+              "Zero 6A %", "Zero 9A %", "Zero 1Y %"]
+           + ["%s · %d" % (label, k + 1) for label in ("gün", "ima %", "baz bp", "OIS %") for k in range(VH_SLOTS)])
+    window = {"$O$340": "$D$8", "$Q$340": "$F$8"}
+    R = VH_SOURCE
+    # ---- the history itself: the sheet's own BDH calls with this sheet's window (dates and spot, the contracts
+    #      that are drawn, the OIS and USD OIS tenors).  Array formulas, as in the workbook: the block they return
+    #      is written into the rows below.
+    b.set("A%d" % r0, "=" + transplant(formula_of(model, "VIOP", "K%d" % R), dict(window, **{"$S$340": "VIOP!$S$340"})), fmt=DATE, array=True)
+    for k, c in enumerate(C["px"]):
+        b.set("%s%d" % (c, r0), "=" + transplant(formula_of(model, "VIOP", "M%d" % R), dict(window, **{"L$1": "$%s$4" % slots[k]})), fmt=NUM4, array=True)
+    for src, c in zip(_VH_OIS + _VH_USD, C["ois"] + C["usd"]):
+        b.set("%s%d" % (c, r0), "=" + transplant(formula_of(model, "VIOP", "%s%d" % (src, R)), window), fmt="0.000", array=True)
+    usd = ("IF({g}<=30,N({a}),IF({g}<=91,N({a})+(N({b})-N({a}))*({g}-30)/61,IF({g}<=182,N({b})+(N({c})-N({b}))*({g}-91)/91,"
+           "IF({g}<=365,N({c})+(N({d})-N({c}))*({g}-182)/183,N({d})))))")
+    zero_text = [formula_of(model, "VIOP", "%s%d" % (col, R)) for col in _VH_ZERO]
+    basis_text = formula_of(model, "VIOP", "AJ%d" % R)
+    for r in range(r0, r1 + 1):
+        if r > r0:
+            b.sheet.styles[parse_a1("A%d" % r)] = b.sheet.styles[parse_a1("A%d" % r0)]          # the dates that spill below
+        same = {"$K%d" % R: "$A%d" % r}
+        same.update({"$%s%d" % (src, R): "$%s%d" % (c, r) for src, c in zip(_VH_OIS + _VH_USD + _VH_ZERO, C["ois"] + C["usd"] + C["zero"])})
+        for text, c in zip(zero_text, C["zero"]):
+            b.set("%s%d" % (c, r), "=" + transplant(text, same), fmt="0.0000")
+        for k in range(VH_SLOTS):
+            f = {"exp": "$%s$5" % slots[k], "r": r, "px": "$%s%d" % (C["px"][k], r), "g": "$%s%d" % (C["days"][k], r),
+                 "imp": C["imp"][k], "baz": C["baz"][k], "hol": _VH_HOLIDAYS}
+            f["usd"] = usd.format(g=f["g"], **{n: "$%s%d" % (c, r) for n, c in zip("abcd", C["usd"])})
+            # days from the day's T+1 to the expiry, as the sheet counts them
+            b.set("%s%d" % (C["days"][k], r), '=IF(AND(ISNUMBER(%(exp)s),ISNUMBER($A%(r)d)),%(exp)s-WORKDAY($A%(r)d,1,%(hol)s),"")' % f, fmt="0")
+            # (a day without a price for the contract - not listed yet, a hole in the history - is left out: an
+            #  empty cell of a spilled BDH block counts as 0, which would otherwise be drawn as a rate of -333 %)
+            b.set("%s%d" % (C["imp"][k], r), ('=IFERROR(IF(AND(ISNUMBER(%(g)s),N(%(px)s)>0,N($B%(r)d)>0,N(%(g)s)>0),'
+                                              '((%(px)s/$B%(r)d)*(1+%(usd)s/100*%(g)s/360)-1)*360/%(g)s*100,""),"")') % f, fmt="0.00")
+            own = dict(same, **{"M%d" % R: f["px"], "$L%d" % R: "$B%d" % r, "$M$9": f["exp"]})
+            b.set("%s%d" % (C["baz"][k], r), '=IF(ISNUMBER($%s%d),%s,"")' % (C["imp"][k], r, transplant(basis_text, own).lstrip("=")), fmt="0.0")
+            b.set("%s%d" % (C["ois360"][k], r), '=IF(AND(ISNUMBER($%(imp)s%(r)d),ISNUMBER($%(baz)s%(r)d)),$%(imp)s%(r)d-$%(baz)s%(r)d/100,"")' % f,
+                  fmt="0.00")
+    # ---- today: the VİOP sheet's live row
+    L = VH_SOURCE_LIVE
+    b.set("A%d" % live, '=IF(ISNUMBER(VIOP!$K$%d),VIOP!$K$%d,"")' % (L, L), fmt=DATE)
+    b.set("B%d" % live, '=IF(ISNUMBER(VIOP!$L$%d),VIOP!$L$%d,"")' % (L, L), fmt=NUM4)
+    for k in range(VH_SLOTS):
+        f = {"sel": "$%s$3" % slots[k], "exp": "$%s$5" % slots[k], "r": live, "L": L, "g": "$%s%d" % (C["days"][k], live),
+             "imp": C["imp"][k], "baz": C["baz"][k], "hol": _VH_HOLIDAYS}
+        f["usd"] = usd.format(g=f["g"], **{n: "VIOP!$%s$%d" % (c, L) for n, c in zip("abcd", _VH_USD)})
+        f["px"] = "INDEX(VIOP!$M$%(L)d:$X$%(L)d,%(sel)s)" % f
+        f["b"] = "INDEX(VIOP!$AJ$%(L)d:$AU$%(L)d,%(sel)s)" % f
+        b.set("%s%d" % (C["days"][k], live), ('=IF(AND(ISNUMBER(%(exp)s),ISNUMBER(VIOP!$K$%(L)d)),'
+                                             '%(exp)s-WORKDAY(VIOP!$K$%(L)d,1,%(hol)s),"")') % f, fmt="0")
+        b.set("%s%d" % (C["imp"][k], live), ('=IFERROR(IF(AND(ISNUMBER(%(g)s),N(%(px)s)>0,N(VIOP!$L$%(L)d)>0,N(%(g)s)>0),'
+                                            '((%(px)s/VIOP!$L$%(L)d)*(1+%(usd)s/100*%(g)s/360)-1)*360/%(g)s*100,""),"")') % f, fmt="0.00")
+        b.set("%s%d" % (C["baz"][k], live), '=IFERROR(IF(AND(ISNUMBER($%(imp)s%(r)d),ISNUMBER(%(b)s)),%(b)s,""),"")' % f, fmt="0.0")
+        b.set("%s%d" % (C["ois360"][k], live), '=IF(AND(ISNUMBER($%(imp)s%(r)d),ISNUMBER($%(baz)s%(r)d)),$%(imp)s%(r)d-$%(baz)s%(r)d/100,"")' % f,
+              fmt="0.00")
+
+
 #: book -> (name, precondition, builder) of each addition
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
-    "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold)),
+    "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
+            (VH_SHEET, _viop_hist_check, _tto_viop_history)),
 }
 
 
