@@ -1,0 +1,7 @@
+# Windows batch files keep their CRLF line endings exactly as committed (labels need them)
+*.bat -text
+# bundled packages and workbooks are binary
+*.whl binary
+*.xlsx binary
+*.xlsm binary
+*.gz binary

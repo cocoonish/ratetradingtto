@@ -7,6 +7,9 @@
     python -m tto import-workbook workbooks/TTO_v8_5.xlsm --id tto
     python -m tto import-workbook workbooks/BBG_Borsa_Swap.xlsx --id borsa --password ...   # a file with a password to open
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
+
+Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
+(see ``tto/bundled.py``).
 """
 from __future__ import annotations
 
@@ -66,12 +69,19 @@ def cmd_run(args) -> int:
     except ValueError as exc:
         print("HATA: %s" % exc, file=sys.stderr)
         return 2
+    from . import bundled
+    try:
+        packages = bundled.enable()                # the web packages: installed, or the copies in vendor/
+    except bundled.BundleError as exc:
+        print("HATA: %s" % exc, file=sys.stderr)
+        return 2
     import uvicorn
 
     from .server import create_app
     app = create_app(settings=settings)
     shown = "localhost" if settings.host in ("0.0.0.0", "::") else settings.host
-    print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s)" % (shown, settings.port, settings.mode, settings.data_dir))
+    how = ", web paketleri: gömülü kopya (vendor/%s)" % packages["bundled"] if packages["bundled"] else ""
+    print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
     return 0
 
@@ -90,6 +100,8 @@ def cmd_import(args) -> int:
 
 
 def cmd_check(args) -> int:
+    from . import bundled
+    bundled.add_local()                            # a blpapi dropped into vendor/local
     try:
         from .marketdata.bloomberg import check_connection
     except ImportError as exc:
@@ -99,6 +111,14 @@ def cmd_check(args) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:                                       # a console that cannot show a Turkish letter must not stop the start
+            stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+    if sys.version_info < (3, 8):
+        print("HATA: Python %d.%d cok eski; en az Python 3.8 gerekir." % sys.version_info[:2], file=sys.stderr)
+        return 2
     args = build_parser().parse_args(argv)
     if args.command == "import-workbook":
         return cmd_import(args)

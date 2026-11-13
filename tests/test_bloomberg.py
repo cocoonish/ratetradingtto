@@ -414,9 +414,10 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
         assert sum(1 for k, v in expected.items() if k[0] in ("borsa", "asw") and isinstance(v, float)) > 5000
         st = provider.status()
         # four workbooks: the BIST swap sheet alone watches 800 tickers (bid, ask and their sizes).  Each item is
-        # asked once and the requests are batched (how finely depends on timing: several items per request)
+        # asked once and the requests are batched - how finely depends on how fast the cells are evaluated (some
+        # ten items per request here, four on a slow interpreter), so only "clearly batched" is asserted
         assert st["subscriptions"] > 900 and st["hits_today"] < 6000 and not st["error"]
-        assert st["hits_today"] == warm["items"] and st["requests"] < st["hits_today"] / 5
+        assert st["hits_today"] == warm["items"] and st["requests"] < st["hits_today"] / 2
 
         # a tick moves the curve: both sides again agree after the change
         tickers = sorted({k[1] for k in snapshot if k[0] == "BDP" and k[1].startswith("TYSO") and k[2] == "PX_LAST"})

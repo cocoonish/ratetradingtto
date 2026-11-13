@@ -24,6 +24,38 @@ kayıtlı son veriyle çalışır.
 
 ## Hızlı başlangıç
 
+### Hiçbir şey kurmadan
+
+Bilgisayarda **Python 3.8 ya da üstü** olması yeterlidir; `pip install` da Git de gerekmez.
+
+1. GitHub'da (giriş yapmış olarak) repo sayfası → yeşil **Code** düğmesi → **Download ZIP**; zip'i bir klasöre açın.
+   Repo private kalabilir.
+2. Klasördeki `run.bat`'a çift tıklayın — ya da o klasörde bir komut penceresinde:
+
+```bash
+python -m tto
+```
+
+3. Tarayıcıdan `http://localhost:1057` (başka bilgisayardan `http://<makine-adı>:1057`).
+
+Web sunucusunun ihtiyaç duyduğu paketler (Starlette, uvicorn ve bağımlılıkları) `vendor/` klasöründe gömülü gelir
+ve kurulmadan, doğrudan oradan kullanılır; açılış satırında `web paketleri: gömülü kopya (vendor/py310)` yazar
+(ayrıntı: [vendor/README.md](vendor/README.md)). Bu yol Python 3.8, 3.9, 3.10, 3.11, 3.12 ve 3.13'te, hiçbir paket
+kurulu olmayan bir Python'la denendi.
+
+* **Python var mı?** Komut penceresinde `python --version` (ya da `py --version`). Hiç yoksa python.org'daki
+  *Windows embeddable package (64-bit)* zip'i de kurulum istemez: içindekileri proje klasörüne açıp
+  `python.exe -m tto` çalıştırılır. Bu yol bu ortamda denenemedi.
+* **Güncelleme:** yeni ZIP'i indirip eskisinin üzerine açın; `data` klasörüne dokunmayın (kullanıcılar, senaryolar,
+  RET geçmişi ve işlem defteri orada).
+* **Güvenlik duvarı sorusu** çıkarsa ve yalnızca kendi bilgisayarınızdan kullanacaksanız `python -m tto --host 127.0.0.1`
+  ile açın; soru çıkmaz.
+* **Canlı Bloomberg verisi** için o Python'da `blpapi` paketi bulunmalıdır (`python -c "import blpapi"` hata
+  vermiyorsa vardır). Yoksa dashboard kayıtlı veriyle açılır. Kurulamıyorsa, kurulum gerektirmeyen yol
+  [vendor/README.md](vendor/README.md) içinde (`vendor/local`).
+
+### Kurulum yapılabilen bir makinede
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -32,8 +64,7 @@ pip install -r requirements.txt
 python -m tto
 ```
 
-Tarayıcıdan `http://<makine-adı>:1057` adresine girin. Windows'ta `run.bat`'a çift tıklamak da aynı işi yapar.
-Python 3.11, 3.12 ve 3.13 ile sınandı (kod 3.9 sözdizimiyle uyumlu yazıldı).
+Kurulu paketler varsa gömülü kopyalar yerine onlar kullanılır. Test paketi Python 3.13 ve 3.8'de koşturuldu.
 
 Bloomberg terminalinin olduğu makinede bir kez:
 
@@ -319,7 +350,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~4 dk). 562 test:
+Bloomberg ve ağ gerekmez (~4 dk). 570 test:
 
 | Dosya | Kapsam |
 |---|---|
@@ -333,6 +364,7 @@ Bloomberg ve ağ gerekmez (~4 dk). 562 test:
 | `test_workbook_features.py` | Gizli sütunlar, dondurulmuş bölmeler, yorumlar, veri çubukları, kısayollar, resim, aralıktan okunan açılır listeler, Excel yerleşimiyle yapıştırma, gün sonu arşivi (.xlsx yazıcı dahil), hücreden okunan başlık / notlar, şifreli dosyanın içe aktarılması |
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma, port kuralı |
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda |
+| `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik (kota büyüklükleri dahil), sessiz kalan kotaların giderek seyrek sorulması, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik (dört kitap) |
 | `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 117 kontrol: giriş, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu, XY grafiği), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, forward kotasyon matrisi, altın swap faizi girişi ve VİOP tablosunun değişmesi, Borsa Swap, DİBS ASW, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
 
@@ -394,10 +426,12 @@ tto/blotter.py     forward fiyatlama, OIS strateji bacakları, pozisyon maliyeti
 tto/xlsx.py        gün sonu arşivi için küçük .xlsx yazıcı (yalnızca değerler ve biçimler)
 tto/server.py      HTTP API + canlı güncelleme (server-sent events)
 tto/store.py       SQLite (kullanıcılar, girdiler, senaryolar, RET geçmişi, işlemler)  →  data/tto.db
+tto/bundled.py     kurulu değilse web paketlerini vendor/ altındaki wheel'lerden içe aktarır
 tto/views/         sayfa tanımları
 tto/data/          kayıtlı veri modunda kullanılan ek kotalar (replay_*.json)
 tto/static/        arayüz (derleme gerektirmeyen ES modülleri, kendi SVG grafikleri)
 models/            içe aktarılmış çalışma kitapları        workbooks/   kaynak Excel dosyaları
+vendor/            gömülü web paketleri (değiştirilmemiş PyPI wheel'leri; Python 3.8 / 3.9 / 3.10+ setleri)
 tools/             parite, LibreOffice referansı, içe aktarma, kayıtlı veri kotaları
 tests/             test paketi
 ```
