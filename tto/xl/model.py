@@ -15,7 +15,7 @@ from .errors import XlError
 from .tokenizer import index_to_col, col_to_index
 
 COLS = 16384
-MODEL_VERSION = 5
+MODEL_VERSION = 7
 
 
 def pack(row: int, col: int) -> int:
@@ -53,7 +53,8 @@ def parse_range(ref: str) -> Tuple[int, int, int, int]:
 
 class Sheet(object):
     __slots__ = ("name", "index", "state", "consts", "fml", "arr", "members", "cached", "styles",
-                 "max_row", "max_col", "merges", "col_widths", "validations", "dyn", "cf", "charts")
+                 "max_row", "max_col", "merges", "col_widths", "validations", "dyn", "cf", "charts",
+                 "hidden_rows", "hidden_cols", "freeze", "links", "comments", "images")
 
     def __init__(self, name: str, index: int, state: str = "visible"):
         self.name = name
@@ -73,6 +74,24 @@ class Sheet(object):
         self.dyn: set = set()                     # anchors flagged as dynamic arrays (cm attribute)
         self.cf: List[Dict[str, Any]] = []        # conditional-formatting rules
         self.charts: List[Dict[str, Any]] = []    # charts drawn on the sheet (series are range references)
+        self.hidden_rows: List[List[int]] = []    # [first, last] runs of rows hidden in Excel
+        self.hidden_cols: List[List[int]] = []    # [first, last] runs of columns hidden in Excel
+        self.freeze: List[int] = [0, 0]           # frozen panes: [rows, columns]
+        self.links: List[Dict[str, str]] = []     # in-workbook hyperlinks: ref, location, display
+        self.comments: Dict[int, str] = {}        # rc -> cell comment
+        self.images: List[Dict[str, Any]] = []    # pictures on the sheet (base64) with their anchor cells
+
+    def col_hidden(self, col: int) -> bool:
+        for a, b in self.hidden_cols:
+            if a <= col <= b:
+                return True
+        return False
+
+    def row_hidden(self, row: int) -> bool:
+        for a, b in self.hidden_rows:
+            if a <= row <= b:
+                return True
+        return False
 
 
 class Model(object):
@@ -132,6 +151,12 @@ class Model(object):
                 "dyn": sorted(s.dyn),
                 "cf": s.cf,
                 "charts": s.charts,
+                "hidden_rows": s.hidden_rows,
+                "hidden_cols": s.hidden_cols,
+                "freeze": s.freeze,
+                "links": s.links,
+                "comments": [[k, v] for k, v in sorted(s.comments.items())],
+                "images": s.images,
             })
         return {
             "version": MODEL_VERSION,
@@ -176,6 +201,12 @@ class Model(object):
             s.dyn = set(sd.get("dyn", []))
             s.cf = list(sd.get("cf", []))
             s.charts = list(sd.get("charts", []))
+            s.hidden_rows = [list(x) for x in sd.get("hidden_rows", [])]
+            s.hidden_cols = [list(x) for x in sd.get("hidden_cols", [])]
+            s.freeze = list(sd.get("freeze", [0, 0]))
+            s.links = list(sd.get("links", []))
+            s.comments = {int(k): v for k, v in sd.get("comments", [])}
+            s.images = list(sd.get("images", []))
         return m
 
     def save(self, path: str) -> None:

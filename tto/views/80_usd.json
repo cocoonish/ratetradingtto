@@ -172,6 +172,7 @@
    "spec": {
     "title": "FOMC ima patikası ve senaryolar (O/N %)",
     "kind": "line",
+    "auto": "fit",
     "series": [
      {
       "name_ref": "SOFR_FOMC!$K$73",
@@ -232,6 +233,7 @@
    "spec": {
     "title": "SOFR OIS eğrisi · kota ve patika fiyatı (%)",
     "kind": "line",
+    "auto": "fit",
     "series": [
      {
       "name_ref": "SOFR_FOMC!$E$47",

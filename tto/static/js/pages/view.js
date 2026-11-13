@@ -74,12 +74,8 @@ export class ViewPage {
     const search = h('input', { class: 'inp', type: 'search', placeholder: 'Tablo ara…', style: { width: '190px' }, value: this.filter });
     search.addEventListener('input', () => { this.filter = search.value; this.applyFilter(); });
     const allBtn = h('button', { class: 'btn sm' + (this.showAll ? ' on' : ''), type: 'button',
-      title: 'Grafik verisi ve ara hesap tablolarını da göster' }, 'Yardımcı tablolar');
-    allBtn.addEventListener('click', () => {
-      this.showAll = !this.showAll;
-      setPref('tto.all.' + this.id, this.showAll ? '1' : '0');
-      this.load().catch(errorToast);
-    });
+      title: 'Excel\'de gizli sütunları, grafik verisi ve ara hesap tablolarını da göster' }, 'Yardımcı tablolar');
+    allBtn.addEventListener('click', () => this.toggleAll());
     const resetBtn = h('button', { class: 'btn sm', type: 'button', title: 'Bu çalışma kitabındaki kişisel girdilerimi sil' }, 'Girdilerimi sıfırla');
     resetBtn.addEventListener('click', async () => {
       const ok = await confirmDialog('Girdileri sıfırla',
@@ -97,11 +93,41 @@ export class ViewPage {
         h('span', null, h('i', { class: 'sw-sh' }), 'ortak girdi (herkes görür)'),
         h('span', { class: 'muted' }, data.ms + ' ms'))));
 
+    if (data.links && data.links.length) {
+      // the workbook's own "go to" links: other pages, straight to the table they point at
+      const bar = h('div', { class: 'shortcuts' }, h('span', { class: 'lbl' }, 'Kısayollar'));
+      for (const l of data.links) {
+        const a = h('a', { class: 'chip', href: '#/' + l.page + (l.panel ? '?p=' + encodeURIComponent(l.panel) : ''),
+          title: 'Excel\'deki köprü: ' + l.ref }, l.label);
+        a.addEventListener('click', (e) => { e.preventDefault(); this.ctx.goto(l.page, l.panel); });
+        bar.appendChild(a);
+      }
+      this.host.appendChild(bar);
+    }
     if (data.note) this.host.appendChild(h('div', { class: 'banner' }, data.note));
     const wrap = h('div', { class: 'panels' });
     for (const p of data.panels) wrap.appendChild(this.panel(p));
     this.host.appendChild(wrap);
     this.applyFilter();
+  }
+
+  toggleAll() {
+    this.showAll = !this.showAll;
+    setPref('tto.all.' + this.id, this.showAll ? '1' : '0');
+    return this.load().catch(errorToast);
+  }
+
+  /** Bring a panel into view (opening it if it is collapsed) and mark it for a moment. */
+  focusPanel(panelId) {
+    const it = this.items.get(panelId);
+    if (!it) return false;
+    if (this.filter) { this.filter = ''; const box = this.host.querySelector('.page-tools input[type=search]'); if (box) box.value = ''; this.applyFilter(); }
+    if (it.el.classList.contains('collapsed') && it.toggle) it.toggle(false);
+    it.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    it.el.classList.remove('focus');
+    void it.el.offsetWidth;                       // restart the highlight
+    it.el.classList.add('focus');
+    return true;
   }
 
   applyFilter() {
@@ -130,6 +156,10 @@ export class ViewPage {
 
     if (p.error) {
       body.appendChild(h('div', { class: 'err' }, p.error));
+    } else if (p.type === 'image') {
+      const img = h('img', { class: 'sheet-image', src: p.src, alt: p.title || 'Resim', loading: 'lazy' });
+      if (p.width) img.style.maxWidth = p.width + 'px';
+      body.appendChild(img);
     } else if (p.type === 'chart') {
       if (p.data) {
         const chartHost = h('div');
@@ -155,17 +185,25 @@ export class ViewPage {
     } else if (p.data) {
       it.grid = new Grid({ book: this.book, data: p.data, editable: true });
       body.appendChild(it.grid.el);
+      if (p.data.hc) {
+        // Excel hides some columns of this table: say so, one click shows them
+        const more = h('button', { class: 'iconbtn hc', type: 'button',
+          title: 'Bu tabloda Excel\'de gizli ' + p.data.hc + ' sütun var. Göstermek için tıklayın (Yardımcı tablolar).' },
+        '+' + p.data.hc + ' gizli sütun');
+        more.addEventListener('click', () => this.toggleAll());
+        head.insertBefore(more, tools);
+      }
       const cp = h('button', { class: 'iconbtn', type: 'button', title: 'Tüm tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
       cp.addEventListener('click', () => copyGrid(it.grid, false));
       tools.appendChild(cp);
     }
     const col = h('button', { class: 'iconbtn', type: 'button', title: 'Daralt / aç' }, collapsed ? '▸' : '▾');
-    col.addEventListener('click', () => {
-      const now = !el.classList.contains('collapsed');
+    it.toggle = (now) => {
       el.classList.toggle('collapsed', now);
       col.textContent = now ? '▸' : '▾';
       setPref(key, now ? '1' : '0');
-    });
+    };
+    col.addEventListener('click', () => it.toggle(!el.classList.contains('collapsed')));
     tools.appendChild(col);
     if (p.note) el.appendChild(h('div', { class: 'note' }, p.note));
     this.items.set(p.id, it);

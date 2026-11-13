@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import concurrent.futures
 import datetime as _dt
+import json
 import os
 import queue
 import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote as _quote
 
 from . import blotter as bl
 from .books import Book, formula_text, load_books, snapshot_today
@@ -140,6 +142,8 @@ class Service(object):
         self.renderers = {bid: Renderer(b) for bid, b in self.books.items()}
         self.views = [v for v in load_views() if v["book"] in self.books]
         self.view_index = {v["id"]: v for v in self.views}
+        self._shortcut_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._snapshot_mark: Dict[str, int] = {}
         for v in self.views:
             book = self.books[v["book"]]
             for inp in v.get("inputs", []):
@@ -401,7 +405,8 @@ class Service(object):
             try:
                 if p["type"] in ("table", "notes"):
                     entry["range"] = p["range"]
-                    entry["data"] = R.table(calc, sheet, p["range"], loc, overlay)
+                    # columns hidden in Excel stay out of the way until the helper tables are asked for
+                    entry["data"] = R.table(calc, sheet, p["range"], loc, overlay, show_hidden=show_hidden)
                     if p.get("lift", True):
                         own = _lift_title(entry["data"])
                         if own and not p.get("keep_title"):
@@ -431,8 +436,82 @@ class Service(object):
                     continue
                 panels.append({"id": "chart%d" % i, "type": "chart", "title": data["title"], "data": data,
                                "anchor": ch["anchor"], "hidden": False, "wide": False})
-        return {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
-                "panels": panels, "ms": int((time.time() - t0) * 1000), "note": v.get("note")}
+        sheet_obj = book.model.sheets[book.model.sheet_index[sheet_default]] if sheet_default else None
+        if sheet_obj is not None:
+            # pictures pasted on the sheet come after the tables
+            for i, img in enumerate(sheet_obj.images):
+                panels.append({"id": "image%d" % i, "type": "image", "title": v.get("image_titles", {}).get(str(i)) or "Excel'deki resim",
+                               "src": "/api/image?book=%s&sheet=%s&i=%d" % (book.id, _quote(sheet_default), i),
+                               "width": img.get("width"), "height": img.get("height"), "hidden": False, "wide": True})
+        out = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
+               "panels": panels, "ms": int((time.time() - t0) * 1000), "note": v.get("note")}
+        links = self._shortcuts(v)
+        if links:
+            out["links"] = links
+        return out
+
+    def _shortcuts(self, v: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The sheet's own hyperlinks ("go to OIS_MAIN!A7") as page + panel targets of the dashboard."""
+        cached = self._shortcut_cache.get(v["id"])
+        if cached is not None:
+            return cached
+        out: List[Dict[str, Any]] = []
+        book = self.books[v["book"]]
+        sheet_name = v.get("sheet")
+        sheet = book.model.sheets[book.model.sheet_index[sheet_name]] if sheet_name else None
+        by_sheet: Dict[str, Dict[str, Any]] = {}
+        for other in self.views:
+            if other["book"] == v["book"] and other.get("sheet"):
+                by_sheet.setdefault(other["sheet"], other)
+        for link in (sheet.links if sheet is not None else []):
+            target_sheet, _, addr = link["location"].rpartition("!")
+            target_sheet = target_sheet.strip("'")
+            label = (link.get("display") or "").strip()
+            if not label or not addr:
+                continue
+            try:
+                r, c = divmod(parse_a1(addr.replace("$", "").split(":")[0]), COLS)
+            except Exception:  # noqa: BLE001
+                continue
+            if target_sheet == bl.SHEET and "tto" in self.books:
+                out.append({"label": label, "page": "blotter", "panel": None, "ref": link["location"]})
+                continue
+            page = by_sheet.get(target_sheet)
+            if page is None:
+                continue
+            best, best_score = None, None
+            for p in page["panels"]:
+                if p["type"] not in ("table", "notes") or p.get("hidden") or p.get("sheet", target_sheet) != target_sheet:
+                    continue
+                try:
+                    r1, c1, r2, c2 = parse_range(p["range"])
+                except Exception:  # noqa: BLE001
+                    continue
+                if r1 <= r <= r2 and c1 <= c <= c2:
+                    score = (0, (r2 - r1 + 1) * (c2 - c1 + 1))            # inside: the tightest panel
+                else:
+                    # the link points at a heading just above / beside the table it means
+                    dr = r1 - r if r1 >= r else (r - r2 if r > r2 else 0)
+                    dc = c1 - c if c1 >= c else (c - c2 if c > c2 else 0)
+                    score = (1, dr * 4 + dc * 12 + (40 if r1 < r else 0))
+                if best_score is None or score < best_score:
+                    best, best_score = p, score
+            out.append({"label": label, "page": page["id"], "panel": best.get("id") if best is not None else None,
+                        "ref": link["location"]})
+        self._shortcut_cache[v["id"]] = out
+        return out
+
+    def image(self, book_id: str, sheet: str, index: int) -> Tuple[bytes, str]:
+        """A picture of the workbook: (bytes, mime type)."""
+        import base64
+        book = self._book(book_id)
+        si = book.model.sheet_index.get(sheet)
+        if si is None:
+            raise ServiceError("sayfa bulunamadı: %s" % sheet, 404)
+        images = book.model.sheets[si].images
+        if not 0 <= index < len(images):
+            raise ServiceError("resim bulunamadı", 404)
+        return base64.b64decode(images[index]["data"]), images[index]["mime"]
 
     def header(self, user: Optional[str], locale: Optional[str] = None) -> Dict[str, Any]:
         """Top strip: spot / TLREF / spot date ... read from MASA row 1-2 (labels) and its status row."""
@@ -510,18 +589,19 @@ class Service(object):
 
     # ================================================================== inputs
     def set_inputs(self, user: str, book_id: str, items: List[Dict[str, Any]], allow_adhoc: bool = False,
-                   lang: Optional[str] = None) -> Dict[str, Any]:
+                   lang: Optional[str] = None, lenient: bool = False) -> Dict[str, Any]:
         """items: [{"ref": "Forward!D2", "value": "03.12.2026"} ...] (value None / "" clears).
 
         ``lang`` is the number format the texts were typed / copied in ("tr": 1.234,56 – "en": 1,234.56).
+        ``lenient`` (a block pasted from Excel): cells that are not inputs are skipped and counted, not errors.
         """
         user = self.require_user(user)
-        res = self.et.call(self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale)
+        res = self.et.call(self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
         self.bump()
         res["gen"] = self.gen
         return res
 
-    def _set_inputs(self, user, book_id, items, allow_adhoc, lang="tr") -> Dict[str, Any]:
+    def _set_inputs(self, user, book_id, items, allow_adhoc, lang="tr", lenient=False) -> Dict[str, Any]:
         book = self._book(book_id)
         if len(items) > 20000:
             raise ServiceError("çok fazla hücre")
@@ -529,6 +609,7 @@ class Service(object):
         user_clear: List[Tuple[int, int]] = []
         shared_vals: Dict[Tuple[int, int], Any] = {}
         errors: List[str] = []
+        skipped = 0
         for it in items:
             ref = it.get("ref")
             try:
@@ -538,6 +619,9 @@ class Service(object):
                 continue
             d = book.inputs.get((si, rc))
             if d is None:
+                if lenient and not allow_adhoc:
+                    skipped += 1
+                    continue
                 if not allow_adhoc:
                     errors.append("%s: girdi hücresi değil" % ref)
                     continue
@@ -573,7 +657,10 @@ class Service(object):
                 self.store.set_user_inputs(user, book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in user_vals.items()})
             if user_clear:
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in user_clear])
-        return {"applied": len(shared_vals) + len(user_vals) + len(user_clear), "errors": errors}
+        res: Dict[str, Any] = {"applied": len(shared_vals) + len(user_vals) + len(user_clear), "errors": errors}
+        if lenient:
+            res["skipped"] = skipped
+        return res
 
     def paste(self, user: str, book_id: str, anchor: str, text: str, allow_adhoc: bool = False,
               lang: Optional[str] = None) -> Dict[str, Any]:
@@ -774,12 +861,163 @@ class Service(object):
                 except Exception as exc:  # noqa: BLE001
                     sheet_panels.append({"id": pid, "title": title, "error": str(exc)[:200]})
             out["sheet"] = sheet_panels
-            self.store.save_blotter_snapshot(date, {"sheet": sheet_panels})
+            # the day's archive: the summary tables as shown and the whole sheet as values (what the workbook's
+            # end-of-day macro saved); written only when something changed
+            snap = {"sheet": sheet_panels, "cells": self._blotter_cells(book, calc)}
+            mark = hash(json.dumps(snap, ensure_ascii=False, sort_keys=True, default=str))
+            if self._snapshot_mark.get(date) != mark:
+                self.store.save_blotter_snapshot(date, snap)
+                self._snapshot_mark = {date: mark}
         else:
             snap = self.store.blotter_snapshot(date)
             out["sheet"] = snap.get("sheet") if snap else []
             out["snapshot_at"] = snap.get("snapshot_at") if snap else None
         return out
+
+    @staticmethod
+    def _blotter_cells(book, calc) -> List[List[Any]]:
+        """Every non-empty cell of the blotter sheet as [row, column, value]: the sheet "as values"."""
+        si = book.model.sheet_index[bl.SHEET]
+        sh = book.model.sheets[si]
+        out: List[List[Any]] = []
+        for r in range(1, sh.max_row + 1):
+            for c in range(1, sh.max_col + 1):
+                v = calc.get(si, r, c)
+                if v is None or v == "":
+                    continue
+                out.append([r, c, {"e": v.code} if type(v) is XlError else v])
+        return out
+
+    def blotter_export(self, user: Optional[str], date: Optional[str] = None,
+                       locale: Optional[str] = None) -> Tuple[bytes, str]:
+        """The day's blotter as an .xlsx file (values only) and its file name ``Blotter_yyyy.mm.dd.xlsx``.
+
+        This is the dashboard's version of the workbook's ``GunSonuArsivle`` macro.  Sheet 1 has the blotter
+        sheet in Excel's own layout, as values; sheet 2 lists the trades with who entered them and the cost of
+        the net positions.  Nothing has to be cleared for the next day: every day has its own list.
+        """
+        return self.et.call(self._blotter_export, user, date, locale)
+
+    def _blotter_export(self, user, date, locale) -> Tuple[bytes, str]:
+        from .xlsx import XlsxBook
+        data = self._blotter(user, date, locale)
+        book = self._book("tto")
+        si = book.model.sheet_index[bl.SHEET]
+        sh = book.model.sheets[si]
+        day = _dt.date.fromisoformat(data["date"])
+        wb = XlsxBook()
+
+        # ---- sheet 1: the blotter sheet as Excel lays it out, values only
+        ws = wb.add_sheet(bl.SHEET)
+        if data["is_today"]:
+            cells = self._blotter_cells(book, book.engine.shared)
+        else:
+            snap = self.store.blotter_snapshot(data["date"]) or {}
+            cells = snap.get("cells")
+            if cells is None:
+                # a day archived before whole-sheet snapshots existed: captions, the trades, the saved summaries
+                grid: Dict[Tuple[int, int], Any] = {}
+                for rc, v in sh.consts.items():
+                    grid[divmod(rc, COLS)] = v
+                for (_, rc), v in bl.sheet_values(book, data["trades"]).items():
+                    if v is None:
+                        grid.pop(divmod(rc, COLS), None)
+                    else:
+                        grid[divmod(rc, COLS)] = v
+                for panel in snap.get("sheet") or []:
+                    t = panel.get("data") or {}
+                    for i, row in enumerate(t.get("rows") or []):
+                        for j, cell in enumerate(row):
+                            if cell.get("sk"):
+                                continue
+                            r, c = t["r"][i], parse_a1("%s1" % t["c"][j]) % COLS
+                            if "v" in cell:
+                                grid[(r, c)] = cell["v"]
+                            elif cell.get("t"):
+                                grid[(r, c)] = cell["t"]
+                cells = [[r, c, v] for (r, c), v in sorted(grid.items())]
+        for r, c, v in cells:
+            if isinstance(v, dict):
+                v = XlError(v.get("e", "#N/A"))
+            elif isinstance(v, int) and not isinstance(v, bool):
+                v = float(v)
+            # rows the workbook left empty carry no format of their own: a list row looks like the list's first row
+            xf_i = sh.styles.get(r * COLS + c) or (sh.styles.get(3 * COLS + c, 0) if r > 3 else 0)
+            xf = book.model.xfs[xf_i] if xf_i < len(book.model.xfs) else book.model.xfs[0]
+            ws.set(r, c, v, fmt=xf[0], bold=bool(xf[1]), align=xf[4] if xf[4] in ("left", "center", "right") else None)
+        ws.widths = {c: w for c, w in sh.col_widths.items() if c <= sh.max_col}
+        ws.merges = [m for m in sh.merges]
+        ws.freeze = (sh.freeze[0], sh.freeze[1]) if len(sh.freeze) > 1 else (0, 0)
+
+        # ---- sheet 2: the trades as entered, and the cost of the net positions
+        ls = wb.add_sheet("İşlem listesi")
+        names = {u["name"]: u["display"] for u in self.store.users()}
+        who = lambda t: names.get(t.get("created_by"), t.get("created_by") or "")          # noqa: E731
+        clock = lambda t: (t.get("created_at") or "")[11:19]                                 # noqa: E731
+        basis = {"RET_BID": "RET bid", "RET_MID": "RET mid", "RET_ASK": "RET ask", "TRY": "TRY faizi", "FWD": "Forward kur"}
+        role = {"outright": "Outright", "short": "Kısa", "long": "Uzun", "wing1": "Kanat 1", "body": "Gövde",
+                "wing2": "Kanat 2", "start": "Başlangıç", "end": "Bitiş"}
+        INT, AMT, FX, P3, P4, BP, DATE = "#,##0", "#,##0.00", "#,##0.0000", "0.000%", "0.0000%", "#,##0.00", "dd.mm.yyyy"
+        ls.set(1, 1, "Günlük İşlemler · %s" % day.strftime("%d.%m.%Y"), bold=True)
+        ls.set(2, 1, "Dışa aktarım: %s%s" % (_dt.datetime.now().strftime("%d.%m.%Y %H:%M"),
+                                              " · %s" % names.get(user, user) if user else ""))
+        row = 4
+
+        def table(title: str, header: List[str], rows: List[List[Any]], fmts: List[Optional[str]]) -> None:
+            nonlocal row
+            ls.set(row, 1, title, bold=True)
+            row += 1
+            ls.row(row, 1, header, bold=True, fill="E7E6E6")
+            row += 1
+            if not rows:
+                ls.set(row, 1, "kayıt yok")
+                row += 1
+            for line in rows:
+                for k, v in enumerate(line):
+                    ls.set(row, 1 + k, float(v) if isinstance(v, int) and not isinstance(v, bool) else v, fmt=fmts[k])
+                row += 1
+            row += 1
+
+        trades = data["trades"]
+        fw = [t for t in trades if t["kind"] == "fwd"]
+        table("USDTRY Forward", ["Saat", "Kullanıcı", "Yön", "Tutar (USD)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
+                                 "Fiyatlama", "Karşı taraf", "Not"],
+              [[clock(t), who(t), "ALIŞ" if t["dir"] == "B" else "SATIŞ", t.get("amount"), t.get("value_date"), t.get("days"),
+                t.get("try_rate"), t.get("forward"), t.get("tl"), basis.get(t.get("basis"), t.get("basis") or ""),
+                t.get("cpt") or "", t.get("note") or ""] for t in fw],
+              [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None])
+        seen = set()
+        ois_rows = []
+        for t in (x for x in trades if x["kind"] == "ois"):
+            first = not t.get("package") or t["package"] not in seen
+            if t.get("package"):
+                seen.add(t["package"])
+            ois_rows.append([clock(t), who(t), t.get("label") or "", role.get(t.get("role"), t.get("role") or ""),
+                             "RECEIVE" if t["dir"] == "S" else "PAY", t.get("tenor"), t.get("rate"), t.get("nominal"), t.get("dv01"),
+                             t.get("cost_bp") if first else None, t.get("cost_usd") if first else None, t.get("cpt") or "",
+                             t.get("note") or ""])
+        table("OIS", ["Saat", "Kullanıcı", "İşlem", "Bacak", "Yön", "Vade", "Oran", "Nominal (TL)", "DV01 ($)", "Maliyet (bp)",
+                      "Maliyet ($)", "Karşı taraf", "Not"], ois_rows,
+              [None, None, None, None, None, None, P4, INT, INT, BP, INT, None, None])
+        bd = [t for t in trades if t["kind"] == "bond"]
+        table("Tahvil", ["Saat", "Kullanıcı", "Enstrüman", "Yön", "Tutar", "Fiyat", "Not"],
+              [[clock(t), who(t), t.get("instrument"), "ALIŞ" if t["amount"] >= 0 else "SATIŞ", abs(t["amount"]), t.get("price"),
+                t.get("note") or ""] for t in bd], [None, None, None, None, INT, FX, None])
+        cost = data.get("cost") or {"fwd": [], "ois": [], "bond": []}
+        table("Forward · pozisyon ve maliyet", ["Valör", "Alış (USD)", "Ort. alış kuru", "Satış (USD)", "Ort. satış kuru", "Net (USD)",
+                                                 "Maliyet (kur)", "Gerçekleşen K/Z (TL)"],
+              [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["fwd"]],
+              [DATE, INT, FX, INT, FX, INT, FX, AMT])
+        table("OIS · pozisyon ve maliyet", ["Vade", "Pay DV01 ($)", "Ort. pay", "Receive DV01 ($)", "Ort. receive", "Net DV01 ($)",
+                                             "Maliyet", "Gerçekleşen K/Z ($)"],
+              [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["ois"]],
+              [None, INT, P4, INT, P4, INT, P4, INT])
+        table("Tahvil · pozisyon ve maliyet", ["Enstrüman", "Alış", "Ort. alış", "Satış", "Ort. satış", "Net", "Maliyet",
+                                                "Gerçekleşen K/Z"],
+              [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["bond"]],
+              [None, INT, FX, INT, FX, INT, FX, AMT])
+        ls.autosize()
+        return wb.to_bytes(), "Blotter_%s.xlsx" % day.strftime("%Y.%m.%d")
 
     def quote_forward(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         return self.et.call(self._quote_forward, user, payload, lang)

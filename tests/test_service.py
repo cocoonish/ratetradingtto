@@ -30,6 +30,9 @@ def test_every_page_renders_without_errors(service, view_id):
     assert data["id"] == view_id and data["panels"]
     for p in data["panels"]:
         assert "error" not in p, (view_id, p["id"], p.get("error"))
+        if p["type"] == "image":                         # a picture of the sheet: served on its own
+            assert p["src"].startswith("/api/image?") and p["title"]
+            continue
         if p["type"] == "chart":
             d = p["data"]
             assert d["cats"] and d["series"], (view_id, p["id"])
@@ -44,7 +47,7 @@ def test_every_page_renders_without_errors(service, view_id):
 def test_visible_panels_have_content(service):
     for view_id in VIEW_IDS:
         for p in service.view(None, view_id)["panels"]:
-            if p["type"] != "chart":
+            if p["type"] not in ("chart", "image"):
                 assert any(c.get("t") for row in p["data"]["rows"] for c in row), (view_id, p["id"])
 
 

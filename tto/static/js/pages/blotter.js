@@ -134,8 +134,19 @@ export class BlotterPage {
     this.dateSel = h('select', { class: 'inp' });
     this.dateSel.addEventListener('change', () => { this.date = this.dateSel.value; this.load().catch(errorToast); });
     this.dayNote = h('span', { class: 'muted' });
+    // the workbook's end-of-day macro saved the sheet as values to Blotter_yyyy.mm.dd.xlsx: same file, as a download
+    this.exportBtn = h('button', { class: 'btn sm', type: 'button',
+      title: 'Seçili günün blotter\'ını Excel dosyası olarak indir (Blotter_yyyy.aa.gg.xlsx): sayfa Excel\'deki düzeniyle, yalnızca değerler; '
+        + 'ayrıca işlem listesi ve maliyet özeti. Excel\'deki "gün sonu arşivle" makrosunun karşılığıdır.' }, 'Gün sonu arşivi (.xlsx)');
+    this.exportBtn.addEventListener('click', async () => {
+      this.exportBtn.disabled = true;
+      try {
+        const res = await api.download('/api/blotter/export', { date: this.date || undefined }, 'Blotter.xlsx');
+        toast(res.name + ' indirildi', 'ok', 3200);
+      } catch (err) { errorToast(err); } finally { this.exportBtn.disabled = false; }
+    });
     this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'İşlem günü'), this.dateSel, this.dayNote,
-      h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Kaydedilen işlemler tüm kullanıcılarda anında görünür')));
+      this.exportBtn, h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Kaydedilen işlemler tüm kullanıcılarda anında görünür')));
 
     this.entry = h('div', { class: 'card entry' });
     const tabs = h('div', { class: 'tabs' });

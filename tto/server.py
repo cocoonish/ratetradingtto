@@ -107,6 +107,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().view, _user(request), request.path_params["view_id"], show, _lang(request)))
 
     @handler
+    async def image(request: Request):
+        q = request.query_params
+        try:
+            index = int(q.get("i", "0"))
+        except ValueError:
+            index = -1
+        raw, mime = await call(svc().image, q.get("book", "tto"), q.get("sheet", ""), index)
+        return Response(raw, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+
+    @handler
     async def cell(request: Request):
         q = request.query_params
         return ok(await call(svc().cell_info, _user(request), q.get("book", "tto"), q.get("ref", ""), _lang(request)))
@@ -129,7 +139,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         if not isinstance(items, list):
             raise ServiceError("items listesi gerekli")
         return ok(await call(svc().set_inputs, _user(request), str(data.get("book", "tto")), items,
-                             bool(data.get("adhoc")), _lang(request)))
+                             bool(data.get("adhoc")), _lang(request), bool(data.get("lenient"))))
 
     @handler
     async def paste(request: Request):
@@ -183,6 +193,12 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def blotter(request: Request):
         return ok(await call(svc().blotter, _user(request), request.query_params.get("date"), _lang(request)))
+
+    @handler
+    async def blotter_export(request: Request):
+        raw, name = await call(svc().blotter_export, _user(request), request.query_params.get("date"), _lang(request))
+        return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
 
     @handler
     async def quote_forward(request: Request):
@@ -258,6 +274,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/nav", nav),
         Route("/api/header", header),
         Route("/api/view/{view_id}", view),
+        Route("/api/image", image),
         Route("/api/cell", cell),
         Route("/api/grid", grid),
         Route("/api/sheets", sheets),
@@ -270,6 +287,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
         Route("/api/blotter", blotter),
+        Route("/api/blotter/export", blotter_export),
         Route("/api/blotter/quote/forward", quote_forward, methods=["POST"]),
         Route("/api/blotter/forward", add_forward, methods=["POST"]),
         Route("/api/blotter/quote/ois", quote_ois, methods=["POST"]),

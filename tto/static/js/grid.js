@@ -4,7 +4,7 @@ import { h, clear, menu, closeMenu, inFormControl, toast } from './ui.js';
 import { raw } from './format.js';
 
 const hooks = {
-  setInputs: null,     // async (book, items, adhoc) -> result
+  setInputs: null,     // async (book, items, adhoc, lenient) -> result   (lenient: cells that are not inputs are skipped)
   paste: null,         // async (book, anchorRef, text, adhoc) -> result
   reset: null,         // async (book, refs, shared) -> result
   onSelect: null,      // (info | null)
@@ -47,6 +47,8 @@ function cellClass(cell) {
   if (cell.f && cell.f !== 'in') cls += ' f-' + cell.f;
   if (cell.al) cls += ' al-' + cell.al;
   if (cell.ov) cls += ' ov';
+  if (cell.n) cls += ' nt';
+  if (typeof cell.bar === 'number') cls += ' bar bar-' + (cell.bc || 'info');
   if (cell.i) {
     cls += ' in';
     if (cell.i === 's') cls += ' sh';
@@ -56,7 +58,8 @@ function cellClass(cell) {
 }
 
 function signature(cell) {
-  return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1);
+  return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1)
+    + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '');
 }
 
 /**
@@ -117,6 +120,11 @@ export class Grid {
     this.el.addEventListener('dblclick', (e) => this._dblClick(e));
     this.el.addEventListener('contextmenu', (e) => this._context(e));
     this.update(this.opts.data, false);
+    if (window.ResizeObserver) {
+      // column widths change with the content and when a collapsed panel opens: re-pin the frozen columns
+      this._ro = new ResizeObserver(() => this._freeze());
+      this._ro.observe(this.el);
+    }
   }
 
   ref(i, j) {
@@ -212,7 +220,9 @@ export class Grid {
         if (cell.rs) td.rowSpan = cell.rs;
         if (cell.cs) td.colSpan = cell.cs;
         if (cell.heat) td.style.backgroundColor = heatStyle(cell.heat);
-        if (cell.tip) td.title = cell.tip;
+        if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
+        if (cell.n) td.title = cell.n + (cell.tip ? '\n' + cell.tip : '');          // the cell's comment in Excel
+        else if (cell.tip) td.title = cell.tip;
         else if (cell.k === 's' && cell.t && cell.t.length > 28) td.title = cell.t;
         td.__i = i;
         td.__j = j;
@@ -223,6 +233,37 @@ export class Grid {
       body.appendChild(tr);
     }
     this.el.appendChild(body);
+    this._freeze();
+  }
+
+  /**
+   * Keep the columns Excel freezes (panes) in view while the table scrolls sideways.  Offsets come from the
+   * rendered widths, so this runs again whenever the table changes size.
+   */
+  _freeze() {
+    const n = this.data && this.data.fz;
+    if (!n || this.opts.axis || !this.tds.length) return;
+    const widths = [];
+    for (let j = 0; j < n; j++) {
+      let w = 0;
+      for (const line of this.tds) {
+        const td = line[j];
+        if (td && td.colSpan === 1) { w = td.getBoundingClientRect().width; break; }
+      }
+      widths.push(w);
+    }
+    if (!widths.some((w) => w > 0)) return;                 // not laid out yet (a collapsed panel)
+    let left = 0;
+    for (let j = 0; j < n; j++) {
+      for (const line of this.tds) {
+        const td = line[j];
+        if (!td || j + td.colSpan > n) continue;            // a caption that runs past the frozen part scrolls
+        td.classList.add('fz');
+        td.classList.toggle('fzl', j + td.colSpan === n);
+        td.style.left = left + 'px';
+      }
+      left += widths[j];
+    }
   }
 
   _patch(data, flash) {
@@ -242,6 +283,8 @@ export class Grid {
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '');
         td.textContent = cell.t || '';
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
+        if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
+        else td.style.removeProperty('--bar');
         td.classList.remove('up', 'down');
         if (flash && cell.k === 'n' && before.k === 'n' && typeof cell.v === 'number' && typeof before.v === 'number'
             && cell.v !== before.v) {
@@ -254,6 +297,7 @@ export class Grid {
       void this.el.offsetWidth;                      // restart the animations
       for (const [td, cls] of moved) td.classList.add(cls);
     }
+    this._freeze();
     if (sel.grid === this) notifySelection();
   }
 
@@ -425,9 +469,27 @@ function copyViaCommand(full) {
   if (!ok) {
     const text = selectionText(full);
     if (navigator.clipboard && text !== null) {
+      lastCopied = normalise(text);
       navigator.clipboard.writeText(text).then(() => toast('Kopyalandı', 'ok', 1500), () => toast('Kopyalanamadı', 'err'));
     }
   }
+}
+
+// What was last copied out of a grid.  Text that comes back unchanged was copied from the screen, so it is
+// pasted onto the screen cell by cell; anything else comes from Excel and keeps Excel's own layout.
+let lastCopied = null;
+const normalise = (text) => text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n$/, '');
+
+function colIndex(name) {
+  let n = 0;
+  for (const ch of name) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n;
+}
+
+function colName(n) {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - 1 - m) / 26; }
+  return s;
 }
 
 export function copyGrid(grid, full = false) {
@@ -449,6 +511,7 @@ document.addEventListener('copy', (e) => {
   }
   e.clipboardData.setData('text/plain', text);
   e.preventDefault();
+  lastCopied = normalise(text);
   const s = currentSelection();
   const n = (s.bottom - s.top + 1) * (s.right - s.left + 1);
   toast(n === 1 ? 'Hücre kopyalandı' : (s.bottom - s.top + 1) + ' × ' + (s.right - s.left + 1) + ' hücre kopyalandı – Excel\'e yapıştırabilirsiniz', 'ok', 1800);
@@ -466,17 +529,45 @@ document.addEventListener('paste', (e) => {
   pasteText(g, s, text);
 });
 
+/**
+ * True when the block, laid over the screen from (top, left), covers rows and columns that follow each other
+ * in the sheet as well - then the screen and the sheet agree on where every pasted cell goes.
+ */
+function sheetContiguous(grid, top, left, rows, cols) {
+  const d = grid.data;
+  if (top + rows > d.r.length || left + cols > d.c.length) return false;
+  for (let i = 1; i < rows; i++) if (d.r[top + i] !== d.r[top + i - 1] + 1) return false;
+  for (let j = 1; j < cols; j++) if (colIndex(d.c[left + j]) !== colIndex(d.c[left + j - 1]) + 1) return false;
+  return true;
+}
+
 export async function pasteText(grid, s, text) {
   if (!grid.ref(s.top, s.left)) return;
-  const clean = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n$/, '');
+  const clean = normalise(text);
   const matrix = clean.split('\n').map((line) => line.split('\t'));
   const single = matrix.length === 1 && matrix[0].length === 1;
+  const width = Math.max(...matrix.map((row) => row.length));
   try {
     let items = [];
     let skipped = 0;
+    let lenient = false;
     if (single && (s.bottom > s.top || s.right > s.left)) {
       // one value onto a selection: fill every input cell of the selection (as Excel does)
       items = inputRefs(grid, s).map((x) => ({ ref: x.ref, value: clean }));
+    } else if (clean !== lastCopied && !sheetContiguous(grid, s.top, s.left, matrix.length, width)) {
+      // a block from Excel that runs over rows / columns the table does not show (hidden in Excel, or empty
+      // and left out): it keeps Excel's layout, counted in sheet cells from the top-left of the selection.
+      // Nothing outside the table's own range is written; the server skips whatever is not an input.
+      const d = grid.data;
+      const row0 = d.r[s.top], col0 = colIndex(d.c[s.left]);
+      const rowMax = d.r[d.r.length - 1], colMax = colIndex(d.c[d.c.length - 1]);
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[i].length; j++) {
+          if (row0 + i > rowMax || col0 + j > colMax) { skipped += 1; continue; }
+          items.push({ ref: d.sheet + '!' + colName(col0 + j) + (row0 + i), value: matrix[i][j] });
+        }
+      }
+      lenient = true;
     } else {
       // a block: cell by cell onto what is on screen, starting at the top-left of the selection.
       // Rows / columns the table does not show are never written to, and neither are non-input cells.
@@ -490,8 +581,9 @@ export async function pasteText(grid, s, text) {
       }
     }
     if (!items.length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
-    const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc);
-    if (res) res.skipped = skipped;
+    const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc, lenient);
+    if (res) res.skipped = skipped + (res.skipped || 0);
+    if (res && lenient && !res.applied && !(res.errors || []).length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
     reportApply(res, 'yapıştırıldı');
   } catch (err) {
     toast(err.message || String(err), 'err', 6000);

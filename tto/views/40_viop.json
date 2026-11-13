@@ -251,105 +251,120 @@
    "type": "table",
    "title": "Uzak AL / Yakın SAT – spread fiyatı",
    "range": "K110:X122",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B18",
    "type": "table",
    "title": "Uzak SAT / Yakın AL – spread fiyatı",
    "range": "K124:X136",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B19",
    "type": "table",
    "title": "Uzak AL / Yakın SAT – ima TRY",
    "range": "K138:X150",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B20",
    "type": "table",
    "title": "Uzak SAT / Yakın AL – ima TRY",
    "range": "K152:X164",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B21",
    "type": "table",
    "title": "Alış−satış farkı (bp)",
    "range": "K166:X178",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B22",
    "type": "table",
    "title": "TRY OIS",
    "range": "K180:X192",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B23",
    "type": "table",
    "title": "Orta ima ff − OIS ff (bp)",
    "range": "K194:X206",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B24",
    "type": "table",
    "title": "OIS FRA",
    "range": "K208:X220",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B25",
    "type": "table",
    "title": "VİOP orta ima ff − OIS FRA (bp)",
    "range": "K222:X234",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B26",
    "type": "table",
    "title": "Uzak AL / Yakın SAT − OIS FRA (bp)",
    "range": "K236:X248",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B27",
    "type": "table",
    "title": "Uzak SAT / Yakın AL − OIS FRA (bp)",
    "range": "K250:X262",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B28",
    "type": "table",
    "title": "FX swap ima TRY ff",
    "range": "K264:X276",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B29",
    "type": "table",
    "title": "VİOP orta ima ff − FX swap ima ff (bp)",
    "range": "K278:X290",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B30",
    "type": "table",
    "title": "FX swap ima ff − OIS FRA (bp)",
    "range": "K292:X304",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B31",
    "type": "table",
    "title": "TRY ff DV01 (TL, 1mn USD)",
    "range": "K306:X318",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B34",
@@ -426,7 +441,8 @@
    "type": "table",
    "title": "BFX kontrol",
    "range": "Z110:AE124",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B15",

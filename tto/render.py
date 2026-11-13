@@ -98,6 +98,42 @@ class _CfIndex(object):
             self.rules.append((ranges, rule, fns))
         self._scale_stats: Dict[int, Tuple[float, float]] = {}
 
+    def _numbers(self, calc, ranges) -> List[float]:
+        nums = []
+        for (a, b, cc, d) in ranges:
+            for rr in range(a, cc + 1):
+                for col in range(b, d + 1):
+                    v = calc.get(self.si, rr, col)
+                    if type(v) is float:
+                        nums.append(v)
+        return nums
+
+    @staticmethod
+    def _cfvo(cfvo, i: int, nums: List[float], calc, r: int, c: int) -> float:
+        """Threshold ``i`` (0 = low end, 1 = high end) of a data bar / colour scale."""
+        kind, val = (cfvo[i] if cfvo and i < len(cfvo) else (("min", "max")[i], None))
+        try:
+            x = float(val) if val is not None else None
+        except (TypeError, ValueError):
+            x = None
+        if not nums:
+            return x if x is not None else 0.0
+        lo, hi = min(nums), max(nums)
+        if kind in ("num", "formula") and x is not None:
+            return x
+        if kind == "percent" and x is not None:
+            return lo + (hi - lo) * x / 100.0
+        if kind == "percentile" and x is not None:
+            ordered = sorted(nums)
+            pos = (len(ordered) - 1) * x / 100.0
+            k = int(pos)
+            return ordered[k] + (ordered[min(k + 1, len(ordered) - 1)] - ordered[k]) * (pos - k)
+        if kind in ("max", "autoMax"):
+            return hi
+        if kind in ("min", "autoMin"):
+            return lo
+        return lo if i == 0 else hi
+
     def applicable(self, r1: int, c1: int, r2: int, c2: int):
         out = []
         for i, (ranges, rule, fns) in enumerate(self.rules):
@@ -136,6 +172,20 @@ class _CfIndex(object):
                     ok = {"lessThan": cmp < 0, "lessThanOrEqual": cmp <= 0, "greaterThan": cmp > 0,
                           "greaterThanOrEqual": cmp >= 0, "equal": cmp == 0, "notEqual": cmp != 0}.get(op, False)
                 return style if ok else None
+            if kind == "dataBar":
+                bar = rule.get("bar") or {}
+                if type(value) is not float:
+                    return None
+                stats = cache.get(idx)
+                if stats is None:
+                    nums = self._numbers(calc, ranges)
+                    stats = (self._cfvo(bar.get("cfvo"), 0, nums, calc, r, c), self._cfvo(bar.get("cfvo"), 1, nums, calc, r, c))
+                    cache[idx] = stats
+                lo, hi = stats
+                t = 0.0 if hi <= lo else max(0.0, min(1.0, (value - lo) / (hi - lo)))
+                # Excel draws the shortest bar at `min` % and the longest at `max` % of the cell width
+                a, b = float(bar.get("min", 10)), float(bar.get("max", 90))
+                return {"bar": round(a + (b - a) * t, 1), "bar_color": bar.get("color")}
             if kind == "colorScale":
                 if type(value) is not float:
                     return None
@@ -145,13 +195,7 @@ class _CfIndex(object):
                     return None
                 stats = cache.get(idx)
                 if stats is None:
-                    nums = []
-                    for (a, b, cc, d) in ranges:
-                        for rr in range(a, cc + 1):
-                            for col in range(b, d + 1):
-                                v = calc.get(self.si, rr, col)
-                                if type(v) is float:
-                                    nums.append(v)
+                    nums = self._numbers(calc, ranges)
                     stats = (min(nums), max(nums)) if nums else (0.0, 0.0)
                     cache[idx] = stats
                 lo, hi = stats
@@ -260,6 +304,10 @@ class Renderer(object):
             if "heat" in st:
                 out["heat"] = st["heat"]
                 continue
+            if "bar" in st:
+                out["bar"] = st["bar"]
+                out["bc"] = tone(st.get("bar_color")) or "info"
+                continue
             if st.get("color"):
                 tn = tone(st["color"]) or tn
             if st.get("fill"):
@@ -276,7 +324,7 @@ class Renderer(object):
         d = book.inputs.get((si, rc))
         if d is not None:
             out["i"] = "s" if d.scope == "shared" else "u"
-            opts = book.options_for(si, rc)
+            opts = book.options_for(si, rc, calc)
             if opts:
                 out["o"] = opts
             if overlay is not None and (si, rc) in overlay:
@@ -291,10 +339,20 @@ class Renderer(object):
                 out["ik"] = d.kind
         if rc in sheet.fml:
             out["fx"] = 1
+        note = sheet.comments.get(rc)
+        if note:
+            out["n"] = note
         return out
 
     # ------------------------------------------------------------------ ranges
-    def table(self, calc, sheet: str, rng: str, loc: numfmt.Locale, overlay=None, trim: bool = True) -> Dict[str, Any]:
+    def table(self, calc, sheet: str, rng: str, loc: numfmt.Locale, overlay=None, trim: bool = True,
+              show_hidden: bool = True) -> Dict[str, Any]:
+        """Cells of a range as the browser draws them.
+
+        ``trim`` drops rows and columns that are completely empty; ``show_hidden=False`` also leaves out the
+        columns that are hidden in the workbook (they are helpers the trader does not look at in Excel either).
+        ``fz`` in the result is the number of leading columns that Excel keeps in view (frozen panes).
+        """
         book = self.book
         si = book.model.sheet_index[sheet]
         r1, c1, r2, c2 = parse_range(rng)
@@ -330,20 +388,54 @@ class Renderer(object):
                 cell["cs"] = cs
         row_nums = list(range(r1, r2 + 1))
         col_nums = list(range(c1, c2 + 1))
+        keep_r = list(range(len(row_nums)))
+        keep_c = list(range(len(col_nums)))
+        hidden_count = 0
+        if not show_hidden and sh.hidden_cols:
+            visible = [j for j in keep_c if not sh.col_hidden(col_nums[j])]
+            if visible:                                  # a range that is hidden as a whole is shown as it is
+                hidden_count = len(keep_c) - len(visible)
+                keep_c = visible
         if trim:
             def empty(cell):
                 return (cell.get("t", "") == "" and "i" not in cell) or cell.get("sk")
-            keep_r = [i for i, row in enumerate(rows) if not all(empty(c) for c in row)]
-            keep_c = [j for j in range(len(col_nums)) if not all(empty(row[j]) for row in rows)]
-            if keep_r and keep_c:
+            used_r = [i for i in keep_r if not all(empty(rows[i][j]) for j in keep_c)]
+            used_c = [j for j in keep_c if not all(empty(row[j]) for row in rows)]
+            if used_r and used_c:
                 # drop leading / trailing blank rows; a run of blank rows inside (they separate sub-tables)
                 # shrinks to a single one
-                filled = set(keep_r)
-                keep_r = [i for i in range(keep_r[0], keep_r[-1] + 1) if i in filled or (i - 1) in filled]
-                rows = [[rows[i][j] for j in keep_c] for i in keep_r]
-                row_nums = [row_nums[i] for i in keep_r]
-                col_nums = [col_nums[j] for j in keep_c]
-        return {"sheet": sheet, "rows": rows, "r": row_nums, "c": [index_to_col(c) for c in col_nums]}
+                filled = set(used_r)
+                keep_r = [i for i in range(used_r[0], used_r[-1] + 1) if i in filled or (i - 1) in filled]
+                keep_c = used_c
+        if len(keep_c) != len(col_nums) or len(keep_r) != len(row_nums):
+            kept_c, kept_r = set(keep_c), set(keep_r)
+            # a merged cell keeps only the columns / rows that are still there
+            for (a, b), (rs, cs) in spans.items():
+                cell = rows[a - r1][b - c1]
+                if cs > 1:
+                    left = sum(1 for j in range(b - c1, b - c1 + cs) if j in kept_c)
+                    if left > 1:
+                        cell["cs"] = left
+                    else:
+                        cell.pop("cs", None)
+                if rs > 1:
+                    left = sum(1 for i in range(a - r1, a - r1 + rs) if i in kept_r)
+                    if left > 1:
+                        cell["rs"] = left
+                    else:
+                        cell.pop("rs", None)
+            rows = [[rows[i][j] for j in keep_c] for i in keep_r]
+            row_nums = [row_nums[i] for i in keep_r]
+            col_nums = [col_nums[j] for j in keep_c]
+        out = {"sheet": sheet, "rows": rows, "r": row_nums, "c": [index_to_col(c) for c in col_nums]}
+        if hidden_count:
+            out["hc"] = hidden_count                     # columns of the range that Excel hides (left out)
+        frozen = sh.freeze[1] if len(sh.freeze) > 1 else 0
+        if frozen and col_nums and col_nums[0] <= frozen:
+            n = sum(1 for c in col_nums if c <= frozen)
+            if 0 < n < len(col_nums):
+                out["fz"] = n
+        return out
 
     def values(self, calc, sheet: str, rng: str) -> List[List[Any]]:
         si = self.book.model.sheet_index[sheet]
@@ -351,16 +443,38 @@ class Renderer(object):
         return calc.get_range(si, r1, c1, r2, c2)
 
     def chart(self, calc, chart: Dict[str, Any], loc: numfmt.Locale) -> Dict[str, Any]:
-        """Resolve a chart imported from the workbook into category labels and numeric series."""
+        """Resolve a chart of the workbook into what the browser draws.
+
+        Values follow Excel's plotting rules: a number is plotted; an empty cell leaves a gap (or zero / a
+        connecting line, as the chart says); ``#N/A`` is skipped with the line running on - unless the chart
+        shows #N/A as empty; text (even ``""``) counts as zero.  In the data ``None`` is a gap and ``"c"``
+        a skipped point the line passes over.
+        """
         book = self.book
 
         def split(ref: str) -> Tuple[str, str]:
             sheet, _, addr = ref.rpartition("!")
             return sheet.strip("'"), addr.replace("$", "")
 
+        blanks = chart.get("blanks") or "gap"
+        empty = None if blanks == "gap" else (0.0 if blanks == "zero" else "c")
+        missing = empty if chart.get("na_gap") else "c"
+
+        def plot_value(v: Any) -> Any:
+            tv = type(v)
+            if tv is float:
+                return v if v == v and abs(v) != float("inf") else missing
+            if v is None:
+                return empty
+            if tv is XlError:
+                return missing
+            if tv is bool:
+                return 0.0
+            return 0.0                                  # text is plotted as zero
+
         cats: List[str] = []
+        xs: List[Any] = []
         series: List[Dict[str, Any]] = []
-        slots: Dict[Any, int] = {}
         for s in chart["series"]:
             sh, addr = split(s["val"])
             vals = [v for row in self.values(calc, sh, addr) for v in row]
@@ -375,35 +489,49 @@ class Renderer(object):
                 r1, c1, r2, c2 = parse_range(caddr)
                 for r in range(r1, r2 + 1):
                     for c in range(c1, c2 + 1):
-                        cats.append(self.cell(calc, si, r, c, loc).get("t", ""))
-            entry = {"name": name, "kind": s.get("kind", "line"), "stacked": bool(s.get("stacked")),
-                     "data": [v if type(v) is float else None for v in vals]}
-            if s.get("dash"):
-                entry["dash"] = 1
-            if s.get("noline"):
-                entry["noline"] = 1
-            # series drawn in one colour in the workbook are one entity (e.g. the two edges of a band)
-            src = s.get("color")
-            if src:
-                if src not in slots:
-                    slots[src] = len(slots)
-                entry["slot"] = slots[src]
-            else:
-                entry["slot"] = len(slots)
-                slots[("auto", len(series))] = entry["slot"]
+                        cell = self.cell(calc, si, r, c, loc)
+                        cats.append(cell.get("t", ""))
+                        xs.append(cell.get("v") if cell.get("k") in ("n", "d") else None)
+            entry: Dict[str, Any] = {"name": name, "kind": s.get("kind", "line"), "stacked": bool(s.get("stacked")),
+                                     "data": [plot_value(v) for v in vals]}
+            for key in ("dash", "noline", "marker", "smooth"):
+                if s.get(key):
+                    entry[key] = 1
+            if s.get("color"):
+                entry["color"] = s["color"]
+            if s.get("alpha") is not None:
+                entry["alpha"] = s["alpha"]
+            if s.get("legend") is False:
+                entry["legend"] = 0
             series.append(entry)
         if not cats and series:
             cats = [str(i + 1) for i in range(len(series[0]["data"]))]
-        # drop trailing categories for which no series has data
+            xs = [None] * len(cats)
+        # drop trailing categories that have neither a label nor a value in any series
         n = len(cats)
-        while n > 0 and all(n - 1 >= len(s["data"]) or s["data"][n - 1] is None for s in series) and not cats[n - 1]:
+        while n > 0 and not cats[n - 1] and all(n - 1 >= len(s["data"]) or type(s["data"][n - 1]) is not float for s in series):
             n -= 1
-        out = {"title": chart.get("title") or "", "kind": chart.get("kind", "line"), "cats": cats[:n],
-               "series": [dict(s, data=s["data"][:n]) for s in series], "axis": chart.get("axis_titles") or []}
+        out: Dict[str, Any] = {"title": chart.get("title") or "", "kind": chart.get("kind", "line"), "cats": cats[:n],
+                               "series": [dict(s, data=s["data"][:n]) for s in series],
+                               "axis": chart.get("axis_titles") or []}
         fmt = chart.get("value_format") or ""
         if "%" in fmt:
             out["unit"] = "pct"
-        for key in ("ymin", "ymax"):
+        first = fmt.split(";")[0]
+        if first and first != "General":
+            point = first.find(".")
+            decimals = 0
+            if point >= 0:
+                k = point + 1
+                while k < len(first) and first[k] in "0#?":
+                    decimals += 1
+                    k += 1
+            out["decimals"] = decimals
+        for key in ("ymin", "ymax", "major_unit", "label_skip", "aspect", "gap_width", "x_title", "y_title", "auto", "updown"):
             if chart.get(key) is not None:
                 out[key] = chart[key]
+        # a date axis places the points in proportion to their dates and labels months, not points
+        if chart.get("x_axis") == "date" and n > 1 and all(type(x) is float for x in xs[:n]) \
+                and all(xs[i] < xs[i + 1] for i in range(n - 1)):
+            out["x"] = {"type": "date", "values": xs[:n], "format": (chart.get("x_format") or "").replace("\\", "")}
         return out

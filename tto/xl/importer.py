@@ -6,6 +6,8 @@ workbook works on any machine.  Everything the engine and the dashboard need is 
 * constants, formulas (as position independent templates), array-formula ranges, dynamic-array flags
 * the values Excel cached at the last save (used for parity tests and as replay market data)
 * number formats / bold flags per cell, merged cells, column widths, list validations
+* what Excel hides or pins: hidden rows and columns, frozen panes; cell comments, in-workbook hyperlinks,
+  pictures; conditional formats (rules, colour scales, data bars) and the charts drawn on each sheet
 * defined names
 """
 from __future__ import annotations
@@ -220,11 +222,23 @@ def _rels(zf: zipfile.ZipFile, part: str) -> Dict[str, str]:
     return out
 
 
-def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
+def _chart(zf: zipfile.ZipFile, part: str, accents: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    """One chart part -> what is needed to draw it the way Excel does.
+
+    ``series``     name / category / value references, type (line, bar, area), colour (explicit, or the theme
+                   accent Excel would pick), dash, markers, smoothing, fill transparency, legend visibility
+    ``x_axis``     "cat" (evenly spaced categories) or "date" (positions proportional to the dates)
+    ``ymin/ymax``  limits fixed on the value axis, ``major_unit`` its fixed tick distance
+    ``blanks``     how empty cells are drawn ("gap", "zero", "span"); ``na_gap``: #N/A is treated as empty
+                   (Excel's "Show #N/A as an empty cell"), otherwise the line simply skips the point
+    ``updown``     up / down bars of a line chart: indices of the two series they join, their width and style
+    """
     try:
-        root = ET.fromstring(zf.read(part))
+        raw = zf.read(part)
     except KeyError:
         return None
+    root = ET.fromstring(raw)
+    chart = root.find(NS_C + "chart")
     plot = root.find(".//" + NS_C + "plotArea")
     if plot is None:
         return None
@@ -234,9 +248,55 @@ def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
             return ""
         return "".join(t.text or "" for t in el.iter(NS_A + "t")).strip()
 
+    def attr(el, path: str, name: str = "val") -> Optional[str]:
+        if el is None:
+            return None
+        x = el.find(path)
+        return None if x is None else x.get(name)
+
+    def number(text: Optional[str]) -> Optional[float]:
+        try:
+            return None if text is None else float(text)
+        except ValueError:
+            return None
+
     title = text_of(root.find(NS_C + "chart/" + NS_C + "title"))
+    hidden_legend = set()
+    legend = chart.find(NS_C + "legend") if chart is not None else None
+    if legend is not None:
+        for entry in legend.findall(NS_C + "legendEntry"):
+            if attr(entry, NS_C + "delete") == "1" and attr(entry, NS_C + "idx") is not None:
+                hidden_legend.add(attr(entry, NS_C + "idx"))
+    def box_style(el) -> Dict[str, Any]:
+        """Fill and outline of an up / down bar."""
+        style: Dict[str, Any] = {}
+        sp = el.find(NS_C + "spPr") if el is not None else None
+        if sp is None:
+            return style
+        if sp.find(NS_A + "noFill") is not None:
+            style["nofill"] = True
+        fill = sp.find(NS_A + "solidFill/" + NS_A + "srgbClr")
+        if fill is not None and fill.get("val"):
+            style["color"] = fill.get("val").upper()
+            alpha = number(attr(fill, NS_A + "alpha"))
+            if alpha is not None and alpha < 100000:
+                style["alpha"] = round(alpha / 100000.0, 3)
+        ln = sp.find(NS_A + "ln")
+        if ln is not None:
+            if ln.find(NS_A + "noFill") is not None:
+                style["noline"] = True
+            edge = ln.find(NS_A + "solidFill/" + NS_A + "srgbClr")
+            if edge is not None and edge.get("val"):
+                style["line"] = edge.get("val").upper()
+                alpha = number(attr(edge, NS_A + "alpha"))
+                if alpha is not None and alpha < 100000:
+                    style["line_alpha"] = round(alpha / 100000.0, 3)
+        return style
+
     series = []
     kinds = []
+    gap_width = None
+    updown = None
     for grp in plot:
         tag = grp.tag.replace(NS_C, "")
         if not tag.endswith("Chart"):
@@ -245,7 +305,11 @@ def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
                 "pieChart": "pie"}.get(tag, "line")
         grouping = grp.find(NS_C + "grouping")
         stacked = grouping is not None and grouping.get("val") in ("stacked", "percentStacked")
+        group_markers = attr(grp, NS_C + "marker") == "1"
+        if kind == "bar" and attr(grp, NS_C + "gapWidth") is not None:
+            gap_width = number(attr(grp, NS_C + "gapWidth"))
         kinds.append(kind)
+        group_start = len(series)
         for ser in grp.findall(NS_C + "ser"):
             def ref(path):
                 el = ser.find(path)
@@ -257,12 +321,13 @@ def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
             val = ref(NS_C + "val/" + NS_C + "numRef/" + NS_C + "f") or ref(NS_C + "yVal/" + NS_C + "numRef/" + NS_C + "f")
             if val is None:
                 continue
+            idx = attr(ser, NS_C + "idx") or str(len(series))
             entry = {"name_ref": name_ref, "name": name_lit.text if name_lit is not None else None,
                      "cat": cat, "val": val, "kind": kind, "stacked": stacked}
             sp = ser.find(NS_C + "spPr")
+            clr = None
             if sp is not None:
                 ln = sp.find(NS_A + "ln")
-                clr = None
                 if ln is not None:
                     if ln.find(NS_A + "noFill") is not None:
                         entry["noline"] = True
@@ -270,31 +335,89 @@ def _chart(zf: zipfile.ZipFile, part: str) -> Optional[Dict[str, Any]]:
                     dash = ln.find(NS_A + "prstDash")
                     if dash is not None and dash.get("val") not in (None, "solid"):
                         entry["dash"] = True
+                fill = sp.find(NS_A + "solidFill/" + NS_A + "srgbClr")
                 if clr is None:
-                    clr = sp.find(NS_A + "solidFill/" + NS_A + "srgbClr")
-                if clr is not None and clr.get("val"):
-                    entry["color"] = clr.get("val").upper()
-            series.append(entry)
-    axes = [text_of(ax.find(NS_C + "title")) for ax in plot if ax.tag in (NS_C + "catAx", NS_C + "valAx", NS_C + "dateAx")]
-    out = {"title": title, "kind": kinds[0] if kinds else "line", "series": series,
-           "axis_titles": [a for a in axes if a]}
-    val_ax = plot.find(NS_C + "valAx")
-    if val_ax is not None:
-        for key in ("min", "max"):
-            el = val_ax.find(NS_C + "scaling/" + NS_C + key)
-            if el is not None and el.get("val") is not None:
+                    clr = fill
+                if fill is not None:
+                    alpha = number(attr(fill, NS_A + "alpha"))
+                    if alpha is not None and alpha < 100000:
+                        entry["alpha"] = round(alpha / 100000.0, 3)
+            if clr is not None and clr.get("val"):
+                entry["color"] = clr.get("val").upper()
+            elif accents:
                 try:
-                    out["y" + key] = float(el.get("val"))
+                    entry["color"] = accents[int(idx) % len(accents)]      # Excel's automatic series colour
                 except ValueError:
                     pass
+            if kind in ("line", "scatter"):
+                marker = ser.find(NS_C + "marker")
+                symbol = attr(marker, NS_C + "symbol") if marker is not None else None
+                if symbol is not None:
+                    if symbol != "none":
+                        entry["marker"] = True
+                elif group_markers:
+                    entry["marker"] = True
+                if attr(ser, NS_C + "smooth") == "1":
+                    entry["smooth"] = True
+            if idx in hidden_legend:
+                entry["legend"] = False
+            series.append(entry)
+        # up / down bars: boxes between the first and the last series of a line group, at every category
+        bars_el = grp.find(NS_C + "upDownBars") if kind == "line" else None
+        if bars_el is not None and len(series) - group_start >= 2:
+            updown = {"first": group_start, "last": len(series) - 1,
+                      "gap_width": number(attr(bars_el, NS_C + "gapWidth")) or 150.0,
+                      "up": box_style(bars_el.find(NS_C + "upBars")), "down": box_style(bars_el.find(NS_C + "downBars"))}
+    x_ax = None
+    for ax in plot:
+        if ax.tag in (NS_C + "catAx", NS_C + "dateAx"):
+            x_ax = ax
+            break
+    val_ax = plot.find(NS_C + "valAx")
+    x_title, y_title = text_of(x_ax.find(NS_C + "title")) if x_ax is not None else "", \
+        text_of(val_ax.find(NS_C + "title")) if val_ax is not None else ""
+    out: Dict[str, Any] = {"title": title, "kind": kinds[0] if kinds else "line", "series": series,
+                           "axis_titles": [t for t in (x_title, y_title) if t],
+                           "x_axis": "date" if (x_ax is not None and x_ax.tag == NS_C + "dateAx") else "cat",
+                           "blanks": attr(chart, NS_C + "dispBlanksAs") or "gap",
+                           "na_gap": b"dispNaAsBlank" in raw and b'dispNaAsBlank val="0"' not in raw}
+    if x_title:
+        out["x_title"] = x_title
+    if y_title:
+        out["y_title"] = y_title
+    if gap_width is not None:
+        out["gap_width"] = gap_width
+    if updown is not None:
+        out["updown"] = updown
+    if x_ax is not None:
+        nf = x_ax.find(NS_C + "numFmt")
+        if nf is not None and nf.get("formatCode") and nf.get("sourceLinked") != "1":
+            out["x_format"] = nf.get("formatCode")
+        skip = number(attr(x_ax, NS_C + "tickLblSkip"))
+        if skip and skip > 1:
+            out["label_skip"] = int(skip)
+    if val_ax is not None:
+        for key in ("min", "max"):
+            v = number(attr(val_ax, NS_C + "scaling/" + NS_C + key))
+            if v is not None:
+                out["y" + key] = v
+        unit = number(attr(val_ax, NS_C + "majorUnit"))
+        if unit and unit > 0:
+            out["major_unit"] = unit
         nf = val_ax.find(NS_C + "numFmt")
         if nf is not None and nf.get("formatCode"):
             out["value_format"] = nf.get("formatCode")
     return out
 
 
-def _sheet_charts(zf: zipfile.ZipFile, sheet_part: str) -> List[Dict[str, Any]]:
+def _sheet_charts(zf: zipfile.ZipFile, sheet_part: str, accents: Optional[List[str]] = None,
+                  col_widths: Optional[Dict[int, float]] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+
+    def col_px(c: int) -> float:
+        w = (col_widths or {}).get(c, 8.43)
+        return w * 7.0 + 5.0
+
     for rid, target in _rels(zf, sheet_part).items():
         if "/drawings/drawing" not in target:
             continue
@@ -311,12 +434,20 @@ def _sheet_charts(zf: zipfile.ZipFile, sheet_part: str) -> List[Dict[str, Any]]:
                 cref = el.get(NS_REL + "id")
             if cref is None or cref not in drels or frm is None:
                 continue
-            ch = _chart(zf, drels[cref])
+            ch = _chart(zf, drels[cref], accents)
             if ch is None:
                 continue
-            ch["anchor"] = [int(frm.find(NS_XDR + "row").text) + 1, int(frm.find(NS_XDR + "col").text) + 1,
-                            (int(to.find(NS_XDR + "row").text) + 1) if to is not None else 0,
-                            (int(to.find(NS_XDR + "col").text) + 1) if to is not None else 0]
+            r1, c1 = int(frm.find(NS_XDR + "row").text) + 1, int(frm.find(NS_XDR + "col").text) + 1
+            r2 = (int(to.find(NS_XDR + "row").text) + 1) if to is not None else 0
+            c2 = (int(to.find(NS_XDR + "col").text) + 1) if to is not None else 0
+            ch["anchor"] = [r1, c1, r2, c2]
+            # shape of the chart as drawn on the sheet (height / width), from the cells it covers
+            ext = anchor.find(NS_XDR + "ext")
+            if ext is not None and ext.get("cx") and ext.get("cy"):
+                ch["aspect"] = round(float(ext.get("cy")) / max(1.0, float(ext.get("cx"))), 3)
+            elif r2 > r1 and c2 > c1:
+                width = sum(col_px(c) for c in range(c1, c2))
+                ch["aspect"] = round((r2 - r1) * 20.0 / max(1.0, width), 3)
             out.append(ch)
     out.sort(key=lambda c: (c["anchor"][0], c["anchor"][1]))
     return out
@@ -386,13 +517,19 @@ def import_workbook(path: str, label: Optional[str] = None) -> Model:
         model.numfmts = [x[0] for x in model.xfs]
         model.xf_flags = [x[1] for x in model.xfs]
         sheet_defs, names, model.date1904 = _workbook(zf)
+        accents = _theme_colors(zf)[4:10]
         for name, state, part in sheet_defs:
             sh = model.add_sheet(name, state)
             _read_sheet(zf, part, sh, sst, intern, problems)
             try:
-                sh.charts = _sheet_charts(zf, part)
+                sh.charts = _sheet_charts(zf, part, accents, sh.col_widths)
             except Exception as exc:  # noqa: BLE001 - charts are decoration, never block an import
                 problems.append("%s: charts not imported (%s)" % (name, exc))
+            try:
+                sh.comments = _sheet_comments(zf, part)
+                sh.images = _sheet_images(zf, part)
+            except Exception as exc:  # noqa: BLE001 - neither do notes and pictures
+                problems.append("%s: comments / pictures not imported (%s)" % (name, exc))
 
     for name, local, text in names:
         text = (text or "").strip()
@@ -421,6 +558,7 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
     shared: Dict[str, int] = {}          # si -> template id
     array_refs: List[Tuple[int, Tuple[int, int, int, int]]] = []
     plain_values: Dict[int, Any] = {}
+    hidden_rows: List[int] = []
     max_row = max_col = 0
     c_tag, f_tag, v_tag, is_tag = NS_MAIN + "c", NS_MAIN + "f", NS_MAIN + "v", NS_MAIN + "is"
     row_tag = NS_MAIN + "row"
@@ -485,6 +623,8 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
                     plain_values[rc] = value
                 el.clear()
             elif tag == row_tag:
+                if el.get("hidden") == "1" and el.get("r"):
+                    hidden_rows.append(int(el.get("r")))
                 el.clear()
             elif tag == NS_MAIN + "mergeCell":
                 sh.merges.append(el.get("ref"))
@@ -493,6 +633,16 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
                 if w is not None:
                     for c in range(int(el.get("min")), min(int(el.get("max")), 400) + 1):
                         sh.col_widths[c] = float(w)
+                if el.get("hidden") == "1":
+                    sh.hidden_cols.append([int(el.get("min")), int(el.get("max"))])
+            elif tag == NS_MAIN + "pane":
+                if el.get("state") in ("frozen", "frozenSplit"):
+                    # [rows, columns] kept in view while the sheet scrolls
+                    sh.freeze = [int(float(el.get("ySplit") or 0)), int(float(el.get("xSplit") or 0))]
+            elif tag == NS_MAIN + "hyperlink":
+                if el.get("ref") and el.get("location"):
+                    sh.links.append({"ref": el.get("ref"), "location": el.get("location"),
+                                     "display": el.get("display") or ""})
             elif tag == NS_MAIN + "conditionalFormatting":
                 sqref = el.get("sqref") or ""
                 first = sqref.split()[0].split(":")[0] if sqref else "A1"
@@ -514,6 +664,14 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
                         entry["scale"] = {
                             "cfvo": [[v.get("type"), v.get("val")] for v in cs.findall(NS_MAIN + "cfvo")],
                             "colors": [(c.get("rgb") or "FFFFFF")[-6:] for c in cs.findall(NS_MAIN + "color")],
+                        }
+                    db = rule.find(NS_MAIN + "dataBar")
+                    if db is not None:
+                        clr = db.find(NS_MAIN + "color")
+                        entry["bar"] = {
+                            "cfvo": [[v.get("type"), v.get("val")] for v in db.findall(NS_MAIN + "cfvo")],
+                            "color": ((clr.get("rgb") if clr is not None else None) or "638EC6")[-6:].upper(),
+                            "min": int(db.get("minLength", "10")), "max": int(db.get("maxLength", "90")),
                         }
                     if entry["dxf"] is not None:
                         entry["dxf"] = int(entry["dxf"])
@@ -538,3 +696,78 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
                     sh.cached[rc] = plain_values.pop(rc)
     sh.consts.update(plain_values)
     sh.max_row, sh.max_col = max_row, max_col
+    # hidden rows as [first, last] runs
+    for r in sorted(hidden_rows):
+        if sh.hidden_rows and r == sh.hidden_rows[-1][1] + 1:
+            sh.hidden_rows[-1][1] = r
+        else:
+            sh.hidden_rows.append([r, r])
+
+
+def _sheet_comments(zf: zipfile.ZipFile, sheet_part: str) -> Dict[int, str]:
+    """Cell comments (notes) of a sheet: rc -> text."""
+    out: Dict[int, str] = {}
+    for rid, target in _rels(zf, sheet_part).items():
+        if "/comments" not in target or "threaded" in target.lower():
+            continue
+        try:
+            root = ET.fromstring(zf.read(target))
+        except KeyError:
+            continue
+        for c in root.iter(NS_MAIN + "comment"):
+            ref = c.get("ref")
+            text = "".join(t.text or "" for t in c.iter(NS_MAIN + "t")).strip()
+            if ref and text:
+                out[_rc(ref.split(":")[0])] = text
+    return out
+
+
+_IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif"}
+
+
+def _sheet_images(zf: zipfile.ZipFile, sheet_part: str) -> List[Dict[str, Any]]:
+    """Pictures placed on a sheet (bitmaps only), with the cells they cover."""
+    import base64
+    out: List[Dict[str, Any]] = []
+    for rid, target in _rels(zf, sheet_part).items():
+        if "/drawings/drawing" not in target:
+            continue
+        try:
+            root = ET.fromstring(zf.read(target))
+        except KeyError:
+            continue
+        drels = _rels(zf, target)
+        for anchor in root:
+            pic = anchor.find(NS_XDR + "pic")
+            frm = anchor.find(NS_XDR + "from")
+            if pic is None or frm is None:
+                continue
+            blip = pic.find(".//" + NS_A + "blip")
+            embed = blip.get(NS_REL + "embed") if blip is not None else None
+            part = drels.get(embed) if embed else None
+            mime = _IMAGE_TYPES.get((part or "").rsplit(".", 1)[-1].lower())
+            if part is None or mime is None:
+                continue
+            try:
+                raw = zf.read(part)
+            except KeyError:
+                continue
+            if len(raw) > 2_000_000:
+                continue                               # nothing that large belongs in a model file
+            to = anchor.find(NS_XDR + "to")
+
+            def pos(el, name):
+                x = el.find(NS_XDR + name) if el is not None else None
+                return int(x.text) + 1 if x is not None and x.text else None
+
+            ext = pic.find(NS_XDR + "spPr/" + NS_A + "xfrm/" + NS_A + "ext")
+            name_el = pic.find(".//" + NS_XDR + "cNvPr")
+            out.append({
+                "name": name_el.get("name") if name_el is not None else "",
+                "mime": mime,
+                "anchor": [pos(frm, "row"), pos(frm, "col"), pos(to, "row") or pos(frm, "row"), pos(to, "col") or pos(frm, "col")],
+                "width": int(int(ext.get("cx")) / 9525) if ext is not None and ext.get("cx") else None,
+                "height": int(int(ext.get("cy")) / 9525) if ext is not None and ext.get("cy") else None,
+                "data": base64.b64encode(raw).decode("ascii"),
+            })
+    return out

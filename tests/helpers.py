@@ -225,3 +225,59 @@ def ev(formula: str, cells: Dict[str, Any] = None, **kw) -> Any:
     data = dict(cells or {})
     data["Z50"] = formula if formula.startswith("=") else "=" + formula
     return mini_engine(data, **kw).shared.value("S!Z50")
+
+
+def mini_book(cells: Dict[str, Any], **sheet_attrs):
+    """A one-sheet ``Book`` (sheet "S") for renderer tests; ``sheet_attrs`` set fields of the sheet
+    (``hidden_cols=[[3, 3]]``, ``freeze=[0, 1]``, ``merges=["A1:C1"]``, ``comments={rc: text}`` ...)."""
+    from tto.books import Book
+
+    model = mini_engine(cells).model
+    for key, value in sheet_attrs.items():
+        setattr(model.sheets[0], key, value)
+    return Book("mini", "Mini", model)
+
+
+def read_xlsx(raw: bytes) -> Dict[str, Dict[str, Any]]:
+    """Read an .xlsx written by ``tto.xlsx`` back: ``{sheet name: {"A1": value, ...}}``.
+
+    The special keys ``"!formats"`` (address -> number format), ``"!merges"`` and ``"!pane"`` describe the rest.
+    """
+    import io
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    out: Dict[str, Dict[str, Any]] = {}
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        assert zf.testzip() is None
+        for name in zf.namelist():                       # every part is well-formed XML
+            ET.fromstring(zf.read(name))
+        styles = ET.fromstring(zf.read("xl/styles.xml"))
+        codes = {int(f.get("numFmtId")): f.get("formatCode") for f in styles.iter(ns + "numFmt")}
+        xfs = [codes.get(int(x.get("numFmtId")), "General") for x in styles.find(ns + "cellXfs")]
+        wb = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))}
+        for sh in wb.find(ns + "sheets"):
+            root = ET.fromstring(zf.read("xl/" + rels[sh.get(rel + "id")]))
+            cells: Dict[str, Any] = {"!formats": {}, "!merges": [m.get("ref") for m in root.iter(ns + "mergeCell")], "!pane": None}
+            pane = root.find(".//" + ns + "pane")
+            if pane is not None:
+                cells["!pane"] = pane.get("topLeftCell")
+            for c in root.iter(ns + "c"):
+                t, v = c.get("t"), c.find(ns + "v")
+                if t == "inlineStr":
+                    value: Any = "".join(x.text or "" for x in c.iter(ns + "t"))
+                elif v is None:
+                    continue
+                elif t == "b":
+                    value = v.text == "1"
+                elif t == "e":
+                    value = v.text
+                else:
+                    value = float(v.text)
+                cells[c.get("r")] = value
+                cells["!formats"][c.get("r")] = xfs[int(c.get("s", "0"))]
+            out[sh.get("name")] = cells
+    return out

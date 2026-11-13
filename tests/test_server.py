@@ -153,6 +153,48 @@ def test_blotter_endpoints(client, user):
     assert client.get("/api/blotter?date=bozuk").status_code == 400
 
 
+def test_workbook_extras_over_http(client, user):
+    # the picture of the "Ivır Zıvır" sheet
+    pic = next(p for p in client.get("/api/view/ivir").json()["panels"] if p["type"] == "image")
+    res = client.get(pic["src"])
+    assert res.status_code == 200 and res.headers["content-type"] == "image/png" and res.content[:4] == b"\x89PNG"
+    assert "max-age" in res.headers["cache-control"]
+    assert client.get("/api/image?book=tto&sheet=MASA&i=0").status_code == 404
+    assert client.get("/api/image?book=tto&sheet=%s&i=x" % quote("Ivır Zıvır")).status_code == 404
+    # shortcuts of the desk sheet; columns hidden in Excel only with the helper tables
+    assert len(client.get("/api/view/masa").json()["links"]) == 30
+
+    def columns(query):
+        return next(p for p in client.get("/api/view/ypdibs" + query).json()["panels"] if p["id"] == "B2")["data"]["c"]
+
+    assert columns("") == ["B", "C", "F", "G", "H"] and columns("?all=1") == ["B", "C", "D", "E", "F", "G", "H"]
+    # a block pasted in Excel's layout: what is not an input is skipped instead of refused
+    items = [{"ref": "YP DIBS!D2", "value": "1"}, {"ref": "YP DIBS!E2", "value": "5,4"}]
+    res = client.post("/api/inputs", json={"book": "tto", "items": items, "lenient": True}, headers=hdr(user)).json()
+    assert (res["applied"], res["skipped"], res["errors"]) == (1, 1, [])
+    res = client.post("/api/inputs", json={"book": "tto", "items": items}, headers=hdr(user)).json()
+    assert res["applied"] == 1 and len(res["errors"]) == 1 and "skipped" not in res
+    assert client.post("/api/reset", json={"book": "tto"}, headers=hdr(user)).status_code == 200
+
+
+def test_blotter_archive_download(client, user):
+    import re
+
+    from helpers import read_xlsx
+    res = client.get("/api/blotter/export", headers=hdr(user))
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert re.fullmatch(r'attachment; filename="Blotter_\d{4}\.\d{2}\.\d{2}\.xlsx"', res.headers["content-disposition"])
+    assert res.headers["cache-control"] == "no-store"
+    book = read_xlsx(res.content)
+    assert list(book) == ["Günlük İşlemler", "İşlem listesi"] and book["Günlük İşlemler"]["B1"] == "USDTRY Forward"
+    assert book["Günlük İşlemler"]["L3"] == "2Y"                                # the OIS trade entered above
+    empty = client.get("/api/blotter/export?date=2020-01-01")                  # a day without trades is still a file
+    assert empty.status_code == 200 and 'filename="Blotter_2020.01.01.xlsx"' in empty.headers["content-disposition"]
+    assert "kayıt yok" in read_xlsx(empty.content)["İşlem listesi"].values()
+    assert client.get("/api/blotter/export?date=bozuk").status_code == 400
+
+
 def test_errors_are_json_and_never_tracebacks(client):
     res = client.get("/api/cell?book=tto&ref=bozuk")
     assert res.status_code == 404 and set(res.json()) == {"error"}

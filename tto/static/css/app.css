@@ -30,7 +30,9 @@
   --sel: rgba(57, 135, 229, 0.22);
   --sel-line: #3987e5;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  /* chart series: the workbook's colour families in tones checked for colour-blind separation on this surface */
+  --c-blue: #3b83f7; --c-red: #df2a48; --c-green: #247f50; --c-purple: #9f5ec9; --c-orange: #d67a29; --c-cyan: #07a2b0;
+  --c-ink: var(--ink-2);
   --radius: 10px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "SF Mono", Menlo, monospace;
@@ -66,7 +68,7 @@
   --sel: rgba(42, 120, 214, 0.16);
   --sel-line: #2a78d6;
   --shadow: 0 10px 30px rgba(11, 11, 11, 0.14);
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --c-blue: #1481f5; --c-red: #e44e58; --c-green: #218c3a; --c-purple: #6948cb; --c-orange: #ef8d25; --c-cyan: #0d9eab;
 }
 
 * { box-sizing: border-box; }
@@ -171,6 +173,17 @@ a { color: var(--accent-ink); }
 .panel:hover > header .tools, .panel:focus-within > header .tools { opacity: 1; }
 .panel .body { overflow: auto; max-height: 72vh; border-radius: 0 0 var(--radius) var(--radius); }
 .panel.collapsed .body { display: none; }
+.panel.focus { animation: panel-focus 1.8s ease-out; }
+@keyframes panel-focus { 0%, 35% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
+.panel > header .hc { font-size: 10.5px; color: var(--ink-3); border: 1px dashed var(--line-2); border-radius: 999px; padding: 1px 8px;
+  white-space: nowrap; }
+.panel > header .hc:hover { color: var(--ink); border-color: var(--ink-3); }
+.sheet-image { display: block; max-width: 100%; height: auto; margin: 10px; border-radius: 4px; }
+.shortcuts { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 6px; margin: -2px 0 12px; }
+.shortcuts .lbl { color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-right: 4px; }
+.shortcuts .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink-2); font-size: 11.5px; text-decoration: none; line-height: 18px; }
+.shortcuts .chip:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
 .panel .err { color: var(--neg); padding: 10px 12px; }
 .panel.aux { border-style: dashed; }
 .panel.notes table.grid td { white-space: normal; max-width: min(900px, 80vw); height: auto; line-height: 1.45; padding: 6px 12px; }
@@ -212,7 +225,29 @@ table.grid td.in { background: var(--input-bg); box-shadow: inset 0 -2px 0 var(-
 table.grid td.in.sh { background: var(--shared-bg); box-shadow: inset 0 -2px 0 var(--shared-line); }
 table.grid td.in.mod::after { content: ""; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 table.grid td.in.sh.mod::after { background: var(--shared-line); }
+/* a cell comment of the workbook: corner mark, the text is the tooltip */
+table.grid td.nt::before { content: ""; position: absolute; top: 0; right: 0; border-style: solid; border-width: 0 6px 6px 0;
+  border-color: transparent var(--neg) transparent transparent; }
+/* data bar (conditional format): the bar's length is the value's place between the rule's limits */
+table.grid td.bar { background-image: linear-gradient(90deg, var(--barc) 0, var(--barc) var(--bar, 0%), transparent var(--bar, 0%)); }
+table.grid td.bar-info, table.grid td.bar-accent { --barc: rgba(57, 135, 229, .30); }
+table.grid td.bar-pos { --barc: rgba(12, 163, 12, .28); }
+table.grid td.bar-neg { --barc: rgba(208, 59, 59, .28); }
+table.grid td.bar-warn { --barc: rgba(237, 161, 0, .30); }
+table.grid td.bar-mute { --barc: var(--sub-bg); }
+/* columns Excel freezes stay put while the table scrolls sideways; their tone sits on an opaque base */
+table.grid td.fz.fz { position: sticky; z-index: 1; background: linear-gradient(var(--fzt, transparent), var(--fzt, transparent)), var(--surface); }
+table.grid td.fz.f-sub { --fzt: var(--sub-bg); }
+table.grid td.fz.f-good { --fzt: var(--good-bg); }
+table.grid td.fz.f-bad { --fzt: var(--bad-bg); }
+table.grid td.fz.f-note { --fzt: var(--note-bg); }
+table.grid td.fz.f-hd { --fzt: var(--hd-bg); }
+table.grid td.fz.in { --fzt: var(--input-bg); }
+table.grid td.fz.in.sh { --fzt: var(--shared-bg); }
+table.grid tr.hd td.fz.fz { --fzt: var(--hd-bg); z-index: 4; }
+table.grid td.fzl { border-right: 1px solid var(--line-2); }
 table.grid td.sel { background-image: linear-gradient(var(--sel), var(--sel)) !important; }
+table.grid td.fz.sel { background-image: linear-gradient(var(--sel), var(--sel)), linear-gradient(var(--fzt, transparent), var(--fzt, transparent)) !important; }
 table.grid td.cur { outline: 2px solid var(--sel-line); outline-offset: -2px; z-index: 1; }
 table.grid td.up { animation: flash-up .9s ease-out; }
 table.grid td.down { animation: flash-down .9s ease-out; }
@@ -243,23 +278,24 @@ table.grid.addr td.axis.rowh { left: 0; }
 
 /* ---------------------------------------------------------------- charts */
 .chart-wrap { padding: 8px 10px 10px; position: relative; }
-.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 2px 4px 6px; color: var(--ink-2); font-size: 11.5px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 2px 4px 6px; color: var(--ink-2); font-size: 11.5px; min-height: 22px; }
+.chart-legend:empty { display: none; }
 .chart-legend .key { display: inline-flex; align-items: center; gap: 6px; }
-.chart-legend .key i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; border-radius: 2px; }
-.chart-legend .key i.box { height: 9px; width: 9px; border: 0; border-radius: 2px; }
-svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+svg.sw { flex: none; display: inline-block; overflow: visible; }
+svg.chart { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
 svg.chart text { fill: var(--ink-3); font-size: 10.5px; font-family: var(--font); font-variant-numeric: tabular-nums; }
 svg.chart .grid line { stroke: var(--line); stroke-width: 1; }
 svg.chart .axis line { stroke: var(--line-2); stroke-width: 1; }
 svg.chart .cross { stroke: var(--ink-3); stroke-width: 1; pointer-events: none; }
-svg.chart .ring { stroke: var(--surface); stroke-width: 2; }
+svg.chart .band { fill: var(--ink); opacity: .07; pointer-events: none; }
+svg.chart .ring { stroke: var(--surface); stroke-width: 2; pointer-events: none; }
+svg.chart .mk { stroke: var(--surface); stroke-width: 1.25; }
 .chart-tip { position: fixed; z-index: 60; pointer-events: none; background: var(--surface-3); border: 1px solid var(--line-2); border-radius: 8px;
   padding: 7px 10px; font-size: 11.5px; box-shadow: var(--shadow); min-width: 120px; }
 .chart-tip .t { color: var(--ink-3); margin-bottom: 4px; }
-.chart-tip .r { display: flex; align-items: center; gap: 7px; justify-content: space-between; }
-.chart-tip .r i { display: inline-block; width: 12px; border-top: 2px solid; margin-right: 6px; vertical-align: 3px; }
+.chart-tip .r { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.chart-tip .r span { color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
 .chart-tip .r b { font-variant-numeric: tabular-nums; color: var(--ink); }
-.chart-tip .r span { color: var(--ink-2); }
 .chart-empty { color: var(--ink-3); padding: 28px 12px; text-align: center; }
 
 /* ---------------------------------------------------------------- forms / blotter */

@@ -24,6 +24,12 @@ function store(key, value) {
 const ctx = {
   refreshNow: () => { runRefresh(); pollStatus(); },
   displayName: (key) => state.users[key] || key || '',
+  /** Open a page and bring one of its panels into view (the workbook's "go to" hyperlinks). */
+  goto: (pageId, panelId) => {
+    const hash = '#/' + pageId + (panelId ? '?p=' + encodeURIComponent(panelId) : '');
+    if (window.location.hash === hash) route();
+    else window.location.hash = hash;
+  },
 };
 
 // ---------------------------------------------------------------------- login
@@ -110,13 +116,18 @@ function pageTitle(id) {
 }
 
 function route() {
-  let id = decodeURIComponent((window.location.hash || '').replace(/^#\/?/, ''));
+  // "#/ois" opens a page, "#/ois?p=B4" also brings that panel into view
+  const raw = (window.location.hash || '').replace(/^#\/?/, '');
+  const cut = raw.indexOf('?');
+  let id = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
+  const panel = cut < 0 ? null : new URLSearchParams(raw.slice(cut + 1)).get('p');
   const known = id === 'explorer' || state.pages.some((p) => p.id === id);
   if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : 'explorer');
-  if (id !== state.pageId) openPage(id);
+  if (id !== state.pageId) openPage(id, panel);
+  else if (panel && state.page && state.page.ready && state.page.focusPanel) state.page.focusPanel(panel);
 }
 
-async function openPage(id) {
+async function openPage(id, panel) {
   if (state.page) state.page.destroy();
   clearSelection();
   state.pageId = id;
@@ -134,6 +145,7 @@ async function openPage(id) {
   try {
     await page.load();
     page.ready = true;
+    if (panel && state.page === page && page.focusPanel) page.focusPanel(panel);
   } catch (err) {
     if (state.page !== page) return;
     clear(host);
@@ -306,7 +318,7 @@ function boot() {
   session.onUnauthorized = () => { showLogin('Oturum bulunamadı – tekrar giriş yapın.'); };
   const after = (res) => { runRefresh(); return res; };
   configureGrid({
-    setInputs: (book, items, adhoc) => api.post('/api/inputs', { book, items, adhoc: !!adhoc }).then(after),
+    setInputs: (book, items, adhoc, lenient) => api.post('/api/inputs', { book, items, adhoc: !!adhoc, lenient: !!lenient }).then(after),
     paste: (book, anchor, text, adhoc) => api.post('/api/paste', { book, anchor, text, adhoc: !!adhoc }).then(after),
     reset: (book, refs, shared) => api.post('/api/reset', { book, refs, shared: !!shared }).then(after),
     onSelect,

@@ -59,7 +59,17 @@ ortam değişkenleriyle de verilebilir.
 **Sayfalar.** Excel'deki her sayfanın bir karşılığı var: Masa, OIS · PPK, Forward, VİOP, Carry & Roll, TM OIS,
 DİBS RV, Manuel Tahvil, Bulk Bond, YP DİBS, DV01 Risk, USD · FOMC, Hesaplayıcılar, USDTRY IYIX, Mobil MK,
 Ivır Zıvır, Motor. Ek olarak **Günlük İşlemler** ve herhangi bir sayfanın herhangi bir aralığını (formülüyle
-birlikte) gösteren **Sayfa gezgini**. Excel'deki grafikler eksen sınırlarıyla birlikte ilgili tabloların yanında.
+birlikte) gösteren **Sayfa gezgini**. Masa sayfasının üstündeki **Kısayollar** Excel'deki 30 köprünün aynısıdır:
+tıklayınca ilgili sayfa açılır ve köprünün gösterdiği tablo ekrana gelir.
+
+**Grafikler.** Excel'deki 14 grafik kendi tanımlarıyla çizilir: seri renkleri (RET kırmızı/mor kesik çizgi, ICAP
+turuncu, OIS mavi, VİOP yeşil …), işaretçiler, yumuşatılmış çizgiler, sabit eksen alt/üst sınırı ve adımı, eksen
+sayı biçimi, tarih ekseni (TLREF patikası ay ay), her 4 etiketten biri (FRA eğrisi), RET bid–ask kutuları, bant
+(alan) grafikleri, yığılmış / yan yana sütunlar ve grafiğin Excel'deki en-boy oranı. Değerler Excel'in kuralıyla
+çizilir: boş hücre çizgide boşluk bırakır, `#N/A` noktası atlanıp çizgi devam eder (Forward sayfasındaki iki
+grafikte Excel'deki ayar gereği boşluk kalır), metin sıfır sayılır; sabit sınırı olmayan eksen Excel'in otomatik
+kuralını izler. Renkler Excel'deki renk ailesini korur, tonları iki temada da renk körlüğü ayrımı için sınanmıştır.
+Fareyle üzerine gelince o noktadaki tüm değerler, "Tablo" düğmesiyle grafiğin verisi (kopyalanabilir) görünür.
 
 **Girdi hücreleri.**
 
@@ -77,8 +87,13 @@ birlikte) gösteren **Sayfa gezgini**. Excel'deki grafikler eksen sınırlarıyl
 
 * Fareyle sürükleyip (ya da `Shift` + ok / `Ctrl+A`) seçin, `Ctrl+C` → Excel'e yapıştırın. Her tablonun
   başlığında "Kopyala" düğmesi de var. `Ctrl+Shift+C` sayıları tam hassasiyetle (15 basamak) kopyalar.
-* Excel'den kopyaladığınız bloğu bir girdi hücresine tıklayıp `Ctrl+V` ile yapıştırın; blok ekrandaki hücrelere
-  birebir oturur, girdi olmayan hücreler atlanır (kaç hücrenin yazıldığı / atlandığı bildirilir).
+* Excel'den kopyaladığınız bloğu bir girdi hücresine tıklayıp `Ctrl+V` ile yapıştırın; girdi olmayan hücreler
+  atlanır (kaç hücrenin yazıldığı / atlandığı bildirilir). Blok Excel'deki yerleşimiyle oturur: tablonun
+  göstermediği (Excel'de gizli ya da boş olduğu için atlanan) satır ve sütunlar da sayılır, tablonun kendi aralığı
+  dışına hiçbir şey yazılmaz. Dashboard'dan kopyalanıp dashboard'a yapıştırılan blok ise ekrandaki hücrelere oturur.
+* **Excel'de gizli sütunlar** varsayılan olarak gösterilmez ve kopyalanmaz (ör. YP DİBS'te Bid sütunları): tablo
+  Excel'de gördüğünüz haliyle kopyalanır. Tablo başlığındaki "+N gizli sütun" ya da "Yardımcı tablolar" düğmesi
+  onları (ve ara hesap tablolarını) açar; açıkken kopyalanan blok Excel'deki sütun düzeniyle aynıdır.
 * Alt durum çubuğu seçili hücrenin Excel formülünü, çoklu seçimde toplam / ortalama / adedi gösterir.
 
 **RET faizleri.** Üstteki "RET faizleri" düğmesi: Excel'deki RET tablosunu (yalnızca bid–ask sütunları ya da
@@ -105,12 +120,33 @@ Kaydedilen işlem tüm kullanıcılarda anında görünür (kim, saat kaçta gir
 gerçekleşen K/Z — Hesaplayıcılar sayfasındaki "Weighted Average" tablosunun aynısı), altta Excel'deki
 Günlük İşlemler sayfasının kendi özet tabloları. Geçmiş günler tarih seçicisinden salt okunur açılır.
 
+**Gün sonu arşivi.** Excel'deki `GunSonuArsivle` makrosunun (sayfayı değer olarak `Blotter_yyyy.aa.gg.xlsx`
+dosyasına kaydedip listeleri temizleyen düğme) karşılığı: "Gün sonu arşivi (.xlsx)" seçili günü aynı adla indirir.
+Dosyanın ilk sayfası Günlük İşlemler sayfasının Excel'deki yerleşimiyle, yalnızca değerlerden oluşan kopyasıdır
+(makronun kaydettiği dosyayla aynı hücre adresleri); ikinci sayfada kimin, ne zaman, hangi işlemi girdiği ve
+pozisyon maliyetleri vardır. Listeleri temizlemek gerekmez: her günün defteri ayrıdır, yeni gün boş başlar ve
+geçmiş günler istenildiği zaman yeniden indirilebilir.
+
+### Excel'deki diğer özelliklerin karşılığı
+
+| Excel'de | Dashboard'da |
+|---|---|
+| Masa sayfasındaki 30 köprü | "Kısayollar" çubuğu: sayfa + tablo |
+| Gizli sütunlar (YP DİBS D:E, VİOP C/I/J, DİBS RV yardımcı sütunları) | Gösterilmez; "+N gizli sütun" / "Yardımcı tablolar" ile açılır |
+| Daraltılmış satır grupları (OIS'te tüm spread/fly/FRA listeleri, VİOP matrisleri) | Kapalı başlayan paneller (▸ ile açılır, tercih hatırlanır) |
+| Dondurulmuş bölmeler | Başlık satırları ve dondurulmuş sütunlar (DİBS RV A:C, USD A) kaydırırken yerinde kalır |
+| Hücre yorumları (OIS parametreleri, VİOP) | Hücrenin köşesinde kırmızı işaret, üzerine gelince metin |
+| Açılır listeler (veri doğrulama; sabit ya da bir aralıktan okunan) | Hücrede seçenek menüsü |
+| Koşullu biçimler: kural, renk skalası, veri çubuğu | Aynı kurallarla hücre rengi / ısı haritası / çubuk |
+| Ivır Zıvır sayfasındaki resim | Sayfanın sonunda resim paneli |
+| `GunSonuArsivle` makrosu | "Gün sonu arşivi (.xlsx)" |
+
 ---
 
 ## Excel ile birebirlik nasıl doğrulandı
 
 **Yaklaşım.** Çalışma kitapları içe aktarılır (`models/*.json.gz`: formüller, sabitler, biçimler, koşullu
-biçimler, grafikler) ve formüller `tto/xl` altındaki motorla çalıştırılır: Excel'in işlem önceliği, örtük kesişim,
+biçimler, grafik tanımları, gizli satır/sütunlar, dondurulmuş bölmeler, yorumlar, köprüler, resimler) ve formüller `tto/xl` altındaki motorla çalıştırılır: Excel'in işlem önceliği, örtük kesişim,
 dizi formülleri, `LET`, Türkçe yerel ayar (metin tarihler, `TEXT`), 15 basamak karşılaştırma, yarım-yukarı
 yuvarlama, soldan sağa toplama, son `+`/`−` işlemindeki sıfıra yapıştırma gibi davranışlarıyla. Bir hücre
 değişince yalnızca ona bağlı hücreler yeniden hesaplanır; her kullanıcının girdileri kendi katmanında tutulur.
@@ -193,7 +229,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~2,5 dk). 422 test:
+Bloomberg ve ağ gerekmez (~3 dk). 459 test:
 
 | Dosya | Kapsam |
 |---|---|
@@ -202,9 +238,11 @@ Bloomberg ve ağ gerekmez (~2,5 dk). 422 test:
 | `test_reference.py` | LibreOffice'in baştan hesapladığı değerlerle karşılaştırma (`tests/data/lo_*.json.gz`) |
 | `test_forward.py` | Forward: bağımsız kapalı formül, Excel'in kayıtlı değerleri, işlem girişindeki fiyatlamanın sayfayla aynılığı |
 | `test_blotter.py` | Outright / spread / fly / FRA bacakları, maliyet, ortak işlem defteri, Excel özet tabloları |
+| `test_charts.py` | Grafik tanımlarının Excel'den alınışı (renk, çizgi, işaretçi, eksen sınırları, tarih ekseni, bid–ask kutuları) ve değerlerin Excel kuralıyla çizime verilişi (boşluk, `#N/A`, metin) |
+| `test_workbook_features.py` | Gizli sütunlar, dondurulmuş bölmeler, yorumlar, veri çubukları, kısayollar, resim, aralıktan okunan açılır listeler, Excel yerleşimiyle yapıştırma, gün sonu arşivi (.xlsx yazıcı dahil) |
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_views.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma, sayfa tanımları, port kuralı |
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik |
-| `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 62 kontrol: giriş, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
+| `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 93 kontrol: giriş, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
 
 LibreOffice referansını yeniden üretmek (LibreOffice kuruluysa):
 
@@ -237,6 +275,7 @@ tto/xl/            Excel formül motoru (tokenizer, parser, derleyici, fonksiyon
 tto/marketdata/    Bloomberg (blpapi) ve kayıtlı veri sağlayıcıları
 tto/service.py     uygulama servisi (sayfalar, girdiler, senaryolar, RET, işlem defteri)
 tto/blotter.py     forward fiyatlama, OIS strateji bacakları, pozisyon maliyeti
+tto/xlsx.py        gün sonu arşivi için küçük .xlsx yazıcı (yalnızca değerler ve biçimler)
 tto/server.py      HTTP API + canlı güncelleme (server-sent events)
 tto/store.py       SQLite (kullanıcılar, girdiler, senaryolar, RET geçmişi, işlemler)  →  data/tto.db
 tto/views/         sayfa tanımları

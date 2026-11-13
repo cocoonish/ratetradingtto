@@ -480,7 +480,8 @@
    "type": "table",
    "title": "İMA PPK – kotalar ve global çözücü kontrolü (model − kota, bp)",
    "range": "A440:W457",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B23",

@@ -281,7 +281,158 @@ async function shot(page, name) {
     await page.waitForTimeout(250);
     const yp = await page.evaluate(() => navigator.clipboard.readText());
     check('"Kopyala" on the YP DİBS table puts a TSV block on the clipboard', yp.split('\r\n').length >= 9 && yp.includes('\t'), yp.slice(0, 120));
+    check('the copy has the columns Excel shows (the hidden Bid columns stay out)',
+      yp.split('\r\n')[0] === '\t04.11.2026\tOffer\tT1 Yield\tStok', yp.split('\r\n')[0]);
     await shot(page, '06-ypdibs');
+
+    // ------------------------------------------------------------------ charts as Excel defines them
+    console.log('charts');
+    const fns = await page.evaluate(async () => {
+      const m = await import('/static/js/chart.js');
+      return {
+        fam: ['C0504D', '8064A2', 'F79646', '1F497D', '9BBB59', '4BACC6', '7F7F7F', 'zz'].map(m.colorFamily),
+        cols: m.seriesColors([{ color: 'C0504D' }, { color: 'C0504D' }, { color: 'BE4B48' }, {}, {}]),
+        excel: m.valueScale({}, 0.30, 0.42, 300), near: m.valueScale({}, 0.38, 0.42, 300),
+        fit: m.valueScale({ auto: 'fit' }, 0.30, 0.42, 300), fixed: m.valueScale({ ymin: 0.25 }, 0.28, 0.51, 200),
+        unit: m.valueScale({ ymin: 0.3, ymax: 0.42, major_unit: 0.01 }, 0.31, 0.40, 330), mixed: m.valueScale({}, -80, 20, 300),
+        date: m.formatAxisDate(46388, 'mmm yy'), date2: m.formatAxisDate(46388, 'dd.mm.yyyy'),
+      };
+    });
+    check('Excel colours map to their colour family', JSON.stringify(fns.fam) === JSON.stringify(['red', 'purple', 'orange', 'blue', 'green', 'cyan', 'ink', null]), fns.fam);
+    check('the same workbook colour keeps one tone, another colour of a taken family takes the next free one',
+      JSON.stringify(fns.cols) === JSON.stringify(['var(--c-red)', 'var(--c-red)', 'var(--c-blue)', 'var(--c-green)', 'var(--c-purple)']), fns.cols);
+    check('automatic axis follows Excel: from zero unless the data sit in the top sixth of their maximum',
+      fns.excel.lo === 0 && fns.near.lo > 0.3 && fns.near.lo < 0.38 && fns.near.hi >= 0.42, [fns.excel, fns.near]);
+    check('a chart that is not from the workbook fits its data', fns.fit.lo > 0.2 && fns.fit.lo <= 0.3 && fns.fit.hi >= 0.42, fns.fit);
+    check('ticks start at a fixed minimum and keep the fixed unit',
+      fns.fixed.lo === 0.25 && fns.fixed.ticks[0] === 0.25 && fns.fixed.hi >= 0.51 && fns.unit.ticks.length === 13 && fns.unit.hi === 0.42, [fns.fixed, fns.unit]);
+    check('an axis over both signs keeps zero as a tick', fns.mixed.lo <= -80 && fns.mixed.hi >= 20 && fns.mixed.ticks.includes(0), fns.mixed);
+    check('date axis labels use month names', fns.date === 'Oca 27' && fns.date2 === '01.01.2027', [fns.date, fns.date2]);
+
+    const chartInfo = () => page.evaluate(() => [...document.querySelectorAll('.panel.chart')].map((p) => {
+      const svg = p.querySelector('svg.chart');
+      const box = svg.getBoundingClientRect();
+      return {
+        title: p.querySelector('h2').textContent,
+        keys: [...p.querySelectorAll('.chart-legend .key')].map((k) => k.textContent),
+        strokes: [...new Set([...svg.querySelectorAll('path[fill="none"]')].map((x) => x.style.stroke))],
+        dashed: svg.querySelectorAll('path[stroke-dasharray]').length, curved: [...svg.querySelectorAll('path[fill="none"]')].filter((x) => x.getAttribute('d').includes(' C')).length,
+        markers: svg.querySelectorAll('circle.mk').length, boxes: svg.querySelectorAll('rect[rx="1.5"]').length,
+        areas: svg.querySelectorAll('path[fill-opacity]').length, bars: [...svg.querySelectorAll('path')].filter((x) => x.getAttribute('d').endsWith('Z') && !x.hasAttribute('fill-opacity')).length,
+        height: Math.round(box.height), width: Math.round(box.width),
+        y: [...svg.querySelectorAll('text[text-anchor="end"]')].map((t) => t.textContent),
+        x: [...svg.querySelectorAll('text[text-anchor="middle"]:not(.ttl)')].map((t) => t.textContent),
+        titles: [...svg.querySelectorAll('text.ttl')].map((t) => t.textContent),
+      };
+    }));
+    await open(page, 'masa');
+    const mc = await chartInfo();
+    check('desk page draws the six charts of the workbook', mc.length === 6, mc.map((c) => c.title));
+    check('"Oranlar": legend, Excel colours (RET red / purple dashes, ICAP orange, OIS blue, VİOP green), markers',
+      JSON.stringify(mc[0].keys) === JSON.stringify(['RET bid', 'RET ask', 'ICAP', 'OIS zero', 'VİOP'])
+      && JSON.stringify(mc[0].strokes) === JSON.stringify(['var(--c-red)', 'var(--c-purple)', 'var(--c-orange)', 'var(--c-blue)', 'var(--c-green)'])
+      && mc[0].dashed === 2 && mc[0].markers > 35 && mc[0].curved === 0, mc[0]);
+    check('value axis starts at the minimum fixed in Excel, with the format\'s decimals', mc[0].y[0] === '25,0%' && mc[0].y[1] === '30,0%', mc[0].y);
+    check('"RET bid–ask": 30–42 % in steps of 1 % and the bid–ask boxes',
+      mc[2].y.length === 13 && mc[2].y[0] === '30%' && mc[2].y[12] === '42%' && mc[2].boxes === 8, { y: mc[2].y, boxes: mc[2].boxes });
+    check('"RET bandı": one legend key for the band, drawn as two washes', mc[3].keys.length === 4 && mc[3].keys[0] === 'RET bid–ask bandı' && mc[3].areas === 2, mc[3].keys);
+    check('"3M FRA eğrisi": every fourth label, as in Excel', JSON.stringify(mc[4].x) === JSON.stringify(['Spot', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y']), mc[4].x);
+    check('chart height follows the shape of the chart in Excel', mc[2].height > mc[0].height + 80 && mc[0].height >= 230 && mc[2].height <= 400, mc.map((c) => c.height));
+    await shot(page, '07-charts-masa');
+
+    await open(page, 'ois');
+    const oc = await chartInfo();
+    const tlref = oc.find((c) => c.title.startsWith('TLREF'));
+    check('TLREF path is on a date axis labelled by month, smoothed, with its axis title',
+      tlref.x.length >= 5 && tlref.x.every((t) => /^(Oca|Şub|Mar|Nis|May|Haz|Tem|Ağu|Eyl|Eki|Kas|Ara) \d\d$/.test(t)) && tlref.curved === 4
+      && tlref.titles.includes('TLREF') && tlref.y[0] === '25%', tlref);
+    check('scenario lines keep Excel\'s blue / red / green / purple',
+      JSON.stringify(tlref.strokes) === JSON.stringify(['var(--c-blue)', 'var(--c-red)', 'var(--c-green)', 'var(--c-purple)']), tlref.strokes);
+    const steps = oc.find((c) => c.title.startsWith('Toplantı başı'));
+    const carry = oc.find((c) => c.title.startsWith('Carry + roll'));
+    check('bar charts: clustered steps and the stacked carry + roll', steps.bars > 30 && steps.keys.length === 4 && carry.keys.length === 2 && carry.bars >= 16, [steps.bars, carry.bars]);
+    // tooltip: nearest date on the date axis, every series with its value
+    const pathSvg = page.locator('.panel.chart', { hasText: 'TLREF patikası' }).locator('svg.chart');
+    await pathSvg.scrollIntoViewIfNeeded();
+    const tb = await pathSvg.boundingBox();
+    await page.mouse.move(tb.x + tb.width * 0.55, tb.y + tb.height * 0.45);
+    await page.waitForSelector('.chart-tip');
+    const tip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent, rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    check('hovering a chart shows the date and all four values', /^\d\d\.\d\d\.\d{4}$/.test(tip.head) && tip.rows.length === 4 && tip.rows.every((r) => /%$/.test(r)), tip);
+    const stepSvg = page.locator('.panel.chart', { hasText: 'Toplantı başı adım' }).locator('svg.chart');
+    await stepSvg.scrollIntoViewIfNeeded();
+    const bb = await stepSvg.boundingBox();
+    await page.mouse.move(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5);
+    await page.waitForFunction(() => [...document.querySelectorAll('svg.chart .band')].some((b) => b.getAttribute('visibility') === 'visible'));
+    check('hovering a bar chart marks the category', /^MPC\d+$|^Spot$/.test(await page.textContent('.chart-tip .t')));
+    await page.mouse.move(5, 5);
+    await shot(page, '08-charts-ois');
+
+    // ------------------------------------------------------------------ what else the workbook has
+    console.log('workbook extras');
+    const notes = await page.evaluate(() => [...document.querySelectorAll('td.nt')].map((td) => td.title));
+    check('cell comments of the workbook are tooltips on their cells', notes.length === 6 && notes.includes('1 = OIS ima patikası, 0 = TLREF sabit'), notes);
+    await open(page, 'masa');
+    check('the desk page has the workbook\'s 30 shortcuts', await page.locator('.shortcuts .chip').count() === 30);
+    await page.locator('.shortcuts .chip', { hasText: 'Matrisler' }).click();
+    await page.waitForFunction(() => window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await page.waitForTimeout(900);
+    const hit = await page.evaluate(() => {
+      const el = document.querySelector('.panel[data-panel="B17"]');
+      return { top: el.getBoundingClientRect().top, open: !el.classList.contains('collapsed'), hash: window.location.hash,
+        folded: document.querySelectorAll('.panel.collapsed').length };
+    });
+    check('a shortcut opens the page at the table it points to (and unfolds it)', hit.hash === '#/viop?p=B17' && hit.open && hit.top < 400 && hit.top > 0, hit);
+    check('tables Excel keeps folded start folded', hit.folded >= 14, hit.folded);
+    await page.evaluate(() => window.tto.state.page.items.get('B17').toggle(true));
+
+    await open(page, 'ypdibs');
+    const ypCols = () => page.evaluate(() => window.tto.state.page.items.get('B2').grid.data.c.join(''));
+    check('columns hidden in Excel are not shown', await ypCols() === 'BCFGH' && /2 gizli sütun/.test(await page.textContent('.panel[data-panel="B2"] .hc')));
+    // a block copied in Excel (C2:F3) carries the hidden columns: ISIN | Bid (formula) | Bid Yield | Offer
+    await page.evaluate(async () => {
+      const g = window.tto.state.page.items.get('B2').grid;
+      const mod = await import('/static/js/grid.js');
+      const i = g.data.r.indexOf(2), j = g.data.c.indexOf('C');
+      await mod.pasteText(g, { grid: g, top: i, left: j, bottom: i, right: j },
+        'TRT191127F19\t98,9\t5,45\t100,25\r\nTRT030227F18\t99,7\t5,15\t100,15');
+    });
+    await page.waitForFunction(() => { const td = window.tto.findCell('YP DIBS!F2'); return td && td.textContent === '100,250'; }, null, { timeout: 15000 });
+    check('a block pasted from Excel keeps Excel\'s layout across the hidden columns', await cellText(page, 'YP DIBS!F3') === '100,150');
+    await page.click('.panel[data-panel="B2"] .hc');
+    await page.waitForFunction(() => window.tto.findCell('YP DIBS!E2') !== null, null, { timeout: 15000 });
+    check('"gizli sütun" shows them - with the value that was pasted into the hidden input',
+      await ypCols() === 'BCDEFGH' && await cellText(page, 'YP DIBS!E2') === '5,45' && await cellText(page, 'YP DIBS!E3') === '5,15',
+      [await ypCols(), await cellText(page, 'YP DIBS!E2')]);
+    await page.click('.page-tools button:has-text("Yardımcı tablolar")');
+    await page.waitForFunction(() => window.tto.findCell('YP DIBS!E2') === null, null, { timeout: 15000 });
+
+    await open(page, 'dibs');
+    const frozen = await page.evaluate(() => {
+      const p = document.querySelector('.panel[data-panel="B3"]');
+      const row = [...p.querySelectorAll('tr')][5];
+      const at = () => [...row.querySelectorAll('td.fz')].map((td) => Math.round(td.getBoundingClientRect().left));
+      const before = at();
+      p.querySelector('.body').scrollLeft = 700;
+      return { before, after: at(), scrolled: p.querySelector('.body').scrollLeft };
+    });
+    check('columns frozen in Excel stay in view when the table scrolls sideways',
+      frozen.before.length === 3 && frozen.scrolled > 300 && JSON.stringify(frozen.before) === JSON.stringify(frozen.after), frozen);
+
+    await open(page, 'usd');
+    const bars = await page.evaluate(() => [...document.querySelectorAll('td.bar')].map((td) => parseFloat(td.style.getPropertyValue('--bar'))));
+    // four rules of ten cells each; a cell without a number has no bar
+    check('data bars of the USD sheet are drawn', bars.length >= 30 && bars.length <= 40 && Math.max(...bars) === 90 && Math.min(...bars) >= 10, bars.length);
+    await open(page, 'ivir');
+    await page.waitForFunction(() => { const im = document.querySelector('img.sheet-image'); return im && im.complete && im.naturalWidth > 0; }, null, { timeout: 15000 });
+    check('the picture pasted on the sheet is shown', await page.evaluate(() => document.querySelector('img.sheet-image').naturalWidth) === 1366);
+
+    await open(page, 'blotter');
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
+    const saved = await download.path();
+    const size = require('fs').statSync(saved).size;
+    check('"Gün sonu arşivi" downloads the day as Blotter_yyyy.mm.dd.xlsx', /^Blotter_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(download.suggestedFilename()) && size > 4000,
+      [download.suggestedFilename(), size]);
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

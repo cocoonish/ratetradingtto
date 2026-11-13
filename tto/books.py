@@ -39,6 +39,7 @@ class Book(object):
         self.engine = Engine(model, provider=provider, clock=clock)
         self.inputs: Dict[Tuple[int, int], InputDef] = {}
         self._validation: Dict[Tuple[int, int], List[str]] = {}
+        self._validation_ranges: Dict[Tuple[int, int], Tuple[int, int, int, int, int]] = {}
         self._index_validations()
         self._register_spills()
         if replay:
@@ -73,20 +74,63 @@ class Book(object):
     def input_def(self, si: int, rc: int) -> Optional[InputDef]:
         return self.inputs.get((si, rc))
 
-    def options_for(self, si: int, rc: int) -> Optional[List[str]]:
+    def options_for(self, si: int, rc: int, calc=None) -> Optional[List[str]]:
+        """Items of the cell's drop-down list.  A list that Excel reads from a range ("=$B$6:$B$25") needs
+        ``calc`` - its items are whatever those cells hold right now."""
         d = self.inputs.get((si, rc))
         if d is not None and d.options:
             return d.options
-        return self._validation.get((si, rc))
+        items = self._validation.get((si, rc))
+        if items is None and calc is not None:
+            src = self._validation_ranges.get((si, rc))
+            if src is not None:
+                items = self._range_items(calc, src)
+        return items
+
+    @staticmethod
+    def _range_items(calc, src: Tuple[int, int, int, int, int]) -> Optional[List[str]]:
+        ssi, r1, c1, r2, c2 = src
+        out: List[str] = []
+        try:
+            rows = calc.get_range(ssi, r1, c1, r2, c2)
+        except Exception:  # noqa: BLE001 - a list that cannot be read is simply not offered
+            return None
+        for row in rows:
+            for v in row:
+                if v is None or v == "" or type(v) is XlError:
+                    continue
+                if type(v) is float:
+                    text = str(int(v)) if v == int(v) else repr(v)
+                elif type(v) is bool:
+                    text = "TRUE" if v else "FALSE"
+                else:
+                    text = str(v)
+                if text not in out:
+                    out.append(text)
+        return out[:300] or None
 
     def _index_validations(self) -> None:
-        """Drop-down lists defined in the workbook (data validation of type list with literal items)."""
+        """Drop-down lists defined in the workbook: data validation of type list, with literal items
+        ("USD,EUR") or with a range of cells that holds the items."""
         for s in self.model.sheets:
             for v in s.validations:
-                f1 = v.get("formula1")
-                if v.get("type") != "list" or not f1 or not f1.startswith('"'):
+                f1 = (v.get("formula1") or "").strip()
+                if v.get("type") != "list" or not f1:
                     continue
-                items = [x.strip() for x in f1.strip('"').split(",")]
+                items = None
+                src = None
+                if f1.startswith('"'):
+                    items = [x.strip() for x in f1.strip('"').split(",")]
+                else:
+                    sheet_name, _, addr = f1.lstrip("=").rpartition("!")
+                    sheet_name = sheet_name.strip("'") or s.name
+                    try:
+                        r1, c1, r2, c2 = parse_range(addr.replace("$", ""))
+                        src = (self.model.sheet_index[sheet_name], r1, c1, r2, c2)
+                    except Exception:  # noqa: BLE001 - a named list or a formula: no menu, typing still works
+                        continue
+                    if (r2 - r1 + 1) * (c2 - c1 + 1) > 2000:
+                        continue
                 for part in (v.get("sqref") or "").split():
                     try:
                         r1, c1, r2, c2 = parse_range(part)
@@ -96,7 +140,10 @@ class Book(object):
                         continue
                     for r in range(r1, r2 + 1):
                         for c in range(c1, c2 + 1):
-                            self._validation[(s.index, r * COLS + c)] = items
+                            if items is not None:
+                                self._validation[(s.index, r * COLS + c)] = items
+                            else:
+                                self._validation_ranges[(s.index, r * COLS + c)] = src
 
     # ------------------------------------------------------------------ spills (BDH / BDS / dynamic arrays)
     def _register_spills(self) -> None:
