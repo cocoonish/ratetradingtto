@@ -420,6 +420,7 @@ class Calc(object):
 
     def _load(self, si: int, rc: int, r: int, c: int) -> Any:
         parent = self.parent
+        eng = self.engine
         if parent is not None:
             pv = parent.memo[si].get(rc, _MISS)
             if pv is not _MISS:
@@ -429,7 +430,12 @@ class Calc(object):
                 if not (k & self.omask):
                     self.cm |= k
                     return pv
-        eng = self.engine
+                if rc in eng.input_mask[si] and (rc not in eng.fml[si] or rc in eng.input_value[si] or rc in eng.pins[si]):
+                    # An input this user did not type into, although it shares its dependency bit with cells
+                    # the user did type into (a group of inputs, e.g. one column of scenario steps): the value
+                    # everybody sees stands - and whatever is computed from it depends on that group.
+                    self.cm |= k
+                    return pv
         tid = eng.fml[si].get(rc)
         if tid is not None:
             return self._eval(si, rc, r, c, tid)

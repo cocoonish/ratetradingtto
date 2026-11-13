@@ -75,6 +75,46 @@ def test_input_group_shares_one_dependency_bit():
     assert eng.shared.value("S!B1") == 33.0
 
 
+def test_a_user_who_types_into_one_cell_of_a_group_keeps_the_other_cells():
+    """Cells of a group share one dependency bit; typing into one of them must not blank the others for that
+    user (regression: they read as empty, and what was computed from them leaked to everybody)."""
+    eng = mini_engine({"A1": 1, "A2": 2, "A3": 3, "B1": "=SUM(A1:A3)", "C1": "=A1*10", "D1": "=A2*10", "E1": '=IF(A2="","boş","dolu")'})
+    cells = [eng.model.cell_ref("S!A%d" % i) for i in (1, 2, 3)]
+    eng.declare_inputs(cells, group="table")
+    ali = eng.set_user_inputs("ali", {cells[2]: 30.0})
+    # the user asks first: nothing is in the shared pool yet
+    assert ali.value("S!C1") == 10.0 and ali.value("S!D1") == 20.0 and ali.value("S!E1") == "dolu"
+    assert ali.value("S!A1") == 1.0 and ali.value("S!A2") == 2.0 and ali.value("S!A3") == 30.0
+    assert ali.value("S!B1") == 33.0
+    # ... and what was computed for the user did not reach the others
+    assert eng.shared.value("S!B1") == 6.0 and eng.shared.value("S!C1") == 10.0 and eng.shared.value("S!E1") == "dolu"
+    veli = eng.set_user_inputs("veli", {cells[0]: 100.0})
+    assert veli.value("S!B1") == 105.0 and veli.value("S!C1") == 1000.0 and veli.value("S!D1") == 20.0
+    # a shared change of a cell the user left alone reaches the user; the user's own cell stays
+    eng.set_inputs({cells[1]: 7.0})
+    assert eng.shared.value("S!B1") == 11.0 and ali.value("S!B1") == 38.0 and ali.value("S!D1") == 70.0
+    assert veli.value("S!B1") == 110.0
+    eng.set_inputs({cells[2]: 9.0})
+    assert ali.value("S!B1") == 38.0 and veli.value("S!B1") == 116.0 and eng.shared.value("S!B1") == 17.0
+    # a blank typed by the user is a blank; without the user's input the shared view is back
+    eng.set_user_inputs("ali", {cells[1]: None})
+    assert eng.user("ali").value("S!E1") == "boş" and eng.user("ali").value("S!B1") == 10.0 and eng.shared.value("S!E1") == "dolu"
+    eng.set_user_inputs("ali", {})
+    assert eng.user("ali").value("S!B1") == 17.0 and eng.user("ali").value("S!C1") == 10.0
+
+
+def test_grouped_inputs_with_a_formula_default_are_computed_for_the_user():
+    eng = mini_engine({"A1": 2, "A2": "=A1*10", "A3": 5, "B1": "=A2+A3"})
+    cells = [eng.model.cell_ref("S!A%d" % i) for i in (1, 2, 3)]
+    eng.declare_inputs(cells, group="g")
+    assert eng.shared.value("S!B1") == 25.0
+    u = eng.set_user_inputs("ali", {cells[0]: 3.0})           # A2 is still its formula - on the user's A1
+    assert u.value("S!A2") == 30.0 and u.value("S!A3") == 5.0 and u.value("S!B1") == 35.0
+    assert eng.shared.value("S!B1") == 25.0
+    eng.set_inputs({cells[1]: 1.0})                           # a shared value typed over the formula: everybody's
+    assert u.value("S!B1") == 6.0 and eng.shared.value("S!B1") == 6.0
+
+
 def test_empty_input_cell_can_be_filled_per_user():
     """A blank input still carries a dependency: filling it must recalculate (regression)."""
     eng = mini_engine({"A1": None, "B1": '=IF(A1="","",A1*2)'})
