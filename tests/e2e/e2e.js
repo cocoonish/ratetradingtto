@@ -483,6 +483,129 @@ async function shot(page, name) {
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.is_today, null, { timeout: 20000 });
     await shot(page, '04b-broker');
 
+    // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
+    console.log('blotter: pairs, swap points, MPC');
+    await open(page, 'blotter');
+    const fxTile = (k) => page.evaluate((key) => (document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="' + key + '"] .v') || {}).textContent || '', k);
+    const fxRows = () => page.evaluate(() => [...document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const fxBefore = (await fxRows()).length;
+    await page.click('#fwd-pair button[data-v="EURTRY"]');
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="B"]');
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="RET_MID"]');
+    await page.fill('.form input[placeholder^="örn. 10m"]', '5m');
+    await page.fill('.form input[placeholder="gg.aa.yyyy"]', '15.12.2026');
+    const eurQ = await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/forward', { pair: 'EURTRY', value_date: '15.12.2026', basis: 'RET_MID', amount: 5000000 });
+    const fxForwardIs = (f) => page.waitForFunction((want) => {
+      const el = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="fwd-forward"] .v');
+      return !!el && Math.abs(Number(el.textContent.replace(',', '.')) - want) < 6e-5;
+    }, f, { timeout: 15000 });
+    await fxForwardIs(eurQ.json.forward);
+    const eurLabels = await page.evaluate(() => [...document.querySelectorAll('.entry .pad:not(.hidden) .field > label')].map((l) => l.textContent).join('|')
+      + '|' + [...document.querySelectorAll('.entry .pad:not(.hidden) .seg button')].map((b) => b.textContent).join('|'));
+    check('EURTRY forward: the sheet\'s own EURTRY table, in EUR', eurQ.json.pair === 'EURTRY' && Math.abs(trNumber(await fxTile('fwd-total')) - 5e6 * eurQ.json.forward) < 0.006
+      && /Tutar \(EUR\)/.test(eurLabels) && /Alış \(EUR al\)/.test(eurLabels), [await fxTile('fwd-total'), eurQ.json.forward, eurLabels.slice(0, 200)]);
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="SP"]');
+    await page.fill('.form input[placeholder="örn. 17.400"]', '22.500');
+    await fxForwardIs(eurQ.json.spot + 2.25);
+    check('swap points: forward = spot + points / 10.000', (await fxTile('fwd-points')).trim() === '22.500', [await fxTile('fwd-points'), await fxTile('fwd-forward')]);
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === n + 1, fxBefore, { timeout: 15000 });
+    // a currency the workbook has no curve for: typed by hand
+    await page.click('#fwd-pair button[data-v="OTHER"]');
+    await page.fill('#fwd-code', 'gbp');
+    await page.fill('#fwd-spot', '63,00');
+    await page.fill('.form input[placeholder="örn. 17.400"]', '20.000');
+    await page.fill('.form input[placeholder^="örn. 10m"]', '2m');
+    await page.waitForFunction(() => /^65,0000$/.test(((document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="fwd-forward"] .v') || {}).textContent || '').trim()), null, { timeout: 15000 });
+    const gbpBases = await page.evaluate(() => [...document.querySelectorAll('.entry .pad:not(.hidden) .seg button')]
+      .filter((b) => !b.classList.contains('hidden') && ['RET_BID', 'RET_MID', 'RET_ASK', 'TRY', 'FWD', 'SP'].includes(b.dataset.v)).map((b) => b.dataset.v).join(','));
+    check('another currency: a pair typed, spot and points by hand', (await fxTile('fwd-total')).trim() === '130.000.000,00' && gbpBases === 'FWD,SP'
+      && /Tutar \(GBP\)/.test(await page.textContent('.entry .pad:not(.hidden)')), [await fxTile('fwd-total'), gbpBases]);
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === n + 2, fxBefore, { timeout: 15000 });
+    const fxList = await fxRows();
+    const fxCol = (name) => fxList[0].indexOf(name);
+    const fxNew = fxList.slice(-2);
+    const fxCost = await page.evaluate(() => [...document.querySelectorAll('.lists .panel:nth-child(4) table.grid tr')].map((tr) => tr.children[0].textContent));
+    check('the forwards are listed with their pair and points, and costed by pair', fxNew[0][fxCol('Parite')] === 'EURTRY' && fxNew[1][fxCol('Parite')] === 'GBPTRY'
+      && fxNew[0][fxCol('Swap puanı')] === '22.500' && fxNew[1][fxCol('Forward')] === '65,0000' && fxNew[0][fxCol('Fiyatlama')] === 'Swap puanı'
+      && /^\+/.test(fxNew[0][fxCol('DV01 ($)')]) && fxCost[0] === 'Parite' && fxCost.includes('EURTRY') && fxCost.includes('GBPTRY'), [fxNew, fxCost]);
+    // a meeting-dated OIS
+    await page.click('.entry .tabs button:nth-child(2)');
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="mpc"]');
+    await page.waitForSelector('#ois-mpc-start');
+    const mpcMarket = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter/ois-market')).json.mpc;
+    await page.waitForFunction(() => /Piyasa mid/.test(document.querySelector('.entry .pad:not(.hidden) .echo')?.textContent || ''));
+    const mpcOptions = await page.evaluate(() => [[...document.querySelectorAll('#ois-mpc-start option')].map((o) => o.textContent), document.querySelector('#ois-mpc-end').selectedOptions[0].textContent]);
+    check('MPC: from spot or a meeting\'s effective day to a later meeting\'s, at the sheet\'s market level',
+      mpcOptions[0][0] === 'Spot · ' + mpcMarket.spot_text && mpcOptions[0][1] === 'MPC1 · ' + mpcMarket.dates[0].text && mpcOptions[1] === 'MPC2 · ' + mpcMarket.dates[1].text
+      && Math.abs(trNumber((await page.textContent('.entry .pad:not(.hidden) .echo')).replace('Piyasa mid:', '').replace('kullan', '')) - mpcMarket.dates[0].market * 100) < 6e-5,
+      [mpcOptions[0].slice(0, 3), mpcOptions[1], await page.textContent('.entry .pad:not(.hidden) .echo')]);
+    await page.fill('input[placeholder="örn. 37,25"]', '35,90');
+    await page.waitForFunction(() => document.querySelectorAll('.entry .pad:not(.hidden) .quotebox table.grid tr').length === 2);
+    const mpcLeg = await page.evaluate(() => [...document.querySelectorAll('.entry .pad:not(.hidden) .quotebox table.grid tr')][1].textContent);
+    const oisBefore = await page.locator('.lists .panel:nth-child(2) table.grid tr').count();
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr').length === n + 1, oisBefore, { timeout: 15000 });
+    const oisList = await page.evaluate(() => [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const dvCol = oisList[0].indexOf('DV01 ($)'), sideCol = oisList[0].indexOf('Yön');
+    check('the meeting-dated swap is one leg named by its dates', /^MPCPAYMPC \d\d\.\d\d\.\d\d–\d\d\.\d\d\.\d\d35,9000%/.test(mpcLeg)
+      && /^MPC \d\d\.\d\d\.\d\d–/.test(oisList[oisList.length - 1][oisList[0].indexOf('Vade')]), [mpcLeg, oisList[oisList.length - 1]]);
+    check('DV01 sign: a payer is plus and a receiver minus, leg by leg',
+      oisList.slice(1).every((r) => (r[sideCol] === 'PAY' ? /^\+/.test(r[dvCol]) : /^-/.test(r[dvCol]))) && oisList.slice(1).some((r) => r[sideCol] === 'RECEIVE'), oisList.map((r) => [r[sideCol], r[dvCol]]));
+    await page.click('.entry .tabs button:nth-child(1)');
+    await page.click('#fwd-pair button[data-v="USDTRY"]');
+    await shot(page, '04c-blotter-pairs');
+
+    // ------------------------------------------------------------------ realized vol · carry
+    console.log('realized vol, carry / vol');
+    await open(page, 'vol');
+    await page.waitForFunction(() => /22 gün/.test(document.getElementById('vol-history').textContent), null, { timeout: 60000 });
+    const volTable = () => page.evaluate(() => [...document.querySelectorAll('#vol-panel table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
+    await page.fill('#vol-items', '1y, 3m6m, 3m6m1y, 9x12, 2y3y4y, abc');
+    await page.waitForFunction(() => document.querySelectorAll('#vol-panel table.grid tr').length === 7 && document.querySelector('#vol-panel table.grid tr:nth-child(2) td').textContent === '1Y', null, { timeout: 20000 });
+    const volApi = (await api(page, 'ayşe yilmaz', 'POST', '/api/vol', { text: '1y, 3m6m', window: 20 })).json;
+    let vt = await volTable();
+    check('realized vol of what is typed: outright, spread, fly, FRA - bp a day over 10 / 20 / 60 … days',
+      JSON.stringify(vt.slice(1, 5).map((r) => r[0] + '/' + r[1])) === JSON.stringify(['1Y/Outright', '3M–6M/Spread (bp)', '3M–6M–1Y/Fly (bp)', '9x12/FRA'])
+      && Math.abs(trNumber(vt[1][6]) - volApi.rows[0].vols['20'].d) < 0.06 && Math.abs(trNumber(vt[2][5]) - volApi.rows[1].vols['10'].d) < 0.06
+      && Math.abs(trNumber(vt[1][2]) - volApi.rows[0].level) < 0.006 && vt[1][10] === String(volApi.rows[0].n), [vt.slice(0, 5), volApi.rows[0].vols]);
+    check('what has no history, or is no instrument, says so', /geçmişi yok: 2Y, 3Y, 4Y/.test(vt[5].join(' ')) && /anlaşılamadı/.test(vt[6].join(' '))
+      && /Tarihçe kısa/.test(await page.textContent('#vol-banner')), vt.slice(5));
+    await page.click('#vol-unit button[data-v="1"]');
+    await page.waitForFunction(() => /yıllık/.test(document.querySelector('#vol-panel table.grid tr td:nth-child(6)').textContent));
+    vt = await volTable();
+    check('a year\'s volatility is a day\'s × √252', Math.abs(trNumber(vt[1][6]) - volApi.rows[0].vols['20'].d * Math.sqrt(252)) < 0.06, vt[1]);
+    await page.click('#vol-unit button[data-v="0"]');
+    await page.evaluate(() => { [...document.querySelectorAll('#vol-panel table.grid tr')][2].querySelector('td.act button').click(); });
+    await page.waitForFunction(() => /^3M–6M · seviye/.test(document.querySelector('#vol-panel .volcharts .ct').textContent));
+    await page.click('#vol-window button[data-v="10"]');
+    await page.waitForFunction(() => /kayan 10 günlük/.test(document.querySelectorAll('#vol-panel .volcharts .ct')[1].textContent), null, { timeout: 20000 });
+    check('the history of the picked instrument: its level and its rolling volatility', await page.locator('#vol-panel .volcharts svg.chart').count() === 2
+      && await page.locator('#vol-panel .volcharts svg.chart path').count() >= 2);
+    // carry against it
+    await page.waitForFunction(() => document.querySelectorAll('#carry-panel table.grid tr').length === 35, null, { timeout: 20000 });
+    const carryApi = (await api(page, 'ayşe yilmaz', 'GET', '/api/vol/carry?kind=fly&window=10')).json;
+    const carryRows = () => page.evaluate(() => [...document.querySelectorAll('#carry-panel table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
+    let ct = await carryRows();
+    const best = carryApi.rows.filter((r) => typeof r.ratio_b === 'number').sort((a, b) => Math.abs(b.ratio_b) - Math.abs(a.ratio_b))[0];
+    check('flies: the sheet\'s carry + roll against the volatility of the same horizon, the best ratio first',
+      ct[0][2] === 'C+R 3 ay (bp)' && ct[1][0] === best.label && Math.abs(trNumber(ct[1][5].replace('+', '')) - best.ratio_b) < 0.006
+      && Math.abs(trNumber(ct[1][4]) - best.vol * Math.sqrt(carryApi.horizons.b.days)) < 0.06, [ct.slice(0, 3), best]);
+    const dotsB = await page.locator('#carry-panel svg.chart circle.mk').count();
+    await page.click('#carry-horizon button[data-v="a"]');
+    await page.waitForFunction(() => document.querySelector('#carry-panel table.grid tr td:nth-child(3)').textContent === 'C+R 1 ay (bp)');
+    const dotsA = await page.locator('#carry-panel svg.chart circle.mk').count();
+    check('the carry / vol chart: one labelled point per fly that has a history, for either horizon',
+      dotsB === carryApi.rows.filter((r) => typeof r.ratio_b === 'number').length && dotsA === carryApi.rows.filter((r) => typeof r.ratio_a === 'number').length && dotsA > dotsB
+      && await page.locator('#carry-panel svg.chart .pt-labels text').count() >= 2, [dotsA, dotsB]);
+    await page.click('#carry-kind button[data-v="spread"]');
+    await page.waitForFunction(() => document.querySelectorAll('#carry-panel table.grid tr').length === 121, null, { timeout: 20000 });
+    check('the same for the sheet\'s spreads', /spread/.test(await page.textContent('#carry-panel h2')));
+    await page.click('#carry-kind button[data-v="fly"]');
+    await page.click('#carry-horizon button[data-v="b"]');
+    await shot(page, '04d-vol');
+
     // ------------------------------------------------------------------ number format + theme
     console.log('number format, theme, explorer');
     await open(page, 'forward');

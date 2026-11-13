@@ -5,16 +5,33 @@ import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
 
-const FWD_BASES = [['RET_BID', 'RET bid'], ['RET_MID', 'RET mid'], ['RET_ASK', 'RET ask'], ['TRY', 'TRY faizi'], ['FWD', 'Forward kur']];
-const BASIS_LABEL = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask', TRY: 'TRY faizi', FWD: 'Forward kur' };
-const STRATEGIES = [['outright', 'Outright'], ['spread', 'Spread'], ['fly', 'Fly'], ['fra', 'FRA']];
+const FWD_BASES = [['RET_BID', 'RET bid'], ['RET_MID', 'RET mid'], ['RET_ASK', 'RET ask'], ['TRY', 'TRY faizi'], ['FWD', 'Forward kur'], ['SP', 'Swap puanı']];
+const BASIS_LABEL = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask', TRY: 'TRY faizi', FWD: 'Forward kur', SP: 'Swap puanı' };
+// what is typed next to the pricing choice: [label, placeholder]
+const MANUAL = { TRY: ['TRY faizi (%)', 'örn. 36,50'], FWD: ['Forward kur', 'örn. 52,1000'], SP: ['Swap puanı (×10.000)', 'örn. 17.400'] };
+const PAIRS = [['USDTRY', 'USDTRY'], ['EURTRY', 'EURTRY'], ['OTHER', 'Diğer']];
+const STRATEGIES = [['outright', 'Outright'], ['spread', 'Spread'], ['fly', 'Fly'], ['fra', 'FRA'], ['mpc', 'MPC']];
 const SIDES = {
   outright: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   fra: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
+  mpc: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   spread: [['STEEPENER', 'STEEPENER'], ['FLATTENER', 'FLATTENER']],
   fly: [['REC GÖVDE', 'REC GÖVDE'], ['PAY GÖVDE', 'PAY GÖVDE']],
 };
-const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat 1', body: 'Gövde', wing2: 'Kanat 2', start: 'Başlangıç', end: 'Bitiş' };
+const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat 1', body: 'Gövde', wing2: 'Kanat 2', start: 'Başlangıç', end: 'Bitiş', mpc: 'MPC' };
+
+/** "gbp" / "GBPTRY" / "gbp/try" -> "GBPTRY" (a currency alone is against TRY); null when it is not a pair. */
+export function pairOf(text) {
+  const s = String(text || '').replace(/[^A-Za-z]/g, '').toUpperCase();
+  if (s.length === 3 && s !== 'TRY') return s + 'TRY';
+  if (s.length === 6 && s.slice(0, 3) !== s.slice(3)) return s;
+  return null;
+}
+
+/** The DV01 of an OIS leg with the desk's sign: payer is plus, receiver is minus. */
+function payerPlus(leg) {
+  return typeof leg.dv01 === 'number' ? (leg.dir === 'S' ? -leg.dv01 : leg.dv01) : null;
+}
 
 /** "10m", "2,5 mio", "500k", "1.000.000" -> number (null when not understood). */
 export function parseAmount(text) {
@@ -85,7 +102,7 @@ function isoDay(d) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
-const DV01_HINT = 'TRY faizi +1 bp olursa kâr / zarar. + = faiz artınca kazanır (vadeli USD alışı, PAY); − = faiz artınca kaybeder (vadeli USD satışı, RECEIVE, tahvil alışı).';
+const DV01_HINT = 'TRY faizi +1 bp olursa kâr / zarar. İşaret her yerde aynı: payer + (faiz artınca kazanır: PAY, vadeli döviz alışı); receiver − (RECEIVE, vadeli döviz satışı, tahvil alışı).';
 
 export class BlotterPage {
   constructor(host, ctx) {
@@ -100,7 +117,7 @@ export class BlotterPage {
     this.tab = 'fwd';
     this.grids = {};
     this.sheetGrids = new Map();
-    this.fwd = { dir: 'B', basis: 'RET_MID' };
+    this.fwd = { dir: 'B', basis: 'RET_MID', pair: 'USDTRY' };
     this.ois = { strategy: 'outright', side: 'PAY', sizeMode: 'dv01' };
     this.quoteFwd = debounce(() => this.doQuoteFwd(), 220);
     this.quoteOis = debounce(() => this.doQuoteOis(), 220);
@@ -218,7 +235,7 @@ export class BlotterPage {
       }
       if (id === 'fwd') this.quoteFwd(); else if (id === 'ois') this.quoteOis(); else this.quoteBond();
     };
-    for (const [id, label] of [['fwd', 'USDTRY Forward'], ['ois', 'OIS'], ['bond', 'Tahvil']]) {
+    for (const [id, label] of [['fwd', 'FX Forward'], ['ois', 'OIS'], ['bond', 'Tahvil']]) {
       const b = h('button', { type: 'button' }, label);
       b.addEventListener('click', () => show(id));
       tabBtns[id] = b;
@@ -235,7 +252,7 @@ export class BlotterPage {
     const lists = h('div', { class: 'lists' });
     this.sections = {};
     for (const [id, title] of [['fwd', 'Forward işlemleri'], ['ois', 'OIS işlemleri'], ['bond', 'Tahvil işlemleri'],
-      ['cfwd', 'Maliyet · Forward (valöre göre)'], ['cois', 'Maliyet · OIS (vadeye göre)'], ['cbond', 'Maliyet · Tahvil']]) {
+      ['cfwd', 'Maliyet · Forward (parite ve valöre göre)'], ['cois', 'Maliyet · OIS (vadeye göre)'], ['cbond', 'Maliyet · Tahvil']]) {
       const body = h('div', { class: 'body' });
       const count = h('span', { class: 'muted' });
       const cp = h('button', { class: 'iconbtn', type: 'button', title: 'Tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
@@ -256,6 +273,9 @@ export class BlotterPage {
       window.location.hash = '#/explorer';
     });
     this.sheetTitle.appendChild(this.sheetLink);
+    // what the workbook's own sheet cannot hold is said next to its tables
+    this.sheetNote = h('span', { class: 'sheetnote hidden', id: 'blotter-sheet-note' });
+    this.sheetTitle.appendChild(this.sheetNote);
     this.host.appendChild(this.sheetTitle);
     this.host.appendChild(this.sheetWrap);
     show(this.tab);
@@ -266,6 +286,16 @@ export class BlotterPage {
     const f = this.fwd;
     const pane = h('div', { class: 'pad form' });
     f.dirSeg = seg([['B', 'Alış (USD al)'], ['S', 'Satış (USD sat)']], f.dir, (v) => { f.dir = v; this.quoteFwd(); }, { B: 'buy', S: 'sell' });
+    // the pair: the two the workbook prices itself, or any other (typed) whose forward is entered by hand
+    f.code = input('örn. GBP ya da GBPTRY');
+    f.code.id = 'fwd-code';
+    f.code.maxLength = 7;
+    f.codeField = field('Döviz / parite', f.code, '170px');
+    f.spot = input('örn. 63,2500', 'num');
+    f.spot.id = 'fwd-spot';
+    f.spotField = field('Spot (elle)', f.spot, '130px');
+    f.pairSeg = seg(PAIRS, f.pair, (v) => { f.pair = v; this.layoutFwd(); if (v === 'OTHER') f.code.focus(); this.quoteFwd(); });
+    f.pairSeg.id = 'fwd-pair';
     f.amount = input('örn. 10m ya da 10.000.000', 'num');
     f.amountEcho = h('div', { class: 'muted echo' });
     f.date = input('gg.aa.yyyy');
@@ -276,14 +306,12 @@ export class BlotterPage {
     const cal = h('button', { class: 'btn sm', type: 'button', title: 'Takvimden seç' }, '📅');
     cal.addEventListener('click', () => { try { picker.showPicker(); } catch (e) { picker.focus(); } });
     f.manual = input('', 'num');
-    f.manualField = field('TRY faizi (%)', f.manual, '150px');
+    f.manualField = field('TRY faizi (%)', f.manual, '160px');
+    f.manualField.title = 'TRY faizi: basit ACT/360, %. Forward kur: outright. Swap puanı: (forward − spot) × 10.000 – forward = spot + puan / 10.000.';
     f.basisSeg = seg(FWD_BASES, f.basis, (v) => {
       f.basis = v;
-      const manual = v === 'TRY' || v === 'FWD';
-      f.manualField.classList.toggle('hidden', !manual);
-      f.manualField.firstChild.textContent = v === 'TRY' ? 'TRY faizi (%)' : 'Forward kur';
-      f.manual.placeholder = v === 'TRY' ? 'örn. 36,50' : 'örn. 52,1000';
-      if (manual) f.manual.focus();
+      this.layoutFwd();
+      if (MANUAL[v]) f.manual.focus();
       this.quoteFwd();
     });
     f.manualField.classList.add('hidden');
@@ -292,26 +320,58 @@ export class BlotterPage {
     f.quote = h('div', { class: 'quotebox' });
     f.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     f.save.addEventListener('click', () => this.saveFwd());
-    for (const el of [f.amount, f.date, f.manual]) {
-      el.addEventListener('input', () => this.quoteFwd());
+    for (const el of [f.amount, f.date, f.manual, f.code, f.spot]) {
+      el.addEventListener('input', () => { if (el === f.code) this.layoutFwd(); this.quoteFwd(); });
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveFwd(); });
     }
+    f.amountField = field('Tutar (USD)', h('div', null, f.amount, f.amountEcho), '210px');
+    pane.appendChild(h('div', { class: 'row' }, field('Parite', f.pairSeg), f.codeField, f.spotField));
     pane.appendChild(h('div', { class: 'row' }, field('Yön', f.dirSeg)));
-    pane.appendChild(h('div', { class: 'row' }, field('Tutar (USD)', h('div', null, f.amount, f.amountEcho), '210px'),
+    pane.appendChild(h('div', { class: 'row' }, f.amountField,
       field('Valör', h('div', { class: 'daterow' }, f.date, cal, picker), '190px')));
     pane.appendChild(h('div', { class: 'row' }, field('Fiyatlama', f.basisSeg), f.manualField));
     pane.appendChild(f.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Karşı taraf', f.cpt, '150px'), field('Not', f.note, '240px')));
     pane.appendChild(h('div', { class: 'row actions' }, f.save));
+    this.layoutFwd();
     return pane;
+  }
+
+  /** The pair being typed ("USDTRY", "EURTRY", or what stands in the box of "Diğer"; null while that is no pair). */
+  fwdPair() {
+    const f = this.fwd;
+    return f.pair === 'OTHER' ? pairOf(f.code.value) : f.pair;
+  }
+
+  /** Labels and fields of the forward form follow the pair and the pricing choice. */
+  layoutFwd() {
+    const f = this.fwd;
+    const other = f.pair === 'OTHER';
+    const pair = this.fwdPair();
+    const base = pair ? pair.slice(0, 3) : 'döviz';
+    f.codeField.classList.toggle('hidden', !other);
+    f.spotField.classList.toggle('hidden', !other);
+    // a pair without a curve in the workbook is priced by hand: an outright, or points on a spot
+    for (const b of f.basisSeg.children) b.classList.toggle('hidden', other && b.dataset.v !== 'FWD' && b.dataset.v !== 'SP');
+    if (other && f.basis !== 'FWD' && f.basis !== 'SP') { f.basis = 'FWD'; f.basisSeg.set('FWD'); }
+    f.dirSeg.children[0].textContent = 'Alış (' + base + ' al)';
+    f.dirSeg.children[1].textContent = 'Satış (' + base + ' sat)';
+    f.amountField.firstChild.textContent = 'Tutar (' + base + ')';
+    const m = MANUAL[f.basis];
+    f.manualField.classList.toggle('hidden', !m);
+    if (m) {
+      f.manualField.firstChild.textContent = m[0];
+      f.manual.placeholder = m[1];
+    }
   }
 
   fwdPayload() {
     const f = this.fwd;
     const amount = parseAmount(f.amount.value);
-    f.amountEcho.textContent = f.amount.value.trim() ? (amount === null ? 'tutar anlaşılamadı' : num(amount, 0) + ' USD') : '';
-    return { dir: f.dir, amount, value_date: f.date.value.trim(), basis: f.basis,
-      manual: (f.basis === 'TRY' || f.basis === 'FWD') ? f.manual.value.trim() : null,
+    const pair = this.fwdPair();
+    f.amountEcho.textContent = f.amount.value.trim() ? (amount === null ? 'tutar anlaşılamadı' : num(amount, 0) + ' ' + (pair ? pair.slice(0, 3) : '')) : '';
+    return { pair, dir: f.dir, amount, value_date: f.date.value.trim(), basis: f.basis,
+      manual: MANUAL[f.basis] ? f.manual.value.trim() : null, spot: f.pair === 'OTHER' ? (f.spot.value.trim() || null) : null,
       cpt: f.cpt.value.trim(), note: f.note.value.trim() };
   }
 
@@ -319,49 +379,66 @@ export class BlotterPage {
     const f = this.fwd;
     if (!f.quote || this.dead) return;
     const pl = this.fwdPayload();
+    f.ticket = (f.ticket || 0) + 1;                 // whatever is still on its way belongs to what was typed before
+    if (!pl.pair) { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, 'Dövizi ya da pariteyi yazın (örn. GBP, CHFTRY, EURUSD).')); return; }
     if (!pl.value_date) { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, 'Valör tarihini yazın; forward ve TL tutarı otomatik hesaplanır.')); return; }
-    if ((pl.basis === 'TRY' || pl.basis === 'FWD') && !pl.manual) {
+    if (MANUAL[pl.basis] && !pl.manual) {
       clear(f.quote);
-      f.quote.appendChild(h('div', { class: 'muted' }, pl.basis === 'TRY' ? 'TRY faizini yazın.' : 'Forward kuru yazın.'));
+      f.quote.appendChild(h('div', { class: 'muted' }, pl.basis === 'TRY' ? 'TRY faizini yazın.' : (pl.basis === 'SP' ? 'Swap puanını yazın.' : 'Forward kuru yazın.')));
       return;
     }
-    const ticket = (f.ticket = (f.ticket || 0) + 1);
+    const ticket = f.ticket;
     try {
       const q = await api.post('/api/blotter/quote/forward', pl);
       if (ticket !== f.ticket || this.dead) return;
       clear(f.quote);
+      const base = q.base, vsTry = q.quote === 'TRY';
+      const dash = (v, fn) => (typeof v === 'number' ? fn(v) : '—');
       const tiles = h('div', { class: 'quote' });
-      tiles.appendChild(tile('TL tutarı', typeof q.tl === 'number' ? num(q.tl, 2) : '— tutar girin —', true, typeof q.tl === 'number' ? raw(q.tl) : ''));
-      tiles.appendChild(tile('Forward kur', num(q.forward, 4), false, raw(q.forward)));
-      tiles.appendChild(tile('TRY faizi', pct(q.try_rate, 3), false, raw(q.try_rate)));
+      const total = tile(vsTry ? 'TL tutarı' : 'Karşı tutar (' + q.quote + ')', typeof q.tl === 'number' ? num(q.tl, 2) : '— tutar girin —', true, typeof q.tl === 'number' ? raw(q.tl) : '');
+      total.dataset.k = 'fwd-total';
+      tiles.appendChild(total);
+      const fw = tile('Forward kur', num(q.forward, 4), false, raw(q.forward));
+      fw.dataset.k = 'fwd-forward';
+      tiles.appendChild(fw);
+      tiles.appendChild(tile('TRY faizi', dash(q.try_rate, (v) => pct(v, 3)), false, typeof q.try_rate === 'number' ? raw(q.try_rate)
+        : 'Bu paritenin döviz faizi çalışma kitabında yok: ima TRY faizi hesaplanmaz'));
       tiles.appendChild(tile('Gün', num(q.days, 0)));
-      tiles.appendChild(tile('Spot', num(q.spot, 4), false, raw(q.spot)));
-      tiles.appendChild(tile('USD faizi', pct(q.usd_rate, 3)));
-      tiles.appendChild(tile('Swap puanı', num(q.points, 0)));
+      tiles.appendChild(tile('Spot', dash(q.spot, (v) => num(v, 4)), false, typeof q.spot === 'number' ? raw(q.spot) : 'Spot yazılmadı'));
+      tiles.appendChild(tile(base + ' faizi', dash(q.usd_rate, (v) => pct(v, 3))));
+      const sp = tile('Swap puanı', dash(q.points, (v) => num(v, 0)));
+      sp.dataset.k = 'fwd-points';
+      tiles.appendChild(sp);
       tiles.appendChild(tile('Valör', serialDate(q.value_date)));
-      // risk of the trade being typed (per 1 mn USD until an amount is there): the sheet's "Forward DV01" block
+      // risk of the trade being typed (per 1 mn until an amount is there): the sheet's "Forward DV01" block
       const d1 = q.dv01 || {};
-      const per = typeof q.amount === 'number' ? '' : ' / 1mn USD';
+      const per = typeof q.amount === 'number' ? '' : ' / 1mn ' + base;
       const t1 = tile('DV01 (TL)' + per, signed(d1.tl, 0), false, DV01_HINT);
       const t2 = tile('DV01 ($)' + per, signed(d1.usd, 0), false, DV01_HINT);
       t1.dataset.k = 'dv01-tl';
       t2.dataset.k = 'dv01-usd';
       tiles.appendChild(t1);
       tiles.appendChild(t2);
-      tiles.appendChild(tile('USD faizi DV01 ($)' + per, signed(d1.usd_leg, 0), false, 'USD faizi +1 bp olursa kâr / zarar'));
+      tiles.appendChild(tile(base + ' faizi DV01 (' + (base === 'USD' ? '$' : base) + ')' + per, signed(d1.usd_leg, 0), false, base + ' faizi +1 bp olursa kâr / zarar'));
       f.quote.appendChild(tiles);
-      f.quote.appendChild(this.copyLine(() => (pl.dir === 'B' ? 'ALIŞ ' : 'SATIŞ ') + (typeof q.amount === 'number' ? num(q.amount, 0) + ' USD' : 'USD')
-        + ' · valör ' + serialDate(q.value_date) + ' (' + num(q.days, 0) + ' gün) · forward ' + num(q.forward, 4) + ' · spot ' + num(q.spot, 4)
-        + ' · swap puanı ' + num(q.points, 0) + ' · TRY faizi ' + pct(q.try_rate, 2)
-        + (typeof q.tl === 'number' ? ' · TL tutarı ' + num(q.tl, 2) : '')));
+      f.quote.appendChild(this.copyLine(() => q.pair + ' ' + (pl.dir === 'B' ? 'ALIŞ ' : 'SATIŞ ') + (typeof q.amount === 'number' ? num(q.amount, 0) + ' ' + base : base)
+        + ' · valör ' + serialDate(q.value_date) + ' (' + num(q.days, 0) + ' gün) · forward ' + num(q.forward, 4)
+        + (typeof q.spot === 'number' ? ' · spot ' + num(q.spot, 4) + ' · swap puanı ' + num(q.points, 0) : '')
+        + (typeof q.try_rate === 'number' ? ' · TRY faizi ' + pct(q.try_rate, 2) : '')
+        + (typeof q.tl === 'number' ? ' · ' + (vsTry ? 'TL tutarı ' : q.quote + ' tutarı ') + num(q.tl, 2) : '')));
       const rows = [];
-      for (const k of ['RET', 'OIS', 'ICAP', 'VIOP']) {
-        const t = q.table[k] || {};
-        rows.push([k, n(t.bid, 4), n(t.mid, 4), n(t.ask, 4)]);
+      for (const k of ['RET', 'OIS', 'ICAP', 'VIOP', 'BBG']) {
+        const t = q.table[k];
+        if (t && (typeof t.bid === 'number' || typeof t.ask === 'number')) rows.push([k, n(t.bid, 4), n(t.mid, 4), n(t.ask, 4)]);
       }
-      rows.push(['RET faizi', p(q.ret_bid, 3), p(q.ret_mid, 3), p(q.ret_ask, 3)]);
-      const g = new Grid({ data: plainData(['Eğri', 'Bid', 'Mid', 'Ask'], rows), editable: false });
-      f.quote.appendChild(h('div', { class: 'reftable' }, g.el));
+      if (typeof q.ret_bid === 'number' && q.table.RET) rows.push(['RET faizi', p(q.ret_bid, 3), p(q.ret_mid, 3), p(q.ret_ask, 3)]);
+      if (rows.length) {
+        const g = new Grid({ data: plainData(['Eğri', 'Bid', 'Mid', 'Ask'], rows), editable: false });
+        f.quote.appendChild(h('div', { class: 'reftable' }, g.el));
+      } else if (q.pair !== 'USDTRY' && q.pair !== 'EURTRY') {
+        f.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '8px' } }, q.pair + ' için çalışma kitabında eğri yok: forward yazdığınız kur'
+          + (typeof q.spot_market === 'number' ? ' (Bloomberg spotu ' + num(q.spot_market, 4) + ')' : '') + '. İma TRY faizi hesaplanmaz; TRY faizi DV01\'i valöre kadarki TRY iskonto faktörüyle verilir.'));
+      }
     } catch (err) {
       if (ticket !== f.ticket) return;
       clear(f.quote);
@@ -372,13 +449,14 @@ export class BlotterPage {
   async saveFwd() {
     const f = this.fwd;
     const pl = this.fwdPayload();
+    if (!pl.pair) { toast('Dövizi ya da pariteyi yazın (örn. GBP)', 'err'); f.code.focus(); return; }
     if (pl.amount === null || !(pl.amount > 0)) { toast('Tutar girin (örn. 10m)', 'err'); f.amount.focus(); return; }
     if (!pl.value_date) { toast('Valör tarihini girin', 'err'); f.date.focus(); return; }
     f.save.disabled = true;
     try {
       const rec = await api.post('/api/blotter/forward', pl);
-      toast((rec.dir === 'B' ? 'Alış ' : 'Satış ') + num(rec.amount, 0) + ' USD · ' + serialDate(rec.value_date) + ' · '
-        + num(rec.forward, 4) + ' → ' + num(rec.tl, 2) + ' TL kaydedildi', 'ok', 4200);
+      toast(rec.pair + ' ' + (rec.dir === 'B' ? 'alış ' : 'satış ') + num(rec.amount, 0) + ' ' + rec.pair.slice(0, 3) + ' · ' + serialDate(rec.value_date) + ' · '
+        + num(rec.forward, 4) + ' → ' + num(rec.tl, 2) + ' ' + rec.pair.slice(3) + ' kaydedildi', 'ok', 4200);
       f.amount.value = '';
       f.amountEcho.textContent = '';
       f.note.value = '';
@@ -402,6 +480,18 @@ export class BlotterPage {
       s.appendChild(h('option', { value: String(m) }, label));
     }
     s.value = String(value);
+    s.addEventListener('change', () => this.quoteOis());
+    return s;
+  }
+
+  /** The dates a meeting-dated swap can start or end on: OIS spot (a start only) and the day after every decision. */
+  mpcSelect(withSpot, value) {
+    const s = h('select', { class: 'inp' });
+    const m = (this.market && this.market.mpc) || { dates: [] };
+    if (withSpot && typeof m.spot === 'number') s.appendChild(h('option', { value: String(m.spot) }, 'Spot · ' + m.spot_text));
+    for (const d of m.dates) s.appendChild(h('option', { value: String(d.date) }, 'MPC' + d.k + ' · ' + d.text));
+    const pick = m.dates[value];
+    if (pick) s.value = String(pick.date);
     s.addEventListener('change', () => this.quoteOis());
     return s;
   }
@@ -482,6 +572,14 @@ export class BlotterPage {
       o.legsHost.appendChild(field('Kanat 2', o.f.wing2, '100px'));
       o.f.wing1_rate = rate('Kanat 1 oranı (%)');
       o.f.wing2_rate = rate('Kanat 2 oranı (%)');
+    } else if (st === 'mpc') {
+      // one swap between two dates, paid at its end: from a meeting's effective day (or spot) to a later meeting's
+      o.f.start = this.mpcSelect(true, 0);
+      o.f.end = this.mpcSelect(false, 1);
+      o.f.start.id = 'ois-mpc-start';
+      o.f.end.id = 'ois-mpc-end';
+      o.legsHost.appendChild(field('Başlangıç', o.f.start, '170px'));
+      o.legsHost.appendChild(field('Bitiş', o.f.end, '170px'));
     } else {
       o.f.start_months = this.monthSelect(0, 117, 3);
       o.f.end_months = this.monthSelect(3, 120, 6);
@@ -501,7 +599,7 @@ export class BlotterPage {
     for (const k of Object.keys(o.f)) {
       const el = o.f[k];
       const v = el.value.trim();
-      if (k === 'start_months' || k === 'end_months') pl[k] = Number(v);
+      if (k === 'start_months' || k === 'end_months' || k === 'start' || k === 'end') pl[k] = Number(v);
       else if (v) pl[k] = v;
     }
     const size = parseAmount(o.size.value);
@@ -561,12 +659,12 @@ export class BlotterPage {
       o.quote.appendChild(tiles);
       const rows = q.legs.map((lg) => [ROLE[lg.role] || lg.role,
         { t: lg.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: lg.dir === 'S' ? 'buy' : 'sell' }, lg.tenor,
-        p(lg.rate, 4), n(lg.nominal, 0), n(lg.dv01, 0)]);
+        p(lg.rate, 4), n(lg.nominal, 0), dv(payerPlus(lg))]);
       const g = new Grid({ data: plainData(['Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)'], rows), editable: false });
       o.quote.appendChild(h('div', { class: 'reftable' }, g.el));
       o.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.label));
       o.quote.appendChild(this.copyLine(() => q.label + ' · ' + q.legs.map((lg) => (lg.dir === 'S' ? 'REC ' : 'PAY ') + lg.tenor + ' ' + pct(lg.rate, 4)
-        + ' ' + num(lg.nominal, 0) + ' TL (DV01 ' + num(lg.dv01, 0) + ' $)').join(' / ')));
+        + ' ' + num(lg.nominal, 0) + ' TL (DV01 ' + signed(payerPlus(lg), 0) + ' $)').join(' / ')));
     } catch (err) {
       if (ticket !== o.ticket) return;
       clear(o.quote);
@@ -746,12 +844,12 @@ export class BlotterPage {
       if (typeof v === 'number' && v !== 0) el.classList.add(v > 0 ? 'pos' : 'neg');
       return el;
     };
-    this.riskBar.appendChild(h('div', { class: 'l' }, 'DV01 · TRY faizi +1 bp ($)'));
+    this.riskBar.appendChild(h('div', { class: 'l', title: DV01_HINT }, 'DV01 · TRY faizi +1 bp ($) · payer +'));
     this.riskBar.appendChild(rt('Toplam', r.total, 'total'));
     this.riskBar.appendChild(rt('Forward', r.fwd, 'fwd', DV01_HINT + ' TL karşılığı: ' + signed(r.fwd_tl, 0)));
     this.riskBar.appendChild(rt('OIS (net)', r.ois, 'ois', DV01_HINT + ' Brüt: ' + (typeof r.ois_gross === 'number' ? num(r.ois_gross, 0) : '—')));
     this.riskBar.appendChild(rt('Tahvil', r.bond, 'bond', DV01_HINT + ' TL karşılığı: ' + signed(r.bond_tl, 0)));
-    if (r.unknown) this.riskBar.appendChild(h('div', { class: 'muted warn' }, r.unknown + ' işlemin DV01\'i bilinmiyor (DİBS RV tablosunda olmayan tahvil)'));
+    if (r.unknown) this.riskBar.appendChild(h('div', { class: 'muted warn' }, r.unknown + ' işlemin DV01\'i bilinmiyor (DİBS RV tablosunda olmayan tahvil ya da TRY\'ye karşı olmayan forward)'));
     this.riskBar.classList.toggle('hidden', !d.trades.length);
 
     // in a period every row says which day it belongs to
@@ -760,12 +858,14 @@ export class BlotterPage {
 
     const fw = d.trades.filter((t) => t.kind === 'fwd');
     // "O/N" is column F of the workbook's blotter sheet: the overnight equivalent of the trade's TRY rate
-    this.setGrid('fwd', dayHead.concat(['Saat', 'Kullanıcı', 'Yön', 'Tutar (USD)', 'Valör', 'Gün', 'TRY faizi', 'O/N', 'Forward', 'TL tutarı', 'DV01 (TL)', 'DV01 ($)',
-      'Fiyatlama', 'Karşı taraf', 'Not', '']),
-      fw.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
-        n(t.amount, 0), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.tl, 2),
-        dv(t.dv01_tl), dv(t.dv01), BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
-        this.delCell(t, (t.dir === 'B' ? 'Alış ' : 'Satış ') + num(t.amount, 0) + ' USD · ' + serialDate(t.value_date))])),
+    const pairOfTrade = (t) => t.pair || 'USDTRY';
+    this.setGrid('fwd', dayHead.concat(['Saat', 'Kullanıcı', 'Parite', 'Yön', 'Tutar (döviz)', 'Valör', 'Gün', 'TRY faizi', 'O/N', 'Forward', 'Swap puanı', 'Karşı tutar',
+      'DV01 (TL)', 'DV01 ($)', 'Fiyatlama', 'Karşı taraf', 'Not', '']),
+      fw.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), { t: pairOfTrade(t), k: 's', b: 1 },
+        { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
+        n(t.amount, 0), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.points, 0),
+        n(t.tl, 2), dv(t.dv01_tl), dv(t.dv01), BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
+        this.delCell(t, pairOfTrade(t) + ' ' + (t.dir === 'B' ? 'alış ' : 'satış ') + num(t.amount, 0) + ' ' + pairOfTrade(t).slice(0, 3) + ' · ' + serialDate(t.value_date))])),
       fw.length ? fw.length + ' işlem' : '');
 
     const os = d.trades.filter((t) => t.kind === 'ois');
@@ -775,7 +875,7 @@ export class BlotterPage {
         const first = !t.package || !seenPkg.has(t.package);
         if (t.package) seenPkg.add(t.package);
         return day(t).concat([timeOf(t.created_at), this.who(t), first ? (t.label || '') : '', ROLE[t.role] || t.role || '',
-          { t: t.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: t.dir === 'S' ? 'buy' : 'sell' }, t.tenor, p(t.rate, 4), n(t.nominal, 0), n(t.dv01, 0),
+          { t: t.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: t.dir === 'S' ? 'buy' : 'sell' }, t.tenor, p(t.rate, 4), n(t.nominal, 0), dv(payerPlus(t)),
           first ? n(t.cost_bp, 2) : { t: '', k: '' }, first ? n(t.cost_usd, 0) : { t: '', k: '' }, t.cpt || '', first ? (t.note || '') : '',
           first ? this.delCell(t, t.label || 'OIS işlemi') : { t: '', k: '' }]);
       }), os.length ? os.length + ' bacak' : '');
@@ -787,11 +887,11 @@ export class BlotterPage {
       bd.length ? bd.length + ' işlem' : '');
 
     const c = d.cost || { fwd: [], ois: [], bond: [] };
-    this.setGrid('cfwd', ['Valör', 'Alış (USD)', 'Ort. alış kuru', 'Satış (USD)', 'Ort. satış kuru', 'Net (USD)', 'Maliyet (kur)', 'Gerçekleşen K/Z (TL)'],
-      c.fwd.map((x) => [{ t: serialDate(x.key), v: x.key, k: 'd' }, n(x.buy, 0), n(x.buy_avg, 4), n(x.sell, 0), n(x.sell_avg, 4), n(x.net, 0),
-        n(x.cost, 4), n(x.realised, 2)]));
+    this.setGrid('cfwd', ['Parite', 'Valör', 'Alış (döviz)', 'Ort. alış kuru', 'Satış (döviz)', 'Ort. satış kuru', 'Net (döviz)', 'Maliyet (kur)', 'Gerçekleşen K/Z'],
+      c.fwd.map((x) => [{ t: x.pair || 'USDTRY', k: 's', b: 1 }, { t: serialDate(x.key), v: x.key, k: 'd' }, n(x.buy, 0), n(x.buy_avg, 4), n(x.sell, 0), n(x.sell_avg, 4),
+        n(x.net, 0), n(x.cost, 4), n(x.realised, 2)]));
     this.setGrid('cois', ['Vade', 'Pay DV01 ($)', 'Ort. pay', 'Receive DV01 ($)', 'Ort. receive', 'Net DV01 ($)', 'Maliyet', 'Gerçekleşen K/Z ($)'],
-      c.ois.map((x) => [x.key, n(x.buy, 0), p(x.buy_avg, 4), n(x.sell, 0), p(x.sell_avg, 4), n(x.net, 0), p(x.cost, 4), n(x.realised, 0)]));
+      c.ois.map((x) => [x.key, n(x.buy, 0), p(x.buy_avg, 4), n(x.sell, 0), p(x.sell_avg, 4), dv(x.net), p(x.cost, 4), n(x.realised, 0)]));
     this.setGrid('cbond', ['Enstrüman', 'Alış', 'Ort. alış', 'Satış', 'Ort. satış', 'Net', 'Maliyet', 'Gerçekleşen K/Z'],
       c.bond.map((x) => [x.key, n(x.buy, 0), n(x.buy_avg, 4), n(x.sell, 0), n(x.sell_avg, 4), n(x.net, 0), n(x.cost, 4), n(x.realised, 2)]));
 
@@ -824,6 +924,10 @@ export class BlotterPage {
         if (g && s.data) g.update(s.data, true);
       }
     }
+    const outside = d.trades.filter((t) => (t.kind === 'fwd' && (t.pair || 'USDTRY') !== 'USDTRY') || (t.kind === 'ois' && t.mpc)).length;
+    this.sheetNote.textContent = outside ? outside + ' işlem bu tablolarda yok: Excel sayfası yalnızca USDTRY forward\'ları ve vadeli OIS\'leri tutar '
+      + '(EURTRY / diğer pariteler ve MPC tarihli OIS\'ler yukarıdaki listelerde, maliyet tablolarında ve DV01 özetindedir)' : '';
+    this.sheetNote.classList.toggle('hidden', !outside || !sheet.length);
     this.sheetTitle.classList.toggle('hidden', !sheet.length);
     this.sheetLink.classList.toggle('hidden', !sheet.length);
   }

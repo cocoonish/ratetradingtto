@@ -206,6 +206,17 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
 
+    # ------------------------------------------------------------------ realized volatility · carry
+    @handler
+    async def vol(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().vol, _user(request), str(data.get("text", "")), data.get("window", 20)))
+
+    @handler
+    async def carry_vol(request: Request):
+        q = request.query_params
+        return ok(await call(svc().carry_vol, _user(request), q.get("kind", "fly"), q.get("window", 60)))
+
     # ------------------------------------------------------------------ broker chat
     @handler
     async def broker(request: Request):
@@ -376,6 +387,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/scenarios/load", scenario_load, methods=["POST"]),
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
+        Route("/api/vol", vol, methods=["POST"]),
+        Route("/api/vol/carry", carry_vol),
         Route("/api/broker", broker),
         Route("/api/broker", broker_add, methods=["POST"]),
         Route("/api/broker/parse", broker_parse, methods=["POST"]),

@@ -11,6 +11,7 @@ import datetime as _dt
 import json
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -19,6 +20,7 @@ from urllib.parse import quote as _quote
 
 from . import blotter as bl
 from . import brokerchat as bc
+from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
 from .inputs import InputError, parse_amount, parse_clipboard, parse_date, parse_input, parse_number
@@ -35,6 +37,14 @@ from .xl.values import date_to_serial, serial_to_date
 
 RET_TENORS = ["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
 RET_FIRST_ROW = 33
+
+
+def _payer_plus(leg: Dict[str, Any]) -> Optional[float]:
+    """The DV01 of an OIS leg with the desk's sign: paying fixed is plus, receiving is minus."""
+    d = leg.get("dv01")
+    if type(d) is not float:
+        return None
+    return d if leg.get("dir") == "B" else -d
 
 
 class ServiceError(Exception):
@@ -436,6 +446,8 @@ class Service(object):
             # pages of the dashboard's own: what happened over time, and the settings behind it
             pages.append({"id": "eod", "title": "Gün Sonu Matrisi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "mpc", "title": "PPK Fiyatlama Geçmişi", "group": "TRY Faiz", "book": "tto", "sheet": None,
+                          "custom": True})
+            pages.append({"id": "vol", "title": "Realized Vol · Carry", "group": "TRY Faiz", "book": "tto", "sheet": None,
                           "custom": True})
             pages.append({"id": "settings", "title": "Ayarlar · Toplantı takvimi", "group": "Araçlar", "book": "tto",
                           "sheet": None, "custom": True})
@@ -1168,7 +1180,8 @@ class Service(object):
         names = {u["name"]: u["display"] for u in self.store.users()}
         who = lambda t: names.get(t.get("created_by"), t.get("created_by") or "")          # noqa: E731
         clock = lambda t: (t.get("created_at") or "")[11:19]                                 # noqa: E731
-        basis = {"RET_BID": "RET bid", "RET_MID": "RET mid", "RET_ASK": "RET ask", "TRY": "TRY faizi", "FWD": "Forward kur"}
+        basis = {"RET_BID": "RET bid", "RET_MID": "RET mid", "RET_ASK": "RET ask", "TRY": "TRY faizi", "FWD": "Forward kur",
+                 "SP": "Swap puanı"}
         role = {"outright": "Outright", "short": "Kısa", "long": "Uzun", "wing1": "Kanat 1", "body": "Gövde",
                 "wing2": "Kanat 2", "start": "Başlangıç", "end": "Bitiş"}
         INT, AMT, FX, P3, P4, BP, DATE = "#,##0", "#,##0.00", "#,##0.0000", "0.000%", "0.0000%", "#,##0.00", "dd.mm.yyyy"
@@ -1202,12 +1215,14 @@ class Service(object):
 
         trades = data["trades"]
         fw = [t for t in trades if t["kind"] == "fwd"]
-        table("USDTRY Forward", lead + ["Saat", "Kullanıcı", "Yön", "Tutar (USD)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
-                                        "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı", "DV01 (TL)", "DV01 ($)"],
+        # the pair comes last: the columns before it are where they were when every forward was USDTRY
+        table("Forward", lead + ["Saat", "Kullanıcı", "Yön", "Tutar (döviz)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
+                                 "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı", "DV01 (TL)", "DV01 ($)", "Parite", "Swap puanı"],
               [when(t) + [clock(t), who(t), "ALIŞ" if t["dir"] == "B" else "SATIŞ", t.get("amount"), t.get("value_date"), t.get("days"),
                           t.get("try_rate"), t.get("forward"), t.get("tl"), basis.get(t.get("basis"), t.get("basis") or ""),
-                          t.get("cpt") or "", t.get("note") or "", t.get("on_rate"), t.get("dv01_tl"), t.get("dv01")] for t in fw],
-              lead_fmt + [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3, INT, INT])
+                          t.get("cpt") or "", t.get("note") or "", t.get("on_rate"), t.get("dv01_tl"), t.get("dv01"),
+                          t.get("pair") or "USDTRY", t.get("points")] for t in fw],
+              lead_fmt + [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3, INT, INT, None, INT])
         seen = set()
         ois_rows = []
         for t in (x for x in trades if x["kind"] == "ois"):
@@ -1215,7 +1230,8 @@ class Service(object):
             if t.get("package"):
                 seen.add(t["package"])
             ois_rows.append(when(t) + [clock(t), who(t), t.get("label") or "", role.get(t.get("role"), t.get("role") or ""),
-                                       "RECEIVE" if t["dir"] == "S" else "PAY", t.get("tenor"), t.get("rate"), t.get("nominal"), t.get("dv01"),
+                                       "RECEIVE" if t["dir"] == "S" else "PAY", t.get("tenor"), t.get("rate"), t.get("nominal"),
+                                       _payer_plus(t),
                                        t.get("cost_bp") if first else None, t.get("cost_usd") if first else None, t.get("cpt") or "",
                                        t.get("note") or ""])
         table("OIS", lead + ["Saat", "Kullanıcı", "İşlem", "Bacak", "Yön", "Vade", "Oran", "Nominal (TL)", "DV01 ($)", "Maliyet (bp)",
@@ -1227,10 +1243,11 @@ class Service(object):
                           t.get("note") or "", t.get("dv01_tl"), t.get("dv01")] for t in bd],
               lead_fmt + [None, None, None, None, INT, FX, None, INT, INT])
         cost = data.get("cost") or {"fwd": [], "ois": [], "bond": []}
-        table("Forward · pozisyon ve maliyet", ["Valör", "Alış (USD)", "Ort. alış kuru", "Satış (USD)", "Ort. satış kuru", "Net (USD)",
-                                                 "Maliyet (kur)", "Gerçekleşen K/Z (TL)"],
-              [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["fwd"]],
-              [DATE, INT, FX, INT, FX, INT, FX, AMT])
+        table("Forward · pozisyon ve maliyet", ["Valör", "Alış (döviz)", "Ort. alış kuru", "Satış (döviz)", "Ort. satış kuru", "Net (döviz)",
+                                                 "Maliyet (kur)", "Gerçekleşen K/Z (TL)", "Parite"],
+              [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"], x.get("pair") or "USDTRY"]
+               for x in cost["fwd"]],
+              [DATE, INT, FX, INT, FX, INT, FX, AMT, None])
         table("OIS · pozisyon ve maliyet", ["Vade", "Pay DV01 ($)", "Ort. pay", "Receive DV01 ($)", "Ort. receive", "Net DV01 ($)",
                                              "Maliyet", "Gerçekleşen K/Z ($)"],
               [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["ois"]],
@@ -1240,7 +1257,7 @@ class Service(object):
               [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["bond"]],
               [None, INT, FX, INT, FX, INT, FX, AMT])
         risk = data.get("risk") or {}
-        table("DV01 özeti · TRY faizi +1 bp ($; + = faiz artınca kazanır)", ["Forward", "OIS (net)", "Tahvil", "Toplam", "DV01'i bilinmeyen işlem"],
+        table("DV01 özeti · TRY faizi +1 bp ($; payer + : faiz artınca kazanır)", ["Forward", "OIS (net)", "Tahvil", "Toplam", "DV01'i bilinmeyen işlem"],
               [[risk.get("fwd"), risk.get("ois"), risk.get("bond"), risk.get("total"), risk.get("unknown")]], [INT, INT, INT, INT, INT])
         ls.autosize()
         name = "Blotter_%s.xlsx" % day.strftime("%Y.%m.%d") if not ranged else \
@@ -1270,12 +1287,24 @@ class Service(object):
         man = p.get("manual")
         basis = str(p.get("basis", "RET_MID")).upper()
         if isinstance(man, str):
-            n = parse_number(man, lang, prefer_decimal=True)
+            # swap points are thousands ("14.200" in Turkish format); a rate or an outright is a decimal
+            n = parse_number(man, lang, prefer_decimal=basis != "SP")
             if n is not None and basis == "TRY" and not (man.strip().endswith("%") or man.strip().startswith("%")) and abs(n) >= 1.0:
                 n /= 100.0
             p["manual"] = n
         elif isinstance(man, (int, float)):
             p["manual"] = float(man)
+        spot = p.get("spot")
+        if isinstance(spot, str):
+            p["spot"] = parse_number(spot, lang, prefer_decimal=True)
+        elif isinstance(spot, bool) or not isinstance(spot, (int, float)):
+            p["spot"] = None
+        else:
+            p["spot"] = float(spot)
+        try:
+            p["pair"] = bl.pair_of(p.get("pair"))
+        except bl.TradeError as exc:
+            raise ServiceError(str(exc))
         return p
 
     def _quote_forward(self, user, payload, lang=None) -> Dict[str, Any]:
@@ -1286,7 +1315,8 @@ class Service(object):
         ov = self._overlay(user_key(user), book) if user else {}
         try:
             q = bl.price_forward(book, ov, p["value_date"], str(p.get("basis", "RET_MID")).upper(),
-                                 p.get("manual") if type(p.get("manual")) is float else None)
+                                 p.get("manual") if type(p.get("manual")) is float else None, p["pair"],
+                                 p.get("spot") if type(p.get("spot")) is float else None)
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         amount = p.get("amount")
@@ -1294,9 +1324,9 @@ class Service(object):
         if type(amount) is float and amount > 0:
             q["amount"] = amount
             q["tl"] = amount * q["forward"]
-        size = amount if type(amount) is float and amount > 0 else 1e6           # no amount yet: per 1 mn USD
-        q["dv01"] = bl.forward_dv01(direction, size, q["forward"], q["days"], q["spot"], q.get("df_try"), q.get("df_usd"),
-                                    q["try_rate"], q.get("usd_rate"))
+        size = amount if type(amount) is float and amount > 0 else 1e6           # no amount yet: per 1 mn of the currency
+        q["dv01"] = bl.forward_dv01(direction, size, q["forward"], q["days"], q.get("usdtry"), q.get("df_try"), q.get("df_usd"),
+                                    q["try_rate"] if q["quote"] == "TRY" else None, q.get("usd_rate"))
         q["dv01"]["amount"] = size
         q["dv01"]["dir"] = direction
         q["value_date_iso"] = serial_to_date(q["value_date"]).isoformat()
@@ -1324,12 +1354,22 @@ class Service(object):
         p = dict(payload)
         p["_lang"] = lang
         strategy = str(p.get("strategy", "outright")).lower()
+        for k in ("start", "end"):
+            v = p.get(k)
+            if isinstance(v, str):
+                p[k] = parse_date(v)
+                if p[k] is None and v.strip():
+                    raise ServiceError("tarih anlaşılamadı: %r" % v)
+            elif isinstance(v, bool) or not isinstance(v, (int, float)):
+                p[k] = None
+            else:
+                p[k] = float(v)
         for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate",
                   "start_months", "end_months"):
             v = p.get(k)
             if isinstance(v, str):
                 rate_like = k in ("short_rate", "wing1_rate", "wing2_rate", "start_rate") or \
-                    (k == "level" and strategy in ("outright", "fra"))
+                    (k == "level" and strategy in ("outright", "fra", "mpc"))
                 n = parse_amount(v, lang) if k in ("dv01", "nominal") else parse_number(v, lang, prefer_decimal=True)
                 if n is not None and rate_like and not ("%" in v) and abs(n) >= 1.0:
                     n /= 100.0                    # 35,5 typed for 35,5 %
@@ -1338,7 +1378,7 @@ class Service(object):
                 p[k] = None
             elif isinstance(v, (int, float)):
                 x = float(v)
-                if k == "level" and strategy in ("outright", "fra") and abs(x) >= 1.0:
+                if k == "level" and strategy in ("outright", "fra", "mpc") and abs(x) >= 1.0:
                     x /= 100.0
                 p[k] = x
         return p
@@ -1348,11 +1388,14 @@ class Service(object):
 
     def _quote_ois(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
-        calc = self._calc(user_key(user) if user else None, book)
         try:
-            return bl.ois_legs(bl.OisMarket(book, calc), self._ois_payload(payload, lang))
+            return bl.ois_legs(self._ois_curve(user_key(user) if user else None, book), self._ois_payload(payload, lang))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
+
+    def _ois_curve(self, user: Optional[str], book: Book) -> "bl.OisMarket":
+        """The TRY OIS curve as the user sees it (``user``: a user key, or nobody)."""
+        return bl.OisMarket(book, self._calc(user, book), self._overlay(user, book) if user else None)
 
     def ois_market(self, user: Optional[str]) -> Dict[str, Any]:
         """Mid par rates / annuities per tenor for the trade form."""
@@ -1360,7 +1403,7 @@ class Service(object):
 
     def _ois_market(self, user) -> Dict[str, Any]:
         book = self._book("tto")
-        mkt = bl.OisMarket(book, self._calc(user_key(user) if user else None, book))
+        mkt = self._ois_curve(user_key(user) if user else None, book)
         rows = []
         for t in bl.OIS_TENORS:
             try:
@@ -1368,6 +1411,13 @@ class Service(object):
             except bl.TradeError:
                 rows.append({"tenor": t, "par": mkt.par(t), "annuity": None})
         out = {"tenors": rows, "gen": self.gen}
+        # the dates a meeting-dated swap can run between: OIS spot and the day after every coming decision
+        mpc = mkt.mpc_dates()
+        text = lambda d: serial_to_date(d).strftime("%d.%m.%Y")      # noqa: E731
+        out["mpc"] = {"spot": mpc["spot"], "spot_text": text(mpc["spot"]) if mpc["spot"] else None,
+                      "dates": [{"k": k + 1, "date": d, "text": text(d),
+                                 "market": mpc["market"][k] if k < len(mpc["market"]) else None}
+                                for k, d in enumerate(mpc["dates"])]}
         try:
             out.update({"usdtry": mkt.usdtry, "lot": mkt.lot, "dv01": mkt.default_dv01})
         except bl.TradeError:
@@ -1383,7 +1433,7 @@ class Service(object):
     def _add_ois(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
         try:
-            q = bl.ois_legs(bl.OisMarket(book, self._calc(user, book)), self._ois_payload(payload, lang))
+            q = bl.ois_legs(self._ois_curve(user, book), self._ois_payload(payload, lang))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         package = uuid.uuid4().hex[:12] if len(q["legs"]) > 1 else None
@@ -1394,6 +1444,8 @@ class Service(object):
                    "label": q["label"], "level": q["level"], "side": q["side"],
                    "cost_bp": q["info"].get("cost_bp"), "cost_usd": q["info"].get("cost_usd"),
                    "market": q["info"].get("market"), "note": str(payload.get("note") or "").strip()[:200]}
+            if lg.get("mpc"):
+                rec["mpc"] = lg["mpc"]
             ids.append(self.store.add_trade(self.today_iso(), "ois", rec, user, package))
         self._sync_blotter()
         q["ids"] = ids
@@ -1453,6 +1505,119 @@ class Service(object):
         self.bump()
         rec["id"] = tid
         return rec
+
+    # ================================================================== realized volatility · carry against it
+    def _vol_curves(self) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, float]], Dict[str, Any]]:
+        """The daily closes the history keeps, by product (OIS, XCCY) and tenor, and what they cover."""
+        mark = (self.history.rev, self.gen)
+        hit = getattr(self, "_vol_cache", None)
+        if hit is not None and hit[0] == mark:
+            return hit[1]
+        out = self._vol_read()
+        self._vol_cache = (mark, out)
+        return out
+
+    def _vol_read(self) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, float]], Dict[str, Any]]:
+        snap = self.history.snapshot()
+        defs = [d for d in snap["defs"] if (d.group in ("ois", "xccy", "off") and d.months) or d.group == "dibs"]
+        start = (snap["today"] - _dt.timedelta(days=600)).isoformat()
+        data = self.store.hist_many([i for d in defs for i in d.ids()], start)
+        curves: Dict[str, Dict[str, Dict[str, float]]] = {p: {} for p in vc.PRODUCTS}
+        months: Dict[str, Dict[str, float]] = {p: {} for p in vc.PRODUCTS}
+        for d in defs:
+            product = {"ois": "OIS", "dibs": "DIBS"}.get(d.group, "XCCY")
+            label = d.label.strip().upper()
+            points = d.pick(data)[1]
+            if product == "XCCY" and curves[product].get(label):
+                continue                                    # the swap itself goes before an implied rate of the same tenor
+            curves[product][label] = points
+            # a bond has no tenor to sort by; a floater is followed by its price, not a yield ("px")
+            months[product][label] = d.months if product != "DIBS" else (-1.0 if d.unit == "px" else 0.0)
+        days = sorted({day for series in curves["OIS"].values() for day in series})
+        info = {"first": days[0] if days else None, "last": days[-1] if days else None, "days": len(days),
+                "source": snap["src"], "live": self.mode == "live",
+                "tenors": {p: sorted((t for t, s in curves[p].items() if s), key=lambda t: months[p][t]) for p in vc.PRODUCTS}}
+        return curves, months, info
+
+    def vol(self, user: Optional[str], text: str, window: Any = 20) -> Dict[str, Any]:
+        """Realized volatility of the instruments typed (one per line or separated by commas), from the daily
+        closes of the history: bp a day over the last 10 / 20 / 60 / 120 / 250 changes."""
+        try:
+            window = int(window)
+        except (TypeError, ValueError):
+            window = 20
+        if window not in vc.WINDOWS:
+            window = 20
+        items = vc.parse_items(str(text or "")[:4000])[:40]
+        curves, months, info = self._vol_curves()
+        rows = []
+        for it in items:
+            if not it["ok"]:
+                rows.append(it)
+                continue
+            product = it["product"] if it["product"] in curves else "OIS"
+            if product == "DIBS" and months[product].get(it["tenors"][0]) == -1.0:
+                it["unit"] = "px"                           # the price of a floater: moves in points, not bp
+            rows.append(vc.describe(it, curves[product], months[product], window))
+        return {"rows": rows, "window": window, "windows": list(vc.WINDOWS), "year": vc.YEAR, "history": info}
+
+    def carry_vol(self, user: Optional[str], kind: str = "fly", window: Any = 60) -> Dict[str, Any]:
+        """The flies (or spreads) of the Carry & Roll sheet with their realized volatility: carry + roll over
+        the sheet's two horizons against the volatility over the same time."""
+        kind = "spread" if str(kind or "").lower().startswith("s") else "fly"
+        try:
+            window = int(window)
+        except (TypeError, ValueError):
+            window = 60
+        if window not in vc.WINDOWS:
+            window = 60
+        table = self.et.call(self._carry_table, user, kind)
+        curves, months, info = self._vol_curves()
+        days = {name: h["days"] for name, h in table["horizons"].items()}
+        rows = [vc.carry_row(vc.item_of(kind, r["tenors"]), r["market"], {"a": r["a"], "b": r["b"]}, days,
+                             curves["OIS"], months["OIS"], window) for r in table["rows"]]
+        return {"kind": kind, "window": window, "windows": list(vc.WINDOWS), "horizons": table["horizons"], "rows": rows,
+                "history": info, "gen": self.gen}
+
+    def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
+        """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
+        bp) and its two horizons."""
+        book = self._book("tto")
+        si = book.model.sheet_index.get("C & R")
+        if si is None:
+            raise ServiceError("Carry & Roll sayfası bu çalışma kitabında yok")
+        calc = self._calc(user_key(user) if user else None, book)
+
+        def cell(ref: str) -> Any:
+            r, c = divmod(parse_a1(ref), COLS)
+            return calc.get(si, r, c)
+
+        def number(v: Any) -> Optional[float]:
+            return v if type(v) is float else None
+
+        head = "Kanat / Gövde" if kind == "fly" else "Kısa / Uzun"
+        first = next((r for r in range(1, 600) if isinstance(cell("A%d" % r), str) and cell("A%d" % r).strip().startswith(head)), None)
+        if first is None:
+            raise ServiceError("Carry & Roll sayfasında %s tablosu bulunamadı" % ("fly" if kind == "fly" else "spread"))
+        rows = []
+        r = first + 1
+        while r < first + 400:
+            label = cell("A%d" % r)
+            if not isinstance(label, str) or "/" not in label:
+                break
+            rows.append({"label": label.strip(), "tenors": [t.strip() for t in label.split("/")], "market": number(cell("B%d" % r)),
+                         "a": number(cell("C%d" % r)), "b": number(cell("D%d" % r))})
+            r += 1
+        spot = book.cell("OIS_MAIN!B2")
+        spot = calc.get(spot[0], *divmod(spot[1], COLS))
+        horizons: Dict[str, Any] = {}
+        for name, row in (("a", 3), ("b", 22)):
+            text, end = cell("A%d" % row), cell("C%d" % row)
+            m = re.search(r":\s*([^–-]+)", text) if isinstance(text, str) else None
+            days = vc.week_days(serial_to_date(spot), serial_to_date(end)) if type(spot) is float and type(end) is float else 0
+            horizons[name] = {"label": m.group(1).strip() if m else ("Ufuk " + name.upper()), "days": days,
+                              "date": serial_to_date(end).isoformat() if type(end) is float else None}
+        return {"rows": rows, "horizons": horizons}
 
     # ================================================================== broker chat
     def _broker_day(self, date: Optional[str]) -> str:

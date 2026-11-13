@@ -343,7 +343,8 @@ def test_the_days_blotter_downloads_as_the_macro_saved_it(blotter):
     # the trade list: who, when, what - and the cost of the net positions
     lst = book["İşlem listesi"]
     assert lst["A1"] == "Günlük İşlemler · %s" % today.strftime("%d.%m.%Y") and "Arşiv A" in lst["A2"]
-    assert lst["A4"] == "USDTRY Forward" and lst["B6"] == "Arşiv A" and lst["C6"] == "ALIŞ" and lst["D6"] == 10e6
+    assert lst["A4"] == "Forward" and lst["B6"] == "Arşiv A" and lst["C6"] == "ALIŞ" and lst["D6"] == 10e6
+    assert (lst["P5"], lst["P6"], lst["P7"]) == ("Parite", "USDTRY", "USDTRY")       # the pair comes after the columns that were there
     assert lst["H6"] == f1["forward"] and lst["I6"] == f1["tl"] and lst["J6"] == "RET mid" and lst["K6"] == "ABC" and lst["L6"] == "ilk"
     assert lst["B7"] == "Arşiv B" and lst["C7"] == "SATIŞ" and lst["J7"] == "TRY faizi" and lst["G7"] == 0.365
     texts = [v for k, v in lst.items() if isinstance(v, str)]

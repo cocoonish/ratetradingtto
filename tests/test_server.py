@@ -29,7 +29,7 @@ def test_index_and_static_files(client):
     res = client.get("/")
     assert res.status_code == 200 and "TTO Masa" in res.text and "/static/js/main.js" in res.text
     for path in ("/static/js/main.js", "/static/js/grid.js", "/static/js/chart.js", "/static/css/app.css",
-                 "/static/js/pages/view.js", "/static/js/pages/blotter.js", "/static/js/pages/broker.js", "/static/js/pages/explorer.js",
+                 "/static/js/pages/view.js", "/static/js/pages/blotter.js", "/static/js/pages/broker.js", "/static/js/pages/vol.js", "/static/js/pages/explorer.js",
                  "/static/js/ret.js", "/static/js/scenarios.js", "/static/js/api.js", "/static/js/ui.js", "/static/js/format.js",
                  "/static/js/find.js", "/static/js/spot.js"):
         r = client.get(path)

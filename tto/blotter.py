@@ -26,7 +26,8 @@ TENOR_MONTHS = {"1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9, "1Y": 12, "15M": 15
 # OIS_MAIN outright table: tenor label -> row (A9:A26); Motor row = 316 + that row
 OIS_ROW = {"1M": 9, "2M": 10, "3M": 11, "6M": 12, "9M": 13, "1Y": 14, "15M": 15, "18M": 16, "21M": 17, "2Y": 18,
            "3Y": 19, "4Y": 20, "5Y": 21, "6Y": 22, "7Y": 23, "8Y": 24, "9Y": 25, "10Y": 26}
-FWD_BASES = ("RET_BID", "RET_MID", "RET_ASK", "TRY", "FWD")
+FWD_BASES = ("RET_BID", "RET_MID", "RET_ASK", "TRY", "FWD", "SP")
+MPC_ROWS = (84, 99)        # OIS_MAIN 'MPC OIS': A period, B start, C end, D market (bootstrap)
 
 
 class TradeError(ValueError):
@@ -46,25 +47,44 @@ def month_label(m: int) -> str:
 
 
 # ---------------------------------------------------------------------------------------------- FX forward
-def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: float, basis: str,
-                  manual: Optional[float] = None) -> Dict[str, Any]:
-    """Price a USDTRY forward for ``value_date`` exactly as the Forward sheet does.
+def pair_of(text: Any) -> str:
+    """The currency pair of a forward as typed: "EURTRY", "eur/try"; a currency alone ("gbp") is against TRY."""
+    s = "".join(ch for ch in str(text or "") if ch.isalpha()).upper()
+    if not s:
+        return "USDTRY"
+    if len(s) == 3 and s != "TRY":
+        return s + "TRY"
+    if len(s) == 6 and s[:3] != s[3:]:
+        return s
+    raise TradeError("parite anlaşılamadı: %r (örn. EURTRY, GBP)" % (text,))
 
-    ``basis``  RET_BID / RET_MID / RET_ASK -> the 'RET' row of the USDTRY outright table (Forward!D33:F33)
+
+def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: float, basis: str,
+                  manual: Optional[float] = None, pair: str = "USDTRY", spot: Optional[float] = None) -> Dict[str, Any]:
+    """Price a forward for ``value_date`` exactly as the Forward sheet does.
+
+    ``pair``   USDTRY and EURTRY are priced with the sheet's own tables (the value date typed into
+               ``Forward!D2``); any other pair has no curve in the workbook: its forward is what is typed.
+    ``basis``  RET_BID / RET_MID / RET_ASK -> the 'RET' row of the outright table (Forward!D33:F33, D45:F45)
                TRY  -> ``manual`` is a TRY simple ACT/360 rate (fraction); bulk-pricing formula (Forward!N)
                FWD  -> ``manual`` is the forward outright; the implied TRY rate is backed out
+               SP   -> ``manual`` is the swap point (forward − spot, ×10.000): forward = spot + points
+    ``spot``   the spot to use for a pair the workbook has none for
     """
     if basis not in FWD_BASES:
         raise TradeError("bilinmeyen fiyatlama tipi: %r" % basis)
+    pair = pair_of(pair)
+    base_ccy, quote_ccy = pair[:3], pair[3:]
     eng = book.engine
     cell = book.cell
     overlay = dict(base_overlay)
-    d2 = cell("Forward!D2")
-    b_row = cell("Forward!B163")
-    l_row = cell("Forward!L163")
-    overlay[d2] = float(value_date)
-    overlay[b_row] = float(value_date)
-    overlay[l_row] = (manual * 100.0) if (basis == "TRY" and manual is not None) else None
+    overlay[cell("Forward!D2")] = float(value_date)
+    if pair == "USDTRY":
+        overlay[cell("Forward!B163")] = float(value_date)
+        overlay[cell("Forward!L163")] = (manual * 100.0) if (basis == "TRY" and manual is not None) else None
+    elif pair != "EURTRY" and quote_ccy == "TRY":
+        overlay[cell("Forward!C197")] = base_ccy             # the sheet's cross block: spot = USDTRY ÷ USDXXX
+        overlay[cell("Forward!B200")] = float(value_date)
     calc = Calc(eng, eng.shared, overlay)
 
     def v(ref: str) -> Any:
@@ -72,54 +92,95 @@ def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: fl
         r, c = divmod(rc, COLS)
         return calc.get(si, r, c)
 
-    days = _num(v("Forward!U27"), "gün sayısı")
-    if days <= 0:
-        raise TradeError("valör spot tarihinden sonra olmalı")
-    spot = _num(v("Forward!F2"), "spot")
-    usd_bid, usd_mid, usd_ask = v("Forward!W27"), v("Forward!X27"), v("Forward!Y27")
+    def need_manual(what: str) -> float:
+        if manual is None or (basis == "FWD" and manual <= 0):
+            raise TradeError("%s girilmedi" % what)
+        return float(manual)
+
+    usdtry = v("Forward!F2")
     ret_bid, ret_ask = v("Forward!W48"), v("Forward!X48")
-    df_try, df_usd = v("Forward!O37"), v("Forward!O42")        # 'Forward DV01' block: TRY OIS and USD OIS discount factors
-    table = {}
-    for name, row in (("ICAP", 30), ("OIS", 31), ("VIOP", 32), ("RET", 33)):
-        table[name] = {"bid": v("Forward!D%d" % row), "mid": v("Forward!E%d" % row), "ask": v("Forward!F%d" % row)}
-    out: Dict[str, Any] = {
-        "value_date": float(value_date), "days": days, "spot": spot, "basis": basis,
-        "usd_bid": usd_bid, "usd_mid": usd_mid, "usd_ask": usd_ask, "ret_bid": ret_bid, "ret_ask": ret_ask,
-        "ret_mid": (ret_bid + ret_ask) / 2.0 if type(ret_bid) is float and type(ret_ask) is float else None,
-        "table": {k: {s: (x if type(x) is float else None) for s, x in d.items()} for k, d in table.items()},
-    }
-    if basis == "RET_BID":
-        fwd = _num(table["RET"]["bid"], "RET bid forward")
-        rate = _num(ret_bid, "RET bid")
-        usd = usd_ask
-    elif basis == "RET_ASK":
-        fwd = _num(table["RET"]["ask"], "RET ask forward")
-        rate = _num(ret_ask, "RET ask")
-        usd = usd_bid
-    elif basis == "RET_MID":
-        fwd = _num(table["RET"]["mid"], "RET mid forward")
-        usd = usd_mid
-        rate = (_num(ret_bid, "RET bid") + _num(ret_ask, "RET ask")) / 2.0      # the sheet's 'RET MID'
-    elif basis == "TRY":
-        if manual is None:
-            raise TradeError("TRY faizi girilmedi")
-        fwd = _num(v("Forward!N163"), "forward")
-        rate = float(manual)
-        usd = _num(v("Forward!J163"), "USD faiz") / 100.0        # the USD mid the bulk row itself uses
+    df_try = v("Forward!O37")                                # 'Forward DV01' block: TRY OIS discount factor to the value date
+    out: Dict[str, Any] = {"pair": pair, "base": base_ccy, "quote": quote_ccy, "value_date": float(value_date), "basis": basis,
+                           "usdtry": usdtry if type(usdtry) is float else None,
+                           "ret_bid": ret_bid, "ret_ask": ret_ask,
+                           "ret_mid": (ret_bid + ret_ask) / 2.0 if type(ret_bid) is float and type(ret_ask) is float else None}
+    rate: Optional[float] = None
+    foreign: Any = None
+    df_foreign: Any = None
+    if pair in ("USDTRY", "EURTRY"):
+        usd = pair == "USDTRY"
+        # days from the pair's own spot value date; the currency's OIS curve at the value date (bid / mid / ask)
+        days = _num(v("Forward!U27" if usd else "Forward!AA27"), "gün sayısı")
+        if days <= 0:
+            raise TradeError("valör spot tarihinden sonra olmalı")
+        spot_px = _num(v("Forward!F2" if usd else "Forward!G2"), "spot")
+        f_bid, f_mid, f_ask = (v("Forward!W27"), v("Forward!X27"), v("Forward!Y27")) if usd else \
+            (v("Forward!AC27"), v("Forward!AD27"), v("Forward!AE27"))
+        first = 30 if usd else 42
+        table = {}
+        for k, name in enumerate(("ICAP", "OIS", "VIOP", "RET")):
+            table[name] = {"bid": v("Forward!D%d" % (first + k)), "mid": v("Forward!E%d" % (first + k)), "ask": v("Forward!F%d" % (first + k))}
+        out["table"] = {k: {s: (x if type(x) is float else None) for s, x in d.items()} for k, d in table.items()}
+        out.update({"usd_bid": f_bid, "usd_mid": f_mid, "usd_ask": f_ask})
+        if basis == "RET_BID":
+            fwd = _num(table["RET"]["bid"], "RET bid forward")
+            rate = _num(ret_bid, "RET bid")
+            foreign = f_ask
+        elif basis == "RET_ASK":
+            fwd = _num(table["RET"]["ask"], "RET ask forward")
+            rate = _num(ret_ask, "RET ask")
+            foreign = f_bid
+        elif basis == "RET_MID":
+            fwd = _num(table["RET"]["mid"], "RET mid forward")
+            foreign = f_mid
+            rate = (_num(ret_bid, "RET bid") + _num(ret_ask, "RET ask")) / 2.0      # the sheet's 'RET MID'
+        else:
+            # the currency's mid rate, as the bulk row (Forward!J163) and the cross block (Forward!Q200) use it
+            foreign = _num(v("Forward!J163"), "USD faiz") / 100.0 if usd else _num(f_mid, "EUR faiz")
+            if basis == "TRY":
+                rate = need_manual("TRY faizi")
+                fwd = _num(v("Forward!N163"), "forward") if usd else \
+                    spot_px * (1.0 + rate * days / 360.0) / (1.0 + foreign * days / 360.0)
+            else:
+                fwd = need_manual("forward kur") if basis == "FWD" else spot_px + need_manual("swap puanı") / 10000.0
+                if fwd <= 0:
+                    raise TradeError("forward kur pozitif olmalı")
+                rate = ((fwd / spot_px) * (1.0 + foreign * days / 360.0) - 1.0) * 360.0 / days
+        df_foreign = v("Forward!O42") if usd else (1.0 / (1.0 + foreign * days / 360.0) if type(foreign) is float else None)
     else:
-        if manual is None or manual <= 0:
-            raise TradeError("forward kur girilmedi")
-        fwd = float(manual)
-        usd = _num(v("Forward!J163"), "USD faiz") / 100.0        # same convention as the TRY-rate pricing
-        rate = ((fwd / spot) * (1.0 + usd * days / 360.0) - 1.0) * 360.0 / days
+        # a pair without a curve in the workbook: the forward is the one typed, as an outright or as points on a spot
+        if basis not in ("FWD", "SP"):
+            raise TradeError("%s için fiyat elle girilir: forward kur ya da swap puanı" % pair)
+        days = _num(v("Forward!U27"), "gün sayısı")
+        if days <= 0:
+            raise TradeError("valör spot tarihinden sonra olmalı")
+        cross_bid, cross_ask = (v("Forward!L198"), v("Forward!M198")) if quote_ccy == "TRY" else (None, None)
+        market = (cross_bid + cross_ask) / 2.0 if type(cross_bid) is float and type(cross_ask) is float else None
+        out["spot_market"] = market
+        spot_px = float(spot) if type(spot) is float and spot > 0 else market
+        if basis == "FWD":
+            fwd = need_manual("forward kur")
+        else:
+            if spot_px is None:
+                raise TradeError("%s spotu yok: swap puanıyla girmek için spot da yazın" % pair)
+            fwd = spot_px + need_manual("swap puanı") / 10000.0
+        if fwd <= 0:
+            raise TradeError("forward kur pozitif olmalı")
+        m_bid, m_ask = (v("Forward!M200"), v("Forward!N200")) if quote_ccy == "TRY" else (None, None)
+        out["table"] = {"BBG": {"bid": m_bid if type(m_bid) is float else None, "ask": m_ask if type(m_ask) is float else None,
+                                "mid": (m_bid + m_ask) / 2.0 if type(m_bid) is float and type(m_ask) is float else None}}
+        out.update({"usd_bid": None, "usd_mid": None, "usd_ask": None})
+    points = (fwd - spot_px) * 10000.0 if spot_px is not None else None      # an outright typed for a pair without a spot
     out.update({
-        "forward": fwd, "try_rate": rate, "usd_rate": usd if type(usd) is float else None,
-        "points": (fwd - spot) * 10000.0, "daily_points": (fwd - spot) * 10000.0 / days,
-        "on_equiv": 360.0 * ((1.0 + rate * days / 360.0) ** (1.0 / days) - 1.0) if rate > -1 else None,
-        "df_try": df_try if type(df_try) is float else None, "df_usd": df_usd if type(df_usd) is float else None,
+        "days": days, "spot": spot_px, "forward": fwd, "try_rate": rate, "usd_rate": foreign if type(foreign) is float else None,
+        "points": points, "daily_points": points / days if points is not None else None,
+        "on_equiv": 360.0 * ((1.0 + rate * days / 360.0) ** (1.0 / days) - 1.0) if rate is not None and rate > -1 else None,
+        "df_try": df_try if type(df_try) is float and quote_ccy == "TRY" else None,
+        "df_usd": df_foreign if type(df_foreign) is float else None,
     })
-    # per 1 mn USD bought, so that the form can show the risk before an amount is typed
-    out["dv01_1m"] = forward_dv01("B", 1e6, fwd, days, spot, out["df_try"], out["df_usd"], rate, out["usd_rate"])
+    # per 1 mn bought, so that the form can show the risk before an amount is typed
+    out["dv01_1m"] = forward_dv01("B", 1e6, fwd, days, out["usdtry"], out["df_try"], out["df_usd"],
+                                  rate if quote_ccy == "TRY" else None, out["usd_rate"])
     return out
 
 
@@ -128,12 +189,13 @@ def forward_dv01(direction: str, amount: float, forward: float, days: float, spo
                  usd_rate: Optional[float] = None) -> Dict[str, Optional[float]]:
     """DV01 of an FX forward as the Forward sheet's 'Forward DV01' block has it (Forward!N31:P49).
 
-    ``tl``   TL for +1 bp on the TRY rate  = ±amount·forward·T·DF_TRY/10000   (+ for a purchase of USD)
-    ``usd``  the same in USD at spot                                           (the sheet's TRY_USD_DV01)
-    ``usd_leg``  USD for +1 bp on the USD rate = ∓amount·T·DF_USD/10000
+    ``tl``   TL for +1 bp on the TRY rate  = ±amount·forward·T·DF_TRY/10000   (+ for a purchase of the currency:
+             the buyer of the forward pays the TRY rate - payer is plus)
+    ``usd``  the same in USD at the USDTRY ``spot``                            (the sheet's TRY_USD_DV01)
+    ``usd_leg``  in the currency bought, for +1 bp on its own rate = ∓amount·T·DF/10000
 
     T = days/360.  Without the sheet's discount factors (a trade stored before they were kept) the trade's
-    own simple rates stand in for them.
+    own simple rates stand in for them; a pair that is not against TRY has no TRY risk.
     """
     try:
         t = float(days) / 360.0
@@ -163,17 +225,19 @@ def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise TradeError("valör tarihi gerekli")
     basis = str(payload.get("basis", "RET_MID")).upper()
     manual = payload.get("manual")
-    p = price_forward(book, overlay, vd, basis, manual if type(manual) is float else None)
+    spot = payload.get("spot")
+    p = price_forward(book, overlay, vd, basis, manual if type(manual) is float else None, payload.get("pair") or "USDTRY",
+                      spot if type(spot) is float else None)
     rec = {
-        "dir": direction, "amount": amount, "value_date": vd, "basis": basis,
+        "pair": p["pair"], "dir": direction, "amount": amount, "value_date": vd, "basis": basis,
         "manual": manual if type(manual) is float else None,
         "days": p["days"], "spot": p["spot"], "usd_rate": p["usd_rate"], "try_rate": p["try_rate"],
         "forward": p["forward"], "points": p["points"], "tl": amount * p["forward"],
-        "df_try": p.get("df_try"), "df_usd": p.get("df_usd"),
+        "df_try": p.get("df_try"), "df_usd": p.get("df_usd"), "usdtry": p.get("usdtry"),
         "cpt": str(payload.get("cpt") or "").strip()[:40], "note": str(payload.get("note") or "").strip()[:200],
     }
-    risk = forward_dv01(direction, amount, p["forward"], p["days"], p["spot"], p.get("df_try"), p.get("df_usd"),
-                        p["try_rate"], p["usd_rate"])
+    risk = forward_dv01(direction, amount, p["forward"], p["days"], p.get("usdtry"), p.get("df_try"), p.get("df_usd"),
+                        p["try_rate"] if p["quote"] == "TRY" else None, p["usd_rate"])
     rec.update({"dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]})
     return rec
 
@@ -182,9 +246,10 @@ def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
 class OisMarket(object):
     """Par rates and annuities of the TRY OIS curve, read from OIS_MAIN / Motor through the engine."""
 
-    def __init__(self, book, calc):
+    def __init__(self, book, calc, overlay: Optional[Dict[Tuple[int, int], Any]] = None):
         self.book = book
         self.calc = calc
+        self.overlay = dict(overlay or {})      # the user's own inputs, for what is priced with a date typed in
         self._fn_cache: Dict[str, Any] = {}
 
     def value(self, ref: str) -> Any:
@@ -268,6 +333,51 @@ class OisMarket(object):
         start_par = (1.0 - self.df_months(start)) / a1
         return (end_par * a2 - start_par * a1) / (a2 - a1)
 
+    def mpc_dates(self) -> Dict[str, Any]:
+        """The OIS spot date and the effective dates of the coming meetings (the day after each decision), as the
+        'MPC OIS' table of OIS_MAIN has them: its period k runs from date k to date k+1."""
+        spot = self.value("OIS_MAIN!B2")
+        dates: List[float] = []
+        market: List[Optional[float]] = []
+        for r in range(MPC_ROWS[0], MPC_ROWS[1] + 1):
+            start, end = self.value("OIS_MAIN!B%d" % r), self.value("OIS_MAIN!C%d" % r)
+            if type(start) is not float or type(end) is not float:
+                break
+            if not dates:
+                dates.append(start)
+            dates.append(end)
+            level = self.value("OIS_MAIN!D%d" % r)
+            market.append(level if type(level) is float else None)
+        return {"spot": spot if type(spot) is float else None, "dates": dates, "market": market}
+
+    def between(self, start: float, end: float) -> Dict[str, Any]:
+        """A swap from one date to another, paid once at the end - how a meeting-dated OIS trades.  The numbers
+        are those of OIS_MAIN's 'İKİ TARİH ARASI SIMPLE RATE' block with the two dates typed into it: the
+        market level is its bootstrap row (simple ACT/365), the annuity the year fraction times the discount
+        factor of the MPC-implied curve (what the sheet's own 'Nominal' column of the MPC table uses)."""
+        spot = self.value("OIS_MAIN!B2")
+        if type(spot) is float and start < spot:
+            raise TradeError("başlangıç OIS spot tarihinden önce olamaz")
+        if end <= start:
+            raise TradeError("bitiş başlangıçtan sonra olmalı")
+        cell = self.book.cell
+        overlay = dict(self.overlay)
+        overlay[cell("OIS_MAIN!B122")] = float(start)
+        overlay[cell("OIS_MAIN!B123")] = float(end)
+        eng = self.book.engine
+        calc = Calc(eng, eng.shared, overlay)
+
+        def v(ref: str) -> Any:
+            si, rc = cell(ref)
+            return calc.get(si, *divmod(rc, COLS))
+
+        days = float(end) - float(start)
+        df_end = _num(v("OIS_MAIN!E125"), "iskonto faktörü")
+        implied = v("OIS_MAIN!B125")
+        return {"start": float(start), "end": float(end), "days": days, "market": _num(v("OIS_MAIN!B129"), "piyasa seviyesi"),
+                "implied": implied if type(implied) is float else None, "df_end": df_end,
+                "annuity": days / 365.0 * df_end}
+
     def nominal(self, dv01_usd: float, annuity: float, weight: float = 1.0) -> float:
         """OIS_MAIN sizing rule: ROUND(w*DV01*USDTRY/(A*0.0001)/lot,0)*lot."""
         lot = self.lot
@@ -284,12 +394,19 @@ def _round_half_away(x: float) -> float:
     return -r if x < 0 else r
 
 
+def mpc_label(start: float, end: float) -> str:
+    """How a meeting-dated swap is named in the lists: by its two dates (the number of a meeting changes when
+    one passes; its date does not)."""
+    return "MPC %s–%s" % (serial_to_date(start).strftime("%d.%m.%y"), serial_to_date(end).strftime("%d.%m.%y"))
+
+
 def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Expand an OIS trade (outright / spread / fly / FRA) into the outright legs booked in the blotter.
 
     Conventions (same as OIS_MAIN): RECEIVE = receive fixed; spread = long − short in bp, FLATTENER =
     receive the long leg / pay the short leg; fly = 2·body − wings in bp, "REC GÖVDE" = receive the body;
-    FRA start→end is traded as the two spot swaps with one nominal sized on the forward annuity.
+    FRA start→end is traded as the two spot swaps with one nominal sized on the forward annuity; "mpc" is one
+    swap between two dates (meeting to meeting, or spot to a meeting), paid once at its end.
     Size is given per leg as DV01 in USD (fly wings carry half) or as TL nominal.
     """
     strategy = str(payload.get("strategy", "outright")).lower()
@@ -411,6 +528,19 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
             mkt_level = (end_par * a2 - start_par * a1) / fwd_annuity
         label = "%s FRA %s→%s @ %s%%" % (side, "Spot" if m1 == 0 else month_label(m1), month_label(m2), fmt(level * 100.0, 4))
         info = {"market": mkt_level, "cost_bp": ((mkt_level - level) if rec else (level - mkt_level)) * 10000.0}
+    elif strategy == "mpc":
+        if side not in ("PAY", "RECEIVE"):
+            raise TradeError("yön PAY ya da RECEIVE olmalı")
+        d1, d2 = payload.get("start"), payload.get("end")
+        if type(d1) is not float or type(d2) is not float:
+            raise TradeError("başlangıç ve bitiş tarihi gerekli")
+        span = mkt.between(d1, d2)
+        name = mpc_label(d1, d2)
+        leg(name, side == "RECEIVE", level, 1.0, "mpc", annuity=span["annuity"])
+        legs[-1]["mpc"] = {"start": d1, "end": d2, "days": span["days"]}
+        label = "%s %s @ %s%%" % (side, name, fmt(level * 100.0, 4))
+        info = {"market": span["market"], "implied": span["implied"],
+                "cost_bp": ((span["market"] - level) if side == "RECEIVE" else (level - span["market"])) * 10000.0}
     else:
         raise TradeError("bilinmeyen strateji: %r" % strategy)
     # cost versus market mid in money terms: the bp given away on the leg that carries the price
@@ -478,9 +608,10 @@ def bond_dv01(amount: float, info: Optional[Dict[str, Any]], usdtry: Optional[fl
 
 # ---------------------------------------------------------------------------------------------- risk of the day
 def risk_summary(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """DV01 of the listed trades in USD for +1 bp on TRY rates: USD bought forward and fixed paid are positive,
-    USD sold forward, fixed received and bonds bought are negative.  Trades without a DV01 (a bond the DİBS
-    table does not list) are counted in ``unknown``."""
+    """DV01 of the listed trades in USD for +1 bp on TRY rates.  Payer is plus, everywhere: a currency bought
+    forward and fixed paid are positive, a currency sold forward, fixed received and bonds bought are negative.
+    Trades without a DV01 (a bond the DİBS table does not list, a forward that is not against TRY) are counted
+    in ``unknown``."""
     out: Dict[str, Any] = {"fwd": 0.0, "fwd_tl": 0.0, "ois": 0.0, "ois_gross": 0.0, "bond": 0.0, "bond_tl": 0.0, "unknown": 0}
     for t in trades:
         k = t.get("kind")
@@ -530,18 +661,21 @@ def position_cost(buys: List[Tuple[float, float]], sells: List[Tuple[float, floa
 
 
 def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Position and cost per forward value date bucket, OIS tenor and bond instrument."""
-    fwd: Dict[float, Dict[str, List[Tuple[float, float]]]] = {}
+    """Position and cost per forward (pair and value date), OIS tenor or meeting-dated period and bond."""
+    fwd: Dict[Tuple[str, float], Dict[str, List[Tuple[float, float]]]] = {}
+    spans: Dict[str, float] = {}
     ois: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
     bonds: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
     for t in trades:
         k = t.get("kind")
         if k == "fwd":
-            d = fwd.setdefault(t["value_date"], {"B": [], "S": []})
+            d = fwd.setdefault((t.get("pair") or "USDTRY", t["value_date"]), {"B": [], "S": []})
             d[t["dir"]].append((t["amount"], t["forward"]))
         elif k == "ois":
             d = ois.setdefault(t["tenor"], {"B": [], "S": []})
             d[t["dir"]].append((t["dv01"], t["rate"]))
+            if t.get("mpc"):
+                spans[t["tenor"]] = t["mpc"].get("start") or 0.0
         elif k == "bond":
             d = bonds.setdefault(t["instrument"], {"B": [], "S": []})
             if t["amount"] >= 0:
@@ -549,13 +683,14 @@ def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
             else:
                 d["S"].append((-t["amount"], t["price"]))
     out: Dict[str, Any] = {"fwd": [], "ois": [], "bond": []}
-    for vd in sorted(fwd):
-        pc = position_cost(fwd[vd]["B"], fwd[vd]["S"])
+    for pair, vd in sorted(fwd, key=lambda x: (x[0] != "USDTRY", x[0], x[1])):
+        pc = position_cost(fwd[(pair, vd)]["B"], fwd[(pair, vd)]["S"])
         pc["key"] = vd
-        # forwards: realised P&L in TL = matched USD × (sell forward − buy forward)
+        pc["pair"] = pair
+        # forwards: realised P&L in TL = matched amount × (sell forward − buy forward)
         out["fwd"].append(pc)
     order = {t: i for i, t in enumerate(OIS_TENORS)}
-    for tenor in sorted(ois, key=lambda x: order.get(x, 999)):
+    for tenor in sorted(ois, key=lambda x: (order.get(x, 999), spans.get(x, 0.0), x)):
         # pay = "B" (buy the rate), receive = "S"; realised in USD = matched DV01 × (receive − pay) in bp
         pc = position_cost(ois[tenor]["B"], ois[tenor]["S"])
         pc["key"] = tenor
@@ -602,6 +737,10 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
     rf, ro, rb = FWD_ROWS[0], OIS_ROWS[0], BOND_ROWS[0]
     for t in trades:
         k = t.get("kind")
+        if k == "fwd" and (t.get("pair") or "USDTRY") != "USDTRY":
+            continue                                        # the sheet's forward list is in USD
+        if k == "ois" and t.get("mpc"):
+            continue                                        # ... and its OIS list by quoted tenor
         if k == "fwd" and rf <= FWD_ROWS[1]:
             put("A", rf, t["dir"])
             put("B", rf, float(t["amount"]))

@@ -6,6 +6,7 @@ import { configureGrid, clearSelection, findCell, selectionText } from './grid.j
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
 import { BrokerPage } from './pages/broker.js';
+import { VolPage } from './pages/vol.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
 import { openRetEditor } from './ret.js';
@@ -146,6 +147,7 @@ async function openPage(id, panel) {
   let page;
   if (id === 'blotter') page = new BlotterPage(host, ctx);
   else if (id === 'broker') page = new BrokerPage(host, ctx);
+  else if (id === 'vol') page = new VolPage(host, ctx);
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
   else if (id === 'eod') page = new EodPage(host, ctx);
   else if (id === 'mpc') page = new MpcPage(host, ctx);
