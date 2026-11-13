@@ -49,6 +49,8 @@ export class VolPage {
     this.vol = null;
     this.carry = null;
     this.grids = {};
+    this.rowKeys = {};
+    this.extra = null;                  // the history of a carry row (not one of the typed instruments)
     this.charts = {};
     this.loaded = 0;
     this.typed = debounce(() => this.loadVol().catch(errorToast), 450);
@@ -152,7 +154,7 @@ export class VolPage {
     const typed = h('section', { class: 'panel wide', id: 'vol-panel' },
       h('header', null, h('h2', null, 'Realized vol · yazdığınız enstrüman'), h('span', { class: 'grow' }), h('div', { class: 'tools' }, copy)),
       h('div', { class: 'volentry' }, this.input,
-        h('div', { class: 'muted' }, 'Vade (18m), spread (1y5y – uzun − kısa), fly (2y3y4y – 2 × gövde − kanatlar), FRA / forward (9x12, 1y1y); cross-currency için "x" (5y x); tahvil için ISIN. '
+        h('div', { class: 'muted' }, 'Satıra tıklayınca seviyesi ve kayan vol\'ü aşağıda çizilir (carry tablosundaki satırlarda da). Vade (18m), spread (1y5y – uzun − kısa), fly (2y3y4y – 2 × gövde − kanatlar), FRA / forward (9x12, 1y1y); cross-currency için "x" (5y x); tahvil için ISIN. '
           + 'Virgülle ayırın. Vol = günlük değişimlerin (bp) standart sapması; yalnızca bütün bacakların kapanışı olan günler sayılır.')),
       this.volBody, this.volCharts);
 
@@ -175,20 +177,51 @@ export class VolPage {
     this.host.appendChild(h('div', { class: 'volpage' }, typed, carry));
   }
 
-  setGrid(id, body, header, rows, empty) {
+  /**
+   * ``keys``: what each row stands for - a click anywhere on a row draws its history (the row is marked).
+   */
+  setGrid(id, body, header, rows, empty, keys) {
+    this.rowKeys[id] = keys || [];
     if (!rows.length) {
       clear(body);
       this.grids[id] = null;
       body.appendChild(h('div', { class: 'empty' }, empty));
       return;
     }
-    const data = plainData(header, rows);
+    const marked = rows.map((row, i) => (keys && keys[i] && keys[i].key === this.picked
+      ? row.map((c) => (c && typeof c === 'object' ? (c.sk ? c : Object.assign({}, c, { cls: ((c.cls || '') + ' pick').trim() })) : { t: c == null ? '' : String(c), k: 's', cls: 'pick' }))
+      : row));
+    const data = plainData(header, marked);
     if (this.grids[id]) this.grids[id].replace(data);
     else {
       clear(body);
-      this.grids[id] = new Grid({ data, editable: false });
-      body.appendChild(this.grids[id].el);
+      const g = new Grid({ data, editable: false });
+      g.el.classList.add('pickable');
+      g.el.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        const td = e.target.closest('td');
+        if (!td || td.__i === undefined || td.__i < 1) return;                  // row 0: the captions
+        const k = this.rowKeys[id][td.__i - 1];
+        if (k) this.pick(k).catch(errorToast);
+      });
+      this.grids[id] = g;
+      body.appendChild(g.el);
     }
+  }
+
+  /** Draw the history of a row: one of the typed ones, or a fly / spread of the carry table (asked for on its own). */
+  async pick(k) {
+    this.picked = k.key;
+    const typed = (this.vol.rows || []).find((r) => r.key === k.key && r.ok);
+    if (!typed && k.text) {
+      const res = await api.post('/api/vol', { text: k.text, window: this.window });
+      if (this.dead) return;
+      this.extra = (res.rows || []).find((r) => r.ok) || null;
+      if (this.extra) this.extra.key = k.key;
+    }
+    this.fillVol();
+    this.fillCarry();
+    if (k.from === 'carry') this.volCharts.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   /** A volatility as shown: bp a day, or a year's (× √252). */
@@ -235,14 +268,15 @@ export class VolPage {
         isNum(r.sigma) ? { t: (r.sigma > 0 ? '+' : '') + num(r.sigma, 1, false) + ' σ', v: r.sigma, k: 'n', cls: Math.abs(r.sigma) >= 2 ? 'thru' : '',
           tip: 'Son günün hareketi ÷ ' + d.window + ' günlük realized vol' } : { t: '', k: '' },
         vol(r, 10), vol(r, 20), vol(r, 60), vol(r, 120), vol(r, 250), { t: String(r.n), k: 'n', tip: isoToTr(r.first) + ' – ' + isoToTr(r.day) },
-        { t: '', k: '', cls: 'act', act: { label: '📈', title: name + ' geçmişini çiz', fn: () => { this.picked = r.key; this.fillVol(); } } }];
+        { t: '', k: '', cls: 'act', act: { label: '📈', title: name + ' geçmişini çiz', fn: () => this.pick({ key: r.key }).catch(errorToast) } }];
     });
     this.setGrid('vol', this.volBody, ['Enstrüman', 'Tür', 'Seviye', 'Son Δ (bp)', 'Son Δ / σ', 'σ 10g' + unit, 'σ 20g', 'σ 60g', 'σ 120g', 'σ 250g', 'Gün', ''], rows,
-      'Enstrüman yazın: 18m, 1y5y, 2y3y4y, 9x12 …');
+      'Enstrüman yazın: 18m, 1y5y, 2y3y4y, 9x12 …', d.rows.map((r) => (r.ok ? { key: r.key, from: 'vol' } : null)));
 
-    // ---- the history of one of them
+    // ---- the history of one of them: the row clicked (of either table), else the first one
     const good = d.rows.filter((r) => r.ok && r.days && r.days.length > 1);
-    const row = good.find((r) => r.key === this.picked) || good[0];
+    const extra = this.extra && this.extra.key === this.picked && this.extra.days && this.extra.days.length > 1 ? this.extra : null;
+    const row = good.find((r) => r.key === this.picked) || extra || good[0];
     this.volCharts.classList.toggle('hidden', !row);
     if (!row) return;
     this.picked = row.key;
@@ -283,18 +317,27 @@ export class VolPage {
     const pos = fly ? 'REC gövde' : 'Flattener', neg = fly ? 'PAY gövde' : 'Steepener';
     this.carryNote.textContent = 'C+R: Carry & Roll sayfasının ' + (fly ? '"fly (gövde receive)"' : '"spread (flattener)"') + ' tablosundaki ' + H.label + ' carry + roll-down (bp; + ise '
       + pos + ' kazanır, − ise ' + neg + '). σ: işlemin seviyesinin son ' + d.window + ' günlük realized vol\'ü; ufuk σ\'sı = günlük σ × √' + H.days
-      + ' iş günü. Oran = C+R ÷ ufuk σ\'sı: bir standart sapmalık harekete karşı kaç birim carry.';
+      + ' iş günü. Oran = C+R ÷ ufuk σ\'sı: bir standart sapmalık harekete karşı kaç birim carry. z: bugünkü seviyenin son 60 / 120 / 250 kapanışın '
+      + 'ortalamasından kaç standart sapma uzakta olduğu (+ ise seviye ortalamanın üstünde; |z| ≥ 2 vurgulu).';
     const cr = (r) => r['cr_' + this.horizon], over = (r) => r['vol_' + this.horizon], ratio = (r) => r['ratio_' + this.horizon];
     const rows = d.rows.slice().sort((a, b) => (isNum(ratio(b)) ? Math.abs(ratio(b)) : -1) - (isNum(ratio(a)) ? Math.abs(ratio(a)) : -1));
     const sign = (v, digits) => (isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, digits, false), v, k: 'n' } : { t: '', k: '' });
-    this.setGrid('carry', this.carryBody, ['İşlem', 'Piyasa (bp)', 'C+R ' + H.label + ' (bp)', 'σ (bp/gün)', 'σ ' + H.label + ' (bp)', 'C+R / σ', 'Carry\'yi alan', 'Gün'],
+    const zs = (d.z_windows || [60, 120, 250]).map(String);
+    const zName = { 60: 'z 3a', 120: 'z 6a', 250: 'z 1y' };
+    const zCell = (r, n) => {
+      const v = r.z ? r.z[n] : null;
+      return isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, 2, false), v, k: 'n', cls: Math.abs(v) >= 2 ? 'thru' : '',
+        tip: 'Son ' + Math.min(Number(n), r.closes || 0) + ' kapanışa göre z-score' } : { t: '', k: '' };
+    };
+    this.setGrid('carry', this.carryBody, ['İşlem', 'Piyasa (bp)', 'C+R ' + H.label + ' (bp)', 'σ (bp/gün)', 'σ ' + H.label + ' (bp)', 'C+R / σ', 'Carry\'yi alan']
+      .concat(zs.map((n) => zName[n] || 'z ' + n + 'g')).concat(['Gün']),
       rows.map((r) => [{ t: r.label, k: 's', b: 1 }, isNum(r.market) ? { t: num(r.market, 1, false), v: r.market, k: 'n' } : { t: '', k: '' }, sign(cr(r), 1),
         isNum(r.vol) ? { t: num(r.vol, 1, false), v: r.vol, k: 'n', cls: r.full ? '' : 'soft', tip: r.n + ' değişim' + (r.full ? '' : ' (pencere dolmadı)') }
           : { t: r.error || '', k: 's', cls: 'soft' },
         isNum(over(r)) ? { t: num(over(r), 1, false), v: over(r), k: 'n' } : { t: '', k: '' },
         isNum(ratio(r)) ? { t: (ratio(r) > 0 ? '+' : '') + num(ratio(r), 2, false), v: ratio(r), k: 'n', b: 1, cls: Math.abs(ratio(r)) >= 0.5 ? 'thru' : '' } : { t: '', k: '' },
-        isNum(cr(r)) && cr(r) !== 0 ? (cr(r) > 0 ? pos : neg) : '', { t: r.n ? String(r.n) : '', k: 'n' }]),
-      'Tabloda işlem yok');
+        isNum(cr(r)) && cr(r) !== 0 ? (cr(r) > 0 ? pos : neg) : ''].concat(zs.map((n) => zCell(r, n))).concat([{ t: r.n ? String(r.n) : '', k: 'n' }])),
+      'Tabloda işlem yok', rows.map((r) => ({ key: 'OIS:' + r.kind + ':' + r.tenors.join('/'), text: r.tenors.join('').toLowerCase(), from: 'carry' })));
 
     // ---- the picture: carry against the volatility of the same time
     const pts = d.rows.filter((r) => isNum(cr(r)) && isNum(over(r)));

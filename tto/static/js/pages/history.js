@@ -264,7 +264,9 @@ export class EodPage extends HistoryPage {
     };
     const so = sides(d.curve.map((r) => r.ois).concat([d.tlref])), sf = sides(d.curve.map((r) => r.off));
     const half = (e, scale) => (e
-      ? [N(e.last, 3, { tip: e.ticker + ' · ' + e.field + (e.day ? ' · ' + isoToTr(e.day) : '') }),
+      ? [N(e.last, 3, { tip: e.ticker + ' · ' + e.field + (e.day ? ' · ' + isoToTr(e.day) : '')
+          + (e.backup ? ' · bu günün kapanışı yedek kaynaktan (' + e.backup + '): onun hareketi ana kaynağın seviyesine eklendi' : ''),
+        c: e.backup ? 'mute' : undefined }),
         D(e.d1, scale, 1, e.d1_from, d.ref.d1), D(e.w1, scale, 1, e.w1_from, d.ref.w1), D(e.m1, scale, 1, e.m1_from, d.ref.m1)]
       : [EMPTY(), EMPTY(), EMPTY(), EMPTY()]);
     if (d.tlref) rows.push([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so), half(null)));
@@ -273,8 +275,9 @@ export class EodPage extends HistoryPage {
       rows.push([TXT(r.tenor, { cls: 'lab' })].concat(half(r.ois, so), half(r.off, sf)));
     }
     this.curve.setData({ sheet: '', rows });
-    this.curve.setNote('OIS kaynağı: ' + d.source.ois + ' (MASA → OIS eğri RV → Kaynak). Offshore: Forward sayfasındaki TRYI / TRYSAQ ticker\'ları. '
-      + 'Hücrenin üzerinde durunca önceki kapanış görünür.');
+    this.curve.setNote('Kaynak sırası (Ayarlar → Veri kaynakları): OIS ' + d.source.ois + ' · offshore ' + d.source.off + ' · XCCY ' + d.source.xccy
+      + '. Ana kaynağın kapanışı olmayan günde sıradaki kaynağın o günkü hareketi ana kaynağın seviyesine eklenir (soluk yazılır). '
+      + 'Hücrenin üzerinde durunca önceki kapanış ve kaynak görünür.');
   }
 
   renderMpc(d) {
@@ -565,14 +568,16 @@ export class SettingsPage {
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
-    const [cal, cov] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series')]);
+    const [cal, cov, src] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources')]);
     if (this.dead) return;
     this.cal = cal;
     this.cov = cov;
+    this.src = src;
     this.rows = cal.meetings.map((m) => ({ date: m.date, was: m.date }));
     this.dirty = false;
     clear(this.host);
     this.build();
+    this.renderSources(true);
     this.renderCalendar();
     this.renderHistory();
     this.timer = setInterval(() => { this.pollState().catch(() => {}); }, 4000);
@@ -581,6 +586,12 @@ export class SettingsPage {
   /** A market tick: the calendar is only reloaded when nothing is being edited. */
   async refresh() {
     if (this.dead) return;
+    if (this.srcPanel) {
+      const src = await api.get('/api/sources');
+      if (this.dead) return;
+      this.src = src;
+      this.renderSources(false);
+    }
     if (!this.dirty) {
       const cal = await api.get('/api/calendar');
       if (this.dead || this.dirty) return;
@@ -610,6 +621,29 @@ export class SettingsPage {
   }
 
   build() {
+    // ---- the order of the pricing sources
+    this.srcPanel = panel('Veri kaynakları · Bloomberg fiyat kaynağı sırası', { wide: true, id: 'sources' });
+    this.srcTable = h('table', { class: 'src-table', id: 'sources-table' });
+    this.srcSave = h('button', { class: 'btn primary', type: 'button', id: 'sources-save' }, 'Kaydet');
+    this.srcSave.addEventListener('click', () => this.saveSources());
+    const srcReset = h('button', { class: 'btn', type: 'button', id: 'sources-default',
+      title: 'OIS: GFOF · offshore: ICPL · XCCY: ICPL (sonra Excel\'deki BGN ticker\'ı)' }, 'Varsayılana dön');
+    srcReset.addEventListener('click', () => {
+      for (const c of this.src.curves) {
+        const inputs = this.srcTable.querySelectorAll('input[data-curve="' + c.id + '"]');
+        inputs.forEach((inp, k) => { inp.value = c.default[k] || ''; });
+      }
+      this.srcDirty = true;
+      this.srcSave.disabled = false;
+    });
+    this.srcPanel.body.appendChild(h('div', { class: 'set-body' },
+      this.srcTable,
+      h('div', { class: 'src-actions' }, h('span', { class: 'grow' }), srcReset, this.srcSave)));
+    this.srcPanel.setNote('Her eğri için soldan sağa denenir: fiyatı olan ilk kaynak kullanılır, en sonda her zaman Excel\'deki ticker (BGN). '
+      + 'Kaynak kodu Bloomberg\'in fiyat kaynağıdır (GFOF, ICPL, BGN, CMPN, TRPU …): ticker kök + kaynak + Curncy olarak sorulur. OIS\'te önce MID, yoksa PX_LAST; '
+      + 'offshore ve XCCY\'de bid ve ask\'in ikisi de olan kaynak alınır. Değişiklik herkes için ve hem canlı sayfalarda hem tarihçede geçerlidir.');
+    this.usedPanel = gridPanel('Şu an kullanılan kaynak · her vade için', { wide: true, id: 'sources-used' });
+
     // ---- calendar
     this.calPanel = panel('PPK toplantı takvimi', { wide: true, id: 'calendar' });
     this.calInfo = h('div', { class: 'set-info' });
@@ -673,7 +707,60 @@ export class SettingsPage {
         h('div', { class: 'field' }, h('label', null, 'Geriye bakış (gün)'), this.daysInp),
         saveSet, h('span', { class: 'grow' }), sync, redo)));
     this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.calPanel.el, this.histPanel.el, this.seriesPanel.el));
+    this.host.appendChild(h('div', { class: 'panels' }, this.srcPanel.el, this.usedPanel.el, this.calPanel.el, this.histPanel.el, this.seriesPanel.el));
+  }
+
+  renderSources(force) {
+    const src = this.src;
+    if (!src || !src.available) {
+      clear(this.srcTable).appendChild(h('tr', null, h('td', null, 'Bu dosyada kaynak sayfası yok (EK_KAYNAK) – Excel\'deki ticker\'lar kullanılıyor.')));
+      this.srcSave.disabled = true;
+      return;
+    }
+    if (force || !this.srcDirty) {
+      const t = clear(this.srcTable);
+      t.appendChild(h('tr', null, h('th', null, 'Eğri'), h('th', null, '1. kaynak'), h('th', null, '2. kaynak'), h('th', null, '3. kaynak'),
+        h('th', null, '4. kaynak'), h('th', null, 'Son yedek (her zaman)')));
+      for (const c of src.curves) {
+        const cells = [h('td', null, h('b', null, c.title))];
+        for (let k = 0; k < 4; k++) {
+          const inp = h('input', { class: 'inp src', type: 'text', spellcheck: 'false', maxlength: '8', 'data-curve': c.id,
+            placeholder: k === 0 ? 'kaynak' : '', value: c.sources[k] || '', title: 'Bloomberg fiyat kaynağı kodu (boş = yok)' });
+          inp.addEventListener('input', () => { this.srcDirty = true; this.srcSave.disabled = false; });
+          inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveSources(); });
+          cells.push(h('td', null, inp));
+        }
+        cells.push(h('td', { class: 'muted' }, c.fallback));
+        t.appendChild(h('tr', null, ...cells));
+      }
+      this.srcDirty = false;
+      this.srcSave.disabled = true;
+    }
+    const names = Object.fromEntries(src.curves.map((c) => [c.id, c.title]));
+    const rows = [[HD('Eğri'), HD('Vade'), HD('Kullanılan kaynak'), HD('Ticker'), HD('Değer · bid'), HD('Ask'), HD('Excel\'deki ticker')]];
+    for (const r of src.rows) {
+      const fallback = !(r.rank >= 1 && r.rank <= 4);
+      rows.push([TXT(names[r.curve] || r.curve), TXT(r.tenor, { cls: 'lab' }),
+        TXT(r.source, { c: fallback ? 'mute' : 'pos', tip: fallback ? 'Listedeki kaynakların hiçbiri fiyat vermedi: Excel\'deki ticker' : r.rank + '. kaynak' }),
+        TXT(r.ticker), isNum(r.bid) ? N(r.bid, 4) : TXT(typeof r.bid === 'string' ? r.bid : '', { c: 'mute' }),
+        isNum(r.ask) ? N(r.ask, 4) : TXT(typeof r.ask === 'string' ? r.ask : '', { c: 'mute' }), TXT(r.excel, { c: 'mute' })]);
+    }
+    this.usedPanel.setData({ sheet: '', rows });
+    this.usedPanel.setNote(src.live ? 'Canlı: kaynak yanıt verene kadar (Requesting) sıradaki kaynak görünür. OIS değeri yüzde, offshore ve XCCY bid / ask.'
+      : 'Kayıtlı veri: Excel dosyasında ICAP (ICPL) kotası olmadığı için offshore satırları Excel\'deki ticker\'ı gösterir; sayfalardaki değerler dosyanınkidir.');
+  }
+
+  async saveSources() {
+    const lists = {};
+    for (const c of this.src.curves) {
+      lists[c.id] = [...this.srcTable.querySelectorAll('input[data-curve="' + c.id + '"]')].map((i) => i.value.trim()).filter(Boolean);
+    }
+    try {
+      this.src = await api.post('/api/sources', { lists });
+      this.srcDirty = false;
+      this.renderSources(true);
+      toast('Kaynak sırası kaydedildi – canlı sayfalar ve tarihçe yeni sırayla güncelleniyor', 'ok');
+    } catch (err) { errorToast(err); }
   }
 
   renderCalendar() {
@@ -831,10 +918,13 @@ export class SettingsPage {
     const rows = [[HD('Grup'), HD('Seri'), HD('Ticker'), HD('Alan'), HD('İlk gün'), HD('Son gün'), HD('Gün'), HD('Durum')]];
     for (const s of this.cov.series) {
       rows.push([TXT(names[s.group] || s.group), TXT(s.label, { cls: 'lab' }), TXT(s.ticker), TXT(s.field), TXT(isoToTr(s.first)), TXT(isoToTr(s.last)), N(s.n, 0),
-        s.n ? TXT(s.alt ? 'yedek kaynak' : 'var', { c: 'pos' }) : TXT(s.alt ? 'yedek · geçmiş yok' : 'geçmiş yok', { c: s.alt ? 'mute' : 'warn' })]);
+        s.n ? TXT(s.alt ? 'yedek kaynak' : (s.main ? 'ana kaynak' : 'var'), { c: 'pos' })
+          : TXT(s.alt ? 'yedek · geçmiş yok' : (s.backed ? 'ana kaynakta geçmiş yok – yedek kullanılır' : 'geçmiş yok'), { c: s.alt || s.backed ? 'mute' : 'warn' })]);
     }
     this.seriesPanel.setData({ sheet: '', rows });
-    this.seriesPanel.setNote('Seriler Excel dosyasından okunur: OIS ticker kökleri (OIS_MAIN!J9:J26) + kaynak (MASA!S171), offshore ticker\'ları (Forward!AO6:AO26), '
-      + 'DİBS RV listesi. Bir seride "geçmiş yok" yazıyorsa Bloomberg o ticker / alan için tarihçe vermiyor demektir.');
+    this.seriesPanel.setNote('Seriler Excel dosyasından okunur: OIS ticker kökleri (OIS_MAIN!J9:J26), offshore ticker\'ları (Forward!AO6:AO26), DİBS RV listesi. '
+      + 'Kaynak sırası yukarıdaki "Veri kaynakları" listesinden gelir (en sonda Excel\'deki ticker – BGN). '
+      + 'Yedek yalnızca ana kaynağın kapanışı olmayan günleri doldurur (hareketi ana kaynağın seviyesine eklenerek); ana kaynakta hiç geçmiş yoksa seri yedekten okunur. '
+      + 'Bir seride "geçmiş yok" yazıyorsa Bloomberg o ticker / alan için tarihçe vermiyor demektir.');
   }
 }

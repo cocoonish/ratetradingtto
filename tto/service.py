@@ -20,6 +20,7 @@ from urllib.parse import quote as _quote
 
 from . import blotter as bl
 from . import brokerchat as bc
+from . import extras as ex
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
@@ -33,6 +34,8 @@ from .xl import numfmt
 from .xl.engine import Calc, Clock
 from .xl.errors import XlError
 from .xl.model import COLS, a1, parse_a1, parse_range
+from .xl.tokenizer import index_to_col
+from .marketdata.base import INVALID_FIELD, INVALID_SECURITY, NOT_APPLICABLE
 from .xl.values import date_to_serial, serial_to_date
 
 RET_TENORS = ["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
@@ -174,6 +177,17 @@ class Service(object):
                 tto.declare(ref, scope="shared", group="blotter", view="blotter")
             for ref in ("Forward!D2", "Forward!B163", "Forward!L163"):
                 tto.declare(ref, scope="user", group="fwd-pricer", view="forward")
+        asw = self.books.get("asw")
+        if asw is not None and ex.FXC_SHEET in asw.model.sheet_index and "ASW" in asw.model.sheet_index:
+            # the OIS quotes the ASW curve is built from are swapped for the FX swap curve in a calculation of its
+            # own (ASW against FX swaps): the engine has to know what depends on them - not inputs of the page
+            si = asw.model.sheet_index["ASW"]
+            asw.engine.declare_inputs([(si, parse_a1("%s65" % index_to_col(3 + k))) for k in range(len(ex.FXC_ROOTS))],
+                                      group="asw-fx-curve")
+        if tto is not None:
+            if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
+                tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
+                            label="Bloomberg fiyat kaynağı sırası (OIS / offshore / XCCY)", view="settings")
         if replay:
             if isinstance(provider, ReplayProvider):
                 if tto is not None:
@@ -516,6 +530,8 @@ class Service(object):
                             entry["title"] = own
                     if p.get("header"):
                         _column_captions(entry["data"], p["header"])
+                    if p.get("append") == "asw_fx":
+                        self._asw_fx_columns(book, user, entry["data"], loc)
                 elif p["type"] == "chart":
                     spec = p.get("spec")
                     if spec is None:
@@ -1058,6 +1074,8 @@ class Service(object):
                     t.update({"dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]})
         out: Dict[str, Any] = {"date": date, "to": date_to, "ranged": ranged, "today": today,
                                "is_today": date == today and not ranged, "trades": trades,
+                               # a period that runs up to today: what was done in it, and today's entry form too
+                               "can_enter": date <= today <= date_to,
                                "cost": bl.summarise(trades), "risk": bl.risk_summary(trades),
                                "dates": self.store.trade_dates(), "gen": self.gen, "tenors": bl.OIS_TENORS}
         loc = numfmt.get_locale(locale or self.settings.locale)
@@ -1068,11 +1086,14 @@ class Service(object):
             R = self.renderers[book.id]
             calc = book.engine.shared
             sheet_panels = []
-            for pid, title, rng in (("fwd", "USDTRY Forward · vade kovaları", "P1:W20"), ("ois", "OIS · vade özeti", "O22:W39"),
+            for pid, title, rng in (("fwd", "Forward · vade kovaları (USD karşılığı, TL maliyeti, DV01)", "P1:W20"),
+                                    ("ois", "OIS · vade özeti (MPC işlemleri ana vadelere dağıtılmış)", "O22:W39"),
                                     ("bond", "Bonds", "P41:V84"), ("cpt", "OIS — CPT x VADE (DV01 USD)", "P87:V349")):
                 try:
                     data = R.table(calc, bl.SHEET, rng, loc, None)
                     _lift_title(data)
+                    if pid == "fwd":
+                        _add_dv01_columns(data, bl.forward_dv01_buckets(book, calc, trades), loc)
                     sheet_panels.append({"id": pid, "title": title, "range": rng, "data": data})
                 except Exception as exc:  # noqa: BLE001
                     sheet_panels.append({"id": pid, "title": title, "error": str(exc)[:200]})
@@ -1151,9 +1172,10 @@ class Service(object):
                         grid[divmod(rc, COLS)] = v
                 for panel in snap.get("sheet") or []:
                     t = panel.get("data") or {}
+                    sheet_cols = len(t.get("c") or []) - int(t.get("added") or 0)   # the dashboard's own columns are no cells
                     for i, row in enumerate(t.get("rows") or []):
                         for j, cell in enumerate(row):
-                            if cell.get("sk"):
+                            if cell.get("sk") or j >= sheet_cols:
                                 continue
                             r, c = t["r"][i], parse_a1("%s1" % t["c"][j]) % COLS
                             if "v" in cell:
@@ -1506,6 +1528,300 @@ class Service(object):
         rec["id"] = tid
         return rec
 
+    # ================================================================== what Bloomberg does not know
+    #: what a ticker of a known shape is, when Bloomberg does not know it
+    _UNKNOWN_NOTES = (
+        (re.compile(r"^TYB\d+D BFX\d", re.I),
+         "BIST swap vadesi: Borsa Swap çalışma kitabı 1–400 günün her birini iki valörde (BFX0 = T+0, BFX1 = T+1) sorar; "
+         "Bloomberg'de yalnızca tanımlı vadeler vardır. Beklenen, zararsız: o vadeler tabloda boş kalır."),
+        (re.compile(r"^(@\S+\s+)?(Corp|Govt|Mtge|Muni|Pfd)$", re.I),
+         "Kod boş: tablonun bu satırında ISIN yazılı değil, ticker yalnızca fiyat kaynağı ve sınıftan oluşuyor. Satır boşsa zararsız."),
+        (re.compile(r"^\S+@\S+\s+(ISIN|CUSIP|SEDOL)$|^/isin/\S+@", re.I),
+         "Fiyat kaynaklı ISIN: Bloomberg bu tahvili bu kaynakta (@...) tanımıyor; ISIN ya da kaynak yanlış olabilir."),
+        (re.compile(r"\b(Curncy|Index|Corp|Govt|Comdty|Equity)\s+\1$", re.I),
+         "Sarı anahtar iki kez yazılmış: hücrede tam ticker var, formül bir tane daha ekliyor (VİOP!B58:B69 – C sütunundaki ICAP ticker'ına "
+         "\" Curncy\" ekleyip vade gününü soruyor). O sütun boş kalır; zararsız, Excel'de düzeltilebilir."),
+        (re.compile(r"^\s|\s\s|^\S+$"), "Ticker'ın yazımı eksik (boşluk ya da sarı anahtar – Curncy, Index, Corp, Comdty … – yok)."),
+    )
+    _SOURCE_NOTE = ("Ayarlar → Veri kaynakları listesindeki bir kaynak bu vadeyi yayınlamıyor: sıradaki kaynak (en sonda Excel'deki BGN "
+                    "ticker'ı) kullanılır – zararsız. Bu kaynağı hiç kullanmayacaksanız listeden çıkarın.")
+    _ANSWERS = {INVALID_SECURITY: ("security", "Bloomberg'de böyle bir menkul kıymet yok (Invalid Security)"),
+                INVALID_FIELD: ("field", "Alan yok (Invalid Field)"),
+                NOT_APPLICABLE: ("na", "Alan bu menkul kıymet için geçerli değil (Field Not Applicable)")}
+
+    def _cell_places(self) -> Dict[Tuple[str, str], List[Tuple[int, int, int, int, str, str]]]:
+        """(book, sheet) -> the tables of the pages that show it: (r1, c1, r2, c2, page, panel)."""
+        hit = getattr(self, "_places", None)
+        if hit is not None:
+            return hit
+        out: Dict[Tuple[str, str], List[Tuple[int, int, int, int, str, str]]] = {}
+        for v in self.views:
+            for p in v["panels"]:
+                if p.get("type", "table") != "table" or not p.get("range"):
+                    continue
+                try:
+                    r1, c1, r2, c2 = parse_range(p["range"])
+                except Exception:  # noqa: BLE001
+                    continue
+                out.setdefault((v["book"], p.get("sheet") or v.get("sheet")), []).append((r1, c1, r2, c2, v["id"], p["id"]))
+        self._places = out
+        return out
+
+    def _market_callers(self) -> Dict[Tuple, List[Tuple[str, int, int]]]:
+        """Which cell asks for which market-data item, in every workbook (cached until an input changes)."""
+        mark = self.gen
+        hit = getattr(self, "_callers_cache", None)
+        if hit is not None and hit[0] == mark:
+            return hit[1]
+        from .marketdata.replay import addin_callers
+
+        def scan() -> Dict[Tuple, List[Tuple[str, int, int]]]:
+            out: Dict[Tuple, List[Tuple[str, int, int]]] = {}
+            for bid, book in self.books.items():
+                for key, cells in addin_callers(book.engine).items():
+                    out.setdefault(key, []).extend((bid, si, rc) for si, rc in cells)
+            return out
+
+        found = self.et.call(scan)
+        self._callers_cache = (mark, found)
+        return found
+
+    # ================================================================== ASW against FX swaps
+    def _asw_fx_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
+        """ASW against the FX swap curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
+        it builds its curve from (ASW!C65:R65) swapped for the FX swap implied rates of EK_FX - a tenor without
+        one keeps its OIS quote.  Two columns on the right of the table: ASW FX and FX − OIS, in bp."""
+        if ex.FXC_SHEET not in book.model.sheet_index or "ASW" not in book.model.sheet_index:
+            return
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows:
+            return
+        si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
+        base = self._calc(user, book)
+        ov = dict(self._overlay(user, book)) if user else {}
+        swapped = 0
+        for k in range(len(ex.FXC_ROOTS)):
+            v = base.get(fi, ex.FXC_FIRST + k, parse_a1("D1") % COLS)
+            if type(v) is float:
+                ov[(si, parse_a1("%s65" % index_to_col(3 + k)))] = v
+                swapped += 1
+        calc = Calc(book.engine, book.engine.shared, ov) if swapped else None
+        r_col = parse_a1("R1") % COLS
+
+        def bp(v: Any, signed: bool = False) -> Dict[str, Any]:
+            if type(v) is not float:
+                return {"t": "", "k": ""}
+            cell = {"t": (("+" if signed and v > 0 else "") + numfmt.format_value(v, "0.0", loc)), "v": v, "k": "n"}
+            if signed:
+                cell["c"] = "pos" if v > 0 else ("neg" if v < 0 else None)
+                if cell["c"] is None:
+                    cell.pop("c")
+            return cell
+
+        for i, r in enumerate(rnums):
+            if r == 6:
+                rows[i].extend([{"t": "ASW FX (bp)", "k": "s", "b": 1, "f": "hd",
+                                 "tip": "FX swap ima TRY eğrisine göre ASW (EK_FX: %d / %d vade fiyatlı)" % (swapped, len(ex.FXC_ROOTS))},
+                                {"t": "FX − OIS (bp)", "k": "s", "b": 1, "f": "hd", "tip": "ASW FX − ASW OIS"}])
+            elif 7 <= r <= 56 and calc is not None:
+                ois, fx = base.get(si, r, r_col), calc.get(si, r, r_col)
+                rows[i].extend([bp(fx), bp(fx - ois if type(fx) is float and type(ois) is float else None, True)])
+            else:
+                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
+        data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
+        data["added"] = int(data.get("added") or 0) + 2
+
+    # ================================================================== the order of the pricing sources
+    def sources(self) -> Dict[str, Any]:
+        """The pricing sources of the live curves, in the order they are tried (settings -> data sources), and
+        the source each quoted tenor is read from right now."""
+        book = self.books.get("tto")
+        if book is None or ex.SRC_SHEET not in book.model.sheet_index:
+            return {"available": False, "curves": [], "rows": [], "live": self.mode == "live"}
+
+        def run():
+            calc = self._calc(None, book)
+            si = book.model.sheet_index[ex.SRC_SHEET]
+
+            def get(addr):
+                v = calc.get(si, *divmod(parse_a1(addr), COLS))
+                if isinstance(v, bool) or v is None:
+                    return v
+                return v if isinstance(v, (int, float, str)) else str(v)
+
+            curves = []
+            for kind, title, row, first, fallback in ex.SRC_LISTS:
+                codes = [str(get("%s%d" % (c, row)) or "").strip().upper() for c in ex.SRC_COLS]
+                curves.append({"id": kind, "title": title, "sources": [c for c in codes if c], "default": [first],
+                               "fallback": fallback})
+            rows = []
+            k = ex.SRC_FIRST
+            kinds = {c["title"]: c["id"] for c in curves}
+            while get("A%d" % k) in kinds:
+                kind = kinds[get("A%d" % k)]
+                rank = get("F%d" % k)
+                rows.append({"curve": kind, "tenor": get("B%d" % k), "excel": get("C%d" % k), "source": get("D%d" % k),
+                             "ticker": get("E%d" % k), "rank": int(rank) if isinstance(rank, float) else None,
+                             "bid": get("I%d" % k), "ask": get("J%d" % k) if kind != "ois" else None})
+                k += 1
+            return {"available": True, "curves": curves, "rows": rows, "live": self.mode == "live", "gen": self.gen}
+
+        return self.et.call(run)
+
+    def set_sources(self, user: str, lists: Dict[str, Any]) -> Dict[str, Any]:
+        """A new order of pricing sources for a curve (or for several): ``{"ois": ["GFOF", "BGN"], ...}`` - up to
+        four Bloomberg pricing source codes each; the workbook's own ticker is always tried last.  For everyone,
+        live at once, and the history follows (the new tickers' closes are fetched)."""
+        user = self.require_user(user)
+        if ex.SRC_SHEET not in self.books["tto"].model.sheet_index:
+            raise ServiceError("bu dosyada kaynak sayfası yok")
+        items = []
+        for kind, title, row, first, fallback in ex.SRC_LISTS:
+            codes = lists.get(kind) if isinstance(lists, dict) else None
+            if codes is None:
+                continue
+            if isinstance(codes, str):
+                codes = re.split(r"[\s,;>→]+", codes)
+            clean: List[str] = []
+            for c in codes:
+                c = re.sub(r"\s+", "", str(c or "")).upper()
+                if not c:
+                    continue
+                if not re.match(r"^[A-Z0-9]{2,8}$", c):
+                    raise ServiceError("%s: kaynak kodu anlaşılamadı – %s (Bloomberg fiyat kaynağı: GFOF, ICPL, BGN, CMPN …)" % (title, c))
+                if c not in clean:
+                    clean.append(c)
+            if len(clean) > len(ex.SRC_COLS):
+                raise ServiceError("%s: en fazla %d kaynak" % (title, len(ex.SRC_COLS)))
+            for n, col in enumerate(ex.SRC_COLS):
+                items.append({"ref": "%s!%s%d" % (ex.SRC_SHEET, col, row), "value": clean[n] if n < len(clean) else ""})
+        if not items:
+            raise ServiceError("değişiklik yok")
+        res = self.set_inputs(user, "tto", items)
+        if res["errors"]:
+            raise ServiceError("; ".join(res["errors"]))
+        hist = getattr(self, "history", None)
+        if hist is not None:
+            try:
+                hist.kick()                         # the closes of the new tickers
+            except Exception:  # noqa: BLE001
+                pass
+        return self.sources()
+
+    def market_unknown(self) -> Dict[str, Any]:
+        """What Bloomberg said it does not know - securities, fields - grouped by the shape of the ticker, with
+        the cells of the workbooks that ask for them.  The answer to "N ticker Bloomberg'de yok"."""
+        from .marketdata.bloomberg import api_security
+        prov = self.provider
+        try:
+            answers = prov.unknown() if hasattr(prov, "unknown") else []
+        except Exception:  # noqa: BLE001
+            answers = []
+        callers = self._market_callers() if answers else {}
+        places = self._cell_places()
+        rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for key, answer in answers:
+            kind = key[0]
+            sec = str(key[2] if kind == "RT" else key[1])
+            field = str(key[3] if kind == "RT" else (key[2] if len(key) > 2 else ""))
+            code, text = self._ANSWERS.get(answer, ("na", answer))
+            row = rows.get((sec, code))
+            if row is None:
+                row = rows[(sec, code)] = {"security": sec, "api": api_security(sec) if kind in ("BDP", "BDS", "BDH") else sec,
+                                           "answer": code, "answer_text": text, "fields": [], "kinds": [], "cells": [], "ncells": 0,
+                                           "_seen": set()}
+            if field and field not in row["fields"]:
+                row["fields"].append(field)
+            if kind not in row["kinds"]:
+                row["kinds"].append(kind)
+            for bid, si, rc in callers.get(key, ()):
+                if (bid, si, rc) in row["_seen"]:
+                    continue
+                row["_seen"].add((bid, si, rc))
+                row["ncells"] += 1
+                if len(row["cells"]) >= 6:
+                    continue
+                book = self.books[bid]
+                sheet = book.model.sheets[si].name
+                r, c = divmod(rc, COLS)
+                page = next(((pg, pn) for r1, c1, r2, c2, pg, pn in places.get((bid, sheet), ())
+                             if r1 <= r <= r2 and c1 <= c <= c2), (None, None))
+                row["cells"].append({"book": bid, "book_title": book.title, "sheet": sheet, "ref": a1(rc), "page": page[0],
+                                     "panel": page[1]})
+        out_rows = sorted(rows.values(), key=lambda x: ({"security": 0, "field": 1}.get(x["answer"], 2), x["security"]))
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for row in out_rows:
+            row.pop("_seen", None)
+            # the shape of the ticker: numbers become "#", a pricing source with no code in front of it "@…"
+            pattern = re.sub(r"^@\S+", "@…", re.sub(r"\d+", "#", row["security"]).strip()) or "(boş)"
+            g = groups.get((pattern, row["answer"]))
+            if g is None:
+                note = next((n for rx, n in self._UNKNOWN_NOTES if rx.search(row["security"])), "")
+                g = groups[(pattern, row["answer"])] = {"pattern": pattern, "answer": row["answer"], "answer_text": row["answer_text"],
+                                                        "count": 0, "examples": [], "numbers": [], "fields": [], "where": {},
+                                                        "note": note}
+            g["count"] += 1
+            if len(g["examples"]) < 4:
+                g["examples"].append(row["security"])
+            g["numbers"].append([int(x) for x in re.findall(r"\d+", row["security"])][:3])
+            for f in row["fields"]:
+                if f not in g["fields"]:
+                    g["fields"].append(f)
+            for cl in row["cells"]:
+                w = g["where"].setdefault((cl["book_title"], cl["sheet"], cl["page"]), 0)
+                g["where"][(cl["book_title"], cl["sheet"], cl["page"])] = w + 1
+        out_groups = []
+        for g in sorted(groups.values(), key=lambda x: (-x["count"], x["pattern"])):
+            g["numbers"] = self._number_ranges(g.pop("numbers"))
+            g["where"] = [{"book_title": b, "sheet": sh, "page": pg} for (b, sh, pg), _n in
+                          sorted(g["where"].items(), key=lambda kv: -kv[1])]
+            if not g["note"] and g["where"] and all(w["sheet"] == ex.SRC_SHEET for w in g["where"]):
+                g["note"] = self._SOURCE_NOTE           # a source of the source order that has no such ticker
+            out_groups.append(g)
+        st = {}
+        try:
+            st = prov.status() or {}
+        except Exception:  # noqa: BLE001
+            pass
+        return {"mode": self.mode, "securities": sum(1 for r in out_rows if r["answer"] == "security"),
+                "fields": sum(1 for r in out_rows if r["answer"] != "security"), "groups": out_groups, "rows": out_rows,
+                "subscriptions_invalid": st.get("subscriptions_invalid"), "gen": self.gen}
+
+    @staticmethod
+    def _number_ranges(numbers: List[List[int]]) -> str:
+        """The numbers that vary inside a group of tickers, as ranges: "3–400 · 0–1"."""
+        if len(numbers) < 2:
+            return ""
+        width = min(len(n) for n in numbers)
+        parts = []
+        for k in range(width):
+            vals = sorted({n[k] for n in numbers})
+            if len(vals) < 2:
+                continue
+            parts.append("%d–%d (%d farklı)" % (vals[0], vals[-1], len(vals)) if len(vals) > 2 else "%d, %d" % (vals[0], vals[1]))
+        return " · ".join(parts)
+
+    def market_unknown_export(self) -> Tuple[bytes, str]:
+        """The list as an .xlsx file: the groups, and every ticker with the cells that ask for it."""
+        from .xlsx import XlsxBook
+        data = self.market_unknown()
+        wb = XlsxBook()
+        ws = wb.add_sheet("Gruplar")
+        ws.row(1, 1, ["Kalıp", "Adet", "Bloomberg'in cevabı", "Sayılar", "Alanlar", "Örnekler", "Nerede", "Açıklama"], bold=True, fill="E7E6E6")
+        for i, g in enumerate(data["groups"]):
+            ws.row(2 + i, 1, [g["pattern"], g["count"], g["answer_text"], g["numbers"], ", ".join(g["fields"]), ", ".join(g["examples"]),
+                              "; ".join("%s · %s" % (w["book_title"], w["sheet"]) for w in g["where"]), g["note"]])
+        ws.autosize()
+        ls = wb.add_sheet("Liste")
+        ls.row(1, 1, ["Ticker", "API'ye giden", "Bloomberg'in cevabı", "Alanlar", "Çağrı", "Çalışma kitabı", "Sayfa", "Hücreler", "Hücre sayısı"],
+               bold=True, fill="E7E6E6")
+        for i, r in enumerate(data["rows"]):
+            first = r["cells"][0] if r["cells"] else {}
+            ls.row(2 + i, 1, [r["security"], r["api"], r["answer_text"], ", ".join(r["fields"]), ", ".join(r["kinds"]),
+                              first.get("book_title", ""), first.get("sheet", ""), ", ".join(c["ref"] for c in r["cells"]), r["ncells"]])
+        ls.autosize()
+        return wb.to_bytes(), "Bloomberg_tanimsiz_%s.xlsx" % _dt.date.today().strftime("%Y.%m.%d")
+
     # ================================================================== realized volatility · carry against it
     def _vol_curves(self) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, float]], Dict[str, Any]]:
         """The daily closes the history keeps, by product (OIS, XCCY) and tenor, and what they cover."""
@@ -1518,6 +1834,7 @@ class Service(object):
         return out
 
     def _vol_read(self) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, float]], Dict[str, Any]]:
+        from .history import source_text
         snap = self.history.snapshot()
         defs = [d for d in snap["defs"] if (d.group in ("ois", "xccy", "off") and d.months) or d.group == "dibs"]
         start = (snap["today"] - _dt.timedelta(days=600)).isoformat()
@@ -1535,7 +1852,7 @@ class Service(object):
             months[product][label] = d.months if product != "DIBS" else (-1.0 if d.unit == "px" else 0.0)
         days = sorted({day for series in curves["OIS"].values() for day in series})
         info = {"first": days[0] if days else None, "last": days[-1] if days else None, "days": len(days),
-                "source": snap["src"], "live": self.mode == "live",
+                "source": source_text(snap), "live": self.mode == "live",
                 "tenors": {p: sorted((t for t, s in curves[p].items() if s), key=lambda t: months[p][t]) for p in vc.PRODUCTS}}
         return curves, months, info
 
@@ -1576,8 +1893,8 @@ class Service(object):
         days = {name: h["days"] for name, h in table["horizons"].items()}
         rows = [vc.carry_row(vc.item_of(kind, r["tenors"]), r["market"], {"a": r["a"], "b": r["b"]}, days,
                              curves["OIS"], months["OIS"], window) for r in table["rows"]]
-        return {"kind": kind, "window": window, "windows": list(vc.WINDOWS), "horizons": table["horizons"], "rows": rows,
-                "history": info, "gen": self.gen}
+        return {"kind": kind, "window": window, "windows": list(vc.WINDOWS), "z_windows": list(vc.Z_WINDOWS),
+                "horizons": table["horizons"], "rows": rows, "history": info, "gen": self.gen}
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
@@ -1641,6 +1958,97 @@ class Service(object):
             return None
         return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months)
 
+    def _fx_market(self, user: Optional[str]) -> Optional[Callable[[str, float, str], Optional[Dict[str, float]]]]:
+        """What a USDTRY swap quote in points means as a TRY rate - with the Forward sheet's own numbers: the spot
+        (F2), the days of each tenor from its offshore table (G6:G17, Bloomberg's DAYS_TO_MTY) and the USD rate of
+        as many days from its USD table (U6:Y26), the bid side with the USD ask and the ask side with the USD bid
+        as the sheet prices a forward.  TRY % = ((1 + points / 10 000 / spot) · (1 + USD · d / 360) − 1) · 360 / d."""
+        book = self.books.get("tto")
+        if book is None or "Forward" not in book.model.sheet_index:
+            return None
+        calc = self._calc(user_key(user) if user else None, book)
+        si = book.model.sheet_index["Forward"]
+
+        def v(addr: str) -> Any:
+            return calc.get(si, *divmod(parse_a1(addr), COLS))
+
+        spot = v("F2")
+        if type(spot) is not float or spot <= 0:
+            return None
+        days: Dict[str, float] = {}
+        for r in range(6, 18):
+            label, d = v("H%d" % r), v("G%d" % r)
+            if isinstance(label, str) and type(d) is float and d > 0:
+                days[label.strip().upper().replace("12M", "1Y")] = d
+        usd = []
+        for r in range(6, 27):
+            d, b, m, a = v("U%d" % r), v("W%d" % r), v("X%d" % r), v("Y%d" % r)
+            if type(d) is float and type(m) is float:
+                usd.append((d, b if type(b) is float else m, m, a if type(a) is float else m))
+        usd.sort()
+        if not usd:
+            return None
+        spot_day = v("I2")
+        if isinstance(spot_day, str):
+            try:
+                spot_day = parse_date(spot_day)
+            except Exception:  # noqa: BLE001
+                spot_day = None
+
+        def tenor_days(label: str) -> Optional[float]:
+            label = label.upper()
+            if label in days:
+                return days[label]
+            if label in ("O/N", "T/N", "S/N"):
+                if label == "S/N" and type(spot_day) is float:
+                    wd = serial_to_date(spot_day).weekday()
+                    return 3.0 if wd == 4 else 1.0             # Friday's spot: to Monday
+                return 1.0
+            m = re.match(r"^(\d+)([WMY])$", label)
+            if not m:
+                return None
+            n = int(m.group(1))
+            return {"W": 7.0 * n, "M": 30.4375 * n, "Y": 365.0 * n}[m.group(2)]
+
+        def rate_usd(d: float, col: int) -> float:
+            if d <= usd[0][0]:
+                return usd[0][col]
+            for (d1, *r1), (d2, *r2) in zip(usd, usd[1:]):
+                if d1 <= d <= d2:
+                    return r1[col - 1] + (d - d1) * (r2[col - 1] - r1[col - 1]) / (d2 - d1)
+            return usd[-1][col]
+
+        def implied(label: str, points: float, side: str) -> Optional[Dict[str, float]]:
+            d = tenor_days(label)
+            if not d or d <= 0:
+                return None
+            col = {"bid": 3, "ask": 1}.get(side, 2)             # the bid side with the USD ask, the ask side with the USD bid
+            u = rate_usd(d, col)
+            r = ((1.0 + points / 10000.0 / spot) * (1.0 + u / 100.0 * d / 360.0) - 1.0) * 360.0 / d * 100.0
+            return {"rate": r, "days": d, "usd": u, "spot": spot}
+
+        return implied
+
+    def _fx_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
+        """The TRY rate each FX swap quote in points stands for (``implied``: bid / ask / price / last, in per cent)."""
+        if not any(q.get("product") == "FX" for q in rows) and not any(r.get("product") == "FX" for r in board or ()):
+            return
+        fn = self._fx_market(user)
+        if fn is None:
+            return
+        for q, fields in [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last")) for r in board or ()]:
+            if q.get("product") != "FX" or not q.get("tenors"):
+                continue
+            out: Dict[str, Any] = {}
+            for f in fields:
+                if type(q.get(f)) is float:
+                    side = f if f in ("bid", "ask") else (q.get("side") if f == "price" else q.get("last_side")) or "mid"
+                    hit = fn(q["tenors"][0], q[f], side)
+                    if hit:
+                        out[f] = hit["rate"]
+                        out["days"], out["usd"], out["spot"] = hit["days"], hit["usd"], hit["spot"]
+            q["implied"] = out or None
+
     def _broker_close(self, q: Dict[str, Any]) -> Optional[float]:
         """The last close the history keeps of an outright the curve cannot place (a cross-currency swap has no
         curve in the workbook): enough to find the big figure of a shortened level."""
@@ -1697,37 +2105,124 @@ class Service(object):
             q["mark"] = hashlib.sha1("\x1f".join(said_as[2:] + (str(nth),)).encode("utf-8")).hexdigest()[:20]
         return rows
 
-    def broker_parse(self, user: Optional[str], text: str, date: Optional[str] = None) -> Dict[str, Any]:
-        """How a pasted chat would be read - nothing is kept.  ``dup`` marks what is stored already."""
-        return self.et.call(self._broker_parse, user, text, date)
+    # ------------------------------------------------------------------ who is who in the chats
+    def _people(self) -> Dict[str, Dict[str, Any]]:
+        """The desk's list of the names that write in the chats: name -> {"name", "source", "party"}.
+        "party" is "biz" (our own desk) or "broker"; "source" the house ("Tullett", "ICAP" ... or our desk)."""
+        saved = self.store.get("broker.people", {})
+        return saved if isinstance(saved, dict) else {}
 
-    def _broker_parse(self, user, text, date) -> Dict[str, Any]:
+    def _who(self, people: Dict[str, Dict[str, Any]], q: Dict[str, Any], source: str = "", party: str = "") -> Tuple[str, str]:
+        """(source, party) of a line: from the list for a known sender, else what was chosen for the paste."""
+        person = bc.person_of(people, q.get("sender"))
+        if person is not None:
+            return person.get("source") or source, person.get("party") or party
+        return source, party
+
+    def broker_people(self, user: Optional[str] = None) -> Dict[str, Any]:
+        """Every name of the list and every sender the kept chats have, with how many lines each wrote."""
+        people = self._people()
+        seen = self.store.broker_senders()
+        out: Dict[str, Dict[str, Any]] = {}
+        for key, p in people.items():
+            out[key] = {"name": p.get("name") or key, "source": p.get("source") or "", "party": p.get("party") or "", "known": True,
+                        "lines": 0, "last": None}
+        for name, n, last in seen:
+            key = bc.person_key(name)
+            hit = bc.person_of(people, name)
+            row = out.get(key)
+            if row is None and hit is not None:
+                row = out.get(bc.person_key(hit.get("name")))
+            if row is None:
+                row = out[key] = {"name": name, "source": "", "party": "", "known": False, "lines": 0, "last": None}
+            elif row["name"].upper() == row["name"] or row["name"].lower() == row["name"]:
+                row["name"] = name                          # the spelling of the chat, rather than one typed by hand
+            row["lines"] += n
+            row["last"] = max(filter(None, (row["last"], last)), default=None)
+        sources = sorted({p["source"] for p in out.values() if p["source"]} | set(self.store.broker_sources()))
+        return {"people": sorted(out.values(), key=lambda p: (p["party"] != "", p["name"])), "sources": sources}
+
+    def broker_set_people(self, user: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Change the list: ``[{"name", "source", "party"}]``.  A name with neither a source nor a party
+        is taken off it.  Kept for everyone; the chats already kept are shown by the new list at once."""
+        self.require_user(user)
+        if not isinstance(items, list):
+            raise ServiceError("liste bekleniyor")
+        people = dict(self._people())
+        for it in items[:500]:
+            if not isinstance(it, dict):
+                continue
+            name = " ".join(str(it.get("name") or "").split())[:60]
+            key = bc.person_key(name)
+            if not key:
+                continue
+            party = str(it.get("party") or "").lower()
+            if party not in bc.PARTIES:
+                party = ""
+            source = " ".join(str(it.get("source") or "").split())[:40]
+            if not source and not party:
+                people.pop(key, None)
+            else:
+                people[key] = {"name": name, "source": source, "party": party}
+        self.store.put("broker.people", people)
+        self.bump()
+        return self.broker_people(user)
+
+    # ------------------------------------------------------------------ a chat: read, keep, show
+    def broker_parse(self, user: Optional[str], text: str, date: Optional[str] = None, source: str = "",
+                     party: str = "") -> Dict[str, Any]:
+        """How a pasted chat would be read - nothing is kept.  ``dup`` marks what is stored already; every line
+        says whose it is (from the list of names, or the source and party chosen for the paste)."""
+        return self.et.call(self._broker_parse, user, text, date, source, party)
+
+    def _broker_parse(self, user, text, date, source="", party="") -> Dict[str, Any]:
         rows = self._broker_rows(user, text, date)
         have: Dict[str, set] = {}
+        people = self._people()
+        source, party = self._paste_owner(source, party)
+        senders: Dict[str, Dict[str, Any]] = {}
         for q in rows:
             if q["date"] not in have:
                 have[q["date"]] = self.store.broker_marks(q["date"])
             q["dup"] = (q["time"], q["mark"]) in have[q["date"]]
+            q["source"], q["party"] = self._who(people, q, source, party)
+            if q.get("sender"):
+                p = bc.person_of(people, q["sender"])
+                s = senders.setdefault(bc.person_key(q["sender"]), {"name": q["sender"], "known": p is not None, "lines": 0,
+                                                                    "source": (p or {}).get("source") or "",
+                                                                    "party": (p or {}).get("party") or ""})
+                s["lines"] += 1
+        self._fx_implied(user, rows)
         return {"date": self._broker_day(date), "rows": rows, "quotes": sum(1 for q in rows if q.get("ok")),
-                "texts": sum(1 for q in rows if not q.get("ok")), "known": sum(1 for q in rows if q["dup"])}
+                "texts": sum(1 for q in rows if not q.get("ok")), "known": sum(1 for q in rows if q["dup"]),
+                "senders": list(senders.values())}
 
-    def broker_add(self, user: str, text: str, date: Optional[str] = None, source: str = "", texts: bool = True) -> Dict[str, Any]:
-        """Keep a pasted chat: every line with its time, sender and reading.  Pasting a stretch again adds
-        only what is new.  ``texts`` off: lines that name no instrument are left out."""
+    @staticmethod
+    def _paste_owner(source: Any, party: Any) -> Tuple[str, str]:
+        source = " ".join(str(source or "").split())[:40]
+        party = str(party or "").lower()
+        return source, party if party in bc.PARTIES else ""
+
+    def broker_add(self, user: str, text: str, date: Optional[str] = None, source: str = "", texts: bool = True,
+                   party: str = "") -> Dict[str, Any]:
+        """Keep a pasted chat: every line with its time, sender, reading - and whose it is: the list of names
+        says it for a known sender, ``source`` / ``party`` for the others.  Pasting a stretch again adds only
+        what is new.  ``texts`` off: lines that name no instrument are left out."""
         user = self.require_user(user)
-        res = self.et.call(self._broker_add, user, text, date, source, texts)
+        res = self.et.call(self._broker_add, user, text, date, source, texts, party)
         self.bump()
         return res
 
-    def _broker_add(self, user, text, date, source, texts) -> Dict[str, Any]:
+    def _broker_add(self, user, text, date, source, texts, party="") -> Dict[str, Any]:
         rows = self._broker_rows(user, text, date)
         if not texts:
             rows = [q for q in rows if q.get("ok")]
         if not rows:
             raise ServiceError("kaydedilecek satır yok")
-        source = str(source or "").strip()[:40]
+        source, party = self._paste_owner(source, party)
+        people = self._people()
         for q in rows:
-            q["source"] = source
+            q["source"], q["party"] = self._who(people, q, source, party)
         ids, skipped = self.store.add_broker_quotes(rows, user)
         return {"saved": len(ids), "skipped": skipped, "quotes": sum(1 for q in rows if q.get("ok")), "ids": ids,
                 "dates": sorted({q["date"] for q in rows})}
@@ -1744,12 +2239,63 @@ class Service(object):
         if last < day:
             day, last = last, day
         rows = self.store.broker_quotes(day, last)
+        # the list of names as it is now: a name assigned after its lines were kept shows them as its own
+        people = self._people()
+        for q in rows:
+            q["source"], q["party"] = self._who(people, q, q.get("source") or "", q.get("party") or "")
         mkt = self._broker_market(user)
-        table = bc.board(rows)
+        # a reset of the board: what was said up to then no longer stands on it (the lines stay in the log)
+        resets = [r for r in self._broker_resets() if day <= str(r.get("at", ""))[:10] <= last]
+
+        def cleared(q: Dict[str, Any]) -> bool:
+            stamp = "%s %s" % (q.get("date") or "", q.get("time") or "")
+            return any((r.get("key") in ("*", q.get("key"))) and stamp < r.get("at", "") for r in resets)
+
+        table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz")
         for row in table:
             row.update(bc.against(row, self._broker_model(mkt, row)))
+        self._fx_implied(user, rows, table)
         return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
-                "rows": rows, "board": table, "dates": self.store.broker_dates(), "gen": self.gen}
+                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen}
+
+    def _broker_resets(self) -> List[Dict[str, Any]]:
+        v = self.store.get("broker.resets", [])
+        return [r for r in v if isinstance(r, dict) and r.get("at")] if isinstance(v, list) else []
+
+    def broker_reset(self, user: str, date: Optional[str] = None, key: Optional[str] = None, undo: bool = False) -> Dict[str, Any]:
+        """Clear the board - every instrument, or one (``key``) - from now on: what was said until now no longer
+        stands on it, the log keeps every line.  On a day other than today the whole day is cleared.  ``undo``
+        takes the last reset of the day back."""
+        user = self.require_user(user)
+        day = self._broker_day(date)
+        resets = self._broker_resets()
+        if undo:
+            idx = max((i for i, r in enumerate(resets) if str(r.get("at", ""))[:10] == day), default=None)
+            if idx is None:
+                raise ServiceError("bu günde sıfırlama yok")
+            resets.pop(idx)
+        else:
+            at = "%s %s" % (day, _dt.datetime.now().strftime("%H:%M:%S") if day == self.today_iso() else "23:59:59")
+            resets.append({"at": at, "key": str(key or "*")[:80], "label": "", "by": user})
+            if key:
+                resets[-1]["label"] = next((r.get("label") or "" for r in self.store.broker_quotes(day, day) if r.get("key") == key), "")
+            resets = resets[-500:]
+        self.store.put("broker.resets", resets)
+        self.bump()
+        return self.broker(user, day)
+
+    def broker_delete_many(self, user: str, ids: List[Any]) -> Dict[str, Any]:
+        """Delete the lines ticked in the log (for everyone)."""
+        self.require_user(user)
+        n = 0
+        for i in list(ids or [])[:5000]:
+            try:
+                n += 1 if self.store.delete_broker_quote(int(i)) else 0
+            except (TypeError, ValueError):
+                continue
+        if n:
+            self.bump()
+        return {"deleted": n}
 
     def broker_delete(self, user: str, quote_id: int) -> Dict[str, Any]:
         self.require_user(user)
@@ -1772,24 +2318,25 @@ class Service(object):
         wb = XlsxBook()
         ws = wb.add_sheet("Tahta")
         ws.row(1, 1, ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem", "İşlem saati",
-                      "Model mid", "Bid − mid (bp)", "Ask − mid (bp)"], bold=True, fill="E7E6E6")
+                      "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bizim bid", "Bizim ask", "İşlemi yapan"], bold=True, fill="E7E6E6")
         for i, r in enumerate(data["board"]):
             fmt = "#,##0.00" if r["unit"] == "pct" else "#,##0.0"
             line = [r["product"], kinds.get(r["kind"], r["kind"]), r["label"], "%" if r["unit"] == "pct" else "bp", r["bid"], r["bid_time"],
-                    r["ask"], r["ask_time"], r["last"], r["last_time"], r["mid"], r["bid_diff"], r["ask_diff"]]
+                    r["ask"], r["ask_time"], r["last"], r["last_time"], r["mid"], r["bid_diff"], r["ask_diff"], r.get("our_bid"),
+                    r.get("our_ask"), {"biz": "Biz", "broker": "Broker"}.get(r.get("last_by") or "", "")]
             for k, v in enumerate(line):
-                ws.set(2 + i, 1 + k, v, fmt=fmt if k in (4, 6, 8, 10) else ("#,##0.0" if k in (11, 12) else None))
+                ws.set(2 + i, 1 + k, v, fmt=fmt if k in (4, 6, 8, 10, 13, 14) else ("#,##0.0" if k in (11, 12) else None))
         ws.autosize()
         ls = wb.add_sheet("Kayıt")
         ls.row(1, 1, ["Tarih", "Saat", "Kimden", "Kaynak", "Mesaj", "Ürün", "Tür", "Enstrüman", "Olay", "Bid", "Ask", "İşlem / seviye",
-                      "Birim", "Not", "Giren"], bold=True, fill="E7E6E6")
+                      "Birim", "Not", "Giren", "Taraf"], bold=True, fill="E7E6E6")
         for i, q in enumerate(data["rows"]):
             fmt = "#,##0.00" if q.get("unit") == "pct" else "#,##0.0"
             line = [date_to_serial(_dt.date.fromisoformat(q["date"])), q["time"], q.get("sender") or "", q.get("source") or "",
                     q.get("raw") or "", q.get("product") or "", kinds.get(q.get("kind"), q.get("kind") or ""), q.get("label") or "",
                     events.get(q.get("event"), q.get("event") or ""), q.get("bid"), q.get("ask"), q.get("price"),
                     ("%" if q.get("unit") == "pct" else "bp") if q.get("ok") else "", q.get("note") or "",
-                    names.get(q.get("created_by"), q.get("created_by") or "")]
+                    names.get(q.get("created_by"), q.get("created_by") or ""), {"biz": "Biz", "broker": "Broker"}.get(q.get("party") or "", "")]
             for k, v in enumerate(line):
                 ls.set(2 + i, 1 + k, v, fmt="dd.mm.yyyy" if k == 0 else (fmt if k in (9, 10, 11) else None))
         ls.autosize()
@@ -1806,6 +2353,35 @@ class Service(object):
         self.et.call(self._sync_blotter)
         self.bump()
         return {"deleted": ids}
+
+
+def _add_dv01_columns(data: Dict[str, Any], buckets: Dict[int, Tuple[float, float]], loc) -> None:
+    """The forward buckets of the trades sheet with their DV01 ($) on the right: buys, sells, net - split
+    between the buckets as the sheet splits the amounts (the sheet itself has no DV01 there)."""
+    rows, rnums = data.get("rows") or [], data.get("r") or []
+    if not rows or not buckets:
+        return
+
+    def numcell(v: float, bold: bool = False) -> Dict[str, Any]:
+        if abs(v) < 0.5:
+            return {"t": "-", "v": 0.0, "k": "n", "al": "c"}
+        cell = {"t": ("+" if v > 0 else "") + numfmt.format_value(round(v), "#,##0", loc), "v": v, "k": "n",
+                "c": "pos" if v > 0 else "neg"}
+        if bold:
+            cell["b"] = 1
+        return cell
+
+    head = {1: ["DV01 ($)", "", ""], 2: ["Buy", "Sell", "Net"], 3: ["", "", ""]}
+    for i, r in enumerate(rnums):
+        if r in head:
+            rows[i].extend({"t": t, "k": "s", "b": 1, "f": "hd"} if t else {"t": "", "k": ""} for t in head[r])
+        elif r in buckets:
+            buy, sell = buckets[r]
+            rows[i].extend([numcell(buy, r == 20), numcell(sell, r == 20), numcell(buy + sell, True)])
+        else:
+            rows[i].extend([{"t": "", "k": ""}] * 3)
+    data["c"] = list(data.get("c") or []) + ["DV01 B", "DV01 S", "DV01 N"]
+    data["added"] = int(data.get("added") or 0) + 3                 # columns that are not cells of the sheet
 
 
 def _lift_title(data: Dict[str, Any]) -> Optional[str]:

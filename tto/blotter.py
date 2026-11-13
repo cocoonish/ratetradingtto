@@ -7,13 +7,15 @@ into its legs and the cost ("maliyet") of the net position.
 """
 from __future__ import annotations
 
+import bisect
+import datetime as _dt
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .xl.engine import Calc
 from .xl.errors import XlError
 from .xl.model import COLS, parse_a1
-from .xl.values import serial_to_date
+from .xl.values import date_to_serial, serial_to_date
 
 SHEET = "Günlük İşlemler"
 FWD_ROWS = (3, 200)        # A:D
@@ -717,8 +719,126 @@ def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------------------------- sheet sync
+# the main tenors of the sheet's OIS summary ('OIS · vade özeti', P25:P38): where a meeting-dated swap is spread
+SUMMARY_TENORS = ("ON", "1W", "2W", "1M", "2M", "3M", "6M", "9M", "1Y", "18M", "2Y", "3Y", "4Y", "5Y")
+
+
+def tenor_end(spot: float, tenor: str) -> float:
+    """The end (serial date) of a spot swap of a quoted tenor."""
+    days = {"ON": 1.0, "1W": 7.0, "2W": 14.0}.get(tenor)
+    if days is not None:
+        return spot + days
+    d = serial_to_date(spot)
+    m = d.month - 1 + TENOR_MONTHS[tenor]
+    y, m = d.year + m // 12, m % 12 + 1
+    last = [31, 29 if y % 4 == 0 and (y % 100 != 0 or y % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+    return float(date_to_serial(_dt.date(y, m, min(d.day, last))))
+
+
+def split_weights(x: float, nodes: Sequence[float]) -> List[Tuple[int, float]]:
+    """A point spread over the two nodes around it, linearly (all of it on the end node outside them) - the way
+    the sheet's own forward buckets spread an amount: ``[(node index, weight)]``."""
+    if x <= nodes[0]:
+        return [(0, 1.0)]
+    if x >= nodes[-1]:
+        return [(len(nodes) - 1, 1.0)]
+    k = bisect.bisect_right(nodes, x) - 1
+    if x == nodes[k] or nodes[k + 1] == nodes[k]:
+        return [(k, 1.0)]
+    w = (x - nodes[k]) / (nodes[k + 1] - nodes[k])
+    return [(k, 1.0 - w), (k + 1, w)]
+
+
+def mpc_summary_rows(mkt: "OisMarket", t: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A meeting-dated swap on the summary's main tenors.  The swap from S to E is the spot swap to E with the
+    opposite spot swap to S, on one nominal - the one that makes their DV01s add up to the trade's (from the spot
+    itself: only the first, the trade as it is); each of the two goes to the two main tenors around its date,
+    split by days as the sheet splits a forward.  The rate of the leg to S is the curve's (spot to S), the leg
+    to E's is what makes the two together the traded rate: (R·(A_E − A_S) + R_S·A_S) / A_E."""
+    info = t.get("mpc") or {}
+    start, end = info.get("start"), info.get("end")
+    spot = mkt.value("OIS_MAIN!B2")
+    nominal, rate, d, dv01 = t.get("nominal"), t.get("rate"), t.get("dir"), t.get("dv01")
+    if type(spot) is not float or type(start) is not float or type(end) is not float or type(nominal) is not float \
+            or type(rate) is not float or type(dv01) is not float or d not in ("B", "S"):
+        return []
+    nodes = [tenor_end(spot, x) for x in SUMMARY_TENORS]
+    legs = [(end, d, dv01, rate, nominal)]                  # from the spot: one spot swap, the trade itself
+    if start > spot + 0.5:
+        try:
+            long_leg, short = mkt.between(spot, end), mkt.between(spot, start)
+            a_e, a_s, r_s = long_leg["annuity"], short["annuity"], short["market"]
+            d_e, d_s = mkt.dv01_usd(nominal, a_e), mkt.dv01_usd(nominal, a_s)
+            if d_e <= d_s:
+                raise ZeroDivisionError
+            # one nominal for both legs, chosen so that they add up to the trade's own DV01 exactly
+            k = dv01 / (d_e - d_s)
+            legs = [(end, d, d_e * k, (rate * (a_e - a_s) + r_s * a_s) / a_e, nominal * k),
+                    (start, "S" if d == "B" else "B", d_s * k, r_s, nominal * k)]
+        except (TradeError, ZeroDivisionError):
+            pass                                            # no curve to split it with: all of it at its end
+    rows = []
+    for when, direction, dv, r, n in legs:
+        for k, w in split_weights(when, nodes):
+            rows.append({"nominal": n * w, "dv01": dv * w, "dir": direction, "rate": r, "tenor": SUMMARY_TENORS[k],
+                         "cpt": t.get("cpt")})
+    return rows
+
+
+def usd_equivalent(t: Dict[str, Any]) -> Optional[float]:
+    """The USD amount a forward of another currency against TRY stands for (its amount at the trade's spot,
+    turned into USD at the USDTRY of the trade); ``None`` when it is not against TRY."""
+    pair = str(t.get("pair") or "USDTRY").upper()
+    if pair == "USDTRY":
+        return float(t["amount"])
+    spot, usdtry = t.get("spot"), t.get("usdtry")
+    if not pair.endswith("TRY") or type(spot) is not float or type(usdtry) is not float or usdtry <= 0:
+        return None
+    return float(t["amount"]) * spot / usdtry
+
+
+def in_summary(t: Dict[str, Any]) -> bool:
+    """Whether the sheet's summary tables take the trade (a forward needs a TRY leg)."""
+    return t.get("kind") != "fwd" or (usd_equivalent(t) is not None and type(t.get("try_rate")) is float)
+
+
+def forward_dv01_buckets(book, calc, trades: List[Dict[str, Any]]) -> Dict[int, Tuple[float, float]]:
+    """DV01 ($) of the day's forwards in the sheet's forward buckets (rows 6..19), split between the two buckets
+    around the value date as the sheet splits the amounts: ``{row: (buys, sells)}``, the total under row 20."""
+    si = book.model.sheet_index[SHEET]
+
+    def v(addr: str) -> Any:
+        return calc.get(si, *divmod(parse_a1(addr), COLS))
+
+    nodes = [v("O%d" % r) for r in range(6, 20)]
+    today = v("X1")                                  # the sheet's day (Forward!I2 - a date written as text, as Excel reads it)
+    if isinstance(today, str):
+        from .inputs import InputError, parse_date
+        try:
+            today = parse_date(today)
+        except (InputError, ValueError):
+            today = None
+    out: Dict[int, List[float]] = {r: [0.0, 0.0] for r in range(6, 21)}
+    if any(type(x) is not float for x in nodes) or type(today) is not float:
+        return {}
+    for t in trades:
+        if t.get("kind") != "fwd" or type(t.get("dv01")) is not float or type(t.get("value_date")) is not float:
+            continue
+        if not in_summary(t):
+            continue
+        side = 0 if t.get("dir") == "B" else 1
+        for k, w in split_weights(t["value_date"] - today, nodes):
+            out[6 + k][side] += t["dv01"] * w
+            out[20][side] += t["dv01"] * w
+    return {r: (a, b) for r, (a, b) in out.items()}
+
+
 def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], Any]:
-    """Cell values of the three input lists of the 'Günlük İşlemler' sheet for the given trades."""
+    """Cell values of the three input lists of the 'Günlük İşlemler' sheet for the given trades.
+
+    The sheet was made for USDTRY forwards and OIS of a quoted tenor.  A forward of another currency against
+    TRY goes in at its USD amount (its TRY rate as it is: the TL cost); a meeting-dated OIS goes in spread over
+    the main tenors (see :func:`mpc_summary_rows`).  Column G holds each forward's DV01 ($)."""
     si = book.model.sheet_index[SHEET]
     vals: Dict[Tuple[int, int], Any] = {}
 
@@ -726,7 +846,7 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
         vals[(si, parse_a1("%s%d" % (col, row)))] = v
 
     for r in range(FWD_ROWS[0], FWD_ROWS[1] + 1):
-        for col in "ABCD":
+        for col in "ABCDG":
             put(col, r, None)
     for r in range(OIS_ROWS[0], OIS_ROWS[1] + 1):
         for col in "HIJKLM":
@@ -735,17 +855,31 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
         for col in ("Y", "Z", "AA"):
             put(col, r, None)
     rf, ro, rb = FWD_ROWS[0], OIS_ROWS[0], BOND_ROWS[0]
+    mkt = None
     for t in trades:
         k = t.get("kind")
-        if k == "fwd" and (t.get("pair") or "USDTRY") != "USDTRY":
-            continue                                        # the sheet's forward list is in USD
+        if k == "fwd" and not in_summary(t):
+            continue                                        # no TRY leg: nothing for the TRY tables
         if k == "ois" and t.get("mpc"):
-            continue                                        # ... and its OIS list by quoted tenor
+            if mkt is None:
+                mkt = OisMarket(book, book.engine.shared)
+            for leg in mpc_summary_rows(mkt, t):
+                if ro > OIS_ROWS[1]:
+                    break
+                put("H", ro, float(leg["nominal"]))
+                put("I", ro, float(leg["dv01"]))
+                put("J", ro, leg["dir"])
+                put("K", ro, float(leg["rate"]))
+                put("L", ro, leg["tenor"])
+                put("M", ro, leg.get("cpt") or None)
+                ro += 1
+            continue
         if k == "fwd" and rf <= FWD_ROWS[1]:
             put("A", rf, t["dir"])
-            put("B", rf, float(t["amount"]))
+            put("B", rf, float(usd_equivalent(t)))
             put("C", rf, float(t["try_rate"]))
             put("D", rf, float(t["value_date"]))
+            put("G", rf, float(t["dv01"]) if type(t.get("dv01")) is float else None)
             rf += 1
         elif k == "ois" and ro <= OIS_ROWS[1]:
             put("H", ro, float(t["nominal"]) if t.get("nominal") else None)
@@ -764,5 +898,5 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
 
 
 def input_ranges() -> List[str]:
-    return ["%s!A%d:D%d" % (SHEET, FWD_ROWS[0], FWD_ROWS[1]), "%s!H%d:M%d" % (SHEET, OIS_ROWS[0], OIS_ROWS[1]),
-            "%s!Y%d:AA%d" % (SHEET, BOND_ROWS[0], BOND_ROWS[1])]
+    return ["%s!A%d:D%d" % (SHEET, FWD_ROWS[0], FWD_ROWS[1]), "%s!G%d:G%d" % (SHEET, FWD_ROWS[0], FWD_ROWS[1]),
+            "%s!H%d:M%d" % (SHEET, OIS_ROWS[0], OIS_ROWS[1]), "%s!Y%d:AA%d" % (SHEET, BOND_ROWS[0], BOND_ROWS[1])]

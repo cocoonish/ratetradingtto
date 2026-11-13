@@ -6,6 +6,7 @@ import { configureGrid, clearSelection, findCell, selectionText } from './grid.j
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
 import { BrokerPage } from './pages/broker.js';
+import { openStatus } from './status.js';
 import { VolPage } from './pages/vol.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
@@ -236,7 +237,7 @@ function applyStatus(status) {
       $('mode-text').textContent = p.slow ? 'CANLI · Bloomberg kuyruğu doluyor'
         : p.pending ? 'CANLI · ' + p.pending + ' veri bekleniyor' : 'CANLI · Bloomberg';
       badge.title = 'Bloomberg (blpapi) canlı veri · ' + (p.subscriptions || 0) + ' abonelik'
-        + (p.subscriptions_invalid ? ' (' + p.subscriptions_invalid + ' ticker Bloomberg\'de yok: abone olunmadı)' : '')
+        + (p.subscriptions_invalid ? ' (' + p.subscriptions_invalid + ' ticker Bloomberg\'de yok: abone olunmadı – hangileri olduğu için tıklayın)' : '')
         + ' · bugün ' + (p.hits_today || 0) + ' veri isteği'
         + (p.isolated ? ' · oturum ayrı süreçte' + (p.restarts ? ' (' + p.restarts + ' kez yeniden başladı)' : '') : ' · oturum dashboard sürecinde')
         + (p.events_dropped || p.messages_lost
@@ -340,11 +341,21 @@ function applyLangButton() {
   $('btn-lang').textContent = settings.lang === 'en' ? '1,234.56' : '1.234,56';
 }
 
+/** Changed cells flash green / red for a moment; some find it tiring: it can be turned off (per browser). */
+function applyFlash(on) {
+  document.body.classList.toggle('noflash', !on);
+  const b = $('btn-flash');
+  b.classList.toggle('off', !on);
+  b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  b.title = on ? 'Değişen hücreler yanıp sönüyor – kapatmak için tıklayın' : 'Yanıp sönme kapalı – açmak için tıklayın';
+}
+
 function boot() {
   if (state.booted) return;
   state.booted = true;
   setLang(store('tto.lang') || 'tr');
   applyLangButton();
+  applyFlash(store('tto.flash') !== '0');
   if (store('tto.nav') === '1') $('app').classList.add('nav-collapsed');
 
   session.onUnauthorized = () => { showLogin('Oturum bulunamadı – tekrar giriş yapın.'); };
@@ -363,6 +374,13 @@ function boot() {
     document.documentElement.setAttribute('data-theme', next);
     store('tto.theme', next);
   });
+  $('btn-flash').addEventListener('click', () => {
+    const on = document.body.classList.contains('noflash');
+    store('tto.flash', on ? '1' : '0');
+    applyFlash(on);
+    toast(on ? 'Değişen hücreler yeniden yanıp sönecek' : 'Yanıp sönme kapatıldı', '', 2200);
+  });
+  $('mode-badge').addEventListener('click', () => openStatus(state.status).catch(errorToast));
   $('btn-lang').addEventListener('click', () => {
     setLang(settings.lang === 'en' ? 'tr' : 'en');
     store('tto.lang', settings.lang);

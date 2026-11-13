@@ -311,7 +311,8 @@ def cells(svc, refs, user=None):
 
 def test_the_series_come_from_the_workbook(hsvc):
     snap = hsvc.history.snapshot()
-    assert snap["today"] == D(TODAY) and snap["spot"] == D("2026-11-04") and snap["src"] == "Curncy"
+    assert snap["today"] == D(TODAY) and snap["spot"] == D("2026-11-04") and snap["src"] == "GFOF Curncy" and snap["backup"] == "Curncy"
+    assert snap["sources"] == {"ois": ["GFOF"], "off": ["ICPL"], "xccy": ["ICPL"]}             # settings -> data sources
     by = {}
     for d in snap["defs"]:
         by.setdefault(d.group, []).append(d)
@@ -319,11 +320,15 @@ def test_the_series_come_from_the_workbook(hsvc):
     # the 16 quotes of the OIS page and the two stub quotes of the solver, on the source of MASA's history
     assert [d.label for d in by["ois"]] == ["1W", "2W", "1M", "2M", "3M", "6M", "9M", "1Y", "18M", "2Y", "3Y", "4Y", "5Y", "6Y", "7Y", "8Y",
                                              "9Y", "10Y"]
-    assert [d.ticker for d in by["ois"]][:4] == ["TYSO1Z Curncy", "TYSO2Z Curncy", "TYSOA Curncy", "TYSOB Curncy"]
-    assert by["ois"][2].alts == ["TYSOA GFOF Curncy"] and by["ois"][2].root == "TYSOA" and by["ois"][-1].months == 120.0
+    # GFOF first, as the OIS page itself prices; the ticker without a source (BGN, MASA's history) as the backup
+    assert [d.ticker for d in by["ois"]][:4] == ["TYSO1Z GFOF Curncy", "TYSO2Z GFOF Curncy", "TYSOA GFOF Curncy", "TYSOB GFOF Curncy"]
+    assert by["ois"][2].alts == ["TYSOA Curncy"] and by["ois"][2].root == "TYSOA" and by["ois"][-1].months == 120.0
     assert [d.label for d in by["off"]] == ["O/N", "T/N", "1W", "2W", "1M", "2M", "3M", "4M", "5M", "6M", "9M"]
-    assert by["off"][4].ticker == "TRYI1M BGN Curncy"
-    assert [d.label for d in by["xccy"]] == ["%dY" % k for k in range(1, 11)] and by["xccy"][0].ticker == "TRYSAQ1 BGN Curncy"
+    # offshore: ICAP's page first, the workbook's own BGN ticker as the backup (one without a source stays as it is)
+    assert (by["off"][4].ticker, by["off"][4].alts) == ("TRYI1M ICPL Curncy", ["TRYI1M BGN Curncy"])
+    assert (by["off"][7].ticker, by["off"][7].alts) == ("TRYI4M ICPL Curncy", ["TRYI4M Curncy"])
+    assert [d.label for d in by["xccy"]] == ["%dY" % k for k in range(1, 11)]
+    assert (by["xccy"][0].ticker, by["xccy"][0].alts) == ("TRYSAQ1 ICPL Curncy", ["TRYSAQ1 BGN Curncy"])
     bonds = by["dibs"]
     assert len(bonds) == 19 and all(d.info["isin"] in d.ticker for d in bonds)
     fixed = next(d for d in bonds if d.info["isin"] == "TRT150328T24")
@@ -337,10 +342,11 @@ def test_the_series_come_from_the_workbook(hsvc):
     user = hsvc.login("Seri Deneme")["user"]
     hsvc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!J9", "value": "TYSOX"}])
     try:
-        assert [d.ticker for d in hsvc.history.snapshot()["defs"] if d.label == "1M" and d.group == "ois"] == ["TYSOX Curncy"]
+        assert [(d.ticker, d.alts) for d in hsvc.history.snapshot()["defs"] if d.label == "1M" and d.group == "ois"] == [
+            ("TYSOX GFOF Curncy", ["TYSOX Curncy"])]
     finally:
         hsvc.reset_inputs(user, "tto", ["OIS_MAIN!J9"], shared=True)
-    assert [d.ticker for d in hsvc.history.snapshot()["defs"] if d.label == "1M" and d.group == "ois"] == ["TYSOA Curncy"]
+    assert [d.ticker for d in hsvc.history.snapshot()["defs"] if d.label == "1M" and d.group == "ois"] == ["TYSOA GFOF Curncy"]
 
 
 def test_offline_the_history_is_what_the_file_recorded(hsvc):
@@ -654,7 +660,7 @@ def test_end_of_day_matrix(hsvc):
     m = hsvc.history.matrix()
     assert m["asof"] == TODAY and m["ref"] == {"d1": "2026-11-02", "w1": "2026-10-27", "m1": "2026-10-05"}
     assert m["days"][0] == TODAY and m["days"][1] == "2026-11-02" and not m["live"] and not m["decision_day"]
-    assert m["source"] == {"ois": "Curncy", "dibs_field": "YLD_YTM_MID"}
+    assert m["source"] == {"ois": "GFOF → Excel (Curncy)", "off": "ICPL → Excel (BGN)", "xccy": "ICPL → Excel (BGN)", "dibs_field": "YLD_YTM_MID"}
     recorded = hsvc.provider.history([("TYSOA Curncy", "PX_LAST"), ("TRYSAQ1 BGN Curncy", "PX_LAST")], "20261001", "20261103")
     curve = {r["tenor"]: r for r in m["curve"]}
     assert list(curve) == ["O/N", "T/N", "1W", "2W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y", "3Y", "4Y", "5Y", "6Y", "7Y",
@@ -986,10 +992,12 @@ def _fake_history(svc, snap):
         if d.group == "ref":
             # the fixing of the workbook's day; one point higher until the meeting of 22 October; today's is not out yet
             hist[(d.ticker, d.field)] = [(x, 36.8159 if x <= D("2026-10-22") else 35.8159) for x in days if x < today]
+        # the curves have history on the workbook's own tickers only (the backups): GFOF / ICPL give none here, so
+        # each series is read from its backup as it is
         elif d.group == "ois":
-            hist[(d.ticker, d.field)] = [(x, round(saved[d.root] + drift(x), 4)) for x in days]
+            hist[(d.alts[-1], d.field)] = [(x, round(saved[d.root] + drift(x), 4)) for x in days]
         elif d.group in ("off", "xccy"):
-            hist[(d.ticker, d.field)] = curve(42.0, d.months, k)
+            hist[(d.alts[-1], d.field)] = curve(42.0, d.months, k)
         elif d.info["isin"] == "TRT150328T24":
             hist[(d.alts[0], d.field)] = curve(41.0, 16, k)                 # only the ticker without a source has history
         elif d.info["isin"] != "TRT081128T15":                               # ... and one bond has none at all
@@ -1023,7 +1031,8 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert {"TYSOA Curncy", "TYSOA GFOF Curncy", "BISTTREF Index", "TRYI1M BGN Curncy", "TRYSAQ5 BGN Curncy",
                 "/isin/TRT150328T24@ISL1", "/isin/TRT150328T24"} <= tickers
         assert not [t for t in tickers if t.endswith(" ISIN")]
-        assert len(tickers) == 96 and len(first) <= 5                        # 50 securities per request, one field each
+        assert {"TRYI1M ICPL Curncy", "TRYSAQ5 ICPL Curncy"} <= tickers                                  # the main sources too
+        assert len(tickers) == 117 and len(first) <= 5                       # 50 securities per request, one field each
         assert {r["options"]["startDate"] for r in first} == {"20251029"} and {r["options"]["endDate"] for r in first} == {"20261103"}
         assert all("nonTradingDayFillOption" not in r["options"] for r in first)          # trading days only, nothing filled in
         assert {tuple(r["fields"]) for r in first} == {("PX_LAST",), ("YLD_YTM_MID",)}
@@ -1147,7 +1156,7 @@ def test_history_api(client, hsvc, monkeypatch):
     page = client.get("/api/history/mpc", params={"n": 3}).json()
     assert page["days"] == DAYS and len(page["meetings"]) == 4
     assert client.get("/api/history/mpc", params={"days": "çok"}).status_code == 400
-    assert len(client.get("/api/history/series").json()["series"]) == 96            # 59 series, 37 of them with a fallback ticker
+    assert len(client.get("/api/history/series").json()["series"]) == 117           # 59 series, 58 of them with a backup ticker
     cal = client.get("/api/calendar").json()
     assert cal["next"] == "2026-12-10" and len(cal["meetings"]) == 95
     dates = [x["date"] for x in cal["meetings"]]

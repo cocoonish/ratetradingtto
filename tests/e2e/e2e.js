@@ -241,8 +241,17 @@ async function shot(page, name) {
     const bidBefore = await page.inputValue('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
     const retRows = () => page.evaluate(() => [...document.querySelectorAll('.modal table.ret tbody tr')].map((tr) => ({
       tenor: tr.children[0].textContent, bid: tr.children[2].querySelector('input').value, ask: tr.children[3].querySelector('input').value,
-      bp: tr.children[5].querySelector('input').value, next: tr.children[6].textContent })));
+      spread: tr.children[5].textContent, bp: tr.children[6].querySelector('input').value, next: tr.children[7].textContent })));
     const ret0 = await retRows();
+    check('the RET editor shows every maturity\'s bid-ask spread in bp', ret0.every((r) => !r.bid || !r.ask
+      || Math.abs(trNumber(r.spread) - Math.round((trNumber(r.ask) - trNumber(r.bid)) * 1000) / 10) < 0.051), ret0.map((r) => r.spread));
+    const onAsk = '.modal table.ret tbody tr:nth-child(1) td:nth-child(4) input';
+    await page.fill(onAsk, (trNumber(ret0[0].ask) + 0.1).toFixed(2).replace('.', ','));
+    const retWider = await retRows();
+    const bpTr = (x) => (Math.abs(x - Math.round(x)) > 1e-9 ? x.toFixed(1).replace('.', ',') : String(Math.round(x)));
+    check('... a changed side shows the spread before and now', retWider[0].spread === ret0[0].spread + ' → ' + bpTr(trNumber(ret0[0].spread) + 10), [ret0[0], retWider[0]]);
+    await page.fill(onAsk, ret0[0].ask);
+    check('... and back to one number when it is the same again', (await retRows())[0].spread === ret0[0].spread);
     await page.fill('#ret-shift', '25');
     const retShown = await retRows();
     check('"Tümünü kaydır" shows next to every maturity by how much it moves and what it becomes',
@@ -256,7 +265,7 @@ async function shot(page, name) {
       retHeld[0].bp === '' && retHeld[0].next === 'sabit' && retHeld[2].bp === '10' && retHeld[1].bp === '30' && retHeld[5].next === '34,3 / 34,5'
       && (await page.textContent('#ret-pending')) === '14 vade kayacak · 1 vade sabit', [retHeld.slice(0, 3), await page.textContent('#ret-pending')]);
     await page.click('#ret-side-bid');
-    check('the side that moves can be the bid alone', (await retRows())[5].next === '34,3 / 34,2');
+    check('the side that moves can be the bid alone (and the spread it leaves)', /^34,3 \/ 34,2 · spread [-−]?\d/.test((await retRows())[5].next), (await retRows())[5]);
     await page.click('#ret-side-both');
     await page.fill('#ret-shift', '25');
     await page.click('.modal .mfoot .btn.primary');                       // "Kaydet" with a shift that is only previewed
@@ -351,9 +360,15 @@ async function shot(page, name) {
     await page.click('.rangebox button:has-text("Son 30 gün")');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ranged, null, { timeout: 20000 });
     await page.waitForFunction(() => (document.querySelector('.lists .panel:nth-child(1) table.grid tr td') || {}).textContent === 'Tarih');
-    check('a period lists the trades of its days with their date - to look at, not to enter',
-      await page.locator('.entry.hidden').count() === 1 && /^Aralık: /.test(await page.textContent('#content .banner:not(.hidden)'))
-      && await page.locator('.lists .panel:nth-child(1) table.grid tr').count() === 3 && await page.locator('.lists td.act button').count() === 0);
+    check('a period up to today lists the trades of its days with their date and keeps today\'s entry form',
+      await page.locator('.entry.hidden').count() === 0 && /^Aralık: /.test(await page.textContent('#content .banner:not(.hidden)'))
+      && /bugüne .* yazılır/.test(await page.textContent('#content .banner:not(.hidden)'))
+      && await page.locator('.lists .panel:nth-child(1) table.grid tr').count() === 3 && await page.locator('.lists td.act button').count() >= 2);
+    await page.evaluate(() => window.tto.state.page.show('2026-10-01', '2026-10-31'));
+    await page.waitForFunction(() => window.tto.state.page.data && window.tto.state.page.data.to === '2026-10-31', null, { timeout: 20000 });
+    check('... a period that ends before today is to look at only', await page.locator('.entry.hidden').count() === 1 && !(await page.evaluate(() => window.tto.state.page.data.can_enter)));
+    await page.click('.rangebox button:has-text("Son 30 gün")');
+    await page.waitForFunction(() => window.tto.state.page.data && window.tto.state.page.data.can_enter && window.tto.state.page.data.ranged, null, { timeout: 20000 });
     const [period] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
     check('the period downloads as one file', /^Blotter_\d{4}\.\d{2}\.\d{2}-\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(period.suggestedFilename()), period.suggestedFilename());
     await page.click('#blotter-today');
@@ -396,11 +411,19 @@ async function shot(page, name) {
       '12:18:04 2y3y4y ois 12/ bid', 'MIKE REES', '18m ois 10/14', '13:33:59', '18m ois taken at 14', '13:41:09', 'ref 18m ois offer', '13:55:37',
       'EVREN DIKME', '6m OIS 35.88 bid', '16:40:10', '6m OIS 90 bid', '16:48:21', '1yr x 38.60/80 , bid nl', '17:00:01', 'selam', '17:00:05'].join('\n');
     const brokerBoard = () => page.evaluate(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
-    const brokerLog = () => page.evaluate(() => [...document.querySelectorAll('#broker-log-panel table.grid tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    // the log's lines without the tick box, with whose line it is (Taraf) moved to the end
+    const brokerLog = () => page.evaluate(() => [...document.querySelectorAll('#broker-log-panel table.grid tr')].slice(1).map((tr) => {
+      const cells = [...tr.children].map((td) => td.textContent).slice(1);
+      const whose = cells.splice(window.tto.state.page.data.ranged ? 3 : 2, 1)[0];
+      return cells.concat([whose]);
+    }));
     await page.fill('#broker-source', 'Tullett');
     await page.fill('#broker-text', CHAT);
     await page.waitForFunction(() => document.querySelectorAll('#broker-preview table tr').length === 13, null, { timeout: 20000 });
-    const chatSeen = await page.evaluate(() => [...document.querySelectorAll('#broker-preview table tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    // the preview's lines without whose line it is (checked on its own below)
+    const chatSeen = await page.evaluate(() => [...document.querySelectorAll('#broker-preview table tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)
+      .filter((_, k) => k !== 1)));
+    const chatWhose = await page.evaluate(() => [...document.querySelectorAll('#broker-preview table tr')].slice(1).map((tr) => tr.children[1].textContent));
     check('a pasted chat is read while it is typed: time, instrument, bid, ask',
       JSON.stringify(chatSeen[0].slice(0, 4)) === JSON.stringify(['10:23:58', '3Y–5Yspread · bp', '', '-75'])
       && JSON.stringify(chatSeen[1].slice(0, 4)) === JSON.stringify(['10:29:57', '1Y–5Yspread · bp', '-64', '-60'])
@@ -413,6 +436,7 @@ async function shot(page, name) {
       && /^Ref · offer/.test(chatSeen[7][5]) && chatSeen[9][2] === '35,90' && chatSeen[9][0] === '16:48:21'
       && JSON.stringify(chatSeen[10].slice(0, 4)) === JSON.stringify(['17:00:01', 'XCCY 1Y', '38,60', '38,80']) && /bid nl/.test(chatSeen[10][5])
       && chatSeen[11][1] === 'selam', chatSeen.slice(5));
+    check('the preview says whose every line is (no list of names yet: the source typed for the paste)', chatWhose.every((w) => w === 'Tullett'), chatWhose);
     check('the preview says what will be kept', (await page.textContent('#broker-summary')).trim() === '11 kota · 1 metin satırı', await page.textContent('#broker-summary'));
     await page.click('#broker-save');
     await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 13, null, { timeout: 20000 });
@@ -424,10 +448,11 @@ async function shot(page, name) {
       chatBoard.length === 7 && chat18[3] === '35,10' && chat18[4] === '' && chat18[5] === '13:55:37' && chat18[6] === '35,14'
       && JSON.stringify(chatBoard.map((r) => r[1])) === JSON.stringify(['6M', '18M', '1Y–5Y', '3Y–5Y', '2Y–3Y–4Y', '9x12', '1Y']) && chatBoard[6][0] === 'XCCY', chatBoard);
     check('the board compares with the dashboard\'s own curve (model, difference in bp)',
-      Math.abs(trNumber(chat18[7]) - model18.mid) < 0.006 && Math.abs(trNumber(chat18[8].replace('+', '')) - model18.bid_diff) < 0.06 && chatBoard[6][7] === '', [chat18, model18]);
+      Math.abs(trNumber(chat18[8]) - model18.mid) < 0.006 && Math.abs(trNumber(chat18[9].replace('+', '')) - model18.bid_diff) < 0.06 && chatBoard[6][8] === '', [chat18, model18]);
     let chatLog = await brokerLog();
     check('the chat is kept line by line with its time, sender and source',
-      chatLog.length === 12 && chatLog[0][0] === '10:23:58' && chatLog[0][2] === '3y5y ois /-75 offer' && chatLog[5][1] === 'MIKE REES · Tullett' && chatLog[5][0] === '13:33:59'
+      chatLog.length === 12 && chatLog[0][0] === '10:23:58' && chatLog[0][2] === '3y5y ois /-75 offer' && chatLog[5][1] === 'MIKE REES' && chatLog[5][13] === 'Tullett'
+      && chatLog[5][0] === '13:33:59'
       && chatLog[11][2] === 'selam' && /Metin/.test(chatLog[11][8]) && chatKept.json.rows.every((q) => q.created_by === 'ayşe yilmaz' && q.source === 'Tullett')
       && (await page.inputValue('#broker-text')) === '', chatLog);
     await page.fill('#broker-text', CHAT);
@@ -456,9 +481,9 @@ async function shot(page, name) {
     const chatAdded = await api(page, 'mehmet', 'POST', '/api/broker', { text: '17:10:00 5y ois 34.50/34.70', source: 'ICAP' });
     await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => tr.children[1].textContent === '5Y'), null, { timeout: 15000 });
     chatLog = await brokerLog();
-    check('a line another user keeps shows up live', chatAdded.json.saved === 1 && chatLog.length === 13 && chatLog[12][1] === 'ICAP' && chatLog[12][5] === '34,50', chatLog[12]);
+    check('a line another user keeps shows up live', chatAdded.json.saved === 1 && chatLog.length === 13 && chatLog[12][13] === 'ICAP' && chatLog[12][5] === '34,50', chatLog[12]);
     // delete a line
-    await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => x.children[2].textContent === 'selam'); tr.querySelector('td.act button').click(); });
+    await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => x.children[4].textContent === 'selam'); tr.querySelector('td.act button').click(); });
     await page.waitForSelector('.modal .mfoot .btn.primary');
     await page.click('.modal .mfoot .btn.primary');
     await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 13, null, { timeout: 15000 });
@@ -476,11 +501,47 @@ async function shot(page, name) {
     check('the day downloads as a workbook', /^BrokerChat_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(chatFile.suggestedFilename()), chatFile.suggestedFilename());
     await page.click('#content .rangebox button:has-text("Son 30 gün")');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ranged, null, { timeout: 20000 });
-    await page.waitForFunction(() => (document.querySelector('#broker-log-panel table.grid tr td') || {}).textContent === 'Tarih');
+    await page.waitForFunction(() => /^Tarih/.test((document.querySelectorAll('#broker-log-panel table.grid tr:first-child td')[1] || {}).textContent || ''));
     check('a period lists every day\'s chat with its date', /^Aralık: /.test(await page.textContent('#content .banner:not(.hidden)')) && (await brokerLog()).length === 13
       && (await brokerLog()).every((r) => /^\d\d\.\d\d\.\d{4}$/.test(r[0])));
     await page.click('#broker-today');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.is_today, null, { timeout: 20000 });
+    // the log sorts by a caption: the time newest first, then by sender; the time oldest first again
+    const logCaption = (k) => page.click('#broker-log-panel table.grid tr:first-child td:nth-child(' + k + ')');
+    await logCaption(2);
+    await page.waitForFunction(() => /▼/.test(document.querySelectorAll('#broker-log-panel table.grid tr:first-child td')[1].textContent));
+    chatLog = await brokerLog();
+    check('the log sorts by its captions: the newest line first', chatLog[0][0] >= chatLog[1][0] && chatLog[1][0] >= chatLog[chatLog.length - 1][0], chatLog.map((r) => r[0]));
+    await logCaption(3);
+    await page.waitForFunction(() => /▲/.test(document.querySelectorAll('#broker-log-panel table.grid tr:first-child td')[2].textContent));
+    chatLog = await brokerLog();
+    check('... by sender', chatLog.map((r) => r[1]).filter(Boolean).every((x, i, a) => i === 0 || a[i - 1].localeCompare(x, 'tr') <= 0), chatLog.map((r) => r[1]));
+    await logCaption(2);
+    await logCaption(2);
+    await page.waitForFunction(() => /▲/.test(document.querySelectorAll('#broker-log-panel table.grid tr:first-child td')[1].textContent));
+    // lines ticked are deleted together
+    const nLog = (await brokerLog()).length;
+    const ticks = page.locator('#broker-log-panel input.pick');
+    await ticks.nth(0).check();
+    await ticks.nth(1).check();
+    check('ticked lines: the delete button counts them', (await page.textContent('#broker-del-picked')) === 'Seçilenleri sil (2)' && await page.isVisible('#broker-del-picked'));
+    await page.click('#broker-del-picked');
+    await page.click('.modal .mfoot .btn.primary');
+    await page.waitForFunction((n) => document.querySelectorAll('#broker-log-panel table.grid tr').length - 1 === n - 2, nLog, { timeout: 15000 });
+    check('... and go together', (await brokerLog()).length === nLog - 2 && await page.isHidden('#broker-del-picked'));
+    // the board is reset (the log keeps every line) and the reset taken back
+    const boardBefore = (await brokerBoard()).map((r) => r[1]);
+    await page.waitForFunction(() => !document.querySelector('.modal'), null, { timeout: 10000 });     // the delete's dialog is gone
+    await page.click('#broker-reset');
+    await page.click('.modal .mfoot .btn.primary');
+    const cleared = await page.waitForFunction(() => !document.querySelector('#broker-board-panel table.grid'), null, { timeout: 15000 }).then(() => true, () => false);
+    check('"Tahtayı sıfırla" clears the board, the log stays', cleared && (await brokerLog()).length === nLog - 2
+      && /Sıfırlandı: \d\d:\d\d/.test(await page.textContent('#broker-reset-info')),
+    { board: await brokerBoard(), info: await page.textContent('#broker-reset-info'), data: await page.evaluate(() => JSON.stringify({ resets: window.tto.state.page.data.resets,
+      times: window.tto.state.page.data.rows.map((q) => q.date + ' ' + q.time), today: window.tto.state.page.data.today })) });
+    await page.click('#broker-reset-undo');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-board-panel table.grid tr').length > 1, null, { timeout: 15000 });
+    check('... and the reset can be taken back', JSON.stringify((await brokerBoard()).map((r) => r[1])) === JSON.stringify(boardBefore), boardBefore);
     await shot(page, '04b-broker');
 
     // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
@@ -592,6 +653,8 @@ async function shot(page, name) {
     check('flies: the sheet\'s carry + roll against the volatility of the same horizon, the best ratio first',
       ct[0][2] === 'C+R 3 ay (bp)' && ct[1][0] === best.label && Math.abs(trNumber(ct[1][5].replace('+', '')) - best.ratio_b) < 0.006
       && Math.abs(trNumber(ct[1][4]) - best.vol * Math.sqrt(carryApi.horizons.b.days)) < 0.06, [ct.slice(0, 3), best]);
+    check('flies: the z-scores of today\'s level against 3 months, 6 months and a year of closes',
+      JSON.stringify(ct[0].slice(7, 10)) === JSON.stringify(['z 3a', 'z 6a', 'z 1y']) && ct.slice(1).some((r) => /^[+-]?\d+,\d\d$/.test(r[7])), ct[0]);
     const dotsB = await page.locator('#carry-panel svg.chart circle.mk').count();
     await page.click('#carry-horizon button[data-v="a"]');
     await page.waitForFunction(() => document.querySelector('#carry-panel table.grid tr td:nth-child(3)').textContent === 'C+R 1 ay (bp)');
@@ -1123,7 +1186,20 @@ async function shot(page, name) {
     const series = await rowsOf('series');
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
-      && series.some((r) => r[2] === 'TYSO10 Curncy' && r[7] === 'geçmiş yok') && series.length === 97, rowOf(series, 'TLREF'));
+      && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
+      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118, rowOf(series, 'TLREF'));
+    // the order of the pricing sources: for everyone, live pages and history alike
+    const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
+    check('settings: the pricing sources - OIS GFOF, offshore and XCCY ICPL, the workbook\'s BGN ticker last',
+      JSON.stringify([await srcInputs('ois'), await srcInputs('off'), await srcInputs('xccy')]) === JSON.stringify([['GFOF', '', '', ''], ['ICPL', '', '', ''], ['ICPL', '', '', '']])
+      && await page.locator('.panel[data-panel="sources-used"] table.grid tr').count() === 40);
+    await page.locator('#sources-table input[data-curve="off"]').nth(1).fill('bgn');
+    await page.click('#sources-save');
+    await page.waitForFunction(() => document.querySelectorAll('#sources-table input[data-curve="off"]')[1].value === 'BGN', null, { timeout: 15000 });
+    check('settings: a source added to a curve is kept', JSON.stringify((await api(page, 'ayşe yilmaz', 'GET', '/api/sources')).json.curves[1].sources) === '["ICPL","BGN"]');
+    await page.click('#sources-default');
+    await page.click('#sources-save');
+    await page.waitForFunction(() => document.querySelectorAll('#sources-table input[data-curve="off"]')[1].value === '', null, { timeout: 15000 });
     check('settings: the state of the history', /Excel dosyasındaki kayıtlı geçmiş/.test(await page.textContent('.panel[data-panel="history"] .set-info')));
     await shot(page, '15-settings');
 

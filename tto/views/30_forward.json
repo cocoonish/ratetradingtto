@@ -712,6 +712,55 @@
    "group": "forward-calc-b10-ak",
    "kind": "pct",
    "label": "'Interest 2 SP (O/N)' EUR faizi (B10; boş = EUR OIS eğrisi)"
+  },
+  {
+   "range": "EK_FWD!B35",
+   "scope": "user",
+   "group": "fwdrate-spot",
+   "kind": "number",
+   "label": "USDTRY spot of the value-date rate table (formula default: Forward!F2)"
+  },
+  {
+   "range": "EK_FWD!D35",
+   "scope": "user",
+   "group": "fwdrate-usd",
+   "kind": "number",
+   "label": "USD bid % of the value date (formula default: Forward!W27)"
+  },
+  {
+   "range": "EK_FWD!F35",
+   "scope": "user",
+   "group": "fwdrate-usd",
+   "kind": "number",
+   "label": "USD ask % of the value date (formula default: Forward!Y27)"
+  },
+  {
+   "range": "EK_FWD!H35",
+   "scope": "user",
+   "group": "fwdrate-spot",
+   "kind": "number",
+   "label": "EURTRY spot of the value-date rate table (formula default: Forward!G2)"
+  },
+  {
+   "range": "EK_FWD!J35",
+   "scope": "user",
+   "group": "fwdrate-eur",
+   "kind": "number",
+   "label": "EUR bid % of the value date (formula default: Forward!AC27)"
+  },
+  {
+   "range": "EK_FWD!L35",
+   "scope": "user",
+   "group": "fwdrate-eur",
+   "kind": "number",
+   "label": "EUR ask % of the value date (formula default: Forward!AE27)"
+  },
+  {
+   "range": "EK_FWD!B37:C41",
+   "scope": "user",
+   "group": "fwdrate-try",
+   "kind": "number",
+   "label": "TRY bid / ask % of the value date per curve: ICAP, OIS, VİOP, RET, Elle (formula default: the Forward sheet's cells)"
   }
  ],
  "panels": [
@@ -729,6 +778,16 @@
     "I": "USDTRY spot valörü",
     "K": "EURTRY spot valörü"
    }
+  },
+  {
+   "id": "FR1",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A33:O42",
+   "hidden": false,
+   "wide": true,
+   "title": "VADE FAİZLERİYLE FORWARD  ·  Forward sayfasının valörü için her eğrinin bid / ask TRY faizi – faizi değiştirin, forward ve puan hemen yeniden hesaplanır",
+   "borrowed": true
   },
   {
    "id": "B15",
@@ -1072,13 +1131,14 @@
    "id": "fwd",
    "title": "Forward fiyatları",
    "panels": [
+    "FR1",
     "B15",
     "B15b",
     "B17",
     "B16",
     "B18"
    ],
-   "note": "Üstteki valör tarihi için forward: ICAP, OIS, VİOP ve RET eğrilerinden bid / mid / ask."
+   "note": "Üstteki valör tarihi için forward: ICAP, OIS, VİOP ve RET eğrilerinden bid / mid / ask. İlk tabloda her eğrinin o vadedeki bid / ask TRY faizi var: faizi (ya da spotu, döviz faizini) değiştirin, forward ve swap puanı hemen yeniden hesaplanır; silince piyasaya döner."
   },
   {
    "id": "ret",

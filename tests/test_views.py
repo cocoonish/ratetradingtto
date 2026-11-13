@@ -27,7 +27,8 @@ def sheets_of(view):
 
 #: sheets of the TRY workbook that have no page any more (the desk does not use them); their cells are still
 #: calculated and can be looked at in the sheet explorer
-NO_PAGE = {("tto", "MOBIL MK"), ("tto", "Ivır Zıvır"), ("tto", "YP DIBS")}
+NO_PAGE = {("tto", "MOBIL MK"), ("tto", "Ivır Zıvır"), ("tto", "YP DIBS"),
+           ("tto", "EK_KAYNAK")}                # the order of the pricing sources: on the settings page
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):

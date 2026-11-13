@@ -76,12 +76,12 @@ function prepare(data) {
   for (const row of data.rows) {
     for (let j = 0; j < row.length; j++) {
       const c = row[j];
-      if (c.sk || c.k !== 's' || c.cs || c.rs || c.i || c.act || !c.t || c.t.length < 14) continue;
+      if (c.sk || c.k !== 's' || c.cs || c.rs || c.i || c.act || c.chk || !c.t || c.t.length < 14) continue;
       if (c.al === 'r' || c.al === 'c') continue;
       let n = 0;
       while (j + n + 1 < row.length) {
         const x = row[j + n + 1];
-        if (x.sk || x.t || x.i || x.f || x.heat || x.cs || x.rs || x.act) break;
+        if (x.sk || x.t || x.i || x.f || x.heat || x.cs || x.rs || x.act || x.chk) break;
         n += 1;
       }
       if (n > 0) {
@@ -218,6 +218,13 @@ export class Grid {
           const b = h('button', { class: 'iconbtn', type: 'button', title: cell.act.title || '' }, cell.act.label);
           b.addEventListener('click', (e) => { e.stopPropagation(); cell.act.fn(); });
           td.appendChild(b);
+        } else if (cell.chk) {
+          // a tick box of a client-built table (its row is picked for something - deleting it, say)
+          const b = h('input', { type: 'checkbox', class: 'pick', title: cell.chk.title || '' });
+          b.checked = !!cell.chk.on;
+          b.addEventListener('click', (e) => e.stopPropagation());
+          b.addEventListener('change', () => cell.chk.fn(b.checked));
+          td.appendChild(b);
         } else {
           td.textContent = cell.t || '';
         }
@@ -283,7 +290,7 @@ export class Grid {
         if (editing && editing.td === td) continue;
         if (signature(cell) === signature(before)) continue;
         const keepSel = td.classList.contains('sel'), keepCur = td.classList.contains('cur');
-        if (cell.act) continue;
+        if (cell.act || cell.chk) continue;
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '');
         td.textContent = cell.t || '';
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';

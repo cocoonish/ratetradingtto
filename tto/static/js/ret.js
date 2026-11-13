@@ -88,7 +88,8 @@ export async function openRetEditor(ctx) {
   const tenors = data.rows.map((r) => r.tenor);
   const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 1040 });
   const inputs = {};                 // tenor -> {bid, ask, bp}
-  const mids = {}, news = {}, lines = {};
+  const mids = {}, news = {}, lines = {}, spreads = {};
+  const before = {};                 // tenor -> spread (bp) of the curve as it was opened (or last saved)
   const meta = h('div', { class: 'muted' });
   const setMeta = (mt) => {
     meta.textContent = mt && mt.updated_at ? 'Son güncelleme: ' + mt.updated_at + (mt.updated_by ? ' · ' + (ctx.displayName(mt.updated_by)) : '')
@@ -97,12 +98,33 @@ export async function openRetEditor(ctx) {
   setMeta(data.meta);
   const table = h('table', { class: 'plain ret' });
   table.appendChild(h('thead', null, h('tr', null, h('th', { class: 'l' }, 'Vade'), h('th', null, 'Gün'), h('th', null, 'Bid (%)'), h('th', null, 'Ask (%)'),
-    h('th', null, 'Mid (%)'), h('th', { title: 'Bu vade kaç baz puan kayacak. "Tümünü kaydır" hepsini doldurur; bir vadeyi sabit tutmak için kutusunu silin ya da 0 yazın.' }, 'Kaydır (bp)'),
+    h('th', null, 'Mid (%)'), h('th', { title: 'Ask − bid, baz puan: önce kayıtlı eğrinin, ok işaretinden sonra kutulardakinin (değiştirdiyseniz)' }, 'Spread (bp)'),
+    h('th', { title: 'Bu vade kaç baz puan kayacak. "Tümünü kaydır" hepsini doldurur; bir vadeyi sabit tutmak için kutusunu silin ya da 0 yazın.' }, 'Kaydır (bp)'),
     h('th', { class: 'l' }, 'Yeni bid / ask'))));
   const tbody = h('tbody');
+  const spreadOf = (bidText, askText) => {
+    const b = percent(bidText), a = percent(askText);
+    return b !== null && a !== null ? Math.round((a - b) * 100 * 10) / 10 : null;
+  };
+  const bpText = (x) => (x === null ? '—' : num(x, Math.abs(x - Math.round(x)) > 1e-9 ? 1 : 0, false));
+  const updateSpread = (t) => {
+    const now = spreadOf(inputs[t].bid.value, inputs[t].ask.value);
+    const was = before[t] === undefined ? null : before[t];
+    const el = clear(spreads[t]);
+    if (was === now || (was !== null && now !== null && Math.abs(was - now) < 0.05)) {
+      el.className = 'muted';
+      el.textContent = now === null ? '' : bpText(now);
+      return;
+    }
+    el.className = 'ret-spread changed';
+    el.appendChild(h('span', { class: 'muted' }, bpText(was)));
+    el.appendChild(document.createTextNode(' → '));
+    el.appendChild(h('b', null, bpText(now)));
+  };
   const updateMid = (t) => {
     const b = percent(inputs[t].bid.value), a = percent(inputs[t].ask.value);
     mids[t].textContent = b !== null && a !== null ? num((b + a) / 2, 3, false) : '';
+    updateSpread(t);
   };
 
   // ---- shifting: every maturity shows by how much it will move; a maturity typed (or blanked) by hand is left alone
@@ -123,6 +145,11 @@ export async function openRetEditor(ctx) {
     el.appendChild(h('span', { class: sides.includes('bid') ? 'chg' : '' }, out.bid || '—'));
     el.appendChild(document.createTextNode(' / '));
     el.appendChild(h('span', { class: sides.includes('ask') ? 'chg' : '' }, out.ask || '—'));
+    if (sides.length === 1) {
+      // one side moves: the spread changes with it
+      const sp = spreadOf(out.bid, out.ask);
+      el.appendChild(h('span', { class: 'muted' }, ' · spread ' + bpText(sp)));
+    }
   };
   const pending = () => tenors.filter((t) => bpOf(t) !== 0);
   const fillRows = (rows) => {
@@ -145,13 +172,15 @@ export async function openRetEditor(ctx) {
     bp.dataset.tenor = t;
     inputs[t] = { bid, ask, bp };
     mids[t] = h('td', { class: 'muted' });
+    spreads[t] = h('td', { class: 'muted' });
+    spreads[t].dataset.tenor = t;
     news[t] = h('td', { class: 'l ret-new muted' });
     news[t].dataset.tenor = t;
     bid.addEventListener('input', () => { updateMid(t); preview(t); });
     ask.addEventListener('input', () => { updateMid(t); preview(t); });
     bp.addEventListener('input', () => { own.add(t); preview(t); showPending(); });
     lines[t] = h('tr', null, h('td', { class: 'l' }, h('b', null, t)), h('td', { class: 'muted' }, typeof r.days === 'number' ? num(r.days, 0) : ''),
-      h('td', null, bid), h('td', null, ask), mids[t], h('td', null, bp), news[t]);
+      h('td', null, bid), h('td', null, ask), mids[t], spreads[t], h('td', null, bp), news[t]);
     tbody.appendChild(lines[t]);
   }
   table.appendChild(tbody);
@@ -254,7 +283,10 @@ export async function openRetEditor(ctx) {
     copyBtn('Kopyala (tablo)', 'table', 'ret-copy', 'Vade · gün · bid · ask: Excel\'e ya da e-postaya yapıştırılabilir tablo'),
     copyBtn('Kopyala (mesaj)', 'message', 'ret-copy-msg', 'Sohbet penceresine atılacak hizalı metin: "1M   34,45 / 34,65"'));
 
+  // the spreads of the curve as it stands: what a change is shown against ("önceki → şimdi")
+  const markSaved = () => { for (const t of tenors) { before[t] = spreadOf(inputs[t].bid.value, inputs[t].ask.value); updateSpread(t); } };
   fillRows(data.rows);
+  markSaved();
   saved = JSON.stringify(current());
   showPending();
 
@@ -299,6 +331,7 @@ export async function openRetEditor(ctx) {
       if (res.errors && res.errors.length) toast(res.errors.join('; '), 'err', 7000);
       else toast('RET faizleri kaydedildi (' + res.applied + ' hücre)', 'ok');
       fillRows(res.ret.rows);
+      markSaved();
       saved = JSON.stringify(current());
       setMeta(res.ret.meta);
       loadHistory();

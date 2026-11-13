@@ -157,7 +157,7 @@ export class BlotterPage {
     }
     this.data = data;
     this.fill();
-    if (this.data.is_today) {
+    if (this.data.can_enter) {
       if (this.tab === 'fwd') this.quoteFwd(); else if (this.tab === 'ois') this.quoteOis();
     }
   }
@@ -779,7 +779,7 @@ export class BlotterPage {
   }
 
   delCell(t, what) {
-    if (!this.data.is_today) return { t: '', k: '' };
+    if (!this.data.can_enter || t.trade_date !== this.data.today) return { t: '', k: '' };       // today's trades only
     return { t: '', k: '', cls: 'act', act: { label: '✕', title: 'İşlemi sil', fn: () => this.remove(t, what) } };
   }
 
@@ -801,7 +801,8 @@ export class BlotterPage {
     if (!rows.length) {
       clear(sec.body);
       this.grids[id] = null;
-      sec.body.appendChild(h('div', { class: 'empty' }, this.data.is_today ? 'Henüz işlem yok – soldaki formdan girin' : (this.data.ranged ? 'Bu aralıkta kayıt yok' : 'Kayıt yok')));
+      sec.body.appendChild(h('div', { class: 'empty' }, this.data.can_enter ? (this.data.ranged ? 'Bu aralıkta kayıt yok – bugünün işlemini soldaki formdan girin'
+        : 'Henüz işlem yok – soldaki formdan girin') : (this.data.ranged ? 'Bu aralıkta kayıt yok' : 'Kayıt yok')));
       return;
     }
     if (this.grids[id]) {
@@ -828,12 +829,13 @@ export class BlotterPage {
     this.toInp.value = d.to || d.date;
     this.todayBtn.classList.toggle('hidden', d.is_today);
     this.dayNote.textContent = d.is_today ? '' : (d.ranged
-      ? 'Aralık: ' + isoToTr(d.date) + ' – ' + isoToTr(d.to) + ' · ' + (d.days || 0) + ' işlem günü, ' + d.trades.length + ' kayıt – yalnızca görüntüleme. '
+      ? 'Aralık: ' + isoToTr(d.date) + ' – ' + isoToTr(d.to) + ' · ' + (d.days || 0) + ' işlem günü, ' + d.trades.length + ' kayıt'
+        + (d.can_enter ? ' – soldaki formdan girilen işlem bugüne (' + isoToTr(d.today) + ') yazılır ve listeye eklenir. ' : ' – yalnızca görüntüleme. ')
         + 'Maliyet ve DV01 bu aralıktaki işlemlerin toplamıdır.'
       : 'Geçmiş gün – yalnızca görüntüleme' + (d.snapshot_at ? ' (özet: ' + d.snapshot_at + ')' : ''));
     this.dayNote.classList.toggle('hidden', d.is_today);
-    this.entry.classList.toggle('hidden', !d.is_today);
-    this.readonlyNote.classList.toggle('hidden', d.is_today);
+    this.entry.classList.toggle('hidden', !d.can_enter);
+    this.readonlyNote.classList.toggle('hidden', !!d.can_enter);
 
     // risk of what is listed
     const r = d.risk || {};
@@ -924,10 +926,14 @@ export class BlotterPage {
         if (g && s.data) g.update(s.data, true);
       }
     }
-    const outside = d.trades.filter((t) => (t.kind === 'fwd' && (t.pair || 'USDTRY') !== 'USDTRY') || (t.kind === 'ois' && t.mpc)).length;
-    this.sheetNote.textContent = outside ? outside + ' işlem bu tablolarda yok: Excel sayfası yalnızca USDTRY forward\'ları ve vadeli OIS\'leri tutar '
-      + '(EURTRY / diğer pariteler ve MPC tarihli OIS\'ler yukarıdaki listelerde, maliyet tablolarında ve DV01 özetindedir)' : '';
-    this.sheetNote.classList.toggle('hidden', !outside || !sheet.length);
+    const others = d.trades.filter((t) => t.kind === 'fwd' && (t.pair || 'USDTRY') !== 'USDTRY').length;
+    const mpc = d.trades.filter((t) => t.kind === 'ois' && t.mpc).length;
+    const parts = [];
+    if (others) parts.push(others + ' forward başka paritede: tutarı işlem anındaki kurlarla USD karşılığı, faizi kendi TRY faizi (TL maliyeti)');
+    if (mpc) parts.push(mpc + ' MPC tarihli OIS ana vadelere dağıtıldı: bitişe kadar olan swap ile ters yöndeki başlangıca kadar olan swap, '
+      + 'her biri tarihinin iki yanındaki ana vadeye gün oranında (DV01\'leriyle)');
+    this.sheetNote.textContent = parts.length ? 'Tablolarda: ' + parts.join(' · ') + '.' : '';
+    this.sheetNote.classList.toggle('hidden', !parts.length || !sheet.length);
     this.sheetTitle.classList.toggle('hidden', !sheet.length);
     this.sheetLink.classList.toggle('hidden', !sheet.length);
   }

@@ -733,16 +733,19 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
         assert st["subscriptions"] > 900 and st["hits_today"] < 6000 and not st["error"]
         assert st["hits_today"] == warm["items"] and st["requests"] < st["hits_today"] / 2
 
-        # a tick moves the curve: both sides again agree after the change
-        tickers = sorted({k[1] for k in snapshot if k[0] == "BDP" and k[1].startswith("TYSO") and k[2] == "PX_LAST"})
+        # a tick moves the curve: both sides again agree after the change (the OIS page reads its quotes from the
+        # first pricing source that has one - GFOF's MID - the workbook's own ticker's PX_LAST after it)
+        tickers = sorted({(k[1], k[2]) for k in snapshot if k[0] == "BDP" and k[1].startswith("TYSO") and k[2] in ("PX_LAST", "MID")
+                          and not k[3]})
         assert len(tickers) >= 10
         changes = {}
-        for i, sec in enumerate(tickers):
-            new = snapshot[("BDP", sec, "PX_LAST", ())] + 0.05 + 0.01 * i
-            server.ref[(sec, "PX_LAST", ())] = new                       # what a later request would get
-            server.rt[(sec, "LAST_PRICE")] = new
-            server.tick(sec, {"LAST_PRICE": new})                        # what the subscription delivers now
-            changes[("BDP", sec, "PX_LAST", ())] = new
+        for i, (sec, fld) in enumerate(tickers):
+            new = snapshot[("BDP", sec, fld, ())] + 0.05 + 0.01 * i
+            rt = "LAST_PRICE" if fld == "PX_LAST" else fld
+            server.ref[(sec, fld, ())] = new                             # what a later request would get
+            server.rt[(sec, rt)] = new
+            server.tick(sec, {rt: new})                                  # what the subscription delivers now
+            changes[("BDP", sec, fld, ())] = new
         time.sleep(0.5)
         keys = provider.drain_changes()
         assert len(keys) >= 10 and set(keys) <= set(changes)             # only what the workbook really uses

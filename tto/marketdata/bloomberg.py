@@ -426,6 +426,12 @@ class BloombergProvider(Provider):
                     "slow": self.slow, "slow_warnings": self.slow_warnings, "events_dropped": self.events_dropped,
                     "messages_lost": self.messages_lost, "resyncs": self.resyncs}
 
+    def unknown(self) -> List[Tuple[Tuple, str]]:
+        """The calls Bloomberg answered with "no such security", "no such field" or "field not applicable"
+        (in the helper's case: the answers it passed on)."""
+        with self._lock:
+            return [(k, v) for k, v in self._values.items() if type(v) is str and v in FINAL_ANSWERS]
+
     # ================================================================== values
     def _set(self, key: Tuple, value: Any, streamed: bool = False) -> None:
         """Store a value (lock held by the caller)."""

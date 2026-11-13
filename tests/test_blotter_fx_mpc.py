@@ -188,15 +188,47 @@ def test_forwards_are_kept_with_their_pair(book_of_trades):
     assert risk["fwd"] == pytest.approx(sum(t[k]["dv01"] for k in ("usd", "eur", "eur2", "gbp"))) and risk["unknown"] == 1
 
 
-def test_the_workbooks_own_sheet_takes_what_it_knows(book_of_trades):
-    svc, u, t, _ = book_of_trades
-    svc.blotter(u)
-    # its forward list is in USD and its OIS list by quoted tenor: the other trades are the dashboard's alone
-    assert (cell(svc, "Günlük İşlemler!A3"), cell(svc, "Günlük İşlemler!B3"), cell(svc, "Günlük İşlemler!D3")) == ("B", 10e6, VALUE_SERIAL)
-    assert cell(svc, "Günlük İşlemler!A4") is None and cell(svc, "Günlük İşlemler!B4") is None
-    assert (cell(svc, "Günlük İşlemler!L3"), cell(svc, "Günlük İşlemler!J3"), cell(svc, "Günlük İşlemler!K3")) == ("1Y", "S", pytest.approx(0.356))
-    assert cell(svc, "Günlük İşlemler!L4") is None and cell(svc, "Günlük İşlemler!H4") is None
-    assert cell(svc, "Günlük İşlemler!P20") == 10e6                                # net USD bought: the one USDTRY trade
+def test_the_workbooks_own_sheet_takes_every_trade_against_try(book_of_trades):
+    svc, u, t, m = book_of_trades
+    data = svc.blotter(u)
+    g = lambda ref: cell(svc, "Günlük İşlemler!" + ref)                                      # noqa: E731
+    # forwards: USDTRY as it is; EURTRY at its USD amount (the trade's spot and USDTRY) with its own TRY rate - the TL cost;
+    # GBPTRY by hand without a TRY rate and EURUSD (no TRY leg) stay out.  Column G: each one's DV01 ($)
+    assert (g("A3"), g("B3"), g("C3"), g("D3"), g("G3")) == ("B", 10e6, t["usd"]["try_rate"], VALUE_SERIAL, t["usd"]["dv01"])
+    eur, eur2 = t["eur"], t["eur2"]
+    assert (g("A4"), g("C4"), g("G4")) == ("B", eur["try_rate"], eur["dv01"]) and g("B4") == pytest.approx(5e6 * eur["spot"] / eur["usdtry"])
+    assert (g("A5"), g("C5")) == ("S", eur2["try_rate"]) and g("B5") == pytest.approx(3e6 * eur2["spot"] / eur2["usdtry"])
+    assert g("A6") is None and g("B6") is None
+    assert g("P20") == pytest.approx(10e6 + g("B4") - g("B5"))                         # net USD bought, every pair in USD
+    # the summary as the page shows it: the sheet's buckets with their DV01 ($) on the right - buys, sells, net
+    fwd = next(p for p in data["sheet"] if p["id"] == "fwd")["data"]
+    assert fwd["c"][-3:] == ["DV01 B", "DV01 S", "DV01 N"]
+    total = fwd["rows"][fwd["r"].index(20)]
+    assert total[-3]["v"] == pytest.approx(t["usd"]["dv01"] + eur["dv01"]) and total[-2]["v"] == pytest.approx(eur2["dv01"])
+    assert total[-1]["v"] == pytest.approx(t["usd"]["dv01"] + eur["dv01"] + eur2["dv01"])
+    per_bucket = [fwd["rows"][i][-1].get("v") or 0.0 for i, r in enumerate(fwd["r"]) if 6 <= r <= 19]
+    assert sum(per_bucket) == pytest.approx(total[-1]["v"])                             # split between buckets, nothing lost
+    # OIS: the 1Y as it is, then the two meeting-dated swaps spread over the main tenors
+    assert (g("L3"), g("J3"), g("K3")) == ("1Y", "S", pytest.approx(0.356))
+    rows = []
+    r = 4
+    while g("L%d" % r):
+        rows.append((g("L%d" % r), g("J%d" % r), g("I%d" % r), g("H%d" % r), g("K%d" % r)))
+        r += 1
+    mpc, stub = t["mpc"]["legs"][0], t["stub"]["legs"][0]
+    # PAY 11.12.26–22.01.27 = PAY to 22.01.27 (between 2M and 3M) + RECEIVE to 11.12.26 (between 1M and 2M)
+    assert [(x[0], x[1]) for x in rows[:4]] == [("2M", "B"), ("3M", "B"), ("1M", "S"), ("2M", "S")]
+    assert sum(x[2] for x in rows[:2]) - sum(x[2] for x in rows[2:4]) == pytest.approx(mpc["dv01"])     # its own DV01, exactly
+    assert rows[0][3] + rows[1][3] == pytest.approx(rows[2][3] + rows[3][3])                              # one nominal for both
+    # ... at rates that make the two legs the traded rate: R_E·A_E − R_S·A_S = R·(A_E − A_S), A ~ DV01
+    d_e, d_s = rows[0][2] + rows[1][2], rows[2][2] + rows[3][2]
+    assert rows[0][4] * d_e - rows[2][4] * d_s == pytest.approx(mpc["rate"] * (d_e - d_s), rel=1e-9)
+    # RECEIVE from the spot to the third meeting: one spot swap, the trade itself, between the two tenors around its end
+    assert [x[1] for x in rows[4:]] == ["S", "S"] and sum(x[2] for x in rows[4:]) == pytest.approx(stub["dv01"])
+    assert sum(x[3] for x in rows[4:]) == pytest.approx(stub["nominal"]) and {x[4] for x in rows[4:]} == {stub["rate"]}
+    # the sheet's tenor summary: pay DV01 − receive DV01 over every tenor = the day's OIS risk
+    net = sum((g("S%d" % k) or 0.0) - (g("V%d" % k) or 0.0) for k in range(25, 39))
+    assert net == pytest.approx(mpc["dv01"] - stub["dv01"] - t["ois"]["legs"][0]["dv01"])
 
 
 # ---------------------------------------------------------------------------------------------- meeting-dated OIS

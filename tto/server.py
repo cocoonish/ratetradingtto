@@ -206,6 +206,17 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
 
+    # ------------------------------------------------------------------ what Bloomberg does not know
+    @handler
+    async def market_unknown(request: Request):
+        return ok(await call(svc().market_unknown))
+
+    @handler
+    async def market_unknown_export(request: Request):
+        raw, name = await call(svc().market_unknown_export)
+        return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
     # ------------------------------------------------------------------ realized volatility · carry
     @handler
     async def vol(request: Request):
@@ -226,17 +237,38 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def broker_parse(request: Request):
         data = await _body(request)
-        return ok(await call(svc().broker_parse, _user(request), str(data.get("text", "")), data.get("date") or None))
+        return ok(await call(svc().broker_parse, _user(request), str(data.get("text", "")), data.get("date") or None,
+                             str(data.get("source") or ""), str(data.get("party") or "")))
 
     @handler
     async def broker_add(request: Request):
         data = await _body(request)
         return ok(await call(svc().broker_add, _user(request), str(data.get("text", "")), data.get("date") or None,
-                             str(data.get("source") or ""), data.get("texts", True) is not False))
+                             str(data.get("source") or ""), data.get("texts", True) is not False, str(data.get("party") or "")))
+
+    @handler
+    async def broker_people(request: Request):
+        return ok(await call(svc().broker_people, _user(request)))
+
+    @handler
+    async def broker_set_people(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().broker_set_people, _user(request), data.get("people")))
 
     @handler
     async def broker_delete(request: Request):
         return ok(await call(svc().broker_delete, _user(request), int(request.path_params["quote_id"])))
+
+    @handler
+    async def broker_delete_many(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().broker_delete_many, _user(request), data.get("ids") or []))
+
+    @handler
+    async def broker_reset(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().broker_reset, _user(request), data.get("date") or None, data.get("key") or None,
+                             bool(data.get("undo"))))
 
     @handler
     async def broker_export(request: Request):
@@ -309,6 +341,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def history_series(request: Request):
         return ok(await call(svc().history.coverage))
+
+    @handler
+    async def sources(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().set_sources, _user(request), data.get("lists") or {}))
+        return ok(await call(svc().sources))
 
     @handler
     async def history_matrix(request: Request):
@@ -387,12 +426,18 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/scenarios/load", scenario_load, methods=["POST"]),
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
+        Route("/api/market/unknown", market_unknown),
+        Route("/api/market/unknown/export", market_unknown_export),
         Route("/api/vol", vol, methods=["POST"]),
         Route("/api/vol/carry", carry_vol),
         Route("/api/broker", broker),
         Route("/api/broker", broker_add, methods=["POST"]),
         Route("/api/broker/parse", broker_parse, methods=["POST"]),
+        Route("/api/broker/people", broker_people),
+        Route("/api/broker/people", broker_set_people, methods=["POST"]),
         Route("/api/broker/export", broker_export),
+        Route("/api/broker/delete", broker_delete_many, methods=["POST"]),
+        Route("/api/broker/reset", broker_reset, methods=["POST"]),
         Route("/api/broker/{quote_id:int}", broker_delete, methods=["DELETE"]),
         Route("/api/blotter", blotter),
         Route("/api/blotter/export", blotter_export),
@@ -407,6 +452,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/history/status", history_status),
         Route("/api/history/sync", history_sync, methods=["POST"]),
         Route("/api/history/settings", history_settings, methods=["POST"]),
+        Route("/api/sources", sources, methods=["GET", "POST"]),
         Route("/api/history/series", history_series),
         Route("/api/history/matrix", history_matrix),
         Route("/api/history/mpc", history_mpc),

@@ -90,6 +90,20 @@
    "group": "asw-holiday",
    "kind": "date",
    "label": "Tatil günleri"
+  },
+  {
+   "range": "EK_FX!B3:C3",
+   "scope": "shared",
+   "group": "asw-fx-src",
+   "kind": "text",
+   "label": "FX swap eğrisinin fiyat kaynakları (sırayla: ICPL, BGN)"
+  },
+  {
+   "range": "EK_FX!B6:B21",
+   "scope": "shared",
+   "group": "asw-fx-roots",
+   "kind": "text",
+   "label": "FX swap eğrisi ticker kökleri (1M … 10Y: TRYI…, TRYSAQ…)"
   }
  ],
  "panels": [
@@ -109,15 +123,33 @@
   {
    "id": "tbl",
    "type": "table",
-   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz",
+   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap eğrisine göre ASW",
    "range": "B6:U56",
-   "keep_title": true
+   "keep_title": true,
+   "append": "asw_fx"
   },
   {
    "id": "chart0",
    "type": "chart",
    "chart": 0,
    "wide": true
+  },
+  {
+   "id": "fxc",
+   "type": "table",
+   "sheet": "EK_FX",
+   "range": "A1:F23",
+   "hidden": false,
+   "title": "FX swap ima TRY eğrisi · ASW'nin ikinci eğrisi (ICPL, sonra BGN)"
+  },
+  {
+   "id": "fxh",
+   "type": "table",
+   "sheet": "EK_FX",
+   "range": "G5:H21",
+   "hidden": true,
+   "title": "Yardımcı · FX swap eğrisi: iki kaynağın fiyatı (MID ya da bid–ask ortası)",
+   "keep_title": true
   },
   {
    "id": "sel",

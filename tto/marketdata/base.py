@@ -200,6 +200,11 @@ class Provider(object):
     def status(self) -> Dict[str, Any]:
         return {"mode": "none", "connected": False}
 
+    def unknown(self) -> List[Tuple[Tuple, str]]:
+        """The calls Bloomberg answered with "no such security" or "no such field" (or "field not applicable"):
+        ``[(key, answer), ...]``.  What the desk asks about when the status says tickers are unknown."""
+        return []
+
     def history(self, items: Sequence[Tuple[str, str]], start: str, end: str,
                 timeout: float = 60.0) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
         """Daily closes of ``(security, FIELD)`` items between two dates (``YYYYMMDD``), outside of any

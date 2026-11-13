@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..xl.errors import E_NA, XlError
 from ..xl.values import XlArray
-from .base import Provider, bdp_key
+from .base import INVALID_FIELD, INVALID_SECURITY, NOT_APPLICABLE, Provider, bdp_key
 
 
 class ReplayProvider(Provider):
@@ -50,6 +50,11 @@ class ReplayProvider(Provider):
 
     def status(self) -> Dict[str, Any]:
         return {"mode": "replay", "connected": False, "label": self.label, "items": len(self.snapshot)}
+
+    def unknown(self) -> List[Tuple[Tuple, str]]:
+        """What Excel saved as Bloomberg's "no such security / field" answer (the add-in's text)."""
+        final = (INVALID_SECURITY, INVALID_FIELD, NOT_APPLICABLE)
+        return [(k, v) for k, v in self.snapshot.items() if type(v) is str and v in final]
 
     def load_history(self, path: str) -> int:
         """Load daily closes kept next to the offline quotes:
@@ -124,6 +129,43 @@ def _recorded_rows(key: Tuple, value: Any) -> List[Tuple[str, Any]]:
         if not row or type(row[0]) is not float or not (20000 < row[0] < 80000):
             continue
         out.append((serial_to_date(row[0]).isoformat(), row[1] if len(row) > 1 else None))
+    return out
+
+
+def addin_callers(engine) -> Dict[Tuple, List[Tuple[int, int]]]:
+    """Which cell asks for which market-data item: every add-in call of the workbook - also one inside a
+    larger formula (``WORKDAY(BDP(...)-1, ...)``) - with the key its arguments make now, in the shared
+    calculation: ``{key: [(sheet index, rc), ...]}``.  Must run on the engine's thread."""
+    from ..xl.compiler import ADDINS
+    from ..xl.engine import addin_cells
+    from ..xl.model import COLS
+    from ..xl.parser import parse_template, walk
+
+    model = engine.model
+    calc = engine.shared
+    capture = _KeyCapture()
+    nodeps = _NoDeps()
+    out: Dict[Tuple, List[Tuple[int, int]]] = {}
+    calls: Dict[int, List[Any]] = {}
+    for si, rc in addin_cells(model):
+        tid = model.sheets[si].fml[rc]
+        found = calls.get(tid)
+        if found is None:
+            try:
+                found = [nd for nd in walk(parse_template(model.templates[tid]))
+                         if nd[0] == "func" and (nd[3] or nd[1] in ADDINS) and nd[1] != "BINTERPOL"]
+            except Exception:  # noqa: BLE001 - a formula the parser cannot read asks for nothing we know
+                found = []
+            calls[tid] = found
+        r, c = divmod(rc, COLS)
+        for nd in found:
+            try:
+                args = [engine.compiler.compile_node(a)(calc, si, r, c) if a[0] != "missing" else None for a in nd[2]]
+                key = capture.call(nodeps, nd[1], si, r, c, args)
+            except Exception:  # noqa: BLE001
+                continue
+            if type(key) is tuple:
+                out.setdefault(key, []).append((si, rc))
     return out
 
 

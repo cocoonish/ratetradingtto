@@ -425,6 +425,15 @@
    "keep_title": true
   },
   {
+   "id": "EKF4",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A33:O42",
+   "hidden": true,
+   "title": "Vade faizleriyle forward · Forward sayfasında gösterilir (Forward fiyatları sekmesi)",
+   "keep_title": true
+  },
+  {
    "id": "B27",
    "type": "table",
    "title": "Kontrol kodları (0 tamam · 1 uyarı · 2 hata)",

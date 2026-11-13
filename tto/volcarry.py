@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from . import brokerchat as bc
 
 WINDOWS = (10, 20, 60, 120, 250)
+Z_WINDOWS = (60, 120, 250)  # z-score of the level: ~3 months, ~6 months, a year of closes
+MIN_Z = 20                  # closes a z-score needs at least
 YEAR = 252.0
 MIN_CHANGES = 5            # fewer changes than this are no volatility
 PRODUCTS = ("OIS", "XCCY", "DIBS")
@@ -210,6 +212,20 @@ def week_days(start: Any, end: Any) -> int:
     return n
 
 
+def zscores(levels: Sequence[float], now: Optional[float], windows: Sequence[int] = Z_WINDOWS) -> Dict[str, Optional[float]]:
+    """Where the level stands against its own past: (now − mean) / standard deviation of the last n closes, for
+    each n (``None`` with fewer than :data:`MIN_Z` closes or no spread at all).  ``now`` is today's level - the
+    market's when there is one, else the last close."""
+    out: Dict[str, Optional[float]] = {}
+    if now is None and levels:
+        now = levels[-1]
+    for n in windows:
+        part = list(levels[-n:])
+        sd = stdev(part) if len(part) >= MIN_Z else None
+        out[str(n)] = None if now is None or not sd else (now - sum(part) / len(part)) / sd
+    return out
+
+
 def carry_row(item: Dict[str, Any], market: Optional[float], carry: Dict[str, Optional[float]], horizons: Dict[str, int],
               curve: Dict[str, Dict[str, float]], months: Dict[str, float], window: int) -> Dict[str, Any]:
     """One trade of the carry table next to its volatility: carry + roll over each horizon (bp, as the sheet
@@ -218,7 +234,8 @@ def carry_row(item: Dict[str, Any], market: Optional[float], carry: Dict[str, Op
     vol = realized(levels, item["unit"], (window,))[window] if levels else None
     row: Dict[str, Any] = {"label": item["label"], "tenors": item["tenors"], "kind": item["kind"], "market": market,
                            "vol": vol["d"] if vol else None, "n": vol["n"] if vol else 0, "full": bool(vol and vol["full"]),
-                           "error": "" if vol else (why or "geçmiş kısa")}
+                           "error": "" if vol else (why or "geçmiş kısa"),
+                           "z": zscores(levels, market if type(market) is float else None), "closes": len(levels)}
     for name, cr in carry.items():
         h = horizons.get(name) or 0
         over = vol["d"] * math.sqrt(h) if vol and h > 0 else None

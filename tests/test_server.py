@@ -31,7 +31,7 @@ def test_index_and_static_files(client):
     for path in ("/static/js/main.js", "/static/js/grid.js", "/static/js/chart.js", "/static/css/app.css",
                  "/static/js/pages/view.js", "/static/js/pages/blotter.js", "/static/js/pages/broker.js", "/static/js/pages/vol.js", "/static/js/pages/explorer.js",
                  "/static/js/ret.js", "/static/js/scenarios.js", "/static/js/api.js", "/static/js/ui.js", "/static/js/format.js",
-                 "/static/js/find.js", "/static/js/spot.js"):
+                 "/static/js/find.js", "/static/js/spot.js", "/static/js/status.js"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert r.headers["cache-control"] == "no-cache"          # an updated dashboard is picked up at once

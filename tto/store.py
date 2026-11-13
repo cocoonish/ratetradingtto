@@ -329,6 +329,27 @@ class Store(object):
             out.append(d)
         return out
 
+    def broker_senders(self) -> List[Tuple[str, int, str]]:
+        """Every sender of the kept chats: (name, lines, last day)."""
+        out: Dict[str, List[Any]] = {}
+        for r in self._q("SELECT quote_date, payload FROM broker_quotes WHERE deleted=0"):
+            name = (json.loads(r["payload"]).get("sender") or "").strip()
+            if not name:
+                continue
+            hit = out.setdefault(name, [name, 0, r["quote_date"]])
+            hit[1] += 1
+            hit[2] = max(hit[2], r["quote_date"])
+        return [tuple(v) for v in out.values()]
+
+    def broker_sources(self) -> List[str]:
+        """The sources the kept chats were given."""
+        found = set()
+        for r in self._q("SELECT payload FROM broker_quotes WHERE deleted=0"):
+            src = (json.loads(r["payload"]).get("source") or "").strip()
+            if src:
+                found.add(src)
+        return sorted(found)
+
     def delete_broker_quote(self, quote_id: int) -> bool:
         with self._lock:
             cur = self._db.execute("UPDATE broker_quotes SET deleted=1 WHERE id=? AND deleted=0", (quote_id,))

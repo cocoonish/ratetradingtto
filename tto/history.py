@@ -21,6 +21,7 @@ steps - moves with its meeting (:func:`align_meetings`).
 """
 from __future__ import annotations
 
+import bisect
 import datetime as _dt
 import hashlib
 import re
@@ -52,6 +53,34 @@ DEFAULT_PAST_MEETINGS = ("2025-01-23", "2025-03-06", "2025-04-17", "2025-06-19",
                          "2025-12-11", "2026-01-22", "2026-03-12", "2026-04-22", "2026-06-11", "2026-07-23", "2026-09-10",
                          "2026-10-22")
 DEFAULTS = {"dibs_field": "YLD_YTM_MID", "lookback_days": 370}
+# the order of the Bloomberg pricing sources when the workbook has no source sheet (EK_KAYNAK, see tto.extras)
+SOURCE_DEFAULTS = {"ois": ["GFOF"], "off": ["ICPL"], "xccy": ["ICPL"]}
+SOURCE_ROWS = {"ois": 4, "off": 5, "xccy": 6}           # EK_KAYNAK!B4:E6
+
+
+def source_lists(val) -> Dict[str, List[str]]:
+    """The pricing sources per curve, in order (``val`` reads a cell of the workbook as everyone sees it)."""
+    out: Dict[str, List[str]] = {}
+    for kind, row in SOURCE_ROWS.items():
+        first = val("EK_KAYNAK!A%d" % row)
+        if first is None:                                   # no source sheet in this file
+            out[kind] = list(SOURCE_DEFAULTS[kind])
+            continue
+        codes = []
+        for col in "BCDE":
+            c = re.sub(r"\s+", "", _text(val("EK_KAYNAK!%s%d" % (col, row)))).upper()
+            if len(c) >= 2 and c not in codes:
+                codes.append(c)
+        out[kind] = codes
+    return out
+
+
+def source_text(snap: Dict[str, Any]) -> str:
+    """How the OIS closes are sourced, for the notes of the pages: "GFOF → Excel (Curncy)"."""
+    if not snap.get("src"):
+        return ""
+    codes = (snap.get("sources") or {}).get("ois") or []
+    return " → ".join(list(codes) + ["Excel (%s)" % (snap.get("backup") or "Curncy")])
 
 
 # ---------------------------------------------------------------------------------------------- small helpers
@@ -330,13 +359,43 @@ class SeriesDef(object):
         return ["%s|%s" % (t, self.field) for t in [self.ticker] + self.alts]
 
     def pick(self, data: Dict[str, Dict[str, float]]) -> Tuple[str, Dict[str, float]]:
-        """The ticker to use (the one with the most closes; the workbook's own on a tie) and its closes."""
-        best, points = self.ticker, data.get(self.id) or {}
+        """The ticker the series stands for and its closes (see :meth:`merged`)."""
+        ticker, points, _ = self.merged(data)
+        return ticker, points
+
+    def merged(self, data: Dict[str, Dict[str, float]]) -> Tuple[str, Dict[str, float], Dict[str, str]]:
+        """The closes of the main source, the backups filling only the days it has none.
+
+        A backup's close is not taken as it stands - two sources rarely agree to the basis point, and a series that
+        jumped between them would show moves that never happened (in a day's change, a realized vol, a z-score).
+        The backup's move is laid on the main source's level instead: a missing day is the main source's close of
+        the nearest day both have, plus what the backup did from that day to this one (the day before first; the
+        day after for days before the main source began).  A main source without any close gives way to the
+        backup as it is.  Returns ``(ticker, {day: close}, {day: backup ticker})`` - the ticker the series is
+        shown with is the main one whenever it has a close at all.
+        """
+        points = dict(data.get(self.id) or {})
+        ticker = self.ticker
+        used: Dict[str, str] = {}
         for t in self.alts:
             other = data.get("%s|%s" % (t, self.field)) or {}
-            if len(other) > len(points):
-                best, points = t, other
-        return best, points
+            if not other:
+                continue
+            if not points:
+                points, ticker, used = dict(other), t, {}
+                continue
+            missing = [d for d in other if d not in points]
+            if not missing:
+                continue
+            common = sorted(d for d in other if d in points)
+            if not common:
+                continue                            # nothing in common: the two levels cannot be tied together
+            for d in sorted(missing):
+                k = bisect.bisect_left(common, d)
+                a = common[k - 1] if k > 0 else common[0]
+                points[d] = points[a] + (other[d] - other[a])
+                used[d] = t
+        return ticker, points, used
 
 
 # ---------------------------------------------------------------------------------------------- one past day
@@ -549,7 +608,7 @@ class History(object):
         book = self.svc.books.get(BOOK)
         if book is None:
             return {"today": _dt.date.today(), "spot": None, "defs": [], "roots": {}, "holidays": [], "rows": [], "labels": [],
-                    "src": "", "tlref": "BISTTREF Index", "stub": {}}
+                    "src": "", "backup": "", "sources": {k: [] for k in SOURCE_DEFAULTS}, "tlref": "BISTTREF Index", "stub": {}}
         calc = book.engine.shared
         model = book.model
         cfg = self.settings()
@@ -572,8 +631,24 @@ class History(object):
 
         today = serial_to_date(book.engine.clock.today())
         spot = _of_serial(val("%s!B2" % OIS_SHEET))
-        src = _text(val("MASA!S171")) or "Curncy"
-        other = "Curncy" if src.upper() != "CURNCY" else "GFOF Curncy"
+        # the order of the pricing sources, as the live pages use it (settings -> data sources, EK_KAYNAK):
+        # OIS GFOF, offshore and XCCY ICPL, and last the workbook's own ticker (BGN) - here the source of
+        # MASA's own history (MASA!S171) for the OIS
+        lists = source_lists(val)
+        other = _text(val("MASA!S171")) or "Curncy"
+
+        def chain(root: str, codes: Sequence[str], last: str) -> List[str]:
+            out: List[str] = []
+            for t in ["%s %s Curncy" % (root, c) for c in codes] + [last]:
+                if t and t not in out:
+                    out.append(t)
+            return out
+
+        def ois_def(label: str, root: str) -> SeriesDef:
+            tickers = chain(root, lists["ois"], "%s %s" % (root, other))
+            return SeriesDef("ois", label, tickers[0], "PX_LAST", tickers[1:], months=tenor_months(label), root=root)
+
+        src = ("%s Curncy" % lists["ois"][0]) if lists["ois"] else other
         tlref = literal_ticker("%s!J2" % OIS_SHEET, "BISTTREF Index")
         defs: List[SeriesDef] = [SeriesDef("ref", "TLREF", tlref, "PX_LAST")]
         roots: Dict[int, Any] = {}
@@ -581,8 +656,7 @@ class History(object):
         for label, ref in (("1W", "AU13"), ("2W", "AU14")):
             root = literal_ticker("%s!%s" % (OIS_SHEET, ref), "TYSO%sZ" % label[0]).split(" ", 1)[0]
             stub[label] = root
-            defs.append(SeriesDef("ois", label, "%s %s" % (root, src), "PX_LAST", ["%s %s" % (root, other)],
-                                  months=tenor_months(label), root=root))
+            defs.append(ois_def(label, root))
         for r in range(OIS_ROWS[0], OIS_ROWS[1] + 1):
             root = val("%s!J%d" % (OIS_SHEET, r))
             roots[r] = root if isinstance(root, str) and root.strip() else None
@@ -590,8 +664,7 @@ class History(object):
             if roots[r] is None or not label:
                 continue
             root = root.strip()
-            defs.append(SeriesDef("ois", label, "%s %s" % (root, src), "PX_LAST", ["%s %s" % (root, other)],
-                                  months=tenor_months(label), root=root))
+            defs.append(ois_def(label, root))
         if "Forward" in model.sheet_index:
             for r in range(6, 27):
                 ticker = _text(val("Forward!AO%d" % r))
@@ -603,7 +676,10 @@ class History(object):
                     label, group = _text(val("Forward!C%d" % (125 + r - 17))), "xccy"
                 if not label:
                     continue
-                defs.append(SeriesDef(group, label, ticker, "PX_LAST", months=tenor_months(label)))
+                # offshore: the listed sources first (ICAP's page by default), the workbook's own ticker (BGN) last
+                parts = ticker.split()
+                tickers = chain(parts[0], lists[group], ticker) if len(parts) > 1 and parts[-1].upper() == "CURNCY" else [ticker]
+                defs.append(SeriesDef(group, label, tickers[0], "PX_LAST", tickers[1:], months=tenor_months(label)))
         if "DİBS RV" in model.sheet_index:
             for r in range(5, 55):
                 isin = _text(val("DİBS RV!A%d" % r))
@@ -636,7 +712,7 @@ class History(object):
             rows.append(_iso(d) if d else None)
             labels.append(_text(val("%s!O%d" % (OIS_SHEET, r))) or "MPC%d" % (r - MEETING_ROWS[0] + 1))
         return {"today": today, "spot": spot, "defs": defs, "roots": roots, "holidays": holidays, "rows": rows,
-                "labels": labels, "src": src, "tlref": tlref, "stub": stub}
+                "labels": labels, "src": src, "backup": other, "sources": lists, "tlref": tlref, "stub": stub}
 
     # ================================================================== calendar
     def archive(self) -> List[str]:
@@ -1067,9 +1143,11 @@ class History(object):
         bounds = self.store.hist_bounds()
         rows = []
         for d in snap["defs"]:
+            backed = any(bounds.get("%s|%s" % (t, d.field)) for t in d.alts)       # a backup has closes
             for k, t in enumerate([d.ticker] + d.alts):
                 b = bounds.get("%s|%s" % (t, d.field))
                 rows.append({"group": d.group, "label": d.label, "ticker": t, "field": d.field, "alt": k > 0,
+                             "main": k == 0 and bool(d.alts), "backed": k == 0 and backed,
                              "first": b[0] if b else None, "last": b[1] if b else None, "n": b[2] if b else 0})
         return {"series": rows, "state": self.status()}
 
@@ -1115,15 +1193,16 @@ class History(object):
         data = self.store.hist_many([i for d in defs for i in d.ids()], _iso(axis[0]), _iso(day))
 
         def entry(d: SeriesDef) -> Optional[Dict[str, Any]]:
-            ticker, points = d.pick(data)
+            ticker, points, used = d.merged(data)
             if not points:
                 return None
             vals = filled(points, axis)
             if vals[-1] is None:
                 return None
             out = self._changes(vals, 100.0 if d.unit == "pct" else 1.0)
-            out.update({"ticker": ticker, "field": d.field, "unit": d.unit,
-                        "day": max((k for k in points if k <= _iso(day)), default=None)})
+            last = max((k for k in points if k <= _iso(day)), default=None)
+            # the close of the day came from the backup (its move laid on the main source's level)
+            out.update({"ticker": ticker, "field": d.field, "unit": d.unit, "day": last, "backup": used.get(last) if last else None})
             return out
 
         ref = next((d for d in defs if d.group == "ref"), None)
@@ -1152,7 +1231,9 @@ class History(object):
                "days": days_with_data, "tlref": entry(ref) if ref else None,
                "curve": [curve[k] for k in sorted(curve)], "bonds": bonds, "mpc": self._mpc_matrix(day, axis),
                "decision_day": bool((self.store.mpc_days(_iso(day), _iso(day)).get(_iso(day)) or {}).get("decision")),
-               "source": {"ois": snap["src"], "dibs_field": self.settings()["dibs_field"]},
+               "source": {"ois": source_text(snap), "off": " → ".join((snap["sources"].get("off") or []) + ["Excel (BGN)"]),
+                          "xccy": " → ".join((snap["sources"].get("xccy") or []) + ["Excel (BGN)"]),
+                          "dibs_field": self.settings()["dibs_field"]},
                "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}
         return out
 
@@ -1274,4 +1355,4 @@ class History(object):
                 "issues": issues, "flagged": flagged,
                 "status": sorted({x.get("status") or "" for x in meta.values()} - {""}),
                 "notes": sorted({x.get("note") or "" for x in meta.values()} - {""})[:5],
-                "source": snap["src"], "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}
+                "source": source_text(snap), "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}

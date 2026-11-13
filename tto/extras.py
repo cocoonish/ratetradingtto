@@ -332,6 +332,14 @@ def _tto_forward(model: Model) -> None:
     b.dropdown("B2", FWD_CURVES)
     b.set("G2", "=IFERROR(DATE(YEAR(Forward!$I$2),MONTH(Forward!$I$2),DAY(Forward!$I$2)),Forward!$I$2)", fmt=DATE)
     b.set("I2", "=OIS_MAIN!$B$2", fmt=DATE)
+    # what the curves are: S1 / S2 / S3 are the scenarios of the OIS sheet - their names and weights are read
+    # from its SENARYOLAR table (OIS_MAIN!O3:Q5), so a scenario renamed there is renamed here
+    scen = 'INDEX(OIS_MAIN!$%s$3:$%s$5,MATCH("%s",OIS_MAIN!$O$3:$O$5,0))'
+    b.set("C2", '=IFERROR(IF(LEFT($B$2,1)="S","= "&INDEX(OIS_MAIN!$P$3:$P$5,MATCH($B$2,OIS_MAIN!$O$3:$O$5,0)),'
+                'IF($B$2="Ağırlıklı","= S1–S3 ağırlıklı","")),"")', bold=True, color=NOTE_COLOR)
+    parts = ['"S%d = "&%s&" (%%"&ROUND(%s*100,0)&")"' % (k, scen % ("P", "P", "S%d" % k), scen % ("Q", "Q", "S%d" % k)) for k in (1, 2, 3)]
+    b.set("K2", '=IFERROR("Eğriler: "&' + '&" · "&'.join(parts) + '&" · Ağırlıklı = S1–S3 olasılıklarıyla · MPC ima = kotaların ima ettiği PPK patikası'
+                ' · Bootstrap = kotalardan doğrudan · TLREF sabit = bugünkü TLREF","")', color=NOTE_COLOR)
     b.head("A3", ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask", "Fwd bid",
                   "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "USD %", "P/gün bid", "P/gün ask", "RET bid %", "RET ask %",
                   "Bid − RET", "Ask − RET"])
@@ -634,7 +642,9 @@ def _tto_gold(model: Model) -> None:
         # other date the swap rate curve; typed over when none of them is there
         from_curve = 'IFERROR(%(c)s%(xau)d*(1+%(curve)s/100*%(gd)s/360),"")' % f
         own = from_curve if free else 'IF(%(c)s%(d2)d=$B$%(t)d,IFERROR(($I$%(t)d+$J$%(t)d)/2,""),%(fc)s)' % dict(f, fc=from_curve)
-        b.input("%(c)s%(xfwd)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),IFERROR(%(c)s%(xau)d*(1+%(c)s%(swap)d/100*%(gd)s/360),""),%(own)s)')
+        # (no second date - the free column before one is typed - no forward: its days would count from day zero)
+        b.input("%(c)s%(xfwd)d" % f, ('=IF(NOT(ISNUMBER(%(c)s%(d2)d)),"",IF(ISNUMBER(%(c)s%(swap)d),'
+                                       'IFERROR(%(c)s%(xau)d*(1+%(c)s%(swap)d/100*%(gd)s/360),""),%(own)s))')
                 % dict(f, own=own), fmt=NUM4, bold=True)
         b.set("%(c)s%(simp)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),%(c)s%(swap)d,'
                                     'IFERROR((%(c)s%(xfwd)d/%(c)s%(xau)d-1)*360/%(gd)s*100,""))') % f, fmt="0.000")
@@ -821,10 +831,268 @@ def _tto_viop_history(model: Model) -> None:
 
 
 #: book -> (name, precondition, builder) of each addition
+# ---------------------------------------------------------------------------------------------- forward rates
+FR_FIRST = 33                     # title row of the block "the TRY rates of the value date, to change and price with"
+FR_CURVES = (("ICAP", "D30", "$I$22", "$K$22"), ("OIS", "D31", "$O$25", "$P$25"), ("VİOP", "D32", "$C$18", "$E$18"),
+             ("RET", "D33", "$W$48", "$X$48"))
+
+
+def _fwd_rates_check(model: Model) -> None:
+    """The Forward sheet's USDTRY / EURTRY tables price from these cells (the rates of the value date).  The block
+    lives on the forward quote sheet, so it goes when that one is left out."""
+    _need_sheets(model, "Forward", FWD_SHEET)
+    for _, at, bid, ask in FR_CURVES:
+        _need_formula(model, "Forward", at, bid)                      # the bid side of the row uses the bid rate ...
+        _need_formula(model, "Forward", "F" + at[1:], ask)            # ... the ask side the ask rate
+        _need_formula(model, "Forward", at, "$Y$27")                  # USD ask on the bid side, USD bid on the ask side
+        _need_formula(model, "Forward", "F" + at[1:], "$W$27")
+        _need_formula(model, "Forward", "D%d" % (int(at[1:]) + 12), bid)  # EURTRY: the same TRY rate, EUR days and rates
+    _need_formula(model, "Forward", "D42", "$AE$27")
+    _need_formula(model, "Forward", "F42", "$AC$27")
+
+
+def _tto_fwd_rates(model: Model) -> None:
+    """The TRY rates the Forward sheet's tables price the value date with - ICAP, OIS, VİOP and RET, bid and ask -
+    side by side, each one a cell that can be typed over: the USDTRY and EURTRY forwards and their points follow
+    at once (with the sheet's own formula), and blanking a rate takes it back to its curve."""
+    b = SheetBuilder(model, FWD_SHEET)
+    t = FR_FIRST
+    b.title("A%d" % t, "VADE FAİZLERİYLE FORWARD  ·  Forward sayfasının valörü için her eğrinin bid / ask TRY faizi – faizi değiştirin, "
+                       "forward ve puan hemen yeniden hesaplanır")
+    b.row("A%d" % (t + 1), ["Valör", None, "Gün USDTRY", None, "Gün EURTRY"], bold=True)
+    b.set("B%d" % (t + 1), "=Forward!$D$2", fmt=DATE, bold=True)
+    b.set("D%d" % (t + 1), "=Forward!$U$27", fmt=INT0)
+    b.set("F%d" % (t + 1), "=Forward!$AA$27", fmt=INT0)
+    s = t + 2                                                        # spots and the currencies' rates
+    b.row("A%d" % s, ["USDTRY spot", None, "USD bid %", None, "USD ask %", None, "EURTRY spot", None, "EUR bid %", None, "EUR ask %"], bold=True)
+    b.input("B%d" % s, "=Forward!$F$2", fmt=NUM4)
+    b.input("D%d" % s, "=Forward!$W$27*100", fmt="0.0000")
+    b.input("F%d" % s, "=Forward!$Y$27*100", fmt="0.0000")
+    b.input("H%d" % s, "=Forward!$G$2", fmt=NUM4)
+    b.input("J%d" % s, "=Forward!$AC$27*100", fmt="0.0000")
+    b.input("L%d" % s, "=Forward!$AE$27*100", fmt="0.0000")
+    b.head("A%d" % (s + 1), ["Eğri", "TRY bid %", "TRY ask %", "USDTRY bid", "USDTRY mid", "USDTRY ask", "Puan bid", "Puan mid", "Puan ask",
+                             "P/gün bid", "P/gün ask", "EURTRY bid", "EURTRY ask", "EUR puan bid", "EUR puan ask"])
+    first = s + 2
+    rows = [(name, "=Forward!%s*100" % bid, "=Forward!%s*100" % ask) for name, _, bid, ask in FR_CURVES]
+    ret = first + len(FR_CURVES) - 1
+    rows.append(("Elle", "=$B$%d" % ret, "=$C$%d" % ret))            # a row of one's own: starts from RET
+    f = {"s": s, "d": t + 1}
+    for k, (name, bid, ask) in enumerate(rows):
+        r = first + k
+        f["r"] = r
+        b.set("A%d" % r, name, bold=True, align="center")
+        b.input("B%d" % r, bid, fmt="0.0000")
+        b.input("C%d" % r, ask, fmt="0.0000")
+        # the sheet's own formula: bid side = spot·(1 + TRY bid·g/360)/(1 + USD ask·g/360), ask side the other way round
+        b.set("D%d" % r, '=IFERROR($B$%(s)d*(1+$B%(r)d/100/360*$D$%(d)d)/(1+$F$%(s)d/100/360*$D$%(d)d),"")' % f, fmt=NUM4, bold=True)
+        b.set("F%d" % r, '=IFERROR($B$%(s)d*(1+$C%(r)d/100/360*$D$%(d)d)/(1+$D$%(s)d/100/360*$D$%(d)d),"")' % f, fmt=NUM4, bold=True)
+        b.set("E%d" % r, '=IFERROR(($D%(r)d+$F%(r)d)/2,"")' % f, fmt=NUM4)
+        b.set("G%d" % r, '=IFERROR(($D%(r)d-$B$%(s)d)*10000,"")' % f, fmt=INT0)
+        b.set("H%d" % r, '=IFERROR(($E%(r)d-$B$%(s)d)*10000,"")' % f, fmt=INT0)
+        b.set("I%d" % r, '=IFERROR(($F%(r)d-$B$%(s)d)*10000,"")' % f, fmt=INT0)
+        b.set("J%d" % r, '=IFERROR($G%(r)d/$D$%(d)d,"")' % f, fmt="#,##0.0")
+        b.set("K%d" % r, '=IFERROR($I%(r)d/$D$%(d)d,"")' % f, fmt="#,##0.0")
+        b.set("L%d" % r, '=IFERROR($H$%(s)d*(1+$B%(r)d/100/360*$F$%(d)d)/(1+$L$%(s)d/100/360*$F$%(d)d),"")' % f, fmt=NUM4, bold=True)
+        b.set("M%d" % r, '=IFERROR($H$%(s)d*(1+$C%(r)d/100/360*$F$%(d)d)/(1+$J$%(s)d/100/360*$F$%(d)d),"")' % f, fmt=NUM4, bold=True)
+        b.set("N%d" % r, '=IFERROR(($L%(r)d-$H$%(s)d)*10000,"")' % f, fmt=INT0)
+        b.set("O%d" % r, '=IFERROR(($M%(r)d-$H$%(s)d)*10000,"")' % f, fmt=INT0)
+    b.note("A%d" % (first + len(rows)), "TRY faizi: eğrinin bu valördeki basit ACT/360 faizi (%) – Forward sayfasının USDTRY ve EURTRY tablolarının kullandığı hücreler "
+                                         "(ICAP ve VİOP ima eğrileri, TRY OIS ± yarım bid/ask, RET). Bid tarafı USD (EUR) ask'iyle, ask tarafı USD (EUR) bid'iyle hesaplanır "
+                                         "(sayfanın formülü). Değiştirdiğiniz faiz, spot ve döviz faizi yalnız size görünür; silince piyasaya döner. 'Elle' satırı RET'ten başlar.")
+
+
+# ---------------------------------------------------------------------------------------------- sources
+SRC_SHEET = "EK_KAYNAK"
+SRC_LISTS = (("ois", "TRY OIS", 4, "GFOF", "Excel'deki ticker: kök + Curncy (BGN)"),
+             ("off", "Offshore · FX swap ima", 5, "ICPL", "Excel'deki ticker: Forward!AO6:AO16 (BGN)"),
+             ("xccy", "Offshore · XCCY", 6, "ICPL", "Excel'deki ticker: Forward!AO17:AO26 (BGN)"))
+SRC_COLS = "BCDE"                 # up to four pricing sources per curve, tried from left to right
+SRC_FIRST = 11                    # the first row of "the source in use" table
+OIS_SRC_ROWS = tuple(r for r in range(9, 27) if r not in (15, 17))     # 15M and 21M are interpolated, not quoted
+OFF_SRC_ROWS = tuple(range(6, 17))                                      # Forward!AO6:AO16 - FX swap implied
+XCCY_SRC_ROWS = tuple(range(17, 27))                                    # Forward!AO17:AO26 - cross currency
+
+
+def _sources_check(model: Model) -> None:
+    """The quotes the source order takes over: the OIS page's GFOF-then-plain chain, the offshore and XCCY
+    tables' single BID / ASK calls on the Forward sheet's tickers."""
+    _need_sheets(model, "OIS_MAIN", "Forward")
+    for r in OIS_SRC_ROWS:
+        f = _need_formula(model, "OIS_MAIN", "B%d" % r, 'J%d&" GFOF Curncy","MID"' % r)
+        if 'J%d&" Curncy","PX_LAST"' % r not in f:
+            raise ValueError("OIS_MAIN!B%d beklenen formül değil" % r)
+    for a in ("AU13", "AU14"):
+        _need_formula(model, "OIS_MAIN", a, ' GFOF Curncy","MID")/100')
+    for r in OFF_SRC_ROWS + (17,):
+        for col, fld in (("I", "BID"), ("K", "ASK")):
+            if _need_formula(model, "Forward", "%s%d" % (col, r)).replace("$", "") != '_xll.BDP(AO%d,"%s")' % (r, fld):
+                raise ValueError("Forward!%s%d beklenen formül değil" % (col, r))
+    for r in XCCY_SRC_ROWS:
+        for col, fld in (("D", "BID"), ("F", "ASK")):
+            at = "%s%d" % (col, r + 108)
+            if _need_formula(model, "Forward", at).replace("$", "") != '_xll.BDP(AO%d,"%s")' % (r, fld):
+                raise ValueError("Forward!%s beklenen formül değil" % at)
+
+
+def _tto_sources(model: Model) -> None:
+    """Which Bloomberg pricing source the live curves are read from - an ordered list per curve, shared by
+    everyone and kept on the settings page: the first source that has a price is used, the workbook's own
+    ticker (BGN) always comes last.  The OIS page used to try GFOF and then the ticker without a source; the
+    offshore and XCCY tables read the BGN tickers only.  Now:
+
+    * ``EK_KAYNAK!B4:E6`` - the lists (OIS: GFOF, offshore: ICPL, XCCY: ICPL by default);
+    * one row per quoted tenor below: every source's price, the first that has one, its ticker - and the
+      workbook's own call, which keeps the value Excel saved (offline the page shows the saved file);
+    * the cells of the OIS page and of the Forward sheet that read the quotes now read the chosen ticker.
+
+    An offshore source is taken only when it has both a bid and an ask (a row never mixes two sources)."""
+    b = SheetBuilder(model, SRC_SHEET)
+    b.title("A1", "VERİ KAYNAKLARI  ·  Bloomberg fiyat kaynağı sırası: soldan sağa ilk fiyat veren kaynak kullanılır, "
+                  "en sonda her zaman Excel'deki ticker (BGN)")
+    b.head("A3", ["Eğri", "1. kaynak", "2. kaynak", "3. kaynak", "4. kaynak", "Son yedek (her zaman)"])
+    for _, title, row, first, fallback in SRC_LISTS:
+        b.set("A%d" % row, title, bold=True)
+        b.input("B%d" % row, first)
+        for col in SRC_COLS[1:]:
+            b.input("%s%d" % (col, row), None)
+        b.set("F%d" % row, fallback, color=NOTE_COLOR)
+    b.note("A7", "Kaynak kodu Bloomberg'in fiyat kaynağıdır (GFOF, ICPL, BGN, CMPN, TRPU …): ticker kök + kaynak + Curncy olarak sorulur. "
+                 "OIS'te önce MID, yoksa PX_LAST; offshore ve XCCY'de bid ve ask'in ikisi de olan kaynak alınır. Değişiklik herkes için geçerlidir; "
+                 "tarihçe de aynı sırayı kullanır (yedek kaynak yalnızca ana kaynağın boş günlerini doldurur).")
+    b.title("A9", "ŞU AN KULLANILAN KAYNAK  ·  her vade için")
+    b.head("A10", ["Eğri", "Vade", "Excel ticker'ı", "Kullanılan kaynak", "Kullanılan ticker", "Sıra", "Excel bid / değer",
+                   "Excel ask", "Değer · bid", "Değer · ask", None, None, None, "1. kaynak", "2. kaynak", "3. kaynak",
+                   "4. kaynak", "Kök"])
+    k = SRC_FIRST
+    rows = []                                                   # (status row, kind, list row, consumer cells)
+    for label, root in (("1W", "TYSO1Z"), ("2W", "TYSO2Z")):
+        rows.append((k, "ois", 4, ("OIS_MAIN", "AU%d" % (13 if label == "1W" else 14)), label, root))
+        k += 1
+    for r in OIS_SRC_ROWS:
+        rows.append((k, "ois", 4, ("OIS_MAIN", "B%d" % r), "=OIS_MAIN!$A$%d" % r, "=OIS_MAIN!$J$%d" % r))
+        k += 1
+    for r in OFF_SRC_ROWS:
+        rows.append((k, "off", 5, r, "=Forward!$H$%d" % r, None))
+        k += 1
+    for r in XCCY_SRC_ROWS:
+        rows.append((k, "xccy", 6, r, "=Forward!$C$%d" % (r + 108), None))
+        k += 1
+    titles = {kind: title for kind, title, _, _, _ in SRC_LISTS}
+    fwd = SheetBuilder(model, "Forward")
+    ois = SheetBuilder(model, "OIS_MAIN")
+    for k, kind, lr, where, tenor, root in rows:
+        f = {"k": k, "lr": lr}
+        b.set("A%d" % k, titles[kind])
+        b.set("B%d" % k, tenor, bold=True, align="center")
+        if kind == "ois":
+            if root.startswith("="):
+                b.set("R%d" % k, root)
+                b.set("C%d" % k, '=$R%d&" Curncy"' % k)
+            else:
+                b.set("R%d" % k, root)
+                b.set("C%d" % k, "%s Curncy" % root)
+            for n, col in enumerate("NOPQ"):
+                f["s"] = "$%s$%d" % (SRC_COLS[n], lr)
+                t = '$R%(k)d&" "&TRIM(%(s)s)&" Curncy"' % f
+                b.set("%s%d" % (col, k), '=IF(LEN(TRIM(%s&""))<2,"",IF(ISNUMBER(_xll.BDP(%s,"MID")),_xll.BDP(%s,"MID"),_xll.BDP(%s,"PX_LAST")))'
+                      % (f["s"], t, t, t), fmt="0.0000")
+            b.set("G%d" % k, '=_xll.BDP($C%d,"PX_LAST")' % k, fmt="0.0000")
+            b.set("I%d" % k, '=IF($F%(k)d>4,$G%(k)d,INDEX($N%(k)d:$Q%(k)d,$F%(k)d))' % f, fmt="0.0000", bold=True)
+            sheet, addr = where
+            ois.patch(addr, '=LET(t,%s!$E$%d,IF(%s!$F$%d>4,_xll.BDP(t,"PX_LAST"),IF(ISNUMBER(_xll.BDP(t,"MID")),'
+                            '_xll.BDP(t,"MID"),_xll.BDP(t,"PX_LAST"))))/100' % (SRC_SHEET, k, SRC_SHEET, k))
+        else:
+            r = where
+            b.set("C%d" % k, "=Forward!$AO$%d" % r)
+            b.set("R%d" % k, '=IFERROR(LEFT($C%(k)d,FIND(" ",$C%(k)d)-1),$C%(k)d)' % f)
+            for n, col in enumerate("NOPQ"):
+                f["s"] = "$%s$%d" % (SRC_COLS[n], lr)
+                t = '$R%(k)d&" "&TRIM(%(s)s)&" Curncy"' % f
+                b.set("%s%d" % (col, k), '=IF(LEN(TRIM(%s&""))<2,"",IF(AND(ISNUMBER(_xll.BDP(%s,"BID")),ISNUMBER(_xll.BDP(%s,"ASK"))),'
+                                         '_xll.BDP(%s,"BID"),""))' % (f["s"], t, t, t), fmt="0.0000")
+            # the workbook's own calls, with what Excel saved for them (the offline value of the page)
+            bid_at, ask_at = ("I%d" % r, "K%d" % r) if kind == "off" else ("D%d" % (r + 108), "F%d" % (r + 108))
+            b.set("G%d" % k, '=_xll.BDP(Forward!$AO$%d,"BID")' % r, fmt="0.0000")
+            b.set("H%d" % k, '=_xll.BDP(Forward!$AO$%d,"ASK")' % r, fmt="0.0000")
+            b.recorded("G%d" % k, recorded_value(model, "Forward", bid_at))
+            b.recorded("H%d" % k, recorded_value(model, "Forward", ask_at))
+            b.set("I%d" % k, '=IF($F%(k)d>4,$G%(k)d,_xll.BDP($E%(k)d,"BID"))' % f, fmt="0.0000", bold=True)
+            b.set("J%d" % k, '=IF($F%(k)d>4,$H%(k)d,_xll.BDP($E%(k)d,"ASK"))' % f, fmt="0.0000", bold=True)
+            consumers = [(bid_at, "BID", "G"), (ask_at, "ASK", "H")]
+            if r == 17:                                             # 12M of the offshore table is the 1Y cross currency swap
+                consumers += [("I17", "BID", "G"), ("K17", "ASK", "H")]
+            for at, fld, col in consumers:
+                fwd.patch(at, '=IF(%s!$F$%d>4,%s!$%s$%d,_xll.BDP(%s!$E$%d,"%s"))' % (SRC_SHEET, k, SRC_SHEET, col, k, SRC_SHEET, k, fld))
+        b.set("F%d" % k, '=IF(ISNUMBER($N%(k)d),1,IF(ISNUMBER($O%(k)d),2,IF(ISNUMBER($P%(k)d),3,IF(ISNUMBER($Q%(k)d),4,5))))' % f, fmt="0")
+        b.set("D%d" % k, '=IF($F%(k)d>4,"Excel (BGN)",TRIM(INDEX($B$%(lr)d:$E$%(lr)d,$F%(k)d)))' % f, bold=True)
+        b.set("E%d" % k, '=IF($F%(k)d>4,$C%(k)d,$R%(k)d&" "&$D%(k)d&" Curncy")' % f)
+    b.note("A%d" % (k + 2), "Sıra 1–4: listedeki kaynak; 5: Excel'deki ticker. Değer: OIS'te yüzde (sayfa /100 ile kullanır), offshore ve XCCY'de bid / ask. "
+                            "Canlıda kaynak yanıt verene kadar (Requesting) bir sonraki kaynak görünür.")
+
+
+# ---------------------------------------------------------------------------------------------- ASW against FX swaps
+FXC_SHEET = "EK_FX"
+FXC_FIRST = 6                     # first tenor row
+# the tenors of the ASW sheet's OIS curve (ASW!C64:R64) and the offshore ticker of each: the FX swap implied yields
+# up to 18 months, the cross currency swaps after
+FXC_ROOTS = ("TRYI1M", "TRYI2M", "TRYI3M", "TRYI6M", "TRYI9M", "TRYI12M", "TRYI18M", "TRYSAQ2", "TRYSAQ3", "TRYSAQ4",
+             "TRYSAQ5", "TRYSAQ6", "TRYSAQ7", "TRYSAQ8", "TRYSAQ9", "TRYSAQ10")
+
+
+def _asw_fx_check(model: Model) -> None:
+    """The ASW sheet's curve: the OIS quotes of today in C65:R65 (16 tenors) that its discount factors are built from."""
+    _need_sheets(model, "ASW")
+    _need_formula(model, "ASW", "BT65", "$C65")
+    for k in range(16):
+        col = index_to_col(3 + k)                      # C .. R
+        _need_formula(model, "ASW", "%s65" % col, 'BDP(%s$63&" GFOF Curncy","MID")' % col)
+
+
+def _asw_fx(model: Model) -> None:
+    """The TRY curve the FX swaps imply, tenor by tenor where the ASW sheet's OIS curve has its quotes - the
+    second curve of the ASW table: the dashboard prices every bond off it as well (the sheet's own formulas, the
+    OIS quotes of C65:R65 swapped for these) and shows ASW against FX swaps next to ASW against OIS.
+
+    Each tenor: the ticker root (typed over freely), the first of the two pricing sources that has a price - MID,
+    else the middle of bid and ask -, and the OIS quote of the same tenor."""
+    b = SheetBuilder(model, FXC_SHEET)
+    b.title("A1", "FX SWAP İMA TRY EĞRİSİ  ·  ASW'nin ikinci eğrisi: offshore TRY faizi (18 aya kadar FX swap ima, sonra XCCY)")
+    b.row("A3", ["Kaynaklar (sırayla)"], bold=True)
+    b.input("B3", "ICPL")
+    b.input("C3", "BGN")
+    b.note("D3", "İlk fiyat veren kaynak kullanılır: önce MID, yoksa bid–ask ortası. Ticker kökü sarı hücrede (yalnız kök: TRYI1M, TRYSAQ2 …).")
+    b.head("A5", ["Vade", "Ticker kökü", "Kullanılan ticker", "FX ima (%)", "OIS (%)", "FX − OIS (bp)", "1. kaynak", "2. kaynak"])
+    for k, root in enumerate(FXC_ROOTS):
+        r = FXC_FIRST + k
+        col = index_to_col(3 + k)
+        f = {"r": r, "col": col}
+        b.set("A%d" % r, "=ASW!%s$64" % col, bold=True, align="center")
+        b.input("B%d" % r, root)
+
+        def price(src: str) -> str:
+            t = 'TRIM($B%(r)d)&" "&TRIM(%(s)s)&" Curncy"' % dict(f, s=src)
+            return ('IF(LEN(TRIM(%(s)s&""))<2,NA(),IF(ISNUMBER(_xll.BDP(%(t)s,"MID")),_xll.BDP(%(t)s,"MID"),'
+                    'IFERROR((_xll.BDP(%(t)s,"BID")+_xll.BDP(%(t)s,"ASK"))/2,NA())))') % {"s": src, "t": t}
+
+        b.set("G%d" % r, "=" + price("$B$3"), fmt="0.000")
+        b.set("H%d" % r, "=" + price("$C$3"), fmt="0.000")
+        b.set("D%d" % r, '=IF(ISNUMBER($G%(r)d),$G%(r)d,IF(ISNUMBER($H%(r)d),$H%(r)d,NA()))' % f, fmt="0.000", bold=True)
+        b.set("C%d" % r, '=IF(ISNUMBER($G%(r)d),TRIM($B%(r)d)&" "&TRIM($B$3)&" Curncy",IF(ISNUMBER($H%(r)d),TRIM($B%(r)d)&" "&TRIM($C$3)&" Curncy","yok"))' % f)
+        b.set("E%d" % r, "=ASW!%s$65" % col, fmt="0.000")
+        b.set("F%d" % r, '=IFERROR(($D%(r)d-$E%(r)d)*100,"")' % f, fmt="0.0")
+    b.note("A%d" % (FXC_FIRST + len(FXC_ROOTS) + 1),
+           "ASW tablosundaki 'ASW FX' sütunu: kâğıt, OIS kotaları yerine bu faizlerle kurulan eğriyle (sayfanın kendi iskonto ve annuity formülleriyle) "
+           "fiyatlanır. Fiyatı olmayan vadede OIS kotası kullanılır. FX ima faizleri basit TRY para piyasası faizi, XCCY'ler TRY sabit / USD değişken "
+           "swap faizidir; OIS gibi par faiz olarak kullanılır.")
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
+    "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
     "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
-            (VH_SHEET, _viop_hist_check, _tto_viop_history)),
+            (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
+            (SRC_SHEET, _sources_check, _tto_sources)),
 }
 
 

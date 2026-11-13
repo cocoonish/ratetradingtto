@@ -3,7 +3,7 @@
 // its time and sender, and shown twice: as a board of where every instrument stands - next to the dashboard's
 // own curve - and as the chat in the order it was said.  Shared by every user, like the blotter.
 import { api } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, debounce } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, debounce, modal } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { num, isoToTr } from '../format.js';
 
@@ -18,6 +18,27 @@ const FLAG = {
   standing: ['kotadan', '', 'Mesajda fiyat yok ("taken", "given"): o an duran offer / bid seviyesi alındı'],
 };
 const KNOWN = 'Bu satır zaten kayıtlı – yeniden eklenmez';
+const PARTY = { biz: 'Biz', broker: 'Broker' };
+
+/** A small Broker / Biz switch (an empty value: not said yet). */
+function partySeg(value, onChange, id) {
+  const el = h('div', { class: 'seg party', id: id || null });
+  for (const [v, label, title] of [['broker', 'Broker', 'Broker\'ın fiyatı: piyasa'], ['biz', 'Biz', 'Bizim masanın fiyatı']]) {
+    const b = h('button', { type: 'button', title }, label);
+    b.dataset.v = v;
+    b.classList.toggle('on', v === value);
+    b.addEventListener('click', () => { for (const x of el.children) x.classList.toggle('on', x === b); onChange(v); });
+    el.appendChild(b);
+  }
+  return el;
+}
+
+/** Whose a line is, as a short word: "Biz", or the broker's house (or "Broker"). */
+function owner(q) {
+  if (q.party === 'biz') return 'Biz';
+  if (q.party === 'broker') return q.source || 'Broker';
+  return q.source || '';
+}
 const EXAMPLES = [
   ['12:15:38 18m ois 35.03/35.23', 'outright, iki taraf'],
   ['12:10:07 18m ois /35.23 offer', 'yalnızca offer (bid yok)'],
@@ -32,6 +53,8 @@ const EXAMPLES = [
   ['ref 18m ois offer', 'offer geri çekildi'],
   ['2yr ois 35.46, oco with 18m 35.14 offer', 'iki offer, biri öbürünü iptal eder'],
   ['1yr x 38.60/80', 'cross-currency ("x")'],
+  ['t/n 375/90', 'FX swap puanı (o/n, t/n, s/n): 375 / 390 – yanında ima TRY faizi'],
+  ['fx 2m 25 500/', 'FX swap 2M, puan (binler boşlukla ya da noktayla: 25.500)'],
 ];
 
 /** A level as it is quoted: per cent with at least two decimals, basis points with as many as were typed. */
@@ -41,6 +64,10 @@ export function level(v, unit) {
   const most = unit === 'pct' ? 4 : 2;
   while (d < most && Math.abs(v * 10 ** d - Math.round(v * 10 ** d)) > 1e-7) d += 1;
   return num(v, d, false);
+}
+
+function pref(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
 }
 
 function fold(text) {
@@ -61,8 +88,44 @@ export function eventText(q) {
 }
 
 function kindText(q) {
-  return q.ok === false ? '' : (KIND[q.kind] || q.kind || '') + (q.unit === 'bp' ? ' (bp)' : '');
+  if (q.ok === false) return '';
+  if (q.product === 'FX') return 'FX swap (puan)';
+  return (KIND[q.kind] || q.kind || '') + (q.unit === 'bp' ? ' (bp)' : '');
 }
+
+/** The TRY rate an FX swap quote in points stands for: "31,31 / 31,67" (bid / ask), or the trade's / the last one's. */
+function impliedText(q, last) {
+  const m = q.implied;
+  if (!m) return '';
+  const r = (v) => (typeof v === 'number' ? num(v, 2, false) : '');
+  if (typeof m.bid === 'number' || typeof m.ask === 'number') return r(m.bid) + ' / ' + r(m.ask);
+  return r(last ? m.last : m.price);
+}
+
+function impliedTip(q) {
+  const m = q.implied;
+  if (!m) return '';
+  return 'FX swap puanının ima ettiği TRY faizi (ACT/360): ' + q.label + ' · ' + num(m.days, 0) + ' gün · USD ' + num(m.usd, 3, false)
+    + '% · spot ' + num(m.spot, 4, false) + ' – Forward sayfasının spot, vade günü ve USD faiziyle; bid tarafı USD ask\'iyle, ask tarafı USD bid\'iyle';
+}
+
+/** The log's columns (after the date column of a range) and what each one sorts by. */
+const LOG_COLUMNS = ['time', 'sender', 'party', 'raw', 'label', 'kind', 'bid', 'ask', 'price', 'event', 'model', 'note', 'implied'];
+const LOG_SORT = {
+  time: (q) => (q.date || '') + ' ' + (q.time || ''),
+  sender: (q) => q.sender || '',
+  party: (q) => (q.party === 'biz' ? 'Biz' : (q.source || (q.party ? 'Broker' : ''))),
+  raw: (q) => q.raw || '',
+  label: (q) => (q.ok ? (q.product === 'OIS' ? '' : q.product + ' ') + q.label : ''),
+  kind: (q) => (q.ok ? (KIND[q.kind] || q.kind || '') : ''),
+  bid: (q) => (typeof q.bid === 'number' ? q.bid : null),
+  ask: (q) => (typeof q.ask === 'number' ? q.ask : null),
+  price: (q) => (q.ok && typeof q.price === 'number' ? q.price : null),
+  event: (q) => eventText(q),
+  model: (q) => (q.ok && typeof q.model === 'number' ? q.model : null),
+  note: (q) => q.note || '',
+  implied: (q) => (q.implied ? (typeof q.implied.bid === 'number' ? q.implied.bid : (typeof q.implied.ask === 'number' ? q.implied.ask : q.implied.price)) : null),
+};
 
 export class BrokerPage {
   constructor(host, ctx) {
@@ -78,6 +141,10 @@ export class BrokerPage {
     this.only = null;             // log: one instrument ({key, label}) ...
     this.find = '';               // ... and / or a search text
     this.quotesOnly = false;
+    this.partyFilter = 'all';     // log: every line, the brokers' or ours
+    this.picked = new Set();      // log: the lines ticked (to delete them together)
+    this.logSort = (() => { try { return JSON.parse(localStorage.getItem('tto.broker.sort') || 'null'); } catch (e) { return null; } })();
+    this.pasteParty = pref('tto.broker.party', 'broker');      // whose the lines of a paste are when no name says it
     this.seq = 0;
     this.parsed = null;
     this.preview = debounce(() => this.doPreview(), 240);
@@ -159,7 +226,10 @@ export class BrokerPage {
         toast(res.name + ' indirildi', 'ok', 3200);
       } catch (err) { errorToast(err); } finally { this.exportBtn.disabled = false; }
     });
-    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Gün'), this.dateSel, this.todayBtn, range, this.exportBtn,
+    const people = h('button', { class: 'btn sm', type: 'button', id: 'broker-people',
+      title: 'Chat\'lerde yazan isimler: hangisi bizim masa, hangisi hangi broker – herkes için kaydedilir' }, 'İsimler · kaynaklar');
+    people.addEventListener('click', () => this.openPeople().catch(errorToast));
+    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Gün'), this.dateSel, this.todayBtn, range, this.exportBtn, people,
       h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Kaydedilen kotalar tüm kullanıcılarda anında görünür')));
     this.dayNote = h('div', { class: 'banner hidden' });
     this.host.appendChild(this.dayNote);
@@ -172,7 +242,15 @@ export class BrokerPage {
     this.text.addEventListener('input', () => { this.draft = this.text.value; this.preview(); });
     this.text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.save(); } });
     this.source = h('input', { type: 'text', id: 'broker-source', class: 'inp', maxlength: '40', placeholder: 'örn. Tullett', list: 'broker-sources',
-      autocomplete: 'off', title: 'Chat\'in kimden / hangi kurumdan olduğu – her satırla birlikte saklanır' });
+      autocomplete: 'off', title: 'İsmi listede olmayan satırların kaynağı (kurum) – her satırla birlikte saklanır. Listedeki isimler kendi kaynağıyla gelir.' });
+    this.source.addEventListener('input', () => this.preview());
+    this.partyBox = partySeg(this.pasteParty, (v) => {
+      this.pasteParty = v;
+      try { localStorage.setItem('tto.broker.party', v); } catch (e) { /* ignore */ }
+      this.preview();
+    }, 'broker-party');
+    this.partyBox.title = 'İsmi listede olmayan (ya da hiç ismi olmayan) satırlar kimin: broker fiyatı mı, bizim fiyatımız mı';
+    this.namesBox = h('div', { class: 'chatnames hidden', id: 'broker-names' });
     try { this.source.value = localStorage.getItem('tto.broker.source') || ''; } catch (e) { /* ignore */ }
     this.sources = h('datalist', { id: 'broker-sources' });
     this.entryDate = h('input', { type: 'date', id: 'broker-date', class: 'inp',
@@ -201,8 +279,10 @@ export class BrokerPage {
       h('div', { class: 'pad form' }, this.text,
         h('div', { class: 'chatrow' },
           h('div', { class: 'field' }, h('label', { for: 'broker-source' }, 'Kaynak'), this.source, this.sources),
+          h('div', { class: 'field party' }, h('label', null, 'Taraf'), this.partyBox),
           h('div', { class: 'field' }, h('label', { for: 'broker-date' }, 'Tarih'), this.entryDate),
           h('label', { class: 'check', title: 'Kapalıyken yalnızca enstrüman içeren satırlar saklanır' }, this.keepTexts, ' Metin satırlarını da sakla')),
+        this.namesBox,
         this.previewBox,
         h('div', { class: 'chatrow actions' }, this.summary, h('span', { class: 'grow' }), wipe, this.saveBtn),
         help));
@@ -216,7 +296,11 @@ export class BrokerPage {
       seg.appendChild(b);
     }
     this.productSeg = seg;
-    this.board = this.panel('board', 'Tahta · son durum', [seg],
+    const resetBtn = h('button', { class: 'btn sm', type: 'button', id: 'broker-reset',
+      title: 'Tahtadaki bütün kotaları şu andan itibaren sıfırla – kayıttaki satırlar silinmez; sonra söylenenler tahtaya yeniden gelir' }, 'Tahtayı sıfırla');
+    resetBtn.addEventListener('click', () => this.reset(null));
+    this.resetInfo = h('span', { class: 'muted resetinfo', id: 'broker-reset-info' });
+    this.board = this.panel('board', 'Tahta · son durum', [seg, this.resetInfo, resetBtn],
       'Bid / ask: en son söylenen kota (geri çekilen taraf boş). Model: dashboard\'un kendi TRY OIS eğrisi (sizin senaryonuzla); '
       + 'farklar baz puan – bid model\'in üstünde ya da ask model\'in altındaysa vurgulanır.');
     // ---- log: the chat in the order it was said
@@ -228,7 +312,17 @@ export class BrokerPage {
     this.quotesBox = h('input', { type: 'checkbox', id: 'broker-quotes' });
     this.quotesBox.checked = this.quotesOnly;
     this.quotesBox.addEventListener('change', () => { this.quotesOnly = this.quotesBox.checked; this.fillLog(); });
-    this.log = this.panel('log', 'Kayıt · söylendiği sırayla', [this.onlyBtn, this.findInp,
+    const whose = h('div', { class: 'seg', id: 'broker-whose' });
+    for (const [v, label] of [['all', 'Tümü'], ['broker', 'Broker'], ['biz', 'Biz']]) {
+      const b = h('button', { type: 'button' }, label);
+      b.dataset.v = v;
+      b.classList.toggle('on', v === this.partyFilter);
+      b.addEventListener('click', () => { this.partyFilter = v; for (const x of whose.children) x.classList.toggle('on', x === b); this.fillLog(); });
+      whose.appendChild(b);
+    }
+    this.delPicked = h('button', { class: 'btn sm danger hidden', type: 'button', id: 'broker-del-picked' });
+    this.delPicked.addEventListener('click', () => this.removePicked());
+    this.log = this.panel('log', 'Kayıt · söylendiği sırayla', [this.delPicked, this.onlyBtn, whose, this.findInp,
       h('label', { class: 'check' }, this.quotesBox, ' Yalnızca kotalar')]);
     // entry and board side by side, the chat itself across the page below them
     this.host.appendChild(h('div', { class: 'broker' }, h('div', { class: 'entrycol' }, entry), h('div', { class: 'boardcol' }, this.board.el),
@@ -305,19 +399,72 @@ export class BrokerPage {
     const diff = (v, through) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, 1, false), v, k: 'n', cls: through ? 'thru' : '',
       tip: through ? 'Kota model seviyesinin öbür tarafında' : '' } : { t: '', k: '' });
     const board = d.board.filter((r) => this.product === 'all' || r.product === this.product);
+    const ours = (r) => (typeof r.our_bid === 'number' || typeof r.our_ask === 'number'
+      ? { t: (typeof r.our_bid === 'number' ? level(r.our_bid, r.unit) : '') + ' / ' + (typeof r.our_ask === 'number' ? level(r.our_ask, r.unit) : ''),
+        k: 's', cls: 'ours', tip: 'Bizim son kotamız · ' + when(r.our_time) } : { t: '', k: '' });
     this.setGrid('board', this.board,
-      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Ask', 'Saat', 'Son işlem', 'Model', 'Bid − model (bp)', 'Ask − model (bp)', 'Son mesaj', ''],
+      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Ask', 'Saat', 'Son işlem', 'Bizim kota', 'Model', 'Bid − model (bp)', 'Ask − model (bp)', 'Son mesaj', 'TRY % (ima)', '', ''],
       board.map((r) => [r.product, { t: r.label, k: 's', b: 1 }, kindText(r),
         side(r.bid, r.unit, r.bid_time, 'Bid'), side(r.ask, r.unit, r.ask_time, 'Ask'),
-        when(r.time), typeof r.last === 'number' ? { t: level(r.last, r.unit), v: r.last, k: 'n', cls: r.last_side === 'ask' ? 'buy' : (r.last_side === 'bid' ? 'sell' : ''),
-          tip: when(r.last_time) + (r.last_side === 'ask' ? ' · offer alındı' : (r.last_side === 'bid' ? ' · bid\'e verildi' : '')) } : { t: '', k: '' },
+        when(r.time), typeof r.last === 'number' ? { t: level(r.last, r.unit) + (r.last_by === 'biz' ? ' · biz' : ''), v: r.last, k: 'n',
+          cls: r.last_side === 'ask' ? 'buy' : (r.last_side === 'bid' ? 'sell' : ''),
+          tip: when(r.last_time) + (r.last_side === 'ask' ? ' · offer alındı' : (r.last_side === 'bid' ? ' · bid\'e verildi' : ''))
+            + (r.last_by === 'biz' ? ' · bizim işlemimiz' : '') } : { t: '', k: '' },
+        ours(r),
         typeof r.mid === 'number' ? { t: num(r.mid, r.unit === 'pct' ? 2 : 1, false), v: r.mid, k: 'n', cls: 'soft' } : { t: '', k: '' },
         diff(r.bid_diff, r.bid_diff > 0), diff(r.ask_diff, r.ask_diff < 0), { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
-        { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } }]),
+        r.implied ? { t: impliedText(r) || impliedText(r, true), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' },
+        { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
+        { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }]),
       d.board.length ? board.length + ' enstrüman' : '', d.board.length ? 'Bu üründe kota yok' : 'Henüz kota yok – soldaki kutuya chat\'i yapıştırın',
-      JSON.stringify([d.ranged, board.map((r) => [r.key, r.bid, r.ask, r.last, r.last_side, r.bid_time, r.ask_time, r.last_time, r.time, r.said,
-        typeof r.mid === 'number'])]));
+      JSON.stringify([d.ranged, board.map((r) => [r.key, r.bid, r.ask, r.last, r.last_side, r.last_by, r.bid_time, r.ask_time, r.last_time, r.time, r.said,
+        r.our_bid, r.our_ask, r.our_time, typeof r.mid === 'number', impliedText(r)])]));
+    // resets of the board in what is shown, the last one can be taken back
+    clear(this.resetInfo);
+    const resets = d.resets || [];
+    if (resets.length) {
+      const last = resets[resets.length - 1];
+      const undo = h('button', { class: 'linkbtn', type: 'button', id: 'broker-reset-undo', title: 'Son sıfırlamayı geri al' }, 'geri al');
+      undo.addEventListener('click', () => this.reset(null, true, last.at.slice(0, 10)));
+      this.resetInfo.append('Sıfırlandı: ' + resets.slice(-3).map((x) => (d.ranged ? isoToTr(x.at.slice(0, 10)).slice(0, 5) + ' ' : '') + x.at.slice(11, 16)
+        + (x.key === '*' ? '' : ' (' + (x.label || 'tek') + ')')).join(', ') + ' · ', undo);
+    }
     this.fillLog();
+  }
+
+  async reset(r, undo, day) {
+    const d = this.data;
+    if (!undo) {
+      const ok = await confirmDialog('Tahtayı sıfırla', (r ? r.label + ' için' : 'Tahtadaki') + ' şu ana kadar söylenen kotalar tahtadan kalkar; kayıttaki satırlar '
+        + 'silinmez, sonra söylenenler tahtaya yeniden gelir. ' + (d.is_today ? '' : 'Bugün olmayan bir günde o günün tamamı sıfırlanır. ') + 'Devam edilsin mi?', 'Sıfırla');
+      if (!ok) return;
+    }
+    try {
+      await api.post('/api/broker/reset', { date: day || (d.ranged ? d.to : d.date), key: r ? r.key : null, undo: !!undo });
+      toast(undo ? 'Sıfırlama geri alındı' : (r ? r.label + ' sıfırlandı' : 'Tahta sıfırlandı') , 'ok');
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); }
+  }
+
+  updatePicked() {
+    const ids = new Set((this.data.rows || []).map((q) => q.id));
+    for (const id of [...this.picked]) if (!ids.has(id)) this.picked.delete(id);
+    const n = this.picked.size;
+    this.delPicked.textContent = 'Seçilenleri sil (' + n + ')';
+    this.delPicked.classList.toggle('hidden', !n);
+  }
+
+  async removePicked() {
+    const ids = [...this.picked];
+    if (!ids.length) return;
+    const ok = await confirmDialog('Seçilenleri sil', ids.length + ' satır silinsin mi? Silinen satırlar tüm kullanıcılardan kalkar.', 'Sil', true);
+    if (!ok) return;
+    try {
+      const res = await api.post('/api/broker/delete', { ids });
+      this.picked.clear();
+      toast(res.deleted + ' satır silindi', 'ok');
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); }
   }
 
   showOnly(r) {
@@ -326,26 +473,72 @@ export class BrokerPage {
     this.log.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
+  /** The order of the log: a column and a direction (the time, oldest first, unless a caption was clicked). */
+  logOrder(rows) {
+    const s = this.logSort || { key: 'time', dir: 1 };
+    const key = LOG_SORT[s.key] || LOG_SORT.time;
+    const time = LOG_SORT.time;
+    return rows.map((q, i) => [q, i]).sort((a, b) => {
+      const x = key(a[0]), y = key(b[0]);
+      let c = 0;
+      if (x === y) c = 0;
+      else if (x === null || x === undefined || x === '') c = 1;                  // empty cells last, whichever way
+      else if (y === null || y === undefined || y === '') c = -1;
+      else c = (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'tr')) * s.dir;
+      if (!c) c = time(a[0]).localeCompare(time(b[0])) * (s.key === 'time' ? s.dir : 1) || a[1] - b[1];
+      return c;
+    }).map((x) => x[0]);
+  }
+
+  /** Tick every line shown (or, when they all are, none). */
+  pickAll() {
+    const shown = this.shownIds || [];
+    const all = shown.length > 0 && shown.every((id) => this.picked.has(id));
+    for (const id of shown) { if (all) this.picked.delete(id); else this.picked.add(id); }
+    this.fillLog();
+  }
+
+  sortLog(column) {
+    const key = LOG_COLUMNS[column];
+    if (!key) return;
+    const s = this.logSort || { key: 'time', dir: 1 };
+    this.logSort = { key, dir: s.key === key ? -s.dir : (key === 'time' ? -1 : 1) };
+    try { localStorage.setItem('tto.broker.sort', JSON.stringify(this.logSort)); } catch (e) { /* private window */ }
+    this.fillLog();
+  }
+
   fillLog() {
     const d = this.data;
     const needle = fold(this.find).trim();
     this.onlyBtn.classList.toggle('hidden', !this.only);
     this.onlyBtn.textContent = this.only ? 'Yalnızca ' + this.only.label + ' ✕' : '';
-    const rows = d.rows.filter((q) => {
+    const kept = d.rows.filter((q) => {
       if (this.only && q.key !== this.only.key) return false;
       if (this.quotesOnly && !q.ok) return false;
+      if (this.partyFilter === 'biz' && q.party !== 'biz') return false;
+      if (this.partyFilter === 'broker' && q.party === 'biz') return false;
       if (!needle) return true;
       return fold([q.raw, q.label, q.product, KIND[q.kind], q.sender, q.source, eventText(q), q.note].join(' ')).includes(needle);
     });
-    const dayHead = d.ranged ? ['Tarih'] : [];
+    const rows = this.logOrder(kept);
+    this.shownIds = rows.map((q) => q.id);
+    const s = this.logSort || { key: 'time', dir: 1 };
+    const arrow = (key) => (s.key === key ? (s.dir > 0 ? ' ▲' : ' ▼') : '');
+    const dayHead = (d.ranged ? ['Tarih' + arrow('time')] : []);
+    const allOn = rows.length > 0 && rows.every((q) => this.picked.has(q.id));
     const lv = (q, v) => (typeof v === 'number' ? { t: level(v, q.unit), v, k: 'n' } : { t: '', k: '' });
     const stamp = (q) => 'Giren: ' + (this.ctx.displayName(q.created_by) || '?') + (q.created_at ? ' · ' + q.created_at.replace('T', ' ').slice(0, 19) : '')
       + (q.timed === false ? '\nMesajda saat yoktu: girildiği an yazıldı' : '');
     this.setGrid('log', this.log,
-      dayHead.concat(['Saat', 'Kimden', 'Mesaj', 'Enstrüman', 'Tür', 'Bid', 'Ask', 'İşlem / seviye', 'Olay', 'Model (girişte)', 'Not', '']),
-      rows.map((q) => (d.ranged ? [{ t: isoToTr(q.date), k: 's' }] : []).concat([
+      [allOn ? '☑' : '☐'].concat(dayHead).concat(['Saat' + (d.ranged ? '' : arrow('time')), 'Kimden' + arrow('sender'), 'Taraf' + arrow('party'), 'Mesaj' + arrow('raw'),
+        'Enstrüman' + arrow('label'), 'Tür' + arrow('kind'), 'Bid' + arrow('bid'), 'Ask' + arrow('ask'), 'İşlem / seviye' + arrow('price'),
+        'Olay' + arrow('event'), 'Model (girişte)' + arrow('model'), 'Not' + arrow('note'), 'TRY % (ima)' + arrow('implied'), '']),
+      rows.map((q) => [{ t: '', k: '', cls: 'tick', chk: { on: this.picked.has(q.id), title: 'Seç (seçilenleri birlikte silmek için)',
+        fn: (on) => { if (on) this.picked.add(q.id); else this.picked.delete(q.id); this.updatePicked(); } } }]
+        .concat(d.ranged ? [{ t: isoToTr(q.date), k: 's' }] : []).concat([
         { t: q.time, k: 's', cls: q.timed === false ? 'soft' : '', tip: stamp(q) },
-        [q.sender, q.source].filter(Boolean).join(' · '), { t: q.raw || '', k: 's', cls: 'said', tip: q.raw || '' },
+        q.sender || '', { t: owner(q), k: 's', cls: q.party === 'biz' ? 'ours' : '', tip: q.party ? (q.party === 'biz' ? 'Bizim fiyatımız' : 'Broker fiyatı') : 'Taraf belli değil' },
+        { t: q.raw || '', k: 's', cls: 'said', tip: q.raw || '' },
         q.ok ? { t: (q.product === 'OIS' ? '' : q.product + ' ') + q.label, k: 's', b: 1 } : '', kindText(q),
         lv(q, q.bid), lv(q, q.ask), q.ok && typeof q.price === 'number' ? { t: level(q.price, q.unit), v: q.price, k: 'n',
           cls: q.event === 'trade' ? (q.side === 'ask' ? 'buy' : (q.side === 'bid' ? 'sell' : '')) : '' } : { t: '', k: '' },
@@ -354,10 +547,32 @@ export class BrokerPage {
         q.ok && typeof q.model === 'number' ? { t: num(q.model, q.unit === 'pct' ? 2 : 1, false), v: q.model, k: 'n', cls: 'soft',
           tip: 'Satır girildiği anda dashboard eğrisinin bu enstrüman için verdiği seviye' } : { t: '', k: '' },
         q.note || '',
+        q.implied ? { t: impliedText(q), k: 's', cls: 'soft', tip: impliedTip(q) } : { t: '', k: '' },
         { t: '', k: '', cls: 'act', act: { label: '✕', title: 'Satırı sil', fn: () => this.remove(q) } }])),
       d.rows.length ? (rows.length === d.rows.length ? rows.length + ' satır' : rows.length + ' / ' + d.rows.length + ' satır') : '',
       d.rows.length ? 'Süzgece uyan satır yok' : (d.ranged ? 'Bu aralıkta kayıt yok' : 'Bu gün için kayıt yok'),
-      JSON.stringify([d.ranged, rows.map((q) => q.id)]));
+      JSON.stringify([d.ranged, s, allOn, rows.map((q) => q.id + q.party + q.source + (this.picked.has(q.id) ? '+' : ''))]));
+    this.updatePicked();
+    const g = this.grids.log;
+    if (g && !g.el.__sortable) {
+      g.el.__sortable = true;
+      g.el.classList.add('sortable');
+      g.el.addEventListener('click', (e) => {
+        const td = e.target.closest('td');
+        if (!td || td.__i !== 0) return;                                          // the captions
+        if (td.__j === 0) { this.pickAll(); return; }                              // the tick box column: all shown / none
+        this.sortLog(td.__j - 1 - (this.data.ranged ? 1 : 0));
+      });
+    }
+    // the newest line in view, as in the chat itself, while the log runs oldest first
+    const last = rows.length ? rows[rows.length - 1].id : null;
+    if (g && last !== this.logLast) {
+      this.logLast = last;
+      if (s.key === 'time' && s.dir > 0) {
+        const scroller = g.el.closest('.body') || g.el;
+        if (scroller.scrollHeight > scroller.clientHeight) scroller.scrollTop = scroller.scrollHeight;
+      }
+    }
   }
 
   async remove(q) {
@@ -376,7 +591,7 @@ export class BrokerPage {
     const seq = ++this.seq;
     if (!text.trim()) { this.parsed = null; this.showPreview(); return; }
     try {
-      const res = await api.post('/api/broker/parse', { text, date: this.entryDate.value || null });
+      const res = await api.post('/api/broker/parse', { text, date: this.entryDate.value || null, source: this.source.value.trim(), party: this.pasteParty });
       if (this.dead || seq !== this.seq) return;
       this.parsed = res;
     } catch (err) {
@@ -391,12 +606,14 @@ export class BrokerPage {
     clear(this.previewBox);
     this.summary.textContent = '';
     this.summary.className = 'muted';
+    if (!p || p.error) this.fillNames([]);
     if (!p) { this.saveBtn.disabled = !this.text.value.trim(); return; }
     if (p.error) { this.previewBox.appendChild(h('div', { class: 'errtxt' }, p.error)); return; }
     const keep = this.keepTexts.checked;
     const rows = p.rows.filter((q) => q.ok || keep);
     const pill = (text, cls, title) => h('span', { class: 'pill ' + (cls || 'neu'), title: title || '' }, text);
-    const table = h('table', { class: 'plain chat' }, h('tr', null, h('th', { class: 'l' }, 'Saat'), h('th', { class: 'l' }, 'Enstrüman'),
+    this.fillNames(p.senders || []);
+    const table = h('table', { class: 'plain chat' }, h('tr', null, h('th', { class: 'l' }, 'Saat'), h('th', { class: 'l' }, 'Kimin'), h('th', { class: 'l' }, 'Enstrüman'),
       h('th', null, 'Bid'), h('th', null, 'Ask'), h('th', { title: 'İşlem fiyatı ya da tarafı söylenmemiş seviye' }, 'Fiyat'), h('th', { class: 'l' }, 'Olay')));
     for (const q of rows) {
       const marks = [];
@@ -407,17 +624,19 @@ export class BrokerPage {
         title: short && typeof v === 'number' ? FLAG[short === 'standing' ? 'standing' : 'abbr'][2] : '' }, level(v, q.unit));
       if (q.oco) marks.push(pill('OCO', 'neu', 'Biri yapılırsa öbürü iptal'));
       const time = h('td', { class: 'l' + (q.timed ? '' : ' soft'), title: q.timed ? '' : 'Mesajda saat yok: kaydedildiği an yazılır' }, q.timed ? q.time : 'şimdi');
+      const whose = h('td', { class: 'l whose' + (q.party === 'biz' ? ' ours' : ''), title: (q.sender ? q.sender + ' · ' : '') + (q.party === 'biz' ? 'bizim fiyatımız' : (q.party ? 'broker fiyatı' : 'taraf belli değil')) },
+        owner(q) || '?');
       if (!q.ok) {
-        table.appendChild(h('tr', { class: 'txt' + (q.dup ? ' dup' : ''), title: q.dup ? KNOWN : '' }, time, h('td', { class: 'l said', colspan: '4', title: q.raw }, q.raw),
+        table.appendChild(h('tr', { class: 'txt' + (q.dup ? ' dup' : ''), title: q.dup ? KNOWN : '' }, time, whose, h('td', { class: 'l said', colspan: '4', title: q.raw }, q.raw),
           h('td', { class: 'l what soft' }, 'Metin', marks)));
         continue;
       }
       const who = [q.sender, q.raw].filter(Boolean).join(': ');
-      table.appendChild(h('tr', { class: q.dup ? 'dup' : '', title: q.dup ? KNOWN : who }, time,
+      table.appendChild(h('tr', { class: q.dup ? 'dup' : '', title: q.dup ? KNOWN : who }, time, whose,
         h('td', { class: 'l' }, h('b', null, (q.product === 'OIS' ? '' : q.product + ' ') + q.label),
           q.kind === 'outright' ? null : h('span', { class: 'kind' }, (KIND[q.kind] || q.kind).toLowerCase() + (q.unit === 'bp' ? ' · bp' : ''))),
         numCell(q.bid), numCell(q.ask), numCell(q.price, q.event === 'trade' ? (q.side === 'ask' ? 'buy' : (q.side === 'bid' ? 'sell' : '')) : ''),
-        h('td', { class: 'l what' }, eventText(q) + (q.note ? ' · ' + q.note : ''), marks)));
+        h('td', { class: 'l what', title: impliedTip(q) }, eventText(q) + (q.implied ? ' · TRY ' + (impliedText(q) || '') + '%' : '') + (q.note ? ' · ' + q.note : ''), marks)));
     }
     if (rows.length) this.previewBox.appendChild(table);
     const fresh = rows.filter((q) => !q.dup);
@@ -431,6 +650,84 @@ export class BrokerPage {
     this.saveBtn.disabled = !fresh.length;
   }
 
+  // ------------------------------------------------------------------ who is who
+  /** The names of the paste: each with Broker / Biz and its house - changed here, kept for everyone. */
+  fillNames(senders) {
+    clear(this.namesBox);
+    this.namesBox.classList.toggle('hidden', !senders.length);
+    if (!senders.length) return;
+    const fresh = senders.filter((s) => !s.known).length;
+    this.namesBox.appendChild(h('div', { class: 'head' }, h('b', null, 'Bu chat\'teki isimler'),
+      h('span', { class: fresh ? 'warn-text' : 'muted' }, fresh ? ' · ' + fresh + ' yeni isim: taraf ve kaynağını seçin, herkes için kaydedilir'
+        : ' · hepsi listede')));
+    for (const s of senders) {
+      const src = h('input', { type: 'text', class: 'inp', maxlength: '40', placeholder: 'kaynak (örn. Tullett)', list: 'broker-sources', value: s.source || '' });
+      const save = (party) => this.savePeople([{ name: s.name, source: src.value.trim(), party: party || s.party || '' }]);
+      src.addEventListener('change', () => save());
+      const seg = partySeg(s.party, (v) => { s.party = v; save(v); });
+      this.namesBox.appendChild(h('div', { class: 'namerow' + (s.known ? '' : ' fresh') }, h('span', { class: 'nm', title: s.lines + ' satır' }, s.name),
+        seg, src, s.known ? null : h('span', { class: 'pill warn' }, 'yeni')));
+    }
+  }
+
+  async savePeople(items) {
+    try {
+      await api.post('/api/broker/people', { people: items });
+      toast('İsim listesi kaydedildi', 'ok', 1800);
+      this.doPreview();
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); }
+  }
+
+  /** Every name: those of the list and every sender of the kept chats. */
+  async openPeople() {
+    const data = await api.get('/api/broker/people');
+    const m = modal({ title: 'İsimler · kaynaklar', width: 760 });
+    m.body.appendChild(h('div', { class: 'muted', style: { marginBottom: '8px', fontSize: '12px' } }, 'Chat\'lerde yazan her isim için: bizim masa mı, broker mı – ve hangi kurum. '
+      + 'Yapıştırılan chat\'te bu isimlerin satırları kendiliğinden bu taraf ve kaynakla kaydedilir; kayıtlı satırlar da yeni listeyle gösterilir. Herkes için geçerlidir.'));
+    const dl = h('datalist', { id: 'broker-people-sources' }, data.sources.map((x) => h('option', { value: x })));
+    const table = h('table', { class: 'plain people', id: 'broker-people-table' }, h('tr', null, h('th', { class: 'l' }, 'İsim'), h('th', { class: 'l' }, 'Taraf'),
+      h('th', { class: 'l' }, 'Kaynak'), h('th', null, 'Satır'), h('th', { class: 'l' }, 'Son')));
+    const edits = [];
+    const addRow = (p) => {
+      const state = { name: p.name, party: p.party || '', source: p.source || '' };
+      const nameCell = p.name ? h('td', { class: 'l b' }, p.name) : h('td', { class: 'l' });
+      if (!p.name) {
+        const inp = h('input', { type: 'text', class: 'inp', placeholder: 'İSİM SOYİSİM', maxlength: '60' });
+        inp.addEventListener('input', () => { state.name = inp.value.trim(); });
+        nameCell.appendChild(inp);
+      }
+      const src = h('input', { type: 'text', class: 'inp', maxlength: '40', list: 'broker-people-sources', value: state.source, placeholder: 'kaynak' });
+      src.addEventListener('input', () => { state.source = src.value.trim(); });
+      const clr = h('button', { class: 'iconbtn', type: 'button', title: 'Listeden çıkar' }, '✕');
+      const seg = partySeg(state.party, (v) => { state.party = v; });
+      clr.addEventListener('click', () => { state.party = ''; state.source = ''; src.value = ''; for (const b of seg.children) b.classList.remove('on'); });
+      table.appendChild(h('tr', { class: p.known ? '' : 'fresh' }, nameCell, h('td', { class: 'l' }, seg), h('td', { class: 'l' }, src, clr),
+        h('td', null, p.lines ? String(p.lines) : ''), h('td', { class: 'l' }, p.last ? isoToTr(p.last) : '')));
+      edits.push(state);
+    };
+    for (const p of data.people) addRow(p);
+    const more = h('button', { class: 'btn sm', type: 'button' }, '+ İsim ekle');
+    more.addEventListener('click', () => addRow({ name: '', party: 'broker', source: '', known: false }));
+    m.body.appendChild(dl);
+    m.body.appendChild(h('div', { class: 'reftable' }, table));
+    m.body.appendChild(h('div', { style: { marginTop: '8px' } }, more));
+    const ok = h('button', { class: 'btn primary', type: 'button', id: 'broker-people-save' }, 'Kaydet');
+    ok.addEventListener('click', async () => {
+      ok.disabled = true;
+      try {
+        await api.post('/api/broker/people', { people: edits.filter((x) => x.name) });
+        toast('İsim listesi kaydedildi', 'ok');
+        m.close();
+        this.doPreview();
+        this.ctx.refreshNow();
+      } catch (err) { errorToast(err); ok.disabled = false; }
+    });
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+    m.foot.appendChild(ok);
+    return m;
+  }
+
   async save() {
     const text = this.text.value;
     if (!text.trim() || this.saving) return;
@@ -438,7 +735,7 @@ export class BrokerPage {
     this.saveBtn.disabled = true;
     try {
       const source = this.source.value.trim();
-      const res = await api.post('/api/broker', { text, date: this.entryDate.value || null, source, texts: this.keepTexts.checked });
+      const res = await api.post('/api/broker', { text, date: this.entryDate.value || null, source, texts: this.keepTexts.checked, party: this.pasteParty });
       try { localStorage.setItem('tto.broker.source', source); } catch (e) { /* ignore */ }
       toast(res.saved + ' satır kaydedildi' + (res.skipped ? ' · ' + res.skipped + ' satır zaten kayıtlıydı' : ''), res.saved ? 'ok' : '', 3600);
       this.text.value = '';

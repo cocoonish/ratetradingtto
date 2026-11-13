@@ -34,13 +34,19 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------------------------- words
 _PRODUCTS = {"ois": "OIS", "tlref": "OIS", "x": "XCCY", "xccy": "XCCY", "ccs": "XCCY", "ccy": "XCCY", "cross": "XCCY",
-             "basis": "XCCY", "irs": "IRS"}
+             "basis": "XCCY", "irs": "IRS", "fx": "FX", "fxs": "FX", "fxswap": "FX", "pts": "FX", "points": "FX", "puan": "FX",
+             "pips": "FX"}
+# the short dates of the FX swap market: quoted in swap points, never an OIS
+_FX_SHORT = {"o/n": "O/N", "on": "O/N", "t/n": "T/N", "tn": "T/N", "tom/next": "T/N", "tomnext": "T/N", "tom": "T/N",
+             "s/n": "S/N", "sn": "S/N", "spot/next": "S/N", "spotnext": "S/N"}
+_FX_SHORT_DAYS = {"O/N": 0.0, "T/N": 0.0, "S/N": 0.0}
 _BID = {"bid", "bids", "bidding", "pay", "pays", "payer", "paying", "buy", "buys", "buyer", "buying", "alıcı", "alici", "alış", "alis"}
 _ASK = {"offer", "offers", "offered", "offering", "ofr", "ofrd", "ofd", "ask", "asks", "asked", "rec", "recs", "receive",
         "receiver", "receiving", "sell", "sells", "seller", "selling", "satıcı", "satici", "satış", "satis"}
-_LIFT = {"taken", "lifted", "lifts", "paid", "mine"}                # a trade at the offer
-_HIT = {"given", "hit", "hits", "sold", "yours"}                    # a trade at the bid
-_TRADE = {"trades", "traded", "trade", "trd", "trds", "dealt", "done", "deals"}
+_LIFT = {"taken", "tkn", "lifted", "lftd", "lifts", "paid", "mine"}                # a trade at the offer
+_HIT = {"given", "gvn", "givn", "hit", "hits", "sold", "yours"}                    # a trade at the bid
+_TRADE = {"trades", "traded", "trade", "trading", "trding", "trdng", "tradng", "tradin", "trd", "trds", "trdd", "dealt",
+          "done", "deals", "printed", "prints"}                                    # a trade, nobody's side said
 _REF = {"ref", "refer", "refs", "referred", "cxl", "cancel", "cancelled", "canceled", "pull", "pulled", "off"}
 _CARE = {"care", "cares", "interest", "interested", "looking"}
 _FRA = {"fra", "fras", "fwd", "forward", "fwds"}
@@ -251,9 +257,45 @@ def _tokens(text: str) -> List[str]:
     t = _SIDE_SLASH.sub(r"\1 ", t)                         # "35.03 bid / 35.23 offer": the slash only separates
     t = _SLASH_SIDE.sub(r"\1 ", t)                         # "offer 35.23 / bid 35.03" too ("12/ bid" is a bid without an offer)
     t = re.sub(r"(\d)\s+/", r"\1/", t)                      # "35.00 / 35.20" -> "35.00/35.20"; "12/ bid" stays
-    t = re.sub(r"/\s+(?=[-+]?\d)", "/", t)
+    t = re.sub(r"/\s+(?=[-+]?\d+(?:[.,]\d+)?(?![\w]))", "/", t)          # "35.00/ 35.20"; not "25 500/ 1f", "35.10/ 2y"
     t = re.sub(r"@\s*", " at ", t)
     return [w for w in re.split(r"\s+", t.strip()) if w]
+
+
+# ---------------------------------------------------------------------------------------------- FX swaps
+_GROUPED = re.compile(r"^\d{1,3}(?:[.,]\d{3})+$")
+
+
+def _points(text: str) -> float:
+    """Swap points as typed: "380", "25500", "25.500" (a thousands separator), "12,5" (half a point)."""
+    t = text.strip()
+    if _GROUPED.match(t):
+        return float(re.sub(r"[.,]", "", t))
+    return _num(t)
+
+
+def _complete_points(bid: str, ask: str) -> float:
+    """The offer of a two-sided swap quote written short: "375/90" is 375 / 390, "1175/80" is 1175 / 1180 - the
+    last digits of the bid replaced, a figure up when that would cross it."""
+    b, a = bid.strip(), ask.strip()
+    if not (b.isdigit() and a.isdigit()) or len(a) >= len(b):
+        return _points(a)
+    k = len(a)
+    v = int(b[:-k] + a)
+    if v < int(b):
+        v += 10 ** k
+    return float(v)
+
+
+def _fx_short(low: List[str]) -> Optional[int]:
+    """Where an FX swap short date ("o/n", "t/n", "tn", "s/n") stands in the words of a line, ``None`` when there
+    is none.  A bare "on" counts only at the start, followed by a level, a side or a trade."""
+    for k, w in enumerate(low):
+        if w in _FX_SHORT and w != "on":
+            return k
+    if low and low[0] == "on" and len(low) > 1 and (_is_level(low[1]) or low[1] in _BID | _ASK | _LIFT | _HIT | _TRADE | _REF):
+        return 0
+    return None
 
 
 def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[float]]] = None,
@@ -262,15 +304,32 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     ``instrument``: the one spoken of when the text names none ("..., 35.23 offer")."""
     raw = _tokens(text)
     low = [w.lower().strip(",;:()") for w in raw]
+    other = {"ois", "tlref", "xccy", "ccs", "x", "cross", "basis", "irs"}
+    fx_word = bool(set(low) & {"fx", "fxs", "fxswap", "pts", "points", "puan", "pips"})
+    # a short date with a rate ("o/n 35.10 bid") is a money market rate, not swap points
+    rate = r"(?:[1-9]\d[.,]\d{1,3}|\d[.,]\d{1,2})"                  # 35.10, 35.125, 4.50 - not 1.175 (points)
+    rate_like = any(re.match(r"^[-+]?%s(?:/|$)|/%s$" % (rate, rate), w) for w in low)
+    fx = not (set(low) & other) and (fx_word or (_fx_short(low) is not None and not rate_like))
+    if fx:
+        # swap points are written with a space between the thousands ("25 500/", "2 950/3 000"): one number
+        joined = re.sub(r"(?<![\d.,])(\d{1,3}) (\d{3})(?![\d.,])", r"\1\2", text)
+        if joined != text:
+            raw = _tokens(joined)
+            low = [w.lower().strip(",;:()") for w in raw]
     fra_word = any(w in _FRA for w in low)
     found = None
     at = 0
-    for i in range(len(low)):
-        found = _tenor_expression(low, i, fra_word)
-        if found:
-            at = i
-            break
-    if found:
+    short = _fx_short(low) if fx else None
+    if short is None:
+        for i in range(len(low)):
+            found = _tenor_expression(low, i, fra_word)
+            if found:
+                at = i
+                break
+    if short is not None:
+        tenors, months, kind, product = [_FX_SHORT[low[short]]], [0.0], "outright", "FX"
+        idx = [k for k in range(len(low)) if k != short]
+    elif found:
         used, pieces, sep = found
         tenors = [tenor_label(v, u) for v, u in pieces]
         months = [tenor_months(v, u) for v, u in pieces]
@@ -292,8 +351,10 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         product = next((_PRODUCTS[low[k]] for k in idx if low[k] in _PRODUCTS and low[k] != "x"), instrument["product"])
     else:
         return None
+    if product == "FX" and kind != "outright":
+        return None                                        # an FX swap is one tenor (a forward-forward is not read here)
     words = {low[k] for k in idx}
-    unit = "bp" if kind in ("spread", "fly") else "pct"
+    unit = "pts" if product == "FX" else ("bp" if kind in ("spread", "fly") else "pct")
     out: Dict[str, Any] = {"product": product, "kind": kind, "tenors": tenors, "months": months,
                            "label": instrument_label(kind, tenors), "key": instrument_key(product, kind, tenors),
                            "unit": unit, "event": "quote", "bid": None, "ask": None, "price": None, "side": None,
@@ -337,6 +398,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     consumed = set()
 
     def level(tok: str, anchor: Optional[float] = None, above: bool = True) -> float:
+        if unit == "pts":
+            return _points(tok)
         if unit != "pct":
             return _num(tok)
         v, flag = _complete(tok, level_ref, anchor, above)
@@ -347,6 +410,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     def two_sided(b: str, a: str) -> Tuple[float, float]:
         """Bid and ask of one quote.  Written short on both sides ("90/10") they find their big figure together;
         with one side in full the other is completed against it (the bid below the ask, the ask above the bid)."""
+        if unit == "pts":
+            return _points(b), _complete_points(b, a)       # "375/90": 375 / 390
         if unit != "pct":
             return _num(b), _num(a)
         short_b, short_a = _is_short(b), _is_short(a)
@@ -707,14 +772,19 @@ def sort_key(q: Dict[str, Any]) -> Tuple:
     return (q.get("product") != "OIS", q.get("product") or "", _KIND_ORDER.get(q.get("kind"), 9), tuple(q.get("months") or ()))
 
 
-def board(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
     """Where every instrument stands after the records (oldest first): the last bid and ask with their times,
     the last trade, and what was said last.  A side that was taken off ("ref", or the empty half of "/35.23")
-    is empty; a side nobody has spoken of since keeps its level and its time."""
+    is empty; a side nobody has spoken of since keeps its level and its time.
+
+    ``ours(record)`` tells the lines of our own desk: our prices are not the market's, so they are kept apart
+    (``our_bid`` / ``our_ask``) and do not move its bid and ask.  A trade is a trade, whoever says it
+    (``last_by``: "biz" when it was ours)."""
     rows: Dict[str, Dict[str, Any]] = {}
     for q in records:
         if not q.get("ok"):
             continue
+        mine = bool(ours(q)) if ours is not None else False
         row = rows.get(q["key"])
         if row is None:
             if q["event"] in ("note", "ref"):
@@ -722,26 +792,59 @@ def board(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             row = rows[q["key"]] = {"key": q["key"], "product": q["product"], "kind": q["kind"], "tenors": q["tenors"],
                                     "months": q.get("months") or [], "label": q["label"], "unit": q["unit"],
                                     "bid": None, "bid_time": None, "ask": None, "ask_time": None, "last": None,
-                                    "last_time": None, "last_side": None, "level": None, "level_time": None, "said": ""}
+                                    "last_time": None, "last_side": None, "last_by": None, "level": None, "level_time": None,
+                                    "our_bid": None, "our_ask": None, "our_time": None, "said": ""}
         when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
         ev = q["event"]
         if ev == "quote":
-            for side in ("bid", "ask"):
-                if q.get(side) is not None:
-                    row[side], row[side + "_time"] = q[side], when
-                elif side in (q.get("clear") or []):
-                    row[side], row[side + "_time"] = None, when
+            if mine:
+                for side in ("bid", "ask"):
+                    if q.get(side) is not None or side in (q.get("clear") or []):
+                        row["our_" + side] = q.get(side)
+                row["our_time"] = when
+            else:
+                for side in ("bid", "ask"):
+                    if q.get(side) is not None:
+                        row[side], row[side + "_time"] = q[side], when
+                    elif side in (q.get("clear") or []):
+                        row[side], row[side + "_time"] = None, when
         elif ev == "trade":
             if q.get("price") is not None:
                 row["last"], row["last_time"], row["last_side"] = q["price"], when, q.get("side")
+                row["last_by"] = "biz" if mine else "broker"
         elif ev == "ref":
             for side in ((q["side"],) if q.get("side") else ("bid", "ask")):
-                row[side], row[side + "_time"] = None, when
-        elif ev == "level":
+                if mine:
+                    row["our_" + side] = None
+                    row["our_time"] = when
+                else:
+                    row[side], row[side + "_time"] = None, when
+        elif ev == "level" and not mine:
             row["level"], row["level_time"] = q.get("price"), when
         row["said"] = q.get("raw") or ""
         row["time"] = when
     return sorted(rows.values(), key=sort_key)
+
+
+# ---------------------------------------------------------------------------------------------- who said it
+PARTIES = ("biz", "broker")
+
+
+def person_key(name: Any) -> str:
+    """How a sender is looked up: case and spacing do not matter ("Mike  Rees" is "MIKE REES")."""
+    return " ".join(str(name or "").split()).upper()
+
+
+def person_of(people: Dict[str, Dict[str, Any]], sender: Any) -> Optional[Dict[str, Any]]:
+    """The entry of a sender in the desk's list of names: by the name as written, else without what stands in
+    parentheses after it ("MIKE REES (TULLETT PREBON)" is "MIKE REES")."""
+    key = person_key(sender)
+    if not key:
+        return None
+    hit = people.get(key)
+    if hit is None and "(" in key:
+        hit = people.get(person_key(key.split("(", 1)[0]))
+    return hit
 
 
 # ---------------------------------------------------------------------------------------------- against a curve
