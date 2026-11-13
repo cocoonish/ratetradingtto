@@ -1,7 +1,7 @@
 // Generic workbook page: a set of panels (tables and charts) defined by a view on the server.
 // A page with many tables comes in tabs ("sections" of the view): one group of tables at a time, the
 // calculators first; the search box and "Tümü" look across all of them.
-import { openAddIsin, bondCardLinks } from '../bonds.js';
+import { openAddIsin, bondCardLinks, bondFlags } from '../bonds.js';
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell } from '../grid.js';
@@ -424,6 +424,7 @@ export class ViewPage {
       tools.appendChild(cp);
       if (p.grow) this.growable(it, p, head, tools);
       if (p.card === 'bond') bondCardLinks(this.ctx, it.grid.el);            // ▸ opens the bond's card
+      if (p.flags === 'dibs') bondFlags(this.ctx, it.grid.el);                // ☆ / ★: onto / off the trading list
     }
     const col = h('button', { class: 'iconbtn', type: 'button', title: 'Daralt / aç' }, collapsed ? '▸' : '▾');
     it.toggle = (now) => {

@@ -291,7 +291,7 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
         assert status["mode"] == "replay" and set(status["books"]) == {"tto", "sofr", "borsa", "asw"}
         assert not any(b["left_out"] for b in status["books"].values())
         pages = [p["id"] for p in json.loads(get("/api/nav")[1])["pages"]]
-        assert len(pages) == 23 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive"} <= set(pages)
+        assert len(pages) == 24 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar"} <= set(pages)
         page = json.loads(get("/api/view/ois")[1])
         assert len(page["panels"]) > 20 and not any(p.get("error") for p in page["panels"])
         assert len(json.loads(get("/api/calendar")[1])["meetings"]) == 95

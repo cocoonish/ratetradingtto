@@ -347,6 +347,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().bond_catalog, _user(request)))
 
     @handler
+    async def bond_flag(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().bond_flag, _user(request), str(data.get("isin") or ""), bool(data.get("on"))))
+
+    @handler
     async def bond_card(request: Request):
         return ok(await call(svc().bond_card, _user(request), request.path_params["isin"]))
 
@@ -469,6 +474,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/sources", sources, methods=["GET", "POST"]),
         Route("/api/bonds/catalog", bond_catalog),
         Route("/api/list/add", list_add, methods=["POST"]),
+        Route("/api/bonds/flag", bond_flag, methods=["POST"]),
         Route("/api/bond/{isin}", bond_card),
         Route("/api/history/series", history_series),
         Route("/api/history/matrix", history_matrix),

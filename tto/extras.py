@@ -1214,7 +1214,7 @@ def _tto_dibs_live(model: Model) -> None:
     L = _live_cols()
     rv = "'DİBS RV'!"
     hol = "Motor!$A$361:$A$523"
-    b.title("A1", "DİBS CANLI  ·  T0 / T1 / T2 fiyatları, son işlem, ek kaynak, ima O/N repo  (DİBS RV listesindeki kâğıtlar)")
+    b.title("A1", "DİBS TRADING  ·  T0 / T1 / T2 fiyatları, son işlem, ek kaynak, ima O/N repo  (trading listesi: DİBS RV)")
     b.set("A2", "Kaynak · valör", bold=True)
     for g in L["groups"]:
         b.input(g["src"], g["default"], align="center")
@@ -1318,13 +1318,137 @@ def _col(letter: str) -> int:
     return col_to_index(letter)
 
 
+# ---------------------------------------------------------------------------------------------- every bond
+UNI_SHEET = "EK_EVREN"
+UNI_OWN = (6, 20)                      # the bonds the desk adds that the list does not have (a new issue): ISIN typed
+UNI_FIRST = 22                         # the desk's list of TRY government bonds from here, kind by kind
+#: the kinds in the order the desk thinks of them: (catalog kind, caption, the value date it trades on)
+UNI_KINDS = (("bill", "Bono", "bill"), ("zero", "Kuponsuz", "bill"), ("fixed", "Sabit kuponlu", "bond"),
+             ("float", "TLREF'e endeksli", "bond"), ("cpi", "TÜFE'ye endeksli", "bond"))
+UNI_RAW = ("bid", "ask", "last", "date", "vol")
+#: what the trading list (DİBS RV) says of a bond that is on it: (column there, caption, number format)
+UNI_RV = (("T", "Getiri % (RV)", "0.00%"), ("Z", "ASW / DM (bp)", "0"), ("AC", "Sinyal", None), ("AI", "DV01 / 1mn", "0.0"))
+
+
+def universe_rows() -> List[Tuple[int, Optional[Dict[str, Any]], Optional[str]]]:
+    """The rows of the EK_EVREN sheet below the desk's own: ``(row, bond, caption)`` - a caption row per kind
+    (bond ``None``), then its bonds by maturity."""
+    from . import bonds as bd
+    out: List[Tuple[int, Optional[Dict[str, Any]], Optional[str]]] = []
+    r = UNI_FIRST
+    for kind, caption, _ in UNI_KINDS:
+        group = [b for b in bd.catalog() if b.get("kind") == kind]
+        if not group:
+            continue
+        out.append((r, None, "%s · %d kâğıt" % (caption, len(group))))
+        r += 1
+        for b in sorted(group, key=lambda x: x["maturity"]):
+            out.append((r, b, None))
+            r += 1
+    return out
+
+
+def _universe_check(model: Model) -> None:
+    _dibs_live_check(model)
+    for addr, has in (("T5", "DY5"), ("Z5", "EH5"), ("AC5", "FV5"), ("AI5", "ED5")):
+        _need_formula(model, "DİBS RV", addr, has)
+
+
+def _tto_universe(model: Model) -> None:
+    """Every TRY government bond of the desk's Bloomberg list in one place, kind by kind, by maturity: what it is,
+    how long it has left, whether it is on the trading list (DİBS RV), its price on Borsa İstanbul (bid, ask,
+    the last trade and its day, the volume - bills on their own value date, the rest on theirs) and, for a bond on
+    the trading list, what DİBS RV says of it.  On top, the bonds the desk adds that the list does not have yet.
+    A bond's price comes from DİBS RV when it is listed there on the same source (the recorded file shows it
+    offline); the others ask Bloomberg."""
+    import datetime as _dt
+    from .xl.values import date_to_serial
+    b = SheetBuilder(model, UNI_SHEET)
+    rv = "'DİBS RV'!"
+    lst = "$%s$5:$%s$54"
+    b.title("A1", "TÜM KÂĞITLAR  ·  TRY devlet iç borçlanma senetleri (★: trading listesinde - DİBS RV ve DİBS Trading)")
+    b.set("B2", "Kaynak · bono / kuponsuz", color=NOTE_COLOR, align="right")
+    b.input("C2", "ISL0", align="center")
+    b.set("D2", "tahvil", color=NOTE_COLOR, align="right")
+    b.input("E2", "ISL1", align="center")
+    b.head("A4", ["ISIN", "Kâğıt", "Tür", "Kupon", "Vade", "Kalan gün", "Kalan yıl", "Trading", "Bid", "Ask", "Son işlem",
+                  "Son işlem günü", "Hacim"] + [cap for _, cap, _ in UNI_RV] + ["Kaynak"])
+    b.head("T4", ["RV satırı", "Menkul", "bid", "ask", "son", "gün", "hacim"])
+    b.set("A%d" % (UNI_OWN[0] - 1), "Kendi eklediklerimiz · listede olmayan kâğıtlar (yeni ihraç: ISIN yazın)", bold=True)
+
+    def row(r: int, src: str) -> None:
+        a = "$A%d" % r
+        b.set("F%d" % r, '=IF(ISNUMBER($E{r}),$E{r}-TODAY(),"")'.format(r=r), fmt=INT0)
+        b.set("G%d" % r, '=IF(ISNUMBER($F{r}),$F{r}/365.25,"")'.format(r=r), fmt="0.00")
+        b.set("H%d" % r, '=IF({a}="","",IF(ISNUMBER($T{r}),"★",""))'.format(a=a, r=r), align="center", bold=True)
+        b.set("T%d" % r, '=IF({a}="","",IFERROR(MATCH({a},{rv}$A$5:$A$54,0),""))'.format(a=a, rv=rv))
+        b.set("R%d" % r, '=IF({a}="","",IF(TRIM({s}&"")="","{d}",TRIM(UPPER({s}))))'.format(
+            a=a, s=src, d="ISL0" if src == "$C$2" else "ISL1"), align="center", color=NOTE_COLOR)
+        b.set("U%d" % r, '=IF({a}="","",IF({rv}$N$2="/isin/","/isin/"&{a}&"@"&$R{r},{a}&" @"&$R{r}&" "&{rv}$N$2))'.format(
+            a=a, rv=rv, r=r))
+        same = 'IF(ISNUMBER($T{r}),$R{r}=INDEX({rv}{bs},$T{r}),FALSE)'.format(r=r, rv=rv, bs=lst % ("BS", "BS"))
+        for f, field, own in (("bid", "PX_BID", "K"), ("ask", "PX_ASK", "L"), ("last", "LAST_PRICE", "AS"), ("date", "LAST_TRADE_DATE", "I")):
+            col = index_to_col(_col("V") + UNI_RAW.index(f))
+            b.set("%s%d" % (col, r), '=IF({a}="","",IF({same},INDEX({rv}{own},$T{r}),_xll.BDP($U{r},"{fld}")))'.format(
+                a=a, same=same, rv=rv, own=lst % (own, own), r=r, fld=field))
+        vcol = index_to_col(_col("V") + UNI_RAW.index("vol"))
+        b.set("%s%d" % (vcol, r), '=IF({a}="","",_xll.BDP($U{r},"VOLUME"))'.format(a=a, r=r))
+        for k, (vis, raw) in enumerate(zip("IJK", ("V", "W", "X"))):
+            b.set("%s%d" % (vis, r), '=IFERROR(IF(N({c}{r})>0,{c}{r},""),"")'.format(c=raw, r=r), fmt="0.000", bold=vis == "K")
+        d = "Y%d" % r
+        b.set("L%d" % r,
+              '=IFERROR(IF(ISNUMBER({d}),IF({d}>0,{d},""),IF(TRIM({d}&"")="","",DATE(VALUE(RIGHT({d},4)),'
+              'VALUE(MID({d},FIND(".",{d})+1,FIND(".",{d},FIND(".",{d})+1)-FIND(".",{d})-1)),VALUE(LEFT({d},FIND(".",{d})-1))))),"")'
+              .format(d=d), fmt=DATE)
+        b.set("M%d" % r, '=IFERROR(IF(N($Z{r})>0,$Z{r},""),"")'.format(r=r), fmt=INT0)
+        for k, (col, _, fmt) in enumerate(UNI_RV):
+            b.set("%s%d" % (index_to_col(_col("N") + k), r), '=IF(ISNUMBER($T{r}),INDEX({rv}{c},$T{r}),"")'.format(
+                r=r, rv=rv, c=lst % (col, col)), fmt=fmt, bold=col == "AC")
+
+    # the desk's own: an ISIN typed; what a Turkish ISIN says of its maturity
+    for r in range(UNI_OWN[0], UNI_OWN[1] + 1):
+        b.input("A%d" % r, None)
+        mat = 'DATE(2000+VALUE(MID($A{r},8,2)),VALUE(MID($A{r},6,2)),VALUE(MID($A{r},4,2)))'.format(r=r)
+        b.set("B%d" % r, '=IF($A{r}="","",IF(LEFT($A{r},2)="TR",IFERROR(TEXT({m},"dd.mm.yy"),$A{r}),$A{r}))'.format(r=r, m=mat), bold=True)
+        b.set("C%d" % r, '=IF($A{r}="","","liste dışı")'.format(r=r), color=NOTE_COLOR)
+        b.set("E%d" % r, '=IF(LEFT($A{r},2)="TR",IFERROR({m},""),"")'.format(r=r, m=mat), fmt=DATE)
+        row(r, "$E$2")
+    # the list, kind by kind
+    trades_on = {kind: on for kind, _, on in UNI_KINDS}
+    for r, bond, caption in universe_rows():
+        if bond is None:
+            b.set("A%d" % r, caption, bold=True)
+            continue
+        kind = bond.get("kind")
+        b.set("A%d" % r, bond["isin"])
+        from . import bonds as bd
+        b.set("B%d" % r, bd.short_label(bond), bold=True)
+        b.set("C%d" % r, bd.KINDS.get(kind, kind))
+        cpn = bond.get("coupon")
+        if kind == "fixed" and isinstance(cpn, (int, float)):
+            b.set("D%d" % r, float(cpn) / 100.0, fmt="0.00%")
+        elif kind == "cpi" and isinstance(cpn, (int, float)):
+            b.set("D%d" % r, "reel %%%s" % ("%.2f" % cpn).replace(".", ","))
+        else:
+            b.set("D%d" % r, {"float": "TLREF", "bill": "iskontolu", "zero": "iskontolu"}.get(kind, ""))
+        b.set("E%d" % r, date_to_serial(_dt.date.fromisoformat(bond["maturity"])), fmt=DATE)
+        row(r, "$C$2" if trades_on.get(kind) == "bill" else "$E$2")
+    last = universe_rows()[-1][0] if universe_rows() else UNI_FIRST
+    b.note("A%d" % (last + 2),
+           "★ trading listesindeki (DİBS RV ve DİBS Trading) kâğıtlardır; ☆ / ★ ile eklenir, çıkarılır. Fiyatlar Borsa İstanbul'dan "
+           "(bono ve kuponsuz kendi valöründe, diğerleri ertesi gün; kaynaklar sarı hücrelerde). Getiri, ASW ve sinyal yalnızca "
+           "trading listesindeki kâğıtlar için hesaplanır.")
+    b.sheet.freeze = [4, 2]
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
     "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
             (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
-            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live)),
+            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
+            (UNI_SHEET, _universe_check, _tto_universe)),
 }
 
 

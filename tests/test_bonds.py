@@ -254,7 +254,10 @@ def test_bonds_are_added_to_a_pages_list_by_isin(tmp_path):
         new = next(b["isin"] for b in cat["bonds"] if b["kind"] == "float" and b["isin"] not in listed)
         before = s._list_values(u, "tto", "DİBS RV!A5:A54")
         res = s.list_add(u, "tto", "DİBS RV!A5:A54", [new, "trt150328t24", new])
-        assert res["added"] == [new] and res["skipped"] == ["TRT150328T24"] and res["cells"] == ["DİBS RV!A%d" % (5 + before.index(""))]
+        # below the list's last bond: the empty rows the desk keeps between its groups stay empty
+        last = max(k for k, v in enumerate(before) if v)
+        assert res["added"] == [new] and res["skipped"] == ["TRT150328T24"] and res["cells"] == ["DİBS RV!A%d" % (5 + last + 1)]
+        assert before.index("") < last
         assert res["free"] == before.count("") - 1
         # the DİBS RV list is the desk's: everyone sees the bond added
         other = s.login("Öbür Kullanıcı")["user"]
@@ -364,11 +367,12 @@ def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
         assert cell(s, "EK_DIBS!K2") == "ISL1"
         # the page: the table with a card per bond, the day's tape, the helper columns behind
         view = s.view(u, "dibslive")
-        assert [p["id"] for p in view["panels"]] == ["L1", "L3"]
-        main = view["panels"][0]
+        assert [p["id"] for p in view["panels"]] == ["L0", "L1", "L3"] and view["title"] == "DİBS Trading"
+        main = view["panels"][1]
+        assert main["title"] == "Valörler · T0 / T1 / T2"
         assert main["card"] == "bond" and main["add"]["ref"] == "DİBS RV!A5:A54" and main["add"]["name"] == "dibs"
         assert main["data"]["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Kart"]
-        assert [p["id"] for p in s.view(u, "dibslive", show_hidden=True)["panels"]] == ["L1", "L3", "L2"]
+        assert [p["id"] for p in s.view(u, "dibslive", show_hidden=True)["panels"]] == ["L0", "L1", "L3", "L2"]
     finally:
         s.stop()
 
@@ -408,7 +412,9 @@ def test_a_trade_the_dashboard_sees_shows_its_time(tmp_path, monkeypatch):
         assert s.trades_seen("TRT150328T24 @ISL0 ISIN") is None
         s.bump()
         # the page: the T1 last trade at the moment it was seen, Bloomberg's day in the tip; the tape has it
-        main, tape = s.view(u, "dibslive")["panels"][:2]
+        summary, main, tape = s.view(u, "dibslive")["panels"][:3]
+        line = next(r for r in summary["data"]["rows"] if r[2].get("t") == "TRT150328T24")
+        assert line[9]["t"] == "bugün 10:41:07" and line[9]["cls"] == "fresh"                # the summary says it too
         d = main["data"]
         j = d["c"].index(ex._live_cols()["groups"][1]["when"])
         row = next(r for r, n in zip(d["rows"], d["r"]) if n == 8)
@@ -454,5 +460,101 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
             hdr = {"X-TTO-User": quote(u)}                                          # as the page sends it
             got = client.get("/api/bond/TRT160431T35", headers=hdr).json()
             assert got["label"] == "16.04.31" and got["board"]["last"] == "94,100"
+    finally:
+        s.stop()
+
+
+# ---------------------------------------------------------------------------------------------- every bond, the trading list
+def test_every_bond_is_in_one_place_kind_by_kind(svc):
+    rows = ex.universe_rows()
+    captions = [c for _, b, c in rows if b is None]
+    assert captions == ["Bono · 2 kâğıt", "Kuponsuz · 2 kâğıt", "Sabit kuponlu · 26 kâğıt", "TLREF'e endeksli · 23 kâğıt",
+                        "TÜFE'ye endeksli · 24 kâğıt"]
+    listed = [b for _, b, _ in rows if b is not None]
+    assert len(listed) == 77 and rows[0][0] == ex.UNI_FIRST
+    for kind in ("fixed", "float"):
+        mats = [b["maturity"] for b in listed if b["kind"] == kind]
+        assert mats == sorted(mats)
+    at = {b["isin"]: r for r, b, _ in rows if b is not None}
+    r = at["TRT150328T24"]
+    assert [cell(svc, "EK_EVREN!%s%d" % (c, r)) for c in "ABCDE"] == ["TRT150328T24", "15.03.28", "Sabit", 0.368, 46827.0]
+    assert cell(svc, "EK_EVREN!F%d" % r) == 46827.0 - 46329.0 and cell(svc, "EK_EVREN!G%d" % r) == pytest.approx(498 / 365.25)
+    # on the trading list: ★, its price from DİBS RV on the same source, what DİBS RV makes of it
+    assert cell(svc, "EK_EVREN!H%d" % r) == "★" and cell(svc, "EK_EVREN!R%d" % r) == "ISL1"
+    assert [cell(svc, "EK_EVREN!%s%d" % (c, r)) for c in "IJKL"] == [100.1, 100.125, 100.2, 46329.0]
+    assert cell(svc, "EK_EVREN!N%d" % r) == cell(svc, "DİBS RV!T8") and cell(svc, "EK_EVREN!P%d" % r) == cell(svc, "DİBS RV!AC8")
+    # bills on their own value date
+    rb = at["TRB100227T13"]
+    assert (cell(svc, "EK_EVREN!R%d" % rb), cell(svc, "EK_EVREN!I%d" % rb), cell(svc, "EK_EVREN!D%d" % rb)) == ("ISL0", 92.22, "iskontolu")
+    # off the list: no mark, Bloomberg asked (nothing offline), nothing of DİBS RV
+    rf = at["TRT130127T11"]
+    assert [cell(svc, "EK_EVREN!%s%d" % (c, rf)) for c in "CDHIKNP"] == ["TLREF", "TLREF", "", "", "", "", ""]
+    assert cell(svc, "EK_EVREN!U%d" % rf) == "TRT130127T11 @ISL1 ISIN"
+    rc = at["TRT070727T13"]
+    assert cell(svc, "EK_EVREN!D%d" % rc) == "reel %2,90" and cell(svc, "EK_EVREN!B%d" % rc) == "07.07.27 TÜFE"
+    # the desk's own (a new issue): the label and the maturity from a Turkish ISIN
+    u = svc.login("Evren Ekleyen")["user"]
+    res = svc.list_add(u, "tto", "EK_EVREN!A6:A20", ["TRT280432T14"])
+    assert res["cells"] == ["EK_EVREN!A6"]
+    assert [cell(svc, "EK_EVREN!%s6" % c) for c in "ABCE"] == ["TRT280432T14", "28.04.32", "liste dışı", 48332.0]
+    assert cell(svc, "EK_EVREN!H6") == "" and cell(svc, "EK_EVREN!U6") == "TRT280432T14 @ISL1 ISIN"
+    svc.set_inputs(u, "tto", [{"ref": "EK_EVREN!A6", "value": None}])
+    # the page: ☆ / ★ to click, today's board and the card on the right; the own rows grow
+    view = svc.view(u, "kagitlar")
+    panel = view["panels"][0]
+    assert (panel["flags"], panel["card"], panel["grow"]["first"], panel["add"]["ref"]) == ("dibs", "bond", 6, "EK_EVREN!A6:A20")
+    d = panel["data"]
+    j = d["c"].index("H")
+    marks = {row[0]["t"]: row[j] for row, n in zip(d["rows"], d["r"]) if n >= ex.UNI_FIRST and len(row[0].get("t") or "") == 12}
+    assert len(marks) == 77
+    assert marks["TRT150328T24"]["t"] == "★" and "on" in marks["TRT150328T24"]["cls"] and marks["TRT150328T24"]["tip"].endswith("TRT150328T24")
+    assert marks["TRT130127T11"]["t"] == "☆" and "on" not in marks["TRT130127T11"]["cls"]
+    assert d["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Kart"]
+
+
+def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Yıldız Koyan")["user"]
+        other = s.login("Öbür Masa")["user"]
+        before = s._list_values(u, "tto", "DİBS RV!A5:A54")
+        last = max(k for k, v in enumerate(before) if v)
+        res = s.bond_flag(u, "trt190128t14", True)
+        assert res == {"isin": "TRT190128T14", "on": True, "added": True, "cells": ["DİBS RV!A%d" % (5 + last + 1)], "gen": res["gen"]}
+        r = 5 + last + 1
+        assert s.bond_flag(u, "TRT190128T14", True)["added"] is False                   # already there
+        assert s._list_values(other, "tto", "DİBS RV!A5:A54")[last + 1] == "TRT190128T14"  # for everyone
+        # the page of every bond marks it, the trading summary has it under its kind
+        rows = {b["isin"]: n for n, b, _ in ex.universe_rows() if b}
+        assert cell(s, "EK_EVREN!H%d" % rows["TRT190128T14"]) == "★"
+        summary = s.view(u, "dibslive")["panels"][0]
+        assert (summary["id"], summary["flags"], summary["card"]) == ("L0", "dibs", "bond")
+        lines = [[c.get("t") for c in row] for row in summary["data"]["rows"]]
+        assert lines[0][:4] == ["★", "Kâğıt", "ISIN", "Vade"] and lines[0][-1] == "Kart"
+        groups = [x[0] for x in lines if x[0] != "★" and x[0] != lines[0][0]]
+        assert groups == ["Bono · kuponsuz · 2", "Sabit kuponlu · 14", "TLREF'e endeksli · 4"]
+        floaters = [x for x in lines if x[2] in ("TRT190128T14", "TRT090130T12", "TRT030730T12", "TRT110930T36")]
+        assert [x[1] for x in floaters] == ["19.01.28 TLREF", "09.01.30 TLREF", "03.07.30 TLREF", "11.09.30 TLREF"]   # by maturity
+        t8 = next(x for x in lines if x[2] == "TRT150328T24")
+        assert t8[5:10] == ["ISL1", "100,100", "100,125", "100,200", "03.11.2026"] and t8[13] in ("UCUZ", "PAHALI", "–")
+        # what goes with a row: the desk's source and everyone's own values for it
+        s.set_inputs(u, "tto", [{"ref": "DİBS RV!B%d" % r, "value": "ISL0"}, {"ref": "DİBS RV!N%d" % r, "value": 100.5}])
+        s.set_inputs(other, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": 40.0}])
+        assert cell(s, "DİBS RV!N%d" % r, user=user_key(u)) == 100.5
+        res = s.bond_flag(u, "TRT190128T14", False)
+        assert (res["on"], res["removed"]) == (False, 1)
+        assert cell(s, "DİBS RV!A%d" % r) is None and cell(s, "DİBS RV!B%d" % r) is None
+        assert cell(s, "DİBS RV!N%d" % r, user=user_key(u)) is None and cell(s, "DİBS RV!AL%d" % r, user=user_key(other)) is None
+        assert s.store.user_inputs(user_key(other), "tto").get(("tto", "DİBS RV!AL%d" % r)) is None
+        assert cell(s, "EK_EVREN!H%d" % rows["TRT190128T14"]) == ""
+        assert s.bond_flag(u, "TRT190128T14", False)["removed"] == 0
+        with pytest.raises(ServiceError):
+            s.bond_flag(u, "TRT190128T15", True)                                        # the check digit
+        with TestClient(create_app(s)) as client:
+            hdr = {"X-TTO-User": quote(u)}
+            got = client.post("/api/bonds/flag", json={"isin": "TRT130127T11", "on": True}, headers=hdr)
+            assert got.status_code == 200 and got.json()["added"] is True
+            assert client.post("/api/bonds/flag", json={"isin": "TRT130127T11", "on": False}, headers=hdr).json()["removed"] == 1
+            assert client.post("/api/bonds/flag", json={"isin": "X", "on": True}, headers=hdr).status_code == 400
     finally:
         s.stop()

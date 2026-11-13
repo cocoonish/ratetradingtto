@@ -1,10 +1,10 @@
 {
  "id": "dibslive",
- "title": "DİBS Canlı",
+ "title": "DİBS Trading",
  "group": "Tahvil",
  "book": "tto",
  "sheet": "EK_DIBS",
- "order": 60,
+ "order": 59,
  "inputs": [
   {
    "range": "F2",
@@ -37,9 +37,18 @@
  ],
  "panels": [
   {
+   "id": "L0",
+   "type": "generated",
+   "source": "dibs_trading",
+   "title": "Trading listesi · özet",
+   "card": "bond",
+   "flags": "dibs",
+   "note": "Trading listesindeki (★) kâğıtlar türüne ve vadesine göre: kâğıdın fiyatlandığı valörde bid / ask / son işlem ve zamanı, DİBS RV'den getiri, ASW, pahalı / ucuz, sinyal, süre, DV01, carry, T0→T1 ima repo ve bugünün Broker Chat tahtası. ★ listeden çıkarır; kâğıt eklemek için Tüm Kâğıtlar sayfası ya da \"+ ISIN ekle\"."
+  },
+  {
    "id": "L1",
    "type": "table",
-   "title": "DİBS canlı",
+   "title": "Valörler · T0 / T1 / T2",
    "range": "A1:Y56",
    "action": "add-isin",
    "add": {
@@ -51,7 +60,8 @@
    "append": "dibs_live",
    "wide": true,
    "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır.",
-   "card": "bond"
+   "card": "bond",
+   "keep_title": true
   },
   {
    "id": "L3",

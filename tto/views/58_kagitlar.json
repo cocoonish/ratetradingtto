@@ -1,0 +1,63 @@
+{
+ "id": "kagitlar",
+ "title": "Tüm Kâğıtlar",
+ "group": "Tahvil",
+ "book": "tto",
+ "sheet": "EK_EVREN",
+ "order": 58,
+ "inputs": [
+  {
+   "range": "C2",
+   "scope": "shared",
+   "group": "evren-src",
+   "kind": "text",
+   "label": "Bono / kuponsuz fiyat kaynağı (ör. ISL0)"
+  },
+  {
+   "range": "E2",
+   "scope": "shared",
+   "group": "evren-src",
+   "kind": "text",
+   "label": "Tahvil fiyat kaynağı (ör. ISL1)"
+  },
+  {
+   "range": "A6:A20",
+   "scope": "shared",
+   "group": "evren-own",
+   "kind": "text",
+   "label": "Listede olmayan kâğıtlar (ISIN)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "U1",
+   "type": "table",
+   "title": "Tüm kâğıtlar",
+   "range": "A1:R105",
+   "append": "universe",
+   "card": "bond",
+   "flags": "dibs",
+   "action": "add-isin",
+   "add": {
+    "list": "A6:A20",
+    "name": "evren",
+    "catalog": false,
+    "title": "Listede olmayan kâğıt ekle (yeni ihraç)"
+   },
+   "grow": {
+    "key": "A",
+    "first": 6,
+    "extra": 1,
+    "last": 20
+   },
+   "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar. Sağdaki sütunlar bugünün Broker Chat tahtasıdır."
+  },
+  {
+   "id": "U2",
+   "type": "table",
+   "title": "Yardımcı · Bloomberg yanıtları (RV satırı, menkul, fiyatlar, hacim)",
+   "range": "T4:Z103",
+   "hidden": true
+  }
+ ]
+}

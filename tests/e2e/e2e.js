@@ -1305,6 +1305,29 @@ async function shot(page, name) {
     await page.waitForSelector('.modal.bondcard');
     check('... and from DİBS RV too', /16\.04\.31 · TRT160431T35/.test(await page.textContent('.modal.bondcard header')));
     await page.keyboard.press('Escape');
+    // Tüm Kâğıtlar: every bond kind by kind; ☆ puts one on the trading list, ★ takes it off
+    await open(page, 'kagitlar');
+    await page.waitForSelector('.panel[data-panel="U1"] table.grid');
+    const uni = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
+      return { bonds: rows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[0])).length, captions: rows.filter((r) => /· \d+ kâğıt$/.test(r[0])).map((r) => r[0]),
+        stars: document.querySelectorAll('.panel[data-panel="U1"] td.flag.on').length, open: document.querySelectorAll('.panel[data-panel="U1"] td.flag:not(.on)').length };
+    });
+    check('Tüm Kâğıtlar: the 77 bonds of the desk\'s list kind by kind, the ones on the trading list starred',
+      uni.bonds === 77 && uni.captions.length === 5 && uni.stars >= 19 && uni.stars + uni.open === 77, uni);
+    const flagOf = (panel, isin) => '.panel[data-panel="' + panel + '"] table.grid td.flag[title$="' + isin + '"]';
+    await page.click(flagOf('U1', 'TRT130127T11'));
+    await page.waitForFunction((sel) => { const td = document.querySelector(sel); return td && td.classList.contains('on'); }, flagOf('U1', 'TRT130127T11'), { timeout: 20000 });
+    await open(page, 'dibslive');
+    await page.waitForSelector('.panel[data-panel="L0"] table.grid');
+    const summaryRows = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const inSummary = (await summaryRows()).filter((r) => r[2] === 'TRT130127T11');
+    check('☆ puts a bond on the trading list: DİBS Trading has it in its summary, under its kind',
+      inSummary.length === 1 && inSummary[0][1] === '13.01.27 TLREF' && (await summaryRows()).some((r) => /^TLREF'e endeksli · \d+$/.test(r[0])), inSummary);
+    await page.click(flagOf('L0', 'TRT130127T11'));
+    const unstarred = await page.waitForFunction(() => ![...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
+      .some((tr) => tr.children[2] && tr.children[2].textContent === 'TRT130127T11'), null, { timeout: 20000 }).then(() => true, () => false);
+    check('... and ★ takes it off', unstarred && !(await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT130127T11').lists.includes('dibs'));
 
     // ------------------------------------------------------------------ find a table from anywhere
     console.log('table search');

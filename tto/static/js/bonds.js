@@ -166,3 +166,20 @@ export function bondCardLinks(ctx, el) {
     if (code) openBondCard(ctx, code);
   });
 }
+
+/** ☆ / ★ in a table of bonds: onto / off the trading list (DİBS RV and DİBS Trading), for everyone. */
+export function bondFlags(ctx, el) {
+  el.addEventListener('click', async (e) => {
+    const td = e.target.closest('td.flag');
+    if (!td || td.classList.contains('busy')) return;
+    const code = ((td.title || '').match(/[A-Z]{2}[A-Z0-9]{9}\d/) || [])[0];
+    if (!code) return;
+    const on = !td.classList.contains('on');
+    td.classList.add('busy');
+    try {
+      const res = await api.post('/api/bonds/flag', { isin: code, on });
+      toast(on ? (res.added ? code + ' trading listesine eklendi' : code + ' zaten listede') : code + ' trading listesinden çıkarıldı', 'ok');
+      ctx.refreshNow();
+    } catch (err) { errorToast(err); } finally { td.classList.remove('busy'); }
+  });
+}
