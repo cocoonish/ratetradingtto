@@ -32,8 +32,8 @@ kayıtlı son veriyle çalışır.
 Bilgisayarda **Python 3.8 ya da üstü** olması yeterlidir; `pip install` da Git de gerekmez.
 
 1. GitHub'da (giriş yapmış olarak) repo sayfası → yeşil **Code** düğmesi → **Download ZIP**; zip'i bir klasöre açın.
-   Repo private kalabilir. O bilgisayardan GitHub hesabına girilemiyorsa aynı ZIP başka bir yoldan da getirilebilir
-   (e-posta eki, paylaşılan klasör, USB): klasör kendi kendine yeter, GitHub'a bağlı hiçbir şey içermez.
+   Repo private kalabilir. ZIP inmiyorsa ya da ZIP'i taşıyamıyorsanız
+   [tek dosyalık kurulum](#zip-inmiyorsa-tek-dosya) aynı klasörü üretir.
 2. Klasördeki `run.bat`'a çift tıklayın — ya da o klasörde bir komut penceresinde:
 
 ```bash
@@ -57,6 +57,31 @@ kurulu olmayan bir Python'la denendi.
 * **Canlı Bloomberg verisi** için o Python'da `blpapi` paketi bulunmalıdır (`python -c "import blpapi"` hata
   vermiyorsa vardır). Yoksa dashboard kayıtlı veriyle açılır. Kurulamıyorsa, kurulum gerektirmeyen yol
   [vendor/README.md](vendor/README.md) içinde (`vendor/local`).
+
+### ZIP inmiyorsa: tek dosya
+
+Bazı ağlarda GitHub'ın "Download ZIP"i engellenir, e-posta servisleri de içinde `.bat` / `.js` bulunan arşivleri
+kabul etmez (Gmail: *"yürütülebilir dosyalara ve arşivlere yönelik politika"*). Dosyalar tek tek inebiliyorsa
+[`kurulum/tto_kur.py`](kurulum/tto_kur.py) yeter: dashboard'un çalışması için gereken her şeyi (program, içe aktarılmış
+çalışma kitapları, web paketleri) taşıyan **tek bir düz metin dosyası** (~4,7 MB).
+
+1. Repoda `kurulum/tto_kur.py` → **Download raw file**.
+2. İndirdiğiniz yerde:
+
+```bash
+python tto_kur.py
+```
+
+Yanına `ratetradingtto` klasörünü açar (ZIP'ten çıkanla aynı program; testler ve kaynak Excel dosyaları hariç) ve
+dashboard'u başlatmayı sorar. Sonraki açılışlarda o klasördeki `run.bat`. İnternetten bir şey indirmez, bir şey kurmaz.
+
+* **Güncelleme:** yeni `tto_kur.py`'yi indirip aynı yerde yeniden çalıştırın; değişen dosyalar yenilenir, artık
+  olmayanlar silinir, `data` klasörüne ve `vendor/local`'a dokunulmaz.
+* **E-postayla:** dosyanın adını `tto_kur.txt` yapıp ekleyin; içerik düz metindir ve `python tto_kur.txt` aynı şekilde
+  çalışır.
+* Yarım inmiş ya da yolda bozulmuş dosya açılmaz, ne olduğunu söyler (içeriğin özeti dosyanın içindedir).
+* Dosya `python tools/make_bundle.py` ile üretilir; repodaki kopyanın kodla aynı olduğunu bir test denetler
+  (`python tools/make_bundle.py --check` de söyler). Ayrıntı: [kurulum/README.md](kurulum/README.md).
 
 ### Kurulum yapılabilen bir makinede
 
@@ -444,7 +469,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~6 dk). 594 test:
+Bloomberg ve ağ gerekmez (~6 dk). 604 test:
 
 | Dosya | Kapsam |
 |---|---|
@@ -460,6 +485,7 @@ Bloomberg ve ağ gerekmez (~6 dk). 594 test:
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda |
 | `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |
 | `test_history.py` | Günlük tarihçe: kapanış deposu, kayıtlı `BDH` bloklarının tarihlenmesi, serilerin dosyadan okunuşu, **tarihçenin bugünkü satırı = OIS sayfası** (80 toplantı, hücre hücre), toplantı bazında fiyatlama (yapılan toplantının serisi, gerçekleşen TLREF değişimi, toplantı günü ölçümü, kotaların eriştiği ufuk), gün sonu matrisi (1 / 5 / 21 iş günü kuralı, tatil, geçmiş gün), takvim (tarih düzeltme / ekleme / çıkarma: adımların ve kayıtlı senaryoların toplantıyla taşınması; **toplantı geçince ve liste kaydırılınca** sayfalar ve her toplantının değerleri), sahte Bloomberg'le canlı tarihçe (istek gruplama, yalnızca son günlerin yenilenmesi, yedek ticker, zaman aşımı), HTTP uçları |
+| `test_bundle.py` | Tek dosyalık kurulum (`kurulum/tto_kur.py`): içine ne girdiği, aynı içeriğin aynı dosyayı vermesi, boş klasöre açma, güncelleme (değişen yenilenir, kalkan silinir, `data` / `vendor/local` / kullanıcının kendi dosyaları kalır), ZIP'ten gelmiş klasör, yarım inmiş / bozulmuş / satır sonları değişmiş dosya, klasör dışına çıkan adların reddi, seçenekler; **repodaki dosyanın kodla aynı olduğu** ve hiçbir paketi olmayan bir Python'la açılıp sunucunun ondan çalıştığı |
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik (kota büyüklükleri dahil), sessiz kalan kotaların giderek seyrek sorulması, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik (dört kitap) |
 | `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 149 kontrol: giriş, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu, XY grafiği), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, forward kotasyon matrisi, altın swap faizi girişi ve VİOP tablosunun değişmesi, Borsa Swap, DİBS ASW, gün sonu matrisi (değerler, geçmiş gün, kopyalama), PPK fiyatlama geçmişi (çizgiler, toplantı ekleme / çıkarma, ölçü değiştirme, ipucu), Ayarlar'da toplantı tarihinin düzeltilip OIS sayfasına yansıması, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
 
@@ -501,6 +527,12 @@ TTO dosyası değiştiyse, kayıtlı veri modunda Borsa ve ASW sayfalarını bes
 python tools/make_replay_quotes.py
 ```
 
+Model ya da kod değişince tek dosyalık kurulumu da yenileyin (bir test, repodaki kopyanın güncel olduğunu denetler):
+
+```bash
+python tools/make_bundle.py
+```
+
 Sayfa düzeni (hangi aralık hangi panelde, hangi hücreler girdi, kişisel mi ortak mı) `tto/views/*.json`
 dosyalarındadır; satır/sütun eklenip çıkarıldıysa ilgili aralıkları güncelleyin (`python -m pytest tests/test_views.py`
 tutarlılığı denetler). Yeni bir Excel fonksiyonu kullanılırsa `test_parity.py` adını söyler.
@@ -529,7 +561,8 @@ tto/data/          kayıtlı veri modunda kullanılan ek kotalar ve TLREF geçmi
 tto/static/        arayüz (derleme gerektirmeyen ES modülleri, kendi SVG grafikleri)
 models/            içe aktarılmış çalışma kitapları        workbooks/   kaynak Excel dosyaları
 vendor/            gömülü web paketleri (değiştirilmemiş PyPI wheel'leri; Python 3.8 / 3.9 / 3.10+ setleri)
-tools/             parite, LibreOffice referansı, içe aktarma, kayıtlı veri kotaları
+tools/             parite, LibreOffice referansı, içe aktarma, kayıtlı veri kotaları, tek dosyalık kurulumun üretimi
+kurulum/           tto_kur.py: dashboard'un tamamı tek düz metin dosyasında (ZIP inmeyen / taşınamayan yerler için)
 tests/             test paketi
 ```
 

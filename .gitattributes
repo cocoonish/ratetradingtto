@@ -5,3 +5,7 @@
 *.xlsx binary
 *.xlsm binary
 *.gz binary
+# the single-file installer is generated (tools/make_bundle.py): no line-by-line diffs, Unix line ends, and
+# it stays out of archives of the repository (an archive already is the whole project)
+kurulum/tto_kur.py text eol=lf -diff linguist-generated=true
+kurulum/** export-ignore
