@@ -94,7 +94,7 @@ async function shot(page, name) {
     await page.waitForFunction(() => document.querySelectorAll('.kpi').length >= 5);
     check('KPI strip is filled', (await page.locator('.kpi').count()) >= 5);
     check('mode badge says replay data', /KAYITLI/.test(await page.textContent('#mode-text')));
-    check('nav lists the pages', (await page.locator('#nav .nav-item').count()) >= 18);
+    check('nav lists the pages', (await page.locator('#nav .nav-item').count()) >= 20);
     await shot(page, '01-masa');
 
     // ------------------------------------------------------------------ editing an input
@@ -433,6 +433,116 @@ async function shot(page, name) {
     const size = require('fs').statSync(saved).size;
     check('"Gün sonu arşivi" downloads the day as Blotter_yyyy.mm.dd.xlsx', /^Blotter_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(download.suggestedFilename()) && size > 4000,
       [download.suggestedFilename(), size]);
+
+    // ------------------------------------------------------------------ the dashboard's own tables
+    console.log('own tables: forward quotes from OIS + spread, gold from lease rates, BIST swap, ASW');
+    const order = (ids) => page.evaluate((want) => {
+      const all = [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel);
+      const at = all.indexOf(want[0]);
+      return at >= 0 && want.every((id, k) => all[at + k] === id);
+    }, ids);
+    const pick = async (ref, label) => {                       // a drop-down cell: Enter opens its list
+      const el = await cellHandle(page, ref);
+      await el.click();
+      await page.keyboard.press('Enter');
+      await page.click('.menu button:text-is("' + label + '")');
+    };
+    await open(page, 'masa');
+    check('the forward quote matrix follows the forward pricing table', await order(['B14', 'EKF1', 'EKF2']));
+    const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
+    check('matrix starts from the desk spread (−150 bp on both sides)',
+      (await cellText(page, 'EK_FWD!D4')).trim() === '-150' && Math.abs(trNumber(await cellText(page, 'EK_FWD!M5')) - (ois1m - 1.5)) < 0.011);
+    await typeInto(page, 'EK_FWD!D4', '-300');
+    await waitCell(page, 'EK_FWD!M5', 'Math.abs(Number(t.replace(",", ".")) - ' + (ois1m - 3) + ') < 0.011');
+    const fq = {};
+    for (const c of ['D5', 'E5', 'H5', 'I5', 'M5', 'N5', 'J5', 'K5']) fq[c] = trNumber(await cellText(page, 'EK_FWD!' + c));
+    check('a bid spread of −300 bp moves the bid side only', fq.D5 === -300 && fq.E5 === -150 && Math.abs(fq.N5 - (ois1m - 1.5)) < 0.011, fq);
+    check('bid points are below ask points, forwards follow', fq.H5 < fq.I5 - 500 && fq.J5 < fq.K5, fq);
+    const ois3m = trNumber(await cellText(page, 'EK_FWD!L7'));
+    await typeInto(page, 'EK_FWD!E7', '-25');                  // one date with its own ask spread
+    await waitCell(page, 'EK_FWD!N7', 'Math.abs(Number(t.replace(",", ".")) - ' + (ois3m - 0.25) + ') < 0.011');
+    check('a date can carry its own spread', (await cellText(page, 'EK_FWD!E7')).trim() === '-25' && (await cellText(page, 'EK_FWD!E8')).trim() === '-150'
+      && Math.abs(trNumber(await cellText(page, 'EK_FWD!N8')) - (trNumber(await cellText(page, 'EK_FWD!L8')) - 1.5)) < 0.011);
+    await pick('EK_FWD!B2', 'Bootstrap');
+    await waitCell(page, 'EK_FWD!B2', 't.trim() === "Bootstrap"');
+    const boot = trNumber(await cellText(page, 'EK_FWD!L5'));
+    check('the OIS curve is chosen from a list', Math.abs(boot - ois1m) > 0.001 && Math.abs(boot - ois1m) < 0.5, [ois1m, boot]);
+    // the way back: the points the matrix shows, typed by hand, read the same spread
+    const pts = (await cellText(page, 'EK_FWD!H5')).trim();
+    await typeInto(page, 'EK_FWD!D20', pts);
+    await waitCell(page, 'EK_FWD!K20', 't.trim() !== ""');
+    check('points typed by hand show their spread over OIS', Math.abs(trNumber(await cellText(page, 'EK_FWD!K20')) + 300) <= 1, await cellText(page, 'EK_FWD!K20'));
+    await shot(page, '10-forward-quotes');
+
+    await open(page, 'viop');
+    check('gold tables: spot / source, lease curve, forwards, calculator', await order(['B11', 'B11b', 'XAU1', 'XAU2', 'XAU3', 'XAU4']));
+    const xau0 = (await cellText(page, 'VIOP!M58')).trim();
+    check('offline the gold forward is the BFXFORWARD value Excel saved',
+      xau0 === '3.971,85' && (await cellText(page, 'EK_XAU!K27')).trim() === '3.971,8535' && (await cellText(page, 'EK_XAU!C11')).trim() === 'Spot yok → BFXFORWARD'
+      && (await cellText(page, 'EK_XAU!L27')).trim() === 'BFXFORWARD', xau0);
+    await typeInto(page, 'EK_XAU!B5', '3950,10');
+    await typeInto(page, 'EK_XAU!C5', '3950,60');
+    await typeInto(page, 'EK_XAU!F17', '0,45');
+    await waitCell(page, 'EK_XAU!C11', 't.trim() === "Lease · 1 vade"');
+    await waitCell(page, 'VIOP!M58', 't.trim() !== "' + xau0 + '"');
+    const lease = { m58: await cellText(page, 'VIOP!M58'), k27: await cellText(page, 'EK_XAU!K27'), src: await cellText(page, 'EK_XAU!L27'),
+      usdtry: trNumber(await cellText(page, 'VIOP!M55')), fwd: trNumber(await cellText(page, 'EK_XAU!K27')), viop: trNumber(await cellText(page, 'VIOP!M57')) };
+    check('typed spot and lease rate: the VİOP XAUTRY table runs on the lease forward',
+      Math.abs(trNumber(lease.m58) - lease.fwd) < 0.006 && lease.src.trim() === 'Lease' && Math.abs(lease.fwd - 3950.6 * (1 + 0.0396429 * 57 / 360) / (1 + 0.0045 * 57 / 360)) < 0.01, lease);
+    check('implied USDTRY = VİOP gold ÷ XAUUSD forward × 31,1035', Math.abs(lease.usdtry - lease.viop / lease.fwd * 31.1035) < 0.0006, lease);
+    const theo = trNumber(await cellText(page, 'EK_XAU!B53'));
+    await typeInto(page, 'EK_XAU!B46', '40');                  // "price it at this TRY rate"
+    await waitCell(page, 'EK_XAU!B46', 't.trim() === "40,00"');
+    const theo40 = trNumber(await cellText(page, 'EK_XAU!B53'));
+    const fwd40 = 49.9977 * (1 + 0.40 / 360 * 57) / (1 + 0.0396429 / 360 * 57);
+    check('gold calculator: theoretical XAUTRY at a typed TRY rate', theo40 > theo + 40
+      && Math.abs(theo40 - trNumber(await cellText(page, 'EK_XAU!B48')) * fwd40 / 31.1035) < 0.02, [theo, theo40]);
+    await shot(page, '11-gold-lease');
+    const ctxC = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const pageC = await ctxC.newPage();
+    pageC.on('pageerror', (e) => errors.push('pageerror(C): ' + e.message));
+    await login(pageC, 'Zeynep');
+    await open(pageC, 'viop');
+    check('spot and lease are desk inputs: another user sees the same forward', (await cellText(pageC, 'VIOP!M58')).trim() === lease.m58.trim(), await cellText(pageC, 'VIOP!M58'));
+    check('the calculator rate is personal', (await cellText(pageC, 'EK_XAU!B46')).trim() !== '40,00', await cellText(pageC, 'EK_XAU!B46'));
+    await ctxC.close();
+    await pick('EK_XAU!B11', 'BFXFORWARD');
+    await waitCell(page, 'VIOP!M58', 't.trim() === "' + xau0 + '"');
+    check('the source can be switched back to BFXFORWARD', (await cellText(page, 'EK_XAU!C11')).trim() === 'BFXFORWARD (seçildi)');
+    await pick('EK_XAU!B11', 'Otomatik');
+    await waitCell(page, 'EK_XAU!C11', 't.trim() === "Lease · 1 vade"');
+
+    await open(page, 'borsa');
+    const borsa = await page.evaluate(() => {
+      const num = (ref) => { const td = window.tto.findCell(ref); return td ? Number(td.textContent.replace('%', '').replace(/\./g, '').replace(',', '.')) : NaN; };
+      const heads = [...document.querySelectorAll('.panel[data-panel="t0"] table.grid td')].map((td) => td.textContent.trim());
+      return { banner: (document.querySelector('#content .banner') || {}).textContent || '', heads: heads.filter((t) => /O\/N|SP \/ gün/.test(t)),
+        days: num('bu!E11'), bid: num('bu!H11'), on: num('bu!O11'), ask: num('bu!M11'), onAsk: num('bu!P11') };
+    });
+    check('Borsa swap page says its offline quotes are examples', /ÖRNEK/.test(borsa.banner), borsa.banner.slice(0, 80));
+    check('BIST swap table has the per-day points and the O/N equivalents', JSON.stringify(borsa.heads) === JSON.stringify(['BID SP / gün', 'ASK SP / gün', 'BID O/N', 'ASK O/N']), borsa.heads);
+    check('O/N equivalent is below the simple rate of a longer maturity', borsa.days > 1 && borsa.on > 20 && borsa.on < borsa.bid && borsa.onAsk < borsa.ask, borsa);
+
+    await open(page, 'asw');
+    const asw = await page.evaluate(() => [...document.querySelectorAll('.panel.chart')].map((p) => {
+      const svg = p.querySelector('svg.chart');
+      return { title: p.querySelector('header h2').textContent, markers: svg ? svg.querySelectorAll('circle.mk').length : 0,
+        labels: svg ? [...svg.querySelectorAll('text.pt')].map((t) => t.textContent) : [], paths: svg ? svg.querySelectorAll('path').length : 0,
+        titles: svg ? [...svg.querySelectorAll('text.ttl')].map((t) => t.textContent) : [], wide: p.classList.contains('wide') };
+    }));
+    check('ASW page draws the workbook\'s XY chart: one marker per bond, labelled, and the fitted curve',
+      asw.length === 2 && asw[0].title === 'DİBS ASW — kalan vade' && asw[0].markers >= 15 && asw[0].labels.length >= 10
+      && asw[0].labels.every((t) => /^[A-ZŞÇÖÜİa-zşçöüığ]{3}\d\d/.test(t)) && asw[0].titles.includes('ASW (bp)') && asw[0].titles.includes('Kalan vade (yıl)'), asw[0]);
+    const aswSvg = page.locator('.panel.chart', { hasText: 'DİBS ASW — kalan vade' }).locator('svg.chart');
+    await aswSvg.scrollIntoViewIfNeeded();
+    const ab = await aswSvg.boundingBox();
+    await page.mouse.move(ab.x + ab.width * 0.3, ab.y + ab.height * 0.5);
+    await page.waitForSelector('.chart-tip');
+    const atip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent, rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    check('hovering the XY chart names the nearest bond and its spread', atip.head.length > 0 && atip.rows.length >= 1 && atip.rows.some((r) => /\d/.test(r)), atip);
+    await page.mouse.move(5, 5);
+    check('ASW table has the bonds of the recorded day', (await cellText(page, 'ASW!B7')).trim() === 'TRB100227T13' && /^-?\d+/.test((await cellText(page, 'ASW!R9')).trim()));
+    await shot(page, '12-asw');
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

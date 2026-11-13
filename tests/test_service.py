@@ -16,8 +16,9 @@ def login(svc, name):
 def test_status_and_navigation(service):
     st = service.status()
     assert st["mode"] == "replay" and st["today"] == "2026-11-03" and st["port"] == 1057
-    assert set(st["books"]) == {"tto", "sofr"}
+    assert set(st["books"]) == {"tto", "sofr", "borsa", "asw"}
     assert st["books"]["tto"]["formulas"] > 110000 and st["books"]["sofr"]["formulas"] > 4000
+    assert st["books"]["borsa"]["formulas"] > 16000 and st["books"]["asw"]["formulas"] > 80000
     pages = service.nav()
     ids = [p["id"] for p in pages]
     assert "blotter" in ids and "masa" in ids and "forward" in ids and "usd" in ids
@@ -35,6 +36,9 @@ def test_every_page_renders_without_errors(service, view_id):
             continue
         if p["type"] == "chart":
             d = p["data"]
+            if d.get("scatter"):                         # an XY chart: every series brings its own x values
+                assert d["series"] and all(len(s["x"]) == len(s["data"]) for s in d["series"]), (view_id, p["id"])
+                continue
             assert d["cats"] and d["series"], (view_id, p["id"])
             assert all(len(s["data"]) == len(d["cats"]) for s in d["series"])
             continue
@@ -186,7 +190,9 @@ def test_cell_info_and_grid(service):
     with pytest.raises(ServiceError):
         service.cell_info(None, "tto", "Yok!A1")
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
-    assert len(service.sheets("tto")) == 17
+    assert [s["name"] for s in service.sheets("tto")][-2:] == ["EK_FWD", "EK_XAU"]      # the dashboard's own sheets come last
+    assert len(service.sheets("tto")) == 17 + 2
+    assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2"] and [s["name"] for s in service.sheets("asw")] == ["ASW"]
 
 
 def test_adhoc_what_if_on_any_cell(module_service):

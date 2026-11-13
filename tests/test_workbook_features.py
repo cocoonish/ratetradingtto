@@ -21,8 +21,8 @@ TR = numfmt.get_locale("tr")
 
 @pytest.fixture(scope="module")
 def models():
-    return {"tto": Model.load(os.path.join(ROOT, "models", "tto.json.gz")),
-            "sofr": Model.load(os.path.join(ROOT, "models", "sofr.json.gz"))}
+    """The workbooks exactly as imported (without the dashboard's own sheets)."""
+    return {name: Model.load(os.path.join(ROOT, "models", name + ".json.gz")) for name in ("tto", "sofr", "borsa", "asw")}
 
 
 def panel(svc, view_id, panel_id, show_hidden=False, user=None):
@@ -217,10 +217,11 @@ def test_groups_collapsed_in_excel_start_collapsed(models):
     """A table whose rows Excel keeps folded away (an outline group, collapsed) opens on request here too."""
     checked = 0
     for v in load_views():
-        sheet = models[v["book"]].sheet(v["sheet"])
+        model = models[v["book"]]
         for p in v["panels"]:
-            if p["type"] != "table" or p.get("hidden"):
-                continue
+            if p["type"] != "table" or p.get("hidden") or p.get("sheet", v["sheet"]) not in model.sheet_index:
+                continue                                                        # (a sheet the dashboard added itself)
+            sheet = model.sheet(p.get("sheet", v["sheet"]))
             r1, _, r2, _ = parse_range(p["range"])
             rows = r2 - r1 + 1
             folded = sum(1 for r in range(r1, r2 + 1) if sheet.row_hidden(r))
@@ -412,3 +413,80 @@ def test_the_snapshot_is_written_only_when_something_changed(blotter):
     finally:
         svc.store.save_blotter_snapshot = original
     assert svc.store.blotter_snapshot(today)["snapshot_at"] >= first
+
+
+# ---------------------------------------------------------------------------------------------- panel texts
+def test_captions_and_remarks_kept_in_cells_reach_their_panels(service):
+    """The workbook explains its charts and tables in cells next to them: the caption above becomes the
+    panel title, the remark below its note."""
+    masa = {p["id"]: p for p in service.view(None, "masa")["panels"]}
+    assert masa["chart4"]["title"] == "FRA EĞRİSİ · TRY OIS 3M (bootstrap) · oran ACT/365 ve O/N eşleniği 360"      # MASA!B72
+    assert masa["chart5"]["title"].startswith("FRA EĞRİSİ · OFFSHORE 1Y (XCCY)")                                    # MASA!P72
+    assert masa["chart4"]["note"].startswith("OIS 3M FRA = (DF_a/DF_b − 1)/τ")                                       # MASA!B90
+    assert masa["chart0"]["title"] == "Oranlar (360 basit)" and not masa["chart0"]["note"]                           # the chart's own title
+    dv01 = {p["id"]: p for p in service.view(None, "dv01")["panels"]}
+    assert dv01["B18"]["note"].startswith("Birinci derece; büyük hareketli günlerde konveksite")                     # DV01_RISK!B145
+    usd = service.view(None, "usd")["panels"][0]
+    assert usd["type"] == "notes" and [c["t"] for c in usd["data"]["rows"][0] if c.get("t")] == [
+        "USD OIS · FOMC ima patikası ve işlem seçici", "Bootstrap forward (WIRP mantığı) · senaryo görüşü → işlem önerisi"]
+
+
+def test_long_helper_tables_show_their_first_rows_and_point_to_the_explorer(service):
+    shown = {p["id"]: p for p in service.view(None, "borsa")["panels"]}
+    assert "d0" not in shown                                                            # helper tables come on request
+    helpers = {p["id"]: p for p in service.view(None, "borsa", True)["panels"]}
+    d0 = helpers["d0"]
+    assert d0["data"]["sheet"] == "Sheet1" and d0["data"]["r"][0] == 2 and d0["data"]["r"][-1] == 61
+    assert d0["note"] == "İlk 60 satır gösteriliyor (toplam 403). Tamamı: Sayfa gezgini → Sheet1!A2:L404"
+    assert helpers["t0"]["note"].startswith("BID % / ASK %")                             # a short table keeps its own note
+    # the explorer serves the whole block
+    full = service.grid(None, "borsa", "Sheet1", "A2:L404")["data"]
+    assert full["r"][-1] == 404 and len(full["rows"]) == 403
+
+
+def test_workbooks_without_recorded_data_say_so_offline(service):
+    assert service.books["tto"].recorded and service.books["sofr"].recorded
+    assert not service.books["borsa"].recorded and not service.books["asw"].recorded
+    assert not service.books["borsa"].replay and service.books["tto"].replay           # only recorded values are frozen
+    assert "ÖRNEK" in service.view(None, "borsa")["note"]
+    assert "DİBS RV" in service.view(None, "asw")["note"] and "canlı" in service.view(None, "asw")["note"]
+    assert service.view(None, "masa")["note"] is None
+
+
+# ---------------------------------------------------------------------------------------------- password to open
+def test_a_workbook_with_a_password_to_open_is_imported_with_that_password(tmp_path):
+    """BBG_Borsa_Swap.xlsx is saved with a password to open: such a file is an encrypted container, opened in
+    memory when the password is given - and refused with a clear message otherwise."""
+    pytest.importorskip("msoffcrypto")
+    from msoffcrypto.format.ooxml import OOXMLFile
+    from tto.xl.importer import WorkbookLocked, import_workbook, open_workbook
+    wb = XlsxBook()
+    ws = wb.add_sheet("Kota")
+    ws.set(1, 1, "Vade")
+    ws.set(2, 1, 7)
+    ws.set(2, 2, 0.345, fmt="0.00%")
+    # (the encrypting side of the library wants whole 4096-byte segments: pad the archive with a comment)
+    import io
+    import zipfile
+    raw = io.BytesIO(wb.to_bytes())
+    with zipfile.ZipFile(raw, "a") as zf:
+        zf.comment = b" " * ((-len(raw.getvalue())) % 4096)
+    assert len(raw.getvalue()) % 4096 == 0
+    plain = tmp_path / "acik.xlsx"
+    plain.write_bytes(raw.getvalue())
+    locked = tmp_path / "sifreli.xlsx"
+    with open(plain, "rb") as src, open(locked, "wb") as dst:
+        OOXMLFile(src).encrypt("s1nama-şifresi", dst)
+    assert locked.read_bytes()[:4] == b"\xd0\xcf\x11\xe0" and not locked.read_bytes().startswith(b"PK")
+    model = import_workbook(str(locked), password="s1nama-şifresi")
+    sh = model.sheet("Kota")
+    assert sh.consts[parse_a1("A1")] == "Vade" and sh.consts[parse_a1("A2")] == 7.0 and sh.consts[parse_a1("B2")] == 0.345
+    assert model.numfmts[sh.styles[parse_a1("B2")]] == "0.00%"
+    assert import_workbook(str(plain), password="gereksiz").sheet("Kota").consts == sh.consts      # an open file ignores it
+    with pytest.raises(WorkbookLocked) as exc:
+        import_workbook(str(locked))
+    assert "--password" in str(exc.value)
+    with pytest.raises(WorkbookLocked) as exc:
+        open_workbook(str(locked), "yanlış")
+    assert "açılamadı" in str(exc.value)
+    assert sorted(os.listdir(tmp_path)) == ["acik.xlsx", "sifreli.xlsx"]                # nothing was decrypted to disk

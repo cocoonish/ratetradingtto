@@ -541,6 +541,13 @@
    "hidden": false
   },
   {
+   "id": "B15b",
+   "type": "table",
+   "title": "USDTRY · günlük swap puanı (bid / mid / ask)",
+   "range": "H35:J39",
+   "keep_title": true
+  },
+  {
    "id": "B17",
    "type": "table",
    "title": "EURTRY forward",
@@ -552,7 +559,8 @@
    "type": "table",
    "title": "Altın forward (XAUUSD · XARTRY · XARUSD)",
    "range": "H29:J32",
-   "hidden": false
+   "hidden": false,
+   "note": "XAUUSD forward'ı VİOP sayfasındaki \"Altın · spot ve forward kaynağı\" tablosundan gelir: lease faizi ve spot varsa lease'den, yoksa BFXFORWARD'dan (canlıda yalnızca lease). Lease eğrisi ve kaynak seçimi orada."
   },
   {
    "id": "B19",
@@ -628,7 +636,7 @@
    "id": "B3",
    "type": "table",
    "title": "ICAP Implied TL Curve",
-   "range": "G4:K22",
+   "range": "F4:K22",
    "hidden": false
   },
   {
@@ -707,37 +715,42 @@
   {
    "id": "B7",
    "type": "table",
-   "title": "Interest 2 SP' (TRY rate → swap points)",
-   "range": "AG4:AH16",
-   "hidden": false
+   "title": "Interest 2 SP · TRY faizi → swap puanı (USDTRY | EURTRY)",
+   "range": "AG4:AK16",
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B8",
    "type": "table",
-   "title": "SP 2 Interest' (swap points → implied TRY rate)",
-   "range": "AG18:AH30",
-   "hidden": false
+   "title": "SP 2 Interest · swap puanı → ima TRY faizi (USDTRY | EURTRY)",
+   "range": "AG18:AK30",
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B9",
    "type": "table",
-   "title": "SP 2 Interest' (all-in outright → SP and implied TRY rate)",
-   "range": "AG32:AH44",
-   "hidden": false
+   "title": "SP 2 Interest · all-in outright → puan ve ima TRY faizi (USDTRY | EURTRY)",
+   "range": "AG32:AK44",
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B10",
    "type": "table",
-   "title": "Interest 2 SP' (O/N-equivalent rate → term rate → swap points)",
-   "range": "AG46:AH58",
-   "hidden": false
+   "title": "Interest 2 SP · O/N karşılığı → vade faizi → swap puanı (USDTRY | EURTRY)",
+   "range": "AG46:AK58",
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B11",
    "type": "table",
-   "title": "Basit ↔ bileşik çevirici",
-   "range": "AG60:AH68",
-   "hidden": false
+   "title": "Basit ↔ bileşik çevirici · Repo",
+   "range": "AG60:AK68",
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B21",
@@ -775,6 +788,13 @@
    "hidden": true
   },
   {
+   "id": "B22b",
+   "type": "table",
+   "title": "Yardımcı · RET'ten oran / DF / annuity (3M–1Y)",
+   "range": "H56:J72",
+   "hidden": true
+  },
+  {
    "id": "B31",
    "type": "table",
    "title": "Yardımcı · 'Rate Comparison' grafik verisi",
@@ -787,6 +807,46 @@
    "title": "Yardımcı · kopyalama listesi (valör, USDTRY fwd)",
    "range": "G183:H193",
    "hidden": true
+  },
+  {
+   "id": "S1",
+   "range": "H1:I1",
+   "title": "Yardımcı · serbest hücreler (üst satır: EURTRY mid − 0,10 ve valör + 34 gün)",
+   "type": "table",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "S2",
+   "range": "AB1:AH2",
+   "title": "Yardımcı · serbest sabitler (AB1:AB2) ve AH2",
+   "type": "table",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "S3",
+   "range": "L26:L27",
+   "title": "Yardımcı · bugün ve bugün + 35 gün",
+   "type": "table",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "S4",
+   "range": "AA52:AB58",
+   "title": "Yardımcı · serbest hesap (gün oranlaması)",
+   "type": "table",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "S5",
+   "range": "N71:N71",
+   "title": "Yardımcı · serbest sabit (N71)",
+   "type": "table",
+   "hidden": true,
+   "keep_title": true
   }
  ]
 }

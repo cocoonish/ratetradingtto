@@ -28,6 +28,12 @@ export class ExplorerPage {
     this.grid = null;
     this.adhoc = false;
     this.books = {};
+    // another page may ask for a particular sheet ("show me the whole sheet")
+    try {
+      const want = JSON.parse(sessionStorage.getItem('tto.explorer') || 'null');
+      sessionStorage.removeItem('tto.explorer');
+      if (want && want.book && want.sheet) { this.book = want.book; this.sheet = want.sheet; if (want.range) this.range = want.range; }
+    } catch (e) { /* storage unavailable */ }
   }
 
   async load() {

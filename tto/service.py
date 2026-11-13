@@ -143,6 +143,7 @@ class Service(object):
         self.views = [v for v in load_views() if v["book"] in self.books]
         self.view_index = {v["id"]: v for v in self.views}
         self._shortcut_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._leftover_cache: Dict[str, Any] = {}
         self._snapshot_mark: Dict[str, int] = {}
         for v in self.views:
             book = self.books[v["book"]]
@@ -163,9 +164,11 @@ class Service(object):
             if isinstance(provider, ReplayProvider):
                 if tto is not None:
                     provider.update(snapshot_from_model(tto.engine))
-                demo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "replay_usd.json")
-                if os.path.exists(demo):
-                    provider.load_quotes(demo)
+                # offline quotes for the workbooks that recorded none themselves (see tools/make_replay_quotes.py)
+                folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+                for name in ("replay_usd.json", "replay_asw.json", "replay_borsa.json"):
+                    if os.path.exists(os.path.join(folder, name)):
+                        provider.load_quotes(os.path.join(folder, name))
                 for b in self.books.values():
                     b.engine.reset()
         # shared inputs saved earlier (RET curve, calendars ...)
@@ -357,7 +360,8 @@ class Service(object):
         return {"mode": self.mode, "note": self.mode_note, "provider": prov, "gen": self.gen, "today": today,
                 "ret": ret, "server_date": _dt.date.today().isoformat(),
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
-                                "source": b.model.meta.get("source")} for bid, b in self.books.items()},
+                                "source": b.model.meta.get("source"), "left_out": list(getattr(b, "left_out", []))}
+                          for bid, b in self.books.items()},
                 "port": self.settings.port}
 
     def nav(self) -> List[Dict[str, Any]]:
@@ -402,11 +406,27 @@ class Service(object):
             entry = {"id": p.get("id"), "type": p["type"], "title": p.get("title", ""), "hidden": bool(p.get("hidden")),
                      "wide": bool(p.get("wide")), "collapsed": bool(p.get("collapsed")), "note": p.get("note")}
             sheet = p.get("sheet", sheet_default)
+            if sheet is not None and sheet not in book.model.sheet_index:
+                continue                               # a table of the dashboard's own that does not fit this file
             try:
+                if p.get("note_ref"):
+                    # the explanation the workbook keeps in a cell next to the chart / table
+                    nsi, nrc = book.cell(p["note_ref"] if "!" in p["note_ref"] else "%s!%s" % (sheet, p["note_ref"]))
+                    text = calc.get(nsi, *divmod(nrc, COLS))
+                    if isinstance(text, str) and text.strip():
+                        entry["note"] = text.strip()
                 if p["type"] in ("table", "notes"):
                     entry["range"] = p["range"]
+                    rng = p["range"]
+                    if p.get("max_rows"):
+                        # a long helper table: its first rows here, all of it in the sheet explorer
+                        r1, c1, r2, c2 = parse_range(rng)
+                        if r2 - r1 + 1 > int(p["max_rows"]):
+                            rng = "%s:%s" % (a1(r1 * COLS + c1), a1((r1 + int(p["max_rows"]) - 1) * COLS + c2))
+                            entry["note"] = ("İlk %d satır gösteriliyor (toplam %d). Tamamı: Sayfa gezgini → %s!%s"
+                                             % (int(p["max_rows"]), r2 - r1 + 1, sheet, p["range"]))
                     # columns hidden in Excel stay out of the way until the helper tables are asked for
-                    entry["data"] = R.table(calc, sheet, p["range"], loc, overlay, show_hidden=show_hidden)
+                    entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
                     if p.get("lift", True):
                         own = _lift_title(entry["data"])
                         if own and not p.get("keep_title"):
@@ -423,6 +443,12 @@ class Service(object):
                         entry["title"] = p.get("title") or entry["data"]["title"]
                 elif p["type"] == "custom":
                     entry["component"] = p.get("component")
+                if p.get("title_ref"):
+                    # the caption the workbook keeps in a cell above the chart / table
+                    tsi, trc = book.cell(p["title_ref"] if "!" in p["title_ref"] else "%s!%s" % (sheet, p["title_ref"]))
+                    text = calc.get(tsi, *divmod(trc, COLS))
+                    if isinstance(text, str) and text.strip():
+                        entry["title"] = " ".join(text.split())
             except ServiceError:
                 raise
             except Exception as exc:  # noqa: BLE001 - one broken panel must not take the page down
@@ -443,11 +469,61 @@ class Service(object):
                 panels.append({"id": "image%d" % i, "type": "image", "title": v.get("image_titles", {}).get(str(i)) or "Excel'deki resim",
                                "src": "/api/image?book=%s&sheet=%s&i=%d" % (book.id, _quote(sheet_default), i),
                                "width": img.get("width"), "height": img.get("height"), "hidden": False, "wide": True})
+        if show_hidden:
+            # scratch cells that belong to no table: listed, so that nothing the workbook computes is missing
+            for k, (sheet_name, rest) in enumerate(self._leftover_cells(v)):
+                extra = "" if sheet_name == sheet_default else " (%s)" % sheet_name
+                panels.append({"id": "rest" if k == 0 else "rest%d" % k, "type": "table",
+                               "title": "Diğer hücreler · tablolara girmeyen formül ve değerler" + extra,
+                               "hidden": True, "wide": False, "collapsed": False, "note": None,
+                               "data": R.cells_table(calc, sheet_name, rest, loc, overlay)})
+        note = v.get("note")
+        if v.get("replay_note") and self.mode != "live" and not getattr(book, "recorded", True):
+            note = v["replay_note"]                    # the workbook was saved without market data
         out = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
-               "panels": panels, "ms": int((time.time() - t0) * 1000), "note": v.get("note")}
+               "panels": panels, "ms": int((time.time() - t0) * 1000), "note": note}
         links = self._shortcuts(v)
         if links:
             out["links"] = links
+        return out
+
+    def _leftover_cells(self, v: Dict[str, Any]) -> List[Tuple[str, List[Tuple[int, int]]]]:
+        """Cells of the page's sheets that hold a formula or a value but lie in none of the page's tables:
+        ``[(sheet, [(row, col), ...]), ...]`` (sheets without such cells are left out)."""
+        cached = self._leftover_cache.get(v["id"])
+        if cached is not None:
+            return cached
+        out: List[Tuple[str, List[Tuple[int, int]]]] = []
+        main = v.get("sheet")
+        book = self.books[v["book"]]
+        sheets = [main] if main else []
+        for p in v["panels"]:
+            if p.get("sheet") and p["sheet"] not in sheets and p["sheet"] in book.model.sheet_index:
+                sheets.append(p["sheet"])
+        for sheet_name in sheets:
+            sh = book.model.sheets[book.model.sheet_index[sheet_name]]
+            boxes = []
+            for p in v["panels"]:
+                if p["type"] in ("table", "notes") and p.get("sheet", main) == sheet_name:
+                    try:
+                        boxes.append(parse_range(p["range"]))
+                    except Exception:  # noqa: BLE001
+                        continue
+                if p.get("sheet", main) == sheet_name:
+                    for key in ("note_ref", "title_ref"):
+                        if p.get(key) and "!" not in p[key]:
+                            r, c = divmod(parse_a1(p[key]), COLS)
+                            boxes.append((r, c, r, c))
+            cells = set(sh.fml) | set(sh.members) | {rc for rc, val in sh.consts.items()
+                                                     if val is not None and not (isinstance(val, str) and not val.strip())}
+            rest = []
+            for rc in sorted(cells):
+                r, c = divmod(rc, COLS)
+                if not any(r1 <= r <= r2 and c1 <= c <= c2 for (r1, c1, r2, c2) in boxes):
+                    rest.append((r, c))
+            if rest:
+                out.append((sheet_name, rest))
+        self._leftover_cache[v["id"]] = out
         return out
 
     def _shortcuts(self, v: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -844,6 +920,9 @@ class Service(object):
         except ValueError:
             raise ServiceError("tarih anlaşılamadı: %s" % date)
         trades = self.store.trades(date)
+        for t in trades:
+            if t.get("kind") == "fwd":
+                t["on_rate"] = bl.overnight_equivalent(t.get("try_rate"), t.get("days"))
         out: Dict[str, Any] = {"date": date, "today": today, "is_today": date == today, "trades": trades,
                                "cost": bl.summarise(trades), "dates": self.store.trade_dates(), "gen": self.gen,
                                "tenors": bl.OIS_TENORS}
@@ -981,11 +1060,11 @@ class Service(object):
         trades = data["trades"]
         fw = [t for t in trades if t["kind"] == "fwd"]
         table("USDTRY Forward", ["Saat", "Kullanıcı", "Yön", "Tutar (USD)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
-                                 "Fiyatlama", "Karşı taraf", "Not"],
+                                 "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı"],
               [[clock(t), who(t), "ALIŞ" if t["dir"] == "B" else "SATIŞ", t.get("amount"), t.get("value_date"), t.get("days"),
                 t.get("try_rate"), t.get("forward"), t.get("tl"), basis.get(t.get("basis"), t.get("basis") or ""),
-                t.get("cpt") or "", t.get("note") or ""] for t in fw],
-              [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None])
+                t.get("cpt") or "", t.get("note") or "", t.get("on_rate")] for t in fw],
+              [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3])
         seen = set()
         ois_rows = []
         for t in (x for x in trades if x["kind"] == "ois"):

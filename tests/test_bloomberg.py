@@ -2,7 +2,7 @@
 
 The decisive test is :func:`test_live_pipeline_reproduces_a_direct_calculation`: with the same market data
 the asynchronous chain *request -> answer -> invalidate -> recalculate* must give, for every formula cell of
-both workbooks, exactly what a plain synchronous calculation gives.
+the four workbooks, exactly what a plain synchronous calculation gives.
 """
 import datetime as dt
 import time
@@ -13,6 +13,7 @@ import fake_blpapi
 from helpers import close, complete_snapshot, server_from_snapshot
 from tto.config import Settings
 from tto.marketdata.base import INVALID_SECURITY, NOT_APPLICABLE, REQUESTING, bdp_key
+from tto.marketdata import bloomberg
 from tto.marketdata.bloomberg import NA_NA, NO_BFX, NO_RT, BloombergProvider, check_connection
 from tto.marketdata.replay import ReplayProvider
 from tto.service import Service
@@ -134,6 +135,96 @@ def test_streaming_updates_real_time_fields_without_new_requests(provider, serve
     assert len(server.requests) == n                                                 # ticks cost no data points
     st = provider.status()
     assert st["connected"] and st["subscriptions"] == 1 and st["ticks"] >= 2 and st["mode"] == "live"
+
+
+def test_bist_swap_quote_sizes_are_streamed(provider, server):
+    """The Borsa swap sheet asks BID / ASK and their sizes for some 800 tickers: all four are real-time
+    fields, so the quotes cost one request each and are then kept up to date by the subscription."""
+    sec = "TYB7D BFX0 Curncy"
+    server.ref[(sec, "BID", ())] = 3350.0
+    server.ref[(sec, "BID_SIZE", ())] = 150.0
+    server.ref[(sec, "ASK_SIZE", ())] = 40.0
+    bid, size, ask_size = bdp_key(sec, "BID"), bdp_key(sec, "BID_SIZE"), bdp_key(sec, "ASK_SIZE")
+    for k in (bid, size, ask_size):
+        provider.get_bdp(k)
+    settle(provider)
+    provider.drain_changes()
+    assert (provider.get_bdp(bid), provider.get_bdp(size), provider.get_bdp(ask_size)) == (3350.0, 150.0, 40.0)
+    assert (sec, ["ASK_SIZE", "BID", "BID_SIZE"]) in server.subscriptions
+    n = len(server.requests)
+    server.tick(sec, {"BID_SIZE": 90.0, "ASK_SIZE": 40.0})
+    time.sleep(0.3)
+    assert provider.get_bdp(size) == 90.0 and provider.drain_changes() == [size]
+    assert len(server.requests) == n
+
+
+def requests_for(server, security):
+    return sum(1 for r in server.requests if security in r["securities"])
+
+
+def test_quotes_that_never_arrive_are_asked_less_and_less(server, monkeypatch):
+    """A real-time field whose subscription stays silent is asked by request instead.  The BIST swap sheet
+    watches hundreds of maturities without any quote: asked at a fixed interval they would use up the daily
+    data limit, so the interval doubles while the answer stays the same - and an unknown ticker is asked once."""
+    monkeypatch.setattr(bloomberg, "SILENT_AFTER", 0.2)
+    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX", 1.6)
+    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX_EMPTY", 1.6)
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), price_poll=0.2)
+    p.start()
+    try:
+        quiet, unknown = "TYB200D BFX0 Curncy", "TYB999D BFX0 Curncy"
+        server.invalid.add(unknown)
+        kq, ku = bdp_key(quiet, "BID"), bdp_key(unknown, "BID")
+        p.get_bdp(kq)
+        p.get_bdp(ku)
+        settle(p)
+        assert p.get_bdp(kq) == NA_NA and p.get_bdp(ku) == INVALID_SECURITY
+        time.sleep(3.0)
+        # every 0.2 s would be some fourteen requests; 0.2, 0.4, 0.8, 1.6 ... leaves a handful
+        assert 2 <= requests_for(server, quiet) <= 7, requests_for(server, quiet)
+        assert requests_for(server, unknown) == 1
+        with p._lock:
+            assert p._items[kq].poll == 1.6 and p._items[ku].poll == 0.0
+        # the quote appears: the next request finds it and the short interval applies again
+        server.ref[(quiet, "BID", ())] = 3350.0
+        deadline = time.time() + 6.0
+        while p.get_bdp(kq) != 3350.0 and time.time() < deadline:
+            time.sleep(0.05)
+        assert p.get_bdp(kq) == 3350.0 and kq in p.drain_changes()
+        n = requests_for(server, quiet)
+        time.sleep(0.9)
+        assert requests_for(server, quiet) > n                       # asked again within 0.2 + 0.4 s, not after 1.6 s
+        # ... and once the subscription delivers, the polling stops altogether
+        server.tick(quiet, {"BID": 3360.0})
+        time.sleep(0.4)
+        assert p.get_bdp(kq) == 3360.0
+        n = requests_for(server, quiet)
+        time.sleep(1.2)
+        assert requests_for(server, quiet) == n
+    finally:
+        p.stop()
+
+
+def test_without_subscriptions_unchanged_quotes_back_off_too(server, monkeypatch):
+    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX", 1.6)
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), stream=False, price_poll=0.2)
+    p.start()
+    try:
+        key = bdp_key("USDTRY Curncy", "BID")
+        p.get_bdp(key)
+        settle(p)
+        assert p.get_bdp(key) == 49.997 and server.subscriptions == []
+        time.sleep(3.0)
+        assert 2 <= requests_for(server, "USDTRY Curncy") <= 7, requests_for(server, "USDTRY Curncy")
+        server.ref[("USDTRY Curncy", "BID", ())] = 50.01            # a moving quote is followed at the short interval
+        deadline = time.time() + 6.0
+        while p.get_bdp(key) != 50.01 and time.time() < deadline:
+            time.sleep(0.05)
+        assert p.get_bdp(key) == 50.01
+        with p._lock:
+            assert p._items[key].poll <= 0.4
+    finally:
+        p.stop()
 
 
 def test_fields_with_overrides_and_static_fields_are_not_streamed(provider, server):
@@ -310,15 +401,22 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
             if not live.warmup()["items"]:
                 break
             got = _all_formula_values(live)
-        assert len(expected) > 118000
+        assert len(expected) > 220000                        # every formula of the four workbooks and of the extra sheets
         differ = [(k[1], a1(k[2]), v, got[k]) for k, v in expected.items()
                   if not (close(v, got[k], 1e-12) or (type(v) is XlError and type(got[k]) is XlError and v.code == got[k].code))]
         assert differ == [], differ[:10]
-        numbers = sum(1 for v in expected.values() if isinstance(v, float))
-        errors = sum(1 for v in expected.values() if type(v) is XlError)
-        assert numbers > 80000 and errors < 500              # a real calculation, not a comparison of errors
+        # a real calculation, not a comparison of errors - counted on the two workbooks whose files hold the
+        # market data of their last calculation (the other two have no recorded history to answer with)
+        recorded = [v for k, v in expected.items() if k[0] in ("tto", "sofr")]
+        numbers = sum(1 for v in recorded if isinstance(v, float))
+        errors = sum(1 for v in recorded if type(v) is XlError)
+        assert numbers > 80000 and errors < 500
+        assert sum(1 for k, v in expected.items() if k[0] in ("borsa", "asw") and isinstance(v, float)) > 5000
         st = provider.status()
-        assert st["subscriptions"] > 150 and st["requests"] < 200 and st["hits_today"] < 2000 and not st["error"]
+        # four workbooks: the BIST swap sheet alone watches 800 tickers (bid, ask and their sizes).  Each item is
+        # asked once and the requests are batched (how finely depends on timing: several items per request)
+        assert st["subscriptions"] > 900 and st["hits_today"] < 6000 and not st["error"]
+        assert st["hits_today"] == warm["items"] and st["requests"] < st["hits_today"] / 5
 
         # a tick moves the curve: both sides again agree after the change
         tickers = sorted({k[1] for k in snapshot if k[0] == "BDP" and k[1].startswith("TYSO") and k[2] == "PX_LAST"})

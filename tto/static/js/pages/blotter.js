@@ -187,6 +187,14 @@ export class BlotterPage {
     this.host.appendChild(h('div', { class: 'blotter' }, h('div', { class: 'left' }, this.entry, this.readonlyNote), lists));
     this.sheetTitle = h('div', { class: 'section-title' }, 'Excel sayfasının kendi özet tabloları (Günlük İşlemler)');
     this.sheetWrap = h('div', { class: 'panels' });
+    // every cell of the workbook's blotter sheet (the per-trade columns, helpers) is one click away
+    this.sheetLink = h('button', { class: 'btn sm', type: 'button',
+      title: 'Günlük İşlemler sayfasının tamamını (Excel düzeni, formülleriyle) Sayfa gezgininde aç' }, 'Sayfanın tamamı');
+    this.sheetLink.addEventListener('click', () => {
+      try { sessionStorage.setItem('tto.explorer', JSON.stringify({ book: 'tto', sheet: 'Günlük İşlemler', range: 'A1:AA60' })); } catch (e) { /* ignore */ }
+      window.location.hash = '#/explorer';
+    });
+    this.sheetTitle.appendChild(this.sheetLink);
     this.host.appendChild(this.sheetTitle);
     this.host.appendChild(this.sheetWrap);
     show(this.tab);
@@ -592,9 +600,10 @@ export class BlotterPage {
     this.readonlyNote.classList.toggle('hidden', d.is_today);
 
     const fw = d.trades.filter((t) => t.kind === 'fwd');
-    this.setGrid('fwd', ['Saat', 'Kullanıcı', 'Yön', 'Tutar (USD)', 'Valör', 'Gün', 'TRY faizi', 'Forward', 'TL tutarı', 'Fiyatlama', 'Karşı taraf', 'Not', ''],
+    // "O/N" is column F of the workbook's blotter sheet: the overnight equivalent of the trade's TRY rate
+    this.setGrid('fwd', ['Saat', 'Kullanıcı', 'Yön', 'Tutar (USD)', 'Valör', 'Gün', 'TRY faizi', 'O/N', 'Forward', 'TL tutarı', 'Fiyatlama', 'Karşı taraf', 'Not', ''],
       fw.map((t) => [timeOf(t.created_at), this.who(t), { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
-        n(t.amount, 0), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), n(t.forward, 4), n(t.tl, 2),
+        n(t.amount, 0), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.tl, 2),
         BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
         this.delCell(t, (t.dir === 'B' ? 'Alış ' : 'Satış ') + num(t.amount, 0) + ' USD · ' + serialDate(t.value_date))]),
       fw.length ? fw.length + ' işlem' : '');
@@ -656,6 +665,7 @@ export class BlotterPage {
       }
     }
     this.sheetTitle.classList.toggle('hidden', !sheet.length);
+    this.sheetLink.classList.toggle('hidden', !sheet.length);
   }
 }
 

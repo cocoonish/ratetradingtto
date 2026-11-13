@@ -166,9 +166,52 @@
    "group": "masa-22",
    "kind": "text",
    "label": "Kaynak — Bloomberg source suffix for OIS history tickers"
+  },
+  {
+   "range": "EK_FWD!B2",
+   "scope": "user",
+   "group": "ekfwd-curve",
+   "kind": "text",
+   "label": "Eğri — OIS curve of the forward quote matrix (MPC ima / S1 / S2 / S3 / Ağırlıklı / Bootstrap / TLREF sabit)"
+  },
+  {
+   "range": "EK_FWD!D4:E4",
+   "scope": "user",
+   "group": "ekfwd-spread",
+   "kind": "number",
+   "label": "Spread bid / ask (bp), 'Tümü' — general OIS spread of the bid and of the ask side (formula default: MASA!I60)"
+  },
+  {
+   "range": "EK_FWD!B5:B14",
+   "scope": "user",
+   "group": "ekfwd-dates",
+   "kind": "date",
+   "label": "Valör — value dates of the forward quote matrix (1M…12M by formula, four free rows)"
+  },
+  {
+   "range": "EK_FWD!D5:E14",
+   "scope": "user",
+   "group": "ekfwd-rowspread",
+   "kind": "number",
+   "label": "Spread bid / ask (bp) per value date (formula default: the general spread)"
+  },
+  {
+   "range": "EK_FWD!D20:E29",
+   "scope": "user",
+   "group": "ekfwd-points",
+   "kind": "number",
+   "label": "Elle puan bid / ask — swap points typed by hand, to read their spread over OIS"
   }
  ],
  "panels": [
+  {
+   "id": "B1",
+   "type": "table",
+   "title": "Yardımcı · başlık şeridi ve köprüler (üst bantta ve Kısayollar'da gösterilir)",
+   "range": "B1:AI2",
+   "hidden": true,
+   "keep_title": true
+  },
   {
    "id": "B2",
    "type": "table",
@@ -234,12 +277,16 @@
   {
    "id": "chart4",
    "type": "chart",
-   "chart": 4
+   "chart": 4,
+   "note_ref": "B90",
+   "title_ref": "B72"
   },
   {
    "id": "chart5",
    "type": "chart",
-   "chart": 5
+   "chart": 5,
+   "note_ref": "P90",
+   "title_ref": "P72"
   },
   {
    "id": "B13",
@@ -254,6 +301,24 @@
    "title": "FORWARD FİYATLAMA  ·  USDTRY  (döviz Q100; valör ve manuel faiz sarı hücreler)",
    "range": "P92:AB103",
    "hidden": false
+  },
+  {
+   "id": "EKF1",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A1:U16",
+   "hidden": false,
+   "wide": true,
+   "title": "FORWARD KOTASYON  ·  USDTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)"
+  },
+  {
+   "id": "EKF2",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A18:N30",
+   "hidden": false,
+   "wide": true,
+   "title": "PUAN → OIS SPREAD  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
   },
   {
    "id": "B15",
@@ -338,6 +403,15 @@
    "title": "Forward-pricing helpers",
    "range": "AX93:AZ99",
    "hidden": true
+  },
+  {
+   "id": "EKF3",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "X2:AK14",
+   "hidden": true,
+   "title": "Yardımcı · forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi",
+   "keep_title": true
   },
   {
    "id": "B27",

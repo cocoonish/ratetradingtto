@@ -1,7 +1,7 @@
 """Excel semantics of the formula engine: operators, coercion, functions, locale."""
 import pytest
 
-from helpers import ev, mini_engine
+from helpers import ev, mini_book, mini_engine
 from tto.xl.errors import XlError
 
 CELLS = {"A1": 1, "A2": 2, "A3": 3, "A4": "x", "B1": 10, "B2": 20, "B3": 30, "B4": 40, "C1": "apple", "C2": "avocado",
@@ -240,3 +240,84 @@ def test_empty_cells_count_as_zero_or_empty_text():
     assert ev("ISBLANK(Y1)") is True
     eng = mini_engine({"A1": "=Y1"})           # a formula that returns an empty cell shows 0
     assert eng.shared.value("S!A1") == 0.0
+
+
+# ---------------------------------------------------------------------------------------------- dynamic arrays
+FILTER_CELLS = {"A1": 1, "A2": 2, "A3": 3, "A4": 4, "B1": "a", "B2": "b", "B3": "c", "B4": "d",
+                "C1": True, "C2": False, "C3": 1, "C4": 0, "D1": 5, "D2": "=NA()", "D3": 7, "D4": "x"}
+
+
+def spilled(calc, anchor, rows, cols=1):
+    from tto.xl.model import COLS, a1, parse_a1
+    r0, c0 = divmod(parse_a1(anchor), COLS)
+    out = [[calc.value("S!" + a1((r0 + i) * COLS + c0 + j)) for j in range(cols)] for i in range(rows)]
+    return [row[0] for row in out] if cols == 1 else out
+
+
+def test_filter_spills_the_rows_whose_flag_is_true():
+    """FILTER lists the quoted maturities on the Borsa swap sheet: true / non-zero keeps a row, the result
+    spills below the formula and the cells after it stay empty."""
+    cells = dict(FILTER_CELLS, F1="=FILTER(A1:B4,C1:C4)", I1="=FILTER(A1:A4,A1:A4>2)", A6=1, B6=0, C6=1, D6=0,
+                 K1="=FILTER(A1:D1,A6:D6)", P1="=SUM(FILTER(A1:A4,A1:A4>1))")
+    calc = mini_book(cells, dynamic=("F1", "I1", "K1")).engine.shared
+    assert spilled(calc, "F1", 4, 2) == [[1.0, "a"], [3.0, "c"], [None, None], [None, None]]
+    assert spilled(calc, "I1", 4) == [3.0, 4.0, None, None]             # the flags may be computed in place
+    assert [calc.value("S!K1"), calc.value("S!L1"), calc.value("S!M1")] == [1.0, True, None]     # a row of flags picks columns
+    assert calc.value("S!P1") == 9.0                                     # usable inside another function
+
+
+def test_filter_without_a_match_and_with_a_wrong_shape():
+    cells = dict(FILTER_CELLS, K1='=FILTER(A1:A4,B1:B4="z","yok")', L1='=FILTER(A1:A4,B1:B4="z")', M1="=FILTER(A1:A4,C1:C3)",
+                 N1="=FILTER(A1:A4,D1:D4)")
+    calc = mini_book(cells, dynamic=("K1", "L1", "M1", "N1")).engine.shared
+    assert calc.value("S!K1") == "yok"                                   # if_empty
+    assert calc.value("S!L1").code == "#CALC!"                           # nothing left and no if_empty
+    assert calc.value("S!M1").code == "#VALUE!"                          # flags of another size
+    assert calc.value("S!N1").code == "#N/A"                             # an error among the flags is the result
+
+
+def test_a_spill_that_has_no_room_is_an_error():
+    cells = dict(FILTER_CELLS, F1="=FILTER(A1:B4,C1:C4)", F2="dolu", I1="=FILTER(A1:B4,A1:A4=4)", I2="dolu")
+    calc = mini_book(cells, dynamic=("F1", "I1")).engine.shared
+    assert calc.value("S!F1").code == "#SPILL!" and calc.value("S!G1") is None and calc.value("S!F2") == "dolu"
+    assert [calc.value("S!I1"), calc.value("S!J1")] == [4.0, "d"]         # one row fits above the occupied cell
+    assert calc.value("S!I2") == "dolu"
+
+
+@pytest.mark.parametrize("formula, expected", [
+    ("AGGREGATE(9,6,D1:D4)", 12.0),                  # options 6: errors are left out (5, #N/A, 7, text)
+    ("AGGREGATE(1,6,D1:D4)", 6.0),
+    ("AGGREGATE(2,6,D1:D4)", 2.0),                   # COUNT
+    ("AGGREGATE(3,6,D1:D4)", 3.0),                   # COUNTA
+    ("AGGREGATE(4,6,D1:D4)", 7.0),
+    ("AGGREGATE(5,6,D1:D4)", 5.0),
+    ("AGGREGATE(6,6,A1:A4)", 24.0),
+    ("AGGREGATE(9,6,A1:A2,A3:A4)", 10.0),            # reference form takes several ranges
+    ("AGGREGATE(12,6,A1:A4)", 2.5),                  # MEDIAN
+    ("AGGREGATE(14,6,A1:A4,2)", 3.0),                # LARGE
+    ("AGGREGATE(15,6,A1:A4,1)", 1.0),                # SMALL
+    ("AGGREGATE(16,6,A1:A4,0.9)", 3.7),              # PERCENTILE.INC
+    ("AGGREGATE(17,6,A1:A4,1)", 1.75),               # QUARTILE.INC
+    ("AGGREGATE(18,6,A1:A4,0.25)", 1.25),            # PERCENTILE.EXC
+    ("AGGREGATE(19,6,A1:A4,2)", 2.5),                # QUARTILE.EXC
+    ("AGGREGATE(16,6,D1:D4/1,0.5)", 6.0),            # array form: errors made by the calculation are left out too
+    ("AGGREGATE(7,6,A1:A4)", 1.2909944487358056),    # STDEV.S
+    ("AGGREGATE(8,6,A1:A4)", 1.118033988749895),     # STDEV.P
+    ("AGGREGATE(10,6,A1:A4)", 1.6666666666666667),   # VAR.S
+    ("AGGREGATE(11,6,A1:A4)", 1.25),                 # VAR.P
+])
+def test_aggregate(formula, expected):
+    assert approx(ev(formula, FILTER_CELLS), expected)
+
+
+@pytest.mark.parametrize("formula, code", [
+    ("AGGREGATE(9,4,D1:D4)", "#N/A"),                # options 4: errors are not ignored
+    ("AGGREGATE(13,6,A1:A4)", "#N/A"),               # MODE without a repeated value
+    ("AGGREGATE(14,6,A1:A4,9)", "#NUM!"),            # k beyond the data
+    ("AGGREGATE(18,6,A1:A4,0.1)", "#NUM!"),          # PERCENTILE.EXC outside 1/(n+1) … n/(n+1)
+    ("AGGREGATE(1,6,B1:B4)", "#DIV/0!"),             # no numbers
+    ("AGGREGATE(20,6,A1:A4)", "#VALUE!"),            # no such function number
+    ("AGGREGATE(14,6,A1:A4)", "#VALUE!"),            # LARGE needs k
+])
+def test_aggregate_errors(formula, code):
+    assert ev(formula, FILTER_CELLS).code == code

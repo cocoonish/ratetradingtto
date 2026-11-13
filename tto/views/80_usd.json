@@ -142,10 +142,16 @@
  ],
  "panels": [
   {
+   "id": "cap",
+   "type": "notes",
+   "title": "USD OIS · FOMC ima patikası ve işlem seçici",
+   "range": "A1:J1"
+  },
+  {
    "id": "top",
    "type": "table",
    "title": "En iyi işlemler",
-   "range": "F3:N14"
+   "range": "F2:N14"
   },
   {
    "id": "inp",
@@ -269,7 +275,7 @@
    "id": "t3",
    "type": "table",
    "title": "İşlem 3 · Ardışık toplantı spread",
-   "range": "A120:R130",
+   "range": "A120:R131",
    "wide": true
   },
   {
@@ -299,7 +305,7 @@
    "id": "aux",
    "type": "table",
    "title": "Yardımcı hesaplar",
-   "range": "AU47:BM123",
+   "range": "AU15:BM284",
    "hidden": true
   }
  ]

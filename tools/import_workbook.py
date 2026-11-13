@@ -1,6 +1,7 @@
 """Import an Excel workbook into a model file used by the dashboard.
 
     python tools/import_workbook.py workbooks/TTO_v8_5.xlsm models/tto.json.gz
+    python tools/import_workbook.py workbooks/BBG_Borsa_Swap.xlsx models/borsa.json.gz <password to open>
 """
 from __future__ import annotations
 
@@ -14,11 +15,11 @@ from tto.xl.importer import import_workbook  # noqa: E402
 
 
 def main(argv):
-    if len(argv) != 3:
+    if len(argv) not in (3, 4):
         print(__doc__)
         return 2
     t0 = time.time()
-    model = import_workbook(argv[1])
+    model = import_workbook(argv[1], password=argv[3] if len(argv) == 4 else None)
     model.save(argv[2])
     print("%s -> %s : %d sheets, %d formulas, %d templates, %.1fs" % (
         argv[1], argv[2], len(model.sheets), model.meta["formulas"], model.meta["templates"], time.time() - t0))

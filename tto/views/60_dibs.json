@@ -128,6 +128,13 @@
    "hidden": false
   },
   {
+   "id": "B2b",
+   "type": "table",
+   "title": "ASW eğrisi (FX swap)",
+   "range": "BF3:BJ3",
+   "keep_title": true
+  },
+  {
    "id": "B3",
    "type": "table",
    "title": "DİBS göreli değer tablosu",

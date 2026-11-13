@@ -443,6 +443,18 @@ def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:
+    """O/N equivalent (360) of a forward trade's TRY rate, as column F of the blotter sheet computes it:
+    ``360*((1+rate*days/365)^(1/days)-1)``."""
+    try:
+        r, d = float(rate), float(days)
+    except (TypeError, ValueError):
+        return None
+    if d <= 0 or 1.0 + r * d / 365.0 <= 0:
+        return None
+    return 360.0 * ((1.0 + r * d / 365.0) ** (1.0 / d) - 1.0)
+
+
 # ---------------------------------------------------------------------------------------------- sheet sync
 def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], Any]:
     """Cell values of the three input lists of the 'Günlük İşlemler' sheet for the given trades."""

@@ -5,8 +5,8 @@ implemented here.
 What the workbook asks for                       how it is served
 -----------------------------------------------  ------------------------------------------------------------
 ``BDP`` real-time fields (BID, ASK, MID,          one ``ReferenceDataRequest`` for the first value, then a
-PX_LAST, LAST_PRICE, PX_BID/ASK/MID, HIGH, LOW)   ``//blp/mktdata`` subscription keeps it up to date (streaming
-without overrides                                 does not use up the daily data limit)
+PX_LAST, LAST_PRICE, PX_BID/ASK/MID, HIGH, LOW,   ``//blp/mktdata`` subscription keeps it up to date (streaming
+BID_SIZE, ASK_SIZE) without overrides             does not use up the daily data limit)
 other ``BDP`` fields / ``BDP`` with overrides     ``ReferenceDataRequest``, refreshed on a slow schedule
 ``BDH``                                           ``HistoricalDataRequest`` (Days / Fill / Per / Dates options)
 ``BDS``                                           ``ReferenceDataRequest`` on the bulk field
@@ -36,7 +36,8 @@ MKTDATA = "//blp/mktdata"
 
 #: BDP field -> name of the same quantity in a market-data subscription
 RT_FIELDS = {"BID": "BID", "ASK": "ASK", "MID": "MID", "LAST_PRICE": "LAST_PRICE", "PX_LAST": "LAST_PRICE",
-             "PX_BID": "BID", "PX_ASK": "ASK", "PX_MID": "MID", "HIGH": "HIGH", "LOW": "LOW"}
+             "PX_BID": "BID", "PX_ASK": "ASK", "PX_MID": "MID", "HIGH": "HIGH", "LOW": "LOW",
+             "BID_SIZE": "BID_SIZE", "ASK_SIZE": "ASK_SIZE"}      # order sizes of the BIST swap quotes
 
 #: how often (seconds) reference values are asked again; real-time fields are streamed instead
 STATIC_FIELDS = {"NAME", "SECURITY_DES", "CPN", "CPN_TYP", "CPN_FREQ", "MATURITY", "FIRST_CPN_DT", "FLT_SPREAD",
@@ -45,6 +46,16 @@ REFRESH_STATIC = 6 * 3600.0
 REFRESH_DAILY = 30 * 60.0
 REFRESH_DERIVED = 60.0
 REFRESH_HISTORY = 15 * 60.0
+#: a real-time field that does not arrive through its subscription is asked by request instead: first after
+#: ``price_poll`` seconds and then, as long as the answer stays the same, at twice the previous interval up to
+#: these limits.  (A sheet such as the BIST swap quotes watches hundreds of maturities that have no quote at
+#: all: asked every two minutes they alone would use up the daily data limit within hours.)
+PRICE_POLL_MAX = 30 * 60.0            # a value that may have gone stale
+PRICE_POLL_MAX_EMPTY = 60 * 60.0      # a field without any value ("#N/A N/A")
+#: seconds after which a started subscription that has not delivered a field counts as not delivering it
+SILENT_AFTER = 30.0
+#: answers that no later request will change: never asked again
+FINAL_ANSWERS = (INVALID_SECURITY, INVALID_FIELD, NOT_APPLICABLE)
 
 _PERIODICITY = {"D": "DAILY", "W": "WEEKLY", "M": "MONTHLY", "Q": "QUARTERLY", "S": "SEMI_ANNUALLY", "Y": "YEARLY"}
 _DAYS = {"W": "NON_TRADING_WEEKDAYS", "A": "ALL_CALENDAR_DAYS", "C": "ALL_CALENDAR_DAYS", "T": "ACTIVE_DAYS_ONLY"}
@@ -59,13 +70,14 @@ def _override_value(name: str, value: str) -> str:
 
 
 class _Item(object):
-    __slots__ = ("state", "fetched", "refresh", "streamed")
+    __slots__ = ("state", "fetched", "refresh", "streamed", "poll")
 
     def __init__(self):
         self.state = "queued"        # queued | sent | ok
         self.fetched = 0.0
         self.refresh = 0.0           # seconds between reference refreshes (0 = never)
         self.streamed = 0.0          # time of the last value that came from a subscription
+        self.poll = 0.0              # current interval of a polled real-time field (0 = not polled); backs off
 
 
 class _Request(object):
@@ -206,6 +218,8 @@ class BloombergProvider(Provider):
             if key not in self._items:
                 it = _Item()
                 it.refresh = refresh
+                if rt_field is not None and not self.stream:
+                    it.poll = refresh                    # no subscriptions at all: quotes are polled (and back off)
                 self._items[key] = it
                 self._queue.append(key)
                 if rt_field is not None and self.stream:
@@ -282,15 +296,19 @@ class BloombergProvider(Provider):
             self._items[key] = it
         now = time.time()
         it.state = "ok"
-        if streamed:
-            it.streamed = now
-        else:
-            it.fetched = now
         old = self._values.get(key)
         if type(old) is XlArray and type(value) is XlArray:
             same = old.rows == value.rows
         else:
             same = type(old) is type(value) and old == value
+        if streamed:
+            it.streamed = now
+            it.poll = 0.0                                # the subscription delivers: no need to poll
+        else:
+            if it.poll and it.fetched:                   # a polled quote: the same answer again -> ask less often
+                limit = PRICE_POLL_MAX if type(value) is float else PRICE_POLL_MAX_EMPTY
+                it.poll = min(it.poll * 2.0, max(limit, self.price_poll)) if same else self.price_poll
+            it.fetched = now
         if not same:
             self._values[key] = value
             self._changed.add(key)
@@ -380,8 +398,10 @@ class BloombergProvider(Provider):
             for key, it in self._items.items():
                 if it.state != "ok" or it.refresh <= 0:
                     continue
+                if it.poll and self._values.get(key) in FINAL_ANSWERS:
+                    continue                             # a polled quote of an unknown ticker / field
                 last = max(it.fetched, it.streamed)
-                if now - last >= it.refresh:
+                if now - last >= max(it.refresh, it.poll):
                     it.state = "queued"
                     self._queue.append(key)
             # real-time keys whose subscription does not deliver are polled instead
@@ -389,14 +409,17 @@ class BloombergProvider(Provider):
                 for (sec, field), keys in self._rt_keys.items():
                     sub = self._subs.get(sec)
                     dead = sub is None or sub.state == "failed" or field in sub.bad or \
-                        (sub.state == "started" and now - sub.since > 30.0)
+                        (sub.state == "started" and now - sub.since > SILENT_AFTER)
                     if not dead:
                         continue
                     for key in keys:
                         it = self._items.get(key)
                         if it is None or it.state != "ok" or it.streamed:
                             continue
-                        if now - it.fetched >= self.price_poll:
+                        if self._values.get(key) in FINAL_ANSWERS:
+                            continue                     # nothing a later request could change
+                        if now - it.fetched >= (it.poll or self.price_poll):
+                            it.poll = it.poll or self.price_poll
                             it.state = "queued"
                             self._queue.append(key)
 

@@ -496,6 +496,14 @@
    "title": "Yardımcı · senaryo adımları (S1–S3)",
    "range": "BM8:BO89",
    "hidden": true
+  },
+  {
+   "id": "B25",
+   "type": "table",
+   "title": "Yardımcı · spot valör (Bloomberg, W2)",
+   "range": "W2:W2",
+   "hidden": true,
+   "keep_title": true
   }
  ]
 }

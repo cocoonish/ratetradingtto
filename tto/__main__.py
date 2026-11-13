@@ -5,6 +5,7 @@
     python -m tto --mode replay         # never touch Bloomberg (works anywhere, uses the workbook snapshot)
     python -m tto --mode live           # fail instead of falling back when Bloomberg is not reachable
     python -m tto import-workbook workbooks/TTO_v8_5.xlsm --id tto
+    python -m tto import-workbook workbooks/BBG_Borsa_Swap.xlsx --id borsa --password ...   # a file with a password to open
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
 """
 from __future__ import annotations
@@ -44,7 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_server_args(run)
     imp = sub.add_parser("import-workbook", help="bir Excel dosyasını model olarak içe aktar")
     imp.add_argument("path")
-    imp.add_argument("--id", required=True, choices=("tto", "sofr"), help="hangi çalışma kitabı")
+    imp.add_argument("--id", required=True, choices=("tto", "sofr", "borsa", "asw"), help="hangi çalışma kitabı")
+    imp.add_argument("--password", default=os.environ.get("TTO_WORKBOOK_PASSWORD"),
+                     help="dosyanın açma şifresi (şifreli kaydedildiyse; 'pip install msoffcrypto-tool' ister)")
     chk = sub.add_parser("check-bloomberg", help="Bloomberg bağlantısını ve alanları sına")
     chk.add_argument("--bbg-host", default=os.environ.get("TTO_BBG_HOST", "localhost"))
     chk.add_argument("--bbg-port", type=int, default=int(os.environ.get("TTO_BBG_PORT", 8194)))
@@ -74,8 +77,12 @@ def cmd_run(args) -> int:
 
 
 def cmd_import(args) -> int:
-    from .xl.importer import import_workbook
-    model = import_workbook(args.path)
+    from .xl.importer import WorkbookLocked, import_workbook
+    try:
+        model = import_workbook(args.path, password=args.password)
+    except WorkbookLocked as exc:
+        print("HATA: %s" % exc, file=sys.stderr)
+        return 2
     out = os.path.join(ROOT, "models", "%s.json.gz" % args.id)
     model.save(out)
     print("%s -> %s  (%d sayfa, %d formül)" % (args.path, out, len(model.sheets), model.formula_count()))

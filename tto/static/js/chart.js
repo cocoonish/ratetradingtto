@@ -216,7 +216,7 @@ function barPath(x, w, y0, y1, round) {
 
 function swatch(s, color) {
   const el = svg('svg', { class: 'sw', width: 22, height: 10, viewBox: '0 0 22 10', 'aria-hidden': 'true' });
-  if (s.kind === 'line') {
+  if (s.kind === 'line' || s.kind === 'scatter') {
     if (!s.noline) {
       const l = svg('line', { x1: 1, x2: 21, y1: 5, y2: 5, 'stroke-width': 2, 'stroke-linecap': s.dash ? 'butt' : 'round' }, el);
       if (s.dash) l.setAttribute('stroke-dasharray', '5 3');
@@ -241,6 +241,29 @@ let clipSeq = 0;
 export function chartTable(data) {
   const mult = data.unit === 'pct' ? 100 : 1;
   const digits = data.unit === 'pct' ? 3 : 4;
+  if (data.scatter) {
+    // an XY chart: label, x and y of every series side by side (series need not share their x values)
+    const date = data.xaxis && data.xaxis.type === 'date';
+    const xText = (v) => (date ? formatAxisDate(v, 'dd.mm.yyyy') : num(v, 4, false));
+    const head = [];
+    for (const s of data.series) {
+      if (s.labels) head.push({ t: 'Etiket', k: 's', b: 1, f: 'hd' });
+      head.push({ t: (s.name || '') + ' · x', k: 's', b: 1, f: 'hd' }, { t: s.name || '', k: 's', b: 1, f: 'hd' });
+    }
+    const rows = [head];
+    const n = Math.max(...data.series.map((s) => s.x.length));
+    for (let i = 0; i < n; i++) {
+      const row = [];
+      for (const s of data.series) {
+        const x = s.x[i], y = s.data[i];
+        if (s.labels) row.push({ t: s.labels[i] || '', k: 's' });
+        row.push(isNum(x) ? { t: xText(x), v: x, k: date ? 'd' : 'n' } : { t: '', k: '' });
+        row.push(isNum(y) ? { t: num(y * mult, digits, false) + (mult === 100 ? '%' : ''), v: y, k: 'n' } : { t: '', k: '' });
+      }
+      rows.push(row);
+    }
+    return { sheet: '', rows };
+  }
   const head = [{ t: '', k: 's', b: 1, f: 'hd' }].concat(data.series.map((s) => ({ t: s.name || '', k: 's', b: 1, f: 'hd' })));
   const rows = [head];
   for (let i = 0; i < data.cats.length; i++) {
@@ -312,6 +335,7 @@ export class Chart {
     clear(this.plot);
     this.hideTip();
     this.reshow = null;
+    if (d && d.scatter) { this.renderScatter(); return; }
     const series = d && d.series ? d.series : [];
     const n = d && d.cats ? d.cats.length : 0;
     if (!n || !series.some((s) => s.data.some(isNum))) {
@@ -592,6 +616,213 @@ export class Chart {
     });
     this.plot.appendChild(root);
     // a refresh that arrives while the pointer rests on the chart keeps the tooltip, with the new values
+    if (this.hover) show(this.hover);
+  }
+
+  /**
+   * XY (scatter) chart: every series brings its own x values, both axes are value axes (x may show dates).
+   * Series are drawn in data order as lines, markers or both; points may carry a label read from the sheet.
+   */
+  renderScatter() {
+    const d = this.data;
+    const series = d.series || [];
+    const drawable = (s) => s.x.some((x, i) => isNum(x) && isNum(s.data[i]));
+    if (!series.some(drawable)) {
+      this.plot.appendChild(h('div', { class: 'chart-empty' }, 'Veri yok'));
+      return;
+    }
+    const colors = seriesColors(series);
+    const label = (s, k) => s.name || ('Seri ' + (k + 1));
+    if (series.length > 1) {
+      series.forEach((s, k) => {
+        if (s.legend === 0 || !drawable(s)) return;
+        this.legend.appendChild(h('span', { class: 'key' }, swatch(s, colors[k]), label(s, k)));
+      });
+    }
+    const W = Math.max(260, Math.floor(this.plot.clientWidth) || 520);
+    const H = this.opts.height
+      || (isNum(d.aspect) ? Math.round(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, W * d.aspect))) : DEFAULT_HEIGHT);
+    this.width = W;
+    const xa = d.xaxis || {};
+    const dates = xa.type === 'date';
+
+    let xlo = Infinity, xhi = -Infinity, ylo = Infinity, yhi = -Infinity;
+    for (const s of series) {
+      s.x.forEach((x, i) => {
+        const y = s.data[i];
+        if (!isNum(x) || !isNum(y)) return;
+        if (x < xlo) xlo = x;
+        if (x > xhi) xhi = x;
+        if (y < ylo) ylo = y;
+        if (y > yhi) yhi = y;
+      });
+    }
+    const top = 10, right = 14;
+    const bottom = 24 + (d.x_title ? 15 : 0);
+    const ph = H - top - bottom;
+    const ys = valueScale(d, ylo, yhi, ph);
+    const mult = d.unit === 'pct' ? 100 : 1;
+    let digits = stepDigits(ys.step * mult);
+    if (isNum(d.decimals)) digits = Math.max(digits, Math.min(6, d.decimals));
+    const yText = ys.ticks.map((t) => this.fmt(t, digits));
+    const left = Math.ceil(Math.max(30, Math.max(...yText.map(textWidth)) + 12) + (d.y_title ? 17 : 0));
+    const pw = W - left - right;
+    // x axis: dates keep their own range (a little air at both ends), numbers follow the value-axis rules
+    let xs;
+    if (dates) {
+      const pad = Math.max(0.5, (xhi - xlo) * 0.02);
+      xs = { lo: xlo - pad, hi: xhi + pad, step: 0, ticks: [] };
+    } else {
+      xs = valueScale({ ymin: xa.min, ymax: xa.max, major_unit: xa.major_unit, auto: d.auto }, xlo, xhi, pw * 44 / 92);
+    }
+    const X = (v) => left + ((v - xs.lo) / (xs.hi - xs.lo)) * pw;
+    const Y = (v) => top + ph - ((v - ys.lo) / (ys.hi - ys.lo)) * ph;
+    const xDigits = dates ? 0 : stepDigits(xs.step);
+    const xText = (v) => (dates ? formatAxisDate(v, 'dd.mm.yyyy') : num(v, Math.min(4, xDigits + 2), false));
+
+    const root = svg('svg', { class: 'chart', viewBox: '0 0 ' + W + ' ' + H, width: W, height: H, role: 'img' });
+    root.setAttribute('aria-label', d.title || 'grafik');
+    const gGrid = svg('g', { class: 'grid' }, root);
+    ys.ticks.forEach((t, k) => {
+      const y = Math.round(Y(t)) + 0.5;
+      svg('line', { x1: left, x2: W - right, y1: y, y2: y }, gGrid);
+      svg('text', { x: left - 7, y: y + 3.5, 'text-anchor': 'end' }, root).textContent = yText[k];
+    });
+    const gAxis = svg('g', { class: 'axis' }, root);
+    const yBase = Math.round(Y(Math.max(ys.lo, Math.min(0, ys.hi)))) + 0.5;
+    svg('line', { x1: left, x2: W - right, y1: yBase, y2: yBase }, gAxis);
+    if (ys.lo < 0 && ys.hi > 0) svg('line', { x1: left, x2: W - right, y1: top + ph + 0.5, y2: top + ph + 0.5 }, gGrid);
+    if (d.y_title) {
+      const ty = top + ph / 2;
+      svg('text', { x: 11, y: ty, 'text-anchor': 'middle', class: 'ttl', transform: 'rotate(-90 11 ' + f1(ty) + ')' }, root).textContent = d.y_title;
+    }
+    if (d.x_title) svg('text', { x: left + pw / 2, y: H - 5, 'text-anchor': 'middle', class: 'ttl' }, root).textContent = d.x_title;
+
+    // ---- x ticks: months (or days) on a date axis, round numbers otherwise
+    const yLab = top + ph + 15;
+    let ticks = [];
+    if (dates) {
+      const span = xs.hi - xs.lo;
+      const sample = textWidth(formatAxisDate(serialOf(2028, 8), xa.format || 'dd.mm.yy'));
+      if (span > 70) ticks = monthTicks(xs.lo, xs.hi, pw / span, sample);
+      if (ticks.length < 2) {
+        const stepDays = [1, 2, 7, 14, 28].find((k) => k * pw / Math.max(1, span) >= sample + 14) || 28;
+        ticks = [];
+        for (let v = Math.ceil(xs.lo); v <= xs.hi; v += stepDays) ticks.push(v);
+      }
+    } else {
+      ticks = xs.ticks;
+    }
+    let lastRight = -Infinity;
+    for (const v of ticks) {
+      const x = X(v);
+      if (x < left - 0.5 || x > W - right + 0.5) continue;
+      const xr = Math.round(x) + 0.5;
+      svg('line', { x1: xr, x2: xr, y1: top + ph, y2: top + ph + 4 }, gAxis);
+      const text = dates ? formatAxisDate(v, xa.format || 'dd.mm.yy') : num(v, xDigits, false);
+      const half = textWidth(text) / 2;
+      if (x - half < lastRight + 8 || x + half > W - 1) continue;
+      svg('text', { x: f1(x), y: yLab + 2, 'text-anchor': 'middle' }, root).textContent = text;
+      lastRight = x + half;
+    }
+
+    const clipId = 'tto-clip-' + (++clipSeq);
+    const cp = svg('clipPath', { id: clipId }, svg('defs', null, root));
+    svg('rect', { x: left, y: top, width: pw, height: ph }, cp);
+    const marksRoot = svg('g', { 'clip-path': 'url(#' + clipId + ')' }, root);
+    const labelsRoot = svg('g', { class: 'pt-labels' }, root);
+    const placed = [];
+    const points = [];                                   // every drawn point, for the hover layer
+    series.forEach((s, k) => {
+      const sx = (i) => X(s.x[i]);
+      for (const p of runs(s.data, sx, Y)) {
+        if (p.length > 1 && !s.noline) {
+          const l = svg('path', { d: s.smooth ? smooth(p) : straight(p), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round',
+            'stroke-linecap': s.dash ? 'butt' : 'round' }, marksRoot);
+          if (s.dash) l.setAttribute('stroke-dasharray', '6 4');
+          l.style.stroke = colors[k];
+        }
+        const dots = s.marker || s.noline || p.length === 1;
+        for (const q of p) {
+          points.push({ k, i: q[2], x: q[0], y: q[1] });
+          if (dots) svg('circle', { cx: f1(q[0]), cy: f1(q[1]), r: s.noline ? 4 : 3, class: 'mk' }, marksRoot).style.fill = colors[k];
+        }
+      }
+    });
+    // labels of the points (read from the sheet): above the point, below when that is taken, left out when both are
+    series.forEach((s) => {
+      if (!s.labels) return;
+      s.labels.forEach((text, i) => {
+        if (!text || !isNum(s.data[i]) || !isNum(s.x[i])) return;
+        const x = X(s.x[i]), y = Y(s.data[i]);
+        if (x < left || x > W - right || y < top || y > top + ph) return;
+        const w = textWidth(text) * 0.92 + 4;
+        for (const dy of [-8, 15]) {
+          const box = { x0: x - w / 2, x1: x + w / 2, y0: y + dy - 9, y1: y + dy + 2 };
+          if (box.y0 < top - 2 || box.y1 > top + ph + 2 || box.x0 < left - 2 || box.x1 > W - 2) continue;
+          if (placed.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+          placed.push(box);
+          svg('text', { x: f1(x), y: f1(y + dy), 'text-anchor': 'middle', class: 'pt' }, labelsRoot).textContent = text;
+          break;
+        }
+      });
+    });
+
+    // ---- hover: the nearest point, and what the other series say at the same x
+    const cross = svg('line', { class: 'cross', y1: top, y2: top + ph, x1: 0, x2: 0, visibility: 'hidden' }, root);
+    const rings = svg('g', null, root);
+    const hit = svg('rect', { x: left, y: top, width: pw, height: ph, fill: 'transparent' }, root);
+    const tipDigits = Math.min(6, Math.max(digits + 2, d.unit === 'pct' ? 3 : 1));
+    const show = (pt) => {
+      const box = root.getBoundingClientRect();
+      if (!box.width || !points.length) return;
+      const mx = (pt.clientX - box.left) * (W / box.width), my = (pt.clientY - box.top) * (H / box.height);
+      let best = points[0], bd = Infinity;
+      for (const q of points) {
+        const dist = (q.x - mx) * (q.x - mx) + (q.y - my) * (q.y - my) * 0.35;      // x counts more than y
+        if (dist < bd) { bd = dist; best = q; }
+      }
+      cross.setAttribute('x1', f1(best.x));
+      cross.setAttribute('x2', f1(best.x));
+      cross.setAttribute('visibility', 'visible');
+      clear(rings);
+      if (!this.tip) { this.tip = h('div', { class: 'chart-tip' }); document.body.appendChild(this.tip); }
+      clear(this.tip);
+      const main = series[best.k];
+      const name = main.labels && main.labels[best.i] ? main.labels[best.i] + ' · ' : '';
+      this.tip.appendChild(h('div', { class: 't' }, name + xText(main.x[best.i])));
+      series.forEach((s, k) => {
+        // this series' point at (or right next to) the same x
+        let j = -1, gap = Math.max(1.5, pw * 0.012);
+        s.x.forEach((x, i) => {
+          if (!isNum(x) || !isNum(s.data[i])) return;
+          const dx = Math.abs(X(x) - best.x);
+          if (dx <= gap) { gap = dx; j = i; }
+        });
+        if (k === best.k) j = best.i;
+        if (j < 0) return;
+        const cy = Y(s.data[j]);
+        if (cy >= top && cy <= top + ph) svg('circle', { cx: f1(X(s.x[j])), cy: f1(cy), r: 4.5, class: 'ring' }, rings).style.fill = colors[k];
+        this.tip.appendChild(h('div', { class: 'r' }, h('span', null, swatch(s, colors[k]), label(s, k)), h('b', null, this.fmt(s.data[j], tipDigits))));
+      });
+      const tr = this.tip.getBoundingClientRect();
+      let tx = pt.clientX + 14, ty = pt.clientY + 14;
+      if (tx + tr.width > window.innerWidth - 8) tx = pt.clientX - tr.width - 14;
+      if (ty + tr.height > window.innerHeight - 8) ty = pt.clientY - tr.height - 14;
+      this.tip.style.left = Math.max(4, tx) + 'px';
+      this.tip.style.top = Math.max(4, ty) + 'px';
+    };
+    hit.addEventListener('pointermove', (evt) => {
+      this.hover = { clientX: evt.clientX, clientY: evt.clientY };
+      show(this.hover);
+    });
+    hit.addEventListener('pointerleave', () => {
+      this.hover = null;
+      cross.setAttribute('visibility', 'hidden');
+      clear(rings);
+      this.hideTip();
+    });
+    this.plot.appendChild(root);
     if (this.hover) show(this.hover);
   }
 }

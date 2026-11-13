@@ -13,6 +13,7 @@ workbook works on any machine.  Everything the engine and the dashboard need is 
 from __future__ import annotations
 
 import datetime as _dt
+import io
 import re
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -165,8 +166,12 @@ def _styles(zf: zipfile.ZipFile):
     if nf is not None:
         for el in nf:
             custom[int(el.get("numFmtId"))] = el.get("formatCode") or "General"
-    fonts = [_font(f, theme) for f in (root.find(NS_MAIN + "fonts") or [])]
-    fills = [_fill(f, theme) for f in (root.find(NS_MAIN + "fills") or [])]
+    def children(tag):
+        el = root.find(NS_MAIN + tag)
+        return list(el) if el is not None else []
+
+    fonts = [_font(f, theme) for f in children("fonts")]
+    fills = [_fill(f, theme) for f in children("fills")]
     xfs: List[List[Any]] = []
     cx = root.find(NS_MAIN + "cellXfs")
     if cx is not None:
@@ -355,10 +360,29 @@ def _chart(zf: zipfile.ZipFile, part: str, accents: Optional[List[str]] = None) 
                 if symbol is not None:
                     if symbol != "none":
                         entry["marker"] = True
-                elif group_markers:
+                elif group_markers or (kind == "scatter" and marker is None
+                                       and attr(grp, NS_C + "scatterStyle") in ("lineMarker", "marker", "smoothMarker")):
                     entry["marker"] = True
                 if attr(ser, NS_C + "smooth") == "1":
                     entry["smooth"] = True
+                # a series drawn with markers only takes its colour from the marker
+                mfill = marker.find(NS_C + "spPr/" + NS_A + "solidFill/" + NS_A + "srgbClr") if marker is not None else None
+                if mfill is not None and mfill.get("val") and (entry.get("noline") or clr is None):
+                    entry["color"] = mfill.get("val").upper()
+                # data labels taken from cells (one <c:dLbl> per point): keep them as one range when they are one
+                refs = []
+                for lab in ser.findall(NS_C + "dLbls/" + NS_C + "dLbl"):
+                    f = lab.find(NS_C + "tx/" + NS_C + "strRef/" + NS_C + "f")
+                    refs.append((attr(lab, NS_C + "idx"), f.text if f is not None else None))
+                if refs and all(i is not None and r for i, r in refs):
+                    refs.sort(key=lambda x: int(x[0]))
+                    first, last = refs[0][1], refs[-1][1]
+                    sheet_a, _, cell_a = first.rpartition("!")
+                    sheet_b, _, cell_b = last.rpartition("!")
+                    ma, mb = re.match(r"\$?([A-Z]+)\$?(\d+)$", cell_a), re.match(r"\$?([A-Z]+)\$?(\d+)$", cell_b)
+                    if ma and mb and sheet_a == sheet_b and ma.group(1) == mb.group(1) \
+                            and int(mb.group(2)) - int(ma.group(2)) == len(refs) - 1 and int(refs[0][0]) == 0:
+                        entry["labels_ref"] = "%s!$%s$%s:$%s$%s" % (sheet_a, ma.group(1), ma.group(2), mb.group(1), mb.group(2))
             if idx in hidden_legend:
                 entry["legend"] = False
             series.append(entry)
@@ -374,11 +398,19 @@ def _chart(zf: zipfile.ZipFile, part: str, accents: Optional[List[str]] = None) 
             x_ax = ax
             break
     val_ax = plot.find(NS_C + "valAx")
+    scatter = bool(kinds) and kinds[0] == "scatter"
+    if scatter:
+        # an XY chart has two value axes: the one at the bottom (or top) is x
+        for ax in plot.findall(NS_C + "valAx"):
+            if attr(ax, NS_C + "axPos") in ("b", "t"):
+                x_ax = ax
+            else:
+                val_ax = ax
     x_title, y_title = text_of(x_ax.find(NS_C + "title")) if x_ax is not None else "", \
         text_of(val_ax.find(NS_C + "title")) if val_ax is not None else ""
     out: Dict[str, Any] = {"title": title, "kind": kinds[0] if kinds else "line", "series": series,
                            "axis_titles": [t for t in (x_title, y_title) if t],
-                           "x_axis": "date" if (x_ax is not None and x_ax.tag == NS_C + "dateAx") else "cat",
+                           "x_axis": "value" if scatter else ("date" if (x_ax is not None and x_ax.tag == NS_C + "dateAx") else "cat"),
                            "blanks": attr(chart, NS_C + "dispBlanksAs") or "gap",
                            "na_gap": b"dispNaAsBlank" in raw and b'dispNaAsBlank val="0"' not in raw}
     if x_title:
@@ -396,6 +428,14 @@ def _chart(zf: zipfile.ZipFile, part: str, accents: Optional[List[str]] = None) 
         skip = number(attr(x_ax, NS_C + "tickLblSkip"))
         if skip and skip > 1:
             out["label_skip"] = int(skip)
+        if scatter:
+            for key in ("min", "max"):
+                v = number(attr(x_ax, NS_C + "scaling/" + NS_C + key))
+                if v is not None:
+                    out["x" + key] = v
+            unit = number(attr(x_ax, NS_C + "majorUnit"))
+            if unit and unit > 0:
+                out["x_major_unit"] = unit
     if val_ax is not None:
         for key in ("min", "max"):
             v = number(attr(val_ax, NS_C + "scaling/" + NS_C + key))
@@ -411,10 +451,14 @@ def _chart(zf: zipfile.ZipFile, part: str, accents: Optional[List[str]] = None) 
 
 
 def _sheet_charts(zf: zipfile.ZipFile, sheet_part: str, accents: Optional[List[str]] = None,
-                  col_widths: Optional[Dict[int, float]] = None) -> List[Dict[str, Any]]:
+                  col_widths: Optional[Dict[int, float]] = None,
+                  hidden_cols: Optional[List[List[int]]] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
 
     def col_px(c: int) -> float:
+        for a, b in hidden_cols or ():
+            if a <= c <= b:
+                return 0.0                             # a hidden column takes no room
         w = (col_widths or {}).get(c, 8.43)
         return w * 7.0 + 5.0
 
@@ -497,8 +541,39 @@ def _value(t: Optional[str], vtext: Optional[str], is_el, sst: List[str]) -> Any
     return vtext
 
 
-def import_workbook(path: str, label: Optional[str] = None) -> Model:
-    """Read ``path`` and return the workbook model."""
+class WorkbookLocked(ValueError):
+    """The workbook is protected with a password to open and could not be opened."""
+
+
+def open_workbook(path: str, password: Optional[str] = None) -> zipfile.ZipFile:
+    """The workbook file as a zip archive.
+
+    A workbook saved with a *password to open* is not a zip but an encrypted container; it is decrypted in
+    memory with the optional ``msoffcrypto-tool`` package (nothing is written to disk)."""
+    with open(path, "rb") as fh:
+        head = fh.read(8)
+    if not head.startswith(b"\xd0\xcf\x11\xe0"):
+        return zipfile.ZipFile(path)
+    if not password:
+        raise WorkbookLocked("dosya açma şifresiyle korunuyor: şifreyi --password ile verin")
+    try:
+        import msoffcrypto
+    except ImportError as exc:
+        raise WorkbookLocked("şifreli dosyayı açmak için 'pip install msoffcrypto-tool' gerekir") from exc
+    plain = io.BytesIO()
+    try:
+        with open(path, "rb") as fh:
+            office = msoffcrypto.OfficeFile(fh)
+            office.load_key(password=password)
+            office.decrypt(plain)
+    except Exception as exc:  # noqa: BLE001 - a wrong password, or not an Office file at all
+        raise WorkbookLocked("dosya bu şifreyle açılamadı (%s)" % (str(exc) or type(exc).__name__)) from exc
+    plain.seek(0)
+    return zipfile.ZipFile(plain)
+
+
+def import_workbook(path: str, label: Optional[str] = None, password: Optional[str] = None) -> Model:
+    """Read ``path`` and return the workbook model (``password``: the password to open, if it has one)."""
     model = Model()
     tpl_index: Dict[str, int] = {}
 
@@ -511,7 +586,7 @@ def import_workbook(path: str, label: Optional[str] = None) -> Model:
         return i
 
     problems: List[str] = []
-    with zipfile.ZipFile(path) as zf:
+    with open_workbook(path, password) as zf:
         sst = _shared_strings(zf)
         model.xfs, model.dxfs = _styles(zf)
         model.numfmts = [x[0] for x in model.xfs]
@@ -522,7 +597,7 @@ def import_workbook(path: str, label: Optional[str] = None) -> Model:
             sh = model.add_sheet(name, state)
             _read_sheet(zf, part, sh, sst, intern, problems)
             try:
-                sh.charts = _sheet_charts(zf, part, accents, sh.col_widths)
+                sh.charts = _sheet_charts(zf, part, accents, sh.col_widths, sh.hidden_cols)
             except Exception as exc:  # noqa: BLE001 - charts are decoration, never block an import
                 problems.append("%s: charts not imported (%s)" % (name, exc))
             try:
@@ -582,8 +657,10 @@ def _read_sheet(zf, part: str, sh: Sheet, sst: List[str], intern, problems: List
                         max_row = row
                     if col > max_col:
                         max_col = col
-                    if style is not None and style != "0":
-                        sh.styles[rc] = int(style)
+                # an empty cell keeps its format too: a value may arrive there later (a spilled array, a
+                # typed input) and must look - and be read, think of a percent cell - as Excel would have it
+                if style is not None and style != "0":
+                    sh.styles[rc] = int(style)
                 if f_el is not None:
                     ft = f_el.get("t")
                     text = f_el.text or ""

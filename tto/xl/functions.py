@@ -13,7 +13,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import numfmt
-from .errors import E_DIV0, E_NA, E_NAME, E_NUM, E_REF, E_VALUE, XlError
+from .errors import E_CALC, E_DIV0, E_NA, E_NAME, E_NUM, E_REF, E_VALUE, XlError
 from .values import (XlArray, XlRange, as_rows, compare, date_to_serial, deref, first, fmt_general, intersect,
                      is_multi, num_eq, parse_number_text, serial_to_date, to_bool, to_num, to_text)
 
@@ -256,6 +256,147 @@ def _large_small(arr, k, largest: bool):
 
 def F_LARGE(arr, k):
     return _large_small(arr, k, True)
+
+
+def _percentile(xs: List[float], p: float, exclusive: bool):
+    """PERCENTILE.INC / PERCENTILE.EXC of sorted numbers."""
+    n = len(xs)
+    if n == 0 or not (0.0 <= p <= 1.0):
+        return E_NUM
+    if exclusive:
+        pos = p * (n + 1)
+        if pos < 1 or pos > n:
+            return E_NUM
+        pos -= 1
+    else:
+        pos = p * (n - 1)
+    lo = int(math.floor(pos))
+    hi = min(lo + 1, n - 1)
+    return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
+
+
+def F_AGGREGATE(fnum, options, *args):
+    """AGGREGATE(function_num, options, ref1 [, ref2 ...])  /  AGGREGATE(function_num, options, array, k).
+
+    Options 2, 3, 6 and 7 leave error values out (the reason the function is used); hidden rows play no
+    role here - nothing is hidden inside the engine.
+    """
+    f, o = to_num(fnum), to_num(options)
+    if type(f) is XlError:
+        return f
+    if type(o) is XlError:
+        return o
+    f, o = int(f), int(o)
+    if not 1 <= f <= 19 or not 0 <= o <= 7 or not args:
+        return E_VALUE
+    skip_errors = o in (2, 3, 6, 7)
+    k = None
+    if f >= 14:
+        if len(args) < 2:
+            return E_VALUE
+        k = to_num(first(args[1]) if type(args[1]) in (XlRange, XlArray) else args[1])
+        if type(k) is XlError:
+            return k
+        args = args[:1]
+    xs: List[float] = []
+    filled = 0
+    for a in args:
+        vals = a.flat() if type(a) in (XlRange, XlArray) else [a]
+        for v in vals:
+            tv = type(v)
+            if tv is XlError:
+                if skip_errors:
+                    continue
+                return v
+            if v is not None and v != "":
+                filled += 1
+            if tv is _float:
+                xs.append(v)
+    n = len(xs)
+    if f == 2:
+        return float(n)
+    if f == 3:
+        return float(filled)
+    if f == 9:
+        return _sum(xs)
+    if f == 6:
+        p = 1.0
+        for x in xs:
+            p *= x
+        return p if n else 0.0
+    if f in (4, 5):
+        return (max(xs) if f == 4 else min(xs)) if n else 0.0
+    if f == 1:
+        return _sum(xs) / n if n else E_DIV0
+    if f in (7, 8, 10, 11):
+        sample = f in (7, 10)
+        if n < (2 if sample else 1):
+            return E_DIV0
+        m = _sum(xs) / n
+        ss = _sum([(x - m) * (x - m) for x in xs]) / (n - 1 if sample else n)
+        return math.sqrt(ss) if f in (7, 8) else ss
+    if n == 0:
+        return E_NUM
+    xs.sort()
+    if f == 12:
+        return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+    if f == 13:
+        best, count = None, 1
+        seen: Dict[float, int] = {}
+        for x in xs:
+            seen[x] = seen.get(x, 0) + 1
+        for x in xs:                                   # the smallest of the most frequent values
+            if seen[x] > count:
+                best, count = x, seen[x]
+        return best if best is not None else E_NA
+    if f in (14, 15):
+        kk = int(math.ceil(k)) if k != int(k) else int(k)
+        if kk < 1 or kk > n:
+            return E_NUM
+        return xs[n - kk] if f == 14 else xs[kk - 1]
+    if f in (16, 18):
+        return _percentile(xs, k, f == 18)
+    quart = int(k)                                     # 17 / 19: QUARTILE.INC / QUARTILE.EXC
+    if f == 17 and 0 <= quart <= 4:
+        return _percentile(xs, quart / 4.0, False)
+    if f == 19 and 1 <= quart <= 3:
+        return _percentile(xs, quart / 4.0, True)
+    return E_NUM
+
+
+def F_FILTER(arr, include, if_empty=None):
+    """FILTER(array, include, [if_empty]): the rows (or columns) of ``array`` whose ``include`` entry is true."""
+    rows = as_rows(arr)
+    if type(include) is XlError:
+        return include
+    inc = as_rows(include)
+    nr = len(rows)
+    nc = len(rows[0]) if nr else 0
+    by_rows = len(inc) == nr and (len(inc[0]) if inc else 0) == 1
+    by_cols = not by_rows and len(inc) == 1 and len(inc[0]) == nc
+    if not (by_rows or by_cols):
+        return E_VALUE
+    flags = []
+    for v in ([row[0] for row in inc] if by_rows else inc[0]):
+        tv = type(v)
+        if tv is XlError:
+            return v
+        if tv is bool:
+            flags.append(v)
+        elif tv is _float:
+            flags.append(v != 0.0)
+        elif v is None:
+            flags.append(False)
+        else:
+            return E_VALUE
+    if by_rows:
+        kept = [list(rows[i]) for i in range(nr) if flags[i]]
+    else:
+        cols = [j for j in range(nc) if flags[j]]
+        kept = [[row[j] for j in cols] for row in rows] if cols else []
+    if not kept:
+        return E_CALC if if_empty is None else if_empty
+    return XlArray(kept)
 
 
 def F_SMALL(arr, k):
@@ -1874,6 +2015,8 @@ _reg("STDEV.P", F_STDEVP, "", "r")
 _reg("MEDIAN", F_MEDIAN, "", "r")
 _reg("SUMPRODUCT", F_SUMPRODUCT, "", "a")
 _reg("LARGE", F_LARGE, "av")
+_reg("AGGREGATE", F_AGGREGATE, "vv", "a")
+_reg("FILTER", F_FILTER, "aav", multi=True)
 _reg("SMALL", F_SMALL, "av")
 _reg("SLOPE", F_SLOPE, "aa")
 _reg("INTERCEPT", F_INTERCEPT, "aa")

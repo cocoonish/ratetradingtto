@@ -223,6 +223,16 @@ def test_trades_are_shared_summarised_and_feed_the_workbook(svc, users, market):
     assert cell(svc, "Günlük İşlemler!A3") == "B" and cell(svc, "Günlük İşlemler!B3") == 10e6
     assert cell(svc, "Günlük İşlemler!C3") == f1["try_rate"] and cell(svc, "Günlük İşlemler!D3") == f1["value_date"]
     assert cell(svc, "Günlük İşlemler!A4") == "S" and cell(svc, "Günlük İşlemler!A5") is None
+    # the O/N equivalent listed with each forward is the sheet's own column F: 360·((1+faiz·gün/365)^(1/gün) − 1)
+    for i, t in enumerate(svc.blotter(a)["trades"][:2]):
+        days, rate = cell(svc, "Günlük İşlemler!E%d" % (3 + i)), cell(svc, "Günlük İşlemler!C%d" % (3 + i))
+        assert days == t["days"] and rate == t["try_rate"]
+        assert t["on_rate"] == pytest.approx(cell(svc, "Günlük İşlemler!F%d" % (3 + i)), rel=1e-13)
+        assert t["on_rate"] == pytest.approx(360 * ((1 + rate * days / 365) ** (1 / days) - 1), rel=1e-13)
+        assert 0.25 < t["on_rate"] < rate
+    assert all("on_rate" not in t for t in svc.blotter(a)["trades"] if t["kind"] != "fwd")
+    assert bl.overnight_equivalent(0.36, 0) is None and bl.overnight_equivalent(None, 30) is None
+    assert bl.overnight_equivalent(0.365, 1) == pytest.approx(0.36)                     # one day: only the day basis changes
     assert cell(svc, "Günlük İşlemler!L3") == "1Y" and cell(svc, "Günlük İşlemler!J3") == "B"
     assert cell(svc, "Günlük İşlemler!M3") == "XYZ" and cell(svc, "Günlük İşlemler!Y3") == "TRT150328T24"
     sheet = {p["id"]: p for p in svc.blotter(a)["sheet"]}

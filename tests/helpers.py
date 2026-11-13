@@ -71,43 +71,6 @@ def close(a: Any, b: Any, rel: float = 1e-9, abs_tol: float = 1e-12) -> bool:
     return type(a) is type(b) and a == b
 
 
-def close(a: Any, b: Any, rel: float = 1e-9, abs_tol: float = 1e-12) -> bool:
-    if isinstance(a, float) and isinstance(b, float):
-        if a != a and b != b:
-            return True
-        return abs(a - b) <= max(abs_tol, rel * max(abs(a), abs(b)))
-    return type(a) is type(b) and a == b
-
-
-def complete_snapshot(replay_service) -> Dict[Tuple, Any]:
-    """The workbook snapshot plus the TRY OIS quotes that only appear inside larger formulas.
-
-    ``BDP`` calls that are wrapped in other functions (``IFERROR(BDP(..)/100, ..)``) leave no raw result in
-    the workbook; for the OIS curve the raw quote is simply the cached par rate in percent.
-    """
-    snap = dict(replay_service.provider.snapshot)
-    tto = replay_service.books["tto"]
-
-    def collect():
-        calc = tto.engine.shared
-        out = {}
-        for row in range(9, 27):
-            root, par = calc.value("OIS_MAIN!J%d" % row), calc.value("OIS_MAIN!B%d" % row)
-            if isinstance(root, str) and root and isinstance(par, float):
-                q = round(par * 100.0, 6)
-                for sec, fld in ((root + " GFOF Curncy", "MID"), (root + " GFOF Curncy", "PX_LAST"),
-                                 (root + " Curncy", "PX_LAST"), (root + " Curncy", "MID")):
-                    out[("BDP", sec, fld, ())] = q
-        tlref = calc.value("OIS_MAIN!J2")
-        if isinstance(tlref, float):
-            out[("BDP", "BISTTREF Index", "PX_LAST", ())] = round(tlref * 100.0, 6)
-        return out
-
-    for k, v in replay_service.et.call(collect).items():
-        snap.setdefault(k, v)
-    return {k: v for k, v in snap.items() if k[0] not in ("BFX", "RT")}
-
-
 def complete_snapshot(replay_service) -> Dict[Tuple, Any]:
     """The workbook snapshot plus the raw results of add-in calls that sit inside larger formulas.
 
@@ -227,12 +190,17 @@ def ev(formula: str, cells: Dict[str, Any] = None, **kw) -> Any:
     return mini_engine(data, **kw).shared.value("S!Z50")
 
 
-def mini_book(cells: Dict[str, Any], **sheet_attrs):
+def mini_book(cells: Dict[str, Any], array: Tuple[str, ...] = (), dynamic: Tuple[str, ...] = (), **sheet_attrs):
     """A one-sheet ``Book`` (sheet "S") for renderer tests; ``sheet_attrs`` set fields of the sheet
-    (``hidden_cols=[[3, 3]]``, ``freeze=[0, 1]``, ``merges=["A1:C1"]``, ``comments={rc: text}`` ...)."""
-    from tto.books import Book
+    (``hidden_cols=[[3, 3]]``, ``freeze=[0, 1]``, ``merges=["A1:C1"]``, ``comments={rc: text}`` ...).
 
-    model = mini_engine(cells).model
+    ``array``: addresses entered as array formulas; ``dynamic``: dynamic-array formulas (they spill).
+    """
+    from tto.books import Book
+    from tto.xl.model import parse_a1
+
+    model = mini_engine(cells, array=tuple(array) + tuple(dynamic)).model
+    model.sheets[0].dyn = {parse_a1(a) for a in dynamic}
     for key, value in sheet_attrs.items():
         setattr(model.sheets[0], key, value)
     return Book("mini", "Mini", model)

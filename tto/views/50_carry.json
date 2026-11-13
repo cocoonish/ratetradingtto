@@ -82,7 +82,7 @@
    "id": "B6",
    "type": "table",
    "title": "Carry & roll · spread (flattener)",
-   "range": "A42:G162",
+   "range": "A41:G162",
    "hidden": false,
    "keep_title": true,
    "collapsed": true

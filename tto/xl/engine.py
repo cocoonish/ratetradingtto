@@ -23,7 +23,7 @@ import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .compiler import ADDINS, Compiler
-from .errors import E_NA, E_NAME, E_REF, E_VALUE, XlError
+from .errors import E_NA, E_NAME, E_REF, E_SPILL, E_VALUE, XlError
 from .model import COLS, Model, a1
 from .parser import parse_template, walk
 from .values import XlArray, XlRange, date_to_serial
@@ -81,6 +81,8 @@ class Engine(object):
         self.pins: List[Dict[int, Any]] = [dict() for _ in range(n)]           # pinned (formula) cells
         self.spill_zone: List[Dict[int, Tuple[int, ...]]] = [dict() for _ in range(n)]  # rc -> anchors
         self.spill_anchors: List[Dict[int, Tuple[int, int]]] = [dict() for _ in range(n)]
+        # dynamic arrays whose room is cut short by other content: a larger result is #SPILL!
+        self.spill_blocked: List[set] = [set() for _ in range(n)]
         self._mask_pool: Dict[int, int] = {}
         self.circular: List[str] = []
         self.shared = Calc(self, None, None)
@@ -534,6 +536,12 @@ class Calc(object):
         else:
             return self._store(si, rc, E_VALUE, k)
         ref = eng.arr[si].get(rc)
+        if rc in eng.spill_blocked[si]:
+            room = eng.spill_anchors[si].get(rc)
+            if room is not None and (len(rows) > room[0] or (len(rows[0]) if rows else 0) > room[1]):
+                # Excel refuses to write a dynamic array over cells that are in use
+                self._spill(si, rc, r, c, [[None]], k, None, False)
+                return self._store(si, rc, E_SPILL, k)
         if ref is not None and (ref[0] != ref[2] or ref[1] != ref[3]):
             self._spill(si, rc, r, c, rows, k, ref, rc not in self.engine.model.sheets[si].dyn)
         elif rc in eng.spill_anchors[si]:

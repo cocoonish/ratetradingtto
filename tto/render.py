@@ -295,6 +295,11 @@ class Renderer(object):
             out["it"] = 1
         tn = tone(xf[2]) if not color else {"red": "neg", "green": "pos", "blue": "info"}.get(color, None)
         ft = fill_tone(xf[3])
+        if v is None and rc not in sheet.fml:
+            # an empty cell is only formatted for what may arrive in it: no colours, no weight
+            tn = ft = None
+            out.pop("b", None)
+            out.pop("it", None)
         if xf[4] in ("center", "right", "left"):
             out["al"] = xf[4][0]
         for i in cf_rules:
@@ -437,6 +442,26 @@ class Renderer(object):
                 out["fz"] = n
         return out
 
+    def cells_table(self, calc, sheet: str, cells: List[Tuple[int, int]], loc: numfmt.Locale, overlay=None) -> Dict[str, Any]:
+        """A list of single cells as a three-column table: address, value, formula.
+
+        Used for the cells of a sheet that belong to no table of its page (scratch calculations), so that
+        nothing the workbook computes is left out.
+        """
+        from .books import formula_text
+        book = self.book
+        si = book.model.sheet_index[sheet]
+        head = [{"t": "Hücre", "k": "s", "b": 1, "f": "hd"}, {"t": "Değer", "k": "s", "b": 1, "f": "hd"},
+                {"t": "Formül", "k": "s", "b": 1, "f": "hd"}]
+        rows = [head]
+        for r, c in cells:
+            rc = r * COLS + c
+            cell = self.cell(calc, si, r, c, loc, overlay)
+            cell.pop("i", None)                           # listed for reference; edited in its own table
+            cell.pop("o", None)
+            rows.append([{"t": a1(rc), "k": "s", "c": "mute"}, cell, {"t": formula_text(book, si, rc) or "", "k": "s"}])
+        return {"sheet": sheet, "rows": rows}
+
     def values(self, calc, sheet: str, rng: str) -> List[List[Any]]:
         si = self.book.model.sheet_index[sheet]
         r1, c1, r2, c2 = parse_range(rng)
@@ -472,17 +497,96 @@ class Renderer(object):
                 return 0.0
             return 0.0                                  # text is plotted as zero
 
+        def style_of(s: Dict[str, Any], entry: Dict[str, Any]) -> None:
+            for key in ("dash", "noline", "marker", "smooth"):
+                if s.get(key):
+                    entry[key] = 1
+            if s.get("color"):
+                entry["color"] = s["color"]
+            if s.get("alpha") is not None:
+                entry["alpha"] = s["alpha"]
+            if s.get("legend") is False:
+                entry["legend"] = 0
+
+        def name_of(s: Dict[str, Any]) -> str:
+            name = s.get("name") or ""
+            if s.get("name_ref"):
+                nsh, naddr = split(s["name_ref"])
+                nv = self.values(calc, nsh, naddr)
+                name = str(nv[0][0]) if nv and nv[0] and nv[0][0] is not None else name
+            return name
+
+        def axis_format(out: Dict[str, Any]) -> None:
+            fmt = chart.get("value_format") or ""
+            if "%" in fmt:
+                out["unit"] = "pct"
+            first = fmt.split(";")[0]
+            if first and first != "General":
+                point = first.find(".")
+                decimals = 0
+                if point >= 0:
+                    k = point + 1
+                    while k < len(first) and first[k] in "0#?":
+                        decimals += 1
+                        k += 1
+                out["decimals"] = decimals
+            for key in ("ymin", "ymax", "major_unit", "label_skip", "aspect", "gap_width", "x_title", "y_title", "auto", "updown"):
+                if chart.get(key) is not None:
+                    out[key] = chart[key]
+
+        if chart.get("x_axis") == "value" or chart.get("kind") == "scatter":
+            # an XY chart: every series has its own x values; a point without a numeric x is not drawn
+            points: List[Dict[str, Any]] = []
+            for s in chart["series"]:
+                sh, addr = split(s["val"])
+                ys = [v for row in self.values(calc, sh, addr) for v in row]
+                if s.get("cat"):
+                    csh, caddr = split(s["cat"])
+                    xvals = [v for row in self.values(calc, csh, caddr) for v in row]
+                else:
+                    xvals = [float(i + 1) for i in range(len(ys))]
+                labels: List[Any] = []
+                if s.get("labels_ref"):
+                    lsh, laddr = split(s["labels_ref"])
+                    lsi = book.model.sheet_index[lsh]
+                    r1, c1, r2, c2 = parse_range(laddr)
+                    labels = [self.cell(calc, lsi, r, c, loc).get("t", "") for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
+                px: List[float] = []
+                py: List[Any] = []
+                pl: List[str] = []
+                for i, y in enumerate(ys):
+                    x = xvals[i] if i < len(xvals) else None
+                    if type(x) is not float or x != x:
+                        continue
+                    px.append(x)
+                    py.append(plot_value(y))
+                    pl.append(labels[i] if i < len(labels) else "")
+                entry = {"name": name_of(s), "kind": "scatter", "stacked": False, "x": px, "data": py}
+                if labels:
+                    entry["labels"] = pl
+                style_of(s, entry)
+                points.append(entry)
+            out = {"title": chart.get("title") or "", "kind": "scatter", "scatter": 1, "cats": [], "series": points,
+                   "axis": chart.get("axis_titles") or []}
+            axis_format(out)
+            xfmt = (chart.get("x_format") or "").replace("\\", "")
+            is_date = bool(xfmt) and xfmt != "General" and any(ch in xfmt.lower() for ch in "dmy") and "0" not in xfmt
+            xaxis: Dict[str, Any] = {"type": "date" if is_date else "value"}
+            if xfmt and xfmt != "General":
+                xaxis["format"] = xfmt
+            for key, name in (("xmin", "min"), ("xmax", "max"), ("x_major_unit", "major_unit")):
+                if chart.get(key) is not None:
+                    xaxis[name] = chart[key]
+            out["xaxis"] = xaxis
+            return out
+
         cats: List[str] = []
         xs: List[Any] = []
         series: List[Dict[str, Any]] = []
         for s in chart["series"]:
             sh, addr = split(s["val"])
             vals = [v for row in self.values(calc, sh, addr) for v in row]
-            name = s.get("name") or ""
-            if s.get("name_ref"):
-                nsh, naddr = split(s["name_ref"])
-                nv = self.values(calc, nsh, naddr)
-                name = str(nv[0][0]) if nv and nv[0] and nv[0][0] is not None else name
+            name = name_of(s)
             if not cats and s.get("cat"):
                 csh, caddr = split(s["cat"])
                 si = book.model.sheet_index[csh]
@@ -494,15 +598,7 @@ class Renderer(object):
                         xs.append(cell.get("v") if cell.get("k") in ("n", "d") else None)
             entry: Dict[str, Any] = {"name": name, "kind": s.get("kind", "line"), "stacked": bool(s.get("stacked")),
                                      "data": [plot_value(v) for v in vals]}
-            for key in ("dash", "noline", "marker", "smooth"):
-                if s.get(key):
-                    entry[key] = 1
-            if s.get("color"):
-                entry["color"] = s["color"]
-            if s.get("alpha") is not None:
-                entry["alpha"] = s["alpha"]
-            if s.get("legend") is False:
-                entry["legend"] = 0
+            style_of(s, entry)
             series.append(entry)
         if not cats and series:
             cats = [str(i + 1) for i in range(len(series[0]["data"]))]
@@ -514,22 +610,7 @@ class Renderer(object):
         out: Dict[str, Any] = {"title": chart.get("title") or "", "kind": chart.get("kind", "line"), "cats": cats[:n],
                                "series": [dict(s, data=s["data"][:n]) for s in series],
                                "axis": chart.get("axis_titles") or []}
-        fmt = chart.get("value_format") or ""
-        if "%" in fmt:
-            out["unit"] = "pct"
-        first = fmt.split(";")[0]
-        if first and first != "General":
-            point = first.find(".")
-            decimals = 0
-            if point >= 0:
-                k = point + 1
-                while k < len(first) and first[k] in "0#?":
-                    decimals += 1
-                    k += 1
-            out["decimals"] = decimals
-        for key in ("ymin", "ymax", "major_unit", "label_skip", "aspect", "gap_width", "x_title", "y_title", "auto", "updown"):
-            if chart.get(key) is not None:
-                out[key] = chart[key]
+        axis_format(out)
         # a date axis places the points in proportion to their dates and labels months, not points
         if chart.get("x_axis") == "date" and n > 1 and all(type(x) is float for x in xs[:n]) \
                 and all(xs[i] < xs[i + 1] for i in range(n - 1)):

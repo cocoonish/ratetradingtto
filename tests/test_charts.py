@@ -163,6 +163,9 @@ def test_every_chart_on_the_pages_is_drawable(service):
                 continue
             seen += 1
             d = p["data"]
+            if d.get("scatter"):                                  # XY charts: checked on their own below
+                assert d["cats"] == [] and d["series"] and all(s["kind"] == "scatter" for s in d["series"])
+                continue
             n = len(d["cats"])
             assert n > 1 and d["series"], (view["id"], p["id"])
             for s in d["series"]:
@@ -172,7 +175,7 @@ def test_every_chart_on_the_pages_is_drawable(service):
                 assert s["kind"] in ("line", "area", "bar")
                 assert "color" not in s or (len(s["color"]) == 6 and int(s["color"], 16) >= 0)
             assert "slot" not in d["series"][0]
-    assert seen == 16                                             # 14 from the workbook + 2 defined for the USD page
+    assert seen == 18                         # 14 from the TRY workbook + 2 defined for the USD page + 2 XY charts (ASW)
 
 
 def test_tlref_path_is_on_a_date_axis_and_the_usd_charts_fit_their_data(service):
@@ -207,3 +210,69 @@ def test_the_workbook_values_reach_the_chart_unchanged(service):
     fwd = [p["data"] for p in service.view(None, "forward")["panels"] if p["type"] == "chart"]
     assert all(v != "c" for d in fwd for s in d["series"] for v in s["data"])
     assert any(v is None for d in fwd for s in d["series"] for v in s["data"])
+
+
+# ---------------------------------------------------------------------------------------------- XY (scatter) charts
+def xy_of(cells, **chart):
+    book = mini_book(cells)
+    spec = {"title": "t", "kind": "scatter", "x_axis": "value",
+            "series": [{"name": "s", "cat": "S!A1:A6", "val": "S!B1:B6", "kind": "scatter"}]}
+    spec.update(chart)
+    return Renderer(book).chart(book.engine.shared, spec, TR)
+
+
+def test_the_asw_workbooks_two_charts_are_xy_charts():
+    charts = Model.load(os.path.join(ROOT, "models", "asw.json.gz")).sheet("ASW").charts
+    assert [c["title"] for c in charts] == ["DİBS ASW — kalan vade", "ASW geçmişi (son nokta canlı)"]
+    assert all(c["kind"] == "scatter" and c["x_axis"] == "value" for c in charts)
+    bonds, curve = charts[0]["series"]
+    # the bonds are markers only, each with the label Excel shows next to it; the fitted curve is a dashed line
+    assert bonds["noline"] and bonds["marker"] and bonds["labels_ref"] == "ASW!$F$7:$F$56" and bonds["cat"] == "ASW!$BG$7:$BG$56"
+    assert curve["dash"] and curve["smooth"] and "labels_ref" not in curve and not curve.get("marker")
+    assert charts[0]["x_title"] == "Kalan vade (yıl)" and charts[0]["y_title"] == "ASW (bp)" and charts[0]["xmin"] == 0.0
+    assert charts[1]["x_format"] == "dd.mm.yy" and [s["name_ref"] for s in charts[1]["series"]] == ["ASW!$D$59", "ASW!$D$60", "ASW!$D$61"]
+    assert 0.3 < charts[0]["aspect"] < 0.8                        # the hidden helper columns do not count as width
+
+
+def test_an_xy_series_keeps_only_points_with_a_numeric_x():
+    cells = {"A1": 1.5, "A2": 0.5, "A3": "yok", "A5": "=NA()", "A6": 4,
+             "B1": 10, "B2": 20, "B3": 30, "B4": 40, "B5": 50, "B6": "=NA()",
+             "C1": "bir", "C2": "iki", "C3": "üç", "C6": "altı"}
+    out = xy_of(cells, series=[{"name": "s", "cat": "S!A1:A6", "val": "S!B1:B6", "kind": "scatter", "labels_ref": "S!C1:C6",
+                                "noline": True, "marker": True, "color": "1F3864"}])
+    assert out["scatter"] == 1 and out["kind"] == "scatter" and out["cats"] == []
+    (s,) = out["series"]
+    assert s["x"] == [1.5, 0.5, 4.0]                              # text, empty and #N/A x values are not points
+    assert s["data"] == [10.0, 20.0, "c"]                         # ... a missing y keeps its place (the line passes over it)
+    assert s["labels"] == ["bir", "iki", "altı"]                  # labels stay with their points
+    assert s["kind"] == "scatter" and s["color"] == "1F3864" and s["marker"] == 1
+    assert out["xaxis"] == {"type": "value"}
+    assert "labels" not in xy_of(cells)["series"][0]
+
+
+def test_an_xy_chart_axis_settings():
+    cells = {"A1": 46300, "A2": 46310, "B1": 1, "B2": 2}
+    out = xy_of(cells, x_format="dd.mm.yy", value_format="#,##0", y_title="ASW (bp)", x_title="Tarih", ymin=-10.0)
+    assert out["xaxis"] == {"type": "date", "format": "dd.mm.yy"}
+    assert out["decimals"] == 0 and out["y_title"] == "ASW (bp)" and out["x_title"] == "Tarih" and out["ymin"] == -10.0
+    out = xy_of(cells, x_format="0.0", xmin=0.0, xmax=12.0, x_major_unit=2.0)
+    assert out["xaxis"] == {"type": "value", "format": "0.0", "min": 0.0, "max": 12.0, "major_unit": 2.0}
+    # without x values the points are numbered
+    out = xy_of(cells, series=[{"name": "s", "val": "S!B1:B2", "kind": "scatter"}])
+    assert out["series"][0]["x"] == [1.0, 2.0]
+
+
+def test_asw_page_charts(service):
+    from conftest import cell
+    charts = {p["id"]: p["data"] for p in service.view(None, "asw")["panels"] if p["type"] == "chart"}
+    bonds, curve = charts["chart0"]["series"]
+    assert charts["chart0"]["title"] == "DİBS ASW — kalan vade" and charts["chart0"]["xaxis"]["type"] == "value"
+    assert bonds["name"] == "Kâğıtlar" and len(bonds["x"]) == len(bonds["data"]) == len(bonds["labels"]) >= 15
+    assert all(type(v) is float for v in bonds["x"] + bonds["data"]) and all(bonds["labels"])
+    # the points are the sheet's own columns: remaining years (J) against ASW bp (R), labelled by column F
+    rows = [r for r in range(7, 57) if type(cell(service, "ASW!BG%d" % r, book="asw")) is float]
+    assert bonds["x"] == [cell(service, "ASW!BG%d" % r, book="asw") for r in rows]
+    assert bonds["data"] == [cell(service, "ASW!BH%d" % r, book="asw") for r in rows]
+    assert bonds["labels"] == [cell(service, "ASW!F%d" % r, book="asw") for r in rows]
+    assert len(curve["x"]) == 50 and curve["x"] == sorted(curve["x"]) and "labels" not in curve
+    assert charts["chart1"]["xaxis"] == {"type": "date", "format": "dd.mm.yy"} and len(charts["chart1"]["series"]) == 3

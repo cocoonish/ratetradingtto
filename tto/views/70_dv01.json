@@ -314,13 +314,14 @@
    "type": "table",
    "title": "P&L özeti",
    "range": "B136:D143",
-   "hidden": false
+   "hidden": false,
+   "note_ref": "B145"
   },
   {
    "id": "B5",
    "type": "table",
    "title": "Yardımcı · kova ara sütunları",
-   "range": "Z5:AH25",
+   "range": "Z3:AH25",
    "hidden": true
   },
   {
@@ -349,6 +350,13 @@
    "type": "table",
    "title": "Yardımcı · hedge matrisleri",
    "range": "AF88:AH102",
+   "hidden": true
+  },
+  {
+   "id": "B15b",
+   "type": "table",
+   "title": "Yardımcı · hedge sonrası kova duyarlılıkları, ağırlıklar ve birim matris",
+   "range": "AI84:EQ102",
    "hidden": true
   }
  ]

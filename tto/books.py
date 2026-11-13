@@ -1,6 +1,7 @@
 """Workbooks loaded into the dashboard: model + engine + input registry."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -36,6 +37,8 @@ class Book(object):
         self.title = title
         self.model = model
         self.replay = replay
+        self.recorded = True                      # the workbook file holds recorded Bloomberg values
+        self.left_out: List[str] = []             # additions of the dashboard that do not fit this file
         self.engine = Engine(model, provider=provider, clock=clock)
         self.inputs: Dict[Tuple[int, int], InputDef] = {}
         self._validation: Dict[Tuple[int, int], List[str]] = {}
@@ -165,10 +168,17 @@ class Book(object):
                 is_bulk = root[0] == "func" and root[1] in ("BDH", "BDS")
                 ref = s.arr.get(rc)
                 multi = ref is not None and (ref[0] != ref[2] or ref[1] != ref[3])
-                if not (is_bulk or (multi and rc in s.dyn)):
+                # a dynamic-array function decides its own size: FILTER can return as much as it is given,
+                # whatever the single cell Excel happened to save for it
+                shape = None
+                if rc in s.dyn and root[0] == "func" and root[1] == "FILTER" and root[2]:
+                    shape = _range_shape(root[2][0], *divmod(rc, COLS))
+                if not (is_bulk or (multi and rc in s.dyn) or shape is not None):
                     continue
                 r0, c0 = divmod(rc, COLS)
-                if multi:
+                if shape is not None:
+                    width = max(shape[1], ref[3] - ref[1] + 1 if multi else 1)
+                elif multi:
                     width = ref[3] - ref[1] + 1
                 elif root[1] == "BDH":
                     opts = " ".join(str(a[1]).upper() for a in root[2] if a[0] == "str")
@@ -181,6 +191,15 @@ class Book(object):
                         width += 1
                 height = 1
                 limit = min(s.max_row + 1, r0 + MAX_SPILL_ROWS)
+                if shape is not None:
+                    limit = r0 + min(shape[0], MAX_SPILL_ROWS) - 1
+                    # the cells right of the anchor must be free as well
+                    for c in range(c0 + 1, c0 + width):
+                        k = r0 * COLS + c
+                        if k in s.fml or (type(s.consts.get(k)) is str and k not in s.members):
+                            width = c - c0
+                            self.engine.spill_blocked[s.index].add(rc)
+                            break
                 r = r0 + 1
                 while r <= limit:
                     blocked = False
@@ -194,12 +213,28 @@ class Book(object):
                             blocked = True
                             break
                     if blocked:
+                        if shape is not None:
+                            self.engine.spill_blocked[s.index].add(rc)      # more than this is #SPILL!
                         break
                     height += 1
                     r += 1
                 if multi:
                     height = max(height, ref[2] - ref[0] + 1)
                 self.engine.register_spill(s.index, rc, height, width)
+
+
+def _range_shape(node, r0: int, c0: int) -> Optional[Tuple[int, int]]:
+    """(rows, columns) of a range / cell reference node for a formula hosted at (r0, c0)."""
+    while node[0] == "paren":
+        node = node[1]
+    if node[0] == "cell":
+        return 1, 1
+    if node[0] != "range":
+        return None
+    ra1, r1, ca1, c1, ra2, r2, ca2, c2 = node[2:10]
+    row1, row2 = (r1 if ra1 else r0 + r1), (r2 if ra2 else r0 + r2)
+    col1, col2 = (c1 if ca1 else c0 + c1), (c2 if ca2 else c0 + c2)
+    return abs(row2 - row1) + 1, abs(col2 - col1) + 1
 
 
 def formula_text(book: Book, si: int, rc: int) -> Optional[str]:
@@ -216,13 +251,32 @@ def formula_text(book: Book, si: int, rc: int) -> Optional[str]:
         return "=" + book.model.templates[tid]
 
 
-def load_books(models_dir: str, provider=None, clock: Optional[Clock] = None, replay: bool = False) -> Dict[str, Book]:
+#: the workbooks of the dashboard: id, title, model file, "the file holds the Bloomberg values of its last
+#: calculation".  A workbook saved without a Bloomberg connection has nothing recorded: offline it is
+#: calculated from what the other workbooks recorded (and the offline quote files) instead of being frozen.
+BOOKS = (("tto", "TRY masa", "tto.json.gz", True), ("sofr", "USD SOFR / FOMC", "sofr.json.gz", True),
+         ("borsa", "Borsa İstanbul swap", "borsa.json.gz", False), ("asw", "DİBS ASW (TLREF OIS)", "asw.json.gz", False))
+
+
+def load_books(models_dir: str, provider=None, clock: Optional[Clock] = None, replay: bool = False,
+               extras: bool = True) -> Dict[str, Book]:
+    """Load the workbook models.  ``extras`` adds the dashboard's own sheets (``tto.extras``) to them -
+    calculations that are not in the Excel files but are written as ordinary Excel formulas."""
     books: Dict[str, Book] = {}
-    for book_id, title, fname in (("tto", "TRY masa", "tto.json.gz"), ("sofr", "USD SOFR / FOMC", "sofr.json.gz")):
+    for book_id, title, fname, recorded in BOOKS:
         path = os.path.join(models_dir, fname)
         if not os.path.exists(path):
             continue
-        books[book_id] = Book(book_id, title, Model.load(path), provider=provider, clock=clock, replay=replay)
+        model = Model.load(path)
+        left_out: List[str] = []
+        if extras:
+            from . import extras as _extras
+            left_out = _extras.apply(book_id, model)
+        books[book_id] = Book(book_id, title, model, provider=provider, clock=clock, replay=replay and recorded)
+        books[book_id].recorded = recorded
+        books[book_id].left_out = left_out
+        for text in left_out:
+            logging.getLogger("tto").warning("%s: dashboard eki dosyaya uymadığı için dışarıda bırakıldı - %s", fname, text)
     return books
 
 

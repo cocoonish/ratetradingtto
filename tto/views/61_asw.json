@@ -1,0 +1,189 @@
+{
+ "id": "asw",
+ "title": "DİBS ASW",
+ "group": "Tahvil",
+ "book": "asw",
+ "sheet": "ASW",
+ "order": 61,
+ "replay_note": "Bu Excel dosyasında kayıtlı piyasa verisi yok. Kayıtlı veri modunda kâğıt bilgileri ve fiyatlar TTO dosyasının 03.11.2026 kayıtlarından (DİBS RV sayfası) alınır; geçmiş (BDH) kısmı yalnızca canlı modda dolar.",
+ "inputs": [
+  {
+   "range": "C3",
+   "scope": "shared",
+   "group": "asw-src",
+   "kind": "text",
+   "label": "Kaynak (genel): ISL0 = bugün valör, diğerleri T+1"
+  },
+  {
+   "range": "E3",
+   "scope": "shared",
+   "group": "asw-suffix",
+   "kind": "text",
+   "label": "BBG eki (ISIN, Govt, Corp ya da /isin/)"
+  },
+  {
+   "range": "G3",
+   "scope": "user",
+   "group": "asw-px",
+   "kind": "text",
+   "label": "Fiyat: ORTA / ALIŞ / SATIŞ"
+  },
+  {
+   "range": "J3",
+   "scope": "user",
+   "group": "asw-hist",
+   "kind": "number",
+   "label": "Geçmiş (iş günü)"
+  },
+  {
+   "range": "L3",
+   "scope": "user",
+   "group": "asw-field",
+   "kind": "text",
+   "label": "Geçmiş fiyat alanı"
+  },
+  {
+   "range": "B7:B56",
+   "scope": "shared",
+   "group": "asw-isin",
+   "kind": "text",
+   "label": "ISIN listesi"
+  },
+  {
+   "range": "C7:C56",
+   "scope": "shared",
+   "group": "asw-isin-src",
+   "kind": "text",
+   "label": "Kaynak (boş = genel)"
+  },
+  {
+   "range": "D7:D56",
+   "scope": "user",
+   "group": "asw-manual",
+   "kind": "number",
+   "label": "Manuel temiz fiyat"
+  },
+  {
+   "range": "E7:E56",
+   "scope": "user",
+   "group": "asw-fit",
+   "kind": "text",
+   "label": "Eğri / grafik: boş, 1, 0 ya da x"
+  },
+  {
+   "range": "C59:C61",
+   "scope": "user",
+   "group": "asw-sel",
+   "kind": "text",
+   "label": "Geçmişi izlenen kâğıtlar"
+  },
+  {
+   "range": "C63:R63",
+   "scope": "shared",
+   "group": "asw-ois",
+   "kind": "text",
+   "label": "TRY OIS ticker'ları"
+  },
+  {
+   "range": "LR2:LR200",
+   "scope": "shared",
+   "group": "asw-holiday",
+   "kind": "date",
+   "label": "Tatil günleri"
+  }
+ ],
+ "panels": [
+  {
+   "id": "nt",
+   "type": "notes",
+   "title": "DİBS ASW — TLREF OIS",
+   "range": "B1:B2"
+  },
+  {
+   "id": "prm",
+   "type": "table",
+   "title": "Parametreler",
+   "range": "B3:N4",
+   "keep_title": true
+  },
+  {
+   "id": "tbl",
+   "type": "table",
+   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz",
+   "range": "B6:U56",
+   "keep_title": true
+  },
+  {
+   "id": "chart0",
+   "type": "chart",
+   "chart": 0,
+   "wide": true
+  },
+  {
+   "id": "sel",
+   "type": "table",
+   "title": "ASW geçmişi · seçili kâğıtlar",
+   "range": "B58:N61",
+   "keep_title": true
+  },
+  {
+   "id": "chart1",
+   "type": "chart",
+   "chart": 1,
+   "wide": true
+  },
+  {
+   "id": "hist",
+   "type": "table",
+   "title": "Geçmiş · OIS kotaları, TLREF, fiyat ve ASW (son satır canlı)",
+   "range": "A62:Z326",
+   "collapsed": true,
+   "keep_title": true
+  },
+  {
+   "id": "fit",
+   "type": "table",
+   "title": "Yardımcı · eğri uyumu (a + b·t + c·t²) toplamları",
+   "range": "AN2:BA3",
+   "hidden": true
+  },
+  {
+   "id": "cols",
+   "type": "table",
+   "title": "Yardımcı · kâğıt ara sütunları (BBG alanları, kupon tarihleri, iskonto faktörleri, grafik eğrisi)",
+   "range": "AN6:EF56",
+   "hidden": true
+  },
+  {
+   "id": "h1",
+   "type": "table",
+   "title": "Yardımcı · geçmiş: OIS eğrisi düğümleri ve iskonto faktörleri",
+   "range": "AB62:EW326",
+   "hidden": true,
+   "max_rows": 40
+  },
+  {
+   "id": "h2",
+   "type": "table",
+   "title": "Yardımcı · geçmiş: seçili kâğıtların kupon tarihleri ve iskonto faktörleri",
+   "range": "EZ62:LK326",
+   "hidden": true,
+   "max_rows": 40
+  },
+  {
+   "id": "h3",
+   "type": "table",
+   "title": "Yardımcı · geçmiş grafiği verisi",
+   "range": "LM64:LP326",
+   "hidden": true,
+   "max_rows": 40
+  },
+  {
+   "id": "hol",
+   "type": "table",
+   "title": "Tatil günleri",
+   "range": "LR1:LR200",
+   "hidden": true
+  }
+ ]
+}

@@ -1,0 +1,91 @@
+{
+ "id": "borsa",
+ "title": "Borsa Swap",
+ "group": "TRY Faiz",
+ "book": "borsa",
+ "sheet": "bu",
+ "order": 46,
+ "replay_note": "Bu Excel dosyasında kayıtlı piyasa verisi yok (Bloomberg bağlantısı olmadan kaydedilmiş). Kayıtlı veri modunda aşağıdaki kotalar, TTO dosyasının 03.11.2026 kayıtlarındaki RET eğrisinden türetilmiş ÖRNEK veridir; canlı modda Borsa İstanbul swap kotaları Bloomberg'den gelir.",
+ "inputs": [
+  {
+   "range": "Sheet1!AD6:AD15",
+   "scope": "shared",
+   "group": "borsa-ois",
+   "kind": "text",
+   "label": "USD OIS ticker'ları (Curncy eki olmadan)"
+  },
+  {
+   "range": "Sheet1!B4",
+   "scope": "shared",
+   "group": "borsa-day0",
+   "kind": "number",
+   "label": "BFX0: ilk vade (gün)"
+  },
+  {
+   "range": "Sheet1!N4",
+   "scope": "shared",
+   "group": "borsa-day1",
+   "kind": "number",
+   "label": "BFX1: ilk vade (gün)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "t0",
+   "type": "table",
+   "title": "BIST swap · T+0 valör (BFX0) — kota, ima TRY faizi ve O/N karşılığı",
+   "range": "D8:P54",
+   "keep_title": true,
+   "note": "BID % / ASK %: swap puanından ima edilen TRY basit faizi (ACT/360, USD OIS ile). O/N = 360·((1 + r·gün/360)^(1/gün) − 1). SP / gün = swap puanı ÷ vade günü. Yalnızca alış ya da satış miktarı olan vadeler listelenir."
+  },
+  {
+   "id": "t1",
+   "type": "table",
+   "title": "BIST swap · T+1 valör (BFX1) — kota, ima TRY faizi ve O/N karşılığı",
+   "range": "Q8:AC54",
+   "keep_title": true
+  },
+  {
+   "id": "mkt",
+   "type": "table",
+   "sheet": "Sheet1",
+   "title": "Spot kur ve USD OIS eğrisi",
+   "range": "AC3:AH19",
+   "keep_title": true
+  },
+  {
+   "id": "d0",
+   "type": "table",
+   "sheet": "Sheet1",
+   "title": "Yardımcı · Bloomberg kotaları ve ima faiz (BFX0, 1–400 gün)",
+   "range": "A2:L404",
+   "hidden": true,
+   "max_rows": 60
+  },
+  {
+   "id": "d1",
+   "type": "table",
+   "sheet": "Sheet1",
+   "title": "Yardımcı · Bloomberg kotaları ve ima faiz (BFX1, 1–400 gün)",
+   "range": "N3:X404",
+   "hidden": true,
+   "max_rows": 60
+  },
+  {
+   "id": "f0",
+   "type": "table",
+   "sheet": "Sheet2",
+   "title": "Yardımcı · kotası olan vadeler (süzgeç)",
+   "range": "B4:X366",
+   "hidden": true,
+   "max_rows": 60
+  },
+  {
+   "id": "a0",
+   "type": "table",
+   "title": "Yardımcı · tarih bayrağı sütunu",
+   "range": "A4:C54",
+   "hidden": true
+  }
+ ]
+}

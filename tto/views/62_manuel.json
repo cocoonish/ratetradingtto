@@ -166,7 +166,7 @@
    "id": "B5",
    "type": "table",
    "title": "Hedef → temiz fiyat",
-   "range": "H9:J13",
+   "range": "H9:J15",
    "hidden": false
   },
   {
@@ -188,6 +188,13 @@
    "type": "table",
    "title": "Yardımcı · ara hesap",
    "range": "AI17:AJ38",
+   "hidden": true
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "Yardımcı · dönem tablosu ara sütunları (gün, endeks faktörü, kupon, nakit akışı)",
+   "range": "M23:AF63",
    "hidden": true
   }
  ]
