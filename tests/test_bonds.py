@@ -323,13 +323,13 @@ def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
     try:
         u = s.login("Canlı Masa")["user"]
         L = ex._live_cols()
-        assert [g["cap"] for g in L["groups"]] == ["T0", "T1", "T2"] and [g["default"] for g in L["groups"]] == ["ISL0", "ISL1", "ISL2"]
+        assert [g["cap"] for g in L["groups"]] == ["T0", "T1", "T2"] and [g["default"] for g in L["groups"]] == ["ISL0", "ISL1", "ISLN"]
         # the value dates: today, the next business day and the one after (the workbook's holidays)
         assert [cell(s, "EK_DIBS!%s" % g["date"]) for g in L["groups"]] == [46329.0, 46330.0, 46331.0]
         # the bonds of the DİBS RV list, row for row, with the security Bloomberg is asked for on each value date
         assert [cell(s, "EK_DIBS!%s8" % c) for c in "ABCD"] == ["TRT150328T24", "15.03.28", "S", 46827.0]
         assert [cell(s, "EK_DIBS!%s8" % c) for c in L["sec"] + [L["sec_extra"]]] == [
-            "TRT150328T24 @ISL0 ISIN", "TRT150328T24 @ISL1 ISIN", "TRT150328T24 @ISL2 ISIN", "TRT150328T24 @BGN ISIN"]
+            "TRT150328T24 @ISL0 ISIN", "TRT150328T24 @ISL1 ISIN", "TRT150328T24 @ISLN ISIN", "TRT150328T24 @BGN ISIN"]
         assert cell(s, "EK_DIBS!B5") == "10.02.27 Bono" and cell(s, "EK_DIBS!B26") == "09.01.30 TLREF"
         # the value date the DİBS RV row is priced on comes from that sheet (offline: the file's values) ...
         t1 = L["groups"][1]
@@ -443,7 +443,7 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
         rv = {x["name"]: x["t"] for x in card["rv"]}
         assert rv["Sinyal"] in ("UCUZ", "PAHALI", "–") and rv["Kupon"] == "36,80%" and "BIST bileşik getiri" in rv and "DV01 TL / 1mn (T: spread)" in rv
         assert [(g["cap"], g["src"], g["bid"], g["ask"]) for g in card["live"]] == [
-            ("T0", "ISL0", "", ""), ("T1", "ISL1", "100,100", "100,125"), ("T2", "ISL2", "", "")]
+            ("T0", "ISL0", "", ""), ("T1", "ISL1", "100,100", "100,125"), ("T2", "ISLN", "", "")]
         assert [x["name"] for x in card["repo"]] == ["T0→T1 repo %", "T1→T2 repo %", "T0→T1 − TLREF (bp)"] and card["extra"]["src"] == "BGN"
         assert (card["board"]["bid"], card["board"]["ask"], card["board"]["last"], card["board"]["time"]) == ("100,400", "100,475", "100,400", "14:13")
         assert card["board"]["implied"]["bid"] > card["board"]["implied"]["ask"]

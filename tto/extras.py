@@ -1166,7 +1166,7 @@ _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", 
 LIVE_SHEET = "EK_DIBS"
 LIVE_FIRST, LIVE_LAST = 5, 54          # the rows of the DİBS RV list, row for row
 #: the value dates: (caption, first visible column, default Bloomberg pricing source, business days after today)
-LIVE_GROUPS = (("T0", "F", "ISL0", 0), ("T1", "K", "ISL1", 1), ("T2", "P", "ISL2", 2))
+LIVE_GROUPS = (("T0", "F", "ISL0", 0), ("T1", "K", "ISL1", 1), ("T2", "P", "ISLN", 2))
 LIVE_EXTRA = "U"                       # one more pricing source of the desk's choice: bid / ask (BGN to start with)
 LIVE_REPO = ("W", "X", "Y")            # O/N repo implied T0 -> T1, T1 -> T2, T0 -> T1 against TLREF (bp)
 LIVE_HELP = "AA"                       # the helper columns start here: securities, Bloomberg's answers, mids
@@ -1306,7 +1306,7 @@ def _tto_dibs_live(model: Model) -> None:
         b.set("%s%d" % (y, r), '=IF(ISNUMBER({w}{r}),({w}{r}/100-OIS_MAIN!$J$2)*10000,"")'.format(w=w, r=r), fmt="0")
     b.note("A%d" % (LIVE_LAST + 2),
            "Kâğıtlar DİBS RV listesindekilerdir (oraya eklenen buraya da gelir). Her valör bir Bloomberg fiyat kaynağıdır "
-           "(ISL0 = aynı gün, ISL1 = ertesi iş günü; T2'nin kodu masanın terminalinde doğrulanmalı) - sarı hücreye başka kod "
+           "(ISL0 = aynı gün, ISL1 = ertesi iş günü, ISLN = iki iş günü sonra) - sarı hücreye başka kod "
            "yazılabilir. Kâğıdın DİBS RV'de fiyatlandığı kaynak o sayfadan okunur. Repo: iki valörün kirli fiyatlarından "
            "(temiz + o valördeki işlemiş faiz), (kirli2 / kirli1 − 1) · 365 / gün; tek bir fiyat adımı (0,005) bir günde "
            "~1,8 puan eder.")

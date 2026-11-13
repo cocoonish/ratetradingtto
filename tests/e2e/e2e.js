@@ -1284,11 +1284,11 @@ async function shot(page, name) {
       const at = (name) => bond[head.indexOf(name)];
       return { label: bond[1], t1: [at('T1 bid'), at('T1 ask'), at('T1 son işlem'), at('T1 son işlem günü')], t0: at('T0 bid'),
         broker: [at('Broker bid'), at('Broker ask')], card: bond[bond.length - 1],
-        sources: (rows.find((r) => r.includes('ISL0')) || []).filter((x) => /^(ISL\d|BGN)$/.test(x)) };
+        sources: (rows.find((r) => r.includes('ISL0')) || []).filter((x) => /^(ISL[0-9N]|BGN)$/.test(x)) };
     });
-    check('DİBS Canlı: every bond on T0 / T1 / T2 (sources ISL0 / ISL1 / ISL2 and BGN), the RV value date from the recorded file, the chat\'s quotes on the right',
+    check('DİBS Canlı: every bond on T0 / T1 / T2 (sources ISL0 / ISL1 / ISLN and BGN), the RV value date from the recorded file, the chat\'s quotes on the right',
       liveRow.label === '15.03.28' && JSON.stringify(liveRow.t1) === '["100,100","100,125","100,200","03.11.2026"]' && liveRow.t0 === ''
-      && JSON.stringify(liveRow.broker) === '["100,550","100,575"]' && liveRow.card === '▸' && liveRow.sources.join(',') === 'ISL0,ISL1,ISL2,BGN', liveRow);
+      && JSON.stringify(liveRow.broker) === '["100,550","100,575"]' && liveRow.card === '▸' && liveRow.sources.join(',') === 'ISL0,ISL1,ISLN,BGN', liveRow);
     const tapeRows = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="L3"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
     check('DİBS Canlı: the day\'s bond trades, newest first, with who said them',
       tapeRows[0][0] === 'Saat' && tapeRows.length >= 2 && tapeRows[1][1] === '19.01.28 TLREF' && tapeRows[1][3] === '100,725' && /ICAP/.test(tapeRows[1][7]), tapeRows.slice(0, 3));

@@ -434,7 +434,7 @@ bu sütunlar da boşalır; Excel'e aktarmada bu sütunlar yoktur (sayfanın hüc
 
 **DİBS Trading · valörler.** Trading listesindeki her kâğıt (DİBS RV listesi; başlıktaki "+ ISIN ekle" aynı listeye
 ekler) üç valörde yan yana: **T0** (aynı gün), **T1** (ertesi iş günü), **T2** - her valör bir Bloomberg fiyat kaynağıdır
-(`ISL0`, `ISL1`, `ISL2`; sarı hücreye başka kod yazılabilir, boşaltılırsa varsayılan kullanılır). Her valörde bid, ask,
+(`ISL0`, `ISL1`, `ISLN`; sarı hücreye başka kod yazılabilir, boşaltılırsa varsayılan kullanılır). Her valörde bid, ask,
 **son işlem fiyatı**, **son işlemin ne zaman olduğu** ve günün hacmi; ayrıca seçilen bir **ek kaynağın** bid / ask'i
 (`BGN` ile başlar; bir broker'ın kodu yazılabilir) ve sağda o günün **Broker Chat** tahtası (bid, ask, son işlem,
 saat). Son işlemin zamanı: canlıda dashboard o valörün son fiyatının değiştiğini ya da hacminin arttığını gördüğü an
@@ -871,8 +871,8 @@ olay bekledi).
 * **DİBS değişimleri** Bloomberg'in getiri alanındandır (kendi getiri kuralıyla); DİBS RV sayfasındaki BIST bileşik
   getirinin geçmişi dosyada yoktur, bu yüzden o sütun yalnızca bugünkü seviyeyi gösterir. Bloomberg'in bu alanlar
   için geçmiş verip vermediği canlıda sınanmadı.
-* **DİBS Trading ve Tüm Kâğıtlar** canlıda sınanmadı. `ISL0` (aynı gün) ve `ISL1` (ertesi gün) çalışma kitabının kendi kaynaklarıdır;
-  **T2'nin kodu (`ISL2`) varsayımdır**, masanın terminalinde doğrulanmalı (yanlışsa o sütunlar boş kalır, ticker
+* **DİBS Trading ve Tüm Kâğıtlar** canlıda sınanmadı. `ISL0` (aynı gün) ve `ISL1` (ertesi gün) çalışma kitabının kendi
+  kaynaklarıdır, `ISLN` (T2) masanın Bloomberg'indeki kaynaktır (bir kaynak kodu yanlışsa o sütunlar boş kalır, ticker
   *Bloomberg'in tanımadıkları* listesinde görünür; sarı hücreden düzeltilir). `VOLUME` alanının DİBS'te akıp akmadığı
   ve son işlem saatini veren bir Bloomberg alanı denenmedi: saat, dashboard'un işlemi gördüğü andır (açık değilken
   olan işlemin yalnızca günü görünür). Ek kaynak (`BGN`) her kâğıt için fiyat vermeyebilir.

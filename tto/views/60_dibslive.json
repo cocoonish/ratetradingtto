@@ -25,7 +25,7 @@
    "scope": "shared",
    "group": "dibslive-src",
    "kind": "text",
-   "label": "T2 fiyat kaynağı (ör. ISL2 - terminalde doğrulayın)"
+   "label": "T2 fiyat kaynağı (ISLN)"
   },
   {
    "range": "U2",
