@@ -16,7 +16,9 @@ class Settings(object):
                  mode: str = "auto", bbg_host: str = "localhost", bbg_port: int = 8194,
                  tick_seconds: float = 2.0, locale: str = "tr", models_dir: Optional[str] = None,
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
-                 bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0):
+                 bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
+                 bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
+                 history_pace: float = 1.0):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -32,6 +34,12 @@ class Settings(object):
         self.bbg_price_poll = float(bbg_price_poll)
         self.history = bool(history)            # keep the daily history up to date in the background
         self.history_refresh = float(history_refresh)   # seconds between history updates in live mode (0: once)
+        self.bbg_isolate = bool(bbg_isolate)    # the Bloomberg session in a helper process (see marketdata/bbg_process.py)
+        # seconds between two ticks of one subscription; None: every tick in the helper process, 1 s inside this one
+        self.bbg_interval = None if bbg_interval is None else max(0.0, float(bbg_interval))
+        self.bbg_queue = int(bbg_queue)         # undelivered events the Bloomberg session may hold
+        # live mode: after a day of the meeting-pricing history has been computed, rest this many times as long
+        self.history_pace = max(0.0, float(history_pace))
 
     @property
     def db_path(self) -> str:

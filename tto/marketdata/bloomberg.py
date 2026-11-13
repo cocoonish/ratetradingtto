@@ -16,10 +16,26 @@ other ``BDP`` fields / ``BDP`` with overrides     ``ReferenceDataRequest``, refr
 Nothing here blocks the calculation engine: a value that is not known yet is returned as
 ``#N/A Requesting Data...`` (exactly what Excel shows) and the cells that used it are recalculated as soon
 as the answer arrives (:meth:`BloombergProvider.drain_changes`).
+
+Keeping up with Bloomberg.  The session hands events over through a queue of limited length; a reader that
+is too slow first gets a ``SlowConsumerWarning`` and then loses events ("event queue is full, events are
+being dropped").  Every call into blpapi releases Python's interpreter lock, and a thread that computes at
+the same time (the calculation engine) takes it: measured with blpapi 3.26, a tick that costs 0.06 ms to
+read alone costs 6 ms then.  So:
+
+* the dashboard runs this provider in a process of its own (``bbg_process.py``), where nothing else
+  computes; inside one process :func:`favour_reader` shortens the hand-over and ticks are conflated;
+* a security is subscribed to only once a reference answer has shown that it exists (a sheet such as the
+  BIST swap quotes asks for hundreds of maturities that do not);
+* the queue is made longer (``queue_size``), a tick is read with as few calls as possible, and what
+  Bloomberg says about the queue (``SlowConsumerWarning`` / ``DataLoss``) is counted, shown in
+  :meth:`BloombergProvider.status` and repaired by asking the affected values again.
 """
 from __future__ import annotations
 
 import datetime as _dt
+import os
+import sys
 import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -54,8 +70,21 @@ PRICE_POLL_MAX = 30 * 60.0            # a value that may have gone stale
 PRICE_POLL_MAX_EMPTY = 60 * 60.0      # a field without any value ("#N/A N/A")
 #: seconds after which a started subscription that has not delivered a field counts as not delivering it
 SILENT_AFTER = 30.0
-#: answers that no later request will change: never asked again
+#: answers that no later request will change: never asked again (an unknown security once on every new
+#: day: a maturity that did not exist yesterday may exist today)
 FINAL_ANSWERS = (INVALID_SECURITY, INVALID_FIELD, NOT_APPLICABLE)
+#: undelivered events the session may hold (blpapi's own default is 10 000: the first paint of a few
+#: thousand subscriptions alone is more than that)
+QUEUE_SIZE = 100000
+#: a new subscription waits this long for the reference answer that says whether the security exists
+SUBSCRIBE_WAIT = 60.0
+#: seconds between two rounds of asking again what a full queue may have dropped ...
+RESYNC_EVERY = 60.0
+#: ... and how long the queue must have been quiet before the first one
+RESYNC_SETTLE = 2.0
+#: values asked again per day at most: a reader that keeps falling behind must not use up the terminal's
+#: daily data limit by repairing itself (the losses stay visible in the status)
+RESYNC_BUDGET = 20000
 
 _PERIODICITY = {"D": "DAILY", "W": "WEEKLY", "M": "MONTHLY", "Q": "QUARTERLY", "S": "SEMI_ANNUALLY", "Y": "YEARLY"}
 _DAYS = {"W": "NON_TRADING_WEEKDAYS", "A": "ALL_CALENDAR_DAYS", "C": "ALL_CALENDAR_DAYS", "T": "ACTIVE_DAYS_ONLY"}
@@ -91,15 +120,44 @@ class _Request(object):
 
 
 class _Sub(object):
-    __slots__ = ("cid", "fields", "sent_fields", "state", "bad", "since")
+    __slots__ = ("cid", "fields", "sent_fields", "names", "state", "bad", "since", "created", "plain")
 
     def __init__(self, cid: int):
         self.cid = cid
         self.fields: Set[str] = set()
         self.sent_fields: Set[str] = set()
-        self.state = "new"           # new | pending | started | failed
+        self.names: Tuple = ()       # (field, blpapi Name) of the fields sent: what a tick is searched for
+        self.state = "new"           # new | pending | started | failed | invalid (no such security)
         self.bad: Set[str] = set()
         self.since = 0.0
+        self.created = time.time()
+        self.plain = False           # subscribe without the conflation option (it was refused with it)
+
+
+def favour_reader(interval: float = 0.001) -> Dict[str, Any]:
+    """For a provider that shares its process with the calculation engine: let the thread that reads from
+    Bloomberg have the interpreter sooner when it asks for it.
+
+    A thread that wants Python's interpreter lock waits one "switch interval" (5 ms by default) before the
+    thread that holds it is told to let go; the reader loses the lock on its calls into blpapi all the
+    time.  On Windows a wait of that length really takes until the next tick of the system clock (up to
+    15.6 ms) unless the process asks for the finer clock.  Returns what was changed.
+    """
+    done: Dict[str, Any] = {}
+    try:
+        if sys.getswitchinterval() > interval:
+            sys.setswitchinterval(interval)
+            done["switch_interval"] = interval
+    except Exception:  # noqa: BLE001 - tuning only
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes  # noqa: PLC0415
+            ctypes.windll.winmm.timeBeginPeriod(1)
+            done["timer_ms"] = 1
+        except Exception:  # noqa: BLE001
+            pass
+    return done
 
 
 class BloombergProvider(Provider):
@@ -107,7 +165,8 @@ class BloombergProvider(Provider):
 
     def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 120.0,
                  request_timeout: float = 45.0, max_hits_per_day: int = 400000, bfx: str = "off",
-                 blpapi_module=None, reconnect_wait: float = 10.0):
+                 blpapi_module=None, reconnect_wait: float = 10.0, queue_size: int = QUEUE_SIZE,
+                 interval: float = 0.0):
         self.host = host
         self.port = int(port)
         self.stream = stream
@@ -116,6 +175,8 @@ class BloombergProvider(Provider):
         self.max_hits_per_day = int(max_hits_per_day)
         self.bfx_mode = bfx
         self.reconnect_wait = float(reconnect_wait)
+        self.queue_size = int(queue_size or 0)       # undelivered events the session may hold (0: blpapi's default)
+        self.interval = max(0.0, float(interval or 0.0))   # seconds between two ticks of a subscription (0: every tick)
         self._bp = blpapi_module
         self._lock = threading.RLock()
         self._values: Dict[Tuple, Any] = {}
@@ -142,6 +203,17 @@ class BloombergProvider(Provider):
         self.last_tick = 0.0
         self.last_error = ""
         self.limit_reached = False
+        # what Bloomberg said about its event queue (see the module text)
+        self.slow = False                # between a SlowConsumerWarning and its ...Cleared
+        self.slow_warnings = 0
+        self.events_dropped = 0          # events the session threw away because the queue was full
+        self.messages_lost = 0           # ... as reported per subscription (DataLoss)
+        self.resyncs = 0                 # values asked again after such a loss
+        self._resyncs_today = 0
+        self._resync: Set[str] = set()   # securities whose subscription lost data
+        self._resync_all = False
+        self._resync_at = 0.0
+        self._slow_at = 0.0
 
     # ================================================================== lifecycle
     def start(self) -> None:
@@ -161,7 +233,10 @@ class BloombergProvider(Provider):
         opts = bp.SessionOptions()
         opts.setServerHost(self.host)
         opts.setServerPort(self.port)
-        for setter, value in (("setAutoRestartOnDisconnection", True), ("setNumStartAttempts", 2)):
+        tuning = [("setAutoRestartOnDisconnection", True), ("setNumStartAttempts", 2)]
+        if self.queue_size > 0:
+            tuning.append(("setMaxEventQueueSize", self.queue_size))
+        for setter, value in tuning:
             fn = getattr(opts, setter, None)
             if fn is not None:
                 try:
@@ -320,9 +395,12 @@ class BloombergProvider(Provider):
                     "items": len(self._values), "pending": len(self._queue) + sum(len(r.keys) for r in self._requests.values()),
                     "subscriptions": sum(1 for s in self._subs.values() if s.state == "started"),
                     "subscriptions_failed": sum(1 for s in self._subs.values() if s.state == "failed"),
+                    "subscriptions_invalid": sum(1 for s in self._subs.values() if s.state == "invalid"),
                     "streaming": self.stream, "requests": self.requests_sent, "hits_today": self.hits, "ticks": self.ticks,
                     "last_tick": self.last_tick, "limit_reached": self.limit_reached, "error": self.last_error,
-                    "bfx": self.bfx_mode}
+                    "bfx": self.bfx_mode, "isolated": False, "interval": self.interval, "queue_size": self.queue_size,
+                    "slow": self.slow, "slow_warnings": self.slow_warnings, "events_dropped": self.events_dropped,
+                    "messages_lost": self.messages_lost, "resyncs": self.resyncs}
 
     # ================================================================== values
     def _set(self, key: Tuple, value: Any, streamed: bool = False) -> None:
@@ -395,6 +473,7 @@ class BloombergProvider(Provider):
                     continue
                 self._roll_day()
                 self._schedule_refreshes()
+                self._resync_lost()
                 self._send_queued()
                 self._sync_subscriptions()
                 self._expire_requests()
@@ -417,9 +496,13 @@ class BloombergProvider(Provider):
                         self._items[k].state = "queued"
                         self._queue.append(k)
             self._requests.clear()
+            now = time.time()
             for sub in self._subs.values():
                 sub.state = "new"
                 sub.sent_fields = set()
+                sub.names = ()
+                sub.created = now
+            self.slow = False
 
     def _roll_day(self) -> None:
         today = _dt.date.today()
@@ -427,6 +510,54 @@ class BloombergProvider(Provider):
             self.hits_day = today
             self.hits = 0
             self.limit_reached = False
+            self._resyncs_today = 0
+            self.revalidate()
+
+    def revalidate(self) -> int:
+        """Ask again about the securities Bloomberg did not know (done once on every new day: a maturity
+        that did not exist yesterday may exist today).  Returns how many values were queued."""
+        n = 0
+        now = time.time()
+        with self._lock:
+            for key, it in self._items.items():
+                if it.state == "ok" and self._values.get(key) == INVALID_SECURITY:
+                    it.state = "queued"
+                    self._queue.append(key)
+                    n += 1
+            for sub in self._subs.values():
+                if sub.state == "invalid":
+                    sub.state = "new"
+                    sub.created = now
+        if n:
+            self._wake.set()
+        return n
+
+    def _resync_lost(self) -> None:
+        """After the queue has overflowed: what a subscription delivered meanwhile may be missing, so the
+        values concerned are asked once more by request (not while the queue is still filling up)."""
+        now = time.time()
+        with self._lock:
+            if not (self._resync or self._resync_all) or self.slow or self.limit_reached:
+                return
+            if now - self._slow_at < RESYNC_SETTLE or now - self._resync_at < RESYNC_EVERY:
+                return
+            everything, self._resync_all = self._resync_all, False
+            secs, self._resync = self._resync, set()
+            self._resync_at = now
+            if self._resyncs_today >= RESYNC_BUDGET:
+                return                               # enough for one day: the streams go on, the counts stay
+            n = 0
+            for (sec, _field), keys in self._rt_keys.items():
+                if not everything and sec not in secs:
+                    continue
+                for key in keys:
+                    it = self._items.get(key)
+                    if it is not None and it.state == "ok" and self._values.get(key) not in FINAL_ANSWERS:
+                        it.state = "queued"
+                        self._queue.append(key)
+                        n += 1
+            self.resyncs += n
+            self._resyncs_today += n
 
     def _schedule_refreshes(self) -> None:
         now = time.time()
@@ -588,33 +719,60 @@ class BloombergProvider(Provider):
             return
         bp = self._bp
         fresh, changed = [], []
+        now = time.time()
+        conflate = ["interval=%s" % (("%.3f" % self.interval).rstrip("0").rstrip("."),)] if self.interval > 0 else []
         with self._lock:
             for sec, sub in self._subs.items():
                 if sub.state == "new":
-                    fresh.append((sec, sub, sorted(sub.fields)))
+                    known = self._known(sec, sub)
+                    if known is False:
+                        sub.state = "invalid"            # no such security: nothing to subscribe to
+                        continue
+                    if known is None and now - sub.created < SUBSCRIBE_WAIT:
+                        continue                         # the reference answer is still on its way
+                    fields = sorted(sub.fields)
+                    fresh.append((sec, sub, fields, [] if sub.plain else conflate))
                     sub.state = "pending"
-                    sub.sent_fields = set(sub.fields)
-                    sub.since = time.time()
+                    sub.sent_fields = set(fields)
+                    sub.names = tuple((f, self._name(f)) for f in fields)
+                    sub.since = now
                 elif sub.state == "started" and sub.fields - sub.sent_fields:
-                    changed.append((sec, sub, sorted(sub.fields)))
-                    sub.sent_fields = set(sub.fields)
+                    fields = sorted(sub.fields)
+                    changed.append((sec, sub, fields, [] if sub.plain else conflate))
+                    sub.sent_fields = set(fields)
+                    sub.names = tuple((f, self._name(f)) for f in fields)
         for group, action in ((fresh, "subscribe"), (changed, "resubscribe")):
             for i in range(0, len(group), 200):
                 lst = bp.SubscriptionList()
-                for sec, sub, fields in group[i:i + 200]:
-                    lst.add(sec, fields, [], bp.CorrelationId(sub.cid))
+                for sec, sub, fields, options in group[i:i + 200]:
+                    lst.add(sec, fields, options, bp.CorrelationId(sub.cid))
                 try:
                     getattr(self._session, action)(lst)
                 except Exception as exc:  # noqa: BLE001
                     self.last_error = "abonelik hatası: %s" % (str(exc)[:160],)
                     with self._lock:
-                        for sec, sub, _ in group[i:i + 200]:
+                        for sec, sub, _f, _o in group[i:i + 200]:
                             sub.state = "failed"
+
+    def _known(self, sec: str, sub: _Sub) -> Optional[bool]:
+        """Does the security of a subscription exist?  ``None`` while no reference answer has arrived
+        (lock held by the caller)."""
+        answered = False
+        for field in sub.fields:
+            for key in self._rt_keys.get((sec, field), ()):
+                it = self._items.get(key)
+                if it is None or it.state != "ok":
+                    continue
+                if self._values.get(key) == INVALID_SECURITY:
+                    return False
+                answered = True
+        return True if answered else None
 
     # ================================================================== reader: events from Bloomberg
     def _read_loop(self) -> None:
         bp = self._bp
         ev_types = bp.Event
+        admin = getattr(ev_types, "ADMIN", None)
         while not self._stop.is_set():
             session = self._session
             if session is None:
@@ -648,6 +806,9 @@ class BloombergProvider(Provider):
                 elif et == ev_types.SESSION_STATUS:
                     for msg in event:
                         self._on_session_status(msg)
+                elif admin is not None and et == admin:
+                    for msg in event:
+                        self._on_admin(msg)
             except Exception as exc:  # noqa: BLE001 - one bad message must not stop the stream
                 self.last_error = "%s: %s" % (type(exc).__name__, str(exc)[:200])
 
@@ -675,6 +836,50 @@ class BloombergProvider(Provider):
             self.last_error = "Bloomberg bağlantısı koptu"
         elif kind in ("SessionConnectionUp", "SessionStarted"):
             self.connected = True
+
+    def _number(self, msg, name: str) -> int:
+        try:
+            root = msg.asElement()
+            if root.hasElement(self._name(name), True):
+                return int(root.getElementAsFloat(self._name(name)))
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+    def _on_admin(self, msg) -> None:
+        """What the session says about its event queue."""
+        kind = str(msg.messageType())
+        if kind == "SlowConsumerWarning":
+            with self._lock:
+                self.slow = True
+                self.slow_warnings += 1
+                self._slow_at = time.time()
+            self.last_error = "Bloomberg olay kuyruğu doluyor: veriler yeterince hızlı okunamıyor"
+        elif kind == "SlowConsumerWarningCleared":
+            dropped = self._number(msg, "eventsDropped")
+            with self._lock:
+                self.slow = False
+                self._slow_at = time.time()
+                self.events_dropped += dropped
+                if dropped:
+                    self._resync_all = True          # a dropped event may have been anything
+            if dropped:
+                self.last_error = "Bloomberg olay kuyruğu taştı: %d olay düştü – değerler yeniden isteniyor" % dropped
+            elif self.last_error.startswith("Bloomberg olay kuyruğu doluyor"):
+                self.last_error = ""                 # caught up without losing anything
+            self._wake.set()
+        elif kind == "DataLoss":
+            lost = self._number(msg, "numMessagesDropped") or 1
+            cids = self._cids(msg)
+            with self._lock:
+                self.messages_lost += lost
+                for cid in cids:
+                    sec = self._sub_by_cid.get(cid)
+                    if sec is not None:
+                        self._resync.add(sec)
+                if not cids:
+                    self._resync_all = True
+            self._wake.set()
 
     def _on_request_failure(self, msg) -> None:
         with self._lock:
@@ -706,29 +911,40 @@ class BloombergProvider(Provider):
                                 sub.bad.add(str(item.getElementAsString(self._name("fieldId"))))
                     except Exception:  # noqa: BLE001
                         pass
+                elif kind == "SubscriptionFailure" and self.interval > 0 and not sub.plain and sub.state == "pending":
+                    sub.plain = True                     # refused with the conflation option: once more without
+                    sub.state = "new"
+                    sub.created = 0.0
+                    self._wake.set()
                 elif kind in ("SubscriptionFailure", "SubscriptionTerminated"):
                     sub.state = "failed"
 
     def _on_tick(self, msg) -> None:
-        cids = self._cids(msg)
-        with self._lock:
-            for cid in cids:
-                sec = self._sub_by_cid.get(cid)
-                sub = self._subs.get(sec) if sec is not None else None
-                if sub is None:
+        """One market-data message.  Reading it takes as few calls into blpapi as possible (one per field
+        that is not in the message, three per field that is), and none of them while holding the lock."""
+        root = None
+        now = time.time()
+        for cid in self._cids(msg):
+            sec = self._sub_by_cid.get(cid)
+            sub = self._subs.get(sec) if sec is not None else None
+            if sub is None:
+                continue
+            if root is None:
+                root = msg.asElement()
+            got = []
+            for field, name in sub.names:
+                try:
+                    if not root.hasElement(name, True):      # absent, or present without a value
+                        continue
+                    got.append((field, float(root.getElementAsFloat(name))))
+                except Exception:  # noqa: BLE001 - not a number: nothing a price field can use
                     continue
-                for field in sub.sent_fields:
-                    name = self._name(field)
-                    if not msg.hasElement(name):
-                        continue
-                    el = msg.getElement(name)
-                    v = self._convert(el, True)
-                    if type(v) is not float:
-                        continue
+            with self._lock:
+                for field, v in got:
                     for key in self._rt_keys.get((sec, field), ()):
                         self._set(key, v, streamed=True)
                 self.ticks += 1
-                self.last_tick = time.time()
+                self.last_tick = now
 
     def _on_response(self, msg, final: bool) -> None:
         with self._lock:
@@ -749,6 +965,8 @@ class BloombergProvider(Provider):
                             it = self._items.get(k)      # (a history item may have been collected already)
                             if it is not None and it.state == "sent":
                                 self._set(k, NA_NA)
+                    if self.stream and req.kind == "BDP":
+                        self._wake.set()                 # subscriptions that waited for this answer can go out
 
     def _error_text(self, info) -> str:
         try:

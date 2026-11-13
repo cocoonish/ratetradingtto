@@ -112,10 +112,7 @@ class Service(object):
         self.mode_note = ""
         if provider is None and s.mode in ("auto", "live"):
             try:
-                from .marketdata.bloomberg import BloombergProvider
-                provider = BloombergProvider(s.bbg_host, s.bbg_port, stream=s.bbg_stream, price_poll=s.bbg_price_poll,
-                                             max_hits_per_day=s.bbg_max_hits, bfx=s.bbg_bfx)
-                provider.start()
+                provider = self._bloomberg()
                 self.mode = "live"
             except Exception as exc:  # noqa: BLE001
                 if s.mode == "live":
@@ -188,6 +185,35 @@ class Service(object):
                 book.declare(ref, scope="shared", group="adhoc-shared")
             book.engine.set_inputs({key: _from_json(val)})
         self._sync_blotter()
+
+    def _bloomberg(self):
+        """A started Bloomberg provider: its session in a helper process, or - when that is switched off or
+        the helper does not come up - inside this process, with the reader thread favoured and ticks
+        conflated.  Raises what the session raises (blpapi missing, terminal not reachable)."""
+        s = self.settings
+        from .marketdata.bloomberg import BloombergProvider, favour_reader
+        common = dict(stream=s.bbg_stream, price_poll=s.bbg_price_poll, max_hits_per_day=s.bbg_max_hits, bfx=s.bbg_bfx,
+                      queue_size=s.bbg_queue)
+        stand_in = os.environ.get("TTO_BLPAPI_MODULE") or None      # tests: a module to use in place of blpapi
+        if s.bbg_isolate:
+            from .marketdata.bbg_process import IsolatedBloombergProvider, IsolationError
+            try:
+                provider = IsolatedBloombergProvider(s.bbg_host, s.bbg_port, interval=s.bbg_interval or 0.0,
+                                                     blpapi_name=stand_in, **common)
+                provider.start()
+                return provider
+            except IsolationError as exc:
+                self.mode_note = "Bloomberg yardımcı süreci başlatılamadı (%s) – oturum dashboard'un kendi sürecinde" % (
+                    str(exc)[:120],)
+        module = None
+        if stand_in:
+            import importlib
+            module = importlib.import_module(stand_in)
+        provider = BloombergProvider(s.bbg_host, s.bbg_port, interval=1.0 if s.bbg_interval is None else s.bbg_interval,
+                                     blpapi_module=module, **common)
+        provider.start()
+        favour_reader()
+        return provider
 
     # ================================================================== lifecycle / events
     def start(self) -> None:
@@ -353,6 +379,18 @@ class Service(object):
         return book.engine.user(user)
 
     # ================================================================== status / navigation
+    def describe(self) -> str:
+        """One line for the console: where the market data comes from."""
+        note = (" · " + self.mode_note) if self.mode_note else ""
+        if self.mode != "live":
+            return "Veri: kayıtlı (Excel dosyasındaki son piyasa verisi)" + note
+        try:
+            isolated = bool(self.provider.status().get("isolated"))
+        except Exception:  # noqa: BLE001
+            isolated = False
+        where = "ayrı bir yardımcı süreçte" if isolated else "dashboard'un kendi sürecinde"
+        return "Veri: Bloomberg canlı · oturum %s%s" % (where, note)
+
     def status(self) -> Dict[str, Any]:
         prov = {}
         try:

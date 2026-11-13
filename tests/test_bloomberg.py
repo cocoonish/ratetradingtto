@@ -319,6 +319,239 @@ def test_reconnects_and_resubscribes_after_the_terminal_drops(server):
         p.stop()
 
 
+# ---------------------------------------------------------------------------------- keeping up with Bloomberg
+def wait_for(cond, timeout=10.0, step=0.02):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if cond():
+            return True
+        time.sleep(step)
+    return bool(cond())
+
+
+def test_securities_bloomberg_does_not_know_are_not_subscribed_to(provider, server):
+    """The BIST swap sheet asks for hundreds of maturities that do not exist.  Each is asked once by request
+    (Excel shows "#N/A Invalid Security" for them); a subscription would only make the terminal log
+    "Resolution failed" and send a failure event for every one of them."""
+    for n in (374, 375, 376):
+        server.invalid.add("TYB%dD BFX0 Curncy" % n)
+    sec = "TYB7D BFX0 Curncy"
+    for f, v in (("BID", 3350.0), ("ASK", 3352.0), ("BID_SIZE", 150.0), ("ASK_SIZE", 40.0)):
+        server.ref[(sec, f, ())] = v
+    keys = [bdp_key("TYB%dD BFX0 Curncy" % n, f) for n in (7, 374, 375, 376) for f in ("BID", "ASK", "BID_SIZE", "ASK_SIZE")]
+    for k in keys:
+        provider.get_bdp(k)
+    settle(provider)
+    assert wait_for(lambda: provider.status()["subscriptions"] == 1)
+    assert [t for t, _ in server.subscriptions] == [sec]                  # only the one that exists
+    assert provider.get_bdp(bdp_key("TYB374D BFX0 Curncy", "BID")) == INVALID_SECURITY
+    st = provider.status()
+    assert st["subscriptions_invalid"] == 3 and st["subscriptions_failed"] == 0 and st["hits_today"] == 16
+    hits, asked = server.hits(), len(server.subscriptions)
+    time.sleep(0.8)                                                       # ... and they are left alone afterwards
+    assert server.hits() == hits and len(server.subscriptions) == asked
+
+
+def test_a_security_that_appears_on_a_new_day_is_found(server):
+    """A maturity that does not exist today may exist tomorrow: what Bloomberg did not know is asked once
+    more when the day changes, and subscribed to if it is there now."""
+    sec = "TYB30D BFX0 Curncy"
+    server.invalid.add(sec)
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    p.start()
+    try:
+        bid = bdp_key(sec, "BID")
+        p.get_bdp(bid)
+        settle(p)
+        assert p.get_bdp(bid) == INVALID_SECURITY and server.subscriptions == []
+        p.drain_changes()
+        server.invalid.discard(sec)
+        server.ref[(sec, "BID", ())] = 3301.0
+        server.rt[(sec, "BID")] = 3301.5
+        p.hits_day = dt.date.today() - dt.timedelta(days=1)                # midnight has passed
+        assert wait_for(lambda: p.get_bdp(bid) != INVALID_SECURITY)
+        assert wait_for(lambda: p.status()["subscriptions"] == 1)
+        assert wait_for(lambda: p.get_bdp(bid) == 3301.5)                  # the first paint of the new subscription
+        assert bid in p.drain_changes()
+        assert p.status()["subscriptions_invalid"] == 0
+        assert requests_for(server, sec) == 2                              # once on each day
+    finally:
+        p.stop()
+
+
+def test_a_subscription_does_not_wait_for_ever_for_the_reference_answer(server, monkeypatch):
+    monkeypatch.setattr(bloomberg, "SUBSCRIBE_WAIT", 0.3)
+    server.silent = True                                                   # requests are swallowed
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    p.start()
+    try:
+        bid = bdp_key("USDTRY Curncy", "BID")
+        p.get_bdp(bid)
+        time.sleep(0.15)
+        assert server.subscriptions == []                                  # still waiting for the answer
+        assert wait_for(lambda: p.get_bdp(bid) == 49.997, timeout=5)       # ... then subscribed anyway: first paint
+        assert server.subscriptions == [("USDTRY Curncy", ["BID"])]
+    finally:
+        p.stop()
+
+
+def test_ticks_can_be_conflated_and_the_option_is_dropped_when_refused(server):
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), interval=1.0)
+    p.start()
+    try:
+        p.get_bdp(bdp_key("USDTRY Curncy", "BID"))
+        settle(p)
+        assert wait_for(lambda: p.status()["subscriptions"] == 1)
+        assert server.subscription_options == [("USDTRY Curncy", ["interval=1"])]
+        assert p.status()["interval"] == 1.0
+    finally:
+        p.stop()
+    server.subscription_options[:] = []
+    server.subscriptions[:] = []
+    server.refuse_options = True
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), interval=0.5)
+    p.start()
+    try:
+        bid = bdp_key("USDTRY Curncy", "BID")
+        p.get_bdp(bid)
+        settle(p)
+        assert wait_for(lambda: p.status()["subscriptions"] == 1)
+        assert server.subscription_options == [("USDTRY Curncy", ["interval=0.5"]), ("USDTRY Curncy", [])]
+        server.tick("USDTRY Curncy", {"BID": 50.25})
+        assert wait_for(lambda: p.get_bdp(bid) == 50.25)
+        assert p.status()["subscriptions_failed"] == 0
+    finally:
+        p.stop()
+    plain = BloombergProvider(blpapi_module=fake_blpapi.module(server))     # default: every tick, no option
+    assert plain.interval == 0.0
+
+
+def test_the_session_is_given_a_longer_event_queue(server):
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    p.start()
+    try:
+        assert server.sessions[0].options.settings["MaxEventQueueSize"] == bloomberg.QUEUE_SIZE == 100000
+        assert p.status()["queue_size"] == 100000
+    finally:
+        p.stop()
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), queue_size=0)      # blpapi's own default
+    p.start()
+    try:
+        assert "MaxEventQueueSize" not in server.sessions[0].options.settings
+    finally:
+        p.stop()
+
+
+def test_ticks_without_a_number_are_ignored(provider, server):
+    bid, size = bdp_key("USDTRY Curncy", "BID"), bdp_key("USDTRY Curncy", "BID_SIZE")
+    server.ref[("USDTRY Curncy", "BID_SIZE", ())] = 5.0
+    provider.get_bdp(bid)
+    provider.get_bdp(size)
+    settle(provider)
+    assert wait_for(lambda: provider.status()["subscriptions"] == 1)
+    provider.drain_changes()
+    ticks = provider.status()["ticks"]
+    server.tick("USDTRY Curncy", {"BID": None, "BID_SIZE": "n.a.", "MKTDATA_EVENT_TYPE": "QUOTE"})
+    assert wait_for(lambda: provider.status()["ticks"] == ticks + 1)
+    assert provider.get_bdp(bid) == 49.997 and provider.get_bdp(size) == 5.0 and provider.drain_changes() == []
+    server.tick("USDTRY Curncy", {"BID_SIZE": 7})                           # an integer field
+    assert wait_for(lambda: provider.get_bdp(size) == 7.0)
+    assert type(provider.get_bdp(size)) is float and provider.drain_changes() == [size]
+
+
+def test_a_full_event_queue_is_reported_and_what_it_dropped_is_asked_again(server, monkeypatch):
+    """Bloomberg's session holds a limited number of undelivered events.  When the reader falls behind, it
+    is warned (SlowConsumerWarning) and then loses events; afterwards the session says how many
+    (SlowConsumerWarningCleared) and for which subscriptions (DataLoss).  The provider counts all of that,
+    shows it in its status and asks the values concerned once more by request - a dropped tick must not
+    leave an old price on the screen."""
+    monkeypatch.setattr(bloomberg, "RESYNC_SETTLE", 0.1)
+    server.queue_limit = 40
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    p.start()
+    try:
+        bid, ask = bdp_key("USDTRY Curncy", "BID"), bdp_key("USDTRY Curncy", "ASK")
+        p.get_bdp(bid)
+        p.get_bdp(ask)
+        settle(p)
+        assert wait_for(lambda: p.status()["subscriptions"] == 1)
+        st = p.status()
+        assert not st["slow"] and st["slow_warnings"] == 0 and st["events_dropped"] == 0 and st["messages_lost"] == 0
+        hits = server.hits()
+        with p._lock:                                # the reader is stuck (as when the engine keeps it waiting)
+            for i in range(200):
+                server.tick("USDTRY Curncy", {"BID": 50.0 + i * 0.001})
+        # the last ticks were dropped; what a request answers now is the true last price
+        server.ref[("USDTRY Curncy", "BID", ())] = 50.199
+        assert server.dropped >= 150
+        assert wait_for(lambda: p.status()["events_dropped"] == server.dropped and not p.status()["slow"])
+        st = p.status()
+        assert st["slow_warnings"] == 1 and st["messages_lost"] == server.dropped
+        assert "düştü" in st["error"]
+        assert wait_for(lambda: p.get_bdp(bid) == 50.199)                 # asked again, not left at an old tick
+        assert wait_for(lambda: p.status()["resyncs"] == 2)               # both fields of the subscription
+        assert server.hits() == hits + 2
+        assert wait_for(lambda: not p.busy())
+        time.sleep(0.3)
+        assert server.hits() == hits + 2                                  # once, not in a loop
+    finally:
+        p.stop()
+
+
+def test_repairing_after_losses_cannot_use_up_the_daily_data_limit(provider, server, monkeypatch):
+    """A reader that keeps falling behind would ask everything again after every overflow; that is capped per
+    day (the terminal's data limit is shared with the desk's Excel)."""
+    monkeypatch.setattr(bloomberg, "RESYNC_SETTLE", 0.0)
+    monkeypatch.setattr(bloomberg, "RESYNC_EVERY", 0.0)
+    monkeypatch.setattr(bloomberg, "RESYNC_BUDGET", 3)
+    bid, ask = bdp_key("USDTRY Curncy", "BID"), bdp_key("USDTRY Curncy", "ASK")
+    provider.get_bdp(bid)
+    provider.get_bdp(ask)
+    settle(provider)
+    assert wait_for(lambda: provider.status()["subscriptions"] == 1)
+    hits = server.hits()
+    for round_ in range(4):
+        server.admin("SlowConsumerWarning")
+        server.admin("SlowConsumerWarningCleared", {"eventsDropped": 10})
+        assert wait_for(lambda: provider.status()["events_dropped"] == 10 * (round_ + 1))
+        time.sleep(0.6)                                  # two turns of the worker
+        assert wait_for(lambda: not provider.busy())
+    assert provider.status()["resyncs"] == 4 and server.hits() == hits + 4      # two rounds of two, then no more
+    provider.hits_day = dt.date.today() - dt.timedelta(days=1)                  # a new day: the budget is back
+    assert wait_for(lambda: provider.hits_day == dt.date.today())
+    server.admin("SlowConsumerWarningCleared", {"eventsDropped": 1})
+    assert wait_for(lambda: provider.status()["resyncs"] == 6)
+
+
+def test_admin_messages_alone_are_understood(provider, server):
+    bid = bdp_key("USDTRY Curncy", "BID")
+    provider.get_bdp(bid)
+    settle(provider)
+    assert wait_for(lambda: provider.status()["subscriptions"] == 1)
+    server.admin("SlowConsumerWarning")
+    assert wait_for(lambda: provider.status()["slow"])
+    assert provider.status()["slow_warnings"] == 1 and "kuyruğu" in provider.status()["error"]
+    server.admin("SlowConsumerWarningCleared", {"eventsDropped": 0})
+    assert wait_for(lambda: not provider.status()["slow"])
+    assert provider.status()["events_dropped"] == 0 and provider.status()["resyncs"] == 0
+    assert provider.status()["error"] == ""                                # caught up: nothing left to report
+    server.admin("SomethingNew", {"x": 1})                                 # unknown admin messages are harmless
+    server.tick("USDTRY Curncy", {"BID": 50.4})
+    assert wait_for(lambda: provider.get_bdp(bid) == 50.4)
+
+
+def test_favour_reader_shortens_the_switch_interval():
+    import sys
+    before = sys.getswitchinterval()
+    try:
+        sys.setswitchinterval(0.005)
+        done = bloomberg.favour_reader()
+        assert done.get("switch_interval") == 0.001 and abs(sys.getswitchinterval() - 0.001) < 1e-9
+        assert "switch_interval" not in bloomberg.favour_reader()          # already short: left alone
+    finally:
+        sys.setswitchinterval(before)
+
+
 def test_unreachable_bloomberg_is_reported(server):
     server.fail_start = True
     p = BloombergProvider(blpapi_module=fake_blpapi.module(server))

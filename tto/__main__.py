@@ -38,6 +38,13 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--bfx", choices=("off", "approx"), default="off",
                    help="BFXFORWARD: off = #N/A (API karşılığı yok), approx = FWD_CURVE'den yaklaşık hesap")
     p.add_argument("--max-hits", type=int, default=400000, help="günlük referans/geçmiş veri isteği üst sınırı (0 = sınırsız)")
+    p.add_argument("--bbg-inprocess", action="store_true",
+                   help="Bloomberg oturumunu ayrı bir yardımcı süreçte değil, dashboard'un kendi sürecinde çalıştır")
+    p.add_argument("--bbg-interval", type=float, default=None,
+                   help="bir aboneliğin iki güncellemesi arasındaki en kısa süre (sn; 0 = her tick). "
+                        "Varsayılan: yardımcı süreçte 0, aynı süreçte 1")
+    p.add_argument("--bbg-queue", type=int, default=100000,
+                   help="Bloomberg oturumunun bekletebileceği olay sayısı (blpapi varsayılanı 10000)")
     p.add_argument("--no-history", action="store_true",
                    help="günlük tarihçeyi (gün sonu matrisi, PPK fiyatlama geçmişi) arka planda güncelleme")
     p.add_argument("--history-refresh", type=float, default=900.0,
@@ -65,7 +72,8 @@ def settings_from(args) -> Settings:
     return Settings(host=args.host, port=args.port, data_dir=args.data_dir, mode=args.mode, bbg_host=args.bbg_host,
                     bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale, bbg_stream=not args.no_stream,
                     bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll,
-                    history=not args.no_history, history_refresh=args.history_refresh)
+                    history=not args.no_history, history_refresh=args.history_refresh,
+                    bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue)
 
 
 def cmd_run(args) -> int:

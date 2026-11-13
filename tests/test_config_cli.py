@@ -49,3 +49,16 @@ def test_environment_port_is_checked_too():
     res = subprocess.run([sys.executable, "-m", "tto", "--mode", "replay"], cwd=ROOT, env=env,
                          capture_output=True, text=True, timeout=60)
     assert res.returncode == 2
+
+
+def test_bloomberg_session_options_on_the_command_line():
+    """Where the Bloomberg session runs and how it is tuned (see tto/marketdata/bbg_process.py)."""
+    from tto.__main__ import build_parser, settings_from
+
+    s = settings_from(build_parser().parse_args([]))
+    assert s.bbg_isolate is True and s.bbg_interval is None and s.bbg_queue == 100000 and s.history_pace == 1.0
+    s = settings_from(build_parser().parse_args(["--bbg-inprocess", "--bbg-interval", "2", "--bbg-queue", "50000"]))
+    assert s.bbg_isolate is False and s.bbg_interval == 2.0 and s.bbg_queue == 50000
+    s = settings_from(build_parser().parse_args(["run", "--bbg-interval", "0"]))
+    assert s.bbg_isolate is True and s.bbg_interval == 0.0          # 0: every tick, also inside the dashboard
+    assert Settings(bbg_interval=-3).bbg_interval == 0.0 and Settings(history_pace=-1).history_pace == 0.0

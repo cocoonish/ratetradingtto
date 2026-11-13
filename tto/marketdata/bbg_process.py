@@ -1,0 +1,519 @@
+"""The Bloomberg session in a process of its own.
+
+Why.  Bloomberg hands its events to the application through a queue; an application that reads too slowly
+is warned ("slow consumer") and then loses events.  Reading is done in Python, and Python runs one thread
+at a time: every call into blpapi lets go of the interpreter, and when the calculation engine is busy at
+that moment the reader waits a whole scheduling interval to get it back.  Measured with blpapi 3.26: a
+tick that takes 0.06 ms to read alone takes 6 ms next to a computing thread - a few hundred subscriptions
+are enough to fall behind for good.
+
+So the session, its subscriptions and its requests live in a helper process in which nothing else computes
+(:func:`_child_main` runs an ordinary :class:`~tto.marketdata.bloomberg.BloombergProvider` there), and the
+dashboard talks to it over two pipes:
+
+    dashboard  -- ("lookup", [(key, refresh, real-time field), ...]) ------>  helper
+               -- ("history", id, items, start, end, timeout) ------------->
+               -- ("stop",) ------------------------------------------------>
+               <-- ("values", [(key, value), ...], lookups seen, status) ---   every 0.1 s when something changed
+               <-- ("history", id, result) ----------------------------------
+
+:class:`IsolatedBloombergProvider` is the dashboard's side.  It answers the engine from its own copy of the
+values (never blocking), so a burst of ticks reaches the engine as "the latest value of each item", however
+busy the engine is.  A helper that dies is started again and asked for everything once more; a helper that
+cannot be started at all raises :class:`IsolationError`, on which the dashboard falls back to a session
+inside its own process.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import importlib
+import importlib.util
+import multiprocessing
+import pickle
+import signal
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+from ..xl.values import XlArray
+from .base import REQUESTING
+from .bloomberg import NA_NA, QUEUE_SIZE, BloombergProvider
+
+#: seconds the helper waits for a message of the dashboard before it looks for changed values again
+PUMP = 0.1
+#: lookups per message (a first calculation registers many thousands at once)
+CHUNK = 2000
+#: a helper that ends within this many seconds of its start died "quickly" ...
+QUICK = 300.0
+#: ... and after so many quick deaths in a row no new one is started: every new helper asks Bloomberg for
+#: everything again, and a helper that keeps dying must not use up the terminal's daily data limit that way
+MAX_QUICK_DEATHS = 5
+
+
+class IsolationError(RuntimeError):
+    """The helper process could not be started or did not answer (this says nothing about Bloomberg)."""
+
+
+# ====================================================================================== the helper process
+def _history(prov: BloombergProvider, send, rid: int, items, start: str, end: str, timeout: float) -> None:
+    try:
+        res = prov.history(items, start, end, timeout=timeout)
+    except Exception:  # noqa: BLE001 - the caller gets "nothing came" and asks again later
+        res = {}
+    try:
+        send(("history", rid, res))
+    except Exception:  # noqa: BLE001 - the dashboard is gone
+        pass
+
+
+def _send_values(send, batch, seen: int, status: Dict[str, Any]) -> None:
+    try:
+        send(("values", batch, seen, status))
+    except (EOFError, OSError):
+        raise
+    except Exception:  # noqa: BLE001 - a value that cannot cross the pipe must not hold up the others
+        good = []
+        for key, value in batch:
+            try:
+                pickle.dumps(value)
+                good.append((key, value))
+            except Exception:  # noqa: BLE001
+                good.append((key, NA_NA))
+        send(("values", good, seen, status))
+
+
+def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
+    """Body of the helper process: a :class:`BloombergProvider`, fed and emptied through the two pipes."""
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)       # Ctrl+C in the console: the dashboard stops us
+    except Exception:  # noqa: BLE001
+        pass
+    lock = threading.Lock()
+
+    def send(obj) -> None:
+        with lock:
+            outbox.send(obj)
+
+    try:
+        module = importlib.import_module(cfg["module"]) if cfg.get("module") else None
+        prov = BloombergProvider(cfg["host"], cfg["port"], stream=cfg["stream"], price_poll=cfg["price_poll"],
+                                 request_timeout=cfg["request_timeout"], max_hits_per_day=cfg["max_hits_per_day"],
+                                 bfx="off", blpapi_module=module, reconnect_wait=cfg["reconnect_wait"],
+                                 queue_size=cfg["queue_size"], interval=cfg["interval"])
+        prov.hits = int(cfg.get("hits_start") or 0)        # what earlier helpers used today counts too
+        prov.start()
+    except ImportError as exc:
+        send(("failed", "import", str(exc)))
+        return
+    except Exception as exc:  # noqa: BLE001
+        send(("failed", "start", str(exc)))
+        return
+    registered = set()
+    seen = 0
+    last = 0.0
+    pump = float(cfg.get("pump") or PUMP)
+    try:
+        send(("started", prov.status()))
+        while True:
+            fresh: List[Tuple] = []
+            keys: List[Tuple] = []
+            asked = False
+            try:
+                if inbox.poll(pump):                       # EOFError / OSError: the dashboard is gone
+                    while True:
+                        msg = inbox.recv()
+                        kind = msg[0]
+                        if kind == "stop":
+                            return
+                        if kind == "lookup":
+                            asked = True
+                            for key, refresh, rt in msg[1]:
+                                registered.add(key)
+                                seen += 1
+                                if prov._lookup(key, refresh, rt) != REQUESTING:
+                                    fresh.append(key)      # known already (asked a second time)
+                        elif kind == "history":
+                            threading.Thread(target=_history, args=(prov, send) + tuple(msg[1:]),
+                                             name="tto-bbg-history", daemon=True).start()
+                        if not inbox.poll(0):
+                            break
+                status = prov.status()                     # before the values: "nothing pending" then means
+                keys = prov.drain_changes()                # that every answer is in this very batch
+                now = time.time()
+                if keys or fresh or asked or now - last >= 1.0:
+                    with prov._lock:
+                        batch = [(k, prov._values.get(k)) for k in set(keys).union(fresh) if k in registered]
+                    _send_values(send, batch, seen, status)
+                    last = now
+            except (EOFError, OSError):
+                raise
+            except Exception as exc:  # noqa: BLE001 - the helper must survive anything but a lost dashboard
+                prov.last_error = "yardımcı süreç: %s: %s" % (type(exc).__name__, str(exc)[:160])
+                with prov._lock:
+                    prov._changed.update(keys)             # not delivered: they go out with the next batch
+                time.sleep(0.2)
+    except (EOFError, OSError):
+        pass                                               # the dashboard went away: so do we
+    finally:
+        try:
+            prov.stop()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ====================================================================================== the dashboard's side
+class IsolatedBloombergProvider(BloombergProvider):
+    """A :class:`BloombergProvider` whose session runs in a helper process (see the module text).
+
+    ``blpapi_name`` names a module to use in place of ``blpapi`` (the tests' stand-in); it is imported in
+    the helper, never here.
+    """
+
+    isolated = True
+
+    def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 120.0,
+                 request_timeout: float = 45.0, max_hits_per_day: int = 400000, bfx: str = "off",
+                 reconnect_wait: float = 10.0, queue_size: int = QUEUE_SIZE, interval: float = 0.0,
+                 blpapi_name: Optional[str] = None, start_timeout: float = 60.0, pump: float = PUMP):
+        super(IsolatedBloombergProvider, self).__init__(
+            host, port, stream=stream, price_poll=price_poll, request_timeout=request_timeout,
+            max_hits_per_day=max_hits_per_day, bfx=bfx, reconnect_wait=reconnect_wait, queue_size=queue_size,
+            interval=interval)
+        self.blpapi_name = blpapi_name
+        self.start_timeout = float(start_timeout)
+        self._cfg = {"host": host, "port": int(port), "stream": bool(stream), "price_poll": float(price_poll),
+                     "request_timeout": float(request_timeout), "max_hits_per_day": int(max_hits_per_day),
+                     "reconnect_wait": float(reconnect_wait), "queue_size": int(queue_size or 0),
+                     "interval": float(interval or 0.0), "module": blpapi_name, "pump": float(pump)}
+        self._wanted: Dict[Tuple, Tuple[float, Optional[str]]] = {}     # everything asked for so far
+        self._outbox: List[Tuple] = []                                   # ... and not sent to the helper yet
+        self._sent = 0
+        self._seen = 0
+        self._proc = None
+        self._rx = None                      # helper -> dashboard
+        self._tx = None                      # dashboard -> helper
+        self._tx_lock = threading.Lock()
+        self._remote: Dict[str, Any] = {}    # the helper's last status
+        self._waiters: Dict[int, List[Any]] = {}
+        self._rid = 0
+        self.restarts = 0
+        self._born = 0.0                     # when the present helper came up
+        self._quick_deaths = 0               # helpers in a row that did not live long
+        self._gave_up = False
+        self._carry = (None, 0)              # (day, data points used) by helpers that are gone
+
+    # ================================================================== lifecycle
+    def start(self) -> None:
+        """Start the helper and wait for its session (``ImportError`` / ``RuntimeError`` as in-process;
+        :class:`IsolationError` when the helper itself does not come up)."""
+        name = self.blpapi_name or "blpapi"
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            raise ImportError("No module named %r" % name)       # not worth starting a process to find out
+        self._stop.clear()
+        self._spawn()
+        for label, fn in (("tto-bbg-recv", self._recv_loop), ("tto-bbg-send", self._send_loop)):
+            t = threading.Thread(target=fn, name=label, daemon=True)
+            t.start()
+            self._threads.append(t)
+
+    def _spawn(self) -> None:
+        # "spawn" everywhere: what Windows does anyway, and safe in a process that already has threads
+        ctx = multiprocessing.get_context("spawn")
+        proc = None
+        ends: List[Any] = []
+        try:
+            rx, child_tx = ctx.Pipe(False)
+            child_rx, tx = ctx.Pipe(False)
+            ends = [rx, child_tx, child_rx, tx]
+            cfg = dict(self._cfg)
+            day, used = self._carry
+            cfg["hits_start"] = used if day == _dt.date.today() else 0
+            proc = ctx.Process(target=_child_main, args=(child_rx, child_tx, cfg), name="tto-bloomberg", daemon=True)
+            proc.start()
+            child_rx.close()                 # ours are the other two ends; with these closed here the pipes
+            child_tx.close()                 # break when the helper goes away
+        except Exception as exc:  # noqa: BLE001
+            for end in ends:
+                self._close(end)
+            raise IsolationError("yardımcı süreç başlatılamadı: %s" % (str(exc)[:160],))
+        first = None
+        deadline = time.time() + self.start_timeout
+        try:
+            while time.time() < deadline and not self._stop.is_set():
+                if rx.poll(0.2):
+                    first = rx.recv()
+                    break
+                if not proc.is_alive():
+                    if rx.poll(0.2):         # what it said just before it ended
+                        first = rx.recv()
+                    break
+        except (EOFError, OSError):
+            first = None
+        if first is None or first[0] not in ("started", "failed"):
+            code = proc.exitcode
+            self._kill(proc)
+            self._close(rx)
+            self._close(tx)
+            raise IsolationError("yardımcı süreç yanıt vermedi (%s)" % (
+                "çıkış kodu %s" % code if code is not None else "%g sn içinde" % self.start_timeout,))
+        if first[0] == "failed":
+            proc.join(3.0)
+            self._kill(proc)
+            self._close(rx)
+            self._close(tx)
+            if first[1] == "import":
+                raise ImportError(first[2])
+            raise RuntimeError(first[2])
+        with self._tx_lock:
+            self._proc, self._rx, self._tx = proc, rx, tx
+        self._born = time.time()
+        self._take_status(first[1])
+
+    @staticmethod
+    def _close(end) -> None:
+        try:
+            end.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    @staticmethod
+    def _kill(proc) -> None:
+        try:
+            if proc.is_alive():
+                proc.terminate()
+            proc.join(3.0)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        self._post(("stop",))
+        with self._tx_lock:
+            proc, rx, tx = self._proc, self._rx, self._tx
+            self._proc = self._rx = self._tx = None
+        self.connected = False
+        if proc is not None:
+            try:
+                proc.join(5.0)
+            except Exception:  # noqa: BLE001
+                pass
+            self._kill(proc)
+        for end in (rx, tx):
+            if end is not None:
+                self._close(end)
+        self._release_waiters()
+        for t in self._threads:
+            t.join(timeout=3.0)
+        self._threads = []
+
+    # ================================================================== engine side (never blocks)
+    def _lookup(self, key: Tuple, refresh: float, rt_field: Optional[str] = None) -> Any:
+        with self._lock:
+            v = self._values.get(key)
+            if v is not None:
+                return v
+            if key not in self._wanted:
+                self._wanted[key] = (refresh, rt_field)
+                self._outbox.append((key, refresh, rt_field))
+                self._wake.set()
+            return REQUESTING
+
+    def busy(self) -> bool:
+        if self._gave_up or self._stop.is_set():
+            return False                         # nothing more will come
+        with self._lock:
+            if self._outbox or self._seen < self._sent:
+                return True
+            return bool(self._remote.get("pending"))
+
+    def history(self, items, start, end, timeout=60.0):
+        """As :meth:`BloombergProvider.history`, asked of the helper."""
+        waiter: List[Any] = [threading.Event(), None]
+        with self._lock:
+            self._rid += 1
+            rid = self._rid
+            self._waiters[rid] = waiter
+        try:
+            if not self._post(("history", rid, [tuple(i) for i in items], start, end, float(timeout))):
+                return {}
+            waiter[0].wait(float(timeout) + 15.0)
+            return waiter[1] or {}
+        finally:
+            with self._lock:
+                self._waiters.pop(rid, None)
+
+    def revalidate(self) -> int:
+        return 0                             # the helper does this on its own when the day changes
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            st = dict(self._remote)
+            waiting = len(self._outbox) + max(0, self._sent - self._seen)
+            alive = self._proc is not None and self._rx is not None
+            st.update({"mode": "live", "host": "%s:%d" % (self.host, self.port), "items": len(self._values),
+                       "pending": int(st.get("pending") or 0) + waiting, "connected": bool(self.connected and alive),
+                       "streaming": bool(st.get("streaming", self.stream)), "error": self.last_error,
+                       "bfx": self.bfx_mode, "isolated": True, "restarts": self.restarts,
+                       "worker": "running" if alive else ("stopped" if self._gave_up or self._stop.is_set() else "restarting")})
+            for name, default in (("subscriptions", 0), ("subscriptions_failed", 0), ("subscriptions_invalid", 0),
+                                  ("requests", 0), ("hits_today", 0), ("ticks", 0), ("last_tick", 0.0),
+                                  ("limit_reached", False), ("interval", self.interval), ("queue_size", self.queue_size),
+                                  ("slow", False), ("slow_warnings", 0), ("events_dropped", 0), ("messages_lost", 0),
+                                  ("resyncs", 0)):
+                st.setdefault(name, default)
+            return st
+
+    # ================================================================== talking to the helper
+    def _post(self, obj) -> bool:
+        with self._tx_lock:
+            tx = self._tx
+            if tx is None:
+                return False
+            try:
+                tx.send(obj)
+                return True
+            except (OSError, ValueError, EOFError):
+                return False
+
+    def _send_loop(self) -> None:
+        while not self._stop.is_set():
+            self._wake.wait(0.25)
+            self._wake.clear()
+            if self._stop.is_set():
+                return
+            with self._lock:
+                items, self._outbox = self._outbox, []
+            for i in range(0, len(items), CHUNK):
+                chunk = items[i:i + CHUNK]
+                if self._post(("lookup", chunk)):
+                    with self._lock:
+                        self._sent += len(chunk)
+                    continue
+                with self._lock:             # no helper at the moment: a new one is asked for everything
+                    if self._tx is not None:
+                        self._outbox = items[i:] + self._outbox
+                self._stop.wait(0.5)
+                break
+
+    def _recv_loop(self) -> None:
+        while not self._stop.is_set():
+            rx = self._rx
+            if rx is None:
+                self._respawn()
+                continue
+            try:
+                if not rx.poll(0.5):
+                    proc = self._proc
+                    if proc is not None and not proc.is_alive() and not rx.poll(0):
+                        raise EOFError("helper ended")
+                    continue
+                msg = rx.recv()
+            except (EOFError, OSError):
+                if self._stop.is_set():
+                    return
+                self._lost()
+                continue
+            try:
+                kind = msg[0]
+                if kind == "values":
+                    self._apply(msg[1], msg[2], msg[3])
+                elif kind == "history":
+                    with self._lock:
+                        waiter = self._waiters.get(msg[1])
+                    if waiter is not None:
+                        waiter[1] = msg[2]
+                        waiter[0].set()
+            except Exception as exc:  # noqa: BLE001 - one bad message must not stop the stream
+                self.last_error = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+
+    def _take_status(self, status: Dict[str, Any]) -> None:
+        with self._lock:
+            self._remote = dict(status)
+        self.connected = bool(status.get("connected"))
+        self.last_error = status.get("error") or ""
+        self.limit_reached = bool(status.get("limit_reached"))
+        self.hits = int(status.get("hits_today") or 0)
+        self.ticks = int(status.get("ticks") or 0)
+        self.last_tick = float(status.get("last_tick") or 0.0)
+        self.requests_sent = int(status.get("requests") or 0)
+        self.stream = bool(status.get("streaming", self.stream))
+        self.slow = bool(status.get("slow"))
+        self.slow_warnings = int(status.get("slow_warnings") or 0)
+        self.events_dropped = int(status.get("events_dropped") or 0)
+        self.messages_lost = int(status.get("messages_lost") or 0)
+        self.resyncs = int(status.get("resyncs") or 0)
+
+    def _apply(self, batch, seen: int, status: Dict[str, Any]) -> None:
+        with self._lock:
+            for key, value in batch:
+                if value is None:
+                    continue
+                old = self._values.get(key)
+                if type(old) is XlArray and type(value) is XlArray:
+                    same = old.rows == value.rows
+                else:
+                    same = type(old) is type(value) and old == value
+                if not same:
+                    self._values[key] = value
+                    self._changed.add(key)
+            self._seen = max(self._seen, int(seen))
+        self._take_status(status)
+
+    def _release_waiters(self) -> None:
+        with self._lock:
+            waiters = list(self._waiters.values())
+        for w in waiters:
+            w[0].set()
+
+    def _lost(self) -> None:
+        """The helper is gone without having been told to stop."""
+        with self._tx_lock:
+            proc, rx, tx = self._proc, self._rx, self._tx
+            self._proc = self._rx = self._tx = None
+        self.connected = False
+        self.last_error = "Bloomberg yardımcı süreci kapandı – yeniden başlatılıyor"
+        self._quick_deaths = self._quick_deaths + 1 if time.time() - self._born < QUICK else 0
+        self._carry = (_dt.date.today(), int(self.hits))    # the daily count goes on with the next helper
+        for end in (rx, tx):
+            if end is not None:
+                self._close(end)
+        if proc is not None:
+            self._kill(proc)
+        self._release_waiters()
+
+    def _respawn(self) -> None:
+        if self._quick_deaths >= MAX_QUICK_DEATHS:
+            self._gave_up = True
+            self.last_error = ("Bloomberg yardımcı süreci art arda %d kez kapandı – yeniden başlatılmıyor; "
+                               "dashboard'u kapatıp yeniden açın" % self._quick_deaths)
+            self._stop.wait(5.0)
+            return
+        # each quick death doubles the wait: 10 s, 20 s, 40 s ...
+        if self._stop.wait(self.reconnect_wait * (2 ** max(0, self._quick_deaths - 1))):
+            return
+        try:
+            self._spawn()
+        except Exception as exc:  # noqa: BLE001 - tried again after the next wait
+            self.last_error = "Bloomberg yardımcı süreci başlatılamadı: %s" % (str(exc)[:160],)
+            return
+        if self._stop.is_set():                # stopped while the helper was coming up
+            with self._tx_lock:
+                proc, rx, tx = self._proc, self._rx, self._tx
+                self._proc = self._rx = self._tx = None
+            for end in (rx, tx):
+                if end is not None:
+                    self._close(end)
+            if proc is not None:
+                self._kill(proc)
+            return
+        with self._lock:                       # the new helper knows nothing: ask for everything again
+            self._outbox = [(k, r, f) for k, (r, f) in self._wanted.items()]
+            self._sent = 0
+            self._seen = 0
+            self.restarts += 1
+        self._wake.set()

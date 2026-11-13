@@ -119,6 +119,8 @@ a { color: var(--accent-ink); }
 .badge .led { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
 .badge.live { border-color: rgba(12, 163, 12, .5); color: var(--pos); }
 .badge.live .led { background: var(--pos); box-shadow: 0 0 0 3px rgba(12, 163, 12, .18); }
+.badge.live.slow { border-color: rgba(250, 178, 25, .6); color: var(--warn); }
+.badge.live.slow .led { background: var(--warn); box-shadow: 0 0 0 3px rgba(250, 178, 25, .2); }
 .badge.replay { border-color: rgba(250, 178, 25, .5); color: var(--warn); }
 .badge.replay .led { background: var(--warn); }
 .btn { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink); border-radius: 7px; padding: 5px 10px;

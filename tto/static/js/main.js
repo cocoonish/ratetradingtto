@@ -212,7 +212,7 @@ function applyStatus(status) {
   if (!status) return;
   state.status = status;
   const badge = $('mode-badge');
-  badge.classList.remove('live', 'replay');
+  badge.classList.remove('live', 'replay', 'slow');
   if (!state.online) {
     $('mode-text').textContent = 'Bağlantı yok';
     badge.title = 'Sunucuya ulaşılamıyor – yeniden bağlanılıyor';
@@ -223,9 +223,17 @@ function applyStatus(status) {
       badge.title = (p.error || 'Bloomberg bağlantısı koptu') + ' – yeniden bağlanılıyor';
     } else {
       badge.classList.add('live');
-      $('mode-text').textContent = p.pending ? 'CANLI · ' + p.pending + ' veri bekleniyor' : 'CANLI · Bloomberg';
-      badge.title = 'Bloomberg (blpapi) canlı veri · ' + (p.subscriptions || 0) + ' abonelik · bugün ' + (p.hits_today || 0)
-        + ' veri isteği' + (p.limit_reached ? ' · GÜNLÜK LİMİT KORUMASI DEVREDE' : '') + (p.error ? ' · ' + p.error : '');
+      // Bloomberg says its event queue is filling up: prices may arrive late (and are asked again if any were dropped)
+      if (p.slow) badge.classList.add('slow');
+      $('mode-text').textContent = p.slow ? 'CANLI · Bloomberg kuyruğu doluyor'
+        : p.pending ? 'CANLI · ' + p.pending + ' veri bekleniyor' : 'CANLI · Bloomberg';
+      badge.title = 'Bloomberg (blpapi) canlı veri · ' + (p.subscriptions || 0) + ' abonelik'
+        + (p.subscriptions_invalid ? ' (' + p.subscriptions_invalid + ' ticker Bloomberg\'de yok: abone olunmadı)' : '')
+        + ' · bugün ' + (p.hits_today || 0) + ' veri isteği'
+        + (p.isolated ? ' · oturum ayrı süreçte' + (p.restarts ? ' (' + p.restarts + ' kez yeniden başladı)' : '') : ' · oturum dashboard sürecinde')
+        + (p.events_dropped || p.messages_lost
+          ? ' · KUYRUK TAŞTI: ' + (p.events_dropped || p.messages_lost) + ' olay düştü, ' + (p.resyncs || 0) + ' değer yeniden istendi' : '')
+        + (p.limit_reached ? ' · GÜNLÜK LİMİT KORUMASI DEVREDE' : '') + (p.error ? ' · ' + p.error : '');
     }
   } else {
     badge.classList.add('replay');

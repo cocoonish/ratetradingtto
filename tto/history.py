@@ -874,9 +874,13 @@ class History(object):
         st = self.state
         st["done"], st["total"] = 0, len(todo)
         done = 0
+        # live: the solver shares the interpreter with the engine that serves the desk, so it rests after every
+        # day (history_pace times as long as the day took) - a year of history may take a little longer
+        pace = float(getattr(self.svc.settings, "history_pace", 0.0) or 0.0) if self.svc.mode == "live" else 0.0
         for p in todo:
             if self._stop.is_set() or self._kick.is_set():
                 break                                          # asked to stop, or the inputs changed: start over
+            t0 = time.time()
             try:
                 res = self._het_call(self._solve, p, shared)
                 note = ""
@@ -893,6 +897,8 @@ class History(object):
             done += 1
             st["done"] = done
             self.rev += 1
+            if pace > 0 and done < len(todo):
+                self._kick.wait(min(5.0, pace * (time.time() - t0)))
         return done
 
     def _het_call(self, fn, *args):

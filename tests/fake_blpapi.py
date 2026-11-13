@@ -7,14 +7,49 @@ The "terminal" is a :class:`Server` object the test fills with data:
     server.ref[("USDTRY Curncy", "BID", ())] = 49.997
     server.history[("USDTRY Curncy", "PX_LAST")] = [(date(2026, 11, 2), 49.9), ...]
     provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+
+Two things the real library does that matter for keeping up with a busy market can be switched on:
+
+* ``server.release_gil = True``: every accessor lets go of Python's interpreter lock for a moment, as each
+  call into the real (ctypes) blpapi does - a reader that shares its process with a computing thread then
+  loses the lock on them;
+* ``server.queue_limit = N``: the session holds at most N undelivered events, warns at 75 % of that
+  (``SlowConsumerWarning``), drops what does not fit and reports it afterwards (``DataLoss`` per
+  subscription, ``SlowConsumerWarningCleared`` with the number of events dropped).
 """
 from __future__ import annotations
 
 import datetime as _dt
 import queue
 import threading
+import time
 import types
 from typing import Any, Dict, List, Optional, Tuple
+
+#: set by :class:`Server` (``release_gil``): accessors behave like calls into a C library
+_YIELD = {"on": False}
+
+
+def _noop():
+    """A C function that does nothing, called the way blpapi calls its library (``ctypes.CDLL``: the
+    interpreter lock is released for the call)."""
+    import ctypes
+    try:
+        fn = ctypes.CDLL(None).getpid                    # POSIX: the C library of the process itself
+    except (OSError, AttributeError, TypeError):
+        fn = ctypes.WinDLL("kernel32").GetCurrentThreadId
+    fn.restype = ctypes.c_int
+    fn.argtypes = []
+    return fn
+
+
+_NOOP = _noop()
+
+
+def _c() -> None:
+    """Stands for the moment a real blpapi call spends outside the interpreter lock."""
+    if _YIELD["on"]:
+        _NOOP()
 
 
 class Name(object):
@@ -39,6 +74,7 @@ class CorrelationId(object):
         self._value = value
 
     def value(self):
+        _c()
         return self._value
 
 
@@ -71,17 +107,22 @@ class Element(object):
         return isinstance(self._value, dict)
 
     def isNull(self):
+        _c()
         return self._value is None
 
     def numValues(self):
+        _c()
         if isinstance(self._value, list):
             return len(self._value)
         return 0 if self._value is None else 1
 
     def numElements(self):
+        _c()
         return len(self._value) if isinstance(self._value, dict) else 0
 
     def getValue(self, index=0):
+        _c()
+        _c()                                    # the real one asks for the data type first
         if isinstance(self._value, list):
             return self._value[index]
         if index != 0:
@@ -89,25 +130,37 @@ class Element(object):
         return self._value
 
     def getValueAsElement(self, index=0):
+        _c()
         v = self._value[index] if isinstance(self._value, list) else self._value
         return Element(self._name, v)
 
     def hasElement(self, name, excludeNullElements=False):
-        return isinstance(self._value, dict) and str(name) in self._value
+        _c()
+        if not (isinstance(self._value, dict) and str(name) in self._value):
+            return False
+        return not (excludeNullElements and self._value[str(name)] is None)
 
     def getElement(self, name):
+        _c()
         if isinstance(name, int):
             key = list(self._value.keys())[name]
             return Element(key, self._value[key])
-        if not self.hasElement(name):
+        if not (isinstance(self._value, dict) and str(name) in self._value):
             raise KeyError(str(name))
         return Element(str(name), self._value[str(name)])
 
     def getElementAsString(self, name):
+        _c()
+        _c()
         return str(self._value[str(name)])
 
     def getElementAsFloat(self, name):
-        return float(self._value[str(name)])
+        _c()
+        _c()
+        v = self._value[str(name)]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise TypeError("%s is not a number" % (name,))
+        return float(v)
 
     def elements(self):
         return [Element(k, v) for k, v in self._value.items()] if isinstance(self._value, dict) else []
@@ -135,19 +188,24 @@ class Message(object):
         self._data = data
 
     def messageType(self):
+        _c()
         return self._type
 
     def correlationIds(self):
+        _c()
+        for _ in self._cids:
+            _c()
         return list(self._cids)
 
     def asElement(self):
+        _c()
         return Element(str(self._type), self._data)
 
     def hasElement(self, name, excludeNullElements=False):
-        return str(name) in self._data
+        return self.asElement().hasElement(name, excludeNullElements)
 
     def getElement(self, name):
-        return Element(str(name), self._data[str(name)])
+        return self.asElement().getElement(name)
 
     def __str__(self):
         return "%s %r" % (self._type, self._data)
@@ -169,10 +227,15 @@ class Event(object):
         self._messages = messages or []
 
     def eventType(self):
+        _c()
         return self._type
 
     def __iter__(self):
-        return iter(self._messages)
+        _c()
+        for m in self._messages:
+            _c()
+            yield m
+        _c()
 
 
 class Request(object):
@@ -230,11 +293,30 @@ class Server(object):
         self.lock = threading.Lock()
         self.split_responses = False                              # answer with PARTIAL_RESPONSE + RESPONSE
         self.silent = False                                       # swallow requests (timeouts)
+        self.subscription_options: List[Tuple[str, List[str]]] = []   # (topic, options) of every subscribe
+        self.refuse_options = False                               # subscriptions that carry options fail
+        self.queue_limit = 0                                      # undelivered events a session holds (0: no limit)
+        self.dropped = 0                                          # events thrown away because the queue was full
+
+    @property
+    def release_gil(self) -> bool:
+        return _YIELD["on"]
+
+    @release_gil.setter
+    def release_gil(self, on: bool) -> None:
+        _YIELD["on"] = bool(on)
 
     # ---- helpers for tests
     def tick(self, security: str, values: Dict[str, Any]) -> None:
         for s in list(self.sessions):
             s.push_tick(security, values)
+
+    def admin(self, message_type: str, data: Optional[Dict[str, Any]] = None, security: Optional[str] = None) -> None:
+        """An ADMIN event (``SlowConsumerWarning`` ...), for a subscription when ``security`` is given."""
+        for s in list(self.sessions):
+            sub = s.subs.get(security) if security is not None else None
+            cids = [sub[1]] if sub is not None else []
+            s.events.put(Event(Event.ADMIN, [Message(message_type, cids, dict(data or {}))]))
 
     def drop_sessions(self) -> None:
         """The terminal goes away: every session is told it was terminated."""
@@ -319,6 +401,39 @@ class Session(object):
         self.events: "queue.Queue[Event]" = queue.Queue()
         self.subs: Dict[str, Tuple[List[str], Any]] = {}
         self.started = False
+        self._slow = False                        # a SlowConsumerWarning is out
+        self._dropped = 0                         # ... events dropped since then
+        self._lost: Dict[Any, int] = {}           # ... per correlation id of a subscription
+
+    # ---- the bounded event queue of the real session
+    def _put(self, event: Event) -> None:
+        limit = self.server.queue_limit
+        if not limit:
+            self.events.put(event)
+            return
+        n = self.events.qsize()
+        if n >= limit:                            # "event queue is full, events are being dropped"
+            self._dropped += 1
+            self.server.dropped += 1
+            for m in event._messages:
+                for c in m._cids:
+                    self._lost[c._value] = self._lost.get(c._value, 0) + 1
+            return
+        if n >= 0.75 * limit and not self._slow:
+            self._slow = True
+            self.events.put(Event(Event.ADMIN, [Message("SlowConsumerWarning", [], {})]))
+        self.events.put(event)
+
+    def _after_get(self) -> None:
+        limit = self.server.queue_limit
+        if limit and self._slow and self.events.qsize() <= 0.5 * limit:
+            self._slow = False
+            lost, self._lost = self._lost, {}
+            dropped, self._dropped = self._dropped, 0
+            for cid, count in lost.items():
+                self.events.put(Event(Event.ADMIN, [Message("DataLoss", [cid], {
+                    "id": str(cid), "source": "fake", "numMessagesDropped": count})]))
+            self.events.put(Event(Event.ADMIN, [Message("SlowConsumerWarningCleared", [], {"eventsDropped": dropped})]))
 
     def start(self):
         if self.server.fail_start:
@@ -352,49 +467,53 @@ class Session(object):
             half = max(1, len(data) // 2)
             first = Message("ReferenceDataResponse", [cid], {"securityData": data[:half]})
             second = Message("ReferenceDataResponse", [cid], {"securityData": data[half:]})
-            self.events.put(Event(Event.PARTIAL_RESPONSE, [first]))
-            self.events.put(Event(Event.RESPONSE, [second]))
+            self._put(Event(Event.PARTIAL_RESPONSE, [first]))
+            self._put(Event(Event.RESPONSE, [second]))
         else:
             for m in messages[:-1]:
-                self.events.put(Event(Event.PARTIAL_RESPONSE, [m]))
-            self.events.put(Event(Event.RESPONSE, [messages[-1]]))
+                self._put(Event(Event.PARTIAL_RESPONSE, [m]))
+            self._put(Event(Event.RESPONSE, [messages[-1]]))
         return correlationId
 
     def subscribe(self, sublist: SubscriptionList):
-        for topic, fields, _options, cid in sublist.entries:
-            self._subscribe(topic, fields, cid)
+        for topic, fields, options, cid in sublist.entries:
+            self._subscribe(topic, fields, cid, options)
 
     def resubscribe(self, sublist: SubscriptionList):
         self.subscribe(sublist)
 
-    def _subscribe(self, topic, fields, cid):
+    def _subscribe(self, topic, fields, cid, options=None):
         self.server.subscriptions.append((topic, list(fields)))
-        if topic in self.server.invalid:
-            self.events.put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionFailure", [cid.value()], {
-                "reason": {"category": "BAD_SEC", "description": "Invalid security"}})]))
+        self.server.subscription_options.append((topic, list(options or [])))
+        if topic in self.server.invalid or (options and self.server.refuse_options):
+            self._put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionFailure", [cid._value], {
+                "reason": {"category": "BAD_SEC" if topic in self.server.invalid else "NOT_AUTHORIZED",
+                           "description": "Invalid security" if topic in self.server.invalid else "option refused"}})]))
             return
-        self.subs[topic] = (list(fields), cid.value())
+        self.subs[topic] = (list(fields), cid._value)
         bad = [f for f in fields if f in self.server.bad_rt_fields]
         data: Dict[str, Any] = {}
         if bad:
             data["exceptions"] = [{"fieldId": f, "reason": {"category": "BAD_FLD", "description": "not a real-time field"}} for f in bad]
-        self.events.put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionStarted", [cid.value()], data)]))
+        self._put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionStarted", [cid._value], data)]))
         first = {f: self.server.rt[(topic, f)] for f in fields if (topic, f) in self.server.rt and f not in bad}
         if first:
             first["MKTDATA_EVENT_TYPE"] = "SUMMARY"
-            self.events.put(Event(Event.SUBSCRIPTION_DATA, [Message("MarketDataEvents", [cid.value()], first)]))
+            self._put(Event(Event.SUBSCRIPTION_DATA, [Message("MarketDataEvents", [cid._value], first)]))
 
     def push_tick(self, security: str, values: Dict[str, Any]):
         sub = self.subs.get(security)
         if sub is None:
             return
-        self.events.put(Event(Event.SUBSCRIPTION_DATA, [Message("MarketDataEvents", [sub[1]], dict(values))]))
+        self._put(Event(Event.SUBSCRIPTION_DATA, [Message("MarketDataEvents", [sub[1]], dict(values))]))
 
     def nextEvent(self, timeout=0):
         try:
-            return self.events.get(timeout=(timeout or 0) / 1000.0 if timeout else None)
+            event = self.events.get(timeout=(timeout or 0) / 1000.0 if timeout else None)
         except queue.Empty:
             return Event(Event.TIMEOUT)
+        self._after_get()
+        return event
 
 
 def module(server: Server):

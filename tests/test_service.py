@@ -16,6 +16,7 @@ def login(svc, name):
 def test_status_and_navigation(service):
     st = service.status()
     assert st["mode"] == "replay" and st["today"] == "2026-11-03" and st["port"] == 1057
+    assert service.describe().startswith("Veri: kayıtlı")            # the line printed on the console at the start
     assert set(st["books"]) == {"tto", "sofr", "borsa", "asw"}
     assert st["books"]["tto"]["formulas"] > 110000 and st["books"]["sofr"]["formulas"] > 4000
     assert st["books"]["borsa"]["formulas"] > 16000 and st["books"]["asw"]["formulas"] > 80000

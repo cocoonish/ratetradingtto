@@ -360,6 +360,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def on_startup():
         if state["service"] is None:
             state["service"] = await run_in_threadpool(Service, settings)
+            try:
+                print(state["service"].describe(), flush=True)
+            except Exception:  # noqa: BLE001 - a console that cannot print must not stop the start
+                pass
         state["service"].start()
 
     async def on_shutdown():
