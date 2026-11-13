@@ -262,6 +262,35 @@ def test_a_level_without_its_big_figure():
     assert bc.parse_chat("6m ois 45 bid", lambda q: 35.88)[0]["bid"] == 35.45
 
 
+def test_both_sides_short_find_their_big_figure_together():
+    pair = bc._complete_pair
+    assert pair("90", "10", 35.88) == (35.90, 36.10, "abbr")                  # the desk's "6m 90/10": across the figure
+    assert pair("90", "10", 36.02) == (35.90, 36.10, "abbr") and pair("10", "14", 35.14) == (35.10, 35.14, "abbr")
+    assert pair("95", "05", 36.0) == (35.95, 36.05, "abbr") and pair("98", "02", 35.99) == (35.98, 36.02, "abbr")
+    assert pair(".90", ".10", 36.0) == (35.90, 36.10, "abbr") and pair("50", "50", 36.6) == (36.50, 36.50, "abbr")
+    # the reference half a figure away: the nearer figure still, and said to be uncertain
+    assert pair("90", "10", 36.44) == (35.90, 36.10, "ambiguous") and pair("90", "10", 36.60)[:2] == (36.90, 37.10)
+    assert pair("35", "36", 35.5) == (35.0, 36.0, "ambiguous")                # whole numbers may be meant as typed
+    assert bc._is_short("90") and bc._is_short(".5") and bc._is_short("0,90") and not bc._is_short("35.90")
+    assert not bc._is_short("3590") and not bc._is_short("-5") and not bc._is_short("190")
+    # in a quote, however it is written
+    for text in ("6m 90/10", "6m ois 90 / 10", "6m ois 90 bid 10 offer", "6m ois 90 bid, 10 offer", "6m 90/36.10", "6m 35.90/10",
+                 "6m ois .90/.10", "6m ois bid 90 offer 10"):
+        assert sides(text) == (35.90, 36.10), text
+    assert one("6m 90/10")["flags"] == ["abbr"] and one("6m 35.90/10")["flags"] == ["abbr"] and one("6m 90/36.10")["flags"] == ["abbr"]
+    assert sides("3m ois 55/75") == (36.55, 36.75) and sides("3m ois 95/15") == (36.95, 37.15) and sides("2y 30/50") == (35.30, 35.50)
+    assert sides("3m ois 40/80") == (36.40, 36.80) and sides("3m ois 85/05") == (36.85, 37.05)    # 3M stands at 36.60: the middle nearest to it
+    # what the chat said just before is the reference, whatever the caller's
+    rows = bc.parse_chat("12:00:00 6m ois 37.95 bid\n12:05:00 6m 90/10", ref)
+    assert (rows[1]["bid"], rows[1]["ask"], rows[1]["flags"]) == (37.90, 38.10, ["abbr"])
+    # nothing to find the figure with: as typed, and said so
+    q = one("1y x 60/80", None)
+    assert (q["bid"], q["ask"], q["flags"]) == (60.0, 80.0, ["no-ref"])
+    assert one("6m 90/10", None)["flags"] == ["no-ref", "crossed"]
+    # basis points are never completed
+    assert sides("2y3y 90/10") == (90.0, 10.0) and sides("1v5y x 55/60", None) == (55.0, 60.0)
+
+
 def test_trades_refs_and_interest():
     q = one("18m ois taken at 14")
     assert (q["event"], q["price"], q["side"], q["bid"], q["ask"]) == ("trade", 35.14, "ask", None, None)
@@ -498,9 +527,23 @@ def test_shortened_levels_use_what_was_said_then_the_curve(desk):
     assert (q["event"], q["price"], q["side"], q["flags"]) == ("trade", 35.70, "ask", ["standing"])
     assert svc.broker_parse(u, "15:21:00 3y ois given")["rows"][0]["price"] == 35.52
     assert svc.broker_parse(u, "15:09:00 3y ois taken")["rows"][0]["price"] is None       # nothing stood yet
-    # cross-currency: no curve to ask
+    # the desk's "6m 90/10": both sides find their figure, from the curve when nothing was said
+    par6 = svc.et.call(lambda: mkt.par("6M")) * 100
+    q = svc.broker_parse(u, "09:00:00 6m 90/10")["rows"][0]
+    assert q["ask"] - q["bid"] == pytest.approx(0.20) and round(q["bid"] * 100) % 100 == 90 and abs((q["bid"] + q["ask"]) / 2 - par6) <= 0.5
+    svc.broker_add(u, "09:01:00 6m ois 35.88 bid")
+    q = svc.broker_parse(u, "09:02:00 6m 90/10")["rows"][0]
+    assert (q["bid"], q["ask"], q["flags"]) == (35.90, 36.10, ["abbr"])
+    # cross-currency: no curve to ask - the last close of the history finds the figure, when there is one
     q = svc.broker_parse(u, "2yr x 40 offer")["rows"][0]
     assert q["ask"] == 40.0 and q["flags"] == ["no-ref"] and q["model"] is None
+    assert svc.broker_parse(u, "2yr x 90/10")["rows"][0]["flags"] == ["no-ref", "crossed"]
+    swap = next(d for d in svc.history.snapshot()["defs"] if d.group == "xccy" and d.label == "2Y")
+    svc.store.hist_upsert(swap.id, [("2026-11-02", 40.60), ("2026-11-03", 40.75)])
+    svc.history.rev += 1                                                     # as the history does when it stores closes
+    q = svc.broker_parse(u, "2yr x 90/10")["rows"][0]
+    assert (q["product"], q["bid"], q["ask"], q["flags"], q["model"]) == ("XCCY", 40.90, 41.10, ["abbr"], None)
+    assert svc.broker_parse(u, "2yr x 80 offer")["rows"][0]["ask"] == 40.80
 
 
 def test_the_board_next_to_the_curve(desk):

@@ -628,16 +628,18 @@ async function shot(page, name) {
     await page.waitForFunction(() => document.getElementById('sb-fx').textContent.startsWith('='), null, { timeout: 10000 });
     check('status bar shows the Excel formula of the cell', true);
 
-    // ------------------------------------------------------------------ YP DİBS copy
-    await open(page, 'ypdibs');
-    await page.hover('.panel');
-    await page.click('.panel .tools .iconbtn');
+    // ------------------------------------------------------------------ copying a table (the VİOP sheet's USD OIS curve)
+    await open(page, 'viop');
+    await page.evaluate(() => window.tto.state.page.focusPanel('B2'));
+    await page.waitForFunction(() => { const it = window.tto.state.page.items.get('B2'); return !!(it && it.grid && it.grid.data); }, null, { timeout: 20000 });
+    await page.hover('.panel[data-panel="B2"]');
+    await page.click('.panel[data-panel="B2"] .tools .iconbtn');
     await page.waitForTimeout(250);
     const yp = await page.evaluate(() => navigator.clipboard.readText());
-    check('"Kopyala" on the YP DİBS table puts a TSV block on the clipboard', yp.split('\r\n').length >= 9 && yp.includes('\t'), yp.slice(0, 120));
-    check('the copy has the columns Excel shows (the hidden Bid columns stay out)',
-      yp.split('\r\n')[0] === '\t04.11.2026\tOffer\tT1 Yield\tStok', yp.split('\r\n')[0]);
-    await shot(page, '06-ypdibs');
+    check('"Kopyala" on a table puts a TSV block on the clipboard', yp.split('\r\n').length >= 20 && yp.includes('\t'), yp.slice(0, 120));
+    check('the copy has the columns Excel shows (the hidden ticker column stays out)',
+      yp.split('\r\n')[0] === '\tMaturity\tBid\tMid\tAsk', yp.split('\r\n')[0]);
+    await shot(page, '06-viop-copy');
 
     // ------------------------------------------------------------------ charts as Excel defines them
     console.log('charts');
@@ -729,7 +731,8 @@ async function shot(page, name) {
     const notes = await page.evaluate(() => [...document.querySelectorAll('td.nt')].map((td) => td.title));
     check('cell comments of the workbook are tooltips on their cells', notes.length === 6 && notes.includes('1 = OIS ima patikası, 0 = TLREF sabit'), notes);
     await open(page, 'masa');
-    check('the desk page has the workbook\'s 30 shortcuts', await page.locator('.shortcuts .chip').count() === 30);
+    check('the desk page has the workbook\'s shortcuts (29 of its 30: the sheet without a page is not offered)',
+      await page.locator('.shortcuts .chip').count() === 29 && await page.locator('.shortcuts .chip', { hasText: 'YP DİBS' }).count() === 0);
     await page.locator('.shortcuts .chip', { hasText: 'Matrisler' }).click();
     await page.waitForFunction(() => window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     await page.waitForTimeout(900);
@@ -742,26 +745,31 @@ async function shot(page, name) {
     check('tables Excel keeps folded start folded', hit.folded >= 14, hit.folded);
     await page.evaluate(() => window.tto.state.page.items.get('B17').toggle(true));
 
-    await open(page, 'ypdibs');
+    // the USD OIS curve of the VİOP sheet: Excel hides its ticker column
+    await open(page, 'viop');
+    await page.evaluate(() => window.tto.state.page.focusPanel('B2'));
+    await page.waitForFunction(() => { const it = window.tto.state.page.items.get('B2'); return !!(it && it.grid && it.grid.data); }, null, { timeout: 20000 });
     const ypCols = () => page.evaluate(() => window.tto.state.page.items.get('B2').grid.data.c.join(''));
-    check('columns hidden in Excel are not shown', await ypCols() === 'BCFGH' && /2 gizli sütun/.test(await page.textContent('.panel[data-panel="B2"] .hc')));
-    // a block copied in Excel (C2:F3) carries the hidden columns: ISIN | Bid (formula) | Bid Yield | Offer
+    check('columns hidden in Excel are not shown', await ypCols() === 'BDEFG' && /1 gizli sütun/.test(await page.textContent('.panel[data-panel="B2"] .hc')));
+    // a block copied in Excel (B16:D17) carries the hidden column: days (formula) | Ticker | Maturity
     await page.evaluate(async () => {
       const g = window.tto.state.page.items.get('B2').grid;
       const mod = await import('/static/js/grid.js');
-      const i = g.data.r.indexOf(2), j = g.data.c.indexOf('C');
-      await mod.pasteText(g, { grid: g, top: i, left: j, bottom: i, right: j },
-        'TRT191127F19\t98,9\t5,45\t100,25\r\nTRT030227F18\t99,7\t5,15\t100,15');
+      const i = g.data.r.indexOf(16), j = g.data.c.indexOf('B');
+      await mod.pasteText(g, { grid: g, top: i, left: j, bottom: i, right: j }, '7\tUSSO2Z\t2W\r\n14\tUSSO1Z\t1W');
     });
-    await page.waitForFunction(() => { const td = window.tto.findCell('YP DIBS!F2'); return td && td.textContent === '100,250'; }, null, { timeout: 15000 });
-    check('a block pasted from Excel keeps Excel\'s layout across the hidden columns', await cellText(page, 'YP DIBS!F3') === '100,150');
+    await page.waitForFunction(() => { const td = window.tto.findCell('VIOP!D16'); return td && td.textContent === '2W'; }, null, { timeout: 15000 });
+    check('a block pasted from Excel keeps Excel\'s layout across the hidden columns', await cellText(page, 'VIOP!D17') === '1W');
     await page.click('.panel[data-panel="B2"] .hc');
-    await page.waitForFunction(() => window.tto.findCell('YP DIBS!E2') !== null, null, { timeout: 15000 });
+    await page.waitForFunction(() => window.tto.findCell('VIOP!C16') !== null, null, { timeout: 15000 });
     check('"gizli sütun" shows them - with the value that was pasted into the hidden input',
-      await ypCols() === 'BCDEFGH' && await cellText(page, 'YP DIBS!E2') === '5,45' && await cellText(page, 'YP DIBS!E3') === '5,15',
-      [await ypCols(), await cellText(page, 'YP DIBS!E2')]);
+      await ypCols() === 'BCDEFG' && await cellText(page, 'VIOP!C16') === 'USSO2Z' && await cellText(page, 'VIOP!C17') === 'USSO1Z',
+      [await ypCols(), await cellText(page, 'VIOP!C16')]);
     await page.click('.page-tools button:has-text("Yardımcı tablolar")');
-    await page.waitForFunction(() => window.tto.findCell('YP DIBS!E2') === null, null, { timeout: 15000 });
+    await page.waitForFunction(() => window.tto.findCell('VIOP!C16') === null, null, { timeout: 15000 });
+    // the curve as it was
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!C16', 'VIOP!C17', 'VIOP!D16', 'VIOP!D17'] });
+    await page.waitForFunction(() => { const td = window.tto.findCell('VIOP!D16'); return td && td.textContent === '1W'; }, null, { timeout: 15000 });
 
     await open(page, 'dibs');
     const frozen = await page.evaluate(() => {

@@ -6,6 +6,7 @@ A line of a chat becomes a record - when, who, which instrument, bid and ask, an
     12:10:07 18m ois /35.23 offer           ... offered only (the slash says: nothing bid)
     6m OIS 90 bid                           ... the big figure left out: 35.90
     18m ois 10/14                           ... on both sides: 35.10 / 35.14
+    6m ois 90/10                            ... across the figure: 35.90 / 36.10
     1yr x 38.60/80                          a cross-currency swap, 38.60 / 38.80
     10:29:57 1y5y ois -64/-60               a spread (5Y − 1Y) in bp - two tenors without a "v" are a spread, not a FRA
     1v5y x 55 offer                         ... written with a "v"
@@ -179,6 +180,42 @@ def _complete(text: str, ref: Optional[float], anchor: Optional[float] = None, a
     return value, flag
 
 
+def _is_short(text: str) -> bool:
+    """A level written without its big figure: "90", "05", ".90" - what :func:`_complete` would complete."""
+    n = _num(text)
+    dotted = "." in text or "," in text
+    return not ((not dotted and 1000 <= n < 10000) or (dotted and abs(n) >= 1.0) or n < 0 or n >= 100)
+
+
+def _complete_pair(bid: str, ask: str, ref: float) -> Tuple[float, float, str]:
+    """Both sides of a quote written without their big figure: "90/10" for a rate near 36 is 35.90 / 36.10.
+
+    The two are completed together: the ask is the first level at or above the bid ("90/10" crosses into the next
+    figure, "10/14" does not), and of the figures that leaves the one whose middle is nearest to ``ref`` - where
+    the instrument stands - is taken.  Whole numbers may also be meant as typed ("35/36"); that reading competes.
+    Returns (bid, ask, flag) like :func:`_complete`."""
+    dotted = any("." in t or "," in t for t in (bid, ask))
+    nb, na = _num(bid), _num(ask)
+    pb = nb if ("." in bid or "," in bid) else nb / 100.0
+    pa = na if ("." in ask or "," in ask) else na / 100.0
+    cands: List[Tuple[float, float, float, str]] = []
+    base = int(ref // 1)
+    for big in range(base - 2, base + 3):
+        b = big + pb
+        a = big + pa if pa >= pb - 1e-12 else big + 1 + pa
+        cands.append((abs((a + b) / 2.0 - ref), b, a, "abbr"))
+    if not dotted and na >= nb:
+        cands.append((abs((na + nb) / 2.0 - ref), nb, na, ""))
+    cands.sort(key=lambda c: c[0])
+    _, b, a, flag = cands[0]
+    # two readings about as far from where the instrument stands: said, so that it is looked at
+    if len(cands) > 1 and cands[1][0] - cands[0][0] < 0.15 and (cands[1][1], cands[1][2]) != (b, a):
+        flag = "ambiguous"
+    elif flag == "abbr" and not dotted and na >= nb and abs((na + nb) / 2.0 - ref) < 0.6:
+        flag = "ambiguous"                                   # "35/36" at 35.5 could be meant either way
+    return b, a, flag
+
+
 # ---------------------------------------------------------------------------------------------- one quote
 def instrument_key(product: str, kind: str, tenors: List[str]) -> str:
     return "%s:%s:%s" % (product, kind, "/".join(tenors))
@@ -299,13 +336,33 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     level_ref = ref(out) if ref is not None and unit == "pct" else None
     consumed = set()
 
-    def level(tok: str, anchor: Optional[float] = None) -> float:
+    def level(tok: str, anchor: Optional[float] = None, above: bool = True) -> float:
         if unit != "pct":
             return _num(tok)
-        v, flag = _complete(tok, level_ref, anchor)
+        v, flag = _complete(tok, level_ref, anchor, above)
         if flag and not (anchor is not None and flag == "ambiguous") and flag not in out["flags"]:
             out["flags"].append(flag)
         return v
+
+    def two_sided(b: str, a: str) -> Tuple[float, float]:
+        """Bid and ask of one quote.  Written short on both sides ("90/10") they find their big figure together;
+        with one side in full the other is completed against it (the bid below the ask, the ask above the bid)."""
+        if unit != "pct":
+            return _num(b), _num(a)
+        short_b, short_a = _is_short(b), _is_short(a)
+        if short_b and short_a:
+            if level_ref is None:
+                out["flags"].append("no-ref")                # nothing to find the figure with: as typed, and said so
+                return _num(b), _num(a)
+            bid, ask, flag = _complete_pair(b, a, level_ref)
+            if flag:
+                out["flags"].append(flag)
+            return bid, ask
+        if short_b:
+            ask = level(a)
+            return level(b, ask, False), ask                 # "90/36.10": the bid is the 90 below 36.10
+        bid = level(b)
+        return bid, level(a, bid)                            # the ask does not cross the bid: "35.60/80" is 35.80
 
     if out["event"] == "trade":
         k = after_at if after_at is not None else (singles[0] if singles else None)
@@ -320,8 +377,7 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     elif out["event"] in ("ref", "interest"):
         out["side"] = side
     elif both is not None:
-        out["bid"] = level(low[both[0]])
-        out["ask"] = level(low[both[1]], out["bid"])
+        out["bid"], out["ask"] = two_sided(low[both[0]], low[both[1]])    # "90 bid 10 offer" as "90/10"
         consumed.update(both)
     elif singles and words & _CHOICE and k_slash is None and k_range is None:
         k = after_at if after_at is not None else singles[0]
@@ -331,10 +387,12 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         k = k_slash if k_slash is not None else k_range
         b, a = _SLASH.match(low[k]).groups() if k_slash is not None else _RANGE.match(low[k]).groups()
         consumed.add(k)
-        if b is not None:
+        if b is not None and a is not None:
+            out["bid"], out["ask"] = two_sided(b, a)
+        elif b is not None:
             out["bid"] = level(b)
-        if a is not None:
-            out["ask"] = level(a, out["bid"])               # the ask does not cross the bid: "35.60/80" is 35.80
+        elif a is not None:
+            out["ask"] = level(a)
         if b is None:
             out["clear"].append("bid")                      # "/35.23": nothing bid
         if a is None:

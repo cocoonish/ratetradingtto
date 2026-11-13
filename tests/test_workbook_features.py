@@ -73,18 +73,18 @@ def test_a_model_round_trips_the_new_fields(models, tmp_path):
 
 # ---------------------------------------------------------------------------------------------- hidden columns
 def test_columns_hidden_in_excel_are_left_out_until_asked_for(service):
-    quotes = panel(service, "ypdibs", "B2")["data"]
-    assert quotes["c"] == ["B", "C", "F", "G", "H"] and quotes["hc"] == 2
-    assert [c["t"] for c in quotes["rows"][0] if c.get("t")] == ["04.11.2026", "Offer", "T1 Yield", "Stok"]
-    full = panel(service, "ypdibs", "B2", show_hidden=True)["data"]
-    assert full["c"] == ["B", "C", "D", "E", "F", "G", "H"] and "hc" not in full
-    assert "Bid Yield" in [c.get("t") for c in full["rows"][0]]
+    # the USD OIS table of the VİOP sheet: Excel hides its ticker column (C)
+    curve = panel(service, "viop", "B2")["data"]
+    assert curve["c"] == ["B", "D", "E", "F", "G"] and curve["hc"] == 1
+    assert [c["t"] for c in curve["rows"][0] if c.get("t")] == ["Maturity", "Bid", "Mid", "Ask"]
+    full = panel(service, "viop", "B2", show_hidden=True)["data"]
+    assert full["c"] == ["B", "C", "D", "E", "F", "G"] and "hc" not in full
+    assert "Ticker" in [c.get("t") for c in full["rows"][0]] and full["rows"][1][1]["t"] == "USSO1Z"
     # tables without hidden columns are untouched
-    stock = panel(service, "ypdibs", "B3")["data"]
-    assert stock["c"] == ["K", "L"] and "hc" not in stock
-    # the ticker column of the VİOP helper tables
-    assert "C" not in panel(service, "viop", "B2")["data"]["c"] and "C" in panel(service, "viop", "B2", True)["data"]["c"]
-    # the explorer and the single-range API always show everything
+    outright = panel(service, "ois", "B3")["data"]
+    assert outright["c"][:3] == ["A", "B", "C"] and "hc" not in outright
+    # the explorer and the single-range API always show everything - also of a sheet that has no page
+    assert service.grid(None, "tto", "VIOP", "B14:G35")["data"]["c"] == ["B", "C", "D", "E", "F", "G"]
     assert service.grid(None, "tto", "YP DIBS", "B1:H10")["data"]["c"] == ["B", "C", "D", "E", "F", "G", "H"]
 
 
@@ -180,13 +180,14 @@ def test_data_bar_limits():
 # ---------------------------------------------------------------------------------------------- shortcuts / picture
 def test_the_workbooks_go_to_links_become_shortcuts_to_page_and_panel(service):
     links = service.view(None, "masa")["links"]
-    assert len(links) == 30
+    assert len(links) == 29                               # 30 in the workbook; the one to YP DİBS has no page to go to
     by = {l["label"]: l for l in links}
     assert (by["Outright"]["page"], by["Outright"]["panel"]) == ("ois", "B3")
     assert (by["MPC ima"]["page"], by["MPC ima"]["panel"]) == ("ois", "B4")
     assert (by["Matrisler"]["page"], by["Matrisler"]["panel"]) == ("viop", "B17")
     assert (by["Blotter"]["page"], by["Blotter"]["panel"]) == ("blotter", None)
-    assert by["Makro"]["page"] == "masa" and by["YP DİBS"] == {"label": "YP DİBS", "page": "ypdibs", "panel": "B2", "ref": "'YP DIBS'!B1"}
+    assert by["Makro"]["page"] == "masa" and "YP DİBS" not in by
+    assert by["DİBS RV"]["page"] == "dibs" and by["DİBS RV"]["ref"].startswith("'DİBS RV'!")
     views = {v["id"]: v for v in load_views()}
     pages = {p["id"] for p in service.nav()}
     for l in links:
@@ -259,16 +260,16 @@ def test_a_list_read_from_a_range_offers_the_cells_of_that_range(service):
 def test_a_block_from_excel_skips_what_is_not_an_input(module_service):
     svc = module_service
     u = svc.login("Yapıştır")["user"]
-    # C2:F3 of YP DIBS as Excel copies it: ISIN | Bid (formula) | Bid Yield (hidden input) | Offer
-    items = [{"ref": "YP DIBS!%s%d" % (col, row), "value": val}
-             for row, vals in ((2, ["TRT191127F19", "98,9", "5,45", "100,25"]), (3, ["TRT030227F18", "99,7", "5,15", "100,15"]))
-             for col, val in zip("CDEF", vals)]
+    # B16:D17 of VIOP as Excel copies it: days (formula) | Ticker (hidden input) | Maturity (input)
+    items = [{"ref": "VIOP!%s%d" % (col, row), "value": val}
+             for row, vals in ((16, ["7", "USSO2Z", "2W"]), (17, ["14", "USSO1Z", "1W"]))
+             for col, val in zip("BCD", vals)]
     res = svc.set_inputs(u, "tto", items, False, "tr", True)
-    assert (res["applied"], res["skipped"], res["errors"]) == (6, 2, [])
-    assert cell(svc, "YP DIBS!E2", u) == 5.45 and cell(svc, "YP DIBS!F3", u) == 100.15
-    assert cell(svc, "YP DIBS!E2") == 5.3                                      # other users are untouched
+    assert (res["applied"], res["skipped"], res["errors"]) == (4, 2, [])
+    assert cell(svc, "VIOP!C16", u) == "USSO2Z" and cell(svc, "VIOP!D17", u) == "1W"
+    assert cell(svc, "VIOP!C16") == "USSO1Z"                                     # other users are untouched
     # typing into a cell that is not an input is still an error
-    res = svc.set_inputs(u, "tto", [{"ref": "YP DIBS!D2", "value": "1"}])
+    res = svc.set_inputs(u, "tto", [{"ref": "VIOP!B16", "value": "1"}])
     assert res["applied"] == 0 and "skipped" not in res and "girdi hücresi değil" in res["errors"][0]
 
 

@@ -1641,9 +1641,22 @@ class Service(object):
             return None
         return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months)
 
+    def _broker_close(self, q: Dict[str, Any]) -> Optional[float]:
+        """The last close the history keeps of an outright the curve cannot place (a cross-currency swap has no
+        curve in the workbook): enough to find the big figure of a shortened level."""
+        if q.get("kind") != "outright" or q.get("unit") != "pct":
+            return None
+        try:
+            curves = self._vol_curves()[0]
+        except Exception:  # noqa: BLE001 - no history is no reason to lose the chat
+            return None
+        series = (curves.get(q.get("product")) or {}).get(q["tenors"][0])
+        return series[max(series)] if series else None
+
     def _broker_rows(self, user: Optional[str], text: str, date: Optional[str]) -> List[Dict[str, Any]]:
-        """A pasted chat as rows to keep.  A level without its big figure ("90 bid") is completed from what the
-        chat last said about the instrument - in the same paste, then earlier that day - and then from the curve."""
+        """A pasted chat as rows to keep.  A level without its big figure ("90 bid", "90/10") is completed from
+        what the chat last said about the instrument - in the same paste, then earlier that day - then from the
+        curve, and for what the curve does not have (cross-currency) from its last close in the history."""
         import hashlib
         day = self._broker_day(date)
         mkt = self._broker_market(user)
@@ -1662,7 +1675,8 @@ class Service(object):
                     for name in ("price", "ask", "bid"):
                         if r.get(name) is not None:
                             return r[name]
-            return self._broker_model(mkt, q)
+            model = self._broker_model(mkt, q)
+            return model if model is not None else self._broker_close(q)
 
         def standing(q: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return next((row for row in bc.board(before(q)) if row["key"] == q["key"]), None)

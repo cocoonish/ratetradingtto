@@ -27,7 +27,7 @@ def sheets_of(view):
 
 #: sheets of the TRY workbook that have no page any more (the desk does not use them); their cells are still
 #: calculated and can be looked at in the sheet explorer
-NO_PAGE = {("tto", "MOBIL MK"), ("tto", "Ivır Zıvır")}
+NO_PAGE = {("tto", "MOBIL MK"), ("tto", "Ivır Zıvır"), ("tto", "YP DIBS")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):
@@ -40,7 +40,7 @@ def test_every_sheet_of_the_workbooks_has_a_page(models):
                 assert (book, sh.name) not in covered
                 continue
             assert (book, sh.name) in covered, sh.name
-    assert not {"mobil", "ivir"} & {v["id"] for v in VIEWS}
+    assert not {"mobil", "ivir", "ypdibs"} & {v["id"] for v in VIEWS}
 
 
 def test_the_sheets_without_a_page_are_still_in_the_sheet_explorer(service):

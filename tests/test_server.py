@@ -212,14 +212,15 @@ def test_workbook_extras_over_http(client, user):
     assert client.get("/api/image?book=tto&sheet=MASA&i=0").status_code == 404
     assert client.get("/api/image?book=tto&sheet=%s&i=x" % quote("Ivır Zıvır")).status_code == 404
     # shortcuts of the desk sheet; columns hidden in Excel only with the helper tables
-    assert len(client.get("/api/view/masa").json()["links"]) == 30
+    assert len(client.get("/api/view/masa").json()["links"]) == 29
+    assert client.get("/api/view/ypdibs").status_code == 404                  # a sheet the desk does not use: no page
 
     def columns(query):
-        return next(p for p in client.get("/api/view/ypdibs" + query).json()["panels"] if p["id"] == "B2")["data"]["c"]
+        return next(p for p in client.get("/api/view/viop" + query).json()["panels"] if p["id"] == "B2")["data"]["c"]
 
-    assert columns("") == ["B", "C", "F", "G", "H"] and columns("?all=1") == ["B", "C", "D", "E", "F", "G", "H"]
+    assert columns("") == ["B", "D", "E", "F", "G"] and columns("?all=1") == ["B", "C", "D", "E", "F", "G"]
     # a block pasted in Excel's layout: what is not an input is skipped instead of refused
-    items = [{"ref": "YP DIBS!D2", "value": "1"}, {"ref": "YP DIBS!E2", "value": "5,4"}]
+    items = [{"ref": "VIOP!B16", "value": "7"}, {"ref": "VIOP!C16", "value": "USSO1Z"}]
     res = client.post("/api/inputs", json={"book": "tto", "items": items, "lenient": True}, headers=hdr(user)).json()
     assert (res["applied"], res["skipped"], res["errors"]) == (1, 1, [])
     res = client.post("/api/inputs", json={"book": "tto", "items": items}, headers=hdr(user)).json()

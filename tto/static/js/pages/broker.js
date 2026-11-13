@@ -10,9 +10,9 @@ import { num, isoToTr } from '../format.js';
 const KIND = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward' };
 const EVENT = { quote: 'Kota', trade: 'İşlem', ref: 'Ref', interest: 'İlgi', level: 'Seviye', note: 'Not', text: 'Metin' };
 const FLAG = {
-  abbr: ['tamamlandı', '', 'Büyük rakam yazılmamış ("90 bid"): kotanın öbür tarafından, bu enstrümanın son seviyesinden ya da eğriden tamamlandı'],
-  ambiguous: ['belirsiz', 'warn', 'İki türlü okunabilir ("36": 35,36 mı 36,00 mı?) – yakın olan alındı; yanlışsa seviyeyi tam yazın'],
-  'no-ref': ['büyük rakam yok', 'warn', 'Seviyeyi tamamlayacak bir referans yok (bu enstrüman için ne önceki kota ne eğri) – yazıldığı gibi alındı'],
+  abbr: ['tamamlandı', '', 'Büyük rakam yazılmamış ("90 bid", "90/10"): kotanın öbür tarafından, bu enstrümanın son seviyesinden ya da eğriden tamamlandı'],
+  ambiguous: ['belirsiz', 'warn', 'İki türlü okunabilir ("36": 35,36 mı 36,00 mı?; referans iki büyük rakamın ortasında) – yakın olan alındı; yanlışsa seviyeyi tam yazın'],
+  'no-ref': ['büyük rakam yok', 'warn', 'Seviyeyi tamamlayacak bir referans yok (bu enstrüman için ne önceki kota, ne eğri, ne tarihçede kapanış) – yazıldığı gibi alındı'],
   'side?': ['taraf?', 'warn', 'Eğik çizgi ile kelime uyuşmuyor ("12/ offer") – eğik çizgiye uyuldu'],
   crossed: ['bid > ask', 'warn', 'Bid ask\'ten yüksek okundu'],
   standing: ['kotadan', '', 'Mesajda fiyat yok ("taken", "given"): o an duran offer / bid seviyesi alındı'],
@@ -23,6 +23,7 @@ const EXAMPLES = [
   ['12:10:07 18m ois /35.23 offer', 'yalnızca offer (bid yok)'],
   ['6m OIS 90 bid', 'büyük rakam tamamlanır: 35,90'],
   ['18m ois 10/14', '35,10 / 35,14'],
+  ['6m ois 90/10', 'rakamı aşan kota: 35,90 / 36,10'],
   ['10:29:57 1y5y ois -64/-60', 'spread (5Y − 1Y, bp) – "v" yazılmasa da FRA değil spread'],
   ['1v5y ois -62 bid', 'spread, "v" ile'],
   ['12:18:04 2y3y4y ois 12/ bid', 'fly (2×3Y − 2Y − 4Y, bp)'],
