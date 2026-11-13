@@ -347,6 +347,59 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().bond_catalog, _user(request)))
 
     @handler
+    async def watch(request: Request):
+        return ok(await call(svc().watch_view, _user(request), request.query_params.get("lang")))
+
+    @handler
+    async def watch_action(request: Request):
+        data = await _body(request)
+        what = request.path_params["what"]
+        u = _user(request)
+        s = svc()
+        if what == "add":
+            return ok(await call(s.watch_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
+                                 str(data.get("label") or ""), str(data.get("unit") or "")))
+        if what == "preset":
+            return ok(await call(s.watch_preset, u, str(data.get("group") or "")))
+        if what == "remove":
+            return ok(await call(s.watch_remove, u, str(data.get("id") or "")))
+        if what == "update":
+            move = data.get("move")
+            return ok(await call(s.watch_update, u, str(data.get("id") or ""), data.get("label"), data.get("unit"),
+                                 int(move) if isinstance(move, (int, float)) else None))
+        if what == "base":
+            return ok(await call(s.watch_base, u, data.get("id") or None))
+        raise ServiceError("bilinmeyen işlem: %s" % what, 404)
+
+    @handler
+    async def alarm_action(request: Request):
+        data = await _body(request)
+        what = request.path_params["what"]
+        u = _user(request)
+        s = svc()
+        if what == "add":
+            return ok(await call(s.alarm_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
+                                 str(data.get("op") or ""), data.get("level"), str(data.get("label") or ""), str(data.get("note") or "")))
+        if what == "remove":
+            return ok(await call(s.alarm_remove, u, str(data.get("id") or "")))
+        if what == "rearm":
+            return ok(await call(s.alarm_rearm, u, str(data.get("id") or ""), data.get("level")))
+        raise ServiceError("bilinmeyen işlem: %s" % what, 404)
+
+    @handler
+    async def alarms_fired(request: Request):
+        try:
+            since = int(request.query_params.get("since") or 0)
+        except ValueError:
+            since = 0
+        return ok(await call(svc().alarms_fired, _user(request), since))
+
+    @handler
+    async def notes(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().notes_set, _user(request), str(data.get("text") or "")))
+
+    @handler
     async def bond_flag(request: Request):
         data = await _body(request)
         return ok(await call(svc().bond_flag, _user(request), str(data.get("isin") or ""), bool(data.get("on"))))
@@ -475,6 +528,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/bonds/catalog", bond_catalog),
         Route("/api/list/add", list_add, methods=["POST"]),
         Route("/api/bonds/flag", bond_flag, methods=["POST"]),
+        Route("/api/watch", watch),
+        Route("/api/watch/{what}", watch_action, methods=["POST"]),
+        Route("/api/alarms/fired", alarms_fired),
+        Route("/api/alarms/{what}", alarm_action, methods=["POST"]),
+        Route("/api/notes", notes, methods=["POST"]),
         Route("/api/bond/{isin}", bond_card),
         Route("/api/history/series", history_series),
         Route("/api/history/matrix", history_matrix),

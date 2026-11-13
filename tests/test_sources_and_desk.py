@@ -219,6 +219,19 @@ def test_the_board_is_reset_and_the_log_keeps_its_lines(tmp_path):
         ids = [q["id"] for q in s.broker(u, day)["rows"] if q.get("label") == "6M"]
         assert len(ids) == 2 and s.broker_delete_many(u, ids + [999999, "x"]) == {"deleted": 2}
         assert {r["label"] for r in s.broker(u, day)["board"]} == {"1Y", "2Y"}
+        # a line kept within the very second of a reset (typed without a time, it takes the moment it was entered)
+        # is the reset's; one said in that second but kept after it stands
+        s.broker_add(u, "18m ois 35.10/35.30", day, "", None)
+        row = next(q for q in s.broker(u, day)["rows"] if q.get("label") == "18M")
+        s.broker_reset(u, day)
+        resets = s.store.get("broker.resets")
+        resets[-1]["at"] = "%s %s" % (row["date"], row["time"])
+        s.store.put("broker.resets", resets)
+        assert "18M" not in [r["label"] for r in s.broker(u, day)["board"]]
+        s.broker_add(u, "%s 9m ois 35.40/35.60" % row["time"], day, "", None)
+        assert "9M" in [r["label"] for r in s.broker(u, day)["board"]]
+        s.broker_reset(u, day, undo=True)
+        s.broker_delete_many(u, [q["id"] for q in s.broker(u, day)["rows"] if q.get("label") in ("18M", "9M")])
         with TestClient(create_app(s)) as client:
             hdr = {"X-TTO-User": u}
             res = client.post("/api/broker/reset", json={"date": day}, headers=hdr)

@@ -1329,6 +1329,38 @@ async function shot(page, name) {
       .some((tr) => tr.children[2] && tr.children[2].textContent === 'TRT130127T11'), null, { timeout: 20000 }).then(() => true, () => false);
     check('... and ★ takes it off', unstarred && !(await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT130127T11').lists.includes('dibs'));
 
+    // ------------------------------------------------------------------ watch list and alarms
+    console.log('watch list and alarms');
+    await open(page, 'watch');
+    await page.click('#watch-preset');
+    await page.click('.menu >> text=TRY OIS eğrisi');
+    await page.waitForFunction(() => document.querySelectorAll('#watch-table tr').length === 10, null, { timeout: 20000 });
+    const watchRows = await page.evaluate(() => [...document.querySelectorAll('#watch-table tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    check('İzleme: the OIS curve in one click - the level now, the open, the change of the day',
+      watchRows.length === 9 && watchRows[3][0] === 'OIS 1Y' && /^3\d,\d\d%$/.test(watchRows[3][1]) && watchRows[3][1] === watchRows[3][2] && watchRows[3][3] === '0,0 bp', watchRows[3]);
+    await open(page, 'dibs');
+    await (await cellHandle(page, 'DİBS RV!T8')).click({ button: 'right' });
+    await page.click('.menu >> text=İzlemeye ekle');
+    await page.waitForFunction(() => /İzleme listesine eklendi/.test(document.getElementById('toasts').textContent), null, { timeout: 10000 });
+    await open(page, 'watch');
+    const watched = await page.evaluate(() => [...document.querySelectorAll('#watch-table tr')].pop().children[0].textContent);
+    check('... and any cell from its right-click menu, named after its row and its column', watched === 'TRT150328T24 · BIST bileşik getiri', watched);
+    const oneY = await page.evaluate(() => [...document.querySelectorAll('#watch-table tr')].findIndex((tr) => tr.children[0].textContent === 'OIS 1Y'));
+    await page.click('#watch-table tr:nth-child(' + (oneY + 1) + ') button[title="Bu kaleme alarm kur"]');
+    await page.waitForSelector('#alarm-level');
+    await page.fill('#alarm-level', '30,00');
+    await page.click('#alarm-save');
+    await page.waitForFunction(() => /🔔 OIS 1Y/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    await page.waitForSelector('#fired-table', { timeout: 20000 });
+    check('an alarm that fires is told on the page that is open (and listed with the ones of the day)',
+      /≥ 30,00%/.test(await page.textContent('#toasts')) && /OIS 1Y/.test(await page.textContent('#fired-table'))
+      && /çaldı/.test(await page.textContent('#alarm-table')));
+    await page.fill('#notes-text', 'Sabah toplantısı: 1Y 35,50 üstü alıcı yok');
+    await page.click('#notes-save');
+    await page.waitForFunction(() => /Son kaydeden/.test(document.getElementById('notes-info').textContent), null, { timeout: 10000 });
+    check('the desk\'s notes of the day are kept for everyone',
+      (await api(page, 'mehmet', 'GET', '/api/watch')).json.notes.text === 'Sabah toplantısı: 1Y 35,50 üstü alıcı yok');
+
     // ------------------------------------------------------------------ find a table from anywhere
     console.log('table search');
     await page.keyboard.press('Control+k');
@@ -1349,7 +1381,7 @@ async function shot(page, name) {
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
     for (const id of ids) {
       await open(page, id);
-      const n = await page.locator('#content table.grid').count();
+      const n = await page.locator('#content table.grid, #content table.plain').count();
       const bad = await page.locator('#content .panel .err').count();
       check('page "' + id + '" renders tables without panel errors', n >= 1 && bad === 0, { tables: n, errors: bad });
     }

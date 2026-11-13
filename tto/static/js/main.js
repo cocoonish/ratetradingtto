@@ -8,6 +8,8 @@ import { BlotterPage } from './pages/blotter.js';
 import { BrokerPage } from './pages/broker.js';
 import { openStatus } from './status.js';
 import { VolPage } from './pages/vol.js';
+import { WatchPage } from './pages/watch.js';
+import { openAlarmDialog, addToWatch, checkAlarms } from './alarms.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
 import { openRetEditor } from './ret.js';
@@ -149,6 +151,7 @@ async function openPage(id, panel) {
   if (id === 'blotter') page = new BlotterPage(host, ctx);
   else if (id === 'broker') page = new BrokerPage(host, ctx);
   else if (id === 'vol') page = new VolPage(host, ctx);
+  else if (id === 'watch') page = new WatchPage(host, ctx);
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
   else if (id === 'eod') page = new EodPage(host, ctx);
   else if (id === 'mpc') page = new MpcPage(host, ctx);
@@ -199,6 +202,7 @@ function connectEvents() {
       const first = state.gen === 0;
       state.gen = gen;
       if (!first) runRefresh();
+      checkAlarms();
     }
   };
   es.onerror = () => setOnline(false);
@@ -364,6 +368,9 @@ function boot() {
     setInputs: (book, items, adhoc, lenient) => api.post('/api/inputs', { book, items, adhoc: !!adhoc, lenient: !!lenient }).then(after),
     paste: (book, anchor, text, adhoc) => api.post('/api/paste', { book, anchor, text, adhoc: !!adhoc }).then(after),
     reset: (book, refs, shared) => api.post('/api/reset', { book, refs, shared: !!shared }).then(after),
+    // right click on a cell: watch it, or set an alarm on it
+    watch: (book, ref, label) => addToWatch(ctx, { book, ref, label }),
+    alarm: (book, ref, label, text) => openAlarmDialog(ctx, { book, ref, label, text }),
     onSelect,
   });
 

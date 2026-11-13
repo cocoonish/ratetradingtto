@@ -677,3 +677,22 @@ table.grid td.flag.on { color: #e3b341; }
 table.grid td.flag:hover { background: var(--accent-soft, rgba(80, 140, 255, .14)); }
 table.grid td.flag.busy { opacity: .4; }
 table.grid td.grouphead { color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; font-size: 11.5px; padding-top: 8px; }
+
+/* İzleme · Alarmlar */
+table.plain.watch { width: 100%; }
+table.plain.watch td, table.plain.watch th { padding: 4px 8px; white-space: nowrap; }
+table.plain.watch td:not(.l), table.plain.watch th:not(.l) { text-align: right; font-variant-numeric: tabular-nums; }
+table.plain.watch td.name { font-weight: 650; cursor: text; }
+table.plain.watch td.now { font-weight: 700; }
+table.plain.watch td.pos { color: var(--pos, #35b535); }
+table.plain.watch td.neg { color: var(--neg, #d0504f); }
+table.plain.watch td.acts { white-space: nowrap; }
+table.plain.watch td.acts .iconbtn { padding: 0 5px; }
+table.plain.watch tr.fired td { opacity: .75; }
+svg.spark { display: block; }
+svg.spark polyline { fill: none; stroke-width: 1.5; }
+svg.spark polyline.up { stroke: var(--pos, #35b535); }
+svg.spark polyline.down { stroke: var(--neg, #d0504f); }
+svg.spark line.base { stroke: var(--ink-3); stroke-dasharray: 2 3; stroke-width: 1; }
+.toast.alarm { border-left: 4px solid #e3b341; font-weight: 650; cursor: pointer; }
+.toast.warn { border-left: 4px solid #e3b341; }

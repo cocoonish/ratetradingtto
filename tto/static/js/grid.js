@@ -363,7 +363,14 @@ export class Grid {
     const inputs = inputRefs(this, cur);
     const mine = inputs.filter((x) => x.cell.i === 'u').map((x) => x.ref);
     const shared = inputs.filter((x) => x.cell.i === 's' && x.cell.m).map((x) => x.ref);
+    // one cell of a sheet: watch it, or an alarm on it
+    const one = cur && cur.top === cur.bottom && cur.left === cur.right ? { ref: this.ref(cur.top, cur.left), cell: this.cell(cur.top, cur.left) } : null;
+    const watchable = one && one.ref && this.book && one.cell && typeof one.cell.v === 'number' && (hooks.watch || hooks.alarm);
+    const label = watchable ? cellLabel(this, cur.top, cur.left) : '';
     menu(e.clientX, e.clientY, [
+      watchable && hooks.watch ? { label: 'İzlemeye ekle', action: () => hooks.watch(this.book, one.ref, label) } : null,
+      watchable && hooks.alarm ? { label: 'Alarm kur…', action: () => hooks.alarm(this.book, one.ref, label, one.cell.t) } : null,
+      watchable ? { sep: true } : null,
       { label: 'Kopyala  (Ctrl+C)', action: () => copyViaCommand(false) },
       { label: 'Tam hassasiyetle kopyala  (Ctrl+Shift+C)', action: () => copyViaCommand(true) },
       { label: 'Tüm tabloyu seç  (Ctrl+A)', action: () => selectAll(this) },
@@ -373,6 +380,20 @@ export class Grid {
       shared.length ? { label: 'Ortak girdiyi dosyadaki değere döndür', action: () => resetRefs(this, shared, true) } : null,
     ]);
   }
+}
+
+/** A name for a cell, from its table: the text of its row (left of it) and the caption of its column (above). */
+function cellLabel(grid, i, j) {
+  const txt = (c) => (c && c.k === 's' && typeof c.t === 'string' ? c.t.trim() : '');
+  let row = '';                                          // the row's name: its first text from the left
+  for (let k = 0; k < j && !row; k++) row = txt(grid.cell(i, k));
+  let col = '';
+  for (let k = i - 1; k >= 0 && !col; k--) {
+    const c = grid.cell(k, j);
+    if (c && (c.f === 'hd' || c.b) && txt(c)) col = txt(c);
+  }
+  const name = [row, col].filter(Boolean).join(' · ').slice(0, 60);
+  return name || grid.ref(i, j) || '';
 }
 
 function setSelection(grid, r0, c0, r1, c1) {

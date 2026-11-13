@@ -126,6 +126,12 @@ class Service(object):
         self.et.call(self._setup, provider)
         from .history import History
         self.history = History(self)
+        # the watch lists and the alarms: read again whenever the market or an input moved
+        from .watch import Watch
+        self.watch = Watch(self)
+        self._watch_kick = threading.Event()
+        self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
+        self._watch_thread.start()
 
     # ================================================================== setup
     def _setup(self, provider) -> None:
@@ -389,7 +395,25 @@ class Service(object):
             return None
         return self._trades_seen.get(security)
 
+    def _watch_loop(self) -> None:
+        """Watch lists and alarms: read after every change (at the latest every few seconds), on the calculation
+        thread; an alarm that fired tells the pages (a new generation: they ask what fired)."""
+        while not self._stop.is_set():
+            self._watch_kick.wait(3.0)
+            self._watch_kick.clear()
+            if self._stop.is_set():
+                break
+            try:
+                fired = self.et.submit(self.watch.tick).result(timeout=60)
+            except Exception:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
+                continue
+            if fired:
+                self.bump()
+
     def bump(self) -> int:
+        kick = getattr(self, "_watch_kick", None)
+        if kick is not None:
+            kick.set()
         with self._gen_lock:
             self.gen += 1
             g = self.gen
@@ -502,6 +526,8 @@ class Service(object):
             pages.append({"id": v["id"], "title": v["title"], "group": v.get("group", ""), "book": v["book"],
                           "sheet": v.get("sheet"), "tables": tables})
         if "tto" in self.books:
+            pages.append({"id": "watch", "title": "İzleme · Alarmlar", "group": "Masa", "book": "tto", "sheet": None,
+                          "custom": True})
             pages.append({"id": "blotter", "title": "Günlük İşlemler", "group": "Masa", "book": "tto",
                           "sheet": bl.SHEET, "custom": True})
             pages.append({"id": "broker", "title": "Broker Chat", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
@@ -1882,6 +1908,98 @@ class Service(object):
         out["r"] = list(range(1, len(rows) + 1))
         return out
 
+    # ================================================================== watching the market
+    def _watch_call(self, fn, *args):
+        try:
+            return self.et.call(fn, *args)
+        except (KeyError, ValueError) as exc:
+            raise ServiceError(str(exc.args[0]) if exc.args else "hücre bulunamadı")
+
+    def watch_view(self, user: str, locale: Optional[str] = None) -> Dict[str, Any]:
+        """The user's watch list and alarms, what fired today, the desk's notes."""
+        user = self.require_user(user)
+        loc = numfmt.get_locale(locale or self.settings.locale)
+        out = self.et.call(self.watch.snapshot, user, loc)
+        out["gen"] = self.gen
+        return out
+
+    def watch_add(self, user: str, book_id: str, ref: str, label: str = "", unit: str = "") -> Dict[str, Any]:
+        user = self.require_user(user)
+        self._book(book_id)
+        res = self._watch_call(self.watch.add, user, book_id, str(ref or ""), str(label or ""), str(unit or ""))
+        self.bump()
+        return {"added": res["added"], "count": len(res["items"])}
+
+    def watch_preset(self, user: str, group: str) -> Dict[str, Any]:
+        user = self.require_user(user)
+        res = self._watch_call(self.watch.add_preset, user, str(group or ""))
+        self.bump()
+        return res
+
+    def watch_remove(self, user: str, item_id: str) -> Dict[str, Any]:
+        user = self.require_user(user)
+        n = self.watch.remove(user, str(item_id or ""))
+        self.bump()
+        return {"removed": n}
+
+    def watch_update(self, user: str, item_id: str, label: Optional[str] = None, unit: Optional[str] = None,
+                     move: Optional[int] = None) -> Dict[str, Any]:
+        user = self.require_user(user)
+        self._watch_call(self.watch.update, user, str(item_id or ""), label, unit, move)
+        self.bump()
+        return {"ok": True}
+
+    def watch_base(self, user: str, item_id: Optional[str] = None) -> Dict[str, Any]:
+        """Take the level now as the reference of one item (or of all): the change is told since then as well."""
+        user = self.require_user(user)
+        n = self.et.call(self.watch.set_base, user, item_id or None)
+        self.bump()
+        return {"taken": n}
+
+    def alarm_add(self, user: str, book_id: str, ref: str, op: str, level: Any, label: str = "", note: str = "") -> Dict[str, Any]:
+        user = self.require_user(user)
+        self._book(book_id)
+        try:
+            lvl = float(str(level).replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
+        except (TypeError, ValueError):
+            raise ServiceError("seviye bir sayı olmalı")
+        res = self._watch_call(self.watch.add_alarm, user, book_id, str(ref or ""), str(op or ""), lvl, str(label or ""), str(note or ""))
+        self.bump()
+        return res
+
+    def alarm_remove(self, user: str, alarm_id: str) -> Dict[str, Any]:
+        user = self.require_user(user)
+        n = self.watch.remove_alarm(user, str(alarm_id or ""))
+        self.bump()
+        return {"removed": n}
+
+    def alarm_rearm(self, user: str, alarm_id: str, level: Any = None) -> Dict[str, Any]:
+        user = self.require_user(user)
+        lvl = None
+        if level not in (None, ""):
+            try:
+                lvl = float(str(level).replace(",", "."))
+            except (TypeError, ValueError):
+                raise ServiceError("seviye bir sayı olmalı")
+        res = self._watch_call(self.watch.rearm, user, str(alarm_id or ""), lvl)
+        self.bump()
+        return {"alarm": res}
+
+    def alarms_fired(self, user: str, since: int = 0) -> Dict[str, Any]:
+        """The user's alarms that fired today after ``since`` (the last one the page has shown)."""
+        user = self.require_user(user)
+        mine = [e for e in self.watch.fired() if e.get("user") == user]
+        last = max([int(e.get("seq") or 0) for e in self.watch.fired()] or [0])
+        return {"fired": [e for e in mine if int(e.get("seq") or 0) > int(since or 0)], "last": last}
+
+    def notes_set(self, user: str, text: str) -> Dict[str, Any]:
+        """The desk's notes of the day (shared): levels to watch, what was said at the morning meeting."""
+        user = self.require_user(user)
+        note = {"text": str(text or "")[:20000], "by": user, "at": _dt.datetime.now().strftime("%H:%M:%S")}
+        self.store.put("desk.notes:%s" % self.today_iso(), note)
+        self.bump()
+        return note
+
     # ================================================================== ASW against FX swaps
     def _asw_fx_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """ASW against the FX swap curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
@@ -2983,8 +3101,13 @@ class Service(object):
         resets = [r for r in self._broker_resets() if day <= str(r.get("at", ""))[:10] <= last]
 
         def cleared(q: Dict[str, Any]) -> bool:
+            # said before the reset; said in its very second, it is the reset's when it was kept before it (a line
+            # typed without a time takes the moment it was entered)
             stamp = "%s %s" % (q.get("date") or "", q.get("time") or "")
-            return any((r.get("key") in ("*", q.get("key"))) and stamp < r.get("at", "") for r in resets)
+            return any((r.get("key") in ("*", q.get("key")))
+                       and (stamp < r.get("at", "") or (stamp == r.get("at") and type(r.get("upto")) is int
+                                                        and int(q.get("id") or 0) <= r["upto"]))
+                       for r in resets)
 
         table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz")
         for row in table:
@@ -3009,7 +3132,9 @@ class Service(object):
             resets.pop(idx)
         else:
             at = "%s %s" % (day, _dt.datetime.now().strftime("%H:%M:%S") if day == self.today_iso() else "23:59:59")
-            resets.append({"at": at, "key": str(key or "*")[:80], "label": "", "by": user})
+            kept = self.store.broker_quotes(day, day)
+            resets.append({"at": at, "key": str(key or "*")[:80], "label": "", "by": user,
+                           "upto": max([int(q.get("id") or 0) for q in kept] or [0])})
             if key:
                 resets[-1]["label"] = next((r.get("label") or "" for r in self.store.broker_quotes(day, day) if r.get("key") == key), "")
             resets = resets[-500:]
