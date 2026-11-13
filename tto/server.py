@@ -206,6 +206,34 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
 
+    # ------------------------------------------------------------------ broker chat
+    @handler
+    async def broker(request: Request):
+        q = request.query_params
+        return ok(await call(svc().broker, _user(request), q.get("date"), q.get("to")))
+
+    @handler
+    async def broker_parse(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().broker_parse, _user(request), str(data.get("text", "")), data.get("date") or None))
+
+    @handler
+    async def broker_add(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().broker_add, _user(request), str(data.get("text", "")), data.get("date") or None,
+                             str(data.get("source") or ""), data.get("texts", True) is not False))
+
+    @handler
+    async def broker_delete(request: Request):
+        return ok(await call(svc().broker_delete, _user(request), int(request.path_params["quote_id"])))
+
+    @handler
+    async def broker_export(request: Request):
+        q = request.query_params
+        raw, name = await call(svc().broker_export, _user(request), q.get("date"), q.get("to"))
+        return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
     @handler
     async def quote_forward(request: Request):
         return ok(await call(svc().quote_forward, _user(request), await _body(request), _lang(request)))
@@ -348,6 +376,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/scenarios/load", scenario_load, methods=["POST"]),
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
+        Route("/api/broker", broker),
+        Route("/api/broker", broker_add, methods=["POST"]),
+        Route("/api/broker/parse", broker_parse, methods=["POST"]),
+        Route("/api/broker/export", broker_export),
+        Route("/api/broker/{quote_id:int}", broker_delete, methods=["DELETE"]),
         Route("/api/blotter", blotter),
         Route("/api/blotter/export", blotter_export),
         Route("/api/blotter/quote/forward", quote_forward, methods=["POST"]),

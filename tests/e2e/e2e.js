@@ -386,6 +386,103 @@ async function shot(page, name) {
     check('deleting a trade updates the other user\'s screen live', true);
     await ctxB.close();
 
+    // ------------------------------------------------------------------ broker chat
+    console.log('broker chat');
+    await open(page, 'broker');
+    check('Broker Chat is a page of the desk, next to the blotter',
+      await page.evaluate(() => { const a = [...document.querySelectorAll('#nav .nav-item')].map((x) => x.dataset.page); return a.indexOf('broker') === a.indexOf('blotter') + 1; })
+      && /Henüz kota yok/.test(await page.textContent('#broker-board-panel')) && await page.isDisabled('#broker-save'));
+    const CHAT = ['10:23:58 3y5y ois /-75 offer', '10:29:57 1y5y ois -64/-60', '12:11:55 9x12m ois fra 33.80/34.10', '12:15:38 18m ois 35.03/35.23',
+      '12:18:04 2y3y4y ois 12/ bid', 'MIKE REES', '18m ois 10/14', '13:33:59', '18m ois taken at 14', '13:41:09', 'ref 18m ois offer', '13:55:37',
+      'EVREN DIKME', '6m OIS 35.88 bid', '16:40:10', '6m OIS 90 bid', '16:48:21', '1yr x 38.60/80 , bid nl', '17:00:01', 'selam', '17:00:05'].join('\n');
+    const brokerBoard = () => page.evaluate(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    const brokerLog = () => page.evaluate(() => [...document.querySelectorAll('#broker-log-panel table.grid tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    await page.fill('#broker-source', 'Tullett');
+    await page.fill('#broker-text', CHAT);
+    await page.waitForFunction(() => document.querySelectorAll('#broker-preview table tr').length === 13, null, { timeout: 20000 });
+    const chatSeen = await page.evaluate(() => [...document.querySelectorAll('#broker-preview table tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    check('a pasted chat is read while it is typed: time, instrument, bid, ask',
+      JSON.stringify(chatSeen[0].slice(0, 4)) === JSON.stringify(['10:23:58', '3Y–5Yspread · bp', '', '-75'])
+      && JSON.stringify(chatSeen[1].slice(0, 4)) === JSON.stringify(['10:29:57', '1Y–5Yspread · bp', '-64', '-60'])
+      && JSON.stringify(chatSeen[2].slice(0, 4)) === JSON.stringify(['12:11:55', '9x12fra', '33,80', '34,10'])
+      && JSON.stringify(chatSeen[3].slice(0, 4)) === JSON.stringify(['12:15:38', '18M', '35,03', '35,23'])
+      && JSON.stringify(chatSeen[4].slice(0, 4)) === JSON.stringify(['12:18:04', '2Y–3Y–4Yfly · bp', '12', '']), chatSeen.slice(0, 5));
+    check('the big figure of a shortened level is completed, a trade and a ref are told apart, the time under the message is its time',
+      JSON.stringify(chatSeen[5].slice(0, 4)) === JSON.stringify(['13:33:59', '18M', '35,10', '35,14'])
+      && chatSeen[6][0] === '13:41:09' && chatSeen[6][4] === '35,14' && /^İşlem · offer alındı/.test(chatSeen[6][5])
+      && /^Ref · offer/.test(chatSeen[7][5]) && chatSeen[9][2] === '35,90' && chatSeen[9][0] === '16:48:21'
+      && JSON.stringify(chatSeen[10].slice(0, 4)) === JSON.stringify(['17:00:01', 'XCCY 1Y', '38,60', '38,80']) && /bid nl/.test(chatSeen[10][5])
+      && chatSeen[11][1] === 'selam', chatSeen.slice(5));
+    check('the preview says what will be kept', (await page.textContent('#broker-summary')).trim() === '11 kota · 1 metin satırı', await page.textContent('#broker-summary'));
+    await page.click('#broker-save');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 13, null, { timeout: 20000 });
+    let chatBoard = await brokerBoard();
+    const chatKept = await api(page, 'ayşe yilmaz', 'GET', '/api/broker');
+    const chat18 = chatBoard.find((r) => r[0] === 'OIS' && r[1] === '18M') || [];
+    const model18 = chatKept.json.board.find((r) => r.key === 'OIS:outright:18M');
+    check('saved: the board shows where every instrument stands (the pulled offer is gone, the trade is the last one)',
+      chatBoard.length === 7 && chat18[3] === '35,10' && chat18[4] === '' && chat18[5] === '13:55:37' && chat18[6] === '35,14'
+      && JSON.stringify(chatBoard.map((r) => r[1])) === JSON.stringify(['6M', '18M', '1Y–5Y', '3Y–5Y', '2Y–3Y–4Y', '9x12', '1Y']) && chatBoard[6][0] === 'XCCY', chatBoard);
+    check('the board compares with the dashboard\'s own curve (model, difference in bp)',
+      Math.abs(trNumber(chat18[7]) - model18.mid) < 0.006 && Math.abs(trNumber(chat18[8].replace('+', '')) - model18.bid_diff) < 0.06 && chatBoard[6][7] === '', [chat18, model18]);
+    let chatLog = await brokerLog();
+    check('the chat is kept line by line with its time, sender and source',
+      chatLog.length === 12 && chatLog[0][0] === '10:23:58' && chatLog[0][2] === '3y5y ois /-75 offer' && chatLog[5][1] === 'MIKE REES · Tullett' && chatLog[5][0] === '13:33:59'
+      && chatLog[11][2] === 'selam' && /Metin/.test(chatLog[11][8]) && chatKept.json.rows.every((q) => q.created_by === 'ayşe yilmaz' && q.source === 'Tullett')
+      && (await page.inputValue('#broker-text')) === '', chatLog);
+    await page.fill('#broker-text', CHAT);
+    await page.waitForFunction(() => /zaten kayıtlı/.test(document.querySelector('#broker-summary').textContent), null, { timeout: 20000 });
+    check('the same chat pasted again adds nothing', (await page.textContent('#broker-summary')).trim() === '0 kota · 12 satır zaten kayıtlı' && await page.isDisabled('#broker-save'),
+      await page.textContent('#broker-summary'));
+    await page.click('#broker-clear');
+    // one instrument, a search, quotes only
+    await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-board-panel table.grid tr')].find((x) => x.children[1].textContent === '18M'); tr.querySelector('td.act button').click(); });
+    await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 5);
+    chatLog = await brokerLog();
+    check('the board\'s row button lists what was said about one instrument', chatLog.every((r) => r[3] === '18M') && /^Yalnızca 18M/.test(await page.textContent('#broker-only')), chatLog);
+    await page.click('#broker-only');
+    await page.fill('#broker-find', 'fly');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 2);
+    check('the log can be searched', (await brokerLog())[0][3] === '2Y–3Y–4Y');
+    await page.fill('#broker-find', '');
+    await page.check('#broker-quotes');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 12);
+    await page.uncheck('#broker-quotes');
+    await page.click('#broker-product button[data-v="XCCY"]');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-board-panel table.grid tr').length === 2);
+    check('the board can be narrowed to a product', (await brokerBoard())[0][0] === 'XCCY');
+    await page.click('#broker-product button[data-v="all"]');
+    // another user adds a line: it is on this screen at once
+    const chatAdded = await api(page, 'mehmet', 'POST', '/api/broker', { text: '17:10:00 5y ois 34.50/34.70', source: 'ICAP' });
+    await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => tr.children[1].textContent === '5Y'), null, { timeout: 15000 });
+    chatLog = await brokerLog();
+    check('a line another user keeps shows up live', chatAdded.json.saved === 1 && chatLog.length === 13 && chatLog[12][1] === 'ICAP' && chatLog[12][5] === '34,50', chatLog[12]);
+    // delete a line
+    await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => x.children[2].textContent === 'selam'); tr.querySelector('td.act button').click(); });
+    await page.waitForSelector('.modal .mfoot .btn.primary');
+    await page.click('.modal .mfoot .btn.primary');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-log-panel table.grid tr').length === 13, null, { timeout: 15000 });
+    check('a line can be deleted', !(await brokerLog()).some((r) => r[2] === 'selam'));
+    // typed by hand, no time: the moment it is entered; Ctrl+Enter keeps it
+    await page.fill('#broker-text', '2y ois 35.26/35.46');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-preview table tr').length === 2);
+    const typedRow = await page.evaluate(() => [...document.querySelectorAll('#broker-preview table tr')][1].children[0].textContent);
+    await page.focus('#broker-text');
+    await page.keyboard.press('Control+Enter');
+    await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => tr.children[1].textContent === '2Y'), null, { timeout: 15000 });
+    const typedKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker')).json.rows.find((q) => q.raw === '2y ois 35.26/35.46');
+    check('a quote typed without a time gets the time it was entered', typedRow === 'şimdi' && typedKept.timed === false && /^\d\d:\d\d:\d\d$/.test(typedKept.time), [typedRow, typedKept]);
+    const [chatFile] = await Promise.all([page.waitForEvent('download'), page.click('#broker-export')]);
+    check('the day downloads as a workbook', /^BrokerChat_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(chatFile.suggestedFilename()), chatFile.suggestedFilename());
+    await page.click('#content .rangebox button:has-text("Son 30 gün")');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ranged, null, { timeout: 20000 });
+    await page.waitForFunction(() => (document.querySelector('#broker-log-panel table.grid tr td') || {}).textContent === 'Tarih');
+    check('a period lists every day\'s chat with its date', /^Aralık: /.test(await page.textContent('#content .banner:not(.hidden)')) && (await brokerLog()).length === 13
+      && (await brokerLog()).every((r) => /^\d\d\.\d\d\.\d{4}$/.test(r[0])));
+    await page.click('#broker-today');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.is_today, null, { timeout: 20000 });
+    await shot(page, '04b-broker');
+
     // ------------------------------------------------------------------ number format + theme
     console.log('number format, theme, explorer');
     await open(page, 'forward');

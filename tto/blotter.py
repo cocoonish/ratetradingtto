@@ -255,6 +255,19 @@ class OisMarket(object):
             return 1.0
         return _num(self.formula("INDEX(Motor!$O$139:$O$178,%d)" % (months // 3)), "DF %dM" % months)
 
+    def fra_months(self, start: int, end: int) -> Optional[float]:
+        """The curve's forward par rate between two month counts on Motor's quarterly grid (multiples of 3,
+        0 ≤ start < end ≤ 120): (R_end·A_end − R_start·A_start)/(A_end − A_start); ``None`` off the grid."""
+        if start < 0 or end <= start or start % 3 or end % 3 or end > 120:
+            return None
+        a2 = self.annuity_months(end)
+        end_par = (1.0 - self.df_months(end)) / a2
+        if start == 0:
+            return end_par
+        a1 = self.annuity_months(start)
+        start_par = (1.0 - self.df_months(start)) / a1
+        return (end_par * a2 - start_par * a1) / (a2 - a1)
+
     def nominal(self, dv01_usd: float, annuity: float, weight: float = 1.0) -> float:
         """OIS_MAIN sizing rule: ROUND(w*DV01*USDTRY/(A*0.0001)/lot,0)*lot."""
         lot = self.lot

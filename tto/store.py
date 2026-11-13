@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE INDEX IF NOT EXISTS trades_date ON trades (trade_date, deleted);
 CREATE TABLE IF NOT EXISTS blotter_snapshots (
     trade_date TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS broker_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, quote_date TEXT NOT NULL, quote_time TEXT NOT NULL, mark TEXT NOT NULL,
+    payload TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS broker_date ON broker_quotes (quote_date, deleted);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS hist_values (
     series TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, day)) WITHOUT ROWID;
@@ -287,6 +291,53 @@ class Store(object):
                       "updated_by": r["updated_by"], "updated_at": r["updated_at"]})
             out.append(d)
         return out
+
+    # ------------------------------------------------------------------ broker chat
+    def add_broker_quotes(self, rows: List[Dict[str, Any]], user: Optional[str]) -> Tuple[List[int], int]:
+        """Keep what a broker chat said: one row per quote (or line).  A row that is already there - the same
+        day, time, sender, text and reading, as when the same stretch of chat is pasted again - is skipped.
+        Returns (ids of the new rows, number skipped)."""
+        ids: List[int] = []
+        skipped = 0
+        ts = now_iso()
+        with self._lock:
+            for row in rows:
+                day, time, mark = row["date"], row["time"], row["mark"]
+                found = self._db.execute("SELECT id FROM broker_quotes WHERE quote_date=? AND quote_time=? AND mark=? AND deleted=0",
+                                         (day, time, mark)).fetchone()
+                if found:
+                    skipped += 1
+                    continue
+                cur = self._db.execute("INSERT INTO broker_quotes (quote_date, quote_time, mark, payload, created_by, created_at) "
+                                       "VALUES (?,?,?,?,?,?)", (day, time, mark, json.dumps(row, ensure_ascii=False), user, ts))
+                ids.append(cur.lastrowid)
+        return ids, skipped
+
+    def broker_marks(self, day: str) -> set:
+        rows = self._q("SELECT quote_time, mark FROM broker_quotes WHERE quote_date=? AND deleted=0", (day,))
+        return {(r["quote_time"], r["mark"]) for r in rows}
+
+    def broker_quotes(self, day: str, until: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The rows of a day, or of every day from ``day`` to ``until``, in the order they were said."""
+        rows = self._q("SELECT * FROM broker_quotes WHERE quote_date>=? AND quote_date<=? AND deleted=0 "
+                       "ORDER BY quote_date, quote_time, id", (day, until or day))
+        out = []
+        for r in rows:
+            d = json.loads(r["payload"])
+            d.update({"id": r["id"], "date": r["quote_date"], "time": r["quote_time"], "created_by": r["created_by"],
+                      "created_at": r["created_at"]})
+            out.append(d)
+        return out
+
+    def delete_broker_quote(self, quote_id: int) -> bool:
+        with self._lock:
+            cur = self._db.execute("UPDATE broker_quotes SET deleted=1 WHERE id=? AND deleted=0", (quote_id,))
+            return cur.rowcount > 0
+
+    def broker_dates(self, limit: int = 120) -> List[Dict[str, Any]]:
+        rows = self._q("SELECT quote_date, COUNT(*) AS n FROM broker_quotes WHERE deleted=0 GROUP BY quote_date "
+                       "ORDER BY quote_date DESC LIMIT ?", (limit,))
+        return [{"date": r["quote_date"], "count": r["n"]} for r in rows]
 
     def trade(self, trade_id: int) -> Optional[Dict[str, Any]]:
         rows = self._q("SELECT * FROM trades WHERE id=? AND deleted=0", (trade_id,))

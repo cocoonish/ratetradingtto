@@ -11,8 +11,8 @@ kayıtlı son veriyle çalışır.
 * **Excel ile birebir:** formüller yeniden yazılmadı; çalışma kitaplarının kendi formülleri bir Excel formül
   motoruyla aynen çalıştırılıyor. Doğrulama sonuçları [aşağıda](#excel-ile-birebirlik-nasıl-doğrulandı).
 * **İsimle giriş:** her kullanıcı ismini yazıp girer; kişisel girdileri ve senaryoları o isimle saklanır.
-* **Ortak veriler:** RET faizleri ve Günlük İşlemler bir kişi kaydedince herkeste anında görünür ve sunucu
-  yeniden başlasa da kalır.
+* **Ortak veriler:** RET faizleri, Günlük İşlemler ve Broker Chat bir kişi kaydedince herkeste anında görünür ve
+  sunucu yeniden başlasa da kalır.
 * **Excel ⇄ dashboard kopyala / yapıştır:** tablolar Excel'e, Excel'deki bloklar girdi hücrelerine doğrudan.
 * **Hiçbir formül eksik değil:** dört kitabın her sayfasındaki her formül ve değer, sayfasının bir tablosundadır
   (görünen tablo ya da "Yardımcı tablolar"); bunu bir test denetler.
@@ -127,7 +127,8 @@ planda güncelleme), `--bbg-inprocess`, `--bbg-interval`, `--bbg-queue` (üçü 
 ## Kullanım
 
 **Sayfalar.** Masa, OIS · PPK, Forward, VİOP, Borsa Swap, Carry & Roll, TM OIS, DİBS RV, DİBS ASW, Manuel Tahvil,
-Bulk Bond, YP DİBS, DV01 Risk, USD · FOMC, Hesaplayıcılar, USDTRY IYIX, Motor. Ek olarak **Günlük İşlemler** ve
+Bulk Bond, YP DİBS, DV01 Risk, USD · FOMC, Hesaplayıcılar, USDTRY IYIX, Motor. Ek olarak **Günlük İşlemler**,
+**Broker Chat** (broker'ların chat'te yazdığı kotalar) ve
 herhangi bir sayfanın herhangi bir aralığını (formülüyle birlikte) gösteren **Sayfa gezgini**. Excel'deki "MOBIL MK"
 ve "Ivır Zıvır" sayfalarının dashboard'da sayfası yoktur (masa kullanmıyor); hücreleri hesaplanmaya devam eder ve
 Sayfa gezgini'nden bakılabilir. Masa sayfasının üstündeki **Kısayollar** Excel'deki köprülerin aynısıdır: tıklayınca
@@ -270,6 +271,57 @@ pozisyon maliyetleri vardır. Listeleri temizlemek gerekmez: her günün defteri
 geçmiş günler istenildiği zaman yeniden indirilebilir. Bir **aralık** görüntülenirken aynı düğme o aralığın işlem
 listesini (her satırda günüyle), DV01 ve maliyet özetleriyle tek dosya olarak indirir
 (`Blotter_yyyy.aa.gg-yyyy.aa.gg.xlsx`); Excel yerleşimindeki sayfa tek bir güne ait olduğundan o dosyada yoktur.
+
+**Broker Chat.** Broker'ların chat'te yazdığı kotalar buraya yapıştırılır ya da yazılır; her satır okunur, saatiyle
+ve gönderenle birlikte saklanır ve herkeste anında görünür. Soldaki kutuya chat yapıştırılınca altında **nasıl
+okunduğu** hemen görünür (hiçbir şey kaydedilmeden); "Kaydet" (Ctrl+Enter) saklar. Okunan yazım biçimleri:
+
+| Yazılan | Okunan |
+|---|---|
+| `12:15:38 18m ois 35.03/35.23` | 18M outright, bid 35,03 / ask 35,23, saat 12:15:38 |
+| `18m ois /35.23 offer` · `2y3y4y ois 12/ bid` | tek taraf: eğik çizginin boş yanı "o tarafta kota yok" demektir, tahtada o taraf boşalır |
+| `18m ois 35.23 offer` · `18m bid at 35.03` · `pay 18m at 35.03` | tek taraf, kelimeyle (öbür taraf olduğu gibi kalır) |
+| `18m ois 35.03 bid 35.23 offer` · `… 35.03 bid, 35.23 offer` · `35.03-35.23` · `35,03/35,23` · `35.14 choice` | iki taraf ("choice": bid ve ask aynı seviye) |
+| `6m OIS 90 bid` · `18m ois 10/14` · `1y 35.60/80` · `18m 3503/3523` | büyük rakamı yazılmamış seviye tamamlanır: 35,90 · 35,10 / 35,14 · 35,60 / 35,80 · 35,03 / 35,23 |
+| `1y5y ois -64/-60` · `1v5y` · `1y vs 5y` · `1y/5y` · `1s5s` | **spread** (uzun − kısa, bp). "v" yazılmasa da iki vade spread'dir, FRA değil |
+| `2y3y4y ois 12/14` · `2y/3y/4y` · `2s3s4s` | **fly** (2 × gövde − kanatlar, bp) |
+| `9x12 33.80/34.10` · `9x12m ois fra` · `9m12m fra` | **FRA**: "AxB" yazımı ya da "fra" kelimesi |
+| `1y1y 34.50/34.80` | forward (aynı vade iki kez spread olamaz) |
+| `1y 35.00/35.20 18m 35.03/35.23 2y 35.26/35.46` | bir satırda birkaç kota (virgülle ayrılmış da olabilir) |
+| `18m ois taken at 14` · `paid` · `mine` · `given at 03` · `hit` · `trades 35.14` | **işlem**: taken / paid / mine offer'ın alındığını, given / hit bid'e verildiğini söyler. Fiyat yazılmamışsa ("18m taken") o an duran kota alınır |
+| `ref 18m ois offer` · `18m ois off` | kota geri çekildi (taraf söylenmişse yalnızca o taraf) |
+| `care offer 6m1y OIS` | fiyatsız ilgi |
+| `2yr ois 35.46 , oco with 18m 35.14 offer` | iki kota, aynı OCO grubu (taraf bir kez söylenmiş) |
+| `1yr x 38.60/80` · `1v5y x 55 offer` | cross-currency (`x`, `xccy`, `ccs`); ürün yazılmamışsa OIS |
+
+Büyüklük ("in 50m", "100x100") ve kotaya ait olmayan kelimeler ("bal", "bid nl") satırın **Not**'unda kalır. Hiçbir
+enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlarını da sakla" kapatılırsa atlanır.
+
+* **Saat ve gönderen.** Saat satırın başında, sonunda ya da telefondaki gibi mesajın altındaki satırda olabilir
+  (`12:15`, `12:15:38`, `[12:15:38]`, `1:15:38 PM`). `İSİM: mesaj`, `İSİM (KURUM) says: mesaj`, `İSİM 12:15:38 mesaj`
+  ya da tek başına bir isim satırı göndereni belirler; `13 Nov 2026`, `13.11.2026` gibi bir tarih satırı (ya da
+  saatin önündeki tarih) altındaki mesajların gününü. Saati olmayan mesaja **girildiği an** yazılır (listede soluk). "Kaynak" kutusuna yazılan ad (örn.
+  broker'ın kurumu) her satırla saklanır.
+* **Büyük rakamın tamamlanması** sırayla şunlara bakar: aynı kotanın öbür tarafı (`35.60/80`: ask bid'in altında
+  olamaz) → aynı chat'te o enstrüman için daha önce söylenen seviye → o gün o saate kadar kaydedilmiş son seviye →
+  dashboard'un kendi eğrisi. Tamamlanan sayıların altı önizlemede noktalı çizilidir. İki türlü okunabilen
+  ("36": 35,36 mı 36,00 mı?), referansı olmayan (cross-currency'nin eğrisi yok), eğik çizgiyle kelimesi çelişen
+  ("12/ offer") ya da bid'i ask'inden yüksek çıkan satırlar etiketlenir; yanlışsa seviyeyi tam yazmak yeter.
+* **Tahta** her enstrümanın son durumunu gösterir: bid ve ask (ne zaman söylendiği üzerine gelince), son işlem
+  (yeşil: offer alındı, kırmızı: bid'e verildi), **model** – dashboard'un kendi TRY OIS eğrisinin o enstrüman için
+  verdiği seviye (outright: par; spread ve fly: par farkları, bp; FRA / forward: eğrinin forward'ı; kişisel
+  senaryonuzla) – ve bid − model, ask − model farkları (bp). Bid modelin üstünde ya da ask modelin altındaysa fark
+  vurgulanır. Satır sonundaki ≡ o enstrüman için söylenen her şeyi aşağıda listeler.
+* **Kayıt** chat'i söylendiği sırayla tutar: saat, kimden · kaynak, mesaj (yazıldığı gibi), enstrüman, tür, bid,
+  ask, işlem / seviye, olay, satır girildiği andaki model seviyesi, not. Arama kutusu ve "Yalnızca kotalar"
+  süzer; ✕ satırı siler (yanlış okunan satır silinip düzeltilmiş hâliyle yeniden girilir).
+* **Aynı chat ikinci kez yapıştırılırsa** günü, saati, göndereni ve metni aynı olan satırlar eklenmez; yalnızca
+  yeni satırlar saklanır (önizlemede eskiler soluk görünür).
+* Gün seçici ve **Aralık** Günlük İşlemler'deki gibidir; "Excel (.xlsx)" görüntülenen günün / aralığın tahtasını
+  ve bütün satırlarını `BrokerChat_yyyy.aa.gg.xlsx` olarak indirir.
+
+Anlaşılmayanlar: vade yerine toplantı adıyla yazılan kotalar ("dec mpc 3650/3700") ve tek kelimelik yanıtlar
+metin olarak kalır.
 
 ### Dashboard'un kendi ekledikleri
 
@@ -654,7 +706,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~8–11 dk). 677 test (gerçek `blpapi` kuruluysa 7 tane daha):
+Bloomberg ve ağ gerekmez (~8–11 dk). 762 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|
@@ -663,6 +715,7 @@ Bloomberg ve ağ gerekmez (~8–11 dk). 677 test (gerçek `blpapi` kuruluysa 7 t
 | `test_reference.py` | LibreOffice'in baştan hesapladığı değerlerle karşılaştırma (`tests/data/lo_*.json.gz`) |
 | `test_forward.py` | Forward: bağımsız kapalı formül, Excel'in kayıtlı değerleri, işlem girişindeki fiyatlamanın sayfayla aynılığı |
 | `test_blotter.py` | Outright / spread / fly / FRA bacakları, maliyet, ortak işlem defteri, forward'ların O/N karşılığı, Excel özet tabloları, **DV01** (forward: sayfadaki "Forward DV01" bloğuyla aynı sayılar, iki yön, tutarsız fiyat; OIS net / brüt; tahvil: DİBS RV tablosundan, tabloda olmayan kâğıt), işlemle saklanması ve risk özeti, DV01'siz eski kayıt, **tarih aralığı** (günler, toplam maliyet / risk, uçların sırası) ve aralığın tek dosya olarak indirilmesi |
+| `test_brokerchat.py` | Broker chat: masanın gönderdiği örnek satırlar ve telefon ekranındaki chat satır satır (saat, gönderen, enstrüman, bid / ask, işlem, ref, OCO, cross-currency), enstrüman türleri ("v"siz spread, fly, FRA yazımları, forward), iki tarafın ve tek tarafın her yazımı, büyük rakamın tamamlanması (öbür taraf, önceki seviye, eğri, belirsizlik), bir satırda birkaç kota, kota olmayan satırlar, mesaj düzenleri (saat başta / sonda / alt satırda, isim, tarih), tahta, eğriyle karşılaştırma; saklama (önizleme, ikinci kez yapıştırma, saatsiz satır, o saate kadarki referans, fiyatsız "taken"), tahtanın model seviyeleri (outright / spread / fly / FRA, kişisel senaryo), günler / aralık / silme, .xlsx, yeniden başlatma, HTTP uçları |
 | `test_charts.py` | Grafik tanımlarının Excel'den alınışı (renk, çizgi, işaretçi, eksen sınırları, tarih ekseni, bid–ask kutuları), değerlerin Excel kuralıyla çizime verilişi (boşluk, `#N/A`, metin) ve XY grafikleri (nokta etiketleri, sayı / tarih ekseni) |
 | `test_extras.py` | Dashboard'un ekledikleri: forward kotasyon matrisi (yedi eğri Masa bloğuyla aynı, bid / ask ayrı spread, puan → spread tersi), altın (`spot·(1+swap·g/360)` kapalı formülü, USD faizinin hesaba girmediği, faiz interpolasyonu, kaynak seçimi, `XAUSR…` ticker'ları ve ticker eki, canlıda `BFXFORWARD`'sız çalışma, VİOP / Forward hücrelerinin beslenmesi, "belli faizle fiyat"; **VİOP XAUTRY hesaplayıcısında her girdinin elle yazılması**: fiyattan ima TRY ve ima altın swap faizi, ima faizle fiyatın geri gelmesi, başka tarih, serbest sütun, silince piyasaya dönüş; **VİOP geçmiş serileri**: canlı-benzeri bir sağlayıcının geçmişiyle ima faiz / baz / OIS'in elle hesapla ve aynı günlerde sayfanın kendi "Baz" değeriyle aynılığı, fiyatı olmayan günün çizilmemesi, grafik verisi, kontrat seçimi, kendi geçmiş penceresi – sayfanın 20 günlük istatistik penceresi değişmeden), bir ekin dosyaya uymadığında dışarıda bırakılması, Borsa O/N karşılıkları ve örnek kotaların RET'e eşitliği, **Borsa'da yalnızca miktarı olan kotanın listelenmesi** (miktarı 0 / eski fiyatlı vadeler, tek taraflı kota, hata hücresi kalmaması), ASW ↔ DİBS RV |
 | `test_workbook_features.py` | Gizli sütunlar, dondurulmuş bölmeler, yorumlar, veri çubukları, kısayollar, resim, aralıktan okunan açılır listeler, Excel yerleşimiyle yapıştırma, gün sonu arşivi (.xlsx yazıcı dahil), hücreden okunan başlık / notlar, şifreli dosyanın içe aktarılması |
@@ -674,7 +727,7 @@ Bloomberg ve ağ gerekmez (~8–11 dk). 677 test (gerçek `blpapi` kuruluysa 7 t
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik (kota büyüklükleri dahil), sessiz kalan kotaların giderek seyrek sorulması, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik (dört kitap); **Bloomberg'in tanımadığı ticker'lara abone olunmaması**, ertesi gün yeniden sorulması, seyreltme seçeneği ve reddedilince seçeneksiz deneme, uzun olay kuyruğu, **kuyruk taşınca sayım ve düşen değerlerin yeniden istenmesi** (günlük üst sınırıyla); **Excel eklentisi için yazılmış kimliklerin API biçimine çevrilmesi** (`… @ISL1 ISIN` → `/isin/…@ISL1`: istek, geçmiş, abonelik), geri çekilen emrin miktarının boşalması |
 | `test_bloomberg_process.py` | Oturumun yardımcı süreçte çalışması: değerlerin, tick'lerin, `BDH`'nin ve tarihçe çağrısının süreç sınırını geçmesi; `blpapi` yok / yüklenemiyor / terminal yok / yardımcı yanıt vermiyor; **yardımcı ölünce yeniden başlayıp her şeyi yeniden istemesi** (istek sayacı sürer), sürekli ölen yardımcının bir noktada bırakılması; dashboard durunca ya da öldürülünce yardımcının kapanması; **ölçüm: hesap yapan bir sürecin içindeki okuyucu saniyede 2.000 tick'in dörtte birine yetişemezken yardımcı hepsini okur**; dashboard'un yardımcıyı kullanması ve başlatamazsa aynı süreçte devam etmesi; ve ilk canlı çalıştırmanın sahnelenmesi: `python -m tto --mode live`, dört kitap, saniyede 1.500 tick, 10.000'lik kuyruk — hiç olay düşmez, var olmayan ~790 vadeye abone olunmaz |
 | `test_blpapi_real.py` | Gerçek `blpapi` kuruluysa (yoksa atlanır; terminal gerekmez): kütüphanenin kendi test olaylarıyla tick okuma, değeri boşaltılmış miktarın "mesajda yok"tan ayırt edilmesi, `SlowConsumerWarning` / `DataLoss` / abonelik durum mesajları, oturum seçenekleri ve abonelik metni (`…?fields=ASK,BID&interval=1`), hesap yapan bir iş parçacığının yanında okumanın kaç kat yavaşladığı, terminal yokken hata (aynı süreçte ve yardımcıyla). `blpapi` yükseltildikten sonra masada bir kez çalıştırmaya değer. |
-| `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 192 kontrol: giriş, **sekmeler** (Forward hesaplayıcılarla açılır, sabit valör şeridi, sekme değiştirme ve hatırlanması, her sekmede arama, "Tümü", başka sekmedeki hücreye gidiş), **elle değer** (mod kapalıyken formül yazılamaz; açıkken yazılan değerin işareti, sayaç, silince ve "formüle dön"le geri dönüş), hesaplayıcıya elle spot, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu, XY grafiği), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, forward kotasyon matrisi, altın swap faizi girişi ve VİOP tablosunun değişmesi, Borsa Swap, DİBS ASW, gün sonu matrisi (değerler, geçmiş gün, kopyalama), PPK fiyatlama geçmişi (çizgiler, toplantı ekleme / çıkarma, ölçü değiştirme, ipucu, günlerin durumu), manuel spot penceresi (üst şeritten açma, bid > ask reddi, Bloomberg'e dönme), RET kaydırma önizlemesi (her vadede kaç bp ve yeni bid / ask, sabit tutulan ve elle miktar verilen vade, yalnız bid, önizlemedeyken kaydetmeme, "Uygula") ve tablo / mesaj olarak kopyalama, VİOP geçmiş sekmesi (kontrat tablosu, iki grafik, yeni çizgi ekleme), işlem girerken ve listede DV01, tarih aralığı görünümü ve indirilmesi, altın hesaplayıcısının serbest sütunu, Ctrl+K ile tablo bulma, Ayarlar'da toplantı tarihinin düzeltilip OIS sayfasına yansıması, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
+| `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 209 kontrol: giriş, **sekmeler** (Forward hesaplayıcılarla açılır, sabit valör şeridi, sekme değiştirme ve hatırlanması, her sekmede arama, "Tümü", başka sekmedeki hücreye gidiş), **elle değer** (mod kapalıyken formül yazılamaz; açıkken yazılan değerin işareti, sayaç, silince ve "formüle dön"le geri dönüş), hesaplayıcıya elle spot, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu, XY grafiği), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, forward kotasyon matrisi, altın swap faizi girişi ve VİOP tablosunun değişmesi, Borsa Swap, DİBS ASW, gün sonu matrisi (değerler, geçmiş gün, kopyalama), PPK fiyatlama geçmişi (çizgiler, toplantı ekleme / çıkarma, ölçü değiştirme, ipucu, günlerin durumu), manuel spot penceresi (üst şeritten açma, bid > ask reddi, Bloomberg'e dönme), RET kaydırma önizlemesi (her vadede kaç bp ve yeni bid / ask, sabit tutulan ve elle miktar verilen vade, yalnız bid, önizlemedeyken kaydetmeme, "Uygula") ve tablo / mesaj olarak kopyalama, VİOP geçmiş sekmesi (kontrat tablosu, iki grafik, yeni çizgi ekleme), işlem girerken ve listede DV01, tarih aralığı görünümü ve indirilmesi, **Broker Chat** (yapıştırılan chat'in yazılırken okunması, kısaltılmış seviye / işlem / ref, kaydetme, tahta ve model farkı, ikinci kez yapıştırma, tek enstrüman / arama / ürün süzgeci, başka kullanıcının eklediği satırın canlı gelmesi, silme, saatsiz satır, indirme, aralık), altın hesaplayıcısının serbest sütunu, Ctrl+K ile tablo bulma, Ayarlar'da toplantı tarihinin düzeltilip OIS sayfasına yansıması, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
 
 LibreOffice referansını yeniden üretmek (LibreOffice kuruluysa):
 
@@ -746,9 +799,11 @@ tto/service.py     uygulama servisi (sayfalar, girdiler, senaryolar, RET, işlem
 tto/history.py     günlük tarihçe: kapanışlar, PPK fiyatlama geçmişi (çözücüyü geçmiş günle besleyen ikinci motor),
                    gün sonu matrisi, toplantı takvimi (düzeltme, kaydırma, adımların toplantıyla taşınması)
 tto/blotter.py     forward fiyatlama, OIS strateji bacakları, pozisyon maliyeti, DV01 (forward / OIS / tahvil) ve risk özeti
+tto/brokerchat.py  broker chat ayrıştırıcısı: mesajlar (saat, gönderen, gün), kotalar (outright / spread / fly / FRA,
+                   kısaltılmış seviyeler, işlem / ref / ilgi), tahta ve eğriyle karşılaştırma
 tto/xlsx.py        gün sonu arşivi için küçük .xlsx yazıcı (yalnızca değerler ve biçimler)
 tto/server.py      HTTP API + canlı güncelleme (server-sent events)
-tto/store.py       SQLite (kullanıcılar, girdiler, senaryolar, RET geçmişi, işlemler, günlük tarihçe)  →  data/tto.db
+tto/store.py       SQLite (kullanıcılar, girdiler, senaryolar, RET geçmişi, işlemler, broker chat, günlük tarihçe)  →  data/tto.db
 tto/bundled.py     kurulu değilse web paketlerini vendor/ altındaki wheel'lerden içe aktarır
 tto/views/         sayfa tanımları: tablolar, girdiler, sekmeler ("sections") ve sekmelerin üstünde sabit duranlar ("pinned")
 tto/data/          kayıtlı veri modunda kullanılan ek kotalar ve TLREF geçmişi (replay_*.json)

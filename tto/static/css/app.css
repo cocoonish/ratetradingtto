@@ -481,7 +481,50 @@ table.plain.ret td.ret-new .chg { color: var(--accent-ink); font-weight: 650; }
 .ret-hist .btn { text-align: left; }
 .mine-list { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 .btn.primary.danger-solid { background: #c64242; border-color: #c64242; color: #fff; }
+
+/* ---------------------------------------------------------------- broker chat */
+.broker { display: grid; grid-template-columns: minmax(400px, 520px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.broker > .boardcol { min-width: 0; }
+.broker > .logcol { grid-column: 1 / -1; min-width: 0; }
+.broker .panel { margin: 0; }
+.broker .panel .body { max-height: 64vh; }
+.broker .panel > header .grow { flex: 1; }
+.broker .panel > header .seg button { padding: 3px 9px; font-size: 12px; }
+.broker .panel > header input[type="search"] { width: 190px; padding: 4px 8px; }
+.chatbox { width: 100%; min-height: 150px; resize: vertical; font-family: var(--mono); font-size: 12.25px; line-height: 1.45; white-space: pre; overflow: auto; }
+.chatrow { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.chatrow.actions { align-items: center; }
+.chatrow .grow { flex: 1; }
+.chatrow .field { width: 150px; }
+label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; white-space: nowrap; padding-bottom: 6px; cursor: pointer; }
+.panel > header label.check { padding-bottom: 0; }
+.chatpreview { margin-top: 10px; max-height: 42vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.chatpreview:empty { display: none; }
+.chatpreview .errtxt { padding: 8px 10px; }
+table.plain.chat td, table.plain.chat th { padding: 4px 7px; }
+table.plain.chat th:last-child, table.plain.chat td.what { width: 99%; }
+table.plain.chat td .kind { margin-left: 6px; color: var(--ink-3); font-size: 11px; }
+table.plain.chat td.what { white-space: normal; }
+table.plain.chat td.abbr { text-decoration: underline dotted var(--ink-3); text-underline-offset: 3px; cursor: help; }
+table.plain.chat td.said { max-width: 240px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); font-family: var(--mono); font-size: 11.5px; }
+table.plain.chat tr.dup td { opacity: .5; }
+table.plain.chat .pill { display: inline-block; padding: 0 7px; margin-left: 3px; border-radius: 999px; font-size: 10.5px; font-weight: 650; line-height: 16px; }
+table.plain td.soft, table.grid td.soft { color: var(--ink-3); }
+table.grid td.thru { color: var(--accent-ink); font-weight: 650; }
+table.grid td.said { color: var(--ink-2); font-family: var(--mono); font-size: 11.5px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+table.grid td.said.short { max-width: 250px; }
+/* the row's button stays in reach when the table is wider than its panel */
+.broker table.grid td:last-child { position: sticky; right: 0; }
+.broker table.grid tr:not(.hd) td:last-child { background: var(--surface); z-index: 1; }
+.chathelp { margin-top: 12px; }
+.chathelp > summary { cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 600; }
+.chathelp table.plain { margin-top: 6px; }
+.chathelp td.mono { font-family: var(--mono); font-size: 11.5px; }
+.chathelp table.plain td { white-space: normal; padding: 3px 8px 3px 0; border-bottom: 0; vertical-align: top; }
+.chathelp td.mono { white-space: nowrap; }
+.chathelp .pad0 { margin-top: 8px; font-size: 11.5px; line-height: 1.5; }
 @media (max-width: 1100px) {
+  .broker { grid-template-columns: minmax(0, 1fr); }
   .blotter { grid-template-columns: minmax(0, 1fr); }
   .blotter .left { position: static; }
   .ret-layout { grid-template-columns: minmax(0, 1fr); }
