@@ -126,7 +126,13 @@
    "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap eğrisine göre ASW",
    "range": "B6:U56",
    "keep_title": true,
-   "append": "asw_fx"
+   "append": "asw_fx",
+   "action": "add-isin",
+   "add": {
+    "list": "B7:B56",
+    "catalog": true,
+    "title": "DİBS ASW listesine kâğıt ekle"
+   }
   },
   {
    "id": "chart0",

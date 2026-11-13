@@ -16,7 +16,31 @@ const FLAG = {
   'side?': ['taraf?', 'warn', 'Eğik çizgi ile kelime uyuşmuyor ("12/ offer") – eğik çizgiye uyuldu'],
   crossed: ['bid > ask', 'warn', 'Bid ask\'ten yüksek okundu'],
   standing: ['kotadan', '', 'Mesajda fiyat yok ("taken", "given"): o an duran offer / bid seviyesi alındı'],
+  'bond?': ['kâğıt?', 'warn', 'O ay için birden çok kâğıt var ("mar28": 08.03.28 ve 15.03.28; "jan30 tlref": iki TLREF): fiyatı ekrandakine en yakın olan, ekran yoksa kuponu en yüksek olan (gösterge) alındı – yanlışsa tarihi tam yazın (15/3/28)'],
+  near: ['yakın kâğıttan', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var: büyük rakamı vadesi en yakın aynı tür kâğıttan (TLREF\'ten TLREF, bonodan bono) alındı'],
+  par: ['100\'e göre', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var, yakınında fiyatı bilinen aynı tür kâğıt da yok: TLREF / TÜFE kâğıdı 100 civarı sayılarak tamamlandı – yanlışsa fiyatı tam yazın'],
 };
+
+/** What a flag says, with what it was about (the bond a big figure was taken from). */
+function flagTip(q, f) {
+  const x = FLAG[f];
+  if (!x) return f;
+  return x[0] + ': ' + x[2] + (f === 'near' && q.ref_from ? ' (' + q.ref_from + ')' : '');
+}
+
+/** An instrument's name: "18M", "XCCY 2Y", "DİBS 15.03.28 · T1" (a bond with its value date when said). */
+function instText(q) {
+  if (q.product === 'OIS') return q.label;
+  if (q.product === 'DIBS') return 'DİBS ' + q.label + (q.settle ? ' · ' + q.settle : '');
+  return q.product + ' ' + q.label;
+}
+
+/** A bond's ISIN and what it is, for the tip of its name. */
+function instTip(q) {
+  if (q.product !== 'DIBS') return '';
+  return [q.isin, q.alts && q.alts.length ? 'öbür aday: ' + q.alts.join(', ') : '', q.settle ? 'valör ' + q.settle.replace('T', 'T+') : '']
+    .filter(Boolean).join(' · ');
+}
 const KNOWN = 'Bu satır zaten kayıtlı – yeniden eklenmez';
 const PARTY = { biz: 'Biz', broker: 'Broker' };
 
@@ -55,13 +79,17 @@ const EXAMPLES = [
   ['1yr x 38.60/80', 'cross-currency ("x")'],
   ['t/n 375/90', 'FX swap puanı (o/n, t/n, s/n): 375 / 390 – yanında ima TRY faizi'],
   ['fx 2m 25 500/', 'FX swap 2M, puan (binler boşlukla ya da noktayla: 25.500)'],
+  ['15/3/28 550/575', 'DİBS (vade tarihiyle): 100,550 / 100,575 – rakam ekran fiyatından'],
+  ['mar28 .400/475 · Jan30 tlref 98.650/750', 'DİBS (ay ve yılla; tlref, cpi, zc türü söyler)'],
+  ['06/01/2027.t1 31.450', 'ihale fiyat listesi: seviye (bono / kuponsuzda getiri)'],
 ];
 
 /** A level as it is quoted: per cent with at least two decimals, basis points with as many as were typed. */
 export function level(v, unit) {
   if (typeof v !== 'number' || !isFinite(v)) return '';
-  let d = unit === 'pct' ? 2 : 0;
-  const most = unit === 'pct' ? 4 : 2;
+  if (unit === 'px') return num(v, 3, false);                     // a bond's price: three decimals, as the desk quotes it
+  let d = unit === 'pct' || unit === 'yld' ? 2 : 0;
+  const most = unit === 'pct' || unit === 'yld' ? 4 : 2;
   while (d < most && Math.abs(v * 10 ** d - Math.round(v * 10 ** d)) > 1e-7) d += 1;
   return num(v, d, false);
 }
@@ -90,6 +118,7 @@ export function eventText(q) {
 function kindText(q) {
   if (q.ok === false) return '';
   if (q.product === 'FX') return 'FX swap (puan)';
+  if (q.product === 'DIBS') return q.unit === 'yld' ? 'DİBS (getiri)' : 'DİBS (fiyat)';
   return (KIND[q.kind] || q.kind || '') + (q.unit === 'bp' ? ' (bp)' : '');
 }
 
@@ -105,6 +134,10 @@ function impliedText(q, last) {
 function impliedTip(q) {
   const m = q.implied;
   if (!m) return '';
+  if (m.kind === 'bond') {
+    return 'Fiyatın ima ettiği getiri (DİBS RV ekranından): ekran ' + num(m.screen, 3, false) + ' · getiri ' + num(m.screen_yield, 2, false)
+      + '% · mod. süre ' + num(m.mod_dur, 2, false) + ' – getiri − (fiyat − ekran) / (ekran · süre)';
+  }
   return 'FX swap puanının ima ettiği TRY faizi (ACT/360): ' + q.label + ' · ' + num(m.days, 0) + ' gün · USD ' + num(m.usd, 3, false)
     + '% · spot ' + num(m.spot, 4, false) + ' – Forward sayfasının spot, vade günü ve USD faiziyle; bid tarafı USD ask\'iyle, ask tarafı USD bid\'iyle';
 }
@@ -116,7 +149,7 @@ const LOG_SORT = {
   sender: (q) => q.sender || '',
   party: (q) => (q.party === 'biz' ? 'Biz' : (q.source || (q.party ? 'Broker' : ''))),
   raw: (q) => q.raw || '',
-  label: (q) => (q.ok ? (q.product === 'OIS' ? '' : q.product + ' ') + q.label : ''),
+  label: (q) => (q.ok ? instText(q) : ''),
   kind: (q) => (q.ok ? (KIND[q.kind] || q.kind || '') : ''),
   bid: (q) => (typeof q.bid === 'number' ? q.bid : null),
   ask: (q) => (typeof q.ask === 'number' ? q.ask : null),
@@ -289,7 +322,7 @@ export class BrokerPage {
 
     // ---- board: where every instrument stands
     const seg = h('div', { class: 'seg', id: 'broker-product' });
-    for (const [v, label] of [['all', 'Tümü'], ['OIS', 'OIS'], ['XCCY', 'XCCY']]) {
+    for (const [v, label] of [['all', 'Tümü'], ['OIS', 'OIS'], ['XCCY', 'XCCY'], ['FX', 'FX swap'], ['DIBS', 'DİBS']]) {
       const b = h('button', { type: 'button' }, label);
       b.dataset.v = v;
       b.addEventListener('click', () => { this.product = v; this.fill(); });
@@ -396,23 +429,25 @@ export class BrokerPage {
       return d.ranged ? isoToTr(day).slice(0, 5) + ' ' + (time || '') : (time || day);
     };
     const side = (v, unit, stamp, name) => (typeof v === 'number' ? { t: level(v, unit), v, k: 'n', tip: name + ': ' + when(stamp) } : { t: '', k: '', tip: stamp ? name + ' yok: ' + when(stamp) : '' });
-    const diff = (v, through) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, 1, false), v, k: 'n', cls: through ? 'thru' : '',
-      tip: through ? 'Kota model seviyesinin öbür tarafında' : '' } : { t: '', k: '' });
+    const diff = (v, through, unit) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, unit === 'px' ? 3 : 1, false), v, k: 'n', cls: through ? 'thru' : '',
+      tip: (unit === 'px' ? 'DİBS: fiyat farkı (puan), bp değil – ekran fiyatına göre' : (unit === 'yld' ? 'Bono: getiri farkı (bp)' : ''))
+        + (through ? (unit === 'px' || unit === 'yld' ? '\n' : '') + 'Kota model seviyesinin öbür tarafında' : '') } : { t: '', k: '' });
     const board = d.board.filter((r) => this.product === 'all' || r.product === this.product);
     const ours = (r) => (typeof r.our_bid === 'number' || typeof r.our_ask === 'number'
       ? { t: (typeof r.our_bid === 'number' ? level(r.our_bid, r.unit) : '') + ' / ' + (typeof r.our_ask === 'number' ? level(r.our_ask, r.unit) : ''),
         k: 's', cls: 'ours', tip: 'Bizim son kotamız · ' + when(r.our_time) } : { t: '', k: '' });
     this.setGrid('board', this.board,
-      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Ask', 'Saat', 'Son işlem', 'Bizim kota', 'Model', 'Bid − model (bp)', 'Ask − model (bp)', 'Son mesaj', 'TRY % (ima)', '', ''],
-      board.map((r) => [r.product, { t: r.label, k: 's', b: 1 }, kindText(r),
+      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Ask', 'Saat', 'Son işlem', 'Bizim kota', 'Model', 'Bid − model (bp)', 'Ask − model (bp)', 'Son mesaj', 'TRY % / getiri (ima)', '', ''],
+      board.map((r) => [r.product === 'DIBS' ? 'DİBS' : r.product, { t: r.label, k: 's', b: 1, tip: r.isin || '' }, kindText(r),
         side(r.bid, r.unit, r.bid_time, 'Bid'), side(r.ask, r.unit, r.ask_time, 'Ask'),
         when(r.time), typeof r.last === 'number' ? { t: level(r.last, r.unit) + (r.last_by === 'biz' ? ' · biz' : ''), v: r.last, k: 'n',
           cls: r.last_side === 'ask' ? 'buy' : (r.last_side === 'bid' ? 'sell' : ''),
           tip: when(r.last_time) + (r.last_side === 'ask' ? ' · offer alındı' : (r.last_side === 'bid' ? ' · bid\'e verildi' : ''))
             + (r.last_by === 'biz' ? ' · bizim işlemimiz' : '') } : { t: '', k: '' },
         ours(r),
-        typeof r.mid === 'number' ? { t: num(r.mid, r.unit === 'pct' ? 2 : 1, false), v: r.mid, k: 'n', cls: 'soft' } : { t: '', k: '' },
-        diff(r.bid_diff, r.bid_diff > 0), diff(r.ask_diff, r.ask_diff < 0), { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
+        typeof r.mid === 'number' ? { t: num(r.mid, r.unit === 'px' ? 3 : (r.unit === 'pct' || r.unit === 'yld' ? 2 : 1), false), v: r.mid, k: 'n', cls: 'soft',
+          tip: r.product === 'DIBS' ? 'DİBS RV ekranındaki ' + (r.unit === 'yld' ? 'getiri' : 'temiz fiyat') : '' } : { t: '', k: '' },
+        diff(r.bid_diff, r.bid_diff > 0, r.unit), diff(r.ask_diff, r.ask_diff < 0, r.unit), { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
         r.implied ? { t: impliedText(r) || impliedText(r, true), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' },
         { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
         { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }]),
@@ -468,7 +503,7 @@ export class BrokerPage {
   }
 
   showOnly(r) {
-    this.only = { key: r.key, label: (r.product === 'OIS' ? '' : r.product + ' ') + r.label };
+    this.only = { key: r.key, label: instText(r) };
     this.fillLog();
     this.log.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
@@ -532,19 +567,19 @@ export class BrokerPage {
     this.setGrid('log', this.log,
       [allOn ? '☑' : '☐'].concat(dayHead).concat(['Saat' + (d.ranged ? '' : arrow('time')), 'Kimden' + arrow('sender'), 'Taraf' + arrow('party'), 'Mesaj' + arrow('raw'),
         'Enstrüman' + arrow('label'), 'Tür' + arrow('kind'), 'Bid' + arrow('bid'), 'Ask' + arrow('ask'), 'İşlem / seviye' + arrow('price'),
-        'Olay' + arrow('event'), 'Model (girişte)' + arrow('model'), 'Not' + arrow('note'), 'TRY % (ima)' + arrow('implied'), '']),
+        'Olay' + arrow('event'), 'Model (girişte)' + arrow('model'), 'Not' + arrow('note'), 'TRY % / getiri (ima)' + arrow('implied'), '']),
       rows.map((q) => [{ t: '', k: '', cls: 'tick', chk: { on: this.picked.has(q.id), title: 'Seç (seçilenleri birlikte silmek için)',
         fn: (on) => { if (on) this.picked.add(q.id); else this.picked.delete(q.id); this.updatePicked(); } } }]
         .concat(d.ranged ? [{ t: isoToTr(q.date), k: 's' }] : []).concat([
         { t: q.time, k: 's', cls: q.timed === false ? 'soft' : '', tip: stamp(q) },
         q.sender || '', { t: owner(q), k: 's', cls: q.party === 'biz' ? 'ours' : '', tip: q.party ? (q.party === 'biz' ? 'Bizim fiyatımız' : 'Broker fiyatı') : 'Taraf belli değil' },
         { t: q.raw || '', k: 's', cls: 'said', tip: q.raw || '' },
-        q.ok ? { t: (q.product === 'OIS' ? '' : q.product + ' ') + q.label, k: 's', b: 1 } : '', kindText(q),
+        q.ok ? { t: instText(q), k: 's', b: 1, tip: instTip(q) } : '', kindText(q),
         lv(q, q.bid), lv(q, q.ask), q.ok && typeof q.price === 'number' ? { t: level(q.price, q.unit), v: q.price, k: 'n',
           cls: q.event === 'trade' ? (q.side === 'ask' ? 'buy' : (q.side === 'bid' ? 'sell' : '')) : '' } : { t: '', k: '' },
         { t: eventText(q) + (q.oco ? ' · OCO' : '') + ((q.flags || []).some((f) => FLAG[f] && FLAG[f][1] === 'warn') ? ' ⚠' : ''), k: 's', cls: q.ok ? '' : 'soft',
-          tip: (q.flags || []).map((f) => (FLAG[f] ? FLAG[f][0] + ': ' + FLAG[f][2] : f)).join('\n') },
-        q.ok && typeof q.model === 'number' ? { t: num(q.model, q.unit === 'pct' ? 2 : 1, false), v: q.model, k: 'n', cls: 'soft',
+          tip: (q.flags || []).map((f) => flagTip(q, f)).join('\n') },
+        q.ok && typeof q.model === 'number' ? { t: num(q.model, q.unit === 'px' ? 3 : (q.unit === 'pct' || q.unit === 'yld' ? 2 : 1), false), v: q.model, k: 'n', cls: 'soft',
           tip: 'Satır girildiği anda dashboard eğrisinin bu enstrüman için verdiği seviye' } : { t: '', k: '' },
         q.note || '',
         q.implied ? { t: impliedText(q), k: 's', cls: 'soft', tip: impliedTip(q) } : { t: '', k: '' },
@@ -618,7 +653,7 @@ export class BrokerPage {
     for (const q of rows) {
       const marks = [];
       // a completed big figure is marked on the numbers themselves; what may be wrong gets a label
-      for (const f of q.flags || []) { const x = FLAG[f]; if (x && x[1] === 'warn') marks.push(pill(x[0], x[1], x[2])); }
+      for (const f of q.flags || []) { const x = FLAG[f]; if (x && x[1] === 'warn') marks.push(pill(x[0], x[1], flagTip(q, f).slice(x[0].length + 2))); }
       const short = (q.flags || []).find((f) => f === 'abbr' || f === 'ambiguous' || f === 'standing');
       const numCell = (v, cls) => h('td', { class: (cls || '') + (short && typeof v === 'number' ? ' abbr' : ''),
         title: short && typeof v === 'number' ? FLAG[short === 'standing' ? 'standing' : 'abbr'][2] : '' }, level(v, q.unit));
@@ -633,7 +668,7 @@ export class BrokerPage {
       }
       const who = [q.sender, q.raw].filter(Boolean).join(': ');
       table.appendChild(h('tr', { class: q.dup ? 'dup' : '', title: q.dup ? KNOWN : who }, time, whose,
-        h('td', { class: 'l' }, h('b', null, (q.product === 'OIS' ? '' : q.product + ' ') + q.label),
+        h('td', { class: 'l', title: instTip(q) }, h('b', null, instText(q)),
           q.kind === 'outright' ? null : h('span', { class: 'kind' }, (KIND[q.kind] || q.kind).toLowerCase() + (q.unit === 'bp' ? ' · bp' : ''))),
         numCell(q.bid), numCell(q.ask), numCell(q.price, q.event === 'trade' ? (q.side === 'ask' ? 'buy' : (q.side === 'bid' ? 'sell' : '')) : ''),
         h('td', { class: 'l what', title: impliedTip(q) }, eventText(q) + (q.implied ? ' · TRY ' + (impliedText(q) || '') + '%' : '') + (q.note ? ' · ' + q.note : ''), marks)));

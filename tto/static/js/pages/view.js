@@ -1,6 +1,7 @@
 // Generic workbook page: a set of panels (tables and charts) defined by a view on the server.
 // A page with many tables comes in tabs ("sections" of the view): one group of tables at a time, the
 // calculators first; the search box and "Tümü" look across all of them.
+import { openAddIsin } from '../bonds.js';
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell } from '../grid.js';
@@ -94,6 +95,7 @@ export class ViewPage {
         if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
       } else if (it.grid && p.data) {
         it.grid.update(p.data, true);
+        if (it.grow) it.grow();
       }
     }
     this.showOverrides(data.panels);
@@ -307,6 +309,46 @@ export class ViewPage {
     } catch (err) { errorToast(err); }
   }
 
+  /**
+   * A table with more rows than are in use (a list, a bulk pricing): the rows after the last filled one stay
+   * out of the way but ``extra`` empty ones; "+ Satır" opens one more, "Tümü" all of them.
+   */
+  growable(it, p, head, tools) {
+    const key = 'tto.grow.' + this.id + '.' + p.id;
+    let extra = Math.max(1, Number(pref(key, String(p.grow.extra || 1))) || 1);
+    let all = false;
+    const more = h('button', { class: 'iconbtn grow-more', type: 'button', title: 'Bir boş satır daha göster' }, '+ Satır');
+    const every = h('button', { class: 'iconbtn grow-all', type: 'button', title: 'Bütün satırları göster / yalnızca dolu olanları' }, 'Tümü');
+    head.insertBefore(more, tools);
+    head.insertBefore(every, tools);
+    it.grow = () => {
+      const g = it.grid;
+      const d = g && g.data;
+      if (!d || !d.c || !d.r) return;
+      const k = d.c.indexOf(p.grow.key);
+      const first = p.grow.first || 1;
+      let last = first - 1;
+      for (let i = 0; i < d.r.length; i++) {
+        const cell = (d.rows[i] || [])[k];
+        if (d.r[i] >= first && d.r[i] <= (p.grow.last || Infinity) && cell && String(cell.t || '').trim()) last = Math.max(last, d.r[i]);
+      }
+      const upto = last + extra;
+      const trs = [...g.el.querySelectorAll('tbody > tr')].filter((tr) => !tr.classList.contains('axisrow'));
+      let hidden = 0;
+      trs.forEach((tr, i) => {
+        const r = d.r[i];
+        const hide = !all && typeof r === 'number' && r > upto && r <= (p.grow.last || Infinity);       // a note below the rows stays
+        tr.classList.toggle('grow-hidden', hide);
+        if (hide) hidden += 1;
+      });
+      more.disabled = all || !hidden;
+      every.textContent = all ? 'Dolu satırlar' : 'Tümü (' + trs.length + ')';
+    };
+    more.addEventListener('click', () => { extra += 1; setPref(key, String(extra)); it.grow(); });
+    every.addEventListener('click', () => { all = !all; it.grow(); });
+    it.grow();
+  }
+
   panel(p) {
     const key = 'tto.col.' + this.id + '.' + p.id;
     const collapsed = pref(key, p.collapsed ? '1' : '0') === '1';
@@ -319,6 +361,14 @@ export class ViewPage {
     const title = h('h2', { title: p.title || '' }, p.title || '');
     const head = h('header', null, title);
     if (p.range && p.data) head.appendChild(h('span', { class: 'rng' }, p.range));
+    if (p.action === 'add-isin' && p.add) {
+      // a list of bonds: add by ISIN (typed, or picked from the TRY government bonds)
+      const b = h('button', { class: 'btn sm', type: 'button', title: p.add.title || 'ISIN ile ekle' }, '+ ISIN ekle');
+      b.dataset.action = 'add-isin';
+      b.addEventListener('click', () => openAddIsin(this.ctx, { book: p.add.book || this.book, list: p.add.ref, name: p.add.name,
+        catalog: !!p.add.catalog, title: p.add.title }).catch(errorToast));
+      head.appendChild(b);
+    }
     if (p.action === 'ret' && this.ctx.openRet) {
       // the desk's RET curve: the editor (paste, shift, copy to send) is one click from the table
       const b = h('button', { class: 'btn sm', type: 'button', title: 'RET faizlerini değiştir, kaydır ya da göndermek için kopyala' }, 'RET faizlerini düzenle / kopyala');
@@ -372,6 +422,7 @@ export class ViewPage {
       const cp = h('button', { class: 'iconbtn', type: 'button', title: 'Tüm tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
       cp.addEventListener('click', () => copyGrid(it.grid, false));
       tools.appendChild(cp);
+      if (p.grow) this.growable(it, p, head, tools);
     }
     const col = h('button', { class: 'iconbtn', type: 'button', title: 'Daralt / aç' }, collapsed ? '▸' : '▾');
     it.toggle = (now) => {

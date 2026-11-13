@@ -1087,12 +1087,88 @@ def _asw_fx(model: Model) -> None:
            "swap faizidir; OIS gibi par faiz olarak kullanılır.")
 
 
+# ---------------------------------------------------------------------------------------------- more rows
+BULK_BOND_LAST = 52               # Bulk Bond: the workbook's four rows (3..6) and these more, to row 52
+BULK_SHEET = "EK_BULK"
+BULK_FIRST, BULK_ROWS = 5, 100    # the bulk forward table here: 100 value dates (the Forward sheet has 20)
+BULK_COLS = "CDEFGHJKNOPQ"        # the formula columns of Forward!B144:Q144 (B: date and L: manual TRY % are typed)
+_ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_!$.':])\$[A-Z]{1,3}\$\d+(?::\$[A-Z]{1,3}\$\d+)?(?![A-Za-z0-9_(])")
+
+
+def _bulk_bond_check(model: Model) -> None:
+    _need_sheets(model, "Bulk Bond")
+    _need_formula(model, "Bulk Bond", "B6", '$A6&" Corp","SECURITY_DES"')
+    _need_formula(model, "Bulk Bond", "K6", '$A6&" @"&$K$1&" Corp",$K$2')
+    sh = model.sheet("Bulk Bond")
+    if any(rc // COLS > 6 for rc in list(sh.fml) + list(sh.consts)):
+        raise ValueError("Bulk Bond: 6. satırın altı boş değil")
+
+
+def _tto_bulk_bond(model: Model) -> None:
+    """Room for more bonds on the Bulk Bond sheet: the row of the workbook's last bond copied down to row 52,
+    each formula asking nothing while its ISIN is empty (the workbook's own four rows stay as they are)."""
+    b = SheetBuilder(model, "Bulk Bond")
+    sh = b.sheet
+    for col in "BEFGHIJKLMNOPQRSTUV":
+        rc = parse_a1("%s6" % col)
+        if rc not in sh.fml:
+            continue
+        text = formula_of(model, "Bulk Bond", "%s6" % col)
+        for r in range(7, BULK_BOND_LAST + 1):
+            body = re.sub(r"(?<![A-Za-z0-9_$])(\$?[A-Z]{1,3})6(?!\d)", lambda m: "%s%d" % (m.group(1), r), text)
+            b.set("%s%d" % (col, r), '=IF(TRIM($A%d&"")="","",%s)' % (r, body), like="%s6" % col)
+    for col in "ACD":
+        for r in range(7, BULK_BOND_LAST + 1):
+            b.set("%s%d" % (col, r), None, like="%s6" % col)
+
+
+def _bulk_forward_check(model: Model) -> None:
+    _need_sheets(model, "Forward")
+    for col in BULK_COLS:
+        _need_formula(model, "Forward", "%s144" % col)
+    _need_formula(model, "Forward", "N144", "ISNUMBER(L144),L144,G144")
+
+
+def _tto_bulk_forward(model: Model) -> None:
+    """The Forward sheet's bulk forward table with 100 rows instead of 20 - the sheet's own formulas, row by row,
+    the curves and spots still read from the Forward sheet.  The first 20 value dates and manual TRY rates are
+    the Forward sheet's (typed over freely); the page shows as many rows as are filled, one more on demand."""
+    b = SheetBuilder(model, BULK_SHEET)
+    b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid)")
+    heads = [model.sheet("Forward").consts.get(parse_a1("%s143" % c)) for c in "BCDEFGHIJKLMNOPQ"]
+    b.head("B4", [h if isinstance(h, str) else None for h in heads])
+    templates = {}
+    for col in BULK_COLS:
+        text = formula_of(model, "Forward", "%s144" % col)
+        templates[col] = _ABSOLUTE.sub(lambda m: "Forward!" + m.group(0), text)       # the curves stay on the Forward sheet
+    for k in range(BULK_ROWS):
+        r = BULK_FIRST + k
+        src = 144 + k
+        if k < 20:
+            b.input("B%d" % r, '=IF(ISNUMBER(Forward!$B$%d),Forward!$B$%d,"")' % (src, src), fmt=DATE)
+            b.input("L%d" % r, '=IF(ISNUMBER(Forward!$L$%d),Forward!$L$%d,"")' % (src, src), fmt="0.0000")
+        else:
+            b.input("B%d" % r, None, fmt=DATE)
+            b.input("L%d" % r, None, fmt="0.0000")
+        for col in BULK_COLS:
+            body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
+            b.set("%s%d" % (col, r), "=" + body, like=None, fmt=_BULK_FMT.get(col, NUM4))
+    b.note("B%d" % (BULK_FIRST + BULK_ROWS + 1),
+           "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. İlk 20 "
+           "satırın valörü ve manuel TRY faizi Forward sayfasındakidir; üzerine yazabilir, silerek ona dönebilirsiniz.")
+
+
+_BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", "H": "0.000", "J": "0.000", "K": "0.000",
+             "N": NUM4, "O": INT0, "P": NUM4, "Q": INT0}
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
     "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
             (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
-            (SRC_SHEET, _sources_check, _tto_sources)),
+            (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
+            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward)),
 }
 
 

@@ -139,7 +139,14 @@
    "type": "table",
    "title": "DİBS göreli değer tablosu",
    "range": "A4:BJ54",
-   "hidden": false
+   "hidden": false,
+   "action": "add-isin",
+   "add": {
+    "list": "A5:A54",
+    "catalog": true,
+    "title": "DİBS RV listesine kâğıt ekle"
+   },
+   "append": "broker_bonds"
   },
   {
    "id": "B4",

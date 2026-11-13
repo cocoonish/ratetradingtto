@@ -343,6 +343,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().history.coverage))
 
     @handler
+    async def bond_catalog(request: Request):
+        return ok(await call(svc().bond_catalog, _user(request)))
+
+    @handler
+    async def list_add(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().list_add, _user(request), str(data.get("book") or "tto"), str(data.get("list") or ""),
+                             data.get("values") or []))
+
+    @handler
     async def sources(request: Request):
         if request.method == "POST":
             data = await _body(request)
@@ -453,6 +463,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/history/sync", history_sync, methods=["POST"]),
         Route("/api/history/settings", history_settings, methods=["POST"]),
         Route("/api/sources", sources, methods=["GET", "POST"]),
+        Route("/api/bonds/catalog", bond_catalog),
+        Route("/api/list/add", list_add, methods=["POST"]),
         Route("/api/history/series", history_series),
         Route("/api/history/matrix", history_matrix),
         Route("/api/history/mpc", history_mpc),

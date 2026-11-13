@@ -1,0 +1,545 @@
+{
+ "asof": "2026-11-13",
+ "source": "the desk's Bloomberg list of TRY government bonds (bills, fixed, CPI, TLREF floaters)",
+ "bonds": [
+  {
+   "isin": "TRB100227T13",
+   "kind": "bill",
+   "maturity": "2027-02-10",
+   "name": "TURKTB 0 02/10/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRB170327T15",
+   "kind": "bill",
+   "maturity": "2027-03-17",
+   "name": "TURKTB 0 03/17/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT210427T18",
+   "kind": "zero",
+   "maturity": "2027-04-21",
+   "name": "TURKGB 0 04/21/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT081128T15",
+   "kind": "fixed",
+   "maturity": "2028-11-08",
+   "name": "TURKGB 31.08 11/08/28",
+   "coupon": 31.08
+  },
+  {
+   "isin": "TRT060127T10",
+   "kind": "zero",
+   "maturity": "2027-01-06",
+   "name": "TURKGB 0 01/06/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT090627T12",
+   "kind": "fixed",
+   "maturity": "2027-06-09",
+   "name": "TURKGB 20.2 06/09/27",
+   "coupon": 20.2
+  },
+  {
+   "isin": "TRT110827T16",
+   "kind": "fixed",
+   "maturity": "2027-08-11",
+   "name": "TURKGB 10 1/2 08/11/27",
+   "coupon": 10.5
+  },
+  {
+   "isin": "TRT140727T14",
+   "kind": "fixed",
+   "maturity": "2027-07-14",
+   "name": "TURKGB 37.84 07/14/27",
+   "coupon": 37.84
+  },
+  {
+   "isin": "TRT100227T13",
+   "kind": "fixed",
+   "maturity": "2027-02-10",
+   "name": "TURKGB 32.6 02/10/27",
+   "coupon": 32.6
+  },
+  {
+   "isin": "TRT130928T38",
+   "kind": "fixed",
+   "maturity": "2028-09-13",
+   "name": "TURKGB 36 09/13/28",
+   "coupon": 36.0
+  },
+  {
+   "isin": "TRT150328T24",
+   "kind": "fixed",
+   "maturity": "2028-03-15",
+   "name": "TURKGB 36.8 03/15/28",
+   "coupon": 36.8
+  },
+  {
+   "isin": "TRT050527T33",
+   "kind": "fixed",
+   "maturity": "2027-05-05",
+   "name": "TURKGB 41 05/05/27",
+   "coupon": 41.0
+  },
+  {
+   "isin": "TRT131027T36",
+   "kind": "fixed",
+   "maturity": "2027-10-13",
+   "name": "TURKGB 36.78 10/13/27",
+   "coupon": 36.78
+  },
+  {
+   "isin": "TRT150927T11",
+   "kind": "fixed",
+   "maturity": "2027-09-15",
+   "name": "TURKGB 10.28 09/15/27",
+   "coupon": 10.28
+  },
+  {
+   "isin": "TRT240227T17",
+   "kind": "fixed",
+   "maturity": "2027-02-24",
+   "name": "TURKGB 11 02/24/27",
+   "coupon": 11.0
+  },
+  {
+   "isin": "TRT190728T18",
+   "kind": "fixed",
+   "maturity": "2028-07-19",
+   "name": "TURKGB 17.3 07/19/28",
+   "coupon": 17.3
+  },
+  {
+   "isin": "TRT080328T15",
+   "kind": "fixed",
+   "maturity": "2028-03-08",
+   "name": "TURKGB 12.4 03/08/28",
+   "coupon": 12.4
+  },
+  {
+   "isin": "TRT160228T16",
+   "kind": "fixed",
+   "maturity": "2028-02-16",
+   "name": "TURKGB 9.1 02/16/28",
+   "coupon": 9.1
+  },
+  {
+   "isin": "TRT210329T17",
+   "kind": "fixed",
+   "maturity": "2029-03-21",
+   "name": "TURKGB 03/21/29",
+   "coupon": null
+  },
+  {
+   "isin": "TRT120929T12",
+   "kind": "fixed",
+   "maturity": "2029-09-12",
+   "name": "TURKGB 30 09/12/29",
+   "coupon": 30.0
+  },
+  {
+   "isin": "TRT160431T35",
+   "kind": "fixed",
+   "maturity": "2031-04-16",
+   "name": "TURKGB 33.26 04/16/31",
+   "coupon": 33.26
+  },
+  {
+   "isin": "TRT021030T18",
+   "kind": "fixed",
+   "maturity": "2030-10-02",
+   "name": "TURKGB 33.9 10/02/30",
+   "coupon": 33.9
+  },
+  {
+   "isin": "TRT100730T13",
+   "kind": "fixed",
+   "maturity": "2030-07-10",
+   "name": "TURKGB 34.1 07/10/30",
+   "coupon": 34.1
+  },
+  {
+   "isin": "TRT131130T14",
+   "kind": "fixed",
+   "maturity": "2030-11-13",
+   "name": "TURKGB 11.7 11/13/30",
+   "coupon": 11.7
+  },
+  {
+   "isin": "TRT050935T13",
+   "kind": "fixed",
+   "maturity": "2035-09-05",
+   "name": "TURKGB 30.06 09/05/35",
+   "coupon": 30.06
+  },
+  {
+   "isin": "TRT051033T12",
+   "kind": "fixed",
+   "maturity": "2033-10-05",
+   "name": "TURKGB 26.2 10/05/33",
+   "coupon": 26.2
+  },
+  {
+   "isin": "TRT270934T18",
+   "kind": "fixed",
+   "maturity": "2034-09-27",
+   "name": "TURKGB 27.7 09/27/34",
+   "coupon": 27.7
+  },
+  {
+   "isin": "TRT130733T17",
+   "kind": "fixed",
+   "maturity": "2033-07-13",
+   "name": "TURKGB 17.8 07/13/33",
+   "coupon": 17.8
+  },
+  {
+   "isin": "TRT131032T13",
+   "kind": "fixed",
+   "maturity": "2032-10-13",
+   "name": "TURKGB 10.4 10/13/32",
+   "coupon": 10.4
+  },
+  {
+   "isin": "TRT280432T14",
+   "kind": "fixed",
+   "maturity": "2032-04-28",
+   "name": "TURKGB 21 1/2 04/28/32",
+   "coupon": 21.5
+  },
+  {
+   "isin": "TRT070727T13",
+   "kind": "cpi",
+   "maturity": "2027-07-07",
+   "name": "TURKGB 2.9 07/07/27",
+   "coupon": 2.9
+  },
+  {
+   "isin": "TRT151227T16",
+   "kind": "cpi",
+   "maturity": "2027-12-15",
+   "name": "TURKGB 3 12/15/27",
+   "coupon": 3.0
+  },
+  {
+   "isin": "TRT180827T19",
+   "kind": "cpi",
+   "maturity": "2027-08-18",
+   "name": "TURKGB 3 08/18/27",
+   "coupon": 3.0
+  },
+  {
+   "isin": "TRT280628T18",
+   "kind": "cpi",
+   "maturity": "2028-06-28",
+   "name": "TURKGB 3.3 06/28/28",
+   "coupon": 3.3
+  },
+  {
+   "isin": "TRT120128T11",
+   "kind": "cpi",
+   "maturity": "2028-01-12",
+   "name": "TURKGB 2.9 01/12/28",
+   "coupon": 2.9
+  },
+  {
+   "isin": "TRT190728T34",
+   "kind": "cpi",
+   "maturity": "2028-07-19",
+   "name": "TURKGB 0 07/19/28",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT181028T14",
+   "kind": "cpi",
+   "maturity": "2028-10-18",
+   "name": "TURKGB 0 10/18/28",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT080530T19",
+   "kind": "cpi",
+   "maturity": "2030-05-08",
+   "name": "TURKGB 0 05/08/30",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT211229T16",
+   "kind": "cpi",
+   "maturity": "2029-12-21",
+   "name": "TURKGB 0 12/21/29",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT110930T10",
+   "kind": "cpi",
+   "maturity": "2030-09-11",
+   "name": "TURKGB 6.12 09/11/30",
+   "coupon": 6.12
+  },
+  {
+   "isin": "TRT080530T27",
+   "kind": "cpi",
+   "maturity": "2030-05-08",
+   "name": "TURKGB 5.26 05/08/30",
+   "coupon": 5.26
+  },
+  {
+   "isin": "TRT110429T18",
+   "kind": "cpi",
+   "maturity": "2029-04-11",
+   "name": "TURKGB 5 04/11/29",
+   "coupon": 5.0
+  },
+  {
+   "isin": "TRT020529T18",
+   "kind": "cpi",
+   "maturity": "2029-05-02",
+   "name": "TURKGB 2.48 05/02/29",
+   "coupon": 2.48
+  },
+  {
+   "isin": "TRT080131T12",
+   "kind": "cpi",
+   "maturity": "2031-01-08",
+   "name": "TURKGB 5.3 01/08/31",
+   "coupon": 5.3
+  },
+  {
+   "isin": "TRT140229T17",
+   "kind": "cpi",
+   "maturity": "2029-02-14",
+   "name": "TURKGB 0 02/14/29",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT130629T14",
+   "kind": "cpi",
+   "maturity": "2029-06-13",
+   "name": "TURKGB 4 1/2 06/13/29",
+   "coupon": 4.5
+  },
+  {
+   "isin": "TRT280531T14",
+   "kind": "cpi",
+   "maturity": "2031-05-28",
+   "name": "TURKGB 3 05/28/31",
+   "coupon": 3.0
+  },
+  {
+   "isin": "TRT210235T10",
+   "kind": "cpi",
+   "maturity": "2035-02-21",
+   "name": "TURKGB 0 02/21/35",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT230233T10",
+   "kind": "cpi",
+   "maturity": "2033-02-23",
+   "name": "TURKGB 0 02/23/33",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT110232T15",
+   "kind": "cpi",
+   "maturity": "2032-02-11",
+   "name": "TURKGB 0 02/11/32",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT040832T18",
+   "kind": "cpi",
+   "maturity": "2032-08-04",
+   "name": "TURKGB 0 08/04/32",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT120133T14",
+   "kind": "cpi",
+   "maturity": "2033-01-12",
+   "name": "TURKGB 0 01/12/33",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT070933T13",
+   "kind": "cpi",
+   "maturity": "2033-09-07",
+   "name": "TURKGB 0 09/07/33",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT180237T13",
+   "kind": "cpi",
+   "maturity": "2037-02-18",
+   "name": "TURKGB 0 02/18/37",
+   "coupon": 0.0
+  },
+  {
+   "isin": "TRT131027T10",
+   "kind": "float",
+   "maturity": "2027-10-13",
+   "name": "TURKGB Float 10/13/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT010328T12",
+   "kind": "float",
+   "maturity": "2028-03-01",
+   "name": "TURKGB Float 03/01/28",
+   "coupon": null
+  },
+  {
+   "isin": "TRT190128T14",
+   "kind": "float",
+   "maturity": "2028-01-19",
+   "name": "TURKGB Float 01/19/28",
+   "coupon": null
+  },
+  {
+   "isin": "TRT170528T12",
+   "kind": "float",
+   "maturity": "2028-05-17",
+   "name": "TURKGB Float 05/17/28",
+   "coupon": null
+  },
+  {
+   "isin": "TRT060928T11",
+   "kind": "float",
+   "maturity": "2028-09-06",
+   "name": "TURKGB Float 09/06/28",
+   "coupon": null
+  },
+  {
+   "isin": "TRT160627T13",
+   "kind": "float",
+   "maturity": "2027-06-16",
+   "name": "TURKGB Float 06/16/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT130928T12",
+   "kind": "float",
+   "maturity": "2028-09-13",
+   "name": "TURKGB Float 09/13/28",
+   "coupon": null
+  },
+  {
+   "isin": "TRT050527T17",
+   "kind": "float",
+   "maturity": "2027-05-05",
+   "name": "TURKGB Float 05/05/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT171127T15",
+   "kind": "float",
+   "maturity": "2027-11-17",
+   "name": "TURKGB Float 11/17/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT130127T11",
+   "kind": "float",
+   "maturity": "2027-01-13",
+   "name": "TURKGB Float 01/13/27",
+   "coupon": null
+  },
+  {
+   "isin": "TRT070329T15",
+   "kind": "float",
+   "maturity": "2029-03-07",
+   "name": "TURKGB Float 03/07/29",
+   "coupon": null
+  },
+  {
+   "isin": "TRT160431T19",
+   "kind": "float",
+   "maturity": "2031-04-16",
+   "name": "TURKGB Float 04/16/31",
+   "coupon": null
+  },
+  {
+   "isin": "TRT020130T19",
+   "kind": "float",
+   "maturity": "2030-01-02",
+   "name": "TURKGB Float 01/02/30",
+   "coupon": null
+  },
+  {
+   "isin": "TRT030730T12",
+   "kind": "float",
+   "maturity": "2030-07-03",
+   "name": "TURKGB Float 07/03/30",
+   "coupon": null
+  },
+  {
+   "isin": "TRT040729T14",
+   "kind": "float",
+   "maturity": "2029-07-04",
+   "name": "TURKGB Float 07/04/29",
+   "coupon": null
+  },
+  {
+   "isin": "TRT090130T12",
+   "kind": "float",
+   "maturity": "2030-01-09",
+   "name": "TURKGB Float 01/09/30",
+   "coupon": null
+  },
+  {
+   "isin": "TRT061228T16",
+   "kind": "float",
+   "maturity": "2028-12-06",
+   "name": "TURKGB Float 12/06/28",
+   "coupon": null
+  },
+  {
+   "isin": "TRT031029T10",
+   "kind": "float",
+   "maturity": "2029-10-03",
+   "name": "TURKGB Float 10/03/29",
+   "coupon": null
+  },
+  {
+   "isin": "TRT130629T30",
+   "kind": "float",
+   "maturity": "2029-06-13",
+   "name": "TURKGB Float 06/13/29",
+   "coupon": null
+  },
+  {
+   "isin": "TRT050630T11",
+   "kind": "float",
+   "maturity": "2030-06-05",
+   "name": "TURKGB Float 06/05/30",
+   "coupon": null
+  },
+  {
+   "isin": "TRT110930T36",
+   "kind": "float",
+   "maturity": "2030-09-11",
+   "name": "TURKGB Float 09/11/30",
+   "coupon": null
+  },
+  {
+   "isin": "TRT100332T15",
+   "kind": "float",
+   "maturity": "2032-03-10",
+   "name": "TURKGB Float 03/10/32",
+   "coupon": null
+  },
+  {
+   "isin": "TRT110832T19",
+   "kind": "float",
+   "maturity": "2032-08-11",
+   "name": "TURKGB Float 08/11/32",
+   "coupon": null
+  }
+ ]
+}

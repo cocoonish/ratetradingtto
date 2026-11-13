@@ -585,7 +585,8 @@ def test_days_periods_and_what_is_left_out(desk):
     today = dt.date.today()
     before = (today - dt.timedelta(days=3)).isoformat()
     # a day typed in the box, and a day the chat names itself
-    res = svc.broker_add(u, "09:00:00 2y ois 35.30/35.50\nselam\n", before, "ICAP")
+    # (an empty line between: "selam" is a message of its own, without a time - not a line of the 09:00 message)
+    res = svc.broker_add(u, "09:00:00 2y ois 35.30/35.50\n\nselam\n", before, "ICAP")
     assert (res["saved"], res["quotes"], res["dates"]) == (2, 1, [before])
     named = (today - dt.timedelta(days=2))
     res = svc.broker_add(u, "%s\n09:00:00 2y ois 35.32/35.52\n" % named.strftime("%d.%m.%Y"), before)

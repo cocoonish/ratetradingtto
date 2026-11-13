@@ -530,7 +530,7 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 table.plain.chat td, table.plain.chat th { padding: 4px 7px; }
 table.plain.chat th:last-child, table.plain.chat td.what { width: 99%; }
 table.plain.chat td .kind { margin-left: 6px; color: var(--ink-3); font-size: 11px; }
-table.plain.chat td.what { white-space: normal; }
+table.plain.chat td.what { white-space: normal; min-width: 190px; }      /* long bond names beside it do not squeeze it to a word a line */
 table.plain.chat td.abbr { text-decoration: underline dotted var(--ink-3); text-underline-offset: 3px; cursor: help; }
 table.plain.chat td.said { max-width: 240px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); font-family: var(--mono); font-size: 11.5px; }
 table.plain.chat tr.dup td { opacity: .5; }
@@ -642,4 +642,14 @@ table.grid.sortable tr:first-child td:hover { color: var(--ink); }
 .resetinfo { font-size: 12px; margin-right: 6px; }
 .resetinfo .linkbtn, .linkbtn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .ret td.ret-spread.changed b { color: var(--warn, #d9a33b); font-weight: 600; }
+
+/* a table with room for more rows; the bond list dialog */
+table.grid tr.grow-hidden { display: none; }
+.isin-tools { display: flex; gap: 10px; align-items: center; margin: 8px 0; }
+.isin-tools input[type=search] { flex: 1; }
+.isin-scroll { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+table.plain.isins { width: 100%; font-size: 12.5px; }
+table.plain.isins td.mono { font-family: var(--mono, ui-monospace, monospace); }
+table.plain.isins tr.have td { color: var(--ink-3); }
+#isin-text { width: 100%; font-family: var(--mono, ui-monospace, monospace); }
 

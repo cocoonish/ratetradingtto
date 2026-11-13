@@ -502,6 +502,12 @@ class Service(object):
                      "wide": bool(p.get("wide")), "collapsed": bool(p.get("collapsed")), "note": p.get("note")}
             if p.get("action"):
                 entry["action"] = p["action"]          # a button of the dashboard's own in the panel's header
+            if p.get("add"):
+                # a list of bonds: where an ISIN added goes, and which list of the catalog it is
+                where = p.get("sheet", v.get("sheet"))
+                entry["add"] = dict(p["add"], ref="%s!%s" % (where, p["add"]["list"]), book=v["book"], name=v["id"])
+            if p.get("grow"):
+                entry["grow"] = p["grow"]               # more rows than in use: the page shows the filled ones and one more
             sheet = p.get("sheet", sheet_default)
             if sheet is not None and sheet not in book.model.sheet_index:
                 continue                               # a table of the dashboard's own that does not fit this file
@@ -532,6 +538,8 @@ class Service(object):
                         _column_captions(entry["data"], p["header"])
                     if p.get("append") == "asw_fx":
                         self._asw_fx_columns(book, user, entry["data"], loc)
+                    elif p.get("append") == "broker_bonds":
+                        self._dibs_broker_columns(book, user, entry["data"], loc)
                 elif p["type"] == "chart":
                     spec = p.get("spec")
                     if spec is None:
@@ -1586,6 +1594,67 @@ class Service(object):
         self._callers_cache = (mark, found)
         return found
 
+    # ================================================================== bond lists
+    #: the lists of bonds on the pages, by page: (book, the cells of the list)
+    BOND_LISTS = {"dibs": ("tto", "DİBS RV!A5:A54"), "asw": ("asw", "ASW!B7:B56"), "bulk": ("tto", "Bulk Bond!A3:A52")}
+
+    def bond_catalog(self, user: Optional[str] = None) -> Dict[str, Any]:
+        """The TRY government bonds of the desk's Bloomberg list, each with the lists it is already in."""
+        from . import bonds as bd
+        lists = {name: self._list_values(user, *where) for name, where in self.BOND_LISTS.items() if where[0] in self.books}
+        rows = []
+        for b in bd.catalog():
+            rows.append(dict(b, label=bd.short_label(b), kind_text=bd.KINDS.get(b.get("kind"), b.get("kind") or ""),
+                             lists=[name for name, vals in lists.items() if b["isin"] in vals]))
+        return {"bonds": rows, "kinds": bd.KINDS, "lists": {k: len([v for v in vals if v]) for k, vals in lists.items()}}
+
+    def _list_values(self, user: Optional[str], book_id: str, ref: str) -> List[str]:
+        book = self.books[book_id]
+
+        def run():
+            calc = self._calc(user_key(user) if user else None, book)
+            return ["".join(str(v).split()).upper() if isinstance(v, str) else ""
+                    for v in (calc.get(si, *divmod(rc, COLS)) for si, rc in book.cells_of(ref))]
+
+        return self.et.call(run)
+
+    def list_add(self, user: str, book_id: str, ref: str, values: List[Any]) -> Dict[str, Any]:
+        """Bonds added to a list of a page by ISIN: into its first empty rows (for everyone when the list is a
+        shared one), each ISIN once.  An ISIN whose check digit is wrong is refused; one already listed is skipped."""
+        from . import bonds as bd
+        user = self.require_user(user)
+        book = self._book(book_id)
+        try:
+            cells = book.cells_of(ref)
+        except (KeyError, ValueError):
+            raise ServiceError("liste bulunamadı: %s" % ref, 404)
+        if not all(c in book.inputs for c in cells):
+            raise ServiceError("bu hücreler bir liste değil: %s" % ref)
+        current = self._list_values(user, book_id, ref)
+        wanted: List[str] = []
+        bad: List[str] = []
+        for v in values or []:
+            for code in re.split(r"[\s,;]+", str(v or "")):
+                code = code.strip().upper()
+                if not code:
+                    continue
+                if not bd.isin_valid(code):
+                    bad.append(code)
+                elif code not in wanted:
+                    wanted.append(code)
+        if bad:
+            raise ServiceError("ISIN değil ya da kontrol hanesi tutmuyor: " + ", ".join(bad[:8]))
+        skipped = [c for c in wanted if c in current]
+        todo = [c for c in wanted if c not in current]
+        free = [k for k, v in enumerate(current) if not v]
+        if len(todo) > len(free):
+            raise ServiceError("listede %d boş satır var, %d kâğıt eklenmek istendi" % (len(free), len(todo)))
+        items = [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, todo)]
+        res = self.set_inputs(user, book_id, items) if items else {"applied": 0, "errors": []}
+        if res["errors"]:
+            raise ServiceError("; ".join(res["errors"]))
+        return {"added": todo, "skipped": skipped, "cells": [i["ref"] for i in items], "free": len(free) - len(todo), "gen": self.gen}
+
     # ================================================================== ASW against FX swaps
     def _asw_fx_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """ASW against the FX swap curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
@@ -1630,6 +1699,82 @@ class Service(object):
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
         data["added"] = int(data.get("added") or 0) + 2
+
+    def _dibs_broker_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
+        """The day's broker chat next to the DİBS RV table: per bond the bid, the ask and the last trade where the
+        Broker Chat board has them (resets applied), the time of the last word, the yield the broker mid stands
+        for and how far it is from the screen's yield (bp; + : the brokers see it cheaper than the screen)."""
+        sheet = "DİBS RV"
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows or sheet not in book.model.sheet_index:
+            return
+        si = book.model.sheet_index[sheet]
+        calc = self._calc(user, book)
+        today = self.today_iso()
+        _, table, _ = self._broker_board(user, today, today)
+        said = {r["isin"]: r for r in table if r.get("product") == "DIBS" and r.get("isin")}
+        if said:
+            self._bond_implied(user, [], list(said.values()))
+        mkt = self._broker_market(user) if said else None
+
+        def blank() -> Dict[str, Any]:
+            return {"t": "", "k": ""}
+
+        def lvl(v: Any, unit: str, extra: str = "", cls: str = "") -> Dict[str, Any]:
+            if type(v) is not float:
+                return blank()
+            cell = {"t": numfmt.format_value(v, "0.000" if unit == "px" else "0.00", loc) + extra, "v": v, "k": "n"}
+            if cls:
+                cell["cls"] = cls
+            return cell
+
+        heads = [("Broker bid", "Broker Chat tahtasında bugün duran bid (bono / kuponsuzda getiri)"),
+                 ("Broker ask", "Broker Chat tahtasında bugün duran offer"),
+                 ("Son işlem", "Bugün chat'te geçen son işlem (biz: bizim masanın); işlem yoksa tarafı söylenmemiş son seviye "
+                               "(ihale fiyatı gibi), soluk"),
+                 ("Saat", "Kâğıt için chat'te söylenen son şeyin saati"),
+                 ("Broker getiri %", "Broker orta fiyatının ima ettiği getiri: ekran getirisi − (fiyat − ekran fiyatı) / (ekran fiyatı · mod. süre); "
+                                     "bonoda kotanın kendisi"),
+                 ("Broker − ekran (bp)", "Broker orta getirisi − ekran getirisi (DİBS RV): + ise brokerlar kâğıdı ekrandan ucuz görüyor")]
+        for i, r in enumerate(rnums):
+            if r == 4:
+                rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in heads])
+                continue
+            q = None
+            if 5 <= r <= 54:
+                v = calc.get(si, r, 1)
+                q = said.get("".join(str(v).split()).upper()) if isinstance(v, str) and v.strip() else None
+            if q is None:
+                rows[i].extend([blank() for _ in heads])
+                continue
+            unit = q.get("unit") or "px"
+            times = [x for x in (q.get("bid_time"), q.get("ask_time"), q.get("last_time"), q.get("level_time")) if x]
+            last = lvl(q.get("last"), unit, " · biz" if q.get("last_by") == "biz" else "",
+                       "buy" if q.get("last_side") == "ask" else ("sell" if q.get("last_side") == "bid" else ""))
+            if type(q.get("last")) is not float and type(q.get("level")) is float:
+                last = dict(lvl(q["level"], unit, "", "soft"), tip="Seviye (işlem değil): " + (q.get("said") or ""))
+            # the yield of the mid (of one side when only one stands; of the last trade when no side stands)
+            imp = q.get("implied") or {}
+            if unit == "yld":
+                sides = [q[k] for k in ("bid", "ask") if type(q.get(k)) is float] or \
+                    [q[k] for k in ("last", "level") if type(q.get(k)) is float][:1]
+                screen = (self._bond_screen(mkt, q["isin"]) or {}).get("yield")
+            else:
+                sides = [imp[k] for k in ("bid", "ask") if type(imp.get(k)) is float] or \
+                    [imp[k] for k in ("last", "level") if type(imp.get(k)) is float][:1]
+                screen = imp.get("screen_yield")
+            mid = sum(sides) / len(sides) if sides else None
+            gap = (mid - screen) * 100.0 if mid is not None and type(screen) is float else None
+            gap_cell = blank()
+            if gap is not None:
+                gap_cell = {"t": ("+" if gap > 0 else "") + numfmt.format_value(gap, "0", loc), "v": gap, "k": "n"}
+                if abs(gap) >= 0.5:
+                    gap_cell["c"] = "pos" if gap > 0 else "neg"
+            rows[i].extend([lvl(q.get("bid"), unit), lvl(q.get("ask"), unit), last,
+                            {"t": max(times)[-8:-3] if times else "", "k": "s", "tip": max(times) if times else ""},
+                            lvl(mid, "yld"), gap_cell])
+        data["c"] = list(data.get("c") or []) + [h for h, _ in heads]
+        data["added"] = int(data.get("added") or 0) + len(heads)
 
     # ================================================================== the order of the pricing sources
     def sources(self) -> Dict[str, Any]:
@@ -1952,8 +2097,107 @@ class Service(object):
         return bl.OisMarket(book, self._calc(user_key(user) if user else None, book))
 
     @staticmethod
+    def _bond_screen(mkt, isin: Optional[str]) -> Optional[Dict[str, Any]]:
+        """What the DİBS RV table has of a bond: the clean price in use, the BIST compound yield (%), the modified
+        duration - the screen a chat's bond quote is read against."""
+        if mkt is None or not isin:
+            return None
+        try:
+            info = bl.bond_info(mkt.book, mkt.calc, isin)
+        except Exception:  # noqa: BLE001 - the table may not have the bond
+            return None
+        if not info or "".join(str(info.get("isin") or "").split()).upper() != isin:
+            return None
+        y = info.get("yield")
+        return {"clean": info.get("clean") if type(info.get("clean")) is float else None,
+                "yield": y * 100.0 if type(y) is float and abs(y) < 5 else (y if type(y) is float else None),
+                "mod_dur": info.get("mod_dur") if type(info.get("mod_dur")) is float else None}
+
+    @staticmethod
+    def _bond_level(isin: str, unit: Optional[str], value: Any) -> Optional[Dict[str, Any]]:
+        """A bond's level as ``bc.near_level`` takes it (``None`` for a bond the catalog does not know)."""
+        from . import bonds as bd
+        b = bd.by_isin(isin)
+        if b is None or type(value) is not float or unit not in ("px", "yld"):
+            return None
+        mat = _dt.date.fromisoformat(b["maturity"])
+        return {"isin": b["isin"], "kind": b.get("kind"), "months": (mat.year - 2000) * 12.0 + mat.month, "unit": unit,
+                "value": value, "label": bd.short_label(b)}
+
+    def _bond_nearby(self, user: Optional[str], mkt) -> List[Dict[str, Any]]:
+        """The floaters, CPI linkers and bills of the DİBS RV table at their screen price (a bill at its yield)."""
+        from . import bonds as bd
+        out: List[Dict[str, Any]] = []
+        if mkt is None or "tto" not in self.books:
+            return out
+        try:
+            isins = self._list_values(user, *self.BOND_LISTS["dibs"])
+        except Exception:  # noqa: BLE001 - a workbook without the table
+            return out
+        for isin in isins:
+            b = bd.by_isin(isin) if isin else None
+            if b is None or b.get("kind") not in ("float", "cpi", "bill", "zero"):
+                continue
+            sc = self._bond_screen(mkt, isin) or {}
+            unit = "yld" if bd.quoted_in_yield(b) else "px"
+            lv = self._bond_level(isin, unit, sc.get("yield") if unit == "yld" else sc.get("clean"))
+            if lv is not None:
+                out.append(lv)
+        return out
+
+    def _bond_pick(self, mkt, rows: List[Dict[str, Any]]) -> None:
+        """A month that has several bonds of the kind ("Jan30 tlref": 02.01.30 and 09.01.30; "10/02/2027": a bill
+        and a bond): the one whose screen level is nearest to the level said - in the unit the line was read in.
+        When the screen settles it (one is near, the others far or not of that unit) the line is no longer flagged."""
+        from . import bonds as bd
+        for q in rows:
+            if q.get("product") != "DIBS" or "bond?" not in (q.get("flags") or []):
+                continue
+            level = next((q[k] for k in ("price", "bid", "ask") if type(q.get(k)) is float), None)
+            same = [i for i in [q.get("isin")] + list(q.get("alts") or [])
+                    if i and bd.by_isin(i) is not None and ("yld" if bd.quoted_in_yield(bd.by_isin(i)) else "px") == q.get("unit")]
+            if len(same) == 1 and same[0] == q.get("isin"):
+                q["flags"].remove("bond?")                   # the others trade on the other unit: "10/02/2027 99.445"
+                continue
+            if level is None:
+                continue
+            gaps: Dict[str, float] = {}
+            for isin in same:
+                sc = self._bond_screen(mkt, isin) or {}
+                ref = sc.get("yield") if q.get("unit") == "yld" else sc.get("clean")
+                if ref is not None:
+                    gaps[isin] = abs(ref - level)
+            if not gaps:
+                continue
+            best = min(gaps, key=lambda i: gaps[i])
+            tight = 0.5 if q.get("unit") == "yld" else 1.5
+
+            def far(other: str) -> bool:
+                """Another bond of the month that cannot be the one: its screen is far from the level, or - with no
+                screen - its coupon is far from the near one's (12.4% next to 36.8%: some twenty points apart)."""
+                if other in gaps:
+                    return gaps[other] >= 2 * gaps[best] + tight
+                a, b = bd.by_isin(best) or {}, bd.by_isin(other) or {}
+                return a.get("kind") == b.get("kind") == "fixed" and abs((a.get("coupon") or 0.0) - (b.get("coupon") or 0.0)) >= 5.0
+
+            if gaps[best] <= tight and all(far(i) for i in same if i != best):
+                q["flags"].remove("bond?")                   # near one, the others cannot be it: settled
+            if best != q.get("isin"):
+                b = bd.by_isin(best)
+                q["alts"] = [i for i in [q.get("isin")] + list(q.get("alts") or []) if i != best]
+                q["isin"], q["key"] = best, "DIBS:" + best
+                if b:
+                    q["label"] = bd.short_label(b)
+                    q["tenors"] = [q["label"]]
+                    q["bond_kind"] = b.get("kind")
+
+    @staticmethod
     def _broker_model(mkt, q: Dict[str, Any]) -> Optional[float]:
-        """Where the dashboard's own TRY OIS curve has an instrument of the chat (cross-currency: no answer)."""
+        """Where the dashboard's own TRY OIS curve has an instrument of the chat (cross-currency: no answer); for a
+        bond, its screen price (or yield, for a bill) in the DİBS RV table."""
+        if mkt is not None and q.get("product") == "DIBS":
+            sc = Service._bond_screen(mkt, q.get("isin") or str(q.get("key") or "").replace("DIBS:", "")) or {}
+            return sc.get("yield") if q.get("unit") == "yld" else sc.get("clean")
         if mkt is None or q.get("product") != "OIS":
             return None
         return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months)
@@ -2029,8 +2273,31 @@ class Service(object):
 
         return implied
 
+    def _bond_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
+        """The yield a bond's price quote stands for, from the DİBS RV screen: yield − (price − screen price) /
+        (screen price · modified duration) (``implied``, in per cent; ``kind`` "bond")."""
+        items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "level")) for r in board or ()]
+        if not any(q.get("product") == "DIBS" and q.get("unit") == "px" for q, _ in items):
+            return
+        book = self.books.get("tto")
+        if book is None:
+            return
+        mkt = bl.OisMarket(book, self._calc(user_key(user) if user else None, book))
+        for q, fields in items:
+            if q.get("product") != "DIBS" or q.get("unit") != "px":
+                continue
+            sc = self._bond_screen(mkt, q.get("isin") or str(q.get("key") or "").replace("DIBS:", ""))
+            if not sc or sc.get("clean") is None or sc.get("yield") is None or not sc.get("mod_dur"):
+                continue
+            out: Dict[str, Any] = {"kind": "bond", "screen": sc["clean"], "screen_yield": sc["yield"], "mod_dur": sc["mod_dur"]}
+            for f in fields:
+                if type(q.get(f)) is float:
+                    out[f] = sc["yield"] - (q[f] - sc["clean"]) / (sc["clean"] * sc["mod_dur"]) * 100.0
+            q["implied"] = out if any(f in out for f in fields) else None
+
     def _fx_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
         """The TRY rate each FX swap quote in points stands for (``implied``: bid / ask / price / last, in per cent)."""
+        self._bond_implied(user, rows, board)
         if not any(q.get("product") == "FX" for q in rows) and not any(r.get("product") == "FX" for r in board or ()):
             return
         fn = self._fx_market(user)
@@ -2079,7 +2346,7 @@ class Service(object):
 
         def ref(q: Dict[str, Any]) -> Optional[float]:
             for r in reversed(before(q)):
-                if r.get("ok") and r.get("key") == q["key"] and r.get("unit") == "pct":
+                if r.get("ok") and r.get("key") == q["key"] and r.get("unit") == q.get("unit"):
                     for name in ("price", "ask", "bid"):
                         if r.get(name) is not None:
                             return r[name]
@@ -2089,7 +2356,23 @@ class Service(object):
         def standing(q: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return next((row for row in bc.board(before(q)) if row["key"] == q["key"]), None)
 
-        rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing)
+        screen: List[List[Dict[str, Any]]] = []
+
+        def nearby(q: Dict[str, Any]) -> List[Dict[str, Any]]:
+            """The bonds priced before the line - in the day's chat, then on the DİBS RV screen."""
+            if not screen:
+                screen.append(self._bond_nearby(user, mkt))
+            said: Dict[str, Dict[str, Any]] = {}
+            for r in before(q):
+                if r.get("ok") and r.get("product") == "DIBS" and r.get("isin"):
+                    v = next((r[k] for k in ("price", "ask", "bid") if type(r.get(k)) is float), None)
+                    lv = self._bond_level(r["isin"], r.get("unit"), v)
+                    if lv is not None:
+                        said[r["isin"]] = lv                  # the last word on a bond stands
+            return list(said.values()) + screen[0]
+
+        rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing, nearby)
+        self._bond_pick(mkt, rows)
         now = _dt.datetime.now().strftime("%H:%M:%S")
         seen: Dict[Tuple, int] = {}
         for q in rows:
@@ -2238,6 +2521,14 @@ class Service(object):
         last = self._broker_day(date_to) if date_to else day
         if last < day:
             day, last = last, day
+        rows, table, resets = self._broker_board(user, day, last)
+        self._fx_implied(user, rows, table)
+        return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
+                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen}
+
+    def _broker_board(self, user, day: str, last: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """The kept lines of the days, each with whose it is, and the board they make (resets applied), each
+        instrument next to where the dashboard has it."""
         rows = self.store.broker_quotes(day, last)
         # the list of names as it is now: a name assigned after its lines were kept shows them as its own
         people = self._people()
@@ -2254,9 +2545,7 @@ class Service(object):
         table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz")
         for row in table:
             row.update(bc.against(row, self._broker_model(mkt, row)))
-        self._fx_implied(user, rows, table)
-        return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
-                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen}
+        return rows, table, resets
 
     def _broker_resets(self) -> List[Dict[str, Any]]:
         v = self.store.get("broker.resets", [])

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------------------------- words
 _PRODUCTS = {"ois": "OIS", "tlref": "OIS", "x": "XCCY", "xccy": "XCCY", "ccs": "XCCY", "ccy": "XCCY", "cross": "XCCY",
@@ -40,18 +40,22 @@ _PRODUCTS = {"ois": "OIS", "tlref": "OIS", "x": "XCCY", "xccy": "XCCY", "ccs": "
 _FX_SHORT = {"o/n": "O/N", "on": "O/N", "t/n": "T/N", "tn": "T/N", "tom/next": "T/N", "tomnext": "T/N", "tom": "T/N",
              "s/n": "S/N", "sn": "S/N", "spot/next": "S/N", "spotnext": "S/N"}
 _FX_SHORT_DAYS = {"O/N": 0.0, "T/N": 0.0, "S/N": 0.0}
-_BID = {"bid", "bids", "bidding", "pay", "pays", "payer", "paying", "buy", "buys", "buyer", "buying", "alıcı", "alici", "alış", "alis"}
+_BID = {"bid", "bids", "bidding", "pay", "pays", "payer", "paying", "buy", "buys", "buyer", "buying", "alıcı", "alici", "alış", "alis",
+        "bidim", "alicaz", "alırız", "aliriz", "alirim", "alırım"}
 _ASK = {"offer", "offers", "offered", "offering", "ofr", "ofrd", "ofd", "ask", "asks", "asked", "rec", "recs", "receive",
-        "receiver", "receiving", "sell", "sells", "seller", "selling", "satıcı", "satici", "satış", "satis"}
-_LIFT = {"taken", "tkn", "lifted", "lftd", "lifts", "paid", "mine"}                # a trade at the offer
-_HIT = {"given", "gvn", "givn", "hit", "hits", "sold", "yours"}                    # a trade at the bid
+        "receiver", "receiving", "sell", "sells", "seller", "selling", "satıcı", "satici", "satış", "satis", "offerim", "saticam",
+        "satarim", "satarım", "satıcam"}
+_LIFT = {"taken", "tkn", "lifted", "lftd", "lifts", "paid", "mine", "aldi", "aldı", "aldik", "aldık", "alindi", "alındı"}   # at the offer
+_HIT = {"given", "gvn", "givn", "hit", "hits", "sold", "yours", "verdi", "verdiler", "verdik", "verildi"}            # at the bid
 _TRADE = {"trades", "traded", "trade", "trading", "trding", "trdng", "tradng", "tradin", "trd", "trds", "trdd", "dealt",
           "done", "deals", "printed", "prints"}                                    # a trade, nobody's side said
-_REF = {"ref", "refer", "refs", "referred", "cxl", "cancel", "cancelled", "canceled", "pull", "pulled", "off"}
-_CARE = {"care", "cares", "interest", "interested", "looking"}
+_REF = {"ref", "refer", "refs", "referred", "cxl", "cancel", "cancelled", "canceled", "pull", "pulled", "off", "refledi", "refleldi",
+        "refle", "reflendi"}
+_CARE = {"care", "cares", "interest", "interested", "looking", "int", "ilgi", "ilginiz", "bakariz", "bakarız", "bakarim", "bakarım"}
 _FRA = {"fra", "fras", "fwd", "forward", "fwds"}
 _FILLER = {"at", "@", "a", "the", "in", "on", "for", "with", "is", "now", "still", "pls", "please", "try", "tl", "tlref", "vs",
-           "fly", "flies", "bfly", "butterfly", "spread", "sprd", "spd", "switch", "outright", "swap", "and", "&", "bp", "bps"}
+           "fly", "flies", "bfly", "butterfly", "spread", "sprd", "spd", "switch", "outright", "swap", "and", "&", "bp", "bps",
+           "any"}
 _CHOICE = {"choice", "cho"}                                         # bid and ask at one level
 
 _VOCABULARY = set(_PRODUCTS) | _BID | _ASK | _LIFT | _HIT | _TRADE | _REF | _CARE | _FRA | _FILLER | _CHOICE
@@ -262,6 +266,126 @@ def _tokens(text: str) -> List[str]:
     return [w for w in re.split(r"\s+", t.strip()) if w]
 
 
+# ---------------------------------------------------------------------------------------------- bonds
+_BOND_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11,
+                "dec": 12, "january": 1, "february": 2, "march": 3, "april": 4, "june": 6, "july": 7, "august": 8, "sept": 9,
+                "september": 9, "october": 10, "november": 11, "december": 12, "oca": 1, "ocak": 1, "şub": 2, "sub": 2, "şubat": 2,
+                "subat": 2, "mart": 3, "nis": 4, "nisan": 4, "mayıs": 5, "mayis": 5, "haz": 6, "haziran": 6, "tem": 7, "temmuz": 7,
+                "ağu": 8, "agu": 8, "ağustos": 8, "agustos": 8, "eyl": 9, "eylül": 9, "eylul": 9, "eki": 10, "ekim": 10, "kas": 11,
+                "kasım": 11, "kasim": 11, "ara": 12, "aralık": 12, "aralik": 12}
+_BOND_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})(zc|tlref|cpi)?(?:\.?(t\d))?$")
+_BOND_MONTH = re.compile(r"^([a-zçğıöşü]{3,9})'?(\d{2})(?:\.?(t\d))?$")
+_BOND_KIND = {"tlref": "float", "float": "float", "frn": "float", "cpi": "cpi", "tüfe": "cpi", "tufe": "cpi", "zc": "zc",
+              "bono": "zc", "bill": "zc"}
+_BOND_SETTLE = {"today": "T0", "tdy": "T0", "tod": "T0", "t0": "T0", "bugün": "T0", "bugun": "T0", "tom": "T1", "t1": "T1",
+                "yarın": "T1", "yarin": "T1", "t2": "T2"}
+_BOND_WORDS = set(_BOND_KIND) | set(_BOND_SETTLE) | {"mio", "mn", "tane"}
+
+
+def _bond_refs(low: List[str]) -> List[Tuple[List[int], Dict[str, Any]]]:
+    """The bonds a line names: "15/3/28", "06/01/2027.t1", "10/02/2027zc.t1", "mar28", "Jan30", "April 31", "Sep 34" -
+    ``[(word indices, {"date" | "month", "kind", "settle"})]``."""
+    out: List[Tuple[List[int], Dict[str, Any]]] = []
+    k = 0
+    while k < len(low):
+        w = low[k].strip(".:?")
+        m = _BOND_DATE.match(w)
+        info: Optional[Dict[str, Any]] = None
+        used = [k]
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            y = y if y > 100 else 2000 + y
+            try:
+                info = {"date": _dt.date(y, mo, d).isoformat(), "kind": _BOND_KIND.get(m.group(4) or ""), "settle": m.group(5)}
+            except ValueError:
+                info = None
+        else:
+            m = _BOND_MONTH.match(w)
+            if m and m.group(1) in _BOND_MONTHS:
+                info = {"month": "%d-%02d" % (2000 + int(m.group(2)), _BOND_MONTHS[m.group(1)]), "kind": None, "settle": m.group(3)}
+            elif w in _BOND_MONTHS and k + 1 < len(low) and re.match(r"^'?\d{2}$", low[k + 1]) and w not in ("mar", "may"):
+                # "April 31", "Sep 34", "Nov 28" (not "may" / "mar": too often a word or a level follows them)
+                info = {"month": "%d-%02d" % (2000 + int(low[k + 1].strip("'")), _BOND_MONTHS[w]), "kind": None, "settle": None}
+                used = [k, k + 1]
+            elif w in ("nov", "dec", "sep", "oct", "jan", "feb", "apr", "jun", "jul", "aug") and k + 1 < len(low) \
+                    and re.match(r"^'?\d{2}$", low[k + 1]):
+                info = {"month": "%d-%02d" % (2000 + int(low[k + 1].strip("'")), _BOND_MONTHS[w]), "kind": None, "settle": None}
+                used = [k, k + 1]
+        if info is not None:
+            out.append((used, info))
+            k = used[-1] + 1
+            continue
+        k += 1
+    return out
+
+
+def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any]]:
+    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "cpi", "zc"),
+    of several of the month the one with the highest coupon (the benchmark: "mar28" is the 36.8% of 15.03.28, not the
+    12.4% of 08.03.28) - flagged, the price may tell otherwise.  Its label, ISIN and whether it trades on yield."""
+    from . import bonds as bd
+    kind = info.get("kind") or next((_BOND_KIND[w.split(".")[0]] for w in low if w.split(".")[0] in _BOND_KIND), None)  # "cpi.t1"
+    cands = bd.candidates(info.get("date"), info.get("month"), kind)
+    if not cands:
+        label = (info.get("date") or info.get("month") or "")
+        return {"label": label, "months": 0.0}
+    cands = sorted(cands, key=lambda b: -(b.get("coupon") or 0.0))
+    b = cands[0]
+    mat = _dt.date.fromisoformat(b["maturity"])
+    return {"isin": b["isin"], "label": bd.short_label(b), "yield": bd.quoted_in_yield(b), "ambiguous": len(cands) > 1,
+            "months": (mat.year - 2000) * 12.0 + mat.month, "alts": [c["isin"] for c in cands[1:]], "bond_kind": b.get("kind")}
+
+
+NEAR_MONTHS = 18          # how far the maturity of a bond may be from the one it stands in for
+
+
+def near_level(q: Dict[str, Any], levels: Iterable[Dict[str, Any]]) -> Optional[Tuple[float, str]]:
+    """Where a bond nobody has priced stands, from the bond of the same kind next to it: a floater from the floater
+    of the nearest maturity ("jan28 tlref .725" next to "13/10/27 tlref 100.650/.800" is 100.725), a bill's yield
+    from the nearest bill's - not a fixed coupon bond's price from another's (their coupons differ).
+    ``levels``: ``{"isin", "kind", "months", "unit", "value", "label"}`` of the bonds priced, nearest first wins
+    (within ``NEAR_MONTHS``).  ``(value, label)`` or ``None``."""
+    kind = q.get("bond_kind")
+    group = ("float",) if kind == "float" else (("cpi",) if kind == "cpi" else (("bill", "zero") if kind in ("bill", "zero") else ()))
+    if not group or not q.get("months"):
+        return None
+    best: Optional[Tuple[float, float, str]] = None
+    for lv in levels:
+        if lv.get("kind") not in group or lv.get("unit") != q.get("unit") or lv.get("isin") == q.get("isin"):
+            continue
+        if type(lv.get("value")) is not float or not lv.get("months"):
+            continue
+        gap = abs(lv["months"] - q["months"][0])
+        if gap <= NEAR_MONTHS and (best is None or gap < best[0]):
+            best = (gap, lv["value"], lv.get("label") or "")
+    return (best[1], best[2]) if best is not None else None
+
+
+def _complete_px(text: str, ref: Optional[float], anchor: Optional[float] = None, above: bool = True) -> Tuple[float, str]:
+    """A bond price as typed -> the price meant.  "550" for a bond at 100.56 is 100.550, ".60" is 100.600; written in
+    full ("94.125", "103.20") it stays.  The figure comes from ``anchor`` (the other side) or ``ref`` (the bond's
+    price); "abbr" when completed, "no-ref" when there is nothing to complete it with."""
+    t = text.strip().replace(",", ".")
+    m = re.match(r"^(\d+)\.(\d+)$", t)
+    if m and int(m.group(1)) >= 1:
+        return float(t), ""
+    if t.startswith("."):
+        frac = float("0" + t)
+    elif t.isdigit() and len(t) <= 3:
+        frac = int(t) / 10.0 ** len(t)
+    else:
+        return _num(t), ""
+    base = anchor if anchor is not None else ref
+    if base is None:
+        return frac, "no-ref"
+    big = int(base // 1)
+    cands = [big + k + frac for k in (-1, 0, 1)]
+    if anchor is not None:
+        cands = [c for c in cands if (c >= anchor - 1e-9 if above else c <= anchor + 1e-9)] or cands
+    cands.sort(key=lambda c: abs(c - base))
+    return round(cands[0], 6), "abbr"
+
+
 # ---------------------------------------------------------------------------------------------- FX swaps
 _GROUPED = re.compile(r"^\d{1,3}(?:[.,]\d{3})+$")
 
@@ -303,19 +427,19 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     """One quote ("18m ois 35.03/35.23") as a record, or ``None`` when the text names no instrument.
     ``instrument``: the one spoken of when the text names none ("..., 35.23 offer")."""
     raw = _tokens(text)
-    low = [w.lower().strip(",;:()") for w in raw]
+    low = [w.lower().strip(",;:()?!") for w in raw]
     other = {"ois", "tlref", "xccy", "ccs", "x", "cross", "basis", "irs"}
     fx_word = bool(set(low) & {"fx", "fxs", "fxswap", "pts", "points", "puan", "pips"})
     # a short date with a rate ("o/n 35.10 bid") is a money market rate, not swap points
     rate = r"(?:[1-9]\d[.,]\d{1,3}|\d[.,]\d{1,2})"                  # 35.10, 35.125, 4.50 - not 1.175 (points)
     rate_like = any(re.match(r"^[-+]?%s(?:/|$)|/%s$" % (rate, rate), w) for w in low)
-    fx = not (set(low) & other) and (fx_word or (_fx_short(low) is not None and not rate_like))
+    fx = not (set(low) & other) and (fx_word or (_fx_short(low) is not None and not rate_like)) and not _bond_refs(low)
     if fx:
         # swap points are written with a space between the thousands ("25 500/", "2 950/3 000"): one number
         joined = re.sub(r"(?<![\d.,])(\d{1,3}) (\d{3})(?![\d.,])", r"\1\2", text)
         if joined != text:
             raw = _tokens(joined)
-            low = [w.lower().strip(",;:()") for w in raw]
+            low = [w.lower().strip(",;:()?!") for w in raw]
     fra_word = any(w in _FRA for w in low)
     found = None
     at = 0
@@ -326,7 +450,21 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
             if found:
                 at = i
                 break
-    if short is not None:
+    bonds = _bond_refs(low) if short is None and not fx else []
+    if len(bonds) > 1:
+        return None                                        # a switch of two bonds: kept as it was written
+    bond = None
+    if bonds:
+        used_b, bond = bonds[0]
+        hit = _bond_lookup(bond, low)
+        if hit is not None:
+            bond.update(hit)
+        found = None
+        tenors, months, kind, product = [bond.get("label") or bond.get("date") or bond.get("month")], [bond.get("months", 0.0)], "outright", "DIBS"
+        idx = [k for k in range(len(low)) if k not in used_b]
+    if bond is not None:
+        pass
+    elif short is not None:
         tenors, months, kind, product = [_FX_SHORT[low[short]]], [0.0], "outright", "FX"
         idx = [k for k in range(len(low)) if k != short]
     elif found:
@@ -354,11 +492,29 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     if product == "FX" and kind != "outright":
         return None                                        # an FX swap is one tenor (a forward-forward is not read here)
     words = {low[k] for k in idx}
-    unit = "pts" if product == "FX" else ("bp" if kind in ("spread", "fly") else "pct")
+    if bond is not None:
+        unit = "yld" if bond.get("yield") else "px"
+    else:
+        unit = "pts" if product == "FX" else ("bp" if kind in ("spread", "fly") else "pct")
     out: Dict[str, Any] = {"product": product, "kind": kind, "tenors": tenors, "months": months,
                            "label": instrument_label(kind, tenors), "key": instrument_key(product, kind, tenors),
                            "unit": unit, "event": "quote", "bid": None, "ask": None, "price": None, "side": None,
                            "clear": [], "flags": [], "note": ""}
+    if bond is not None:
+        out["label"] = bond.get("label") or tenors[0]
+        if bond.get("isin"):
+            out["key"] = "DIBS:" + bond["isin"]
+            out["isin"] = bond["isin"]
+        if bond.get("bond_kind"):
+            out["bond_kind"] = bond["bond_kind"]
+        if bond.get("ambiguous"):
+            out["flags"].append("bond?")
+            out["alts"] = list(bond.get("alts") or [])
+        tails = [re.match(r"^(?:tlref|cpi|zc|tüfe|tufe)\.?(t\d)$", low[k]) for k in idx]      # "cpi.t1"
+        settle = (bond.get("settle") or "").upper() or next((_BOND_SETTLE[low[k]] for k in idx if low[k] in _BOND_SETTLE), "") \
+            or next((m.group(1).upper() for m in tails if m), "")
+        if settle:
+            out["settle"] = settle                           # "15/03/2028.t1", "tdy", "tom": the value date
     first = {name: min([k for k in idx if low[k] in group] or [10 ** 6]) for name, group in (("bid", _BID), ("ask", _ASK))}
     side = None if first["bid"] == first["ask"] else ("bid" if first["bid"] < first["ask"] else "ask")
 
@@ -394,17 +550,32 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         out["event"] = "ref"
     elif words & _CARE:
         out["event"] = "interest"
-    level_ref = ref(out) if ref is not None and unit == "pct" else None
+    level_ref = ref(out) if ref is not None and unit in ("pct", "px", "yld") else None
+    at_par = level_ref is None and bond is not None and unit == "px" and bond.get("bond_kind") in ("float", "cpi")
+    if at_par:
+        level_ref = 100.0           # a floater or a CPI linker nobody has priced yet (no screen, no quote before): near par
     consumed = set()
 
     def level(tok: str, anchor: Optional[float] = None, above: bool = True) -> float:
         if unit == "pts":
             return _points(tok)
-        if unit != "pct":
+        if unit == "px":
+            v, flag = _complete_px(tok, level_ref, anchor, above)
+            if flag and flag not in out["flags"] and not (anchor is not None and flag == "abbr" and level_ref is None):
+                out["flags"].append(flag)
+            if flag == "abbr" and anchor is None:
+                # its big figure is another bond's ("near") or par's: said so
+                said = "near" if out.get("ref_from") else ("par" if at_par else "")
+                if said and said not in out["flags"]:
+                    out["flags"].append(said)
+            return v
+        if unit not in ("pct", "yld"):
             return _num(tok)
         v, flag = _complete(tok, level_ref, anchor, above)
         if flag and not (anchor is not None and flag == "ambiguous") and flag not in out["flags"]:
             out["flags"].append(flag)
+        if flag == "abbr" and anchor is None and out.get("ref_from") and "near" not in out["flags"]:
+            out["flags"].append("near")                      # a bill's yield completed from the bill next to it
         return v
 
     def two_sided(b: str, a: str) -> Tuple[float, float]:
@@ -412,7 +583,10 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         with one side in full the other is completed against it (the bid below the ask, the ask above the bid)."""
         if unit == "pts":
             return _points(b), _complete_points(b, a)       # "375/90": 375 / 390
-        if unit != "pct":
+        if unit == "px":
+            bid = level(b)
+            return bid, level(a, bid)                        # ".95/20": 102.95 / 103.20 - the offer does not cross the bid
+        if unit not in ("pct", "yld"):
             return _num(b), _num(a)
         short_b, short_a = _is_short(b), _is_short(a)
         if short_b and short_a:
@@ -479,8 +653,12 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     if out["bid"] is not None and out["ask"] is not None and out["bid"] > out["ask"] + 1e-9:
         out["flags"].append("crossed")
     # ---- what else was said stays as it was typed ("bal", a size, "nl" ...)
-    known = _VOCABULARY
-    out["note"] = " ".join(raw[k].strip(",;") for k in idx if k not in consumed and low[k] and low[k] not in known)
+    known = _VOCABULARY | (_BOND_WORDS if product == "DIBS" else set())
+
+    def said(w: str) -> bool:
+        return bool(w) and w not in known and not (product == "DIBS" and re.match(r"^(tlref|cpi|zc|tüfe|tufe)?\.?t\d$", w))
+
+    out["note"] = " ".join(raw[k].strip(",;") for k in idx if k not in consumed and said(low[k]))
     return out
 
 
@@ -642,14 +820,17 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
     sender = ""
     waiting: List[Dict[str, Any]] = []                     # messages whose time may still come on a later line
     named: Optional[Tuple[str, str]] = None                # (sender before it, text) of the line last taken for a name
+    lead: Optional[Dict[str, Any]] = None                  # the message last written with its time in front of it
     for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         s = line.strip().strip("•·>*\t ").strip()
         if not s:
+            lead = None                                     # an empty line ends a message
             continue
         d = _parse_date(s, today)
         if d is not None:
             date = d
             waiting = []                                    # a new day: nothing above it is still waiting for its time
+            lead = None
             continue
         # a date in front of the time: "11/13/2026 12:10:07 ..."
         first = s.split(" ", 1)
@@ -657,11 +838,14 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
             date = _parse_date(first[0], today)
             s = first[1].lstrip()
         time = None
+        first_time = False
+        heading = s.endswith(":")                          # "09:14:59 Auction prices:" - the lines under it are its
         s = _TIME_BRACKET.sub(r"\1 ", s)                    # "[12:15:38] text"
         m = _TIME.match(s)
         if m and m.start() == 0:
             time = _clock(m)
             s = s[m.end():].strip(" -–\t:")
+            first_time = True
         else:
             found = list(_TIME.finditer(s))
             m = found[-1] if found else None
@@ -673,6 +857,7 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
                 time = _clock(found[0])
                 sender = " ".join(s[:found[0].start()].strip(" -–\t:,").split())
                 s = s[found[0].end():].strip(" -–\t:")
+                first_time = True
         if not s:
             # a time on a line of its own belongs to what was written above it
             if not waiting and named is not None:
@@ -683,46 +868,68 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
                 msg["time"] = time
             waiting = []
             named = None
+            lead = None
             continue
         m = _SENDER.match(s)
         if m and not re.search(r"\d", m.group(1)) and not all(w.lower() in _VOCABULARY for w in re.findall(r"[^\s,()]+", m.group(1))):
             sender = " ".join(m.group(1).replace(" says", "").split())
             s = s[m.end():].strip()
+            if time is None:
+                lead = None                                 # "EVREN DIKME: ..." - someone else's message
         elif time is None and _NAME_LINE.match(s) and not any(w.lower() in _VOCABULARY for w in s.split()):
             named = (sender, s)
             sender = s
             waiting = []                                    # a new bubble
+            lead = None
             continue
         if not s:
             continue
         named = None
         msg = {"date": date.isoformat() if date else None, "time": time, "sender": sender, "text": s}
+        if time is None and lead is not None:
+            # "09:14:59 Auction prices:" and the lines under it: one message of that time (a time on a line of its
+            # own further down would still be theirs - the phone's layout)
+            msg["time"] = lead["time"]
+            if lead.get("heading"):
+                msg["head"] = lead["text"].rstrip(":").strip()
         out.append(msg)
         if time is None:
             waiting.append(msg)
         else:
             waiting = []
+            lead = dict(msg, heading=heading) if first_time else None
     return out
 
 
 def parse_chat(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[float]]] = None,
                today: Optional[_dt.date] = None,
-               standing: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None) -> List[Dict[str, Any]]:
+               standing: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
+               nearby: Optional[Callable[[Dict[str, Any]], List[Dict[str, Any]]]] = None) -> List[Dict[str, Any]]:
     """Everything a pasted chat says, line by line.  A line that names an instrument gives one record per quote
     (``event`` quote / trade / ref / interest / level); any other line is kept as it is (``event`` "text").
 
     ``ref(record)`` is asked where an instrument stands (in the unit it is quoted in) when a level has no big
     figure; a full level earlier in the same chat answers before it.  ``standing(record)`` is asked for the bid
     and ask that stood before the chat (``{"bid", "ask"}``): "18m ois taken" is a trade at the offer that stands.
-    Both are given the record with the ``date`` and ``time`` of its message, as far as the chat says them."""
+    Both are given the record with the ``date`` and ``time`` of its message, as far as the chat says them.
+    ``nearby(record)``: the bonds priced elsewhere (the day's chat, the screen) as ``near_level`` takes them - a
+    floater or a bill nobody has priced takes its big figure from the nearest one, of the chat first."""
     last: Dict[str, float] = {}
     book: Dict[str, Dict[str, Optional[float]]] = {}
     at: Dict[str, Any] = {}                               # the message being read
+    bonds_said: Dict[str, Dict[str, Any]] = {}            # the bonds this chat priced: key -> near_level's record
 
     def where(q: Dict[str, Any]) -> Optional[float]:
         if q["key"] in last:
             return last[q["key"]]
-        return ref(dict(q, date=at.get("date"), time=at.get("time"))) if ref is not None else None
+        probe = dict(q, date=at.get("date"), time=at.get("time"))
+        v = ref(probe) if ref is not None else None
+        if v is None and q.get("product") == "DIBS":
+            # the nearest maturity of the same kind wins; of two as near, the one this chat priced
+            found = near_level(q, list(bonds_said.values()) + (nearby(probe) if nearby is not None else []))
+            if found is not None:
+                v, q["ref_from"] = found
+        return v
 
     def sides(q: Dict[str, Any]) -> Dict[str, Optional[float]]:
         if q["key"] not in book:
@@ -744,6 +951,9 @@ def parse_chat(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[floa
             group += 1
         for q in quotes:
             q.update({"date": msg["date"], "time": msg["time"], "sender": msg["sender"], "raw": msg["text"], "ok": True})
+            if msg.get("head"):
+                # the heading the line was written under ("Auction prices:") says what its level is
+                q["note"] = msg["head"] + (" · " + q["note"] if q.get("note") else "")
             if q.pop("oco", None):
                 q["oco"] = group
             now = sides(q)
@@ -758,8 +968,11 @@ def parse_chat(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[floa
                 q["price"] = now[q["side"]]                 # "taken": at the offer that stands; "given": at the bid
                 q["flags"].append("standing")
             for v in (q["bid"], q["ask"], q["price"]):
-                if v is not None and q["unit"] == "pct":
+                if v is not None and q["unit"] in ("pct", "px", "yld") and "no-ref" not in q["flags"]:
                     last[q["key"]] = v
+                    if q.get("product") == "DIBS" and q.get("bond_kind"):
+                        bonds_said[q["key"]] = {"isin": q.get("isin"), "kind": q["bond_kind"], "months": (q.get("months") or [0.0])[0],
+                                                "unit": q["unit"], "value": v, "label": q.get("label")}
             out.append(q)
     return out
 
@@ -794,6 +1007,8 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
                                     "bid": None, "bid_time": None, "ask": None, "ask_time": None, "last": None,
                                     "last_time": None, "last_side": None, "last_by": None, "level": None, "level_time": None,
                                     "our_bid": None, "our_ask": None, "our_time": None, "said": ""}
+            if q.get("isin"):
+                row["isin"] = q["isin"]                     # a bond's ISIN, for the screen and the bond pages
         when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
         ev = q["event"]
         if ev == "quote":
@@ -878,7 +1093,7 @@ def model_level(q: Dict[str, Any], par: Callable[[str], Optional[float]],
 
 def against(row: Dict[str, Any], mid: Optional[float]) -> Dict[str, Any]:
     """A board row next to the curve: the model level and how far bid, ask and the last trade are from it (bp)."""
-    k = 100.0 if row["unit"] == "pct" else 1.0
+    k = 100.0 if row["unit"] in ("pct", "yld") else 1.0
     out = {"mid": mid}
     for name in ("bid", "ask", "last"):
         v = row.get(name)

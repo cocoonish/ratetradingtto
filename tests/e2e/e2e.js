@@ -1203,6 +1203,78 @@ async function shot(page, name) {
     check('settings: the state of the history', /Excel dosyasındaki kayıtlı geçmiş/.test(await page.textContent('.panel[data-panel="history"] .set-info')));
     await shot(page, '15-settings');
 
+    // ------------------------------------------------------------------ bonds: the chat, the screen, the lists
+    console.log('bonds');
+    await open(page, 'broker');
+    await page.fill('#broker-source', 'ICAP');
+    await page.fill('#broker-text', '09:14:59 Auction prices:\n15/03/2028.t1   100.650\n10:25:28 15/3/28 550/575\n'
+      + '13:36:12 13/10/27 tlref  100.650/.800\n17:29:21 jan28 tlref .725 trading');
+    await page.waitForFunction(() => document.querySelectorAll('#broker-preview table tr').length === 6, null, { timeout: 20000 });
+    const bondSeen = await page.evaluate(() => [...document.querySelectorAll('#broker-preview table tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent)));
+    check('broker chat: bond quotes are read with their ISIN, the lines of an auction list under its heading',
+      bondSeen.length === 5 && bondSeen[1][0] === '09:14:59' && bondSeen[1][2] === 'DİBS 15.03.28 · T1' && bondSeen[1][5] === '100,650'
+      && /Auction prices/.test(bondSeen[1][6]) && bondSeen[2][2] === 'DİBS 15.03.28' && bondSeen[2][3] === '100,550' && bondSeen[2][4] === '100,575'
+      && /TRY 3\d,\d\d \/ 3\d,\d\d%/.test(bondSeen[2][6]), bondSeen);
+    check('broker chat: a floater nobody priced takes the big figure of the floater next to it, and says so',
+      bondSeen[4][2] === 'DİBS 19.01.28 TLREF' && bondSeen[4][5] === '100,725' && /yakın kâğıttan/.test(bondSeen[4][6]), bondSeen[4]);
+    await page.click('#broker-save');
+    await page.waitForFunction(() => window.tto.state.page.data.board.some((r) => r.isin === 'TRT190128T14'), null, { timeout: 20000 });
+    await open(page, 'dibs');
+    const rvBroker = await page.evaluate(() => {
+      const p = document.querySelector('.panel[data-panel="B3"]');
+      const rows = [...p.querySelectorAll('table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
+      const head = rows.find((r) => r.includes('Broker bid')) || [];
+      const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
+      return { head: head.slice(-6), bond: bond.slice(-6) };                  // the dashboard's own columns, on the right
+    });
+    check('DİBS RV: the day\'s broker chat next to each bond - bid, ask, the time, the yield of the mid against the screen',
+      rvBroker.head.join('|') === 'Broker bid|Broker ask|Son işlem|Saat|Broker getiri %|Broker − ekran (bp)'
+      && rvBroker.bond[0] === '100,550' && rvBroker.bond[1] === '100,575' && rvBroker.bond[3] === '10:25' && /^3\d,\d\d$/.test(rvBroker.bond[4])
+      && /^[+-]?\d+$/.test(rvBroker.bond[5]), rvBroker);
+    // a bond added from the catalog of the desk's list
+    const rvIsins = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent).filter((t) => /^TR/.test(t || '')));
+    const rvBefore = await rvIsins();
+    await page.click('.panel[data-panel="B3"] button[data-action="add-isin"]');
+    await page.waitForSelector('#isin-table tr:nth-child(5)');
+    const catalog = await page.evaluate(() => ({ rows: document.querySelectorAll('#isin-table tr').length - 1, have: document.querySelectorAll('#isin-table tr.have').length }));
+    check('DİBS RV: "+ ISIN ekle" lists the desk\'s 77 TRY government bonds, the ones listed already ticked',
+      catalog.rows === 77 && catalog.have === rvBefore.length, { catalog, listed: rvBefore.length });
+    await page.click('#isin-kind button[data-v="float"]');
+    await page.fill('#isin-find', '2030');
+    await page.locator('#isin-table tr:not(.have) input.pick').first().check();
+    await page.fill('#isin-text', 'TRT999999T99');
+    await page.click('#isin-add');
+    await page.waitForTimeout(600);
+    check('... an ISIN whose check digit is wrong is refused, nothing is added', /kontrol hanesi/.test(await page.textContent('#toasts'))
+      && (await page.locator('#isin-table').count()) === 1 && (await rvIsins()).length === rvBefore.length);
+    await page.fill('#isin-text', 'TRT280432T14');
+    await page.click('#isin-add');
+    await page.waitForFunction((n) => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')]
+      .filter((tr) => /^TR/.test((tr.children[0] || {}).textContent || '')).length === n + 2, rvBefore.length, { timeout: 30000 });
+    const rvAfter = await rvIsins();
+    check('... a floater picked and an ISIN typed go to the first empty rows of the list, for everyone',
+      rvAfter.length === rvBefore.length + 2 && rvAfter.includes('TRT280432T14') && /2 kâğıt eklendi/.test(await page.textContent('#toasts'))
+      && (await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT280432T14').lists.includes('dibs'), rvAfter.slice(-3));
+    // tables that grow: the rows in use and one more, "+ Satır" for another
+    await open(page, 'bulk');
+    const bulkShown = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B1"] table.grid tbody > tr')].filter((tr) => !tr.classList.contains('grow-hidden')).length);
+    const bulkAll = await page.evaluate(() => document.querySelectorAll('.panel[data-panel="B1"] table.grid tbody > tr').length);
+    const shown0 = await bulkShown();
+    await page.click('.panel[data-panel="B1"] .grow-more');
+    const shown1 = await bulkShown();
+    check('Bulk Bond: 50 bond rows, the page shows the ones in use and one more; "+ Satır" opens another',
+      bulkAll >= 52 && shown0 < bulkAll && shown1 === shown0 + 1, { bulkAll, shown0, shown1 });
+    await open(page, 'forward');
+    await tab(page, 'bulk');
+    const fwdShown = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="BK1"] table.grid tbody > tr')].filter((tr) => !tr.classList.contains('grow-hidden')).length);
+    const fwd0 = await fwdShown();
+    const fwdAll = await page.evaluate(() => document.querySelectorAll('.panel[data-panel="BK1"] table.grid tbody > tr').length);
+    await page.click('.panel[data-panel="BK1"] .grow-all');
+    check('Forward: the bulk table has 100 value dates; the filled ones and one more are shown, "Tümü" shows every row',
+      fwdAll >= 100 && fwd0 < 40 && (await fwdShown()) === fwdAll, { fwd0, fwdAll });
+    await page.click('.panel[data-panel="BK1"] .grow-all');
+    check('... and back to the filled ones', (await fwdShown()) === fwd0);
+
     // ------------------------------------------------------------------ find a table from anywhere
     console.log('table search');
     await page.keyboard.press('Control+k');

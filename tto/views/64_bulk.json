@@ -7,21 +7,21 @@
  "order": 64,
  "inputs": [
   {
-   "range": "A3:A6",
+   "range": "A3:A52",
    "scope": "user",
    "group": "bulk-0",
    "kind": "text",
    "label": "ISIN list"
   },
   {
-   "range": "C3:C6",
+   "range": "C3:C52",
    "scope": "user",
    "group": "bulk-1",
    "kind": "auto",
    "label": "own 'Bid'"
   },
   {
-   "range": "D3:D6",
+   "range": "D3:D52",
    "scope": "user",
    "group": "bulk-2",
    "kind": "auto",
@@ -82,8 +82,20 @@
    "id": "B1",
    "type": "table",
    "title": "Kotasyon tablosu",
-   "range": "A1:V6",
-   "hidden": false
+   "range": "A1:V52",
+   "hidden": false,
+   "grow": {
+    "key": "A",
+    "first": 3,
+    "extra": 1,
+    "last": 52
+   },
+   "action": "add-isin",
+   "add": {
+    "list": "A3:A52",
+    "catalog": false,
+    "title": "Bulk Bond listesine ISIN ekle"
+   }
   }
  ]
 }

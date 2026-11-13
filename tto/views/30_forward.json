@@ -761,6 +761,20 @@
    "group": "fwdrate-try",
    "kind": "number",
    "label": "TRY bid / ask % of the value date per curve: ICAP, OIS, VİOP, RET, Elle (formula default: the Forward sheet's cells)"
+  },
+  {
+   "range": "EK_BULK!B5:B104",
+   "scope": "user",
+   "group": "bulk100-dates",
+   "kind": "date",
+   "label": "toplu forward valör tarihleri (100 satır; ilk 20'si Forward!B144:B163)"
+  },
+  {
+   "range": "EK_BULK!L5:L104",
+   "scope": "user",
+   "group": "bulk100-try",
+   "kind": "number",
+   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; ilk 20'si Forward!L144:L163)"
   }
  ],
  "panels": [
@@ -848,11 +862,27 @@
    "hidden": false
   },
   {
+   "id": "BK1",
+   "type": "table",
+   "sheet": "EK_BULK",
+   "range": "B1:Q106",
+   "hidden": false,
+   "wide": true,
+   "title": "TOPLU FORWARD FİYATLAMA · 100 valöre kadar",
+   "grow": {
+    "key": "B",
+    "first": 5,
+    "extra": 1,
+    "last": 104
+   }
+  },
+  {
    "id": "B33",
    "type": "table",
-   "title": "BULK FORWARD FİYATLAMA",
+   "title": "BULK FORWARD FİYATLAMA (Excel'deki 20 satırlık tablo – ilk 20 valör üstteki tabloya gelir)",
    "range": "B142:Q163",
-   "hidden": false
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B34",
@@ -1154,11 +1184,11 @@
    "id": "bulk",
    "title": "Toplu fiyatlama",
    "panels": [
-    "B33",
+    "BK1",
     "B34",
     "B36"
    ],
-   "note": "Birden çok valör için forward, forward starting swap ve çapraz kurlar."
+   "note": "Birden çok valör için forward (100 valöre kadar: dolu satırlar ve bir boş satır görünür, \"+ Satır\" bir satır daha açar), forward starting swap ve çapraz kurlar."
   },
   {
    "id": "curves",
