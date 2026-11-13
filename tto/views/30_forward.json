@@ -560,7 +560,7 @@
    "title": "Altın forward (XAUUSD · XARTRY · XARUSD)",
    "range": "H29:J32",
    "hidden": false,
-   "note": "XAUUSD forward'ı VİOP sayfasındaki \"Altın · spot ve forward kaynağı\" tablosundan gelir: lease faizi ve spot varsa lease'den, yoksa BFXFORWARD'dan (canlıda yalnızca lease). Lease eğrisi ve kaynak seçimi orada."
+   "note": "XAUUSD forward'ı VİOP sayfasındaki \"Altın · spot ve forward kaynağı\" tablosundan gelir: spot ve altın swap faizi (XAUSR) varsa spot·(1+swap·g/360), yoksa BFXFORWARD (canlıda yalnızca swap faizi). Eğri ve kaynak seçimi orada."
   },
   {
    "id": "B19",

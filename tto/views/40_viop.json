@@ -205,30 +205,37 @@
   {
    "range": "EK_XAU!B10",
    "scope": "shared",
-   "group": "xau-lease",
+   "group": "xau-swap",
    "kind": "text",
-   "label": "Lease ticker'larından okunan Bloomberg alanı"
+   "label": "Altın swap faizi ticker'larından okunan Bloomberg alanı"
   },
   {
    "range": "EK_XAU!B11",
    "scope": "shared",
    "group": "xau-source",
    "kind": "text",
-   "label": "XAUUSD forward kaynağı: Otomatik / Lease / BFXFORWARD"
+   "label": "XAUUSD forward kaynağı: Otomatik / Swap faizi / BFXFORWARD"
+  },
+  {
+   "range": "EK_XAU!B12",
+   "scope": "shared",
+   "group": "xau-swap",
+   "kind": "text",
+   "label": "Ticker eki (sarı tuş): ticker kökünün sonuna eklenir"
   },
   {
    "range": "EK_XAU!D16:D22",
    "scope": "shared",
-   "group": "xau-lease",
+   "group": "xau-swap",
    "kind": "text",
-   "label": "Lease faizi ticker'ları (1W…12M)"
+   "label": "Altın swap faizi ticker kökleri (XAUSR1W … XAUSR12M)"
   },
   {
    "range": "EK_XAU!F16:F22",
    "scope": "shared",
-   "group": "xau-lease",
+   "group": "xau-swap",
    "kind": "number",
-   "label": "Manuel lease faizi % (0,45 = %0,45; boş = Bloomberg)"
+   "label": "Manuel altın swap faizi % (0,45 = %0,45; boş = Bloomberg)"
   },
   {
    "range": "EK_XAU!B34:B35",
@@ -242,7 +249,7 @@
    "scope": "user",
    "group": "xau-calc",
    "kind": "number",
-   "label": "VİOP XAUTRY hesaplayıcısı: USD %, TRY % ve (isteğe bağlı) lease %"
+   "label": "VİOP XAUTRY hesaplayıcısı: USD %, TRY % ve (isteğe bağlı) altın swap %"
   }
  ],
  "panels": [
@@ -490,10 +497,10 @@
    "id": "XAU1",
    "type": "table",
    "sheet": "EK_XAU",
-   "range": "A1:E11",
+   "range": "A1:E12",
    "hidden": false,
-   "note_ref": "A12",
-   "title": "ALTIN  ·  spot ve forward kaynağı  (XAUUSD forward, BFXFORWARD yerine lease faizinden)"
+   "note_ref": "A13",
+   "title": "ALTIN  ·  spot ve forward kaynağı  (XAUUSD forward, BFXFORWARD yerine altın swap faizinden)"
   },
   {
    "id": "XAU2",
@@ -502,13 +509,13 @@
    "range": "A14:L22",
    "hidden": false,
    "note_ref": "A23",
-   "title": "ALTIN  ·  lease eğrisi  (% ACT/360; Bloomberg ticker'ı ya da manuel — sarı hücreler girdi)"
+   "title": "ALTIN  ·  swap faizi eğrisi  (XAUSR, % ACT/360; Bloomberg ticker'ı ya da manuel — sarı hücreler girdi)"
   },
   {
    "id": "XAU3",
    "type": "table",
    "sheet": "EK_XAU",
-   "range": "A25:N35",
+   "range": "A25:M35",
    "hidden": false,
    "wide": true,
    "note_ref": "A36",
@@ -565,7 +572,7 @@
    "sheet": "EK_XAU",
    "range": "N15:Q22",
    "hidden": true,
-   "title": "Yardımcı · lease eğrisinin kotasyonu olan vadeleri (sıralı)",
+   "title": "Yardımcı · swap faizi eğrisinin kotasyonu olan vadeleri (sıralı)",
    "keep_title": true
   },
   {

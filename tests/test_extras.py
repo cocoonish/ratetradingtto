@@ -1,5 +1,5 @@
 """The dashboard's own sheets (``tto/extras.py``): forward quotes from OIS + spread with separate bid / ask
-spreads, gold forwards from lease rates in place of ``BFXFORWARD``, O/N equivalents of the BIST swap quotes.
+spreads, gold forwards from the gold swap rate in place of ``BFXFORWARD``, O/N equivalents of the BIST swap quotes.
 
 They are ordinary Excel formulas inside the workbook model, so every check below reads cells - and compares
 them with an independent calculation or with what the workbook itself computes elsewhere."""
@@ -71,7 +71,7 @@ def test_the_extra_sheets_are_ordinary_workbook_sheets(svc):
     assert plain["borsa"].model.sheet("bu").fml.get(parse_a1("O9")) is None
     info = svc.cell_info(None, "tto", "EK_FWD!J5")
     assert info["formula"] == '=IFERROR(IF($C5="","",$F5*(1+$M5/100*$C5/360)/(1+$O5/100*$C5/360)),"")'
-    assert svc.cell_info(None, "tto", "EK_XAU!F27")["formula"].startswith('=IFERROR(IF(OR($C27="",$D27=""),"",$B$6*(1+$E27/100*$C27/360)')
+    assert svc.cell_info(None, "tto", "EK_XAU!E27")["formula"] == '=IFERROR(IF(OR($C27="",$D27=""),"",$B$6*(1+$D27/100*$C27/360)),"")'
     assert svc.cell_info(None, "borsa", "bu!O9")["formula"] == '=IF(AND(ISNUMBER(H9),ISNUMBER(E9),N(E9)>0),360*((1+H9*E9/360)^(1/E9)-1),"")'
     grid = svc.grid(None, "tto", "EK_FWD", "A3:C5")["data"]
     assert [c["t"] for c in grid["rows"][0]] == ["Vade", "Valör", "Gün"] and grid["rows"][2][0]["t"] == "1M"
@@ -264,15 +264,16 @@ def test_matrix_panels_are_on_the_desk_page_with_their_inputs(svc):
     assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "masa", True)["panels"]}
 
 
-# ============================================================================== gold: forwards from lease rates
-PATCHED = (("VIOP", "M58", "K27"), ("VIOP", "N58", "K28"), ("VIOP", "O58", "K29"),          # XAUTRY BID table: ask outright
-           ("VIOP", "S58", "J27"), ("VIOP", "T58", "J28"), ("VIOP", "U58", "J29"),          # XAUTRY ASK table: bid outright
-           ("VIOP", "M68", "K30"), ("VIOP", "N68", "K31"), ("VIOP", "O68", "K32"),          # XAUUSD table: ask outright
-           ("Forward", "I29", "J33"), ("Forward", "J29", "K33"))
+# ============================================================================== gold: forwards from the swap rate
+PATCHED = (("VIOP", "M58", "J27"), ("VIOP", "N58", "J28"), ("VIOP", "O58", "J29"),          # XAUTRY BID table: ask outright
+           ("VIOP", "S58", "I27"), ("VIOP", "T58", "I28"), ("VIOP", "U58", "I29"),          # XAUTRY ASK table: bid outright
+           ("VIOP", "M68", "J30"), ("VIOP", "N68", "J31"), ("VIOP", "O68", "J32"),          # XAUUSD table: ask outright
+           ("Forward", "I29", "I33"), ("Forward", "J29", "J33"))
 SPOT_BID, SPOT_ASK = 3950.10, 3950.60
-LEASE = {17: 0.45, 19: 0.55, 22: 0.80}                # 1M, 3M and 12M rows of the lease table, per cent
-LEASE_ROWS = range(extras.XAU_LEASE[0], extras.XAU_LEASE[1] + 1)
+RATES = {17: 4.10, 19: 4.20, 22: 4.45}                # 1M, 3M and 12M rows of the gold swap rate table, per cent
+CURVE_ROWS = range(extras.XAU_CURVE[0], extras.XAU_CURVE[1] + 1)
 TARGET_ROWS = range(extras.XAU_TARGETS[0], extras.XAU_TARGETS[0] + 7)
+ROOTS = [root for _, _, root in extras.XAU_TENORS]
 
 
 def recorded(svc, sheet, addr):
@@ -281,104 +282,134 @@ def recorded(svc, sheet, addr):
 
 def gold_defaults(svc, u):
     cells = {"EK_XAU!B3": "XAU Curncy", "EK_XAU!B5": "", "EK_XAU!C5": "", "EK_XAU!B8": "", "EK_XAU!B10": "PX_LAST",
-             "EK_XAU!B11": "Otomatik"}
-    for r in LEASE_ROWS:
-        cells["EK_XAU!D%d" % r] = ""
+             "EK_XAU!B11": "Otomatik", "EK_XAU!B12": extras.XAU_TICKER_KEY}
+    for r, root in zip(CURVE_ROWS, ROOTS):
+        cells["EK_XAU!D%d" % r] = root
         cells["EK_XAU!F%d" % r] = ""
     put(svc, u, cells)
 
 
 @pytest.fixture()
 def gold(svc):
-    """Spot and three lease rates typed by hand (shared desk inputs); everything is put back afterwards."""
+    """Spot and three swap rates typed by hand (shared desk inputs); everything is put back afterwards."""
     u = svc.login("Altın")["user"]
     gold_defaults(svc, u)
     cells = {"EK_XAU!B5": SPOT_BID, "EK_XAU!C5": SPOT_ASK}
-    cells.update({"EK_XAU!F%d" % r: v for r, v in LEASE.items()})
+    cells.update({"EK_XAU!F%d" % r: v for r, v in RATES.items()})
     put(svc, u, cells)
     yield u
     gold_defaults(svc, u)
 
 
-def lease_points(svc):
-    return sorted((cell(svc, "EK_XAU!C%d" % r), v) for r, v in LEASE.items())
+def rate_points(svc):
+    return sorted((cell(svc, "EK_XAU!C%d" % r), v) for r, v in RATES.items())
 
 
 def usd_points(svc):
     return sorted((cell(svc, "VIOP!B%d" % r), cell(svc, "VIOP!F%d" % r)) for r in range(16, 26))
 
 
+def test_gold_swap_rate_tickers_are_the_bloomberg_ones():
+    assert ROOTS == ["XAUSR1W", "XAUSR1M", "XAUSR2M", "XAUSR3M", "XAUSR6M", "XAUSR9M", "XAUSR12M"]
+    assert extras.XAU_TICKER_KEY == "Curncy" and extras.XAU_SOURCES == ("Otomatik", "Swap faizi", "BFXFORWARD")
+
+
 def test_offline_the_gold_tables_show_what_excel_recorded(svc):
-    """The BFXFORWARD calls moved to EK_XAU with the values Excel saved for them: with no lease rates in
+    """The BFXFORWARD calls moved to EK_XAU with the values Excel saved for them: with no gold swap rates in
     the recording the VİOP gold tables and the Forward gold strip are exactly Excel's."""
     u = svc.login("Altın kayıt")["user"]
     gold_defaults(svc, u)
     assert cell(svc, "EK_XAU!B11") == "Otomatik"
     assert cell(svc, "EK_XAU!C11") == "Spot yok → BFXFORWARD"
+    assert [cell(svc, "EK_XAU!D%d" % r) for r in CURVE_ROWS] == ROOTS and cell(svc, "EK_XAU!B12") == "Curncy"
+    assert all(type(cell(svc, "EK_XAU!E%d" % r)) is XlError and cell(svc, "EK_XAU!G%d" % r) == "" for r in CURVE_ROWS)   # nothing recorded
     book = svc.books["tto"]
     for sheet, addr, source in PATCHED:
         assert formula_text(book, *book.cell("%s!%s" % (sheet, addr))) == "=EK_XAU!$%s$%s" % (source[0], source[1:])
         assert cell(svc, "%s!%s" % (sheet, addr)) == recorded(svc, sheet, addr) > 3900
-        assert "BFXFORWARD" in formula_text(book, *book.cell("EK_XAU!%s%s" % ("H" if source[0] == "J" else "I", source[1:])))
+        assert "BFXFORWARD" in formula_text(book, *book.cell("EK_XAU!%s%s" % ("G" if source[0] == "I" else "H", source[1:])))
     for r in TARGET_ROWS:
-        assert cell(svc, "EK_XAU!L%d" % r) == "BFXFORWARD"
-        assert cell(svc, "EK_XAU!F%d" % r) == "" and cell(svc, "EK_XAU!D%d" % r) == ""
+        assert cell(svc, "EK_XAU!K%d" % r) == "BFXFORWARD"
+        assert cell(svc, "EK_XAU!E%d" % r) == "" and cell(svc, "EK_XAU!D%d" % r) == ""
     # what hangs on those cells is therefore unchanged too
     for addr in ("VIOP!M55", "VIOP!M52", "VIOP!S52", "VIOP!M65", "Forward!I30", "Forward!J30"):
         sheet, a = addr.split("!")
         assert cell(svc, addr) == pytest.approx(recorded(svc, sheet, a), rel=1e-12)
 
 
-def test_gold_forward_is_the_cost_of_carry_at_the_interpolated_lease_rate(svc, gold):
+def test_gold_forward_is_the_spot_carried_at_the_swap_rate_without_a_usd_rate(svc, gold):
+    """XAUUSD fwd = spot · (1 + swap rate · days / 360): the gold rate is applied directly."""
     assert cell(svc, "EK_XAU!B6") == SPOT_BID and cell(svc, "EK_XAU!C6") == SPOT_ASK
     assert cell(svc, "EK_XAU!D6") == pytest.approx((SPOT_BID + SPOT_ASK) / 2)
-    assert cell(svc, "EK_XAU!Q16") == 3.0 and cell(svc, "EK_XAU!C11") == "Lease · 3 vade"
+    assert cell(svc, "EK_XAU!Q16") == 3.0 and cell(svc, "EK_XAU!C11") == "Swap faizi · 3 vade"
     spot_date = cell(svc, "EK_XAU!B9")
     assert spot_date == 46330.0                                    # no gold value date offline: the USDTRY one
-    lease, usd = lease_points(svc), usd_points(svc)
-    assert [d for d, _ in lease] == [30.0, 92.0, 365.0]
+    curve = rate_points(svc)
+    assert [d for d, _ in curve] == [30.0, 92.0, 365.0]
     seen = []
     for r in TARGET_ROWS:
         days = cell(svc, "EK_XAU!C%d" % r)
         assert days == cell(svc, "EK_XAU!B%d" % r) - spot_date
-        l, s = linear(lease, days, flat=True), linear(usd, days, flat=False)
-        assert cell(svc, "EK_XAU!D%d" % r) == pytest.approx(l, rel=1e-13)
-        assert cell(svc, "EK_XAU!E%d" % r) == pytest.approx(s, rel=1e-13)
-        carry = (1 + s / 100 * days / 360) / (1 + l / 100 * days / 360)
-        assert cell(svc, "EK_XAU!F%d" % r) == pytest.approx(SPOT_BID * carry, rel=1e-13)
-        assert cell(svc, "EK_XAU!G%d" % r) == pytest.approx(SPOT_ASK * carry, rel=1e-13)
+        rate = linear(curve, days, flat=True)
+        assert cell(svc, "EK_XAU!D%d" % r) == pytest.approx(rate, rel=1e-13)
+        carry = 1 + rate / 100 * days / 360
+        assert cell(svc, "EK_XAU!E%d" % r) == pytest.approx(SPOT_BID * carry, rel=1e-13)
+        assert cell(svc, "EK_XAU!F%d" % r) == pytest.approx(SPOT_ASK * carry, rel=1e-13)
+        assert cell(svc, "EK_XAU!I%d" % r) == cell(svc, "EK_XAU!E%d" % r)
         assert cell(svc, "EK_XAU!J%d" % r) == cell(svc, "EK_XAU!F%d" % r)
-        assert cell(svc, "EK_XAU!K%d" % r) == cell(svc, "EK_XAU!G%d" % r)
-        assert cell(svc, "EK_XAU!L%d" % r) == "Lease"
+        assert cell(svc, "EK_XAU!K%d" % r) == "Swap faizi"
         seen.append(days)
     assert seen == [57.0, 114.0, 177.0, 57.0, 114.0, 114.0, 215.0]
     # the other sheets read these forwards
     for sheet, addr, source in PATCHED:
         assert cell(svc, "%s!%s" % (sheet, addr)) == cell(svc, "EK_XAU!%s" % source) != recorded(svc, sheet, addr)
-    assert cell(svc, "VIOP!M55") == pytest.approx(cell(svc, "VIOP!M57") / cell(svc, "EK_XAU!K27") * GRAM, rel=1e-13)
-    assert cell(svc, "VIOP!S55") == pytest.approx(cell(svc, "VIOP!S57") / cell(svc, "EK_XAU!J27") * GRAM, rel=1e-13)
-    assert cell(svc, "VIOP!M65") == pytest.approx((cell(svc, "VIOP!M67") - cell(svc, "EK_XAU!K30")) / cell(svc, "EK_XAU!K30"), rel=1e-12)
-    # the lease curve table itself
-    for r, rate in LEASE.items():
-        days, s = cell(svc, "EK_XAU!C%d" % r), cell(svc, "EK_XAU!H%d" % r)
+    assert cell(svc, "VIOP!M55") == pytest.approx(cell(svc, "VIOP!M57") / cell(svc, "EK_XAU!J27") * GRAM, rel=1e-13)
+    assert cell(svc, "VIOP!S55") == pytest.approx(cell(svc, "VIOP!S57") / cell(svc, "EK_XAU!I27") * GRAM, rel=1e-13)
+    assert cell(svc, "VIOP!M65") == pytest.approx((cell(svc, "VIOP!M67") - cell(svc, "EK_XAU!J30")) / cell(svc, "EK_XAU!J30"), rel=1e-12)
+    # the curve table itself
+    for r, rate in RATES.items():
+        days = cell(svc, "EK_XAU!C%d" % r)
         assert cell(svc, "EK_XAU!G%d" % r) == rate
-        assert cell(svc, "EK_XAU!J%d" % r) == pytest.approx(SPOT_BID * (1 + s / 100 * days / 360) / (1 + rate / 100 * days / 360), rel=1e-13)
-        fwd_rate = ((1 + s / 100 * days / 360) / (1 + rate / 100 * days / 360) - 1) * 360 / days * 100
-        assert cell(svc, "EK_XAU!I%d" % r) == pytest.approx(fwd_rate, rel=1e-12)
-    assert cell(svc, "EK_XAU!G18") == "" and cell(svc, "EK_XAU!J18") == ""           # 2M has no rate: left out
+        assert cell(svc, "EK_XAU!H%d" % r) == pytest.approx(SPOT_BID * (1 + rate / 100 * days / 360), rel=1e-13)
+        assert cell(svc, "EK_XAU!I%d" % r) == pytest.approx(SPOT_ASK * (1 + rate / 100 * days / 360), rel=1e-13)
+        assert cell(svc, "EK_XAU!J%d" % r) == pytest.approx((SPOT_BID + SPOT_ASK) / 2 * rate / 100 * days / 360, rel=1e-9)
+    assert cell(svc, "EK_XAU!G18") == "" and cell(svc, "EK_XAU!H18") == ""           # 2M has no rate: left out
 
 
-def test_lease_is_flat_outside_the_quoted_tenors_and_free_dates_are_personal(svc, gold):
+def test_the_usd_rate_plays_no_part_in_the_gold_forward(svc, gold):
+    """The USD OIS curve of the VİOP sheet is only shown next to the swap rate (with the lease rate the two
+    imply): moving it must not move a single gold forward."""
+    u = svc.login("Altın usd")["user"]
+    before = [cell(svc, "EK_XAU!%s%d" % (c, r), u) for r in TARGET_ROWS for c in "EFIJ"] + [cell(svc, "VIOP!M58", u), cell(svc, "Forward!J29", u)]
+    usd_1m = cell(svc, "EK_XAU!K17", u)
+    days, rate = cell(svc, "EK_XAU!C17", u), RATES[17]
+    assert usd_1m == pytest.approx(linear(usd_points(svc), days, False), rel=1e-13)
+    lease = ((1 + usd_1m / 100 * days / 360) / (1 + rate / 100 * days / 360) - 1) * 360 / days * 100
+    assert cell(svc, "EK_XAU!L17", u) == pytest.approx(lease, rel=1e-9)
+    # what if the 1M USD OIS quote were 9.5 % (a what-if of this user on the VİOP sheet's USD curve)?
+    res = svc.set_inputs(u, "tto", [{"ref": "VIOP!F18", "value": 9.5}], allow_adhoc=True)
+    assert res["errors"] == [] and cell(svc, "VIOP!B18", u) == days
+    assert cell(svc, "EK_XAU!K17", u) == pytest.approx(9.5) and cell(svc, "EK_XAU!L17", u) > lease + 5      # the information moves ...
+    after = [cell(svc, "EK_XAU!%s%d" % (c, r), u) for r in TARGET_ROWS for c in "EFIJ"] + [cell(svc, "VIOP!M58", u), cell(svc, "Forward!J29", u)]
+    assert after == before and all(isinstance(x, float) for x in before)                                   # ... no gold forward does
+    book = svc.books["tto"]
+    for r in list(TARGET_ROWS) + list(CURVE_ROWS):                   # because no forward formula refers to the USD curve
+        for c in ("EFIJ" if r in TARGET_ROWS else "HIJ"):
+            text = formula_text(book, *book.cell("EK_XAU!%s%d" % (c, r)))
+            assert "VIOP" not in text and "BINTERPOL" not in text and "$K" not in text, text
+    svc.reset_inputs(u, "tto")
+    assert cell(svc, "EK_XAU!K17", u) == usd_1m
+
+
+def test_swap_rate_is_flat_outside_the_quoted_tenors_and_free_dates_are_personal(svc, gold):
     u = svc.login("Altın tarih")["user"]
     put(svc, u, {"EK_XAU!B34": "09.11.2026", "EK_XAU!B35": "01.06.2028"})
-    assert cell(svc, "EK_XAU!C34", u) == 5.0 and cell(svc, "EK_XAU!D34", u) == 0.45
-    assert cell(svc, "EK_XAU!C35", u) == 575.0 and cell(svc, "EK_XAU!D35", u) == 0.80
-    usd = linear(usd_points(svc), 575.0, flat=False)                 # beyond 1Y the USD curve is extended
-    assert cell(svc, "EK_XAU!E35", u) == pytest.approx(usd, rel=1e-13)
-    assert cell(svc, "EK_XAU!G35", u) == pytest.approx(SPOT_ASK * (1 + usd / 100 * 575 / 360) / (1 + 0.80 / 100 * 575 / 360), rel=1e-13)
-    assert cell(svc, "EK_XAU!L35", u) == "Lease"
-    assert cell(svc, "EK_XAU!C34") == "" and cell(svc, "EK_XAU!G35") == ""           # the dates are this user's only
-    assert cell(svc, "EK_XAU!F27", u) == cell(svc, "EK_XAU!F27")                     # the lease curve is the desk's
+    assert cell(svc, "EK_XAU!C34", u) == 5.0 and cell(svc, "EK_XAU!D34", u) == 4.10
+    assert cell(svc, "EK_XAU!C35", u) == 575.0 and cell(svc, "EK_XAU!D35", u) == 4.45
+    assert cell(svc, "EK_XAU!F35", u) == pytest.approx(SPOT_ASK * (1 + 4.45 / 100 * 575 / 360), rel=1e-13)
+    assert cell(svc, "EK_XAU!K35", u) == "Swap faizi"
+    assert cell(svc, "EK_XAU!C34") == "" and cell(svc, "EK_XAU!F35") == ""           # the dates are this user's only
+    assert cell(svc, "EK_XAU!E27", u) == cell(svc, "EK_XAU!E27")                     # the curve is the desk's
 
 
 def test_the_source_can_be_forced(svc, gold):
@@ -386,59 +417,67 @@ def test_the_source_can_be_forced(svc, gold):
     assert cell(svc, "EK_XAU!B11") == "BFXFORWARD" and cell(svc, "EK_XAU!C11") == "BFXFORWARD (seçildi)"
     for sheet, addr, _ in PATCHED:
         assert cell(svc, "%s!%s" % (sheet, addr)) == recorded(svc, sheet, addr)
-    assert cell(svc, "EK_XAU!L27") == "BFXFORWARD" and isinstance(cell(svc, "EK_XAU!F27"), float)   # still shown for comparison
-    assert cell(svc, "EK_XAU!N27") == pytest.approx((cell(svc, "EK_XAU!F27") + cell(svc, "EK_XAU!G27")) / 2
-                                                    - (cell(svc, "EK_XAU!H27") + cell(svc, "EK_XAU!I27")) / 2)
-    put(svc, gold, {"EK_XAU!B11": "Lease", "EK_XAU!B5": "", "EK_XAU!C5": ""})
-    assert cell(svc, "EK_XAU!C11") == "Lease seçili: spot yok"
+    assert cell(svc, "EK_XAU!K27") == "BFXFORWARD" and isinstance(cell(svc, "EK_XAU!E27"), float)   # still shown for comparison
+    assert cell(svc, "EK_XAU!M27") == pytest.approx((cell(svc, "EK_XAU!E27") + cell(svc, "EK_XAU!F27")) / 2
+                                                    - (cell(svc, "EK_XAU!G27") + cell(svc, "EK_XAU!H27")) / 2)
+    put(svc, gold, {"EK_XAU!B11": "Swap faizi", "EK_XAU!B5": "", "EK_XAU!C5": ""})
+    assert cell(svc, "EK_XAU!C11") == "Swap faizi seçili: spot yok"
     v = cell(svc, "VIOP!M58")
-    assert type(v) is XlError and v.code == "#N/A"                   # asked for lease, none can be computed
+    assert type(v) is XlError and v.code == "#N/A"                   # asked for the swap rate forward, none can be computed
     put(svc, gold, {"EK_XAU!B11": "Otomatik"})
     assert cell(svc, "EK_XAU!C11") == "Spot yok → BFXFORWARD"
     assert cell(svc, "VIOP!M58") == recorded(svc, "VIOP", "M58")
     put(svc, gold, {"EK_XAU!B5": SPOT_BID, "EK_XAU!C5": SPOT_ASK, "EK_XAU!F17": "", "EK_XAU!F19": "", "EK_XAU!F22": ""})
-    assert cell(svc, "EK_XAU!C11") == "Lease faizi yok → BFXFORWARD"
+    assert cell(svc, "EK_XAU!C11") == "Swap faizi yok → BFXFORWARD"
     assert cell(svc, "VIOP!M58") == recorded(svc, "VIOP", "M58")
 
 
-def test_bfxforward_implies_a_lease_rate(svc, gold):
-    """The comparison column: the lease rate at which the cost of carry gives Bloomberg's own forward."""
+def test_bfxforward_implies_a_swap_rate(svc, gold):
+    """The comparison column: the rate at which the spot carried directly gives Bloomberg's own forward."""
+    spot = (SPOT_BID + SPOT_ASK) / 2
     for r in TARGET_ROWS:
-        days, usd = cell(svc, "EK_XAU!C%d" % r), cell(svc, "EK_XAU!E%d" % r)
-        mid = (cell(svc, "EK_XAU!H%d" % r) + cell(svc, "EK_XAU!I%d" % r)) / 2
-        implied = cell(svc, "EK_XAU!M%d" % r)
-        spot = (SPOT_BID + SPOT_ASK) / 2
-        assert spot * (1 + usd / 100 * days / 360) / (1 + implied / 100 * days / 360) == pytest.approx(mid, rel=1e-12)
+        days = cell(svc, "EK_XAU!C%d" % r)
+        mid = (cell(svc, "EK_XAU!G%d" % r) + cell(svc, "EK_XAU!H%d" % r)) / 2
+        implied = cell(svc, "EK_XAU!L%d" % r)
+        assert spot * (1 + implied / 100 * days / 360) == pytest.approx(mid, rel=1e-12)
 
 
-def test_bloomberg_quotes_feed_the_lease_curve_and_a_typed_rate_wins(svc, gold):
-    """Spot, its value date and the lease rates come from Bloomberg through the ticker cells (here: the
-    offline provider answers for made-up tickers); a manual rate overrides the quote of its tenor."""
+def test_bloomberg_quotes_feed_the_swap_curve_and_a_typed_rate_wins(svc, gold):
+    """Spot, its value date and the gold swap rates come from Bloomberg: the default tickers are XAUSR1W,
+    XAUSR1M ... with the yellow key of the "Ticker eki" cell (here the offline provider answers for them).
+    A manual rate overrides the quote of its tenor."""
     quotes = {bdp_key("XAU Curncy", "BID"): 3960.0, bdp_key("XAU Curncy", "ASK"): 3961.0,
               bdp_key("XAU Curncy", "SETTLE_DT"): "5.11.2026",
-              bdp_key("TESTLEASE1M Index", "PX_LAST"): 0.30, bdp_key("TESTLEASE6M Index", "PX_LAST"): 0.60,
-              bdp_key("TESTLEASE6M Index", "MID"): 0.65}
+              bdp_key("XAUSR1W Curncy", "PX_LAST"): 4.00, bdp_key("XAUSR1M Curncy", "PX_LAST"): 4.05,
+              bdp_key("XAUSR6M Curncy", "PX_LAST"): 4.30, bdp_key("XAUSR6M Curncy", "MID"): 4.35,
+              bdp_key("XAUSR9M Index", "PX_LAST"): 4.40, bdp_key("TESTSWAP2M Comdty", "PX_LAST"): 4.15}
     changed = svc.provider.update(quotes)
     svc.et.call(svc._apply_market, changed)
     try:
-        put(svc, gold, {"EK_XAU!B5": "", "EK_XAU!C5": "", "EK_XAU!D17": "TESTLEASE1M Index", "EK_XAU!D20": "TESTLEASE6M Index",
-                        "EK_XAU!D21": "YOK9M Index"})
+        put(svc, gold, {"EK_XAU!B5": "", "EK_XAU!C5": ""})
         assert cell(svc, "EK_XAU!B6") == 3960.0 and cell(svc, "EK_XAU!C6") == 3961.0
         assert cell(svc, "EK_XAU!B7") == cell(svc, "EK_XAU!B9") == 46331.0          # gold settles a day after USDTRY here
-        assert cell(svc, "EK_XAU!E17") == 0.30 and cell(svc, "EK_XAU!E20") == 0.60
-        assert type(cell(svc, "EK_XAU!E21")) is XlError and cell(svc, "EK_XAU!G21") == ""      # unknown ticker: no node
-        # 1M: the typed 0.45 wins over Bloomberg's 0.30; 6M comes from Bloomberg; 3M and 12M are typed
-        assert [cell(svc, "EK_XAU!G%d" % r) for r in (17, 19, 20, 22)] == [0.45, 0.55, 0.60, 0.80]
-        assert cell(svc, "EK_XAU!Q16") == 4.0
-        nodes = sorted((cell(svc, "EK_XAU!C%d" % r), cell(svc, "EK_XAU!G%d" % r)) for r in (17, 19, 20, 22))
+        # without typing a ticker: the roots of the sheet + " Curncy"
+        assert [cell(svc, "EK_XAU!E%d" % r) for r in (16, 17, 20)] == [4.00, 4.05, 4.30]
+        assert all(type(cell(svc, "EK_XAU!E%d" % r)) is XlError and (r in RATES or cell(svc, "EK_XAU!G%d" % r) == "") for r in (18, 19, 21, 22))
+        # 1W and 6M come from Bloomberg; 1M: the typed 4.10 wins over Bloomberg's 4.05; 3M and 12M are typed
+        assert [cell(svc, "EK_XAU!G%d" % r) for r in (16, 17, 19, 20, 22)] == [4.00, 4.10, 4.20, 4.30, 4.45]
+        assert cell(svc, "EK_XAU!Q16") == 5.0 and cell(svc, "EK_XAU!C11") == "Swap faizi · 5 vade"
+        nodes = sorted((cell(svc, "EK_XAU!C%d" % r), cell(svc, "EK_XAU!G%d" % r)) for r in (16, 17, 19, 20, 22))
         days = cell(svc, "EK_XAU!C29")
         assert days == 176.0                                                          # one day less than from the USDTRY date
-        l, s = linear(nodes, days, True), linear(usd_points(svc), days, False)
-        assert cell(svc, "VIOP!O58") == pytest.approx(3961.0 * (1 + s / 100 * days / 360) / (1 + l / 100 * days / 360), rel=1e-13)
+        rate = linear(nodes, days, True)
+        assert cell(svc, "VIOP!O58") == pytest.approx(3961.0 * (1 + rate / 100 * days / 360), rel=1e-13)
         put(svc, gold, {"EK_XAU!F17": ""})
-        assert cell(svc, "EK_XAU!G17") == 0.30
-        put(svc, gold, {"EK_XAU!B10": "MID"})                                         # another Bloomberg field
-        assert cell(svc, "EK_XAU!E20") == 0.65 and type(cell(svc, "EK_XAU!E17")) is XlError
+        assert cell(svc, "EK_XAU!G17") == 4.05
+        # a full ticker (with its own yellow key) is used as it is typed; a root follows the "Ticker eki" cell
+        put(svc, gold, {"EK_XAU!D18": "TESTSWAP2M Comdty"})
+        assert cell(svc, "EK_XAU!E18") == 4.15 and cell(svc, "EK_XAU!G18") == 4.15
+        put(svc, gold, {"EK_XAU!B12": "Index"})
+        assert cell(svc, "EK_XAU!E21") == 4.40 and cell(svc, "EK_XAU!E18") == 4.15
+        assert type(cell(svc, "EK_XAU!E17")) is XlError and cell(svc, "EK_XAU!G17") == ""       # "XAUSR1M Index" is not known
+        put(svc, gold, {"EK_XAU!B12": "Curncy", "EK_XAU!B10": "MID"})                 # another Bloomberg field
+        assert cell(svc, "EK_XAU!E20") == 4.35 and type(cell(svc, "EK_XAU!E17")) is XlError
         put(svc, gold, {"EK_XAU!B8": "06.11.2026"})                                   # a typed value date wins
         assert cell(svc, "EK_XAU!B9") == 46332.0 and cell(svc, "EK_XAU!C29") == 175.0
     finally:
@@ -452,13 +491,14 @@ def test_xautry_price_at_a_given_rate(svc, gold):
     u = svc.login("Altın hesap")["user"]
     c0 = extras.XAU_CALC
     row = dict((name, c0 + 1 + i) for i, name in enumerate(
-        ("d1", "d2", "n", "s", "xau", "usd", "try", "lease", "xfwd", "limp", "fwd", "sp", "spd", "teo", "vbid", "vask", "dbid", "dask",
+        ("d1", "d2", "n", "s", "xau", "usd", "try", "swap", "xfwd", "simp", "fwd", "sp", "spd", "teo", "vbid", "vask", "dbid", "dask",
          "ibid", "iask", "sxt")))
 
     def v(name, col="B", user=u):
         return cell(svc, "EK_XAU!%s%d" % (col, row[name]), user)
 
     assert [cell(svc, "EK_XAU!%s%d" % (c, c0), u) for c in "BCD"] == [cell(svc, "VIOP!%s45" % c, u) for c in "MNO"]
+    assert cell(svc, "EK_XAU!A%d" % row["swap"], u) == "Altın swap % (ops.)"
     for col, viop, target in (("B", "N", 27), ("C", "P", 28), ("D", "R", 29)):
         # the default TRY rate is what the USDTRY contract of the same expiry implies (mid of the bid / ask tables)
         assert cell(svc, "VIOP!%s9" % viop, u) == v("d2", col)
@@ -469,24 +509,26 @@ def test_xautry_price_at_a_given_rate(svc, gold):
         fwd = spot * (1 + implied / 100 / 360 * n) / (1 + usd / 100 / 360 * n)
         assert v("fwd", col) == pytest.approx(fwd, rel=1e-13)
         assert v("sp", col) == pytest.approx((fwd - spot) * 10000, rel=1e-9) and v("spd", col) == pytest.approx((fwd - spot) * 10000 / n, rel=1e-9)
-        xfwd = (cell(svc, "EK_XAU!J%d" % target, u) + cell(svc, "EK_XAU!K%d" % target, u)) / 2
+        xfwd = (cell(svc, "EK_XAU!I%d" % target, u) + cell(svc, "EK_XAU!J%d" % target, u)) / 2
         assert v("xfwd", col) == pytest.approx(xfwd, rel=1e-13)
         assert v("teo", col) == pytest.approx(xfwd * fwd / GRAM, rel=1e-13)
         assert v("dbid", col) == pytest.approx(v("teo", col) - v("vbid", col)) and v("dask", col) == pytest.approx(v("teo", col) - v("vask", col))
         assert v("sxt", col) == pytest.approx((SPOT_BID + SPOT_ASK) / 2 * spot / GRAM, rel=1e-13)
-        # the lease rate that the forward in use implies is the interpolated one
-        assert v("limp", col) == pytest.approx(cell(svc, "EK_XAU!D%d" % target, u), rel=1e-9)
-    # a rate of my own
-    put(svc, u, {"EK_XAU!B%d" % row["try"]: 40, "EK_XAU!B%d" % row["usd"]: "4,25", "EK_XAU!B%d" % row["lease"]: "0,5"})
+        # the swap rate that the forward in use implies is the interpolated one
+        assert v("simp", col) == pytest.approx(cell(svc, "EK_XAU!D%d" % target, u), rel=1e-9)
+    # rates of my own: the gold forward needs the gold swap rate only, the USD rate belongs to the USDTRY leg
+    put(svc, u, {"EK_XAU!B%d" % row["try"]: 40, "EK_XAU!B%d" % row["usd"]: "4,25", "EK_XAU!B%d" % row["swap"]: "4,5"})
     n, spot, days = v("n"), v("s"), cell(svc, "EK_XAU!C27", u)
     fwd = spot * (1 + 40 / 100 / 360 * n) / (1 + 4.25 / 100 / 360 * n)
-    xfwd = (SPOT_BID + SPOT_ASK) / 2 * (1 + 4.25 / 100 * days / 360) / (1 + 0.5 / 100 * days / 360)
-    assert v("try") == 40.0 and v("usd") == 4.25 and v("lease") == 0.5 and v("limp") == 0.5
+    xfwd = (SPOT_BID + SPOT_ASK) / 2 * (1 + 4.5 / 100 * days / 360)
+    assert v("try") == 40.0 and v("usd") == 4.25 and v("swap") == 4.5 and v("simp") == 4.5
     assert v("fwd") == pytest.approx(fwd, rel=1e-13) and v("xfwd") == pytest.approx(xfwd, rel=1e-13)
     assert v("teo") == pytest.approx(xfwd * fwd / GRAM, rel=1e-13)
+    put(svc, u, {"EK_XAU!B%d" % row["usd"]: "6"})                       # another USD rate: the gold forward stays
+    assert v("xfwd") == pytest.approx(xfwd, rel=1e-13) and v("fwd") != pytest.approx(fwd, rel=1e-6)
     # ... is mine alone, and blanking returns to the formula
-    assert v("try", user=None) != 40.0 and v("lease", user=None) is None
-    put(svc, u, {"EK_XAU!B%d" % row["try"]: "", "EK_XAU!B%d" % row["usd"]: "", "EK_XAU!B%d" % row["lease"]: ""})
+    assert v("try", user=None) != 40.0 and v("swap", user=None) is None
+    put(svc, u, {"EK_XAU!B%d" % row["try"]: "", "EK_XAU!B%d" % row["usd"]: "", "EK_XAU!B%d" % row["swap"]: ""})
     assert v("try") == v("try", user=None) and v("xfwd") == v("xfwd", user=None)
 
 
@@ -495,14 +537,17 @@ def test_gold_panels_are_on_the_viop_page(svc, gold):
     ids = [p["id"] for p in page["panels"]]
     assert ids[ids.index("B11") + 1:ids.index("B11") + 6] == ["B11b", "XAU1", "XAU2", "XAU3", "XAU4"]      # after the gold tables
     panels = {p["id"]: p for p in page["panels"]}
-    assert panels["XAU2"]["note"].startswith("Lease % = Manuel doluysa")              # the explanation kept in a cell
-    assert panels["XAU1"]["note"].startswith("Canlıda spot ve lease Bloomberg'den gelir")
+    assert panels["XAU2"]["note"].startswith("Swap % = Manuel doluysa") and "USD faizi hesaba girmez" in panels["XAU2"]["note"]
+    assert panels["XAU1"]["note"].startswith("Canlıda spot ve altın swap faizi (XAUSR…) Bloomberg'den gelir")
     cells = [c for row in panels["XAU1"]["data"]["rows"] for c in row]
     shared = [c for c in cells if c.get("i") == "s"]
-    assert len(shared) == 6 and any(c.get("o") == list(extras.XAU_SOURCES) for c in shared)
+    assert len(shared) == 7 and any(c.get("o") == list(extras.XAU_SOURCES) for c in shared)        # incl. the ticker key
     assert sum(1 for row in panels["XAU2"]["data"]["rows"] for c in row if c.get("i") == "s") == 14       # tickers + manual rates
-    assert sum(1 for row in panels["XAU4"]["data"]["rows"] for c in row if c.get("i") == "u") == 9        # USD, TRY, lease × 3
-    assert sum(1 for row in panels["XAU3"]["data"]["rows"] for c in row if c.get("t") == "Lease") == 7
+    assert [row[3]["t"] for row in panels["XAU2"]["data"]["rows"][1:]] == ROOTS
+    assert sum(1 for row in panels["XAU4"]["data"]["rows"] for c in row if c.get("i") == "u") == 9        # USD, TRY, gold swap × 3
+    assert sum(1 for row in panels["XAU3"]["data"]["rows"] for c in row if c.get("t") == "Swap faizi") == 7
+    fwd = {p["id"]: p for p in svc.view(None, "forward")["panels"]}
+    assert "swap faizi (XAUSR)" in fwd["B16"]["note"]
 
 
 class _Direct(ReplayProvider):
@@ -522,32 +567,35 @@ class _Direct(ReplayProvider):
         return NO_RT
 
 
-def test_live_without_bfxforward_the_gold_tables_run_on_the_lease_curve(svc, tmp_path):
+def test_live_without_bfxforward_the_gold_tables_run_on_the_swap_rate(svc, tmp_path):
     today = svc.books["tto"].engine.clock.today()
     snapshot = {k: v for k, v in svc.provider.snapshot.items() if k[0] != "BFX"}
-    snapshot.update({bdp_key("XAU Curncy", "BID"): 3960.0, bdp_key("XAU Curncy", "ASK"): 3961.0,
-                     bdp_key("TESTLEASE1M Index", "PX_LAST"): 0.30, bdp_key("TESTLEASE12M Index", "PX_LAST"): 0.70})
+    snapshot.update({bdp_key("XAU Curncy", "BID"): 3960.0, bdp_key("XAU Curncy", "ASK"): 3961.0})
     clock = Clock(today + 0.5)
     clock.today = lambda: float(today)
-    live = Service(Settings(data_dir=str(tmp_path), mode="live"), provider=_Direct(snapshot), clock=clock)
+    provider = _Direct(snapshot)
+    live = Service(Settings(data_dir=str(tmp_path), mode="live"), provider=provider, clock=clock)
     try:
         assert live.mode == "live"
-        u = live.login("Canlı")["user"]
-        # no lease ticker yet: the API cannot price the forward, so the tables are empty-handed (as they were)
-        assert cell(live, "EK_XAU!I27") == NO_BFX == cell(live, "VIOP!M58")
-        assert cell(live, "EK_XAU!C11") == "Lease faizi yok → BFXFORWARD"
+        # Bloomberg has no quote for the swap rate tickers (yet): the API cannot price the forward, so the
+        # tables are empty-handed, as they were
+        assert cell(live, "EK_XAU!E17") == NA_NA and cell(live, "EK_XAU!H27") == NO_BFX == cell(live, "VIOP!M58")
+        assert cell(live, "EK_XAU!C11") == "Swap faizi yok → BFXFORWARD"
         assert type(cell(live, "VIOP!M55")) is XlError
-        put(live, u, {"EK_XAU!D17": "TESTLEASE1M Index", "EK_XAU!D22": "TESTLEASE12M Index"})
-        assert cell(live, "EK_XAU!C11") == "Lease · 2 vade"
+        # the quotes of the default tickers arrive: no typing needed
+        quotes = {bdp_key("XAUSR1M Curncy", "PX_LAST"): 4.05, bdp_key("XAUSR12M Curncy", "PX_LAST"): 4.40}
+        provider.snapshot.update(quotes)
+        live.et.call(live._apply_market, list(quotes))
+        assert cell(live, "EK_XAU!C11") == "Swap faizi · 2 vade"
         days = cell(live, "EK_XAU!C27")
         nodes = sorted((cell(live, "EK_XAU!C%d" % r), cell(live, "EK_XAU!G%d" % r)) for r in (17, 22))
-        usd = sorted((cell(live, "VIOP!B%d" % r), cell(live, "VIOP!F%d" % r)) for r in range(16, 26))
-        l, s = linear(nodes, days, True), linear(usd, days, False)
-        ask = 3961.0 * (1 + s / 100 * days / 360) / (1 + l / 100 * days / 360)
+        assert [y for _, y in nodes] == [4.05, 4.40]
+        rate = linear(nodes, days, True)
+        ask = 3961.0 * (1 + rate / 100 * days / 360)
         assert cell(live, "VIOP!M58") == pytest.approx(ask, rel=1e-13)
         assert cell(live, "VIOP!M55") == pytest.approx(cell(live, "VIOP!M57") / ask * GRAM, rel=1e-13)
         assert isinstance(cell(live, "VIOP!M52"), float) and isinstance(cell(live, "Forward!I30"), float)
-        assert cell(live, "EK_XAU!L27") == "Lease" and cell(live, "EK_XAU!M27") == ""          # nothing to compare with
+        assert cell(live, "EK_XAU!K27") == "Swap faizi" and cell(live, "EK_XAU!L27") == ""          # nothing to compare with
         assert live.view(None, "borsa").get("note") is None                                    # the offline notice is offline only
     finally:
         live.stop()

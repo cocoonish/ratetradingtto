@@ -435,7 +435,7 @@ async function shot(page, name) {
       [download.suggestedFilename(), size]);
 
     // ------------------------------------------------------------------ the dashboard's own tables
-    console.log('own tables: forward quotes from OIS + spread, gold from lease rates, BIST swap, ASW');
+    console.log('own tables: forward quotes from OIS + spread, gold from the swap rate, BIST swap, ASW');
     const order = (ids) => page.evaluate((want) => {
       const all = [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel);
       const at = all.indexOf(want[0]);
@@ -475,21 +475,24 @@ async function shot(page, name) {
     await shot(page, '10-forward-quotes');
 
     await open(page, 'viop');
-    check('gold tables: spot / source, lease curve, forwards, calculator', await order(['B11', 'B11b', 'XAU1', 'XAU2', 'XAU3', 'XAU4']));
+    check('gold tables: spot / source, swap rate curve, forwards, calculator', await order(['B11', 'B11b', 'XAU1', 'XAU2', 'XAU3', 'XAU4']));
+    check('gold swap rate tickers are Bloomberg\'s XAUSR… roots with the yellow key next to them',
+      (await cellText(page, 'EK_XAU!D16')).trim() === 'XAUSR1W' && (await cellText(page, 'EK_XAU!D17')).trim() === 'XAUSR1M'
+      && (await cellText(page, 'EK_XAU!D22')).trim() === 'XAUSR12M' && (await cellText(page, 'EK_XAU!B12')).trim() === 'Curncy');
     const xau0 = (await cellText(page, 'VIOP!M58')).trim();
     check('offline the gold forward is the BFXFORWARD value Excel saved',
-      xau0 === '3.971,85' && (await cellText(page, 'EK_XAU!K27')).trim() === '3.971,8535' && (await cellText(page, 'EK_XAU!C11')).trim() === 'Spot yok → BFXFORWARD'
-      && (await cellText(page, 'EK_XAU!L27')).trim() === 'BFXFORWARD', xau0);
+      xau0 === '3.971,85' && (await cellText(page, 'EK_XAU!J27')).trim() === '3.971,8535' && (await cellText(page, 'EK_XAU!C11')).trim() === 'Spot yok → BFXFORWARD'
+      && (await cellText(page, 'EK_XAU!K27')).trim() === 'BFXFORWARD', xau0);
     await typeInto(page, 'EK_XAU!B5', '3950,10');
     await typeInto(page, 'EK_XAU!C5', '3950,60');
-    await typeInto(page, 'EK_XAU!F17', '0,45');
-    await waitCell(page, 'EK_XAU!C11', 't.trim() === "Lease · 1 vade"');
+    await typeInto(page, 'EK_XAU!F17', '4,10');
+    await waitCell(page, 'EK_XAU!C11', 't.trim() === "Swap faizi · 1 vade"');
     await waitCell(page, 'VIOP!M58', 't.trim() !== "' + xau0 + '"');
-    const lease = { m58: await cellText(page, 'VIOP!M58'), k27: await cellText(page, 'EK_XAU!K27'), src: await cellText(page, 'EK_XAU!L27'),
-      usdtry: trNumber(await cellText(page, 'VIOP!M55')), fwd: trNumber(await cellText(page, 'EK_XAU!K27')), viop: trNumber(await cellText(page, 'VIOP!M57')) };
-    check('typed spot and lease rate: the VİOP XAUTRY table runs on the lease forward',
-      Math.abs(trNumber(lease.m58) - lease.fwd) < 0.006 && lease.src.trim() === 'Lease' && Math.abs(lease.fwd - 3950.6 * (1 + 0.0396429 * 57 / 360) / (1 + 0.0045 * 57 / 360)) < 0.01, lease);
-    check('implied USDTRY = VİOP gold ÷ XAUUSD forward × 31,1035', Math.abs(lease.usdtry - lease.viop / lease.fwd * 31.1035) < 0.0006, lease);
+    const gold = { m58: await cellText(page, 'VIOP!M58'), src: await cellText(page, 'EK_XAU!K27'),
+      usdtry: trNumber(await cellText(page, 'VIOP!M55')), fwd: trNumber(await cellText(page, 'EK_XAU!J27')), viop: trNumber(await cellText(page, 'VIOP!M57')) };
+    check('typed spot and gold swap rate: the VİOP XAUTRY table runs on spot·(1 + swap·days/360), no USD rate in it',
+      Math.abs(trNumber(gold.m58) - gold.fwd) < 0.006 && gold.src.trim() === 'Swap faizi' && Math.abs(gold.fwd - 3950.6 * (1 + 0.041 * 57 / 360)) < 0.01, gold);
+    check('implied USDTRY = VİOP gold ÷ XAUUSD forward × 31,1035', Math.abs(gold.usdtry - gold.viop / gold.fwd * 31.1035) < 0.0006, gold);
     const theo = trNumber(await cellText(page, 'EK_XAU!B53'));
     await typeInto(page, 'EK_XAU!B46', '40');                  // "price it at this TRY rate"
     await waitCell(page, 'EK_XAU!B46', 't.trim() === "40,00"');
@@ -497,20 +500,20 @@ async function shot(page, name) {
     const fwd40 = 49.9977 * (1 + 0.40 / 360 * 57) / (1 + 0.0396429 / 360 * 57);
     check('gold calculator: theoretical XAUTRY at a typed TRY rate', theo40 > theo + 40
       && Math.abs(theo40 - trNumber(await cellText(page, 'EK_XAU!B48')) * fwd40 / 31.1035) < 0.02, [theo, theo40]);
-    await shot(page, '11-gold-lease');
+    await shot(page, '11-gold-swap-rate');
     const ctxC = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
     const pageC = await ctxC.newPage();
     pageC.on('pageerror', (e) => errors.push('pageerror(C): ' + e.message));
     await login(pageC, 'Zeynep');
     await open(pageC, 'viop');
-    check('spot and lease are desk inputs: another user sees the same forward', (await cellText(pageC, 'VIOP!M58')).trim() === lease.m58.trim(), await cellText(pageC, 'VIOP!M58'));
+    check('spot and swap rate are desk inputs: another user sees the same forward', (await cellText(pageC, 'VIOP!M58')).trim() === gold.m58.trim(), await cellText(pageC, 'VIOP!M58'));
     check('the calculator rate is personal', (await cellText(pageC, 'EK_XAU!B46')).trim() !== '40,00', await cellText(pageC, 'EK_XAU!B46'));
     await ctxC.close();
     await pick('EK_XAU!B11', 'BFXFORWARD');
     await waitCell(page, 'VIOP!M58', 't.trim() === "' + xau0 + '"');
     check('the source can be switched back to BFXFORWARD', (await cellText(page, 'EK_XAU!C11')).trim() === 'BFXFORWARD (seçildi)');
     await pick('EK_XAU!B11', 'Otomatik');
-    await waitCell(page, 'EK_XAU!C11', 't.trim() === "Lease · 1 vade"');
+    await waitCell(page, 'EK_XAU!C11', 't.trim() === "Swap faizi · 1 vade"');
 
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {

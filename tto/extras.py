@@ -7,9 +7,10 @@ the Excel files (parity and reference tests read those).
 
 * ``EK_FWD``  (TRY workbook)  forward quotes from OIS + spread, with separate spreads for bid and ask, and
                                the way back: the OIS spread of swap points typed by hand
-* ``EK_XAU``  (TRY workbook)  gold forwards from lease rates instead of ``BFXFORWARD`` (which the Bloomberg
-                               API does not offer), the VİOP gold tables and the Forward gold strip fed from
-                               them, and a "price it at this rate" calculator for the VİOP XAUTRY contracts
+* ``EK_XAU``  (TRY workbook)  gold forwards from the gold swap rate (``XAUSR…``) instead of ``BFXFORWARD``
+                               (which the Bloomberg API does not offer), the VİOP gold tables and the Forward
+                               gold strip fed from them, and a "price it at this rate" calculator for the
+                               VİOP XAUTRY contracts
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 """
 from __future__ import annotations
@@ -360,10 +361,13 @@ def _tto_forward(model: Model) -> None:
 
 
 XAU_SHEET = "EK_XAU"
-XAU_LEASE = (16, 22)                     # lease curve rows: 1W, 1M, 2M, 3M, 6M, 9M, 12M
-XAU_TENORS = (("1W", None), ("1M", 1), ("2M", 2), ("3M", 3), ("6M", 6), ("9M", 9), ("12M", 12))
+XAU_CURVE = (16, 22)                     # gold swap rate curve rows: 1W, 1M, 2M, 3M, 6M, 9M, 12M
+#: tenor, months from spot (None = one week), Bloomberg ticker root of the gold swap rate
+XAU_TENORS = (("1W", None, "XAUSR1W"), ("1M", 1, "XAUSR1M"), ("2M", 2, "XAUSR2M"), ("3M", 3, "XAUSR3M"),
+              ("6M", 6, "XAUSR6M"), ("9M", 9, "XAUSR9M"), ("12M", 12, "XAUSR12M"))
+XAU_TICKER_KEY = "Curncy"                # the "yellow key" appended to a ticker root
 XAU_TARGETS = (27, 35)                   # 3 VİOP XAUTRY contracts, 3 VİOP XAUUSD contracts, Forward!D2, 2 free dates
-XAU_SOURCES = ("Otomatik", "Lease", "BFXFORWARD")
+XAU_SOURCES = ("Otomatik", "Swap faizi", "BFXFORWARD")
 XAU_CALC = 39                            # header row of the "price at a given rate" calculator
 GRAMS_PER_OUNCE = "31.1035"              # the VİOP sheet's own constant (VIOP!M55)
 _USD_CURVE = "VIOP!$B$16:$B$25,VIOP!$F$16:$F$25"
@@ -390,22 +394,23 @@ def _gold_check(model: Model) -> None:
 
 
 def _tto_gold(model: Model) -> None:
-    """Gold forwards from lease rates.
+    """Gold forwards from the gold swap rate.
 
     Excel prices the gold forward with ``BFXFORWARD("XAUUSD"; date; ...)``, a function of the Bloomberg
-    Excel add-in that the API does not have.  Here the forward comes from the cost of carry instead:
+    Excel add-in that the API does not have.  Here the forward is the spot carried at the gold swap rate
+    (Bloomberg ``XAUSR1W``, ``XAUSR1M`` ...), applied directly - no USD rate is involved:
 
-        XAUUSD fwd = spot · (1 + USD·g/360) / (1 + lease·g/360)         g = value date − gold spot value date
+        XAUUSD fwd = spot · (1 + swap rate · g/360)                     g = value date − gold spot value date
 
-    with the lease curve read from Bloomberg (ticker cells) or typed in, and the USD curve of the VİOP
-    sheet.  The cells of the VİOP sheet and of the Forward sheet that held the ``BFXFORWARD`` calls now read
-    the forward chosen here (source ``Otomatik``: the lease forward when spot and lease rates are there,
-    otherwise ``BFXFORWARD``).  The ``BFXFORWARD`` calls themselves moved here together with the values
-    Excel recorded for them, so offline the pages still show exactly what Excel showed.
+    The curve is read from Bloomberg (ticker cells) or typed in, and interpolated linearly in days.  The cells
+    of the VİOP sheet and of the Forward sheet that held the ``BFXFORWARD`` calls now read the forward chosen
+    here (source ``Otomatik``: from the swap rate when spot and rates are there, otherwise ``BFXFORWARD``).
+    The ``BFXFORWARD`` calls themselves moved here together with the values Excel recorded for them, so
+    offline the pages still show exactly what Excel showed.
     """
     b = SheetBuilder(model, XAU_SHEET)
     # ---- spot and settings
-    b.title("A1", "ALTIN  ·  spot ve forward kaynağı  (XAUUSD forward, BFXFORWARD yerine lease faizinden)")
+    b.title("A1", "ALTIN  ·  spot ve forward kaynağı  (XAUUSD forward, BFXFORWARD yerine altın swap faizinden)")
     b.head("A2", ["Spot / ayar", "Bid", "Ask", "Mid", "Açıklama"])
     b.set("A3", "Spot ticker", bold=True)
     b.input("B3", "XAU Curncy")
@@ -430,58 +435,66 @@ def _tto_gold(model: Model) -> None:
     b.note("E8", "boş = Bloomberg; o da yoksa USDTRY spot valörü (VIOP!K3)")
     b.set("A9", "Spot valör · kullanılan", bold=True)
     b.set("B9", "=IF(ISNUMBER($B$8),$B$8,IF(ISNUMBER($B$7),$B$7,DATE(YEAR(VIOP!$K$3),MONTH(VIOP!$K$3),DAY(VIOP!$K$3))))", fmt=DATE, bold=True)
-    b.set("A10", "Lease alanı", bold=True)
+    b.set("A10", "Faiz alanı", bold=True)
     b.input("B10", "PX_LAST")
-    b.note("E10", "lease ticker'larından okunan Bloomberg alanı (PX_LAST, MID, PX_MID …)")
+    b.note("E10", "swap faizi ticker'larından okunan Bloomberg alanı (PX_LAST, MID, PX_MID …)")
     b.set("A11", "Kaynak", bold=True)
     b.input("B11", XAU_SOURCES[0])
     b.dropdown("B11", XAU_SOURCES)
-    l1, l2 = XAU_LEASE
+    l1, l2 = XAU_CURVE
     nodes = "$Q$%d" % l1
-    b.set("C11", ('=IF($B$11="BFXFORWARD","BFXFORWARD (seçildi)",IF(AND(ISNUMBER($D$6),%(n)s>0),"Lease · "&%(n)s&" vade",'
-                  'IF($B$11="Lease","Lease seçili: "&IF(ISNUMBER($D$6),"lease faizi","spot")&" yok",'
-                  'IF(ISNUMBER($D$6),"Lease faizi yok → BFXFORWARD","Spot yok → BFXFORWARD"))))') % {"n": nodes}, bold=True)
-    b.note("E11", "Otomatik = spot ve lease faizi varsa lease, yoksa BFXFORWARD")
-    b.note("A12", "Canlıda spot ve lease Bloomberg'den gelir: lease ticker'larını aşağıdaki tabloya yazın ya da faizi elle girin. Kayıtlı veri modunda "
-                  "altın spotu ve lease kaydı yoktur; forward Excel'in kaydettiği BFXFORWARD değerlerinden okunur, spot ve lease'i elle girerek "
-                  "lease hesabını deneyebilirsiniz.")
+    b.set("C11", ('=IF($B$11="BFXFORWARD","BFXFORWARD (seçildi)",IF(AND(ISNUMBER($D$6),%(n)s>0),"Swap faizi · "&%(n)s&" vade",'
+                  'IF($B$11="Swap faizi","Swap faizi seçili: "&IF(ISNUMBER($D$6),"swap faizi","spot")&" yok",'
+                  'IF(ISNUMBER($D$6),"Swap faizi yok → BFXFORWARD","Spot yok → BFXFORWARD"))))') % {"n": nodes}, bold=True)
+    b.note("E11", "Otomatik = spot ve swap faizi varsa swap faizinden, yoksa BFXFORWARD")
+    b.set("A12", "Ticker eki", bold=True)
+    b.input("B12", XAU_TICKER_KEY)
+    b.note("E12", "swap faizi ticker'ının sarı tuşu: XAUSR1M + Curncy = \"XAUSR1M Curncy\"")
+    b.note("A13", "Canlıda spot ve altın swap faizi (XAUSR…) Bloomberg'den gelir; ticker'lar aşağıdaki tablodadır, faiz elle de yazılabilir. "
+                  "Kayıtlı veri modunda altın spotu ve swap faizi kaydı yoktur; forward Excel'in kaydettiği BFXFORWARD değerlerinden okunur, spot "
+                  "ve faizi elle girerek hesabı deneyebilirsiniz.")
 
-    # ---- lease curve
-    b.title("A14", "ALTIN  ·  lease eğrisi  (% ACT/360; Bloomberg ticker'ı ya da manuel — sarı hücreler girdi)")
-    b.head("A15", ["Vade", "Valör", "Gün", "Ticker", "Bloomberg %", "Manuel %", "Lease %", "USD %", "Fwd faizi %", "Fwd bid", "Fwd ask",
-                   "Puan (mid)"])
-    b.head("N15", ["Sıra", "Gün (sıralı)", "Lease (sıralı)", "Düğüm"])
+    # ---- gold swap rate curve
+    b.title("A14", "ALTIN  ·  swap faizi eğrisi  (XAUSR, % ACT/360; Bloomberg ticker'ı ya da manuel — sarı hücreler girdi)")
+    b.head("A15", ["Vade", "Valör", "Gün", "Ticker", "Bloomberg %", "Manuel %", "Swap %", "Fwd bid", "Fwd ask", "Puan (mid)", "USD % (bilgi)",
+                   "İma lease % (bilgi)"])
+    b.head("N15", ["Sıra", "Gün (sıralı)", "Faiz (sıralı)", "Düğüm"])
     xs, ys = "$O$%d:$O$%d" % (l1, l2), "$P$%d:$P$%d" % (l1, l2)
-    for i, (label, months) in enumerate(XAU_TENORS):
+    for i, (label, months, root) in enumerate(XAU_TENORS):
         r = l1 + i
         f = {"r": r, "k": i + 1, "l1": l1, "l2": l2, "usd": _USD_CURVE}
         b.set("A%d" % r, label, bold=True, align="center")
         b.set("B%d" % r, "=WORKDAY($B$9+6,1)" if months is None else "=WORKDAY(EDATE($B$9,%d)-1,1)" % months, fmt=DATE)
         b.set("C%d" % r, "=$B%(r)d-$B$9" % f, fmt=INT0)
-        b.input("D%d" % r, None)
-        b.set("E%d" % r, '=IF(TRIM($D%(r)d&"")="","",_xll.BDP($D%(r)d,$B$10))' % f, fmt="0.000")
+        b.input("D%d" % r, root)
+        # a ticker root gets the yellow key of B12; a full ticker (with a space) is used as it is typed
+        b.set("E%d" % r, ('=IF(TRIM($D%(r)d&"")="","",_xll.BDP(IF(ISNUMBER(SEARCH(" ",TRIM($D%(r)d))),TRIM($D%(r)d),'
+                          'TRIM($D%(r)d)&" "&TRIM($B$12)),$B$10))') % f, fmt="0.000")
         b.input("F%d" % r, None, fmt="0.000")
         b.set("G%d" % r, '=IF(ISNUMBER($F%(r)d),$F%(r)d,IF(ISNUMBER($E%(r)d),$E%(r)d,""))' % f, fmt="0.000", bold=True)
-        b.set("H%d" % r, '=_xll.BINTERPOL(%(usd)s,$C%(r)d,"LINEAR")' % f, fmt="0.000")
-        b.set("I%d" % r, '=IFERROR(IF($G%(r)d="","",((1+$H%(r)d/100*$C%(r)d/360)/(1+$G%(r)d/100*$C%(r)d/360)-1)*360/$C%(r)d*100),"")' % f, fmt="0.000")
-        b.set("J%d" % r, '=IFERROR(IF($G%(r)d="","",$B$6*(1+$H%(r)d/100*$C%(r)d/360)/(1+$G%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM2)
-        b.set("K%d" % r, '=IFERROR(IF($G%(r)d="","",$C$6*(1+$H%(r)d/100*$C%(r)d/360)/(1+$G%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM2)
-        b.set("L%d" % r, '=IFERROR(IF($G%(r)d="","",($J%(r)d+$K%(r)d)/2-$D$6),"")' % f, fmt=NUM2)
+        b.set("H%d" % r, '=IFERROR(IF($G%(r)d="","",$B$6*(1+$G%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM2)
+        b.set("I%d" % r, '=IFERROR(IF($G%(r)d="","",$C$6*(1+$G%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM2)
+        b.set("J%d" % r, '=IFERROR(IF($G%(r)d="","",($H%(r)d+$I%(r)d)/2-$D$6),"")' % f, fmt=NUM2)
+        # for information only: the USD OIS rate of the tenor and the lease rate the swap rate implies with it
+        b.set("K%d" % r, '=_xll.BINTERPOL(%(usd)s,$C%(r)d,"LINEAR")' % f, fmt="0.000", color=NOTE_COLOR)
+        b.set("L%d" % r, '=IFERROR(IF($G%(r)d="","",((1+$K%(r)d/100*$C%(r)d/360)/(1+$G%(r)d/100*$C%(r)d/360)-1)*360/$C%(r)d*100),"")' % f,
+              fmt="0.000", color=NOTE_COLOR)
         # the quoted tenors only, in order (a tenor without a rate is left out of the interpolation)
         b.set("N%d" % r, '=IF(ISNUMBER($G%(r)d),COUNT($G$%(l1)d:$G%(r)d),"")' % f, fmt="0")
         b.set("O%d" % r, '=IFERROR(INDEX($C$%(l1)d:$C$%(l2)d,MATCH(%(k)d,$N$%(l1)d:$N$%(l2)d,0)),"")' % f, fmt="0")
         b.set("P%d" % r, '=IFERROR(INDEX($G$%(l1)d:$G$%(l2)d,MATCH(%(k)d,$N$%(l1)d:$N$%(l2)d,0)),"")' % f, fmt="0.000")
     b.set(nodes.replace("$", ""), "=COUNT($G$%d:$G$%d)" % (l1, l2), fmt="0")
-    b.note("A%d" % (l2 + 1), "Lease % = Manuel doluysa o, değilse ticker'ın Bloomberg değeri (yüzde olarak: 0,45 = %0,45). Fwd = spot·(1+USD·g/360)/"
-                             "(1+lease·g/360); USD = VİOP sayfasındaki USD OIS eğrisi. Aradaki günler lineer, uçlarda sabit; faizi olmayan vade "
-                             "atlanır.")
+    b.note("A%d" % (l2 + 1), "Swap % = Manuel doluysa o, değilse ticker'ın Bloomberg değeri (yüzde olarak: 0,45 = %0,45). Fwd = spot·(1 + swap·g/360): "
+                             "altın faizi doğrudan uygulanır, USD faizi hesaba girmez. Aradaki günler lineer, uçlarda sabit; faizi olmayan vade "
+                             "atlanır. Ticker = kök + ticker eki (boşluklu tam ticker yazılırsa aynen kullanılır). USD % ve ima lease yalnızca "
+                             "bilgi içindir (lease ≈ USD − swap).")
 
     # ---- the dates the other sheets need
     t1, t2 = XAU_TARGETS
     b.title("A%d" % (t1 - 2), "ALTIN  ·  XAUUSD forward  (VİOP altın tablolarına ve Forward sayfasına giden değerler)")
-    b.head("A%d" % (t1 - 1), ["Hedef", "Valör", "Gün", "Lease %", "USD %", "Lease fwd bid", "Lease fwd ask", "BFXFORWARD bid", "BFXFORWARD ask",
-                              "Kullanılan bid", "Kullanılan ask", "Kaynak", "BFX ima lease %", "Lease − BFX (mid)"])
-    lease_at = "IF(%s=0,\"\",%s)" % (nodes, lin("$C%(r)d", xs, ys, nodes))
+    b.head("A%d" % (t1 - 1), ["Hedef", "Valör", "Gün", "Swap %", "Swap fwd bid", "Swap fwd ask", "BFXFORWARD bid", "BFXFORWARD ask",
+                              "Kullanılan bid", "Kullanılan ask", "Kaynak", "BFX ima swap %", "Swap − BFX (mid)"])
+    rate_at = "IF(%s=0,\"\",%s)" % (nodes, lin("$C%(r)d", xs, ys, nodes))
     viop_bid, viop_ask, usd_c = ("S", "T", "U"), ("M", "N", "O"), ("M", "N", "O")
     targets = []
     for i in range(3):       # VİOP XAUTRY: the BID table divides by the ask outright, the ASK table by the bid outright
@@ -495,49 +508,48 @@ def _tto_gold(model: Model) -> None:
         r = t1 + i
         b.set("A%d" % r, label, bold=True)
         b.set("B%d" % r, date, fmt=DATE)
-        b.set("H%d" % r, '=_xll.BFXFORWARD("XAUUSD",%s,"BidOutright")' % bid_date, fmt=NUM4)
-        b.set("I%d" % r, '=_xll.BFXFORWARD("XAUUSD",%s,"AskOutright")' % ask_date, fmt=NUM4)
+        b.set("G%d" % r, '=_xll.BFXFORWARD("XAUUSD",%s,"BidOutright")' % bid_date, fmt=NUM4)
+        b.set("H%d" % r, '=_xll.BFXFORWARD("XAUUSD",%s,"AskOutright")' % ask_date, fmt=NUM4)
         if bid_src:
-            b.recorded("H%d" % r, recorded_value(model, *bid_src))
-            SheetBuilder(model, bid_src[0]).patch(bid_src[1], "=%s!$J$%d" % (XAU_SHEET, r))
+            b.recorded("G%d" % r, recorded_value(model, *bid_src))
+            SheetBuilder(model, bid_src[0]).patch(bid_src[1], "=%s!$I$%d" % (XAU_SHEET, r))
         if ask_src:
-            b.recorded("I%d" % r, recorded_value(model, *ask_src))
-            SheetBuilder(model, ask_src[0]).patch(ask_src[1], "=%s!$K$%d" % (XAU_SHEET, r))
+            b.recorded("H%d" % r, recorded_value(model, *ask_src))
+            SheetBuilder(model, ask_src[0]).patch(ask_src[1], "=%s!$J$%d" % (XAU_SHEET, r))
     for r in range(t1 + len(targets), t2 + 1):
         b.set("A%d" % r, "serbest", color=NOTE_COLOR)
         b.input("B%d" % r, None, fmt=DATE)
-        b.set("H%d" % r, '=IF(ISNUMBER($B%d),_xll.BFXFORWARD("XAUUSD",$B%d,"BidOutright"),"")' % (r, r), fmt=NUM4)
-        b.set("I%d" % r, '=IF(ISNUMBER($B%d),_xll.BFXFORWARD("XAUUSD",$B%d,"AskOutright"),"")' % (r, r), fmt=NUM4)
+        b.set("G%d" % r, '=IF(ISNUMBER($B%d),_xll.BFXFORWARD("XAUUSD",$B%d,"BidOutright"),"")' % (r, r), fmt=NUM4)
+        b.set("H%d" % r, '=IF(ISNUMBER($B%d),_xll.BFXFORWARD("XAUUSD",$B%d,"AskOutright"),"")' % (r, r), fmt=NUM4)
     for r in range(t1, t2 + 1):
-        f = {"r": r, "usd": _USD_CURVE}
+        f = {"r": r}
         b.set("C%d" % r, '=IF(ISNUMBER($B%(r)d),$B%(r)d-$B$9,"")' % f, fmt=INT0)
-        b.set("D%d" % r, '=IFERROR(IF($C%d="","",%s),"")' % (r, lease_at % f), fmt="0.000")
-        b.set("E%d" % r, '=IFERROR(IF($C%(r)d="","",_xll.BINTERPOL(%(usd)s,$C%(r)d,"LINEAR")),"")' % f, fmt="0.000")
-        b.set("F%d" % r, '=IFERROR(IF(OR($C%(r)d="",$D%(r)d=""),"",$B$6*(1+$E%(r)d/100*$C%(r)d/360)/(1+$D%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM4)
-        b.set("G%d" % r, '=IFERROR(IF(OR($C%(r)d="",$D%(r)d=""),"",$C$6*(1+$E%(r)d/100*$C%(r)d/360)/(1+$D%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM4)
-        b.set("J%d" % r, '=IF($B$11="BFXFORWARD",$H%(r)d,IF(ISNUMBER($F%(r)d),$F%(r)d,IF($B$11="Lease",NA(),$H%(r)d)))' % f, fmt=NUM4, bold=True)
-        b.set("K%d" % r, '=IF($B$11="BFXFORWARD",$I%(r)d,IF(ISNUMBER($G%(r)d),$G%(r)d,IF($B$11="Lease",NA(),$I%(r)d)))' % f, fmt=NUM4, bold=True)
-        b.set("L%d" % r, '=IF($C%(r)d="","",IF(AND($B$11<>"BFXFORWARD",ISNUMBER($G%(r)d)),"Lease",IF(ISNUMBER($I%(r)d),"BFXFORWARD","yok")))' % f,
-              align="center")
-        b.set("M%d" % r, '=IFERROR(IF($C%(r)d="","",(($D$6/(($H%(r)d+$I%(r)d)/2))*(1+$E%(r)d/100*$C%(r)d/360)-1)*360/$C%(r)d*100),"")' % f, fmt="0.000")
-        b.set("N%d" % r, '=IFERROR(($F%(r)d+$G%(r)d)/2-($H%(r)d+$I%(r)d)/2,"")' % f, fmt=NUM2)
-    b.note("A%d" % (t2 + 1), "Kullanılan = Kaynak'a göre lease forward ya da BFXFORWARD; VİOP XAUTRY BID tablosu ask'ı, ASK tablosu bid'i, VİOP XAUUSD "
-                             "ask'ı, Forward!I29:J29 bid/ask'ı okur. BFX ima lease = BFXFORWARD'ın (mid) spot ve USD faiziyle ima ettiği lease.")
+        b.set("D%d" % r, '=IFERROR(IF($C%d="","",%s),"")' % (r, rate_at % f), fmt="0.000")
+        b.set("E%d" % r, '=IFERROR(IF(OR($C%(r)d="",$D%(r)d=""),"",$B$6*(1+$D%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM4)
+        b.set("F%d" % r, '=IFERROR(IF(OR($C%(r)d="",$D%(r)d=""),"",$C$6*(1+$D%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM4)
+        b.set("I%d" % r, '=IF($B$11="BFXFORWARD",$G%(r)d,IF(ISNUMBER($E%(r)d),$E%(r)d,IF($B$11="Swap faizi",NA(),$G%(r)d)))' % f, fmt=NUM4, bold=True)
+        b.set("J%d" % r, '=IF($B$11="BFXFORWARD",$H%(r)d,IF(ISNUMBER($F%(r)d),$F%(r)d,IF($B$11="Swap faizi",NA(),$H%(r)d)))' % f, fmt=NUM4, bold=True)
+        b.set("K%d" % r, ('=IF($C%(r)d="","",IF(AND($B$11<>"BFXFORWARD",ISNUMBER($F%(r)d)),"Swap faizi",'
+                          'IF(ISNUMBER($H%(r)d),"BFXFORWARD","yok")))') % f, align="center")
+        b.set("L%d" % r, '=IFERROR(IF($C%(r)d="","",((($G%(r)d+$H%(r)d)/2)/$D$6-1)*360/$C%(r)d*100),"")' % f, fmt="0.000")
+        b.set("M%d" % r, '=IFERROR(($E%(r)d+$F%(r)d)/2-($G%(r)d+$H%(r)d)/2,"")' % f, fmt=NUM2)
+    b.note("A%d" % (t2 + 1), "Kullanılan = Kaynak'a göre swap faizinden forward ya da BFXFORWARD; VİOP XAUTRY BID tablosu ask'ı, ASK tablosu bid'i, VİOP "
+                             "XAUUSD ask'ı, Forward!I29:J29 bid/ask'ı okur. BFX ima swap = BFXFORWARD'ın (mid) spot'a göre ima ettiği swap faizi.")
 
-    # ---- "Interest 2 SP" for gold: the VİOP XAUTRY price at a given TRY / USD / lease rate
+    # ---- "Interest 2 SP" for gold: the VİOP XAUTRY price at a given TRY / USD / gold swap rate
     c0 = XAU_CALC
     b.title("A%d" % (c0 - 1), "VİOP XAUTRY  ·  belli faizle fiyat  (Interest 2 SP'nin altın karşılığı; sarı hücreler girdi)")
     b.head("A%d" % c0, ["Kontrat", "=VIOP!M45", "=VIOP!N45", "=VIOP!O45"])
-    labels = ["1st Date", "2nd Date", "VKGS", "USDTRY spot", "XAUUSD spot", "USD %", "TRY %", "Lease % (ops.)", "XAUUSD fwd", "Lease % (ima)",
-              "All In S -> E (USDTRY fwd)", "SP", "Günlük SP", "XAUTRY teorik (TL/gr)", "VIOP bid", "VIOP ask", "Teorik − VIOP bid",
-              "Teorik − VIOP ask", "İma TRY % · VIOP bid", "İma TRY % · VIOP ask", "Spot XAUTRY (TL/gr)"]
+    labels = ["1st Date", "2nd Date", "VKGS", "USDTRY spot", "XAUUSD spot", "USD %", "TRY %", "Altın swap % (ops.)", "XAUUSD fwd",
+              "Altın swap % (ima)", "All In S -> E (USDTRY fwd)", "SP", "Günlük SP", "XAUTRY teorik (TL/gr)", "VIOP bid", "VIOP ask",
+              "Teorik − VIOP bid", "Teorik − VIOP ask", "İma TRY % · VIOP bid", "İma TRY % · VIOP ask", "Spot XAUTRY (TL/gr)"]
     for i, text in enumerate(labels):
         b.set("A%d" % (c0 + 1 + i), text, bold=True)
     for i, col in enumerate("BCD"):
         vb, va = viop_ask[i], viop_bid[i]            # columns of the VİOP XAUTRY BID / ASK tables
         f = {"c": col, "vb": vb, "va": va, "t": t1 + i, "x": XAU_SHEET, "g": GRAMS_PER_OUNCE}
         rows = dict((name, c0 + 1 + k) for k, name in enumerate(
-            ("d1", "d2", "n", "s", "xau", "usd", "try", "lease", "xfwd", "limp", "fwd", "sp", "spd", "teo", "vbid", "vask", "dbid", "dask",
+            ("d1", "d2", "n", "s", "xau", "usd", "try", "swap", "xfwd", "simp", "fwd", "sp", "spd", "teo", "vbid", "vask", "dbid", "dask",
              "ibid", "iask", "sxt")))
         f.update(rows)
         b.set("%(c)s%(d1)d" % f, "=VIOP!%(vb)s47" % f, fmt=DATE)
@@ -549,11 +561,11 @@ def _tto_gold(model: Model) -> None:
         # default TRY rate: what the USDTRY contract of the same expiry implies (mid of the VIOP BID / ASK tables)
         b.input("%(c)s%(try)d" % f, ("=IFERROR((INDEX(VIOP!$M$13:$X$13,MATCH(%(c)s%(d2)d,VIOP!$M$9:$X$9,0))"
                                       "+INDEX(VIOP!$M$25:$X$25,MATCH(%(c)s%(d2)d,VIOP!$M$21:$X$21,0)))/2*100,VIOP!%(vb)s52*100)") % f, fmt="0.00")
-        b.input("%(c)s%(lease)d" % f, None, fmt="0.000")
-        b.set("%(c)s%(xfwd)d" % f, ('=IF(ISNUMBER(%(c)s%(lease)d),IFERROR(%(c)s%(xau)d*(1+%(c)s%(usd)d/100*$C$%(t)d/360)'
-                                    '/(1+%(c)s%(lease)d/100*$C$%(t)d/360),""),IFERROR(($J$%(t)d+$K$%(t)d)/2,""))') % f, fmt=NUM4, bold=True)
-        b.set("%(c)s%(limp)d" % f, ('=IF(ISNUMBER(%(c)s%(lease)d),%(c)s%(lease)d,IFERROR(((%(c)s%(xau)d/%(c)s%(xfwd)d)'
-                                    '*(1+%(c)s%(usd)d/100*$C$%(t)d/360)-1)*360/$C$%(t)d*100,""))') % f, fmt="0.000")
+        b.input("%(c)s%(swap)d" % f, None, fmt="0.000")
+        b.set("%(c)s%(xfwd)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),IFERROR(%(c)s%(xau)d*(1+%(c)s%(swap)d/100*$C$%(t)d/360),""),'
+                                    'IFERROR(($I$%(t)d+$J$%(t)d)/2,""))') % f, fmt=NUM4, bold=True)
+        b.set("%(c)s%(simp)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),%(c)s%(swap)d,'
+                                    'IFERROR((%(c)s%(xfwd)d/%(c)s%(xau)d-1)*360/$C$%(t)d*100,""))') % f, fmt="0.000")
         b.set("%(c)s%(fwd)d" % f, '=IFERROR(%(c)s%(s)d*(1+%(c)s%(try)d/100/360*%(c)s%(n)d)/(1+%(c)s%(usd)d/100/360*%(c)s%(n)d),"")' % f, fmt=NUM4)
         b.set("%(c)s%(sp)d" % f, '=IFERROR((%(c)s%(fwd)d-%(c)s%(s)d)*10000,"")' % f, fmt=INT0)
         b.set("%(c)s%(spd)d" % f, '=IFERROR(%(c)s%(sp)d/%(c)s%(n)d,"")' % f, fmt="#,##0.0")
@@ -567,7 +579,7 @@ def _tto_gold(model: Model) -> None:
         b.set("%(c)s%(sxt)d" % f, '=IFERROR(%(c)s%(xau)d*%(c)s%(s)d/%(g)s,"")' % f, fmt=NUM2)
     b.note("A%d" % (c0 + len(labels) + 1), "XAUTRY teorik = XAUUSD fwd · USDTRY fwd / 31,1035; USDTRY fwd = spot·(1+TRY·VKGS/360)/(1+USD·VKGS/360). TRY % "
                                            "varsayılanı aynı vadeli USDTRY VİOP kontratının ima faizi (bid/ask ortalaması); üzerine istediğin faizi "
-                                           "yaz. Lease % boşsa üstteki 'Kullanılan' forward (mid) alınır, doluysa spot ve bu lease ile hesaplanır.")
+                                           "yaz. Altın swap % boşsa üstteki 'Kullanılan' forward (mid) alınır, doluysa XAUUSD fwd = spot·(1+swap·g/360).")
 
 
 #: book -> (name, precondition, builder) of each addition

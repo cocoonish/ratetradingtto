@@ -17,7 +17,8 @@ kayıtlı son veriyle çalışır.
 * **Hiçbir formül eksik değil:** dört kitabın her sayfasındaki her formül ve değer, sayfasının bir tablosundadır
   (görünen tablo ya da "Yardımcı tablolar"); bunu bir test denetler.
 * **Excel'de olmayan ekler** de Excel formülü olarak yazıldı: bid / ask için ayrı OIS spread'li forward kotasyon
-  matrisi, altın forward'ının lease faizinden hesabı, O/N karşılıkları ([aşağıda](#dashboardun-kendi-ekledikleri)).
+  matrisi, altın forward'ının altın swap faizinden (XAUSR) hesabı, O/N karşılıkları
+  ([aşağıda](#dashboardun-kendi-ekledikleri)).
 
 ---
 
@@ -158,28 +159,31 @@ bloğunun iskonto faktörleriyle aynıdır: aynı tarih ve spread'de iki blok ay
 Altındaki **Puan → OIS spread** tablosu tersini yapar: elle verdiğiniz bid / ask puanının ima ettiği TRY faizini ve
 OIS'e göre kaç bp olduğunu gösterir.
 
-**Altın — forward'ı lease faizinden** (VİOP sayfası, altın tablolarının altında). Excel altın forward'ını
+**Altın — forward'ı altın swap faizinden** (VİOP sayfası, altın tablolarının altında). Excel altın forward'ını
 `BFXFORWARD("XAUUSD"; tarih; …)` ile alıyor; bu fonksiyonun API karşılığı olmadığı için canlıda bu hücreler boş
-kalıyordu. Artık forward taşıma maliyetinden hesaplanır:
-`XAUUSD fwd = spot·(1+USD·g/360)/(1+lease·g/360)` (USD = VİOP sayfasındaki USD OIS eğrisi, lease = eğriden gün
-bazında doğrusal, uçlarda sabit).
+kalıyordu. Artık forward, spot'un Bloomberg'deki altın swap faiziyle (`XAUSR1W`, `XAUSR1M` …) taşınmasıyla
+hesaplanır; altın faizi **doğrudan** uygulanır, USD faizi hesaba girmez:
+`XAUUSD fwd = spot·(1 + swap·g/360)` (g = valör − altın spot valörü; faiz eğriden gün bazında doğrusal, uçlarda
+sabit).
 
-* *Spot ve kaynak:* spot ticker'ı (`XAU Curncy`), manuel spot (boşsa Bloomberg), spot valörü ve kaynak seçimi:
-  **Otomatik** (spot ve lease varsa lease, yoksa `BFXFORWARD`), **Lease**, **BFXFORWARD**.
-* *Lease eğrisi:* 1W … 12M için **ticker hücresi** (Bloomberg'den okunur; alan adı da hücrede, varsayılan
-  `PX_LAST`) ve **Manuel %** (doluysa ticker'ın önüne geçer). Faizi olmayan vade atlanır.
-  Lease ticker'ları boş gelir: Bloomberg'deki altın lease faizi ticker adları doğrulanamadı, bir kez yazmanız
-  yeterli (ortak girdidir, saklanır).
+* *Spot ve kaynak:* spot ticker'ı (`XAU Curncy`), manuel spot (boşsa Bloomberg), spot valörü, okunacak Bloomberg
+  alanı (`PX_LAST`), ticker eki (`Curncy`) ve kaynak seçimi: **Otomatik** (spot ve swap faizi varsa swap faizinden,
+  yoksa `BFXFORWARD`), **Swap faizi**, **BFXFORWARD**.
+* *Swap faizi eğrisi:* 1W … 12M için **ticker kökü** (`XAUSR1W`, `XAUSR1M`, `XAUSR2M`, `XAUSR3M`, `XAUSR6M`,
+  `XAUSR9M`, `XAUSR12M`; sonuna ticker eki eklenir, hücreye boşluklu tam ticker yazılırsa aynen kullanılır) ve
+  **Manuel %** (doluysa Bloomberg değerinin önüne geçer). Faizi olmayan ya da Bloomberg'de bulunmayan vade atlanır.
+  Yanında yalnızca bilgi için USD OIS faizi ve ikisinin ima ettiği lease (≈ USD − swap) gösterilir.
 * *XAUUSD forward:* üç VİOP XAUTRY kontratı, üç VİOP XAUUSD kontratı, `Forward!D2` tarihi ve iki serbest tarih için
-  lease forward'ı, `BFXFORWARD`, kullanılan değer ve `BFXFORWARD`'ın ima ettiği lease. **VİOP XAUTRY BID / ASK**
-  tabloları, VİOP XAUUSD tablosu ve Forward sayfasındaki altın şeridi (`VIOP!M58:O58`, `S58:U58`, `M68:O68`,
-  `Forward!I29:J29`) buradaki "kullanılan" değeri okur.
-* *Belli faizle fiyat* ("Interest 2 SP"nin altın karşılığı): her XAUTRY kontratı için TRY %, USD % ve isteğe
-  bağlı lease % yazılır → USDTRY forward, swap puanı, **teorik XAUTRY (TL/gr) = XAUUSD fwd · USDTRY fwd / 31,1035**
-  ve VİOP bid / ask'a fark. TRY % varsayılanı aynı vadeli USDTRY VİOP kontratının ima faizidir.
+  swap faizinden forward, `BFXFORWARD`, kullanılan değer ve `BFXFORWARD`'ın ima ettiği swap faizi. **VİOP XAUTRY
+  BID / ASK** tabloları, VİOP XAUUSD tablosu ve Forward sayfasındaki altın şeridi (`VIOP!M58:O58`, `S58:U58`,
+  `M68:O68`, `Forward!I29:J29`) buradaki "kullanılan" değeri okur.
+* *Belli faizle fiyat* ("Interest 2 SP"nin altın karşılığı): her XAUTRY kontratı için TRY %, USD % (USDTRY bacağı
+  için) ve isteğe bağlı altın swap % yazılır → USDTRY forward, swap puanı,
+  **teorik XAUTRY (TL/gr) = XAUUSD fwd · USDTRY fwd / 31,1035** ve VİOP bid / ask'a fark. TRY % varsayılanı aynı
+  vadeli USDTRY VİOP kontratının ima faizidir.
 
-Kayıtlı veri modunda altın spotu ve lease kaydı olmadığından forward Excel'in kaydettiği `BFXFORWARD` değerlerinden
-okunur (sayfalar Excel'le aynı kalır); spot ve lease'i elle yazınca lease hesabı devreye girer.
+Kayıtlı veri modunda altın spotu ve swap faizi kaydı olmadığından forward Excel'in kaydettiği `BFXFORWARD`
+değerlerinden okunur (sayfalar Excel'le aynı kalır); spot ve faizi elle yazınca hesap devreye girer.
 
 **O/N karşılıkları.** Borsa Swap tablolarında BID / ASK ima faizinin yanında O/N karşılığı
 (`360·((1+r·gün/360)^(1/gün) − 1)`) ve günlük puan sütunları; Günlük İşlemler'deki forward listesinde her işlemin
@@ -231,7 +235,7 @@ değişince yalnızca ona bağlı hücreler yeniden hesaplanır; her kullanıcı
 | Forward hesabı ayrıca elle yazılmış bağımsız bir formülle (faiz paritesi, basit ACT/360, gün bazında doğrusal interpolasyon) 11 valör için sınandı | 1e-13 göreli hassasiyetle aynı; dosyanın kendi valöründe Excel'in kayıtlı outright ve swap puanlarıyla 1e-13 aynı. |
 | Canlı veri hattı: sahte bir Bloomberg sunucusuyla *istek → yanıt → geçersiz kılma → yeniden hesap* zinciri, aynı veriyle doğrudan hesapla karşılaştırıldı | Dört kitaptaki 220.337 formül hücresinin **tamamı** aynı (tick öncesi ve sonrası). |
 | DİBS ASW kitabı, TRY kitabındaki DİBS RV tablosuyla (aynı kâğıtlar, aynı gün, iki ayrı dosya) karşılaştırıldı | Sabit kuponlu ve iskontolu 15 kâğıdın ASW'si 0,05 bp içinde aynı (RV tablosu değeri 0,1 bp'ye yuvarlıyor). |
-| Dashboard'un ekledikleri bağımsız kapalı formüllerle sınandı | Forward matrisi: yedi eğrinin her biri Masa'daki bloğun TRY faiziyle 1e-12 aynı; puan → spread tersi 1e-7 bp. Altın: taşıma maliyeti formülü ve lease interpolasyonu 1e-13. |
+| Dashboard'un ekledikleri bağımsız kapalı formüllerle sınandı | Forward matrisi: yedi eğrinin her biri Masa'daki bloğun TRY faiziyle 1e-12 aynı; puan → spread tersi 1e-7 bp. Altın: `spot·(1+swap·g/360)` ve faiz interpolasyonu 1e-13; USD eğrisi oynatıldığında hiçbir altın forward'ı değişmiyor. |
 
 Motor'daki çözücü farkı ekranda görünen basamakların çok altındadır; ancak "son basamağına kadar aynı" iddiası
 yalnızca çözücüye bağlı olmayan sayfalar için geçerlidir (Excel'in kendisi de bu matriste tam çözümden ~1e-9
@@ -248,7 +252,7 @@ uzaktadır).
 | `BDH` | `HistoricalDataRequest` (`Days`, `Fill`, `Per`, `Dates`, `Sort` seçenekleri) |
 | `BDS` | toplu alan için `ReferenceDataRequest` |
 | `BInterpol` | doğrusal interpolasyon (Excel'deki değerlerle doğrulandı) |
-| `BFXFORWARD` | **API karşılığı yok** → `#N/A BFXFORWARD` (aşağıya bakın); altın forward'ı bunun yerine lease faizinden hesaplanır |
+| `BFXFORWARD` | **API karşılığı yok** → `#N/A BFXFORWARD` (aşağıya bakın); altın forward'ı bunun yerine altın swap faizinden (`XAUSR…`) hesaplanır |
 | `RtGet` (Refinitiv) | Bloomberg fonksiyonu değil → `#N/A RTGET` |
 
 Bağlantı **Desktop API** içindir (terminalin açık olduğu makinede `localhost:8194`); B-PIPE / SAPI gibi sunucu
@@ -278,9 +282,11 @@ rozet uyarır. Bağlantı koparsa otomatik yeniden bağlanılır.
   ortak girdidir, bir kişinin silmesi yeter.
 * **RET faizleri:** dosyadaki RET eğrisi 03.11.2026 tarihlidir. Her gün "RET faizleri" penceresinden güncel eğriyi
   yapıştırın; bugün yüklenmediyse düğmenin yanında sarı nokta durur.
-* **Altın lease ticker'ları:** VİOP sayfasındaki "Altın · lease eğrisi" tablosuna Bloomberg'deki lease faizi
-  ticker'larını bir kez yazın (ya da faizleri "Manuel %" sütununa girin). Boşken altın forward'ı `BFXFORWARD`'a
-  düşer; o da canlıda yoktur, yani VİOP XAUTRY tabloları lease gelene kadar `#N/A` kalır.
+* **Altın swap faizi ticker'ları:** VİOP sayfasındaki "Altın · swap faizi eğrisi" tablosu `XAUSR1W` … `XAUSR12M`
+  kökleri ve `Curncy` ekiyle gelir. `XAUSR1W` ve `XAUSR1M` masadan alınan adlardır; diğer vadeler aynı kalıba göre
+  yazıldı, ek (sarı tuş) ise varsayımdır. İlk açılışta "Bloomberg %" sütununda değer gelmeyen satır varsa kökü ya
+  da eki düzeltin (ek tek hücredir) ya da faizi "Manuel %" sütununa girin. Hiç faiz gelmezse altın forward'ı
+  `BFXFORWARD`'a düşer; o da canlıda yoktur, yani VİOP XAUTRY tabloları `#N/A` kalır.
 * `python -m tto check-bloomberg` ile bağlantıyı sınayın, ardından birkaç hücreyi Excel'le karşılaştırın.
 
 ## Bilinen sınırlamalar
@@ -289,8 +295,8 @@ rozet uyarır. Bağlantı koparsa otomatik yeniden bağlanılır.
   fonksiyonu, API'de yok. Canlı modda bu hücreler `#N/A` olur; USDTRY / EURTRY forward tabloları bundan
   etkilenmez. `--bfx approx` ile Bloomberg'in `FWD_CURVE` verisinden gün bazında doğrusal interpolasyonla
   **yaklaşık** bir değer üretilir (Excel'le birebir olma garantisi yoktur, doğrulanmadı). Altın forward'ı artık
-  buna bağlı değildir (lease faizinden hesaplanır) — ancak lease ticker'ları kullanıcıdan beklenir: Bloomberg'deki
-  ticker adları doğrulanamadığı için hücreler varsayılan olarak boştur.
+  buna bağlı değildir (altın swap faizinden hesaplanır). `XAUSR…` ticker'larının sarı tuşu (`Curncy`) ve 2M–12M
+  vadelerinin yazımı canlıda doğrulanmadı; yanlışsa o vade atlanır, hücreden düzeltilir.
 * **Borsa Swap ve DİBS ASW** dosyalarında kayıtlı piyasa verisi yok: kayıtlı veri modunda Borsa kotaları örnek
   veridir, ASW geçmişi boştur. İkisi de gerçek değerlerini ancak canlı modda gösterir ve canlıda henüz sınanmadı.
 * **USDTRY IYIX** sayfası Refinitiv `RtGet` kullanıyor; canlı modda `#N/A`.
@@ -313,7 +319,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~4 dk). 560 test:
+Bloomberg ve ağ gerekmez (~4 dk). 562 test:
 
 | Dosya | Kapsam |
 |---|---|
@@ -323,12 +329,12 @@ Bloomberg ve ağ gerekmez (~4 dk). 560 test:
 | `test_forward.py` | Forward: bağımsız kapalı formül, Excel'in kayıtlı değerleri, işlem girişindeki fiyatlamanın sayfayla aynılığı |
 | `test_blotter.py` | Outright / spread / fly / FRA bacakları, maliyet, ortak işlem defteri, forward'ların O/N karşılığı, Excel özet tabloları |
 | `test_charts.py` | Grafik tanımlarının Excel'den alınışı (renk, çizgi, işaretçi, eksen sınırları, tarih ekseni, bid–ask kutuları), değerlerin Excel kuralıyla çizime verilişi (boşluk, `#N/A`, metin) ve XY grafikleri (nokta etiketleri, sayı / tarih ekseni) |
-| `test_extras.py` | Dashboard'un ekledikleri: forward kotasyon matrisi (yedi eğri Masa bloğuyla aynı, bid / ask ayrı spread, puan → spread tersi), altın (taşıma maliyeti kapalı formülü, lease interpolasyonu, kaynak seçimi, Bloomberg ticker'ları, canlıda `BFXFORWARD`'sız çalışma, VİOP / Forward hücrelerinin beslenmesi, "belli faizle fiyat"), Borsa O/N karşılıkları ve örnek kotaların RET'e eşitliği, ASW ↔ DİBS RV |
+| `test_extras.py` | Dashboard'un ekledikleri: forward kotasyon matrisi (yedi eğri Masa bloğuyla aynı, bid / ask ayrı spread, puan → spread tersi), altın (`spot·(1+swap·g/360)` kapalı formülü, USD faizinin hesaba girmediği, faiz interpolasyonu, kaynak seçimi, `XAUSR…` ticker'ları ve ticker eki, canlıda `BFXFORWARD`'sız çalışma, VİOP / Forward hücrelerinin beslenmesi, "belli faizle fiyat"), bir ekin dosyaya uymadığında dışarıda bırakılması, Borsa O/N karşılıkları ve örnek kotaların RET'e eşitliği, ASW ↔ DİBS RV |
 | `test_workbook_features.py` | Gizli sütunlar, dondurulmuş bölmeler, yorumlar, veri çubukları, kısayollar, resim, aralıktan okunan açılır listeler, Excel yerleşimiyle yapıştırma, gün sonu arşivi (.xlsx yazıcı dahil), hücreden okunan başlık / notlar, şifreli dosyanın içe aktarılması |
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma, port kuralı |
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda |
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik (kota büyüklükleri dahil), sessiz kalan kotaların giderek seyrek sorulması, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik (dört kitap) |
-| `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 116 kontrol: giriş, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu, XY grafiği), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, forward kotasyon matrisi, altın lease girişi ve VİOP tablosunun değişmesi, Borsa Swap, DİBS ASW, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
+| `test_e2e.py` | Gerçek tarayıcıda (Playwright/Chromium) 117 kontrol: giriş, düzenleme, Excel kopyala/yapıştır, RET, senaryo, işlem girişi, iki kullanıcı arası canlı paylaşım, grafiklerin çizimi (renk, eksen, tarih ekseni, ipucu, XY grafiği), kısayollar, gizli / dondurulmuş sütunlar, arşiv indirme, forward kotasyon matrisi, altın swap faizi girişi ve VİOP tablosunun değişmesi, Borsa Swap, DİBS ASW, tüm sayfalar. Node.js + Playwright yoksa atlanır. |
 
 LibreOffice referansını yeniden üretmek (LibreOffice kuruluysa):
 
