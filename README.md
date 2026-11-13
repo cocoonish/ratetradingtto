@@ -6,7 +6,8 @@
 birleştirilmiş hâli. Piyasa verisi Bloomberg'den `blpapi` ile canlı gelir; Bloomberg yoksa Excel dosyasında
 kayıtlı son veriyle çalışır.
 
-* **Port:** varsayılan `1057`. `1055` ve `1056` portları **hiçbir koşulda kullanılmaz** (program reddeder).
+* **Port:** varsayılan `1057`. Masadaki makinede dolu olan `5000` ve `5001` portları **hiçbir koşulda
+  kullanılmaz** (program reddeder).
 * **Excel ile birebir:** formüller yeniden yazılmadı; çalışma kitaplarının kendi formülleri bir Excel formül
   motoruyla aynen çalıştırılıyor. Doğrulama sonuçları [aşağıda](#excel-ile-birebirlik-nasıl-doğrulandı).
 * **İsimle giriş:** her kullanıcı ismini yazıp girer; kişisel girdileri ve senaryoları o isimle saklanır.
@@ -53,7 +54,7 @@ python -m tto check-bloomberg
 | `python -m tto --mode live` | Yalnızca canlı; Bloomberg yoksa başlamaz |
 | `python -m tto --mode replay` | Bloomberg'e hiç dokunmaz; Excel dosyasındaki son kayıtlı piyasa verisi (değerleme tarihi 03.11.2026) |
 
-Diğer seçenekler: `--port 1060` (1055/1056 hariç), `--host 127.0.0.1`, `--data-dir D:\tto-data` (veritabanı klasörü),
+Diğer seçenekler: `--port 1060` (5000/5001 hariç), `--host 127.0.0.1`, `--data-dir D:\tto-data` (veritabanı klasörü),
 `--bbg-host`, `--bbg-port 8194`, `--tick 2` (ekran yenileme, sn), `--no-stream`, `--price-poll 120`, `--max-hits 400000`,
 `--bfx approx`. Aynı ayarlar `TTO_PORT`, `TTO_HOST`, `TTO_MODE`, `TTO_DATA_DIR`, `TTO_BBG_HOST`, `TTO_BBG_PORT`
 ortam değişkenleriyle de verilebilir.
@@ -312,7 +313,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~4 dk). 556 test:
+Bloomberg ve ağ gerekmez (~4 dk). 560 test:
 
 | Dosya | Kapsam |
 |---|---|

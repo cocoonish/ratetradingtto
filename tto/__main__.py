@@ -1,7 +1,7 @@
 """Command line: ``python -m tto`` starts the dashboard.
 
     python -m tto                       # http://<this machine>:1057, Bloomberg if reachable else replay
-    python -m tto --port 1060           # any port except 1055 / 1056
+    python -m tto --port 1060           # any port except 5000 / 5001
     python -m tto --mode replay         # never touch Bloomberg (works anywhere, uses the workbook snapshot)
     python -m tto --mode live           # fail instead of falling back when Bloomberg is not reachable
     python -m tto import-workbook workbooks/TTO_v8_5.xlsm --id tto

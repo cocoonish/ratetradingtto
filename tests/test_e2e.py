@@ -12,6 +12,8 @@ import urllib.request
 
 import pytest
 
+from tto.config import FORBIDDEN_PORTS
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -21,7 +23,7 @@ def _free_port():
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()
-        if port not in (1055, 1056):
+        if port not in FORBIDDEN_PORTS:
             return port
     raise RuntimeError("no free port")
 

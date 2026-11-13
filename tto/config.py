@@ -5,7 +5,7 @@ import os
 from typing import Optional
 
 #: ports that are already taken on the desk machine by other dashboards
-FORBIDDEN_PORTS = (1055, 1056)
+FORBIDDEN_PORTS = (5000, 5001)
 DEFAULT_PORT = 1057
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,8 +39,8 @@ class Settings(object):
 def check_port(port) -> int:
     port = int(port)
     if port in FORBIDDEN_PORTS:
-        raise ValueError("port %d is reserved for the other desk dashboards (%s); choose another one, "
-                         "e.g. %d" % (port, ", ".join(str(p) for p in FORBIDDEN_PORTS), DEFAULT_PORT))
+        raise ValueError("port %d is already in use on the desk machine by another dashboard (%s are taken); "
+                         "choose another one, e.g. %d" % (port, ", ".join(str(p) for p in FORBIDDEN_PORTS), DEFAULT_PORT))
     if not (1 <= port <= 65535):
         raise ValueError("invalid port %r" % (port,))
     return port
