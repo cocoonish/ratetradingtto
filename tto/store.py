@@ -30,6 +30,15 @@ CREATE INDEX IF NOT EXISTS trades_date ON trades (trade_date, deleted);
 CREATE TABLE IF NOT EXISTS blotter_snapshots (
     trade_date TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS hist_values (
+    series TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, day)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS mpc_days (
+    day TEXT PRIMARY KEY, basis TEXT NOT NULL, spot TEXT, tlref REAL, base REAL, decision INTEGER NOT NULL DEFAULT 0,
+    quotes INTEGER, status TEXT, note TEXT, computed_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mpc_values (
+    day TEXT NOT NULL, meeting TEXT NOT NULL, step REAL, level REAL, cum REAL, sigma REAL, front INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, meeting)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS mpc_values_meeting ON mpc_values (meeting, day);
 """
 
 
@@ -286,6 +295,154 @@ class Store(object):
         d = json.loads(rows[0]["payload"])
         d["snapshot_at"] = rows[0]["updated_at"]
         return d
+
+    # ------------------------------------------------------------------ cells that move with their meeting
+    def remap_user_cells(self, book: str, mapping: Dict[str, Optional[str]]) -> Dict[str, int]:
+        """Move personal inputs (and the cells of saved scenarios) of one workbook to other cells.
+
+        ``mapping``: old cell -> new cell (``None``: the value is dropped).  All of it happens in one
+        transaction, for every user: what was typed for a meeting stays with that meeting when the list of
+        meetings is shifted.  Returns how many values moved / were dropped.
+        """
+        if not mapping:
+            return {"moved": 0, "dropped": 0, "scenarios": 0}
+        ts = now_iso()
+        moved = dropped = touched = 0
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                marks = ",".join("?" for _ in mapping)
+                rows = self._db.execute("SELECT user, cell, value FROM user_inputs WHERE book=? AND cell IN (%s)" % marks,
+                                        (book,) + tuple(mapping)).fetchall()
+                self._db.execute("DELETE FROM user_inputs WHERE book=? AND cell IN (%s)" % marks, (book,) + tuple(mapping))
+                for r in rows:
+                    new = mapping[r["cell"]]
+                    if new is None:
+                        dropped += 1
+                        continue
+                    moved += 1 if new != r["cell"] else 0
+                    self._db.execute(
+                        "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
+                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                        (r["user"], book, new, r["value"], ts))
+                for r in self._db.execute("SELECT id, payload FROM scenarios").fetchall():
+                    items = json.loads(r["payload"])
+                    out, changed = [], False
+                    for b, c, v in items:
+                        if b == book and c in mapping:
+                            new = mapping[c]
+                            changed = changed or new != c
+                            if new is None:
+                                continue
+                            out.append([b, new, v])
+                        else:
+                            out.append([b, c, v])
+                    if changed:
+                        touched += 1
+                        self._db.execute("UPDATE scenarios SET payload=?, updated_at=? WHERE id=?",
+                                         (json.dumps(sorted(out, key=lambda x: (x[0], x[1])), ensure_ascii=False), ts, r["id"]))
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return {"moved": moved, "dropped": dropped, "scenarios": touched}
+
+    # ------------------------------------------------------------------ daily history of market series
+    def hist_upsert(self, series: str, rows: List[Tuple[str, float]]) -> int:
+        """Store closes ``[(yyyy-mm-dd, value), ...]``; returns how many rows are new or changed."""
+        if not rows:
+            return 0
+        with self._lock:
+            have = {r["day"]: r["value"] for r in self._db.execute(
+                "SELECT day, value FROM hist_values WHERE series=? AND day>=? AND day<=?",
+                (series, min(d for d, _ in rows), max(d for d, _ in rows))).fetchall()}
+            fresh = [(series, d, float(v)) for d, v in rows if have.get(d) != float(v)]
+            if fresh:
+                self._db.execute("BEGIN")
+                try:
+                    self._db.executemany("INSERT INTO hist_values (series, day, value) VALUES (?,?,?) "
+                                         "ON CONFLICT(series, day) DO UPDATE SET value=excluded.value", fresh)
+                    self._db.execute("COMMIT")
+                except Exception:
+                    self._db.execute("ROLLBACK")
+                    raise
+            return len(fresh)
+
+    def hist_series(self, series: str, start: Optional[str] = None, end: Optional[str] = None) -> List[Tuple[str, float]]:
+        rows = self._q("SELECT day, value FROM hist_values WHERE series=? AND day>=? AND day<=? ORDER BY day",
+                       (series, start or "0000", end or "9999"))
+        return [(r["day"], r["value"]) for r in rows]
+
+    def hist_many(self, series: List[str], start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, float]]:
+        """``{series: {day: value}}`` for several series at once."""
+        out: Dict[str, Dict[str, float]] = {s: {} for s in series}
+        for i in range(0, len(series), 400):
+            chunk = series[i:i + 400]
+            marks = ",".join("?" for _ in chunk)
+            for r in self._q("SELECT series, day, value FROM hist_values WHERE series IN (%s) AND day>=? AND day<=?" % marks,
+                             tuple(chunk) + (start or "0000", end or "9999")):
+                out[r["series"]][r["day"]] = r["value"]
+        return out
+
+    def hist_bounds(self) -> Dict[str, Tuple[str, str, int]]:
+        """``{series: (first day, last day, count)}``."""
+        return {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
+            "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+
+    def hist_delete(self, series: Optional[str] = None) -> None:
+        with self._lock:
+            if series is None:
+                self._db.execute("DELETE FROM hist_values")
+            else:
+                self._db.execute("DELETE FROM hist_values WHERE series=?", (series,))
+
+    # ------------------------------------------------------------------ what was priced for the MPC meetings, per day
+    def mpc_save(self, day: str, basis: str, meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
+        """Replace one day: ``rows`` = ``[{"meeting", "step", "level", "cum", "sigma", "front"}, ...]``."""
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.execute("DELETE FROM mpc_values WHERE day=?", (day,))
+                self._db.executemany(
+                    "INSERT INTO mpc_values (day, meeting, step, level, cum, sigma, front) VALUES (?,?,?,?,?,?,?)",
+                    [(day, r["meeting"], r.get("step"), r.get("level"), r.get("cum"), r.get("sigma"), 1 if r.get("front") else 0)
+                     for r in rows])
+                self._db.execute(
+                    "INSERT INTO mpc_days (day, basis, spot, tlref, base, decision, quotes, status, note, computed_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(day) DO UPDATE SET basis=excluded.basis, spot=excluded.spot, tlref=excluded.tlref, "
+                    "base=excluded.base, decision=excluded.decision, quotes=excluded.quotes, status=excluded.status, "
+                    "note=excluded.note, computed_at=excluded.computed_at",
+                    (day, basis, meta.get("spot"), meta.get("tlref"), meta.get("base"), 1 if meta.get("decision") else 0,
+                     meta.get("quotes"), meta.get("status"), meta.get("note"), now_iso()))
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def mpc_days(self, start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        rows = self._q("SELECT * FROM mpc_days WHERE day>=? AND day<=? ORDER BY day", (start or "0000", end or "9999"))
+        return {r["day"]: dict(r) for r in rows}
+
+    def mpc_values(self, start: Optional[str] = None, end: Optional[str] = None,
+                   meetings: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        sql = "SELECT day, meeting, step, level, cum, sigma, front FROM mpc_values WHERE day>=? AND day<=?"
+        args: Tuple = (start or "0000", end or "9999")
+        if meetings is not None:
+            if not meetings:
+                return []
+            sql += " AND meeting IN (%s)" % ",".join("?" for _ in meetings)
+            args += tuple(meetings)
+        return [dict(r) for r in self._q(sql + " ORDER BY day, meeting", args)]
+
+    def mpc_delete(self, days: Optional[List[str]] = None) -> None:
+        with self._lock:
+            if days is None:
+                self._db.execute("DELETE FROM mpc_values")
+                self._db.execute("DELETE FROM mpc_days")
+            else:
+                self._db.executemany("DELETE FROM mpc_values WHERE day=?", [(d,) for d in days])
+                self._db.executemany("DELETE FROM mpc_days WHERE day=?", [(d,) for d in days])
 
     # ------------------------------------------------------------------ misc key/value
     def get(self, key: str, default: Any = None) -> Any:

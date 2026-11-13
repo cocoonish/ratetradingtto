@@ -38,6 +38,10 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--bfx", choices=("off", "approx"), default="off",
                    help="BFXFORWARD: off = #N/A (API karşılığı yok), approx = FWD_CURVE'den yaklaşık hesap")
     p.add_argument("--max-hits", type=int, default=400000, help="günlük referans/geçmiş veri isteği üst sınırı (0 = sınırsız)")
+    p.add_argument("--no-history", action="store_true",
+                   help="günlük tarihçeyi (gün sonu matrisi, PPK fiyatlama geçmişi) arka planda güncelleme")
+    p.add_argument("--history-refresh", type=float, default=900.0,
+                   help="canlı veride tarihçenin güncellenme aralığı (sn; 0 = yalnızca açılışta)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,7 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
 def settings_from(args) -> Settings:
     return Settings(host=args.host, port=args.port, data_dir=args.data_dir, mode=args.mode, bbg_host=args.bbg_host,
                     bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale, bbg_stream=not args.no_stream,
-                    bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll)
+                    bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll,
+                    history=not args.no_history, history_refresh=args.history_refresh)
 
 
 def cmd_run(args) -> int:

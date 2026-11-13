@@ -22,7 +22,10 @@ def test_status_and_navigation(service):
     pages = service.nav()
     ids = [p["id"] for p in pages]
     assert "blotter" in ids and "masa" in ids and "forward" in ids and "usd" in ids
-    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 1
+    # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, settings)
+    custom = [p["id"] for p in pages if p.get("custom")]
+    assert custom == ["blotter", "eod", "mpc", "settings"]
+    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 4
 
 
 @pytest.mark.parametrize("view_id", VIEW_IDS)

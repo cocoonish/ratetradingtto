@@ -277,6 +277,43 @@ class BloombergProvider(Provider):
         with self._lock:
             return bool(self._queue) or bool(self._requests)
 
+    def history(self, items, start, end, timeout=60.0):
+        """Daily closes by ``HistoricalDataRequest`` (trading days only, nothing filled in).  Asked afresh on
+        every call; items that share the field go out together, 50 securities per request.  Blocks until the
+        answers are in or ``timeout`` has passed - items still outstanding then are simply not returned."""
+        keys = {(sec, fld.upper()): ("BDH", sec, fld.upper(), start, end, ()) for sec, fld in items}
+        with self._lock:
+            for k in keys.values():
+                it = self._items.get(k)
+                if it is not None and it.state == "ok":          # an earlier answer: forget it and ask again
+                    del self._items[k]
+                    self._values.pop(k, None)
+                    self._changed.discard(k)
+        for k in keys.values():
+            self._lookup(k, 0.0)
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self._stop.is_set():
+            with self._lock:
+                if all(self._items.get(k) is not None and self._items[k].state == "ok" for k in keys.values()):
+                    break
+            time.sleep(0.05)
+        out: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
+        with self._lock:
+            for item, k in keys.items():
+                it = self._items.get(k)
+                if it is None or it.state != "ok":
+                    continue                                     # still on its way: the next call picks it up
+                v = self._values.pop(k, None)
+                del self._items[k]
+                self._changed.discard(k)
+                if type(v) is not XlArray:
+                    continue
+                rows = [(serial_to_date(r[0]).isoformat(), r[1]) for r in v.rows
+                        if len(r) > 1 and type(r[0]) is float and type(r[1]) is float]
+                if rows:
+                    out[item] = rows
+        return out
+
     def status(self) -> Dict[str, Any]:
         with self._lock:
             return {"mode": "live", "connected": self.connected, "host": "%s:%d" % (self.host, self.port),
@@ -376,8 +413,9 @@ class BloombergProvider(Provider):
         with self._lock:
             for req in self._requests.values():
                 for k in req.keys:
-                    self._items[k].state = "queued"
-                    self._queue.append(k)
+                    if k in self._items:
+                        self._items[k].state = "queued"
+                        self._queue.append(k)
             self._requests.clear()
             for sub in self._subs.values():
                 sub.state = "new"
@@ -427,7 +465,7 @@ class BloombergProvider(Provider):
         with self._lock:
             if not self._queue or len(self._requests) >= 12:
                 return
-            keys = self._queue
+            keys = [k for k in self._queue if k in self._items]
             self._queue = []
             for k in keys:
                 self._items[k].state = "sent"
@@ -485,8 +523,9 @@ class BloombergProvider(Provider):
             with self._lock:
                 self._requests.pop(cid, None)
                 for k in req.keys:
-                    self._items[k].state = "queued"
-                    self._queue.append(k)
+                    if k in self._items:
+                        self._items[k].state = "queued"
+                        self._queue.append(k)
             time.sleep(0.5)
 
     def _reference(self, securities: List[str], fields: List[str], overrides: Tuple, kind: str,
@@ -539,8 +578,8 @@ class BloombergProvider(Provider):
                 req = self._requests.pop(cid)
                 self.last_error = "istek zaman aşımına uğradı (%d öğe) – yeniden denenecek" % len(req.keys)
                 for k in req.keys:
-                    it = self._items[k]
-                    if it.state == "sent":
+                    it = self._items.get(k)
+                    if it is not None and it.state == "sent":
                         it.state = "queued"
                         self._queue.append(k)
 
@@ -707,7 +746,8 @@ class BloombergProvider(Provider):
                     with self._lock:
                         self._requests.pop(cid, None)
                         for k in req.keys:           # anything Bloomberg did not mention
-                            if self._items[k].state == "sent":
+                            it = self._items.get(k)      # (a history item may have been collected already)
+                            if it is not None and it.state == "sent":
                                 self._set(k, NA_NA)
 
     def _error_text(self, info) -> str:

@@ -16,7 +16,7 @@ class Settings(object):
                  mode: str = "auto", bbg_host: str = "localhost", bbg_port: int = 8194,
                  tick_seconds: float = 2.0, locale: str = "tr", models_dir: Optional[str] = None,
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
-                 bbg_price_poll: float = 120.0):
+                 bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -30,6 +30,8 @@ class Settings(object):
         self.bbg_bfx = bbg_bfx                  # "off" | "approx"  (BFXFORWARD has no API equivalent)
         self.bbg_max_hits = int(bbg_max_hits)   # daily cap on reference/historical data points (0 = no cap)
         self.bbg_price_poll = float(bbg_price_poll)
+        self.history = bool(history)            # keep the daily history up to date in the background
+        self.history_refresh = float(history_refresh)   # seconds between history updates in live mode (0: once)
 
     @property
     def db_path(self) -> str:

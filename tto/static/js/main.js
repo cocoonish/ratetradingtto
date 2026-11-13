@@ -6,6 +6,7 @@ import { configureGrid, clearSelection, findCell, selectionText } from './grid.j
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
 import { ExplorerPage } from './pages/explorer.js';
+import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
 import { openRetEditor } from './ret.js';
 import { openScenarios } from './scenarios.js';
 
@@ -140,6 +141,9 @@ async function openPage(id, panel) {
   let page;
   if (id === 'blotter') page = new BlotterPage(host, ctx);
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
+  else if (id === 'eod') page = new EodPage(host, ctx);
+  else if (id === 'mpc') page = new MpcPage(host, ctx);
+  else if (id === 'settings') page = new SettingsPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   try {

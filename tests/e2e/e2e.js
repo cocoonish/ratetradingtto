@@ -547,6 +547,132 @@ async function shot(page, name) {
     check('ASW table has the bonds of the recorded day', (await cellText(page, 'ASW!B7')).trim() === 'TRB100227T13' && /^-?\d+/.test((await cellText(page, 'ASW!R9')).trim()));
     await shot(page, '12-asw');
 
+    // ------------------------------------------------------------------ history: matrix, meeting pricing, calendar
+    console.log('history: end-of-day matrix, meeting pricing, calendar');
+    // the server fills the history of the recorded month in the background (about a minute after its start)
+    let hist = null;
+    for (let i = 0; i < 200; i++) {
+      hist = (await api(page, 'ayşe yilmaz', 'GET', '/api/history/status')).json;
+      if (hist.phase === 'idle' && hist.mpc_days >= 21) break;
+      await page.waitForTimeout(2000);
+    }
+    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 && !hist.error, hist);
+    const rowsOf = (panel) => page.evaluate((p) => [...document.querySelectorAll('.panel[data-panel="' + p + '"] table.grid tr')]
+      .map((tr) => [...tr.children].map((td) => td.textContent.trim())), panel);
+    const rowOf = (rows, label) => rows.find((r) => r[0] === label || r[0].startsWith(label)) || [];
+
+    await open(page, 'eod');
+    let curve = await rowsOf('curve');
+    check('matrix: TLREF and the OIS tenors with their 1 day / 1 week / 1 month changes',
+      JSON.stringify(rowOf(curve, 'TLREF').slice(0, 5)) === JSON.stringify(['TLREF', '35,816', '0,0', '-5,5', '-100,7'])
+      && JSON.stringify(rowOf(curve, '1M').slice(0, 5)) === JSON.stringify(['1M', '36,350', '+5,0', '0,0', '-80,0']), [rowOf(curve, 'TLREF'), rowOf(curve, '1M')]);
+    check('matrix: offshore next to the OIS tenor (XCCY 1Y)', JSON.stringify(rowOf(curve, '1Y').slice(5)) === JSON.stringify(['39,350', '-8,0', '-60,0', '+55,0']), rowOf(curve, '1Y'));
+    check('matrix says what the changes are measured against', /03\.11\.2026 kapanışı · Δ1G 02\.11 · Δ1H 27\.10 · Δ1A 05\.10/.test(await page.textContent('.page-tools')));
+    const tipOf = await page.evaluate(() => {
+      const tr = [...document.querySelectorAll('.panel[data-panel="curve"] table.grid tr')].find((r) => r.children[0].textContent.trim() === '1M');
+      return { title: tr.children[2].title, heat: tr.children[4].style.backgroundColor };
+    });
+    check('a change shows the earlier close on hover and is shaded by its size', /^02\.11\.2026: 36,300$/.test(tipOf.title) && /rgba/.test(tipOf.heat), tipOf);
+    const mpcRows = await rowsOf('mpc');
+    check('matrix: what is priced for the meetings, the first one marked', mpcRows.length === 10 && mpcRows[2][0] === '10.12.2026 · ilk'
+      && /^-\d+,\d$/.test(mpcRows[2][1]) && /^[+-]?\d+,\d$/.test(mpcRows[2][2]) && /^3\d,\d{3}$/.test(mpcRows[2][5]), mpcRows[2]);
+    const bondRows = await rowsOf('dibs');
+    check('matrix: the bonds of DİBS RV by maturity with the workbook\'s own yield', bondRows.length === 20 && bondRows[1][0] === 'TRB100227T13'
+      && bondRows[1][2] === '10.02.2027' && /^3\d,\d{3}$/.test(bondRows[1][10]) && bondRows[1][4] === '', bondRows[1]);
+    check('matrix says that offline there is no bond history', /DİBS geçmişi yok/.test(await page.textContent('.panel[data-panel="dibs"] .note')));
+    await shot(page, '13-eod');
+    await page.selectOption('.page-tools select', '2026-10-23');
+    await page.waitForFunction(() => /23\.10\.2026 kapanışı/.test(document.querySelector('.page-tools').textContent));
+    curve = await rowsOf('curve');
+    check('matrix of an earlier day: the cut of 22 October arrives in the fixing', rowOf(curve, 'TLREF')[2] === '-102,7' && rowOf(curve, 'TLREF')[1] === '35,850', rowOf(curve, 'TLREF'));
+    await page.selectOption('.page-tools select', '2026-10-22');
+    await page.waitForFunction(() => /PPK günü/.test(document.querySelector('.panel[data-panel="mpc"] .note').textContent));
+    check('matrix on the day of a meeting says how the steps are measured', (await rowsOf('mpc'))[2][0] === '10.12.2026 · ilk');
+    await (await page.locator('.panel[data-panel="curve"] .tools button', { hasText: 'Kopyala' })).click({ force: true });
+    await page.waitForTimeout(200);
+    const eodCopy = await page.evaluate(() => navigator.clipboard.readText());
+    check('the matrix can be copied to Excel', eodCopy.split('\r\n').length >= 9 && /^1M\t\d\d,\d{3}\t/m.test(eodCopy), eodCopy.slice(0, 160));
+
+    await open(page, 'mpc');
+    const mp = async () => page.evaluate(() => {
+      const svg = document.querySelector('.panel[data-panel="chart"] svg.chart');
+      return { keys: [...document.querySelectorAll('.panel[data-panel="chart"] .chart-legend .key')].map((k) => k.textContent),
+        lines: svg ? svg.querySelectorAll('path[fill="none"]').length : 0, titles: svg ? [...svg.querySelectorAll('text.ttl')].map((t) => t.textContent) : [],
+        chips: [...document.querySelectorAll('.chips .chip')].map((c) => c.textContent + (c.classList.contains('on') ? '*' : '') + (c.classList.contains('past') ? '!' : '')),
+        head: document.querySelector('.panel[data-panel="chart"] header h2').textContent, banner: (document.querySelector('#content .banner') || {}).textContent || '' };
+    });
+    let m1 = await mp();
+    check('meeting pricing: one line per chosen meeting - the one held on 22 October and the next four',
+      JSON.stringify(m1.keys) === JSON.stringify(['22.10.2026 (yapıldı)', '10.12.2026', '21.01.2027', '18.03.2027', '22.04.2027']) && m1.lines >= 5
+      && m1.chips.length === 9 && m1.chips[0] === '22.10.2026*!' && m1.chips[5] === '10.06.2027', m1);
+    check('meeting pricing: the period and the measure are in the caption', m1.head === 'Toplantı fiyatlaması · Adım (bp) · 05.10.2026 – 03.11.2026' && m1.titles.includes('Adım (bp)'), m1.head);
+    check('meeting pricing says that the recorded data are partial', /eksik OIS kotası/.test(m1.banner), m1.banner.slice(0, 90));
+    await page.click('.chips .chip:has-text("10.06.2027")');
+    await page.click('.chips .chip:has-text("22.10.2026")');
+    m1 = await mp();
+    check('a meeting is added to / taken out of the chart by its chip', JSON.stringify(m1.keys) === JSON.stringify(['10.12.2026', '21.01.2027', '18.03.2027', '22.04.2027', '10.06.2027']), m1.keys);
+    await page.click('.seg button:has-text("Seviye (%)")');
+    m1 = await mp();
+    check('the measure can be switched to the implied level', m1.titles.includes('Seviye (%)') && /Seviye \(%\)/.test(m1.head), m1.titles);
+    const mpSvg = page.locator('.panel[data-panel="chart"] svg.chart');
+    const mb = await mpSvg.boundingBox();
+    await page.mouse.move(mb.x + mb.width * 0.6, mb.y + mb.height * 0.5);
+    await page.waitForSelector('.chart-tip');
+    const mtip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent, rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    check('hovering the time series shows the day and the level of every meeting', /^\d\d\.\d\d$/.test(mtip.head) && mtip.rows.length === 5 && mtip.rows.every((r) => /3\d,\d+/.test(r)), mtip);
+    await page.mouse.move(5, 5);
+    await page.click('.seg button:has-text("Adım (bp)")');
+    const meet = await rowsOf('meetings');
+    const held = rowOf(meet, '22.10.2026');
+    check('meetings table: the next meeting with its changes', rowOf(meet, '10.12.2026')[1] === 'MPC1 · 37 gün' && /^-\d+,\d$/.test(rowOf(meet, '10.12.2026')[2])
+      && /^[+-]?\d+,\d$/.test(rowOf(meet, '10.12.2026')[3]), rowOf(meet, '10.12.2026'));
+    check('meetings table: the meeting that was held - last pricing, what TLREF did, the surprise',
+      held[1] === 'yapıldı' && /^-\d+,\d$/.test(held[2]) && held[14] === '-102,7' && /^[+-]?\d+,\d$/.test(held[15]) && held[13] === '21.10.2026', held);
+    const daily = await rowsOf('daily');
+    check('daily history: newest first, the day of the meeting marked', daily[1][0] === '03.11.2026' && daily[1][1] === '35,8159' && daily[1][2] === '6'
+      && daily.some((r) => r[0] === '22.10.2026 · PPK') && daily.length === 22, [daily[1], daily.length]);
+    await shot(page, '14-mpc');
+
+    await open(page, 'settings');
+    const calRows = () => page.evaluate(() => [...document.querySelectorAll('.set-table tr')].slice(1).map((tr) => [tr.children[0].textContent,
+      tr.querySelector('input.date').value, tr.children[3].textContent, tr.children[4].textContent, tr.className.trim()]));
+    let cal = await calRows();
+    check('settings: the calendar lists the meetings held (archive) and the 80 of the OIS page',
+      cal.length === 95 && cal[14][1] === '22.10.2026' && cal[14][2] === 'geçti' && cal[14][3] === 'arşiv'
+      && JSON.stringify(cal[15].slice(0, 4)) === JSON.stringify(['1', '10.12.2026', '37 gün', 'OIS listesi · MPC1 (P10)']), [cal[14], cal[15]]);
+    check('settings: nothing to roll while no meeting of the list has passed', await page.isDisabled('button:has-text("Geçen toplantıları arşivle")')
+      && await page.isDisabled('.set-actions button.primary'));
+    const second = page.locator('.set-table tr').nth(17).locator('input.date');
+    await second.fill('28.01.2027');
+    await second.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('.set-table tr.changed').length === 1);
+    cal = await calRows();
+    check('settings: a corrected date is marked until it is saved', cal[16][1] === '28.01.2027' && /önce 21\.01\.2027/.test(cal[16][3]) && cal[16][4] === 'changed', cal[16]);
+    await page.click('.set-actions button.primary');
+    await page.waitForFunction(() => document.querySelectorAll('.set-table tr.changed').length === 0 && document.querySelector('.set-actions button.primary').disabled);
+    check('settings: the saved calendar is the calendar of the OIS page', (await api(page, 'ayşe yilmaz', 'GET', '/api/calendar')).json.meetings[16].date === '2027-01-28');
+    await open(page, 'ois');
+    check('the meeting date typed in the settings is on the OIS page', (await cellText(page, 'OIS_MAIN!P11')).trim() === '28.01.2027', await cellText(page, 'OIS_MAIN!P11'));
+    await open(page, 'settings');
+    const again = page.locator('.set-table tr').nth(17).locator('input.date');
+    await again.fill('32.01.2027');
+    await again.press('Enter');
+    check('settings: a date that is none is refused', await again.evaluate((el) => el.classList.contains('bad')));
+    await again.fill('21.01.2027');
+    await again.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('.set-table tr.changed').length === 1);
+    await page.click('.set-actions button.primary');
+    await page.waitForFunction(() => document.querySelector('.set-actions button.primary').disabled);
+    await open(page, 'ois');
+    check('... and back again', (await cellText(page, 'OIS_MAIN!P11')).trim() === '21.01.2027');
+    await open(page, 'settings');
+    const series = await rowsOf('series');
+    check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
+      JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
+      && series.some((r) => r[2] === 'TYSO10 Curncy' && r[7] === 'geçmiş yok') && series.length === 97, rowOf(series, 'TLREF'));
+    check('settings: the state of the history', /Excel dosyasındaki kayıtlı geçmiş/.test(await page.textContent('.panel[data-panel="history"] .set-info')));
+    await shot(page, '15-settings');
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));

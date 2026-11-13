@@ -228,6 +228,57 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def delete_trade(request: Request):
         return ok(await call(svc().delete_trade, _user(request), int(request.path_params["trade_id"])))
 
+    # ------------------------------------------------------------------ history: closes, meeting pricing, calendar
+    def _int(request: Request, name: str, default: Optional[int] = None) -> Optional[int]:
+        raw = request.query_params.get(name)
+        if raw in (None, ""):
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            raise ServiceError("%s bir sayı olmalı" % name)
+
+    @handler
+    async def history_status(request: Request):
+        return ok(await call(svc().history.status))
+
+    @handler
+    async def history_sync(request: Request):
+        data = await _body(request)
+        svc().require_user(_user(request))
+        return ok(await call(svc().history.request_sync, bool(data.get("recompute"))))
+
+    @handler
+    async def history_settings(request: Request):
+        data = await _body(request)
+        svc().require_user(_user(request))
+        try:
+            return ok(await call(svc().history.set_settings, data))
+        except ValueError as exc:
+            raise ServiceError(str(exc))
+
+    @handler
+    async def history_series(request: Request):
+        return ok(await call(svc().history.coverage))
+
+    @handler
+    async def history_matrix(request: Request):
+        return ok(await call(svc().history.matrix, request.query_params.get("asof") or None))
+
+    @handler
+    async def history_mpc(request: Request):
+        return ok(await call(svc().history.mpc, _int(request, "days"), _int(request, "n", 16)))
+
+    @handler
+    async def calendar(request: Request):
+        if request.method == "GET":
+            return ok(await call(svc().history.calendar))
+        data = await _body(request)
+        dates = data.get("dates")
+        if not isinstance(dates, list):
+            raise ServiceError("dates listesi gerekli")
+        return ok(await call(svc().history.set_calendar, _user(request), dates, bool(data.get("roll"))))
+
     # ------------------------------------------------------------------ live updates (SSE)
     async def events(request: Request):
         loop = asyncio.get_running_loop()
@@ -295,6 +346,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/ois-market", ois_market),
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
+        Route("/api/history/status", history_status),
+        Route("/api/history/sync", history_sync, methods=["POST"]),
+        Route("/api/history/settings", history_settings, methods=["POST"]),
+        Route("/api/history/series", history_series),
+        Route("/api/history/matrix", history_matrix),
+        Route("/api/history/mpc", history_mpc),
+        Route("/api/calendar", calendar, methods=["GET", "POST"]),
         Route("/api/events", events),
         Mount("/static", app=_Static(directory=STATIC), name="static"),
     ]

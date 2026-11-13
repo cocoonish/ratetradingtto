@@ -21,6 +21,7 @@ class ReplayProvider(Provider):
         self.snapshot: Dict[Tuple, Any] = dict(snapshot or {})
         self.label = label
         self.missing: Dict[Tuple, int] = {}
+        self.recorded_history: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
 
     def _get(self, key):
         v = self.snapshot.get(key)
@@ -50,6 +51,38 @@ class ReplayProvider(Provider):
     def status(self) -> Dict[str, Any]:
         return {"mode": "replay", "connected": False, "label": self.label, "items": len(self.snapshot)}
 
+    def load_history(self, path: str) -> int:
+        """Load daily closes kept next to the offline quotes:
+        ``{"series": {"TICKER|FIELD": {"yyyy-mm-dd": value, ...}}}`` (keys starting with "_" are comments)."""
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        n = 0
+        for name, points in (data.get("series") or {}).items():
+            sec, _, fld = name.partition("|")
+            rows = sorted((d, float(v)) for d, v in points.items() if isinstance(v, (int, float)))
+            self.recorded_history[(sec.strip(), (fld.strip() or "PX_LAST").upper())] = rows
+            n += len(rows)
+        return n
+
+    def history(self, items, start, end, timeout=60.0):
+        """What the snapshot holds: the history calls recorded in the workbook (``BDH`` blocks) and the
+        closes loaded with :meth:`load_history`."""
+        lo = "%s-%s-%s" % (start[:4], start[4:6], start[6:8])
+        hi = "%s-%s-%s" % (end[:4], end[4:6], end[6:8])
+        wanted = {(sec, fld.upper()) for sec, fld in items}
+        found: Dict[Tuple[str, str], Dict[str, float]] = {}
+        for key, value in self.snapshot.items():
+            if key[0] != "BDH" or (key[1], key[2]) not in wanted:
+                continue
+            for day, v in _recorded_rows(key, value):
+                if isinstance(v, float) and lo <= day <= hi:
+                    found.setdefault((key[1], key[2]), {})[day] = v
+        for item in wanted:
+            for day, v in self.recorded_history.get(item, ()):
+                if lo <= day <= hi:
+                    found.setdefault(item, {}).setdefault(day, v)      # what the workbook recorded itself wins
+        return {item: sorted(points.items()) for item, points in found.items() if points}
+
     def load_quotes(self, path: str) -> None:
         """Load ``{"TICKER|FIELD": value}`` JSON (keys starting with "_" are comments)."""
         with open(path, encoding="utf-8") as fh:
@@ -59,6 +92,39 @@ class ReplayProvider(Provider):
                 continue
             sec, _, fld = k.partition("|")
             self.snapshot[bdp_key(sec.strip(), fld.strip() or "PX_LAST")] = float(v) if isinstance(v, (int, float)) else v
+
+
+def _recorded_rows(key: Tuple, value: Any) -> List[Tuple[str, Any]]:
+    """The rows of a recorded ``BDH`` block as ``[(yyyy-mm-dd, value), ...]``.
+
+    A block saved with its dates carries them; one saved without (``Dates=H``) is a run of consecutive
+    days from the start date of the call - week days when the call said ``Days=W``."""
+    import datetime as _dt
+    from ..xl.values import serial_to_date
+    opts = dict(key[5])
+    rows = value.rows if type(value) is XlArray else [[value]]
+    out: List[Tuple[str, Any]] = []
+    if opts.get("DATES") == "H" or type(value) is not XlArray:
+        if opts.get("DIR") == "H" or opts.get("SORT") in ("D", "R"):
+            return []
+        try:
+            day = _dt.datetime.strptime(key[3], "%Y%m%d").date()
+        except ValueError:
+            return []
+        weekdays = opts.get("DAYS") == "W"
+        if not weekdays and opts.get("DAYS") not in ("A", "C"):
+            return []                                  # trading days only: the dates cannot be told
+        for row in rows:
+            while weekdays and day.weekday() >= 5:
+                day += _dt.timedelta(days=1)
+            out.append((day.isoformat(), row[0] if row else None))
+            day += _dt.timedelta(days=1)
+        return out
+    for row in rows:
+        if not row or type(row[0]) is not float or not (20000 < row[0] < 80000):
+            continue
+        out.append((serial_to_date(row[0]).isoformat(), row[1] if len(row) > 1 else None))
+    return out
 
 
 class _KeyCapture(Provider):

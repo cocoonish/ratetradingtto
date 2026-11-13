@@ -18,7 +18,8 @@ from tto.service import Service  # noqa: E402
 
 
 def make_service(data_dir) -> Service:
-    return Service(Settings(data_dir=str(data_dir), mode="replay"))
+    # history=False: the daily history is not filled in the background (tests that need it run it themselves)
+    return Service(Settings(data_dir=str(data_dir), mode="replay", history=False))
 
 
 @pytest.fixture(scope="session")

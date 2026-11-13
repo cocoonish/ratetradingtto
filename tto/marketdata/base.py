@@ -200,6 +200,14 @@ class Provider(object):
     def status(self) -> Dict[str, Any]:
         return {"mode": "none", "connected": False}
 
+    def history(self, items: Sequence[Tuple[str, str]], start: str, end: str,
+                timeout: float = 60.0) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
+        """Daily closes of ``(security, FIELD)`` items between two dates (``YYYYMMDD``), outside of any
+        workbook formula: ``{(security, FIELD): [("yyyy-mm-dd", value), ...]}`` in date order, trading days
+        only.  Items without history are left out.  May block for up to ``timeout`` seconds - never call it
+        on the calculation thread."""
+        return {}
+
     # ------------------------------------------------------------------ dispatch
     def call(self, calc, name: str, si: int, r: int, c: int, args: Sequence[Any]) -> Any:
         if name == "BDP":

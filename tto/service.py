@@ -45,14 +45,14 @@ class ServiceError(Exception):
 class EngineThread(object):
     """Runs every calculation on one thread with a large stack (formula chains recurse deeply)."""
 
-    def __init__(self):
+    def __init__(self, name: str = "tto-engine"):
         self._q: "queue.Queue" = queue.Queue()
         old = threading.stack_size()
         try:
             threading.stack_size(256 * 1024 * 1024)
         except (ValueError, RuntimeError):
             pass
-        self._t = threading.Thread(target=self._loop, name="tto-engine", daemon=True)
+        self._t = threading.Thread(target=self._loop, name=name, daemon=True)
         self._t.start()
         try:
             threading.stack_size(old)
@@ -102,6 +102,8 @@ class Service(object):
         self._market_thread: Optional[threading.Thread] = None
         self.started_at = time.time()
         self.et.call(self._setup, provider)
+        from .history import History
+        self.history = History(self)
 
     # ================================================================== setup
     def _setup(self, provider) -> None:
@@ -169,6 +171,8 @@ class Service(object):
                 for name in ("replay_usd.json", "replay_asw.json", "replay_borsa.json"):
                     if os.path.exists(os.path.join(folder, name)):
                         provider.load_quotes(os.path.join(folder, name))
+                if os.path.exists(os.path.join(folder, "replay_history.json")):
+                    provider.load_history(os.path.join(folder, "replay_history.json"))    # closes the file did not record
                 for b in self.books.values():
                     b.engine.reset()
         # shared inputs saved earlier (RET curve, calendars ...)
@@ -192,6 +196,7 @@ class Service(object):
             self._market_thread.start()
             if self.mode == "live":
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
+            self.history.start()
 
     def _warmup_safe(self) -> None:
         try:
@@ -241,12 +246,17 @@ class Service(object):
 
     def stop(self) -> None:
         self._stop.set()
+        self.history._stop.set()                   # no new work while the provider goes down
+        self.history._kick.set()
         try:
             stop = getattr(self.provider, "stop", None)
             if stop:
                 stop()
         finally:
-            self.et.stop()
+            try:
+                self.history.stop()
+            finally:
+                self.et.stop()
 
     def _market_loop(self) -> None:
         last_day = None
@@ -370,6 +380,12 @@ class Service(object):
         if "tto" in self.books:
             pages.append({"id": "blotter", "title": "Günlük İşlemler", "group": "Masa", "book": "tto",
                           "sheet": bl.SHEET, "custom": True})
+            # pages of the dashboard's own: what happened over time, and the settings behind it
+            pages.append({"id": "eod", "title": "Gün Sonu Matrisi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
+            pages.append({"id": "mpc", "title": "PPK Fiyatlama Geçmişi", "group": "TRY Faiz", "book": "tto", "sheet": None,
+                          "custom": True})
+            pages.append({"id": "settings", "title": "Ayarlar · Toplantı takvimi", "group": "Araçlar", "book": "tto",
+                          "sheet": None, "custom": True})
         return pages
 
     # ================================================================== rendering

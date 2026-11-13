@@ -1,0 +1,1117 @@
+"""History: daily closes of the market series, what the market priced for every MPC meeting day by day, the
+end-of-day change matrix and the meeting calendar.
+
+Three things live here.
+
+**Daily closes.**  A table of ``(series, day, value)`` in the dashboard's database, filled from Bloomberg
+history (``HistoricalDataRequest``) one year back and kept up to date while the server runs.  Offline it
+holds what the workbook recorded (its ``BDH`` blocks) plus the TLREF fixings that ship with the dashboard.
+Which series are kept is read from the workbook itself: the OIS ticker roots of ``OIS_MAIN``, the offshore
+curve tickers of ``Forward``, the bonds of ``DİBS RV``.
+
+**Meeting pricing history.**  For every past day the workbook's own solver (``Motor`` "GLOBAL İMA PPK") is
+run again with that day's closes - on a second engine that is fed one day at a time (:class:`MpcMachine`).
+The implied step / level of every meeting is stored per ``(day, meeting date)``, so a series stays with its
+meeting when the list of meetings is rolled, and the series of meetings that have been held are kept.
+
+**The meeting calendar.**  Meetings that are still in the workbook's list (``OIS_MAIN!P10:P89``) and the ones
+that were taken out of it after they passed (the archive).  When the list is edited or rolled, everything
+typed per meeting - the scenario steps ``U:W`` of every user, their saved scenarios and the workbook's own
+steps - moves with its meeting (:func:`align_meetings`).
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import hashlib
+import re
+import threading
+import time
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from .books import Book, formula_text
+from .inputs import parse_date
+from .marketdata.base import Provider, tr_date_text
+from .xl.engine import Clock
+from .xl.model import COLS, parse_a1
+from .xl.values import date_to_serial, serial_to_date
+
+#: bump to have every stored MPC day computed again after a change of method
+METHOD = 1
+NA = "#N/A N/A"
+BOOK = "tto"
+OIS_SHEET = "OIS_MAIN"
+MEETING_ROWS = (10, 89)                 # OIS_MAIN!P10:P89 - the 80 meeting slots of the workbook
+OIS_ROWS = (9, 26)                      # OIS_MAIN!A9:J26 - tenor label (A) and ticker root (J)
+HOLIDAY_ROWS = (361, 523)               # Motor!A361:A523
+STEP_COLS = ("U", "V", "W")             # scenario step per meeting (S1, S2, S3)
+MAX_STALE = 5                           # week days a close may be carried forward (a bayram is shorter)
+MIN_QUOTES = 3                          # OIS quotes a day needs before the solver is run for it
+PRICE_FIELDS = ("MID", "PX_LAST", "PX_MID", "BID", "ASK", "PX_BID", "PX_ASK", "LAST_PRICE")
+#: meetings held before the workbook's list starts (CBRT calendar); the archive starts with these
+DEFAULT_PAST_MEETINGS = ("2025-01-23", "2025-03-06", "2025-04-17", "2025-06-19", "2025-07-24", "2025-09-11", "2025-10-23",
+                         "2025-12-11", "2026-01-22", "2026-03-12", "2026-04-22", "2026-06-11", "2026-07-23", "2026-09-10",
+                         "2026-10-22")
+DEFAULTS = {"dibs_field": "YLD_YTM_MID", "lookback_days": 370}
+
+
+# ---------------------------------------------------------------------------------------------- small helpers
+def _iso(d: _dt.date) -> str:
+    return d.isoformat()
+
+
+def _day(s: str) -> _dt.date:
+    return _dt.date.fromisoformat(s)
+
+
+def _serial(d: _dt.date) -> float:
+    return float(date_to_serial(d))
+
+
+def _of_serial(x: Any) -> Optional[_dt.date]:
+    if type(x) is float and 20000 < x < 80000:
+        return serial_to_date(x)
+    return None
+
+
+def _text(v: Any) -> str:
+    return v.strip() if isinstance(v, str) else ""
+
+
+def weekdays_ending(day: _dt.date, n: int) -> List[_dt.date]:
+    """The last ``n`` week days up to and including ``day`` (oldest first)."""
+    out: List[_dt.date] = []
+    d = day
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d -= _dt.timedelta(days=1)
+    out.reverse()
+    return out
+
+
+def next_business_day(day: _dt.date, holidays) -> _dt.date:
+    d = day + _dt.timedelta(days=1)
+    while d.weekday() >= 5 or d in holidays:
+        d += _dt.timedelta(days=1)
+    return d
+
+
+def add_months(d: _dt.date, months: int) -> _dt.date:
+    """Excel's EDATE."""
+    y, m = divmod(d.year * 12 + d.month - 1 + months, 12)
+    m += 1
+    last = [31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+    return _dt.date(y, m, min(d.day, last))
+
+
+def tenor_months(label: str) -> Optional[float]:
+    """``"1W"`` -> 0.25, ``"3M"`` -> 3, ``"18M"`` -> 18, ``"2Y"`` -> 24, ``"O/N"`` -> 0.01, ``"T/N"`` -> 0.02."""
+    s = label.strip().upper().replace(" ", "")
+    if s in ("O/N", "ON"):
+        return 0.01
+    if s in ("T/N", "TN"):
+        return 0.02
+    m = re.match(r"^(\d+)([WMY])$", s)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return {"W": n * 0.25, "M": float(n), "Y": n * 12.0}[m.group(2)]
+
+
+def filled(points: Dict[str, float], axis: Sequence[_dt.date], stale: int = MAX_STALE) -> List[Optional[float]]:
+    """The series along a week-day axis, a missing day taking the previous close (as ``Fill=P`` does) - but
+    not for longer than ``stale`` week days, so that a series that stopped does not look unchanged."""
+    out: List[Optional[float]] = []
+    last: Optional[float] = None
+    age = 0
+    for d in axis:
+        v = points.get(_iso(d))
+        if v is not None:
+            last, age = v, 0
+        elif last is not None:
+            age += 1
+            if age > stale:
+                last = None
+        out.append(last)
+    return out
+
+
+def align_meetings(old: Sequence[str], new: Sequence[str], tolerance: int = 45) -> Dict[int, Optional[int]]:
+    """Which entry of the new list of meeting dates each entry of the old list became.
+
+    ``{old index: new index, or None when the meeting is no longer in the list}``.  A date that is in both
+    lists is the same meeting.  Between two such dates, a date that disappeared and a new date at most
+    ``tolerance`` days away are a meeting whose date was corrected - the pairs are chosen so that the dates
+    move as little as possible and stay in order; what is left over was removed (old) or is a new meeting.
+    Both lists are ISO dates in ascending order.
+    """
+    pos = {d: j for j, d in enumerate(new)}
+    out: Dict[int, Optional[int]] = {i: pos.get(d) for i, d in enumerate(old)}
+    anchors = [(-1, -1)] + [(i, pos[d]) for i, d in enumerate(old) if d in pos] + [(len(old), len(new))]
+    skip = tolerance / 2.0 + 0.25                       # leaving a pair unmatched costs more than any allowed move
+    for (i0, j0), (i1, j1) in zip(anchors, anchors[1:]):
+        gone = list(range(i0 + 1, i1))                  # old dates that are not in the new list
+        fresh = list(range(j0 + 1, j1))                 # new dates that are not in the old list
+        if not gone or not fresh:
+            continue
+        n, m = len(gone), len(fresh)
+        cost = [[0.0] * (m + 1) for _ in range(n + 1)]
+        step = [[""] * (m + 1) for _ in range(n + 1)]
+        for a in range(n + 1):
+            for b in range(m + 1):
+                if a == 0 and b == 0:
+                    continue
+                best, how = float("inf"), ""
+                if a > 0 and cost[a - 1][b] + skip < best:
+                    best, how = cost[a - 1][b] + skip, "old"
+                if b > 0 and cost[a][b - 1] + skip < best:
+                    best, how = cost[a][b - 1] + skip, "new"
+                if a > 0 and b > 0:
+                    dist = abs((_day(new[fresh[b - 1]]) - _day(old[gone[a - 1]])).days)
+                    if dist <= tolerance and cost[a - 1][b - 1] + dist < best:
+                        best, how = cost[a - 1][b - 1] + dist, "pair"
+                cost[a][b], step[a][b] = best, how
+        a, b = n, m
+        while a > 0 or b > 0:
+            how = step[a][b]
+            if how == "pair":
+                out[gone[a - 1]] = fresh[b - 1]
+                a, b = a - 1, b - 1
+            elif how == "old":
+                a -= 1
+            else:
+                b -= 1
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- series
+class SeriesDef(object):
+    """One series of the history: where it comes from and how it is shown."""
+
+    __slots__ = ("group", "label", "ticker", "field", "alts", "unit", "months", "root", "info")
+
+    def __init__(self, group: str, label: str, ticker: str, field: str = "PX_LAST", alts: Sequence[str] = (),
+                 unit: str = "pct", months: Optional[float] = None, root: str = "", info: Optional[Dict[str, Any]] = None):
+        self.group = group              # ref | ois | off | xccy | dibs
+        self.label = label
+        self.ticker = ticker
+        self.field = field.upper()
+        self.alts = [a for a in alts if a and a != ticker]
+        self.unit = unit                # pct: level in percent, change in bp · px: price, change in points
+        self.months = months
+        self.root = root
+        self.info = info or {}
+
+    @property
+    def id(self) -> str:
+        return "%s|%s" % (self.ticker, self.field)
+
+    def ids(self) -> List[str]:
+        return ["%s|%s" % (t, self.field) for t in [self.ticker] + self.alts]
+
+    def pick(self, data: Dict[str, Dict[str, float]]) -> Tuple[str, Dict[str, float]]:
+        """The ticker to use (the one with the most closes; the workbook's own on a tie) and its closes."""
+        best, points = self.ticker, data.get(self.id) or {}
+        for t in self.alts:
+            other = data.get("%s|%s" % (t, self.field)) or {}
+            if len(other) > len(points):
+                best, points = t, other
+        return best, points
+
+
+# ---------------------------------------------------------------------------------------------- one past day
+class DayProvider(Provider):
+    """Answers the workbook's Bloomberg calls with the closes of one day."""
+
+    live = False
+
+    def __init__(self, tlref_ticker: str = "BISTTREF Index"):
+        self.tlref_ticker = tlref_ticker
+        self.quotes: Dict[str, float] = {}       # ticker root -> close (percent)
+        self.tlref: Optional[float] = None
+        self.spot_text: Optional[str] = None
+        self.unknown: set = set()
+
+    def get_bdp(self, key: Tuple) -> Any:
+        sec, field = key[1], key[2]
+        if field == "SETTLE_DT" and sec.split(" ", 1)[0] in ("TRY", "USDTRY"):
+            return self.spot_text or NA
+        if sec == self.tlref_ticker:
+            return self.tlref if self.tlref is not None else NA
+        if field in PRICE_FIELDS:
+            v = self.quotes.get(sec.split(" ", 1)[0])
+            return v if v is not None else NA          # no close that day: the workbook's own fallback applies
+        self.unknown.add("%s|%s" % (sec, field))
+        return NA
+
+    def _none(self, key: Tuple) -> Any:
+        self.unknown.add("%s|%s" % (key[1], key[0]))
+        return NA
+
+    get_bdh = get_bds = get_bfx = get_rt = _none
+
+    def status(self) -> Dict[str, Any]:
+        return {"mode": "history", "connected": False}
+
+
+class MpcMachine(object):
+    """A second engine of the TRY workbook that is fed one past day at a time and answers what the market
+    priced for the meetings on that day - with the workbook's own formulas, nothing re-implemented."""
+
+    def __init__(self, model, tlref_ticker: str = "BISTTREF Index"):
+        self.provider = DayProvider(tlref_ticker)
+        self.clock = Clock(0.5)
+        self.book = Book(BOOK, "TRY masa (geçmiş)", model, provider=self.provider, clock=self.clock, replay=False)
+        self.si = model.sheet_index[OIS_SHEET]
+        self.mi = model.sheet_index["Motor"]
+        self.book.declare("%s!P%d:P%d" % ((OIS_SHEET,) + MEETING_ROWS), scope="shared", group="hist-calendar")
+        self.book.declare("%s!J%d:J%d" % ((OIS_SHEET,) + OIS_ROWS), scope="shared", group="hist-roots")
+        self.book.declare("Motor!A%d:A%d" % HOLIDAY_ROWS, scope="shared", group="hist-holidays")
+        self.solves = 0
+
+    def solve(self, day: _dt.date, spot: _dt.date, tlref: float, quotes: Dict[str, float], meetings: Sequence[_dt.date],
+              roots: Dict[int, Any], holidays: Sequence[float], horizon: Optional[_dt.date] = None) -> Dict[str, Any]:
+        """Run the workbook for ``day``.  Returns ``{"rows": [...], "status", "control", "spot", "unknown"}``;
+        a row is ``{"meeting", "step", "level", "cum", "sigma", "front"}`` (bp / fraction / bp / bp)."""
+        eng = self.book.engine
+        prov = self.provider
+        prov.quotes = dict(quotes)
+        prov.tlref = tlref
+        prov.spot_text = tr_date_text(spot)
+        prov.unknown = set()
+        self.clock.fixed = _serial(day) + 0.5
+        si, mi = self.si, self.mi
+        values: Dict[Tuple[int, int], Any] = {}
+        r1, r2 = MEETING_ROWS
+        pc = parse_a1("P1") % COLS
+        for k, r in enumerate(range(r1, r2 + 1)):
+            values[(si, r * COLS + pc)] = _serial(meetings[k]) if k < len(meetings) else None
+        jc = parse_a1("J1") % COLS
+        for r in range(OIS_ROWS[0], OIS_ROWS[1] + 1):
+            values[(si, r * COLS + jc)] = roots.get(r)
+        h1, h2 = HOLIDAY_ROWS
+        hol = list(holidays)[:h2 - h1 + 1]
+        for k, r in enumerate(range(h1, h2 + 1)):
+            values[(mi, r * COLS + 1)] = hol[k] if k < len(hol) else None
+        eng.set_inputs(values)
+        eng.reset()                                    # a new day: the clock and every quote changed
+        calc = eng.shared
+        col = {name: parse_a1(name + "1") % COLS for name in ("N", "P", "R", "S", "T")}
+        rows: List[Dict[str, Any]] = []
+        front_seen = False
+        front_row: Optional[int] = None
+        spot_serial = _serial(spot)
+        for r in range(r1, r2 + 1):
+            p = calc.get(si, r, col["P"])
+            if type(p) is not float:
+                continue
+            level = calc.get(si, r, col["S"])
+            step = calc.get(si, r, col["R"])
+            if type(level) is not float or type(step) is not float:
+                continue                               # passed ("geçti"), or beyond the quotes
+            meeting = serial_to_date(p)
+            front = (not front_seen) and p >= spot_serial
+            front_seen = front_seen or front
+            if front:
+                front_row = r
+            if horizon is not None and meeting > horizon:
+                continue
+            cum = calc.get(si, r, col["T"])
+            sigma = calc.get(si, r, col["N"])
+            rows.append({"meeting": _iso(meeting), "step": step, "level": level,
+                         "cum": cum if type(cum) is float else None, "sigma": sigma if type(sigma) is float else None,
+                         "front": front})
+        # A day on which a meeting is held: the close already prices the decision, the TLREF fixing of that
+        # day does not (it follows the next day).  Measured against that fixing - as the sheet does - the next
+        # meeting would carry today's decision as well.  On such a day the steps are measured from the level
+        # the solver itself puts before the next meeting.
+        base = tlref / 100.0
+        decision = any(m == day for m in meetings)
+        if decision and front_row is not None and rows:
+            own = self._solver_step(front_row, calc)
+            first = next((x for x in rows if x["front"]), None)
+            if own is not None and first is not None:
+                base = first["level"] - own
+                first["step"] = own * 10000.0
+                for x in rows:
+                    x["cum"] = round((x["level"] - base) * 10000.0, 2)
+            else:
+                decision = False
+        status = calc.get(si, *divmod(parse_a1("AU12"), COLS))
+        control = calc.get(si, *divmod(parse_a1("AU11"), COLS))
+        b2 = calc.get(si, *divmod(parse_a1("B2"), COLS))
+        self.solves += 1
+        return {"rows": rows, "status": status if isinstance(status, str) else "",
+                "control": control if type(control) is float else None, "base": base, "decision": decision,
+                "spot": _iso(serial_to_date(b2)) if type(b2) is float and 20000 < b2 < 80000 else None,
+                "unknown": sorted(prov.unknown)}
+
+    def _solver_step(self, row: int, calc) -> Optional[float]:
+        """The solver's own step of the meeting in a row of the list (the cell the sheet's "Implied bps"
+        formula of that row names: ``Motor!$A$5734`` for the first row)."""
+        rc = row * COLS + parse_a1("R1") % COLS
+        m = re.search(r"Motor!\$A\$(\d+)", formula_text(self.book, self.si, rc) or "")
+        if not m:
+            return None
+        v = calc.get(self.mi, int(m.group(1)), 1)
+        return v if type(v) is float else None
+
+
+# ---------------------------------------------------------------------------------------------- the history
+class History(object):
+    def __init__(self, service):
+        self.svc = service
+        self.store = service.store
+        self.rev = 1                                   # increases whenever stored history changed
+        self._lock = threading.RLock()
+        self._sync_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._kick = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._het = None                               # big-stack thread that owns the MPC machine
+        self._machine: Optional[MpcMachine] = None
+        self._snap: Optional[Tuple[int, Dict[str, Any]]] = None
+        self._empty: Dict[str, float] = {}             # series without any history -> when it was last asked
+        self._force = False                            # the next pass recomputes every day
+        self.state: Dict[str, Any] = {"phase": "idle", "done": 0, "total": 0, "error": "", "last_sync": None,
+                                      "fetched": 0, "computed": 0}
+
+    # ================================================================== settings
+    def settings(self) -> Dict[str, Any]:
+        out = dict(DEFAULTS)
+        saved = self.store.get("hist.settings")
+        if isinstance(saved, dict):
+            out.update({k: v for k, v in saved.items() if k in DEFAULTS})
+        return out
+
+    def set_settings(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        cur = self.settings()
+        field = values.get("dibs_field")
+        if field is not None:
+            field = str(field).strip().upper().replace(" ", "_")
+            if not re.match(r"^[A-Z][A-Z0-9_]{1,40}$", field):
+                raise ValueError("alan adı anlaşılamadı: %r" % values.get("dibs_field"))
+            cur["dibs_field"] = field
+        days = values.get("lookback_days")
+        if days is not None:
+            try:
+                days = int(days)
+            except (TypeError, ValueError):
+                raise ValueError("gün sayısı anlaşılamadı: %r" % (values.get("lookback_days"),))
+            if not 30 <= days <= 1100:
+                raise ValueError("geriye bakış 30 – 1100 gün arasında olmalı")
+            cur["lookback_days"] = days
+        self.store.put("hist.settings", cur)
+        self._snap = None
+        self.kick()
+        return cur
+
+    # ================================================================== what the workbook says
+    def today(self) -> _dt.date:
+        book = self.svc.books.get(BOOK)
+        if book is None:
+            return _dt.date.today()
+        return serial_to_date(book.engine.clock.today())
+
+    def snapshot(self) -> Dict[str, Any]:
+        """The series to keep and the calendar, read from the live workbook (cached until something changes)."""
+        gen = self.svc.gen
+        hit = self._snap
+        if hit is not None and hit[0] == gen:
+            return hit[1]
+        snap = self.svc.et.call(self._read_workbook)
+        self._snap = (gen, snap)
+        return snap
+
+    def _read_workbook(self) -> Dict[str, Any]:
+        book = self.svc.books.get(BOOK)
+        if book is None:
+            return {"today": _dt.date.today(), "spot": None, "defs": [], "roots": {}, "holidays": [], "rows": [], "labels": [],
+                    "src": "", "tlref": "BISTTREF Index", "stub": {}}
+        calc = book.engine.shared
+        model = book.model
+        cfg = self.settings()
+
+        def val(ref: str) -> Any:
+            try:
+                si, rc = book.cell(ref)
+                return calc.get(si, *divmod(rc, COLS))
+            except Exception:  # noqa: BLE001 - a sheet that is not in this file
+                return None
+
+        def literal_ticker(ref: str, fallback: str) -> str:
+            """The security a cell's own BDP call names (``=BDP("TYSO1Z GFOF Curncy","MID")/100``)."""
+            try:
+                si, rc = book.cell(ref)
+                m = re.search(r'BDP\(\s*"([^"]+)"', formula_text(book, si, rc) or "")
+                return m.group(1) if m else fallback
+            except Exception:  # noqa: BLE001
+                return fallback
+
+        today = serial_to_date(book.engine.clock.today())
+        spot = _of_serial(val("%s!B2" % OIS_SHEET))
+        src = _text(val("MASA!S171")) or "Curncy"
+        other = "Curncy" if src.upper() != "CURNCY" else "GFOF Curncy"
+        tlref = literal_ticker("%s!J2" % OIS_SHEET, "BISTTREF Index")
+        defs: List[SeriesDef] = [SeriesDef("ref", "TLREF", tlref, "PX_LAST")]
+        roots: Dict[int, Any] = {}
+        stub: Dict[str, str] = {}
+        for label, ref in (("1W", "AU13"), ("2W", "AU14")):
+            root = literal_ticker("%s!%s" % (OIS_SHEET, ref), "TYSO%sZ" % label[0]).split(" ", 1)[0]
+            stub[label] = root
+            defs.append(SeriesDef("ois", label, "%s %s" % (root, src), "PX_LAST", ["%s %s" % (root, other)],
+                                  months=tenor_months(label), root=root))
+        for r in range(OIS_ROWS[0], OIS_ROWS[1] + 1):
+            root = val("%s!J%d" % (OIS_SHEET, r))
+            roots[r] = root if isinstance(root, str) and root.strip() else None
+            label = _text(val("%s!A%d" % (OIS_SHEET, r)))
+            if roots[r] is None or not label:
+                continue
+            root = root.strip()
+            defs.append(SeriesDef("ois", label, "%s %s" % (root, src), "PX_LAST", ["%s %s" % (root, other)],
+                                  months=tenor_months(label), root=root))
+        if "Forward" in model.sheet_index:
+            for r in range(6, 27):
+                ticker = _text(val("Forward!AO%d" % r))
+                if not ticker:
+                    continue
+                if r <= 16:
+                    label, group = _text(val("Forward!H%d" % r)), "off"
+                else:
+                    label, group = _text(val("Forward!C%d" % (125 + r - 17))), "xccy"
+                if not label:
+                    continue
+                defs.append(SeriesDef(group, label, ticker, "PX_LAST", months=tenor_months(label)))
+        if "DİBS RV" in model.sheet_index:
+            for r in range(5, 55):
+                isin = _text(val("DİBS RV!A%d" % r))
+                if not isin:
+                    continue
+                priced, plain = _text(val("DİBS RV!BT%d" % r)), _text(val("DİBS RV!BR%d" % r))
+                if not priced and not plain:
+                    continue
+                kind = _text(val("DİBS RV!D%d" % r))
+                name = _text(val("DİBS RV!C%d" % r))
+                maturity = _of_serial(val("DİBS RV!E%d" % r))
+                floater = kind == "T"                  # a TLREF floater has no yield: its price is followed
+                bist = val("DİBS RV!T%d" % r)          # the workbook's own BIST compound yield (as it stands now)
+                defs.append(SeriesDef("dibs", isin, priced or plain, "PX_LAST" if floater else cfg["dibs_field"],
+                                      [plain] if priced else [], unit="px" if floater else "pct",
+                                      info={"isin": isin, "name": "" if name.startswith("#") else name, "type": kind,
+                                            "maturity": _iso(maturity) if maturity else None, "row": r,
+                                            "bist": bist if type(bist) is float else None}))
+        holidays: List[float] = []
+        mi = model.sheet_index.get("Motor")
+        if mi is not None:
+            for r in range(HOLIDAY_ROWS[0], HOLIDAY_ROWS[1] + 1):
+                v = calc.get(mi, r, 1)
+                if type(v) is float:
+                    holidays.append(v)
+        rows: List[Optional[str]] = []
+        labels: List[str] = []
+        for r in range(MEETING_ROWS[0], MEETING_ROWS[1] + 1):
+            d = _of_serial(val("%s!P%d" % (OIS_SHEET, r)))
+            rows.append(_iso(d) if d else None)
+            labels.append(_text(val("%s!O%d" % (OIS_SHEET, r))) or "MPC%d" % (r - MEETING_ROWS[0] + 1))
+        return {"today": today, "spot": spot, "defs": defs, "roots": roots, "holidays": holidays, "rows": rows,
+                "labels": labels, "src": src, "tlref": tlref, "stub": stub}
+
+    # ================================================================== calendar
+    def archive(self) -> List[str]:
+        saved = self.store.get("mpc.archive")
+        if not isinstance(saved, list):
+            saved = list(DEFAULT_PAST_MEETINGS)
+        out = []
+        for d in saved:
+            try:
+                out.append(_iso(_day(str(d))))
+            except ValueError:
+                continue
+        return sorted(set(out))
+
+    def meetings(self, snap: Optional[Dict[str, Any]] = None) -> List[str]:
+        """Every meeting the dashboard knows: the archive and the workbook's list (ISO dates, ascending)."""
+        snap = snap or self.snapshot()
+        return sorted(set(self.archive()) | {d for d in snap["rows"] if d})
+
+    def calendar(self) -> Dict[str, Any]:
+        snap = self.snapshot()
+        spot = snap["spot"] or next_business_day(snap["today"], set())
+        rows = []
+        in_rows = set()
+        for k, d in enumerate(snap["rows"]):
+            if not d:
+                continue
+            in_rows.add(d)
+            rows.append({"date": d, "row": MEETING_ROWS[0] + k, "label": snap["labels"][k], "passed": _day(d) < spot,
+                         "where": "list"})
+        past = [{"date": d, "row": None, "label": "", "passed": True, "where": "archive"} for d in self.archive() if d not in in_rows]
+        items = sorted(past + rows, key=lambda x: x["date"])
+        upcoming = [x for x in items if not x["passed"]]
+        return {"today": _iso(snap["today"]), "spot": _iso(spot), "meetings": items, "slots": MEETING_ROWS[1] - MEETING_ROWS[0] + 1,
+                "passed_in_list": sum(1 for x in rows if x["passed"]),
+                "next": upcoming[0]["date"] if upcoming else None, "gen": self.svc.gen}
+
+    @staticmethod
+    def parse_dates(dates: Sequence[Any]) -> List[str]:
+        out = set()
+        for raw in dates:
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                continue
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                serial = float(raw)
+            else:
+                serial = parse_date(str(raw))
+            d = _of_serial(serial) if serial is not None else None
+            if d is None or not 2000 <= d.year <= 2100:
+                raise ValueError("tarih anlaşılamadı: %r" % (raw,))
+            out.add(_iso(d))
+        return sorted(out)
+
+    def set_calendar(self, user: str, dates: Sequence[Any], roll: bool = False) -> Dict[str, Any]:
+        """Replace the list of meetings.  Dates before the first meeting of the workbook's list go to the
+        archive; with ``roll`` every meeting that has passed does, and the list starts at the next one.
+        Whatever was typed per meeting moves with its meeting."""
+        user = self.svc.require_user(user)
+        try:
+            wanted = self.parse_dates(dates)
+        except ValueError as exc:
+            from .service import ServiceError
+            raise ServiceError(str(exc))
+        res = self.svc.et.call(self._set_calendar, user, wanted, bool(roll))
+        self._snap = None
+        self.svc.bump()
+        self.kick()
+        res["gen"] = self.svc.gen
+        return res
+
+    def roll_calendar(self, user: str) -> Dict[str, Any]:
+        """Take the meetings that have passed out of the workbook's list (into the archive)."""
+        return self.set_calendar(user, self.meetings(), roll=True)
+
+    def _set_calendar(self, user: str, wanted: List[str], roll: bool) -> Dict[str, Any]:
+        from .service import ServiceError, _to_json
+        svc = self.svc
+        book = svc.books.get(BOOK)
+        if book is None:
+            raise ServiceError("TRY çalışma kitabı yüklü değil", 500)
+        snap = self._read_workbook()
+        spot = snap["spot"] or next_business_day(snap["today"], set())
+        old = [d for d in snap["rows"] if d]
+        if any(d is None for d in snap["rows"][:len(old)]):
+            raise ServiceError("OIS sayfasındaki toplantı listesinde boş satır var – önce listeyi düzeltin")
+        cutoff = spot if (roll or not old) else min(_day(old[0]), spot)
+        new = [d for d in wanted if _day(d) >= cutoff]
+        slots = MEETING_ROWS[1] - MEETING_ROWS[0] + 1
+        if len(new) > slots:
+            raise ServiceError("listede en fazla %d toplantı olabilir (%d verildi)" % (slots, len(new)))
+        if not new:
+            raise ServiceError("en az bir gelecek toplantı gerekli")
+        archive = [d for d in wanted if _day(d) < cutoff]
+        moves = align_meetings(old, new)
+        si = book.model.sheet_index[OIS_SHEET]
+        sheet = book.model.sheets[si]
+        r0 = MEETING_ROWS[0]
+        engine = book.engine
+
+        # ---- what was typed per meeting: the workbook's own steps (as everybody sees them) ...
+        source = {j: i for i, j in moves.items() if j is not None}          # new index -> old index
+        shared_set: Dict[Tuple[int, int], Any] = {}
+        shared_clear: List[Tuple[int, int]] = []
+        span = max(len(old), len(new))                  # rows below both lists are left as they are
+        for name in STEP_COLS:
+            c = parse_a1(name + "1") % COLS
+            current = {}
+            for k in range(slots):
+                rc = (r0 + k) * COLS + c
+                current[k] = engine.input_value[si][rc] if rc in engine.input_value[si] else sheet.consts.get(rc)
+            for k in range(span):
+                rc = (r0 + k) * COLS + c
+                value = current[source[k]] if k in source else None
+                base = sheet.consts.get(rc)
+                if value == base and type(value) is type(base):
+                    if rc in engine.input_value[si]:
+                        shared_clear.append((si, rc))
+                elif current[k] != value or type(current[k]) is not type(value):
+                    shared_set[(si, rc)] = value
+        # ---- ... and every user's own steps and saved scenarios
+        cells: Dict[str, Optional[str]] = {}
+        for i in range(span):
+            j = moves.get(i) if i < len(old) else None
+            if j == i:
+                continue
+            for name in STEP_COLS:
+                cells["%s!%s%d" % (OIS_SHEET, name, r0 + i)] = None if j is None else "%s!%s%d" % (OIS_SHEET, name, r0 + j)
+        # ---- the dates
+        pc = parse_a1("P1") % COLS
+        dates: Dict[Tuple[int, int], Any] = {}
+        for k in range(slots):
+            dates[(si, (r0 + k) * COLS + pc)] = _serial(_day(new[k])) if k < len(new) else None
+
+        for key in list(shared_set) + shared_clear + list(dates):
+            if key not in book.inputs:
+                book.declare(book.ref(*key), scope="shared", group="adhoc-shared")
+        if shared_clear:
+            engine.clear_inputs(shared_clear)
+            self.store.clear_shared_inputs(BOOK, [book.ref(*k) for k in shared_clear])
+        changes = dict(shared_set)
+        changes.update(dates)
+        engine.set_inputs(changes)
+        self.store.set_shared_inputs(BOOK, {book.ref(*k): _to_json(v) for k, v in changes.items()}, user)
+        moved = self.store.remap_user_cells(BOOK, cells) if cells else {"moved": 0, "dropped": 0, "scenarios": 0}
+        if cells:
+            for name in list(engine.users):                       # overlays are rebuilt from what is stored now
+                svc._overlays.pop((name, BOOK), None)
+                engine.set_user_inputs(name, svc._overlay(name, book))
+            for key in [k for k in svc._overlays if k[1] == BOOK]:
+                svc._overlays.pop(key, None)
+        self.store.put("mpc.archive", sorted(set(archive)))
+        rolled = [d for d in old if d not in new and _day(d) < cutoff]
+        return {"meetings": len(new), "archive": len(archive), "rolled": rolled, "first": new[0],
+                "moved": moved["moved"], "dropped": moved["dropped"], "scenarios": moved["scenarios"],
+                "changed": sum(1 for i, j in moves.items() if j != i)}
+
+    # ================================================================== fetching closes
+    def kick(self) -> None:
+        self._kick.set()
+
+    def start(self, force: bool = False) -> None:
+        """Keep the history up to date in the background (``force``: also when the setting turns it off)."""
+        if self._thread is not None or self._stop.is_set():
+            return
+        if not force and not getattr(self.svc.settings, "history", True):
+            return
+        self._thread = threading.Thread(target=self._loop, name="tto-history", daemon=True)
+        self._thread.start()
+
+    def request_sync(self, recompute: bool = False) -> Dict[str, Any]:
+        """Ask for an update now (it runs in the background; :meth:`status` tells how far it is)."""
+        if recompute:
+            self._force = True
+        self._empty.clear()                            # series that had no history are asked again
+        self.kick()
+        self.start(force=True)
+        return self.status()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._kick.set()
+        t = self._thread
+        if t is not None:
+            t.join(timeout=8.0)
+        self._thread = None
+        if self._het is not None:
+            self._het.stop()
+            self._het = None
+
+    def _loop(self) -> None:
+        live = self.svc.mode == "live"
+        if live:
+            # the workbook's own requests go first
+            busy = getattr(self.svc.provider, "busy", None)
+            t0 = time.time()
+            while not self._stop.is_set() and time.time() - t0 < 90.0 and (time.time() - t0 < 5.0 or (busy is not None and busy())):
+                self._stop.wait(0.5)
+        while not self._stop.is_set():
+            try:
+                force, self._force = self._force, False
+                self.sync(recompute=force)
+            except Exception as exc:  # noqa: BLE001 - the loop must survive anything
+                self.state["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+                self.state["phase"] = "idle"
+            interval = float(getattr(self.svc.settings, "history_refresh", 900.0) or 0.0)
+            self._kick.wait(interval if (live and interval > 0) else None)
+
+    def sync(self, recompute: bool = False, limit: Optional[int] = None, only: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        """One pass: bring the closes up to date, then run the solver for the days whose inputs changed
+        (newest first; ``limit`` caps how many, ``only`` names the days).  Blocks until done or until
+        :meth:`kick` / :meth:`stop`."""
+        with self._sync_lock:
+            self._kick.clear()
+            st = self.state
+            st["error"] = ""
+            try:
+                st["phase"] = "fetch"
+                fetched = self._fetch()
+                st["fetched"] = fetched
+                if fetched:
+                    self.rev += 1
+                st["phase"] = "mpc"
+                computed = self._compute(recompute, limit, only)
+                st["computed"] = computed
+            finally:
+                st["phase"] = "idle"
+                st["last_sync"] = _dt.datetime.now().replace(microsecond=0).isoformat(sep=" ")
+            return {"fetched": fetched, "computed": computed, "rev": self.rev}
+
+    def _fetch(self) -> int:
+        snap = self.snapshot()
+        today = snap["today"]
+        look = int(self.settings()["lookback_days"])
+        first = today - _dt.timedelta(days=look)
+        bounds = self.store.hist_bounds()
+        now = time.time()
+        full: Dict[str, List[str]] = {}
+        tail: Dict[str, List[str]] = {}
+        for d in snap["defs"]:
+            for t in [d.ticker] + d.alts:
+                sid = "%s|%s" % (t, d.field)
+                b = bounds.get(sid)
+                if b is None:
+                    if now - self._empty.get(sid, 0.0) < 6 * 3600.0:
+                        continue                               # no history a moment ago: not asked again so soon
+                    full.setdefault(d.field, []).append(t)
+                elif _day(b[1]) < today - _dt.timedelta(days=10) or _day(b[0]) > first + _dt.timedelta(days=20):
+                    full.setdefault(d.field, []).append(t)     # a gap, or the window grew
+                else:
+                    tail.setdefault(d.field, []).append(t)
+        prov = self.svc.provider
+        changed = 0
+        end = today.strftime("%Y%m%d")
+        for group, start in ((full, first), (tail, today - _dt.timedelta(days=10))):
+            for field, tickers in group.items():
+                tickers = sorted(set(tickers))
+                if not tickers or self._stop.is_set():
+                    continue
+                got = prov.history([(t, field) for t in tickers], start.strftime("%Y%m%d"), end, timeout=120.0)
+                for t in tickers:
+                    rows = got.get((t, field))
+                    sid = "%s|%s" % (t, field)
+                    if rows:
+                        self._empty.pop(sid, None)
+                        changed += self.store.hist_upsert(sid, [(d, v) for d, v in rows if d <= _iso(today)])
+                    elif sid not in bounds:
+                        self._empty[sid] = now
+        return changed
+
+    # ================================================================== the meeting pricing of past days
+    def _holidays(self, snap: Dict[str, Any], tlref: Dict[str, float]) -> Tuple[List[float], set]:
+        """The workbook's holiday list plus the week days of the past on which TLREF was not fixed (the
+        workbook only lists the holidays still ahead): ``(serials for Motor!A361:A523, set of dates)``."""
+        base = [h for h in snap["holidays"]]
+        known = set(base)
+        extra: List[float] = []
+        if tlref:
+            days = sorted(tlref)
+            d, last = _day(days[0]), _day(days[-1])
+            while d < last:
+                if d.weekday() < 5 and _iso(d) not in tlref and _serial(d) not in known:
+                    extra.append(_serial(d))
+                d += _dt.timedelta(days=1)
+            if len(extra) > 0.08 * max(1, len(days)):
+                extra = []                                     # that many gaps are missing data, not holidays
+        room = HOLIDAY_ROWS[1] - HOLIDAY_ROWS[0] + 1 - len(base)
+        extra = sorted(extra)[-room:] if room > 0 else []
+        serials = sorted(base + extra)
+        return serials, {serial_to_date(x) for x in serials if 20000 < x < 80000}
+
+    def _plan(self, snap: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """The inputs of every day the solver can be run for (newest first) and what they share."""
+        today = snap["today"]
+        look = int(self.settings()["lookback_days"])
+        first = today - _dt.timedelta(days=look)
+        ois = [d for d in snap["defs"] if d.group == "ois"]
+        ref = next((d for d in snap["defs"] if d.group == "ref"), None)
+        ids = [i for d in ois for i in d.ids()] + (ref.ids() if ref else [])
+        data = self.store.hist_many(ids, _iso(first - _dt.timedelta(days=12)), _iso(today))
+        tlref = ref.pick(data)[1] if ref else {}
+        serials, holidays = self._holidays(snap, tlref)
+        axis = weekdays_ending(today, int(look * 5 / 7) + 12)
+        picked = []
+        own: Dict[str, int] = {}                               # day -> tenors with a close of that very day
+        for d in ois:
+            points = d.pick(data)[1]
+            for k in points:
+                own[k] = own.get(k, 0) + 1
+            vals = filled(points, axis, 3)
+            picked.append((d, {_iso(a): v for a, v in zip(axis, vals) if v is not None}))
+        calendar = [_day(d) for d in self.meetings(snap)]
+        shared = {"roots": snap["roots"], "holidays": serials, "tlref_ticker": snap["tlref"]}
+        hol_mark = hashlib.sha1(repr(serials).encode()).hexdigest()[:12]
+        roots_mark = repr(sorted((k, v) for k, v in snap["roots"].items()))
+        tl_days = sorted(tlref)
+        plan: List[Dict[str, Any]] = []
+        day = today
+        while day >= first:
+            if day.weekday() < 5 and day not in holidays:
+                key = _iso(day)
+                quotes = {d.root: pts[key] for d, pts in picked if key in pts}
+                months = [d.months for d, pts in picked if key in pts and d.months]
+                # today's TLREF is the last fixing published by the close of the day
+                fix = None
+                for k in reversed(tl_days):
+                    if k <= key:
+                        fix = tlref[k] if (day - _day(k)).days <= 10 else None
+                        break
+                # a day counts when the market closed on it: carried-forward quotes alone do not make a day
+                if len(quotes) >= MIN_QUOTES and own.get(key, 0) >= MIN_QUOTES and fix is not None:
+                    spot = next_business_day(day, holidays)
+                    meetings = [m for m in calendar if m >= day][:MEETING_ROWS[1] - MEETING_ROWS[0] + 1]
+                    horizon = add_months(spot, int(max(months))) if months else spot
+                    basis = hashlib.sha1(repr((METHOD, key, _iso(spot), fix, sorted(quotes.items()),
+                                               [_iso(m) for m in meetings], hol_mark, roots_mark)).encode()).hexdigest()
+                    plan.append({"day": day, "spot": spot, "tlref": fix, "quotes": quotes, "meetings": meetings,
+                                 "horizon": horizon, "basis": basis})
+            day -= _dt.timedelta(days=1)
+        return plan, shared
+
+    def _compute(self, recompute: bool = False, limit: Optional[int] = None, only: Optional[Sequence[str]] = None) -> int:
+        snap = self.snapshot()
+        if BOOK not in self.svc.books:
+            return 0
+        plan, shared = self._plan(snap)
+        stored = self.store.mpc_days()
+        todo = [p for p in plan if recompute or stored.get(_iso(p["day"]), {}).get("basis") != p["basis"]]
+        window = _iso(snap["today"] - _dt.timedelta(days=int(self.settings()["lookback_days"])))
+        gone = sorted(d for d in set(stored) - {_iso(p["day"]) for p in plan} if d >= window)
+        if gone:
+            self.store.mpc_delete(gone)                        # days that can no longer be computed (older ones are kept)
+            self.rev += 1
+        if only is not None:
+            todo = [p for p in todo if _iso(p["day"]) in set(only)]
+        if limit is not None:
+            todo = todo[:limit]
+        st = self.state
+        st["done"], st["total"] = 0, len(todo)
+        done = 0
+        for p in todo:
+            if self._stop.is_set() or self._kick.is_set():
+                break                                          # asked to stop, or the inputs changed: start over
+            try:
+                res = self._het_call(self._solve, p, shared)
+                note = ""
+                if res["unknown"]:
+                    note = "eksik veri: " + ", ".join(res["unknown"][:6])
+                self.store.mpc_save(_iso(p["day"]), p["basis"],
+                                    {"spot": _iso(p["spot"]), "tlref": p["tlref"], "quotes": len(p["quotes"]),
+                                     "status": res["status"], "note": note, "base": res["base"],
+                                     "decision": res["decision"]}, res["rows"])
+            except Exception as exc:  # noqa: BLE001 - one bad day must not stop the others
+                self.store.mpc_save(_iso(p["day"]), p["basis"],
+                                    {"spot": _iso(p["spot"]), "tlref": p["tlref"], "quotes": len(p["quotes"]),
+                                     "status": "HATA", "note": "%s: %s" % (type(exc).__name__, str(exc)[:160])}, [])
+            done += 1
+            st["done"] = done
+            self.rev += 1
+        return done
+
+    def _het_call(self, fn, *args):
+        if self._het is None:
+            from .service import EngineThread
+            self._het = EngineThread("tto-history-engine")
+        return self._het.call(fn, *args)
+
+    def _solve(self, p: Dict[str, Any], shared: Dict[str, Any]) -> Dict[str, Any]:
+        if self._machine is None or self._machine.provider.tlref_ticker != shared["tlref_ticker"]:
+            self._machine = MpcMachine(self.svc.books[BOOK].model, shared["tlref_ticker"])
+        return self._machine.solve(p["day"], p["spot"], p["tlref"], p["quotes"], p["meetings"], shared["roots"],
+                                   shared["holidays"], p["horizon"])
+
+    # ================================================================== status
+    def status(self) -> Dict[str, Any]:
+        bounds = self.store.hist_bounds()
+        days = self.store.mpc_days()
+        st = dict(self.state)
+        partial = sum(1 for d in days.values() if d.get("status") and d["status"] != "OK")
+        first = min((b[0] for b in bounds.values()), default=None)
+        last = max((b[1] for b in bounds.values()), default=None)
+        st.update({"rev": self.rev, "series": len(bounds), "first_day": first, "last_day": last, "mpc_days": len(days),
+                   "mpc_partial": partial, "mpc_first": min(days) if days else None, "mpc_last": max(days) if days else None,
+                   "running": self._thread is not None and self._thread.is_alive(), "mode": self.svc.mode,
+                   "auto": bool(getattr(self.svc.settings, "history", True)), "settings": self.settings(),
+                   "refresh": float(getattr(self.svc.settings, "history_refresh", 900.0) or 0.0)})
+        return st
+
+    def coverage(self) -> Dict[str, Any]:
+        """What is stored for every series the workbook asks for (the first place to look when a row of the
+        matrix stays empty: a ticker or a field Bloomberg has no history for)."""
+        snap = self.snapshot()
+        bounds = self.store.hist_bounds()
+        rows = []
+        for d in snap["defs"]:
+            for k, t in enumerate([d.ticker] + d.alts):
+                b = bounds.get("%s|%s" % (t, d.field))
+                rows.append({"group": d.group, "label": d.label, "ticker": t, "field": d.field, "alt": k > 0,
+                             "first": b[0] if b else None, "last": b[1] if b else None, "n": b[2] if b else 0})
+        return {"series": rows, "state": self.status()}
+
+    # ================================================================== end-of-day matrix
+    @staticmethod
+    def _changes(values: List[Optional[float]], scale: float) -> Dict[str, Any]:
+        """Last value and its change against 1 / 5 / 21 week days earlier."""
+        last = values[-1]
+        out: Dict[str, Any] = {"last": last}
+        for name, back in (("d1", 1), ("w1", 5), ("m1", 21)):
+            prev = values[-1 - back] if len(values) > back else None
+            out[name] = None if last is None or prev is None else (last - prev) * scale
+            out[name + "_from"] = prev
+        return out
+
+    def matrix(self, asof: Optional[str] = None) -> Dict[str, Any]:
+        """Levels on a day and their change over one day, one week (5 week days) and one month (21 week
+        days) - the convention of the workbook's own Δ1G / Δ1H / Δ1A columns."""
+        snap = self.snapshot()
+        defs: List[SeriesDef] = snap["defs"]
+        bounds = self.store.hist_bounds()
+        core = [i for d in defs if d.group in ("ois", "ref") for i in d.ids() if i in bounds]
+        last_day = max((bounds[i][1] for i in core), default=None) or max((b[1] for b in bounds.values()), default=None)
+        days_with_data: List[str] = []
+        if core:
+            seen = set()
+            for i in core[:6]:
+                seen.update(d for d, _ in self.store.hist_series(i))
+            days_with_data = sorted(seen, reverse=True)[:400]
+        if asof:
+            try:
+                day = _day(asof)
+            except ValueError:
+                from .service import ServiceError
+                raise ServiceError("tarih anlaşılamadı: %s" % asof)
+        elif last_day:
+            day = _day(last_day)
+        else:
+            day = snap["today"]
+        while day.weekday() >= 5:
+            day -= _dt.timedelta(days=1)
+        axis = weekdays_ending(day, 22 + MAX_STALE)
+        data = self.store.hist_many([i for d in defs for i in d.ids()], _iso(axis[0]), _iso(day))
+
+        def entry(d: SeriesDef) -> Optional[Dict[str, Any]]:
+            ticker, points = d.pick(data)
+            if not points:
+                return None
+            vals = filled(points, axis)
+            if vals[-1] is None:
+                return None
+            out = self._changes(vals, 100.0 if d.unit == "pct" else 1.0)
+            out.update({"ticker": ticker, "field": d.field, "unit": d.unit,
+                        "day": max((k for k in points if k <= _iso(day)), default=None)})
+            return out
+
+        ref = next((d for d in defs if d.group == "ref"), None)
+        curve: Dict[float, Dict[str, Any]] = {}
+        for d in defs:
+            if d.group not in ("ois", "off", "xccy") or d.months is None:
+                continue
+            row = curve.setdefault(d.months, {"tenor": d.label, "months": d.months, "ois": None, "off": None})
+            side = "ois" if d.group == "ois" else "off"
+            e = entry(d)
+            if e is not None:
+                e["kind"] = d.group
+                row[side] = e
+            if side == "ois":
+                row["tenor"] = d.label
+        bonds = []
+        for d in defs:
+            if d.group != "dibs":
+                continue
+            e = entry(d) or {"last": None, "d1": None, "w1": None, "m1": None, "ticker": d.ticker, "field": d.field,
+                             "unit": d.unit, "day": None}
+            e.update(d.info)
+            bonds.append(e)
+        bonds.sort(key=lambda b: (b.get("maturity") or "9999", b.get("isin") or ""))
+        out = {"asof": _iso(day), "ref": {"d1": _iso(axis[-2]), "w1": _iso(axis[-6]), "m1": _iso(axis[-22])},
+               "days": days_with_data, "tlref": entry(ref) if ref else None,
+               "curve": [curve[k] for k in sorted(curve)], "bonds": bonds, "mpc": self._mpc_matrix(day, axis),
+               "decision_day": bool((self.store.mpc_days(_iso(day), _iso(day)).get(_iso(day)) or {}).get("decision")),
+               "source": {"ois": snap["src"], "dibs_field": self.settings()["dibs_field"]},
+               "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}
+        return out
+
+    def _mpc_matrix(self, day: _dt.date, axis: List[_dt.date]) -> List[Dict[str, Any]]:
+        rows = self.store.mpc_values(_iso(axis[0]), _iso(day))
+        by_day: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for r in rows:
+            by_day.setdefault(r["day"], {})[r["meeting"]] = r
+        if not by_day:
+            return []
+
+        def at(target: _dt.date) -> Optional[Dict[str, Dict[str, Any]]]:
+            """The last computed day up to ``target`` (not older than a bayram)."""
+            for back in range(0, MAX_STALE + 3):
+                hit = by_day.get(_iso(target - _dt.timedelta(days=back)))
+                if hit is not None:
+                    return hit
+            return None
+
+        now = at(day)
+        if not now:
+            return []
+        refs = {"d1": at(axis[-2]), "w1": at(axis[-6]), "m1": at(axis[-22])}
+        out = []
+        for meeting in sorted(now):
+            cur = now[meeting]
+            item: Dict[str, Any] = {"meeting": meeting, "front": bool(cur["front"]), "sigma": cur["sigma"]}
+            for measure, scale in (("step", 1.0), ("level", 10000.0), ("cum", 1.0)):
+                e: Dict[str, Any] = {"last": cur[measure]}
+                for name, ref in refs.items():
+                    prev = ref.get(meeting) if ref else None
+                    pv = prev[measure] if prev else None
+                    e[name] = None if cur[measure] is None or pv is None else (cur[measure] - pv) * scale
+                    e[name + "_from"] = pv
+                item[measure] = e
+            out.append(item)
+        return out[:12]
+
+    # ================================================================== meeting pricing time series
+    def mpc(self, days: Optional[int] = None, upcoming: int = 16) -> Dict[str, Any]:
+        snap = self.snapshot()
+        today = snap["today"]
+        look = int(days or self.settings()["lookback_days"])
+        start = _iso(today - _dt.timedelta(days=look))
+        meta = self.store.mpc_days(start, _iso(today))
+        rows = self.store.mpc_values(start, _iso(today))
+        axis = sorted(meta)
+        index = {d: i for i, d in enumerate(axis)}
+        cal = self.calendar()
+        info = {m["date"]: m for m in cal["meetings"]}
+        spot = _day(cal["spot"])
+        per: Dict[str, List[Dict[str, Any]]] = {}
+        for r in rows:
+            per.setdefault(r["meeting"], []).append(r)
+        ahead = sorted(m for m in per if _day(m) >= spot)[:max(1, int(upcoming))]
+        held = sorted(m for m in per if _day(m) < spot)
+        ref = next((d for d in snap["defs"] if d.group == "ref"), None)
+        tl: Dict[str, float] = {}
+        if ref is not None:
+            tl = ref.pick(self.store.hist_many(ref.ids(), start, _iso(today + _dt.timedelta(days=5))))[1]
+        tl_days = sorted(tl)
+        meetings = []
+        series: Dict[str, Dict[str, List[Optional[float]]]] = {}
+        for m in held + ahead:
+            pts = sorted(per[m], key=lambda r: r["day"])
+            cols = {k: [None] * len(axis) for k in ("step", "level", "cum")}
+            for r in pts:
+                i = index.get(r["day"])
+                if i is None:
+                    continue
+                for k in cols:
+                    cols[k][i] = r[k]
+            series[m] = cols
+            last = pts[-1]
+            steps = [r["step"] for r in pts if r["step"] is not None]
+            item = {"date": m, "passed": _day(m) < spot, "label": (info.get(m) or {}).get("label") or "",
+                    "where": (info.get(m) or {}).get("where") or "", "n": len(pts), "first_day": pts[0]["day"],
+                    "last_day": last["day"], "last": {k: last[k] for k in ("step", "level", "cum", "sigma")},
+                    "min": min(steps) if steps else None, "max": max(steps) if steps else None}
+            # change of the priced step against 1 / 5 / 21 week days earlier (the matrix's convention)
+            wk = weekdays_ending(_day(last["day"]), 22 + MAX_STALE)
+            chg = self._changes(filled({r["day"]: r["step"] for r in pts if r["step"] is not None}, wk), 1.0)
+            for name in ("d1", "w1", "m1"):
+                item[name] = chg[name]
+            if item["passed"]:
+                # what TLREF did: the fixing after the meeting against the fixing of the meeting day
+                before = next((tl[k] for k in reversed(tl_days) if k <= m), None)
+                after = next((tl[k] for k in tl_days if k > m), None)
+                item["realized"] = None if before is None or after is None else (after - before) * 100.0
+                item["priced"] = last["step"]
+                item["surprise"] = None if item["realized"] is None or last["step"] is None else item["realized"] - last["step"]
+            meetings.append(item)
+        partial = sorted(d for d, x in meta.items() if x.get("status") and x["status"] != "OK")
+        return {"today": _iso(today), "spot": cal["spot"], "days": axis, "meetings": meetings, "series": series,
+                "decision_days": [d for d in axis if meta[d].get("decision")],
+                "tlref": [tl.get(d) if d in tl else next((tl[k] for k in reversed(tl_days) if k <= d), None) for d in axis],
+                "quotes": [meta[d].get("quotes") for d in axis], "partial": len(partial),
+                "status": sorted({x.get("status") or "" for x in meta.values()} - {""}),
+                "notes": sorted({x.get("note") or "" for x in meta.values()} - {""})[:5],
+                "source": snap["src"], "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}

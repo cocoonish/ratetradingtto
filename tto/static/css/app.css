@@ -412,3 +412,37 @@ table.plain.ret input { width: 104px; padding: 4px 8px; text-align: right; }
   .blotter .left { position: static; }
   .ret-layout { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------------------------------------------------------------- history pages (matrix, meeting pricing, settings) */
+.hist-state { font-size: 11.5px; }
+.hist-state.run { color: var(--info); }
+.hist-state.run::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--info);
+  margin-right: 6px; animation: hist-pulse 1.1s ease-in-out infinite; }
+@keyframes hist-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+.panel.chart.full { flex: 1 1 100%; max-width: 100%; }           /* a time series: the whole width of the page */
+.chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 9px 12px 2px; }
+.chips .lbl { color: var(--ink-3); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; margin: 0 2px 0 6px; }
+.chips .lbl:first-child { margin-left: 0; }
+.chips .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--surface); color: var(--ink-2); font-size: 11.5px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.chips .chip:hover { border-color: var(--ink-3); color: var(--ink); }
+.chips .chip.past { border-style: dashed; }
+.chips .chip.on { background: var(--surface-3); color: var(--ink); border-color: var(--ink-3); font-weight: 600; }
+.chips .chip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.set-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+.set-info { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--ink-2); font-size: 12.5px; }
+.set-info b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.set-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.set-actions .grow { flex: 1; }
+.set-scroll { max-height: 56vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.set-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.set-table th { position: sticky; top: 0; background: var(--hd-bg); color: var(--ink-2); font-weight: 600; font-size: 11.5px; text-align: left;
+  padding: 6px 10px; z-index: 1; }
+.set-table td { padding: 3px 10px; border-top: 1px solid var(--line); white-space: nowrap; }
+.set-table td.n { color: var(--ink-3); font-variant-numeric: tabular-nums; width: 34px; }
+.set-table tr.past td { color: var(--ink-3); }
+.set-table tr.changed td { background: var(--input-bg); }
+.set-table input.date { padding: 3px 7px; width: 108px; font-variant-numeric: tabular-nums; }
+.set-table input.date.bad { border-color: var(--neg); }
+.warn-text { color: var(--warn); }
+
