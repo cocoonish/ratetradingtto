@@ -260,8 +260,8 @@ def test_cell_info_and_grid(service):
         service.cell_info(None, "tto", "Yok!A1")
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
     # the dashboard's own sheets come last
-    assert [s["name"] for s in service.sheets("tto")][-5:] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK"]
-    assert len(service.sheets("tto")) == 17 + 5
+    assert [s["name"] for s in service.sheets("tto")][-6:] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS"]
+    assert len(service.sheets("tto")) == 17 + 6
     assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2"] and [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX"]
 
 

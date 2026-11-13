@@ -116,6 +116,10 @@ class Service(object):
         self._listeners: List[Callable[[int], None]] = []
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._view_cache: Dict[Tuple, Dict[str, Any]] = {}
+        # live: when the dashboard saw each security trade today (its last price changed or its volume grew)
+        self._trades_day = ""
+        self._trades_seen: Dict[str, Dict[str, Any]] = {}
+        self._trade_last: Dict[Tuple[str, str], float] = {}
         self._stop = threading.Event()
         self._market_thread: Optional[threading.Thread] = None
         self.started_at = time.time()
@@ -334,12 +338,56 @@ class Service(object):
 
     def _apply_market(self, keys) -> bool:
         changed = False
+        self._note_trades(keys)
         for b in self.books.values():
             if keys and b.engine.market_changed(keys):
                 changed = True
             before = b.engine.shared.evals
             b.engine.clock_tick()
         return changed or bool(keys)
+
+    #: the real-time fields whose change tells that a security traded: its last price, its volume of the day
+    TRADE_FIELDS = ("LAST_PRICE", "VOLUME")
+
+    def _note_trades(self, keys) -> None:
+        """The moment a security traded, as far as the dashboard saw it: its last price changed or its volume of
+        the day grew (a trade at the same price as the one before still adds to the volume).  The first answer of
+        the day is not a trade; a new day starts afresh."""
+        get = getattr(self.provider, "get_bdp", None)
+        if get is None or not keys:
+            return
+        now = _dt.datetime.now()
+        day = now.date().isoformat()
+        if day != self._trades_day:
+            self._trades_day = day
+            self._trades_seen.clear()
+            self._trade_last.clear()
+        for k in keys:
+            if k[0] != "BDP" or len(k) < 4 or k[2] not in self.TRADE_FIELDS or k[3]:
+                continue
+            try:
+                v = get(k)
+            except Exception:  # noqa: BLE001 - a value that cannot be read is no trade
+                continue
+            if type(v) is not float:
+                continue
+            prev = self._trade_last.get((k[1], k[2]))
+            self._trade_last[(k[1], k[2])] = v
+            if prev is None or v == prev or (k[2] == "VOLUME" and v < prev):
+                continue
+            seen = self._trades_seen.setdefault(k[1], {})
+            seen["time"] = now.strftime("%H:%M:%S")
+            seen["by"] = k[2]
+            if k[2] == "LAST_PRICE":
+                seen["price"] = v
+            else:
+                seen["volume"] = v - prev                    # what this trade (or these trades) added
+
+    def trades_seen(self, security: str) -> Optional[Dict[str, Any]]:
+        """When the dashboard saw ``security`` trade today (``None``: not since it started, or not today)."""
+        if self._trades_day != self.today_iso():
+            return None
+        return self._trades_seen.get(security)
 
     def bump(self) -> int:
         with self._gen_lock:
@@ -505,9 +553,13 @@ class Service(object):
             if p.get("add"):
                 # a list of bonds: where an ISIN added goes, and which list of the catalog it is
                 where = p.get("sheet", v.get("sheet"))
-                entry["add"] = dict(p["add"], ref="%s!%s" % (where, p["add"]["list"]), book=v["book"], name=v["id"])
+                lst = p["add"]["list"]
+                entry["add"] = dict(p["add"], ref=lst if "!" in lst else "%s!%s" % (where, lst), book=v["book"],
+                                    name=p["add"].get("name") or v["id"])     # another page's list: by its name
             if p.get("grow"):
                 entry["grow"] = p["grow"]               # more rows than in use: the page shows the filled ones and one more
+            if p.get("card"):
+                entry["card"] = p["card"]               # a click on ▸ opens the bond's card
             sheet = p.get("sheet", sheet_default)
             if sheet is not None and sheet not in book.model.sheet_index:
                 continue                               # a table of the dashboard's own that does not fit this file
@@ -540,6 +592,8 @@ class Service(object):
                         self._asw_fx_columns(book, user, entry["data"], loc)
                     elif p.get("append") == "broker_bonds":
                         self._dibs_broker_columns(book, user, entry["data"], loc)
+                    elif p.get("append") == "dibs_live":
+                        self._dibs_live_columns(book, user, entry["data"], loc)
                 elif p["type"] == "chart":
                     spec = p.get("spec")
                     if spec is None:
@@ -552,6 +606,10 @@ class Service(object):
                         entry["title"] = p.get("title") or entry["data"]["title"]
                 elif p["type"] == "custom":
                     entry["component"] = p.get("component")
+                elif p["type"] == "generated":
+                    entry["type"] = "table"             # a table of the dashboard's own, from no range of a sheet
+                    if p.get("source") == "dibs_tape":
+                        entry["data"] = self._tape_table(user, loc)
                 if p.get("title_ref"):
                     # the caption the workbook keeps in a cell above the chart / table
                     tsi, trc = book.cell(p["title_ref"] if "!" in p["title_ref"] else "%s!%s" % (sheet, p["title_ref"]))
@@ -1700,6 +1758,46 @@ class Service(object):
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
         data["added"] = int(data.get("added") or 0) + 2
 
+    def _board_bonds(self, user: Optional[str]) -> Dict[str, Dict[str, Any]]:
+        """Today's Broker Chat board bond by bond: ISIN -> its row (resets applied), with the yields its prices
+        imply on the DİBS RV screen."""
+        today = self.today_iso()
+        _, table, _ = self._broker_board(user, today, today)
+        said = {r["isin"]: r for r in table if r.get("product") == "DIBS" and r.get("isin")}
+        if said:
+            self._bond_implied(user, [], list(said.values()))
+        return said
+
+    @staticmethod
+    def _bond_cells(q: Optional[Dict[str, Any]], loc) -> List[Dict[str, Any]]:
+        """Bid, ask, last trade (or a level said without a side, soft) and the time of the last word of a bond on
+        the board - four cells, empty for a bond nobody spoke of."""
+        if q is None:
+            return [{"t": "", "k": ""} for _ in range(4)]
+        unit = q.get("unit") or "px"
+
+        def lvl(v: Any, extra: str = "", cls: str = "") -> Dict[str, Any]:
+            if type(v) is not float:
+                return {"t": "", "k": ""}
+            cell = {"t": numfmt.format_value(v, "0.000" if unit == "px" else "0.00", loc) + extra, "v": v, "k": "n"}
+            if cls:
+                cell["cls"] = cls
+            return cell
+
+        last = lvl(q.get("last"), " · biz" if q.get("last_by") == "biz" else "",
+                   "buy" if q.get("last_side") == "ask" else ("sell" if q.get("last_side") == "bid" else ""))
+        if type(q.get("last")) is not float and type(q.get("level")) is float:
+            last = dict(lvl(q["level"], "", "soft"), tip="Seviye (işlem değil): " + (q.get("said") or ""))
+        times = [x for x in (q.get("bid_time"), q.get("ask_time"), q.get("last_time"), q.get("level_time")) if x]
+        return [lvl(q.get("bid")), lvl(q.get("ask")), last,
+                {"t": max(times)[-8:-3] if times else "", "k": "s", "tip": max(times) if times else ""}]
+
+    _BOARD_HEADS = [("Broker bid", "Broker Chat tahtasında bugün duran bid (bono / kuponsuzda getiri)"),
+                    ("Broker ask", "Broker Chat tahtasında bugün duran offer"),
+                    ("Son işlem", "Bugün chat'te geçen son işlem (biz: bizim masanın); işlem yoksa tarafı söylenmemiş son seviye "
+                                  "(ihale fiyatı gibi), soluk"),
+                    ("Saat", "Kâğıt için chat'te söylenen son şeyin saati")]
+
     def _dibs_broker_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """The day's broker chat next to the DİBS RV table: per bond the bid, the ask and the last trade where the
         Broker Chat board has them (resets applied), the time of the last word, the yield the broker mid stands
@@ -1710,32 +1808,12 @@ class Service(object):
             return
         si = book.model.sheet_index[sheet]
         calc = self._calc(user, book)
-        today = self.today_iso()
-        _, table, _ = self._broker_board(user, today, today)
-        said = {r["isin"]: r for r in table if r.get("product") == "DIBS" and r.get("isin")}
-        if said:
-            self._bond_implied(user, [], list(said.values()))
+        said = self._board_bonds(user)
         mkt = self._broker_market(user) if said else None
-
-        def blank() -> Dict[str, Any]:
-            return {"t": "", "k": ""}
-
-        def lvl(v: Any, unit: str, extra: str = "", cls: str = "") -> Dict[str, Any]:
-            if type(v) is not float:
-                return blank()
-            cell = {"t": numfmt.format_value(v, "0.000" if unit == "px" else "0.00", loc) + extra, "v": v, "k": "n"}
-            if cls:
-                cell["cls"] = cls
-            return cell
-
-        heads = [("Broker bid", "Broker Chat tahtasında bugün duran bid (bono / kuponsuzda getiri)"),
-                 ("Broker ask", "Broker Chat tahtasında bugün duran offer"),
-                 ("Son işlem", "Bugün chat'te geçen son işlem (biz: bizim masanın); işlem yoksa tarafı söylenmemiş son seviye "
-                               "(ihale fiyatı gibi), soluk"),
-                 ("Saat", "Kâğıt için chat'te söylenen son şeyin saati"),
-                 ("Broker getiri %", "Broker orta fiyatının ima ettiği getiri: ekran getirisi − (fiyat − ekran fiyatı) / (ekran fiyatı · mod. süre); "
-                                     "bonoda kotanın kendisi"),
-                 ("Broker − ekran (bp)", "Broker orta getirisi − ekran getirisi (DİBS RV): + ise brokerlar kâğıdı ekrandan ucuz görüyor")]
+        heads = self._BOARD_HEADS + [
+            ("Broker getiri %", "Broker orta fiyatının ima ettiği getiri: ekran getirisi − (fiyat − ekran fiyatı) / (ekran fiyatı · mod. süre); "
+                                "bonoda kotanın kendisi"),
+            ("Broker − ekran (bp)", "Broker orta getirisi − ekran getirisi (DİBS RV): + ise brokerlar kâğıdı ekrandan ucuz görüyor")]
         for i, r in enumerate(rnums):
             if r == 4:
                 rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in heads])
@@ -1745,14 +1823,9 @@ class Service(object):
                 v = calc.get(si, r, 1)
                 q = said.get("".join(str(v).split()).upper()) if isinstance(v, str) and v.strip() else None
             if q is None:
-                rows[i].extend([blank() for _ in heads])
+                rows[i].extend([{"t": "", "k": ""} for _ in heads])
                 continue
             unit = q.get("unit") or "px"
-            times = [x for x in (q.get("bid_time"), q.get("ask_time"), q.get("last_time"), q.get("level_time")) if x]
-            last = lvl(q.get("last"), unit, " · biz" if q.get("last_by") == "biz" else "",
-                       "buy" if q.get("last_side") == "ask" else ("sell" if q.get("last_side") == "bid" else ""))
-            if type(q.get("last")) is not float and type(q.get("level")) is float:
-                last = dict(lvl(q["level"], unit, "", "soft"), tip="Seviye (işlem değil): " + (q.get("said") or ""))
             # the yield of the mid (of one side when only one stands; of the last trade when no side stands)
             imp = q.get("implied") or {}
             if unit == "yld":
@@ -1765,16 +1838,218 @@ class Service(object):
                 screen = imp.get("screen_yield")
             mid = sum(sides) / len(sides) if sides else None
             gap = (mid - screen) * 100.0 if mid is not None and type(screen) is float else None
-            gap_cell = blank()
+            gap_cell: Dict[str, Any] = {"t": "", "k": ""}
             if gap is not None:
                 gap_cell = {"t": ("+" if gap > 0 else "") + numfmt.format_value(gap, "0", loc), "v": gap, "k": "n"}
                 if abs(gap) >= 0.5:
                     gap_cell["c"] = "pos" if gap > 0 else "neg"
-            rows[i].extend([lvl(q.get("bid"), unit), lvl(q.get("ask"), unit), last,
-                            {"t": max(times)[-8:-3] if times else "", "k": "s", "tip": max(times) if times else ""},
-                            lvl(mid, "yld"), gap_cell])
-        data["c"] = list(data.get("c") or []) + [h for h, _ in heads]
-        data["added"] = int(data.get("added") or 0) + len(heads)
+            mid_cell = {"t": numfmt.format_value(mid, "0.00", loc), "v": mid, "k": "n"} if mid is not None else {"t": "", "k": ""}
+            rows[i].extend(self._bond_cells(q, loc) + [mid_cell, gap_cell])
+        # ▸: the bond's card
+        for i, r in enumerate(rnums):
+            v = calc.get(si, r, 1) if 5 <= r <= 54 else None
+            code = "".join(str(v).split()).upper() if isinstance(v, str) else ""
+            if r == 4:
+                rows[i].append({"t": "Kart", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdın bütün bilgisi tek pencerede"})
+            else:
+                rows[i].append({"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code} if code else {"t": "", "k": ""})
+        data["c"] = list(data.get("c") or []) + [h for h, _ in heads] + ["Kart"]
+        data["added"] = int(data.get("added") or 0) + len(heads) + 1
+
+    def _dibs_live_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
+        """The DİBS Canlı table, completed: the last trade of each value date at the time the dashboard saw it
+        (live: its last price changed or its volume grew today) instead of Bloomberg's day of the last trade, and
+        the day's Broker Chat board on the right."""
+        sheet = ex.LIVE_SHEET
+        rows, rnums, cols = data.get("rows") or [], data.get("r") or [], list(data.get("c") or [])
+        if not rows or sheet not in book.model.sheet_index:
+            return
+        si = book.model.sheet_index[sheet]
+        calc = self._calc(user, book)
+        layout = ex._live_cols()
+        said = self._board_bonds(user)
+        where = {g["when"]: (cols.index(g["when"]), layout["sec"][k]) for k, g in enumerate(layout["groups"]) if g["when"] in cols}
+        for i, r in enumerate(rnums):
+            if r == 4:
+                rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in self._BOARD_HEADS]
+                               + [{"t": "Kart", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdın bütün bilgisi tek pencerede"}])
+                continue
+            if not ex.LIVE_FIRST <= r <= ex.LIVE_LAST:
+                rows[i].extend([{"t": "", "k": ""} for _ in range(len(self._BOARD_HEADS) + 1)])
+                continue
+            isin = calc.get(si, r, 1)
+            isin = "".join(str(isin).split()).upper() if isinstance(isin, str) else ""
+            for col, (j, sec_col) in where.items():
+                sec = calc.get(si, r, parse_a1("%s1" % sec_col) % COLS)
+                seen = self.trades_seen(sec) if isinstance(sec, str) and sec else None
+                if seen and j < len(rows[i]):
+                    cell = dict(rows[i][j])
+                    was = cell.get("t") or ""
+                    cell.update({"t": "bugün " + seen["time"], "k": "s", "cls": "fresh",
+                                 "tip": "Dashboard'un bu kâğıtta işlem gördüğü an: %s %s"
+                                        % ("son fiyat" if seen.get("by") == "LAST_PRICE" else "hacim arttı", seen["time"])
+                                        + (" · fiyat %s" % numfmt.format_value(seen["price"], "0.000", loc) if type(seen.get("price")) is float else "")
+                                        + (" · Bloomberg son işlem günü: %s" % was if was else "")})
+                    rows[i][j] = cell
+            rows[i].extend(self._bond_cells(said.get(isin) if isin else None, loc))
+            rows[i].append({"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + isin} if isin else {"t": "", "k": ""})
+        data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
+        data["added"] = int(data.get("added") or 0) + len(self._BOARD_HEADS) + 1
+
+    def _live_securities(self, user: Optional[str], book) -> Dict[str, Tuple[str, str, str]]:
+        """The securities of the DİBS Canlı sheet: Bloomberg security -> (ISIN, value date caption, source)."""
+        out: Dict[str, Tuple[str, str, str]] = {}
+        if ex.LIVE_SHEET not in book.model.sheet_index:
+            return out
+        si = book.model.sheet_index[ex.LIVE_SHEET]
+        calc = self._calc(user, book)
+        layout = ex._live_cols()
+        for r in range(ex.LIVE_FIRST, ex.LIVE_LAST + 1):
+            isin = calc.get(si, r, 1)
+            if not isinstance(isin, str) or not isin:
+                continue
+            for k, g in enumerate(layout["groups"]):
+                sec = calc.get(si, r, parse_a1("%s1" % layout["sec"][k]) % COLS)
+                src = calc.get(si, *divmod(parse_a1(g["src"]), COLS))
+                if isinstance(sec, str) and sec:
+                    out[sec] = (isin, g["cap"], str(src or ""))
+        return out
+
+    def _dibs_tape(self, user: Optional[str], loc, isin: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Today's bond trades, newest first: the ones said in the Broker Chat (time, bond, price, the yield it
+        stands for, the side taken, the value date, who said it) and - live - the ones the dashboard saw on
+        Bloomberg (a value date's last price changed or its volume grew).  ``isin``: one bond only."""
+        from . import bonds as bd
+        today = self.today_iso()
+        rows, _, _ = self._broker_board(user, today, today)
+        trades = [q for q in rows if q.get("ok") and q.get("product") == "DIBS" and q.get("event") == "trade"
+                  and (isin is None or q.get("isin") == isin)]
+        self._bond_implied(user, trades)
+        out: List[Dict[str, Any]] = []
+        for q in trades:
+            imp = (q.get("implied") or {}).get("price") if q.get("unit") == "px" else q.get("price")
+            out.append({"time": q.get("time") or "", "isin": q.get("isin") or "", "label": q.get("label") or "",
+                        "price": q.get("price"), "unit": q.get("unit") or "px", "yield": imp if type(imp) is float else None,
+                        "side": q.get("side") or "", "settle": q.get("settle") or "", "flags": list(q.get("flags") or []),
+                        "who": ("Biz" if q.get("party") == "biz" else (q.get("source") or "Broker"))
+                               + (" · " + q["sender"] if q.get("sender") else ""), "note": q.get("note") or "", "from": "chat"})
+        book = self.books.get("tto")
+        if book is not None and self._trades_day == today and self._trades_seen:
+            for sec, (code, cap, src) in self._live_securities(user, book).items():
+                seen = self._trades_seen.get(sec)
+                if not seen or (isin is not None and code != isin):
+                    continue
+                b = bd.by_isin(code)
+                out.append({"time": seen["time"], "isin": code, "label": bd.short_label(b) if b else code,
+                            "price": seen.get("price"), "unit": "px",            # Borsa İstanbul trades on the price
+                            "yield": None, "side": "", "settle": cap, "flags": [],
+                            "who": "Bloomberg · " + src, "note": "son fiyat değişti" if seen.get("by") == "LAST_PRICE" else "hacim arttı",
+                            "from": "bloomberg"})
+        out.sort(key=lambda x: x["time"], reverse=True)
+        return out
+
+    def _tape_table(self, user: Optional[str], loc) -> Dict[str, Any]:
+        """The tape as a table of the page (generated, no cell of a sheet)."""
+        heads = ["Saat", "Kâğıt", "ISIN", "Fiyat", "Getiri %", "Taraf", "Valör", "Kim", "Not", "Kart"]
+        rows = [[{"t": x, "k": "s", "b": 1, "f": "hd"} for x in heads]]
+        for x in self._dibs_tape(user, loc):
+            px = x["price"]
+            side = {"ask": "offer alındı", "bid": "bid'e verildi"}.get(x["side"], "")
+            rows.append([
+                {"t": x["time"], "k": "s"}, {"t": x["label"], "k": "s", "b": 1}, {"t": x["isin"], "k": "s", "cls": "soft"},
+                {"t": numfmt.format_value(px, "0.000" if x["unit"] == "px" else "0.00", loc), "v": px, "k": "n",
+                 "cls": "buy" if x["side"] == "ask" else ("sell" if x["side"] == "bid" else "")} if type(px) is float else {"t": "", "k": ""},
+                {"t": numfmt.format_value(x["yield"], "0.00", loc), "v": x["yield"], "k": "n", "cls": "soft"}
+                if type(x["yield"]) is float else {"t": "", "k": ""},
+                {"t": side, "k": "s"}, {"t": x["settle"], "k": "s"},
+                {"t": x["who"], "k": "s", "cls": "soft" if x["from"] == "bloomberg" else ""},
+                {"t": x["note"], "k": "s", "cls": "soft"},
+                {"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + x["isin"]} if x["isin"] else {"t": "", "k": ""}])
+        if len(rows) == 1:
+            rows.append([{"t": "Bugün henüz DİBS işlemi yok (Broker Chat'te söylenen ya da canlıda Bloomberg'de görülen)", "k": "s",
+                          "cls": "soft", "cs": len(heads)}] + [{"t": "", "k": ""} for _ in heads[1:]])
+        return {"rows": rows, "r": list(range(1, len(rows) + 1)), "c": [index_to_col(k + 1) for k in range(len(heads))],
+                "added": len(heads), "tape": True}
+
+    def bond_card(self, user: Optional[str], isin: str) -> Dict[str, Any]:
+        """Everything the dashboard has on one bond: what it is (the catalog), its row of DİBS RV (yield, ASW,
+        signal, duration, DV01, carry), its prices on each value date with the last trades, the implied repo,
+        today's Broker Chat board and lines, and its trades of the day."""
+        return self.et.call(self._bond_card, user, isin)
+
+    def _bond_card(self, user, isin) -> Dict[str, Any]:
+        from . import bonds as bd
+        code = "".join(str(isin or "").split()).upper()
+        if not code:
+            raise ServiceError("ISIN gerekli")
+        loc = numfmt.get_locale(self.settings.locale)
+        b = bd.by_isin(code)
+        out: Dict[str, Any] = {"isin": code, "known": b is not None, "label": bd.short_label(b) if b else code,
+                               "kind": (b or {}).get("kind"), "kind_text": bd.KINDS.get((b or {}).get("kind"), ""),
+                               "coupon": (b or {}).get("coupon"), "maturity": (b or {}).get("maturity"), "name": (b or {}).get("name") or ""}
+        if b:
+            mat = _dt.date.fromisoformat(b["maturity"])
+            today = _dt.date.fromisoformat(self.today_iso())
+            out["days"] = (mat - today).days
+            out["years"] = round(out["days"] / 365.25, 2)
+        book = self.books.get("tto")
+        out["rv"], out["live"], out["repo"] = [], [], []
+        if book is not None:
+            calc = self._calc(user_key(user) if user else None, book)
+            R = self.renderers[book.id]
+            info = bl.bond_info(book, calc, code)
+            if info and "".join(str(info.get("isin") or "").split()).upper() == code:
+                si = book.model.sheet_index["DİBS RV"]
+                sh = book.model.sheets[si]
+                want = ("Tip", "Kupon", "Fiyat durumu", "Kullanılan temiz", "Valör", "Kirli", "BIST bileşik getiri", "Alış−satış",
+                        "Getiri − OIS", "ASW (S/B)", "Uydurulmuş ASW (bp)", "Pahalı/ucuz (bp", "Sinyal", "ASW FX swap", "Pahalı/ucuz FX",
+                        "Mod. süre", "DV01 TL", "C+R (bp)", "Son işlem tarihi", "Son işlem fiyatı", "Bugün düşük", "Bugün yüksek")
+                for c in range(1, sh.max_col + 1):
+                    cap = sh.consts.get(4 * COLS + c)
+                    if isinstance(cap, str) and any(cap.strip().startswith(w) for w in want):
+                        cell = R.cell(calc, si, info["row"], c, loc)
+                        if str(cell.get("t") or "").strip():
+                            out["rv"].append({"name": cap.strip(), "t": cell.get("t"), "c": cell.get("c")})
+                out["row"] = info["row"]
+            if ex.LIVE_SHEET in book.model.sheet_index:
+                si = book.model.sheet_index[ex.LIVE_SHEET]
+                layout = ex._live_cols()
+                row = next((r for r in range(ex.LIVE_FIRST, ex.LIVE_LAST + 1) if calc.get(si, r, 1) == code), None)
+                if row is not None:
+                    def txt(addr: str) -> str:
+                        r0, c0 = divmod(parse_a1(addr), COLS)
+                        return str(R.cell(calc, si, r0, c0, loc).get("t") or "")
+                    for k, g in enumerate(layout["groups"]):
+                        sec = calc.get(si, row, parse_a1("%s1" % layout["sec"][k]) % COLS)
+                        seen = self.trades_seen(sec) if isinstance(sec, str) else None
+                        out["live"].append({"cap": g["cap"], "src": txt(g["src"]), "date": txt(g["date"]),
+                                            "bid": txt("%s%d" % (g["bid"], row)), "ask": txt("%s%d" % (g["ask"], row)),
+                                            "last": txt("%s%d" % (g["last"], row)), "when": txt("%s%d" % (g["when"], row)),
+                                            "vol": txt("%s%d" % (g["vol"], row)), "seen": seen["time"] if seen else ""})
+                    w, x, y = ex.LIVE_REPO
+                    for name, col in (("T0→T1 repo %", w), ("T1→T2 repo %", x), ("T0→T1 − TLREF (bp)", y)):
+                        out["repo"].append({"name": name, "t": txt("%s%d" % (col, row))})
+                    extra = ex.LIVE_EXTRA
+                    out["extra"] = {"src": txt("%s2" % extra), "bid": txt("%s%d" % (extra, row)),
+                                    "ask": txt("%s%d" % (index_to_col(ex._col(extra) + 1), row))}
+        board = self._board_bonds(user).get(code)
+        out["board"] = None
+        if board is not None:
+            cells = self._bond_cells(board, loc)
+            out["board"] = {"bid": cells[0]["t"], "ask": cells[1]["t"], "last": cells[2]["t"], "time": cells[3]["t"],
+                            "implied": {k: v for k, v in (board.get("implied") or {}).items() if k in ("bid", "ask", "last", "screen_yield")}}
+        today = self.today_iso()
+        lines = [q for q in self.store.broker_quotes(today, today) if q.get("ok") and q.get("isin") == code]
+        people = self._people()
+        out["chat"] = []
+        for q in lines:
+            source, party = self._who(people, q, q.get("source") or "", q.get("party") or "")
+            out["chat"].append({"time": q.get("time"), "who": ("Biz" if party == "biz" else (source or "Broker"))
+                                + (" · " + q["sender"] if q.get("sender") else ""), "raw": q.get("raw") or "",
+                                "event": q.get("event"), "side": q.get("side"), "bid": q.get("bid"), "ask": q.get("ask"),
+                                "price": q.get("price"), "unit": q.get("unit")})
+        out["tape"] = self._dibs_tape(user, loc, code)
+        return out
 
     # ================================================================== the order of the pricing sources
     def sources(self) -> Dict[str, Any]:

@@ -6,7 +6,7 @@ What the workbook asks for                       how it is served
 -----------------------------------------------  ------------------------------------------------------------
 ``BDP`` real-time fields (BID, ASK, MID,          one ``ReferenceDataRequest`` for the first value, then a
 PX_LAST, LAST_PRICE, PX_BID/ASK/MID, HIGH, LOW,   ``//blp/mktdata`` subscription keeps it up to date (streaming
-BID_SIZE, ASK_SIZE) without overrides             does not use up the daily data limit)
+BID_SIZE, ASK_SIZE, VOLUME) without overrides     does not use up the daily data limit)
 other ``BDP`` fields / ``BDP`` with overrides     ``ReferenceDataRequest``, refreshed on a slow schedule
 ``BDH``                                           ``HistoricalDataRequest`` (Days / Fill / Per / Dates options)
 ``BDS``                                           ``ReferenceDataRequest`` on the bulk field
@@ -53,7 +53,8 @@ MKTDATA = "//blp/mktdata"
 #: BDP field -> name of the same quantity in a market-data subscription
 RT_FIELDS = {"BID": "BID", "ASK": "ASK", "MID": "MID", "LAST_PRICE": "LAST_PRICE", "PX_LAST": "LAST_PRICE",
              "PX_BID": "BID", "PX_ASK": "ASK", "PX_MID": "MID", "HIGH": "HIGH", "LOW": "LOW",
-             "BID_SIZE": "BID_SIZE", "ASK_SIZE": "ASK_SIZE"}      # order sizes of the BIST swap quotes
+             "BID_SIZE": "BID_SIZE", "ASK_SIZE": "ASK_SIZE",      # order sizes of the BIST swap quotes
+             "VOLUME": "VOLUME"}                                  # the day's volume: it grows with every trade (DİBS Canlı)
 
 #: Real-time fields that are gone when a tick carries them without a value: the size of an order.  Shown as
 #: "#N/A N/A" then, as in Excel, so that a quote which was withdrawn does not stay on the page.  (A price

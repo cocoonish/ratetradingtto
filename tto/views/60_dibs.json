@@ -146,7 +146,8 @@
     "catalog": true,
     "title": "DİBS RV listesine kâğıt ekle"
    },
-   "append": "broker_bonds"
+   "append": "broker_bonds",
+   "card": "bond"
   },
   {
    "id": "B4",

@@ -71,7 +71,10 @@ def test_panels_and_inputs_point_at_real_cells(models, view):
     assert view["sheet"] in model.sheet_index
     assert view["title"] and view["group"]
     for p in view["panels"]:
-        assert p["type"] in ("table", "notes", "chart")
+        assert p["type"] in ("table", "notes", "chart", "generated")
+        if p["type"] == "generated":
+            assert p.get("source") in ("dibs_tape",) and p.get("title"), (view["id"], p)   # a table of the dashboard's own
+            continue
         sheet = model.sheet(p.get("sheet", view["sheet"]))          # a panel may show another sheet of the book
         if p["type"] == "chart":
             if "spec" in p:

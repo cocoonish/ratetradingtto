@@ -653,3 +653,20 @@ table.plain.isins td.mono { font-family: var(--mono, ui-monospace, monospace); }
 table.plain.isins tr.have td { color: var(--ink-3); }
 #isin-text { width: 100%; font-family: var(--mono, ui-monospace, monospace); }
 
+
+/* bonds: ▸ opens a bond's card; a trade the dashboard saw today; the card */
+table.grid td.cardlink { cursor: pointer; color: var(--accent-ink); font-weight: 700; text-align: center; }
+table.grid td.cardlink:hover { background: var(--accent-soft, rgba(80, 140, 255, .14)); }
+table.grid td.fresh, table.plain td.fresh { color: var(--pos, #2e9d5b); font-weight: 650; }
+.modal.bondcard .mbody { max-height: 74vh; overflow: auto; }
+.modal.bondcard .facts { margin: 0 0 6px; color: var(--ink-2); }
+.modal.bondcard h3 { margin: 14px 0 6px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
+.modal.bondcard table.plain { width: 100%; }
+.modal.bondcard table.plain.nums td:not(.l), .modal.bondcard table.plain.nums th:not(.l) { text-align: right; font-variant-numeric: tabular-nums; }
+.modal.bondcard table.plain td.said { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
+.modal.bondcard .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 4px 14px; }
+.modal.bondcard .kv > div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); padding: 3px 0; }
+.modal.bondcard .kv .k { color: var(--ink-3); font-size: 11.5px; }
+.modal.bondcard .kv .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+.modal.bondcard .kv .v.pos { color: var(--pos, #2e9d5b); }
+.modal.bondcard .kv .v.neg { color: var(--neg, #d0504f); }

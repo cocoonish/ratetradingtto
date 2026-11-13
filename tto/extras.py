@@ -1162,13 +1162,169 @@ _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", 
              "N": NUM4, "O": INT0, "P": NUM4, "Q": INT0}
 
 
+# ---------------------------------------------------------------------------------------------- DİBS live
+LIVE_SHEET = "EK_DIBS"
+LIVE_FIRST, LIVE_LAST = 5, 54          # the rows of the DİBS RV list, row for row
+#: the value dates: (caption, first visible column, default Bloomberg pricing source, business days after today)
+LIVE_GROUPS = (("T0", "F", "ISL0", 0), ("T1", "K", "ISL1", 1), ("T2", "P", "ISL2", 2))
+LIVE_EXTRA = "U"                       # one more pricing source of the desk's choice: bid / ask (BGN to start with)
+LIVE_REPO = ("W", "X", "Y")            # O/N repo implied T0 -> T1, T1 -> T2, T0 -> T1 against TLREF (bp)
+LIVE_HELP = "AA"                       # the helper columns start here: securities, Bloomberg's answers, mids
+_LIVE_FIELDS = ("bid", "ask", "last", "date", "vol", "acc")
+
+
+def _live_cols() -> Dict[str, Any]:
+    """Where everything of the EK_DIBS sheet is (column letters)."""
+    from .xl.tokenizer import col_to_index
+    h = col_to_index(LIVE_HELP)
+    out: Dict[str, Any] = {"sec": [index_to_col(h + k) for k in range(3)], "sec_extra": index_to_col(h + 3), "raw": [],
+                           "groups": []}
+    at = h + 4
+    for k, (cap, first, src, days) in enumerate(LIVE_GROUPS):
+        out["raw"].append({f: index_to_col(at + i) for i, f in enumerate(_LIVE_FIELDS)})
+        at += len(_LIVE_FIELDS)
+        c = col_to_index(first)
+        out["groups"].append({"cap": cap, "src": "%s2" % first, "date": "%s2" % index_to_col(c + 1), "default": src, "days": days,
+                              "bid": first, "ask": index_to_col(c + 1), "last": index_to_col(c + 2),
+                              "when": index_to_col(c + 3), "vol": index_to_col(c + 4)})
+    out["raw_extra"] = {"bid": index_to_col(at), "ask": index_to_col(at + 1)}
+    out["mid"] = [index_to_col(at + 2 + k) for k in range(3)]
+    out["last_help"] = index_to_col(at + 4)
+    return out
+
+
+def _dibs_live_check(model: Model) -> None:
+    _need_sheets(model, "DİBS RV", "Motor", "OIS_MAIN")
+    _need_formula(model, "DİBS RV", "BT5", '"/isin/"&$A5&"@"&BS5')      # the security as the sheet writes it
+    _need_formula(model, "DİBS RV", "BS5", "$B$2")
+    for addr, has in (("K5", "FD5"), ("L5", "FE5"), ("AS5", "FX5"), ("I5", "DA5"), ("CW5", "CF5"), ("DC5", 'BS5="ISL0"'),
+                      ("DC5", "Motor!$A$361:$A$523")):
+        _need_formula(model, "DİBS RV", addr, has)
+
+
+def _tto_dibs_live(model: Model) -> None:
+    """The bonds of the DİBS RV list on the three value dates of Borsa İstanbul: per value date (T0, T1, T2 - a
+    Bloomberg pricing source each, typed over freely) the bid, the ask, the last trade with its day and the
+    volume; the bid / ask of one more source; and the overnight repo the prices imply between the value dates
+    (dirty prices: the clean price plus the accrued interest of each value date), against TLREF.
+
+    The value date the DİBS RV row itself is priced on is read from that sheet (the same Bloomberg call), so the
+    recorded file shows it offline; the other value dates ask Bloomberg."""
+    b = SheetBuilder(model, LIVE_SHEET)
+    L = _live_cols()
+    rv = "'DİBS RV'!"
+    hol = "Motor!$A$361:$A$523"
+    b.title("A1", "DİBS CANLI  ·  T0 / T1 / T2 fiyatları, son işlem, ek kaynak, ima O/N repo  (DİBS RV listesindeki kâğıtlar)")
+    b.set("A2", "Kaynak · valör", bold=True)
+    for g in L["groups"]:
+        b.input(g["src"], g["default"], align="center")
+        when = "TODAY()" if g["days"] == 0 else "WORKDAY(TODAY(),%d,%s)" % (g["days"], hol)
+        b.set(g["date"], "=" + when, fmt=DATE, color=NOTE_COLOR)
+        b.set("%s3" % g["bid"], "%s · aynı gün" % g["cap"] if g["days"] == 0 else "%s · %d iş günü sonra" % (g["cap"], g["days"]),
+              bold=True)
+    b.input("%s2" % LIVE_EXTRA, "BGN", align="center")
+    b.set("%s3" % LIVE_EXTRA, "Ek kaynak", bold=True)
+    w, x, y = LIVE_REPO
+    b.set("%s2" % w, "TLREF (O/N, %)", color=NOTE_COLOR, align="right")
+    b.set("%s2" % x, "=OIS_MAIN!$J$2*100", fmt="0.00", color=NOTE_COLOR)
+    b.set("%s3" % w, "İma O/N repo (kirli fiyatlardan, ACT/365)", bold=True)
+    heads = ["ISIN", "Kâğıt", "Tip", "Vade", "Kupon"]
+    for g in L["groups"]:
+        heads += ["%s bid" % g["cap"], "%s ask" % g["cap"], "%s son işlem" % g["cap"], "%s son işlem günü" % g["cap"],
+                  "%s hacim" % g["cap"]]
+    heads += ["Ek bid", "Ek ask", "T0→T1 repo %", "T1→T2 repo %", "T0→T1 − TLREF (bp)"]
+    b.head("A4", heads)
+    b.head("%s4" % LIVE_HELP, ["Menkul T0", "Menkul T1", "Menkul T2", "Menkul ek"]
+           + ["%s %s" % (g["cap"], f) for g in L["groups"] for f in ("bid", "ask", "son", "gün", "hacim", "işlemiş")]
+           + ["Ek bid", "Ek ask", "Orta T0", "Orta T1", "Orta T2"])
+
+    def source(cell: str, default: str) -> str:
+        """The pricing source typed in a cell (its default when the cell was emptied)."""
+        return 'IF(TRIM(%s&"")="","%s",TRIM(UPPER(%s)))' % (cell, default, cell)
+
+    def security(src: str, default: str, r: int) -> str:
+        s = source(src, default)
+        return ('=IF($A{r}="","",IF({rv}$N$2="/isin/","/isin/"&$A{r}&"@"&{s},$A{r}&" @"&{s}&" "&{rv}$N$2))'
+                .format(r=r, rv=rv, s=s))
+
+    def clean(ref: str) -> str:
+        return '=IFERROR(IF(N(%s)>0,%s,""),"")' % (ref, ref)
+
+    for r in range(LIVE_FIRST, LIVE_LAST + 1):
+        b.set("A%d" % r, '=IF(TRIM(%s$A%d&"")="","",UPPER(TRIM(%s$A%d&"")))' % (rv, r, rv, r))
+        b.set("B%d" % r, '=IF($A{r}="","",IF(ISNUMBER({rv}$E{r}),TEXT({rv}$E{r},"dd.mm.yy")&IF({rv}$D{r}="T"," TLREF",'
+                         'IF({rv}$D{r}="E"," TÜFE",IF({rv}$D{r}="B"," Bono",""))),$A{r}))'.format(r=r, rv=rv), bold=True)
+        b.set("C%d" % r, '=IF($A{r}="","",{rv}$D{r})'.format(r=r, rv=rv), align="center")
+        b.set("D%d" % r, '=IF($A{r}="","",{rv}$E{r})'.format(r=r, rv=rv), fmt=DATE)
+        b.set("E%d" % r, '=IF($A{r}="","",{rv}$G{r})'.format(r=r, rv=rv), fmt="0.00%")
+        for k, g in enumerate(L["groups"]):
+            sec = "$%s%d" % (L["sec"][k], r)
+            raw = L["raw"][k]
+            src_cell = "$%s$2" % g["src"][:-1]
+            b.set("%s%d" % (L["sec"][k], r), security(src_cell, g["default"], r))
+            same = 'AND($A{r}<>"",{s}={rv}$BS{r})'.format(r=r, s=source(src_cell, g["default"]), rv=rv)
+            own = {"bid": "$K", "ask": "$L", "last": "$AS", "date": "$I"}
+            fields = {"bid": "PX_BID", "ask": "PX_ASK", "last": "LAST_PRICE", "date": "LAST_TRADE_DATE"}
+            for f in ("bid", "ask", "last", "date"):
+                b.set("%s%d" % (raw[f], r), '=IF($A{r}="","",IF({same},{rv}{own}{r},_xll.BDP({sec},"{fld}")))'.format(
+                    r=r, same=same, rv=rv, own=own[f], sec=sec, fld=fields[f]))
+            b.set("%s%d" % (raw["vol"], r), '=IF($A{r}="","",_xll.BDP({sec},"VOLUME"))'.format(r=r, sec=sec))
+            b.set("%s%d" % (raw["acc"], r),
+                  '=IF($A{r}="","",IF({rv}$D{r}="B",0,IF(AND({same},${d}=({rv}$DC{r})),{rv}$CW{r},'
+                  '_xll.BDP({sec},"INT_ACC","SETTLE_DT",${d}))))'.format(r=r, rv=rv, same=same, sec=sec,
+                                                                       d=g["date"][:-1] + "$2"))
+            b.set("%s%d" % (g["bid"], r), clean("%s%d" % (raw["bid"], r)), fmt="0.000")
+            b.set("%s%d" % (g["ask"], r), clean("%s%d" % (raw["ask"], r)), fmt="0.000")
+            b.set("%s%d" % (g["last"], r), clean("%s%d" % (raw["last"], r)), fmt="0.000", bold=True)
+            d = "%s%d" % (raw["date"], r)
+            b.set("%s%d" % (g["when"], r),
+                  '=IFERROR(IF(ISNUMBER({d}),IF({d}>0,{d},""),IF(TRIM({d}&"")="","",DATE(VALUE(RIGHT({d},4)),'
+                  'VALUE(MID({d},FIND(".",{d})+1,FIND(".",{d},FIND(".",{d})+1)-FIND(".",{d})-1)),VALUE(LEFT({d},FIND(".",{d})-1))))),"")'
+                  .format(d=d), fmt=DATE)
+            b.set("%s%d" % (g["vol"], r), clean("%s%d" % (raw["vol"], r)), fmt=INT0)
+            b.set("%s%d" % (L["mid"][k], r), '=IF(AND(ISNUMBER({b}{r}),ISNUMBER({a}{r})),({b}{r}+{a}{r})/2,"")'.format(
+                b=g["bid"], a=g["ask"], r=r), fmt="0.0000")
+        # one more source
+        b.set("%s%d" % (L["sec_extra"], r), security("$%s$2" % LIVE_EXTRA, "BGN", r))
+        ex_bid, ex_ask = L["raw_extra"]["bid"], L["raw_extra"]["ask"]
+        b.set("%s%d" % (ex_bid, r), '=IF($A{r}="","",_xll.BDP(${s}{r},"PX_BID"))'.format(r=r, s=L["sec_extra"]))
+        b.set("%s%d" % (ex_ask, r), '=IF($A{r}="","",_xll.BDP(${s}{r},"PX_ASK"))'.format(r=r, s=L["sec_extra"]))
+        e1 = index_to_col(_col(LIVE_EXTRA) + 1)
+        b.set("%s%d" % (LIVE_EXTRA, r), clean("%s%d" % (ex_bid, r)), fmt="0.000")
+        b.set("%s%d" % (e1, r), clean("%s%d" % (ex_ask, r)), fmt="0.000")
+        # the overnight repo the dirty prices of two value dates imply (none for a CPI linker: its TL price moves
+        # with the index ratio of each value date)
+        for col, (k0, k1) in ((w, (0, 1)), (x, (1, 2))):
+            g0, g1 = L["groups"][k0], L["groups"][k1]
+            m0, m1 = "%s%d" % (L["mid"][k0], r), "%s%d" % (L["mid"][k1], r)
+            a0, a1 = "%s%d" % (L["raw"][k0]["acc"], r), "%s%d" % (L["raw"][k1]["acc"], r)
+            d0, d1 = "$%s$2" % g0["date"][:-1], "$%s$2" % g1["date"][:-1]
+            b.set("%s%d" % (col, r),
+                  '=IF(OR($A{r}="",{rv}$D{r}="E"),"",IFERROR(IF(AND(ISNUMBER({m0}),ISNUMBER({m1}),ISNUMBER({a0}),ISNUMBER({a1}),{d1}>{d0}),'
+                  '(({m1}+{a1})/({m0}+{a0})-1)*365/({d1}-{d0})*100,""),""))'.format(r=r, rv=rv, m0=m0, m1=m1, a0=a0, a1=a1, d0=d0, d1=d1),
+                  fmt="0.00", bold=col == w)
+        b.set("%s%d" % (y, r), '=IF(ISNUMBER({w}{r}),({w}{r}/100-OIS_MAIN!$J$2)*10000,"")'.format(w=w, r=r), fmt="0")
+    b.note("A%d" % (LIVE_LAST + 2),
+           "Kâğıtlar DİBS RV listesindekilerdir (oraya eklenen buraya da gelir). Her valör bir Bloomberg fiyat kaynağıdır "
+           "(ISL0 = aynı gün, ISL1 = ertesi iş günü; T2'nin kodu masanın terminalinde doğrulanmalı) - sarı hücreye başka kod "
+           "yazılabilir. Kâğıdın DİBS RV'de fiyatlandığı kaynak o sayfadan okunur. Repo: iki valörün kirli fiyatlarından "
+           "(temiz + o valördeki işlemiş faiz), (kirli2 / kirli1 − 1) · 365 / gün; tek bir fiyat adımı (0,005) bir günde "
+           "~1,8 puan eder.")
+    b.sheet.freeze = [4, 2]
+
+
+def _col(letter: str) -> int:
+    from .xl.tokenizer import col_to_index
+    return col_to_index(letter)
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
     "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
             (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
-            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward)),
+            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live)),
 }
 
 

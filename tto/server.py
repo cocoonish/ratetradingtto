@@ -347,6 +347,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().bond_catalog, _user(request)))
 
     @handler
+    async def bond_card(request: Request):
+        return ok(await call(svc().bond_card, _user(request), request.path_params["isin"]))
+
+    @handler
     async def list_add(request: Request):
         data = await _body(request)
         return ok(await call(svc().list_add, _user(request), str(data.get("book") or "tto"), str(data.get("list") or ""),
@@ -465,6 +469,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/sources", sources, methods=["GET", "POST"]),
         Route("/api/bonds/catalog", bond_catalog),
         Route("/api/list/add", list_add, methods=["POST"]),
+        Route("/api/bond/{isin}", bond_card),
         Route("/api/history/series", history_series),
         Route("/api/history/matrix", history_matrix),
         Route("/api/history/mpc", history_mpc),

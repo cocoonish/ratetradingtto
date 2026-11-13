@@ -4,6 +4,7 @@ shown next to it, and the tables that grow (Bulk Bond, the 100-row bulk forward)
 from __future__ import annotations
 
 import datetime as dt
+from urllib.parse import quote
 
 import pytest
 from starlette.testclient import TestClient
@@ -223,13 +224,15 @@ def test_the_dibs_rv_table_shows_the_days_broker_chat(tmp_path):
         assert (board["TRT150328T24"]["bid"], board["TRT150328T24"]["ask"], board["TRT150328T24"]["last"]) == (100.4, 100.475, 100.4)
         panel = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")
         data = panel["data"]
-        assert data["c"][-6:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Broker getiri %", "Broker − ekran (bp)"]
-        assert data["added"] == 6 and panel["action"] == "add-isin" and panel["add"]["ref"] == "DİBS RV!A5:A54"
-        rows = {row[0]["t"]: [c.get("t") for c in row[-6:]] for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t")}
+        assert data["c"][-7:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Broker getiri %", "Broker − ekran (bp)", "Kart"]
+        assert data["added"] == 7 and panel["action"] == "add-isin" and panel["add"]["ref"] == "DİBS RV!A5:A54" and panel["card"] == "bond"
+        rows = {row[0]["t"]: [c.get("t") for c in row[-7:-1]] for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t")}
+        assert all(row[-1]["t"] == "▸" and row[-1]["tip"] == "Kâğıt kartı: " + row[0]["t"]
+                   for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t"))
         assert rows["TRT150328T24"][:4] == ["100,400", "100,475", "100,400", "14:13"]
         assert rows["TRT160431T35"][:3] == ["94,100", "94,200", "94,100"]
         assert rows["TRB100227T13"][2:4] == ["31,40", "09:14"]                    # an auction level, not a trade
-        gap = next(c for row, r in zip(data["rows"], data["r"]) if row[0].get("t") == "TRT150328T24" for c in row[-1:])
+        gap = next(c for row, r in zip(data["rows"], data["r"]) if row[0].get("t") == "TRT150328T24" for c in row[-2:-1])
         imp = board["TRT150328T24"]["implied"]
         assert gap["v"] == pytest.approx(((imp["bid"] + imp["ask"]) / 2 - imp["screen_yield"]) * 100.0)
         assert all(not any(v) for k, v in rows.items() if k not in {b for b in board})   # bonds nobody spoke of: empty
@@ -309,3 +312,147 @@ def test_the_bulk_forward_table_has_a_hundred_rows_of_the_sheets_own_formulas(sv
     assert len(bk["data"]["rows"]) >= ex.BULK_ROWS
     bulk = next(p for p in svc.view(u, "bulk")["panels"] if p["id"] == "B1")
     assert bulk["grow"]["last"] == ex.BULK_BOND_LAST and bulk["action"] == "add-isin" and bulk["add"]["catalog"] is False
+
+
+# ---------------------------------------------------------------------------------------------- DİBS Canlı
+def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Canlı Masa")["user"]
+        L = ex._live_cols()
+        assert [g["cap"] for g in L["groups"]] == ["T0", "T1", "T2"] and [g["default"] for g in L["groups"]] == ["ISL0", "ISL1", "ISL2"]
+        # the value dates: today, the next business day and the one after (the workbook's holidays)
+        assert [cell(s, "EK_DIBS!%s" % g["date"]) for g in L["groups"]] == [46329.0, 46330.0, 46331.0]
+        # the bonds of the DİBS RV list, row for row, with the security Bloomberg is asked for on each value date
+        assert [cell(s, "EK_DIBS!%s8" % c) for c in "ABCD"] == ["TRT150328T24", "15.03.28", "S", 46827.0]
+        assert [cell(s, "EK_DIBS!%s8" % c) for c in L["sec"] + [L["sec_extra"]]] == [
+            "TRT150328T24 @ISL0 ISIN", "TRT150328T24 @ISL1 ISIN", "TRT150328T24 @ISL2 ISIN", "TRT150328T24 @BGN ISIN"]
+        assert cell(s, "EK_DIBS!B5") == "10.02.27 Bono" and cell(s, "EK_DIBS!B26") == "09.01.30 TLREF"
+        # the value date the DİBS RV row is priced on comes from that sheet (offline: the file's values) ...
+        t1 = L["groups"][1]
+        assert [cell(s, "EK_DIBS!%s8" % t1[f]) for f in ("bid", "ask", "last", "when")] == [
+            cell(s, "DİBS RV!K8"), cell(s, "DİBS RV!L8"), cell(s, "DİBS RV!AS8"), cell(s, "DİBS RV!I8")] == [100.1, 100.125, 100.2, 46329.0]
+        t0 = L["groups"][0]
+        assert cell(s, "EK_DIBS!%s5" % t0["bid"]) == cell(s, "DİBS RV!K5") == 92.22          # a bill: priced on T0
+        # ... the others ask Bloomberg, which the recorded file cannot answer: empty, not an error
+        assert [cell(s, "EK_DIBS!%s8" % t0[f]) for f in ("bid", "ask", "last", "when", "vol")] == ["", "", "", "", ""]
+        assert cell(s, "EK_DIBS!%s8" % L["raw"][0]["bid"]) is not None
+        # the repo two value dates imply: dirty prices (clean + the accrued interest of each value date), ACT/365
+        raw0 = L["raw"][0]
+        res = s.set_inputs(u, "tto", [{"ref": "EK_DIBS!%s8" % raw0["bid"], "value": 100.0}, {"ref": "EK_DIBS!%s8" % raw0["ask"], "value": 100.03},
+                                      {"ref": "EK_DIBS!%s8" % raw0["acc"], "value": 4.86}], allow_adhoc=True)
+        assert not res["errors"]
+        uk = user_key(u)
+        dirty0, dirty1 = 100.015 + 4.86, cell(s, "DİBS RV!M8") + cell(s, "DİBS RV!CW8")
+        w, x, y = ex.LIVE_REPO
+        assert cell(s, "EK_DIBS!%s8" % w, user=uk) == pytest.approx((dirty1 / dirty0 - 1) * 365 * 100)
+        assert cell(s, "EK_DIBS!%s8" % y, user=uk) == pytest.approx((cell(s, "EK_DIBS!%s8" % w, user=uk) / 100 - cell(s, "OIS_MAIN!J2")) * 1e4)
+        assert cell(s, "EK_DIBS!%s8" % x, user=uk) == "" and cell(s, "EK_DIBS!%s8" % w) == ""     # T2 not priced; others unchanged
+        # no repo for a CPI linker (its TL price moves with each value date's index ratio)
+        cpi_row = next(r for r in range(5, 55) if cell(s, "DİBS RV!D%d" % r) == "E") if any(
+            cell(s, "DİBS RV!D%d" % r) == "E" for r in range(5, 55)) else None
+        if cpi_row:
+            assert cell(s, "EK_DIBS!%s%d" % (w, cpi_row)) == ""
+        # a source is the desk's to choose: T1 on ISL0 asks for "@ISL0" (offline the bill keeps its file values)
+        s.set_inputs(u, "tto", [{"ref": "EK_DIBS!K2", "value": "isl0"}])
+        assert cell(s, "EK_DIBS!%s8" % L["sec"][1]) == "TRT150328T24 @ISL0 ISIN" and cell(s, "EK_DIBS!K8") == ""
+        assert cell(s, "EK_DIBS!K5") == 92.22
+        s.set_inputs(u, "tto", [{"ref": "EK_DIBS!K2", "value": None}])               # emptied: the default source
+        assert cell(s, "EK_DIBS!K2") is None and cell(s, "EK_DIBS!%s8" % L["sec"][1]) == "TRT150328T24 @ISL1 ISIN"
+        assert cell(s, "EK_DIBS!K8") == 100.1
+        s.reset_inputs(u, "tto", ["EK_DIBS!K2"], shared=True)
+        assert cell(s, "EK_DIBS!K2") == "ISL1"
+        # the page: the table with a card per bond, the day's tape, the helper columns behind
+        view = s.view(u, "dibslive")
+        assert [p["id"] for p in view["panels"]] == ["L1", "L3"]
+        main = view["panels"][0]
+        assert main["card"] == "bond" and main["add"]["ref"] == "DİBS RV!A5:A54" and main["add"]["name"] == "dibs"
+        assert main["data"]["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Kart"]
+        assert [p["id"] for p in s.view(u, "dibslive", show_hidden=True)["panels"]] == ["L1", "L3", "L2"]
+    finally:
+        s.stop()
+
+
+class _Prices(object):
+    """A provider's answers that the test moves."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __call__(self, key):
+        return self.values.get((key[1], key[2]), "#N/A")
+
+
+def test_a_trade_the_dashboard_sees_shows_its_time(tmp_path, monkeypatch):
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Canlı İşlem")["user"]
+        sec = "TRT150328T24 @ISL1 ISIN"
+        prices = _Prices({(sec, "LAST_PRICE"): 100.2, (sec, "VOLUME"): 5e6})
+        monkeypatch.setattr(s.provider, "get_bdp", prices, raising=False)
+        keys = [("BDP", sec, "LAST_PRICE", ()), ("BDP", sec, "VOLUME", ())]
+        s._note_trades(keys)
+        assert s.trades_seen(sec) is None                         # the first answer of the day is no trade
+        prices.values[(sec, "VOLUME")] = 7e6                      # a trade at the same price: the volume grew
+        s._note_trades(keys[1:])
+        seen = s.trades_seen(sec)
+        assert seen["by"] == "VOLUME" and seen["volume"] == 2e6 and len(seen["time"]) == 8
+        prices.values[(sec, "LAST_PRICE")] = 100.25
+        s._note_trades(keys[:1])
+        assert s.trades_seen(sec)["by"] == "LAST_PRICE" and s.trades_seen(sec)["price"] == 100.25
+        s._trades_seen[sec]["time"] = "10:41:07"
+        prices.values[(sec, "VOLUME")] = 1e6                      # a smaller volume (a new count) is no trade
+        s._note_trades(keys[1:])
+        assert s.trades_seen(sec)["time"] == "10:41:07"
+        s._note_trades([("BDP", sec, "PX_BID", ()), ("BDH", sec, "PX_LAST", "", "", ())])   # other fields: nothing
+        assert s.trades_seen("TRT150328T24 @ISL0 ISIN") is None
+        s.bump()
+        # the page: the T1 last trade at the moment it was seen, Bloomberg's day in the tip; the tape has it
+        main, tape = s.view(u, "dibslive")["panels"][:2]
+        d = main["data"]
+        j = d["c"].index(ex._live_cols()["groups"][1]["when"])
+        row = next(r for r, n in zip(d["rows"], d["r"]) if n == 8)
+        assert row[j]["t"] == "bugün 10:41:07" and row[j]["cls"] == "fresh" and "100,250" in row[j]["tip"] and "03.11.2026" in row[j]["tip"]
+        other = next(r for r, n in zip(d["rows"], d["r"]) if n == 13)
+        assert other[j]["t"] == "03.11.2026"                      # no trade seen: Bloomberg's day of the last one
+        lines = [[c.get("t") for c in r] for r in tape["data"]["rows"]]
+        assert lines[0][:3] == ["Saat", "Kâğıt", "ISIN"]
+        assert ["10:41:07", "15.03.28", "TRT150328T24", "100,250", "", "", "T1", "Bloomberg · ISL1", "son fiyat değişti", "▸"] in lines
+        # a new day starts afresh
+        s._trades_day = "2000-01-01"
+        assert s.trades_seen(sec) is None
+    finally:
+        s.stop()
+
+
+def test_the_bond_card_has_everything_on_one_bond(tmp_path):
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Kâğıt Kartı")["user"]
+        s.broker_add(u, CHAT, s.today_iso(), source="ICAP")
+        card = s.bond_card(u, " trt150328t24 ")
+        assert (card["isin"], card["label"], card["kind_text"], card["coupon"], card["maturity"], card["known"]) == (
+            "TRT150328T24", "15.03.28", "Sabit", 36.8, "2028-03-15", True)
+        assert card["days"] == (dt.date(2028, 3, 15) - dt.date.fromisoformat(s.today_iso())).days
+        rv = {x["name"]: x["t"] for x in card["rv"]}
+        assert rv["Sinyal"] in ("UCUZ", "PAHALI", "–") and rv["Kupon"] == "36,80%" and "BIST bileşik getiri" in rv and "DV01 TL / 1mn (T: spread)" in rv
+        assert [(g["cap"], g["src"], g["bid"], g["ask"]) for g in card["live"]] == [
+            ("T0", "ISL0", "", ""), ("T1", "ISL1", "100,100", "100,125"), ("T2", "ISL2", "", "")]
+        assert [x["name"] for x in card["repo"]] == ["T0→T1 repo %", "T1→T2 repo %", "T0→T1 − TLREF (bp)"] and card["extra"]["src"] == "BGN"
+        assert (card["board"]["bid"], card["board"]["ask"], card["board"]["last"], card["board"]["time"]) == ("100,400", "100,475", "100,400", "14:13")
+        assert card["board"]["implied"]["bid"] > card["board"]["implied"]["ask"]
+        said = [(q["time"], q["event"]) for q in card["chat"]]
+        assert said[0] == ("09:14:59", "level") and ("13:21:38", "trade") in said and all(q["who"].startswith("ICAP") for q in card["chat"])
+        assert [(x["time"], x["price"]) for x in card["tape"]] == [("14:13:22", 100.4), ("13:21:38", 100.55)]
+        # a bond off the list: what the catalog knows, and nothing else
+        off = s.bond_card(u, "TRT280432T14")
+        assert (off["label"], off["kind_text"], off["rv"], off["live"], off["board"], off["chat"]) == ("28.04.32", "Sabit", [], [], None, [])
+        assert s.bond_card(u, "XS2010030836")["known"] is False
+        with pytest.raises(ServiceError):
+            s.bond_card(u, " ")
+        with TestClient(create_app(s)) as client:
+            hdr = {"X-TTO-User": quote(u)}                                          # as the page sends it
+            got = client.get("/api/bond/TRT160431T35", headers=hdr).json()
+            assert got["label"] == "16.04.31" and got["board"]["last"] == "94,100"
+    finally:
+        s.stop()

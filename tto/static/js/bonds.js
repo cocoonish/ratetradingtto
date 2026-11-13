@@ -1,7 +1,7 @@
 // Bonds added to a list of a page by ISIN: typed / pasted, or picked from the desk's list of TRY government bonds.
 import { api } from './api.js';
 import { h, clear, modal, toast, errorToast } from './ui.js';
-import { isoToTr } from './format.js';
+import { isoToTr, num } from './format.js';
 
 const KIND_ORDER = ['all', 'fixed', 'float', 'cpi', 'bill', 'zero'];
 const KIND_TEXT = { all: 'Tümü', fixed: 'Sabit', float: 'TLREF', cpi: 'TÜFE', bill: 'Bono', zero: 'Kuponsuz' };
@@ -85,4 +85,84 @@ export async function openAddIsin(ctx, opts) {
   m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
   m.foot.appendChild(add);
   text.focus();
+}
+
+const SIDE = { ask: 'offer alındı', bid: "bid'e verildi" };
+const EVENT_TEXT = { quote: 'Kota', trade: 'İşlem', ref: 'Ref', interest: 'İlgi', level: 'Seviye', note: 'Not' };
+
+/** A bond's card: what it is, its prices on each value date with the last trades, the implied repo, its row of
+ * DİBS RV and today's Broker Chat - everything the dashboard has on it, in one window. */
+export async function openBondCard(ctx, isin) {
+  let d;
+  try { d = await api.get('/api/bond/' + encodeURIComponent(isin)); } catch (err) { errorToast(err); return; }
+  const m = modal({ title: d.label + ' · ' + d.isin, width: 980 });
+  m.box.classList.add('bondcard');
+  const px = (v, unit) => (typeof v === 'number' ? num(v, unit === 'yld' ? 2 : 3, false) : '');
+  const facts = [d.kind_text, d.kind === 'fixed' && typeof d.coupon === 'number' ? 'kupon %' + num(d.coupon, 2, false) : (d.name || ''),
+    d.maturity ? 'vade ' + isoToTr(d.maturity) : '', typeof d.days === 'number' ? d.days + ' gün (' + num(d.years, 2, false) + ' yıl)' : '']
+    .filter(Boolean).join(' · ');
+  m.body.appendChild(h('p', { class: 'facts' }, facts || 'Masanın DİBS listesinde olmayan bir kâğıt'));
+  const section = (title, el) => { m.body.appendChild(h('h3', null, title)); m.body.appendChild(el); };
+  // ``left``: the columns of text (the others are numbers, right-aligned)
+  const table = (heads, rows, cls, left = [0]) => {
+    const t = h('table', { class: 'plain ' + (cls || '') });
+    const side = (i) => (left.includes(i) ? 'l' : '');
+    t.appendChild(h('tr', null, ...heads.map((x, i) => h('th', { class: side(i) }, x))));
+    for (const r of rows) t.appendChild(h('tr', null, ...r.map((x, i) => (x instanceof Node ? x : h('td', { class: side(i) }, x == null ? '' : String(x))))));
+    return t;
+  };
+  if (d.live && d.live.length) {
+    const rows = d.live.map((g) => [g.cap + ' · ' + g.src, g.date, g.bid, g.ask, g.last,
+      g.seen ? h('td', { class: 'fresh', title: "Dashboard'un bu valörde işlem gördüğü an" }, 'bugün ' + g.seen) : g.when, g.vol]);
+    if (d.extra && (d.extra.bid || d.extra.ask)) rows.push(['Ek kaynak · ' + d.extra.src, '', d.extra.bid, d.extra.ask, '', '', '']);
+    section('Valörler (Bloomberg)', table(['Valör · kaynak', 'Tarih', 'Bid', 'Ask', 'Son işlem', 'Son işlem', 'Hacim'], rows, 'nums'));
+    const repo = (d.repo || []).filter((x) => x.t);
+    if (repo.length) m.body.appendChild(h('p', { class: 'muted' }, 'İma O/N repo: ' + repo.map((x) => x.name + ' ' + x.t).join(' · ')));
+  }
+  if (d.board) {
+    const imp = d.board.implied || {};
+    section('Broker Chat · bugün', table(['', 'Bid', 'Ask', 'Son işlem', 'Saat', 'Getiri (ima)'],
+      [['Tahta', d.board.bid, d.board.ask, d.board.last, d.board.time,
+        [imp.bid, imp.ask].some((v) => typeof v === 'number') ? px(imp.bid, 'yld') + ' / ' + px(imp.ask, 'yld') : px(imp.last, 'yld')]], 'nums'));
+  }
+  if (d.chat && d.chat.length) {
+    m.body.appendChild(table(['Saat', 'Kim', 'Mesaj', 'Olay', 'Bid', 'Ask', 'Fiyat'],
+      d.chat.map((q) => [q.time, q.who, h('td', { class: 'l said', title: q.raw }, q.raw),
+        (EVENT_TEXT[q.event] || q.event) + (q.event === 'trade' && SIDE[q.side] ? ' · ' + SIDE[q.side] : ''),
+        px(q.bid, q.unit), px(q.ask, q.unit), px(q.price, q.unit)]), 'nums chat', [0, 1, 2, 3]));
+  }
+  if (d.tape && d.tape.length) {
+    section('Bugünün işlemleri', table(['Saat', 'Fiyat', 'Getiri %', 'Taraf', 'Valör', 'Kim', 'Not'],
+      d.tape.map((x) => [x.time, px(x.price, x.unit), px(x.yield, 'yld'), SIDE[x.side] || '', x.settle, x.who, x.note]), 'nums', [0, 3, 4, 5, 6]));
+  }
+  if (d.rv && d.rv.length) {
+    const grid = h('div', { class: 'kv' });
+    for (const x of d.rv) grid.appendChild(h('div', null, h('span', { class: 'k' }, x.name), h('span', { class: 'v' + (x.c ? ' ' + x.c : '') }, x.t)));
+    section('DİBS RV', grid);
+  } else {
+    m.body.appendChild(h('p', { class: 'muted' }, 'Kâğıt DİBS RV listesinde değil: getiri, ASW ve canlı valör fiyatları için listeye ekleyin.'));
+  }
+  if (!d.rv || !d.rv.length) {
+    const add = h('button', { class: 'btn', type: 'button' }, 'DİBS RV listesine ekle');
+    add.addEventListener('click', async () => {
+      try {
+        const res = await api.post('/api/list/add', { book: 'tto', list: 'DİBS RV!A5:A54', values: [d.isin] });
+        toast(res.added.length ? 'Listeye eklendi' : 'Zaten listede', 'ok');
+        m.close();
+        ctx.refreshNow();
+      } catch (err) { errorToast(err); }
+    });
+    m.foot.appendChild(add);
+  }
+  m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', onclick: () => m.close() }, 'Kapat'));
+}
+
+/** ▸ in a table of bonds opens the card of the bond of its row (the ISIN is in the cell's tip). */
+export function bondCardLinks(ctx, el) {
+  el.addEventListener('click', (e) => {
+    const td = e.target.closest('td.cardlink');
+    if (!td) return;
+    const code = ((td.title || '').match(/[A-Z]{2}[A-Z0-9]{9}\d/) || [])[0];
+    if (code) openBondCard(ctx, code);
+  });
 }

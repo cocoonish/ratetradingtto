@@ -1225,7 +1225,7 @@ async function shot(page, name) {
       const rows = [...p.querySelectorAll('table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
       const head = rows.find((r) => r.includes('Broker bid')) || [];
       const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
-      return { head: head.slice(-6), bond: bond.slice(-6) };                  // the dashboard's own columns, on the right
+      return { head: head.slice(-7, -1), bond: bond.slice(-7, -1) };          // the dashboard's own columns, on the right (▸ last)
     });
     check('DİBS RV: the day\'s broker chat next to each bond - bid, ask, the time, the yield of the mid against the screen',
       rvBroker.head.join('|') === 'Broker bid|Broker ask|Son işlem|Saat|Broker getiri %|Broker − ekran (bp)'
@@ -1274,6 +1274,37 @@ async function shot(page, name) {
       fwdAll >= 100 && fwd0 < 40 && (await fwdShown()) === fwdAll, { fwd0, fwdAll });
     await page.click('.panel[data-panel="BK1"] .grow-all');
     check('... and back to the filled ones', (await fwdShown()) === fwd0);
+    // DİBS Canlı: the value dates side by side, the day's tape, the bond's card
+    await open(page, 'dibslive');
+    await page.waitForSelector('.panel[data-panel="L1"] table.grid');
+    const liveRow = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.panel[data-panel="L1"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
+      const head = rows.find((r) => r.includes('T1 bid')) || [];
+      const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
+      const at = (name) => bond[head.indexOf(name)];
+      return { label: bond[1], t1: [at('T1 bid'), at('T1 ask'), at('T1 son işlem'), at('T1 son işlem günü')], t0: at('T0 bid'),
+        broker: [at('Broker bid'), at('Broker ask')], card: bond[bond.length - 1],
+        sources: (rows.find((r) => r.includes('ISL0')) || []).filter((x) => /^(ISL\d|BGN)$/.test(x)) };
+    });
+    check('DİBS Canlı: every bond on T0 / T1 / T2 (sources ISL0 / ISL1 / ISL2 and BGN), the RV value date from the recorded file, the chat\'s quotes on the right',
+      liveRow.label === '15.03.28' && JSON.stringify(liveRow.t1) === '["100,100","100,125","100,200","03.11.2026"]' && liveRow.t0 === ''
+      && JSON.stringify(liveRow.broker) === '["100,550","100,575"]' && liveRow.card === '▸' && liveRow.sources.join(',') === 'ISL0,ISL1,ISL2,BGN', liveRow);
+    const tapeRows = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="L3"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
+    check('DİBS Canlı: the day\'s bond trades, newest first, with who said them',
+      tapeRows[0][0] === 'Saat' && tapeRows.length >= 2 && tapeRows[1][1] === '19.01.28 TLREF' && tapeRows[1][3] === '100,725' && /ICAP/.test(tapeRows[1][7]), tapeRows.slice(0, 3));
+    await page.click('.panel[data-panel="L1"] table.grid td.cardlink[title$="TRT150328T24"]');
+    await page.waitForSelector('.modal.bondcard');
+    const cardText = await page.textContent('.modal.bondcard');
+    check('the bond card: what it is, its value dates, the board, the chat and its row of DİBS RV',
+      /15\.03\.28 · TRT150328T24/.test(cardText) && /Sabit · kupon %36,80 · vade 15\.03\.2028/.test(cardText) && /T1 · ISL1/.test(cardText)
+      && /Broker Chat · bugün/.test(cardText) && /BIST bileşik getiri/.test(cardText) && /Sinyal/.test(cardText), cardText.slice(0, 300));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
+    await open(page, 'dibs');
+    await page.click('.panel[data-panel="B3"] table.grid td.cardlink[title$="TRT160431T35"]');
+    await page.waitForSelector('.modal.bondcard');
+    check('... and from DİBS RV too', /16\.04\.31 · TRT160431T35/.test(await page.textContent('.modal.bondcard header')));
+    await page.keyboard.press('Escape');
 
     // ------------------------------------------------------------------ find a table from anywhere
     console.log('table search');

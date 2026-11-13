@@ -1,0 +1,73 @@
+{
+ "id": "dibslive",
+ "title": "DİBS Canlı",
+ "group": "Tahvil",
+ "book": "tto",
+ "sheet": "EK_DIBS",
+ "order": 60,
+ "inputs": [
+  {
+   "range": "F2",
+   "scope": "shared",
+   "group": "dibslive-src",
+   "kind": "text",
+   "label": "T0 fiyat kaynağı (Bloomberg pricing source, ör. ISL0)"
+  },
+  {
+   "range": "K2",
+   "scope": "shared",
+   "group": "dibslive-src",
+   "kind": "text",
+   "label": "T1 fiyat kaynağı (ör. ISL1)"
+  },
+  {
+   "range": "P2",
+   "scope": "shared",
+   "group": "dibslive-src",
+   "kind": "text",
+   "label": "T2 fiyat kaynağı (ör. ISL2 - terminalde doğrulayın)"
+  },
+  {
+   "range": "U2",
+   "scope": "shared",
+   "group": "dibslive-src",
+   "kind": "text",
+   "label": "Ek fiyat kaynağı (ör. BGN ya da bir broker'ın kodu)"
+  }
+ ],
+ "panels": [
+  {
+   "id": "L1",
+   "type": "table",
+   "title": "DİBS canlı",
+   "range": "A1:Y56",
+   "action": "add-isin",
+   "add": {
+    "list": "DİBS RV!A5:A54",
+    "name": "dibs",
+    "catalog": true,
+    "title": "DİBS listesine kâğıt ekle (DİBS RV ile ortak)"
+   },
+   "append": "dibs_live",
+   "wide": true,
+   "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır.",
+   "card": "bond"
+  },
+  {
+   "id": "L3",
+   "type": "generated",
+   "source": "dibs_tape",
+   "title": "Bugünün DİBS işlemleri",
+   "card": "bond",
+   "note": "Broker Chat'te söylenen işlemler (saat, fiyat, ima getiri, alınan taraf, valör, kim) ve canlıda Bloomberg'de görülenler (bir valörün son fiyatı değişti ya da hacmi arttı), en yenisi üstte. ▸ kâğıdın kartını açar."
+  },
+  {
+   "id": "L2",
+   "type": "table",
+   "title": "Yardımcı · Bloomberg yanıtları (menkul, valör başına fiyat, hacim, işlemiş faiz)",
+   "range": "AA4:BA54",
+   "hidden": true
+  }
+ ],
+ "sections": []
+}
