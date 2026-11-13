@@ -245,11 +245,102 @@
    "label": "Serbest tarihler (XAUUSD forward)"
   },
   {
-   "range": "EK_XAU!B45:D47",
+   "range": "M32:M33",
+   "scope": "user",
+   "group": "viop-calc-m",
+   "kind": "date",
+   "label": "'Interest 2 SP' 1st / 2nd date (1. kontrat; boş = kontrat tarihleri)"
+  },
+  {
+   "range": "M35",
+   "scope": "user",
+   "group": "viop-calc-m",
+   "kind": "number",
+   "label": "'Interest 2 SP' spot (1. kontrat; boş = piyasa)"
+  },
+  {
+   "range": "M36",
+   "scope": "user",
+   "group": "viop-calc-m",
+   "kind": "pct",
+   "label": "'Interest 2 SP' USD faizi (1. kontrat; boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "P32:P33",
+   "scope": "user",
+   "group": "viop-calc-p",
+   "kind": "date",
+   "label": "'Interest 2 SP' 1st / 2nd date (2. kontrat; boş = kontrat tarihleri)"
+  },
+  {
+   "range": "P35",
+   "scope": "user",
+   "group": "viop-calc-p",
+   "kind": "number",
+   "label": "'Interest 2 SP' spot (2. kontrat; boş = piyasa)"
+  },
+  {
+   "range": "P36",
+   "scope": "user",
+   "group": "viop-calc-p",
+   "kind": "pct",
+   "label": "'Interest 2 SP' USD faizi (2. kontrat; boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "S32:S33",
+   "scope": "user",
+   "group": "viop-calc-s",
+   "kind": "date",
+   "label": "'Interest 2 SP' 1st / 2nd date (takvim (1. → 2. kontrat); boş = kontrat tarihleri)"
+  },
+  {
+   "range": "S35",
+   "scope": "user",
+   "group": "viop-calc-s",
+   "kind": "number",
+   "label": "'Interest 2 SP' spot (takvim (1. → 2. kontrat); boş = piyasa)"
+  },
+  {
+   "range": "S36",
+   "scope": "user",
+   "group": "viop-calc-s",
+   "kind": "pct",
+   "label": "'Interest 2 SP' USD faizi (takvim (1. → 2. kontrat); boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "EK_XAU!B40:E41",
+   "scope": "user",
+   "group": "xau-calc",
+   "kind": "date",
+   "label": "VİOP XAUTRY hesaplayıcısı: 1. ve 2. tarih (boş = spot valörü / kontrat vadesi)"
+  },
+  {
+   "range": "EK_XAU!B43:E44",
+   "scope": "user",
+   "group": "xau-calc",
+   "kind": "number",
+   "label": "VİOP XAUTRY hesaplayıcısı: USDTRY ve XAUUSD spot (boş = piyasa)"
+  },
+  {
+   "range": "EK_XAU!B45:E47",
    "scope": "user",
    "group": "xau-calc",
    "kind": "number",
    "label": "VİOP XAUTRY hesaplayıcısı: USD %, TRY % ve (isteğe bağlı) altın swap %"
+  },
+  {
+   "range": "EK_XAU!B48:E48",
+   "scope": "user",
+   "group": "xau-calc",
+   "kind": "number",
+   "label": "VİOP XAUTRY hesaplayıcısı: XAUUSD forward (boş = swap faizinden / piyasadan)"
+  },
+  {
+   "range": "EK_XAU!B54:E55",
+   "scope": "user",
+   "group": "xau-calc",
+   "kind": "number",
+   "label": "VİOP XAUTRY hesaplayıcısı: VİOP bid / ask fiyatı (boş = piyasa; kendi fiyatını yaz: ima faiz)"
   }
  ],
  "panels": [
@@ -462,9 +553,10 @@
   {
    "id": "B8",
    "type": "table",
-   "title": "Interest 2 SP (üç hesaplayıcı)",
+   "title": "USDTRY VİOP  ·  Interest 2 SP: TRY faizinden kontrat fiyatı  (1. kontrat | 2. kontrat | takvim: 1. → 2. kontrat)",
    "range": "L31:V43",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B9",
@@ -527,10 +619,10 @@
    "id": "XAU4",
    "type": "table",
    "sheet": "EK_XAU",
-   "range": "A38:D60",
+   "range": "A38:E63",
    "hidden": false,
-   "note_ref": "A61",
-   "title": "VİOP XAUTRY  ·  belli faizle fiyat  (Interest 2 SP'nin altın karşılığı; sarı hücreler girdi)"
+   "note_ref": "A64",
+   "title": "VİOP XAUTRY  ·  faizden fiyat, fiyattan faiz  (sarı hücreler girdi; boş bırakılan piyasadan dolar)"
   },
   {
    "id": "B2",
@@ -590,6 +682,87 @@
    "title": "Yardımcı · canlı son fiyat",
    "range": "K510:DD511",
    "hidden": true
+  }
+ ],
+ "sections": [
+  {
+   "id": "main",
+   "title": "Kontratlar",
+   "panels": [
+    "B6",
+    "B1",
+    "B5",
+    "B7",
+    "B12",
+    "B13",
+    "B32",
+    "B33"
+   ]
+  },
+  {
+   "id": "calc",
+   "title": "Hesaplayıcılar",
+   "panels": [
+    "B8",
+    "XAU4"
+   ],
+   "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot, USD faizi ve VİOP fiyatı piyasadan gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz."
+  },
+  {
+   "id": "gold",
+   "title": "Altın",
+   "panels": [
+    "B9",
+    "B10",
+    "B11",
+    "XAU4",
+    "XAU1",
+    "XAU2",
+    "XAU3",
+    "B11b"
+   ],
+   "note": "VİOP XAUTRY / XAUUSD. Bloomberg'den gelmeyen altın spotunu, swap faizini ya da VİOP fiyatını sarı / yeşil hücrelere elle yazabilirsiniz."
+  },
+  {
+   "id": "matrix",
+   "title": "Takvim spread matrisleri",
+   "panels": [
+    "B14",
+    "B17",
+    "B18",
+    "B19",
+    "B20",
+    "B21",
+    "B22",
+    "B23",
+    "B24",
+    "B25",
+    "B26",
+    "B27",
+    "B28",
+    "B29",
+    "B30",
+    "B31"
+   ]
+  },
+  {
+   "id": "basis",
+   "title": "Baz",
+   "panels": [
+    "B34",
+    "B35",
+    "B36",
+    "B16"
+   ]
+  },
+  {
+   "id": "curves",
+   "title": "Eğriler",
+   "panels": [
+    "B2",
+    "B3",
+    "B4"
+   ]
   }
  ]
 }

@@ -2,6 +2,7 @@
 import pytest
 
 from tto.books import BOOKS, load_books
+from tto.service import ServiceError
 from tto.views import load_views
 from tto.xl.model import COLS, parse_range
 import os
@@ -24,13 +25,35 @@ def sheets_of(view):
     return {view["sheet"]} | {p["sheet"] for p in view["panels"] if p.get("sheet") and not p.get("borrowed")}
 
 
+#: sheets of the TRY workbook that have no page any more (the desk does not use them); their cells are still
+#: calculated and can be looked at in the sheet explorer
+NO_PAGE = {("tto", "MOBIL MK"), ("tto", "Ivır Zıvır")}
+
+
 def test_every_sheet_of_the_workbooks_has_a_page(models):
     covered = {(v["book"], name) for v in VIEWS for name in sheets_of(v)}
     for book, model in models.items():
         for sh in model.sheets:
             if sh.name == "Günlük İşlemler":
                 continue                        # has its own page (the blotter)
+            if (book, sh.name) in NO_PAGE:
+                assert (book, sh.name) not in covered
+                continue
             assert (book, sh.name) in covered, sh.name
+    assert not {"mobil", "ivir"} & {v["id"] for v in VIEWS}
+
+
+def test_the_sheets_without_a_page_are_still_in_the_sheet_explorer(service):
+    names = [s["name"] for s in service.sheets("tto")]
+    for _, name in NO_PAGE:
+        assert name in names
+    grid = service.grid(None, "tto", "MOBIL MK", "A1:G6")
+    assert grid["data"]["rows"][0][0]["t"] and grid["dims"][0] > 20
+    with pytest.raises(ServiceError) as exc:
+        service.view(None, "ivir")
+    assert exc.value.status == 404
+    # a link of the desk sheet to a sheet without a page is simply not offered
+    assert all(l["page"] in service.view_index or l["page"] == "blotter" for l in service.view(None, "masa")["links"])
 
 
 def test_ids_are_unique():
@@ -127,7 +150,9 @@ def test_nothing_the_workbooks_compute_is_missing_from_the_pages(service, models
                 assert any(r1 <= r <= r2 and c1 <= c <= c2 for r1, c1, r2, c2 in boxes), (v["id"], name, rc)
                 total += 1
     blotter = len(models["tto"].sheet("Günlük İşlemler").fml)             # shown by the blotter page instead
-    assert total + blotter == sum(len(sh.fml) for m in models.values() for sh in m.sheets) > 215000
+    unused = sum(len(models[b].sheet(name).fml) for b, name in NO_PAGE)   # no page: the sheet explorer has them
+    assert unused > 100
+    assert total + blotter + unused == sum(len(sh.fml) for m in models.values() for sh in m.sheets) > 215000
 
 
 def test_a_cell_outside_every_table_would_be_listed_on_its_page(service):
@@ -156,3 +181,62 @@ def test_forward_sheets_manual_calculators_are_shown_in_full():
     for rng in ("AG4:AK16", "AG18:AK30", "AG32:AK44", "AG46:AK58", "AG60:AK68", "H35:J39", "F8:F21"):
         r1, c1, r2, c2 = parse_range(rng)
         assert any(a <= r1 and b <= c1 and c >= r2 and d >= c2 for a, b, c, d in shown), rng
+
+
+TABBED = [v for v in VIEWS if v["sections"]]
+
+
+def test_the_big_pages_come_in_tabs():
+    assert {v["id"] for v in TABBED} == {"masa", "ois", "forward", "viop", "carry", "dv01", "usd", "calc", "motor"}
+    for v in VIEWS:
+        if len([p for p in v["panels"] if not p.get("hidden")]) > 12:
+            assert v["sections"], v["id"]                       # a long page is never one long list
+
+
+@pytest.mark.parametrize("view", TABBED, ids=[v["id"] for v in TABBED])
+def test_tabs_name_real_panels_and_leave_none_out(view):
+    """Every table that is shown belongs to a tab or is pinned above them; a tab lists only panels that exist and
+    are shown (the helper tables get a tab of their own when they are asked for)."""
+    by_id = {p["id"]: p for p in view["panels"]}
+    shown = {pid for pid, p in by_id.items() if not p.get("hidden")}
+    ids = [s["id"] for s in view["sections"]]
+    assert len(ids) == len(set(ids)) and "aux" not in ids and "*" not in ids
+    listed = set()
+    for s in view["sections"]:
+        assert s["title"] and s["panels"], (view["id"], s["id"])
+        assert len(s["panels"]) == len(set(s["panels"])), (view["id"], s["id"])
+        for pid in s["panels"]:
+            assert pid in shown, (view["id"], s["id"], pid)
+        listed.update(s["panels"])
+    pinned = set(view["pinned"])
+    assert pinned <= shown and not (pinned & listed), view["id"]
+    assert listed | pinned == shown, (view["id"], sorted(shown - listed - pinned))
+
+
+def test_layout_of_a_page():
+    from tto.views import layout
+    v = {"pinned": ["P"], "sections": [{"id": "a", "title": "A", "panels": ["x", "y"], "note": "n"}, {"id": "b", "title": "B", "panels": ["z", "x"]}]}
+    assert layout(v, ["P", "x", "y", "z"]) == {"pinned": ["P"], "sections": [
+        {"id": "a", "title": "A", "note": "n", "panels": ["x", "y"]}, {"id": "b", "title": "B", "note": None, "panels": ["z", "x"]}]}
+    # panels that are sent but listed nowhere (helper tables, a picture) are gathered at the end; a tab none of
+    # whose panels is sent is left out, and so is a pinned panel that is not there
+    out = layout(v, ["x", "h1", "rest"])
+    assert out["pinned"] == [] and [(s["id"], s["panels"]) for s in out["sections"]] == [("a", ["x"]), ("b", ["x"]), ("aux", ["h1", "rest"])]
+    assert layout({"pinned": [], "sections": []}, ["x", "y"]) == {"pinned": [], "sections": []}
+    assert layout({}, ["x"]) == {"pinned": [], "sections": []}
+
+
+def test_calculators_are_easy_to_reach():
+    """What the desk asked for: the hand calculators of the Forward sheet are the first thing on its page."""
+    fwd = next(v for v in VIEWS if v["id"] == "forward")
+    first = fwd["sections"][0]
+    assert first["title"] == "Hesaplayıcılar" and first["panels"][:5] == ["B7", "B8", "B9", "B10", "B11"]
+    titles = {p["id"]: p.get("title", "") for p in fwd["panels"]}
+    assert titles["B7"].startswith("Interest 2 SP") and titles["B8"].startswith("SP 2 Interest")
+    assert fwd["pinned"] == ["B1"]                                   # the value date they all read stays in sight
+    viop = next(v for v in VIEWS if v["id"] == "viop")
+    assert [s["title"] for s in viop["sections"]][:3] == ["Kontratlar", "Hesaplayıcılar", "Altın"]
+    # the copies on the Calculators sheet are told apart by name
+    calc = next(v for v in VIEWS if v["id"] == "calc")
+    names = [p.get("title", "") for p in calc["panels"] if not p.get("hidden")]
+    assert len(names) == len(set(names)), [n for n in names if names.count(n) > 1]

@@ -327,6 +327,8 @@ class Renderer(object):
         if ft:
             out["f"] = ft
         d = book.inputs.get((si, rc))
+        if d is not None and d.group == "adhoc" and not (overlay is not None and (si, rc) in overlay):
+            d = None                               # typed over by hand ("elle değer"): an input only for whoever did
         if d is not None:
             out["i"] = "s" if d.scope == "shared" else "u"
             opts = book.options_for(si, rc, calc)

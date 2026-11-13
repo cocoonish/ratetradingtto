@@ -1019,30 +1019,34 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Interest 2 SP",
+   "title": "Interest 2 SP · USDTRY (tarih ve spot: Ana girdiler)",
    "range": "B2:C16",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B2",
    "type": "table",
-   "title": "SP 2 Interest",
+   "title": "SP 2 Interest · USDTRY (tarih ve spot: Ana girdiler)",
    "range": "E2:F16",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Interest 2 SP",
+   "title": "Interest 2 SP · EURTRY (tarih: Ana girdiler, spot elle)",
    "range": "H2:I16",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "SP 2 Interest",
+   "title": "SP 2 Interest · EURTRY (tarih: Ana girdiler, spot elle)",
    "range": "K2:L16",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B5",
@@ -1089,37 +1093,42 @@
   {
    "id": "B12",
    "type": "table",
-   "title": "Interest 2 SP",
+   "title": "Interest 2 SP · serbest parite 1 (her şey elle)",
    "range": "B19:C30",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B13",
    "type": "table",
-   "title": "SP 2 Interest",
+   "title": "SP 2 Interest · serbest parite 1",
    "range": "E19:F30",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B14",
    "type": "table",
-   "title": "Interest 2 SP",
+   "title": "Interest 2 SP · serbest parite 2 (her şey elle)",
    "range": "H19:I30",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B15",
    "type": "table",
-   "title": "SP 2 Interest",
+   "title": "SP 2 Interest · serbest parite 2",
    "range": "K19:L30",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B16",
    "type": "table",
-   "title": "SP 2 Interest",
+   "title": "SP 2 Interest · USDTRY, serbest (tarih ve spot elle)",
    "range": "N19:O30",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B17",
@@ -1138,30 +1147,34 @@
   {
    "id": "B19",
    "type": "table",
-   "title": "Interest 2 SP",
+   "title": "Interest 2 SP · serbest parite 3 (her şey elle)",
    "range": "B35:C46",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B20",
    "type": "table",
-   "title": "SP 2 Interest",
+   "title": "SP 2 Interest · serbest parite 3",
    "range": "E35:F46",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B21",
    "type": "table",
-   "title": "Interest 2 SP' (duplicate of B19)",
+   "title": "Interest 2 SP · serbest parite 4 (her şey elle)",
    "range": "H35:I46",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B22",
    "type": "table",
-   "title": "SP 2 Interest' (duplicate of B20)",
+   "title": "SP 2 Interest · serbest parite 4",
    "range": "K35:L46",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B23",
@@ -1194,16 +1207,18 @@
   {
    "id": "B29",
    "type": "table",
-   "title": "TLREF Spread' (second copy)",
+   "title": "TLREF Spread (2)",
    "range": "H51:I56",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B30",
    "type": "table",
-   "title": "Forward Volatility' (second copy)",
+   "title": "Forward Volatility (2)",
    "range": "K51:L56",
-   "hidden": false
+   "hidden": false,
+   "keep_title": true
   },
   {
    "id": "B31",
@@ -1253,6 +1268,66 @@
    "title": "Yardımcı · iskonto karalaması",
    "range": "X40:X44",
    "hidden": true
+  }
+ ],
+ "sections": [
+  {
+   "id": "sp",
+   "title": "Swap puanı ↔ faiz",
+   "panels": [
+    "B7",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B16",
+    "B12",
+    "B13",
+    "B14",
+    "B15",
+    "B19",
+    "B20",
+    "B21",
+    "B22"
+   ],
+   "note": "İlk dört hesaplayıcı tarihlerini (ve USDTRY spotu) \"Ana girdiler\" tablosundan alır; \"serbest\" olanların her şeyi elle yazılır."
+  },
+  {
+   "id": "conv",
+   "title": "Faiz çevirici",
+   "panels": [
+    "B8",
+    "B9",
+    "B17",
+    "B18",
+    "B24",
+    "B5",
+    "B6",
+    "B23"
+   ]
+  },
+  {
+   "id": "pos",
+   "title": "Maliyet · DV01",
+   "panels": [
+    "B26",
+    "B10",
+    "B35"
+   ]
+  },
+  {
+   "id": "bond",
+   "title": "Tahvil · diğer",
+   "panels": [
+    "B27",
+    "B29",
+    "B28",
+    "B30",
+    "B31",
+    "B32",
+    "B33",
+    "B34"
+   ]
   }
  ]
 }

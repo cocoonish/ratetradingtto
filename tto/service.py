@@ -25,7 +25,7 @@ from .marketdata import ReplayProvider
 from .marketdata.replay import snapshot_from_model
 from .render import Renderer
 from .store import Store, user_key
-from .views import load_views
+from .views import layout as view_layout, load_views
 from .xl import numfmt
 from .xl.engine import Calc, Clock
 from .xl.errors import XlError
@@ -417,8 +417,17 @@ class Service(object):
                 "port": self.settings.port}
 
     def nav(self) -> List[Dict[str, Any]]:
-        pages = [{"id": v["id"], "title": v["title"], "group": v.get("group", ""), "book": v["book"],
-                  "sheet": v.get("sheet")} for v in self.views]
+        pages = []
+        for v in self.views:
+            # the tables of the page (as the page definition names them): what the search box of the top bar finds
+            tab = {}
+            for sec in v.get("sections", []):
+                for pid in sec.get("panels", []):
+                    tab.setdefault(pid, sec["title"])
+            tables = [{"id": p["id"], "title": p.get("title") or "", "tab": tab.get(p["id"], "")}
+                      for p in v["panels"] if not p.get("hidden") and p.get("title")]
+            pages.append({"id": v["id"], "title": v["title"], "group": v.get("group", ""), "book": v["book"],
+                          "sheet": v.get("sheet"), "tables": tables})
         if "tto" in self.books:
             pages.append({"id": "blotter", "title": "Günlük İşlemler", "group": "Masa", "book": "tto",
                           "sheet": bl.SHEET, "custom": True})
@@ -463,6 +472,8 @@ class Service(object):
                 continue
             entry = {"id": p.get("id"), "type": p["type"], "title": p.get("title", ""), "hidden": bool(p.get("hidden")),
                      "wide": bool(p.get("wide")), "collapsed": bool(p.get("collapsed")), "note": p.get("note")}
+            if p.get("action"):
+                entry["action"] = p["action"]          # a button of the dashboard's own in the panel's header
             sheet = p.get("sheet", sheet_default)
             if sheet is not None and sheet not in book.model.sheet_index:
                 continue                               # a table of the dashboard's own that does not fit this file
@@ -489,6 +500,8 @@ class Service(object):
                         own = _lift_title(entry["data"])
                         if own and not p.get("keep_title"):
                             entry["title"] = own
+                    if p.get("header"):
+                        _column_captions(entry["data"], p["header"])
                 elif p["type"] == "chart":
                     spec = p.get("spec")
                     if spec is None:
@@ -540,6 +553,7 @@ class Service(object):
             note = v["replay_note"]                    # the workbook was saved without market data
         out = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
                "panels": panels, "ms": int((time.time() - t0) * 1000), "note": note}
+        out.update(view_layout(v, [p["id"] for p in panels]))
         links = self._shortcuts(v)
         if links:
             out["links"] = links
@@ -804,8 +818,10 @@ class Service(object):
                 continue
             if d.scope == "shared":
                 shared_vals[(si, rc)] = val
-            elif val is None and rc in sheet.fml:
-                user_clear.append((si, rc))          # blanking a formula default = back to the formula
+            elif val is None and (rc in sheet.fml or d.group == "adhoc"):
+                # blanking a formula default = back to the formula; blanking a value typed over any other cell
+                # ("elle değer") = back to what the workbook holds there
+                user_clear.append((si, rc))
             else:
                 user_vals[(si, rc)] = val
         if shared_vals:
@@ -999,26 +1015,42 @@ class Service(object):
         trades = self.store.trades(self.today_iso())
         book.engine.set_inputs(bl.sheet_values(book, trades))
 
-    def blotter(self, user: Optional[str], date: Optional[str] = None, locale: Optional[str] = None) -> Dict[str, Any]:
-        return self.et.call(self._blotter, user, date, locale)
+    def blotter(self, user: Optional[str], date: Optional[str] = None, locale: Optional[str] = None,
+                date_to: Optional[str] = None) -> Dict[str, Any]:
+        """The trades of a day (today when ``date`` is left out) or, with ``date_to``, of every day from ``date``
+        to ``date_to``: a list to look at - trades are entered and deleted on today's page only."""
+        return self.et.call(self._blotter, user, date, locale, date_to)
 
-    def _blotter(self, user, date, locale) -> Dict[str, Any]:
+    def _blotter(self, user, date, locale, date_to=None) -> Dict[str, Any]:
         book = self._book("tto")
         today = self.today_iso()
         date = date or today
+        date_to = date_to or date
         try:
-            _dt.date.fromisoformat(date)
+            d1, d2 = _dt.date.fromisoformat(date), _dt.date.fromisoformat(date_to)
         except ValueError:
-            raise ServiceError("tarih anlaşılamadı: %s" % date)
-        trades = self.store.trades(date)
+            raise ServiceError("tarih anlaşılamadı: %s – %s" % (date, date_to))
+        if d2 < d1:
+            date, date_to = date_to, date
+        ranged = date != date_to
+        trades = self.store.trades(date, date_to)
         for t in trades:
             if t.get("kind") == "fwd":
                 t["on_rate"] = bl.overnight_equivalent(t.get("try_rate"), t.get("days"))
-        out: Dict[str, Any] = {"date": date, "today": today, "is_today": date == today, "trades": trades,
-                               "cost": bl.summarise(trades), "dates": self.store.trade_dates(), "gen": self.gen,
-                               "tenors": bl.OIS_TENORS}
+                if type(t.get("dv01")) is not float:
+                    # a trade stored before its DV01 was kept: from its own rates
+                    risk = bl.forward_dv01(t.get("dir"), t.get("amount"), t.get("forward"), t.get("days"), t.get("spot"),
+                                           None, None, t.get("try_rate"), t.get("usd_rate"))
+                    t.update({"dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]})
+        out: Dict[str, Any] = {"date": date, "to": date_to, "ranged": ranged, "today": today,
+                               "is_today": date == today and not ranged, "trades": trades,
+                               "cost": bl.summarise(trades), "risk": bl.risk_summary(trades),
+                               "dates": self.store.trade_dates(), "gen": self.gen, "tenors": bl.OIS_TENORS}
         loc = numfmt.get_locale(locale or self.settings.locale)
-        if date == today:
+        if ranged:
+            out["sheet"] = []                          # the workbook's summary tables belong to a single day
+            out["days"] = len({t["trade_date"] for t in trades})
+        elif date == today:
             R = self.renderers[book.id]
             calc = book.engine.shared
             sheet_panels = []
@@ -1059,27 +1091,36 @@ class Service(object):
         return out
 
     def blotter_export(self, user: Optional[str], date: Optional[str] = None,
-                       locale: Optional[str] = None) -> Tuple[bytes, str]:
+                       locale: Optional[str] = None, date_to: Optional[str] = None) -> Tuple[bytes, str]:
         """The day's blotter as an .xlsx file (values only) and its file name ``Blotter_yyyy.mm.dd.xlsx``.
 
         This is the dashboard's version of the workbook's ``GunSonuArsivle`` macro.  Sheet 1 has the blotter
         sheet in Excel's own layout, as values; sheet 2 lists the trades with who entered them and the cost of
         the net positions.  Nothing has to be cleared for the next day: every day has its own list.
-        """
-        return self.et.call(self._blotter_export, user, date, locale)
 
-    def _blotter_export(self, user, date, locale) -> Tuple[bytes, str]:
+        With ``date_to`` the file covers every day from ``date`` to ``date_to``: the list of trades (with their
+        day) and the cost of the net positions over the period - the sheet in Excel's layout belongs to one day
+        and is left out (``Blotter_yyyy.mm.dd-yyyy.mm.dd.xlsx``).
+        """
+        return self.et.call(self._blotter_export, user, date, locale, date_to)
+
+    def _blotter_export(self, user, date, locale, date_to=None) -> Tuple[bytes, str]:
         from .xlsx import XlsxBook
-        data = self._blotter(user, date, locale)
+        data = self._blotter(user, date, locale, date_to)
         book = self._book("tto")
         si = book.model.sheet_index[bl.SHEET]
         sh = book.model.sheets[si]
         day = _dt.date.fromisoformat(data["date"])
+        last = _dt.date.fromisoformat(data["to"])
+        ranged = data["ranged"]
         wb = XlsxBook()
 
         # ---- sheet 1: the blotter sheet as Excel lays it out, values only
-        ws = wb.add_sheet(bl.SHEET)
-        if data["is_today"]:
+        ws = wb.add_sheet(bl.SHEET) if not ranged else None
+        cells: List[List[Any]] = []
+        if ranged:
+            pass
+        elif data["is_today"]:
             cells = self._blotter_cells(book, book.engine.shared)
         else:
             snap = self.store.blotter_snapshot(data["date"]) or {}
@@ -1115,9 +1156,10 @@ class Service(object):
             xf_i = sh.styles.get(r * COLS + c) or (sh.styles.get(3 * COLS + c, 0) if r > 3 else 0)
             xf = book.model.xfs[xf_i] if xf_i < len(book.model.xfs) else book.model.xfs[0]
             ws.set(r, c, v, fmt=xf[0], bold=bool(xf[1]), align=xf[4] if xf[4] in ("left", "center", "right") else None)
-        ws.widths = {c: w for c, w in sh.col_widths.items() if c <= sh.max_col}
-        ws.merges = [m for m in sh.merges]
-        ws.freeze = (sh.freeze[0], sh.freeze[1]) if len(sh.freeze) > 1 else (0, 0)
+        if ws is not None:
+            ws.widths = {c: w for c, w in sh.col_widths.items() if c <= sh.max_col}
+            ws.merges = [m for m in sh.merges]
+            ws.freeze = (sh.freeze[0], sh.freeze[1]) if len(sh.freeze) > 1 else (0, 0)
 
         # ---- sheet 2: the trades as entered, and the cost of the net positions
         ls = wb.add_sheet("İşlem listesi")
@@ -1128,7 +1170,8 @@ class Service(object):
         role = {"outright": "Outright", "short": "Kısa", "long": "Uzun", "wing1": "Kanat 1", "body": "Gövde",
                 "wing2": "Kanat 2", "start": "Başlangıç", "end": "Bitiş"}
         INT, AMT, FX, P3, P4, BP, DATE = "#,##0", "#,##0.00", "#,##0.0000", "0.000%", "0.0000%", "#,##0.00", "dd.mm.yyyy"
-        ls.set(1, 1, "Günlük İşlemler · %s" % day.strftime("%d.%m.%Y"), bold=True)
+        period = day.strftime("%d.%m.%Y") if not ranged else "%s – %s" % (day.strftime("%d.%m.%Y"), last.strftime("%d.%m.%Y"))
+        ls.set(1, 1, "Günlük İşlemler · %s" % period, bold=True)
         ls.set(2, 1, "Dışa aktarım: %s%s" % (_dt.datetime.now().strftime("%d.%m.%Y %H:%M"),
                                               " · %s" % names.get(user, user) if user else ""))
         row = 4
@@ -1148,31 +1191,39 @@ class Service(object):
                 row += 1
             row += 1
 
+        # a period: every row starts with its day (the file of a single day keeps the columns it always had)
+        lead = ["Tarih"] if ranged else []
+        lead_fmt: List[Optional[str]] = [DATE] if ranged else []
+
+        def when(t: Dict[str, Any]) -> List[Any]:
+            return [date_to_serial(_dt.date.fromisoformat(t["trade_date"]))] if ranged else []
+
         trades = data["trades"]
         fw = [t for t in trades if t["kind"] == "fwd"]
-        table("USDTRY Forward", ["Saat", "Kullanıcı", "Yön", "Tutar (USD)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
-                                 "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı"],
-              [[clock(t), who(t), "ALIŞ" if t["dir"] == "B" else "SATIŞ", t.get("amount"), t.get("value_date"), t.get("days"),
-                t.get("try_rate"), t.get("forward"), t.get("tl"), basis.get(t.get("basis"), t.get("basis") or ""),
-                t.get("cpt") or "", t.get("note") or "", t.get("on_rate")] for t in fw],
-              [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3])
+        table("USDTRY Forward", lead + ["Saat", "Kullanıcı", "Yön", "Tutar (USD)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
+                                        "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı", "DV01 (TL)", "DV01 ($)"],
+              [when(t) + [clock(t), who(t), "ALIŞ" if t["dir"] == "B" else "SATIŞ", t.get("amount"), t.get("value_date"), t.get("days"),
+                          t.get("try_rate"), t.get("forward"), t.get("tl"), basis.get(t.get("basis"), t.get("basis") or ""),
+                          t.get("cpt") or "", t.get("note") or "", t.get("on_rate"), t.get("dv01_tl"), t.get("dv01")] for t in fw],
+              lead_fmt + [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3, INT, INT])
         seen = set()
         ois_rows = []
         for t in (x for x in trades if x["kind"] == "ois"):
             first = not t.get("package") or t["package"] not in seen
             if t.get("package"):
                 seen.add(t["package"])
-            ois_rows.append([clock(t), who(t), t.get("label") or "", role.get(t.get("role"), t.get("role") or ""),
-                             "RECEIVE" if t["dir"] == "S" else "PAY", t.get("tenor"), t.get("rate"), t.get("nominal"), t.get("dv01"),
-                             t.get("cost_bp") if first else None, t.get("cost_usd") if first else None, t.get("cpt") or "",
-                             t.get("note") or ""])
-        table("OIS", ["Saat", "Kullanıcı", "İşlem", "Bacak", "Yön", "Vade", "Oran", "Nominal (TL)", "DV01 ($)", "Maliyet (bp)",
-                      "Maliyet ($)", "Karşı taraf", "Not"], ois_rows,
-              [None, None, None, None, None, None, P4, INT, INT, BP, INT, None, None])
+            ois_rows.append(when(t) + [clock(t), who(t), t.get("label") or "", role.get(t.get("role"), t.get("role") or ""),
+                                       "RECEIVE" if t["dir"] == "S" else "PAY", t.get("tenor"), t.get("rate"), t.get("nominal"), t.get("dv01"),
+                                       t.get("cost_bp") if first else None, t.get("cost_usd") if first else None, t.get("cpt") or "",
+                                       t.get("note") or ""])
+        table("OIS", lead + ["Saat", "Kullanıcı", "İşlem", "Bacak", "Yön", "Vade", "Oran", "Nominal (TL)", "DV01 ($)", "Maliyet (bp)",
+                             "Maliyet ($)", "Karşı taraf", "Not"], ois_rows,
+              lead_fmt + [None, None, None, None, None, None, P4, INT, INT, BP, INT, None, None])
         bd = [t for t in trades if t["kind"] == "bond"]
-        table("Tahvil", ["Saat", "Kullanıcı", "Enstrüman", "Yön", "Tutar", "Fiyat", "Not"],
-              [[clock(t), who(t), t.get("instrument"), "ALIŞ" if t["amount"] >= 0 else "SATIŞ", abs(t["amount"]), t.get("price"),
-                t.get("note") or ""] for t in bd], [None, None, None, None, INT, FX, None])
+        table("Tahvil", lead + ["Saat", "Kullanıcı", "Enstrüman", "Yön", "Tutar", "Fiyat", "Not", "DV01 (TL)", "DV01 ($)"],
+              [when(t) + [clock(t), who(t), t.get("instrument"), "ALIŞ" if t["amount"] >= 0 else "SATIŞ", abs(t["amount"]), t.get("price"),
+                          t.get("note") or "", t.get("dv01_tl"), t.get("dv01")] for t in bd],
+              lead_fmt + [None, None, None, None, INT, FX, None, INT, INT])
         cost = data.get("cost") or {"fwd": [], "ois": [], "bond": []}
         table("Forward · pozisyon ve maliyet", ["Valör", "Alış (USD)", "Ort. alış kuru", "Satış (USD)", "Ort. satış kuru", "Net (USD)",
                                                  "Maliyet (kur)", "Gerçekleşen K/Z (TL)"],
@@ -1186,8 +1237,13 @@ class Service(object):
                                                 "Gerçekleşen K/Z"],
               [[x["key"], x["buy"], x["buy_avg"], x["sell"], x["sell_avg"], x["net"], x["cost"], x["realised"]] for x in cost["bond"]],
               [None, INT, FX, INT, FX, INT, FX, AMT])
+        risk = data.get("risk") or {}
+        table("DV01 özeti · TRY faizi +1 bp ($; + = faiz artınca kazanır)", ["Forward", "OIS (net)", "Tahvil", "Toplam", "DV01'i bilinmeyen işlem"],
+              [[risk.get("fwd"), risk.get("ois"), risk.get("bond"), risk.get("total"), risk.get("unknown")]], [INT, INT, INT, INT, INT])
         ls.autosize()
-        return wb.to_bytes(), "Blotter_%s.xlsx" % day.strftime("%Y.%m.%d")
+        name = "Blotter_%s.xlsx" % day.strftime("%Y.%m.%d") if not ranged else \
+            "Blotter_%s-%s.xlsx" % (day.strftime("%Y.%m.%d"), last.strftime("%Y.%m.%d"))
+        return wb.to_bytes(), name
 
     def quote_forward(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         return self.et.call(self._quote_forward, user, payload, lang)
@@ -1232,9 +1288,15 @@ class Service(object):
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         amount = p.get("amount")
+        direction = "S" if str(p.get("dir", "B")).upper() == "S" else "B"
         if type(amount) is float and amount > 0:
             q["amount"] = amount
             q["tl"] = amount * q["forward"]
+        size = amount if type(amount) is float and amount > 0 else 1e6           # no amount yet: per 1 mn USD
+        q["dv01"] = bl.forward_dv01(direction, size, q["forward"], q["days"], q["spot"], q.get("df_try"), q.get("df_usd"),
+                                    q["try_rate"], q.get("usd_rate"))
+        q["dv01"]["amount"] = size
+        q["dv01"]["dir"] = direction
         q["value_date_iso"] = serial_to_date(q["value_date"]).isoformat()
         return q
 
@@ -1335,26 +1397,55 @@ class Service(object):
         q["ids"] = ids
         return q
 
-    def add_bond(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
-        user = self.require_user(user)
+    def _bond_payload(self, payload: Dict[str, Any], lang: Optional[str]) -> Tuple[str, Optional[float], Optional[float]]:
         lang = lang or self.settings.locale
         inst = str(payload.get("instrument") or "").strip()[:60]
-        if not inst:
-            raise ServiceError("enstrüman gerekli")
         amount = payload.get("amount")
         amount = parse_amount(amount, lang) if isinstance(amount, str) else (float(amount) if isinstance(amount, (int, float)) else None)
         price = payload.get("price")
         price = parse_number(price, lang, prefer_decimal=True) if isinstance(price, str) else (float(price) if isinstance(price, (int, float)) else None)
+        side = str(payload.get("dir") or "").upper()
+        if amount is not None:
+            if side == "S":
+                amount = -abs(amount)
+            elif side == "B":
+                amount = abs(amount)
+        return inst, amount, price
+
+    def _bond_risk(self, user: Optional[str], inst: str, amount: Optional[float]) -> Dict[str, Any]:
+        """What the DİBS RV table says about the bond, and the DV01 of ``amount`` nominal of it."""
+        book = self._book("tto")
+        calc = self._calc(user_key(user) if user else None, book)
+        info = bl.bond_info(book, calc, inst)
+        try:
+            usdtry = bl.OisMarket(book, calc).usdtry
+        except bl.TradeError:
+            usdtry = None
+        size = amount if amount else 1e6
+        risk = bl.bond_dv01(size, info, usdtry)
+        return {"instrument": inst, "known": info is not None, "info": info, "usdtry": usdtry,
+                "amount": amount, "per": size, "dv01_tl": risk["tl"], "dv01": risk["usd"]}
+
+    def quote_bond(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        """Name, price in use, duration and DV01 of the bond being typed (when the DİBS RV table lists it)."""
+        inst, amount, _ = self._bond_payload(payload, lang)
+        if not inst:
+            raise ServiceError("enstrüman gerekli")
+        return self.et.call(self._bond_risk, user, inst, amount)
+
+    def add_bond(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        user = self.require_user(user)
+        inst, amount, price = self._bond_payload(payload, lang)
+        if not inst:
+            raise ServiceError("enstrüman gerekli")
         if amount is None or amount == 0:
             raise ServiceError("tutar gerekli (+ alış / − satış)")
         if price is None or price <= 0:
             raise ServiceError("fiyat gerekli")
-        side = str(payload.get("dir") or "").upper()
-        if side == "S":
-            amount = -abs(amount)
-        elif side == "B":
-            amount = abs(amount)
         rec = {"instrument": inst, "amount": amount, "price": price, "note": str(payload.get("note") or "").strip()[:200]}
+        risk = self.et.call(self._bond_risk, user, inst, amount)
+        rec.update({"dv01_tl": risk["dv01_tl"], "dv01": risk["dv01"],
+                    "name": (risk["info"] or {}).get("name") if risk["known"] else None})
         tid = self.store.add_trade(self.today_iso(), "bond", rec, user)
         self.et.call(self._sync_blotter)
         self.bump()
@@ -1393,6 +1484,13 @@ def _lift_title(data: Dict[str, Any]) -> Optional[str]:
     del rows[0]
     del data["r"][0]
     return title or None
+
+
+def _column_captions(data: Dict[str, Any], captions: Dict[str, str]) -> None:
+    """A caption row of the dashboard's own above a table whose columns the workbook left unnamed
+    (``{"F": "USDTRY spot", ...}`` by column letter).  It belongs to no cell of the sheet: its row number is 0."""
+    data["rows"].insert(0, [{"t": captions.get(c, ""), "k": "s", "b": 1, "f": "hd"} for c in data.get("c") or []])
+    data["r"].insert(0, 0)
 
 
 def _to_json(v: Any) -> Any:

@@ -199,11 +199,10 @@ def test_the_workbooks_go_to_links_become_shortcuts_to_page_and_panel(service):
     assert "links" not in service.view(None, "ois")                             # only the desk sheet has them
 
 
-def test_the_picture_on_the_sheet_is_a_panel_and_is_served(service):
-    panels = service.view(None, "ivir")["panels"]
-    (pic,) = [p for p in panels if p["type"] == "image"]
-    assert pic["id"] == "image0" and pic["width"] == 1366 and panels[-1] is pic
-    assert pic["src"].startswith("/api/image?book=tto&sheet=") and pic["src"].endswith("&i=0")
+def test_the_picture_on_the_sheet_is_served(service):
+    """The workbook's only picture is on the "Ivır Zıvır" sheet, which has no page any more: the picture is
+    still read and served (a page that showed a sheet with pictures would list them as panels)."""
+    assert not any(p["type"] == "image" for v in service.views for p in service.view(None, v["id"])["panels"])
     raw, mime = service.image("tto", "Ivır Zıvır", 0)
     assert mime == "image/png" and raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) > 5000
     for args in (("tto", "Ivır Zıvır", 1), ("tto", "Ivır Zıvır", -1), ("tto", "Yok", 0), ("tto", "MASA", 0)):

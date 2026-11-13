@@ -523,15 +523,212 @@
    "group": "forward-41",
    "kind": "date",
    "label": "scratch constants (see §6)"
+  },
+  {
+   "range": "F2:G2",
+   "scope": "user",
+   "group": "forward-spot",
+   "kind": "number",
+   "label": "USDTRY / EURTRY spot (boş = Bloomberg mid)"
+  },
+  {
+   "range": "I2",
+   "scope": "user",
+   "group": "forward-spot",
+   "kind": "date",
+   "label": "USDTRY spot valörü (boş = Bloomberg)"
+  },
+  {
+   "range": "K2",
+   "scope": "user",
+   "group": "forward-spot",
+   "kind": "date",
+   "label": "EURTRY spot valörü (boş = Bloomberg)"
+  },
+  {
+   "range": "AH5:AH6",
+   "scope": "user",
+   "group": "forward-calc-b7-ah",
+   "kind": "date",
+   "label": "'Interest 2 SP' 1st / 2nd date (B7; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AH8",
+   "scope": "user",
+   "group": "forward-calc-b7-ah",
+   "kind": "number",
+   "label": "'Interest 2 SP' spot (B7; boş = piyasa)"
+  },
+  {
+   "range": "AH9",
+   "scope": "user",
+   "group": "forward-calc-b7-ah",
+   "kind": "pct",
+   "label": "'Interest 2 SP' USD faizi (B7; boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "AK5:AK6",
+   "scope": "user",
+   "group": "forward-calc-b7-ak",
+   "kind": "date",
+   "label": "'Interest 2 SP' 1st / 2nd date (B7; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AK8",
+   "scope": "user",
+   "group": "forward-calc-b7-ak",
+   "kind": "number",
+   "label": "'Interest 2 SP' spot (B7; boş = piyasa)"
+  },
+  {
+   "range": "AK9",
+   "scope": "user",
+   "group": "forward-calc-b7-ak",
+   "kind": "pct",
+   "label": "'Interest 2 SP' EUR faizi (B7; boş = EUR OIS eğrisi)"
+  },
+  {
+   "range": "AH19:AH20",
+   "scope": "user",
+   "group": "forward-calc-b8-ah",
+   "kind": "date",
+   "label": "'SP 2 Interest' 1st / 2nd date (B8; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AH22",
+   "scope": "user",
+   "group": "forward-calc-b8-ah",
+   "kind": "number",
+   "label": "'SP 2 Interest' spot (B8; boş = piyasa)"
+  },
+  {
+   "range": "AH23",
+   "scope": "user",
+   "group": "forward-calc-b8-ah",
+   "kind": "pct",
+   "label": "'SP 2 Interest' USD faizi (B8; boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "AK19:AK20",
+   "scope": "user",
+   "group": "forward-calc-b8-ak",
+   "kind": "date",
+   "label": "'SP 2 Interest' 1st / 2nd date (B8; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AK22",
+   "scope": "user",
+   "group": "forward-calc-b8-ak",
+   "kind": "number",
+   "label": "'SP 2 Interest' spot (B8; boş = piyasa)"
+  },
+  {
+   "range": "AK23",
+   "scope": "user",
+   "group": "forward-calc-b8-ak",
+   "kind": "pct",
+   "label": "'SP 2 Interest' EUR faizi (B8; boş = EUR OIS eğrisi)"
+  },
+  {
+   "range": "AH33:AH34",
+   "scope": "user",
+   "group": "forward-calc-b9-ah",
+   "kind": "date",
+   "label": "'SP 2 Interest (all-in)' 1st / 2nd date (B9; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AH36",
+   "scope": "user",
+   "group": "forward-calc-b9-ah",
+   "kind": "number",
+   "label": "'SP 2 Interest (all-in)' spot (B9; boş = piyasa)"
+  },
+  {
+   "range": "AH37",
+   "scope": "user",
+   "group": "forward-calc-b9-ah",
+   "kind": "pct",
+   "label": "'SP 2 Interest (all-in)' USD faizi (B9; boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "AK33:AK34",
+   "scope": "user",
+   "group": "forward-calc-b9-ak",
+   "kind": "date",
+   "label": "'SP 2 Interest (all-in)' 1st / 2nd date (B9; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AK36",
+   "scope": "user",
+   "group": "forward-calc-b9-ak",
+   "kind": "number",
+   "label": "'SP 2 Interest (all-in)' spot (B9; boş = piyasa)"
+  },
+  {
+   "range": "AK37",
+   "scope": "user",
+   "group": "forward-calc-b9-ak",
+   "kind": "pct",
+   "label": "'SP 2 Interest (all-in)' EUR faizi (B9; boş = EUR OIS eğrisi)"
+  },
+  {
+   "range": "AH47:AH48",
+   "scope": "user",
+   "group": "forward-calc-b10-ah",
+   "kind": "date",
+   "label": "'Interest 2 SP (O/N)' 1st / 2nd date (B10; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AH50",
+   "scope": "user",
+   "group": "forward-calc-b10-ah",
+   "kind": "number",
+   "label": "'Interest 2 SP (O/N)' spot (B10; boş = piyasa)"
+  },
+  {
+   "range": "AH51",
+   "scope": "user",
+   "group": "forward-calc-b10-ah",
+   "kind": "pct",
+   "label": "'Interest 2 SP (O/N)' USD faizi (B10; boş = USD OIS eğrisi)"
+  },
+  {
+   "range": "AK47:AK48",
+   "scope": "user",
+   "group": "forward-calc-b10-ak",
+   "kind": "date",
+   "label": "'Interest 2 SP (O/N)' 1st / 2nd date (B10; boş = spot valörü / valör tarihi)"
+  },
+  {
+   "range": "AK50",
+   "scope": "user",
+   "group": "forward-calc-b10-ak",
+   "kind": "number",
+   "label": "'Interest 2 SP (O/N)' spot (B10; boş = piyasa)"
+  },
+  {
+   "range": "AK51",
+   "scope": "user",
+   "group": "forward-calc-b10-ak",
+   "kind": "pct",
+   "label": "'Interest 2 SP (O/N)' EUR faizi (B10; boş = EUR OIS eğrisi)"
   }
  ],
  "panels": [
   {
    "id": "B1",
    "type": "table",
-   "title": "Valör tarihi ve spot",
+   "title": "Valör tarihi ve spot  ·  aşağıdaki tek valörlü tabloların ve hesaplayıcıların tarihi",
    "range": "C2:K2",
-   "hidden": false
+   "hidden": false,
+   "header": {
+    "C": "",
+    "D": "Valör tarihi",
+    "F": "USDTRY spot",
+    "G": "EURTRY spot",
+    "I": "USDTRY spot valörü",
+    "K": "EURTRY spot valörü"
+   }
   },
   {
    "id": "B15",
@@ -567,7 +764,8 @@
    "type": "table",
    "title": "TRY RET",
    "range": "U31:Y50",
-   "hidden": false
+   "hidden": false,
+   "action": "ret"
   },
   {
    "id": "B20",
@@ -847,6 +1045,92 @@
    "type": "table",
    "hidden": true,
    "keep_title": true
+  }
+ ],
+ "pinned": [
+  "B1"
+ ],
+ "sections": [
+  {
+   "id": "calc",
+   "title": "Hesaplayıcılar",
+   "panels": [
+    "B7",
+    "B8",
+    "B9",
+    "B10",
+    "B11",
+    "B25",
+    "B13",
+    "B14",
+    "B21",
+    "B24"
+   ],
+   "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot ve döviz faizi piyasadan (ve üstteki valör tarihinden) gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz."
+  },
+  {
+   "id": "fwd",
+   "title": "Forward fiyatları",
+   "panels": [
+    "B15",
+    "B15b",
+    "B17",
+    "B16",
+    "B18"
+   ],
+   "note": "Üstteki valör tarihi için forward: ICAP, OIS, VİOP ve RET eğrilerinden bid / mid / ask."
+  },
+  {
+   "id": "ret",
+   "title": "RET",
+   "panels": [
+    "B19",
+    "B20",
+    "B26"
+   ],
+   "note": "Masanın RET faizleri (yeşil hücreler ortak girdidir: yazdığınız değer herkeste değişir). Toplu değişiklik, kaydırma ve göndermek için kopyalama: \"RET faizlerini düzenle / kopyala\"."
+  },
+  {
+   "id": "bulk",
+   "title": "Toplu fiyatlama",
+   "panels": [
+    "B33",
+    "B34",
+    "B36"
+   ],
+   "note": "Birden çok valör için forward, forward starting swap ve çapraz kurlar."
+  },
+  {
+   "id": "curves",
+   "title": "Eğriler",
+   "panels": [
+    "B2",
+    "B3",
+    "B4",
+    "B23",
+    "B5",
+    "B6",
+    "B27",
+    "chart0"
+   ]
+  },
+  {
+   "id": "off",
+   "title": "Offshore",
+   "panels": [
+    "B28",
+    "B29",
+    "B30",
+    "B32",
+    "chart1"
+   ]
+  },
+  {
+   "id": "tick",
+   "title": "Ticker'lar",
+   "panels": [
+    "B12"
+   ]
   }
  ]
 }

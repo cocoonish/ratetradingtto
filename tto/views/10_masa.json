@@ -445,5 +445,69 @@
    "range": "BK240:CR514",
    "hidden": true
   }
+ ],
+ "sections": [
+  {
+   "id": "over",
+   "title": "Genel bakış",
+   "panels": [
+    "SPOT",
+    "B2",
+    "B3",
+    "B4",
+    "chart0",
+    "chart1",
+    "B8",
+    "chart2",
+    "chart3"
+   ]
+  },
+  {
+   "id": "fwd",
+   "title": "Forward fiyatlama",
+   "panels": [
+    "B14",
+    "EKF1",
+    "EKF2",
+    "B10",
+    "B22"
+   ]
+  },
+  {
+   "id": "rates",
+   "title": "Faiz · PPK",
+   "panels": [
+    "B9",
+    "B13",
+    "B21",
+    "chart4",
+    "chart5"
+   ]
+  },
+  {
+   "id": "viop",
+   "title": "VİOP",
+   "panels": [
+    "B15",
+    "B16",
+    "B17"
+   ]
+  },
+  {
+   "id": "sig",
+   "title": "Sinyaller",
+   "panels": [
+    "B18",
+    "B19",
+    "B23"
+   ]
+  },
+  {
+   "id": "macro",
+   "title": "Makro",
+   "panels": [
+    "B20"
+   ]
+  }
  ]
 }

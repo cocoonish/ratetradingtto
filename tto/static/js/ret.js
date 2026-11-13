@@ -1,7 +1,7 @@
 // RET faizleri: the desk's TRY RET bid / ask curve.  Typed or pasted from Excel, stored on the server
 // (shared by everyone, kept across restarts) with a history of every upload.
 import { api } from './api.js';
-import { h, clear, modal, toast, errorToast } from './ui.js';
+import { h, clear, modal, toast, errorToast, copyText } from './ui.js';
 import { num, raw, parseNumber } from './format.js';
 
 const ALIASES = { 'O/N': 'ON', 'T/N': 'TN', '12M': '1Y', '24M': '2Y', '1.5Y': '18M', '1,5Y': '18M', '1H': '1W', '2H': '2W', '3H': '3W',
@@ -14,6 +14,28 @@ function tenorKey(text) {
 
 function shown(v) {
   return typeof v === 'number' ? raw(Number((v * 100).toPrecision(12))) : '';
+}
+
+/** A typed rate as percent: 34,45 and 0,3445 are the same rate. */
+function percent(text) {
+  const x = parseNumber(text, true);
+  if (x === null) return null;
+  return Math.abs(x) < 1 ? x * 100 : x;
+}
+
+/**
+ * The curve as text to send: ``rows`` = [{tenor, days, bid, ask}] with bid / ask as typed.
+ * 'table' is tab separated (Excel takes it as cells), 'message' is lined up for a chat window.
+ */
+export function retText(rows, kind, date) {
+  const fmt = (t) => { const x = percent(t); return x === null ? '' : num(x, 2, false); };
+  const filled = rows.filter((r) => fmt(r.bid) || fmt(r.ask));
+  if (kind === 'table') {
+    return ['Vade\tGün\tBid\tAsk'].concat(filled.map((r) => [r.tenor, typeof r.days === 'number' ? String(r.days) : '', fmt(r.bid), fmt(r.ask)].join('\t')))
+      .join('\r\n');
+  }
+  const w = Math.max(...filled.map((r) => r.tenor.length), 2);
+  return ['TRY RET' + (date ? ' · ' + date : '')].concat(filled.map((r) => r.tenor.padEnd(w + 2) + fmt(r.bid) + ' / ' + fmt(r.ask))).join('\n');
 }
 
 /**
@@ -110,6 +132,47 @@ export async function openRetEditor(ctx) {
   };
   m.box.addEventListener('paste', onPaste);
 
+  // ---- change the whole curve at once, and take it along
+  const current = () => data.rows.map((r) => ({ tenor: r.tenor, days: r.days, bid: inputs[r.tenor].bid.value.trim(), ask: inputs[r.tenor].ask.value.trim() }));
+  let saved = JSON.stringify(current());
+  const shiftInp = h('input', { type: 'text', class: 'inp num', id: 'ret-shift', placeholder: 'bp, örn. 25 ya da -50', autocomplete: 'off', style: { width: '150px' } });
+  const shift = (sides) => {
+    const bp = parseNumber(shiftInp.value, true);
+    if (bp === null || bp === 0) { toast('Kaydırma miktarını baz puan olarak yazın (örn. 25 ya da -50)', 'err'); shiftInp.focus(); return; }
+    let n = 0;
+    for (const t of tenors) {
+      for (const k of sides) {
+        const x = percent(inputs[t][k].value);
+        if (x === null) continue;
+        inputs[t][k].value = raw(Number((x + bp / 100).toPrecision(12)));
+        n += 1;
+      }
+      updateMid(t);
+    }
+    toast(n + ' faiz ' + (bp > 0 ? '+' : '') + raw(bp) + ' bp kaydırıldı – uygulamak için "Kaydet"e basın', 'ok', 3600);
+  };
+  const shiftBtn = (label, sides, id) => {
+    const b = h('button', { class: 'btn sm', type: 'button', id }, label);
+    b.addEventListener('click', () => shift(sides));
+    return b;
+  };
+  const copyBtn = (label, kind, id, title) => {
+    const b = h('button', { class: 'btn sm', type: 'button', id, title }, label);
+    b.addEventListener('click', () => {
+      const today = new Date();
+      const date = String(today.getDate()).padStart(2, '0') + '.' + String(today.getMonth() + 1).padStart(2, '0') + '.' + today.getFullYear();
+      const unsaved = JSON.stringify(current()) !== saved;
+      copyText(retText(current(), kind, date), unsaved ? 'Kopyalandı – dikkat: tablodaki değerler henüz kaydedilmedi' : 'RET faizleri kopyalandı');
+    });
+    return b;
+  };
+  const tools = h('div', { class: 'ret-tools' },
+    h('span', { class: 'muted' }, 'Tümünü kaydır'), shiftInp, shiftBtn('Bid + Ask', ['bid', 'ask'], 'ret-shift-both'), shiftBtn('Bid', ['bid'], 'ret-shift-bid'),
+    shiftBtn('Ask', ['ask'], 'ret-shift-ask'), h('span', { class: 'grow' }),
+    copyBtn('Kopyala (tablo)', 'table', 'ret-copy', 'Vade · gün · bid · ask: Excel\'e ya da e-postaya yapıştırılabilir tablo'),
+    copyBtn('Kopyala (mesaj)', 'message', 'ret-copy-msg', 'Sohbet penceresine atılacak hizalı metin: "1M   34,45 / 34,65"'));
+  shiftInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') shift(['bid', 'ask']); });
+
   const hist = h('div', { class: 'ret-hist' });
   const loadHistory = async () => {
     try {
@@ -129,7 +192,9 @@ export async function openRetEditor(ctx) {
 
   m.body.appendChild(h('p', { class: 'muted', style: { margin: '0 0 10px' } },
     'Excel\'de RET tablosunu (yalnızca bid–ask sütunları ya da vade etiketiyle birlikte) kopyalayın, aşağıdaki tabloda bir kutuya tıklayıp Ctrl+V ile yapıştırın. ',
-    'Değerler yüzde (34,45) ya da oran (0,3445) olabilir. Kaydedilen eğri tüm kullanıcılar için geçerlidir ve sunucu yeniden başlasa da saklanır.'));
+    'Değerler yüzde (34,45) ya da oran (0,3445) olabilir. Tek tek değiştirebilir ya da tüm eğriyi baz puanla kaydırabilirsiniz. ',
+    'Kaydedilen eğri tüm kullanıcılar için geçerlidir ve sunucu yeniden başlasa da saklanır.'));
+  m.body.appendChild(tools);
   m.body.appendChild(h('div', { class: 'ret-layout' }, h('div', null, table, meta), hist));
   const save = h('button', { class: 'btn primary', type: 'button' }, 'Kaydet');
   save.addEventListener('click', async () => {
@@ -144,6 +209,7 @@ export async function openRetEditor(ctx) {
       if (res.errors && res.errors.length) toast(res.errors.join('; '), 'err', 7000);
       else toast('RET faizleri kaydedildi (' + res.applied + ' hücre)', 'ok');
       fillRows(res.ret.rows);
+      saved = JSON.stringify(current());
       setMeta(res.ret.meta);
       loadHistory();
       ctx.refreshNow();

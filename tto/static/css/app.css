@@ -22,6 +22,8 @@
   --input-line: #c98500;
   --shared-bg: rgba(25, 158, 112, 0.14);
   --shared-line: #199e70;
+  --hand-bg: rgba(144, 133, 233, 0.22);
+  --hand-line: #9085e9;
   --good-bg: rgba(12, 163, 12, 0.16);
   --bad-bg: rgba(208, 59, 59, 0.20);
   --note-bg: rgba(250, 178, 25, 0.13);
@@ -60,6 +62,8 @@
   --input-line: #c98500;
   --shared-bg: rgba(27, 175, 122, 0.14);
   --shared-line: #12885e;
+  --hand-bg: rgba(74, 58, 167, 0.14);
+  --hand-line: #4a3aa7;
   --good-bg: rgba(12, 163, 12, 0.13);
   --bad-bg: rgba(208, 59, 59, 0.14);
   --note-bg: rgba(237, 161, 0, 0.14);
@@ -123,6 +127,16 @@ a { color: var(--accent-ink); }
 .badge.live.slow .led { background: var(--warn); box-shadow: 0 0 0 3px rgba(250, 178, 25, .2); }
 .badge.replay { border-color: rgba(250, 178, 25, .5); color: var(--warn); }
 .badge.replay .led { background: var(--warn); }
+/* "Tablo bul": the tables of every page by name */
+.findbox { position: relative; display: inline-block; }
+.findbox input { width: 250px; }
+.findlist { position: absolute; right: 0; top: calc(100% + 6px); width: min(560px, 80vw); max-height: 60vh; overflow: auto; z-index: 40;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; }
+.findlist .hit { display: flex; align-items: baseline; gap: 10px; padding: 6px 9px; border-radius: 7px; cursor: pointer; }
+.findlist .hit .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.findlist .hit .w { color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+.findlist .hit.on, .findlist .hit:hover { background: var(--accent-soft); }
+.findlist .none { color: var(--ink-3); padding: 8px 10px; }
 .btn { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink); border-radius: 7px; padding: 5px 10px;
   font-size: 12.5px; white-space: nowrap; }
 .btn:hover { border-color: var(--ink-3); }
@@ -168,6 +182,24 @@ a { color: var(--accent-ink); }
 .page-tools .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
 .sw-in { background: var(--input-bg); border-bottom: 2px solid var(--input-line); }
 .sw-sh { background: var(--shared-bg); border-bottom: 2px solid var(--shared-line); }
+.sw-hand { background: var(--hand-bg); border-bottom: 2px solid var(--hand-line); }
+.btn.warnchip { border-color: var(--hand-line); background: var(--hand-bg); color: var(--ink); }
+/* a page in tabs: the pinned tables stay above the tab bar, the bar stays in sight while the page scrolls */
+.panels.pinned { margin-bottom: 10px; }
+.viewtabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 -14px 12px; padding: 2px 14px 0;
+  position: sticky; top: -14px; z-index: 6; background: var(--plane); }
+.viewtabs button { border: 0; background: none; padding: 8px 12px 7px; color: var(--ink-2); border-bottom: 2px solid transparent;
+  font-weight: 600; font-size: 12.5px; border-radius: 7px 7px 0 0; white-space: nowrap; }
+.viewtabs button:hover { color: var(--ink); background: var(--surface-2); }
+.viewtabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.viewtabs button .n { margin-left: 6px; font-size: 10.5px; color: var(--ink-3); font-weight: 500; }
+.viewtabs.searching button { opacity: .55; }
+.secnote { color: var(--ink-3); font-size: 11.5px; margin: -4px 2px 10px; }
+.secthead { flex: 1 1 100%; color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  margin: 10px 2px -2px; }
+.secthead:first-child { margin-top: 0; }
+.secthead .n { margin-left: 8px; font-weight: 500; letter-spacing: 0; }
+.panel > header .btn.sm { white-space: nowrap; }
 .panels { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; max-width: 100%;
   display: flex; flex-direction: column; flex: 0 1 auto; }
@@ -234,6 +266,15 @@ table.grid td.in { background: var(--input-bg); box-shadow: inset 0 -2px 0 var(-
 table.grid td.in.sh { background: var(--shared-bg); box-shadow: inset 0 -2px 0 var(--shared-line); }
 table.grid td.in.mod::after { content: ""; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 table.grid td.in.sh.mod::after { background: var(--shared-line); }
+/* an input the workbook fills by itself (spot, a date, a rate off the curve) until somebody types over it */
+table.grid td.in.auto { background: none; box-shadow: inset 0 -1px 0 var(--input-line); }
+table.grid td.in.sh.auto { background: none; box-shadow: inset 0 -1px 0 var(--shared-line); }
+table.grid td.fz.in.auto { --fzt: transparent; }
+.sw-auto { border-bottom: 1px solid var(--input-line); }
+/* the user's own value where the workbook has a formula ("elle değer"): deleting it brings the formula back */
+table.grid td.in.hand { background: var(--hand-bg); box-shadow: inset 0 -2px 0 var(--hand-line); }
+table.grid td.in.hand.mod::after { background: var(--hand-line); }
+.hand table.grid td { cursor: text; }
 /* a cell comment of the workbook: corner mark, the text is the tooltip */
 table.grid td.nt::before { content: ""; position: absolute; top: 0; right: 0; border-style: solid; border-width: 0 6px 6px 0;
   border-color: transparent var(--neg) transparent transparent; }
@@ -253,6 +294,7 @@ table.grid td.fz.f-note { --fzt: var(--note-bg); }
 table.grid td.fz.f-hd { --fzt: var(--hd-bg); }
 table.grid td.fz.in { --fzt: var(--input-bg); }
 table.grid td.fz.in.sh { --fzt: var(--shared-bg); }
+table.grid td.fz.in.hand { --fzt: var(--hand-bg); }
 table.grid tr.hd td.fz.fz { --fzt: var(--hd-bg); z-index: 4; }
 table.grid td.fzl { border-right: 1px solid var(--line-2); }
 table.grid td.sel { background-image: linear-gradient(var(--sel), var(--sel)) !important; }
@@ -394,6 +436,21 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); b
 .blotter { display: grid; grid-template-columns: minmax(380px, 470px) minmax(0, 1fr); gap: 12px; align-items: start; }
 .blotter .left { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 0; }
 .blotter .lists { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.blotter .right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* what the listed trades add up to: DV01 for +1 bp on TRY rates */
+.riskbar { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.riskbar > .l { align-self: center; color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-right: 4px; }
+.riskbar .q { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; min-width: 104px; }
+.riskbar .q .l { color: var(--ink-3); font-size: 10.5px; }
+.riskbar .q .v { font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.riskbar .q.big { border-color: var(--accent); background: var(--accent-soft); }
+.riskbar .q.big .v { font-size: 17px; }
+.riskbar .q.pos .v { color: var(--pos); }
+.riskbar .q.neg .v { color: var(--neg); }
+.riskbar .warn { align-self: center; color: var(--warn); font-size: 11.5px; }
+.rangebox { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-left: 10px; margin-left: 2px; border-left: 1px solid var(--line-2); }
+.rangebox input[type="date"] { width: 138px; }
+.copyline { display: flex; justify-content: flex-end; margin-top: 6px; }
 .blotter .lists .panel .body { max-height: 38vh; }
 .form .row { margin-bottom: 12px; }
 .form .row.actions { margin-bottom: 0; justify-content: flex-end; }
@@ -410,6 +467,9 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); b
 .section-title { color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin: 18px 2px 8px; }
 table.plain.ret td { padding: 3px 6px; }
 table.plain.ret input { width: 104px; padding: 4px 8px; text-align: right; }
+.ret-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 9px; background: var(--surface-2); }
+.ret-tools .grow { flex: 1; }
 .ret-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
 .ret-hist { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
 .ret-hist .btn { text-align: left; }

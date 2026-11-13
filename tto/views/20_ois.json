@@ -505,5 +505,64 @@
    "hidden": true,
    "keep_title": true
   }
+ ],
+ "sections": [
+  {
+   "id": "quotes",
+   "title": "Kotalar",
+   "panels": [
+    "B1",
+    "B2",
+    "B3",
+    "chart3",
+    "chart4",
+    "B5",
+    "B8"
+   ]
+  },
+  {
+   "id": "calc",
+   "title": "Hesaplayıcılar",
+   "panels": [
+    "B17",
+    "B18"
+   ]
+  },
+  {
+   "id": "mpc",
+   "title": "PPK ima",
+   "panels": [
+    "B4",
+    "chart0",
+    "chart1",
+    "B6",
+    "B7",
+    "B13",
+    "B14",
+    "B15",
+    "B16",
+    "B22"
+   ]
+  },
+  {
+   "id": "best",
+   "title": "En iyi işlemler",
+   "panels": [
+    "B9",
+    "B10",
+    "B11",
+    "chart2",
+    "chart5"
+   ]
+  },
+  {
+   "id": "all",
+   "title": "Tüm listeler",
+   "panels": [
+    "B19",
+    "B20",
+    "B21"
+   ]
+  }
  ]
 }

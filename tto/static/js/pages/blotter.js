@@ -1,7 +1,7 @@
 // Günlük İşlemler: trade entry (FX forward / OIS / bond) with live pricing, the shared blotter and the
 // cost of the day's position.  Everything saved here is visible to every user at once.
 import { api } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, debounce } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
 
@@ -72,12 +72,28 @@ function p(v, digits) {
   return typeof v === 'number' ? { t: pct(v, digits), v, k: 'n' } : { t: '', k: '' };
 }
 
+/** A signed DV01: + gains when TRY rates rise (USD bought forward, fixed paid), − loses (fixed received, bond bought). */
+function dv(v, digits) {
+  return typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, digits || 0), v, k: 'n', cls: v > 0 ? 'buy' : (v < 0 ? 'sell' : '') } : { t: '', k: '' };
+}
+
+function signed(v, digits) {
+  return typeof v === 'number' ? (v > 0 ? '+' : '') + num(v, digits || 0) : '—';
+}
+
+function isoDay(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+const DV01_HINT = 'TRY faizi +1 bp olursa kâr / zarar. + = faiz artınca kazanır (vadeli USD alışı, PAY); − = faiz artınca kaybeder (vadeli USD satışı, RECEIVE, tahvil alışı).';
+
 export class BlotterPage {
   constructor(host, ctx) {
     this.host = host;
     this.ctx = ctx;
     this.dead = false;
     this.date = null;
+    this.to = null;               // set: every day from this.date to this.to (a list to look at)
     this.data = null;
     this.users = {};
     this.market = null;
@@ -88,13 +104,19 @@ export class BlotterPage {
     this.ois = { strategy: 'outright', side: 'PAY', sizeMode: 'dv01' };
     this.quoteFwd = debounce(() => this.doQuoteFwd(), 220);
     this.quoteOis = debounce(() => this.doQuoteOis(), 220);
+    this.quoteBond = debounce(() => this.doQuoteBond(), 260);
+  }
+
+  query() {
+    if (!this.date) return null;
+    return this.to && this.to !== this.date ? { date: this.date, to: this.to } : { date: this.date };
   }
 
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
     const [data, users, market] = await Promise.all([
-      api.get('/api/blotter', this.date ? { date: this.date } : null),
+      api.get('/api/blotter', this.query()),
       api.get('/api/users'),
       api.get('/api/blotter/ois-market').catch(() => null),
     ]);
@@ -103,12 +125,13 @@ export class BlotterPage {
     this.market = market;
     this.data = data;
     this.date = data.date;
+    this.to = data.ranged ? data.to : null;
     this.build();
     this.fill();
   }
 
   async refresh() {
-    const data = await api.get('/api/blotter', this.date ? { date: this.date } : null);
+    const data = await api.get('/api/blotter', this.query());
     if (this.dead) return;
     const users = Object.keys(this.users);
     if (data.trades.some((t) => t.created_by && !users.includes(t.created_by))) {
@@ -126,14 +149,47 @@ export class BlotterPage {
     this.dead = true;
     this.quoteFwd.cancel();
     this.quoteOis.cancel();
+    this.quoteBond.cancel();
+  }
+
+  /** Show one day (``to`` empty) or every day of a period. */
+  show(from, to) {
+    if (!from) return;
+    if (to && to < from) { const x = from; from = to; to = x; }
+    this.date = from;
+    this.to = to && to !== from ? to : null;
+    this.load().catch(errorToast);
   }
 
   // ------------------------------------------------------------------ layout
   build() {
     clear(this.host);
+    this.grids = {};                 // the tables of the previous day / period went with the page
+    this.sheetGrids.clear();
+    this.sheetOrder = null;
     this.dateSel = h('select', { class: 'inp' });
-    this.dateSel.addEventListener('change', () => { this.date = this.dateSel.value; this.load().catch(errorToast); });
+    this.dateSel.addEventListener('change', () => { if (this.dateSel.value) this.show(this.dateSel.value, null); });
     this.dayNote = h('span', { class: 'muted' });
+    // a period instead of a day: the trades of every day between two dates, in one list
+    this.fromInp = h('input', { type: 'date', class: 'inp', id: 'blotter-from', title: 'Başlangıç günü' });
+    this.toInp = h('input', { type: 'date', class: 'inp', id: 'blotter-to', title: 'Bitiş günü' });
+    const go = h('button', { class: 'btn sm primary', type: 'button', id: 'blotter-range' }, 'Göster');
+    go.addEventListener('click', () => {
+      if (!this.fromInp.value || !this.toInp.value) { toast('Aralığın iki tarihini de seçin', 'err'); return; }
+      this.show(this.fromInp.value, this.toInp.value);
+    });
+    for (const el of [this.fromInp, this.toInp]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
+    const preset = (label, title, fn) => {
+      const b = h('button', { class: 'btn sm', type: 'button', title }, label);
+      b.addEventListener('click', () => { const [a, z] = fn(new Date()); this.show(isoDay(a), isoDay(z)); });
+      return b;
+    };
+    const range = h('span', { class: 'rangebox' }, h('span', { class: 'muted' }, 'Aralık'), this.fromInp, h('span', { class: 'muted' }, '–'), this.toInp, go,
+      preset('Bu hafta', 'Pazartesiden bugüne', (t) => { const a = new Date(t); a.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return [a, t]; }),
+      preset('Bu ay', 'Ayın birinden bugüne', (t) => [new Date(t.getFullYear(), t.getMonth(), 1), t]),
+      preset('Son 30 gün', 'Otuz gün öncesinden bugüne', (t) => { const a = new Date(t); a.setDate(t.getDate() - 30); return [a, t]; }));
+    this.todayBtn = h('button', { class: 'btn sm', type: 'button', id: 'blotter-today', title: 'Bugünün işlemlerine dön (işlem girişi yalnızca bugünde açıktır)' }, 'Bugün');
+    this.todayBtn.addEventListener('click', () => this.show(this.data.today, null));
     // the workbook's end-of-day macro saved the sheet as values to Blotter_yyyy.mm.dd.xlsx: same file, as a download
     this.exportBtn = h('button', { class: 'btn sm', type: 'button',
       title: 'Seçili günün blotter\'ını Excel dosyası olarak indir (Blotter_yyyy.aa.gg.xlsx): sayfa Excel\'deki düzeniyle, yalnızca değerler; '
@@ -141,12 +197,14 @@ export class BlotterPage {
     this.exportBtn.addEventListener('click', async () => {
       this.exportBtn.disabled = true;
       try {
-        const res = await api.download('/api/blotter/export', { date: this.date || undefined }, 'Blotter.xlsx');
+        const res = await api.download('/api/blotter/export', { date: this.date || undefined, to: this.to || undefined }, 'Blotter.xlsx');
         toast(res.name + ' indirildi', 'ok', 3200);
       } catch (err) { errorToast(err); } finally { this.exportBtn.disabled = false; }
     });
-    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'İşlem günü'), this.dateSel, this.dayNote,
+    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'İşlem günü'), this.dateSel, this.todayBtn, range,
       this.exportBtn, h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Kaydedilen işlemler tüm kullanıcılarda anında görünür')));
+    this.host.appendChild(this.dayNote);
+    this.dayNote.className = 'banner hidden';
 
     this.entry = h('div', { class: 'card entry' });
     const tabs = h('div', { class: 'tabs' });
@@ -158,7 +216,7 @@ export class BlotterPage {
         panes[k].classList.toggle('hidden', k !== id);
         tabBtns[k].classList.toggle('on', k === id);
       }
-      if (id === 'fwd') this.quoteFwd(); else if (id === 'ois') this.quoteOis();
+      if (id === 'fwd') this.quoteFwd(); else if (id === 'ois') this.quoteOis(); else this.quoteBond();
     };
     for (const [id, label] of [['fwd', 'USDTRY Forward'], ['ois', 'OIS'], ['bond', 'Tahvil']]) {
       const b = h('button', { type: 'button' }, label);
@@ -170,7 +228,9 @@ export class BlotterPage {
     this.entry.appendChild(tabs);
     for (const k of Object.keys(panes)) this.entry.appendChild(panes[k]);
     this.readonlyNote = h('div', { class: 'card hidden' }, h('div', { class: 'pad muted' },
-      'Geçmiş bir gün görüntüleniyor. Yeni işlem girmek için işlem gününü bugüne alın.'));
+      'Geçmiş bir gün ya da bir tarih aralığı görüntüleniyor. Yeni işlem girmek için "Bugün"e dönün.'));
+    // what the listed trades add up to in risk
+    this.riskBar = h('div', { class: 'riskbar', title: DV01_HINT });
 
     const lists = h('div', { class: 'lists' });
     this.sections = {};
@@ -184,7 +244,8 @@ export class BlotterPage {
       this.sections[id] = { el: sec, body, count };
       lists.appendChild(sec);
     }
-    this.host.appendChild(h('div', { class: 'blotter' }, h('div', { class: 'left' }, this.entry, this.readonlyNote), lists));
+    this.host.appendChild(h('div', { class: 'blotter' }, h('div', { class: 'left' }, this.entry, this.readonlyNote),
+      h('div', { class: 'right' }, this.riskBar, lists)));
     this.sheetTitle = h('div', { class: 'section-title' }, 'Excel sayfasının kendi özet tabloları (Günlük İşlemler)');
     this.sheetWrap = h('div', { class: 'panels' });
     // every cell of the workbook's blotter sheet (the per-trade columns, helpers) is one click away
@@ -204,7 +265,7 @@ export class BlotterPage {
   buildFwd() {
     const f = this.fwd;
     const pane = h('div', { class: 'pad form' });
-    f.dirSeg = seg([['B', 'Alış (USD al)'], ['S', 'Satış (USD sat)']], f.dir, (v) => { f.dir = v; }, { B: 'buy', S: 'sell' });
+    f.dirSeg = seg([['B', 'Alış (USD al)'], ['S', 'Satış (USD sat)']], f.dir, (v) => { f.dir = v; this.quoteFwd(); }, { B: 'buy', S: 'sell' });
     f.amount = input('örn. 10m ya da 10.000.000', 'num');
     f.amountEcho = h('div', { class: 'muted echo' });
     f.date = input('gg.aa.yyyy');
@@ -278,7 +339,21 @@ export class BlotterPage {
       tiles.appendChild(tile('USD faizi', pct(q.usd_rate, 3)));
       tiles.appendChild(tile('Swap puanı', num(q.points, 0)));
       tiles.appendChild(tile('Valör', serialDate(q.value_date)));
+      // risk of the trade being typed (per 1 mn USD until an amount is there): the sheet's "Forward DV01" block
+      const d1 = q.dv01 || {};
+      const per = typeof q.amount === 'number' ? '' : ' / 1mn USD';
+      const t1 = tile('DV01 (TL)' + per, signed(d1.tl, 0), false, DV01_HINT);
+      const t2 = tile('DV01 ($)' + per, signed(d1.usd, 0), false, DV01_HINT);
+      t1.dataset.k = 'dv01-tl';
+      t2.dataset.k = 'dv01-usd';
+      tiles.appendChild(t1);
+      tiles.appendChild(t2);
+      tiles.appendChild(tile('USD faizi DV01 ($)' + per, signed(d1.usd_leg, 0), false, 'USD faizi +1 bp olursa kâr / zarar'));
       f.quote.appendChild(tiles);
+      f.quote.appendChild(this.copyLine(() => (pl.dir === 'B' ? 'ALIŞ ' : 'SATIŞ ') + (typeof q.amount === 'number' ? num(q.amount, 0) + ' USD' : 'USD')
+        + ' · valör ' + serialDate(q.value_date) + ' (' + num(q.days, 0) + ' gün) · forward ' + num(q.forward, 4) + ' · spot ' + num(q.spot, 4)
+        + ' · swap puanı ' + num(q.points, 0) + ' · TRY faizi ' + pct(q.try_rate, 2)
+        + (typeof q.tl === 'number' ? ' · TL tutarı ' + num(q.tl, 2) : '')));
       const rows = [];
       for (const k of ['RET', 'OIS', 'ICAP', 'VIOP']) {
         const t = q.table[k] || {};
@@ -478,6 +553,11 @@ export class BlotterPage {
       tiles.appendChild(tile('Maliyet (TL)', typeof q.info.cost_tl === 'number' ? num(q.info.cost_tl, 0) : '—'));
       tiles.appendChild(tile('İşlem seviyesi', this.levelText(q.level, st)));
       tiles.appendChild(tile('Piyasa mid', this.levelText(q.info.market, st)));
+      const od = q.dv01 || {};
+      const n1 = tile('Net DV01 ($)', signed(od.net, 0), false, DV01_HINT);
+      n1.dataset.k = 'dv01-net';
+      tiles.appendChild(n1);
+      if (q.legs.length > 1) tiles.appendChild(tile('Brüt DV01 ($)', typeof od.gross === 'number' ? num(od.gross, 0) : '—', false, 'Bacakların DV01 toplamı (işaretsiz)'));
       o.quote.appendChild(tiles);
       const rows = q.legs.map((lg) => [ROLE[lg.role] || lg.role,
         { t: lg.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: lg.dir === 'S' ? 'buy' : 'sell' }, lg.tenor,
@@ -485,6 +565,8 @@ export class BlotterPage {
       const g = new Grid({ data: plainData(['Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)'], rows), editable: false });
       o.quote.appendChild(h('div', { class: 'reftable' }, g.el));
       o.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.label));
+      o.quote.appendChild(this.copyLine(() => q.label + ' · ' + q.legs.map((lg) => (lg.dir === 'S' ? 'REC ' : 'PAY ') + lg.tenor + ' ' + pct(lg.rate, 4)
+        + ' ' + num(lg.nominal, 0) + ' TL (DV01 ' + num(lg.dv01, 0) + ' $)').join(' / ')));
     } catch (err) {
       if (ticket !== o.ticket) return;
       clear(o.quote);
@@ -520,13 +602,60 @@ export class BlotterPage {
     });
     b.price = input('temiz fiyat', 'num');
     b.note = input('opsiyonel');
+    b.quote = h('div', { class: 'quotebox' });
+    b.dirSeg.addEventListener('click', () => this.quoteBond());
+    for (const el of [b.inst, b.amount]) el.addEventListener('input', () => this.quoteBond());
+    for (const el of [b.inst, b.amount, b.price]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveBond(); });
     b.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     b.save.addEventListener('click', () => this.saveBond());
     pane.appendChild(h('div', { class: 'row' }, field('Yön', b.dirSeg), field('Enstrüman', b.inst, '200px')));
     pane.appendChild(h('div', { class: 'row' }, field('Tutar', h('div', null, b.amount, b.amountEcho), '190px'), field('Fiyat', b.price, '130px')));
+    pane.appendChild(b.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Not', b.note, '330px')));
     pane.appendChild(h('div', { class: 'row actions' }, b.save));
     return pane;
+  }
+
+  /** Name, price in use, duration and DV01 of the bond being typed, when the DİBS RV table lists it. */
+  async doQuoteBond() {
+    const b = this.bond;
+    if (!b || !b.quote || this.dead) return;
+    const inst = b.inst.value.trim();
+    clear(b.quote);
+    if (!inst) { b.quote.appendChild(h('div', { class: 'muted' }, 'Enstrümanı (ISIN) yazın; DİBS RV tablosundaki bir kâğıtsa süre ve DV01 gösterilir.')); return; }
+    const ticket = (b.ticket = (b.ticket || 0) + 1);
+    try {
+      const q = await api.post('/api/blotter/quote/bond', { instrument: inst, dir: b.dir, amount: parseAmount(b.amount.value) });
+      if (ticket !== b.ticket || this.dead) return;
+      clear(b.quote);
+      if (!q.known) {
+        b.quote.appendChild(h('div', { class: 'muted' }, 'Bu enstrüman DİBS RV tablosunda yok: işlem kaydedilir, DV01 hesaplanamaz.'));
+        return;
+      }
+      const per = q.amount ? '' : ' / 1mn nominal';
+      const tiles = h('div', { class: 'quote' });
+      const t1 = tile('DV01 (TL)' + per, signed(q.dv01_tl, 0), true, DV01_HINT);
+      t1.dataset.k = 'dv01-tl';
+      tiles.appendChild(t1);
+      tiles.appendChild(tile('DV01 ($)' + per, signed(q.dv01, 0), false, DV01_HINT));
+      tiles.appendChild(tile('Mod. süre', typeof q.info.mod_dur === 'number' ? num(q.info.mod_dur, 3) : '—'));
+      tiles.appendChild(tile('Temiz fiyat (tablo)', typeof q.info.clean === 'number' ? num(q.info.clean, 3) : '—', false,
+        'DİBS RV tablosunda kullanılan temiz fiyat; fiyat kutusuna siz yazarsınız'));
+      tiles.appendChild(tile('Vade', typeof q.info.maturity === 'number' ? serialDate(q.info.maturity) : '—'));
+      b.quote.appendChild(tiles);
+      b.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.info.isin + (q.info.name ? ' · ' + q.info.name : '')));
+    } catch (err) {
+      if (ticket !== b.ticket) return;
+      clear(b.quote);
+      b.quote.appendChild(h('div', { class: 'errtxt' }, err.message));
+    }
+  }
+
+  /** "Kopyala": the quote on screen as one line of text, to send. */
+  copyLine(text) {
+    const b = h('button', { class: 'btn sm ghost copyq', type: 'button', title: 'Bu fiyatı tek satır metin olarak kopyala (mesaja yapıştırmak için)' }, 'Fiyatı kopyala');
+    b.addEventListener('click', () => copyText(text(), 'Fiyat kopyalandı'));
+    return h('div', { class: 'copyline' }, b);
   }
 
   async saveBond() {
@@ -541,6 +670,7 @@ export class BlotterPage {
       b.amount.value = '';
       b.amountEcho.textContent = '';
       b.note.value = '';
+      this.quoteBond();
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { b.save.disabled = false; }
   }
@@ -573,7 +703,7 @@ export class BlotterPage {
     if (!rows.length) {
       clear(sec.body);
       this.grids[id] = null;
-      sec.body.appendChild(h('div', { class: 'empty' }, this.data.is_today ? 'Henüz işlem yok – soldaki formdan girin' : 'Kayıt yok'));
+      sec.body.appendChild(h('div', { class: 'empty' }, this.data.is_today ? 'Henüz işlem yok – soldaki formdan girin' : (this.data.ranged ? 'Bu aralıkta kayıt yok' : 'Kayıt yok')));
       return;
     }
     if (this.grids[id]) {
@@ -591,39 +721,69 @@ export class BlotterPage {
     clear(this.dateSel);
     const seen = new Set();
     const add = (iso, label) => { if (!seen.has(iso)) { seen.add(iso); this.dateSel.appendChild(h('option', { value: iso }, label)); } };
+    if (d.ranged) this.dateSel.appendChild(h('option', { value: '' }, 'Aralık: ' + isoToTr(d.date) + ' – ' + isoToTr(d.to)));
     add(d.today, isoToTr(d.today) + ' (bugün)');
     for (const x of d.dates) add(x.date, isoToTr(x.date) + ' · ' + x.count + ' işlem');
-    add(d.date, isoToTr(d.date));
-    this.dateSel.value = d.date;
-    this.dayNote.textContent = d.is_today ? '' : 'Geçmiş gün – yalnızca görüntüleme' + (d.snapshot_at ? ' (özet: ' + d.snapshot_at + ')' : '');
+    if (!d.ranged) add(d.date, isoToTr(d.date));
+    this.dateSel.value = d.ranged ? '' : d.date;
+    this.fromInp.value = d.date;
+    this.toInp.value = d.to || d.date;
+    this.todayBtn.classList.toggle('hidden', d.is_today);
+    this.dayNote.textContent = d.is_today ? '' : (d.ranged
+      ? 'Aralık: ' + isoToTr(d.date) + ' – ' + isoToTr(d.to) + ' · ' + (d.days || 0) + ' işlem günü, ' + d.trades.length + ' kayıt – yalnızca görüntüleme. '
+        + 'Maliyet ve DV01 bu aralıktaki işlemlerin toplamıdır.'
+      : 'Geçmiş gün – yalnızca görüntüleme' + (d.snapshot_at ? ' (özet: ' + d.snapshot_at + ')' : ''));
+    this.dayNote.classList.toggle('hidden', d.is_today);
     this.entry.classList.toggle('hidden', !d.is_today);
     this.readonlyNote.classList.toggle('hidden', d.is_today);
 
+    // risk of what is listed
+    const r = d.risk || {};
+    clear(this.riskBar);
+    const rt = (label, v, key, title) => {
+      const el = tile(label, signed(v, 0), key === 'total', title || DV01_HINT);
+      el.dataset.k = 'risk-' + key;
+      if (typeof v === 'number' && v !== 0) el.classList.add(v > 0 ? 'pos' : 'neg');
+      return el;
+    };
+    this.riskBar.appendChild(h('div', { class: 'l' }, 'DV01 · TRY faizi +1 bp ($)'));
+    this.riskBar.appendChild(rt('Toplam', r.total, 'total'));
+    this.riskBar.appendChild(rt('Forward', r.fwd, 'fwd', DV01_HINT + ' TL karşılığı: ' + signed(r.fwd_tl, 0)));
+    this.riskBar.appendChild(rt('OIS (net)', r.ois, 'ois', DV01_HINT + ' Brüt: ' + (typeof r.ois_gross === 'number' ? num(r.ois_gross, 0) : '—')));
+    this.riskBar.appendChild(rt('Tahvil', r.bond, 'bond', DV01_HINT + ' TL karşılığı: ' + signed(r.bond_tl, 0)));
+    if (r.unknown) this.riskBar.appendChild(h('div', { class: 'muted warn' }, r.unknown + ' işlemin DV01\'i bilinmiyor (DİBS RV tablosunda olmayan tahvil)'));
+    this.riskBar.classList.toggle('hidden', !d.trades.length);
+
+    // in a period every row says which day it belongs to
+    const day = (t) => (d.ranged ? [{ t: isoToTr(t.trade_date), k: 's' }] : []);
+    const dayHead = d.ranged ? ['Tarih'] : [];
+
     const fw = d.trades.filter((t) => t.kind === 'fwd');
     // "O/N" is column F of the workbook's blotter sheet: the overnight equivalent of the trade's TRY rate
-    this.setGrid('fwd', ['Saat', 'Kullanıcı', 'Yön', 'Tutar (USD)', 'Valör', 'Gün', 'TRY faizi', 'O/N', 'Forward', 'TL tutarı', 'Fiyatlama', 'Karşı taraf', 'Not', ''],
-      fw.map((t) => [timeOf(t.created_at), this.who(t), { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
+    this.setGrid('fwd', dayHead.concat(['Saat', 'Kullanıcı', 'Yön', 'Tutar (USD)', 'Valör', 'Gün', 'TRY faizi', 'O/N', 'Forward', 'TL tutarı', 'DV01 (TL)', 'DV01 ($)',
+      'Fiyatlama', 'Karşı taraf', 'Not', '']),
+      fw.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
         n(t.amount, 0), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.tl, 2),
-        BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
-        this.delCell(t, (t.dir === 'B' ? 'Alış ' : 'Satış ') + num(t.amount, 0) + ' USD · ' + serialDate(t.value_date))]),
+        dv(t.dv01_tl), dv(t.dv01), BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
+        this.delCell(t, (t.dir === 'B' ? 'Alış ' : 'Satış ') + num(t.amount, 0) + ' USD · ' + serialDate(t.value_date))])),
       fw.length ? fw.length + ' işlem' : '');
 
     const os = d.trades.filter((t) => t.kind === 'ois');
     const seenPkg = new Set();
-    this.setGrid('ois', ['Saat', 'Kullanıcı', 'İşlem', 'Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)', 'Maliyet (bp)', 'Maliyet ($)', 'Karşı taraf', 'Not', ''],
+    this.setGrid('ois', dayHead.concat(['Saat', 'Kullanıcı', 'İşlem', 'Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)', 'Maliyet (bp)', 'Maliyet ($)', 'Karşı taraf', 'Not', '']),
       os.map((t) => {
         const first = !t.package || !seenPkg.has(t.package);
         if (t.package) seenPkg.add(t.package);
-        return [timeOf(t.created_at), this.who(t), first ? (t.label || '') : '', ROLE[t.role] || t.role || '',
+        return day(t).concat([timeOf(t.created_at), this.who(t), first ? (t.label || '') : '', ROLE[t.role] || t.role || '',
           { t: t.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: t.dir === 'S' ? 'buy' : 'sell' }, t.tenor, p(t.rate, 4), n(t.nominal, 0), n(t.dv01, 0),
           first ? n(t.cost_bp, 2) : { t: '', k: '' }, first ? n(t.cost_usd, 0) : { t: '', k: '' }, t.cpt || '', first ? (t.note || '') : '',
-          first ? this.delCell(t, t.label || 'OIS işlemi') : { t: '', k: '' }];
+          first ? this.delCell(t, t.label || 'OIS işlemi') : { t: '', k: '' }]);
       }), os.length ? os.length + ' bacak' : '');
 
     const bd = d.trades.filter((t) => t.kind === 'bond');
-    this.setGrid('bond', ['Saat', 'Kullanıcı', 'Enstrüman', 'Yön', 'Tutar', 'Fiyat', 'Not', ''],
-      bd.map((t) => [timeOf(t.created_at), this.who(t), t.instrument, { t: t.amount >= 0 ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.amount >= 0 ? 'buy' : 'sell' },
-        n(Math.abs(t.amount), 0), n(t.price, 4), t.note || '', this.delCell(t, t.instrument + ' ' + num(Math.abs(t.amount), 0))]),
+    this.setGrid('bond', dayHead.concat(['Saat', 'Kullanıcı', 'Enstrüman', 'Yön', 'Tutar', 'Fiyat', 'DV01 (TL)', 'DV01 ($)', 'Not', '']),
+      bd.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), t.instrument, { t: t.amount >= 0 ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.amount >= 0 ? 'buy' : 'sell' },
+        n(Math.abs(t.amount), 0), n(t.price, 4), dv(t.dv01_tl), dv(t.dv01), t.note || '', this.delCell(t, t.instrument + ' ' + num(Math.abs(t.amount), 0))])),
       bd.length ? bd.length + ' işlem' : '');
 
     const c = d.cost || { fwd: [], ois: [], bond: [] };

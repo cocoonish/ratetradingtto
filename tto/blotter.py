@@ -78,6 +78,7 @@ def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: fl
     spot = _num(v("Forward!F2"), "spot")
     usd_bid, usd_mid, usd_ask = v("Forward!W27"), v("Forward!X27"), v("Forward!Y27")
     ret_bid, ret_ask = v("Forward!W48"), v("Forward!X48")
+    df_try, df_usd = v("Forward!O37"), v("Forward!O42")        # 'Forward DV01' block: TRY OIS and USD OIS discount factors
     table = {}
     for name, row in (("ICAP", 30), ("OIS", 31), ("VIOP", 32), ("RET", 33)):
         table[name] = {"bid": v("Forward!D%d" % row), "mid": v("Forward!E%d" % row), "ask": v("Forward!F%d" % row)}
@@ -115,8 +116,38 @@ def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: fl
         "forward": fwd, "try_rate": rate, "usd_rate": usd if type(usd) is float else None,
         "points": (fwd - spot) * 10000.0, "daily_points": (fwd - spot) * 10000.0 / days,
         "on_equiv": 360.0 * ((1.0 + rate * days / 360.0) ** (1.0 / days) - 1.0) if rate > -1 else None,
+        "df_try": df_try if type(df_try) is float else None, "df_usd": df_usd if type(df_usd) is float else None,
     })
+    # per 1 mn USD bought, so that the form can show the risk before an amount is typed
+    out["dv01_1m"] = forward_dv01("B", 1e6, fwd, days, spot, out["df_try"], out["df_usd"], rate, out["usd_rate"])
     return out
+
+
+def forward_dv01(direction: str, amount: float, forward: float, days: float, spot: Optional[float],
+                 df_try: Optional[float] = None, df_usd: Optional[float] = None, try_rate: Optional[float] = None,
+                 usd_rate: Optional[float] = None) -> Dict[str, Optional[float]]:
+    """DV01 of an FX forward as the Forward sheet's 'Forward DV01' block has it (Forward!N31:P49).
+
+    ``tl``   TL for +1 bp on the TRY rate  = ±amount·forward·T·DF_TRY/10000   (+ for a purchase of USD)
+    ``usd``  the same in USD at spot                                           (the sheet's TRY_USD_DV01)
+    ``usd_leg``  USD for +1 bp on the USD rate = ∓amount·T·DF_USD/10000
+
+    T = days/360.  Without the sheet's discount factors (a trade stored before they were kept) the trade's
+    own simple rates stand in for them.
+    """
+    try:
+        t = float(days) / 360.0
+        sign = 1.0 if direction == "B" else -1.0
+        if type(df_try) is not float and type(try_rate) is float:
+            df_try = 1.0 / (1.0 + try_rate * t)
+        if type(df_usd) is not float and type(usd_rate) is float:
+            df_usd = 1.0 / (1.0 + usd_rate * t)
+        tl = sign * float(amount) * float(forward) * t * df_try / 10000.0 if type(df_try) is float else None
+        usd_leg = -sign * float(amount) * t * df_usd / 10000.0 if type(df_usd) is float else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return {"tl": None, "usd": None, "usd_leg": None}
+    usd = tl / spot if tl is not None and type(spot) is float and spot > 0 else None
+    return {"tl": tl, "usd": usd, "usd_leg": usd_leg}
 
 
 def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -138,8 +169,12 @@ def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
         "manual": manual if type(manual) is float else None,
         "days": p["days"], "spot": p["spot"], "usd_rate": p["usd_rate"], "try_rate": p["try_rate"],
         "forward": p["forward"], "points": p["points"], "tl": amount * p["forward"],
+        "df_try": p.get("df_try"), "df_usd": p.get("df_usd"),
         "cpt": str(payload.get("cpt") or "").strip()[:40], "note": str(payload.get("note") or "").strip()[:200],
     }
+    risk = forward_dv01(direction, amount, p["forward"], p["days"], p["spot"], p.get("df_try"), p.get("df_usd"),
+                        p["try_rate"], p["usd_rate"])
+    rec.update({"dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]})
     return rec
 
 
@@ -375,8 +410,86 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
     cost_bp = info.get("cost_bp")
     info["cost_usd"] = None if cost_bp is None else cost_bp * risk_dv01
     info["cost_tl"] = None if cost_bp is None else cost_bp * risk_dv01 * mkt.usdtry
+    # + = pays fixed (gains when rates rise), as the blotter sheet's "Net" column: pay − receive
+    net = sum(lg["dv01"] if lg["dir"] == "B" else -lg["dv01"] for lg in legs)
     return {"strategy": strategy, "side": side, "level": level, "label": label, "legs": legs, "info": info,
-            "usdtry": mkt.usdtry}
+            "usdtry": mkt.usdtry, "dv01": {"net": net, "gross": sum(lg["dv01"] for lg in legs)}}
+
+
+# ---------------------------------------------------------------------------------------------- bonds
+BOND_SHEET = "DİBS RV"
+BOND_ROWS_RV = (5, 54)
+_BOND_COLUMNS = {"isin": "ISIN", "name": "Ad", "maturity": "Vade", "clean": "Kullanılan temiz", "mod_dur": "Mod. süre",
+                 "dv01_mn": "DV01 TL / 1mn"}
+
+
+def bond_info(book, calc, instrument: str) -> Optional[Dict[str, Any]]:
+    """What the DİBS RV table knows about a bond typed into the blotter (by ISIN): name, maturity, the clean
+    price in use, modified duration and DV01 in TL per 1 mn nominal.  ``None`` when the bond is not listed."""
+    key = "".join(str(instrument or "").upper().split())
+    if not key or BOND_SHEET not in book.model.sheet_index:
+        return None
+    si = book.model.sheet_index[BOND_SHEET]
+    sh = book.model.sheets[si]
+    cols: Dict[str, int] = {}
+    for c in range(1, sh.max_col + 1):
+        text = sh.consts.get(4 * COLS + c)
+        if isinstance(text, str):
+            for name, label in _BOND_COLUMNS.items():
+                if name not in cols and text.strip().startswith(label):
+                    cols[name] = c
+    if "isin" not in cols or "dv01_mn" not in cols:
+        return None
+    for r in range(BOND_ROWS_RV[0], BOND_ROWS_RV[1] + 1):
+        isin = calc.get(si, r, cols["isin"])
+        if not isinstance(isin, str) or not isin.strip():
+            continue
+        code = "".join(isin.upper().split())
+        if code == key or (len(key) >= 6 and (key in code or code in key)):
+            out: Dict[str, Any] = {"isin": isin.strip(), "row": r}
+            for name in ("name", "maturity", "clean", "mod_dur", "dv01_mn"):
+                v = calc.get(si, r, cols[name]) if name in cols else None
+                out[name] = v if type(v) in (float, str) else None
+            return out
+    return None
+
+
+def bond_dv01(amount: float, info: Optional[Dict[str, Any]], usdtry: Optional[float]) -> Dict[str, Optional[float]]:
+    """DV01 of a bond trade for +1 bp of yield: a purchase loses, so it is negative (TL, and USD at spot)."""
+    per_mn = info.get("dv01_mn") if info else None
+    if type(per_mn) is not float:
+        return {"tl": None, "usd": None}
+    tl = -float(amount) / 1e6 * per_mn
+    return {"tl": tl, "usd": tl / usdtry if type(usdtry) is float and usdtry > 0 else None}
+
+
+# ---------------------------------------------------------------------------------------------- risk of the day
+def risk_summary(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """DV01 of the listed trades in USD for +1 bp on TRY rates: USD bought forward and fixed paid are positive,
+    USD sold forward, fixed received and bonds bought are negative.  Trades without a DV01 (a bond the DİBS
+    table does not list) are counted in ``unknown``."""
+    out: Dict[str, Any] = {"fwd": 0.0, "fwd_tl": 0.0, "ois": 0.0, "ois_gross": 0.0, "bond": 0.0, "bond_tl": 0.0, "unknown": 0}
+    for t in trades:
+        k = t.get("kind")
+        if k == "fwd":
+            if type(t.get("dv01")) is float:
+                out["fwd"] += t["dv01"]
+                out["fwd_tl"] += t.get("dv01_tl") or 0.0
+            else:
+                out["unknown"] += 1
+        elif k == "ois":
+            d = t.get("dv01")
+            if type(d) is float:
+                out["ois"] += d if t.get("dir") == "B" else -d
+                out["ois_gross"] += d
+        elif k == "bond":
+            if type(t.get("dv01")) is float:
+                out["bond"] += t["dv01"]
+                out["bond_tl"] += t.get("dv01_tl") or 0.0
+            else:
+                out["unknown"] += 1
+    out["total"] = out["fwd"] + out["ois"] + out["bond"]
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- cost of position

@@ -30,7 +30,8 @@ def test_index_and_static_files(client):
     assert res.status_code == 200 and "TTO Masa" in res.text and "/static/js/main.js" in res.text
     for path in ("/static/js/main.js", "/static/js/grid.js", "/static/js/chart.js", "/static/css/app.css",
                  "/static/js/pages/view.js", "/static/js/pages/blotter.js", "/static/js/pages/explorer.js",
-                 "/static/js/ret.js", "/static/js/scenarios.js", "/static/js/api.js", "/static/js/ui.js", "/static/js/format.js"):
+                 "/static/js/ret.js", "/static/js/scenarios.js", "/static/js/api.js", "/static/js/ui.js", "/static/js/format.js",
+                 "/static/js/find.js", "/static/js/spot.js"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert r.headers["cache-control"] == "no-cache"          # an updated dashboard is picked up at once
@@ -153,10 +154,59 @@ def test_blotter_endpoints(client, user):
     assert client.get("/api/blotter?date=bozuk").status_code == 400
 
 
+def test_blotter_risk_period_and_bond_quote_over_http(client, user):
+    import datetime as dt
+    h = hdr(user)
+    q = client.post("/api/blotter/quote/forward", json={"dir": "S", "value_date": "15.12.2026", "basis": "RET_MID", "amount": "5m"}).json()
+    assert q["dv01"]["tl"] < 0 < q["dv01"]["usd_leg"] and q["dv01"]["amount"] == 5e6 and q["dv01"]["dir"] == "S"
+    oq = client.post("/api/blotter/quote/ois", json={"strategy": "outright", "side": "PAY", "tenor": "2Y", "level": "35"}).json()
+    assert oq["dv01"]["net"] == oq["dv01"]["gross"] == oq["legs"][0]["dv01"]
+    bq = client.post("/api/blotter/quote/bond", json={"instrument": "TRT150328T24", "dir": "B", "amount": "20m"}).json()
+    assert bq["known"] and bq["info"]["isin"] == "TRT150328T24" and bq["dv01_tl"] == pytest.approx(-20 * bq["info"]["dv01_mn"])
+    assert client.post("/api/blotter/quote/bond", json={"instrument": "YOK"}).json()["known"] is False
+    assert client.post("/api/blotter/quote/bond", json={}).status_code == 400
+    assert client.post("/api/blotter/bond", json={"instrument": "TRT150328T24", "dir": "B", "amount": "20m", "price": "100"}, headers=h).status_code == 200
+    today = dt.date.today()
+    data = client.get("/api/blotter").json()
+    assert data["ranged"] is False and data["is_today"] and data["to"] == today.isoformat()
+    bonds = [t for t in data["trades"] if t["kind"] == "bond"]
+    assert bonds[-1]["dv01"] == pytest.approx(bq["dv01"]) and bonds[-1]["dv01_tl"] == pytest.approx(bq["dv01_tl"])
+    assert data["risk"]["bond"] == pytest.approx(sum(t["dv01"] for t in bonds)) and "total" in data["risk"]
+    start = (today - dt.timedelta(days=30)).isoformat()
+    per = client.get("/api/blotter?date=%s&to=%s" % (start, today.isoformat())).json()
+    assert per["ranged"] and per["date"] == start and per["to"] == today.isoformat() and not per["is_today"]
+    assert [t["id"] for t in per["trades"]] == [t["id"] for t in data["trades"]] and per["sheet"] == []
+    assert client.get("/api/blotter?date=%s&to=bozuk" % start).status_code == 400
+    res = client.get("/api/blotter/export?date=%s&to=%s" % (start, today.isoformat()))
+    assert res.status_code == 200 and res.content[:2] == b"PK"
+    assert res.headers["content-disposition"] == 'attachment; filename="Blotter_%s-%s.xlsx"' % (
+        start.replace("-", "."), today.strftime("%Y.%m.%d"))
+
+
+def test_tabs_hand_values_and_search_data_over_http(client, user):
+    h = hdr(user)
+    page = client.get("/api/view/forward", headers=h).json()
+    assert page["pinned"] == ["B1"] and page["sections"][0]["id"] == "calc" and page["sections"][0]["panels"][0] == "B7"
+    assert client.get("/api/view/bulk").json()["sections"] == []
+    tables = {p["id"]: p.get("tables") for p in client.get("/api/nav").json()["pages"]}
+    assert any(t["id"] == "XAU4" and t["tab"] == "Hesaplayıcılar" for t in tables["viop"]) and tables["blotter"] is None
+    # a value over a formula needs the mode ("adhoc"); it is undone by "reset" with the cell's address
+    res = client.post("/api/inputs", json={"book": "tto", "items": [{"ref": "Forward!E33", "value": "55"}]}, headers=h).json()
+    assert res["applied"] == 0 and res["errors"]
+    res = client.post("/api/inputs", json={"book": "tto", "adhoc": True, "items": [{"ref": "Forward!E33", "value": "55"}]}, headers=h).json()
+    assert res["applied"] == 1 and res["errors"] == []
+    b15 = next(p for p in client.get("/api/view/forward", headers=h).json()["panels"] if p["id"] == "B15")["data"]
+    mine = b15["rows"][b15["r"].index(33)][b15["c"].index("E")]
+    assert mine["m"] == 1 and mine["fx"] == 1 and mine["i"] == "u" and mine["t"] == "55,0000"
+    assert client.post("/api/reset", json={"book": "tto", "refs": ["Forward!E33"]}, headers=h).json()["reset"] == 1
+    b15 = next(p for p in client.get("/api/view/forward", headers=h).json()["panels"] if p["id"] == "B15")["data"]
+    assert "m" not in b15["rows"][b15["r"].index(33)][b15["c"].index("E")]
+
+
 def test_workbook_extras_over_http(client, user):
-    # the picture of the "Ivır Zıvır" sheet
-    pic = next(p for p in client.get("/api/view/ivir").json()["panels"] if p["type"] == "image")
-    res = client.get(pic["src"])
+    # the picture of the "Ivır Zıvır" sheet (the sheet has no page any more; the picture is still served)
+    assert client.get("/api/view/ivir").status_code == 404
+    res = client.get("/api/image?book=tto&sheet=%s&i=0" % quote("Ivır Zıvır"))
     assert res.status_code == 200 and res.headers["content-type"] == "image/png" and res.content[:4] == b"\x89PNG"
     assert "max-age" in res.headers["cache-control"]
     assert client.get("/api/image?book=tto&sheet=MASA&i=0").status_code == 404

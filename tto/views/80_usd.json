@@ -308,5 +308,46 @@
    "range": "AU15:BM284",
    "hidden": true
   }
+ ],
+ "sections": [
+  {
+   "id": "top",
+   "title": "Özet",
+   "panels": [
+    "cap",
+    "top",
+    "inp",
+    "chk",
+    "spr",
+    "fly"
+   ]
+  },
+  {
+   "id": "fomc",
+   "title": "FOMC",
+   "panels": [
+    "fomc",
+    "fomc-chart"
+   ]
+  },
+  {
+   "id": "curve",
+   "title": "Eğri",
+   "panels": [
+    "crv",
+    "curve-chart"
+   ]
+  },
+  {
+   "id": "trades",
+   "title": "İşlemler",
+   "panels": [
+    "t1",
+    "t2",
+    "t3",
+    "t4",
+    "t5"
+   ]
+  }
  ]
 }

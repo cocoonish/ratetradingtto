@@ -143,6 +143,24 @@ export function promptDialog(title, label, initial = '') {
   });
 }
 
+/** Put text on the clipboard (also where the Clipboard API is not allowed: plain http on the desk network). */
+export async function copyText(text, message = 'Kopyalandı') {
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+  } catch (e) { ok = false; }
+  if (!ok) {
+    const ta = h('textarea', { style: { position: 'fixed', left: '-9999px', top: '0' } });
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+  }
+  toast(ok ? message : 'Kopyalanamadı', ok ? 'ok' : 'err', ok ? 2200 : 4000);
+  return ok;
+}
+
 /** True when keyboard / clipboard events should be left to a form control. */
 export function inFormControl(target) {
   if (!target || !target.tagName) return false;

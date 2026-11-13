@@ -359,3 +359,135 @@ def test_personal_inputs_survive_a_restart(tmp_path):
         assert [s["name"] for s in again.scenarios(u)] == ["Senaryo 1"]
     finally:
         again.stop()
+
+
+# ---------------------------------------------------------------------------------------------- hand values
+def _cell_of(page, panel, ref):
+    p = next(x for x in page["panels"] if x["id"] == panel)
+    col = "".join(ch for ch in ref if ch.isalpha())
+    row = int("".join(ch for ch in ref if ch.isdigit()))
+    return p["data"]["rows"][p["data"]["r"].index(row)][p["data"]["c"].index(col)]
+
+
+def test_a_value_typed_over_a_formula_is_mine_marked_and_undone_by_blanking(tmp_path):
+    """"Elle değer": any cell of a page may be typed over - a formula too.  The value is the user's own, the
+    cell is shown as theirs (and as an ordinary cell to everybody else), blanking it brings the formula back,
+    and it is kept across a restart."""
+    svc = make_service(tmp_path)
+    try:
+        u, w = login(svc, "Elle A"), login(svc, "Elle B")
+        ref = "Forward!E33"                                              # RET mid forward: a formula, no input
+        base = cell(svc, ref)
+        assert _cell_of(svc.view(u, "forward"), "B15", "E33").get("i") is None
+        res = svc.set_inputs(u, "tto", [{"ref": ref, "value": "55"}])
+        assert res["applied"] == 0 and "girdi hücresi değil" in res["errors"][0]          # not without the mode
+        res = svc.set_inputs(u, "tto", [{"ref": ref, "value": "55"}], True)
+        assert res["errors"] == [] and cell(svc, ref, u) == 55.0 and cell(svc, ref, w) == base == cell(svc, ref)
+        assert cell(svc, "Forward!O46", u) == 55.0                         # what reads the cell follows
+        mine = _cell_of(svc.view(u, "forward"), "B15", "E33")
+        assert (mine["i"], mine["m"], mine["fx"]) == ("u", 1, 1) and mine["v"] == 55.0
+        for other in (w, None):
+            c = _cell_of(svc.view(other, "forward"), "B15", "E33")
+            assert "i" not in c and "m" not in c and c["fx"] == 1 and c["v"] == base
+        assert svc.my_inputs(u)["inputs"] == [{"book": "tto", "ref": ref, "value": 55.0, "label": ""}]
+        # a constant typed over as well (a label here), and put back by blanking it
+        assert cell(svc, "Forward!C2") == "Tarih"
+        svc.set_inputs(u, "tto", [{"ref": "Forward!C2", "value": "Valör"}], True)
+        assert cell(svc, "Forward!C2", u) == "Valör"
+        svc.set_inputs(u, "tto", [{"ref": "Forward!C2", "value": ""}], True)
+        assert cell(svc, "Forward!C2", u) == "Tarih"
+    finally:
+        svc.stop()
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Elle A")
+        assert cell(svc, "Forward!E33", u) == 55.0 and cell(svc, "Forward!E33") == base
+        assert _cell_of(svc.view(u, "forward"), "B15", "E33")["m"] == 1
+        # blanking: the formula is back and the cell is nobody's input any more
+        res = svc.set_inputs(u, "tto", [{"ref": "Forward!E33", "value": ""}], True)
+        assert res["errors"] == [] and cell(svc, "Forward!E33", u) == base
+        assert "i" not in _cell_of(svc.view(u, "forward"), "B15", "E33") and svc.my_inputs(u)["inputs"] == []
+        # ... as does "back to the formulas" for a list of cells
+        svc.set_inputs(u, "tto", [{"ref": "Forward!E33", "value": "56"}, {"ref": "Forward!D33", "value": "55,9"}], True)
+        assert svc.reset_inputs(u, "tto", ["Forward!E33", "Forward!D33"])["reset"] == 2
+        assert cell(svc, "Forward!E33", u) == base and cell(svc, "Forward!D33", u) == cell(svc, "Forward!D33")
+    finally:
+        svc.stop()
+
+
+def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(service):
+    """The calculators on the right of the Forward sheet read their dates, the spot and the USD / EUR rate from
+    the sheet.  Each of those can be typed over; blanking returns to the sheet's value."""
+    u = login(service, "Hesap Elle")
+    page = service.view(u, "forward")
+    for ref in ("AH5", "AH6", "AH8", "AH9", "AK5", "AK6", "AK8", "AK9"):
+        c = _cell_of(page, "B7", ref)
+        assert c["i"] == "u" and c["fx"] == 1 and "m" not in c, ref          # an input the sheet fills by itself
+    assert _cell_of(page, "B7", "AH10")["i"] == "u" and "fx" not in _cell_of(page, "B7", "AH10")      # the TRY rate: typed
+    assert "i" not in _cell_of(page, "B7", "AH11")                                                      # the result
+    sp0, fwd0 = cell(service, "Forward!AH11"), cell(service, "Forward!AH12")
+    days = cell(service, "Forward!AH7")
+    res = service.set_inputs(u, "tto", [{"ref": "Forward!AH8", "value": "50,50"}, {"ref": "Forward!AH9", "value": "4,5"},
+                                        {"ref": "Forward!AH6", "value": "15.01.2027"}])
+    assert res["errors"] == []
+    first = cell(service, "Forward!AH5")                         # Bloomberg's SETTLE_DT: a date as text offline
+    n = parse_date("15.01.2027") - (parse_date(first) if isinstance(first, str) else first)
+    assert cell(service, "Forward!AH7", u) == n != days
+    sp = 50.50 * ((1 + 0.36 / 360 * n) / (1 + 0.045 / 360 * n) - 1) * 10000
+    assert cell(service, "Forward!AH11", u) == pytest.approx(sp, rel=1e-13)
+    assert cell(service, "Forward!AH22", u) == 50.50 and cell(service, "Forward!AH20", u) == parse_date("15.01.2027")   # the next one follows
+    assert cell(service, "Forward!AH11") == sp0                                                            # mine alone
+    c = _cell_of(service.view(u, "forward"), "B7", "AH8")
+    assert (c["i"], c["m"], c["fx"]) == ("u", 1, 1)
+    service.set_inputs(u, "tto", [{"ref": "Forward!AH%d" % r, "value": ""} for r in (6, 8, 9)])
+    assert cell(service, "Forward!AH11", u) == sp0 and cell(service, "Forward!AH12", u) == fwd0
+    # the spot of the whole page (Bloomberg's mid) and its value date, when Bloomberg does not deliver them
+    service.set_inputs(u, "tto", [{"ref": "Forward!F2", "value": "51"}, {"ref": "Forward!I2", "value": "05.11.2026"}])
+    assert cell(service, "Forward!AH8", u) == 51.0 and cell(service, "Forward!AH5", u) == parse_date("05.11.2026")
+    assert cell(service, "Forward!O32", u) == 51.0 and cell(service, "Forward!F2") != 51.0
+    service.reset_inputs(u, "tto")
+    assert cell(service, "Forward!AH8", u) == cell(service, "Forward!F2")
+    # the three USDTRY contract calculators of the VİOP page
+    vp = service.view(u, "viop")
+    for ref in ("M32", "M33", "M35", "M36", "P33", "S36"):
+        c = _cell_of(vp, "B8", ref)
+        assert c["i"] == "u" and c["fx"] == 1, ref
+    service.set_inputs(u, "tto", [{"ref": "VIOP!M35", "value": "50"}, {"ref": "VIOP!M36", "value": "4"}])
+    n = cell(service, "VIOP!M34", u)
+    assert cell(service, "VIOP!M38", u) == pytest.approx(50 * ((1 + 0.3405 / 360 * n) / (1 + 0.04 / 360 * n) - 1) * 10000, rel=1e-13)
+    assert cell(service, "VIOP!P35", u) == 50.0                                 # the second calculator reads the first one's spot
+    service.reset_inputs(u, "tto")
+
+
+def test_pages_come_in_tabs_with_the_calculators_first(service):
+    page = service.view(None, "forward")
+    assert page["pinned"] == ["B1"]
+    tabs = page["sections"]
+    assert [s["id"] for s in tabs] == ["calc", "fwd", "ret", "bulk", "curves", "off", "tick"]
+    assert tabs[0]["title"] == "Hesaplayıcılar" and tabs[0]["panels"][:5] == ["B7", "B8", "B9", "B10", "B11"] and tabs[0]["note"]
+    shown = [p["id"] for p in page["panels"]]
+    listed = [pid for s in tabs for pid in s["panels"]]
+    assert sorted(listed + page["pinned"]) == sorted(shown) and len(listed) == len(set(listed))
+    # the value date strip: captions of the dashboard's own above the cells the sheet leaves unnamed
+    b1 = next(p for p in page["panels"] if p["id"] == "B1")["data"]
+    assert b1["r"] == [0, 2] and b1["c"] == ["C", "D", "F", "G", "I", "K"]
+    assert [c["t"] for c in b1["rows"][0]] == ["", "Valör tarihi", "USDTRY spot", "EURTRY spot", "USDTRY spot valörü", "EURTRY spot valörü"]
+    assert b1["rows"][1][0]["t"] == "Tarih" and [c.get("i") for c in b1["rows"][1]] == [None, "u", "u", "u", "u", "u"]
+    # the RET table has the button of the RET editor
+    assert next(p for p in page["panels"] if p["id"] == "B19")["action"] == "ret"
+    # with the helper tables: they get a tab of their own, nothing is left out
+    full = service.view(None, "forward", True)
+    assert [s["id"] for s in full["sections"]][-1] == "aux" and full["sections"][-1]["title"] == "Yardımcı tablolar"
+    assert "B22" in full["sections"][-1]["panels"] and full["sections"][0] == tabs[0]
+    assert sorted(pid for s in full["sections"] for pid in s["panels"]) + ["B1"] == sorted(p["id"] for p in full["panels"] if p["id"] != "B1") + ["B1"]
+    # a page without tabs
+    small = service.view(None, "bulk")
+    assert small["sections"] == [] and small["pinned"] == []
+    # a calculator may be in two tabs (VİOP: the gold calculator)
+    viop = {s["id"]: s for s in service.view(None, "viop")["sections"]}
+    assert viop["calc"]["panels"] == ["B8", "XAU4"] and "XAU4" in viop["gold"]["panels"]
+    # the search box of the top bar: the tables of every page, with their tab
+    pages = {p["id"]: p for p in service.nav()}
+    tables = {t["id"]: t for t in pages["forward"]["tables"]}
+    assert tables["B7"]["tab"] == "Hesaplayıcılar" and tables["B7"]["title"].startswith("Interest 2 SP")
+    assert tables["B19"]["tab"] == "RET" and "B22" not in tables and "tables" not in pages["blotter"]

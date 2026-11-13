@@ -116,5 +116,35 @@
    "range": "A227:C238",
    "hidden": false
   }
+ ],
+ "sections": [
+  {
+   "id": "out",
+   "title": "Outright",
+   "panels": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5"
+   ]
+  },
+  {
+   "id": "sf",
+   "title": "Spread · fly",
+   "panels": [
+    "B6",
+    "B7"
+   ]
+  },
+  {
+   "id": "sim",
+   "title": "Kapanış simülatörü",
+   "panels": [
+    "B8",
+    "B9",
+    "B10"
+   ]
+  }
  ]
 }

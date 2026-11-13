@@ -359,5 +359,44 @@
    "range": "AI84:EQ102",
    "hidden": true
   }
+ ],
+ "sections": [
+  {
+   "id": "pos",
+   "title": "Pozisyon",
+   "panels": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B7"
+   ]
+  },
+  {
+   "id": "risk",
+   "title": "Risk · senaryo",
+   "panels": [
+    "B9",
+    "B10",
+    "B11",
+    "B13"
+   ]
+  },
+  {
+   "id": "hedge",
+   "title": "Hedge",
+   "panels": [
+    "B14",
+    "B16"
+   ]
+  },
+  {
+   "id": "pnl",
+   "title": "Günlük P&L",
+   "panels": [
+    "B17",
+    "B18"
+   ]
+  }
  ]
 }

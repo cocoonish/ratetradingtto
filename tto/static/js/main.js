@@ -8,6 +8,7 @@ import { BlotterPage } from './pages/blotter.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
 import { openRetEditor } from './ret.js';
+import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
 
@@ -27,6 +28,7 @@ const ctx = {
   refreshNow: () => { runRefresh(); pollStatus(); },
   setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
   displayName: (key) => state.users[key] || key || '',
+  openRet: () => openRetEditor(ctx),
   /** Open a page and bring one of its panels into view (the workbook's "go to" hyperlinks). */
   goto: (pageId, panelId) => {
     const hash = '#/' + pageId + (panelId ? '?p=' + encodeURIComponent(panelId) : '');
@@ -372,6 +374,7 @@ function boot() {
     store('tto.nav', on ? '1' : '0');
   });
   $('btn-ret').addEventListener('click', () => openRetEditor(ctx));
+  setupFind($('findbox'), () => state.pages || [], (page, panel) => ctx.goto(page, panel));
   $('btn-scen').addEventListener('click', () => openScenarios(ctx));
   $('btn-user').addEventListener('click', (e) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -394,6 +397,11 @@ function boot() {
 }
 
 // small debugging / testing surface
-window.tto = { findCell, selectionText, state, refresh: () => runRefresh() };
+// (a cell of a tab that is not open is found as well: the page opens its tab)
+function findCellAnywhere(ref) {
+  return findCell(ref) || (state.page && state.page.findCell ? state.page.findCell(ref) : null);
+}
+
+window.tto = { findCell: findCellAnywhere, selectionText, state, refresh: () => runRefresh() };
 
 boot();

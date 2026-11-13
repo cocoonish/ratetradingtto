@@ -53,6 +53,10 @@ function cellClass(cell) {
     cls += ' in';
     if (cell.i === 's') cls += ' sh';
     if (cell.m) cls += ' mod';
+    if (cell.fx && cell.m === 1) cls += ' hand';        // this user's value stands where the workbook has a formula
+    // filled by the workbook (market, another cell) until typed over; one that came out empty or as an error
+    // (the market did not deliver) stays a plain input: that is where a value has to be typed
+    else if (cell.fx && !cell.m && cell.t && cell.k !== 'e') cls += ' auto';
   }
   return cls;
 }
@@ -129,7 +133,7 @@ export class Grid {
 
   ref(i, j) {
     const d = this.data;
-    if (!d || !d.r || !d.c || d.r[i] === undefined || d.c[j] === undefined) return null;
+    if (!d || !d.r || !d.c || !d.r[i] || d.c[j] === undefined) return null;      // (row 0: a caption row of the dashboard's own)
     return d.sheet + '!' + d.c[j] + d.r[i];
   }
 

@@ -300,3 +300,172 @@ def test_bond_validation(svc, users):
                     {"instrument": "X", "amount": 1e6, "price": 0}):
         with pytest.raises(ServiceError):
             svc.add_bond(a, payload)
+
+
+# ---------------------------------------------------------------------------------------------- DV01
+def test_forward_dv01_is_the_sheets_own_block(service):
+    """The workbook has a 'Forward DV01' block (Forward!N31:P49) for 1 mn USD at the RET mid forward of the
+    value date in D2: the quote of that trade shows the same numbers, scaled by the amount and signed by the side."""
+    u = service.login("DV01 fwd")["user"]
+    d2 = cell(service, "Forward!D2")
+    q = service.quote_forward(u, {"dir": "B", "amount": "10m", "value_date": d2, "basis": "RET_MID"})
+    assert cell(service, "Forward!O44") == "B" and cell(service, "Forward!O45") == 1e6 and q["forward"] == cell(service, "Forward!O46")
+    assert q["dv01"]["tl"] == pytest.approx(10 * cell(service, "Forward!O48"), rel=1e-12)             # DV01_TRY
+    assert q["dv01"]["usd"] == pytest.approx(10 * cell(service, "Forward!O49"), rel=1e-12)            # TRY_USD_DV01
+    assert q["dv01"]["usd_leg"] == pytest.approx(10 * cell(service, "Forward!O47"), rel=1e-12)        # DV01_USD
+    assert q["dv01"]["tl"] > 0 > q["dv01"]["usd_leg"] and q["dv01"]["amount"] == 10e6
+    assert q["df_try"] == cell(service, "Forward!O37") and q["df_usd"] == cell(service, "Forward!O42")
+    # the other side has the other sign; without an amount the quote is per 1 mn USD
+    s = service.quote_forward(u, {"dir": "S", "amount": "10m", "value_date": d2, "basis": "RET_MID"})["dv01"]
+    assert s["tl"] == pytest.approx(-q["dv01"]["tl"]) and s["usd_leg"] == pytest.approx(-q["dv01"]["usd_leg"])
+    one = service.quote_forward(u, {"dir": "B", "value_date": d2, "basis": "RET_MID"})
+    assert "amount" not in one and one["dv01"]["amount"] == 1e6 and one["dv01"]["tl"] == pytest.approx(cell(service, "Forward!O48"), rel=1e-12)
+    assert one["dv01_1m"]["tl"] == one["dv01"]["tl"]
+    # another date: T, the forward and the discount factors of that date (the sheet's formula, by hand)
+    q2 = service.quote_forward(u, {"dir": "B", "amount": "4m", "value_date": "15.01.2027", "basis": "TRY", "manual": "36,5"})
+    t = q2["days"] / 360.0
+    assert q2["dv01"]["tl"] == pytest.approx(4e6 * q2["forward"] * t * q2["df_try"] / 10000, rel=1e-12)
+    assert q2["dv01"]["usd"] == pytest.approx(q2["dv01"]["tl"] / q2["spot"], rel=1e-12)
+    assert q2["dv01"]["usd_leg"] == pytest.approx(-4e6 * t * q2["df_usd"] / 10000, rel=1e-12)
+    assert 0.9 < q2["df_try"] < 1.0 and q2["df_try"] < q2["df_usd"] < 1.0
+
+
+def test_forward_dv01_helper():
+    r = bl.forward_dv01("B", 1e6, 52.0, 90.0, 50.0, 0.92, 0.99)
+    assert r == {"tl": pytest.approx(1e6 * 52.0 * 0.25 * 0.92 / 1e4), "usd": pytest.approx(1e6 * 52.0 * 0.25 * 0.92 / 1e4 / 50.0),
+                 "usd_leg": pytest.approx(-1e6 * 0.25 * 0.99 / 1e4)}
+    # a trade stored without discount factors: its own simple rates stand in
+    own = bl.forward_dv01("S", 2e6, 52.0, 90.0, 50.0, None, None, 0.36, 0.04)
+    assert own["tl"] == pytest.approx(-2e6 * 52.0 * 0.25 / (1 + 0.36 * 0.25) / 1e4) and own["usd_leg"] == pytest.approx(2e6 * 0.25 / 1.01 / 1e4)
+    assert bl.forward_dv01("B", None, 52.0, 90.0, 50.0, 0.9, 0.9) == {"tl": None, "usd": None, "usd_leg": None}
+    assert bl.forward_dv01("B", 1e6, 52.0, 90.0, None, 0.9, 0.9)["usd"] is None
+
+
+def test_ois_quote_has_the_net_and_gross_dv01(svc, market):
+    q = svc.quote_ois(None, {"strategy": "outright", "side": "PAY", "tenor": "1Y", "level": 0.37, "dv01": 5000.0})
+    assert q["dv01"]["net"] == pytest.approx(q["legs"][0]["dv01"]) and q["dv01"]["gross"] == q["dv01"]["net"] > 0
+    r = svc.quote_ois(None, {"strategy": "outright", "side": "RECEIVE", "tenor": "1Y", "level": 0.37, "dv01": 5000.0})
+    assert r["dv01"]["net"] == pytest.approx(-q["dv01"]["net"]) and r["dv01"]["gross"] == pytest.approx(q["dv01"]["gross"])
+    # a DV01-neutral spread: the legs cancel (but for the rounding to lots), the gross is both
+    sp = svc.quote_ois(None, {"strategy": "spread", "side": "STEEPENER", "short": "1Y", "long": "2Y", "level": -125.0, "dv01": 5000.0})
+    assert abs(sp["dv01"]["net"]) < 50 and sp["dv01"]["gross"] > 9900
+    assert sp["dv01"]["gross"] == pytest.approx(sum(lg["dv01"] for lg in sp["legs"]))
+    assert sp["dv01"]["net"] == pytest.approx(sp["legs"][1]["dv01"] - sp["legs"][0]["dv01"])          # pays the long leg
+
+
+def test_bond_dv01_comes_from_the_rv_table(service):
+    u = service.login("DV01 tahvil")["user"]
+    q = service.quote_bond(u, {"instrument": " trt150328t24 ", "dir": "B", "amount": "50m"})
+    row = q["info"]["row"]
+    assert q["known"] and q["info"]["isin"] == "TRT150328T24" == cell(service, "DİBS RV!A%d" % row)
+    per_mn = cell(service, "DİBS RV!AI%d" % row)
+    assert cell(service, "DİBS RV!AI4").startswith("DV01 TL / 1mn") and per_mn > 50
+    assert q["info"]["dv01_mn"] == per_mn and q["info"]["mod_dur"] == cell(service, "DİBS RV!AG%d" % row)
+    assert q["info"]["clean"] == cell(service, "DİBS RV!O%d" % row) and q["info"]["name"] == cell(service, "DİBS RV!C%d" % row)
+    assert q["dv01_tl"] == pytest.approx(-50 * per_mn) and q["dv01"] == pytest.approx(-50 * per_mn / q["usdtry"])    # a purchase loses
+    assert service.quote_bond(u, {"instrument": "TRT150328T24", "dir": "S", "amount": "50m"})["dv01_tl"] == pytest.approx(50 * per_mn)
+    one = service.quote_bond(u, {"instrument": "TRT150328T24"})                    # no amount yet: per 1 mn nominal
+    assert one["amount"] is None and one["per"] == 1e6 and one["dv01_tl"] == pytest.approx(-per_mn)
+    miss = service.quote_bond(u, {"instrument": "XS0000000000", "amount": "5m"})
+    assert not miss["known"] and miss["info"] is None and miss["dv01"] is None and miss["dv01_tl"] is None
+    with pytest.raises(ServiceError):
+        service.quote_bond(u, {"instrument": "  "})
+    assert bl.bond_dv01(1e6, None, 50.0) == {"tl": None, "usd": None}
+    assert bl.bond_dv01(2e6, {"dv01_mn": 100.0}, None) == {"tl": -200.0, "usd": None}
+
+
+@pytest.fixture()
+def desk(tmp_path):
+    """A blotter of its own: trades on three days."""
+    from conftest import make_service
+    svc = make_service(tmp_path)
+    u = svc.login("Aralık A")["user"]
+    yield svc, u
+    svc.stop()
+
+
+def test_dv01_is_kept_with_the_trade_and_summed(desk):
+    svc, u = desk
+    f1 = svc.add_forward(u, {"dir": "B", "amount": "10m", "value_date": "07.06.2027", "basis": "RET_MID"})
+    f2 = svc.add_forward(u, {"dir": "S", "amount": "5m", "value_date": "15.01.2027", "basis": "RET_BID"})
+    assert f1["dv01_tl"] > 0 > f2["dv01_tl"] and f1["dv01"] == pytest.approx(f1["dv01_tl"] / f1["spot"])
+    assert f1["usd_dv01"] < 0 < f2["usd_dv01"] and 0 < f1["df_try"] < 1
+    pay = svc.add_ois(u, {"strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "37,25", "dv01": 5000})
+    rec = svc.add_ois(u, {"strategy": "outright", "side": "RECEIVE", "tenor": "2Y", "level": "34", "dv01": 2000})
+    b1 = svc.add_bond(u, {"instrument": "TRT150328T24", "dir": "B", "amount": "50m", "price": "100,10"})
+    b2 = svc.add_bond(u, {"instrument": "LISTEDE YOK", "dir": "S", "amount": "5m", "price": "99"})
+    assert b1["dv01_tl"] < 0 and b1["dv01"] == pytest.approx(b1["dv01_tl"] / cell(svc, "OIS_MAIN!D2")) and b1["name"]
+    assert b2["dv01"] is None and b2["dv01_tl"] is None and b2["name"] is None
+    day = svc.blotter(u)
+    by_id = {t["id"]: t for t in day["trades"]}
+    assert by_id[f1["id"]]["dv01"] == f1["dv01"] and by_id[b1["id"]]["dv01_tl"] == b1["dv01_tl"]
+    risk = day["risk"]
+    assert risk["fwd"] == pytest.approx(f1["dv01"] + f2["dv01"]) and risk["fwd_tl"] == pytest.approx(f1["dv01_tl"] + f2["dv01_tl"])
+    assert risk["ois"] == pytest.approx(pay["legs"][0]["dv01"] - rec["legs"][0]["dv01"])           # pay − receive
+    assert risk["ois_gross"] == pytest.approx(pay["legs"][0]["dv01"] + rec["legs"][0]["dv01"])
+    assert risk["bond"] == pytest.approx(b1["dv01"]) and risk["unknown"] == 1
+    assert risk["total"] == pytest.approx(risk["fwd"] + risk["ois"] + risk["bond"])
+    assert svc.blotter(u, "2020-01-01")["risk"]["total"] == 0.0
+    # a forward stored before the DV01 was kept gets one from its own rates
+    old = {k: v for k, v in f1.items() if k not in ("id", "dv01", "dv01_tl", "usd_dv01", "df_try", "df_usd")}
+    svc.store.add_trade("2026-02-03", "fwd", old, u)
+    (t,) = svc.blotter(u, "2026-02-03")["trades"]
+    own = bl.forward_dv01("B", 10e6, f1["forward"], f1["days"], f1["spot"], None, None, f1["try_rate"], f1["usd_rate"])
+    assert t["dv01_tl"] == pytest.approx(own["tl"]) and t["dv01"] == pytest.approx(own["usd"]) and abs(t["dv01_tl"] / f1["dv01_tl"] - 1) < 0.05
+
+
+def test_a_period_lists_the_trades_of_every_day_in_it(desk):
+    svc, u = desk
+    today = dt.date.today()
+    days = [(today - dt.timedelta(days=k)).isoformat() for k in (9, 4, 0)]
+    f = svc.add_forward(u, {"dir": "B", "amount": "3m", "value_date": "07.06.2027", "basis": "RET_MID"})
+    rec = {k: v for k, v in f.items() if k != "id"}
+    svc.store.add_trade(days[0], "fwd", dict(rec, amount=1e6, tl=1e6 * rec["forward"]), u)
+    svc.store.add_trade(days[1], "fwd", dict(rec, dir="S", amount=2e6, tl=2e6 * rec["forward"], dv01=-rec["dv01"], dv01_tl=-rec["dv01_tl"]), u)
+    svc.store.add_trade(days[1], "bond", {"instrument": "TRT150328T24", "amount": 5e6, "price": 100.0, "note": ""}, u)
+    one = svc.blotter(u, days[1])
+    assert not one["ranged"] and one["to"] == days[1] and len(one["trades"]) == 2 and not one["is_today"]
+    per = svc.blotter(u, days[0], None, days[2])
+    assert per["ranged"] and (per["date"], per["to"]) == (days[0], days[2]) and per["days"] == 3 and not per["is_today"]
+    assert [t["trade_date"] for t in per["trades"]] == [days[0], days[1], days[1], days[2]] and per["sheet"] == []
+    # cost and risk are those of the whole period: 1 + 3 mn bought, 2 mn sold at the same forward
+    (bucket,) = per["cost"]["fwd"]
+    assert (bucket["buy"], bucket["sell"], bucket["net"]) == (4e6, 2e6, 2e6)
+    assert per["risk"]["fwd"] == pytest.approx(rec["dv01"] + f["dv01"] - rec["dv01"])
+    assert per["risk"]["unknown"] == 1                                             # the bond row above carries no DV01
+    # the ends may be given in either order; a period of one day is that day; today alone is still today
+    assert svc.blotter(u, days[2], None, days[0])["trades"] == per["trades"]
+    assert not svc.blotter(u, days[1], None, days[1])["ranged"]
+    assert svc.blotter(u, days[2], None, days[2])["is_today"] and svc.blotter(u)["is_today"]
+    assert svc.blotter(u, "2019-01-01", None, "2019-12-31")["trades"] == []
+    with pytest.raises(ServiceError):
+        svc.blotter(u, days[0], None, "yarın")
+    assert svc.store.trades(days[1], days[1]) == svc.store.trades(days[1]) and len(svc.store.trades(days[0], days[1])) == 3
+
+
+def test_a_period_downloads_as_one_list(desk):
+    from helpers import read_xlsx
+    svc, u = desk
+    today = dt.date.today()
+    first = today - dt.timedelta(days=6)
+    f = svc.add_forward(u, {"dir": "B", "amount": "3m", "value_date": "07.06.2027", "basis": "RET_MID", "note": "bugün"})
+    svc.add_bond(u, {"instrument": "TRT150328T24", "dir": "B", "amount": "50m", "price": "100,10"})
+    svc.store.add_trade(first.isoformat(), "fwd", dict({k: v for k, v in f.items() if k != "id"}, note="geçen hafta"), u)
+    raw, name = svc.blotter_export(u, first.isoformat(), None, today.isoformat())
+    assert name == "Blotter_%s-%s.xlsx" % (first.strftime("%Y.%m.%d"), today.strftime("%Y.%m.%d"))
+    book = read_xlsx(raw)
+    assert list(book) == ["İşlem listesi"]                                       # Excel's layout of the sheet is one day's
+    lst = book["İşlem listesi"]
+    assert lst["A1"] == "Günlük İşlemler · %s – %s" % (first.strftime("%d.%m.%Y"), today.strftime("%d.%m.%Y"))
+    assert lst["A5"] == "Tarih" and lst["B5"] == "Saat" and "yyyy" in lst["!formats"]["A6"]
+    from tto.xl.values import date_to_serial
+    assert (lst["A6"], lst["A7"]) == (date_to_serial(first), date_to_serial(today)) and lst["E6"] == 3e6 == lst["E7"]
+    texts = [v for v in lst.values() if isinstance(v, str)]
+    assert "geçen hafta" in texts and "bugün" in texts and "TRT150328T24" in texts
+    assert any(t.startswith("DV01 özeti") for t in texts) and "DV01 (TL)" in texts
+    # one day: the file the macro wrote, with the DV01 at the end of each row
+    day = read_xlsx(svc.blotter_export(u)[0])
+    assert list(day) == ["Günlük İşlemler", "İşlem listesi"]
+    one = day["İşlem listesi"]
+    assert one["A5"] == "Saat" and one["N5"] == "DV01 (TL)" and one["O5"] == "DV01 ($)"
+    assert one["N6"] == pytest.approx(f["dv01_tl"]) and one["O6"] == pytest.approx(f["dv01"])

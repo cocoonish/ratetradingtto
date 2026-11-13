@@ -196,11 +196,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     # ------------------------------------------------------------------ blotter
     @handler
     async def blotter(request: Request):
-        return ok(await call(svc().blotter, _user(request), request.query_params.get("date"), _lang(request)))
+        q = request.query_params
+        return ok(await call(svc().blotter, _user(request), q.get("date"), _lang(request), q.get("to")))
 
     @handler
     async def blotter_export(request: Request):
-        raw, name = await call(svc().blotter_export, _user(request), request.query_params.get("date"), _lang(request))
+        q = request.query_params
+        raw, name = await call(svc().blotter_export, _user(request), q.get("date"), _lang(request), q.get("to"))
         return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
 
@@ -223,6 +225,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def ois_market(request: Request):
         return ok(await call(svc().ois_market, _user(request)))
+
+    @handler
+    async def quote_bond(request: Request):
+        return ok(await call(svc().quote_bond, _user(request), await _body(request), _lang(request)))
 
     @handler
     async def add_bond(request: Request):
@@ -349,6 +355,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/quote/ois", quote_ois, methods=["POST"]),
         Route("/api/blotter/ois", add_ois, methods=["POST"]),
         Route("/api/blotter/ois-market", ois_market),
+        Route("/api/blotter/quote/bond", quote_bond, methods=["POST"]),
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
         Route("/api/history/status", history_status),

@@ -1,8 +1,12 @@
 // Generic workbook page: a set of panels (tables and charts) defined by a view on the server.
+// A page with many tables comes in tabs ("sections" of the view): one group of tables at a time, the
+// calculators first; the search box and "Tümü" look across all of them.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
-import { Grid, copyGrid } from '../grid.js';
+import { Grid, copyGrid, findCell } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
+
+const ALL = '*';
 
 function pref(key, fallback) {
   try {
@@ -15,6 +19,32 @@ function setPref(key, value) {
   try { localStorage.setItem(key, value); } catch (e) { /* ignore */ }
 }
 
+/** "Elle değer" stays on while the browser tab is open, on every page; a new session starts with it off. */
+function handMode() {
+  try { return sessionStorage.getItem('tto.adhoc') === '1'; } catch (e) { return false; }
+}
+
+function setHandMode(on) {
+  try { sessionStorage.setItem('tto.adhoc', on ? '1' : '0'); } catch (e) { /* ignore */ }
+}
+
+/** Formula cells this user typed a value over: [ref, ...] of the tables on the page. */
+function overridden(panels) {
+  const refs = new Set();
+  for (const p of panels) {
+    const d = p.data;
+    if (!d || !d.rows || !d.r || !d.c) continue;
+    for (let i = 0; i < d.rows.length; i++) {
+      const row = d.rows[i];
+      for (let j = 0; j < row.length; j++) {
+        const c = row[j];
+        if (c && c.fx && c.m === 1 && !c.sk) refs.add(d.sheet + '!' + d.c[j] + d.r[i]);
+      }
+    }
+  }
+  return Array.from(refs);
+}
+
 export class ViewPage {
   constructor(host, viewId, ctx) {
     this.host = host;
@@ -22,7 +52,12 @@ export class ViewPage {
     this.ctx = ctx;
     this.items = new Map();
     this.order = '';
+    this.ids = [];
+    this.sections = [];
+    this.pinned = [];
+    this.tab = pref('tto.sec.' + viewId, '');
     this.showAll = pref('tto.all.' + viewId, '0') === '1';
+    this.adhoc = handMode();
     this.filter = '';
     this.book = null;
     this.dead = false;
@@ -40,22 +75,28 @@ export class ViewPage {
     return api.get('/api/view/' + encodeURIComponent(this.id), this.showAll ? { all: 1 } : null);
   }
 
+  signature(data) {
+    return data.panels.map((p) => p.id + ':' + p.type).join('|') + '#' + (data.sections || []).map((s) => s.id + '=' + s.panels.join(',')).join('|')
+      + '#' + (data.pinned || []).join(',');
+  }
+
   async refresh() {
     const data = await this.fetch();
     if (this.dead) return;
-    const order = data.panels.map((p) => p.id + ':' + p.type).join('|');
-    if (order !== this.order) { this.build(data); return; }
+    if (this.signature(data) !== this.order) { this.build(data); return; }
     for (const p of data.panels) {
       const it = this.items.get(p.id);
       if (!it) continue;
       if (p.type === 'chart') {
         it.data = p.data;
+        if (!it.el.isConnected) { it.stale = true; continue; }       // drawn when its tab is opened
         if (it.chart && p.data) it.chart.update(p.data);
         if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
       } else if (it.grid && p.data) {
         it.grid.update(p.data, true);
       }
     }
+    this.showOverrides(data.panels);
   }
 
   destroy() {
@@ -68,14 +109,33 @@ export class ViewPage {
     for (const it of this.items.values()) if (it.chart) it.chart.destroy();
     this.items.clear();
     this.book = data.book;
-    this.order = data.panels.map((p) => p.id + ':' + p.type).join('|');
+    this.order = this.signature(data);
+    this.ids = data.panels.map((p) => p.id);
+    this.sections = data.sections || [];
+    this.pinned = data.pinned || [];
+    if (this.sections.length && this.tab !== ALL && !this.sections.some((s) => s.id === this.tab)) this.tab = this.sections[0].id;
     clear(this.host);
+    this.host.classList.toggle('hand', this.adhoc);
 
-    const search = h('input', { class: 'inp', type: 'search', placeholder: 'Tablo ara…', style: { width: '190px' }, value: this.filter });
+    const search = h('input', { class: 'inp', type: 'search', placeholder: this.sections.length ? 'Tablo ara (tüm sekmelerde)…' : 'Tablo ara…',
+      style: { width: '210px' }, value: this.filter });
     search.addEventListener('input', () => { this.filter = search.value; this.applyFilter(); });
+    this.searchBox = search;
     const allBtn = h('button', { class: 'btn sm' + (this.showAll ? ' on' : ''), type: 'button',
       title: 'Excel\'de gizli sütunları, grafik verisi ve ara hesap tablolarını da göster' }, 'Yardımcı tablolar');
     allBtn.addEventListener('click', () => this.toggleAll());
+    // Excel lets you type over anything; here that is a mode, so that a formula is never lost by accident
+    const handBtn = h('button', { class: 'btn sm' + (this.adhoc ? ' on' : ''), type: 'button', id: 'hand-mode',
+      title: 'Açıkken bu sayfadaki her hücreye – formül olanlara da – kendi değerinizi yazabilirsiniz (Bloomberg\'den gelmeyen bir fiyat, '
+        + 'denemek istediğiniz bir spot…). Yalnızca sizin görünümünüz değişir; hücreyi silince (Delete) formül geri gelir.' }, 'Elle değer');
+    handBtn.addEventListener('click', () => {
+      this.adhoc = !this.adhoc;
+      setHandMode(this.adhoc);
+      handBtn.classList.toggle('on', this.adhoc);
+      this.host.classList.toggle('hand', this.adhoc);
+      for (const it of this.items.values()) if (it.grid) it.grid.opts.adhoc = this.adhoc;
+      toast(this.adhoc ? 'Elle değer açık: her hücreye yazabilirsiniz (yalnızca sizde değişir; silince formül geri gelir)' : 'Elle değer kapalı', '', 3600);
+    });
     const resetBtn = h('button', { class: 'btn sm', type: 'button', title: 'Bu çalışma kitabındaki kişisel girdilerimi sil' }, 'Girdilerimi sıfırla');
     resetBtn.addEventListener('click', async () => {
       const ok = await confirmDialog('Girdileri sıfırla',
@@ -87,10 +147,16 @@ export class ViewPage {
         this.ctx.refreshNow();
       } catch (err) { errorToast(err); }
     });
-    this.host.appendChild(h('div', { class: 'page-tools' }, search, allBtn, resetBtn, h('span', { class: 'grow' }),
+    this.overChip = h('button', { class: 'btn sm warnchip hidden', type: 'button', id: 'hand-values',
+      title: 'Bu sayfada formülün yerine elle yazdığınız değerler var. Tıklayın: hepsi formüle döner.' });
+    this.overChip.addEventListener('click', () => this.restoreFormulas());
+    this.host.appendChild(h('div', { class: 'page-tools' }, search, allBtn, handBtn, resetBtn, this.overChip, h('span', { class: 'grow' }),
       h('span', { class: 'legend' },
         h('span', null, h('i', { class: 'sw-in' }), 'kişisel girdi'),
+        h('span', { title: 'Piyasadan ya da başka bir hücreden dolan girdi: üzerine yazabilirsiniz, silince otomatik değer geri gelir' },
+          h('i', { class: 'sw-auto' }), 'otomatik (üzerine yazılabilir)'),
         h('span', null, h('i', { class: 'sw-sh' }), 'ortak girdi (herkes görür)'),
+        h('span', null, h('i', { class: 'sw-hand' }), 'formül yerine elle değer'),
         h('span', { class: 'muted' }, data.ms + ' ms'))));
 
     if (data.links && data.links.length) {
@@ -105,10 +171,76 @@ export class ViewPage {
       this.host.appendChild(bar);
     }
     if (data.note) this.host.appendChild(h('div', { class: 'banner' }, data.note));
-    const wrap = h('div', { class: 'panels' });
-    for (const p of data.panels) wrap.appendChild(this.panel(p));
-    this.host.appendChild(wrap);
-    this.applyFilter();
+
+    for (const p of data.panels) this.panel(p);              // built once; the tabs only decide which are on the page
+    this.pinWrap = h('div', { class: 'panels pinned' });
+    this.tabBar = h('div', { class: 'viewtabs', role: 'tablist' });
+    this.tabBtns = new Map();
+    for (const s of this.sections) this.tabBtns.set(s.id, this.tabButton(s.id, s.title, s.panels.length));
+    if (this.sections.length) this.tabBtns.set(ALL, this.tabButton(ALL, 'Tümü', this.ids.length));
+    this.secNote = h('div', { class: 'secnote hidden' });
+    this.wrap = h('div', { class: 'panels' });
+    if (this.pinned.length) this.host.appendChild(this.pinWrap);
+    if (this.sections.length) this.host.appendChild(this.tabBar);
+    this.host.appendChild(this.secNote);
+    this.host.appendChild(this.wrap);
+    this.layout();
+    this.showOverrides(data.panels);
+  }
+
+  tabButton(id, title, count) {
+    const b = h('button', { type: 'button', role: 'tab', title: count + ' tablo' }, title, h('span', { class: 'n' }, String(count)));
+    b.dataset.tab = id;
+    b.addEventListener('click', () => this.setTab(id));
+    this.tabBar.appendChild(b);
+    return b;
+  }
+
+  setTab(id) {
+    if (this.filter) { this.filter = ''; if (this.searchBox) this.searchBox.value = ''; }
+    this.tab = id;
+    setPref('tto.sec.' + this.id, id);
+    this.layout();
+  }
+
+  /** Put the panels of the open tab (or what the search finds, in every tab) on the page. */
+  layout() {
+    const low = (t) => String(t || '').toLocaleLowerCase('tr').replace(/ı/g, 'i');       // "interest" finds "Interest"
+    const q = low(this.filter.trim());
+    const hit = (it) => !q || low(it.title).includes(q);
+    const place = (host, id) => {
+      const it = this.items.get(id);
+      if (!it) return false;
+      host.appendChild(it.el);
+      if (it.stale && it.chart && it.data) { it.stale = false; it.chart.update(it.data); }
+      return true;
+    };
+    while (this.wrap.firstChild) this.wrap.removeChild(this.wrap.firstChild);
+    while (this.pinWrap.firstChild) this.pinWrap.removeChild(this.pinWrap.firstChild);
+    for (const id of this.pinned) place(this.pinWrap, id);
+    let shown = 0;
+    let note = '';
+    if (!this.sections.length) {
+      for (const id of this.ids) if (hit(this.items.get(id))) shown += place(this.wrap, id) ? 1 : 0;
+    } else if (q || this.tab === ALL) {
+      const placed = new Set(this.pinned);
+      for (const s of this.sections) {
+        const ids = s.panels.filter((id) => !placed.has(id) && this.items.has(id) && hit(this.items.get(id)));
+        if (!ids.length) continue;
+        const head = h('div', { class: 'secthead' }, s.title, h('span', { class: 'n' }, String(ids.length)));
+        this.wrap.appendChild(head);
+        for (const id of ids) { placed.add(id); shown += place(this.wrap, id) ? 1 : 0; }
+      }
+    } else {
+      const s = this.sections.find((x) => x.id === this.tab) || this.sections[0];
+      note = s.note || '';
+      for (const id of s.panels) if (this.pinned.indexOf(id) < 0) shown += place(this.wrap, id) ? 1 : 0;
+    }
+    if (!shown) this.wrap.appendChild(h('div', { class: 'empty' }, q ? 'Aramayla eşleşen tablo yok' : 'Bu sekmede tablo yok'));
+    for (const [id, b] of this.tabBtns) b.classList.toggle('on', !q && id === this.tab);
+    this.tabBar.classList.toggle('searching', !!q);
+    this.secNote.textContent = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
+    this.secNote.classList.toggle('hidden', !this.secNote.textContent);
   }
 
   toggleAll() {
@@ -117,11 +249,22 @@ export class ViewPage {
     return this.load().catch(errorToast);
   }
 
-  /** Bring a panel into view (opening it if it is collapsed) and mark it for a moment. */
-  focusPanel(panelId) {
+  /** Make sure a panel is on the page: open the tab that holds it. */
+  showPanel(panelId) {
     const it = this.items.get(panelId);
     if (!it) return false;
-    if (this.filter) { this.filter = ''; const box = this.host.querySelector('.page-tools input[type=search]'); if (box) box.value = ''; this.applyFilter(); }
+    if (this.filter) { this.filter = ''; if (this.searchBox) this.searchBox.value = ''; this.layout(); }
+    if (!it.el.isConnected) {
+      const s = this.sections.find((x) => x.panels.indexOf(panelId) >= 0);
+      this.setTab(s ? s.id : ALL);
+    }
+    return it.el.isConnected;
+  }
+
+  /** Bring a panel into view (opening its tab, and the panel if it is collapsed) and mark it for a moment. */
+  focusPanel(panelId) {
+    const it = this.items.get(panelId);
+    if (!it || !this.showPanel(panelId)) return false;
     if (it.el.classList.contains('collapsed') && it.toggle) it.toggle(false);
     it.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
     it.el.classList.remove('focus');
@@ -130,12 +273,38 @@ export class ViewPage {
     return true;
   }
 
-  applyFilter() {
-    const q = this.filter.trim().toLocaleLowerCase('tr');
-    for (const it of this.items.values()) {
-      const hit = !q || it.title.toLocaleLowerCase('tr').includes(q);
-      it.el.classList.toggle('hidden', !hit);
+  /** The <td> of a workbook cell wherever it is on this page; the tab that holds it is opened. */
+  findCell(ref) {
+    for (const [id, it] of this.items) {
+      if (!it.grid) continue;
+      const td = findCell(ref, it.el);
+      if (td) { this.showPanel(id); return td; }
     }
+    return null;
+  }
+
+  applyFilter() {
+    this.layout();
+  }
+
+  showOverrides(panels) {
+    this.overRefs = overridden(panels);
+    const n = this.overRefs.length;
+    this.overChip.classList.toggle('hidden', !n);
+    this.overChip.textContent = n ? n + ' formül yerine elle değer · formüle dön' : '';
+  }
+
+  async restoreFormulas() {
+    const refs = this.overRefs || [];
+    if (!refs.length) return;
+    const ok = await confirmDialog('Formüllere dön', 'Bu sayfada formülün yerine elle yazdığınız ' + refs.length
+      + ' değer silinir ve hücreler yeniden hesaplanır (' + refs.slice(0, 6).join(', ') + (refs.length > 6 ? ' …' : '') + '). Diğer girdileriniz kalır.', 'Formüllere dön');
+    if (!ok) return;
+    try {
+      const res = await api.post('/api/reset', { book: this.book, refs });
+      toast((res.reset || 0) + ' hücre formüle döndü', 'ok');
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); }
   }
 
   panel(p) {
@@ -150,6 +319,13 @@ export class ViewPage {
     const title = h('h2', { title: p.title || '' }, p.title || '');
     const head = h('header', null, title);
     if (p.range && p.data) head.appendChild(h('span', { class: 'rng' }, p.range));
+    if (p.action === 'ret' && this.ctx.openRet) {
+      // the desk's RET curve: the editor (paste, shift, copy to send) is one click from the table
+      const b = h('button', { class: 'btn sm', type: 'button', title: 'RET faizlerini değiştir, kaydır ya da göndermek için kopyala' }, 'RET faizlerini düzenle / kopyala');
+      b.dataset.action = 'ret';
+      b.addEventListener('click', () => this.ctx.openRet());
+      head.appendChild(b);
+    }
     head.appendChild(tools);
     el.appendChild(head);
     el.appendChild(body);
@@ -183,7 +359,7 @@ export class ViewPage {
         body.appendChild(h('div', { class: 'chart-empty' }, 'Grafik bulunamadı'));
       }
     } else if (p.data) {
-      it.grid = new Grid({ book: this.book, data: p.data, editable: true });
+      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: this.adhoc });
       body.appendChild(it.grid.el);
       if (p.data.hc) {
         // Excel hides some columns of this table: say so, one click shows them

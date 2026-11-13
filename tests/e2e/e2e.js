@@ -37,6 +37,14 @@ async function open(page, id) {
   await page.waitForTimeout(150);
 }
 
+/** Open a tab of the page ('*' = "Tümü": every table of the page). */
+async function tab(page, id) {
+  await page.evaluate((t) => window.tto.state.page.setTab(t), id);
+  await page.waitForTimeout(500);                 // charts of the tab are drawn when they come on the page
+}
+
+const panelsOnPage = (page) => page.evaluate(() => [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel));
+
 async function cellText(page, ref) {
   return page.evaluate((r) => { const td = window.tto.findCell(r); return td ? td.textContent : null; }, ref);
 }
@@ -100,7 +108,30 @@ async function shot(page, name) {
     // ------------------------------------------------------------------ editing an input
     console.log('forward page: edit, copy, paste');
     await open(page, 'forward');
+    // a long page comes in tabs: the calculators first, the value date they read pinned above the tabs
+    const tabs0 = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button')].map((b) => b.dataset.tab + (b.classList.contains('on') ? '!' : '')));
+    const on0 = await panelsOnPage(page);
+    check('forward page opens on the calculators, the value date pinned above the tabs',
+      tabs0.join(' ') === 'calc! fwd ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
+    const caps = await page.evaluate(() => [...document.querySelectorAll('.panels.pinned .panel[data-panel="B1"] tr.hd td')].map((td) => td.textContent));
+    check('the value date strip names its cells', caps.join('|') === '|Valör tarihi|USDTRY spot|EURTRY spot|USDTRY spot valörü|EURTRY spot valörü', caps);
+    await page.click('.viewtabs button[data-tab="ret"]');
+    const onRet = await panelsOnPage(page);
+    check('a tab shows its own tables (and the pinned one)', onRet.join(' ') === 'B1 B19 B20 B26', onRet);
+    check('the RET table has the button of the RET editor', await page.locator('.panel[data-panel="B19"] header button[data-action="ret"]').count() === 1);
+    await page.fill('.page-tools input[type=search]', 'interest');
+    const found = await panelsOnPage(page);
+    check('the search box looks in every tab', found.join(' ') === 'B1 B7 B8 B9 B10', found);
+    await page.fill('.page-tools input[type=search]', '');
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'forward' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    check('the open tab is remembered', (await panelsOnPage(page)).join(' ') === 'B1 B19 B20 B26');
+    await tab(page, '*');
     check('forward page has many tables', (await page.locator('table.grid').count()) >= 20);
+    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 7);
+    await tab(page, 'calc');
+    check('a cell of another tab is found - its tab opens', (await cellText(page, 'Forward!D33')) !== null
+      && (await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab)) === 'fwd');
     const before = await cellText(page, 'Forward!D33');
     await typeInto(page, 'Forward!D2', '15.12.2026');
     await waitCell(page, 'Forward!D2', "t.trim() === '15.12.2026'");
@@ -109,6 +140,44 @@ async function shot(page, name) {
     const q = await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/forward', { value_date: '15.12.2026', basis: 'RET_BID', amount: 1000000 });
     check('typed value date reprices the RET forward (sheet = pricing API)', Math.abs(retBid - q.json.forward) < 6e-5, [retBid, q.json.forward]);
     check('edited cell is marked as personal input', await page.evaluate(() => window.tto.findCell('Forward!D2').classList.contains('mod')));
+
+    // ------------------------------------------------------------------ a value of my own over a formula ("Elle değer")
+    const e33 = (await cellText(page, 'Forward!E33')).trim();
+    await (await cellHandle(page, 'Forward!E33')).click();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    check('a formula is not typed over by accident', await page.locator('td.editing').count() === 0);
+    await page.click('#hand-mode');
+    await typeInto(page, 'Forward!E33', '55');
+    await waitCell(page, 'Forward!E33', "t.trim() === '55,0000'");
+    check('with "Elle değer" on, a value typed over a formula is shown as mine',
+      await page.evaluate(() => { const td = window.tto.findCell('Forward!E33'); return td.classList.contains('hand') && td.classList.contains('in'); }));
+    await page.waitForFunction(() => /^1 formül yerine elle değer/.test(document.getElementById('hand-values').textContent), null, { timeout: 15000 });
+    check('the page says how many formulas are replaced', await page.locator('#hand-values:not(.hidden)').count() === 1);
+    await (await cellHandle(page, 'Forward!E33')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'Forward!E33', 't.trim() === "' + e33 + '"');
+    check('deleting the value brings the formula back', await page.evaluate(() => !window.tto.findCell('Forward!E33').classList.contains('in')));
+    await typeInto(page, 'Forward!E33', '56');
+    await waitCell(page, 'Forward!E33', "t.trim() === '56,0000'");
+    await page.waitForSelector('#hand-values:not(.hidden)');
+    await page.click('#hand-values');
+    await page.click('.modal .mfoot .btn.primary');
+    await waitCell(page, 'Forward!E33', 't.trim() === "' + e33 + '"');
+    await page.waitForSelector('#hand-values.hidden', { state: 'attached' });
+    check('"formüle dön" restores every replaced formula of the page', true);
+    await page.click('#hand-mode');
+    // the calculators take spot, dates and the foreign rate by hand; blanking returns to the market
+    const sp0 = (await cellText(page, 'Forward!AH11')).trim();
+    check('a calculator input the sheet fills by itself is marked as such', await page.evaluate(() => window.tto.findCell('Forward!AH8').classList.contains('auto')));
+    await typeInto(page, 'Forward!AH8', '50,50');
+    await page.waitForFunction((b) => { const td = window.tto.findCell('Forward!AH11'); return td && td.textContent.trim() !== b; }, sp0, { timeout: 15000 });
+    check('a calculator priced at a spot typed by hand',
+      await page.evaluate(() => { const td = window.tto.findCell('Forward!AH8'); return td.classList.contains('hand') && td.textContent.trim() === '50,5000'; }));
+    await (await cellHandle(page, 'Forward!AH8')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'Forward!AH11', 't.trim() === "' + sp0 + '"');
+    check('blanking it returns to the market spot', await page.evaluate(() => window.tto.findCell('Forward!AH8').classList.contains('auto')));
 
     // ------------------------------------------------------------------ copy to Excel
     await (await cellHandle(page, 'Forward!C29')).click();
@@ -166,6 +235,25 @@ async function shot(page, name) {
     await page.click('.modal .mfoot .btn:not(.primary)');
     await waitCell(page, 'Forward!W38', "t.trim() === '34,00%'");
     check('sheet follows the editor', (await cellText(page, 'Forward!X40')).trim() === '35,60%');
+    // change the whole curve at once, and take it along to send
+    await page.click('.panel[data-panel="B19"] header button[data-action="ret"]');
+    await page.waitForSelector('#ret-shift');
+    const bidBefore = await page.inputValue('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
+    await page.fill('#ret-shift', '25');
+    await page.click('#ret-shift-both');
+    const bidAfter = await page.inputValue('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
+    check('"Tümünü kaydır" moves every rate by the basis points typed', trNumber(bidAfter) === trNumber(bidBefore) + 0.25
+      && await page.inputValue('.modal table.ret tbody tr:nth-child(6) td:nth-child(4) input') === '34,45', [bidBefore, bidAfter]);
+    await page.click('#ret-copy-msg');
+    await page.waitForTimeout(300);
+    const msg = await page.evaluate(() => navigator.clipboard.readText());
+    check('"Kopyala (mesaj)": the curve as text for a chat window', /^TRY RET · \d\d\.\d\d\.\d{4}\n/.test(msg) && msg.includes('\n1M   34,25 / 34,45\n'), msg.slice(0, 160));
+    await page.click('#ret-copy');
+    await page.waitForTimeout(300);
+    const tsv = (await page.evaluate(() => navigator.clipboard.readText())).split('\r\n');
+    check('"Kopyala (tablo)": tenor, days, bid, ask as cells', tsv[0] === 'Vade\tGün\tBid\tAsk' && tsv.includes('1M\t30\t34,25\t34,45') && tsv.length === 16, tsv.slice(0, 7));
+    await page.click('.modal .mfoot .btn:not(.primary)');                 // closed without saving: the sheet keeps the stored curve
+    check('nothing changes until the curve is saved', (await cellText(page, 'Forward!W38')).trim() === '34,00%');
 
     // ------------------------------------------------------------------ scenarios
     console.log('scenarios');
@@ -198,6 +286,9 @@ async function shot(page, name) {
     const qm = await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/forward', { value_date: '15.12.2026', basis: 'RET_MID', amount: 10000000 });
     check('TL amount = amount × forward (RET mid)', Math.abs(tl - 10000000 * qm.json.forward) < 0.006, [tl, 10000000 * qm.json.forward]);
     check('forward tile shows the RET mid forward', Math.abs(fwd - qm.json.forward) < 6e-5, [fwd, qm.json.forward]);
+    const dvTile = await page.evaluate(() => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="dv01-tl"] .v'); return q ? q.textContent : null; });
+    check('the forward being typed shows its DV01 (the sheet\'s "Forward DV01" block)', dvTile !== null && dvTile[0] === '+'
+      && Math.abs(trNumber(dvTile.slice(1)) - qm.json.dv01.tl) < 1, [dvTile, qm.json.dv01]);
     await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
     await page.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 2);
     check('saved forward appears in the list', true);
@@ -226,6 +317,25 @@ async function shot(page, name) {
     await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
     await page.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr').length === 3);
     check('OIS legs are booked', true);
+    const netTile = await page.evaluate(() => (document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="dv01-net"] .v') || {}).textContent || null);
+    check('the OIS being typed shows its net DV01', netTile !== null && /^[+-]?\d/.test(netTile), netTile);
+    const risk = await page.evaluate(() => [...document.querySelectorAll('.riskbar .q')].map((q) => q.dataset.k + '=' + q.querySelector('.v').textContent));
+    const fwdHead = await page.evaluate(() => [...document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr:first-child td')].map((td) => td.textContent));
+    check('saved trades carry their DV01, summed above the lists',
+      risk.length === 4 && /^risk-total=[+-]\d/.test(risk[0]) && /^risk-fwd=[+-]\d/.test(risk[1]) && fwdHead.includes('DV01 (TL)') && fwdHead.includes('DV01 ($)'), [risk, fwdHead]);
+    // a period instead of a day
+    await page.click('.rangebox button:has-text("Son 30 gün")');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ranged, null, { timeout: 20000 });
+    await page.waitForFunction(() => (document.querySelector('.lists .panel:nth-child(1) table.grid tr td') || {}).textContent === 'Tarih');
+    check('a period lists the trades of its days with their date - to look at, not to enter',
+      await page.locator('.entry.hidden').count() === 1 && /^Aralık: /.test(await page.textContent('#content .banner:not(.hidden)'))
+      && await page.locator('.lists .panel:nth-child(1) table.grid tr').count() === 3 && await page.locator('.lists td.act button').count() === 0);
+    const [period] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
+    check('the period downloads as one file', /^Blotter_\d{4}\.\d{2}\.\d{2}-\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(period.suggestedFilename()), period.suggestedFilename());
+    await page.click('#blotter-today');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.is_today, null, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 3);
+    check('"Bugün" returns to the day and its entry form', await page.locator('.entry.hidden').count() === 0 && await page.locator('.lists td.act button').count() >= 2);
     await shot(page, '04-blotter');
 
     // ------------------------------------------------------------------ second user: shared vs personal
@@ -326,6 +436,7 @@ async function shot(page, name) {
       };
     }));
     await open(page, 'masa');
+    await tab(page, '*');
     const mc = await chartInfo();
     check('desk page draws the six charts of the workbook', mc.length === 6, mc.map((c) => c.title));
     check('"Oranlar": legend, Excel colours (RET red / purple dashes, ICAP orange, OIS blue, VİOP green), markers',
@@ -341,6 +452,7 @@ async function shot(page, name) {
     await shot(page, '07-charts-masa');
 
     await open(page, 'ois');
+    await tab(page, '*');
     const oc = await chartInfo();
     const tlref = oc.find((c) => c.title.startsWith('TLREF'));
     check('TLREF path is on a date axis labelled by month, smoothed, with its axis title',
@@ -420,12 +532,18 @@ async function shot(page, name) {
       frozen.before.length === 3 && frozen.scrolled > 300 && JSON.stringify(frozen.before) === JSON.stringify(frozen.after), frozen);
 
     await open(page, 'usd');
+    await tab(page, '*');
     const bars = await page.evaluate(() => [...document.querySelectorAll('td.bar')].map((td) => parseFloat(td.style.getPropertyValue('--bar'))));
     // four rules of ten cells each; a cell without a number has no bar
     check('data bars of the USD sheet are drawn', bars.length >= 30 && bars.length <= 40 && Math.max(...bars) === 90 && Math.min(...bars) >= 10, bars.length);
-    await open(page, 'ivir');
-    await page.waitForFunction(() => { const im = document.querySelector('img.sheet-image'); return im && im.complete && im.naturalWidth > 0; }, null, { timeout: 15000 });
-    check('the picture pasted on the sheet is shown', await page.evaluate(() => document.querySelector('img.sheet-image').naturalWidth) === 1366);
+    // "Mobil MK" and "Ivır Zıvır" have no page any more; the sheets are still in the sheet explorer
+    const gone = await page.evaluate(async () => {
+      const pic = await fetch('/api/image?book=tto&sheet=' + encodeURIComponent('Ivır Zıvır') + '&i=0');
+      const sheets = (await (await fetch('/api/sheets?book=tto')).json()).sheets.map((x) => x.name);
+      return { nav: [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page), pic: pic.status, sheets };
+    });
+    check('the two sheets the desk dropped have no page (the sheet explorer still has them)',
+      !gone.nav.includes('ivir') && !gone.nav.includes('mobil') && gone.pic === 200 && gone.sheets.includes('MOBIL MK') && gone.sheets.includes('Ivır Zıvır'), gone.nav);
 
     await open(page, 'blotter');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
@@ -448,6 +566,7 @@ async function shot(page, name) {
       await page.click('.menu button:text-is("' + label + '")');
     };
     await open(page, 'masa');
+    await tab(page, 'fwd');
     check('the forward quote matrix follows the forward pricing table', await order(['B14', 'EKF1', 'EKF2']));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('matrix starts from the desk spread (−150 bp on both sides)',
@@ -475,7 +594,12 @@ async function shot(page, name) {
     await shot(page, '10-forward-quotes');
 
     await open(page, 'viop');
-    check('gold tables: spot / source, swap rate curve, forwards, calculator', await order(['B11', 'B11b', 'XAU1', 'XAU2', 'XAU3', 'XAU4']));
+    await tab(page, 'gold');
+    check('gold tab: the VİOP gold tables, the calculator, then spot / source, swap rate curve and forwards',
+      await order(['B9', 'B10', 'B11', 'XAU4', 'XAU1', 'XAU2', 'XAU3', 'B11b']), await panelsOnPage(page));
+    await tab(page, 'calc');
+    check('the gold calculator is with the calculators as well', (await panelsOnPage(page)).join(' ') === 'B8 XAU4');
+    await tab(page, 'gold');
     check('gold swap rate tickers are Bloomberg\'s XAUSR… roots with the yellow key next to them',
       (await cellText(page, 'EK_XAU!D16')).trim() === 'XAUSR1W' && (await cellText(page, 'EK_XAU!D17')).trim() === 'XAUSR1M'
       && (await cellText(page, 'EK_XAU!D22')).trim() === 'XAUSR12M' && (await cellText(page, 'EK_XAU!B12')).trim() === 'Curncy');
@@ -508,6 +632,16 @@ async function shot(page, name) {
     await open(pageC, 'viop');
     check('spot and swap rate are desk inputs: another user sees the same forward', (await cellText(pageC, 'VIOP!M58')).trim() === gold.m58.trim(), await cellText(pageC, 'VIOP!M58'));
     check('the calculator rate is personal', (await cellText(pageC, 'EK_XAU!B46')).trim() !== '40,00', await cellText(pageC, 'EK_XAU!B46'));
+    // the free column: dates, rate, gold forward and a price of my own
+    await typeInto(page, 'EK_XAU!E41', '15.01.2027');
+    await typeInto(page, 'EK_XAU!E46', '36');
+    await typeInto(page, 'EK_XAU!E48', '3990');
+    await typeInto(page, 'EK_XAU!E54', '6900');
+    await waitCell(page, 'EK_XAU!E58', 't.trim() !== ""');
+    const freeTeo = trNumber(await cellText(page, 'EK_XAU!E53')), freeFwd = trNumber(await cellText(page, 'EK_XAU!E50'));
+    check('gold calculator, free column: price from a rate and the rate a price implies, all typed by hand',
+      Math.abs(freeTeo - 3990 * freeFwd / 31.1035) < 0.02 && trNumber(await cellText(page, 'EK_XAU!E58')) > trNumber(await cellText(page, 'EK_XAU!E46')),
+      [freeTeo, freeFwd, await cellText(page, 'EK_XAU!E58')]);
     await ctxC.close();
     await pick('EK_XAU!B11', 'BFXFORWARD');
     await waitCell(page, 'VIOP!M58', 't.trim() === "' + xau0 + '"');
@@ -521,8 +655,10 @@ async function shot(page, name) {
       return first ? first.querySelector('header h2').textContent : '';
     });
     await open(page, 'viop');
+    await tab(page, 'main');
     check('VİOP page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
     await open(page, 'masa');
+    await tab(page, 'over');
     check('main page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
     const spotKpi = await page.evaluate(() => (document.querySelector('#kpi-spot') || {}).textContent || '');
     check('header strip: "Spot kaynağı" says where the spot comes from', /Spot kaynağı/.test(spotKpi) && /MANUEL/.test(spotKpi), spotKpi);
@@ -724,6 +860,21 @@ async function shot(page, name) {
       && series.some((r) => r[2] === 'TYSO10 Curncy' && r[7] === 'geçmiş yok') && series.length === 97, rowOf(series, 'TLREF'));
     check('settings: the state of the history', /Excel dosyasındaki kayıtlı geçmiş/.test(await page.textContent('.panel[data-panel="history"] .set-info')));
     await shot(page, '15-settings');
+
+    // ------------------------------------------------------------------ find a table from anywhere
+    console.log('table search');
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('interest');
+    await page.waitForSelector('.findlist .hit');
+    const hits = await page.evaluate(() => [...document.querySelectorAll('.findlist .hit')].map((x) => x.querySelector('.t').textContent + ' @ ' + x.querySelector('.w').textContent));
+    check('Ctrl+K lists the tables of every page by name', hits.length >= 6 && hits.some((x) => /^Interest 2 SP · TRY faizi.* @ Forward › Hesaplayıcılar$/.test(x)), hits);
+    await page.fill('#find', 'faizden fiyat');
+    await page.waitForFunction(() => document.querySelectorAll('.findlist .hit').length === 1);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await page.waitForTimeout(600);
+    check('Enter goes to the table: its page, its tab', (await panelsOnPage(page)).includes('XAU4')
+      && await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab) === 'calc');
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

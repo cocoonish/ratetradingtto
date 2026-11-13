@@ -256,5 +256,43 @@
    "hidden": true
   }
  ],
- "note": "Motor sayfası hesap makinesidir (bootstrap + ima PPK çözücüsü). Büyük ara tablolar \"Yardımcı tablolar\" ile ya da Sayfa gezgininden görülebilir."
+ "note": "Motor sayfası hesap makinesidir (bootstrap + ima PPK çözücüsü). Büyük ara tablolar \"Yardımcı tablolar\" ile ya da Sayfa gezgininden görülebilir.",
+ "sections": [
+  {
+   "id": "meet",
+   "title": "Toplantılar · eğri",
+   "panels": [
+    "B1",
+    "B2",
+    "B4",
+    "B5"
+   ]
+  },
+  {
+   "id": "tenor",
+   "title": "Vade motoru",
+   "panels": [
+    "B6",
+    "B7",
+    "B10",
+    "B11"
+   ]
+  },
+  {
+   "id": "solver",
+   "title": "Çözücü",
+   "panels": [
+    "B16",
+    "B18",
+    "B19"
+   ]
+  },
+  {
+   "id": "hol",
+   "title": "Tatiller",
+   "panels": [
+    "B12"
+   ]
+  }
+ ]
 }

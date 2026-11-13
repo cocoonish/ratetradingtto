@@ -272,8 +272,13 @@ class Store(object):
                                  [(user, ts, i) for i in ids])
             return ids
 
-    def trades(self, trade_date: str) -> List[Dict[str, Any]]:
-        rows = self._q("SELECT * FROM trades WHERE trade_date=? AND deleted=0 ORDER BY id", (trade_date,))
+    def trades(self, trade_date: str, until: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The trades of a day, or of every day from ``trade_date`` to ``until`` (both included), oldest first."""
+        if until is None or until == trade_date:
+            rows = self._q("SELECT * FROM trades WHERE trade_date=? AND deleted=0 ORDER BY id", (trade_date,))
+        else:
+            rows = self._q("SELECT * FROM trades WHERE trade_date>=? AND trade_date<=? AND deleted=0 ORDER BY trade_date, id",
+                           (trade_date, until))
         out = []
         for r in rows:
             d = json.loads(r["payload"])

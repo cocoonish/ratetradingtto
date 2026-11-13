@@ -9,8 +9,9 @@ the Excel files (parity and reference tests read those).
                                the way back: the OIS spread of swap points typed by hand
 * ``EK_XAU``  (TRY workbook)  gold forwards from the gold swap rate (``XAUSR…``) instead of ``BFXFORWARD``
                                (which the Bloomberg API does not offer), the VİOP gold tables and the Forward
-                               gold strip fed from them, and a "price it at this rate" calculator for the
-                               VİOP XAUTRY contracts
+                               gold strip fed from them, and a calculator for the VİOP XAUTRY contracts: the
+                               price at a given rate and the rates a price implies, every driver of which can
+                               be typed by hand (dates, spots, rates, the gold forward, the VİOP price)
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 * ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
 
@@ -423,6 +424,13 @@ XAU_TICKER_KEY = "Curncy"                # the "yellow key" appended to a ticker
 XAU_TARGETS = (27, 35)                   # 3 VİOP XAUTRY contracts, 3 VİOP XAUUSD contracts, Forward!D2, 2 free dates
 XAU_SOURCES = ("Otomatik", "Swap faizi", "BFXFORWARD")
 XAU_CALC = 39                            # header row of the "price at a given rate" calculator
+#: the calculator's rows below its header, in order (name -> label)
+XAU_CALC_ROWS = ("d1", "d2", "n", "s", "xau", "usd", "try", "swap", "xfwd", "simp", "fwd", "sp", "spd", "teo", "vbid", "vask", "dbid", "dask",
+                 "ibid", "iask", "sxt", "on", "gbid", "gask")
+XAU_CALC_LABELS = ("1st Date", "2nd Date", "VKGS", "USDTRY spot", "XAUUSD spot", "USD %", "TRY %", "Altın swap % (ops.)", "XAUUSD fwd",
+                   "Altın swap % (ima)", "All In S -> E (USDTRY fwd)", "SP", "Günlük SP", "XAUTRY teorik (TL/gr)", "VIOP bid", "VIOP ask",
+                   "Teorik − VIOP bid", "Teorik − VIOP ask", "İma TRY % · VIOP bid", "İma TRY % · VIOP ask", "Spot XAUTRY (TL/gr)",
+                   "ON karşılık (TRY %)", "İma altın swap % · VIOP bid", "İma altın swap % · VIOP ask")
 GRAMS_PER_OUNCE = "31.1035"              # the VİOP sheet's own constant (VIOP!M55)
 _USD_CURVE = "VIOP!$B$16:$B$25,VIOP!$F$16:$F$25"
 
@@ -590,50 +598,68 @@ def _tto_gold(model: Model) -> None:
     b.note("A%d" % (t2 + 1), "Kullanılan = Kaynak'a göre swap faizinden forward ya da BFXFORWARD; VİOP XAUTRY BID tablosu ask'ı, ASK tablosu bid'i, VİOP "
                              "XAUUSD ask'ı, Forward!I29:J29 bid/ask'ı okur. BFX ima swap = BFXFORWARD'ın (mid) spot'a göre ima ettiği swap faizi.")
 
-    # ---- "Interest 2 SP" for gold: the VİOP XAUTRY price at a given TRY / USD / gold swap rate
+    # ---- "Interest 2 SP" and "SP 2 Interest" for gold: the VİOP XAUTRY price at a given TRY / USD / gold swap
+    #      rate, and the rates that a price implies.  Every driver is a cell the trader may type over; left alone
+    #      it is filled from the market.  The last column is free: its second date (and its rates) are typed.
     c0 = XAU_CALC
-    b.title("A%d" % (c0 - 1), "VİOP XAUTRY  ·  belli faizle fiyat  (Interest 2 SP'nin altın karşılığı; sarı hücreler girdi)")
-    b.head("A%d" % c0, ["Kontrat", "=VIOP!M45", "=VIOP!N45", "=VIOP!O45"])
-    labels = ["1st Date", "2nd Date", "VKGS", "USDTRY spot", "XAUUSD spot", "USD %", "TRY %", "Altın swap % (ops.)", "XAUUSD fwd",
-              "Altın swap % (ima)", "All In S -> E (USDTRY fwd)", "SP", "Günlük SP", "XAUTRY teorik (TL/gr)", "VIOP bid", "VIOP ask",
-              "Teorik − VIOP bid", "Teorik − VIOP ask", "İma TRY % · VIOP bid", "İma TRY % · VIOP ask", "Spot XAUTRY (TL/gr)"]
-    for i, text in enumerate(labels):
+    b.title("A%d" % (c0 - 1), "VİOP XAUTRY  ·  faizden fiyat, fiyattan faiz  (sarı hücreler girdi; boş bırakılan piyasadan dolar)")
+    b.head("A%d" % c0, ["Kontrat", "=VIOP!M45", "=VIOP!N45", "=VIOP!O45", "Serbest"])
+    for i, text in enumerate(XAU_CALC_LABELS):
         b.set("A%d" % (c0 + 1 + i), text, bold=True)
-    for i, col in enumerate("BCD"):
-        vb, va = viop_ask[i], viop_bid[i]            # columns of the VİOP XAUTRY BID / ASK tables
-        f = {"c": col, "vb": vb, "va": va, "t": t1 + i, "x": XAU_SHEET, "g": GRAMS_PER_OUNCE}
-        rows = dict((name, c0 + 1 + k) for k, name in enumerate(
-            ("d1", "d2", "n", "s", "xau", "usd", "try", "swap", "xfwd", "simp", "fwd", "sp", "spd", "teo", "vbid", "vask", "dbid", "dask",
-             "ibid", "iask", "sxt")))
+    rows = dict((name, c0 + 1 + k) for k, name in enumerate(XAU_CALC_ROWS))
+    for i, col in enumerate("BCDE"):
+        free = i == 3
+        f = {"c": col, "x": XAU_SHEET, "g": GRAMS_PER_OUNCE, "usdc": _USD_CURVE}
+        if not free:
+            f.update({"vb": viop_ask[i], "va": viop_bid[i], "t": t1 + i})      # columns of the VİOP XAUTRY BID / ASK tables
         f.update(rows)
-        b.set("%(c)s%(d1)d" % f, "=VIOP!%(vb)s47" % f, fmt=DATE)
-        b.set("%(c)s%(d2)d" % f, "=VIOP!%(vb)s48" % f, fmt=DATE)
-        b.set("%(c)s%(n)d" % f, "=VIOP!%(vb)s49" % f, fmt=INT0)
-        b.set("%(c)s%(s)d" % f, "=VIOP!%(vb)s50" % f, fmt=NUM4)
-        b.set("%(c)s%(xau)d" % f, "=$D$6", fmt=NUM2)
-        b.input("%(c)s%(usd)d" % f, "=VIOP!%(vb)s51*100" % f, fmt="0.000")
+        f["gd"] = "(%(c)s%(d2)d-$B$9)" % f                                     # days from the gold spot value date
+        f["curve"] = "IF(%s=0,NA(),%s)" % (nodes, lin(f["gd"], xs, ys, nodes))  # the swap rate curve at that many days
+        b.input("%(c)s%(d1)d" % f, ("=VIOP!M47" if free else "=VIOP!%(vb)s47") % f, fmt=DATE)
+        b.input("%(c)s%(d2)d" % f, None if free else "=VIOP!%(vb)s48" % f, fmt=DATE)
+        b.set("%(c)s%(n)d" % f, '=IF(AND(ISNUMBER(%(c)s%(d1)d),ISNUMBER(%(c)s%(d2)d)),%(c)s%(d2)d-%(c)s%(d1)d,"")' % f, fmt=INT0)
+        b.input("%(c)s%(s)d" % f, ("=VIOP!M50" if free else "=VIOP!%(vb)s50") % f, fmt=NUM4)
+        b.input("%(c)s%(xau)d" % f, "=$D$6", fmt=NUM2)
+        # USD rate of the calculator's own number of days (the VİOP gold tables read the same curve at theirs)
+        b.input("%(c)s%(usd)d" % f, '=IFERROR(_xll.BINTERPOL(%(usdc)s,%(c)s%(n)d,"LINEAR"),"")' % f, fmt="0.000")
         # default TRY rate: what the USDTRY contract of the same expiry implies (mid of the VIOP BID / ASK tables)
-        b.input("%(c)s%(try)d" % f, ("=IFERROR((INDEX(VIOP!$M$13:$X$13,MATCH(%(c)s%(d2)d,VIOP!$M$9:$X$9,0))"
-                                      "+INDEX(VIOP!$M$25:$X$25,MATCH(%(c)s%(d2)d,VIOP!$M$21:$X$21,0)))/2*100,VIOP!%(vb)s52*100)") % f, fmt="0.00")
+        b.input("%(c)s%(try)d" % f, None if free else (
+            "=IFERROR((INDEX(VIOP!$M$13:$X$13,MATCH(%(c)s%(d2)d,VIOP!$M$9:$X$9,0))"
+            "+INDEX(VIOP!$M$25:$X$25,MATCH(%(c)s%(d2)d,VIOP!$M$21:$X$21,0)))/2*100,VIOP!%(vb)s52*100)") % f, fmt="0.00")
         b.input("%(c)s%(swap)d" % f, None, fmt="0.000")
-        b.set("%(c)s%(xfwd)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),IFERROR(%(c)s%(xau)d*(1+%(c)s%(swap)d/100*$C$%(t)d/360),""),'
-                                    'IFERROR(($I$%(t)d+$J$%(t)d)/2,""))') % f, fmt=NUM4, bold=True)
+        # gold forward: from the swap rate typed here; else the forward in use for the contract's own date; for any
+        # other date the swap rate curve; typed over when none of them is there
+        from_curve = 'IFERROR(%(c)s%(xau)d*(1+%(curve)s/100*%(gd)s/360),"")' % f
+        own = from_curve if free else 'IF(%(c)s%(d2)d=$B$%(t)d,IFERROR(($I$%(t)d+$J$%(t)d)/2,""),%(fc)s)' % dict(f, fc=from_curve)
+        b.input("%(c)s%(xfwd)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),IFERROR(%(c)s%(xau)d*(1+%(c)s%(swap)d/100*%(gd)s/360),""),%(own)s)')
+                % dict(f, own=own), fmt=NUM4, bold=True)
         b.set("%(c)s%(simp)d" % f, ('=IF(ISNUMBER(%(c)s%(swap)d),%(c)s%(swap)d,'
-                                    'IFERROR((%(c)s%(xfwd)d/%(c)s%(xau)d-1)*360/$C$%(t)d*100,""))') % f, fmt="0.000")
+                                    'IFERROR((%(c)s%(xfwd)d/%(c)s%(xau)d-1)*360/%(gd)s*100,""))') % f, fmt="0.000")
         b.set("%(c)s%(fwd)d" % f, '=IFERROR(%(c)s%(s)d*(1+%(c)s%(try)d/100/360*%(c)s%(n)d)/(1+%(c)s%(usd)d/100/360*%(c)s%(n)d),"")' % f, fmt=NUM4)
         b.set("%(c)s%(sp)d" % f, '=IFERROR((%(c)s%(fwd)d-%(c)s%(s)d)*10000,"")' % f, fmt=INT0)
         b.set("%(c)s%(spd)d" % f, '=IFERROR(%(c)s%(sp)d/%(c)s%(n)d,"")' % f, fmt="#,##0.0")
         b.set("%(c)s%(teo)d" % f, '=IFERROR(%(c)s%(xfwd)d*%(c)s%(fwd)d/%(g)s,"")' % f, fmt=NUM2, bold=True)
-        b.set("%(c)s%(vbid)d" % f, "=VIOP!%(vb)s57" % f, fmt=NUM2)
-        b.set("%(c)s%(vask)d" % f, "=VIOP!%(va)s57" % f, fmt=NUM2)
-        b.set("%(c)s%(dbid)d" % f, '=IFERROR(%(c)s%(teo)d-%(c)s%(vbid)d,"")' % f, fmt=NUM2)
-        b.set("%(c)s%(dask)d" % f, '=IFERROR(%(c)s%(teo)d-%(c)s%(vask)d,"")' % f, fmt=NUM2)
-        b.set("%(c)s%(ibid)d" % f, '=IFERROR(VIOP!%(vb)s52*100,"")' % f, fmt="0.00")
-        b.set("%(c)s%(iask)d" % f, '=IFERROR(VIOP!%(va)s52*100,"")' % f, fmt="0.00")
+        b.input("%(c)s%(vbid)d" % f, None if free else "=VIOP!%(vb)s57" % f, fmt=NUM2)
+        b.input("%(c)s%(vask)d" % f, None if free else "=VIOP!%(va)s57" % f, fmt=NUM2)
+        for side, diff, imp, gimp in (("vbid", "dbid", "ibid", "gbid"), ("vask", "dask", "iask", "gask")):
+            k = dict(f, p="%s%d" % (col, rows[side]))
+            b.set("%s%d" % (col, rows[diff]), '=IFERROR(IF(%(p)s="","",%(c)s%(teo)d-%(p)s),"")' % k, fmt=NUM2)
+            # the way back: the USDTRY forward the price stands for, and the TRY rate that makes it
+            b.set("%s%d" % (col, rows[imp]), ('=IFERROR(IF(%(p)s="","",((%(p)s*%(g)s/%(c)s%(xfwd)d)/%(c)s%(s)d'
+                                              '*(1+%(c)s%(usd)d/100/360*%(c)s%(n)d)-1)*360/%(c)s%(n)d*100),"")') % k, fmt="0.00", bold=True)
+            # ... or, at the TRY rate above, the gold swap rate that makes it
+            b.set("%s%d" % (col, rows[gimp]), ('=IFERROR(IF(%(p)s="","",((%(p)s*%(g)s/%(c)s%(fwd)d)/%(c)s%(xau)d-1)*360/%(gd)s*100),"")') % k,
+                  fmt="0.000")
         b.set("%(c)s%(sxt)d" % f, '=IFERROR(%(c)s%(xau)d*%(c)s%(s)d/%(g)s,"")' % f, fmt=NUM2)
-    b.note("A%d" % (c0 + len(labels) + 1), "XAUTRY teorik = XAUUSD fwd · USDTRY fwd / 31,1035; USDTRY fwd = spot·(1+TRY·VKGS/360)/(1+USD·VKGS/360). TRY % "
-                                           "varsayılanı aynı vadeli USDTRY VİOP kontratının ima faizi (bid/ask ortalaması); üzerine istediğin faizi "
-                                           "yaz. Altın swap % boşsa üstteki 'Kullanılan' forward (mid) alınır, doluysa XAUUSD fwd = spot·(1+swap·g/360).")
+        b.set("%(c)s%(on)d" % f, '=IFERROR(360*((1+%(c)s%(try)d/100*%(c)s%(n)d/360)^(1/%(c)s%(n)d)-1)*100,"")' % f, fmt="0.00")
+    b.note("A%d" % (c0 + len(XAU_CALC_LABELS) + 1),
+           "Faizden fiyat: XAUTRY teorik = XAUUSD fwd · USDTRY fwd / 31,1035; USDTRY fwd = spot·(1+TRY·VKGS/360)/(1+USD·VKGS/360). "
+           "Fiyattan faiz: 'VIOP bid / ask' satırındaki fiyat (piyasa ya da üzerine yazdığın fiyat) için ima TRY % ve, TRY % satırındaki "
+           "faizle aynı fiyatı veren, ima altın swap %. Her girdi piyasadan dolar; üzerine yazabilir, silerek piyasaya dönebilirsin. "
+           "Altın swap % doluysa XAUUSD fwd = spot·(1+swap·g/360); boşsa kontratın kendi tarihinde üstteki 'Kullanılan' forward (mid), başka "
+           "bir tarihte swap faizi eğrisi. 'Serbest' sütununda 2. tarihi ve TRY faizini sen yazarsın; Bloomberg'den altın verisi gelmiyorsa "
+           "XAUUSD spot ya da XAUUSD fwd'ı da elle yaz. (VİOP tabloları bid için ask, ask için bid outright'ı kullanır; burada tek forward "
+           "kullanıldığından ima faiz birkaç baz puan farklı olabilir.)")
 
 
 #: book -> (name, precondition, builder) of each addition

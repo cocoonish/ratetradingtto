@@ -532,6 +532,68 @@ def test_xautry_price_at_a_given_rate(svc, gold):
     assert v("try") == v("try", user=None) and v("xfwd") == v("xfwd", user=None)
 
 
+def test_xautry_calculator_takes_everything_by_hand(svc, gold):
+    """Every driver of the gold calculator can be typed over (and blanked back to the market); a price typed
+    into the VİOP rows gives the TRY rate and the gold swap rate it stands for; the last column is free."""
+    u = svc.login("Altın elle")["user"]
+    row = dict((name, extras.XAU_CALC + 1 + i) for i, name in enumerate(extras.XAU_CALC_ROWS))
+    assert len(extras.XAU_CALC_ROWS) == len(extras.XAU_CALC_LABELS) == 24 and row["teo"] == 53 and row["gask"] == 63
+
+    def v(name, col="B", user=u):
+        return cell(svc, "EK_XAU!%s%d" % (col, row[name]), user)
+
+    # untouched: the contract's own dates, the market's spot and price; the implied rate is the way back
+    assert v("d1") == cell(svc, "VIOP!M47") and v("d2") == cell(svc, "VIOP!M48") and v("n") == cell(svc, "VIOP!M49")
+    assert v("s") == cell(svc, "VIOP!M50") and v("xau") == pytest.approx((SPOT_BID + SPOT_ASK) / 2)
+    assert v("vbid") == cell(svc, "VIOP!M57") and v("vask") == cell(svc, "VIOP!S57")
+    for side in ("bid", "ask"):
+        price, n, spot, usd = v("v" + side), v("n"), v("s"), v("usd")
+        implied = ((price * GRAM / v("xfwd")) / spot * (1 + usd / 100 / 360 * n) - 1) * 360 / n * 100
+        assert v("i" + side) == pytest.approx(implied, rel=1e-12)
+        gold_days = v("d2") - cell(svc, "EK_XAU!B9")
+        assert v("g" + side) == pytest.approx(((price * GRAM / v("fwd")) / v("xau") - 1) * 360 / gold_days * 100, rel=1e-12)
+    # pricing at the implied rate gives the price back
+    put(svc, u, {"EK_XAU!B%d" % row["try"]: v("ibid")})
+    assert v("teo") == pytest.approx(v("vbid"), rel=1e-12) and v("dbid") == pytest.approx(0.0, abs=1e-8)
+    assert v("on") == pytest.approx(360 * ((1 + v("try") / 100 * v("n") / 360) ** (1 / v("n")) - 1) * 100, rel=1e-12)
+    put(svc, u, {"EK_XAU!B%d" % row["try"]: ""})
+    # a price of my own instead of the market's; blanking it brings the market back
+    market = v("ibid")
+    put(svc, u, {"EK_XAU!B%d" % row["vbid"]: "6.750,00"})
+    assert v("vbid") == 6750.0 and v("ibid") != pytest.approx(market, rel=1e-6) and v("vbid", user=None) == cell(svc, "VIOP!M57")
+    put(svc, u, {"EK_XAU!B%d" % row["vbid"]: ""})
+    assert v("vbid") == cell(svc, "VIOP!M57") and v("ibid") == pytest.approx(market, rel=1e-12)
+    # another date: days, the USD rate and the gold forward follow it (the forward now off the swap rate curve)
+    usd0, xfwd0 = v("usd"), v("xfwd")
+    put(svc, u, {"EK_XAU!B%d" % row["d2"]: "15.01.2027"})
+    n = v("n")
+    assert n == 46402.0 - v("d1") and v("usd") != usd0 and v("xfwd") != xfwd0
+    days = 46402.0 - cell(svc, "EK_XAU!B9")
+    pts = [(cell(svc, "EK_XAU!C%d" % r), rate) for r, rate in sorted(RATES.items())]
+    assert v("xfwd") == pytest.approx((SPOT_BID + SPOT_ASK) / 2 * (1 + linear(pts, days, True) / 100 * days / 360), rel=1e-12)
+    # spot, forward and the first date by hand as well
+    put(svc, u, {"EK_XAU!B%d" % row["s"]: "50,25", "EK_XAU!B%d" % row["xfwd"]: "3990", "EK_XAU!B%d" % row["d1"]: "10.11.2026",
+                 "EK_XAU!B%d" % row["try"]: "36", "EK_XAU!B%d" % row["usd"]: "4"})
+    n = 46402.0 - 46336.0
+    fwd = 50.25 * (1 + 36 / 100 / 360 * n) / (1 + 4 / 100 / 360 * n)
+    assert v("n") == n and v("fwd") == pytest.approx(fwd, rel=1e-13) and v("teo") == pytest.approx(3990 * fwd / GRAM, rel=1e-13)
+    assert v("simp") == pytest.approx((3990 / v("xau") - 1) * 360 / days * 100, rel=1e-12)
+    put(svc, u, {"EK_XAU!B%d" % row[k]: "" for k in ("d1", "d2", "s", "xfwd", "try", "usd")})
+    assert v("d2") == cell(svc, "VIOP!M48") and v("xfwd") == pytest.approx(xfwd0, rel=1e-13) and v("usd") == pytest.approx(usd0, rel=1e-13)
+    # the free column: nothing until its second date and rate are typed; no Bloomberg gold data needed
+    assert cell(svc, "EK_XAU!E%d" % extras.XAU_CALC) == "Serbest" and v("d1", "E") == cell(svc, "VIOP!M47") and v("d2", "E") is None
+    assert v("n", "E") == "" and v("teo", "E") == "" and v("ibid", "E") == ""
+    put(svc, u, {"EK_XAU!E%d" % row["d2"]: "15.01.2027", "EK_XAU!E%d" % row["try"]: "36", "EK_XAU!E%d" % row["xfwd"]: "3990",
+                 "EK_XAU!E%d" % row["vbid"]: "6900"})
+    n, spot, usd = v("n", "E"), v("s", "E"), v("usd", "E")
+    assert n == 46402.0 - v("d1", "E") and spot == cell(svc, "VIOP!M50") and 3.5 < usd < 4.5
+    fwd = spot * (1 + 36 / 100 / 360 * n) / (1 + usd / 100 / 360 * n)
+    assert v("teo", "E") == pytest.approx(3990 * fwd / GRAM, rel=1e-13) and v("dbid", "E") == pytest.approx(3990 * fwd / GRAM - 6900)
+    assert v("ibid", "E") == pytest.approx(((6900 * GRAM / 3990) / spot * (1 + usd / 100 / 360 * n) - 1) * 360 / n * 100, rel=1e-12)
+    assert v("iask", "E") == "" and v("dask", "E") == ""                        # no ask typed
+    assert v("teo", "E", user=None) == ""                                         # mine alone
+
+
 def test_gold_panels_are_on_the_viop_page(svc, gold):
     page = svc.view(None, "viop")
     ids = [p["id"] for p in page["panels"]]
@@ -544,7 +606,8 @@ def test_gold_panels_are_on_the_viop_page(svc, gold):
     assert len(shared) == 7 and any(c.get("o") == list(extras.XAU_SOURCES) for c in shared)        # incl. the ticker key
     assert sum(1 for row in panels["XAU2"]["data"]["rows"] for c in row if c.get("i") == "s") == 14       # tickers + manual rates
     assert [row[3]["t"] for row in panels["XAU2"]["data"]["rows"][1:]] == ROOTS
-    assert sum(1 for row in panels["XAU4"]["data"]["rows"] for c in row if c.get("i") == "u") == 9        # USD, TRY, gold swap × 3
+    # every driver of the calculator can be typed: dates, spots, USD / TRY / gold swap rate, gold forward, VİOP bid / ask
+    assert sum(1 for row in panels["XAU4"]["data"]["rows"] for c in row if c.get("i") == "u") == 10 * 4
     assert sum(1 for row in panels["XAU3"]["data"]["rows"] for c in row if c.get("t") == "Swap faizi") == 7
     fwd = {p["id"]: p for p in svc.view(None, "forward")["panels"]}
     assert "swap faizi (XAUSR)" in fwd["B16"]["note"]
