@@ -88,8 +88,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
                                                    "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
-                                                   "Motor gün sayıları"]
-    assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY"} & set(sofr.sheet_index)
+                                                   "Motor gün sayıları", "EK_IHALE"]
+    assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
+                                              "EK_IHALE"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
     # the TRY workbook with one gold forward typed over by hand: the gold tables stay as they are in the file
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))

@@ -966,14 +966,16 @@ async function shot(page, name) {
     const bars = await page.evaluate(() => [...document.querySelectorAll('td.bar')].map((td) => parseFloat(td.style.getPropertyValue('--bar'))));
     // four rules of ten cells each; a cell without a number has no bar
     check('data bars of the USD sheet are drawn', bars.length >= 30 && bars.length <= 40 && Math.max(...bars) === 90 && Math.min(...bars) >= 10, bars.length);
-    // "Mobil MK" and "Ivır Zıvır" have no page any more; the sheets are still in the sheet explorer
+    // "Mobil MK", "YP DIBS" and "Ivır Zıvır" are taken out as the workbook loads: no page, not in the sheet explorer
     const gone = await page.evaluate(async () => {
       const pic = await fetch('/api/image?book=tto&sheet=' + encodeURIComponent('Ivır Zıvır') + '&i=0');
       const sheets = (await (await fetch('/api/sheets?book=tto')).json()).sheets.map((x) => x.name);
       return { nav: [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page), pic: pic.status, sheets };
     });
-    check('the two sheets the desk dropped have no page (the sheet explorer still has them)',
-      !gone.nav.includes('ivir') && !gone.nav.includes('mobil') && gone.pic === 200 && gone.sheets.includes('MOBIL MK') && gone.sheets.includes('Ivır Zıvır'), gone.nav);
+    check('the three sheets the desk dropped are gone: no page, not in the sheet explorer',
+      !gone.nav.includes('ivir') && !gone.nav.includes('mobil') && !gone.nav.includes('ypdibs') && gone.pic === 404
+      && !['MOBIL MK', 'YP DIBS', 'Ivır Zıvır'].some((s) => gone.sheets.includes(s)) && gone.sheets.includes('MASA')
+      && gone.nav.includes('ihale'), gone);
 
     await open(page, 'blotter');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
