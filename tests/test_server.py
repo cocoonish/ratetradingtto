@@ -210,8 +210,7 @@ def test_workbook_extras_over_http(client, user, module_service, monkeypatch):
     assert client.get("/api/view/ivir", headers=h).status_code == 404
     assert client.get("/api/view/ypdibs", headers=h).status_code == 404
     assert client.get("/api/image?book=tto&sheet=%s&i=0" % quote("Ivır Zıvır"), headers=h).status_code == 404
-    assert client.get("/api/grid?book=tto&sheet=%s&range=A1:B2" % quote("MOBIL MK"), headers=h).status_code == 404
-    assert "YP DIBS" not in [s["name"] for s in client.get("/api/sheets?book=tto", headers=h).json()["sheets"]]
+    # (that the sheet explorer does not list them is tested on the service: test_views.py)
     # a picture of a sheet (the workbook's only one was on "Ivır Zıvır"; put on MASA here) is served and cached
     assert client.get("/api/image?book=tto&sheet=MASA&i=0", headers=h).status_code == 404
     from tto.xl.model import Model
