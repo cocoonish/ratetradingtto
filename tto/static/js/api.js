@@ -1,7 +1,8 @@
 // HTTP client for the dashboard API.
 import { settings } from './format.js';
 
-export const session = { user: null, display: null, onUnauthorized: null };
+// Who is signed in is the server's to say: the session lives in an HttpOnly cookie the browser sends by itself.
+export const session = { user: null, display: null, role: null, onUnauthorized: null };
 
 async function request(method, path, body, query) {
   const url = new URL(path, window.location.origin);
@@ -12,8 +13,7 @@ async function request(method, path, body, query) {
     }
   }
   const headers = {};
-  if (session.user) headers['X-TTO-User'] = encodeURIComponent(session.user);
-  const init = { method, headers };
+  const init = { method, headers, credentials: 'same-origin' };
   if (body !== undefined && body !== null) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
@@ -31,7 +31,8 @@ async function request(method, path, body, query) {
   if (!res.ok) {
     const err = new Error((data && data.error) || ('HTTP ' + res.status));
     err.status = res.status;
-    if (res.status === 401 && session.onUnauthorized) session.onUnauthorized();
+    // the session ended (signed out elsewhere, expired, account closed): back to the sign-in screen
+    if (res.status === 401 && data && data.login && session.user && session.onUnauthorized) session.onUnauthorized();
     throw err;
   }
   return data;
@@ -44,11 +45,9 @@ async function download(path, query, fallbackName) {
   for (const k of Object.keys(query || {})) {
     if (query[k] !== undefined && query[k] !== null) url.searchParams.set(k, query[k]);
   }
-  const headers = {};
-  if (session.user) headers['X-TTO-User'] = encodeURIComponent(session.user);
   let res;
   try {
-    res = await fetch(url, { headers });
+    res = await fetch(url, { credentials: 'same-origin' });
   } catch (e) {
     const err = new Error('Sunucuya ulaşılamıyor');
     err.network = true;
