@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from conftest import cell, make_service
+from conftest import auth, cell, make_service
 from tto import extras as ex
 from tto import fx
 from tto.marketdata.base import bdp_key
@@ -412,7 +412,7 @@ def test_http(svc):
     from tto.server import create_app
     client = TestClient(create_app(service=svc))
     u = user(svc, "FX HTTP")
-    h = {"x-tto-user": u}
+    h = auth(svc, u)                                   # a signed-in session (the old user header signs nobody in)
     nav = client.get("/api/nav", headers=h).json()["pages"]
     fxp = [p for p in nav if p["group"] == "FX"]
     assert [p["id"] for p in fxp] == ["fx", "fxvol"] and fxp[0]["title"] == "Spot / FX"
@@ -430,7 +430,7 @@ def test_http(svc):
     assert client.get("/api/fx/tickers", headers=h).json()["items"][0]["text"] == "DXY Curncy"
     assert client.post("/api/fx/tickers", json={"remove": added["id"]}, headers=h).json() == {"items": []}
     assert client.post("/api/fx/history", json={}, headers=h).status_code == 200
-    assert client.get("/api/fx/board").status_code == 401                          # a name first
+    assert client.get("/api/fx/board").status_code == 401                          # no session, no data
 
 
 def test_a_spot_tick_moves_the_smile_without_fitting_it_again(svc):
