@@ -19,6 +19,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote as _quote
 
+from . import auth
 from . import blotter as bl
 from . import brokerchat as bc
 from . import extras as ex
@@ -29,7 +30,7 @@ from .inputs import InputError, parse_amount, parse_clipboard, parse_date, parse
 from .marketdata import ReplayProvider
 from .marketdata.replay import snapshot_from_model
 from .render import Renderer
-from .store import Store, user_key
+from .store import Store, now_iso, user_key
 from .views import layout as view_layout, load_views
 from .xl import numfmt
 from .xl.engine import Calc, Clock
@@ -101,6 +102,16 @@ class EngineThread(object):
         self._q.put(None)
 
 
+_DUMMY: List[str] = []
+
+
+def _dummy_hash() -> str:
+    """A hash to check a password against when the name does not exist (made once, on the first such sign-in)."""
+    if not _DUMMY:
+        _DUMMY.append(auth.hash_password(uuid.uuid4().hex))
+    return _DUMMY[0]
+
+
 #: the manual USDTRY spot of the workbook (VİOP sheet, "Manuel SP"): empty cells mean Bloomberg
 MANUAL_SPOT = {"book": "tto", "bid": "VIOP!AA9", "ask": "VIOP!AA10", "status": "VIOP!AA8", "shown_as": "VIOP!$AA$8"}
 
@@ -114,6 +125,7 @@ class Service(object):
         self.et = EngineThread()
         self.gen = 1
         self._gen_lock = threading.Lock()
+        self._auth_lock = threading.Lock()               # account changes one at a time (two first administrators ...)
         self._listeners: List[Callable[[int], None]] = []
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._retired: Dict[str, set] = {}
@@ -439,6 +451,8 @@ class Service(object):
 
     # ================================================================== users & overlays
     def login(self, name: str) -> Dict[str, Any]:
+        """The user of a name, made (active, without a password) when new - the program's and the tests' own way to
+        a user key.  It signs nobody in: over HTTP a user signs in with a password (``authenticate``)."""
         try:
             return self.store.login(name)
         except ValueError as exc:
@@ -446,11 +460,239 @@ class Service(object):
 
     def require_user(self, user: Optional[str]) -> str:
         if not user:
-            raise ServiceError("önce isminizle giriş yapın", 401)
+            raise ServiceError("önce giriş yapın", 401)
         key = user_key(user)
-        if not self.store.user_exists(key):
+        acc = self.store.account(key)
+        if acc is None:
             raise ServiceError("kullanıcı bulunamadı – tekrar giriş yapın", 401)
+        if acc.get("status") != "active":
+            raise ServiceError("hesap etkin değil – tekrar giriş yapın", 401)
         return key
+
+    def require_admin(self, user: Optional[str]) -> str:
+        key = self.require_user(user)
+        if (self.store.account(key) or {}).get("role") != "admin":
+            raise ServiceError("bu işlem yalnızca yöneticiler içindir", 403)
+        return key
+
+    # ================================================================== sign-in and accounts
+    @staticmethod
+    def _now() -> _dt.datetime:
+        return _dt.datetime.now()
+
+    @staticmethod
+    def _account_name(name: Any) -> str:
+        display = " ".join(str(name or "").split())
+        if not display:
+            raise ServiceError("isim boş olamaz")
+        if len(display) > 40:
+            raise ServiceError("isim en fazla 40 karakter olabilir")
+        return display
+
+    @staticmethod
+    def _new_password(password: Any) -> str:
+        problem = auth.password_problem(password)
+        if problem:
+            raise ServiceError(problem)
+        return auth.hash_password(str(password))
+
+    def me(self, user: str) -> Dict[str, Any]:
+        """The signed-in user as the page needs it (an administrator also learns how many requests wait)."""
+        acc = self.store.account(user_key(user)) or {}
+        out = {"user": acc.get("name"), "display": acc.get("display"), "role": acc.get("role") or "user"}
+        if out["role"] == "admin":
+            out["pending"] = self.store.pending_count()
+        return out
+
+    def auth_state(self, user: Optional[str], local: bool) -> Dict[str, Any]:
+        """Before the page shows anything: who is signed in (``None``: nobody), whether the dashboard still has no
+        administrator (``setup``: the first one is created from this computer only) and whether the request came
+        from this computer."""
+        return {"user": self.me(user) if user else None, "setup": not self.store.admins(), "local": bool(local)}
+
+    def session_user(self, token: Optional[str]) -> Optional[str]:
+        """The user of a session token that is still valid (``None`` otherwise)."""
+        if not token:
+            return None
+        return self.store.session_user(auth.token_hash(token), auth.stamp(self._now()))
+
+    def open_session(self, user: str, ip: Optional[str] = None) -> str:
+        """A new session of an active user - after a correct password or the first administrator's set-up.  The token
+        goes to the browser; the database keeps only its hash."""
+        now = self._now()
+        token = auth.new_token()
+        self.store.purge_sessions(auth.stamp(now))
+        self.store.add_session(auth.token_hash(token), user_key(user),
+                               auth.stamp(now + _dt.timedelta(days=auth.SESSION_DAYS)), ip)
+        return token
+
+    def authenticate(self, name: Any, password: Any, ip: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+        """Sign in with a name and a password: ``(session token, me)``.  Wrong passwords in a row lock the name for
+        a minute; an account waiting for approval or closed does not sign in."""
+        display = " ".join(str(name or "").split())
+        key = user_key(display) if display else ""
+        acc = self.store.account(key) if key else None
+        now = self._now()
+        wrong = ServiceError("isim ya da şifre hatalı", 401)
+        if acc is None:
+            auth.check_password(str(password or ""), _dummy_hash())     # as slow as a real check: no telling which names exist
+            raise wrong
+        if acc.get("locked_until") and acc["locked_until"] > auth.stamp(now):
+            raise ServiceError("çok fazla hatalı deneme – %s'den sonra tekrar deneyin" % acc["locked_until"][11:19], 429)
+        if acc.get("pw_hash") is None:
+            raise ServiceError("bu hesabın şifresi yok: \"Hesap iste\" ile aynı isimle şifrenizi belirleyin, bir yönetici "
+                               "onaylayınca girebilirsiniz", 401)
+        if not auth.check_password(str(password or ""), acc["pw_hash"]):
+            failed = int(acc.get("failed") or 0) + 1
+            if failed >= auth.MAX_FAILED:
+                self.store.update_account(key, failed=0, locked_until=auth.stamp(now + _dt.timedelta(seconds=auth.LOCK_SECONDS)))
+            else:
+                self.store.update_account(key, failed=failed)
+            raise wrong
+        if acc.get("status") == "pending":
+            raise ServiceError("hesabınız bir yöneticinin onayını bekliyor", 403)
+        if acc.get("status") != "active":
+            raise ServiceError("hesabınız kapatılmış – bir yöneticiye başvurun", 403)
+        self.store.update_account(key, failed=0, locked_until=None, last_seen=now_iso())
+        return self.open_session(key, ip), self.me(key)
+
+    def logout(self, token: Optional[str]) -> Dict[str, Any]:
+        if token:
+            self.store.drop_session(auth.token_hash(token))
+        return {"ok": True}
+
+    def request_account(self, name: Any, password: Any, note: Any = "") -> Dict[str, Any]:
+        """Ask for an account: it waits for an administrator.  A user of the earlier version (signed in by name only,
+        no password) asks under the same name: the request sets the password of that account, and once approved
+        its personal inputs and scenarios are still there."""
+        display = self._account_name(name)
+        pw_hash = self._new_password(password)
+        note = " ".join(str(note or "").split())[:200] or None
+        key = user_key(display)
+        with self._auth_lock:
+            acc = self.store.account(key)
+            if acc is None:
+                self.store.create_account(display, pw_hash, role="user", status="pending", note=note)
+            elif acc.get("status") == "pending":
+                raise ServiceError("bu isimle bir istek zaten onay bekliyor")
+            elif acc.get("pw_hash") is None and acc.get("status") == "active":
+                self.store.update_account(key, pw_hash=pw_hash, status="pending", note=note, requested_at=now_iso(),
+                                          decided_by=None, decided_at=None, failed=0, locked_until=None)
+                display = acc.get("display") or display
+            else:
+                raise ServiceError("bu isimde bir hesap var – şifrenizi unuttuysanız bir yöneticiye başvurun")
+        return {"status": "pending", "display": display}
+
+    def setup_admin(self, name: Any, password: Any, local: bool, ip: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+        """The first administrator, while there is none - from the dashboard's own computer only (nobody else on the
+        network can take the role first)."""
+        if not local:
+            raise ServiceError("ilk yönetici yalnızca dashboard'un çalıştığı bilgisayardan oluşturulabilir", 403)
+        display = self._account_name(name)
+        pw_hash = self._new_password(password)
+        key = user_key(display)
+        with self._auth_lock:
+            if self.store.admins():
+                raise ServiceError("bir yönetici zaten var – giriş yapın", 409)
+            if self.store.account(key) is None:
+                self.store.create_account(display, pw_hash, role="admin", status="active", by=key)
+            else:
+                self.store.update_account(key, display=display, pw_hash=pw_hash, role="admin", status="active", failed=0,
+                                          locked_until=None, decided_by=key, decided_at=now_iso())
+        return self.open_session(key, ip), self.me(key)
+
+    def change_password(self, user: Optional[str], old: Any, new: Any) -> Dict[str, Any]:
+        key = self.require_user(user)
+        acc = self.store.account(key) or {}
+        if not auth.check_password(str(old or ""), acc.get("pw_hash")):
+            raise ServiceError("mevcut şifre hatalı", 403)
+        self.store.update_account(key, pw_hash=self._new_password(new))
+        return {"ok": True}
+
+    # ------------------------------------------------------------------ the administrators' page
+    def accounts(self, user: Optional[str]) -> Dict[str, Any]:
+        self.require_admin(user)
+        return {"accounts": self.store.accounts(), "pending": self.store.pending_count(), "admins": len(self.store.admins())}
+
+    def admin_action(self, user: Optional[str], action: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """What an administrator does to an account: ``create`` (name, password, admin), ``approve`` / ``reject`` a
+        request, ``role`` (admin: true / false), ``password`` (a new one), ``status`` (active: true / false)."""
+        me = self.require_admin(user)
+        fn = {"create": self._admin_create, "approve": self._admin_approve, "reject": self._admin_reject,
+              "role": self._admin_role, "password": self._admin_password, "status": self._admin_status}.get(action)
+        if fn is None:
+            raise ServiceError("bilinmeyen işlem: %s" % action, 404)
+        with self._auth_lock:
+            fn(me, data or {})
+        return self.accounts(user)
+
+    def _target(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        key = user_key(str(data.get("name") or ""))
+        acc = self.store.account(key) if key else None
+        if acc is None:
+            raise ServiceError("kullanıcı bulunamadı: %s" % (data.get("name") or ""), 404)
+        return acc
+
+    def _last_admin(self, acc: Dict[str, Any]) -> bool:
+        return self.store.admins() == [acc["name"]]
+
+    def _admin_create(self, me: str, data: Dict[str, Any]) -> None:
+        display = self._account_name(data.get("name"))
+        pw_hash = self._new_password(data.get("password"))
+        role = "admin" if data.get("admin") else "user"
+        key = user_key(display)
+        acc = self.store.account(key)
+        if acc is None:
+            self.store.create_account(display, pw_hash, role=role, status="active", by=me)
+        elif acc.get("pw_hash") is None and acc.get("status") in ("active", "pending"):
+            # a user of the earlier version: the account gets its password, its inputs and scenarios stay
+            self.store.update_account(key, pw_hash=pw_hash, role=role, status="active", decided_by=me, decided_at=now_iso())
+        else:
+            raise ServiceError("bu isimde bir hesap var")
+
+    def _admin_approve(self, me: str, data: Dict[str, Any]) -> None:
+        acc = self._target(data)
+        if acc.get("status") != "pending":
+            raise ServiceError("onay bekleyen bir istek değil")
+        self.store.update_account(acc["name"], status="active", decided_by=me, decided_at=now_iso())
+
+    def _admin_reject(self, me: str, data: Dict[str, Any]) -> None:
+        acc = self._target(data)
+        if acc.get("status") != "pending":
+            raise ServiceError("onay bekleyen bir istek değil")
+        if acc.get("requested_new"):
+            self.store.delete_account(acc["name"])            # a new name: the request was all there was of it
+        else:
+            # the request of an existing user (of the earlier version): the account stays as it was, without a password
+            self.store.update_account(acc["name"], pw_hash=None, status="active", note=None, requested_at=None,
+                                      decided_by=me, decided_at=now_iso())
+
+    def _admin_role(self, me: str, data: Dict[str, Any]) -> None:
+        acc = self._target(data)
+        admin = bool(data.get("admin"))
+        if not admin and acc.get("role") == "admin" and self._last_admin(acc):
+            raise ServiceError("son yöneticinin yetkisi alınamaz – önce başka birini yönetici yapın")
+        self.store.update_account(acc["name"], role="admin" if admin else "user")
+
+    def _admin_password(self, me: str, data: Dict[str, Any]) -> None:
+        acc = self._target(data)
+        self.store.update_account(acc["name"], pw_hash=self._new_password(data.get("password")), failed=0, locked_until=None)
+        if acc["name"] != me:
+            self.store.drop_sessions(acc["name"])            # signed in elsewhere with the old password: out
+
+    def _admin_status(self, me: str, data: Dict[str, Any]) -> None:
+        acc = self._target(data)
+        if acc.get("status") == "pending":
+            raise ServiceError("onay bekleyen istek: onaylayın ya da reddedin")
+        if data.get("active"):
+            self.store.update_account(acc["name"], status="active", failed=0, locked_until=None)
+            return
+        if acc["name"] == me:
+            raise ServiceError("kendi hesabınızı kapatamazsınız")
+        if acc.get("role") == "admin" and self._last_admin(acc):
+            raise ServiceError("son yöneticinin hesabı kapatılamaz")
+        self.store.update_account(acc["name"], status="disabled", decided_by=me, decided_at=now_iso())
+        self.store.drop_sessions(acc["name"])
 
     def _overlay(self, user: str, book: Book) -> Dict[Tuple[int, int], Any]:
         key = (user, book.id)

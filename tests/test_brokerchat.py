@@ -6,6 +6,7 @@ import datetime as dt
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import auth
 from tto import blotter as bl
 from tto import brokerchat as bc
 from tto.server import create_app
@@ -718,10 +719,9 @@ def client(module_service):
         yield c
 
 
-def test_broker_chat_over_http(client):
-    from urllib.parse import quote
-    user = client.post("/api/login", json={"name": "Broker Web"}).json()["user"]
-    hdr = {"X-TTO-User": quote(user)}
+def test_broker_chat_over_http(client, module_service):
+    user = module_service.login("Broker Web")["user"]
+    hdr = auth(module_service, user)
     day = (dt.date.today() - dt.timedelta(days=40)).isoformat()
     text = "12:15:38 18m ois 35.03/35.23\n12:18:04 2y3y4y ois 12/ bid\nselam"
     res = client.post("/api/broker/parse", json={"text": text, "date": day}, headers=hdr)

@@ -1,28 +1,31 @@
-"""HTTP layer: the JSON API the browser uses."""
+"""HTTP layer: the JSON API the browser uses.  The client is signed in (as a reader with no inputs of their own);
+``hdr(user)`` signs a request in as someone else, ``ANON`` sends it without a session."""
 from urllib.parse import quote
 
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import ANON, auth
 from tto.server import create_app
+
+_svc = []
 
 
 @pytest.fixture(scope="module")
 def client(module_service):
     app = create_app(module_service)
-    with TestClient(app) as c:
+    _svc[:] = [module_service]
+    with TestClient(app, headers=auth(module_service, "HTTP Okuyucu")) as c:
         yield c
 
 
 def hdr(user):
-    return {"X-TTO-User": quote(user)}
+    return auth(_svc[0], user)
 
 
 @pytest.fixture(scope="module")
-def user(client):
-    res = client.post("/api/login", json={"name": "Çağrı Öztürk"})
-    assert res.status_code == 200
-    return res.json()["user"]
+def user(client, module_service):
+    return module_service.login("Çağrı Öztürk")["user"]
 
 
 def test_index_and_static_files(client):
@@ -31,21 +34,29 @@ def test_index_and_static_files(client):
     for path in ("/static/js/main.js", "/static/js/grid.js", "/static/js/chart.js", "/static/css/app.css",
                  "/static/js/pages/view.js", "/static/js/pages/blotter.js", "/static/js/pages/broker.js", "/static/js/pages/vol.js", "/static/js/pages/explorer.js",
                  "/static/js/ret.js", "/static/js/scenarios.js", "/static/js/api.js", "/static/js/ui.js", "/static/js/format.js",
-                 "/static/js/find.js", "/static/js/spot.js", "/static/js/status.js"):
+                 "/static/js/find.js", "/static/js/spot.js", "/static/js/status.js", "/static/js/pages/users.js"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert r.headers["cache-control"] == "no-cache"          # an updated dashboard is picked up at once
     assert client.get("/static/yok.js").status_code == 404
 
 
-def test_login(client):
-    res = client.post("/api/login", json={"name": "  Yeni   Kişi "})
-    assert res.json() == {"user": "yeni kişi", "display": "Yeni Kişi", "new": True}
-    assert client.post("/api/login", json={"name": "YENİ KİŞİ"}).json()["new"] is False
-    assert client.post("/api/login", json={"name": ""}).status_code == 400
-    assert client.post("/api/login", content=b"not json", headers={"Content-Type": "application/json"}).status_code == 400
+def test_login(client, module_service):
+    from tto.auth import hash_password
+    module_service.store.create_account("Yeni Kişi", hash_password("gizli-sifre-1"))
+    try:
+        res = client.post("/api/login", json={"name": "  YENİ   kişi ", "password": "gizli-sifre-1"}, headers=ANON)
+        assert res.status_code == 200 and res.json() == {"user": "yeni kişi", "display": "Yeni Kişi", "role": "user"}
+        cookie = res.headers["set-cookie"]
+        assert cookie.startswith("tto_oturum=") and "HttpOnly" in cookie and "SameSite=strict" in cookie
+        assert client.post("/api/login", json={"name": "Yeni Kişi", "password": "yanlış-şifre"}, headers=ANON).status_code == 401
+        assert client.post("/api/login", json={"name": ""}, headers=ANON).status_code == 401
+        assert client.post("/api/login", content=b"not json", headers=dict(ANON, **{"Content-Type": "application/json"})).status_code == 400
+    finally:
+        client.cookies.clear()                       # the module's client stays the reader
     names = [u["display"] for u in client.get("/api/users").json()["users"]]
     assert "Yeni Kişi" in names
+    assert client.get("/api/users", headers=ANON).status_code == 401           # nothing but the sign-in without a session
 
 
 def test_status_nav_header(client):
@@ -75,9 +86,9 @@ def test_views_and_locale(client, user):
 
 def test_inputs_need_a_user(client):
     body = {"book": "tto", "items": [{"ref": "Forward!D2", "value": "15.12.2026"}]}
-    assert client.post("/api/inputs", json=body).status_code == 401
-    assert client.post("/api/inputs", json=body, headers=hdr("tanımsız")).status_code == 401
-    assert client.post("/api/inputs", json={"book": "tto"}, headers=hdr("tanımsız")).status_code == 400
+    assert client.post("/api/inputs", json=body, headers=ANON).status_code == 401
+    assert client.post("/api/inputs", json=body, headers={"Authorization": "Bearer gecersiz-oturum"}).status_code == 401
+    assert client.post("/api/inputs", json={"book": "tto"}, headers=hdr("Girdi Kişisi")).status_code == 400
 
 
 def test_inputs_paste_reset(client, user):
@@ -111,7 +122,7 @@ def test_scenarios(client, user):
     assert client.post("/api/scenarios/load", json={"name": "Yok"}, headers=h).status_code == 404
     assert client.request("DELETE", "/api/scenarios", json={"name": "Şubat"}, headers=h).status_code == 200
     assert client.get("/api/scenarios", headers=h).json()["scenarios"] == []
-    assert client.get("/api/scenarios").status_code == 401
+    assert client.get("/api/scenarios", headers=ANON).status_code == 401
     client.post("/api/reset", json={"book": "tto"}, headers=h)
 
 
@@ -123,7 +134,7 @@ def test_ret_endpoints(client, user):
     assert rows["1W"]["bid"] == pytest.approx(0.345) and rows["1W"]["ask"] == pytest.approx(0.347)
     hist = client.get("/api/ret/history").json()["history"]
     assert hist and hist[0]["user"] == user
-    assert client.post("/api/ret", json={"rows": [{"tenor": "1W", "bid": "34,5"}]}).status_code == 401
+    assert client.post("/api/ret", json={"rows": [{"tenor": "1W", "bid": "34,5"}]}, headers=ANON).status_code == 401
     assert client.post("/api/ret", json={"rows": "x"}, headers=h).status_code == 400
     assert client.post("/api/ret", json={"rows": [{"tenor": "99Y", "bid": 1}]}, headers=h).status_code == 400
 
@@ -135,7 +146,7 @@ def test_blotter_endpoints(client, user):
     assert client.post("/api/blotter/quote/forward", json={"basis": "RET_MID"}).status_code == 400
     saved = client.post("/api/blotter/forward", json={"dir": "S", "amount": "5m", "value_date": "15.12.2026", "basis": "RET_ASK"}, headers=h)
     assert saved.status_code == 200 and saved.json()["forward"] == q["forward"]
-    assert client.post("/api/blotter/forward", json={"dir": "S", "amount": "5m", "value_date": "15.12.2026"}).status_code == 401
+    assert client.post("/api/blotter/forward", json={"dir": "S", "amount": "5m", "value_date": "15.12.2026"}, headers=ANON).status_code == 401
     mk = client.get("/api/blotter/ois-market").json()
     assert mk["usdtry"] > 0 and len(mk["tenors"]) == 21
     oq = client.post("/api/blotter/quote/ois", json={"strategy": "fly", "side": "REC GÖVDE", "wing1": "1Y", "body": "2Y", "wing2": "3Y",
@@ -147,7 +158,7 @@ def test_blotter_endpoints(client, user):
     assert [t["kind"] for t in data["trades"]] == ["fwd", "ois", "bond"]
     assert all(t["created_by"] == user for t in data["trades"])
     first = data["trades"][0]["id"]
-    assert client.delete("/api/blotter/trade/%d" % first).status_code == 401
+    assert client.delete("/api/blotter/trade/%d" % first, headers=ANON).status_code == 401
     assert client.delete("/api/blotter/trade/%d" % first, headers=h).json()["deleted"] == [first]
     assert client.delete("/api/blotter/trade/%d" % first, headers=h).status_code == 404
     assert client.get("/api/blotter?date=2020-01-01").json()["trades"] == []
@@ -250,5 +261,6 @@ def test_blotter_archive_download(client, user):
 def test_errors_are_json_and_never_tracebacks(client):
     res = client.get("/api/cell?book=tto&ref=bozuk")
     assert res.status_code == 404 and set(res.json()) == {"error"}
-    res = client.get("/api/view/masa?user=%s" % quote("çağrı öztürk"))        # user may also come in the query string
-    assert res.status_code == 200
+    # a name in the query string (or in the old X-TTO-User header) signs nobody in: only a session does
+    assert client.get("/api/view/masa?user=%s" % quote("çağrı öztürk"), headers=ANON).status_code == 401
+    assert client.get("/api/view/masa", headers=dict(ANON, **{"X-TTO-User": quote("çağrı öztürk")})).status_code == 401

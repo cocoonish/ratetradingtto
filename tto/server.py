@@ -4,8 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional
-from urllib.parse import unquote
+from typing import Any, Callable, Dict, Optional
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -14,10 +13,14 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from . import auth
 from .config import Settings
 from .service import Service, ServiceError
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+#: what answers without a session: the sign-in itself (the page and its files are outside /api/)
+PUBLIC_API = ("/api/auth", "/api/login", "/api/logout", "/api/account-request", "/api/setup")
 
 
 class _Static(StaticFiles):
@@ -30,10 +33,45 @@ class _Static(StaticFiles):
 
 
 def _user(request: Request) -> Optional[str]:
-    raw = request.headers.get("x-tto-user") or request.query_params.get("user")
-    if not raw:
-        return None
-    return unquote(raw)
+    """The signed-in user of the request (set by the session gate; ``None`` only on the sign-in routes)."""
+    return request.scope.get("tto_user")
+
+
+def _token(request: Request) -> Optional[str]:
+    """The session token: the cookie the browser keeps, or ``Authorization: Bearer …`` (scripts, tests)."""
+    head = request.headers.get("authorization") or ""
+    if head[:7].lower() == "bearer ":
+        return head[7:].strip() or None
+    return request.cookies.get(auth.COOKIE) or None
+
+
+def _ip(request: Request) -> Optional[str]:
+    return request.client.host if request.client else None
+
+
+class _SessionGate(object):
+    """Every request learns its user from its session; ``/api/…`` answers 401 without one (except the sign-in
+    routes).  The page and its files are served to anybody - they show the sign-in screen."""
+
+    def __init__(self, app, service: Callable[[], Optional[Service]]):
+        self.app = app
+        self.service = service
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        token = _token(request)
+        svc = self.service()
+        user = svc.session_user(token) if (svc is not None and token) else None
+        scope["tto_user"] = user
+        scope["tto_token"] = token
+        path = scope.get("path") or ""
+        if user is None and path.startswith("/api/") and path not in PUBLIC_API:
+            await JSONResponse({"error": "giriş gerekli", "login": True}, status_code=401)(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def _lang(request: Request) -> Optional[str]:
@@ -78,11 +116,56 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def index(request: Request):
         return FileResponse(os.path.join(STATIC, "index.html"), headers={"Cache-Control": "no-cache"})
 
-    # ------------------------------------------------------------------ session / status
+    # ------------------------------------------------------------------ sign-in, accounts
+    def signed_in(request: Request, token: str, me: Dict[str, Any]) -> JSONResponse:
+        resp = JSONResponse(me)
+        resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, path="/", httponly=True, samesite="strict",
+                        secure=request.url.scheme == "https")
+        return resp
+
+    @handler
+    async def auth_state(request: Request):
+        return ok(await call(svc().auth_state, _user(request), auth.is_local(_ip(request))))
+
     @handler
     async def login(request: Request):
         data = await _body(request)
-        return ok(await call(svc().login, str(data.get("name") or "")))
+        token, me = await call(svc().authenticate, data.get("name"), data.get("password"), _ip(request))
+        return signed_in(request, token, me)
+
+    @handler
+    async def logout(request: Request):
+        resp = JSONResponse(await call(svc().logout, request.scope.get("tto_token")))
+        resp.delete_cookie(auth.COOKIE, path="/")
+        return resp
+
+    @handler
+    async def account_request(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().request_account, data.get("name"), data.get("password"), data.get("note")))
+
+    @handler
+    async def setup(request: Request):
+        data = await _body(request)
+        token, me = await call(svc().setup_admin, data.get("name"), data.get("password"), auth.is_local(_ip(request)),
+                               _ip(request))
+        return signed_in(request, token, me)
+
+    @handler
+    async def password(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().change_password, _user(request), data.get("old"), data.get("new")))
+
+    @handler
+    async def admin_users(request: Request):
+        return ok(await call(svc().accounts, _user(request)))
+
+    @handler
+    async def admin_action(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().admin_action, _user(request), request.path_params["action"], data))
+
+    # ------------------------------------------------------------------ session / status
 
     @handler
     async def users(request: Request):
@@ -511,7 +594,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     routes = [
         Route("/", index),
+        Route("/api/auth", auth_state),
         Route("/api/login", login, methods=["POST"]),
+        Route("/api/logout", logout, methods=["POST"]),
+        Route("/api/account-request", account_request, methods=["POST"]),
+        Route("/api/setup", setup, methods=["POST"]),
+        Route("/api/password", password, methods=["POST"]),
+        Route("/api/admin/users", admin_users),
+        Route("/api/admin/users/{action}", admin_action, methods=["POST"]),
         Route("/api/users", users),
         Route("/api/status", status),
         Route("/api/nav", nav),
@@ -603,5 +693,6 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             await on_shutdown()
 
     app = Starlette(routes=routes, lifespan=lifespan)
+    app.add_middleware(_SessionGate, service=lambda: state["service"])
     app.state.get_service = svc
     return app

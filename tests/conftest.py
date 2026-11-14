@@ -17,6 +17,17 @@ from tto.config import Settings  # noqa: E402
 from tto.service import Service  # noqa: E402
 
 
+#: request headers without a session, for a test client that signs in by default (cookies of the client aside)
+ANON = {"Authorization": ""}
+
+
+def auth(svc: Service, user: str) -> dict:
+    """Request headers of a signed-in user: a session as the sign-in opens it, sent the way scripts send it
+    (``Authorization: Bearer …``).  The user is made (active) when new."""
+    key = svc.login(str(user))["user"]
+    return {"Authorization": "Bearer " + svc.open_session(key)}
+
+
 def make_service(data_dir) -> Service:
     # history=False: the daily history is not filled in the background (tests that need it run it themselves)
     return Service(Settings(data_dir=str(data_dir), mode="replay", history=False))

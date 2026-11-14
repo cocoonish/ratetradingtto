@@ -4,12 +4,11 @@ shown next to it, and the tables that grow (Bulk Bond, the 100-row bulk forward)
 from __future__ import annotations
 
 import datetime as dt
-from urllib.parse import quote
 
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import cell, make_service
+from conftest import auth, cell, make_service
 from tto import bonds as bd
 from tto import brokerchat as bc
 from tto import extras as ex
@@ -329,8 +328,8 @@ def test_the_dibs_rv_table_shows_the_days_broker_chat(tmp_path):
         assert gap["v"] == pytest.approx(((imp["bid"] + imp["ask"]) / 2 - imp["screen_yield"]) * 100.0)
         assert all(not any(v) for k, v in rows.items() if k not in {b for b in board})   # bonds nobody spoke of: empty
         # the export keeps to the sheet's own columns
+        hdr = auth(s, u)
         with TestClient(create_app(s)) as client:
-            hdr = {"X-TTO-User": u}
             assert client.get("/api/view/dibs", headers=hdr).status_code == 200
     finally:
         s.stop()
@@ -369,8 +368,8 @@ def test_bonds_are_added_to_a_pages_list_by_isin(tmp_path):
         assert res["cells"] == ["Bulk Bond!A6", "Bulk Bond!A7"]
         assert cell(s, "Bulk Bond!A7", user=user_key(u)) == "TRT160431T35" and cell(s, "Bulk Bond!A7") is None
         # over HTTP
+        hdr = auth(s, u)
         with TestClient(create_app(s)) as client:
-            hdr = {"X-TTO-User": u}
             got = client.get("/api/bonds/catalog", headers=hdr).json()
             assert len(got["bonds"]) == 77 and new in {b["isin"] for b in got["bonds"] if "dibs" in b["lists"]}
             res = client.post("/api/list/add", json={"book": "tto", "list": "Bulk Bond!A3:A52", "values": ["TRT050527T33"]}, headers=hdr)
@@ -561,8 +560,8 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
         assert s.bond_card(u, "XS2010030836")["known"] is False
         with pytest.raises(ServiceError):
             s.bond_card(u, " ")
+        hdr = auth(s, u)
         with TestClient(create_app(s)) as client:
-            hdr = {"X-TTO-User": quote(u)}                                          # as the page sends it
             got = client.get("/api/bond/TRT160431T35", headers=hdr).json()
             assert got["label"] == "16.04.31" and got["board"]["last"] == "94,100"
     finally:
@@ -655,8 +654,8 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         assert s.bond_flag(u, "TRT190128T14", False)["removed"] == 0
         with pytest.raises(ServiceError):
             s.bond_flag(u, "TRT190128T15", True)                                        # the check digit
+        hdr = auth(s, u)
         with TestClient(create_app(s)) as client:
-            hdr = {"X-TTO-User": quote(u)}
             got = client.post("/api/bonds/flag", json={"isin": "TRT130127T11", "on": True}, headers=hdr)
             assert got.status_code == 200 and got.json()["added"] is True
             assert client.post("/api/bonds/flag", json={"isin": "TRT130127T11", "on": False}, headers=hdr).json()["removed"] == 1
