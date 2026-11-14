@@ -1292,16 +1292,20 @@ def _tto_dibs_live(model: Model) -> None:
         e1 = index_to_col(_col(LIVE_EXTRA) + 1)
         b.set("%s%d" % (LIVE_EXTRA, r), clean("%s%d" % (ex_bid, r)), fmt="0.000")
         b.set("%s%d" % (e1, r), clean("%s%d" % (ex_ask, r)), fmt="0.000")
-        # the overnight repo the dirty prices of two value dates imply (none for a CPI linker: its TL price moves
-        # with the index ratio of each value date)
+        # the overnight repo the dirty prices of two value dates imply - only from prices of the same day (the last
+        # trades of both value dates on one day: a T0 price of two weeks ago against today's T1 implies nothing);
+        # none for a CPI linker (its TL price moves with the index ratio of each value date)
         for col, (k0, k1) in ((w, (0, 1)), (x, (1, 2))):
             g0, g1 = L["groups"][k0], L["groups"][k1]
             m0, m1 = "%s%d" % (L["mid"][k0], r), "%s%d" % (L["mid"][k1], r)
             a0, a1 = "%s%d" % (L["raw"][k0]["acc"], r), "%s%d" % (L["raw"][k1]["acc"], r)
             d0, d1 = "$%s$2" % g0["date"][:-1], "$%s$2" % g1["date"][:-1]
+            t0, t1 = "%s%d" % (g0["when"], r), "%s%d" % (g1["when"], r)
             b.set("%s%d" % (col, r),
-                  '=IF(OR($A{r}="",{rv}$D{r}="E"),"",IFERROR(IF(AND(ISNUMBER({m0}),ISNUMBER({m1}),ISNUMBER({a0}),ISNUMBER({a1}),{d1}>{d0}),'
-                  '(({m1}+{a1})/({m0}+{a0})-1)*365/({d1}-{d0})*100,""),""))'.format(r=r, rv=rv, m0=m0, m1=m1, a0=a0, a1=a1, d0=d0, d1=d1),
+                  '=IF(OR($A{r}="",{rv}$D{r}="E"),"",IFERROR(IF(AND(ISNUMBER({m0}),ISNUMBER({m1}),ISNUMBER({a0}),ISNUMBER({a1}),{d1}>{d0},'
+                  'ISNUMBER({t0}),ISNUMBER({t1}),{t0}={t1}),'
+                  '(({m1}+{a1})/({m0}+{a0})-1)*365/({d1}-{d0})*100,""),""))'.format(r=r, rv=rv, m0=m0, m1=m1, a0=a0, a1=a1, d0=d0, d1=d1,
+                                                                                    t0=t0, t1=t1),
                   fmt="0.00", bold=col == w)
         b.set("%s%d" % (y, r), '=IF(ISNUMBER({w}{r}),({w}{r}/100-OIS_MAIN!$J$2)*10000,"")'.format(w=w, r=r), fmt="0")
     b.note("A%d" % (LIVE_LAST + 2),
@@ -1309,7 +1313,8 @@ def _tto_dibs_live(model: Model) -> None:
            "(ISL0 = aynı gün, ISL1 = ertesi iş günü, ISLN = iki iş günü sonra) - sarı hücreye başka kod "
            "yazılabilir. Kâğıdın DİBS RV'de fiyatlandığı kaynak o sayfadan okunur. Repo: iki valörün kirli fiyatlarından "
            "(temiz + o valördeki işlemiş faiz), (kirli2 / kirli1 − 1) · 365 / gün; tek bir fiyat adımı (0,005) bir günde "
-           "~1,8 puan eder.")
+           "~1,8 puan eder. Repo yalnız iki valörün fiyatı aynı güne aitse (son işlemleri aynı gündeyse) hesaplanır: "
+           "eski bir T0 fiyatıyla bugünün T1 fiyatı bir repo söylemez.")
     b.sheet.freeze = [4, 2]
 
 

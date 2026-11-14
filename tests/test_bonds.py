@@ -343,11 +343,24 @@ def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
         # the repo two value dates imply: dirty prices (clean + the accrued interest of each value date), ACT/365
         raw0 = L["raw"][0]
         res = s.set_inputs(u, "tto", [{"ref": "EK_DIBS!%s8" % raw0["bid"], "value": 100.0}, {"ref": "EK_DIBS!%s8" % raw0["ask"], "value": 100.03},
-                                      {"ref": "EK_DIBS!%s8" % raw0["acc"], "value": 4.86}], allow_adhoc=True)
+                                      {"ref": "EK_DIBS!%s8" % raw0["acc"], "value": 4.86},
+                                      {"ref": "EK_DIBS!%s8" % raw0["date"], "value": 46315.0}], allow_adhoc=True)
         assert not res["errors"]
         uk = user_key(u)
         dirty0, dirty1 = 100.015 + 4.86, cell(s, "DİBS RV!M8") + cell(s, "DİBS RV!CW8")
         w, x, y = ex.LIVE_REPO
+        # ... only from prices of the same day: a T0 price of two weeks before against T1's implies nothing
+        assert cell(s, "EK_DIBS!%s8" % t0["when"], user=uk) == 46315.0 and cell(s, "EK_DIBS!%s8" % w, user=uk) == ""
+        card = s.bond_card(u, "TRT150328T24")
+        assert card["repo_note"] == ("T0 ve T1 fiyatları aynı güne ait değil (T0 son işlem: 20.10.2026 · T1 son işlem: 03.11.2026): "
+                                     "repo hesaplanmadı") and not card["repo"][0]["t"]
+        summary = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
+        heads = [c["t"] for c in summary[0]]
+        line = next(row for row in summary if any(c.get("t") == "TRT150328T24" for c in row))
+        repo_cell = line[heads.index("T0→T1 repo %")]
+        assert repo_cell["t"] == "–" and repo_cell["tip"] == card["repo_note"]
+        s.set_inputs(u, "tto", [{"ref": "EK_DIBS!%s8" % raw0["date"], "value": 46329.0}], allow_adhoc=True)     # the same day
+        assert s.bond_card(u, "TRT150328T24")["repo_note"] == ""
         assert cell(s, "EK_DIBS!%s8" % w, user=uk) == pytest.approx((dirty1 / dirty0 - 1) * 365 * 100)
         assert cell(s, "EK_DIBS!%s8" % y, user=uk) == pytest.approx((cell(s, "EK_DIBS!%s8" % w, user=uk) / 100 - cell(s, "OIS_MAIN!J2")) * 1e4)
         assert cell(s, "EK_DIBS!%s8" % x, user=uk) == "" and cell(s, "EK_DIBS!%s8" % w) == ""     # T2 not priced; others unchanged

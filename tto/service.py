@@ -1832,6 +1832,34 @@ class Service(object):
         data["added"] = int(data.get("added") or 0) + len(self._BOARD_HEADS) + 1
 
     #: the order of the kinds in the trading summary: DİBS RV's types (B / S / T / E)
+    @staticmethod
+    def _repo_note(txt: Callable[[str], str], layout: Dict[str, Any], row: int) -> str:
+        """Why the T0 → T1 repo is not given while both value dates have a price: the prices are not of the same
+        day (the repo is worked out only from prices of one day)."""
+        w = ex.LIVE_REPO[0]
+        g0, g1 = layout["groups"][0], layout["groups"][1]
+        priced = all(txt("%s%d" % (g[side], row)) for g in (g0, g1) for side in ("bid", "ask"))
+        when0, when1 = txt("%s%d" % (g0["when"], row)), txt("%s%d" % (g1["when"], row))
+        if txt("%s%d" % (w, row)) or not priced or (when0 and when0 == when1):
+            return ""
+        return "T0 ve T1 fiyatları aynı güne ait değil (T0 son işlem: %s · T1 son işlem: %s): repo hesaplanmadı" % (
+            when0 or "yok", when1 or "yok")
+
+    def _repo_cell(self, cell: Callable[..., Dict[str, Any]], live: Optional[int], r: int) -> Dict[str, Any]:
+        """The trading summary's T0 → T1 repo: the value, or a dash that says why there is none."""
+        if live is None:
+            return {"t": "", "k": ""}
+        got = cell(ex.LIVE_REPO[0], r, live)
+        if str(got.get("t") or "").strip():
+            return got
+
+        def txt(addr: str) -> str:
+            m = re.match(r"([A-Z]+)(\d+)$", addr)
+            return str(cell(m.group(1), int(m.group(2)), live).get("t") or "") if m else ""
+
+        note = self._repo_note(txt, ex._live_cols(), r)
+        return {"t": "–", "k": "s", "cls": "soft", "tip": note} if note else got
+
     _TYPE_GROUPS = (("B", "Bono · kuponsuz"), ("S", "Sabit kuponlu"), ("T", "TLREF'e endeksli"), ("E", "TÜFE'ye endeksli"))
 
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
@@ -1893,7 +1921,7 @@ class Service(object):
                     {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
                     {"t": str(src or ""), "k": "s", "cls": "soft"}, cell("K", r), cell("L", r), dict(cell("AS", r), b=1), when,
                     cell("T", r), cell("Z", r), cell("AB", r), dict(cell("AC", r), b=1), cell("AG", r), cell("AI", r), cell("AO", r),
-                    cell(ex.LIVE_REPO[0], r, live) if live is not None else {"t": "", "k": ""}]
+                    self._repo_cell(cell, live, r)]
             line += self._bond_cells(said.get(code), loc) + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}]
             group = kind if kind in bonds else "S"
             bonds[group].append((mat if type(mat) is float else 1e9, line))
@@ -2374,6 +2402,7 @@ class Service(object):
                     w, x, y = ex.LIVE_REPO
                     for name, col in (("T0→T1 repo %", w), ("T1→T2 repo %", x), ("T0→T1 − TLREF (bp)", y)):
                         out["repo"].append({"name": name, "t": txt("%s%d" % (col, row))})
+                    out["repo_note"] = self._repo_note(txt, layout, row)
                     extra = ex.LIVE_EXTRA
                     out["extra"] = {"src": txt("%s2" % extra), "bid": txt("%s%d" % (extra, row)),
                                     "ask": txt("%s%d" % (index_to_col(ex._col(extra) + 1), row))}

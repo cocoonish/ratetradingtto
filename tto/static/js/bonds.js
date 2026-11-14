@@ -118,6 +118,7 @@ export async function openBondCard(ctx, isin) {
     section('Valörler (Bloomberg)', table(['Valör · kaynak', 'Tarih', 'Bid', 'Ask', 'Son işlem', 'Son işlem', 'Hacim'], rows, 'nums'));
     const repo = (d.repo || []).filter((x) => x.t);
     if (repo.length) m.body.appendChild(h('p', { class: 'muted' }, 'İma O/N repo: ' + repo.map((x) => x.name + ' ' + x.t).join(' · ')));
+    if (d.repo_note) m.body.appendChild(h('p', { class: 'muted', id: 'card-repo-note' }, 'İma O/N repo: ' + d.repo_note));
   }
   if (d.board) {
     const imp = d.board.implied || {};
