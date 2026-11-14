@@ -87,6 +87,7 @@ def _workbook_server() -> "fake_blpapi.Server":
                 closes = svc.provider.history(items, "20250101", "20991231")
         finally:
             svc.stop()
+            svc.store.close()               # Windows does not remove a folder that holds an open database file
     extra = {}
     for days in CONFIG.get("idle_maturities", []):
         for source in (0, 1):
