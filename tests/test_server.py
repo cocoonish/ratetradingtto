@@ -191,16 +191,17 @@ def test_tabs_hand_values_and_search_data_over_http(client, user):
     tables = {p["id"]: p.get("tables") for p in client.get("/api/nav").json()["pages"]}
     assert any(t["id"] == "XAU4" and t["tab"] == "Hesaplayıcılar" for t in tables["viop"]) and tables["blotter"] is None
     # a value over a formula needs the mode ("adhoc"); it is undone by "reset" with the cell's address
-    res = client.post("/api/inputs", json={"book": "tto", "items": [{"ref": "Forward!E33", "value": "55"}]}, headers=h).json()
+    # (EK_FWD!F50: the RET mid outright of the USDTRY table on the "Forward fiyatları" tab - a formula)
+    res = client.post("/api/inputs", json={"book": "tto", "items": [{"ref": "EK_FWD!F50", "value": "55"}]}, headers=h).json()
     assert res["applied"] == 0 and res["errors"]
-    res = client.post("/api/inputs", json={"book": "tto", "adhoc": True, "items": [{"ref": "Forward!E33", "value": "55"}]}, headers=h).json()
+    res = client.post("/api/inputs", json={"book": "tto", "adhoc": True, "items": [{"ref": "EK_FWD!F50", "value": "55"}]}, headers=h).json()
     assert res["applied"] == 1 and res["errors"] == []
-    b15 = next(p for p in client.get("/api/view/forward", headers=h).json()["panels"] if p["id"] == "B15")["data"]
-    mine = b15["rows"][b15["r"].index(33)][b15["c"].index("E")]
+    usd = next(p for p in client.get("/api/view/forward", headers=h).json()["panels"] if p["id"] == "FR1")["data"]
+    mine = usd["rows"][usd["r"].index(50)][usd["c"].index("F")]
     assert mine["m"] == 1 and mine["fx"] == 1 and mine["i"] == "u" and mine["t"] == "55,0000"
-    assert client.post("/api/reset", json={"book": "tto", "refs": ["Forward!E33"]}, headers=h).json()["reset"] == 1
-    b15 = next(p for p in client.get("/api/view/forward", headers=h).json()["panels"] if p["id"] == "B15")["data"]
-    assert "m" not in b15["rows"][b15["r"].index(33)][b15["c"].index("E")]
+    assert client.post("/api/reset", json={"book": "tto", "refs": ["EK_FWD!F50"]}, headers=h).json()["reset"] == 1
+    usd = next(p for p in client.get("/api/view/forward", headers=h).json()["panels"] if p["id"] == "FR1")["data"]
+    assert "m" not in usd["rows"][usd["r"].index(50)][usd["c"].index("F")]
 
 
 def test_workbook_extras_over_http(client, user):

@@ -182,7 +182,8 @@ def test_forward_sheets_manual_calculators_are_shown_in_full():
     halves - are visible tables of the Forward page."""
     fwd = next(v for v in VIEWS if v["id"] == "forward")
     shown = [parse_range(p["range"]) for p in fwd["panels"] if p["type"] == "table" and not p.get("hidden")]
-    for rng in ("AG4:AK16", "AG18:AK30", "AG32:AK44", "AG46:AK58", "AG60:AK68", "H35:J39", "F8:F21"):
+    # (the USDTRY daily swap points, H35:J39, are in the USDTRY table of the "Forward fiyatları" tab: EK_FWD, columns K:M)
+    for rng in ("AG4:AK16", "AG18:AK30", "AG32:AK44", "AG46:AK58", "AG60:AK68", "F8:F21"):
         r1, c1, r2, c2 = parse_range(rng)
         assert any(a <= r1 and b <= c1 and c >= r2 and d >= c2 for a, b, c, d in shown), rng
 

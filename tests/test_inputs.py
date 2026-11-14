@@ -83,6 +83,9 @@ def test_date_cells():
 def test_options_are_matched_case_insensitively():
     assert parse_input("receive", options=["PAY", "RECEIVE"]) == "RECEIVE"
     assert parse_input("1", options=["0", "1"]) == 1.0
+    # the Turkish dotted capital İ and the dotless ı: typed either way, it is the item of the list
+    assert parse_input("viop", options=["Offshore", "OIS", "VİOP", "RET"]) == "VİOP"
+    assert parse_input("DIŞ", options=["iç", "dış"]) == "dış"
 
 
 def test_bad_numbers_are_refused():

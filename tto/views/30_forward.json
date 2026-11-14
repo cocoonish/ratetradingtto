@@ -714,53 +714,137 @@
    "label": "'Interest 2 SP (O/N)' EUR faizi (B10; boş = EUR OIS eğrisi)"
   },
   {
-   "range": "EK_FWD!B35",
+   "range": "EK_FWD!F45",
    "scope": "user",
-   "group": "fwdrate-spot",
+   "group": "fwdrate-usd",
    "kind": "number",
-   "label": "USDTRY spot of the value-date rate table (formula default: Forward!F2)"
+   "label": "USDTRY spot of the value-date table (formula default: Forward!F2)"
   },
   {
-   "range": "EK_FWD!D35",
+   "range": "EK_FWD!H45",
    "scope": "user",
    "group": "fwdrate-usd",
    "kind": "number",
    "label": "USD bid % of the value date (formula default: Forward!W27)"
   },
   {
-   "range": "EK_FWD!F35",
+   "range": "EK_FWD!L45",
    "scope": "user",
    "group": "fwdrate-usd",
    "kind": "number",
    "label": "USD ask % of the value date (formula default: Forward!Y27)"
   },
   {
-   "range": "EK_FWD!H35",
+   "range": "EK_FWD!B47:B51",
    "scope": "user",
-   "group": "fwdrate-spot",
+   "group": "fwdrate-try",
    "kind": "number",
-   "label": "EURTRY spot of the value-date rate table (formula default: Forward!G2)"
+   "label": "TRY bid % of the value date per curve: Offshore, OIS, VİOP, RET (formula default: the Forward sheet's cells), Elle (from its settings)"
   },
   {
-   "range": "EK_FWD!J35",
+   "range": "EK_FWD!D47:D51",
+   "scope": "user",
+   "group": "fwdrate-try",
+   "kind": "number",
+   "label": "TRY ask % of the value date per curve: Offshore, OIS, VİOP, RET (formula default: the Forward sheet's cells), Elle (from its settings)"
+  },
+  {
+   "range": "EK_FWD!B52",
+   "scope": "user",
+   "group": "fwdrate-elle",
+   "kind": "text",
+   "label": "Elle: the curve its rate starts from (Offshore / OIS / VİOP / RET)"
+  },
+  {
+   "range": "EK_FWD!D52",
+   "scope": "user",
+   "group": "fwdrate-elle",
+   "kind": "number",
+   "label": "Elle: mid % typed (blank = the curve's mid)"
+  },
+  {
+   "range": "EK_FWD!F52",
+   "scope": "user",
+   "group": "fwdrate-elle",
+   "kind": "number",
+   "label": "Elle: spread to the curve's mid, bp (blank = 0)"
+  },
+  {
+   "range": "EK_FWD!H52",
+   "scope": "user",
+   "group": "fwdrate-elle",
+   "kind": "number",
+   "label": "Elle: bid / ask width, bp (blank = the curve's own)"
+  },
+  {
+   "range": "EK_FWD!F56",
+   "scope": "user",
+   "group": "fwdrate-eur",
+   "kind": "number",
+   "label": "EURTRY spot of the value-date table (formula default: Forward!G2)"
+  },
+  {
+   "range": "EK_FWD!H56",
    "scope": "user",
    "group": "fwdrate-eur",
    "kind": "number",
    "label": "EUR bid % of the value date (formula default: Forward!AC27)"
   },
   {
-   "range": "EK_FWD!L35",
+   "range": "EK_FWD!L56",
    "scope": "user",
    "group": "fwdrate-eur",
    "kind": "number",
    "label": "EUR ask % of the value date (formula default: Forward!AE27)"
   },
   {
-   "range": "EK_FWD!B37:C41",
+   "range": "EK_FWD!B58:B62",
    "scope": "user",
-   "group": "fwdrate-try",
+   "group": "fwdrate-eur-try",
    "kind": "number",
-   "label": "TRY bid / ask % of the value date per curve: ICAP, OIS, VİOP, RET, Elle (formula default: the Forward sheet's cells)"
+   "label": "TRY bid % of the EURTRY table (formula default: the USDTRY table's)"
+  },
+  {
+   "range": "EK_FWD!D58:D62",
+   "scope": "user",
+   "group": "fwdrate-eur-try",
+   "kind": "number",
+   "label": "TRY ask % of the EURTRY table (formula default: the USDTRY table's)"
+  },
+  {
+   "range": "EK_FWD!B66",
+   "scope": "user",
+   "group": "fwdfree-curve",
+   "kind": "text",
+   "label": "free forward list: the TRY curve of the minor rate (Offshore / OIS / VİOP / RET)"
+  },
+  {
+   "range": "EK_FWD!A68:A77",
+   "scope": "user",
+   "group": "fwdfree-pair",
+   "kind": "text",
+   "label": "free forward list: pair (USDTRY / EURTRY)"
+  },
+  {
+   "range": "EK_FWD!B68:C77",
+   "scope": "user",
+   "group": "fwdfree-dates",
+   "kind": "date",
+   "label": "free forward list: start (formula default: the pair's spot date) and end date"
+  },
+  {
+   "range": "EK_FWD!E68:G77",
+   "scope": "user",
+   "group": "fwdfree-rates",
+   "kind": "number",
+   "label": "free forward list: spot at the start, major %, minor % (formula defaults: from the curves)"
+  },
+  {
+   "range": "EK_FWD!B93:B95",
+   "scope": "user",
+   "group": "fwdtenor-dates",
+   "kind": "date",
+   "label": "TRY rates by tenor: dates of one's own"
   },
   {
    "range": "EK_BULK!B5:B104",
@@ -797,32 +881,80 @@
    "id": "FR1",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A33:O42",
+   "range": "A44:M52",
    "hidden": false,
    "wide": true,
-   "title": "VADE FAİZLERİYLE FORWARD  ·  Forward sayfasının valörü için her eğrinin bid / ask TRY faizi – faizi değiştirin, forward ve puan hemen yeniden hesaplanır",
-   "borrowed": true
+   "borrowed": true,
+   "title": "USDTRY FORWARD  ·  valör faizleriyle bid / mid / ask",
+   "note_ref": "A53"
+  },
+  {
+   "id": "FR2",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A55:M62",
+   "hidden": false,
+   "wide": true,
+   "borrowed": true,
+   "title": "EURTRY FORWARD  ·  valör faizleriyle bid / mid / ask",
+   "note_ref": "A63"
+  },
+  {
+   "id": "FR3",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A65:M77",
+   "hidden": false,
+   "wide": true,
+   "borrowed": true,
+   "title": "SERBEST FORWARD",
+   "note_ref": "A78",
+   "grow": {
+    "key": "C",
+    "first": 68,
+    "extra": 3,
+    "last": 77
+   }
+  },
+  {
+   "id": "FR4",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A80:J95",
+   "hidden": false,
+   "borrowed": true,
+   "title": "TRY FAİZLERİ VADELERE GÖRE  ·  simple zero",
+   "note_ref": "A96",
+   "grow": {
+    "key": "B",
+    "first": 93,
+    "extra": 1,
+    "last": 95
+   }
   },
   {
    "id": "B15",
    "type": "table",
-   "title": "USDTRY forward",
+   "title": "Excel'in USDTRY forward tablosu · Forward fiyatları sekmesindeki USDTRY tablosuyla aynı",
    "range": "B29:F39",
-   "hidden": false
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B15b",
    "type": "table",
-   "title": "USDTRY · günlük swap puanı (bid / mid / ask)",
+   "title": "Excel'in USDTRY günlük swap puanı · USDTRY tablosunun P/gün sütunları",
    "range": "H35:J39",
-   "keep_title": true
+   "keep_title": true,
+   "hidden": true
   },
   {
    "id": "B17",
    "type": "table",
-   "title": "EURTRY forward",
+   "title": "Excel'in EURTRY forward tablosu · Forward fiyatları sekmesindeki EURTRY tablosuyla aynı",
    "range": "B41:J51",
-   "hidden": false
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B16",
@@ -901,9 +1033,10 @@
   {
    "id": "B14",
    "type": "table",
-   "title": "Serbest forward listesi",
+   "title": "Excel'in serbest forward listesi · yerine: Forward fiyatları → Serbest forward",
    "range": "A24:H27",
-   "hidden": false
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B13",
@@ -1151,24 +1284,23 @@
     "B11",
     "B25",
     "B13",
-    "B14",
     "B21",
     "B24"
    ],
-   "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot ve döviz faizi piyasadan (ve üstteki valör tarihinden) gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz."
+   "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot ve döviz faizi piyasadan (ve üstteki valör tarihinden) gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz. Serbest forward listesi: Forward fiyatları sekmesinde."
   },
   {
    "id": "fwd",
    "title": "Forward fiyatları",
    "panels": [
     "FR1",
-    "B15",
-    "B15b",
-    "B17",
+    "FR2",
+    "FR3",
+    "FR4",
     "B16",
     "B18"
    ],
-   "note": "Üstteki valör tarihi için forward: ICAP, OIS, VİOP ve RET eğrilerinden bid / mid / ask. İlk tabloda her eğrinin o vadedeki bid / ask TRY faizi var: faizi (ya da spotu, döviz faizini) değiştirin, forward ve swap puanı hemen yeniden hesaplanır; silince piyasaya döner."
+   "note": "Üstteki valör tarihi için USDTRY ve EURTRY: her eğrinin (offshore, OIS, VİOP, RET) bid / mid / ask TRY faizi, forward, swap puanı ve günlük puan. Faizi, spotu ya da döviz faizini değiştirin, hemen yeniden hesaplanır; silince piyasaya döner. 'Elle' satırı: bir eğri seçip mid ya da mid'e spread ile kendi faiziniz. Altında serbest forward listesi (spot, major ve minor faizi eğrilerden) ve eğrilerin vadelere göre simple zero faizleri."
   },
   {
    "id": "ret",

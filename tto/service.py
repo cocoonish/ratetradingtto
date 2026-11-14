@@ -115,6 +115,7 @@ class Service(object):
         self._gen_lock = threading.Lock()
         self._listeners: List[Callable[[int], None]] = []
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
+        self._retired: Dict[str, set] = {}
         self._view_cache: Dict[Tuple, Dict[str, Any]] = {}
         # live: when the dashboard saw each security trade today (its last price changed or its volume grew)
         self._trades_day = ""
@@ -456,20 +457,40 @@ class Service(object):
         if ov is None:
             ov = {}
             fresh = []
+            retired = self._retired_cells(book)
+            dropped = []
             for (bid, ref), val in self.store.user_inputs(user, book.id).items():
                 try:
                     cell = book.cell(ref)
                 except (KeyError, ValueError):
                     continue
+                if cell in retired:
+                    dropped.append(ref)                # an input that moved: its old value is no one's input now
+                    continue
                 if cell not in book.inputs:
                     fresh.append(ref)
                 ov[cell] = _from_json(val)
+            if dropped:
+                self.store.clear_user_inputs(user, book.id, dropped)
             for ref in fresh:
                 book.declare(ref, scope="user", group="adhoc")
             self._overlays[key] = ov
             if ov:
                 book.engine.set_user_inputs(user, ov)
         return ov
+
+    def _retired_cells(self, book: Book) -> set:
+        """Cells of input cells that moved to another address in a later layout (``extras.RETIRED_INPUTS``)."""
+        out = self._retired.get(book.id)
+        if out is None:
+            out = set()
+            for ref in ex.RETIRED_INPUTS.get(book.id, ()):
+                try:
+                    out.update(book.cells_of(ref))
+                except (KeyError, ValueError):
+                    continue
+            self._retired[book.id] = out
+        return out
 
     def _calc(self, user: Optional[str], book: Book) -> Calc:
         if not user:
@@ -1052,7 +1073,10 @@ class Service(object):
             label = ""
             if book is not None:
                 try:
-                    d = book.inputs.get(book.cell(ref))
+                    cell = book.cell(ref)
+                    if cell in self._retired_cells(book):
+                        continue                       # an input that moved: dropped when the values are loaded
+                    d = book.inputs.get(cell)
                     label = d.label if d else ""
                 except (KeyError, ValueError):
                     pass

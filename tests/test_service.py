@@ -377,18 +377,18 @@ def test_a_value_typed_over_a_formula_is_mine_marked_and_undone_by_blanking(tmp_
     svc = make_service(tmp_path)
     try:
         u, w = login(svc, "Elle A"), login(svc, "Elle B")
-        ref = "Forward!E33"                                              # RET mid forward: a formula, no input
+        ref = "Forward!E33"                 # RET mid forward: a formula, no input (B15: among the helper tables)
         base = cell(svc, ref)
-        assert _cell_of(svc.view(u, "forward"), "B15", "E33").get("i") is None
+        assert _cell_of(svc.view(u, "forward", True), "B15", "E33").get("i") is None
         res = svc.set_inputs(u, "tto", [{"ref": ref, "value": "55"}])
         assert res["applied"] == 0 and "girdi hücresi değil" in res["errors"][0]          # not without the mode
         res = svc.set_inputs(u, "tto", [{"ref": ref, "value": "55"}], True)
         assert res["errors"] == [] and cell(svc, ref, u) == 55.0 and cell(svc, ref, w) == base == cell(svc, ref)
         assert cell(svc, "Forward!O46", u) == 55.0                         # what reads the cell follows
-        mine = _cell_of(svc.view(u, "forward"), "B15", "E33")
+        mine = _cell_of(svc.view(u, "forward", True), "B15", "E33")
         assert (mine["i"], mine["m"], mine["fx"]) == ("u", 1, 1) and mine["v"] == 55.0
         for other in (w, None):
-            c = _cell_of(svc.view(other, "forward"), "B15", "E33")
+            c = _cell_of(svc.view(other, "forward", True), "B15", "E33")
             assert "i" not in c and "m" not in c and c["fx"] == 1 and c["v"] == base
         assert svc.my_inputs(u)["inputs"] == [{"book": "tto", "ref": ref, "value": 55.0, "label": ""}]
         # a constant typed over as well (a label here), and put back by blanking it
@@ -403,11 +403,11 @@ def test_a_value_typed_over_a_formula_is_mine_marked_and_undone_by_blanking(tmp_
     try:
         u = login(svc, "Elle A")
         assert cell(svc, "Forward!E33", u) == 55.0 and cell(svc, "Forward!E33") == base
-        assert _cell_of(svc.view(u, "forward"), "B15", "E33")["m"] == 1
+        assert _cell_of(svc.view(u, "forward", True), "B15", "E33")["m"] == 1
         # blanking: the formula is back and the cell is nobody's input any more
         res = svc.set_inputs(u, "tto", [{"ref": "Forward!E33", "value": ""}], True)
         assert res["errors"] == [] and cell(svc, "Forward!E33", u) == base
-        assert "i" not in _cell_of(svc.view(u, "forward"), "B15", "E33") and svc.my_inputs(u)["inputs"] == []
+        assert "i" not in _cell_of(svc.view(u, "forward", True), "B15", "E33") and svc.my_inputs(u)["inputs"] == []
         # ... as does "back to the formulas" for a list of cells
         svc.set_inputs(u, "tto", [{"ref": "Forward!E33", "value": "56"}, {"ref": "Forward!D33", "value": "55,9"}], True)
         assert svc.reset_inputs(u, "tto", ["Forward!E33", "Forward!D33"])["reset"] == 2

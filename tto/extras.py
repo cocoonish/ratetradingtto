@@ -830,17 +830,47 @@ def _tto_viop_history(model: Model) -> None:
               fmt="0.00")
 
 
-#: book -> (name, precondition, builder) of each addition
 # ---------------------------------------------------------------------------------------------- forward rates
-FR_FIRST = 33                     # title row of the block "the TRY rates of the value date, to change and price with"
-FR_CURVES = (("ICAP", "D30", "$I$22", "$K$22"), ("OIS", "D31", "$O$25", "$P$25"), ("VİOP", "D32", "$C$18", "$E$18"),
+#: The Forward page's pricing tables, on the forward quote sheet below its two matrices:
+FR_USD = 44            # USDTRY at the value date: title, value date / spot / USD rates, header, 4 curves, "Elle", its settings, note
+FR_EUR = 55            # EURTRY: the same without the settings ("Elle" follows the USDTRY table's)
+FR_LIST = 65           # the free forward list: title, TRY curve, header, FR_FREE rows, note
+FR_TENOR = 80          # the TRY curves' rates by tenor: title, header, value date, FR_TENORS, FR_FREE_DATES free dates, note
+FR_FREE = 10
+FR_FREE_DATES = 3
+#: the TRY curves of the Forward sheet: name, the USDTRY row of its table there, its bid and its ask rate of the value date
+FR_CURVES = (("Offshore", "D30", "$I$22", "$K$22"), ("OIS", "D31", "$O$25", "$P$25"), ("VİOP", "D32", "$C$18", "$E$18"),
              ("RET", "D33", "$W$48", "$X$48"))
+FR_NAMES = tuple(c[0] for c in FR_CURVES)
+#: the nodes of each TRY curve on the Forward sheet: days from the USDTRY spot date, the mid rate (RET: its bid and its
+#: ask, averaged), the number of nodes, and what makes the rate a percentage - those the sheet reads its value date from
+FR_NODES = {"Offshore": ("Forward!$G$8:$G$21", ("Forward!$J$8:$J$21",), 14, 1),
+            "OIS": ("Forward!$N$6:$N$18", ("Forward!$P$6:$P$18",), 13, 1),
+            "VİOP": ("Forward!$B$6:$B$17", ("Forward!$D$6:$D$17",), 12, 100),
+            "RET": ("Forward!$U$33:$U$47", ("Forward!$W$33:$W$47", "Forward!$X$33:$X$47"), 15, 100)}
+#: the spot date of a pair (Bloomberg's SETTLE_DT, or the date typed there) - a date even when it comes as a text
+FR_SPOT = {pair: "IFERROR(DATE(YEAR(%(d)s),MONTH(%(d)s),DAY(%(d)s)),%(d)s)" % {"d": d}
+           for pair, d in (("USDTRY", "Forward!$I$2"), ("EURTRY", "Forward!$K$2"))}
+#: the OIS curve of a pair's major currency (days from the pair's spot date, mid %, nodes), as the sheet reads it
+FR_MAJOR = {"USDTRY": ("Forward!$U$7:$U$26", "Forward!$X$7:$X$26", 20),
+            "EURTRY": ("Forward!$AA$7:$AA$26", "Forward!$AD$7:$AD$26", 20)}
+FR_REACH = 31          # a curve is read up to a month past its last node; further out it gives no rate (rather than a flat one)
+#: the usual tenors from the USDTRY spot date: days, or months (then the next business day)
+FR_TENORS = (("1W", 7, 0), ("2W", 14, 0), ("1M", 0, 1), ("2M", 0, 2), ("3M", 0, 3), ("6M", 0, 6), ("9M", 0, 9), ("1Y", 0, 12),
+             ("18M", 0, 18), ("2Y", 0, 24))
+FR_HOLIDAYS = "Motor!$A$361:$A$523"
+
+#: Input cells an earlier layout of the dashboard's own sheets had and that moved since: a value a user saved in one of
+#: them is dropped when it is loaded (it would land on whatever stands there now).  {book: (range, ...)}
+RETIRED_INPUTS = {"tto": ("EK_FWD!B35", "EK_FWD!D35", "EK_FWD!F35", "EK_FWD!H35", "EK_FWD!J35", "EK_FWD!L35",
+                          "EK_FWD!B37:C41")}       # the value-date rates of rows 33-42, now from row FR_USD on
 
 
 def _fwd_rates_check(model: Model) -> None:
-    """The Forward sheet's USDTRY / EURTRY tables price from these cells (the rates of the value date).  The block
-    lives on the forward quote sheet, so it goes when that one is left out."""
-    _need_sheets(model, "Forward", FWD_SHEET)
+    """The Forward sheet's USDTRY / EURTRY tables price from these cells (the rates of the value date), and its curves
+    have their nodes where the value date's rates are read from.  The tables live on the forward quote sheet, so they
+    go when that one is left out."""
+    _need_sheets(model, "Forward", "Motor", FWD_SHEET)
     for _, at, bid, ask in FR_CURVES:
         _need_formula(model, "Forward", at, bid)                      # the bid side of the row uses the bid rate ...
         _need_formula(model, "Forward", "F" + at[1:], ask)            # ... the ask side the ask rate
@@ -849,57 +879,200 @@ def _fwd_rates_check(model: Model) -> None:
         _need_formula(model, "Forward", "D%d" % (int(at[1:]) + 12), bid)  # EURTRY: the same TRY rate, EUR days and rates
     _need_formula(model, "Forward", "D42", "$AE$27")
     _need_formula(model, "Forward", "F42", "$AC$27")
+    for addr, nodes in (("I22", "$G$8:$G$21"), ("P24", "$N$6:$N$18"), ("C18", "$B$6:$B$17"), ("W48", "$U$33:$U$47"),
+                        ("W27", "$U$7:$U$26"), ("AC27", "$AA$7:$AA$26")):
+        _need_formula(model, "Forward", addr, nodes)
+    for addr, mid in (("J8", "AVERAGE(I8,K8)"), ("D6", "AVERAGE(C6,E6)"), ("P6", '"MID"'), ("X7", '"MID"'), ("AD7", '"MID"')):
+        _need_formula(model, "Forward", addr, mid)                    # the mid rates of the curves
+
+
+def fr_rate(name: str, g: str) -> str:
+    """The mid rate (%, simple ACT/360 zero) of a TRY curve of the Forward sheet ``g`` days after the USDTRY spot
+    date, as the sheet reads its value date: linear between the nodes, flat before the first.  More than a month past
+    its last node the curve has no rate ("")."""
+    xs, ys, n, scale = FR_NODES[name]
+    rate = "+".join(lin(g, xs, y, n) for y in ys)
+    if len(ys) > 1:
+        rate = "(%s)/%d" % (rate, len(ys))
+    if scale != 1:
+        rate = "(%s)*%d" % (rate, scale)
+    return 'IF(%s>INDEX(%s,%d)+%d,"",%s)' % (g, xs, n, FR_REACH, rate)
+
+
+def fr_major(pair: str, days: str) -> str:
+    """The OIS mid (%) of the pair's major currency - EUR when ``pair`` holds "EURTRY", USD otherwise - ``days`` after
+    the pair's spot date: the sheet's own curve."""
+    rates = {name: lin(days, xs, ys, n) for name, (xs, ys, n) in FR_MAJOR.items()}
+    return 'IF(%s="EURTRY",%s,%s)' % (pair, rates["EURTRY"], rates["USDTRY"])
 
 
 def _tto_fwd_rates(model: Model) -> None:
-    """The TRY rates the Forward sheet's tables price the value date with - ICAP, OIS, VİOP and RET, bid and ask -
-    side by side, each one a cell that can be typed over: the USDTRY and EURTRY forwards and their points follow
-    at once (with the sheet's own formula), and blanking a rate takes it back to its curve."""
+    """The Forward page's pricing tables.  Every input is a cell to type over (blank = back to the market), seen by
+    whoever typed it only.
+
+    * USDTRY and EURTRY at the sheet's value date, one below the other: each TRY curve's bid / mid / ask rate, the
+      outright, the swap points and the points per day - with the sheet's own formula, the same numbers as its
+      USDTRY and EURTRY tables.  The "Elle" row prices a rate of one's own: a curve, then a mid (or a spread to the
+      curve's mid) and a bid / ask width.  The EURTRY table takes its TRY rates from the USDTRY one.
+    * the free forward list: any start and end date; the outright at the start, the major and the minor rate of the
+      period come from the curves, and the four TRY curves' simple zero rates at the end date stand beside it.
+    * the four TRY curves' simple zero rates at the value date, the usual tenors and dates of one's own.
+    """
     b = SheetBuilder(model, FWD_SHEET)
-    t = FR_FIRST
-    b.title("A%d" % t, "VADE FAİZLERİYLE FORWARD  ·  Forward sayfasının valörü için her eğrinin bid / ask TRY faizi – faizi değiştirin, "
-                       "forward ve puan hemen yeniden hesaplanır")
-    b.row("A%d" % (t + 1), ["Valör", None, "Gün USDTRY", None, "Gün EURTRY"], bold=True)
-    b.set("B%d" % (t + 1), "=Forward!$D$2", fmt=DATE, bold=True)
-    b.set("D%d" % (t + 1), "=Forward!$U$27", fmt=INT0)
-    b.set("F%d" % (t + 1), "=Forward!$AA$27", fmt=INT0)
-    s = t + 2                                                        # spots and the currencies' rates
-    b.row("A%d" % s, ["USDTRY spot", None, "USD bid %", None, "USD ask %", None, "EURTRY spot", None, "EUR bid %", None, "EUR ask %"], bold=True)
-    b.input("B%d" % s, "=Forward!$F$2", fmt=NUM4)
-    b.input("D%d" % s, "=Forward!$W$27*100", fmt="0.0000")
-    b.input("F%d" % s, "=Forward!$Y$27*100", fmt="0.0000")
-    b.input("H%d" % s, "=Forward!$G$2", fmt=NUM4)
-    b.input("J%d" % s, "=Forward!$AC$27*100", fmt="0.0000")
-    b.input("L%d" % s, "=Forward!$AE$27*100", fmt="0.0000")
-    b.head("A%d" % (s + 1), ["Eğri", "TRY bid %", "TRY ask %", "USDTRY bid", "USDTRY mid", "USDTRY ask", "Puan bid", "Puan mid", "Puan ask",
-                             "P/gün bid", "P/gün ask", "EURTRY bid", "EURTRY ask", "EUR puan bid", "EUR puan ask"])
-    first = s + 2
-    rows = [(name, "=Forward!%s*100" % bid, "=Forward!%s*100" % ask) for name, _, bid, ask in FR_CURVES]
-    ret = first + len(FR_CURVES) - 1
-    rows.append(("Elle", "=$B$%d" % ret, "=$C$%d" % ret))            # a row of one's own: starts from RET
-    f = {"s": s, "d": t + 1}
-    for k, (name, bid, ask) in enumerate(rows):
-        r = first + k
-        f["r"] = r
-        b.set("A%d" % r, name, bold=True, align="center")
-        b.input("B%d" % r, bid, fmt="0.0000")
-        b.input("C%d" % r, ask, fmt="0.0000")
-        # the sheet's own formula: bid side = spot·(1 + TRY bid·g/360)/(1 + USD ask·g/360), ask side the other way round
-        b.set("D%d" % r, '=IFERROR($B$%(s)d*(1+$B%(r)d/100/360*$D$%(d)d)/(1+$F$%(s)d/100/360*$D$%(d)d),"")' % f, fmt=NUM4, bold=True)
-        b.set("F%d" % r, '=IFERROR($B$%(s)d*(1+$C%(r)d/100/360*$D$%(d)d)/(1+$D$%(s)d/100/360*$D$%(d)d),"")' % f, fmt=NUM4, bold=True)
-        b.set("E%d" % r, '=IFERROR(($D%(r)d+$F%(r)d)/2,"")' % f, fmt=NUM4)
-        b.set("G%d" % r, '=IFERROR(($D%(r)d-$B$%(s)d)*10000,"")' % f, fmt=INT0)
-        b.set("H%d" % r, '=IFERROR(($E%(r)d-$B$%(s)d)*10000,"")' % f, fmt=INT0)
-        b.set("I%d" % r, '=IFERROR(($F%(r)d-$B$%(s)d)*10000,"")' % f, fmt=INT0)
-        b.set("J%d" % r, '=IFERROR($G%(r)d/$D$%(d)d,"")' % f, fmt="#,##0.0")
-        b.set("K%d" % r, '=IFERROR($I%(r)d/$D$%(d)d,"")' % f, fmt="#,##0.0")
-        b.set("L%d" % r, '=IFERROR($H$%(s)d*(1+$B%(r)d/100/360*$F$%(d)d)/(1+$L$%(s)d/100/360*$F$%(d)d),"")' % f, fmt=NUM4, bold=True)
-        b.set("M%d" % r, '=IFERROR($H$%(s)d*(1+$C%(r)d/100/360*$F$%(d)d)/(1+$J$%(s)d/100/360*$F$%(d)d),"")' % f, fmt=NUM4, bold=True)
-        b.set("N%d" % r, '=IFERROR(($L%(r)d-$H$%(s)d)*10000,"")' % f, fmt=INT0)
-        b.set("O%d" % r, '=IFERROR(($M%(r)d-$H$%(s)d)*10000,"")' % f, fmt=INT0)
-    b.note("A%d" % (first + len(rows)), "TRY faizi: eğrinin bu valördeki basit ACT/360 faizi (%) – Forward sayfasının USDTRY ve EURTRY tablolarının kullandığı hücreler "
-                                         "(ICAP ve VİOP ima eğrileri, TRY OIS ± yarım bid/ask, RET). Bid tarafı USD (EUR) ask'iyle, ask tarafı USD (EUR) bid'iyle hesaplanır "
-                                         "(sayfanın formülü). Değiştirdiğiniz faiz, spot ve döviz faizi yalnız size görünür; silince piyasaya döner. 'Elle' satırı RET'ten başlar.")
+    pct = "0.0000"
+    usd_first = FR_USD + 3
+    usd_last = usd_first + len(FR_CURVES) - 1
+    usd_elle, usd_set = usd_last + 1, usd_last + 2
+    names = "$A$%d:$A$%d" % (usd_first, usd_last)
+    # ---- USDTRY and EURTRY
+    for t, pair, major, days, spot, mbid, mask in (
+            (FR_USD, "USDTRY", "USD", "=Forward!$U$27", "=Forward!$F$2", "=Forward!$W$27*100", "=Forward!$Y$27*100"),
+            (FR_EUR, "EURTRY", "EUR", "=Forward!$AA$27", "=Forward!$G$2", "=Forward!$AC$27*100", "=Forward!$AE$27*100")):
+        usd = pair == "USDTRY"
+        i = t + 1
+        b.title("A%d" % t, "%s FORWARD  ·  valör faizleriyle bid / mid / ask – TRY faizini, spotu ya da %s faizini değiştirin, forward ve "
+                           "puanlar hemen yeniden hesaplanır" % (pair, major))
+        b.set("A%d" % i, "Valör", bold=True)
+        b.set("B%d" % i, "=Forward!$D$2", fmt=DATE, bold=True)
+        b.set("C%d" % i, "Gün", bold=True, align="right")
+        b.set("D%d" % i, days, fmt=INT0)
+        b.set("E%d" % i, "Spot", bold=True, align="right")
+        b.input("F%d" % i, spot, fmt=NUM4)
+        b.set("G%d" % i, major + " bid %", bold=True, align="right")
+        b.input("H%d" % i, mbid, fmt=pct)
+        b.set("I%d" % i, major + " mid %", bold=True, align="right")
+        b.set("J%d" % i, '=IFERROR(($H%d+$L%d)/2,"")' % (i, i), fmt=pct)
+        b.set("K%d" % i, major + " ask %", bold=True, align="right")
+        b.input("L%d" % i, mask, fmt=pct)
+        b.head("A%d" % (t + 2), ["Eğri", "TRY bid %", "TRY mid %", "TRY ask %", pair + " bid", pair + " mid", pair + " ask",
+                                 "Puan bid", "Puan mid", "Puan ask", "P/gün bid", "P/gün mid", "P/gün ask"])
+        if usd:
+            rows = [(name, "=Forward!%s*100" % bid, "=Forward!%s*100" % ask) for name, _, bid, ask in FR_CURVES]
+            # "Elle": the chosen curve's mid - or the mid typed - plus the spread, the curve's own width or the one typed
+            f = {"s": usd_set, "a": usd_first, "z": usd_last, "m": "MATCH($B$%d,%s,0)" % (usd_set, names)}
+            mid = "IF(ISNUMBER($D$%(s)d),$D$%(s)d,INDEX($C$%(a)d:$C$%(z)d,%(m)s)+N($F$%(s)d)/100)" % f
+            width = "IF(ISNUMBER($H$%(s)d),$H$%(s)d/100,INDEX($D$%(a)d:$D$%(z)d,%(m)s)-INDEX($B$%(a)d:$B$%(z)d,%(m)s))" % f
+            rows.append(("Elle", '=IFERROR(%s-(%s)/2,"")' % (mid, width), '=IFERROR(%s+(%s)/2,"")' % (mid, width)))
+        else:
+            # the TRY rates are the USDTRY table's (typed ones too); they can be typed over here as well
+            rows = [(name, "=$B$%d" % (usd_first + k), "=$D$%d" % (usd_first + k)) for k, name in enumerate(FR_NAMES)]
+            rows.append(("Elle", "=$B$%d" % usd_elle, "=$D$%d" % usd_elle))
+        for k, (name, bid, ask) in enumerate(rows):
+            r = t + 3 + k
+            f = {"r": r, "i": i}
+            b.set("A%d" % r, name, bold=True, align="center")
+            b.input("B%d" % r, bid, fmt=pct)
+            b.set("C%d" % r, '=IFERROR(($B%(r)d+$D%(r)d)/2,"")' % f, fmt=pct)
+            b.input("D%d" % r, ask, fmt=pct)
+            # the sheet's formula: bid = spot·(1 + TRY bid·g/360)/(1 + major ask·g/360), the ask side the other way round
+            b.set("E%d" % r, '=IFERROR($F$%(i)d*(1+$B%(r)d/100/360*$D$%(i)d)/(1+$L$%(i)d/100/360*$D$%(i)d),"")' % f, fmt=NUM4, bold=True)
+            b.set("F%d" % r, '=IFERROR(($E%(r)d+$G%(r)d)/2,"")' % f, fmt=NUM4)
+            b.set("G%d" % r, '=IFERROR($F$%(i)d*(1+$D%(r)d/100/360*$D$%(i)d)/(1+$H$%(i)d/100/360*$D$%(i)d),"")' % f, fmt=NUM4, bold=True)
+            for col, src in (("H", "E"), ("I", "F"), ("J", "G")):
+                b.set("%s%d" % (col, r), '=IFERROR(($%s%d-$F$%d)*10000,"")' % (src, r, i), fmt=INT0)
+            for col, src in (("K", "H"), ("L", "I"), ("M", "J")):
+                b.set("%s%d" % (col, r), '=IFERROR($%s%d/$D$%d,"")' % (src, r, i), fmt="#,##0.0")
+        last = t + 3 + len(rows)
+        if usd:
+            s = usd_set
+            b.set("A%d" % s, "Elle ayarı", bold=True)
+            b.input("B%d" % s, "RET", align="center")
+            b.dropdown("B%d" % s, FR_NAMES)
+            b.set("C%d" % s, "Mid %", bold=True, align="right")
+            b.input("D%d" % s, None, fmt=pct)
+            b.set("E%d" % s, "Spread bp", bold=True, align="right")
+            b.input("F%d" % s, None, fmt="0.0")
+            b.set("G%d" % s, "Genişlik bp", bold=True, align="right")
+            b.input("H%d" % s, None, fmt="0.0")
+            b.note("I%d" % s, "boşsa: eğrinin mid'i, spread 0, eğrinin bid / ask aralığı")
+            b.note("A%d" % (s + 1), "TRY faizi: eğrinin valördeki basit ACT/360 faizi (%) – Forward sayfasının USDTRY ve EURTRY tablolarının kullandığı "
+                                    "hücreler (offshore = ICAP ima eğrisi, VİOP ima eğrisi, TRY OIS ± yarım bid/ask, RET). Bid tarafı USD ask'iyle, ask tarafı USD "
+                                    "bid'iyle hesaplanır (sayfanın formülü). 'Elle': eğriyi seçin, mid'i ya da mid'e spread'i (bp) yazın; mid yazılınca "
+                                    "spread'e bakılmaz. Değiştirdikleriniz yalnız size görünür, silince piyasaya döner.")
+        else:
+            b.note("A%d" % last, "TRY faizleri (Elle dahil) USDTRY tablosundakilerdir: orada değiştirilen faiz burada da geçerli, yalnız EURTRY için "
+                                 "burada ayrıca değiştirilebilir. Bid tarafı EUR ask'iyle, ask tarafı EUR bid'iyle; gün EURTRY spot valöründen.")
+    # ---- the free forward list
+    t = FR_LIST
+    c, h = t + 1, t + 2
+    b.title("A%d" % t, "SERBEST FORWARD  ·  başlangıç → bitiş: spot (başlangıçtaki kur), major ve minor faizi eğrilerden gelir; hepsinin üzerine "
+                       "yazılabilir")
+    b.set("A%d" % c, "TRY eğrisi", bold=True)
+    b.input("B%d" % c, "RET", align="center")
+    b.dropdown("B%d" % c, FR_NAMES)
+    b.note("C%d" % c, "minor faizi bu eğriden, major faizi USD / EUR OIS'ten gelir · sağda: dört TRY eğrisinin bitiş tarihindeki simple zero faizi")
+    b.head("A%d" % h, ["Parite", "Başlangıç", "Bitiş", "Gün", "Spot", "Major %", "Minor %", "Swap", "Forward"] + [n + " %" for n in FR_NAMES])
+    b.head("O%d" % h, ["Spot valörü", "Gün başl.", "Gün bitiş", "TRY gün başl.", "TRY gün bitiş", "TRY % başl.", "TRY % bitiş",
+                       "Major % başl.", "Major % bitiş", "Parite spotu", "Eğri"])
+    for r in range(h + 1, h + 1 + FR_FREE):
+        f = {"r": r, "c": c, "usd": FR_USD + 1, "eur": FR_EUR + 1, "names": names}
+        b.input("A%d" % r, "USDTRY", align="center")
+        b.dropdown("A%d" % r, ("USDTRY", "EURTRY"))
+        b.input("B%d" % r, '=IF(ISNUMBER($C%(r)d),$O%(r)d,"")' % f, fmt=DATE)       # the pair's spot date
+        b.input("C%d" % r, None, fmt=DATE)
+        b.set("D%d" % r, '=IF(AND(ISNUMBER($B%(r)d),ISNUMBER($C%(r)d)),$C%(r)d-$B%(r)d,"")' % f, fmt=INT0)
+        # the outright at the start: the pair's spot carried to it with the chosen TRY curve and the major's OIS
+        b.input("E%d" % r, ('=IFERROR(IF($D%(r)d="","",IF($P%(r)d=0,$X%(r)d,$X%(r)d*(1+$T%(r)d/100*$P%(r)d/360)/(1+$V%(r)d/100*$P%(r)d/360))),"")'
+                            % f), fmt=NUM4)
+        # the rates of the period start -> end, from the zero rates of the two dates
+        period = '=IFERROR(IF(N($D%(r)d)<=0,"",((1+$%(e)s%(r)d/100*$Q%(r)d/360)/(1+$%(s)s%(r)d/100*$P%(r)d/360)-1)*360/$D%(r)d*100),"")'
+        b.input("F%d" % r, period % dict(f, e="W", s="V"), fmt=pct)
+        b.input("G%d" % r, period % dict(f, e="U", s="T"), fmt=pct)
+        b.set("H%d" % r, '=IFERROR(IF($I%(r)d="","",($I%(r)d-$E%(r)d)*10000),"")' % f, fmt=INT0, bold=True)
+        b.set("I%d" % r, '=IFERROR(IF(N($D%(r)d)<=0,"",$E%(r)d*(1+$G%(r)d/100*$D%(r)d/360)/(1+$F%(r)d/100*$D%(r)d/360)),"")' % f,
+              fmt=NUM4, bold=True)
+        for k, name in enumerate(FR_NAMES):
+            b.set("%s%d" % ("JKLM"[k], r), '=IFERROR(IF(ISNUMBER($S%d),%s,""),"")' % (r, fr_rate(name, "$S%d" % r)), fmt="0.00")
+        # helpers: the pair's spot date, days from it (the accrual, the major's curve) and from the USDTRY spot date (the
+        # TRY curves' days, as the sheet counts them for EURTRY too)
+        b.set("O%d" % r, '=IF($A%d="EURTRY",%s,%s)' % (r, FR_SPOT["EURTRY"], FR_SPOT["USDTRY"]), fmt=DATE)
+        b.set("P%d" % r, '=IF(ISNUMBER($B%(r)d),$B%(r)d-$O%(r)d,"")' % f, fmt=INT0)
+        b.set("Q%d" % r, '=IF(ISNUMBER($C%(r)d),$C%(r)d-$O%(r)d,"")' % f, fmt=INT0)
+        b.set("R%d" % r, '=IF(ISNUMBER($B%d),$B%d-%s,"")' % (r, r, FR_SPOT["USDTRY"]), fmt=INT0)
+        b.set("S%d" % r, '=IF(ISNUMBER($C%d),$C%d-%s,"")' % (r, r, FR_SPOT["USDTRY"]), fmt=INT0)
+        b.set("T%d" % r, '=IFERROR(IF(ISNUMBER($R%d),CHOOSE($Y%d,%s),""),"")' % (r, r, ",".join(fr_rate(n, "$R%d" % r) for n in FR_NAMES)),
+              fmt=pct)
+        b.set("U%d" % r, '=IFERROR(INDEX($J%(r)d:$M%(r)d,$Y%(r)d),"")' % f, fmt=pct)
+        b.set("V%d" % r, '=IFERROR(IF(ISNUMBER($P%d),%s,""),"")' % (r, fr_major("$A%d" % r, "$P%d" % r)), fmt=pct)
+        b.set("W%d" % r, '=IFERROR(IF(ISNUMBER($Q%d),%s,""),"")' % (r, fr_major("$A%d" % r, "$Q%d" % r)), fmt=pct)
+        b.set("X%d" % r, '=IF($A%(r)d="EURTRY",$F$%(eur)d,$F$%(usd)d)' % f, fmt=NUM4)      # the tables' spot (typed too)
+        b.set("Y%d" % r, '=MATCH($B$%(c)d,%(names)s,0)' % f, fmt="0")
+    b.note("A%d" % (h + 1 + FR_FREE), "Bitiş tarihini yazın: başlangıç paritenin spot valörüdür (değiştirilebilir). Spot = başlangıçtaki kur (spot, "
+                                      "başlangıç ileri bir tarihse seçilen TRY eğrisi ve major OIS ile o tarihe taşınır). Major % = USD / EUR OIS'in, "
+                                      "minor % = seçilen TRY eğrisinin başlangıç → bitiş arası basit ACT/360 faizi (başlangıç spot ise bitişteki zero "
+                                      "faiz). Forward = spot·(1 + minor·gün/360)/(1 + major·gün/360), swap = (forward − spot)·10000. Spot, major ve minor "
+                                      "faizin üzerine yazılabilir; silince eğriye döner. Eğrinin son düğümünden bir aydan uzak tarihte faizi yoktur.")
+    # ---- the TRY curves' rates by tenor
+    t = FR_TENOR
+    h = t + 1
+    b.title("A%d" % t, "TRY FAİZLERİ VADELERE GÖRE  ·  simple zero (ACT/360, %) – offshore, OIS, VİOP ve RET aynı vadede")
+    b.head("A%d" % h, ["Vade", "Tarih", "Gün"] + [n + " %" for n in FR_NAMES] + ["Offshore − OIS bp", "VİOP − OIS bp", "RET − OIS bp"])
+    spot = FR_SPOT["USDTRY"]
+    dates = [("Valör", "=Forward!$D$2")]
+    for label, n_days, months in FR_TENORS:
+        if months:
+            dates.append((label, "=WORKDAY(EDATE(%s,%d)-1,1,%s)" % (spot, months, FR_HOLIDAYS)))
+        else:
+            dates.append((label, "=WORKDAY(%s+%d-1,1,%s)" % (spot, n_days, FR_HOLIDAYS)))
+    dates += [("serbest", None)] * FR_FREE_DATES
+    for k, (label, date) in enumerate(dates):
+        r = h + 1 + k
+        f = {"r": r}
+        if date is None:
+            b.set("A%d" % r, label, align="center", color=NOTE_COLOR)
+            b.input("B%d" % r, None, fmt=DATE)
+        else:
+            b.set("A%d" % r, label, bold=True, align="center")
+            b.set("B%d" % r, date, fmt=DATE, bold=label == "Valör")
+        b.set("C%d" % r, '=IF(ISNUMBER($B%d),$B%d-%s,"")' % (r, r, spot), fmt=INT0)
+        for j, name in enumerate(FR_NAMES):
+            b.set("%s%d" % ("DEFG"[j], r), '=IFERROR(IF(ISNUMBER($C%d),%s,""),"")' % (r, fr_rate(name, "$C%d" % r)), fmt="0.00")
+        for col, src in (("H", "D"), ("I", "F"), ("J", "G")):
+            b.set("%s%d" % (col, r), '=IFERROR(IF(OR($%s%d="",$E%d=""),"",($%s%d-$E%d)*100),"")' % (src, r, r, src, r, r), fmt="0")
+    b.note("A%d" % (h + 1 + len(dates)), "Gün ve vadeler USDTRY spot valöründen (ay vadeleri sonraki iş gününe). Faizler eğrilerin mid'i, Forward "
+                                         "sayfasının kendi düğümlerinden doğrusal: offshore = ICAP ima eğrisi, OIS = TRY OIS simple zero, VİOP = ima "
+                                         "eğri, RET = bid / ask ortası. Fark sütunları bp. Bir eğrinin son düğümünden bir aydan uzak vadede faizi yoktur "
+                                         "(VİOP yaklaşık 1 yıl, RET 2 yıl). 'serbest' satırlarına tarih yazılabilir.")
 
 
 # ---------------------------------------------------------------------------------------------- sources
@@ -1446,6 +1619,7 @@ def _tto_universe(model: Model) -> None:
     b.sheet.freeze = [4, 2]
 
 
+#: book -> (name, precondition, builder) of each addition
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),

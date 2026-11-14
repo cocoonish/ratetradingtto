@@ -428,9 +428,9 @@
    "id": "EKF4",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A33:O42",
+   "range": "A44:Y96",
    "hidden": true,
-   "title": "Vade faizleriyle forward · Forward sayfasında gösterilir (Forward fiyatları sekmesi)",
+   "title": "Forward fiyatları sekmesinin tabloları (USDTRY · EURTRY · serbest forward · vadelere göre TRY faizleri) · Forward sayfasında gösterilir",
    "keep_title": true
   },
   {

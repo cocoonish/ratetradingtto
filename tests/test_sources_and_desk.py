@@ -1,5 +1,5 @@
-"""The order of Bloomberg pricing sources (live sheets and the history), ASW against FX swaps, the value-date rate
-table of the Forward page, the gold calculator's free column, z-scores of the carry table, and the broker chat's
+"""The order of Bloomberg pricing sources (live sheets and the history), ASW against FX swaps, the pricing tables
+of the Forward page, the gold calculator's free column, z-scores of the carry table, and the broker chat's
 board reset / ticked delete / the trades page's entry over a period."""
 from __future__ import annotations
 
@@ -141,22 +141,180 @@ def test_asw_against_the_fx_swap_curve(svc):
 
 
 # ---------------------------------------------------------------------------------------------- the Forward page's rates
-def test_the_value_date_rates_price_like_the_forward_sheet(svc):
+USD, EUR = ex.FR_USD, ex.FR_EUR               # title rows of the USDTRY and the EURTRY table of the Forward page
+
+
+def row_of(t, name):
+    """Row of a curve ("Offshore", "OIS", "VİOP", "RET", "Elle") in the table whose title is in row ``t``."""
+    return t + 3 + (list(ex.FR_NAMES) + ["Elle"]).index(name)
+
+
+def test_the_value_date_tables_price_like_the_forward_sheet(svc):
+    """USDTRY and EURTRY, one below the other: each curve's TRY bid / mid / ask, the outright, the swap points and the
+    points per day - the numbers of the Forward sheet's own tables (its USDTRY daily points included)."""
+    for t, fwd, points in ((USD, 30, 36), (EUR, 42, 48)):
+        for k, name in enumerate(ex.FR_NAMES):
+            r = row_of(t, name)
+            assert cell(svc, "EK_FWD!A%d" % r) == name
+            mine = [cell(svc, "EK_FWD!%s%d" % (c, r)) for c in "EFGHIJKLM"]
+            sheet = [cell(svc, "Forward!%s%d" % (c, fwd + k)) for c in "DEF"] + [cell(svc, "Forward!%s%d" % (c, points + k)) for c in "DEFHIJ"]
+            assert mine == pytest.approx(sheet, rel=1e-12)
+            bid, mid, ask = (cell(svc, "EK_FWD!%s%d" % (c, r)) for c in "BCD")
+            assert bid < mid < ask and mid == pytest.approx((bid + ask) / 2)
+        # the "Elle" row starts from RET
+        assert [cell(svc, "EK_FWD!%s%d" % (c, row_of(t, "Elle"))) for c in "BCDEFG"] == \
+            pytest.approx([cell(svc, "EK_FWD!%s%d" % (c, row_of(t, "RET"))) for c in "BCDEFG"], rel=1e-12)
+    assert cell(svc, "EK_FWD!D%d" % (USD + 1)) == cell(svc, "Forward!U27") and cell(svc, "EK_FWD!D%d" % (EUR + 1)) == cell(svc, "Forward!AA27")
+    assert cell(svc, "EK_FWD!J%d" % (USD + 1)) == pytest.approx((cell(svc, "Forward!W27") + cell(svc, "Forward!Y27")) * 50)
+    heads = [cell(svc, "EK_FWD!%s%d" % (c, USD + 2)) for c in "ABCDEFGHIJKLM"]
+    assert heads == ["Eğri", "TRY bid %", "TRY mid %", "TRY ask %", "USDTRY bid", "USDTRY mid", "USDTRY ask", "Puan bid", "Puan mid",
+                     "Puan ask", "P/gün bid", "P/gün mid", "P/gün ask"]
+    page = svc.view(None, "forward")
+    panels = {p["id"]: p for p in page["panels"]}
+    tab = next(s for s in page["sections"] if s["id"] == "fwd")["panels"]
+    assert tab == ["FR1", "FR2", "FR3", "FR4", "B16", "B18"]
+    assert [panels[p]["title"].split("  ·  ")[0] for p in tab[:4]] == ["USDTRY FORWARD", "EURTRY FORWARD", "SERBEST FORWARD",
+                                                                     "TRY FAİZLERİ VADELERE GÖRE"]
+    assert all(not panels[p].get("error") for p in tab)
+    assert not {"B14", "B15", "B15b", "B17"} & set(panels)                      # the sheet's own tables: among the helpers
+
+
+def test_a_rate_typed_reprices_both_pairs_for_its_writer_only(svc):
     u = svc.login("Vade Faiz")["user"]
-    for k in range(4):
-        assert [cell(svc, "EK_FWD!%s%d" % (c, 37 + k)) for c in "DEF"] == [cell(svc, "Forward!%s%d" % (c, 30 + k)) for c in "DEF"]
-        assert [cell(svc, "EK_FWD!%s%d" % (c, 37 + k)) for c in "LM"] == [cell(svc, "Forward!%s%d" % (c, 42 + k)) for c in "DF"]
-        assert cell(svc, "EK_FWD!G%d" % (37 + k)) == pytest.approx(cell(svc, "Forward!D%d" % (36 + k)))
-    assert cell(svc, "EK_FWD!B41") == cell(svc, "EK_FWD!B40")                   # "Elle" starts from RET
-    res = svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B38", "value": "40"}, {"ref": "EK_FWD!C38", "value": "41"}])
+    ois, eur_ois = row_of(USD, "OIS"), row_of(EUR, "OIS")
+    res = svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % ois, "value": "40"}, {"ref": "EK_FWD!D%d" % ois, "value": "41"}])
     assert res["errors"] == []
-    spot, days, usd_ask = cell(svc, "EK_FWD!B35", u), cell(svc, "EK_FWD!D34", u), cell(svc, "EK_FWD!F35", u)
-    assert cell(svc, "EK_FWD!D38", u) == pytest.approx(spot * (1 + 0.40 / 360 * days) / (1 + usd_ask / 100 / 360 * days))
-    assert cell(svc, "EK_FWD!D38") == cell(svc, "Forward!D31")                    # nobody else's
-    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B38", "value": ""}])
-    assert cell(svc, "EK_FWD!D38", u) == cell(svc, "Forward!D31")                 # blanked: back to the curve
-    panel = next(p for p in svc.view(u, "forward")["panels"] if p["id"] == "FR1")
-    assert not panel.get("error") and panel["title"].startswith("VADE FAİZLERİYLE FORWARD")
+    i = USD + 1
+    spot, days, usd_bid, usd_ask = (cell(svc, "EK_FWD!%s%d" % (c, i), u) for c in "FDHL")
+    assert cell(svc, "EK_FWD!E%d" % ois, u) == pytest.approx(spot * (1 + 0.40 / 360 * days) / (1 + usd_ask / 100 / 360 * days))
+    assert cell(svc, "EK_FWD!G%d" % ois, u) == pytest.approx(spot * (1 + 0.41 / 360 * days) / (1 + usd_bid / 100 / 360 * days))
+    assert cell(svc, "EK_FWD!C%d" % ois, u) == pytest.approx(40.5)
+    # the EURTRY table takes the TRY rates of the USDTRY one ...
+    e = EUR + 1
+    spot, days, eur_ask = (cell(svc, "EK_FWD!%s%d" % (c, e), u) for c in "FDL")
+    assert cell(svc, "EK_FWD!B%d" % eur_ois, u) == 40.0
+    assert cell(svc, "EK_FWD!E%d" % eur_ois, u) == pytest.approx(spot * (1 + 0.40 / 360 * days) / (1 + eur_ask / 100 / 360 * days))
+    # ... and can have its own
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % eur_ois, "value": "39"}])
+    assert cell(svc, "EK_FWD!B%d" % eur_ois, u) == 39.0 and cell(svc, "EK_FWD!B%d" % ois, u) == 40.0
+    assert cell(svc, "EK_FWD!E%d" % ois) == cell(svc, "Forward!D31")              # nobody else's
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % ois, "value": ""}, {"ref": "EK_FWD!D%d" % ois, "value": ""},
+                              {"ref": "EK_FWD!B%d" % eur_ois, "value": ""}])
+    assert cell(svc, "EK_FWD!E%d" % ois, u) == pytest.approx(cell(svc, "Forward!D31"), rel=1e-12)    # blanked: back to the curve
+    assert cell(svc, "EK_FWD!E%d" % eur_ois, u) == pytest.approx(cell(svc, "Forward!D43"), rel=1e-12)
+
+
+def test_a_rate_of_ones_own_from_a_curve_with_a_mid_or_a_spread(svc):
+    u = svc.login("Elle Faiz")["user"]
+    s, elle, ois = row_of(USD, "Elle") + 1, row_of(USD, "Elle"), row_of(USD, "OIS")
+    assert [cell(svc, "EK_FWD!%s%d" % (c, s)) for c in "ABCEG"] == ["Elle ayarı", "RET", "Mid %", "Spread bp", "Genişlik bp"]
+    res = svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % s, "value": "OIS"}, {"ref": "EK_FWD!F%d" % s, "value": "25"}])
+    assert res["errors"] == []
+    bid, mid, ask = (cell(svc, "EK_FWD!%s%d" % (c, ois), u) for c in "BCD")
+    got = [cell(svc, "EK_FWD!%s%d" % (c, elle), u) for c in "BCD"]
+    assert got == pytest.approx([bid + 0.25, mid + 0.25, ask + 0.25])           # the curve's mid + 25 bp, the curve's width
+    eur = row_of(EUR, "Elle")
+    assert [cell(svc, "EK_FWD!%s%d" % (c, eur), u) for c in "BCD"] == pytest.approx(got)      # EURTRY follows
+    # a mid typed is taken as it is (the spread no longer counts), and a width of one's own
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!D%d" % s, "value": "40"}, {"ref": "EK_FWD!H%d" % s, "value": "50"}])
+    assert [cell(svc, "EK_FWD!%s%d" % (c, elle), u) for c in "BCD"] == pytest.approx([39.75, 40.0, 40.25])
+    i = USD + 1
+    spot, days, usd_ask = (cell(svc, "EK_FWD!%s%d" % (c, i), u) for c in "FDL")
+    assert cell(svc, "EK_FWD!E%d" % elle, u) == pytest.approx(spot * (1 + 0.3975 / 360 * days) / (1 + usd_ask / 100 / 360 * days))
+    # the bid / ask of the row itself can be typed over too
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % elle, "value": "39"}])
+    assert cell(svc, "EK_FWD!C%d" % elle, u) == pytest.approx(39.625)
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % elle, "value": ""}, {"ref": "EK_FWD!D%d" % s, "value": ""},
+                              {"ref": "EK_FWD!H%d" % s, "value": ""}, {"ref": "EK_FWD!B%d" % s, "value": "viop"}])
+    assert cell(svc, "EK_FWD!B%d" % s, u) == "VİOP"                             # as the list writes it
+    viop = row_of(USD, "VİOP")
+    assert [cell(svc, "EK_FWD!%s%d" % (c, elle), u) for c in "BCD"] == \
+        pytest.approx([cell(svc, "EK_FWD!%s%d" % (c, viop), u) + 0.25 for c in "BCD"])
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % s, "value": "Yok"}])
+    assert [cell(svc, "EK_FWD!%s%d" % (c, elle), u) for c in "BCE"] == ["", "", ""]      # no curve: no price rather than a wrong one
+
+
+def test_the_free_forward_list_takes_spot_and_rates_from_the_curves(svc):
+    u = svc.login("Serbest Fwd")["user"]
+    h = ex.FR_LIST + 2
+    r1, r2, r3, r4 = h + 1, h + 2, h + 3, h + 4
+    assert [cell(svc, "EK_FWD!%s%d" % (c, h)) for c in "ABCDEFGHI"] == ["Parite", "Başlangıç", "Bitiş", "Gün", "Spot", "Major %",
+                                                                         "Minor %", "Swap", "Forward"]
+    assert cell(svc, "EK_FWD!B%d" % r1) == "" and cell(svc, "EK_FWD!I%d" % r1) == ""            # an empty row waits for its date
+    value_date = cell(svc, "Forward!D2")
+    res = svc.set_inputs(u, "tto", [
+        {"ref": "EK_FWD!C%d" % r1, "value": value_date},                                          # spot -> the value date
+        {"ref": "EK_FWD!B%d" % r2, "value": cell(svc, "Forward!D2") - 185}, {"ref": "EK_FWD!C%d" % r2, "value": value_date},
+        {"ref": "EK_FWD!A%d" % r3, "value": "EURTRY"}, {"ref": "EK_FWD!C%d" % r3, "value": value_date},
+        {"ref": "EK_FWD!C%d" % r4, "value": value_date + 1500}])
+    assert res["errors"] == []
+    usd_spot_date = cell(svc, "EK_FWD!B%d" % r1, u)
+    assert usd_spot_date == pytest.approx(cell(svc, "Forward!D2") - cell(svc, "Forward!U27"))      # starts at the spot date
+    assert cell(svc, "EK_FWD!D%d" % r1, u) == cell(svc, "Forward!U27")
+    assert cell(svc, "EK_FWD!E%d" % r1, u) == cell(svc, "Forward!F2")                            # the spot itself
+    ret = row_of(USD, "RET")
+    assert cell(svc, "EK_FWD!G%d" % r1, u) == pytest.approx(cell(svc, "EK_FWD!C%d" % ret))       # RET mid at the value date
+    assert cell(svc, "EK_FWD!F%d" % r1, u) == pytest.approx(cell(svc, "Forward!X27") * 100, rel=1e-3)
+    # the four curves at the end date, side by side: those of the value-date row of the rates by tenor
+    assert [cell(svc, "EK_FWD!%s%d" % (c, r1), u) for c in "JKLM"] == \
+        pytest.approx([cell(svc, "EK_FWD!%s%d" % (c, ex.FR_TENOR + 2)) for c in "DEFG"], rel=1e-12)
+    # mid rates against the average of the bid and the ask forwards of the table: the same forward but for a hair
+    assert cell(svc, "EK_FWD!I%d" % r1, u) == pytest.approx(cell(svc, "EK_FWD!F%d" % ret), rel=1e-6)
+    # a later start: the spot is carried to it, the period's rates make the same end outright
+    fwd_start = cell(svc, "EK_FWD!E%d" % r2, u)
+    assert fwd_start > cell(svc, "Forward!F2")
+    assert cell(svc, "EK_FWD!I%d" % r2, u) == pytest.approx(cell(svc, "EK_FWD!I%d" % r1, u), rel=1e-12)
+    assert cell(svc, "EK_FWD!H%d" % r2, u) == pytest.approx((cell(svc, "EK_FWD!I%d" % r2, u) - fwd_start) * 10000)
+    # EURTRY: its own spot, spot date and EUR rate
+    assert cell(svc, "EK_FWD!E%d" % r3, u) == cell(svc, "Forward!G2")
+    assert cell(svc, "EK_FWD!D%d" % r3, u) == cell(svc, "Forward!AA27")
+    assert cell(svc, "EK_FWD!I%d" % r3, u) == pytest.approx(cell(svc, "EK_FWD!F%d" % row_of(EUR, "RET")), rel=1e-6)
+    # four years out RET has no rate (its last node is 2Y): no forward rather than a flat one; another curve has one
+    assert cell(svc, "EK_FWD!M%d" % r4, u) == "" and cell(svc, "EK_FWD!I%d" % r4, u) == ""
+    assert isinstance(cell(svc, "EK_FWD!K%d" % r4, u), float)
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % (ex.FR_LIST + 1), "value": "OIS"}])
+    assert cell(svc, "EK_FWD!G%d" % r4, u) == pytest.approx(cell(svc, "EK_FWD!K%d" % r4, u))
+    assert isinstance(cell(svc, "EK_FWD!I%d" % r4, u), float)
+    # every one of them can be typed over
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!E%d" % r1, "value": "50"}, {"ref": "EK_FWD!F%d" % r1, "value": "4"},
+                              {"ref": "EK_FWD!G%d" % r1, "value": "36"}])
+    days = cell(svc, "EK_FWD!D%d" % r1, u)
+    assert cell(svc, "EK_FWD!I%d" % r1, u) == pytest.approx(50 * (1 + 0.36 * days / 360) / (1 + 0.04 * days / 360))
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!E%d" % r1, "value": ""}])
+    assert cell(svc, "EK_FWD!E%d" % r1, u) == cell(svc, "Forward!F2")
+
+
+def test_the_try_rates_by_tenor_side_by_side(svc):
+    t = ex.FR_TENOR
+    assert [cell(svc, "EK_FWD!%s%d" % (c, t + 1)) for c in "ABCDEFG"] == ["Vade", "Tarih", "Gün", "Offshore %", "OIS %", "VİOP %", "RET %"]
+    v = t + 2                                                                   # the value date: the sheet's own rates
+    assert cell(svc, "EK_FWD!C%d" % v) == cell(svc, "Forward!G22")
+    assert [cell(svc, "EK_FWD!%s%d" % (c, v)) for c in "DEFG"] == pytest.approx(
+        [cell(svc, "Forward!J22") * 100, cell(svc, "Forward!P24") * 100, cell(svc, "Forward!D18") * 100,
+         (cell(svc, "Forward!W48") + cell(svc, "Forward!X48")) * 50], rel=1e-12)
+    assert cell(svc, "EK_FWD!H%d" % v) == pytest.approx((cell(svc, "EK_FWD!D%d" % v) - cell(svc, "EK_FWD!E%d" % v)) * 100)
+    tenors = {cell(svc, "EK_FWD!A%d" % r): r for r in range(t + 3, t + 3 + len(ex.FR_TENORS))}
+    assert list(tenors) == [x[0] for x in ex.FR_TENORS]
+    assert cell(svc, "EK_FWD!C%d" % tenors["1W"]) == 7
+    assert cell(svc, "EK_FWD!B%d" % tenors["3M"]) == cell(svc, "EK_FWD!B7")      # as the desk's matrix dates 3M
+    assert cell(svc, "EK_FWD!F%d" % tenors["2Y"]) == "" and cell(svc, "EK_FWD!I%d" % tenors["2Y"]) == ""   # VİOP ends near 1Y
+    assert all(isinstance(cell(svc, "EK_FWD!%s%d" % (c, tenors["2Y"])), float) for c in "DEG")
+    u = svc.login("Vade Tablosu")["user"]
+    free = t + 3 + len(ex.FR_TENORS)
+    assert cell(svc, "EK_FWD!D%d" % free) == ""
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B%d" % free, "value": cell(svc, "Forward!D2")}])
+    assert [cell(svc, "EK_FWD!%s%d" % (c, free), u) for c in "CDEFG"] == [cell(svc, "EK_FWD!%s%d" % (c, v)) for c in "CDEFG"]
+
+
+def test_a_value_saved_where_an_input_used_to_be_is_dropped(svc):
+    """The value-date rates were once in rows 33-42: what a user had typed there must not land on whatever stands
+    there now, nor be listed as theirs."""
+    u = svc.login("Eski Girdi")["user"]
+    svc.store.set_user_inputs(u, "tto", {"EK_FWD!B37": 40.0, "EK_FWD!D35": 4.5, "EK_FWD!B47": 41.0})
+    refs = [i["ref"] for i in svc.my_inputs(u)["inputs"]]
+    assert "EK_FWD!B37" not in refs and "EK_FWD!D35" not in refs and "EK_FWD!B47" in refs
+    assert cell(svc, "EK_FWD!B37", u) is None and cell(svc, "EK_FWD!B47", u) == 41.0
+    assert set(svc.store.user_inputs(u, "tto")) == {("tto", "EK_FWD!B47")}     # gone from the store as well
 
 
 def test_the_gold_calculators_free_column_waits_for_its_date(svc):

@@ -125,6 +125,11 @@ def parse_date(text: str) -> Optional[float]:
     return None
 
 
+def _fold(text: str) -> str:
+    """Text compared without case - the Turkish dotted / dotless i included ("viop" is "VİOP")."""
+    return text.casefold().replace("\u0307", "").replace("\u0131", "i")
+
+
 def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, kind: str = "auto",
                 options: Optional[List[str]] = None, lang: str = "tr") -> Any:
     """Convert user text to the value stored in the cell.
@@ -150,8 +155,9 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
     if len(s) > 2000:
         raise InputError("girdi çok uzun")
     if options:
+        typed = _fold(s)
         for o in options:
-            if o.casefold() == s.casefold():
+            if _fold(o) == typed:
                 n = parse_number(o, lang)
                 return n if n is not None and re.match(r"^[+-]?[\d.,]+$", o) else o
     if date_cell or kind == "date":

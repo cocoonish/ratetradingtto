@@ -130,40 +130,41 @@ async function shot(page, name) {
     check('forward page has many tables', (await page.locator('table.grid').count()) >= 20);
     check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 7);
     await tab(page, 'calc');
-    check('a cell of another tab is found - its tab opens', (await cellText(page, 'Forward!D33')) !== null
+    // (EK_FWD!E50: RET bid of the USDTRY table of the "Forward fiyatları" tab - the sheet's Forward!D33)
+    check('a cell of another tab is found - its tab opens', (await cellText(page, 'EK_FWD!E50')) !== null
       && (await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab)) === 'fwd');
-    const before = await cellText(page, 'Forward!D33');
+    const before = await cellText(page, 'EK_FWD!E50');
     await typeInto(page, 'Forward!D2', '15.12.2026');
     await waitCell(page, 'Forward!D2', "t.trim() === '15.12.2026'");
-    await page.waitForFunction(([r, b]) => { const td = window.tto.findCell(r); return td && td.textContent !== b; }, ['Forward!D33', before]);
-    const retBid = trNumber(await cellText(page, 'Forward!D33'));
+    await page.waitForFunction(([r, b]) => { const td = window.tto.findCell(r); return td && td.textContent !== b; }, ['EK_FWD!E50', before]);
+    const retBid = trNumber(await cellText(page, 'EK_FWD!E50'));
     const q = await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/forward', { value_date: '15.12.2026', basis: 'RET_BID', amount: 1000000 });
     check('typed value date reprices the RET forward (sheet = pricing API)', Math.abs(retBid - q.json.forward) < 6e-5, [retBid, q.json.forward]);
     check('edited cell is marked as personal input', await page.evaluate(() => window.tto.findCell('Forward!D2').classList.contains('mod')));
 
     // ------------------------------------------------------------------ a value of my own over a formula ("Elle değer")
-    const e33 = (await cellText(page, 'Forward!E33')).trim();
-    await (await cellHandle(page, 'Forward!E33')).click();
+    const e33 = (await cellText(page, 'EK_FWD!F50')).trim();             // RET mid of the USDTRY table: a formula
+    await (await cellHandle(page, 'EK_FWD!F50')).click();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(200);
     check('a formula is not typed over by accident', await page.locator('td.editing').count() === 0);
     await page.click('#hand-mode');
-    await typeInto(page, 'Forward!E33', '55');
-    await waitCell(page, 'Forward!E33', "t.trim() === '55,0000'");
+    await typeInto(page, 'EK_FWD!F50', '55');
+    await waitCell(page, 'EK_FWD!F50', "t.trim() === '55,0000'");
     check('with "Elle değer" on, a value typed over a formula is shown as mine',
-      await page.evaluate(() => { const td = window.tto.findCell('Forward!E33'); return td.classList.contains('hand') && td.classList.contains('in'); }));
+      await page.evaluate(() => { const td = window.tto.findCell('EK_FWD!F50'); return td.classList.contains('hand') && td.classList.contains('in'); }));
     await page.waitForFunction(() => /^1 formül yerine elle değer/.test(document.getElementById('hand-values').textContent), null, { timeout: 15000 });
     check('the page says how many formulas are replaced', await page.locator('#hand-values:not(.hidden)').count() === 1);
-    await (await cellHandle(page, 'Forward!E33')).click();
+    await (await cellHandle(page, 'EK_FWD!F50')).click();
     await page.keyboard.press('Delete');
-    await waitCell(page, 'Forward!E33', 't.trim() === "' + e33 + '"');
-    check('deleting the value brings the formula back', await page.evaluate(() => !window.tto.findCell('Forward!E33').classList.contains('in')));
-    await typeInto(page, 'Forward!E33', '56');
-    await waitCell(page, 'Forward!E33', "t.trim() === '56,0000'");
+    await waitCell(page, 'EK_FWD!F50', 't.trim() === "' + e33 + '"');
+    check('deleting the value brings the formula back', await page.evaluate(() => !window.tto.findCell('EK_FWD!F50').classList.contains('in')));
+    await typeInto(page, 'EK_FWD!F50', '56');
+    await waitCell(page, 'EK_FWD!F50', "t.trim() === '56,0000'");
     await page.waitForSelector('#hand-values:not(.hidden)');
     await page.click('#hand-values');
     await page.click('.modal .mfoot .btn.primary');
-    await waitCell(page, 'Forward!E33', 't.trim() === "' + e33 + '"');
+    await waitCell(page, 'EK_FWD!F50', 't.trim() === "' + e33 + '"');
     await page.waitForSelector('#hand-values.hidden', { state: 'attached' });
     check('"formüle dön" restores every replaced formula of the page', true);
     await page.click('#hand-mode');
@@ -180,21 +181,21 @@ async function shot(page, name) {
     check('blanking it returns to the market spot', await page.evaluate(() => window.tto.findCell('Forward!AH8').classList.contains('auto')));
 
     // ------------------------------------------------------------------ copy to Excel
-    await (await cellHandle(page, 'Forward!C29')).click();
-    await (await cellHandle(page, 'Forward!F33')).click({ modifiers: ['Shift'] });
+    await (await cellHandle(page, 'EK_FWD!A46')).click();
+    await (await cellHandle(page, 'EK_FWD!D50')).click({ modifiers: ['Shift'] });
     await page.keyboard.press('Control+c');
     await page.waitForTimeout(200);
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     const lines = copied.split('\r\n');
     check('copy gives one line per row', lines.length === 5, lines.length);
     check('copy is tab separated', lines.every((l) => l.split('\t').length === 4), copied);
-    check('copy keeps the header text', lines[0] === 'Outright\tBid\tMid\tAsk', lines[0]);
+    check('copy keeps the header text', lines[0] === 'Eğri\tTRY bid %\tTRY mid %\tTRY ask %', lines[0]);
     check('copied numbers use the Turkish decimal comma', /^RET\t\d+,\d{4}\t\d+,\d{4}\t\d+,\d{4}$/.test(lines[4]), lines[4]);
-    check('status bar shows the selected range', /Forward!C29:F33/.test(await page.textContent('#sb-addr')));
+    check('status bar shows the selected range', /EK_FWD!A46:D50/.test(await page.textContent('#sb-addr')));
     check('status bar sums the numbers', /Toplam/.test(await page.textContent('#sb-stat')));
 
     // full precision copy
-    await (await cellHandle(page, 'Forward!D33')).click();
+    await (await cellHandle(page, 'EK_FWD!E50')).click();
     await page.keyboard.press('Control+Shift+C');
     await page.waitForTimeout(200);
     const full = await page.evaluate(() => navigator.clipboard.readText());
@@ -212,6 +213,49 @@ async function shot(page, name) {
     const hist1 = await api(page, 'ayşe yilmaz', 'GET', '/api/ret/history');
     check('RET upload is in the history', hist1.json.history.length === 1 && hist1.json.history[0].user === 'ayşe yilmaz');
     await shot(page, '02-forward');
+
+    // ------------------------------------------------------------------ the forward pricing tab
+    await tab(page, 'fwd');
+    const onFwd = await panelsOnPage(page);
+    check('forward pricing: USDTRY and EURTRY one below the other, then the free forwards and the TRY rates by tenor',
+      onFwd.join(' ') === 'B1 FR1 FR2 FR3 FR4 B16 B18', onFwd);
+    check('the USDTRY table shows the TRY mid and the daily swap points', (await cellText(page, 'EK_FWD!C46')) === 'TRY mid %'
+      && (await cellText(page, 'EK_FWD!L46')) === 'P/gün mid' && trNumber(await cellText(page, 'EK_FWD!L50')) > 0);
+    // "Elle": a curve from the list, then a spread to its mid
+    const oisMid = trNumber(await cellText(page, 'EK_FWD!C48'));
+    await (await cellHandle(page, 'EK_FWD!B52')).click();
+    await page.keyboard.press('Enter');
+    await page.click('.menu button:text-is("OIS")');
+    await waitCell(page, 'EK_FWD!B52', "t.trim() === 'OIS'");
+    await typeInto(page, 'EK_FWD!F52', '25');
+    await waitCell(page, 'EK_FWD!C51', 'Math.abs(Number(t.replace(".", "").replace(",", ".")) - ' + (oisMid + 0.25) + ') < 0.00011');
+    check('"Elle" prices the chosen curve plus a spread - the EURTRY table too', Math.abs(trNumber(await cellText(page, 'EK_FWD!C62')) - (oisMid + 0.25)) < 0.00011,
+      [await cellText(page, 'EK_FWD!C62'), oisMid]);
+    // the free forward list: an end date is enough - spot and both rates come from the curves; the next row opens
+    check('the free forward list shows its first empty rows only', await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.panel[data-panel="FR3"] tbody tr')];
+      return rows.filter((tr) => tr.classList.contains('grow-hidden')).length === 7;
+    }));
+    await typeInto(page, 'EK_FWD!C68', '15.12.2026');
+    await waitCell(page, 'EK_FWD!I68', 't.trim() !== ""');
+    const fwdSpot = trNumber(await cellText(page, 'EK_FWD!E68'));
+    check('a free forward from the spot: the spot, the major and the minor rate filled by themselves',
+      Math.abs(fwdSpot - trNumber(await cellText(page, 'EK_FWD!F45'))) < 1e-9 && trNumber(await cellText(page, 'EK_FWD!F68')) > 0
+      && Math.abs(trNumber(await cellText(page, 'EK_FWD!G68')) - trNumber(await cellText(page, 'EK_FWD!M68'))) < 0.006
+      && trNumber(await cellText(page, 'EK_FWD!I68')) > fwdSpot);
+    const curves68 = [];
+    for (const c of ['J68', 'K68', 'L68', 'M68']) curves68.push(trNumber(await cellText(page, 'EK_FWD!' + c)));
+    check('the four TRY curves stand beside it at its end date', curves68.every((x) => x > 0), curves68);
+    await typeInto(page, 'EK_FWD!G68', '30');
+    await waitCell(page, 'EK_FWD!G68', "t.trim() === '30,0000'");
+    const days68 = trNumber(await cellText(page, 'EK_FWD!D68'));
+    const major68 = trNumber(await cellText(page, 'EK_FWD!F68'));
+    await waitCell(page, 'EK_FWD!I68', 'Math.abs(Number(t.replace(".", "").replace(",", ".")) - ' +
+      (fwdSpot * (1 + 0.30 * days68 / 360) / (1 + major68 / 100 * days68 / 360)) + ') < 0.0002');
+    check('a minor rate typed over the curve prices the forward', true);
+    check('the TRY rates by tenor: VİOP has none at 2Y, the others do', (await cellText(page, 'EK_FWD!F92')).trim() === ''
+      && trNumber(await cellText(page, 'EK_FWD!E92')) > 0);
+    await shot(page, '02b-forward-pricing');
 
     // ------------------------------------------------------------------ RET editor dialog
     console.log('RET editor');
@@ -673,10 +717,10 @@ async function shot(page, name) {
     console.log('number format, theme, explorer');
     await open(page, 'forward');
     await page.click('#btn-lang');
-    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ready && /\d\.\d{4}/.test(window.tto.findCell('Forward!D33')?.textContent || ''));
-    check('English number format shows a decimal point', /^\d+\.\d{4}$/.test((await cellText(page, 'Forward!D33')).trim()), await cellText(page, 'Forward!D33'));
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ready && /\d\.\d{4}/.test(window.tto.findCell('EK_FWD!E50')?.textContent || ''));
+    check('English number format shows a decimal point', /^\d+\.\d{4}$/.test((await cellText(page, 'EK_FWD!E50')).trim()), await cellText(page, 'EK_FWD!E50'));
     await page.click('#btn-lang');
-    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ready && /\d,\d{4}/.test(window.tto.findCell('Forward!D33')?.textContent || ''));
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ready && /\d,\d{4}/.test(window.tto.findCell('EK_FWD!E50')?.textContent || ''));
     await page.click('#btn-theme');
     check('theme toggles to light', (await page.evaluate(() => document.documentElement.getAttribute('data-theme'))) === 'light');
     await shot(page, '05-forward-light');
