@@ -45,6 +45,28 @@ function spark(points, open) {
   return svg;
 }
 
+/** Where the level stands in the past window: the low - high line, the mean (tick) and now (dot). */
+function band(z, now) {
+  const w = 96, hgt = 16;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', w);
+  svg.setAttribute('height', hgt);
+  svg.setAttribute('class', 'band');
+  if (!z || !isNum(z.min) || !isNum(z.max) || !isNum(now)) return svg;
+  const lo = Math.min(z.min, now), hi = Math.max(z.max, now);
+  const x = (v) => (hi === lo ? w / 2 : 4 + (w - 8) * (v - lo) / (hi - lo));
+  const el = (tag, attrs) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.appendChild(e); return e; };
+  el('line', { x1: x(z.min), x2: x(z.max), y1: hgt / 2, y2: hgt / 2, class: 'range' });
+  if (isNum(z.mean)) el('line', { x1: x(z.mean), x2: x(z.mean), y1: 3, y2: hgt - 3, class: 'mean' });
+  el('circle', { cx: x(now), cy: hgt / 2, r: 4, class: 'now' + (isNum(z.z) && Math.abs(z.z) >= 2 ? ' far' : '') });
+  return svg;
+}
+
+const ZDAYS_KEY = 'tto.watch.zdays';
+function savedDays() {
+  try { const v = Number(localStorage.getItem(ZDAYS_KEY)); return [20, 60, 250].includes(v) ? v : 60; } catch (e) { return 60; }
+}
+
 export class WatchPage {
   constructor(host, ctx) {
     this.host = host;
@@ -80,7 +102,22 @@ export class WatchPage {
       this.host.appendChild(el);
       return body;
     };
+    this.zdays = savedDays();
     this.list = panel('watch-list', 'İzleme listesi');
+    const zseg = h('div', { class: 'seg small', id: 'watch-zdays', title: 'z-skoru ve tarihsel bant: son kaç günlük kapanışa göre' });
+    for (const n of [20, 60, 250]) {
+      const b = h('button', { type: 'button' }, n + 'g');
+      b.dataset.v = String(n);
+      b.classList.toggle('on', n === this.zdays);
+      b.addEventListener('click', () => {
+        this.zdays = n;
+        try { localStorage.setItem(ZDAYS_KEY, String(n)); } catch (e) { /* not kept */ }
+        for (const x of zseg.children) x.classList.toggle('on', x === b);
+        this.refresh();
+      });
+      zseg.appendChild(b);
+    }
+    this.list.parentElement.querySelector('header').appendChild(h('div', { class: 'ztools' }, h('span', { class: 'muted' }, 'z / bant:'), zseg));
     this.alarmBox = panel('watch-alarms', 'Alarmlar');
     this.firedBox = panel('watch-fired', 'Bugün çalan alarmlar');
     const notesBody = panel('watch-notes', 'Masa notları · bugün (herkes görür)');
@@ -102,7 +139,7 @@ export class WatchPage {
   async load() { await this.refresh(); }
 
   async refresh() {
-    const d = await api.get('/api/watch');
+    const d = await api.get('/api/watch?days=' + (this.zdays || 60));
     this.data = d;
     this.fillList(d);
     this.fillAlarms(d);
@@ -124,8 +161,9 @@ export class WatchPage {
       return;
     }
     const t = h('table', { class: 'plain watch', id: 'watch-table' });
-    t.appendChild(h('tr', null, ...['Ad', 'Şimdi', 'Açılış', 'Gün', 'Düşük', 'Yüksek', 'Gün içi', 'Referans', 'Ref\'ten', 'Son hareket', '']
-      .map((x, i) => h('th', { class: i === 0 || i === 6 || i === 10 ? 'l' : '' }, x))));
+    const zh = 'z (' + (d.days || 60) + 'g)';
+    t.appendChild(h('tr', null, ...['Ad', 'Şimdi', 'Açılış', 'Gün', 'Düşük', 'Yüksek', 'Gün içi', zh, 'Bant', 'Referans', 'Ref\'ten', 'Son hareket', '']
+      .map((x, i) => h('th', { class: [0, 6, 8, 12].includes(i) ? 'l' : '' }, x))));
     d.items.forEach((it, k) => {
       const cls = (v) => (isNum(v) && Math.abs(v) > 1e-9 ? (v > 0 ? 'pos' : 'neg') : '');
       const kind = (it.subject && it.subject.kind) || 'cell';
@@ -140,9 +178,16 @@ export class WatchPage {
       btn('▼', 'Aşağı', () => this.move(it, 1)).disabled = k === d.items.length - 1;
       btn('⋯', kind === 'cell' ? 'Ad / birim' : 'Ad', (e) => this.more(it, e));
       btn('✕', 'Listeden çıkar', () => this.remove(it));
+      const z = it.z || {};
+      const ztip = isNum(z.z) ? z.n + ' kapanış (' + (z.source || '') + ', ' + (z.first || '') + ' – ' + (z.last || '') + '): ortalama ' + (z.mean_text || '')
+        + ', std ' + (z.sd_text || '') + ', en düşük ' + (z.min_text || '') + ', en yüksek ' + (z.max_text || '') + ', yüzdelik %' + num(z.pct, 0, false)
+        : 'Geçmiş yetersiz: ' + (z.n || 0) + ' / ' + (z.need || 20) + ' kapanış' + (z.source ? ' (' + z.source + ')' : '')
+          + '. OIS, TLREF ve offshore için tarihçe deposu; diğerleri için dashboard\'un her gün kaydettiği kapanış kullanılır.';
       const tr = h('tr', { 'data-id': it.id }, name, h('td', { class: 'now' }, it.now || ''), h('td', null, it.open_text || ''),
         h('td', { class: cls(it.change) }, changeText(it.change, it)), h('td', null, it.low_text || ''), h('td', null, it.high_text || ''),
         h('td', { class: 'l' }, spark(it.path, it.open)),
+        h('td', { class: 'z' + (isNum(z.z) && Math.abs(z.z) >= 2 ? ' far' : ''), title: ztip }, isNum(z.z) ? z.z_text : '–'),
+        h('td', { class: 'l', title: ztip }, band(z, it.value)),
         h('td', { title: it.base_at ? 'Referans alındı: ' + it.base_at : 'Referans yok: ⟲ ile alın' }, it.base_text || ''),
         h('td', { class: cls(it.since_base) }, changeText(it.since_base, it)), h('td', { class: 'muted' }, it.moved || ''), acts);
       t.appendChild(tr);
@@ -158,9 +203,9 @@ export class WatchPage {
       return;
     }
     const t = h('table', { class: 'plain watch', id: 'alarm-table' });
-    t.appendChild(h('tr', null, ...['Ad', 'Koşul', 'Seviye', 'Şimdi', 'Uzaklık', 'Durum', 'Not', ''].map((x, i) => h('th', { class: [0, 5, 6, 7].includes(i) ? 'l' : '' }, x))));
+    t.appendChild(h('tr', null, ...['Ad', 'Koşul', 'Şimdi', 'Hareket / z', 'Uzaklık', 'Durum', 'Not', ''].map((x, i) => h('th', { class: [0, 1, 5, 6, 7].includes(i) ? 'l' : '' }, x))));
     for (const a of d.alarms) {
-      const dist = isNum(a.distance) ? (a.unit_name === 'bp' ? num(a.distance, 1, false) + ' bp' : num(a.distance, 4, false)) : '';
+      const dist = a.distance_text || '';
       const state = a.active ? h('span', { class: 'pill neu' }, 'bekliyor') : h('span', { class: 'pill warn', title: 'Değer: ' + (a.fired_text || '') }, 'çaldı · ' + (a.fired_at || '').slice(11));
       const acts = h('td', { class: 'l acts' });
       if (!a.active) {
@@ -173,7 +218,8 @@ export class WatchPage {
       acts.appendChild(del);
       t.appendChild(h('tr', { 'data-id': a.id, class: a.active ? '' : 'fired' }, h('td', { class: 'l', title: a.what + (a.detail ? ' · ' + a.detail : '') }, a.label,
         !isNum(a.now) && a.detail ? h('span', { class: 'sub' }, a.detail) : null),
-        h('td', null, OP[a.op] || a.op), h('td', null, a.level_text || ''), h('td', null, a.now_text || ''), h('td', null, dist),
+        h('td', { class: 'l cond' }, a.condition || ((OP[a.op] || a.op) + ' ' + (a.level_text || ''))), h('td', null, a.now_text || ''),
+        h('td', null, a.mode && a.mode !== 'level' ? (a.measure_text || '–') : ''), h('td', { title: 'Koşulun sağlanmasına kalan' }, dist),
         h('td', { class: 'l' }, state), h('td', { class: 'l muted' }, a.note || ''), acts));
     }
     box.appendChild(t);
@@ -183,10 +229,11 @@ export class WatchPage {
     const box = clear(this.firedBox);
     if (!d.fired.length) { box.appendChild(h('div', { class: 'empty' }, 'Bugün çalan alarm yok.')); return; }
     const t = h('table', { class: 'plain watch', id: 'fired-table' });
-    t.appendChild(h('tr', null, ...['Saat', 'Ad', 'Koşul', 'Seviye', 'Değer', 'Not'].map((x, i) => h('th', { class: [0, 1, 5].includes(i) ? 'l' : '' }, x))));
+    t.appendChild(h('tr', null, ...['Saat', 'Ad', 'Koşul', 'Değer', 'Hareket / z', 'Not'].map((x, i) => h('th', { class: [0, 1, 2, 5].includes(i) ? 'l' : '' }, x))));
     for (const e of d.fired.slice().reverse()) {
-      t.appendChild(h('tr', null, h('td', { class: 'l' }, e.time), h('td', { class: 'l' }, e.label), h('td', null, OP[e.op] || e.op),
-        h('td', null, e.level_text || ''), h('td', null, e.value_text || ''), h('td', { class: 'l muted' }, e.note || '')));
+      const cond = e.condition || ((OP[e.op] || e.op) + ' ' + (e.level_text || ''));
+      t.appendChild(h('tr', null, h('td', { class: 'l' }, e.time), h('td', { class: 'l' }, e.label), h('td', { class: 'l' }, cond),
+        h('td', null, e.value_text || ''), h('td', null, e.mode && e.mode !== 'level' ? (e.measure_text || '') : ''), h('td', { class: 'l muted' }, e.note || '')));
     }
     box.appendChild(t);
   }

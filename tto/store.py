@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS mpc_values (
     day TEXT NOT NULL, meeting TEXT NOT NULL, step REAL, level REAL, cum REAL, sigma REAL, front INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, meeting)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS mpc_values_meeting ON mpc_values (meeting, day);
+CREATE TABLE IF NOT EXISTS watch_closes (
+    subject TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (subject, day)) WITHOUT ROWID;
 """
 
 
@@ -537,6 +539,36 @@ class Store(object):
             else:
                 self._db.executemany("DELETE FROM mpc_values WHERE day=?", [(d,) for d in days])
                 self._db.executemany("DELETE FROM mpc_days WHERE day=?", [(d,) for d in days])
+
+    # ------------------------------------------------------------------ the closes the watch keeps itself
+    def close_upsert(self, rows: List[Tuple[str, str, float]]) -> int:
+        """The day's last value of what is watched ``[(subject key, yyyy-mm-dd, value), ...]`` (kept apart from
+        the market history: these are the dashboard's own readings, of anything - a VİOP spread, an ASW, an
+        expression)."""
+        if not rows:
+            return 0
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.executemany("INSERT INTO watch_closes (subject, day, value) VALUES (?,?,?) "
+                                     "ON CONFLICT(subject, day) DO UPDATE SET value=excluded.value",
+                                     [(k, d, float(v)) for k, d, v in rows])
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return len(rows)
+
+    def closes(self, subjects: List[str], start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, float]]:
+        """``{subject key: {day: value}}``."""
+        out: Dict[str, Dict[str, float]] = {s: {} for s in subjects}
+        for i in range(0, len(subjects), 400):
+            chunk = subjects[i:i + 400]
+            marks = ",".join("?" for _ in chunk)
+            for r in self._q("SELECT subject, day, value FROM watch_closes WHERE subject IN (%s) AND day>=? AND day<=?" % marks,
+                             tuple(chunk) + (start or "0000", end or "9999")):
+                out[r["subject"]][r["day"]] = r["value"]
+        return out
 
     # ------------------------------------------------------------------ misc key/value
     def get(self, key: str, default: Any = None) -> Any:

@@ -528,6 +528,7 @@ class Service(object):
         if "tto" in self.books:
             pages.append({"id": "watch", "title": "İzleme · Alarmlar", "group": "Masa", "book": "tto", "sheet": None,
                           "custom": True})
+            pages.append({"id": "heat", "title": "Eğri Hareketi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "blotter", "title": "Günlük İşlemler", "group": "Masa", "book": "tto",
                           "sheet": bl.SHEET, "custom": True})
             pages.append({"id": "broker", "title": "Broker Chat", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
@@ -1915,11 +1916,16 @@ class Service(object):
         except (KeyError, ValueError) as exc:
             raise ServiceError(str(exc.args[0]) if exc.args else "hücre bulunamadı")
 
-    def watch_view(self, user: str, locale: Optional[str] = None) -> Dict[str, Any]:
-        """The user's watch list and alarms, what fired today, the desk's notes."""
+    def watch_view(self, user: str, locale: Optional[str] = None, days: Any = 60) -> Dict[str, Any]:
+        """The user's watch list (with each item's z-score over ``days`` closes) and alarms, what fired today,
+        the desk's notes."""
         user = self.require_user(user)
         loc = numfmt.get_locale(locale or self.settings.locale)
-        out = self.et.call(self.watch.snapshot, user, loc)
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            days = 60
+        out = self.et.call(self.watch.snapshot, user, loc, days)
         out["gen"] = self.gen
         return out
 
@@ -1986,18 +1992,20 @@ class Service(object):
         return {"taken": n}
 
     def alarm_add(self, user: str, book_id: str = "tto", ref: str = "", op: str = "", level: Any = None, label: str = "",
-                  note: str = "", subject: Any = None) -> Dict[str, Any]:
-        """An alarm on anything that can be watched; the level is typed as the subject is shown (35,80 on a rate in
-        per cent, 250 on a spread in bp)."""
+                  note: str = "", subject: Any = None, mode: str = "level", minutes: Any = None, days: Any = None) -> Dict[str, Any]:
+        """An alarm on anything that can be watched: on its level (typed as the subject is shown: 35,80 on a rate
+        in per cent, 250 on a spread in bp), on a move (from the day's open, from now, from the watch list's
+        reference, within the last minutes; bp for rates and spreads) or on its z-score."""
         user = self.require_user(user)
         s = self._subject(subject, book_id, ref)
         if s["kind"] == "cell":
             self._book(s.get("book") or "tto")
         try:
-            lvl = float(str(level).strip().replace(" ", "").replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
+            lvl = float(str(level).strip().replace(" ", "").replace("−", "-").replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
         except (TypeError, ValueError):
             raise ServiceError("seviye bir sayı olmalı")
-        res = self._watch_call(self.watch.add_alarm, user, s, str(op or ""), lvl, str(label or ""), str(note or ""))
+        res = self._watch_call(self.watch.add_alarm, user, s, str(op or ""), lvl, str(label or ""), str(note or ""),
+                               str(mode or "level"), minutes, days)
         self.bump()
         return res
 
@@ -2025,6 +2033,22 @@ class Service(object):
         mine = [e for e in self.watch.fired() if e.get("user") == user]
         last = max([int(e.get("seq") or 0) for e in self.watch.fired()] or [0])
         return {"fired": [e for e in mine if int(e.get("seq") or 0) > int(since or 0)], "last": last}
+
+    def heat_view(self, user: str, basis: str = "close", locale: Optional[str] = None) -> Dict[str, Any]:
+        """The heat map of the curves: every point's change since the previous close, the day's open or the
+        user's reference."""
+        user = self.require_user(user)
+        loc = numfmt.get_locale(locale or self.settings.locale)
+        out = self.et.call(self.watch.heat, user, str(basis or "close"), loc)
+        out["gen"] = self.gen
+        return out
+
+    def heat_ref(self, user: str) -> Dict[str, Any]:
+        """Take the levels now as this user's reference of the heat map (the morning meeting)."""
+        user = self.require_user(user)
+        res = self.et.call(self.watch.heat_ref, user)
+        self.bump()
+        return res
 
     def notes_set(self, user: str, text: str) -> Dict[str, Any]:
         """The desk's notes of the day (shared): levels to watch, what was said at the morning meeting."""

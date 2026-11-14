@@ -1401,6 +1401,63 @@ async function shot(page, name) {
     const exprRow = await page.evaluate(() => [...[...document.querySelectorAll('#watch-table tr')].find((tr) => tr.children[0].textContent === '[OIS 2Y] - [OIS 1Y]').children].map((td) => td.textContent));
     check('... and anything built of them: picked, then "İfadeye ekle", then written on - a spread of rates told in bp',
       exprStart === '[OIS 2Y]' && exprRow[1] === exprNow && / bp$/.test(exprNow), [exprStart, exprNow, exprRow]);
+    // the z-score of each item against its past (20 / 60 / 250 closes) and an alarm on it
+    const zHead = () => page.evaluate(() => [...document.querySelectorAll('#watch-table tr:first-child th')].map((x) => x.textContent).find((t) => /^z \(/.test(t)));
+    const zOf = (label) => page.evaluate((l) => {
+      const tr = [...document.querySelectorAll('#watch-table tr')].find((x) => x.children[0].textContent === l);
+      return tr ? tr.querySelector('td.z').textContent : null;
+    }, label);
+    const z60 = await zOf('OIS 1Y');
+    await page.click('#watch-zdays button[data-v="20"]');
+    await page.waitForFunction(() => /z \(20g\)/.test(document.getElementById('watch-table').textContent), null, { timeout: 15000 });
+    check('İzleme: each item\'s z-score against its own past - 60 closes, or 20 / 250 picked', (await zHead()) === 'z (20g)' && /^−?\d+,\d\d$/.test(z60)
+      && /^−?\d+,\d\d$/.test(await zOf('OIS 1Y')), [z60, await zOf('OIS 1Y')]);
+    await page.click('#watch-zdays button[data-v="60"]');
+    await openPick();
+    await page.click('#pick-kind button[data-k="ois"]');
+    await page.selectOption('#pick-ois', '1Y');
+    await pickNow('OIS 1Y');
+    await page.click('#alarm-mode button[data-v="z"]');
+    await page.click('#alarm-zdays button[data-v="20"]');
+    const zInfo = await page.textContent('#alarm-zinfo');
+    await page.fill('#alarm-z', '5');
+    await page.click('#alarm-save');
+    await page.waitForFunction(() => /z\(20g\) ≥ 5,00/.test(document.getElementById('watch-alarms').textContent), null, { timeout: 20000 });
+    check('... an alarm on the z-score (the window\'s closes and z now shown as it is set)', /^şu an z = −?\d+,\d\d · \d+ kapanış/.test(zInfo), zInfo);
+
+    // ------------------------------------------------------------------ the heat map of the curves
+    console.log('heat map');
+    await open(page, 'heat');
+    await page.waitForSelector('table.heat[data-panel="curve"]');
+    const heatRows = await page.evaluate(() => [...document.querySelectorAll('table.heat th.row')].map((x) => x.textContent).filter(Boolean));
+    const heatOf = (label) => page.evaluate((l) => {
+      const td = [...document.querySelectorAll('table.heat td.hc')].find((x) => x.title.split('\n')[0] === l);
+      return td ? { chg: td.querySelector('.c').textContent, level: td.querySelector('.l').textContent, bg: td.style.background } : null;
+    }, label);
+    check('Eğri Hareketi: OIS, offshore and their difference by tenor, the VİOP contracts, the bonds - each point\'s level and change',
+      JSON.stringify(heatRows.slice(0, 5)) === JSON.stringify(['OIS', 'Offshore', 'Offshore − OIS', 'OIS − VİOP', 'ima TRY'])
+      && (await heatOf('OIS 1Y')).level === '35,55' && (await heatOf('VİOP A1Z6 OIS − VİOP')) !== null, heatRows);
+    await page.click('#heat-basis button[data-v="open"]');
+    await page.waitForFunction(() => /açılıştan/.test(document.getElementById('heat-info').textContent), null, { timeout: 15000 });
+    await page.click('#heat-ref');
+    await page.waitForFunction(() => /referanstan \(\d\d:\d\d:\d\d\)/.test(document.getElementById('heat-info').textContent), null, { timeout: 15000 });
+    check('... against the open, or against a reference taken on purpose (no move since: 0,0)', (await heatOf('OIS 2Y')).chg === '0,0'
+      && /−\d+ bp/.test(await page.textContent('#heat-legend')), await heatOf('OIS 2Y'));
+    for (const td of await page.$$('table.heat[data-panel="curve"] td.hc')) {
+      if ((await td.getAttribute('title')).startsWith('OIS 2Y\n')) { await td.click(); break; }
+    }
+    await page.click('.menu >> text=Hareket alarmı…');
+    await page.waitForSelector('#alarm-from');
+    await page.selectOption('#alarm-from', 'window');
+    await page.fill('#alarm-minutes', '15');
+    await page.click('#alarm-dir button[data-v="up"]');
+    await page.fill('#alarm-size', '3');
+    await page.click('#alarm-save');
+    await page.waitForFunction(() => /Alarm kuruldu: OIS 2Y · 15 dk içinde ↑ 3,0 bp/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    const moveAlarm = (await api(page, 'ayşe yilmaz', 'GET', '/api/watch')).json.alarms.find((a) => a.mode === 'window');
+    check('... a point clicked: a move alarm on it (within the last 15 minutes, 3 bp up)', moveAlarm && moveAlarm.minutes === 15
+      && moveAlarm.condition === '15 dk içinde ↑ 3,0 bp' && moveAlarm.active, moveAlarm);
+    await open(page, 'watch');
     await page.fill('#notes-text', 'Sabah toplantısı: 1Y 35,50 üstü alıcı yok');
     await page.click('#notes-save');
     await page.waitForFunction(() => /Son kaydeden/.test(document.getElementById('notes-info').textContent), null, { timeout: 10000 });
@@ -1427,7 +1484,7 @@ async function shot(page, name) {
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
     for (const id of ids) {
       await open(page, id);
-      const n = await page.locator('#content table.grid, #content table.plain').count();
+      const n = await page.locator('#content table.grid, #content table.plain, #content table.heat').count();
       const bad = await page.locator('#content .panel .err').count();
       check('page "' + id + '" renders tables without panel errors', n >= 1 && bad === 0, { tables: n, errors: bad });
     }

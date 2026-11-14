@@ -38,7 +38,7 @@ function levelOf(text) { return String(text || '').trim(); }
  * Watch something, or set an alarm on it.  ``subject`` given (right click on a cell, the bell of a watched item):
  * that subject; none: the user picks what (VİOP · Kâğıt · OIS · Offshore · Masa · İfade · Hücre).
  */
-export async function openWatchDialog(ctx, { subject = null, label = '', hint = '', focus = 'watch', kind = null } = {}) {
+export async function openWatchDialog(ctx, { subject = null, label = '', hint = '', focus = 'watch', kind = null, mode = 'level' } = {}) {
   let cat;
   try { cat = await catalog(); } catch (err) { errorToast(err); return; }
   const fixed = !!subject;
@@ -134,27 +134,74 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
     }
   };
 
-  // ---------------------------------------------------------------- the alarm
+  // ---------------------------------------------------------------- the alarm: on a level, on a move, on a z-score
+  const segOf = (id, items, value, onPick) => {
+    const el = h('div', { class: 'seg', id });
+    for (const [v, t, tip] of items) {
+      const b = h('button', { type: 'button', title: tip || null }, t);
+      b.dataset.v = v;
+      b.classList.toggle('on', v === value);
+      b.addEventListener('click', () => { for (const x of el.children) x.classList.toggle('on', x === b); onPick(v); });
+      el.appendChild(b);
+    }
+    return el;
+  };
+  let amode = ['level', 'move', 'z'].includes(mode) ? mode : 'level';
   let op = '>=';
-  const opSeg = h('div', { class: 'seg', id: 'alarm-op' });
-  for (const [v, t, tip] of OPS) {
-    const b = h('button', { type: 'button', title: tip }, t);
-    b.dataset.v = v;
-    b.classList.toggle('on', v === op);
-    b.addEventListener('click', () => { op = v; for (const x of opSeg.children) x.classList.toggle('on', x === b); });
-    opSeg.appendChild(b);
-  }
+  let dir = 'any';
+  let zdays = 60;
+  let zop = '>=';
+  const modeSeg = segOf('alarm-mode', [['level', 'Seviye', 'Seviyeye gelince'], ['move', 'Hareket', 'Belli bir hareket yapınca (açılıştan, şimdiden, referanstan ya da son dakikalarda)'],
+    ['z', 'z-skoru', 'Kendi geçmişine göre alışılmadık bir yere gelince']], amode, (v) => { amode = v; drawAlarm(); });
+  const opSeg = segOf('alarm-op', OPS, op, (v) => { op = v; });
   const level = h('input', { class: 'inp num', id: 'alarm-level', inputmode: 'decimal', placeholder: 'seviye' });
   level.addEventListener('input', () => { state.typedLevel = true; });
   const unit = h('span', { class: 'unit muted', id: 'alarm-unit' });
+  const from = h('select', { class: 'inp', id: 'alarm-from' },
+    h('option', { value: 'open' }, 'açılıştan (bugün görülen ilk değer)'), h('option', { value: 'set' }, 'şimdiki seviyeden'),
+    h('option', { value: 'ref' }, 'izleme referansından (⟲)'), h('option', { value: 'window' }, 'son … dakika içinde'));
+  const minutes = h('input', { class: 'inp num', id: 'alarm-minutes', inputmode: 'numeric', value: '10' });
+  const minutesBox = h('div', { class: 'lvl' }, minutes, h('span', { class: 'unit muted' }, 'dk'));
+  const dirSeg = segOf('alarm-dir', [['up', '↑ yukarı'], ['down', '↓ aşağı'], ['any', '± iki yön']], dir, (v) => { dir = v; });
+  const size = h('input', { class: 'inp num', id: 'alarm-size', inputmode: 'decimal', value: '10' });
+  const sizeUnit = h('span', { class: 'unit muted', id: 'alarm-size-unit' }, 'bp');
+  const zdaysSeg = segOf('alarm-zdays', [['20', '20 gün'], ['60', '60 gün'], ['250', '250 gün']], '60', (v) => { zdays = Number(v); showZ(); });
+  const zopSeg = segOf('alarm-zop', OPS, zop, (v) => { zop = v; });
+  const zlevel = h('input', { class: 'inp num', id: 'alarm-z', inputmode: 'decimal', value: '2' });
+  const zinfo = h('span', { class: 'muted', id: 'alarm-zinfo' });
   const note = h('input', { class: 'inp', id: 'alarm-note', placeholder: 'not (isteğe bağlı): örn. "spread 250 üstünde öde"', maxlength: '200' });
   const both = h('input', { type: 'checkbox', id: 'alarm-watch-too', checked: !fixed || null });
-  const alarmBox = h('div', { class: 'pick-alarm' },
-    h('div', { class: 'pick-row' }, field('Alarm koşulu', opSeg), field('Seviye', h('div', { class: 'lvl' }, level, unit))),
-    field('Not', note),
-    h('label', { class: 'check' }, both, ' Alarmı kurarken izleme listesine de ekle'),
-    h('p', { class: 'muted' }, 'Seviye gösterildiği gibi yazılır: faizde 35,50 (= %35,50), spread\'de bp (250), fiyatta fiyat. Alarm bir kez çalar; Alarmlar listesinden yeniden kurulur.'));
+  const modeBox = h('div', { class: 'pick-mode' });
+  const help = h('p', { class: 'muted' });
+  const alarmBox = h('div', { class: 'pick-alarm' }, field('Alarm', modeSeg), modeBox, field('Not', note),
+    h('label', { class: 'check' }, both, ' Alarmı kurarken izleme listesine de ekle'), help);
   m.body.appendChild(alarmBox);
+  function showZ() {
+    const z = state.preview && state.preview.z ? state.preview.z[String(zdays)] : null;
+    zinfo.textContent = !z ? '' : (z.z_text ? 'şu an z = ' + z.z_text + ' · ' + z.n + ' kapanış' + (z.source ? ' (' + z.source + ')' : '')
+      : 'geçmiş yetersiz: ' + (z.n || 0) + ' / ' + z.need + ' kapanış (izlenen kalemlerin kapanışı her gün kaydedilir)');
+  }
+  function drawAlarm() {
+    clear(modeBox);
+    if (amode === 'level') {
+      modeBox.appendChild(h('div', { class: 'pick-row' }, field('Koşul', opSeg), field('Seviye', h('div', { class: 'lvl' }, level, unit))));
+      help.textContent = 'Seviye gösterildiği gibi yazılır: faizde 35,50 (= %35,50), spread\'de bp (250), fiyatta fiyat. Alarm bir kez çalar; Alarmlar listesinden yeniden kurulur.';
+    } else if (amode === 'move') {
+      modeBox.appendChild(h('div', { class: 'pick-row' }, field('Nereden', from), from.value === 'window' ? field('Süre', minutesBox) : null));
+      modeBox.appendChild(h('div', { class: 'pick-row' }, field('Yön', dirSeg), field('Hareket', h('div', { class: 'lvl' }, size, sizeUnit))));
+      help.textContent = 'Hareket faiz ve spread\'lerde bp, fiyat ve kurda kendi biriminde yazılır. Açılış: dashboard\'un bugün gördüğü ilk değer; '
+        + 'şimdiki seviye: alarm kurulduğu an (yeniden kurulunca o an); referans: izleme listesinde ⟲ ile alınan seviye; '
+        + 'son N dakika: o süre içindeki en düşük ya da en yüksekten bu yana.';
+    } else {
+      modeBox.appendChild(h('div', { class: 'pick-row' }, field('Geçmiş', zdaysSeg), field('Koşul', zopSeg), field('z', h('div', { class: 'lvl' }, zlevel))));
+      modeBox.appendChild(zinfo);
+      help.textContent = 'z = (şimdi − ortalama) ÷ standart sapma; son 20 / 60 / 250 günlük kapanışa göre. 2 ve üstü alışılmadık yüksek, −2 ve altı alışılmadık düşük. '
+        + 'OIS, TLREF ve offshore için tarihçe deposu, diğerleri için dashboard\'un her gün kaydettiği kapanışlar kullanılır.';
+      showZ();
+    }
+  }
+  from.addEventListener('change', drawAlarm);
+  drawAlarm();
 
   // ---------------------------------------------------------------- preview
   let seq = 0;
@@ -177,6 +224,10 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
     now.appendChild(h('b', { class: 'v' }, p.text || '–'));
     now.appendChild(h('span', { class: 'muted' }, ' · ' + p.label + (p.detail ? ' · ' + p.detail : '')));
     unit.textContent = p.unit || '';
+    sizeUnit.textContent = p.move_unit || '';
+    if (p.since_open_text) now.appendChild(h('span', { class: 'muted' }, ' · açılıştan ' + p.since_open_text));
+    if (p.z && p.z['60'] && p.z['60'].z_text) now.appendChild(h('span', { class: 'muted' }, ' · z(60g) ' + p.z['60'].z_text));
+    showZ();
     if (!state.typedLevel && typeof p.value === 'number') {
       const d = p.show === 'bp' ? 1 : (p.show === 'pct' ? 2 : (p.show === 'px' ? 3 : 4));
       level.value = p.value.toFixed(d).replace('.', ',');
@@ -224,15 +275,18 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
   alarmBtn.addEventListener('click', async () => {
     const s = current();
     if (!s) return;
-    if (!levelOf(level.value)) { level.focus(); toast('Alarm için bir seviye yazın', 'warn'); return; }
+    const box = amode === 'level' ? level : (amode === 'move' ? size : zlevel);
+    if (!levelOf(box.value)) { box.focus(); toast(amode === 'move' ? 'Alarm için hareketin büyüklüğünü yazın' : 'Alarm için bir seviye yazın', 'warn'); return; }
     alarmBtn.disabled = true;
     try {
       const cellHint = state.preview && state.preview.subject.kind === 'cell' ? hint : '';
-      const res = await api.post('/api/alarms/add', { subject: s, op, level: levelOf(level.value), label: name.value.trim() || cellHint, note: note.value });
+      const body = { subject: s, label: name.value.trim() || cellHint, note: note.value, level: levelOf(box.value),
+        mode: amode === 'move' ? from.value : amode, op: amode === 'level' ? op : (amode === 'z' ? zop : dir), minutes: minutes.value, days: zdays };
+      const res = await api.post('/api/alarms/add', body);
       if (both.checked) await api.post('/api/watch/add', { subject: s, label: name.value.trim(), hint });
       askPermission();
       const what = (res.alarm && res.alarm.label) || name.value;
-      toast(res.already ? 'Alarm kuruldu – koşul şu an zaten sağlanıyor: hemen çalar' : 'Alarm kuruldu: ' + what, res.already ? 'warn' : 'ok', 5000);
+      toast(res.already ? 'Alarm kuruldu – koşul şu an zaten sağlanıyor: hemen çalar' : 'Alarm kuruldu: ' + what + ' · ' + (res.condition || ''), res.already ? 'warn' : 'ok', 5000);
       m.close();
       if (ctx && ctx.refreshNow) ctx.refreshNow();
     } catch (err) { errorToast(err); alarmBtn.disabled = false; }
@@ -244,12 +298,12 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
   m.foot.appendChild(watchBtn);
   m.foot.appendChild(alarmBtn);
   if (fixed) { toExpr.classList.add('hidden'); await changed(); } else draw();
-  if (focus === 'alarm') { level.focus(); level.select(); }
+  if (focus === 'alarm') { const box = amode === 'move' ? size : (amode === 'z' ? zlevel : level); box.focus(); box.select(); }
 }
 
 /** "Alarm kur…" on a cell (right click) or on a watched item. */
-export function openAlarmDialog(ctx, { book, ref, label, subject }) {
-  return openWatchDialog(ctx, { subject: subject || { kind: 'cell', book: book || 'tto', ref }, hint: label, focus: 'alarm' });
+export function openAlarmDialog(ctx, { book, ref, label, subject, mode }) {
+  return openWatchDialog(ctx, { subject: subject || { kind: 'cell', book: book || 'tto', ref }, hint: label, focus: 'alarm', mode });
 }
 
 /** "İzlemeye ekle" on a cell: a cell of a table that names a bond, a VİOP contract, an OIS or offshore tenor is
@@ -258,6 +312,15 @@ export async function addToWatch(ctx, { book, ref, label }) {
   try {
     const res = await api.post('/api/watch/add', { book, ref, hint: label });
     toast(res.added ? 'İzleme listesine eklendi: ' + ((res.item && res.item.label) || label || ref) : 'Zaten izleme listesinde', 'ok');
+    if (ctx && ctx.refreshNow) ctx.refreshNow();
+  } catch (err) { errorToast(err); }
+}
+
+/** "İzlemeye ekle" for a subject (a point of the heat map). */
+export async function watchSubject(ctx, subject, label = '') {
+  try {
+    const res = await api.post('/api/watch/add', { subject, label });
+    toast(res.added ? 'İzleme listesine eklendi: ' + ((res.item && res.item.label) || label) : 'Zaten izleme listesinde', 'ok');
     if (ctx && ctx.refreshNow) ctx.refreshNow();
   } catch (err) { errorToast(err); }
 }
@@ -297,8 +360,9 @@ export async function checkAlarms() {
   if (seen.last == null) { seen.last = res.last; return []; }
   const op = Object.fromEntries(OPS.map(([v, t]) => [v, t]));
   for (const e of res.fired) {
-    const text = '🔔 ' + e.label + ': ' + (e.value_text || e.value) + '  (' + (op[e.op] || e.op) + ' ' + (e.level_text || e.level) + ') · ' + e.time
-      + (e.note ? ' · ' + e.note : '');
+    const cond = e.mode && e.mode !== 'level' ? (e.measure_text ? e.measure_text + ', ' : '') + (e.condition || '')
+      : (op[e.op] || e.op) + ' ' + (e.level_text || e.level);
+    const text = '🔔 ' + e.label + ': ' + (e.value_text || e.value) + '  (' + cond + ') · ' + e.time + (e.note ? ' · ' + e.note : '');
     const el = toast(text, 'alarm', 15000);
     el.addEventListener('click', () => el.remove());
     try {

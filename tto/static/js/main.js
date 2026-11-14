@@ -9,6 +9,7 @@ import { BrokerPage } from './pages/broker.js';
 import { openStatus } from './status.js';
 import { VolPage } from './pages/vol.js';
 import { WatchPage } from './pages/watch.js';
+import { HeatPage } from './pages/heat.js';
 import { openAlarmDialog, addToWatch, checkAlarms } from './alarms.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
@@ -152,6 +153,7 @@ async function openPage(id, panel) {
   else if (id === 'broker') page = new BrokerPage(host, ctx);
   else if (id === 'vol') page = new VolPage(host, ctx);
   else if (id === 'watch') page = new WatchPage(host, ctx);
+  else if (id === 'heat') page = new HeatPage(host, ctx);
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
   else if (id === 'eod') page = new EodPage(host, ctx);
   else if (id === 'mpc') page = new MpcPage(host, ctx);

@@ -3,6 +3,8 @@ strip, an expression of them, any cell; the day's open, high, low, path; the cha
 reference), alarms on them (≥, ≤, crossing; levels as shown; told once; re-armed), what fired today, the notes."""
 from __future__ import annotations
 
+import datetime as _dt
+import statistics
 import time
 from urllib.parse import quote
 
@@ -29,6 +31,38 @@ def tick(s):
 
 def preview(s, user, subject):
     return s.watch_preview(user, subject)
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    """The watch's clock, told by the test (the last minutes of a move)."""
+    now = {"t": _dt.datetime.combine(_dt.date.today(), _dt.time(10, 0, 0))}
+    monkeypatch.setattr(wt, "_now", lambda: now["t"])
+    return now
+
+
+def at(clock, hhmm):
+    h, m = hhmm.split(":")
+    clock["t"] = _dt.datetime.combine(_dt.date.today(), _dt.time(int(h), int(m), 0))
+
+
+def past_days(n):
+    """The last n week days before today, oldest first."""
+    out, d = [], _dt.date.today()
+    while len(out) < n:
+        d -= _dt.timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(d.isoformat())
+    return out[::-1]
+
+
+def seed(s, group, tenor, values):
+    """Closes of the market history (as Bloomberg's would be kept) for the last week days."""
+    d = s.et.call(s.watch._hist_defs)[(group, tenor)]
+    days = past_days(len(values))
+    s.store.hist_upsert(d.id, list(zip(days, values)))
+    s.history.rev += 1
+    return days
 
 
 def test_expressions_are_read_as_the_desk_writes_them():
@@ -350,3 +384,166 @@ def test_the_page_over_http_and_the_notes(svc):
         assert client.get("/api/watch", headers={"X-TTO-User": quote(other)}).json()["notes"]["text"] == "1Y 35,50 üstü alıcı yok"
         assert client.get("/api/watch").status_code == 401
         assert client.get("/api/watch/catalog").status_code == 401
+
+
+def test_alarms_on_a_move(svc, clock):
+    u = svc.login("Hareket Bekleyen")["user"]
+    one = {"kind": "ois", "tenor": "1Y"}
+
+    def typed(text):
+        svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!B14", "value": text}], allow_adhoc=True)
+        tick(svc)
+
+    tick(svc)                                                     # 10:00: the day's first reading (the open)
+    svc.watch_add(u, subject=one)
+    opened = svc.alarm_add(u, subject=one, mode="open", op="any", level="15")
+    assert (opened["already"], opened["condition"], opened["measure"]) == (False, "açılıştan ± 15,0 bp", 0.0)
+    frm = svc.alarm_add(u, subject=one, mode="set", op="up", level="10", label="kurduğumdan 10 yukarı")["alarm"]
+    assert frm["base"] == pytest.approx(35.55)
+    fast = svc.alarm_add(u, subject=one, mode="window", op="any", level="5", minutes=10, label="hızlı")
+    assert fast["condition"] == "10 dk içinde ± 5,0 bp"
+    for bad in (dict(mode="window", op="any", level="5", minutes=0), dict(mode="open", op=">=", level="5"),
+                dict(mode="open", op="up", level="0"), dict(mode="z", op=">=", level="2", days=30), dict(mode="nope", op="up", level="1")):
+        with pytest.raises(ServiceError):
+            svc.alarm_add(u, subject=one, **bad)
+    tick(svc)
+    at(clock, "10:05")
+    typed("35,58%")                                               # +3 bp
+    assert svc.watch_base(u) == {"taken": 1}                      # the reference: 35,58
+    refd = svc.alarm_add(u, subject=one, mode="ref", op="down", level="5", label="referanstan 5 aşağı")
+    assert refd["condition"] == "referanstan ↓ 5,0 bp" and refd["measure"] == pytest.approx(0.0)
+    at(clock, "10:20")
+    typed("35,61%")                                               # 3 bp in the last ten minutes: not yet
+    assert svc.alarms_fired(u, 0)["fired"] == []
+    at(clock, "10:21")
+    typed("35,64%")                                               # from 35,58 (the level at 10:11) to 35,64: 6 bp
+    fired = svc.alarms_fired(u, 0)["fired"]
+    assert [(e["label"], e["measure_text"], e["condition"]) for e in fired] == [("hızlı", "+6,0 bp", "10 dk içinde ± 5,0 bp")]
+    at(clock, "10:30")
+    typed("35,71%")                                               # 16 bp from the open and from where it was set
+    got = {e["label"]: e for e in svc.alarms_fired(u, 0)["fired"]}
+    assert got["OIS 1Y"]["measure_text"] == "+16,0 bp" and got["OIS 1Y"]["value_text"] == "35,71%"
+    assert got["kurduğumdan 10 yukarı"]["condition"] == "kurulduğundan (35,55%) ↑ 10,0 bp"
+    assert "referanstan 5 aşağı" not in got
+    at(clock, "10:40")
+    typed("35,50%")                                               # 8 bp below the reference
+    got = {e["label"]: e for e in svc.alarms_fired(u, 0)["fired"]}
+    assert got["referanstan 5 aşağı"]["measure_text"] == "−8,0 bp"
+    # the list: what each condition is, the move now, what is left
+    view = {a["label"]: a for a in svc.watch_view(u)["alarms"]}
+    assert view["hızlı"]["active"] is False and view["kurduğumdan 10 yukarı"]["measure_text"] == "−5,0 bp"
+    # re-armed, "from where it is set" starts from now
+    a = svc.alarm_rearm(u, frm["id"])["alarm"]
+    assert a["active"] is True and a["base"] == pytest.approx(35.50)
+    assert svc.watch_view(u)["items"][0]["open_text"] == "35,55%"
+
+
+def test_z_scores_and_the_band_of_the_past(svc):
+    u = svc.login("Z Bakan")["user"]
+    one = {"kind": "ois", "tenor": "1Y"}
+    ones = [35.0 + 0.02 * i for i in range(30)]
+    sixes = [36.0 + 0.01 * i for i in range(30)]
+    days = seed(svc, "ois", "1Y", ones)
+    seed(svc, "ois", "6M", sixes)
+    last = ones[-20:]
+    p = preview(svc, u, one)
+    z20 = (35.55 - statistics.mean(last)) / statistics.stdev(last)
+    assert p["z"]["20"]["z"] == pytest.approx(z20) and p["z"]["20"]["n"] == 20 and p["z"]["20"]["source"] == "tarihçe"
+    assert p["z"]["60"]["n"] == 30 and p["z"]["250"]["z"] == pytest.approx((35.55 - statistics.mean(ones)) / statistics.stdev(ones))
+    # an expression: the same arithmetic on every past day its parts closed (a spread of rates in bp)
+    spread = [(a - b) * 100 for a, b in zip(ones, sixes)][-20:]
+    now = preview(svc, u, {"kind": "expr", "text": "[OIS 1Y] - [OIS 6M]"})
+    assert now["z"]["20"]["z"] == pytest.approx((now["value"] - statistics.mean(spread)) / statistics.stdev(spread))
+    # what the history does not keep: the watch's own closes (here written for the past days)
+    viop = {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"}
+    key = svc.watch.key(viop)
+    svc.store.close_upsert([(key, d, 200.0 + (i % 5)) for i, d in enumerate(days[-25:])])
+    vz = preview(svc, u, viop)["z"]["20"]
+    assert vz["source"] == "kayıt" and vz["n"] == 20 and vz["z"] > 0
+    assert preview(svc, u, {"kind": "viop", "ticker": "A1F7 Curncy", "metric": "ois"})["z"]["20"] == \
+        {"z": None, "z_text": "", "n": 0, "need": 15, "pct": None, "source": ""}
+    # ... kept every day for what is watched (the market's level, whoever watches it)
+    svc.watch_add(u, subject=viop)
+    assert svc.et.call(svc.watch.record, True) >= 1
+    today = svc.store.closes([key])[key][svc.today_iso()]
+    assert today == pytest.approx(preview(svc, u, viop)["value"])
+    # the watch list: z and the band over the window asked for
+    svc.watch_add(u, subject=one)
+    item = {i["label"]: i for i in svc.watch_view(u, days=20)["items"]}["OIS 1Y"]
+    assert item["z"]["z"] == pytest.approx(z20) and item["z"]["min"] == pytest.approx(min(last)) and item["z"]["max"] == pytest.approx(max(last))
+    assert item["z"]["z_text"] == ("%.2f" % z20).replace(".", ",") and item["z"]["pct"] == pytest.approx(100.0 * sum(x < 35.55 for x in last) / 20)
+    # an alarm on the z-score: 2 over the last 20 closes
+    za = svc.alarm_add(u, subject=one, mode="z", op=">=", level="2", days=20)
+    assert za["already"] is False and za["condition"] == "z(20g) ≥ 2,00"
+    svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!B14", "value": "35,70%"}], allow_adhoc=True)
+    tick(svc)
+    e = next(x for x in svc.alarms_fired(u, 0)["fired"] if x.get("mode") == "z")
+    assert e["measure"] == pytest.approx((35.70 - statistics.mean(last)) / statistics.stdev(last)) and e["condition"] == "z(20g) ≥ 2,00"
+
+
+def test_the_heat_map_of_the_curves(svc):
+    u = svc.login("Isı Haritası")["user"]
+    tick(svc)
+    assert not any(user == "" for user, _ in svc.watch.days)          # not read before anyone opens it (Bloomberg hits)
+    svc.heat_view(u, "open")
+    tick(svc)                                                          # opened: read from now on, the open kept
+    assert svc.store.get("watch.open:%s" % svc.today_iso())["#ois|tenor=1Y"] == pytest.approx(35.55)
+    h = svc.heat_view(u, "open")
+    assert [p["id"] for p in h["panels"]] == ["curve", "viop", "dibs"]
+    curve = h["panels"][0]
+    cols = [c["id"] for c in curve["cols"]]
+    assert cols[:5] == ["O/N", "T/N", "1W", "2W", "1M"] and cols[-1] == "10Y" and len(cols) == 24
+    rows = {r["name"]: r["cells"] for r in curve["rows"]}
+    assert list(rows) == ["OIS", "Offshore", "Offshore − OIS"]
+    one = rows["OIS"][cols.index("1Y")]
+    assert one["subject"] == {"kind": "ois", "tenor": "1Y"} and one["now_text"] == "35,55" and one["chg"] == pytest.approx(0.0)
+    assert rows["OIS"][cols.index("O/N")]["subject"] == {"kind": "ois", "tenor": "TLREF"} and rows["OIS"][cols.index("T/N")] is None
+    assert rows["Offshore"][cols.index("1Y")]["subject"] == {"kind": "off", "tenor": "12M", "side": "mid"}
+    basis = rows["Offshore − OIS"][cols.index("1M")]
+    assert basis["subject"] == {"kind": "expr", "text": "[Offshore 1M] - [OIS 1M]"} and basis["show"] == "bp"
+    assert basis["now"] == pytest.approx((rows["Offshore"][cols.index("1M")]["now"] - rows["OIS"][cols.index("1M")]["now"]) * 100)
+    viop = h["panels"][1]
+    assert viop["cols"][1] == {"id": "A1Z6 Curncy", "label": "A1Z6", "tip": "vade 31.12.2026"}
+    assert [r["name"] for r in viop["rows"]] == ["OIS − VİOP", "ima TRY"]
+    dibs = h["panels"][2]
+    assert [r["name"] for r in dibs["rows"]] == ["getiri", "ASW", "pahalı/ucuz"] and "TRT150328T24" in [c["id"] for c in dibs["cols"]]
+    # the market moves: 1Y 12 bp up (the heat map is the market's, not anyone's scenario)
+    book = svc.books["tto"]
+    si, rc = book.cell("OIS_MAIN!B14")
+    svc.et.call(book.engine.set_inputs, {(si, rc): 0.3567})
+    h = svc.heat_view(u, "open")
+    rows = {r["name"]: r["cells"] for r in h["panels"][0]["rows"]}
+    assert rows["OIS"][cols.index("1Y")]["chg"] == pytest.approx(12.0) and rows["OIS"][cols.index("1Y")]["chg_text"] == "+12,0 bp"
+    assert rows["Offshore − OIS"][cols.index("1Y")]["chg"] == pytest.approx(-12.0) and h["cap"] >= 12
+    # the previous close: the market history's (OIS), the watch's own closes (VİOP)
+    yesterday = past_days(1)[0]
+    seed(svc, "ois", "1Y", [35.40])
+    key = svc.watch.key({"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"})
+    svc.store.close_upsert([(key, yesterday, 200.0)])
+    h = svc.heat_view(u, "close")
+    one = {r["name"]: r["cells"] for r in h["panels"][0]["rows"]}["OIS"][cols.index("1Y")]
+    assert (one["chg"], one["base_day"], one["base_text"]) == (pytest.approx(27.0), yesterday, "35,40%")
+    z6 = {r["name"]: r["cells"] for r in h["panels"][1]["rows"]}["OIS − VİOP"][1]
+    assert z6["base"] == 200.0 and z6["chg"] == pytest.approx(z6["now"] - 200.0)
+    assert h["panels"][0]["rows"][0]["cells"][cols.index("2Y")]["chg"] is None          # no close kept: no change
+    # a reference taken now: the moves since then, this user's only
+    assert svc.heat_ref(u)["count"] > 50
+    svc.et.call(book.engine.set_inputs, {(si, rc): 0.3572})
+    h = svc.heat_view(u, "ref")
+    assert h["ref_at"] and {r["name"]: r["cells"] for r in h["panels"][0]["rows"]}["OIS"][cols.index("1Y")]["chg"] == pytest.approx(5.0)
+    other = svc.login("Başka Isı")["user"]
+    h = svc.heat_view(other, "ref")
+    assert h["ref_at"] is None and h["panels"][0]["rows"][0]["cells"][cols.index("1Y")]["chg"] is None
+    with TestClient(create_app(svc)) as client:
+        hdr = {"X-TTO-User": quote(u)}
+        got = client.get("/api/heat?basis=open", headers=hdr).json()
+        assert got["basis"] == "open" and got["panels"][0]["id"] == "curve"
+        assert client.post("/api/heat/ref", json={}, headers=hdr).json()["count"] > 50
+        assert client.get("/api/heat").status_code == 401
+        res = client.post("/api/alarms/add", json={"subject": {"kind": "ois", "tenor": "2Y"}, "mode": "window", "op": "up", "level": "4",
+                                                   "minutes": "15"}, headers=hdr)
+        assert res.status_code == 200 and res.json()["condition"] == "15 dk içinde ↑ 4,0 bp"
+        assert client.post("/api/alarms/add", json={"subject": {"kind": "ois", "tenor": "2Y"}, "mode": "window", "op": "up",
+                                                    "level": "4"}, headers=hdr).status_code == 400
+        got = client.get("/api/watch?days=250", headers=hdr).json()
+        assert got["days"] == 250 and got["z_days"] == [20, 60, 250] and got["modes"]["window"] == "son dakikalarda"

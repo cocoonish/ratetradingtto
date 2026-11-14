@@ -348,7 +348,15 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def watch(request: Request):
-        return ok(await call(svc().watch_view, _user(request), request.query_params.get("lang")))
+        return ok(await call(svc().watch_view, _user(request), request.query_params.get("lang"), request.query_params.get("days") or 60))
+
+    @handler
+    async def heat(request: Request):
+        return ok(await call(svc().heat_view, _user(request), request.query_params.get("basis") or "close", request.query_params.get("lang")))
+
+    @handler
+    async def heat_ref(request: Request):
+        return ok(await call(svc().heat_ref, _user(request)))
 
     @handler
     async def watch_catalog(request: Request):
@@ -388,7 +396,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             subject = data.get("subject") if isinstance(data.get("subject"), dict) else None
             return ok(await call(s.alarm_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
                                  str(data.get("op") or ""), data.get("level"), str(data.get("label") or ""), str(data.get("note") or ""),
-                                 subject))
+                                 subject, str(data.get("mode") or "level"), data.get("minutes"), data.get("days")))
         if what == "remove":
             return ok(await call(s.alarm_remove, u, str(data.get("id") or "")))
         if what == "rearm":
@@ -539,6 +547,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/bonds/flag", bond_flag, methods=["POST"]),
         Route("/api/watch", watch),
         Route("/api/watch/catalog", watch_catalog),
+        Route("/api/heat", heat),
+        Route("/api/heat/ref", heat_ref, methods=["POST"]),
         Route("/api/watch/{what}", watch_action, methods=["POST"]),
         Route("/api/alarms/fired", alarms_fired),
         Route("/api/alarms/{what}", alarm_action, methods=["POST"]),
