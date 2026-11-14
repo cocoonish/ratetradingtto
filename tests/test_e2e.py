@@ -34,8 +34,9 @@ def _node_env():
     if node is None:
         return None, None
     env = dict(os.environ)
+    npm = shutil.which("npm")                           # npm.cmd on Windows: a bare "npm" is not found there
     try:
-        root = subprocess.run(["npm", "root", "-g"], capture_output=True, text=True, timeout=30).stdout.strip()
+        root = subprocess.run([npm, "root", "-g"], capture_output=True, text=True, timeout=30).stdout.strip() if npm else ""
         if root:
             env["NODE_PATH"] = root + os.pathsep + env.get("NODE_PATH", "")
     except Exception:  # noqa: BLE001

@@ -3,7 +3,7 @@
 //   node tests/e2e/e2e.js http://localhost:1057 [screenshot-dir]
 //
 // The server must run in replay mode on a fresh data directory (tests/test_e2e.py does that).
-const { chromium } = require('playwright');
+const { chromium, request } = require('playwright');
 
 const BASE = process.argv[2] || 'http://localhost:1057';
 const SHOTS = process.argv[3] || null;
@@ -85,9 +85,19 @@ async function waitCell(page, ref, pred, timeout = 20000) {
   }, [ref, pred], { timeout });
 }
 
+const apiSessions = {};               // user key -> a sign-in of its own, for a user whose page was closed
+
 async function api(page, user, method, path, body) {
-  const as = signedIn[user] || page;                 // the request goes with the session of that user's page
-  const res = await as.request.fetch(BASE + path, { method, headers: { 'Content-Type': 'application/json' },
+  // the request goes with the session of that user's page - or, that page closed, with a sign-in of its own
+  let as = signedIn[user] ? signedIn[user].request : page.request;
+  if (signedIn[user] && signedIn[user].isClosed()) {
+    if (!apiSessions[user]) {
+      apiSessions[user] = await request.newContext();
+      await apiSessions[user].post(BASE + '/api/login', { data: { name: user, password: PASSWORD } });
+    }
+    as = apiSessions[user];
+  }
+  const res = await as.fetch(BASE + path, { method, headers: { 'Content-Type': 'application/json' },
     data: body === undefined ? undefined : JSON.stringify(body) });
   return { status: res.status(), json: await res.json().catch(() => null) };
 }
@@ -372,7 +382,7 @@ async function shot(page, name) {
       && retAfter[5].ask === '34,45' && retAfter.every((r) => r.bp === '' && r.next === ''), [ret0.slice(0, 3), retAfter.slice(0, 3)]);
     await page.click('#ret-copy-msg');
     await page.waitForTimeout(300);
-    const msg = await page.evaluate(() => navigator.clipboard.readText());
+    const msg = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');   // Windows: CRLF
     check('"Kopyala (mesaj)": the curve as text for a chat window', /^TRY RET · \d\d\.\d\d\.\d{4}\n/.test(msg) && msg.includes('\n1M   34,25 / 34,45\n'), msg.slice(0, 160));
     await page.click('#ret-copy');
     await page.waitForTimeout(300);
