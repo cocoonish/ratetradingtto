@@ -2061,7 +2061,9 @@ def _tto_auction(model: Model) -> None:
             "ok": ('=AND(ISNUMBER({valor}),ISNUMBER({mat_d}),N({mat_d})>N({valor}),{kind}<>"",ISNUMBER({acc_n}),'
                    'IF({kind}="B",TRUE,AND(ISNUMBER({prev_d}),ISNUMBER({next_d}),N({next_d})>N({prev_d}),ISNUMBER({freq_n}))))'),
             "w": '=IF(AND({ok},OR({kind}="S",{kind}="E")),({next_d}-{valor})/({next_d}-{prev_d}),"")',
-            "n": '=IF(AND({ok},OR({kind}="S",{kind}="E")),ROUND(({mat_d}-{next_d})/({next_d}-{prev_d}),0)+1,"")',
+            # the coupons left: whole periods of the calendar (364 / frequency days, DİBS RV's "takvim 182g") from the next
+            # coupon to the maturity - a long or short current period does not change their number
+            "n": '=IF(AND({ok},OR({kind}="S",{kind}="E")),ROUND(({mat_d}-{next_d})/ROUND(364/{freq_n},0),0)+1,"")',
             "fits": "=AND(ISNUMBER({n}),N({n})<=%d)" % AUC_CF,
             "g": '=IF({ok},{mat_d}-{valor},"")',
             "per": '=IF(AND({ok},OR({kind}="S",{kind}="E")),{cpn_n}/{freq_n},"")',
@@ -2282,6 +2284,8 @@ def _tto_viop_dv01(model: Model) -> None:
 #: empty: the scenario step per meeting (S1 / S2 / S3) of the PPK ima tab - a blank step follows the scenario base
 #: (OIS_MAIN!B3 / D3) - and the VİOP target table (also on the desk page).  What a user types stays theirs.
 EMPTY_BY_DEFAULT = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"))
+#: the name of that addition (left out where the file does not fit it: the cells keep the file's values)
+EMPTY_NAME = "Boş başlayan girdiler"
 
 
 def empty_default_refs() -> List[str]:
@@ -2325,7 +2329,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (UNI_SHEET, _universe_check, _tto_universe), (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
-            (AUC_SHEET, _auction_check, _tto_auction), ("Boş başlayan girdiler", _empty_check, _tto_empty)),
+            (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty)),
 }
 
 

@@ -238,7 +238,10 @@ class Service(object):
                     b.engine.reset()
         # the steps per meeting and the VİOP target table start empty for everybody (extras.EMPTY_BY_DEFAULT): copies
         # of the file's old values kept as shared inputs (a calendar change carried them along) go - once
-        if "tto" in self.books and not self.store.get("migrated.empty_defaults"):
+        # (only where they do start empty: a file that the addition does not fit keeps its steps, and their copies)
+        tto = self.books.get("tto")
+        if tto is not None and not self.store.get("migrated.empty_defaults") \
+                and not any(x.startswith(ex.EMPTY_NAME + ":") for x in tto.left_out):
             self.store.clear_shared_inputs("tto", ex.empty_default_refs())
             self.store.put("migrated.empty_defaults", now_iso())
         # shared inputs saved earlier (RET curve, calendars ...)
@@ -354,8 +357,13 @@ class Service(object):
             finally:
                 self.et.stop()
 
+    #: how often the running dashboard looks whether a meeting has passed: the OIS spot (Bloomberg's settle date) moves
+    #: some time after midnight, not at the turn of the day
+    ROLL_CHECK_SECONDS = 600.0
+
     def _market_loop(self) -> None:
         last_day = None
+        last_roll = 0.0
         busy = getattr(self.provider, "busy", None)
         while not self._stop.wait(0.3 if (busy is not None and busy()) else self.settings.tick_seconds):
             try:
@@ -371,8 +379,9 @@ class Service(object):
                         if day_changed:
                             self.et.call(self._sync_blotter)
                         self.bump()
-                if first or day_changed:
+                if first or day_changed or time.monotonic() - last_roll >= self.ROLL_CHECK_SECONDS:
                     # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
+                    last_roll = time.monotonic()
                     self.history.auto_roll()
             except Exception:  # noqa: BLE001 - the loop must survive anything
                 continue
@@ -1274,6 +1283,7 @@ class Service(object):
         user_vals: Dict[Tuple[int, int], Any] = {}
         user_clear: List[Tuple[int, int]] = []
         shared_vals: Dict[Tuple[int, int], Any] = {}
+        meetings: Dict[int, Any] = {}
         errors: List[str] = []
         skipped = 0
         for it in items:
@@ -1282,6 +1292,14 @@ class Service(object):
                 si, rc = book.cell(ref)
             except (KeyError, ValueError, AttributeError):
                 errors.append("%s: hücre bulunamadı" % ref)
+                continue
+            if self._meeting_date_cell(book, si, rc):
+                try:
+                    self.history.parse_dates([it.get("value")])
+                except ValueError as exc:
+                    errors.append("%s: %s" % (ref, exc))
+                    continue
+                meetings[rc // COLS] = it.get("value")
                 continue
             d = book.inputs.get((si, rc))
             if d is None:
@@ -1309,6 +1327,13 @@ class Service(object):
                 user_clear.append((si, rc))
             else:
                 user_vals[(si, rc)] = val
+        calendar = None
+        if meetings:
+            # first, so that steps typed with the dates land on the meetings as the new list has them
+            try:
+                calendar = self.history._typed_rows(user, meetings)
+            except ServiceError as exc:
+                errors.append("toplantı takvimi: %s" % exc)
         if shared_vals:
             book.engine.set_inputs(shared_vals)
             self.store.set_shared_inputs(book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in shared_vals.items()}, user)
@@ -1325,10 +1350,23 @@ class Service(object):
                 self.store.set_user_inputs(user, book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in user_vals.items()})
             if user_clear:
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in user_clear])
-        res: Dict[str, Any] = {"applied": len(shared_vals) + len(user_vals) + len(user_clear), "errors": errors}
+        res: Dict[str, Any] = {"applied": len(shared_vals) + len(user_vals) + len(user_clear) + (len(meetings) if calendar else 0),
+                               "errors": errors}
+        if calendar:
+            res["calendar"] = calendar
         if lenient:
             res["skipped"] = skipped
         return res
+
+    @staticmethod
+    def _meeting_date_cell(book: Book, si: int, rc: int) -> bool:
+        """A meeting date of the workbook's list (OIS_MAIN!P10:P89): it changes through the calendar only, which moves
+        what was typed per meeting along with it."""
+        from .history import BOOK, MEETING_ROWS, OIS_SHEET
+        if book.id != BOOK or book.model.sheets[si].name != OIS_SHEET:
+            return False
+        r, c = divmod(rc, COLS)
+        return c == parse_a1("P1") % COLS and MEETING_ROWS[0] <= r <= MEETING_ROWS[1]
 
     def paste(self, user: str, book_id: str, anchor: str, text: str, allow_adhoc: bool = False,
               lang: Optional[str] = None) -> Dict[str, Any]:
@@ -1381,6 +1419,11 @@ class Service(object):
                     continue
         n = 0
         if shared:
+            if any(self._meeting_date_cell(book, si, rc) for si, rc in cells):
+                # the file's dates are those of the day it was saved: put back over the list, the steps would no longer
+                # be those of their meetings
+                raise ServiceError("toplantı tarihleri dosyadaki değere döndürülmez – listeyi Ayarlar → Toplantı takvimi'nden "
+                                   "düzeltin (adımlar toplantısıyla taşınır)")
             keep = [c for c in cells if c in book.inputs and book.inputs[c].scope == "shared"]
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])

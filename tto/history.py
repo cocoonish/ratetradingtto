@@ -863,6 +863,18 @@ class History(object):
         res["gen"] = self.svc.gen
         return res
 
+    def _typed_rows(self, user: str, typed: Dict[int, Any]) -> Dict[str, Any]:
+        """Meeting dates typed or pasted on the OIS page (``{row: value}``; a blank one leaves the list) change the
+        list the way the calendar does: whatever was typed per meeting moves with its meeting.  Engine thread."""
+        rows = list(self._read_workbook()["rows"])
+        for r, value in typed.items():
+            rows[r - MEETING_ROWS[0]] = value
+        wanted = self.parse_dates(list(self.archive()) + [d for d in rows if d is not None])
+        res = self._set_calendar(user, wanted, False)
+        self._snap = None
+        self.kick()
+        return res
+
     def roll_calendar(self, user: str) -> Dict[str, Any]:
         """Take the meetings that have passed out of the workbook's list (into the archive)."""
         return self.set_calendar(user, self.meetings(), roll=True)

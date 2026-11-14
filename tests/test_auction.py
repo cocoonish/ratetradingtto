@@ -65,6 +65,10 @@ def _bloomberg():
          {VALOR: {"INT_ACC": 18.4 * 37 / 182, "PREV_CPN_DT": "16.09.2026", "NXT_CPN_DT": "17.03.2027", "DAYS_ACC": 37.0},
           ON_COUPON: {"INT_ACC": 0.0, "PREV_CPN_DT": "16.09.2026", "NXT_CPN_DT": "17.03.2027", "DAYS_ACC": 0.0},
           LATER: {"INT_ACC": 18.4 * 63 / 182, "PREV_CPN_DT": "16.09.2026", "NXT_CPN_DT": "17.03.2027", "DAYS_ACC": 63.0}})
+    # a new issue with a long first coupon (an invented ISIN): 210 days to it, then 182-day periods to the maturity
+    bond("TRT140329T11", {"NAME": "TURKIYE GOVERNMENT BOND", "CPN": 30.0, "CPN_TYP": "FIXED", "MATURITY": "14.03.2029", "CPN_FREQ": 2.0,
+                          "INFLATION_LINKED_INDICATOR": "N"},
+         {VALOR: {"INT_ACC": 15.0 * 65 / 210, "PREV_CPN_DT": "19.08.2026", "NXT_CPN_DT": "17.03.2027", "DAYS_ACC": 65.0}})
     # a bill: no coupon, no coupon dates (Bloomberg: field not applicable)
     bond("TRB170327T15", {"NAME": "TURKIYE T-BILL", "CPN": 0.0, "CPN_TYP": "ZERO COUPON", "MATURITY": "17.03.2027",
                           "CPN_FREQ": NOT_APPLICABLE, "INFLATION_LINKED_INDICATOR": "N"},
@@ -167,6 +171,17 @@ def test_a_bid_is_priced_from_a_clean_price_a_simple_or_a_compound_yield(auction
     # nothing of the auction's result yet
     assert [get(svc, c + "10") for c in "LMNOQ"] == [""] * 5
     assert get(svc, "A22").startswith("İhale bitince açıklanan asgari")
+
+
+def test_a_long_current_coupon_period_does_not_change_the_number_of_coupons(auction):
+    """A new issue with a long first coupon: the coupons left are counted in periods of the calendar (364 / 2 days, as
+    DİBS RV counts them), not in the length of the current period - which would leave one out."""
+    svc, user, _ = auction
+    fill(svc, user, {"B2": "23.10.2026", "A7": "TRT140329T11", "B10": "10000000", "D10": "30"})
+    acc = 15.0 * 65 / 210
+    w, n = (46463 - 46318) / 210, 5                   # coupons 17.03.27, 15.09.27, 14.03.28, 12.09.28, 14.03.29
+    pv = bist_simple(100.0, 30.0, w, n)[1]
+    assert get(svc, "J10") == round(pv(0.30), 3) and get(svc, "G10") == pytest.approx(pv(0.30) - acc, abs=1e-10)
 
 
 def test_the_auction_says_which_bids_won_and_where_they_stand(auction):

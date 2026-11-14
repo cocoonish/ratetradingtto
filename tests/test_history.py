@@ -938,6 +938,66 @@ def test_a_meeting_that_passed_leaves_the_list_by_itself(tmp_path):
         svc.stop()
 
 
+def test_the_roll_follows_the_spot_within_the_day(tmp_path, monkeypatch):
+    """Bloomberg's settle date (the OIS spot) moves some time after midnight, not at the turn of the day: the running
+    dashboard looks again every few minutes, so a meeting that passed leaves the list on its day."""
+    monkeypatch.setattr(Service, "ROLL_CHECK_SECONDS", 0.5)
+    svc = make_service(tmp_path)
+    try:
+        h = svc.history
+        book = svc.books["tto"]
+        svc.start()
+        time.sleep(1.5)                                                                     # the look at start: nothing
+        assert (h.calendar()["next"], h.calendar()["passed_in_list"]) == ("2026-12-10", 0)
+
+        def move_spot():
+            book.declare("OIS_MAIN!W2", scope="shared", group="test-spot")
+            book.engine.set_inputs({book.cell("OIS_MAIN!W2"): "11.12.2026"})
+        svc.et.call(move_spot)
+        svc.bump()
+        assert h.calendar()["passed_in_list"] == 1                                          # passed, still listed
+        for _ in range(100):
+            if not h.calendar()["passed_in_list"]:
+                break
+            time.sleep(0.2)
+        cal = h.calendar()
+        assert (cal["next"], cal["passed_in_list"], cal["autoroll"]["rolled"]) == ("2027-01-21", 0, ["2026-12-10"])
+    finally:
+        svc.stop()
+
+
+def test_a_meeting_date_typed_on_the_ois_page_goes_through_the_calendar(tmp_path):
+    """A date typed over a meeting on the OIS page changes the list the way the calendar does: the steps typed per
+    meeting stay with their meeting.  The file's dates are not put back over the list (they are those of the day
+    the file was saved: the steps would no longer be their meetings')."""
+    from conftest import cell
+    svc = make_service(tmp_path)
+    try:
+        user = svc.login("Takvim Deneme")["user"]
+
+        def p(r):
+            return serial_to_date(cell(svc, "OIS_MAIN!P%d" % r)).isoformat()
+        assert [p(r) for r in (10, 11, 12, 13)] == ["2026-12-10", "2027-01-21", "2027-03-18", "2027-04-22"]
+        svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!U11", "value": "-75"}, {"ref": "OIS_MAIN!U12", "value": "-125"}])
+        # 21.01.2027 moves a week: its step goes with it
+        res = svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P11", "value": "28.01.2027"}])
+        assert res["errors"] == [] and res["calendar"]["dropped"] == 0 and p(11) == "2027-01-28"
+        mine = svc.store.user_inputs(user, "tto")
+        assert mine[("tto", "OIS_MAIN!U11")] == -75.0 and mine[("tto", "OIS_MAIN!U12")] == -125.0
+        # 18.03.2027 leaves the list: the meetings below move up, each with its own step - 18.03's goes with it
+        svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P12", "value": ""}])
+        assert [p(r) for r in (11, 12)] == ["2027-01-28", "2027-04-22"]
+        mine = svc.store.user_inputs(user, "tto")
+        assert mine[("tto", "OIS_MAIN!U11")] == -75.0 and ("tto", "OIS_MAIN!U12") not in mine
+        res = svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P13", "value": "yarın"}])
+        assert res["applied"] == 0 and "anlaşılamadı" in res["errors"][0]
+        with pytest.raises(ServiceError) as exc:
+            svc.reset_inputs(user, "tto", ["OIS_MAIN!P10:P12"], shared=True)
+        assert "Toplantı takvimi" in str(exc.value) and p(12) == "2027-04-22"
+    finally:
+        svc.stop()
+
+
 def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
     """The first meeting of the list passes: the pages go on with the next one; the roll takes the passed
     meeting out of the list and nothing that belongs to a meeting changes."""

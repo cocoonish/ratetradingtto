@@ -27,6 +27,25 @@ def test_the_steps_and_the_target_table_start_empty(service):
         service.reset_inputs(u, "tto")
 
 
+def test_a_file_the_blank_steps_do_not_fit_keeps_its_steps(tmp_path, monkeypatch):
+    """Where the addition that blanks the steps is left out (a workbook of another layout keeps its own steps), the
+    copies a calendar change made of them stay too - and the clean-up waits for a file the addition fits."""
+    def no_fit(model):
+        raise ValueError("başka düzen")
+    monkeypatch.setitem(ex._BUILDERS, "tto", tuple((n, no_fit if n == ex.EMPTY_NAME else c, b)
+                                                    for n, c, b in ex._BUILDERS["tto"]))
+    store = Store(str(tmp_path / "tto.db"))
+    store.set_shared_inputs("tto", {"OIS_MAIN!U11": -100.0}, "takvim")
+    store.close()
+    svc = make_service(tmp_path)
+    try:
+        assert any(x.startswith(ex.EMPTY_NAME + ":") for x in svc.books["tto"].left_out)
+        assert svc.store.shared_inputs("tto")[("tto", "OIS_MAIN!U11")] == -100.0
+        assert not svc.store.get("migrated.empty_defaults")
+    finally:
+        svc.stop()
+
+
 def test_old_shared_copies_of_the_file_values_go_once(tmp_path):
     """A calendar change used to carry the file's steps as shared inputs: the first start of this version drops such
     copies of the cells that now start empty - only those - and only once."""
