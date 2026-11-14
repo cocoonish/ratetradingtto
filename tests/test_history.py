@@ -835,6 +835,61 @@ def test_calendar_edits_keep_what_was_typed_with_its_meeting(tmp_path):
         svc.stop()
 
 
+def test_announced_dates_correct_the_calendar(hsvc):
+    """Pasting the central bank's dates: each corrects the meeting ahead nearest to it (at most 45 days away, in
+    order); the meetings not announced yet and the past stay; nothing is saved by looking."""
+    h = hsvc.history
+    cal = h.calendar()
+    cur = [m["date"] for m in cal["meetings"]]
+    assert cal["history_days"] == len(hsvc.store.mpc_days())
+    res = h.preview_calendar(cur, ["14.01.2027", "2027-03-11", "22.04.2027", "23.10.2026"], "correct")
+    assert res["corrected"] == [["2027-01-21", "2027-01-14"], ["2027-03-18", "2027-03-11"]]
+    assert (res["added"], res["removed"], res["unchanged"], res["skipped"], res["spot"]) == ([], [], 1, ["2026-10-23"], "2026-11-04")
+    assert len(res["dates"]) == len(cur) and res["dates"] == sorted(res["dates"])
+    assert res["dates"][:15] == cur[:15]                                                    # the meetings held: as they were
+    assert [d for d in res["dates"] if d >= "2028"] == [d for d in cur if d >= "2028"]     # the years not announced yet stay
+    assert h.calendar()["meetings"] == cal["meetings"]                                      # looking saves nothing
+    res = h.preview_calendar(cur, ["2026-12-10"], "correct")
+    assert (res["corrected"], res["added"], res["unchanged"], res["dates"]) == ([], [], 1, cur)
+    # a date with no meeting within 45 days is a new meeting; the workbook's 80 rows must have room for it
+    with pytest.raises(ServiceError) as exc:
+        h.preview_calendar(cur, ["2027-01-21", "2027-02-11", "2027-03-18"], "correct")
+    text = str(exc.value)
+    assert "en fazla 80" in text and "81 olur" in text and "11.02.2027" in text and cur[-1][8:] + "." + cur[-1][5:7] in text
+    shorter = cur[:-1]
+    res = h.preview_calendar(shorter, ["2027-01-21", "2027-02-11", "2027-03-18"], "correct")
+    assert (res["corrected"], res["added"], res["unchanged"], len(res["dates"])) == ([], ["2027-02-11"], 2, len(cur))
+    # the other two ways: add what is missing, or replace every meeting ahead
+    res = h.preview_calendar(shorter, ["2027-02-11", "21.01.2027"], "merge")
+    assert (res["added"], res["unchanged"], res["corrected"]) == (["2027-02-11"], 1, [])
+    res = h.preview_calendar(cur, ["2026-12-10", "2027-01-14"], "future")
+    assert res["dates"] == cur[:15] + ["2026-12-10", "2027-01-14"]
+    assert (len(res["removed"]), res["added"], res["unchanged"]) == (79, ["2027-01-14"], 1)
+    for args in ((cur, [], "correct"), (cur, ["31.02.2027"], "correct"), (cur, ["2027-01-14"], "yanlış")):
+        with pytest.raises(ServiceError):
+            h.preview_calendar(*args)
+
+
+def test_announced_dates_carry_the_steps_typed_for_their_meetings(tmp_path):
+    svc = make_service(tmp_path)
+    try:
+        h = svc.history
+        ayse = svc.login("Ayşe Takvim")["user"]
+        svc.set_inputs(ayse, "tto", [{"ref": "OIS_MAIN!U11", "value": "-75"}, {"ref": "OIS_MAIN!V12", "value": "-125"}])
+        before = {None: steps_by_meeting(svc), ayse: steps_by_meeting(svc, ayse)}
+        res = h.preview_calendar(h.meetings(), ["14.01.2027", "11.03.2027", "22.04.2027"], "correct")
+        saved = h.set_calendar(ayse, res["dates"])
+        assert (saved["meetings"], saved["moved"], saved["changed"], saved["dropped"]) == (80, 0, 0, 0)  # rows stay, dates change
+        assert h.meetings() == res["dates"]
+        for who in (None, ayse):
+            after = steps_by_meeting(svc, who)
+            assert after["2027-01-14"] == before[who]["2027-01-21"] and after["2027-03-11"] == before[who]["2027-03-18"]
+            assert after["2027-04-22"] == before[who]["2027-04-22"]
+        assert before[ayse]["2027-01-21"][0] == -75.0 and steps_by_meeting(svc, ayse)["2027-01-14"][0] == -75.0
+    finally:
+        svc.stop()
+
+
 def panel_errors(svc, view_id, user=None):
     """(panels that failed, the cells of the page that show an error)."""
     page = svc.view(user, view_id)
@@ -846,6 +901,42 @@ def panel_errors(svc, view_id, user=None):
                 if c.get("k") == "e":
                     bad.add("%s!%s%d" % (data.get("sheet") or page["sheet"], data["c"][j], data["r"][i]))
     return [p["id"] for p in page["panels"] if p.get("error")], bad
+
+
+def test_a_meeting_that_passed_leaves_the_list_by_itself(tmp_path):
+    """MPC1 is always the next meeting: when one has passed (its date is before the OIS spot), the running
+    dashboard rolls the list itself - at start and when the day turns - and what was typed moves with its meeting."""
+    import time as _time
+    svc = make_service(tmp_path)
+    try:
+        h = svc.history
+        book = svc.books["tto"]
+        user = svc.login("Otomatik Deneme")["user"]
+        svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!U11", "value": "-75"}])               # her step for 21.01.2027
+        assert h.auto_roll() is None and svc.store.get("mpc.autoroll") is None              # nothing has passed yet
+
+        def move_spot():                                                                     # Bloomberg's settle date, then
+            book.declare("OIS_MAIN!W2", scope="shared", group="test-spot")
+            book.engine.set_inputs({book.cell("OIS_MAIN!W2"): "14.12.2026"})
+        svc.et.call(move_spot)
+        svc.bump()
+        cal = h.calendar()
+        assert (cal["spot"], cal["passed_in_list"], cal["meetings"][15]["label"]) == ("2026-12-14", 1, "MPC1")
+        svc.start()                                                                          # the dashboard starts: it rolls
+        for _ in range(100):
+            if not h.calendar()["passed_in_list"]:
+                break
+            _time.sleep(0.2)
+        cal = h.calendar()
+        assert (cal["next"], cal["passed_in_list"], cal["autoroll_error"]) == ("2027-01-21", 0, "")
+        assert cal["meetings"][15]["where"] == "archive" and cal["meetings"][15]["date"] == "2026-12-10"
+        assert cal["meetings"][16] == {"date": "2027-01-21", "row": 10, "label": "MPC1", "passed": False, "where": "list"}
+        assert cal["autoroll"]["rolled"] == ["2026-12-10"] and cal["autoroll"]["first"] == "2027-01-21"
+        assert svc.store.user_inputs(user, "tto") == {("tto", "OIS_MAIN!U10"): -75.0}      # her step went with its meeting
+        assert svc.store.shared_meta("tto", ["OIS_MAIN!P10"])["updated_by"] == h.AUTO_USER
+        assert h.auto_roll() is None                                                         # once is enough
+    finally:
+        svc.stop()
 
 
 def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
@@ -1165,6 +1256,11 @@ def test_history_api(client, hsvc, monkeypatch):
     assert client.post("/api/calendar", json={"dates": dates + ["yarın"]}, headers=hdr(user)).status_code == 400
     res = client.post("/api/calendar", json={"dates": dates}, headers=hdr(user))                        # unchanged: nothing moves
     assert res.status_code == 200 and (res.json()["meetings"], res.json()["moved"], res.json()["rolled"]) == (80, 0, [])
+    # a pasted column, before it is saved: what it would do to the list being edited
+    prev = client.post("/api/calendar/preview", json={"current": dates, "dates": ["14.01.2027"], "mode": "correct"})
+    assert prev.status_code == 200 and prev.json()["corrected"] == [["2027-01-21", "2027-01-14"]] and len(prev.json()["dates"]) == 95
+    assert client.post("/api/calendar/preview", json={"current": dates, "dates": "x"}).status_code == 400
+    assert client.post("/api/calendar/preview", json={"current": dates, "dates": ["14.01.2027"], "mode": "x"}).status_code == 400
     assert client.post("/api/history/settings", json={"dibs_field": "x"}).status_code == 401
     assert client.post("/api/history/settings", json={"lookback_days": 3}, headers=hdr(user)).status_code == 400
     ok = client.post("/api/history/settings", json={"dibs_field": "yld_ytm_mid", "lookback_days": 370}, headers=hdr(user))
