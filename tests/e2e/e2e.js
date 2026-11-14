@@ -926,7 +926,8 @@ async function shot(page, name) {
     };
     await open(page, 'masa');
     await tab(page, 'fwd');
-    check('the forward quote matrix follows the forward pricing table', await order(['B14', 'EKF1', 'EKF2']));
+    check('the forward quote matrices follow the forward pricing table: USDTRY, EURTRY, then the way back of each',
+      await order(['B14', 'EKF1', 'EKF5', 'EKF2', 'EKF6']));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('matrix starts from the desk spread (−150 bp on both sides)',
       (await cellText(page, 'EK_FWD!D4')).trim() === '-150' && Math.abs(trNumber(await cellText(page, 'EK_FWD!M5')) - (ois1m - 1.5)) < 0.011);
@@ -950,6 +951,20 @@ async function shot(page, name) {
     await typeInto(page, 'EK_FWD!D20', pts);
     await waitCell(page, 'EK_FWD!K20', 't.trim() !== ""');
     check('points typed by hand show their spread over OIS', Math.abs(trNumber(await cellText(page, 'EK_FWD!K20')) + 300) <= 1, await cellText(page, 'EK_FWD!K20'));
+    // EURTRY: the same matrix, taking the USDTRY one's curve and spreads until it is given its own
+    check('the EURTRY matrix follows the USDTRY one\'s curve and spreads', (await cellText(page, 'EK_FWD!B101')).trim() === 'Bootstrap'
+      && (await cellText(page, 'EK_FWD!D103')).trim() === '-300' && (await cellText(page, 'EK_FWD!E103')).trim() === '-150',
+      [await cellText(page, 'EK_FWD!B101'), await cellText(page, 'EK_FWD!D103'), await cellText(page, 'EK_FWD!E103')]);
+    const eurOis = trNumber(await cellText(page, 'EK_FWD!L104'));
+    await typeInto(page, 'EK_FWD!E103', '-50');
+    await waitCell(page, 'EK_FWD!N104', 'Math.abs(Number(t.replace(",", ".")) - ' + (eurOis - 0.5) + ') < 0.011');
+    check('an EURTRY spread of its own leaves the USDTRY matrix as it is', (await cellText(page, 'EK_FWD!E4')).trim() === '-150',
+      await cellText(page, 'EK_FWD!E4'));
+    const eurPts = (await cellText(page, 'EK_FWD!I104')).trim();
+    await typeInto(page, 'EK_FWD!E119', eurPts);
+    await waitCell(page, 'EK_FWD!L119', 't.trim() !== ""');
+    check('EURTRY points typed by hand show their spread over OIS', Math.abs(trNumber(await cellText(page, 'EK_FWD!L119')) + 50) <= 1,
+      await cellText(page, 'EK_FWD!L119'));
     await shot(page, '10-forward-quotes');
 
     await open(page, 'viop');

@@ -201,6 +201,48 @@
    "group": "ekfwd-points",
    "kind": "number",
    "label": "Elle puan bid / ask — swap points typed by hand, to read their spread over OIS"
+  },
+  {
+   "range": "EK_FWD!B101",
+   "scope": "user",
+   "group": "ekfwd-eur-curve",
+   "kind": "text",
+   "label": "Eğri — OIS curve of the EURTRY forward quote matrix (formula default: the USDTRY matrix's curve, EK_FWD!B2)"
+  },
+  {
+   "range": "EK_FWD!D103:E103",
+   "scope": "user",
+   "group": "ekfwd-eur-spread",
+   "kind": "number",
+   "label": "EURTRY spread bid / ask (bp), 'Tümü' (formula default: the USDTRY matrix's general spreads, EK_FWD!D4:E4)"
+  },
+  {
+   "range": "EK_FWD!F103:G103",
+   "scope": "user",
+   "group": "ekfwd-eur-spot",
+   "kind": "number",
+   "label": "EURTRY spot bid / ask (formula default: Bloomberg EURTRY bid / ask, Forward!F198:G198)"
+  },
+  {
+   "range": "EK_FWD!B104:B113",
+   "scope": "user",
+   "group": "ekfwd-eur-dates",
+   "kind": "date",
+   "label": "Valör — value dates of the EURTRY quote matrix (1M…12M from the EURTRY spot date by formula, four free rows)"
+  },
+  {
+   "range": "EK_FWD!D104:E113",
+   "scope": "user",
+   "group": "ekfwd-eur-rowspread",
+   "kind": "number",
+   "label": "EURTRY spread bid / ask (bp) per value date (formula default: the general spread)"
+  },
+  {
+   "range": "EK_FWD!D119:E128",
+   "scope": "user",
+   "group": "ekfwd-eur-points",
+   "kind": "number",
+   "label": "EURTRY elle puan bid / ask — swap points typed by hand, to read their spread over OIS"
   }
  ],
  "panels": [
@@ -332,6 +374,24 @@
    "title": "PUAN → OIS SPREAD  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
   },
   {
+   "id": "EKF5",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A100:U115",
+   "hidden": false,
+   "wide": true,
+   "title": "FORWARD KOTASYON  ·  EURTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)"
+  },
+  {
+   "id": "EKF6",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A117:N129",
+   "hidden": false,
+   "wide": true,
+   "title": "PUAN → OIS SPREAD  ·  EURTRY  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
+  },
+  {
    "id": "B15",
    "type": "table",
    "title": "VİOP  ·  kontratlar, ima TRY ve baz",
@@ -425,6 +485,15 @@
    "keep_title": true
   },
   {
+   "id": "EKF7",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "X101:AL113",
+   "hidden": true,
+   "title": "Yardımcı · EURTRY forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi",
+   "keep_title": true
+  },
+  {
    "id": "EKF4",
    "type": "table",
    "sheet": "EK_FWD",
@@ -477,7 +546,9 @@
    "panels": [
     "B14",
     "EKF1",
+    "EKF5",
     "EKF2",
+    "EKF6",
     "B10",
     "B22"
    ]
