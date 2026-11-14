@@ -477,6 +477,7 @@ async function shot(page, name) {
     pageB.on('pageerror', (e) => errors.push('pageerror(B): ' + e.message));
     await login(pageB, 'Mehmet');
     check('a user has no Kullanıcılar page', (await pageB.locator('#nav .nav-item[data-page=users]').count()) === 0);
+    check('a user has no sheet explorer', (await pageB.locator('#nav .nav-item[data-page=explorer]').count()) === 0);
     await open(pageB, 'blotter');
     await pageB.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 3);
     check('another user sees the saved forwards', true);

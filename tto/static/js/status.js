@@ -1,6 +1,6 @@
 // What stands behind the badge of the top bar: where the market data comes from, how the Bloomberg session is
 // doing - and which tickers Bloomberg says it does not know, with the cells of the workbooks that ask for them.
-import { api } from './api.js';
+import { api, session } from './api.js';
 import { h, clear, modal, toast, errorToast, copyText } from './ui.js';
 import { Grid, plainData, copyGrid } from './grid.js';
 import { num } from './format.js';
@@ -15,9 +15,10 @@ function clock(t) {
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
 }
 
-/** A link to where a cell is shown: its page and table, or the sheet explorer when no page shows it. */
+/** A link to where a cell is shown: its page and table, or the sheet explorer (administrators) when no page shows it. */
 function cellLink(c, close) {
   const text = c.sheet + '!' + c.ref;
+  if (!c.page && session.role !== 'admin') return h('span', { title: c.book_title + ' · ' + text }, text);
   const a = h('a', { href: c.page ? '#/' + c.page + (c.panel ? '?p=' + encodeURIComponent(c.panel) : '') : '#/explorer', title: c.book_title + ' · ' + text }, text);
   a.addEventListener('click', () => {
     if (!c.page) {

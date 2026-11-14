@@ -152,6 +152,10 @@ Senaryolar, kişisel girdiler ve kayıtlar bu hesapla saklanır.
   rozetle görünür): istekleri onaylama / reddetme, kullanıcı oluşturma (isim, ilk şifre, istenirse yönetici), yönetici
   yetkisi verme / alma, şifre belirleme, hesabı kapatma / açma. Son yöneticinin yetkisi alınamaz, hesabı kapatılamaz;
   kimse kendi hesabını kapatamaz. Şifresi değiştirilen ya da hesabı kapatılan kullanıcının açık oturumları sona erer.
+* **Sayfa gezgini** (herhangi bir sayfanın herhangi bir aralığı, formülleriyle) de **yalnızca yöneticilere** açıktır:
+  menüde, Günlük İşlemler'in "Sayfanın tamamı" düğmesinde ve hücre bilgisinin "sayfası olmayan hücre" bağlantısında
+  yalnız onlar görür, `/api/sheets` ve `/api/grid` başkasına 403 verir. Sayfaların kendi tabloları ve durum çubuğundaki
+  hücre bilgisi (`/api/cell`) herkese açıktır; uzun yardımcı tablonun "tamamı gezginde" notu yalnız yöneticide çıkar.
 * **Oturum** 7 gün geçerlidir (sağ üstteki menüden *Çıkış* ile daha önce biter); *Şifremi değiştir* aynı menüdedir.
   Aynı isimle art arda 5 yanlış şifre o ismi 1 dakika kilitler.
 * **Güvenlik.** Şifreler veritabanında yalnızca tuzlanmış PBKDF2-SHA256 özetiyle (600.000 tur) durur; oturum

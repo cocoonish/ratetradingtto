@@ -830,6 +830,7 @@ class Service(object):
         calc = self._calc(user, book)
         overlay = self._overlay(user, book) if user else None
         R = self.renderers[book.id]
+        explorer = bool(user) and (self.store.account(user_key(user)) or {}).get("role") == "admin"   # the sheet explorer is theirs
         gen = self.gen
         panels = []
         sheet_default = v.get("sheet")
@@ -873,12 +874,12 @@ class Service(object):
                     entry["range"] = p["range"]
                     rng = p["range"]
                     if p.get("max_rows"):
-                        # a long helper table: its first rows here, all of it in the sheet explorer
+                        # a long helper table: its first rows here, all of it in the sheet explorer (administrators)
                         r1, c1, r2, c2 = parse_range(rng)
                         if r2 - r1 + 1 > int(p["max_rows"]):
                             rng = "%s:%s" % (a1(r1 * COLS + c1), a1((r1 + int(p["max_rows"]) - 1) * COLS + c2))
-                            entry["note"] = ("İlk %d satır gösteriliyor (toplam %d). Tamamı: Sayfa gezgini → %s!%s"
-                                             % (int(p["max_rows"]), r2 - r1 + 1, sheet, p["range"]))
+                            entry["note"] = ("İlk %d satır gösteriliyor (toplam %d)." % (int(p["max_rows"]), r2 - r1 + 1)
+                                             + (" Tamamı: Sayfa gezgini → %s!%s" % (sheet, p["range"]) if explorer else ""))
                     # columns hidden in Excel stay out of the way until the helper tables are asked for
                     entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
                     if p.get("lift", True):

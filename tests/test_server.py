@@ -78,10 +78,14 @@ def test_views_and_locale(client, user):
     tr = client.get("/api/cell?book=tto&ref=Forward!F2&lang=tr").json()["cell"]["t"]
     en = client.get("/api/cell?book=tto&ref=Forward!F2&lang=en").json()["cell"]["t"]
     assert tr == "49,9977" and en == "49.9977"
-    grid = client.get("/api/grid", params={"book": "sofr", "sheet": "SOFR_FOMC", "range": "A47:C49"}).json()
+    # the sheet explorer: administrators only (a page's cells come with the page, /api/cell answers everybody)
+    adm = auth(_svc[0], "HTTP Yönetici", admin=True)
+    grid = client.get("/api/grid", params={"book": "sofr", "sheet": "SOFR_FOMC", "range": "A47:C49"}, headers=adm).json()
     assert grid["data"]["rows"][0][0]["t"] == "Vade"
-    assert client.get("/api/grid", params={"book": "tto", "sheet": "Yok", "range": "A1"}).status_code == 404
-    assert [s["name"] for s in client.get("/api/sheets?book=sofr").json()["sheets"]] == ["SOFR_FOMC"]
+    assert client.get("/api/grid", params={"book": "tto", "sheet": "Yok", "range": "A1"}, headers=adm).status_code == 404
+    assert [s["name"] for s in client.get("/api/sheets?book=sofr", headers=adm).json()["sheets"]] == ["SOFR_FOMC"]
+    assert client.get("/api/grid", params={"book": "sofr", "sheet": "SOFR_FOMC", "range": "A47:C49"}).status_code == 403
+    assert client.get("/api/sheets?book=sofr").status_code == 403
 
 
 def test_inputs_need_a_user(client):

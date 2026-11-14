@@ -1,6 +1,6 @@
 // Günlük İşlemler: trade entry (FX forward / OIS / bond) with live pricing, the shared blotter and the
 // cost of the day's position.  Everything saved here is visible to every user at once.
-import { api } from '../api.js';
+import { api, session } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
@@ -274,7 +274,7 @@ export class BlotterPage {
       try { sessionStorage.setItem('tto.explorer', JSON.stringify({ book: 'tto', sheet: 'Günlük İşlemler', range: 'A1:AA60' })); } catch (e) { /* ignore */ }
       window.location.hash = '#/explorer';
     });
-    this.sheetTitle.appendChild(this.sheetLink);
+    if (session.role === 'admin') this.sheetTitle.appendChild(this.sheetLink);          // the sheet explorer is the administrators'
     // what the workbook's own sheet cannot hold is said next to its tables
     this.sheetNote = h('span', { class: 'sheetnote hidden', id: 'blotter-sheet-note' });
     this.sheetTitle.appendChild(this.sheetNote);

@@ -21,10 +21,12 @@ from tto.service import Service  # noqa: E402
 ANON = {"Authorization": ""}
 
 
-def auth(svc: Service, user: str) -> dict:
+def auth(svc: Service, user: str, admin: bool = False) -> dict:
     """Request headers of a signed-in user: a session as the sign-in opens it, sent the way scripts send it
-    (``Authorization: Bearer …``).  The user is made (active) when new."""
+    (``Authorization: Bearer …``).  The user is made (active) when new; ``admin``: an administrator."""
     key = svc.login(str(user))["user"]
+    if admin:
+        svc.store.update_account(key, role="admin")
     return {"Authorization": "Bearer " + svc.open_session(key)}
 
 

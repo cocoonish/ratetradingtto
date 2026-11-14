@@ -210,12 +210,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def grid(request: Request):
+        # any rectangle of any sheet: the sheet explorer, for administrators only (a page's cells come with the page,
+        # a cell's details with /api/cell)
+        await call(svc().require_admin, _user(request))
         q = request.query_params
         return ok(await call(svc().grid, _user(request), q.get("book", "tto"), q.get("sheet", ""),
                              q.get("range", "A1:T40"), _lang(request)))
 
     @handler
     async def sheets(request: Request):
+        await call(svc().require_admin, _user(request))
         return ok({"sheets": await call(svc().sheets, request.query_params.get("book", "tto"))})
 
     # ------------------------------------------------------------------ inputs

@@ -211,8 +211,11 @@ function buildNav() {
     groups.get(g).push(p);
   }
   if (!groups.has('Araçlar')) groups.set('Araçlar', []);
-  groups.get('Araçlar').push({ id: 'explorer', title: 'Sayfa gezgini' });
-  if (session.role === 'admin') groups.get('Araçlar').push({ id: 'users', title: 'Kullanıcılar' });
+  if (session.role === 'admin') {                    // the sheet explorer and the accounts: administrators only
+    groups.get('Araçlar').push({ id: 'explorer', title: 'Sayfa gezgini' });
+    groups.get('Araçlar').push({ id: 'users', title: 'Kullanıcılar' });
+  }
+  if (!groups.get('Araçlar').length) groups.delete('Araçlar');
   // the blotter belongs right under the desk overview
   const masa = groups.get('Masa');
   if (masa) masa.sort((a, b) => (a.id === 'masa' ? -1 : b.id === 'masa' ? 1 : 0));
@@ -241,8 +244,9 @@ function route() {
   const cut = raw.indexOf('?');
   let id = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
   const panel = cut < 0 ? null : new URLSearchParams(raw.slice(cut + 1)).get('p');
-  const known = id === 'explorer' || (id === 'users' && session.role === 'admin') || state.pages.some((p) => p.id === id);
-  if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : 'explorer');
+  const admin = session.role === 'admin';
+  const known = ((id === 'explorer' || id === 'users') && admin) || state.pages.some((p) => p.id === id);
+  if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : (admin ? 'explorer' : 'masa'));
   if (id !== state.pageId) openPage(id, panel);
   else if (panel && state.page && state.page.ready && state.page.focusPanel) state.page.focusPanel(panel);
 }

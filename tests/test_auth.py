@@ -280,6 +280,12 @@ def test_sign_in_requests_and_administration_over_http(fresh):
             assert web.get("/api/status").status_code == 200
             assert web.get("/api/admin/users").status_code == 403
             assert web.post("/api/admin/users/role", json={"name": "Deniz", "admin": True}).status_code == 403
+            # the sheet explorer is the administrators'; a cell's details are everybody's (the status bar of every page)
+            assert web.get("/api/sheets?book=tto").status_code == 403
+            assert web.get("/api/grid", params={"book": "tto", "sheet": "MASA", "range": "A1:B2"}).status_code == 403
+            assert web.get("/api/cell", params={"book": "tto", "ref": "MASA!B4"}).status_code == 200
+            assert admin.get("/api/sheets?book=tto").status_code == 200
+            assert admin.get("/api/grid", params={"book": "tto", "sheet": "MASA", "range": "A1:B2"}).status_code == 200
             assert web.post("/api/password", json={"old": "deniz-sifre", "new": "deniz-yeni-sifre"}).json() == {"ok": True}
             # a token in the Authorization header is a session as well (scripts); a wrong one is nobody
             token, _ = svc.authenticate("Deniz", "deniz-yeni-sifre")
