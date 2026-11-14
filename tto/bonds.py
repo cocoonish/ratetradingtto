@@ -100,6 +100,6 @@ def candidates(date: Optional[str] = None, month: Optional[str] = None, kind: Op
     if kind == "cpi":
         return [b for b in hit if b.get("kind") == "cpi"]
     if kind == "zc":
-        return [b for b in hit if b.get("kind") in ("bill", "zero")] or hit
+        return [b for b in hit if b.get("kind") in ("bill", "zero")]          # zero coupon: never a coupon bond instead
     plain = [b for b in hit if b.get("kind") in ("fixed", "zero", "bill")]
     return plain or hit

@@ -152,6 +152,38 @@ def test_a_month_and_a_year_alone_are_the_fixed_coupon_bond():
     assert [leg["isin"] for leg in q["legs"]] == [None, "TRT100730T13"] and "nobond" in q["flags"]
 
 
+def test_zc_is_a_zero_coupon_one_quoted_on_its_yield():
+    """"zc" (or "bono", "kuponsuz"): a bill or a zero coupon bond, quoted on its yield - never a coupon bond instead.
+    In yield the bid is the higher number: "31.45/40" is 31.45 / 31.40, not crossed."""
+    assert bd.candidates(date="2028-03-15", kind="zc") == [] and bd.candidates(month="2027-02", kind="zc")[0]["isin"] == "TRB100227T13"
+    for text, isin, settle in (("feb27 zc 31.40", "TRB100227T13", None), ("feb27zc 31.40", "TRB100227T13", None),
+                               ("feb27zc.t1 31.40", "TRB100227T13", "T1"), ("jan27 zc 31.45", "TRT060127T10", None),
+                               ("6/1/27 kuponsuz 31.45", "TRT060127T10", None), ("10/2/27 zc 31.40", "TRB100227T13", None)):
+        q = one(text)
+        assert (q["isin"], q["unit"], q.get("settle")) == (isin, "yld", settle), text
+    # no zero coupon one then: not the coupon bond of the day, and still a yield
+    q = one("15/3/28 zc 36.50")
+    assert (q.get("isin"), q["label"], q["unit"], q["price"]) == (None, "15.03.28 ZC", "yld", 36.5) and "nobond" in q["flags"]
+    q = one("mar28 zc 36.50")
+    assert (q.get("isin"), q["label"], q["unit"]) == (None, "Mar28 ZC", "yld") and "nobond" in q["flags"]
+    # bid and ask in yield: the bid is the higher one; a short ask completes below it, a crossing one into the figure below
+    for text, bid, ask in (("feb27 zc 31.45/40", 31.45, 31.40), ("feb27 zc 45/40", 34.45, 34.40), ("feb27 zc 05/95", 35.05, 34.95),
+                           ("feb27 zc 34.45/40", 34.45, 34.40), ("feb27 zc 34.90 bid, 80 offer", 34.90, 34.80)):
+        q = one(text)
+        assert (q["bid"], q["ask"]) == (pytest.approx(bid), pytest.approx(ask)) and "crossed" not in q["flags"], text
+    assert "crossed" in one("feb27 zc 31.40/31.45")["flags"] and "crossed" not in one("15/3/28 100.550/100.575")["flags"]
+
+
+def test_the_other_side_after_a_comma_is_the_same_bond():
+    """"15/3/28 550 bid, 575 offer": the offer is the same bond's - completed from its screen, or from the side said in
+    full just before it when the bond has no screen."""
+    q = one("15/3/28 550 bid, 575 offer")
+    assert (q["isin"], q["bid"], q["ask"]) == ("TRT150328T24", 100.55, 100.575)
+    q = one("jan30 tlref 98.650 bid, 750 offer")
+    assert (q["bid"], q["ask"]) == (98.65, 98.75) and "crossed" not in q["flags"]
+    q = one("18m ois 35.03 bid, 23 offer", lambda r: None)                           # no curve: the side said before
+    assert (q["bid"], q["ask"]) == (35.03, 35.23)
+
 def test_trades_refs_and_interest_on_a_bond_in_english_and_turkish():
     assert (one("15/3/28 550 traded")["event"], one("15/3/28 550 traded")["price"]) == ("trade", 100.55)
     q = one("16/4/31 100 given")

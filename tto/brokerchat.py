@@ -190,6 +190,14 @@ def _complete(text: str, ref: Optional[float], anchor: Optional[float] = None, a
     return value, flag
 
 
+def _crossed(q: Dict[str, Any]) -> bool:
+    """A bid through the ask: above it - or, for a quote in yield (the bid is the higher yield), below it."""
+    b, a = q.get("bid"), q.get("ask")
+    if b is None or a is None:
+        return False
+    return b < a - 1e-9 if q.get("unit") == "yld" else b > a + 1e-9
+
+
 def _is_short(text: str) -> bool:
     """A level written without its big figure: "90", "05", ".90" - what :func:`_complete` would complete."""
     n = _num(text)
@@ -197,12 +205,14 @@ def _is_short(text: str) -> bool:
     return not ((not dotted and 1000 <= n < 10000) or (dotted and abs(n) >= 1.0) or n < 0 or n >= 100)
 
 
-def _complete_pair(bid: str, ask: str, ref: float) -> Tuple[float, float, str]:
+def _complete_pair(bid: str, ask: str, ref: float, down: bool = False) -> Tuple[float, float, str]:
     """Both sides of a quote written without their big figure: "90/10" for a rate near 36 is 35.90 / 36.10.
 
     The two are completed together: the ask is the first level at or above the bid ("90/10" crosses into the next
     figure, "10/14" does not), and of the figures that leaves the one whose middle is nearest to ``ref`` - where
     the instrument stands - is taken.  Whole numbers may also be meant as typed ("35/36"); that reading competes.
+    ``down``: a yield, whose bid is the higher number (the lower price) - the ask is the first level at or below the
+    bid ("45/40" near 34.8 is 34.45 / 34.40, "05/95" crosses into the figure below).
     Returns (bid, ask, flag) like :func:`_complete`."""
     dotted = any("." in t or "," in t for t in (bid, ask))
     nb, na = _num(bid), _num(ask)
@@ -210,18 +220,22 @@ def _complete_pair(bid: str, ask: str, ref: float) -> Tuple[float, float, str]:
     pa = na if ("." in ask or "," in ask) else na / 100.0
     cands: List[Tuple[float, float, float, str]] = []
     base = int(ref // 1)
+    in_order = (na <= nb) if down else (na >= nb)
     for big in range(base - 2, base + 3):
         b = big + pb
-        a = big + pa if pa >= pb - 1e-12 else big + 1 + pa
+        if down:
+            a = big + pa if pa <= pb + 1e-12 else big - 1 + pa
+        else:
+            a = big + pa if pa >= pb - 1e-12 else big + 1 + pa
         cands.append((abs((a + b) / 2.0 - ref), b, a, "abbr"))
-    if not dotted and na >= nb:
+    if not dotted and in_order:
         cands.append((abs((na + nb) / 2.0 - ref), nb, na, ""))
     cands.sort(key=lambda c: c[0])
     _, b, a, flag = cands[0]
     # two readings about as far from where the instrument stands: said, so that it is looked at
     if len(cands) > 1 and cands[1][0] - cands[0][0] < 0.15 and (cands[1][1], cands[1][2]) != (b, a):
         flag = "ambiguous"
-    elif flag == "abbr" and not dotted and na >= nb and abs((na + nb) / 2.0 - ref) < 0.6:
+    elif flag == "abbr" and not dotted and in_order and abs((na + nb) / 2.0 - ref) < 0.6:
         flag = "ambiguous"                                   # "35/36" at 35.5 could be meant either way
     return b, a, flag
 
@@ -274,9 +288,10 @@ _BOND_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul
                 "ağu": 8, "agu": 8, "ağustos": 8, "agustos": 8, "eyl": 9, "eylül": 9, "eylul": 9, "eki": 10, "ekim": 10, "kas": 11,
                 "kasım": 11, "kasim": 11, "ara": 12, "aralık": 12, "aralik": 12}
 _BOND_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})(zc|tlref|cpi)?(?:\.?(t\d))?$")
-_BOND_MONTH = re.compile(r"^([a-zçğıöşü]{3,9})'?(\d{2})(?:\.?(t\d))?$")
+_BOND_MONTH = re.compile(r"^([a-zçğıöşü]{3,9})'?(\d{2})(zc|tlref|cpi)?(?:\.?(t\d))?$")
+# the kind said: "zc" is a zero coupon one - a bill (bono) or a zero coupon bond (kuponsuz) -, quoted on its yield
 _BOND_KIND = {"tlref": "float", "float": "float", "frn": "float", "cpi": "cpi", "tüfe": "cpi", "tufe": "cpi", "zc": "zc",
-              "bono": "zc", "bill": "zc"}
+              "bono": "zc", "bill": "zc", "kuponsuz": "zc"}
 _BOND_SETTLE = {"today": "T0", "tdy": "T0", "tod": "T0", "t0": "T0", "bugün": "T0", "bugun": "T0", "tom": "T1", "t1": "T1",
                 "yarın": "T1", "yarin": "T1", "t2": "T2"}
 _BOND_WORDS = set(_BOND_KIND) | set(_BOND_SETTLE) | {"mio", "mn", "tane"}
@@ -304,7 +319,8 @@ def _bond_refs(low: List[str]) -> List[Tuple[List[int], Dict[str, Any]]]:
         else:
             m = _BOND_MONTH.match(w)
             if m and m.group(1) in _BOND_MONTHS:
-                info = {"month": "%d-%02d" % (2000 + int(m.group(2)), _BOND_MONTHS[m.group(1)]), "kind": None, "settle": m.group(3)}
+                info = {"month": "%d-%02d" % (2000 + int(m.group(2)), _BOND_MONTHS[m.group(1)]), "kind": _BOND_KIND.get(m.group(3) or ""),
+                        "settle": m.group(4)}
             elif w in _BOND_MONTHS and k + 1 < len(low) and re.match(r"^'?\d{2}$", low[k + 1]) and w not in ("mar", "may"):
                 # "April 31", "Sep 34", "Nov 28" (not "may" / "mar": too often a word or a level follows them)
                 info = {"month": "%d-%02d" % (2000 + int(low[k + 1].strip("'")), _BOND_MONTHS[w]), "kind": None, "settle": None}
@@ -364,8 +380,9 @@ def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any
         else:
             y, m, d = (int(x) for x in (info.get("date") or "2000-01-01").split("-"))
             label = "%02d.%02d.%02d" % (d, m, y % 100)
-        tail = {"float": " TLREF", "cpi": " TÜFE", "zc": " Bono"}.get(kind or "", "")
-        return {"label": label + tail, "months": (y - 2000) * 12.0 + m, "missing": True}
+        tail = {"float": " TLREF", "cpi": " TÜFE", "zc": " ZC"}.get(kind or "", "")
+        # a zero coupon one is quoted on its yield, known or not
+        return {"label": label + tail, "months": (y - 2000) * 12.0 + m, "missing": True, "yield": kind == "zc"}
     cands = sorted(cands, key=lambda b: -(b.get("coupon") or 0.0))
     b = cands[0]
     mat = _dt.date.fromisoformat(b["maturity"])
@@ -551,8 +568,11 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     if product == "FX" and kind != "outright":
         return None                                        # an FX swap is one tenor (a forward-forward is not read here)
     words = {low[k] for k in idx}
+    carried = instrument is not None and bond is None and switch is None and product == "DIBS" and kind != "switch"
     if bond is not None:
         unit = "yld" if bond.get("yield") else "px"
+    elif carried and instrument.get("unit") in ("px", "yld"):
+        unit = instrument["unit"]                            # the other side of a bond quoted just before: its price or yield
     else:
         unit = "pts" if product == "FX" else ("bp" if kind in ("spread", "fly", "switch") else "pct")
     out: Dict[str, Any] = {"product": product, "kind": kind, "tenors": tenors, "months": months,
@@ -573,6 +593,11 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     elif kind == "switch" and instrument is not None:
         # the other side of a switch quoted just before ("..., 220 offer")
         for k in ("label", "key", "legs"):
+            if instrument.get(k) is not None:
+                out[k] = instrument[k]
+    elif carried:
+        # the other side of a bond quoted just before ("15/3/28 550 bid, 575 offer"): the same bond, completed from its screen
+        for k in ("label", "key", "isin", "bond_kind", "settle"):
             if instrument.get(k) is not None:
                 out[k] = instrument[k]
     if bond is not None:
@@ -665,20 +690,21 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
             return bid, level(a, bid)                        # ".95/20": 102.95 / 103.20 - the offer does not cross the bid
         if unit not in ("pct", "yld"):
             return _num(b), _num(a)
+        yld = unit == "yld"                                  # a yield: the bid is the higher number (the lower price)
         short_b, short_a = _is_short(b), _is_short(a)
         if short_b and short_a:
             if level_ref is None:
                 out["flags"].append("no-ref")                # nothing to find the figure with: as typed, and said so
                 return _num(b), _num(a)
-            bid, ask, flag = _complete_pair(b, a, level_ref)
+            bid, ask, flag = _complete_pair(b, a, level_ref, down=yld)
             if flag:
                 out["flags"].append(flag)
             return bid, ask
         if short_b:
             ask = level(a)
-            return level(b, ask, False), ask                 # "90/36.10": the bid is the 90 below 36.10
+            return level(b, ask, yld), ask                   # "90/36.10": the bid is the 90 below 36.10 (a yield's: above)
         bid = level(b)
-        return bid, level(a, bid)                            # the ask does not cross the bid: "35.60/80" is 35.80
+        return bid, level(a, bid, not yld)                   # the ask does not cross the bid: "35.60/80" is 35.80, "31.45/40" a yield's 31.40
 
     if out["event"] == "trade":
         k = after_at if after_at is not None else (singles[0] if singles else None)
@@ -727,7 +753,7 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     else:
         out["event"] = "interest" if side is not None else "note"
         out["side"] = side
-    if out["bid"] is not None and out["ask"] is not None and out["bid"] > out["ask"] + 1e-9:
+    if _crossed(out):
         out["flags"].append("crossed")
     # ---- what else was said stays as it was typed ("bal", a size, "nl" ...)
     known = _VOCABULARY | (_BOND_WORDS if product == "DIBS" else set()) | (_SWITCH_WORDS if kind == "switch" else set())
@@ -842,9 +868,17 @@ def parse_message(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[f
                 if q is not None and q["event"] == "note" and quotes:
                     q = None                                # "..., 50m": a size, not another instrument
                 if q is None and quotes:
-                    # "18m ois 35.03 bid, 35.23 offer": the other side of what was just quoted
-                    more = parse_quote(seg, ref, quotes[-1])
+                    # "18m ois 35.03 bid, 35.23 offer": the other side of what was just quoted - its big figure from the
+                    # side said in full before it ("98.650 bid, 750 offer"), else as any level is completed
                     prev = quotes[-1]
+                    said = next((prev[x] for x in ("bid", "ask", "price") if prev.get(x) is not None), None)
+
+                    def near(r: Dict[str, Any], _prev=prev, _said=said) -> Optional[float]:
+                        if _said is not None and r.get("key") == _prev.get("key") and r.get("unit") == _prev.get("unit"):
+                            return _said
+                        return ref(r) if ref is not None else None
+
+                    more = parse_quote(seg, near, prev)
                     if more is not None and more["event"] == "quote" and prev["event"] == "quote" and \
                             all(more[x] is None or prev[x] is None for x in ("bid", "ask")) and (more["bid"], more["ask"]) != (None, None):
                         for x in ("bid", "ask"):
@@ -853,7 +887,7 @@ def parse_message(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[f
                         prev["side"] = None if prev["bid"] is not None and prev["ask"] is not None else prev["side"]
                         prev["clear"] = [x for x in prev["clear"] if prev[x] is None]
                         prev["flags"] = prev["flags"] + [f for f in more["flags"] if f not in prev["flags"]]
-                        if prev["bid"] is not None and prev["ask"] is not None and prev["bid"] > prev["ask"] + 1e-9 and "crossed" not in prev["flags"]:
+                        if _crossed(prev) and "crossed" not in prev["flags"]:
                             prev["flags"].append("crossed")
                         prev["note"] = (prev["note"] + " " + more["note"]).strip()
                         prev["raw_part"] += ", " + seg
