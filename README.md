@@ -873,16 +873,34 @@ Vadeye / kontrata tıklamak da o spread'i çizer: grafik görünür alana gelir,
 **Ayarlar · Toplantı takvimi** (Araçlar grubu). Tek liste: yapılan toplantılar (arşiv) ve OIS sayfasındaki 80
 toplantı (`OIS_MAIN!P10:P89`; aynı hücreler, herkes için ortak). Gerçek tarih belli olunca satırdaki tarih
 düzeltilir (gg.aa.yyyy), yeni toplantı eklenir, silinir ya da Excel'den bir tarih sütunu toplu yapıştırılır →
-**Kaydet**.
+**Kaydet**. **Kopyala** tablodaki tarihleri Excel'e yapıştırılacak bir sütun olarak kopyalar.
+
+* **Toplu yapıştır…** üç şekilde çalışır; yapıştırılanın ne yapacağını sunucu hesaplar (`POST /api/calendar/preview`,
+  hiçbir şey kaydedilmez), tablo gösterir, **Kaydet** ile kaydedilir:
+  * **Açıklanan tarihlerle düzelt (diğerleri kalır)** — TCMB yılın tarihlerini açıklayınca: yapıştırılan her tarih,
+    bugünden (OIS spot valöründen) sonraki toplantılardan en çok 45 gün uzaktaki en yakınının tarihini düzeltir
+    (sıra korunur, tarihler olabildiğince az kayar — kaydetmenin adımları taşırken kullandığı eşleştirme); satırda
+    "önce 21.01.2027" görünür. Yakınında toplantı olmayan tarih yeni toplantı olarak eklenir. Açıklanmamış
+    toplantılar (ör. sonraki yıllar), geçen toplantılar ve arşiv olduğu gibi kalır; bugünden önceki yapıştırılmış
+    tarih yok sayılır ve söylenir. Liste 80 satırı aşacaksa kaydetmeden önce hangi tarihin eklendiği ve en
+    uzaktaki hangi toplantıların çıkarılması gerektiği yazılır.
+  * **Listeye ekle** — listede olmayan tarihler eklenir, eskiler de kalır.
+  * **Gelecek toplantıların yerine koy** — bugünden sonraki bütün toplantılar silinip yerine yapıştırılanlar gelir;
+    önce kaç toplantının (ve senaryo adımlarının) gideceği sorulur.
+
+  Takvim değişince PPK fiyatlama geçmişinin her günü yeni takvimle yeniden hesaplanır (canlıda gün başına
+  birkaç saniye); düzeltmeleri tek kayıtta yapın — kaydetmeden önce sayfa bunu yaklaşık gün sayısıyla hatırlatır.
 
 * Bir toplantıya yazılmış her şey **toplantısıyla birlikte taşınır**: her kullanıcının senaryo adımları (`U:W`),
   kayıtlı senaryoları ve dosyanın kendi adımları. Araya toplantı eklenince sonrakiler bir satır aşağı, çıkarılınca
   yukarı kayar; tarihi düzeltilen toplantı aynı toplantı sayılır.
-* **Toplantı geçince:** dosyanın kendi mantığı çalışır — satır "geçti" olur, sıradaki toplantı ilk toplantı olur,
-  hiçbir şeyi kaydırmak gerekmez. İstenirse **Geçen toplantıları arşivle** geçenleri listeden arşive alır ve liste
-  sıradaki toplantıdan (MPC1) başlar; kaydırmadan önce ve sonra her toplantının fiyatlaması ve her kullanıcının
-  senaryo patikaları toplantı bazında aynıdır (testle doğrulanır). Fiyatlama geçmişi toplantının tarihine bağlı
-  olduğu için kaydırmadan etkilenmez.
+* **Toplantı geçince liste kendiliğinden kayar: MPC1 her zaman sıradaki toplantıdır.** Bir toplantının tarihi OIS
+  spot valöründen önce kalınca (dosyanın kendi "geçti" ölçütü) dashboard açılışta ve gün dönünce geçen toplantıyı
+  listeden arşive alır, liste sıradaki toplantıdan (MPC1) başlar; dosyanın adımları, her kullanıcının senaryo
+  adımları ve kayıtlı senaryoları toplantılarıyla birlikte bir satır kayar. Kaydırmadan önce ve sonra her toplantının
+  fiyatlaması ve her kullanıcının senaryo patikaları toplantı bazında aynıdır (testle doğrulanır); kaydı yapan
+  "otomatik" görünür, Ayarlar'da son otomatik kaydırma yazar. **Geçen toplantıları arşivle** aynı işi elle yapar.
+  Fiyatlama geçmişi toplantının tarihine bağlı olduğu için kaydırmadan etkilenmez.
 * Takvim değişince fiyatlama geçmişi yeni takvimle arka planda yeniden hesaplanır (yalnızca etkilenen günler).
 * *Tarihçe* bölümü: durum, DİBS getiri alanı, geriye bakış süresi, "Şimdi güncelle", "PPK geçmişini yeniden
   hesapla". *Tarihçe serileri* tablosu her ticker için ilk / son gün ve gün sayısını gösterir — matriste boş kalan
@@ -1098,7 +1116,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~8–11 dk). 850 test (gerçek `blpapi` kuruluysa 7 tane daha):
+Bloomberg ve ağ gerekmez (~8–11 dk). 853 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|
@@ -1119,7 +1137,7 @@ Bloomberg ve ağ gerekmez (~8–11 dk). 850 test (gerçek `blpapi` kuruluysa 7 t
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma, port kuralı, manuel spot (VİOP ve Masa'nın ilk tablosu, üst şeritten giriş, temizleyince Bloomberg spotu), **elle değer** (formülün üzerine yazma: yalnızca sahibinin, yalnızca ona girdi görünür, silince / "formüle dön"le formül geri gelir, yeniden başlatmada kalır), hesaplayıcıların otomatik dolan girdileri (Forward ve VİOP: tarih, spot, döviz faizi), sekmeli sayfa çıktısı ve arama kutusunun verisi, işlem defterinin aralık / DV01 / tahvil fiyatı uçları |
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda; **sekmeler**: 12'den çok tablosu olan her sayfa sekmeli, her görünen tablo bir sekmede ya da sekmelerin üstünde, sekmeler var olan görünür tabloları gösteriyor, Forward hesaplayıcılarla başlıyor, Hesaplayıcılar sayfasında aynı adlı iki tablo yok; sayfası kaldırılan üç sayfa (formülleri sayılır, Sayfa gezgini'nde durur) |
 | `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |
-| `test_history.py` | Günlük tarihçe: kapanış deposu, kayıtlı `BDH` bloklarının tarihlenmesi, serilerin dosyadan okunuşu, **tarihçenin bugünkü satırı = OIS sayfası** (80 toplantı, hücre hücre), toplantı bazında fiyatlama (yapılan toplantının serisi, gerçekleşen TLREF değişimi, toplantı günü ölçümü, kotaların eriştiği ufuk), gün sonu matrisi (1 / 5 / 21 iş günü kuralı, tatil, geçmiş gün), takvim (tarih düzeltme / ekleme / çıkarma: adımların ve kayıtlı senaryoların toplantıyla taşınması; **toplantı geçince ve liste kaydırılınca** sayfalar ve her toplantının değerleri), sahte Bloomberg'le canlı tarihçe (istek gruplama, yalnızca son günlerin yenilenmesi, yedek ticker, zaman aşımı), HTTP uçları; **bir günün kotaları** (kapanışı olmayan vadenin komşularının hareketiyle taşınması, komşularından ayrılıp geri dönen kapanışın ayıklanması, piyasa hareketinin korunması), günlerin Excel'in kendi durumuna göre sınıflanması, çözücünün tutturamadığı günün seriden / min-maks'tan / değişimlerden çıkması, hatalı bir kapanışın kayıtlı ayda çözücüye ulaşmaması, eski sürümün veritabanının korunması |
+| `test_history.py` | **Toplantı takvimi**: açıklanan tarihlerle toplu düzeltme (en yakın toplantının düzeltilmesi, 45 günden uzak tarihin eklenmesi, açıklanmamış yılların ve geçmişin kalması, 80 sınırının nedeniyle reddi, listeye ekleme, gelecektekilerin yerine koyma, kaydedince adımların toplantısıyla gitmesi, önizleme ucu) ve **geçen toplantının listeden kendiliğinden çıkması** (açılışta: MPC1 sıradaki toplantı, adım toplantısıyla, "otomatik" kaydı); günlük tarihçe: kapanış deposu, kayıtlı `BDH` bloklarının tarihlenmesi, serilerin dosyadan okunuşu, **tarihçenin bugünkü satırı = OIS sayfası** (80 toplantı, hücre hücre), toplantı bazında fiyatlama (yapılan toplantının serisi, gerçekleşen TLREF değişimi, toplantı günü ölçümü, kotaların eriştiği ufuk), gün sonu matrisi (1 / 5 / 21 iş günü kuralı, tatil, geçmiş gün), takvim (tarih düzeltme / ekleme / çıkarma: adımların ve kayıtlı senaryoların toplantıyla taşınması; **toplantı geçince ve liste kaydırılınca** sayfalar ve her toplantının değerleri), sahte Bloomberg'le canlı tarihçe (istek gruplama, yalnızca son günlerin yenilenmesi, yedek ticker, zaman aşımı), HTTP uçları; **bir günün kotaları** (kapanışı olmayan vadenin komşularının hareketiyle taşınması, komşularından ayrılıp geri dönen kapanışın ayıklanması, piyasa hareketinin korunması), günlerin Excel'in kendi durumuna göre sınıflanması, çözücünün tutturamadığı günün seriden / min-maks'tan / değişimlerden çıkması, hatalı bir kapanışın kayıtlı ayda çözücüye ulaşmaması, eski sürümün veritabanının korunması |
 | `test_bundle.py` | Tek dosyalık kurulum (`kurulum/tto_kur.py`): içine ne girdiği, aynı içeriğin aynı dosyayı vermesi, boş klasöre açma, güncelleme (değişen yenilenir, kalkan silinir, `data` / `vendor/local` / kullanıcının kendi dosyaları kalır), ZIP'ten gelmiş klasör, yarım inmiş / bozulmuş / satır sonları değişmiş dosya, klasör dışına çıkan adların reddi, seçenekler; **repodaki dosyanın kodla aynı olduğu** ve hiçbir paketi olmayan bir Python'la açılıp sunucunun ondan çalıştığı |
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik (kota büyüklükleri dahil), sessiz kalan kotaların giderek seyrek sorulması, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik (dört kitap); **Bloomberg'in tanımadığı ticker'lara abone olunmaması**, ertesi gün yeniden sorulması, seyreltme seçeneği ve reddedilince seçeneksiz deneme, uzun olay kuyruğu, **kuyruk taşınca sayım ve düşen değerlerin yeniden istenmesi** (günlük üst sınırıyla); **Excel eklentisi için yazılmış kimliklerin API biçimine çevrilmesi** (`… @ISL1 ISIN` → `/isin/…@ISL1`: istek, geçmiş, abonelik), geri çekilen emrin miktarının boşalması |
 | `test_bloomberg_process.py` | Oturumun yardımcı süreçte çalışması: değerlerin, tick'lerin, `BDH`'nin ve tarihçe çağrısının süreç sınırını geçmesi; `blpapi` yok / yüklenemiyor / terminal yok / yardımcı yanıt vermiyor; **yardımcı ölünce yeniden başlayıp her şeyi yeniden istemesi** (istek sayacı sürer), sürekli ölen yardımcının bir noktada bırakılması; dashboard durunca ya da öldürülünce yardımcının kapanması; **ölçüm: hesap yapan bir sürecin içindeki okuyucu saniyede 2.000 tick'in dörtte birine yetişemezken yardımcı hepsini okur**; dashboard'un yardımcıyı kullanması ve başlatamazsa aynı süreçte devam etmesi; ve ilk canlı çalıştırmanın sahnelenmesi: `python -m tto --mode live`, dört kitap, saniyede 1.500 tick, 10.000'lik kuyruk — hiç olay düşmez, var olmayan ~790 vadeye abone olunmaz |

@@ -471,6 +471,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             raise ServiceError("dates listesi gerekli")
         return ok(await call(svc().history.set_calendar, _user(request), dates, bool(data.get("roll"))))
 
+    @handler
+    async def calendar_preview(request: Request):
+        data = await _body(request)
+        current, dates = data.get("current"), data.get("dates")
+        if not isinstance(current, list) or not isinstance(dates, list):
+            raise ServiceError("current ve dates listeleri gerekli")
+        return ok(await call(svc().history.preview_calendar, current, dates, str(data.get("mode") or "correct")))
+
     # ------------------------------------------------------------------ live updates (SSE)
     async def events(request: Request):
         loop = asyncio.get_running_loop()
@@ -575,6 +583,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/history/matrix", history_matrix),
         Route("/api/history/mpc", history_mpc),
         Route("/api/calendar", calendar, methods=["GET", "POST"]),
+        Route("/api/calendar/preview", calendar_preview, methods=["POST"]),
         Route("/api/events", events),
         Mount("/static", app=_Static(directory=STATIC), name="static"),
     ]

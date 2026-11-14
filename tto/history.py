@@ -748,7 +748,87 @@ class History(object):
         upcoming = [x for x in items if not x["passed"]]
         return {"today": _iso(snap["today"]), "spot": _iso(spot), "meetings": items, "slots": MEETING_ROWS[1] - MEETING_ROWS[0] + 1,
                 "passed_in_list": sum(1 for x in rows if x["passed"]),
-                "next": upcoming[0]["date"] if upcoming else None, "gen": self.svc.gen}
+                "next": upcoming[0]["date"] if upcoming else None, "gen": self.svc.gen,
+                "history_days": len(self.store.mpc_days()),       # what a new calendar makes the meeting history compute again
+                "autoroll": self.store.get("mpc.autoroll"), "autoroll_error": self.state.get("autoroll_error") or ""}
+
+    #: what a pasted column of dates may do to the list being edited
+    PASTE_MODES = ("correct", "merge", "future")
+
+    def preview_calendar(self, current: Sequence[Any], pasted: Sequence[Any], mode: str = "correct") -> Dict[str, Any]:
+        """What a pasted column of dates does to the list being edited - nothing is saved:
+
+        * ``correct`` - the dates the central bank announced: each corrects the meeting ahead nearest to it (at most
+          45 days away; in order, the dates moving as little as possible - the pairing of ``align_meetings``, which
+          saving uses to carry what was typed per meeting), a date with no meeting that near is added, every other
+          meeting stays as it is;
+        * ``merge`` - the dates that are not in the list are added;
+        * ``future`` - the meetings ahead are replaced by the dates pasted.
+
+        Meetings before the OIS spot (held, or in the archive) are never touched; pasted dates before it are left
+        out (``skipped``).  Returns the list as saving would get it (``dates``), ``corrected`` ([was, now] pairs),
+        ``added``, ``removed``, ``unchanged`` (pasted dates the list already had right) and ``history_days``.  More
+        than the workbook's 80 rows is refused here already, with the dates that make it so."""
+        from .service import ServiceError
+        if mode not in self.PASTE_MODES:
+            raise ServiceError("bilinmeyen yapıştırma şekli: %s" % mode)
+        try:
+            have = self.parse_dates(current)
+            given = self.parse_dates(pasted)
+        except ValueError as exc:
+            raise ServiceError(str(exc))
+        if not given:
+            raise ServiceError("yapıştırılanlarda tarih yok")
+        snap = self.snapshot()
+        spot = _iso(snap["spot"] or next_business_day(snap["today"], set()))
+        held = [d for d in have if d < spot]
+        ahead = [d for d in have if d >= spot]
+        skipped = [d for d in given if d < spot]
+        given = [d for d in given if d >= spot]
+        corrected: List[List[str]] = []
+        added: List[str] = []
+        removed: List[str] = []
+        unchanged = 0
+        if mode == "correct":
+            moves = align_meetings(ahead, given)
+            taken = set()
+            kept = []
+            for i, d in enumerate(ahead):
+                j = moves[i]
+                if j is None:
+                    kept.append(d)                                # not announced (yet): stays as it is
+                    continue
+                taken.add(j)
+                kept.append(given[j])
+                if given[j] == d:
+                    unchanged += 1
+                else:
+                    corrected.append([d, given[j]])
+            added = [d for j, d in enumerate(given) if j not in taken]
+            ahead = sorted(set(kept) | set(added))
+        elif mode == "merge":
+            added = [d for d in given if d not in set(ahead)]
+            unchanged = len(given) - len(added)
+            ahead = sorted(set(ahead) | set(given))
+        else:
+            removed = [d for d in ahead if d not in set(given)]
+            added = [d for d in given if d not in set(ahead)]
+            unchanged = len(given) - len(added)
+            ahead = list(given)
+        dates = held + ahead
+        # the workbook's list counts from its first meeting (or the spot, the earlier) - as saving will
+        old = [d for d in snap["rows"] if d]
+        cutoff = min(old[0], spot) if old else spot
+        slots = MEETING_ROWS[1] - MEETING_ROWS[0] + 1
+        listed = [d for d in dates if d >= cutoff]
+        if len(listed) > slots:
+            tr = lambda d: _day(d).strftime("%d.%m.%Y")                      # noqa: E731
+            why = " (yakınında toplantı olmadığı için eklenen: %s)" % ", ".join(tr(d) for d in added) if added else ""
+            raise ServiceError("listede en fazla %d toplantı olabilir, yapıştırılanlarla %d olur%s. Önce en uzaktaki %d toplantıyı "
+                               "listeden çıkarın: %s" % (slots, len(listed), why, len(listed) - slots,
+                                                         ", ".join(tr(d) for d in listed[slots:])))
+        return {"dates": dates, "corrected": corrected, "added": added, "removed": removed, "unchanged": unchanged,
+                "skipped": skipped, "spot": spot, "history_days": len(self.store.mpc_days())}
 
     @staticmethod
     def parse_dates(dates: Sequence[Any]) -> List[str]:
@@ -786,6 +866,29 @@ class History(object):
     def roll_calendar(self, user: str) -> Dict[str, Any]:
         """Take the meetings that have passed out of the workbook's list (into the archive)."""
         return self.set_calendar(user, self.meetings(), roll=True)
+
+    #: who the automatic roll is, where a change is noted with its author
+    AUTO_USER = "otomatik"
+
+    def auto_roll(self) -> Optional[Dict[str, Any]]:
+        """A meeting that has passed leaves the workbook's list by itself: the list starts at the next meeting, which
+        is MPC1, the one that passed goes to the archive, and what was typed per meeting (the workbook's steps,
+        every user's own, saved scenarios) moves with its meeting - what "Geçen toplantıları arşivle" does.  The
+        service calls it when it starts and when the day turns.  ``None`` when no meeting of the list has passed."""
+        try:
+            if not self.calendar()["passed_in_list"]:
+                return None
+            res = self.svc.et.call(self._set_calendar, self.AUTO_USER, self.meetings(), True)
+        except Exception as exc:  # noqa: BLE001 - the list stays as it is; the settings page says why
+            self.state["autoroll_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+            return None
+        self.state["autoroll_error"] = ""
+        self._snap = None
+        self.store.put("mpc.autoroll", {"at": _dt.datetime.now().replace(microsecond=0).isoformat(sep=" "),
+                                        "rolled": res["rolled"], "first": res["first"]})
+        self.svc.bump()
+        self.kick()
+        return res
 
     def _set_calendar(self, user: str, wanted: List[str], roll: bool) -> Dict[str, Any]:
         from .service import ServiceError, _to_json

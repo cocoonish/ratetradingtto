@@ -1,7 +1,7 @@
 // Pages built on the dashboard's own history: the end-of-day change matrix, the pricing of every MPC meeting
 // over time, and the settings behind them (the meeting calendar).
 import { api } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, modal } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, modal, copyText } from '../ui.js';
 import { Grid, copyGrid } from '../grid.js';
 import { Chart } from '../chart.js';
 import { num, isoToTr } from '../format.js';
@@ -856,18 +856,29 @@ export class SettingsPage {
       const inputs = this.calTable.querySelectorAll('input.date');
       if (inputs.length) { inputs[inputs.length - 1].focus(); inputs[inputs.length - 1].select(); }
     });
-    const paste = h('button', { class: 'btn', type: 'button', title: 'Excel\'den kopyalanan tarih sütununu yapıştır' }, 'Toplu yapıştır…');
+    const paste = h('button', { class: 'btn', type: 'button',
+      title: 'Excel\'den kopyalanan tarih sütununu yapıştır: açıklanan tarihlerle düzelt, listeye ekle ya da gelecek toplantıların yerine koy' },
+    'Toplu yapıştır…');
     paste.addEventListener('click', () => this.bulk());
+    const copy = h('button', { class: 'btn', type: 'button', title: 'Tablodaki tarihleri (gg.aa.yyyy, her satıra bir tane) Excel\'e yapıştırmak için kopyala' },
+      'Kopyala');
+    copy.addEventListener('click', () => {
+      const dates = this.dates().slice().sort();
+      copyText(dates.map(isoToTr).join('\n'), 'Takvim kopyalandı (' + dates.length + ' tarih)');
+    });
     this.rollBtn = h('button', { class: 'btn', type: 'button',
-      title: 'Geçen toplantıları OIS sayfasındaki listeden arşive al; liste sıradaki toplantıdan başlar. Senaryo adımları toplantılarıyla birlikte kayar.' },
+      title: 'Geçen toplantıları OIS sayfasındaki listeden arşive al; liste sıradaki toplantıdan başlar. Senaryo adımları toplantılarıyla birlikte kayar. '
+        + 'Dashboard bunu açılışta ve gün dönünce kendiliğinden de yapar.' },
     'Geçen toplantıları arşivle');
     this.rollBtn.addEventListener('click', () => this.roll());
     this.calPanel.body.appendChild(h('div', { class: 'set-body' }, this.calInfo,
-      h('div', { class: 'set-actions' }, add, paste, this.rollBtn, h('span', { class: 'grow' }), this.undoBtn, this.saveBtn),
+      h('div', { class: 'set-actions' }, add, paste, copy, this.rollBtn, h('span', { class: 'grow' }), this.undoBtn, this.saveBtn),
       h('div', { class: 'set-scroll' }, this.calTable)));
     this.calPanel.setNote('Toplantı tarihleri herkes için ortaktır ve OIS · PPK sayfasındaki listeyle (OIS_MAIN!P10:P89) aynıdır. Bir tarih değiştiğinde ya da '
       + 'liste kaydırıldığında her kullanıcının senaryo adımları (U:W) ve kayıtlı senaryoları toplantısıyla birlikte taşınır; '
-      + 'PPK fiyatlama geçmişi yeni takvimle arka planda yeniden hesaplanır.');
+      + 'PPK fiyatlama geçmişi yeni takvimle arka planda yeniden hesaplanır. Bir toplantı geçince (tarihi OIS spot valöründen önce '
+      + 'kalınca) liste açılışta ve gün dönünce kendiliğinden kayar: MPC1 her zaman sıradaki toplantıdır. Açıklanan yeni tarihler '
+      + '"Toplu yapıştır… → Açıklanan tarihlerle düzelt" ile tek seferde girilir.');
 
     // ---- history
     this.histPanel = panel('Tarihçe', { wide: true, id: 'history' });
@@ -989,6 +1000,17 @@ export class SettingsPage {
     this.calInfo.appendChild(h('span', null, 'Bugün ', h('b', null, isoToTr(cal.today)), ' · OIS spot ', h('b', null, isoToTr(spot)),
       ' · sıradaki toplantı ', h('b', null, cal.next ? isoToTr(cal.next) : '—'), ' · listede ', h('b', null, String(inList)), ' / ' + cal.slots + ' toplantı',
       cal.passed_in_list ? h('span', { class: 'warn-text' }, ' · ' + cal.passed_in_list + ' toplantı geçti, hâlâ listede') : null));
+    const auto = cal.autoroll;
+    if (auto && auto.rolled && auto.rolled.length) {
+      this.calInfo.appendChild(h('span', { class: 'muted' }, 'Son otomatik kaydırma: ' + auto.rolled.map(isoToTr).join(', ')
+        + ' arşive alındı, MPC1 ' + isoToTr(auto.first) + ' (' + isoToTr(auto.at.slice(0, 10)) + ' ' + auto.at.slice(11, 16) + ')'));
+    }
+    if (cal.autoroll_error) this.calInfo.appendChild(h('span', { class: 'warn-text' }, 'Otomatik kaydırma yapılamadı: ' + cal.autoroll_error));
+    if (this.dirty) {
+      // a new calendar makes every day of the meeting pricing history compute again: one save, one recalculation
+      this.calInfo.appendChild(h('span', { class: 'warn-text' }, 'Kaydedince PPK fiyatlama geçmişi yeni takvimle arka planda yeniden hesaplanır'
+        + (cal.history_days ? ' (~' + cal.history_days + ' gün)' : '') + ' – düzeltmeleri tek kayıtta yapın'));
+    }
     this.rollBtn.disabled = !cal.passed_in_list || this.dirty;
     this.saveBtn.disabled = !this.dirty;
     this.undoBtn.disabled = !this.dirty;
@@ -1078,16 +1100,34 @@ export class SettingsPage {
     if (ok) this.save(true);
   }
 
+  /** Paste a column of dates.  The server works out what it does to the list being edited (the same pairing that
+   * saving uses to carry the steps with their meetings); the table shows it, nothing is kept until "Kaydet". */
   bulk() {
-    const m = modal({ title: 'Toplantı tarihlerini yapıştır', width: 460 });
+    const m = modal({ title: 'Toplantı tarihlerini yapıştır', width: 520 });
     const area = h('textarea', { class: 'inp', rows: '12', style: { width: '100%', fontFamily: 'var(--mono)' },
-      placeholder: '10.12.2026\n21.01.2027\n18.03.2027\n…' });
-    const mode = h('select', { class: 'inp' }, h('option', { value: 'merge' }, 'Listeye ekle'), h('option', { value: 'future' }, 'Gelecek toplantıların yerine koy'));
+      placeholder: '14.01.2027\n11.03.2027\n22.04.2027\n…' });
+    const mode = h('select', { class: 'inp' },
+      h('option', { value: 'correct' }, 'Açıklanan tarihlerle düzelt (diğerleri kalır)'),
+      h('option', { value: 'merge' }, 'Listeye ekle'),
+      h('option', { value: 'future' }, 'Gelecek toplantıların yerine koy'));
+    const hints = {
+      correct: 'Her tarih, bugünden sonraki toplantılardan en çok 45 gün uzaktaki en yakınının tarihini düzeltir (sıra korunur, tarihler '
+        + 'olabildiğince az kayar); yakınında toplantı olmayan tarih yeni toplantı olarak eklenir. Açıklanmamış toplantılar (ör. sonraki '
+        + 'yıllar) ve geçmiş olduğu gibi kalır; senaryo adımları toplantısıyla taşınır.',
+      merge: 'Listede olmayan tarihler eklenir; eski tarihler de kalır (yanlış olanları ✕ ile silin).',
+      future: 'Bugünden sonraki bütün toplantılar silinir, yerine yapıştırılanlar gelir: yapıştırılmayan toplantılar ve onlara yazılmış '
+        + 'senaryo adımları gider.',
+    };
+    const hint = h('p', { class: 'muted', style: { margin: '6px 0 0', fontSize: '12.5px' } });
+    const showHint = () => { hint.textContent = hints[mode.value]; };
+    mode.addEventListener('change', showHint);
+    showHint();
     m.body.appendChild(h('p', { class: 'muted', style: { marginTop: '0' } }, 'Her satıra bir tarih (Excel\'den bir sütun kopyalayıp yapıştırabilirsiniz).'));
     m.body.appendChild(area);
-    m.body.appendChild(h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Ne yapılsın'), mode));
+    m.body.appendChild(h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', null, 'Ne yapılsın'), mode, hint));
     m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
-    m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', onclick: () => {
+    const apply = h('button', { class: 'btn primary', type: 'button' }, 'Uygula');
+    apply.addEventListener('click', async () => {
       const out = [];
       for (const raw of area.value.split(/[\n\r\t;]+/)) {
         const s = raw.trim();
@@ -1097,14 +1137,49 @@ export class SettingsPage {
         out.push(iso);
       }
       if (!out.length) { toast('Tarih bulunamadı', 'err'); return; }
-      if (mode.value === 'future') this.rows = this.rows.filter((r) => r.date < this.cal.spot);
-      const have = new Set(this.rows.map((r) => r.date));
-      for (const iso of out) if (!have.has(iso)) { this.rows.push({ date: iso, was: null }); have.add(iso); }
-      this.dirty = true;
-      m.close();
-      this.renderCalendar();
-    } }, 'Uygula'));
+      apply.disabled = true;
+      try {
+        const res = await api.post('/api/calendar/preview', { current: this.dates(), dates: out, mode: mode.value });
+        if (mode.value === 'future' && res.removed.length) {
+          const list = res.removed.slice(0, 6).map(isoToTr).join(', ') + (res.removed.length > 6 ? ' …' : '');
+          const ok = await confirmDialog('Gelecek toplantıların yerine koy',
+            'Gelecekteki ' + (res.removed.length + res.unchanged) + ' toplantı silinip yerine ' + (res.added.length + res.unchanged)
+            + ' tarih konacak: ' + res.removed.length + ' toplantı (' + list + ') ve onlara yazılmış senaryo adımları gidecek. '
+            + 'Kaydetmeden önce tabloda görebilirsiniz.', 'Yerine koy', true);
+          if (!ok) return;
+        }
+        m.close();
+        this.applyPaste(res);
+      } catch (err) {
+        errorToast(err);
+      } finally {
+        apply.disabled = false;
+      }
+    });
+    m.foot.appendChild(apply);
     area.focus();
+  }
+
+  /** What a pasted column does, on the table: corrected rows keep where they came from ("önce …"). */
+  applyPaste(res) {
+    const byDate = new Map(this.rows.map((r) => [r.date, r]));
+    for (const [was, now] of res.corrected) {
+      const row = byDate.get(was);
+      if (row) row.date = now;
+    }
+    const gone = new Set(res.removed);
+    this.rows = this.rows.filter((r) => !gone.has(r.date));
+    for (const d of res.added) this.rows.push({ date: d, was: null });
+    const bits = [];
+    if (res.corrected.length) bits.push(res.corrected.length + ' tarih düzeltildi');
+    if (res.added.length) bits.push(res.added.length + ' yeni toplantı');
+    if (res.removed.length) bits.push(res.removed.length + ' toplantı çıkarıldı');
+    if (res.unchanged) bits.push(res.unchanged + ' tarih zaten doğruydu');
+    if (res.skipped.length) bits.push('bugünden önceki ' + res.skipped.length + ' tarih yok sayıldı (' + res.skipped.map(isoToTr).join(', ') + ')');
+    const changed = res.corrected.length + res.added.length + res.removed.length;
+    if (changed) this.dirty = true;
+    toast((bits.join(' · ') || 'Değişiklik yok') + (changed ? ' – kaydetmeden önce tabloyu kontrol edin' : ''), changed ? 'ok' : '', 6500);
+    this.renderCalendar();
   }
 
   async sync(recompute) {

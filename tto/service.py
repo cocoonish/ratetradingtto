@@ -333,6 +333,7 @@ class Service(object):
                 drain = getattr(self.provider, "drain_changes", None)
                 keys = drain() if drain else []
                 day = _dt.date.today()
+                first = last_day is None
                 day_changed = last_day is not None and day != last_day
                 last_day = day
                 if keys or day_changed or self.mode == "live":
@@ -341,6 +342,9 @@ class Service(object):
                         if day_changed:
                             self.et.call(self._sync_blotter)
                         self.bump()
+                if first or day_changed:
+                    # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
+                    self.history.auto_roll()
             except Exception:  # noqa: BLE001 - the loop must survive anything
                 continue
 
