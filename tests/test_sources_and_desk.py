@@ -3,6 +3,8 @@ of the Forward page, the gold calculator's free column, z-scores of the carry ta
 board reset / ticked delete / the trades page's entry over a period."""
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -401,6 +403,31 @@ def test_the_board_is_reset_and_the_log_keeps_its_lines(tmp_path):
             assert {r["label"] for r in back} == {"1Y", "2Y"}
             one = s.broker(u, day)["rows"][0]["id"]
             assert client.post("/api/broker/delete", json={"ids": [one]}, headers=hdr).json() == {"deleted": 1}
+    finally:
+        s.stop()
+
+
+def test_a_chat_of_the_day_before_goes_to_its_day_past_todays_reset(tmp_path):
+    # yesterday's Bloomberg IB chat pasted today, the paste's date left at today: the chat's own day heading wins, so
+    # the lines are yesterday's - on yesterday's board, out of reach of today's reset - and the reply's quote of a
+    # message is not kept a second time
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Broker Dün")["user"]
+        day = s.today_iso()
+        s.broker_reset(u, day)
+        y = dt.date.fromisoformat(day) - dt.timedelta(days=1)
+        head = "%s, %s %d, %d" % ("Monday Tuesday Wednesday Thursday Friday Saturday Sunday".split()[y.weekday()],
+                                  "January February March April May June July August September October November December".split()[y.month - 1],
+                                  y.day, y.year)
+        chat = "\n".join([head, "SAFA YILMAZ", "09:00:00 2y ois 34.00/34.20", "EVREN DIKME",
+                          "%s 09:00:00 SAFA YILMAZ: 2y ois 34.00/34.20" % y.strftime("%m/%d/%Y"), "09:01:00 1y ois 35.00/35.10"])
+        res = s.broker_add(u, chat, day, "", None)
+        assert res["dates"] == [y.isoformat()] and res["saved"] == 2
+        back = s.broker(u, y.isoformat())
+        assert [(r["label"], r["bid"], r["ask"]) for r in back["board"]] == [("1Y", 35.0, 35.1), ("2Y", 34.0, 34.2)] and back["resets"] == []
+        assert [(q["time"], q["sender"], q["label"]) for q in back["rows"]] == [("09:00:00", "SAFA YILMAZ", "2Y"), ("09:01:00", "EVREN DIKME", "1Y")]
+        assert s.broker(u, day)["rows"] == [] and s.broker(u, day)["board"] == []
     finally:
         s.stop()
 

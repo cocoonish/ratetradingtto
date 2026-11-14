@@ -433,6 +433,14 @@ enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlar�
   ya da tek başına bir isim satırı göndereni belirler; `13 Nov 2026`, `13.11.2026` gibi bir tarih satırı (ya da
   saatin önündeki tarih) altındaki mesajların gününü. Saati olmayan mesaja **girildiği an** yazılır (listede soluk). "Kaynak" kutusuna yazılan ad (örn.
   broker'ın kurumu) her satırla saklanır.
+  Bloomberg IB'nin gün başlığı da (`Friday, November 13, 2026`; `13 Kasım 2026 Cuma` gibi haftanın günüyle
+  yazılanlar da) günü belirler, yani dünün chat'i bugün yapıştırılsa da kendi gününe kaydedilir ("Tarih" kutusu
+  yalnızca chat'te gün yazmıyorsa kullanılır). Haftanın günü tarihe uymuyorsa ya da tarih yarından sonraysa satır gün
+  sayılmaz: tek başına yazılmış `15/03/2028` bir kâğıttır. IB'de bir yanıtın üstünde yanıtlanan mesaj tarihi, saati
+  ve yazanıyla alıntılanır (`11/13/2026 15:34:22 İSİM: mesaj`). İsimlerin kendi satırında, mesajların saatle
+  başladığı böyle bir chat'te (ya da hemen altında saatle başlayan yanıt satırı varken) bu satır yeni mesaj sayılmaz:
+  yeniden kaydedilmez, altındaki satırların gününü ve yanıtın kimden geldiğini değiştirmez. Her satırı tarih, saat
+  ve yazanıyla gelen bir dışa aktarım ise (üstünde bir isim satırı olsa da) satır satır okunur.
 * **İsimler → kaynak ve taraf.** "İsimler · kaynaklar" listesi her gönderen adını bir kaynağa (ICAP, Tullett …) ve
   tarafa bağlar: **Broker** ya da **Biz** (masanın kendisi). Liste herkes için ortaktır ve saklanır; yapıştırılan
   chat'teki yeni isimler kutunun altında hemen atanabilir. Böylece yapıştırılan satırın bizim fiyatımız mı broker
@@ -860,6 +868,7 @@ Her satırda spread (bp), Δ1G / Δ1H / Δ1A (1 / 5 / 21 kapanış önceye göre
 kapanış) ortalama, σ, **z-skoru**, min / maks ve yüzdelik (kapanışların ne kadarı bugünkünün altında), kapanış
 sayısı. 📈 spread'i çizer: kesikli çizgiler pencerenin ortalaması ve ±2σ. Kayıtlı veri modunda yalnızca dosyanın son
 ayı vardır (XCCY 1Y ve 1Y'ye kadar OIS); Bloomberg bağlıyken offshore ve OIS bir yıl geriye doldurulur.
+Vadeye / kontrata tıklamak da o spread'i çizer: grafik görünür alana gelir, çizilen satır tabloda işaretlenir.
 
 **Ayarlar · Toplantı takvimi** (Araçlar grubu). Tek liste: yapılan toplantılar (arşiv) ve OIS sayfasındaki 80
 toplantı (`OIS_MAIN!P10:P89`; aynı hücreler, herkes için ortak). Gerçek tarih belli olunca satırdaki tarih

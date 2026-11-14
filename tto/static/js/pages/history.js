@@ -385,20 +385,40 @@ export class SpreadsPage extends HistoryPage {
     this.chartHost = h('div');
     this.chartPanel.body.appendChild(this.chartHost);
     this.host.appendChild(h('div', { class: 'panels' }, this.chartPanel.el, this.offPanel.el, this.viopPanel.el));
+    // a click on a row's tenor / contract draws its spread, as the row's 📈 does (``ids``: the spread of each table row)
+    for (const p of [this.offPanel, this.viopPanel]) {
+      p.ids = [];
+      p.body.addEventListener('click', (e) => {
+        const td = e.target.closest('td.chartlink');
+        const id = td ? p.ids[td.__i] : null;
+        if (id) this.pick(id);
+      });
+    }
   }
 
-  /** One spread as a row: its level and moves, then where it stands against the window's closes. */
+  /** Draw a spread in the chart and bring the chart into view - scrolling the page (the host) up or down only:
+   *  scrollIntoView would also move a page wider than the window sideways, its menu out of sight. */
+  pick(id) {
+    this.picked = id;
+    this.render();
+    const top = this.chartPanel.el.getBoundingClientRect().top - this.host.getBoundingClientRect().top;
+    if (top < 0 || top > this.host.clientHeight - 80) this.host.scrollBy({ top: top - 14, behavior: 'smooth' });
+  }
+
+  /** One spread as a row: its level and moves, then where it stands against the window's closes (the drawn one marked). */
   cells(r, sc, first) {
     const b = (r.bands || {})[String(this.window)] || {};
     const zc = isNum(b.z) ? { t: (b.z > 0 ? '+' : '') + num(b.z, 2, false), v: b.z, k: 'n', b: Math.abs(b.z) >= 2 ? 1 : 0,
       heat: heat(b.z, 3), tip: b.n + ' kapanış: ortalama ' + num(b.mean, 1, false) + ' bp, σ ' + num(b.sd, 1, false) + ' bp' } : EMPTY();
     const lv = { t: num(r.level, 1, false), v: r.level, k: 'n', b: 1,
       tip: r.live ? 'Canlı (bugünün kotası)' : isoToTr(r.day) + ' kapanışı (canlı kota yok)', c: r.live ? undefined : 'mute' };
-    const pick = { t: '', k: '', cls: 'act', act: { id: 'chart', label: '📈', title: 'Grafikte göster', fn: () => { this.picked = r.id; this.render(); } } };
-    return first.concat([lv, D(r.d1, sc, 1, r.d1_from, r.d1_day, 1), D(r.w1, sc, 1, r.w1_from, r.w1_day, 1), D(r.m1, sc, 1, r.m1_from, r.m1_day, 1),
+    const pick = { t: '', k: '', cls: 'act', act: { id: 'chart', label: '📈', title: 'Grafikte göster', fn: () => this.pick(r.id) } };
+    const out = first.concat([lv, D(r.d1, sc, 1, r.d1_from, r.d1_day, 1), D(r.w1, sc, 1, r.w1_from, r.w1_day, 1), D(r.m1, sc, 1, r.m1_from, r.m1_day, 1),
       N(b.mean, 1), N(b.sd, 1), zc, N(b.min, 1), N(b.max, 1),
       isNum(b.pct) ? { t: '%' + num(b.pct * 100, 0, false), v: b.pct, k: 'n', tip: 'Son ' + b.n + ' kapanışın ne kadarı bugünkünün altında' } : EMPTY(),
       { t: String(r.n), k: 'n', tip: isoToTr(r.first) + ' – ' + isoToTr(r.day) }, pick]);
+    if (r.id === this.picked) for (const c of out) c.cls = ((c.cls || '') + ' pick').trim();
+    return out;
   }
 
   render() {
@@ -406,6 +426,9 @@ export class SpreadsPage extends HistoryPage {
     const W = this.window;
     const tail = ['Spread', 'Δ1G', 'Δ1H', 'Δ1A', 'Ort. ' + W + 'g', 'σ ' + W + 'g', 'z ' + W + 'g', 'Min', 'Maks', 'Yüzdelik', 'Kapanış', ''].map((t) => HD(t));
     const all = d.off.concat(d.viop);
+    // the spread drawn: the one picked, else the first with a history
+    const row = all.find((r) => r.id === this.picked) || all.find((r) => r.n > 1) || all[0];
+    if (row) this.picked = row.id;
     const notes = [];
     if (!all.some((r) => r.n > 1)) {
       notes.push(d.live ? 'Henüz kapanış geçmişi yok – Bloomberg geçmişi çekiliyor ya da bu seriler için geçmiş gelmedi (Ayarlar → Tarihçe serileri).'
@@ -419,11 +442,12 @@ export class SpreadsPage extends HistoryPage {
     const so = scaleOf(d.off.flatMap((r) => [r.d1, r.w1, r.m1]), 10);
     const offRows = [[HD('Vade'), HD('Tür'), HD('Offshore %'), HD('OIS %')].concat(tail)];
     for (const r of d.off) {
-      offRows.push(this.cells(r, so, [TXT(r.tenor, { cls: 'lab', b: 1 }), TXT(r.kind, { c: 'mute' }),
+      offRows.push(this.cells(r, so, [TXT(r.tenor, { cls: 'lab chartlink', b: 1, tip: 'Grafikte göster' }), TXT(r.kind, { c: 'mute' }),
         N(r.off_now, 3, { tip: 'Offshore ' + r.off_label + ': kullanılan kaynağın bid / ask ortası (Ayarlar → Veri kaynakları)' }),
         N(r.ois_now, 3, { tip: 'TRY OIS ' + r.ois_label + ': kullanılan kaynak' })]));
     }
     if (!d.off.length) offRows.push([TXT('Offshore ve OIS\'in ortak vadesi için ne kapanış ne canlı kota var', { cs: 16 })].concat(Array.from({ length: 15 }, SKIP)));
+    this.offPanel.ids = [null].concat(d.off.map((r) => r.id));
     this.offPanel.setData({ sheet: '', rows: offRows });
     this.offPanel.setNote('Offshore: 9 aya kadar FX swap ima getirisi (ICAP), 1 yıldan itibaren XCCY. Kapanışlar Gün Sonu Matrisi\'nin '
       + 'serileridir (kaynak sırası: ' + ((d.history && d.history.source) || 'Ayarlar') + '); spread yalnızca iki eğrinin de kapanışı olan günlerden '
@@ -433,21 +457,21 @@ export class SpreadsPage extends HistoryPage {
     const sv = scaleOf(d.viop.flatMap((r) => [r.d1, r.w1, r.m1]), 10);
     const viopRows = [[HD('Kontrat'), HD('Vadeye gün'), HD('VİOP ima %'), HD('OIS %')].concat(tail)];
     for (const r of d.viop) {
-      viopRows.push(this.cells(r, sv, [TXT(r.tenor, { cls: 'lab', b: 1, tip: r.ticker + (r.expiry ? ' · vade ' + isoToTr(r.expiry) : '') }),
+      viopRows.push(this.cells(r, sv, [TXT(r.tenor, { cls: 'lab chartlink', b: 1,
+        tip: r.ticker + (r.expiry ? ' · vade ' + isoToTr(r.expiry) : '') + ' · grafikte göster' }),
         N(r.to_expiry, 0), N(r.imp_now, 2, { tip: 'Bugünün son fiyatından ima TRY faizi (VİOP sayfasının formülü)' }),
         N(r.ois_now, 2, { tip: 'Aynı güne OIS (ACT/360) – VİOP sayfasının baz formülünün karşılaştırdığı' })]));
     }
     if (!d.viop.length) viopRows.push([TXT('VİOP geçmiş grafiğinde kontrat seçili değil', { cs: 16 })].concat(Array.from({ length: 15 }, SKIP)));
+    this.viopPanel.ids = [null].concat(d.viop.map((r) => r.id));
     this.viopPanel.setData({ sheet: '', rows: viopRows });
     this.viopPanel.setNote('Kontratlar ve geçmişin uzunluğu VİOP sayfasındaki VİOP GEÇMİŞİ tablosundan (Çizgi 1–6; Geçmiş '
       + (isNum(d.viop_days) ? num(d.viop_days, 0) + ' iş günü' : '—') + '). Baz: VİOP sayfasının kendi formülü (ima TRY − aynı vadeye OIS, bp); '
       + 'son nokta bugünün canlı son fiyatı.');
 
     // ---- the chart of the one picked
-    const row = all.find((r) => r.id === this.picked) || all.find((r) => r.n > 1) || all[0];
     this.chartPanel.el.classList.toggle('hidden', !row);
     if (!row) return;
-    this.picked = row.id;
     const name = (row.id.startsWith('viop:') ? 'VİOP ' : 'Offshore ') + row.tenor + ' − OIS';
     const b = (row.bands || {})[String(W)] || {};
     const n = row.days.length;
@@ -467,7 +491,7 @@ export class SpreadsPage extends HistoryPage {
     this.chartPanel.title.textContent = name + ' (bp)' + (n > 1 ? ' · ' + isoToTr(row.days[0]) + ' – ' + isoToTr(row.days[n - 1]) : '');
     this.chartPanel.setNote(isNum(b.z) ? 'Şu an ' + num(row.level, 1, false) + ' bp: son ' + W + ' kapanışın ortalaması ' + num(b.mean, 1, false)
       + ' bp, σ ' + num(b.sd, 1, false) + ' bp → z ' + (b.z > 0 ? '+' : '') + num(b.z, 2, false) + '. Kesikli çizgiler: ortalama ve ±2σ.'
-      : 'z-skoru için en az 20 kapanış gerekir. Tablodaki 📈 ile başka bir spread çizilir.');
+      : 'z-skoru için en az 20 kapanış gerekir. Tabloda vadeye / kontrata (ya da 📈\'e) tıklayınca o spread çizilir.');
   }
 }
 
