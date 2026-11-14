@@ -175,18 +175,24 @@ Senaryolar, kişisel girdiler ve kayıtlar bu hesapla saklanır.
   gider (HTTPS ayrı bir iş).
 
 **Sayfalar.** Masa, OIS · PPK, Forward, VİOP, Borsa Swap, Carry & Roll, TM OIS, DİBS RV, DİBS ASW, Manuel Tahvil,
-Bulk Bond, DV01 Risk, USD · FOMC, Hesaplayıcılar, USDTRY IYIX, Motor. Ek olarak **İzleme · Alarmlar** (her kullanıcının
+Bulk Bond, DV01 Risk, USD · FOMC, Hesaplayıcılar, Motor. Ek olarak **İzleme · Alarmlar** (her kullanıcının
 izleme listesi: VİOP spread'i, kâğıt ASW'i, OIS, offshore, ifadeler, hücreler; z-skoru; seviye, hareket ve z-skoru
 alarmları; günün masa notları), **Eğri Hareketi** (OIS, offshore, VİOP ve DİBS'in önceki kapanıştan / açılıştan /
 referanstan değişimi, ısı haritası), **Tüm Kâğıtlar** (masanın bütün
 TRY DİBS'leri; ★ ile trading listesine), **DİBS Trading** (trading listesinin özeti, T0 / T1 / T2 fiyatları, son
-işlemler, ima repo, günün işlemleri), **Günlük İşlemler**,
+işlemler, ima repo, günün işlemleri), **Hazine İhalesi** (üç kâğıt için ihaleye gönderilecek kirli fiyat ve ihale
+sonucu), **Günlük İşlemler**,
 **Broker Chat** (broker'ların chat'te yazdığı kotalar), **Realized Vol · Carry** (yazılan enstrümanın gerçekleşen
 oynaklığı ve fly'ların carry / vol grafiği), **Spread Geçmişi** (offshore − OIS vade bazında, VİOP − OIS kontrat
 bazında; z-skoru, aralık, grafik), **Spot / FX** ve **FX Vol İzleme** (FX opsiyon piyasası; [aşağıda](#fx-spot--fx-ve-vol-izleme-sayfaları)) ve
 herhangi bir sayfanın herhangi bir aralığını (formülüyle birlikte) gösteren **Sayfa gezgini**. Excel'deki "MOBIL MK",
-"Ivır Zıvır" ve "YP DIBS" sayfalarının dashboard'da sayfası yoktur (masa kullanmıyor); hücreleri hesaplanmaya devam
-eder ve Sayfa gezgini'nden bakılabilir (Masa'daki kısayollardan sayfası olmayan bir sayfaya giden gösterilmez). Masa sayfasının üstündeki **Kısayollar** Excel'deki köprülerin aynısıdır: tıklayınca
+"Ivır Zıvır", "YP DIBS" ve "USDTRY IYIX" sayfaları masa kullanmadığı için **kaldırıldı**: kitap yüklenirken modelden
+çıkarılır, hesaplanmaz, Bloomberg'e sorulmaz (YP DIBS'in 18, Ivır Zıvır'ın 21, USDTRY IYIX'in 6 `BDP` çağrısı; IYIX'in
+Refinitiv `RtGet` çağrıları da) ve Sayfa gezgini'nde yoktur. Başka
+hiçbir sayfa bunlara başvurmaz; Excel dosyası ve model dosyası onları yine tutar (kitap yeniden içe aktarılsa da
+dashboard'a gelmezler). Dosyanın ileride değişen bir sürümünde bunlardan birine başka bir formül başvurursa o sayfa
+kaldırılmaz, başlangıçta günlüğe uyarı yazılır (`tto/books.py`, `REMOVED_SHEETS`). Ivır Zıvır'daki ihale hesabı
+**Hazine İhalesi** sayfasına taşındı. Masa sayfasının üstündeki **Kısayollar** Excel'deki köprülerin aynısıdır: tıklayınca
 ilgili sayfa açılır ve köprünün gösterdiği tablo ekrana gelir.
 
 **Sekmeler.** Excel'de bir sayfada onlarca tablo yan yana ve alt alta durur; aradığını bulmak için sağa sola
@@ -622,6 +628,36 @@ fiyatlandığı valör (dosyanın değeri) görünür, diğer valörler canlıda
   chat satırları, günün işlemleri, DİBS RV satırı (getiri, ASW, sinyal, süre, DV01, carry, gün içi aralık). Listede
   olmayan kâğıtta katalog bilgisi ve "DİBS RV listesine ekle" düğmesi.
 
+**Hazine İhalesi** (Tahvil grubunda; `EK_IHALE`). Ivır Zıvır sayfasındaki ihale hesabının yerini alır: ihaleye
+gönderilecek **kirli fiyat** ve ihale bitince **sonuç**, üç kâğıt için.
+
+* **Valör ve kâğıt.** Üstte ortak **ihale valörü**; her kâğıda ISIN ve isterse kendi valörü yazılır. Kâğıdın adı, türü
+  (sabit kuponlu / TLREF / TÜFE / bono), kuponu ve vadesi ile **o valördeki** birikmiş faiz, önceki ve sonraki kupon
+  tarihi ve işlemiş gün sayısı Bloomberg'den gelir (`INT_ACC`, `PREV_CPN_DT`, `NXT_CPN_DT`, `DAYS_ACC`; `SETTLE_DT` =
+  valör). Birikmiş faiz **burada hesaplanmaz**: valör kupon gününe denk gelirse Bloomberg birikmişi 0 verir ve sonraki
+  kupona geçer, TLREF'in o dönemki kuponunu yalnız Bloomberg bilir. Bloomberg yanıt vermezse kirli fiyat çıkmaz
+  (satırın üstünde nedeni yazar). Valörsüz kirli fiyat yoktur. (Excel'deki blokta ikinci kâğıdın ihale sonucundan
+  başka bir kâğıdın birikmiş faizi düşülüyordu; burada her kâğıt yalnız kendi birikmişini kullanır.)
+* **Teklifler** (kâğıt başına 5 satır). Nominal ve şu üçünden biri yazılır: **temiz fiyat**, **basit** ya da **bileşik
+  getiri** (birden çoğu yazılırsa önce temiz, sonra basit; satır hangisini kullandığını yazar). Satır öteki ikisini,
+  birikmişi ve **gönderilecek kirli fiyatı** (temiz + birikmiş, 3 haneye yuvarlanmış) ve TL tutarını (nominal × kirli /
+  100) verir; altında toplam nominal, nominal ağırlıklı ortalama kirli / temiz fiyat, bunun getirileri ve toplam tutar.
+* **Getiriler** DİBS RV'nin "BIST" tanımıyla, iki sayfa aynı getiriyi göstersin diye: sabit kuponluda basit getiri,
+  kuponları dönem başına `(1 + y/f)` ile iskonto eden getiridir (dönemin kalan kesri Bloomberg'in önceki / sonraki
+  kupon tarihinden; Newton yöntemi kupondan başlar), bileşik `= (1 + basit/f)^f − 1`; bono ve kuponsuzda basit
+  `= (100/P − 1)·365/gün`, bileşik `= (100/P)^(365/gün) − 1`. Getiriden fiyat aynı formüllerin tersidir. **TLREF**'te
+  getiri yoktur (kirli fiyat ve ihaledeki yer çıkar). **TÜFE**'ye endeksli kâğıt reel fiyat ve reel getiriyle; tutar
+  Bloomberg'in valördeki endeks oranıyla (`IDX_RATIO`) TL'ye çevrilir.
+* **İhale sonrası.** Açıklanan **asgari, ortalama ve azami** fiyat kirli olarak yazılır (teklif kirliyle verilir): üçünün
+  temiz karşılığı ve getirileri; her teklif için **Gerçekleşti / Asgari fiyatta · kısmi olabilir / Gerçekleşmedi**
+  (çok fiyatlı ihale: asgari fiyatın üstündeki teklif kendi fiyatından gerçekleşir), ortalamaya fark (fiyat ve basit
+  getiride bp), min–maks aralığındaki yeri; asgari fiyattan kısmen karşılanan teklifin **gerçekleşen nominali**
+  yazılabilir. Gerçekleşen tekliflerden **ortalama kirli ve temiz fiyatınız**, bunun basit ve bileşik getirisi, ihale
+  ortalamasına farkı ve tutar; altında tek cümlelik özet.
+
+Girdiler masa için ortaktır. Bloomberg yükü kâğıt başına bir avuç `BDP` (valör değişince yeniden); `BDH` yok. Kayıtlı
+veri modunda Bloomberg yanıtı olmadığından sayfa boş kalır.
+
 **Satır eklenen tablolar.** Bulk Bond tablosu 4 yerine 50 kâğıt alır (alttaki satırlar 6. satırın formülleridir,
 ISIN'i boşken hiçbir şey istemez); Forward'daki toplu forward fiyatlama 20 yerine **100 valör** alır (EK_BULK:
 sayfanın kendi formülleri, eğri ve faizler Forward sayfasından; ilk 20 satırın valörü ve manuel TRY faizi Forward
@@ -775,7 +811,7 @@ açılınca o paritenin bütün vadeleri (50 vol) istenir. `--no-history` ile ç
 
 Bunlar Excel dosyalarında yok; ama dashboard'a "kod" olarak değil **Excel formülü** olarak eklendi
 (`tto/extras.py`, kitap yüklenirken modele sayfalar: `EK_FWD`, `EK_XAU`, `EK_VIOP`, `EK_KAYNAK`, `EK_BULK`,
-`EK_DIBS`, `EK_EVREN`, `EK_CARRY`; ASW kitabına `EK_FX`; Bulk Bond sayfasına 7–52. satırlar; Motor ve Carry & Roll'da carry patikası ve gün sayısı formülleri).
+`EK_DIBS`, `EK_EVREN`, `EK_CARRY`, `EK_IHALE`; ASW kitabına `EK_FX`; Bulk Bond sayfasına 7–52. satırlar; Motor ve Carry & Roll'da carry patikası ve gün sayısı formülleri).
 Aynı motor hesaplar, girdilere ve canlı veriye aynı şekilde bağlıdır, durum çubuğunda formülü görünür, Excel'e
 kopyalanabilir.
 
@@ -1075,14 +1111,14 @@ düzeltilir (gg.aa.yyyy), yeni toplantı eklenir, silinir ya da Excel'den bir ta
 
 | Excel'de | Dashboard'da |
 |---|---|
-| Masa sayfasındaki 30 köprü | "Kısayollar" çubuğu: sayfa + tablo |
+| Masa sayfasındaki 30 köprü | "Kısayollar" çubuğu: sayfa + tablo (YP DIBS'e giden köprü o sayfayla birlikte kalktı: 29) |
 | Gizli sütunlar (VİOP C/I/J, Borsa Swap, DİBS RV yardımcı sütunları) | Gösterilmez; "+N gizli sütun" / "Yardımcı tablolar" ile açılır |
 | Daraltılmış satır grupları (OIS'te tüm spread/fly/FRA listeleri, VİOP matrisleri) | Kapalı başlayan paneller (▸ ile açılır, tercih hatırlanır) |
 | Dondurulmuş bölmeler | Başlık satırları ve dondurulmuş sütunlar (DİBS RV A:C, USD A) kaydırırken yerinde kalır |
 | Hücre yorumları (OIS parametreleri, VİOP) | Hücrenin köşesinde kırmızı işaret, üzerine gelince metin |
 | Açılır listeler (veri doğrulama; sabit ya da bir aralıktan okunan) | Hücrede seçenek menüsü |
 | Koşullu biçimler: kural, renk skalası, veri çubuğu | Aynı kurallarla hücre rengi / ısı haritası / çubuk |
-| Ivır Zıvır sayfasındaki resim | Sayfanın dashboard'da sayfası yok; resim okunur ve `/api/image` ile sunulur (resimli bir sayfa gösterilseydi sonunda resim paneli olurdu) |
+| Sayfadaki resimler | Okunur ve `/api/image` ile sunulur; resimli bir sayfa gösterilseydi sonunda resim paneli olurdu (dosyadaki tek resim Ivır Zıvır'daydı, o sayfa kaldırıldı) |
 | `GunSonuArsivle` makrosu | "Gün sonu arşivi (.xlsx)" |
 
 ---
@@ -1272,7 +1308,6 @@ olay bekledi).
   olan işlemin yalnızca günü görünür). Ek kaynak (`BGN`) her kâğıt için fiyat vermeyebilir.
 * **"Gerçekleşen"** (yapılan toplantılarda) TLREF fixingindeki değişimdir, politika faizi kararı değil; TLREF
   politika faizinden ayrıştığı dönemlerde (ör. fonlamanın üst banda kaydığı günler) ikisi farklıdır.
-* **USDTRY IYIX** sayfası Refinitiv `RtGet` kullanıyor; canlı modda `#N/A`.
 * **FX olasılıkları risk-nötrdür** (forward ölçüsü): opsiyon piyasasının fiyatladığı dağılımdır, gerçek dünya tahmini
   değildir; USDTRY'de forward'ın faiz farkı merkezi yukarı taşır. Delta / ATM / prim kuralları tablodaki piyasa
   alışkanlıklarıdır (Bloomberg OVDV ayarlarıyla karşılaştırılmadı); BGN'nin orta kotaları kendi aralarında arbitrajsız
@@ -1319,12 +1354,13 @@ Bloomberg ve ağ gerekmez (~8–11 dk). 868 test (gerçek `blpapi` kuruluysa 7 t
 | `test_fx.py` | Spot / FX ve FX Vol İzleme: ticker adları (Bloomberg'deki gibi), paritelerin kuralları, **USDTRY forward'ının Forward sayfasının "Serbest forward" listesindeki offshore forward'ıyla birebirliği** (her vade), yazılan spotun yalnız sahibini etkilemesi, puandan forward ve TRY çaprazının USD bacaklarından, teslim tarihleri; yüzey (her vadede arbitrajsız, ortalama = forward, artan kuantiller, skew), otomatik seviyeler, SABR / geçersiz model, EURUSD'de spot delta ve iskonto, **kendi kotası** (yalnız sahibine, boşla Bloomberg'e dönüş, hatalı girdiler), pariteler tablosu, **Makro bloğunun istatistikleri** (Δ1G / 1H / 1A, z 3A, pencere z'si, yüzdelik, aralık, boş günün doldurulması), gerçekleşen vol, yuvarlak seviyeler, izleme (tarihçeyle, eklenen parite ve ticker, ortak fiyat kaynağı), parite ayrıntısı (bugün / 1H / 1A önce; RR / BF'siz gün smile'sız), tarihçenin bir yıl geriye sonra son on gün istenmesi, **spot oynayınca smile'ın yeniden kalibre edilmeden taşınması**, `check-fx`, HTTP uçları |
 | `test_volcarry.py` | Realized vol: yazılanın okunuşu, enstrüman seviyesinin günlere göre kuruluşu (yalnızca bütün bacakların kapandığı günler), **vol = günlük değişimlerin standart sapması** (elle hesapla aynı; pencereler, dolmayan pencere, en az beş değişim, kayan vol), forward'ın par eğrisinden bootstrap'i (düz eğri, sınırlar, Excel'in forward'ına 5 bp içinde yakınlık), sayfa satırı; tarihçeye yazılmış kapanışlarla servis (outright / spread / fly / FRA / cross-currency, eksik günü olan vade, geçmişi olmayan vade, pencere seçimi), **carry / vol** (C & R sayfasının 34 fly'ı ve 120 spread'i, sayfanın kendi C+R değerleri, ufukların iş günü sayısı, oran = C+R ÷ (σ·√gün)), **carry patikası** (S1'in Excel'in kaydettiği C & R değerlerini birebir vermesi, Bootstrap'ta ufku vadeye eşit OIS'in carry'sinin ~0 olması, patikadan bağımsız roll, kullanıcıya özel seçim ve ufuklar, hatalı değerler), **Listem** (yazılan OIS vadesi / spread / fly'ın carry'si, FRA ve listede olmayan vade için açıklama), **Spread Geçmişi** (offshore − OIS: iki eğrinin ortak günlerinden seri, canlı kotayla bugünkü seviye, 1G / 1H / 1A değişim, 20 / 60 / 250 kapanışta ortalama, σ, z, aralık, yüzdelik; canlı kota yokken son kapanış; VİOP − OIS kontratları), HTTP uçları |
 | `test_charts.py` | Grafik tanımlarının Excel'den alınışı (renk, çizgi, işaretçi, eksen sınırları, tarih ekseni, bid–ask kutuları), değerlerin Excel kuralıyla çizime verilişi (boşluk, `#N/A`, metin) ve XY grafikleri (nokta etiketleri, sayı / tarih ekseni) |
+| `test_auction.py` | **Hazine İhalesi** (canlı-benzeri bir Bloomberg'le): temiz fiyattan, basit ve bileşik getiriden kirli fiyat (bağımsız bir BIST getiri hesabıyla aynı; 3 haneye yuvarlama, tutar, iki girdide temizin önceliği), nominal ağırlıklı ortalama ve getirisi; açıklanan asgari / ortalama / azami fiyatla gerçekleşen / asgari fiyatta / gerçekleşmeyen teklifler, ortalamaya fark, aralıktaki yer, elle yazılan gerçekleşen nominal, gerçekleşen ortalama ve getirisi; bono, TLREF (getiri yok) ve TÜFE (reel getiri, endeks oranıyla tutar); **birikmiş faizin yalnız Bloomberg'den, valörle** istenmesi (kâğıdın kendi valörü, kupon gününe denk gelen valör, Bloomberg'in yanıt vermediği valörde fiyat çıkmaması, tanınmayan ISIN); sayfa tanımı ve kayıtlı veri modu |
 | `test_extras.py` | Dashboard'un ekledikleri: forward kotasyon matrisi (yedi eğri Masa bloğuyla aynı, bid / ask ayrı spread, puan → spread tersi; **piyasa spread'i**: her vadede offshore ima − OIS, seçilince spread'in yerine geçmesi, EURTRY'nin seçimi izlemesi; **EURTRY matrisi**: aynı tarihte USDTRY ile aynı OIS faizi, EUR faizi ve gününün Masa'nın EURTRY hücreleriyle aynılığı, eğri ve spread'lerin USDTRY'yi izlemesi ve ayrılması, kendi spot'u, puandan spread), altın (`spot·(1+swap·g/360)` kapalı formülü, USD faizinin hesaba girmediği, faiz interpolasyonu, kaynak seçimi, `XAUSR…` ticker'ları ve ticker eki, canlıda `BFXFORWARD`'sız çalışma, VİOP / Forward hücrelerinin beslenmesi, "belli faizle fiyat"; **VİOP XAUTRY hesaplayıcısında her girdinin elle yazılması**: fiyattan ima TRY ve ima altın swap faizi, ima faizle fiyatın geri gelmesi, başka tarih, serbest sütun, silince piyasaya dönüş; **VİOP geçmiş serileri**: canlı-benzeri bir sağlayıcının geçmişiyle ima faiz / baz / OIS'in elle hesapla ve aynı günlerde sayfanın kendi "Baz" değeriyle aynılığı, fiyatı olmayan günün çizilmemesi, grafik verisi, kontrat seçimi, kendi geçmiş penceresi – sayfanın 20 günlük istatistik penceresi değişmeden), bir ekin dosyaya uymadığında dışarıda bırakılması, Borsa O/N karşılıkları ve örnek kotaların RET'e eşitliği, **Borsa'da yalnızca miktarı olan kotanın listelenmesi** (miktarı 0 / eski fiyatlı vadeler, tek taraflı kota, hata hücresi kalmaması), ASW ↔ DİBS RV |
 | `test_workbook_features.py` | Gizli sütunlar, dondurulmuş bölmeler, yorumlar, veri çubukları, kısayollar, resim, aralıktan okunan açılır listeler, Excel yerleşimiyle yapıştırma, gün sonu arşivi (.xlsx yazıcı dahil), hücreden okunan başlık / notlar, şifreli dosyanın içe aktarılması |
 | `test_dv01.py` | DV01 Risk'in sıfır pozisyonla açılması (kova DV01'leri ve yapıştırma alanı; kullanıcının kendi pozisyonu kişisel), VİOP matrisinin DV01 satırları kendi para biriminde (TRY: TL ve USD, USD: USD; kontrat fiyatıyla çevrim, sayfada yeni satır) |
 | `test_auth.py` | **Giriş ve hesaplar**: şifrenin tuzlu özetle saklanması (tur sayısı özetin içinde), önceki sürümün veritabanındaki kullanıcıların şifresiz etkin hesap olarak kalması, **ilk yöneticinin yalnızca bu bilgisayardan** ve yalnızca yönetici yokken oluşturulması (önceki sürümden bir kullanıcı da olabilir, girdileri kalır), yanlış şifre / bilinmeyen isim için aynı yanıt, **5 hatada 1 dakika kilit**, oturumun 7 gün sürmesi ve veritabanında yalnızca özetinin durması, çıkış; **hesap isteği** (bekleyen istekle girilmemesi, önceki sürümün kullanıcısının aynı isimle isteyip onaylanınca girdilerine kavuşması, reddedilen yeni isteğin silinmesi / eski hesabın şifresiz geri dönmesi); **yönetici işleri** (oluşturma, rol verme / alma, son yöneticinin korunması, şifre belirleyince ve hesap kapatınca açık oturumların bitmesi, kendi hesabını kapatamama); kendi şifresini değiştirme; HTTP'de **oturumsuz her `/api` isteğinin 401** alması, çerezin HttpOnly / SameSite=Strict / 7 gün olması, `Authorization: Bearer`, yönetici uçlarının yöneticiye açık olması, kapatılan hesabın tarayıcısının bir sonraki istekte dışarıda kalması; `python -m tto yonetici` komutu |
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma, port kuralı, manuel spot (VİOP ve Masa'nın ilk tablosu, üst şeritten giriş, temizleyince Bloomberg spotu), **elle değer** (formülün üzerine yazma: yalnızca sahibinin, yalnızca ona girdi görünür, silince / "formüle dön"le formül geri gelir, yeniden başlatmada kalır), hesaplayıcıların otomatik dolan girdileri (Forward ve VİOP: tarih, spot, döviz faizi), sekmeli sayfa çıktısı ve arama kutusunun verisi, işlem defterinin aralık / DV01 / tahvil fiyatı uçları |
-| `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda; **sekmeler**: 12'den çok tablosu olan her sayfa sekmeli, her görünen tablo bir sekmede ya da sekmelerin üstünde, sekmeler var olan görünür tabloları gösteriyor, Forward hesaplayıcılarla başlıyor, Hesaplayıcılar sayfasında aynı adlı iki tablo yok; sayfası kaldırılan üç sayfa (formülleri sayılır, Sayfa gezgini'nde durur) |
+| `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda; **sekmeler**: 12'den çok tablosu olan her sayfa sekmeli, her görünen tablo bir sekmede ya da sekmelerin üstünde, sekmeler var olan görünür tabloları gösteriyor, Forward hesaplayıcılarla başlıyor, Hesaplayıcılar sayfasında aynı adlı iki tablo yok; **kaldırılan dört sayfa** (MOBIL MK, YP DIBS, Ivır Zıvır, USDTRY IYIX: yüklenen kitapta ve Sayfa gezgini'nde yok, 45 `BDP` çağrısı gitti, kalan sayfaların sırası ve numaraları, model dosyasının onları tutması, başka bir formülün başvurduğu sayfanın kalması) |
 | `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |
 | `test_history.py` | **Toplantı takvimi**: açıklanan tarihlerle toplu düzeltme (en yakın toplantının düzeltilmesi, 45 günden uzak tarihin eklenmesi, açıklanmamış yılların ve geçmişin kalması, 80 sınırının nedeniyle reddi, listeye ekleme, gelecektekilerin yerine koyma, kaydedince adımların toplantısıyla gitmesi, önizleme ucu) ve **geçen toplantının listeden kendiliğinden çıkması** (açılışta: MPC1 sıradaki toplantı, adım toplantısıyla, "otomatik" kaydı); günlük tarihçe: kapanış deposu, kayıtlı `BDH` bloklarının tarihlenmesi, serilerin dosyadan okunuşu, **tarihçenin bugünkü satırı = OIS sayfası** (80 toplantı, hücre hücre), toplantı bazında fiyatlama (yapılan toplantının serisi, gerçekleşen TLREF değişimi, toplantı günü ölçümü, kotaların eriştiği ufuk), gün sonu matrisi (1 / 5 / 21 iş günü kuralı, tatil, geçmiş gün), takvim (tarih düzeltme / ekleme / çıkarma: adımların ve kayıtlı senaryoların toplantıyla taşınması; **toplantı geçince ve liste kaydırılınca** sayfalar ve her toplantının değerleri), sahte Bloomberg'le canlı tarihçe (istek gruplama, yalnızca son günlerin yenilenmesi, yedek ticker, zaman aşımı), HTTP uçları; **bir günün kotaları** (kapanışı olmayan vadenin komşularının hareketiyle taşınması, komşularından ayrılıp geri dönen kapanışın ayıklanması, piyasa hareketinin korunması), günlerin Excel'in kendi durumuna göre sınıflanması, çözücünün tutturamadığı günün seriden / min-maks'tan / değişimlerden çıkması, hatalı bir kapanışın kayıtlı ayda çözücüye ulaşmaması, eski sürümün veritabanının korunması |
 | `test_bundle.py` | Tek dosyalık kurulum (`kurulum/tto_kur.py`): içine ne girdiği, aynı içeriğin aynı dosyayı vermesi, boş klasöre açma, güncelleme (değişen yenilenir, kalkan silinir, `data` / `vendor/local` / kullanıcının kendi dosyaları kalır), ZIP'ten gelmiş klasör, yarım inmiş / bozulmuş / satır sonları değişmiş dosya, klasör dışına çıkan adların reddi, seçenekler; **repodaki dosyanın kodla aynı olduğu** ve hiçbir paketi olmayan bir Python'la açılıp sunucunun ondan çalıştığı |
@@ -1388,7 +1424,9 @@ Sayfa düzeni (hangi aralık hangi panelde, hangi hücreler girdi, kişisel mi o
 duran tabloları sayar; yeni eklenen görünür bir tablo bir sekmeye yazılmadıysa test adını söyler. `"header"` Excel'in
 adsız bıraktığı sütunlara başlık satırı ekler, `"action": "ret"` tablonun başlığına RET penceresinin düğmesini koyar.
 Bir sayfanın dashboard'da sayfası olmasın isteniyorsa görünüm dosyasını silip `tests/test_views.py` içindeki
-`NO_PAGE` listesine eklemek yeterlidir (hücreleri hesaplanmaya ve Sayfa gezgini'nde görünmeye devam eder).
+`NO_PAGE` listesine eklemek yeterlidir (hücreleri hesaplanmaya ve Sayfa gezgini'nde görünmeye devam eder). Sayfa
+tamamen kalksın (hesaplanmasın, Sayfa gezgini'nde de olmasın) isteniyorsa adı `tto/books.py` içindeki
+`REMOVED_SHEETS` listesine yazılır; başka bir sayfanın formülü ona başvuruyorsa kaldırılmaz, günlüğe uyarı düşer.
 
 Dashboard'un kendi ekleri (`tto/extras.py`) dosyadaki belirli hücrelere dayanır (Masa'daki iskonto faktörleri,
 VİOP'taki `BFXFORWARD` hücreleri, Borsa tablosunun başlıkları). Dosyanın düzeni değişip bir ek artık uymuyorsa
@@ -1402,7 +1440,7 @@ tto/xl/            Excel formül motoru (tokenizer, parser, derleyici, fonksiyon
 tto/marketdata/    Bloomberg (blpapi) ve kayıtlı veri sağlayıcıları; bbg_process.py: Bloomberg oturumunu ayrı bir
                    yardımcı süreçte çalıştırır
 tto/extras.py      dashboard'un kendi eklediği hesaplar (Excel formülü olarak: EK_FWD, EK_XAU, EK_VIOP, EK_KAYNAK,
-                   EK_BULK, EK_FX, Borsa O/N, Bulk Bond'un yeni satırları)
+                   EK_BULK, EK_FX, EK_IHALE, Borsa O/N, Bulk Bond'un yeni satırları)
 tto/service.py     uygulama servisi (sayfalar, girdiler, senaryolar, RET, işlem defteri)
 tto/history.py     günlük tarihçe: kapanışlar, PPK fiyatlama geçmişi (çözücüyü geçmiş günle besleyen ikinci motor),
                    gün sonu matrisi, toplantı takvimi (düzeltme, kaydırma, adımların toplantıyla taşınması)

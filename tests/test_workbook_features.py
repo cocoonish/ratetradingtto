@@ -83,9 +83,8 @@ def test_columns_hidden_in_excel_are_left_out_until_asked_for(service):
     # tables without hidden columns are untouched
     outright = panel(service, "ois", "B3")["data"]
     assert outright["c"][:3] == ["A", "B", "C"] and "hc" not in outright
-    # the explorer and the single-range API always show everything - also of a sheet that has no page
+    # the explorer and the single-range API always show everything
     assert service.grid(None, "tto", "VIOP", "B14:G35")["data"]["c"] == ["B", "C", "D", "E", "F", "G"]
-    assert service.grid(None, "tto", "YP DIBS", "B1:H10")["data"]["c"] == ["B", "C", "D", "E", "F", "G", "H"]
 
 
 def test_hidden_columns_shrink_merged_cells_and_keep_a_fully_hidden_range():
@@ -180,7 +179,7 @@ def test_data_bar_limits():
 # ---------------------------------------------------------------------------------------------- shortcuts / picture
 def test_the_workbooks_go_to_links_become_shortcuts_to_page_and_panel(service):
     links = service.view(None, "masa")["links"]
-    assert len(links) == 29                               # 30 in the workbook; the one to YP DİBS has no page to go to
+    assert len(links) == 29                               # 30 in the workbook; the one to YP DIBS went with that sheet
     by = {l["label"]: l for l in links}
     assert (by["Outright"]["page"], by["Outright"]["panel"]) == ("ois", "B3")
     assert (by["MPC ima"]["page"], by["MPC ima"]["panel"]) == ("ois", "B4")
@@ -200,17 +199,19 @@ def test_the_workbooks_go_to_links_become_shortcuts_to_page_and_panel(service):
     assert "links" not in service.view(None, "ois")                             # only the desk sheet has them
 
 
-def test_the_picture_on_the_sheet_is_served(service):
-    """The workbook's only picture is on the "Ivır Zıvır" sheet, which has no page any more: the picture is
-    still read and served (a page that showed a sheet with pictures would list them as panels)."""
+def test_a_picture_on_a_sheet_is_served(service, models, monkeypatch):
+    """The workbook's only picture was on the "Ivır Zıvır" sheet, which the dashboard takes out as it loads: no
+    picture is left.  A sheet with one would have it served (here the picture is put on MASA for the test; a
+    page that showed a sheet with pictures would list them as panels)."""
+    assert not any(sh.images for sh in service.books["tto"].model.sheets)
     assert not any(p["type"] == "image" for v in service.views for p in service.view(None, v["id"])["panels"])
-    raw, mime = service.image("tto", "Ivır Zıvır", 0)
+    monkeypatch.setattr(service.books["tto"].model.sheet("MASA"), "images", list(models["tto"].sheet("Ivır Zıvır").images))
+    raw, mime = service.image("tto", "MASA", 0)
     assert mime == "image/png" and raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) > 5000
-    for args in (("tto", "Ivır Zıvır", 1), ("tto", "Ivır Zıvır", -1), ("tto", "Yok", 0), ("tto", "MASA", 0)):
+    for args in (("tto", "MASA", 1), ("tto", "MASA", -1), ("tto", "Yok", 0), ("tto", "Ivır Zıvır", 0), ("tto", "VIOP", 0)):
         with pytest.raises(ServiceError) as exc:
             service.image(*args)
         assert exc.value.status == 404
-    assert not any(p["type"] == "image" for p in service.view(None, "masa")["panels"])
 
 
 def test_groups_collapsed_in_excel_start_collapsed(models):

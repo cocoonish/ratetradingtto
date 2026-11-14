@@ -25,10 +25,9 @@ def sheets_of(view):
     return {view["sheet"]} | {p["sheet"] for p in view["panels"] if p.get("sheet") and not p.get("borrowed")}
 
 
-#: sheets of the TRY workbook that have no page any more (the desk does not use them); their cells are still
-#: calculated and can be looked at in the sheet explorer
-NO_PAGE = {("tto", "MOBIL MK"), ("tto", "Ivır Zıvır"), ("tto", "YP DIBS"),
-           ("tto", "EK_KAYNAK")}                # the order of the pricing sources: on the settings page
+#: sheets without a page of their own (the sheet explorer shows them): the order of the pricing sources, which is on
+#: the settings page
+NO_PAGE = {("tto", "EK_KAYNAK")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):
@@ -41,20 +40,54 @@ def test_every_sheet_of_the_workbooks_has_a_page(models):
                 assert (book, sh.name) not in covered
                 continue
             assert (book, sh.name) in covered, sh.name
-    assert not {"mobil", "ivir", "ypdibs"} & {v["id"] for v in VIEWS}
+    assert not {"mobil", "ivir", "ypdibs", "iyix"} & {v["id"] for v in VIEWS}
 
 
-def test_the_sheets_without_a_page_are_still_in_the_sheet_explorer(service):
+def test_the_sheets_without_a_page_are_in_the_sheet_explorer(service):
     names = [s["name"] for s in service.sheets("tto")]
     for _, name in NO_PAGE:
         assert name in names
-    grid = service.grid(None, "tto", "MOBIL MK", "A1:G6")
-    assert grid["data"]["rows"][0][0]["t"] and grid["dims"][0] > 20
-    with pytest.raises(ServiceError) as exc:
-        service.view(None, "ivir")
-    assert exc.value.status == 404
+    grid = service.grid(None, "tto", "EK_KAYNAK", "A1:G6")
+    assert grid["data"]["rows"][0][0]["t"]
     # a link of the desk sheet to a sheet without a page is simply not offered
     assert all(l["page"] in service.view_index or l["page"] == "blotter" for l in service.view(None, "masa")["links"])
+
+
+def test_the_sheets_the_desk_does_not_use_are_taken_out(service, models):
+    """MOBIL MK, YP DIBS, Ivır Zıvır and USDTRY IYIX are taken out as the TRY workbook loads: no page, not in the
+    sheet explorer, none of their formulas (45 of them Bloomberg calls) is calculated.  The model file keeps them."""
+    from tto.books import REMOVED_SHEETS, remove_sheets
+    from tto.xl.model import Model
+    gone = ("MOBIL MK", "YP DIBS", "Ivır Zıvır", "USDTRY IYIX")
+    assert REMOVED_SHEETS == {"tto": gone}
+    names = [s["name"] for s in service.sheets("tto")]
+    assert not set(gone) & set(names) and names[:2] == ["MASA", "Günlük İşlemler"]
+    for name in gone:
+        assert name not in models["tto"].sheet_index
+        with pytest.raises(ServiceError) as exc:
+            service.grid(None, "tto", name, "A1:G6")
+        assert exc.value.status == 404
+    for page in ("mobil", "ivir", "ypdibs", "iyix"):
+        with pytest.raises(ServiceError) as exc:
+            service.view(None, page)
+        assert exc.value.status == 404
+    # the sheets left keep their order and are numbered again; the desk sheet's link to YP DIBS went with it
+    model = models["tto"]
+    assert [s.index for s in model.sheets] == list(range(len(model.sheets)))
+    assert all(model.sheet_index[s.name] == s.index for s in model.sheets)
+    assert not any("YP DIBS" in link["location"] for s in model.sheets for link in s.links)
+    raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))
+    assert set(gone) <= set(raw.sheet_index)                                  # the model file is a pure import
+    calls = sum(raw.templates[t].count("_xll.BDP(") for name in gone for t in raw.sheet(name).fml.values())
+    assert calls == 45
+    order = [s.name for s in raw.sheets if s.name not in gone]
+    assert remove_sheets("tto", raw) == sorted(gone) and [s.name for s in raw.sheets] == order
+    assert remove_sheets("tto", raw) == [] and remove_sheets("sofr", raw) == []
+    # a sheet that another sheet's formula refers to stays (taking it out would make those formulas #REF!)
+    raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))
+    raw.templates.append("`MOBIL MK!R1C1`+1")
+    raw.sheet("MASA").fml[COLS * 500 + 1] = len(raw.templates) - 1
+    assert remove_sheets("tto", raw) == ["Ivır Zıvır", "USDTRY IYIX", "YP DIBS"] and "MOBIL MK" in raw.sheet_index
 
 
 def test_ids_are_unique():

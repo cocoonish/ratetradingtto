@@ -219,17 +219,25 @@ def test_tabs_hand_values_and_search_data_over_http(client, user):
     assert "m" not in usd["rows"][usd["r"].index(50)][usd["c"].index("F")]
 
 
-def test_workbook_extras_over_http(client, user):
-    # the picture of the "Ivır Zıvır" sheet (the sheet has no page any more; the picture is still served)
-    assert client.get("/api/view/ivir").status_code == 404
-    res = client.get("/api/image?book=tto&sheet=%s&i=0" % quote("Ivır Zıvır"))
+def test_workbook_extras_over_http(client, user, module_service, monkeypatch):
+    # the sheets the desk does not use are taken out as the workbook loads: no page, no cells, no picture
+    h = hdr(user)
+    assert client.get("/api/view/ivir", headers=h).status_code == 404
+    assert client.get("/api/view/ypdibs", headers=h).status_code == 404
+    assert client.get("/api/image?book=tto&sheet=%s&i=0" % quote("Ivır Zıvır"), headers=h).status_code == 404
+    # (that the sheet explorer does not list them is tested on the service: test_views.py)
+    # a picture of a sheet (the workbook's only one was on "Ivır Zıvır"; put on MASA here) is served and cached
+    assert client.get("/api/image?book=tto&sheet=MASA&i=0", headers=h).status_code == 404
+    from tto.xl.model import Model
+    import os
+    raw = Model.load(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "tto.json.gz"))
+    monkeypatch.setattr(module_service.books["tto"].model.sheet("MASA"), "images", list(raw.sheet("Ivır Zıvır").images))
+    res = client.get("/api/image?book=tto&sheet=MASA&i=0", headers=h)
     assert res.status_code == 200 and res.headers["content-type"] == "image/png" and res.content[:4] == b"\x89PNG"
     assert "max-age" in res.headers["cache-control"]
-    assert client.get("/api/image?book=tto&sheet=MASA&i=0").status_code == 404
-    assert client.get("/api/image?book=tto&sheet=%s&i=x" % quote("Ivır Zıvır")).status_code == 404
+    assert client.get("/api/image?book=tto&sheet=MASA&i=x", headers=h).status_code == 404
     # shortcuts of the desk sheet; columns hidden in Excel only with the helper tables
     assert len(client.get("/api/view/masa").json()["links"]) == 29
-    assert client.get("/api/view/ypdibs").status_code == 404                  # a sheet the desk does not use: no page
 
     def columns(query):
         return next(p for p in client.get("/api/view/viop" + query).json()["panels"] if p["id"] == "B2")["data"]["c"]

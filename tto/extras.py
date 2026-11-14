@@ -15,6 +15,8 @@ the Excel files (parity and reference tests read those).
 * ``EK_VIOP`` (TRY workbook)  a history of the VİOP contracts for two charts: the implied TRY rate of up to six
                                contracts and their spread over OIS, day by day, with the VİOP sheet's own
                                formulas and a window of its own
+* ``EK_IHALE`` (TRY workbook) the Treasury auction: the dirty price to bid for three bonds (Bloomberg's accrued
+                               interest at the auction's value date) and where the bids stand once it is over
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 * ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
 
@@ -1935,6 +1937,286 @@ def _tto_desk_days(model: Model) -> None:
             m.patch("C%d" % r, "=B%d-$B$88" % r)
 
 
+# ---------------------------------------------------------------------------------------------- Treasury auction
+AUC_SHEET = "EK_IHALE"
+AUC_DATE = "B2"                   # the auction's value date (a bond can be given its own)
+AUC_FIRST = 5                     # the caption row of the first bond's block
+AUC_BLOCK = 20                    # rows per bond
+AUC_BONDS = 3
+AUC_LINES = 5                     # bids per bond
+AUC_CF = 30                       # cash flows a bond may still have for its yield (15 years of half-yearly coupons)
+AUC_PART = "Asgari fiyatta · kısmi olabilir"
+#: the Bloomberg answers and the yield's cash flows of a bond, on its block's information row (from column S)
+AUC_INFO = ("sec", "valor", "name", "cpn_typ", "cpn", "mat", "freq", "infl", "acc", "prev", "next", "days", "idx", "kind",
+            "cpn_n", "mat_d", "prev_d", "next_d", "freq_n", "acc_n", "ok", "w", "n", "fits", "g", "per", "idx_n")
+#: what a priced row (a bid, the averages, the auction's prices) works out, from column S: the dirty price, Newton's
+#: steps to the simple yield, the yields; a bid also says which of its three inputs it priced from
+AUC_HELP = ("dirty", "s0", "s1", "s2", "s3", "s4", "s5", "simple", "comp", "how", "from_yield", "typed")
+AUC_HELP_FIRST = 19               # column S
+
+
+def auction_rows(k: int) -> Dict[str, Any]:
+    """The rows of bond ``k``'s block (0, 1, 2)."""
+    r = AUC_FIRST + k * AUC_BLOCK
+    lines = list(range(r + 5, r + 5 + AUC_LINES))
+    return {"caption": r, "info_head": r + 1, "info": r + 2, "state": r + 3, "line_head": r + 4, "lines": lines,
+            "total": lines[-1] + 1, "result_head": r + 12, "min": r + 13, "avg": r + 14, "max": r + 15, "mine": r + 16,
+            "summary": r + 17}
+
+
+def auction_cols() -> Dict[str, Any]:
+    """Helper columns: ``info`` (name -> letter), ``cf`` / ``ex`` (the cash flows and their exponents, first and
+    last letter) and ``help`` (name -> letter) of a priced row."""
+    info = {name: index_to_col(AUC_HELP_FIRST + i) for i, name in enumerate(AUC_INFO)}
+    first_cf = AUC_HELP_FIRST + len(AUC_INFO)
+    return {"info": info,
+            "cf": (index_to_col(first_cf), index_to_col(first_cf + AUC_CF - 1)),
+            "ex": (index_to_col(first_cf + AUC_CF), index_to_col(first_cf + 2 * AUC_CF - 1)),
+            "help": {name: index_to_col(AUC_HELP_FIRST + i) for i, name in enumerate(AUC_HELP)},
+            "last": index_to_col(first_cf + 2 * AUC_CF - 1)}
+
+
+def _auction_check(model: Model) -> None:
+    """The page prices the TRY workbook's government bonds (it reads nothing of its cells)."""
+    _need_sheets(model, "DİBS RV")
+    if AUC_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % AUC_SHEET)
+
+
+def _date_of(x: str) -> str:
+    """A date Bloomberg sends as text ("15.03.2028", "3.11.2026") or as a number, as a serial number ("" if none)."""
+    return ('IF(ISNUMBER({x}),{x},IFERROR(DATE(VALUE(RIGHT({x},4)),VALUE(MID({x},FIND(".",{x})+1,FIND(".",{x},FIND(".",{x})+1)'
+            '-FIND(".",{x})-1)),VALUE(LEFT({x},FIND(".",{x})-1))),""))').format(x=x)
+
+
+def _tto_auction(model: Model) -> None:
+    """The Treasury auction (``EK_IHALE``): the dirty price to bid for a clean price, a simple or a compound yield,
+    and, once the auction is over, where each bid stands against the announced prices.
+
+    Three bonds, five bids each.  The accrued interest is Bloomberg's at the auction's value date (``INT_ACC`` with
+    ``SETTLE_DT``) - never worked out here: a value date on a coupon date, a coupon period of its own, a floater's
+    current coupon are Bloomberg's to know.  The coupon dates around the value date and the days accrued come with
+    it.  The yields follow the DİBS RV sheet ("BIST"): a fixed coupon bond's simple yield discounts the coupons at
+    (1 + y/f) per coupon period (Newton's method from the coupon), compound = (1 + y/f)^f − 1; a bill or zero coupon
+    bond: simple = (100/P − 1)·365/days, compound = (100/P)^(365/days) − 1.  CPI linkers are priced real (a TL amount
+    with Bloomberg's index ratio), TLREF floaters get their dirty price and their place in the auction, no yield."""
+    b = SheetBuilder(model, AUC_SHEET)
+    C = auction_cols()
+    c, h = C["info"], C["help"]
+    pct, px, dt = "0.000%", "0.000", DATE
+    b.title("A1", "HAZİNE İHALESİ  ·  gönderilecek kirli fiyat ve ihale sonucu")
+    b.set("A2", "İhale valörü", bold=True)
+    b.input(AUC_DATE, None, fmt=dt, align="center")
+    b.set("C2", '=IF(N($B$2)>0,"Birikmiş faiz her kâğıt için bu valörle (kâğıda kendi valörü yazılırsa onunla) Bloomberg\'den",'
+                '"← Valörü yazın: gönderilecek kirli fiyat valördeki birikmiş faizle hesaplanır")', color=NOTE_COLOR)
+
+    def text(x: str) -> str:
+        return 'IFERROR(%s&"","")' % x
+
+    for k in range(AUC_BONDS):
+        R = auction_rows(k)
+        i = R["info"]
+        I = {name: "$%s$%d" % (col, i) for name, col in c.items()}
+        cf = "$%s$%d:$%s$%d" % (C["cf"][0], i, C["cf"][1], i)
+        ex = "$%s$%d:$%s$%d" % (C["ex"][0], i, C["ex"][1], i)
+        lines = R["lines"]
+        l1, l5 = lines[0], lines[-1]
+        mn, av, mx, me, tot = ("$B$%d" % R["min"], "$B$%d" % R["avg"], "$B$%d" % R["max"], R["mine"], R["total"])
+        kind, freq, acc, g = I["kind"], I["freq_n"], I["acc_n"], I["g"]
+
+        # ---- the bond: what is typed, what Bloomberg says at the value date
+        b.set("A%d" % R["caption"], '="KÂĞIT %d"&IF($C$%d="",""," · "&$C$%d&" · "&UPPER(TRIM($A$%d&"")))' % (k + 1, i, i, i),
+              bold=True)
+        b.head("A%d" % R["info_head"], ["ISIN (yaz)", "Valör (boşsa üstteki)", "Kâğıt", "Tür", "Kupon", "Vade", "Önceki kupon",
+                                        "Sonraki kupon", "İşlemiş gün", "Dönem (gün)", "Birikmiş faiz (100)", "Kullanılan valör",
+                                        "Endeks oranı (TÜFE)"])
+        b.head("%s%d" % (c["sec"], R["info_head"]), list(AUC_INFO) + ["cf%d" % (j + 1) for j in range(AUC_CF)]
+               + ["üs%d" % (j + 1) for j in range(AUC_CF)])
+        b.input("A%d" % i, None, align="center", bold=True)
+        b.input("B%d" % i, None, fmt=dt, align="center")
+        f = {
+            "sec": '=IF(TRIM($A{i}&"")="","",UPPER(TRIM($A{i}&""))&" ISIN")',
+            "valor": '=IF({sec}="","",IF(N($B{i})>0,$B{i},IF(N($B$2)>0,$B$2,"")))',
+            "name": '=IF({sec}="","",_xll.BDP({sec},"NAME"))',
+            "cpn_typ": '=IF({sec}="","",_xll.BDP({sec},"CPN_TYP"))',
+            "cpn": '=IF({sec}="","",_xll.BDP({sec},"CPN"))',
+            "mat": '=IF({sec}="","",_xll.BDP({sec},"MATURITY"))',
+            "freq": '=IF({sec}="","",_xll.BDP({sec},"CPN_FREQ"))',
+            "infl": '=IF({sec}="","",_xll.BDP({sec},"INFLATION_LINKED_INDICATOR"))',
+            "acc": '=IF(OR({sec}="",{valor}=""),"",_xll.BDP({sec},"INT_ACC","SETTLE_DT",{valor}))',
+            "prev": '=IF(OR({sec}="",{valor}=""),"",_xll.BDP({sec},"PREV_CPN_DT","SETTLE_DT",{valor}))',
+            "next": '=IF(OR({sec}="",{valor}=""),"",_xll.BDP({sec},"NXT_CPN_DT","SETTLE_DT",{valor}))',
+            "days": '=IF(OR({sec}="",{valor}=""),"",_xll.BDP({sec},"DAYS_ACC","SETTLE_DT",{valor}))',
+            "idx": '=IF(OR({sec}="",{valor}="",{kind}<>"E"),"",_xll.BDP({sec},"IDX_RATIO","SETTLE_DT",{valor}))',
+            "kind": ('=IF(OR({sec}="",NOT(ISNUMBER({mat_d}))),"",IF(LEFT(UPPER(%s),1)="Y","E",IF(OR(ISNUMBER(SEARCH("FLOAT",%s)),'
+                     'ISNUMBER(SEARCH("VARIABLE",%s)),ISNUMBER(SEARCH("FRN",%s))),"T",IF(OR(ISNUMBER(SEARCH("ZERO",%s)),'
+                     'ISNUMBER(SEARCH("DISC",%s))),"B",IF(ISNUMBER({cpn_n}),"S","")))))')
+                    % ((text("{infl}"),) + (text("{cpn_typ}"),) * 5),
+            "cpn_n": '=IF(ISNUMBER({cpn}),{cpn},"")',
+            "mat_d": "=" + _date_of("{mat}"),
+            "prev_d": "=" + _date_of("{prev}"),
+            "next_d": "=" + _date_of("{next}"),
+            "freq_n": '=IF(ISNUMBER({freq}),IF({freq}>0,{freq},""),"")',
+            "acc_n": '=IF(ISNUMBER({acc}),{acc},"")',
+            "ok": ('=AND(ISNUMBER({valor}),ISNUMBER({mat_d}),N({mat_d})>N({valor}),{kind}<>"",ISNUMBER({acc_n}),'
+                   'IF({kind}="B",TRUE,AND(ISNUMBER({prev_d}),ISNUMBER({next_d}),N({next_d})>N({prev_d}),ISNUMBER({freq_n}))))'),
+            "w": '=IF(AND({ok},OR({kind}="S",{kind}="E")),({next_d}-{valor})/({next_d}-{prev_d}),"")',
+            "n": '=IF(AND({ok},OR({kind}="S",{kind}="E")),ROUND(({mat_d}-{next_d})/({next_d}-{prev_d}),0)+1,"")',
+            "fits": "=AND(ISNUMBER({n}),N({n})<=%d)" % AUC_CF,
+            "g": '=IF({ok},{mat_d}-{valor},"")',
+            "per": '=IF(AND({ok},OR({kind}="S",{kind}="E")),{cpn_n}/{freq_n},"")',
+            "idx_n": '=IF(AND({kind}="E",ISNUMBER({idx})),{idx},"")',
+        }
+        for name, formula in f.items():
+            b.set("%s%d" % (c[name], i), formula.format(i=i, **I), fmt=dt if name.endswith("_d") else None)
+        first_cf = AUC_HELP_FIRST + len(AUC_INFO)
+        for j in range(1, AUC_CF + 1):
+            b.set("%s%d" % (index_to_col(first_cf + j - 1), i),
+                  '=IF(AND({fits},{j}<=N({n})),{per}+IF({j}=N({n}),100,0),0)'.format(j=j, **I))
+            b.set("%s%d" % (index_to_col(first_cf + AUC_CF + j - 1), i),
+                  '=IF(AND({fits},{j}<=N({n})),{w}+{j}-1,0)'.format(j=j, **I))
+        shown = [
+            ("C", '=IF({sec}="","",IF(ISNUMBER({mat_d}),TEXT({mat_d},"dd.mm.yy")&IF({kind}="T"," TLREF",IF({kind}="E"," TÜFE",'
+                  'IF({kind}="B"," Bono",""))),%s))' % text("{name}"), None),
+            ("D", '=IF({kind}="S","Sabit kuponlu",IF({kind}="T","TLREF",IF({kind}="E","TÜFE",IF({kind}="B","Bono / kuponsuz",""))))',
+             None),
+            ("E", '=IF(AND(ISNUMBER({cpn_n}),{kind}<>"B"),{cpn_n}/100,"")', pct),
+            ("F", '=IF(ISNUMBER({mat_d}),{mat_d},"")', dt),
+            ("G", '=IF(ISNUMBER({prev_d}),{prev_d},"")', dt),
+            ("H", '=IF(ISNUMBER({next_d}),{next_d},"")', dt),
+            ("I", '=IF(ISNUMBER({days}),{days},"")', INT0),
+            ("J", '=IF(AND(ISNUMBER({prev_d}),ISNUMBER({next_d})),{next_d}-{prev_d},"")', INT0),
+            ("K", '=IF(ISNUMBER({acc_n}),{acc_n},"")', "0.000000"),
+            ("L", '=IF(ISNUMBER({valor}),{valor},"")', dt),
+            ("M", '=IF(ISNUMBER({idx_n}),{idx_n},"")', "0.000000"),
+        ]
+        for col, formula, fmt in shown:
+            b.set("%s%d" % (col, i), formula.format(**I), fmt=fmt, bold=col in ("C", "K"), align="center" if fmt == dt else None)
+        b.set("A%d" % R["state"],
+              ('=IF({sec}="","← ISIN yazın",IF({valor}="","← İhale valörünü (üstte) ya da bu kâğıdın valörünü yazın",'
+               'IF(ISERROR({name}),"Bloomberg yanıtı bekleniyor",IF(LEFT({name}&"",4)="#N/A","Bloomberg: "&{name},'
+               'IF(NOT(ISNUMBER({acc_n})),"Bloomberg\'den valördeki birikmiş faiz bekleniyor",'
+               'IF(NOT({ok}),IF(N({mat_d})>0,IF(N({mat_d})<=N({valor}),"Kâğıt valörde ya da daha önce itfa oluyor",'
+               '"Bloomberg\'den kupon tarihleri bekleniyor"),"Bloomberg\'den vade bekleniyor"),'
+               'IF({kind}="T","TLREF: kirli fiyat ve ihaledeki yer; getiri hesaplanmaz",'
+               'IF(AND(OR({kind}="S",{kind}="E"),NOT({fits})),"Kalan kupon %d\'dan çok: getiri hesaplanmaz",'
+               'IF({kind}="E","TÜFE: reel fiyat ve reel getiri; tutar Bloomberg\'in valördeki endeks oranıyla",'
+               '"Birikmiş faiz, kupon tarihleri ve işlemiş gün Bloomberg\'den, valöre göre")))))))))') .format(**I) % AUC_CF,
+              color=NOTE_COLOR)
+
+        # ---- the bids
+        b.head("A%d" % R["line_head"], ["#", "Nominal", "Temiz (yaz)", "Basit % (yaz)", "Bileşik % (yaz)", "Girdi", "Temiz",
+                                        "Basit %", "Bileşik %", "Kirli · gönderilecek", "Tutar (TL)", "Sonuç", "Kirli − ihale ort.",
+                                        "Basit − ihale ort. (bp)", "Min–maks'ta yer", "Gerçekleşen nom. (yaz)", "Gerçekleşen nominal"])
+        b.head("%s%d" % (h["dirty"], R["line_head"]), list(AUC_HELP))
+
+        def priced(r: int, line: bool) -> None:
+            """The yields of the dirty price in column ``dirty`` of row ``r`` (a bid also from a typed yield)."""
+            H = {name: "%s%d" % (col, r) for name, col in h.items()}
+            ref = dict(I, cf=cf, ex=ex, **H)
+            for s in range(6):
+                if s == 0:
+                    step = ('=IF(OR(N({dirty})<=0,AND({kind}<>"S",{kind}<>"E"),NOT({fits})),"",IF(N({cpn_n})>0,{cpn_n}/100,0.3))')
+                else:
+                    step = ('=IF({prev}="","",IFERROR({prev}-(SUMPRODUCT({cf},(1+{prev}/{freq_n})^(-{ex}))-{dirty})/'
+                            '(-SUMPRODUCT({cf},{ex},(1+{prev}/{freq_n})^(-{ex}-1))/{freq_n}),""))').replace("{prev}", H["s%d" % (s - 1)])
+                b.set(H["s%d" % s], step.format(**ref))
+            solved = ('IF(N({dirty})<=0,"",IF({kind}="B",IF(N({g})>0,(100/{dirty}-1)*365/{g},""),IF(ISNUMBER({s5}),'
+                      'IF(ABS(SUMPRODUCT({cf},(1+{s5}/{freq_n})^(-{ex}))-{dirty})<0.000001,{s5},""),"")))')
+            if line:
+                simple = ('=IF(OR({how}="B",{how}="C"),IF(AND(N({dirty})>0,ISNUMBER({from_yield})),{from_yield},""),%s)' % solved)
+            else:
+                simple = "=" + solved
+            b.set(H["simple"], simple.format(**ref))
+            b.set(H["comp"], ('=IF(NOT(ISNUMBER({simple})),"",IF({kind}="B",(1+{simple}*{g}/365)^(365/{g})-1,'
+                              '(1+{simple}/{freq_n})^{freq_n}-1))').format(**ref))
+
+        for n_line, r in enumerate(lines, 1):
+            H = {name: "%s%d" % (col, r) for name, col in h.items()}
+            ref = dict(I, cf=cf, ex=ex, r=r, mn=mn, av=av, mx=mx, avs="$D$%d" % R["avg"], part=AUC_PART, **H)
+            b.set("A%d" % r, n_line, align="center", color=NOTE_COLOR)
+            b.input("B%d" % r, None, fmt=INT0)
+            b.input("C%d" % r, None, fmt=px)
+            b.input("D%d" % r, None, fmt=pct)
+            b.input("E%d" % r, None, fmt=pct)
+            b.input("P%d" % r, None, fmt=INT0)
+            b.set(H["how"], '=IF(ISNUMBER($C{r}),"T",IF(ISNUMBER($D{r}),"B",IF(ISNUMBER($E{r}),"C","")))'.format(**ref))
+            b.set(H["typed"], "=ISNUMBER($C{r})+ISNUMBER($D{r})+ISNUMBER($E{r})".format(**ref))
+            b.set(H["from_yield"], ('=IFERROR(IF({how}="B",$D{r},IF({how}="C",IF({kind}="B",IF(N({g})>0,((1+$E{r})^({g}/365)-1)*365/{g},""),'
+                                    'IF(OR({kind}="S",{kind}="E"),{freq_n}*((1+$E{r})^(1/{freq_n})-1),"")),"")),"")').format(**ref))
+            b.set(H["dirty"], ('=IF(NOT({ok}),"",IFERROR(IF({how}="T",$C{r}+{acc_n},IF(AND(OR({how}="B",{how}="C"),ISNUMBER({from_yield})),'
+                               'IF({kind}="B",100/(1+{from_yield}*{g}/365),IF(AND(OR({kind}="S",{kind}="E"),{fits}),'
+                               'SUMPRODUCT({cf},(1+{from_yield}/{freq_n})^(-{ex})),"")),"")),""))').format(**ref))
+            priced(r, True)
+            row = [
+                ("F", '=IF({how}="","",IF(AND({how}<>"T",{kind}="T"),"TLREF: temiz fiyat yazın",IF({how}="T","Temiz",IF({how}="B","Basit",'
+                      '"Bileşik"))&IF({typed}>1," · diğerine bakılmadı","")))', None, False),
+                ("G", '=IF(N({dirty})<=0,"",IF({how}="T",$C{r},{dirty}-{acc_n}))', px, False),
+                ("H", '=IF(ISNUMBER({simple}),{simple},"")', pct, False),
+                ("I", '=IF(ISNUMBER({comp}),{comp},"")', pct, False),
+                ("J", '=IF(N({dirty})<=0,"",ROUND({dirty},3))', px, True),
+                ("K", '=IF(AND(N($B{r})>0,ISNUMBER($J{r})),IF({kind}="E",IF(ISNUMBER({idx_n}),$B{r}*$J{r}/100*{idx_n},""),'
+                      '$B{r}*$J{r}/100),"")', NUM2, False),
+                ("L", '=IF(OR(NOT(ISNUMBER($J{r})),N({mn})<=0),"",IF($J{r}>{mn}+0.0005,"Gerçekleşti",IF($J{r}>={mn}-0.0005,"{part}",'
+                      '"Gerçekleşmedi")))', None, True),
+                ("M", '=IF(AND(ISNUMBER($J{r}),N({av})>0),$J{r}-{av},"")', "+0.000;-0.000;0.000", False),
+                ("N", '=IF(AND(ISNUMBER($H{r}),ISNUMBER({avs})),($H{r}-{avs})*10000,"")', "+0.0;-0.0;0.0", False),
+                ("O", '=IF(AND(ISNUMBER($J{r}),N({mn})>0,N({mx})>N({mn})),($J{r}-{mn})/({mx}-{mn}),"")', "0%", False),
+                ("Q", '=IF($L{r}="","",IF(ISNUMBER($P{r}),$P{r},IF($L{r}="Gerçekleşmedi",0,N($B{r}))))', INT0, False),
+            ]
+            for col, formula, fmt, bold in row:
+                b.set("%s%d" % (col, r), formula.format(**ref), fmt=fmt, bold=bold)
+
+        # ---- all the bids together: the nominal, the average dirty price (weighted by the nominal) and its yields
+        H = {name: "%s%d" % (col, tot) for name, col in h.items()}
+        ref = dict(I, l1=l1, l5=l5, t=tot, **H)
+        b.set("A%d" % tot, "Toplam / ort.", bold=True)
+        b.set("B%d" % tot, '=IF(COUNT(B{l1}:B{l5})=0,"",SUM(B{l1}:B{l5}))'.format(**ref), fmt=INT0, bold=True)
+        b.set(H["dirty"], '=IFERROR(SUMPRODUCT(B{l1}:B{l5},J{l1}:J{l5})/SUMPRODUCT(B{l1}:B{l5}*ISNUMBER(J{l1}:J{l5})),"")'.format(**ref))
+        priced(tot, False)
+        b.set("G%d" % tot, '=IF(N({dirty})<=0,"",{dirty}-{acc_n})'.format(**ref), fmt=px, bold=True)
+        b.set("H%d" % tot, '=IF(ISNUMBER({simple}),{simple},"")'.format(**ref), fmt=pct, bold=True)
+        b.set("I%d" % tot, '=IF(ISNUMBER({comp}),{comp},"")'.format(**ref), fmt=pct, bold=True)
+        b.set("J%d" % tot, '=IF(N({dirty})<=0,"",{dirty})'.format(**ref), fmt=px, bold=True)
+        b.set("K%d" % tot, '=IF(COUNT(K{l1}:K{l5})=0,"",SUM(K{l1}:K{l5}))'.format(**ref), fmt=NUM2, bold=True)
+        b.set("Q%d" % tot, '=IF(COUNT(Q{l1}:Q{l5})=0,"",SUM(Q{l1}:Q{l5}))'.format(**ref), fmt=INT0, bold=True)
+
+        # ---- the auction's result: the announced prices (dirty, as bid) and the average of what was won
+        b.head("A%d" % R["result_head"], ["İhale sonucu", "Kirli (açıklanan, yaz)", "Temiz", "Basit %", "Bileşik %", "Kirli − ihale ort.",
+                                          "Basit − ihale ort. (bp)", "Gerçekleşen nominal", "Tutar (TL)"])
+        for r, label in ((R["min"], "Asgari fiyat"), (R["avg"], "Ortalama fiyat"), (R["max"], "Azami fiyat"), (me, "Benim · gerçekleşen ort.")):
+            H = {name: "%s%d" % (col, r) for name, col in h.items()}
+            ref = dict(I, r=r, l1=l1, l5=l5, t=tot, av=R["avg"], **H)
+            b.set("A%d" % r, label, bold=True)
+            if r == me:
+                b.set("B%d" % r, '=IF(N($Q${t})>0,SUMPRODUCT(Q{l1}:Q{l5},J{l1}:J{l5})/$Q${t},"")'.format(**ref), fmt=px, bold=True)
+                b.set(H["dirty"], '=IF(ISNUMBER($B{r}),$B{r},"")'.format(**ref))
+            else:
+                b.input("B%d" % r, None, fmt=px)
+                b.set(H["dirty"], '=IF(AND(N($B{r})>0,{ok}),$B{r},"")'.format(**ref))
+            priced(r, False)
+            b.set("C%d" % r, '=IF(N({dirty})<=0,"",{dirty}-{acc_n})'.format(**ref), fmt=px)
+            b.set("D%d" % r, '=IF(ISNUMBER({simple}),{simple},"")'.format(**ref), fmt=pct)
+            b.set("E%d" % r, '=IF(ISNUMBER({comp}),{comp},"")'.format(**ref), fmt=pct)
+            if r == me:
+                b.set("F%d" % r, '=IF(AND(ISNUMBER($B{r}),N($B${av})>0),$B{r}-$B${av},"")'.format(**ref), fmt="+0.000;-0.000;0.000",
+                      bold=True)
+                b.set("G%d" % r, '=IF(AND(ISNUMBER($D{r}),ISNUMBER($D${av})),($D{r}-$D${av})*10000,"")'.format(**ref),
+                      fmt="+0.0;-0.0;0.0", bold=True)
+                b.set("H%d" % r, '=IF(N($Q${t})>0,$Q${t},"")'.format(**ref), fmt=INT0)
+                b.set("I%d" % r, ('=IF(ISNUMBER($B{r}),IF({kind}="E",IF(ISNUMBER({idx_n}),$Q${t}*$B{r}/100*{idx_n},""),'
+                                  '$Q${t}*$B{r}/100),"")').format(**ref), fmt=NUM2)
+        ref = dict(I, l1=l1, l5=l5, mn=mn, me=me, part=AUC_PART)
+        b.set("A%d" % R["summary"],
+              ('=IF(N({mn})<=0,"İhale bitince açıklanan asgari, ortalama ve azami kirli fiyatı yazın: her teklifin sonucu ve yeri, '
+               'gerçekleşen ortalamanız ve getirisi çıkar.",COUNTIF($L${l1}:$L${l5},"Gerçekleşti")&" teklif gerçekleşti, "'
+               '&COUNTIF($L${l1}:$L${l5},"{part}")&" teklif asgari fiyatta (kısmi olabilir), "&COUNTIF($L${l1}:$L${l5},"Gerçekleşmedi")'
+               '&" teklif gerçekleşmedi."&IF(AND(ISNUMBER($F${me}),ISNUMBER($G${me}))," Gerçekleşen ortalamanız ihale ortalamasından "'
+               '&TEXT(ABS($F${me}),"0.000")&IF($F${me}>=0," yüksek"," düşük")&" (basit getiride "&TEXT($G${me},"+0.0;-0.0;0.0")&" bp).",""))')
+              .format(**ref), color=NOTE_COLOR)
+    b.sheet.freeze = [0, 1]
+
+
 #: book -> (name, precondition, builder) of each addition
 # ---------------------------------------------------------------------------------------------- DV01 risk: no position
 #: the position cells of the DV01 risk sheet: the bucket DV01s (TL/bp) and the paste area beside them (Onshore /
@@ -2005,7 +2287,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
-            ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01)),
+            ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
+            (AUC_SHEET, _auction_check, _tto_auction)),
 }
 
 

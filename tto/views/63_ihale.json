@@ -1,0 +1,69 @@
+{
+ "id": "ihale",
+ "title": "Hazine İhalesi",
+ "group": "Tahvil",
+ "book": "tto",
+ "sheet": "EK_IHALE",
+ "order": 63,
+ "inputs": [
+  {"range": "B2", "scope": "shared", "group": "ihale-valor", "kind": "date", "label": "İhale valörü"},
+  {"range": "A7", "scope": "shared", "group": "ihale-1", "kind": "text", "label": "Kâğıt 1 ISIN"},
+  {"range": "B7", "scope": "shared", "group": "ihale-1", "kind": "date", "label": "Kâğıt 1 valörü (boşsa ihale valörü)"},
+  {"range": "B10:C14", "scope": "shared", "group": "ihale-1", "kind": "number", "label": "Kâğıt 1 teklif: nominal, temiz fiyat"},
+  {"range": "D10:E14", "scope": "shared", "group": "ihale-1", "kind": "pct", "label": "Kâğıt 1 teklif: basit / bileşik getiri"},
+  {"range": "P10:P14", "scope": "shared", "group": "ihale-1", "kind": "number", "label": "Kâğıt 1 gerçekleşen nominal"},
+  {"range": "B18:B20", "scope": "shared", "group": "ihale-1", "kind": "number", "label": "Kâğıt 1 açıklanan asgari / ortalama / azami kirli fiyat"},
+  {"range": "A27", "scope": "shared", "group": "ihale-2", "kind": "text", "label": "Kâğıt 2 ISIN"},
+  {"range": "B27", "scope": "shared", "group": "ihale-2", "kind": "date", "label": "Kâğıt 2 valörü (boşsa ihale valörü)"},
+  {"range": "B30:C34", "scope": "shared", "group": "ihale-2", "kind": "number", "label": "Kâğıt 2 teklif: nominal, temiz fiyat"},
+  {"range": "D30:E34", "scope": "shared", "group": "ihale-2", "kind": "pct", "label": "Kâğıt 2 teklif: basit / bileşik getiri"},
+  {"range": "P30:P34", "scope": "shared", "group": "ihale-2", "kind": "number", "label": "Kâğıt 2 gerçekleşen nominal"},
+  {"range": "B38:B40", "scope": "shared", "group": "ihale-2", "kind": "number", "label": "Kâğıt 2 açıklanan asgari / ortalama / azami kirli fiyat"},
+  {"range": "A47", "scope": "shared", "group": "ihale-3", "kind": "text", "label": "Kâğıt 3 ISIN"},
+  {"range": "B47", "scope": "shared", "group": "ihale-3", "kind": "date", "label": "Kâğıt 3 valörü (boşsa ihale valörü)"},
+  {"range": "B50:C54", "scope": "shared", "group": "ihale-3", "kind": "number", "label": "Kâğıt 3 teklif: nominal, temiz fiyat"},
+  {"range": "D50:E54", "scope": "shared", "group": "ihale-3", "kind": "pct", "label": "Kâğıt 3 teklif: basit / bileşik getiri"},
+  {"range": "P50:P54", "scope": "shared", "group": "ihale-3", "kind": "number", "label": "Kâğıt 3 gerçekleşen nominal"},
+  {"range": "B58:B60", "scope": "shared", "group": "ihale-3", "kind": "number", "label": "Kâğıt 3 açıklanan asgari / ortalama / azami kirli fiyat"}
+ ],
+ "panels": [
+  {
+   "id": "H0",
+   "type": "table",
+   "title": "İhale valörü",
+   "range": "A1:C2",
+   "note": "Her kâğıdın birikmiş faizi, önceki ve sonraki kupon tarihi ve işlemiş gün sayısı Bloomberg'den bu valörle gelir (INT_ACC, SETTLE_DT); kâğıda kendi valörü yazılırsa onunla. Burada hesaplanmaz: valör kupon gününe denk gelirse Bloomberg birikmişi 0 verir ve sonraki kupona geçer. Girdiler masa için ortaktır."
+  },
+  {
+   "id": "H1",
+   "type": "table",
+   "title": "Kâğıt 1",
+   "range": "A5:Q22",
+   "wide": true,
+   "note": "Teklif satırına nominal ve şu üçünden birini yazın: temiz fiyat, basit ya da bileşik getiri (birden çoğu yazılırsa önce temiz, sonra basit). Kirli = temiz + valördeki birikmiş faiz; gönderilecek kirli 3 haneye yuvarlanır, tutar onunla hesaplanır. Getiriler DİBS RV'nin BIST tanımıyla: sabit kuponluda basit getiri kuponları dönem başına (1 + y/2) ile iskonto eder, bileşik = (1 + basit/2)² − 1; bono ve kuponsuzda basit = (100/P − 1)·365/gün, bileşik = (100/P)^(365/gün) − 1. TLREF'te getiri yoktur; TÜFE reel fiyat ve reel getiriyle, tutar Bloomberg'in valördeki endeks oranıyla. İhale bitince açıklanan asgari, ortalama ve azami kirli fiyatı yazın: çok fiyatlı ihalede asgari fiyatın üstündeki teklif kendi fiyatından gerçekleşir, asgari fiyattaki kısmen gerçekleşebilir (gerçekleşen nominali yazabilirsiniz)."
+  },
+  {
+   "id": "H2",
+   "type": "table",
+   "title": "Kâğıt 2",
+   "range": "A25:Q42",
+   "wide": true,
+   "note": "Kâğıt 1'deki gibi: nominal ve temiz fiyat / basit / bileşik getiriden biri → gönderilecek kirli; ihale bitince asgari, ortalama ve azami kirli fiyat."
+  },
+  {
+   "id": "H3",
+   "type": "table",
+   "title": "Kâğıt 3",
+   "range": "A45:Q62",
+   "wide": true,
+   "note": "Kâğıt 1'deki gibi: nominal ve temiz fiyat / basit / bileşik getiriden biri → gönderilecek kirli; ihale bitince asgari, ortalama ve azami kirli fiyat."
+  },
+  {
+   "id": "H9",
+   "type": "table",
+   "title": "Yardımcı · Bloomberg yanıtları, nakit akışları ve getiri çözümü",
+   "range": "S5:DA62",
+   "hidden": true
+  }
+ ]
+}
