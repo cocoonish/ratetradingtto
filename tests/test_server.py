@@ -206,21 +206,22 @@ def test_tabs_hand_values_and_search_data_over_http(client, user):
 
 def test_workbook_extras_over_http(client, user, module_service, monkeypatch):
     # the sheets the desk does not use are taken out as the workbook loads: no page, no cells, no picture
-    assert client.get("/api/view/ivir").status_code == 404
-    assert client.get("/api/view/ypdibs").status_code == 404
-    assert client.get("/api/image?book=tto&sheet=%s&i=0" % quote("Ivır Zıvır")).status_code == 404
-    assert client.get("/api/grid?book=tto&sheet=%s&range=A1:B2" % quote("MOBIL MK")).status_code == 404
-    assert "YP DIBS" not in [s["name"] for s in client.get("/api/sheets?book=tto").json()["sheets"]]
+    h = hdr(user)
+    assert client.get("/api/view/ivir", headers=h).status_code == 404
+    assert client.get("/api/view/ypdibs", headers=h).status_code == 404
+    assert client.get("/api/image?book=tto&sheet=%s&i=0" % quote("Ivır Zıvır"), headers=h).status_code == 404
+    assert client.get("/api/grid?book=tto&sheet=%s&range=A1:B2" % quote("MOBIL MK"), headers=h).status_code == 404
+    assert "YP DIBS" not in [s["name"] for s in client.get("/api/sheets?book=tto", headers=h).json()["sheets"]]
     # a picture of a sheet (the workbook's only one was on "Ivır Zıvır"; put on MASA here) is served and cached
-    assert client.get("/api/image?book=tto&sheet=MASA&i=0").status_code == 404
+    assert client.get("/api/image?book=tto&sheet=MASA&i=0", headers=h).status_code == 404
     from tto.xl.model import Model
     import os
     raw = Model.load(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "tto.json.gz"))
     monkeypatch.setattr(module_service.books["tto"].model.sheet("MASA"), "images", list(raw.sheet("Ivır Zıvır").images))
-    res = client.get("/api/image?book=tto&sheet=MASA&i=0")
+    res = client.get("/api/image?book=tto&sheet=MASA&i=0", headers=h)
     assert res.status_code == 200 and res.headers["content-type"] == "image/png" and res.content[:4] == b"\x89PNG"
     assert "max-age" in res.headers["cache-control"]
-    assert client.get("/api/image?book=tto&sheet=MASA&i=x").status_code == 404
+    assert client.get("/api/image?book=tto&sheet=MASA&i=x", headers=h).status_code == 404
     # shortcuts of the desk sheet; columns hidden in Excel only with the helper tables
     assert len(client.get("/api/view/masa").json()["links"]) == 29
 
