@@ -18,9 +18,13 @@ BUNDLE = os.path.join(ROOT, "kurulum", "tto_kur.py")
 
 
 def run(script, *args, cwd=None, bare=True):
-    """Run a bundle script with an interpreter that has no installed packages; returns (exit code, output)."""
+    """Run a bundle script with an interpreter that has no installed packages; returns (exit code, output).
+
+    Python writes to a pipe in the locale's encoding - UTF-8 on Linux, cp1254 on a Turkish Windows (a console
+    gets Unicode either way) - so the script is asked for the UTF-8 its output is read in."""
     cmd = [sys.executable] + (["-S"] if bare else []) + [script] + list(args)
-    res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=300, stdin=subprocess.DEVNULL)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=300, stdin=subprocess.DEVNULL, env=env)
     return res.returncode, (res.stdout + res.stderr).decode("utf-8", "replace")
 
 
@@ -201,7 +205,8 @@ def test_a_file_that_cannot_be_written_is_reported(tmp_path):
 
 
 def test_names_that_would_leave_the_folder_are_refused(tmp_path):
-    for name in ("../disari.txt", "/kok.txt", "data/tto.db", "vendor/local/x.py", "a\\b.txt"):
+    # a backslash is refused as such where it is no separator; on Windows zipfile turns it into "/" (so the ".." counts)
+    for name in ("../disari.txt", "/kok.txt", "data/tto.db", "vendor/local/x.py", "..\\disari.txt"):
         script = str(tmp_path / "kotu.py")
         write(script, make_bundle.bundle_script({"tto/__init__.py": b"", name: b"x"}))
         code, out = run(script, str(tmp_path / "hedef"), "--no-run")

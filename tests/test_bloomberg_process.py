@@ -44,6 +44,18 @@ def wait_for(cond, timeout=15.0, step=0.02):
 
 def alive(pid: int) -> bool:
     """Is the process still running (a zombie nobody has collected counts as gone)?"""
+    if os.name == "nt":
+        # not os.kill(pid, 0): on Windows signal 0 is CTRL_C_EVENT, a console event that "succeeds" whatever the
+        # process - and without a console Python goes on to TerminateProcess, ending the process it was to look at
+        import _winapi
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+        except OSError:
+            return False                                # no such process any more
+        try:
+            return _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_TIMEOUT
+        finally:
+            _winapi.CloseHandle(handle)
     try:
         with open("/proc/%d/stat" % pid) as fh:
             return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
