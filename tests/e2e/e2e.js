@@ -22,13 +22,23 @@ function trNumber(text) {
   return Number(s);
 }
 
+// the accounts are made by tests/test_e2e.py before the server starts (Ayşe Yılmaz: administrator), all with this password
+const PASSWORD = process.env.TTO_E2E_PASSWORD || 'e2e-sifre-1';
+const signedIn = {};                 // user key -> the page signed in as that user (its cookie is the session)
+
+function keyOf(name) {
+  return name.trim().split(/\s+/).join(' ').toLowerCase().replace(/̇/g, '').replace(/ı/g, 'i');
+}
+
 async function login(page, name) {
   await page.goto(BASE + '/');
   await page.waitForSelector('#login:not(.hidden)');
   await page.fill('#login-name', name);
+  await page.fill('#login-pass', PASSWORD);
   await page.click('#login-form button[type=submit]');
   await page.waitForSelector('#app:not(.hidden)');
   await page.waitForFunction(() => document.querySelectorAll('#nav .nav-item').length > 5);
+  signedIn[keyOf(name)] = page;
 }
 
 async function open(page, id) {
@@ -76,7 +86,8 @@ async function waitCell(page, ref, pred, timeout = 20000) {
 }
 
 async function api(page, user, method, path, body) {
-  const res = await page.request.fetch(BASE + path, { method, headers: { 'X-TTO-User': encodeURIComponent(user), 'Content-Type': 'application/json' },
+  const as = signedIn[user] || page;                 // the request goes with the session of that user's page
+  const res = await as.request.fetch(BASE + path, { method, headers: { 'Content-Type': 'application/json' },
     data: body === undefined ? undefined : JSON.stringify(body) });
   return { status: res.status(), json: await res.json().catch(() => null) };
 }
@@ -97,8 +108,17 @@ async function shot(page, name) {
   try {
     // ------------------------------------------------------------------ login
     console.log('login');
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#login:not(.hidden)');
+    check('nothing but the sign-in without a session', (await api(page, 'nobody', 'GET', '/api/status')).status === 401);
+    await page.fill('#login-name', 'Ayşe Yılmaz');
+    await page.fill('#login-pass', 'yanlis-sifre');
+    await page.click('#login-form button[type=submit]');
+    await page.waitForFunction(() => document.getElementById('login-err').textContent.length > 0);
+    check('a wrong password is refused', /hatalı/.test(await page.textContent('#login-err')));
     await login(page, 'Ayşe Yılmaz');
     check('user chip shows the name', (await page.textContent('#user-name')) === 'Ayşe Yılmaz');
+    check('an administrator has the Kullanıcılar page', (await page.locator('#nav .nav-item[data-page=users]').count()) === 1);
     await page.waitForFunction(() => document.querySelectorAll('.kpi').length >= 5);
     check('KPI strip is filled', (await page.locator('.kpi').count()) >= 5);
     check('mode badge says replay data', /KAYITLI/.test(await page.textContent('#mode-text')));
@@ -456,6 +476,8 @@ async function shot(page, name) {
     const pageB = await ctxB.newPage();
     pageB.on('pageerror', (e) => errors.push('pageerror(B): ' + e.message));
     await login(pageB, 'Mehmet');
+    check('a user has no Kullanıcılar page', (await pageB.locator('#nav .nav-item[data-page=users]').count()) === 0);
+    check('a user has no sheet explorer', (await pageB.locator('#nav .nav-item[data-page=explorer]').count()) === 0);
     await open(pageB, 'blotter');
     await pageB.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 3);
     check('another user sees the saved forwards', true);

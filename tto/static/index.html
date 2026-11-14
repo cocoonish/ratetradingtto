@@ -17,14 +17,18 @@
 </head>
 <body>
 <div id="login" class="hidden">
-  <form class="box" id="login-form" autocomplete="off">
+  <form class="box" id="login-form" autocomplete="on">
     <div class="brand" style="padding:0"><div class="logo">TTO</div><div class="txt"><div class="name">TTO Masa</div><div class="sub">TRY · USD faiz masası</div></div></div>
-    <h1>Hoş geldiniz</h1>
-    <p>İsminizi yazıp girin. Senaryolarınız ve girdileriniz bu isimle saklanır.</p>
-    <input id="login-name" name="name" maxlength="40" placeholder="İsminiz" autofocus>
+    <h1 id="login-title">Giriş</h1>
+    <p id="login-hint">İsminiz ve şifrenizle girin.</p>
+    <input id="login-name" name="username" maxlength="40" placeholder="İsim" autocomplete="username" autofocus>
+    <input id="login-pass" name="password" type="password" maxlength="200" placeholder="Şifre" autocomplete="current-password">
+    <input id="login-pass2" name="password2" type="password" maxlength="200" placeholder="Şifre (tekrar)" autocomplete="new-password" class="hidden">
+    <input id="login-note" name="note" maxlength="200" placeholder="Not (isteğe bağlı): kim olduğunuz, masanız" class="hidden">
     <div class="errtxt" id="login-err"></div>
-    <button class="btn primary" type="submit">Giriş</button>
-    <div class="known" id="login-known"></div>
+    <div class="oktxt" id="login-ok"></div>
+    <button class="btn primary" type="submit" id="login-submit">Giriş</button>
+    <div class="login-links"><a href="#" id="login-switch">Hesabınız yok mu? Hesap isteyin</a></div>
   </form>
 </div>
 

@@ -15,6 +15,7 @@ import pytest
 from tto.config import FORBIDDEN_PORTS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+E2E_PASSWORD = "e2e-sifre-1"
 
 
 def _free_port():
@@ -50,13 +51,21 @@ def test_dashboard_in_a_real_browser(tmp_path):
     port = _free_port()
     shots = tmp_path / "shots"
     shots.mkdir()
+    # the scenario's accounts (the dashboard opens with a name and a password; Ayşe Yılmaz is the administrator)
+    from tto.auth import hash_password
+    from tto.store import Store
+    store = Store(str(tmp_path / "data" / "tto.db"))
+    for name, role in (("Ayşe Yılmaz", "admin"), ("Mehmet", "user"), ("Zeynep", "user")):
+        store.create_account(name, hash_password(E2E_PASSWORD), role=role)
+    store.close()
+    env["TTO_E2E_PASSWORD"] = E2E_PASSWORD
     server = subprocess.Popen([sys.executable, "-m", "tto", "--mode", "replay", "--host", "127.0.0.1", "--port", str(port),
                                "--data-dir", str(tmp_path / "data")], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         url = "http://127.0.0.1:%d" % port
         for _ in range(120):
             try:
-                urllib.request.urlopen(url + "/api/status", timeout=1).read()
+                urllib.request.urlopen(url + "/api/auth", timeout=1).read()                 # answers without a session
                 break
             except Exception:  # noqa: BLE001
                 if server.poll() is not None:

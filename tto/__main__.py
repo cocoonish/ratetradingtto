@@ -7,6 +7,7 @@
     python -m tto import-workbook workbooks/TTO_v8_5.xlsm --id tto
     python -m tto import-workbook workbooks/BBG_Borsa_Swap.xlsx --id borsa --password ...   # a file with a password to open
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
+    python -m tto yonetici "Ad Soyad"   # an administrator with a password typed here (the first one, or a forgotten one)
 
 Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
 (see ``tto/bundled.py``).
@@ -65,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk = sub.add_parser("check-bloomberg", help="Bloomberg bağlantısını ve alanları sına")
     chk.add_argument("--bbg-host", default=os.environ.get("TTO_BBG_HOST", "localhost"))
     chk.add_argument("--bbg-port", type=int, default=int(os.environ.get("TTO_BBG_PORT", 8194)))
+    adm = sub.add_parser("yonetici", help="bir kullanıcıyı şifresiyle yönetici yap (ilk yönetici ya da unutulan şifre)")
+    adm.add_argument("name", help="kullanıcı adı")
+    adm.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
     return parser
 
 
@@ -123,6 +127,41 @@ def cmd_check(args) -> int:
     return check_connection(args.bbg_host, args.bbg_port)
 
 
+def cmd_admin(args) -> int:
+    """Make a user an administrator with a password typed here (never on the command line, never echoed): the
+    first administrator of a dashboard, or one whose password was forgotten.  The dashboard may keep running."""
+    import getpass
+
+    from . import auth
+    from .store import Store, now_iso, user_key
+    display = " ".join(str(args.name or "").split())
+    if not display or len(display) > 40:
+        print("HATA: kullanıcı adı 1-40 karakter olmalı", file=sys.stderr)
+        return 2
+    password = getpass.getpass("%s için yeni şifre: " % display)
+    problem = auth.password_problem(password)
+    if problem:
+        print("HATA: %s" % problem, file=sys.stderr)
+        return 2
+    if getpass.getpass("Şifre (tekrar): ") != password:
+        print("HATA: iki şifre aynı değil", file=sys.stderr)
+        return 2
+    path = Settings(data_dir=args.data_dir).db_path
+    store = Store(path)
+    try:
+        key = user_key(display)
+        pw_hash = auth.hash_password(password)
+        if store.account(key) is None:
+            store.create_account(display, pw_hash, role="admin", status="active", by=key)
+        else:
+            store.update_account(key, pw_hash=pw_hash, role="admin", status="active", failed=0, locked_until=None,
+                                 decided_by=key, decided_at=now_iso())
+    finally:
+        store.close()
+    print("%s artık yönetici; bu isim ve şifreyle girebilir (veri: %s)" % (display, path))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:                                       # a console that cannot show a Turkish letter must not stop the start
@@ -137,6 +176,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_import(args)
     if args.command == "check-bloomberg":
         return cmd_check(args)
+    if args.command == "yonetici":
+        return cmd_admin(args)
     return cmd_run(args)
 
 

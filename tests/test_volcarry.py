@@ -9,7 +9,7 @@ import statistics
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import cell
+from conftest import auth, cell
 from tto.service import ServiceError
 from tto.xl.model import parse_a1
 from tto import blotter as bl
@@ -399,7 +399,7 @@ def test_week_days():
 
 def test_over_http(seeded):
     svc, days, data = seeded
-    with TestClient(create_app(svc)) as client:
+    with TestClient(create_app(svc), headers=auth(svc, "Vol Okuyucu")) as client:
         res = client.post("/api/vol", json={"text": "1y, 1y2y3y, yok", "window": 60})
         assert res.status_code == 200
         out = res.json()
@@ -410,8 +410,7 @@ def test_over_http(seeded):
         assert client.get("/api/vol/carry").json()["kind"] == "fly"
         res = client.post("/api/vol/carry", json={"kind": "list", "window": 20, "text": "1y2y3y, 2y"})
         assert res.status_code == 200 and [r["label"] for r in res.json()["rows"]] == ["1Y–2Y–3Y", "2Y"]
-        h = {"X-TTO-User": "carry http"}
-        client.post("/api/login", json={"name": "carry http"})
+        h = auth(svc, "carry http")
         assert client.get("/api/carry", headers=h).json()["path"] == "Bootstrap"
         res = client.post("/api/carry", json={"path": "S3", "a": "1", "b": "3"}, headers=h)
         assert res.status_code == 200 and res.json()["path"] == "S3" and res.json()["about"] == "S3 senaryosu (Dovish)"

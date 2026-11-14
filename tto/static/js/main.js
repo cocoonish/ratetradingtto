@@ -1,7 +1,7 @@
-// Application shell: login by name, navigation, live refresh (server-sent events), status bar.
+// Application shell: sign-in (name and password), navigation, live refresh (server-sent events), status bar.
 import { api, session } from './api.js';
 import { settings, setLang, num, isoToTr } from './format.js';
-import { h, clear, toast, errorToast, debounce, menu } from './ui.js';
+import { h, clear, toast, errorToast, debounce, menu, modal } from './ui.js';
 import { configureGrid, clearSelection, findCell, selectionText } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
@@ -17,10 +17,11 @@ import { openRetEditor } from './ret.js';
 import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
+import { UsersPage } from './pages/users.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null, es: null,
-  online: true, booted: false };
+  online: true, booted: false, pending: 0 };
 
 function store(key, value) {
   try {
@@ -47,50 +48,146 @@ const ctx = {
     if (window.location.hash === hash) route();
     else window.location.hash = hash;
   },
+  /** How many account requests wait (the badge on "Kullanıcılar" in the menu). */
+  setPending: (n) => {
+    state.pending = n || 0;
+    const item = document.querySelector('#nav .nav-item[data-page="users"]');
+    if (!item) return;
+    const old = item.querySelector('.nav-count');
+    if (old) old.remove();
+    if (state.pending) item.appendChild(h('span', { class: 'nav-count', title: 'Onay bekleyen hesap isteği' }, String(state.pending)));
+  },
 };
 
-// ---------------------------------------------------------------------- login
+// ---------------------------------------------------------------------- sign-in
+// One card, three forms: sign in; ask for an account (an administrator approves it); and - while the dashboard has
+// no administrator, on the dashboard's own computer only - create the first administrator.
+const signin = { mode: 'login' };
+
+function setLoginMode(mode) {
+  signin.mode = mode;
+  const ask = mode === 'request';
+  const setup = mode === 'setup';
+  $('login-title').textContent = setup ? 'İlk yönetici hesabı' : ask ? 'Hesap isteği' : 'Giriş';
+  $('login-hint').textContent = setup
+    ? 'Bu dashboard\'un henüz yöneticisi yok. Yönetici hesabınızın adını ve şifresini belirleyin – bu adım yalnızca '
+      + 'dashboard\'un çalıştığı bilgisayardan yapılabilir.'
+    : ask
+      ? 'İsminizi ve bir şifre yazın; bir yönetici onaylayınca bu isim ve şifreyle girersiniz. Daha önce isminizle giriyorduysanız '
+        + 'aynı ismi yazın: girdileriniz ve senaryolarınız korunur.'
+      : 'İsminiz ve şifrenizle girin.';
+  $('login-pass').setAttribute('autocomplete', mode === 'login' ? 'current-password' : 'new-password');
+  $('login-pass2').classList.toggle('hidden', mode === 'login');
+  $('login-note').classList.toggle('hidden', !ask);
+  $('login-submit').textContent = setup ? 'Yönetici hesabını oluştur' : ask ? 'İsteği gönder' : 'Giriş';
+  $('login-switch').textContent = ask ? 'Hesabınız var mı? Giriş yapın' : 'Hesabınız yok mu? Hesap isteyin';
+  $('login-switch').parentElement.classList.toggle('hidden', setup);
+  $('login-err').textContent = '';
+  $('login-ok').textContent = '';
+}
+
 async function showLogin(message) {
   session.user = null;
   session.display = null;
+  session.role = null;
   if (state.es) { state.es.close(); state.es = null; }
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   $('app').classList.add('hidden');
   $('login').classList.remove('hidden');
+  let st = { user: null, setup: false, local: false };
+  try { st = await api.get('/api/auth'); } catch (e) { /* the form still works; the server says what is wrong */ }
+  if (st.user) { await enter(st.user); return; }               // still signed in (this browser's session is valid)
+  setLoginMode(st.setup && st.local ? 'setup' : 'login');
+  if (st.setup && !st.local && !message) {
+    message = 'Bu dashboard\'un henüz yöneticisi yok: ilk yönetici, dashboard\'un çalıştığı bilgisayardaki tarayıcıdan oluşturulur.';
+  }
   $('login-err').textContent = message || '';
+  $('login-pass').value = '';
+  $('login-pass2').value = '';
   const name = $('login-name');
   name.value = store('tto.user') || '';
-  name.focus();
-  name.select();
-  const known = clear($('login-known'));
-  try {
-    const res = await api.get('/api/users');
-    for (const u of res.users.slice(0, 24)) {
-      const b = h('button', { type: 'button' }, u.display);
-      b.addEventListener('click', () => doLogin(u.display));
-      known.appendChild(b);
-    }
-  } catch (e) { /* the list is a convenience only */ }
+  (name.value ? $('login-pass') : name).focus();
 }
 
-async function doLogin(name) {
+async function submitLogin() {
+  const mode = signin.mode;
+  const name = $('login-name').value.trim();
+  const password = $('login-pass').value;
+  $('login-err').textContent = '';
+  $('login-ok').textContent = '';
+  if (!name) { $('login-err').textContent = 'İsminizi yazın'; $('login-name').focus(); return; }
+  if (!password) { $('login-err').textContent = 'Şifrenizi yazın'; $('login-pass').focus(); return; }
+  if (mode !== 'login' && password !== $('login-pass2').value) {
+    $('login-err').textContent = 'İki şifre aynı değil';
+    $('login-pass2').focus();
+    return;
+  }
+  const btn = $('login-submit');
+  btn.disabled = true;
   try {
-    const res = await api.post('/api/login', { name });
+    if (mode === 'request') {
+      const res = await api.post('/api/account-request', { name, password, note: $('login-note').value });
+      store('tto.user', res.display);
+      setLoginMode('login');
+      $('login-pass').value = '';
+      $('login-pass2').value = '';
+      $('login-note').value = '';
+      $('login-ok').textContent = 'İsteğiniz yöneticiye iletildi. Onaylanınca bu isim ve şifreyle girebilirsiniz.';
+      return;
+    }
+    const res = await api.post(mode === 'setup' ? '/api/setup' : '/api/login', { name, password });
     store('tto.user', res.display);
+    $('login-pass').value = '';
+    $('login-pass2').value = '';
     await enter(res);
-    if (res.new) toast('Hoş geldiniz, ' + res.display + '. Girdileriniz ve senaryolarınız bu isimle saklanacak.', 'ok', 5000);
+    if (mode === 'setup') toast('Yönetici hesabınız oluşturuldu. Kullanıcılar: Araçlar → Kullanıcılar.', 'ok', 6000);
   } catch (err) {
     $('login-err').textContent = err.message;
+  } finally {
+    btn.disabled = false;
   }
 }
 
-async function enter(login) {
-  session.user = login.user;
-  session.display = login.display;
+async function signOut() {
+  try { await api.post('/api/logout'); } catch (e) { /* signed out on this side either way */ }
+  showLogin('');
+}
+
+function openPasswordDialog() {
+  const m = modal({ title: 'Şifremi değiştir', width: 420 });
+  const field = (label, auto) => {
+    const input = h('input', { class: 'inp', type: 'password', autocomplete: auto, style: { width: '100%' } });
+    m.body.appendChild(h('div', { class: 'field' }, h('label', null, label), input));
+    return input;
+  };
+  const old = field('Mevcut şifre', 'current-password');
+  const a = field('Yeni şifre (en az 8 karakter)', 'new-password');
+  const b = field('Yeni şifre (tekrar)', 'new-password');
+  const err = h('div', { class: 'errtxt' });
+  m.body.appendChild(err);
+  const save = async () => {
+    if (a.value !== b.value) { err.textContent = 'İki yeni şifre aynı değil'; b.focus(); return; }
+    try {
+      await api.post('/api/password', { old: old.value, new: a.value });
+      m.close();
+      toast('Şifreniz değişti', 'ok');
+    } catch (e) { err.textContent = e.message; }
+  };
+  b.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+  m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Kaydet'));
+  old.focus();
+}
+
+async function enter(me) {
+  session.user = me.user;
+  session.display = me.display;
+  session.role = me.role;
+  state.pending = me.pending || 0;
   $('login').classList.add('hidden');
   $('app').classList.remove('hidden');
-  $('user-name').textContent = login.display;
-  $('user-av').textContent = (login.display.trim()[0] || '?').toLocaleUpperCase('tr');
+  $('user-name').textContent = me.display;
+  $('user-av').textContent = (me.display.trim()[0] || '?').toLocaleUpperCase('tr');
   const [nav, status, users] = await Promise.all([api.get('/api/nav'), api.get('/api/status'), api.get('/api/users')]);
   state.pages = nav.pages;
   for (const u of users.users) state.users[u.name] = u.display;
@@ -99,6 +196,9 @@ async function enter(login) {
   connectEvents();
   loadHeader().catch(() => {});
   route();
+  if (me.role === 'admin' && state.pending) {
+    toast(state.pending + ' hesap isteği onay bekliyor (Araçlar → Kullanıcılar)', '', 6000);
+  }
 }
 
 // ---------------------------------------------------------------------- navigation
@@ -111,7 +211,11 @@ function buildNav() {
     groups.get(g).push(p);
   }
   if (!groups.has('Araçlar')) groups.set('Araçlar', []);
-  groups.get('Araçlar').push({ id: 'explorer', title: 'Sayfa gezgini' });
+  if (session.role === 'admin') {                    // the sheet explorer and the accounts: administrators only
+    groups.get('Araçlar').push({ id: 'explorer', title: 'Sayfa gezgini' });
+    groups.get('Araçlar').push({ id: 'users', title: 'Kullanıcılar' });
+  }
+  if (!groups.get('Araçlar').length) groups.delete('Araçlar');
   // the blotter belongs right under the desk overview
   const masa = groups.get('Masa');
   if (masa) masa.sort((a, b) => (a.id === 'masa' ? -1 : b.id === 'masa' ? 1 : 0));
@@ -124,10 +228,12 @@ function buildNav() {
     }
     nav.appendChild(box);
   }
+  ctx.setPending(state.pending);
 }
 
 function pageTitle(id) {
   if (id === 'explorer') return 'Sayfa gezgini';
+  if (id === 'users') return 'Kullanıcılar';
   const p = state.pages.find((x) => x.id === id);
   return p ? p.title : id;
 }
@@ -138,8 +244,9 @@ function route() {
   const cut = raw.indexOf('?');
   let id = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
   const panel = cut < 0 ? null : new URLSearchParams(raw.slice(cut + 1)).get('p');
-  const known = id === 'explorer' || state.pages.some((p) => p.id === id);
-  if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : 'explorer');
+  const admin = session.role === 'admin';
+  const known = ((id === 'explorer' || id === 'users') && admin) || state.pages.some((p) => p.id === id);
+  if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : (admin ? 'explorer' : 'masa'));
   if (id !== state.pageId) openPage(id, panel);
   else if (panel && state.page && state.page.ready && state.page.focusPanel) state.page.focusPanel(panel);
 }
@@ -161,6 +268,7 @@ async function openPage(id, panel) {
   else if (id === 'watch') page = new WatchPage(host, ctx);
   else if (id === 'heat') page = new HeatPage(host, ctx);
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
+  else if (id === 'users') page = new UsersPage(host, ctx);
   else if (id === 'eod') page = new EodPage(host, ctx);
   else if (id === 'mpc') page = new MpcPage(host, ctx);
   else if (id === 'spreads') page = new SpreadsPage(host, ctx);
@@ -371,7 +479,7 @@ function boot() {
   applyFlash(store('tto.flash') !== '0');
   if (store('tto.nav') === '1') $('app').classList.add('nav-collapsed');
 
-  session.onUnauthorized = () => { showLogin('Oturum bulunamadı – tekrar giriş yapın.'); };
+  session.onUnauthorized = () => { showLogin('Oturumunuz sona erdi – tekrar giriş yapın.'); };
   const after = (res) => { runRefresh(); return res; };
   configureGrid({
     setInputs: (book, items, adhoc, lenient) => api.post('/api/inputs', { book, items, adhoc: !!adhoc, lenient: !!lenient }).then(after),
@@ -383,7 +491,12 @@ function boot() {
     onSelect,
   });
 
-  $('login-form').addEventListener('submit', (e) => { e.preventDefault(); doLogin($('login-name').value); });
+  $('login-form').addEventListener('submit', (e) => { e.preventDefault(); submitLogin(); });
+  $('login-switch').addEventListener('click', (e) => {
+    e.preventDefault();
+    setLoginMode(signin.mode === 'request' ? 'login' : 'request');
+    $('login-name').focus();
+  });
   $('btn-theme').addEventListener('click', () => {
     const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
     const next = cur === 'light' ? 'dark' : 'light';
@@ -417,21 +530,16 @@ function boot() {
   $('btn-user').addEventListener('click', (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     menu(r.left, r.bottom + 4, [
-      { header: session.display || '' },
+      { header: session.display + (session.role === 'admin' ? ' · yönetici' : '') },
       { label: 'Senaryolarım', action: () => openScenarios(ctx) },
-      { sep: true },
-      { label: 'Kullanıcı değiştir / çıkış', action: () => { store('tto.user', null); showLogin(''); } },
-    ]);
+      { label: 'Şifremi değiştir', action: () => openPasswordDialog() },
+    ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } }] : [],
+      [{ sep: true }, { label: 'Çıkış', action: () => signOut() }]));
   });
   window.addEventListener('hashchange', () => { if (session.user) route(); });
   setInterval(pollStatus, 15000);
 
-  const saved = store('tto.user');
-  if (saved) {
-    api.post('/api/login', { name: saved }).then(enter).catch(() => showLogin(''));
-  } else {
-    showLogin('');
-  }
+  showLogin('');                                     // straight in when this browser's session is still valid
 }
 
 // small debugging / testing surface

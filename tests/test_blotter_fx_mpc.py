@@ -7,7 +7,7 @@ import datetime as dt
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import cell
+from conftest import auth, cell
 from helpers import read_xlsx
 from tto import blotter as bl
 from tto.inputs import parse_date
@@ -331,10 +331,9 @@ def test_the_days_file_has_the_pair_the_points_and_signed_dv01(book_of_trades):
 
 
 def test_over_http(desk):
-    from urllib.parse import quote as q
     svc, u = desk
+    hdr = auth(svc, u)
     with TestClient(create_app(svc)) as client:
-        hdr = {"X-TTO-User": q(u)}
         res = client.post("/api/blotter/quote/forward", json={"pair": "EURTRY", "value_date": VALUE, "basis": "SP", "manual": "22.500"}, headers=hdr)
         assert res.status_code == 200 and res.json()["forward"] == pytest.approx(cell(svc, "Forward!G2", u) + 2.25) and res.json()["pair"] == "EURTRY"
         assert client.post("/api/blotter/quote/forward", json={"pair": "zz", "value_date": VALUE, "basis": "FWD", "manual": "1"},

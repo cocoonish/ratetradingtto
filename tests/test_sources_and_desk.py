@@ -8,7 +8,7 @@ import datetime as dt
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import cell, make_service
+from conftest import auth, cell, make_service
 from tto import extras as ex
 from tto import volcarry as vc
 from tto.history import SeriesDef
@@ -100,8 +100,8 @@ def test_the_source_order_is_set_for_everyone_and_kept(tmp_path):
     s = make_service(tmp_path)                                                   # a restart keeps it
     try:
         assert [(c["id"], c["sources"]) for c in s.sources()["curves"]] == [("ois", ["GFOF", "BGN"]), ("off", ["CMPN", "ICPL"]), ("xccy", [])]
+        hdr = auth(s, "Kaynak HTTP")
         with TestClient(create_app(s)) as client:
-            hdr = {"X-TTO-User": s.login("Kaynak HTTP")["user"]}
             assert client.get("/api/sources", headers=hdr).json()["curves"][0]["sources"] == ["GFOF", "BGN"]
             res = client.post("/api/sources", json={"lists": {"ois": ["GFOF"], "off": ["ICPL"], "xccy": ["ICPL"]}}, headers=hdr)
             assert res.status_code == 200 and [c["sources"] for c in res.json()["curves"]] == [["GFOF"], ["ICPL"], ["ICPL"]]
@@ -395,8 +395,8 @@ def test_the_board_is_reset_and_the_log_keeps_its_lines(tmp_path):
         # a line kept before the reset is cleared whatever time it carries (here 23:59:59: a clock ahead of ours)
         assert s.broker_reset(u, day)["board"] == []
         s.broker_reset(u, day, undo=True)
+        hdr = auth(s, u)
         with TestClient(create_app(s)) as client:
-            hdr = {"X-TTO-User": u}
             res = client.post("/api/broker/reset", json={"date": day}, headers=hdr)
             assert res.status_code == 200 and res.json()["board"] == []
             back = client.post("/api/broker/reset", json={"date": day, "undo": True}, headers=hdr).json()["board"]

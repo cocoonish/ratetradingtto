@@ -428,10 +428,22 @@ table.plain td.sell { color: var(--neg); font-weight: 650; }
 #login p { margin: 0 0 18px; color: var(--ink-2); }
 #login input { width: 100%; padding: 10px 12px; font-size: 15px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--surface-2); outline: none; }
 #login input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#login input + input { margin-top: 8px; }
 #login .btn { width: 100%; margin-top: 12px; padding: 10px; font-size: 14px; }
-#login .known { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
-#login .known button { border: 1px solid var(--line-2); background: var(--surface-2); border-radius: 999px; padding: 4px 11px; color: var(--ink-2); font-size: 12px; }
-#login .known button:hover { color: var(--ink); border-color: var(--ink-3); }
+#login .oktxt { color: var(--pos); font-size: 13px; margin-top: 8px; }
+#login .oktxt:empty { display: none; }
+#login .login-links { margin-top: 14px; text-align: center; font-size: 13px; }
+#login .login-links a { color: var(--ink-2); }
+#login .login-links a:hover { color: var(--ink); }
+/* the administrators' page */
+.users-page .users-new { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.users-page .users-new .inp { min-width: 180px; }
+.users-page table.plain td .btn + .btn { margin-left: 4px; }
+.users-page .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line-2); color: var(--ink-2); }
+.users-page .tag.admin { color: var(--accent); border-color: var(--accent); }
+.users-page .tag.off { color: var(--neg); border-color: var(--neg); }
+.nav-item .nav-count { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: 11px; line-height: 18px; text-align: center; }
 .modal-back { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 80; display: grid; place-items: center; }
 .modal { width: min(680px, 94vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-2);
   border-radius: 14px; box-shadow: var(--shadow); }

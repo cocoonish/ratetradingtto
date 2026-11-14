@@ -46,13 +46,25 @@ CREATE TABLE IF NOT EXISTS mpc_values (
 CREATE INDEX IF NOT EXISTS mpc_values_meeting ON mpc_values (meeting, day);
 CREATE TABLE IF NOT EXISTS watch_closes (
     subject TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (subject, day)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY, user TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, ip TEXT);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user);
 """
 
 
 #: table -> columns added after its first version: the solver's own check of a day (largest distance between
 #: model and quote in bp, and what the workbook tolerates), how many quotes were not that day's own close and
-#: which closes were not used (the roots of their tickers)
-_ADDED_COLUMNS = {"mpc_days": (("control", "REAL"), ("tolerance", "REAL"), ("carried", "INTEGER"), ("cleaned", "TEXT"))}
+#: which closes were not used (the roots of their tickers); a user's sign-in: the password hash, administrator
+#: or not, active / waiting for approval / closed, the note sent with a request and who decided on it, the wrong
+#: passwords in a row and until when the name is locked.  A user of an earlier version is an active user without
+#: a password: they ask for an account under the same name to set one.
+_ADDED_COLUMNS = {"mpc_days": (("control", "REAL"), ("tolerance", "REAL"), ("carried", "INTEGER"), ("cleaned", "TEXT")),
+                  "users": (("pw_hash", "TEXT"), ("role", "TEXT NOT NULL DEFAULT 'user'"),
+                            ("status", "TEXT NOT NULL DEFAULT 'active'"), ("note", "TEXT"), ("requested_at", "TEXT"),
+                            ("decided_by", "TEXT"), ("decided_at", "TEXT"), ("failed", "INTEGER NOT NULL DEFAULT 0"),
+                            ("locked_until", "TEXT"), ("requested_new", "INTEGER NOT NULL DEFAULT 0"))}
+_ACCOUNT_FIELDS = ("display", "last_seen", "pw_hash", "role", "status", "note", "requested_at", "decided_by", "decided_at",
+                   "failed", "locked_until", "requested_new")
 
 
 def now_iso() -> str:
@@ -78,7 +90,8 @@ class Store(object):
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(_SCHEMA)
-            self._add_columns("mpc_days", _ADDED_COLUMNS["mpc_days"])
+            for table, columns in _ADDED_COLUMNS.items():
+                self._add_columns(table, columns)
 
     def _add_columns(self, table: str, columns) -> None:
         """Columns that came after a table was first created (a database of an earlier version keeps its rows)."""
@@ -121,6 +134,75 @@ class Store(object):
 
     def user_exists(self, key: str) -> bool:
         return bool(self._q("SELECT 1 FROM users WHERE name=?", (key,)))
+
+    # ------------------------------------------------------------------ accounts and sessions (sign-in)
+    def account(self, key: str) -> Optional[Dict[str, Any]]:
+        """Everything kept of a user, the password hash included (for the sign-in itself only)."""
+        rows = self._q("SELECT * FROM users WHERE name=?", (key,))
+        return dict(rows[0]) if rows else None
+
+    def accounts(self) -> List[Dict[str, Any]]:
+        """Every account as the administrators see it - never a password hash - with how much each user has kept
+        (personal inputs and scenarios: what a request for an existing name would take over)."""
+        rows = self._q("SELECT u.name, u.display, u.created_at, u.last_seen, u.role, u.status, u.note, u.requested_at, "
+                       "u.decided_by, u.decided_at, u.locked_until, u.requested_new, u.pw_hash IS NOT NULL AS has_password, "
+                       "(SELECT COUNT(*) FROM user_inputs i WHERE i.user = u.name) AS inputs, "
+                       "(SELECT COUNT(*) FROM scenarios s WHERE s.user = u.name) AS scenarios "
+                       "FROM users u ORDER BY u.display")
+        return [dict(r, has_password=bool(r["has_password"]), requested_new=bool(r["requested_new"])) for r in rows]
+
+    def create_account(self, display: str, pw_hash: Optional[str], role: str = "user", status: str = "active",
+                       note: Optional[str] = None, by: Optional[str] = None) -> str:
+        """A new account; one made waiting for approval is a request for a new name (``requested_new``: rejected,
+        nothing of it is kept)."""
+        key = user_key(display)
+        ts = now_iso()
+        pending = status == "pending"
+        self._x("INSERT INTO users (name, display, created_at, last_seen, pw_hash, role, status, note, requested_at, "
+                "decided_by, decided_at, requested_new) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (key, display, ts, ts, pw_hash, role, status, note, ts if pending else None, by, ts if by else None,
+                 1 if pending else 0))
+        return key
+
+    def update_account(self, key: str, **fields: Any) -> None:
+        unknown = set(fields) - set(_ACCOUNT_FIELDS)
+        if unknown:
+            raise ValueError("bilinmeyen alan: %s" % ", ".join(sorted(unknown)))
+        if fields:
+            sets = ", ".join("%s=?" % name for name in fields)
+            self._x("UPDATE users SET %s WHERE name=?" % sets, tuple(fields.values()) + (key,))
+
+    def delete_account(self, key: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM sessions WHERE user=?", (key,))
+            self._db.execute("DELETE FROM users WHERE name=?", (key,))
+
+    def admins(self) -> List[str]:
+        """The administrators who can sign in (active, with a password)."""
+        return [r["name"] for r in self._q("SELECT name FROM users WHERE role='admin' AND status='active' "
+                                           "AND pw_hash IS NOT NULL ORDER BY name")]
+
+    def pending_count(self) -> int:
+        return int(self._q("SELECT COUNT(*) AS n FROM users WHERE status='pending'")[0]["n"])
+
+    def add_session(self, token_hash: str, user: str, expires_at: str, ip: Optional[str] = None) -> None:
+        self._x("INSERT INTO sessions (token, user, created_at, expires_at, ip) VALUES (?,?,?,?,?)",
+                (token_hash, user, now_iso(), expires_at, ip))
+
+    def session_user(self, token_hash: str, now: str) -> Optional[str]:
+        """The user of a session that has not expired, while the account is active."""
+        rows = self._q("SELECT s.user FROM sessions s JOIN users u ON u.name = s.user "
+                       "WHERE s.token=? AND s.expires_at>? AND u.status='active'", (token_hash, now))
+        return rows[0]["user"] if rows else None
+
+    def drop_session(self, token_hash: str) -> None:
+        self._x("DELETE FROM sessions WHERE token=?", (token_hash,))
+
+    def drop_sessions(self, user: str) -> None:
+        self._x("DELETE FROM sessions WHERE user=?", (user,))
+
+    def purge_sessions(self, now: str) -> None:
+        self._x("DELETE FROM sessions WHERE expires_at<=?", (now,))
 
     # ------------------------------------------------------------------ personal inputs
     def user_inputs(self, user: str, book: Optional[str] = None) -> Dict[Tuple[str, str], Any]:

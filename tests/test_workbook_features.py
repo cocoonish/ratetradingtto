@@ -438,7 +438,12 @@ def test_long_helper_tables_show_their_first_rows_and_point_to_the_explorer(serv
     helpers = {p["id"]: p for p in service.view(None, "borsa", True)["panels"]}
     d0 = helpers["d0"]
     assert d0["data"]["sheet"] == "Sheet1" and d0["data"]["r"][0] == 2 and d0["data"]["r"][-1] == 61
-    assert d0["note"] == "İlk 60 satır gösteriliyor (toplam 403). Tamamı: Sayfa gezgini → Sheet1!A2:L404"
+    assert d0["note"] == "İlk 60 satır gösteriliyor (toplam 403)."
+    # the sheet explorer is the administrators': only they are pointed to it
+    admin = service.login("Gezgin Yönetici")["user"]
+    service.store.update_account(admin, role="admin")
+    mine = {p["id"]: p for p in service.view(admin, "borsa", True)["panels"]}
+    assert mine["d0"]["note"] == "İlk 60 satır gösteriliyor (toplam 403). Tamamı: Sayfa gezgini → Sheet1!A2:L404"
     assert helpers["t0"]["note"].startswith("BID % / ASK %")                             # a short table keeps its own note
     # the explorer serves the whole block
     full = service.grid(None, "borsa", "Sheet1", "A2:L404")["data"]

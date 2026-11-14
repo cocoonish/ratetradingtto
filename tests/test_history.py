@@ -3,12 +3,11 @@ the meeting calendar (edits, and the roll after a meeting has passed)."""
 import datetime as dt
 import math
 import time
-from urllib.parse import quote
 
 import pytest
 
 import fake_blpapi
-from conftest import make_service
+from conftest import ANON, auth, make_service
 from helpers import close
 from tto import history
 from tto.config import Settings
@@ -1224,16 +1223,20 @@ def client(hsvc):
     from starlette.testclient import TestClient
 
     from tto.server import create_app
-    with TestClient(create_app(hsvc)) as c:
+    _svc[:] = [hsvc]
+    with TestClient(create_app(hsvc), headers=auth(hsvc, "Tarihçe Okuyucu")) as c:
         yield c
 
 
+_svc = []
+
+
 def hdr(user):
-    return {"X-TTO-User": quote(user)}
+    return auth(_svc[0], user)
 
 
 def test_history_api(client, hsvc, monkeypatch):
-    user = client.post("/api/login", json={"name": "Tarihçe API"}).json()["user"]
+    user = hsvc.login("Tarihçe API")["user"]
     pages = {p["id"]: p for p in client.get("/api/nav").json()["pages"]}
     assert pages["eod"]["group"] == "Masa" and pages["mpc"]["group"] == "TRY Faiz" and pages["settings"]["group"] == "Araçlar"
     for path in ("/static/js/pages/history.js",):
@@ -1251,7 +1254,7 @@ def test_history_api(client, hsvc, monkeypatch):
     cal = client.get("/api/calendar").json()
     assert cal["next"] == "2026-12-10" and len(cal["meetings"]) == 95
     dates = [x["date"] for x in cal["meetings"]]
-    assert client.post("/api/calendar", json={"dates": dates}).status_code == 401                      # who is asking?
+    assert client.post("/api/calendar", json={"dates": dates}, headers=ANON).status_code == 401                      # who is asking?
     assert client.post("/api/calendar", json={"dates": "x"}, headers=hdr(user)).status_code == 400
     assert client.post("/api/calendar", json={"dates": dates + ["yarın"]}, headers=hdr(user)).status_code == 400
     res = client.post("/api/calendar", json={"dates": dates}, headers=hdr(user))                        # unchanged: nothing moves
@@ -1261,14 +1264,14 @@ def test_history_api(client, hsvc, monkeypatch):
     assert prev.status_code == 200 and prev.json()["corrected"] == [["2027-01-21", "2027-01-14"]] and len(prev.json()["dates"]) == 95
     assert client.post("/api/calendar/preview", json={"current": dates, "dates": "x"}).status_code == 400
     assert client.post("/api/calendar/preview", json={"current": dates, "dates": ["14.01.2027"], "mode": "x"}).status_code == 400
-    assert client.post("/api/history/settings", json={"dibs_field": "x"}).status_code == 401
+    assert client.post("/api/history/settings", json={"dibs_field": "x"}, headers=ANON).status_code == 401
     assert client.post("/api/history/settings", json={"lookback_days": 3}, headers=hdr(user)).status_code == 400
     ok = client.post("/api/history/settings", json={"dibs_field": "yld_ytm_mid", "lookback_days": 370}, headers=hdr(user))
     assert ok.json() == {"dibs_field": "YLD_YTM_MID", "lookback_days": 370}
     # "update now" runs in the background: the call returns at once
     calls = []
     monkeypatch.setattr(hsvc.history, "sync", lambda **kw: calls.append(kw) or {"fetched": 0, "computed": 0, "rev": hsvc.history.rev})
-    assert client.post("/api/history/sync", json={}).status_code == 401
+    assert client.post("/api/history/sync", json={}, headers=ANON).status_code == 401
     res = client.post("/api/history/sync", json={"recompute": True}, headers=hdr(user))
     assert res.status_code == 200 and res.json()["running"] is True
     for _ in range(100):

@@ -6,12 +6,11 @@ from __future__ import annotations
 import datetime as _dt
 import statistics
 import time
-from urllib.parse import quote
 
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import cell, make_service
+from conftest import auth, cell, make_service
 from tto import watch as wt
 from tto.server import create_app
 from tto.service import ServiceError
@@ -342,8 +341,8 @@ def test_lists_of_an_earlier_version_still_read(svc):
 def test_the_page_over_http_and_the_notes(svc):
     u = svc.login("İzleme HTTP")["user"]
     assert any(p["id"] == "watch" and p["group"] == "Masa" for p in svc.nav())
+    hdr = auth(svc, u)
     with TestClient(create_app(svc)) as client:
-        hdr = {"X-TTO-User": quote(u)}
         assert client.post("/api/watch/preset", json={"group": "Masa"}, headers=hdr).json() == {"added": 5}
         assert client.post("/api/watch/add", json={"book": "tto", "ref": "OIS_MAIN!B18", "label": "2Y"}, headers=hdr).json()["added"] is True
         cat = client.get("/api/watch/catalog", headers=hdr).json()
@@ -381,7 +380,7 @@ def test_the_page_over_http_and_the_notes(svc):
         note = client.post("/api/notes", json={"text": "1Y 35,50 üstü alıcı yok"}, headers=hdr).json()
         assert note["text"] == "1Y 35,50 üstü alıcı yok" and note["by"] == u
         other = svc.login("Notu Okuyan")["user"]
-        assert client.get("/api/watch", headers={"X-TTO-User": quote(other)}).json()["notes"]["text"] == "1Y 35,50 üstü alıcı yok"
+        assert client.get("/api/watch", headers=auth(svc, other)).json()["notes"]["text"] == "1Y 35,50 üstü alıcı yok"
         assert client.get("/api/watch").status_code == 401
         assert client.get("/api/watch/catalog").status_code == 401
 
@@ -534,8 +533,8 @@ def test_the_heat_map_of_the_curves(svc):
     other = svc.login("Başka Isı")["user"]
     h = svc.heat_view(other, "ref")
     assert h["ref_at"] is None and h["panels"][0]["rows"][0]["cells"][cols.index("1Y")]["chg"] is None
+    hdr = auth(svc, u)
     with TestClient(create_app(svc)) as client:
-        hdr = {"X-TTO-User": quote(u)}
         got = client.get("/api/heat?basis=open", headers=hdr).json()
         assert got["basis"] == "open" and got["panels"][0]["id"] == "curve"
         assert client.post("/api/heat/ref", json={}, headers=hdr).json()["count"] > 50
