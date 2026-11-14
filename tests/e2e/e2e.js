@@ -1645,9 +1645,8 @@ async function shot(page, name) {
     await page.waitForFunction(() => /referanstan \(\d\d:\d\d:\d\d\)/.test(document.getElementById('heat-info').textContent), null, { timeout: 15000 });
     check('... against the open, or against a reference taken on purpose (no move since: 0,0)', (await heatOf('OIS 2Y')).chg === '0,0'
       && /−\d+ bp/.test(await page.textContent('#heat-legend')), await heatOf('OIS 2Y'));
-    for (const td of await page.$$('table.heat[data-panel="curve"] td.hc')) {
-      if ((await td.getAttribute('title')).startsWith('OIS 2Y\n')) { await td.click(); break; }
-    }
+    // a locator, found again when the live map redraws itself between finding the point and clicking it
+    await page.locator('table.heat[data-panel="curve"] td.hc[title^="OIS 2Y\\A"]').first().click();
     await page.click('.menu >> text=Hareket alarmı…');
     await page.waitForSelector('#alarm-from');
     await page.selectOption('#alarm-from', 'window');
