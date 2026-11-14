@@ -448,3 +448,26 @@ def test_a_spot_tick_moves_the_smile_without_fitting_it_again(svc):
     again = fv.residuals(q2, s2)
     assert all(abs(again[k] - i1["fit"][k]) < 1e-9 for k in again)
     assert i2["points"]["25C"][0] == pytest.approx(i1["points"]["25C"][0] * 1.01, rel=1e-12)
+
+
+def test_check_fx_asks_once_for_a_pairs_tickers():
+    """``python -m tto check-fx``: one reference request for the surface's tickers, a table of what came back."""
+    import fake_blpapi
+    server = fake_blpapi.Server()
+    for t in fx.TENORS:
+        for kind, v in usdtry_quotes(t).items():
+            server.ref[(fx.vol_ticker("USDTRY", kind, t), "PX_LAST", ())] = v
+        server.ref[(fx.points_ticker(fx.PAIRS[0], t), "PX_LAST", ())] = 1000.0
+        server.ref[(fx.points_ticker(fx.PAIRS[0], t), "FWD_SCALE", ())] = 4.0
+    server.ref[("USDTRY Curncy", "PX_LAST", ())] = 50.0
+    server.invalid.add("USDTRY10B2Y BGN Curncy")
+    lines = []
+    assert fx.check_fx("usdtry", blpapi_module=fake_blpapi.module(server), out=lines.append) == 0
+    text = "\n".join(lines)
+    assert "USDTRY25R3M BGN Curncy" in text and "TRY12M Curncy" in text and "Spot USDTRY Curncy: 50.0000" in text
+    row = next(x for x in lines if x.startswith("2Y"))
+    assert "yok" in row and "20.0000" in row
+    assert len(server.requests) <= 3                           # batched: one request per field set
+    server.invalid.add("USDTRYV1W BGN Curncy")
+    assert fx.check_fx("USDTRY", blpapi_module=fake_blpapi.module(server), out=lines.append) == 2
+    assert fx.check_fx("US/D", out=lines.append) == 1

@@ -7,6 +7,7 @@
     python -m tto import-workbook workbooks/TTO_v8_5.xlsm --id tto
     python -m tto import-workbook workbooks/BBG_Borsa_Swap.xlsx --id borsa --password ...   # a file with a password to open
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
+    python -m tto check-fx USDTRY       # which vol / forward point tickers of a pair the terminal knows (~70 items)
 
 Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
 (see ``tto/bundled.py``).
@@ -65,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     chk = sub.add_parser("check-bloomberg", help="Bloomberg bağlantısını ve alanları sına")
     chk.add_argument("--bbg-host", default=os.environ.get("TTO_BBG_HOST", "localhost"))
     chk.add_argument("--bbg-port", type=int, default=int(os.environ.get("TTO_BBG_PORT", 8194)))
+    cfx = sub.add_parser("check-fx", help="bir paritenin vol / forward puanı ticker'larını Bloomberg'de sına (~70 kalem)")
+    cfx.add_argument("pair", nargs="?", default="USDTRY")
+    cfx.add_argument("--source", default="BGN", help="vol ticker'larının fiyat kaynağı (varsayılan BGN; boş: kaynaksız)")
+    cfx.add_argument("--bbg-host", default=os.environ.get("TTO_BBG_HOST", "localhost"))
+    cfx.add_argument("--bbg-port", type=int, default=int(os.environ.get("TTO_BBG_PORT", 8194)))
     return parser
 
 
@@ -123,6 +129,13 @@ def cmd_check(args) -> int:
     return check_connection(args.bbg_host, args.bbg_port)
 
 
+def cmd_check_fx(args) -> int:
+    from . import bundled
+    bundled.add_local()
+    from .fx import check_fx
+    return check_fx(args.pair, args.source.strip().upper(), args.bbg_host, args.bbg_port)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:                                       # a console that cannot show a Turkish letter must not stop the start
@@ -137,6 +150,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_import(args)
     if args.command == "check-bloomberg":
         return cmd_check(args)
+    if args.command == "check-fx":
+        return cmd_check_fx(args)
     return cmd_run(args)
 
 

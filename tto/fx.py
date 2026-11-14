@@ -976,6 +976,67 @@ class Fx(object):
         self._hist_kick.set()
 
 
+# ---------------------------------------------------------------------------------------------- the terminal check
+def check_fx(pair: str = "USDTRY", source: str = DEFAULT_SOURCE, host: str = "localhost", port: int = 8194,
+             wait: float = 40.0, blpapi_module=None, out=print) -> int:
+    """``python -m tto check-fx USDTRY``: ask the terminal once for every ticker of a pair's surface - the five vol
+    quotes of every tenor, the forward points and their scale, the spot (one reference request, about seventy items)
+    - and print which of them Bloomberg knows.  0: every ATM vol and the spot came back, 2: some did not, 1: no
+    connection."""
+    from .marketdata.bloomberg import BloombergProvider
+    code = str(pair or "").replace("/", "").upper()
+    if not re.match(r"^[A-Z]{6}$", code):
+        out("Parite anlaşılamadı: %r (örn. USDTRY, EURUSD)" % pair)
+        return 1
+    p = next((x for x in PAIRS if x.code == code), None) or _pair(code, "", 4)
+    prov = BloombergProvider(host, port, stream=False, blpapi_module=blpapi_module)
+    try:
+        prov.start()
+    except ImportError as exc:
+        out("blpapi yüklü değil (%s)" % exc)
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        out("Bağlantı kurulamadı: %s" % exc)
+        return 1
+    try:
+        keys: Dict[Tuple[str, str], Tuple] = {}
+        for t in TENORS:
+            for k in KINDS:
+                keys[(t, k)] = bdp_key(vol_ticker(code, k, t, source), FIELD)
+            keys[(t, "FWD")] = bdp_key(points_ticker(p, t), FIELD)
+            keys[(t, "SCALE")] = bdp_key(points_ticker(p, t), "FWD_SCALE")
+        keys[("", "SPOT")] = bdp_key(spot_ticker(p), FIELD)
+        for k in keys.values():
+            prov._lookup(k, 0.0)
+        t0 = time.time()
+        while time.time() - t0 < wait and prov.busy():
+            time.sleep(0.2)
+        time.sleep(0.5)
+
+        def shown(key: Tuple) -> str:
+            v = prov._values.get(key, REQUESTING)
+            if type(v) is float:
+                return "%.4f" % v
+            return {INVALID_SECURITY: "yok", INVALID_FIELD: "alan yok", NOT_APPLICABLE: "-", REQUESTING: "?"}.get(v, "boş")
+
+        out("%s · vol kaynağı %s · ticker örnekleri: %s, %s, %s" % (code, source or "(yok)", vol_ticker(code, "ATM", "1M", source),
+                                                                 vol_ticker(code, "RR25", "3M", source), points_ticker(p, "1Y")))
+        out("%-5s" % "Vade" + "".join("%11s" % k for k in KINDS + ("FWD puan", "FWD_SCALE")))
+        missing = 0
+        for t in TENORS:
+            cells = [shown(keys[(t, k)]) for k in KINDS + ("FWD", "SCALE")]
+            if cells[0] in ("yok", "boş", "?"):
+                missing += 1
+            out("%-5s" % t + "".join("%11s" % c for c in cells))
+        spot = shown(keys[("", "SPOT")])
+        out("Spot %s: %s" % (spot_ticker(p), spot))
+        st = prov.status()
+        out("İstek: %d · veri isteği sayacı: %d%s" % (st["requests"], st["hits_today"], (" · " + st["error"]) if st["error"] else ""))
+        return 0 if not missing and spot not in ("yok", "boş", "?") else 2
+    finally:
+        prov.stop()
+
+
 def _moved(smile: Any, info: Dict[str, Any], F: float) -> Tuple[Any, Dict[str, Any]]:
     """A fitted smile carried to another forward, its shape in moneyness unchanged (strikes scale with F)."""
     if abs(F / smile.F - 1.0) < 1e-14:
