@@ -131,12 +131,19 @@ def test_a_bond_is_named_the_ways_the_brokers_write_it():
 
 def test_a_month_and_a_year_alone_are_the_fixed_coupon_bond():
     """"mar28", "feb27", "Sep 34": the desk names a fixed coupon bond by its month alone - a floater, a CPI linker or a
-    bill is said to be one ("jan30 tlref", "jun29 cpi", "feb27 bono").  A month without a fixed coupon bond takes
-    nothing else: the line is flagged."""
+    bill is said to be one ("jan30 tlref", "jun29 cpi", "feb27 bono").  A month without a fixed coupon bond can mean
+    its other bonds ("jan30" for its floater): a floater first, then a CPI linker, then a bill - flagged.  A kind said
+    is that kind only."""
     q = one("feb27 99.450 offer")
     assert (q["isin"], q["bond_kind"], q["alts"]) == ("TRT100227T13", "fixed", ["TRT240227T17"])        # the bill of the month is not a candidate
+    # no fixed coupon bond in June 2029 or in January 2030: the month's floater, the others as candidates
     q = one("jun29 99.50/99.70")
-    assert (q.get("isin"), q["label"], q["unit"]) == (None, "Haz29", "px") and "nobond" in q["flags"]   # no fixed coupon bond in June 2029
+    assert (q["isin"], q["bond_kind"], q["alts"], q["unit"]) == ("TRT130629T30", "float", ["TRT130629T14"], "px")
+    assert {"bond?", "notfixed"} <= set(q["flags"]) and "nobond" not in q["flags"]
+    q = one("jan30 98.650/750")
+    assert (q["isin"], q["alts"], q["bid"], q["ask"]) == ("TRT020130T19", ["TRT090130T12"], 98.65, 98.75) and "notfixed" in q["flags"]
+    assert "notfixed" not in one("mar28 .400/475")["flags"] and "notfixed" not in one("Jan30 tlref 98.650/750")["flags"]
+    assert "nobond" in one("mar28 zc 36.50")["flags"] and "nobond" in one("dec29 tlref 99.00")["flags"]  # a kind said: that kind only
     assert (one("jun29 cpi 92.050")["isin"], one("jun29 tlref 98.650")["isin"]) == ("TRT130629T14", "TRT130629T30")
     q = one("feb27 bono 31.40")
     assert (q["isin"], q["unit"], q["price"]) == ("TRB100227T13", "yld", 31.4) and q["flags"] == []
@@ -149,7 +156,7 @@ def test_a_month_and_a_year_alone_are_the_fixed_coupon_bond():
     q = one("mar28 vs jun29 cpi switch 210/220")
     assert [leg["isin"] for leg in q["legs"]] == ["TRT150328T24", "TRT130629T14"] and "nobond" not in q["flags"]
     q = one("jan30 700 vs jul30 750 switch trading")
-    assert [leg["isin"] for leg in q["legs"]] == [None, "TRT100730T13"] and "nobond" in q["flags"]
+    assert [leg["isin"] for leg in q["legs"]] == ["TRT020130T19", "TRT100730T13"] and "notfixed" in q["flags"] and q["unit"] == "px"
 
 
 def test_zc_is_a_zero_coupon_one_quoted_on_its_yield():

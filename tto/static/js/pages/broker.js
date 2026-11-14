@@ -18,8 +18,9 @@ const FLAG = {
   standing: ['kotadan', '', 'Mesajda fiyat yok ("taken", "given"): o an duran offer / bid seviyesi alındı'],
   'bond?': ['kâğıt?', 'warn', 'O ay için birden çok kâğıt var ("mar28": 08.03.28 ve 15.03.28; "jan30 tlref": iki TLREF): fiyatı ekrandakine en yakın olan, ekran yoksa kuponu en yüksek olan (gösterge) alındı – yanlışsa tarihi tam yazın (15/3/28)'],
   near: ['yakın kâğıttan', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var: büyük rakamı vadesi en yakın aynı tür kâğıttan (TLREF\'ten TLREF, bonodan bono) alındı'],
-  nobond: ['kâğıt yok', 'warn', 'Masanın DİBS listesinde bu vadede bu türden kâğıt yok. Ay ve yıl tek başına ("jun29") sabit kuponlu kâğıt demektir; '
-    + 'TLREF / TÜFE / bono ise satıra yazın ("jun29 cpi", "jan30 tlref").'],
+  nobond: ['kâğıt yok', 'warn', 'Masanın DİBS listesinde bu vadede bu türden kâğıt yok (tür yazılmışsa yalnız o tür aranır: "mar28 zc", "dec26 tlref").'],
+  notfixed: ['sabit kuponlu değil', '', 'Ay ve yıl tek başına önce sabit kuponlu kâğıt demektir; bu ayda sabit kuponlu olmadığı için ayın öbür kâğıdı alındı '
+    + '(önce TLREF, sonra TÜFE, sonra bono / kuponsuz; birden çoksa ekrandaki fiyata en yakın olan) – yanlışsa türü yazın ("jun29 cpi").'],
   par: ['100\'e göre', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var, yakınında fiyatı bilinen aynı tür kâğıt da yok: TLREF / TÜFE kâğıdı 100 civarı sayılarak tamamlandı – yanlışsa fiyatı tam yazın'],
 };
 

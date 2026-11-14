@@ -362,16 +362,22 @@ def _split_bond_pairs(raw: List[str], low: List[str]) -> Tuple[List[str], List[s
 
 
 def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any]]:
-    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "cpi", "zc");
-    a month and a year said alone ("mar28", "Jan30", "Sep 34") are the fixed coupon bond of the month - the floaters,
-    the CPI linkers and the bills are named as such.  Of several, the one with the highest coupon (the benchmark:
-    "mar28" is the 36.8% of 15.03.28, not the 12.4% of 08.03.28) - flagged, the price may tell otherwise.  Its label,
-    ISIN and whether it trades on yield; ``missing`` when the list has no such bond (nothing else is taken instead)."""
+    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "cpi", "zc") -
+    then only a bond of that kind.  A month and a year said alone ("mar28", "Jan30", "Sep 34") are the fixed coupon
+    bond of the month; a month without one can mean its other bonds ("jan30" for its floater): a floater first, then
+    a CPI linker, then a bill or a zero coupon bond (``other_kind``).  Of several, the one with the highest coupon (the
+    benchmark: "mar28" is the 36.8% of 15.03.28, not the 12.4% of 08.03.28) - flagged, the price may tell otherwise.
+    Its label, ISIN and whether it trades on yield; ``missing`` when the list has no such bond."""
     from . import bonds as bd
     kind = info.get("kind") or next((_BOND_KIND[w.split(".")[0]] for w in low if w.split(".")[0] in _BOND_KIND), None)  # "cpi.t1"
+    other = False
     if kind is None and info.get("month"):
-        kind = "fixed"
-    cands = bd.candidates(info.get("date"), info.get("month"), kind)
+        cands = bd.candidates(None, info["month"], "fixed")
+        if not cands:
+            cands = bd.candidates(None, info["month"], "any")
+            other = bool(cands)
+    else:
+        cands = bd.candidates(info.get("date"), info.get("month"), kind)
     if not cands:
         # nothing of the kind matures then: said as it was ("Haz29", "13.06.29"), the line flagged
         if info.get("month"):
@@ -383,11 +389,13 @@ def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any
         tail = {"float": " TLREF", "cpi": " TÜFE", "zc": " ZC"}.get(kind or "", "")
         # a zero coupon one is quoted on its yield, known or not
         return {"label": label + tail, "months": (y - 2000) * 12.0 + m, "missing": True, "yield": kind == "zc"}
-    cands = sorted(cands, key=lambda b: -(b.get("coupon") or 0.0))
+    order = {"float": 0, "cpi": 1} if other else {}
+    cands = sorted(cands, key=lambda b: (order.get(b.get("kind"), 2), -(b.get("coupon") or 0.0)))
     b = cands[0]
     mat = _dt.date.fromisoformat(b["maturity"])
     return {"isin": b["isin"], "label": bd.short_label(b), "yield": bd.quoted_in_yield(b), "ambiguous": len(cands) > 1,
-            "months": (mat.year - 2000) * 12.0 + mat.month, "alts": [c["isin"] for c in cands[1:]], "bond_kind": b.get("kind")}
+            "months": (mat.year - 2000) * 12.0 + mat.month, "alts": [c["isin"] for c in cands[1:]], "bond_kind": b.get("kind"),
+            "other_kind": other}
 
 
 NEAR_MONTHS = 18          # how far the maturity of a bond may be from the one it stands in for
@@ -590,6 +598,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
             out["alts"] = [a for b in switch for a in (b.get("alts") or [])]
         if any(b.get("missing") for b in switch):
             out["flags"].append("nobond")
+        if any(b.get("other_kind") for b in switch):
+            out["flags"].append("notfixed")
     elif kind == "switch" and instrument is not None:
         # the other side of a switch quoted just before ("..., 220 offer")
         for k in ("label", "key", "legs"):
@@ -612,6 +622,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
             out["alts"] = list(bond.get("alts") or [])
         if bond.get("missing"):
             out["flags"].append("nobond")
+        if bond.get("other_kind"):
+            out["flags"].append("notfixed")
         tails = [re.match(r"^(?:tlref|cpi|zc|tüfe|tufe)\.?(t\d)$", low[k]) for k in idx]      # "cpi.t1"
         settle = (bond.get("settle") or "").upper() or next((_BOND_SETTLE[low[k]] for k in idx if low[k] in _BOND_SETTLE), "") \
             or next((m.group(1).upper() for m in tails if m), "")
