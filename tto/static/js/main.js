@@ -13,6 +13,8 @@ import { HeatPage } from './pages/heat.js';
 import { openAlarmDialog, addToWatch, checkAlarms } from './alarms.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SpreadsPage, SettingsPage } from './pages/history.js';
+import { FxPage } from './pages/fx.js';
+import { FxVolPage } from './pages/fxvol.js';
 import { openRetEditor } from './ret.js';
 import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
@@ -273,6 +275,8 @@ async function openPage(id, panel) {
   else if (id === 'mpc') page = new MpcPage(host, ctx);
   else if (id === 'spreads') page = new SpreadsPage(host, ctx);
   else if (id === 'settings') page = new SettingsPage(host, ctx);
+  else if (id === 'fx') page = new FxPage(host, ctx);
+  else if (id === 'fxvol') page = new FxVolPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   try {

@@ -8,6 +8,7 @@
     python -m tto import-workbook workbooks/BBG_Borsa_Swap.xlsx --id borsa --password ...   # a file with a password to open
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
     python -m tto yonetici "Ad Soyad"   # an administrator with a password typed here (the first one, or a forgotten one)
+    python -m tto check-fx USDTRY       # which vol / forward point tickers of a pair the terminal knows (~70 items)
 
 Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
 (see ``tto/bundled.py``).
@@ -69,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     adm = sub.add_parser("yonetici", help="bir kullanıcıyı şifresiyle yönetici yap (ilk yönetici ya da unutulan şifre)")
     adm.add_argument("name", help="kullanıcı adı")
     adm.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
+    cfx = sub.add_parser("check-fx", help="bir paritenin vol / forward puanı ticker'larını Bloomberg'de sına (~70 kalem)")
+    cfx.add_argument("pair", nargs="?", default="USDTRY")
+    cfx.add_argument("--source", default="BGN", help="vol ticker'larının fiyat kaynağı (varsayılan BGN; boş: kaynaksız)")
+    cfx.add_argument("--bbg-host", default=os.environ.get("TTO_BBG_HOST", "localhost"))
+    cfx.add_argument("--bbg-port", type=int, default=int(os.environ.get("TTO_BBG_PORT", 8194)))
     return parser
 
 
@@ -162,6 +168,13 @@ def cmd_admin(args) -> int:
     return 0
 
 
+def cmd_check_fx(args) -> int:
+    from . import bundled
+    bundled.add_local()
+    from .fx import check_fx
+    return check_fx(args.pair, args.source.strip().upper(), args.bbg_host, args.bbg_port)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:                                       # a console that cannot show a Turkish letter must not stop the start
@@ -178,6 +191,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_check(args)
     if args.command == "yonetici":
         return cmd_admin(args)
+    if args.command == "check-fx":
+        return cmd_check_fx(args)
     return cmd_run(args)
 
 

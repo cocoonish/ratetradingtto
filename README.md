@@ -25,6 +25,10 @@ kayıtlı son veriyle çalışır.
   ([aşağıda](#gün-sonu-matrisi-ppk-fiyatlama-geçmişi-ve-toplantı-takvimi)).
 * **Kotadan işleme:** tablolardaki kotalar tek tıkla chat mesajı olur; bir kota ya da chat'teki bir işlem satırı
   Günlük İşlemler'i dolu açar.
+* **FX opsiyon piyasası:** **Spot / FX** (bir paritenin vol yüzeyi – ATM, 25D / 10D risk reversal ve butterfly –,
+  forward'ları – USDTRY offshore eğrisinden –, smile'ı, ima edilen yolu ve olasılık bulutu, vade × seviye olasılık
+  matrisi) ve **FX Vol İzleme** (USDTRY, G10, çaprazlar ve masanın eklediği her şeyin vol'leri, değişimleri, tarihsel
+  yeri, ısı haritası, vade yapısı ve skew grafikleri) ([aşağıda](#fx-spot--fx-ve-vol-izleme-sayfaları)).
 
 ---
 
@@ -110,6 +114,12 @@ Bağlantıyı ve alanları sınamak için (birkaç örnek kotasyon ister, sonucu
 python -m tto check-bloomberg
 ```
 
+Bir paritenin FX vol ve forward puanı ticker'larını sınamak için (~70 kalem, tek istek):
+
+```bash
+python -m tto check-fx USDTRY
+```
+
 ### Çalışma modları
 
 | Komut | Davranış |
@@ -173,7 +183,7 @@ TRY DİBS'leri; ★ ile trading listesine), **DİBS Trading** (trading listesini
 işlemler, ima repo, günün işlemleri), **Günlük İşlemler**,
 **Broker Chat** (broker'ların chat'te yazdığı kotalar), **Realized Vol · Carry** (yazılan enstrümanın gerçekleşen
 oynaklığı ve fly'ların carry / vol grafiği), **Spread Geçmişi** (offshore − OIS vade bazında, VİOP − OIS kontrat
-bazında; z-skoru, aralık, grafik) ve
+bazında; z-skoru, aralık, grafik), **Spot / FX** ve **FX Vol İzleme** (FX opsiyon piyasası; [aşağıda](#fx-spot--fx-ve-vol-izleme-sayfaları)) ve
 herhangi bir sayfanın herhangi bir aralığını (formülüyle birlikte) gösteren **Sayfa gezgini**. Excel'deki "MOBIL MK",
 "Ivır Zıvır" ve "YP DIBS" sayfalarının dashboard'da sayfası yoktur (masa kullanmıyor); hücreleri hesaplanmaya devam
 eder ve Sayfa gezgini'nden bakılabilir (Masa'daki kısayollardan sayfası olmayan bir sayfaya giden gösterilmez). Masa sayfasının üstündeki **Kısayollar** Excel'deki köprülerin aynısıdır: tıklayınca
@@ -652,6 +662,115 @@ kullandığı depo) kullanır.
 Tarihçe Bloomberg bağlıyken arka planda yaklaşık bir yıla tamamlanır; kayıtlı veride yalnızca dosyadaki son ay ve
 1M–1Y vadeleri vardır (sayfa bunu söyler, geçmişi olmayan vadeleri içeren satırlar boş kalır).
 
+### FX: Spot / FX ve vol izleme sayfaları
+
+Menünün **FX** grubunda iki sayfa: bir paritenin opsiyon piyasası derinlemesine (Spot / FX) ve bütün pariteler bir
+bakışta (FX Vol İzleme). Hesaplar `tto/fxvol.py` (smile ve dağılım, saf Python) ve `tto/fx.py`'dedir (veriler);
+Excel formülü değildir – smile kalibrasyonu ve yoğunluk hücre formülüyle yazılamaz –, Realized Vol · Carry gibi.
+
+**Kotalar.** Her vade için Bloomberg'in beş vol kotası, vol puanı: `USDTRYV1M BGN Curncy` (ATM), `USDTRY25R3M BGN
+Curncy` / `10R` (risk reversal), `USDTRY25B1Y BGN Curncy` / `10B` (butterfly). Vadeler 1W 2W 1M 2M 3M 6M 9M 1Y 18M
+2Y (vol ticker'ında yıl `1Y`, forward puanında `12M`). Fiyat kaynağı (`BGN`) masanın ortak ayarıdır (FX Vol İzleme →
+Kendi ticker'larım → *Kaynağı değiştir*). Pariteler: USDTRY, EURTRY; G10: EURUSD, USDJPY, GBPUSD, USDCHF, AUDUSD,
+USDCAD, NZDUSD, USDNOK, USDSEK; çaprazlar: EURJPY, EURGBP, EURCHF, AUDJPY, GBPJPY; ve masanın eklediği pariteler.
+Ticker adları masanın terminalinde denendi (14.11.2026); `python -m tto check-fx USDTRY` bir paritenin bütün
+ticker'larını tek istekte sorar (~70 kalem) ve hangilerinin var olduğunu tablo olarak yazar.
+
+**Forward'lar.**
+
+* **USDTRY**: Forward sayfasının **offshore eğrisinden** – ICAP ima TRY faizi ve USD OIS, "Serbest forward"
+  listesinin formülüyle: `F = spot·(1 + TRY·g/360)/(1 + USD·g/360)`. Vadelerin tarihi ve TRY faizi `EK_FWD`'nin
+  "TRY faizleri vadelere göre" tablosundan (USDTRY spot valörü + vade, masanın tatil takvimiyle), spot Forward
+  fiyatları tablosunun spotu (üzerine yazılan spot o kişinin forward'ını değiştirir). Aynı tarihte Serbest forward
+  listesindeki "Offshore" forward'ıyla birebir aynıdır (testle doğrulanır).
+* **EURTRY** (TRY çaprazları): USD bacaklarının çarpımı, `F = F(EURUSD)·F(USDTRY)` – TRY tarafı yine offshore eğrisi.
+* **Diğerleri**: Bloomberg spotu + forward puanı / 10^`FWD_SCALE` (`EUR1M Curncy`, `JPY1M Curncy`, çaprazlarda
+  `EURJPY1M Curncy`); teslim tarihi spot valörü (iki iş günü) + vade, hafta sonu atlanarak.
+* Vade süresi `T = gün / 365` (spot valöründen teslime; bugünden vade sonuna, iki uçtaki iki günlük kayma dışında
+  aynı).
+
+**Kotaların anlamı (piyasa kuralları).**
+
+| Pariteler | Delta | Delta tipi | ATM |
+|---|---|---|---|
+| EURUSD, GBPUSD, AUDUSD, NZDUSD | primsiz (`N(d1)`) | 1Y'ye kadar spot, sonrası forward | DNS |
+| USDJPY, USDCHF, USDCAD, USDNOK, USDSEK, G10 çaprazları | primli (`(K/F)·N(d2)`) | 1Y'ye kadar spot, sonrası forward | DNS |
+| USDTRY, EURTRY (ve eklenen EM pariteleri) | primli | her vadede forward | DNS |
+
+Spot delta = forward delta × baz dövizin iskonto faktörü (USD için TRY kitabının USD OIS'i; EUR, GBP, AUD, NZD için
+kendi USD paritesinin `F/S`'i × USD). ATM delta-neutral straddle'dır (primli deltada `K = F·e^(−σ²T/2)`).
+**Risk reversal** smile'ın kendi 25-delta call ve put strike'larındaki vol farkıdır; **butterfly market (broker)
+strangle'dır**: ATM + BF tek vol'le, o vol'deki 25-delta strike'larda fiyatlanan strangle – smile aynı strangle'ı aynı
+fiyatlamalıdır (smile'ın kendi 25D kanatlarının vol'ü "ATM + BF ± RR/2" değildir; USDTRY gibi çarpık bir paritede fark
+büyüktür).
+
+**Smile.** Varsayılan **SVI** (Gatheral; toplam varyans, log-moneyness): beş kotaya en küçük kareler (ATM ağırlığı en
+yüksek, 10D kanatlar en düşük), Gatheral'ın kelebek arbitrajı koşulu `g(k) ≥ 0` ve Lee'nin kanat sınırı ceza olarak –
+smile hiçbir yerde negatif yoğunluk vermez. G10 smile'larını kotaya oturtur; USDTRY'nin orta kotaları kendi aralarında
+arbitrajsız olmayabilir, o zaman en yakın arbitrajsız smile alınır. Masanın terminalindeki USDTRY 1M kotalarıyla:
+ATM, 25D RR ve BF ile 10D RR'de sapma < 0,1 vol, 10D BF'de ~0,3 vol (BGN alış–satış farkı 25D BF'de ~1 vol).
+Karşılaştırma için **SABR** (β = 1; ATM tam, ρ ve ν en küçük kareler) ve **Vanna-Volga** (25D pillar'lar) seçilebilir;
+USDTRY'de SABR 25D RR'yi ~0,6 vol kaçırır ve yoğunluğu negatife düşebilir, VV'nin 10D kanadı ~4 vol uzaklaşır – bu
+yüzden varsayılan SVI'dır. Seçilen model bir vadede arbitrajlıysa sayfa söyler. Kalibrasyon kotalar değişince yapılır;
+spot oynadığında (forward değişince) aynı smile moneyness'te taşınır – bütün koşullar strike'a yalnız `K/F` üzerinden
+bağlı olduğu için bu yaklaşık değil, kesindir.
+
+**Dağılım.** Fiyatlar iskontosuz (forward ölçüsü) olduğundan vade sonundaki spotun **risk-nötr** dağılımıdır:
+`P(S_T > K) = N(d2) − F·n(d1)·√T·σ'(K)` (Breeden–Litzenberger, birinci türevden). Ortalaması forward'dır: USDTRY'de
+bulutun merkezi faiz farkı kadar yukarıdadır – gerçek dünya olasılığı değil, opsiyon piyasasının fiyatladığıdır. Her
+vadede toplam olasılık, ortalamanın forward'a uzaklığı ve yoğunluğun hiçbir yerde negatif olmadığı denetlenir
+("Yoğunluk" sütunu).
+
+**Spot / FX sayfası.**
+
+* **Pariteler · spot ve vol**: her paritenin spotu, son kapanışa göre değişimi, ATM 1W / 1M / 3M / 1Y, 25D RR 1M / 3M,
+  25D BF 1M, 10D RR 1M, 1 aylık ±1σ (spot × ATM 1M × √(30/365)) ve günlük başabaş hareket (spot × ATM 1M / √252).
+  Satıra tıklayınca parite açılır (USDTRY varsayılan; seçim hatırlanır).
+* **Vol yüzeyi**: vade, teslim tarihi, gün, forward, beş kota, smile'ın kendi 10P / 25P / 25C / 10C vol'leri (üzerine
+  gelince strike), ±1σ, dağılımın %5 / medyan / %95'i, **Uyum** (modelin kotalardan en büyük sapması, vol puanı;
+  ayrıntısı üzerine gelince) ve **Yoğunluk** denetimi. Bir kotaya ya da forward'a **çift tıklayınca** kendi değerinizi
+  yazarsınız ("ya şöyle olsa" ya da Bloomberg'den gelmeyen kota): yalnız sizin görünümünüzü değiştirir, hücre mor olur,
+  boş bırakınca Bloomberg'e döner; "N kota sizin · Bloomberg'e dön" hepsini siler. Kayıtlı veri modunda (Bloomberg
+  yokken) kotalar böyle elle yazılarak da hesap yapılır.
+* **İma edilen yol ve olasılık bulutu**: spotun son kapanışları, bugünden itibaren forward patikası (kesikli), medyan
+  ve vade sonu dağılımının yüzdelik bantları (%1–99, %5–95, %10–90, %25–75; açılıp kapanır), bantlar vadeler arasında
+  doğrusal. Ufuk 3A / 6A / 1Y / 2Y; matrisin seviyeleri grafikte noktalı çizgi. Üzerine gelince o tarihteki forward,
+  medyan ve bantlar.
+* **Olasılık matrisi**: satır vade, sütun fiyat seviyesi; **Üstünde** (vade sonunda seviyenin üstünde olma
+  olasılığı), **Altında** ya da **Aralıkta** (iki seviye arası; uçlarda "<" ve "≥"). Seviyeler yazılır (`50 52,5 55`;
+  paritesi için hatırlanır) ya da otomatik gelir (1Y dağılımının %5–%95 aralığında yuvarlak adımlar). Kopyalanır.
+* **Smile ve yoğunluk**: seçilen vadenin smile'ı (vol – strike, pillar'larıyla) ve vade sonundaki spotun yoğunluğu
+  (forward ve spot çizgileriyle).
+
+**FX Vol İzleme sayfası.** Üstteki düğmelerle her bölüm gösterilir ya da gizlenir (tercih tarayıcıda hatırlanır);
+**Pencere** (3A / 6A / 1Y = 63 / 126 / 250 kapanış) z-skoru, yüzdelik ve aralığın penceresidir.
+
+* **Özet**: her parite bir satır: ATM 1M / 3M / 1Y, 25D RR 1M / 3M, 25D BF 1M, 10D RR 1M (seviye ya da Δ1G / Δ1H /
+  Δ1A; renk penceredeki z-skoru, kırmızı yüksek / mavi düşük), ATM 1M'nin z 3A'sı ve yüzdeliği, **ima − gerçekleşen**
+  (ATM 1M − spotun 21 günlük gerçekleşen vol'ü), **eğim** (ATM 1Y − ATM 1M) ve ATM 1M'nin bir yıllık çizgisi.
+* **Isı haritası**: parite × (ATM 1W 1M 3M 6M 1Y · 25D RR ve BF 1M 3M 1Y · 10D RR ve BF 1M); hücrede seçilen ölçü
+  (seviye, Δ1G, Δ1H, Δ1A, z, yüzdelik) ve seviye. Değişimlerde renk sütunun en büyük hareketine göre, z ve yüzdelikte
+  tarihine göre.
+* **Hareketler**: günün en büyük değişimleri ve tarihsel uçta olanlar (|z| ≥ 1,5 ya da yüzdelik ≤ %5 / ≥ %95).
+* **Parite ayrıntısı** (pariteyi seçin; özet ya da ısı haritasında satıra tıklamak da açar): ATM vade yapısı, 25D /
+  10D RR ve BF vade yapısı ve seçilen vadenin smile'ı (10P … 10C) – bugün, 1 hafta ve 1 ay önce (o günlerin
+  kapanışlarından aynı yöntemle; RR / BF kapanışı olmayan gün çizilmez) –, ATM 1M / 3M / 1Y, RR ve BF'nin bir yıllık
+  serileri, ima ve gerçekleşen vol.
+* **Kendi ticker'larım** (masa için ortak): kutuya **parite** yazılırsa (`USDZAR`) o paritenin vol seti bütün
+  tablolara girer (EM paritesi forward delta ile); **herhangi bir ticker** yazılırsa (sonunda sarı tuşuyla: `VIX
+  Index`, `USDTRYV1M CMPN Curncy`) seviyesi, değişimleri, z'si, yüzdeliği ve aralığı izlenir. Ad verilebilir; ✕ çıkarır.
+
+**İstatistikler** Masa → Makro bloğunun ("MAKRO · risk göstergeleri") tanımıyla, her vol için: hafta içi günler (boş
+gün önceki kapanışla, `Days=W, Fill=P`), pencere bugün − 366 … dün; **Δ1G / Δ1H / Δ1A** canlı değerin 1 / 5 / 21 iş
+günü önceki kapanışa farkı; **z 3A** son 63 kapanışa göre `(son − ort)/std` (örneklem std'si, `STDEV`); **z**,
+**yüzdelik** (penceredeki ≤ son kapanış payı) ve **aralık** seçili pencerede; |z| ≥ 1,5 vurgulu.
+
+**Tarihçe.** Her vol'ün ve spotun günlük kapanışı (`PX_LAST`) dashboard'un tarihçe tablosunda `<ticker>|PX_LAST` adıyla
+saklanır: bir seri ilk istendiğinde bir yıl geriye, sonra son on gün, en çok günde bir kez. FX Vol İzleme canlıda
+açılınca izlenen set (parite başına 13 vol ve spot: 16 paritede ~220 seri; ilk gün bir kez), bir paritenin ayrıntısı
+açılınca o paritenin bütün vadeleri (50 vol) istenir. `--no-history` ile çalışırken bu otomatik istek yapılmaz;
+"Tarihçeyi güncelle" düğmesi her zaman çalışır.
+
 ### Dashboard'un kendi ekledikleri
 
 Bunlar Excel dosyalarında yok; ama dashboard'a "kod" olarak değil **Excel formülü** olarak eklendi
@@ -1034,6 +1153,13 @@ açılışta ~100 ticker için bir yıllık günlük kapanış (alan başına 50
 10 gün. Bunlar da günlük istek sayacına yazılır (tur başına ~100). Geçmişi hiç olmayan bir ticker 6 saat boyunca
 yeniden sorulmaz; "Şimdi güncelle" hemen yeniden dener.
 
+**FX vol'leri** de aynı yoldan gelir: bir kota ilk istendiğinde referans isteği, sonra abonelik (vol ve forward puanı
+ticker'larında `LAST_PRICE`, `BID`, `ASK`, `MID` akar). Yalnız açılan sayfanın istediği ister: Spot / FX'te açılan
+parite için ~60 ticker (10 vade × 5 kota, forward puanları ve `FWD_SCALE`, spot), FX Vol İzleme'de parite başına 13 vol
+ve spot (16 paritede ~220 abonelik). Tarihçeleri yukarıda ([FX tarihçesi](#fx-spot--fx-ve-vol-izleme-sayfaları)): ilk gün bir
+yıllık BDH (~220 seri), sonra günde bir son 10 gün. Bu yeni ticker'lar Bloomberg'in aylık tekil menkul sınırına da
+sayılır.
+
 ### Bloomberg oturumu ayrı bir süreçte
 
 Bloomberg, olayları uygulamaya sınırlı uzunlukta bir kuyruktan verir; yeterince hızlı okumayan uygulamayı önce
@@ -1113,6 +1239,10 @@ olay bekledi).
   değiştirin (ör. `YLD_CNV_MID`). Toplantı takvimindeki geçmiş toplantılar (2025–2026) TCMB takviminden gelir;
   eksik ya da fazla varsa Ayarlar'dan düzeltin.
 * `python -m tto check-bloomberg` ile bağlantıyı sınayın, ardından birkaç hücreyi Excel'le karşılaştırın.
+* **FX ticker'ları:** `python -m tto check-fx USDTRY` (ve izlediğiniz başka bir parite) bir paritenin bütün vol,
+  forward puanı ve spot ticker'larını tek istekte sorar ve hangilerinin geldiğini yazar. FX Vol İzleme'yi ilk açışta
+  vol'lerin bir yıllık tarihçesi istenir (~220 seri, bir kez); günlük veri limitine yakın bir günde açmayın ya da
+  `--no-history` ile çalışıp "Tarihçeyi güncelle"yi uygun bir anda kullanın.
 * **Bloomberg kuyruğu:** açılıştan sonra konsolda `Slow consumer` / `Marking Session as slow` satırı çıkmamalı,
   rozetin ipucunda "oturum ayrı süreçte" yazmalı. Çıkarsa ipucundaki sayıları (abonelik, düşen olay) not edin.
 
@@ -1143,6 +1273,12 @@ olay bekledi).
 * **"Gerçekleşen"** (yapılan toplantılarda) TLREF fixingindeki değişimdir, politika faizi kararı değil; TLREF
   politika faizinden ayrıştığı dönemlerde (ör. fonlamanın üst banda kaydığı günler) ikisi farklıdır.
 * **USDTRY IYIX** sayfası Refinitiv `RtGet` kullanıyor; canlı modda `#N/A`.
+* **FX olasılıkları risk-nötrdür** (forward ölçüsü): opsiyon piyasasının fiyatladığı dağılımdır, gerçek dünya tahmini
+  değildir; USDTRY'de forward'ın faiz farkı merkezi yukarı taşır. Delta / ATM / prim kuralları tablodaki piyasa
+  alışkanlıklarıdır (Bloomberg OVDV ayarlarıyla karşılaştırılmadı); BGN'nin orta kotaları kendi aralarında arbitrajsız
+  olmayabilir (SVI en yakın arbitrajsız smile'ı alır, sapma "Uyum" sütununda). G10 teslim tarihleri yalnız hafta sonunu
+  atlar (ülke tatilleri yok); vade süresi `gün/365`. Kayıtlı veri modunda FX kotası ve tarihçesi yoktur (kotalar elle
+  yazılabilir). Gerçekleşen vol kapanışlardan, işlem günleriyle hesaplanır.
 * **Kayıtlı veri modu** piyasa verisini ve "bugün"ü dosyanın son hesaplandığı güne (03.11.2026) sabitler;
   Günlük İşlemler ise gerçek takvim gününe yazılır. Spot hücreleri de (`VIOP!L99:L100`, içlerinde Bloomberg çağrısı
   var) dosyadaki değerde kalır: manuel spot bu modda kaynak yazısını değiştirir ama kullanılan spotu değiştirmez
@@ -1179,6 +1315,8 @@ Bloomberg ve ağ gerekmez (~8–11 dk). 868 test (gerçek `blpapi` kuruluysa 7 t
 | `test_watch.py` | **Ne izlenebilir**: OIS, offshore, masa, VİOP kontratı (ticker'ıyla ya da sırasıyla; OIS − VİOP bp, ima faiz), kâğıt (ISIN'iyle; ASW, getiri, pahalı/ucuz, liste dışı kâğıt), hücrenin gösterdiği şey olarak alınması, reddedilenler; **ifadeler** (okunuşu, hataları, birimi: spread / fly bp, ortalama %, oran düz sayı, hücre adresi); **izleme listesi** (hazır gruplar, açılış / düşük / yüksek / gün içi çizgi, referanstan değişim, sıra / ad / hücrenin birimi, kişiye özel liste, açılışın saklanması, yeni gün); **alarmlar** (seviyenin gösterildiği gibi okunması, ≥ / ≤ / kesişir, bir kez çalması, başka kullanıcıya söylenmemesi, yeniden kurma ve silme, izleme döngüsünün kendiliğinden çalması; **VİOP spread'i, kâğıt ASW'i ve ifade üzerine alarmlar**); kâğıt listede yer değiştirince ve **kontratlar dönünce** takip; önceki sürümün listeleri; HTTP uçları (katalog, önizleme) ve **masa notları**; **hareket alarmları** (açılıştan, kurulduğu andan, referanstan, son 10 dakikada - saat testte verilir -, yön, hatalı koşulların reddi, yeniden kurunca yeni başlangıç); **z-skoru ve bant** (tarihçeden, ifadenin parçalarından, dashboard'un kendi kapanışlarından; 20 / 60 / 250 gün; günün kapanışının kaydı; z alarmı); **ısı haritası** (tablolar, sütunlar, hücrelerin konuları, piyasanın hareketi, önceki kapanış: tarihçe ve kendi kayıt, referans - kişiye özel -, HTTP) |
 | `test_bonds.py` | **Tüm Kâğıtlar** (77 kâğıt türlerine ve vadesine göre, ★, trading listesindekilerin fiyatı ve DİBS RV özeti, listede olmayanlar, kendi eklenen kâğıt ve ISIN'inden vadesi, sayfadaki ☆ / ★), **★ ile trading listesi** (listenin sonuna ekleme, herkes için, özetteki tür grupları ve vade sırası, çıkarınca satırın kaynağının ve herkesin kişisel değerlerinin silinmesi, HTTP), **DİBS Trading** (her valörün menkulü ve tarihi, DİBS RV'nin valörünün o sayfadan okunması, diğerlerinin hata değil boş kalması, kaynağın değiştirilip boşaltılınca varsayılana dönmesi, kirli fiyatlardan **ima repo** ve TLREF farkı - yalnız aynı güne ait fiyatlardan, değilse kartta ve özette nedeni -, TÜFE'de repo olmaması), canlıda **işlemin görüldüğü an** (ilk yanıt işlem sayılmaz, aynı fiyattan işlem hacimden anlaşılır, azalan hacim, yeni gün), sayfada saat ve günün işlemleri, **kâğıt kartı** (katalog, DİBS RV satırı, valörler, tahta, chat satırları, işlemler, listede olmayan kâğıt, HTTP); **TRY DİBS kataloğu** (77 kâğıt, ISIN kontrol hanesi, ISIN'deki vade, türler, bir ayın / günün adayları); broker chat'te **DİBS kotaları** (tarih ve ay-yıl yazımları, TLREF / TÜFE / bono, valör, kısa fiyatın tamamlanması, Türkçe işlem / ref / ilgi kelimeleri, switch'in metin kalması), fiyatı bilinmeyen kâğıdın **en yakın aynı tür kâğıttan** ya da 100'den tamamlanması, **başlıklı liste** (ihale fiyatları), servisin örnek chat'i ekranla okuması (ima getiri, bir ayın iki kâğıdının ekranla ayrılması), **DİBS RV'deki broker sütunları**, **ISIN ile listeye ekleme** (listenin sonuna, atlanan / reddedilen, ortak ve kişisel liste, HTTP), **100 satırlık toplu forward**'ın Forward tablosuyla birebirliği ve **Bulk Bond**'un yeni satırları; **switch** kotaları (iki kâğıt: getiri farkı bp, yazılış sırası ve bağlaçlar, "bid … offer" ayrı yazılışı, tahtada tek satır; bacak bacak yazılmış switch: her bacağın fiyatı kendi ekranıyla tamamlanır, olay satırın kelimelerinden; üç kâğıt metin kalır); **ay-yıl tek başına önce sabit kuponlu** (o ayda yoksa ayın TLREF'i, sonra TÜFE'si; tür yazılınca yalnız o tür; switch bacağının kendi türü); **zc = sıfır kuponlu ve getiriyle** (bono / kuponsuz, bitişik `feb27zc`, kuponluya geçmeme, getiride bid > ask ve kısa ask'in altta tamamlanması); virgülden sonraki öbür tarafın aynı kâğıt olması |
 | `test_sources_and_desk.py` | **Fiyat kaynağı sırası**: canlı hücrelerin sıradaki ilk fiyatlı kaynağı alması (offshore'da iki taraflı kaynak, tek taraflı alınmaz), kayıtlı veride sayfaların dosyanın değerinde kalması, sıranın herkes için değişmesi, saklanması, tarihçe tanımlarının izlemesi, hatalı kod, HTTP; **yedek kaynağın yalnızca boş günleri hareketiyle doldurması**; tanımsız ticker açıklamaları; **ASW'nin FX swap eğrisiyle** fiyatlanması; **Forward fiyatları**: USDTRY / EURTRY tablolarının Forward sayfasıyla birebirliği (günlük puanlar dahil), yazılan faizin iki pariteyi yalnız yazana yeniden fiyatlaması, **Elle** satırı (eğri + mid ya da spread, genişlik), **serbest forward** (spot, major, minor eğrilerden; ileri başlangıç; EURTRY; eğrinin bittiği yerde boş; üzerine yazma), **vadelere göre simple zero** tablosu, eski düzende yazılmış değerin silinmesi; altın serbest sütunu; **z-score**; **tahta sıfırlama / geri alma, işaretlenen satırların silinmesi**; bugünü içeren aralıkta işlem girişi; **FX swap puanlarının okunuşu ve ima TRY faizi**; **OIS Kontrol gün sayıları masa takvimiyle** (düğüm tarihinden sayılan gün, hafta içi Bloomberg'le aynı) |
+| `test_fxvol.py` | FX smile'ları: normal dağılım ve tersi, Black, piyasanın deltaları (forward / spot, primli) ve strike'ları – primli call deltasının azalan kolu –, delta-neutral straddle, market strangle; **SVI'nin, kotaları üreten smile'ı geri bulması**, G10 smile'ını arbitrajsız ve kotasına oturtması, USDTRY benzeri smile'da arbitrajsız kalması (ATM ve 25D kotalarda < 0,1 vol), **SABR'ın USDTRY skew'unu tutamaması** (neden SVI), Vanna-Volga'nın pillar'larından geçmesi, eksik kotalar; dağılım: düz smile'da lognormal yasa, kuantil ↔ CDF, ortalama = forward, yoğunluğun call'un ikinci türeviyle aynılığı |
+| `test_fx.py` | Spot / FX ve FX Vol İzleme: ticker adları (Bloomberg'deki gibi), paritelerin kuralları, **USDTRY forward'ının Forward sayfasının "Serbest forward" listesindeki offshore forward'ıyla birebirliği** (her vade), yazılan spotun yalnız sahibini etkilemesi, puandan forward ve TRY çaprazının USD bacaklarından, teslim tarihleri; yüzey (her vadede arbitrajsız, ortalama = forward, artan kuantiller, skew), otomatik seviyeler, SABR / geçersiz model, EURUSD'de spot delta ve iskonto, **kendi kotası** (yalnız sahibine, boşla Bloomberg'e dönüş, hatalı girdiler), pariteler tablosu, **Makro bloğunun istatistikleri** (Δ1G / 1H / 1A, z 3A, pencere z'si, yüzdelik, aralık, boş günün doldurulması), gerçekleşen vol, yuvarlak seviyeler, izleme (tarihçeyle, eklenen parite ve ticker, ortak fiyat kaynağı), parite ayrıntısı (bugün / 1H / 1A önce; RR / BF'siz gün smile'sız), tarihçenin bir yıl geriye sonra son on gün istenmesi, **spot oynayınca smile'ın yeniden kalibre edilmeden taşınması**, `check-fx`, HTTP uçları |
 | `test_volcarry.py` | Realized vol: yazılanın okunuşu, enstrüman seviyesinin günlere göre kuruluşu (yalnızca bütün bacakların kapandığı günler), **vol = günlük değişimlerin standart sapması** (elle hesapla aynı; pencereler, dolmayan pencere, en az beş değişim, kayan vol), forward'ın par eğrisinden bootstrap'i (düz eğri, sınırlar, Excel'in forward'ına 5 bp içinde yakınlık), sayfa satırı; tarihçeye yazılmış kapanışlarla servis (outright / spread / fly / FRA / cross-currency, eksik günü olan vade, geçmişi olmayan vade, pencere seçimi), **carry / vol** (C & R sayfasının 34 fly'ı ve 120 spread'i, sayfanın kendi C+R değerleri, ufukların iş günü sayısı, oran = C+R ÷ (σ·√gün)), **carry patikası** (S1'in Excel'in kaydettiği C & R değerlerini birebir vermesi, Bootstrap'ta ufku vadeye eşit OIS'in carry'sinin ~0 olması, patikadan bağımsız roll, kullanıcıya özel seçim ve ufuklar, hatalı değerler), **Listem** (yazılan OIS vadesi / spread / fly'ın carry'si, FRA ve listede olmayan vade için açıklama), **Spread Geçmişi** (offshore − OIS: iki eğrinin ortak günlerinden seri, canlı kotayla bugünkü seviye, 1G / 1H / 1A değişim, 20 / 60 / 250 kapanışta ortalama, σ, z, aralık, yüzdelik; canlı kota yokken son kapanış; VİOP − OIS kontratları), HTTP uçları |
 | `test_charts.py` | Grafik tanımlarının Excel'den alınışı (renk, çizgi, işaretçi, eksen sınırları, tarih ekseni, bid–ask kutuları), değerlerin Excel kuralıyla çizime verilişi (boşluk, `#N/A`, metin) ve XY grafikleri (nokta etiketleri, sayı / tarih ekseni) |
 | `test_extras.py` | Dashboard'un ekledikleri: forward kotasyon matrisi (yedi eğri Masa bloğuyla aynı, bid / ask ayrı spread, puan → spread tersi; **piyasa spread'i**: her vadede offshore ima − OIS, seçilince spread'in yerine geçmesi, EURTRY'nin seçimi izlemesi; **EURTRY matrisi**: aynı tarihte USDTRY ile aynı OIS faizi, EUR faizi ve gününün Masa'nın EURTRY hücreleriyle aynılığı, eğri ve spread'lerin USDTRY'yi izlemesi ve ayrılması, kendi spot'u, puandan spread), altın (`spot·(1+swap·g/360)` kapalı formülü, USD faizinin hesaba girmediği, faiz interpolasyonu, kaynak seçimi, `XAUSR…` ticker'ları ve ticker eki, canlıda `BFXFORWARD`'sız çalışma, VİOP / Forward hücrelerinin beslenmesi, "belli faizle fiyat"; **VİOP XAUTRY hesaplayıcısında her girdinin elle yazılması**: fiyattan ima TRY ve ima altın swap faizi, ima faizle fiyatın geri gelmesi, başka tarih, serbest sütun, silince piyasaya dönüş; **VİOP geçmiş serileri**: canlı-benzeri bir sağlayıcının geçmişiyle ima faiz / baz / OIS'in elle hesapla ve aynı günlerde sayfanın kendi "Baz" değeriyle aynılığı, fiyatı olmayan günün çizilmemesi, grafik verisi, kontrat seçimi, kendi geçmiş penceresi – sayfanın 20 günlük istatistik penceresi değişmeden), bir ekin dosyaya uymadığında dışarıda bırakılması, Borsa O/N karşılıkları ve örnek kotaların RET'e eşitliği, **Borsa'da yalnızca miktarı olan kotanın listelenmesi** (miktarı 0 / eski fiyatlı vadeler, tek taraflı kota, hata hücresi kalmaması), ASW ↔ DİBS RV |
@@ -1276,6 +1414,10 @@ tto/watch.py       izlenenler (VİOP, kâğıt, OIS, offshore, masa, ifade, hüc
 tto/bonds.py       TRY DİBS kataloğu (tto/data/try_bonds.json): ISIN kontrolü, ISIN'deki vade, chat'teki kâğıdın adayları
 tto/volcarry.py    realized vol (yazılan enstrümanın günlük tarihçeden seviyesi, değişimlerin standart sapması,
                    forward için par eğrisinden bootstrap) ve carry'nin vol'e oranı
+tto/fxvol.py       FX smile'ları (saf Python): Black, piyasanın delta / ATM kuralları, market strangle, SVI (varsayılan),
+                   SABR, Vanna-Volga; smile'dan spotun risk-nötr dağılımı, kuantiller, yoğunluk denetimi
+tto/fx.py          Spot / FX ve FX Vol İzleme: pariteler, ticker'lar, forward'lar (USDTRY offshore eğrisinden), yüzey,
+                   olasılık matrisi, izleme istatistikleri (Makro bloğunun tanımı), FX tarihçesi, check-fx
 tto/xlsx.py        gün sonu arşivi için küçük .xlsx yazıcı (yalnızca değerler ve biçimler)
 tto/server.py      HTTP API + canlı güncelleme (server-sent events); oturum kapısı: girişsiz /api isteği 401
 tto/auth.py        şifre özeti (PBKDF2-SHA256), oturum anahtarı, kilit ve süre ayarları
@@ -1284,7 +1426,7 @@ tto/store.py       SQLite (kullanıcılar ve oturumlar, girdiler, senaryolar, RE
 tto/bundled.py     kurulu değilse web paketlerini vendor/ altındaki wheel'lerden içe aktarır
 tto/views/         sayfa tanımları: tablolar, girdiler, sekmeler ("sections") ve sekmelerin üstünde sabit duranlar ("pinned")
 tto/data/          kayıtlı veri modunda kullanılan ek kotalar ve TLREF geçmişi (replay_*.json), DİBS kataloğu
-tto/static/        arayüz (derleme gerektirmeyen ES modülleri, kendi SVG grafikleri)
+tto/static/        arayüz (derleme gerektirmeyen ES modülleri, kendi SVG grafikleri; fan.js: olasılık bulutu)
 models/            içe aktarılmış çalışma kitapları        workbooks/   kaynak Excel dosyaları
 vendor/            gömülü web paketleri (değiştirilmemiş PyPI wheel'leri; Python 3.8 / 3.9 / 3.10+ setleri)
 tools/             parite, LibreOffice referansı, içe aktarma, kayıtlı veri kotaları, tek dosyalık kurulumun üretimi

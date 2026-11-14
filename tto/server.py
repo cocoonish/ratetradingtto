@@ -337,6 +337,54 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def spreads(request: Request):
         return ok(await call(svc().spreads, _user(request)))
 
+    # ------------------------------------------------------------------ Spot / FX and FX vol
+    @handler
+    async def fx_board(request: Request):
+        return ok(await call(svc().fx_board, _user(request)))
+
+    @handler
+    async def fx_surface(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().fx_surface, _user(request), data.get("pair"), data.get("model"), data.get("levels")))
+
+    @handler
+    async def fx_override(request: Request):
+        data = await _body(request)
+        if data.get("clear"):
+            return ok(await call(svc().fx_override_clear, _user(request), data.get("pair")))
+        return ok(await call(svc().fx_override, _user(request), data.get("pair"), data.get("tenor"), data.get("kind"),
+                             data.get("value")))
+
+    @handler
+    async def fx_monitor(request: Request):
+        return ok(await call(svc().fx_monitor, _user(request), request.query_params.get("window", 250)))
+
+    @handler
+    async def fx_pair(request: Request):
+        q = request.query_params
+        return ok(await call(svc().fx_pair, _user(request), q.get("pair"), q.get("tenor", "1M"), q.get("model", "svi")))
+
+    @handler
+    async def fx_series(request: Request):
+        q = request.query_params
+        return ok(await call(svc().fx_series, _user(request), q.get("ticker"), q.get("window", 250)))
+
+    @handler
+    async def fx_tickers(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            if data.get("remove"):
+                return ok(await call(svc().fx_ticker_remove, _user(request), data.get("remove")))
+            if "source" in data:
+                return ok(await call(svc().fx_set_settings, _user(request), data.get("source")))
+            return ok(await call(svc().fx_ticker_add, _user(request), data.get("text"), data.get("label", "")))
+        return ok(await call(svc().fx_tickers, _user(request)))
+
+    @handler
+    async def fx_history(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().fx_history_sync, _user(request), data.get("pair")))
+
     # ------------------------------------------------------------------ broker chat
     @handler
     async def broker(request: Request):
@@ -685,6 +733,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/history/mpc", history_mpc),
         Route("/api/calendar", calendar, methods=["GET", "POST"]),
         Route("/api/calendar/preview", calendar_preview, methods=["POST"]),
+        Route("/api/fx/board", fx_board),
+        Route("/api/fx/surface", fx_surface, methods=["POST"]),
+        Route("/api/fx/override", fx_override, methods=["POST"]),
+        Route("/api/fx/monitor", fx_monitor),
+        Route("/api/fx/pair", fx_pair),
+        Route("/api/fx/series", fx_series),
+        Route("/api/fx/tickers", fx_tickers, methods=["GET", "POST"]),
+        Route("/api/fx/history", fx_history, methods=["POST"]),
         Route("/api/events", events),
         Mount("/static", app=_Static(directory=STATIC), name="static"),
     ]

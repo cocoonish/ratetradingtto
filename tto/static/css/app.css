@@ -771,3 +771,30 @@ table.heat td .l { font-size: 10px; color: var(--ink-2); line-height: 1.2; }
 .quote-row b { min-width: 34px; }
 .quote-row.soft { opacity: .5; }
 .quote-text { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; line-height: 1.5; resize: vertical; margin-bottom: 6px; }
+
+/* ---------------------------------------------------------------- Spot / FX and FX vol */
+.fxpanel > header .fold { font-size: 11px; padding: 2px 5px; }
+.fxpanel > header .seg button { padding: 4px 9px; font-size: 12px; }
+.fxpanel > header .inp.fxlevels { width: 270px; height: 26px; font-size: 12px; }
+.fxpanel > header { flex-wrap: wrap; }
+table.grid td.own { background: var(--hand-bg); box-shadow: inset 0 -2px 0 var(--hand-line); }
+.fxmethod { padding: 8px 14px 10px; color: var(--ink-2); font-size: 12px; line-height: 1.55; max-width: 1100px; }
+.fxmethod p { margin: 6px 0; }
+.fxmethod code { font-family: var(--mono); font-size: 11px; background: var(--surface-2); padding: 0 4px; border-radius: 4px; }
+.fanhost { padding: 0 4px; }
+.fxpanel .volcharts { border-top: 0; }
+.fxchips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.fxchips button { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-3); border-radius: 999px; padding: 3px 10px; font-size: 11.5px; }
+.fxchips button.on { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
+table.fxheat { border-collapse: separate; border-spacing: 2px; font-variant-numeric: tabular-nums; margin: 8px 10px; }
+table.fxheat th { color: var(--ink-3); font-weight: 600; font-size: 11px; padding: 2px 6px; text-align: center; white-space: nowrap; }
+table.fxheat th.row { text-align: left; color: var(--ink-2); }
+table.fxheat td { min-width: 58px; padding: 4px 6px; text-align: right; border-radius: 6px; background: var(--heat-mid, var(--surface-2)); cursor: pointer; }
+table.fxheat td .c { font-weight: 650; color: var(--ink); }
+table.fxheat td .l { font-size: 10.5px; color: var(--ink-2); }
+table.fxheat td.none { background: none; cursor: default; }
+.fxspark { display: block; }
+.fxspark path { fill: none; stroke: var(--ink-2); stroke-width: 1.25; }
+.fxspark circle { fill: var(--c-blue); }
+.fxadd { display: flex; gap: 6px; align-items: center; padding: 8px 12px; flex-wrap: wrap; }
+.fxadd .inp { width: 260px; }
