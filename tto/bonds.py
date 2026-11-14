@@ -84,8 +84,8 @@ def month_label(bond: Dict[str, Any]) -> str:
 def candidates(date: Optional[str] = None, month: Optional[str] = None, kind: Optional[str] = None,
                extra: Iterable[Dict[str, Any]] = ()) -> List[Dict[str, Any]]:
     """The bonds a chat line can mean: maturing on ``date`` (ISO) or in ``month`` ("2028-03"), of ``kind``
-    ("float", "cpi", "zc" - a bill or a zero coupon -, or ``None``: a fixed coupon one first, then the rest).
-    ``extra``: bonds of the desk's own lists that are not in the catalog."""
+    ("fixed", "float", "cpi", "zc" - a bill or a zero coupon -, or ``None``: a fixed coupon one first, then the
+    rest).  ``extra``: bonds of the desk's own lists that are not in the catalog."""
     pool = list(catalog()) + [b for b in extra if b.get("isin") and not by_isin(b["isin"])]
     if date:
         hit = [b for b in pool if b.get("maturity") == date]
@@ -93,6 +93,8 @@ def candidates(date: Optional[str] = None, month: Optional[str] = None, kind: Op
         hit = [b for b in pool if (b.get("maturity") or "").startswith(month)]
     else:
         return []
+    if kind == "fixed":
+        return [b for b in hit if b.get("kind") == "fixed"]
     if kind == "float":
         return [b for b in hit if b.get("kind") == "float"]
     if kind == "cpi":

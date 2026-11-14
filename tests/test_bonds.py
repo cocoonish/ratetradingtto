@@ -96,6 +96,8 @@ def test_the_catalog_is_the_desks_list_of_try_government_bonds():
     assert [c["isin"] for c in bd.candidates(month="2028-03", kind="float")] == ["TRT010328T12"]
     assert [c["isin"] for c in bd.candidates(date="2027-02-10", kind="zc")] == ["TRB100227T13"]
     assert [c["isin"] for c in bd.candidates(date="2027-02-10")] == ["TRB100227T13", "TRT100227T13"]
+    assert [c["isin"] for c in bd.candidates(month="2027-02", kind="fixed")] == ["TRT100227T13", "TRT240227T17"]   # not the bill
+    assert bd.candidates(month="2029-06", kind="fixed") == []                         # a CPI linker and a floater only
     assert bd.candidates() == [] and bd.candidates(month="2045-01") == []
 
 
@@ -125,6 +127,29 @@ def test_a_bond_is_named_the_ways_the_brokers_write_it():
     assert (q["isin"], q["bid"], q["ask"], q["alts"]) == ("TRT150328T24", 100.4, 100.475, ["TRT080328T15"]) and "bond?" in q["flags"]
     q = one("Jan30 tlref 98.650/750 nl")
     assert (q["bond_kind"], q["ask"], q["note"]) == ("float", 98.75, "nl") and "bond?" in q["flags"] and len(q["alts"]) == 1
+
+
+def test_a_month_and_a_year_alone_are_the_fixed_coupon_bond():
+    """"mar28", "feb27", "Sep 34": the desk names a fixed coupon bond by its month alone - a floater, a CPI linker or a
+    bill is said to be one ("jan30 tlref", "jun29 cpi", "feb27 bono").  A month without a fixed coupon bond takes
+    nothing else: the line is flagged."""
+    q = one("feb27 99.450 offer")
+    assert (q["isin"], q["bond_kind"], q["alts"]) == ("TRT100227T13", "fixed", ["TRT240227T17"])        # the bill of the month is not a candidate
+    q = one("jun29 99.50/99.70")
+    assert (q.get("isin"), q["label"], q["unit"]) == (None, "Haz29", "px") and "nobond" in q["flags"]   # no fixed coupon bond in June 2029
+    assert (one("jun29 cpi 92.050")["isin"], one("jun29 tlref 98.650")["isin"]) == ("TRT130629T14", "TRT130629T30")
+    q = one("feb27 bono 31.40")
+    assert (q["isin"], q["unit"], q["price"]) == ("TRB100227T13", "yld", 31.4) and q["flags"] == []
+    assert "nobond" in one("dec26 31.40")["flags"]
+    # a date says which bond matures then, of whatever kind (the kind word, if any, chooses)
+    assert one("13/6/29 92.050")["isin"] == "TRT130629T14" and one("13/6/29 tlref 98.650")["isin"] == "TRT130629T30"
+    # in a switch each bond takes the kind said next to it
+    q = one("jan30 tlref vs jul30 -10/-5")
+    assert [(leg["isin"], leg["bond_kind"]) for leg in q["legs"]] == [("TRT020130T19", "float"), ("TRT100730T13", "fixed")]
+    q = one("mar28 vs jun29 cpi switch 210/220")
+    assert [leg["isin"] for leg in q["legs"]] == ["TRT150328T24", "TRT130629T14"] and "nobond" not in q["flags"]
+    q = one("jan30 700 vs jul30 750 switch trading")
+    assert [leg["isin"] for leg in q["legs"]] == [None, "TRT100730T13"] and "nobond" in q["flags"]
 
 
 def test_trades_refs_and_interest_on_a_bond_in_english_and_turkish():

@@ -346,15 +346,26 @@ def _split_bond_pairs(raw: List[str], low: List[str]) -> Tuple[List[str], List[s
 
 
 def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any]]:
-    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "cpi", "zc"),
-    of several of the month the one with the highest coupon (the benchmark: "mar28" is the 36.8% of 15.03.28, not the
-    12.4% of 08.03.28) - flagged, the price may tell otherwise.  Its label, ISIN and whether it trades on yield."""
+    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "cpi", "zc");
+    a month and a year said alone ("mar28", "Jan30", "Sep 34") are the fixed coupon bond of the month - the floaters,
+    the CPI linkers and the bills are named as such.  Of several, the one with the highest coupon (the benchmark:
+    "mar28" is the 36.8% of 15.03.28, not the 12.4% of 08.03.28) - flagged, the price may tell otherwise.  Its label,
+    ISIN and whether it trades on yield; ``missing`` when the list has no such bond (nothing else is taken instead)."""
     from . import bonds as bd
     kind = info.get("kind") or next((_BOND_KIND[w.split(".")[0]] for w in low if w.split(".")[0] in _BOND_KIND), None)  # "cpi.t1"
+    if kind is None and info.get("month"):
+        kind = "fixed"
     cands = bd.candidates(info.get("date"), info.get("month"), kind)
     if not cands:
-        label = (info.get("date") or info.get("month") or "")
-        return {"label": label, "months": 0.0}
+        # nothing of the kind matures then: said as it was ("Haz29", "13.06.29"), the line flagged
+        if info.get("month"):
+            y, m = (int(x) for x in info["month"].split("-"))
+            label = "%s%02d" % (bd._MONTHS[m - 1], y % 100)
+        else:
+            y, m, d = (int(x) for x in (info.get("date") or "2000-01-01").split("-"))
+            label = "%02d.%02d.%02d" % (d, m, y % 100)
+        tail = {"float": " TLREF", "cpi": " TÜFE", "zc": " Bono"}.get(kind or "", "")
+        return {"label": label + tail, "months": (y - 2000) * 12.0 + m, "missing": True}
     cands = sorted(cands, key=lambda b: -(b.get("coupon") or 0.0))
     b = cands[0]
     mat = _dt.date.fromisoformat(b["maturity"])
@@ -490,8 +501,9 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         # a switch: one bond for the other, quoted as the spread of their yields - the longer bond's yield − the
         # shorter one's (bp), as a spread of two tenors is
         switch = []
-        for _, info in bonds:
-            hit = _bond_lookup(info, low)
+        for j, (_, info) in enumerate(bonds):
+            # a kind said goes with its own bond: "jan30 tlref vs jul30" is a floater against the fixed coupon bond
+            hit = _bond_lookup(info, low[:u2[0]] if j == 0 else low[u2[0]:])
             if hit is not None:
                 info.update(hit)
             switch.append(info)
@@ -556,6 +568,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         if any(b.get("ambiguous") for b in switch):
             out["flags"].append("bond?")
             out["alts"] = [a for b in switch for a in (b.get("alts") or [])]
+        if any(b.get("missing") for b in switch):
+            out["flags"].append("nobond")
     elif kind == "switch" and instrument is not None:
         # the other side of a switch quoted just before ("..., 220 offer")
         for k in ("label", "key", "legs"):
@@ -571,6 +585,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         if bond.get("ambiguous"):
             out["flags"].append("bond?")
             out["alts"] = list(bond.get("alts") or [])
+        if bond.get("missing"):
+            out["flags"].append("nobond")
         tails = [re.match(r"^(?:tlref|cpi|zc|tüfe|tufe)\.?(t\d)$", low[k]) for k in idx]      # "cpi.t1"
         settle = (bond.get("settle") or "").upper() or next((_BOND_SETTLE[low[k]] for k in idx if low[k] in _BOND_SETTLE), "") \
             or next((m.group(1).upper() for m in tails if m), "")

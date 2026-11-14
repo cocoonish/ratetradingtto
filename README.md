@@ -421,8 +421,8 @@ okunduğu** hemen görünür (hiçbir şey kaydedilmeden); "Kaydet" (Ctrl+Enter)
 | `15/3/28 550/575` · `16/4/31 100/200` · `mar28 .400/475` · `apr31 94.125 bid` · `April 31 100/125` · `Sep 34 625/700 for 50 mio` | **DİBS** (aşağıda): vade tarihi ya da ay-yıl kâğıdı bulur; kısa fiyat kâğıdın fiyatıyla tamamlanır (100,550 / 100,575) |
 | `11/9/30 tlref 675/800 tdy` · `Jan30 tlref 98.650/750 nl` · `02/05/2029 cpi.t1 92.050` · `10/02/2027zc.t1 31.400` | TLREF / TÜFE / kuponsuz (`zc`, `bono`) kâğıt; `tdy`, `today` = T+0, `tom`, `.t1` = T+1 valör |
 | `15/3/28 550 traded` · `16/4/31 100 given` · `Dec28 tlref 100.050 trading` · `mar28 given` · `15/3/28 550 bidim refledi` · `16/4/31 aldi` · `15/3/28 any int?` | kâğıtta işlem, ref ve ilgi; Türkçe yazımlar da (bidim, offerim, aldı, verdi, refledi, ilginiz, bakarız) |
-| `mar28 vs jul30 switch -45/-40` · `jul30 v mar28 -45 bid` · `mar28/jul30 sw -45/-40` · `15/3/28-10/7/30 trd -42` | **switch** (iki kâğıt): uzun vadelinin getirisi − kısanınki (bp); yazılış sırası ve bağlaç (`vs`, `v`, `into`, `/`, `-`) fark etmez |
-| `jan30 700 vs jul30 750 switch trading` · `Sw int 9/1/30 775 offer vs 3/7/30 775 bid` | **bacak bacak switch**: her kâğıdın fiyatı kendi kotası gibi tamamlanır; switch seviyesi iki fiyatın DİBS RV ekranında getiriye çevrilmesiyle (bp) – TLREF / TÜFE kâğıtlarında iki fiyatın farkı |
+| `mar28 vs jul30 switch -45/-40` · `jul30 v mar28 -45 bid` · `mar28/jul30 sw -45/-40` · `15/3/28-10/7/30 trd -42` | **switch** (iki kâğıt): uzun vadelinin getirisi − kısanınki (bp); yazılış sırası ve bağlaç (`vs`, `v`, `into`, `/`, `-`) fark etmez; tür kelimesi yanındaki kâğıdındır (`jan30 tlref vs jul30`: TLREF'e karşı sabit kuponlu) |
+| `mar28 200 vs jul30 750 switch trading` · `Sw int 9/1/30 775 offer vs 3/7/30 775 bid` | **bacak bacak switch**: her kâğıdın fiyatı kendi kotası gibi tamamlanır; switch seviyesi iki fiyatın DİBS RV ekranında getiriye çevrilmesiyle (bp) – TLREF / TÜFE kâğıtlarında iki fiyatın farkı |
 
 Büyüklük ("in 50m", "100x100") ve kotaya ait olmayan kelimeler ("bal", "bid nl") satırın **Not**'unda kalır. Hiçbir
 enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlarını da sakla" kapatılırsa atlanır.
@@ -471,7 +471,11 @@ enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlar�
 
 * **DİBS kotaları.** Satırdaki tarih (`15/3/28`, `06/01/2027.t1`, `10/02/2027zc`) ya da ay-yıl (`mar28`,
   `Jan30`, `April 31`, `Sep 34`) masanın TRY DİBS listesinden (aşağıda: *DİBS kataloğu*) kâğıdı bulur; `tlref`,
-  `cpi`, `zc` kelimesi türünü söyler. Kâğıdın ISIN'i satırla saklanır (tahtada ve kayıtta adın üzerine gelince).
+  `cpi`, `zc` / `bono` kelimesi türünü söyler. **Ay-yıl tek başına sabit kuponlu kâğıt demektir** (`mar28`, `feb27`):
+  TLREF, TÜFE ve bono satırda söylenir (`jan30 tlref`, `jun29 cpi`, `feb27 bono`); o ayda sabit kuponlu kâğıt yoksa
+  başka türe geçilmez, satır "kâğıt yok" etiketiyle kalır (`jun29`). Tarih yazılınca o gün vadesi dolan kâğıt alınır
+  (aynı gün birden çok türde kâğıt varsa tür kelimesi seçer). Kâğıdın ISIN'i satırla saklanır (tahtada ve kayıtta adın
+  üzerine gelince).
   Bono ve kuponsuzlar **getiriyle**, diğerleri **fiyatla** kote edilir. Kısa fiyatın büyük rakamı (`550` →
   100,550; `.60` → 100,600) şu sırayla bulunur: kotanın öbür tarafı → aynı chat'te o kâğıt için söylenen fiyat
   (ihale listesi dahil) → o gün kaydedilmiş son fiyat → **DİBS RV tablosundaki ekran fiyatı** → kâğıdın ekranı da
@@ -491,7 +495,7 @@ enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlar�
   getirisi farkı); son sütun kotanın **eğriye göre** yeridir: DİBS RV'nin "Pahalı/ucuz" sütununda (uydurulmuş ASW
   eğrisine göre, + ucuz) uzun kâğıdın kısaya göre farkı + söylenen seviyenin ekrandaki switch'ten farkı (seviye:
   işlem, yoksa bid / ask ortası). **+ ise uzun kâğıt ucuz** (uzunu al, kısayı sat); eğri değeri olmayan kâğıtlarda
-  (bono, TLREF) ekrana göre fark yazılır. Bacak bacak yazılmış switch'in (`jan30 700 vs jul30 750`) seviyesi her
+  (bono, TLREF) ekrana göre fark yazılır. Bacak bacak yazılmış switch'in (`mar28 200 vs jul30 750`) seviyesi her
   bacağın fiyatından ekranla bulunan getirilerden hesaplanır (fiyat → getiri: ekran getirisi − (fiyat − ekran fiyatı)
   / (ekran fiyatı · mod. süre)). Üç kâğıtlı satırlar metin olarak kalır.
 * **İşlem gir (⇢).** İşlem satırlarının ve bizim kotalarımızın (taraf *Biz*) sonundaki ⇢ Günlük İşlemler'i o satırla
@@ -1079,7 +1083,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~8–11 dk). 847 test (gerçek `blpapi` kuruluysa 7 tane daha):
+Bloomberg ve ağ gerekmez (~8–11 dk). 848 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|
