@@ -232,6 +232,57 @@ def test_workday_with_holidays():
     assert ev("WORKDAY(DATE(2026,11,6),1,A1:A1)", cells) == 46336.0
 
 
+RAMAZAN = {"A1": "=DATE(2027,3,9)", "A2": "=DATE(2027,3,10)", "A3": "=DATE(2027,3,11)"}           # Tue - Thu
+KURBAN = {"A1": "=DATE(2027,5,1)", "A2": "=DATE(2027,5,16)", "A3": "=DATE(2027,5,17)", "A4": "=DATE(2027,5,18)",
+          "A5": "=DATE(2027,5,19)"}                                   # 1 May and 16 May fall on a weekend
+YILBASI = {"A1": "=DATE(2027,1,1)"}                                    # a Friday
+
+
+@pytest.mark.parametrize("formula, cells, expected", [
+    # a bayram of three days: before it, after it, from inside it, nothing to move
+    ("WORKDAY(DATE(2027,3,8),1,A1:A3)", RAMAZAN, "DATE(2027,3,12)"),
+    ("WORKDAY(DATE(2027,3,12),-1,A1:A3)", RAMAZAN, "DATE(2027,3,8)"),
+    ("WORKDAY(DATE(2027,3,10),1,A1:A3)", RAMAZAN, "DATE(2027,3,12)"),
+    ("WORKDAY(DATE(2027,3,10),-1,A1:A3)", RAMAZAN, "DATE(2027,3,8)"),
+    ("WORKDAY(DATE(2027,3,10),0,A1:A3)", RAMAZAN, "DATE(2027,3,10)"),
+    ("WORKDAY(DATE(2027,3,6),2,A1:A3)", RAMAZAN, "DATE(2027,3,12)"),
+    ("WORKDAY(DATE(2027,3,8),1,A1:A9)", RAMAZAN, "DATE(2027,3,12)"),          # the empty rows of the list
+    # Kurban bayramı joined to 19 Mayıs; holidays on a weekend are not counted twice
+    ("WORKDAY(DATE(2027,5,14),1,A1:A5)", KURBAN, "DATE(2027,5,20)"),
+    ("WORKDAY(DATE(2027,5,20),-1,A1:A5)", KURBAN, "DATE(2027,5,14)"),
+    ("WORKDAY(DATE(2027,4,30),1,A1:A5)", KURBAN, "DATE(2027,5,3)"),
+    ("NETWORKDAYS(DATE(2027,5,1),DATE(2027,5,31),A1:A5)", KURBAN, "18"),
+    # the year end: 1 Ocak and the weekend after it
+    ("WORKDAY(DATE(2026,12,31),1,A1:A1)", YILBASI, "DATE(2027,1,4)"),
+    ("WORKDAY(DATE(2027,1,4),-1,A1:A1)", YILBASI, "DATE(2026,12,31)"),
+    ("WORKDAY(EDATE(DATE(2026,12,1),1)-1,1,A1:A1)", YILBASI, "DATE(2027,1,4)"),   # the workbook's tenor rule
+    ("NETWORKDAYS(DATE(2026,12,31),DATE(2027,1,4),A1:A1)", YILBASI, "2"),
+    ("NETWORKDAYS(DATE(2027,1,4),DATE(2026,12,31),A1:A1)", YILBASI, "-2"),
+    ("NETWORKDAYS(DATE(2027,1,1),DATE(2027,1,1),A1:A1)", YILBASI, "0"),
+    # month ends and 29 February
+    ("EDATE(DATE(2028,1,31),1)", {}, "DATE(2028,2,29)"),
+    ("EDATE(DATE(2028,2,29),12)", {}, "DATE(2029,2,28)"),
+    ("EDATE(DATE(2026,8,31),-6)", {}, "DATE(2026,2,28)"),
+    ("EOMONTH(DATE(2027,12,15),2)", {}, "DATE(2028,2,29)"),
+    ("EOMONTH(DATE(2027,1,31),-1)", {}, "DATE(2026,12,31)"),
+    # YEARFRAC actual/actual: a year at most apart counts 366 days when a 29 February lies in it
+    ("YEARFRAC(DATE(2027,7,1),DATE(2028,7,1),1)", {}, "1"),
+    ("YEARFRAC(DATE(2027,12,31),DATE(2028,12,31),1)", {}, "1"),
+    ("YEARFRAC(DATE(2026,7,1),DATE(2027,7,1),1)", {}, "1"),
+    ("YEARFRAC(DATE(2027,3,1),DATE(2028,2,29),1)", {}, "365/366"),
+    ("YEARFRAC(DATE(2028,3,1),DATE(2029,2,28),1)", {}, "364/365"),
+    ("YEARFRAC(DATE(2026,1,1),DATE(2028,1,1),1)", {}, "730/(1096/3)"),
+    # YEARFRAC US 30/360: the last day of February is the 30th
+    ("YEARFRAC(DATE(2027,2,28),DATE(2027,3,31),0)", {}, "31/360"),
+    ("YEARFRAC(DATE(2027,2,28),DATE(2028,2,29),0)", {}, "1"),
+    ("YEARFRAC(DATE(2026,1,30),DATE(2026,3,31),0)", {}, "60/360"),
+    ("YEARFRAC(DATE(2026,1,29),DATE(2026,3,31),0)", {}, "62/360"),
+])
+def test_dates_around_holidays_month_ends_and_leap_days(formula, cells, expected):
+    cells = {k: ev(v[1:]) for k, v in cells.items()}
+    assert approx(ev(formula, cells), ev(expected))
+
+
 def test_empty_cells_count_as_zero_or_empty_text():
     assert ev("Y1+1") == 1.0
     assert ev('Y1&"a"') == "a"

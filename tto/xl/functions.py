@@ -1909,21 +1909,33 @@ def F_YEARFRAC(start, end, basis=0.0):
     if b == 3:
         return (e - s) / 365.0
     d1, d2 = serial_to_date(s), serial_to_date(e)
+    import calendar
+    import datetime as _dt
+
+    def last_of_feb(d):
+        return d.month == 2 and d.day == calendar.monthrange(d.year, 2)[1]
+
     if b in (0, 4):
         dd1, dd2 = d1.day, d2.day
-        if b == 0:
-            if dd1 == 31:
-                dd1 = 30
-            if dd2 == 31 and dd1 == 30:
+        if b == 4:
+            dd1, dd2 = min(dd1, 30), min(dd2, 30)
+        elif dd1 == 31:                       # US 30/360 as Excel applies it - the end of February included
+            dd1 = 30
+            if dd2 == 31:
                 dd2 = 30
-        else:
-            dd1 = min(dd1, 30)
-            dd2 = min(dd2, 30)
+        elif dd1 == 30 and dd2 == 31:
+            dd2 = 30
+        elif last_of_feb(d1):
+            dd1 = 30
+            if last_of_feb(d2):
+                dd2 = 30
         return ((d2.year - d1.year) * 360 + (d2.month - d1.month) * 30 + (dd2 - dd1)) / 360.0
-    # basis 1: actual/actual
-    import calendar
+    # basis 1: actual/actual - a year at most apart: 366 days when a 29 February lies in the period
     if d1.year == d2.year:
         return (e - s) / (366.0 if calendar.isleap(d1.year) else 365.0)
+    if d2.year == d1.year + 1 and (d1.month, d1.day) >= (d2.month, d2.day):
+        leap = any(calendar.isleap(y) and d1 <= _dt.date(y, 2, 29) <= d2 for y in (d1.year, d2.year))
+        return (e - s) / (366.0 if leap else 365.0)
     years = d2.year - d1.year + 1
     days = sum(366 if calendar.isleap(y) else 365 for y in range(d1.year, d2.year + 1))
     return (e - s) / (days / years)
