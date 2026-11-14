@@ -1336,7 +1336,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~8–11 dk). 868 test (gerçek `blpapi` kuruluysa 7 tane daha):
+Bloomberg ve ağ gerekmez (~8–11 dk). 916 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|
