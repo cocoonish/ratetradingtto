@@ -258,16 +258,53 @@ BOOKS = (("tto", "TRY masa", "tto.json.gz", True), ("sofr", "USD SOFR / FOMC", "
          ("borsa", "Borsa İstanbul swap", "borsa.json.gz", False), ("asw", "DİBS ASW (TLREF OIS)", "asw.json.gz", False))
 
 
+#: sheets of a workbook the desk does not use: taken out of the model as it loads - nothing of them is calculated or
+#: asked of Bloomberg and the sheet explorer does not list them.  The Excel file and the model file keep them (a
+#: workbook imported again is still a pure import); no other sheet refers to them.
+REMOVED_SHEETS: Dict[str, Tuple[str, ...]] = {"tto": ("MOBIL MK", "YP DIBS", "Ivır Zıvır")}
+
+
+def remove_sheets(book_id: str, model: Model) -> List[str]:
+    """Take the sheets :data:`REMOVED_SHEETS` names for ``book_id`` out of ``model``: the others keep their order
+    and are numbered again, and a hyperlink to a sheet taken out goes with it.  Returns the names taken out.
+
+    A sheet that a formula of another sheet or a defined name refers to (a workbook imported again with another
+    layout) stays, with a warning: taking it out would turn those formulas into ``#REF!``."""
+    gone = {name for name in REMOVED_SHEETS.get(book_id, ()) if name in model.sheet_index}
+    used = set()
+    for name in gone:
+        mark = "`%s!" % name                       # a template's reference to another sheet: `OIS_MAIN!R2C10`
+        if any(mark in text for text in model.names.values()) or any(
+                mark in model.templates[tid] for s in model.sheets if s.name not in gone for tid in set(s.fml.values())):
+            used.add(name)
+            logging.getLogger("tto").warning("%s: '%s' sayfasına başka formüller başvuruyor, sayfa kaldırılmadı", book_id, name)
+    gone -= used
+    if not gone:
+        return []
+    keep = [s for s in model.sheets if s.name not in gone]
+    number = {s.index: i for i, s in enumerate(keep)}
+    for s in keep:
+        s.index = number[s.index]
+        s.links = [link for link in s.links
+                   if str(link.get("location") or "").rpartition("!")[0].strip("'") not in gone]
+    model.sheets = keep
+    model.sheet_index = {s.name: s.index for s in keep}
+    model.local_names = {(number[i], name): text for (i, name), text in model.local_names.items() if i in number}
+    return sorted(gone)
+
+
 def load_books(models_dir: str, provider=None, clock: Optional[Clock] = None, replay: bool = False,
                extras: bool = True) -> Dict[str, Book]:
-    """Load the workbook models.  ``extras`` adds the dashboard's own sheets (``tto.extras``) to them -
-    calculations that are not in the Excel files but are written as ordinary Excel formulas."""
+    """Load the workbook models, without the sheets the desk does not use (:data:`REMOVED_SHEETS`).  ``extras``
+    adds the dashboard's own sheets (``tto.extras``) to them - calculations that are not in the Excel files but
+    are written as ordinary Excel formulas."""
     books: Dict[str, Book] = {}
     for book_id, title, fname, recorded in BOOKS:
         path = os.path.join(models_dir, fname)
         if not os.path.exists(path):
             continue
         model = Model.load(path)
+        remove_sheets(book_id, model)
         left_out: List[str] = []
         if extras:
             from . import extras as _extras
