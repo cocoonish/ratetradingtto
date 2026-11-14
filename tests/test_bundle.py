@@ -278,14 +278,16 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
                                "--no-history"], cwd=target, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     url = "http://127.0.0.1:%d" % port
 
+    session = {}
+
     def get(path):
-        with urllib.request.urlopen(url + path, timeout=60) as r:
+        with urllib.request.urlopen(urllib.request.Request(url + path, headers=session), timeout=60) as r:
             return r.status, r.read()
 
     try:
         for _ in range(240):
             try:
-                status = json.loads(get("/api/status")[1])
+                get("/api/auth")                                        # answers without a session
                 break
             except Exception:  # noqa: BLE001
                 if server.poll() is not None:
@@ -293,6 +295,9 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
                 time.sleep(0.5)
         else:
             pytest.fail("server did not answer")
+        from helpers import first_admin
+        session.update(first_admin(url))                               # the first administrator, then their session
+        status = json.loads(get("/api/status")[1])
         assert status["mode"] == "replay" and set(status["books"]) == {"tto", "sofr", "borsa", "asw"}
         assert not any(b["left_out"] for b in status["books"].values())
         pages = [p["id"] for p in json.loads(get("/api/nav")[1])["pages"]]

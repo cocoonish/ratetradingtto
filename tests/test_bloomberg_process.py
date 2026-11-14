@@ -444,8 +444,15 @@ def _free_port():
     raise RuntimeError("no free port")
 
 
+_SESSIONS = {}                                          # port -> the headers of the first administrator's session
+
+
 def _status(port):
-    with urllib.request.urlopen("http://127.0.0.1:%d/api/status" % port, timeout=10) as r:
+    from helpers import first_admin
+    url = "http://127.0.0.1:%d" % port
+    if port not in _SESSIONS:
+        _SESSIONS[port] = first_admin(url)              # every /api request but the sign-in needs a session
+    with urllib.request.urlopen(urllib.request.Request(url + "/api/status", headers=_SESSIONS[port]), timeout=10) as r:
         return json.load(r)
 
 

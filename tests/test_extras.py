@@ -88,7 +88,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
                                                    "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
-                                                   "Motor gün sayıları", "EK_IHALE"]
+                                                   "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
+                                                   "Boş başlayan girdiler"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
@@ -99,7 +100,10 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     viop.consts[parse_a1("M58")] = 3971.85
     formulas = dict(viop.fml)
     assert extras.apply("tto", tto) == ["EK_XAU: VIOP!M58 bir formül değil"]
-    assert "EK_FWD" in tto.sheet_index and "EK_XAU" not in tto.sheet_index and viop.fml == formulas
+    # (rows 107-109: the matrix's DV01s, rewritten by their own addition whatever the gold tables are)
+    dv01_rows = {r for r in (107, 108, 109)}
+    keep = lambda fml: {rc: t for rc, t in fml.items() if rc // COLS not in dv01_rows}          # noqa: E731
+    assert "EK_FWD" in tto.sheet_index and "EK_XAU" not in tto.sheet_index and keep(viop.fml) == keep(formulas)
     assert "EK_VIOP" in tto.sheet_index                                             # the history charts do not need the gold tables
     # the VİOP history block laid out differently: its charts are left out, the rest stays
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))

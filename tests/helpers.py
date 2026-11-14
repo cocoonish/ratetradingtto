@@ -249,3 +249,17 @@ def read_xlsx(raw: bytes) -> Dict[str, Dict[str, Any]]:
                 cells["!formats"][c.get("r")] = xfs[int(c.get("s", "0"))]
             out[sh.get("name")] = cells
     return out
+
+
+def first_admin(url: str, name: str = "Test Yönetici", password: str = "test-sifre-1") -> Dict[str, str]:
+    """A dashboard a test started has no administrator yet: create the first one (the test runs on the dashboard's
+    own computer) and return the headers that carry its session - every /api request but the sign-in needs one."""
+    import json
+    import urllib.request
+    req = urllib.request.Request(url + "/api/setup", data=json.dumps({"name": name, "password": password}).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        cookie = r.headers.get("Set-Cookie") or ""
+    token = cookie.split(";", 1)[0].partition("=")[2]
+    assert token, cookie
+    return {"Authorization": "Bearer " + token}

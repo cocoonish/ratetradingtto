@@ -143,14 +143,16 @@ def test_a_python_without_any_installed_package_serves_the_dashboard(tmp_path):
                                "--data-dir", str(tmp_path / "data")], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     url = "http://127.0.0.1:%d" % port
 
+    session = {}
+
     def get(path):
-        with urllib.request.urlopen(url + path, timeout=30) as r:
+        with urllib.request.urlopen(urllib.request.Request(url + path, headers=session), timeout=30) as r:
             return r.status, r.headers.get("content-type", ""), r.read()
 
     try:
         for _ in range(240):
             try:
-                status = json.loads(get("/api/status")[2])
+                get("/api/auth")                                        # answers without a session
                 break
             except Exception:  # noqa: BLE001
                 if server.poll() is not None:
@@ -158,17 +160,17 @@ def test_a_python_without_any_installed_package_serves_the_dashboard(tmp_path):
                 time.sleep(0.5)
         else:
             pytest.fail("server did not answer")
+        from helpers import first_admin
+        session.update(first_admin(url))                               # the first administrator, then their session
+        status = json.loads(get("/api/status")[2])
         assert status["mode"] == "replay" and set(status["books"]) == {"tto", "sofr", "borsa", "asw"}
         page = json.loads(get("/api/view/forward")[2])
         assert len(page["panels"]) > 30 and not any(p.get("error") for p in page["panels"])
         code, kind, body = get("/static/js/main.js")
         assert code == 200 and "javascript" in kind and len(body) > 5000
         assert get("/")[0] == 200
-        req = urllib.request.Request(url + "/api/login", data=json.dumps({"name": "Kurulumsuz"}).encode("utf-8"),
-                                     headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as r:
-            assert json.loads(r.read())["user"] == "kurulumsuz"
-        with urllib.request.urlopen(url + "/api/events", timeout=30) as r:           # the live-update stream opens
+        assert json.loads(get("/api/auth")[2])["user"]["role"] == "admin"           # signed in as the first administrator
+        with urllib.request.urlopen(urllib.request.Request(url + "/api/events", headers=session), timeout=30) as r:  # the live-update stream
             assert r.status == 200 and r.headers.get("content-type", "").startswith("text/event-stream")
     finally:
         server.terminate()
