@@ -1017,21 +1017,40 @@ def _is_name(text: str) -> bool:
         not any(w.lower() in _VOCABULARY for w in words)
 
 
+def _bare(line: str) -> str:
+    """A pasted line without the bullets and marks chat programs put in front of it."""
+    return line.strip().strip("•·>*\t ").strip()
+
+
+def _timed_below(lines: List[str], k: int) -> bool:
+    """Whether the next line after ``lines[k]`` with something on it starts with its time ("16:32:59 .60/70")."""
+    for j in range(k + 1, len(lines)):
+        s = _bare(lines[j])
+        if s:
+            return _TIME.match(_TIME_BRACKET.sub(r"\1 ", s)) is not None
+    return False
+
+
 def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
     """The messages of a pasted chat: ``[{"date", "time", "sender", "text"}, ...]`` in the order they were
     written.  Understood: "12:15:38 text", "text" with its time on the next line (the phone's layout), a name on
-    a line of its own or before a colon, a date on a line of its own or before the time.  Where the names stand on
-    lines of their own (Bloomberg IB, the phone), a line with its own date, time and author is the quote a reply
-    carries ("11/13/2026 15:34:22 MIKE REES: 18m ois 35.03/35.23" above the reply), not a message."""
+    a line of its own or before a colon, a date on a line of its own or before the time.
+
+    Bloomberg IB's layout - each name on a line of its own over its lines that start with their time - puts above a
+    reply the message it answers, with its date, time and author ("11/13/2026 15:34:22 MIKE REES: 18m ois
+    35.03/35.23"): in that layout (or right above a line starting with its time) such a line is that quote, not a
+    message.  An export of the chat, every line with its date, time and author, is read line by line."""
     out: List[Dict[str, Any]] = []
     date: Optional[_dt.date] = None
     sender = ""
-    bubbles = False                                        # a name has stood on a line of its own
+    names = False                                          # a name has stood on a line of its own
+    bubbles = False                                        # ... and lines started with their time, no date in front
     waiting: List[Dict[str, Any]] = []                     # messages whose time may still come on a later line
     named: Optional[Tuple[str, str]] = None                # (sender before it, text) of the line last taken for a name
     lead: Optional[Dict[str, Any]] = None                  # the message last written with its time in front of it
-    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        s = line.strip().strip("•·>*\t ").strip()
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for k, line in enumerate(lines):
+        s = _bare(line)
         if not s:
             lead = None                                     # an empty line ends a message
             continue
@@ -1043,14 +1062,16 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
             continue
         # a date in front of the time: "11/13/2026 12:10:07 ..."
         first = s.split(" ", 1)
+        dated = False
         if len(first) == 2 and _parse_date(first[0], today) is not None and _TIME.match(first[1].lstrip()):
             rest = first[1].lstrip()
-            if bubbles and _SENDER.match(rest[_TIME.match(rest).end():].strip(" -–\t:")):
+            if names and _SENDER.match(rest[_TIME.match(rest).end():].strip(" -–\t:")) and (bubbles or _timed_below(lines, k)):
                 # a reply's quote of an earlier message: said before, it changes neither the day of the lines below
                 # nor who writes them, and it is not kept again
                 continue
             date = _parse_date(first[0], today)
             s = rest
+            dated = True
         time = None
         first_time = False
         heading = s.endswith(":")                          # "09:14:59 Auction prices:" - the lines under it are its
@@ -1060,6 +1081,7 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
             time = _clock(m)
             s = s[m.end():].strip(" -–\t:")
             first_time = True
+            bubbles = bubbles or (names and not dated)
         else:
             found = list(_TIME.finditer(s))
             m = found[-1] if found else None
@@ -1093,7 +1115,7 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
         elif time is None and _NAME_LINE.match(s) and not any(w.lower() in _VOCABULARY for w in s.split()):
             named = (sender, s)
             sender = s
-            bubbles = True
+            names = True
             waiting = []                                    # a new bubble
             lead = None
             continue

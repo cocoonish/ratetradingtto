@@ -423,9 +423,15 @@ def test_a_bloomberg_ib_chat_and_its_replies():
     rows = bc.parse_chat(chat, ref, TODAY)
     assert [(q["time"], q["label"]) for q in rows if q["ok"]] == [("16:32:04", "18M"), ("16:33:10", "1Y"), ("16:33:35", "18M")]
     assert [(r["label"], r["bid"], r["ask"]) for r in bc.board(rows)] == [("1Y", 35.05, None), ("18M", 35.05, 35.20)]
-    # an export of the chat - every line with its date, time and author, no name on a line of its own - is read line by line
-    m = bc.split_messages("11/13/2026 12:15:38 MIKE REES: 18m ois 35.03/35.23\n11/12/2026 12:16:00 EVREN DIKME: 2y ois 35.26/35.46", TODAY)
-    assert [(x["date"], x["time"], x["sender"]) for x in m] == [("2026-11-13", "12:15:38", "MIKE REES"), ("2026-11-12", "12:16:00", "EVREN DIKME")]
+    # a paste that starts at a reply: the line under the quote, starting with its time, tells the quote
+    m = bc.split_messages("EVREN DIKME\n11/12/2026 17:01:00 MIKE REES: 1y ois 35.00/35.20\n16:33:10 1y ois 35.05 bid", TODAY)
+    assert [(x["date"], x["time"], x["sender"], x["text"]) for x in m] == [(None, "16:33:10", "EVREN DIKME", "1y ois 35.05 bid")]
+    # an export of the chat - every line with its date, time and author - is read line by line, a name above it or not
+    export = "11/13/2026 12:15:38 MIKE REES: 18m ois 35.03/35.23\n11/12/2026 12:16:00 EVREN DIKME: 2y ois 35.26/35.46"
+    for text in (export, "MIKE REES\n" + export):
+        m = bc.split_messages(text, TODAY)
+        assert [(x["date"], x["time"], x["sender"]) for x in m] == [("2026-11-13", "12:15:38", "MIKE REES"),
+                                                                    ("2026-11-12", "12:16:00", "EVREN DIKME")], text
 
 
 def test_the_board_follows_the_chat():

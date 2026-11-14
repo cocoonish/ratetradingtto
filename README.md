@@ -436,8 +436,10 @@ enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlar�
   kendi gününe kaydedilir ("Tarih" kutusu yalnızca chat'te gün yazmıyorsa kullanılır). Haftanın günü tarihe
   uymuyorsa ya da tarih yarından sonraysa satır gün sayılmaz: tek başına yazılmış `15/03/2028` bir kâğıttır.
   IB'de bir yanıtın üstünde yanıtlanan mesaj tarihi, saati ve yazanıyla alıntılanır
-  (`11/13/2026 15:34:22 İSİM: mesaj`). İsimlerin kendi satırında durduğu böyle bir chat'te bu satır yeni mesaj
-  sayılmaz: yeniden kaydedilmez, altındaki satırların gününü ve yanıtın kimden geldiğini değiştirmez. Saati olmayan
+  (`11/13/2026 15:34:22 İSİM: mesaj`). İsimlerin kendi satırında, mesajların saatle başladığı böyle bir chat'te (ya
+  da hemen altında saatle başlayan yanıt satırı varken) bu satır yeni mesaj sayılmaz: yeniden kaydedilmez, altındaki
+  satırların gününü ve yanıtın kimden geldiğini değiştirmez. Her satırı tarih, saat ve yazanıyla gelen bir dışa
+  aktarım ise (üstünde bir isim satırı olsa da) satır satır okunur. Saati olmayan
   mesaja **girildiği an** yazılır (listede soluk). "Kaynak" kutusuna yazılan ad (örn. broker'ın kurumu) her satırla
   saklanır.
 * **İsimler → kaynak ve taraf.** "İsimler · kaynaklar" listesi her gönderen adını bir kaynağa (ICAP, Tullett …) ve
