@@ -709,6 +709,9 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
         assert live.mode == "live" and direct.mode == "live"
         warm = live.warmup()
         assert warm["items"] > 900 and warm["rounds"] <= 10
+        # what the first calculation asked for, counted now: YAS_ / CHG_ fields and LAST_TRADE_DATE are asked again a
+        # minute after their answer, and a slower machine is still comparing the two sides by then
+        asked = provider.status()
         expected = _all_formula_values(direct)
         got = _all_formula_values(live)
         for _ in range(8):                                   # a full pass may discover a few more items
@@ -730,8 +733,8 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
         # four workbooks: the BIST swap sheet alone watches 800 tickers (bid, ask and their sizes).  Each item is
         # asked once and the requests are batched - how finely depends on how fast the cells are evaluated (some
         # ten items per request here, four on a slow interpreter), so only "clearly batched" is asserted
-        assert st["subscriptions"] > 900 and st["hits_today"] < 6000 and not st["error"]
-        assert st["hits_today"] == warm["items"] and st["requests"] < st["hits_today"] / 2
+        assert st["subscriptions"] > 900 and asked["hits_today"] < 6000 and not st["error"]
+        assert asked["hits_today"] == warm["items"] and asked["requests"] < asked["hits_today"] / 2
 
         # a tick moves the curve: both sides again agree after the change (the OIS page reads its quotes from the
         # first pricing source that has one - GFOF's MID - the workbook's own ticker's PX_LAST after it)
