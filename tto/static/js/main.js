@@ -53,9 +53,9 @@ const ctx = {
     state.pending = n || 0;
     const item = document.querySelector('#nav .nav-item[data-page="users"]');
     if (!item) return;
-    const old = item.querySelector('.badge');
+    const old = item.querySelector('.nav-count');
     if (old) old.remove();
-    if (state.pending) item.appendChild(h('span', { class: 'badge', title: 'Onay bekleyen hesap isteği' }, String(state.pending)));
+    if (state.pending) item.appendChild(h('span', { class: 'nav-count', title: 'Onay bekleyen hesap isteği' }, String(state.pending)));
   },
 };
 
