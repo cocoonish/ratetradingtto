@@ -40,7 +40,7 @@ def test_every_sheet_of_the_workbooks_has_a_page(models):
                 assert (book, sh.name) not in covered
                 continue
             assert (book, sh.name) in covered, sh.name
-    assert not {"mobil", "ivir", "ypdibs"} & {v["id"] for v in VIEWS}
+    assert not {"mobil", "ivir", "ypdibs", "iyix"} & {v["id"] for v in VIEWS}
 
 
 def test_the_sheets_without_a_page_are_in_the_sheet_explorer(service):
@@ -54,11 +54,11 @@ def test_the_sheets_without_a_page_are_in_the_sheet_explorer(service):
 
 
 def test_the_sheets_the_desk_does_not_use_are_taken_out(service, models):
-    """MOBIL MK, YP DIBS and Ivır Zıvır are taken out as the TRY workbook loads: no page, not in the sheet
-    explorer, none of their formulas (39 of them Bloomberg calls) is calculated.  The model file keeps them."""
+    """MOBIL MK, YP DIBS, Ivır Zıvır and USDTRY IYIX are taken out as the TRY workbook loads: no page, not in the
+    sheet explorer, none of their formulas (45 of them Bloomberg calls) is calculated.  The model file keeps them."""
     from tto.books import REMOVED_SHEETS, remove_sheets
     from tto.xl.model import Model
-    gone = ("MOBIL MK", "YP DIBS", "Ivır Zıvır")
+    gone = ("MOBIL MK", "YP DIBS", "Ivır Zıvır", "USDTRY IYIX")
     assert REMOVED_SHEETS == {"tto": gone}
     names = [s["name"] for s in service.sheets("tto")]
     assert not set(gone) & set(names) and names[:2] == ["MASA", "Günlük İşlemler"]
@@ -67,7 +67,7 @@ def test_the_sheets_the_desk_does_not_use_are_taken_out(service, models):
         with pytest.raises(ServiceError) as exc:
             service.grid(None, "tto", name, "A1:G6")
         assert exc.value.status == 404
-    for page in ("mobil", "ivir", "ypdibs"):
+    for page in ("mobil", "ivir", "ypdibs", "iyix"):
         with pytest.raises(ServiceError) as exc:
             service.view(None, page)
         assert exc.value.status == 404
@@ -79,7 +79,7 @@ def test_the_sheets_the_desk_does_not_use_are_taken_out(service, models):
     raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))
     assert set(gone) <= set(raw.sheet_index)                                  # the model file is a pure import
     calls = sum(raw.templates[t].count("_xll.BDP(") for name in gone for t in raw.sheet(name).fml.values())
-    assert calls == 39
+    assert calls == 45
     order = [s.name for s in raw.sheets if s.name not in gone]
     assert remove_sheets("tto", raw) == sorted(gone) and [s.name for s in raw.sheets] == order
     assert remove_sheets("tto", raw) == [] and remove_sheets("sofr", raw) == []
@@ -87,7 +87,7 @@ def test_the_sheets_the_desk_does_not_use_are_taken_out(service, models):
     raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))
     raw.templates.append("`MOBIL MK!R1C1`+1")
     raw.sheet("MASA").fml[COLS * 500 + 1] = len(raw.templates) - 1
-    assert remove_sheets("tto", raw) == ["Ivır Zıvır", "YP DIBS"] and "MOBIL MK" in raw.sheet_index
+    assert remove_sheets("tto", raw) == ["Ivır Zıvır", "USDTRY IYIX", "YP DIBS"] and "MOBIL MK" in raw.sheet_index
 
 
 def test_ids_are_unique():

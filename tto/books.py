@@ -261,7 +261,7 @@ BOOKS = (("tto", "TRY masa", "tto.json.gz", True), ("sofr", "USD SOFR / FOMC", "
 #: sheets of a workbook the desk does not use: taken out of the model as it loads - nothing of them is calculated or
 #: asked of Bloomberg and the sheet explorer does not list them.  The Excel file and the model file keep them (a
 #: workbook imported again is still a pure import); no other sheet refers to them.
-REMOVED_SHEETS: Dict[str, Tuple[str, ...]] = {"tto": ("MOBIL MK", "YP DIBS", "Ivır Zıvır")}
+REMOVED_SHEETS: Dict[str, Tuple[str, ...]] = {"tto": ("MOBIL MK", "YP DIBS", "Ivır Zıvır", "USDTRY IYIX")}
 
 
 def remove_sheets(book_id: str, model: Model) -> List[str]:

@@ -259,10 +259,11 @@ def test_cell_info_and_grid(service):
     with pytest.raises(ServiceError):
         service.cell_info(None, "tto", "Yok!A1")
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
-    # the dashboard's own sheets come last; three of the workbook's 17 are taken out (MOBIL MK, YP DIBS, Ivır Zıvır)
+    # the dashboard's own sheets come last; four of the workbook's 17 are taken out (MOBIL MK, YP DIBS, Ivır Zıvır,
+    # USDTRY IYIX)
     assert [s["name"] for s in service.sheets("tto")][-9:] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN",
                                                                 "EK_CARRY", "EK_IHALE"]
-    assert len(service.sheets("tto")) == 17 - 3 + 9
+    assert len(service.sheets("tto")) == 17 - 4 + 9
     assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2"] and [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX"]
 
 
