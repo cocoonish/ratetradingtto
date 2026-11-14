@@ -2277,6 +2277,43 @@ def _tto_viop_dv01(model: Model) -> None:
         b.set("%s109" % col, '=IFERROR(-100*(%s$98/360)/(1+%s$101*%s$98/360),"")' % (col, col, col), like="%s108" % col)
 
 
+# ---------------------------------------------------------------------------------------------- empty by default
+#: inputs the file brings filled in with the desk's choices of the day it was saved; every user starts with them
+#: empty: the scenario step per meeting (S1 / S2 / S3) of the PPK ima tab - a blank step follows the scenario base
+#: (OIS_MAIN!B3 / D3) - and the VİOP target table (also on the desk page).  What a user types stays theirs.
+EMPTY_BY_DEFAULT = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"))
+
+
+def empty_default_refs() -> List[str]:
+    """The cells of ``EMPTY_BY_DEFAULT`` as references ("OIS_MAIN!U10", ...)."""
+    out = []
+    for sheet, rng in EMPTY_BY_DEFAULT:
+        r1, c1, r2, c2 = parse_range(rng)
+        out += ["%s!%s%d" % (sheet, index_to_col(c), r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
+    return out
+
+
+def _empty_check(model: Model) -> None:
+    _need_sheets(model, "OIS_MAIN", "VIOP")
+    v = model.sheet("VIOP")
+    for addr, text in (("K330", "Target"), ("L330", "Yakın"), ("P330", "Hedef değer")):
+        if v.consts.get(parse_a1(addr)) != text:
+            raise ValueError("VIOP!%s beklenen başlık değil (%s yok)" % (addr, text))
+    for col, step in (("X", "U"), ("Y", "V"), ("Z", "W")):           # a blank step: the scenario base decides
+        _need_formula(model, "OIS_MAIN", "%s10" % col, 'IF(%s10<>"",%s10' % (step, step))
+
+
+def _tto_empty(model: Model) -> None:
+    for sheet, rng in EMPTY_BY_DEFAULT:
+        sh = model.sheet(sheet)
+        r1, c1, r2, c2 = parse_range(rng)
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                rc = r * COLS + c
+                if rc not in sh.fml:
+                    sh.consts.pop(rc, None)
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
@@ -2288,7 +2325,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (UNI_SHEET, _universe_check, _tto_universe), (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
-            (AUC_SHEET, _auction_check, _tto_auction)),
+            (AUC_SHEET, _auction_check, _tto_auction), ("Boş başlayan girdiler", _empty_check, _tto_empty)),
 }
 
 

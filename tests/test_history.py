@@ -760,7 +760,7 @@ def test_calendar_edits_keep_what_was_typed_with_its_meeting(tmp_path):
         start = h.meetings()
         base = {None: steps_by_meeting(svc), ayse: steps_by_meeting(svc, ayse), veli: steps_by_meeting(svc, veli)}
         assert base[ayse]["2027-01-21"][0] == -75.0 and base[ayse]["2027-03-18"][1:] == (-125.0, None)
-        assert base[None]["2027-03-18"] == (-100.0, -50.0, -100.0) and base[veli] == base[None]      # the file's own steps
+        assert base[None]["2027-03-18"] == (None, None, None) and base[veli] == base[None]      # nobody starts with a step
 
         def check(now, moved=()):
             """Every meeting that is still there has the steps it had; ``moved``: (old date, new date)."""
@@ -1041,7 +1041,7 @@ def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
         try:
             assert svc2.history.calendar()["meetings"][16]["row"] == 10
             assert steps_by_meeting(svc2, user)["2027-01-21"][0] == -75.0
-            assert steps_by_meeting(svc2)["2027-03-18"] == (-100.0, -50.0, -100.0)        # the file's own steps, one row up
+            assert steps_by_meeting(svc2)["2027-03-18"] == (None, None, None)              # the file brings no step of its own
         finally:
             svc2.stop()
     finally:

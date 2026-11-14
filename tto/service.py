@@ -228,6 +228,11 @@ class Service(object):
                     provider.load_history(os.path.join(folder, "replay_history.json"))    # closes the file did not record
                 for b in self.books.values():
                     b.engine.reset()
+        # the steps per meeting and the VİOP target table start empty for everybody (extras.EMPTY_BY_DEFAULT): copies
+        # of the file's old values kept as shared inputs (a calendar change carried them along) go - once
+        if "tto" in self.books and not self.store.get("migrated.empty_defaults"):
+            self.store.clear_shared_inputs("tto", ex.empty_default_refs())
+            self.store.put("migrated.empty_defaults", now_iso())
         # shared inputs saved earlier (RET curve, calendars ...)
         for (bid, ref), val in self.store.shared_inputs().items():
             book = self.books.get(bid)

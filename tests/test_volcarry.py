@@ -294,6 +294,15 @@ def test_the_carry_path_is_ones_own_choice(seeded):
     the S1 cells the OIS sheet prices with stay as they are."""
     svc, days, data = seeded
     u = svc.login("Carry Patika")["user"]
+    # Excel saved its numbers with the file's own steps per meeting; every user now starts without them
+    # (extras.EMPTY_BY_DEFAULT), so this user types the file's S1 steps as their own
+    import os
+
+    from tto.config import ROOT
+    from tto.xl.model import Model
+    raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz")).sheet("OIS_MAIN")
+    steps = [{"ref": "OIS_MAIN!U%d" % r, "value": raw.consts.get(parse_a1("U%d" % r))} for r in range(10, 90)]
+    assert svc.set_inputs(u, "tto", [s for s in steps if isinstance(s["value"], float)])["applied"] > 10
     st = svc.carry_settings(u)
     assert (st["path"], st["default"], st["a"], st["b"]) == ("Bootstrap", "Bootstrap", 1.0, 3.0)
     assert [o["id"] for o in st["options"]] == ["Bootstrap", "MPC ima", "S1", "S2", "S3", "Sabit TLREF"]
