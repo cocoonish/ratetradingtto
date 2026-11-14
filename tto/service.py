@@ -1694,10 +1694,9 @@ class Service(object):
         if type(spot) is not float:
             return None
         holidays = set()
-        si = book.model.sheet_index.get("Motor")
-        if si is not None:
-            for r in range(360, 523):
-                h = calc.get(si, r, 0)
+        if "Motor" in book.model.sheet_index:
+            for si, rc in book.cells_of("Motor!A361:A523"):
+                h = calc.get(si, *divmod(rc, COLS))
                 if type(h) is float:
                     holidays.add(int(h))
         n, unit = int(m.group(1)), m.group(2).upper()
