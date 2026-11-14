@@ -55,6 +55,11 @@ FIELD = "PX_LAST"
 #: the vol monitor's own set per pair (kind, tenor): what is kept with its history for every pair
 CORE = (("ATM", "1W"), ("ATM", "1M"), ("ATM", "3M"), ("ATM", "6M"), ("ATM", "1Y"), ("RR25", "1M"), ("RR25", "3M"),
         ("RR25", "1Y"), ("BF25", "1M"), ("BF25", "3M"), ("BF25", "1Y"), ("RR10", "1M"), ("BF10", "1M"))
+#: skew: the risk reversal over the ATM vol of the same tenor (a ratio: "how many ATM vols the calls are over the
+#: puts"), for the monitor's tenors whose both quotes it keeps: (name, risk reversal, tenor)
+SKEWS = (("SKEW25", "RR25", "1M"), ("SKEW25", "RR25", "3M"), ("SKEW25", "RR25", "1Y"), ("SKEW10", "RR10", "1M"))
+SKEW_OF = {"SKEW25": "RR25", "SKEW10": "RR10"}
+SKEW_LABEL = {"SKEW25": "25D RR / ATM", "SKEW10": "10D RR / ATM"}
 #: windows of the percentile / z-score / range (closes): ~3 months, ~6 months, a year
 WINDOWS = (63, 126, 250)
 LOOKBACK_DAYS = 366                      # the workbook's BDH: TODAY()-366 .. TODAY()-1
@@ -247,6 +252,11 @@ def stats(points: Dict[str, float], live: Optional[float], today: _dt.date, wind
     out["min"], out["max"] = min(win), max(win)
     out["window"] = len(win)
     return out
+
+
+def skew_closes(rr: Dict[str, float], atm: Dict[str, float]) -> Dict[str, float]:
+    """The skew's closes: the risk reversal over the ATM vol on every day both closed (an ATM vol of zero is none)."""
+    return {d: v / atm[d] for d, v in rr.items() if d in atm and atm[d] > 0}
 
 
 def realized(closes: Sequence[Tuple[str, float]], n: int = 21) -> List[Tuple[str, Optional[float]]]:
@@ -493,11 +503,11 @@ class Fx(object):
         except Exception:  # noqa: BLE001 - a workbook that does not fit: Bloomberg's points instead
             return None
 
-    def _points_curve(self, pair: Pair, spot_date: _dt.date) -> Dict[str, Any]:
+    def _points_curve(self, pair: Pair, spot_date: _dt.date, tenors: Sequence[str] = TENORS) -> Dict[str, Any]:
         """Spot and forward of each tenor from Bloomberg (spot + points / 10^FWD_SCALE)."""
         spot, why = self.value(spot_ticker(pair))
         out: Dict[str, Any] = {"spot": spot, "spot_why": why, "tenors": {}, "spot_date": spot_date, "source": "bbg"}
-        for t in TENORS:
+        for t in tenors:
             tk = points_ticker(pair, t)
             pts, pwhy = self.value(tk)
             scale, _ = self.value(tk, "FWD_SCALE")
@@ -693,7 +703,10 @@ class Fx(object):
         out["params"] = info.get("svi") or ({"alpha": info["alpha"], "rho": info["rho"], "nu": info["nu"]} if "alpha" in info else None)
         if spot:
             sd = atm / 100.0 * math.sqrt(T)
-            out["move_1sd"] = spot * sd                        # ± one standard deviation, in price
+            out["move_1sd"] = spot * sd                        # ± one standard deviation from the ATM vol alone, in price
+        if qs.get(0.84) is not None and qs.get(0.16) is not None:
+            out["up_1s"] = qs[0.84] - F                       # one standard deviation up and down, the skew included
+            out["down_1s"] = F - qs[0.16]
         out["_dist"] = dist
         return out
 
@@ -748,8 +761,33 @@ class Fx(object):
             if spot and atm:
                 row["move_1m"] = spot * atm / 100.0 * math.sqrt(30.0 / 365.0)
                 row["breakeven"] = spot * atm / 100.0 / math.sqrt(252.0)
+                row.update(self._one_month(user, p, spot) or {})
             rows.append(row)
         return {"rows": rows, "source": src, "today": today.isoformat()}
+
+    def _one_month(self, user: Optional[str], pair: Pair, spot: float) -> Optional[Dict[str, float]]:
+        """The 1M move one standard deviation up and down, the skew included (the 84th and 16th percentiles of the
+        spot one month on, around the forward): the forward and the smile as the Spot / FX page builds them."""
+        src = self.source()
+        vols = {k: self.value(vol_ticker(pair.code, k, "1M", src))[0] for k in KINDS}
+        if not vols["ATM"]:
+            return None
+        if pair.code == "USDTRY" or (pair.quote == "TRY" and pair.base != "USD"):
+            row = dict(self.curve(user, pair)["tenors"].get("1M") or {})          # the offshore curve / the USD legs
+        else:                                                                    # Bloomberg's 1M points only
+            row = self._points_curve(pair, add_week_days(self.today(), 2), ("1M",))["tenors"]["1M"]
+        F, days = row.get("fwd"), row.get("days")
+        if not F or not days:
+            return None
+        df, _ = self._base_df(user, pair, "1M", row, spot)
+        q = fv.Quotes(F, days / 365.0, vols["ATM"] / 100.0, *[(vols[k] / 100.0 if vols[k] is not None else None)
+                                                             for k in ("RR25", "BF25", "RR10", "BF10")], premium=pair.premium, df=df)
+        try:
+            smile, _ = self._smile(pair, "1M", "svi", q)
+            dist = fv.Distribution(smile)
+            return {"up_1m": dist.quantile(0.84) - F, "down_1m": F - dist.quantile(0.16), "fwd_1m": F}
+        except fv.MATH_ERRORS:
+            return None
 
     # ================================================================== the vol monitor
     def _series(self, tickers: Sequence[str], today: _dt.date) -> Dict[str, Dict[str, float]]:
@@ -784,6 +822,15 @@ class Fx(object):
             st = stats(data.get(series_id(tk)) or {}, live, today, win)
             st.update({"ticker": tk, "why": why})
             cells["%s|%s|%s" % (p.code, kind, tenor)] = st
+        # the skews: the risk reversal over the ATM vol of the same tenor, its own closes from the two series
+        for p in pairs:
+            for name, rr_kind, tenor in SKEWS:
+                rr_tk, atm_tk = vol_ticker(p.code, rr_kind, tenor, src), vol_ticker(p.code, "ATM", tenor, src)
+                rr_live, atm_live = self.value(rr_tk)[0], self.value(atm_tk)[0]
+                live = rr_live / atm_live if rr_live is not None and atm_live else None
+                st = stats(skew_closes(data.get(series_id(rr_tk)) or {}, data.get(series_id(atm_tk)) or {}), live, today, win)
+                st.update({"ticker": None, "of": [rr_tk, atm_tk], "why": "" if live is not None else "RR ya da ATM yok"})
+                cells["%s|%s|%s" % (p.code, name, tenor)] = st
         rows = []
         for p in pairs:
             spot_tk = spot_ticker(p)
@@ -792,7 +839,7 @@ class Fx(object):
             iv = cells.get("%s|ATM|1M" % p.code, {}).get("last")
             spot_now, _ = self.spot(user, p)
             atm_closes = sorted((data.get(series_id(vol_ticker(p.code, "ATM", "1M", src))) or {}).items())
-            rows.append({"pair": p.code, "group": p.group, "decimals": p.decimals, "spot": spot_now,
+            rows.append({"pair": p.code, "group": p.group, "decimals": p.decimals, "spot": spot_now, "spot_ticker": spot_tk,
                          "rv1m": rv[-1][1] if rv else None, "iv1m": iv,
                          "spark": [v for _, v in closes[-260:]][::5],               # the spot, a point a week
                          "spark_atm": [v for _, v in atm_closes[-260:]][::5]})      # ATM 1M, a point a week
@@ -804,6 +851,7 @@ class Fx(object):
                        "by": t.get("by"), "spark": [v for _, v in sorted((data.get(series_id(t["text"])) or {}).items())[-260:]][::5]})
             extra.append(st)
         return {"pairs": [p.info() for p in pairs], "rows": rows, "cells": cells, "core": [list(c) for c in CORE],
+                "skews": [list(s) for s in SKEWS], "skew_labels": SKEW_LABEL,
                 "tenors": list(TENORS), "kinds": list(KINDS), "window": win, "windows": list(WINDOWS), "own": extra,
                 "own_pairs": [t for t in self.user_tickers() if t["kind"] == "pair"], "source": src, "today": today.isoformat(),
                 "history": self.history_status(), "z_flag": Z_FLAG}
@@ -853,7 +901,8 @@ class Fx(object):
             pts = info["points"]
             smiles[name] = {k: (pts[k][1] * 100.0 if pts.get(k) else None) for k, _, _ in fv.PILLARS}
         series: Dict[str, Any] = {}
-        for k, t in (("ATM", "1M"), ("ATM", "3M"), ("ATM", "1Y"), ("RR25", "1M"), ("RR25", "3M"), ("BF25", "1M"), ("RR10", "1M"), ("BF10", "1M")):
+        for k, t in (("ATM", "1M"), ("ATM", "3M"), ("ATM", "1Y"), ("RR25", "1M"), ("RR25", "3M"), ("RR25", "1Y"), ("BF25", "1M"), ("RR10", "1M"),
+                     ("BF10", "1M")):
             tk = vol_ticker(pair.code, k, t, src)
             series["%s %s" % (KIND_LABEL[k], t)] = sorted((data.get(series_id(tk)) or {}).items())
         spot_closes = sorted((data.get(series_id(spot_ticker(pair))) or {}).items())
@@ -861,19 +910,63 @@ class Fx(object):
                 "structure": structure, "smiles": smiles, "series": series, "spot": spot_closes,
                 "realized": realized(spot_closes), "history": self.history_status(), "today": today.isoformat()}
 
-    def series(self, ticker: str, window: Any = 250) -> Dict[str, Any]:
-        tk = " ".join(str(ticker or "").split())
-        if not tk:
-            raise FxError("ticker yok")
-        today = self.today()
-        self.want_history([tk])
-        pts = self._series([tk], today).get(series_id(tk)) or {}
-        live, why = self.value(tk)
+    def series(self, ticker: str = "", window: Any = 250, pair: Any = None, kind: Any = None, tenor: Any = None) -> Dict[str, Any]:
+        """The daily closes of what a row or a cell shows, with the value now and where it stands: a ticker, or a pair's
+        quote by kind and tenor - a skew (``SKEW25`` / ``SKEW10``) from the closes of its risk reversal and ATM vol."""
         try:
             win = int(window)
         except (TypeError, ValueError):
             win = 250
-        return {"ticker": tk, "points": sorted(pts.items()), "stats": stats(pts, live, today, win), "why": why}
+        today = self.today()
+        if pair:
+            p = self.pair(pair)
+            k = str(kind or "").upper()
+            t = str(tenor or "").upper()
+            if t not in TENORS or (k not in KINDS and k not in SKEW_OF):
+                raise FxError("vade ya da kota anlaşılamadı: %s %s" % (kind, tenor))
+            src = self.source()
+            if k in SKEW_OF:
+                rr_tk, atm_tk = vol_ticker(p.code, SKEW_OF[k], t, src), vol_ticker(p.code, "ATM", t, src)
+                self.want_history([rr_tk, atm_tk])
+                data = self._series([rr_tk, atm_tk], today)
+                pts = skew_closes(data.get(series_id(rr_tk)) or {}, data.get(series_id(atm_tk)) or {})
+                rr_live, atm_live = self.value(rr_tk)[0], self.value(atm_tk)[0]
+                live = rr_live / atm_live if rr_live is not None and atm_live else None
+                return {"ticker": None, "of": [rr_tk, atm_tk], "label": "%s %s %s" % (p.code, SKEW_LABEL[k], t), "unit": "ratio",
+                        "points": sorted(pts.items()), "live": live, "stats": stats(pts, live, today, win),
+                        "from": closes_axis(today)[0].isoformat(), "today": today.isoformat(),
+                        "why": "" if live is not None else "RR ya da ATM yok"}
+            ticker = vol_ticker(p.code, k, t, src)
+            label = "%s %s %s" % (p.code, KIND_LABEL[k], t)
+        else:
+            ticker = " ".join(str(ticker or "").split())
+            if not ticker:
+                raise FxError("ticker yok")
+            label = ticker
+        self.want_history([ticker])
+        pts = self._series([ticker], today).get(series_id(ticker)) or {}
+        live, why = self.value(ticker)
+        return {"ticker": ticker, "label": label, "unit": "vol" if pair else "", "points": sorted(pts.items()), "live": live,
+                "stats": stats(pts, live, today, win), "from": closes_axis(today)[0].isoformat(), "today": today.isoformat(), "why": why}
+
+    def tenor_history(self, user: Optional[str], code: str, tenor: str) -> Dict[str, Any]:
+        """One tenor of a pair through time: the closes of its five quotes and of its 25-delta skew (the Spot / FX page's
+        surface, a row clicked).  The tenor's quotes are fetched once when first asked (a year back, then the last days)."""
+        pair = self.pair(code)
+        t = str(tenor or "").upper()
+        if t not in TENORS:
+            raise FxError("vade anlaşılamadı: %s" % tenor)
+        src = self.source()
+        today = self.today()
+        tickers = {k: vol_ticker(pair.code, k, t, src) for k in KINDS}
+        self.want_history(list(tickers.values()))
+        data = self._series(list(tickers.values()), today)
+        series = {k: sorted((data.get(series_id(tk)) or {}).items()) for k, tk in tickers.items()}
+        skew = skew_closes(data.get(series_id(tickers["RR25"])) or {}, data.get(series_id(tickers["ATM"])) or {})
+        live = {k: self.value(tk)[0] for k, tk in tickers.items()}
+        return {"pair": pair.code, "tenor": t, "series": series, "skew": sorted(skew.items()), "labels": KIND_LABEL, "live": live,
+                "skew_live": live["RR25"] / live["ATM"] if live["RR25"] is not None and live["ATM"] else None,
+                "from": closes_axis(today)[0].isoformat(), "history": self.history_status(), "today": today.isoformat()}
 
     # ================================================================== history
     def history_status(self) -> Dict[str, Any]:

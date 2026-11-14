@@ -1303,6 +1303,7 @@ class History(object):
             if vals[-1] is None:
                 return None
             out = self._changes(vals, 100.0 if d.unit == "pct" else 1.0)
+            out["sid"] = d.id                              # what a click on the row draws (:meth:`closes`)
             last = max((k for k in points if k <= _iso(day)), default=None)
             # the close of the day came from the backup (its move laid on the main source's level)
             out.update({"ticker": ticker, "field": d.field, "unit": d.unit, "day": last, "backup": used.get(last) if last else None})
@@ -1326,7 +1327,7 @@ class History(object):
             if d.group != "dibs":
                 continue
             e = entry(d) or {"last": None, "d1": None, "w1": None, "m1": None, "ticker": d.ticker, "field": d.field,
-                             "unit": d.unit, "day": None}
+                             "unit": d.unit, "day": None, "sid": d.id}
             e.update(d.info)
             bonds.append(e)
         bonds.sort(key=lambda b: (b.get("maturity") or "9999", b.get("isin") or ""))
@@ -1339,6 +1340,20 @@ class History(object):
                           "dibs_field": self.settings()["dibs_field"]},
                "live": self.svc.mode == "live", "rev": self.rev, "state": self.status()}
         return out
+
+    def closes(self, sid: str) -> Dict[str, Any]:
+        """The daily closes of one series of the history (its backups filling the days it has none, as the matrix
+        reads it), the lookback and a little more: what a click on a row of the end-of-day matrix draws."""
+        snap = self.snapshot()
+        d = next((x for x in snap["defs"] if x.id == sid), None)
+        if d is None:
+            raise ValueError("tarihçede böyle bir seri yok: %s" % sid)
+        today = snap["today"]
+        start = today - _dt.timedelta(days=int(self.settings()["lookback_days"]) + 10)
+        ticker, points, used = d.merged(self.store.hist_many(d.ids(), _iso(start)))
+        return {"sid": sid, "label": d.label, "group": d.group, "unit": d.unit, "ticker": ticker, "field": d.field,
+                "points": sorted((k, v) for k, v in points.items() if k <= _iso(today)), "backup_days": len(used),
+                "info": d.info, "today": _iso(today)}
 
     def _mpc_matrix(self, day: _dt.date, axis: List[_dt.date]) -> List[Dict[str, Any]]:
         rows = self.store.mpc_values(_iso(axis[0]), _iso(day))

@@ -367,7 +367,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def fx_series(request: Request):
         q = request.query_params
-        return ok(await call(svc().fx_series, _user(request), q.get("ticker"), q.get("window", 250)))
+        return ok(await call(svc().fx_series, _user(request), q.get("ticker"), q.get("window", 250), q.get("pair"), q.get("kind"),
+                             q.get("tenor")))
+
+    @handler
+    async def fx_tenor(request: Request):
+        q = request.query_params
+        return ok(await call(svc().fx_tenor, _user(request), q.get("pair"), q.get("tenor")))
 
     @handler
     async def fx_tickers(request: Request):
@@ -500,6 +506,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().history.coverage))
 
     @handler
+    async def history_closes(request: Request):
+        return ok(await call(svc().history_closes, _user(request), request.query_params.get("sid")))
+
+    @handler
     async def bond_catalog(request: Request):
         return ok(await call(svc().bond_catalog, _user(request)))
 
@@ -541,6 +551,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                                  int(move) if isinstance(move, (int, float)) else None))
         if what == "base":
             return ok(await call(s.watch_base, u, data.get("id") or None))
+        if what == "history":
+            return ok(await call(s.watch_history, u, subject))
         raise ServiceError("bilinmeyen işlem: %s" % what, 404)
 
     @handler
@@ -730,6 +742,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/bond/{isin}", bond_card),
         Route("/api/history/series", history_series),
         Route("/api/history/matrix", history_matrix),
+        Route("/api/history/closes", history_closes),
         Route("/api/history/mpc", history_mpc),
         Route("/api/calendar", calendar, methods=["GET", "POST"]),
         Route("/api/calendar/preview", calendar_preview, methods=["POST"]),
@@ -739,6 +752,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/fx/monitor", fx_monitor),
         Route("/api/fx/pair", fx_pair),
         Route("/api/fx/series", fx_series),
+        Route("/api/fx/tenor", fx_tenor),
         Route("/api/fx/tickers", fx_tickers, methods=["GET", "POST"]),
         Route("/api/fx/history", fx_history, methods=["POST"]),
         Route("/api/events", events),
