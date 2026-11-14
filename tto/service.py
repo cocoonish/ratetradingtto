@@ -2513,6 +2513,31 @@ class Service(object):
         out["gen"] = self.gen
         return out
 
+    def watch_history(self, user: str, subject: Any = None) -> Dict[str, Any]:
+        """A watched subject's daily closes (the market history's, its parts', or the dashboard's own record) and its
+        value now - what a click on a watch item or a point of the heat map draws."""
+        user = self.require_user(user)
+        if not isinstance(subject, dict) or not subject.get("kind"):
+            raise ServiceError("izlenecek şey belli değil")
+
+        def run() -> Dict[str, Any]:
+            s = self.watch.check(subject)                  # what is not there to watch has no past either
+            rd = self.watch._Reader(self.watch, user)
+            value, show, _ = self.watch.resolve(s, rd)
+            closes, source = self.watch.history(s, rd)
+            return {"label": self.watch.label(s), "show": show, "value": value, "points": sorted(closes.items()),
+                    "source": source, "today": self.today_iso()}
+
+        return self._watch_call(run)
+
+    def history_closes(self, user: Optional[str], sid: Any) -> Dict[str, Any]:
+        """The daily closes of one series of the end-of-day matrix (a row clicked)."""
+        self.require_user(user)
+        try:
+            return self.history.closes(str(sid or ""))
+        except ValueError as exc:
+            raise ServiceError(str(exc))
+
     def heat_ref(self, user: str) -> Dict[str, Any]:
         """Take the levels now as this user's reference of the heat map (the morning meeting)."""
         user = self.require_user(user)
@@ -3151,9 +3176,15 @@ class Service(object):
         return self._fx(self.fx.pair_detail, self.require_user(user), str(pair or "USDTRY"), str(tenor or "1M"),
                         str(model or "svi"))
 
-    def fx_series(self, user: Optional[str], ticker: Any, window: Any = 250) -> Dict[str, Any]:
+    def fx_series(self, user: Optional[str], ticker: Any, window: Any = 250, pair: Any = None, kind: Any = None,
+                  tenor: Any = None) -> Dict[str, Any]:
+        """The closes of a ticker, or of a pair's quote / skew by kind and tenor (a picked row or cell)."""
         self.require_user(user)
-        return self._fx(self.fx.series, str(ticker or ""), window)
+        return self._fx(self.fx.series, str(ticker or ""), window, pair or None, kind, tenor)
+
+    def fx_tenor(self, user: Optional[str], pair: Any, tenor: Any) -> Dict[str, Any]:
+        """One tenor of a pair through time: its five quotes and its skew (a row of the surface clicked)."""
+        return self._fx(self.fx.tenor_history, self.require_user(user), str(pair or "USDTRY"), str(tenor or ""))
 
     def fx_tickers(self, user: Optional[str]) -> Dict[str, Any]:
         self.require_user(user)

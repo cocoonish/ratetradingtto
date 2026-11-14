@@ -2,14 +2,17 @@
 // it: its vol surface as Bloomberg quotes it (ATM, 25- and 10-delta risk reversals and butterflies, by tenor) with
 // the forwards (USDTRY: the Forward page's offshore curve), the smile fitted through each tenor's quotes, and what
 // that says about the spot - the implied path with its cloud of percentiles, the probabilities of being above /
-// below / between price levels at every tenor, and each tenor's smile and density.  A quote can be typed over (one's
-// own view, back to Bloomberg with an empty value).
+// below / between price levels at every tenor, and each tenor's smile and density.  One standard deviation up and
+// down is read off the distribution, the skew included (the ATM vol alone gives a symmetric ±1σ).  A row of the surface
+// clicked draws that tenor through time: its quotes and its skew (25D RR / ATM) with the z-score.  A quote can be typed
+// over (one's own view, back to Bloomberg with an empty value).
 import { api } from '../api.js';
 import { h, clear, errorToast, toast, promptDialog } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { Chart } from '../chart.js';
 import { FanChart, serialOfIso } from '../fan.js';
 import { num, isoToTr, parseNumber } from '../format.js';
+import { SeriesView } from '../serieschart.js';
 
 const MODELS = [['svi', 'SVI', 'Arbitrajsız SVI: beş kotaya en küçük kareler (önerilen)'],
   ['sabr', 'SABR', 'SABR (β = 1): ATM tam, diğerleri en küçük kareler — USDTRY gibi çarpık smile\'ı tutamayabilir'],
@@ -20,6 +23,7 @@ const MODES = [['above', 'Üstünde', 'Vade sonunda seviyenin üstünde olma ola
   ['between', 'Aralıkta', 'Vade sonunda iki seviye arasında olma olasılığı']];
 const HORIZONS = [['3M', '3A'], ['6M', '6A'], ['1Y', '1Y'], ['2Y', '2Y']];
 const KINDS = [['ATM', 'ATM'], ['RR25', '25D RR'], ['BF25', '25D BF'], ['RR10', '10D RR'], ['BF10', '10D BF']];
+const KIND_NAME = Object.fromEntries(KINDS);
 const BLUE = '4F81BD', ORANGE = 'F79646', PURPLE = '8064A2';
 const REFRESH_MS = 12000;
 
@@ -74,6 +78,7 @@ export class FxPage {
     this.mode = pref('tto.fx.mode', 'above');
     this.horizon = pref('tto.fx.horizon', '1Y');
     this.tenor = pref('tto.fx.tenor', '3M');
+    this.histTenor = pref('tto.fx.histtenor', this.tenor);           // the tenor drawn through time
     this.showLevels = pref('tto.fx.levels.on', '1') === '1';
     this.bandsOn = new Set((pref('tto.fx.bands', '0.05,0.25') || '').split(',').filter(Boolean));
     this.grids = {};
@@ -93,6 +98,7 @@ export class FxPage {
     this.loaded = Date.now();
     this.build();
     this.fill();
+    this.loadTenor();
   }
 
   /** Quotes still on their way (the first answers of Bloomberg): the page is refreshed sooner. */
@@ -111,12 +117,14 @@ export class FxPage {
       this.surf = surf;
       this.loaded = Date.now();
       this.fill();
+      this.loadTenor();
     } finally { this.busy = false; }
   }
 
   destroy() {
     this.dead = true;
     for (const c of Object.values(this.charts)) if (c) c.destroy();
+    if (this.sv) this.sv.destroy();
   }
 
   fetchBoard() { return api.get('/api/fx/board'); }
@@ -135,6 +143,7 @@ export class FxPage {
       this.surf = surf;
       this.loaded = Date.now();
       this.fill();
+      this.loadTenor();
     } catch (err) { errorToast(err); }
   }
 
@@ -143,7 +152,10 @@ export class FxPage {
     clear(this.host);
     this.grids = {};
     for (const c of Object.values(this.charts)) if (c) c.destroy();
+    if (this.sv) { this.sv.destroy(); this.sv = null; }
     this.charts = {};
+    this.tenorData = null;
+    this.tenorKey = '';
     this.modelSeg = seg(MODELS, this.model, (v) => { this.model = v; keep('tto.fx.model', v); this.reload(); }, 'fx-model');
     this.ownBtn = h('button', { class: 'btn hidden', type: 'button', id: 'fx-own',
       title: 'Bu paritede kendi yazdığınız kotaları silip Bloomberg\'e dönün' });
@@ -168,6 +180,20 @@ export class FxPage {
     copyS.addEventListener('click', () => this.grids.surf && copyGrid(this.grids.surf));
     this.surfPanel = panel('fx-surface', 'Vol yüzeyi', [h('div', { class: 'tools' }, copyS)], this.surfBody, this.surfNote);
     this.host.appendChild(this.surfPanel);
+
+    // ---- one tenor through time: its quotes and its skew (a row of the surface clicked)
+    this.histSeg = h('span');
+    this.histHosts = { atm: h('div', { class: 'volchart' }), rrbf: h('div', { class: 'volchart' }) };
+    this.histTitles = { atm: h('div', { class: 'ct' }), rrbf: h('div', { class: 'ct' }) };
+    this.svHost = h('div', { class: 'fxtenor' });
+    this.histNote = h('div', { class: 'note' }, 'Vol yüzeyinde bir satıra tıklayınca o vadenin son bir yılı çizilir (smile ve yoğunluk da o vadeye geçer). '
+      + 'Skew = 25D RR / ATM: risk reversal bölü aynı vadenin ATM vol\'ü (oran); kapanışları iki serinin aynı günkü kapanışlarından. '
+      + 'Alttaki grafiklerde seviye, seçili pencerenin ortalaması ve ±2σ bandı, her günün kendinden önceki pencereye göre z-skoru (son nokta bugünkü canlı değer).');
+    this.histPanel = panel('fx-tenor', 'Vade geçmişi', [h('span', { class: 'muted' }, 'Vade'), this.histSeg],
+      h('div', { class: 'volcharts' }, h('div', null, this.histTitles.atm, this.histHosts.atm), h('div', null, this.histTitles.rrbf, this.histHosts.rrbf)),
+      this.svHost, this.histNote);
+    this.host.appendChild(this.histPanel);
+    this.sv = new SeriesView(this.svHost, { rule: 'macro', prefKey: 'tto.fx.series.window', height: 220, hint: 'Vol yüzeyinde bir satıra tıklayın.' });
 
     // ---- the cloud
     this.fanHost = h('div', { class: 'fanhost' });
@@ -224,6 +250,10 @@ export class FxPage {
       h('p', null, 'Kotalar Bloomberg\'den: ATM (', h('code', null, 'USDTRYV1M BGN Curncy'), '), 25D / 10D risk reversal (', h('code', null, '25R'), ', ',
         h('code', null, '10R'), ') ve butterfly (', h('code', null, '25B'), ', ', h('code', null, '10B'), '). Butterfly market (broker) strangle\'dır: smile, ATM + BF tek vol\'le fiyatlanan strangle\'ı aynı fiyatlar; RR smile\'ın kendi delta strike\'larındaki vol farkıdır. ATM = delta-neutral straddle.'),
       h('p', null, 'Smile: SVI (toplam varyans, log-moneyness) beş kotaya en küçük kareler ile, Gatheral\'ın kelebek arbitrajı koşulu ve Lee kanat sınırı ceza olarak — yoğunluk hiçbir yerde negatif olmaz. USDTRY\'nin orta kotaları kendi aralarında arbitrajsız olmayabilir; o zaman en yakın arbitrajsız smile alınır ve sapma "Uyum" sütununda vol olarak yazar. SABR ve Vanna-Volga karşılaştırma içindir.'),
+      h('p', null, '↑1σ / ↓1σ: vade sonundaki spotun %84 yüzdeliği − forward ve forward − %16 yüzdeliği, yani normal dağılımın bir standart sapmasına denk gelen olasılıklar, '
+        + 'smile\'ın çarpıklığıyla (skew) birlikte; yalnız ATM vol\'le hesaplanan ±1σ (spot × ATM × √T) simetriktir ve karşılaştırma için hücrenin ipucunda yazar. '
+        + 'Dağılımın ortalaması forward\'dır: USDTRY gibi uzun bir sağ kuyruk (devalüasyon sıçraması) taşıyan bir paritede gövde forward\'ın altında kalır, '
+        + '↑1σ küçülür (eksi bile olabilir: %84 yüzdelik forward\'ın altında) ve ↓1σ büyür; kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür.'),
       h('p', null, 'Dağılım risk-nötrdür (forward ölçüsü): vade sonundaki spotun beklenen değeri forward\'dır, yani USDTRY\'de bulutun merkezi faiz farkı kadar yukarıdadır — gerçek dünya olasılığı değil, opsiyon piyasasının fiyatladığıdır. P(S > K) = N(d2) − F·n(d1)·√T·σ\'(K) (Breeden–Litzenberger).'),
       h('p', null, 'Forward: USDTRY Forward sayfasının offshore eğrisinden (ICAP ima TRY faizi ve USD OIS, "Serbest forward" formülü); EURTRY = EURUSD × USDTRY; diğerleri Bloomberg spot + forward puanı. Delta: primli delta USD karşısı olmayan pariteler ve USDxxx için; G10\'da 1Y\'ye kadar spot, sonrası forward delta; USDTRY ve EURTRY her vadede forward delta.'))));
   }
@@ -274,12 +304,22 @@ export class FxPage {
         isNum(r.chg) ? { t: (r.chg > 0 ? '+' : '') + num(r.chg, 2, false) + '%', v: r.chg, k: 'n', cls: pick.trim(),
           tip: 'Son kapanışa göre' } : { t: '', k: '', cls: pick.trim() },
         c(r.ATM_1W, 2), c(r.ATM_1M, 2), c(r.ATM_3M, 2), c(r.ATM_1Y, 2), c(r.RR25_1M, 2), c(r.RR25_3M, 2), c(r.BF25_1M, 2), c(r.RR10_1M, 2),
-        cellNum(r.move_1m, d, { cls: pick.trim(), tip: '1 aylık ±1σ: spot × ATM 1M × √(30/365)' }),
+        cellNum(r.up_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ yukarı, skew dahil: 1M dağılımının %84 yüzdeliği − forward'
+          + (isNum(r.move_1m) ? '\nYalnız ATM ile ±1σ: ' + num(r.move_1m, d, false) : '') }),
+        cellNum(r.down_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ aşağı, skew dahil: forward − 1M dağılımının %16 yüzdeliği'
+          + (isNum(r.move_1m) ? '\nYalnız ATM ile ±1σ: ' + num(r.move_1m, d, false) : '') }),
         cellNum(r.breakeven, d, { cls: pick.trim(), tip: 'Günlük başabaş hareket: spot × ATM 1M / √252' })];
     });
     this.setGrid('board', this.boardBody, ['Parite', 'Grup', 'Spot', 'Gün %', 'ATM 1W', 'ATM 1M', 'ATM 3M', 'ATM 1Y', '25D RR 1M', '25D RR 3M',
-      '25D BF 1M', '10D RR 1M', '1M ±1σ', 'Başabaş / gün'], cells, 'Parite yok', (i) => {
+      '25D BF 1M', '10D RR 1M', '1M ↑1σ', '1M ↓1σ', 'Başabaş / gün'], cells, 'Parite yok', (i, j) => {
       const r = rows[i];
+      // a vol of the board clicked: its tenor is the one drawn through time below
+      const t = { 4: '1W', 5: '1M', 6: '3M', 7: '1Y', 8: '1M', 9: '3M', 10: '1M', 11: '1M' }[j];
+      if (t && t !== this.histTenor) {
+        this.histTenor = t;
+        keep('tto.fx.histtenor', t);
+        if (r && r.pair === this.pair) { this.markSurface(); this.loadTenor(); }
+      }
       if (!r || r.pair === this.pair) return;
       this.pair = r.pair;
       keep('tto.fx.pair', r.pair);
@@ -328,15 +368,22 @@ export class FxPage {
           : { t: '–', k: 's', cls: 'soft', tip: 'Forward yok · çift tık: yazın' },
         quote(r, 'ATM'), quote(r, 'RR25'), quote(r, 'BF25'), quote(r, 'RR10'), quote(r, 'BF10'),
         pt(r, '10P'), pt(r, '25P'), pt(r, '25C'), pt(r, '10C'),
-        cellNum(r.move_1sd, d, { tip: '±1σ: spot × ATM × √T' }), cellNum(q['0.05'], d), cellNum(q['0.5'], d, { b: 1 }), cellNum(q['0.95'], d),
+        cellNum(r.up_1s, d, { tip: '1σ yukarı, skew dahil: dağılımın %84 yüzdeliği − forward' + (isNum(r.move_1sd) ? '\nYalnız ATM ile ±1σ (spot × ATM × √T): ' + num(r.move_1sd, d, false) : '') }),
+        cellNum(r.down_1s, d, { tip: '1σ aşağı, skew dahil: forward − dağılımın %16 yüzdeliği' + (isNum(r.move_1sd) ? '\nYalnız ATM ile ±1σ (spot × ATM × √T): ' + num(r.move_1sd, d, false) : '') }),
+        cellNum(q['0.05'], d), cellNum(q['0.5'], d, { b: 1 }), cellNum(q['0.95'], d),
         isNum(fit) ? { t: num(fit, 2, false), v: fit, k: 'n', cls: fit > 0.5 ? 'thru' : 'soft', tip: 'Kotalardan sapma (vol puanı)\n' + fitTip + (r.note ? '\n' + r.note : '') }
           : { t: r.error || '', k: 's', cls: 'soft' },
         r.check ? { t: r.check.arbitrage ? 'arbitraj!' : '✓', k: 's', cls: r.check.arbitrage ? 'thru' : 'soft',
           tip: 'Yoğunluk ' + (r.check.arbitrage ? 'bir yerde negatif' : 'hiçbir yerde negatif değil') + ' · toplam ' + num(r.check.mass, 4, false)
             + ' · E[S]/F − 1 = ' + num(r.check.mean_error * 1e4, 2, false) + ' bp' + (r.delta ? '\nDelta: ' + r.delta + (r.df_note ? ' (' + r.df_note + ')' : '') : '') } : { t: '', k: '' }];
     });
+    const marked = rows.map((row, i) => (s.rows[i].tenor === this.histTenor
+      ? row.map((c) => Object.assign({}, c, { cls: ((c.cls || '') + ' pick').trim() })) : row));
     const g = this.setGrid('surf', this.surfBody, ['Vade', 'Teslim', 'Gün', 'Forward', 'ATM', '25D RR', '25D BF', '10D RR', '10D BF', '10P', '25P', '25C', '10C',
-      '±1σ', '%5', 'Medyan', '%95', 'Uyum', 'Yoğunluk'], rows, 'Vade yok');
+      '↑1σ', '↓1σ', '%5', 'Medyan', '%95', 'Uyum', 'Yoğunluk'], marked, 'Vade yok', (i) => {
+      const r = this.surf.rows[i];
+      if (r) this.setTenor(r.tenor);
+    });
     if (g && !g.el.__fxedit) {
       g.el.__fxedit = true;
       g.el.addEventListener('dblclick', (e) => {
@@ -347,9 +394,95 @@ export class FxPage {
         if (col && r) this.typeQuote(r, col);
       });
     }
-    this.surfNote.textContent = 'Vol\'ler vol puanı (%). 10P … 10C: smile\'ın kendi delta strike\'larındaki vol (üzerine gelince strike). %5 / Medyan / %95: vade sonunda spotun '
-      + 'risk-nötr dağılımının yüzdelikleri. Uyum: modelin kotalardan en büyük sapması (vol puanı; ayrıntı üzerine gelince). Bir kotayı ya da forward\'ı değiştirmek için çift tıklayın: '
-      + 'değer yalnız sizin görünümünüzü değiştirir, boş bırakınca Bloomberg\'e döner.';
+    this.surfNote.textContent = 'Vol\'ler vol puanı (%). 10P … 10C: smile\'ın kendi delta strike\'larındaki vol (üzerine gelince strike). ↑1σ / ↓1σ: vade sonunda spotun '
+      + 'forward\'dan bir standart sapma yukarı / aşağı hareketi, skew dahil (dağılımın %84 ve %16 yüzdelikleri; yalnız ATM ile simetrik ±1σ üzerine gelince). '
+      + 'USDTRY\'de ↑1σ küçük, hatta eksi çıkabilir: büyük yukarı sıçrama kuyruğu ortalamayı (forward\'ı) dağılımın gövdesinin üstüne çeker. %5 / Medyan / %95: '
+      + 'risk-nötr dağılımın yüzdelikleri. Uyum: modelin kotalardan en büyük sapması (vol puanı; ayrıntı üzerine gelince). Satıra tıklayınca o vadenin geçmişi "Vade geçmişi"nde çizilir. '
+      + 'Bir kotayı ya da forward\'ı değiştirmek için çift tıklayın: değer yalnız sizin görünümünüzü değiştirir, boş bırakınca Bloomberg\'e döner.';
+  }
+
+  /** The tenor in focus (a row of the surface clicked, the smile's tenor chosen): its smile and its past. */
+  setTenor(t) {
+    if (!t) return;
+    const smileOk = this.surf && this.surf.rows.some((r) => r.tenor === t && r.curve && r.curve.length);
+    if (smileOk && t !== this.tenor) { this.tenor = t; keep('tto.fx.tenor', t); this.fillSmile(); }
+    if (t === this.histTenor && this.tenorData) return;
+    this.histTenor = t;
+    keep('tto.fx.histtenor', t);
+    this.markSurface();
+    this.loadTenor();
+  }
+
+  /** Mark the drawn tenor's row of the surface (in place: a double click on it must still find its cell). */
+  markSurface() {
+    const g = this.grids.surf;
+    if (!g || !g.tds || !this.surf) return;
+    g.tds.slice(1).forEach((line, i) => {
+      const on = !!(this.surf.rows[i] && this.surf.rows[i].tenor === this.histTenor);
+      for (const td of line) if (td) td.classList.toggle('pick', on);
+    });
+  }
+
+  async loadTenor() {
+    if (!this.sv || !this.histPanel) return;
+    const pair = this.surf ? this.surf.pair : this.pair;
+    const tenor = this.histTenor;
+    const key = pair + '|' + tenor;
+    const seq = (this.tseq = (this.tseq || 0) + 1);
+    if (this.tenorKey !== key) this.sv.loading(pair + ' 25D RR / ATM ' + tenor);
+    try {
+      const d = await api.get('/api/fx/tenor', { pair, tenor });
+      if (this.dead || seq !== this.tseq) return;
+      this.tenorData = d;
+      this.tenorKey = key;
+      this.fillTenor();
+    } catch (err) {
+      if (!this.dead && seq === this.tseq) this.sv.show({ title: pair + ' 25D RR / ATM ' + tenor, points: [], why: (err && err.message) || 'Geçmiş alınamadı' });
+    }
+  }
+
+  fillTenor() {
+    const d = this.tenorData;
+    if (!d || !this.histPanel) return;
+    this.histPanel.titleEl.textContent = d.pair + ' ' + d.tenor + ' · geçmiş: ATM, risk reversal, butterfly ve skew (25D RR / ATM)';
+    clear(this.histSeg);
+    const tenors = this.surf ? this.surf.rows.map((r) => r.tenor) : [d.tenor];
+    this.histSeg.appendChild(seg(tenors.map((t) => [t, t]), d.tenor, (v) => this.setTenor(v), 'fx-hist-tenor'));
+    // every quote on one date axis, the value now as the last point
+    const live = d.live || {};
+    const days = [...new Set([].concat(...Object.values(d.series).map((pts) => pts.map((p) => p[0]))))].sort();
+    const now = Object.values(live).some(isNum) && d.today && (!days.length || d.today > days[days.length - 1]);
+    if (now) days.push(d.today);
+    const idx = new Map(days.map((x, i) => [x, i]));
+    const line = (k, color, dash) => {
+      const data = days.map(() => null);
+      for (const [day, v] of d.series[k] || []) data[idx.get(day)] = v;
+      if (now && isNum(live[k])) data[days.length - 1] = live[k];
+      return { name: KIND_NAME[k], kind: 'line', color, data, marker: false, dash: !!dash };
+    };
+    const x = { type: 'date', values: days.map(serialOfIso), format: 'mmm yy' };
+    const cats = days.map(isoToTr);
+    const specs = {
+      atm: { title: d.pair + ' ATM ' + d.tenor, cats, x, auto: 'fit', decimals: 2, y_title: 'vol %', aspect: 0.45, series: [line('ATM', BLUE)] },
+      rrbf: { title: d.pair + ' RR ve BF ' + d.tenor, cats, x, auto: 'fit', decimals: 2, y_title: 'vol %', aspect: 0.45,
+        series: [line('RR25', BLUE), line('RR10', BLUE, true), line('BF25', ORANGE), line('BF10', ORANGE, true)] },
+    };
+    this.histTitles.atm.textContent = 'ATM ' + d.tenor + ' (vol %)';
+    this.histTitles.rrbf.textContent = 'Risk reversal ve butterfly ' + d.tenor + ' (25D düz, 10D kesikli)';
+    for (const k of ['atm', 'rrbf']) {
+      const host = this.histHosts[k];
+      const empty = !specs[k].series.some((sr) => sr.data.some(isNum));
+      if (empty) {
+        if (this.charts['h' + k]) { this.charts['h' + k].destroy(); this.charts['h' + k] = null; }
+        clear(host);
+        host.appendChild(h('div', { class: 'chart-empty' }, 'Tarihçe yok'));
+        continue;
+      }
+      if (host.firstChild && host.firstChild.classList && host.firstChild.classList.contains('chart-empty')) clear(host);
+      if (this.charts['h' + k]) this.charts['h' + k].update(specs[k]); else this.charts['h' + k] = new Chart(host, specs[k], { height: 220 });
+    }
+    this.sv.show({ title: d.pair + ' 25D RR / ATM ' + d.tenor, points: d.skew, live: d.skew_live, today: d.today, from: d.from, digits: 3, unit: '', axis: 'RR/ATM',
+      note: '25D RR ÷ ATM', why: 'Bu vadenin 25D RR ve ATM kapanışları yok (tarihçe henüz inmemiş olabilir).' });
   }
 
   async typeQuote(r, kind) {
@@ -440,7 +573,7 @@ export class FxPage {
       return;
     }
     if (!good.some((r) => r.tenor === this.tenor)) this.tenor = good[Math.min(4, good.length - 1)].tenor;
-    this.tenorSeg.appendChild(seg(good.map((r) => [r.tenor, r.tenor]), this.tenor, (v) => { this.tenor = v; keep('tto.fx.tenor', v); this.fillSmile(); }, 'fx-tenor'));
+    this.tenorSeg.appendChild(seg(good.map((r) => [r.tenor, r.tenor]), this.tenor, (v) => this.setTenor(v), 'fx-tenor'));
     const r = good.find((x) => x.tenor === this.tenor);
     const d = (s.pair_info && s.pair_info.decimals) || 4;
     const pts = Object.entries(r.points_smile || {}).filter(([, p]) => p);

@@ -471,3 +471,133 @@ def test_check_fx_asks_once_for_a_pairs_tickers():
     server.invalid.add("USDTRYV1W BGN Curncy")
     assert fx.check_fx("USDTRY", blpapi_module=fake_blpapi.module(server), out=lines.append) == 2
     assert fx.check_fx("US/D", out=lines.append) == 1
+
+
+# ---------------------------------------------------------------------------------------------- skew and the picked series
+def _seed_eurusd_1m(svc, n=260):
+    """A year of EURUSD 1M closes: the ATM vol drifting up, the risk reversal sinking (puts ever dearer)."""
+    days = _weekdays(svc.fx.today() - _dt.timedelta(days=1), n)
+    atm = {d.isoformat(): 6.0 + 0.002 * i for i, d in enumerate(days)}
+    rr = {d.isoformat(): -0.20 - 0.001 * i for i, d in enumerate(days) if i % 9}            # a few days without a close
+    svc.store.hist_upsert(fx.series_id(fx.vol_ticker("EURUSD", "ATM", "1M")), sorted(atm.items()))
+    svc.store.hist_upsert(fx.series_id(fx.vol_ticker("EURUSD", "RR25", "1M")), sorted(rr.items()))
+    return atm, rr
+
+
+def test_skew_is_the_risk_reversal_over_the_atm_vol(svc):
+    assert fx.skew_closes({"a": 1.0, "b": 2.0, "c": 3.0}, {"a": 4.0, "b": 0.0, "d": 5.0}) == {"a": 0.25}
+    assert [s[0] for s in fx.SKEWS] == ["SKEW25", "SKEW25", "SKEW25", "SKEW10"]
+    assert all((rr, t) in fx.CORE and ("ATM", t) in fx.CORE for _, rr, t in fx.SKEWS)       # no new history to fetch
+    u = user(svc, "FX Skew")
+    atm, rr = _seed_eurusd_1m(svc)
+    res = svc.fx_monitor(u, 250)
+    assert res["skews"] == [list(s) for s in fx.SKEWS] and res["skew_labels"]["SKEW25"] == "25D RR / ATM"
+    c = res["cells"]["EURUSD|SKEW25|1M"]
+    closes = fx.skew_closes(rr, atm)
+    assert len(closes) == len(rr) and c["n"] == 259                       # from the first close on, a missing one filled
+    assert c["last"] == pytest.approx(-0.4 / 6.1) and c["live"] and c["ticker"] is None
+    assert c["of"] == [fx.vol_ticker("EURUSD", "RR25", "1M"), fx.vol_ticker("EURUSD", "ATM", "1M")]
+    want = fx.stats(closes, -0.4 / 6.1, svc.fx.today(), 250)
+    assert c["z"] == pytest.approx(want["z"]) and c["pct"] == want["pct"] and c["d1"] == pytest.approx(want["d1"])
+    assert -3.0 < c["z"] < -0.5                                            # puts dearer than over most of the year
+    assert res["cells"]["EURUSD|SKEW25|3M"]["last"] == pytest.approx(-0.4 / 6.3) and res["cells"]["EURUSD|SKEW25|3M"]["n"] == 0
+    assert res["cells"]["EURUSD|SKEW10|1M"]["last"] == pytest.approx(-0.8 / 6.1)
+    assert res["cells"]["USDTRY|SKEW25|1Y"]["last"] == pytest.approx((1.0 + 0.7 * 16.0) / 16.0)
+    none = res["cells"]["USDJPY|SKEW25|1M"]
+    assert none["last"] is None and none["why"] == "RR ya da ATM yok"
+    row = next(r for r in res["rows"] if r["pair"] == "EURUSD")
+    assert row["spot_ticker"] == "EURUSD Curncy"
+
+
+def test_the_series_of_a_quote_a_skew_and_a_ticker(svc):
+    from tto.service import ServiceError
+    u = user(svc, "FX Seri")
+    atm, rr = _seed_eurusd_1m(svc)
+    today = svc.fx.today()
+    axis_from = fx.closes_axis(today)[0].isoformat()
+    sk = svc.fx_series(u, "", 126, "eurusd", "skew25", "1m")
+    assert sk["label"] == "EURUSD 25D RR / ATM 1M" and sk["unit"] == "ratio" and sk["ticker"] is None
+    assert sk["points"] == sorted(fx.skew_closes(rr, atm).items()) and sk["live"] == pytest.approx(-0.4 / 6.1)
+    assert sk["stats"]["window"] == 126 and sk["stats"]["z"] == pytest.approx(svc.fx_monitor(u, 126)["cells"]["EURUSD|SKEW25|1M"]["z"])
+    assert sk["from"] == axis_from and sk["today"] == today.isoformat()
+    v = svc.fx_series(u, "", 250, "EURUSD", "ATM", "1M")
+    assert v["ticker"] == "EURUSDV1M BGN Curncy" and v["label"] == "EURUSD ATM 1M" and v["unit"] == "vol"
+    assert v["points"] == sorted(atm.items()) and v["live"] == pytest.approx(6.1) and v["from"] == axis_from
+    t = svc.fx_series(u, "EURUSDV1M BGN Curncy")
+    assert t["ticker"] == t["label"] == "EURUSDV1M BGN Curncy" and t["points"] == v["points"] and t["unit"] == ""
+    for bad in (("", 250, "EURUSD", "ATM", "5Y"), ("", 250, "EURUSD", "XX", "1M"), ("", 250, "ABCDEF", "ATM", "1M"), ("",)):
+        with pytest.raises(ServiceError):
+            svc.fx_series(u, *bad)
+
+
+def test_a_tenor_through_time(svc):
+    from tto.service import ServiceError
+    u = user(svc, "FX Vade")
+    atm, rr = _seed_eurusd_1m(svc)
+    res = svc.fx_tenor(u, "EURUSD", "1m")
+    assert res["pair"] == "EURUSD" and res["tenor"] == "1M" and set(res["series"]) == set(fx.KINDS)
+    assert res["series"]["ATM"] == sorted(atm.items()) and res["series"]["RR25"] == sorted(rr.items()) and res["series"]["BF10"] == []
+    assert res["skew"] == sorted(fx.skew_closes(rr, atm).items())
+    assert res["live"] == eurusd_quotes("1M") and res["skew_live"] == pytest.approx(-0.4 / 6.1)
+    assert res["from"] == fx.closes_axis(svc.fx.today())[0].isoformat() and res["labels"]["RR25"] == "25D RR"
+    assert svc.fx_tenor(u, "USDJPY", "3M")["skew_live"] is None                  # no quotes: no skew now
+    with pytest.raises(ServiceError):
+        svc.fx_tenor(u, "EURUSD", "5Y")
+
+
+def test_one_standard_deviation_up_and_down_with_the_skew(svc):
+    """↑1σ / ↓1σ are the distances of the distribution's 84th and 16th percentiles from the forward.  Without a smile
+    they are the lognormal law's; with one they part: USDTRY's long right tail lifts the forward above the bulk of the
+    law (its way down within one sigma is the longer), while its 1 % / 99 % tails lean up and EURUSD's down."""
+    from tto import fxvol as fv
+    u = user(svc, "FX Bir Sigma")
+    tails = {}
+    for pair in ("USDTRY", "EURUSD"):
+        rows = {r["tenor"]: r for r in svc.fx_surface(u, pair, "svi", None)["rows"]}
+        for t, r in rows.items():
+            F = r["fwd"]
+            assert r["up_1s"] == pytest.approx(r["q"]["0.84"] - F) and r["down_1s"] == pytest.approx(F - r["q"]["0.16"])
+            ratio = (r["up_1s"] + r["down_1s"]) / (2.0 * F * r["ATM"] / 100.0 * math.sqrt(r["T"]))   # against the ATM vol's σ
+            if pair == "EURUSD":
+                assert 0.9 < ratio < 1.0, t                      # a G10 smile: about the ATM move, the wings' weight aside
+            else:
+                assert r["down_1s"] > r["up_1s"] and ratio < 0.7, t      # most of USDTRY's variance is in its right tail
+        one = rows["1M"]
+        tails[pair] = (one["q"]["0.99"] - one["fwd"]) / (one["fwd"] - one["q"]["0.01"])
+        assert one["move_1sd"] == pytest.approx(svc.fx.quotes(u, svc.fx.pair(pair))["spot"] * one["ATM"] / 100.0 * math.sqrt(one["T"]))
+    assert tails["USDTRY"] > 1.2 and tails["EURUSD"] < 1.0
+    # no smile (one's own flat quotes): the lognormal law around the forward
+    for kind in ("RR25", "BF25", "RR10", "BF10"):
+        svc.fx_override(u, "EURUSD", "3M", kind, 0)
+    try:
+        r = next(x for x in svc.fx_surface(u, "EURUSD", "svi", None)["rows"] if x["tenor"] == "3M")
+        sd, z = r["ATM"] / 100.0 * math.sqrt(r["T"]), fv.ninv(0.84)              # the 84th percentile: z = 0.994
+        assert r["up_1s"] == pytest.approx(r["fwd"] * (math.exp(z * sd - sd * sd / 2) - 1.0), rel=1e-5)
+        assert r["down_1s"] == pytest.approx(r["fwd"] * (1.0 - math.exp(-z * sd - sd * sd / 2)), rel=1e-5)
+    finally:
+        svc.fx_override_clear(u, "EURUSD")
+    # the board: the 1M of the page itself (its forward, its smile)
+    board = {r["pair"]: r for r in svc.fx_board(u)["rows"]}
+    for pair in ("USDTRY", "EURUSD"):
+        one = next(r for r in svc.fx_surface(u, pair, "svi", None)["rows"] if r["tenor"] == "1M")
+        b = board[pair]
+        assert b["fwd_1m"] == pytest.approx(one["fwd"], rel=1e-12)
+        assert b["up_1m"] == pytest.approx(one["up_1s"], rel=1e-9) and b["down_1m"] == pytest.approx(one["down_1s"], rel=1e-9)
+    assert "up_1m" not in board["USDJPY"]                                        # no quotes, no spot: nothing to say
+
+
+def test_http_series_and_tenor(svc):
+    from starlette.testclient import TestClient
+    from tto.server import create_app
+    client = TestClient(create_app(service=svc))
+    h = auth(svc, user(svc, "FX HTTP Seri"))
+    _seed_eurusd_1m(svc)
+    r = client.get("/api/fx/series", params={"pair": "EURUSD", "kind": "SKEW25", "tenor": "1M", "window": 63}, headers=h)
+    assert r.status_code == 200 and r.json()["unit"] == "ratio" and r.json()["stats"]["window"] == 63
+    assert client.get("/api/fx/series", params={"pair": "EURUSD", "kind": "ATM", "tenor": "9Y"}, headers=h).status_code == 400
+    t = client.get("/api/fx/tenor", params={"pair": "EURUSD", "tenor": "1M"}, headers=h)
+    assert t.status_code == 200 and t.json()["tenor"] == "1M" and len(t.json()["skew"]) > 200
+    assert client.get("/api/fx/tenor", params={"pair": "EURUSD", "tenor": "x"}, headers=h).status_code == 400
+    assert client.get("/api/fx/tenor", params={"pair": "EURUSD", "tenor": "1M"}).status_code == 401
+    for path in ("/static/js/serieschart.js", "/static/js/seriesstats.js"):
+        assert client.get(path, headers=h).status_code == 200

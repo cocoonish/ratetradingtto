@@ -27,8 +27,10 @@ kayıtlı son veriyle çalışır.
   Günlük İşlemler'i dolu açar.
 * **FX opsiyon piyasası:** **Spot / FX** (bir paritenin vol yüzeyi – ATM, 25D / 10D risk reversal ve butterfly –,
   forward'ları – USDTRY offshore eğrisinden –, smile'ı, ima edilen yolu ve olasılık bulutu, vade × seviye olasılık
-  matrisi) ve **FX Vol İzleme** (USDTRY, G10, çaprazlar ve masanın eklediği her şeyin vol'leri, değişimleri, tarihsel
-  yeri, ısı haritası, vade yapısı ve skew grafikleri) ([aşağıda](#fx-spot--fx-ve-vol-izleme-sayfaları)).
+  matrisi) ve **FX Vol İzleme** (USDTRY, G10, çaprazlar ve masanın eklediği her şeyin vol'leri, skew'ü – RR / ATM –,
+  değişimleri, tarihsel yeri, ısı haritası, vade yapısı ve skew grafikleri) ([aşağıda](#fx-spot--fx-ve-vol-izleme-sayfaları)).
+  Bir satıra ya da hücreye tıklayınca geçmişi z-skoruyla çizilir – FX sayfalarında, Gün Sonu Matrisi'nde, İzleme ·
+  Alarmlar'da ve Eğri Hareketi'nde ([aşağıda](#tıkla--grafik-bir-satırın-geçmişi)).
 
 ---
 
@@ -766,14 +768,19 @@ vadede toplam olasılık, ortalamanın forward'a uzaklığı ve yoğunluğun hi�
 **Spot / FX sayfası.**
 
 * **Pariteler · spot ve vol**: her paritenin spotu, son kapanışa göre değişimi, ATM 1W / 1M / 3M / 1Y, 25D RR 1M / 3M,
-  25D BF 1M, 10D RR 1M, 1 aylık ±1σ (spot × ATM 1M × √(30/365)) ve günlük başabaş hareket (spot × ATM 1M / √252).
-  Satıra tıklayınca parite açılır (USDTRY varsayılan; seçim hatırlanır).
+  25D BF 1M, 10D RR 1M, **1M ↑1σ / ↓1σ** (skew dahil, aşağıda; yalnız ATM ile ±1σ = spot × ATM 1M × √(30/365)
+  hücrenin ipucunda) ve günlük başabaş hareket (spot × ATM 1M / √252). Satıra tıklayınca parite açılır (USDTRY
+  varsayılan; seçim hatırlanır); bir vol hücresine tıklamak o vadeyi "Vade geçmişi"nde de açar.
 * **Vol yüzeyi**: vade, teslim tarihi, gün, forward, beş kota, smile'ın kendi 10P / 25P / 25C / 10C vol'leri (üzerine
-  gelince strike), ±1σ, dağılımın %5 / medyan / %95'i, **Uyum** (modelin kotalardan en büyük sapması, vol puanı;
-  ayrıntısı üzerine gelince) ve **Yoğunluk** denetimi. Bir kotaya ya da forward'a **çift tıklayınca** kendi değerinizi
+  gelince strike), **↑1σ / ↓1σ**, dağılımın %5 / medyan / %95'i, **Uyum** (modelin kotalardan en büyük sapması, vol
+  puanı; ayrıntısı üzerine gelince) ve **Yoğunluk** denetimi. Satıra tıklayınca o vade "Vade geçmişi"nde çizilir (smile
+  ve yoğunluk da o vadeye geçer). Bir kotaya ya da forward'a **çift tıklayınca** kendi değerinizi
   yazarsınız ("ya şöyle olsa" ya da Bloomberg'den gelmeyen kota): yalnız sizin görünümünüzü değiştirir, hücre mor olur,
   boş bırakınca Bloomberg'e döner; "N kota sizin · Bloomberg'e dön" hepsini siler. Kayıtlı veri modunda (Bloomberg
   yokken) kotalar böyle elle yazılarak da hesap yapılır.
+* **Vade geçmişi**: seçilen vadenin son bir yılı – ATM; 25D ve 10D RR ve BF; **skew (25D RR / ATM)** seviyesi, seçili
+  pencerenin (3A / 6A / 1Y) ortalaması ve ±2σ bandı ve günlük z-skoru. İlk açılışta o vadenin beş kotasının
+  kapanışları istenir (bir yıl geriye; sonra son günler).
 * **İma edilen yol ve olasılık bulutu**: spotun son kapanışları, bugünden itibaren forward patikası (kesikli), medyan
   ve vade sonu dağılımının yüzdelik bantları (%1–99, %5–95, %10–90, %25–75; açılıp kapanır), bantlar vadeler arasında
   doğrusal. Ufuk 3A / 6A / 1Y / 2Y; matrisin seviyeleri grafikte noktalı çizgi. Üzerine gelince o tarihteki forward,
@@ -784,23 +791,44 @@ vadede toplam olasılık, ortalamanın forward'a uzaklığı ve yoğunluğun hi�
 * **Smile ve yoğunluk**: seçilen vadenin smile'ı (vol – strike, pillar'larıyla) ve vade sonundaki spotun yoğunluğu
   (forward ve spot çizgileriyle).
 
+**↑1σ / ↓1σ (skew dahil).** Vade sonundaki spotun dağılımının **%84 yüzdeliği − forward** ve **forward − %16
+yüzdeliği**: normal dağılımda bir standart sapmaya denk gelen olasılıklar, smile'ın çarpıklığıyla birlikte. Smile yoksa
+lognormal yasanın bir sigması çıkar (testle doğrulanır); yalnız ATM vol'le hesaplanan ±1σ simetriktir ve karşılaştırma
+için ipucunda yazar. Dağılımın ortalaması forward'dır: **USDTRY**'de uzun bir sağ kuyruk (büyük yukarı sıçrama
+olasılığı) ortalamayı gövdenin üstüne çeker; ↑1σ küçülür – eksi bile olabilir, yani %84 yüzdelik forward'ın altındadır
+– ve ↓1σ büyür (USDTRY'nin kısa vadelerinde ↑1σ sıfıra yakın çıkabilir; ikisinin toplamı da yalnız ATM'nin
+±1σ'sından belirgin dar). Kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür. EURUSD gibi bir G10 paritesinde ikisi ATM'nin sigmasına yakındır.
+
 **FX Vol İzleme sayfası.** Üstteki düğmelerle her bölüm gösterilir ya da gizlenir (tercih tarayıcıda hatırlanır);
 **Pencere** (3A / 6A / 1Y = 63 / 126 / 250 kapanış) z-skoru, yüzdelik ve aralığın penceresidir.
 
-* **Özet**: her parite bir satır: ATM 1M / 3M / 1Y, 25D RR 1M / 3M, 25D BF 1M, 10D RR 1M (seviye ya da Δ1G / Δ1H /
-  Δ1A; renk penceredeki z-skoru, kırmızı yüksek / mavi düşük), ATM 1M'nin z 3A'sı ve yüzdeliği, **ima − gerçekleşen**
-  (ATM 1M − spotun 21 günlük gerçekleşen vol'ü), **eğim** (ATM 1Y − ATM 1M) ve ATM 1M'nin bir yıllık çizgisi.
-* **Isı haritası**: parite × (ATM 1W 1M 3M 6M 1Y · 25D RR ve BF 1M 3M 1Y · 10D RR ve BF 1M); hücrede seçilen ölçü
-  (seviye, Δ1G, Δ1H, Δ1A, z, yüzdelik) ve seviye. Değişimlerde renk sütunun en büyük hareketine göre, z ve yüzdelikte
-  tarihine göre.
-* **Hareketler**: günün en büyük değişimleri ve tarihsel uçta olanlar (|z| ≥ 1,5 ya da yüzdelik ≤ %5 / ≥ %95).
-* **Parite ayrıntısı** (pariteyi seçin; özet ya da ısı haritasında satıra tıklamak da açar): ATM vade yapısı, 25D /
-  10D RR ve BF vade yapısı ve seçilen vadenin smile'ı (10P … 10C) – bugün, 1 hafta ve 1 ay önce (o günlerin
-  kapanışlarından aynı yöntemle; RR / BF kapanışı olmayan gün çizilmez) –, ATM 1M / 3M / 1Y, RR ve BF'nin bir yıllık
-  serileri, ima ve gerçekleşen vol.
+* **Özet**: her parite bir satır: ATM 1M / 3M / 1Y, 25D RR 1M / 3M, 25D BF 1M, 10D RR 1M, **25D RR / ATM 1M** (skew)
+  (seviye ya da Δ1G / Δ1H / Δ1A; renk penceredeki z-skoru, kırmızı yüksek / mavi düşük), skew'ün penceredeki z'si, ATM
+  1M'nin z 3A'sı ve yüzdeliği, **ima − gerçekleşen** (ATM 1M − spotun 21 günlük gerçekleşen vol'ü), **eğim** (ATM 1Y −
+  ATM 1M) ve ATM 1M'nin bir yıllık çizgisi. Bir kotaya (spot dahil) tıklayınca geçmişi "Seçili seri"de çizilir, parite
+  adına tıklayınca parite ayrıntıda açılır.
+* **Isı haritası**: parite × (ATM 1W 1M 3M 6M 1Y · 25D RR ve BF 1M 3M 1Y · 10D RR ve BF 1M · **25D RR / ATM 1M 3M 1Y ·
+  10D RR / ATM 1M**); hücrede seçilen ölçü (seviye, Δ1G, Δ1H, Δ1A, z, yüzdelik) ve seviye. Değişimlerde renk sütunun en
+  büyük hareketine göre, z ve yüzdelikte tarihine göre. Hücreye tıklayınca o serinin geçmişi "Seçili seri"de çizilir
+  (hücre çerçevelenir; parite ayrıntısı da o pariteye geçer).
+* **Seçili seri**: tıklanan kotanın ya da skew'ün son bir yılı – seviye, seçili pencerenin ortalaması ve ±2σ bandı – ve
+  her günün z-skoru; üstündeki satırda şimdiki değer, z, yüzdelik, ortalama, σ, aralık (tablolardaki sayıların aynısı).
+  Pencere üstteki seçimdir. Varsayılan USDTRY 25D RR / ATM 1M; seçim hatırlanır.
+* **Hareketler**: günün en büyük değişimleri (vol puanı) ve tarihsel uçta olanlar (|z| ≥ 1,5 ya da yüzdelik ≤ %5 /
+  ≥ %95; skew'ler dahil). Satıra tıklayınca geçmişi çizilir.
+* **Parite ayrıntısı** (pariteyi seçin; özet ya da ısı haritasında tıklamak da seçer): ATM vade yapısı, 25D / 10D RR
+  ve BF vade yapısı, **skew'ün (25D RR / ATM) vade yapısı** ve seçilen vadenin smile'ı (10P … 10C) – bugün, 1 hafta ve
+  1 ay önce (o günlerin kapanışlarından aynı yöntemle; RR / BF kapanışı olmayan gün çizilmez) –, ATM 1M / 3M / 1Y, RR,
+  skew (1M / 3M / 1Y) ve BF'nin bir yıllık serileri, ima ve gerçekleşen vol.
 * **Kendi ticker'larım** (masa için ortak): kutuya **parite** yazılırsa (`USDZAR`) o paritenin vol seti bütün
   tablolara girer (EM paritesi forward delta ile); **herhangi bir ticker** yazılırsa (sonunda sarı tuşuyla: `VIX
   Index`, `USDTRYV1M CMPN Curncy`) seviyesi, değişimleri, z'si, yüzdeliği ve aralığı izlenir. Ad verilebilir; ✕ çıkarır.
+  Satıra tıklayınca geçmişi çizilir.
+
+**Skew** = risk reversal ÷ aynı vadenin ATM vol'ü (**25D RR / ATM** 1M 3M 1Y, **10D RR / ATM** 1M; oran): call'ların
+put'lara göre primi, vol seviyesinden arındırılmış – vol'ler genel olarak yükselip RR onlarla birlikte büyüdüğünde skew
+değişmez. Kapanışları iki serinin aynı günkü kapanışlarının oranıdır (yeni Bloomberg isteği yok: ikisi de izlenen
+setin içinde); değişim, z ve yüzdelik vol'lerle aynı tanımla.
 
 **İstatistikler** Masa → Makro bloğunun ("MAKRO · risk göstergeleri") tanımıyla, her vol için: hafta içi günler (boş
 gün önceki kapanışla, `Days=W, Fill=P`), pencere bugün − 366 … dün; **Δ1G / Δ1H / Δ1A** canlı değerin 1 / 5 / 21 iş
@@ -812,6 +840,28 @@ saklanır: bir seri ilk istendiğinde bir yıl geriye, sonra son on gün, en ço
 açılınca izlenen set (parite başına 13 vol ve spot: 16 paritede ~220 seri; ilk gün bir kez), bir paritenin ayrıntısı
 açılınca o paritenin bütün vadeleri (50 vol) istenir. `--no-history` ile çalışırken bu otomatik istek yapılmaz;
 "Tarihçeyi güncelle" düğmesi her zaman çalışır.
+
+### Tıkla → grafik: bir satırın geçmişi
+
+Realized Vol · Carry'deki gibi, zaman serisi olan her tabloda bir satıra ya da hücreye tıklayınca o serinin geçmişi
+çizilir (`tto/static/js/serieschart.js`): solda seviye, seçili pencerenin ortalaması ve ±2σ bandı; sağda her günün
+**kendinden önceki pencereye göre z-skoru** (ilk 20 kapanıştan sonra), son nokta şimdiki değer; üstte şimdiki değer,
+z, yüzdelik, ortalama, σ, aralık ve tarih aralığı. Seçilen satır işaretlenir; aynı satıra yeniden tıklamak ya da ✕
+kapatır.
+
+| Sayfa | Neye tıklanır | Ne çizilir | Pencere |
+|---|---|---|---|
+| FX Vol İzleme | ısı haritası hücresi, özetteki kota / spot, hareketler, kendi ticker'larım | vol, skew (RR / ATM), spot, ticker | sayfanın 3A / 6A / 1Y'si |
+| Spot / FX | vol yüzeyinin satırı (ya da tablodaki bir vol) | o vadenin ATM, RR, BF ve skew'ü | 3A / 6A / 1Y |
+| Gün Sonu Matrisi | OIS / offshore hücresi (tıklanan taraf), PPK satırı (tıklanan sütun: adım, seviye, kümülatif), DİBS satırı | tarihçe serisi (yedek kaynakla doldurulmuş, matrisin okuduğu gibi) | 3A / 6A / 1Y |
+| İzleme · Alarmlar | listedeki kalem (ya da 📈), alarm | kalemin kapanışları (OIS, TLREF, offshore: tarihçe; diğerleri: dashboard'un kendi kaydı; ifade: parçalarından) | listenin "z / bant"ı (20 / 60 / 250) |
+| Eğri Hareketi | nokta → "Geçmişini çiz" | noktanın kapanışları (İzleme'deki gibi) | 1A / 3A / 1Y |
+
+İstatistikler yanındaki tablonun tanımıyla hesaplanır, sayılar birebir tutar (testle; tarayıcının modülü Node ile
+çalıştırılarak): FX ve Gün Sonu'nda Makro bloğunun tanımı (hafta içi günler, boş gün önceki kapanışla; yüzdelik ≤
+payı), İzleme'de listenin z'si (kapanışlar olduğu gibi, son N kapanış; yüzdelik altında kalanların payı; 1 aylık
+pencerede en az 15, daha uzunda 20 kapanış). Yeni Bloomberg isteği yalnız Spot / FX'te bir vade ilk açıldığında
+olur (o vadenin beş kotası; FX Vol İzleme'nin parite ayrıntısı zaten bütün vadeleri ister).
 
 ### Dashboard'un kendi ekledikleri
 

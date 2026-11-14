@@ -5,6 +5,7 @@ import { h, clear, toast, errorToast, confirmDialog, modal, copyText } from '../
 import { Grid, copyGrid } from '../grid.js';
 import { Chart } from '../chart.js';
 import { num, isoToTr } from '../format.js';
+import { SeriesView } from '../serieschart.js';
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const HD = (t, extra) => Object.assign({ t, k: 's', b: 1, f: 'hd' }, extra || {});
@@ -80,6 +81,15 @@ function gridPanel(title, opts = {}) {
   p.setData = (data) => {
     if (!p.grid) {
       p.grid = new Grid({ data, editable: false });
+      if (opts.onCell) {
+        // a click on a cell: its row and column in ``data`` (header rows counted)
+        p.grid.el.classList.add('pickable');
+        p.grid.el.addEventListener('click', (e) => {
+          if (e.target.closest('button')) return;
+          const td = e.target.closest('td');
+          if (td && td.__i !== undefined) opts.onCell(td.__i, td.__j);
+        });
+      }
       p.body.appendChild(p.grid.el);
       const cp = h('button', { class: 'iconbtn', type: 'button', title: 'Tüm tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
       cp.addEventListener('click', () => copyGrid(p.grid, false));
@@ -188,10 +198,20 @@ class HistoryPage {
 }
 
 // ====================================================================================== end-of-day matrix
+/** Mark a picked row's cells. */
+const marked = (cells, on) => (on ? cells.map((c) => Object.assign({}, c, { cls: ((c.cls || '') + ' pick').trim() })) : cells);
+
 export class EodPage extends HistoryPage {
   constructor(host, ctx) {
     super(host, ctx);
     this.asof = null;                      // null: the last close
+    this.picked = null;                    // what a click drew: {sid, title} of the history, or {mpc: date, metric}
+    this.keys = { curve: [], mpc: [], bonds: [] };
+  }
+
+  destroy() {
+    super.destroy();
+    if (this.sv) this.sv.destroy();
   }
 
   fetch() {
@@ -216,10 +236,90 @@ export class EodPage extends HistoryPage {
       h('span', { class: 'grow' }), this.stateEl, now));
     this.banner = h('div', { class: 'banner hidden' });
     this.host.appendChild(this.banner);
-    this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { wide: true, id: 'curve' });
-    this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { wide: true, id: 'mpc' });
-    this.bonds = gridPanel('DİBS — getiri ve değişim', { wide: true, id: 'dibs' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.curve.el, this.mpc.el, this.bonds.el));
+    this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { wide: true, id: 'curve', onCell: (i, j) => this.pickCurve(i, j) });
+    this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { wide: true, id: 'mpc', onCell: (i, j) => this.pickMpc(i, j) });
+    this.bonds = gridPanel('DİBS — getiri ve değişim', { wide: true, id: 'dibs', onCell: (i) => this.pickBond(i) });
+    // the series of the row clicked (as on Realized Vol · Carry): level, the window's mean and ±2σ, z day by day
+    this.seriesPanel = panel('Seçili seri', { wide: true, id: 'eod-series' });
+    const close = h('button', { class: 'iconbtn', type: 'button', title: 'Grafiği kapat' }, '✕');
+    close.addEventListener('click', () => { this.picked = null; this.seriesPanel.el.classList.add('hidden'); this.renderTables(); });
+    this.seriesPanel.tools.appendChild(close);
+    this.sv = new SeriesView(this.seriesPanel.body, { rule: 'macro', prefKey: 'tto.eod.series.window', height: 230 });
+    this.seriesPanel.setNote('Bir satıra tıklayınca o serinin geçmişi çizilir: seviye, seçili pencerenin ortalaması ve ±2σ bandı, her günün kendinden önceki pencereye göre '
+      + 'z-skoru. Son nokta son kapanış; geçmiş, matrisin okuduğu kapanışlar (ana kaynağın olmadığı gün yedek kaynağın hareketiyle). Yeniden tıklayınca ya da ✕ ile kapanır.');
+    this.seriesPanel.el.classList.add('hidden');
+    this.host.appendChild(h('div', { class: 'panels' }, this.seriesPanel.el, this.curve.el, this.mpc.el, this.bonds.el));
+  }
+
+  /** Draw a history series ({sid, title}) or a meeting's pricing ({mpc, metric, title}); the same again closes it. */
+  async pick(what) {
+    const same = this.picked && JSON.stringify(this.picked) === JSON.stringify(what);
+    if (same && !this.seriesPanel.el.classList.contains('hidden')) {
+      this.picked = null;
+      this.seriesPanel.el.classList.add('hidden');
+      this.renderTables();
+      return;
+    }
+    this.picked = what;
+    this.seriesPanel.el.classList.remove('hidden');
+    this.renderTables();
+    this.seriesPanel.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    await this.loadPicked(true);
+  }
+
+  async loadPicked(fresh) {
+    const w = this.picked;
+    if (!w || !this.sv) return;
+    const seq = (this.pseq = (this.pseq || 0) + 1);
+    if (fresh) this.sv.loading(w.title);
+    try {
+      let spec;
+      if (w.mpc) {
+        if (!this.mpcData || this.mpcData.rev !== this.rev) this.mpcData = Object.assign(await api.get('/api/history/mpc'), { rev: this.rev });
+        const d = this.mpcData;
+        const M = METRICS[w.metric];
+        const vals = (d.series[w.mpc] || {})[w.metric] || [];
+        spec = { title: w.title, points: d.days.map((day, k) => [day, isNum(vals[k]) ? vals[k] * M.scale : null]).filter((p) => isNum(p[1])),
+          digits: M.digits, unit: w.metric === 'level' ? '%' : 'bp', note: 'çözücünün o günün OIS kapanışlarıyla verdiği değer',
+          why: 'Bu toplantının fiyatlama geçmişi yok' };
+      } else {
+        const d = await api.get('/api/history/closes', { sid: w.sid });
+        const px = d.unit === 'px';
+        spec = { title: w.title, points: d.points, digits: 3, unit: px ? 'fiyat' : '%',
+          note: d.ticker + ' · ' + d.field + (d.backup_days ? ' · ' + d.backup_days + ' gün yedek kaynaktan' : ''), why: 'Bu serinin kapanışı yok' };
+      }
+      if (this.dead || seq !== this.pseq) return;
+      this.sv.show(spec);
+    } catch (err) {
+      if (!this.dead && seq === this.pseq) this.sv.show({ title: w.title, points: [], why: (err && err.message) || 'Geçmiş alınamadı' });
+    }
+  }
+
+  pickCurve(i, j) {
+    const k = this.keys.curve[i];
+    if (!k) return;
+    const side = j >= 5 ? k.off : (j >= 1 ? k.ois : (k.ois || k.off));
+    if (side && side.sid) this.pick({ sid: side.sid, title: side.title });
+  }
+
+  pickMpc(i, j) {
+    const date = this.keys.mpc[i];
+    if (!date) return;
+    const metric = j >= 9 ? 'cum' : (j >= 5 ? 'level' : 'step');
+    this.pick({ mpc: date, metric, title: 'PPK ' + isoToTr(date) + ' · ' + METRICS[metric].label });
+  }
+
+  pickBond(i) {
+    const k = this.keys.bonds[i];
+    if (k && k.sid) this.pick({ sid: k.sid, title: k.title });
+  }
+
+  /** The tables again (the picked row marked) without asking for anything. */
+  renderTables() {
+    if (!this.data) return;
+    this.renderCurve(this.data);
+    this.renderMpc(this.data);
+    this.renderBonds(this.data);
   }
 
   render() {
@@ -247,9 +347,8 @@ export class EodPage extends HistoryPage {
     this.banner.textContent = notes.join(' ');
     this.banner.classList.toggle('hidden', !notes.length);
 
-    this.renderCurve(d);
-    this.renderMpc(d);
-    this.renderBonds(d);
+    this.renderTables();
+    if (this.picked) this.loadPicked(false);
   }
 
   renderCurve(d) {
@@ -269,15 +368,26 @@ export class EodPage extends HistoryPage {
         c: e.backup ? 'mute' : undefined }),
         D(e.d1, scale, 1, e.d1_from, d.ref.d1), D(e.w1, scale, 1, e.w1_from, d.ref.w1), D(e.m1, scale, 1, e.m1_from, d.ref.m1)]
       : [EMPTY(), EMPTY(), EMPTY(), EMPTY()]);
-    if (d.tlref) rows.push([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so), half(null)));
+    // what a click on a row draws: the OIS side (columns 1-4, the tenor) or the offshore side (5-8)
+    const keys = [null, null];
+    const pickedSid = this.picked && this.picked.sid;
+    const side = (e, title) => (e && e.sid ? { sid: e.sid, title } : null);
+    const offName = (r) => (r.off && r.months >= 12 ? 'XCCY ' : 'Offshore ') + r.tenor;
+    if (d.tlref) {
+      rows.push(marked([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so)), pickedSid && d.tlref.sid === pickedSid).concat(half(null)));
+      keys.push({ ois: side(d.tlref, 'TLREF'), off: null });
+    }
     for (const r of d.curve) {
       if (!r.ois && !r.off) continue;
-      rows.push([TXT(r.tenor, { cls: 'lab' })].concat(half(r.ois, so), half(r.off, sf)));
+      const onOis = !!(pickedSid && r.ois && r.ois.sid === pickedSid), onOff = !!(pickedSid && r.off && r.off.sid === pickedSid);
+      rows.push(marked([TXT(r.tenor, { cls: 'lab' })], onOis || onOff).concat(marked(half(r.ois, so), onOis), marked(half(r.off, sf), onOff)));
+      keys.push({ ois: side(r.ois, 'TRY OIS ' + r.tenor), off: side(r.off, offName(r)) });
     }
+    this.keys.curve = keys;
     this.curve.setData({ sheet: '', rows });
     this.curve.setNote('Kaynak sırası (Ayarlar → Veri kaynakları): OIS ' + d.source.ois + ' · offshore ' + d.source.off + ' · XCCY ' + d.source.xccy
       + '. Ana kaynağın kapanışı olmayan günde sıradaki kaynağın o günkü hareketi ana kaynağın seviyesine eklenir (soluk yazılır). '
-      + 'Hücrenin üzerinde durunca önceki kapanış ve kaynak görünür.');
+      + 'Hücrenin üzerinde durunca önceki kapanış ve kaynak görünür; tıklayınca o tarafın (OIS ya da offshore) geçmişi çizilir.');
   }
 
   renderMpc(d) {
@@ -288,20 +398,23 @@ export class EodPage extends HistoryPage {
     const vals = [];
     for (const m of d.mpc) vals.push(m.step.d1, m.step.w1, m.step.m1, m.level.d1, m.level.w1, m.level.m1);
     const sc = scaleOf(vals, 10);
+    const keys = [null, null];
     for (const m of d.mpc) {
       const s = m.step, l = m.level, c = m.cum;
-      rows.push([TXT(isoToTr(m.meeting) + (m.front ? ' · ilk' : ''), { cls: 'lab', tip: m.front ? 'İlk toplantı: adım bugünkü TLREF\'e göre ölçülür' : '' }),
+      keys.push(m.meeting);
+      rows.push(marked([TXT(isoToTr(m.meeting) + (m.front ? ' · ilk' : ''), { cls: 'lab', tip: m.front ? 'İlk toplantı: adım bugünkü TLREF\'e göre ölçülür' : '' }),
         N(s.last, 1), D(s.d1, sc, 1, s.d1_from, d.ref.d1, 1), D(s.w1, sc, 1, s.w1_from, d.ref.w1, 1), D(s.m1, sc, 1, s.m1_from, d.ref.m1, 1),
         N(isNum(l.last) ? l.last * 100 : null, 3), D(l.d1, sc, 1, isNum(l.d1_from) ? l.d1_from * 100 : null, d.ref.d1),
         D(l.w1, sc, 1, isNum(l.w1_from) ? l.w1_from * 100 : null, d.ref.w1), D(l.m1, sc, 1, isNum(l.m1_from) ? l.m1_from * 100 : null, d.ref.m1),
-        N(c.last, 1), D(c.d1, sc, 1, c.d1_from, d.ref.d1, 1)]);
+        N(c.last, 1), D(c.d1, sc, 1, c.d1_from, d.ref.d1, 1)], !!(this.picked && this.picked.mpc === m.meeting)));
     }
+    this.keys.mpc = keys;
     if (!d.mpc.length) rows.push([TXT('Bu tarih için hesaplanmış PPK fiyatlaması yok' + (d.state && d.state.phase !== 'idle' ? ' – hesaplanıyor…' : ''), { cs: 11 })]
       .concat(Array.from({ length: 10 }, SKIP)));
     this.mpc.setData({ sheet: '', rows });
     this.mpc.setNote((d.decision_day ? 'PPK günü: o günün TLREF fixingi kararı henüz yansıtmadığı için adımlar çözücünün karar sonrası ima ettiği seviyeden ölçülür. ' : '')
       + 'Her gün o günün OIS kapanışlarıyla Excel\'in kendi çözücüsü (Motor · GLOBAL İMA PPK) yeniden çalıştırılır. '
-      + 'Zaman serisi: PPK Fiyatlama Geçmişi sayfası.');
+      + 'Satıra tıklayınca o toplantının geçmişi çizilir (adım, seviye ya da kümülatif: tıklanan sütun); hepsi bir arada: PPK Fiyatlama Geçmişi sayfası.');
   }
 
   renderBonds(d) {
@@ -312,17 +425,21 @@ export class EodPage extends HistoryPage {
     const sc = scaleOf(d.bonds.filter((b) => b.unit === 'pct').flatMap((b) => [b.d1, b.w1, b.m1]), 10);
     const sp = scaleOf(d.bonds.filter((b) => b.unit !== 'pct').flatMap((b) => [b.d1, b.w1, b.m1]), 0.25);
     let any = false;
+    const keys = [null];
     for (const b of d.bonds) {
       const pct = b.unit === 'pct', s = pct ? sc : sp, dg = pct ? 1 : 3;
       if (isNum(b.last)) any = true;
-      rows.push([TXT(b.isin, { cls: 'lab', tip: b.ticker + ' · ' + b.field }), TXT(b.name), TXT(isoToTr(b.maturity)), TXT(b.type),
+      keys.push(b.sid ? { sid: b.sid, title: (b.name || b.isin) + (b.name ? ' (' + b.isin + ')' : '') + (pct ? ' · getiri' : ' · fiyat') } : null);
+      rows.push(marked([TXT(b.isin, { cls: 'lab', tip: b.ticker + ' · ' + b.field }), TXT(b.name), TXT(isoToTr(b.maturity)), TXT(b.type),
         N(b.last, 3), D(b.d1, s, dg, b.d1_from, d.ref.d1), D(b.w1, s, dg, b.w1_from, d.ref.w1), D(b.m1, s, dg, b.m1_from, d.ref.m1),
         TXT(pct ? 'getiri · bp' : 'fiyat · puan', { c: 'mute' }), TXT(isoToTr(b.day), { c: 'mute' }),
-        latest && isNum(b.bist) ? N(b.bist * 100, 3) : EMPTY()]);
+        latest && isNum(b.bist) ? N(b.bist * 100, 3) : EMPTY()], !!(this.picked && b.sid && this.picked.sid === b.sid)));
     }
+    this.keys.bonds = keys;
     this.bonds.setData({ sheet: '', rows });
     this.bonds.setNote(any
-      ? 'Tahviller DİBS RV sayfasındaki listeden; getiri Bloomberg alanı ' + d.source.dibs_field + ' (Ayarlar\'dan değiştirilebilir). TLREF\'e endeksli (T) kağıtlarda fiyat izlenir.'
+      ? 'Tahviller DİBS RV sayfasındaki listeden; getiri Bloomberg alanı ' + d.source.dibs_field + ' (Ayarlar\'dan değiştirilebilir). TLREF\'e endeksli (T) kağıtlarda fiyat izlenir. '
+        + 'Satıra tıklayınca tahvilin geçmişi çizilir.'
       : 'DİBS geçmişi yok' + (d.live ? ': Bloomberg bu alan (' + d.source.dibs_field + ') için geçmiş vermedi – Ayarlar\'dan alanı değiştirin.'
         : ' – Excel dosyası tahvil geçmişi saklamıyor; Bloomberg bağlıyken ' + d.source.dibs_field + ' alanından doldurulur.'));
   }

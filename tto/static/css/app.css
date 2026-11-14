@@ -798,3 +798,18 @@ table.fxheat td.none { background: none; cursor: default; }
 .fxspark circle { fill: var(--c-blue); }
 .fxadd { display: flex; gap: 6px; align-items: center; padding: 8px 12px; flex-wrap: wrap; }
 .fxadd .inp { width: 260px; }
+table.fxheat td.pick { box-shadow: inset 0 0 0 2px var(--accent); }
+table.fxheat th.skew { color: var(--ink-2); }
+/* a picked series' past (serieschart.js): level with the window's mean and ±2σ, z day by day - every page that draws one */
+.seriesview { padding: 8px 12px 10px; }
+.seriesview .svtop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.seriesview .svtitle { font-size: 13px; color: var(--ink); margin: 0; }
+.seriesview .svwinbox { display: inline-flex; align-items: center; gap: 6px; }
+.seriesview .svstat { font-size: 11.5px; margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+.seriesview .volcharts.svcharts { padding: 8px 0 0; border-top: 0; }
+.seriesview .empty { padding: 12px 0 4px; }
+.fxtenor { border-top: 1px solid var(--line); }
+#watch-table tr[data-id] td, #alarm-table tr[data-id] td { cursor: pointer; }
+#watch-table tr.pick td, #alarm-table tr.pick td { background-color: var(--accent-soft); }
+#watch-table tr.pick td:first-child, #alarm-table tr.pick td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+table.heat td.pick { box-shadow: inset 0 0 0 2px var(--accent); }
