@@ -21,7 +21,8 @@ A line of a chat becomes a record - when, who, which instrument, bid and ask, an
     1y 35.00/35.20 18m 35.03/35.23          a run: several quotes on one line
 
 and a chat becomes messages - the time at the start or the end of a line or (on the phone) on the line below, a
-name on its own line, before a colon or in front of the time, a date on its own line.
+name on its own line, before a colon or in front of the time, a date on its own line ("Friday, November 13, 2026"
+as Bloomberg IB heads a day); the quote of an earlier message that IB puts above a reply is not a message.
 
 Nothing here knows about the workbook: the big figure of a shortened level is completed from the level the
 caller says the instrument is at (:func:`parse_chat`'s ``ref``) and from the lines before it.
@@ -71,8 +72,14 @@ _TIME_BRACKET = re.compile(r"^[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp]\.?[M
 _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
            "oca": 1, "şub": 2, "sub": 2, "nis": 4, "mayıs": 5, "haz": 6, "tem": 7, "ağu": 8, "agu": 8, "eyl": 9, "eki": 10, "kas": 11,
            "ara": 12}
-_DATE_NAME = re.compile(r"^(\d{1,2})\s+([A-Za-zÇĞİÖŞÜçğıöşü]{3,9})\.?\s+(\d{4})$")
+_DATE_NAME = re.compile(r"^(\d{1,2})\s+([A-Za-zÇĞİÖŞÜçğıöşü]{3,9})\.?\s+(\d{4})$")                    # 13 November 2026
+_DATE_NAME_US = re.compile(r"^([A-Za-zÇĞİÖŞÜçğıöşü]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$")    # November 13, 2026
 _DATE_NUM = re.compile(r"^(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})$")
+# the day of the week a chat's day line may carry: "Friday, November 13, 2026" (Bloomberg IB), "13 Kasım 2026 Cuma"
+_WEEKDAYS = {"monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1, "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3,
+             "thur": 3, "thurs": 3, "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+             "pazartesi": 0, "pzt": 0, "salı": 1, "sali": 1, "sal": 1, "çarşamba": 2, "carsamba": 2, "çar": 2, "car": 2,
+             "perşembe": 3, "persembe": 3, "per": 3, "prş": 3, "cuma": 4, "cum": 4, "cumartesi": 5, "cmt": 5, "pazar": 6, "paz": 6}
 _SENDER = re.compile(r"^([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜa-zçğıöşü.'\-]*(?:[ ,]+[A-ZÇĞİÖŞÜ(][A-ZÇĞİÖŞÜa-zçğıöşü.'&()\-]*){0,6}?)\s*(?:says)?\s*:\s+(?=\S)")
 _NAME_LINE = re.compile(r"^[A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.'\-]+(?: [A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.'\-]*){1,4}$")
 
@@ -936,16 +943,45 @@ def parse_message(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[f
 
 
 # ---------------------------------------------------------------------------------------------- a chat
+def _low(word: str) -> str:
+    """A word in lower case as the tables here hold it: the dotted capital İ is an i ("NİSAN" is "nisan")."""
+    return word.lower().replace("\u0307", "")
+
+
 def _parse_date(text: str, today: Optional[_dt.date] = None) -> Optional[_dt.date]:
+    """The day a line of its own names: "13 Nov 2026", "13.11.2026", "2026-11-13", "11/13/2026", and the way chat
+    programs head a day, with its day of the week: "Friday, November 13, 2026" (Bloomberg IB), "13 Kasım 2026 Cuma".
+    A day of the week that is not the date's makes it no day; nor is one after tomorrow (``today`` given) - a chat
+    is not written ahead of time: "15/03/2028" on a line of its own is a bond."""
     t = text.strip().strip("-–— ")
-    m = _DATE_NAME.match(t)
-    if m:
-        month = _MONTHS.get(m.group(2).lower()[:3]) or _MONTHS.get(m.group(2).lower())
-        if month:
-            try:
-                return _dt.date(int(m.group(3)), month, int(m.group(1)))
-            except ValueError:
-                return None
+    words = t.split()
+    weekday = None
+    if len(words) > 2:
+        for at in (0, -1):
+            w = _low(words[at]).strip(",.")
+            if w in _WEEKDAYS:
+                weekday = _WEEKDAYS[w]
+                t = " ".join(words[1:] if at == 0 else words[:-1]).strip(" ,")
+                break
+    d = _date_of(t, today)
+    if d is None or (weekday is not None and d.weekday() != weekday):
+        return None
+    if today is not None and d > today + _dt.timedelta(days=1):
+        return None
+    return d
+
+
+def _date_of(t: str, today: Optional[_dt.date]) -> Optional[_dt.date]:
+    for rx, day, month in ((_DATE_NAME, 1, 2), (_DATE_NAME_US, 2, 1)):
+        m = rx.match(t)
+        if m:
+            name = _low(m.group(month))
+            number = _MONTHS.get(name[:3]) or _MONTHS.get(name)
+            if number:
+                try:
+                    return _dt.date(int(m.group(3)), number, int(m.group(day)))
+                except ValueError:
+                    return None
     m = _DATE_NUM.match(t)
     if m:
         a, b, c = (int(x) for x in m.groups())
@@ -984,10 +1020,13 @@ def _is_name(text: str) -> bool:
 def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
     """The messages of a pasted chat: ``[{"date", "time", "sender", "text"}, ...]`` in the order they were
     written.  Understood: "12:15:38 text", "text" with its time on the next line (the phone's layout), a name on
-    a line of its own or before a colon, a date on a line of its own or before the time."""
+    a line of its own or before a colon, a date on a line of its own or before the time.  Where the names stand on
+    lines of their own (Bloomberg IB, the phone), a line with its own date, time and author is the quote a reply
+    carries ("11/13/2026 15:34:22 MIKE REES: 18m ois 35.03/35.23" above the reply), not a message."""
     out: List[Dict[str, Any]] = []
     date: Optional[_dt.date] = None
     sender = ""
+    bubbles = False                                        # a name has stood on a line of its own
     waiting: List[Dict[str, Any]] = []                     # messages whose time may still come on a later line
     named: Optional[Tuple[str, str]] = None                # (sender before it, text) of the line last taken for a name
     lead: Optional[Dict[str, Any]] = None                  # the message last written with its time in front of it
@@ -1005,8 +1044,13 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
         # a date in front of the time: "11/13/2026 12:10:07 ..."
         first = s.split(" ", 1)
         if len(first) == 2 and _parse_date(first[0], today) is not None and _TIME.match(first[1].lstrip()):
+            rest = first[1].lstrip()
+            if bubbles and _SENDER.match(rest[_TIME.match(rest).end():].strip(" -–\t:")):
+                # a reply's quote of an earlier message: said before, it changes neither the day of the lines below
+                # nor who writes them, and it is not kept again
+                continue
             date = _parse_date(first[0], today)
-            s = first[1].lstrip()
+            s = rest
         time = None
         first_time = False
         heading = s.endswith(":")                          # "09:14:59 Auction prices:" - the lines under it are its
@@ -1049,6 +1093,7 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
         elif time is None and _NAME_LINE.match(s) and not any(w.lower() in _VOCABULARY for w in s.split()):
             named = (sender, s)
             sender = s
+            bubbles = True
             waiting = []                                    # a new bubble
             lead = None
             continue

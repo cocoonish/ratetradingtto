@@ -381,6 +381,17 @@ def test_messages_in_every_layout():
     assert split("03/11/2026\n12:00:00 a", dt.date(2026, 11, 13))[0]["date"] == "2026-11-03"        # day first where both are possible
     assert split("12/11/2026\n12:00:00 a", dt.date(2026, 11, 13))[0]["date"] == "2026-11-12"
     assert split("12/11/2026\n12:00:00 a", dt.date(2026, 11, 11))[0]["date"] == "2026-11-12"        # ... also a day ahead: day first
+    # the day as chat programs head it, with its day of the week (Bloomberg IB: "Friday, November 13, 2026")
+    for head in ("Friday, November 13, 2026", "Fri, Nov 13, 2026", "November 13, 2026", "Nov. 13th 2026", "Friday 13 November 2026",
+                 "13 Kasım 2026 Cuma", "Cuma, 13 Kasım 2026", "13 KASIM 2026, CUMA", "— Friday, November 13, 2026 —"):
+        assert split(head + "\n12:00:00 a", TODAY) == [{"date": "2026-11-13", "time": "12:00:00", "sender": "", "text": "a"}], head
+    assert split("ÇARŞAMBA 1 NİSAN 2026\n12:00:00 a")[0]["date"] == "2026-04-01"              # the dotted İ of the capitals
+    assert split("CUMARTESİ, 14 KASIM 2026\n12:00:00 a")[0]["date"] == "2026-11-14"
+    # ... a day of the week that is not the date's makes it no day, nor does a date after tomorrow: a chat is not
+    # written ahead of time - a bond's maturity on a line of its own is a message, and the day stays as it was
+    for line in ("Friday, November 14, 2026", "15/03/2028", "Mar 15, 2028", "15 Mart 2028"):
+        assert [(x["date"], x["text"]) for x in split(line + "\n12:00:00 a", TODAY)] == [(None, line), (None, "a")], line
+    assert [x["date"] for x in split("13 Nov 2026\n12:00:00 a\n15/03/2028\n12:00:05 b", TODAY)] == ["2026-11-13"] * 3
     # the phone: the time under the message, for every line of the bubble; a name starts a new bubble
     m = split("MIKE REES\nfirst\nsecond\n13:01:10\nthird\nEVREN DIKME\nfourth\n13:05:00")
     assert [(x["time"], x["sender"], x["text"]) for x in m] == [("13:01:10", "MIKE REES", "first"), ("13:01:10", "MIKE REES", "second"),
@@ -394,6 +405,27 @@ def test_messages_in_every_layout():
     assert [(x["time"], x["sender"], x["text"]) for x in m] == [("13:01:10", "MIKE REES", "18m ois 35.03/35.23"), ("13:02:00", "MIKE REES", "ALL OFF"),
                                                                  ("13:03:00", "MIKE REES", "2y ois 35.26/35.46")]
     assert split("\n\n  \n") == []
+
+
+def test_a_bloomberg_ib_chat_and_its_replies():
+    # IB: the day above its messages, each sender's name on a line of its own above them; a reply carries the message it
+    # answers - with its date, time and author - right above it: that quote is no message, and it moves neither the
+    # day (a quote of the day before) nor whose the reply is
+    chat = "\n".join(["Friday, November 13, 2026", "MIKE REES", "16:32:04 18m ois 35.03/35.23", "16:32:10 any int?",
+                      "EVREN DIKME", "11/13/2026 16:32:04 MIKE REES: 18m ois 35.03/35.23", "16:32:59 05/20",
+                      "11/12/2026 17:01:00 MIKE REES: 1y ois 35.00/35.20", "16:33:10 1y ois 35.05 bid",
+                      "MIKE REES", "16:33:35 18m ois 35.05/35.20"])
+    m = bc.split_messages(chat, TODAY)
+    assert [(x["date"], x["time"], x["sender"], x["text"]) for x in m] == [
+        ("2026-11-13", "16:32:04", "MIKE REES", "18m ois 35.03/35.23"), ("2026-11-13", "16:32:10", "MIKE REES", "any int?"),
+        ("2026-11-13", "16:32:59", "EVREN DIKME", "05/20"), ("2026-11-13", "16:33:10", "EVREN DIKME", "1y ois 35.05 bid"),
+        ("2026-11-13", "16:33:35", "MIKE REES", "18m ois 35.05/35.20")]
+    rows = bc.parse_chat(chat, ref, TODAY)
+    assert [(q["time"], q["label"]) for q in rows if q["ok"]] == [("16:32:04", "18M"), ("16:33:10", "1Y"), ("16:33:35", "18M")]
+    assert [(r["label"], r["bid"], r["ask"]) for r in bc.board(rows)] == [("1Y", 35.05, None), ("18M", 35.05, 35.20)]
+    # an export of the chat - every line with its date, time and author, no name on a line of its own - is read line by line
+    m = bc.split_messages("11/13/2026 12:15:38 MIKE REES: 18m ois 35.03/35.23\n11/12/2026 12:16:00 EVREN DIKME: 2y ois 35.26/35.46", TODAY)
+    assert [(x["date"], x["time"], x["sender"]) for x in m] == [("2026-11-13", "12:15:38", "MIKE REES"), ("2026-11-12", "12:16:00", "EVREN DIKME")]
 
 
 def test_the_board_follows_the_chat():

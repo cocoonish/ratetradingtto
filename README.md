@@ -431,8 +431,15 @@ enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlar�
 * **Saat ve gönderen.** Saat satırın başında, sonunda ya da telefondaki gibi mesajın altındaki satırda olabilir
   (`12:15`, `12:15:38`, `[12:15:38]`, `1:15:38 PM`). `İSİM: mesaj`, `İSİM (KURUM) says: mesaj`, `İSİM 12:15:38 mesaj`
   ya da tek başına bir isim satırı göndereni belirler; `13 Nov 2026`, `13.11.2026` gibi bir tarih satırı (ya da
-  saatin önündeki tarih) altındaki mesajların gününü. Saati olmayan mesaja **girildiği an** yazılır (listede soluk). "Kaynak" kutusuna yazılan ad (örn.
-  broker'ın kurumu) her satırla saklanır.
+  saatin önündeki tarih) altındaki mesajların gününü. Bloomberg IB'nin gün başlığı da (`Friday, November 13, 2026`;
+  `13 Kasım 2026 Cuma` gibi haftanın günüyle yazılanlar da) günü belirler, yani dünün chat'i bugün yapıştırılsa da
+  kendi gününe kaydedilir ("Tarih" kutusu yalnızca chat'te gün yazmıyorsa kullanılır). Haftanın günü tarihe
+  uymuyorsa ya da tarih yarından sonraysa satır gün sayılmaz: tek başına yazılmış `15/03/2028` bir kâğıttır.
+  IB'de bir yanıtın üstünde yanıtlanan mesaj tarihi, saati ve yazanıyla alıntılanır
+  (`11/13/2026 15:34:22 İSİM: mesaj`). İsimlerin kendi satırında durduğu böyle bir chat'te bu satır yeni mesaj
+  sayılmaz: yeniden kaydedilmez, altındaki satırların gününü ve yanıtın kimden geldiğini değiştirmez. Saati olmayan
+  mesaja **girildiği an** yazılır (listede soluk). "Kaynak" kutusuna yazılan ad (örn. broker'ın kurumu) her satırla
+  saklanır.
 * **İsimler → kaynak ve taraf.** "İsimler · kaynaklar" listesi her gönderen adını bir kaynağa (ICAP, Tullett …) ve
   tarafa bağlar: **Broker** ya da **Biz** (masanın kendisi). Liste herkes için ortaktır ve saklanır; yapıştırılan
   chat'teki yeni isimler kutunun altında hemen atanabilir. Böylece yapıştırılan satırın bizim fiyatımız mı broker
