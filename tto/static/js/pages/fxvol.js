@@ -134,8 +134,13 @@ export class FxVolPage {
     this.fill();
   }
 
+  /** Quotes still on their way (the first answers of Bloomberg): the page is refreshed sooner. */
+  waiting() {
+    return !!(this.mon && Object.values(this.mon.cells).some((c) => c.why === 'bekleniyor'));
+  }
+
   async refresh() {
-    if (this.busy || Date.now() - this.loaded < REFRESH_MS) return;
+    if (this.busy || Date.now() - this.loaded < (this.waiting() ? 2500 : REFRESH_MS)) return;
     this.busy = true;
     try {
       const [mon, det] = await Promise.all([this.fetchMonitor(), this.on.has('pair') ? this.fetchPair() : Promise.resolve(this.det)]);

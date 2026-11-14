@@ -95,8 +95,14 @@ export class FxPage {
     this.fill();
   }
 
+  /** Quotes still on their way (the first answers of Bloomberg): the page is refreshed sooner. */
+  waiting() {
+    const s = this.surf, b = this.board;
+    return !!((s && s.rows.some((r) => r.ATM_why === 'bekleniyor')) || (b && b.rows.some((r) => r.spot_why === 'bekleniyor')));
+  }
+
   async refresh() {
-    if (this.busy || Date.now() - this.loaded < REFRESH_MS) return;
+    if (this.busy || Date.now() - this.loaded < (this.waiting() ? 2500 : REFRESH_MS)) return;
     this.busy = true;
     try {
       const [board, surf] = await Promise.all([this.fetchBoard(), this.fetchSurface()]);
