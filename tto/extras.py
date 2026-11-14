@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .xl.model import COLS, Model, Sheet, parse_a1
+from .xl.model import COLS, Model, Sheet, parse_a1, parse_range
 from .xl.tokenizer import index_to_col, to_template
 
 NUM2 = "#,##0.00"
@@ -1936,6 +1936,65 @@ def _tto_desk_days(model: Model) -> None:
 
 
 #: book -> (name, precondition, builder) of each addition
+# ---------------------------------------------------------------------------------------------- DV01 risk: no position
+#: the position cells of the DV01 risk sheet: the bucket DV01s (TL/bp) and the paste area beside them (Onshore /
+#: TLREF).  The file keeps the desk's positions of the day it was saved - nobody's position today - so the sheet
+#: opens at zero; each user's own (personal) position is typed or pasted over it and kept as before.
+DV01_POSITIONS = ("C6:C25", "X33:Y52")
+
+
+def _dv01_zero_check(model: Model) -> None:
+    _need_sheets(model, "DV01_RISK")
+    sh = model.sheet("DV01_RISK")
+    for addr, text in (("B5", "Bucket"), ("C5", "DV01 (TL/bp)"), ("X32", "Onshore"), ("Y32", "TLREF")):
+        if sh.consts.get(parse_a1(addr)) != text:
+            raise ValueError("DV01_RISK!%s beklenen başlık değil (%s yok)" % (addr, text))
+
+
+def _tto_dv01_zero(model: Model) -> None:
+    sh = model.sheet("DV01_RISK")
+    for rng in DV01_POSITIONS:
+        r1, c1, r2, c2 = parse_range(rng)
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                rc = r * COLS + c
+                if rc not in sh.fml:                        # a formula would stay a formula (there is none today)
+                    sh.consts[rc] = 0.0
+
+
+# ---------------------------------------------------------------------------------------------- VİOP matrix DV01s
+#: the matrix's driver rows (VIOP!K97:X108) end with two DV01s per contract, per 1 mn USD: "DV01 TRY" - the TRY
+#: rate's bp, in TL - and "DV01 USD" - the USD rate's bp, but also in TL.  The desk reads them in their own
+#: currency: the TRY one in TL and in USD, the USD one in USD.  Nothing in the workbook reads these two rows.
+VIOP_DV01_COLS = [index_to_col(c) for c in range(13, 25)]          # M:X, the twelve contracts (L is the spot)
+
+
+def _viop_dv01_check(model: Model) -> None:
+    _need_sheets(model, "VIOP")
+    sh = model.sheet("VIOP")
+    if (sh.consts.get(parse_a1("K107")), sh.consts.get(parse_a1("K108"))) != ("DV01 TRY", "DV01 USD"):
+        raise ValueError("VIOP!K107:K108 beklenen DV01 satırları değil")
+    for col in VIOP_DV01_COLS:
+        _need_formula(model, "VIOP", "%s107" % col, "/(1+$%s$101*$%s$98/360)" % (col, col))
+        _need_formula(model, "VIOP", "%s108" % col, "-100*(($%s$99+$%s$100)/2)" % (col, col))
+    taken = [a for a in ["K109"] + ["%s109" % c for c in VIOP_DV01_COLS]
+             if parse_a1(a) in sh.consts or parse_a1(a) in sh.fml]
+    if taken:
+        raise ValueError("VIOP 109. satır boş değil: %s" % ", ".join(taken))
+
+
+def _tto_viop_dv01(model: Model) -> None:
+    b = SheetBuilder(model, "VIOP")
+    b.set("K107", "DV01 TRY (TL)", like="K107")
+    b.set("K108", "DV01 TRY (USD)", like="K108")
+    b.set("K109", "DV01 USD (USD)", like="K108")
+    for col in VIOP_DV01_COLS:
+        # the TL of the TRY bp at the contract's own price (a value at maturity, so at that maturity's forward) ...
+        b.set("%s108" % col, '=IFERROR(%s107/((%s99+%s100)/2),"")' % (col, col, col), like="%s108" % col)
+        # ... and the USD bp in USD: the TL formula of the workbook without the price it was multiplied by
+        b.set("%s109" % col, '=IFERROR(-100*(%s$98/360)/(1+%s$101*%s$98/360),"")' % (col, col, col), like="%s108" % col)
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
@@ -1945,7 +2004,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), (CARRY_SHEET, _carry_check, _tto_carry),
-            ("Motor gün sayıları", _desk_days_check, _tto_desk_days)),
+            ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
+            ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01)),
 }
 
 
