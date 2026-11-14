@@ -580,6 +580,9 @@ table.grid.pickable td { cursor: pointer; }
 table.grid.pickable tr:hover td { background-image: linear-gradient(var(--sub-bg), var(--sub-bg)); }
 table.grid td.pick { background-color: var(--accent-soft); }
 table.grid td.pick:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+/* spread history: a row's tenor / contract draws it in the chart */
+table.grid td.chartlink { cursor: pointer; }
+table.grid td.chartlink:hover { color: var(--accent-ink); text-decoration: underline; }
 .carrygrid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 0; align-items: start; }
 .carrygrid > .volscatter { padding: 10px 12px; min-width: 0; }
 .carrygrid > .body { border-left: 1px solid var(--line); max-height: 470px; border-radius: 0 0 var(--radius) 0; }

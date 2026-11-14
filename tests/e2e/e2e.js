@@ -1296,6 +1296,11 @@ async function shot(page, name) {
     await page.evaluate(() => { const tr = [...document.querySelectorAll('.panel[data-panel="spread-viop"] table.grid tr')][1]; tr.querySelector('td.act button').click(); });
     await page.waitForFunction(() => /^VİOP .* − OIS \(bp\)/.test(document.querySelector('.panel[data-panel="spread-chart"] h2').textContent));
     check('a spread picked is drawn', await page.locator('.panel[data-panel="spread-chart"] svg.chart').count() === 1);
+    // ... a click on a row's tenor draws that one too, its row marked
+    await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="spread-off"] table.grid td.chartlink')].find((td) => td.textContent === '1Y').click());
+    await page.waitForFunction(() => /^Offshore 1Y − OIS \(bp\)/.test(document.querySelector('.panel[data-panel="spread-chart"] h2').textContent));
+    check('a click on a tenor draws its spread and marks its row', await page.evaluate(() => [...document.querySelectorAll(
+      '.panel[data-panel="spread-off"] table.grid td.chartlink.pick, .panel[data-panel="spread-viop"] table.grid td.chartlink.pick')].map((td) => td.textContent).join() === '1Y'));
     await page.click('#spread-window button[data-v="60"]');
     await shot(page, '14b-spreads');
 

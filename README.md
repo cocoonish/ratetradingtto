@@ -865,7 +865,8 @@ yazılmadı, ikinci bir motor örneği o günün verisiyle beslenir. Sonuç gün
 
 Her satırda spread (bp), Δ1G / Δ1H / Δ1A (1 / 5 / 21 kapanış önceye göre), seçilen pencerede (20 / 60 / 250
 kapanış) ortalama, σ, **z-skoru**, min / maks ve yüzdelik (kapanışların ne kadarı bugünkünün altında), kapanış
-sayısı. 📈 spread'i çizer: kesikli çizgiler pencerenin ortalaması ve ±2σ. Kayıtlı veri modunda yalnızca dosyanın son
+sayısı. Vadeye / kontrata (ya da satırdaki 📈'e) tıklamak o spread'i üstteki grafikte çizer, grafiği görünür alana
+getirir ve satırını işaretler: kesikli çizgiler pencerenin ortalaması ve ±2σ. Kayıtlı veri modunda yalnızca dosyanın son
 ayı vardır (XCCY 1Y ve 1Y'ye kadar OIS); Bloomberg bağlıyken offshore ve OIS bir yıl geriye doldurulur.
 
 **Ayarlar · Toplantı takvimi** (Araçlar grubu). Tek liste: yapılan toplantılar (arşiv) ve OIS sayfasındaki 80
