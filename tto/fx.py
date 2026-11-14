@@ -540,6 +540,19 @@ class Fx(object):
             return out
         return self._points_curve(pair, spot_date)
 
+    def spot(self, user: Optional[str], pair: Pair) -> Tuple[Optional[float], str]:
+        """The pair's spot as its page prices it: USDTRY the Forward page's (the TRY workbook's), a TRY cross the
+        product of its USD legs, any other pair Bloomberg's - without asking for forward points."""
+        if pair.code == "USDTRY":
+            book = self._try_book(user)
+            if book:
+                return book["spot"], ""
+        elif pair.quote == "TRY" and pair.base != "USD":
+            a, why = self.spot(user, self.pair_or_build(pair.base + "USD"))
+            b, why2 = self.spot(user, self.pair("USDTRY"))
+            return (a * b if a and b else None), (why or why2)
+        return self.value(spot_ticker(pair))
+
     def pair_or_build(self, code: str) -> Pair:
         try:
             return self.pair(code)
@@ -604,13 +617,17 @@ class Fx(object):
                 "forward_source": cur.get("source"), "legs": cur.get("legs"), "rows": rows, "source": src}
 
     def _smile(self, pair: Pair, tenor: str, model: str, q: fv.Quotes) -> Tuple[Any, Dict[str, Any]]:
-        key = (pair.code, tenor, model, round(q.F, 10), round(q.T, 10), round(q.atm, 8), q.rr25 and round(q.rr25, 8),
+        """The fitted smile of these quotes.  The forward is not part of the key: every condition of the fit (the
+        deltas, the delta-neutral straddle, the market strangle's strikes) depends on strikes only through ``K/F``,
+        so when only the forward moved - the spot ticked - the same smile holds in moneyness, exactly: it is moved
+        to the new forward instead of being fitted again."""
+        key = (pair.code, tenor, model, round(q.T, 10), round(q.atm, 8), q.rr25 and round(q.rr25, 8),
                q.bf25 and round(q.bf25, 8), q.rr10 and round(q.rr10, 8), q.bf10 and round(q.bf10, 8), q.premium, round(q.df, 10))
         with self._lock:
             hit = self._smiles.get(key)
             start = self._starts.get((pair.code, tenor, model))
         if hit is not None:
-            return hit
+            return _moved(hit[0], hit[1], q.F)
         smile, info = fv.build_smile(q, model, start)
         with self._lock:
             if len(self._smiles) > 600:
@@ -639,6 +656,11 @@ class Fx(object):
         out["quantiles"] = list(fv.QUANTILES)
         out["today"] = self.today().isoformat()
         out["levels"], out["matrix"] = self._matrix(tenors, spot, levels)
+        # the spot's recent closes, for the chart's past
+        today = self.today()
+        hist = self.store.hist_many([series_id(spot_ticker(pair))], (today - _dt.timedelta(days=200)).isoformat(),
+                                    (today - _dt.timedelta(days=1)).isoformat()).get(series_id(spot_ticker(pair))) or {}
+        out["spot_history"] = sorted(hist.items())
         return out
 
     def _tenor(self, user: Optional[str], pair: Pair, model: str, row: Dict[str, Any], spot: Optional[float]) -> Dict[str, Any]:
@@ -665,6 +687,7 @@ class Fx(object):
         out["points_smile"] = {k: ({"strike": v[0], "vol": v[1] * 100.0} if v else None) for k, v in info["points"].items()}
         out["model"] = info["model"]
         out["note"] = info.get("note") or ""
+        out["curve"] = _curve_points(smile, dist, qs, info["points"])
         out["check"] = {"mass": chk["mass"], "mean_error": chk["mean_error"], "arbitrage": chk["arbitrage"]}
         out["q"] = {"%g" % p: v for p, v in qs.items()}
         out["params"] = info.get("svi") or ({"alpha": info["alpha"], "rho": info["rho"], "nu": info["nu"]} if "alpha" in info else None)
@@ -713,11 +736,7 @@ class Fx(object):
         spot_ids = [series_id(spot_ticker(p)) for p in self.pairs()]
         closes = self.store.hist_many(spot_ids, (today - _dt.timedelta(days=12)).isoformat(), (today - _dt.timedelta(days=1)).isoformat())
         for p in self.pairs():
-            spot, why = self.value(spot_ticker(p))
-            if p.code == "USDTRY":
-                book = self._try_book(user)
-                if book:
-                    spot = book["spot"]
+            spot, why = self.spot(user, p)
             prev = closes.get(series_id(spot_ticker(p))) or {}
             last_close = prev[max(prev)] if prev else None
             row: Dict[str, Any] = {"pair": p.code, "group": p.group, "decimals": p.decimals, "spot": spot, "spot_why": why,
@@ -771,10 +790,12 @@ class Fx(object):
             closes = sorted((data.get(series_id(spot_tk)) or {}).items())
             rv = realized(closes)
             iv = cells.get("%s|ATM|1M" % p.code, {}).get("last")
-            spot_now, _ = self.value(spot_tk)
+            spot_now, _ = self.spot(user, p)
+            atm_closes = sorted((data.get(series_id(vol_ticker(p.code, "ATM", "1M", src))) or {}).items())
             rows.append({"pair": p.code, "group": p.group, "decimals": p.decimals, "spot": spot_now,
                          "rv1m": rv[-1][1] if rv else None, "iv1m": iv,
-                         "spark": [v for _, v in closes[-260:]][::5]})
+                         "spark": [v for _, v in closes[-260:]][::5],               # the spot, a point a week
+                         "spark_atm": [v for _, v in atm_closes[-260:]][::5]})      # ATM 1M, a point a week
         extra = []
         for t in own:
             live, why = self.value(t["text"])
@@ -953,6 +974,46 @@ class Fx(object):
     def stop(self) -> None:
         self._stop.set()
         self._hist_kick.set()
+
+
+def _moved(smile: Any, info: Dict[str, Any], F: float) -> Tuple[Any, Dict[str, Any]]:
+    """A fitted smile carried to another forward, its shape in moneyness unchanged (strikes scale with F)."""
+    if abs(F / smile.F - 1.0) < 1e-14:
+        return smile, info
+    r = F / smile.F
+    if isinstance(smile, fv.SviSmile):
+        moved: Any = fv.SviSmile(F, smile.T, smile.a, smile.b, smile.rho, smile.m, smile.s)
+    elif isinstance(smile, fv.SabrSmile):
+        moved = fv.SabrSmile(F, smile.T, smile.alpha, smile.rho, smile.nu)
+    elif isinstance(smile, fv.VannaVolgaSmile):
+        moved = fv.VannaVolgaSmile(F, smile.T, [smile.k1 * r, smile.k2 * r, smile.k3 * r], [smile.v1, smile.v2, smile.v3])
+    else:
+        moved = fv.FlatSmile(F, smile.T, smile.vol(smile.F))
+    out = dict(info)
+    out["points"] = {k: ((v[0] * r, v[1]) if v else None) for k, v in (info.get("points") or {}).items()}
+    if info.get("pillars"):
+        out["pillars"] = {k: (v[0] * r, v[1]) for k, v in info["pillars"].items()}
+    return moved, out
+
+
+def _curve_points(smile: Any, dist: Any, qs: Dict[float, Optional[float]], points: Dict[str, Any], n: int = 61) -> List[List[float]]:
+    """The smile (vol points) and the density on a strike grid wide enough for the 1st to the 99th percentile and the
+    10-delta strikes: ``[[strike, vol, density], ...]``."""
+    ends = [v for v in (qs.get(0.01), qs.get(0.99)) if v] + [p[0] for p in points.values() if p]
+    if len(ends) < 2:
+        return []
+    lo, hi = min(ends), max(ends)
+    lo, hi = lo - 0.08 * (hi - lo), hi + 0.08 * (hi - lo)
+    out = []
+    for i in range(n):
+        K = lo + (hi - lo) * i / (n - 1)
+        if K <= 0:
+            continue
+        try:
+            out.append([K, smile.vol(K) * 100.0, max(0.0, dist.density(K))])
+        except fv.MATH_ERRORS:
+            continue
+    return out
 
 
 def _now() -> str:

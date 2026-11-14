@@ -223,6 +223,7 @@ def test_the_board(svc):
     assert t["spot"] == cell(svc, "EK_FWD!F%d" % (ex.FR_USD + 1)) and t["ATM_1M"] == 5.0 and t["RR25_1M"] == 4.5
     assert t["move_1m"] == pytest.approx(t["spot"] * 0.05 * math.sqrt(30 / 365))
     assert rows["USDJPY"]["spot"] is None and rows["USDJPY"]["spot_why"] == "veri yok"
+    assert rows["EURTRY"]["spot"] == pytest.approx(1.10 * t["spot"])            # its USD legs, as the page prices it
 
 
 # ---------------------------------------------------------------------------------------------- statistics
@@ -430,3 +431,20 @@ def test_http(svc):
     assert client.post("/api/fx/tickers", json={"remove": added["id"]}, headers=h).json() == {"items": []}
     assert client.post("/api/fx/history", json={}, headers=h).status_code == 200
     assert client.get("/api/fx/board").status_code == 401                          # a name first
+
+
+def test_a_spot_tick_moves_the_smile_without_fitting_it_again(svc):
+    """Every condition of the fit depends on the strikes only through K/F: the smile fitted at one forward is, moved to
+    another, exactly the one a new fit would give - so a ticking spot costs no new calibration."""
+    from tto import fxvol as fv
+    pair = svc.fx.pair("USDTRY")
+    args = (0.25, 0.09, 0.073, 0.0135, 0.146, 0.045)
+    s1, i1 = svc.fx._smile(pair, "spot-tick", "svi", fv.Quotes(50.0, *args, premium=True))
+    q2 = fv.Quotes(50.5, *args, premium=True)
+    s2, i2 = svc.fx._smile(pair, "spot-tick", "svi", q2)
+    assert s2.F == 50.5 and s2 is not s1
+    for K in (45.0, 50.0, 55.0):
+        assert s2.vol(K * 1.01) == pytest.approx(s1.vol(K), rel=1e-12)
+    again = fv.residuals(q2, s2)
+    assert all(abs(again[k] - i1["fit"][k]) < 1e-9 for k in again)
+    assert i2["points"]["25C"][0] == pytest.approx(i1["points"]["25C"][0] * 1.01, rel=1e-12)
