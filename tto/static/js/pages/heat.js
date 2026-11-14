@@ -1,16 +1,19 @@
 // Eğri Hareketi: a heat map of the curves - every point's change since the previous close, the day's open or a
 // reference taken on purpose (the morning meeting): OIS, offshore and their difference by tenor, the VİOP contracts,
 // the bonds of the trading list.  Red: up (a rate, a spread higher), blue: down; the deeper, the larger against the
-// day's largest move.  A click on a point watches it or sets an alarm on it.
+// day's largest move.  A click on a point draws its past (closes, band, z-score), watches it or sets an alarm on it.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu } from '../ui.js';
 import { openWatchDialog, watchSubject } from '../alarms.js';
+import { SeriesView, watchSpec } from '../serieschart.js';
 
 const BASES = [['close', 'Önceki kapanış', 'Bir önceki iş gününün kapanışına göre (OIS, TLREF, offshore: tarihçe; diğerleri: dashboard\'un kaydettiği kapanış)'],
   ['open', 'Açılış', 'Dashboard\'un bugün gördüğü ilk değere göre'],
   ['ref', 'Referans', '"Referansı şimdi al" ile alınan seviyelere göre (ör. sabah toplantısı)']];
 const KEY = 'tto.heat.basis';
 const isNum = (v) => typeof v === 'number' && isFinite(v);
+const HISTORY_AGAIN_MS = 5 * 60 * 1000;   // a drawn history is asked again this often (the value now: every refresh)
+const keyOf = (subject) => JSON.stringify(subject || null);
 
 function savedBasis() {
   try { const v = localStorage.getItem(KEY); return BASES.some((b) => b[0] === v) ? v : 'close'; } catch (e) { return 'close'; }
@@ -34,6 +37,7 @@ export class HeatPage {
     this.ctx = ctx;
     this.basis = savedBasis();
     this.data = null;
+    this.picked = null;                    // the point whose past is drawn: {key, subject, label}
     this.build();
   }
 
@@ -62,6 +66,16 @@ export class HeatPage {
     tools.appendChild(this.legend);
     tools.appendChild(this.info);
     this.host.appendChild(tools);
+    // the past of the point clicked
+    const seriesBody = h('div', { class: 'body' });
+    const close = h('button', { class: 'iconbtn', type: 'button', title: 'Grafiği kapat' }, '✕');
+    close.addEventListener('click', () => this.closeHistory());
+    this.seriesSec = h('section', { class: 'panel wide hidden', id: 'heat-series' },
+      h('header', null, h('h2', null, 'Seçili noktanın geçmişi'), h('span', { class: 'grow' }), close), seriesBody,
+      h('div', { class: 'note' }, 'Bir noktaya tıklayıp "Geçmişini çiz"i seçin. Kapanışlar İzleme · Alarmlar\'daki z\'nin kullandıklarıdır (OIS, TLREF, offshore: tarihçe deposu; '
+        + 'diğerleri dashboard\'un kaydettiği kapanış); son nokta şimdiki değer.'));
+    this.host.appendChild(this.seriesSec);
+    this.sv = new SeriesView(seriesBody, { rule: 'raw', prefKey: 'tto.heat.series.window', window: 60, height: 220 });
     this.box = h('div', { id: 'heat-panels' });
     this.host.appendChild(this.box);
   }
@@ -72,6 +86,7 @@ export class HeatPage {
     const d = await api.get('/api/heat?basis=' + this.basis);
     this.data = d;
     this.draw(d);
+    this.liveHistory(d);
   }
 
   draw(d) {
@@ -96,6 +111,7 @@ export class HeatPage {
               : d.basis === 'open' ? 'Açılış' : 'Referans') + ': ' + c.base_text : '') + (has ? '\nDeğişim: ' + c.chg_text : '\nDeğişim: karşılaştıracak değer yok') },
           h('div', { class: 'c' }, has ? c.chg_text.replace(' bp', '') : '–'), h('div', { class: 'l' }, c.now_text || ''));
           paint(td, c.chg, d.cap);
+          if (this.picked && this.picked.key === keyOf(c.subject)) td.classList.add('pick');
           td.addEventListener('click', (e) => this.pick(c, e));
           tr.appendChild(td);
         }
@@ -108,6 +124,7 @@ export class HeatPage {
 
   pick(c, e) {
     menu(e.clientX, e.clientY, [{ header: c.label },
+      { label: 'Geçmişini çiz (z-skoru ile)', action: () => this.showHistory({ key: keyOf(c.subject), subject: c.subject, label: c.label }) },
       { label: 'İzlemeye ekle', action: () => watchSubject(this.ctx, c.subject) },
       { label: 'Alarm kur…', action: () => openWatchDialog(this.ctx, { subject: c.subject, focus: 'alarm' }) },
       { label: 'Hareket alarmı…', action: () => openWatchDialog(this.ctx, { subject: c.subject, focus: 'alarm', mode: 'move' }) }]);
@@ -127,5 +144,73 @@ export class HeatPage {
     } catch (err) { errorToast(err); }
   }
 
-  destroy() {}
+  // ------------------------------------------------------------------ the past of the point clicked
+  showHistory(w) {
+    this.picked = w;
+    this.hist = null;
+    this.seriesSec.classList.remove('hidden');
+    this.markPicked();
+    this.seriesSec.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    this.loadHistory(true);
+  }
+
+  closeHistory() {
+    this.picked = null;
+    this.hist = null;
+    this.seriesSec.classList.add('hidden');
+    this.markPicked();
+  }
+
+  markPicked() {
+    if (!this.data) return;
+    const tds = this.box.querySelectorAll('td.hc');
+    let k = 0;
+    for (const p of this.data.panels) {
+      for (const row of p.rows) {
+        for (const c of row.cells) {
+          if (!c) continue;
+          const td = tds[k++];
+          if (td) td.classList.toggle('pick', !!(this.picked && this.picked.key === keyOf(c.subject)));
+        }
+      }
+    }
+  }
+
+  async loadHistory(fresh) {
+    const w = this.picked;
+    if (!w) return;
+    const seq = (this.hseq = (this.hseq || 0) + 1);
+    if (fresh) this.sv.loading(w.label);
+    try {
+      const d = await api.post('/api/watch/history', { subject: w.subject });
+      if (seq !== this.hseq || this.picked !== w) return;
+      this.hist = d;
+      this.histAt = Date.now();
+      this.sv.show(watchSpec(d, w.label));
+    } catch (err) {
+      if (seq === this.hseq) this.sv.show({ title: w.label, points: [], why: (err && err.message) || 'Geçmiş alınamadı' });
+    }
+  }
+
+  /** The value now from the map (every refresh); the closes again now and then. */
+  liveHistory(d) {
+    const w = this.picked;
+    if (!w || !this.hist) return;
+    if (Date.now() - (this.histAt || 0) > HISTORY_AGAIN_MS) { this.loadHistory(false); return; }
+    for (const p of d.panels) {
+      for (const row of p.rows) {
+        for (const c of row.cells) {
+          if (c && keyOf(c.subject) === w.key && isNum(c.now) && c.now !== this.hist.value) {
+            this.hist.value = c.now;
+            this.sv.show(watchSpec(this.hist, w.label));
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  destroy() {
+    if (this.sv) this.sv.destroy();
+  }
 }

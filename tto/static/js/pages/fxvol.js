@@ -2,19 +2,25 @@
 // adds (a pair, or any Bloomberg ticker).  Every vol's level, its moves over a day / a week / a month and where it
 // stands in its recent history (z-score, percentile, range - the workbook's macro block, for every pair), a heat map
 // of the whole set, the day's movers, one pair in depth (term structure, skew and smile now against a week and a month
-// ago, time series, implied against realized).  Each section can be shown or hidden.
+// ago, time series, implied against realized).  The skew of a tenor is its risk reversal over its ATM vol (RR / ATM),
+// followed like a vol.  A click on a cell or a row draws that series' past and its z-score day by day ("Seçili seri").
+// Each section can be shown or hidden.
 import { api } from '../api.js';
 import { h, clear, errorToast, toast, confirmDialog, promptDialog } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { Chart } from '../chart.js';
 import { serialOfIso } from '../fan.js';
 import { num, isoToTr } from '../format.js';
+import { SeriesView } from '../serieschart.js';
 
-const SECTIONS = [['summary', 'Özet'], ['heat', 'Isı haritası'], ['movers', 'Hareketler'], ['pair', 'Parite ayrıntısı'],
+const SECTIONS = [['summary', 'Özet'], ['heat', 'Isı haritası'], ['series', 'Seçili seri'], ['movers', 'Hareketler'], ['pair', 'Parite ayrıntısı'],
   ['own', 'Kendi ticker\'larım'], ['method', 'Yöntem']];
 const WINDOWS = [[63, '3A', 'Son 63 kapanış (~3 ay)'], [126, '6A', 'Son 126 kapanış (~6 ay)'], [250, '1Y', 'Son 250 kapanış (~1 yıl)']];
 const METRICS = [['last', 'Seviye'], ['d1', 'Δ1G'], ['w1', 'Δ1H'], ['m1', 'Δ1A'], ['z', 'z'], ['pct', 'Yüzdelik']];
-const KIND = { ATM: 'ATM', RR25: '25D RR', BF25: '25D BF', RR10: '10D RR', BF10: '10D BF' };
+const KIND = { ATM: 'ATM', RR25: '25D RR', BF25: '25D BF', RR10: '10D RR', BF10: '10D BF', SKEW25: '25D RR/ATM', SKEW10: '10D RR/ATM' };
+const SKEW = { SKEW25: 'RR25', SKEW10: 'RR10' };
+/** Decimals of a quote: vols in vol points, a skew (a ratio) one more. */
+const digitsOf = (kind) => (SKEW[kind] ? 3 : 2);
 const BLUE = '4F81BD', ORANGE = 'F79646', PURPLE = '8064A2', GREEN = '9BBB59';
 const REFRESH_MS = 15000;
 
@@ -84,17 +90,17 @@ function spark(values, w = 90, ht = 22) {
 }
 
 /** What a cell shows of a series' statistics, and its tooltip. */
-function statText(st, metric) {
+function statText(st, metric, digits = 2) {
   if (!st) return '';
   if (metric === 'pct') return isNum(st.pct) ? num(st.pct * 100, 0, false) + '%' : '';
   if (metric === 'z') return isNum(st.z) ? sgn(st.z, 2) : '';
-  if (metric === 'last') return isNum(st.last) ? num(st.last, 2, false) : '';
-  return isNum(st[metric]) ? sgn(st[metric], 2) : '';
+  if (metric === 'last') return isNum(st.last) ? num(st.last, digits, false) : '';
+  return isNum(st[metric]) ? sgn(st[metric], digits) : '';
 }
 
 function statTip(name, st, window) {
   if (!st) return name;
-  const lines = [name + (st.ticker ? ' · ' + st.ticker : '')];
+  const lines = [name + (st.ticker ? ' · ' + st.ticker : (st.of ? ' · ' + st.of.join(' ÷ ') : ''))];
   if (!isNum(st.last)) lines.push(st.why || 'veri yok');
   else lines.push('Son: ' + num(st.last, 3, false) + (st.live ? '' : ' (son kapanış)'));
   if (isNum(st.d1)) lines.push('Δ1G ' + sgn(st.d1, 3) + ' · Δ1H ' + sgn(st.w1, 3) + ' · Δ1A ' + sgn(st.m1, 3));
@@ -102,6 +108,7 @@ function statTip(name, st, window) {
   if (isNum(st.z)) lines.push('z (' + st.window + ' kapanış) ' + sgn(st.z, 2) + ' · yüzdelik ' + num(st.pct * 100, 0, false) + '%');
   if (isNum(st.min)) lines.push('Aralık ' + num(st.min, 3, false) + ' – ' + num(st.max, 3, false));
   lines.push(st.n ? st.n + ' kapanış' + (st.day ? ', son ' + isoToTr(st.day) : '') : 'tarihçe yok');
+  lines.push('Tıklayın: geçmişi ve z-skoru');
   return lines.join('\n');
 }
 
@@ -114,9 +121,18 @@ export class FxVolPage {
     this.sumMetric = pref('tto.fxvol.summetric', 'last');
     this.pair = pref('tto.fxvol.pair', 'USDTRY');
     this.tenor = pref('tto.fxvol.tenor', '1M');
-    let on = null;
-    try { on = JSON.parse(pref('tto.fxvol.sections', 'null')); } catch (e) { on = null; }
-    this.on = new Set(Array.isArray(on) ? on : SECTIONS.map((s) => s[0]));
+    // the hidden sections (kept before as the shown ones: a section added since then is shown)
+    let hidden = null;
+    try { hidden = JSON.parse(pref('tto.fxvol.hidden', 'null')); } catch (e) { hidden = null; }
+    if (!Array.isArray(hidden)) {
+      let on = null;
+      try { on = JSON.parse(pref('tto.fxvol.sections', 'null')); } catch (e) { on = null; }
+      hidden = Array.isArray(on) ? SECTIONS.map((s) => s[0]).filter((id) => id !== 'series' && !on.includes(id)) : [];
+    }
+    this.on = new Set(SECTIONS.map((s) => s[0]).filter((id) => !hidden.includes(id)));
+    let picked = null;
+    try { picked = JSON.parse(pref('tto.fxvol.series', 'null')); } catch (e) { picked = null; }
+    this.picked = picked && (picked.ticker || (picked.pair && picked.kind && picked.tenor)) ? picked : { pair: this.pair, kind: 'SKEW25', tenor: '1M' };
     this.grids = {};
     this.charts = {};
     this.loaded = 0;
@@ -132,6 +148,7 @@ export class FxVolPage {
     this.loaded = Date.now();
     this.build();
     this.fill();
+    this.loadSeries();
   }
 
   /** Quotes still on their way (the first answers of Bloomberg): the page is refreshed sooner. */
@@ -149,12 +166,17 @@ export class FxVolPage {
       this.det = det;
       this.loaded = Date.now();
       this.fill();
+      // the picked series: its history again when a new one has come in (or there was none), else the value now
+      const stamp = (mon.history || {}).last || '';
+      if (this.on.has('series') && (stamp !== this.seriesStamp || !(this.seriesData && this.seriesData.points.length))) this.loadSeries();
+      else this.liveSeries();
     } finally { this.busy = false; }
   }
 
   destroy() {
     this.dead = true;
     for (const c of Object.values(this.charts)) if (c) c.destroy();
+    if (this.sv) this.sv.destroy();
   }
 
   fetchMonitor() { return api.get('/api/fx/monitor', { window: this.window }); }
@@ -180,9 +202,15 @@ export class FxVolPage {
     clear(this.host);
     this.grids = {};
     for (const c of Object.values(this.charts)) if (c) c.destroy();
+    if (this.sv) { this.sv.destroy(); this.sv = null; }
     this.charts = {};
     this.chartHosts = null;
-    const win = seg(WINDOWS, this.window, (v) => { this.window = Number(v); keep('tto.fxvol.window', v); this.reloadMonitor(); }, 'fxvol-window');
+    const win = seg(WINDOWS, this.window, (v) => {
+      this.window = Number(v);
+      keep('tto.fxvol.window', v);
+      if (this.sv) this.sv.setWindow(this.window);
+      this.reloadMonitor();
+    }, 'fxvol-window');
     const chips = h('div', { class: 'fxchips', id: 'fxvol-sections' });
     for (const [id, title] of SECTIONS) {
       const b = h('button', { type: 'button', title: 'Bölümü göster / gizle' }, title);
@@ -190,9 +218,10 @@ export class FxVolPage {
       b.addEventListener('click', () => {
         if (this.on.has(id)) this.on.delete(id); else this.on.add(id);
         b.classList.toggle('on', this.on.has(id));
-        keep('tto.fxvol.sections', JSON.stringify([...this.on]));
+        keep('tto.fxvol.hidden', JSON.stringify(SECTIONS.map((x) => x[0]).filter((x) => !this.on.has(x))));
         this.showSections();
         if (id === 'pair' && this.on.has('pair')) this.reloadPair();
+        if (id === 'series' && this.on.has('series')) this.loadSeries();
       });
       chips.appendChild(b);
     }
@@ -209,15 +238,26 @@ export class FxVolPage {
     const sumSeg = seg([['last', 'Seviye'], ['d1', 'Δ1G'], ['w1', 'Δ1H'], ['m1', 'Δ1A']], this.sumMetric,
       (v) => { this.sumMetric = v; keep('tto.fxvol.summetric', v); this.fillSummary(); }, 'fxvol-summetric');
     this.sections.summary = this.panel('fxvol-summary', 'Özet · her parite bir satır', [sumSeg, this.copyBtn('summary')], this.sumBody,
-      h('div', { class: 'note' }, 'Vol\'ler vol puanı. Renk: seçili penceredeki z-skoru (kırmızı yüksek, mavi düşük). z ve yüzdelik seçili pencerede (Masa → Makro bloğunun tanımı: '
-        + 'canlı değer, dünkü kapanışa kadarki kapanışlara göre). İma − gerçekleşen: ATM 1M − spotun son 21 günlük gerçekleşen vol\'ü. Eğim: ATM 1Y − ATM 1M. Satıra tıklayınca parite ayrıntıda açılır.'));
+      h('div', { class: 'note' }, 'Vol\'ler vol puanı; skew = 25D RR / ATM (aynı vadenin risk reversal\'ı bölü ATM vol\'ü, oran). Renk: seçili penceredeki z-skoru (kırmızı yüksek, mavi düşük). '
+        + 'z ve yüzdelik seçili pencerede (Masa → Makro bloğunun tanımı: canlı değer, dünkü kapanışa kadarki kapanışlara göre). İma − gerçekleşen: ATM 1M − spotun son 21 günlük '
+        + 'gerçekleşen vol\'ü. Eğim: ATM 1Y − ATM 1M. Bir kotaya tıklayınca geçmişi "Seçili seri"de çizilir, parite adına tıklayınca parite ayrıntıda açılır.'));
 
     // ---- heat map
     this.heatBody = h('div', { class: 'heat-wrap' });
     const metricSeg = seg(METRICS, this.metric, (v) => { this.metric = v; keep('tto.fxvol.metric', v); this.fillHeat(); }, 'fxvol-metric');
     this.sections.heat = this.panel('fxvol-heat', 'Isı haritası · parite × vade', [metricSeg], this.heatBody,
-      h('div', { class: 'note' }, 'Büyük: seçili ölçü (Δ vol puanı; z; yüzdelik), küçük: seviye. Değişimlerde renk o sütunun en büyük hareketine göre, z ve yüzdelikte '
-        + 'tarihine göre (kırmızı yükseldi / yüksek, mavi düştü / düşük). Üzerine gelince ayrıntı; tıklayınca o paritenin ayrıntısı.'));
+      h('div', { class: 'note' }, 'Büyük: seçili ölçü (Δ vol puanı, skew\'de Δ oran; z; yüzdelik), küçük: seviye. RR/ATM sütunları skew: risk reversal bölü aynı vadenin ATM vol\'ü. '
+        + 'Değişimlerde renk o sütunun en büyük hareketine göre, z ve yüzdelikte tarihine göre (kırmızı yükseldi / yüksek, mavi düştü / düşük). '
+        + 'Üzerine gelince ayrıntı; tıklayınca o serinin geçmişi ve z-skoru "Seçili seri"de çizilir (parite ayrıntısı da o pariteye geçer).'));
+
+    // ---- the picked series
+    this.seriesHost = h('div');
+    this.sections.series = this.panel('fxvol-series', 'Seçili seri', null, this.seriesHost,
+      h('div', { class: 'note' }, 'Isı haritasında bir hücreye, özette bir kotaya, hareketlerde ya da kendi ticker\'larınızda bir satıra tıklayın. Soldaki grafik seviye, '
+        + 'seçili pencerenin ortalaması ve ±2σ bandı; sağdaki her günün kendinden önceki pencereye göre z-skoru (son nokta bugünkü canlı değer). Tanım tablolardakiyle aynı '
+        + '(hafta içi günler, boş gün önceki kapanışla; pencere üstteki seçimden).'));
+    this.sv = new SeriesView(this.seriesHost, { rule: 'macro', windowSeg: false, window: this.window, height: 230,
+      hint: 'Isı haritasında bir hücreye tıklayın: geçmişi burada çizilir.' });
 
     // ---- movers
     this.moversBody = h('div', { class: 'volcharts' });
@@ -253,6 +293,8 @@ export class FxVolPage {
       h('p', null, 'Ticker\'lar: ', h('code', null, '<PARİTE>V<vade> BGN Curncy'), ' (ATM), ', h('code', null, '25R'), ' / ', h('code', null, '10R'), ' (risk reversal), ',
         h('code', null, '25B'), ' / ', h('code', null, '10B'), ' (butterfly), spot ', h('code', null, '<PARİTE> Curncy'), '. Fiyat kaynağı (BGN) masanın ortak ayarıdır. '
         + 'Her paritenin izlenen seti: ATM 1W 1M 3M 6M 1Y, 25D RR ve BF 1M 3M 1Y, 10D RR ve BF 1M; ayrıntıda bütün vadeler.'),
+      h('p', null, 'Skew = risk reversal ÷ aynı vadenin ATM vol\'ü (25D RR / ATM 1M 3M 1Y, 10D RR / ATM 1M): call\'ların put\'lara göre primi, vol seviyesinden arındırılmış. '
+        + 'Kapanışları iki serinin aynı günkü kapanışlarının oranı (yeni Bloomberg isteği yok); değişim, z ve yüzdelik vol\'lerle aynı tanımla.'),
       h('p', null, 'Değişim ve istatistikler Masa sayfasının Makro bloğundaki gibidir: hafta içi günler (boş gün önceki kapanışla), Δ1G / Δ1H / Δ1A canlı değerin 1 / 5 / 21 iş günü önceki '
         + 'kapanışa farkı; z 3A son 63 kapanışa, z ve yüzdelik seçili pencereye göre; |z| ≥ 1,5 vurgulu.'),
       h('p', null, 'Tarihçe: her vol\'ün günlük kapanışı (PX_LAST) bir kez bir yıl geriye, sonra günde bir son on gün istenir ve dashboard\'un tarihçe tablosunda saklanır. '
@@ -328,13 +370,90 @@ export class FxVolPage {
 
   cell(pair, kind, tenor) { return this.mon.cells[pair + '|' + kind + '|' + tenor] || null; }
 
-  pick(pair) {
-    if (!pair || pair === this.pair) return;
-    this.pair = pair;
-    keep('tto.fxvol.pair', pair);
-    if (!this.on.has('pair')) return;
-    this.reloadPair();
-    this.sections.pair.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  /** The pair of the detail; ``scroll``: bring the detail into view. */
+  pick(pair, scroll = true) {
+    if (!pair) return;
+    if (pair !== this.pair) {
+      this.pair = pair;
+      keep('tto.fxvol.pair', pair);
+      if (this.on.has('pair')) this.reloadPair();
+    }
+    if (scroll && this.on.has('pair')) this.sections.pair.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  // ------------------------------------------------------------------ the picked series
+  /** Draw the past of a quote ({pair, kind, tenor}: a vol or a skew) or of a ticker ({ticker, title}). */
+  pickSeries(what) {
+    if (!what) return;
+    this.picked = what;
+    keep('tto.fxvol.series', JSON.stringify(what));
+    if (what.pair) this.pick(what.pair, false);
+    if (!this.on.has('series')) {
+      this.on.add('series');
+      keep('tto.fxvol.hidden', JSON.stringify(SECTIONS.map((x) => x[0]).filter((x) => !this.on.has(x))));
+      const chip = this.host.querySelector('#fxvol-sections');
+      if (chip) [...chip.children].forEach((b, i) => b.classList.toggle('on', this.on.has(SECTIONS[i][0])));
+      this.showSections();
+    }
+    this.loadSeries();
+    this.mark();
+    this.sections.series.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  seriesTitle(w) {
+    if (!w) return '';
+    if (w.ticker) return w.title || w.ticker;
+    return w.pair + ' ' + (KIND[w.kind] || w.kind) + ' ' + w.tenor;
+  }
+
+  async loadSeries() {
+    const w = this.picked;
+    if (!this.sv || !w || !this.on.has('series')) return;
+    const seq = (this.sseq = (this.sseq || 0) + 1);
+    if (!this.seriesData || this.seriesKey !== JSON.stringify(w)) this.sv.loading(this.seriesTitle(w));
+    try {
+      const q = w.ticker ? { ticker: w.ticker, window: this.window } : { pair: w.pair, kind: w.kind, tenor: w.tenor, window: this.window };
+      const res = await api.get('/api/fx/series', q);
+      if (this.dead || seq !== this.sseq) return;
+      this.seriesData = res;
+      this.seriesKey = JSON.stringify(w);
+      this.seriesStamp = ((this.mon && this.mon.history) || {}).last || '';
+      this.showSeries();
+    } catch (err) {
+      if (seq === this.sseq && this.sv) this.sv.show({ title: this.seriesTitle(w), points: [], why: (err && err.message) || 'Geçmiş alınamadı' });
+    }
+  }
+
+  showSeries() {
+    const w = this.picked, d = this.seriesData;
+    if (!this.sv || !d) return;
+    const skew = !!(w && SKEW[w.kind]);
+    const digits = w && w.ticker ? (w.spot ? (w.decimals || 4) : 3) : digitsOf(w && w.kind);
+    const note = skew ? (d.of || []).join(' ÷ ') : (d.ticker || '');
+    this.sv.show({ title: this.seriesTitle(w), points: d.points, live: d.live, today: d.today, from: d.from, digits,
+      unit: skew || (w && w.ticker) ? '' : 'vol', axis: skew ? 'RR/ATM' : undefined, note, why: d.why || '' });
+  }
+
+  /** The value now from the monitor (refreshed every few seconds) - the history is not asked again for it. */
+  liveSeries() {
+    const w = this.picked, d = this.seriesData;
+    if (!w || !d || !this.mon || this.seriesKey !== JSON.stringify(w)) return;
+    let st = null;
+    if (w.pair && !w.ticker) st = this.cell(w.pair, w.kind, w.tenor);
+    else if (w.ticker) st = (this.mon.own || []).find((o) => o.ticker === w.ticker) || null;
+    if (w.spot) {
+      const row = this.mon.rows.find((r) => r.pair === w.pair);
+      if (row && isNum(row.spot) && row.spot !== d.live) { d.live = row.spot; this.showSeries(); }
+      return;
+    }
+    if (st && st.live && isNum(st.last) && st.last !== d.live) { d.live = st.last; this.showSeries(); }
+  }
+
+  /** Mark the picked quote in the heat map. */
+  mark() {
+    if (!this.heatBody) return;
+    const w = this.picked || {};
+    for (const td of this.heatBody.querySelectorAll('td[data-k]')) td.classList.toggle('pick', !w.ticker && td.dataset.k === w.pair + '|' + w.kind + '|' + w.tenor);
   }
 
   fillSummary() {
@@ -343,7 +462,7 @@ export class FxVolPage {
     const zc = (st) => (st && isNum(st.z) ? heatHex(st.z / 3) : null);
     const c = (st, name, digits = 2) => {
       if (!st) return { t: '', k: '' };
-      const t = metric === 'last' ? (isNum(st.last) ? num(st.last, digits, false) : '') : statText(st, metric);
+      const t = metric === 'last' ? (isNum(st.last) ? num(st.last, digits, false) : '') : statText(st, metric, digits);
       const out = { t: t || (isNum(st.last) ? '' : '–'), v: metric === 'last' ? st.last : st[metric], k: 'n', tip: statTip(name, st, m.window),
         cls: isNum(st.z) && Math.abs(st.z) >= m.z_flag ? 'thru' : '' };
       const hx = zc(st);
@@ -352,13 +471,15 @@ export class FxVolPage {
     };
     const rows = m.rows.map((r) => {
       const p = r.pair;
-      const atm1m = this.cell(p, 'ATM', '1M'), atm1y = this.cell(p, 'ATM', '1Y');
+      const atm1m = this.cell(p, 'ATM', '1M'), atm1y = this.cell(p, 'ATM', '1Y'), sk1m = this.cell(p, 'SKEW25', '1M');
       const slope = atm1m && atm1y && isNum(atm1m.last) && isNum(atm1y.last) ? atm1y.last - atm1m.last : null;
       const vrp = isNum(r.iv1m) && isNum(r.rv1m) ? r.iv1m - r.rv1m : null;
       return [{ t: p, k: 's', b: 1, cls: p === this.pair ? 'pick' : '' }, isNum(r.spot) ? { t: num(r.spot, r.decimals || 4, false), v: r.spot, k: 'n' } : { t: '', k: '' },
         c(atm1m, p + ' ATM 1M'), c(this.cell(p, 'ATM', '3M'), p + ' ATM 3M'), c(atm1y, p + ' ATM 1Y'),
         c(this.cell(p, 'RR25', '1M'), p + ' 25D RR 1M'), c(this.cell(p, 'RR25', '3M'), p + ' 25D RR 3M'), c(this.cell(p, 'BF25', '1M'), p + ' 25D BF 1M'),
-        c(this.cell(p, 'RR10', '1M'), p + ' 10D RR 1M'),
+        c(this.cell(p, 'RR10', '1M'), p + ' 10D RR 1M'), c(sk1m, p + ' 25D RR/ATM 1M', 3),
+        isNum(sk1m && sk1m.z) ? { t: sgn(sk1m.z, 2), v: sk1m.z, k: 'n', cls: Math.abs(sk1m.z) >= m.z_flag ? 'thru' : '', heat: heatHex(sk1m.z / 3) || undefined,
+          tip: '25D RR / ATM 1M: ' + sk1m.window + ' kapanışa göre z (seçili pencere) · yüzdelik ' + (isNum(sk1m.pct) ? num(sk1m.pct * 100, 0, false) + '%' : '–') } : { t: '', k: '' },
         isNum(atm1m && atm1m.z3m) ? { t: sgn(atm1m.z3m, 2), v: atm1m.z3m, k: 'n', cls: Math.abs(atm1m.z3m) >= m.z_flag ? 'thru' : '', tip: 'ATM 1M: son 63 kapanışa göre z' } : { t: '', k: '' },
         isNum(atm1m && atm1m.pct) ? { t: num(atm1m.pct * 100, 0, false) + '%', v: atm1m.pct, k: 'n', bar: Math.round(atm1m.pct * 100), bc: 'info',
           tip: 'ATM 1M\'nin ' + atm1m.window + ' kapanış içindeki yüzdeliği' } : { t: '', k: '' },
@@ -367,9 +488,19 @@ export class FxVolPage {
         { t: '', k: '', act: [] }];
     });
     const label = { last: '', d1: ' Δ1G', w1: ' Δ1H', m1: ' Δ1A' }[metric];
+    // what a click on each column draws: a quote of the pair (null: the pair's detail)
+    const cols = [null, 'spot', ['ATM', '1M'], ['ATM', '3M'], ['ATM', '1Y'], ['RR25', '1M'], ['RR25', '3M'], ['BF25', '1M'], ['RR10', '1M'], ['SKEW25', '1M'],
+      ['SKEW25', '1M'], ['ATM', '1M'], ['ATM', '1M'], ['ATM', '1M'], null, ['ATM', '1M']];
     const g = this.setGrid('summary', this.sumBody, ['Parite', 'Spot', 'ATM 1M' + label, 'ATM 3M' + label, 'ATM 1Y' + label, '25D RR 1M' + label, '25D RR 3M' + label,
-      '25D BF 1M' + label, '10D RR 1M' + label, 'ATM 1M z 3A', 'ATM 1M yüzdelik', 'İma − gerç. 1M', 'Eğim 1Y−1M', 'ATM 1M · 1 yıl'], rows,
-      'Parite yok', (i) => this.pick(m.rows[i] && m.rows[i].pair));
+      '25D BF 1M' + label, '10D RR 1M' + label, '25D RR/ATM 1M' + label, 'RR/ATM 1M z', 'ATM 1M z 3A', 'ATM 1M yüzdelik', 'İma − gerç. 1M', 'Eğim 1Y−1M', 'ATM 1M · 1 yıl'], rows,
+      'Parite yok', (i, j) => {
+        const r = m.rows[i];
+        if (!r) return;
+        const col = cols[j];
+        if (col === 'spot' && r.spot_ticker) this.pickSeries({ ticker: r.spot_ticker, title: r.pair + ' spot', pair: r.pair, spot: true, decimals: r.decimals });
+        else if (Array.isArray(col)) this.pickSeries({ pair: r.pair, kind: col[0], tenor: col[1] });
+        else this.pick(r.pair);
+      });
     // sparklines in the last column (drawn into the cells the grid made)
     if (g) {
       g.tds.slice(1).forEach((line, i) => {
@@ -384,7 +515,7 @@ export class FxVolPage {
 
   fillHeat() {
     const m = this.mon;
-    const cols = m.core.map(([kind, tenor]) => ({ kind, tenor }));
+    const cols = m.core.map(([kind, tenor]) => ({ kind, tenor })).concat((m.skews || []).map(([kind, , tenor]) => ({ kind, tenor })));
     const box = clear(this.heatBody);
     const t = h('table', { class: 'fxheat' });
     const groups = [];
@@ -392,8 +523,9 @@ export class FxVolPage {
       const g = groups[groups.length - 1];
       if (g && g.kind === c.kind) g.n += 1; else groups.push({ kind: c.kind, n: 1 });
     }
-    t.appendChild(h('tr', null, h('th', { class: 'row' }, ''), ...groups.map((g) => h('th', { colspan: String(g.n) }, KIND[g.kind] || g.kind))));
-    t.appendChild(h('tr', null, h('th', { class: 'row' }, ''), ...cols.map((c) => h('th', null, c.tenor))));
+    t.appendChild(h('tr', null, h('th', { class: 'row' }, ''), ...groups.map((g) => h('th', { colspan: String(g.n), class: SKEW[g.kind] ? 'skew' : '',
+      title: SKEW[g.kind] ? 'Skew: ' + KIND[SKEW[g.kind]] + ' bölü aynı vadenin ATM vol\'ü' : '' }, KIND[g.kind] || g.kind))));
+    t.appendChild(h('tr', null, h('th', { class: 'row' }, ''), ...cols.map((c) => h('th', { class: SKEW[c.kind] ? 'skew' : '' }, c.tenor))));
     // a move is coloured against the largest of its column, a z-score / percentile by itself
     const caps = cols.map((c) => Math.max(1e-9, ...m.rows.map((r) => {
       const st = this.cell(r.pair, c.kind, c.tenor);
@@ -404,19 +536,22 @@ export class FxVolPage {
       cols.forEach((c, j) => {
         const st = this.cell(r.pair, c.kind, c.tenor);
         if (!st || !isNum(st.last)) { tr.appendChild(h('td', { class: 'none', title: st ? statTip(r.pair + ' ' + KIND[c.kind] + ' ' + c.tenor, st, m.window) : '' }, '')); return; }
-        const big = this.metric === 'last' ? num(st.last, 2, false) : statText(st, this.metric) || '–';
-        const td = h('td', { title: statTip(r.pair + ' ' + KIND[c.kind] + ' ' + c.tenor, st, m.window) },
-          h('div', { class: 'c' }, big), h('div', { class: 'l' }, this.metric === 'last' ? (isNum(st.z) ? 'z ' + sgn(st.z, 1) : '') : num(st.last, 2, false)));
+        const dg = digitsOf(c.kind);
+        const big = this.metric === 'last' ? num(st.last, dg, false) : statText(st, this.metric, dg) || '–';
+        const td = h('td', { title: statTip(r.pair + ' ' + KIND[c.kind] + ' ' + c.tenor, st, m.window), class: SKEW[c.kind] ? 'skew' : '' },
+          h('div', { class: 'c' }, big), h('div', { class: 'l' }, this.metric === 'last' ? (isNum(st.z) ? 'z ' + sgn(st.z, 1) : '') : num(st.last, dg, false)));
+        td.dataset.k = r.pair + '|' + c.kind + '|' + c.tenor;
         const tone = this.metric === 'z' || this.metric === 'last' ? (isNum(st.z) ? st.z / 3 : null)
           : this.metric === 'pct' ? (isNum(st.pct) ? (st.pct - 0.5) * 2 : null)
             : (isNum(st[this.metric]) ? st[this.metric] / caps[j] : null);
         paint(td, tone);
-        td.addEventListener('click', () => this.pick(r.pair));
+        td.addEventListener('click', () => this.pickSeries({ pair: r.pair, kind: c.kind, tenor: c.tenor }));
         tr.appendChild(td);
       });
       t.appendChild(tr);
     }
     box.appendChild(t);
+    this.mark();
   }
 
   fillMovers() {
@@ -424,21 +559,26 @@ export class FxVolPage {
     const box = clear(this.moversBody);
     const all = [];
     for (const r of m.rows) {
-      for (const [kind, tenor] of m.core) {
+      for (const [kind, tenor] of m.core.concat((m.skews || []).map(([k, , t]) => [k, t]))) {
         const st = this.cell(r.pair, kind, tenor);
-        if (st && isNum(st.last)) all.push({ name: r.pair + ' ' + KIND[kind] + ' ' + tenor, pair: r.pair, st });
+        if (st && isNum(st.last)) all.push({ name: r.pair + ' ' + KIND[kind] + ' ' + tenor, pair: r.pair, kind, tenor, st, digits: digitsOf(kind) });
       }
     }
-    for (const o of m.own) if (isNum(o.last)) all.push({ name: o.label, st: o });
-    const day = all.filter((x) => isNum(x.st.d1)).sort((a, b) => Math.abs(b.st.d1) - Math.abs(a.st.d1)).slice(0, 12);
+    for (const o of m.own) if (isNum(o.last)) all.push({ name: o.label, ticker: o.ticker, st: o, digits: 2 });
+    // the day's moves are vol points: the skews (a ratio) are ranked among the extremes only
+    const day = all.filter((x) => isNum(x.st.d1) && !SKEW[x.kind]).sort((a, b) => Math.abs(b.st.d1) - Math.abs(a.st.d1)).slice(0, 12);
     const far = all.filter((x) => isNum(x.st.z) && (Math.abs(x.st.z) >= m.z_flag || x.st.pct >= 0.95 || x.st.pct <= 0.05))
       .sort((a, b) => Math.abs(b.st.z) - Math.abs(a.st.z)).slice(0, 12);
     const table = (id, list, empty) => {
       const holder = h('div');
-      const rows = list.map((x) => [{ t: x.name, k: 's', b: 1, tip: statTip(x.name, x.st, m.window) }, { t: num(x.st.last, 2, false), v: x.st.last, k: 'n' },
-        { t: sgn(x.st.d1, 2), v: x.st.d1, k: 'n' }, { t: sgn(x.st.w1, 2), v: x.st.w1, k: 'n' }, { t: sgn(x.st.z, 2), v: x.st.z, k: 'n', cls: isNum(x.st.z) && Math.abs(x.st.z) >= m.z_flag ? 'thru' : '' },
+      const rows = list.map((x) => [{ t: x.name, k: 's', b: 1, tip: statTip(x.name, x.st, m.window) }, { t: num(x.st.last, x.digits, false), v: x.st.last, k: 'n' },
+        { t: sgn(x.st.d1, x.digits), v: x.st.d1, k: 'n' }, { t: sgn(x.st.w1, x.digits), v: x.st.w1, k: 'n' }, { t: sgn(x.st.z, 2), v: x.st.z, k: 'n', cls: isNum(x.st.z) && Math.abs(x.st.z) >= m.z_flag ? 'thru' : '' },
         isNum(x.st.pct) ? { t: num(x.st.pct * 100, 0, false) + '%', v: x.st.pct, k: 'n', bar: Math.round(x.st.pct * 100), bc: 'info' } : { t: '', k: '' }]);
-      this.setGrid(id, holder, ['Vol', 'Son', 'Δ1G', 'Δ1H', 'z', 'Yüzdelik'], rows, empty, (i) => list[i] && list[i].pair && this.pick(list[i].pair));
+      this.setGrid(id, holder, ['Vol', 'Son', 'Δ1G', 'Δ1H', 'z', 'Yüzdelik'], rows, empty, (i) => {
+        const x = list[i];
+        if (x && x.ticker) this.pickSeries({ ticker: x.ticker, title: x.name });
+        else if (x) this.pickSeries({ pair: x.pair, kind: x.kind, tenor: x.tenor });
+      });
       return holder;
     };
     this.grids.day = null;
@@ -464,7 +604,7 @@ export class FxVolPage {
       { t: isNum(o.min) ? num(o.min, 3, false) + ' – ' + num(o.max, 3, false) : '', k: 's' }, { t: String(o.n || ''), k: 'n' },
       { t: '', k: '', act: [{ label: '✕', title: 'Listeden çıkar', fn: () => this.removeTicker(o) }] }]);
     this.setGrid('own', this.ownBody, ['Ad', 'Ticker', 'Son', 'Δ1G', 'Δ1H', 'Δ1A', 'z 3A', 'z', 'Yüzdelik', 'Aralık', 'Kapanış', ''], rows,
-      'Henüz eklenmiş ticker yok');
+      'Henüz eklenmiş ticker yok', (i) => m.own[i] && this.pickSeries({ ticker: m.own[i].ticker, title: m.own[i].label }));
   }
 
   async addTicker() {
@@ -534,6 +674,9 @@ export class FxVolPage {
         { name: '25D 1A önce', kind: 'line', color: BLUE, data: s.RR25.m1, marker: true, dash: true },
         { name: '10D bugün', kind: 'line', color: ORANGE, data: s.RR10.now, marker: true },
         { name: '10D 1A önce', kind: 'line', color: ORANGE, data: s.RR10.m1, marker: true, dash: true }]),
+      skew: lineSpec('25D RR / ATM vade yapısı', d.tenors, ['now', 'w1', 'm1'].map((k, i) => ({ name: ['bugün', '1H önce', '1A önce'][i], kind: 'line',
+        color: [BLUE, ORANGE, PURPLE][i], marker: true, dash: i > 0,
+        data: d.tenors.map((_, j) => (isNum(s.RR25[k][j]) && isNum(s.ATM[k][j]) && s.ATM[k][j] > 0 ? s.RR25[k][j] / s.ATM[k][j] : null)) })), 3, 'RR/ATM'),
       bf: lineSpec('Butterfly vade yapısı', d.tenors, [{ name: '25D bugün', kind: 'line', color: BLUE, data: s.BF25.now, marker: true },
         { name: '25D 1A önce', kind: 'line', color: BLUE, data: s.BF25.m1, marker: true, dash: true },
         { name: '10D bugün', kind: 'line', color: ORANGE, data: s.BF10.now, marker: true },
@@ -562,6 +705,12 @@ export class FxVolPage {
     specs.atm = dated('ATM · 1 yıl', ['ATM 1M', 'ATM 3M', 'ATM 1Y'], [BLUE, ORANGE, PURPLE]);
     specs.rrs = dated('Risk reversal · 1 yıl', ['25D RR 1M', '25D RR 3M', '10D RR 1M'], [BLUE, ORANGE, PURPLE]);
     specs.bfs = dated('Butterfly · 1 yıl', ['25D BF 1M', '10D BF 1M'], [BLUE, ORANGE]);
+    // the skew's closes: the risk reversal over the ATM vol of the same tenor, on the days both closed
+    for (const t of ['1M', '3M', '1Y']) {
+      const atm = new Map(d.series['ATM ' + t] || []);
+      d.series['RR/ATM ' + t] = (d.series['25D RR ' + t] || []).filter((p) => atm.get(p[0]) > 0).map((p) => [p[0], p[1] / atm.get(p[0])]);
+    }
+    specs.skews = Object.assign(dated('25D RR / ATM · 1 yıl', ['RR/ATM 1M', 'RR/ATM 3M', 'RR/ATM 1Y'], [BLUE, ORANGE, PURPLE]), { decimals: 3, y_title: 'RR/ATM' });
     // implied against realized
     const rv = d.realized.filter((p) => isNum(p[1]));
     const atm = new Map((d.series['ATM 1M'] || []));
@@ -572,8 +721,9 @@ export class FxVolPage {
       series: [{ name: 'ATM 1M', kind: 'line', color: BLUE, data: days.map((x) => (atm.has(x) ? atm.get(x) : null)) },
         { name: 'gerçekleşen 21g', kind: 'line', color: GREEN, data: days.map((x) => (rvm.has(x) ? rvm.get(x) : null)) }] };
     const order = [['term', 'ATM vade yapısı: bugün, 1 hafta ve 1 ay önce'], ['smile', d.tenor + ' smile: 10P · 25P · ATM · 25C · 10C (SVI, kendi delta strike\'larında)'],
-      ['rr', 'Risk reversal (25D, 10D): bugün ve 1 ay önce'], ['bf', 'Butterfly (25D, 10D): bugün ve 1 ay önce'],
-      ['atm', 'ATM 1M · 3M · 1Y'], ['rrs', 'Risk reversal 1M · 3M'], ['bfs', 'Butterfly 1M'], ['rv', 'İma ve gerçekleşen vol']];
+      ['rr', 'Risk reversal (25D, 10D): bugün ve 1 ay önce'], ['skew', 'Skew (25D RR / ATM): bugün, 1 hafta ve 1 ay önce'],
+      ['bf', 'Butterfly (25D, 10D): bugün ve 1 ay önce'], ['atm', 'ATM 1M · 3M · 1Y'], ['rrs', 'Risk reversal 1M · 3M'],
+      ['skews', 'Skew (25D RR / ATM) 1M · 3M · 1Y'], ['bfs', 'Butterfly 1M'], ['rv', 'İma ve gerçekleşen vol']];
     if (!this.chartHosts) {
       clear(this.pairCharts);
       this.chartHosts = {};
@@ -592,7 +742,7 @@ export class FxVolPage {
       if (empty) {
         if (this.charts[k]) { this.charts[k].destroy(); this.charts[k] = null; }
         clear(host);
-        host.appendChild(h('div', { class: 'chart-empty' }, k === 'smile' || k === 'term' || k === 'rr' || k === 'bf' ? 'Kota yok' : 'Tarihçe yok'));
+        host.appendChild(h('div', { class: 'chart-empty' }, k === 'smile' || k === 'term' || k === 'rr' || k === 'bf' || k === 'skew' ? 'Kota yok' : 'Tarihçe yok'));
         continue;
       }
       if (host.firstChild && host.firstChild.classList && host.firstChild.classList.contains('chart-empty')) clear(host);

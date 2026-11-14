@@ -1,16 +1,19 @@
 // İzleme · Alarmlar: the user's watch list - anything: a VİOP contract (OIS − VİOP, implied TRY), a bond (ASW,
 // yield, cheap / rich, prices), an OIS or offshore tenor, the desk strip, an expression of them, any cell (right
 // click → "İzlemeye ekle") -, how each item moved today (open, change, low / high, its path, since a reference
-// taken on purpose), the alarms on them, the ones that fired today, and the desk's notes of the day.
+// taken on purpose), the alarms on them, the ones that fired today, and the desk's notes of the day.  A click on an
+// item (or an alarm) draws its past: the closes, the band of the z window and the z-score day by day.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, modal, confirmDialog } from '../ui.js';
 import { num } from '../format.js';
 import { openWatchDialog, askPermission } from '../alarms.js';
+import { SeriesView, watchSpec } from '../serieschart.js';
 
 const OP = { '>=': '≥', '<=': '≤', x: 'kesişir' };
 const UNIT_TEXT = { pct: 'faiz (%) – değişim bp', bp: 'bp', px: 'fiyat', fx: 'kur', raw: 'sayı' };
 const KIND_TEXT = { viop: 'VİOP', bond: 'kâğıt', ois: 'OIS', off: 'offshore', masa: 'masa', expr: 'ifade', cell: 'hücre' };
 const isNum = (v) => typeof v === 'number' && isFinite(v);
+const HISTORY_AGAIN_MS = 5 * 60 * 1000;   // a drawn history is asked again this often (the value now: every refresh)
 
 /** A change: "+3,2 bp", "−0,0150" (a price or FX level: in the item's own decimals). */
 function changeText(v, it) {
@@ -72,6 +75,7 @@ export class WatchPage {
     this.host = host;
     this.ctx = ctx;
     this.data = null;
+    this.picked = null;                    // the item / alarm whose past is drawn: {key, subject, label}
     this.build();
   }
 
@@ -113,11 +117,22 @@ export class WatchPage {
         this.zdays = n;
         try { localStorage.setItem(ZDAYS_KEY, String(n)); } catch (e) { /* not kept */ }
         for (const x of zseg.children) x.classList.toggle('on', x === b);
+        if (this.sv) this.sv.setWindow(n);
         this.refresh();
       });
       zseg.appendChild(b);
     }
     this.list.parentElement.querySelector('header').appendChild(h('div', { class: 'ztools' }, h('span', { class: 'muted' }, 'z / bant:'), zseg));
+    // the past of the item clicked
+    const seriesBody = h('div', { class: 'body' });
+    const close = h('button', { class: 'iconbtn', type: 'button', title: 'Grafiği kapat' }, '✕');
+    close.addEventListener('click', () => this.closeHistory());
+    this.seriesSec = h('section', { class: 'panel wide hidden', id: 'watch-series' },
+      h('header', null, h('h2', null, 'Seçili kalemin geçmişi'), h('span', { class: 'grow' }), close), seriesBody,
+      h('div', { class: 'note' }, 'Listede bir kaleme (ya da bir alarma) tıklayın. Kapanışlar listedeki z\'nin kullandıklarıdır: OIS, TLREF ve offshore tarihçe deposundan, '
+        + 'diğerleri dashboard\'un her gün kaydettiği kapanıştan. Pencere üstteki "z / bant" seçimi; son nokta şimdiki değer.'));
+    this.host.appendChild(this.seriesSec);
+    this.sv = new SeriesView(seriesBody, { rule: 'raw', windowSeg: false, window: this.zdays, height: 220 });
     this.alarmBox = panel('watch-alarms', 'Alarmlar');
     this.firedBox = panel('watch-fired', 'Bugün çalan alarmlar');
     const notesBody = panel('watch-notes', 'Masa notları · bugün (herkes görür)');
@@ -144,6 +159,7 @@ export class WatchPage {
     this.fillList(d);
     this.fillAlarms(d);
     this.fillFired(d);
+    this.liveHistory(d);
     if (document.activeElement !== this.notes && !this.notesDirty) this.notes.value = (d.notes && d.notes.text) || '';
     this.notesInfo.textContent = d.notes && d.notes.at ? 'Son kaydeden: ' + this.ctx.displayName(d.notes.by) + ' · ' + d.notes.at : '';
     if (!this.notes.__bound) {
@@ -183,16 +199,77 @@ export class WatchPage {
         + ', std ' + (z.sd_text || '') + ', en düşük ' + (z.min_text || '') + ', en yüksek ' + (z.max_text || '') + ', yüzdelik %' + num(z.pct, 0, false)
         : 'Geçmiş yetersiz: ' + (z.n || 0) + ' / ' + (z.need || 20) + ' kapanış' + (z.source ? ' (' + z.source + ')' : '')
           + '. OIS, TLREF ve offshore için tarihçe deposu; diğerleri için dashboard\'un her gün kaydettiği kapanış kullanılır.';
-      const tr = h('tr', { 'data-id': it.id }, name, h('td', { class: 'now' }, it.now || ''), h('td', null, it.open_text || ''),
+      btn('📈', 'Geçmişini çiz (z-skoru ile)', () => this.showHistory({ key: 'i:' + it.id, subject: it.subject, label: it.label }));
+      acts.insertBefore(acts.lastChild, acts.firstChild);
+      const tr = h('tr', { 'data-id': it.id, class: this.picked && this.picked.key === 'i:' + it.id ? 'pick' : '' }, name, h('td', { class: 'now' }, it.now || ''), h('td', null, it.open_text || ''),
         h('td', { class: cls(it.change) }, changeText(it.change, it)), h('td', null, it.low_text || ''), h('td', null, it.high_text || ''),
         h('td', { class: 'l' }, spark(it.path, it.open)),
         h('td', { class: 'z' + (isNum(z.z) && Math.abs(z.z) >= 2 ? ' far' : ''), title: ztip }, isNum(z.z) ? z.z_text : '–'),
         h('td', { class: 'l', title: ztip }, band(z, it.value)),
         h('td', { title: it.base_at ? 'Referans alındı: ' + it.base_at : 'Referans yok: ⟲ ile alın' }, it.base_text || ''),
         h('td', { class: cls(it.since_base) }, changeText(it.since_base, it)), h('td', { class: 'muted' }, it.moved || ''), acts);
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        this.showHistory({ key: 'i:' + it.id, subject: it.subject, label: it.label });
+      });
       t.appendChild(tr);
     });
     box.appendChild(t);
+  }
+
+  // ------------------------------------------------------------------ the past of the item clicked
+  showHistory(w) {
+    if (!w || !w.subject) return;
+    if (this.picked && this.picked.key === w.key && !this.seriesSec.classList.contains('hidden')) { this.closeHistory(); return; }
+    this.picked = w;
+    this.hist = null;
+    this.seriesSec.classList.remove('hidden');
+    this.markPicked();
+    this.seriesSec.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    this.loadHistory(true);
+  }
+
+  closeHistory() {
+    this.picked = null;
+    this.hist = null;
+    this.seriesSec.classList.add('hidden');
+    this.markPicked();
+  }
+
+  markPicked() {
+    const key = this.picked ? this.picked.key : '';
+    for (const tr of this.host.querySelectorAll('#watch-table tr[data-id]')) tr.classList.toggle('pick', key === 'i:' + tr.dataset.id);
+    for (const tr of this.host.querySelectorAll('#alarm-table tr[data-id]')) tr.classList.toggle('pick', key === 'a:' + tr.dataset.id);
+  }
+
+  async loadHistory(fresh) {
+    const w = this.picked;
+    if (!w) return;
+    const seq = (this.hseq = (this.hseq || 0) + 1);
+    if (fresh) this.sv.loading(w.label);
+    try {
+      const d = await api.post('/api/watch/history', { subject: w.subject });
+      if (seq !== this.hseq || this.picked !== w) return;
+      this.hist = d;
+      this.histAt = Date.now();
+      this.sv.show(watchSpec(d, w.label));
+    } catch (err) {
+      if (seq === this.hseq) this.sv.show({ title: w.label, points: [], why: (err && err.message) || 'Geçmiş alınamadı' });
+    }
+  }
+
+  /** The value now from the list (every refresh); the closes again now and then. */
+  liveHistory(d) {
+    const w = this.picked;
+    if (!w || !this.hist) return;
+    if (Date.now() - (this.histAt || 0) > HISTORY_AGAIN_MS) { this.loadHistory(false); return; }
+    const id = w.key.slice(2);
+    const row = w.key[0] === 'i' ? d.items.find((x) => x.id === id) : d.alarms.find((x) => x.id === id);
+    const v = row ? (w.key[0] === 'i' ? row.value : row.now) : null;
+    if (isNum(v) && v !== this.hist.value) {
+      this.hist.value = v;
+      this.sv.show(watchSpec(this.hist, w.label));
+    }
   }
 
   fillAlarms(d) {
@@ -216,11 +293,18 @@ export class WatchPage {
       const del = h('button', { class: 'iconbtn', type: 'button', title: 'Alarmı sil' }, '✕');
       del.addEventListener('click', () => this.removeAlarm(a));
       acts.appendChild(del);
-      t.appendChild(h('tr', { 'data-id': a.id, class: a.active ? '' : 'fired' }, h('td', { class: 'l', title: a.what + (a.detail ? ' · ' + a.detail : '') }, a.label,
-        !isNum(a.now) && a.detail ? h('span', { class: 'sub' }, a.detail) : null),
+      const picked = this.picked && this.picked.key === 'a:' + a.id;
+      const tr = h('tr', { 'data-id': a.id, class: ((a.active ? '' : 'fired') + (picked ? ' pick' : '')).trim() },
+        h('td', { class: 'l', title: a.what + (a.detail ? ' · ' + a.detail : '') + '\nTıklayın: geçmişi' }, a.label,
+          !isNum(a.now) && a.detail ? h('span', { class: 'sub' }, a.detail) : null),
         h('td', { class: 'l cond' }, a.condition || ((OP[a.op] || a.op) + ' ' + (a.level_text || ''))), h('td', null, a.now_text || ''),
         h('td', null, a.mode && a.mode !== 'level' ? (a.measure_text || '–') : ''), h('td', { title: 'Koşulun sağlanmasına kalan' }, dist),
-        h('td', { class: 'l' }, state), h('td', { class: 'l muted' }, a.note || ''), acts));
+        h('td', { class: 'l' }, state), h('td', { class: 'l muted' }, a.note || ''), acts);
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        this.showHistory({ key: 'a:' + a.id, subject: a.subject, label: a.label });
+      });
+      t.appendChild(tr);
     }
     box.appendChild(t);
   }
@@ -291,5 +375,7 @@ export class WatchPage {
     if (res) this.notesDirty = false;
   }
 
-  destroy() {}
+  destroy() {
+    if (this.sv) this.sv.destroy();
+  }
 }
