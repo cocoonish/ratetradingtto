@@ -1,20 +1,22 @@
-// İzleme · Alarmlar: the user's watch list (any cell of any page: right click → "İzlemeye ekle"), how each item
-// moved today (open, change, low / high, its path, since a reference taken on purpose), the alarms on cells, the
-// ones that fired today, and the desk's notes of the day.
+// İzleme · Alarmlar: the user's watch list - anything: a VİOP contract (OIS − VİOP, implied TRY), a bond (ASW,
+// yield, cheap / rich, prices), an OIS or offshore tenor, the desk strip, an expression of them, any cell (right
+// click → "İzlemeye ekle") -, how each item moved today (open, change, low / high, its path, since a reference
+// taken on purpose), the alarms on them, the ones that fired today, and the desk's notes of the day.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, modal, confirmDialog } from '../ui.js';
 import { num } from '../format.js';
-import { openAlarmDialog, askPermission } from '../alarms.js';
+import { openWatchDialog, askPermission } from '../alarms.js';
 
 const OP = { '>=': '≥', '<=': '≤', x: 'kesişir' };
-const UNIT_TEXT = { pct: 'faiz (%)', frac: 'faiz (oran, %)', bp: 'bp', px: 'fiyat', fx: 'kur' };
+const UNIT_TEXT = { pct: 'faiz (%) – değişim bp', bp: 'bp', px: 'fiyat', fx: 'kur', raw: 'sayı' };
+const KIND_TEXT = { viop: 'VİOP', bond: 'kâğıt', ois: 'OIS', off: 'offshore', masa: 'masa', expr: 'ifade', cell: 'hücre' };
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 
 /** A change: "+3,2 bp", "−0,0150" (a price or FX level: in the item's own decimals). */
 function changeText(v, it) {
   if (!isNum(v)) return '';
   const bp = it.unit_name === 'bp';
-  const d = bp ? 1 : (it.unit === 'fx' ? 4 : 3);
+  const d = bp ? 1 : (it.show === 'px' ? 3 : 4);
   return (v > 0 ? '+' : (v < 0 ? '−' : '')) + num(Math.abs(v), d, false) + (bp ? ' bp' : '');
 }
 
@@ -60,8 +62,8 @@ export class WatchPage {
         label: p.group + ' (' + p.items.length + ')', action: () => this.addPreset(p.group) })));
       e.stopPropagation();
     });
-    const add = h('button', { class: 'btn', type: 'button', id: 'watch-add' }, 'Hücre ekle…');
-    add.addEventListener('click', () => this.addCell());
+    const add = h('button', { class: 'btn primary', type: 'button', id: 'watch-add', title: 'VİOP kontratı, kâğıt, OIS, offshore, masa özeti, ifade ya da hücre: izle ya da alarm kur' }, 'Ekle · alarm kur…');
+    add.addEventListener('click', () => openWatchDialog(this.ctx));
     const base = h('button', { class: 'btn', type: 'button', id: 'watch-base', title: 'Her kalemin şimdiki seviyesini referans al: değişim ayrıca bundan sonrası için de gösterilir (ör. sabah toplantısı)' }, 'Referansı şimdi al');
     base.addEventListener('click', () => this.takeBase(null));
     this.perm = h('button', { class: 'btn', type: 'button', id: 'watch-perm', title: 'Alarm çalınca tarayıcı bildirimi göster' }, 'Bildirimlere izin ver');
@@ -70,7 +72,7 @@ export class WatchPage {
     tools.appendChild(add);
     tools.appendChild(base);
     tools.appendChild(this.perm);
-    tools.appendChild(h('span', { class: 'muted' }, 'Bir tablodaki hücreye sağ tıklayın: "İzlemeye ekle" ya da "Alarm kur…"'));
+    tools.appendChild(h('span', { class: 'muted' }, 'Ya da herhangi bir tablodaki hücreye sağ tıklayın: "İzlemeye ekle" / "Alarm kur…"'));
     this.host.appendChild(tools);
     const panel = (id, title) => {
       const body = h('div', { class: 'body' });
@@ -116,7 +118,8 @@ export class WatchPage {
   fillList(d) {
     const box = clear(this.list);
     if (!d.items.length) {
-      box.appendChild(h('div', { class: 'empty' }, 'İzleme listesi boş: "Hazır grup ekle" ile masa özetini ya da OIS eğrisini ekleyin, '
+      box.appendChild(h('div', { class: 'empty' }, 'İzleme listesi boş: "Ekle · alarm kur…" ile VİOP kontratı, kâğıt, OIS, offshore, '
+        + 'masa özeti ya da bir ifade ([OIS 2Y] - [OIS 1Y]) ekleyin; "Hazır grup ekle" ile masa özetini, OIS eğrisini, VİOP spread\'lerini; '
         + 'ya da herhangi bir sayfadaki hücreye sağ tıklayıp "İzlemeye ekle"yi seçin.'));
       return;
     }
@@ -125,15 +128,17 @@ export class WatchPage {
       .map((x, i) => h('th', { class: i === 0 || i === 6 || i === 10 ? 'l' : '' }, x))));
     d.items.forEach((it, k) => {
       const cls = (v) => (isNum(v) && Math.abs(v) > 1e-9 ? (v > 0 ? 'pos' : 'neg') : '');
-      const name = h('td', { class: 'l name', title: it.book + ' · ' + it.ref + ' · ' + (UNIT_TEXT[it.unit] || it.unit) }, it.label);
+      const kind = (it.subject && it.subject.kind) || 'cell';
+      const name = h('td', { class: 'l name', title: (KIND_TEXT[kind] || kind) + ' · ' + it.what + (it.detail ? ' · ' + it.detail : '') }, it.label,
+        !isNum(it.value) && it.detail ? h('span', { class: 'sub' }, it.detail) : null);
       name.addEventListener('dblclick', () => this.rename(it));
       const acts = h('td', { class: 'l acts' });
       const btn = (label, title, fn) => { const b = h('button', { class: 'iconbtn', type: 'button', title }, label); b.addEventListener('click', fn); acts.appendChild(b); return b; };
-      btn('🔔', 'Bu kaleme alarm kur', () => openAlarmDialog(this.ctx, { book: it.book, ref: it.ref, label: it.label, text: it.now }));
+      btn('🔔', 'Bu kaleme alarm kur', () => openWatchDialog(this.ctx, { subject: it.subject, label: it.label, focus: 'alarm' }));
       btn('⟲', 'Referansı şimdi al', () => this.takeBase(it.id));
       btn('▲', 'Yukarı', () => this.move(it, -1)).disabled = k === 0;
       btn('▼', 'Aşağı', () => this.move(it, 1)).disabled = k === d.items.length - 1;
-      btn('⋯', 'Ad / birim', (e) => this.more(it, e));
+      btn('⋯', kind === 'cell' ? 'Ad / birim' : 'Ad', (e) => this.more(it, e));
       btn('✕', 'Listeden çıkar', () => this.remove(it));
       const tr = h('tr', { 'data-id': it.id }, name, h('td', { class: 'now' }, it.now || ''), h('td', null, it.open_text || ''),
         h('td', { class: cls(it.change) }, changeText(it.change, it)), h('td', null, it.low_text || ''), h('td', null, it.high_text || ''),
@@ -148,7 +153,8 @@ export class WatchPage {
   fillAlarms(d) {
     const box = clear(this.alarmBox);
     if (!d.alarms.length) {
-      box.appendChild(h('div', { class: 'empty' }, 'Alarm yok: bir hücreye sağ tıklayıp "Alarm kur…" ya da listedeki 🔔.'));
+      box.appendChild(h('div', { class: 'empty' }, 'Alarm yok: "Ekle · alarm kur…" (ör. VİOP OIS − VİOP spread\'i 250 bp üstü, bir kâğıdın ASW\'i), '
+        + 'listedeki 🔔 ya da bir hücreye sağ tıklayıp "Alarm kur…".'));
       return;
     }
     const t = h('table', { class: 'plain watch', id: 'alarm-table' });
@@ -165,7 +171,8 @@ export class WatchPage {
       const del = h('button', { class: 'iconbtn', type: 'button', title: 'Alarmı sil' }, '✕');
       del.addEventListener('click', () => this.removeAlarm(a));
       acts.appendChild(del);
-      t.appendChild(h('tr', { 'data-id': a.id, class: a.active ? '' : 'fired' }, h('td', { class: 'l', title: a.book + ' · ' + a.ref }, a.label),
+      t.appendChild(h('tr', { 'data-id': a.id, class: a.active ? '' : 'fired' }, h('td', { class: 'l', title: a.what + (a.detail ? ' · ' + a.detail : '') }, a.label,
+        !isNum(a.now) && a.detail ? h('span', { class: 'sub' }, a.detail) : null),
         h('td', null, OP[a.op] || a.op), h('td', null, a.level_text || ''), h('td', null, a.now_text || ''), h('td', null, dist),
         h('td', { class: 'l' }, state), h('td', { class: 'l muted' }, a.note || ''), acts));
     }
@@ -204,7 +211,7 @@ export class WatchPage {
   }
 
   rename(it) {
-    const m = modal({ title: 'Ad · ' + it.ref, width: 420 });
+    const m = modal({ title: 'Ad · ' + it.what, width: 420 });
     const inp = h('input', { class: 'inp', value: it.label, maxlength: '60' });
     m.body.appendChild(inp);
     const ok = h('button', { class: 'btn primary', type: 'button' }, 'Kaydet');
@@ -216,25 +223,13 @@ export class WatchPage {
 
   more(it, e) {
     const r = e.target.getBoundingClientRect();
-    menu(r.left, r.bottom + 2, [{ label: 'Adını değiştir…', action: () => this.rename(it) }, { sep: true }, { header: 'Değişimin birimi' }]
-      .concat(Object.entries(UNIT_TEXT).map(([u, t]) => ({ label: (it.unit === u ? '✓ ' : '   ') + t, action: () => this.act('/api/watch/update', { id: it.id, unit: u }) }))));
-  }
-
-  addCell() {
-    const m = modal({ title: 'Hücre ekle', width: 480 });
-    const ref = h('input', { class: 'inp', id: 'watch-ref', placeholder: 'örn. OIS_MAIN!B14 ya da Forward!F2' });
-    const label = h('input', { class: 'inp', id: 'watch-label', placeholder: 'ad (isteğe bağlı)', maxlength: '60' });
-    m.body.appendChild(h('p', { class: 'muted' }, 'Tablodaki bir hücreye sağ tıklayıp "İzlemeye ekle" demek daha kolay; burada sayfa!hücre adresi yazılır.'));
-    m.body.appendChild(h('div', { class: 'field' }, h('label', null, 'Hücre'), ref));
-    m.body.appendChild(h('div', { class: 'field' }, h('label', null, 'Ad'), label));
-    const ok = h('button', { class: 'btn primary', type: 'button', id: 'watch-add-ok' }, 'Ekle');
-    ok.addEventListener('click', async () => {
-      const res = await this.act('/api/watch/add', { book: 'tto', ref: ref.value.trim(), label: label.value.trim() },
-        (r) => (r.added ? 'Eklendi' : 'Zaten listede'));
-      if (res) m.close();
-    });
-    m.foot.appendChild(ok);
-    ref.focus();
+    const items = [{ label: 'Adını değiştir…', action: () => this.rename(it) },
+      { label: 'Alarm kur…', action: () => openWatchDialog(this.ctx, { subject: it.subject, label: it.label, focus: 'alarm' }) }];
+    if (it.subject && it.subject.kind === 'cell') {           // a cell does not say what it holds: how to read it
+      items.push({ sep: true }, { header: 'Hücre ne gösteriyor' });
+      for (const [u, t] of Object.entries(UNIT_TEXT)) items.push({ label: (it.show === u ? '✓ ' : '   ') + t, action: () => this.act('/api/watch/update', { id: it.id, unit: u }) });
+    }
+    menu(r.left, r.bottom + 2, items);
   }
 
   rearm(a) { return this.act('/api/alarms/rearm', { id: a.id }, 'Alarm yeniden kuruldu'); }

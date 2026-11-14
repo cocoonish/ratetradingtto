@@ -1923,12 +1923,41 @@ class Service(object):
         out["gen"] = self.gen
         return out
 
-    def watch_add(self, user: str, book_id: str, ref: str, label: str = "", unit: str = "") -> Dict[str, Any]:
+    @staticmethod
+    def _subject(subject: Any = None, book_id: str = "tto", ref: str = "") -> Dict[str, Any]:
+        """What is watched: a subject as the page sends it, or (as before) a cell of a book."""
+        if isinstance(subject, dict) and subject.get("kind"):
+            return subject
+        if not ref:
+            raise ServiceError("izlenecek şey belli değil")
+        return {"kind": "cell", "book": book_id or "tto", "ref": ref}
+
+    def watch_catalog(self, user: str) -> Dict[str, Any]:
+        """What can be watched: OIS tenors, offshore tenors, the desk strip, VİOP contracts, bonds - and their measures."""
+        self.require_user(user)
+        return self.et.call(self.watch.catalog)
+
+    def watch_preview(self, user: str, subject: Any = None, book_id: str = "tto", ref: str = "") -> Dict[str, Any]:
+        """A subject's name and value now (before it is added; an expression is checked)."""
         user = self.require_user(user)
-        self._book(book_id)
-        res = self._watch_call(self.watch.add, user, book_id, str(ref or ""), str(label or ""), str(unit or ""))
+        return self._watch_call(self.watch.preview, user, self._subject(subject, book_id, ref))
+
+    def watch_add(self, user: str, book_id: str = "tto", ref: str = "", label: str = "", unit: str = "",
+                  subject: Any = None, hint: str = "") -> Dict[str, Any]:
+        """Watch something (a subject, or a cell - one that shows a bond, a VİOP contract, an OIS or offshore tenor
+        is watched as that).  ``label``: the user's name for it; ``hint``: a cell's name from its table."""
+        user = self.require_user(user)
+        s = self._subject(subject, book_id, ref)
+        if s["kind"] == "cell":
+            self._book(s.get("book") or "tto")
+            if unit:
+                s = dict(s, show=unit)
+        res = self._watch_call(self.watch.add, user, s, str(label or ""), str(hint or ""))
         self.bump()
-        return {"added": res["added"], "count": len(res["items"])}
+        out = {"added": res["added"], "count": len(res["items"])}
+        if res.get("item"):
+            out["item"] = res["item"]
+        return out
 
     def watch_preset(self, user: str, group: str) -> Dict[str, Any]:
         user = self.require_user(user)
@@ -1956,14 +1985,19 @@ class Service(object):
         self.bump()
         return {"taken": n}
 
-    def alarm_add(self, user: str, book_id: str, ref: str, op: str, level: Any, label: str = "", note: str = "") -> Dict[str, Any]:
+    def alarm_add(self, user: str, book_id: str = "tto", ref: str = "", op: str = "", level: Any = None, label: str = "",
+                  note: str = "", subject: Any = None) -> Dict[str, Any]:
+        """An alarm on anything that can be watched; the level is typed as the subject is shown (35,80 on a rate in
+        per cent, 250 on a spread in bp)."""
         user = self.require_user(user)
-        self._book(book_id)
+        s = self._subject(subject, book_id, ref)
+        if s["kind"] == "cell":
+            self._book(s.get("book") or "tto")
         try:
-            lvl = float(str(level).replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
+            lvl = float(str(level).strip().replace(" ", "").replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
         except (TypeError, ValueError):
             raise ServiceError("seviye bir sayı olmalı")
-        res = self._watch_call(self.watch.add_alarm, user, book_id, str(ref or ""), str(op or ""), lvl, str(label or ""), str(note or ""))
+        res = self._watch_call(self.watch.add_alarm, user, s, str(op or ""), lvl, str(label or ""), str(note or ""))
         self.bump()
         return res
 
@@ -3101,12 +3135,12 @@ class Service(object):
         resets = [r for r in self._broker_resets() if day <= str(r.get("at", ""))[:10] <= last]
 
         def cleared(q: Dict[str, Any]) -> bool:
-            # said before the reset; said in its very second, it is the reset's when it was kept before it (a line
-            # typed without a time takes the moment it was entered)
+            # on the board when it was reset (kept before it, whatever time the chat gave it - a broker's clock
+            # ahead of ours, a time typed ahead), or said before the reset (a chat pasted after it); a line kept
+            # after the reset and said after it - in its very second too - stands
             stamp = "%s %s" % (q.get("date") or "", q.get("time") or "")
             return any((r.get("key") in ("*", q.get("key")))
-                       and (stamp < r.get("at", "") or (stamp == r.get("at") and type(r.get("upto")) is int
-                                                        and int(q.get("id") or 0) <= r["upto"]))
+                       and (stamp < r.get("at", "") or (type(r.get("upto")) is int and int(q.get("id") or 0) <= r["upto"]))
                        for r in resets)
 
         table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz")

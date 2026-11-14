@@ -232,10 +232,13 @@ def test_the_board_is_reset_and_the_log_keeps_its_lines(tmp_path):
         assert "9M" in [r["label"] for r in s.broker(u, day)["board"]]
         s.broker_reset(u, day, undo=True)
         s.broker_delete_many(u, [q["id"] for q in s.broker(u, day)["rows"] if q.get("label") in ("18M", "9M")])
+        # a line kept before the reset is cleared whatever time it carries (here 23:59:59: a clock ahead of ours)
+        assert s.broker_reset(u, day)["board"] == []
+        s.broker_reset(u, day, undo=True)
         with TestClient(create_app(s)) as client:
             hdr = {"X-TTO-User": u}
             res = client.post("/api/broker/reset", json={"date": day}, headers=hdr)
-            assert res.status_code == 200 and [r["label"] for r in res.json()["board"]] == ["2Y"]       # said later in the day
+            assert res.status_code == 200 and res.json()["board"] == []
             back = client.post("/api/broker/reset", json={"date": day, "undo": True}, headers=hdr).json()["board"]
             assert {r["label"] for r in back} == {"1Y", "2Y"}
             one = s.broker(u, day)["rows"][0]["id"]

@@ -480,7 +480,8 @@ def test_a_chat_is_previewed_kept_and_not_kept_twice(desk):
     data = svc.broker(u)
     assert (data["date"], data["to"], data["ranged"], data["is_today"], data["today"]) == (today, today, False, True, today)
     rows = data["rows"]
-    assert [q["time"] for q in rows[:13]] == sorted(q["time"] for q in rows[:13]) and rows[0]["time"] == "10:23:58"
+    # in the order said (the line without a time: when it was entered - now, wherever that falls in the day)
+    assert [q["time"] for q in rows] == sorted(q["time"] for q in rows) and [q for q in rows if q["timed"]][0]["time"] == "10:23:58"
     assert all(q["source"] == "Tullett" and q["created_by"] == u and q["id"] and q["created_at"] for q in rows)
     q = next(x for x in rows if x["raw"] == "18m ois 35.03/35.23")
     assert (q["time"], q["label"], q["bid"], q["ask"], q["timed"], q["event"]) == ("12:15:38", "18M", 35.03, 35.23, True, "quote")
@@ -518,7 +519,8 @@ def test_shortened_levels_use_what_was_said_then_the_curve(desk):
     svc.broker_add(u, "15:04:20 4y OIS 31.88 bid")
     q = svc.broker_parse(u, "16:48:21 4y OIS 90 bid")["rows"][0]
     assert (q["bid"], q["flags"]) == (31.90, ["abbr"])
-    assert svc.broker_parse(u, "4y OIS 90 bid")["rows"][0]["bid"] == 31.90     # no time: said now, after everything kept
+    if dt.datetime.now().strftime("%H:%M:%S") > "15:04:20":                  # no time: said now - after it, in the afternoon
+        assert svc.broker_parse(u, "4y OIS 90 bid")["rows"][0]["bid"] == 31.90
     early = svc.broker_parse(u, "15:00:00 4y OIS 90 bid")["rows"][0]          # said before it: the curve again
     assert abs(early["bid"] - par4) <= 0.5 and early["bid"] != 31.90
     # "taken" without a price: the offer that stood on the board then
@@ -529,7 +531,7 @@ def test_shortened_levels_use_what_was_said_then_the_curve(desk):
     assert svc.broker_parse(u, "15:09:00 3y ois taken")["rows"][0]["price"] is None       # nothing stood yet
     # the desk's "6m 90/10": both sides find their figure, from the curve when nothing was said
     par6 = svc.et.call(lambda: mkt.par("6M")) * 100
-    q = svc.broker_parse(u, "09:00:00 6m 90/10")["rows"][0]
+    q = svc.broker_parse(u, "00:00:00 6m 90/10")["rows"][0]                  # (before the sample's "6m" without a time)
     assert q["ask"] - q["bid"] == pytest.approx(0.20) and round(q["bid"] * 100) % 100 == 90 and abs((q["bid"] + q["ask"]) / 2 - par6) <= 0.5
     svc.broker_add(u, "09:01:00 6m ois 35.88 bid")
     q = svc.broker_parse(u, "09:02:00 6m 90/10")["rows"][0]
@@ -593,9 +595,10 @@ def test_days_periods_and_what_is_left_out(desk):
     assert res["dates"] == [named.isoformat()]
     day = svc.broker(u, before)
     assert (day["is_today"], day["ranged"], len(day["rows"])) == (False, False, 2)
-    assert [(q["ok"], q["event"], q["raw"], q["source"]) for q in day["rows"]] == [(True, "quote", "2y ois 35.30/35.50", "ICAP"),
-                                                                                (False, "text", "selam", "ICAP")]
-    assert day["rows"][1]["timed"] is False and len(day["rows"][1]["time"]) == 8
+    assert sorted((q["ok"], q["event"], q["raw"], q["source"]) for q in day["rows"]) == [(False, "text", "selam", "ICAP"),
+                                                                                      (True, "quote", "2y ois 35.30/35.50", "ICAP")]
+    hello = next(q for q in day["rows"] if q["raw"] == "selam")                # (when it was entered: now)
+    assert hello["timed"] is False and len(hello["time"]) == 8
     assert [r["label"] for r in day["board"]] == ["2Y"] and day["board"][0]["bid"] == 35.30
     span = svc.broker(u, named.isoformat(), before)                           # the two ends in any order
     assert (span["date"], span["to"], span["ranged"], span["is_today"]) == (before, named.isoformat(), True, False)

@@ -1344,7 +1344,7 @@ async function shot(page, name) {
     await page.waitForFunction(() => /İzleme listesine eklendi/.test(document.getElementById('toasts').textContent), null, { timeout: 10000 });
     await open(page, 'watch');
     const watched = await page.evaluate(() => [...document.querySelectorAll('#watch-table tr')].pop().children[0].textContent);
-    check('... and any cell from its right-click menu, named after its row and its column', watched === 'TRT150328T24 · BIST bileşik getiri', watched);
+    check('... and any cell from its right-click menu (a bond\'s yield: the bond, named as the desk calls it)', watched === '15.03.28 getiri', watched);
     const oneY = await page.evaluate(() => [...document.querySelectorAll('#watch-table tr')].findIndex((tr) => tr.children[0].textContent === 'OIS 1Y'));
     await page.click('#watch-table tr:nth-child(' + (oneY + 1) + ') button[title="Bu kaleme alarm kur"]');
     await page.waitForSelector('#alarm-level');
@@ -1355,6 +1355,52 @@ async function shot(page, name) {
     check('an alarm that fires is told on the page that is open (and listed with the ones of the day)',
       /≥ 30,00%/.test(await page.textContent('#toasts')) && /OIS 1Y/.test(await page.textContent('#fired-table'))
       && /çaldı/.test(await page.textContent('#alarm-table')));
+    // anything: a VİOP contract's OIS − VİOP spread, a bond's ASW, an expression built of them
+    const openPick = async () => {
+      await page.click('#watch-add');
+      await page.waitForSelector('#pick-kind button.on');
+    };
+    const pickNow = (re) => page.waitForFunction((r) => new RegExp(r).test(document.getElementById('pick-now').textContent), re, { timeout: 20000 });
+    await openPick();
+    await page.selectOption('#pick-viop', 't:A1Z6 Curncy');
+    await pickNow('VİOP A1Z6 OIS − VİOP');
+    const viopNow = await page.textContent('#pick-now');
+    await page.fill('#alarm-level', '250');
+    await page.click('#alarm-save');
+    await page.waitForFunction(() => /Alarm kuruldu: VİOP A1Z6 OIS − VİOP/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    let watchNow = (await api(page, 'ayşe yilmaz', 'GET', '/api/watch')).json;
+    const viopAlarm = watchNow.alarms.find((a) => a.label === 'VİOP A1Z6 OIS − VİOP');
+    check('Ekle: a VİOP contract\'s OIS − VİOP spread, its value shown as it is picked - an alarm at 250 bp (and watched)',
+      /Şimdi: 2\d\d,\d bp/.test(viopNow) && viopAlarm && viopAlarm.level_text === '250,0 bp' && viopAlarm.active
+      && watchNow.items.some((i) => i.label === 'VİOP A1Z6 OIS − VİOP' && / bp$/.test(i.now)), [viopNow, viopAlarm]);
+    await openPick();
+    await page.click('#pick-kind button[data-k="bond"]');
+    await page.selectOption('#pick-bond', 'TRT150328T24');
+    await page.selectOption('#pick-bond-metric', 'asw');
+    await pickNow('15.03.28 ASW');
+    await page.click('#alarm-op button[data-v="<="]');
+    await page.fill('#alarm-level', '-60');
+    await page.click('#alarm-save');
+    await page.waitForFunction(() => /🔔 15.03.28 ASW/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    check('... a bond\'s ASW at or below a level (here already: it fires at once)', /15.03.28 ASW: -\d+,\d bp {2}\(≤ -60,0 bp\)/.test(await page.textContent('#toasts')),
+      await page.textContent('#toasts'));
+    await openPick();
+    await page.click('#pick-kind button[data-k="ois"]');
+    await page.selectOption('#pick-ois', '2Y');
+    await pickNow('OIS 2Y');
+    await page.click('#pick-toexpr');
+    await page.waitForSelector('#pick-expr');
+    const exprStart = await page.inputValue('#pick-expr');
+    await page.fill('#pick-expr', exprStart + ' -');
+    await page.waitForFunction(() => /yarım/.test(document.getElementById('pick-now').textContent), null, { timeout: 20000 });
+    await page.fill('#pick-expr', exprStart + ' - [OIS 1Y]');
+    await pickNow('Şimdi: -?\\d+,\\d bp');
+    const exprNow = await page.textContent('#pick-now b.v');
+    await page.click('#pick-watch');
+    await page.waitForFunction(() => [...document.querySelectorAll('#watch-table tr')].some((tr) => tr.children[0].textContent === '[OIS 2Y] - [OIS 1Y]'), null, { timeout: 20000 });
+    const exprRow = await page.evaluate(() => [...[...document.querySelectorAll('#watch-table tr')].find((tr) => tr.children[0].textContent === '[OIS 2Y] - [OIS 1Y]').children].map((td) => td.textContent));
+    check('... and anything built of them: picked, then "İfadeye ekle", then written on - a spread of rates told in bp',
+      exprStart === '[OIS 2Y]' && exprRow[1] === exprNow && / bp$/.test(exprNow), [exprStart, exprNow, exprRow]);
     await page.fill('#notes-text', 'Sabah toplantısı: 1Y 35,50 üstü alıcı yok');
     await page.click('#notes-save');
     await page.waitForFunction(() => /Son kaydeden/.test(document.getElementById('notes-info').textContent), null, { timeout: 10000 });

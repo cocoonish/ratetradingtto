@@ -351,14 +351,21 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().watch_view, _user(request), request.query_params.get("lang")))
 
     @handler
+    async def watch_catalog(request: Request):
+        return ok(await call(svc().watch_catalog, _user(request)))
+
+    @handler
     async def watch_action(request: Request):
         data = await _body(request)
         what = request.path_params["what"]
         u = _user(request)
         s = svc()
+        subject = data.get("subject") if isinstance(data.get("subject"), dict) else None
         if what == "add":
             return ok(await call(s.watch_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
-                                 str(data.get("label") or ""), str(data.get("unit") or "")))
+                                 str(data.get("label") or ""), str(data.get("unit") or ""), subject, str(data.get("hint") or "")))
+        if what == "preview":
+            return ok(await call(s.watch_preview, u, subject, str(data.get("book") or "tto"), str(data.get("ref") or "")))
         if what == "preset":
             return ok(await call(s.watch_preset, u, str(data.get("group") or "")))
         if what == "remove":
@@ -378,8 +385,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         u = _user(request)
         s = svc()
         if what == "add":
+            subject = data.get("subject") if isinstance(data.get("subject"), dict) else None
             return ok(await call(s.alarm_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
-                                 str(data.get("op") or ""), data.get("level"), str(data.get("label") or ""), str(data.get("note") or "")))
+                                 str(data.get("op") or ""), data.get("level"), str(data.get("label") or ""), str(data.get("note") or ""),
+                                 subject))
         if what == "remove":
             return ok(await call(s.alarm_remove, u, str(data.get("id") or "")))
         if what == "rearm":
@@ -529,6 +538,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/list/add", list_add, methods=["POST"]),
         Route("/api/bonds/flag", bond_flag, methods=["POST"]),
         Route("/api/watch", watch),
+        Route("/api/watch/catalog", watch_catalog),
         Route("/api/watch/{what}", watch_action, methods=["POST"]),
         Route("/api/alarms/fired", alarms_fired),
         Route("/api/alarms/{what}", alarm_action, methods=["POST"]),
