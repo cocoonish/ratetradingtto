@@ -105,6 +105,13 @@ class EngineThread(object):
 _DUMMY: List[str] = []
 
 
+def _flag(v: Any) -> bool:
+    """A yes / no of a request: true, 1, "true", "1", "evet" - the text "false" is a no."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "evet", "yes", "on")
+    return bool(v)
+
+
 def _dummy_hash() -> str:
     """A hash to check a password against when the name does not exist (made once, on the first such sign-in)."""
     if not _DUMMY:
@@ -126,6 +133,7 @@ class Service(object):
         self.gen = 1
         self._gen_lock = threading.Lock()
         self._auth_lock = threading.Lock()               # account changes one at a time (two first administrators ...)
+        self._hash_slots = threading.BoundedSemaphore(auth.HASH_SLOTS)    # password checks at a time
         self._listeners: List[Callable[[int], None]] = []
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._retired: Dict[str, set] = {}
@@ -495,19 +503,58 @@ class Service(object):
 
     @staticmethod
     def _account_name(name: Any) -> str:
-        display = " ".join(str(name or "").split())
+        try:
+            display = auth.clean_name(name)
+        except ValueError as exc:
+            raise ServiceError(str(exc))
         if not display:
             raise ServiceError("isim boş olamaz")
         if len(display) > 40:
             raise ServiceError("isim en fazla 40 karakter olabilir")
         return display
 
-    @staticmethod
-    def _new_password(password: Any) -> str:
+    def _slot(self) -> None:
+        """A free place among the password checks (``auth.HASH_SLOTS`` at a time, ~0.5 s each): a flood of sign-ins
+        is turned away after ``auth.HASH_WAIT`` seconds instead of taking every thread of the server."""
+        if not self._hash_slots.acquire(timeout=auth.HASH_WAIT):
+            raise ServiceError("sunucu şu an çok sayıda giriş denemesini işliyor – biraz sonra tekrar deneyin", 429)
+
+    def _check(self, password: Any, stored: Optional[str]) -> bool:
+        self._slot()
+        try:
+            return auth.check_password(str(password or ""), stored)
+        finally:
+            self._hash_slots.release()
+
+    def _new_password(self, password: Any) -> str:
         problem = auth.password_problem(password)
         if problem:
             raise ServiceError(problem)
-        return auth.hash_password(str(password))
+        self._slot()
+        try:
+            return auth.hash_password(str(password))
+        finally:
+            self._hash_slots.release()
+
+    def _verify(self, key: str, acc: Dict[str, Any], password: Any) -> bool:
+        """The password of an account, with its lock: the attempt is counted before the slow check, in one step
+        with the look at the lock (guesses sent at once each take their own turn); the ``auth.MAX_FAILED``-th wrong
+        one in a row locks the name for ``auth.LOCK_SECONDS``."""
+        now = self._now()
+        tries, locked = self.store.count_attempt(key, auth.stamp(now))
+        if locked or tries > auth.MAX_FAILED:
+            until = locked or self._lock_name(key, now)
+            raise ServiceError("çok fazla hatalı deneme – %s'den sonra tekrar deneyin" % until[11:19], 429)
+        if self._check(password, acc.get("pw_hash")):
+            return True
+        if tries >= auth.MAX_FAILED:
+            self._lock_name(key, now)
+        return False
+
+    def _lock_name(self, key: str, now: _dt.datetime) -> str:
+        until = auth.stamp(now + _dt.timedelta(seconds=auth.LOCK_SECONDS))
+        self.store.update_account(key, failed=0, locked_until=until)
+        return until
 
     def me(self, user: str) -> Dict[str, Any]:
         """The signed-in user as the page needs it (an administrator also learns how many requests wait)."""
@@ -542,25 +589,20 @@ class Service(object):
     def authenticate(self, name: Any, password: Any, ip: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
         """Sign in with a name and a password: ``(session token, me)``.  Wrong passwords in a row lock the name for
         a minute; an account waiting for approval or closed does not sign in."""
-        display = " ".join(str(name or "").split())
+        try:
+            display = auth.clean_name(name)
+        except ValueError:
+            display = ""
         key = user_key(display) if display else ""
         acc = self.store.account(key) if key else None
-        now = self._now()
         wrong = ServiceError("isim ya da şifre hatalı", 401)
         if acc is None:
-            auth.check_password(str(password or ""), _dummy_hash())     # as slow as a real check: no telling which names exist
+            self._check(password, _dummy_hash())                # as slow as a real check: no telling which names exist
             raise wrong
-        if acc.get("locked_until") and acc["locked_until"] > auth.stamp(now):
-            raise ServiceError("çok fazla hatalı deneme – %s'den sonra tekrar deneyin" % acc["locked_until"][11:19], 429)
         if acc.get("pw_hash") is None:
             raise ServiceError("bu hesabın şifresi yok: \"Hesap iste\" ile aynı isimle şifrenizi belirleyin, bir yönetici "
                                "onaylayınca girebilirsiniz", 401)
-        if not auth.check_password(str(password or ""), acc["pw_hash"]):
-            failed = int(acc.get("failed") or 0) + 1
-            if failed >= auth.MAX_FAILED:
-                self.store.update_account(key, failed=0, locked_until=auth.stamp(now + _dt.timedelta(seconds=auth.LOCK_SECONDS)))
-            else:
-                self.store.update_account(key, failed=failed)
+        if not self._verify(key, acc, password):
             raise wrong
         if acc.get("status") == "pending":
             raise ServiceError("hesabınız bir yöneticinin onayını bekliyor", 403)
@@ -579,18 +621,26 @@ class Service(object):
         no password) asks under the same name: the request sets the password of that account, and once approved
         its personal inputs and scenarios are still there."""
         display = self._account_name(name)
+        full = ServiceError("çok sayıda istek onay bekliyor – bir yöneticiye başvurun", 429)
+        if self.store.pending_count() >= auth.MAX_PENDING:
+            raise full
         pw_hash = self._new_password(password)
         note = " ".join(str(note or "").split())[:200] or None
         key = user_key(display)
         with self._auth_lock:
             acc = self.store.account(key)
+            if self.store.pending_count() >= auth.MAX_PENDING:
+                raise full
             if acc is None:
                 self.store.create_account(display, pw_hash, role="user", status="pending", note=note)
             elif acc.get("status") == "pending":
                 raise ServiceError("bu isimle bir istek zaten onay bekliyor")
             elif acc.get("pw_hash") is None and acc.get("status") == "active":
-                self.store.update_account(key, pw_hash=pw_hash, status="pending", note=note, requested_at=now_iso(),
-                                          decided_by=None, decided_at=None, failed=0, locked_until=None)
+                # the account becomes the requester's once approved - as a user: the role is an administrator's to
+                # give, and only to an account with a password
+                self.store.update_account(key, pw_hash=pw_hash, role="user", status="pending", note=note,
+                                          requested_at=now_iso(), decided_by=None, decided_at=None, failed=0,
+                                          locked_until=None)
                 display = acc.get("display") or display
             else:
                 raise ServiceError("bu isimde bir hesap var – şifrenizi unuttuysanız bir yöneticiye başvurun")
@@ -614,12 +664,18 @@ class Service(object):
                                           locked_until=None, decided_by=key, decided_at=now_iso())
         return self.open_session(key, ip), self.me(key)
 
-    def change_password(self, user: Optional[str], old: Any, new: Any) -> Dict[str, Any]:
+    def change_password(self, user: Optional[str], old: Any, new: Any, token: Optional[str] = None) -> Dict[str, Any]:
+        """One's own new password.  The other sessions of the account end (a password someone else learned signs in
+        nowhere any more), the page that asked (``token``) stays; a wrong old password counts like a sign-in."""
         key = self.require_user(user)
+        problem = auth.password_problem(new)
+        if problem:
+            raise ServiceError(problem)
         acc = self.store.account(key) or {}
-        if not auth.check_password(str(old or ""), acc.get("pw_hash")):
+        if not self._verify(key, acc, old):
             raise ServiceError("mevcut şifre hatalı", 403)
-        self.store.update_account(key, pw_hash=self._new_password(new))
+        self.store.update_account(key, pw_hash=self._new_password(new), failed=0, locked_until=None)
+        self.store.drop_sessions(key, keep=auth.token_hash(token) if token else None)
         return {"ok": True}
 
     # ------------------------------------------------------------------ the administrators' page
@@ -627,16 +683,25 @@ class Service(object):
         self.require_admin(user)
         return {"accounts": self.store.accounts(), "pending": self.store.pending_count(), "admins": len(self.store.admins())}
 
-    def admin_action(self, user: Optional[str], action: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def admin_action(self, user: Optional[str], action: str, data: Dict[str, Any],
+                     token: Optional[str] = None) -> Dict[str, Any]:
         """What an administrator does to an account: ``create`` (name, password, admin), ``approve`` / ``reject`` a
-        request, ``role`` (admin: true / false), ``password`` (a new one), ``status`` (active: true / false)."""
-        me = self.require_admin(user)
+        request, ``role`` (admin: true / false), ``password`` (a new one), ``status`` (active: true / false).
+        ``token``: the asking page's session (one's own new password keeps it).  ``demoted``: the administrator took
+        the role from themself."""
+        self.require_admin(user)
         fn = {"create": self._admin_create, "approve": self._admin_approve, "reject": self._admin_reject,
               "role": self._admin_role, "password": self._admin_password, "status": self._admin_status}.get(action)
         if fn is None:
             raise ServiceError("bilinmeyen işlem: %s" % action, 404)
         with self._auth_lock:
-            fn(me, data or {})
+            me = self.require_admin(user)                  # again inside: one demoted meanwhile does nothing more
+            if action == "password":
+                self._admin_password(me, data or {}, token)
+            else:
+                fn(me, data or {})
+        if (self.store.account(me) or {}).get("role") != "admin":
+            return {"accounts": [], "pending": 0, "admins": len(self.store.admins()), "demoted": True}
         return self.accounts(user)
 
     def _target(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -652,7 +717,7 @@ class Service(object):
     def _admin_create(self, me: str, data: Dict[str, Any]) -> None:
         display = self._account_name(data.get("name"))
         pw_hash = self._new_password(data.get("password"))
-        role = "admin" if data.get("admin") else "user"
+        role = "admin" if _flag(data.get("admin")) else "user"
         key = user_key(display)
         acc = self.store.account(key)
         if acc is None:
@@ -682,22 +747,26 @@ class Service(object):
 
     def _admin_role(self, me: str, data: Dict[str, Any]) -> None:
         acc = self._target(data)
-        admin = bool(data.get("admin"))
+        admin = _flag(data.get("admin"))
+        if admin and acc.get("pw_hash") is None:
+            # whoever asks for that name next would get the role with their own password
+            raise ServiceError("şifresi olmayan hesap yönetici yapılamaz – önce şifre belirleyin")
         if not admin and acc.get("role") == "admin" and self._last_admin(acc):
             raise ServiceError("son yöneticinin yetkisi alınamaz – önce başka birini yönetici yapın")
         self.store.update_account(acc["name"], role="admin" if admin else "user")
 
-    def _admin_password(self, me: str, data: Dict[str, Any]) -> None:
+    def _admin_password(self, me: str, data: Dict[str, Any], token: Optional[str] = None) -> None:
         acc = self._target(data)
         self.store.update_account(acc["name"], pw_hash=self._new_password(data.get("password")), failed=0, locked_until=None)
-        if acc["name"] != me:
-            self.store.drop_sessions(acc["name"])            # signed in elsewhere with the old password: out
+        # signed in elsewhere with the old password: out - one's own page that asked stays
+        keep = auth.token_hash(token) if (token and acc["name"] == me) else None
+        self.store.drop_sessions(acc["name"], keep=keep)
 
     def _admin_status(self, me: str, data: Dict[str, Any]) -> None:
         acc = self._target(data)
         if acc.get("status") == "pending":
             raise ServiceError("onay bekleyen istek: onaylayın ya da reddedin")
-        if data.get("active"):
+        if _flag(data.get("active")):
             self.store.update_account(acc["name"], status="active", failed=0, locked_until=None)
             return
         if acc["name"] == me:

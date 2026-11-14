@@ -56,6 +56,24 @@ def _ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
+#: methods that change something: a browser may send them only from the dashboard's own page
+UNSAFE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _foreign(request: Request) -> bool:
+    """A request a browser sent from another page than the dashboard's own - another site, or another port of this
+    computer (the same "site" for a SameSite cookie, so the cookie would go along).  Scripts and tests send neither
+    header and are not foreign."""
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    if site and site not in ("same-origin", "none"):
+        return True
+    origin = request.headers.get("origin")
+    if origin is None:
+        return False
+    own = "%s://%s" % (request.url.scheme, request.headers.get("host") or "")
+    return origin.rstrip("/").lower() != own.lower()
+
+
 class _SessionGate(object):
     """Every request learns its user from its session; ``/api/…`` answers 401 without one (except the sign-in
     routes).  The page and its files are served to anybody - they show the sign-in screen."""
@@ -75,6 +93,9 @@ class _SessionGate(object):
         scope["tto_user"] = user
         scope["tto_token"] = token
         path = scope.get("path") or ""
+        if path.startswith("/api/") and scope.get("method") in UNSAFE_METHODS and _foreign(request):
+            await JSONResponse({"error": "başka bir sayfadan gelen istek reddedildi"}, status_code=403)(scope, receive, send)
+            return
         if user is None and path.startswith("/api/") and path not in PUBLIC_API:
             await JSONResponse({"error": "giriş gerekli", "login": True}, status_code=401)(scope, receive, send)
             return
@@ -161,7 +182,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def password(request: Request):
         data = await _body(request)
-        return ok(await call(svc().change_password, _user(request), data.get("old"), data.get("new")))
+        return ok(await call(svc().change_password, _user(request), data.get("old"), data.get("new"),
+                             request.scope.get("tto_token")))
 
     @handler
     async def admin_users(request: Request):
@@ -170,7 +192,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def admin_action(request: Request):
         data = await _body(request)
-        return ok(await call(svc().admin_action, _user(request), request.path_params["action"], data))
+        return ok(await call(svc().admin_action, _user(request), request.path_params["action"], data,
+                             request.scope.get("tto_token")))
 
     # ------------------------------------------------------------------ session / status
 

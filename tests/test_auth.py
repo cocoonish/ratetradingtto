@@ -239,6 +239,98 @@ def test_changing_ones_own_password(svc):
     assert err(svc.change_password, None, "a", "b")[0] == 401
 
 
+# ---------------------------------------------------------------------------------------------- what a guesser tries
+def test_guesses_sent_at_once_do_not_beat_the_lock(svc, monkeypatch):
+    """Each attempt is counted before its password is checked, in one step with the look at the lock: twenty wrong
+    passwords sent at once get five "wrong" and fifteen "locked" (they used to be counted as one)."""
+    import threading
+    clock(svc, monkeypatch)
+    svc.setup_admin("Yönetici", "yonetici-sifre", True)
+    svc.admin_action("yönetici", "create", {"name": "Mehmet", "password": "mehmet-sifre"})
+    start = threading.Barrier(20)
+    answers = []
+
+    def guess(i):
+        start.wait()
+        try:
+            svc.authenticate("Mehmet", "tahmin-%d" % i)
+        except ServiceError as exc:
+            answers.append(exc.status)
+
+    threads = [threading.Thread(target=guess, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(answers) == [401] * 5 + [429] * 15
+    assert svc.store.account("mehmet")["locked_until"] == "2026-11-14 09:01:00"
+    assert err(svc.authenticate, "Mehmet", "mehmet-sifre")[0] == 429
+
+
+def test_a_new_password_ends_the_other_sessions(svc, monkeypatch):
+    """A password someone else learned signs in nowhere once it is changed: the other sessions end, the page that
+    changed it stays.  Wrong old passwords count like sign-ins."""
+    clock(svc, monkeypatch)
+    svc.setup_admin("Yönetici", "yonetici-sifre", True)
+    svc.admin_action("yönetici", "create", {"name": "Zeynep", "password": "zeynep-sifre"})
+    here, _ = svc.authenticate("Zeynep", "zeynep-sifre")
+    there, _ = svc.authenticate("Zeynep", "zeynep-sifre")                               # somebody who learned it
+    svc.change_password("zeynep", "zeynep-sifre", "zeynep-yeni-sifre", here)
+    assert svc.session_user(here) == "zeynep" and svc.session_user(there) is None
+    # an administrator's own new password, set on the users page: the same
+    a1, _ = svc.authenticate("Yönetici", "yonetici-sifre")
+    a2, _ = svc.authenticate("Yönetici", "yonetici-sifre")
+    svc.admin_action("yönetici", "password", {"name": "Yönetici", "password": "yonetici-yeni"}, a1)
+    assert svc.session_user(a1) == "yönetici" and svc.session_user(a2) is None
+    for _ in range(5):
+        assert err(svc.change_password, "zeynep", "yanlış", "zeynep-ucuncu-sifre", here)[0] == 403
+    assert err(svc.authenticate, "Zeynep", "zeynep-yeni-sifre")[0] == 429                 # the name is locked a minute
+    assert svc.session_user(here) == "zeynep"                                              # the page itself stays
+
+
+def test_an_account_without_a_password_is_no_administrators(svc):
+    """Whoever asks for a name that has no password gets that account once approved: such an account is not made
+    an administrator, and a request takes it over as a user."""
+    svc.setup_admin("Yönetici", "yonetici-sifre", True)
+    svc.login("Ayşe")                                                                       # by name, as before
+    status, text = err(svc.admin_action, "yönetici", "role", {"name": "Ayşe", "admin": True})
+    assert status == 400 and text.startswith("şifresi olmayan hesap yönetici yapılamaz")
+    svc.store.update_account("ayşe", role="admin")                                          # as an earlier build could leave it
+    svc.request_account("Ayşe", "baskasinin-sifresi")
+    svc.admin_action("yönetici", "approve", {"name": "Ayşe"})
+    assert svc.store.account("ayşe")["role"] == "user"
+    svc.admin_action("yönetici", "create", {"name": "Can", "password": "can-sifre-1", "admin": "false"})
+    assert svc.store.account("can")["role"] == "user"                                      # the text "false" is a no
+
+
+def test_giving_up_ones_own_role(svc):
+    svc.setup_admin("Yönetici", "yonetici-sifre", True)
+    svc.admin_action("yönetici", "create", {"name": "Can", "password": "can-sifre-1", "admin": True})
+    assert svc.admin_action("can", "role", {"name": "Can", "admin": False}) == {"accounts": [], "pending": 0, "admins": 1,
+                                                                              "demoted": True}
+    assert svc.me("can")["role"] == "user" and err(svc.accounts, "can")[0] == 403
+
+
+def test_names_that_look_alike_are_one_name(svc):
+    """Fullwidth or decomposed letters are the letters themselves; a character one cannot see is refused."""
+    svc.setup_admin("Yönetici", "yonetici-sifre", True)
+    assert err(svc.request_account, "Ali​Veli", "ali-veli-sifre")[1] == "isimde görünmeyen karakter olamaz"
+    svc.request_account("Ｍｅｈｍｅｔ", "mehmet-sifre")             # "Mehmet" in fullwidth
+    assert svc.store.account("mehmet")["display"] == "Mehmet"
+    svc.request_account("Şule", "sule-sifre-1")                                       # S + combining cedilla
+    svc.admin_action("yönetici", "approve", {"name": "Mehmet"})
+    svc.admin_action("yönetici", "approve", {"name": "Şule"})
+    assert svc.authenticate("Şule", "sule-sifre-1")[1]["display"] == "Şule"
+    assert svc.authenticate("ＭＥＨＭＥＴ", "mehmet-sifre")[1]["user"] == "mehmet"
+
+
+def test_requests_waiting_are_capped(svc, monkeypatch):
+    monkeypatch.setattr(auth, "MAX_PENDING", 2)
+    svc.request_account("Bir", "bir-sifre-11")
+    svc.request_account("İki", "iki-sifre-22")
+    assert err(svc.request_account, "Üç", "uc-sifre-333")[0] == 429
+
+
 # ---------------------------------------------------------------------------------------------- over HTTP
 def test_the_api_answers_only_with_a_session(fresh):
     svc = fresh
@@ -304,6 +396,38 @@ def test_sign_in_requests_and_administration_over_http(fresh):
             assert admin.post("/api/admin/users/yok", json={}).status_code == 404
 
 
+def test_requests_from_another_page_are_refused(fresh):
+    """A browser on another page - another site, or another port of this computer (the same "site" for the cookie,
+    so it would go along) - cannot make the dashboard change anything; reading, the page itself and scripts can."""
+    app = create_app(fresh)
+    with TestClient(app, client=LOCAL) as here:
+        here.post("/api/setup", json={"name": "Yönetici", "password": "yonetici-sifre"})
+        body = {"name": "Davetsiz", "password": "davetsiz-sifre", "admin": True}
+        for headers in ({"Origin": "http://masa-pc:5000"}, {"Origin": "null"}, {"Sec-Fetch-Site": "same-site"},
+                        {"Sec-Fetch-Site": "cross-site", "Origin": "http://testserver"}):
+            res = here.post("/api/admin/users/create", json=body, headers=headers)
+            assert res.status_code == 403 and "başka bir sayfadan" in res.json()["error"], headers
+        assert here.post("/api/login", json={"name": "Yönetici", "password": "yonetici-sifre"},
+                         headers={"Origin": "http://masa-pc:5000"}).status_code == 403
+        assert fresh.store.account("davetsiz") is None
+        assert here.get("/api/status", headers={"Origin": "http://masa-pc:5000"}).status_code == 200
+        res = here.post("/api/admin/users/create", json=body, headers={"Origin": "http://testserver",
+                                                                       "Sec-Fetch-Site": "same-origin"})
+        assert res.status_code == 200 and fresh.store.account("davetsiz")["role"] == "admin"
+
+
+def test_the_server_believes_no_forwarded_address(tmp_path, monkeypatch):
+    """The first administrator is made only from this computer: no X-Forwarded-For header can make a request from
+    the network look local (there is no proxy in front of the dashboard)."""
+    import uvicorn
+
+    from tto.__main__ import main
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
+    assert main(["--mode", "replay", "--port", "18057", "--data-dir", str(tmp_path / "veri")]) == 0
+    assert seen["proxy_headers"] is False and seen["port"] == 18057
+
+
 def test_the_command_that_makes_an_administrator(tmp_path, monkeypatch, capsys):
     import getpass
 
@@ -318,12 +442,14 @@ def test_the_command_that_makes_an_administrator(tmp_path, monkeypatch, capsys):
     acc = store.account("komut yönetici")
     assert (acc["role"], acc["status"]) == ("admin", "active") and auth.check_password("komut-sifresi", acc["pw_hash"])
     store.update_account("komut yönetici", failed=3, locked_until="2099-01-01 00:00:00")
+    store.add_session("eski-oturum", "komut yönetici", "2099-01-01 00:00:00")
     store.close()
     answers[:] = ["yeni-komut-sifresi", "yeni-komut-sifresi"]                               # a forgotten password
     assert main(["yonetici", "komut yönetici", "--data-dir", data]) == 0
     store = Store(str(tmp_path / "data" / "tto.db"))
     acc = store.account("komut yönetici")
     assert auth.check_password("yeni-komut-sifresi", acc["pw_hash"]) and acc["locked_until"] is None
+    assert store.session_user("eski-oturum", "2026-11-14 09:00:00") is None                 # the old password's session ended
     store.close()
     answers[:] = ["kısa"]
     assert main(["yonetici", "Komut Yönetici", "--data-dir", data]) == 2

@@ -11,6 +11,7 @@ import datetime as _dt
 import hashlib
 import hmac
 import secrets
+import unicodedata
 from typing import Optional
 
 #: PBKDF2-SHA256 rounds of a new hash (~0.5 s on a desk PC: slow for a guesser, unnoticed at a sign-in)
@@ -20,6 +21,12 @@ SESSION_DAYS = 7
 #: wrong passwords in a row after which a name is locked, and for how long (seconds)
 MAX_FAILED = 5
 LOCK_SECONDS = 60
+#: password checks and hashes at a time: a flood of sign-ins waits for these (at most HASH_WAIT seconds, then it is
+#: turned away) instead of taking every thread of the server
+HASH_SLOTS = 2
+HASH_WAIT = 5.0
+#: account requests waiting for an administrator at most
+MAX_PENDING = 30
 #: the shortest and the longest password accepted
 MIN_PASSWORD = 8
 MAX_PASSWORD = 200
@@ -60,6 +67,16 @@ def password_problem(password: Optional[str]) -> Optional[str]:
     if not pw.strip():
         return "şifre yalnızca boşluk olamaz"
     return None
+
+
+def clean_name(name) -> str:
+    """A user name as it is kept and compared: Unicode NFKC (a fullwidth or a decomposed letter is that letter) and
+    single spaces.  ``ValueError`` for a character one cannot see (a control or a format character such as a
+    zero-width space): two names that look the same are one name."""
+    text = unicodedata.normalize("NFKC", str(name or ""))
+    if any(unicodedata.category(ch)[0] == "C" and not ch.isspace() for ch in text):
+        raise ValueError("isimde görünmeyen karakter olamaz")
+    return " ".join(text.split())
 
 
 def new_token() -> str:

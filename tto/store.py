@@ -198,8 +198,25 @@ class Store(object):
     def drop_session(self, token_hash: str) -> None:
         self._x("DELETE FROM sessions WHERE token=?", (token_hash,))
 
-    def drop_sessions(self, user: str) -> None:
-        self._x("DELETE FROM sessions WHERE user=?", (user,))
+    def drop_sessions(self, user: str, keep: Optional[str] = None) -> None:
+        """End the user's sessions - all, or all but ``keep`` (a token hash: the page that asked)."""
+        if keep:
+            self._x("DELETE FROM sessions WHERE user=? AND token<>?", (user, keep))
+        else:
+            self._x("DELETE FROM sessions WHERE user=?", (user,))
+
+    def count_attempt(self, key: str, now: str) -> Tuple[int, Optional[str]]:
+        """One more sign-in attempt on a name, counted before its password is checked - in one step with the look at
+        the lock, so guesses sent at once each take their own turn: ``(attempts in a row now, None)``, or
+        ``(0, locked until)`` while the name is locked."""
+        with self._lock:
+            row = self._db.execute("SELECT failed, locked_until FROM users WHERE name=?", (key,)).fetchone()
+            if row is None:
+                return 0, None
+            if row["locked_until"] and row["locked_until"] > now:
+                return 0, row["locked_until"]
+            self._db.execute("UPDATE users SET failed = COALESCE(failed, 0) + 1 WHERE name=?", (key,))
+            return int(row["failed"] or 0) + 1, None
 
     def purge_sessions(self, now: str) -> None:
         self._x("DELETE FROM sessions WHERE expires_at<=?", (now,))

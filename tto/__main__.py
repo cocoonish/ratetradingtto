@@ -105,7 +105,9 @@ def cmd_run(args) -> int:
     shown = "localhost" if settings.host in ("0.0.0.0", "::") else settings.host
     how = ", web paketleri: gömülü kopya (vendor/%s)" % packages["bundled"] if packages["bundled"] else ""
     print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
+    # no proxy in front of the dashboard: the address a request came from is the connection's own (an
+    # X-Forwarded-For header could otherwise make a request from the network look like one from this computer)
+    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning", proxy_headers=False)
     return 0
 
 
@@ -140,7 +142,11 @@ def cmd_admin(args) -> int:
 
     from . import auth
     from .store import Store, now_iso, user_key
-    display = " ".join(str(args.name or "").split())
+    try:
+        display = auth.clean_name(args.name)
+    except ValueError as exc:
+        print("HATA: %s" % exc, file=sys.stderr)
+        return 2
     if not display or len(display) > 40:
         print("HATA: kullanıcı adı 1-40 karakter olmalı", file=sys.stderr)
         return 2
@@ -162,6 +168,7 @@ def cmd_admin(args) -> int:
         else:
             store.update_account(key, pw_hash=pw_hash, role="admin", status="active", failed=0, locked_until=None,
                                  decided_by=key, decided_at=now_iso())
+            store.drop_sessions(key)                     # signed in somewhere with the old password: out
     finally:
         store.close()
     print("%s artık yönetici; bu isim ve şifreyle girebilir (veri: %s)" % (display, path))

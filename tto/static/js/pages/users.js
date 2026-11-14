@@ -68,7 +68,13 @@ export class UsersPage {
 
   async act(action, body, message) {
     try {
-      this.data = await api.post('/api/admin/users/' + action, body);
+      const res = await api.post('/api/admin/users/' + action, body);
+      if (res.demoted) {                          // one's own role given up: the dashboard opens again as a user
+        toast('Yönetici yetkiniz kaldırıldı', 'ok', 4000);
+        setTimeout(() => { window.location.hash = '#/masa'; window.location.reload(); }, 800);
+        return;
+      }
+      this.data = res;
       if (!this.dead) this.render();
       if (message) toast(message, 'ok', 3200);
     } catch (err) { errorToast(err); }
@@ -127,7 +133,10 @@ export class UsersPage {
       if (a.role === 'admin') {
         acts.push(btn('Yöneticiliği al', '', () => this.act('role', { name: a.name, admin: false }, a.display + ' artık kullanıcı')));
       } else {
-        acts.push(btn('Yönetici yap', '', () => this.act('role', { name: a.name, admin: true }, a.display + ' artık yönetici')));
+        const make = btn('Yönetici yap', '', () => this.act('role', { name: a.name, admin: true }, a.display + ' artık yönetici'),
+          a.has_password ? '' : 'Önce şifre belirleyin: şifresi olmayan hesap yönetici yapılamaz');
+        make.disabled = !a.has_password;
+        acts.push(make);
       }
       acts.push(btn(a.has_password ? 'Şifre sıfırla' : 'Şifre belirle', '', async () => {
         const pw = await askPassword(a.display + ' · yeni şifre');
