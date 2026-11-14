@@ -95,20 +95,23 @@ async function showLogin(message) {
   if (state.es) { state.es.close(); state.es = null; }
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   $('app').classList.add('hidden');
-  $('login').classList.remove('hidden');
-  let st = { user: null, setup: false, local: false };
-  try { st = await api.get('/api/auth'); } catch (e) { /* the form still works; the server says what is wrong */ }
-  if (st.user) { await enter(st.user); return; }               // still signed in (this browser's session is valid)
-  setLoginMode(st.setup && st.local ? 'setup' : 'login');
-  if (st.setup && !st.local && !message) {
-    message = 'Bu dashboard\'un henüz yöneticisi yok: ilk yönetici, dashboard\'un çalıştığı bilgisayardaki tarayıcıdan oluşturulur.';
-  }
+  // the card is ready at once; what is typed into it while the server answers stays (a busy server answers late)
+  setLoginMode('login');
   $('login-err').textContent = message || '';
   $('login-pass').value = '';
   $('login-pass2').value = '';
   const name = $('login-name');
-  name.value = store('tto.user') || '';
+  if (!name.value) name.value = store('tto.user') || '';
+  $('login').classList.remove('hidden');
   (name.value ? $('login-pass') : name).focus();
+  let st = { user: null, setup: false, local: false };
+  try { st = await api.get('/api/auth'); } catch (e) { /* the form still works; the server says what is wrong */ }
+  if (st.user) { await enter(st.user); return; }               // still signed in (this browser's session is valid)
+  if (st.setup && st.local) setLoginMode('setup');
+  else if (st.setup && !message) {
+    $('login-err').textContent = 'Bu dashboard\'un henüz yöneticisi yok: ilk yönetici, dashboard\'un çalıştığı bilgisayardaki '
+      + 'tarayıcıdan oluşturulur.';
+  }
 }
 
 async function submitLogin() {
