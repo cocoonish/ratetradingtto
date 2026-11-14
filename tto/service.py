@@ -131,6 +131,9 @@ class Service(object):
         # the watch lists and the alarms: read again whenever the market or an input moved
         from .watch import Watch
         self.watch = Watch(self)
+        # Spot / FX and FX vol: the option market's quotes of a pair, its smile and distribution, the vol monitor
+        from .fx import Fx
+        self.fx = Fx(self)
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -315,6 +318,7 @@ class Service(object):
         self._stop.set()
         self.history._stop.set()                   # no new work while the provider goes down
         self.history._kick.set()
+        self.fx.stop()
         try:
             stop = getattr(self.provider, "stop", None)
             if stop:
@@ -564,6 +568,9 @@ class Service(object):
                           "custom": True})
             pages.append({"id": "settings", "title": "Ayarlar · Toplantı takvimi", "group": "Araçlar", "book": "tto",
                           "sheet": None, "custom": True})
+            # the option market of the currency pairs: one pair in depth, and every pair's vols at a glance
+            pages.append({"id": "fx", "title": "Spot / FX", "group": "FX", "book": "tto", "sheet": None, "custom": True})
+            pages.append({"id": "fxvol", "title": "FX Vol İzleme", "group": "FX", "book": "tto", "sheet": None, "custom": True})
         return pages
 
     # ================================================================== rendering
@@ -2743,6 +2750,72 @@ class Service(object):
                 it["unit"] = "px"                           # the price of a floater: moves in points, not bp
             rows.append(vc.describe(it, curves[product], months[product], window))
         return {"rows": rows, "window": window, "windows": list(vc.WINDOWS), "year": vc.YEAR, "history": info}
+
+    # ================================================================== Spot / FX and FX vol
+    def _fx(self, fn, *args):
+        from .fx import FxError
+        try:
+            return fn(*args)
+        except FxError as exc:
+            raise ServiceError(str(exc))
+
+    def fx_board(self, user: Optional[str]) -> Dict[str, Any]:
+        """Every pair's spot and its main vols (the Spot / FX page's table)."""
+        return self._fx(self.fx.board, self.require_user(user))
+
+    def fx_surface(self, user: Optional[str], pair: Any, model: Any = "svi", levels: Any = None) -> Dict[str, Any]:
+        """One pair: quotes, forwards, smiles, the distribution of the spot by tenor and the probability matrix."""
+        lv = levels if isinstance(levels, list) else None
+        return self._fx(self.fx.surface, self.require_user(user), str(pair or "USDTRY"), str(model or "svi"), lv)
+
+    def fx_override(self, user: Optional[str], pair: Any, tenor: Any, kind: Any, value: Any) -> Dict[str, Any]:
+        """A quote of one's own in place of Bloomberg's (``value`` empty: back to Bloomberg) - seen by its owner only."""
+        out = self._fx(self.fx.set_override, self.require_user(user), str(pair or ""), str(tenor or ""), str(kind or ""), value)
+        self.bump()
+        return out
+
+    def fx_override_clear(self, user: Optional[str], pair: Any) -> Dict[str, Any]:
+        out = self._fx(self.fx.clear_overrides, self.require_user(user), str(pair or ""))
+        self.bump()
+        return out
+
+    def fx_monitor(self, user: Optional[str], window: Any = 250) -> Dict[str, Any]:
+        """The vol monitor: every pair's core vols, their changes and where they stand; the desk's own tickers."""
+        return self._fx(self.fx.monitor, self.require_user(user), window)
+
+    def fx_pair(self, user: Optional[str], pair: Any, tenor: Any = "1M", model: Any = "svi") -> Dict[str, Any]:
+        """One pair of the vol monitor in depth: term structure, skew and smile now / a week / a month ago, history."""
+        return self._fx(self.fx.pair_detail, self.require_user(user), str(pair or "USDTRY"), str(tenor or "1M"),
+                        str(model or "svi"))
+
+    def fx_series(self, user: Optional[str], ticker: Any, window: Any = 250) -> Dict[str, Any]:
+        self.require_user(user)
+        return self._fx(self.fx.series, str(ticker or ""), window)
+
+    def fx_tickers(self, user: Optional[str]) -> Dict[str, Any]:
+        self.require_user(user)
+        return {"items": self.fx.user_tickers(), "settings": self.fx.settings()}
+
+    def fx_ticker_add(self, user: Optional[str], text: Any, label: Any = "") -> Dict[str, Any]:
+        """Add a pair (its vols) or any Bloomberg ticker to the vol monitor - for the whole desk."""
+        out = self._fx(self.fx.add_ticker, self.require_user(user), text, label)
+        self.bump()
+        return out
+
+    def fx_ticker_remove(self, user: Optional[str], item_id: Any) -> Dict[str, Any]:
+        out = self._fx(self.fx.remove_ticker, self.require_user(user), str(item_id or ""))
+        self.bump()
+        return out
+
+    def fx_set_settings(self, user: Optional[str], source: Any) -> Dict[str, Any]:
+        """The Bloomberg pricing source of the vol tickers (BGN by default) - for the whole desk."""
+        out = self._fx(self.fx.set_settings, self.require_user(user), source)
+        self.bump()
+        return out
+
+    def fx_history_sync(self, user: Optional[str], pair: Any = None) -> Dict[str, Any]:
+        """Fetch the FX vol history now (the monitor's set; with ``pair`` also that pair's every tenor)."""
+        return self._fx(self.fx.sync_history, self.require_user(user), str(pair) if pair else None)
 
     # ================================================================== spreads over OIS, day by day
     #: z-score windows of a spread: a month, three months and a year of closes

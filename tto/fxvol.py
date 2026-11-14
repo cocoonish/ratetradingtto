@@ -790,8 +790,8 @@ class Distribution(object):
         """Mass, mean (should be the forward) and the lowest density on a grid wide enough for both tails."""
         sd = max(self.sd, 1e-4)
         n += n % 2                                               # Simpson's rule wants an even number of slices
-        lo = math.log(self.F) - 9.0 * sd
-        hi = math.log(self.F) + 9.0 * sd * max(1.0, self.smile.vol(self.F * math.exp(3 * sd)) / max(self.smile.vol(self.F), 1e-6))
+        lo = math.log(self.F) - 12.0 * sd
+        hi = math.log(self.F) + 12.0 * sd * max(1.0, self.smile.vol(self.F * math.exp(3 * sd)) / max(self.smile.vol(self.F), 1e-6))
         step = (hi - lo) / n
         xs = [lo + step * i for i in range(n + 1)]
         ks = [math.exp(x) for x in xs]
