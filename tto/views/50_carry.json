@@ -7,6 +7,13 @@
  "order": 50,
  "inputs": [
   {
+   "range": "EK_CARRY!B2",
+   "scope": "user",
+   "group": "carry-path",
+   "kind": "text",
+   "label": "Carry patikası — TLREF path of the carry: Bootstrap (default) / MPC ima / S1 / S2 / S3 / Sabit TLREF"
+  },
+  {
    "range": "B202",
    "scope": "user",
    "group": "carry-0",
@@ -43,6 +50,33 @@
   }
  ],
  "panels": [
+  {
+   "id": "CP1",
+   "type": "table",
+   "sheet": "EK_CARRY",
+   "range": "A1:C4",
+   "hidden": false,
+   "title": "CARRY PATİKASI"
+  },
+  {
+   "id": "CP2",
+   "type": "table",
+   "sheet": "OIS_MAIN",
+   "range": "A4:F4",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "Ufuklar · Ufuk A / B (ay) ve PV / FV (OIS sayfasının girdileri)"
+  },
+  {
+   "id": "CP3",
+   "type": "table",
+   "sheet": "EK_CARRY",
+   "range": "A6:F70",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · seçili patikayla TLREF bileşiği: ufuklar, vadeler, kupon günleri"
+  },
   {
    "id": "B1",
    "type": "notes",
@@ -146,5 +180,9 @@
     "B10"
    ]
   }
+ ],
+ "pinned": [
+  "CP1",
+  "CP2"
  ]
 }

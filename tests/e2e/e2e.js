@@ -256,6 +256,35 @@ async function shot(page, name) {
     check('the TRY rates by tenor: VİOP has none at 2Y, the others do', (await cellText(page, 'EK_FWD!F92')).trim() === ''
       && trNumber(await cellText(page, 'EK_FWD!E92')) > 0);
     await shot(page, '02b-forward-pricing');
+    // "Kota mesajı": the rows of a table as lines to send - the set of columns and the rows picked are remembered
+    await page.click('.panel[data-panel="FR1"] button[data-action="quote"]');
+    await page.waitForSelector('#quote-dialog #quote-text');
+    await page.click('#quote-set button[data-v="pts"]');
+    let qlines = (await page.inputValue('#quote-text')).split('\n');
+    check('"Kota mesajı": the swap points of the USDTRY table, a curve a line, the value date in the heading',
+      /^USDTRY · puan · \d\d\.\d\d\.\d{4}$/.test(qlines[0]) && qlines.length === 6 && /^Offshore\s+[\d.]+ \/ [\d.]+$/.test(qlines[1]), qlines);
+    await page.click('#quote-rows input[data-key="48"]');
+    qlines = (await page.inputValue('#quote-text')).split('\n');
+    check('... a row left out leaves the message', qlines.length === 5 && !qlines.some((l) => l.startsWith('OIS ')), qlines);
+    await page.click('#quote-dialog button:text-is("Kapat")');
+    // "İşlem gir": a row and a side - Günlük İşlemler opens with the pair, the side, the value date and the swap points
+    const fwdValue = (await cellText(page, 'EK_FWD!B45')).trim();
+    const offAsk = (await cellText(page, 'EK_FWD!J47')).trim();
+    await page.click('.panel[data-panel="FR1"] button[data-action="trade"]');
+    await page.waitForSelector('#trade-dialog');
+    await page.click('#trade-rows input[data-key="47"]');
+    await page.click('#trade-dir button[data-v="S"]');
+    check('the trade dialog says what will be filled', (await page.textContent('#trade-summary')).includes('swap puanı ' + offAsk),
+      [await page.textContent('#trade-summary'), offAsk, fwdValue]);
+    await page.click('#trade-open');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.fwd
+      && window.tto.state.page.fwd.date && window.tto.state.page.fwd.date.value !== '', null, { timeout: 30000 });
+    const fwdFilled = await page.evaluate(() => { const f = window.tto.state.page.fwd; return [f.pair, f.dir, f.basis, f.date.value, f.manual.value, f.note.value]; });
+    await page.waitForFunction(() => /\d/.test((document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="fwd-forward"] .v') || {}).textContent || ''), null, { timeout: 20000 });
+    check('... Günlük İşlemler opens on the forward: USDTRY sold at the ask points of the offshore row, the table\'s value date',
+      JSON.stringify(fwdFilled.slice(0, 5)) === JSON.stringify(['USDTRY', 'S', 'SP', fwdValue, offAsk]) && /^Kota: Offshore/.test(fwdFilled[5]), [fwdFilled, fwdValue, offAsk]);
+    await open(page, 'forward');
+    await tab(page, 'fwd');
 
     // ------------------------------------------------------------------ RET editor dialog
     console.log('RET editor');
@@ -586,6 +615,31 @@ async function shot(page, name) {
     await page.click('#broker-reset-undo');
     await page.waitForFunction(() => document.querySelectorAll('#broker-board-panel table.grid tr').length > 1, null, { timeout: 15000 });
     check('... and the reset can be taken back', JSON.stringify((await brokerBoard()).map((r) => r[1])) === JSON.stringify(boardBefore), boardBefore);
+    // a switch of two bonds: one instrument, the spread of their yields; the screen's switch and the fitted curve beside it
+    await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '17:20:00 mar28 vs jul30 switch -45/-40', source: 'Tullett' });
+    await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => /15\.03\.28 \/ 10\.07\.30/.test(tr.children[1].textContent)),
+      null, { timeout: 15000 });
+    const sw = (await brokerBoard()).find((r) => /15\.03\.28 \/ 10\.07\.30/.test(r[1]));
+    check('a switch of two bonds is one instrument on the board: bid / ask in bp, the screen\'s switch as its model, where it stands on the curve',
+      sw[0] === 'DİBS' && sw[2] === 'Switch (bp)' && sw[3] === '-45' && sw[4] === '-40' && /^-?\d+,\d$/.test(sw[8]) && /bp (eğri|ekran) · uzun (ucuz|pahalı)/.test(sw[12]), sw);
+    // a trade of the chat as the desk's: "⇢" on its line, the level and our side, then Günlük İşlemler filled
+    const tradeLine = () => [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => x.querySelector('td.act button[data-act="trade"]'));
+    check('a trade line of the chat has the "İşlem gir" button, a quote of the brokers has not',
+      await page.evaluate((f) => { const tr = (new Function('return ' + f))()(); return !!tr && /18m ois taken at 14/.test(tr.textContent)
+        && [...document.querySelectorAll('#broker-log-panel table.grid tr')].filter((x) => x.querySelector('td.act button[data-act="trade"]')).length === 1; }, tradeLine.toString()));
+    await page.evaluate((f) => (new Function('return ' + f))()().querySelector('td.act button[data-act="trade"]').click(), tradeLine.toString());
+    await page.waitForSelector('#chat-trade');
+    const chatWhy = await page.textContent('#chat-trade-why');
+    check('the level is the trade\'s and the side the line\'s: the offer lifted is a payer',
+      /^İşlem: offer alındı → PAY/.test(chatWhy) && (await page.getAttribute('#chat-trade-side button.on', 'data-v')) === 'buy', chatWhy);
+    await page.click('#chat-trade-open');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ois && window.tto.state.page.ois.level
+      && window.tto.state.page.ois.level.value !== '', null, { timeout: 30000 });
+    const oisFilled = await page.evaluate(() => { const o = window.tto.state.page.ois; return [o.strategy, o.side, o.f.tenor && o.f.tenor.value, o.level.value, o.note.value, o.cpt.value]; });
+    check('... Günlük İşlemler opens on the OIS with the tenor, the level, the side, the broker and the line as its note',
+      JSON.stringify(oisFilled.slice(0, 4)) === JSON.stringify(['outright', 'PAY', '18M', '35,14']) && /^Chat 13:41:09 MIKE REES: 18m ois taken at 14/.test(oisFilled[4])
+      && oisFilled[5] === 'Tullett', oisFilled);
+    await open(page, 'broker');
     await shot(page, '04b-broker');
 
     // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
@@ -709,6 +763,13 @@ async function shot(page, name) {
     await page.click('#carry-kind button[data-v="spread"]');
     await page.waitForFunction(() => document.querySelectorAll('#carry-panel table.grid tr').length === 121, null, { timeout: 20000 });
     check('the same for the sheet\'s spreads', /spread/.test(await page.textContent('#carry-panel h2')));
+    await page.click('#carry-kind button[data-v="list"]');
+    await page.waitForFunction(() => /yazdıklarınız/.test(document.querySelector('#carry-panel h2').textContent)
+      && document.querySelectorAll('#carry-panel table.grid tr').length === 7, null, { timeout: 20000 });
+    ct = await carryRows();
+    check('"Listem": the carry of the instruments typed above, in their order - a FRA has none',
+      JSON.stringify(ct.slice(1).map((r) => r[0])) === JSON.stringify(['1Y', '3M–6M', '3M–6M–1Y', '9x12', '2Y–3Y–4Y', 'abc'])
+      && /carry yalnız OIS/.test(ct[4].join(' ')) && /^[+-]?\d+,\d$/.test(ct[1][2]) && /TLREF: .*bootstrap/i.test(await page.textContent('#carry-panel')), ct);
     await page.click('#carry-kind button[data-v="fly"]');
     await page.click('#carry-horizon button[data-v="b"]');
     await shot(page, '04d-vol');
@@ -832,6 +893,16 @@ async function shot(page, name) {
     check('hovering a bar chart marks the category', /^MPC\d+$|^Spot$/.test(await page.textContent('.chart-tip .t')));
     await page.mouse.move(5, 5);
     await shot(page, '08-charts-ois');
+    // a quote message of the par curve: mid ± half the width typed
+    await page.click('.panel[data-panel="B3"] button[data-action="quote"]');
+    await page.waitForSelector('#quote-dialog #quote-width');
+    await page.fill('#quote-width', '10');
+    const parMsg = (await page.inputValue('#quote-text')).split('\n');
+    const par1y = parMsg.find((l) => l.startsWith('1Y ')) || '';
+    const par1yParts = par1y.replace(/^1Y\s+/, '').split(' / ').map(trNumber);
+    check('"Kota mesajı" of the OIS curve: the par rate ± half the width typed (bp)', parMsg[0] === 'TRY OIS · par' && par1yParts.length === 2
+      && Math.abs(par1yParts[1] - par1yParts[0] - 0.1) < 1e-9, parMsg);
+    await page.click('#quote-dialog button:text-is("Kapat")');
 
     // ------------------------------------------------------------------ what else the workbook has
     console.log('workbook extras');
@@ -1209,6 +1280,25 @@ async function shot(page, name) {
       daily.slice(0, 3).map((r) => r[3]));
     await shot(page, '14-mpc');
 
+    // ------------------------------------------------------------------ spreads over OIS, day by day
+    await open(page, 'spreads');
+    const offSpread = await rowsOf('spread-off');
+    const viopSpread = await rowsOf('spread-viop');
+    const x1y = rowOf(offSpread, '1Y');
+    check('spread history: offshore − OIS tenor by tenor - today\'s level and the cross-currency 1Y against the closes of the recorded month',
+      offSpread[0][4] === 'Spread' && offSpread[0][10] === 'z 60g' && offSpread.length >= 8 && x1y[1] === 'XCCY' && /^-?\d+,\d$/.test(x1y[4])
+      && /^[+-]?\d+,\d$/.test(x1y[5]) && Number(x1y[14]) > 15, [offSpread[0], x1y]);
+    check('... VİOP − OIS contract by contract (the VİOP history\'s contracts, one added on the VİOP page earlier)', viopSpread.length === 6
+      && viopSpread.slice(1).every((r) => /^-?\d+,\d$/.test(r[4])), viopSpread);
+    await page.click('#spread-window button[data-v="20"]');
+    check('... the statistics window: 20 closes', (await rowsOf('spread-off'))[0][10] === 'z 20g' && /^[+-]?\d+,\d\d$/.test(rowOf(await rowsOf('spread-off'), '1Y')[10]),
+      rowOf(await rowsOf('spread-off'), '1Y'));
+    await page.evaluate(() => { const tr = [...document.querySelectorAll('.panel[data-panel="spread-viop"] table.grid tr')][1]; tr.querySelector('td.act button').click(); });
+    await page.waitForFunction(() => /^VİOP .* − OIS \(bp\)/.test(document.querySelector('.panel[data-panel="spread-chart"] h2').textContent));
+    check('a spread picked is drawn', await page.locator('.panel[data-panel="spread-chart"] svg.chart').count() === 1);
+    await page.click('#spread-window button[data-v="60"]');
+    await shot(page, '14b-spreads');
+
     await open(page, 'settings');
     const calRows = () => page.evaluate(() => [...document.querySelectorAll('.set-table tr')].slice(1).map((tr) => [tr.children[0].textContent,
       tr.querySelector('input.date').value, tr.children[3].textContent, tr.children[4].textContent, tr.className.trim()]));
@@ -1260,6 +1350,19 @@ async function shot(page, name) {
     await page.click('#sources-save');
     await page.waitForFunction(() => document.querySelectorAll('#sources-table input[data-curve="off"]')[1].value === '', null, { timeout: 15000 });
     check('settings: the state of the history', /Excel dosyasındaki kayıtlı geçmiş/.test(await page.textContent('.panel[data-panel="history"] .set-info')));
+    // the carry: the TLREF path (Bootstrap at first) and the horizons, each user's own
+    check('settings: the carry is computed on the bootstrapped curve at first', (await page.inputValue('#carry-path')) === 'Bootstrap'
+      && /bootstrap/i.test(await page.textContent('#carry-info')), await page.textContent('#carry-info'));
+    await page.selectOption('#carry-path', 'S2');
+    await page.fill('#carry-a', '2');
+    await page.click('#carry-save');
+    await page.waitForFunction(() => /S2/.test(document.getElementById('carry-info').textContent), null, { timeout: 20000 });
+    const carrySet = (await api(page, 'ayşe yilmaz', 'GET', '/api/carry')).json;
+    check('... a path and a horizon of one\'s own are kept', carrySet.path === 'S2' && carrySet.a === 2, carrySet);
+    await page.selectOption('#carry-path', 'Bootstrap');
+    await page.fill('#carry-a', '1');
+    await page.click('#carry-save');
+    await page.waitForFunction(() => /bootstrap/i.test(document.getElementById('carry-info').textContent), null, { timeout: 20000 });
     await shot(page, '15-settings');
 
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists

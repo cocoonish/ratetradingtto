@@ -43,7 +43,8 @@ export class VolPage {
     this.window = Number(pref('tto.vol.window', '20')) || 20;
     this.annual = pref('tto.vol.annual', '0') === '1';
     this.items = pref('tto.vol.items', DEFAULT_ITEMS);
-    this.kind = pref('tto.vol.kind', 'fly') === 'spread' ? 'spread' : 'fly';
+    const kind0 = pref('tto.vol.kind', 'fly');
+    this.kind = kind0 === 'spread' || kind0 === 'list' ? kind0 : 'fly';
     this.horizon = pref('tto.vol.horizon', 'b') === 'a' ? 'a' : 'b';
     this.picked = null;                 // the instrument whose history is drawn
     this.vol = null;
@@ -53,7 +54,10 @@ export class VolPage {
     this.extra = null;                  // the history of a carry row (not one of the typed instruments)
     this.charts = {};
     this.loaded = 0;
-    this.typed = debounce(() => this.loadVol().catch(errorToast), 450);
+    this.typed = debounce(() => {
+      this.loadVol().catch(errorToast);
+      if (this.kind === 'list') this.loadCarry().catch(errorToast);       // the carry of what is typed
+    }, 450);
   }
 
   async load() {
@@ -93,7 +97,9 @@ export class VolPage {
   }
 
   fetchCarry() {
-    return api.get('/api/vol/carry', { kind: this.kind, window: this.window }).catch((err) => ({ error: err.message, rows: [], horizons: {} }));
+    const ask = this.kind === 'list' ? api.post('/api/vol/carry', { kind: 'list', window: this.window, text: this.items })
+      : api.get('/api/vol/carry', { kind: this.kind, window: this.window });
+    return ask.catch((err) => ({ error: err.message, rows: [], horizons: {} }));
   }
 
   async loadVol() {
@@ -159,7 +165,8 @@ export class VolPage {
       this.volBody, this.volCharts);
 
     // ---- carry against it
-    const kind = seg([['fly', 'Fly', 'C & R sayfasının fly tablosu (gövde receive)'], ['spread', 'Spread', 'C & R sayfasının spread tablosu (flattener)']], this.kind, (v) => {
+    const kind = seg([['fly', 'Fly', 'C & R sayfasının fly tablosu (gövde receive)'], ['spread', 'Spread', 'C & R sayfasının spread tablosu (flattener)'],
+      ['list', 'Listem', 'Yukarıda yazdığınız enstrümanlar: OIS vadesi (receiver), spread (flattener) ve fly (gövde receive), 1M – 10Y']], this.kind, (v) => {
       this.kind = v;
       keep('tto.vol.kind', v);
       this.loadCarry().catch(errorToast);
@@ -306,7 +313,8 @@ export class VolPage {
     this.horizonSeg.appendChild(seg(['a', 'b'].filter((k) => hz[k]).map((k) => [k, hz[k].label, 'Ufuk sonu ' + isoToTr(hz[k].date) + ' · ' + hz[k].days + ' iş günü']),
       this.horizon, (v) => { this.horizon = v; keep('tto.vol.horizon', v); this.fillCarry(); }, 'carry-horizon'));
     const H = hz[this.horizon] || { label: '', days: 0 };
-    this.carryTitle.textContent = 'Carry / vol · ' + (fly ? 'fly\'lar' : 'spread\'ler');
+    const list = this.kind === 'list';
+    this.carryTitle.textContent = 'Carry / vol · ' + (list ? 'yazdıklarınız' : fly ? 'fly\'lar' : 'spread\'ler');
     if (d.error) {
       this.carryNote.textContent = d.error;
       this.setGrid('carry', this.carryBody, [], [], 'Veri yok');
@@ -314,13 +322,19 @@ export class VolPage {
       this.charts.scatter = null;
       return;
     }
-    const pos = fly ? 'REC gövde' : 'Flattener', neg = fly ? 'PAY gövde' : 'Steepener';
-    this.carryNote.textContent = 'C+R: Carry & Roll sayfasının ' + (fly ? '"fly (gövde receive)"' : '"spread (flattener)"') + ' tablosundaki ' + H.label + ' carry + roll-down (bp; + ise '
-      + pos + ' kazanır, − ise ' + neg + '). σ: işlemin seviyesinin son ' + d.window + ' günlük realized vol\'ü; ufuk σ\'sı = günlük σ × √' + H.days
+    const SIDES = { fly: ['REC gövde', 'PAY gövde'], spread: ['Flattener', 'Steepener'], outright: ['Receiver', 'Payer'] };
+    const pos = list ? 'alan taraf' : fly ? 'REC gövde' : 'Flattener', neg = list ? 'karşı taraf' : fly ? 'PAY gövde' : 'Steepener';
+    const sideOf = (r, v) => { const s2 = list ? (SIDES[r.kind] || SIDES.outright) : [pos, neg]; return v > 0 ? s2[0] : s2[1]; };
+    const what = list ? 'yazdığınız enstrümanların (OIS vadesi receiver, spread flattener, fly gövde receive; Carry & Roll sayfasının vade motorundan)'
+      : 'Carry & Roll sayfasının ' + (fly ? '"fly (gövde receive)"' : '"spread (flattener)"') + ' tablosundaki';
+    this.carryNote.textContent = 'C+R: ' + what + ' ' + H.label + ' carry + roll-down (bp; + ise ' + pos + ' kazanır, − ise ' + neg + '). '
+      + (d.path ? 'TLREF: ' + d.path + ' (Ayarlar → Carry). ' : '')
+      + 'σ: işlemin seviyesinin son ' + d.window + ' günlük realized vol\'ü; ufuk σ\'sı = günlük σ × √' + H.days
       + ' iş günü. Oran = C+R ÷ ufuk σ\'sı: bir standart sapmalık harekete karşı kaç birim carry. z: bugünkü seviyenin son 60 / 120 / 250 kapanışın '
       + 'ortalamasından kaç standart sapma uzakta olduğu (+ ise seviye ortalamanın üstünde; |z| ≥ 2 vurgulu).';
     const cr = (r) => r['cr_' + this.horizon], over = (r) => r['vol_' + this.horizon], ratio = (r) => r['ratio_' + this.horizon];
-    const rows = d.rows.slice().sort((a, b) => (isNum(ratio(b)) ? Math.abs(ratio(b)) : -1) - (isNum(ratio(a)) ? Math.abs(ratio(a)) : -1));
+    // (the list keeps the order it was typed in; the sheet's tables come best ratio first)
+    const rows = list ? d.rows.slice() : d.rows.slice().sort((a, b) => (isNum(ratio(b)) ? Math.abs(ratio(b)) : -1) - (isNum(ratio(a)) ? Math.abs(ratio(a)) : -1));
     const sign = (v, digits) => (isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, digits, false), v, k: 'n' } : { t: '', k: '' });
     const zs = (d.z_windows || [60, 120, 250]).map(String);
     const zName = { 60: 'z 3a', 120: 'z 6a', 250: 'z 1y' };
@@ -329,15 +343,16 @@ export class VolPage {
       return isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, 2, false), v, k: 'n', cls: Math.abs(v) >= 2 ? 'thru' : '',
         tip: 'Son ' + Math.min(Number(n), r.closes || 0) + ' kapanışa göre z-score' } : { t: '', k: '' };
     };
-    this.setGrid('carry', this.carryBody, ['İşlem', 'Piyasa (bp)', 'C+R ' + H.label + ' (bp)', 'σ (bp/gün)', 'σ ' + H.label + ' (bp)', 'C+R / σ', 'Carry\'yi alan']
+    this.setGrid('carry', this.carryBody, ['İşlem', list ? 'Piyasa (% / bp)' : 'Piyasa (bp)', 'C+R ' + H.label + ' (bp)', 'σ (bp/gün)', 'σ ' + H.label + ' (bp)', 'C+R / σ', 'Carry\'yi alan']
       .concat(zs.map((n) => zName[n] || 'z ' + n + 'g')).concat(['Gün']),
-      rows.map((r) => [{ t: r.label, k: 's', b: 1 }, isNum(r.market) ? { t: num(r.market, 1, false), v: r.market, k: 'n' } : { t: '', k: '' }, sign(cr(r), 1),
+      rows.map((r) => [{ t: r.label, k: 's', b: 1 }, isNum(r.market) ? (r.kind === 'outright' ? { t: num(r.market, 2, false) + ' %', v: r.market, k: 'n' }
+        : { t: num(r.market, 1, false), v: r.market, k: 'n' }) : { t: '', k: '' }, sign(cr(r), 1),
         isNum(r.vol) ? { t: num(r.vol, 1, false), v: r.vol, k: 'n', cls: r.full ? '' : 'soft', tip: r.n + ' değişim' + (r.full ? '' : ' (pencere dolmadı)') }
           : { t: r.error || '', k: 's', cls: 'soft' },
         isNum(over(r)) ? { t: num(over(r), 1, false), v: over(r), k: 'n' } : { t: '', k: '' },
         isNum(ratio(r)) ? { t: (ratio(r) > 0 ? '+' : '') + num(ratio(r), 2, false), v: ratio(r), k: 'n', b: 1, cls: Math.abs(ratio(r)) >= 0.5 ? 'thru' : '' } : { t: '', k: '' },
-        isNum(cr(r)) && cr(r) !== 0 ? (cr(r) > 0 ? pos : neg) : ''].concat(zs.map((n) => zCell(r, n))).concat([{ t: r.n ? String(r.n) : '', k: 'n' }])),
-      'Tabloda işlem yok', rows.map((r) => ({ key: 'OIS:' + r.kind + ':' + r.tenors.join('/'), text: r.tenors.join('').toLowerCase(), from: 'carry' })));
+        isNum(cr(r)) && cr(r) !== 0 ? sideOf(r, cr(r)) : ''].concat(zs.map((n) => zCell(r, n))).concat([{ t: r.n ? String(r.n) : '', k: 'n' }])),
+      list ? 'Yukarıya OIS vadesi, spread ya da fly yazın (örn. 1y, 1y2y, 6m1y2y)' : 'Tabloda işlem yok', rows.map((r) => ({ key: 'OIS:' + r.kind + ':' + r.tenors.join('/'), text: r.tenors.join('').toLowerCase(), from: 'carry' })));
 
     // ---- the picture: carry against the volatility of the same time
     const pts = d.rows.filter((r) => isNum(cr(r)) && isNum(over(r)));
@@ -347,7 +362,8 @@ export class VolPage {
     };
     const spec = { scatter: true, title: 'Carry / vol', auto: 'fit', decimals: 1, aspect: 0.62,
       x_title: 'σ ' + H.label + ' (bp)', y_title: 'C+R ' + H.label + ' (bp)',
-      series: [side(pos + ' kazanır', BLUE, (r) => cr(r) >= 0), side(neg + ' kazanır', ORANGE, (r) => cr(r) < 0)] };
+      series: [side((list ? 'alan taraf (receiver / flattener / REC gövde)' : pos) + ' kazanır', BLUE, (r) => cr(r) >= 0),
+        side((list ? 'karşı taraf' : neg) + ' kazanır', ORANGE, (r) => cr(r) < 0)] };
     if (!pts.length) {
       clear(this.scatterHost);
       this.charts.scatter = null;

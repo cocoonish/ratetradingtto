@@ -582,6 +582,41 @@ def test_the_board_next_to_the_curve(desk):
         svc.reset_inputs(other, "tto", ["OIS_MAIN!B14"])
 
 
+def test_switches_next_to_the_screen(desk):
+    """A switch next to the DİBS RV screen: the screen's switch (the longer bond's yield − the shorter one's) as its
+    model, and where the level said stands against it and against the fitted ASW curve; one written leg by leg gets
+    its level from the legs' prices made yields on the screen."""
+    from tto.service import Service
+    svc, u = desk
+    day = (dt.date.today() - dt.timedelta(days=50)).isoformat()
+    svc.broker_add(u, "10:01:02 mar28 vs jul30 switch -45/-40\n10:02:00 mar28 100.200 vs jul30 93.900 switch trading\n"
+                      "10:03:00 Sw int 9/1/30 775 offer vs 3/7/30 775 bid", day)
+    mkt = curve(svc, u)
+    a, b, f1, f2 = (svc.et.call(lambda i=i: Service._bond_screen(mkt, i)) for i in ("TRT150328T24", "TRT100730T13", "TRT090130T12", "TRT030730T12"))
+    screen = (b["yield"] - a["yield"]) * 100
+    seen = svc.broker(u, day)
+    rows = [q for q in seen["rows"] if q.get("ok")]
+    quote, trade, floater = rows
+    assert quote["model"] == pytest.approx(screen) and quote["implied"]["screen"] == pytest.approx(screen)
+    m = quote["implied"]
+    assert m["rv"] == pytest.approx(b["rv"] - a["rv"]) and m["at"] == -42.5 and m["vs_screen"] == pytest.approx(-42.5 - screen)
+    assert m["vs_curve"] == pytest.approx(m["rv"] + m["vs_screen"])
+    ys = [s["yield"] - (p - s["clean"]) / (s["clean"] * s["mod_dur"]) * 100 for s, p in ((a, 100.2), (b, 93.9))]
+    assert trade["event"] == "trade" and trade["price"] == pytest.approx((ys[1] - ys[0]) * 100)
+    assert [leg["yield"] for leg in trade["legs"]] == pytest.approx(ys) and trade["implied"]["at"] == pytest.approx(trade["price"])
+    # floaters: the difference of the two prices, each completed from its own screen price
+    assert floater["unit"] == "px" and floater["event"] == "interest"
+    levels = [leg["level"] for leg in floater["legs"]]
+    assert all(abs(lv - s["clean"]) < 0.5 for lv, s in zip(levels, (f1, f2))) and floater["price"] == pytest.approx(levels[1] - levels[0])
+    assert floater["model"] == pytest.approx(f2["clean"] - f1["clean"])
+    board = {r["key"]: r for r in seen["board"]}
+    r = board["DIBS:switch:TRT150328T24/TRT100730T13"]
+    assert (r["bid"], r["ask"], r["last"]) == (-45.0, -40.0, pytest.approx(trade["price"])) and r["mid"] == pytest.approx(screen)
+    assert r["bid_diff"] == pytest.approx(-45.0 - screen) and r["implied"]["kind"] == "switch"
+    # not a bond's own trade: the DİBS pages leave a switch out
+    assert all(t.get("kind") != "switch" for t in svc.broker(u, day)["rows"] if t.get("isin"))
+
+
 def test_days_periods_and_what_is_left_out(desk):
     svc, u = desk
     today = dt.date.today()

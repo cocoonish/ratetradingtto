@@ -12,7 +12,7 @@ import { WatchPage } from './pages/watch.js';
 import { HeatPage } from './pages/heat.js';
 import { openAlarmDialog, addToWatch, checkAlarms } from './alarms.js';
 import { ExplorerPage } from './pages/explorer.js';
-import { EodPage, MpcPage, SettingsPage } from './pages/history.js';
+import { EodPage, MpcPage, SpreadsPage, SettingsPage } from './pages/history.js';
 import { openRetEditor } from './ret.js';
 import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
@@ -35,6 +35,12 @@ const ctx = {
   setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
   displayName: (key) => state.users[key] || key || '',
   openRet: () => openRetEditor(ctx),
+  /** A trade to enter, its fields filled from a quote (a matrix row, a chat line): opens Günlük İşlemler with them. */
+  openTrade: (spec) => {
+    try { sessionStorage.setItem('tto.trade.prefill', JSON.stringify(spec)); } catch (e) { /* ignore */ }
+    if (state.pageId === 'blotter' && state.page && state.page.takePrefill) state.page.takePrefill();
+    else window.location.hash = '#/blotter';
+  },
   /** Open a page and bring one of its panels into view (the workbook's "go to" hyperlinks). */
   goto: (pageId, panelId) => {
     const hash = '#/' + pageId + (panelId ? '?p=' + encodeURIComponent(panelId) : '');
@@ -157,6 +163,7 @@ async function openPage(id, panel) {
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
   else if (id === 'eod') page = new EodPage(host, ctx);
   else if (id === 'mpc') page = new MpcPage(host, ctx);
+  else if (id === 'spreads') page = new SpreadsPage(host, ctx);
   else if (id === 'settings') page = new SettingsPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;

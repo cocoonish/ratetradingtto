@@ -87,8 +87,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     n = sofr.formula_count()
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
-                                                   "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN"]
-    assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN"} & set(sofr.sheet_index)
+                                                   "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
+                                                   "Motor gün sayıları"]
+    assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
     # the TRY workbook with one gold forward typed over by hand: the gold tables stay as they are in the file
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
@@ -268,7 +269,7 @@ def test_matrix_panels_are_on_the_desk_page_with_their_inputs(svc):
     assert head[:11] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask",
                          "Fwd bid", "Fwd ask"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    assert len(inputs) == 1 + 2 + 10 + 20 and all(i == "u" for i, _ in inputs)          # curve, general, dates, per date
+    assert len(inputs) == 1 + 1 + 2 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, general, dates, per date
     assert inputs[0][1] == list(extras.FWD_CURVES)                                       # the curve is a drop-down
     assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "masa", True)["panels"]}
 
@@ -370,7 +371,7 @@ def test_the_eurtry_matrix_is_on_the_desk_page_below_the_usdtry_one(svc):
     assert [c.get("t") for c in rows[1]][:15] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid",
                                                   "Puan ask", "Fwd bid", "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "EUR %"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    assert len(inputs) == 1 + 4 + 10 + 20 and all(i == "u" for i, _ in inputs)          # curve, spreads and spot, dates, per date
+    assert len(inputs) == 1 + 1 + 4 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, spreads and spot, dates, per date
     assert inputs[0][1] == list(extras.FWD_CURVES)
     assert len([c for row in panels["EKF6"]["data"]["rows"] for c in row if c.get("i")]) == 20
     assert "EKF7" not in panels and "EKF7" in {p["id"] for p in svc.view(None, "masa", True)["panels"]}
@@ -1085,3 +1086,31 @@ def test_viop_history_charts(viop_history, svc):
     off = {p["id"]: p for p in svc.view(None, "viop")["panels"]}
     assert [len([y for y in s["data"] if type(y) is float]) for s in off["VH2"]["data"]["series"]] == [1, 1, 1, 1]
     assert "Kayıtlı veri modunda VİOP geçmişi kaydı yoktur" in off["VH1"]["note"]
+
+
+def test_the_matrices_show_the_markets_spread_and_can_price_with_it(svc):
+    """Next to each date the market's spread: the offshore (ICAP) implied TRY rate − OIS, bid and ask.  "Piyasa spread"
+    in the general row prices every date with it (EURTRY follows USDTRY unless set apart); "Elle spread" back."""
+    nodes = [cell(svc, "Forward!G%d" % r) for r in range(8, 22)]
+    bids = list(zip(nodes, [cell(svc, "Forward!I%d" % r) for r in range(8, 22)]))
+    asks = list(zip(nodes, [cell(svc, "Forward!K%d" % r) for r in range(8, 22)]))
+    u = svc.login("Piyasa spread")["user"]
+    for g, rows, days in ((extras.FWD_ALL, FWD_ROWS, "C"), (EUR_ALL, EUR_ROWS, "AL")):
+        assert cell(svc, "EK_FWD!B%d" % g) == extras.FWD_SPREAD_OWN
+        for r in rows:
+            d, ois = cell(svc, "EK_FWD!%s%d" % (days, r)), cell(svc, "EK_FWD!L%d" % r)
+            assert cell(svc, "EK_FWD!V%d" % r) == pytest.approx((linear(bids, d, True) - ois) * 100, rel=1e-12)
+            assert cell(svc, "EK_FWD!W%d" % r) == pytest.approx((linear(asks, d, True) - ois) * 100, rel=1e-12)
+    put(svc, u, {"EK_FWD!B%d" % extras.FWD_ALL: "piyasa spread"})              # (any case)
+    assert cell(svc, "EK_FWD!B%d" % EUR_ALL, u) == extras.FWD_SPREAD_MARKET     # EURTRY follows
+    for g, rows, days in ((extras.FWD_ALL, FWD_ROWS, "C"), (EUR_ALL, EUR_ROWS, "AL")):
+        for r in rows:
+            d = cell(svc, "EK_FWD!%s%d" % (days, r), u)
+            assert cell(svc, "EK_FWD!M%d" % r, u) == pytest.approx(linear(bids, d, True), rel=1e-12)   # TRY bid = offshore bid
+            assert cell(svc, "EK_FWD!N%d" % r, u) == pytest.approx(linear(asks, d, True), rel=1e-12)
+    put(svc, u, {"EK_FWD!E%d" % FWD_ROWS[2]: -10})                               # a date can still have its own
+    assert cell(svc, "EK_FWD!N%d" % FWD_ROWS[2], u) == pytest.approx(cell(svc, "EK_FWD!L%d" % FWD_ROWS[2], u) - 0.1)
+    put(svc, u, {"EK_FWD!B%d" % EUR_ALL: extras.FWD_SPREAD_OWN})                 # EURTRY set apart
+    r = EUR_ROWS[0]
+    assert cell(svc, "EK_FWD!M%d" % r, u) == pytest.approx(cell(svc, "EK_FWD!L%d" % r, u) - 1.5)
+    assert cell(svc, "EK_FWD!B%d" % extras.FWD_ALL, u) == extras.FWD_SPREAD_MARKET

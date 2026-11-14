@@ -140,9 +140,32 @@ def test_trades_refs_and_interest_on_a_bond_in_english_and_turkish():
     q = one("16/4/31 100 aldi")
     assert (q["event"], q["side"], q["price"]) == ("trade", "ask", 94.1)
     assert one("feb27 99.450 offer")["ask"] == 99.45 and one("feb27 99.450 offer")["isin"] == "TRT100227T13"
-    # "tom" by a bond is its value date, not an FX swap; a switch of two bonds stays as it was written
-    assert bc.parse_quote("Sw int 9/1/30 775 offer vs 3/7/30 775 bid") is None
-    assert bc.parse_quote("jan30 700 vs jul30 750 switch trading") is None
+    # a switch of two bonds is a switch (below); of three, the line stays as it was written
+    assert bc.parse_quote("mar28 vs jun29 vs jan30 10/20") is None
+
+
+def test_switches_of_two_bonds():
+    # written leg by leg: each bond with its level (completed as its own quote would be), the line's words the event
+    q = bc.parse_quote("Sw int 9/1/30 775 offer vs 3/7/30 775 bid")
+    assert (q["product"], q["kind"], q["event"], q["unit"], q["by_legs"]) == ("DIBS", "switch", "interest", "px", True)
+    assert [(leg["isin"], leg["level"], leg["side"]) for leg in q["legs"]] == [("TRT090130T12", 99.775, "ask"), ("TRT030730T12", 99.775, "bid")]
+    assert q["label"] == "09.01.30 TLREF / 03.07.30 TLREF" and q["key"] == "DIBS:switch:TRT090130T12/TRT030730T12" and q["price"] is None
+    q = bc.parse_quote("jul30 750 vs mar28 200 switch trading", lambda r: {"TRT150328T24": 100.1, "TRT100730T13": 93.5}.get(r.get("isin")))
+    assert q["event"] == "trade" and q["unit"] == "bp" and [leg["label"] for leg in q["legs"]] == ["15.03.28", "10.07.30"]   # shorter first
+    assert [leg["level"] for leg in q["legs"]] == [100.2, 93.75]
+    # quoted as the spread of the two yields: the longer bond's − the shorter one's, in bp, in any order and joined any way
+    for text in ("mar28 vs jul30 switch -45/-40", "jul30 v mar28 -45/-40", "mar28/jul30 sw -45/-40", "15/3/28-10/7/30 -45/-40",
+                 "mar28 into jul30 -45 bid -40 offer"):
+        q = bc.parse_quote(text)
+        assert (q["kind"], q["unit"], q["bid"], q["ask"], q["label"], q["note"]) == ("switch", "bp", -45.0, -40.0, "15.03.28 / 10.07.30", ""), text
+        assert [leg["isin"] for leg in q["legs"]] == ["TRT150328T24", "TRT100730T13"] and "by_legs" not in q
+    q = bc.parse_quote("mar28/jul30 trd -42")
+    assert (q["event"], q["price"]) == ("trade", -42.0)
+    # the other side said after a comma, and the switch on the board
+    rows = bc.parse_chat("10:00:00 mar28/jul30 -45 bid, -40 offer\n10:05:00 mar28 vs jul30 -41 bid", lambda q: None, TODAY)
+    assert [(q["bid"], q["ask"]) for q in rows] == [(-45.0, -40.0), (-41.0, None)]
+    row = bc.board(rows)[0]
+    assert (row["kind"], row["bid"], row["ask"], [leg["isin"] for leg in row["legs"]]) == ("switch", -41.0, -40.0, ["TRT150328T24", "TRT100730T13"])
 
 
 def test_a_bond_nobody_priced_takes_its_figure_from_the_one_next_to_it():
@@ -193,7 +216,12 @@ def test_the_desks_bond_chat_is_read_against_the_screen(svc):
     res = svc.broker_parse(u, CHAT, TODAY.isoformat())
     bonds = [q for q in res["rows"] if q.get("product") == "DIBS"]
     texts = [q["raw"] for q in res["rows"] if not q.get("ok")]
-    assert texts == ["Gunaydin...", "Auction prices", "Sw int 9/1/30 775 offer vs  3/7/30 775 bid"]
+    assert texts == ["Gunaydin...", "Auction prices"]
+    # the switch of two floaters: each leg completed from its own screen price, the switch the difference of the two
+    sw = next(q for q in bonds if q.get("kind") == "switch")
+    assert (sw["event"], sw["unit"], [(leg["isin"], leg["side"]) for leg in sw["legs"]]) == (
+        "interest", "px", [("TRT090130T12", "ask"), ("TRT030730T12", "bid")])
+    assert sw["price"] == pytest.approx(sw["legs"][1]["level"] - sw["legs"][0]["level"]) and sw["model"] is not None
     by = {(q["time"], q["label"]): q for q in bonds}
     q = by[("10:25:28", "15.03.28")]
     assert (q["bid"], q["ask"], q["model"]) == (100.55, 100.575, pytest.approx(100.1125))

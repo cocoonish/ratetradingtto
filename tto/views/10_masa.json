@@ -175,6 +175,13 @@
    "label": "Eğri — OIS curve of the forward quote matrix (MPC ima / S1 / S2 / S3 / Ağırlıklı / Bootstrap / TLREF sabit)"
   },
   {
+   "range": "EK_FWD!B4",
+   "scope": "user",
+   "group": "ekfwd-spreadsource",
+   "kind": "text",
+   "label": "Spread kaynağı — 'Elle spread' (the general / per-date spreads) or 'Piyasa spread' (offshore implied − OIS per date)"
+  },
+  {
    "range": "EK_FWD!D4:E4",
    "scope": "user",
    "group": "ekfwd-spread",
@@ -208,6 +215,13 @@
    "group": "ekfwd-eur-curve",
    "kind": "text",
    "label": "Eğri — OIS curve of the EURTRY forward quote matrix (formula default: the USDTRY matrix's curve, EK_FWD!B2)"
+  },
+  {
+   "range": "EK_FWD!B103",
+   "scope": "user",
+   "group": "ekfwd-eur-spreadsource",
+   "kind": "text",
+   "label": "EURTRY spread kaynağı (formula default: the USDTRY matrix's, EK_FWD!B4)"
   },
   {
    "range": "EK_FWD!D103:E103",
@@ -359,10 +373,49 @@
    "id": "EKF1",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A1:U16",
+   "range": "A1:W16",
    "hidden": false,
    "wide": true,
-   "title": "FORWARD KOTASYON  ·  USDTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)"
+   "title": "FORWARD KOTASYON  ·  USDTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)",
+   "quote": {
+    "prefix": "USDTRY",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "first": 5,
+    "last": 14,
+    "sets": [
+     {
+      "id": "pts",
+      "name": "Puan",
+      "bid": "H",
+      "ask": "I"
+     },
+     {
+      "id": "out",
+      "name": "Outright",
+      "bid": "J",
+      "ask": "K"
+     },
+     {
+      "id": "try",
+      "name": "TRY %",
+      "bid": "M",
+      "ask": "N"
+     }
+    ]
+   },
+   "trade": {
+    "pair": "USDTRY",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "first": 5,
+    "last": 14,
+    "date_col": "B",
+    "bid": "H",
+    "ask": "I"
+   }
   },
   {
    "id": "EKF2",
@@ -377,10 +430,49 @@
    "id": "EKF5",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A100:U115",
+   "range": "A100:W115",
    "hidden": false,
    "wide": true,
-   "title": "FORWARD KOTASYON  ·  EURTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)"
+   "title": "FORWARD KOTASYON  ·  EURTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)",
+   "quote": {
+    "prefix": "EURTRY",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "first": 104,
+    "last": 113,
+    "sets": [
+     {
+      "id": "pts",
+      "name": "Puan",
+      "bid": "H",
+      "ask": "I"
+     },
+     {
+      "id": "out",
+      "name": "Outright",
+      "bid": "J",
+      "ask": "K"
+     },
+     {
+      "id": "try",
+      "name": "TRY %",
+      "bid": "M",
+      "ask": "N"
+     }
+    ]
+   },
+   "trade": {
+    "pair": "EURTRY",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "first": 104,
+    "last": 113,
+    "date_col": "B",
+    "bid": "H",
+    "ask": "I"
+   }
   },
   {
    "id": "EKF6",

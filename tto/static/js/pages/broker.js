@@ -7,7 +7,7 @@ import { h, clear, toast, errorToast, confirmDialog, debounce, modal } from '../
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { num, isoToTr } from '../format.js';
 
-const KIND = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward' };
+const KIND = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward', switch: 'Switch' };
 const EVENT = { quote: 'Kota', trade: 'İşlem', ref: 'Ref', interest: 'İlgi', level: 'Seviye', note: 'Not', text: 'Metin' };
 const FLAG = {
   abbr: ['tamamlandı', '', 'Büyük rakam yazılmamış ("90 bid", "90/10"): kotanın öbür tarafından, bu enstrümanın son seviyesinden ya da eğriden tamamlandı'],
@@ -35,9 +35,86 @@ function instText(q) {
   return q.product + ' ' + q.label;
 }
 
+// ---------------------------------------------------------------- a line as a trade (Günlük İşlemler)
+/** Günlük İşlemler's sides of an OIS strategy: [the buy (paying the rate, the spread or the fly's body), the sale]. */
+const OIS_SIDES = {
+  outright: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
+  fra: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
+  spread: [['STEEPENER', 'STEEPENER (spread öde)'], ['FLATTENER', 'FLATTENER (spread al)']],
+  fly: [['PAY GÖVDE', 'PAY GÖVDE (fly öde)'], ['REC GÖVDE', 'REC GÖVDE (fly al)']],
+};
+
+/** What Günlük İşlemler books a chat line as: 'ois', 'fwd' (an FX swap's points, one dated tenor), 'bond' - or
+ * null (a product without a form there: cross currency, IRS, O/N - T/N swaps). */
+export function tradeKind(q) {
+  if (!q || !q.ok) return null;
+  if (q.product === 'OIS' && OIS_SIDES[q.kind === 'fwd' ? 'fra' : q.kind]) return 'ois';
+  if (q.product === 'FX' && q.kind === 'outright' && /^\d+[WMY]$/i.test(String((q.tenors || [])[0] || ''))) return 'fwd';
+  if (q.product === 'DIBS' && q.kind !== 'switch') return 'bond';
+  return null;
+}
+
+/** The levels of a line one deals at: [[key, caption, value]] - the trade's, the bid, the ask. */
+export function tradeLevels(q) {
+  const out = [];
+  if (q.event === 'trade' && typeof q.price === 'number') out.push(['price', 'İşlem', q.price]);
+  if (typeof q.bid === 'number') out.push(['bid', 'Bid', q.bid]);
+  if (typeof q.ask === 'number') out.push(['ask', 'Ask', q.ask]);
+  if (!out.length && typeof q.price === 'number') out.push(['price', 'Seviye', q.price]);
+  return out;
+}
+
+/** Our side at a level: true = we buy (pay the rate, pay the spread or the fly's body, buy the currency forward, buy
+ * the bond), false = we sell, null = the line does not say.  Our own quote dealt on: its bid makes us the buyer, its
+ * ask the seller; a broker's quote dealt on: we sell at its bid, buy at its ask; a trade: the offer lifted is a buy,
+ * the bid hit a sale. */
+export function tradeBuys(q, key) {
+  if (key === 'bid') return q.party === 'biz';
+  if (key === 'ask') return q.party !== 'biz';
+  if (q.side === 'ask') return true;
+  if (q.side === 'bid') return false;
+  return null;
+}
+
+/** The words of the two sides, as Günlük İşlemler shows them: [buy, sell]. */
+export function tradeSideNames(q) {
+  const kind = tradeKind(q);
+  if (kind === 'ois') return OIS_SIDES[q.kind === 'fwd' ? 'fra' : q.kind].map((x) => x[1]);
+  if (kind === 'fwd') return ['Alış (USD al)', 'Satış (USD sat)'];
+  return ['Alış', 'Satış'];
+}
+
+/** The trade to fill Günlük İşlemler with (``ctx.openTrade``): the line at one of its levels, on one side. */
+export function tradeSpec(q, key, buy) {
+  const kind = tradeKind(q);
+  const lv = tradeLevels(q).find((x) => x[0] === key) || tradeLevels(q)[0];
+  const text = lv ? level(lv[2], q.unit) : '';
+  const note = ('Chat ' + [q.time, q.sender].filter(Boolean).join(' ') + ': ' + (q.raw || '')).slice(0, 160);
+  const cpt = q.party === 'broker' ? (q.source || '') : '';
+  const months = q.months || [];
+  if (kind === 'ois') {
+    const strategy = q.kind === 'fwd' ? 'fra' : q.kind;
+    const pair = OIS_SIDES[strategy];
+    const span = q.kind === 'fra' ? [months[0], months[1]] : (q.kind === 'fwd' ? [months[0], months[0] + months[1]] : null);
+    return { kind: 'ois', strategy, side: buy === null ? null : pair[buy ? 0 : 1][0], tenors: q.tenors || [], months: span, level: text, note, cpt };
+  }
+  if (kind === 'fwd') {
+    return { kind: 'fwd', pair: 'USDTRY', dir: buy === null ? null : (buy ? 'B' : 'S'), basis: 'SP', date: (q.tenors || [])[0] || '', value: text, note, cpt };
+  }
+  if (kind === 'bond') {
+    return { kind: 'bond', dir: buy === null ? null : (buy ? 'B' : 'S'), instrument: q.isin || q.label || '',
+      price: q.unit === 'px' ? text : '', note: q.unit === 'px' ? note : (note + ' · getiri ' + text).slice(0, 180) };
+  }
+  return null;
+}
+
 /** A bond's ISIN and what it is, for the tip of its name. */
 function instTip(q) {
   if (q.product !== 'DIBS') return '';
+  if (q.kind === 'switch') {
+    return 'Switch: ' + (q.legs || []).map((l) => l.label + (l.isin ? ' (' + l.isin + ')' : '')).join(' → ')
+      + ' · seviye: uzun vadelinin getirisi − kısanınki (bp)' + (q.alts && q.alts.length ? ' · öbür aday: ' + q.alts.join(', ') : '');
+  }
   return [q.isin, q.alts && q.alts.length ? 'öbür aday: ' + q.alts.join(', ') : '', q.settle ? 'valör ' + q.settle.replace('T', 'T+') : '']
     .filter(Boolean).join(' · ');
 }
@@ -82,6 +159,7 @@ const EXAMPLES = [
   ['15/3/28 550/575', 'DİBS (vade tarihiyle): 100,550 / 100,575 – rakam ekran fiyatından'],
   ['mar28 .400/475 · Jan30 tlref 98.650/750', 'DİBS (ay ve yılla; tlref, cpi, zc türü söyler)'],
   ['06/01/2027.t1 31.450', 'ihale fiyat listesi: seviye (bono / kuponsuzda getiri)'],
+  ['mar28 vs jul30 switch -45/-40', 'switch: iki kâğıt, uzun vadelinin getirisi − kısanınki (bp); yanında ekrana ve ASW eğrisine göre ucuz / pahalı'],
 ];
 
 /** A level as it is quoted: per cent with at least two decimals, basis points with as many as were typed. */
@@ -118,6 +196,7 @@ export function eventText(q) {
 function kindText(q) {
   if (q.ok === false) return '';
   if (q.product === 'FX') return 'FX swap (puan)';
+  if (q.product === 'DIBS' && q.kind === 'switch') return 'Switch (bp)';
   if (q.product === 'DIBS') return q.unit === 'yld' ? 'DİBS (getiri)' : 'DİBS (fiyat)';
   return (KIND[q.kind] || q.kind || '') + (q.unit === 'bp' ? ' (bp)' : '');
 }
@@ -126,6 +205,12 @@ function kindText(q) {
 function impliedText(q, last) {
   const m = q.implied;
   if (!m) return '';
+  if (m.kind === 'switch') {
+    // the longer bond's cheapness against the shorter one at the level said: on the fitted ASW curve, else the screen
+    const v = typeof m.vs_curve === 'number' ? m.vs_curve : m.vs_screen;
+    if (typeof v !== 'number') return '';
+    return (v > 0 ? '+' : '') + num(v, 1, false) + ' bp ' + (typeof m.vs_curve === 'number' ? 'eğri' : 'ekran') + ' · uzun ' + (v >= 0 ? 'ucuz' : 'pahalı');
+  }
   const r = (v) => (typeof v === 'number' ? num(v, 2, false) : '');
   if (typeof m.bid === 'number' || typeof m.ask === 'number') return r(m.bid) + ' / ' + r(m.ask);
   return r(last ? m.last : m.price);
@@ -134,6 +219,14 @@ function impliedText(q, last) {
 function impliedTip(q) {
   const m = q.implied;
   if (!m) return '';
+  if (m.kind === 'switch') {
+    const legs = (m.legs || []).map((l) => l.label + ' getiri ' + num(l.yield, 2, false) + '%' + (typeof l.rv === 'number' ? ', eğriye göre ' + num(l.rv, 1, false) + ' bp' : ''));
+    return 'DİBS RV ekranı: ' + legs.join(' · ') + ' → ekrandaki switch ' + num(m.screen, 1, false) + ' bp'
+      + (typeof m.rv === 'number' ? ', uzunun kısaya göre ucuzluğu (ASW eğrisi) ' + num(m.rv, 1, false) + ' bp' : '')
+      + '. Söylenen seviye ' + num(m.at, 1, false) + ' bp: ekrandan ' + num(m.vs_screen, 1, false) + ' bp'
+      + (typeof m.vs_curve === 'number' ? '; eğriye göre ' + num(m.vs_curve, 1, false) + ' bp' : '')
+      + '. Artı: uzun vadeli kâğıt ucuz (uzunu al, kısayı sat).';
+  }
   if (m.kind === 'bond') {
     return 'Fiyatın ima ettiği getiri (DİBS RV ekranından): ekran ' + num(m.screen, 3, false) + ' · getiri ' + num(m.screen_yield, 2, false)
       + '% · mod. süre ' + num(m.mod_dur, 2, false) + ' – getiri − (fiyat − ekran) / (ekran · süre)';
@@ -583,7 +676,8 @@ export class BrokerPage {
           tip: 'Satır girildiği anda dashboard eğrisinin bu enstrüman için verdiği seviye' } : { t: '', k: '' },
         q.note || '',
         q.implied ? { t: impliedText(q), k: 's', cls: 'soft', tip: impliedTip(q) } : { t: '', k: '' },
-        { t: '', k: '', cls: 'act', act: { label: '✕', title: 'Satırı sil', fn: () => this.remove(q) } }])),
+        { t: '', k: '', cls: 'act', act: (this.canTrade(q) ? [{ id: 'trade', label: '⇢', title: 'İşlem gir: Günlük İşlemler bu satırın enstrümanı, seviyesi ve '
+          + 'yönüyle dolu açılır', fn: () => this.openTrade(q) }] : []).concat([{ id: 'del', label: '✕', title: 'Satırı sil', fn: () => this.remove(q) }]) }])),
       d.rows.length ? (rows.length === d.rows.length ? rows.length + ' satır' : rows.length + ' / ' + d.rows.length + ' satır') : '',
       d.rows.length ? 'Süzgece uyan satır yok' : (d.ranged ? 'Bu aralıkta kayıt yok' : 'Bu gün için kayıt yok'),
       JSON.stringify([d.ranged, s, allOn, rows.map((q) => q.id + q.party + q.source + (this.picked.has(q.id) ? '+' : ''))]));
@@ -608,6 +702,68 @@ export class BrokerPage {
         if (scroller.scrollHeight > scroller.clientHeight) scroller.scrollTop = scroller.scrollHeight;
       }
     }
+  }
+
+  /** A line one can book: a trade, or a quote of ours (a client dealt on it), of a product Günlük İşlemler takes. */
+  canTrade(q) {
+    return !!(this.ctx.openTrade && tradeKind(q) && tradeLevels(q).length && (q.event === 'trade' || q.party === 'biz'));
+  }
+
+  /** "İşlem gir": the level and our side, then Günlük İşlemler with the trade filled - the amount is left to type. */
+  openTrade(q) {
+    const levels = tradeLevels(q);
+    if (!levels.length) return;
+    const names = tradeSideNames(q);
+    let key = levels[0][0];
+    let buy = tradeBuys(q, key);
+    let byHand = false;
+    const m = modal({ title: 'İşlem gir · ' + instText(q), width: 500 });
+    m.box.id = 'chat-trade';
+    const lvBox = h('div', { class: 'seg', id: 'chat-trade-level' });
+    const sideBox = h('div', { class: 'seg', id: 'chat-trade-side' });
+    const why = h('div', { class: 'muted', id: 'chat-trade-why' });
+    const go = h('button', { class: 'btn primary', type: 'button', id: 'chat-trade-open' }, 'Günlük İşlemler\'de aç');
+    const whyText = () => {
+      if (byHand) return 'Yön elle seçildi.';
+      if (key === 'bid') return q.party === 'biz' ? 'Bizim kotamız: bid\'imize satıldı → biz ' + names[0] : 'Broker kotası: bid\'e verdik → biz ' + names[1];
+      if (key === 'ask') return q.party === 'biz' ? 'Bizim kotamız: offer\'ımız alındı → biz ' + names[1] : 'Broker kotası: offer\'ı aldık → biz ' + names[0];
+      if (q.side === 'ask') return 'İşlem: offer alındı → ' + names[0] + (q.party === 'biz' ? '' : ' (bizim tarafımızsa)');
+      if (q.side === 'bid') return 'İşlem: bid\'e verildi → ' + names[1] + (q.party === 'biz' ? '' : ' (bizim tarafımızsa)');
+      return 'Satır yönü söylemiyor: yönü seçin.';
+    };
+    const render = () => {
+      clear(lvBox);
+      for (const [k, caption, v] of levels) {
+        const b = h('button', { type: 'button', class: k === key ? 'on' : '' }, caption + ' ' + level(v, q.unit));
+        b.dataset.v = k;
+        b.addEventListener('click', () => { key = k; if (!byHand) buy = tradeBuys(q, k); render(); });
+        lvBox.appendChild(b);
+      }
+      clear(sideBox);
+      for (const [v, label] of [[true, names[0]], [false, names[1]]]) {
+        const b = h('button', { type: 'button', class: (buy === v ? 'on ' : '') + (v ? 'buy' : 'sell') }, label);
+        b.dataset.v = v ? 'buy' : 'sell';
+        b.addEventListener('click', () => { buy = v; byHand = true; render(); });
+        sideBox.appendChild(b);
+      }
+      why.textContent = whyText();
+      go.disabled = buy === null;
+    };
+    go.addEventListener('click', () => {
+      const spec = tradeSpec(q, key, buy);
+      if (!spec) return;
+      m.close();
+      this.ctx.openTrade(spec);
+    });
+    m.body.appendChild(h('div', { class: 'muted said' }, [q.time, q.sender].filter(Boolean).join(' · ') + ' — ' + (q.raw || '')));
+    m.body.appendChild(h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', null, 'Seviye'), lvBox),
+      h('div', { class: 'field' }, h('label', null, 'Bizim yönümüz'), sideBox)));
+    m.body.appendChild(why);
+    m.body.appendChild(h('div', { class: 'muted' }, 'Günlük İşlemler\'de enstrüman, seviye, yön ve not dolu açılır; tutarı yazıp kaydedin.'));
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
+    m.foot.appendChild(go);
+    render();
+    return m;
   }
 
   async remove(q) {

@@ -328,6 +328,149 @@ export class EodPage extends HistoryPage {
   }
 }
 
+// ====================================================================================== spreads over OIS
+const Z_NAMES = { 20: '1A', 60: '3A', 250: '1Y' };
+
+export class SpreadsPage extends HistoryPage {
+  constructor(host, ctx) {
+    super(host, ctx);
+    let w = 60;
+    try { w = Number(localStorage.getItem('tto.spreads.window')) || 60; } catch (e) { /* ignore */ }
+    this.window = Z_NAMES[w] ? w : 60;
+    this.picked = null;                    // the spread drawn: its id ("off:12", "viop:A1Z6 Curncy")
+    this.fetched = 0;
+  }
+
+  fetch() {
+    this.fetched = Date.now();
+    return api.get('/api/spreads');
+  }
+
+  /** The live points move with the market: look again every 15 seconds, and whenever the history moved. */
+  async refresh(force) {
+    if (this.busy || this.dead) return;
+    if (!force && Date.now() - this.fetched < 15000) return super.refresh(false);
+    this.busy = true;
+    try {
+      const data = await this.fetch();
+      if (this.dead) return;
+      this.data = data;
+      this.rev = data.rev;
+      this.render();
+      this.showState(data.state);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  build() {
+    this.winSeg = seg(Object.keys(Z_NAMES).map((n) => [Number(n), n + ' gün', 'z-skoru, ortalama, σ, aralık ve yüzdelik son ' + n + ' kapanıştan']),
+      this.window, (v) => {
+        this.window = Number(v);
+        try { localStorage.setItem('tto.spreads.window', String(this.window)); } catch (e) { /* ignore */ }
+        this.render();
+      });
+    this.winSeg.id = 'spread-window';
+    const now = h('button', { class: 'btn sm', type: 'button', title: 'Kapanışları şimdi güncelle' }, 'Güncelle');
+    now.addEventListener('click', async () => {
+      try { this.showState(await api.post('/api/history/sync', {})); this.running = true; } catch (err) { errorToast(err); }
+    });
+    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'İstatistik penceresi'), this.winSeg,
+      h('span', { class: 'grow' }), this.stateEl, now));
+    this.banner = h('div', { class: 'banner hidden' });
+    this.host.appendChild(this.banner);
+    this.offPanel = gridPanel('Offshore − OIS · vade bazında (bp)', { wide: true, id: 'spread-off' });
+    this.viopPanel = gridPanel('VİOP − OIS · kontrat bazında (bp)', { wide: true, id: 'spread-viop' });
+    this.chartPanel = panel('Spread geçmişi', { wide: true, chart: true, id: 'spread-chart' });
+    this.chartHost = h('div');
+    this.chartPanel.body.appendChild(this.chartHost);
+    this.host.appendChild(h('div', { class: 'panels' }, this.chartPanel.el, this.offPanel.el, this.viopPanel.el));
+  }
+
+  /** One spread as a row: its level and moves, then where it stands against the window's closes. */
+  cells(r, sc, first) {
+    const b = (r.bands || {})[String(this.window)] || {};
+    const zc = isNum(b.z) ? { t: (b.z > 0 ? '+' : '') + num(b.z, 2, false), v: b.z, k: 'n', b: Math.abs(b.z) >= 2 ? 1 : 0,
+      heat: heat(b.z, 3), tip: b.n + ' kapanış: ortalama ' + num(b.mean, 1, false) + ' bp, σ ' + num(b.sd, 1, false) + ' bp' } : EMPTY();
+    const lv = { t: num(r.level, 1, false), v: r.level, k: 'n', b: 1,
+      tip: r.live ? 'Canlı (bugünün kotası)' : isoToTr(r.day) + ' kapanışı (canlı kota yok)', c: r.live ? undefined : 'mute' };
+    const pick = { t: '', k: '', cls: 'act', act: { id: 'chart', label: '📈', title: 'Grafikte göster', fn: () => { this.picked = r.id; this.render(); } } };
+    return first.concat([lv, D(r.d1, sc, 1, r.d1_from, r.d1_day, 1), D(r.w1, sc, 1, r.w1_from, r.w1_day, 1), D(r.m1, sc, 1, r.m1_from, r.m1_day, 1),
+      N(b.mean, 1), N(b.sd, 1), zc, N(b.min, 1), N(b.max, 1),
+      isNum(b.pct) ? { t: '%' + num(b.pct * 100, 0, false), v: b.pct, k: 'n', tip: 'Son ' + b.n + ' kapanışın ne kadarı bugünkünün altında' } : EMPTY(),
+      { t: String(r.n), k: 'n', tip: isoToTr(r.first) + ' – ' + isoToTr(r.day) }, pick]);
+  }
+
+  render() {
+    const d = this.data;
+    const W = this.window;
+    const tail = ['Spread', 'Δ1G', 'Δ1H', 'Δ1A', 'Ort. ' + W + 'g', 'σ ' + W + 'g', 'z ' + W + 'g', 'Min', 'Maks', 'Yüzdelik', 'Kapanış', ''].map((t) => HD(t));
+    const all = d.off.concat(d.viop);
+    const notes = [];
+    if (!all.some((r) => r.n > 1)) {
+      notes.push(d.live ? 'Henüz kapanış geçmişi yok – Bloomberg geçmişi çekiliyor ya da bu seriler için geçmiş gelmedi (Ayarlar → Tarihçe serileri).'
+        : 'Kayıtlı veri modunda spread geçmişi yok: yalnızca bugünün seviyesi görünür. Bloomberg bağlıyken offshore ve OIS kapanışları bir yıl '
+          + 'geriye doldurulur, VİOP geçmişi VİOP sayfasındaki geçmiş tablosundan gelir.');
+    }
+    this.banner.textContent = notes.join(' ');
+    this.banner.classList.toggle('hidden', !notes.length);
+
+    // ---- offshore − OIS
+    const so = scaleOf(d.off.flatMap((r) => [r.d1, r.w1, r.m1]), 10);
+    const offRows = [[HD('Vade'), HD('Tür'), HD('Offshore %'), HD('OIS %')].concat(tail)];
+    for (const r of d.off) {
+      offRows.push(this.cells(r, so, [TXT(r.tenor, { cls: 'lab', b: 1 }), TXT(r.kind, { c: 'mute' }),
+        N(r.off_now, 3, { tip: 'Offshore ' + r.off_label + ': kullanılan kaynağın bid / ask ortası (Ayarlar → Veri kaynakları)' }),
+        N(r.ois_now, 3, { tip: 'TRY OIS ' + r.ois_label + ': kullanılan kaynak' })]));
+    }
+    if (!d.off.length) offRows.push([TXT('Offshore ve OIS\'in ortak vadesi için ne kapanış ne canlı kota var', { cs: 16 })].concat(Array.from({ length: 15 }, SKIP)));
+    this.offPanel.setData({ sheet: '', rows: offRows });
+    this.offPanel.setNote('Offshore: 9 aya kadar FX swap ima getirisi (ICAP), 1 yıldan itibaren XCCY. Kapanışlar Gün Sonu Matrisi\'nin '
+      + 'serileridir (kaynak sırası: ' + ((d.history && d.history.source) || 'Ayarlar') + '); spread yalnızca iki eğrinin de kapanışı olan günlerden '
+      + 'hesaplanır. Spread sütunu canlıysa bugünün kotası (soluk: son kapanış). z = (spread − ortalama) / σ, son ' + W + ' kapanışa göre.');
+
+    // ---- VİOP − OIS
+    const sv = scaleOf(d.viop.flatMap((r) => [r.d1, r.w1, r.m1]), 10);
+    const viopRows = [[HD('Kontrat'), HD('Vadeye gün'), HD('VİOP ima %'), HD('OIS %')].concat(tail)];
+    for (const r of d.viop) {
+      viopRows.push(this.cells(r, sv, [TXT(r.tenor, { cls: 'lab', b: 1, tip: r.ticker + (r.expiry ? ' · vade ' + isoToTr(r.expiry) : '') }),
+        N(r.to_expiry, 0), N(r.imp_now, 2, { tip: 'Bugünün son fiyatından ima TRY faizi (VİOP sayfasının formülü)' }),
+        N(r.ois_now, 2, { tip: 'Aynı güne OIS (ACT/360) – VİOP sayfasının baz formülünün karşılaştırdığı' })]));
+    }
+    if (!d.viop.length) viopRows.push([TXT('VİOP geçmiş grafiğinde kontrat seçili değil', { cs: 16 })].concat(Array.from({ length: 15 }, SKIP)));
+    this.viopPanel.setData({ sheet: '', rows: viopRows });
+    this.viopPanel.setNote('Kontratlar ve geçmişin uzunluğu VİOP sayfasındaki VİOP GEÇMİŞİ tablosundan (Çizgi 1–6; Geçmiş '
+      + (isNum(d.viop_days) ? num(d.viop_days, 0) + ' iş günü' : '—') + '). Baz: VİOP sayfasının kendi formülü (ima TRY − aynı vadeye OIS, bp); '
+      + 'son nokta bugünün canlı son fiyatı.');
+
+    // ---- the chart of the one picked
+    const row = all.find((r) => r.id === this.picked) || all.find((r) => r.n > 1) || all[0];
+    this.chartPanel.el.classList.toggle('hidden', !row);
+    if (!row) return;
+    this.picked = row.id;
+    const name = (row.id.startsWith('viop:') ? 'VİOP ' : 'Offshore ') + row.tenor + ' − OIS';
+    const b = (row.bands || {})[String(W)] || {};
+    const n = row.days.length;
+    const flat = (v) => row.days.map(() => (isNum(v) ? v : null));
+    const series = [{ name, kind: 'line', color: '4F81BD', data: row.values, marker: n <= 45 }];
+    if (isNum(b.mean) && isNum(b.sd)) {
+      series.push({ name: 'Ortalama (' + W + 'g)', kind: 'line', color: '7F7F7F', dash: true, data: flat(b.mean), marker: false });
+      series.push({ name: '±2σ', kind: 'line', color: 'F79646', dash: true, data: flat(b.mean + 2 * b.sd), marker: false });
+      series.push({ name: '', kind: 'line', color: 'F79646', dash: true, data: flat(b.mean - 2 * b.sd), marker: false, legend: 0 });
+    } else if (series.length === 1) {
+      series.push({ name: '', kind: 'line', data: row.days.map(() => null), legend: 0 });
+    }
+    const spec = { title: name, cats: row.days.map(isoToTr), x: { type: 'date', values: row.days.map(serialOf), format: 'mmm yy' },
+      auto: 'fit', decimals: 0, y_title: 'bp', aspect: 0.3, series };
+    if (this.chart) this.chart.update(spec);
+    else this.chart = new Chart(this.chartHost, spec, { height: 300 });
+    this.chartPanel.title.textContent = name + ' (bp)' + (n > 1 ? ' · ' + isoToTr(row.days[0]) + ' – ' + isoToTr(row.days[n - 1]) : '');
+    this.chartPanel.setNote(isNum(b.z) ? 'Şu an ' + num(row.level, 1, false) + ' bp: son ' + W + ' kapanışın ortalaması ' + num(b.mean, 1, false)
+      + ' bp, σ ' + num(b.sd, 1, false) + ' bp → z ' + (b.z > 0 ? '+' : '') + num(b.z, 2, false) + '. Kesikli çizgiler: ortalama ve ±2σ.'
+      : 'z-skoru için en az 20 kapanış gerekir. Tablodaki 📈 ile başka bir spread çizilir.');
+  }
+}
+
 // ====================================================================================== meeting pricing history
 const SLOTS = ['3B83F7', 'DF2A48', '247F50', '9F5EC9', '07A2B0', 'D67A29'];        // one colour family per chart line
 const METRICS = {
@@ -568,15 +711,18 @@ export class SettingsPage {
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
-    const [cal, cov, src] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources')]);
+    const [cal, cov, src, carry] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
+      api.get('/api/carry').catch(() => ({ available: false }))]);
     if (this.dead) return;
     this.cal = cal;
     this.cov = cov;
     this.src = src;
+    this.carry = carry;
     this.rows = cal.meetings.map((m) => ({ date: m.date, was: m.date }));
     this.dirty = false;
     clear(this.host);
     this.build();
+    this.renderCarry();
     this.renderSources(true);
     this.renderCalendar();
     this.renderHistory();
@@ -621,6 +767,26 @@ export class SettingsPage {
   }
 
   build() {
+    // ---- the carry: which TLREF path, over which horizons
+    this.carryPanel = panel('Carry · TLREF patikası ve ufuklar', { wide: true, id: 'carry' });
+    this.carryPath = h('select', { class: 'inp', id: 'carry-path' });
+    this.carryA = h('input', { class: 'inp num', type: 'text', id: 'carry-a', style: { width: '60px' } });
+    this.carryB = h('input', { class: 'inp num', type: 'text', id: 'carry-b', style: { width: '60px' } });
+    this.carryInfo = h('div', { class: 'set-info', id: 'carry-info' });
+    const carrySave = h('button', { class: 'btn primary', type: 'button', id: 'carry-save' }, 'Kaydet');
+    carrySave.addEventListener('click', () => this.saveCarry());
+    for (const inp of [this.carryA, this.carryB]) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveCarry(); });
+    this.carryPanel.body.appendChild(h('div', { class: 'set-body' }, this.carryInfo,
+      h('div', { class: 'carry-actions' },
+        h('div', { class: 'field' }, h('label', null, 'TLREF patikası'), this.carryPath),
+        h('div', { class: 'field' }, h('label', null, 'Ufuk A (ay)'), this.carryA),
+        h('div', { class: 'field' }, h('label', null, 'Ufuk B (ay)'), this.carryB),
+        h('span', { class: 'grow' }), carrySave)));
+    this.carryPanel.setNote('Carry = sabit bacağın ufka kadar tahakkuku − TLREF\'in ufka kadar bileşiği (iş günü; ufuktan önce ödenen kupon da bu '
+      + 'patikayla taşınır). Bootstrap: piyasa OIS eğrisinin ima ettiği TLREF (varsayılan) · MPC ima: kotaların ima ettiği PPK patikası · S1 – S3: OIS '
+      + 'sayfasındaki senaryolar · Sabit TLREF: bugünkü TLREF. Roll eğriyi bugünkü haliyle tutar. Carry & Roll ve Realized Vol · Carry sayfaları bu '
+      + 'ayarla hesaplanır; ayar yalnız sizin için geçerlidir (ufuklar OIS sayfasındaki "Ufuk A / B ay" girdileridir).');
+
     // ---- the order of the pricing sources
     this.srcPanel = panel('Veri kaynakları · Bloomberg fiyat kaynağı sırası', { wide: true, id: 'sources' });
     this.srcTable = h('table', { class: 'src-table', id: 'sources-table' });
@@ -707,7 +873,35 @@ export class SettingsPage {
         h('div', { class: 'field' }, h('label', null, 'Geriye bakış (gün)'), this.daysInp),
         saveSet, h('span', { class: 'grow' }), sync, redo)));
     this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.srcPanel.el, this.usedPanel.el, this.calPanel.el, this.histPanel.el, this.seriesPanel.el));
+    this.host.appendChild(h('div', { class: 'panels' }, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el, this.calPanel.el, this.histPanel.el,
+      this.seriesPanel.el));
+  }
+
+  renderCarry() {
+    const c = this.carry;
+    if (!c || !c.available) {
+      this.carryPanel.el.classList.add('hidden');
+      return;
+    }
+    clear(this.carryPath);
+    for (const o of c.options) {
+      const opt = h('option', { value: o.id, title: o.about }, o.label + (o.id === c.default ? ' (varsayılan)' : ''));
+      if (o.id === c.path) opt.selected = true;
+      this.carryPath.appendChild(opt);
+    }
+    this.carryA.value = c.a !== null && c.a !== undefined ? String(c.a) : '';
+    this.carryB.value = c.b !== null && c.b !== undefined ? String(c.b) : '';
+    const hz = c.horizons || {};
+    const end = (k) => (hz[k] && hz[k].date ? isoToTr(hz[k].date) : '–');
+    this.carryInfo.textContent = 'Şu an: ' + (c.about || c.path) + ' · Ufuk A sonu ' + end('a') + ', Ufuk B sonu ' + end('b');
+  }
+
+  async saveCarry() {
+    try {
+      this.carry = await api.post('/api/carry', { path: this.carryPath.value, a: this.carryA.value, b: this.carryB.value });
+      this.renderCarry();
+      toast('Carry ayarı kaydedildi', 'ok');
+    } catch (err) { errorToast(err); }
   }
 
   renderSources(force) {

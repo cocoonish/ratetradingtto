@@ -565,7 +565,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
 BOND_SHEET = "DİBS RV"
 BOND_ROWS_RV = (5, 54)
 _BOND_COLUMNS = {"isin": "ISIN", "name": "Ad", "maturity": "Vade", "clean": "Kullanılan temiz", "mod_dur": "Mod. süre",
-                 "dv01_mn": "DV01 TL / 1mn", "yield": "BIST bileşik getiri"}
+                 "dv01_mn": "DV01 TL / 1mn", "yield": "BIST bileşik getiri", "rv": "Pahalı/ucuz (bp"}
 
 
 def bond_info(book, calc, instrument: str) -> Optional[Dict[str, Any]]:
@@ -592,7 +592,7 @@ def bond_info(book, calc, instrument: str) -> Optional[Dict[str, Any]]:
         code = "".join(isin.upper().split())
         if code == key or (len(key) >= 6 and (key in code or code in key)):
             out: Dict[str, Any] = {"isin": isin.strip(), "row": r}
-            for name in ("name", "maturity", "clean", "mod_dur", "dv01_mn", "yield"):
+            for name in ("name", "maturity", "clean", "mod_dur", "dv01_mn", "yield", "rv"):
                 v = calc.get(si, r, cols[name]) if name in cols else None
                 out[name] = v if type(v) in (float, str) else None
             return out

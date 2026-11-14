@@ -18,10 +18,16 @@ the Excel files (parity and reference tests read those).
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 * ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
 
-The last one changes formulas of the workbook itself, which nothing else here does.  The workbook lists a
-maturity when its bid or ask size "is a number"; over the API Bloomberg answers a size of 0 - and an old
-price, the same on both sides - for a maturity nobody is quoting, where Excel's real-time link shows
-"#N/A N/A".  Listed by the workbook's rule, the page was full of quotes that do not exist.
+The last one changes formulas of the workbook itself.  The workbook lists a maturity when its bid or ask size
+"is a number"; over the API Bloomberg answers a size of 0 - and an old price, the same on both sides - for a
+maturity nobody is quoting, where Excel's real-time link shows "#N/A N/A".  Listed by the workbook's rule, the
+page was full of quotes that do not exist.
+
+Two more change formulas of the TRY workbook, each for a reason given where it is done:
+
+* ``EK_CARRY``  the carry of the Carry & Roll sheet along a TLREF path of one's choice (the Motor sheet's carry
+                engine is pointed at it; the S1 cells it compounded stay for the OIS sheet's own pricing)
+* ``Motor``     the curve's nodes count their days with the desk's calendar instead of Bloomberg's maturities
 """
 from __future__ import annotations
 
@@ -306,6 +312,17 @@ FWD_DF_SOURCES = (("Y", "MPC ima", "I62"), ("Z", "S1", "I63"), ("AA", "S2", "I64
                   ("AC", "Bootstrap", "I67"), ("AD", "TLREF sabit", "I68"))
 
 
+FWD_SPREAD_OWN = "Elle spread"
+FWD_SPREAD_MARKET = "Piyasa spread"
+
+
+def fwd_offshore(days: str, side: str) -> str:
+    """The offshore (ICAP) implied TRY rate (%) of the Forward sheet ``days`` after the USDTRY spot date, its bid
+    (``side`` "I") or ask ("K") - as the sheet reads it for the value date; more than a month past its last node: none."""
+    xs = "Forward!$G$8:$G$21"
+    return 'IF(%s>INDEX(%s,14)+%d,"",%s)' % (days, xs, FR_REACH, lin(days, xs, "Forward!$%s$8:$%s$21" % (side, side), 14))
+
+
 def _forward_check(model: Model) -> None:
     _need_sheets(model, "MASA", "VIOP", "Forward", "OIS_MAIN", "Motor")
     for _, _, src in FWD_DF_SOURCES:                   # the discount factors must depend on the days in $M$60 only
@@ -314,6 +331,9 @@ def _forward_check(model: Model) -> None:
     _need_formula(model, "VIOP", "L99")
     _need_formula(model, "VIOP", "L100")
     _need_formula(model, "Forward", "I2", "SETTLE_DT")
+    _need_formula(model, "Forward", "I22", "$I$8:$I$21")         # the offshore implied curve's nodes: days in G, bid in I, ask in K
+    _need_formula(model, "Forward", "K22", "$K$8:$K$21")
+    _need_formula(model, "Forward", "I22", "$G$8:$G$21")
 
 
 def _tto_forward(model: Model) -> None:
@@ -342,10 +362,13 @@ def _tto_forward(model: Model) -> None:
                 ' · Bootstrap = kotalardan doğrudan · TLREF sabit = bugünkü TLREF","")', color=NOTE_COLOR)
     b.head("A3", ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask", "Fwd bid",
                   "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "USD %", "P/gün bid", "P/gün ask", "RET bid %", "RET ask %",
-                  "Bid − RET", "Ask − RET"])
+                  "Bid − RET", "Ask − RET", "Piyasa bid (bp)", "Piyasa ask (bp)"])
     # the general row: one spread for every date (a date's own spread can be typed over it), and the spot quotes
     g = FWD_ALL
     b.set("A%d" % g, "Tümü", bold=True, align="center")
+    # the spreads of the dates: one's own ("Elle spread") or the market's (offshore implied − OIS, "Piyasa spread")
+    b.input("B%d" % g, FWD_SPREAD_OWN, align="center")
+    b.dropdown("B%d" % g, (FWD_SPREAD_OWN, FWD_SPREAD_MARKET))
     b.set("C%d" % g, "bp →", color=NOTE_COLOR, align="right")
     b.input("D%d" % g, "=MASA!$I$60", fmt="0", align="center")      # starts from the desk sheet's single spread
     b.input("E%d" % g, "=MASA!$I$60", fmt="0", align="center")
@@ -367,8 +390,9 @@ def _tto_forward(model: Model) -> None:
             b.set("A%d" % r, "serbest", align="center", color=NOTE_COLOR)
             b.input("B%d" % r, None, fmt=DATE)
         b.set("C%d" % r, '=IF(ISNUMBER($B%(r)d),$B%(r)d-Forward!$I$2,"")' % f, fmt=INT0)
-        b.input("D%d" % r, "=$D$%d" % g, fmt="0", align="center")     # per date; starts from the general spread
-        b.input("E%d" % r, "=$E$%d" % g, fmt="0", align="center")
+        # per date; starts from the general spread - or the market's of the date
+        b.input("D%d" % r, '=IF($B$%d="%s",$V%d,$D$%d)' % (g, FWD_SPREAD_MARKET, r, g), fmt="0", align="center")
+        b.input("E%d" % r, '=IF($B$%d="%s",$W%d,$E$%d)' % (g, FWD_SPREAD_MARKET, r, g), fmt="0", align="center")
         b.set("F%d" % r, '=IF($C%(r)d="","",$F$%(g)d)' % f, fmt=NUM4)
         b.set("G%d" % r, '=IF($C%(r)d="","",$G$%(g)d)' % f, fmt=NUM4)
         b.set("H%d" % r, '=IFERROR(IF($C%(r)d="","",($J%(r)d-$F%(r)d)*10000),"")' % f, fmt=INT0, bold=True)
@@ -376,6 +400,9 @@ def _tto_forward(model: Model) -> None:
         b.set("J%d" % r, '=IFERROR(IF($C%(r)d="","",$F%(r)d*(1+$M%(r)d/100*$C%(r)d/360)/(1+$O%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM4)
         b.set("K%d" % r, '=IFERROR(IF($C%(r)d="","",$G%(r)d*(1+$N%(r)d/100*$C%(r)d/360)/(1+$O%(r)d/100*$C%(r)d/360)),"")' % f, fmt=NUM4)
         b.set("L%d" % r, '=IF($C%(r)d="","",INDEX($AE%(r)d:$AK%(r)d,MATCH($B$2,$AE$3:$AK$3,0)))' % f, fmt="0.00")
+        # the market's spread of the date: the offshore (ICAP) implied TRY rate − OIS, bid and ask
+        for col, side in (("V", "I"), ("W", "K")):
+            b.set("%s%d" % (col, r), '=IFERROR(IF($C%d="","",(%s-$L%d)*100),"")' % (r, fwd_offshore("$C%d" % r, side), r), fmt="0")
         b.set("M%d" % r, '=IFERROR(IF($C%(r)d="","",$L%(r)d+IF(ISNUMBER($D%(r)d),$D%(r)d,$D$%(g)d)/100),"")' % f, fmt="0.00")
         b.set("N%d" % r, '=IFERROR(IF($C%(r)d="","",$L%(r)d+IF(ISNUMBER($E%(r)d),$E%(r)d,$E$%(g)d)/100),"")' % f, fmt="0.00")
         b.set("O%d" % r, '=IFERROR(IF($C%d="","",%s),"")' % (r, lin("$C%d" % r, usd_x, usd_y, 20)), fmt="0.00")
@@ -396,7 +423,8 @@ def _tto_forward(model: Model) -> None:
         b.set("AI%d" % r, '=IFERROR((OIS_MAIN!$Q$3*$AF%(r)d+OIS_MAIN!$Q$4*$AG%(r)d+OIS_MAIN!$Q$5*$AH%(r)d)/SUM(OIS_MAIN!$Q$3:$Q$5),NA())' % f,
               fmt="0.0000")
     b.note("A%d" % (r2 + 1), "TRY faizi = seçilen OIS eğrisinin spot→valör ACT/360 basit faizi + spread (bp); eğriler MASA 'Tarih arası faiz' "
-                             "bloğundaki iskonto faktörleriyle aynı. Spread bp; 'Tümü' satırı bütün vadelere, vade satırındaki değer yalnız o vadeye uygulanır.")
+                             "bloğundaki iskonto faktörleriyle aynı. Spread bp; 'Tümü' satırı bütün vadelere, vade satırındaki değer yalnız o vadeye uygulanır. "
+                             "Piyasa bid / ask = offshore (ICAP) ima TRY faizi − OIS: 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır.")
     b.note("A%d" % (r2 + 2), "Fwd bid = spot bid·(1+TRY bid·g/360)/(1+USD·g/360), ask tarafı spot ask ve TRY ask ile (Forward fiyatlama "
                              "tablosuyla aynı formül). Puan = (fwd − spot)·10000; P/gün = puan/gün. 'Bid/Ask − RET' = aynı valörde RET bid/ask faiziyle çıkan puana fark.")
 
@@ -1116,9 +1144,11 @@ def _tto_fwd_eur(model: Model) -> None:
     b.note("K%d" % c, "eğri ve 'Tümü' spread'leri USDTRY matrisinden gelir; EURTRY için ayrıca seçilip yazılabilir")
     b.head("A%d" % h, ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask", "Fwd bid",
                        "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "EUR %", "P/gün bid", "P/gün ask", "RET bid %", "RET ask %",
-                       "Bid − RET", "Ask − RET"])
+                       "Bid − RET", "Ask − RET", "Piyasa bid (bp)", "Piyasa ask (bp)"])
     # the general row: the spreads (from the USDTRY matrix's) and the EURTRY spot (Bloomberg bid / ask, or typed)
     b.set("A%d" % g, "Tümü", bold=True, align="center")
+    b.input("B%d" % g, "=$B$%d" % FWD_ALL, align="center")             # one's own spreads or the market's: as USDTRY unless set
+    b.dropdown("B%d" % g, (FWD_SPREAD_OWN, FWD_SPREAD_MARKET))
     b.set("C%d" % g, "bp →", color=NOTE_COLOR, align="right")
     b.input("D%d" % g, "=$D$%d" % FWD_ALL, fmt="0", align="center")
     b.input("E%d" % g, "=$E$%d" % FWD_ALL, fmt="0", align="center")
@@ -1140,8 +1170,8 @@ def _tto_fwd_eur(model: Model) -> None:
             b.set("A%d" % r, "serbest", align="center", color=NOTE_COLOR)
             b.input("B%d" % r, None, fmt=DATE)
         b.set("C%d" % r, '=IF(ISNUMBER($B%d),$B%d-%s,"")' % (r, r, spot), fmt=INT0)     # days from the EURTRY spot date
-        b.input("D%d" % r, "=$D$%d" % g, fmt="0", align="center")
-        b.input("E%d" % r, "=$E$%d" % g, fmt="0", align="center")
+        b.input("D%d" % r, '=IF($B$%d="%s",$V%d,$D$%d)' % (g, FWD_SPREAD_MARKET, r, g), fmt="0", align="center")
+        b.input("E%d" % r, '=IF($B$%d="%s",$W%d,$E$%d)' % (g, FWD_SPREAD_MARKET, r, g), fmt="0", align="center")
         b.set("F%d" % r, '=IF($C%(r)d="","",$F$%(g)d)' % f, fmt=NUM4)
         b.set("G%d" % r, '=IF($C%(r)d="","",$G$%(g)d)' % f, fmt=NUM4)
         b.set("H%d" % r, '=IFERROR(IF($C%(r)d="","",($J%(r)d-$F%(r)d)*10000),"")' % f, fmt=INT0, bold=True)
@@ -1161,6 +1191,8 @@ def _tto_fwd_eur(model: Model) -> None:
               fmt=INT0)
         b.set("U%d" % r, '=IFERROR(IF($C%(r)d="","",$I%(r)d-($G%(r)d*(1+$S%(r)d/100*$C%(r)d/360)/(1+$O%(r)d/100*$C%(r)d/360)-$G%(r)d)*10000),"")' % f,
               fmt=INT0)
+        for col, side in (("V", "I"), ("W", "K")):                     # the market's: offshore implied − OIS, at the TRY days
+            b.set("%s%d" % (col, r), '=IFERROR(IF($C%d="","",(%s-$L%d)*100),"")' % (r, fwd_offshore("$AL%d" % r, side), r), fmt="0")
         # helpers: days from the OIS spot date, the discount factor and the ACT/360 simple rate of each curve
         b.set("X%d" % r, '=IF(ISNUMBER($B%(r)d),$B%(r)d-OIS_MAIN!$B$2,"")' % f, fmt=INT0)
         for col, name, _ in FWD_DF_SOURCES:
@@ -1171,7 +1203,8 @@ def _tto_fwd_eur(model: Model) -> None:
         b.set("AL%d" % r, '=IF(ISNUMBER($B%d),$B%d-%s,"")' % (r, r, usd_spot), fmt=INT0)
     b.note("A%d" % (r2 + 1), "TRY faizi = seçilen OIS eğrisinin spot→valör ACT/360 basit faizi + spread (bp), USDTRY matrisiyle aynı eğriler. "
                              "'Tümü' satırı bütün vadelere, vade satırındaki değer yalnız o vadeye uygulanır; spread'ler ve eğri başlangıçta "
-                             "USDTRY matrisinindir, EURTRY için ayrıca yazılabilir. Spot: Bloomberg EURTRY bid / ask (yazılabilir).")
+                             "USDTRY matrisinindir, EURTRY için ayrıca yazılabilir. Spot: Bloomberg EURTRY bid / ask (yazılabilir). Piyasa bid / ask = "
+                             "offshore (ICAP) ima TRY faizi − OIS; 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır.")
     b.note("A%d" % (r2 + 2), "Fwd bid = spot bid·(1+TRY bid·g/360)/(1+EUR·g/360), ask tarafı spot ask ve TRY ask ile; g = valör − EURTRY spot "
                              "valörü, EUR faizi EUR OIS eğrisinden. Puan = (fwd − spot)·10000; P/gün = puan/gün. 'Bid/Ask − RET' = aynı valörde "
                              "RET bid/ask faiziyle çıkan puana fark.")
@@ -1746,6 +1779,162 @@ def _tto_universe(model: Model) -> None:
     b.sheet.freeze = [4, 2]
 
 
+# ---------------------------------------------------------------------------------------------- carry path
+CARRY_SHEET = "EK_CARRY"
+#: the TLREF path the carry engine compounds over the horizon: the value of the choice, and what it is
+CARRY_PATHS = (("Bootstrap", "piyasa OIS eğrisinin (bootstrap) ima ettiği TLREF"),
+               ("MPC ima", "kotaların ima ettiği PPK patikası"),
+               ("S1", "S1 senaryosu"), ("S2", "S2 senaryosu"), ("S3", "S3 senaryosu"),
+               ("Sabit TLREF", "bugünkü TLREF, sabit"))
+CARRY_DEFAULT = "Bootstrap"
+#: the meeting table of the Motor sheet: a path's TLREF after each meeting and its compounded log growth
+CARRY_MEETING_PATHS = {"S1": ("H", "I"), "S2": ("N", "O"), "S3": ("P", "Q"), "MPC ima": ("K", "L")}
+CARRY_ENGINE_A = (182, 197)               # Motor: the tenor engine of horizon A ...
+CARRY_ENGINE_B = (201, 216)               # ... and of horizon B (the same tenors)
+CARRY_PERIODS = (139, 178)                # Motor: the quarterly schedule (payment days in F)
+CARRY_TENOR_ROW = 11                      # EK_CARRY: first row of the tenors' G(T)
+CARRY_PERIOD_ROW = 29                     # EK_CARRY: first row of the payment days' G(t)
+
+
+def carry_growth(days: str, which: str) -> str:
+    """The growth factor G(d) of TLREF compounded on business days from the OIS spot date ``days`` later, along the
+    path in cell ``which`` (1 = Sabit TLREF, 2-4 = S1-S3, 5 = MPC ima, 6 = Bootstrap) - the Motor sheet's own
+    formula for its scenario paths, and for the bootstrapped curve 1 / its discount factor."""
+    def meeting(tl: str, lng: str) -> str:
+        m = "MATCH(%s,Motor!$C$4:$C$84,1)" % days
+        return ("EXP(INDEX(Motor!$%(g)s$4:$%(g)s$84,%(m)s)+(%(d)s-INDEX(Motor!$C$4:$C$84,%(m)s))*LN(1+INDEX(Motor!$%(t)s$4:$%(t)s$84,%(m)s)/365)"
+                "-(INDEX(Motor!$F$528:$F$4228,MIN(%(d)s,3700)+1)-INDEX(Motor!$J$4:$J$84,%(m)s))*(INDEX(Motor!$%(t)s$4:$%(t)s$84,%(m)s)/365)^2)"
+                % {"g": lng, "t": tl, "m": m, "d": days})
+    flat = ("EXP(%(d)s*LN(1+OIS_MAIN!$J$2/365)-INDEX(Motor!$F$528:$F$4228,MIN(%(d)s,3700)+1)*(OIS_MAIN!$J$2/365)^2)" % {"d": days})
+    k = "MIN(MATCH(%s,Motor!$C$88:$C$130,1),42)" % days
+    boot = ("1/EXP(INDEX(Motor!$I$88:$I$130,%(k)s)+(INDEX(Motor!$I$88:$I$130,%(k)s+1)-INDEX(Motor!$I$88:$I$130,%(k)s))*(%(d)s-INDEX(Motor!$C$88:$C$130,%(k)s))"
+            "/(INDEX(Motor!$C$88:$C$130,%(k)s+1)-INDEX(Motor!$C$88:$C$130,%(k)s)))" % {"k": k, "d": days})
+    paths = [flat] + [meeting(*CARRY_MEETING_PATHS[n]) for n in ("S1", "S2", "S3", "MPC ima")] + [boot]
+    return "CHOOSE(%s,%s)" % (which, ",".join(paths))
+
+
+def _carry_check(model: Model) -> None:
+    """The carry engine of the Motor sheet compounds TLREF along the S1 path in the cells this addition re-points:
+    the horizon growth (E134 / E135), each tenor's growth (F182:F216), the reinvestment of coupons paid before the
+    horizon (J / K139:178, L182:L216) and the TLREF at the horizon (G134 / G135)."""
+    _need_sheets(model, "Motor", "OIS_MAIN", "C & R")
+    for addr in ("E134", "E135", "G134", "G135"):
+        _need_formula(model, "Motor", addr, "$H$4:$H$84")
+    for first, last in (CARRY_ENGINE_A, CARRY_ENGINE_B):
+        for r in range(first, last + 1):
+            _need_formula(model, "Motor", "F%d" % r, "$I$4:$I$84")
+            _need_formula(model, "Motor", "L%d" % r, "/$G$139:$G$178")
+    for r in range(CARRY_PERIODS[0], CARRY_PERIODS[1] + 1):
+        _need_formula(model, "Motor", "J%d" % r, "$E$134/G%d" % r)
+        _need_formula(model, "Motor", "K%d" % r, "$E$135/G%d" % r)
+    for tl, lng in CARRY_MEETING_PATHS.values():                    # the meeting table holds the paths there
+        _need_formula(model, "Motor", "%s5" % lng, "LN(1+(%s4)/365)" % tl)
+    _need_formula(model, "Motor", "I89", "LN(G89)")                  # the bootstrapped curve's log discount factors
+    if model.sheet("C & R").consts.get(parse_a1("A1")) != "CARRY & ROLL-DOWN – eğri sabit, TLREF = senaryo patikası (iş günü bileşik)":
+        raise ValueError("C & R!A1 beklenen başlık değil")
+
+
+def _tto_carry(model: Model) -> None:
+    """The carry of the Carry & Roll sheet along a TLREF path of one's choice - today's TLREF kept flat, one of the
+    three scenarios, the path the quotes imply or the bootstrapped curve (the default) - instead of the S1 scenario
+    the workbook compounds.  The roll keeps the curve as it is, as the sheet does.  The S1 cells themselves stay as
+    they are: the OIS sheet's own pricing reads them."""
+    b = SheetBuilder(model, CARRY_SHEET)
+    names = [n for n, _ in CARRY_PATHS]
+    b.title("A1", "CARRY PATİKASI  ·  carry'de TLREF'in ufka kadar bileşiği (ve ufuktan önce ödenen kuponların getirisi) bu patikadan")
+    b.set("A2", "Patika", bold=True)
+    b.input("B2", CARRY_DEFAULT, align="center")
+    b.dropdown("B2", names)
+    b.set("C2", '=CHOOSE($F$7,"bugünkü TLREF, sabit","S1 senaryosu ("&OIS_MAIN!$P$3&")","S2 senaryosu ("&OIS_MAIN!$P$4&")",'
+                '"S3 senaryosu ("&OIS_MAIN!$P$5&")","kotaların ima ettiği PPK patikası (MPC ima)","piyasa OIS eğrisinin (bootstrap) ima ettiği TLREF")',
+          bold=True, color=NOTE_COLOR)
+    b.set("A3", "Ufuk A", bold=True)
+    b.set("B3", "=Motor!$C$134", fmt=DATE)
+    b.set("C3", '="TLREF bileşik "&TEXT(Motor!$F$134*100,"0.00")&" % · ufuk sonu "&TEXT(Motor!$G$134*100,"0.00")&" %"', color=NOTE_COLOR)
+    b.set("A4", "Ufuk B", bold=True)
+    b.set("B4", "=Motor!$C$135", fmt=DATE)
+    b.set("C4", '="TLREF bileşik "&TEXT(Motor!$F$135*100,"0.00")&" % · ufuk sonu "&TEXT(Motor!$G$135*100,"0.00")&" %"', color=NOTE_COLOR)
+    # ---- helpers: the growth along the chosen path at the horizons, the tenors and the payment days
+    b.head("A6", ["Ufuk", "Gün", "G (seçili patika)", "Ufuk sonu TLREF", None, "Patika no"])
+    # which path, as a number (an unknown name: the default)
+    b.set("F7", '=IF($B$2="Sabit TLREF",1,IF($B$2="S1",2,IF($B$2="S2",3,IF($B$2="S3",4,IF($B$2="MPC ima",5,6)))))', fmt="0")
+    for k, (label, row) in enumerate((("A", 134), ("B", 135))):
+        r = 7 + k
+        b.set("A%d" % r, label, bold=True, align="center")
+        b.set("B%d" % r, "=Motor!$D$%d" % row, fmt=INT0)
+        b.set("C%d" % r, "=" + carry_growth("$B%d" % r, "$F$7"), fmt="0.000000000")
+        # the TLREF the path stands at by the horizon: a scenario's after its last meeting, the curve's forward O/N
+        tl = {n: 'INDEX(Motor!$%s$4:$%s$84,MATCH($B%d,Motor!$C$4:$C$84,1))' % (t, t, r) for n, (t, _) in CARRY_MEETING_PATHS.items()}
+        boot = "(%s/%s-1)*365" % (carry_growth("($B%d+1)" % r, "6"), carry_growth("$B%d" % r, "6"))
+        b.set("D%d" % r, "=CHOOSE($F$7,OIS_MAIN!$J$2,%s,%s,%s,%s,%s)" % (tl["S1"], tl["S2"], tl["S3"], tl["MPC ima"], boot), fmt="0.0000%")
+    t0 = CARRY_TENOR_ROW
+    b.head("A%d" % (t0 - 1), ["Vade (ay)", "T gün", "G(T) seçili"])
+    for i, r in enumerate(range(t0, t0 + CARRY_ENGINE_A[1] - CARRY_ENGINE_A[0] + 1)):
+        b.set("A%d" % r, "=Motor!$A$%d" % (CARRY_ENGINE_A[0] + i), fmt="0")
+        b.set("B%d" % r, "=Motor!$E$%d" % (CARRY_ENGINE_A[0] + i), fmt=INT0)
+        b.set("C%d" % r, "=" + carry_growth("$B%d" % r, "$F$7"), fmt="0.000000000")
+    p0 = CARRY_PERIOD_ROW
+    b.head("A%d" % (p0 - 1), ["Dönem", "Ödeme günü", "G(t) seçili"])
+    for i, r in enumerate(range(p0, p0 + CARRY_PERIODS[1] - CARRY_PERIODS[0] + 1)):
+        b.set("A%d" % r, "=Motor!$A$%d" % (CARRY_PERIODS[0] + i), fmt="0")
+        b.set("B%d" % r, "=Motor!$F$%d" % (CARRY_PERIODS[0] + i), fmt=INT0)
+        b.set("C%d" % r, "=" + carry_growth("$B%d" % r, "$F$7"), fmt="0.000000000")
+    last_p = p0 + CARRY_PERIODS[1] - CARRY_PERIODS[0]
+    b.note("A%d" % (last_p + 2), "Carry = sabit bacağın ufka kadar tahakkuku − TLREF'in ufka kadar bileşiği (iş günü, hafta sonu ve tatiller basit); "
+                                 "ufuktan önce ödenen kupon ufka bu patikayla taşınır. Roll eğriyi bugünkü haliyle tutar (Carry & Roll sayfasının "
+                                 "kendi hesabı). S1 – S3 ve MPC ima OIS sayfasındaki toplantı patikaları, Bootstrap piyasa eğrisinin iskonto "
+                                 "faktörleri, Sabit TLREF bugünkü TLREF.")
+
+    # ---- the Motor sheet's carry engine: from the S1 cells to the chosen path's
+    m = SheetBuilder(model, "Motor")
+    m.patch("E134", "=EK_CARRY!$C$7")
+    m.patch("E135", "=EK_CARRY!$C$8")
+    m.patch("G134", "=EK_CARRY!$D$7")
+    m.patch("G135", "=EK_CARRY!$D$8")
+    periods = "EK_CARRY!$C$%d:$C$%d" % (p0, last_p)
+    for first, last in (CARRY_ENGINE_A, CARRY_ENGINE_B):
+        for i, r in enumerate(range(first, last + 1)):
+            m.patch("F%d" % r, "=EK_CARRY!$C$%d" % (t0 + i))
+            m.patch("L%d" % r, "=" + formula_of(model, "Motor", "L%d" % r).replace("/$G$139:$G$178", "/" + periods))
+    for i, r in enumerate(range(CARRY_PERIODS[0], CARRY_PERIODS[1] + 1)):
+        for col, h_cell in (("J", "$E$134"), ("K", "$E$135")):
+            text = formula_of(model, "Motor", "%s%d" % (col, r))
+            m.patch("%s%d" % (col, r), "=" + text.replace("%s/G%d" % (h_cell, r), "%s/EK_CARRY!$C$%d" % (h_cell, p0 + i)))
+    # the sheet says which path it is
+    SheetBuilder(model, "C & R").patch("A1", '="CARRY & ROLL-DOWN – eğri sabit, TLREF = "&EK_CARRY!$C$2&" (iş günü bileşik)"')
+
+
+# ---------------------------------------------------------------------------------------------- desk calendar days
+DESK_DAYS = (89, 130)                     # Motor: the curve's nodes (1M ... 10Y)
+
+
+def _desk_days_check(model: Model) -> None:
+    """The curve's nodes count their days from Bloomberg's maturity of the generic OIS tickers (``=+R89``: maturity −
+    USDTRY settlement) or, where there is no ticker, from the desk's calendar (``=B95-$B$88``)."""
+    _need_sheets(model, "Motor")
+    quoted = 0
+    for r in range(DESK_DAYS[0], DESK_DAYS[1] + 1):
+        text = _need_formula(model, "Motor", "C%d" % r).replace(" ", "")
+        if text == "+R%d" % r:
+            quoted += 1
+        elif text != "B%d-$B$88" % r:
+            raise ValueError("Motor!C%d beklenen gün formülü değil" % r)
+        _need_formula(model, "Motor", "B%d" % r, "WORKDAY(EDATE(OIS_MAIN!$B$2,")
+    if not quoted:
+        raise ValueError("Motor!C89:C130 Bloomberg vadesini okumuyor")
+
+
+def _tto_desk_days(model: Model) -> None:
+    """Every node of the curve counts its days with the desk's calendar - spot + n months, the next business day
+    (Motor!B) - as the nodes without a ticker already do.  On a weekday that is Bloomberg's maturity to the day; at a
+    weekend Bloomberg counts the generic OIS tickers from Monday while the USDTRY settlement is Tuesday, and a tenor
+    across a holiday (6M across Kurban Bayramı) shifted by days: a false "HATA" of the OIS check."""
+    m = SheetBuilder(model, "Motor")
+    for r in range(DESK_DAYS[0], DESK_DAYS[1] + 1):
+        if formula_of(model, "Motor", "C%d" % r).replace(" ", "") == "+R%d" % r:
+            m.patch("C%d" % r, "=B%d-$B$88" % r)
+
+
 #: book -> (name, precondition, builder) of each addition
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
@@ -1755,7 +1944,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("EK_FWD EURTRY", _fwd_eur_check, _tto_fwd_eur),
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
-            (UNI_SHEET, _universe_check, _tto_universe)),
+            (UNI_SHEET, _universe_check, _tto_universe), (CARRY_SHEET, _carry_check, _tto_carry),
+            ("Motor gün sayıları", _desk_days_check, _tto_desk_days)),
 }
 
 

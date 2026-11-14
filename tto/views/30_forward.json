@@ -886,7 +886,49 @@
    "wide": true,
    "borrowed": true,
    "title": "USDTRY FORWARD  ·  valör faizleriyle bid / mid / ask",
-   "note_ref": "A53"
+   "note_ref": "A53",
+   "quote": {
+    "prefix": "USDTRY",
+    "label": "A",
+    "first": 47,
+    "last": 51,
+    "date": "B45",
+    "sets": [
+     {
+      "id": "out",
+      "name": "Outright",
+      "bid": "E",
+      "ask": "G"
+     },
+     {
+      "id": "pts",
+      "name": "Puan",
+      "bid": "H",
+      "ask": "J"
+     },
+     {
+      "id": "pday",
+      "name": "P/gün",
+      "bid": "K",
+      "ask": "M"
+     },
+     {
+      "id": "try",
+      "name": "TRY %",
+      "bid": "B",
+      "ask": "D"
+     }
+    ]
+   },
+   "trade": {
+    "pair": "USDTRY",
+    "label": "A",
+    "first": 47,
+    "last": 51,
+    "date": "B45",
+    "bid": "H",
+    "ask": "J"
+   }
   },
   {
    "id": "FR2",
@@ -897,7 +939,49 @@
    "wide": true,
    "borrowed": true,
    "title": "EURTRY FORWARD  ·  valör faizleriyle bid / mid / ask",
-   "note_ref": "A63"
+   "note_ref": "A63",
+   "quote": {
+    "prefix": "EURTRY",
+    "label": "A",
+    "first": 58,
+    "last": 62,
+    "date": "B56",
+    "sets": [
+     {
+      "id": "out",
+      "name": "Outright",
+      "bid": "E",
+      "ask": "G"
+     },
+     {
+      "id": "pts",
+      "name": "Puan",
+      "bid": "H",
+      "ask": "J"
+     },
+     {
+      "id": "pday",
+      "name": "P/gün",
+      "bid": "K",
+      "ask": "M"
+     },
+     {
+      "id": "try",
+      "name": "TRY %",
+      "bid": "B",
+      "ask": "D"
+     }
+    ]
+   },
+   "trade": {
+    "pair": "EURTRY",
+    "label": "A",
+    "first": 58,
+    "last": 62,
+    "date": "B56",
+    "bid": "H",
+    "ask": "J"
+   }
   },
   {
    "id": "FR3",

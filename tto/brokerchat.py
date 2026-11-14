@@ -76,7 +76,7 @@ _DATE_NUM = re.compile(r"^(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})$")
 _SENDER = re.compile(r"^([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜa-zçğıöşü.'\-]*(?:[ ,]+[A-ZÇĞİÖŞÜ(][A-ZÇĞİÖŞÜa-zçğıöşü.'&()\-]*){0,6}?)\s*(?:says)?\s*:\s+(?=\S)")
 _NAME_LINE = re.compile(r"^[A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.'\-]+(?: [A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.'\-]*){1,4}$")
 
-KINDS = ("outright", "spread", "fly", "fra", "fwd")
+KINDS = ("outright", "spread", "fly", "fra", "fwd", "switch")
 
 
 def _num(text: str) -> float:
@@ -280,6 +280,8 @@ _BOND_KIND = {"tlref": "float", "float": "float", "frn": "float", "cpi": "cpi", 
 _BOND_SETTLE = {"today": "T0", "tdy": "T0", "tod": "T0", "t0": "T0", "bugün": "T0", "bugun": "T0", "tom": "T1", "t1": "T1",
                 "yarın": "T1", "yarin": "T1", "t2": "T2"}
 _BOND_WORDS = set(_BOND_KIND) | set(_BOND_SETTLE) | {"mio", "mn", "tane"}
+#: what joins the two bonds of a switch ("mar28 vs jun29", "15/3/28 into 13/6/29", "mar28/jun29 sw")
+_SWITCH_WORDS = {"switch", "sw", "swi", "swt", "swch", "vs", "v", "into", "against", "->", "=>", "→", "x"}
 
 
 def _bond_refs(low: List[str]) -> List[Tuple[List[int], Dict[str, Any]]]:
@@ -317,6 +319,30 @@ def _bond_refs(low: List[str]) -> List[Tuple[List[int], Dict[str, Any]]]:
             continue
         k += 1
     return out
+
+
+def _split_bond_pairs(raw: List[str], low: List[str]) -> Tuple[List[str], List[str]]:
+    """Two bonds written as one word - "mar28/jun29", "mar28-jun29", "15/3/28-13/6/29" - as two words."""
+    if not any(("/" in w or "-" in w) for w in low):
+        return raw, low
+    out_raw: List[str] = []
+    out_low: List[str] = []
+    for r, w in zip(raw, low):
+        split = None
+        if not _BOND_DATE.match(w.strip(".:?")) and not _BOND_MONTH.match(w.strip(".:?")):
+            for k, ch in enumerate(w):
+                if ch in "/-" and 0 < k < len(w) - 1:
+                    a, b = w[:k], w[k + 1:]
+                    if len(_bond_refs([a])) == 1 and len(_bond_refs([b])) == 1:
+                        split = k
+                        break
+        if split is None:
+            out_raw.append(r)
+            out_low.append(w)
+        else:
+            out_raw += [r[:split], r[split + 1:]]
+            out_low += [w[:split], w[split + 1:]]
+    return out_raw, out_low
 
 
 def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any]]:
@@ -450,11 +476,32 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
             if found:
                 at = i
                 break
+    if short is None and not fx:
+        raw, low = _split_bond_pairs(raw, low)
     bonds = _bond_refs(low) if short is None and not fx else []
-    if len(bonds) > 1:
-        return None                                        # a switch of two bonds: kept as it was written
+    if len(bonds) > 2:
+        return None                                        # three bonds or more: kept as it was written
     bond = None
-    if bonds:
+    switch: Optional[List[Dict[str, Any]]] = None
+    if len(bonds) == 2:
+        (u1, _), (u2, _) = bonds
+        if any(_is_level(low[k]) for k in range(u1[-1] + 1, u2[0])) and any(_is_level(low[k]) for k in range(u2[-1] + 1, len(low))):
+            return _switch_by_legs(raw, low, bonds, ref)    # "jan30 700 vs jul30 750 switch trading": a level for each bond
+        # a switch: one bond for the other, quoted as the spread of their yields - the longer bond's yield − the
+        # shorter one's (bp), as a spread of two tenors is
+        switch = []
+        for _, info in bonds:
+            hit = _bond_lookup(info, low)
+            if hit is not None:
+                info.update(hit)
+            switch.append(info)
+        switch.sort(key=lambda b: b.get("months") or 0.0)
+        found = None
+        tenors = [b.get("label") or b.get("date") or b.get("month") for b in switch]
+        months, kind, product = [b.get("months", 0.0) for b in switch], "switch", "DIBS"
+        taken = {k for used_b, _ in bonds for k in used_b}
+        idx = [k for k in range(len(low)) if k not in taken]
+    elif bonds:
         used_b, bond = bonds[0]
         hit = _bond_lookup(bond, low)
         if hit is not None:
@@ -462,7 +509,7 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         found = None
         tenors, months, kind, product = [bond.get("label") or bond.get("date") or bond.get("month")], [bond.get("months", 0.0)], "outright", "DIBS"
         idx = [k for k in range(len(low)) if k not in used_b]
-    if bond is not None:
+    if bond is not None or switch is not None:
         pass
     elif short is not None:
         tenors, months, kind, product = [_FX_SHORT[low[short]]], [0.0], "outright", "FX"
@@ -495,11 +542,25 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     if bond is not None:
         unit = "yld" if bond.get("yield") else "px"
     else:
-        unit = "pts" if product == "FX" else ("bp" if kind in ("spread", "fly") else "pct")
+        unit = "pts" if product == "FX" else ("bp" if kind in ("spread", "fly", "switch") else "pct")
     out: Dict[str, Any] = {"product": product, "kind": kind, "tenors": tenors, "months": months,
                            "label": instrument_label(kind, tenors), "key": instrument_key(product, kind, tenors),
                            "unit": unit, "event": "quote", "bid": None, "ask": None, "price": None, "side": None,
                            "clear": [], "flags": [], "note": ""}
+    if switch is not None:
+        out["label"] = " / ".join(tenors)
+        isins = [b.get("isin") for b in switch]
+        out["key"] = "DIBS:switch:" + "/".join(i or t for i, t in zip(isins, tenors))
+        out["legs"] = [{"isin": b.get("isin"), "label": t, "bond_kind": b.get("bond_kind"), "months": b.get("months", 0.0)}
+                       for b, t in zip(switch, tenors)]
+        if any(b.get("ambiguous") for b in switch):
+            out["flags"].append("bond?")
+            out["alts"] = [a for b in switch for a in (b.get("alts") or [])]
+    elif kind == "switch" and instrument is not None:
+        # the other side of a switch quoted just before ("..., 220 offer")
+        for k in ("label", "key", "legs"):
+            if instrument.get(k) is not None:
+                out[k] = instrument[k]
     if bond is not None:
         out["label"] = bond.get("label") or tenors[0]
         if bond.get("isin"):
@@ -653,13 +714,60 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     if out["bid"] is not None and out["ask"] is not None and out["bid"] > out["ask"] + 1e-9:
         out["flags"].append("crossed")
     # ---- what else was said stays as it was typed ("bal", a size, "nl" ...)
-    known = _VOCABULARY | (_BOND_WORDS if product == "DIBS" else set())
+    known = _VOCABULARY | (_BOND_WORDS if product == "DIBS" else set()) | (_SWITCH_WORDS if kind == "switch" else set())
 
     def said(w: str) -> bool:
         return bool(w) and w not in known and not (product == "DIBS" and re.match(r"^(tlref|cpi|zc|tüfe|tufe)?\.?t\d$", w))
 
     out["note"] = " ".join(raw[k].strip(",;") for k in idx if k not in consumed and said(low[k]))
     return out
+
+
+def _switch_by_legs(raw: List[str], low: List[str], bonds: List[Tuple[List[int], Dict[str, Any]]],
+                    ref: Optional[Callable[[Dict[str, Any]], Optional[float]]]) -> Optional[Dict[str, Any]]:
+    """A switch written leg by leg - "jan30 700 vs jul30 750 switch trading", "Sw int 9/1/30 775 offer vs 3/7/30 775
+    bid": each bond with its own level (and side).  Each leg is read as a quote of that bond alone - its level
+    completed as the bond's own would be -, the line's words say what happened (a trade, an interest ...).  The
+    switch itself, the longer bond's yield − the shorter one's (bp), is worked out from the legs by the dashboard:
+    a price becomes a yield only on the screen (``price`` stays empty until then)."""
+    (u1, _), (u2, _) = bonds
+    cut = u2[0]
+    while cut > u1[-1] + 1 and low[cut - 1] in _SWITCH_WORDS:
+        cut -= 1                                           # the word that joins the two goes with neither
+    keep = _BID | _ASK | set(_BOND_KIND) | set(_BOND_SETTLE)
+    legs: List[Dict[str, Any]] = []
+    flags: List[str] = []
+    for ks, (used, _) in zip((range(0, cut), range(cut, len(low))), bonds):
+        text = " ".join(raw[k] for k in ks if k in used or _is_level(low[k]) or low[k] in keep)
+        q = parse_quote(text, ref)
+        if q is None or q.get("product") != "DIBS" or q.get("kind") != "outright":
+            return None
+        if q["price"] is not None:
+            v, side = q["price"], q.get("side")
+        elif q["bid"] is not None and (q["ask"] is None or q.get("side") == "bid"):
+            v, side = q["bid"], "bid"
+        else:
+            v, side = q["ask"], "ask" if q["ask"] is not None else None
+        legs.append({"isin": q.get("isin"), "label": q["label"], "bond_kind": q.get("bond_kind"), "months": (q.get("months") or [0.0])[0],
+                     "unit": q["unit"], "level": v, "side": side})
+        flags += [f for f in q.get("flags") or [] if f not in flags]
+    legs.sort(key=lambda b: b.get("months") or 0.0)
+    words = set(low)
+    if words & (_LIFT | _HIT | _TRADE):
+        event = "trade"
+    elif words & (_REF - {"off"}):
+        event = "ref"
+    elif words & _CARE:
+        event = "interest"
+    else:
+        event = "level"
+    tenors = [b["label"] for b in legs]
+    # a floater or a CPI linker has no yield to compare: such a switch is the difference of the two prices
+    unit = "px" if any(b.get("bond_kind") in ("float", "cpi") for b in legs) else "bp"
+    return {"product": "DIBS", "kind": "switch", "tenors": tenors, "months": [b["months"] for b in legs],
+            "label": " / ".join(tenors), "key": "DIBS:switch:" + "/".join(b["isin"] or b["label"] for b in legs), "unit": unit,
+            "event": event, "bid": None, "ask": None, "price": None, "side": None, "clear": [], "flags": flags, "note": "",
+            "legs": legs, "by_legs": True}
 
 
 # ---------------------------------------------------------------------------------------------- a message
@@ -1009,6 +1117,8 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
                                     "our_bid": None, "our_ask": None, "our_time": None, "said": ""}
             if q.get("isin"):
                 row["isin"] = q["isin"]                     # a bond's ISIN, for the screen and the bond pages
+            if q.get("legs"):
+                row["legs"] = q["legs"]                     # the two bonds of a switch
         when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
         ev = q["event"]
         if ev == "quote":

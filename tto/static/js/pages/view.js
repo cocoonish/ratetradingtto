@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
+import { openQuoteMessage, openTradeDialog } from '../quote.js';
 
 const ALL = '*';
 
@@ -81,6 +82,12 @@ export class ViewPage {
       + '#' + (data.pinned || []).join(',');
   }
 
+  /** What a table shows right now (refreshed in place since the page was built): what a message or a trade is made of. */
+  panelData(p, it) {
+    const cur = this.items.get(p.id) || it;
+    return (cur.grid && cur.grid.data) || cur.data || p.data;
+  }
+
   async refresh() {
     const data = await this.fetch();
     if (this.dead) return;
@@ -94,6 +101,7 @@ export class ViewPage {
         if (it.chart && p.data) it.chart.update(p.data);
         if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
       } else if (it.grid && p.data) {
+        it.data = p.data;
         it.grid.update(p.data, true);
         if (it.grow) it.grow();
       }
@@ -367,6 +375,20 @@ export class ViewPage {
       b.dataset.action = 'add-isin';
       b.addEventListener('click', () => openAddIsin(this.ctx, { book: p.add.book || this.book, list: p.add.ref, name: p.add.name,
         catalog: !!p.add.catalog, title: p.add.title }).catch(errorToast));
+      head.appendChild(b);
+    }
+    if (p.quote && p.data) {
+      // the rows of the table as a message for a broker or a client (Kota mesajı)
+      const b = h('button', { class: 'btn sm', type: 'button', title: 'Seçtiğiniz satırların bid / ask\'ını sohbete atılacak metin olarak kopyalayın' }, 'Kota mesajı');
+      b.dataset.action = 'quote';
+      b.addEventListener('click', () => openQuoteMessage(this.id, Object.assign({}, p, { data: this.panelData(p, it) })));
+      head.appendChild(b);
+    }
+    if (p.trade && p.data && this.ctx.openTrade) {
+      // a row of the table as a trade: Günlük İşlemler with its fields filled
+      const b = h('button', { class: 'btn sm', type: 'button', title: 'Bir satırı seçin: Günlük İşlemler parite, yön, valör ve swap puanı dolu açılır' }, 'İşlem gir');
+      b.dataset.action = 'trade';
+      b.addEventListener('click', () => openTradeDialog(this.id, Object.assign({}, p, { data: this.panelData(p, it) }), this.ctx));
       head.appendChild(b);
     }
     if (p.action === 'ret' && this.ctx.openRet) {

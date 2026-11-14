@@ -225,8 +225,23 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def carry_vol(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().carry_vol, _user(request), str(data.get("kind") or "list"), data.get("window", 60),
+                                 str(data.get("text") or "")))
         q = request.query_params
-        return ok(await call(svc().carry_vol, _user(request), q.get("kind", "fly"), q.get("window", 60)))
+        return ok(await call(svc().carry_vol, _user(request), q.get("kind", "fly"), q.get("window", 60), q.get("text", "")))
+
+    @handler
+    async def carry_settings(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().set_carry_settings, _user(request), data.get("path"), data.get("a"), data.get("b")))
+        return ok(await call(svc().carry_settings, _user(request)))
+
+    @handler
+    async def spreads(request: Request):
+        return ok(await call(svc().spreads, _user(request)))
 
     # ------------------------------------------------------------------ broker chat
     @handler
@@ -518,7 +533,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/market/unknown", market_unknown),
         Route("/api/market/unknown/export", market_unknown_export),
         Route("/api/vol", vol, methods=["POST"]),
-        Route("/api/vol/carry", carry_vol),
+        Route("/api/vol/carry", carry_vol, methods=["GET", "POST"]),
+        Route("/api/carry", carry_settings, methods=["GET", "POST"]),
+        Route("/api/spreads", spreads),
         Route("/api/broker", broker),
         Route("/api/broker", broker_add, methods=["POST"]),
         Route("/api/broker/parse", broker_parse, methods=["POST"]),

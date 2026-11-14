@@ -321,7 +321,22 @@
    "type": "table",
    "title": "OUTRIGHT",
    "range": "A7:L26",
-   "hidden": false
+   "hidden": false,
+   "quote": {
+    "prefix": "TRY OIS",
+    "label": "A",
+    "first": 9,
+    "last": 24,
+    "sets": [
+     {
+      "id": "par",
+      "name": "Par",
+      "mid": "B",
+      "scale": 100,
+      "digits": 2
+     }
+    ]
+   }
   },
   {
    "id": "chart3",

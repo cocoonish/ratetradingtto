@@ -10,6 +10,8 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import cell
+from tto.service import ServiceError
+from tto.xl.model import parse_a1
 from tto import blotter as bl
 from tto import volcarry as vc
 from tto.server import create_app
@@ -263,6 +265,133 @@ def test_carry_against_the_vol(seeded):
     assert svc.carry_vol(None, "nedir", "x")["kind"] == "fly" and svc.carry_vol(None, "fly", "x")["window"] == 60
 
 
+def test_carry_of_the_instruments_typed(seeded):
+    """"Listem": OIS tenors, spreads and flies typed - the sheet's tenor engine prices them as its tables do (a fly
+    of the table gives the table's number), against their own volatility."""
+    svc, days, data = seeded
+    out = svc.carry_vol(None, "list", 20, "1y2y3y, 1y2y, 1y, 15m, 9x12, 5y x, yok")
+    assert out["kind"] == "list" and out["horizons"] == svc.carry_vol(None, "fly", 20)["horizons"]
+    assert out["path"] == "piyasa OIS eğrisinin (bootstrap) ima ettiği TLREF"                     # the default
+    rows = out["rows"]
+    assert [r["label"] for r in rows] == ["1Y–2Y–3Y", "1Y–2Y", "1Y", "15M", "9x12", "5Y", "yok"]     # in the order typed
+    table = {r["label"]: r for r in svc.carry_vol(None, "fly", 20)["rows"]}["1Y–2Y–3Y"]
+    spreads = {r["label"]: r for r in svc.carry_vol(None, "spread", 20)["rows"]}["1Y–2Y"]
+    for got, want in ((rows[0], table), (rows[1], spreads)):
+        for k in ("market", "cr_a", "cr_b", "vol", "vol_a", "ratio_b"):
+            assert got[k] == pytest.approx(want[k], rel=1e-12), k
+    # an outright: the receiver's carry + roll in bp of its annuity, the tenor engine's row (1Y is the sixth tenor)
+    k1, d1 = cell(svc, "Motor!K187"), cell(svc, "Motor!D187")
+    assert cell(svc, "Motor!A187") == 12 and rows[2]["cr_a"] == pytest.approx(k1 / d1 * 10000)
+    assert rows[2]["market"] == pytest.approx(cell(svc, "Motor!B311") * 100) and rows[2]["kind"] == "outright"
+    assert rows[3]["error"].startswith("carry vadeleri: 1M, 2M, 3M, 6M, 9M, 1Y, 18M, 2Y") and rows[3]["cr_a"] is None if "cr_a" in rows[3] else True
+    assert rows[4]["error"] == rows[5]["error"] == "carry yalnız OIS vadesi, spread'i ve fly'ı için"
+    assert "anlaşılamadı" in rows[6]["error"]
+    assert svc.carry_vol(None, "list", 20, "")["rows"] == []
+
+
+def test_the_carry_path_is_ones_own_choice(seeded):
+    """Bootstrap by default; S1 gives the workbook's own numbers (Excel compounds S1); the roll keeps the curve and
+    the S1 cells the OIS sheet prices with stay as they are."""
+    svc, days, data = seeded
+    u = svc.login("Carry Patika")["user"]
+    st = svc.carry_settings(u)
+    assert (st["path"], st["default"], st["a"], st["b"]) == ("Bootstrap", "Bootstrap", 1.0, 3.0)
+    assert [o["id"] for o in st["options"]] == ["Bootstrap", "MPC ima", "S1", "S2", "S3", "Sabit TLREF"]
+    assert [o["label"] for o in st["options"]][2:5] == ["S1 · Baz", "S2 · Hawkish", "S3 · Dovish"]
+    assert cell(svc, "C & R!A1", u).endswith("TLREF = piyasa OIS eğrisinin (bootstrap) ima ettiği TLREF (iş günü bileşik)")
+    s1_cells = [cell(svc, "Motor!G%d" % r, u) for r in range(139, 179)]
+    roll = [cell(svc, "C & R!E%d" % r, u) for r in range(24, 40)]
+    # a 3M swap carried over three months along the curve it is priced off: no carry
+    assert cell(svc, "C & R!A26") == "3M" and abs(cell(svc, "C & R!D26", u)) < 1e-6
+    svc.set_carry_settings(u, "S1", 1, 3)
+    sh = svc.books["tto"].model.sheet("C & R")
+    n = 0
+    for r in list(range(5, 21)) + list(range(24, 40)) + list(range(43, 163)) + list(range(166, 200)):
+        for col in "CDEF":
+            saved = sh.cached.get(parse_a1("%s%d" % (col, r)))
+            if isinstance(saved, float):
+                assert cell(svc, "C & R!%s%d" % (col, r), u) == pytest.approx(saved, rel=1e-12, abs=1e-9), (col, r)
+                n += 1
+    assert n > 600
+    assert cell(svc, "Motor!G135", u) == cell(svc, "OIS_MAIN!X11", u)           # S1's TLREF after the second meeting
+    tl = {}
+    for path in ("Sabit TLREF", "MPC ima", "S2", "S3", "Bootstrap"):
+        svc.set_carry_settings(u, path, 1, 3)
+        tl[path] = cell(svc, "Motor!G135", u)
+        now = [cell(svc, "C & R!E%d" % r, u) for r in range(24, 40)]                                          # the roll keeps the curve
+        assert [x for x in now if not isinstance(x, float)] == [x for x in roll if not isinstance(x, float)] == ["", ""]
+        assert [x for x in now if isinstance(x, float)] == pytest.approx([x for x in roll if isinstance(x, float)], rel=1e-12, abs=1e-12)
+        assert [cell(svc, "Motor!G%d" % r, u) for r in range(139, 179)] == s1_cells                              # S1 as it was
+    assert tl["Sabit TLREF"] == cell(svc, "OIS_MAIN!J2")
+    assert tl["MPC ima"] == cell(svc, "Motor!K6")                                   # the implied path after two meetings
+    assert tl["S2"] == cell(svc, "OIS_MAIN!Y11") and tl["S3"] == cell(svc, "OIS_MAIN!Z11")
+    # flat TLREF: carry = fixed − TLREF compounded on business days, the sheet's own day-count correction
+    svc.set_carry_settings(u, "Sabit TLREF", 1, 3)
+    d = cell(svc, "Motor!D135", u)
+    r = cell(svc, "OIS_MAIN!J2")
+    growth = math.exp(d * math.log(1 + r / 365) - cell(svc, "Motor!F%d" % (528 + int(d))) * (r / 365) ** 2)
+    assert cell(svc, "Motor!E135", u) == pytest.approx(growth, rel=1e-13)
+    # nobody else's; the horizons are one's own too
+    assert cell(svc, "EK_CARRY!B2") == "Bootstrap" and cell(svc, "C & R!E26") == pytest.approx(roll[2])
+    st = svc.set_carry_settings(u, "MPC ima", 2, 6)
+    assert (st["path"], st["a"], st["b"]) == ("MPC ima", 2.0, 6.0) and st["horizons"]["b"]["label"] == "6 ay"
+    assert cell(svc, "C & R!A3", u).startswith("Ufuk A: 2 ay") and cell(svc, "C & R!A22", u).startswith("Ufuk B: 6 ay")
+    for bad in (("Yok", 1, 3), ("S1", 0, 3), ("S1", 1, 121), ("S1", 1.5, 3), ("S1", "x", 3)):
+        with pytest.raises(ServiceError):
+            svc.set_carry_settings(u, *bad)
+    with pytest.raises(ServiceError):
+        svc.set_carry_settings(None, "S1", 1, 3)
+
+
+def test_spreads_over_ois_day_by_day(seeded):
+    """Offshore − OIS tenor by tenor from the closes both curves have (the 5Y: the cross currency swap against the
+    5Y OIS, the days the OIS closed), today's level from the live quotes of the source in use, the changes and
+    where the level stands against the last 20 / 60 / 250 closes."""
+    svc, days, data = seeded
+    out = svc.spreads(None)
+    assert out["windows"] == [20, 60, 250] and out["today"] == "2026-11-03"
+    five = next(r for r in out["off"] if r["months"] == 60.0)
+    assert five["tenor"] == "5Y" and five["kind"] == "XCCY" and five["id"] == "off:60"
+    common = [d for d in days if d in data["5Y"] and d in data["X5Y"] and d < out["today"]]
+    spread = [(data["X5Y"][d] - data["5Y"][d]) * 100 for d in common]
+    assert five["live"] and five["day"] == out["today"] and five["n"] == len(common) + 1
+    assert five["level"] == pytest.approx((five["off_now"] - five["ois_now"]) * 100)
+    assert five["off_now"] == pytest.approx(39.97001) and five["ois_now"] == pytest.approx(34.71)
+    assert five["d1"] == pytest.approx(five["level"] - spread[-1]) and five["d1_day"] == common[-1]
+    assert five["w1"] == pytest.approx(five["level"] - spread[-5]) and five["m1"] == pytest.approx(five["level"] - spread[-21])
+    for n in (20, 60):
+        part = spread[-n:]
+        b = five["bands"][str(n)]
+        assert b["n"] == n and b["mean"] == pytest.approx(statistics.mean(part)) and b["sd"] == pytest.approx(statistics.stdev(part))
+        assert b["z"] == pytest.approx((five["level"] - b["mean"]) / b["sd"])
+        assert b["min"] == pytest.approx(min(part + [five["level"]])) and b["max"] == pytest.approx(max(part + [five["level"]]))
+        assert b["pct"] == pytest.approx(sum(1 for x in part if x < five["level"]) / n)
+    assert five["bands"]["250"]["n"] == len(common)                       # fewer closes than the window: all of them
+    assert five["days"][-1] == out["today"] and five["values"][-1] == five["level"] and len(five["days"]) == len(common) + 1
+    assert five["values"][:-1] == pytest.approx(spread)
+    # a tenor without closes on one side still shows today's level, with nothing to compare it with
+    one = next(r for r in out["off"] if r["months"] == 12.0)
+    assert one["live"] and one["n"] == 1 and one["d1"] is None and one["bands"]["20"]["z"] is None
+    # VİOP − OIS: the contracts of the VİOP history (the four nearest at first), today's basis from the sheet's live row
+    assert [r["order"] for r in out["viop"]] == [1, 2, 3, 4] and all(r["id"].startswith("viop:") for r in out["viop"])
+    first = out["viop"][0]
+    assert first["live"] and type(first["level"]) is float and first["imp_now"] - first["ois_now"] == pytest.approx(first["level"] / 100, abs=1e-6)
+
+
+def test_a_spread_row_without_a_live_quote(module_service):
+    """No quote today: the last close is the level and the changes are counted from the closes before it."""
+    svc = module_service
+    pts = [("2026-10-%02d" % d, float(d)) for d in range(1, 31) if dt.date(2026, 10, d).weekday() < 5]
+    row = svc._spread_row(pts, None, "2026-11-03")
+    assert not row["live"] and row["day"] == pts[-1][0] and row["level"] == pts[-1][1] and row["n"] == len(pts)
+    assert row["d1"] == pts[-1][1] - pts[-2][1] and row["w1"] == pts[-1][1] - pts[-6][1] and row["m1"] == pts[-1][1] - pts[-22][1]
+    assert row["bands"]["20"]["n"] == 20 and row["bands"]["60"]["n"] == len(pts) - 1
+    assert svc._spread_row([], None, "2026-11-03") is None and svc._spread_row([("2026-11-02", float("nan"))], None, "2026-11-03") is None
+    # a live quote replaces the day's own close
+    row = svc._spread_row(pts + [("2026-11-03", 99.0)], 50.0, "2026-11-03")
+    assert row["level"] == 50.0 and row["d1_from"] == pts[-1][1] and 99.0 not in row["values"]
+
+
 def test_week_days():
     assert vc.week_days(dt.date(2026, 11, 4), dt.date(2026, 12, 4)) == 22 and vc.week_days(dt.date(2026, 11, 6), dt.date(2026, 11, 9)) == 1
     assert vc.week_days(dt.date(2026, 11, 4), dt.date(2026, 11, 4)) == 0 == vc.week_days(dt.date(2026, 11, 7), dt.date(2026, 11, 8))
@@ -279,6 +408,17 @@ def test_over_http(seeded):
         res = client.get("/api/vol/carry", params={"kind": "spread", "window": 10})
         assert res.status_code == 200 and res.json()["kind"] == "spread" and res.json()["window"] == 10 and len(res.json()["rows"]) == 120
         assert client.get("/api/vol/carry").json()["kind"] == "fly"
+        res = client.post("/api/vol/carry", json={"kind": "list", "window": 20, "text": "1y2y3y, 2y"})
+        assert res.status_code == 200 and [r["label"] for r in res.json()["rows"]] == ["1Y–2Y–3Y", "2Y"]
+        h = {"X-TTO-User": "carry http"}
+        client.post("/api/login", json={"name": "carry http"})
+        assert client.get("/api/carry", headers=h).json()["path"] == "Bootstrap"
+        res = client.post("/api/carry", json={"path": "S3", "a": "1", "b": "3"}, headers=h)
+        assert res.status_code == 200 and res.json()["path"] == "S3" and res.json()["about"] == "S3 senaryosu (Dovish)"
+        assert client.post("/api/carry", json={"path": "S9", "a": 1, "b": 3}, headers=h).status_code == 400
         nav = client.get("/api/nav").json()["pages"]
         assert [p["title"] for p in nav if p["id"] == "vol"] == ["Realized Vol · Carry"]
+        assert [p["title"] for p in nav if p["id"] == "spreads"] == ["Spread Geçmişi"]
+        res = client.get("/api/spreads")
+        assert res.status_code == 200 and {"off", "viop", "windows", "state"} <= set(res.json())
         assert client.get("/static/js/pages/vol.js").status_code == 200

@@ -465,3 +465,34 @@ def test_fx_swap_quotes_show_the_try_rate_they_stand_for(tmp_path):
         assert board["T/N"]["unit"] == "pts" and board["T/N"].get("mid") is None
     finally:
         s.stop()
+
+
+# ---------------------------------------------------------------------------------------------- the OIS check at a weekend
+def test_the_curve_counts_its_days_with_the_desk_calendar(svc):
+    """The curve's nodes count their days with the desk's calendar.  On a weekday that is Bloomberg's maturity of
+    the generic OIS tickers to the day; at a weekend Bloomberg counted them from Monday while the USDTRY settlement is
+    Tuesday, and the 6M across Kurban Bayramı days off: a false "HATA" of the OIS check."""
+    b88 = cell(svc, "Motor!B88")
+    quoted = 0
+    for r in range(89, 131):
+        assert cell(svc, "Motor!C%d" % r) == cell(svc, "Motor!B%d" % r) - b88
+        bbg = cell(svc, "Motor!R%d" % r)
+        if isinstance(bbg, float):
+            assert bbg == cell(svc, "Motor!C%d" % r)                      # the file's day (a Tuesday): Bloomberg agrees
+            quoted += 1
+    assert quoted == 16
+    u = svc.login("Hafta sonu")["user"]
+    check = [cell(svc, "Motor!U%d" % r) for r in range(325, 343)]
+    assert max(check) < 3 and cell(svc, "MASA!BB3") == 0.0                 # TAMAM
+    # Bloomberg's maturities at a weekend: a day early, the 6M three days (across the holiday)
+    shifted = {}
+    for r in range(89, 131):
+        q = cell(svc, "Motor!Q%d" % r)
+        if isinstance(q, float):
+            shifted["Motor!Q%d" % r] = q - (3 if r == 92 else 1)
+    res = svc.set_inputs(u, "tto", [{"ref": k, "value": v} for k, v in shifted.items()], True)
+    assert res["errors"] == []
+    assert cell(svc, "Motor!R92", u) == cell(svc, "Motor!R92") - 3          # what Bloomberg would have said
+    assert [cell(svc, "Motor!U%d" % r, u) for r in range(325, 343)] == check  # the check does not move
+    assert cell(svc, "MASA!BB3", u) == 0.0
+    svc.reset_inputs(u, "tto", list(shifted))

@@ -215,9 +215,13 @@ export class Grid {
         const td = document.createElement('td');
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '');
         if (cell.act) {
-          const b = h('button', { class: 'iconbtn', type: 'button', title: cell.act.title || '' }, cell.act.label);
-          b.addEventListener('click', (e) => { e.stopPropagation(); cell.act.fn(); });
-          td.appendChild(b);
+          // one button, or several side by side (an array)
+          for (const a of [].concat(cell.act)) {
+            const b = h('button', { class: 'iconbtn', type: 'button', title: a.title || '' }, a.label);
+            if (a.id) b.dataset.act = a.id;
+            b.addEventListener('click', (e) => { e.stopPropagation(); a.fn(); });
+            td.appendChild(b);
+          }
         } else if (cell.chk) {
           // a tick box of a client-built table (its row is picked for something - deleting it, say)
           const b = h('input', { type: 'checkbox', class: 'pick', title: cell.chk.title || '' });

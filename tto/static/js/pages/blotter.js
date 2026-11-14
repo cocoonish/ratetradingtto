@@ -145,6 +145,7 @@ export class BlotterPage {
     this.to = data.ranged ? data.to : null;
     this.build();
     this.fill();
+    if (this.data.can_enter) this.takePrefill();         // a trade filled from a quote, if one was sent here
   }
 
   async refresh() {
@@ -229,6 +230,7 @@ export class BlotterPage {
     const tabBtns = {};
     const show = (id) => {
       this.tab = id;
+      this.showTab = show;
       for (const k of Object.keys(panes)) {
         panes[k].classList.toggle('hidden', k !== id);
         tabBtns[k].classList.toggle('on', k === id);
@@ -278,7 +280,86 @@ export class BlotterPage {
     this.sheetTitle.appendChild(this.sheetNote);
     this.host.appendChild(this.sheetTitle);
     this.host.appendChild(this.sheetWrap);
+    this.showTab = show;
     show(this.tab);
+  }
+
+  /** A trade filled from a quote (a matrix row, a chat line - ``ctx.openTrade``): its tab, side and fields, waiting for an
+   * amount and "İşlemi kaydet". */
+  takePrefill() {
+    let spec = null;
+    try {
+      spec = JSON.parse(sessionStorage.getItem('tto.trade.prefill') || 'null');
+      sessionStorage.removeItem('tto.trade.prefill');
+    } catch (e) { spec = null; }
+    if (!spec || !this.showTab) return false;
+    const missing = [];                    // what the form has no option for (a tenor it does not list)
+    let sideKnown = true;
+    const pick = (sel, value, label) => {
+      if (!sel || value === undefined || value === null || value === '') return false;
+      const v = String(value);
+      if (![...sel.options].some((x) => x.value === v)) {
+        if (!label) { missing.push(v); return false; }
+        sel.appendChild(h('option', { value: v }, label));           // a FRA month off the quarterly grid
+      }
+      sel.value = v;
+      return true;
+    };
+    if (spec.kind === 'fwd') {
+      const f = this.fwd;
+      f.pair = spec.pair === 'EURTRY' ? 'EURTRY' : 'USDTRY';
+      if (spec.dir === 'B' || spec.dir === 'S') f.dir = spec.dir;
+      else sideKnown = false;
+      f.basis = BASIS_LABEL[spec.basis] ? spec.basis : 'SP';
+      f.pairSeg.set(f.pair);
+      f.dirSeg.set(f.dir);
+      f.basisSeg.set(f.basis);
+      f.date.value = spec.date || '';
+      f.manual.value = spec.value || '';
+      f.note.value = spec.note || '';
+      if (spec.cpt) f.cpt.value = spec.cpt;
+      this.layoutFwd();
+      this.showTab('fwd');
+      this.quoteFwd();
+      f.amount.focus();
+    } else if (spec.kind === 'ois') {
+      const o = this.ois;
+      o.strategy = STRATEGIES.some((x) => x[0] === spec.strategy) ? spec.strategy : 'outright';
+      o.stratSeg.set(o.strategy);
+      if (spec.side && SIDES[o.strategy].some((x) => x[0] === spec.side)) o.side = spec.side;
+      else sideKnown = false;
+      this.layoutOis();
+      const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy] || [];
+      legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i]));
+      if (o.strategy === 'fra' && spec.months && spec.months.length === 2) {
+        const label = (m) => (m === 0 ? 'Spot' : (m % 12 === 0 ? (m / 12) + 'Y' : m + 'M'));
+        spec.months.forEach((m, i) => {
+          if (typeof m === 'number' && Number.isInteger(m) && m >= 0) pick(o.f[i ? 'end_months' : 'start_months'], m, label(m));
+          else missing.push(String(m));
+        });
+      }
+      o.level.value = spec.level || '';
+      o.note.value = spec.note || '';
+      if (spec.cpt) o.cpt.value = spec.cpt;
+      this.showTab('ois');
+      this.quoteOis();
+      o.size.focus();
+    } else if (spec.kind === 'bond') {
+      const b = this.bond;
+      if (spec.dir === 'B' || spec.dir === 'S') b.dir = spec.dir;
+      else sideKnown = false;
+      b.dirSeg.set(b.dir);
+      b.inst.value = spec.instrument || '';
+      b.price.value = spec.price || '';
+      b.note.value = spec.note || '';
+      this.showTab('bond');
+      b.amount.focus();
+    } else {
+      return false;
+    }
+    const warn = [missing.length ? 'listede olmayan vade: ' + missing.join(', ') + ' – elle seçin' : '', sideKnown ? '' : 'yönü kontrol edin'].filter(Boolean);
+    toast('İşlem kotadan dolduruldu: tutarı yazıp kaydedin' + (warn.length ? ' (' + warn.join('; ') + ')' : ''), warn.length ? 'warn' : 'ok', warn.length ? 7000 : 4000);
+    return true;
   }
 
   // ------------------------------------------------------------------ forward form

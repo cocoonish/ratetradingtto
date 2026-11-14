@@ -9,6 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import datetime as _dt
 import json
+import math
 import os
 import queue
 import re
@@ -559,6 +560,8 @@ class Service(object):
                           "custom": True})
             pages.append({"id": "vol", "title": "Realized Vol · Carry", "group": "TRY Faiz", "book": "tto", "sheet": None,
                           "custom": True})
+            pages.append({"id": "spreads", "title": "Spread Geçmişi", "group": "TRY Faiz", "book": "tto", "sheet": None,
+                          "custom": True})
             pages.append({"id": "settings", "title": "Ayarlar · Toplantı takvimi", "group": "Araçlar", "book": "tto",
                           "sheet": None, "custom": True})
         return pages
@@ -610,6 +613,10 @@ class Service(object):
                 entry["card"] = p["card"]               # a click on ▸ opens the bond's card
             if p.get("flags"):
                 entry["flags"] = p["flags"]             # ☆ / ★: onto / off the trading list
+            if p.get("quote"):
+                entry["quote"] = p["quote"]             # "Kota mesajı": its rows as a message to send
+            if p.get("trade"):
+                entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
             sheet = p.get("sheet", sheet_default)
             if sheet is not None and sheet not in book.model.sheet_index:
                 continue                               # a table of the dashboard's own that does not fit this file
@@ -1409,6 +1416,45 @@ class Service(object):
             "Blotter_%s-%s.xlsx" % (day.strftime("%Y.%m.%d"), last.strftime("%Y.%m.%d"))
         return wb.to_bytes(), name
 
+    def _tenor_date(self, text: str, pair: str = "USDTRY") -> Optional[float]:
+        """The value date of a tenor ("2W", "3M", "1Y") from the pair's spot date: n weeks, or n months and then the
+        next business day of the desk's calendar (Motor!A361:A523) - as the Forward sheet dates its tenors."""
+        m = re.match(r"^\s*(\d{1,3})\s*([WMYwmy])\s*$", str(text or ""))
+        book = self.books.get("tto")
+        if m is None or book is None:
+            return None
+        calc = book.engine.shared
+
+        def value(ref: str) -> Any:
+            si, rc = book.cell(ref)
+            return calc.get(si, *divmod(rc, COLS))
+
+        spot = value("Forward!K2" if str(pair).upper().startswith("EUR") else "Forward!I2")
+        if isinstance(spot, str):
+            spot = parse_date(spot)
+        if type(spot) is not float:
+            return None
+        holidays = set()
+        si = book.model.sheet_index.get("Motor")
+        if si is not None:
+            for r in range(360, 523):
+                h = calc.get(si, r, 0)
+                if type(h) is float:
+                    holidays.add(int(h))
+        n, unit = int(m.group(1)), m.group(2).upper()
+        start = serial_to_date(spot)
+        if unit == "W":
+            day = start + _dt.timedelta(days=7 * n)
+        else:
+            months = n * (12 if unit == "Y" else 1)
+            y, mo = divmod(start.month - 1 + months, 12)
+            y, mo = start.year + y, mo + 1
+            last = (_dt.date(y + (mo == 12), mo % 12 + 1, 1) - _dt.timedelta(days=1)).day
+            day = _dt.date(y, mo, min(start.day, last))
+        while day.weekday() >= 5 or date_to_serial(day) in holidays:
+            day += _dt.timedelta(days=1)
+        return float(date_to_serial(day))
+
     def quote_forward(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         return self.et.call(self._quote_forward, user, payload, lang)
 
@@ -1419,7 +1465,9 @@ class Service(object):
         if isinstance(vd, str):
             d = parse_date(vd)
             if d is None:
-                raise ServiceError("valör tarihi anlaşılamadı: %r" % vd)
+                d = self._tenor_date(vd, str(p.get("pair") or "USDTRY"))          # "3M", "2W", "1Y": from the pair's spot
+            if d is None:
+                raise ServiceError("valör tarihi anlaşılamadı: %r (örn. 15.12.2026 ya da 3M)" % vd)
             p["value_date"] = d
         elif isinstance(vd, (int, float)):
             p["value_date"] = float(vd)
@@ -2320,7 +2368,7 @@ class Service(object):
         today = self.today_iso()
         rows, _, _ = self._broker_board(user, today, today)
         trades = [q for q in rows if q.get("ok") and q.get("product") == "DIBS" and q.get("event") == "trade"
-                  and (isin is None or q.get("isin") == isin)]
+                  and q.get("kind") != "switch" and (isin is None or q.get("isin") == isin)]
         self._bond_implied(user, trades)
         out: List[Dict[str, Any]] = []
         for q in trades:
@@ -2696,23 +2744,315 @@ class Service(object):
             rows.append(vc.describe(it, curves[product], months[product], window))
         return {"rows": rows, "window": window, "windows": list(vc.WINDOWS), "year": vc.YEAR, "history": info}
 
-    def carry_vol(self, user: Optional[str], kind: str = "fly", window: Any = 60) -> Dict[str, Any]:
+    # ================================================================== spreads over OIS, day by day
+    #: z-score windows of a spread: a month, three months and a year of closes
+    SPREAD_Z = (20, 60, 250)
+    #: closes of a spread's series that are sent for its chart (about a year)
+    SPREAD_KEEP = 260
+
+    def spreads(self, user: Optional[str]) -> Dict[str, Any]:
+        """The TRY spreads over OIS the desk watches, day by day, and where they stand now.
+
+        * offshore − OIS, tenor by tenor: the history's closes of both curves (FX swap implied up to 9M, cross
+          currency from 1Y - the end-of-day matrix's "Offshore"), the days both have a close;
+        * VİOP − OIS, contract by contract: the VİOP history (the VİOP sheet's own basis formula, the contracts
+          its charts draw and as many days as its "Geçmiş" cell asks for).
+
+        Each: the level now (today's market where there is one - the source in use on the settings page,
+        the VİOP sheet's live row - else the last close), its change against 1 / 5 / 21 closes earlier, and
+        against the last 20 / 60 / 250 closes its mean, standard deviation, z-score, range and percentile."""
+        curves, months, info = self._vol_curves()
+        live, viop = self.et.call(self._spread_read, user)
+        today = self.history.today().isoformat()
+        off_rows: List[Dict[str, Any]] = []
+        ois_at = {round(m, 3): label for label, m in months["OIS"].items() if m}
+        for label, m in sorted(months["XCCY"].items(), key=lambda kv: kv[1]):
+            ois_label = ois_at.get(round(m, 3)) if m else None
+            if not ois_label:
+                continue
+            off, ois = curves["XCCY"].get(label) or {}, curves["OIS"].get(ois_label) or {}
+            points = sorted((d, (off[d] - ois[d]) * 100.0) for d in off if d in ois)
+            a, b = live["off"].get(label.upper()), live["ois"].get(ois_label.upper())
+            now = (a - b) * 100.0 if a is not None and b is not None else None
+            row = self._spread_row(points, now, today)
+            if row is None:
+                continue
+            row.update({"id": "off:%g" % m, "tenor": vc.months_label(m) if m >= 1 else ois_label, "months": m,
+                        "kind": "XCCY" if m >= 12 else "FX swap ima", "off_label": label, "ois_label": ois_label,
+                        "off_now": a, "ois_now": b})
+            off_rows.append(row)
+        viop_rows: List[Dict[str, Any]] = []
+        for c in viop:
+            row = self._spread_row(c["points"], c["now"], c["now_day"] or today)
+            if row is None:
+                continue
+            row.update({"id": "viop:%s" % c["ticker"], "tenor": c["name"] or c["ticker"], "ticker": c["ticker"],
+                        "expiry": c["expiry"], "to_expiry": c["to_expiry"], "imp_now": c["imp"], "ois_now": c["ois"],
+                        "order": c["order"]})
+            viop_rows.append(row)
+        return {"today": today, "live": self.mode == "live", "windows": list(self.SPREAD_Z), "off": off_rows,
+                "viop": viop_rows, "viop_days": live.get("viop_days"), "history": info, "rev": self.history.rev,
+                "state": self.history.status(), "gen": self.gen}
+
+    def _spread_row(self, points: List[Tuple[str, float]], now: Optional[float], day: str) -> Optional[Dict[str, Any]]:
+        """One spread: ``points`` its closes (day, bp), ``now`` today's level (``None``: none) on ``day``."""
+        seen: Dict[str, float] = {}
+        for d, v in points:
+            if type(v) is float and math.isfinite(v):
+                seen[d] = v
+        if now is not None and not (type(now) is float and math.isfinite(now)):
+            now = None
+        past = sorted((d, v) for d, v in seen.items() if now is None or d < day)
+        if now is None:
+            if not past:
+                return None
+            level_day, level = past[-1]
+            past = past[:-1]
+        else:
+            level_day, level = day, now
+        values = [v for _, v in past]
+        out: Dict[str, Any] = {"level": level, "day": level_day, "live": now is not None, "n": len(values) + 1,
+                               "first": past[0][0] if past else level_day}
+        for name, back in (("d1", 1), ("w1", 5), ("m1", 21)):
+            prev = past[-back] if len(past) >= back else None
+            out[name] = level - prev[1] if prev else None
+            out[name + "_from"] = prev[1] if prev else None
+            out[name + "_day"] = prev[0] if prev else None
+        bands: Dict[str, Any] = {}
+        for n in self.SPREAD_Z:
+            part = values[-n:]
+            sd = vc.stdev(part) if len(part) >= vc.MIN_Z else None
+            mean = sum(part) / len(part) if part else None
+            bands[str(n)] = {"n": len(part), "mean": mean if sd else None, "sd": sd,
+                             "z": (level - mean) / sd if sd else None,
+                             "min": min(part + [level]) if part else None, "max": max(part + [level]) if part else None,
+                             "pct": sum(1 for x in part if x < level) / len(part) if sd else None}
+        out["bands"] = bands
+        keep = past[-(self.SPREAD_KEEP - 1):] + [(level_day, level)]
+        out["days"] = [d for d, _ in keep]
+        out["values"] = [v for _, v in keep]
+        return out
+
+    def _spread_read(self, user: Optional[str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Today's quotes the spreads are measured with, and the VİOP history's contracts (engine thread)."""
+        book = self._book("tto")
+        calc = self._calc(user_key(user) if user else None, book)
+        live: Dict[str, Any] = {"ois": {}, "off": {}, "viop_days": None}
+
+        def reader(sheet: str):
+            si = book.model.sheet_index[sheet]
+            return lambda ref: calc.get(si, *divmod(parse_a1(ref), COLS))
+
+        if ex.SRC_SHEET in book.model.sheet_index:
+            get = reader(ex.SRC_SHEET)
+            titles = {title: kind for kind, title, _, _, _ in ex.SRC_LISTS}
+            for r in range(ex.SRC_FIRST, ex.SRC_FIRST + 60):
+                kind = titles.get(get("A%d" % r))
+                tenor = get("B%d" % r)
+                if kind is None or not isinstance(tenor, str) or not tenor.strip():
+                    continue
+                if kind == "ois":
+                    v = get("I%d" % r)                      # per cent
+                    if type(v) is float:
+                        live["ois"][tenor.strip().upper()] = v
+                else:
+                    bid, ask = get("I%d" % r), get("J%d" % r)
+                    if type(bid) is float and type(ask) is float:
+                        live["off"][tenor.strip().upper()] = (bid + ask) / 2.0
+        viop: List[Dict[str, Any]] = []
+        if ex.VH_SHEET in book.model.sheet_index:
+            get = reader(ex.VH_SHEET)
+            days = get("B8")
+            live["viop_days"] = days if type(days) is float else None
+
+            def iso(v: Any) -> Optional[str]:
+                return serial_to_date(v).isoformat() if type(v) is float and v > 0 else None
+
+            for k in range(ex.VH_SLOTS):
+                slot = index_to_col(2 + k)
+                ticker, expiry = get("%s4" % slot), get("%s5" % slot)
+                if not isinstance(ticker, str) or not ticker.strip() or type(expiry) is not float:
+                    continue
+                baz = ex.VH_COLS["baz"][k]
+                points = []
+                for r in range(ex.VH_FIRST, ex.VH_FIRST + ex.VH_ROWS):
+                    d, v = iso(get("A%d" % r)), get("%s%d" % (baz, r))
+                    if d and type(v) is float:
+                        points.append((d, v))
+                def now(group: str) -> Optional[float]:          # the sheet's live row: today's last prices
+                    v = get("%s%d" % (ex.VH_COLS[group][k], ex.VH_LIVE))
+                    return v if type(v) is float else None
+
+                name, order = get("%s6" % slot), get("%s3" % slot)
+                viop.append({"ticker": ticker.strip(), "name": name if isinstance(name, str) else "", "expiry": iso(expiry),
+                             "order": int(order) if type(order) is float else None, "points": points, "now": now("baz"),
+                             "now_day": iso(get("A%d" % ex.VH_LIVE)), "to_expiry": now("days"), "imp": now("imp"), "ois": now("ois360")})
+        return live, viop
+
+    def carry_vol(self, user: Optional[str], kind: str = "fly", window: Any = 60, text: str = "") -> Dict[str, Any]:
         """The flies (or spreads) of the Carry & Roll sheet with their realized volatility: carry + roll over
-        the sheet's two horizons against the volatility over the same time."""
-        kind = "spread" if str(kind or "").lower().startswith("s") else "fly"
+        the sheet's two horizons against the volatility over the same time.  ``kind`` "list": the instruments typed
+        (``text``) instead - OIS outrights, spreads and flies of the sheet's tenors, priced by its tenor engine."""
+        k = str(kind or "").lower()
+        kind = "list" if k.startswith("l") else "spread" if k.startswith("s") else "fly"
         try:
             window = int(window)
         except (TypeError, ValueError):
             window = 60
         if window not in vc.WINDOWS:
             window = 60
-        table = self.et.call(self._carry_table, user, kind)
+        if kind == "list":
+            table = self.et.call(self._carry_list, user, str(text or "")[:4000])
+        else:
+            table = self.et.call(self._carry_table, user, kind)
         curves, months, info = self._vol_curves()
         days = {name: h["days"] for name, h in table["horizons"].items()}
-        rows = [vc.carry_row(vc.item_of(kind, r["tenors"]), r["market"], {"a": r["a"], "b": r["b"]}, days,
-                             curves["OIS"], months["OIS"], window) for r in table["rows"]]
+        rows = []
+        for r in table["rows"]:
+            if r.get("error"):
+                rows.append({"label": r["label"], "tenors": r.get("tenors") or [], "kind": r.get("kind") or "", "market": None,
+                             "error": r["error"], "n": 0, "closes": 0, "z": {}})
+                continue
+            item = r.get("item") or vc.item_of(kind, r["tenors"])
+            rows.append(vc.carry_row(item, r["market"], {"a": r["a"], "b": r["b"]}, days, curves["OIS"], months["OIS"], window))
         return {"kind": kind, "window": window, "windows": list(vc.WINDOWS), "z_windows": list(vc.Z_WINDOWS),
-                "horizons": table["horizons"], "rows": rows, "history": info, "gen": self.gen}
+                "horizons": table["horizons"], "rows": rows, "history": info, "path": table.get("path", ""), "gen": self.gen}
+
+    def _carry_horizons(self, book: Book, calc: Calc) -> Dict[str, Any]:
+        """The Carry & Roll sheet's two horizons: label ("1 ay"), business days from the OIS spot date, end date."""
+        si = book.model.sheet_index["C & R"]
+
+        def cell(ref: str) -> Any:
+            r, c = divmod(parse_a1(ref), COLS)
+            return calc.get(si, r, c)
+
+        spot = book.cell("OIS_MAIN!B2")
+        spot = calc.get(spot[0], *divmod(spot[1], COLS))
+        horizons: Dict[str, Any] = {}
+        for name, row in (("a", 3), ("b", 22)):
+            text, end = cell("A%d" % row), cell("C%d" % row)
+            m = re.search(r":\s*([^–-]+)", text) if isinstance(text, str) else None
+            days = vc.week_days(serial_to_date(spot), serial_to_date(end)) if type(spot) is float and type(end) is float else 0
+            horizons[name] = {"label": m.group(1).strip() if m else ("Ufuk " + name.upper()), "days": days,
+                              "date": serial_to_date(end).isoformat() if type(end) is float else None}
+        return horizons
+
+    def _carry_path(self, book: Book, calc: Calc) -> str:
+        """What TLREF the carry is compounded with (the carry path chosen, ``extras.CARRY_PATHS``)."""
+        if ex.CARRY_SHEET not in book.model.sheet_index:
+            return "S1 senaryosu"
+        si, rc = book.cell(ex.CARRY_SHEET + "!C2")
+        text = calc.get(si, *divmod(rc, COLS))
+        return text if isinstance(text, str) else ""
+
+    def _carry_engine(self, book: Book, calc: Calc) -> Dict[float, Dict[str, Optional[float]]]:
+        """The tenor engine of the Motor sheet, per tenor (months): its par rate (%) and its carry + roll over
+        horizon A and B in bp of its own annuity (receiver), as the Carry & Roll sheet's spread and fly tables take it."""
+        si = book.model.sheet_index["Motor"]
+
+        def cell(col: str, row: int) -> Any:
+            return calc.get(si, row, parse_a1("%s1" % col) % COLS)
+
+        out: Dict[float, Dict[str, Optional[float]]] = {}
+        first_a, last_a = ex.CARRY_ENGINE_A
+        first_b = ex.CARRY_ENGINE_B[0]
+        for i in range(last_a - first_a + 1):
+            months = cell("A", first_a + i)
+            if type(months) is not float:
+                continue
+            row: Dict[str, Optional[float]] = {"par": None, "a": None, "b": None}
+            par = cell("B", 306 + i)
+            row["par"] = par * 100.0 if type(par) is float else None
+            for name, r in (("a", first_a + i), ("b", first_b + i)):
+                valid, k, d = cell("H", r), cell("K", r), cell("D", r)
+                if valid is True and type(k) is float and type(d) is float and d:
+                    row[name] = k / d * 10000.0
+            out[months] = row
+        return out
+
+    def _carry_list(self, user: Optional[str], text: str) -> Dict[str, Any]:
+        """Carry + roll of the instruments typed: an OIS outright (receiver), a spread (flattener: receive the long
+        tenor, pay the short one) or a fly (receive the body), from the tenor engine - the tenors of the Carry &
+        Roll sheet (1M ... 10Y)."""
+        book = self._book("tto")
+        if "C & R" not in book.model.sheet_index:
+            raise ServiceError("Carry & Roll sayfası bu çalışma kitabında yok")
+        calc = self._calc(user_key(user) if user else None, book)
+        engine = self._carry_engine(book, calc)
+        weights = {"outright": (1.0,), "spread": (-1.0, 1.0), "fly": (-1.0, 2.0, -1.0)}
+        grid = ", ".join(vc.months_label(m) for m in sorted(engine))
+        rows = []
+        for it in vc.parse_items(text)[:40]:
+            label = it.get("label") or it.get("raw") or ""
+            if not it.get("ok"):
+                rows.append({"label": it.get("raw", ""), "error": it.get("error") or "anlaşılamadı"})
+                continue
+            if it["product"] != "OIS" or it["kind"] not in weights:
+                rows.append({"label": label, "tenors": it["tenors"], "kind": it["kind"],
+                             "error": "carry yalnız OIS vadesi, spread'i ve fly'ı için"})
+                continue
+            legs = [engine.get(float(m)) if m is not None else None for m in it["months"]]
+            if any(leg is None for leg in legs):
+                rows.append({"label": label, "tenors": it["tenors"], "kind": it["kind"], "error": "carry vadeleri: " + grid})
+                continue
+            w = weights[it["kind"]]
+            par = [leg["par"] for leg in legs]
+            market = None
+            if all(type(p) is float for p in par):
+                market = par[0] if it["kind"] == "outright" else sum(x * p for x, p in zip(w, par)) * 100.0
+            row = {"label": label, "tenors": it["tenors"], "kind": it["kind"], "item": it, "market": market, "a": None, "b": None}
+            for name in ("a", "b"):
+                vals = [leg[name] for leg in legs]
+                if all(type(v) is float for v in vals):
+                    row[name] = sum(x * v for x, v in zip(w, vals))
+            rows.append(row)
+        return {"rows": rows, "horizons": self._carry_horizons(book, calc), "path": self._carry_path(book, calc)}
+
+    def carry_settings(self, user: Optional[str]) -> Dict[str, Any]:
+        """The carry's TLREF path (one's own choice) and its two horizons (months, the OIS sheet's inputs)."""
+        book = self._book("tto")
+        if ex.CARRY_SHEET not in book.model.sheet_index:
+            return {"available": False}
+        key = user_key(user) if user else None
+
+        def run():
+            calc = self._calc(key, book)
+
+            def get(ref: str) -> Any:
+                si, rc = book.cell(ref)
+                return calc.get(si, *divmod(rc, COLS))
+
+            names = {n: get("OIS_MAIN!P%d" % (3 + k)) for k, n in enumerate(("S1", "S2", "S3"))}
+            options = []
+            for name, about in ex.CARRY_PATHS:
+                extra = names.get(name)
+                options.append({"id": name, "label": name + (" · " + extra if isinstance(extra, str) and extra else ""), "about": about})
+            horizons = self._carry_horizons(book, calc) if "C & R" in book.model.sheet_index else {}
+            return {"available": True, "path": get(ex.CARRY_SHEET + "!B2"), "about": self._carry_path(book, calc), "options": options,
+                    "default": ex.CARRY_DEFAULT, "a": get("OIS_MAIN!B4"), "b": get("OIS_MAIN!D4"), "horizons": horizons}
+
+        return self.et.call(run)
+
+    def set_carry_settings(self, user: Optional[str], path: Any, a: Any, b: Any) -> Dict[str, Any]:
+        """Set one's own carry path and horizons (months, 1 … 120)."""
+        user = self.require_user(user)
+        names = [n for n, _ in ex.CARRY_PATHS]
+        path = str(path or "").strip()
+        if path not in names:
+            raise ServiceError("carry patikası şunlardan biri olmalı: " + ", ".join(names))
+        items = [{"ref": ex.CARRY_SHEET + "!B2", "value": path}]
+        for ref, value, name in (("OIS_MAIN!B4", a, "Ufuk A"), ("OIS_MAIN!D4", b, "Ufuk B")):
+            try:
+                months = int(float(str(value).replace(",", ".")))
+            except (TypeError, ValueError):
+                raise ServiceError("%s ay sayısı olmalı" % name)
+            if not 1 <= months <= 120 or float(str(value).replace(",", ".")) != months:
+                raise ServiceError("%s 1 ile 120 arasında tam ay olmalı" % name)
+            items.append({"ref": ref, "value": months})
+        res = self.set_inputs(user, "tto", items)
+        if res.get("errors"):
+            raise ServiceError("; ".join(res["errors"]))
+        return self.carry_settings(user)
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
@@ -2743,16 +3083,7 @@ class Service(object):
             rows.append({"label": label.strip(), "tenors": [t.strip() for t in label.split("/")], "market": number(cell("B%d" % r)),
                          "a": number(cell("C%d" % r)), "b": number(cell("D%d" % r))})
             r += 1
-        spot = book.cell("OIS_MAIN!B2")
-        spot = calc.get(spot[0], *divmod(spot[1], COLS))
-        horizons: Dict[str, Any] = {}
-        for name, row in (("a", 3), ("b", 22)):
-            text, end = cell("A%d" % row), cell("C%d" % row)
-            m = re.search(r":\s*([^–-]+)", text) if isinstance(text, str) else None
-            days = vc.week_days(serial_to_date(spot), serial_to_date(end)) if type(spot) is float and type(end) is float else 0
-            horizons[name] = {"label": m.group(1).strip() if m else ("Ufuk " + name.upper()), "days": days,
-                              "date": serial_to_date(end).isoformat() if type(end) is float else None}
-        return {"rows": rows, "horizons": horizons}
+        return {"rows": rows, "horizons": self._carry_horizons(book, calc), "path": self._carry_path(book, calc)}
 
     # ================================================================== broker chat
     def _broker_day(self, date: Optional[str]) -> str:
@@ -2784,7 +3115,27 @@ class Service(object):
         y = info.get("yield")
         return {"clean": info.get("clean") if type(info.get("clean")) is float else None,
                 "yield": y * 100.0 if type(y) is float and abs(y) < 5 else (y if type(y) is float else None),
-                "mod_dur": info.get("mod_dur") if type(info.get("mod_dur")) is float else None}
+                "mod_dur": info.get("mod_dur") if type(info.get("mod_dur")) is float else None,
+                "rv": info.get("rv") if type(info.get("rv")) is float else None}      # against the fitted ASW curve, + cheap
+
+    @staticmethod
+    def _switch_screen(mkt, q: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """A switch on the DİBS RV screen: the longer bond's yield − the shorter one's (bp), and how much cheaper the
+        longer bond is than the shorter one against the screen's fitted ASW curve ("Pahalı/ucuz", + cheap; bp)."""
+        legs = q.get("legs") or []
+        if len(legs) != 2:
+            return None
+        a, b = (Service._bond_screen(mkt, leg.get("isin")) or {} for leg in legs)
+        if q.get("unit") == "px":                          # floaters, CPI linkers: the difference of the clean prices
+            if a.get("clean") is None or b.get("clean") is None:
+                return None
+            return {"screen": b["clean"] - a["clean"], "rv": None,
+                    "legs": [{"label": leg.get("label"), "clean": sc["clean"]} for leg, sc in zip(legs, (a, b))]}
+        if a.get("yield") is None or b.get("yield") is None:
+            return None
+        rv = b["rv"] - a["rv"] if a.get("rv") is not None and b.get("rv") is not None else None
+        return {"screen": (b["yield"] - a["yield"]) * 100.0, "rv": rv,
+                "legs": [{"label": leg.get("label"), "yield": sc["yield"], "rv": sc.get("rv")} for leg, sc in zip(legs, (a, b))]}
 
     @staticmethod
     def _bond_level(isin: str, unit: Optional[str], value: Any) -> Optional[Dict[str, Any]]:
@@ -2824,7 +3175,7 @@ class Service(object):
         When the screen settles it (one is near, the others far or not of that unit) the line is no longer flagged."""
         from . import bonds as bd
         for q in rows:
-            if q.get("product") != "DIBS" or "bond?" not in (q.get("flags") or []):
+            if q.get("product") != "DIBS" or q.get("kind") == "switch" or "bond?" not in (q.get("flags") or []):
                 continue
             level = next((q[k] for k in ("price", "bid", "ask") if type(q.get(k)) is float), None)
             same = [i for i in [q.get("isin")] + list(q.get("alts") or [])
@@ -2868,6 +3219,9 @@ class Service(object):
     def _broker_model(mkt, q: Dict[str, Any]) -> Optional[float]:
         """Where the dashboard's own TRY OIS curve has an instrument of the chat (cross-currency: no answer); for a
         bond, its screen price (or yield, for a bill) in the DİBS RV table."""
+        if mkt is not None and q.get("product") == "DIBS" and q.get("kind") == "switch":
+            sw = Service._switch_screen(mkt, q)
+            return sw["screen"] if sw else None
         if mkt is not None and q.get("product") == "DIBS":
             sc = Service._bond_screen(mkt, q.get("isin") or str(q.get("key") or "").replace("DIBS:", "")) or {}
             return sc.get("yield") if q.get("unit") == "yld" else sc.get("clean")
@@ -2968,9 +3322,68 @@ class Service(object):
                     out[f] = sc["yield"] - (q[f] - sc["clean"]) / (sc["clean"] * sc["mod_dur"]) * 100.0
             q["implied"] = out if any(f in out for f in fields) else None
 
+    @staticmethod
+    def _switch_legs(mkt, rows: List[Dict[str, Any]]) -> None:
+        """A switch written leg by leg ("jan30 700 vs jul30 750 switch trading"): its level from the legs' - the
+        longer leg's yield − the shorter one's (bp), a price made a yield on the DİBS RV screen as a bond's quote is
+        (yield − (price − screen price) / (screen price · modified duration)); floaters and CPI linkers: the
+        difference of the two prices."""
+        for q in rows:
+            if not q.get("by_legs") or q.get("kind") != "switch" or q.get("event") == "ref":
+                continue
+            legs = q.get("legs") or []
+            if len(legs) != 2 or any(type(leg.get("level")) is not float for leg in legs):
+                continue
+            if q.get("unit") == "px":
+                if all(leg.get("unit") == "px" for leg in legs):
+                    q["price"] = legs[1]["level"] - legs[0]["level"]
+                continue
+            ys = []
+            for leg in legs:
+                if leg.get("unit") == "yld":
+                    ys.append(leg["level"])
+                    continue
+                sc = Service._bond_screen(mkt, leg.get("isin")) or {}
+                if sc.get("clean") is None or sc.get("yield") is None or not sc.get("mod_dur"):
+                    break
+                leg["yield"] = sc["yield"] - (leg["level"] - sc["clean"]) / (sc["clean"] * sc["mod_dur"]) * 100.0
+                ys.append(leg["yield"])
+            if len(ys) == 2:
+                q["price"] = (ys[1] - ys[0]) * 100.0
+
+    def _switch_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
+        """A switch next to the DİBS RV screen (``implied``, ``kind`` "switch"): the screen's switch, and where the
+        level said stands - ``vs_screen`` (level − the screen's switch) and ``vs_curve`` (the longer bond's
+        cheapness against the shorter one on the fitted ASW curve, at the level said: the screen's own plus the
+        level's distance from the screen's switch).  Positive: the longer bond is cheap (buy it, sell the shorter).
+        The level: the trade's, else the middle of bid and ask, else the one side said."""
+        items = [(q, ("price", "bid", "ask")) for q in rows] + [(r, ("last", "bid", "ask", "level")) for r in board or ()]
+        items = [(q, f) for q, f in items if q.get("product") == "DIBS" and q.get("kind") == "switch" and q.get("legs")]
+        book = self.books.get("tto")
+        if not items or book is None:
+            return
+        mkt = bl.OisMarket(book, self._calc(user_key(user) if user else None, book))
+        for q, fields in items:
+            sw = self._switch_screen(mkt, q)
+            if sw is None:
+                continue
+            got = {f: q[f] for f in fields if type(q.get(f)) is float}
+            first = fields[0]
+            if first in got:
+                at = got[first]
+            elif "bid" in got and "ask" in got:
+                at = (got["bid"] + got["ask"]) / 2.0
+            else:
+                at = next(iter(got.values()), None)
+            out = dict(sw, kind="switch", at=at)
+            out["vs_screen"] = at - sw["screen"] if at is not None else None
+            out["vs_curve"] = sw["rv"] + out["vs_screen"] if at is not None and sw["rv"] is not None else None
+            q["implied"] = out
+
     def _fx_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
         """The TRY rate each FX swap quote in points stands for (``implied``: bid / ask / price / last, in per cent)."""
         self._bond_implied(user, rows, board)
+        self._switch_implied(user, rows, board)
         if not any(q.get("product") == "FX" for q in rows) and not any(r.get("product") == "FX" for r in board or ()):
             return
         fn = self._fx_market(user)
@@ -3046,6 +3459,7 @@ class Service(object):
 
         rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing, nearby)
         self._bond_pick(mkt, rows)
+        self._switch_legs(mkt, rows)
         now = _dt.datetime.now().strftime("%H:%M:%S")
         seen: Dict[Tuple, int] = {}
         for q in rows:

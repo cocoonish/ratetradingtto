@@ -201,6 +201,12 @@ def describe(item: Dict[str, Any], curve: Dict[str, Dict[str, float]], months: D
 
 
 # ---------------------------------------------------------------------------------------------- carry against it
+def months_label(months: float) -> str:
+    """12 -> "1Y", 18 -> "18M", 3 -> "3M": a tenor as a broker writes it."""
+    m = int(round(months))
+    return "%dY" % (m // 12) if m >= 12 and m % 12 == 0 else "%dM" % m
+
+
 def week_days(start: Any, end: Any) -> int:
     """Week days after ``start`` up to ``end`` (two dates): how many daily moves a horizon holds."""
     n = 0

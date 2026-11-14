@@ -23,10 +23,10 @@ def test_status_and_navigation(service):
     pages = service.nav()
     ids = [p["id"] for p in pages]
     assert "blotter" in ids and "masa" in ids and "forward" in ids and "usd" in ids
-    # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, settings)
+    # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, spreads, settings)
     custom = [p["id"] for p in pages if p.get("custom")]
-    assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "settings"]
-    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 8
+    assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "spreads", "settings"]
+    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 9
 
 
 @pytest.mark.parametrize("view_id", VIEW_IDS)
@@ -260,8 +260,9 @@ def test_cell_info_and_grid(service):
         service.cell_info(None, "tto", "Yok!A1")
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
     # the dashboard's own sheets come last
-    assert [s["name"] for s in service.sheets("tto")][-7:] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN"]
-    assert len(service.sheets("tto")) == 17 + 7
+    assert [s["name"] for s in service.sheets("tto")][-8:] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN",
+                                                                "EK_CARRY"]
+    assert len(service.sheets("tto")) == 17 + 8
     assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2"] and [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX"]
 
 

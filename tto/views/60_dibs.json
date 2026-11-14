@@ -147,7 +147,33 @@
     "title": "DİBS RV listesine kâğıt ekle"
    },
    "append": "broker_bonds",
-   "card": "bond"
+   "card": "bond",
+   "quote": {
+    "prefix": "DİBS",
+    "label": "A",
+    "first": 5,
+    "last": 54,
+    "sets": [
+     {
+      "id": "px",
+      "name": "Fiyat (BBG)",
+      "bid": "K",
+      "ask": "L"
+     },
+     {
+      "id": "yld",
+      "name": "Getiri (basit)",
+      "bid": "U",
+      "ask": "V"
+     },
+     {
+      "id": "asw",
+      "name": "ASW / DM",
+      "bid": "AD",
+      "ask": "AE"
+     }
+    ]
+   }
   },
   {
    "id": "B4",
