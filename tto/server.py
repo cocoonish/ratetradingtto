@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 from typing import Any, Dict, Optional
 from urllib.parse import unquote
@@ -18,6 +19,12 @@ from .config import Settings
 from .service import Service, ServiceError
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Every file sent names its type, and on Windows Python reads the types from the registry the first time one is asked
+# for: 8 430 keys on the desk machine, each read letting go of the interpreter lock - next to a calculating thread the
+# first page waited 80 s for them (and the whole server with it).  Read here, before anything calculates.
+if not mimetypes.inited:
+    mimetypes.init()
 
 
 class _Static(StaticFiles):
