@@ -272,3 +272,98 @@ def test_a_thread_with_a_big_stack_evaluates_long_chains_without_unwinding():
     # deeper than DEEP_LIMIT still unwinds (and works) on the big stack
     deep = _long_chain(3000)
     assert run_with_big_stack(deep.shared.value, "S!A3000") == deep.shared.value("S!A3000")
+
+
+# ---------------------------------------------------------------------------------------------- invalidation, at random
+def _random_book(rnd):
+    """Inputs A1:A8 (two of them grouped), constants C1:C4, and 40 formulas reading earlier cells and ranges."""
+    cells = {"A%d" % i: float(rnd.randint(1, 9)) for i in range(1, 9)}
+    cells.update({"C%d" % i: float(rnd.randint(1, 5)) for i in range(1, 5)})
+    names = ["A%d" % i for i in range(1, 9)] + ["C%d" % i for i in range(1, 5)]
+    for i in range(1, 41):
+        a, b = rnd.choice(names), rnd.choice(names)
+        kind = rnd.random()
+        if kind < 0.3:
+            f = "=%s+%s*2" % (a, b)
+        elif kind < 0.5:
+            f = "=IF(%s>%s,%s,%s-1)" % (a, b, a, b)
+        elif kind < 0.7 and i > 3:
+            f = "=SUM(B%d:B%d)+%s" % (max(1, i - 3), i - 1, a)
+        elif kind < 0.85:
+            f = "=%s/(1+ABS(%s))" % (a, b)
+        else:
+            f = "=TODAY()-%s" % a
+        cells["B%d" % i] = f
+        names.append("B%d" % i)
+    return cells
+
+
+def _check_groups(calc):
+    for si, md in enumerate(calc.maskd):
+        for rc, k in md.items():
+            assert rc in calc.groups.get(k, {}).get(si, ()), (si, rc)
+
+
+def test_invalidation_matches_a_calculation_from_scratch_at_random():
+    """Shared values, users' own values, values typed over formulas later and the clock, in random order: after every
+    step every user's every cell is what a fresh calculation of the same inputs gives, and each computed value is
+    listed under its mask (an invalidation tests the masks, not the values)."""
+    import random
+    for seed in range(6):
+        rnd = random.Random(seed)
+        cells = _random_book(rnd)
+        eng = mini_engine(cells)
+        ref = eng.model.cell_ref
+        inputs = [ref("S!A%d" % i) for i in range(1, 7)]
+        eng.declare_inputs(inputs[:4])
+        eng.declare_inputs(inputs[4:], group="g")
+        declared = list(inputs)
+        shared_vals = {}
+        users = {"ali": {}, "veli": {}}
+        today = [46329.0]
+        formula_cells = ["B%d" % i for i in range(1, 41)]
+        for step in range(40):
+            op = rnd.random()
+            if op < 0.25:
+                c = rnd.choice(declared)
+                shared_vals[c] = float(rnd.randint(0, 20))
+                eng.set_inputs({c: shared_vals[c]})
+            elif op < 0.35 and shared_vals:
+                c = rnd.choice(list(shared_vals))
+                del shared_vals[c]
+                eng.clear_inputs([c])
+            elif op < 0.65:
+                name = rnd.choice(list(users))
+                ov = dict(users[name])
+                c = rnd.choice(declared)
+                if c in ov and rnd.random() < 0.3:
+                    del ov[c]
+                else:
+                    ov[c] = float(rnd.randint(-5, 30))
+                users[name] = ov
+                eng.set_user_inputs(name, ov)
+            elif op < 0.8:
+                c = ref("S!" + rnd.choice(formula_cells))      # a value typed over a formula, later
+                if c not in declared:
+                    eng.declare_inputs([c], group="adhoc")
+                    declared.append(c)
+            elif op < 0.9:
+                today[0] += 1
+                eng.clock.today = (lambda t: (lambda: t))(today[0])
+                eng.clock_tick()
+            # read a random part (not everything is computed all the time)
+            for calc in [eng.shared] + [eng.user(n) for n in users]:
+                for a in rnd.sample(formula_cells, 12):
+                    calc.value("S!" + a)
+                _check_groups(calc)
+            # ... and compare with a calculation from scratch
+            fresh = mini_engine(cells, today=today[0])
+            fresh.declare_inputs(inputs[:4])
+            fresh.declare_inputs(inputs[4:], group="g")
+            fresh.declare_inputs([c for c in declared if c not in inputs], group="adhoc")
+            fresh.set_inputs(dict(shared_vals))
+            for name in [None] + list(users):
+                mine = eng.shared if name is None else eng.user(name)
+                theirs = fresh.shared if name is None else fresh.set_user_inputs(name, users[name])
+                for a in formula_cells:
+                    assert mine.value("S!" + a) == theirs.value("S!" + a), (seed, step, name, a)

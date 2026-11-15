@@ -125,6 +125,7 @@ class Engine(object):
         self._bits: Dict[Any, int] = {}
         self._nbits = 0
         self.input_mask: List[Dict[int, int]] = [dict() for _ in range(n)]     # designated input cells
+        self._bit_cells: Dict[int, List[Tuple[int, int]]] = {}                 # input bit -> its cells
         self.input_value: List[Dict[int, Any]] = [dict() for _ in range(n)]    # shared overrides of inputs
         self.pins: List[Dict[int, Any]] = [dict() for _ in range(n)]           # pinned (formula) cells
         self.spill_zone: List[Dict[int, Tuple[int, ...]]] = [dict() for _ in range(n)]  # rc -> anchors
@@ -183,14 +184,18 @@ class Engine(object):
                 mask = self._computed_mask(si, rc)
                 if mask:
                     b = self.bit(("cell", si, rc))             # its own bit: what follows the cell is found exactly
-                    self.input_mask[si][rc] = b
+                    self._set_input(si, rc, b)
                     self._mark_dependents(mask, b)
                     continue
                 key = ("group", group) if group else ("cell", si, rc)
-                self.input_mask[si][rc] = self.bit(key)
+                self._set_input(si, rc, self.bit(key))
                 fresh = True
         if fresh:
             self.reset()
+
+    def _set_input(self, si: int, rc: int, b: int) -> None:
+        self.input_mask[si][rc] = b
+        self._bit_cells.setdefault(b, []).append((si, rc))
 
     def _computed_mask(self, si: int, rc: int) -> int:
         """The dependency mask the shared calculation has for a formula cell - computing the cell first when it has
@@ -209,10 +214,18 @@ class Engine(object):
         """Add bit ``b`` to every computed value - of every calculation - that carries all of ``mask``."""
         intern = self.intern_mask
         for calc in [self.shared] + list(self.users.values()):
-            for md in calc.maskd:
-                hit = [rc for rc, k in md.items() if k & mask == mask]
-                for rc in hit:
-                    md[rc] = intern(md[rc] | b)
+            groups = calc.groups
+            for k in [k for k in groups if k & mask == mask]:
+                nk = intern(k | b)
+                if nk == k:
+                    continue
+                for si, rcs in groups.pop(k).items():
+                    md = calc.maskd[si]
+                    moved = [rc for rc in rcs if md.get(rc) == k]
+                    for rc in moved:
+                        md[rc] = nk
+                    if moved:
+                        calc._group(nk, si).extend(moved)
             for key, ent in list(calc.rcache.items()):
                 if ent[2] & mask == mask:
                     calc.rcache[key] = (ent[0], ent[1], intern(ent[2] | b))
@@ -334,6 +347,11 @@ class Calc(object):
         n = engine.nsheets
         self.memo: List[Dict[int, Any]] = [dict() for _ in range(n)]
         self.maskd: List[Dict[int, int]] = [dict() for _ in range(n)]
+        # the cells of maskd grouped by their mask: mask -> {sheet: [rc, ...]}.  ~150 000 values share ~4 500 masks,
+        # so an invalidation tests each mask once instead of every value.  Every (sheet, rc) of maskd is listed under
+        # its mask; a listed cell whose mask is another by now (or that is gone) is "stale" and skipped.
+        self.groups: Dict[int, Dict[int, List[int]]] = {}
+        self._stale = 0
         self.rcache: Dict[Tuple[int, int, int, int, int], Tuple[Any, Any, int]] = {}
         self.overlay: Dict[Tuple[int, int], Any] = dict(overlay or {})
         self.omask = 0
@@ -377,10 +395,52 @@ class Calc(object):
                         m[rc] = None
                     md[rc] = b
                 self.maskd.append(md)
+            self._rebuild_groups()
         else:
             self.memo = [dict() for _ in range(n)]
             self.maskd = [dict() for _ in range(n)]
+            self.groups = {}
+            self._stale = 0
             self._seed_overlay()
+
+    # ------------------------------------------------------------------ masks grouped
+    def _group(self, k: int, si: int) -> List[int]:
+        g = self.groups.get(k)
+        if g is None:
+            g = self.groups[k] = {}
+        lst = g.get(si)
+        if lst is None:
+            lst = g[si] = []
+        return lst
+
+    def _mark(self, si: int, rc: int, k: int) -> None:
+        """Give a cell the mask ``k`` (listing it under ``k``)."""
+        md = self.maskd[si]
+        old = md.get(rc)
+        if old != k:
+            md[rc] = k
+            self._group(k, si).append(rc)
+            if old is not None:
+                self._stale += 1
+
+    def _rebuild_groups(self) -> None:
+        groups: Dict[int, Dict[int, List[int]]] = {}
+        for si, md in enumerate(self.maskd):
+            for rc, k in md.items():
+                g = groups.get(k)
+                if g is None:
+                    groups[k] = {si: [rc]}
+                else:
+                    lst = g.get(si)
+                    if lst is None:
+                        g[si] = [rc]
+                    else:
+                        lst.append(rc)
+        self.groups = groups
+        self._stale = 0
+
+    #: stale entries of the groups (cells listed under a mask they no longer have) before they are rebuilt
+    STALE_MAX = 20000
 
     def _seed_overlay(self) -> None:
         eng = self.engine
@@ -390,7 +450,7 @@ class Calc(object):
             if bit is None:
                 continue
             self.memo[si][rc] = v
-            self.maskd[si][rc] = bit
+            self._mark(si, rc, bit)
             self.omask |= bit
 
     def set_overlay(self, overlay: Dict[Tuple[int, int], Any]) -> None:
@@ -411,49 +471,58 @@ class Calc(object):
             # overlay cells removed / changed must be re-seeded
             for (si, rc) in keys:
                 self.memo[si].pop(rc, None)
-                self.maskd[si].pop(rc, None)
+                if self.maskd[si].pop(rc, None) is not None:
+                    self._stale += 1
         self._seed_overlay()
 
     def _invalidate(self, changed: int) -> None:
         eng = self.engine
         shared = self.parent is None
-        for si in range(eng.nsheets):
-            md = self.maskd[si]
-            if not md:
-                continue
-            memo = self.memo[si]
-            inputs = eng.input_mask[si]
-            fml = eng.fml[si]
-            iv = eng.input_value[si]
-            overlay = self.overlay
-            dead = []
-            for rc, k in md.items():
-                if k & changed:
+        if self._stale > self.STALE_MAX:
+            self._rebuild_groups()
+        groups = self.groups
+        overlay = self.overlay
+        for k in [k for k in groups if k & changed]:
+            keep: List[Tuple[int, int]] = []
+            for si, rcs in groups.pop(k).items():
+                md = self.maskd[si]
+                memo = self.memo[si]
+                inputs = eng.input_mask[si]
+                fml = eng.fml[si]
+                iv = eng.input_value[si]
+                for rc in rcs:
+                    if md.get(rc) != k:
+                        continue                         # stale: dropped, or stored again with another mask
                     if rc in inputs:
                         # an input keeps its value unless it is a formula default that must be recomputed
                         if shared:
                             if not (rc in fml and rc not in iv):
+                                keep.append((si, rc))
                                 continue
                         elif (si, rc) in overlay:
+                            keep.append((si, rc))
                             continue
-                    dead.append(rc)
-            for rc in dead:
-                del md[rc]
-                memo.pop(rc, None)
-            if shared:
-                fml = eng.fml[si]
-                for rc, bit in inputs.items():
-                    if bit & changed:
-                        v = eng.input_value[si].get(rc, _MISS)
-                        if v is _MISS:
-                            if rc in fml:
-                                # an input holding a default formula: recompute it (it keeps its input bit)
-                                memo.pop(rc, None)
-                                md.pop(rc, None)
-                                continue
-                            v = eng.consts[si].get(rc)
-                        memo[rc] = v
-                        md[rc] = bit
+                    del md[rc]
+                    memo.pop(rc, None)
+            for si, rc in dict.fromkeys(keep):          # (still under k)
+                self._group(k, si).append(rc)
+        if shared:
+            consts = eng.consts
+            for bit, cells in eng._bit_cells.items():
+                if not bit & changed:
+                    continue
+                for si, rc in cells:
+                    v = eng.input_value[si].get(rc, _MISS)
+                    if v is _MISS:
+                        if rc in eng.fml[si]:
+                            # an input holding a default formula: recompute it (it keeps its input bit)
+                            self.memo[si].pop(rc, None)
+                            if self.maskd[si].pop(rc, None) is not None:
+                                self._stale += 1
+                            continue
+                        v = consts[si].get(rc)
+                    self.memo[si][rc] = v
+                    self._mark(si, rc, bit)
         if self.rcache:
             self.rcache = {k: e for k, e in self.rcache.items() if not (e[2] & changed)}
         if not shared:
@@ -580,7 +649,22 @@ class Calc(object):
         target = self if (parent is None or (k & self.omask)) else parent
         target.memo[si][rc] = v
         if k:
-            target.maskd[si][rc] = self.engine.intern_mask(k)
+            k = self.engine.intern_mask(k)
+            md = target.maskd[si]
+            old = md.get(rc)
+            if old != k:
+                md[rc] = k
+                g = target.groups.get(k)
+                if g is None:
+                    target.groups[k] = {si: [rc]}
+                else:
+                    lst = g.get(si)
+                    if lst is None:
+                        g[si] = [rc]
+                    else:
+                        lst.append(rc)
+                if old is not None:
+                    target._stale += 1
         return v
 
     def _eval(self, si: int, rc: int, r: int, c: int, tid: int) -> Any:
