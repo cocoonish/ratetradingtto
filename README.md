@@ -1200,7 +1200,12 @@ Matriste yedekten gelen kapanış soluk yazılır.
 
 * **Canlı modda** kapanışlar Bloomberg'den (`HistoricalDataRequest`, yalnızca işlem günleri) bir yıl geriye çekilir
   ve 15 dakikada bir son günler yenilenir (`--history-refresh`); bugünün satırı gün içinde günün son fiyatıdır.
-  İlk açılışta ~100 ticker için bir kez bir yıllık geçmiş istenir, sonraki turlar yalnızca son 10 günü ister.
+  Bloomberg'in günlük veri limiti için: bir serinin **tüm aralığı günde en çok bir kez** istenir; Bloomberg'in geçmişi
+  pencereden kısaysa (yeni bir kâğıt, kısa geçmişli bir ticker) verdiği en eski gün saklanır ve o aralık bir daha
+  istenmez (yalnızca pencere büyürse). Sonraki turlar her serinin **yalnızca son kapanışından sonrasını** ister (o
+  kapanışı ve bir önceki günü de yeniden: gün içinde saklanan değer kesinleşsin, düzeltme gelsin); dashboard kapalı
+  kalmışsa da aynı, son kapanıştan. Hiç geçmişi olmayan bir seri günde bir kez sorulur ("Şimdi güncelle" yeniden
+  sorar).
 * **Kayıtlı veri modunda** tarihçe, Excel dosyasının kendi sakladığı `BDH` bloklarıdır (05.10–03.11.2026: OIS
   1M–1Y, XCCY 1Y) ve dashboard'la gelen TLREF fixingleri (`tto/data/replay_history.json`, kaynak TCMB EVDS
   `TP.BISTTLREF.ORAN`). Sayfalar hangi verinin eksik olduğunu üstlerinde söyler.
@@ -1513,10 +1518,14 @@ BDP tarihleri masadaki Excel'de olduğu gibi `4.11.2026` biçiminde metin olarak
 isteği sayısı sayılır; `--max-hits` (varsayılan 400.000) aşılırsa yalnızca akan veriler güncellenmeye devam eder ve
 rozet uyarır. Bağlantı koparsa otomatik yeniden bağlanılır.
 
-**Tarihçe** (gün sonu matrisi, PPK fiyatlama geçmişi) için ayrıca `HistoricalDataRequest` gönderilir: ilk
-açılışta ~100 ticker için bir yıllık günlük kapanış (alan başına 50 ticker'lık isteklerle), sonra 15 dakikada bir son
-10 gün. Bunlar da günlük istek sayacına yazılır (tur başına ~100). Geçmişi hiç olmayan bir ticker 6 saat boyunca
-yeniden sorulmaz; "Şimdi güncelle" hemen yeniden dener.
+**Tarihçe** (gün sonu matrisi, PPK fiyatlama geçmişi, quant serileri) için ayrıca `HistoricalDataRequest`
+gönderilir: ilk açılışta ~120 ticker için bir yıllık günlük kapanış (alan başına 50 ticker'lık isteklerle; quant
+paketinin 50 serisi iki yıl, turda 5'er), sonra 15 dakikada bir her serinin yalnızca son kapanışından sonrası. Bir
+serinin tüm aralığı günde en çok bir kez istenir; Bloomberg'in geçmişi kısaysa verdiği en eski gün saklanır
+(`hist.fetch`) ve o aralık bir daha istenmez. Bunlar da günlük istek sayacına yazılır: tur başına seri sayısı kadar
+(security × alan), 15 dakikalık turlarla günde en çok ~170 × 97 ≈ 16.500 (`--max-hits` 400.000'in ~%4'ü); sahte
+terminalle ölçülen bir gün `tests/test_quant.py`'de. Geçmişi hiç olmayan bir ticker günde bir kez sorulur; "Şimdi
+güncelle" hemen yeniden dener. (FX vol sayfalarının tarihçesi `tto/fx.py`'nin kendi kuralıyla gelir: aşağıda.)
 
 **FX vol'leri** de aynı yoldan gelir: bir kota ilk istendiğinde referans isteği, sonra abonelik (vol ve forward puanı
 ticker'larında `LAST_PRICE`, `BID`, `ASK`, `MID` akar). Yalnız açılan sayfanın istediği ister: Spot / FX'te açılan

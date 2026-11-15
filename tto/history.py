@@ -552,7 +552,8 @@ class History(object):
         self._het = None                               # big-stack thread that owns the MPC machine
         self._machine: Optional[MpcMachine] = None
         self._snap: Optional[Tuple[int, Dict[str, Any]]] = None
-        self._empty: Dict[str, float] = {}             # series without any history -> when it was last asked
+        self._empty: Dict[str, str] = {}               # series without any history -> the day it was asked (once a day)
+        self._empty_day = ""                           # the day _empty was read for (from the store's records)
         self._force = False                            # the next pass recomputes every day
         self.state: Dict[str, Any] = {"phase": "idle", "done": 0, "total": 0, "error": "", "last_sync": None,
                                       "fetched": 0, "computed": 0}
@@ -1061,29 +1062,81 @@ class History(object):
                 st["last_sync"] = _dt.datetime.now().replace(microsecond=0).isoformat(sep=" ")
             return {"fetched": fetched, "computed": computed, "rev": self.rev}
 
+    #: every sync asks a series from its last close on - that close again and the day before it (calendar days back:
+    #: a weekend), for the final value of a close stored during its day and a correction - and nothing older; a series
+    #: further behind (the dashboard was off) the same way, from its last close: never the whole range again for that
+    OVERLAP_DAYS = 3
+    #: live: series that are new to the history and ask for it (``info["backfill"]``: the quant package's) get their
+    #: first full range a few per sync, in the order they are listed - not all of them in one sync
+    BACKFILL_PER_SYNC = 5
+    #: the store's record of the full-range requests: series id -> {"day" of the last one, "from" the day it asked
+    #: from, "first" the earliest day Bloomberg gave (None: nothing)}
+    FETCH_KEY = "hist.fetch"
+
+    def fetch_records(self) -> Dict[str, Dict[str, Any]]:
+        v = self.store.get(self.FETCH_KEY)
+        return v if isinstance(v, dict) else {}
+
     def _fetch(self) -> int:
+        """Bring the closes up to date, asking Bloomberg as little as it takes (its daily data limit is the desk's):
+
+        * a series' **full range** is asked at most **once a day** - and never again once it was asked from as far
+          back as the window: what came back starts where Bloomberg's history of it starts (that day is kept in
+          ``FETCH_KEY``); only a window that grows past every earlier request asks again;
+        * otherwise only the **new days**: from the last close on (``OVERLAP_DAYS`` before it, for its final value);
+        * a series without any history is asked once a day (a manual update asks again: :meth:`request_sync`);
+        * live, the series marked ``backfill`` get their first full range ``BACKFILL_PER_SYNC`` at a time (the others
+          wait for the next syncs: ``state["backfill"]``)."""
         snap = self.snapshot()
         today = snap["today"]
+        today_iso = _iso(today)
         look = int(self.settings()["lookback_days"])
         first = today - _dt.timedelta(days=look)
         bounds = self.store.hist_bounds()
-        now = time.time()
+        records = self.fetch_records()
+        if self._empty_day != today_iso:
+            # a new day (or the first sync since the start): what was asked today and had nothing stays unasked today
+            self._empty_day = today_iso
+            self._empty = {sid: today_iso for sid, r in records.items() if r.get("day") == today_iso and sid not in bounds}
+        rationed = self.svc.mode == "live"
+        backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]]]] = []
         full: Dict[Tuple[str, _dt.date], List[str]] = {}
         tail: Dict[Tuple[str, _dt.date], List[str]] = {}
+
+        def recent(field: str, t: str, b: Tuple[str, str, int]) -> None:
+            start = min(today, _day(b[1])) - _dt.timedelta(days=self.OVERLAP_DAYS)
+            tail.setdefault((field, start), []).append(t)
+
         for d in snap["defs"]:
             # a series may ask for a longer past than the setting (the quant package's own: two years)
             since = min(first, today - _dt.timedelta(days=int(d.info.get("lookback") or 0)))
+            reach = _iso(since + _dt.timedelta(days=20))
             for t in [d.ticker] + d.alts:
                 sid = "%s|%s" % (t, d.field)
                 b = bounds.get(sid)
+                rec = records.get(sid) or {}
                 if b is None:
-                    if now - self._empty.get(sid, 0.0) < 6 * 3600.0:
-                        continue                               # no history a moment ago: not asked again so soon
-                    full.setdefault((d.field, since), []).append(t)
-                elif _day(b[1]) < today - _dt.timedelta(days=10) or _day(b[0]) > since + _dt.timedelta(days=20):
-                    full.setdefault((d.field, since), []).append(t)     # a gap, or the window grew
+                    if self._empty.get(sid) == today_iso:
+                        continue                               # asked today, nothing came: not again before tomorrow
+                    wanted = True
                 else:
-                    tail.setdefault((d.field, today - _dt.timedelta(days=10)), []).append(t)
+                    # the window reaches further back than anything asked so far (and not asked today)
+                    wanted = b[0] > reach and str(rec.get("from") or "9999") > reach and rec.get("day") != today_iso
+                if wanted and rationed and d.info.get("backfill"):
+                    # (in turn: a series never asked before goes ahead of one asked again by hand)
+                    backfill.append((1 if sid in records else 0, len(backfill), d.field, t, since, b))
+                elif wanted:
+                    full.setdefault((d.field, since), []).append(t)
+                elif b is not None:
+                    recent(d.field, t, b)
+        backfill.sort()
+        for _, _, field, t, since, b in backfill[:self.BACKFILL_PER_SYNC]:
+            full.setdefault((field, since), []).append(t)
+        for _, _, field, t, since, b in backfill[self.BACKFILL_PER_SYNC:]:
+            if b is not None:
+                recent(field, t, b)                            # what it has stays up to date meanwhile
+        self.state["backfill"] = {"waiting": ["%s|%s" % (t, f) for _, _, f, t, _, _ in backfill[self.BACKFILL_PER_SYNC:]],
+                                  "per_sync": self.BACKFILL_PER_SYNC if rationed else None}
         prov = self.svc.provider
         changed = 0
         end = today.strftime("%Y%m%d")
@@ -1096,12 +1149,34 @@ class History(object):
                 for t in tickers:
                     rows = got.get((t, field))
                     sid = "%s|%s" % (t, field)
+                    if group is full:
+                        # the day counts even when nothing came back; the range itself only once it did (an answer
+                        # that did not come in time leaves the range to be asked again on another day)
+                        old = records.get(sid) or {}
+                        records[sid] = {"day": today_iso, "from": _iso(start) if rows else old.get("from"),
+                                        "first": min(d for d, _ in rows) if rows else old.get("first")}
                     if rows:
                         self._empty.pop(sid, None)
                         changed += self.store.hist_upsert(sid, [(d, v) for d, v in rows if d <= _iso(today)])
                     elif sid not in bounds:
-                        self._empty[sid] = now
+                        self._empty[sid] = today_iso
+                if group is full:
+                    self.store.put(self.FETCH_KEY, records)     # at once: a sync cut short still counts what it asked
         return changed
+
+    def fill_states(self) -> Dict[str, str]:
+        """Per series (by its main id): ``"ok"`` (it has closes), ``"filling"`` (its first full range is still waiting
+        its turn, or it was not asked yet), ``"none"`` (asked, and Bloomberg had nothing)."""
+        bounds = self.store.hist_bounds()
+        records = self.fetch_records()
+        waiting = set((self.state.get("backfill") or {}).get("waiting") or ())
+        out: Dict[str, str] = {}
+        for d in self.snapshot()["defs"]:
+            ids = d.ids()
+            has = any(i in bounds for i in ids)
+            asked = any((records.get(i) or {}).get("day") for i in ids)
+            out[d.id] = "filling" if (d.id in waiting or (not has and not asked)) else ("ok" if has else "none")
+        return out
 
     # ================================================================== the meeting pricing of past days
     def _holidays(self, snap: Dict[str, Any], tlref: Dict[str, float]) -> Tuple[List[float], set]:

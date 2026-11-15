@@ -108,12 +108,26 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
     return out
 
 
+#: the order the first backfill takes them in (live: a few a sync): the global drivers, the spots, the ATM vols, the
+#: forward points, the risk reversals
+BACKFILL_ORDER = ("Global", "FX:", "FXV:", "FXP:", "FXR:")
+
+
+def _backfill_rank(spec: Dict[str, str]) -> int:
+    if spec["group"] == "Global":
+        return 0
+    return next((i for i, p in enumerate(BACKFILL_ORDER) if i and spec["key"].startswith(p)), len(BACKFILL_ORDER))
+
+
 def history_defs(source: str = fxm.DEFAULT_SOURCE) -> List[Any]:
     """The series above as definitions of the history (``tto.history.SeriesDef``): fetched with its normal sync, two
-    years back (``info["lookback"]``), shown on the settings page's coverage table under "Quant"."""
+    years back (``info["lookback"]``) - the first time a few per sync in live mode (``info["backfill"]``), in the order
+    of ``BACKFILL_ORDER`` - and shown on the settings page's coverage table under "Quant"."""
     from .history import SeriesDef
+    specs = sorted(series_specs(source), key=_backfill_rank)
     return [SeriesDef("Quant", s["label"], s["ticker"], "PX_LAST", unit="pct" if s["kind"] == "rate" else "px",
-                      info={"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": HISTORY_DAYS}) for s in series_specs(source)]
+                      info={"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": HISTORY_DAYS, "backfill": True})
+            for s in specs]
 
 
 # ---------------------------------------------------------------------------------------------- small helpers

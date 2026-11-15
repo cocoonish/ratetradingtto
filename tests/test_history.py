@@ -1180,10 +1180,10 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         def asked():
             return [r for r in server.requests if r["op"] == "HistoricalDataRequest"]
 
-        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, one request)
+        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, five a pass)
         res = h.sync(only=[TODAY])
         first = [r for r in asked() if r["options"]["startDate"] != "20241024"]
-        assert len(asked()) - len(first) == 1 and len(asked()[-1]["securities"]) == quant
+        assert len(asked()) - len(first) == 1 and len(asked()[-1]["securities"]) == History.BACKFILL_PER_SYNC
         tickers = {s for r in first for s in r["securities"]}
         # (the bonds go out the way the API names them: the sheet's "TRT150328T24 @ISL1 ISIN" is Excel's spelling)
         assert {"TYSOA Curncy", "TYSOA GFOF Curncy", "BISTTREF Index", "TRYI1M BGN Curncy", "TRYSAQ5 BGN Curncy",
@@ -1236,12 +1236,13 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert "2026-10-29" not in plan and "2026-01-01" not in plan and plan["2026-10-28"]["spot"] == D("2026-10-30")
         assert plan["2026-10-21"]["meetings"][0] == D("2026-10-22") and len(plan) == len(in_window)
 
-        # ---- the next pass asks for the last days only; series without any history are left alone for a while
+        # ---- the next pass asks for the new days only - from each series' last close on, that close again (and the
+        #      next five quant series); series without any history are left alone for the rest of the day
         n = len(asked())
         res = h.sync(only=[TODAY])
-        later = asked()[n:]
-        assert res == {"fetched": 0, "computed": 0, "rev": h.rev}
-        assert {r["options"]["startDate"] for r in later} == {"20261024"} and len(later) <= 3
+        later = [r for r in asked()[n:] if r["options"]["startDate"] != "20241024"]
+        assert res == {"fetched": 0, "computed": 0, "rev": h.rev} and len(asked()[n:]) - len(later) == 1
+        assert {r["options"]["startDate"] for r in later} == {"20261031", "20261030"} and len(later) <= 3      # (TLREF: 2 Nov)
         assert not ({"TYSOA GFOF Curncy", "TRT150328T24 @ISL1 ISIN"} & {s for r in later for s in r["securities"]})
 
         # ---- a close moves (today's last price): one row is stored, today is solved again
@@ -1260,10 +1261,18 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert "TYSOA GFOF Curncy" in {s for r in asked()[n:] for s in r["securities"]}
         st = h.status()
         assert st["mode"] == "live" and st["mpc_days"] == 1 and st["mpc_partial"] == 0 and st["error"] == ""
-        # the workbook's own series stay where they were; the quant series (no history here) are asked a few times at most
-        qt = {s["ticker"] for s in series_specs()}
-        qhits = sum(len(r["securities"]) for r in asked() if qt & set(r["securities"]))
-        assert provider.status()["hits_today"] - qhits < 600 and qhits <= 4 * quant, (provider.status()["hits_today"], qhits)
+        # Bloomberg's hits (security × field per request) of the four passes, part by part instead of one round number:
+        # the workbook's own reference data, every pair asked once - however many fields the workbook uses (the bid /
+        # ask sizes added some) -, and what the history asked: exactly what its rules say
+        hist_hits = sum(len(r["securities"]) for r in asked())
+        refs = [(s, f, r["overrides"]) for r in server.requests if r["op"] != "HistoricalDataRequest" for s in r["securities"] for f in r["fields"]]
+        print("hits: %d = %d reference + %d history" % (provider.status()["hits_today"], len(refs), hist_hits))
+        assert provider.status()["hits_today"] == server.hits() == len(refs) + hist_hits and len(refs) == len(set(refs))
+        q, with_data, without = History.BACKFILL_PER_SYNC, len(svc.store.hist_bounds()), 117 - 58
+        # first pass: every series of the workbook in full and five quant ones; then the last days of the 58 with
+        # history and five more quant series, twice; by hand: the last days again, the 59 workbook series without
+        # history again and five more quant series (those never asked go first)
+        assert with_data == 58 and hist_hits == (117 + q) + 2 * (with_data + q) + (with_data + without + q)
     finally:
         svc.stop()
 
