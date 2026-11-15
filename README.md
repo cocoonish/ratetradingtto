@@ -262,7 +262,9 @@ etiketi (Mar28, Eyl35 …), üstünde kesik çizgiyle uydurulan eğri; geçmiş 
   kendi değerinizi yazabilirsiniz (gelmeyen bir kota, denemek istediğiniz bir seviye). Değer yalnızca sizin
   görünümünüzü değiştirir, hücre mor işaretlenir, sayfanın üstünde "N formül yerine elle değer · formüle dön"
   düğmesi çıkar; hücreyi silmek (ya da o düğme) formülü geri getirir. Mod tarayıcı sekmesi açık kaldıkça bütün
-  sayfalarda geçerlidir; yeni oturum kapalı başlar. Senaryolar bu değerleri de saklar.
+  sayfalarda geçerlidir; yeni oturum kapalı başlar. Senaryolar bu değerleri de saklar. Bir formülün üzerine ilk kez
+  yazmak kimsenin hesabını silmez; yalnız o hücreyi okuyanlar, yalnız yazan kişi için yeniden hesaplanır. Eskiden
+  bütün çalışma kitabı herkes için baştan hesaplanıyordu ve masa bilgisayarında herkes ~20 sn bekliyordu.
 * Yüzde hücrelerine `35,5`, `35,5%` ya da `0,355` yazılabilir (Excel'in otomatik yüzde girişi gibi).
 * **Nominal / tutar** hücrelerine masanın kısaltmasıyla da yazılır: `100m`, `2,5mn`, `1,5 milyon`, `500k`, `500 bin`,
   `1,5b`, `2 milyar` (Hazine İhalesi'nin teklif ve gerçekleşen nominali; OIS'in "Yuvarlama TL" ve "Nominal C+R"'si,
@@ -1471,7 +1473,7 @@ Bloomberg ve ağ gerekmez (~8–11 dk; masa bilgisayarında ~35 dk). 980 test (g
 
 | Dosya | Kapsam |
 |---|---|
-| `test_xl_functions.py`, `test_xl_engine.py`, `test_numfmt.py` | Excel semantiği (operatörler, yuvarlama, tarih - bayram, 1 Ocak ve hafta sonu tatilli `WORKDAY` / `NETWORKDAYS`, ay sonu ve 29 Şubat'ta `EDATE` / `EOMONTH`, `YEARFRAC` -, metin, arama, koşullu toplamlar, matris, `LET`, `FILTER` ve taşma / `#SPILL!`, `AGGREGATE`, sıfıra yapıştırma), bağımlılık takibi, kullanıcı katmanları (aynı gruptaki girdilerden birini değiştiren kullanıcının diğerlerini dosyadaki değeriyle görmesi dahil), sayı biçimleri |
+| `test_xl_functions.py`, `test_xl_engine.py`, `test_numfmt.py` | Excel semantiği (operatörler, yuvarlama, tarih - bayram, 1 Ocak ve hafta sonu tatilli `WORKDAY` / `NETWORKDAYS`, ay sonu ve 29 Şubat'ta `EDATE` / `EOMONTH`, `YEARFRAC` -, metin, arama, koşullu toplamlar, matris, `LET`, `FILTER` ve taşma / `#SPILL!`, `AGGREGATE`, sıfıra yapıştırma), bağımlılık takibi, kullanıcı katmanları (aynı gruptaki girdilerden birini değiştiren kullanıcının diğerlerini dosyadaki değeriyle görmesi dahil), **sonradan elle değer yazılan formülün hiçbir hesaplanmış değeri silmemesi** (yalnız bağımlıları, yalnız yazan kullanıcı için; sabitte eski güvenli yol), sayı biçimleri |
 | `test_parity.py` | Excel'in kayıtlı değerleriyle parite (sayfa bazında eşikler) |
 | `test_reference.py` | LibreOffice'in baştan hesapladığı değerlerle karşılaştırma (`tests/data/lo_*.json.gz`) |
 | `test_forward.py` | Forward: bağımsız kapalı formül, Excel'in kayıtlı değerleri, işlem girişindeki fiyatlamanın sayfayla aynılığı |

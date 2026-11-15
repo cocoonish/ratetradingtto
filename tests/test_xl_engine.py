@@ -66,6 +66,43 @@ def test_user_calc_reuses_shared_results():
     assert ali.evals == 3
 
 
+def test_a_formula_typed_over_later_drops_no_computed_value():
+    """A formula declared an input once values are computed ("elle değer"): what read it carries every bit of its
+    mask, so those values are marked and nothing is dropped - the first value typed over a formula used to drop
+    every value of every user (the next page computed the whole workbook again)."""
+    eng = chain()
+    a1, a2, b1 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "A2", "B1"))
+    eng.declare_inputs([a1, a2])
+    assert eng.shared.value("S!D1") == 260.0 and eng.shared.value("S!B2") == 6.0 and eng.shared.value("S!F1") == "küçük"
+    veli = eng.set_user_inputs("veli", {a2: 0.0})
+    assert veli.value("S!D1") == 210.0
+    before = eng.shared.evals
+    eng.declare_inputs([b1], group="adhoc")                        # B1 = A1*2, typed over by ali
+    ali = eng.set_user_inputs("ali", {b1: 100.0})
+    assert ali.value("S!D1") == 1060.0 and ali.value("S!B2") == 6.0          # (100 + 6) * 10
+    assert ali.evals == 2                                          # C1 and D1 only: B2 came from the shared pool
+    assert eng.shared.value("S!D1") == 260.0 and eng.shared.evals == before  # nothing dropped, nothing computed again
+    assert veli.value("S!D1") == 210.0 and eng.user("veli").value("S!B1") == 20.0
+    # a second value: what reads it follows; a shared change underneath reaches the others
+    eng.set_user_inputs("ali", {b1: 50.0})
+    assert ali.value("S!D1") == 560.0
+    eng.set_inputs({a1: 100.0})
+    assert eng.shared.value("S!D1") == 2060.0 and ali.value("S!D1") == 560.0 and veli.value("S!D1") == 2010.0
+    eng.set_user_inputs("ali", {})
+    assert eng.user("ali").value("S!D1") == 2060.0
+
+
+def test_a_constant_typed_over_later_still_computes_everything_again():
+    """A cell that depends on no input (a constant): nothing tells what read it, so every value is computed again."""
+    eng = chain()
+    a1, a2 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "A2"))
+    eng.declare_inputs([a1])
+    assert eng.shared.value("S!D1") == 260.0
+    eng.declare_inputs([a2], group="adhoc")
+    ali = eng.set_user_inputs("ali", {a2: 0.0})
+    assert ali.value("S!D1") == 210.0 and eng.shared.value("S!D1") == 260.0
+
+
 def test_input_group_shares_one_dependency_bit():
     eng = mini_engine({"A1": 1, "A2": 2, "A3": 3, "B1": "=SUM(A1:A3)", "C1": "=A1"})
     cells = [eng.model.cell_ref("S!A%d" % i) for i in (1, 2, 3)]

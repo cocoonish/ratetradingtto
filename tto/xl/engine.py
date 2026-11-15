@@ -121,15 +121,53 @@ class Engine(object):
         """Mark cells as inputs (they may later be overridden per user or globally).
 
         Cells declared with the same ``group`` share one dependency bit (e.g. a whole pasted table).
+
+        A formula cell declared once values are computed (a value typed over it - "elle değer") gets a bit of its
+        own without dropping anything: whatever read the cell carries every bit of the mask the cell was computed
+        with, so the values that carry them all - the cell's dependents and a few more - are marked with the new
+        bit and kept.  Dropping every value of every user instead made the next page compute the whole workbook
+        again (a ~20 s pause for everybody).  A cell whose dependents cannot be told that way (a constant, or one
+        that depends on no input) still makes everything computed again.
         """
         fresh = False
         for si, rc in cells:
             if rc not in self.input_mask[si]:
+                mask = self._computed_mask(si, rc)
+                if mask:
+                    b = self.bit(("cell", si, rc))             # its own bit: what follows the cell is found exactly
+                    self.input_mask[si][rc] = b
+                    self._mark_dependents(mask, b)
+                    continue
                 key = ("group", group) if group else ("cell", si, rc)
                 self.input_mask[si][rc] = self.bit(key)
                 fresh = True
         if fresh:
             self.reset()
+
+    def _computed_mask(self, si: int, rc: int) -> int:
+        """The dependency mask the shared calculation has for a formula cell - computing the cell first when it has
+        not been yet (0: not a formula, or it depends on no input, or before anything is computed)."""
+        shared = getattr(self, "shared", None)
+        if shared is None or rc not in self.fml[si] or not any(shared.memo):
+            return 0
+        if rc not in shared.memo[si]:
+            try:
+                shared.cv(si, *divmod(rc, COLS))
+            except Exception:  # noqa: BLE001 - a cell that cannot be computed now: the safe way, everything again
+                return 0
+        return shared.maskd[si].get(rc, 0)
+
+    def _mark_dependents(self, mask: int, b: int) -> None:
+        """Add bit ``b`` to every computed value - of every calculation - that carries all of ``mask``."""
+        intern = self.intern_mask
+        for calc in [self.shared] + list(self.users.values()):
+            for md in calc.maskd:
+                hit = [rc for rc, k in md.items() if k & mask == mask]
+                for rc in hit:
+                    md[rc] = intern(md[rc] | b)
+            for key, ent in list(calc.rcache.items()):
+                if ent[2] & mask == mask:
+                    calc.rcache[key] = (ent[0], ent[1], intern(ent[2] | b))
 
     def is_input(self, si: int, rc: int) -> bool:
         return rc in self.input_mask[si]

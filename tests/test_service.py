@@ -418,6 +418,34 @@ def test_a_value_typed_over_a_formula_is_mine_marked_and_undone_by_blanking(tmp_
         svc.stop()
 
 
+def test_the_first_value_typed_over_a_formula_keeps_everyones_computed_values(tmp_path):
+    """The first value typed over a formula used to drop every computed value of every user: the header strip
+    (MASA's KPIs, a long chain of the Motor sheet) then took ~20 s on the desk's machine, everybody waiting on the
+    one calculation thread.  Nothing is dropped now; what reads the cell follows it for its user only."""
+    svc = make_service(tmp_path)
+    try:
+        u, w = login(svc, "Elle Hızlı A"), login(svc, "Elle Hızlı B")
+        svc.header(None)
+        svc.view(w, "forward")
+        eng = svc.books["tto"].engine
+        before = sum(len(m) for m in eng.shared.memo)
+        base, o46 = cell(svc, "Forward!E33"), cell(svc, "Forward!O46")
+        assert svc.set_inputs(u, "tto", [{"ref": "Forward!E33", "value": "55"}], True)["errors"] == []
+        assert sum(len(m) for m in eng.shared.memo) >= before                       # nothing dropped
+        evals = eng.shared.evals
+        svc.header(u)
+        svc.header(w)
+        assert eng.shared.evals - evals < 50                                         # the header is not computed again
+        assert cell(svc, "Forward!E33", u) == 55.0 and cell(svc, "Forward!O46", u) == 55.0
+        assert cell(svc, "Forward!E33", w) == base and cell(svc, "Forward!O46", w) == o46 == cell(svc, "Forward!O46")
+        svc.set_inputs(u, "tto", [{"ref": "Forward!E33", "value": "56"}], True)
+        assert cell(svc, "Forward!O46", u) == 56.0 and cell(svc, "Forward!O46", w) == o46
+        svc.reset_inputs(u, "tto")
+        assert cell(svc, "Forward!O46", u) == o46
+    finally:
+        svc.stop()
+
+
 def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(service):
     """The calculators on the right of the Forward sheet read their dates, the spot and the USD / EUR rate from
     the sheet.  Each of those can be typed over; blanking returns to the sheet's value."""
