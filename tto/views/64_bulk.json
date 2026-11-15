@@ -29,52 +29,52 @@
   },
   {
    "range": "K1",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-3",
    "kind": "text",
-   "label": "pricing source codes"
+   "label": "pricing source codes – masanın ortak verisi"
   },
   {
    "range": "M1",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-3",
    "kind": "text",
-   "label": "pricing source codes"
+   "label": "pricing source codes – masanın ortak verisi"
   },
   {
    "range": "O1",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-3",
    "kind": "text",
-   "label": "pricing source codes"
+   "label": "pricing source codes – masanın ortak verisi"
   },
   {
    "range": "Q1",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-3",
    "kind": "text",
-   "label": "pricing source codes"
+   "label": "pricing source codes – masanın ortak verisi"
   },
   {
    "range": "S1",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-3",
    "kind": "text",
-   "label": "pricing source codes"
+   "label": "pricing source codes – masanın ortak verisi"
   },
   {
    "range": "U1",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-3",
    "kind": "text",
-   "label": "pricing source codes"
+   "label": "pricing source codes – masanın ortak verisi"
   },
   {
    "range": "K2:V2",
-   "scope": "user",
+   "scope": "shared",
    "group": "bulk-4",
    "kind": "text",
-   "label": "BDP field names"
+   "label": "BDP field names – masanın ortak verisi"
   }
  ],
  "panels": [

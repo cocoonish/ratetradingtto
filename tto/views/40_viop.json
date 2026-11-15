@@ -36,17 +36,17 @@
   },
   {
    "range": "C16:C35",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-4",
    "kind": "text",
-   "label": "USD OIS tickers (without \" Curncy\")"
+   "label": "USD OIS tickers (without \" Curncy\") – masanın ortak verisi"
   },
   {
    "range": "D16:D35",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-5",
    "kind": "text",
-   "label": "USD OIS maturity labels"
+   "label": "USD OIS maturity labels – masanın ortak verisi"
   },
   {
    "range": "B44",
@@ -57,17 +57,17 @@
   },
   {
    "range": "C43:C52",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-7",
    "kind": "text",
-   "label": "TRY OIS tickers"
+   "label": "TRY OIS tickers – masanın ortak verisi"
   },
   {
    "range": "C58:C69",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-8",
    "kind": "text",
-   "label": "ICAP implied TRY tickers (full, incl. \" ICPL Curncy\")"
+   "label": "ICAP implied TRY tickers (full, incl. \" ICPL Curncy\") – masanın ortak verisi"
   },
   {
    "range": "M37",
@@ -169,17 +169,17 @@
   },
   {
    "range": "S340",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-23",
    "kind": "text",
-   "label": "'Spot ticker' for history / live spot"
+   "label": "'Spot ticker' for history / live spot – masanın ortak verisi"
   },
   {
    "range": "R353",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-24",
    "kind": "auto",
-   "label": "'Swap gün bazı' — day basis of the TRYSAQ1 1Y swap quote (used as ×360/$R$353)"
+   "label": "'Swap gün bazı' — day basis of the TRYSAQ1 1Y swap quote (used as ×360/$R$353) – masanın ortak verisi"
   },
   {
    "range": "EK_XAU!B3",

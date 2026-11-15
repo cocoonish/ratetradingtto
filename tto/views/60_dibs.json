@@ -15,10 +15,10 @@
   },
   {
    "range": "J2",
-   "scope": "shared",
+   "scope": "user",
    "group": "dibs-1",
    "kind": "auto",
-   "label": "'Ufuk (ay)' — carry / roll horizon"
+   "label": "'Ufuk (ay)' — carry / roll horizon (kişisel: herkes kendi ufkunu seçer)"
   },
   {
    "range": "N2",
@@ -36,10 +36,10 @@
   },
   {
    "range": "V2",
-   "scope": "user",
+   "scope": "shared",
    "group": "dibs-4",
    "kind": "auto",
-   "label": "'TLREF gecikme (iş g.)' — floater fixing lag"
+   "label": "'TLREF gecikme (iş g.)' — floater fixing lag – masanın ortak verisi"
   },
   {
    "range": "X2",

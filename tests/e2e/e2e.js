@@ -978,7 +978,8 @@ async function shot(page, name) {
     await page.click('.page-tools button:has-text("Yardımcı tablolar")');
     await page.waitForFunction(() => window.tto.findCell('VIOP!C16') === null, null, { timeout: 15000 });
     // the curve as it was
-    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!C16', 'VIOP!C17', 'VIOP!D16', 'VIOP!D17'] });
+    // (the curve's tickers and maturities are the desk's: back to the file's for everyone)
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!C16', 'VIOP!C17', 'VIOP!D16', 'VIOP!D17'], shared: true });
     await page.waitForFunction(() => { const td = window.tto.findCell('VIOP!D16'); return td && td.textContent === '1W'; }, null, { timeout: 15000 });
 
     await open(page, 'dibs');

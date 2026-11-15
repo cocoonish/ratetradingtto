@@ -281,24 +281,24 @@
   },
   {
    "range": "B442:B457",
-   "scope": "user",
+   "scope": "shared",
    "group": "ois-35",
    "kind": "auto",
-   "label": "bucket index, type, coupon count"
+   "label": "bucket index, type, coupon count – masanın ortak verisi"
   },
   {
    "range": "F442:F457",
-   "scope": "user",
+   "scope": "shared",
    "group": "ois-35",
    "kind": "auto",
-   "label": "bucket index, type, coupon count"
+   "label": "bucket index, type, coupon count – masanın ortak verisi"
   },
   {
    "range": "G442:G457",
-   "scope": "user",
+   "scope": "shared",
    "group": "ois-35",
    "kind": "auto",
-   "label": "bucket index, type, coupon count"
+   "label": "bucket index, type, coupon count – masanın ortak verisi"
   }
  ],
  "panels": [

@@ -15,31 +15,31 @@
   },
   {
    "range": "B361:B523",
-   "scope": "user",
+   "scope": "shared",
    "group": "motor-1",
    "kind": "text",
-   "label": "holiday name ('Not')"
+   "label": "holiday name ('Not') – masanın ortak verisi"
   },
   {
    "range": "C327:C342",
-   "scope": "user",
+   "scope": "shared",
    "group": "motor-2",
    "kind": "auto",
-   "label": "'Kotalı' flag per tenor (1 = real quote)"
+   "label": "'Kotalı' flag per tenor (1 = real quote) – masanın ortak verisi"
   },
   {
    "range": "O89",
-   "scope": "user",
+   "scope": "shared",
    "group": "motor-3",
    "kind": "text",
-   "label": "Bloomberg ticker roots for maturity lookup"
+   "label": "Bloomberg ticker roots for maturity lookup – masanın ortak verisi"
   },
   {
    "range": "O130",
-   "scope": "user",
+   "scope": "shared",
    "group": "motor-3",
    "kind": "text",
-   "label": "Bloomberg ticker roots for maturity lookup"
+   "label": "Bloomberg ticker roots for maturity lookup – masanın ortak verisi"
   },
   {
    "range": "E88:E130",

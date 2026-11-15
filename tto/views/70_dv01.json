@@ -64,17 +64,17 @@
   },
   {
    "range": "H6:H25",
-   "scope": "user",
+   "scope": "shared",
    "group": "dv01-7",
    "kind": "auto",
-   "label": "bucket tenor months / type"
+   "label": "bucket tenor months / type – masanın ortak verisi"
   },
   {
    "range": "I6:I25",
-   "scope": "user",
+   "scope": "shared",
    "group": "dv01-7",
    "kind": "auto",
-   "label": "bucket tenor months / type"
+   "label": "bucket tenor months / type – masanın ortak verisi"
   },
   {
    "range": "X33:Y52",

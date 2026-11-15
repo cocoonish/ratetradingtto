@@ -162,10 +162,10 @@
   },
   {
    "range": "S171",
-   "scope": "user",
+   "scope": "shared",
    "group": "masa-22",
    "kind": "text",
-   "label": "Kaynak — Bloomberg source suffix for OIS history tickers"
+   "label": "Kaynak — Bloomberg source suffix for OIS history tickers – masanın ortak verisi"
   },
   {
    "range": "EK_FWD!B2",

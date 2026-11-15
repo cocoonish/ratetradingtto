@@ -53,14 +53,14 @@ def test_the_viop_contracts_are_the_desks(tmp_path):
     from them) - the user's other inputs stay."""
     store = Store(str(tmp_path / "tto.db"))
     key = store.login("Eski Kontratçı")["user"]
-    store.set_user_inputs(key, "tto", {"VIOP!L1": "A1X6 Eski", "VIOP!M45": "XLZ6 Eski", "VIOP!C16": "USSO2Z"})
+    store.set_user_inputs(key, "tto", {"VIOP!L1": "A1X6 Eski", "VIOP!M45": "XLZ6 Eski", "VIOP!B44": 2.0})
     store.close()
     svc = make_service(tmp_path)
     try:
         other = svc.login("Masa Arkadaşı")["user"]
         assert cell(svc, "VIOP!L1", key) == cell(svc, "VIOP!L1") == "A1X6 Curncy"
-        assert cell(svc, "VIOP!M45", key) == "XLZ6 Comdty" and cell(svc, "VIOP!C16", key) == "USSO2Z"
-        assert set(svc.store.user_inputs(key, "tto")) == {("tto", "VIOP!C16")}
+        assert cell(svc, "VIOP!M45", key) == "XLZ6 Comdty" and cell(svc, "VIOP!B44", key) == 2.0
+        assert set(svc.store.user_inputs(key, "tto")) == {("tto", "VIOP!B44")}
         res = svc.set_inputs(other, "tto", [{"ref": "VIOP!L1", "value": "A1Z6 Curncy"}, {"ref": "VIOP!O60", "value": "XLTM7 Comdty"}])
         assert res["errors"] == []
         for who in (key, other, None):
@@ -205,3 +205,42 @@ def test_the_calculators_start_from_the_market(service):
         assert cell(service, "Forward!E64", u) == tl
     finally:
         service.reset_inputs(u, "tto")
+
+
+#: desk reference data that was each user's own: tickers, holiday names, source codes, bucket definitions
+DESK_DATA = {"viop": ("C16:C35", "D16:D35", "C43:C52", "C58:C69", "S340", "R353"),
+             "motor": ("O89", "O130", "C327:C342", "B361:B523"), "masa": ("S171",),
+             "bulk": ("K1", "M1", "O1", "Q1", "S1", "U1", "K2:V2"), "dibs": ("V2",), "dv01": ("H6:H25", "I6:I25"),
+             "ois": ("B442:B457", "F442:F457", "G442:G457")}
+
+
+def test_desk_reference_data_is_the_desks_and_the_carry_horizon_each_users(tmp_path):
+    """The VİOP page's OIS / ICAP tickers and spot ticker, Motor's ticker roots, "Kotalı" flags and holiday names, Masa's
+    history source, the Eurobond page's pricing sources and fields, DİBS RV's TLREF lag, DV01's bucket definitions and
+    the OIS solver's buckets are the desk's: one sets them, everyone sees it (a value a user kept while they were
+    personal goes at the next start).  DİBS RV's horizon ("Ufuk (ay)") goes the other way: each user's own."""
+    from tto.views import load_views
+    views = {v["id"]: v for v in load_views()}
+    scopes = {(v, i["range"]): i.get("scope", "user") for v, view in views.items() for i in view["inputs"]}
+    for view, ranges in DESK_DATA.items():
+        for rng in ranges:
+            assert scopes[(view, rng)] == "shared", (view, rng)
+    assert scopes[("dibs", "J2")] == "user"
+    store = Store(str(tmp_path / "tto.db"))
+    key = store.login("Eski Ticker")["user"]
+    store.set_user_inputs(key, "tto", {"VIOP!C16": "USSO2Z", "Motor!B361": "Benim tatilim", "DİBS RV!V2": 3.0, "DİBS RV!P2": 7.0})
+    store.close()
+    svc = make_service(tmp_path)
+    try:
+        other = svc.login("Masa Komşusu")["user"]
+        assert cell(svc, "VIOP!C16", key) == "USSO1Z" and cell(svc, "Motor!B361", key) == "Cumhuriyet"
+        assert set(svc.store.user_inputs(key, "tto")) == {("tto", "DİBS RV!P2")}          # the personal threshold stays
+        res = svc.set_inputs(other, "tto", [{"ref": "MASA!S171", "value": "CMPN"}, {"ref": "Bulk Bond!K1", "value": "BVAL"},
+                                            {"ref": "DİBS RV!J2", "value": "6"}])
+        assert res["errors"] == []
+        for who in (key, other, None):
+            assert cell(svc, "MASA!S171", who) == "CMPN" and cell(svc, "Bulk Bond!K1", who) == "BVAL"
+        assert cell(svc, "DİBS RV!J2", other) == 6.0 and cell(svc, "DİBS RV!J2", key) == cell(svc, "DİBS RV!J2") == 3.0
+        assert svc.store.shared_inputs("tto")[("tto", "MASA!S171")] == "CMPN"
+    finally:
+        svc.stop()
