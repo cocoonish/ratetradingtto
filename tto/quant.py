@@ -928,6 +928,9 @@ class Quant(object):
     def view(self, what: str, user: Optional[str], q: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         self.svc.require_user(user)
         q = q or {}
+        for x in EXTRAS:
+            if what in getattr(x, "QUERIES", ()):
+                return _clean(x.query(what, q, self.store, self._fit))
         if what == "status":
             return self.status()
         if what == "settings":
@@ -1014,6 +1017,12 @@ class Quant(object):
                        "history": hist, "today": fit["today"], "settings": fit["cfg"]})
 
     def action(self, what: str, user: Optional[str], data: Dict[str, Any]) -> Dict[str, Any]:
+        for x in EXTRAS:
+            if what in getattr(x, "ACTIONS", ()):
+                try:
+                    return _clean(x.act(what, self.svc.require_user(user), data, self.store))
+                except ValueError as exc:
+                    raise QuantError(str(exc))
         if what == "settings":
             out = self.set_settings(user, data.get("values") if isinstance(data.get("values"), dict) else data)
             return out

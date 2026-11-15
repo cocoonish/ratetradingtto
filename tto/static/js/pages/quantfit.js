@@ -4,10 +4,11 @@
 // 25D / 10D risk reversals and butterflies), its signals, the smile's distribution against the forward next to how
 // often the spot ended that far from it.  Each lists its own signals at the top and draws a picked row's series below
 // them, like the analysis pages of quantviews.js.
-import { h, clear } from '../ui.js';
+import { api } from '../api.js';
+import { h, clear, copyText, errorToast, toast } from '../ui.js';
 import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, fmt, sgn, pct, isNum, REGIME,
+import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, fmt, sgn, pct, isNum, REGIME, pref, keep,
   BLUE, ORANGE, GREEN, PURPLE, RED, GREY } from './quantbase.js';
 
 const KIND = { fixed: 'Sabit', bill: 'Bono' };
@@ -83,7 +84,8 @@ class CurvePage extends FitPage {
       + 'Receive (al): ucuz (z > 0) ve carry\'si artı; pay (sat): pahalı (z < 0) ve carry\'si eksi (açığa satış onu kazanır). Carry\'si z\'ye ters olan '
       + 'kâğıt kendi tarafında eksi puanla sonda.';
     this.boxes.best = new GridBox(this.best, 'quant/curve/best', (sid) => this.pick(sid));
-    this.frame('Eğri Adil Değeri', [this.ois, this.bonds, this.best]);
+    this.quotes = new BondQuote(this);
+    this.frame('Eğri Adil Değeri', [this.ois, this.bonds, this.best, this.quotes.quote, this.quotes.sw]);
   }
 
   fillPage() {
@@ -111,6 +113,7 @@ class CurvePage extends FitPage {
           { name: 'NSS forward', kind: 'line', color: PURPLE, dash: true, x: cv.t || [], data: cv.fwd || [], marker: false }] });
     }
     const d = this.data.dibsfv || {};
+    this.quotes.fill(d);
     if (!d.ok) {
       this.boxes.bonds.set([], [], null, d.why || 'DİBS için veri yok');
       this.boxes.best.set([], [], null, '—');
@@ -154,6 +157,158 @@ class CurvePage extends FitPage {
         { name: 'OIS uyumuyla', kind: 'line', color: GREY, dash: true, x: bySpan.map((r) => r.years), data: bySpan.map((r) => r.ois_yield), marker: false }] });
   }
 }
+
+// ------------------------------------------------------------------------------------------------ quotes from the fair curve
+const QUOTE_PREF = 'tto.quant.quote.isin', SWITCH_PREF = 'tto.quant.switch';
+const SPREADS = [['short_until', 'kısa ≤', 'yıl'], ['short', '', 'bp'], ['mid', '· orta', 'bp'], ['long_from', '· uzun ≥', 'yıl'], ['long', '', 'bp']];
+
+/**
+ * Two sections of Eğri Adil Değeri: a two-way quote of any fixed-coupon DİBS from the fair curve (the NSS fair yield
+ * and price ± the desk's half spread of the bond's maturity bucket, the market next to it) and a switch A → B (sell A,
+ * buy B, DV01-neutral: the pickup against the curve, the carry + roll difference, the z of the switch).  The numbers
+ * are the server's (/api/quant/quote, /api/quant/switch) on the latest fit; "Kopyala" copies the line to send.
+ */
+class BondQuote {
+  constructor(page) {
+    this.page = page;
+    this.isin = pref(QUOTE_PREF, '');
+    [this.a, this.b] = (pref(SWITCH_PREF, '') + '|').split('|');
+    this.listed = '';
+    // the quote
+    this.bondSel = h('select', { class: 'inp', id: 'quant-quote-bond', title: 'DİBS RV listesindeki sabit kuponlu kâğıtlar' });
+    this.typed = h('input', { class: 'inp', id: 'quant-quote-isin', placeholder: 'ya da ISIN', style: { width: '140px' },
+      title: 'Listede olmayan bir sabit kuponlu DİBS (kataloğun kuponu ve vadesiyle)' });
+    const go = h('button', { class: 'btn', type: 'button', id: 'quant-quote-go' }, 'Kotasyon');
+    this.copyQuote = h('button', { class: 'btn primary', type: 'button', id: 'quant-quote-copy', title: 'Kotasyonu tek satır mesaj olarak kopyala' }, 'Kopyala');
+    this.inputs = {};
+    const fields = [h('span', { class: 'muted' }, 'Yarım spread:')];
+    for (const [k, before, unit] of SPREADS) {
+      const inp = h('input', { class: 'inp num', id: 'quant-quote-' + k, style: { width: '52px' } });
+      this.inputs[k] = inp;
+      fields.push(h('span', { class: 'muted' }, before), inp, h('span', { class: 'muted' }, unit));
+    }
+    const save = h('button', { class: 'btn', type: 'button', id: 'quant-quote-save', title: 'Masanın ortak ayarı: herkesin kotasyonunu değiştirir' }, 'Kaydet');
+    this.quoteBar = h('div', { class: 'qform' }, this.bondSel, this.typed, go, h('span', { class: 'grow' }), ...fields, save, this.copyQuote);
+    this.quote = panel('quant-curve-quote', 'Adil eğriden kotasyon', { top: this.quoteBar });
+    this.quoteBox = new GridBox(this.quote, 'quant/curve/quote');
+    // the switch
+    this.aSel = h('select', { class: 'inp', id: 'quant-switch-a', title: 'Satılan kâğıt (A)' });
+    this.bSel = h('select', { class: 'inp', id: 'quant-switch-b', title: 'Alınan kâğıt (B)' });
+    this.copySwitch = h('button', { class: 'btn primary', type: 'button', id: 'quant-switch-copy', title: 'Switch\'i tek satır mesaj olarak kopyala' }, 'Kopyala');
+    this.swBar = h('div', { class: 'qform' }, h('span', { class: 'muted' }, 'Sat (A)'), this.aSel, h('span', { class: 'muted' }, '→ al (B)'), this.bSel,
+      h('span', { class: 'grow' }), this.copySwitch);
+    this.sw = panel('quant-curve-switch', 'Switch · A sat / B al (DV01 nötr)', { top: this.swBar });
+    this.swBox = new GridBox(this.sw, 'quant/curve/switch');
+    // events
+    this.bondSel.addEventListener('change', () => { this.typed.value = ''; this.isin = this.bondSel.value; keep(QUOTE_PREF, this.isin); this.loadQuote(); });
+    const typed = () => { const v = this.typed.value.trim().toUpperCase(); if (v) { this.isin = v; keep(QUOTE_PREF, v); this.loadQuote(); } };
+    go.addEventListener('click', typed);
+    this.typed.addEventListener('keydown', (e) => { if (e.key === 'Enter') typed(); });
+    save.addEventListener('click', () => this.saveSpreads());
+    this.copyQuote.addEventListener('click', () => { if (this.quoteLine) copyText(this.quoteLine, 'Kotasyon kopyalandı'); });
+    const swChanged = () => { this.a = this.aSel.value; this.b = this.bSel.value; keep(SWITCH_PREF, this.a + '|' + this.b); this.loadSwitch(); };
+    this.aSel.addEventListener('change', swChanged);
+    this.bSel.addEventListener('change', swChanged);
+    this.copySwitch.addEventListener('click', () => { if (this.switchLine) copyText(this.switchLine, 'Switch kopyalandı'); });
+    this.loadSpreads().catch(() => {});
+  }
+
+  /** The page's data moved: the lists of bonds, then the quote and the switch again (live values). */
+  fill(d) {
+    const rows = ((d && d.rows) || []).filter((r) => r.kind === 'fixed');
+    const key = rows.map((r) => r.isin).join(',');
+    if (key !== this.listed) {
+      this.listed = key;
+      for (const sel of [this.bondSel, this.aSel, this.bSel]) {
+        clear(sel);
+        for (const r of rows) sel.appendChild(h('option', { value: r.isin }, r.label + ' · ' + r.isin));
+      }
+      const has = (isin) => rows.some((r) => r.isin === isin);
+      if (!this.isin && rows.length) this.isin = rows[Math.floor(rows.length / 2)].isin;
+      if (!has(this.a) && rows.length) this.a = rows[0].isin;
+      if (!has(this.b) && rows.length) this.b = rows[rows.length - 1].isin;
+    }
+    if (has2(rows, this.isin)) { this.bondSel.value = this.isin; this.typed.value = ''; } else if (this.isin) this.typed.value = this.isin;
+    this.aSel.value = this.a;
+    this.bSel.value = this.b;
+    if (this.isin) this.loadQuote();
+    if (this.a && this.b) this.loadSwitch();
+  }
+
+  async loadSpreads() {
+    const d = await api.get('/api/quant/quote_spreads');
+    for (const [k, inp] of Object.entries(this.inputs)) inp.value = isNum(d.values[k]) ? fmt(d.values[k], 1) : '';
+    this.spreadNote = d.values.by ? 'Son değiştiren: ' + this.page.ctx.displayName(d.values.by) + ' (' + d.values.at + ').' : '';
+  }
+
+  async saveSpreads() {
+    const values = {};
+    for (const [k, inp] of Object.entries(this.inputs)) values[k] = inp.value;
+    try {
+      await api.post('/api/quant/quote_spreads', { values });
+      toast('Yarım spread\'ler kaydedildi (masanın ortak ayarı)', 'ok', 2500);
+      await this.loadSpreads();
+      this.loadQuote();
+      this.loadSwitch();
+    } catch (e) { errorToast(e); }
+  }
+
+  async loadQuote() {
+    const isin = this.isin;
+    if (!isin) return;
+    let q;
+    try {
+      q = await api.get('/api/quant/quote', { isin });
+    } catch (e) { if (!e.network) errorToast(e); return; }
+    if (this.page.dead || isin !== this.isin) return;
+    this.quoteLine = q.ok ? q.line : '';
+    this.copyQuote.disabled = !q.ok;
+    if (!q.ok) {
+      this.quoteBox.set([], [], null, q.why || 'Kotasyon yok');
+      this.quote.note.textContent = '';
+      return;
+    }
+    const row = (name, x, b) => [T(name, { b: 1 }), N(x.yield, 3, { b }), N(x.compound, 3), N(x.clean, 3, { b }), N(x.dirty, 3), N(x.dv01, 1)];
+    const rows = [row('Alış (bid)', q.bid, 1), row('Adil (NSS)', q.fair, 0), row('Satış (ask)', q.ask, 1)];
+    if (q.market) rows.push(row('Piyasa' + (q.market.live ? ' (canlı)' : ' (son kapanış)'), q.market, 0));
+    this.quoteBox.set(['', 'Getiri % (basit)', 'Bileşik %', 'Temiz', 'Kirli', 'DV01 (TL / bp, 1mn)'], rows, null, '—');
+    this.quote.setTitle('Adil eğriden kotasyon · ' + q.label + ' (' + q.isin + ')');
+    this.quote.note.textContent = 'Valör ' + isoToTr(q.value_date) + ' · işlemiş faiz ' + fmt(q.accrued, 4) + ' · kupon %' + fmt(q.coupon, 2) + ' · '
+      + fmt(q.years, 2) + ' yıl, ' + q.bucket + ' vade: yarım spread ' + fmt(q.half_bp, 1) + ' bp (alış = adil + yarım, satış = adil − yarım; basit getiri, '
+      + 'BIST kuralı). ' + (isNum(q.distance) ? 'Piyasa adilden ' + sgn(q.distance, 1) + ' bp' + (isNum(q.z) ? ' (z ' + sgn(q.z, 2) + ')' : '') + ' · ' : '')
+      + (isNum(q.total_1m) ? 'carry + roll ayda ' + sgn(q.total_1m, 1) + ' bp · ' : '') + (q.listed ? '' : 'listede değil: kataloğun kuponu ve vadesiyle · ')
+      + (this.spreadNote || '');
+  }
+
+  async loadSwitch() {
+    const a = this.a, b = this.b;
+    if (!a || !b) return;
+    let s;
+    try {
+      s = await api.get('/api/quant/switch', { a, b });
+    } catch (e) { if (!e.network) errorToast(e); return; }
+    if (this.page.dead || a !== this.a || b !== this.b) return;
+    this.switchLine = s.ok ? s.line : '';
+    this.copySwitch.disabled = !s.ok;
+    if (!s.ok) {
+      this.swBox.set([], [], null, s.why || 'Switch yok');
+      this.sw.note.textContent = '';
+      return;
+    }
+    const entry = (this.page.data.settings || {}).entry_z || 2;
+    const leg = (name, x, nominal) => [T(name, { b: 1 }), T(x.label, { b: 1, tip: x.isin }), N(nominal, 2), N(x.market ? x.market.yield : null, 3), N(x.fair.yield, 3),
+      N(x.distance, 1, { sign: true }), Z(x.z, entry), N(x.total_1w, 1, { sign: true }), N(x.total_1m, 1, { sign: true }), N((x.market || x.fair).dv01, 1)];
+    const rows = [leg('Sat (A)', s.a, 1), leg('Al (B)', s.b, s.ratio),
+      [T('Switch (B − A)', { b: 1 }), T(''), T(''), N(s.level, 1, { sign: true, unit: 'bp', tip: 'Piyasa getiri farkı' }), T(''),
+        N(s.pickup, 1, { sign: true, b: 1, tip: 'B\'nin adil eğriye göre farkı − A\'nınki: + ise B daha ucuz' }), Z(s.z, entry, { tip: 'Bu farkın geçmişine göre' }),
+        N(s.cr_1w, 1, { sign: true }), N(s.cr_1m, 1, { sign: true, b: 1 }), T('')]];
+    this.swBox.set(['', 'Kâğıt', 'Nominal (mn)', 'Getiri %', 'Adil %', 'Eğriye göre (bp)', 'z', 'C+R 1H (bp)', 'C+R 1A (bp)', 'DV01 (TL / bp, 1mn)'], rows, null, '—');
+    this.sw.note.textContent = s.line + ' · Nominal: 1mn A için B (aynı DV01). Eğriye göre fark ve carry + roll bp (÷ DV01); z: B − A eğri farkının '
+      + (isNum(s.n) ? 'son ' + s.n + ' günlük geçmişine göre' + (isNum(s.half_life) ? ', yarı ömür ' + fmt(s.half_life, 1) + ' gün' : '') : 'geçmişi yok') + '.';
+  }
+}
+
+const has2 = (rows, isin) => rows.some((r) => r.isin === isin);
 
 // ------------------------------------------------------------------------------------------------ Opsiyon
 /** A number cell that shows "—" without a value (a row of bold labels alone would read as a header row). */

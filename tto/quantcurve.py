@@ -57,11 +57,21 @@ yield.  Coupons paid before the horizon are not reinvested.
 the bond's yield (its daily changes over the last 60 closes × √21): positive when the rich / cheap and the carry point
 the same way - cheap with positive carry for receive (buy), rich with negative carry for pay (sell) - and the larger
 the more both say so per unit of risk.  A bond whose carry argues against its z scores below zero on its side.
+
+**A quote from the fair curve** (``/api/quant/quote``): any fixed-coupon DİBS - on the list, or by its ISIN with the
+catalog's coupon and maturity - at its value date: the fair yield (the yield of Σ CF·DF on the curve now), its clean
+and dirty price (accrued as the sheet's DİBS RV!Q: c/f × the days since the last coupon over the period's), and a
+two-way quote at the desk's half spread of the bond's maturity bucket (bid = fair + half, ask = fair − half, bp of the
+simple yield; ``QUOTE_DEFAULTS``, the desk's setting in the store); beside it the market yield, its distance from fair,
+z, carry + roll, and the line to send.  **A switch** A → B (``/api/quant/switch``): sell A, buy B, the nominal of B
+for 1 mn of A that keeps the DV01 (each at its market yield), the pickup against the curve (B's rich / cheap − A's),
+the carry + roll difference, the switch's level and the z of B − A on the curve over their common days.
 """
 from __future__ import annotations
 
 import datetime as _dt
 import math
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -870,14 +880,19 @@ def _quotes(ctx: qf.Ctx, keys: Sequence[str], values: Callable[[str], Optional[f
 
 
 def _cached(fn: Callable[[Tuple], Any]) -> Callable[[Tuple], Any]:
-    """One result kept: the live refresh asks every monitor with the same values."""
+    """One result kept: the live refresh asks every monitor with the same values (and a quote, from a request's
+    thread, the worker's last ones) - each caller gets what was computed for its own key."""
     memo: Dict[str, Any] = {"key": None, "val": None}
+    lock = threading.Lock()
 
     def get(key: Tuple) -> Any:
-        if memo["key"] != key:
-            memo["val"] = fn(key)
-            memo["key"] = key
-        return memo["val"]
+        with lock:
+            if memo["key"] == key:
+                return memo["val"]
+        val = fn(key)
+        with lock:
+            memo["key"], memo["val"] = key, val
+        return val
 
     return get
 
@@ -1202,7 +1217,110 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
                 "evals": found["evals"], "curve": {"t": grid, "zero": [nss.zero(t) * 100.0 for t in grid]},
                 "ois": ois_nss is not None, "funding": _funding_text(ctx, live, ois_nss)}
 
-    return mons, {"ok": True, "build": build}
+    def leg(isin: str, live: Dict[str, float], spreads: Dict[str, float], s: Dict[str, Any]) -> Dict[str, Any]:
+        """One bond on the fair curve now: its quote, its market yield and distance from fair, z, carry + roll."""
+        isin = isin.strip().upper()
+        b = bonds.get(isin) or _bond_of(isin, {}, None)
+        if b is None or b.kind != "fixed":
+            return {"ok": False, "isin": isin, "why": "sabit kuponlu bir DİBS bulunamadı: %s" % (isin or "—")}
+        if (b.maturity - ctx.today).days < MIN_DAYS:
+            return {"ok": False, "isin": isin, "why": "vadesine %d günden az kaldı" % MIN_DAYS}
+        nss: Nss = s["fit"]["nss"]
+        value = _value_date(ctx.today, rows.get(isin))
+        years = (b.maturity - ctx.today).days / YEAR
+        bucket, half = spread_for(years, spreads)
+        out = dict(quote_bond(b, value, nss, half), ok=True, isin=isin, label=_bond_label(b), name=b.name, maturity=b.maturity.isoformat(),
+                   coupon=b.coupon, years=years, bucket=bucket, listed=isin in bonds)
+        y_now = _yield_now(ctx, isin, conv.get(isin, "simple"), live) if isin in bonds else None
+        if y_now is not None:
+            y = to_simple(b, y_now / 100.0, conv.get(isin, "simple"))
+            p, dp = b.price(y, value, "simple")
+            out["market"] = {"yield": y * 100.0, "dirty": p, "clean": p - out["accrued"], "dv01": -dp,
+                             "live": ("DIBSS:" + isin) in live or ("DIBSC:" + isin) in live}
+            out["distance"] = (y * 100.0 - out["fair"]["yield"]) * 100.0
+            m = by_isin.get(isin)
+            r = s["resid"].get(isin)
+            out["z"] = m.zof(r) if m is not None and r is not None else None
+            out["sid"] = m.sid if m is not None else None
+        c = _bond_carry(ctx, s, ois, rows, live).get(isin) or {}
+        out.update({k: c.get(k) for k in ("carry_1w", "roll_1w", "total_1w", "carry_1m", "roll_1m", "total_1m")})
+        return out
+
+    def quote(isin: str, live: Dict[str, float], spreads: Dict[str, float]) -> Dict[str, Any]:
+        s = snap(live)
+        if s is None:
+            return {"ok": False, "why": "kâğıtların getirisi yok"}
+        out = leg(isin, live, spreads, s)
+        if out.get("ok"):
+            f, bid, ask = out["fair"], out["bid"], out["ask"]
+            out["line"] = ("DİBS %s (%s) · getiri %s / %s · temiz %s / %s · adil %s · valör %s"
+                           % (out["label"], out["isin"], _tr(bid["yield"], 2), _tr(ask["yield"], 2), _tr(bid["clean"], 3), _tr(ask["clean"], 3),
+                              _tr(f["yield"], 2), _tr_day(out["value_date"])))
+        out["spreads"] = spreads
+        return out
+
+    def switch(a: str, b: str, live: Dict[str, float], spreads: Dict[str, float]) -> Dict[str, Any]:
+        """Sell A, buy B: the DV01-neutral nominal of B for 1 mn A, the pickup against the fair curve (B's rich / cheap −
+        A's), the carry + roll difference, the switch level and its z over the history, a line to read."""
+        s = snap(live)
+        if s is None:
+            return {"ok": False, "why": "kâğıtların getirisi yok"}
+        la, lb = leg(a, live, spreads, s), leg(b, live, spreads, s)
+        out: Dict[str, Any] = {"a": la, "b": lb, "ok": bool(la.get("ok") and lb.get("ok"))}
+        if not out["ok"]:
+            out["why"] = la.get("why") or lb.get("why")
+            return out
+        if la["isin"] == lb["isin"]:
+            return dict(out, ok=False, why="A ile B aynı kâğıt")
+        dv_a = (la.get("market") or la["fair"])["dv01"]
+        dv_b = (lb.get("market") or lb["fair"])["dv01"]
+        ratio = dv_a / dv_b                                  # mn of B for 1 mn of A: the same DV01
+        out["ratio"] = ratio
+        out["dv01_mn"] = dv_a                                # TL per bp, per 1 mn A (and the B against it)
+        if la.get("distance") is not None and lb.get("distance") is not None:
+            out["pickup"] = lb["distance"] - la["distance"]
+            out["level"] = (lb["market"]["yield"] - la["market"]["yield"]) * 100.0
+        for k in ("total_1w", "total_1m"):
+            if la.get(k) is not None and lb.get(k) is not None:
+                out["cr_" + k[6:]] = lb[k] - la[k]
+        # the switch on the fair curve over the window: B's rich / cheap − A's, day by day
+        ha, hb = dict(resid.get(la["isin"]) or []), dict(resid.get(lb["isin"]) or [])
+        days = sorted(set(ha) & set(hb))[-win:]
+        if len(days) >= 20 and out.get("pickup") is not None:
+            series = [hb[d] - ha[d] for d in days]
+            mean, sd = qf.window_stats(series)
+            now = s["resid"].get(lb["isin"], 0.0) - s["resid"].get(la["isin"], 0.0)
+            ou = qf.ou_of(series)
+            out.update({"z": (now - mean) / sd if sd else None, "mean": mean, "n": len(days), "half_life": ou["half_life"] if ou else None})
+        out["line"] = _switch_text(out)
+        return out
+
+    return mons, {"ok": True, "build": build, "quote": quote, "switch": switch}
+
+
+def _tr(v: Optional[float], d: int) -> str:
+    return ("%.*f" % (d, v)).replace(".", ",") if v is not None else "—"
+
+
+def _tr_day(iso: str) -> str:
+    return "%s.%s.%s" % (iso[8:10], iso[5:7], iso[0:4])
+
+
+def _switch_text(sw: Dict[str, Any]) -> str:
+    """The switch in a line, in Turkish, for the desk and for a chat."""
+    a, b = sw["a"], sw["b"]
+    head = "Switch: %s sat / %s al · 1mn %s'e %s mn %s (DV01 nötr, %s TL/bp)" % (a["label"], b["label"], a["label"], _tr(sw["ratio"], 2), b["label"],
+                                                                         _tr(sw["dv01_mn"], 0))
+    parts = [head]
+    pickup = sw.get("pickup")
+    if pickup is not None:
+        side = "daha ucuz (lehte)" if pickup > 0 else "daha pahalı (aleyhte)"
+        parts.append("%s adil eğriye göre %s'den %s bp %s" % (b["label"], a["label"], _tr(abs(pickup), 1), side)
+                     + (" · z %s" % ("%+.2f" % sw["z"]).replace(".", ",") if sw.get("z") is not None else ""))
+    if sw.get("cr_1m") is not None:
+        parts.append("carry + roll ayda %s bp, haftada %s bp" % (("%+.1f" % sw["cr_1m"]).replace(".", ","),
+                                                                ("%+.1f" % sw.get("cr_1w", 0.0)).replace(".", ",")))
+    return " · ".join(parts)
 
 
 def _pct(v: Optional[float]) -> Optional[float]:
@@ -1274,6 +1392,117 @@ def _ois_yields(fit_in: BondFit, ois_nss: Optional[Nss]) -> List[Optional[float]
     if ois_nss is None:
         return [None] * len(fit_in)
     return [b.yield_of(p, v, c, y) for b, p, v, c, y in zip(fit_in.bonds, fit_in.model_prices(ois_nss), fit_in.value, fit_in.conv, fit_in.y)]
+
+
+# ---------------------------------------------------------------------------------------------- quotes from the fair curve
+#: the desk's half bid / ask spreads of a quote from the fair curve (bp of yield), by the bond's years to maturity:
+#: short up to ``short_until``, long from ``long_from``, mid between
+QUOTE_KEY = "quant.quote"
+QUOTE_DEFAULTS: Dict[str, float] = {"short_until": 2.0, "long_from": 5.0, "short": 10.0, "mid": 15.0, "long": 20.0}
+QUOTE_LIMITS = {"short_until": (0.1, 30.0), "long_from": (0.1, 30.0), "short": (0.0, 500.0), "mid": (0.0, 500.0), "long": (0.0, 500.0)}
+#: what ``quant.Quant.view`` / ``action`` hand to this module
+QUERIES = ("quote", "switch", "quote_spreads")
+ACTIONS = ("quote_spreads",)
+
+
+def accrued(bond: Bond, value: _dt.date) -> float:
+    """Accrued interest per 100 at the value date, as the sheet has it (DİBS RV!Q: c/f × days since the last coupon /
+    the period's days); none on a bill."""
+    if bond.kind == "bill":
+        return 0.0
+    flows, frac = bond.flows(value)
+    return bond.coupon / bond.freq * (1.0 - frac) if flows else 0.0
+
+
+def to_simple(bond: Bond, y: float, conv: str) -> float:
+    """A yield (decimal) of ``conv`` as the bond's simple one (compounded ``freq`` times a year; a bill's simple)."""
+    if conv != "compound":
+        return y
+    if bond.kind == "bill":
+        return y                                          # (a bill's compound yield is read as it is: see ``price``)
+    return bond.freq * ((1.0 + y) ** (1.0 / bond.freq) - 1.0)
+
+
+def quote_bond(bond: Bond, value: _dt.date, nss: Nss, half_bp: float) -> Dict[str, Any]:
+    """A two-way quote from the fair curve: the fair yield (the yield of Σ CF·DF on the curve), bid = fair + half,
+    ask = fair − half (bp of the simple yield) - each with its compound yield and dirty / clean price - and the DV01
+    (TL per 1 mn nominal, per bp: the sheet's AI)."""
+    flows, _ = bond.flows(value)
+    dirty = sum(cf * nss.df((d - value).days / YEAR) for d, cf in flows)
+    y = bond.yield_of(dirty, value, "simple", nss.zero(max((bond.maturity - value).days / YEAR, 0.01)))
+    acc = accrued(bond, value)
+
+    def at(yy: float) -> Dict[str, float]:
+        p, dp = bond.price(yy, value, "simple")
+        comp = (1.0 + yy * (bond.maturity - value).days / YEAR) ** (YEAR / max(1, (bond.maturity - value).days)) - 1.0 \
+            if bond.kind == "bill" else (1.0 + yy / bond.freq) ** bond.freq - 1.0
+        return {"yield": yy * 100.0, "compound": comp * 100.0, "dirty": p, "clean": p - acc, "dv01": -dp}
+
+    h = half_bp / 1e4
+    return {"value_date": value.isoformat(), "accrued": acc, "half_bp": half_bp, "fair": at(y), "bid": at(y + h), "ask": at(y - h)}
+
+
+def spread_for(years: float, spreads: Dict[str, float]) -> Tuple[str, float]:
+    """The bucket of a bond's years to maturity and its half spread (bp)."""
+    if years <= spreads["short_until"]:
+        return "kısa", spreads["short"]
+    if years >= spreads["long_from"]:
+        return "uzun", spreads["long"]
+    return "orta", spreads["mid"]
+
+
+def quote_spreads(store: Any) -> Dict[str, Any]:
+    out = dict(QUOTE_DEFAULTS)
+    saved = store.get(QUOTE_KEY) if store is not None else None
+    if isinstance(saved, dict):
+        out.update({k: float(v) for k, v in saved.items() if k in QUOTE_DEFAULTS and isinstance(v, (int, float))})
+        out.update({k: saved[k] for k in ("by", "at") if k in saved})
+    return out
+
+
+def set_quote_spreads(store: Any, user: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    """The desk's half spreads (for everyone; who changed them is kept)."""
+    if not isinstance(values, dict):
+        raise ValueError("ayarlar anlaşılamadı")
+    cur = quote_spreads(store)
+    for name, raw in values.items():
+        if name not in QUOTE_LIMITS:
+            continue
+        try:
+            v = float(str(raw).replace(",", "."))
+        except (TypeError, ValueError):
+            raise ValueError("%s bir sayı olmalı" % name)
+        lo, hi = QUOTE_LIMITS[name]
+        if not (math.isfinite(v) and lo <= v <= hi):
+            raise ValueError("%s %g – %g arasında olmalı" % (name, lo, hi))
+        cur[name] = v
+    if not cur["short_until"] < cur["long_from"]:
+        raise ValueError("kısa vadenin sınırı uzun vadeninkinden küçük olmalı")
+    cur["by"], cur["at"] = user, _dt.datetime.now().replace(microsecond=0).isoformat(sep=" ")
+    store.put(QUOTE_KEY, {k: cur[k] for k in list(QUOTE_DEFAULTS) + ["by", "at"]})
+    return quote_spreads(store)
+
+
+def query(what: str, q: Dict[str, Any], store: Any, fit: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``quant.Quant.view`` of this module's own requests: ``quote`` (``isin``), ``switch`` (``a``, ``b``) and
+    ``quote_spreads`` - on the latest fit, with the values the worker read last."""
+    spreads = quote_spreads(store)
+    if what == "quote_spreads":
+        return {"values": spreads, "defaults": QUOTE_DEFAULTS, "limits": QUOTE_LIMITS}
+    tab = ((fit or {}).get("tables") or {}).get("dibsfv") or {}
+    if not callable(tab.get(what)):
+        return {"ok": False, "why": tab.get("why") or "DİBS uyumu henüz yok", "spreads": spreads}
+    ctx = fit["ctx"]
+    live = ctx.derive_live(ctx.live)
+    if what == "quote":
+        return tab["quote"](str(q.get("isin") or ""), live, spreads)
+    return tab["switch"](str(q.get("a") or ""), str(q.get("b") or ""), live, spreads)
+
+
+def act(what: str, user: str, data: Dict[str, Any], store: Any) -> Dict[str, Any]:
+    """``quant.Quant.action`` of this module: saving the desk's half spreads."""
+    values = data.get("values") if isinstance(data.get("values"), dict) else data
+    return set_quote_spreads(store, user, values)
 
 
 # ---------------------------------------------------------------------------------------------- run, live tables

@@ -2244,6 +2244,15 @@ async function shot(page, name) {
       && dibsRows === dv.rows.length && dv.rows.every((r) => (r.kind === 'fixed' || r.kind === 'bill') && r.total_1m !== null)
       && await page.locator('#quant-curve-ois svg.chart').count() === 1,
     { ois: oisRows, dibs: dibsRows, rmse: cv.rmse, why: cv.why || dv.why });
+    // a two-way quote of a fixed-coupon bond from the fair curve, and a switch between two of them
+    await page.waitForFunction(() => document.querySelectorAll('#quant-curve-quote table.grid tbody tr:not(.hd)').length >= 4
+      && document.querySelectorAll('#quant-curve-switch table.grid tbody tr:not(.hd)').length === 3, null, { timeout: 30000 });
+    const quoteRows = await page.evaluate(() => [...document.querySelectorAll('#quant-curve-quote table.grid tbody tr:not(.hd)')].map((tr) => tr.children[0].textContent));
+    const swq = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/switch?a=TRT150328T24&b=TRT160431T35');
+    check('Eğri Adil Değeri: a bond quoted from the fair curve (bid / fair / ask, the market) and a DV01-neutral switch',
+      quoteRows.join('|').startsWith('Alış (bid)|Adil (NSS)|Satış (ask)|Piyasa') && swq.status === 200 && swq.json.ok
+      && Math.abs(swq.json.ratio * swq.json.b.market.dv01 - swq.json.a.market.dv01) < 1e-6
+      && /^Switch: 15\.03\.28 sat \/ 16\.04\.31 al/.test(swq.json.line), { quoteRows, sw: swq.json && (swq.json.line || swq.json.why) });
     await shot(page, 'quant-curve');
     // options: the vol surface of USDTRY and EURUSD by tenor and the smile's probabilities (the recorded data has no vol
     // quotes: the rows are there, empty, and the smile says why)

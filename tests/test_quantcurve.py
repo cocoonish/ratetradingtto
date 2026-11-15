@@ -287,6 +287,71 @@ def test_bonds_whose_history_is_compounded_read_as_compounded():
     assert planted["z"] > DEFAULTS["entry_z"]
 
 
+# ================================================================================================ quotes from the fair curve
+def test_a_bond_off_a_known_curve_quotes_fair_plus_minus_the_half_spread():
+    b = qc.Bond("TRT150328T24", "15.03.28", "fixed", dt.date(2028, 3, 15), 36.8, 2)
+    v = dt.date(2026, 11, 4)
+    assert abs(qc.accrued(b, v) - 18.4 * 49 / 182) < 1e-12                    # DİBS RV!Q8: 4,9538…
+    q = qc.quote_bond(b, v, TRUE, 12.5)
+    flows, _ = b.flows(v)
+    fair_dirty = sum(cf * TRUE.df((d - v).days / 365.0) for d, cf in flows)
+    y = b.yield_of(fair_dirty, v)
+    assert abs(q["fair"]["dirty"] - fair_dirty) < 1e-9 and abs(q["fair"]["yield"] - y * 100) < 1e-10
+    assert abs(q["bid"]["yield"] - (q["fair"]["yield"] + 0.125)) < 1e-12 and abs(q["ask"]["yield"] - (q["fair"]["yield"] - 0.125)) < 1e-12
+    for side, yy in (("bid", y + 0.00125), ("ask", y - 0.00125), ("fair", y)):
+        p, dp = b.price(yy, v)
+        assert abs(q[side]["dirty"] - p) < 1e-12 and abs(q[side]["clean"] - (p - q["accrued"])) < 1e-12 and abs(q[side]["dv01"] + dp) < 1e-12
+        assert abs(q[side]["compound"] - ((1 + yy / 2) ** 2 - 1) * 100) < 1e-10
+    assert q["bid"]["clean"] < q["fair"]["clean"] < q["ask"]["clean"]          # the desk buys lower, sells higher
+    # the desk's half spreads by the bond's years to maturity
+    s = dict(qc.QUOTE_DEFAULTS)
+    assert qc.spread_for(1.0, s) == ("kısa", 10.0) and qc.spread_for(3.0, s) == ("orta", 15.0) and qc.spread_for(8.0, s) == ("uzun", 20.0)
+
+
+def test_quote_spreads_are_the_desks_and_checked():
+    from tto.store import Store
+    import tempfile
+    import os
+    store = Store(os.path.join(tempfile.mkdtemp(), "q.db"))
+    try:
+        out = qc.set_quote_spreads(store, "ayse", {"short": "7,5", "long_from": 6})
+        assert out["short"] == 7.5 and out["long_from"] == 6.0 and out["mid"] == 15.0 and out["by"] == "ayse"
+        for bad in ({"short": "x"}, {"mid": -1}, {"short_until": 7}, {"long": 900}):
+            with pytest.raises(ValueError):
+                qc.set_quote_spreads(store, "ayse", bad)
+        assert qc.quote_spreads(store)["short"] == 7.5
+    finally:
+        store.close()
+
+
+def test_quote_and_switch_on_the_fitted_curve(fitted):
+    ctx, eng, data, mons, tables, t, timing = fitted
+    live = ctx.derive_live(ctx.live)
+    spreads = dict(qc.QUOTE_DEFAULTS)
+    rows = {r["isin"]: r for r in t["dibsfv"]["rows"]}
+    q = tables["dibsfv"]["quote"](qx.PLANTED, live, spreads)
+    assert q["ok"] and q["listed"] and q["bucket"] == "orta" and q["half_bp"] == 15.0
+    # the market against fair: the bond's rich / cheap (exact yields here, the first-order residual on the table)
+    assert abs(q["distance"] - rows[qx.PLANTED]["resid"]) < 0.5 and abs(q["z"] - rows[qx.PLANTED]["z"]) < 1e-9
+    assert abs(q["market"]["yield"] - rows[qx.PLANTED]["yield"]) < 1e-9 and q["total_1m"] == rows[qx.PLANTED]["total_1m"]
+    assert q["line"].startswith("DİBS ") and qx.PLANTED in q["line"] and "getiri " in q["line"] and " / " in q["line"]
+    assert not tables["dibsfv"]["quote"]("TRB000001T11", live, spreads)["ok"]       # a bill: not a fixed-coupon bond
+    assert not tables["dibsfv"]["quote"]("XS0000000000", live, spreads)["ok"]
+    # sell A, buy B: the nominal that keeps the DV01, the pickup against the curve, the carry difference, the z
+    a, b = "TRT000005T11", qx.PLANTED
+    sw = tables["dibsfv"]["switch"](a, b, live, spreads)
+    assert sw["ok"]
+    dv_a, dv_b = sw["a"]["market"]["dv01"], sw["b"]["market"]["dv01"]
+    assert abs(1.0 * dv_a - sw["ratio"] * dv_b) < 1e-9 and abs(sw["dv01_mn"] - dv_a) < 1e-12        # DV01-neutral
+    assert abs(sw["pickup"] - (sw["b"]["distance"] - sw["a"]["distance"])) < 1e-9 and sw["pickup"] > 15
+    assert abs(sw["cr_1m"] - (sw["b"]["total_1m"] - sw["a"]["total_1m"])) < 1e-9
+    assert sw["n"] >= ctx.window() - 5 and sw["z"] > 2.0                   # the planted bond cheapens the switch to it
+    assert sw["line"].startswith("Switch: ") and "DV01 nötr" in sw["line"] and "daha ucuz (lehte)" in sw["line"]
+    back = tables["dibsfv"]["switch"](b, a, live, spreads)
+    assert abs(back["pickup"] + sw["pickup"]) < 1e-9 and abs(back["ratio"] * sw["ratio"] - 1) < 1e-12 and "aleyhte" in back["line"]
+    assert not tables["dibsfv"]["switch"](a, a, live, spreads)["ok"]
+
+
 # ================================================================================================ the service and the API
 @pytest.fixture(scope="module")
 def seeded(module_service):
@@ -381,3 +446,15 @@ def test_both_pages_over_http(seeded):
         quant = [p["id"] for p in nav if p["group"] == "Quant"]
         assert quant[-2:] == ["quant-curve", "quant-opt"] and len(quant) == 10
         assert client.get("/static/js/pages/quantfit.js").status_code == 200
+        # the quote and the switch from the fair curve, the desk's half spreads
+        fixed = [r["isin"] for r in body["dibsfv"]["rows"] if r["kind"] == "fixed"]
+        q = client.get("/api/quant/quote", params={"isin": fixed[0]}).json()
+        assert q["ok"] and q["bid"]["yield"] > q["fair"]["yield"] > q["ask"]["yield"] and q["line"]
+        assert not client.get("/api/quant/quote", params={"isin": "yok"}).json()["ok"]
+        sw = client.get("/api/quant/switch", params={"a": fixed[0], "b": fixed[-1]}).json()
+        assert sw["ok"] and sw["ratio"] > 0 and sw["line"]
+        assert client.get("/api/quant/quote_spreads").json()["values"]["mid"] == 15.0
+        res = client.post("/api/quant/quote_spreads", json={"values": {"mid": "12,5"}})
+        assert res.status_code == 200 and res.json()["mid"] == 12.5
+        assert client.post("/api/quant/quote_spreads", json={"values": {"mid": "-3"}}).status_code == 400
+        client.post("/api/quant/quote_spreads", json={"values": {"mid": 15}})
