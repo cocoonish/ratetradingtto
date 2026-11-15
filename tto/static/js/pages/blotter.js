@@ -3,6 +3,7 @@
 import { api, session } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
+import { toolsOf } from '../columns.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
 
 const FWD_BASES = [['RET_BID', 'RET bid'], ['RET_MID', 'RET mid'], ['RET_ASK', 'RET ask'], ['TRY', 'TRY faizi'], ['FWD', 'Forward kur'], ['SP', 'Swap puanı']];
@@ -890,7 +891,7 @@ export class BlotterPage {
       this.grids[id].replace(data);
     } else {
       clear(sec.body);
-      this.grids[id] = new Grid({ data, editable: false });
+      this.grids[id] = new Grid({ data, editable: false, name: 'blotter/' + id, tools: toolsOf(sec.body) });
       sec.body.appendChild(this.grids[id].el);
     }
   }
@@ -990,7 +991,7 @@ export class BlotterPage {
         const tools = h('div', { class: 'tools' });
         const el = h('section', { class: 'panel' }, h('header', null, h('h2', null, s.title), h('span', { class: 'rng' }, s.range || ''), tools), body);
         if (s.data) {
-          const g = new Grid({ book: 'tto', data: s.data, editable: false });
+          const g = new Grid({ book: 'tto', data: s.data, editable: false, name: 'blotter/sheet/' + s.id, tools });
           body.appendChild(g.el);
           const cp = h('button', { class: 'iconbtn', type: 'button' }, 'Kopyala');
           cp.addEventListener('click', () => copyGrid(g));

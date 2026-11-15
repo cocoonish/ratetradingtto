@@ -8,6 +8,7 @@
 import { api } from '../api.js';
 import { h, clear, errorToast, toast, confirmDialog, promptDialog } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
+import { TableColumns, toolsOf } from '../columns.js';
 import { Chart } from '../chart.js';
 import { serialOfIso } from '../fan.js';
 import { num, isoToTr } from '../format.js';
@@ -333,7 +334,7 @@ export class FxVolPage {
     if (this.grids[id]) this.grids[id].replace(data);
     else {
       clear(body);
-      const g = new Grid({ data, editable: false });
+      const g = new Grid({ data, editable: false, name: 'fxvol/' + id, tools: toolsOf(body) });
       if (onRow) {
         g.el.classList.add('pickable');
         g.el.addEventListener('click', (e) => {
@@ -491,8 +492,9 @@ export class FxVolPage {
     // what a click on each column draws: a quote of the pair (null: the pair's detail)
     const cols = [null, 'spot', ['ATM', '1M'], ['ATM', '3M'], ['ATM', '1Y'], ['RR25', '1M'], ['RR25', '3M'], ['BF25', '1M'], ['RR10', '1M'], ['SKEW25', '1M'],
       ['SKEW25', '1M'], ['ATM', '1M'], ['ATM', '1M'], ['ATM', '1M'], null, ['ATM', '1M']];
-    const g = this.setGrid('summary', this.sumBody, ['Parite', 'Spot', 'ATM 1M' + label, 'ATM 3M' + label, 'ATM 1Y' + label, '25D RR 1M' + label, '25D RR 3M' + label,
-      '25D BF 1M' + label, '10D RR 1M' + label, '25D RR/ATM 1M' + label, 'RR/ATM 1M z', 'ATM 1M z 3A', 'ATM 1M yüzdelik', 'İma − gerç. 1M', 'Eğim 1Y−1M', 'ATM 1M · 1 yıl'], rows,
+    const cap = (t) => ({ t: t + label, ck: t });          // (a column the user hides stays hidden whatever the metric)
+    const g = this.setGrid('summary', this.sumBody, ['Parite', 'Spot', cap('ATM 1M'), cap('ATM 3M'), cap('ATM 1Y'), cap('25D RR 1M'), cap('25D RR 3M'),
+      cap('25D BF 1M'), cap('10D RR 1M'), cap('25D RR/ATM 1M'), 'RR/ATM 1M z', 'ATM 1M z 3A', 'ATM 1M yüzdelik', 'İma − gerç. 1M', 'Eğim 1Y−1M', 'ATM 1M · 1 yıl'], rows,
       'Parite yok', (i, j) => {
         const r = m.rows[i];
         if (!r) return;
@@ -551,6 +553,8 @@ export class FxVolPage {
       t.appendChild(tr);
     }
     box.appendChild(t);
+    if (!this.heatCols) this.heatCols = new TableColumns('fxvol/heat');
+    this.heatCols.attach(t, toolsOf(this.heatBody, true));
     this.mark();
   }
 

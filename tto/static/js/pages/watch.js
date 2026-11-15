@@ -8,6 +8,7 @@ import { h, clear, toast, errorToast, menu, modal, confirmDialog } from '../ui.j
 import { num } from '../format.js';
 import { openWatchDialog, askPermission } from '../alarms.js';
 import { SeriesView, watchSpec } from '../serieschart.js';
+import { TableColumns, toolsOf } from '../columns.js';
 
 const OP = { '>=': '≥', '<=': '≤', x: 'kesişir' };
 const UNIT_TEXT = { pct: 'faiz (%) – değişim bp', bp: 'bp', px: 'fiyat', fx: 'kur', raw: 'sayı' };
@@ -179,7 +180,7 @@ export class WatchPage {
     const t = h('table', { class: 'plain watch', id: 'watch-table' });
     const zh = 'z (' + (d.days || 60) + 'g)';
     t.appendChild(h('tr', null, ...['Ad', 'Şimdi', 'Açılış', 'Gün', 'Düşük', 'Yüksek', 'Gün içi', zh, 'Bant', 'Referans', 'Ref\'ten', 'Son hareket', '']
-      .map((x, i) => h('th', { class: [0, 6, 8, 12].includes(i) ? 'l' : '' }, x))));
+      .map((x, i) => h('th', { class: [0, 6, 8, 12].includes(i) ? 'l' : '', 'data-col': x === zh ? 'z' : null }, x))));
     d.items.forEach((it, k) => {
       const cls = (v) => (isNum(v) && Math.abs(v) > 1e-9 ? (v > 0 ? 'pos' : 'neg') : '');
       const kind = (it.subject && it.subject.kind) || 'cell';
@@ -215,6 +216,14 @@ export class WatchPage {
       t.appendChild(tr);
     });
     box.appendChild(t);
+    this.columns('list', t, box);
+  }
+
+  /** Each user hides columns of the lists their own way (a right click on a caption, or "Sütunlar"). */
+  columns(name, t, box) {
+    this.cols = this.cols || {};
+    if (!this.cols[name]) this.cols[name] = new TableColumns('watch/' + name);
+    this.cols[name].attach(t, toolsOf(box, true));
   }
 
   // ------------------------------------------------------------------ the past of the item clicked
@@ -307,6 +316,7 @@ export class WatchPage {
       t.appendChild(tr);
     }
     box.appendChild(t);
+    this.columns('alarms', t, box);
   }
 
   fillFired(d) {
@@ -320,6 +330,7 @@ export class WatchPage {
         h('td', null, e.value_text || ''), h('td', null, e.mode && e.mode !== 'level' ? (e.measure_text || '') : ''), h('td', { class: 'l muted' }, e.note || '')));
     }
     box.appendChild(t);
+    this.columns('fired', t, box);
   }
 
   // ------------------------------------------------------------------ actions

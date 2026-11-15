@@ -9,6 +9,7 @@
 import { api } from '../api.js';
 import { h, clear, errorToast, toast, promptDialog } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
+import { toolsOf } from '../columns.js';
 import { Chart } from '../chart.js';
 import { FanChart, serialOfIso } from '../fan.js';
 import { num, isoToTr, parseNumber } from '../format.js';
@@ -278,7 +279,7 @@ export class FxPage {
     if (this.grids[id]) this.grids[id].replace(data);
     else {
       clear(body);
-      const g = new Grid({ data, editable: false });
+      const g = new Grid({ data, editable: false, name: 'fx/' + id, tools: toolsOf(body) });
       if (onRow) {
         g.el.classList.add('pickable');
         g.el.addEventListener('click', (e) => {
