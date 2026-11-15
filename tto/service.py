@@ -173,6 +173,8 @@ class Service(object):
         self._auth_lock = threading.Lock()               # account changes one at a time (two first administrators ...)
         self._hash_slots = threading.BoundedSemaphore(auth.HASH_SLOTS)    # password checks at a time
         self._listeners: List[Callable[[int], None]] = []
+        self._seen: Dict[str, float] = {}                 # user -> when they last asked for anything (monotonic)
+        self._streams: Dict[str, int] = {}               # user -> live-update streams open
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._retired: Dict[str, set] = {}
         # pages and headers kept per calculation (see view_future): key -> what was made, panel by panel
@@ -528,11 +530,15 @@ class Service(object):
         """Watch lists and alarms: read after every change (at the latest every few seconds), on the calculation
         thread; an alarm that fired tells the pages (a new generation: they ask what fired)."""
         pending: Optional["concurrent.futures.Future"] = None
+        swept = time.monotonic()
         while not self._stop.is_set():
             self._watch_kick.wait(3.0)
             self._watch_kick.clear()
             if self._stop.is_set():
                 break
+            if time.monotonic() - swept >= 60.0:
+                swept = time.monotonic()
+                self.et.submit_at(EngineThread.BACKGROUND, self._sweep_idle)      # (users gone for a while)
             if pending is not None and not pending.done():
                 continue                    # the last round still waits behind the pages: no second one queued
             pending = self.et.submit_at(EngineThread.BACKGROUND, self.watch.tick)
@@ -615,6 +621,7 @@ class Service(object):
             raise ServiceError("kullanıcı bulunamadı – tekrar giriş yapın", 401)
         if acc.get("status") != "active":
             raise ServiceError("hesap etkin değil – tekrar giriş yapın", 401)
+        self.saw(key)
         return key
 
     def require_admin(self, user: Optional[str]) -> str:
@@ -1000,7 +1007,58 @@ class Service(object):
         ov = self._overlay(user, book)
         if not ov:
             return book.engine.shared
+        if user not in book.engine.users:
+            return book.engine.set_user_inputs(user, ov)     # (given back while the user was away: made again)
         return book.engine.user(user)
+
+    # ------------------------------------------------------------------ who is here
+    #: a user seen this recently (seconds) - or with a live-update stream open - is connected
+    CONNECTED_WINDOW = 120.0
+
+    def saw(self, user: Optional[str]) -> None:
+        """A request of the user (the session gate tells every one)."""
+        if user:
+            self._seen[user] = time.monotonic()
+
+    def stream(self, user: Optional[str], delta: int) -> None:
+        """A live-update stream of the user opened (+1) or closed (-1)."""
+        if not user:
+            return
+        with self._gen_lock:
+            n = self._streams.get(user, 0) + delta
+            if n > 0:
+                self._streams[user] = n
+            else:
+                self._streams.pop(user, None)
+        self.saw(user)
+
+    def connected(self, user: Optional[str]) -> bool:
+        """Whether the user has the dashboard open: a stream, or a request lately."""
+        if not user:
+            return False
+        if self._streams.get(user):
+            return True
+        return time.monotonic() - self._seen.get(user, -1e9) < self.CONNECTED_WINDOW
+
+    def _sweep_idle(self) -> List[str]:
+        """Users not seen for ``settings.idle_minutes``: their calculations (and kept pages) are given back - a user
+        with inputs of their own holds a private copy of every value they changed (~50 000 for the OIS scenario
+        inputs).  They are made again when the user returns.  Calculation thread."""
+        limit = self.settings.idle_minutes * 60.0
+        if limit <= 0:
+            return []
+        now = time.monotonic()
+        gone = []
+        names = {name for book in self.books.values() for name in book.engine.users}
+        for name in names:
+            if self._streams.get(name) or now - self._seen.get(name, -1e9) < limit:
+                continue
+            for book in self.books.values():
+                book.engine.drop_user(name)
+                self._overlays.pop((name, book.id), None)
+            self._forget_renders(name)
+            gone.append(name)
+        return gone
 
     # ================================================================== status / navigation
     def describe(self) -> str:
@@ -1126,7 +1184,9 @@ class Service(object):
         return (who, what, bool(show_hidden), locale or self.settings.locale)
 
     def _fresh(self, rec: Dict[str, Any], gen: int, wanted: Optional[Tuple], key: Tuple) -> bool:
-        """Whether the asked panels are known as of ``gen``."""
+        """Whether the asked panels are known as of ``gen`` (one with inputs of their own: or checked lately)."""
+        throttle = self.settings.private_refresh
+        recent = time.monotonic() - throttle if key[0] and throttle > 0 else None
         panels = rec["panels"]
         for pid in (wanted if wanted is not None else rec["order"]):
             p = panels.get(pid)
@@ -1134,9 +1194,13 @@ class Service(object):
                 continue                                 # (not a panel of the page: nothing to make)
             if p["entry"] is None:
                 return False
-            if p["checked"] != gen:
-                return False
+            if p["checked"] != gen and (recent is None or p["at"] < recent or self._shared_changes(rec) != rec["inputs"]):
+                return False                             # (a shared input changed since - not the market: at once)
         return True
+
+    def _shared_changes(self, rec: Dict[str, Any]) -> int:
+        book = self.books.get(rec.get("book") or "tto")
+        return book.engine.input_changes if book is not None else 0
 
     def _render_job(self, jk, key, user, view_id, show_hidden, locale, wanted) -> Dict[str, Any]:
         try:
@@ -1297,7 +1361,8 @@ class Service(object):
         if links:
             top["links"] = links
         return {"key": key, "top": top, "order": order, "ids": ["%s:%s" % (pid, t) for pid, t in shown],
-                "panels": panels, "gen": gen, "ms": int((time.time() - t0) * 1000)}
+                "panels": panels, "gen": gen, "ms": int((time.time() - t0) * 1000), "book": book.id,
+                "inputs": book.engine.input_changes}
 
     @staticmethod
     def _sheet_chart(R, calc: Calc, ch: Dict[str, Any], loc, pid: str) -> Dict[str, Any]:
@@ -1542,7 +1607,8 @@ class Service(object):
                 part = {"entry": self._header(user, locale), "meta": None, "content": gen, "checked": gen, "at": time.monotonic()}
             else:
                 part = self._made(old, calc, gen, True, lambda: {"items": self._header(user, locale)["items"]})
-            rec = {"key": key, "panels": {"#": part}, "order": ["#"], "gen": gen}
+            rec = {"key": key, "panels": {"#": part}, "order": ["#"], "gen": gen, "book": "tto",
+                   "inputs": book.engine.input_changes if book is not None else 0}
             self._keep(key, rec)
             return rec
         finally:
@@ -1916,6 +1982,9 @@ class Service(object):
             else:
                 self._private_users.discard(user)
         self._forget_renders(user)
+        watch = getattr(self, "watch", None)
+        if watch is not None:
+            watch._private_at.pop(user, None)            # (their watch list follows their change at once too)
 
     # ================================================================== the columns a user hides
     #: everybody looks at the tables their own way: table -> the columns this user hid, kept with the account

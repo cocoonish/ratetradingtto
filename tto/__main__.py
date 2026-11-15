@@ -51,6 +51,12 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
                    help="günlük tarihçeyi (gün sonu matrisi, PPK fiyatlama geçmişi) arka planda güncelleme")
     p.add_argument("--history-refresh", type=float, default=900.0,
                    help="canlı veride tarihçenin güncellenme aralığı (sn; 0 = yalnızca açılışta)")
+    p.add_argument("--private-refresh", type=float, default=5.0,
+                   help="kendi girdisi olan kullanıcının şerit, sayfa ve izleme listesi piyasaya en çok bu sıklıkla "
+                        "yeniden hesaplanır (sn; kendi değişikliği hemen görünür; 0 = her seferinde)")
+    p.add_argument("--idle-minutes", type=float, default=30.0,
+                   help="bu kadar dakikadır görünmeyen kullanıcının kendi hesaplaması bırakılır, dönünce yeniden kurulur "
+                        "(0 = hiç bırakılmaz)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +89,8 @@ def settings_from(args) -> Settings:
                     bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale, bbg_stream=not args.no_stream,
                     bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll,
                     history=not args.no_history, history_refresh=args.history_refresh,
-                    bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue)
+                    bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue,
+                    private_refresh=args.private_refresh, idle_minutes=args.idle_minutes)
 
 
 def cmd_run(args) -> int:

@@ -18,7 +18,7 @@ class Settings(object):
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
                  bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
                  bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
-                 history_pace: float = 1.0):
+                 history_pace: float = 1.0, private_refresh: float = 5.0, idle_minutes: float = 30.0):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -40,6 +40,11 @@ class Settings(object):
         self.bbg_queue = int(bbg_queue)         # undelivered events the Bloomberg session may hold
         # live mode: after a day of the meeting-pricing history has been computed, rest this many times as long
         self.history_pace = max(0.0, float(history_pace))
+        # a user with inputs of their own: their header, pages and watch list follow the market at most this often
+        # (seconds; their own changes show at once) - each is a calculation of its own (0: every time)
+        self.private_refresh = max(0.0, float(private_refresh))
+        # a user not seen for this long (minutes) gives their calculations back (made again when they return; 0: never)
+        self.idle_minutes = max(0.0, float(idle_minutes))
 
     @property
     def db_path(self) -> str:

@@ -142,6 +142,7 @@ class Engine(object):
         # increases whenever masks change without a value changing (a reset, an input declared): what remembered
         # the masks of what it read (a page's panel) has to read again
         self.layout = 0
+        self.input_changes = 0                            # shared input values changed (not the market, not the clock)
         self.shared = Calc(self, None, None)
         self.users: Dict[str, "Calc"] = {}
         self.lock = threading.RLock()
@@ -343,6 +344,7 @@ class Engine(object):
                 changed |= self.input_mask[si][rc]
             self.input_value[si][rc] = v
         if changed:
+            self.input_changes += 1
             self.invalidate(changed)
 
     def clear_inputs(self, cells: Iterable[Tuple[int, int]]) -> None:
@@ -353,6 +355,7 @@ class Engine(object):
                 del self.input_value[si][rc]
                 changed |= self.input_mask[si][rc]
         if changed:
+            self.input_changes += 1
             self.invalidate(changed)
 
     def base_value(self, si: int, rc: int) -> Any:

@@ -133,6 +133,7 @@ class _SessionGate(object):
             if hit is None:
                 hit = await run_in_threadpool(svc.resolve_session, token)
             user, role = hit
+            svc.saw(user)                              # (who has the dashboard open: their calculations are kept)
         scope["tto_user"] = user
         scope["tto_role"] = role
         scope["tto_token"] = token
@@ -748,9 +749,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                 pass
 
         service = svc()
+        who = _user(request)
 
         async def stream():
             service.add_listener(push)
+            service.stream(who, 1)
             try:
                 yield "data: %s\n\n" % json.dumps({"gen": service.gen})
                 while True:
@@ -763,6 +766,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                         break
             finally:
                 service.remove_listener(push)
+                service.stream(who, -1)
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

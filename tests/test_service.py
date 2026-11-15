@@ -768,3 +768,41 @@ def test_the_header_is_kept_and_answers_unchanged(service):
     assert again["unchanged"] and again["as"] == "s"
     assert service.header(u)["items"] == h["items"]
 
+
+def test_a_user_with_inputs_of_their_own_follows_the_market_every_few_seconds(tmp_path):
+    """The header (and pages) of a user with inputs of their own is a calculation of its own: a market change makes
+    it again at most every ``private_refresh`` seconds; their own change, or a shared input, at once.  Gone for
+    ``idle_minutes``, their calculation is given back - and made again, with their values, when they return."""
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Özel Şerit")
+        svc.settings.private_refresh = 60.0
+        svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!J2", "value": "0,31"}])
+        h = svc.header(u)
+        eng = svc.books["tto"].engine
+        calc = eng.user(u)
+        evals = calc.evals
+        pinned = [(si, rc) for si in range(eng.nsheets) for rc in eng.pins[si]]
+        svc.et.call(lambda: eng.declare_inputs([c for c in pinned if c[1] not in eng.input_mask[c[0]]]))
+        svc.bump()
+        h = svc.header(u)
+        evals = calc.evals
+        svc.et.call(eng.invalidate, eng.input_mask[pinned[0][0]][pinned[0][1]] | eng.input_mask[pinned[-1][0]][pinned[-1][1]])
+        svc.bump()
+        assert svc.header(u)["items"] == h["items"] and calc.evals == evals     # (kept: the market waits)
+        svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!J2", "value": "0,30"}])  # their own change: at once
+        mine = svc.header(u)
+        assert calc.evals > evals
+        w = login(svc, "Ortak Değiştiren")                                      # a shared input: at once
+        svc.set_inputs(w, "tto", [{"ref": "Forward!W40", "value": "41,5"}])
+        assert svc.header(u)["gen"] == svc.gen != mine["gen"]                    # (checked now, not kept)
+        svc.et.call(eng.invalidate, eng.input_mask[pinned[0][0]][pinned[0][1]])
+        svc.bump()
+        assert svc.header(u)["gen"] != svc.gen                                  # (the market: kept a while)
+        # gone a while: their calculation is given back; back, it is made again with their value
+        svc._seen[u] = -1e9
+        svc.settings.idle_minutes = 0.001
+        assert svc.et.call(svc._sweep_idle) == [u] and u not in eng.users
+        assert cell(svc, "OIS_MAIN!J2", u) == 0.30 and u in eng.users
+    finally:
+        svc.stop()
