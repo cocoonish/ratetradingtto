@@ -599,3 +599,28 @@ def newey_west(xs: Sequence[float], lags: int) -> Optional[Dict[str, float]]:
         s += 2.0 * (1.0 - j / (lags + 1.0)) * gj
     se = math.sqrt(s / n) if s > 0 else None
     return {"mean": m, "se": se, "t": m / se if se else None, "n": n, "sd": math.sqrt(g0 * n / (n - 1)) if n > 1 else None}
+
+
+#: the two-sided 5 % critical value of |t| from :func:`newey_west` (lag h − 1) on the mean of overlapping h-day changes,
+#: by r = n / h - the independent h-day periods in the sample - simulated on random walks (the null of no drift; h of
+#: 5, 10 and 20 give the same values for the same r, 1 500 – 3 000 draws a point, the tail smoothed): with a few periods
+#: the Newey-West variance is far too small and 1.96 would find a drift in noise about one time in three
+NW_CRITICAL = ((2.0, 7.8), (2.5, 6.3), (3.0, 5.3), (4.0, 4.2), (5.0, 3.8), (7.5, 3.2), (10.0, 3.0), (15.0, 2.7), (20.0, 2.55),
+               (30.0, 2.45), (50.0, 2.3), (100.0, 2.15), (1000.0, 1.96))
+
+
+def nw_critical(n: int, h: int) -> Optional[float]:
+    """The 5 % two-sided critical value of a Newey-West t on ``n`` overlapping ``h``-day changes (``None``: fewer than two
+    independent periods - no test is possible)."""
+    if h <= 1:
+        return 1.96 if n >= 30 else None
+    r = n / float(h)
+    if r < NW_CRITICAL[0][0]:
+        return None
+    if r >= NW_CRITICAL[-1][0]:
+        return NW_CRITICAL[-1][1]
+    for (r0, c0), (r1, c1) in zip(NW_CRITICAL, NW_CRITICAL[1:]):
+        if r0 <= r <= r1:
+            w = (math.log(r) - math.log(r0)) / (math.log(r1) - math.log(r0))
+            return math.exp(math.log(c0) + w * (math.log(c1) - math.log(c0)))
+    return None

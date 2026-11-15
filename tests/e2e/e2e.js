@@ -1505,7 +1505,7 @@ async function shot(page, name) {
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
-      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 50       // (+ the quant package's 50)
+      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 93       // (+ the quant package's 93: 22 pairs and the global drivers)
       && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), rowOf(series, 'TLREF'));
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
@@ -2230,7 +2230,22 @@ async function shot(page, name) {
       && deskAlarm === 'Güçlü', { tables: quantTables, deskAlarm });
     const qs = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/status');
     check('the quant analyses answer from their own thread', qs.status === 200 && qs.json.ready === true && qs.json.fits >= 1, qs.json);
+    check('the desk settings carry the FX pair list, the carry margin and the backtest floor (off)',
+      await page.locator('#quant-settings input#quant-set-fx_pairs').count() === 1 && await page.locator('#quant-settings input#quant-set-carry_margin').count() === 1
+      && await page.locator('#quant-settings select#quant-set-bt_mute').inputValue() === 'kapalı');
+    const bt = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/backtest');
+    check('the backtest panel and its API are there', bt.status === 200 && await page.locator('#quant-backtest').count() === 1, bt.json);
     await shot(page, 'quant-signals');
+    await open(page, 'quant-pca');
+    await page.waitForSelector('#quant-pca-windows', { timeout: 30000 });
+    check('PCA / RV shows the dynamic PCA, both fly conventions and the path\'s fit', await page.locator('#quant-pca-stability').count() === 1
+      && /klasik/.test(await page.textContent('#quant-pca-rv')) && /Konvansiyon|Patika yok/.test(await page.textContent('#quant-pca-tenors')));
+    await open(page, 'quant-fx');
+    await page.waitForSelector('#quant-fx-summary', { timeout: 30000 });
+    check('the FX page starts with the per-pair carry summary', /Carry % \/ yıl|tarihçesi yok/.test(await page.textContent('#quant-fx-summary')));
+    await open(page, 'quant-intraday');
+    await page.waitForSelector('#quant-intraday-bars', { timeout: 30000 });
+    check('Gün İçi says replay mode has no bars', /Kayıtlı veri modunda gün içi bar yok/.test(await page.textContent('#quant-intraday-bars')));
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

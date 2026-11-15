@@ -241,14 +241,28 @@ export class SignalChart {
           h('td', { class: 'n' }, isNum(l.notional) ? fmt(l.notional, 1) : '')));
       }
       const p = s.parts || {};
+      const pu = s.pnl_unit || '';
+      const fx = s.fx || null;
       const lines = [
+        ['Tez', s.thesis || ''],
         ['Yön', s.expression],
-        ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + s.strength],
-        ['Giriş / hedef / stop', fmt(s.entry, s.digits) + ' / ' + fmt(s.target, s.digits) + ' / ' + fmt(s.stop, s.digits) + (s.unit ? ' ' + s.unit : '')],
-        ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' gün' : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' gün' : '—')],
-        ['Carry + roll / hafta', isNum(s.carry_week) ? sgn(s.carry_week, 2) + ' bp' : '—'],
+        ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + (s.gated ? 'elendi' : s.strength)],
+        ['Giriş / hedef / stop', fmt(s.entry, s.digits) + ' / ' + fmt(s.target, s.digits) + ' / ' + fmt(s.stop, s.digits) + (s.unit ? ' ' + s.unit : '')
+          + (fx ? ' (forward\'la tutmanın getirisi, carry dahil)' : '')],
+        ['Beklenen K/Z (tutma boyunca)', isNum(s.exp_pnl) ? sgn(s.exp_pnl, 2) + ' ' + pu + (isNum(s.carry_h) ? ' · içinde carry ' + sgn(s.carry_h, 2) + ' ' + pu : '')
+          + (isNum(s.pnl_try) ? ' · ' + sgn(s.pnl_try / 1000, 0) + ' bin TRY' + (fx ? ' (1 mn ' + (fx.pair || '').slice(0, 3) + ' başına)' : ' (paket DV01\'iyle)') : '')
+          + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') : '—'],
+        ['Risk / ödül', (isNum(s.reward) ? 'ödül ' + fmt(s.reward, 2) + ' ' + pu : '') + (isNum(s.risk) ? ' · risk ' + fmt(s.risk, 2) + ' ' + pu : '')
+          + (isNum(s.rr) ? ' · ödül / risk ' + fmt(s.rr, 2) : '') + (isNum(s.exp_r) ? ' · beklenen / risk ' + fmt(s.exp_r, 2) : '') || '—'],
+        ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' gün' : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit || 'gün') : '—')],
+        [fx ? 'Carry' : 'Carry + roll / hafta', fx ? (isNum(s.carry_yr) ? sgn(s.carry_yr, 1) + '% / yıl işlemin yönünde' + (isNum(s.carry_h) ? ' · ufukta ' + sgn(s.carry_h, 2) + '%' : '')
+          + (fx.tenors && fx.tenors.length ? ' · forward\'lar ' + fx.tenors.join(' / ') : '') + (isNum(fx.spot) ? ' · spot ' + fmt(fx.spot, 4) : '')
+          + (isNum(fx.fwd_h) ? ' · ufkun forward\'ı ' + fmt(fx.fwd_h, 4) : '') : 'forward yok: carry bilinmiyor')
+          : (isNum(s.carry_week) ? sgn(s.carry_week, 2) + ' ' + (pu || 'bp') : '—')],
         ['Rejim', (s.regime || '—') + (s.regime_info && isNum(s.regime_info.vr_z) ? ' (VR ' + fmt(s.regime_info.vr, 2) + ', z ' + sgn(s.regime_info.vr_z, 2)
           + (isNum(s.regime_info.hurst) ? ', H ' + fmt(s.regime_info.hurst, 2) : '') + (isNum(s.regime_info.vol_pct) ? ', vol yüzdelik ' + pct(s.regime_info.vol_pct) : '') + ')' : '')],
+        ['Geri test', s.bt ? s.bt.text + (isNum(s.bt.sharpe) ? ' · Sharpe ' + fmt(s.bt.sharpe, 2) : '')
+          + (isNum(s.bt.max_dd) ? ' · en büyük düşüş ' + fmt(s.bt.max_dd, 1) + 'σ' : '') + (s.bt.scope === 'tür' ? ' (bu tür)' : '') : 'henüz yok'],
         ['Uyum', s.agree + ' aile aynı yönde' + (s.agree_with && s.agree_with.length ? ' (' + s.agree_with.join(', ') + ')' : '')
           + (s.conflict ? ' · ' + s.conflict + ' ters (' + s.conflict_with.join(', ') + ')' : '')],
         ['Bileşik', fmt(s.composite, 2) + ' = |z| ' + fmt(p.z, 2) + ' × rejim ' + fmt(p.regime, 2) + ' × yarı ömür ' + fmt(p.hl, 2) + ' × carry ' + fmt(p.carry, 2)
@@ -256,7 +270,11 @@ export class SignalChart {
       ];
       const kv = h('table', { class: 'plain qkv' });
       for (const [k, v] of lines) kv.appendChild(h('tr', null, h('th', null, k), h('td', null, v)));
-      box.append(h('div', { class: 'qcols' }, kv, legs));
+      const gates = h('table', { class: 'plain qgates' }, h('tr', null, h('th', null, 'Kapı'), h('th', null, ''), h('th', null, 'Neden')));
+      for (const g of s.gates || []) {
+        gates.appendChild(h('tr', { class: g.ok ? 'ok' : 'fail' }, h('td', null, g.name), h('td', { class: g.ok ? 'thru' : 'soft' }, g.ok ? '✓' : '✗'), h('td', null, g.text || '')));
+      }
+      box.append(h('div', { class: 'qcols' }, kv, h('div', null, legs, gates)));
     }
     const info = m.info || {};
     const extra = [];
@@ -265,22 +283,84 @@ export class SignalChart {
       + (isNum(info.adf) ? ' · ADF ' + fmt(info.adf, 2) + ' (%5 kritik ' + fmt(info.crit5, 2) + ')' : ''));
     if (isNum(info.hit_rate)) extra.push('Model: yukarı olasılığı ' + pct(info.p, 1) + ' · doğrulama isabeti ' + pct(info.hit_rate, 1) + ' (' + info.n_test + ' test, log-loss ' + fmt(info.log_loss, 3) + ')');
     if (info.garch && isNum(info.garch.alpha)) extra.push('GARCH(1,1): α ' + fmt(info.garch.alpha, 3) + ', β ' + fmt(info.garch.beta, 3) + ', uzun dönem vol ' + fmt(Math.sqrt(252 * info.garch.long_var), 2));
-    if (info.phase) extra.push('Faz: ' + info.phase + ' · ortalama ' + sgn(info.mean, 1) + ' bp · n ' + info.n + ' · t ' + sgn(info.t, 2));
+    if (info.phase) extra.push('Faz: ' + info.phase + ' · ortalama ' + sgn(info.mean, 1) + ' bp · n ' + info.n + ' · t ' + sgn(info.t, 2)
+      + (isNum(info.periods) ? ' · ' + fmt(info.periods, 1) + ' bağımsız dönem, eşik ' + fmt(info.cv, 2) : ''));
+    if (isNum(info.net_dv01)) extra.push((info.version === 'klasik' ? 'Klasik' : 'PCA ağırlıklı') + ': net DV01 ' + sgn(info.net_dv01, 0) + ' TL/bp · 1σ PC1 / PC2 / PC3 '
+      + (info.exposures || []).map((x) => sgn(x, 2)).join(' / ') + ' bp');
+    if (info.compare) extra.push('Fark: ' + info.compare);
+    if (isNum(info.window)) extra.push('Pencere: ' + info.window + ' gün');
     if (m.note) extra.push(m.note);
     for (const t of extra) box.appendChild(h('div', { class: 'muted qline' }, t));
+    this.fillRationale(d);
+  }
+
+  /** "Gerekçe": the past days most like today and what followed them, and what would undo the signal. */
+  fillRationale(d) {
+    const r = d.rationale;
+    if (!r) return;
+    const box = h('div', { class: 'qrationale' }, h('div', { class: 'ct' }, 'Gerekçe'));
+    const sm = r.summary;
+    const s = d.signal || {};
+    const unit = (sm && sm.unit) || s.pnl_unit || '';
+    if (sm) {
+      box.appendChild(h('div', { class: 'qline' }, 'Bugüne en çok benzeyen ' + sm.n + ' gün (z, eğim, rejim, vol' + ((r.features || []).includes('carry') ? ', carry' : '')
+        + '; en az bir hafta arayla): ' + sm.hits + '\'inde ' + fmt(sm.hold, 0) + ' iş günü sonra işlemin yönünde kâr (' + pct(sm.share) + '); ortalama ' + sgn(sm.mean, 2) + ' '
+        + unit + ', medyan ' + sgn(sm.median, 2) + ', çeyrekler ' + sgn(sm.q25, 2) + ' / ' + sgn(sm.q75, 2) + (sm.carry_in ? ' (carry dahil getiri)' : ' (fiyat hareketi; carry ayrıca)') + '.'));
+      const t = h('table', { class: 'plain qanalogs' }, h('tr', null, ...['Gün', 'z', 'Eğim', 'Rejim (ρ)', 'Vol', (r.features || []).includes('carry') ? 'Carry' : null, 'Uzaklık',
+        'Sonra (' + unit + ')'].filter((x) => x !== null).map((x) => h('th', null, x))));
+      for (const a of r.analogs || []) {
+        const f = a.features || [];
+        const cells = [isoToTr(a.day), sgn(f[0], 2), sgn(f[1], 2), sgn(f[2], 2), sgn(f[3], 2)];
+        if ((r.features || []).includes('carry')) cells.push(sgn(f[4], 1));
+        cells.push(fmt(a.distance, 2), sgn(a.outcome, 2));
+        t.appendChild(h('tr', { class: isNum(a.outcome) && a.outcome > 0 ? 'ok' : 'fail' }, ...cells.map((c, i) => h('td', { class: i ? 'n' : '' }, c))));
+      }
+      box.appendChild(t);
+    } else if (r.why) {
+      box.appendChild(h('div', { class: 'muted qline' }, r.why));
+    }
+    if ((r.invalidation || []).length) {
+      box.appendChild(h('div', { class: 'ct' }, 'Geçersiz kılanlar'));
+      const ul = h('ul', { class: 'qinvalid' });
+      for (const x of r.invalidation) ul.appendChild(h('li', null, x));
+      box.appendChild(ul);
+    }
+    this.details.appendChild(box);
   }
 }
 
 /** The rows of a signal table (the ranked list, and each analysis page's own signals). */
+/** The gates of a signal in one line: ✓ passed, ✗ failed (the tooltip says why). */
+/** A signal's family backtest in a cell: trades · hit rate · average P&L in σ. */
+export function btShort(bt) {
+  if (!bt || !bt.trades) return '';
+  return bt.trades + ' · ' + pct(bt.hit) + ' · ' + sgn(bt.avg_sigma, 1) + 'σ';
+}
+
+export function gateText(s) {
+  return (s.gates || []).map((g) => (g.ok ? '✓' : '✗') + ' ' + g.name).join(' · ');
+}
+
 export function signalRows(list, opts = {}) {
   return list.map((s, i) => {
     const row = [];
+    const pu = s.pnl_unit || '';
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
-    row.push(T(s.family_label), T(s.asset), T(s.expression, { b: 1, tip: (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
-      Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }), T(s.strength, { cls: 'qs-' + (s.strength || '').toLowerCase() }),
+    row.push(T(s.family_label + (s.intraday ? ' · gün içi' : '')), T(s.asset),
+      T(s.expression, { b: 1, tip: (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
+      Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
+      T(s.gated ? 'elendi' : s.strength, { cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }),
       N(s.entry, s.digits), N(s.target, s.digits), N(s.stop, s.digits), T(s.unit),
-      N(s.half_life, 1), N(s.hold, 0), N(s.carry_week, 2, { sign: true, tip: 'Carry + roll, işlemin yönünde (bp / hafta)' }),
-      T(s.regime || '—'), T(s.agree + (s.conflict ? ' / −' + s.conflict : ''), { tip: (s.agree_with || []).join(', ') + (s.conflict ? '\nters: ' + s.conflict_with.join(', ') : '') }));
+      N(s.exp_pnl, 2, { sign: true, unit: pu, tip: 'Tutma boyunca beklenen kâr / zarar, carry + roll dahil' + (isNum(s.pnl_try) ? ' · ' + sgn(s.pnl_try / 1000, 0) + ' bin TRY' : '')
+        + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') }),
+      N(s.rr, 2, { tip: 'Ödül ÷ risk (hedefe ve stoba uzaklık)' + (isNum(s.exp_r) ? ' · beklenen ÷ risk ' + fmt(s.exp_r, 2) : '') }),
+      N(s.half_life, 1), T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),
+      N(s.carry_week, 2, { sign: true, tip: 'Carry + roll, işlemin yönünde, haftalık (' + (s.fx ? '%' : (pu || 'bp')) + ')' }),
+      N(s.carry_yr, 1, { sign: true, tip: 'FX: carry, işlemin yönünde, yıllık % (forward\'ların ima ettiği)' }),
+      T(s.regime || '—'), T(s.agree + (s.conflict ? ' / −' + s.conflict : ''), { tip: (s.agree_with || []).join(', ') + (s.conflict ? '\nters: ' + s.conflict_with.join(', ') : '') }),
+      T(gateText(s), { cls: 'qgate', tip: (s.gates || []).map((g) => (g.ok ? '✓ ' : '✗ ') + g.name + ': ' + (g.text || '')).join('\n') }),
+      T(btShort(s.bt), { tip: s.bt ? s.bt.text + (isNum(s.bt.sharpe) ? ' · Sharpe ' + fmt(s.bt.sharpe, 2) : '')
+        + (isNum(s.bt.max_dd) ? ' · en büyük düşüş ' + fmt(s.bt.max_dd, 1) + 'σ' : '') : 'geri test henüz yok' }));
     if (opts.gated) row.push(T(s.gated, { cls: 'soft' }));
     else row.push(N(s.composite, 2, { b: 1, tip: '|z| ' + fmt(s.parts.z, 2) + ' × rejim ' + fmt(s.parts.regime, 2) + ' × yarı ömür ' + fmt(s.parts.hl, 2) + ' × carry ' + fmt(s.parts.carry, 2) }));
     row.push(T((s.live ? '● ' : '') + (s.time || ''), { tip: s.live ? 'canlı değerle' : 'son kapanışla' }));
@@ -288,7 +368,8 @@ export function signalRows(list, opts = {}) {
   });
 }
 
-export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Yarı ömür (g)', 'Tutma (g)', 'Carry / hf', 'Rejim', 'Uyum'];
+export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'Yarı ömür (g)', 'Tutma',
+  'Carry / hf', 'Carry % / yıl', 'Rejim', 'Uyum', 'Kapılar', 'Geri test'];
 
 /** A status table of the quant worker: what every page shows at the bottom (and the first thing before a result). */
 export function statusRows(st) {

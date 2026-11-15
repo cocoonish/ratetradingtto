@@ -305,8 +305,8 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
         assert status["mode"] == "replay" and set(status["books"]) == {"tto", "sofr", "borsa", "asw"}
         assert not any(b["left_out"] for b in status["books"].values())
         pages = [p["id"] for p in json.loads(get("/api/nav")[1])["pages"]]
-        # (the quant package's eight pages and the desk corner's two among them)
-        assert len(pages) == 39 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar", "watch",
+        # (the quant package's nine pages - its intraday one among them - and the desk corner's two)
+        assert len(pages) == 40 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar", "watch",
                                      "heat", "spreads", "quant", "quant-fx", "social", "agenda"} <= set(pages)
         page = json.loads(get("/api/view/ois")[1])
         assert len(page["panels"]) > 20 and not any(p.get("error") for p in page["panels"])

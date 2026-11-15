@@ -42,6 +42,13 @@ class SignalsPage extends QuantPage {
     this.chart = new SignalChart(chartPanel.body);
     const gated = panel('quant-gated', 'Elenen sinyaller (eşiği geçti, bir kapı tuttu)', { cls: 'aux' });
     this.boxes.gated = new GridBox(gated, 'quant/gated', (sid) => this.pick(sid));
+    this.btPanel = panel('quant-backtest', 'Geri test · aynı kurallarla yürüyen pencere (son yıl)');
+    this.btPanel.note.textContent = 'Her ' + 10 + ' iş gününde bütün aileler yalnızca o güne kadarki kapanışlarla yeniden kurulur, aradaki günler o günün kapanışıyla '
+      + 'canlıdaki kurallarla (eşik, kapılar) puanlanır; sinyal olan gün kapanıştan girilir, hedef / stop / tutma süresiyle sonraki kapanışlarda çıkılır - '
+      + 'ileriye bakış yok. K/Z σ: sinyalin kendi σ\'sıyla; birim: bp, % ya da vol (FX\'te carry dahil; faiz paketinin tarihçesinde carry motoru yok: '
+      + 'fiyat hareketi); TL: paket DV01\'iyle ya da 1 mn baz döviz başına. Sharpe: işlem K/Z σ\'larının ortalaması ÷ σ × √(yılda işlem). Düşüş: birikimli K/Z σ\'nın '
+      + 'en büyük gerilemesi. Günde bir kez, ayrı iş parçacığında hesaplanır.';
+    this.boxes.bt = new GridBox(this.btPanel, 'quant/backtest');
     const hits = panel('quant-hits', 'Sinyal kaydı · aile başına isabet');
     hits.note.textContent = 'Her sinyal giriş eşiğini geçtiği an kaydedilir ve izlenir: hedef, stop ya da kayıt süresi (iş günü) dolunca kapanır. '
       + 'İsabet = (hedef + süresi dolup kârda kapananlar) ÷ kapananlar; K/Z σ: kapanıştaki kâr / zarar, sinyalin σ\'sı cinsinden. Canlı takip – backtest değildir.';
@@ -50,7 +57,7 @@ class SignalsPage extends QuantPage {
     this.boxes.log = new GridBox(log, 'quant/log', (sid) => this.pick(sid));
     this.subPanel = panel('quant-subscribe', 'Sinyal alarmı aboneliği', { cls: 'aux' });
     this.setPanel = panel('quant-settings', 'Masa ayarları (herkes için)', { cls: 'aux' });
-    page.append(list.el, chartPanel.el, gated.el, hits.el, log.el, this.subPanel.el, this.setPanel.el);
+    page.append(list.el, chartPanel.el, gated.el, this.btPanel.el, hits.el, log.el, this.subPanel.el, this.setPanel.el);
     this.addStatus(page);
     this.host.appendChild(page);
     this.loadSubscription().catch(() => {});
@@ -99,6 +106,23 @@ class SignalsPage extends QuantPage {
       'Henüz kayıt yok: bir sinyal giriş eşiğini geçince burada izlenmeye başlar.');
     if (!this.picked && sig.length) this.pick(sig[0].id);
     this.loadLog().catch(() => {});
+    this.loadBacktest().catch(() => {});
+  }
+
+  async loadBacktest() {
+    if (Date.now() - (this.btAt || 0) < 60000) return;
+    this.btAt = Date.now();
+    const d = await api.get('/api/quant/backtest');
+    if (this.dead) return;
+    if (!d.ready) {
+      this.boxes.bt.set([], [], null, d.running ? 'Geri test çalışıyor (ayrı iş parçacığında)…' : 'Geri test henüz yok: günün ilk tam hesabından sonra çalışır.');
+      return;
+    }
+    const rows = (d.rows || []).map((r) => [T(r.type ? '   ' + r.type : r.label, { b: r.type ? 0 : 1 }), N(r.trades, 0), T(pct(r.hit)), N(r.avg_sigma, 2, { sign: true }),
+      T(isNum(r.avg) ? sgn(r.avg, 2) + ' ' + (r.unit || '') : ''), N(isNum(r.avg_try) ? r.avg_try / 1000 : null, 1, { sign: true }), N(r.sharpe, 2, { sign: true }), N(r.max_dd, 1)]);
+    this.boxes.bt.set(['Aile / tür', 'İşlem', 'İsabet', 'Ort. K/Z σ', 'Ort. K/Z', 'Ort. bin TL', 'Sharpe', 'En büyük düşüş σ'], rows, null, 'Geri testte işlem yok');
+    this.btPanel.setTitle('Geri test · ' + isoToTr(d.first) + ' – ' + isoToTr(d.last) + ' · ' + d.n_trades + ' işlem · ' + d.refits + ' yeniden kurma'
+      + (d.at ? ' · ' + d.at.slice(0, 16) : '') + (d.complete ? '' : ' (süre doldu, eksik)') + (d.running ? ' · yeniden çalışıyor' : ''));
   }
 
   async loadLog() {
@@ -156,7 +180,7 @@ class SignalsPage extends QuantPage {
         : h('input', { class: 'inp', id: 'quant-set-' + k, value: Array.isArray(v) ? v.join(', ') : String(v),
           title: d.limits[k] ? 'aralık ' + d.limits[k][0] + ' – ' + d.limits[k][1] : '' });
       if (choices) inp.value = String(v);
-      if (k === 'rv_items') inp.classList.add('wide');
+      if (k === 'rv_items' || k === 'fx_pairs') inp.classList.add('wide');
       inputs[k] = inp;
       form.appendChild(h('label', { class: 'field' }, h('span', null, label), inp));
     }

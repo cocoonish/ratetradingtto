@@ -35,7 +35,9 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import fx as fxm
+from . import quantbt as qbt
 from . import quantfam as qf
+from . import quantintraday as qi
 from . import volcarry as vc
 from .service import ServiceError
 
@@ -45,10 +47,15 @@ DEFAULTS: Dict[str, Any] = {
     "corr_windows": [20, 60, 120], "corr_min": 0.3, "mom_entry": 1.5, "ma_fast": 20, "ma_slow": 60, "vr_q": 10, "regime_window": 250,
     "log_days": 20, "kalman_q": 0.01, "model_hit": 0.55, "model_min_tests": 40, "model_l2": 5.0, "cycle_bp": 100.0, "cycle_t": 2.0,
     "dv01_base": 10000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
-    "desk_alarm": "Güçlü",
+    "desk_alarm": "Güçlü", "carry_margin": 0.5, "fx_verdict": 0.3,
+    "bt_mute": "kapalı", "bt_min_hit": 0.5, "bt_min_sharpe": 0.0, "bt_min_trades": 10,
+    "fx_pairs": "USDTRY, EURTRY, GBPTRY, EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD, USDCNH, USDZAR, USDMXN, USDBRL, USDINR, USDIDR, "
+                "USDHUF, USDPLN, USDCOP, USDCZK, USDKRW, USDCLP, USDILS",
 }
 #: which signals also ring as the desk's alarms (deskalarms.py, for everyone): at least this strong, or none
 DESK_ALARM_CHOICES = ("kapalı", "Zayıf", "Orta", "Güçlü")
+#: the backtest's floor: off (the stats are shown), or on (a family below it has its signals held back)
+BT_MUTE_CHOICES = ("kapalı", "açık")
 #: name -> (lowest, highest, type)
 LIMITS: Dict[str, Tuple[float, float, type]] = {
     "entry_z": (0.5, 5.0, float), "target_z": (-1.0, 2.0, float), "stop_z": (1.0, 10.0, float), "horizon": (2, 120, int),
@@ -56,6 +63,8 @@ LIMITS: Dict[str, Tuple[float, float, type]] = {
     "mom_entry": (0.25, 5.0, float), "ma_fast": (2, 120, int), "ma_slow": (5, 250, int), "vr_q": (2, 30, int), "regime_window": (60, 750, int),
     "log_days": (1, 120, int), "kalman_q": (1e-6, 1.0, float), "model_hit": (0.5, 0.9, float), "model_min_tests": (10, 200, int),
     "model_l2": (0.0, 100.0, float), "cycle_bp": (10.0, 1000.0, float), "cycle_t": (0.5, 10.0, float), "dv01_base": (1.0, 1e9, float),
+    "carry_margin": (0.0, 3.0, float), "fx_verdict": (0.0, 3.0, float),
+    "bt_min_hit": (0.0, 1.0, float), "bt_min_sharpe": (-5.0, 5.0, float), "bt_min_trades": (1, 1000, int),
 }
 LABELS = {
     "entry_z": "Giriş eşiği |z|", "target_z": "Hedef z (ortalamaya göre)", "stop_z": "Stop |z|", "horizon": "Elde tutma ufku (iş günü)",
@@ -66,6 +75,10 @@ LABELS = {
     "model_min_tests": "Model en az test noktası", "model_l2": "Model L2 cezası", "cycle_bp": "PPK fazı eşiği (TLREF 3A değişimi, bp)",
     "cycle_t": "PPK sinyali için |t| en az", "dv01_base": "Paket DV01'i (TRY / bp, ana bacak)", "rv_items": "PCA-nötr spread ve fly'lar",
     "desk_alarm": "Masa alarmına düşen en az güç",
+    "carry_margin": "Carry aleyhine işlemde tampon (ufuk σ'sı)", "fx_verdict": "Parite kararı için en az beklenen getiri / vol",
+    "fx_pairs": "FX pariteleri (Bloomberg geçmişi: ilk doldurma turda 5 seri)",
+    "bt_mute": "Geri testi zayıf aileyi sustur", "bt_min_hit": "Geri test: en az isabet", "bt_min_sharpe": "Geri test: en az Sharpe",
+    "bt_min_trades": "Geri test: karar için en az işlem",
 }
 
 #: the history keeps this series this many calendar days back (about two years)
@@ -77,32 +90,73 @@ LOG_KEEP = 1500
 ALERT_KEEP = 300
 PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"),
          ("quant-regime", "Rejim & Momentum"), ("quant-fx", "FX Vol Primi & Carry"), ("quant-macro", "Makro Beta"),
-         ("quant-model", "Tahmin Modeli"))
+         ("quant-model", "Tahmin Modeli"), ("quant-intraday", "Gün İçi"))
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
-EM_PAIRS = ("USDZAR", "USDMXN", "USDBRL", "USDINR", "USDIDR", "USDHUF", "USDPLN", "USDCOP")
+G10 = ("USD", "EUR", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD", "NOK", "SEK", "DKK")
+#: the forward tenors kept per pair: USDTRY its term structure (the carry of any holding), the others the 3M
+TRY_TENORS = ("1M", "3M", "6M", "1Y")
 
 
-def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
-    """The tickers the quant analyses need that the workbook does not keep: ``{key, label, ticker, kind, group}``.
-    Every one of them is to be checked on the terminal (README, "Quant sinyaller")."""
+def pair_group(code: str) -> str:
+    """TRY (USDTRY and the TRY crosses), G10 (both currencies), EM (the rest - the EM FX basket's members)."""
+    if "TRY" in code:
+        return "TRY"
+    if code[:3] in G10 and code[3:] in G10 and "CNH" not in code:
+        return "G10"
+    return "EM"
+
+
+def parse_pairs(text: Any) -> List[str]:
+    """The pair codes of a setting ("USDTRY, EURUSD …"): six letters each, USDTRY always first, no repeats."""
+    raw = text if isinstance(text, (list, tuple)) else str(text or "").replace(";", ",").replace("\n", ",").split(",")
+    out = ["USDTRY"]
+    for x in raw:
+        code = str(x).strip().upper().replace("/", "").replace(" ", "")
+        if not code:
+            continue
+        if len(code) != 6 or not code.isalpha() or code[:3] == code[3:]:
+            raise ValueError("parite anlaşılamadı: %r (örn. USDTRY, EURUSD)" % str(x).strip())
+        if code not in out:
+            out.append(code)
+    if len(out) > 40:
+        raise ValueError("en çok 40 parite")
+    return out
+
+
+def fx_pair_list(store: Any) -> List[str]:
+    """The pairs of the desk's quant setting (the defaults without one) - the history keeps their series."""
+    saved = store.get(Quant.SET_KEY) if store is not None else None
+    text = saved.get("fx_pairs") if isinstance(saved, dict) and saved.get("fx_pairs") else DEFAULTS["fx_pairs"]
+    try:
+        return parse_pairs(text)
+    except ValueError:
+        return parse_pairs(DEFAULTS["fx_pairs"])
+
+
+def series_specs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None) -> List[Dict[str, str]]:
+    """The tickers the quant analyses need that the workbook does not keep: ``{key, label, ticker, kind, group}`` - per
+    pair of ``pairs`` (the setting's list; its defaults) the spot, the 3M forward points (USDTRY 1M / 3M / 6M / 1Y) and,
+    but for the TRY crosses, the ATM 3M vol and the 25D risk reversal; the global drivers.  Every one of them is to be
+    checked on the terminal (README, "Quant sinyaller")."""
     out: List[Dict[str, str]] = []
 
     def add(key: str, label: str, ticker: str, kind: str, group: str) -> None:
         out.append({"key": key, "label": label, "ticker": ticker, "kind": kind, "group": group})
 
-    pairs = {code: fxm._pair(code, "EM" if code in EM_PAIRS else "FX", 4) for code in ("USDTRY", "EURUSD", "EURTRY") + EM_PAIRS}
-    for code, p in pairs.items():
-        add("FX:" + code, code, fxm.spot_ticker(p), "fx", p.group)
-    for code in ("USDTRY", "EURUSD") + EM_PAIRS:
-        add("FXV:" + code, "%s ATM 3M vol" % code, fxm.vol_ticker(code, "ATM", "3M", source), "vol", pairs[code].group)
-        add("FXR:" + code, "%s 25D RR 3M" % code, fxm.vol_ticker(code, "RR25", "3M", source), "vol", pairs[code].group)
-    for tenor in ("1M", "3M", "6M", "1Y"):
-        add("FXP:USDTRY:" + tenor, "USDTRY %s swap puanı" % tenor, fxm.points_ticker(pairs["USDTRY"], tenor), "pts", "FX")
-    add("FXP:EURTRY:3M", "EURTRY 3M swap puanı", fxm.points_ticker(pairs["EURTRY"], "3M"), "pts", "FX")
-    for code in EM_PAIRS:
-        add("FXP:%s:3M" % code, "%s 3M swap puanı" % code, fxm.points_ticker(pairs[code], "3M"), "pts", "EM")
+    codes = parse_pairs(DEFAULTS["fx_pairs"] if pairs is None else pairs)
+    known = {p.code: p for p in fxm.PAIRS}
+    objs = {code: known.get(code) or fxm._pair(code, pair_group(code), 3 if code.endswith("JPY") else 4) for code in codes}
+    for code in codes:
+        add("FX:" + code, code, fxm.spot_ticker(objs[code]), "fx", pair_group(code))
+    for code in codes:
+        if code == "USDTRY" or "TRY" not in code:
+            add("FXV:" + code, "%s ATM 3M vol" % code, fxm.vol_ticker(code, "ATM", "3M", source), "vol", pair_group(code))
+            add("FXR:" + code, "%s 25D RR 3M" % code, fxm.vol_ticker(code, "RR25", "3M", source), "vol", pair_group(code))
+    for code in codes:
+        for tenor in (TRY_TENORS if code == "USDTRY" else ("3M",)):
+            add("FXP:%s:%s" % (code, tenor), "%s %s swap puanı" % (code, tenor), fxm.points_ticker(objs[code], tenor), "pts", pair_group(code))
     add("UST:2Y", "UST 2Y", "USGG2YR Index", "rate", "Global")
     add("UST:10Y", "UST 10Y", "USGG10YR Index", "rate", "Global")
     add("DXY", "DXY", "DXY Curncy", "index", "Global")
@@ -112,9 +166,9 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
     return out
 
 
-#: the order the first backfill takes them in (live: a few a sync): the global drivers, the spots, the ATM vols, the
-#: forward points, the risk reversals
-BACKFILL_ORDER = ("Global", "FX:", "FXV:", "FXP:", "FXR:")
+#: the order the first backfill takes them in (live: a few a sync): the global drivers, the spots, the forward points
+#: (with the spots: the carry of every pair), the ATM vols, the risk reversals
+BACKFILL_ORDER = ("Global", "FX:", "FXP:", "FXV:", "FXR:")
 
 
 def _backfill_rank(spec: Dict[str, str]) -> int:
@@ -123,15 +177,29 @@ def _backfill_rank(spec: Dict[str, str]) -> int:
     return next((i for i, p in enumerate(BACKFILL_ORDER) if i and spec["key"].startswith(p)), len(BACKFILL_ORDER))
 
 
-def history_defs(source: str = fxm.DEFAULT_SOURCE) -> List[Any]:
+def history_defs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None) -> List[Any]:
     """The series above as definitions of the history (``tto.history.SeriesDef``): fetched with its normal sync, two
     years back (``info["lookback"]``) - the first time a few per sync in live mode (``info["backfill"]``), in the order
-    of ``BACKFILL_ORDER`` - and shown on the settings page's coverage table under "Quant"."""
+    of ``BACKFILL_ORDER`` -, then their new days with every sync like the history's own series (the desk keeps the
+    15-minute sync for every series; the history can still ask a series' new days once a day, ``info["tail"] = "daily"``,
+    but none of these is marked so), shown on the settings page's coverage table under "Quant"."""
     from .history import SeriesDef
-    specs = sorted(series_specs(source), key=_backfill_rank)
+    specs = sorted(series_specs(source, pairs), key=_backfill_rank)
     return [SeriesDef("Quant", s["label"], s["ticker"], "PX_LAST", unit="pct" if s["kind"] == "rate" else "px",
                       info={"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": HISTORY_DAYS, "backfill": True})
             for s in specs]
+
+
+#: the history's own series the analyses read (the OIS curve, offshore, the XCCY, TLREF, DİBS): kept two years back as
+#: well - the first fill as the history's own setting says, the year before it afterwards, a few series a sync
+QUANT_GROUPS = ("ref", "ois", "off", "xccy", "dibs")
+
+
+def extend_for_quant(defs: Sequence[Any]) -> None:
+    """Mark the history's own series the quant analyses read for two years of closes (see ``QUANT_GROUPS``)."""
+    for d in defs:
+        if d.group in QUANT_GROUPS:
+            d.info = dict(d.info or {}, lookback=HISTORY_DAYS, backfill="extend")
 
 
 # ---------------------------------------------------------------------------------------------- small helpers
@@ -191,6 +259,10 @@ class Quant(object):
         self._hooks: List[Callable[[Dict[str, Any]], None]] = []
         self._scale: Dict[str, Tuple[str, Optional[int]]] = {}
         self.use_live = True                        # False: the last close stands for today (tests on synthetic history)
+        self._last_base: Optional[Dict[str, Any]] = None   # the last fit's inputs (the backtest refits on them)
+        self._bt: Optional[Dict[str, Any]] = None
+        self._bt_thread: Optional[threading.Thread] = None
+        self.intraday = qi.Intraday(self)
         self.version = 0
         self.state: Dict[str, Any] = {"phase": "idle", "fit_at": None, "fit_ms": None, "live_at": None, "live_ms": None, "engine_ms": None,
                                       "error": "", "timing": {}, "fits": 0, "refreshes": 0}
@@ -210,6 +282,7 @@ class Quant(object):
         if not isinstance(values, dict):
             raise QuantError("ayarlar anlaşılamadı")
         cur = self.settings()
+        pairs_changed = False
         for name, raw in values.items():
             if name in LIMITS:
                 lo, hi, typ = LIMITS[name]
@@ -234,10 +307,19 @@ class Quant(object):
                 if not items or any(it["product"] != "OIS" or it["kind"] not in ("spread", "fly") for it in items):
                     raise QuantError("yalnızca OIS spread'i (1y2y) ve fly'ı (2y5y10y) yazılabilir")
                 cur[name] = ", ".join(it["raw"] for it in items)
-            elif name == "desk_alarm":
-                choice = next((c for c in DESK_ALARM_CHOICES if c.casefold() == str(raw or "").strip().casefold()), None)
+            elif name == "fx_pairs":
+                try:
+                    codes = parse_pairs(raw)
+                except ValueError as exc:
+                    raise QuantError(str(exc))
+                if codes != parse_pairs(cur.get("fx_pairs") or DEFAULTS["fx_pairs"]):
+                    pairs_changed = True
+                cur[name] = ", ".join(codes)
+            elif name in ("desk_alarm", "bt_mute"):
+                options = DESK_ALARM_CHOICES if name == "desk_alarm" else BT_MUTE_CHOICES
+                choice = next((c for c in options if c.casefold() == str(raw or "").strip().casefold()), None)
                 if choice is None:
-                    raise QuantError("%s: %s" % (LABELS[name], " / ".join(DESK_ALARM_CHOICES)))
+                    raise QuantError("%s: %s" % (LABELS[name], " / ".join(options)))
                 cur[name] = choice
         if not cur["stop_z"] > cur["entry_z"] > cur["target_z"]:
             raise QuantError("stop |z| > giriş |z| > hedef z olmalı")
@@ -248,12 +330,18 @@ class Quant(object):
         cur["by"], cur["at"] = user, _now().isoformat(sep=" ")
         self.store.put(self.SET_KEY, cur)
         self._force = True
+        if pairs_changed:
+            try:
+                self.svc.bump()                              # the history reads its list of series again (a new pair's tickers)
+                self.svc.history.kick()
+            except Exception:  # noqa: BLE001
+                pass
         self.kick()
         return self.settings_view()
 
     def settings_view(self) -> Dict[str, Any]:
         saved = self.store.get(self.SET_KEY) or {}
-        return _clean({"values": self.settings(), "defaults": DEFAULTS, "labels": LABELS, "choices": {"desk_alarm": list(DESK_ALARM_CHOICES)},
+        return _clean({"values": self.settings(), "defaults": DEFAULTS, "labels": LABELS, "choices": {"desk_alarm": list(DESK_ALARM_CHOICES), "bt_mute": list(BT_MUTE_CHOICES)},
                        "limits": {k: [lo, hi, "int" if t is int else "float"] for k, (lo, hi, t) in LIMITS.items()},
                        "by": saved.get("by") if isinstance(saved, dict) else None, "at": saved.get("at") if isinstance(saved, dict) else None})
 
@@ -286,6 +374,7 @@ class Quant(object):
             try:
                 if self._needs_fit():
                     self.compute()
+                    self._backtest_soon()
                 elif self._fit is not None and time.time() - (self.state.get("live_t") or 0.0) >= LIVE_EVERY - 1.0:
                     self.refresh_live()
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything
@@ -313,6 +402,90 @@ class Quant(object):
         asked = len(self.svc.history.fetch_records())
         text = repr(sorted((k, v[1], v[2]) for k, v in bounds.items())) + repr((len(days), last, days[last].get("computed_at") if last else None, asked))
         return hashlib.sha1(text.encode()).hexdigest()
+
+    # ================================================================== the backtest
+    BT_KEY = "quant.backtest"
+
+    def _bt_key(self) -> Optional[str]:
+        base = self._last_base
+        if base is None:
+            return None
+        cfg = {k: v for k, v in base["cfg"].items() if k not in ("by", "at", "desk_alarm", "bt_mute", "bt_min_hit", "bt_min_sharpe", "bt_min_trades")}
+        return hashlib.sha1(repr((base["today"].isoformat(), sorted(cfg.items()))).encode()).hexdigest()
+
+    def backtest_result(self) -> Optional[Dict[str, Any]]:
+        if self._bt is None:
+            v = self.store.get(self.BT_KEY)
+            self._bt = v if isinstance(v, dict) else None
+        return self._bt
+
+    def _backtest_soon(self) -> None:
+        """Once a day (and after a change of the settings): the walk-forward backtest, in a thread of its own at the
+        engine's pace (it pauses between families as the fit does)."""
+        key = self._bt_key()
+        cur = self.backtest_result()
+        if key is None or (cur is not None and cur.get("key") == key) or (self._bt_thread is not None and self._bt_thread.is_alive()):
+            return
+        self._bt_thread = threading.Thread(target=self._bt_worker, name="tto-quant-bt", daemon=True)
+        self._bt_thread.start()
+
+    def _bt_worker(self) -> None:
+        try:
+            self.run_backtest()
+            self.kick()                                     # the signals carry the new stats at the next refresh
+        except Exception as exc:  # noqa: BLE001 - the backtest is not worth the signals
+            self.state["bt_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+
+    def run_backtest(self, days: int = qbt.BT_DAYS, step: int = qbt.BT_STEP, budget: float = 900.0) -> Optional[Dict[str, Any]]:
+        """The walk-forward backtest (``tto.quantbt``) on the inputs of the last fit: every family fitted every ``step``
+        business days on the closes up to that day only, scored day by day with the very same rules."""
+        base = self._last_base
+        if base is None:
+            return None
+        self.state["bt_phase"] = "çalışıyor"
+        try:
+            cfg = dict(base["cfg"])
+            today_iso = base["today"].isoformat()
+            series = {k: {d: v for d, v in pts.items() if d < today_iso} for k, pts in base["series"].items()}
+            test = sorted({d for k, pts in series.items() if k.startswith(("OIS:", "FX:")) for d in pts})[-days:]
+            items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
+            mpc = base["mpc"]
+
+            def make_ctx(T: str) -> qf.Ctx:
+                nxt = _dt.date.fromisoformat(T) + _dt.timedelta(days=1)
+                mp = {"days": {d: x for d, x in (mpc.get("days") or {}).items() if d <= T},
+                      "values": [r for r in mpc.get("values") or [] if r["day"] <= T]}
+                viop = [dict(c, **{f: {d: v for d, v in (c.get(f) or {}).items() if d <= T} for f in ("px", "days", "imp", "baz", "ois360")}, live={})
+                        for c in base["viop"]]
+                meta = {k: dict(v) for k, v in base["meta"].items()}
+                return qf.Ctx(cfg, nxt, series, meta, {}, viop=viop, carry={}, mpc=mp, path=self._path(mp), holidays=base["holidays"],
+                              fwd_scale=base["fwd_scale"])
+
+            res = qbt.backtest(test, make_ctx, lambda ctx: qf.run_all(ctx, items, None, self.pause)[0], series, cfg, step=step,
+                               pause=self.pause, deadline=time.perf_counter() + budget)
+            first, last = res.get("first"), res.get("last")
+            res.update({"at": _now().isoformat(sep=" "), "today": today_iso, "key": self._bt_key(),
+                        "years": ((_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.0) if first and last else None})
+            self.store.put(self.BT_KEY, _clean(res))
+            self._bt = _clean(res)
+            self.state.update({"bt_at": res["at"], "bt_ms": res["ms"], "bt_error": ""})
+            return self._bt
+        finally:
+            self.state["bt_phase"] = ""
+
+    def backtest_view(self) -> Dict[str, Any]:
+        bt = self.backtest_result()
+        if not bt:
+            return {"ready": False, "running": self._bt_thread is not None and self._bt_thread.is_alive()}
+        rows = []
+        for fam, st in sorted((bt.get("families") or {}).items(), key=lambda kv: qf.FAMILIES.get(kv[0], (kv[0],))[0]):
+            rows.append(dict({k: v for k, v in st.items() if k != "types"}, family=fam, label=qf.FAMILIES.get(fam, (fam,))[0], type=""))
+            for ty, s in (st.get("types") or {}).items():
+                rows.append(dict(s, family=fam, label=qf.FAMILIES.get(fam, (fam,))[0], type=ty))
+        return _clean({"ready": True, "rows": rows, "trades": list(reversed(bt.get("trades") or []))[:150], "first": bt.get("first"),
+                       "last": bt.get("last"), "years": bt.get("years"), "at": bt.get("at"), "ms": bt.get("ms"), "refits": bt.get("refits"),
+                       "step": bt.get("step"), "days": bt.get("days"), "n_trades": bt.get("n_trades"), "complete": bt.get("complete"),
+                       "running": self._bt_thread is not None and self._bt_thread.is_alive()})
 
     def pause(self) -> None:
         """Between two families: the engine thread gets the interpreter (a calculation waiting for it goes first)."""
@@ -417,7 +590,11 @@ class Quant(object):
             source = self.svc.fx.source()
         except Exception:  # noqa: BLE001
             source = fxm.DEFAULT_SOURCE
-        return {s["key"]: s for s in series_specs(source)}
+        try:
+            pairs = parse_pairs(self.settings().get("fx_pairs") or DEFAULTS["fx_pairs"])
+        except ValueError:
+            pairs = None
+        return {s["key"]: s for s in series_specs(source, pairs)}
 
     def _fwd_scales(self, live: bool) -> Dict[str, int]:
         """Bloomberg's FWD_SCALE of each forward-points ticker (live only, asked once a day); 4 (2 for the yen) else."""
@@ -527,6 +704,9 @@ class Quant(object):
         holidays = {serial_to_date(x) for x in snap.get("holidays") or [] if 20000 < x < 80000}
         ctx = qf.Ctx(cfg, today, series, meta, raw_live, viop=viop, carry=eng.get("carry") or {}, mpc=mpc, path=self._path(mpc),
                      holidays=holidays, fwd_scale=self._fwd_scales(self.svc.mode == "live"))
+        # (what the fit was made of: the backtest fits on it again, day by day)
+        ctx.base = {"series": series, "meta": {k: dict(v) for k, v in meta.items()}, "viop": viop, "mpc": mpc, "holidays": holidays,
+                    "fwd_scale": ctx.fwd_scale, "cfg": cfg, "today": today}
         return ctx, eng, raw_live
 
     @staticmethod
@@ -541,7 +721,8 @@ class Quant(object):
                        if r["day"] == day and r.get("level") is not None)
         if not steps:
             return None
-        return {"day": day, "spot": _dt.date.fromisoformat(days[day]["spot"]), "base": days[day]["base"], "steps": steps}
+        return {"day": day, "spot": _dt.date.fromisoformat(days[day]["spot"]), "base": days[day]["base"], "steps": steps,
+                "fit_base": days[day].get("fit_base")}
 
     @staticmethod
     def _front(viop: List[Dict[str, Any]], today: _dt.date) -> Optional[Dict[str, Any]]:
@@ -579,9 +760,12 @@ class Quant(object):
             try:
                 ctx, eng, raw_live = self.snapshot()
                 cfg = ctx.cfg
+                self._last_base = ctx.base
                 items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
                 timing: Dict[str, float] = {}
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
+                imons, tables["intraday"] = self._intraday_step(ctx, raw_live)
+                mons = mons + imons
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx)}
@@ -613,6 +797,10 @@ class Quant(object):
             if front is not None and front["live"].get("imp") is not None:
                 raw_live["VIOPI:FRONT"] = front["live"]["imp"]
             ctx.live = dict(raw_live)
+            imons, fit["tables"]["intraday"] = self._intraday_step(ctx, raw_live)
+            for sid in [s for s, m in fit["mons"].items() if m.intraday]:
+                del fit["mons"][sid]
+            fit["mons"].update({m.sid: m for m in imons})
             qf.score_all(ctx, list(fit["mons"].values()), raw_live)
             self._publish(fit, raw_live, eng)
             self.state.update({"live_at": _now().isoformat(sep=" "), "live_ms": round((time.perf_counter() - t0) * 1000.0, 1),
@@ -628,6 +816,7 @@ class Quant(object):
             if s is not None:
                 s["day"] = fit["today"]
                 signals.append(s)
+        self._bt_attach(fit, signals, cfg)
         live, gated = qf.rank(signals)
         ctx: qf.Ctx = fit["ctx"]
         view = {"signals": live, "gated": gated, "tables": self._tables(fit, ctx), "live_keys": sorted(raw_live), "today": fit["today"],
@@ -643,6 +832,36 @@ class Quant(object):
             self.svc.nudge()
         except Exception:  # noqa: BLE001
             pass
+
+    def _intraday_step(self, ctx: qf.Ctx, raw_live: Dict[str, float]) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
+        """The minute's values into the bars (live), and the intraday monitors on them."""
+        now = _now()
+        try:
+            self.intraday.sample(raw_live, now)
+            return self.intraday.monitors(ctx, now)
+        except Exception as exc:  # noqa: BLE001 - the intraday part is not worth the daily one
+            return [], {"ok": False, "why": "%s: %s" % (type(exc).__name__, str(exc)[:160]), "z": [], "rv": []}
+
+    def _bt_attach(self, fit: Dict[str, Any], signals: List[Dict[str, Any]], cfg: Dict[str, Any]) -> None:
+        """Each signal with its family's backtest ("bu aile son 2 yılda 41 işlem, %58 isabet, ort. +0,4σ"; its type's when
+        that has trades enough) and, if the desk set a floor, held back below it."""
+        bt = self.backtest_result()
+        fams = (bt or {}).get("families") or {}
+        years = (bt or {}).get("years")
+        for s in signals:
+            fam = fams.get(s["family"])
+            m = fit["mons"].get(s["id"])
+            ty = ((fam or {}).get("types") or {}).get(qbt.bt_type(m)) if m is not None else None
+            use = ty if ty and (ty.get("trades") or 0) >= 5 else fam
+            if bt is None:
+                s["bt"] = None
+                continue
+            short = {k: (use or {}).get(k) for k in ("trades", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
+            s["bt"] = dict(short, text=qbt.bt_text(use, years), scope="tür" if use is ty and ty else "aile")
+            why = qbt.bt_gate(fam, cfg)
+            s["gates"].append({"name": "Geri test", "ok": not why, "text": why or s["bt"]["text"], "part": None})
+            if why and not s["gated"]:
+                s.update({"gated": why, "strength": "elendi", "composite": 0.0})
 
     def _tables(self, fit: Dict[str, Any], ctx: qf.Ctx) -> Dict[str, Any]:
         t = dict(fit["tables"])
@@ -677,6 +896,14 @@ class Quant(object):
             if m is not None and m.z is not None:
                 r["score"] = m.z
                 r["level"] = m.level
+        try:
+            live = ctx.derive_live(ctx.live)
+            rows = []
+            for r in qf.fx_summary(ctx):
+                rows.append(dict(r, spot=ctx.cur("FX:" + r["pair"], live)))
+            t["fxsum"] = {"rows": rows, "threshold": float(fit["cfg"].get("fx_verdict", 0.3))}
+        except Exception as exc:  # noqa: BLE001 - the summary is not worth the page
+            t["fxsum"] = {"rows": [], "why": "%s: %s" % (type(exc).__name__, str(exc)[:160])}
         return t
 
     @staticmethod
@@ -719,7 +946,13 @@ class Quant(object):
             if first_look or prev_z is None or abs(prev_z) >= sg["entry_z"] or sg["id"] in open_sids:
                 continue
             seq += 1
+            expires = None
+            if sg.get("intraday"):
+                mins = stamp.hour * 60 + stamp.minute + int(round(sg.get("hold") or 12)) * qi.BAR
+                mins = min(mins, qi.SESSION[1])
+                expires = "%02d:%02d" % (mins // 60, mins % 60)
             e = {"seq": seq, "sid": sg["id"], "family": sg["family"], "family_label": sg["family_label"], "asset": sg["asset"],
+                 "intraday": bool(sg.get("intraday")), "expires": expires,
                  "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "entry_z": sg["entry_z"], "level": sg["level"],
                  "target": sg["target"], "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
@@ -733,8 +966,12 @@ class Quant(object):
             m = mons.get(e["sid"])
             level = m.level if m is not None else None
             held = _bdays(e["day"], today)
+            # an intraday entry closes at its horizon or the session's end - and never lives over night
+            gone = bool(e.get("intraday")) and (today != e["day"] or stamp.strftime("%H:%M") >= (e.get("expires") or "18:00"))
+            if e.get("intraday") and today != e["day"]:
+                level = None                                 # (today's monitor is another day's)
             if level is None:
-                if held >= int(cfg["log_days"]):
+                if held >= int(cfg["log_days"]) or gone:
                     e.update({"status": "veri yok", "closed_day": today, "closed_time": stamp.strftime("%H:%M"), "held": held})
                     self._desk_close(e["sid"], "veri yok")
                     changed = True
@@ -745,7 +982,7 @@ class Quant(object):
                 outcome = "hedef"
             elif e.get("stop") is not None and s * (level - e["stop"]) <= 0:
                 outcome = "stop"
-            elif held >= int(cfg["log_days"]):
+            elif held >= int(cfg["log_days"]) or gone:
                 outcome = "süre"
             if outcome:
                 pnl = s * (level - e["level"])
@@ -899,7 +1136,7 @@ class Quant(object):
     def status(self) -> Dict[str, Any]:
         st = {k: v for k, v in self.state.items() if k != "live_t"}
         st.update({"ready": self._view is not None, "version": self.version, "running": self._thread is not None and self._thread.is_alive(),
-                   "mode": self.svc.mode, "alerts": self._alert_seq})
+                   "mode": self.svc.mode, "alerts": self._alert_seq, "bt_running": self._bt_thread is not None and self._bt_thread.is_alive()})
         fit = self._fit
         if fit is not None:
             st.update({"monitors": len(fit["mons"]), "today": fit["today"], "errors": fit["tables"].get("errors") or {},
@@ -919,6 +1156,8 @@ class Quant(object):
             return self.alerts(user, q.get("since"))
         if what == "log":
             return self.log_view()
+        if what == "backtest":
+            return self.backtest_view()
         v = self._view
         fit = self._fit
         base = {"ready": v is not None, "status": self.status(), "version": self.version}
@@ -943,7 +1182,7 @@ class Quant(object):
         if what == "signal":
             return self.signal_view(q.get("id"))
         pages = {"corr": ("corr",), "pca": ("pca", "rv", "frapath"), "pairs": ("pairs", "viopcal"), "regime": ("momentum", "cycle", "regime"),
-                 "fx": ("vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",)}
+                 "fx": ("fxsum", "vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",), "intraday": ("intraday",)}
         if what not in pages:
             raise QuantError("bilinmeyen görünüm: %s" % what)
         for name in pages[what]:
@@ -963,13 +1202,15 @@ class Quant(object):
         if what == "pairs":
             return key.startswith(("OFF:", "OIS:", "VIOP", "USD:", "FXP:USDTRY"))
         if what == "regime":
-            return any(key == k for k, _ in qf.MOM_UNIVERSE) or key == "TLREF"
+            return any(key == k for k, _ in qf.MOM_UNIVERSE) or key == "TLREF" or key.startswith(("FX:", "XR:"))
         if what == "fx":
-            return key.startswith(("FX", "FWD"))
+            return key.startswith(("FX", "FWD", "XR:"))
         if what == "macro":
             return key in qf.MACRO_DRIVERS or key in qf.MACRO_TARGETS
         if what == "model":
             return key in qf.MODEL_UNIVERSE
+        if what == "intraday":
+            return key in qi.KEYS
         return False
 
     def signal_view(self, sid: Any) -> Dict[str, Any]:
@@ -983,7 +1224,11 @@ class Quant(object):
             raise QuantError("böyle bir sinyal yok: %s" % sid)
         sg = next((s for s in v["signals"] + v["gated"] if s["id"] == m.sid), None)
         hist = m.history()
-        return _clean({"ready": True, "signal": sg, "monitor": {"sid": m.sid, "family": m.family, "family_label": qf.FAMILIES[m.family][0],
+        try:
+            why = qf.rationale(fit["ctx"], m, sg, fit["cfg"])
+        except Exception as exc:  # noqa: BLE001 - the rationale is not worth the chart
+            why = {"analogs": [], "invalidation": [], "why": "%s: %s" % (type(exc).__name__, str(exc)[:160])}
+        return _clean({"ready": True, "signal": sg, "rationale": why, "monitor": {"sid": m.sid, "family": m.family, "family_label": qf.FAMILIES[m.family][0],
                                                                  "name": m.name, "level": m.level, "z": m.z, "unit": m.unit, "digits": m.digits,
                                                                  "half_life": m.half_life, "regime": m.regime, "note": m.note, "mode": m.mode,
                                                                  "entry": m.entry or fit["cfg"]["entry_z"], "score_name": m.score_name,
