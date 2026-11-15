@@ -344,3 +344,125 @@ def test_restoring_from_the_command_line(tmp_path, capsys):
     assert back.user_exists("ali") and not back.user_exists("veli")
     back.close()
     assert main(["yedekten-don", str(tmp_path / "yok.db"), "--data-dir", str(data)]) == 2
+
+
+def test_the_second_copy_goes_to_another_drive_only_for_the_installed_dashboard(tmp_path, monkeypatch):
+    """D:\\tto-yedek by default - for the installed dashboard only (no git checkout, its own data folder): a checkout
+    (a developer's, the tests') or another data folder never writes over the desk's copies unless asked."""
+    from tto.config import DEFAULT_BACKUP_COPY_DIR, Settings, backup_copy_default
+    installed = tmp_path / "kurulum"
+    (installed / "data").mkdir(parents=True)
+    assert DEFAULT_BACKUP_COPY_DIR == "D:\\tto-yedek"
+    assert backup_copy_default(str(installed / "data"), root=str(installed), windows=True) == "D:\\tto-yedek"
+    assert backup_copy_default(str(tmp_path / "baska"), root=str(installed), windows=True) is None      # another data folder
+    assert backup_copy_default(str(installed / "data"), root=str(installed), windows=False) is None
+    (installed / ".git").mkdir()
+    assert backup_copy_default(str(installed / "data"), root=str(installed), windows=True) is None      # a checkout
+    monkeypatch.delenv("TTO_BACKUP_COPY_DIR", raising=False)
+    assert Settings(data_dir=str(tmp_path / "data")).backup_copy_dir is None
+    assert Settings(data_dir=str(tmp_path / "data"), backup_copy_dir=str(tmp_path / "E")).backup_copy_dir == str(tmp_path / "E")
+    monkeypatch.setenv("TTO_BACKUP_COPY_DIR", str(tmp_path / "F"))
+    assert Settings(data_dir=str(tmp_path / "data")).backup_copy_dir == str(tmp_path / "F")
+    assert Settings(data_dir=str(tmp_path / "data"), backup_copy_dir="").backup_copy_dir is None        # "": none
+
+
+def test_the_nightly_backup_keeps_a_second_copy_and_never_fails_because_of_it(tmp_path, caplog):
+    import datetime as _dt
+    import logging
+    import time as _time
+    from types import SimpleNamespace
+
+    from tto import ops as ops_mod
+    from tto.config import Settings
+    copies = tmp_path / "D" / "tto-yedek"
+    settings = Settings(data_dir=str(tmp_path / "data"), backup_copy_dir=str(copies))
+    s = Store(settings.db_path)
+    s.login("Ali")
+    svc = SimpleNamespace(store=s, settings=settings, started_at=_time.time() - 3600, mode="replay")
+    o = ops_mod.Ops(svc)
+    # the night's backup, and its second copy under the same name (the folder is made when missing)
+    res = o.backup_now(_dt.date(2026, 11, 14))
+    copy = res["copy"]
+    assert copy["path"] == str(copies / "tto-2026-11-14.db") and os.path.getsize(copy["path"]) == res["bytes"]
+    second = Store(copy["path"])
+    assert second.user_exists("ali") and second.quick_check() == []
+    second.close()
+    # the same 30 kept there - nothing else in the folder is touched
+    for k in range(35):
+        (copies / ("tto-2026-%02d-%02d.db" % (9 + k // 28, 1 + k % 28))).write_bytes(b"x")
+    (copies / "notlar.txt").write_text("kalır")
+    res = o.backup_now(_dt.date(2026, 11, 15))
+    names = sorted(os.listdir(str(copies)))
+    assert len([n for n in names if n.startswith("tto-")]) == 30 and "notlar.txt" in names and "tto-2026-11-15.db" in names
+    assert len(res["copy"]["removed"]) == 7
+    st = o.db_status()["backup"]["copy"]
+    assert (st["dir"], st["count"], st["last"]["name"], st["error"], st["failed_nights"]) == (str(copies), 30, "tto-2026-11-15.db", None, 0)
+    # the drive is gone (here: a file where the folder should be): the backup itself is taken, the copy's failure is
+    # logged once - not every night - and shown; one night is no alarm, the second night in a row is
+    blocker = tmp_path / "Q"
+    blocker.write_text("bir dosya, klasör değil")
+    settings.backup_copy_dir = str(blocker / "tto-yedek")
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="tto.ops"):
+        res = o.backup_now(_dt.date(2026, 11, 16))
+        assert os.path.exists(res["path"]) and o.backup_error is None and res["copy"]["failed_nights"] == 1
+        assert o.db_status()["backup"]["error"] is None
+        st = o.db_status()["backup"]["copy"]
+        assert st["failed_nights"] == 1 and st["error"]["text"] and st["count"] == 0
+        assert o.system_checks(_dt.datetime(2026, 11, 16, 23, 0))["db"]["state"] == "ok"           # one night: the status only
+        o.backup_now(_dt.date(2026, 11, 16))                                                       # (the same night again)
+        assert o.copy_state()["failed_days"] == ["2026-11-16"]
+        res = o.backup_now(_dt.date(2026, 11, 17))
+        assert res["copy"]["failed_nights"] == 2
+    said = [r for r in caplog.records if "ikinci kopyası alınamadı" in r.getMessage()]
+    assert len(said) == 1 and said[0].levelno == logging.WARNING
+    db = o.system_checks(_dt.datetime(2026, 11, 17, 23, 0))["db"]
+    assert db["state"] == "alarm" and "ikinci kopyası 2 gecedir alınamadı" in db["text"]
+    # the drive back: the copy works again, the alarm's condition ends, the log says so
+    settings.backup_copy_dir = str(copies)
+    with caplog.at_level(logging.INFO, logger="tto.ops"):
+        res = o.backup_now(_dt.date(2026, 11, 18))
+    assert res["copy"]["path"] == str(copies / "tto-2026-11-18.db") and o.copy_state()["failed_days"] == []
+    assert any("ikinci kopyası yeniden alınıyor" in r.getMessage() for r in caplog.records)
+    assert o.system_checks(_dt.datetime(2026, 11, 18, 23, 0))["db"]["state"] == "ok"
+    assert o.db_status()["backup"]["copy"]["error"] is None
+    # a second folder that is the backup folder itself is refused (a copy of nothing), the backup stands
+    settings.backup_copy_dir = settings.backup_dir
+    res = o.backup_now(_dt.date(2026, 11, 19))
+    assert os.path.exists(res["path"]) and "yedek klasörünün kendisi" in res["copy"]["error"]["text"]
+    # no second folder: no copy, nothing said about one
+    settings.backup_copy_dir = None
+    assert o.backup_now(_dt.date(2026, 11, 20))["copy"] is None and o.db_status()["backup"]["copy"] is None
+    s.close()
+
+
+def test_restoring_from_either_folder(tmp_path, capsys):
+    """``yedekten-don`` lists the backups and their second copies, and takes a file from either folder - by its
+    path, or by its name alone."""
+    import shutil
+    from tto.__main__ import main
+    data, copies = tmp_path / "data", tmp_path / "D" / "tto-yedek"
+    s = Store(str(data / "tto.db"))
+    s.login("Ali")
+    s.backup_to(str(data / "backups" / "tto-2026-11-14.db"))
+    s.login("Veli")
+    s.backup_to(str(tmp_path / "gecici.db"))
+    s.login("Ayşe")
+    s.close()
+    copies.mkdir(parents=True)
+    shutil.copyfile(str(tmp_path / "gecici.db"), str(copies / "tto-2026-11-13.db"))      # only among the second copies
+    common = ["--data-dir", str(data), "--backup-copy-dir", str(copies)]
+    assert main(["yedekten-don"] + common) == 0
+    out = capsys.readouterr().out
+    assert "Yedekler (%s)" % (data / "backups") in out and "İkinci kopyalar (%s)" % copies in out
+    assert "tto-2026-11-14.db" in out and "tto-2026-11-13.db" in out
+    assert main(["yedekten-don", "tto-2026-11-13.db"] + common) == 0                     # a name: found in the second folder
+    assert str(copies / "tto-2026-11-13.db") in capsys.readouterr().out
+    back = Store(str(data / "tto.db"))
+    assert back.user_exists("veli") and not back.user_exists("ayşe")
+    back.close()
+    assert main(["yedekten-don", "tto-2026-11-14.db"] + common) == 0                     # ... or in the first
+    back = Store(str(data / "tto.db"))
+    assert back.user_exists("ali") and not back.user_exists("veli")
+    back.close()
+    assert main(["yedekten-don", "tto-2026-01-01.db"] + common) == 2                     # in neither

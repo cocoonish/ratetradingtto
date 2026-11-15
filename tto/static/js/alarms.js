@@ -1,8 +1,9 @@
 // Watching anything and alarms on it: the "Ekle…" window (a VİOP contract, a bond, an OIS tenor, offshore, the
 // desk strip, a free expression of them, any cell), and telling the user an alarm fired - on whatever page is
 // open: a toast that stays a while, a short tone, and the browser's own notification when it is allowed.
-// The desk's alarms (set by an administrator, and the system's own: the data feed, RET, TLREF, the database)
-// ring for everyone: their toast has "Gördüm, ben bakıyorum", and the top bar counts the ones nobody answered.
+// The desk's alarms (set by an administrator, and the system's own: the data feed, TLREF, the database) ring for
+// everyone: their toast has "Gördüm, ben bakıyorum", and the top bar counts the ones nobody answered.  Muting one is
+// personal: it stays silent (and uncounted) for the one who muted it, and rings for everyone else.
 import { api, session } from './api.js';
 import { h, clear, modal, toast, errorToast, menu } from './ui.js';
 
@@ -381,18 +382,23 @@ export async function ackDesk(seq) {
   return api.post('/api/alarms/ack', { seq });
 }
 
-/** Keep a desk alarm (an id, or "sys:feed" …) from firing for a while: 15 / 30 / 60 / 120 minutes, "gün", 0 = lift. */
+/** Mute a desk alarm (an id, or "sys:feed" …) for oneself: 15 / 30 / 60 / 120 minutes, "gün", 0 = lift.  It still
+ * rings for everyone else. */
 export async function muteDesk(alarm, minutes) {
   return api.post('/api/alarms/mute', { alarm, minutes });
 }
 
-/** The choices of a mute, as a menu under (x, y). */
+/** The choices of a mute (for oneself only), as a menu under (x, y). */
 export function muteMenu(x, y, alarm, muted, after) {
   const pick = (minutes) => muteDesk(alarm, minutes).then((r) => {
-    toast(minutes ? 'Herkes için susturuldu · bitiş ' + (r.until || '').slice(11, 16) : 'Susturma kaldırıldı', 'ok');
+    toast(minutes ? 'Sizin için susturuldu · bitiş ' + (r.until || '').slice(11, 16) + ' (başkalarına çalmaya devam eder)'
+      : 'Susturma kaldırıldı', 'ok');
+    if (minutes) {                                   // muted: its toast on this screen goes too
+      for (const [seq, el] of deskToasts) if (el.dataset.alarm === alarm) { el.remove(); deskToasts.delete(seq); }
+    }
     if (after) after();
   }).catch(errorToast);
-  menu(x, y, [{ header: 'Herkes için sustur' }, ...[15, 30, 60, 120].map((n) => ({ label: n + ' dakika', action: () => pick(n) })),
+  menu(x, y, [{ header: 'Yalnızca benim için sustur' }, ...[15, 30, 60, 120].map((n) => ({ label: n + ' dakika', action: () => pick(n) })),
     { label: 'Gün sonuna kadar', action: () => pick('gün') }].concat(muted ? [{ sep: true }, { label: 'Susturmayı kaldır', action: () => pick(0) }] : []));
 }
 
@@ -462,7 +468,7 @@ async function lookOnce() {
     res = await api.get('/api/alarms/fired', { since: seen.last == null ? 0 : seen.last, desk: seen.desk == null ? 0 : seen.desk });
   } catch (e) { return []; }
   const d = res.desk || { events: [], last: 0, open: [] };
-  deskCounter(d.open);
+  deskCounter((d.open || []).filter((e) => !e.muted));      // what this user muted for themselves is not counted
   if (seen.last == null) { seen.last = res.last; seen.desk = d.last; return []; }
   const op = Object.fromEntries(OPS.map(([v, t]) => [v, t]));
   for (const e of res.fired) {
@@ -473,9 +479,10 @@ async function lookOnce() {
     el.addEventListener('click', () => el.remove());
     notify('TTO alarm · ' + e.label, text.slice(2));
   }
-  // the desk's: a firing for everyone, an answer, a condition that ended
+  // the desk's: a firing for everyone, an answer, a condition that ended - silent for this user when they muted it
   let rang = res.fired.length > 0;
   for (const e of d.events) {
+    if (e.muted) continue;
     if (e.kind === 'fired' && !deskToasts.has(e.seq)) { deskToast(e); rang = true; }
     else if (e.kind === 'resolved') {
       for (const [seq, el] of deskToasts) if (el.dataset.alarm === e.alarm) answered(el, { seq });

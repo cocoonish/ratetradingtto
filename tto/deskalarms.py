@@ -4,15 +4,17 @@
   set by an administrator for everyone.  They are kept with the personal alarms (``watch.alarms``) as the
   market's: user ``""`` with ``desk`` set, so they are read on the market's values and never on someone's
   scenario; they fire once and are re-armed.
-* **System alarms**: the Bloomberg data has not flowed for some minutes in market hours, the RET curve is not
-  loaded by its time, no TLREF fixing by its time, the database's check or its backup failed.  The operations
-  loop (ops.py) looks every 15 seconds; one fires when its condition starts to hold and closes by itself when
-  the condition ends.
+* **System alarms**: the Bloomberg data has not flowed for some minutes in market hours, no TLREF fixing by its
+  time, the database's check or its backup failed.  The operations loop (ops.py) looks every 15 seconds; one
+  fires when its condition starts to hold and closes by itself when the condition ends.  (The RET curve may change
+  at any time of the day: there is no time by which it must be loaded, and no alarm on it.)
 
 Every open page tells a firing (a toast, a tone, the browser's notification) and the top bar counts the alarms
-nobody has answered yet.  "Gördüm, ben bakıyorum" answers one for everyone ("✓ Ayşe bakıyor"); an alarm can be
-muted for a while (it does not fire meanwhile).  The day's log (``desk.alarmlog:<day>``) keeps all of it: what
-fired, who answered, who muted, what was set, removed, re-armed.
+nobody has answered yet.  "Gördüm, ben bakıyorum" answers one for everyone ("✓ Ayşe bakıyor").  **Muting is
+personal**: a user mutes an alarm for themselves for a while (``desk.mutes:<user>``) - it still fires and everyone
+else is told; the one who muted it gets no toast, tone or notification and does not count it.  The day's log
+(``desk.alarmlog:<day>``) keeps all of it: what fired, who answered, who muted it for themselves, what was set,
+removed, re-armed.
 """
 from __future__ import annotations
 
@@ -21,12 +23,13 @@ import threading
 from typing import Any, Dict, List, Optional
 
 #: the system alarms: key -> name
-SYSTEM = {"feed": "Bloomberg veri akışı", "ret": "RET eğrisi", "tlref": "TLREF fixingi", "db": "Veritabanı"}
-#: how long an alarm may be muted (minutes; "gün" = until the end of the day)
+SYSTEM = {"feed": "Bloomberg veri akışı", "tlref": "TLREF fixingi", "db": "Veritabanı"}
+#: how long a user may mute an alarm for themselves (minutes; "gün" = until the end of the day)
 MUTE_MINUTES = (15, 30, 60, 120)
 MAX_LOG = 1000
-ACTIONS = {"fired": "çaldı", "ack": "gördüm", "mute": "susturuldu", "unmute": "susturma kalktı", "resolved": "düzeldi",
-           "set": "kuruldu", "removed": "silindi", "rearmed": "yeniden kuruldu", "settings": "ayarlar değişti"}
+ACTIONS = {"fired": "çaldı", "ack": "gördüm", "mute": "kendisi için susturdu", "unmute": "susturmasını kaldırdı",
+           "resolved": "düzeldi", "set": "kuruldu", "removed": "silindi", "rearmed": "yeniden kuruldu",
+           "settings": "ayarlar değişti"}
 
 
 def _now() -> _dt.datetime:
@@ -41,7 +44,7 @@ class DeskAlarms(object):
     def __init__(self, svc):
         self.svc = svc
         self._lock = threading.RLock()
-        self._mutes: Optional[Dict[str, Dict[str, Any]]] = None
+        self._mutes: Dict[str, Dict[str, str]] = {}       # user -> {alarm: muted until} (read from the store once)
 
     # ================================================================== the day's log
     def _key(self, day: Optional[str] = None) -> str:
@@ -100,14 +103,12 @@ class DeskAlarms(object):
                        "set_by": e.get("by") or ""})
 
     def system(self, kind: str, active: bool, text: str = "") -> Optional[Dict[str, Any]]:
-        """A system alarm's condition now: it fires when the condition starts to hold (not while it is muted) and
-        closes ("düzeldi") when it ends.  Returns the line written, if any."""
+        """A system alarm's condition now: it fires when the condition starts to hold and closes ("düzeldi") when it
+        ends.  Returns the line written, if any."""
         alarm = "sys:" + kind
         with self._lock:
             cur = self._current(alarm, self.log())
             if active and cur is None:
-                if self.muted(alarm):
-                    return None
                 return self._add({"kind": "fired", "alarm": alarm, "label": SYSTEM[kind], "text": text, "system": True})
             if not active and cur is not None:
                 self._close(cur["seq"], "düzeldi")
@@ -130,6 +131,14 @@ class DeskAlarms(object):
             if cur is not None:
                 self._close(cur["seq"], why)
 
+    def retire(self) -> None:
+        """Open firings of system alarms that are no longer checked (an earlier version's "RET eğrisi") are closed:
+        nothing would close them before the day ends, and the top bar would count them all day."""
+        with self._lock:
+            for e in self.opened(self.log()):
+                if e.get("system") and str(e.get("alarm") or "")[4:] not in SYSTEM:
+                    self._close(e["seq"], "artık denetlenmiyor")
+
     # ================================================================== answering
     def ack(self, user: str, seq: Any) -> Dict[str, Any]:
         """"Gördüm, ben bakıyorum": a firing answered for everyone."""
@@ -150,22 +159,25 @@ class DeskAlarms(object):
                        "by_name": e["ack_name"], "text": "Gördüm – %s bakıyor" % e["ack_name"]})
             return e
 
-    def mutes(self) -> Dict[str, Dict[str, Any]]:
+    def mutes(self, user: str) -> Dict[str, str]:
+        """The alarms ``user`` muted for themselves: alarm -> until when (expired ones included)."""
         with self._lock:
-            if self._mutes is None:
-                v = self.svc.store.get("desk.mutes", {})
-                self._mutes = v if isinstance(v, dict) else {}
-            return self._mutes
+            m = self._mutes.get(user)
+            if m is None:
+                v = self.svc.store.get("desk.mutes:%s" % user, {})
+                m = self._mutes[user] = {k: u for k, u in v.items() if isinstance(u, str)} if isinstance(v, dict) else {}
+            return m
 
-    def muted(self, alarm: str, now: Optional[_dt.datetime] = None) -> Optional[Dict[str, Any]]:
-        """The mute of an alarm while it lasts (``None``: it may fire)."""
-        m = self.mutes().get(alarm)
-        if not m:
+    def muted(self, alarm: str, user: Optional[str], now: Optional[_dt.datetime] = None) -> Optional[str]:
+        """Until when ``user`` has muted ``alarm`` for themselves (``None``: they are told when it fires)."""
+        if not user:
             return None
-        return m if (now or _now()).strftime("%Y-%m-%d %H:%M:%S") < str(m.get("until") or "") else None
+        until = self.mutes(user).get(alarm)
+        return until if until and (now or _now()).strftime("%Y-%m-%d %H:%M:%S") < until else None
 
     def mute(self, user: str, alarm: str, minutes: Any, label: str = "") -> Dict[str, Any]:
-        """Keep an alarm from firing for ``minutes`` (15, 30, 60, 120; "gün": until the end of the day; 0: lift it)."""
+        """Mute an alarm for ``user`` only, for ``minutes`` (15, 30, 60, 120; "gün": until the end of the day; 0: lift
+        it).  It still fires and everyone else is told; the log says who muted it for themselves."""
         now = _now()
         if minutes in ("gün", "day"):
             until = now.replace(hour=23, minute=59, second=59, microsecond=0)
@@ -179,23 +191,23 @@ class DeskAlarms(object):
                 raise DeskAlarmError("susturma süresi 15, 30, 60, 120 dakika ya da gün sonuna kadar olur")
             until = now + _dt.timedelta(minutes=minutes)
             span = "%d dk" % minutes
+        stamp = now.strftime("%Y-%m-%d %H:%M:%S")
         with self._lock:
-            mutes = dict(self.mutes())
+            mutes = {k: u for k, u in self.mutes(user).items() if u > stamp}      # the ones that ran out go
             if not minutes:
                 had = mutes.pop(alarm, None)
-                self._mutes = mutes
-                self.svc.store.put("desk.mutes", mutes)
+                self._mutes[user] = mutes
+                self.svc.store.put("desk.mutes:%s" % user, mutes)
                 if had:
-                    self._add({"kind": "unmute", "alarm": alarm, "label": label, "by": user, "text": "susturma kaldırıldı"})
+                    self._add({"kind": "unmute", "alarm": alarm, "label": label, "by": user,
+                               "text": "kendisi için susturmayı kaldırdı"})
                 return {"alarm": alarm, "until": None}
-            m = {"until": until.strftime("%Y-%m-%d %H:%M:%S"), "by": user, "by_name": self.name(user)}
-            mutes = {k: v for k, v in mutes.items() if str(v.get("until") or "") > now.strftime("%Y-%m-%d %H:%M:%S")}
-            mutes[alarm] = m
-            self._mutes = mutes
-            self.svc.store.put("desk.mutes", mutes)
-            self._add({"kind": "mute", "alarm": alarm, "label": label, "by": user, "by_name": m["by_name"],
-                       "text": "%s susturuldu (bitiş %s)" % (span, until.strftime("%H:%M"))})
-            return dict(m, alarm=alarm)
+            mutes[alarm] = until.strftime("%Y-%m-%d %H:%M:%S")
+            self._mutes[user] = mutes
+            self.svc.store.put("desk.mutes:%s" % user, mutes)
+            self._add({"kind": "mute", "alarm": alarm, "label": label, "by": user,
+                       "text": "kendisi için %s susturdu (bitiş %s) – başkalarına çalmaya devam eder" % (span, until.strftime("%H:%M"))})
+            return {"alarm": alarm, "until": mutes[alarm]}
 
     # ================================================================== what the pages get
     @staticmethod
@@ -203,8 +215,15 @@ class DeskAlarms(object):
         """Firings nobody has answered and that have not closed: what the top bar counts."""
         return [e for e in entries if e.get("kind") == "fired" and not e.get("ack_by") and not e.get("closed_at")]
 
-    def since(self, seq: Any) -> Dict[str, Any]:
-        """The log's lines after ``seq`` (the last a page has seen), the open firings and the day's last number."""
+    def for_user(self, entries: List[Dict[str, Any]], user: Optional[str]) -> List[Dict[str, Any]]:
+        """Firings (and their ends) as one user is told of them: ``muted`` when that user muted the alarm for
+        themselves - no toast, tone or count for them."""
+        return [dict(e, muted=bool(self.muted(e.get("alarm") or "", user))) if e.get("kind") in ("fired", "resolved") else e
+                for e in entries]
+
+    def since(self, seq: Any, user: Optional[str] = None) -> Dict[str, Any]:
+        """The log's lines after ``seq`` (the last a page has seen), the open firings and the day's last number - as
+        ``user`` is told of them (see :meth:`for_user`)."""
         try:
             seq = int(seq or 0)
         except (TypeError, ValueError):
@@ -213,4 +232,5 @@ class DeskAlarms(object):
         last = max([int(e.get("seq") or 0) for e in entries] or [0])
         if seq > last:
             seq = 0                                       # a new day began: its log starts again from 1
-        return {"events": [e for e in entries if int(e.get("seq") or 0) > seq], "last": last, "open": self.opened(entries)}
+        return {"events": self.for_user([e for e in entries if int(e.get("seq") or 0) > seq], user), "last": last,
+                "open": self.for_user(self.opened(entries), user)}

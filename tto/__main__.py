@@ -60,6 +60,9 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--backup-dir", default=None,
                    help="gece yedeklerinin klasörü (varsayılan: veri klasöründe backups; TTO_BACKUP_DIR ile de verilir)")
     p.add_argument("--backup-time", default="22:00", help="gece yedeğinin saati (SS:DD; varsayılan 22:00)")
+    p.add_argument("--backup-copy-dir", default=None,
+                   help="her gece yedeğin ikinci kopyasının klasörü - başka bir sürücü (kurulu dashboard'da varsayılan "
+                        "D:\\tto-yedek; \"\" = ikinci kopya yok; TTO_BACKUP_COPY_DIR ile de verilir)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,9 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     adm.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
     rst = sub.add_parser("yedekten-don", help="veritabanını bir gece yedeğinden geri getir (dashboard kapalıyken; "
                                                "dosya verilmezse yedekler listelenir)")
-    rst.add_argument("backup", nargs="?", default=None, help="yedek dosyası (data/backups/tto-YYYY-AA-GG.db)")
+    rst.add_argument("backup", nargs="?", default=None,
+                     help="yedek dosyası (data/backups/tto-YYYY-AA-GG.db ya da ikinci kopyası; yalnızca adı da yeter)")
     rst.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
     rst.add_argument("--backup-dir", default=None, help="yedeklerin klasörü (varsayılan: veri klasöründe backups)")
+    rst.add_argument("--backup-copy-dir", default=None, help="ikinci kopyaların klasörü (kurulu dashboard'da varsayılan D:\\tto-yedek)")
     cfx = sub.add_parser("check-fx", help="bir paritenin vol / forward puanı ticker'larını Bloomberg'de sına (~70 kalem)")
     cfx.add_argument("pair", nargs="?", default="USDTRY")
     cfx.add_argument("--source", default="BGN", help="vol ticker'larının fiyat kaynağı (varsayılan BGN; boş: kaynaksız)")
@@ -99,7 +104,7 @@ def settings_from(args) -> Settings:
                     history=not args.no_history, history_refresh=args.history_refresh,
                     bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue,
                     log_dir=args.log_dir, bbg_silent_restart=args.bbg_silent_restart, backup_dir=args.backup_dir,
-                    backup_time=args.backup_time)
+                    backup_time=args.backup_time, backup_copy_dir=args.backup_copy_dir)
 
 
 def cmd_run(args) -> int:
@@ -200,23 +205,29 @@ def cmd_admin(args) -> int:
 
 
 def cmd_restore(args) -> int:
-    """Put a nightly backup back in the place of the database (the dashboard must be stopped).  Without a file: the
-    backups there are, newest first."""
+    """Put a nightly backup back in the place of the database (the dashboard must be stopped), from the backup folder
+    or from the second copies.  Without a file: the backups of both folders, newest first."""
     from .ops import backups
     from .store import restore
-    settings = Settings(data_dir=args.data_dir, backup_dir=args.backup_dir)
+    settings = Settings(data_dir=args.data_dir, backup_dir=args.backup_dir, backup_copy_dir=args.backup_copy_dir)
+    folders = [settings.backup_dir] + ([settings.backup_copy_dir] if settings.backup_copy_dir else [])
     if not args.backup:
-        found = backups(settings.backup_dir)
-        if not found:
-            print("Yedek yok: %s" % settings.backup_dir)
+        shown = 0
+        for folder, what in zip(folders, ("Yedekler", "İkinci kopyalar")):
+            found = backups(folder)
+            print("%s (%s)%s" % (what, folder, ", en yenisi önce:" if found else ": yok"))
+            for b in found:
+                print("  %s   %s   %.1f MB" % (b["path"], b["at"], b["bytes"] / 1048576.0))
+            shown += len(found)
+        if not shown:
             return 1
-        print("Yedekler (%s), en yenisi önce:" % settings.backup_dir)
-        for b in found:
-            print("  %s   %s   %.1f MB" % (b["path"], b["at"], b["bytes"] / 1048576.0))
-        print("Geri dönmek için dashboard'u kapatıp: python -m tto yedekten-don <dosya>")
+        print("Geri dönmek için dashboard'u kapatıp: python -m tto yedekten-don <dosya>  (yalnızca adı da yeter: tto-YYYY-AA-GG.db)")
         return 0
+    path = args.backup
+    if not os.path.exists(path) and os.path.basename(path) == path:     # a name alone: from either folder
+        path = next((os.path.join(f, path) for f in folders if os.path.isfile(os.path.join(f, path))), path)
     try:
-        res = restore(args.backup, settings.db_path)
+        res = restore(path, settings.db_path)
     except ValueError as exc:
         print("HATA: %s" % exc, file=sys.stderr)
         return 2

@@ -80,6 +80,13 @@ export async function openStatus(status) {
     head.appendChild(line('Son yedek', (last ? last.at + ' · ' + num(last.bytes / 1048576, 1) + ' MB' : 'henüz yok')
       + ' · ' + (bk.count || 0) + ' / ' + (bk.keep || 30) + ' yedek · her gece ' + (bk.time || '') + ' · ' + bk.dir
       + (bk.error ? ' · SON DENEME BAŞARISIZ (' + bk.error.at + '): ' + bk.error.text : ''), bk.error ? 'bad' : (last ? '' : 'warn')));
+    // its second copy on another drive (D:\tto-yedek): a failure does not stop the backup; two nights in a row: an alarm
+    const cp = bk.copy;
+    if (cp) {
+      head.appendChild(line('İkinci kopya', (cp.last ? cp.last.at + ' · ' : '') + (cp.count || 0) + ' / ' + (bk.keep || 30) + ' kopya · ' + cp.dir
+        + (cp.error ? ' · ALINAMADI' + (cp.failed_nights > 1 ? ' (' + cp.failed_nights + ' gecedir)' : '') + ': ' + cp.error.text : ''),
+        cp.error ? (cp.failed_nights > 1 ? 'bad' : 'warn') : (cp.last ? '' : 'warn')));
+    }
   }
   m.body.appendChild(head);
 
