@@ -1013,6 +1013,15 @@ görünür) her kullanıcıya **boş** gelir. Boş adımda sayfanın kendi kural
 da sıfır) ve kaydırma (`D3`). Kullanıcının yazdığı değerler kendisinin kalır. Takvim değişikliklerinin eskiden ortak
 girdi olarak taşıdığı dosya adımları bu sürümün ilk açılışında bir kez temizlenir.
 
+Target'ın **Yakın** ve **Uzak** kontratı, kontrat satırındaki listeden (`VIOP!L97:X97`: `Spot`, `30.11.2026`, …)
+seçilir ve formüller o metni arar. Uzak kontrat başka biçimde yazılsa da (`30.11.26`, `30/11/2026`) listedeki aynı günün
+maddesi olarak saklanır. Eskiden tarih sayısı (`46356`) olarak saklanıyor, hiçbir şeyle eşleşmiyor ve satır boş
+kalıyordu. Aralıktan okunan her açılır liste kayıtta da aynı biçimde okunur.
+
+**VİOP kontratları masanın ortak girdisi:** VİOP sayfasındaki vadeli ticker'ları, yani USDTRY 1–12 (`VIOP!L1:W1`),
+altın-TRY (`M45:O45`) ve altın-USD (`M60:O60`), bir kişi güncelleyince (kontrat dönünce) herkeste değişir. Bunlar
+kişiselken birinin kaydettiği değer, o kişide ortak değeri gizlememesi için ilk açılışta atılır.
+
 **VİOP matrisinin DV01'leri kendi para biriminde** (VİOP → Takvim spread matrisleri → *Matris sürücü satırları*).
 Her kontrat için 1 mn USD başına: **DV01 TRY (TL)** – TRY faizindeki 1 bp'nin kontrat fiyatına etkisi, TL (Excel'in
 kendi satırı); **DV01 TRY (USD)** – aynısı USD; **DV01 USD (USD)** – USD faizindeki 1 bp'nin etkisi, USD

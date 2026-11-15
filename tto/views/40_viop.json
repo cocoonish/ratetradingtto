@@ -8,10 +8,10 @@
  "inputs": [
   {
    "range": "L1:W1",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-0",
    "kind": "text",
-   "label": "VIOP USDTRY futures tickers (contract 1–12)"
+   "label": "VIOP USDTRY futures tickers (contract 1–12) – masanın ortak kontratları"
   },
   {
    "range": "K3",
@@ -92,17 +92,17 @@
   },
   {
    "range": "M45:O45",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-12",
    "kind": "text",
-   "label": "VIOP gold-TRY futures tickers"
+   "label": "VIOP gold-TRY futures tickers – masanın ortak kontratları"
   },
   {
    "range": "M60:O60",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-13",
    "kind": "text",
-   "label": "VIOP gold-USD futures tickers"
+   "label": "VIOP gold-USD futures tickers – masanın ortak kontratları"
   },
   {
    "range": "U63",

@@ -103,6 +103,16 @@ def test_options_are_matched_case_insensitively():
     assert parse_input("DIŞ", options=["iç", "dış"]) == "dış"
 
 
+def test_a_list_of_days_kept_as_text_takes_the_day_typed_any_way():
+    """VİOP's contracts are listed as text ("30.11.2026") and the formulas look that text up: a day typed another way,
+    or into a cell declared a date, is the item of that day - never a date number the list does not hold."""
+    contracts = ["Spot", "30.11.2026", "31.12.2026", "29.01.2027"]
+    for typed in ("30.11.2026", "30.11.26", "30/11/2026", "2026-11-30", "30 Kas 2026"):
+        assert parse_input(typed, kind="date", options=contracts) == "30.11.2026", typed
+    assert parse_input("spot", kind="date", options=contracts) == "Spot"
+    assert parse_input("15.12.2026", kind="date", options=contracts) == 46371.0        # not a contract: a plain date
+
+
 def test_bad_numbers_are_refused():
     with pytest.raises(InputError):
         parse_input(float("nan"))

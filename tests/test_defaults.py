@@ -2,6 +2,7 @@
 values of the day it was saved are nobody's choice today.  A user's own values are kept as before."""
 from __future__ import annotations
 
+import pytest
 from conftest import cell, make_service
 from tto import extras as ex
 from tto.store import Store
@@ -25,6 +26,45 @@ def test_the_steps_and_the_target_table_start_empty(service):
         assert cell(service, "OIS_MAIN!U11") is None and cell(service, "VIOP!P331") is None
     finally:
         service.reset_inputs(u, "tto")
+
+
+def test_a_far_contract_picked_from_its_list_prices_the_target_row(service):
+    """The target table's near and far contracts come from the contract row's list (=$L$97:$X$97) and the formulas
+    look that text up.  The far one was kept as a date number (46356): nothing matched and the row stayed empty."""
+    u = service.login("Target Uzak Kontrat")["user"]
+    try:
+        for far in ("30.11.2026", "30.11.26", "30/11/2026"):
+            res = service.set_inputs(u, "tto", [{"ref": "VIOP!L331", "value": "Spot"}, {"ref": "VIOP!M331", "value": far},
+                                                {"ref": "VIOP!N331", "value": "SHORT"}, {"ref": "VIOP!O331", "value": "FRA+bp"},
+                                                {"ref": "VIOP!P331", "value": "-150"}])
+            assert res["errors"] == [] and cell(service, "VIOP!M331", u) == "30.11.2026", far
+            # the file's own row with the same choices: the target rate, the spread price and the days
+            assert cell(service, "VIOP!Q331", u) == pytest.approx(0.34301087462666635, rel=1e-12)
+            assert cell(service, "VIOP!R331", u) == pytest.approx(49.9975) and cell(service, "VIOP!Y331", u) == 26.0
+    finally:
+        service.reset_inputs(u, "tto")
+
+
+def test_the_viop_contracts_are_the_desks(tmp_path):
+    """The futures tickers of the VİOP page (USDTRY 1-12, gold TRY and USD) are the desk's: one user rolls them and
+    everyone sees it.  A ticker a user kept while they were personal goes at the next start (it would hide the desk's
+    from them) - the user's other inputs stay."""
+    store = Store(str(tmp_path / "tto.db"))
+    key = store.login("Eski Kontratçı")["user"]
+    store.set_user_inputs(key, "tto", {"VIOP!L1": "A1X6 Eski", "VIOP!M45": "XLZ6 Eski", "VIOP!C16": "USSO2Z"})
+    store.close()
+    svc = make_service(tmp_path)
+    try:
+        other = svc.login("Masa Arkadaşı")["user"]
+        assert cell(svc, "VIOP!L1", key) == cell(svc, "VIOP!L1") == "A1X6 Curncy"
+        assert cell(svc, "VIOP!M45", key) == "XLZ6 Comdty" and cell(svc, "VIOP!C16", key) == "USSO2Z"
+        assert set(svc.store.user_inputs(key, "tto")) == {("tto", "VIOP!C16")}
+        res = svc.set_inputs(other, "tto", [{"ref": "VIOP!L1", "value": "A1Z6 Curncy"}, {"ref": "VIOP!O60", "value": "XLTM7 Comdty"}])
+        assert res["errors"] == []
+        for who in (key, other, None):
+            assert cell(svc, "VIOP!L1", who) == "A1Z6 Curncy" and cell(svc, "VIOP!O60", who) == "XLTM7 Comdty"
+    finally:
+        svc.stop()
 
 
 def test_a_file_the_blank_steps_do_not_fit_keeps_its_steps(tmp_path, monkeypatch):

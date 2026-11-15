@@ -801,6 +801,12 @@ class Service(object):
                 if cell in retired:
                     dropped.append(ref)                # an input that moved: its old value is no one's input now
                     continue
+                d = book.inputs.get(cell)
+                if d is not None and d.scope == "shared":
+                    # an input that became the desk's (VİOP contracts): a value one user kept of it would hide the
+                    # desk's from them - every user sees what anyone sets there
+                    dropped.append(ref)
+                    continue
                 if cell not in book.inputs:
                     fresh.append(ref)
                 ov[cell] = _from_json(val)
@@ -1286,6 +1292,8 @@ class Service(object):
         meetings: Dict[int, Any] = {}
         errors: List[str] = []
         skipped = 0
+        # a drop-down list Excel reads from a range (VİOP target's contracts, L97:X97) holds what those cells hold now
+        calc = self._calc(user, book)
         for it in items:
             ref = it.get("ref")
             try:
@@ -1315,7 +1323,7 @@ class Service(object):
             fmt = book.model.numfmts[sheet.styles.get(rc, 0)] if sheet.styles.get(rc, 0) < len(book.model.numfmts) else "General"
             try:
                 val = parse_input(it.get("value"), numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
-                                  d.kind, book.options_for(si, rc), lang)
+                                  d.kind, book.options_for(si, rc, calc), lang)
             except InputError as exc:
                 errors.append("%s: %s" % (ref, exc))
                 continue

@@ -162,6 +162,13 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
             if _fold(o) == typed:
                 n = parse_number(o, lang)
                 return n if n is not None and re.match(r"^[+-]?[\d.,]+$", o) else o
+        # a list of days kept as text (VİOP contracts "30.11.2026", matched by the formulas as text): a day typed
+        # another way ("30.11.26", "30/11/2026") is that item - never a date number the list does not hold
+        day = parse_date(s)
+        if day is not None:
+            for o in options:
+                if parse_date(o) == day:
+                    return o
     if kind == "amount":
         n = parse_amount(s, lang)
         if n is None:
