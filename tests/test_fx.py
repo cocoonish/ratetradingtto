@@ -484,6 +484,30 @@ def test_a_spot_tick_moves_the_smile_without_fitting_it_again(svc):
     assert i2["points"]["25C"][0] == pytest.approx(i1["points"]["25C"][0] * 1.01, rel=1e-12)
 
 
+def test_the_likeliest_level_and_ranges_of_every_tenor(svc):
+    """Every tenor of the surface has its peak and its narrowest ranges (``fxvol.likely``): USDTRY's calls over its
+    puts put the peak below the forward, EURUSD's put skew lifts it over the lognormal law's.  They are kept with the
+    smile's quotes over the forward: a spot that ticked only scales them."""
+    from tto import fxvol as fv
+    u = user(svc, "FX En Olası")
+    for pair in ("USDTRY", "EURUSD"):
+        for r in svc.fx_surface(u, pair, "svi", None)["rows"]:
+            lk = r["likely"]
+            a, b = lk["hdi"]["0.5"]
+            assert set(lk["hdi"]) == {"0.5", "0.8", "0.9", "0.98"} and a < lk["mode"] < b, (pair, r["tenor"])
+            if pair == "USDTRY":
+                assert lk["mode"] < r["fwd"], r["tenor"]
+            else:
+                assert lk["mode"] > r["fwd"] * math.exp(-1.5 * (r["ATM"] / 100.0) ** 2 * r["T"]), r["tenor"]
+    pair = svc.fx.pair("USDTRY")
+    args = (0.25, 0.09, 0.073, 0.0135, 0.146, 0.045)
+    q1, q2 = fv.Quotes(50.0, *args, premium=True), fv.Quotes(50.5, *args, premium=True)
+    l1 = svc.fx._likely(pair, "likely-tick", "svi", q1, fv.Distribution(svc.fx._smile(pair, "likely-tick", "svi", q1)[0]))
+    l2 = svc.fx._likely(pair, "likely-tick", "svi", q2, fv.Distribution(svc.fx._smile(pair, "likely-tick", "svi", q2)[0]))
+    assert l2["mode"] == pytest.approx(l1["mode"] * 1.01, rel=1e-12)
+    assert l2["hdi"]["0.8"] == pytest.approx([x * 1.01 for x in l1["hdi"]["0.8"]], rel=1e-12)
+
+
 def test_check_fx_asks_once_for_a_pairs_tickers():
     """``python -m tto check-fx``: one reference request for the surface's tickers, a table of what came back."""
     import fake_blpapi

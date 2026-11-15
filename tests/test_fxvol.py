@@ -202,3 +202,27 @@ def test_the_density_is_the_second_derivative_of_the_call():
         c = [fv.black(q.F, k, smile.vol(k), q.T) for k in (K - h, K, K + h)]
         numeric = (c[0] - 2 * c[1] + c[2]) / (h * h)
         assert abs(d.density(K) - numeric) < 1e-3 * max(1.0, numeric)
+
+
+def test_the_likeliest_level_and_the_narrowest_ranges():
+    """``likely``: the peak of the density and the narrowest range of each mass.  On the lognormal law the peak is
+    F·exp(−3/2·σ²T); every range holds its mass, the density is the same at its two ends and it is no wider than the
+    percentile range of that mass (the equal tails).  Under a skew both lean away from the long tail: USDTRY's calls
+    over its puts put the peak and the likeliest half below the forward, a G10 put skew puts them above it."""
+    F, T, s = 51.56, 0.5, 0.2
+    d = fv.Distribution(fv.FlatSmile(F, T, s))
+    lk = fv.likely(d)
+    assert abs(lk["mode"] / (F * math.exp(-1.5 * s * s * T)) - 1.0) < 1e-6
+    for p in fv.LIKELY:
+        a, b = lk["hdi"]["%g" % p]
+        assert abs(d.cdf(b) - d.cdf(a) - p) < 1e-4, p
+        assert abs(d.density(a) / d.density(b) - 1.0) < 2e-3, p
+        assert b - a <= d.quantile(0.5 + p / 2) - d.quantile(0.5 - p / 2) + 1e-9, p
+    for case, sign in ((USDTRY_1M, -1), (EURUSD_1M, 1)):
+        q = quotes(case, premium=case is USDTRY_1M)
+        d = fv.Distribution(fv.build_smile(q)[0])
+        lk = fv.likely(d)
+        a, b = lk["hdi"]["0.5"]
+        assert sign * (lk["mode"] - q.F) > 0 and a < lk["mode"] < b
+        assert sign * (a - d.quantile(0.25)) > 0 and sign * (b - d.quantile(0.75)) > 0    # the likeliest half leans that way
+        assert abs(d.cdf(b) - d.cdf(a) - 0.5) < 1e-3

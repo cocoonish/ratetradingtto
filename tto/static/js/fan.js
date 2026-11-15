@@ -198,15 +198,21 @@ export class FanChart {
       svg('circle', { cx: f1(X(p.x)), cy: f1(Y(p.fwd)), r: 3.2, class: 'mk' }, root).style.fill = 'var(--ink)';
     }
     svg('circle', { cx: f1(X(d.today)), cy: f1(Y(d.spot)), r: 4, class: 'mk' }, root).style.fill = 'var(--ink-2)';
+    // ---- what the lines and the edges are called: percentiles and the median, or what ``d.names`` says (the
+    // narrowest ranges and the peak)
+    const names = d.names || {};
+    const centerName = names.center || 'medyan';
+    const edgeName = (k) => (names.edge && names.edge[k]) || '%' + num(+k * 100, (+k * 100) % 1 ? 1 : 0, false);
+    const bandName = (lo, hi) => (names.band && names.band[lo]) || '%' + Math.round(+lo * 100) + '–' + Math.round(+hi * 100);
     // ---- direct labels at the right end: the outer band's edges, the median, the forward
     const tail = cut[cut.length - 1];
     if (tail && tail.q) {
       const labels = [];
       if (d.bands.length) {
         const [lo, hi] = d.bands[0];
-        labels.push([tail.q[hi], '%' + Math.round(+hi * 100)], [tail.q[lo], '%' + Math.round(+lo * 100)]);
+        labels.push([tail.q[hi], edgeName(hi)], [tail.q[lo], edgeName(lo)]);
       }
-      if (d.median) labels.push([tail.q['0.5'], 'medyan']);
+      if (d.median) labels.push([tail.q['0.5'], centerName]);
       labels.push([tail.fwd, 'fwd']);
       const used = [];
       for (const [v, text] of labels) {
@@ -232,10 +238,10 @@ export class FanChart {
     };
     key(lineSw('var(--ink-2)'), 'spot (geçmiş)');
     key(lineSw('var(--ink)', true), 'forward');
-    if (d.median) key(lineSw(blue), 'medyan');
+    if (d.median) key(lineSw(blue), centerName);
     d.bands.forEach(([lo, hi], k) => {
       const alpha = BAND_ALPHA[Math.min(BAND_ALPHA.length - 1, k + Math.max(0, BAND_ALPHA.length - d.bands.length))];
-      key(boxSw(Math.min(0.9, alpha * (k + 1))), '%' + Math.round(+lo * 100) + '–' + Math.round(+hi * 100));
+      key(boxSw(Math.min(0.9, alpha * (k + 1))), bandName(lo, hi));
     });
     // ---- hover: the past's close, or the cloud at that date
     const cross = svg('line', { class: 'cross', y1: top, y2: top + ph, x1: 0, x2: 0, visibility: 'hidden' }, root);
@@ -267,7 +273,7 @@ export class FanChart {
           // the edges of the bands shown and the median, highest first
           const shown = new Set([].concat(...d.bands).concat(d.median ? ['0.5'] : []));
           const ks = Object.keys(c.q).filter((k) => shown.has(k)).map(Number).sort((a, b) => b - a);
-          for (const k of ks) row(k === 0.5 ? 'medyan' : '%' + num(k * 100, k * 100 % 1 ? 1 : 0, false), c.q[String(k)]);
+          for (const k of ks) row(k === 0.5 ? centerName : edgeName(String(k)), c.q[String(k)]);
         }
       }
       const tr = this.tip.getBoundingClientRect();

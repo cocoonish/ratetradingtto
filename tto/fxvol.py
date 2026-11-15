@@ -45,6 +45,7 @@ Everything here is plain Python (no numpy): the dashboard runs without installin
 """
 from __future__ import annotations
 
+import bisect
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -52,6 +53,8 @@ SQRT2 = math.sqrt(2.0)
 SQRT2PI = math.sqrt(2.0 * math.pi)
 #: the quantiles of the cloud (the fan chart)
 QUANTILES = (0.01, 0.05, 0.10, 0.16, 0.25, 0.50, 0.75, 0.84, 0.90, 0.95, 0.99)
+#: the masses of the narrowest ranges ("the most likely 50 % ..."): the cloud's bands drawn that way
+LIKELY = (0.5, 0.8, 0.9, 0.98)
 MODELS = ("svi", "sabr", "vv")
 #: the pillars of a smile: name, delta, call
 PILLARS = (("10P", 0.10, False), ("25P", 0.25, False), ("ATM", 0.5, None), ("25C", 0.25, True), ("10C", 0.10, True))
@@ -814,3 +817,61 @@ def quantiles(dist: Distribution, ps: Sequence[float] = QUANTILES) -> Dict[float
         except MATH_ERRORS:
             out[p] = None
     return out
+
+
+def likely(dist: Distribution, masses: Sequence[float] = LIKELY, n: int = 800) -> Dict[str, Any]:
+    """Where the market sees the spot most likely at expiry: the peak of the density (the mode, the single likeliest
+    level) and, for each mass, the narrowest range holding it (the highest-density interval: the density is the same
+    at both ends and every level inside is likelier than any outside).  The percentile bands leave the same probability
+    in either tail; these lean towards the peak - below the forward under a long right tail (USDTRY), above it under a
+    put skew.  The distribution function on ``n`` strikes in ln K from the 0.01st to the 99.99th percentile; the
+    density of each slice between them; the ranges are the density's level sets, found by bisection on the level."""
+    lo, hi = math.log(dist.quantile(1e-4)), math.log(dist.quantile(1.0 - 1e-4))
+    ks = [math.exp(lo + (hi - lo) * i / n) for i in range(n + 1)]
+    cdf = [1.0 - dist.above(k) for k in ks]
+    mid = [0.5 * (ks[i] + ks[i + 1]) for i in range(n)]
+    dens = [max(0.0, cdf[i + 1] - cdf[i]) / (ks[i + 1] - ks[i]) for i in range(n)]
+    m = max(range(n), key=dens.__getitem__)
+    mode = mid[m]
+    if 0 < m < n - 1:                                        # the vertex of the parabola through the peak's slices
+        (x0, x1, x2), (y0, y1, y2) = mid[m - 1:m + 2], dens[m - 1:m + 2]
+        den = (x0 - x1) * (x0 - x2) * (x1 - x2)
+        a = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / den
+        b = (x2 * x2 * (y0 - y1) + x1 * x1 * (y2 - y0) + x0 * x0 * (y1 - y2)) / den
+        if a < 0:
+            mode = min(x2, max(x0, -b / (2.0 * a)))
+    # the density rising to the peak and falling from it, each side made monotone (a numerical ripple in a tail
+    # must not end a range early), the falling side reversed so that both rise
+    left_x, left_y = mid[:m + 1], list(dens[:m + 1])
+    for i in range(1, len(left_y)):
+        left_y[i] = max(left_y[i], left_y[i - 1])
+    right_x, right_y = mid[m:][::-1], list(dens[m:][::-1])
+    for i in range(1, len(right_y)):
+        right_y[i] = max(right_y[i], right_y[i - 1])
+
+    def reach(xs: List[float], ys: List[float], y: float) -> float:
+        """Where the rising ``ys`` reaches ``y``, between the points ``xs``."""
+        j = bisect.bisect_left(ys, y)
+        if j <= 0:
+            return xs[0]
+        if j >= len(ys):
+            return xs[-1]
+        y0, y1 = ys[j - 1], ys[j]
+        return xs[j - 1] + (xs[j] - xs[j - 1]) * ((y - y0) / (y1 - y0) if y1 > y0 else 0.0)
+
+    def cdf_at(k: float) -> float:
+        j = min(max(bisect.bisect_left(ks, k), 1), n)
+        return cdf[j - 1] + (cdf[j] - cdf[j - 1]) * (k - ks[j - 1]) / (ks[j] - ks[j - 1])
+
+    ranges: Dict[str, List[float]] = {}
+    for p in masses:
+        low, high = 0.0, dens[m]                                 # the density level: 0 holds everything, the peak nothing
+        for _ in range(60):
+            level = 0.5 * (low + high)
+            if cdf_at(reach(right_x, right_y, level)) - cdf_at(reach(left_x, left_y, level)) > p:
+                low = level
+            else:
+                high = level
+        level = 0.5 * (low + high)
+        ranges["%g" % p] = [reach(left_x, left_y, level), reach(right_x, right_y, level)]
+    return {"mode": mode, "hdi": ranges}

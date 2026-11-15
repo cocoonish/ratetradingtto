@@ -302,6 +302,7 @@ class Fx(object):
         self.store = service.store
         self._lock = threading.RLock()
         self._smiles: Dict[Tuple, Tuple[Any, Dict[str, Any]]] = {}     # fitted smiles by their quotes
+        self._likelies: Dict[Tuple, Dict[str, Any]] = {}                # their peaks and narrowest ranges, over F
         self._starts: Dict[Tuple[str, str, str], Any] = {}               # last parameters: warm starts
         self._pair_locks: Dict[str, threading.Lock] = {}
         self._hist_wait: List[List[str]] = []
@@ -340,6 +341,7 @@ class Fx(object):
         self.store.put("fx.settings", {"source": src or DEFAULT_SOURCE, "by": user, "at": _now()})
         with self._lock:
             self._smiles.clear()
+            self._likelies.clear()
         return self.settings()
 
     def source(self) -> str:
@@ -631,8 +633,7 @@ class Fx(object):
         deltas, the delta-neutral straddle, the market strangle's strikes) depends on strikes only through ``K/F``,
         so when only the forward moved - the spot ticked - the same smile holds in moneyness, exactly: it is moved
         to the new forward instead of being fitted again."""
-        key = (pair.code, tenor, model, round(q.T, 10), round(q.atm, 8), q.rr25 and round(q.rr25, 8),
-               q.bf25 and round(q.bf25, 8), q.rr10 and round(q.rr10, 8), q.bf10 and round(q.bf10, 8), q.premium, round(q.df, 10))
+        key = _smile_key(pair, tenor, model, q)
         with self._lock:
             hit = self._smiles.get(key)
             start = self._starts.get((pair.code, tenor, model))
@@ -646,6 +647,22 @@ class Fx(object):
             if info.get("start") is not None:
                 self._starts[(pair.code, tenor, model)] = info["start"]
         return smile, info
+
+    def _likely(self, pair: Pair, tenor: str, model: str, q: fv.Quotes, dist: Any) -> Dict[str, Any]:
+        """The peak of a tenor's law and its narrowest ranges (``fxvol.likely``), kept with the smile's quotes: the
+        shape is the same in K/F whatever the forward, so they are kept over the forward and a spot that ticked only
+        scales them."""
+        key = _smile_key(pair, tenor, model, q)
+        with self._lock:
+            unit = self._likelies.get(key)
+        if unit is None:
+            raw = fv.likely(dist)
+            unit = {"mode": raw["mode"] / dist.F, "hdi": {p: [a / dist.F, b / dist.F] for p, (a, b) in raw["hdi"].items()}}
+            with self._lock:
+                if len(self._likelies) > 600:
+                    self._likelies.clear()
+                self._likelies[key] = unit
+        return {"mode": unit["mode"] * dist.F, "hdi": {p: [a * dist.F, b * dist.F] for p, (a, b) in unit["hdi"].items()}}
 
     def surface(self, user: Optional[str], code: str, model: str = "svi", levels: Optional[Sequence[Any]] = None) -> Dict[str, Any]:
         """The FX page: quotes, smile, distribution and the cloud of every tenor; with ``levels``, the probability
@@ -705,6 +722,10 @@ class Fx(object):
         if qs.get(0.84) is not None and qs.get(0.16) is not None:
             out["up_1s"] = qs[0.84] - F                       # one standard deviation up and down, the skew included
             out["down_1s"] = F - qs[0.16]
+        try:                                                  # the likeliest level and the narrowest ranges
+            out["likely"] = self._likely(pair, t, model, q, dist)
+        except fv.MATH_ERRORS:
+            out["likely"] = None
         out["_dist"] = dist
         return out
 
@@ -1146,6 +1167,12 @@ def check_fx(pair: str = "USDTRY", source: str = DEFAULT_SOURCE, host: str = "lo
         return 0 if not missing and spot not in ("yok", "boş", "?") else 2
     finally:
         prov.stop()
+
+
+def _smile_key(pair: Pair, tenor: str, model: str, q: fv.Quotes) -> Tuple:
+    """What a fitted smile is kept by: its quotes, not its forward (see ``Fx._smile``)."""
+    return (pair.code, tenor, model, round(q.T, 10), round(q.atm, 8), q.rr25 and round(q.rr25, 8),
+            q.bf25 and round(q.bf25, 8), q.rr10 and round(q.rr10, 8), q.bf10 and round(q.bf10, 8), q.premium, round(q.df, 10))
 
 
 def _moved(smile: Any, info: Dict[str, Any], F: float) -> Tuple[Any, Dict[str, Any]]:
