@@ -438,7 +438,7 @@ export class EodPage extends HistoryPage {
     this.keys.bonds = keys;
     this.bonds.setData({ sheet: '', rows });
     this.bonds.setNote(any
-      ? 'Tahviller DİBS RV sayfasındaki listeden; getiri Bloomberg alanı ' + d.source.dibs_field + ' (Ayarlar\'dan değiştirilebilir). TLREF\'e endeksli (T) kağıtlarda fiyat izlenir. '
+      ? 'Tahviller DİBS RV sayfasındaki listeden; getiri Bloomberg alanı ' + d.source.dibs_field + ' (Ayarlar\'dan değiştirilebilir). Floater\'larda (TLREF: T, FRN: F) fiyat izlenir. '
         + 'Satıra tıklayınca tahvilin geçmişi çizilir.'
       : 'DİBS geçmişi yok' + (d.live ? ': Bloomberg bu alan (' + d.source.dibs_field + ') için geçmiş vermedi – Ayarlar\'dan alanı değiştirin.'
         : ' – Excel dosyası tahvil geçmişi saklamıyor; Bloomberg bağlıyken ' + d.source.dibs_field + ' alanından doldurulur.'));

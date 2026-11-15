@@ -691,7 +691,7 @@ class History(object):
                 kind = _text(val("DİBS RV!D%d" % r))
                 name = _text(val("DİBS RV!C%d" % r))
                 maturity = _of_serial(val("DİBS RV!E%d" % r))
-                floater = kind == "T"                  # a TLREF floater has no yield: its price is followed
+                floater = kind in ("T", "F")           # a floater (TLREF, FRN) has no yield: its price is followed
                 bist = val("DİBS RV!T%d" % r)          # the workbook's own BIST compound yield (as it stands now)
                 defs.append(SeriesDef("dibs", isin, priced or plain, "PX_LAST" if floater else cfg["dibs_field"],
                                       [plain] if priced else [], unit="px" if floater else "pct",

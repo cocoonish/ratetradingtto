@@ -87,7 +87,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     n = sofr.formula_count()
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
-                                                   "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
+                                                   "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN", "DİBS RV FRN", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
                                                    "Boş başlayan girdiler"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",

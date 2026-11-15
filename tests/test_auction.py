@@ -77,6 +77,10 @@ def _bloomberg():
     bond("TRT170528T12", {"NAME": "TURKIYE GOVERNMENT BOND", "CPN": 38.0, "CPN_TYP": "FLOATING", "MATURITY": "17.05.2028",
                           "CPN_FREQ": 4.0, "INFLATION_LINKED_INDICATOR": "N"},
          {VALOR: {"INT_ACC": 6.75, "PREV_CPN_DT": "19.08.2026", "NXT_CPN_DT": "18.11.2026", "DAYS_ACC": 65.0}})
+    # an FRN: a floater whose coupon does not follow TLREF (Tüm Kâğıtlar knows it as one), two coupons a year
+    bond("TRT171127T15", {"NAME": "TURKIYE GOVERNMENT BOND", "CPN": 40.1, "CPN_TYP": "FLOATING", "MATURITY": "17.11.2027",
+                          "CPN_FREQ": 2.0, "INFLATION_LINKED_INDICATOR": "N"},
+         {VALOR: {"INT_ACC": 7.25, "PREV_CPN_DT": "20.05.2026", "NXT_CPN_DT": "18.11.2026", "DAYS_ACC": 156.0}})
     # a CPI linker: a real coupon of 3.30 %, priced real, paid with the index ratio of the value date
     bond("TRT280628T18", {"NAME": "TURKIYE GOVERNMENT BOND", "CPN": 3.3, "CPN_TYP": "FIXED", "MATURITY": "28.06.2028", "CPN_FREQ": 2.0,
                           "INFLATION_LINKED_INDICATOR": "Y"},
@@ -241,6 +245,17 @@ def test_bills_floaters_and_cpi_linkers(auction):
     assert get(svc, "K50") == pytest.approx(10e6 * get(svc, "J50") / 100 * 12.5)
 
 
+def test_an_frn_is_priced_as_a_floater_under_its_own_name(auction):
+    """An FRN - a floater whose coupon does not follow TLREF - is priced as a TLREF floater is (its dirty price with
+    Bloomberg's accrued, its place in the auction, no yield), under its own name."""
+    svc, user, _ = auction
+    fill(svc, user, {"B2": "23.10.2026", "A7": "TRT171127T15", "B10": "10000000", "C10": "99,80", "D11": "40"})
+    assert [get(svc, c + "7") for c in "CD"] == ["17.11.27 FRN", "FRN"] and get(svc, "A5") == "KÂĞIT 1 · 17.11.27 FRN · TRT171127T15"
+    assert get(svc, "A8") == "FRN: kirli fiyat ve ihaledeki yer; getiri hesaplanmaz"
+    assert get(svc, "J10") == round(99.8 + 7.25, 3) and [get(svc, c + "10") for c in "HI"] == ["", ""]
+    assert get(svc, "F11") == "FRN: temiz fiyat yazın" and get(svc, "J11") == ""
+
+
 def test_the_accrued_interest_is_bloombergs_at_the_value_date(auction):
     svc, user, provider = auction
     # no value date: nothing is priced
@@ -274,7 +289,7 @@ def test_the_auction_page(auction, service):
     rows = [ex.auction_rows(k) for k in range(ex.AUC_BONDS)]
     assert [r["info"] for r in rows] == [7, 27, 47] and [r["lines"][0] for r in rows] == [10, 30, 50]
     assert {"B2", "A7", "B7", "C10", "D10", "E10", "P14", "B18", "B20", "A47", "E54", "B60"} <= set(refs)
-    assert ex.auction_cols()["last"] == "DA" and ex.AUC_CF == 30
+    assert ex.auction_cols()["last"] == "DE" and ex.AUC_CF == 30                    # (the floater's kind: 4 cells more)
     fill(svc, user, {"B2": "23.10.2026", "A7": "TRT150328T24", "C10": "100,70"})
     page = svc.view(user, "ihale")
     titles = {p["id"]: p["title"] for p in page["panels"]}

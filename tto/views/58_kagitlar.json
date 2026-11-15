@@ -19,13 +19,6 @@
    "group": "evren-src",
    "kind": "text",
    "label": "Tahvil fiyat kaynağı (ör. ISL1)"
-  },
-  {
-   "range": "A6:A20",
-   "scope": "shared",
-   "group": "evren-own",
-   "kind": "text",
-   "label": "Listede olmayan kâğıtlar (ISIN)"
   }
  ],
  "panels": [
@@ -33,30 +26,24 @@
    "id": "U1",
    "type": "table",
    "title": "Tüm kâğıtlar",
-   "range": "A1:R105",
+   "range": "A1:R167",
    "append": "universe",
    "card": "bond",
    "flags": "dibs",
    "action": "add-isin",
    "add": {
-    "list": "A6:A20",
+    "list": "A6:A165",
     "name": "evren",
     "catalog": false,
-    "title": "Listede olmayan kâğıt ekle (yeni ihraç)"
+    "title": "Tüm Kâğıtlar'a kâğıt ekle (ISIN)"
    },
-   "grow": {
-    "key": "A",
-    "first": 6,
-    "extra": 1,
-    "last": 20
-   },
-   "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar. Sağdaki sütunlar bugünün Broker Chat tahtasıdır."
+   "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar, ✕ kâğıdı listeden çıkarır. + ISIN ekle: kâğıdın türü Bloomberg'den bulunur, kendi grubuna girer. Sağdaki sütunlar bugünün Broker Chat tahtasıdır."
   },
   {
    "id": "U2",
    "type": "table",
-   "title": "Yardımcı · Bloomberg yanıtları (RV satırı, menkul, fiyatlar, hacim)",
-   "range": "T4:Z103",
+   "title": "Yardımcı · Bloomberg yanıtları (RV satırı, menkul, fiyatlar, hacim, tür)",
+   "range": "T4:AA165",
    "hidden": true
   }
  ]

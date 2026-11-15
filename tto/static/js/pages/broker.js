@@ -16,12 +16,12 @@ const FLAG = {
   'side?': ['taraf?', 'warn', 'Eğik çizgi ile kelime uyuşmuyor ("12/ offer") – eğik çizgiye uyuldu'],
   crossed: ['bid > ask', 'warn', 'Bid ask\'ten yüksek okundu (getiriyle kotede: bid getirisi ask\'inkinden düşük)'],
   standing: ['kotadan', '', 'Mesajda fiyat yok ("taken", "given"): o an duran offer / bid seviyesi alındı'],
-  'bond?': ['kâğıt?', 'warn', 'O ay için birden çok kâğıt var ("mar28": 08.03.28 ve 15.03.28; "jan30 tlref": iki TLREF): fiyatı ekrandakine en yakın olan, ekran yoksa kuponu en yüksek olan (gösterge) alındı – yanlışsa tarihi tam yazın (15/3/28)'],
-  near: ['yakın kâğıttan', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var: büyük rakamı vadesi en yakın aynı tür kâğıttan (TLREF\'ten TLREF, bonodan bono) alındı'],
+  'bond?': ['kâğıt?', 'warn', 'O ay için birden çok kâğıt var ("mar28": 08.03.28 ve 15.03.28; "jan30": 02.01.30 FRN ve 09.01.30 TLREF): fiyatı ekrandakine en yakın olan, ekran yoksa kuponu en yüksek olan (gösterge) alındı – yanlışsa tarihi ya da türü yazın (15/3/28, "jan30 tlref", "jan30 frn")'],
+  near: ['yakın kâğıttan', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var: büyük rakamı vadesi en yakın aynı tür kâğıttan (TLREF\'ten TLREF, FRN\'den FRN, bonodan bono) alındı'],
   nobond: ['kâğıt yok', 'warn', 'Masanın DİBS listesinde bu vadede bu türden kâğıt yok (tür yazılmışsa yalnız o tür aranır: "mar28 zc", "dec26 tlref").'],
   notfixed: ['sabit kuponlu değil', '', 'Ay ve yıl tek başına önce sabit kuponlu kâğıt demektir; bu ayda sabit kuponlu olmadığı için ayın öbür kâğıdı alındı '
-    + '(önce TLREF, sonra TÜFE, sonra bono / kuponsuz; birden çoksa ekrandaki fiyata en yakın olan) – yanlışsa türü yazın ("jun29 cpi").'],
-  par: ['100\'e göre', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var, yakınında fiyatı bilinen aynı tür kâğıt da yok: TLREF / TÜFE kâğıdı 100 civarı sayılarak tamamlandı – yanlışsa fiyatı tam yazın'],
+    + '(önce TLREF / FRN, sonra TÜFE, sonra bono / kuponsuz; birden çoksa ekrandaki fiyata en yakın olan) – yanlışsa türü yazın ("jun29 cpi", "jan30 frn").'],
+  par: ['100\'e göre', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var, yakınında fiyatı bilinen aynı tür kâğıt da yok: TLREF / FRN / TÜFE kâğıdı 100 civarı sayılarak tamamlandı – yanlışsa fiyatı tam yazın'],
 };
 
 /** What a flag says, with what it was about (the bond a big figure was taken from). */

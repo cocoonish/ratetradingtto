@@ -209,6 +209,13 @@
    "title": "Yardımcı · FX swap ASW fit toplamları",
    "range": "XF2:XQ3",
    "hidden": true
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "Yardımcı · FRN mi (Tüm Kâğıtlar'daki türü; listede yoksa Bloomberg'in floater formülü ve reset endeksi)",
+   "range": "YA4:YD54",
+   "hidden": true
   }
  ]
 }

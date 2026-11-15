@@ -294,11 +294,12 @@ _BOND_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul
                 "subat": 2, "mart": 3, "nis": 4, "nisan": 4, "mayıs": 5, "mayis": 5, "haz": 6, "haziran": 6, "tem": 7, "temmuz": 7,
                 "ağu": 8, "agu": 8, "ağustos": 8, "agustos": 8, "eyl": 9, "eylül": 9, "eylul": 9, "eki": 10, "ekim": 10, "kas": 11,
                 "kasım": 11, "kasim": 11, "ara": 12, "aralık": 12, "aralik": 12}
-_BOND_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})(zc|tlref|cpi)?(?:\.?(t\d))?$")
-_BOND_MONTH = re.compile(r"^([a-zçğıöşü]{3,9})'?(\d{2})(zc|tlref|cpi)?(?:\.?(t\d))?$")
-# the kind said: "zc" is a zero coupon one - a bill (bono) or a zero coupon bond (kuponsuz) -, quoted on its yield
-_BOND_KIND = {"tlref": "float", "float": "float", "frn": "float", "cpi": "cpi", "tüfe": "cpi", "tufe": "cpi", "zc": "zc",
-              "bono": "zc", "bill": "zc", "kuponsuz": "zc"}
+_BOND_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})(zc|tlref|frn|cpi)?(?:\.?(t\d))?$")
+_BOND_MONTH = re.compile(r"^([a-zçğıöşü]{3,9})'?(\d{2})(zc|tlref|frn|cpi)?(?:\.?(t\d))?$")
+# the kind said: "zc" is a zero coupon one - a bill (bono) or a zero coupon bond (kuponsuz) -, quoted on its yield;
+# "tlref" a TLREF floater, "frn" an FRN (a floater on another index), "float" / "floater" either of them
+_BOND_KIND = {"tlref": "float", "frn": "frn", "float": "floating", "floater": "floating", "cpi": "cpi", "tüfe": "cpi",
+              "tufe": "cpi", "zc": "zc", "bono": "zc", "bill": "zc", "kuponsuz": "zc"}
 _BOND_SETTLE = {"today": "T0", "tdy": "T0", "tod": "T0", "t0": "T0", "bugün": "T0", "bugun": "T0", "tom": "T1", "t1": "T1",
                 "yarın": "T1", "yarin": "T1", "t2": "T2"}
 _BOND_WORDS = set(_BOND_KIND) | set(_BOND_SETTLE) | {"mio", "mn", "tane"}
@@ -369,10 +370,10 @@ def _split_bond_pairs(raw: List[str], low: List[str]) -> Tuple[List[str], List[s
 
 
 def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any]]:
-    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "cpi", "zc") -
-    then only a bond of that kind.  A month and a year said alone ("mar28", "Jan30", "Sep 34") are the fixed coupon
-    bond of the month; a month without one can mean its other bonds ("jan30" for its floater): a floater first, then
-    a CPI linker, then a bill or a zero coupon bond (``other_kind``).  Of several, the one with the highest coupon (the
+    """The bond of the desk's list a reference means: the kind from the words of the line ("tlref", "frn", "cpi",
+    "zc") - then only a bond of that kind ("tlref" never an FRN).  A month and a year said alone ("mar28", "Jan30",
+    "Sep 34") are the fixed coupon bond of the month; a month without one can mean its other bonds ("jan30" for its
+    floaters): a floater first, then a CPI linker, then a bill or a zero coupon bond (``other_kind``).  Of several, the one with the highest coupon (the
     benchmark: "mar28" is the 36.8% of 15.03.28, not the 12.4% of 08.03.28) - flagged, the price may tell otherwise.
     Its label, ISIN and whether it trades on yield; ``missing`` when the list has no such bond."""
     from . import bonds as bd
@@ -393,10 +394,10 @@ def _bond_lookup(info: Dict[str, Any], low: List[str]) -> Optional[Dict[str, Any
         else:
             y, m, d = (int(x) for x in (info.get("date") or "2000-01-01").split("-"))
             label = "%02d.%02d.%02d" % (d, m, y % 100)
-        tail = {"float": " TLREF", "cpi": " TÜFE", "zc": " ZC"}.get(kind or "", "")
+        tail = {"float": " TLREF", "frn": " FRN", "floating": " floater", "cpi": " TÜFE", "zc": " ZC"}.get(kind or "", "")
         # a zero coupon one is quoted on its yield, known or not
         return {"label": label + tail, "months": (y - 2000) * 12.0 + m, "missing": True, "yield": kind == "zc"}
-    order = {"float": 0, "cpi": 1} if other else {}
+    order = {"float": 0, "frn": 0, "cpi": 1} if other else {}
     cands = sorted(cands, key=lambda b: (order.get(b.get("kind"), 2), -(b.get("coupon") or 0.0)))
     b = cands[0]
     mat = _dt.date.fromisoformat(b["maturity"])
@@ -410,12 +411,13 @@ NEAR_MONTHS = 18          # how far the maturity of a bond may be from the one i
 
 def near_level(q: Dict[str, Any], levels: Iterable[Dict[str, Any]]) -> Optional[Tuple[float, str]]:
     """Where a bond nobody has priced stands, from the bond of the same kind next to it: a floater from the floater
-    of the nearest maturity ("jan28 tlref .725" next to "13/10/27 tlref 100.650/.800" is 100.725), a bill's yield
-    from the nearest bill's - not a fixed coupon bond's price from another's (their coupons differ).
+    of its kind (TLREF from TLREF, FRN from FRN) of the nearest maturity ("jan28 tlref .725" next to "13/10/27 tlref
+    100.650/.800" is 100.725), a bill's yield from the nearest bill's - not a fixed coupon bond's price from another's
+    (their coupons differ).
     ``levels``: ``{"isin", "kind", "months", "unit", "value", "label"}`` of the bonds priced, nearest first wins
     (within ``NEAR_MONTHS``).  ``(value, label)`` or ``None``."""
     kind = q.get("bond_kind")
-    group = ("float",) if kind == "float" else (("cpi",) if kind == "cpi" else (("bill", "zero") if kind in ("bill", "zero") else ()))
+    group = (kind,) if kind in ("float", "frn", "cpi") else (("bill", "zero") if kind in ("bill", "zero") else ())
     if not group or not q.get("months"):
         return None
     best: Optional[Tuple[float, float, str]] = None
@@ -672,7 +674,7 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
     elif words & _CARE:
         out["event"] = "interest"
     level_ref = ref(out) if ref is not None and unit in ("pct", "px", "yld") else None
-    at_par = level_ref is None and bond is not None and unit == "px" and bond.get("bond_kind") in ("float", "cpi")
+    at_par = level_ref is None and bond is not None and unit == "px" and bond.get("bond_kind") in ("float", "frn", "cpi")
     if at_par:
         level_ref = 100.0           # a floater or a CPI linker nobody has priced yet (no screen, no quote before): near par
     consumed = set()
@@ -824,7 +826,7 @@ def _switch_by_legs(raw: List[str], low: List[str], bonds: List[Tuple[List[int],
         event = "level"
     tenors = [b["label"] for b in legs]
     # a floater or a CPI linker has no yield to compare: such a switch is the difference of the two prices
-    unit = "px" if any(b.get("bond_kind") in ("float", "cpi") for b in legs) else "bp"
+    unit = "px" if any(b.get("bond_kind") in ("float", "frn", "cpi") for b in legs) else "bp"
     return {"product": "DIBS", "kind": "switch", "tenors": tenors, "months": [b["months"] for b in legs],
             "label": " / ".join(tenors), "key": "DIBS:switch:" + "/".join(b["isin"] or b["label"] for b in legs), "unit": unit,
             "event": event, "bid": None, "ask": None, "price": None, "side": None, "clear": [], "flags": flags, "note": "",
