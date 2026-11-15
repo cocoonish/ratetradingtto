@@ -1677,3 +1677,127 @@ def against(row: Dict[str, Any], mid: Optional[float]) -> Dict[str, Any]:
         v = row.get(name)
         out[name + "_diff"] = None if v is None or mid is None else (v - mid) * k
     return out
+
+
+# ---------------------------------------------------------------------------------------------- the chat against the blotter
+#: how far apart in time a trade said in the chat and its entry in the blotter may be to be taken for one (seconds)
+MATCH_WINDOW = 15 * 60
+#: how close two levels are when they are one: per cent, bp, swap points, a bond's price
+_LEVEL_TOLERANCE = {"pct": 5e-5, "bp": 5e-3, "pts": 0.5, "px": 5e-4}
+_TENOR_DAYS = {"W": 7.0, "M": 30.4375, "Y": 365.0}
+
+
+def booked_as(q: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What the blotter (Günlük İşlemler) books a trade of the chat as: the instrument as ``blotter.trade_entries``
+    names it (``sig``) and the level in the chat's unit (``level``, ``unit``; an FX swap's days too).  ``None`` for
+    what the blotter has no form for: cross-currency, IRS, a switch, an O/N - S/N swap, a spread of two FRAs, a tenor
+    or FRA its form does not list, a meeting the calendar did not date."""
+    from .blotter import OIS_TENORS
+    if not q.get("ok") or q.get("parts"):
+        return None
+    product, kind, unit = q.get("product"), q.get("kind"), q.get("unit")
+    t, m = list(q.get("tenors") or []), list(q.get("months") or [])
+    level = q.get("price") if type(q.get("price")) is float else None
+    if product == "OIS":
+        sig: Optional[Tuple[Any, ...]] = None
+        if kind in ("outright", "spread", "fly") and t and all(x in OIS_TENORS for x in t):
+            sig = ("ois", kind) + tuple(t)
+        elif kind in ("fra", "fwd") and len(m) == 2:
+            a, b = (m[0], m[1]) if kind == "fra" else (m[0], m[0] + m[1])
+            if a == int(a) and b == int(b) and 0 <= a < b <= 120 and not a % 3 and not b % 3:
+                sig = ("ois", "fra", int(a), int(b))
+        elif kind == "mpc" and (q.get("mpc") or {}).get("start"):
+            sig = ("ois", "mpc", q["mpc"]["start"], q["mpc"]["end"])
+        return None if sig is None else {"sig": sig, "level": level, "unit": unit}
+    if product == "FX" and kind == "outright" and t and re.match(r"^\d+[WMY]$", t[0]):
+        return {"sig": ("fwd", "USDTRY"), "level": level, "unit": "pts", "days": int(t[0][:-1]) * _TENOR_DAYS[t[0][-1]]}
+    if product == "DIBS" and kind != "switch" and q.get("isin"):
+        # a bill quoted on its yield: the blotter keeps a price - the yield is not compared with it
+        return {"sig": ("bond", q["isin"]), "level": level if unit == "px" else None, "unit": unit}
+    return None
+
+
+def _one_trade(b: Dict[str, Any], e: Dict[str, Any]) -> bool:
+    """Whether a chat trade (:func:`booked_as`) and a blotter entry are the same instrument at the same level."""
+    if b["sig"] != e.get("sig"):
+        return False
+    if b["sig"][0] == "fwd":
+        days = e.get("days")
+        if type(days) is not float or abs(days - b["days"]) > 4.0 + 0.03 * b["days"]:
+            return False                                     # "1M": a value date about a month away
+    if b["sig"][0] == "bond" and b.get("unit") == "yld":
+        return True                                          # the bond and the time alone
+    tol = _LEVEL_TOLERANCE.get(b.get("unit") or "")
+    return tol is not None and b.get("level") is not None and type(e.get("level")) is float and abs(e["level"] - b["level"]) <= tol
+
+
+def _stamp(text: Any) -> Optional[_dt.datetime]:
+    try:
+        return _dt.datetime.strptime(str(text)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def chat_note(q: Dict[str, Any]) -> str:
+    """The note "İşlem gir" gives a trade it fills from a chat line ("Chat 13:41:09 MIKE REES: 18m ois taken at 14")."""
+    return ("Chat " + " ".join(x for x in (q.get("time"), q.get("sender")) if x) + ": " + (q.get("raw") or ""))[:160]
+
+
+def reconcile(chats: List[Dict[str, Any]], entries: List[Dict[str, Any]], overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+              window: float = MATCH_WINDOW) -> Dict[Any, Dict[str, Any]]:
+    """Which trade of the desk said in the chat is in the blotter.  ``chats``: the chat's trade lines (records with
+    ``id``, ``date``, ``time``, ``sender``, ``raw``); ``entries``: the blotter's trades as ``blotter.trade_entries``
+    gives them; ``overrides``: what the desk decided by hand, by chat line id (text) - ``{"match": trade id}``,
+    ``{"ignore": True}``, ``{"reject": [trade ids]}`` (pairs that are not one).
+
+    In order: a pair made by hand; a trade entered from the chat line itself ("İşlem gir": its note names the line,
+    whenever it was entered); a trade of the same instrument at the same level entered within ``window`` seconds of
+    the time the chat says.  One entry for one line, the nearest in time first.  Returns ``{chat id: {"state",
+    "entry", "gap"}}``: state "manual", "linked", "auto" (in the blotter), "ignored", "missing" (not entered) or
+    "noform" (the blotter has no form for it); ``gap``: the entry's time − the chat's (seconds)."""
+    overrides = overrides or {}
+    entry_of = {i: e["id"] for e in entries for i in e.get("ids") or [e["id"]]}
+    by_id = {e["id"]: e for e in entries}
+    taken: set = set()
+    out: Dict[Any, Dict[str, Any]] = {}
+
+    def gap(q: Dict[str, Any], e: Dict[str, Any]) -> Optional[float]:
+        a, b = _stamp("%s %s" % (q.get("date"), q.get("time"))), _stamp(e.get("at"))
+        return None if a is None or b is None else (b - a).total_seconds()
+
+    pending = []
+    for q in chats:
+        o = overrides.get(str(q["id"])) or {}
+        if o.get("ignore"):
+            out[q["id"]] = {"state": "ignored"}
+            continue
+        eid = entry_of.get(o.get("match")) if o.get("match") is not None else None
+        if eid is not None and eid not in taken:
+            taken.add(eid)
+            out[q["id"]] = {"state": "manual", "entry": eid, "gap": gap(q, by_id[eid])}
+            continue                                         # (a pair whose trade was deleted is looked for again)
+        b = booked_as(q)
+        if b is None:
+            out[q["id"]] = {"state": "noform"}
+            continue
+        pending.append((q, b, {entry_of.get(x) for x in o.get("reject") or []}))
+    pairs = []
+    for q, b, rejected in pending:
+        note = chat_note(q)
+        for e in entries:
+            if e["id"] in rejected or e["id"] in taken or not e.get("sig"):
+                continue
+            d = gap(q, e)
+            if e.get("date") == q.get("date") and (e.get("note") or "").startswith(note) and e["sig"][0] == b["sig"][0]:
+                pairs.append((0, abs(d or 0.0), q, e, "linked", d))
+            elif d is not None and abs(d) <= window and _one_trade(b, e):
+                pairs.append((1, abs(d), q, e, "auto", d))
+    pairs.sort(key=lambda p: (p[0], p[1], str(p[2]["id"]), p[3]["id"]))
+    for _, _, q, e, how, d in pairs:
+        if q["id"] in out or e["id"] in taken:
+            continue
+        taken.add(e["id"])
+        out[q["id"]] = {"state": how, "entry": e["id"], "gap": d}
+    for q, _, _ in pending:
+        out.setdefault(q["id"], {"state": "missing"})
+    return out

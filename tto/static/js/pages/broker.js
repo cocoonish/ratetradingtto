@@ -302,6 +302,64 @@ const LOG_SORT = {
   implied: (q) => (q.implied ? (typeof q.implied.bid === 'number' ? q.implied.bid : (typeof q.implied.ask === 'number' ? q.implied.ask : q.implied.price)) : null),
 };
 
+/** "İşlem gir": the level and our side of a chat line, then Günlük İşlemler with the trade filled - the amount is left to
+ * type (``ctx.openTrade``).  From the log's ⇢ and from the list of the desk's trades not entered. */
+export function chatTradeDialog(q, ctx) {
+  const levels = tradeLevels(q);
+  if (!levels.length) return;
+  const names = tradeSideNames(q);
+  let key = levels[0][0];
+  let buy = tradeBuys(q, key);
+  let byHand = false;
+  const m = modal({ title: 'İşlem gir · ' + instText(q), width: 500 });
+  m.box.id = 'chat-trade';
+  const lvBox = h('div', { class: 'seg', id: 'chat-trade-level' });
+  const sideBox = h('div', { class: 'seg', id: 'chat-trade-side' });
+  const why = h('div', { class: 'muted', id: 'chat-trade-why' });
+  const go = h('button', { class: 'btn primary', type: 'button', id: 'chat-trade-open' }, 'Günlük İşlemler\'de aç');
+  const whyText = () => {
+    if (byHand) return 'Yön elle seçildi.';
+    if (key === 'bid') return q.party === 'biz' ? 'Bizim kotamız: bid\'imize satıldı → biz ' + names[0] : 'Broker kotası: bid\'e verdik → biz ' + names[1];
+    if (key === 'ask') return q.party === 'biz' ? 'Bizim kotamız: offer\'ımız alındı → biz ' + names[1] : 'Broker kotası: offer\'ı aldık → biz ' + names[0];
+    if (q.side === 'ask') return 'İşlem: offer alındı → ' + names[0] + (q.party === 'biz' ? '' : ' (bizim tarafımızsa)');
+    if (q.side === 'bid') return 'İşlem: bid\'e verildi → ' + names[1] + (q.party === 'biz' ? '' : ' (bizim tarafımızsa)');
+    return 'Satır yönü söylemiyor: yönü seçin.';
+  };
+  const render = () => {
+    clear(lvBox);
+    for (const [k, caption, v] of levels) {
+      const b = h('button', { type: 'button', class: k === key ? 'on' : '' }, caption + ' ' + level(v, q.unit));
+      b.dataset.v = k;
+      b.addEventListener('click', () => { key = k; if (!byHand) buy = tradeBuys(q, k); render(); });
+      lvBox.appendChild(b);
+    }
+    clear(sideBox);
+    for (const [v, label] of [[true, names[0]], [false, names[1]]]) {
+      const b = h('button', { type: 'button', class: (buy === v ? 'on ' : '') + (v ? 'buy' : 'sell') }, label);
+      b.dataset.v = v ? 'buy' : 'sell';
+      b.addEventListener('click', () => { buy = v; byHand = true; render(); });
+      sideBox.appendChild(b);
+    }
+    why.textContent = whyText();
+    go.disabled = buy === null;
+  };
+  go.addEventListener('click', () => {
+    const spec = tradeSpec(q, key, buy);
+    if (!spec) return;
+    m.close();
+    ctx.openTrade(spec);
+  });
+  m.body.appendChild(h('div', { class: 'muted said' }, [q.time, q.sender].filter(Boolean).join(' · ') + ' — ' + (q.raw || '')));
+  m.body.appendChild(h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', null, 'Seviye'), lvBox),
+    h('div', { class: 'field' }, h('label', null, 'Bizim yönümüz'), sideBox)));
+  m.body.appendChild(why);
+  m.body.appendChild(h('div', { class: 'muted' }, 'Günlük İşlemler\'de enstrüman, seviye, yön ve not dolu açılır; tutarı yazıp kaydedin.'));
+  m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
+  m.foot.appendChild(go);
+  render();
+  return m;
+}
+
 export class BrokerPage {
   constructor(host, ctx) {
     this.host = host;
@@ -404,7 +462,11 @@ export class BrokerPage {
     const people = h('button', { class: 'btn sm', type: 'button', id: 'broker-people',
       title: 'Chat\'lerde yazan isimler: hangisi bizim masa, hangisi hangi broker – herkes için kaydedilir' }, 'İsimler · kaynaklar');
     people.addEventListener('click', () => this.openPeople().catch(errorToast));
-    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Gün'), this.dateSel, this.todayBtn, range, this.exportBtn, people,
+    // the desk's own trades of the chat next to Günlük İşlemler: entered or not
+    this.reconBtn = h('button', { class: 'btn sm', type: 'button', id: 'broker-recon',
+      title: 'Masanın chat\'teki işlemleri (Taraf: Biz) Günlük İşlemler\'de var mı: aynı enstrüman, aynı seviye, ±15 dk' }, 'Chat ↔ blotter');
+    this.reconBtn.addEventListener('click', () => { if (this.ctx.openRecon) this.ctx.openRecon(this.data.date, this.data.ranged ? this.data.to : null); });
+    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Gün'), this.dateSel, this.todayBtn, range, this.exportBtn, people, this.reconBtn,
       h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Kaydedilen kotalar tüm kullanıcılarda anında görünür')));
     this.dayNote = h('div', { class: 'banner hidden' });
     this.host.appendChild(this.dayNote);
@@ -562,6 +624,8 @@ export class BrokerPage {
     this.dayNote.classList.toggle('hidden', d.is_today);
     clear(this.sources);
     for (const s of new Set(d.rows.map((q) => q.source).filter(Boolean))) this.sources.appendChild(h('option', { value: s }));
+    this.reconBtn.textContent = d.unbooked ? d.unbooked + ' işlem girilmedi' : 'Chat ↔ blotter';
+    this.reconBtn.classList.toggle('warn', !!d.unbooked);
 
     // ---- board
     for (const b of this.productSeg.children) b.classList.toggle('on', b.dataset.v === this.product);
@@ -760,61 +824,9 @@ export class BrokerPage {
     return !!(this.ctx.openTrade && tradeKind(q) && tradeLevels(q).length && (q.event === 'trade' || q.party === 'biz'));
   }
 
-  /** "İşlem gir": the level and our side, then Günlük İşlemler with the trade filled - the amount is left to type. */
+  /** "İşlem gir" on a line of the log. */
   openTrade(q) {
-    const levels = tradeLevels(q);
-    if (!levels.length) return;
-    const names = tradeSideNames(q);
-    let key = levels[0][0];
-    let buy = tradeBuys(q, key);
-    let byHand = false;
-    const m = modal({ title: 'İşlem gir · ' + instText(q), width: 500 });
-    m.box.id = 'chat-trade';
-    const lvBox = h('div', { class: 'seg', id: 'chat-trade-level' });
-    const sideBox = h('div', { class: 'seg', id: 'chat-trade-side' });
-    const why = h('div', { class: 'muted', id: 'chat-trade-why' });
-    const go = h('button', { class: 'btn primary', type: 'button', id: 'chat-trade-open' }, 'Günlük İşlemler\'de aç');
-    const whyText = () => {
-      if (byHand) return 'Yön elle seçildi.';
-      if (key === 'bid') return q.party === 'biz' ? 'Bizim kotamız: bid\'imize satıldı → biz ' + names[0] : 'Broker kotası: bid\'e verdik → biz ' + names[1];
-      if (key === 'ask') return q.party === 'biz' ? 'Bizim kotamız: offer\'ımız alındı → biz ' + names[1] : 'Broker kotası: offer\'ı aldık → biz ' + names[0];
-      if (q.side === 'ask') return 'İşlem: offer alındı → ' + names[0] + (q.party === 'biz' ? '' : ' (bizim tarafımızsa)');
-      if (q.side === 'bid') return 'İşlem: bid\'e verildi → ' + names[1] + (q.party === 'biz' ? '' : ' (bizim tarafımızsa)');
-      return 'Satır yönü söylemiyor: yönü seçin.';
-    };
-    const render = () => {
-      clear(lvBox);
-      for (const [k, caption, v] of levels) {
-        const b = h('button', { type: 'button', class: k === key ? 'on' : '' }, caption + ' ' + level(v, q.unit));
-        b.dataset.v = k;
-        b.addEventListener('click', () => { key = k; if (!byHand) buy = tradeBuys(q, k); render(); });
-        lvBox.appendChild(b);
-      }
-      clear(sideBox);
-      for (const [v, label] of [[true, names[0]], [false, names[1]]]) {
-        const b = h('button', { type: 'button', class: (buy === v ? 'on ' : '') + (v ? 'buy' : 'sell') }, label);
-        b.dataset.v = v ? 'buy' : 'sell';
-        b.addEventListener('click', () => { buy = v; byHand = true; render(); });
-        sideBox.appendChild(b);
-      }
-      why.textContent = whyText();
-      go.disabled = buy === null;
-    };
-    go.addEventListener('click', () => {
-      const spec = tradeSpec(q, key, buy);
-      if (!spec) return;
-      m.close();
-      this.ctx.openTrade(spec);
-    });
-    m.body.appendChild(h('div', { class: 'muted said' }, [q.time, q.sender].filter(Boolean).join(' · ') + ' — ' + (q.raw || '')));
-    m.body.appendChild(h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', null, 'Seviye'), lvBox),
-      h('div', { class: 'field' }, h('label', null, 'Bizim yönümüz'), sideBox)));
-    m.body.appendChild(why);
-    m.body.appendChild(h('div', { class: 'muted' }, 'Günlük İşlemler\'de enstrüman, seviye, yön ve not dolu açılır; tutarı yazıp kaydedin.'));
-    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
-    m.foot.appendChild(go);
-    render();
-    return m;
+    return chatTradeDialog(q, this.ctx);
   }
 
   async remove(q) {

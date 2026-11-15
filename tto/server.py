@@ -465,6 +465,15 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                              bool(data.get("undo"))))
 
     @handler
+    async def broker_recon(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().broker_recon_set, _user(request), data.get("quote"), str(data.get("action") or ""),
+                                 data.get("trade")))
+        q = request.query_params
+        return ok(await call(svc().broker_recon, _user(request), q.get("date"), q.get("to")))
+
+    @handler
     async def broker_export(request: Request):
         q = request.query_params
         raw, name = await call(svc().broker_export, _user(request), q.get("date"), q.get("to"))
@@ -745,6 +754,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/broker/export", broker_export),
         Route("/api/broker/delete", broker_delete_many, methods=["POST"]),
         Route("/api/broker/reset", broker_reset, methods=["POST"]),
+        Route("/api/broker/recon", broker_recon, methods=["GET", "POST"]),
         Route("/api/broker/{quote_id:int}", broker_delete, methods=["DELETE"]),
         Route("/api/blotter", blotter),
         Route("/api/blotter/export", blotter_export),

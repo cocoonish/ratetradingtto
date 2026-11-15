@@ -216,6 +216,8 @@ export class BlotterPage {
     this.exportBtn.addEventListener('click', async () => {
       this.exportBtn.disabled = true;
       try {
+        // the desk's trades said in the broker chat that are not here: said before the day is archived
+        if (this.ctx.checkArchive && !(await this.ctx.checkArchive(this.data.date, this.data.ranged ? this.data.to : null))) return;
         const res = await api.download('/api/blotter/export', { date: this.date || undefined, to: this.to || undefined }, 'Blotter.xlsx');
         toast(res.name + ' indirildi', 'ok', 3200);
       } catch (err) { errorToast(err); } finally { this.exportBtn.disabled = false; }

@@ -443,6 +443,67 @@ def test_a_period_lists_the_trades_of_every_day_in_it(desk):
     assert svc.store.trades(days[1], days[1]) == svc.store.trades(days[1]) and len(svc.store.trades(days[0], days[1])) == 3
 
 
+def test_the_desks_chat_trades_are_reconciled_with_the_blotter(desk):
+    """The desk's own trades said in the broker chat next to the blotter: entered (the same instrument and level within
+    a quarter of an hour, or entered from the line with "İşlem gir"), not entered (the menu's count, the list), and what
+    is decided by hand - a pair made, a pair taken apart, a line ignored, each undone."""
+    from tto import brokerchat as bc
+    svc, u = desk
+    today = dt.date.today().isoformat()
+    # typed without a time: said now.  Ours ("Biz") and a broker's - only ours count
+    svc.broker_add(u, "18m ois paid 35.14\n2y ois given at 35.50\n7y ois trades 33.10\n1yr x 38.60 paid", None, "", True, "biz")
+    svc.broker_add(u, "3y ois paid 35.30", None, "Tullett", True, "broker")
+    svc.broker_add(u, "00:00:01 1y ois paid 35.00", None, "", True, "biz")
+    assert svc.status()["chat_missing"] == 4 and svc.broker(u)["unbooked"] == 4
+    rec = svc.add_ois(u, {"strategy": "outright", "side": "PAY", "tenor": "18M", "level": "35,14"})
+    other = svc.add_ois(u, {"strategy": "outright", "side": "RECEIVE", "tenor": "2Y", "level": "35,55"})       # not the 35.50 said
+    line = next(q for q in svc.broker(u)["rows"] if q["raw"] == "1y ois paid 35.00")
+    linked = svc.add_ois(u, {"strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "35", "note": bc.chat_note(line)})
+    data = svc.broker_recon(u)
+    items = {x["raw"]: x for x in data["items"]}
+    assert set(items) == {"18m ois paid 35.14", "2y ois given at 35.50", "7y ois trades 33.10", "1yr x 38.60 paid", "1y ois paid 35.00"}
+    assert (items["18m ois paid 35.14"]["state"], items["18m ois paid 35.14"]["entry"]["id"]) == ("auto", rec["ids"][0])
+    assert abs(items["18m ois paid 35.14"]["gap"]) < 120 and items["18m ois paid 35.14"]["entry"]["label"] == rec["label"]
+    assert items["1y ois paid 35.00"]["state"] == "linked" and items["1y ois paid 35.00"]["entry"]["id"] == linked["ids"][0]
+    assert (items["2y ois given at 35.50"]["state"], items["7y ois trades 33.10"]["state"], items["1yr x 38.60 paid"]["state"]) == \
+        ("missing", "missing", "noform")
+    assert data["missing"] == 2 == svc.status()["chat_missing"] and (data["date"], data["to"], data["ranged"]) == (today, today, False)
+    assert [e["id"] for e in data["entries"]] == [rec["ids"][0], other["ids"][0], linked["ids"][0]]
+    assert [e["taken"] for e in data["entries"]] == [True, False, True]
+    two, seven, eighteen = (items[k]["id"] for k in ("2y ois given at 35.50", "7y ois trades 33.10", "18m ois paid 35.14"))
+    # by hand, for everyone: the 2Y line is the 35.55 trade after all; the 7Y one will not be entered
+    res = svc.broker_recon_set(u, two, "match", other["ids"][0])
+    assert {x["id"]: x["state"] for x in res["items"]}[two] == "manual" and res["missing"] == 1
+    gen = svc.gen
+    res = svc.broker_recon_set(u, seven, "ignore")
+    assert {x["id"]: (x["state"], x["by"]) for x in res["items"]}[seven] == ("ignored", u) and res["missing"] == 0 and svc.gen > gen
+    assert svc.status()["chat_missing"] == 0 and svc.broker(u)["unbooked"] == 0
+    # a pair taken apart: the 18M line is not entered any more - until it is undone
+    res = svc.broker_recon_set(u, eighteen, "reject", rec["ids"][0])
+    assert {x["id"]: x["state"] for x in res["items"]}[eighteen] == "missing" and res["missing"] == 1
+    res = svc.broker_recon_set(u, eighteen, "undo")
+    assert {x["id"]: x["state"] for x in res["items"]}[eighteen] == "auto" and res["missing"] == 0
+    # deleting the trade a line was matched with brings the line back
+    svc.delete_trade(u, other["ids"][0])
+    assert {x["id"]: x["state"] for x in svc.broker_recon(u)["items"]}[two] == "missing" and svc.status()["chat_missing"] == 1
+    # what cannot be done
+    for args, status in (((two, "nonsense"), 400), ((two, "match", 999999), 404), ((123456, "ignore"), 404),
+                         ((next(q["id"] for q in svc.broker(u)["rows"] if q["raw"] == "3y ois paid 35.30"), "ignore"), 200)):
+        if status == 200:
+            svc.broker_recon_set(u, *args)                  # a broker's trade line can be decided on too (it is not listed)
+            continue
+        with pytest.raises(ServiceError) as err:
+            svc.broker_recon_set(u, *args)
+        assert err.value.status == status, args
+    with pytest.raises(ServiceError) as err:
+        svc.broker_recon_set(None, two, "ignore")
+    assert err.value.status == 401
+    old = svc.store.add_trade("2026-02-03", "ois", {"strategy": "outright", "tenor": "2Y", "level": 0.355, "role": "outright"}, u)
+    with pytest.raises(ServiceError):
+        svc.broker_recon_set(u, two, "match", old)       # a trade of another day
+    assert svc.broker_recon(u, "2026-02-03")["items"] == []
+
+
 def test_a_period_downloads_as_one_list(desk):
     from helpers import read_xlsx
     svc, u = desk

@@ -575,6 +575,74 @@ def test_meeting_dated_quotes():
     assert bc.model_level(mpc("dec35 mpc 30.00/31.00"), lambda t: None, None, lambda a, b: 0.3) is None
 
 
+def stored(i, kind, at, package=None, **payload):
+    """A trade as the store gives it back (the day of the chat below, entered at ``at``)."""
+    return dict(payload, id=i, kind=kind, package=package, trade_date="2026-11-13", created_at="2026-11-13 " + at, created_by="masa")
+
+
+def test_the_desks_trades_against_the_blotter():
+    """The desk's trades of the chat against the blotter: the same instrument at the same level within a quarter of an
+    hour, one entry for one line - the nearest in time; a trade entered from the line itself ("İşlem gir": its note)
+    whenever it was entered; pairs made, undone and lines ignored by hand; what the blotter has no form for apart."""
+    chat = bc.parse_chat("13.11.2026\n10:00:00 18m ois paid 35.14\n10:10:00 1y5y ois given at -64\n10:20:00 2y ois trades 35.50\n"
+                         "11:00:00 3y ois paid 35.30\n11:20:00 3y ois paid 35.30\n12:00:00 MIKE REES: 9x12 ois fra paid 34.10\n"
+                         "12:30:00 1yr x 38.60 paid\n12:40:00 dec mpc paid 36.75\n12:50:00 fx 1m 12.750 paid\n13:00:00 15/3/28 100.550 paid\n"
+                         "13:10:00 4y ois paid 34.80\n13:20:00 5y ois paid 34.70", None, TODAY, calendar=CALENDAR)
+    for i, q in enumerate(chat):
+        q["id"] = 100 + i
+    by_raw = {q["raw"]: q["id"] for q in chat}
+    trades = [stored(1, "ois", "10:05:00", strategy="outright", tenor="18M", level=0.3514, role="outright", side="PAY", label="PAY 18M @ 35,14%"),
+              stored(2, "ois", "10:30:00", strategy="spread", tenor="1Y", level=-64.0, role="short", side="FLATTENER", label="FLAT", package="p1"),
+              stored(3, "ois", "10:30:00", strategy="spread", tenor="5Y", level=-64.0, role="long", side="FLATTENER", label="FLAT", package="p1"),
+              stored(4, "ois", "10:21:00", strategy="outright", tenor="2Y", level=0.3555, role="outright", side="PAY", label="2Y"),
+              stored(5, "ois", "11:12:00", strategy="outright", tenor="3Y", level=0.353, role="outright", side="PAY", label="3Y"),
+              stored(6, "ois", "14:00:00", strategy="fra", tenor="9M", level=0.341, role="start", side="PAY", label="FRA", package="p2",
+                     note="Chat 12:00:00 MIKE REES: 9x12 ois fra paid 34.10"),
+              stored(7, "ois", "14:00:00", strategy="fra", tenor="1Y", level=0.341, role="end", side="PAY", label="FRA", package="p2"),
+              stored(8, "ois", "12:41:00", strategy="mpc", tenor="MPC 11.12.26–22.01.27", level=0.3675, role="mpc", side="PAY", label="MPC",
+                     mpc={"start": 46367.0, "end": 46409.0, "days": 42.0}),
+              stored(9, "fwd", "12:52:00", pair="USDTRY", dir="B", amount=10e6, points=12750.0, days=31.0),
+              stored(10, "bond", "13:03:00", instrument="TRT150328T24", amount=50e6, price=100.55, name="15.03.28"),
+              stored(11, "ois", "13:11:00", strategy="outright", tenor="4Y", level=0.348, role="outright", side="PAY", label="4Y"),
+              stored(12, "ois", "13:21:00", strategy="outright", tenor="5Y", level=0.347, role="outright", side="PAY", label="5Y")]
+    entries = bl.trade_entries(trades)
+    assert [(e["id"], e["ids"], e["sig"], e["level"]) for e in entries][:3] == [
+        (1, [1], ("ois", "outright", "18M"), pytest.approx(35.14)), (2, [2, 3], ("ois", "spread", "1Y", "5Y"), -64.0),
+        (4, [4], ("ois", "outright", "2Y"), pytest.approx(35.55))]
+    assert {e["id"]: e["sig"] for e in entries}[6] == ("ois", "fra", 9, 12) and {e["id"]: e["sig"] for e in entries}[8] == ("ois", "mpc", "2026-12-11", "2027-01-22")
+
+    def states(overrides=None):
+        got = bc.reconcile(chat, entries, overrides)
+        return {raw: (got[i]["state"], got[i].get("entry")) for raw, i in by_raw.items()}
+
+    s = states()
+    assert s["18m ois paid 35.14"] == ("auto", 1) and bc.reconcile(chat, entries)[by_raw["18m ois paid 35.14"]]["gap"] == 300.0
+    assert s["1y5y ois given at -64"] == ("missing", None)                    # entered 20 minutes later: not taken for it
+    assert s["2y ois trades 35.50"] == ("missing", None)                      # another level
+    assert s["3y ois paid 35.30"] == ("auto", 5)                              # two lines, one trade: the nearer one (11:20, 8 min) has it
+    assert bc.reconcile(chat, entries)[next(q["id"] for q in chat if q["time"] == "11:00:00")]["state"] == "missing"
+    assert s["9x12 ois fra paid 34.10"] == ("linked", 6)                      # two hours later, from the line itself
+    assert s["1yr x 38.60 paid"] == ("noform", None)                          # no cross currency form in the blotter
+    assert s["dec mpc paid 36.75"] == ("auto", 8) and s["fx 1m 12.750 paid"] == ("auto", 9) and s["15/3/28 100.550 paid"] == ("auto", 10)
+    # by hand: a pair made (also out of the window), a line ignored, a pair taken apart - and each undone by leaving it out
+    four, five = by_raw["4y ois paid 34.80"], by_raw["5y ois paid 34.70"]
+    assert (s["4y ois paid 34.80"], s["5y ois paid 34.70"]) == (("auto", 11), ("auto", 12))
+    s = states({str(by_raw["1y5y ois given at -64"]): {"match": 3}, str(by_raw["2y ois trades 35.50"]): {"ignore": True},
+                str(four): {"reject": [11]}, str(five): {"match": 11}})
+    assert s["1y5y ois given at -64"] == ("manual", 2)                        # a leg's id is its package's
+    assert s["2y ois trades 35.50"] == ("ignored", None)
+    assert s["4y ois paid 34.80"] == ("missing", None) and s["5y ois paid 34.70"] == ("manual", 11)   # trade 12 is left without a line
+    # a pair made with a trade that was deleted since: looked for again
+    assert states({str(five): {"match": 99}})["5y ois paid 34.70"] == ("auto", 12)
+    # what the blotter books a chat trade as
+    booked = lambda text, where=ref: bc.booked_as(dict(one(text, where), ok=True))           # noqa: E731
+    assert booked("18m ois paid 35.14") == {"sig": ("ois", "outright", "18M"), "level": 35.14, "unit": "pct"}
+    assert booked("1y1y ois paid 34.50")["sig"] == ("ois", "fra", 12, 24)
+    assert booked("12y ois paid 30") is None and booked("6x9m vs 9x12m paid -40") is None
+    assert booked("t/n 375 paid") is None and booked("mpc1 paid 36.75", None) is None              # a meeting not dated
+    assert bc.chat_note(chat[5]) == "Chat 12:00:00 MIKE REES: 9x12 ois fra paid 34.10"
+
+
 def test_against_a_curve():
     par = {"6M": 0.3644, "1Y": 0.3555, "18M": 0.3559, "2Y": 0.3585, "3Y": 0.3566, "4Y": 0.3527, "5Y": 0.3471}.get
     fra = lambda a, b: {(9, 12): 0.3411, (12, 24): 0.3627}.get((a, b))      # noqa: E731

@@ -21,10 +21,11 @@ import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
 import { UsersPage } from './pages/users.js';
 import { loadHiddenColumns } from './columns.js';
+import { openRecon, checkBeforeArchive } from './recon.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null, es: null,
-  online: true, booted: false, pending: 0 };
+  online: true, booted: false, pending: 0, chatMissing: 0 };
 
 function store(key, value) {
   try {
@@ -51,6 +52,10 @@ const ctx = {
     if (window.location.hash === hash) route();
     else window.location.hash = hash;
   },
+  /** The desk's trades of the broker chat next to Günlük İşlemler (a day, a period; today when none is given). */
+  openRecon: (date, to) => openRecon(ctx, date, to),
+  /** Before the day's archive: the desk's chat trades not in the blotter, if any - true when it is to be downloaded. */
+  checkArchive: (date, to) => checkBeforeArchive(ctx, date, to),
   /** How many account requests wait (the badge on "Kullanıcılar" in the menu). */
   setPending: (n) => {
     state.pending = n || 0;
@@ -61,6 +66,22 @@ const ctx = {
     if (state.pending) item.appendChild(h('span', { class: 'nav-count', title: 'Onay bekleyen hesap isteği' }, String(state.pending)));
   },
 };
+
+/** "N işlem girilmedi" on Broker Chat in the menu: today's trades of the desk said in the chat and not in Günlük
+ * İşlemler (from the status).  A click opens their list, wherever one is. */
+function setChatMissing(n) {
+  state.chatMissing = n || 0;
+  const item = document.querySelector('#nav .nav-item[data-page="broker"]');
+  if (!item) return;
+  const old = item.querySelector('.nav-count.chat');
+  if (old) old.remove();
+  if (!state.chatMissing) return;
+  const badge = h('span', { class: 'nav-count chat', id: 'nav-chat-missing', role: 'button',
+    title: state.chatMissing + ' işlem chat\'te var, Günlük İşlemler\'de yok – listeyi açmak için tıklayın' },
+  h('b', null, String(state.chatMissing)), h('span', { class: 'txt' }, ' işlem girilmedi'));
+  badge.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openRecon(ctx).catch(errorToast); });
+  item.appendChild(badge);
+}
 
 // ---------------------------------------------------------------------- sign-in
 // One card, three forms: sign in; ask for an account (an administrator approves it); and - while the dashboard has
@@ -237,6 +258,7 @@ function buildNav() {
     nav.appendChild(box);
   }
   ctx.setPending(state.pending);
+  setChatMissing(state.chatMissing);
 }
 
 function pageTitle(id) {
@@ -351,6 +373,7 @@ function setOnline(on) {
 function applyStatus(status) {
   if (!status) return;
   state.status = status;
+  if (typeof status.chat_missing === 'number' && status.chat_missing !== state.chatMissing) setChatMissing(status.chat_missing);
   const badge = $('mode-badge');
   badge.classList.remove('live', 'replay', 'slow');
   if (!state.online) {

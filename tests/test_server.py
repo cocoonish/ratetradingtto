@@ -270,6 +270,27 @@ def test_blotter_archive_download(client, user):
     assert client.get("/api/blotter/export?date=bozuk").status_code == 400
 
 
+def test_the_desks_chat_trades_against_the_blotter_over_http(client, user):
+    """A trade of the desk said in the broker chat and not entered: counted in the status (the menu's badge), listed,
+    ignored and taken back over HTTP; deciding needs a session."""
+    h = hdr(user)
+    before = client.get("/api/status").json()["chat_missing"]
+    assert client.post("/api/broker", json={"text": "9y ois given at 33.05", "party": "biz"}, headers=h).status_code == 200
+    data = client.get("/api/broker/recon").json()
+    line = next(x for x in data["items"] if x["raw"] == "9y ois given at 33.05")
+    assert line["state"] == "missing" and line["q"]["party"] == "biz" and data["window"] == 900
+    assert client.get("/api/status").json()["chat_missing"] == before + 1
+    assert client.post("/api/broker/recon", json={"quote": line["id"], "action": "ignore"}, headers=ANON).status_code == 401
+    res = client.post("/api/broker/recon", json={"quote": line["id"], "action": "ignore"}, headers=h)
+    assert res.status_code == 200 and next(x for x in res.json()["items"] if x["id"] == line["id"])["state"] == "ignored"
+    assert client.get("/api/status").json()["chat_missing"] == before
+    assert client.post("/api/broker/recon", json={"quote": line["id"], "action": "undo"}, headers=h).json()["missing"] == data["missing"]
+    assert client.post("/api/broker/recon", json={"quote": line["id"], "action": "bozuk"}, headers=h).status_code == 400
+    assert client.post("/api/broker/recon", json={"quote": "x", "action": "ignore"}, headers=h).status_code == 400
+    assert client.get("/api/broker/recon", params={"date": "dün"}).status_code == 400
+    assert client.get("/static/js/recon.js").status_code == 200
+
+
 def test_errors_are_json_and_never_tracebacks(client):
     res = client.get("/api/cell?book=tto&ref=bozuk")
     assert res.status_code == 404 and set(res.json()) == {"error"}

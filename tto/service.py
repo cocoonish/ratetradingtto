@@ -869,6 +869,8 @@ class Service(object):
             ret = self.store.shared_meta("tto", cells)
         return {"mode": self.mode, "note": self.mode_note, "provider": prov, "gen": self.gen, "today": today,
                 "ret": ret, "server_date": _dt.date.today().isoformat(),
+                # today's trades of the desk said in the broker chat and not entered in Günlük İşlemler (the menu's badge)
+                "chat_missing": self.chat_unbooked(),
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
                                 "source": b.model.meta.get("source"), "left_out": list(getattr(b, "left_out", []))}
                           for bid, b in self.books.items()},
@@ -4317,7 +4319,9 @@ class Service(object):
         rows, table, resets = self._broker_board(user, day, last)
         self._fx_implied(user, rows, table)
         return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
-                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen}
+                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen,
+                # the desk's trades of the chat not in Günlük İşlemler, of the day shown (what "Chat ↔ blotter" lists)
+                "unbooked": self._broker_recon(day, last)["missing"]}
 
     def _broker_board(self, user, day: str, last: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """The kept lines of the days, each with whose it is, and the board they make (resets applied), each
@@ -4372,6 +4376,100 @@ class Service(object):
         self.store.put("broker.resets", resets)
         self.bump()
         return self.broker(user, day)
+
+    # ------------------------------------------------------------------ the chat against the blotter
+    def broker_recon(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """The desk's own trades said in the chat (trade lines whose party is "biz") next to Günlük İşlemler: entered
+        or not (``bc.reconcile``: the same instrument at the same level within a quarter of an hour, or entered from
+        the line itself), with what was decided by hand.  ``missing``: how many are not entered."""
+        day = self._broker_day(date)
+        last = self._broker_day(date_to) if date_to else day
+        if last < day:
+            day, last = last, day
+        return self._broker_recon(day, last)
+
+    def _broker_recon(self, day: str, last: str) -> Dict[str, Any]:
+        people = self._people()
+        chats = []
+        for q in self.store.broker_trades(day, last):
+            if not q.get("ok"):
+                continue
+            q["source"], q["party"] = self._who(people, q, q.get("source") or "", q.get("party") or "")
+            if q["party"] == "biz":
+                chats.append(q)
+        entries = bl.trade_entries(self.store.trades(day, last))
+        overrides = self._recon_overrides()
+        states = bc.reconcile(chats, entries, overrides)
+        by_id = {e["id"]: e for e in entries}
+        matched = {s["entry"] for s in states.values() if s.get("entry") is not None}
+
+        def entry(e: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            if e is None:
+                return None
+            return {"id": e["id"], "ids": e["ids"], "kind": e["kind"], "label": e["label"], "date": e["date"],
+                    "time": str(e.get("at") or "")[11:16], "by": e.get("by"), "taken": e["id"] in matched}
+
+        items = []
+        for q in chats:
+            st = states.get(q["id"]) or {"state": "missing"}
+            o = overrides.get(str(q["id"])) or {}
+            items.append({"id": q["id"], "date": q["date"], "time": q["time"], "sender": q.get("sender") or "", "source": q.get("source") or "",
+                          "raw": q.get("raw") or "", "state": st["state"], "gap": st.get("gap"), "entry": entry(by_id.get(st.get("entry"))),
+                          "by": o.get("by") if st["state"] in ("manual", "ignored") else None, "q": q})
+        return {"date": day, "to": last, "ranged": day != last, "today": self.today_iso(), "items": items,
+                "missing": sum(1 for x in items if x["state"] == "missing"), "entries": [entry(e) for e in entries],
+                "window": bc.MATCH_WINDOW}
+
+    def _recon_overrides(self) -> Dict[str, Dict[str, Any]]:
+        v = self.store.get("broker.recon", {})
+        return v if isinstance(v, dict) else {}
+
+    def broker_recon_set(self, user: str, quote_id: Any, action: str, trade_id: Any = None) -> Dict[str, Any]:
+        """What the desk decides about one trade line of the chat, for everyone: ``match`` it with a trade of
+        Günlük İşlemler of its day (``trade_id``), ``ignore`` it (it will not be entered), ``reject`` the trade it was
+        matched with (not this one) or ``undo`` what was decided."""
+        user = self.require_user(user)
+        if action not in ("match", "ignore", "reject", "undo"):
+            raise ServiceError("bilinmeyen işlem: %r" % action)
+        try:
+            qid = int(quote_id)
+        except (TypeError, ValueError):
+            raise ServiceError("chat satırı bekleniyor")
+        q = self.store.broker_quote(qid)
+        if q is None or q.get("event") != "trade":
+            raise ServiceError("chat'te böyle bir işlem satırı yok", 404)
+        overrides = dict(self._recon_overrides())
+        key = str(qid)
+        if action == "undo":
+            overrides.pop(key, None)
+        elif action == "ignore":
+            overrides[key] = {"ignore": True, "by": user, "at": now_iso()}
+        else:
+            try:
+                t = self.store.trade(int(trade_id))
+            except (TypeError, ValueError):
+                t = None
+            if t is None:
+                raise ServiceError("Günlük İşlemler'de böyle bir işlem yok", 404)
+            if action == "match":
+                if t["trade_date"] != q["date"]:
+                    raise ServiceError("işlem başka bir günün (%s): chat satırı %s" % (t["trade_date"], q["date"]))
+                overrides[key] = {"match": t["id"], "by": user, "at": now_iso()}
+            else:
+                old = (overrides.get(key) or {}).get("reject") or []
+                overrides[key] = {"reject": sorted(set(old) | {t["id"]}), "by": user, "at": now_iso()}
+        if len(overrides) > 5000:                          # the oldest decisions go first
+            overrides = dict(sorted(overrides.items(), key=lambda kv: str(kv[1].get("at") or ""))[-5000:])
+        self.store.put("broker.recon", overrides)
+        self.bump()
+        return self._broker_recon(q["date"], q["date"])
+
+    def chat_unbooked(self) -> Optional[int]:
+        """How many of today's trades of the desk in the chat are not in Günlük İşlemler (the badge of the menu)."""
+        try:
+            return self._broker_recon(self.today_iso(), self.today_iso())["missing"]
+        except Exception:  # noqa: BLE001 - a status is never lost to it
+            return None
 
     def broker_delete_many(self, user: str, ids: List[Any]) -> Dict[str, Any]:
         """Delete the lines ticked in the log (for everyone)."""

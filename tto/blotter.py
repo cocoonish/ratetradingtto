@@ -10,6 +10,7 @@ from __future__ import annotations
 import bisect
 import datetime as _dt
 import math
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .xl.engine import Calc
@@ -740,6 +741,75 @@ def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         pc["realised"] = pc["realised"] / 100.0
         out["bond"].append(pc)
     return out
+
+
+def _months_of(tenor: Any) -> Optional[int]:
+    """The months of a tenor of the lists: "9M" 9, "1Y" 12, "27M" 27 (``None`` for "ON", "1W" ...)."""
+    m = re.match(r"^(\d+)([MY])$", str(tenor or ""))
+    return int(m.group(1)) * (12 if m.group(2) == "Y" else 1) if m else None
+
+
+def _size(v: Any) -> str:
+    """An amount as the desk says it: 10m, 2,5m, 500k, 1bn."""
+    if type(v) is not float:
+        return "–"
+    a = abs(v)
+    for unit, k in (("bn", 1e9), ("m", 1e6), ("k", 1e3)):
+        if a >= k:
+            return ("%g" % round(a / k, 3)).replace(".", ",") + unit
+    return ("%g" % a).replace(".", ",")
+
+
+def trade_entries(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The blotter's trades as they were entered - an OIS spread, fly or FRA is one entry of its legs (its package) -
+    each with its instrument as the broker chat names it (``sig``: see ``brokerchat.booked_as``), its level in the
+    chat's unit (per cent for an outright, a FRA and a meeting swap; bp for a spread and a fly; swap points; a bond's
+    price), when it was entered (``at``), its day, its note and a label to show.  ``id``: the first leg's."""
+    out: List[Dict[str, Any]] = []
+    packages: Dict[str, List[Dict[str, Any]]] = {}
+    for t in trades:
+        kind = t.get("kind")
+        base = {"id": t["id"], "ids": [t["id"]], "kind": kind, "at": t.get("created_at"), "date": t.get("trade_date"),
+                "note": t.get("note") or "", "by": t.get("created_by")}
+        if kind == "ois":
+            packages.setdefault(t.get("package") or "#%d" % t["id"], []).append(t)
+        elif kind == "fwd":
+            pair = t.get("pair") or "USDTRY"
+            points = t.get("points") if type(t.get("points")) is float else None
+            days = t.get("days") if type(t.get("days")) is float else None
+            out.append(dict(base, sig=("fwd", pair), level=points, days=days,
+                            label="%s %s %s · %s gün · %s puan" % ("Alış" if t.get("dir") == "B" else "Satış", pair, _size(t.get("amount")),
+                                                                   "%d" % days if days is not None else "?", "%g" % points if points is not None else "?")))
+        elif kind == "bond":
+            inst = "".join(str(t.get("instrument") or "").split()).upper()
+            amount, price = t.get("amount"), t.get("price")
+            out.append(dict(base, sig=("bond", inst), level=price if type(price) is float else None,
+                            label="%s %s %s @ %s" % ("Alış" if type(amount) is float and amount > 0 else "Satış", t.get("name") or inst,
+                                                    _size(abs(amount) if type(amount) is float else None),
+                                                    ("%.3f" % price).replace(".", ",") if type(price) is float else "?")))
+    for legs in packages.values():
+        legs.sort(key=lambda x: x["id"])
+        first = legs[0]
+        role = {lg.get("role"): lg for lg in legs}
+        strategy = first.get("strategy")
+        level = first.get("level") if type(first.get("level")) is float else None
+        sig: Optional[Tuple[Any, ...]] = None
+        if strategy == "outright":
+            sig = ("ois", "outright", first.get("tenor"))
+        elif strategy == "spread" and "short" in role and "long" in role:
+            sig = ("ois", "spread", role["short"].get("tenor"), role["long"].get("tenor"))
+        elif strategy == "fly" and all(k in role for k in ("wing1", "body", "wing2")):
+            sig = ("ois", "fly", role["wing1"].get("tenor"), role["body"].get("tenor"), role["wing2"].get("tenor"))
+        elif strategy == "fra" and "end" in role:
+            sig = ("ois", "fra", _months_of(role["start"].get("tenor")) if "start" in role else 0, _months_of(role["end"].get("tenor")))
+        elif strategy == "mpc" and first.get("mpc"):
+            sig = ("ois", "mpc", serial_to_date(first["mpc"]["start"]).isoformat(), serial_to_date(first["mpc"]["end"]).isoformat())
+        if level is not None and strategy in ("outright", "fra", "mpc"):
+            level *= 100.0                                   # per cent, as the chat says it
+        out.append({"id": first["id"], "ids": [lg["id"] for lg in legs], "kind": "ois", "sig": sig, "level": level,
+                    "at": first.get("created_at"), "date": first.get("trade_date"), "note": first.get("note") or "",
+                    "by": first.get("created_by"), "label": first.get("label") or "", "cpt": first.get("cpt") or ""})
+    return sorted(out, key=lambda e: e["id"])
 
 
 def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:

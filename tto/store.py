@@ -422,13 +422,25 @@ class Store(object):
         """The rows of a day, or of every day from ``day`` to ``until``, in the order they were said."""
         rows = self._q("SELECT * FROM broker_quotes WHERE quote_date>=? AND quote_date<=? AND deleted=0 "
                        "ORDER BY quote_date, quote_time, id", (day, until or day))
-        out = []
-        for r in rows:
-            d = json.loads(r["payload"])
-            d.update({"id": r["id"], "date": r["quote_date"], "time": r["quote_time"], "created_by": r["created_by"],
-                      "created_at": r["created_at"]})
-            out.append(d)
-        return out
+        return [self._broker_row(r) for r in rows]
+
+    def broker_trades(self, day: str, until: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The trade lines of a day (or of every day from ``day`` to ``until``) in the order they were said - without
+        reading every other line (the rows are kept as ``json.dumps`` writes them: ``"event": "trade"``)."""
+        rows = self._q("SELECT * FROM broker_quotes WHERE quote_date>=? AND quote_date<=? AND deleted=0 AND payload LIKE ? "
+                       "ORDER BY quote_date, quote_time, id", (day, until or day, '%"event": "trade"%'))
+        return [q for q in (self._broker_row(r) for r in rows) if q.get("event") == "trade"]
+
+    def broker_quote(self, quote_id: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM broker_quotes WHERE id=? AND deleted=0", (quote_id,))
+        return self._broker_row(rows[0]) if rows else None
+
+    @staticmethod
+    def _broker_row(r) -> Dict[str, Any]:
+        d = json.loads(r["payload"])
+        d.update({"id": r["id"], "date": r["quote_date"], "time": r["quote_time"], "created_by": r["created_by"],
+                  "created_at": r["created_at"]})
+        return d
 
     def broker_senders(self) -> List[Tuple[str, int, str]]:
         """Every sender of the kept chats: (name, lines, last day)."""

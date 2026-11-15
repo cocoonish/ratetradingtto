@@ -695,6 +695,49 @@ async function shot(page, name) {
     check('... and its "İşlem gir" opens the blotter\'s MPC form with the meeting\'s two days, the level and PAY',
       JSON.stringify(mpcFilled) === JSON.stringify(['mpc', 'PAY', serialOf(mpcKept.mpc.start), serialOf(mpcKept.mpc.end), '36,75']), [mpcFilled, mpcKept.mpc]);
     await open(page, 'broker');
+    // a trade of the desk said in the chat and not entered: "N işlem girilmedi" on Broker Chat in the menu, its list ("Yok say" and
+    // back), the warning before the day's archive; entered from the list ("⇢ Gir") it is in the blotter and the badge goes
+    const deskLine = await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '18m ois paid 35.20', party: 'biz' });
+    await page.waitForSelector('#nav-chat-missing', { timeout: 30000 });
+    check('a trade of the desk in the chat that is not in the blotter: "1 işlem girilmedi" on Broker Chat in the menu',
+      deskLine.json.saved === 1 && (await page.textContent('#nav-chat-missing')).trim() === '1 işlem girilmedi'
+      && await page.evaluate(() => !!document.querySelector('#nav .nav-item[data-page="broker"] #nav-chat-missing')), await page.textContent('#nav-chat-missing'));
+    await page.click('#nav-chat-missing');
+    await page.waitForSelector('#chat-recon-table');
+    const reconRow = () => page.evaluate(() => [...document.querySelectorAll('#chat-recon-table tr')].slice(1).map((tr) => [tr.dataset.id]
+      .concat([...tr.children].map((td) => td.textContent))).find((r) => r[3] === '18m ois paid 35.20'));
+    let deskRow = await reconRow();
+    check('... a click on it lists the line: its trade, "Girilmedi"', !!deskRow && deskRow[4] === '18M @ 35,20' && deskRow[5] === 'Girilmedi', deskRow);
+    const deskId = deskRow[0];
+    await page.click('#recon-ignore-' + deskId);
+    await page.waitForFunction(() => /Yok sayıldı/.test(document.querySelector('#chat-recon-table').textContent) && !document.querySelector('#nav-chat-missing'),
+      null, { timeout: 15000 });
+    await page.click('#recon-undo-' + deskId);
+    await page.waitForSelector('#nav-chat-missing', { timeout: 15000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-recon-table tr')].some((tr) => /18m ois paid 35\.20/.test(tr.textContent)
+      && /Girilmedi/.test(tr.textContent)), null, { timeout: 15000 });
+    deskRow = await reconRow();
+    check('... "Yok say" takes it off the count, "Geri al" brings it back', deskRow[5] === 'Girilmedi', deskRow);
+    await page.click('#chat-recon .mfoot .btn');
+    await open(page, 'blotter');
+    await page.click('button:has-text("Gün sonu arşivi")');
+    await page.waitForSelector('#archive-warn');
+    const archiveWarn = await page.textContent('#archive-warn');
+    check('the day\'s archive warns of it first', /masanın 1 işlemi Günlük İşlemler'de görünmüyor/.test(archiveWarn) && /18M @ 35,20/.test(archiveWarn), archiveWarn);
+    await page.click('#archive-warn-list');
+    await page.waitForSelector('#recon-enter-' + deskId);
+    await page.click('#recon-enter-' + deskId);
+    await page.waitForSelector('#chat-trade');
+    await page.click('#chat-trade-open');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ois && window.tto.state.page.ois.level.value === '35,20'
+      && window.tto.state.page.ois.f.tenor && window.tto.state.page.ois.f.tenor.value === '18M', null, { timeout: 20000 });
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction(() => !document.querySelector('#nav-chat-missing'), null, { timeout: 20000 });
+    const deskAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json.items.find((x) => x.raw === '18m ois paid 35.20') || {};
+    check('... "⇢ Gir" in the list fills Günlük İşlemler; saved, the line is entered and the badge goes', ['linked', 'auto'].includes(deskAfter.state), deskAfter);
+    const [deskArchive] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
+    check('... and the archive downloads without a word', /^Blotter_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(deskArchive.suggestedFilename()), deskArchive.suggestedFilename());
+    await open(page, 'broker');
 
     // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
     console.log('blotter: pairs, swap points, MPC');
