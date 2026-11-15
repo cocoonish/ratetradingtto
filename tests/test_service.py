@@ -813,6 +813,14 @@ def test_the_motor_page_is_for_administrators_and_two_pages_have_their_desk_name
     assert service.view(admin, "motor")["id"] == "motor" and service.view(None, "motor")["id"] == "motor"
     assert "motor" not in {link["page"] for link in service.view(user, "masa")["links"]}
     assert "motor" in {link["page"] for link in service.view(admin, "masa")["links"]}
+    # the page everybody shares is kept - also when the service itself made it (the warm-up has no user): kept, the
+    # administrators' page reaches no one else, nor does a shortcut to it
+    service.view(None, "motor")
+    service.view(None, "masa")
+    with pytest.raises(ServiceError) as exc:
+        service.view(user, "motor")
+    assert exc.value.status == 403
+    assert "motor" not in {link["page"] for link in service.view(user, "masa")["links"]}
     titles = {p["id"]: p["title"] for p in service.nav(user)}
     assert titles["bulk"] == "Eurobond Kotaları" and titles["tmois"] == "OIS · Nakit Akışı"
     isins = [cell(service, "Bulk Bond!A%d" % r) for r in (3, 4, 5)]
