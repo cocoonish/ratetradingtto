@@ -2232,6 +2232,28 @@ async function shot(page, name) {
     check('the quant analyses answer from their own thread', qs.status === 200 && qs.json.ready === true && qs.json.fits >= 1, qs.json);
     await shot(page, 'quant-signals');
 
+    // ------------------------------------------------------------------ the implied path on its grid (quantpath.py)
+    console.log('implied path');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/quant/recompute', {});          // (a fit with the recorded month of meeting pricing)
+    await open(page, 'quant-path');
+    await page.waitForSelector('#quant-path-meetings', { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelectorAll('#quant-path-meetings table.grid tr:not(.hd)').length >= 3, null, { timeout: 90000 });
+    const pathApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/path');
+    const pb = ((pathApi.json || {}).path || {}).banks || {};
+    const pt = pb.try || {};
+    check('İma Patikası: every TCMB meeting a mix of its two 50 bp outcomes, consecutive pairs with their discrete paths, kinks, calibration',
+      pathApi.status === 200 && pt.ok && pt.grid === 50 && pt.rows.length >= 3 && pt.rows.every((r) => Math.abs(r.p_lo * r.lo + r.p_hi * r.hi - r.step) < 1e-6)
+      && pt.pairs.length >= 1 && pt.pairs[0].paths.every((q) => q.p_min <= q.p_max) && pt.kinks.length >= 1 && pt.calibration.n >= 0
+      && await page.locator('#quant-path-pairs table.grid').count() === 1 && await page.locator('#quant-path-kinks table.grid').count() === 1
+      && await page.locator('#quant-path-calib table.grid').count() === 1, { rows: (pt.rows || []).length, why: pt.why });
+    check('... the replay note: live quotes drive it', await page.locator('#quant-path-mode:not(.hidden)').count() === 1);
+    await page.click('#quant-path-bank button[data-v="usd"]');
+    await page.waitForFunction(() => /Fed · FOMC/.test((document.querySelector('#quant-path-meetings h2') || {}).textContent || ''), null, { timeout: 10000 });
+    const usdRows = await page.locator('#quant-path-meetings table.grid tr:not(.hd)').count();
+    check('... the Fed from the USD workbook\'s FOMC table: ten meetings on a 25 bp grid', usdRows === 10 && pb.usd && pb.usd.ok && pb.usd.grid === 25, { usdRows });
+    await shot(page, 'quant-path');
+    await page.click('#quant-path-bank button[data-v="try"]');                 // (the choice is kept in the browser: TCMB again)
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
