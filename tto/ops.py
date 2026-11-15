@@ -14,8 +14,12 @@
   page): the market hours and how long without a tick counts as stale.
 * **The database.**  ``PRAGMA quick_check`` at every start (a failure is said on the console, in the log, in the
   status); every night at ``--backup-time`` (22:00) an online copy to ``--backup-dir`` (``data/backups``) as
-  ``tto-YYYY-MM-DD.db``, the newest 30 kept.  A dashboard that was not running at that time takes the copy it
-  missed five minutes after it starts.  ``python -m tto yedekten-don <file>`` puts one back (see store.restore).
+  ``tto-YYYY-MM-DD.db``, the newest 30 kept - and a second copy of it in ``--backup-copy-dir`` (another drive:
+  ``D:\\tto-yedek`` for the installed dashboard), with the same 30.  The second copy never fails the backup: when it
+  cannot be written that is logged once and shown in the status, and only after two nights in a row it is the
+  database's system alarm.  A dashboard that was not running at the backup time takes the copy it missed five
+  minutes after it starts.  ``python -m tto yedekten-don <file>`` puts one back, from either folder (store.restore).
+  Nothing is copied off the machine.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ import logging
 import logging.handlers
 import os
 import re
+import shutil
 import threading
 import time
 import traceback
@@ -337,18 +342,28 @@ class Ops(object):
             log.info("veritabanı denetimi tamam (%.2f sn): %s", self.db_check["seconds"], self.svc.settings.db_path)
         return self.db_check
 
-    def backup_now(self) -> Dict[str, Any]:
-        """An online copy of the database as ``tto-<today>.db`` in the backup folder (today's earlier copy is
-        replaced), then only the newest BACKUP_KEEP kept."""
+    def backup_now(self, day: Optional[_dt.date] = None) -> Dict[str, Any]:
+        """An online copy of the database as ``tto-<day>.db`` (today's) in the backup folder (that day's earlier copy
+        is replaced), then only the newest BACKUP_KEEP kept; then its second copy (:meth:`copy_backup`), which never
+        fails the backup."""
+        day = day or _dt.date.today()
         folder = self.svc.settings.backup_dir
         self._backup_tried = time.time()
         try:
-            res = self.svc.store.backup_to(os.path.join(folder, "tto-%s.db" % _dt.date.today().isoformat()))
+            res = self.svc.store.backup_to(os.path.join(folder, "tto-%s.db" % day.isoformat()))
         except Exception as exc:  # noqa: BLE001 - said, kept for the status, tried again later
             self.backup_error = {"at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "text": "%s: %s" % (type(exc).__name__, exc)}
             log.error("veritabanı yedeği alınamadı (%s): %s", folder, self.backup_error["text"])
             raise
         self.backup_error = None
+        removed = self._prune(folder)
+        log.info("veritabanı yedeklendi: %s (%d bayt, %.1f sn)%s", res["path"], res["bytes"], res["seconds"],
+                 (" – eski yedekler silindi: %s" % ", ".join(removed)) if removed else "")
+        return dict(res, removed=removed, copy=self.copy_backup(res["path"], day))
+
+    @staticmethod
+    def _prune(folder: str) -> List[str]:
+        """Only the newest BACKUP_KEEP dated backups of a folder stay (nothing else in it is touched)."""
         removed = []
         for old in backups(folder)[BACKUP_KEEP:]:
             try:
@@ -356,9 +371,52 @@ class Ops(object):
                 removed.append(old["name"])
             except OSError as exc:
                 log.warning("eski yedek silinemedi: %s (%s)", old["path"], exc)
-        log.info("veritabanı yedeklendi: %s (%d bayt, %.1f sn)%s", res["path"], res["bytes"], res["seconds"],
-                 (" – eski yedekler silindi: %s" % ", ".join(removed)) if removed else "")
-        return dict(res, removed=removed)
+        return removed
+
+    def copy_state(self) -> Dict[str, Any]:
+        """How the second copies went: the days of the failures in a row (none: the last one worked), the last
+        error, the last copy that worked - kept in the store, so that two nights count across a restart."""
+        v = self.svc.store.get("ops.backup_copy", {})
+        return v if isinstance(v, dict) else {}
+
+    def copy_backup(self, path: str, day: _dt.date) -> Optional[Dict[str, Any]]:
+        """The night's backup copied to the second folder (``--backup-copy-dir``: another drive) under the same name,
+        the newest BACKUP_KEEP kept there too.  It never fails the backup: a folder or drive that is missing or cannot be
+        written is logged once (until a copy works again) and shown in the status; after two nights in a row it is the
+        database's system alarm.  Returns what happened (``None``: no second folder set)."""
+        folder = getattr(self.svc.settings, "backup_copy_dir", None)
+        if not folder:
+            return None
+        folder = os.path.abspath(folder)
+        state = self.copy_state()
+        now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        dst = os.path.join(folder, os.path.basename(path))
+        try:
+            if os.path.normcase(folder) == os.path.normcase(os.path.abspath(self.svc.settings.backup_dir)):
+                raise OSError("ikinci kopyanın klasörü yedek klasörünün kendisi")
+            os.makedirs(folder, exist_ok=True)
+            shutil.copyfile(path, dst + ".part")
+            if os.path.getsize(dst + ".part") != os.path.getsize(path):
+                raise OSError("kopya eksik yazıldı")
+            os.replace(dst + ".part", dst)
+            removed = self._prune(folder)
+        except Exception as exc:  # noqa: BLE001 - the backup itself stands
+            try:
+                if os.path.exists(dst + ".part"):
+                    os.remove(dst + ".part")
+            except OSError:
+                pass
+            failed = [d for d in state.get("failed_days") or [] if d != day.isoformat()] + [day.isoformat()]
+            error = {"at": now, "text": "%s: %s" % (type(exc).__name__, exc)}
+            self.svc.store.put("ops.backup_copy", dict(state, failed_days=failed[-10:], error=error))
+            if not state.get("failed_days"):            # said once, until a copy works again
+                log.warning("yedeğin ikinci kopyası alınamadı (%s): %s – yedeğin kendisi alındı; düzelene kadar bu yeniden "
+                            "yazılmayacak, durum penceresinde görünür", folder, error["text"])
+            return {"dir": folder, "error": error, "failed_nights": len(failed)}
+        if state.get("failed_days"):
+            log.info("yedeğin ikinci kopyası yeniden alınıyor: %s", dst)
+        self.svc.store.put("ops.backup_copy", {"failed_days": [], "error": None, "ok_at": now, "path": dst})
+        return {"dir": folder, "path": dst, "removed": removed}
 
     def backup_due(self, now: Optional[_dt.datetime] = None) -> bool:
         """The night's backup is due when its time (``--backup-time``) has come and no copy was taken since; a dashboard
@@ -378,9 +436,17 @@ class Ops(object):
     def db_status(self) -> Dict[str, Any]:
         folder = self.svc.settings.backup_dir
         found = backups(folder)
+        second = getattr(self.svc.settings, "backup_copy_dir", None)
+        copy = None
+        if second:
+            state = self.copy_state()
+            copies = backups(second)
+            copy = {"dir": os.path.abspath(second), "count": len(copies), "last": copies[0] if copies else None,
+                    "error": state.get("error") if state.get("failed_days") else None,
+                    "failed_nights": len(state.get("failed_days") or [])}
         return {"check": self.db_check, "backup": {"dir": folder, "count": len(found), "last": found[0] if found else None,
                                                    "error": self.backup_error, "time": self.svc.settings.backup_time,
-                                                   "keep": BACKUP_KEEP}}
+                                                   "keep": BACKUP_KEEP, "copy": copy}}
 
     # ================================================================== the desk's system alarms
     def tlref_fixing(self, today: str) -> tuple:
@@ -465,6 +531,10 @@ class Ops(object):
                 bad.append("açılış denetimi başarısız: %s" % "; ".join(self.db_check["problems"][:2]))
             if self.backup_error:
                 bad.append("yedek alınamadı (%s): %s" % (self.backup_error["at"][:16], self.backup_error["text"]))
+            copy = self.copy_state()
+            if len(copy.get("failed_days") or []) >= 2:  # one night is said in the status only; two in a row: an alarm
+                bad.append("yedeğin ikinci kopyası %d gecedir alınamadı (%s): %s" % (
+                    len(copy["failed_days"]), getattr(self.svc.settings, "backup_copy_dir", "") or "", (copy.get("error") or {}).get("text", "")))
             last = backups(self.svc.settings.backup_dir)
             state("db", "alarm" if bad else "ok", " · ".join(bad) if bad else ("son yedek %s" % last[0]["at"][:16] if last else "henüz yedek yok"))
         self.sys_state = states
@@ -480,7 +550,8 @@ class Ops(object):
         """The system alarms as the alarms page shows them: their state at the last look and when they fire."""
         st = self.settings()
         when = {"feed": "piyasa saatinde %d dk akmazsa" % st["feed_minutes"], "tlref": "saat %s itibarıyla gelmemişse" % st["tlref_due"],
-                "db": "açılış denetimi ya da gece yedeği (%s) başarısızsa" % self.svc.settings.backup_time}
+                "db": "açılış denetimi ya da gece yedeği (%s) başarısızsa; ikinci kopyası 2 gece üst üste alınamazsa"
+                      % self.svc.settings.backup_time}
         rows = []
         for kind in SYSTEM_KINDS:
             s = self.sys_state.get(kind) or {"state": "na", "text": "henüz denetlenmedi", "since": "", "checked": ""}

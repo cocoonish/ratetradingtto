@@ -485,7 +485,9 @@ ifade - izleme listesine eklenir ve üzerine alarm kurulur:
     * **TLREF fixingi:** masanın iş gününde **14:00**'e kadar bugünün TLREF fixingi gelmediyse. Fixing, tarihçenin
       `BISTTREF Index` kapanışlarından görülür (canlıda 15 dakikada bir güncellenir); tarihçe kapalıysa (`--no-history`)
       bu alarm denetlenmez.
-    * **Veritabanı:** açılıştaki denetim başarısızsa ya da gece yedeği alınamadıysa ([Operasyon](#operasyon)).
+    * **Veritabanı:** açılıştaki denetim başarısızsa, gece yedeği alınamadıysa ya da yedeğin D: sürücüsündeki ikinci
+      kopyası **iki gece üst üste** alınamadıysa ([Operasyon](#operasyon); tek gecelik kopya hatası yalnızca durum
+      penceresinde görünür).
     Koşul başlayınca bir kez çalar, bitince kendiliğinden kapanır ("düzeldi"); gün içinde yeniden başlarsa yeniden çalar.
     RET eğrisi için sistem alarmı yoktur: eğri günün her saatinde değişebilir, belli bir yükleme saati yoktur.
   * **Bugünün kaydı:** ne çaldı, kim gördü, kim neyi kendisi için ne kadar susturdu, ne kuruldu / silindi / yeniden
@@ -1488,17 +1490,28 @@ Her şey tek dosyada: `data/tto.db` (SQLite, WAL).
   dokunulmaz. O saatte dashboard çalışmıyorduysa, açıldıktan 5 dakika sonra kaçırdığı yedeği alır (bir günden eski
   yedek varsa). Alınamayan yedek günlüğe yazılır, rozetin penceresinde kırmızı görünür ve 30 dakika sonra yeniden
   denenir. Son yedeğin saati, boyutu, sayısı ve klasörü rozetin penceresindedir.
+* **İkinci kopya (D: sürücüsü).** Her gecenin yedeği aynı adla **`D:\tto-yedek`** klasörüne de kopyalanır
+  (`--backup-copy-dir` ya da `TTO_BACKUP_COPY_DIR`; `""` verilirse ikinci kopya alınmaz); orada da en yeni **30** kalır,
+  klasördeki başka dosyalara dokunulmaz. Klasör yoksa açılır. Sürücü yoksa ya da klasöre yazılamıyorsa yedeğin kendisi
+  yine alınır: hata günlüğe **bir kez** yazılır (kopya yeniden alınana kadar tekrarlanmaz) ve rozetin penceresinde
+  "İkinci kopya: ALINAMADI" görünür; **iki gece üst üste** alınamazsa veritabanı sistem alarmı çalar (sayı yeniden
+  başlatmada da korunur). Kopya yeniden alınınca alarm kendiliğinden kapanır. Bu varsayılan yalnızca **kurulu
+  dashboard** içindir (git deposu olmayan, kendi `data` klasörüyle çalışan): bir git klonu (geliştirici, testler) ya da
+  başka bir veri klasörüyle açılan dashboard, istenmedikçe ikinci kopya almaz - masanın kopyalarının üzerine yazmasın
+  diye. Klasör yalnızca komut satırından / ortam değişkeninden verilir, tarayıcıdan değiştirilemez.
 * **Bilgisayarın dışına kopya alınmaz** (masanın kararı): veritabanında Bloomberg geçmişi, şifre özetleri ve işlemler
-  var; yedekler GitHub'a ya da başka bir dış yere yüklenmez, aynı diskte durur. Diskin kendisi bozulursa onlar da gider.
+  var; yedekler GitHub'a ya da başka bir dış yere yüklenmez. İki kopya da masa bilgisayarının kendi diskleri üzerindedir.
 
 **Yedekten dönme.** Dashboard'u kapatın, sonra:
 
 ```bash
-python -m tto yedekten-don                                   # yedekleri listeler (en yenisi önce)
+python -m tto yedekten-don                                   # yedekleri ve ikinci kopyaları listeler (en yenisi önce)
 python -m tto yedekten-don data\backups\tto-2026-11-14.db    # o yedeğe döner
+python -m tto yedekten-don D:\tto-yedek\tto-2026-11-14.db     # ... ya da ikinci kopyasına
+python -m tto yedekten-don tto-2026-11-14.db                 # yalnızca adı: önce yedek klasöründe, sonra D:\tto-yedek'te aranır
 ```
 
-Yedek önce denetlenir (sağlam bir SQLite dosyası ve bu dashboard'un tabloları); şimdiki veritabanı silinmez, yanına
+Yedek önce denetlenir (sağlam bir SQLite dosyası ve bu dashboard'un tabloları) - hangi klasörden gelirse gelsin; şimdiki veritabanı silinmez, yanına
 `tto.db.onceki-YYYYAAGG-SSDDss` adıyla (WAL dosyalarıyla birlikte) taşınır. Dashboard açıkken komut veritabanını yerinden
 alamaz ve hiçbir şeyi değiştirmeden durur (Windows). Yedeğin alındığı andan sonraki girişler (işlemler, chat, RET …)
 geri dönülen veritabanında yoktur.
@@ -1597,7 +1610,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Bloomberg ve ağ gerekmez (~8–11 dk; masa bilgisayarında ~35 dk). 1037 test (gerçek `blpapi` kuruluysa 7 tane daha):
+Bloomberg ve ağ gerekmez (~8–11 dk; masa bilgisayarında ~35 dk). 1040 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|
@@ -1624,7 +1637,10 @@ Bloomberg ve ağ gerekmez (~8–11 dk; masa bilgisayarında ~35 dk). 1037 test (
 | `test_dv01.py` | DV01 Risk'in sıfır pozisyonla açılması (kova DV01'leri ve yapıştırma alanı; kullanıcının kendi pozisyonu kişisel), VİOP matrisinin DV01 satırları kendi para biriminde (TRY: TL ve USD, USD: USD; kontrat fiyatıyla çevrim, sayfada yeni satır) |
 | `test_dates.py` | **Özel günler**: vadeden valörün (`2W`, `18W`, `1M` …) masanın tatil listesini (Motor!A361:A523) izlemesi - Ramazan Bayramı'na (10.03.2027), 19 Mayıs'a ve 1 Ocak'a düşen valörün ilk iş gününe kayması, ay vadelerinin çalışma kitabının kendi `WORKDAY(EDATE(…))` tarihleriyle aynı olması; dashboard'un **ay sonunda** (30.11.2026), **yıl sonunda** (31.12.2026: spot 1 Ocak ve hafta sonundan sonra) ve **bayramın ortasında** (10.03.2027) açılması: spot ve tahvil T+1 valörü, geçen PPK'nın listeden bir kez çıkması (MPC1 bir sonraki toplantı), bütün sayfaların Python hatası vermeden hesaplanması |
 | `test_auth.py` | **Giriş ve hesaplar**: şifrenin tuzlu özetle saklanması (tur sayısı özetin içinde), önceki sürümün veritabanındaki kullanıcıların şifresiz etkin hesap olarak kalması, **ilk yöneticinin yalnızca bu bilgisayardan** ve yalnızca yönetici yokken oluşturulması (önceki sürümden bir kullanıcı da olabilir, girdileri kalır), yanlış şifre / bilinmeyen isim için aynı yanıt, **5 hatada 1 dakika kilit**, oturumun 7 gün sürmesi ve veritabanında yalnızca özetinin durması, çıkış; **hesap isteği** (bekleyen istekle girilmemesi, önceki sürümün kullanıcısının aynı isimle isteyip onaylanınca girdilerine kavuşması, reddedilen yeni isteğin silinmesi / eski hesabın şifresiz geri dönmesi); **yönetici işleri** (oluşturma, rol verme / alma, son yöneticinin korunması, şifre belirleyince ve hesap kapatınca açık oturumların bitmesi, kendi hesabını kapatamama); kendi şifresini değiştirme (diğer oturumların kapanması, eski şifre hatalarının kilide sayılması); **aynı anda gönderilen 20 tahminin 5'inin denenip gerisinin kilide takılması**, şifresiz hesabın yönetici yapılamaması ve istekle sahiplenilenin kullanıcı olması, kendi yetkisini bırakma, benzer görünen isimlerin tek isim / görünmeyen karakterin reddi, bekleyen istek sınırı; HTTP'de **oturumsuz her `/api` isteğinin 401** alması, **başka sayfadan (Origin / Sec-Fetch-Site) gelen değişiklik isteğinin 403** alması, sunucunun X-Forwarded-For'a inanmaması, çerezin HttpOnly / SameSite=Strict / 7 gün olması, `Authorization: Bearer`, yönetici uçlarının yöneticiye açık olması, kapatılan hesabın tarayıcısının bir sonraki istekte dışarıda kalması; `python -m tto yonetici` komutu |
-| `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma (nominal hücrelerinde `100m` / `2,5mn` / `500k`; anlaşılmayanın reddi, başka hücrede `3m`'nin metin kalması), port kuralı, manuel spot (VİOP ve Masa'nın ilk tablosu, üst şeritten giriş, temizleyince Bloomberg spotu), **elle değer** (formülün üzerine yazma: yalnızca sahibinin, yalnızca ona girdi görünür, silince / "formüle dön"le formül geri gelir, yeniden başlatmada kalır), hesaplayıcıların otomatik dolan girdileri (Forward ve VİOP: tarih, spot, döviz faizi), sekmeli sayfa çıktısı ve arama kutusunun verisi, işlem defterinin aralık / DV01 / tahvil fiyatı uçları; **operasyon**: piyasa ve izleme döngülerinin hatalarının günlük dosyasına bir kez ayrıntısıyla yazılması (tekrarı sayılır) ve durumda son hata / hesap motoru kuyruğu, beklenmeyen sunucu hatasının tarayıcıya kısa, günlüğe tam gitmesi, piyasa saatleri (hafta sonu, masanın tatili, ayarlar); **veritabanı**: yarıda kalan yazmanın geri alınması (paket bacakları ve silinmesi, chat yapıştırma, hesap silme - ikinci adımı reddeden tetikleyiciyle), her kaydın diske yazılması (`synchronous=FULL`), **yedek ve geri dönüş** (yedeğin tek dosya ve tutarlı olması, sonraki yazmaları içermemesi, açık veritabanının yerinden alınamaması, önceki halin saklanması, bozuk / başka bir dosyanın reddi, komut satırı), gece yedeğinin zamanı (saati, kaçırılanın açılışta alınması, başarısızın beklemesi) ve en yeni 30'un kalması, **bozuk dosyanın açılışta söylenmesi** ve hiç açılamayanın en son yedeği göstermesi |
+| `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma (nominal hücrelerinde `100m` / `2,5mn` / `500k`; anlaşılmayanın reddi, başka hücrede `3m`'nin metin kalması), port kuralı, manuel spot (VİOP ve Masa'nın ilk tablosu, üst şeritten giriş, temizleyince Bloomberg spotu), **elle değer** (formülün üzerine yazma: yalnızca sahibinin, yalnızca ona girdi görünür, silince / "formüle dön"le formül geri gelir, yeniden başlatmada kalır), hesaplayıcıların otomatik dolan girdileri (Forward ve VİOP: tarih, spot, döviz faizi), sekmeli sayfa çıktısı ve arama kutusunun verisi, işlem defterinin aralık / DV01 / tahvil fiyatı uçları; **operasyon**: piyasa ve izleme döngülerinin hatalarının günlük dosyasına bir kez ayrıntısıyla yazılması (tekrarı sayılır) ve durumda son hata / hesap motoru kuyruğu, beklenmeyen sunucu hatasının tarayıcıya kısa, günlüğe tam gitmesi, piyasa saatleri (hafta sonu, masanın tatili, ayarlar); **veritabanı**: yarıda kalan yazmanın geri alınması (paket bacakları ve silinmesi, chat yapıştırma, hesap silme - ikinci adımı reddeden tetikleyiciyle), her kaydın diske yazılması (`synchronous=FULL`), **yedek ve geri dönüş** (yedeğin tek dosya ve tutarlı olması, sonraki yazmaları içermemesi, açık veritabanının yerinden alınamaması, önceki halin saklanması, bozuk / başka bir dosyanın reddi, komut satırı), gece yedeğinin zamanı (saati, kaçırılanın açılışta alınması, başarısızın beklemesi) ve en yeni 30'un kalması, **ikinci kopya** (D:\tto-yedek'in yalnızca kurulu dashboard'un varsayılanı olması; başka
+klasöre aynı adla kopya, orada da 30; sürücü / klasör yazılamazken yedeğin yine alınması, hatanın bir kez günlüğe
+yazılması, tek gecede alarm olmaması, iki gece üst üste alarm, düzelince kapanması; yedek klasörünün kendisinin reddi),
+**geri dönüşün iki klasörden de** (yol ya da yalnızca adla), **bozuk dosyanın açılışta söylenmesi** ve hiç açılamayanın en son yedeği göstermesi |
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda; **sekmeler**: 12'den çok tablosu olan her sayfa sekmeli, her görünen tablo bir sekmede ya da sekmelerin üstünde, sekmeler var olan görünür tabloları gösteriyor, Forward hesaplayıcılarla başlıyor, Hesaplayıcılar sayfasında aynı adlı iki tablo yok; **kaldırılan dört sayfa** (MOBIL MK, YP DIBS, Ivır Zıvır, USDTRY IYIX: yüklenen kitapta ve Sayfa gezgini'nde yok, 45 `BDP` çağrısı gitti, kalan sayfaların sırası ve numaraları, model dosyasının onları tutması, başka bir formülün başvurduğu sayfanın kalması) |
 | `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |
 | `test_history.py` | **Toplantı takvimi**: açıklanan tarihlerle toplu düzeltme (en yakın toplantının düzeltilmesi, 45 günden uzak tarihin eklenmesi, açıklanmamış yılların ve geçmişin kalması, 80 sınırının nedeniyle reddi, listeye ekleme, gelecektekilerin yerine koyma, kaydedince adımların toplantısıyla gitmesi, önizleme ucu) ve **geçen toplantının listeden kendiliğinden çıkması** (açılışta ve gün içinde spot değişince: MPC1 sıradaki toplantı, adım toplantısıyla, "otomatik" kaydı), **OIS sayfasında yazılan toplantı tarihinin takvimden geçmesi** (adımın toplantısıyla kalması, çıkarılan toplantının adımıyla gitmesi, dosya tarihlerine dönüşün reddi); günlük tarihçe: kapanış deposu, kayıtlı `BDH` bloklarının tarihlenmesi, serilerin dosyadan okunuşu, **tarihçenin bugünkü satırı = OIS sayfası** (80 toplantı, hücre hücre), toplantı bazında fiyatlama (yapılan toplantının serisi, gerçekleşen TLREF değişimi, toplantı günü ölçümü, kotaların eriştiği ufuk), gün sonu matrisi (1 / 5 / 21 iş günü kuralı, tatil, geçmiş gün), takvim (tarih düzeltme / ekleme / çıkarma: adımların ve kayıtlı senaryoların toplantıyla taşınması; **toplantı geçince ve liste kaydırılınca** sayfalar ve her toplantının değerleri), sahte Bloomberg'le canlı tarihçe (istek gruplama, yalnızca son günlerin yenilenmesi, yedek ticker, zaman aşımı), HTTP uçları; **bir günün kotaları** (kapanışı olmayan vadenin komşularının hareketiyle taşınması, komşularından ayrılıp geri dönen kapanışın ayıklanması, piyasa hareketinin korunması), günlerin Excel'in kendi durumuna göre sınıflanması, çözücünün tutturamadığı günün seriden / min-maks'tan / değişimlerden çıkması, hatalı bir kapanışın kayıtlı ayda çözücüye ulaşmaması, eski sürümün veritabanının korunması |
@@ -1715,8 +1731,8 @@ tto/brokerchat.py  broker chat ayrıştırıcısı: mesajlar (saat, gönderen, g
                    FX swap puanı, DİBS; kısaltılmış seviyeler, işlem / ref / ilgi), tahta ve eğriyle karşılaştırma
 tto/watch.py       izlenenler (VİOP, kâğıt, OIS, offshore, masa, ifade, hücre), izleme listeleri, alarmlar (seviye, hareket, z-skoru), z-skoru, kendi kapanış kaydı, ısı haritası
 tto/ops.py         operasyon: günlük dosyası (data/logs), döngülerin hataları, verinin tazeliği (bayat / sessiz yardımcı),
-                   piyasa saatleri, veritabanının açılış denetimi ve gece yedeği (data/backups, 30 adet), sistem alarmlarının
-                   koşulları (veri akışı, RET, TLREF, veritabanı)
+                   piyasa saatleri, veritabanının açılış denetimi ve gece yedeği (data/backups, 30 adet; ikinci kopyası
+                   D:\tto-yedek'te, 30 adet), sistem alarmlarının koşulları (veri akışı, TLREF, veritabanı)
 tto/deskalarms.py  masa alarmları: herkese çalan alarmlar ve sistem alarmları, "Gördüm" cevabı, kişisel susturma, günün kaydı
 tto/bonds.py       TRY DİBS kataloğu (tto/data/try_bonds.json): ISIN kontrolü, ISIN'deki vade, chat'teki kâğıdın adayları
 tto/volcarry.py    realized vol (yazılan enstrümanın günlük tarihçeden seviyesi, değişimlerin standart sapması,

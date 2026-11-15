@@ -9,6 +9,8 @@ FORBIDDEN_PORTS = (5000, 5001)
 DEFAULT_PORT = 1057
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: the second copy of each night's database backup: another drive of the desk machine (the installed dashboard's default)
+DEFAULT_BACKUP_COPY_DIR = r"D:\tto-yedek"
 
 
 class Settings(object):
@@ -19,7 +21,7 @@ class Settings(object):
                  bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
                  bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
                  history_pace: float = 1.0, log_dir: Optional[str] = None, bbg_silent_restart: float = 60.0,
-                 backup_dir: Optional[str] = None, backup_time: str = "22:00"):
+                 backup_dir: Optional[str] = None, backup_time: str = "22:00", backup_copy_dir: Optional[str] = None):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -48,10 +50,25 @@ class Settings(object):
         # the nightly backup of the database: where (the data folder's backups by default) and when (HH:MM)
         self.backup_dir = backup_dir or os.environ.get("TTO_BACKUP_DIR") or os.path.join(self.data_dir, "backups")
         self.backup_time = check_time(backup_time)
+        # ... and a second copy of each one in another folder - another drive (None: no second copy)
+        given = backup_copy_dir if backup_copy_dir is not None else os.environ.get("TTO_BACKUP_COPY_DIR")
+        if given is not None:
+            self.backup_copy_dir = None if given.strip() in ("", "-") else given.strip()
+        else:
+            self.backup_copy_dir = backup_copy_default(self.data_dir)
 
     @property
     def db_path(self) -> str:
         return os.path.join(self.data_dir, "tto.db")
+
+
+def backup_copy_default(data_dir: str, root: str = ROOT, windows: bool = os.name == "nt") -> Optional[str]:
+    """Where the second copy of the backups goes when nothing says: D:\\tto-yedek for the installed dashboard (on
+    Windows, in a folder that is no git checkout, with its own data folder).  A checkout - a developer's, the tests' -
+    or a dashboard given another data folder has none unless asked: its copies must never land on the desk's."""
+    installed = windows and not os.path.exists(os.path.join(root, ".git"))
+    own = os.path.normcase(os.path.abspath(data_dir)) == os.path.normcase(os.path.abspath(os.path.join(root, "data")))
+    return DEFAULT_BACKUP_COPY_DIR if installed and own else None
 
 
 def check_time(text) -> str:
