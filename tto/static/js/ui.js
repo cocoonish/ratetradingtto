@@ -60,7 +60,10 @@ export function closeMenu() {
   if (openMenu) { openMenu.remove(); openMenu = null; }
 }
 
-/** items: [{label, action, header, sep, disabled}] */
+/**
+ * items: [{label, action, header, sep, disabled}]; {check: true, on, label, sub, action(on)} is a line with a tick box
+ * that leaves the menu open (several in a row can be changed); its action returns false to refuse the change.
+ */
 export function menu(x, y, items) {
   closeMenu();
   const el = h('div', { class: 'menu', role: 'menu' });
@@ -68,6 +71,14 @@ export function menu(x, y, items) {
     if (!it) continue;
     if (it.sep) { el.appendChild(h('div', { class: 'sep' })); continue; }
     if (it.header) { el.appendChild(h('div', { class: 'mh' }, it.header)); continue; }
+    if (it.check) {
+      const box = h('input', { type: 'checkbox', disabled: !!it.disabled });
+      box.checked = !!it.on;
+      box.addEventListener('change', () => { if (it.action(box.checked) === false) box.checked = !box.checked; });
+      el.appendChild(h('label', { class: 'mcheck', title: it.title || null }, box, h('span', { class: 't' }, it.label),
+        it.sub ? h('span', { class: 'sub' }, it.sub) : null));
+      continue;
+    }
     const b = h('button', { type: 'button', disabled: !!it.disabled }, it.label);
     b.addEventListener('click', () => { closeMenu(); it.action(); });
     el.appendChild(b);

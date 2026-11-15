@@ -80,7 +80,7 @@ function gridPanel(title, opts = {}) {
   p.grid = null;
   p.setData = (data) => {
     if (!p.grid) {
-      p.grid = new Grid({ data, editable: false });
+      p.grid = new Grid({ data, editable: false, name: opts.id ? 'h/' + opts.id : null, tools: p.tools });
       if (opts.onCell) {
         // a click on a cell: its row and column in ``data`` (header rows counted)
         p.grid.el.classList.add('pickable');

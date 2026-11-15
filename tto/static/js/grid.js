@@ -1,7 +1,8 @@
 // Spreadsheet-like table: range selection, Excel-compatible copy / paste, in-cell editing of input cells,
-// in-place refresh with change flashes.
+// in-place refresh with change flashes, the columns each user hides.
 import { h, clear, menu, closeMenu, inFormControl, toast } from './ui.js';
 import { raw } from './format.js';
+import { Columns, captionKey, markGaps, uniqueKeys } from './columns.js';
 
 const hooks = {
   setInputs: null,     // async (book, items, adhoc, lenient) -> result   (lenient: cells that are not inputs are skipped)
@@ -107,22 +108,84 @@ function isHeaderRow(row) {
   return n >= 2 && strong * 2 >= n;
 }
 
+/** The caption rows of a table (at most two, from the top; a lone title row may precede them). */
+function headerRows(d, opts) {
+  const out = [];
+  let run = opts.header;
+  for (let i = 0; run && i < d.rows.length; i++) {
+    const row = d.rows[i];
+    if (out.length < 2 && d.rows.length > 1 && isHeaderRow(row)) out.push(i);
+    else if (i > 0 || !opts.header) run = false;
+    else if (row.filter((c) => !c.sk && c.t).length > 1) run = false;
+  }
+  return out;
+}
+
+/** The cell that covers row i, column j (a merged caption, one from the row above); a text running over from the left does not. */
+function captionOver(rows, i, j) {
+  for (let r = i; r >= 0; r--) {
+    for (let k = j; k >= 0; k--) {
+      const c = rows[r][k];
+      if (!c || c.sk) continue;
+      if (k + (c.ov ? 1 : (c.cs || 1)) > j && r + (c.rs || 1) > i) return c;
+    }
+  }
+  return null;
+}
+
+/**
+ * The columns of a table for the user's column choice: [{j, key, name, sub}].  A table of a sheet keys a column by its
+ * letter, one of the dashboard's own by its caption (``ck`` of a caption cell, when the caption itself changes).
+ */
+function gridColumns(d, heads) {
+  const n = d.rows.length ? d.rows[0].length : 0;
+  const sheet = !!(d.c && d.c.length === n);
+  const out = [];
+  for (let j = 0; j < n; j++) {
+    const texts = [];
+    let ck = '';
+    for (const i of heads) {
+      const c = captionOver(d.rows, i, j);
+      if (!c) continue;
+      if (c.ck) ck = c.ck;
+      const t = captionKey(c.t);
+      if (t && texts[texts.length - 1] !== t) texts.push(t);
+    }
+    const caption = texts.join(' · ');
+    let sample = '';
+    for (let i = 0; !caption && !sample && i < d.rows.length && i < 12; i++) {
+      const c = d.rows[i][j];
+      if (c && !c.sk && c.t) sample = String(c.t).trim();
+    }
+    if (sample.length > 24) sample = sample.slice(0, 23) + '…';
+    const letter = sheet && /^[A-Z]{1,3}$/.test(d.c[j]) ? d.c[j] : '';        // (a column the dashboard adds has a name)
+    out.push({ j, key: sheet ? d.c[j] : (ck || caption || '#' + j),
+      name: caption || (letter ? 'Sütun ' + letter : 'Sütun ' + (j + 1)), sub: caption ? letter : sample });
+  }
+  return uniqueKeys(out);
+}
+
 export class Grid {
   /**
    * opts: book, data {sheet, rows, r, c}, editable (bool), adhoc (bool: any cell may be overridden),
-   *       axis (bool: show A/B/C and 1/2/3 headers), header (bool: detect header rows)
+   *       axis (bool: show A/B/C and 1/2/3 headers), header (bool: detect header rows),
+   *       name (the table's stable name: each user hides columns of it, kept with the account),
+   *       tools (the panel's tools: the "Sütunlar" button goes there)
    */
   constructor(opts) {
     this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
     this.book = this.opts.book || null;
     this.data = null;
     this.tds = [];
+    this.heads = [];
     this.el = h('table', { class: 'grid' + (this.opts.axis ? ' addr' : '') });
     this.el.__grid = this;
     this.el.addEventListener('mousedown', (e) => this._mouseDown(e));
     this.el.addEventListener('mouseover', (e) => this._mouseOver(e));
     this.el.addEventListener('dblclick', (e) => this._dblClick(e));
     this.el.addEventListener('contextmenu', (e) => this._context(e));
+    this.columns = this.opts.name && !this.opts.axis ? new Columns(this.opts.name, () => this._showColumns()) : null;
+    if (this.columns) this.columns.mount(this.opts.tools);
     this.update(this.opts.data, false);
     if (window.ResizeObserver) {
       // column widths change with the content and when a collapsed panel opens: re-pin the frozen columns
@@ -192,21 +255,12 @@ export class Grid {
       for (const c of d.c) tr.appendChild(h('td', { class: 'axis' }, c));
       body.appendChild(tr);
     }
-    let headerRun = this.opts.header;
-    let headerCount = 0;
+    this.heads = headerRows(d, this.opts);
     for (let i = 0; i < d.rows.length; i++) {
       const row = d.rows[i];
       const tr = h('tr');
-      if (headerRun && headerCount < 2 && d.rows.length > 1 && isHeaderRow(row)) {
-        tr.className = 'hd' + (headerCount === 1 ? ' hd2' : '');
-        headerCount += 1;
-      } else if (i > 0 || !this.opts.header) {
-        headerRun = false;
-      } else {
-        // a lone title row may precede the header row
-        const filled = row.filter((c) => !c.sk && c.t).length;
-        if (filled > 1) headerRun = false;
-      }
+      const hd = this.heads.indexOf(i);
+      if (hd >= 0) tr.className = 'hd' + (hd === 1 ? ' hd2' : '');
       if (this.opts.axis) tr.appendChild(h('td', { class: 'axis rowh' }, String(d.r[i])));
       const line = [];
       for (let j = 0; j < row.length; j++) {
@@ -248,6 +302,50 @@ export class Grid {
       body.appendChild(tr);
     }
     this.el.appendChild(body);
+    if (this.columns) {
+      this.columns.set(gridColumns(d, this.heads));
+      this._showColumns();
+    } else {
+      this._freeze();
+    }
+  }
+
+  /** True when this user hid column j of the table. */
+  colHidden(j) {
+    return !!this.columns && this.columns.hid.has(j);
+  }
+
+  /**
+   * Put the user's column choice on the table: a hidden column's cells go, a caption over it narrows, and the
+   * captions next to it get a mark.  Nothing is rebuilt: a selection, a highlight, the rows a page folds stay.
+   */
+  _showColumns() {
+    const hid = this.columns.hid;
+    const rows = this.data.rows;
+    for (const f of this.el.querySelectorAll('td.colfill')) f.remove();
+    for (let i = 0; i < this.tds.length; i++) {
+      const line = this.tds[i];
+      for (let j = 0; j < line.length; j++) {
+        const td = line[j];
+        if (!td) continue;
+        const cell = rows[i][j];
+        const cs = cell.cs || 1;
+        let v = 0;
+        for (let k = j; k < j + cs; k++) if (!hid.has(k)) v += 1;
+        if (cell.ov && hid.has(j)) {
+          // a long text runs over the empty cells to its right from its own column only: it goes with that column
+          td.hidden = true;
+          if (v) td.after(h('td', { class: 'colfill', colspan: String(v) }));
+          continue;
+        }
+        if (td.hidden !== !v) td.hidden = !v;
+        if (v && td.colSpan !== v) td.colSpan = v;
+      }
+    }
+    const n = rows.length ? rows[0].length : 0;
+    markGaps(this.heads.map((i) => this.tds[i].map((td, j) => (td && !td.hidden ? { el: td, j, cs: rows[i][j].cs || 1 } : null))
+      .filter(Boolean)), hid, n);
+    this.columns.paint();
     this._freeze();
   }
 
@@ -258,23 +356,27 @@ export class Grid {
   _freeze() {
     const n = this.data && this.data.fz;
     if (!n || this.opts.axis || !this.tds.length) return;
+    const rows = this.data.rows;
+    const span = (i, j) => rows[i][j].cs || 1;            // as built (a hidden column narrows the cell, not this)
     const widths = [];
     for (let j = 0; j < n; j++) {
       let w = 0;
-      for (const line of this.tds) {
-        const td = line[j];
-        if (td && td.colSpan === 1) { w = td.getBoundingClientRect().width; break; }
+      for (let i = 0; i < this.tds.length && !this.colHidden(j); i++) {
+        const td = this.tds[i][j];
+        if (td && !td.hidden && span(i, j) === 1) { w = td.getBoundingClientRect().width; break; }
       }
       widths.push(w);
     }
     if (!widths.some((w) => w > 0)) return;                 // not laid out yet (a collapsed panel)
+    let last = n - 1;
+    while (last > 0 && this.colHidden(last)) last -= 1;     // the last frozen column on screen
     let left = 0;
     for (let j = 0; j < n; j++) {
-      for (const line of this.tds) {
-        const td = line[j];
-        if (!td || j + td.colSpan > n) continue;            // a caption that runs past the frozen part scrolls
+      for (let i = 0; i < this.tds.length; i++) {
+        const td = this.tds[i][j];
+        if (!td || j + span(i, j) > n) continue;            // a caption that runs past the frozen part scrolls
         td.classList.add('fz');
-        td.classList.toggle('fzl', j + td.colSpan === n);
+        td.classList.toggle('fzl', j + span(i, j) - 1 >= last);
         td.style.left = left + 'px';
       }
       left += widths[j];
@@ -312,7 +414,10 @@ export class Grid {
       void this.el.offsetWidth;                      // restart the animations
       for (const [td, cls] of moved) td.classList.add(cls);
     }
-    this._freeze();
+    // a caption that changed may name another column now (a caption is the key of a column of the dashboard's own)
+    if (this.columns && this.columns.set(gridColumns(data, this.heads))) this._showColumns();
+    else this._freeze();
+    if (this.columns) this.columns.paint();
     if (sel.grid === this) notifySelection();
   }
 
@@ -371,6 +476,15 @@ export class Grid {
     const one = cur && cur.top === cur.bottom && cur.left === cur.right ? { ref: this.ref(cur.top, cur.left), cell: this.cell(cur.top, cur.left) } : null;
     const watchable = one && one.ref && this.book && one.cell && typeof one.cell.v === 'number' && (hooks.watch || hooks.alarm);
     const label = watchable ? cellLabel(this, cur.top, cur.left) : '';
+    // the columns under the click (a merged caption: all of its own) can be hidden from this user's view
+    let cols = [];
+    if (this.columns) {
+      const lone = cur.top === cur.bottom && cur.left === cur.right ? this.cell(cur.top, cur.left) : null;
+      const right = lone && !lone.ov ? cur.left + (lone.cs || 1) - 1 : cur.right;
+      const js = [];
+      for (let j = cur.left; j <= right; j++) js.push(j);
+      cols = [{ sep: true }].concat(this.columns.menuItems(js, e.clientX, e.clientY));
+    }
     menu(e.clientX, e.clientY, [
       watchable && hooks.watch ? { label: 'İzlemeye ekle', action: () => hooks.watch(this.book, one.ref, label) } : null,
       watchable && hooks.alarm ? { label: 'Alarm kur…', action: () => hooks.alarm(this.book, one.ref, label, one.cell.t) } : null,
@@ -382,6 +496,7 @@ export class Grid {
       inputs.length ? { header: 'Yapıştırmak için Ctrl+V' } : null,
       mine.length ? { label: 'Kendi girdimi sil → varsayılana dön', action: () => resetRefs(this, mine, false) } : null,
       shared.length ? { label: 'Ortak girdiyi dosyadaki değere döndür', action: () => resetRefs(this, shared, true) } : null,
+      ...cols,
     ]);
   }
 }
@@ -439,11 +554,12 @@ function notifySelection() {
   const s = currentSelection();
   if (!s) { hooks.onSelect(null); return; }
   const g = s.grid;
-  let count = 0, sum = 0, n = 0, min = Infinity, max = -Infinity;
+  let count = 0, sum = 0, n = 0, min = Infinity, max = -Infinity, cols = 0;
+  for (let j = s.left; j <= s.right; j++) if (!g.colHidden(j)) cols += 1;
   for (let i = s.top; i <= s.bottom; i++) {
     for (let j = s.left; j <= s.right; j++) {
       const c = g.cell(i, j);
-      if (!c || c.sk) continue;
+      if (!c || c.sk || g.colHidden(j)) continue;
       if (c.t) count += 1;
       if (c.k === 'n' && typeof c.v === 'number') {
         sum += c.v; n += 1;
@@ -459,15 +575,17 @@ function notifySelection() {
     label: !a ? '' : (single ? a : a + ':' + b.split('!')[1]),
     cell: g.cell(sel.r1, sel.c1), focusRef: g.ref(sel.r1, sel.c1),
     count, n, sum, avg: n ? sum / n : null, min: n ? min : null, max: n ? max : null,
-    rows: s.bottom - s.top + 1, cols: s.right - s.left + 1,
+    rows: s.bottom - s.top + 1, cols,
   });
 }
 
+/** The input cells of a selection that are on screen (a column the user hid is never written to). */
 function inputRefs(grid, s) {
   const out = [];
   if (!s) return out;
   for (let i = s.top; i <= s.bottom; i++) {
     for (let j = s.left; j <= s.right; j++) {
+      if (grid.colHidden(j)) continue;
       const c = grid.cell(i, j);
       const ref = grid.ref(i, j);
       if (c && !c.sk && ref && (c.i || grid.opts.adhoc)) out.push({ ref, cell: c, i, j });
@@ -477,6 +595,7 @@ function inputRefs(grid, s) {
 }
 
 // ---------------------------------------------------------------------- clipboard
+/** The selection as Excel takes it: what is on screen (the columns this user hid stay out). */
 export function selectionText(full) {
   const s = currentSelection();
   if (!s) return null;
@@ -484,8 +603,15 @@ export function selectionText(full) {
   const lines = [];
   for (let i = s.top; i <= s.bottom; i++) {
     const parts = [];
+    let carry = null;                // a merged cell that starts in a hidden column shows in the first one on screen
     for (let j = s.left; j <= s.right; j++) {
-      const c = g.cell(i, j);
+      let c = g.cell(i, j);
+      if (g.colHidden(j)) {
+        if (c && !c.sk && !c.ov && (c.cs || 1) > 1) carry = { c, end: j + c.cs - 1 };
+        continue;
+      }
+      if ((!c || c.sk) && carry && j <= carry.end) c = carry.c;
+      carry = null;
       if (!c || c.sk) { parts.push(''); continue; }
       let t = c.t || '';
       if (full && c.k === 'n' && typeof c.v === 'number') t = raw(c.v);
@@ -549,8 +675,11 @@ document.addEventListener('copy', (e) => {
   e.preventDefault();
   lastCopied = normalise(text);
   const s = currentSelection();
-  const n = (s.bottom - s.top + 1) * (s.right - s.left + 1);
-  toast(n === 1 ? 'Hücre kopyalandı' : (s.bottom - s.top + 1) + ' × ' + (s.right - s.left + 1) + ' hücre kopyalandı – Excel\'e yapıştırabilirsiniz', 'ok', 1800);
+  let cols = 0;
+  for (let j = s.left; j <= s.right; j++) if (!s.grid.colHidden(j)) cols += 1;
+  const n = (s.bottom - s.top + 1) * cols;
+  toast(n === 1 ? 'Hücre kopyalandı' : (s.bottom - s.top + 1) + ' × ' + cols + ' hücre kopyalandı – Excel\'e yapıştırabilirsiniz'
+    + (cols < s.right - s.left + 1 ? ' (gizlediğiniz sütunlar hariç)' : ''), 'ok', 1800);
 });
 
 document.addEventListener('paste', (e) => {
@@ -566,19 +695,23 @@ document.addEventListener('paste', (e) => {
 });
 
 /**
- * True when the block, laid over the screen from (top, left), covers rows and columns that follow each other
- * in the sheet as well - then the screen and the sheet agree on where every pasted cell goes.
+ * True when the block, laid over the screen from (top, the columns ``vis``), covers rows and columns that follow
+ * each other in the sheet as well - then the screen and the sheet agree on where every pasted cell goes.
  */
-function sheetContiguous(grid, top, left, rows, cols) {
+function sheetContiguous(grid, top, vis, rows, cols) {
   const d = grid.data;
-  if (top + rows > d.r.length || left + cols > d.c.length) return false;
+  if (top + rows > d.r.length || cols > vis.length) return false;
   for (let i = 1; i < rows; i++) if (d.r[top + i] !== d.r[top + i - 1] + 1) return false;
-  for (let j = 1; j < cols; j++) if (colIndex(d.c[left + j]) !== colIndex(d.c[left + j - 1]) + 1) return false;
+  for (let j = 1; j < cols; j++) if (colIndex(d.c[vis[j]]) !== colIndex(d.c[vis[j - 1]]) + 1) return false;
   return true;
 }
 
 export async function pasteText(grid, s, text) {
-  if (!grid.ref(s.top, s.left)) return;
+  // the screen's columns from the left of the selection on: the ones this user hid are not there
+  const vis = [];
+  const width0 = grid.data && grid.data.rows.length ? grid.data.rows[0].length : 0;
+  for (let j = s.left; j < width0; j++) if (!grid.colHidden(j)) vis.push(j);
+  if (!vis.length || !grid.ref(s.top, vis[0])) return;
   const clean = normalise(text);
   const matrix = clean.split('\n').map((line) => line.split('\t'));
   const single = matrix.length === 1 && matrix[0].length === 1;
@@ -586,20 +719,24 @@ export async function pasteText(grid, s, text) {
   try {
     let items = [];
     let skipped = 0;
+    let unseen = 0;
     let lenient = false;
     if (single && (s.bottom > s.top || s.right > s.left)) {
       // one value onto a selection: fill every input cell of the selection (as Excel does)
       items = inputRefs(grid, s).map((x) => ({ ref: x.ref, value: clean }));
-    } else if (clean !== lastCopied && !sheetContiguous(grid, s.top, s.left, matrix.length, width)) {
+    } else if (clean !== lastCopied && !sheetContiguous(grid, s.top, vis, matrix.length, width)) {
       // a block from Excel that runs over rows / columns the table does not show (hidden in Excel, or empty
       // and left out): it keeps Excel's layout, counted in sheet cells from the top-left of the selection.
-      // Nothing outside the table's own range is written; the server skips whatever is not an input.
+      // Nothing outside the table's own range is written; the server skips whatever is not an input; a column
+      // this user hid is not written to either.
       const d = grid.data;
-      const row0 = d.r[s.top], col0 = colIndex(d.c[s.left]);
+      const row0 = d.r[s.top], col0 = colIndex(d.c[vis[0]]);
       const rowMax = d.r[d.r.length - 1], colMax = colIndex(d.c[d.c.length - 1]);
+      const hiddenCols = new Set(d.c.filter((c, j) => grid.colHidden(j)));
       for (let i = 0; i < matrix.length; i++) {
         for (let j = 0; j < matrix[i].length; j++) {
           if (row0 + i > rowMax || col0 + j > colMax) { skipped += 1; continue; }
+          if (hiddenCols.has(colName(col0 + j))) { unseen += 1; continue; }
           items.push({ ref: d.sheet + '!' + colName(col0 + j) + (row0 + i), value: matrix[i][j] });
         }
       }
@@ -609,16 +746,16 @@ export async function pasteText(grid, s, text) {
       // Rows / columns the table does not show are never written to, and neither are non-input cells.
       for (let i = 0; i < matrix.length; i++) {
         for (let j = 0; j < matrix[i].length; j++) {
-          const cell = grid.cell(s.top + i, s.left + j);
-          const ref = grid.ref(s.top + i, s.left + j);
+          const cell = vis[j] === undefined ? undefined : grid.cell(s.top + i, vis[j]);
+          const ref = vis[j] === undefined ? null : grid.ref(s.top + i, vis[j]);
           if (cell && !cell.sk && ref && (cell.i || grid.opts.adhoc)) items.push({ ref, value: matrix[i][j] });
           else skipped += 1;
         }
       }
     }
-    if (!items.length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
+    if (!items.length) { toast(unseen ? 'Yapıştırılan alan gizlediğiniz sütunlarda kalıyor' : 'Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
     const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc, lenient);
-    if (res) res.skipped = skipped + (res.skipped || 0);
+    if (res) { res.skipped = skipped + (res.skipped || 0); res.unseen = unseen; }
     if (res && lenient && !res.applied && !(res.errors || []).length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
     reportApply(res, 'yapıştırıldı');
   } catch (err) {
@@ -631,6 +768,7 @@ function reportApply(res, verb) {
   const errs = res.errors || [];
   let msg = (res.applied || 0) + ' hücre ' + verb;
   if (res.skipped) msg += ' · ' + res.skipped + ' hücre girdi olmadığı için atlandı';
+  if (res.unseen) msg += ' · ' + res.unseen + ' hücre gizlediğiniz sütunda olduğu için yazılmadı';
   if (errs.length) msg += ' · ' + errs.length + ' hata: ' + errs.slice(0, 3).join('; ');
   toast(msg, errs.length ? 'err' : 'ok', errs.length ? 7000 : 2600);
 }
@@ -657,7 +795,7 @@ function editText(cell) {
 export function startEdit(grid, i, j, typed) {
   const cell = grid.cell(i, j);
   const td = grid.tds[i] && grid.tds[i][j];
-  if (!cell || !td || !grid.opts.editable || !grid.book) return false;
+  if (!cell || !td || td.hidden || !grid.opts.editable || !grid.book) return false;
   if (!cell.i && !grid.opts.adhoc) return false;
   if (editing) commitEdit();
   if (cell.o && cell.o.length && typed === null) {
@@ -749,7 +887,7 @@ function moveBy(dr, dc, extend) {
   for (let guard = 0; guard < 400; guard++) {
     r += dr; c += dc;
     if (r < 0 || c < 0 || r >= rows || c >= cols) return;
-    if (g.tds[r] && g.tds[r][c]) break;
+    if (g.tds[r] && g.tds[r][c] && !g.tds[r][c].hidden) break;           // (a column the user hid is stepped over)
   }
   if (extend) setSelection(g, sel.r0, sel.c0, r, c);
   else setSelection(g, r, c, r, c);
@@ -816,10 +954,13 @@ export function findCell(ref, root = document) {
   return null;
 }
 
-/** Build grid data from plain rows (client-rendered tables such as the blotter lists). */
+/**
+ * Build grid data from plain rows (client-rendered tables such as the blotter lists).  A caption is a text, or
+ * {t, ck}: ``ck`` names the column for the user's column choice when the caption changes ("σ 10g (bp)" -> "σ 10g").
+ */
 export function plainData(header, rows) {
   const out = [];
-  if (header) out.push(header.map((t) => ({ t, k: 's', b: 1, f: 'hd' })));
+  if (header) out.push(header.map((t) => (t && typeof t === 'object' ? Object.assign({ k: 's', b: 1, f: 'hd' }, t) : { t, k: 's', b: 1, f: 'hd' })));
   for (const row of rows) {
     out.push(row.map((c) => {
       if (c === null || c === undefined) return { t: '', k: '' };

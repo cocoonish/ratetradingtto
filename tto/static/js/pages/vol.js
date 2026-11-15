@@ -4,6 +4,7 @@
 import { api } from '../api.js';
 import { h, clear, errorToast, debounce } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
+import { toolsOf } from '../columns.js';
 import { Chart } from '../chart.js';
 import { num, isoToTr } from '../format.js';
 
@@ -202,7 +203,7 @@ export class VolPage {
     if (this.grids[id]) this.grids[id].replace(data);
     else {
       clear(body);
-      const g = new Grid({ data, editable: false });
+      const g = new Grid({ data, editable: false, name: 'vol/' + id, tools: toolsOf(body) });
       g.el.classList.add('pickable');
       g.el.addEventListener('click', (e) => {
         if (e.target.closest('button')) return;
@@ -277,7 +278,7 @@ export class VolPage {
         vol(r, 10), vol(r, 20), vol(r, 60), vol(r, 120), vol(r, 250), { t: String(r.n), k: 'n', tip: isoToTr(r.first) + ' – ' + isoToTr(r.day) },
         { t: '', k: '', cls: 'act', act: { label: '📈', title: name + ' geçmişini çiz', fn: () => this.pick({ key: r.key }).catch(errorToast) } }];
     });
-    this.setGrid('vol', this.volBody, ['Enstrüman', 'Tür', 'Seviye', 'Son Δ (bp)', 'Son Δ / σ', 'σ 10g' + unit, 'σ 20g', 'σ 60g', 'σ 120g', 'σ 250g', 'Gün', ''], rows,
+    this.setGrid('vol', this.volBody, ['Enstrüman', 'Tür', 'Seviye', 'Son Δ (bp)', 'Son Δ / σ', { t: 'σ 10g' + unit, ck: 'σ 10g' }, 'σ 20g', 'σ 60g', 'σ 120g', 'σ 250g', 'Gün', ''], rows,
       'Enstrüman yazın: 18m, 1y5y, 2y3y4y, 9x12 …', d.rows.map((r) => (r.ok ? { key: r.key, from: 'vol' } : null)));
 
     // ---- the history of one of them: the row clicked (of either table), else the first one
@@ -343,7 +344,9 @@ export class VolPage {
       return isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, 2, false), v, k: 'n', cls: Math.abs(v) >= 2 ? 'thru' : '',
         tip: 'Son ' + Math.min(Number(n), r.closes || 0) + ' kapanışa göre z-score' } : { t: '', k: '' };
     };
-    this.setGrid('carry', this.carryBody, ['İşlem', list ? 'Piyasa (% / bp)' : 'Piyasa (bp)', 'C+R ' + H.label + ' (bp)', 'σ (bp/gün)', 'σ ' + H.label + ' (bp)', 'C+R / σ', 'Carry\'yi alan']
+    // (a caption that follows the horizon keeps one name for the user's column choice)
+    this.setGrid('carry', this.carryBody, ['İşlem', { t: list ? 'Piyasa (% / bp)' : 'Piyasa (bp)', ck: 'Piyasa' }, { t: 'C+R ' + H.label + ' (bp)', ck: 'C+R ufukta' },
+      'σ (bp/gün)', { t: 'σ ' + H.label + ' (bp)', ck: 'σ ufukta' }, 'C+R / σ', 'Carry\'yi alan']
       .concat(zs.map((n) => zName[n] || 'z ' + n + 'g')).concat(['Gün']),
       rows.map((r) => [{ t: r.label, k: 's', b: 1 }, isNum(r.market) ? (r.kind === 'outright' ? { t: num(r.market, 2, false) + ' %', v: r.market, k: 'n' }
         : { t: num(r.market, 1, false), v: r.market, k: 'n' }) : { t: '', k: '' }, sign(cr(r), 1),

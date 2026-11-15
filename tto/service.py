@@ -1494,6 +1494,44 @@ class Service(object):
             ov = self._overlay(user, book)
             book.engine.set_user_inputs(user, ov)
 
+    # ================================================================== the columns a user hides
+    #: everybody looks at the tables their own way: table -> the columns this user hid, kept with the account
+    #: (any computer they sign in from shows the same).  A table is named by the page (``v/<view>/<panel>`` for a
+    #: table of a sheet, ``<page>/<table>`` for one of the dashboard's own); a column by its letter in the sheet or
+    #: its caption.
+    MAX_COLUMN_TABLES = 500
+    MAX_HIDDEN_COLUMNS = 400
+    MAX_COLUMN_BYTES = 256 * 1024                       # all of one user's choices together (a few KB in practice)
+    _columns_lock = threading.Lock()
+
+    def columns(self, user: Optional[str]) -> Dict[str, Any]:
+        """The columns this user hid, table by table: ``{"tables": {"v/dibs/B5": ["B", "K"], ...}}``."""
+        return {"tables": self.store.get("cols." + self.require_user(user)) or {}}
+
+    def set_columns(self, user: Optional[str], table: Any, hidden: Any) -> Dict[str, Any]:
+        """Hide these columns of one table from this user (an empty list shows every column again)."""
+        key = self.require_user(user)
+        if not isinstance(table, str) or not table.strip() or len(table) > 160:
+            raise ServiceError("tablo adı geçersiz")
+        if not isinstance(hidden, list) or any(not isinstance(c, str) or not c or len(c) > 160 for c in hidden):
+            raise ServiceError("gizlenecek sütunlar bir ad listesi olmalı")
+        cols = list(dict.fromkeys(hidden))
+        if len(cols) > self.MAX_HIDDEN_COLUMNS:
+            raise ServiceError("bir tabloda en fazla %d sütun gizlenebilir" % self.MAX_HIDDEN_COLUMNS)
+        with self._columns_lock:
+            saved = self.store.get("cols." + key) or {}
+            if cols:
+                saved[table] = cols
+            else:
+                saved.pop(table, None)
+            if len(saved) > self.MAX_COLUMN_TABLES:
+                raise ServiceError("en fazla %d tabloda sütun gizlenebilir – birkaç tablonun sütunlarını yeniden gösterin"
+                                   % self.MAX_COLUMN_TABLES)
+            if len(json.dumps(saved, ensure_ascii=False)) > self.MAX_COLUMN_BYTES:
+                raise ServiceError("gizlenen sütunların listesi çok uzun – birkaç tablonun sütunlarını yeniden gösterin")
+            self.store.put("cols." + key, saved)
+        return {"table": table, "hidden": cols}
+
     # ================================================================== RET curve
     def _ret_rows(self, book: Book) -> List[Dict[str, Any]]:
         calc = book.engine.shared

@@ -7,6 +7,7 @@ import { h, clear, toast, errorToast, menu } from '../ui.js';
 import { openWatchDialog, watchSubject } from '../alarms.js';
 import { SeriesView, watchSpec } from '../serieschart.js';
 import { isoToTr } from '../format.js';
+import { TableColumns, toolsOf } from '../columns.js';
 
 const BASES = [['close', 'Önceki kapanış', 'Bir önceki iş gününün kapanışına göre (OIS, TLREF, offshore: tarihçe; diğerleri: dashboard\'un iş günlerinde kaydettiği kapanış). '
   + 'Hafta sonu piyasa kapalı: son iş gününün kapanışı gösterilir, değişim yoktur'],
@@ -122,6 +123,10 @@ export class HeatPage {
       }
       const body = h('div', { class: 'body heat-wrap' }, t);
       box.appendChild(h('section', { class: 'panel wide', id: 'heat-' + p.id }, h('header', null, h('h2', null, p.title)), body));
+      // each user hides columns of their own (a right click on a caption, or "Sütunlar")
+      this.colsOf = this.colsOf || new Map();
+      if (!this.colsOf.has(p.id)) this.colsOf.set(p.id, new TableColumns('heat/' + p.id));
+      this.colsOf.get(p.id).attach(t, toolsOf(body, true));
     }
   }
 

@@ -5,6 +5,7 @@
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, debounce, modal } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
+import { toolsOf } from '../columns.js';
 import { num, isoToTr } from '../format.js';
 
 const KIND = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward', switch: 'Switch' };
@@ -490,7 +491,7 @@ export class BrokerPage {
       this.grids[id].replace(data);
     } else {
       clear(sec.body);
-      this.grids[id] = new Grid({ data, editable: false });
+      this.grids[id] = new Grid({ data, editable: false, name: 'broker/' + id, tools: toolsOf(sec.body) });
       sec.body.appendChild(this.grids[id].el);
     }
     this.same[id] = same;
