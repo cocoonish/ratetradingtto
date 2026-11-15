@@ -189,6 +189,28 @@ def test_eurtry_tenors_roll_over_target2_holidays_and_usdtry_settles_on_good_fri
     assert tenor(desk, "1M", "EURTRY") == D(2026, 4, 7) and tenor(desk, "1M", "EURUSD") == D(2026, 4, 7)
 
 
+def test_eurusd_has_a_spot_date_of_its_own_a_try_holiday_does_not_move_it(desk):
+    """EURUSD settles two days after the trade that are business days of both USD and EUR - a TRY holiday is none of
+    its business.  Traded Tuesday 27.10.2026, T+2 is Thursday 29.10, Cumhuriyet Bayramı (TRY only): EURUSD settles that
+    day, EURTRY (TRY and EUR) on Friday 30.10.  The blotter's tenors and day counts and the FX page count from it."""
+    from tto import blotter as bl
+    on(desk, D(2026, 10, 27))
+    assert day_of(desk, "Forward!K2") == D(2026, 10, 30)
+    assert serial_to_date(desk.et.call(desk._pair_spot, "EURUSD")) == D(2026, 10, 29)
+    assert desk.fx.spot_date(desk.fx.pair("EURUSD")) == D(2026, 10, 29)
+    eurusd = desk.fx.curve(None, desk.fx.pair("EURUSD"))
+    assert eurusd["spot_date"] == D(2026, 10, 29) and eurusd["tenors"]["1W"]["date"] == D(2026, 11, 5)
+    assert tenor(desk, "1W", "EURUSD") == D(2026, 11, 5) and tenor(desk, "1W", "EURTRY") == D(2026, 11, 6)
+    q = desk.quote_forward("Tatil EURUSD", {"pair": "EURUSD", "value_date": "1W", "basis": "FWD", "manual": "1,1650"})
+    assert q["value_date_iso"] == "2026-11-05" and q["days"] == 7.0 and q["forward"] == 1.165
+    # a trade the same way (not kept here): its days from EURUSD's own spot date, not USDTRY's (28.10)
+    p = desk.et.call(desk._fwd_payload, {"pair": "EURUSD", "value_date": "05.11.2026", "basis": "FWD", "manual": "1,1650",
+                                         "dir": "B", "amount": "1m"})
+    assert serial_to_date(p["spot_date"]) == D(2026, 10, 29)
+    assert desk.et.call(bl.forward_trade, desk.books["tto"], {}, p)["days"] == 7.0
+    assert desk.et.call(desk._fwd_payload, {"pair": "EURTRY", "value_date": "1W"})["spot_date"] is None   # (K2's: the sheet's)
+
+
 def test_the_fx_page_dates_eurusd_on_both_calendars_and_other_pairs_on_week_days(desk):
     on(desk, D(2026, 4, 1))
     eurusd, usdjpy = desk.fx.pair("EURUSD"), desk.fx.pair("USDJPY")

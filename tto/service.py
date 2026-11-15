@@ -2736,27 +2736,45 @@ class Service(object):
             "Blotter_%s-%s.xlsx" % (day.strftime("%Y.%m.%d"), last.strftime("%Y.%m.%d"))
         return wb.to_bytes(), name
 
+    @staticmethod
+    def _own_spot(code: str) -> bool:
+        """Whether a pair has a spot date of its own, apart from the Forward sheet's: a pair of two currencies the desk
+        keeps holiday lists of that is neither USDTRY nor EURTRY (EURUSD)."""
+        return bool(ex.pair_calendar(code)) and code not in ("USDTRY", "EURTRY")
+
+    def _pair_spot(self, code: str) -> Optional[float]:
+        """The spot date (serial) a value date of the pair counts from.  USDTRY's and EURTRY's are the Forward sheet's
+        (I2, K2: from the desk's lists, or the date typed there); EURUSD's is its own - two days after today that are
+        business days of both USD and EUR, as K2 counts EURTRY's, a TRY holiday not among them; any other pair counts
+        from USDTRY's (one starting with EUR from EURTRY's), as before.  On the calculation thread."""
+        from .fx import SPOT_LAG, add_week_days
+        book = self.books.get("tto")
+        if book is None:
+            return None
+        if self._own_spot(code):
+            holidays = {serial_to_date(s) for s in self._calendar_serials(ex.pair_calendar(code))}
+            day = add_week_days(serial_to_date(book.engine.clock.today()), SPOT_LAG.get(code, 2), holidays)
+            return float(date_to_serial(day))
+        si, rc = book.cell("Forward!K2" if code.startswith("EUR") else "Forward!I2")
+        spot = book.engine.shared.get(si, *divmod(rc, COLS))
+        if isinstance(spot, str):
+            spot = parse_date(spot)
+        return spot if type(spot) is float else None
+
     def _tenor_date(self, text: str, pair: str = "USDTRY") -> Optional[float]:
-        """The value date of a tenor ("2W", "3M", "1Y") from the pair's spot date: n weeks, or n months and then the
-        next business day of the pair's calendar - the holidays of both its currencies (USDTRY: TRY and USD, EURTRY: TRY
-        and EUR, EURUSD: USD and EUR; any other pair the TRY list, as before) - as the Forward sheet dates its tenors."""
+        """The value date of a tenor ("2W", "3M", "1Y") from the pair's spot date (:meth:`_pair_spot`): n weeks, or n
+        months and then the next business day of the pair's calendar - the holidays of both its currencies (USDTRY: TRY
+        and USD, EURTRY: TRY and EUR, EURUSD: USD and EUR; any other pair the TRY list, as before) - as the Forward sheet
+        dates its tenors."""
         m = re.match(r"^\s*(\d{1,3})\s*([WMYwmy])\s*$", str(text or ""))
         book = self.books.get("tto")
         if m is None or book is None:
             return None
-        calc = book.engine.shared
         try:
             code = bl.pair_of(pair)
         except bl.TradeError:
             code = "USDTRY"
-
-        def value(ref: str) -> Any:
-            si, rc = book.cell(ref)
-            return calc.get(si, *divmod(rc, COLS))
-
-        spot = value("Forward!K2" if code.startswith("EUR") else "Forward!I2")
-        if isinstance(spot, str):
-            spot = parse_date(spot)
+        spot = self._pair_spot(code)
         if type(spot) is not float:
             return None
         holidays = self._calendar_serials(ex.pair_calendar(code) or ("TRY",))
@@ -2817,6 +2835,8 @@ class Service(object):
             p["pair"] = bl.pair_of(p.get("pair"))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
+        # a pair with a spot date of its own (EURUSD): its days count from that, not from the USDTRY sheet's
+        p["spot_date"] = self._pair_spot(p["pair"]) if self._own_spot(p["pair"]) else None
         return p
 
     def _quote_forward(self, user, payload, lang=None) -> Dict[str, Any]:
@@ -2828,7 +2848,7 @@ class Service(object):
         try:
             q = bl.price_forward(book, ov, p["value_date"], str(p.get("basis", "RET_MID")).upper(),
                                  p.get("manual") if type(p.get("manual")) is float else None, p["pair"],
-                                 p.get("spot") if type(p.get("spot")) is float else None)
+                                 p.get("spot") if type(p.get("spot")) is float else None, p["spot_date"])
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         amount = p.get("amount")
