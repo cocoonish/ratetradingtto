@@ -2581,6 +2581,39 @@ def _tto_market(model: Model) -> None:
         SheetBuilder(model, sheet).patch(addr, formula)
 
 
+# ---------------------------------------------------------------------------------------------- one OIS spread
+#: the desk's OIS spread assumption, typed once: MASA!I60 (bp; 26 formulas of the desk sheet and the forward quote
+#: matrix's general spread read it).  The workbook typed it three more times, in other units: the Forward sheet's
+#: "TRY OIS w/Spread" (P58, %-points), the shift of the OIS mid at the value date (O27, a fraction) and the OIS page's
+#: date-to-date rate (F122, a fraction).  These follow I60 now (a formula default each: typed over, a user's own).
+OIS_SPREAD = "MASA!$I$60"
+OIS_SPREAD_CELLS = (("Forward", "P58", "=%s/100" % OIS_SPREAD), ("Forward", "O27", "=%s/10000" % OIS_SPREAD),
+                    ("OIS_MAIN", "F122", "=%s/10000" % OIS_SPREAD))
+OIS_SPREAD_NAME = "Tek OIS spread'i"
+
+
+def _ois_spread_check(model: Model) -> None:
+    _need_sheets(model, "MASA", "Forward", "OIS_MAIN")
+    _need_captions(model, (("MASA", "H60", "Spread (bp)"), ("Forward", "O58", "Spread"), ("OIS_MAIN", "E122", "Spread")))
+    if type(model.sheet("MASA").consts.get(parse_a1("I60"))) is not float:
+        raise ValueError("MASA!I60 bir sayı değil")
+    _need_formula(model, "Forward", "P27", "P24+O27")                 # the shift of the OIS mid
+    _need_formula(model, "Forward", "P59", "$P$58")                   # TRY OIS w/Spread
+    _need_formula(model, "OIS_MAIN", "F125", "$F$122")                # the date-to-date rate with the spread
+    for sheet, addr, _ in OIS_SPREAD_CELLS:
+        if parse_a1(addr) in model.sheet(sheet).fml:
+            raise ValueError("%s!%s zaten bir formül" % (sheet, addr))
+
+
+def _tto_ois_spread(model: Model) -> None:
+    kept = model.meta.setdefault(FILE_VALUES, {})
+    for sheet, addr, formula in OIS_SPREAD_CELLS:
+        was = model.sheet(sheet).consts.get(parse_a1(addr))
+        if was is not None:
+            kept["%s!%s" % (sheet, addr)] = was
+        SheetBuilder(model, sheet).patch(addr, formula)
+
+
 # ---------------------------------------------------------------------------------------------- VİOP contracts roll
 #: the VİOP futures of the VİOP page (the desk's: shared inputs) as Bloomberg names them - USDTRY monthly (contract 1-12,
 #: "A1X6 Curncy"), gold TRY and gold USD (even months: "XLZ6 Comdty", "XLTZ6 Comdty"): (cells, root, yellow key, months
@@ -2653,7 +2686,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
-            (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll)),
+            (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
+            (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
 }
 

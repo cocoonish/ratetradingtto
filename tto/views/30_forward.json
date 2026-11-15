@@ -53,14 +53,14 @@
    "scope": "user",
    "group": "forward-6",
    "kind": "pct",
-   "label": "unlabelled shift applied to OIS mid in P27"
+   "label": "shift applied to the OIS mid in P27 (boş = Masa'daki spread, MASA!I60 / 10000)"
   },
   {
    "range": "P58",
    "scope": "user",
    "group": "forward-7",
-   "kind": "auto",
-   "label": "'Spread' for 'TRY OIS w/Spread' and chart series 'OIS w/S'"
+   "kind": "number",
+   "label": "'Spread' for 'TRY OIS w/Spread' and chart series 'OIS w/S' (%-points; boş = Masa'daki spread, MASA!I60 / 100)"
   },
   {
    "range": "O44",

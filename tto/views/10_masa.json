@@ -25,7 +25,7 @@
    "scope": "user",
    "group": "masa-2",
    "kind": "number",
-   "label": "Spread (bp) — spread added to ACT/360 simple rates"
+   "label": "Spread (bp) — the desk's OIS spread: added to ACT/360 simple rates here, and the default of the forward quote matrix's spread (EK_FWD!D4:E4), Forward!P58 / O27 and OIS_MAIN!F122"
   },
   {
    "range": "P94:P99",

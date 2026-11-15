@@ -91,7 +91,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tüm Kâğıtlar canlı kota", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
-                                                   "VİOP kontratları"]
+                                                   "VİOP kontratları", "Tek OIS spread'i"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")

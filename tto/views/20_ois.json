@@ -235,7 +235,7 @@
    "scope": "user",
    "group": "ois-30",
    "kind": "pct",
-   "label": "'Spread'"
+   "label": "'Spread' of the date-to-date rate (boş = Masa'daki spread, MASA!I60 / 10000)"
   },
   {
    "range": "M336:N438",

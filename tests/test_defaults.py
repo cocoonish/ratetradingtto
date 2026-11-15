@@ -302,3 +302,26 @@ def test_the_viop_contracts_roll_by_themselves(tmp_path):
     finally:
         clock.today = today
         svc.stop()
+
+
+def test_one_ois_spread_is_typed_once(service):
+    """The desk's OIS spread assumption was typed four times in three units: MASA!I60 = -150 bp (read by the desk sheet and
+    the forward quote matrix), Forward!P58 = -1,5 (%-points), Forward!O27 = -1,5 % and OIS_MAIN!F122 = -1,5 %.  I60 stays
+    the one typed; the three others follow it (a formula default each - typed over, a user's own; Delete: I60's again)."""
+    assert cell(service, "MASA!I60") == -150.0
+    assert cell(service, "Forward!P58") == -1.5 and cell(service, "Forward!O27") == pytest.approx(-0.015)
+    assert cell(service, "OIS_MAIN!F122") == pytest.approx(-0.015)
+    assert cell(service, "Forward!P27") == pytest.approx(cell(service, "Forward!P24") - 0.015)
+    u = service.login("Tek Spread")["user"]
+    try:
+        assert service.set_inputs(u, "tto", [{"ref": "MASA!I60", "value": "-100"}])["errors"] == []
+        assert cell(service, "Forward!P58", u) == -1.0 and cell(service, "Forward!O27", u) == pytest.approx(-0.01)
+        assert cell(service, "OIS_MAIN!F122", u) == pytest.approx(-0.01) and cell(service, "EK_FWD!D4", u) == -100.0
+        assert cell(service, "Forward!P59", u) == pytest.approx(cell(service, "Forward!P6", u) - 1.0)
+        assert cell(service, "Forward!P58") == -1.5                                      # the others keep the desk's
+        assert service.set_inputs(u, "tto", [{"ref": "Forward!P58", "value": "-2"}])["errors"] == []
+        assert cell(service, "Forward!P58", u) == -2.0 and cell(service, "Forward!O27", u) == pytest.approx(-0.01)
+        assert service.set_inputs(u, "tto", [{"ref": "Forward!P58", "value": ""}])["errors"] == []
+        assert cell(service, "Forward!P58", u) == -1.0
+    finally:
+        service.reset_inputs(u, "tto")
