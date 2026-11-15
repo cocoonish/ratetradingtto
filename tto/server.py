@@ -720,11 +720,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                 pass
 
         service = svc()
+        # the counters of the desk's own corner go along (a chat message makes no new generation) - the reports' one
+        # to an administrator only
+        admin = await call(service.desk.is_admin, _user(request))
         service.add_listener(push)
 
         def message(gen: int) -> str:
-            # the generation, and the counters of the desk's own corner (a chat message makes no new generation)
-            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters()})
+            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters(admin)})
 
         async def stream():
             try:

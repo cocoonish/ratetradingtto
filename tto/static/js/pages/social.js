@@ -58,23 +58,22 @@ export class SocialPage {
       h('div', { class: 'chatwrap' }, this.log, this.newer),
       h('div', { class: 'chatin' }, this.text, h('div', { class: 'chatside' }, this.send, this.count)));
     this.host.appendChild(h('div', { class: 'panels' }, panel));
-    const res = await api.get('/api/social');
-    if (this.dead) return;
-    this.msgs = res.messages;
-    this.more = res.more;
-    this.render('bottom');
     document.addEventListener('visibilitychange', this.onVisible);
-    this.text.focus();
+    await this.reload();
+    if (!this.dead) this.text.focus();
   }
 
   /** The market's generations do not concern the chat (its own news come through ``onDesk``). */
   refresh() { return Promise.resolve(); }
 
+  /** The chat changed - also while the page is still loading: then it reads once more when that is done. */
   onDesk(changed) {
-    if (changed.includes('chat')) this.reload();
+    if (!changed.includes('chat')) return;
+    this.reload().catch((err) => { if (!err.network && err.status !== 401) errorToast(err); });
   }
 
-  /** Read again what the page has (and what came after it): new messages, and the ones taken back. */
+  /** Read the chat - the first time the latest messages, then what the page has again (and what came after it): new
+   * messages, and the ones taken back.  One reading at a time; a change meanwhile reads once more after it. */
   async reload() {
     if (this.reading) { this.again = true; return; }
     this.reading = true;
@@ -87,10 +86,9 @@ export class SocialPage {
         const had = new Set(this.msgs.map((m) => m.id));
         this.msgs = res.messages;
         this.more = res.more;
-        this.render(this.msgs.some((m) => !had.has(m.id)) ? 'new' : 'stay');
+        this.render(!this.shown ? 'bottom' : this.msgs.some((m) => !had.has(m.id)) ? 'new' : 'stay');
+        this.shown = true;
       } while (this.again);
-    } catch (err) {
-      if (!err.network && err.status !== 401) errorToast(err);
     } finally {
       this.reading = false;
     }

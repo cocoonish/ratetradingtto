@@ -309,7 +309,8 @@ export function deskEvent(counters) {
   const changed = Object.keys(counters).filter((k) => !prev || prev[k] !== counters[k]);
   if (!changed.length) return;
   loadState();
+  // the open page, also while it is still loading (it reads again once it is there: nothing is missed)
   const page = desk.hooks.page();
-  if (page && page.ready && page.onDesk) page.onDesk(changed);
+  if (page && page.onDesk) page.onDesk(changed);
   if (desk.reports && changed.includes('feedback')) desk.reports.reload();
 }

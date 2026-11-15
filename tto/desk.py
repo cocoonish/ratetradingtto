@@ -7,10 +7,12 @@ as plain text; every call needs a signed-in user, the list of reports and their 
 """
 from __future__ import annotations
 
+import collections
 import datetime as _dt
 import re
 import threading
-from typing import Any, Dict, List, Optional
+from time import monotonic
+from typing import Any, Deque, Dict, Optional, Tuple
 
 from .service import ServiceError
 
@@ -20,18 +22,22 @@ KINDS = {"bug": "Hata", "idea": "Öneri"}
 REPORT_MAX, REPORT_LINES = 2000, 60
 CHAT_MAX, CHAT_LINES = 1000, 30
 AGENDA_MAX = 300
-#: at most this many rows of each in so many seconds per user: more is turned away (a stuck key, a script)
+#: at most this many of each in so many seconds per user, counted as they are written (taking one back does not give
+#: its place back): more is turned away (a stuck key, a script)
 PACE = {"feedback": (10, 600), "chat": (20, 60), "agenda": (60, 600)}
 #: the chat's messages at a time (the latest; earlier ones on request) and the most a page reads again
 CHAT_PAGE = 200
 CHAT_SINCE = 2000
-#: how far back the agenda's page goes (a deadline not met stays on it, however old)
+#: how far back the agenda's page goes - and the earliest day a new item may have (a deadline not met stays, however
+#: old); the most items of the page from that day on, and of the deadlines before it
 AGENDA_PAST_DAYS = 30
+AGENDA_LIMIT = 1000
+AGENDA_LATE = 200
 #: the reports dealt with that an administrator sees under the open ones
 REPORTS_DONE = 100
 
 # control characters (a tab and a line end stay) and the ones that turn the direction of the text around
-_HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f‪-‮⁦-⁩]")
+_HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩]")
 _PAGE_ID = re.compile(r"[A-Za-z0-9_.-]{1,60}")
 _TIME = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 
@@ -98,14 +104,19 @@ class Desk(object):
         self.svc = svc
         self.store = svc.store
         self._counting = threading.Lock()
-        self._writing = threading.Lock()          # the pace check and the row it lets in, one user's request at a time
+        self._writing = threading.Lock()          # the pace check and the row it lets in, one request at a time
         self._counters = {"chat": 0, "feedback": 0, "agenda": 0}
+        self._written: Dict[Tuple[str, str], Deque[float]] = {}     # (part, user) -> when they wrote lately
 
     # ------------------------------------------------------------------ live
-    def counters(self) -> Dict[str, int]:
-        """How many times each part of the corner changed since the start (the live stream sends them along)."""
+    def counters(self, admin: bool = True) -> Dict[str, int]:
+        """How many times each part of the corner changed since the start (the live stream sends them along; the
+        reports' counter only to an administrator - nobody else learns that one was sent or dealt with)."""
         with self._counting:
-            return dict(self._counters)
+            out = dict(self._counters)
+        if not admin:
+            del out["feedback"]
+        return out
 
     def _changed(self, part: str) -> None:
         with self._counting:
@@ -113,16 +124,21 @@ class Desk(object):
         self.svc.nudge()
 
     def _pace(self, part: str, user: str) -> None:
+        """One more of ``part`` by ``user`` (under ``_writing``) - or 429 when ``PACE`` is used up."""
         n, seconds = PACE[part]
-        since = (_dt.datetime.now() - _dt.timedelta(seconds=seconds)).replace(microsecond=0).isoformat(sep=" ")
-        if self.store.written_since(part, user, since) >= n:
+        now = monotonic()
+        seen = self._written.setdefault((part, user), collections.deque())
+        while seen and now - seen[0] >= seconds:
+            seen.popleft()
+        if len(seen) >= n:
             raise ServiceError("çok hızlı – biraz bekleyip tekrar deneyin", 429)
+        seen.append(now)
 
     def _names(self) -> Dict[str, str]:
         return {u["name"]: u["display"] for u in self.store.users()}
 
-    def _admin(self, user: str) -> bool:
-        return (self.store.account(user) or {}).get("role") == "admin"
+    def is_admin(self, user: Optional[str]) -> bool:
+        return bool(user) and (self.store.account(user) or {}).get("role") == "admin"
 
     def state(self, user: Optional[str], seen: Any = None) -> Dict[str, Any]:
         """What the top bar and the menu show: the chat's last message and how many the others wrote after ``seen``
@@ -133,7 +149,7 @@ class Desk(object):
         out: Dict[str, Any] = {
             "chat": {"last": self.store.chat_last(), "unread": self.store.chat_unread(user, seen) if seen is not None else 0},
             "agenda": [self._due(r) for r in self.store.agenda_due(user, *self._today_tomorrow())]}
-        if self._admin(user):
+        if self.is_admin(user):
             out["feedback"] = self.store.feedback_open()
         return out
 
@@ -234,9 +250,9 @@ class Desk(object):
         user = self.svc.require_user(user)
         today = _dt.date.today()
         names = self._names()
-        admin = self._admin(user)
+        admin = self.is_admin(user)
         items = []
-        for r in self.store.agenda(user, (today - _dt.timedelta(days=AGENDA_PAST_DAYS)).isoformat()):
+        for r in self.store.agenda(user, (today - _dt.timedelta(days=AGENDA_PAST_DAYS)).isoformat(), AGENDA_LIMIT, AGENDA_LATE):
             items.append({"id": r["id"], "day": r["day"], "time": r["time"], "text": r["text"], "deadline": bool(r["deadline"]),
                           "shared": r["owner"] is None, "by": names.get(r["created_by"], r["created_by"]), "at": r["created_at"],
                           "done": r["done_at"] is not None, "done_by": names.get(r["done_by"], r["done_by"]) if r["done_by"] else None,
@@ -252,9 +268,12 @@ class Desk(object):
 
     def add(self, user: Optional[str], day: Any, time: Any = None, text: Any = "", deadline: Any = False,
             shared: Any = True) -> Dict[str, Any]:
-        """Something not to forget on a day (at a time), maybe a deadline: the desk's (``shared``) or one's own."""
+        """Something not to forget on a day (at a time), maybe a deadline: the desk's (``shared``) or one's own - on a day
+        from ``AGENDA_PAST_DAYS`` days ago on."""
         user = self.svc.require_user(user)
         day, time = _day(day), _time(time)
+        if day < (_dt.date.today() - _dt.timedelta(days=AGENDA_PAST_DAYS)).isoformat():
+            raise ServiceError("en fazla %d gün öncesine iş eklenebilir" % AGENDA_PAST_DAYS)
         text = _text(text, AGENDA_MAX, "iş")
         with self._writing:
             self._pace("agenda", user)
@@ -274,7 +293,7 @@ class Desk(object):
         """Delete an item: one's own; the desk's by whoever added it or an administrator."""
         user = self.svc.require_user(user)
         row = self._visible(user, aid)
-        if row["owner"] is None and row["created_by"] != user and not self._admin(user):
+        if row["owner"] is None and row["created_by"] != user and not self.is_admin(user):
             raise ServiceError("masanın işini yalnızca ekleyen ya da bir yönetici silebilir", 403)
         self.store.delete_agenda(row["id"])
         self._changed("agenda")

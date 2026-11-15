@@ -159,8 +159,9 @@ def test_a_message_is_checked_paged_and_taken_back_by_its_writer_only(desk):
 
 def test_the_chat_s_pace_is_limited(desk):
     ali, can = _user(desk, "Ali Veli"), _user(desk, "Can Kaya")
-    for i in range(dk.PACE["chat"][0]):
-        desk.say(ali, "hızlı %d" % i)
+    said = [desk.say(ali, "hızlı %d" % i) for i in range(dk.PACE["chat"][0])]
+    for m in said:                                               # taking them back does not give their places back
+        desk.unsay(ali, m["id"])
     _refused(429, desk.say, ali, "bir fazla")
     desk.say(can, "ben yazabilirim")
 
@@ -173,8 +174,9 @@ def test_the_agenda_of_the_desk_and_of_each_trader(desk):
     c = desk.add(ali, _day(1), "9:05", "Kendi notum", shared=False)["added"]
     d = desk.add(can, _day(-3), None, "Rapor gönder", deadline=True)["added"]          # a deadline not met, days ago
     e = desk.add(can, _day(-2), "10:00", "Toplantı")["added"]                          # the past
-    old = desk.add(can, _day(-dk.AGENDA_PAST_DAYS - 5), None, "Çok eski")["added"]      # before the page goes back to
-    late = desk.add(can, _day(-dk.AGENDA_PAST_DAYS - 9), "11:00", "Unutulan deadline", deadline=True)["added"]
+    # items that aged: before the page goes back to (and before any new item may be added for)
+    old = desk.store.add_agenda(None, _day(-dk.AGENDA_PAST_DAYS - 5), None, "Çok eski", False, can)
+    late = desk.store.add_agenda(None, _day(-dk.AGENDA_PAST_DAYS - 9), "11:00", "Unutulan deadline", True, can)
     seen = desk.agenda(ali)
     # by day, then time (the untimed first in their day); a deadline not met stays, however old
     assert [it["id"] for it in seen["items"]] == [late, d, e, b, a, c] and old not in [it["id"] for it in seen["items"]]
@@ -208,19 +210,33 @@ def test_an_agenda_item_is_checked_and_kept(tmp_path):
     d, store = _desk(tmp_path / "tto.db")
     ali = _user(d, "Ali Veli")
     for args in (("15.11.2026", None, "x"), ("2026-02-30", None, "x"), ("1999-12-31", None, "x"), (_day(), "25:00", "x"),
-                 (_day(), "9.30", "x"), (_day(), None, "  "), (_day(), None, "x" * (dk.AGENDA_MAX + 1))):
+                 (_day(), "9.30", "x"), (_day(), None, "  "), (_day(), None, "x" * (dk.AGENDA_MAX + 1)),
+                 (_day(-dk.AGENDA_PAST_DAYS - 1), None, "x")):
         _refused(400, d.add, ali, *args)
+    assert d.add(ali, _day(-dk.AGENDA_PAST_DAYS), None, "geç kalmış not")["added"]
     aid = d.add(ali, _day(), "08:00", "Sabah   toplantısı\nnotu", deadline="true", shared=False)["added"]
-    assert d.counters()["agenda"] == 1
+    assert d.counters()["agenda"] == 2
     store.close()
     d, store = _desk(tmp_path / "tto.db")
-    item = d.agenda(ali)["items"][0]
+    item = d.agenda(ali)["items"][1]
     assert (item["id"], item["text"], item["time"], item["deadline"], item["shared"]) == (aid, "Sabah toplantısı notu", "08:00",
                                                                                          True, False)
-    for i in range(dk.PACE["agenda"][0] - 1):
+    for i in range(dk.PACE["agenda"][0]):
         d.add(ali, _day(1), None, "iş %d" % i)
     _refused(429, d.add, ali, _day(1), None, "bir fazla")
     store.close()
+
+
+def test_the_agenda_page_is_bounded(desk, monkeypatch):
+    monkeypatch.setattr(dk, "AGENDA_LIMIT", 3)
+    monkeypatch.setattr(dk, "AGENDA_LATE", 2)
+    ali = _user(desk, "Ali Veli")
+    for n in (5, 1, 3, 2):
+        desk.add(ali, _day(n), None, "ileride %d" % n)
+    for n in range(3):
+        desk.store.add_agenda(None, _day(-dk.AGENDA_PAST_DAYS - 10 - n), None, "eski %d" % n, True, ali)
+    # the latest of the old deadlines not met, then the nearest days
+    assert [it["text"] for it in desk.agenda(ali)["items"]] == ["eski 1", "eski 0", "ileride 1", "ileride 2", "ileride 3"]
 
 
 # ---------------------------------------------------------------------- the service: no new generation
@@ -236,6 +252,9 @@ def test_the_corner_tells_the_pages_without_a_new_generation(module_service):
         assert heard == [gen, gen] and svc.gen == gen                # the open tables are not read again for a chat line
         after = svc.desk.counters()
         assert after == dict(before, chat=before["chat"] + 1, agenda=before["agenda"] + 1)
+        # the live stream of a user does not carry the reports' counter (nobody else learns that one came or went)
+        assert svc.desk.counters(admin=False) == {"chat": after["chat"], "agenda": after["agenda"]}
+        assert not svc.desk.is_admin(user) and not svc.desk.is_admin(None)
     finally:
         svc.remove_listener(heard.append)
     assert [p["id"] for p in svc.nav()][-2:] == ["social", "agenda"]

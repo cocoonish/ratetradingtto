@@ -52,16 +52,19 @@ export class AgendaPage {
     this.host.appendChild(h('div', { class: 'panels agenda-page' }, form,
       h('section', { class: 'panel wide' }, h('header', null, h('h2', null, 'Ajanda')), this.list)));
     await this.reload();
-    this.clock = setInterval(() => { if (!this.dead) this.render(); }, 30000);   // what is late changes as time goes by
+    if (!this.dead) this.clock = setInterval(() => this.render(), 30000);   // what is late changes as time goes by
   }
 
   /** The market's generations do not concern the agenda (its own news come through ``onDesk``). */
   refresh() { return Promise.resolve(); }
 
+  /** The agenda changed - also while the page is still loading: then it reads once more when that is done. */
   onDesk(changed) {
-    if (changed.includes('agenda')) this.reload();
+    if (!changed.includes('agenda')) return;
+    this.reload().catch((err) => { if (!err.network && err.status !== 401) errorToast(err); });
   }
 
+  /** One reading at a time; a change meanwhile reads once more after it. */
   async reload() {
     if (this.reading) { this.again = true; return; }
     this.reading = true;

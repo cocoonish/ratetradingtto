@@ -726,7 +726,8 @@ sayfadan gelen değişiklik isteği reddedilir.
 * **İlgilenildi** kaydı rozetten düşürür; kayıt altta **İlgilenilenler** geçmişine gider (kim, ne zaman; son 100).
   Yanlışlıkla kapatılan **Yeniden aç** ile döner. Yönetici listeden kendisi de "Yeni bildirim yaz"abilir.
 * Listeyi görmek ve İlgilenildi işaretlemek sunucuda yöneticiye özeldir (`/api/feedback` başkasına 403 verir).
-  Bir kullanıcı 10 dakikada en fazla 10 bildirim gönderebilir.
+  Bir kullanıcı 10 dakikada en fazla 10 bildirim gönderebilir. Canlı akışta bildirimlerin sayacı da yalnızca
+  yöneticiye gider: kullanıcı bir bildirimin geldiğini ya da kapatıldığını hiçbir yoldan öğrenmez.
 
 **Sosyal.** Menünün Masa grubunda: masanın sohbeti. Giriş yapmış herkes yazar ve görür; mesajlar isim ve saatle, gün
 ayraçlarıyla (Bugün / Dün / tarih) durur, aynı kişinin 5 dakika içindeki mesajları tek isim altında toplanır.
@@ -736,11 +737,12 @@ ayraçlarıyla (Bugün / Dün / tarih) durur, aynı kişinin 5 dakika içindeki 
 * Sosyal açık değilken menüde **okunmamış mesaj sayısı** görünür (başkalarının, o tarayıcıda okunandan sonraki
   mesajları).
 * Mesajlar **süresiz saklanır**: sayfa son 200 mesajla açılır, öncekiler "Daha eski mesajlar" ile gelir. Herkes
-  **kendi mesajını** silebilir (herkesin ekranından gider), başkasınınkini silemez. Dakikada en fazla 20 mesaj.
+  **kendi mesajını** silebilir (herkesin ekranından gider), başkasınınkini silemez. Dakikada en fazla 20 mesaj (silinen
+  mesaj sayıdan düşmez).
 
 **Ajanda.** Menünün Masa grubunda: unutulmaması gereken işler.
 
-* **Gün** (ya da **Bugün** düğmesi), isteğe bağlı **saat**, **iş** (en fazla 300 karakter), **Deadline** işareti ve
+* **Gün** (ya da **Bugün** düğmesi; geriye en fazla 30 gün), isteğe bağlı **saat**, **iş** (en fazla 300 karakter), **Deadline** işareti ve
   kimin için olduğu: **Masa** (herkes görür ve tamamlayabilir; silmek ekleyenin ya da bir yöneticinin işidir) ya da
   **Kişisel** (yalnızca siz görürsünüz; başkası ona ulaşamaz).
 * Liste: önce **gecikmiş deadline'lar** (kırmızı: günü ya da bugünkü saati geçmiş, tamamlanmamış - ne kadar eski
@@ -749,7 +751,8 @@ ayraçlarıyla (Bugün / Dün / tarih) durur, aynı kişinin 5 dakika içindeki 
 * **Uyarılar** - hangi sayfada olursanız olun ekranın sağ altında, her tarayıcıda bir kez (tıklayınca Ajanda açılır):
   saatli deadline'da **15 dakika önce** ve **saatinde**, saatsiz deadline'da **bir gün önce** ve **o gün**; saatli
   her işte saatinde hatırlatma. Menüde Ajanda'nın yanında bugünkü işlerin ve gecikmiş deadline'ların sayısı; gecikmiş
-  varsa rozet kırmızıdır. 10 dakikada en fazla 60 iş eklenebilir.
+  varsa rozet kırmızıdır. 10 dakikada en fazla 60 iş eklenebilir; sayfa en yakın 1000 işi ve en yeni 200 gecikmiş
+  deadline'ı gösterir.
 
 ### FX: Spot / FX ve vol izleme sayfaları
 
@@ -1473,7 +1476,7 @@ Bloomberg ve ağ gerekmez (~8–11 dk; masa bilgisayarında ~35 dk). 978 test (g
 | `test_dv01.py` | DV01 Risk'in sıfır pozisyonla açılması (kova DV01'leri ve yapıştırma alanı; kullanıcının kendi pozisyonu kişisel), VİOP matrisinin DV01 satırları kendi para biriminde (TRY: TL ve USD, USD: USD; kontrat fiyatıyla çevrim, sayfada yeni satır) |
 | `test_dates.py` | **Özel günler**: vadeden valörün (`2W`, `18W`, `1M` …) masanın tatil listesini (Motor!A361:A523) izlemesi - Ramazan Bayramı'na (10.03.2027), 19 Mayıs'a ve 1 Ocak'a düşen valörün ilk iş gününe kayması, ay vadelerinin çalışma kitabının kendi `WORKDAY(EDATE(…))` tarihleriyle aynı olması; dashboard'un **ay sonunda** (30.11.2026), **yıl sonunda** (31.12.2026: spot 1 Ocak ve hafta sonundan sonra) ve **bayramın ortasında** (10.03.2027) açılması: spot ve tahvil T+1 valörü, geçen PPK'nın listeden bir kez çıkması (MPC1 bir sonraki toplantı), bütün sayfaların Python hatası vermeden hesaplanması |
 | `test_auth.py` | **Giriş ve hesaplar**: şifrenin tuzlu özetle saklanması (tur sayısı özetin içinde), önceki sürümün veritabanındaki kullanıcıların şifresiz etkin hesap olarak kalması, **ilk yöneticinin yalnızca bu bilgisayardan** ve yalnızca yönetici yokken oluşturulması (önceki sürümden bir kullanıcı da olabilir, girdileri kalır), yanlış şifre / bilinmeyen isim için aynı yanıt, **5 hatada 1 dakika kilit**, oturumun 7 gün sürmesi ve veritabanında yalnızca özetinin durması, çıkış; **hesap isteği** (bekleyen istekle girilmemesi, önceki sürümün kullanıcısının aynı isimle isteyip onaylanınca girdilerine kavuşması, reddedilen yeni isteğin silinmesi / eski hesabın şifresiz geri dönmesi); **yönetici işleri** (oluşturma, rol verme / alma, son yöneticinin korunması, şifre belirleyince ve hesap kapatınca açık oturumların bitmesi, kendi hesabını kapatamama); kendi şifresini değiştirme (diğer oturumların kapanması, eski şifre hatalarının kilide sayılması); **aynı anda gönderilen 20 tahminin 5'inin denenip gerisinin kilide takılması**, şifresiz hesabın yönetici yapılamaması ve istekle sahiplenilenin kullanıcı olması, kendi yetkisini bırakma, benzer görünen isimlerin tek isim / görünmeyen karakterin reddi, bekleyen istek sınırı; HTTP'de **oturumsuz her `/api` isteğinin 401** alması, **başka sayfadan (Origin / Sec-Fetch-Site) gelen değişiklik isteğinin 403** alması, sunucunun X-Forwarded-For'a inanmaması, çerezin HttpOnly / SameSite=Strict / 7 gün olması, `Authorization: Bearer`, yönetici uçlarının yöneticiye açık olması, kapatılan hesabın tarayıcısının bir sonraki istekte dışarıda kalması; `python -m tto yonetici` komutu |
-| `test_desk.py` | **Hata / Öneri, Sosyal, Ajanda** (`tto/desk.py`): bildirimin yalnızca yöneticiye gitmesi (kullanıcıda rozet sayısı yok; liste ve "İlgilenildi" 403), İlgilenildi / yeniden aç ve geçmiş; sohbetin herkese açık ve kalıcı olması (yeniden başlatmada), okunmamış sayısı, sayfalama (son 200, öncekiler, okunanı yeniden okuma), yalnızca kendi mesajını silme; ajandada masa / kişisel görünürlüğü (başkasının kişisel işi 404), gün ve saat sırası, gecikmiş deadline'ın yaşı ne olursa olsun kalması, uyarı listesi (bugün, yarın, gecikmiş), tamamlama ve silme yetkileri; metin temizliği (görünmez yön karakterleri), uzunluk ve hız sınırları (429); bir değişikliğin yeni nesil açmadan sayfalara haber vermesi; HTTP'de oturum ve başka siteden gelen isteğin reddi |
+| `test_desk.py` | **Hata / Öneri, Sosyal, Ajanda** (`tto/desk.py`): bildirimin yalnızca yöneticiye gitmesi (kullanıcıda rozet sayısı yok; liste ve "İlgilenildi" 403), İlgilenildi / yeniden aç ve geçmiş; sohbetin herkese açık ve kalıcı olması (yeniden başlatmada), okunmamış sayısı, sayfalama (son 200, öncekiler, okunanı yeniden okuma), yalnızca kendi mesajını silme; ajandada masa / kişisel görünürlüğü (başkasının kişisel işi 404), gün ve saat sırası, gecikmiş deadline'ın yaşı ne olursa olsun kalması, uyarı listesi (bugün, yarın, gecikmiş), tamamlama ve silme yetkileri; metin temizliği (görünmez yön karakterleri), uzunluk ve hız sınırları (429; silmek sınırı açmaz), ajanda sayfasının sınırı; bir değişikliğin yeni nesil açmadan sayfalara haber vermesi, canlı akışta bildirim sayacının yalnızca yöneticiye gitmesi; HTTP'de oturum ve başka siteden gelen isteğin reddi |
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma, port kuralı, manuel spot (VİOP ve Masa'nın ilk tablosu, üst şeritten giriş, temizleyince Bloomberg spotu), **elle değer** (formülün üzerine yazma: yalnızca sahibinin, yalnızca ona girdi görünür, silince / "formüle dön"le formül geri gelir, yeniden başlatmada kalır), hesaplayıcıların otomatik dolan girdileri (Forward ve VİOP: tarih, spot, döviz faizi), sekmeli sayfa çıktısı ve arama kutusunun verisi, işlem defterinin aralık / DV01 / tahvil fiyatı uçları |
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda; **sekmeler**: 12'den çok tablosu olan her sayfa sekmeli, her görünen tablo bir sekmede ya da sekmelerin üstünde, sekmeler var olan görünür tabloları gösteriyor, Forward hesaplayıcılarla başlıyor, Hesaplayıcılar sayfasında aynı adlı iki tablo yok; **kaldırılan dört sayfa** (MOBIL MK, YP DIBS, Ivır Zıvır, USDTRY IYIX: yüklenen kitapta ve Sayfa gezgini'nde yok, 45 `BDP` çağrısı gitti, kalan sayfaların sırası ve numaraları, model dosyasının onları tutması, başka bir formülün başvurduğu sayfanın kalması) |
 | `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |

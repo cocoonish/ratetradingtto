@@ -52,15 +52,12 @@ CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user);
 CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, page TEXT, page_title TEXT,
     created_by TEXT NOT NULL, created_at TEXT NOT NULL, done_by TEXT, done_at TEXT);
-CREATE INDEX IF NOT EXISTS feedback_user ON feedback (created_by, created_at);
 CREATE TABLE IF NOT EXISTS chat (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS chat_user ON chat (user, created_at);
 CREATE TABLE IF NOT EXISTS agenda (
     id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, day TEXT NOT NULL, time TEXT, text TEXT NOT NULL,
     deadline INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL, done_by TEXT, done_at TEXT);
 CREATE INDEX IF NOT EXISTS agenda_day ON agenda (day);
-CREATE INDEX IF NOT EXISTS agenda_user ON agenda (created_by, created_at);
 """
 
 
@@ -691,14 +688,6 @@ class Store(object):
                 (key, json.dumps(value, ensure_ascii=False)))
 
     # ------------------------------------------------------------------ the desk's own: reports, chat, agenda
-    #: the tables a user writes rows of, and the column that names the writer (how many lately: ``written_since``)
-    _WRITERS = {"feedback": "created_by", "chat": "user", "agenda": "created_by"}
-
-    def written_since(self, table: str, user: str, since: str) -> int:
-        """How many rows of ``table`` the user wrote at ``since`` (``yyyy-mm-dd hh:mm:ss``) or later."""
-        col = self._WRITERS[table]
-        return int(self._q("SELECT COUNT(*) AS n FROM %s WHERE %s=? AND created_at>=?" % (table, col), (user, since))[0]["n"])
-
     def add_feedback(self, kind: str, text: str, page: Optional[str], page_title: Optional[str], user: str) -> int:
         return self._x("INSERT INTO feedback (kind, text, page, page_title, created_by, created_at) VALUES (?,?,?,?,?,?)",
                        (kind, text, page, page_title, user, now_iso()))
@@ -765,12 +754,15 @@ class Store(object):
         return self._x("INSERT INTO agenda (owner, day, time, text, deadline, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
                        (owner, day, time, text, 1 if deadline else 0, user, now_iso()))
 
-    def agenda(self, user: str, start: str) -> List[Dict[str, Any]]:
-        """The desk's items and the user's own from the day ``start`` on, and every deadline before it still not met;
-        by day, then time (an item without a time first in its day)."""
-        return [dict(r) for r in self._q(
-            "SELECT * FROM agenda WHERE (owner IS NULL OR owner=?) AND (day>=? OR (deadline=1 AND done_at IS NULL)) "
-            "ORDER BY day, time IS NOT NULL, time, id", (user, start))]
+    def agenda(self, user: str, start: str, limit: int = 1000, late: int = 200) -> List[Dict[str, Any]]:
+        """The desk's items and the user's own from the day ``start`` on (the first ``limit``), and before it the
+        deadlines still not met (the latest ``late``); by day, then time (an item without a time first in its day)."""
+        mine = "(owner IS NULL OR owner=?)"
+        before = self._q("SELECT * FROM agenda WHERE %s AND day<? AND deadline=1 AND done_at IS NULL "
+                         "ORDER BY day DESC, time IS NOT NULL DESC, time DESC, id DESC LIMIT ?" % mine, (user, start, late))
+        rows = self._q("SELECT * FROM agenda WHERE %s AND day>=? ORDER BY day, time IS NOT NULL, time, id LIMIT ?" % mine,
+                       (user, start, limit))
+        return [dict(r) for r in reversed(before)] + [dict(r) for r in rows]
 
     def agenda_due(self, user: str, today: str, tomorrow: str) -> List[Dict[str, Any]]:
         """What is not done yet of today, of tomorrow, and the deadlines of the days before (the reminders, the badge)."""
