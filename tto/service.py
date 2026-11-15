@@ -203,7 +203,7 @@ class Service(object):
                 try:
                     book.declare(inp["range"], v.get("sheet"), scope=inp.get("scope", "user"),
                                  group=inp.get("group"), kind=inp.get("kind", "auto"), label=inp.get("label", ""),
-                                 options=inp.get("options"), view=v["id"])
+                                 options=inp.get("options"), view=v["id"], aliases=inp.get("aliases"))
                 except (KeyError, ValueError):
                     continue
         tto = self.books.get("tto")
@@ -1350,7 +1350,7 @@ class Service(object):
             fmt = book.model.numfmts[sheet.styles.get(rc, 0)] if sheet.styles.get(rc, 0) < len(book.model.numfmts) else "General"
             try:
                 val = parse_input(it.get("value"), numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
-                                  d.kind, book.options_for(si, rc, calc), lang)
+                                  d.kind, book.options_for(si, rc, calc), lang, d.aliases)
             except InputError as exc:
                 errors.append("%s: %s" % (ref, exc))
                 continue

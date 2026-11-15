@@ -66,8 +66,20 @@
    "range": "O44",
    "scope": "user",
    "group": "forward-8",
-   "kind": "text",
-   "label": "Forward DV01 'B/S'"
+   "kind": "list",
+   "label": "Forward DV01 'B/S' (B = alış, S = satış; Al / Sat da yazılır - the formulas test for 'S' only, anything else is refused)",
+   "options": [
+    "B",
+    "S"
+   ],
+   "aliases": {
+    "Al": "B",
+    "Alış": "B",
+    "Buy": "B",
+    "Sat": "S",
+    "Satış": "S",
+    "Sell": "S"
+   }
   },
   {
    "range": "O45",

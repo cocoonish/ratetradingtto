@@ -216,6 +216,28 @@ def test_spots_rates_prices_and_an_isin_are_typed_where_they_were_refused_as_dat
         service.reset_inputs(u, "tto")
 
 
+def test_buy_or_sell_of_the_forward_dv01_blocks_is_b_or_s_and_nothing_else(service):
+    """Forward!O44 and Calculators!X29 (B/S) had no list and their formulas test for "S" only: "Sat" priced a sale as a
+    buy, silently.  Both offer B / S, take Al / Sat (Alış, Satış, Buy, Sell) for them and refuse anything else."""
+    u = login(service, "Servis BS")
+    try:
+        for sheet, side, usd, view, panel in (("Forward", "O44", "O47", "forward", "B18"), ("Calculators", "X29", "X32", "calc", "B10")):
+            ref = "%s!%s" % (sheet, side)
+            info = service.cell_info(u, "tto", ref)["cell"]
+            assert info["o"] == ["B", "S"] and info["i"] == "u", ref
+            res = service.set_inputs(u, "tto", [{"ref": ref, "value": "B"}])
+            assert res["errors"] == []
+            buy = cell(service, "%s!%s" % (sheet, usd), u)
+            for typed in ("Sat", "satış", "s", "Sell"):
+                assert service.set_inputs(u, "tto", [{"ref": ref, "value": typed}])["errors"] == [], typed
+                assert cell(service, ref, u) == "S" and cell(service, "%s!%s" % (sheet, usd), u) == pytest.approx(-buy), typed
+            assert service.set_inputs(u, "tto", [{"ref": ref, "value": "al"}])["errors"] == [] and cell(service, ref, u) == "B"
+            bad = service.set_inputs(u, "tto", [{"ref": ref, "value": "Satıcı"}])
+            assert len(bad["errors"]) == 1 and "listede yok" in bad["errors"][0] and cell(service, ref, u) == "B"
+    finally:
+        service.reset_inputs(u, "tto")
+
+
 def test_blanking_an_input_returns_to_the_formula_or_empties_the_cell(service):
     u = login(service, "Servis Blank")
     base = cell(service, "MASA!C60")                        # a formula default (start date)

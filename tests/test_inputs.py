@@ -103,6 +103,20 @@ def test_options_are_matched_case_insensitively():
     assert parse_input("DIŞ", options=["iç", "dış"]) == "dış"
 
 
+def test_a_list_cell_takes_its_items_and_the_words_for_them_only():
+    """The B/S of the Forward DV01 blocks: their formulas test for "S" only, so "Sat" kept as text priced a sale as a
+    buy.  A list cell takes one of its items - or a word that means one - and refuses anything else."""
+    side = {"Al": "B", "Alış": "B", "Buy": "B", "Sat": "S", "Satış": "S", "Sell": "S"}
+    for typed, expected in (("S", "S"), ("s", "S"), ("Sat", "S"), ("SAT", "S"), ("satış", "S"), ("SATIŞ", "S"), ("sell", "S"),
+                            ("B", "B"), ("b", "B"), ("al", "B"), ("ALIŞ", "B"), ("Buy", "B")):
+        assert parse_input(typed, kind="list", options=["B", "S"], aliases=side) == expected, typed
+    assert parse_input("", kind="list", options=["B", "S"], aliases=side) is None
+    for typed in ("Satıcı", "x", "1", "BS"):
+        with pytest.raises(InputError):
+            parse_input(typed, kind="list", options=["B", "S"], aliases=side)
+    assert parse_input("Sat", options=["B", "S"]) == "Sat"            # a list that is only offered keeps other text
+
+
 def test_a_list_of_days_kept_as_text_takes_the_day_typed_any_way():
     """VİOP's contracts are listed as text ("30.11.2026") and the formulas look that text up: a day typed another way,
     or into a cell declared a date, is the item of that day - never a date number the list does not hold."""

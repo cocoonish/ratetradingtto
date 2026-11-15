@@ -255,8 +255,20 @@
    "range": "X29",
    "scope": "user",
    "group": "calc-28",
-   "kind": "text",
-   "label": "B10 'B/S'"
+   "kind": "list",
+   "label": "B10 'B/S' (B = alış, S = satış; Al / Sat da yazılır - the formulas test for 'S' only, anything else is refused)",
+   "options": [
+    "B",
+    "S"
+   ],
+   "aliases": {
+    "Al": "B",
+    "Alış": "B",
+    "Buy": "B",
+    "Sat": "S",
+    "Satış": "S",
+    "Sell": "S"
+   }
   },
   {
    "range": "X30",
