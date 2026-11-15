@@ -647,6 +647,17 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().bond_flag, _user(request), str(data.get("isin") or ""), bool(data.get("on"))))
 
     @handler
+    async def bond_list_add(request: Request):
+        data = await _body(request)
+        values = data.get("values") or []
+        return ok(await call(svc().bond_list_add, _user(request), values if isinstance(values, list) else [values]))
+
+    @handler
+    async def bond_list_remove(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().bond_list_remove, _user(request), str(data.get("isin") or "")))
+
+    @handler
     async def bond_card(request: Request):
         return ok(await call(svc().bond_card, _user(request), request.path_params["isin"]))
 
@@ -851,6 +862,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/bonds/catalog", bond_catalog),
         Route("/api/list/add", list_add, methods=["POST"]),
         Route("/api/bonds/flag", bond_flag, methods=["POST"]),
+        Route("/api/bonds/list/add", bond_list_add, methods=["POST"]),
+        Route("/api/bonds/list/remove", bond_list_remove, methods=["POST"]),
         Route("/api/watch", watch),
         Route("/api/watch/catalog", watch_catalog),
         Route("/api/heat", heat),

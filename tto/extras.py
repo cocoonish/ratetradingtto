@@ -1667,7 +1667,8 @@ def _tto_dibs_live(model: Model) -> None:
     for r in range(LIVE_FIRST, LIVE_LAST + 1):
         b.set("A%d" % r, '=IF(TRIM(%s$A%d&"")="","",UPPER(TRIM(%s$A%d&"")))' % (rv, r, rv, r))
         b.set("B%d" % r, '=IF($A{r}="","",IF(ISNUMBER({rv}$E{r}),TEXT({rv}$E{r},"dd.mm.yy")&IF({rv}$D{r}="T"," TLREF",'
-                         'IF({rv}$D{r}="E"," TÜFE",IF({rv}$D{r}="B"," Bono",""))),$A{r}))'.format(r=r, rv=rv), bold=True)
+                         'IF({rv}$D{r}="F"," FRN",IF({rv}$D{r}="E"," TÜFE",IF({rv}$D{r}="B"," Bono","")))),'
+                         '$A{r}))'.format(r=r, rv=rv), bold=True)
         b.set("C%d" % r, '=IF($A{r}="","",{rv}$D{r})'.format(r=r, rv=rv), align="center")
         b.set("D%d" % r, '=IF($A{r}="","",{rv}$E{r})'.format(r=r, rv=rv), fmt=DATE)
         b.set("E%d" % r, '=IF($A{r}="","",{rv}$G{r})'.format(r=r, rv=rv), fmt="0.00%")
@@ -1756,32 +1757,25 @@ def _col(letter: str) -> int:
 
 # ---------------------------------------------------------------------------------------------- every bond
 UNI_SHEET = "EK_EVREN"
-UNI_OWN = (6, 20)                      # the bonds the desk adds that the list does not have (a new issue): ISIN typed
-UNI_FIRST = 22                         # the desk's list of TRY government bonds from here, kind by kind
-#: the kinds in the order the desk thinks of them: (catalog kind, caption, the value date it trades on)
+UNI_FIRST = 6                          # the bonds of Tüm Kâğıtlar from here, one a row: the service writes them
+UNI_ROWS = 160                         # room for this many (the list has ~80; a bond past its maturity leaves its row)
+UNI_LAST = UNI_FIRST + UNI_ROWS - 1
+#: the kinds in the order the desk thinks of them: (kind, caption, the value date it trades on)
 UNI_KINDS = (("bill", "Bono", "bill"), ("zero", "Kuponsuz", "bill"), ("fixed", "Sabit kuponlu", "bond"),
-             ("float", "TLREF'e endeksli", "bond"), ("cpi", "TÜFE'ye endeksli", "bond"))
+             ("float", "TLREF'e endeksli", "bond"), ("frn", "FRN", "bond"), ("cpi", "TÜFE'ye endeksli", "bond"))
+#: the kind's code of a bond's row, right of Bloomberg's answers (T:Z) and of what is added next to them (AA:AB)
+UNI_KIND = "AC"
+#: the cells of a bond's row the service writes: ISIN, name, kind and coupon as shown, maturity, the kind's code
+UNI_WRITTEN = ("A", "B", "C", "D", "E", UNI_KIND)
 UNI_RAW = ("bid", "ask", "last", "date", "vol")
 #: what the trading list (DİBS RV) says of a bond that is on it: (column there, caption, number format)
 UNI_RV = (("T", "Getiri % (RV)", "0.00%"), ("Z", "ASW / DM (bp)", "0"), ("AC", "Sinyal", None), ("AI", "DV01 / 1mn", "0.0"))
 
 
-def universe_rows() -> List[Tuple[int, Optional[Dict[str, Any]], Optional[str]]]:
-    """The rows of the EK_EVREN sheet below the desk's own: ``(row, bond, caption)`` - a caption row per kind
-    (bond ``None``), then its bonds by maturity."""
-    from . import bonds as bd
-    out: List[Tuple[int, Optional[Dict[str, Any]], Optional[str]]] = []
-    r = UNI_FIRST
-    for kind, caption, _ in UNI_KINDS:
-        group = [b for b in bd.catalog() if b.get("kind") == kind]
-        if not group:
-            continue
-        out.append((r, None, "%s · %d kâğıt" % (caption, len(group))))
-        r += 1
-        for b in sorted(group, key=lambda x: x["maturity"]):
-            out.append((r, b, None))
-            r += 1
-    return out
+def universe_kind(isin: str) -> str:
+    """A formula's text: the kind (its code) Tüm Kâğıtlar has for the ISIN in cell ``isin`` ("" when it is not there)."""
+    return ('IFERROR(INDEX(%s!$%s$%d:$%s$%d,MATCH(UPPER(TRIM(%s&"")),%s!$A$%d:$A$%d,0))&"","")'
+            % (UNI_SHEET, UNI_KIND, UNI_FIRST, UNI_KIND, UNI_LAST, isin, UNI_SHEET, UNI_FIRST, UNI_LAST))
 
 
 def _universe_check(model: Model) -> None:
@@ -1791,14 +1785,14 @@ def _universe_check(model: Model) -> None:
 
 
 def _tto_universe(model: Model) -> None:
-    """Every TRY government bond of the desk's Bloomberg list in one place, kind by kind, by maturity: what it is,
-    how long it has left, whether it is on the trading list (DİBS RV), its price on Borsa İstanbul (bid, ask,
-    the last trade and its day, the volume - bills on their own value date, the rest on theirs) and, for a bond on
-    the trading list, what DİBS RV says of it.  On top, the bonds the desk adds that the list does not have yet.
-    A bond's price comes from DİBS RV when it is listed there on the same source (the recorded file shows it
-    offline); the others ask Bloomberg."""
-    import datetime as _dt
-    from .xl.values import date_to_serial
+    """Every TRY government bond of the desk's list in one place: what it is, how long it has left, whether it is on
+    the trading list (DİBS RV), its price on Borsa İstanbul (bid, ask, the last trade and its day, the volume - bills
+    on their own value date, the rest on theirs) and, for a bond on the trading list, what DİBS RV says of it.
+
+    The list is the desk's (the catalog file and the bonds added, less the ones taken off and the ones past their
+    maturity): the service writes a bond's ISIN, name, kind, coupon and maturity on a row of its own (``UNI_WRITTEN``)
+    and the page shows them kind by kind, by maturity.  A bond's price comes from DİBS RV when it is listed there on
+    the same source (the recorded file shows it offline); the others ask Bloomberg."""
     b = SheetBuilder(model, UNI_SHEET)
     rv = "'DİBS RV'!"
     lst = "$%s$5:$%s$54"
@@ -1810,16 +1804,20 @@ def _tto_universe(model: Model) -> None:
     b.head("A4", ["ISIN", "Kâğıt", "Tür", "Kupon", "Vade", "Kalan gün", "Kalan yıl", "Trading", "Bid", "Ask", "Son işlem",
                   "Son işlem günü", "Hacim"] + [cap for _, cap, _ in UNI_RV] + ["Kaynak"])
     b.head("T4", ["RV satırı", "Menkul", "bid", "ask", "son", "gün", "hacim"])
-    b.set("A%d" % (UNI_OWN[0] - 1), "Kendi eklediklerimiz · listede olmayan kâğıtlar (yeni ihraç: ISIN yazın)", bold=True)
-
-    def row(r: int, src: str) -> None:
+    b.head("%s4" % UNI_KIND, ["tür"])
+    for r in range(UNI_FIRST, UNI_LAST + 1):
         a = "$A%d" % r
+        b.set("B%d" % r, None, bold=True)
+        b.set("D%d" % r, None, fmt="0.00%")
+        b.set("E%d" % r, None, fmt=DATE)
         b.set("F%d" % r, '=IF(ISNUMBER($E{r}),$E{r}-TODAY(),"")'.format(r=r), fmt=INT0)
         b.set("G%d" % r, '=IF(ISNUMBER($F{r}),$F{r}/365.25,"")'.format(r=r), fmt="0.00")
         b.set("H%d" % r, '=IF({a}="","",IF(ISNUMBER($T{r}),"★",""))'.format(a=a, r=r), align="center", bold=True)
         b.set("T%d" % r, '=IF({a}="","",IFERROR(MATCH({a},{rv}$A$5:$A$54,0),""))'.format(a=a, rv=rv))
-        b.set("R%d" % r, '=IF({a}="","",IF(TRIM({s}&"")="","{d}",TRIM(UPPER({s}))))'.format(
-            a=a, s=src, d="ISL0" if src == "$C$2" else "ISL1"), align="center", color=NOTE_COLOR)
+        # bills and zero coupon bonds on their own value date (and source), the rest on the bonds'
+        b.set("R%d" % r, '=IF({a}="","",IF(OR(${k}{r}="bill",${k}{r}="zero"),IF(TRIM($C$2&"")="","ISL0",TRIM(UPPER($C$2))),'
+                         'IF(TRIM($E$2&"")="","ISL1",TRIM(UPPER($E$2)))))'.format(a=a, r=r, k=UNI_KIND),
+              align="center", color=NOTE_COLOR)
         b.set("U%d" % r, '=IF({a}="","",IF({rv}$N$2="/isin/","/isin/"&{a}&"@"&$R{r},{a}&" @"&$R{r}&" "&{rv}$N$2))'.format(
             a=a, rv=rv, r=r))
         same = 'IF(ISNUMBER($T{r}),$R{r}=INDEX({rv}{bs},$T{r}),FALSE)'.format(r=r, rv=rv, bs=lst % ("BS", "BS"))
@@ -1840,40 +1838,12 @@ def _tto_universe(model: Model) -> None:
         for k, (col, _, fmt) in enumerate(UNI_RV):
             b.set("%s%d" % (index_to_col(_col("N") + k), r), '=IF(ISNUMBER($T{r}),INDEX({rv}{c},$T{r}),"")'.format(
                 r=r, rv=rv, c=lst % (col, col)), fmt=fmt, bold=col == "AC")
-
-    # the desk's own: an ISIN typed; what a Turkish ISIN says of its maturity
-    for r in range(UNI_OWN[0], UNI_OWN[1] + 1):
-        b.input("A%d" % r, None)
-        mat = 'DATE(2000+VALUE(MID($A{r},8,2)),VALUE(MID($A{r},6,2)),VALUE(MID($A{r},4,2)))'.format(r=r)
-        b.set("B%d" % r, '=IF($A{r}="","",IF(LEFT($A{r},2)="TR",IFERROR(TEXT({m},"dd.mm.yy"),$A{r}),$A{r}))'.format(r=r, m=mat), bold=True)
-        b.set("C%d" % r, '=IF($A{r}="","","liste dışı")'.format(r=r), color=NOTE_COLOR)
-        b.set("E%d" % r, '=IF(LEFT($A{r},2)="TR",IFERROR({m},""),"")'.format(r=r, m=mat), fmt=DATE)
-        row(r, "$E$2")
-    # the list, kind by kind
-    trades_on = {kind: on for kind, _, on in UNI_KINDS}
-    for r, bond, caption in universe_rows():
-        if bond is None:
-            b.set("A%d" % r, caption, bold=True)
-            continue
-        kind = bond.get("kind")
-        b.set("A%d" % r, bond["isin"])
-        from . import bonds as bd
-        b.set("B%d" % r, bd.short_label(bond), bold=True)
-        b.set("C%d" % r, bd.KINDS.get(kind, kind))
-        cpn = bond.get("coupon")
-        if kind == "fixed" and isinstance(cpn, (int, float)):
-            b.set("D%d" % r, float(cpn) / 100.0, fmt="0.00%")
-        elif kind == "cpi" and isinstance(cpn, (int, float)):
-            b.set("D%d" % r, "reel %%%s" % ("%.2f" % cpn).replace(".", ","))
-        else:
-            b.set("D%d" % r, {"float": "TLREF", "bill": "iskontolu", "zero": "iskontolu"}.get(kind, ""))
-        b.set("E%d" % r, date_to_serial(_dt.date.fromisoformat(bond["maturity"])), fmt=DATE)
-        row(r, "$C$2" if trades_on.get(kind) == "bill" else "$E$2")
-    last = universe_rows()[-1][0] if universe_rows() else UNI_FIRST
-    b.note("A%d" % (last + 2),
-           "★ trading listesindeki (DİBS RV ve DİBS Trading) kâğıtlardır; ☆ / ★ ile eklenir, çıkarılır. Fiyatlar Borsa İstanbul'dan "
-           "(bono ve kuponsuz kendi valöründe, diğerleri ertesi gün; kaynaklar sarı hücrelerde). Getiri, ASW ve sinyal yalnızca "
-           "trading listesindeki kâğıtlar için hesaplanır.")
+    b.note("A%d" % (UNI_LAST + 2),
+           "★ trading listesindeki (DİBS RV ve DİBS Trading) kâğıtlardır; ☆ / ★ ile eklenir, çıkarılır. Liste masanındır: "
+           "+ ISIN ekle ile kâğıt eklenir (türü Bloomberg'den bulunur, kendi grubuna girer), ✕ ile çıkarılır; vadesi geçen "
+           "kâğıt ertesi gün düşer. Fiyatlar Borsa İstanbul'dan (bono ve kuponsuz kendi valöründe, diğerleri ertesi gün; "
+           "kaynaklar sarı hücrelerde). Getiri, ASW ve sinyal yalnızca trading listesindeki kâğıtlar için hesaplanır; FRN "
+           "yalnız fiyatla izlenir.")
     b.sheet.freeze = [4, 2]
 
 
@@ -1884,7 +1854,7 @@ UNI_SIZE = ("AA", "AB")
 def _universe_quote_rows(model: Model) -> List[int]:
     """The rows of EK_EVREN that price a bond: those that ask Bloomberg for one (a security in U)."""
     sh = model.sheet(UNI_SHEET)
-    return [r for r in range(UNI_OWN[0], sh.max_row + 1) if parse_a1("U%d" % r) in sh.fml]
+    return [r for r in range(UNI_FIRST, sh.max_row + 1) if parse_a1("U%d" % r) in sh.fml]
 
 
 def _universe_quote_edits(r: int) -> Tuple[Tuple[str, str, str], ...]:
@@ -1928,6 +1898,62 @@ def _tto_universe_quotes(model: Model) -> None:
                   fmt=INT0)
         for addr, old, new in _universe_quote_edits(r):
             b.patch(addr, "=" + formula_of(model, UNI_SHEET, addr).replace(old, new))
+
+
+# ---------------------------------------------------------------------------------------------- FRN on DİBS RV
+#: DİBS RV's own cells for the FRN, right of the workbook's: the kind Tüm Kâğıtlar has for the bond, what Bloomberg says
+#: when the list does not have it (the floater formula, the reset index), whether the bond is an FRN
+RV_FRN = {"kind": "YA", "formula": "YB", "reset": "YC", "frn": "YD"}
+#: what DİBS RV works out against TLREF - the discount margin and what is made of it, the OIS par yield, the carry and
+#: the roll: blank for an FRN, priced only (its coupon does not follow TLREF)
+RV_FRN_BLANK = ("W", "X", "Z", "AD", "AE", "AF", "AI", "AK", "AM", "AN", "AO", "AP", "AQ")
+
+
+def frn_test(kind: str, cpn_kind: str, formula: str, reset: str) -> str:
+    """A formula's text: TRUE for an FRN - a floater (``cpn_kind`` is "T") that Tüm Kâğıtlar has as one (``kind``,
+    its code there) or, when the list does not have it, whose floater formula Bloomberg gives without TLREF and whose
+    reset index is not TLREF's (BISTREFI).  Bloomberg not answering leaves a floater a TLREF one."""
+    return ('IF({t}<>"T",FALSE,IF({k}<>"",{k}="frn",AND(ISTEXT({x}),LEFT({x}&"",1)<>"#",NOT(ISNUMBER(SEARCH("BISTREF",{x}&""))),'
+            'NOT(ISNUMBER(SEARCH("TLREF",IFERROR({f}&"","")))))))').format(t=cpn_kind, k=kind, x=reset, f=formula)
+
+
+def _rv_frn_check(model: Model) -> None:
+    _need_sheets(model, "DİBS RV", UNI_SHEET)
+    _need_formula(model, "DİBS RV", "D5", "CR5")
+    _need_formula(model, "DİBS RV", "G5", "TLREF+")
+    _need_formula(model, "DİBS RV", "CR5", "FLOAT")
+    _need_formula(model, "DİBS RV", "BR5", "$A5")
+    for col in RV_FRN_BLANK:
+        _need_formula(model, "DİBS RV", "%s5" % col)
+    sh = model.sheet("DİBS RV")
+    for col in RV_FRN.values():
+        for r in range(1, 56):
+            rc = parse_a1("%s%d" % (col, r))
+            if rc in sh.fml or rc in sh.consts:
+                raise ValueError("DİBS RV!%s%d dolu" % (col, r))
+
+
+def _tto_rv_frn(model: Model) -> None:
+    """DİBS RV tells an FRN from a TLREF floater (its "T" bonds): by Tüm Kâğıtlar's kind for the bond or, for a bond
+    the list does not have, by what Bloomberg says (``frn_test``).  An FRN is "F" in the kind column and "FRN" in the
+    coupon's, and what DİBS RV works out against TLREF (``RV_FRN_BLANK``) is blank for it."""
+    b = SheetBuilder(model, "DİBS RV")
+    k, f, x, frn = RV_FRN["kind"], RV_FRN["formula"], RV_FRN["reset"], RV_FRN["frn"]
+    b.head("%s4" % k, ["Tür (Tüm Kâğıtlar)", "FLOATER_FORMULA", "RESET_IDX", "FRN"])
+    was = {(col, r): formula_of(model, "DİBS RV", "%s%d" % (col, r)) for col in ("D", "G") + RV_FRN_BLANK for r in range(5, 55)}
+    for r in range(5, 55):
+        b.set("%s%d" % (k, r), '=IF($A{r}="","",{kind})'.format(r=r, kind=universe_kind("$A%d" % r)))
+        ask = 'AND(CR{r}="T",{k}{r}="")'.format(r=r, k=k)
+        b.set("%s%d" % (f, r), '=IF({ask},_xll.BDP(BR{r},"FLOATER_FORMULA"),"")'.format(ask=ask, r=r))
+        b.set("%s%d" % (x, r), '=IF({ask},_xll.BDP(BR{r},"RESET_IDX"),"")'.format(ask=ask, r=r))
+        b.set("%s%d" % (frn, r), "=" + frn_test("%s%d" % (k, r), "CR%d" % r, "%s%d" % (f, r), "%s%d" % (x, r)))
+        b.patch("D%d" % r, '=IF({frn}{r},"F",{was})'.format(frn=frn, r=r, was=was[("D", r)]))
+        b.patch("G%d" % r, '=IF(AND(DG{r},{frn}{r}),IF(ISNUMBER(DP{r}),"sabit %"&ROUND(DP{r},2)&" · ","")&"FRN",{was})'.format(
+            frn=frn, r=r, was=was[("G", r)]))
+        for col in RV_FRN_BLANK:
+            b.patch("%s%d" % (col, r), '=IF({frn}{r},"",{was})'.format(frn=frn, r=r, was=was[(col, r)]))
+    if model.sheet("DİBS RV").consts.get(parse_a1("D4")) == "Tip (S/T/E/B)":
+        b.set("D4", "Tip (S/T/F/E/B)", like="D4")
 
 
 # ---------------------------------------------------------------------------------------------- carry path
@@ -2097,7 +2123,8 @@ AUC_CF = 30                       # cash flows a bond may still have for its yie
 AUC_PART = "Asgari fiyatta · kısmi olabilir"
 #: the Bloomberg answers and the yield's cash flows of a bond, on its block's information row (from column S)
 AUC_INFO = ("sec", "valor", "name", "cpn_typ", "cpn", "mat", "freq", "infl", "acc", "prev", "next", "days", "idx", "kind",
-            "cpn_n", "mat_d", "prev_d", "next_d", "freq_n", "acc_n", "ok", "w", "n", "fits", "g", "per", "idx_n")
+            "cpn_n", "mat_d", "prev_d", "next_d", "freq_n", "acc_n", "ok", "w", "n", "fits", "g", "per", "idx_n",
+            "listed", "fform", "freset", "frn")
 #: what a priced row (a bid, the averages, the auction's prices) works out, from column S: the dirty price, Newton's
 #: steps to the simple yield, the yields; a bid also says which of its three inputs it priced from
 AUC_HELP = ("dirty", "s0", "s1", "s2", "s3", "s4", "s5", "simple", "comp", "how", "from_yield", "typed")
@@ -2148,7 +2175,7 @@ def _tto_auction(model: Model) -> None:
     it.  The yields follow the DİBS RV sheet ("BIST"): a fixed coupon bond's simple yield discounts the coupons at
     (1 + y/f) per coupon period (Newton's method from the coupon), compound = (1 + y/f)^f − 1; a bill or zero coupon
     bond: simple = (100/P − 1)·365/days, compound = (100/P)^(365/days) − 1.  CPI linkers are priced real (a TL amount
-    with Bloomberg's index ratio), TLREF floaters get their dirty price and their place in the auction, no yield."""
+    with Bloomberg's index ratio), floaters (TLREF ones and FRNs) get their dirty price and their place in the auction, no yield."""
     b = SheetBuilder(model, AUC_SHEET)
     C = auction_cols()
     c, h = C["info"], C["help"]
@@ -2217,6 +2244,11 @@ def _tto_auction(model: Model) -> None:
             "g": '=IF({ok},{mat_d}-{valor},"")',
             "per": '=IF(AND({ok},OR({kind}="S",{kind}="E")),{cpn_n}/{freq_n},"")',
             "idx_n": '=IF(AND({kind}="E",ISNUMBER({idx})),{idx},"")',
+            # a floater: a TLREF one or an FRN - Tüm Kâğıtlar's kind for it, else what Bloomberg says
+            "listed": '=IF({sec}="","",%s)' % universe_kind("$A{i}"),
+            "fform": '=IF(AND({kind}="T",{listed}=""),_xll.BDP({sec},"FLOATER_FORMULA"),"")',
+            "freset": '=IF(AND({kind}="T",{listed}=""),_xll.BDP({sec},"RESET_IDX"),"")',
+            "frn": "=" + frn_test("{listed}", "{kind}", "{fform}", "{freset}"),
         }
         for name, formula in f.items():
             b.set("%s%d" % (c[name], i), formula.format(i=i, **I), fmt=dt if name.endswith("_d") else None)
@@ -2227,9 +2259,9 @@ def _tto_auction(model: Model) -> None:
             b.set("%s%d" % (index_to_col(first_cf + AUC_CF + j - 1), i),
                   '=IF(AND({fits},{j}<=N({n})),{w}+{j}-1,0)'.format(j=j, **I))
         shown = [
-            ("C", '=IF({sec}="","",IF(ISNUMBER({mat_d}),TEXT({mat_d},"dd.mm.yy")&IF({kind}="T"," TLREF",IF({kind}="E"," TÜFE",'
+            ("C", '=IF({sec}="","",IF(ISNUMBER({mat_d}),TEXT({mat_d},"dd.mm.yy")&IF({kind}="T",IF({frn}," FRN"," TLREF"),IF({kind}="E"," TÜFE",'
                   'IF({kind}="B"," Bono",""))),%s))' % text("{name}"), None),
-            ("D", '=IF({kind}="S","Sabit kuponlu",IF({kind}="T","TLREF",IF({kind}="E","TÜFE",IF({kind}="B","Bono / kuponsuz",""))))',
+            ("D", '=IF({kind}="S","Sabit kuponlu",IF({kind}="T",IF({frn},"FRN","TLREF"),IF({kind}="E","TÜFE",IF({kind}="B","Bono / kuponsuz",""))))',
              None),
             ("E", '=IF(AND(ISNUMBER({cpn_n}),{kind}<>"B"),{cpn_n}/100,"")', pct),
             ("F", '=IF(ISNUMBER({mat_d}),{mat_d},"")', dt),
@@ -2249,7 +2281,7 @@ def _tto_auction(model: Model) -> None:
                'IF(NOT(ISNUMBER({acc_n})),"Bloomberg\'den valördeki birikmiş faiz bekleniyor",'
                'IF(NOT({ok}),IF(N({mat_d})>0,IF(N({mat_d})<=N({valor}),"Kâğıt valörde ya da daha önce itfa oluyor",'
                '"Bloomberg\'den kupon tarihleri bekleniyor"),"Bloomberg\'den vade bekleniyor"),'
-               'IF({kind}="T","TLREF: kirli fiyat ve ihaledeki yer; getiri hesaplanmaz",'
+               'IF({kind}="T",IF({frn},"FRN","TLREF")&": kirli fiyat ve ihaledeki yer; getiri hesaplanmaz",'
                'IF(AND(OR({kind}="S",{kind}="E"),NOT({fits})),"Kalan kupon %d\'dan çok: getiri hesaplanmaz",'
                'IF({kind}="E","TÜFE: reel fiyat ve reel getiri; tutar Bloomberg\'in valördeki endeks oranıyla",'
                '"Birikmiş faiz, kupon tarihleri ve işlemiş gün Bloomberg\'den, valöre göre")))))))))') .format(**I) % AUC_CF,
@@ -2300,7 +2332,7 @@ def _tto_auction(model: Model) -> None:
                                'SUMPRODUCT({cf},(1+{from_yield}/{freq_n})^(-{ex})),"")),"")),""))').format(**ref))
             priced(r, True)
             row = [
-                ("F", '=IF({how}="","",IF(AND({how}<>"T",{kind}="T"),"TLREF: temiz fiyat yazın",IF({how}="T","Temiz",IF({how}="B","Basit",'
+                ("F", '=IF({how}="","",IF(AND({how}<>"T",{kind}="T"),IF({frn},"FRN","TLREF")&": temiz fiyat yazın",IF({how}="T","Temiz",IF({how}="B","Basit",'
                       '"Bileşik"))&IF({typed}>1," · diğerine bakılmadı","")))', None, False),
                 ("G", '=IF(N({dirty})<=0,"",IF({how}="T",$C{r},{dirty}-{acc_n}))', px, False),
                 ("H", '=IF(ISNUMBER({simple}),{simple},"")', pct, False),
@@ -2682,6 +2714,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
+            ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),

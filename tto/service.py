@@ -22,6 +22,7 @@ from urllib.parse import quote as _quote
 
 from . import auth
 from . import blotter as bl
+from . import bonds as bd
 from . import brokerchat as bc
 from . import extras as ex
 from . import volcarry as vc
@@ -274,6 +275,14 @@ class Service(object):
                 self.store.put("migrated.empty_defaults", now_iso())
         for book in self.books.values():
             self._drop_file_copies(book)
+        # Tüm Kâğıtlar: the desk's list of bonds (the bonds typed into the page's old own rows join it - once)
+        self._desk_lock = threading.Lock()
+        self._uni_rows: Dict[str, int] = {}
+        self._uni_written: Dict[Tuple[int, int], Any] = {}
+        self._uni_day: Optional[_dt.date] = None  # the day the rows were written for (past maturity: off the next day)
+        self._uni_tried = time.time()            # the kinds Bloomberg has not told: asked again in BOND_RETRY
+        self._migrate_own_bonds()
+        bd.set_desk(self._desk_now(), owner=self)
         # shared inputs saved earlier (RET curve, calendars ...)
         for (bid, ref), val in self.store.shared_inputs().items():
             book = self.books.get(bid)
@@ -286,6 +295,7 @@ class Service(object):
             if key not in book.inputs:
                 book.declare(ref, scope="shared", group="adhoc-shared")
             book.engine.set_inputs({key: _from_json(val)})
+        self._sync_universe()
         self._sync_blotter()
 
     #: the cells whose stored shared copies of the file's value went already (``_drop_file_copies``): {book: [ref, ...]}
@@ -402,6 +412,7 @@ class Service(object):
 
     def stop(self) -> None:
         self._stop.set()
+        bd.drop_desk(self)
         self.history._stop.set()                   # no new work while the provider goes down
         self.history._kick.set()
         self.ops.stop()
@@ -518,6 +529,13 @@ class Service(object):
                 continue
             if fired:
                 self.bump()
+            try:
+                if self._uni_day != self._bond_day() and self.et.submit(self._sync_universe).result(timeout=60):
+                    self.bump()                    # a new day: the bonds past their maturity leave Tüm Kâğıtlar
+                if bd.pending() and time.time() - self._uni_tried >= self.BOND_RETRY:
+                    self._classify_pending()
+            except Exception:  # noqa: BLE001
+                pass
 
     def bump(self) -> int:
         kick = getattr(self, "_watch_kick", None)
@@ -2438,11 +2456,10 @@ class Service(object):
     BOND_LISTS = {"dibs": ("tto", "DİBS RV!A5:A54"), "asw": ("asw", "ASW!B7:B56"), "bulk": ("tto", "Bulk Bond!A3:A52")}
 
     def bond_catalog(self, user: Optional[str] = None) -> Dict[str, Any]:
-        """The TRY government bonds of the desk's Bloomberg list, each with the lists it is already in."""
-        from . import bonds as bd
+        """The TRY government bonds of the desk's list (Tüm Kâğıtlar), each with the lists it is already in."""
         lists = {name: self._list_values(user, *where) for name, where in self.BOND_LISTS.items() if where[0] in self.books}
         rows = []
-        for b in bd.catalog():
+        for b in bd.listed(self._bond_day()):
             rows.append(dict(b, label=bd.short_label(b), kind_text=bd.KINDS.get(b.get("kind"), b.get("kind") or ""),
                              lists=[name for name, vals in lists.items() if b["isin"] in vals]))
         return {"bonds": rows, "kinds": bd.KINDS, "lists": {k: len([v for v in vals if v]) for k, vals in lists.items()}}
@@ -2457,20 +2474,10 @@ class Service(object):
 
         return self.et.call(run)
 
-    def list_add(self, user: str, book_id: str, ref: str, values: List[Any]) -> Dict[str, Any]:
-        """Bonds added to a list of a page by ISIN: below its last bond (then into the empty rows between, when the
-        end is full), for everyone when the list is a shared one, each ISIN once.  An ISIN whose check digit is
-        wrong is refused; one already listed is skipped."""
-        from . import bonds as bd
-        user = self.require_user(user)
-        book = self._book(book_id)
-        try:
-            cells = book.cells_of(ref)
-        except (KeyError, ValueError):
-            raise ServiceError("liste bulunamadı: %s" % ref, 404)
-        if not all(c in book.inputs for c in cells):
-            raise ServiceError("bu hücreler bir liste değil: %s" % ref)
-        current = self._list_values(user, book_id, ref)
+    @staticmethod
+    def _isins(values: List[Any]) -> List[str]:
+        """The ISINs typed / pasted / picked (spaces, commas, lines between), each once; an error names the ones whose
+        check digit is wrong."""
         wanted: List[str] = []
         bad: List[str] = []
         for v in values or []:
@@ -2484,6 +2491,22 @@ class Service(object):
                     wanted.append(code)
         if bad:
             raise ServiceError("ISIN değil ya da kontrol hanesi tutmuyor: " + ", ".join(bad[:8]))
+        return wanted
+
+    def list_add(self, user: str, book_id: str, ref: str, values: List[Any]) -> Dict[str, Any]:
+        """Bonds added to a list of a page by ISIN: below its last bond (then into the empty rows between, when the
+        end is full), for everyone when the list is a shared one, each ISIN once.  An ISIN whose check digit is
+        wrong is refused; one already listed is skipped."""
+        user = self.require_user(user)
+        book = self._book(book_id)
+        try:
+            cells = book.cells_of(ref)
+        except (KeyError, ValueError):
+            raise ServiceError("liste bulunamadı: %s" % ref, 404)
+        if not all(c in book.inputs for c in cells):
+            raise ServiceError("bu hücreler bir liste değil: %s" % ref)
+        current = self._list_values(user, book_id, ref)
+        wanted = self._isins(values)
         skipped = [c for c in wanted if c in current]
         todo = [c for c in wanted if c not in current]
         # below the last bond of the list first: the empty rows the desk keeps between its groups stay empty
@@ -2583,8 +2606,236 @@ class Service(object):
         return {"t": "★" if listed else "☆", "k": "s", "cls": "act flag" + (" on" if listed else ""),
                 "tip": ("Trading listesinden çıkar: " if listed else "Trading listesine ekle (DİBS RV, DİBS Trading): ") + isin}
 
+    # ================================================================== Tüm Kâğıtlar: the desk's list of bonds
+    #: the store's key of the desk's changes to the list: bonds added ``{isin: bond + by / at}`` (a bond whose kind
+    #: Bloomberg has not told yet has ``kind`` None), taken off ``{isin: {by, at}}``, refused ``{isin: {why, by, at}}``
+    BOND_DESK = "bonds.desk"
+    #: Tüm Kâğıtlar's old rows of the bonds the desk typed in (before the list was the desk's), moved onto the list
+    _OWN_ROWS = (ex.UNI_SHEET, 6, 20)
+    BOND_WAIT = 4.0          # seconds a bond added waits for Bloomberg to say what it is (then: its kind comes later)
+    BOND_RETRY = 10.0        # how often the kinds Bloomberg has not told yet are asked again
+    _REFUSED = {"unknown": "Bloomberg bu ISIN'i tanımıyor", "kind": "türü desteklenmiyor (kupon tipi)",
+                "matured": "vadesi geçmiş", "full": "liste dolu (%d kâğıt)" % ex.UNI_ROWS}
+
+    def _refusal(self, why: str) -> str:
+        if why.startswith("fx:"):
+            return "%s cinsi: döviz cinsi kâğıt listeye alınmaz" % why[3:]
+        return self._REFUSED.get(why, why)
+
+    def _desk_now(self) -> Dict[str, Dict[str, Any]]:
+        desk = self.store.get(self.BOND_DESK) or {}
+        return {k: dict(desk.get(k) or {}) for k in ("added", "removed", "refused")}
+
+    def _save_desk(self, desk: Dict[str, Dict[str, Any]]) -> None:
+        self.store.put(self.BOND_DESK, desk)
+        bd.set_desk(desk, owner=self)
+
+    def _bond_day(self) -> _dt.date:
+        """The day the bonds are past their maturity against: the calculation's today (offline, the recorded file's)."""
+        book = self.books.get("tto")
+        return serial_to_date(book.engine.clock.today()) if book is not None else _dt.date.today()
+
+    def _migrate_own_bonds(self) -> None:
+        """The bonds typed into Tüm Kâğıtlar's old own rows (EK_EVREN!A6:A20): onto the desk's list, their kind to be
+        asked of Bloomberg - once; the cells' values go (the rows are the list's now)."""
+        if self.store.get("migrated.universe_own"):
+            return
+        sheet, first, last = self._OWN_ROWS
+        stored = self.store.shared_inputs("tto")
+        refs = [ref for ref in ("%s!A%d" % (sheet, r) for r in range(first, last + 1)) if ("tto", ref) in stored]
+        desk = self._desk_now()
+        shipped = {b["isin"] for b in bd.shipped()}
+        for ref in refs:
+            code = "".join(str(stored[("tto", ref)] or "").split()).upper()
+            if bd.isin_valid(code) and code not in shipped and code not in desk["added"]:
+                meta = self.store.shared_meta("tto", [ref]) or {}
+                desk["added"][code] = dict(bd.waiting(code), by=meta.get("updated_by") or "", at=meta.get("updated_at") or now_iso())
+        self.store.put(self.BOND_DESK, desk)
+        self.store.clear_shared_inputs("tto", refs)
+        self.store.put("migrated.universe_own", now_iso())
+
+    @staticmethod
+    def _universe_values(b: Dict[str, Any]) -> List[Any]:
+        """What a bond's row of Tüm Kâğıtlar holds (``ex.UNI_WRITTEN``): ISIN, name, kind, coupon, maturity, kind code."""
+        kind = b.get("kind") or ""
+        cpn = b.get("coupon")
+        if kind == "fixed" and isinstance(cpn, (int, float)):
+            shown: Any = float(cpn) / 100.0
+        elif kind == "cpi" and isinstance(cpn, (int, float)):
+            shown = "reel %%%s" % ("%.2f" % cpn).replace(".", ",")
+        else:
+            shown = {"float": "TLREF", "frn": "FRN", "bill": "iskontolu", "zero": "iskontolu"}.get(kind, "")
+        mat = date_to_serial(_dt.date.fromisoformat(b["maturity"])) if b.get("maturity") else None
+        return [b["isin"], bd.short_label(b), bd.KINDS.get(kind) or "tür bekleniyor", shown, mat, kind]
+
+    def _sync_universe(self) -> bool:
+        """Tüm Kâğıtlar's rows, one a bond of the desk's list (on the calculation thread): a bond keeps its row, a new
+        one takes the first free row (the kinds in their order, by maturity), a bond gone leaves its row empty.
+        True when a cell changed."""
+        book = self.books.get("tto")
+        if book is None or ex.UNI_SHEET not in book.model.sheet_index:
+            return False
+        si = book.model.sheet_index[ex.UNI_SHEET]
+        self._uni_day = self._bond_day()
+        listed = bd.listed(self._uni_day)
+        want = {b["isin"]: b for b in listed}
+        rows = {isin: r for isin, r in self._uni_rows.items() if isin in want}
+        taken = set(rows.values())
+        free = [r for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1) if r not in taken]
+        order = {k: i for i, (k, _, _) in enumerate(ex.UNI_KINDS)}
+        for b in sorted(listed, key=lambda x: (order.get(x.get("kind"), len(order)), x.get("maturity") or "9999", x["isin"])):
+            if b["isin"] not in rows and free:
+                rows[b["isin"]] = free.pop(0)
+        filled = {r: want[isin] for isin, r in rows.items()}
+        cells: Dict[Tuple[int, int], Any] = {}
+        for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1):
+            values = self._universe_values(filled[r]) if r in filled else [None] * len(ex.UNI_WRITTEN)
+            for col, v in zip(ex.UNI_WRITTEN, values):
+                cells[(si, parse_a1("%s%d" % (col, r)))] = v
+        if not self._uni_written:
+            book.engine.declare_inputs(cells.keys(), group="tto-universe")     # one dependency for the whole list
+        changed = {k: v for k, v in cells.items() if k not in self._uni_written or self._uni_written[k] != v
+                   or type(self._uni_written[k]) is not type(v)}
+        if changed:
+            book.engine.set_inputs(changed)
+            self._uni_written.update(changed)
+        self._uni_rows = rows
+        return bool(changed)
+
+    def _bbg_security(self, isin: str) -> str:
+        """How DİBS RV names a bond to Bloomberg: "TRT150328T24 ISIN" (its N2), or "/isin/TRT150328T24"."""
+        how = "ISIN"
+        book = self.books.get("tto")
+        try:
+            si, rc = book.cell("DİBS RV!N2")
+            v = book.engine.input_value[si].get(rc)
+            v = book.engine.base_value(si, rc) if v is None else v
+            if isinstance(v, str) and v.strip():
+                how = v.strip()
+        except (AttributeError, KeyError, ValueError):
+            pass
+        return "/isin/" + isin if how.lower() == "/isin/" else "%s %s" % (isin, how)
+
+    def _bond_facts(self, codes: List[str], wait: float = 0.0) -> Dict[str, Optional[Dict[str, Any]]]:
+        """What Bloomberg says of each bond (``bd.FACTS``) - ``None`` for one it has not answered yet, asked again for
+        up to ``wait`` seconds (a connected Bloomberg answers within a second or two)."""
+        from .marketdata.base import REQUESTING, bdp_key
+        end = time.time() + wait
+        while True:
+            out: Dict[str, Optional[Dict[str, Any]]] = {}
+            for code in codes:
+                sec = self._bbg_security(code)
+                got = {f: self.provider.get_bdp(bdp_key(sec, f)) for f in bd.FACTS}
+                out[code] = None if any(isinstance(v, str) and v == REQUESTING for v in got.values()) else got
+            if all(v is not None for v in out.values()) or time.time() >= end or self._stop.is_set():
+                return out
+            time.sleep(0.2)
+
+    def _classify_pending(self, wait: float = 0.0) -> bool:
+        """The kind of the bonds added that Bloomberg has not told yet, asked again; a bond Bloomberg says is not a TL
+        one, or does not know, leaves the list (its reason kept).  True when the list changed."""
+        codes = bd.pending()
+        if not codes:
+            return False
+        self._uni_tried = time.time()
+        facts = self._bond_facts(codes, wait)
+        changed = False
+        with self._desk_lock:
+            desk = self._desk_now()
+            for code in codes:
+                was = desk["added"].get(code)
+                if facts.get(code) is None or was is None or was.get("kind"):
+                    continue
+                rec, why = bd.classify(code, facts[code])
+                if rec is not None:
+                    desk["added"][code] = dict(rec, by=was.get("by") or "", at=was.get("at") or now_iso())
+                    changed = True
+                elif why != "pending":
+                    desk["added"].pop(code)
+                    desk["refused"][code] = {"why": why, "by": was.get("by") or "", "at": now_iso()}
+                    changed = True
+            if changed:
+                self._save_desk(desk)
+        if changed:
+            self.et.call(self._sync_universe)
+            self.bump()
+        return changed
+
+    def bond_list_add(self, user: str, values: List[Any]) -> Dict[str, Any]:
+        """Bonds onto the desk's list (Tüm Kâğıtlar), for everyone, each ISIN once: its kind, maturity, coupon and
+        name from Bloomberg, and it goes into its kind's group.  A bond Bloomberg has not answered for yet joins the list
+        and waits there for its kind; one Bloomberg says is not a TL bond, does not know, or is past its maturity is
+        refused.  A bond taken off earlier comes back."""
+        user = self.require_user(user)
+        wanted = self._isins(values)
+        day = self._bond_day()
+        on = {b["isin"] for b in bd.listed(day)}
+        skipped = [c for c in wanted if c in on]
+        todo = [c for c in wanted if c not in on]
+        known = {c: bd.by_isin(c) for c in todo}
+        ask = [c for c in todo if not (known[c] or {}).get("kind")]
+        facts = self._bond_facts(ask, self.BOND_WAIT) if ask else {}
+        added: List[Dict[str, Any]] = []
+        waiting: List[str] = []
+        refused: List[Dict[str, Any]] = []
+        shipped = {x["isin"] for x in bd.shipped()}
+        with self._desk_lock:
+            desk = self._desk_now()
+            room = ex.UNI_ROWS - len(bd.listed(day))
+            for code in todo:
+                b = known.get(code)
+                if not (b or {}).get("kind"):
+                    b, why = bd.classify(code, facts[code]) if facts.get(code) is not None else (None, "pending")
+                    if why not in ("", "pending"):
+                        refused.append({"isin": code, "why": why, "text": self._refusal(why)})
+                        continue
+                    if b is None:
+                        b = bd.waiting(code)
+                if b.get("maturity") and b["maturity"] < day.isoformat():
+                    refused.append({"isin": code, "why": "matured", "text": self._refusal("matured")})
+                    continue
+                if room <= 0:
+                    refused.append({"isin": code, "why": "full", "text": self._refusal("full")})
+                    continue
+                room -= 1
+                if code not in shipped and not (desk["added"].get(code) or {}).get("kind"):
+                    desk["added"][code] = dict(b, by=user, at=now_iso())          # (one added before keeps its record)
+                desk["removed"].pop(code, None)
+                desk["refused"].pop(code, None)
+                if not b.get("kind"):
+                    waiting.append(code)
+                added.append({"isin": code, "label": bd.short_label(b), "kind": b.get("kind"),
+                              "kind_text": bd.KINDS.get(b.get("kind") or "", "")})
+            if added:
+                self._save_desk(desk)
+        if added:
+            self.et.call(self._sync_universe)
+            self.bump()
+        return {"added": added, "skipped": skipped, "waiting": waiting, "refused": refused,
+                "free": ex.UNI_ROWS - len(bd.listed(day)), "gen": self.gen}
+
+    def bond_list_remove(self, user: str, isin: str) -> Dict[str, Any]:
+        """A bond off the desk's list (Tüm Kâğıtlar), for everyone - and off the trading list when it is on it.  The
+        dashboard still knows it (a chat line about it, its card)."""
+        user = self.require_user(user)
+        code = "".join(str(isin or "").split()).upper()
+        if not bd.isin_valid(code):
+            raise ServiceError("ISIN değil ya da kontrol hanesi tutmuyor: %s" % (code or "(boş)"))
+        if code not in {b["isin"] for b in bd.listed(self._bond_day())}:
+            return {"isin": code, "removed": False, "trading": False, "gen": self.gen}
+        trading = self.bond_flag(user, code, False)["removed"] > 0
+        with self._desk_lock:
+            desk = self._desk_now()
+            desk["removed"][code] = {"by": user, "at": now_iso()}
+            self._save_desk(desk)
+        self.et.call(self._sync_universe)
+        self.bump()
+        return {"isin": code, "removed": True, "trading": trading, "gen": self.gen}
+
     def _universe_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
-        """Tüm Kâğıtlar, completed: ☆ / ★ (onto / off the trading list), today's Broker Chat board and ▸ (the card)."""
+        """Tüm Kâğıtlar, completed: the bonds kind by kind (a caption row each, a bond whose kind Bloomberg has not told
+        yet last), by maturity; ☆ / ★ (onto / off the trading list), today's Broker Chat board, ▸ (the card) and ✕ (off
+        the list)."""
         rows, rnums, cols = data.get("rows") or [], data.get("r") or [], list(data.get("c") or [])
         if not rows or ex.UNI_SHEET not in book.model.sheet_index:
             return
@@ -2592,24 +2843,67 @@ class Service(object):
         calc = self._calc(user, book)
         said = self._board_bonds(user)
         flag_at = cols.index("H") if "H" in cols else None
+        kind_col, mat_col = parse_a1("%s1" % ex.UNI_KIND) % COLS, parse_a1("E1") % COLS
+        desk = bd.desk()
+        extra = len(self._BOARD_HEADS) + 2
+        width = len(cols) + extra
+        blank = [{"t": "", "k": ""} for _ in range(extra)]
+        top: List[Tuple[List[Dict[str, Any]], int]] = []
+        foot: List[Tuple[List[Dict[str, Any]], int]] = []
+        groups: Dict[str, List[Tuple[Tuple[float, str], List[Dict[str, Any]], int]]] = {k: [] for k, _, _ in ex.UNI_KINDS}
+        waiting: List[Tuple[Tuple[float, str], List[Dict[str, Any]], int]] = []
         for i, r in enumerate(rnums):
-            if r == 4:
-                rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in self._BOARD_HEADS]
-                               + [{"t": "Kart", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdın bütün bilgisi tek pencerede"}])
+            row = rows[i]
+            if r < ex.UNI_FIRST or r > ex.UNI_LAST:
+                if r == 4:
+                    row.extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in self._BOARD_HEADS]
+                               + [{"t": "Kart", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdın bütün bilgisi tek pencerede"},
+                                  {"t": "Çıkar", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdı Tüm Kâğıtlar listesinden çıkar (herkes için)"}])
+                else:
+                    row.extend(dict(c) for c in blank)
+                (top if r < ex.UNI_FIRST else foot).append((row, r))
                 continue
-            v = calc.get(si, r, 1) if r >= 5 else None
+            v = calc.get(si, r, 1)
             code = "".join(str(v).split()).upper() if isinstance(v, str) else ""
-            bond = code if r >= ex.UNI_OWN[0] and code and " " not in str(v).strip() and len(code) == 12 else ""
-            if not bond:
-                rows[i].extend([{"t": "", "k": ""} for _ in range(len(self._BOARD_HEADS) + 1)])
+            if not code:
                 continue
-            if flag_at is not None and flag_at < len(rows[i]):
-                rows[i][flag_at] = self._flag_cell(bond, calc.get(si, r, 8) == "★")
-            rows[i].extend(self._bond_cells(said.get(bond), loc)
-                           + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + bond}])
-        self._universe_quote_marks(book, calc, si, rows, rnums, cols, loc)
-        data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
-        data["added"] = int(data.get("added") or 0) + len(self._BOARD_HEADS) + 1
+            if flag_at is not None and flag_at < len(row):
+                row[flag_at] = self._flag_cell(code, calc.get(si, r, 8) == "★")
+            who = desk["added"].get(code)
+            if who and who.get("by") and row:
+                row[0] = dict(row[0], tip="Listeye ekleyen: %s · %s" % (who["by"], str(who.get("at") or "")[:16].replace("T", " ")))
+            row.extend(self._bond_cells(said.get(code), loc)
+                       + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code},
+                          {"t": "✕", "k": "s", "cls": "act unlist", "tip": "Tüm Kâğıtlar listesinden çıkar: " + code}])
+            mat = calc.get(si, r, mat_col)
+            item = ((mat if type(mat) is float else 1e9, code), row, r)
+            kind = calc.get(si, r, kind_col)
+            (groups[kind] if kind in groups else waiting).append(item)
+
+        def caption(text: str) -> List[Dict[str, Any]]:
+            return [{"t": text, "k": "s", "b": 1, "cls": "grouphead", "cs": width}] + [{"t": "", "k": ""} for _ in range(width - 1)]
+
+        out: List[Tuple[List[Dict[str, Any]], int]] = [x for x in top if x[1] != ex.UNI_FIRST - 1]
+        for kind, cap, _ in ex.UNI_KINDS:
+            if groups[kind]:
+                out.append((caption("%s · %d kâğıt" % (cap, len(groups[kind]))), 0))
+                out.extend((row, r) for _, row, r in sorted(groups[kind], key=lambda x: x[0]))
+        if waiting:
+            out.append((caption("Türü bekleniyor (Bloomberg) · %d kâğıt" % len(waiting)), 0))
+            out.extend((row, r) for _, row, r in sorted(waiting, key=lambda x: x[0]))
+        if not any(groups.values()) and not waiting:
+            out.append((caption("Liste boş: + ISIN ekle ile kâğıt ekleyin"), 0))
+        refused = [(isin, x) for isin, x in (self._desk_now()["refused"] or {}).items()
+                   if str(x.get("at") or "") >= (_dt.date.today() - _dt.timedelta(days=7)).isoformat()]
+        if refused:
+            text = "Listeye alınmayan: " + " · ".join("%s (%s)" % (isin, self._refusal(x.get("why") or "")) for isin, x in refused)
+            out.append(([{"t": text, "k": "s", "cls": "soft", "cs": width}] + [{"t": "", "k": ""} for _ in range(width - 1)], 0))
+        out.extend(foot)
+        data["rows"] = [row for row, _ in out]
+        data["r"] = [r for _, r in out]
+        self._universe_quote_marks(book, calc, si, data["rows"], data["r"], cols, loc)
+        data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart", "Çıkar"]
+        data["added"] = int(data.get("added") or 0) + extra
 
     def _universe_quote_marks(self, book, calc, si: int, rows, rnums, cols: List[str], loc) -> None:
         """Tüm Kâğıtlar: each bond's bid / ask ("–" where no order stands, the size of a live one in the tip) and,
@@ -2621,7 +2915,7 @@ class Service(object):
         for i, r in enumerate(rnums):
             def v(col: str) -> Any:
                 return calc.get(si, r, parse_a1("%s1" % col) % COLS)
-            if r < ex.UNI_OWN[0] or not v("U"):
+            if r < ex.UNI_FIRST or not v("U"):
                 continue
             for vis, size, raw, side in sides:
                 j = cols.index(vis)
@@ -2634,7 +2928,7 @@ class Service(object):
                     if col in cols and cols.index(col) < len(rows[i]):
                         rows[i][cols.index(col)] = self._soft(rows[i][cols.index(col)], q["tip"])
 
-    #: the order of the kinds in the trading summary: DİBS RV's types (B / S / T / E)
+    #: the order of the kinds in the trading summary: DİBS RV's types (B / S / T / F / E)
     @staticmethod
     def _repo_note(txt: Callable[[str], str], layout: Dict[str, Any], row: int) -> str:
         """Why the T0 → T1 repo is not given while both value dates have a price: the prices are not of the same
@@ -2667,7 +2961,8 @@ class Service(object):
         note = self._repo_note(txt, ex._live_cols(), r)
         return {"t": "–", "k": "s", "cls": "soft", "tip": note} if note else got
 
-    _TYPE_GROUPS = (("B", "Bono · kuponsuz"), ("S", "Sabit kuponlu"), ("T", "TLREF'e endeksli"), ("E", "TÜFE'ye endeksli"))
+    _TYPE_GROUPS = (("B", "Bono · kuponsuz"), ("S", "Sabit kuponlu"), ("T", "TLREF'e endeksli"), ("F", "FRN"),
+                    ("E", "TÜFE'ye endeksli"))
 
     #: the trading list's nominal for a round USD DV01: what the desk sizes a bond trade by
     USD_DV01 = 1000.0
@@ -2733,7 +3028,7 @@ class Service(object):
             known = bd.by_isin(code)
             # the kind and the maturity: the desk's list knows them; DİBS RV knows them from Bloomberg (a bond the
             # list does not have, or one just added while the recorded file is shown, has only what Bloomberg says)
-            kind = {"bill": "B", "zero": "B", "fixed": "S", "float": "T", "cpi": "E"}.get((known or {}).get("kind")) \
+            kind = {"bill": "B", "zero": "B", "fixed": "S", "float": "T", "frn": "F", "cpi": "E"}.get((known or {}).get("kind")) \
                 or calc.get(si, r, 4)
             mat = calc.get(si, r, 5)
             if type(mat) is not float and known:
@@ -4346,7 +4641,7 @@ class Service(object):
             return out
         for isin in isins:
             b = bd.by_isin(isin) if isin else None
-            if b is None or b.get("kind") not in ("float", "cpi", "bill", "zero"):
+            if b is None or b.get("kind") not in ("float", "frn", "cpi", "bill", "zero"):
                 continue
             sc = self._bond_screen(mkt, isin) or {}
             unit = "yld" if bd.quoted_in_yield(b) else "px"
@@ -4356,7 +4651,7 @@ class Service(object):
         return out
 
     def _bond_pick(self, mkt, rows: List[Dict[str, Any]]) -> None:
-        """A month that has several bonds of the kind ("Jan30 tlref": 02.01.30 and 09.01.30; "10/02/2027": a bill
+        """A month that has several bonds of the kind ("jan30": 02.01.30 FRN and 09.01.30 TLREF; "10/02/2027": a bill
         and a bond): the one whose screen level is nearest to the level said - in the unit the line was read in.
         When the screen settles it (one is near, the others far or not of that unit) the line is no longer flagged."""
         from . import bonds as bd

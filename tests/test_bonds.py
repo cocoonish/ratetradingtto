@@ -16,6 +16,7 @@ from tto import extras as ex
 from tto.marketdata.base import NOT_APPLICABLE, bdp_key
 from tto.server import create_app
 from tto.service import ServiceError
+from tto.marketdata import ReplayProvider
 from tto.store import user_key
 
 TODAY = dt.date(2026, 11, 13)
@@ -86,20 +87,56 @@ def test_the_catalog_is_the_desks_list_of_try_government_bonds():
     assert all(bd.isin_valid(b["isin"]) and bd.maturity_of(b["isin"]).isoformat() == b["maturity"] for b in cat)
     assert [b["maturity"] for b in cat] == sorted(b["maturity"] for b in cat)
     kinds = {k: sum(1 for b in cat if b["kind"] == k) for k in bd.KINDS}
-    assert kinds == {"bill": 2, "zero": 2, "fixed": 26, "cpi": 24, "float": 23}
+    assert kinds == {"bill": 2, "zero": 2, "fixed": 26, "cpi": 24, "float": 14, "frn": 9}
     b = bd.by_isin("trt150328t24")
     assert (b["kind"], b["coupon"], bd.short_label(b), bd.quoted_in_yield(b)) == ("fixed", 36.8, "15.03.28", False)
     assert bd.short_label(bd.by_isin("TRT090130T12")) == "09.01.30 TLREF"
+    # the floaters: TLREF ones (Bloomberg's floater formula "91 D / 182 D TLREF FLAT") and FRNs (no formula)
+    frn = {b["isin"] for b in cat if b["kind"] == "frn"}
+    assert frn == {"TRT050527T17", "TRT171127T15", "TRT130928T12", "TRT031029T10", "TRT020130T19", "TRT050630T11", "TRT160431T19",
+                   "TRT100332T15", "TRT110832T19"}
+    assert bd.short_label(bd.by_isin("TRT020130T19")) == "02.01.30 FRN" and not bd.quoted_in_yield(bd.by_isin("TRT020130T19"))
     assert bd.short_label(bd.by_isin("TRB100227T13")) == "10.02.27 Bono" and bd.quoted_in_yield(bd.by_isin("TRB100227T13"))
     assert bd.by_isin("TRT050527T33")["coupon"] == 41.0 and bd.by_isin("XS0000000000") is None
     # what a chat line can mean: a month's plain bonds, its floater, the bill of a day
     assert [c["isin"] for c in bd.candidates(month="2028-03")] == ["TRT080328T15", "TRT150328T24"]
     assert [c["isin"] for c in bd.candidates(month="2028-03", kind="float")] == ["TRT010328T12"]
+    assert [c["isin"] for c in bd.candidates(month="2030-01", kind="float")] == ["TRT090130T12"]             # TLREF only
+    assert [c["isin"] for c in bd.candidates(month="2030-01", kind="frn")] == ["TRT020130T19"]
+    assert [c["isin"] for c in bd.candidates(month="2030-01", kind="floating")] == ["TRT020130T19", "TRT090130T12"]
     assert [c["isin"] for c in bd.candidates(date="2027-02-10", kind="zc")] == ["TRB100227T13"]
     assert [c["isin"] for c in bd.candidates(date="2027-02-10")] == ["TRB100227T13", "TRT100227T13"]
     assert [c["isin"] for c in bd.candidates(month="2027-02", kind="fixed")] == ["TRT100227T13", "TRT240227T17"]   # not the bill
     assert bd.candidates(month="2029-06", kind="fixed") == []                         # a CPI linker and a floater only
     assert bd.candidates() == [] and bd.candidates(month="2045-01") == []
+
+
+def test_a_bonds_kind_from_what_bloomberg_says():
+    """A bond added by ISIN: its kind, maturity, coupon and name from Bloomberg's fields - a TLREF floater by its
+    floater formula (or reset index), an FRN without; a bill by its ISIN (TRB); not a TL bond, not known, a coupon
+    type of none of the kinds: refused; not answered: waits."""
+    fixed = {"NAME": "TURKIYE GOVERNMENT BOND", "SECURITY_DES": "TURKGB 30.5 05/12/33", "CRNCY": "TRY", "CPN_TYP": "FIXED",
+             "CPN": 30.5, "MATURITY": "2033-05-12", "INFLATION_LINKED_INDICATOR": "N"}
+    assert bd.classify(" trt120533t10 ", fixed) == ({"isin": "TRT120533T10", "kind": "fixed", "maturity": "2033-05-12",
+                                                     "name": "TURKGB 30.5 05/12/33", "coupon": 30.5}, "")
+    for said in ("12.05.2033", "5/12/2033"):                                          # the provider's text, the API's
+        assert bd.classify("TRT120533T10", dict(fixed, MATURITY=said))[0]["maturity"] == "2033-05-12"
+    floater = dict(fixed, CPN_TYP="FLOATING", CPN=41.0)
+    kinds = [bd.classify("TRT080931T14", dict(floater, **extra))[0] for extra in (
+        {"FLOATER_FORMULA": "91 D TLREF FLAT"}, {"FLOATER_FORMULA": "#N/A N/A", "RESET_IDX": "BISTREFI"},
+        {"FLOATER_FORMULA": "#N/A N/A", "RESET_IDX": "N/A"}, {"RESET_IDX": "6MO N/A"})]
+    assert [(b["kind"], b["coupon"]) for b in kinds] == [("float", None), ("float", None), ("frn", None), ("frn", None)]
+    assert bd.classify("TRT070727T13", dict(fixed, INFLATION_LINKED_INDICATOR="Y", CPN=2.9))[0]["kind"] == "cpi"
+    zero = dict(fixed, CPN_TYP="ZERO COUPON", CPN=0.0)
+    assert (bd.classify("TRB100227T13", zero)[0]["kind"], bd.classify("TRT210427T18", zero)[0]["kind"]) == ("bill", "zero")
+    assert bd.classify("TRT061027F15", dict(fixed, CRNCY="USD")) == (None, "fx:USD")
+    assert bd.classify("TRT120533T10", {"CPN_TYP": "#N/A Invalid Security"}) == (None, "unknown")
+    assert bd.classify("TRT120533T10", dict(fixed, CPN_TYP="STEP CPN")) == (None, "kind")
+    assert bd.classify("TRT120533T10", dict(fixed, CPN_TYP="#N/A N/A")) == (None, "pending")
+    assert bd.classify("TRT120533T10", dict(fixed, CRNCY="#N/A Requesting Data...")) == (None, "pending")
+    # waiting for Bloomberg: the maturity a Turkish ISIN carries, nothing else
+    assert bd.waiting("trt171134t15") == {"isin": "TRT171134T15", "kind": None, "maturity": "2034-11-17", "name": "", "coupon": None}
+    assert bd.short_label(bd.waiting("TRT171134T15")) == "17.11.34" and bd.short_label(bd.waiting("XS2010030836")) == "XS2010030836"
 
 
 # ---------------------------------------------------------------------------------------------- the chat, line by line
@@ -126,8 +163,16 @@ def test_a_bond_is_named_the_ways_the_brokers_write_it():
     # a month that has more than one bond: the benchmark (highest coupon), flagged
     q = one("mar28 .400/475")
     assert (q["isin"], q["bid"], q["ask"], q["alts"]) == ("TRT150328T24", 100.4, 100.475, ["TRT080328T15"]) and "bond?" in q["flags"]
+    # "tlref": the TLREF floater of the month - never its FRN (January 2030 has one of each)
     q = one("Jan30 tlref 98.650/750 nl")
-    assert (q["bond_kind"], q["ask"], q["note"]) == ("float", 98.75, "nl") and "bond?" in q["flags"] and len(q["alts"]) == 1
+    assert (q["isin"], q["label"], q["bond_kind"], q["ask"], q["note"], q.get("alts", [])) == (
+        "TRT090130T12", "09.01.30 TLREF", "float", 98.75, "nl", []) and "bond?" not in q["flags"]
+    q = one("jan30 frn 98.650/750")
+    assert (q["isin"], q["label"], q["bond_kind"], q["unit"], q.get("alts", [])) == ("TRT020130T19", "02.01.30 FRN", "frn", "px", [])
+    assert one("02/01/2030frn 98.650")["isin"] == "TRT020130T19" and one("9/1/30 tlref 98.650")["isin"] == "TRT090130T12"
+    q = one("jan30 float 98.650/750")                                                  # either floater: both, flagged
+    assert (q["isin"], q["alts"]) == ("TRT020130T19", ["TRT090130T12"]) and "bond?" in q["flags"]
+    assert "nobond" in one("mar28 frn 99.00")["flags"]                                # March 2028 has a TLREF floater only
 
 
 def test_a_month_and_a_year_alone_are_the_fixed_coupon_bond():
@@ -153,7 +198,7 @@ def test_a_month_and_a_year_alone_are_the_fixed_coupon_bond():
     assert one("13/6/29 92.050")["isin"] == "TRT130629T14" and one("13/6/29 tlref 98.650")["isin"] == "TRT130629T30"
     # in a switch each bond takes the kind said next to it
     q = one("jan30 tlref vs jul30 -10/-5")
-    assert [(leg["isin"], leg["bond_kind"]) for leg in q["legs"]] == [("TRT020130T19", "float"), ("TRT100730T13", "fixed")]
+    assert [(leg["isin"], leg["bond_kind"]) for leg in q["legs"]] == [("TRT090130T12", "float"), ("TRT100730T13", "fixed")]
     q = one("mar28 vs jun29 cpi switch 210/220")
     assert [leg["isin"] for leg in q["legs"]] == ["TRT150328T24", "TRT130629T14"] and "nobond" not in q["flags"]
     q = one("jan30 700 vs jul30 750 switch trading")
@@ -255,6 +300,13 @@ def test_a_bond_nobody_priced_takes_its_figure_from_the_one_next_to_it():
     # a price written in full needs nothing: no flag
     q = bc.parse_chat("13/10/27 tlref 100.650/100.800", lambda q: None, TODAY)[-1]
     assert (q["bid"], q["ask"], q["flags"]) == (100.65, 100.8, [])
+    # an FRN takes its figure from an FRN, never from a TLREF floater (nor a TLREF one from an FRN)
+    near = [{"isin": "TRT171127T15", "kind": "frn", "months": 335.0, "unit": "px", "value": 99.10, "label": "17.11.27 FRN"},
+            {"isin": "TRT131027T10", "kind": "float", "months": 334.0, "unit": "px", "value": 100.65, "label": "13.10.27 TLREF"}]
+    q = bc.parse_chat("jan28 tlref .725 trading", lambda q: None, TODAY, nearby=lambda q: near)[-1]
+    assert (q["price"], q["ref_from"]) == (100.725, "13.10.27 TLREF")
+    q = bc.parse_chat("5/5/27 frn .200 bid", lambda q: None, TODAY, nearby=lambda q: near)[-1]
+    assert (q["isin"], q["bid"], q["ref_from"]) == ("TRT050527T17", 99.2, "17.11.27 FRN") and "near" in q["flags"]
 
 
 def test_the_lines_under_a_heading_are_its_message():
@@ -296,7 +348,7 @@ def test_the_desks_bond_chat_is_read_against_the_screen(svc):
     assert imp["bid"] == pytest.approx(imp["screen_yield"] - (100.55 - imp["screen"]) / (imp["screen"] * imp["mod_dur"]) * 100.0)
     # the screen settles a month of two bonds when the level is near one of them and the other cannot be it
     assert "bond?" not in by[("14:05:26", "15.03.28")]["flags"] and "bond?" not in by[("10:22:33", "10.02.27")]["flags"]
-    assert "bond?" in by[("09:51:39", "09.01.30 TLREF")]["flags"]                    # two floaters of January 2030 near par
+    assert "bond?" not in by[("09:51:39", "09.01.30 TLREF")]["flags"]                # "tlref": not 02.01.30, an FRN
     # completed from the screen: the floater of September 2030, the 5.5.27 with its value date
     assert (by[("11:49:56", "11.09.30 TLREF")]["bid"], by[("11:49:56", "11.09.30 TLREF")]["settle"]) == (97.675, "T0")
     assert (by[("13:12:50", "05.05.27")]["bid"], by[("13:12:50", "05.05.27")]["ask"]) == (103.0, 103.15)
@@ -824,7 +876,7 @@ def test_on_a_closed_market_no_bid_or_ask_is_shown_as_a_quote(tmp_path):
         L = ex._live_cols()
         listed = [r for r in range(ex.LIVE_FIRST, ex.LIVE_LAST + 1) if cell(s, "DİBS RV!A%d" % r)]
         secs = {cell(s, "EK_DIBS!%s%d" % (c, r)) for r in listed for c in L["sec"] + [L["sec_extra"]]}
-        secs |= {cell(s, "EK_EVREN!U%d" % r) for r, b, _ in ex.universe_rows() if b}
+        secs |= {cell(s, "EK_EVREN!U%d" % r) for r in s._uni_rows.values()}
         assert len(listed) >= 15 and len(secs) > 100
         _answers(s, {(x, f): NOT_APPLICABLE if "@BGN" in x else "#N/A N/A" for x in secs for f in ("BID_SIZE", "ASK_SIZE")})
         assert all(str(cell(s, "DİBS RV!J%d" % r)).startswith("Kota yok · ") for r in listed)
@@ -839,25 +891,20 @@ def test_on_a_closed_market_no_bid_or_ask_is_shown_as_a_quote(tmp_path):
         assert len(priced) >= 15 and all("soft" in c["cls"] for c in priced)
         quotes = [g[side] for g in L["groups"] for side in ("bid", "ask")]
         assert not any(type(cell(s, "EK_DIBS!%s%d" % (c, r))) is float for r in listed for c in quotes)
-        assert not any(type(cell(s, "EK_EVREN!%s%d" % (c, r))) is float for r, b, _ in ex.universe_rows() if b for c in "IJ")
+        assert not any(type(cell(s, "EK_EVREN!%s%d" % (c, r))) is float for r in s._uni_rows.values() for c in "IJ")
     finally:
         s.stop()
 
 
 # ---------------------------------------------------------------------------------------------- every bond, the trading list
 def test_every_bond_is_in_one_place_kind_by_kind(svc):
-    rows = ex.universe_rows()
-    captions = [c for _, b, c in rows if b is None]
-    assert captions == ["Bono · 2 kâğıt", "Kuponsuz · 2 kâğıt", "Sabit kuponlu · 26 kâğıt", "TLREF'e endeksli · 23 kâğıt",
-                        "TÜFE'ye endeksli · 24 kâğıt"]
-    listed = [b for _, b, _ in rows if b is not None]
-    assert len(listed) == 77 and rows[0][0] == ex.UNI_FIRST
-    for kind in ("fixed", "float"):
-        mats = [b["maturity"] for b in listed if b["kind"] == kind]
-        assert mats == sorted(mats)
-    at = {b["isin"]: r for r, b, _ in rows if b is not None}
+    """Tüm Kâğıtlar: the desk's list, a bond a row (the service writes its ISIN, name, kind, coupon, maturity); the
+    page shows it kind by kind, by maturity, with a caption row for each kind."""
+    at = svc._uni_rows
+    assert len(at) == 77 and min(at.values()) == ex.UNI_FIRST and max(at.values()) == ex.UNI_FIRST + 76
     r = at["TRT150328T24"]
     assert [cell(svc, "EK_EVREN!%s%d" % (c, r)) for c in "ABCDE"] == ["TRT150328T24", "15.03.28", "Sabit", 0.368, 46827.0]
+    assert cell(svc, "EK_EVREN!%s%d" % (ex.UNI_KIND, r)) == "fixed"
     assert cell(svc, "EK_EVREN!F%d" % r) == 46827.0 - 46329.0 and cell(svc, "EK_EVREN!G%d" % r) == pytest.approx(498 / 365.25)
     # on the trading list: ★, its price from DİBS RV on the same source, what DİBS RV makes of it
     assert cell(svc, "EK_EVREN!H%d" % r) == "★" and cell(svc, "EK_EVREN!R%d" % r) == "ISL1"
@@ -870,26 +917,246 @@ def test_every_bond_is_in_one_place_kind_by_kind(svc):
     rf = at["TRT130127T11"]
     assert [cell(svc, "EK_EVREN!%s%d" % (c, rf)) for c in "CDHIKNP"] == ["TLREF", "TLREF", "", "", "", "", ""]
     assert cell(svc, "EK_EVREN!U%d" % rf) == "TRT130127T11 @ISL1 ISIN"
+    rn = at["TRT020130T19"]
+    assert [cell(svc, "EK_EVREN!%s%d" % (c, rn)) for c in ("B", "C", "D", ex.UNI_KIND)] == ["02.01.30 FRN", "FRN", "FRN", "frn"]
     rc = at["TRT070727T13"]
     assert cell(svc, "EK_EVREN!D%d" % rc) == "reel %2,90" and cell(svc, "EK_EVREN!B%d" % rc) == "07.07.27 TÜFE"
-    # the desk's own (a new issue): the label and the maturity from a Turkish ISIN
-    u = svc.login("Evren Ekleyen")["user"]
-    res = svc.list_add(u, "tto", "EK_EVREN!A6:A20", ["TRT280432T14"])
-    assert res["cells"] == ["EK_EVREN!A6"]
-    assert [cell(svc, "EK_EVREN!%s6" % c) for c in "ABCE"] == ["TRT280432T14", "28.04.32", "liste dışı", 48332.0]
-    assert cell(svc, "EK_EVREN!H6") == "" and cell(svc, "EK_EVREN!U6") == "TRT280432T14 @ISL1 ISIN"
-    svc.set_inputs(u, "tto", [{"ref": "EK_EVREN!A6", "value": None}])
-    # the page: ☆ / ★ to click, today's board and the card on the right; the own rows grow
-    view = svc.view(u, "kagitlar")
-    panel = view["panels"][0]
-    assert (panel["flags"], panel["card"], panel["grow"]["first"], panel["add"]["ref"]) == ("dibs", "bond", 6, "EK_EVREN!A6:A20")
+    # the page: kind by kind, by maturity; ☆ / ★ to click, today's board, the card and ✕ on the right
+    u = svc.login("Evren Bakan")["user"]
+    panel = svc.view(u, "kagitlar")["panels"][0]
+    assert (panel["flags"], panel["card"], panel["add"]["name"], "grow" in panel) == ("dibs", "bond", "evren", False)
     d = panel["data"]
+    captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
+    assert captions == ["Bono · 2 kâğıt", "Kuponsuz · 2 kâğıt", "Sabit kuponlu · 26 kâğıt", "TLREF'e endeksli · 14 kâğıt",
+                        "FRN · 9 kâğıt", "TÜFE'ye endeksli · 24 kâğıt"]
+    groups: list = []
+    for row, n in zip(d["rows"], d["r"]):
+        if n == 0:
+            groups.append([])
+        elif groups and len(row[0].get("t") or "") == 12:
+            groups[-1].append(bd.by_isin(row[0]["t"]))
+    assert [len(g) for g in groups] == [2, 2, 26, 14, 9, 24]
+    assert [{b["kind"] for b in g} for g in groups] == [{"bill"}, {"zero"}, {"fixed"}, {"float"}, {"frn"}, {"cpi"}]
+    for g in groups:
+        assert [b["maturity"] for b in g] == sorted(b["maturity"] for b in g)            # by maturity, not as added
     j = d["c"].index("H")
     marks = {row[0]["t"]: row[j] for row, n in zip(d["rows"], d["r"]) if n >= ex.UNI_FIRST and len(row[0].get("t") or "") == 12}
     assert len(marks) == 77
     assert marks["TRT150328T24"]["t"] == "★" and "on" in marks["TRT150328T24"]["cls"] and marks["TRT150328T24"]["tip"].endswith("TRT150328T24")
     assert marks["TRT130127T11"]["t"] == "☆" and "on" not in marks["TRT130127T11"]["cls"]
-    assert d["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Kart"]
+    assert d["c"][-6:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Kart", "Çıkar"]
+    row = next(row for row in d["rows"] if row[0].get("t") == "TRT130127T11")
+    assert (row[-1]["t"], row[-1]["cls"], row[-1]["tip"].endswith("TRT130127T11")) == ("✕", "act unlist", True)
+    # the list's cells are the service's: not a list a page types into
+    with pytest.raises(ServiceError):
+        svc.list_add(u, "tto", "EK_EVREN!A6:A165", ["TRT280432T14"])
+
+
+def _isin(body: str) -> str:
+    """An ISIN with the check digit that makes it valid (an invented new issue)."""
+    return next(body + str(d) for d in range(10) if bd.isin_valid(body + str(d)))
+
+
+class _Direct(ReplayProvider):
+    """A connected Bloomberg that answers at once ("#N/A N/A" for what it was not given)."""
+    live = True
+
+    def _get(self, key):
+        v = self.snapshot.get(key)
+        return "#N/A N/A" if v is None else v
+
+    get_bdp = get_bdh = get_bds = _get
+
+
+def _desk_service(tmp_path, module_service, facts):
+    """A service on a connected Bloomberg that answers at once: the recorded file's values and ``facts``."""
+    from tto.config import Settings
+    from tto.marketdata.base import bdp_key
+    from tto.service import Service
+    from tto.xl.engine import Clock
+    today = module_service.books["tto"].engine.clock.today()
+    snapshot = dict(module_service.provider.snapshot)
+    for isin, fields in facts.items():
+        for field, value in fields.items():
+            snapshot[bdp_key(isin + " ISIN", field)] = value
+    clock = Clock(today + 0.5)
+    clock.today = lambda: float(today)
+    provider = _Direct(snapshot)
+    return Service(Settings(data_dir=str(tmp_path), mode="live"), provider=provider, clock=clock), provider
+
+
+NEW_TLREF, NEW_FRN, NEW_FIXED, NEW_LATER = _isin("TRT080931T1"), _isin("TRT150632T1"), _isin("TRT120533T1"), _isin("TRT171134T1")
+FACTS = {
+    # a new TLREF floater, a new FRN, a new fixed coupon bond; a USD bond; one Bloomberg does not know
+    NEW_TLREF: {"NAME": "TURKIYE GOVERNMENT BOND", "SECURITY_DES": "TURKGB Float 09/08/31", "CRNCY": "TRY", "CPN_TYP": "FLOATING",
+                "CPN": 39.5, "MATURITY": "8.09.2031", "INFLATION_LINKED_INDICATOR": "N", "FLOATER_FORMULA": "91 D TLREF FLAT",
+                "RESET_IDX": "BISTREFI"},
+    NEW_FRN: {"NAME": "TURKIYE GOVERNMENT BOND", "SECURITY_DES": "TURKGB Float 06/15/32", "CRNCY": "TRY", "CPN_TYP": "FLOATING",
+              "CPN": 41.2, "MATURITY": "15.06.2032", "INFLATION_LINKED_INDICATOR": "N", "RESET_IDX": "N/A"},
+    NEW_FIXED: {"NAME": "TURKIYE GOVERNMENT BOND", "SECURITY_DES": "TURKGB 30.5 05/12/33", "CRNCY": "TRY", "CPN_TYP": "FIXED",
+                "CPN": 30.5, "MATURITY": "12.05.2033", "INFLATION_LINKED_INDICATOR": "N"},
+    "TRT061027F15": {"NAME": "TURKIYE GOVERNMENT BOND", "SECURITY_DES": "TURKGB 5.9 10/06/27", "CRNCY": "USD", "CPN_TYP": "FIXED",
+                     "CPN": 5.9, "MATURITY": "6.10.2027", "INFLATION_LINKED_INDICATOR": "N"},
+    _isin("TRT010136T1"): {"CPN_TYP": "#N/A Invalid Security", "CRNCY": "#N/A Invalid Security"},
+}
+
+
+def test_the_desk_adds_bonds_and_bloomberg_says_what_they_are(tmp_path, module_service):
+    """+ ISIN ekle on Tüm Kâğıtlar: Bloomberg says what the bond is - its kind (a TLREF floater from an FRN by the
+    floater formula), maturity, coupon - and it goes into its kind's group, for everyone.  A bond that is not a TL one,
+    or one Bloomberg does not know, is refused; one Bloomberg has not answered for waits for its kind on the list."""
+    s, provider = _desk_service(tmp_path, module_service, FACTS)
+    try:
+        u = s.login("Liste Ekleyen")["user"]
+        unknown = _isin("TRT010136T1")
+        res = s.bond_list_add(u, [NEW_TLREF.lower(), NEW_FRN + ", " + NEW_FIXED, "TRT061027F15", unknown, "TRT150328T24", NEW_LATER])
+        assert [(b["isin"], b["label"], b["kind"]) for b in res["added"]] == [
+            (NEW_TLREF, "08.09.31 TLREF", "float"), (NEW_FRN, "15.06.32 FRN", "frn"), (NEW_FIXED, "12.05.33", "fixed"),
+            (NEW_LATER, "17.11.34", None)]
+        assert res["skipped"] == ["TRT150328T24"] and res["waiting"] == [NEW_LATER]                  # already there / no answer yet
+        assert [(x["isin"], x["why"]) for x in res["refused"]] == [("TRT061027F15", "fx:USD"), (unknown, "unknown")]
+        assert "USD cinsi" in res["refused"][0]["text"] and res["free"] == ex.UNI_ROWS - 81
+        with pytest.raises(ServiceError):
+            s.bond_list_add(u, ["TRT150328T25"])                                                    # the check digit
+        # the catalog knows them (the chat, the card), each on a row of its own, in its kind's group on the page
+        assert bd.by_isin(NEW_FRN)["kind"] == "frn" and bd.by_isin(NEW_FIXED)["coupon"] == 30.5
+        r = s._uni_rows[NEW_FRN]
+        assert [cell(s, "EK_EVREN!%s%d" % (c, r)) for c in ("A", "B", "C", "D", ex.UNI_KIND)] == [NEW_FRN, "15.06.32 FRN", "FRN", "FRN", "frn"]
+        assert cell(s, "EK_EVREN!R%d" % s._uni_rows[NEW_FIXED]) == "ISL1" and cell(s, "EK_EVREN!D%d" % s._uni_rows[NEW_FIXED]) == 0.305
+        d = s.view(u, "kagitlar")["panels"][0]["data"]
+        captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
+        assert captions[2:] == ["Sabit kuponlu · 27 kâğıt", "TLREF'e endeksli · 15 kâğıt", "FRN · 10 kâğıt", "TÜFE'ye endeksli · 24 kâğıt",
+                                "Türü bekleniyor (Bloomberg) · 1 kâğıt"]
+        order = [row[0]["t"] for row in d["rows"] if len(row[0].get("t") or "") == 12]
+        assert order.index(NEW_FRN) == order.index("TRT100332T15") + 1                             # by maturity among the FRNs
+        assert order.index(NEW_FIXED) > order.index("TRT150328T24") and order[-1] == NEW_LATER
+        tip = next(row[0]["tip"] for row in d["rows"] if row[0].get("t") == NEW_FIXED)
+        assert tip.startswith("Listeye ekleyen: " + user_key("Liste Ekleyen"))
+        # what Bloomberg had not said, it says later: the bond takes its place
+        provider.snapshot.update(_facts_of(NEW_LATER, "17.11.2034"))
+        s._classify_pending()                                          # (the service asks again every few seconds)
+        assert bd.by_isin(NEW_LATER)["kind"] == "cpi" and cell(s, "EK_EVREN!%s%d" % (ex.UNI_KIND, s._uni_rows[NEW_LATER])) == "cpi"
+        # kept for everyone, and for the next start (the store)
+        desk = s.store.get(s.BOND_DESK)
+        assert set(desk["added"]) == {NEW_TLREF, NEW_FRN, NEW_FIXED, NEW_LATER} and desk["added"][NEW_FRN]["by"] == user_key("Liste Ekleyen")
+        assert desk["refused"] == {}                                   # refused when added: said then, not kept
+        # the ISIN picker of the other lists offers them
+        assert NEW_FRN in {b["isin"] for b in s.bond_catalog(u)["bonds"]}
+        hdr = auth(s, u)
+        with TestClient(create_app(s)) as client:
+            got = client.post("/api/bonds/list/add", json={"values": [NEW_FIXED, "XS2010030836"]}, headers=hdr)
+            assert got.status_code == 200 and got.json()["skipped"] == [NEW_FIXED]
+            assert got.json()["waiting"] == ["XS2010030836"]           # Bloomberg has said nothing of it (yet)
+            assert client.post("/api/bonds/list/add", json={"values": ["X"]}, headers=hdr).status_code == 400
+    finally:
+        s.stop()
+
+
+def _facts_of(isin: str, maturity: str):
+    from tto.marketdata.base import bdp_key
+    fields = {"NAME": "TURKIYE GOVERNMENT BOND", "SECURITY_DES": "TURKGB 3.1 %s" % maturity, "CRNCY": "TRY", "CPN_TYP": "FIXED",
+              "CPN": 3.1, "MATURITY": maturity, "INFLATION_LINKED_INDICATOR": "Y"}
+    return {bdp_key(isin + " ISIN", f): v for f, v in fields.items()}
+
+
+def test_a_bond_taken_off_the_list_and_one_past_its_maturity(tmp_path, module_service):
+    """✕ takes a bond off Tüm Kâğıtlar for everyone - off the trading list too when it is on it; + ISIN ekle brings it
+    back.  A bond past its maturity leaves the list the next day; the dashboard still knows it (the chat, the card)."""
+    s, _ = _desk_service(tmp_path, module_service, FACTS)
+    try:
+        u = s.login("Liste Çıkaran")["user"]
+        other = s.login("Öbür Masa")["user"]
+        assert s.bond_flag(u, "TRT020130T19", True)["added"] is True                                # an FRN on the trading list
+        res = s.bond_list_remove(u, "trt020130t19")
+        assert (res["isin"], res["removed"], res["trading"]) == ("TRT020130T19", True, True)
+        assert "TRT020130T19" not in s._list_values(other, "tto", "DİBS RV!A5:A54")
+        assert "TRT020130T19" not in s._uni_rows and bd.by_isin("TRT020130T19")["kind"] == "frn"    # still known
+        d = s.view(other, "kagitlar")["panels"][0]["data"]
+        assert "FRN · 8 kâğıt" in [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
+        assert s.bond_list_remove(u, "TRT020130T19")["removed"] is False                            # not there any more
+        assert s.store.get(s.BOND_DESK)["removed"]["TRT020130T19"]["by"] == user_key("Liste Çıkaran")
+        back = s.bond_list_add(other, ["TRT020130T19"])
+        assert [(b["isin"], b["kind"]) for b in back["added"]] == [("TRT020130T19", "frn")] and "TRT020130T19" in s._uni_rows
+        assert "TRT020130T19" not in s.store.get(s.BOND_DESK)["removed"]
+        # past its maturity: off the list the day after (06.01.2027), known still; one already past is refused
+        assert "TRT060127T10" in {b["isin"] for b in bd.listed(dt.date(2027, 1, 6))}
+        assert "TRT060127T10" not in {b["isin"] for b in bd.listed(dt.date(2027, 1, 7))} and bd.by_isin("TRT060127T10")
+        gone = _isin("TRT010126T1")
+        assert s.bond_list_add(u, [gone])["refused"][0]["why"] == "matured"                          # 01.01.2026
+        # the day turns (the service looks every few seconds): the bond past its maturity leaves its row
+        from tto.xl.values import date_to_serial
+        assert "TRT060127T10" in s._uni_rows
+        s.books["tto"].engine.clock.today = lambda: float(date_to_serial(dt.date(2027, 1, 7)))
+        assert s.et.call(s._sync_universe) is True and "TRT060127T10" not in s._uni_rows
+        assert s._uni_day == dt.date(2027, 1, 7) and "TRT060127T10" not in {b["isin"] for b in s.bond_catalog(u)["bonds"]}
+        # the page's ✕ - last: the app's shutdown stops the service
+        hdr = auth(s, u)
+        with TestClient(create_app(s)) as client:
+            got = client.post("/api/bonds/list/remove", json={"isin": "TRT130127T11"}, headers=hdr)
+            assert got.status_code == 200 and got.json()["removed"] is True and got.json()["trading"] is False
+            assert client.post("/api/bonds/list/remove", json={"isin": "X"}, headers=hdr).status_code == 400
+    finally:
+        s.stop()
+
+
+def test_dibs_rv_prices_an_frn_only(tmp_path, module_service):
+    """DİBS RV tells an FRN from a TLREF floater - by Tüm Kâğıtlar's kind for it, or, for a bond the list does not
+    have, by Bloomberg (no TLREF in the floater formula, a reset index that is not TLREF's): "F" in the kind column,
+    "FRN" in the coupon's, and nothing it works out against TLREF (DM, Z-spread, spread DV01, carry, roll)."""
+    floater = {"NAME": "TURKIYE GOVERNMENT BOND", "CRNCY": "TRY", "CPN_TYP": "FLOATING", "CPN": 41.0, "CPN_FREQ": 2.0,
+               "INFLATION_LINKED_INDICATOR": "N", "FLT_SPREAD": 0.0}
+    facts = {"TRT020130T19": dict(floater, MATURITY="2.01.2030"),
+             NEW_FRN: dict(floater, MATURITY="15.06.2032", RESET_IDX="N/A"),
+             NEW_TLREF: dict(floater, MATURITY="8.09.2031", RESET_IDX="BISTREFI", FLOATER_FORMULA="91 D TLREF FLAT")}
+    s, _ = _desk_service(tmp_path, module_service, facts)
+    try:
+        u = s.login("FRN Bakan")["user"]
+        me = user_key(u)
+        assert s.bond_flag(u, "TRT020130T19", True)["added"] is True
+        s.list_add(u, "tto", "DİBS RV!A5:A54", [NEW_FRN, NEW_TLREF])                  # not on Tüm Kâğıtlar: Bloomberg says
+        rows = s._list_values(u, "tto", "DİBS RV!A5:A54")
+        r, t = rows.index("TRT020130T19") + 5, rows.index("TRT090130T12") + 5
+        rn, rt = rows.index(NEW_FRN) + 5, rows.index(NEW_TLREF) + 5
+        s.set_inputs(u, "tto", [{"ref": "DİBS RV!N%d" % r, "value": 99.0}])           # its clean price, typed
+
+        def rv(col, row):
+            return cell(s, "DİBS RV!%s%d" % (col, row), user=me)
+
+        assert [rv(c, r) for c in ("D", "YA", "YD", "O")] == ["F", "frn", True, 99.0]
+        assert rv("G", r).endswith("FRN") and "TLREF" not in rv("G", r)
+        assert [rv(c, r) for c in ex.RV_FRN_BLANK] == [""] * len(ex.RV_FRN_BLANK)
+        assert cell(s, "EK_DIBS!B%d" % r, user=me) == "02.01.30 FRN" and cell(s, "EK_DIBS!C%d" % r, user=me) == "F"
+        # a TLREF floater: "T", TLREF + its margin, its discount margin
+        assert rv("D", t) == "T" and "TLREF+" in rv("G", t) and type(rv("Z", t)) is float and rv("YD", t) is False
+        # bonds the list does not have: Bloomberg's floater formula and reset index tell
+        assert [rv(c, rn) for c in ("YA", "YC", "YD", "D")] == ["", "N/A", True, "F"]
+        assert [rv(c, rt) for c in ("YA", "YB", "YD", "D")] == ["", "91 D TLREF FLAT", False, "T"]
+        # the trading summary: the FRN in its own group
+        lines = [[c.get("t") for c in row] for row in s.view(u, "dibslive")["panels"][0]["data"]["rows"]]
+        assert "FRN · 2" in [x[0] for x in lines] and next(x for x in lines if x[2] == "TRT020130T19")[1] == "02.01.30 FRN"
+    finally:
+        s.stop()
+
+
+def test_the_own_rows_of_an_older_dashboard_join_the_list(tmp_path, module_service):
+    """A dashboard updated from the one with "Kendi eklediklerimiz" (EK_EVREN!A6:A20, typed): those bonds join the
+    list - once - Bloomberg telling their kind; a USD one is not taken; the old cells' values go."""
+    from tto.store import Store
+    store = Store(str(tmp_path / "tto.db"))
+    store.set_shared_inputs("tto", {"EK_EVREN!A6": "TRT061027F15", "EK_EVREN!A7": NEW_FRN, "EK_EVREN!A8": "TRT150328T24",
+                                    "EK_EVREN!A9": "yanlış"}, "eski kullanıcı")
+    store.close()
+    s, _ = _desk_service(tmp_path, module_service, FACTS)
+    try:
+        assert not [ref for (_, ref) in s.store.shared_inputs("tto") if ref.startswith("EK_EVREN!A")]
+        assert set(bd.pending()) == {"TRT061027F15", NEW_FRN}                                      # catalog bonds are there already
+        assert s.store.get(s.BOND_DESK)["added"][NEW_FRN]["by"] == "eski kullanıcı"
+        s._classify_pending()                                          # (the service asks again every few seconds)
+        assert bd.pending() == [] and bd.by_isin(NEW_FRN)["kind"] == "frn" and NEW_FRN in s._uni_rows
+        assert "TRT061027F15" not in s._uni_rows and s.store.get(s.BOND_DESK)["refused"]["TRT061027F15"]["why"] == "fx:USD"
+        assert s.store.get("migrated.universe_own")
+    finally:
+        s.stop()
 
 
 def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
@@ -912,7 +1179,7 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         assert again["added"] is False and again["asw"] is False                          # already there
         assert s._list_values(other, "tto", "DİBS RV!A5:A54")[last + 1] == "TRT190128T14"  # for everyone
         # the page of every bond marks it, the trading summary has it under its kind
-        rows = {b["isin"]: n for n, b, _ in ex.universe_rows() if b}
+        rows = s._uni_rows
         assert cell(s, "EK_EVREN!H%d" % rows["TRT190128T14"]) == "★"
         summary = s.view(u, "dibslive")["panels"][0]
         assert (summary["id"], summary["flags"], summary["card"]) == ("L0", "dibs", "bond")

@@ -63,7 +63,7 @@ CLEARED_WHEN_NULL = ("BID_SIZE", "ASK_SIZE")
 
 #: how often (seconds) reference values are asked again; real-time fields are streamed instead
 STATIC_FIELDS = {"NAME", "SECURITY_DES", "CPN", "CPN_TYP", "CPN_FREQ", "MATURITY", "FIRST_CPN_DT", "FLT_SPREAD",
-                 "INFLATION_LINKED_INDICATOR", "LAST_TRADEABLE_DT",
+                 "INFLATION_LINKED_INDICATOR", "LAST_TRADEABLE_DT", "CRNCY", "FLOATER_FORMULA", "RESET_IDX",
                  "FWD_SCALE"}                    # the decimals of a pair's forward points (the FX pages)
 REFRESH_STATIC = 6 * 3600.0
 REFRESH_DAILY = 30 * 60.0

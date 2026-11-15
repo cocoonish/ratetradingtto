@@ -1,6 +1,6 @@
 {
  "asof": "2026-11-13",
- "source": "the desk's Bloomberg list of TRY government bonds (bills, fixed, CPI, TLREF floaters)",
+ "source": "the desk's Bloomberg list of TRY government bonds (bills, fixed, CPI, TLREF floaters, FRNs: FLOATER_FORMULA)",
  "bonds": [
   {
    "isin": "TRB100227T13",
@@ -424,21 +424,21 @@
   },
   {
    "isin": "TRT130928T12",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2028-09-13",
    "name": "TURKGB Float 09/13/28",
    "coupon": null
   },
   {
    "isin": "TRT050527T17",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2027-05-05",
    "name": "TURKGB Float 05/05/27",
    "coupon": null
   },
   {
    "isin": "TRT171127T15",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2027-11-17",
    "name": "TURKGB Float 11/17/27",
    "coupon": null
@@ -459,14 +459,14 @@
   },
   {
    "isin": "TRT160431T19",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2031-04-16",
    "name": "TURKGB Float 04/16/31",
    "coupon": null
   },
   {
    "isin": "TRT020130T19",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2030-01-02",
    "name": "TURKGB Float 01/02/30",
    "coupon": null
@@ -501,7 +501,7 @@
   },
   {
    "isin": "TRT031029T10",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2029-10-03",
    "name": "TURKGB Float 10/03/29",
    "coupon": null
@@ -515,7 +515,7 @@
   },
   {
    "isin": "TRT050630T11",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2030-06-05",
    "name": "TURKGB Float 06/05/30",
    "coupon": null
@@ -529,14 +529,14 @@
   },
   {
    "isin": "TRT100332T15",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2032-03-10",
    "name": "TURKGB Float 03/10/32",
    "coupon": null
   },
   {
    "isin": "TRT110832T19",
-   "kind": "float",
+   "kind": "frn",
    "maturity": "2032-08-11",
    "name": "TURKGB Float 08/11/32",
    "coupon": null

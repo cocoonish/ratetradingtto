@@ -1592,7 +1592,7 @@ async function shot(page, name) {
     const catalog = await page.evaluate(() => ({ rows: document.querySelectorAll('#isin-table tr').length - 1, have: document.querySelectorAll('#isin-table tr.have').length }));
     check('DİBS RV: "+ ISIN ekle" lists the desk\'s 77 TRY government bonds, the ones listed already ticked',
       catalog.rows === 77 && catalog.have === rvBefore.length, { catalog, listed: rvBefore.length });
-    await page.click('#isin-kind button[data-v="float"]');
+    await page.click('#isin-kind button[data-v="frn"]');
     await page.fill('#isin-find', '2030');
     await page.locator('#isin-table tr:not(.have) input.pick').first().check();
     await page.fill('#isin-text', 'TRT999999T99');
@@ -1605,7 +1605,7 @@ async function shot(page, name) {
     await page.waitForFunction((n) => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')]
       .filter((tr) => /^TR/.test((tr.children[0] || {}).textContent || '')).length === n + 2, rvBefore.length, { timeout: 30000 });
     const rvAfter = await rvIsins();
-    check('... a floater picked and an ISIN typed go to the first empty rows of the list, for everyone',
+    check('... an FRN picked and an ISIN typed go to the first empty rows of the list, for everyone',
       rvAfter.length === rvBefore.length + 2 && rvAfter.includes('TRT280432T14') && /2 kâğıt eklendi/.test(await page.textContent('#toasts'))
       && (await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT280432T14').lists.includes('dibs'), rvAfter.slice(-3));
     // tables that grow: the rows in use and one more, "+ Satır" for another
@@ -1667,8 +1667,8 @@ async function shot(page, name) {
       return { bonds: rows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[0])).length, captions: rows.filter((r) => /· \d+ kâğıt$/.test(r[0])).map((r) => r[0]),
         stars: document.querySelectorAll('.panel[data-panel="U1"] td.flag.on').length, open: document.querySelectorAll('.panel[data-panel="U1"] td.flag:not(.on)').length };
     });
-    check('Tüm Kâğıtlar: the 77 bonds of the desk\'s list kind by kind, the ones on the trading list starred',
-      uni.bonds === 77 && uni.captions.length === 5 && uni.stars >= 19 && uni.stars + uni.open === 77, uni);
+    check('Tüm Kâğıtlar: the 77 bonds of the desk\'s list kind by kind (TLREF and FRN apart), the ones on the trading list starred',
+      uni.bonds === 77 && uni.captions.length === 6 && uni.captions.includes('FRN · 9 kâğıt') && uni.stars >= 19 && uni.stars + uni.open === 77, uni);
     const flagOf = (panel, isin) => '.panel[data-panel="' + panel + '"] table.grid td.flag[title$="' + isin + '"]';
     await page.click(flagOf('U1', 'TRT130127T11'));
     await page.waitForFunction((sel) => { const td = document.querySelector(sel); return td && td.classList.contains('on'); }, flagOf('U1', 'TRT130127T11'), { timeout: 20000 });
@@ -1682,6 +1682,23 @@ async function shot(page, name) {
     const unstarred = await page.waitForFunction(() => ![...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
       .some((tr) => tr.children[2] && tr.children[2].textContent === 'TRT130127T11'), null, { timeout: 20000 }).then(() => true, () => false);
     check('... and ★ takes it off', unstarred && !(await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT130127T11').lists.includes('dibs'));
+    // "+ ISIN ekle" on Tüm Kâğıtlar: onto the desk's list, its kind from Bloomberg (offline it waits for it); ✕ takes it off
+    await open(page, 'kagitlar');
+    await page.waitForSelector('.panel[data-panel="U1"] table.grid');
+    await page.click('.panel[data-panel="U1"] button[data-action="add-isin"]');
+    await page.fill('#isin-text', 'TRT080931T14');
+    await page.click('#isin-add');
+    const unlistOf = (isin) => '.panel[data-panel="U1"] table.grid td.unlist[title$="' + isin + '"]';
+    await page.waitForSelector(unlistOf('TRT080931T14'), { timeout: 30000 });
+    const firstCells = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent || ''));
+    check('Tüm Kâğıtlar: "+ ISIN ekle" puts a new bond on the desk\'s list, for everyone (offline its kind waits for Bloomberg)',
+      firstCells.includes('Türü bekleniyor (Bloomberg) · 1 kâğıt') && firstCells.includes('TRT080931T14') && /bekleniyor/.test(await page.textContent('#toasts'))
+      && (await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.some((b) => b.isin === 'TRT080931T14'), firstCells.slice(-6));
+    await page.click(unlistOf('TRT080931T14'));
+    await page.click('.modal button.btn.primary');
+    const unlisted = await page.waitForFunction((sel) => !document.querySelector(sel), unlistOf('TRT080931T14'), { timeout: 20000 }).then(() => true, () => false);
+    check('... and ✕ takes it off the list, for everyone', unlisted
+      && !(await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.some((b) => b.isin === 'TRT080931T14'));
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');

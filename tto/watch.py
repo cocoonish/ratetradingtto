@@ -349,9 +349,13 @@ class Watch(object):
             if self._uni is None:
                 self._uni = {}
                 from . import extras as ex
-                for r, b, _ in ex.universe_rows():
-                    if b:
-                        self._uni[b["isin"]] = r
+                for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1):
+                    try:
+                        v = self.get("%s!A%d" % (ex.UNI_SHEET, r))
+                    except (KeyError, ValueError):
+                        break
+                    if isinstance(v, str) and v.strip():
+                        self._uni.setdefault("".join(v.split()).upper(), r)
             return self._uni
 
         def viop(self) -> Dict[str, int]:
@@ -702,7 +706,7 @@ class Watch(object):
                 contracts.append({"ticker": " ".join(t.split()), "position": k + 1, "short": t.replace(" Curncy", ""),
                                   "due": date_text(due)})
         bonds = []
-        for isin in listed + [b["isin"] for b in bd.catalog() if b["isin"] not in listed]:
+        for isin in listed + [b["isin"] for b in bd.listed(self.svc._bond_day()) if b["isin"] not in listed]:
             b = bd.by_isin(isin)
             bonds.append({"isin": isin, "label": bd.short_label(b) if b else isin, "listed": isin in listed})
         return {"ois": list(OIS_EXTRA) + list(OIS_ROWS), "off": list(OFF_ROWS), "off_sides": list(OFF_SIDES),
