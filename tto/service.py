@@ -194,6 +194,10 @@ class Service(object):
         # the generation: what the pages compare - it starts above any number a page could still hold from before
         # a restart (a page that sent "since" an old number would otherwise take everything for unchanged)
         self.gen = int(time.time() * 1000)
+        # the changes at the desk that are no market move (a chat line, a trade, a setting, an input, a bond listed ...):
+        # after one, a page kept for a user with inputs of their own is made again at once, never held back as a
+        # market move is (_fresh)
+        self.desk_changes = 0
         self._gen_lock = threading.Lock()
         self._notified = 0.0                             # when the pages were last told of a new generation
         self._notify_due = False                         # ... and whether they will be told once more
@@ -624,7 +628,7 @@ class Service(object):
                     if changed or day_changed:
                         if day_changed:
                             self.et.call_at(EngineThread.WRITE, self._sync_blotter)
-                        self.bump()
+                        self.bump(market=not day_changed)          # (a new day: TODAY moved everything)
                     if day_changed:
                         self.warm()                      # a new day: TODAY moved everything
                 if self.mode == "live" and time.monotonic() - kept >= self.BBG_KEEP_EVERY:
@@ -735,12 +739,14 @@ class Service(object):
     #: every page asks again each time it is told
     NOTIFY_EVERY = 1.0
 
-    def bump(self) -> int:
+    def bump(self, market: bool = False) -> int:
         kick = getattr(self, "_watch_kick", None)
         if kick is not None:
             kick.set()
         with self._gen_lock:
             self.gen += 1
+            if not market:
+                self.desk_changes += 1
             g = self.gen
             now = time.monotonic()
             wait = self._notified + self.NOTIFY_EVERY - now
@@ -1455,7 +1461,7 @@ class Service(object):
 
     def _fresh(self, rec: Dict[str, Any], gen: int, wanted: Optional[Tuple], key: Tuple) -> bool:
         """Whether the asked panels are known as of ``gen`` - or, for a user with inputs of their own (a calculation of
-        their own), checked lately with no shared input changed since (only the market moved)."""
+        their own), checked lately with no shared input and nothing at the desk changed since (only the market moved)."""
         throttle = self.settings.private_refresh
         recent = time.monotonic() - throttle if (throttle > 0 and key[0] and key[0] in self._private_users) else None
         shared = self._shared_changes(rec)
@@ -1466,8 +1472,9 @@ class Service(object):
                 continue                                 # (not a panel of the page: nothing to make)
             if p["entry"] is None:
                 return False
-            if p["checked"] != gen and (recent is None or p["at"] < recent or p.get("inputs") != shared):
-                return False                             # (a shared input changed since it was checked: at once)
+            if p["checked"] != gen and (recent is None or p["at"] < recent or p.get("inputs") != shared
+                                         or p.get("desk") != self.desk_changes):
+                return False                             # (a shared input or the desk changed since it was checked: at once)
         return True
 
     def _shared_changes(self, rec: Dict[str, Any]) -> int:
@@ -1513,13 +1520,14 @@ class Service(object):
     def _made(self, old: Optional[Dict[str, Any]], calc: Calc, gen: int, reusable: bool, make: Callable[[], Any]):
         """A kept part (a panel, the header) as of ``gen``: the one kept if nothing it read changed, or made again."""
         now = time.monotonic()
+        desk = self.desk_changes                  # (before it is made: a change while it is made counts after)
         if old is not None and old["entry"] is not None:
             if old["checked"] == gen:
                 return old
             if reusable and old["meta"] is not None and self._still(old["meta"], calc):
                 meta = old["meta"]
                 return dict(old, checked=gen, at=now, meta=(meta[0], meta[1], calc.epoch, meta[3]),
-                            inputs=calc.engine.input_changes)
+                            inputs=calc.engine.input_changes, desk=desk)
         calc.track = 0
         try:
             entry = make()
@@ -1529,7 +1537,7 @@ class Service(object):
         meta = (calc.serial, calc.engine.layout, calc.epoch, mask) if reusable else None
         same = old is not None and old["entry"] is not None and old["entry"] == entry
         return {"entry": entry, "meta": meta, "content": old["content"] if same else gen, "checked": gen, "at": now,
-                "inputs": calc.engine.input_changes}      # (shared inputs changed so far: _fresh)
+                "inputs": calc.engine.input_changes, "desk": desk}      # (shared inputs / desk changes so far: _fresh)
 
     def _answer(self, rec: Dict[str, Any], since: Optional[int], wanted: Optional[Tuple],
                 as_: Optional[str] = None) -> Dict[str, Any]:

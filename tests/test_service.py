@@ -1207,3 +1207,28 @@ def test_a_shared_change_reaches_another_tabs_panel_after_one_tab_was_refreshed(
         assert b19["rows"][b19["r"].index(38)][b19["c"].index("W")]["t"] == "34,00%"
     finally:
         svc.stop()
+
+
+def test_a_change_at_the_desk_reaches_a_page_of_ones_own_at_once(tmp_path):
+    """A user with inputs of their own has the market's moves on their pages every few seconds (private_refresh) - but
+    a change at the desk is no market move: a broker's quote said in the chat is on their DİBS RV at once, as on
+    everybody's (it waited for the next change of anything before)."""
+    import datetime as _dt
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Kendi Girdisiyle")
+        svc.set_inputs(u, "tto", [{"ref": "Forward!F2", "value": "51"}])           # an input of their own
+        assert u in svc._private_users
+        first = svc.view(u, "dibs")
+        said = (_dt.datetime.now() - _dt.timedelta(minutes=1)).strftime("%H:%M:%S")
+        svc.broker_add(u, said + " 16/4/31 94.000/94.200", source="BGC")
+        again = svc.view(u, "dibs", since=first["gen"])
+        assert not again.get("unchanged")
+        b3 = next(p for p in again["panels"] if p["id"] == "B3")["data"]
+        row = next(r for r in b3["rows"] if r and r[0].get("t") == "TRT160431T35")
+        assert any("BGC" in (c.get("t") or "") for c in row)
+        # a market move alone is still held back for a few seconds (nothing at the desk changed)
+        svc.bump(market=True)
+        assert svc.view(u, "dibs", since=again["gen"]).get("unchanged")
+    finally:
+        svc.stop()
