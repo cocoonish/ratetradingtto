@@ -293,3 +293,48 @@ def test_a_number_json_cannot_hold_is_sent_as_null_not_a_500(client, module_serv
     assert res.status_code == 200
     assert res.json()["odd"] == {"inf": None, "nan": None, "list": [1.5, None], "ok": 2.5}
     assert res.json()["mode"] == "replay"
+
+
+def test_pages_waiting_for_a_busy_calculation_thread_hold_no_server_thread(client, module_service):
+    """A page waits for the calculation thread without holding one of the server's threads (Starlette has 40, shared
+    with the static files and the sign-in): with the calculation thread busy and 54 pages asked at once, the
+    dashboard's files and the sign-in still answer at once; the pages come when the calculation is done."""
+    import threading
+    import time
+    users = [hdr("Bekleyen %d" % i) for i in range(3)]
+    views = [p["id"] for p in client.get("/api/nav").json()["pages"] if not p.get("custom")][:18]
+    gate = threading.Event()
+    module_service.et.submit_at(module_service.et.WRITE, gate.wait, 120)
+    codes = []
+
+    def ask(h, vid):
+        codes.append(client.get("/api/view/" + vid, headers=h).status_code)
+
+    threads = [threading.Thread(target=ask, args=(h, vid)) for h in users for vid in views]
+    try:
+        for t in threads:
+            t.start()
+        time.sleep(1.0)
+        t0 = time.time()
+        assert client.get("/static/js/main.js").status_code == 200
+        assert client.get("/api/auth").status_code == 200 and client.get("/api/status").status_code == 200
+        assert time.time() - t0 < 5.0 and not codes                     # (the pages still wait)
+    finally:
+        gate.set()
+        for t in threads:
+            t.join(300)
+    assert codes == [200] * len(threads)
+
+
+def test_a_session_is_looked_up_once_a_minute_and_a_sign_out_ends_it_at_once(client, module_service, monkeypatch):
+    """The session of a request is not a database query on the event loop each time: it is kept for a minute - and
+    forgotten at once when it ends (signed out, a new password, an account closed)."""
+    h = hdr("Oturum Önbellek")
+    looked = []
+    real = module_service.store.session_user
+    monkeypatch.setattr(module_service.store, "session_user", lambda *a: (looked.append(1), real(*a))[1])
+    for _ in range(5):
+        assert client.get("/api/status", headers=h).status_code == 200
+    assert len(looked) == 1
+    assert client.post("/api/logout", headers=h).status_code == 200
+    assert client.get("/api/status", headers=h).status_code == 401

@@ -84,6 +84,10 @@ class Store(object):
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self.path = path
         self._lock = threading.RLock()
+        # what the history pages and the settings page poll, kept until the history is written to (a GROUP BY over
+        # every close each time made the status poll a full scan)
+        self._bounds: Optional[Dict[str, Tuple[str, str, int]]] = None
+        self._mpc_all: Optional[Dict[str, Dict[str, Any]]] = None
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         with self._lock:
@@ -561,6 +565,7 @@ class Store(object):
                 (series, min(d for d, _ in rows), max(d for d, _ in rows))).fetchall()}
             fresh = [(series, d, float(v)) for d, v in rows if have.get(d) != float(v)]
             if fresh:
+                self._bounds = None
                 self._db.execute("BEGIN")
                 try:
                     self._db.executemany("INSERT INTO hist_values (series, day, value) VALUES (?,?,?) "
@@ -588,12 +593,16 @@ class Store(object):
         return out
 
     def hist_bounds(self) -> Dict[str, Tuple[str, str, int]]:
-        """``{series: (first day, last day, count)}``."""
-        return {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
-            "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+        """``{series: (first day, last day, count)}`` (kept until the closes change)."""
+        with self._lock:
+            if self._bounds is None:
+                self._bounds = {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
+                    "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+            return dict(self._bounds)
 
     def hist_delete(self, series: Optional[str] = None) -> None:
         with self._lock:
+            self._bounds = None
             if series is None:
                 self._db.execute("DELETE FROM hist_values")
             else:
@@ -603,6 +612,7 @@ class Store(object):
     def mpc_save(self, day: str, basis: str, meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
         """Replace one day: ``rows`` = ``[{"meeting", "step", "level", "cum", "sigma", "front"}, ...]``."""
         with self._lock:
+            self._mpc_all = None
             self._db.execute("BEGIN")
             try:
                 self._db.execute("DELETE FROM mpc_values WHERE day=?", (day,))
@@ -626,6 +636,11 @@ class Store(object):
                 raise
 
     def mpc_days(self, start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        if start is None and end is None:
+            with self._lock:                         # every day: kept until a day is computed again
+                if self._mpc_all is None:
+                    self._mpc_all = {r["day"]: dict(r) for r in self._q("SELECT * FROM mpc_days ORDER BY day")}
+                return {k: dict(v) for k, v in self._mpc_all.items()}
         rows = self._q("SELECT * FROM mpc_days WHERE day>=? AND day<=? ORDER BY day", (start or "0000", end or "9999"))
         return {r["day"]: dict(r) for r in rows}
 
@@ -642,6 +657,7 @@ class Store(object):
 
     def mpc_delete(self, days: Optional[List[str]] = None) -> None:
         with self._lock:
+            self._mpc_all = None
             if days is None:
                 self._db.execute("DELETE FROM mpc_values")
                 self._db.execute("DELETE FROM mpc_days")

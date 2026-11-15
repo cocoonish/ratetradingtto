@@ -624,3 +624,43 @@ def test_hand_values_and_scenarios_saved_earlier_are_declared_at_the_start(tmp_p
         assert resets == [] and sum(len(m) for m in eng.shared.memo) >= memo
     finally:
         again.stop()
+
+
+# ---------------------------------------------------------------------------------------------- the calculation thread
+def test_the_calculation_thread_takes_what_was_typed_before_the_header_pages_and_background(service):
+    """One calculation thread does everything; what waits goes by priority - inputs typed (and market ticks), then
+    the header strip, then pages, then the background (watch lists, warming up) - first come first served within one."""
+    import threading
+    et = service.et
+    gate = threading.Event()
+    order = []
+    et.submit_at(et.WRITE, gate.wait, 10)
+    futs = [et.submit_at(et.BACKGROUND, order.append, "background"), et.submit_at(et.VIEW, order.append, "page"),
+            et.submit_at(et.HEADER, order.append, "header"), et.submit_at(et.WRITE, order.append, "typed"),
+            et.submit_at(et.VIEW, order.append, "page 2")]
+    gate.set()
+    for f in futs:
+        f.result(timeout=30)
+    assert order == ["typed", "header", "page", "page 2", "background"]
+
+
+def test_the_same_page_asked_again_while_it_is_made_is_made_once(service):
+    """Two tabs of one user (or a refresh on the heels of another) ask for the same page of the same generation:
+    one calculation, both get it."""
+    import threading
+    u = login(service, "Aynı Sayfa")
+    gate = threading.Event()
+    service.et.submit_at(service.et.WRITE, gate.wait, 10)
+    service.bump()
+    made = []
+    real = service._view
+    service._view = lambda *a: (made.append(a[1]), real(*a))[1]
+    try:
+        f1, f2 = service.view_future(u, "calc"), service.view_future(u, "calc")
+        h1, h2 = service.header_future(u), service.header_future(u)
+        assert f1 is f2 and h1 is h2 and not f1.done()
+        gate.set()
+        assert f1.result(timeout=120)["panels"] and h1.result(timeout=120)["items"]
+        assert made == ["calc"]
+    finally:
+        del service._view

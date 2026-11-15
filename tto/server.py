@@ -112,8 +112,16 @@ class _SessionGate(object):
         request = Request(scope)
         token = _token(request)
         svc = self.service()
-        user = svc.session_user(token) if (svc is not None and token) else None
+        user = role = None
+        if svc is not None and token:
+            # a session looked up lately is known without a database query; another is looked up in a thread (the
+            # event loop never waits on SQLite)
+            hit = svc.cached_session(token)
+            if hit is None:
+                hit = await run_in_threadpool(svc.resolve_session, token)
+            user, role = hit
         scope["tto_user"] = user
+        scope["tto_role"] = role
         scope["tto_token"] = token
         path = scope.get("path") or ""
         if path.startswith("/api/") and scope.get("method") in UNSAFE_METHODS and _foreign(request):
@@ -140,14 +148,32 @@ async def _body(request: Request) -> Dict[str, Any]:
     return data
 
 
+#: requests that may wait in a thread for the calculation thread at once (Starlette has 40 threads, shared with the
+#: static files and the sign-in: a slow calculation must not take all of them)
+ENGINE_THREADS = 12
+
+
 def create_app(service: Optional[Service] = None, settings: Optional[Settings] = None) -> Starlette:
-    state: Dict[str, Any] = {"service": service}
+    state: Dict[str, Any] = {"service": service, "slots": None}
 
     def svc() -> Service:
         return state["service"]
 
     async def call(fn, *args, **kw):
+        """``fn`` in a thread - one of at most ENGINE_THREADS: what waits for the calculation thread queues here."""
+        slots = state["slots"]
+        if slots is None:
+            slots = state["slots"] = asyncio.Semaphore(ENGINE_THREADS)
+        async with slots:
+            return await run_in_threadpool(fn, *args, **kw)
+
+    async def call_free(fn, *args, **kw):
+        """``fn`` in a thread, without waiting for a place: work that never waits for the calculation thread."""
         return await run_in_threadpool(fn, *args, **kw)
+
+    async def engine(fut):
+        """The result of a calculation-thread future, awaited without holding a thread."""
+        return await asyncio.wrap_future(fut)
 
     def ok(data: Any) -> JSONResponse:
         return _Json(data)
@@ -176,65 +202,65 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def auth_state(request: Request):
-        return ok(await call(svc().auth_state, _user(request), auth.is_local(_ip(request))))
+        return ok(await call_free(svc().auth_state, _user(request), auth.is_local(_ip(request))))
 
     @handler
     async def login(request: Request):
         data = await _body(request)
-        token, me = await call(svc().authenticate, data.get("name"), data.get("password"), _ip(request))
+        token, me = await call_free(svc().authenticate, data.get("name"), data.get("password"), _ip(request))
         return signed_in(request, token, me)
 
     @handler
     async def logout(request: Request):
-        resp = JSONResponse(await call(svc().logout, request.scope.get("tto_token")))
+        resp = _Json(await call_free(svc().logout, request.scope.get("tto_token")))
         resp.delete_cookie(auth.COOKIE, path="/")
         return resp
 
     @handler
     async def account_request(request: Request):
         data = await _body(request)
-        return ok(await call(svc().request_account, data.get("name"), data.get("password"), data.get("note")))
+        return ok(await call_free(svc().request_account, data.get("name"), data.get("password"), data.get("note")))
 
     @handler
     async def setup(request: Request):
         data = await _body(request)
-        token, me = await call(svc().setup_admin, data.get("name"), data.get("password"), auth.is_local(_ip(request)),
+        token, me = await call_free(svc().setup_admin, data.get("name"), data.get("password"), auth.is_local(_ip(request)),
                                _ip(request))
         return signed_in(request, token, me)
 
     @handler
     async def password(request: Request):
         data = await _body(request)
-        return ok(await call(svc().change_password, _user(request), data.get("old"), data.get("new"),
+        return ok(await call_free(svc().change_password, _user(request), data.get("old"), data.get("new"),
                              request.scope.get("tto_token")))
 
     @handler
     async def admin_users(request: Request):
-        return ok(await call(svc().accounts, _user(request)))
+        return ok(await call_free(svc().accounts, _user(request)))
 
     @handler
     async def admin_action(request: Request):
         data = await _body(request)
-        return ok(await call(svc().admin_action, _user(request), request.path_params["action"], data,
+        return ok(await call_free(svc().admin_action, _user(request), request.path_params["action"], data,
                              request.scope.get("tto_token")))
 
     # ------------------------------------------------------------------ session / status
 
     @handler
     async def users(request: Request):
-        return ok({"users": await call(svc().store.users)})
+        return ok({"users": await call_free(svc().store.users)})
 
     @handler
     async def status(request: Request):
-        return ok(await call(svc().status))
+        return ok(await call_free(svc().status))
 
     @handler
     async def nav(request: Request):
-        return ok({"pages": await call(svc().nav)})
+        return ok({"pages": await call_free(svc().nav)})
 
     @handler
     async def header(request: Request):
-        return ok(await call(svc().header, _user(request), _lang(request)))
+        return ok(await engine(svc().header_future(_user(request), _lang(request))))
 
     @handler
     async def spot(request: Request):
@@ -244,7 +270,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def view(request: Request):
         show = request.query_params.get("all") in ("1", "true")
-        return ok(await call(svc().view, _user(request), request.path_params["view_id"], show, _lang(request)))
+        return ok(await engine(svc().view_future(_user(request), request.path_params["view_id"], show, _lang(request))))
 
     @handler
     async def image(request: Request):
@@ -253,7 +279,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             index = int(q.get("i", "0"))
         except ValueError:
             index = -1
-        raw, mime = await call(svc().image, q.get("book", "tto"), q.get("sheet", ""), index)
+        raw, mime = await call_free(svc().image, q.get("book", "tto"), q.get("sheet", ""), index)
         return Response(raw, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
     @handler
@@ -300,18 +326,18 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def my_inputs(request: Request):
-        return ok(await call(svc().my_inputs, _user(request)))
+        return ok(await call_free(svc().my_inputs, _user(request)))
 
     # ------------------------------------------------------------------ scenarios
     @handler
     async def scenarios(request: Request):
         if request.method == "GET":
-            return ok({"scenarios": await call(svc().scenarios, _user(request))})
+            return ok({"scenarios": await call_free(svc().scenarios, _user(request))})
         data = await _body(request)
         name = str(data.get("name") or "")
         if request.method == "DELETE":
-            return ok(await call(svc().delete_scenario, _user(request), name))
-        return ok(await call(svc().save_scenario, _user(request), name))
+            return ok(await call_free(svc().delete_scenario, _user(request), name))
+        return ok(await call_free(svc().save_scenario, _user(request), name))
 
     @handler
     async def scenario_load(request: Request):
@@ -322,9 +348,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def columns(request: Request):
         if request.method == "GET":
-            return ok(await call(svc().columns, _user(request)))
+            return ok(await call_free(svc().columns, _user(request)))
         data = await _body(request)
-        return ok(await call(svc().set_columns, _user(request), data.get("table"), data.get("hidden")))
+        return ok(await call_free(svc().set_columns, _user(request), data.get("table"), data.get("hidden")))
 
     # ------------------------------------------------------------------ RET curve
     @handler
@@ -339,7 +365,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def ret_history(request: Request):
-        return ok({"history": await call(svc().ret_history)})
+        return ok({"history": await call_free(svc().ret_history)})
 
     # ------------------------------------------------------------------ blotter
     @handler
@@ -538,18 +564,18 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def history_status(request: Request):
-        return ok(await call(svc().history.status))
+        return ok(await call_free(svc().history.status))
 
     @handler
     async def history_sync(request: Request):
         data = await _body(request)
-        svc().require_user(_user(request))
+        await call_free(svc().require_user, _user(request))
         return ok(await call(svc().history.request_sync, bool(data.get("recompute"))))
 
     @handler
     async def history_settings(request: Request):
         data = await _body(request)
-        svc().require_user(_user(request))
+        await call_free(svc().require_user, _user(request))
         try:
             return ok(await call(svc().history.set_settings, data))
         except ValueError as exc:
@@ -632,7 +658,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             since = int(request.query_params.get("since") or 0)
         except ValueError:
             since = 0
-        return ok(await call(svc().alarms_fired, _user(request), since))
+        return ok(await call_free(svc().alarms_fired, _user(request), since))
 
     @handler
     async def notes(request: Request):

@@ -856,7 +856,7 @@ class History(object):
         except ValueError as exc:
             from .service import ServiceError
             raise ServiceError(str(exc))
-        res = self.svc.et.call(self._set_calendar, user, wanted, bool(roll))
+        res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, user, wanted, bool(roll))
         self._snap = None
         self.svc.bump()
         self.kick()
@@ -890,7 +890,7 @@ class History(object):
         try:
             if not self.calendar()["passed_in_list"]:
                 return None
-            res = self.svc.et.call(self._set_calendar, self.AUTO_USER, self.meetings(), True)
+            res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, self.AUTO_USER, self.meetings(), True)
         except Exception as exc:  # noqa: BLE001 - the list stays as it is; the settings page says why
             self.state["autoroll_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
             return None

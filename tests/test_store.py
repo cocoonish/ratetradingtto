@@ -116,3 +116,27 @@ def test_key_value(store):
     assert store.get("x", 5) == 5
     store.put("x", {"a": [1, 2]})
     assert store.get("x") == {"a": [1, 2]}
+
+
+def test_what_the_history_polls_is_kept_until_the_history_changes(store, monkeypatch):
+    """The settings page polls the history's status: the first and last day and the count of every series (a GROUP BY
+    over every close) and the computed MPC days are kept until closes or days are written, not read each time."""
+    store.hist_upsert("A Index|PX_LAST", [("2026-01-02", 1.0), ("2026-01-05", 2.0)])
+    store.mpc_save("2026-01-05", "close", {"status": "OK"}, [])
+    asked = []
+    real = store._q
+    monkeypatch.setattr(store, "_q", lambda sql, args=(): (asked.append(sql.split()[0:3]), real(sql, args))[1])
+    for _ in range(3):
+        assert store.hist_bounds() == {"A Index|PX_LAST": ("2026-01-02", "2026-01-05", 2)}
+        assert list(store.mpc_days()) == ["2026-01-05"]
+    assert len(asked) == 2                                     # once each
+    store.hist_upsert("A Index|PX_LAST", [("2026-01-06", 3.0)])
+    store.mpc_save("2026-01-06", "close", {"status": "OK"}, [])
+    assert store.hist_bounds()["A Index|PX_LAST"] == ("2026-01-02", "2026-01-06", 3)
+    assert list(store.mpc_days()) == ["2026-01-05", "2026-01-06"]
+    store.hist_delete("A Index|PX_LAST")
+    store.mpc_delete()
+    assert store.hist_bounds() == {} and store.mpc_days() == {}
+    bounds = store.hist_bounds()
+    bounds["x"] = 1                                            # (a copy: what is kept is not changed by a caller)
+    assert store.hist_bounds() == {}

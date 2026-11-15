@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import datetime as _dt
+import itertools
 import json
 import math
 import os
@@ -59,16 +60,23 @@ class ServiceError(Exception):
 
 
 class EngineThread(object):
-    """Runs every calculation on one thread with a large stack (formula chains recurse deeply)."""
+    """Runs every calculation on one thread with a large stack (formula chains recurse deeply).
+
+    Work waits in order of priority, first come first served within one: what a user typed goes before the header
+    strip, the header before a page, a page before the background (the watch lists, warming up)."""
+
+    WRITE, HEADER, VIEW, BACKGROUND = 0, 1, 2, 3
+    _STOP = 99
 
     def __init__(self, name: str = "tto-engine"):
-        self._q: "queue.Queue" = queue.Queue()
+        self._q: "queue.PriorityQueue" = queue.PriorityQueue()
+        self._seq = itertools.count()
         # a big stack: long chains are evaluated in one go (engine.DEEP_LIMIT deep) instead of unwound and restarted
         self._t = big_stack_thread(self._loop, name, daemon=True)
 
     def _loop(self) -> None:
         while True:
-            item = self._q.get()
+            _, _, item = self._q.get()
             if item is None:
                 return
             fut, fn, args, kw = item
@@ -80,17 +88,38 @@ class EngineThread(object):
                 fut.set_exception(exc)
 
     def submit(self, fn: Callable, *args, **kw) -> "concurrent.futures.Future":
+        """``fn(*args, **kw)`` on the calculation thread, as an ordinary request (a page)."""
+        return self.submit_at(self.VIEW, fn, *args, **kw)
+
+    def submit_at(self, priority: int, fn: Callable, *args, **kw) -> "concurrent.futures.Future":
         fut: "concurrent.futures.Future" = concurrent.futures.Future()
-        self._q.put((fut, fn, args, kw))
+        self._q.put((priority, next(self._seq), (fut, fn, args, kw)))
         return fut
 
     def call(self, fn: Callable, *args, **kw):
+        return self.call_at(self.VIEW, fn, *args, **kw)
+
+    def call_at(self, priority: int, fn: Callable, *args, **kw):
         if threading.current_thread() is self._t:
             return fn(*args, **kw)
-        return self.submit(fn, *args, **kw).result()
+        return self.submit_at(priority, fn, *args, **kw).result()
+
+    def here(self) -> bool:
+        """Whether the caller is the calculation thread itself."""
+        return threading.current_thread() is self._t
+
+    def waiting(self) -> int:
+        return self._q.qsize()
 
     def stop(self) -> None:
-        self._q.put(None)
+        self._q.put((self._STOP, next(self._seq), None))       # after what waits
+
+
+def _done(value: Any) -> "concurrent.futures.Future":
+    """A future that already holds ``value``."""
+    fut: "concurrent.futures.Future" = concurrent.futures.Future()
+    fut.set_result(value)
+    return fut
 
 
 _DUMMY: List[str] = []
@@ -129,6 +158,11 @@ class Service(object):
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._retired: Dict[str, set] = {}
         self._view_cache: Dict[Tuple, Dict[str, Any]] = {}
+        self._render_lock = threading.Lock()
+        self._inflight: Dict[Tuple, "concurrent.futures.Future"] = {}     # pages / headers being made now
+        # sessions looked up lately: token hash -> (user, role, until) - not a database query per request
+        self._sessions: Dict[str, Tuple[str, Optional[str], float]] = {}
+        self._sessions_lock = threading.Lock()
         # live: when the dashboard saw each security trade today (its last price changed or its volume grew)
         self._trades_day = ""
         self._trades_seen: Dict[str, Dict[str, Any]] = {}
@@ -354,7 +388,7 @@ class Service(object):
             if not keys:
                 break
             total += len(keys)
-            self.et.call(self._apply_market, keys)
+            self.et.call_at(EngineThread.WRITE, self._apply_market, keys)
         self.bump()
         return {"rounds": done, "items": total, "seconds": round(time.time() - t0, 2)}
 
@@ -404,10 +438,10 @@ class Service(object):
                 day_changed = last_day is not None and day != last_day
                 last_day = day
                 if keys or day_changed or self.mode == "live":
-                    changed = self.et.call(self._apply_market, keys)
+                    changed = self.et.call_at(EngineThread.WRITE, self._apply_market, keys)
                     if changed or day_changed:
                         if day_changed:
-                            self.et.call(self._sync_blotter)
+                            self.et.call_at(EngineThread.WRITE, self._sync_blotter)
                         self.bump()
                 if first or day_changed or time.monotonic() - last_roll >= self.ROLL_CHECK_SECONDS:
                     # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
@@ -472,17 +506,24 @@ class Service(object):
     def _watch_loop(self) -> None:
         """Watch lists and alarms: read after every change (at the latest every few seconds), on the calculation
         thread; an alarm that fired tells the pages (a new generation: they ask what fired)."""
+        pending: Optional["concurrent.futures.Future"] = None
         while not self._stop.is_set():
             self._watch_kick.wait(3.0)
             self._watch_kick.clear()
             if self._stop.is_set():
                 break
-            try:
-                fired = self.et.submit(self.watch.tick).result(timeout=60)
-            except Exception:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
-                continue
-            if fired:
-                self.bump()
+            if pending is not None and not pending.done():
+                continue                    # the last round still waits behind the pages: no second one queued
+            pending = self.et.submit_at(EngineThread.BACKGROUND, self.watch.tick)
+            pending.add_done_callback(self._watch_done)
+
+    def _watch_done(self, fut: "concurrent.futures.Future") -> None:
+        try:
+            fired = fut.result()
+        except BaseException:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
+            return
+        if fired:
+            self.bump()
 
     def bump(self) -> int:
         kick = getattr(self, "_watch_kick", None)
@@ -615,6 +656,44 @@ class Service(object):
             return None
         return self.store.session_user(auth.token_hash(token), auth.stamp(self._now()))
 
+    #: how long a session looked up is taken as it was (a signed-out / ended one is forgotten at once by this process)
+    SESSION_TTL = 60.0
+
+    def cached_session(self, token: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
+        """``(user, role)`` of a session looked up less than ``SESSION_TTL`` ago (``None``: look it up - in a thread:
+        :meth:`resolve_session` queries the database).  Every request asks: no database query on the event loop."""
+        if not token:
+            return None
+        h = auth.token_hash(token)
+        with self._sessions_lock:
+            hit = self._sessions.get(h)
+        if hit is None or hit[2] < time.monotonic():
+            return None
+        return hit[0], hit[1]
+
+    def resolve_session(self, token: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        """``(user, role)`` of a session token (``(None, None)``: not valid), kept for ``SESSION_TTL`` seconds."""
+        if not token:
+            return None, None
+        h = auth.token_hash(token)
+        user = self.store.session_user(h, auth.stamp(self._now()))
+        if user is None:
+            return None, None
+        role = (self.store.account(user) or {}).get("role")
+        with self._sessions_lock:
+            if len(self._sessions) > 5000:
+                self._sessions.clear()
+            self._sessions[h] = (user, role, time.monotonic() + self.SESSION_TTL)
+        return user, role
+
+    def forget_sessions(self, token: Optional[str] = None) -> None:
+        """Sessions ended or changed (signed out, a new password, an account closed, a role changed): looked up again."""
+        with self._sessions_lock:
+            if token:
+                self._sessions.pop(auth.token_hash(token), None)
+            else:
+                self._sessions.clear()
+
     def open_session(self, user: str, ip: Optional[str] = None) -> str:
         """A new session of an active user - after a correct password or the first administrator's set-up.  The token
         goes to the browser; the database keeps only its hash."""
@@ -653,6 +732,7 @@ class Service(object):
     def logout(self, token: Optional[str]) -> Dict[str, Any]:
         if token:
             self.store.drop_session(auth.token_hash(token))
+            self.forget_sessions(token)
         return {"ok": True}
 
     def request_account(self, name: Any, password: Any, note: Any = "") -> Dict[str, Any]:
@@ -715,6 +795,7 @@ class Service(object):
             raise ServiceError("mevcut şifre hatalı", 403)
         self.store.update_account(key, pw_hash=self._new_password(new), failed=0, locked_until=None)
         self.store.drop_sessions(key, keep=auth.token_hash(token) if token else None)
+        self.forget_sessions()
         return {"ok": True}
 
     # ------------------------------------------------------------------ the administrators' page
@@ -735,10 +816,13 @@ class Service(object):
             raise ServiceError("bilinmeyen işlem: %s" % action, 404)
         with self._auth_lock:
             me = self.require_admin(user)                  # again inside: one demoted meanwhile does nothing more
-            if action == "password":
-                self._admin_password(me, data or {}, token)
-            else:
-                fn(me, data or {})
+            try:
+                if action == "password":
+                    self._admin_password(me, data or {}, token)
+                else:
+                    fn(me, data or {})
+            finally:
+                self.forget_sessions()                     # (a session ended, a role changed ...)
         if (self.store.account(me) or {}).get("role") != "admin":
             return {"accounts": [], "pending": 0, "admins": len(self.store.admins()), "demoted": True}
         return self.accounts(user)
@@ -940,16 +1024,38 @@ class Service(object):
 
     # ================================================================== rendering
     def view(self, user: Optional[str], view_id: str, show_hidden: bool = False, locale: Optional[str] = None) -> Dict[str, Any]:
-        key = (user, view_id, show_hidden, locale, self.gen)
-        hit = self._view_cache.get(key)
-        if hit is not None:
-            return hit
-        out = self.et.call(self._view, user, view_id, show_hidden, locale)
-        if len(self._view_cache) > 64:
-            self._view_cache.clear()
-        if out.get("gen") == self.gen:
-            self._view_cache[key] = out
-        return out
+        if self.et.here():
+            return self._view(user, view_id, show_hidden, locale)
+        return self.view_future(user, view_id, show_hidden, locale).result()
+
+    def view_future(self, user: Optional[str], view_id: str, show_hidden: bool = False,
+                    locale: Optional[str] = None) -> "concurrent.futures.Future":
+        """A page, as a future (the web layer awaits it without holding a thread of its own while the calculation
+        thread is busy).  The same page asked again of the same generation while it is being made - the same user's
+        two tabs, a refresh on the heels of another - waits for the one calculation."""
+        key = (user, view_id, bool(show_hidden), locale, self.gen)
+        with self._render_lock:
+            hit = self._view_cache.get(key)
+            if hit is not None:
+                return _done(hit)
+            fut = self._inflight.get(key)
+            if fut is None:
+                fut = self.et.submit_at(EngineThread.VIEW, self._view_job, key, user, view_id, show_hidden, locale)
+                self._inflight[key] = fut
+        return fut
+
+    def _view_job(self, key, user, view_id, show_hidden, locale) -> Dict[str, Any]:
+        try:
+            out = self._view(user, view_id, show_hidden, locale)
+            with self._render_lock:
+                if len(self._view_cache) > 64:
+                    self._view_cache.clear()
+                if out.get("gen") == self.gen:
+                    self._view_cache[key] = out
+            return out
+        finally:
+            with self._render_lock:
+                self._inflight.pop(key, None)
 
     def _view(self, user, view_id, show_hidden, locale) -> Dict[str, Any]:
         v = self.view_index.get(view_id)
@@ -1194,7 +1300,26 @@ class Service(object):
 
     def header(self, user: Optional[str], locale: Optional[str] = None) -> Dict[str, Any]:
         """Top strip: spot / TLREF / spot date ... read from MASA row 1-2 (labels) and its status row."""
-        return self.et.call(self._header, user, locale)
+        if self.et.here():
+            return self._header(user, locale)
+        return self.header_future(user, locale).result()
+
+    def header_future(self, user: Optional[str], locale: Optional[str] = None) -> "concurrent.futures.Future":
+        """The header strip as a future, made once per user and generation however many tabs ask (see view_future)."""
+        key = ("header", user, locale, self.gen)
+        with self._render_lock:
+            fut = self._inflight.get(key)
+            if fut is None:
+                fut = self.et.submit_at(EngineThread.HEADER, self._header_job, key, user, locale)
+                self._inflight[key] = fut
+        return fut
+
+    def _header_job(self, key, user, locale) -> Dict[str, Any]:
+        try:
+            return self._header(user, locale)
+        finally:
+            with self._render_lock:
+                self._inflight.pop(key, None)
 
     def _header(self, user, locale) -> Dict[str, Any]:
         book = self.books.get("tto")
@@ -1307,7 +1432,7 @@ class Service(object):
         ``lenient`` (a block pasted from Excel): cells that are not inputs are skipped and counted, not errors.
         """
         user = self.require_user(user)
-        res = self.et.call(self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
+        res = self.et.call_at(EngineThread.WRITE, self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -1441,7 +1566,7 @@ class Service(object):
     def reset_inputs(self, user: str, book_id: str, refs: Optional[List[str]] = None, shared: bool = False) -> Dict[str, Any]:
         """Back to the workbook's own values (personal inputs; ``shared`` for desk inputs)."""
         user = self.require_user(user)
-        res = self.et.call(self._reset_inputs, user, book_id, refs, shared)
+        res = self.et.call_at(EngineThread.WRITE, self._reset_inputs, user, book_id, refs, shared)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -1516,7 +1641,7 @@ class Service(object):
         if values is None:
             raise ServiceError("senaryo bulunamadı: %s" % name, 404)
         self.store.replace_user_inputs(user, values)
-        self.et.call(self._reload_user, user)
+        self.et.call_at(EngineThread.WRITE, self._reload_user, user)
         self.bump()
         return {"loaded": name, "cells": len(values), "gen": self.gen}
 
@@ -1973,7 +2098,7 @@ class Service(object):
 
     def add_forward(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
-        res = self.et.call(self._add_forward, user, payload, lang)
+        res = self.et.call_at(EngineThread.WRITE, self._add_forward, user, payload, lang)
         self.bump()
         return res
 
@@ -2065,7 +2190,7 @@ class Service(object):
 
     def add_ois(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
-        res = self.et.call(self._add_ois, user, payload, lang)
+        res = self.et.call_at(EngineThread.WRITE, self._add_ois, user, payload, lang)
         self.bump()
         return res
 
@@ -2140,7 +2265,7 @@ class Service(object):
         rec.update({"dv01_tl": risk["dv01_tl"], "dv01": risk["dv01"],
                     "name": (risk["info"] or {}).get("name") if risk["known"] else None})
         tid = self.store.add_trade(self.today_iso(), "bond", rec, user)
-        self.et.call(self._sync_blotter)
+        self.et.call_at(EngineThread.WRITE, self._sync_blotter)
         self.bump()
         rec["id"] = tid
         return rec
@@ -2297,7 +2422,7 @@ class Service(object):
         res = self.set_inputs(user, book_id, items)
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        self.et.call(self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in self._ROW_PERSONAL])
+        self.et.call_at(EngineThread.WRITE, self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in self._ROW_PERSONAL])
         self.bump()
         return {"isin": code, "on": False, "removed": len(rows), "gen": self.gen}
 
@@ -4404,7 +4529,7 @@ class Service(object):
         ids = self.store.delete_trade(int(trade_id), user)
         if not ids:
             raise ServiceError("işlem bulunamadı", 404)
-        self.et.call(self._sync_blotter)
+        self.et.call_at(EngineThread.WRITE, self._sync_blotter)
         self.bump()
         return {"deleted": ids}
 
