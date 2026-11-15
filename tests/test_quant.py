@@ -226,12 +226,72 @@ def test_pca_residual_marks_the_planted_cheap_tenor():
     assert planted.z > 2.0 and planted.z == max(m.z for m in mons)
     s = qf.make_signal(planted, cfg(), "10:00")
     assert s["expression"].startswith("Receive 2Y OIS") and s["direction"] == -1 and s["target"] < s["entry"] < s["stop"]
-    # the hedge legs make the package neutral to PC1 and PC2
-    e = fit["vectors"]
+    # the hedge legs make the package neutral to PC1 and PC2 of the levels (the directions the curve moved in)
+    e = fit["lvl_vectors"]
     idx = {k: i for i, k in enumerate(fit["keys"])}
     for f in (0, 1):
         assert abs(sum(leg["weight"] * e[f][idx[leg["key"]]] for leg in planted.legs)) < 1e-9
     assert 0 < planted.half_life < 20
+
+
+def _curve(n, seed, shape=None, slope_of=None, trend=0.0, beta=None):
+    """OIS levels: a random-walk level (flat) and slope, an optional steady trend along beta (a cycle)."""
+    rnd = random.Random(seed)
+    labels = ["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "10Y"]
+    months = [1, 3, 6, 12, 24, 36, 60, 120]
+    beta = beta or [1.6, 1.5, 1.4, 1.25, 1.0, 0.85, 0.7, 0.6]
+    days = DAYS[-n:]
+    lv, sl = 0.0, 0.0
+    lev = {x: [] for x in labels}
+    for i in range(n):
+        lv += rnd.gauss(0, 0.05)
+        sl += rnd.gauss(0, 0.02)
+        shape_i = slope_of(i) if slope_of else [(math.log(m) - math.log(8)) / 2.0 for m in months]
+        for j, x in enumerate(labels):
+            lev[x].append(30.0 - trend * i * beta[j] + lv + sl * shape_i[j] + rnd.gauss(0, 0.01))
+    series = {"OIS:" + x: dict(zip(days, lev[x])) for x in labels}
+    meta = {"OIS:" + x: {"label": x + " OIS", "kind": "rate", "months": float(m)} for x, m in zip(labels, months)}
+    return ctx_of(series, meta)
+
+
+def test_dynamic_pca_windows_stability_and_level_residuals():
+    ctx, _ = synth_ctx(shock=3.0)
+    fit = qf.pca_fit(ctx)
+    assert set(fit["windows"]) == {60, 120, 250} and fit["window"] == 250
+    st = {r["pc"]: {(x["a"], x["b"]): x for x in r["pairs"]} for r in fit["stability"]}
+    assert st[1][(120, 250)]["cos"] > 0.95 and st[1][(60, 250)]["max_move"] < 0.2      # the level is the same shape in every window
+    mons, table = qf.fam_pca(ctx, fit)
+    planted = next(m for m in mons if m.sid == "pca:OIS:2Y")
+    assert planted.info["window"] == 250 and set(planted.info["z_windows"]) == {60, 120} and table["window"] == 250
+    planted.score({}, {})
+    s = qf.make_signal(planted, cfg(), "10:00")
+    assert "250 günlük pencere" in s["thesis"] and "120 günde z" in s["thesis"]
+    # the second factor's shape changes in the last 60 days (a twist turns into a bow): PC2 of the 60-day window is not
+    # the 250-day one's, PC1 still is
+    early = [(math.log(m) - math.log(8)) / 2.0 for m in (1, 3, 6, 12, 24, 36, 60, 120)]
+    late = [x * x - 0.8 for x in early]
+    ctx2 = _curve(300, 6, slope_of=lambda i: late if i >= 240 else early)
+    st2 = {r["pc"]: {(x["a"], x["b"]): x for x in r["pairs"]} for r in qf.pca_fit(ctx2)["stability"]}
+    assert st2[1][(60, 250)]["cos"] > 0.95 and st2[2][(60, 250)]["cos"] < 0.9 and st2[2][(60, 250)]["max_move"] > 0.2
+    # a cutting cycle moves the curve along its own shape (the short end more): residuals against the change-PCA trend
+    # with it (|correlation with time| 1), the packages neutral to the level-PCA do not - no tenor is "rich" or "cheap"
+    for seed in (3, 4):
+        ctx3 = _curve(300, seed, trend=0.02)
+        f3 = qf.pca_fit(ctx3)
+        m3, _ = qf.fam_pca(ctx3, f3)
+        t_ = list(range(len(f3["rows"])))
+        e, xbar, k = f3["vectors"], f3["xbar"], len(f3["keys"])
+        old = []
+        for j in range(k):
+            rs = []
+            for r in f3["rows"]:
+                d = [(r[i] - xbar[i]) * 100.0 for i in range(k)]
+                rs.append(d[j] - sum(qf._proj(e[c], d) * e[c][j] for c in (0, 1)))
+            old.append(abs(qm.corr(rs, t_)))
+        new = [abs(qm.corr(m.values, t_)) for m in m3]
+        for m in m3:
+            m.score({}, {})
+        assert max(old) > 0.9 and max(new) < 0.2 and max(abs(m.z) for m in m3) < 2.0
 
 
 def test_pca_neutral_flies_and_spreads():

@@ -1000,20 +1000,71 @@ def _pca_signs(vectors: List[List[float]], months: List[float]) -> List[List[flo
     return out
 
 
-def pca_fit(ctx: Ctx) -> Optional[Dict[str, Any]]:
-    keys = ctx.ois_keys(min_months=1.0)
-    keys, days, rows = _curve_matrix(ctx, keys, ctx.window() + 1)
-    if len(keys) < 3 or len(days) < ctx.min_obs() + 1:
+#: the windows the curve's PCA is fitted on (business days): their loadings side by side say how stable the factors are;
+#: the signals use the longest one the history covers (they say which)
+PCA_WINDOWS = (60, 120, 250)
+
+
+def _pca_window(ctx: Ctx, keys: List[str], w: int) -> Optional[Dict[str, Any]]:
+    """One window's fits: the PCA of the daily changes (the risk factors: today's move, the hedges of the flies) and the
+    PCA of the levels (the directions the curve itself moved in over the window: a cycle's trend among them)."""
+    keep, days, rows = _curve_matrix(ctx, keys, w + 1)
+    if len(keep) < 3 or len(days) < w + 1:
         return None
-    chg = [[(rows[t][j] - rows[t - 1][j]) * 100.0 for j in range(len(keys))] for t in range(1, len(rows))]
+    k = len(keep)
+    chg = [[(rows[t][j] - rows[t - 1][j]) * 100.0 for j in range(k)] for t in range(1, len(rows))]
     p = qm.pca(chg)
-    if p is None:
+    pl = qm.pca([[v * 100.0 for v in r] for r in rows])
+    if p is None or pl is None:
         return None
-    months = [ctx.months(k) for k in keys]
-    vec = _pca_signs(p["vectors"], months)
-    xbar = [sum(r[j] for r in rows) / len(rows) for j in range(len(keys))]
-    return {"keys": keys, "days": days, "rows": rows, "changes": chg, "values": p["values"][:3], "vectors": vec,
-            "explained": p["explained"][:3], "mean_change": p["means"], "xbar": xbar, "months": months}
+    months = [ctx.months(x) for x in keep]
+    xbar = [sum(r[j] for r in rows) / len(rows) for j in range(k)]
+    return {"keys": keep, "days": days, "rows": rows, "changes": chg, "values": p["values"][:3], "vectors": _pca_signs(p["vectors"], months),
+            "explained": p["explained"][:3], "mean_change": p["means"], "xbar": xbar, "months": months, "window": w,
+            "lvl_vectors": _pca_signs(pl["vectors"], months), "lvl_explained": pl["explained"][:3]}
+
+
+def pca_stability(fits: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """How much the loadings of PC1–PC3 (of the daily changes) moved between the windows: per component and pair of
+    windows the |cosine| of the two loading vectors (1: the same shape) and the largest move of a tenor's loading."""
+    out = []
+    for c in range(3):
+        row: Dict[str, Any] = {"pc": c + 1, "pairs": []}
+        for a, b in ((60, 120), (120, 250), (60, 250)):
+            fa, fb = fits.get(a), fits.get(b)
+            if fa is None or fb is None or len(fa["vectors"]) <= c or len(fb["vectors"]) <= c:
+                continue
+            common = [x for x in fa["keys"] if x in fb["keys"]]
+            va = [fa["vectors"][c][fa["keys"].index(x)] for x in common]
+            vb = [fb["vectors"][c][fb["keys"].index(x)] for x in common]
+            na, nb = math.sqrt(sum(x * x for x in va)), math.sqrt(sum(x * x for x in vb))
+            dot = sum(x * y for x, y in zip(va, vb))
+            if dot < 0:
+                vb = [-x for x in vb]
+            row["pairs"].append({"a": a, "b": b, "cos": abs(dot) / (na * nb) if na and nb else None,
+                                 "max_move": max((abs(x - y) for x, y in zip(va, vb)), default=None)})
+        out.append(row)
+    return out
+
+
+def pca_fit(ctx: Ctx) -> Optional[Dict[str, Any]]:
+    """The curve's PCA on every window of ``PCA_WINDOWS`` the history covers; the main fit - what the signals use - is the
+    longest one with at least the desk's minimum of closes (or the longest at all)."""
+    keys = ctx.ois_keys(min_months=1.0)
+    fits = {w: f for w, f in ((w, _pca_window(ctx, keys, w)) for w in PCA_WINDOWS) if f is not None}
+    if not fits:
+        return None
+    ok = [w for w in fits if w >= ctx.min_obs()]
+    main = dict(fits[max(ok) if ok else max(fits)])
+    main["windows"] = fits
+    main["stability"] = pca_stability(fits)
+    return main
+
+
+def _pkg_series(fit: Dict[str, Any], weights: Dict[int, float]) -> List[float]:
+    """A package's level in bp against the window's means, day by day."""
+    xbar = fit["xbar"]
+    return [sum(w * (r[j] - xbar[j]) for j, w in weights.items()) * 100.0 for r in fit["rows"]]
 
 
 def _proj(vec: List[float], d: List[float]) -> float:
@@ -1021,48 +1072,73 @@ def _proj(vec: List[float], d: List[float]) -> float:
 
 
 def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dict[str, Any]]:
+    """Rich / cheap tenors against the curve's own shape.  The residual is measured on the levels, against the level-PCA
+    of the window (its first two components): a cycle moves the whole curve along the directions the levels moved in, so
+    those are taken out and what is left - the tenor against a package of its two neighbours neutral to them - does not
+    trend with the cycle (residuals against the change-PCA, or against a rolling mean, keep a trending cycle's part in
+    them: the change factors are not the directions the levels drifted in, and a rolling mean lags the drift)."""
     if fit is None:
-        return [], {"ok": False, "why": "PCA için en az 3 OIS vadesinde %d ortak gün gerekli" % (ctx.min_obs() + 1)}
+        return [], {"ok": False, "why": "PCA için en az 3 OIS vadesinde %d ortak gün gerekli" % (PCA_WINDOWS[0] + 1)}
     keys, rows, vec, xbar = fit["keys"], fit["rows"], fit["vectors"], fit["xbar"]
+    lvec = fit["lvl_vectors"]
     k = len(keys)
-    e1, e2 = vec[0], vec[1]
+    w_main = fit["window"]
 
     def dev(levels: List[float]) -> List[float]:
         return [(levels[j] - xbar[j]) * 100.0 for j in range(k)]
 
-    def resid(levels: List[float]) -> List[float]:
-        d = dev(levels)
-        f1, f2 = _proj(e1, d), _proj(e2, d)
-        return [d[j] - f1 * e1[j] - f2 * e2[j] for j in range(k)]
-
-    res = [resid(r) for r in rows]
     levels_now = lambda live: [ctx.cur(key, live) for key in keys]                       # noqa: E731
     mons: List[Monitor] = []
     table_rows = []
+    others = {w: f for w, f in fit["windows"].items() if w != w_main}
     for j, key in enumerate(keys):
-        hedge = _hedges(keys, vec, j)
-        series = [r[j] for r in res]
+        hedge = _hedges(keys, lvec, j)
+        weights = {j: 1.0}
+        for h_, w_ in hedge:
+            weights[h_] = weights.get(h_, 0.0) + w_
+        series = _pkg_series(fit, weights)
 
-        def calc(live, j=j):
+        def calc(live, weights=weights):
             lv = levels_now(live)
-            if any(v is None for v in lv):
+            if any(lv[i] is None for i in weights):
                 return None
-            return resid(lv)[j]
+            return sum(w * (lv[i] - xbar[i]) for i, w in weights.items()) * 100.0
 
+        # the same tenor's package in the other windows: its z there (does the shorter past say the same?)
+        zs = {}
+        for w, f in others.items():
+            if key in f["keys"]:
+                jj = f["keys"].index(key)
+                ww = {jj: 1.0}
+                for h_, w_ in _hedges(f["keys"], f["lvl_vectors"], jj):
+                    ww[h_] = ww.get(h_, 0.0) + w_
+                s_ = _pkg_series(f, ww)
+                mu, sd = window_stats(s_)
+                zs[w] = (s_[-1] - mu) / sd if sd else None
         legs = [{"key": key, "name": _ois_name(ctx, key), "weight": 1.0}] + [
             {"key": keys[h], "name": _ois_name(ctx, keys[h]), "weight": w} for h, w in hedge]
         carry = _pkg_carry(ctx, legs)
+
+        def pthesis(sg, key=key, zs=zs):
+            other = ", ".join("%d günde z %s" % (w, _sg(z, 1)) for w, z in sorted(zs.items()) if z is not None)
+            return ("%s, iki komşusuyla eğrinin seviye-PCA'sının ilk iki bileşenine nötr pakette %s bp %s (%d günlük pencere, z %s%s); "
+                    "yarı ömür %s gün → %s; beklenen %s bp (carry + roll dahil)." % (
+                        _ois_name(ctx, key), _g(abs(sg["level"]), 1), "ucuz" if sg["level"] > 0 else "pahalı", w_main, _sg(sg["z"], 2),
+                        "; " + other if other else "", _g(sg.get("half_life"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 1)))
+
         mon = mr_monitor(ctx, "pca:" + key, "pca", "TRY OIS", "%s (PC1–PC2 hedge'li)" % _ois_name(ctx, key), "bp", 1, fit["days"], series,
-                         "bp", legs, calc, carry_up=carry, pkg="rate",
-                         note="PC1 (seviye) ve PC2 (eğim) çıkarıldıktan sonra kalan (bp): + ise tenor eğriye göre ucuz (yüksek faiz → receive), "
-                              "− ise pahalı (pay). Hedge bacakları paketi PC1 ve PC2'ye nötr yapar.")
-        row = {"key": key, "label": key.split(":", 1)[1], "loadings": [v[j] for v in vec], "resid": series[-1] if series else None}
+                         "bp", legs, calc, carry_up=carry, pkg="rate", thesis=pthesis, info={"window": w_main, "z_windows": zs},
+                         note="%d günlük pencere: seviyelerin PCA'sı (bileşenler, eğrinin pencerede gerçekten kaydığı yönler) ile tenor ve iki "
+                              "komşusundan PC1 ve PC2'ye nötr paket; seviyesi pencerenin ortalamasına göre (bp): + ise tenor ucuz (yüksek faiz → "
+                              "receive), − ise pahalı (pay). Döngünün trendi bileşenlerde kaldığı için kalıntı onunla trend yapmaz." % w_main)
+        row = {"key": key, "label": key.split(":", 1)[1], "loadings": [v[j] for v in vec], "resid": series[-1] if series else None,
+               "z_windows": zs, "window": w_main}
         if mon is not None:
             mons.append(mon)
             row.update({"z_hist": mon.zof(series[-1]), "half_life": mon.half_life, "regime": (mon.regime or {}).get("tag"),
                         "hedge": [{"key": keys[h], "weight": w} for h, w in hedge]})
         table_rows.append(row)
-    # today's move in factor terms and where the factors stand
+    # today's move in factor terms and where the factors stand (the change-PCA: the risk factors)
     last = rows[-1]
     sd_f = [math.sqrt(max(v, 1e-12)) for v in fit["values"]]
     levels_f = [[_proj(vec[f], dev(r)) for r in rows] for f in range(len(vec))]
@@ -1081,9 +1157,14 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
             out["level_z"][f] = qm.zscore(_proj(vec[f], d), levels_f[f])
         return out
 
+    windows = []
+    for w, f in sorted(fit["windows"].items()):
+        windows.append({"window": w, "explained": f["explained"], "lvl_explained": f["lvl_explained"], "first": f["days"][0], "last": f["days"][-1],
+                        "loadings": {x: [f["vectors"][c][f["keys"].index(x)] for c in range(min(3, len(f["vectors"])))] for x in f["keys"]}})
     table = {"ok": True, "keys": keys, "labels": [x.split(":", 1)[1] for x in keys], "explained": fit["explained"],
              "values": fit["values"], "vectors": vec, "rows": table_rows, "days": len(fit["days"]), "first": fit["days"][0],
-             "last": fit["days"][-1], "factors": factors, "names": ["PC1 · seviye", "PC2 · eğim", "PC3 · eğrilik"]}
+             "last": fit["days"][-1], "factors": factors, "names": ["PC1 · seviye", "PC2 · eğim", "PC3 · eğrilik"], "window": w_main,
+             "windows": windows, "stability": fit["stability"], "lvl_explained": fit["lvl_explained"]}
     return mons, table
 
 

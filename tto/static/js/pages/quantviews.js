@@ -107,8 +107,19 @@ class PcaPage extends AnalysisPage {
     this.loadChartHost = h('div', { class: 'volchart' });
     this.loadings = panel('quant-pca-loadings', 'Yükler (vade başına)', { top: this.loadChartHost });
     this.boxes.loadings = new GridBox(this.loadings, 'quant/pca/loadings');
-    this.resid = panel('quant-pca-resid', 'Zengin / ucuz · PC1–PC2 sonrası kalıntı');
-    this.resid.note.textContent = 'Kalıntı (bp) + ise tenor eğriye göre ucuz (receive), − ise pahalı (pay). Hedge: paketi PC1 ve PC2\'ye nötr yapan iki komşu vade (DV01 ağırlığı).';
+    this.dyn = panel('quant-pca-windows', 'Dinamik PCA · 60 / 120 / 250 günlük pencereler');
+    this.dyn.note.textContent = 'Her pencerede günlük değişimlerin PCA\'sı (risk bileşenleri) ve seviyelerin PCA\'sı (eğrinin pencerede kaydığı yönler). Kararlılık: '
+      + 'iki pencerenin aynı bileşen yüklerinin |kosinüsü| (1: aynı şekil) ve bir vadenin yükünün en büyük değişimi. Sinyaller, en az gözlem kadar kapanışı olan en uzun pencereyi kullanır (yazar).';
+    this.boxes.dyn = new GridBox(this.dyn, 'quant/pca/windows');
+    this.stab = panel('quant-pca-stability', 'Yüklerin kararlılığı (PC1–PC3, pencere çiftleri)', { cls: 'aux' });
+    this.boxes.stab = new GridBox(this.stab, 'quant/pca/stability');
+    this.loadw = panel('quant-pca-loadw', 'Yükler pencere pencere', { cls: 'aux' });
+    this.boxes.loadw = new GridBox(this.loadw, 'quant/pca/loadw');
+    this.resid = panel('quant-pca-resid', 'Zengin / ucuz · seviye-PCA\'sının PC1–PC2\'sine nötr paket');
+    this.resid.note.textContent = 'Kalıntı: tenor ve iki komşusundan, seviyelerin PCA\'sının ilk iki bileşenine nötr paket (DV01 ağırlıklı), pencerenin ortalamasına göre (bp); '
+      + '+ ise tenor ucuz (receive), − ise pahalı (pay). Seviye-PCA\'sı neden: bir döngü (indirim / artırım) eğriyi seviyelerin kaydığı yönlerde taşır; o yönler '
+      + 'çıkarılınca kalan kalıntı döngüyle trend yapmaz. Değişimlerin PCA\'sına göre kalıntı (eski hali) döngünün yönüyle günlük risk bileşenleri aynı olmadığı '
+      + 'için trendin bir kısmını taşır; kayan ortalamaya göre kalıntı ise trende gecikir. Diğer pencerelerin z\'si yanında.';
     this.boxes.resid = new GridBox(this.resid, 'quant/pca/resid', (sid) => this.pick(sid));
     this.rv = panel('quant-pca-rv', 'Fly ve spread\'ler · klasik (DV01 1:1 / 50/50) ve PCA ağırlıklı yan yana');
     this.rv.note.textContent = 'Klasik: masanın usulü, spread 1:1 (uzun bacak +1, kısa −1), fly 50/50 (gövde 1, kanatlar −0,5) - DV01 cinsinden, paralel kaymaya nötr. '
@@ -127,7 +138,7 @@ class PcaPage extends AnalysisPage {
     this.periods.note.textContent = 'Her dönem bir kararın ertesi gününden sonrakinin ertesi gününe (toplantı tarihli OIS gibi): patikanın o dönemki gecelik seviyesi '
       + 've bir önceki seviyeye göre fiyatlanan adım (bp).';
     this.boxes.periods = new GridBox(this.periods, 'quant/pca/periods');
-    this.frame('PCA / RV', [this.factors, this.loadings, this.resid, this.rv, this.fra, this.periods, this.tenors]);
+    this.frame('PCA / RV', [this.factors, this.loadings, this.dyn, this.resid, this.rv, this.fra, this.tenors, this.periods, this.stab, this.loadw]);
   }
 
   destroy() {
@@ -151,9 +162,25 @@ class PcaPage extends AnalysisPage {
         series: (p.vectors || []).map((v, k) => ({ name: (p.names || [])[k], kind: 'line', color: [BLUE, ORANGE, GREEN][k], data: v, marker: true })) };
       if (this.charts.load) this.charts.load.update(spec); else this.charts.load = new Chart(this.loadChartHost, spec, { height: 220 });
       const rows = p.rows || [];
-      this.boxes.resid.set(['Vade', 'Kalıntı (bp)', 'z', 'Yarı ömür (g)', 'Rejim', 'Hedge'], rows.map((r) => [T(r.label, { b: 1 }), N(r.resid, 1, { sign: true }),
-        Z(r.z, entry), N(r.half_life, 1), T(REGIME[r.regime] || '—'),
-        T((r.hedge || []).map((x) => x.key.split(':')[1] + ' ' + sgn(x.weight, 2)).join(' · '))]), rows.map((r) => 'pca:' + r.key), '—', this.picked);
+      this.factors.setTitle('TRY OIS eğrisi · temel bileşenler (' + (p.window || '') + ' günlük pencere)');
+      const zw = (r, w) => (r.z_windows || {})[String(w)];
+      this.boxes.resid.set(['Vade', 'Pencere', 'Kalıntı (bp)', 'z', 'z (60 g)', 'z (120 g)', 'Yarı ömür (g)', 'Rejim', 'Hedge'], rows.map((r) => [T(r.label, { b: 1 }),
+        T(isNum(r.window) ? r.window + ' g' : ''), N(r.resid, 1, { sign: true }), Z(r.z, entry), Z(zw(r, 60), entry), Z(zw(r, 120), entry), N(r.half_life, 1),
+        T(REGIME[r.regime] || '—'), T((r.hedge || []).map((x) => x.key.split(':')[1] + ' ' + sgn(x.weight, 2)).join(' · '))]), rows.map((r) => 'pca:' + r.key), '—', this.picked);
+      const wins = p.windows || [];
+      this.boxes.dyn.set(['Pencere', 'İlk', 'Son', 'PC1 açıklanan', 'PC2', 'PC3', 'Seviye-PCA PC1', 'PC2', 'PC3', 'Sinyallerin penceresi'], wins.map((w) => [T(w.window + ' gün', { b: 1 }),
+        T(isoToTr(w.first)), T(isoToTr(w.last))].concat((w.explained || []).slice(0, 3).map((x) => T(pct(x, 1))), (w.lvl_explained || []).slice(0, 3).map((x) => T(pct(x, 1))),
+        [T(w.window === p.window ? '●' : '')])), null, 'Pencere yok');
+      const st = p.stability || [];
+      const pairs = [[60, 120], [120, 250], [60, 250]];
+      this.boxes.stab.set(['Bileşen'].concat(...pairs.map(([a, b]) => [a + '↔' + b + ' |cos|', a + '↔' + b + ' en büyük Δ yük'])), st.map((r) => [T('PC' + r.pc, { b: 1 })]
+        .concat(...pairs.map(([a, b]) => {
+          const x = (r.pairs || []).find((q) => q.a === a && q.b === b) || {};
+          return [N(x.cos, 3, { cls: isNum(x.cos) && x.cos < 0.9 ? 'thru' : '' }), N(x.max_move, 3)];
+        }))), null, 'Karşılaştırılacak pencere yok');
+      const tenors = (p.labels || []).map((l, i) => [l, (p.keys || [])[i]]);
+      this.boxes.loadw.set(['Vade'].concat(...[1, 2, 3].map((c) => wins.map((w) => 'PC' + c + ' ' + w.window + 'g'))), tenors.map(([l, k]) => [T(l, { b: 1 })]
+        .concat(...[0, 1, 2].map((c) => wins.map((w) => N(((w.loadings || {})[k] || [])[c], 3, { sign: true }))))), null, '—');
     }
     const rv = (this.data.rv || {}).rows || [];
     const rvRows = [];
