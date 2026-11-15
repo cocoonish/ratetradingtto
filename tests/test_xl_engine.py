@@ -92,6 +92,24 @@ def test_a_formula_typed_over_later_drops_no_computed_value():
     assert eng.user("ali").value("S!D1") == 2060.0
 
 
+def test_a_formula_typed_over_later_reaches_the_values_of_a_user_who_changed_what_it_reads():
+    """A user who typed over a formula upstream (B1) computed the cells below with masks of their own: the shared
+    mask of C1 ({A1, B1}) is not all in them.  Typed over later, C1 must still reach that user's values (regression:
+    the user's own value typed into C1 left D1 at its old value)."""
+    eng = mini_engine({"A1": 10, "B1": "=A1*2", "C1": "=B1+1", "D1": "=C1*10"})
+    a1, b1, c1 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "B1", "C1"))
+    eng.declare_inputs([a1])
+    eng.declare_inputs([b1])
+    ali = eng.set_user_inputs("ali", {b1: 100.0})
+    assert ali.value("S!D1") == 1010.0 and eng.shared.value("S!D1") == 210.0
+    eng.declare_inputs([c1], group="adhoc")
+    ali = eng.set_user_inputs("ali", {b1: 100.0, c1: 5.0})
+    assert ali.value("S!D1") == 50.0 and eng.shared.value("S!D1") == 210.0
+    eng.set_inputs({c1: 7.0})                               # ... and a shared value of it reaches the others
+    veli = eng.set_user_inputs("veli", {b1: 1.0})
+    assert veli.value("S!D1") == 70.0 and eng.shared.value("S!D1") == 70.0 and ali.value("S!D1") == 50.0
+
+
 def test_a_formula_at_the_end_of_a_long_chain_typed_over_later_drops_nothing():
     """The cell is computed first when it has not been - through the guard that unwinds long chains (300 deep here),
     which must not end in dropping everything."""
@@ -110,15 +128,69 @@ def test_a_formula_at_the_end_of_a_long_chain_typed_over_later_drops_nothing():
     assert eng.shared.value("S!A300") == 301.0 and ali.value("S!A300") == 0.0
 
 
-def test_a_constant_typed_over_later_still_computes_everything_again():
-    """A cell that depends on no input (a constant): nothing tells what read it, so every value is computed again."""
-    eng = chain()
-    a1, a2 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "A2"))
+def test_a_constant_typed_over_later_is_followed_through_the_formulas_that_name_it():
+    """A constant carries no dependency bit, so no mask tells what read it: the formulas that name it - directly, in a
+    range, through a defined name, inside the box A1:INDEX(..) spans, and what those write and their readers - are
+    followed instead, and their values are marked with the new bit.  Nothing is dropped or computed again (it used to
+    drop every value of every user: ~10 s for everybody)."""
+    eng = mini_engine({"A1": 10, "A2": 5, "A3": 7, "A4": 1, "B1": "=A2*2", "B2": "=SUM(A1:A3)", "B3": "=Q+1",
+                       "B4": "=SUM(A1:INDEX(A1:A9,2))", "B5": "=B1+B2+B3+B4", "B6": "=A4*3", "C1": "=TODAY()+B5"},
+                      names={"Q": "`S!R2C1`"})
+    a1, a2, a4 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "A2", "A4"))
     eng.declare_inputs([a1])
-    assert eng.shared.value("S!D1") == 260.0
-    eng.declare_inputs([a2], group="adhoc")
+    shared = eng.shared
+    assert shared.value("S!C1") == 46329.0 + 10 + 22 + 6 + 15
+    assert shared.value("S!B6") == 3.0
+    evals, memo = shared.evals, sum(len(m) for m in shared.memo)
+    eng.declare_inputs([a2], group="adhoc")                        # A2: read by B1 (cell), B2 (range), B3 (name), B4 (box)
+    assert eng.marked == 1 and sum(len(m) for m in shared.memo) >= memo  # nothing dropped
     ali = eng.set_user_inputs("ali", {a2: 0.0})
-    assert ali.value("S!D1") == 210.0 and eng.shared.value("S!D1") == 260.0
+    assert ali.value("S!B1") == 0.0 and ali.value("S!B2") == 17.0 and ali.value("S!B3") == 1.0 and ali.value("S!B4") == 10.0
+    assert ali.value("S!C1") == 46329.0 + 0 + 17 + 1 + 10 and ali.value("S!B6") == 3.0
+    assert shared.value("S!C1") == 46329.0 + 53 and shared.evals == evals          # everybody else: as it was
+    # a group's second cell (the same bit), and a shared change underneath
+    eng.declare_inputs([a4], group="adhoc")
+    eng.set_user_inputs("veli", {a4: 2.0})
+    assert eng.user("veli").value("S!B6") == 6.0 and shared.value("S!B6") == 3.0 and shared.evals == evals
+    eng.set_inputs({a1: 20.0})
+    assert ali.value("S!C1") == 46329.0 + 0 + 27 + 1 + 20 and shared.value("S!C1") == 46329.0 + 10 + 32 + 6 + 25
+
+
+def test_a_constant_an_array_formula_writes_into_still_computes_everything_again():
+    """A cell inside the area a formula spills into is the formula's to fill: typed over later, every value is
+    computed again (the safe way, as before)."""
+    from helpers import mini_book
+    book = mini_book({"A1": 1.0, "A2": 2.0, "A3": 3.0, "C1": "=FILTER(A1:A3,A1:A3>0)", "D1": "=C2*10"}, dynamic=("C1",))
+    eng = book.engine
+    assert eng.shared.value("S!D1") == 20.0
+    c2 = eng.model.cell_ref("S!C2")
+    assert c2[1] in eng.spill_zone[c2[0]]
+    resets = []
+    real = eng.reset
+    eng.reset = lambda: (resets.append(1), real())
+    eng.declare_inputs([c2], group="adhoc")
+    assert eng.marked == 0 and resets == [1]
+    ali = eng.set_user_inputs("ali", {c2: 7.0})
+    assert ali.value("S!D1") == 70.0
+
+
+def test_inputs_declared_before_anything_is_computed_cost_nothing():
+    """The service declares every input it knows of before the first value is computed: nothing is dropped (there
+    is nothing yet) and nothing is computed to find a formula's dependents - a formula gets its own bit, which comes
+    with its value."""
+    eng = chain()
+    a1, b1, f1 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "B1", "F1"))
+    resets = []
+    real = eng.reset
+    eng.reset = lambda: (resets.append(1), real())
+    eng.declare_inputs([a1, b1, f1], group="g")
+    assert resets == [] and eng.shared.evals == 0
+    assert eng.input_mask[b1[0]][b1[1]] != eng.input_mask[a1[0]][a1[1]]            # the formula: a bit of its own
+    assert eng.shared.value("S!D1") == 260.0 and eng.shared.maskd[b1[0]][b1[1]] & eng.input_mask[b1[0]][b1[1]]
+    ali = eng.set_user_inputs("ali", {a1: 1.0})
+    veli = eng.set_user_inputs("veli", {b1: 100.0})
+    assert ali.value("S!D1") == 80.0 and veli.value("S!D1") == 1060.0 and ali.value("S!F1") == "küçük"
+    assert resets == []
 
 
 def test_input_group_shares_one_dependency_bit():
@@ -208,3 +280,163 @@ def test_deep_dependency_chain_does_not_overflow_the_stack():
         cells["A%d" % i] = "=A%d+1" % (i - 1)
     eng = mini_engine(cells)
     assert eng.shared.value("S!A4000") == 4000.0
+
+
+# ---------------------------------------------------------------------------------------------- overflow
+def test_an_overflow_is_num_not_infinity():
+    """Arithmetic past the largest float gives Python's infinity; Excel shows #NUM!.  JSON has no infinity: one such
+    value used to fail the whole page (a 500).  Whatever reads the cell sees #NUM! as well."""
+    from tto.xl.errors import E_NUM
+    eng = mini_engine({"A1": 1e308, "B1": "=A1*10", "B2": "=A1+A1", "B3": "=-A1*10", "B4": "=A1/1E-10",
+                       "B5": "=(A1*10)-(A1*10)", "B6": "=SUM(A1,A1)", "C1": "=ISERROR(B1)", "C2": "=IFERROR(B2,7)",
+                       "D1": "=A1*2/4", "D2": "=A1-1"})
+    calc = eng.shared
+    for ref in ("B1", "B2", "B3", "B4", "B5", "B6"):
+        assert calc.value("S!" + ref) is E_NUM, ref
+    assert calc.value("S!C1") is True and calc.value("S!C2") == 7.0
+    assert calc.value("S!D2") == 1e308                   # large but finite stays a number
+    # (the elements of an array result are stored one by one, through the same place)
+
+
+def test_an_infinity_that_reaches_the_renderer_is_shown_as_num():
+    """A value that never passed through a calculation (a pinned add-in result, a constant of the file) is not cleaned
+    by the engine: the renderer shows it as #NUM! too, and a chart leaves the point out."""
+    from helpers import mini_book
+    from tto.render import Renderer
+    from tto.xl import numfmt
+    from tto.xl.model import COLS, parse_a1
+    book = mini_book({"A1": 1.0, "A2": 2.0})
+    calc = book.engine.shared
+    rc = parse_a1("A2")
+    calc.memo[0][rc] = float("inf")
+    cell = Renderer(book).cell(calc, 0, *divmod(rc, COLS), numfmt.get_locale("tr"))
+    assert cell["t"] == "#NUM!" and cell["k"] == "e" and "v" not in cell
+
+
+# ---------------------------------------------------------------------------------------------- depth
+def _long_chain(n: int):
+    """A chain of ``n`` cells, each reading the one above, with a side branch and a range every 50 cells."""
+    cells = {"A1": 1, "B1": 2}
+    for i in range(2, n + 1):
+        cells["A%d" % i] = "=A%d+B1" % (i - 1) if i % 50 else "=SUM(A%d:A%d)/10" % (i - 3, i - 1)
+    cells["C1"] = "=A%d*2" % n
+    return mini_engine(cells)
+
+
+def test_a_thread_with_a_big_stack_evaluates_long_chains_without_unwinding():
+    """The calculation threads (a 255 MiB stack) evaluate ~1000 nested cells in one go; any other thread unwinds at
+    DEPTH_LIMIT and restarts the chain from its deep end - ~7x slower on the Motor sheet, with the same values."""
+    from tto.xl.engine import DEEP_LIMIT, DEPTH_LIMIT, depth_limit, run_with_big_stack
+    assert depth_limit() == DEPTH_LIMIT                                # this (the main) thread
+    assert run_with_big_stack(depth_limit) == DEEP_LIMIT
+    small = _long_chain(600)
+    b1 = small.model.cell_ref("S!B1")
+    small.declare_inputs([b1])
+    v_small = small.shared.value("S!C1")
+    assert small.shared.restarts > 0                                  # unwound (and restarted) on this thread
+    big = _long_chain(600)
+    big.declare_inputs([big.model.cell_ref("S!B1")])
+    assert run_with_big_stack(big.shared.value, "S!C1") == v_small
+    assert big.shared.restarts == 0                                   # in one go
+    # the same values and dependency masks either way
+    assert big.shared.memo == small.shared.memo
+    assert big.shared.maskd == small.shared.maskd
+    # deeper than DEEP_LIMIT still unwinds (and works) on the big stack
+    deep = _long_chain(3000)
+    assert run_with_big_stack(deep.shared.value, "S!A3000") == deep.shared.value("S!A3000")
+
+
+# ---------------------------------------------------------------------------------------------- invalidation, at random
+def _random_book(rnd):
+    """Inputs A1:A8 (two of them grouped), constants C1:C4, and 40 formulas reading earlier cells and ranges."""
+    cells = {"A%d" % i: float(rnd.randint(1, 9)) for i in range(1, 9)}
+    cells.update({"C%d" % i: float(rnd.randint(1, 5)) for i in range(1, 5)})
+    names = ["A%d" % i for i in range(1, 9)] + ["C%d" % i for i in range(1, 5)]
+    for i in range(1, 41):
+        a, b = rnd.choice(names), rnd.choice(names)
+        kind = rnd.random()
+        if kind < 0.3:
+            f = "=%s+%s*2" % (a, b)
+        elif kind < 0.5:
+            f = "=IF(%s>%s,%s,%s-1)" % (a, b, a, b)
+        elif kind < 0.7 and i > 3:
+            f = "=SUM(B%d:B%d)+%s" % (max(1, i - 3), i - 1, a)
+        elif kind < 0.85:
+            f = "=%s/(1+ABS(%s))" % (a, b)
+        else:
+            f = "=TODAY()-%s" % a
+        cells["B%d" % i] = f
+        names.append("B%d" % i)
+    return cells
+
+
+def _check_groups(calc):
+    for si, md in enumerate(calc.maskd):
+        for rc, k in md.items():
+            assert rc in calc.groups.get(k, {}).get(si, ()), (si, rc)
+
+
+def test_invalidation_matches_a_calculation_from_scratch_at_random():
+    """Shared values, users' own values, values typed over formulas and constants later and the clock, in random order:
+    after every step every user's every cell is what a fresh calculation of the same inputs gives (one that knew every
+    input from the start), and each computed value is listed under its mask (an invalidation tests the masks)."""
+    import random
+    for seed in range(6):
+        rnd = random.Random(seed)
+        cells = _random_book(rnd)
+        eng = mini_engine(cells)
+        ref = eng.model.cell_ref
+        inputs = [ref("S!A%d" % i) for i in range(1, 7)]
+        eng.declare_inputs(inputs[:4])
+        eng.declare_inputs(inputs[4:], group="g")
+        declared = list(inputs)
+        shared_vals = {}
+        users = {"ali": {}, "veli": {}}
+        today = [46329.0]
+        formula_cells = ["B%d" % i for i in range(1, 41)]
+        for step in range(60):
+            op = rnd.random()
+            if op < 0.25:
+                c = rnd.choice(declared)
+                shared_vals[c] = float(rnd.randint(0, 20))
+                eng.set_inputs({c: shared_vals[c]})
+            elif op < 0.35 and shared_vals:
+                c = rnd.choice(list(shared_vals))
+                del shared_vals[c]
+                eng.clear_inputs([c])
+            elif op < 0.65:
+                name = rnd.choice(list(users))
+                ov = dict(users[name])
+                c = rnd.choice(declared)
+                if c in ov and rnd.random() < 0.3:
+                    del ov[c]
+                else:
+                    ov[c] = float(rnd.randint(-5, 30))
+                users[name] = ov
+                eng.set_user_inputs(name, ov)
+            elif op < 0.8:
+                # a value typed over a formula or over a constant, later
+                c = ref("S!" + rnd.choice(formula_cells + ["C1", "C2", "C3", "C4", "A7", "A8"]))
+                if c not in declared:
+                    eng.declare_inputs([c], group="adhoc")
+                    declared.append(c)
+            elif op < 0.9:
+                today[0] += 1
+                eng.clock.today = (lambda t: (lambda: t))(today[0])
+                eng.clock_tick()
+            # read a random part (not everything is computed all the time)
+            for calc in [eng.shared] + [eng.user(n) for n in users]:
+                for a in rnd.sample(formula_cells, 12):
+                    calc.value("S!" + a)
+                _check_groups(calc)
+            # ... and compare with a calculation from scratch
+            fresh = mini_engine(cells, today=today[0])
+            fresh.declare_inputs(inputs[:4])
+            fresh.declare_inputs(inputs[4:], group="g")
+            fresh.declare_inputs([c for c in declared if c not in inputs], group="adhoc")
+            fresh.set_inputs(dict(shared_vals))
+            for name in [None] + list(users):
+                mine = eng.shared if name is None else eng.user(name)
+                theirs = fresh.shared if name is None else fresh.set_user_inputs(name, users[name])
+                for a in formula_cells:
+                    assert mine.value("S!" + a) == theirs.value("S!" + a), (seed, step, name, a)

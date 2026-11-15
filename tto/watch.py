@@ -247,6 +247,7 @@ class Watch(object):
         # of it is a live Bloomberg request, not to be made all day for a page no one looks at
         self._heat_day = ""
         self._shut: Tuple[str, frozenset] = ("", frozenset())      # (day read, the desk's holidays as ISO days)
+        self._private_at: Dict[str, Tuple[float, int]] = {}   # user -> when their own calculation was last read
 
     # ================================================================== the market's days
     def holidays(self) -> frozenset:
@@ -307,14 +308,19 @@ class Watch(object):
 
     class _Reader(object):
         """Cell values of one user's calculation, the bonds of the trading list by ISIN, the VİOP contracts by
-        ticker - read once for a whole round."""
+        ticker - read once for a whole round.
 
-        def __init__(self, watch: "Watch", user: Optional[str]):
+        ``away``: the user has inputs of their own but is not here - what everybody sees is read instead (their own
+        calculation is not made again for a list nobody looks at), and a value their own inputs decide is none."""
+
+        def __init__(self, watch: "Watch", user: Optional[str], away: bool = False):
             from .store import user_key
             self.w = watch
             self.user = user
+            self.away = away
             self.calcs: Dict[str, Any] = {}
             self.uk = user_key(user) if user else None
+            self._omask: Dict[str, int] = {}
             self._rows: Optional[Dict[str, int]] = None
             self._viop: Optional[Dict[str, int]] = None
             self._uni: Optional[Dict[str, int]] = None
@@ -323,8 +329,38 @@ class Watch(object):
         def calc(self, book_id: str = "tto"):
             c = self.calcs.get(book_id)
             if c is None:
-                c = self.calcs[book_id] = self.w.svc._calc(self.uk, self.w._book(book_id))
+                book = self.w._book(book_id)
+                c = self.calcs[book_id] = book.engine.shared if self.away else self.w.svc._calc(self.uk, book)
             return c
+
+        def mine(self, book) -> int:
+            """The dependency bits of the user's own inputs in a workbook (as the store keeps them)."""
+            m = self._omask.get(book.id)
+            if m is None:
+                m = 0
+                for (_, ref) in self.w.svc.store.user_inputs(self.uk, book.id):
+                    try:
+                        si, rc = book.cell(ref)
+                    except (KeyError, ValueError):
+                        continue
+                    m |= book.engine.input_mask[si].get(rc, 0)
+                self._omask[book.id] = m
+            return m
+
+        def away_value(self, fn: Callable[[], Any]) -> Any:
+            """``fn()`` read from what everybody sees - ``None`` when the user's own inputs decide it."""
+            books = list(self.w.svc.books.values())
+            for b in books:
+                b.engine.shared.track = 0
+            try:
+                v = fn()
+                read = [(b, b.engine.shared.track or 0) for b in books]
+            finally:
+                for b in books:
+                    b.engine.shared.track = None
+            if any(m & self.mine(b) for b, m in read if m):
+                return None
+            return v
 
         def get(self, ref: str, book_id: str = "tto") -> Any:
             book = self.w._book(book_id)
@@ -1355,18 +1391,46 @@ class Watch(object):
                     self.days[(user, subj)] = {"open": v, "high": v, "low": v, "last": v, "moved": None, "path": [], "recent": []}
         readers: Dict[str, Watch._Reader] = {}
         values: Dict[Tuple[str, str], Optional[float]] = {}
+        svc = self.svc
+        private = svc._private_users
+        mono = time.monotonic()
+        # a user with inputs of their own has a calculation of their own: made again for their list at most every
+        # private_refresh seconds while they are here, and not at all while they are away
+        later: set = set()
 
         def reader(user: str) -> "Watch._Reader":
             rd = readers.get(user)
             if rd is None:
-                rd = readers[user] = self._Reader(self, user or None)
+                away = bool(user) and user in private and not svc.connected(user)
+                rd = readers[user] = self._Reader(self, user or None, away=away)
             return rd
+
+        now_due: set = set()
+
+        stamp = sum(b.engine.input_changes for b in svc.books.values())     # (shared inputs changed: at once)
+
+        def due(user: str) -> bool:
+            if user in later:
+                return False
+            if user in now_due or not user or user not in private or not svc.connected(user):
+                return True                     # (everybody's calculation - or away: read from it)
+            last = self._private_at.get(user)
+            if last is not None and last[1] == stamp and mono - last[0] < svc.settings.private_refresh:
+                later.add(user)
+                return False
+            self._private_at[user] = (mono, stamp)
+            now_due.add(user)
+            return True
 
         def value(user: str, subject: Dict[str, Any]) -> Optional[float]:
             key = (user, self.key(subject))
             if key not in values:
+                rd = reader(user)
                 try:
-                    values[key] = self.resolve(subject, reader(user))[0]
+                    if rd.away:
+                        values[key] = rd.away_value(lambda: self.resolve(subject, rd)[0])
+                    else:
+                        values[key] = self.resolve(subject, rd)[0]
                 except Exception:  # noqa: BLE001 - a subject that cannot be read is not watched this time
                     values[key] = None
             return values[key]
@@ -1392,6 +1456,8 @@ class Watch(object):
         # moves every second: an hour of it, of every point, is not worth its memory)
         windowed = {(a.get("user") or "", self.key(a["subject"])) for a in alarms if a.get("active") and a.get("mode") == "window"}
         for (user, key), subj in tracked.items():
+            if not due(user):
+                continue
             v = value(user, subj)
             if type(v) is not float:
                 continue
@@ -1427,6 +1493,8 @@ class Watch(object):
             if not a.get("active"):
                 continue
             user = a.get("user") or ""
+            if not due(user):
+                continue
             v = value(user, a["subject"])
             if type(v) is not float:
                 continue

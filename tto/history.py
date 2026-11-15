@@ -856,9 +856,10 @@ class History(object):
         except ValueError as exc:
             from .service import ServiceError
             raise ServiceError(str(exc))
-        res = self.svc.et.call(self._set_calendar, user, wanted, bool(roll))
+        res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, user, wanted, bool(roll))
         self._snap = None
         self.svc.bump()
+        self.svc.warm()                                # every page reads the meetings: made again ahead
         self.kick()
         res["gen"] = self.svc.gen
         return res
@@ -890,7 +891,7 @@ class History(object):
         try:
             if not self.calendar()["passed_in_list"]:
                 return None
-            res = self.svc.et.call(self._set_calendar, self.AUTO_USER, self.meetings(), True)
+            res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, self.AUTO_USER, self.meetings(), True)
         except Exception as exc:  # noqa: BLE001 - the list stays as it is; the settings page says why
             self.state["autoroll_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
             return None
@@ -899,6 +900,7 @@ class History(object):
         self.store.put("mpc.autoroll", {"at": _dt.datetime.now().replace(microsecond=0).isoformat(sep=" "),
                                         "rolled": res["rolled"], "first": res["first"]})
         self.svc.bump()
+        self.svc.warm()
         self.kick()
         return res
 
@@ -978,6 +980,7 @@ class History(object):
                 engine.set_user_inputs(name, svc._overlay(name, book))
             for key in [k for k in svc._overlays if k[1] == BOOK]:
                 svc._overlays.pop(key, None)
+            svc._note_private()
         self.store.put("mpc.archive", sorted(set(archive)))
         rolled = [d for d in old if d not in new and _day(d) < cutoff]
         return {"meetings": len(new), "archive": len(archive), "rolled": rolled, "first": new[0],

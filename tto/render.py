@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .books import Book
 from .xl import numfmt
-from .xl.errors import XlError
+from .xl.errors import E_NUM, XlError
 from .xl.model import COLS, a1, parse_range
 from .xl.tokenizer import index_to_col
 from .xl.values import compare, to_bool
@@ -234,6 +234,8 @@ def calc_value(calc, fn, si: int, r: int, c: int) -> Any:
     from .xl.values import intersect
     calc.depth = 0
     v = fn(calc, si, r, c)
+    if calc.track is not None:
+        calc.track |= calc.cm                       # (what a conditional format read counts as read by the page)
     return intersect(v, r, c)
 
 
@@ -265,6 +267,8 @@ class Renderer(object):
         xf = model.xfs[xf_i] if xf_i < len(model.xfs) else model.xfs[0]
         fmt = xf[0]
         tv = type(v)
+        if tv is float and v - v != 0.0:
+            v, tv = E_NUM, XlError                 # infinity / NaN (not a computed value: those are #NUM! already)
         color = None
         if v is None:
             out["t"] = ""
@@ -561,8 +565,8 @@ class Renderer(object):
                 pl: List[str] = []
                 for i, y in enumerate(ys):
                     x = xvals[i] if i < len(xvals) else None
-                    if type(x) is not float or x != x:
-                        continue
+                    if type(x) is not float or x - x != 0.0:
+                        continue                        # (NaN and infinity have no place on an axis)
                     px.append(x)
                     py.append(plot_value(y))
                     pl.append(labels[i] if i < len(labels) else "")

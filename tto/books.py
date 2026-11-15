@@ -67,7 +67,10 @@ class Book(object):
 
     # ------------------------------------------------------------------ inputs
     def declare(self, ref: str, default_sheet: Optional[str] = None, **kw) -> List[Tuple[int, int]]:
-        cells = self.cells_of(ref, default_sheet)
+        return self.declare_cells(self.cells_of(ref, default_sheet), **kw)
+
+    def declare_cells(self, cells: List[Tuple[int, int]], **kw) -> List[Tuple[int, int]]:
+        """Inputs of one definition (scope, group ...), declared to the engine at once."""
         d = InputDef(**kw)
         fresh = [c for c in cells if c not in self.inputs]
         for c in cells:
@@ -156,6 +159,7 @@ class Book(object):
         dynamic arrays): reserve the area they may cover so readers always wait for the fresh array."""
         model = self.model
         roots: Dict[int, Any] = {}
+        registered = False
         for s in model.sheets:
             for rc, tid in s.fml.items():
                 root = roots.get(tid)
@@ -222,7 +226,10 @@ class Book(object):
                     r += 1
                 if multi:
                     height = max(height, ref[2] - ref[0] + 1)
-                self.engine.register_spill(s.index, rc, height, width)
+                self.engine.register_spill(s.index, rc, height, width, reset=False)
+                registered = True
+        if registered:
+            self.engine.reset()                           # once, not after each of the ~150 areas
 
 
 def _range_shape(node, r0: int, c0: int) -> Optional[Tuple[int, int]]:

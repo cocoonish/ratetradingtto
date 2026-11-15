@@ -5,6 +5,7 @@ from conftest import cell, make_service
 from tto.inputs import parse_date
 from tto.service import ServiceError
 from tto.views import load_views
+from tto.xl.model import COLS, parse_a1
 
 VIEW_IDS = [v["id"] for v in load_views()]
 
@@ -816,3 +817,381 @@ def test_the_motor_page_is_for_administrators_and_two_pages_have_their_desk_name
     assert titles["bulk"] == "Eurobond Kotaları" and titles["tmois"] == "OIS · Nakit Akışı"
     isins = [cell(service, "Bulk Bond!A%d" % r) for r in (3, 4, 5)]
     assert all(i.startswith("XS") for i in isins)                     # international (Euroclear / Clearstream) bonds
+
+
+def test_the_calculation_thread_evaluates_long_chains_in_one_go(service):
+    """The calculation thread runs on a big stack (255 MiB: Windows refuses 256) and evaluates DEEP_LIMIT nested
+    cells before unwinding - the header's Motor chain is no longer unwound and restarted (~7x slower).  Every other
+    thread keeps DEPTH_LIMIT.  (``tools/depth_check.py`` renders every page both ways: identical.)"""
+    from tto.xl.engine import DEEP_LIMIT, DEPTH_LIMIT, depth_limit
+    assert service.et.call(depth_limit) == DEEP_LIMIT and depth_limit() == DEPTH_LIMIT
+    eng = service.books["tto"].engine
+    service.et.call(eng.reset)                           # from cold
+    service.bump()
+    before = eng.shared.restarts
+    assert service.header(None)["items"]
+    assert eng.shared.restarts == before                 # nothing unwound
+
+
+def _constant_read_by(book, cells):
+    """A constant (no input, no formula) that one of ``cells`` reads."""
+    eng = book.engine
+    idx = eng.ref_index()
+    for s in book.model.sheets:
+        si = s.index
+        for rc, v in sorted(s.consts.items()):
+            if type(v) is not float or (si, rc) in book.inputs or rc in s.fml or rc in eng.spill_zone[si] or rc in eng.members[si]:
+                continue
+            if any(h in cells for h in idx.readers(si, rc)):
+                return book.ref(si, rc), v
+    raise AssertionError("no constant found")
+
+
+def _page_cells(book, page):
+    out = set()
+    for p in page["panels"]:
+        d = p.get("data") or {}
+        if d.get("sheet") in book.model.sheet_index and d.get("r"):
+            si = book.model.sheet_index[d["sheet"]]
+            out.update((si, r * COLS + parse_a1(c + "1") % COLS) for r in d["r"] for c in d["c"])
+    return out
+
+
+def test_a_constant_typed_over_on_a_page_drops_nobodys_values(tmp_path):
+    """"Elle değer" over a constant: the values that follow from it (by the formulas that name it) are marked, nothing
+    of anybody's is dropped - it used to drop every value of every user (the next pages ~10 s, for everybody).  The
+    user's pages are what a calculation from scratch gives; everybody else's stay, without being computed again."""
+    svc = make_service(tmp_path)
+    try:
+        u, w = login(svc, "Sabit A"), login(svc, "Sabit B")
+        book = svc.books["tto"]
+        eng = book.engine
+        page_w = svc.view(w, "ois")
+        svc.header(None)
+        ref, v = svc.et.call(_constant_read_by, book, _page_cells(book, page_w))      # (Motor!C4: deep in the chain)
+        memo = sum(len(m) for m in eng.shared.memo)
+        res = svc.set_inputs(u, "tto", [{"ref": ref, "value": repr(v * 3 + 1)}], True, "en")
+        assert res["errors"] == [] and eng.marked >= 1
+        assert sum(len(m) for m in eng.shared.memo) >= memo                       # nothing dropped
+        evals = eng.shared.evals
+        assert svc.view(w, "ois")["panels"] == page_w["panels"]                   # the others: as they were ...
+        assert eng.shared.evals == evals                                           # ... without a calculation
+        mine = svc.view(u, "ois", True)
+        mine_header = svc.header(u)
+        assert mine["panels"] != svc.view(w, "ois", True)["panels"]               # (the value reaches the page)
+        svc.et.call(eng.reset)                                                     # from scratch: the same
+        svc.bump()
+        assert svc.view(u, "ois", True)["panels"] == mine["panels"]
+        assert svc.header(u)["items"] == mine_header["items"]
+    finally:
+        svc.stop()
+
+
+def test_hand_values_and_scenarios_saved_earlier_are_declared_at_the_start(tmp_path):
+    """Every cell a user typed over or keeps in a scenario is declared when the service starts, before anything is
+    computed: nobody's first request after a restart - nor loading a scenario - drops everybody's values any more."""
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Kayıtlı Elle")
+        book = svc.books["tto"]
+        s = book.model.sheets[book.model.sheet_index["MASA"]]
+        consts = [book.ref(s.index, rc) for rc, v in sorted(s.consts.items())
+                  if type(v) is float and (s.index, rc) not in book.inputs and rc not in s.fml][:2]
+        svc.set_inputs(u, "tto", [{"ref": consts[0], "value": "7"}], True, "en")
+        svc.save_scenario(u, "S1")
+        svc.set_inputs(u, "tto", [{"ref": consts[0], "value": ""}, {"ref": consts[1], "value": "8"}], True, "en")
+    finally:
+        svc.stop()
+    again = make_service(tmp_path)
+    try:
+        book = again.books["tto"]
+        eng = book.engine
+        assert all(book.cell(r) in book.inputs for r in consts)               # (declared at the start)
+        resets = []
+        real = eng.reset
+        eng.reset = lambda: (resets.append(1), real())
+        again.header(None)
+        memo = sum(len(m) for m in eng.shared.memo)
+        assert cell(again, consts[1], u) == 8.0 and again.header(u)["items"]
+        again.load_scenario(u, "S1")
+        assert cell(again, consts[0], u) == 7.0
+        assert resets == [] and sum(len(m) for m in eng.shared.memo) >= memo
+    finally:
+        again.stop()
+
+
+# ---------------------------------------------------------------------------------------------- the calculation thread
+def test_the_calculation_thread_takes_what_was_typed_before_the_header_pages_and_background(service):
+    """One calculation thread does everything; what waits goes by priority - inputs typed (and market ticks), then
+    the header strip, then pages, then the background (watch lists, warming up) - first come first served within one."""
+    import threading
+    et = service.et
+    gate = threading.Event()
+    order = []
+    et.submit_at(et.WRITE, gate.wait, 10)
+    futs = [et.submit_at(et.BACKGROUND, order.append, "background"), et.submit_at(et.VIEW, order.append, "page"),
+            et.submit_at(et.HEADER, order.append, "header"), et.submit_at(et.WRITE, order.append, "typed"),
+            et.submit_at(et.VIEW, order.append, "page 2")]
+    gate.set()
+    for f in futs:
+        f.result(timeout=30)
+    assert order == ["typed", "header", "page", "page 2", "background"]
+
+
+def test_the_same_page_asked_again_while_it_is_made_is_made_once(service):
+    """Two tabs of one user (or a refresh on the heels of another) ask for the same page of the same generation:
+    one calculation, both get it."""
+    import threading
+    u = login(service, "Aynı Sayfa")
+    gate = threading.Event()
+    service.et.submit_at(service.et.WRITE, gate.wait, 10)
+    service.bump()
+    made = []
+    real = service._render
+    service._render = lambda *a: (made.append(a[3]), real(*a))[1]
+    try:
+        before = len(service._inflight)
+        f1, f2 = service.view_future(u, "calc"), service.view_future(u, "calc")
+        h1, h2 = service.header_future(u), service.header_future(u)
+        assert len(service._inflight) == before + 2 and not f1.done()      # one page job, one header job
+        gate.set()
+        assert f1.result(timeout=120)["panels"] == f2.result(timeout=120)["panels"]
+        assert h1.result(timeout=120)["items"] == h2.result(timeout=120)["items"]
+        assert made == ["calc"]
+    finally:
+        del service._render
+
+
+# ---------------------------------------------------------------------------------------------- pages kept
+def _made_panels(svc):
+    """Count the panels made (not kept) from now on: (counter, undo)."""
+    made = []
+    real = svc._panel
+    svc._panel = lambda *a: (made.append(a[0].get("id")), real(*a))[1]
+    return made, lambda: svc.__dict__.pop("_panel", None)
+
+
+def test_a_page_is_made_once_for_everybody_without_inputs_and_only_what_changed_again(tmp_path):
+    """Pages are kept per calculation: two users without inputs of their own share one; a new generation in which
+    nothing they read changed makes no panel again (and ``since`` answers "unchanged"); a shared input makes again only
+    the panels that read it - what is kept equals a page made from scratch."""
+    svc = make_service(tmp_path)
+    try:
+        a, b = login(svc, "Pay A"), login(svc, "Pay B")
+        made, undo = _made_panels(svc)
+        try:
+            first = svc.view(a, "forward")
+            n = len(made)
+            assert n > 30 and svc.view(b, "forward")["panels"] == first["panels"] and len(made) == n   # B: kept
+            svc.bump()
+            again = svc.view(b, "forward")
+            assert len(made) == n and again["panels"] == first["panels"] and again["gen"] == svc.gen
+            assert svc.view(a, "forward", since=first["gen"]) == {"id": "forward", "gen": svc.gen, "unchanged": True, "as": "s"}
+            # the RET curve (a shared input): the panels that read it, and only those
+            svc.set_inputs(a, "tto", [{"ref": "Forward!W40", "value": "41,5"}])
+            g = svc.gen
+            made.clear()
+            part = svc.view(b, "forward", since=again["gen"])
+            assert part["partial"] and 0 < len(part["panels"]) < len(first["panels"])
+            assert set(made) >= {p["id"] for p in part["panels"]} and len(made) < n
+            assert svc.view(a, "forward")["panels"] == svc.et.call(svc._view, a, "forward", False, None)["panels"]
+            assert svc.view(a, "forward", since=g) ["unchanged"]
+        finally:
+            undo()
+    finally:
+        svc.stop()
+
+
+def test_only_the_panels_asked_for_are_made_and_sent(service):
+    """The browser asks for the panels of the open tab: only those are made (and sent); another tab's are made when
+    they are asked for."""
+    u = login(service, "Sekme Kullanıcı")
+    page = service.view(u, "forward")
+    tabs = {s["id"]: s["panels"] for s in page["sections"]}
+    service.bump()
+    made, undo = _made_panels(service)
+    try:
+        calc = tabs["calc"] + page["pinned"]
+        part = service.view(u, "forward", panels=calc)
+        assert part["partial"] and [p["id"] for p in part["panels"]] == [i.split(":")[0] for i in page["ids"] if i.split(":")[0] in calc]
+        assert part["ids"] == page["ids"] and part["sections"] == page["sections"]
+        other = service.view(u, "forward", panels=tabs["ret"])
+        assert {p["id"] for p in other["panels"]} == set(tabs["ret"])
+    finally:
+        undo()
+
+
+def test_a_user_who_types_a_value_gets_a_page_of_their_own_at_once(service):
+    """A value typed by a user makes their page their own (``as``: "p") at once - also when the browser asks "since" a
+    generation of the page everybody shares (then it gets the whole page); blanking it gives the shared page back."""
+    u = login(service, "Kendi Sayfası")
+    shared = service.view(u, "forward")
+    assert shared["as"] == "s"
+    service.set_inputs(u, "tto", [{"ref": "Forward!D2", "value": "15.12.2026"}])
+    mine = service.view(u, "forward", since=shared["gen"], as_="s")
+    assert mine["as"] == "p" and len(mine["panels"]) == len(shared["panels"])
+    assert any(c.get("m") == 1 for p in mine["panels"] for row in (p.get("data") or {}).get("rows", []) for c in row)
+    assert service.header(u)["as"] == "p"
+    service.reset_inputs(u, "tto")
+    back = service.view(u, "forward", since=mine["gen"], as_="p")
+    assert back["as"] == "s" and len(back["panels"]) == len(shared["panels"])
+
+
+def test_the_pages_are_told_of_new_generations_at_most_once_a_second(service):
+    """A busy market bumps the generation every 0.3 s and every page asks again when told: they are told at most once
+    a second - of the last generation."""
+    import time
+    told = []
+    service.add_listener(told.append)
+    try:
+        time.sleep(1.1)
+        for _ in range(5):
+            service.bump()
+        assert len(told) == 1
+        time.sleep(1.3)
+        assert len(told) == 2 and told[-1] == service.gen
+    finally:
+        service.remove_listener(told.append)
+
+
+def test_the_header_is_kept_and_answers_unchanged(service):
+    u = login(service, "Şerit")
+    h = service.header(u)
+    service.bump()
+    again = service.header(u, since=h["gen"])
+    assert again["unchanged"] and again["as"] == "s"
+    assert service.header(u)["items"] == h["items"]
+
+
+def test_a_user_with_inputs_of_their_own_follows_the_market_every_few_seconds(tmp_path):
+    """The header (and pages) of a user with inputs of their own is a calculation of its own: a market change makes
+    it again at most every ``private_refresh`` seconds; their own change, or a shared input, at once.  Gone for
+    ``idle_minutes``, their calculation is given back - and made again, with their values, when they return."""
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Özel Şerit")
+        svc.settings.private_refresh = 60.0
+        svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!J2", "value": "0,31"}])
+        h = svc.header(u)
+        eng = svc.books["tto"].engine
+        calc = eng.user(u)
+        evals = calc.evals
+        pinned = [(si, rc) for si in range(eng.nsheets) for rc in eng.pins[si]]
+        svc.et.call(lambda: eng.declare_inputs([c for c in pinned if c[1] not in eng.input_mask[c[0]]]))
+        svc.bump()
+        h = svc.header(u)
+        evals = calc.evals
+        svc.et.call(eng.invalidate, eng.input_mask[pinned[0][0]][pinned[0][1]] | eng.input_mask[pinned[-1][0]][pinned[-1][1]])
+        svc.bump()
+        assert svc.header(u)["items"] == h["items"] and calc.evals == evals     # (kept: the market waits)
+        svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!J2", "value": "0,30"}])  # their own change: at once
+        mine = svc.header(u)
+        assert calc.evals > evals
+        w = login(svc, "Ortak Değiştiren")                                      # a shared input: at once
+        svc.set_inputs(w, "tto", [{"ref": "Forward!W40", "value": "41,5"}])
+        assert svc.header(u)["gen"] == svc.gen != mine["gen"]                    # (checked now, not kept)
+        svc.et.call(eng.invalidate, eng.input_mask[pinned[0][0]][pinned[0][1]])
+        svc.bump()
+        assert svc.header(u)["gen"] != svc.gen                                  # (the market: kept a while)
+        # gone a while: their calculation is given back; back, it is made again with their value
+        svc._seen[u] = -1e9
+        svc.settings.idle_minutes = 0.001
+        assert svc.et.call(svc._sweep_idle) == [u] and u not in eng.users
+        assert cell(svc, "OIS_MAIN!J2", u) == 0.30 and u in eng.users
+    finally:
+        svc.stop()
+
+
+def test_the_header_and_every_page_are_made_ahead_at_the_lowest_priority(tmp_path):
+    """After the start (the day's turn, a new meeting calendar) the header and every page are made ahead for
+    everybody without inputs of their own - one page at a time at the lowest priority (a request goes first): the
+    first trader of the morning gets them made."""
+    import threading
+    import time as _time
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Sabahın İlki")
+        gate = threading.Event()
+        svc.et.submit_at(svc.et.WRITE, gate.wait, 30)
+        assert svc.warm() and not svc.warm()                     # (one round at a time)
+        header = svc.header_future(u)
+        gate.set()
+        assert header.result(timeout=120)["items"] and svc.warmed == 0       # the request went first
+        t0 = _time.time()
+        while svc.warmed < 1 and _time.time() - t0 < 300:
+            _time.sleep(0.2)
+        assert svc.warmed == 1
+        made = []
+        real = svc._render
+        svc._render = lambda *a: (made.append(a[3]), real(*a))[1]
+        try:
+            for v in svc.views:
+                assert svc.view(u, v["id"])["panels"]
+        finally:
+            del svc._render
+        assert made == []                                        # every page was made already
+    finally:
+        svc.stop()
+
+
+def test_the_days_bloomberg_count_and_answers_are_kept_for_a_restart(tmp_path):
+    """Live: every 30 s (and when the dashboard stops) the day's data points used and the reference answers got are
+    kept in the database; a provider started the same day is given both (a restart does not spend the daily limit
+    again).  Another day's are not given."""
+    import datetime as _d
+    svc = make_service(tmp_path)
+    try:
+        today = _d.date.today().isoformat()
+        answers = [(("BDP", "TRY Curncy", "SETTLE_DT", ()), 46330.0, 1000.0)]
+
+        class Stub(object):
+            def __init__(self):
+                self.got, self.carried = [], None
+
+            def status(self):
+                return {"hits_today": 1234}
+
+            def answers(self, since=0.0):
+                return [a for a in answers if a[2] > since]
+
+            def preload(self, kept):
+                self.got = list(kept)
+
+            def carry_hits(self, n):
+                self.carried = n
+
+        svc.provider = Stub()
+        svc._keep_bloomberg()
+        assert svc.store.get("bbg.hits") == {"day": today, "hits": 1234}
+        assert [(k, v) for k, v, _ in svc.store.bbg_answers(today)] == [(answers[0][0], 46330.0)]
+        fresh = Stub()
+        svc._kept_bloomberg(fresh)
+        assert fresh.carried == 1234 and [(k, v) for k, v, _ in fresh.got] == [(answers[0][0], 46330.0)]
+        svc.store.put("bbg.hits", {"day": "2000-01-01", "hits": 99})
+        old = Stub()
+        svc._kept_bloomberg(old)
+        assert old.carried is None                               # another day's count: not carried
+    finally:
+        svc.stop()
+
+
+def test_a_shared_change_reaches_another_tabs_panel_after_one_tab_was_refreshed(tmp_path):
+    """Regression (browser test, the RET editor): a user with inputs of their own and the market throttle; a shared
+    input changes (the RET curve), the open tab is refreshed, then another tab is opened and asked "since" the
+    page was loaded - its RET table changed and must come, not "unchanged"."""
+    svc = make_service(tmp_path)
+    try:
+        u, w = login(svc, "Sekmeler A"), login(svc, "Sekmeler B")
+        svc.settings.private_refresh = 60.0
+        svc.set_inputs(u, "tto", [{"ref": "Forward!D2", "value": "15.12.2026"}])            # (a calculation of her own)
+        page = svc.view(u, "forward")
+        tabs = {s["id"]: s["panels"] for s in page["sections"]}
+        pinned = page["pinned"]
+        svc.set_inputs(w, "tto", [{"ref": "Forward!W38", "value": "34,00"}])                # the RET curve: shared
+        svc.view(u, "forward", since=page["gen"], panels=tabs["fwd"] + pinned, as_="p")
+        ret = svc.view(u, "forward", since=page["gen"], panels=tabs["ret"] + pinned, as_="p")
+        assert not ret.get("unchanged")
+        b19 = next(p for p in ret["panels"] if p["id"] == "B19")["data"]
+        assert b19["rows"][b19["r"].index(38)][b19["c"].index("W")]["t"] == "34,00%"
+    finally:
+        svc.stop()

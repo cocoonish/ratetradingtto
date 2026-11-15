@@ -73,12 +73,14 @@ export class ViewPage {
     this.build(data);
   }
 
-  fetch() {
-    return api.get('/api/view/' + encodeURIComponent(this.id), this.showAll ? { all: 1 } : null);
+  /** The page: all of it, or (``extra``: {since, panels}) the panels asked for that changed since a generation. */
+  fetch(extra) {
+    return api.get('/api/view/' + encodeURIComponent(this.id), Object.assign(this.showAll ? { all: 1 } : {}, extra || {}));
   }
 
   signature(data) {
-    return data.panels.map((p) => p.id + ':' + p.type).join('|') + '#' + (data.sections || []).map((s) => s.id + '=' + s.panels.join(',')).join('|')
+    const ids = data.ids || data.panels.map((p) => p.id + ':' + p.type);
+    return ids.join('|') + '#' + (data.sections || []).map((s) => s.id + '=' + s.panels.join(',')).join('|')
       + '#' + (data.pinned || []).join(',');
   }
 
@@ -88,11 +90,44 @@ export class ViewPage {
     return (cur.grid && cur.grid.data) || cur.data || p.data;
   }
 
+  /**
+   * Bring the panels on the page up to date: only those in view (the open tab, the pinned ones, what the search
+   * shows) are asked for, and of them only what changed since they were last drawn comes back.  Another tab's
+   * panels are brought up to date when it is opened.
+   */
   async refresh() {
-    const data = await this.fetch();
+    const ids = (this.placed || []).filter((id) => this.items.has(id));
+    if (!ids.length || this.dead) return;
+    const since = Math.min(...ids.map((id) => this.items.get(id).gen || 0));
+    const data = await this.fetch({ since, panels: ids.join(','), as: this.as });
     if (this.dead) return;
-    if (this.signature(data) !== this.order) { this.build(data); return; }
-    for (const p of data.panels) {
+    // (the generations are those of the page the server says this is: everybody's, or the user's own)
+    const seen = (held) => {
+      this.as = data.as;
+      for (const id of ids) {
+        const it = this.items.get(id);
+        if (!it || (held && held.has(id))) continue;     // (held back: asked for again next time)
+        it.gen = Math.max(it.gen || 0, data.gen || 0);
+        it.el.classList.remove('stale');                  // (as current as the server has it)
+      }
+    };
+    if (data.unchanged) { seen(); return; }
+    if (this.signature(data) !== this.order) { this.build(await this.fetch()); return; }    // the page changed shape
+    const held = this.apply(data.panels);
+    seen(held);
+    this.showOverrides();
+  }
+
+  /** Panels that are not up to date with the latest generation, among those on the page now. */
+  stale() {
+    const gen = this.ctx.gen ? this.ctx.gen() : 0;
+    return (this.placed || []).some((id) => { const it = this.items.get(id); return it && (it.gen || 0) < gen; });
+  }
+
+  /** New data of panels, drawn in place; returns the ids of those held back (a cell of theirs is being typed into). */
+  apply(panels) {
+    const held = new Set();
+    for (const p of panels) {
       const it = this.items.get(p.id);
       if (!it) continue;
       if (typeof p.title === 'string' && p.title !== it.title && it.titleEl) {
@@ -107,12 +142,12 @@ export class ViewPage {
         if (it.chart && p.data) it.chart.update(p.data);
         if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
       } else if (it.grid && p.data) {
+        if (it.grid.update(p.data, true) === false) { held.add(p.id); continue; }
         it.data = p.data;
-        it.grid.update(p.data, true);
         if (it.grow) it.grow();
       }
     }
-    this.showOverrides(data.panels);
+    return held;
   }
 
   destroy() {
@@ -127,6 +162,8 @@ export class ViewPage {
     this.book = data.book;
     this.order = this.signature(data);
     this.ids = data.panels.map((p) => p.id);
+    this.gen = data.gen || 0;
+    this.as = data.as;
     this.sections = data.sections || [];
     this.pinned = data.pinned || [];
     if (this.sections.length && this.tab !== ALL && !this.sections.some((s) => s.id === this.tab)) this.tab = this.sections[0].id;
@@ -201,7 +238,7 @@ export class ViewPage {
     this.host.appendChild(this.secNote);
     this.host.appendChild(this.wrap);
     this.layout();
-    this.showOverrides(data.panels);
+    this.showOverrides();
   }
 
   tabButton(id, title, count) {
@@ -224,10 +261,12 @@ export class ViewPage {
     const low = (t) => String(t || '').toLocaleLowerCase('tr').replace(/ı/g, 'i');       // "interest" finds "Interest"
     const q = low(this.filter.trim());
     const hit = (it) => !q || low(it.title).includes(q);
+    const placed = [];
     const place = (host, id) => {
       const it = this.items.get(id);
       if (!it) return false;
       host.appendChild(it.el);
+      placed.push(id);
       if (it.stale && it.chart && it.data) { it.stale = false; it.chart.update(it.data); }
       return true;
     };
@@ -257,6 +296,14 @@ export class ViewPage {
     this.tabBar.classList.toggle('searching', !!q);
     this.secNote.textContent = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
     this.secNote.classList.toggle('hidden', !this.secNote.textContent);
+    this.placed = placed;
+    // a tab whose panels were not brought up to date while another was open: now - shown dimmed until then, so that
+    // nobody reads a number from before the change
+    if (this.stale() && this.ctx.refreshPage) {
+      const gen = this.ctx.gen();
+      for (const id of placed) { const it = this.items.get(id); if (it && (it.gen || 0) < gen) it.el.classList.add('stale'); }
+      this.ctx.refreshPage();
+    }
   }
 
   toggleAll() {
@@ -303,8 +350,9 @@ export class ViewPage {
     this.layout();
   }
 
-  showOverrides(panels) {
-    this.overRefs = overridden(panels);
+  showOverrides() {
+    // (every panel's data as it is now: the ones refreshed and the ones of other tabs)
+    this.overRefs = overridden([...this.items.values()].map((it) => ({ data: (it.grid && it.grid.data) || it.data })));
     const n = this.overRefs.length;
     this.overChip.classList.toggle('hidden', !n);
     this.overChip.textContent = n ? n + ' formül yerine elle değer · formüle dön' : '';
@@ -369,7 +417,7 @@ export class ViewPage {
     const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
       + (p.hidden ? ' aux' : '') + (collapsed ? ' collapsed' : '') });
     el.dataset.panel = p.id;
-    const it = { el, title: p.title || '', data: p.data };
+    const it = { el, title: p.title || '', data: p.data, gen: this.gen || 0 };
     const body = h('div', { class: 'body' });
     const tools = h('div', { class: 'tools' });
     const title = h('h2', { title: p.title || '' }, p.title || '');

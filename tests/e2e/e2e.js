@@ -55,11 +55,19 @@ async function tab(page, id) {
 
 const panelsOnPage = (page) => page.evaluate(() => [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel));
 
+/** A tab opened to find a cell may show its panels from before the last change for a moment (dimmed): wait. */
+async function fresh(page) {
+  await page.waitForFunction(() => !document.querySelector('#content .panel.stale'), null, { timeout: 30000 });
+}
+
 async function cellText(page, ref) {
+  const found = await page.evaluate((r) => !!window.tto.findCell(r), ref);
+  if (found) await fresh(page);
   return page.evaluate((r) => { const td = window.tto.findCell(r); return td ? td.textContent : null; }, ref);
 }
 
 async function cellHandle(page, ref) {
+  if (await page.evaluate((r) => !!window.tto.findCell(r), ref)) await fresh(page);      // (its tab may have opened)
   const h = await page.evaluateHandle((r) => window.tto.findCell(r), ref);
   const el = h.asElement();
   if (!el) throw new Error('cell not on screen: ' + ref);
@@ -2061,6 +2069,36 @@ async function shot(page, name) {
     await page.waitForFunction(() => !document.querySelector('#agenda-list .agenda-day.late'), null, { timeout: 15000 });
     check('ticked off by another trader: no longer late, on every screen', true);
     await ctxD.close();
+
+    // ------------------------------------------------------------------ one live stream per browser, however many tabs
+    console.log('many tabs');
+    await open(page, 'forward');
+    const streamsBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json.streams;
+    const tabs = [];
+    for (let i = 0; i < 7; i++) {
+      const p = await ctxA.newPage();
+      await p.goto(BASE + '/#/calc');
+      await p.waitForFunction(() => window.tto && window.tto.state.pageId === 'calc' && window.tto.state.page && window.tto.state.page.ready,
+        null, { timeout: 90000 });
+      tabs.push(p);
+    }
+    check('8 tabs of one browser: every one opens its page (the 7th is not left waiting for a connection)', tabs.length === 7);
+    await page.waitForTimeout(2500);
+    const streamsDuring = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json.streams;
+    check('... with one live stream between them, not one each', streamsDuring === streamsBefore, { streamsBefore, streamsDuring });
+    const asked = [];
+    page.on('request', (r) => { if (r.url().includes('/api/view/forward')) asked.push(r.url()); });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'Forward!D2', value: '17.12.2026' }] });
+    const genNow = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json.gen;
+    for (const p of [page].concat(tabs)) {
+      await p.waitForFunction((g) => window.tto.state.gen >= g, genNow, { timeout: 15000 });
+    }
+    check('... a change reaches every tab', true);
+    await page.waitForFunction(() => !window.tto.state.refreshing, null, { timeout: 15000 });
+    check('a refresh asks only for the open tab\'s panels, and only what changed since',
+      asked.length > 0 && asked.every((u) => u.includes('since=') && u.includes('panels=')), asked.slice(0, 3));
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!D2'] });
+    for (const p of tabs) await p.close();
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

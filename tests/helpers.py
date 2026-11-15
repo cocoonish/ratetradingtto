@@ -148,16 +148,18 @@ def complete_snapshot(replay_service) -> Dict[Tuple, Any]:
 
 
 
-def mini_engine(cells: Dict[str, Any], today: float = 46329.0, array: Tuple[str, ...] = ()):
+def mini_engine(cells: Dict[str, Any], today: float = 46329.0, array: Tuple[str, ...] = (), names: Dict[str, str] = None):
     """A tiny one-sheet workbook for unit tests: ``{"A1": 5, "B1": "=A1*2"}`` -> ``Engine``.
 
-    Addresses listed in ``array`` are entered as legacy array formulas (Ctrl+Shift+Enter) of one cell.
+    Addresses listed in ``array`` are entered as legacy array formulas (Ctrl+Shift+Enter) of one cell; ``names``:
+    defined names as templates (``{"Q": "`S!R2C1`"}``).
     """
     from tto.xl.engine import Clock, Engine
     from tto.xl.model import COLS, Model, parse_a1
     from tto.xl.tokenizer import to_template
 
     model = Model()
+    model.names = dict(names or {})
     sh = model.add_sheet("S")
     model.xfs = [["General", False, None, None, None, False]]
     model.numfmts = ["General"]

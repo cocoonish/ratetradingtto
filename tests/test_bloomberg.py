@@ -823,3 +823,45 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
     finally:
         direct.stop()
         live.stop()
+
+
+def test_a_restart_the_same_day_does_not_ask_bloomberg_again_what_it_answered(server):
+    """The day's reference answers and the data points used are kept (the service keeps them in its database): a
+    provider started again the same day takes the answers as given - no request - and goes on counting from where the
+    earlier one stopped.  Quotes are not kept; an answer is asked again when it is due."""
+    keys = [bdp_key("TRT150328T24 ISIN", "MATURITY"), bdp_key("TRY Curncy", "SETTLE_DT"), bdp_key("USDTRY Curncy", "BID")]
+    first = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    first.start()
+    try:
+        for k in keys:
+            first.get_bdp(k)
+        settle(first)
+        values = {k: first.get_bdp(k) for k in keys}
+        kept = first.answers()
+        used = first.status()["hits_today"]
+    finally:
+        first.stop()
+    assert {k for k, _, _ in kept} == set(keys[:2]) and used >= 2           # (the quote is not kept)
+    asked = len(server.requests)
+    again = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    again.preload(kept)
+    again.carry_hits(used)
+    again.start()
+    try:
+        assert again.get_bdp(keys[0]) == values[keys[0]] and again.get_bdp(keys[1]) == values[keys[1]]
+        again.get_bdp(keys[2])
+        settle(again)
+        fields = [f for r in server.requests[asked:] for f in r["fields"]]
+        assert "MATURITY" not in fields and "SETTLE_DT" not in fields and "BID" in fields
+        assert again.status()["hits_today"] > used                          # counted on (the quote)
+        assert {k for k, _, _ in again.answers()} == set(keys[:2])          # kept again, for a next restart
+        # due again: asked again (a maturity is refreshed every few hours)
+        with again._lock:
+            again._items[keys[0]].fetched -= bloomberg.REFRESH_STATIC + 1
+        again._wake.set()
+        t0 = time.time()
+        while "MATURITY" not in [f for r in server.requests[asked:] for f in r["fields"]] and time.time() - t0 < 10:
+            time.sleep(0.05)
+        assert "MATURITY" in [f for r in server.requests[asked:] for f in r["fields"]]
+    finally:
+        again.stop()

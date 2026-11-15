@@ -63,6 +63,12 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--backup-copy-dir", default=None,
                    help="her gece yedeğin ikinci kopyasının klasörü - başka bir sürücü (kurulu dashboard'da varsayılan "
                         "D:\\tto-yedek; \"\" = ikinci kopya yok; TTO_BACKUP_COPY_DIR ile de verilir)")
+    p.add_argument("--private-refresh", type=float, default=5.0,
+                   help="kendi girdisi olan kullanıcının şerit, sayfa ve izleme listesi piyasaya en çok bu sıklıkla "
+                        "yeniden hesaplanır (sn; kendi değişikliği hemen görünür; 0 = her seferinde)")
+    p.add_argument("--idle-minutes", type=float, default=30.0,
+                   help="bu kadar dakikadır görünmeyen kullanıcının kendi hesaplaması bırakılır, dönünce yeniden kurulur "
+                        "(0 = hiç bırakılmaz)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -104,7 +110,8 @@ def settings_from(args) -> Settings:
                     history=not args.no_history, history_refresh=args.history_refresh,
                     bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue,
                     log_dir=args.log_dir, bbg_silent_restart=args.bbg_silent_restart, backup_dir=args.backup_dir,
-                    backup_time=args.backup_time, backup_copy_dir=args.backup_copy_dir)
+                    backup_time=args.backup_time, backup_copy_dir=args.backup_copy_dir,
+                    private_refresh=args.private_refresh, idle_minutes=args.idle_minutes)
 
 
 def cmd_run(args) -> int:

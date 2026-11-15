@@ -813,3 +813,42 @@ def test_system_alarms_of_the_desk(svc, monkeypatch):
     rows = {r["kind"]: r for r in svc.watch_view(user)["desk"]["system"]}
     assert list(rows) == ["feed", "tlref", "db"] and rows["feed"]["state"] == "off" and rows["db"]["mute"]
     assert rows["tlref"]["threshold"] == "saat 14:00 itibarıyla gelmemişse"
+
+
+def test_a_user_away_is_read_from_what_everybody_sees_and_one_here_at_most_every_few_seconds(svc):
+    """A user with inputs of their own has a calculation of their own.  While they are here (a request or a live
+    stream lately) their list is read from it - for a market change at most every ``private_refresh`` seconds, for
+    their own change at once.  While they are away it is read from what everybody sees (their own calculation is not
+    made again for a list nobody looks at): a subject their own inputs decide is not read then."""
+    u = svc.login("Uzaktaki")["user"]
+    svc.watch_add(u, "tto", "OIS_MAIN!B14", "1Y")                       # their own value below
+    svc.watch_add(u, "tto", "DİBS RV!T8", hint="15.03.28 · Getiri")     # nothing of theirs
+    svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!B14", "value": "36,05%"}], allow_adhoc=True)
+    tick(svc)
+    items = {i["label"]: i for i in svc.watch_view(u)["items"]}
+    assert items["1Y"]["now"] == "36,05%"
+    # a market change right after: their own calculation is not read again yet; their own change is
+    svc.settings.private_refresh = 60.0
+    calc = svc.books["tto"].engine.user(u)
+    evals = calc.evals
+    svc.et.call(svc.books["tto"].engine.invalidate, 1 << 60)            # (a tick of nothing)
+    tick(svc)
+    assert calc.evals == evals
+    svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!B14", "value": "36,15%"}], allow_adhoc=True)
+    tick(svc)
+    assert {i["label"]: i for i in svc.watch_view(u)["items"]}["1Y"]["now"] == "36,15%"
+    # away: given back after a while; read from everybody's calculation, without theirs
+    svc._seen[u] = -1e9
+    svc.settings.idle_minutes = 0.001
+    assert u in svc.et.call(svc._sweep_idle) and u not in svc.books["tto"].engine.users
+    key = (u, svc.watch.key(items["1Y"]["subject"]))
+    svc.watch.days[key]["last"] = 1.0                                   # (as if read long ago)
+    tick(svc)
+    assert u not in svc.books["tto"].engine.users                        # (not made again for the list)
+    assert svc.watch.days[key]["last"] == 1.0                            # their own value decides it: not read
+    other = (u, svc.watch.key(items["15.03.28 getiri"]["subject"]))
+    assert svc.watch.days[other]["last"] == pytest.approx(39.70, abs=0.01)    # nothing of theirs: read
+    # back: their own calculation is made again, with their value
+    assert cell(svc, "OIS_MAIN!B14", user=u) == pytest.approx(0.3615)
+    view = {i["label"]: i for i in svc.watch_view(u)["items"]}
+    assert view["1Y"]["now"] == "36,15%" and view["15.03.28 getiri"]["now"] == "39,70%"

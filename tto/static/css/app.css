@@ -231,6 +231,8 @@ a { color: var(--accent-ink); }
 .shortcuts .chip:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
 .panel .err { color: var(--neg); padding: 10px 12px; }
 .panel.aux { border-style: dashed; }
+/* a panel of a tab that was not in view while something changed: its numbers are being brought up to date */
+.panel.stale .body { opacity: .45; transition: opacity .12s; }
 .panel.notes table.grid td { white-space: normal; max-width: min(900px, 80vw); height: auto; line-height: 1.45; padding: 6px 12px; }
 .panel .note { color: var(--ink-3); padding: 6px 12px 8px; font-size: 11.5px; border-top: 1px solid var(--line);
   width: 0; min-width: 100%; box-sizing: border-box; }      /* a long note wraps to the table instead of widening the panel */

@@ -12,6 +12,7 @@ import datetime as _dt
 import json
 import os
 import pathlib
+import pickle
 import shutil
 import sqlite3
 import threading
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS mpc_values (
 CREATE INDEX IF NOT EXISTS mpc_values_meeting ON mpc_values (meeting, day);
 CREATE TABLE IF NOT EXISTS watch_closes (
     subject TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (subject, day)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS bbg_answers (key BLOB PRIMARY KEY, day TEXT NOT NULL, fetched REAL NOT NULL, value BLOB);
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY, user TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, ip TEXT);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user);
@@ -144,6 +146,10 @@ class Store(object):
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self.path = path
         self._lock = threading.RLock()
+        # what the history pages and the settings page poll, kept until the history is written to (a GROUP BY over
+        # every close each time made the status poll a full scan)
+        self._bounds: Optional[Dict[str, Tuple[str, str, int]]] = None
+        self._mpc_all: Optional[Dict[str, Dict[str, Any]]] = None
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         with self._lock:
@@ -356,6 +362,20 @@ class Store(object):
         else:
             rows = self._q("SELECT book, cell, value FROM user_inputs WHERE user=? AND book=?", (user, book))
         return {(r["book"], r["cell"]): json.loads(r["value"]) for r in rows}
+
+    def users_with_inputs(self) -> List[str]:
+        """The users who keep personal inputs (their pages are their own)."""
+        return [r["user"] for r in self._q("SELECT DISTINCT user FROM user_inputs")]
+
+    def saved_cells(self) -> List[Tuple[str, str]]:
+        """Every (book, cell) any user keeps a value of: personal inputs and the cells of saved scenarios."""
+        out = {(r["book"], r["cell"]) for r in self._q("SELECT DISTINCT book, cell FROM user_inputs")}
+        for r in self._q("SELECT payload FROM scenarios"):
+            try:
+                out.update((b, c) for b, c, _ in json.loads(r["payload"]))
+            except (TypeError, ValueError):
+                continue
+        return sorted(out)
 
     def set_user_inputs(self, user: str, book: str, values: Dict[str, Any]) -> None:
         ts = now_iso()
@@ -697,6 +717,7 @@ class Store(object):
                 (series, min(d for d, _ in rows), max(d for d, _ in rows))).fetchall()}
             fresh = [(series, d, float(v)) for d, v in rows if have.get(d) != float(v)]
             if fresh:
+                self._bounds = None
                 self._db.execute("BEGIN")
                 try:
                     self._db.executemany("INSERT INTO hist_values (series, day, value) VALUES (?,?,?) "
@@ -724,12 +745,16 @@ class Store(object):
         return out
 
     def hist_bounds(self) -> Dict[str, Tuple[str, str, int]]:
-        """``{series: (first day, last day, count)}``."""
-        return {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
-            "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+        """``{series: (first day, last day, count)}`` (kept until the closes change)."""
+        with self._lock:
+            if self._bounds is None:
+                self._bounds = {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
+                    "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+            return dict(self._bounds)
 
     def hist_delete(self, series: Optional[str] = None) -> None:
         with self._lock:
+            self._bounds = None
             if series is None:
                 self._db.execute("DELETE FROM hist_values")
             else:
@@ -739,6 +764,7 @@ class Store(object):
     def mpc_save(self, day: str, basis: str, meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
         """Replace one day: ``rows`` = ``[{"meeting", "step", "level", "cum", "sigma", "front"}, ...]``."""
         with self._lock:
+            self._mpc_all = None
             self._db.execute("BEGIN")
             try:
                 self._db.execute("DELETE FROM mpc_values WHERE day=?", (day,))
@@ -762,6 +788,11 @@ class Store(object):
                 raise
 
     def mpc_days(self, start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        if start is None and end is None:
+            with self._lock:                         # every day: kept until a day is computed again
+                if self._mpc_all is None:
+                    self._mpc_all = {r["day"]: dict(r) for r in self._q("SELECT * FROM mpc_days ORDER BY day")}
+                return {k: dict(v) for k, v in self._mpc_all.items()}
         rows = self._q("SELECT * FROM mpc_days WHERE day>=? AND day<=? ORDER BY day", (start or "0000", end or "9999"))
         return {r["day"]: dict(r) for r in rows}
 
@@ -778,12 +809,39 @@ class Store(object):
 
     def mpc_delete(self, days: Optional[List[str]] = None) -> None:
         with self._lock:
+            self._mpc_all = None
             if days is None:
                 self._db.execute("DELETE FROM mpc_values")
                 self._db.execute("DELETE FROM mpc_days")
             else:
                 self._db.executemany("DELETE FROM mpc_values WHERE day=?", [(d,) for d in days])
                 self._db.executemany("DELETE FROM mpc_days WHERE day=?", [(d,) for d in days])
+
+    # ------------------------------------------------------------------ Bloomberg's answers of the day
+    def bbg_answers(self, day: str) -> List[Tuple[Tuple, Any, float]]:
+        """The reference answers Bloomberg gave on ``day`` (kept for a restart): ``[(key, value, fetched), ...]``."""
+        out = []
+        for r in self._q("SELECT key, value, fetched FROM bbg_answers WHERE day=?", (day,)):
+            try:
+                out.append((pickle.loads(r["key"]), pickle.loads(r["value"]), float(r["fetched"])))
+            except Exception:  # noqa: BLE001 - an answer that cannot be read is asked again
+                continue
+        return out
+
+    def bbg_keep(self, day: str, answers) -> int:
+        """Keep these answers of ``day`` (those of another day go)."""
+        rows = [(sqlite3.Binary(pickle.dumps(k, protocol=4)), day, float(t), sqlite3.Binary(pickle.dumps(v, protocol=4)))
+                for k, v, t in answers]
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.execute("DELETE FROM bbg_answers WHERE day<>?", (day,))
+                self._db.executemany("INSERT OR REPLACE INTO bbg_answers (key, day, fetched, value) VALUES (?,?,?,?)", rows)
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return len(rows)
 
     # ------------------------------------------------------------------ the closes the watch keeps itself
     def close_upsert(self, rows: List[Tuple[str, str, float]]) -> int:

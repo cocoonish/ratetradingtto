@@ -466,3 +466,41 @@ def test_restoring_from_either_folder(tmp_path, capsys):
     assert back.user_exists("ali") and not back.user_exists("veli")
     back.close()
     assert main(["yedekten-don", "tto-2026-01-01.db"] + common) == 2                     # in neither
+
+
+def test_what_the_history_polls_is_kept_until_the_history_changes(store, monkeypatch):
+    """The settings page polls the history's status: the first and last day and the count of every series (a GROUP BY
+    over every close) and the computed MPC days are kept until closes or days are written, not read each time."""
+    store.hist_upsert("A Index|PX_LAST", [("2026-01-02", 1.0), ("2026-01-05", 2.0)])
+    store.mpc_save("2026-01-05", "close", {"status": "OK"}, [])
+    asked = []
+    real = store._q
+    monkeypatch.setattr(store, "_q", lambda sql, args=(): (asked.append(sql.split()[0:3]), real(sql, args))[1])
+    for _ in range(3):
+        assert store.hist_bounds() == {"A Index|PX_LAST": ("2026-01-02", "2026-01-05", 2)}
+        assert list(store.mpc_days()) == ["2026-01-05"]
+    assert len(asked) == 2                                     # once each
+    store.hist_upsert("A Index|PX_LAST", [("2026-01-06", 3.0)])
+    store.mpc_save("2026-01-06", "close", {"status": "OK"}, [])
+    assert store.hist_bounds()["A Index|PX_LAST"] == ("2026-01-02", "2026-01-06", 3)
+    assert list(store.mpc_days()) == ["2026-01-05", "2026-01-06"]
+    store.hist_delete("A Index|PX_LAST")
+    store.mpc_delete()
+    assert store.hist_bounds() == {} and store.mpc_days() == {}
+    bounds = store.hist_bounds()
+    bounds["x"] = 1                                            # (a copy: what is kept is not changed by a caller)
+    assert store.hist_bounds() == {}
+
+
+def test_bloombergs_answers_of_the_day_are_kept_and_the_days_before_go(store):
+    from tto.xl.values import XlArray
+    key = ("BDS", "TRT150328T24 ISIN", "DES_CASH_FLOW", ())
+    rows = XlArray([[46463.0, 184000.0], [46827.0, 1184000.0]])
+    store.bbg_keep("2026-11-14", [(("BDP", "X", "NAME", ()), "eski", 1.0)])
+    assert store.bbg_keep("2026-11-15", [(key, rows, 1234.5), (("BDP", "TRY Curncy", "SETTLE_DT", ()), 46330.0, 1200.0)]) == 2
+    got = {k: (v, t) for k, v, t in store.bbg_answers("2026-11-15")}
+    assert got[key][0].rows == rows.rows and got[key][1] == 1234.5
+    assert got[("BDP", "TRY Curncy", "SETTLE_DT", ())] == (46330.0, 1200.0)
+    assert store.bbg_answers("2026-11-14") == []                        # another day's: gone
+    store.bbg_keep("2026-11-15", [(key, rows, 2000.0)])                  # the same key again: replaced
+    assert {k: t for k, _, t in store.bbg_answers("2026-11-15")}[key] == 2000.0

@@ -69,6 +69,10 @@ REFRESH_STATIC = 6 * 3600.0
 REFRESH_DAILY = 30 * 60.0
 REFRESH_DERIVED = 60.0
 REFRESH_HISTORY = 15 * 60.0
+#: reference answers asked again this seldom (seconds) or less are kept for a restart of the same day
+#: (:meth:`BloombergProvider.answers` / :meth:`~BloombergProvider.preload`): a restart does not spend the daily
+#: data limit on them again; quotes and what changes by the minute are not kept
+KEEP_REFRESH = REFRESH_HISTORY
 #: a real-time field that does not arrive through its subscription is asked by request instead: first after
 #: ``price_poll`` seconds and then, as long as the answer stays the same, at twice the previous interval up to
 #: these limits.  (A sheet such as the BIST swap quotes watches hundreds of maturities that have no quote at
@@ -125,7 +129,7 @@ def _override_value(name: str, value: str) -> str:
 
 
 class _Item(object):
-    __slots__ = ("state", "fetched", "refresh", "streamed", "poll")
+    __slots__ = ("state", "fetched", "refresh", "streamed", "poll", "rt")
 
     def __init__(self):
         self.state = "queued"        # queued | sent | ok
@@ -133,6 +137,7 @@ class _Item(object):
         self.refresh = 0.0           # seconds between reference refreshes (0 = never)
         self.streamed = 0.0          # time of the last value that came from a subscription
         self.poll = 0.0              # current interval of a polled real-time field (0 = not polled); backs off
+        self.rt = False              # a real-time field (a quote)
 
 
 class _Request(object):
@@ -241,6 +246,9 @@ class BloombergProvider(Provider):
         self._resync_all = False
         self._resync_at = 0.0
         self._slow_at = 0.0
+        # answers kept from earlier today (before a restart): key -> (value, when it was fetched) - taken as answered
+        # when the workbook asks for them, and asked again when they are due
+        self._preload: Dict[Tuple, Tuple[Any, float]] = {}
 
     # ================================================================== lifecycle
     def start(self) -> None:
@@ -320,6 +328,15 @@ class BloombergProvider(Provider):
             if key not in self._items:
                 it = _Item()
                 it.refresh = refresh
+                it.rt = rt_field is not None
+                kept = self._preload.pop(key, None) if rt_field is None else None
+                if kept is not None:
+                    # answered earlier today, before a restart: as it was, until it is due again
+                    it.state = "ok"
+                    it.fetched = kept[1]
+                    self._items[key] = it
+                    self._values[key] = kept[0]
+                    return kept[0]
                 if rt_field is not None and not self.stream:
                     it.poll = refresh                    # no subscriptions at all: quotes are polled (and back off)
                 self._items[key] = it
@@ -363,6 +380,33 @@ class BloombergProvider(Provider):
 
     def get_rt(self, key: Tuple) -> Any:
         return NO_RT
+
+    # ================================================================== kept for a restart of the same day
+    def preload(self, answers) -> None:
+        """Reference answers kept from earlier today - ``[(key, value, fetched), ...]``: taken as answered when the
+        workbook asks for them (no request), asked again when they are due.  Before :meth:`start`."""
+        with self._lock:
+            for key, value, fetched in answers:
+                if value is not None and value != REQUESTING:
+                    self._preload[key] = (value, float(fetched))
+
+    def answers(self, since: float = 0.0) -> List[Tuple[Tuple, Any, float]]:
+        """The reference answers (not quotes, not what changes by the minute) fetched after ``since``:
+        ``[(key, value, fetched), ...]`` - what a restart the same day need not ask again."""
+        out = []
+        with self._lock:
+            for key, it in self._items.items():
+                if it.rt or it.poll or it.state != "ok" or it.refresh < KEEP_REFRESH or it.fetched <= since:
+                    continue
+                v = self._values.get(key)
+                if v is not None and v != REQUESTING:
+                    out.append((key, v, it.fetched))
+        return out
+
+    def carry_hits(self, hits: int) -> None:
+        """The data points already used today (by an earlier run): the daily limit counts them.  Before start."""
+        self._roll_day()
+        self.hits = max(self.hits, int(hits))
 
     def drain_changes(self) -> List[Tuple]:
         """Keys whose value changed since the last call (the engine recalculates their dependants)."""

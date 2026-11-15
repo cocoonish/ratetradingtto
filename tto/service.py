@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import datetime as _dt
+import itertools
 import json
 import math
 import os
@@ -35,7 +36,7 @@ from .render import Renderer
 from .store import Store, now_iso, user_key
 from .views import layout as view_layout, load_views
 from .xl import numfmt
-from .xl.engine import Calc, Clock
+from .xl.engine import Calc, Clock, big_stack_thread
 from .xl.errors import XlError
 from .xl.model import COLS, a1, parse_a1, parse_range
 from .xl.tokenizer import index_to_col
@@ -61,26 +62,24 @@ class ServiceError(Exception):
 
 
 class EngineThread(object):
-    """Runs every calculation on one thread with a large stack (formula chains recurse deeply)."""
+    """Runs every calculation on one thread with a large stack (formula chains recurse deeply).
+
+    Work waits in order of priority, first come first served within one: what a user typed goes before the header
+    strip, the header before a page, a page before the background (the watch lists, warming up)."""
+
+    WRITE, HEADER, VIEW, BACKGROUND = 0, 1, 2, 3
+    _STOP = 99
 
     def __init__(self, name: str = "tto-engine"):
-        self._q: "queue.Queue" = queue.Queue()
+        self._q: "queue.PriorityQueue" = queue.PriorityQueue()
+        self._seq = itertools.count()
         self._busy_since = 0.0                 # when the job running now began (0: idle)
-        old = threading.stack_size()
-        try:
-            threading.stack_size(256 * 1024 * 1024)
-        except (ValueError, RuntimeError):
-            pass
-        self._t = threading.Thread(target=self._loop, name=name, daemon=True)
-        self._t.start()
-        try:
-            threading.stack_size(old)
-        except (ValueError, RuntimeError):
-            pass
+        # a big stack: long chains are evaluated in one go (engine.DEEP_LIMIT deep) instead of unwound and restarted
+        self._t = big_stack_thread(self._loop, name, daemon=True)
 
     def _loop(self) -> None:
         while True:
-            item = self._q.get()
+            _, _, item = self._q.get()
             if item is None:
                 return
             fut, fn, args, kw = item
@@ -104,17 +103,52 @@ class EngineThread(object):
         return time.time() - since if since else 0.0
 
     def submit(self, fn: Callable, *args, **kw) -> "concurrent.futures.Future":
+        """``fn(*args, **kw)`` on the calculation thread, as an ordinary request (a page)."""
+        return self.submit_at(self.VIEW, fn, *args, **kw)
+
+    def submit_at(self, priority: int, fn: Callable, *args, **kw) -> "concurrent.futures.Future":
         fut: "concurrent.futures.Future" = concurrent.futures.Future()
-        self._q.put((fut, fn, args, kw))
+        self._q.put((priority, next(self._seq), (fut, fn, args, kw)))
         return fut
 
     def call(self, fn: Callable, *args, **kw):
+        return self.call_at(self.VIEW, fn, *args, **kw)
+
+    def call_at(self, priority: int, fn: Callable, *args, **kw):
         if threading.current_thread() is self._t:
             return fn(*args, **kw)
-        return self.submit(fn, *args, **kw).result()
+        return self.submit_at(priority, fn, *args, **kw).result()
+
+    def here(self) -> bool:
+        """Whether the caller is the calculation thread itself."""
+        return threading.current_thread() is self._t
+
+    def waiting(self) -> int:
+        return self._q.qsize()
 
     def stop(self) -> None:
-        self._q.put(None)
+        self._q.put((self._STOP, next(self._seq), None))       # after what waits
+
+
+def _done(value: Any) -> "concurrent.futures.Future":
+    """A future that already holds ``value``."""
+    fut: "concurrent.futures.Future" = concurrent.futures.Future()
+    fut.set_result(value)
+    return fut
+
+
+def _then(fut: "concurrent.futures.Future", fn: Callable[[Any], Any]) -> "concurrent.futures.Future":
+    """A future of ``fn(result of fut)`` (each asker of one calculation gets their own answer of it)."""
+    out: "concurrent.futures.Future" = concurrent.futures.Future()
+
+    def done(f: "concurrent.futures.Future") -> None:
+        try:
+            out.set_result(fn(f.result()))
+        except BaseException as exc:  # noqa: BLE001 - delivered to the asker
+            out.set_exception(exc)
+
+    fut.add_done_callback(done)
+    return out
 
 
 _DUMMY: List[str] = []
@@ -156,14 +190,30 @@ class Service(object):
         from .deskalarms import DeskAlarms
         self.desk_alarms = DeskAlarms(self)
         self.et = EngineThread()
-        self.gen = 1
+        # the generation: what the pages compare - it starts above any number a page could still hold from before
+        # a restart (a page that sent "since" an old number would otherwise take everything for unchanged)
+        self.gen = int(time.time() * 1000)
         self._gen_lock = threading.Lock()
+        self._notified = 0.0                             # when the pages were last told of a new generation
+        self._notify_due = False                         # ... and whether they will be told once more
         self._auth_lock = threading.Lock()               # account changes one at a time (two first administrators ...)
         self._hash_slots = threading.BoundedSemaphore(auth.HASH_SLOTS)    # password checks at a time
         self._listeners: List[Callable[[int], None]] = []
+        self._bbg_kept_at = 0.0                           # Bloomberg answers kept up to this time (_keep_bloomberg)
+        self._seen: Dict[str, float] = {}                 # user -> when they last asked for anything (monotonic)
+        self._streams: Dict[str, int] = {}               # user -> live-update streams open
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._retired: Dict[str, set] = {}
-        self._view_cache: Dict[Tuple, Dict[str, Any]] = {}
+        # pages and headers kept per calculation (see view_future): key -> what was made, panel by panel
+        self._renders: Dict[Tuple, Dict[str, Any]] = {}
+        self._private_users: set = set()                 # users with inputs of their own (their pages are theirs)
+        self._render_lock = threading.Lock()
+        self._warming = False                            # a round of warming up is under way (warm)
+        self.warmed = 0                                  # rounds done
+        self._inflight: Dict[Tuple, "concurrent.futures.Future"] = {}     # pages / headers being made now
+        # sessions looked up lately: token hash -> (user, role, until) - not a database query per request
+        self._sessions: Dict[str, Tuple[str, Optional[str], float]] = {}
+        self._sessions_lock = threading.Lock()
         # live: when the dashboard saw each security trade today (its last price changed or its volume grew)
         self._trades_day = ""
         self._trades_seen: Dict[str, Dict[str, Any]] = {}
@@ -295,8 +345,30 @@ class Service(object):
             if key not in book.inputs:
                 book.declare(ref, scope="shared", group="adhoc-shared")
             book.engine.set_inputs({key: _from_json(val)})
+        self._declare_saved_cells()
+        self._private_users = set(self.store.users_with_inputs())
         self._sync_universe()
-        self._sync_blotter()
+        self._sync_blotter()                     # (may compute: a meeting-dated OIS of the day is priced)
+
+    def _declare_saved_cells(self) -> None:
+        """Every cell any user typed a value over ("Elle değer") or keeps in a saved scenario: declared now, in one go,
+        before anything is computed - when that costs nothing.  Declared on the user's first request instead (or when
+        a scenario was loaded), a constant among them made every value of every user computed again (~10 s for
+        everybody, after every restart)."""
+        cells: Dict[str, List[Tuple[int, int]]] = {}
+        for bid, ref in self.store.saved_cells():
+            book = self.books.get(bid)
+            if book is None:
+                continue
+            try:
+                cell = book.cell(ref)
+            except (KeyError, ValueError):
+                continue
+            if cell in book.inputs or cell in self._retired_cells(book):
+                continue                       # (a page's input already - shared ones included -, or one that moved)
+            cells.setdefault(bid, []).append(cell)
+        for bid, found in cells.items():
+            self.books[bid].declare_cells(found, scope="user", group="adhoc")
 
     #: the cells whose stored shared copies of the file's value went already (``_drop_file_copies``): {book: [ref, ...]}
     FILE_COPIES_DONE = "migrated.file_copies"
@@ -339,6 +411,7 @@ class Service(object):
                                                      blpapi_name=stand_in, silent_restart=s.bbg_silent_restart, **common)
                 # a helper gone silent is started again in market hours only (each new one asks for everything)
                 provider.restart_allowed = self.ops.in_market
+                self._kept_bloomberg(provider)
                 provider.start()
                 return provider
             except IsolationError as exc:
@@ -350,9 +423,45 @@ class Service(object):
             module = importlib.import_module(stand_in)
         provider = BloombergProvider(s.bbg_host, s.bbg_port, interval=1.0 if s.bbg_interval is None else s.bbg_interval,
                                      blpapi_module=module, **common)
+        self._kept_bloomberg(provider)
         provider.start()
         favour_reader()
         return provider
+
+    def _kept_bloomberg(self, provider) -> None:
+        """What an earlier run of today used and was answered (kept in the database by :meth:`_keep_bloomberg`): the
+        daily data limit counts it, and the reference answers are not asked again until they are due."""
+        today = _dt.date.today().isoformat()
+        self._bbg_kept_at = 0.0
+        try:
+            used = self.store.get("bbg.hits") or {}
+            if isinstance(used, dict) and used.get("day") == today:
+                provider.carry_hits(int(used.get("hits") or 0))
+            provider.preload(self.store.bbg_answers(today))
+        except Exception:  # noqa: BLE001 - a start from nothing, as before
+            pass
+
+    #: seconds between two keepings of the day's Bloomberg count and answers
+    BBG_KEEP_EVERY = 30.0
+
+    def _keep_bloomberg(self) -> None:
+        """Keep the data points used today and the reference answers got since the last time (live: every
+        ``BBG_KEEP_EVERY`` seconds and when the dashboard stops) - a restart the same day does not spend the daily
+        data limit on them again."""
+        prov = self.provider
+        answers = getattr(prov, "answers", None)
+        if answers is None:
+            return
+        today = _dt.date.today().isoformat()
+        try:
+            st = prov.status() or {}
+            self.store.put("bbg.hits", {"day": today, "hits": int(st.get("hits_today") or 0)})
+            got = answers(self._bbg_kept_at)
+            if got:
+                self.store.bbg_keep(today, got)
+                self._bbg_kept_at = max(t for _, _, t in got)
+        except Exception:  # noqa: BLE001 - kept the next time
+            pass
 
     # ================================================================== lifecycle / events
     def start(self) -> None:
@@ -363,6 +472,58 @@ class Service(object):
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
             self.history.start()
             self.ops.start()
+            self.warm()
+            threading.Thread(target=self._build_ref_indexes, name="tto-refs", daemon=True).start()
+
+    # ------------------------------------------------------------------ warming up
+    def warm(self) -> bool:
+        """The header strip and every page made ahead for everybody without inputs of their own - at the calculation
+        thread's lowest priority, one page at a time (a request in between goes first): the first trader of the
+        morning does not wait for the workbook's first calculation.  After the start, the day's turn and a change of
+        the meeting calendar.  False: a round is under way already."""
+        with self._render_lock:
+            if self._warming:
+                return False
+            self._warming = True
+        self.et.submit_at(EngineThread.BACKGROUND, self._warm_step, 0)
+        return True
+
+    def _warm_step(self, i: int) -> None:
+        try:
+            if self._stop.is_set():
+                return
+            if i == 0:
+                key = self._render_key(None, "#header", False, None)
+                self._header_job(("warm",), key, None, None)
+            else:
+                vid = self.views[i - 1]["id"]
+                if not self.views[i - 1].get("admin"):          # (an administrators' page is kept per administrator)
+                    self._render_job(None, self._render_key(None, vid, False, None), None, vid, False, None, None)
+        except Exception:  # noqa: BLE001 - warming up is an optimisation only
+            pass
+        if i < len(self.views) and not self._stop.is_set():
+            self.et.submit_at(EngineThread.BACKGROUND, self._warm_step, i + 1)      # (after what waits now)
+        else:
+            with self._render_lock:
+                self._warming = False
+                self.warmed += 1
+
+    #: seconds after the start before the reverse reference indexes are built (the first pages come first)
+    REF_INDEX_DELAY = 45.0
+
+    def _build_ref_indexes(self) -> None:
+        """Which formulas read which cell (engine.ref_index, ~10 s, ~45 MB for the four workbooks): built ahead, in the
+        background, so that the first constant typed over on a page does not wait for it (it is followed through the
+        formulas that name it instead of every value of every user being computed again)."""
+        if self._stop.wait(self.REF_INDEX_DELAY):
+            return
+        for book in list(self.books.values()):
+            if self._stop.is_set():
+                return
+            try:
+                book.engine.ref_index()
+            except Exception:  # noqa: BLE001 - built when first needed instead
+                continue
 
     def _warmup_safe(self) -> None:
         try:
@@ -392,7 +553,7 @@ class Service(object):
             if not keys:
                 break
             total += len(keys)
-            self.et.call(self._apply_market, keys)
+            self.et.call_at(EngineThread.WRITE, self._apply_market, keys)
         self.bump()
         return {"rounds": done, "items": total, "seconds": round(time.time() - t0, 2)}
 
@@ -417,6 +578,8 @@ class Service(object):
         self.history._kick.set()
         self.ops.stop()
         self.fx.stop()
+        if self.mode == "live":
+            self._keep_bloomberg()
         try:
             stop = getattr(self.provider, "stop", None)
             if stop:
@@ -434,6 +597,7 @@ class Service(object):
     def _market_loop(self) -> None:
         last_day = None
         last_roll = 0.0
+        kept = time.monotonic()
         busy = getattr(self.provider, "busy", None)
         while not self._stop.wait(0.3 if (busy is not None and busy()) else self.settings.tick_seconds):
             try:
@@ -444,11 +608,16 @@ class Service(object):
                 day_changed = last_day is not None and day != last_day
                 last_day = day
                 if keys or day_changed or self.mode == "live":
-                    changed = self.et.call(self._apply_market, keys)
+                    changed = self.et.call_at(EngineThread.WRITE, self._apply_market, keys)
                     if changed or day_changed:
                         if day_changed:
-                            self.et.call(self._sync_blotter)
+                            self.et.call_at(EngineThread.WRITE, self._sync_blotter)
                         self.bump()
+                    if day_changed:
+                        self.warm()                      # a new day: TODAY moved everything
+                if self.mode == "live" and time.monotonic() - kept >= self.BBG_KEEP_EVERY:
+                    kept = time.monotonic()
+                    self._keep_bloomberg()
                 if first or day_changed or time.monotonic() - last_roll >= self.ROLL_CHECK_SECONDS:
                     # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
                     last_roll = time.monotonic()
@@ -513,22 +682,17 @@ class Service(object):
     def _watch_loop(self) -> None:
         """Watch lists and alarms: read after every change (at the latest every few seconds), on the calculation
         thread; an alarm that fired tells the pages (a new generation: they ask what fired)."""
+        pending: Optional["concurrent.futures.Future"] = None
+        swept = time.monotonic()
+        asked, late = 0.0, False
         while not self._stop.is_set():
             self._watch_kick.wait(3.0)
             self._watch_kick.clear()
             if self._stop.is_set():
                 break
-            try:
-                fired = self.et.submit(self.watch.tick).result(timeout=60)
-            except concurrent.futures.TimeoutError:
-                self.ops.failure("izleme / alarm döngüsü", RuntimeError("tur 60 sn'de bitmedi – hesap motoru meşgul (%d iş bekliyor)"
-                                                                        % self.et.queued()))
-                continue
-            except Exception as exc:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
-                self.ops.failure("izleme / alarm döngüsü", exc)
-                continue
-            if fired:
-                self.bump()
+            if time.monotonic() - swept >= 60.0:
+                swept = time.monotonic()
+                self.et.submit_at(EngineThread.BACKGROUND, self._sweep_idle)      # (users gone for a while)
             try:
                 if self._uni_day != self._bond_day() and self.et.submit(self._sync_universe).result(timeout=60):
                     self.bump()                    # a new day: the bonds past their maturity leave Tüm Kâğıtlar
@@ -536,6 +700,28 @@ class Service(object):
                     self._classify_pending()
             except Exception:  # noqa: BLE001
                 pass
+            if pending is not None and not pending.done():
+                if not late and time.monotonic() - asked >= 60.0:
+                    late = True                 # (said once a round)
+                    self.ops.failure("izleme / alarm döngüsü", RuntimeError(
+                        "tur 60 sn'de bitmedi – hesap motoru meşgul (%d iş bekliyor)" % self.et.queued()))
+                continue                    # the last round still waits behind the pages: no second one queued
+            pending, asked, late = self.et.submit_at(EngineThread.BACKGROUND, self.watch.tick), time.monotonic(), False
+            pending.add_done_callback(self._watch_done)
+
+    def _watch_done(self, fut: "concurrent.futures.Future") -> None:
+        try:
+            fired = fut.result()
+        except BaseException as exc:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
+            if isinstance(exc, Exception):
+                self.ops.failure("izleme / alarm döngüsü", exc)
+            return
+        if fired:
+            self.bump()
+
+    #: the pages are told of a new generation at most this often (seconds): a busy market bumps every 0.3 s, and
+    #: every page asks again each time it is told
+    NOTIFY_EVERY = 1.0
 
     def bump(self) -> int:
         kick = getattr(self, "_watch_kick", None)
@@ -544,10 +730,28 @@ class Service(object):
         with self._gen_lock:
             self.gen += 1
             g = self.gen
-            self._view_cache.clear()
+            now = time.monotonic()
+            wait = self._notified + self.NOTIFY_EVERY - now
+            if wait > 0:
+                # told less than a second ago: told once more when the second is over (of the generation then)
+                if not self._notify_due:
+                    self._notify_due = True
+                    t = threading.Timer(wait, self._notify_late)
+                    t.daemon = True
+                    t.start()
+                return g
+            self._notified = now
             listeners = list(self._listeners)
         self._tell(listeners, g)
         return g
+
+    def _notify_late(self) -> None:
+        with self._gen_lock:
+            self._notify_due = False
+            self._notified = time.monotonic()
+            g = self.gen
+            listeners = list(self._listeners)
+        self._tell(listeners, g)
 
     def nudge(self) -> None:
         """Tell the open pages that something of the desk's own corner changed (a chat message, a report, the agenda):
@@ -592,6 +796,7 @@ class Service(object):
             raise ServiceError("kullanıcı bulunamadı – tekrar giriş yapın", 401)
         if acc.get("status") != "active":
             raise ServiceError("hesap etkin değil – tekrar giriş yapın", 401)
+        self.saw(key)
         return key
 
     def require_admin(self, user: Optional[str]) -> str:
@@ -680,6 +885,44 @@ class Service(object):
             return None
         return self.store.session_user(auth.token_hash(token), auth.stamp(self._now()))
 
+    #: how long a session looked up is taken as it was (a signed-out / ended one is forgotten at once by this process)
+    SESSION_TTL = 60.0
+
+    def cached_session(self, token: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
+        """``(user, role)`` of a session looked up less than ``SESSION_TTL`` ago (``None``: look it up - in a thread:
+        :meth:`resolve_session` queries the database).  Every request asks: no database query on the event loop."""
+        if not token:
+            return None
+        h = auth.token_hash(token)
+        with self._sessions_lock:
+            hit = self._sessions.get(h)
+        if hit is None or hit[2] < time.monotonic():
+            return None
+        return hit[0], hit[1]
+
+    def resolve_session(self, token: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        """``(user, role)`` of a session token (``(None, None)``: not valid), kept for ``SESSION_TTL`` seconds."""
+        if not token:
+            return None, None
+        h = auth.token_hash(token)
+        user = self.store.session_user(h, auth.stamp(self._now()))
+        if user is None:
+            return None, None
+        role = (self.store.account(user) or {}).get("role")
+        with self._sessions_lock:
+            if len(self._sessions) > 5000:
+                self._sessions.clear()
+            self._sessions[h] = (user, role, time.monotonic() + self.SESSION_TTL)
+        return user, role
+
+    def forget_sessions(self, token: Optional[str] = None) -> None:
+        """Sessions ended or changed (signed out, a new password, an account closed, a role changed): looked up again."""
+        with self._sessions_lock:
+            if token:
+                self._sessions.pop(auth.token_hash(token), None)
+            else:
+                self._sessions.clear()
+
     def open_session(self, user: str, ip: Optional[str] = None) -> str:
         """A new session of an active user - after a correct password or the first administrator's set-up.  The token
         goes to the browser; the database keeps only its hash."""
@@ -718,6 +961,7 @@ class Service(object):
     def logout(self, token: Optional[str]) -> Dict[str, Any]:
         if token:
             self.store.drop_session(auth.token_hash(token))
+            self.forget_sessions(token)
         return {"ok": True}
 
     def request_account(self, name: Any, password: Any, note: Any = "") -> Dict[str, Any]:
@@ -780,6 +1024,7 @@ class Service(object):
             raise ServiceError("mevcut şifre hatalı", 403)
         self.store.update_account(key, pw_hash=self._new_password(new), failed=0, locked_until=None)
         self.store.drop_sessions(key, keep=auth.token_hash(token) if token else None)
+        self.forget_sessions()
         return {"ok": True}
 
     # ------------------------------------------------------------------ the administrators' page
@@ -800,10 +1045,13 @@ class Service(object):
             raise ServiceError("bilinmeyen işlem: %s" % action, 404)
         with self._auth_lock:
             me = self.require_admin(user)                  # again inside: one demoted meanwhile does nothing more
-            if action == "password":
-                self._admin_password(me, data or {}, token)
-            else:
-                fn(me, data or {})
+            try:
+                if action == "password":
+                    self._admin_password(me, data or {}, token)
+                else:
+                    fn(me, data or {})
+            finally:
+                self.forget_sessions()                     # (a session ended, a role changed ...)
         if (self.store.account(me) or {}).get("role") != "admin":
             return {"accounts": [], "pending": 0, "admins": len(self.store.admins()), "demoted": True}
         return self.accounts(user)
@@ -907,6 +1155,7 @@ class Service(object):
                 ov[cell] = _from_json(val)
             if dropped:
                 self.store.clear_user_inputs(user, book.id, dropped)
+                self._note_private(user)
             for ref in fresh:
                 book.declare(ref, scope="user", group="adhoc")
             self._overlays[key] = ov
@@ -933,7 +1182,58 @@ class Service(object):
         ov = self._overlay(user, book)
         if not ov:
             return book.engine.shared
+        if user not in book.engine.users:
+            return book.engine.set_user_inputs(user, ov)     # (given back while the user was away: made again)
         return book.engine.user(user)
+
+    # ------------------------------------------------------------------ who is here
+    #: a user seen this recently (seconds) - or with a live-update stream open - is connected
+    CONNECTED_WINDOW = 120.0
+
+    def saw(self, user: Optional[str]) -> None:
+        """A request of the user (the session gate tells every one)."""
+        if user:
+            self._seen[user] = time.monotonic()
+
+    def stream(self, user: Optional[str], delta: int) -> None:
+        """A live-update stream of the user opened (+1) or closed (-1)."""
+        if not user:
+            return
+        with self._gen_lock:
+            n = self._streams.get(user, 0) + delta
+            if n > 0:
+                self._streams[user] = n
+            else:
+                self._streams.pop(user, None)
+        self.saw(user)
+
+    def connected(self, user: Optional[str]) -> bool:
+        """Whether the user has the dashboard open: a stream, or a request lately."""
+        if not user:
+            return False
+        if self._streams.get(user):
+            return True
+        return time.monotonic() - self._seen.get(user, -1e9) < self.CONNECTED_WINDOW
+
+    def _sweep_idle(self) -> List[str]:
+        """Users not seen for ``settings.idle_minutes``: their calculations (and kept pages) are given back - a user
+        with inputs of their own holds a private copy of every value they changed (~50 000 for the OIS scenario
+        inputs).  They are made again when the user returns.  Calculation thread."""
+        limit = self.settings.idle_minutes * 60.0
+        if limit <= 0:
+            return []
+        now = time.monotonic()
+        gone = []
+        names = {name for book in self.books.values() for name in book.engine.users}
+        for name in names:
+            if self._streams.get(name) or now - self._seen.get(name, -1e9) < limit:
+                continue
+            for book in self.books.values():
+                book.engine.drop_user(name)
+                self._overlays.pop((name, book.id), None)
+            self._forget_renders(name)
+            gone.append(name)
+        return gone
 
     # ================================================================== status / navigation
     def describe(self) -> str:
@@ -967,6 +1267,7 @@ class Service(object):
                                 "source": b.model.meta.get("source"), "left_out": list(getattr(b, "left_out", []))}
                           for bid, b in self.books.items()},
                 "port": self.settings.port,
+                "streams": len(self._listeners),            # live-update streams open (one per browser)
                 # how fresh the data is, the calculation thread's queue, the last fault a loop survived (ops.py)
                 "ops": self.ops.status(prov)}
 
@@ -1046,158 +1347,348 @@ class Service(object):
         return pages
 
     # ================================================================== rendering
-    def view(self, user: Optional[str], view_id: str, show_hidden: bool = False, locale: Optional[str] = None) -> Dict[str, Any]:
-        key = (user, view_id, show_hidden, locale, self.gen)
-        hit = self._view_cache.get(key)
-        if hit is not None:
-            return hit
-        out = self.et.call(self._view, user, view_id, show_hidden, locale)
-        if len(self._view_cache) > 64:
-            self._view_cache.clear()
-        if out.get("gen") == self.gen:
-            self._view_cache[key] = out
+    #: pages / headers kept (per calculation: everybody without inputs of their own shares one)
+    RENDERS_KEPT = 120
+
+    def view(self, user: Optional[str], view_id: str, show_hidden: bool = False, locale: Optional[str] = None,
+             since: Optional[int] = None, panels: Optional[List[str]] = None, as_: Optional[str] = None) -> Dict[str, Any]:
+        if self.et.here():
+            key = self._render_key(user, view_id, show_hidden, locale)
+            return self._answer(self._render_job(None, key, user, view_id, show_hidden, locale, None), since, None, as_)
+        return self.view_future(user, view_id, show_hidden, locale, since, panels, None, as_).result()
+
+    def view_future(self, user: Optional[str], view_id: str, show_hidden: bool = False, locale: Optional[str] = None,
+                    since: Optional[int] = None, panels: Optional[List[str]] = None,
+                    role: Optional[str] = None, as_: Optional[str] = None) -> "concurrent.futures.Future":
+        """A page, as a future (the web layer awaits it without holding a thread of its own while the calculation
+        thread is busy).
+
+        Pages are kept per calculation: everybody without inputs of their own (and not an administrator - whose
+        pages hint at the sheet explorer) shares one.  A generation later only the panels whose cells changed are
+        made again (the masks of what a panel read meet what was invalidated since); the same page asked again while
+        it is being made - two tabs, a refresh on the heels of another - waits for the one calculation.
+
+        ``panels``: only these (the open tab's); ``since``: the generation the browser has them from - the panels that
+        did not change since are left out (``{"unchanged": true}`` when none did).  ``as_``: which page the browser has
+        them of (``"s"``: the one everybody shares, ``"p"``: the user's own - an answer says ``as``); ``since`` counts
+        only on the same one."""
+        v = self.view_index.get(view_id)
+        if v is not None and v.get("admin") and user is not None and not (role == "admin" if role is not None else self._is_admin(user)):
+            fut: "concurrent.futures.Future" = concurrent.futures.Future()
+            fut.set_exception(ServiceError("bu sayfa yalnızca yöneticilere açıktır", 403))
+            return fut
+        key = self._render_key(user, view_id, show_hidden, locale, role)
+        wanted = tuple(panels) if panels else None
+        gen = self.gen
+        with self._render_lock:
+            rec = self._renders.get(key)
+            if rec is not None and self._fresh(rec, gen, wanted, key):
+                return _done(self._answer(rec, since, wanted, as_))
+            jk = (key, user, gen, wanted)
+            job = self._inflight.get(jk)
+            if job is None:
+                job = self.et.submit_at(EngineThread.VIEW, self._render_job, jk, key, user, view_id, show_hidden, locale, wanted)
+                self._inflight[jk] = job
+        return _then(job, lambda rec: self._answer(rec, since, wanted, as_))
+
+    def _render_key(self, user: Optional[str], what: str, show_hidden: bool = False, locale: Optional[str] = None,
+                    role: Optional[str] = None) -> Tuple:
+        """Whose page it is: ``""`` for everybody without inputs of their own who is not an administrator."""
+        who = ""
+        if user:
+            if user in self._private_users:
+                who = user
+            else:
+                if role is None:
+                    role = (self.store.account(user_key(user)) or {}).get("role")
+                if role == "admin":
+                    who = user
+        return (who, what, bool(show_hidden), locale or self.settings.locale)
+
+    def _fresh(self, rec: Dict[str, Any], gen: int, wanted: Optional[Tuple], key: Tuple) -> bool:
+        """Whether the asked panels are known as of ``gen`` - or, for a user with inputs of their own (a calculation of
+        their own), checked lately with no shared input changed since (only the market moved)."""
+        throttle = self.settings.private_refresh
+        recent = time.monotonic() - throttle if (throttle > 0 and key[0] and key[0] in self._private_users) else None
+        shared = self._shared_changes(rec)
+        panels = rec["panels"]
+        for pid in (wanted if wanted is not None else rec["order"]):
+            p = panels.get(pid)
+            if p is None:
+                continue                                 # (not a panel of the page: nothing to make)
+            if p["entry"] is None:
+                return False
+            if p["checked"] != gen and (recent is None or p["at"] < recent or p.get("inputs") != shared):
+                return False                             # (a shared input changed since it was checked: at once)
+        return True
+
+    def _shared_changes(self, rec: Dict[str, Any]) -> int:
+        book = self.books.get(rec.get("book") or "tto")
+        return book.engine.input_changes if book is not None else 0
+
+    def _render_job(self, jk, key, user, view_id, show_hidden, locale, wanted) -> Dict[str, Any]:
+        try:
+            gen = self.gen
+            with self._render_lock:
+                prev = self._renders.get(key)
+            rec = self._render(prev, key, user, view_id, show_hidden, locale, wanted, gen)
+            self._keep(rec["key"], rec)
+            return rec
+        finally:
+            if jk is not None:
+                with self._render_lock:
+                    self._inflight.pop(jk, None)
+
+    def _keep(self, key: Tuple, rec: Dict[str, Any]) -> None:
+        with self._render_lock:
+            self._renders.pop(key, None)
+            self._renders[key] = rec
+            while len(self._renders) > self.RENDERS_KEPT:
+                self._renders.pop(next(iter(self._renders)))
+
+    def _forget_renders(self, user: str) -> None:
+        """The pages and header kept for one user (their own inputs changed: made again at once)."""
+        with self._render_lock:
+            for key in [k for k in self._renders if k[0] == user]:
+                self._renders.pop(key, None)
+
+    @staticmethod
+    def _still(meta, calc: Calc) -> bool:
+        """Whether what was made from ``calc`` (``meta``: its calculation, layout, epoch and the masks of what it read)
+        is still what it would be: nothing it read was invalidated since."""
+        serial, layout, epoch, mask = meta
+        if serial != calc.serial or layout != calc.engine.layout:
+            return False
+        m = calc.changed_since(epoch)
+        return m is not None and not (m & mask)
+
+    def _made(self, old: Optional[Dict[str, Any]], calc: Calc, gen: int, reusable: bool, make: Callable[[], Any]):
+        """A kept part (a panel, the header) as of ``gen``: the one kept if nothing it read changed, or made again."""
+        now = time.monotonic()
+        if old is not None and old["entry"] is not None:
+            if old["checked"] == gen:
+                return old
+            if reusable and old["meta"] is not None and self._still(old["meta"], calc):
+                meta = old["meta"]
+                return dict(old, checked=gen, at=now, meta=(meta[0], meta[1], calc.epoch, meta[3]),
+                            inputs=calc.engine.input_changes)
+        calc.track = 0
+        try:
+            entry = make()
+            mask = calc.track
+        finally:
+            calc.track = None
+        meta = (calc.serial, calc.engine.layout, calc.epoch, mask) if reusable else None
+        same = old is not None and old["entry"] is not None and old["entry"] == entry
+        return {"entry": entry, "meta": meta, "content": old["content"] if same else gen, "checked": gen, "at": now,
+                "inputs": calc.engine.input_changes}      # (shared inputs changed so far: _fresh)
+
+    def _answer(self, rec: Dict[str, Any], since: Optional[int], wanted: Optional[Tuple],
+                as_: Optional[str] = None) -> Dict[str, Any]:
+        """What the browser gets of a kept page (never changing what is kept)."""
+        kind = "p" if rec["key"][0] else "s"
+        if as_ is not None and as_ != kind:
+            since = None                                 # (the browser has the other page: everything)
+        ids = set(wanted) if wanted is not None else None
+        panels = [rec["panels"][pid] for pid in rec["order"] if ids is None or pid in ids]
+        panels = [p for p in panels if p["entry"] is not None and not p["entry"].get("skip")]
+        if since is not None:
+            panels = [p for p in panels if p["content"] > since]
+            if not panels:
+                return {"id": rec["top"]["id"], "gen": rec["gen"], "unchanged": True, "as": kind}
+        out = dict(rec["top"])
+        out["gen"] = rec["gen"]
+        out["ms"] = rec["ms"]
+        out["panels"] = [p["entry"] for p in panels]
+        out["ids"] = rec["ids"]
+        out["as"] = kind
+        if since is not None or wanted is not None:
+            out["partial"] = True
         return out
 
-    def _view(self, user, view_id, show_hidden, locale) -> Dict[str, Any]:
+    def _render(self, prev, key, user, view_id, show_hidden, locale, wanted, gen) -> Dict[str, Any]:
+        """A page's kept panels as of ``gen`` (the calculation thread): those asked for are checked or made again."""
         v = self.view_index.get(view_id)
         if v is None:
             raise ServiceError("sayfa bulunamadı: %s" % view_id, 404)
         if v.get("admin") and user is not None and not self._is_admin(user):
             raise ServiceError("bu sayfa yalnızca yöneticilere açıktır", 403)
         book = self.books[v["book"]]
-        loc = numfmt.get_locale(locale or self.settings.locale)
         calc = self._calc(user, book)
+        if not key[0] and calc is not book.engine.shared:
+            # a user with inputs of their own the key did not know of (it never shares their page): theirs
+            with self._render_lock:
+                self._private_users.add(user)
+            key = (user,) + tuple(key[1:])
+            with self._render_lock:
+                prev = self._renders.get(key)
+        loc = numfmt.get_locale(locale or self.settings.locale)
         overlay = self._overlay(user, book) if user else None
         R = self.renderers[book.id]
-        explorer = self._is_admin(user)                    # the sheet explorer is theirs
-        gen = self.gen
-        panels = []
+        # the sheet explorer is the administrators' (a page everybody shares never names it)
+        explorer = bool(key[0]) and self._is_admin(user)
+        old = prev["panels"] if prev is not None else {}
+        want = set(wanted) if wanted is not None else None
+        t0 = time.time()
+        panels: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+        types: List[str] = []
+
+        def part(pid: str, ptype: str, reusable: bool, make: Callable[[], Dict[str, Any]]) -> None:
+            order.append(pid)
+            types.append(ptype)
+            o = old.get(pid)
+            if want is not None and pid not in want:
+                # not asked for (another tab): kept as it is, checked when it is asked for
+                panels[pid] = o if o is not None else {"entry": None, "meta": None, "content": 0, "checked": -1, "at": 0.0}
+                return
+            panels[pid] = self._made(o, calc, gen, reusable, make)
+
         sheet_default = v.get("sheet")
         charts = list(book.model.sheets[book.model.sheet_index[sheet_default]].charts) if sheet_default else []
-        used_charts = set()
-        t0 = time.time()
         for p in v["panels"]:
             if p.get("hidden") and not show_hidden:
                 continue
-            entry = {"id": p.get("id"), "type": p["type"], "title": p.get("title", ""), "hidden": bool(p.get("hidden")),
-                     "wide": bool(p.get("wide")), "collapsed": bool(p.get("collapsed")), "note": p.get("note")}
-            if p.get("action"):
-                entry["action"] = p["action"]          # a button of the dashboard's own in the panel's header
-            if p.get("add"):
-                # a list of bonds: where an ISIN added goes, and which list of the catalog it is
-                where = p.get("sheet", v.get("sheet"))
-                lst = p["add"]["list"]
-                entry["add"] = dict(p["add"], ref=lst if "!" in lst else "%s!%s" % (where, lst), book=v["book"],
-                                    name=p["add"].get("name") or v["id"])     # another page's list: by its name
-            if p.get("grow"):
-                entry["grow"] = p["grow"]               # more rows than in use: the page shows the filled ones and one more
-            if p.get("card"):
-                entry["card"] = p["card"]               # a click on ▸ opens the bond's card
-            if p.get("flags"):
-                entry["flags"] = p["flags"]             # ☆ / ★: onto / off the trading list
-            if p.get("quote"):
-                entry["quote"] = p["quote"]             # "Kota mesajı": its rows as a message to send
-            if p.get("trade"):
-                entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
             sheet = p.get("sheet", sheet_default)
             if sheet is not None and sheet not in book.model.sheet_index:
                 continue                               # a table of the dashboard's own that does not fit this file
-            try:
-                if p.get("note_ref"):
-                    # the explanation the workbook keeps in a cell next to the chart / table
-                    nsi, nrc = book.cell(p["note_ref"] if "!" in p["note_ref"] else "%s!%s" % (sheet, p["note_ref"]))
-                    text = calc.get(nsi, *divmod(nrc, COLS))
-                    if isinstance(text, str) and text.strip():
-                        entry["note"] = text.strip()
-                if p["type"] in ("table", "notes"):
-                    entry["range"] = p["range"]
-                    rng = p["range"]
-                    if p.get("max_rows"):
-                        # a long helper table: its first rows here, all of it in the sheet explorer (administrators)
-                        r1, c1, r2, c2 = parse_range(rng)
-                        if r2 - r1 + 1 > int(p["max_rows"]):
-                            rng = "%s:%s" % (a1(r1 * COLS + c1), a1((r1 + int(p["max_rows"]) - 1) * COLS + c2))
-                            entry["note"] = ("İlk %d satır gösteriliyor (toplam %d)." % (int(p["max_rows"]), r2 - r1 + 1)
-                                             + (" Tamamı: Sayfa gezgini → %s!%s" % (sheet, p["range"]) if explorer else ""))
-                    # columns hidden in Excel stay out of the way until the helper tables are asked for
-                    entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
-                    if p.get("lift", True):
-                        own = _lift_title(entry["data"])
-                        if own and not p.get("keep_title"):
-                            entry["title"] = own
-                    if p.get("header"):
-                        _column_captions(entry["data"], p["header"])
-                    if p.get("append") == "asw_fx":
-                        self._asw_fx_columns(book, user, entry["data"], loc)
-                    elif p.get("append") == "broker_bonds":
-                        self._dibs_broker_columns(book, user, entry["data"], loc)
-                    elif p.get("append") == "dibs_live":
-                        self._dibs_live_columns(book, user, entry["data"], loc)
-                    elif p.get("append") == "universe":
-                        self._universe_columns(book, user, entry["data"], loc)
-                elif p["type"] == "chart":
-                    spec = p.get("spec")
-                    if spec is None:
-                        idx = p.get("chart", 0)
-                        if idx < len(charts):
-                            used_charts.add(idx)
-                            spec = charts[idx]
-                    if spec is not None:
-                        entry["data"] = R.chart(calc, spec, loc)
-                        entry["title"] = p.get("title") or entry["data"]["title"]
-                elif p["type"] == "custom":
-                    entry["component"] = p.get("component")
-                elif p["type"] == "generated":
-                    entry["type"] = "table"             # a table of the dashboard's own, from no range of a sheet
-                    if p.get("source") == "dibs_tape":
-                        entry["data"] = self._tape_table(user, loc)
-                    elif p.get("source") == "dibs_trading":
-                        entry["data"] = self._trading_table(user, loc)
-                if p.get("title_ref"):
-                    # the caption the workbook keeps in a cell above the chart / table
-                    tsi, trc = book.cell(p["title_ref"] if "!" in p["title_ref"] else "%s!%s" % (sheet, p["title_ref"]))
-                    text = calc.get(tsi, *divmod(trc, COLS))
-                    if isinstance(text, str) and text.strip():
-                        entry["title"] = " ".join(text.split())
-            except ServiceError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - one broken panel must not take the page down
-                entry["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
-            panels.append(entry)
+            # what reads the workbook only is made again when what it read changed; a panel completed with what the
+            # Broker Chat, the trades or another workbook say is made every time
+            reusable = p["type"] in ("table", "notes", "chart", "custom") and not p.get("append") and not p.get("source")
+            ptype = "table" if p["type"] == "generated" else p["type"]
+            part(p.get("id"), ptype, reusable,
+                 lambda p=p, sheet=sheet: self._panel(p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer))
         if not any(p["type"] == "chart" for p in v["panels"]):
             for i, ch in enumerate(charts):
-                try:
-                    data = R.chart(calc, ch, loc)
-                except Exception as exc:  # noqa: BLE001
-                    continue
-                panels.append({"id": "chart%d" % i, "type": "chart", "title": data["title"], "data": data,
-                               "anchor": ch["anchor"], "hidden": False, "wide": False})
+                part("chart%d" % i, "chart", True, lambda ch=ch, i=i: self._sheet_chart(R, calc, ch, loc, "chart%d" % i))
         sheet_obj = book.model.sheets[book.model.sheet_index[sheet_default]] if sheet_default else None
         if sheet_obj is not None:
             # pictures pasted on the sheet come after the tables
             for i, img in enumerate(sheet_obj.images):
-                panels.append({"id": "image%d" % i, "type": "image", "title": v.get("image_titles", {}).get(str(i)) or "Excel'deki resim",
-                               "src": "/api/image?book=%s&sheet=%s&i=%d" % (book.id, _quote(sheet_default), i),
-                               "width": img.get("width"), "height": img.get("height"), "hidden": False, "wide": True})
+                part("image%d" % i, "image", True, lambda i=i, img=img: {
+                    "id": "image%d" % i, "type": "image", "title": v.get("image_titles", {}).get(str(i)) or "Excel'deki resim",
+                    "src": "/api/image?book=%s&sheet=%s&i=%d" % (book.id, _quote(sheet_default), i),
+                    "width": img.get("width"), "height": img.get("height"), "hidden": False, "wide": True})
         if show_hidden:
             # scratch cells that belong to no table: listed, so that nothing the workbook computes is missing
             for k, (sheet_name, rest) in enumerate(self._leftover_cells(v)):
                 extra = "" if sheet_name == sheet_default else " (%s)" % sheet_name
-                panels.append({"id": "rest" if k == 0 else "rest%d" % k, "type": "table",
-                               "title": "Diğer hücreler · tablolara girmeyen formül ve değerler" + extra,
-                               "hidden": True, "wide": False, "collapsed": False, "note": None,
-                               "data": R.cells_table(calc, sheet_name, rest, loc, overlay)})
+                pid = "rest" if k == 0 else "rest%d" % k
+                part(pid, "table", True, lambda pid=pid, sheet_name=sheet_name, rest=rest, extra=extra: {
+                    "id": pid, "type": "table", "title": "Diğer hücreler · tablolara girmeyen formül ve değerler" + extra,
+                    "hidden": True, "wide": False, "collapsed": False, "note": None,
+                    "data": R.cells_table(calc, sheet_name, rest, loc, overlay)})
+        # a chart whose data could not be read is no panel at all (as before): left out of the page
+        shown = [(pid, t) for pid, t in zip(order, types) if not (panels[pid]["entry"] or {}).get("skip")]
         note = v.get("note")
         if v.get("replay_note") and self.mode != "live" and not getattr(book, "recorded", True):
             note = v["replay_note"]                    # the workbook was saved without market data
-        out = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
-               "panels": panels, "ms": int((time.time() - t0) * 1000), "note": note}
-        out.update(view_layout(v, [p["id"] for p in panels]))
-        hidden = self._hidden_pages(user)
+        top = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "note": note}
+        top.update(view_layout(v, [pid for pid, _ in shown]))
+        hidden = self._hidden_pages(user if key[0] else "")
         links = [link for link in self._shortcuts(v) if link["page"] not in hidden]      # (an administrators' page: theirs)
         if links:
-            out["links"] = links
-        return out
+            top["links"] = links
+        return {"key": key, "top": top, "order": order, "ids": ["%s:%s" % (pid, t) for pid, t in shown],
+                "panels": panels, "gen": gen, "ms": int((time.time() - t0) * 1000), "book": book.id}
+
+    @staticmethod
+    def _sheet_chart(R, calc: Calc, ch: Dict[str, Any], loc, pid: str) -> Dict[str, Any]:
+        try:
+            data = R.chart(calc, ch, loc)
+        except Exception:  # noqa: BLE001 - a chart that cannot be read is left out
+            return {"skip": True}
+        return {"id": pid, "type": "chart", "title": data["title"], "data": data, "anchor": ch["anchor"],
+                "hidden": False, "wide": False}
+
+    def _view(self, user, view_id, show_hidden, locale) -> Dict[str, Any]:
+        """A whole page made from scratch, nothing kept (the calculation thread)."""
+        key = self._render_key(user, view_id, show_hidden, locale)
+        return self._answer(self._render(None, key, user, view_id, show_hidden, locale, None, self.gen), None, None)
+
+    def _panel(self, p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer) -> Dict[str, Any]:
+        """One panel of a page as the browser draws it."""
+        entry = {"id": p.get("id"), "type": p["type"], "title": p.get("title", ""), "hidden": bool(p.get("hidden")),
+                 "wide": bool(p.get("wide")), "collapsed": bool(p.get("collapsed")), "note": p.get("note")}
+        if p.get("action"):
+            entry["action"] = p["action"]          # a button of the dashboard's own in the panel's header
+        if p.get("add"):
+            # a list of bonds: where an ISIN added goes, and which list of the catalog it is
+            where = p.get("sheet", v.get("sheet"))
+            lst = p["add"]["list"]
+            entry["add"] = dict(p["add"], ref=lst if "!" in lst else "%s!%s" % (where, lst), book=v["book"],
+                                name=p["add"].get("name") or v["id"])     # another page's list: by its name
+        if p.get("grow"):
+            entry["grow"] = p["grow"]               # more rows than in use: the page shows the filled ones and one more
+        if p.get("card"):
+            entry["card"] = p["card"]               # a click on ▸ opens the bond's card
+        if p.get("flags"):
+            entry["flags"] = p["flags"]             # ☆ / ★: onto / off the trading list
+        if p.get("quote"):
+            entry["quote"] = p["quote"]             # "Kota mesajı": its rows as a message to send
+        if p.get("trade"):
+            entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
+        try:
+            if p.get("note_ref"):
+                # the explanation the workbook keeps in a cell next to the chart / table
+                nsi, nrc = book.cell(p["note_ref"] if "!" in p["note_ref"] else "%s!%s" % (sheet, p["note_ref"]))
+                text = calc.get(nsi, *divmod(nrc, COLS))
+                if isinstance(text, str) and text.strip():
+                    entry["note"] = text.strip()
+            if p["type"] in ("table", "notes"):
+                entry["range"] = p["range"]
+                rng = p["range"]
+                if p.get("max_rows"):
+                    # a long helper table: its first rows here, all of it in the sheet explorer (administrators)
+                    r1, c1, r2, c2 = parse_range(rng)
+                    if r2 - r1 + 1 > int(p["max_rows"]):
+                        rng = "%s:%s" % (a1(r1 * COLS + c1), a1((r1 + int(p["max_rows"]) - 1) * COLS + c2))
+                        entry["note"] = ("İlk %d satır gösteriliyor (toplam %d)." % (int(p["max_rows"]), r2 - r1 + 1)
+                                         + (" Tamamı: Sayfa gezgini → %s!%s" % (sheet, p["range"]) if explorer else ""))
+                # columns hidden in Excel stay out of the way until the helper tables are asked for
+                entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
+                if p.get("lift", True):
+                    own = _lift_title(entry["data"])
+                    if own and not p.get("keep_title"):
+                        entry["title"] = own
+                if p.get("header"):
+                    _column_captions(entry["data"], p["header"])
+                if p.get("append") == "asw_fx":
+                    self._asw_fx_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "broker_bonds":
+                    self._dibs_broker_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "dibs_live":
+                    self._dibs_live_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "universe":
+                    self._universe_columns(book, user, entry["data"], loc)
+            elif p["type"] == "chart":
+                spec = p.get("spec")
+                if spec is None:
+                    idx = p.get("chart", 0)
+                    if idx < len(charts):
+                        spec = charts[idx]
+                if spec is not None:
+                    entry["data"] = R.chart(calc, spec, loc)
+                    entry["title"] = p.get("title") or entry["data"]["title"]
+            elif p["type"] == "custom":
+                entry["component"] = p.get("component")
+            elif p["type"] == "generated":
+                entry["type"] = "table"             # a table of the dashboard's own, from no range of a sheet
+                if p.get("source") == "dibs_tape":
+                    entry["data"] = self._tape_table(user, loc)
+                elif p.get("source") == "dibs_trading":
+                    entry["data"] = self._trading_table(user, loc)
+            if p.get("title_ref"):
+                # the caption the workbook keeps in a cell above the chart / table
+                tsi, trc = book.cell(p["title_ref"] if "!" in p["title_ref"] else "%s!%s" % (sheet, p["title_ref"]))
+                text = calc.get(tsi, *divmod(trc, COLS))
+                if isinstance(text, str) and text.strip():
+                    entry["title"] = " ".join(text.split())
+        except ServiceError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one broken panel must not take the page down
+            entry["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+        return entry
 
     def _leftover_cells(self, v: Dict[str, Any]) -> List[Tuple[str, List[Tuple[int, int]]]]:
         """Cells of the page's sheets that hold a formula or a value but lie in none of the page's tables:
@@ -1302,9 +1793,64 @@ class Service(object):
             raise ServiceError("resim bulunamadı", 404)
         return base64.b64decode(images[index]["data"]), images[index]["mime"]
 
-    def header(self, user: Optional[str], locale: Optional[str] = None) -> Dict[str, Any]:
+    def header(self, user: Optional[str], locale: Optional[str] = None, since: Optional[int] = None,
+               as_: Optional[str] = None) -> Dict[str, Any]:
         """Top strip: spot / TLREF / spot date ... read from MASA row 1-2 (labels) and its status row."""
-        return self.et.call(self._header, user, locale)
+        if self.et.here():
+            return self._header(user, locale)
+        return self.header_future(user, locale, since, None, as_).result()
+
+    def header_future(self, user: Optional[str], locale: Optional[str] = None, since: Optional[int] = None,
+                      role: Optional[str] = None, as_: Optional[str] = None) -> "concurrent.futures.Future":
+        """The header strip as a future, kept like a page (see view_future): one for everybody without inputs of their
+        own, made again when what it read changed; ``since``: ``{"unchanged": true}`` when it did not."""
+        key = self._render_key(user, "#header", False, locale, role)
+        gen = self.gen
+        with self._render_lock:
+            rec = self._renders.get(key)
+            if rec is not None and self._fresh(rec, gen, None, key):
+                return _done(self._header_answer(rec, since, as_))
+            jk = (key, user, gen)
+            job = self._inflight.get(jk)
+            if job is None:
+                job = self.et.submit_at(EngineThread.HEADER, self._header_job, jk, key, user, locale)
+                self._inflight[jk] = job
+        return _then(job, lambda rec: self._header_answer(rec, since, as_))
+
+    def _header_job(self, jk, key, user, locale) -> Dict[str, Any]:
+        try:
+            gen = self.gen
+            book = self.books.get("tto")
+            with self._render_lock:
+                prev = self._renders.get(key)
+            calc = self._calc(user, book) if book is not None else None
+            if book is not None and not key[0] and calc is not book.engine.shared:
+                with self._render_lock:
+                    self._private_users.add(user)
+                key = (user,) + tuple(key[1:])
+                with self._render_lock:
+                    prev = self._renders.get(key)
+            old = prev["panels"]["#"] if prev is not None else None
+            if calc is None:
+                part = {"entry": self._header(user, locale), "meta": None, "content": gen, "checked": gen, "at": time.monotonic()}
+            else:
+                part = self._made(old, calc, gen, True, lambda: {"items": self._header(user, locale)["items"]})
+            rec = {"key": key, "panels": {"#": part}, "order": ["#"], "gen": gen, "book": "tto"}
+            self._keep(key, rec)
+            return rec
+        finally:
+            with self._render_lock:
+                self._inflight.pop(jk, None)
+
+    @staticmethod
+    def _header_answer(rec: Dict[str, Any], since: Optional[int], as_: Optional[str] = None) -> Dict[str, Any]:
+        part = rec["panels"]["#"]
+        kind = "p" if rec["key"][0] else "s"
+        if since is not None and part["content"] <= since and (as_ is None or as_ == kind):
+            return {"gen": rec["gen"], "unchanged": True, "as": kind}
+        out = dict(part["entry"], gen=rec["gen"])
+        out["as"] = kind
+        return out
 
     def _header(self, user, locale) -> Dict[str, Any]:
         book = self.books.get("tto")
@@ -1541,7 +2087,7 @@ class Service(object):
         ``lenient`` (a block pasted from Excel): cells that are not inputs are skipped and counted, not errors.
         """
         user = self.require_user(user)
-        res = self.et.call(self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
+        res = self.et.call_at(EngineThread.WRITE, self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -1629,6 +2175,10 @@ class Service(object):
                 self.store.set_user_inputs(user, book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in user_vals.items()})
             if user_clear:
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in user_clear])
+            self._note_private(user)
+        if calendar:
+            self._note_private()                        # (what was typed per meeting moved, for everybody)
+            self.warm()
         res: Dict[str, Any] = {"applied": len(shared_vals) + len(shared_clear) + len(user_vals) + len(user_clear)
                                + (len(meetings) if calendar else 0),
                                "errors": errors}
@@ -1683,7 +2233,7 @@ class Service(object):
     def reset_inputs(self, user: str, book_id: str, refs: Optional[List[str]] = None, shared: bool = False) -> Dict[str, Any]:
         """Back to the workbook's own values (personal inputs; ``shared`` for desk inputs)."""
         user = self.require_user(user)
-        res = self.et.call(self._reset_inputs, user, book_id, refs, shared)
+        res = self.et.call_at(EngineThread.WRITE, self._reset_inputs, user, book_id, refs, shared)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -1721,6 +2271,7 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in targets])
             else:
                 self.store.clear_user_inputs(user, book.id)
+            self._note_private(user)
         return {"reset": n}
 
     def my_inputs(self, user: str) -> Dict[str, Any]:
@@ -1758,7 +2309,7 @@ class Service(object):
         if values is None:
             raise ServiceError("senaryo bulunamadı: %s" % name, 404)
         self.store.replace_user_inputs(user, values)
-        self.et.call(self._reload_user, user)
+        self.et.call_at(EngineThread.WRITE, self._reload_user, user)
         self.bump()
         return {"loaded": name, "cells": len(values), "gen": self.gen}
 
@@ -1773,6 +2324,27 @@ class Service(object):
             self._overlays.pop((user, book.id), None)
             ov = self._overlay(user, book)
             book.engine.set_user_inputs(user, ov)
+        self._note_private(user)
+
+    def _note_private(self, user: Optional[str] = None) -> None:
+        """Whether a user has inputs of their own (``None``: every user, read again) - the pages they share follow it.
+        Their kept pages and header are made again: what they typed shows at once."""
+        if user is None:
+            users = set(self.store.users_with_inputs())
+            with self._render_lock:
+                self._private_users = users
+                self._renders.clear()
+            return
+        mine = bool(self.store.user_inputs(user))
+        with self._render_lock:
+            if mine:
+                self._private_users.add(user)
+            else:
+                self._private_users.discard(user)
+        self._forget_renders(user)
+        watch = getattr(self, "watch", None)
+        if watch is not None:
+            watch._private_at.pop(user, None)            # (their watch list follows their change at once too)
 
     # ================================================================== the columns a user hides
     #: everybody looks at the tables their own way: table -> the columns this user hid, kept with the account
@@ -2220,7 +2792,7 @@ class Service(object):
 
     def add_forward(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
-        res = self.et.call(self._add_forward, user, payload, lang)
+        res = self.et.call_at(EngineThread.WRITE, self._add_forward, user, payload, lang)
         self.bump()
         return res
 
@@ -2312,7 +2884,7 @@ class Service(object):
 
     def add_ois(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
-        res = self.et.call(self._add_ois, user, payload, lang)
+        res = self.et.call_at(EngineThread.WRITE, self._add_ois, user, payload, lang)
         self.bump()
         return res
 
@@ -2388,7 +2960,7 @@ class Service(object):
         rec.update({"dv01_tl": risk["dv01_tl"], "dv01": risk["dv01"],
                     "name": (risk["info"] or {}).get("name") if risk["known"] else None})
         tid = self.store.add_trade(self.today_iso(), "bond", rec, user)
-        self.et.call(self._sync_blotter)
+        self.et.call_at(EngineThread.WRITE, self._sync_blotter)
         self.bump()
         rec["id"] = tid
         return rec
@@ -2546,7 +3118,7 @@ class Service(object):
         res = self.set_inputs(user, book_id, items)
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        self.et.call(self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in personal])
+        self.et.call_at(EngineThread.WRITE, self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in personal])
         return len(rows)
 
     def _asw_follows(self, user: str, code: str, on: bool) -> Optional[bool]:
@@ -2601,6 +3173,7 @@ class Service(object):
                 ov = {k: v for k, v in ov.items() if k not in keys}
                 self._overlays[(name, book.id)] = ov
                 book.engine.set_user_inputs(name, ov)
+        self._note_private()
 
     def _flag_cell(self, isin: str, listed: bool) -> Dict[str, Any]:
         return {"t": "★" if listed else "☆", "k": "s", "cls": "act flag" + (" on" if listed else ""),
@@ -5429,7 +6002,7 @@ class Service(object):
         ids = self.store.delete_trade(int(trade_id), user)
         if not ids:
             raise ServiceError("işlem bulunamadı", 404)
-        self.et.call(self._sync_blotter)
+        self.et.call_at(EngineThread.WRITE, self._sync_blotter)
         self.bump()
         return {"deleted": ids}
 
