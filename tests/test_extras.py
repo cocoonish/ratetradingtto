@@ -86,8 +86,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     sofr = Model.load(os.path.join(root, "models", "sofr.json.gz"))                 # not the workbook they were written for
     n = sofr.formula_count()
     problems = extras.apply("tto", sofr)
-    assert [p.split(":")[0] for p in problems] == ["EK_TATIL", "FX valörleri", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_FWD vade faizleri",
-                                                   "EK_FWD EURTRY", "EK_KAYNAK",
+    assert [p.split(":")[0] for p in problems] == ["EK_TATIL", "FX valörleri", "OIS spot valörü", "EK_FWD", "EK_XAU", "EK_VIOP",
+                                                   "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
                                                    "Bulk Bond satırları", "EK_BULK", "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",

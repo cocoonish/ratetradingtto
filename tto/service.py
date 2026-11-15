@@ -596,8 +596,8 @@ class Service(object):
             finally:
                 self.et.stop()
 
-    #: how often the running dashboard looks whether a meeting has passed: the OIS spot (Bloomberg's settle date) moves
-    #: some time after midnight, not at the turn of the day
+    #: how often the running dashboard looks whether a meeting has passed: the OIS spot (OIS_MAIN!B2) moves with the day
+    #: and with the TRY holiday list, which may be edited at any time
     ROLL_CHECK_SECONDS = 600.0
 
     def _market_loop(self) -> None:

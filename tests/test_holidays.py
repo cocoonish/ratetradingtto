@@ -149,12 +149,32 @@ def test_eurtry_spot_is_two_business_days_of_both_try_and_eur(desk, trade, spot)
     assert desk.fx.spot_date(desk.fx.pair("EURTRY")) == spot
 
 
+@pytest.mark.parametrize("trade, spot", [
+    (D(2026, 11, 25), D(2026, 11, 26)),          # TLREF works on Thanksgiving (USDTRY settles on 27.11)
+    (D(2026, 10, 28), D(2026, 10, 30)),          # 29.10 Cumhuriyet Bayramı
+    (D(2026, 12, 31), D(2027, 1, 4)),            # 1 Ocak and the weekend
+])
+def test_the_tlref_ois_spot_is_the_next_business_day_of_the_try_list(desk, trade, spot):
+    on(desk, trade)
+    assert day_of(desk, "OIS_MAIN!B2") == spot
+
+
 def test_the_money_market_and_bond_dates_stay_on_the_try_list(desk):
-    """The bonds' T+1 value date and the TRY OIS spot (Bloomberg's, recorded) do not move for a US holiday."""
+    """A US holiday moves the USDTRY spot date, not the TLREF OIS spot (OIS_MAIN!B2, the workbook's SPOTDATE) nor what
+    counts from it - the OIS days of the forward matrix, the desk sheet's spot - nor the bonds' T+1 value date.  The
+    broken-date block sees the FX spot a day after the OIS spot then.  Bloomberg's USDTRY settle date, which the OIS
+    spot was, stands beside it on the OIS page (offline: the file's)."""
     on(desk, D(2026, 11, 25))
     assert day_of(desk, "Forward!I2") == D(2026, 11, 27)
+    assert day_of(desk, "OIS_MAIN!B2") == day_of(desk, "MASA!K2") == day_of(desk, "EK_FWD!I2") == D(2026, 11, 26)
     assert day_of(desk, "DİBS RV!D2") == D(2026, 11, 26)                   # WORKDAY(TODAY(),1,Motor!A361:A523)
-    assert day_of(desk, "OIS_MAIN!B2") == D(2026, 11, 4)                   # (recorded: Bloomberg's, unchanged)
+    b5 = cell(desk, "EK_FWD!B5")                                            # 1M: a USDTRY date ...
+    assert cell(desk, "EK_FWD!C5") == b5 - cell(desk, "Forward!I2") and cell(desk, "EK_FWD!X5") == b5 - cell(desk, "OIS_MAIN!B2")
+    assert cell(desk, "EK_FWD!X5") == cell(desk, "EK_FWD!C5") + 1          # ... its OIS days from the OIS spot, one more
+    assert cell(desk, "MASA!BL175") == 1.0                                  # broken date: FX spot − OIS spot
+    assert cell(desk, "OIS_MAIN!K2") == "Bloomberg valörü" and day_of(desk, "OIS_MAIN!L2") == D(2026, 11, 4)
+    params = next(p for p in desk.view(None, "ois")["panels"] if p["id"] == "B1")["data"]
+    assert params["c"][-2:] == ["K", "L"] and [c["t"] for c in params["rows"][0][-2:]] == ["Bloomberg valörü", "04.11.2026"]
 
 
 # ---------------------------------------------------------------------------------------------- tenors

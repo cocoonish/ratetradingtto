@@ -914,9 +914,9 @@ def test_a_meeting_that_passed_leaves_the_list_by_itself(tmp_path):
         svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!U11", "value": "-75"}])               # her step for 21.01.2027
         assert h.auto_roll() is None and svc.store.get("mpc.autoroll") is None              # nothing has passed yet
 
-        def move_spot():                                                                     # Bloomberg's settle date, then
-            book.declare("OIS_MAIN!W2", scope="shared", group="test-spot")
-            book.engine.set_inputs({book.cell("OIS_MAIN!W2"): "14.12.2026"})
+        def move_spot():                                                                     # the OIS spot of a later day
+            book.declare("OIS_MAIN!B2", scope="shared", group="test-spot")
+            book.engine.set_inputs({book.cell("OIS_MAIN!B2"): float(date_to_serial(D("2026-12-14")))})
         svc.et.call(move_spot)
         svc.bump()
         cal = h.calendar()
@@ -939,8 +939,8 @@ def test_a_meeting_that_passed_leaves_the_list_by_itself(tmp_path):
 
 
 def test_the_roll_follows_the_spot_within_the_day(tmp_path, monkeypatch):
-    """Bloomberg's settle date (the OIS spot) moves some time after midnight, not at the turn of the day: the running
-    dashboard looks again every few minutes, so a meeting that passed leaves the list on its day."""
+    """The OIS spot can move within the day - the TRY holiday list edited, the day turned while the dashboard was busy:
+    the running dashboard looks again every few minutes, so a meeting that passed leaves the list on its day."""
     monkeypatch.setattr(Service, "ROLL_CHECK_SECONDS", 0.5)
     svc = make_service(tmp_path)
     try:
@@ -951,8 +951,8 @@ def test_the_roll_follows_the_spot_within_the_day(tmp_path, monkeypatch):
         assert (h.calendar()["next"], h.calendar()["passed_in_list"]) == ("2026-12-10", 0)
 
         def move_spot():
-            book.declare("OIS_MAIN!W2", scope="shared", group="test-spot")
-            book.engine.set_inputs({book.cell("OIS_MAIN!W2"): "11.12.2026"})
+            book.declare("OIS_MAIN!B2", scope="shared", group="test-spot")
+            book.engine.set_inputs({book.cell("OIS_MAIN!B2"): float(date_to_serial(D("2026-12-11")))})
         svc.et.call(move_spot)
         svc.bump()
         assert h.calendar()["passed_in_list"] == 1                                          # passed, still listed
@@ -1021,10 +1021,10 @@ def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
         plan_before = [(p["day"], p["basis"]) for p in h._plan(h.snapshot())[0]]
         assert len(plan_before) == 21
 
-        # ---- the OIS spot moves beyond the meeting of 10.12.2026 (what Bloomberg's settle date will say then)
+        # ---- the OIS spot moves beyond the meeting of 10.12.2026 (what WORKDAY(TODAY(),1,TRY) will say then)
         def move_spot():
-            book.declare("OIS_MAIN!W2", scope="shared", group="test-spot")
-            book.engine.set_inputs({book.cell("OIS_MAIN!W2"): "14.12.2026"})
+            book.declare("OIS_MAIN!B2", scope="shared", group="test-spot")
+            book.engine.set_inputs({book.cell("OIS_MAIN!B2"): float(date_to_serial(D("2026-12-14")))})
         svc.et.call(move_spot)
         svc.bump()
         # a date typed into the page before (the "two dates" calculator starts on 30.11.2026) is now behind the

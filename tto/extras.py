@@ -31,8 +31,9 @@ Two more change formulas of the TRY workbook, each for a reason given where it i
                 engine is pointed at it; the S1 cells it compounded stay for the OIS sheet's own pricing)
 * ``Motor``     the curve's nodes count their days with the desk's calendar instead of Bloomberg's maturities
 
-And one more for the FX value dates: ``EK_TATIL`` holds the USD and EUR holiday lists beside the workbook's TRY list,
-and the USDTRY / EURTRY spot dates and the FX tenors counted from them skip the holidays of both currencies of the pair.
+And one more for the value dates: ``EK_TATIL`` holds the USD and EUR holiday lists beside the workbook's TRY list,
+and the USDTRY / EURTRY spot dates and the FX tenors counted from them skip the holidays of both currencies of the pair;
+the TRY OIS / TLREF spot date (OIS_MAIN!B2) is the next business day of the TRY list (Bloomberg's dates beside them).
 """
 from __future__ import annotations
 
@@ -500,6 +501,33 @@ def _tto_fx_dates(model: Model) -> None:
             for c in range(c1, c2 + 1):
                 addr = "%s%d" % (index_to_col(c), r)
                 b.patch(addr, "=" + formula_of(model, sheet, addr).replace(TRY_HOLIDAYS, FX_HOLIDAYS["USDTRY"]))
+
+
+#: The TRY OIS / TLREF spot date (OIS_MAIN!B2, the workbook's ``SPOTDATE``): the next business day of the TRY list -
+#: TLREF works on a US holiday.  It was Bloomberg's USDTRY settle date (OIS_MAIN!W2, ``TRY Curncy`` ``SETTLE_DT``), an FX
+#: date that skips the US holidays too (25.11.2026: 27.11, where TLREF settles on 26.11); that stands beside it now, for
+#: comparison (K2:L2).  The workbook's OIS, TLREF, meeting, money market and bond dates count from B2; its FX value
+#: dates from Forward!I2.
+OIS_SPOT_NAME = "OIS spot valörü"
+OIS_SPOT_CELLS = ("K2", "L2")            # the caption and Bloomberg's date, right of the OIS page's parameters
+
+
+def _ois_spot_check(model: Model) -> None:
+    _need_sheets(model, "OIS_MAIN", "Motor")
+    _need_formula(model, "OIS_MAIN", "B2", "W2")
+    _need_formula(model, "OIS_MAIN", "W2", '"TRY Curncy","SETTLE_DT"')
+    sh = model.sheet("OIS_MAIN")
+    for addr in OIS_SPOT_CELLS:
+        if parse_a1(addr) in sh.fml or parse_a1(addr) in sh.consts:
+            raise ValueError("OIS_MAIN!%s boş değil" % addr)
+
+
+def _tto_ois_spot(model: Model) -> None:
+    b = SheetBuilder(model, "OIS_MAIN")
+    b.patch("B2", "=WORKDAY(TODAY(),1,%s)" % TRY_HOLIDAYS)
+    caption, date = OIS_SPOT_CELLS
+    b.set(caption, "Bloomberg valörü", like="A2")
+    b.set(date, "=IFERROR(DATE(YEAR($W$2),MONTH($W$2),DAY($W$2)),$W$2)", fmt=DATE, color=NOTE_COLOR, align="center")
 
 
 # ---------------------------------------------------------------------------------------------- TRY workbook
@@ -2912,6 +2940,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
     # (the holiday sheet and the FX value dates first: the forward tables below date their tenors on its calendars)
     "tto": ((HOL_SHEET, _holidays_check, _tto_holidays), (FX_DATE_NAME, _fx_dates_check, _tto_fx_dates),
+            (OIS_SPOT_NAME, _ois_spot_check, _tto_ois_spot),
             (FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
             (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
             ("EK_FWD EURTRY", _fwd_eur_check, _tto_fwd_eur),
