@@ -19,13 +19,16 @@ A line of a chat becomes a record - when, who, which instrument, bid and ask, an
     2yr ois 35.46 , oco with 18m 35.14 offer        two offers, one cancels the other
     18m ois 35.03 bid 35.23 offer           both sides, each with its word
     1y 35.00/35.20 18m 35.03/35.23          a run: several quotes on one line
+    dec mpc 3650/3700                       a meeting-dated OIS: from the December meeting to the next one
+    mpc1 36.50 bid · dec/jan mpc · spot/dec mpc     ... the first meeting ahead; December to January; spot to December
 
 and a chat becomes messages - the time at the start or the end of a line or (on the phone) on the line below, a
 name on its own line, before a colon or in front of the time, a date on its own line ("Friday, November 13, 2026"
 as Bloomberg IB heads a day); the quote of an earlier message that IB puts above a reply is not a message.
 
 Nothing here knows about the workbook: the big figure of a shortened level is completed from the level the
-caller says the instrument is at (:func:`parse_chat`'s ``ref``) and from the lines before it.
+caller says the instrument is at (:func:`parse_chat`'s ``ref``) and from the lines before it; a meeting named by
+its month or number is dated with the calendar the caller gives (:func:`parse_chat`'s ``calendar``).
 """
 from __future__ import annotations
 
@@ -83,7 +86,7 @@ _WEEKDAYS = {"monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1, "wednesda
 _SENDER = re.compile(r"^([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜa-zçğıöşü.'\-]*(?:[ ,]+[A-ZÇĞİÖŞÜ(][A-ZÇĞİÖŞÜa-zçğıöşü.'&()\-]*){0,6}?)\s*(?:says)?\s*:\s+(?=\S)")
 _NAME_LINE = re.compile(r"^[A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.'\-]+(?: [A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.'\-]*){1,4}$")
 
-KINDS = ("outright", "spread", "fly", "fra", "fwd", "switch")
+KINDS = ("outright", "mpc", "spread", "fly", "fra", "fwd", "switch")
 
 
 def _num(text: str) -> float:
@@ -299,6 +302,11 @@ def instrument_key(product: str, kind: str, tenors: List[str]) -> str:
 
 
 def instrument_label(kind: str, tenors: List[str]) -> str:
+    if kind == "mpc":
+        # a meeting-dated swap not dated yet: "MPC1", "MPC1→2", "MPC Ara", "MPC Ara–Oca", "MPC Spot–Ara"
+        if all(t.isdigit() for t in tenors):
+            return "MPC" + "→".join(tenors)
+        return "MPC " + "–".join(tenors)
     if kind == "fra":
         m = [_label_months(t) for t in tenors]
         return "x".join("%d" % x for x in m) if all(x is not None for x in m) else "×".join(tenors)
@@ -501,6 +509,227 @@ def _complete_px(text: str, ref: Optional[float], anchor: Optional[float] = None
     return round(cands[0], 6), "abbr"
 
 
+# ---------------------------------------------------------------------------------------------- meetings
+#: what names a meeting of the central bank (MPC, PPK): "dec mpc", "aralık ppk", "1st meeting", "ocak toplantısı"
+_MPC_WORDS = {"mpc", "mpcs", "ppk", "meeting", "meetings", "mtg", "toplantı", "toplanti", "toplantısı", "toplantisi"}
+_MPC_NTH = re.compile(r"^(?:mpc|ppk)-?(\d{1,2})(?:(?:/|-|→|>)(?:mpc|ppk)?-?(\d{1,2}))?$")    # "mpc1", "ppk2", "mpc1/2", "mpc1→2"
+_ORDINAL = re.compile(r"^(\d{1,2})(?:st|nd|rd|th|\.)$")                                       # "1st", "2nd", "1." (Turkish)
+_ORDINAL_WORDS = {"first": 1, "next": 1, "ilk": 1, "second": 2, "third": 3, "fourth": 4}
+_MPC_MONTH = re.compile(r"^([a-zçğıöşü]{3,9})\.?'?(\d{2}|\d{4})?$")                           # "dec", "dec26", "dec'26", "aralık"
+_MPC_JOIN = ("/", "-", "→", ">", "to")
+#: a meeting put against another ("dec vs jan mpc", "dec/jan mpc spread -25/-20") is a spread of two periods (a step):
+#: not read - it stays text rather than be taken for the rate of one period
+_MPC_NOT = _VERSUS | {"spread", "sprd", "spd", "switch", "sw", "fly", "flies", "bfly", "butterfly", "step", "steps"}
+_MPC_OTHER = {"xccy", "ccs", "x", "cross", "basis", "irs", "fx", "fxs", "fxswap", "pts", "points", "puan", "pips"}
+#: how the desk names a month (as the bond labels do: "Ara26")
+_TR_MONTHS = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
+
+
+def _meeting(word: str) -> Optional[Dict[str, Any]]:
+    """A meeting named by one word: its month - English or Turkish, with or without its year ("dec", "december",
+    "aralık", "dec26", "dec'26", "aralık'taki") -, or ``{"spot": True}`` for the OIS spot ("spot")."""
+    w = word.replace("\u0307", "").strip(".")
+    if w == "spot":
+        return {"spot": True}
+    if "'" in w and w.split("'", 1)[1].isalpha():
+        w = w.split("'", 1)[0]                              # "aralık'taki": the Turkish ending goes
+    m = _MPC_MONTH.match(w)
+    if not m or m.group(1) not in _BOND_MONTHS:
+        return None
+    y = m.group(2)
+    return {"m": _BOND_MONTHS[m.group(1)], "y": None if not y else (int(y) if len(y) == 4 else 2000 + int(y))}
+
+
+def _meeting_pair(word: str) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Two meetings written as one word: "dec/jan", "dec-jan", "dec→jan", "spot/dec"."""
+    for sep in _MPC_JOIN[:4]:
+        a, s, b = word.partition(sep)
+        if s and a and b:
+            ra, rb = _meeting(a), _meeting(b)
+            if ra is not None and rb is not None and not rb.get("spot"):
+                return ra, rb
+    return None
+
+
+def _ordinal(word: str) -> Optional[int]:
+    m = _ORDINAL.match(word)
+    return int(m.group(1)) if m else _ORDINAL_WORDS.get(word)
+
+
+def _mpc_before(low: List[str], k: int) -> Optional[Tuple[set, Dict[str, Any], Optional[Dict[str, Any]]]]:
+    """The meeting named right before the word at ``k`` ("mpc", "ppk" ...): "dec mpc", "dec/jan mpc", "dec jan mpc",
+    "dec / jan mpc", "spot dec mpc", "dec 26 mpc", "1st mpc", "next mpc"."""
+    if k == 0:
+        return None
+    w = low[k - 1]
+    pair = _meeting_pair(w)
+    if pair:
+        return {k - 1, k}, pair[0], pair[1]
+    n = _ordinal(w)
+    if n:
+        return {k - 1, k}, {"n": n}, None
+    j = k - 1
+    one = _meeting(w)
+    if one is None and re.match(r"^'?\d{2}$|^20\d{2}$", w) and k >= 2:
+        one = _meeting(low[k - 2])                          # "dec 26 mpc", "dec 2026 mpc": the year between the month and the word
+        if one is None or one.get("spot") or one.get("y") is not None:
+            return None
+        y = int(w.strip("'"))
+        one, j = dict(one, y=y if y > 100 else 2000 + y), k - 2
+    if one is None or one.get("spot"):
+        return None
+    if j >= 2 and low[j - 1] in _MPC_JOIN and _meeting(low[j - 2]) is not None:
+        return set(range(j - 2, k + 1)), _meeting(low[j - 2]), one          # "dec / jan mpc", "dec to jan mpc"
+    if j >= 1 and _meeting(low[j - 1]) is not None:
+        return set(range(j - 1, k + 1)), _meeting(low[j - 1]), one          # "dec jan mpc", "spot dec mpc"
+    return set(range(j, k + 1)), one, None
+
+
+def _mpc_after(low: List[str], k: int) -> Optional[Tuple[set, Dict[str, Any], Optional[Dict[str, Any]]]]:
+    """The meeting named right after the word at ``k``: "mpc dec", "mpc dec/jan", "mpc dec jan", "ppk aralık",
+    "mpc 2" (a number up to 24 is the meeting's: the second one ahead)."""
+    if k + 1 >= len(low):
+        return None
+    w = low[k + 1]
+    pair = _meeting_pair(w)
+    if pair:
+        return {k, k + 1}, pair[0], pair[1]
+    one = _meeting(w)
+    if one is not None and not one.get("spot"):
+        nxt = _meeting(low[k + 2]) if k + 2 < len(low) else None
+        if nxt is not None and not nxt.get("spot"):
+            return {k, k + 1, k + 2}, one, nxt                              # "mpc dec jan"
+        if k + 3 < len(low) and low[k + 2] in _MPC_JOIN:
+            nxt = _meeting(low[k + 3])
+            if nxt is not None and not nxt.get("spot"):
+                return {k, k + 1, k + 2, k + 3}, one, nxt                   # "mpc dec / jan"
+        return {k, k + 1}, one, None
+    n = _ordinal(w)
+    if n is None and re.match(r"^\d{1,2}$", w) and 1 <= int(w) <= 24:
+        n = int(w)
+    return ({k, k + 1}, {"n": n}, None) if n else None
+
+
+def _mpc_ref(low: List[str]) -> Optional[Tuple[set, Dict[str, Any], Optional[Dict[str, Any]]]]:
+    """Where a line names a meeting-dated OIS: (the words of it, the meeting it starts at, the one it ends at or
+    ``None`` - the next one).  A meeting is named next to "mpc" / "ppk" / "meeting" ("dec mpc", "mpc dec", "1st mpc",
+    "mpc 2", "dec/jan mpc", "spot/dec mpc") or by its number ("mpc1", "mpc1/2").  ``None`` when the line names
+    none, names two apart, or puts them against each other ("dec vs jan mpc", "... spread": a step, not read)."""
+    if set(low) & (_MPC_NOT | _MPC_OTHER):
+        return None
+    found = []
+    for k, w in enumerate(low):
+        m = _MPC_NTH.match(w)
+        if m:
+            found.append(({k}, {"n": int(m.group(1))}, {"n": int(m.group(2))} if m.group(2) else None))
+        elif w in _MPC_WORDS:
+            got = _mpc_before(low, k) or _mpc_after(low, k)
+            if got is not None:                             # "after the meeting": no meeting named
+                found.append(got)
+    if len(found) != 1:
+        return None
+    used = found[0][0]
+    if any(k not in used and (_meeting_pair(w) or (_meeting(w) or {}).get("m")) for k, w in enumerate(low)):
+        return None                                         # another month on the line ("next mpc on 10 dec"): a date, not a quote
+    return found[0]
+
+
+def _meeting_text(ref: Dict[str, Any]) -> str:
+    """A meeting as said, before it is dated: "1" (MPC1), "Ara", "Ara27", "Spot"."""
+    if ref.get("spot"):
+        return "Spot"
+    if ref.get("n"):
+        return str(ref["n"])
+    return _TR_MONTHS[ref["m"] - 1] + ("%02d" % (ref["y"] % 100) if ref.get("y") else "")
+
+
+def mpc_span(said: Dict[str, Any], calendar: Dict[str, Any], on: Optional[_dt.date] = None) -> Optional[Dict[str, Any]]:
+    """The dates of a meeting-dated swap as it was said (``said``: ``{"from", "to"}`` of :func:`_mpc_ref`): from the
+    effective day of the meeting it starts at - or the OIS spot - to the effective day of the meeting it ends at (the
+    next one when none is said).
+
+    ``calendar``: ``{"meetings": [(decision day, effective day), ...] ascending, "spot": OIS spot}`` (dates).  ``on``:
+    the day it was said.  A month is that month's first meeting from a month before ``on`` on ("dec" on 20
+    December is the meeting of 10 December, whose period runs); a number counts the meetings from ``on`` on (on the
+    day of a decision its meeting is still the first).  ``None`` when the calendar has no such meeting."""
+    meetings = list(calendar.get("meetings") or [])
+    on = on or calendar.get("on") or _dt.date.today()
+
+    def find(ref: Dict[str, Any], after: Optional[int] = None) -> Optional[int]:
+        if ref.get("n"):
+            ahead = [i for i, (d, _) in enumerate(meetings) if d >= on]
+            k = ref["n"] - 1
+            hit = ahead[k] if k < len(ahead) else None
+            return hit if hit is not None and (after is None or hit > after) else None
+        for i, (d, _) in enumerate(meetings):
+            if after is not None and i <= after:
+                continue
+            if d.month != ref.get("m") or (ref.get("y") and d.year != ref["y"]):
+                continue
+            if after is None and not ref.get("y") and d < on - _dt.timedelta(days=31):
+                continue
+            return i
+        return None
+
+    frm, to = said.get("from") or {}, said.get("to")
+    if frm.get("spot"):
+        spot = calendar.get("spot")
+        j = find(to) if to else None
+        if spot is None or j is None:
+            return None
+        start, i = spot, None
+    else:
+        i = find(frm)
+        if i is None:
+            return None
+        j = find(to, i) if to else (i + 1 if i + 1 < len(meetings) else None)
+        if j is None:
+            return None
+        start = meetings[i][1]
+    end = meetings[j][1]
+    if end <= start:
+        return None
+    return {"start": start.isoformat(), "end": end.isoformat(), "meeting": meetings[i][0].isoformat() if i is not None else None,
+            "until": meetings[j][0].isoformat(), "periods": (j - i) if i is not None else None}
+
+
+def mpc_label(span: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """How a dated meeting swap is named on the board: "MPC Ara26" (one meeting to the next), "MPC Ara26–Mar27"
+    (several), "MPC Spot–Ara26" (from the OIS spot) - by the month of the decision; and its two ends."""
+    def month(iso: str) -> str:
+        d = _dt.date.fromisoformat(iso)
+        return "%s%02d" % (_TR_MONTHS[d.month - 1], d.year % 100)
+
+    first = "Spot" if span.get("meeting") is None else month(span["meeting"])
+    ends = [first, month(span["until"])]
+    if span.get("meeting") is not None and span.get("periods") == 1:
+        return "MPC " + first, ends
+    return "MPC %s–%s" % tuple(ends), ends
+
+
+def date_mpc(q: Dict[str, Any], calendar: Optional[Dict[str, Any]], on: Any = None) -> Dict[str, Any]:
+    """Date a meeting-dated swap with the calendar (in place): its key becomes its two effective days
+    ("OIS:mpc:2026-12-11/2027-01-22") - "dec mpc", "mpc1" and "dec/jan mpc" said in November are one instrument -,
+    its label the meeting's month.  A meeting the calendar does not have is flagged ("mpc?") and left as it was said."""
+    span = q.get("mpc")
+    if q.get("kind") != "mpc" or not span or span.get("start") or not calendar:
+        return q
+    day = on if isinstance(on, _dt.date) else (_dt.date.fromisoformat(on) if on else None)
+    got = mpc_span(span, calendar, day)
+    if got is None:
+        if "mpc?" not in q["flags"]:
+            q["flags"].append("mpc?")
+        return q
+    span.update(got)
+    q["label"], q["tenors"] = mpc_label(got)
+    q["key"] = "OIS:mpc:%s/%s" % (got["start"], got["end"])
+    base = day or calendar.get("on") or _dt.date.today()
+    q["months"] = [round((_dt.date.fromisoformat(got[k]) - base).days / 30.4375, 2) for k in ("start", "end")]
+    if "mpc?" in q["flags"]:
+        q["flags"].remove("mpc?")
+    return q
+
+
 # ---------------------------------------------------------------------------------------------- FX swaps
 _GROUPED = re.compile(r"^\d{1,3}(?:[.,]\d{3})+$")
 
@@ -565,9 +794,16 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
             if found:
                 at = i
                 break
-    if short is None and not fx:
+    # a meeting-dated OIS ("dec mpc", "mpc1"): read before the bonds - "dec26 mpc" is a meeting, not a bond - and before
+    # a tenor said after it ("dec mpc 36.50/37.00 in 5m": a size); a tenor said first is the instrument ("18m ... dec meeting")
+    mpc = _mpc_ref(low) if short is None and not fx else None
+    if mpc is not None and found is not None and at < min(mpc[0]):
+        mpc = None
+    if mpc is not None:
+        found = None
+    if short is None and not fx and mpc is None:
         raw, low = _split_bond_pairs(raw, low)
-    bonds = _bond_refs(low) if short is None and not fx else []
+    bonds = _bond_refs(low) if short is None and not fx and mpc is None else []
     if len(bonds) > 2:
         return None                                        # three bonds or more: kept as it was written
     bond = None
@@ -602,6 +838,11 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         idx = [k for k in range(len(low)) if k not in used_b]
     if bond is not None or switch is not None:
         pass
+    elif mpc is not None:
+        used_m, frm, to = mpc
+        tenors = [_meeting_text(frm)] + ([_meeting_text(to)] if to else [])
+        months, kind, product = [0.0], "mpc", "OIS"
+        idx = [k for k in range(len(low)) if k not in used_m]
     elif short is not None:
         tenors, months, kind, product = [_FX_SHORT[low[short]]], [0.0], "outright", "FX"
         idx = [k for k in range(len(low)) if k != short]
@@ -649,6 +890,13 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
                            "clear": [], "flags": [], "note": ""}
     if parts:
         out["parts"] = parts
+    if mpc is not None:
+        out["mpc"] = {"from": mpc[1], "to": mpc[2], "said": " ".join(raw[k] for k in sorted(mpc[0]))}
+    elif kind == "mpc" and instrument is not None and instrument.get("mpc"):
+        # the other side of a meeting swap quoted just before ("dec mpc 36.50 bid, 37.00 offer")
+        out["mpc"] = dict(instrument["mpc"])
+        out["label"], out["key"], out["tenors"], out["months"] = instrument["label"], instrument["key"], list(instrument["tenors"]), \
+            list(instrument["months"])
     if switch is not None:
         out["label"] = " / ".join(tenors)
         isins = [b.get("isin") for b in switch]
@@ -829,8 +1077,11 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         out["side"] = side
     if _crossed(out):
         out["flags"].append("crossed")
+    if kind == "mpc" and any(type(out[k]) is float and out[k] < 0 for k in ("bid", "ask", "price")):
+        return None                                        # "dec/jan mpc -25/-20": a step between two periods, not a rate - text
     # ---- what else was said stays as it was typed ("bal", a size, "nl" ...)
-    known = _VOCABULARY | (_BOND_WORDS if product == "DIBS" else set()) | (_SWITCH_WORDS if kind == "switch" else set())
+    known = _VOCABULARY | (_BOND_WORDS if product == "DIBS" else set()) | (_SWITCH_WORDS if kind == "switch" else set()) \
+        | (_MPC_WORDS if kind == "mpc" else set())
 
     def said(w: str) -> bool:
         return bool(w) and w not in known and not (product == "DIBS" and re.match(r"^(tlref|cpi|zc|tüfe|tufe)?\.?t\d$", w))
@@ -906,6 +1157,13 @@ def _split_run(text: str) -> List[str]:
     i = 0
     while i < len(low):
         found = _tenor_expression(low, i, fra_word)
+        if not found:
+            # a meeting with its word ("dec mpc 3650/3700 jan mpc 3600/3650"): an instrument as a tenor is
+            for n in (4, 3, 2, 1):
+                got = _mpc_ref(low[i:i + n]) if i + n <= len(low) else None
+                if got is not None and got[0] == set(range(n)):
+                    found = (n, [], "")
+                    break
         if found:
             j = i + found[0]
             while j < len(low) and (low[j] in _PRODUCTS or low[j] in _FILLER or low[j] in _FRA):
@@ -975,7 +1233,7 @@ def parse_message(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[f
         return []
     explicit = [q for q in quotes if any(w.lower().strip(",;") in _PRODUCTS for w in _tokens(q["raw_part"]))]
     for q in quotes:
-        if q not in explicit and explicit:
+        if q not in explicit and explicit and q["kind"] != "mpc":                 # a meeting swap is an OIS whatever else is said
             # "... oco with 18m 35.14 offer": the product is the one named in the message
             if q["product"] != explicit[0]["product"]:
                 q["product"] = explicit[0]["product"]
@@ -1196,7 +1454,8 @@ def split_messages(text: str, today: Optional[_dt.date] = None) -> List[Dict[str
 def parse_chat(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[float]]] = None,
                today: Optional[_dt.date] = None,
                standing: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
-               nearby: Optional[Callable[[Dict[str, Any]], List[Dict[str, Any]]]] = None) -> List[Dict[str, Any]]:
+               nearby: Optional[Callable[[Dict[str, Any]], List[Dict[str, Any]]]] = None,
+               calendar: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Everything a pasted chat says, line by line.  A line that names an instrument gives one record per quote
     (``event`` quote / trade / ref / interest / level); any other line is kept as it is (``event`` "text").
 
@@ -1205,13 +1464,16 @@ def parse_chat(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[floa
     and ask that stood before the chat (``{"bid", "ask"}``): "18m ois taken" is a trade at the offer that stands.
     Both are given the record with the ``date`` and ``time`` of its message, as far as the chat says them.
     ``nearby(record)``: the bonds priced elsewhere (the day's chat, the screen) as ``near_level`` takes them - a
-    floater or a bill nobody has priced takes its big figure from the nearest one, of the chat first."""
+    floater or a bill nobody has priced takes its big figure from the nearest one, of the chat first.
+    ``calendar``: the meetings a meeting-dated swap ("dec mpc", "mpc1") is dated with - see :func:`mpc_span`
+    (``"on"``: the day of the messages that do not say theirs)."""
     last: Dict[str, float] = {}
     book: Dict[str, Dict[str, Optional[float]]] = {}
     at: Dict[str, Any] = {}                               # the message being read
     bonds_said: Dict[str, Dict[str, Any]] = {}            # the bonds this chat priced: key -> near_level's record
 
     def where(q: Dict[str, Any]) -> Optional[float]:
+        date_mpc(q, calendar, at.get("date"))             # "dec mpc": where it stands is where its dates stand
         if q["key"] in last:
             return last[q["key"]]
         probe = dict(q, date=at.get("date"), time=at.get("time"))
@@ -1242,6 +1504,7 @@ def parse_chat(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[floa
         if any(q.get("oco") for q in quotes):
             group += 1
         for q in quotes:
+            date_mpc(q, calendar, msg["date"])
             q.update({"date": msg["date"], "time": msg["time"], "sender": msg["sender"], "raw": msg["text"], "ok": True})
             if msg.get("head"):
                 # the heading the line was written under ("Auction prices:") says what its level is
@@ -1274,18 +1537,40 @@ _KIND_ORDER = {k: i for i, k in enumerate(KINDS)}
 
 
 def sort_key(q: Dict[str, Any]) -> Tuple:
-    return (q.get("product") != "OIS", q.get("product") or "", _KIND_ORDER.get(q.get("kind"), 9), tuple(q.get("months") or ()))
+    months = tuple(q.get("months") or ())
+    if q.get("kind") == "mpc":
+        span = q.get("mpc") or {}
+        # meeting swaps by their days (a meeting the calendar did not date: after the dated ones)
+        months = (span["start"], span["end"]) if span.get("start") else ("~",)
+    return (q.get("product") != "OIS", q.get("product") or "", _KIND_ORDER.get(q.get("kind"), 9), months)
 
 
-def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
+def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]], bool]] = None,
+          now: Optional[_dt.datetime] = None, stale_after: Optional[float] = None,
+          by: Optional[Callable[[Dict[str, Any]], str]] = None) -> List[Dict[str, Any]]:
     """Where every instrument stands after the records (oldest first): the last bid and ask with their times,
     the last trade, and what was said last.  A side that was taken off ("ref", or the empty half of "/35.23")
     is empty; a side nobody has spoken of since keeps its level and its time.
 
     ``ours(record)`` tells the lines of our own desk: our prices are not the market's, so they are kept apart
     (``our_bid`` / ``our_ask``) and do not move its bid and ask.  A trade is a trade, whoever says it
-    (``last_by``: "biz" when it was ours)."""
+    (``last_by``: "biz" when it was ours).
+
+    **The best price, broker by broker.**  The brokers' quotes are also kept by house (``brokers``; ``by(record)``:
+    the house of a line - its source, else its sender), and the best bid and offer of them stand on the row with
+    their house and time (``best_bid``, ``best_bid_by``, ``best_bid_time``, ``best_bid_age``, the same for the ask):
+    the highest bid and the lowest offer (in yield the other way round), the later of two at one level - a worse
+    quote said later does not hide a better one.  A house's side goes when it withdraws it, when the board is reset
+    (the caller leaves those lines out) and when it is traded away: a trade takes off every offer at or under its
+    level when the offer was lifted ("taken", "paid"), every bid at or over it when the bid was hit ("given"), both
+    when nobody's side was said ("trades") - the trading house's own side when no level was said -, and with them
+    the other quotes of their "oco" message.  With ``now`` (a datetime) and ``stale_after`` (seconds) a quote older
+    than that is stale (``bid_stale`` ...): it stays in its house's row with its age (``bid_age``, seconds) and is
+    never the best.  A quote is as old as the time it was said - or it was kept, when that is earlier: a time typed
+    ahead of the clock makes nothing fresh."""
     rows: Dict[str, Dict[str, Any]] = {}
+    books: Dict[str, Dict[str, Dict[str, Any]]] = {}          # instrument -> house -> side -> the quote that stands
+    oco: Dict[str, List[Tuple[str, str, str]]] = {}            # an "oco" message -> where its quotes stand
     for q in records:
         if not q.get("ok"):
             continue
@@ -1297,44 +1582,131 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
             row = rows[q["key"]] = {"key": q["key"], "product": q["product"], "kind": q["kind"], "tenors": q["tenors"],
                                     "months": q.get("months") or [], "label": q["label"], "unit": q["unit"],
                                     "bid": None, "bid_time": None, "ask": None, "ask_time": None, "last": None,
-                                    "last_time": None, "last_side": None, "last_by": None, "level": None, "level_time": None,
-                                    "our_bid": None, "our_ask": None, "our_time": None, "said": ""}
+                                    "last_time": None, "last_side": None, "last_by": None, "last_src": None, "level": None,
+                                    "level_time": None, "our_bid": None, "our_ask": None, "our_time": None, "our_at": None, "said": ""}
+            books[q["key"]] = {}
             if q.get("isin"):
                 row["isin"] = q["isin"]                     # a bond's ISIN, for the screen and the bond pages
             if q.get("legs"):
                 row["legs"] = q["legs"]                     # the two bonds of a switch
             if q.get("parts"):
                 row["parts"] = q["parts"]                   # the two FRAs of a spread written "6x9m vs 9x12m"
+            if q.get("mpc"):
+                row["mpc"] = q["mpc"]                       # a meeting-dated swap: its meetings and dates
         when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
+        kept = str(q.get("created_at") or "")[:19]
+        at = min(when, kept) if q.get("date") and _stamp(kept) is not None else when
+        house = (by(q) if by is not None else (q.get("source") or q.get("sender"))) or ""
+        book = books[q["key"]]
         ev = q["event"]
         if ev == "quote":
             if mine:
                 for side in ("bid", "ask"):
                     if q.get(side) is not None or side in (q.get("clear") or []):
                         row["our_" + side] = q.get(side)
-                row["our_time"] = when
+                row["our_time"], row["our_at"] = when, at
             else:
+                origin = "%s|%s|%s|%s" % (when, q.get("sender") or "", q.get("raw") or "", q["oco"]) if q.get("oco") else None
+                sides = book.setdefault(house, {})
                 for side in ("bid", "ask"):
                     if q.get(side) is not None:
                         row[side], row[side + "_time"] = q[side], when
+                        sides[side] = {"v": q[side], "time": when, "at": at, "origin": origin}
+                        if origin:
+                            oco.setdefault(origin, []).append((q["key"], house, side))
                     elif side in (q.get("clear") or []):
                         row[side], row[side + "_time"] = None, when
+                        sides[side] = None
         elif ev == "trade":
             if q.get("price") is not None:
                 row["last"], row["last_time"], row["last_side"] = q["price"], when, q.get("side")
                 row["last_by"] = "biz" if mine else "broker"
+                row["last_src"] = house
+            _trade_away(books, oco, q, house)
         elif ev == "ref":
             for side in ((q["side"],) if q.get("side") else ("bid", "ask")):
                 if mine:
                     row["our_" + side] = None
-                    row["our_time"] = when
+                    row["our_time"], row["our_at"] = when, at
                 else:
                     row[side], row[side + "_time"] = None, when
+                    if house in book:
+                        book[house][side] = None
         elif ev == "level" and not mine:
             row["level"], row["level_time"] = q.get("price"), when
         row["said"] = q.get("raw") or ""
         row["time"] = when
+    for key, row in rows.items():
+        _best(row, books[key], now, stale_after)
     return sorted(rows.values(), key=sort_key)
+
+
+def _trade_away(books: Dict[str, Dict[str, Dict[str, Any]]], oco: Dict[str, List[Tuple[str, str, str]]], q: Dict[str, Any],
+                house: str) -> None:
+    """What a trade takes off the brokers' quotes of its instrument: every offer at or under its level when the offer
+    was lifted, every bid at or over it when the bid was hit, both when nobody's side was said (in yield the other
+    way round: what was better was dealt first, or was not there) - the trading house's own side when no level was
+    said -, and with them the other quotes of their "oco" message."""
+    book = books[q["key"]]
+    price, said, unit = q.get("price"), q.get("side"), q.get("unit")
+    gone = []
+    for h, sides in book.items():
+        for side in ("bid", "ask"):
+            x = sides.get(side)
+            if not x or said not in (None, side):
+                continue
+            if price is None:
+                hit = h == house and said == side
+            elif (side == "ask") != (unit == "yld"):
+                hit = x["v"] <= price + 1e-9
+            else:
+                hit = x["v"] >= price - 1e-9
+            if hit:
+                gone.append((h, side, x.get("origin")))
+    for h, side, _ in gone:
+        book[h][side] = None
+    for origin in {o for _, _, o in gone if o}:
+        for key, h, side in oco.get(origin, ()):
+            x = books[key].get(h, {}).get(side)
+            if x and x.get("origin") == origin:
+                books[key][h][side] = None
+
+
+def _age(now: Optional[_dt.datetime], stamp: Optional[str]) -> Optional[float]:
+    """Seconds from a "YYYY-MM-DD HH:MM:SS" stamp to ``now`` (none for a stamp ahead of it); ``None`` without both."""
+    t = _stamp(stamp) if now is not None and stamp else None
+    return None if t is None else max(0.0, (now - t).total_seconds())
+
+
+def _best(row: Dict[str, Any], book: Dict[str, Dict[str, Any]], now: Optional[_dt.datetime], stale_after: Optional[float]) -> None:
+    """The brokers' quotes of a board row (``brokers``, by house) and the best of the fresh ones (``best_bid`` ...)."""
+    brokers = []
+    for house in sorted(book, key=lambda x: (x.lower(), x)):
+        entry: Dict[str, Any] = {"by": house}
+        for side in ("bid", "ask"):
+            x = book[house].get(side)
+            age = _age(now, x["at"]) if x else None
+            entry.update({side: x["v"] if x else None, side + "_time": x["time"] if x else None, side + "_age": age,
+                          side + "_stale": bool(x) and age is not None and stale_after is not None and age > stale_after})
+        if entry["bid"] is None and entry["ask"] is None:
+            continue                                        # withdrawn, traded away: nothing of this house stands
+        entry["time"] = max(t for t in (entry["bid_time"], entry["ask_time"]) if t)
+        brokers.append(entry)
+    row["brokers"] = brokers
+    for side in ("bid", "ask"):
+        up = (side == "bid") != (row.get("unit") == "yld")              # the higher bid, the lower offer - a yield's the other way
+        best = None
+        for b in brokers:
+            if b[side] is None or b[side + "_stale"]:
+                continue
+            if best is None or (b[side] > best[side] if up else b[side] < best[side]) or \
+                    (b[side] == best[side] and (b[side + "_time"] or "") > (best[side + "_time"] or "")):
+                best = b
+        for k in ("", "_by", "_time", "_age"):
+            row["best_" + side + k] = (best[side + k] if k != "_by" else best["by"]) if best else None
+    age = _age(now, row.get("our_at")) if row.get("our_bid") is not None or row.get("our_ask") is not None else None
+    row["our_age"] = age
+    row["our_stale"] = age is not None and stale_after is not None and age > stale_after
 
 
 # ---------------------------------------------------------------------------------------------- who said it
@@ -1360,12 +1732,20 @@ def person_of(people: Dict[str, Dict[str, Any]], sender: Any) -> Optional[Dict[s
 
 # ---------------------------------------------------------------------------------------------- against a curve
 def model_level(q: Dict[str, Any], par: Callable[[str], Optional[float]],
-                fra: Optional[Callable[[int, int], Optional[float]]] = None) -> Optional[float]:
+                fra: Optional[Callable[[int, int], Optional[float]]] = None,
+                mpc: Optional[Callable[[str, str], Optional[float]]] = None) -> Optional[float]:
     """Where a curve has the instrument, in the unit it is quoted in: ``par(tenor)`` is the curve's par rate (a
-    fraction) and ``fra(start, end)`` its forward between two month counts.  Outright and FRA in per cent;
-    spread (long − short) and fly (2·body − wings) in bp.  ``None`` where the curve has no answer."""
+    fraction), ``fra(start, end)`` its forward between two month counts and ``mpc(start, end)`` its rate between
+    two days (ISO; a meeting-dated swap).  Outright, FRA and meeting swap in per cent; spread (long − short) and fly
+    (2·body − wings) in bp.  ``None`` where the curve has no answer."""
     t = q["tenors"]
     try:
+        if q["kind"] == "mpc":
+            span = q.get("mpc") or {}
+            if mpc is None or not span.get("start") or not span.get("end"):
+                return None                                 # a meeting the calendar did not date
+            v = mpc(span["start"], span["end"])
+            return None if v is None else v * 100.0
         if q["kind"] == "spread" and q.get("parts"):
             # "6x9m vs 9x12m": the later part − the earlier, each where the curve has it (per cent) -> bp
             lv = [model_level(p, par, fra) for p in q["parts"]]
@@ -1392,10 +1772,135 @@ def model_level(q: Dict[str, Any], par: Callable[[str], Optional[float]],
 
 
 def against(row: Dict[str, Any], mid: Optional[float]) -> Dict[str, Any]:
-    """A board row next to the curve: the model level and how far bid, ask and the last trade are from it (bp)."""
+    """A board row next to the curve: the model level and how far bid, ask, the last trade - and the best bid and
+    offer of the brokers, on a row that has them - are from it (bp)."""
     k = 100.0 if row["unit"] in ("pct", "yld") else 1.0
     out = {"mid": mid}
-    for name in ("bid", "ask", "last"):
+    for name in ("bid", "ask", "last") + (("best_bid", "best_ask") if "best_bid" in row else ()):
         v = row.get(name)
         out[name + "_diff"] = None if v is None or mid is None else (v - mid) * k
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- the chat against the blotter
+#: how far apart in time a trade said in the chat and its entry in the blotter may be to be taken for one (seconds)
+MATCH_WINDOW = 15 * 60
+#: how close two levels are when they are one: per cent, bp, swap points, a bond's price
+_LEVEL_TOLERANCE = {"pct": 5e-5, "bp": 5e-3, "pts": 0.5, "px": 5e-4}
+_TENOR_DAYS = {"W": 7.0, "M": 30.4375, "Y": 365.0}
+
+
+def booked_as(q: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What the blotter (Günlük İşlemler) books a trade of the chat as: the instrument as ``blotter.trade_entries``
+    names it (``sig``) and the level in the chat's unit (``level``, ``unit``; an FX swap's days too).  ``None`` for
+    what the blotter has no form for: cross-currency, IRS, a switch, an O/N - S/N swap, a spread of two FRAs, a tenor
+    or FRA its form does not list, a meeting the calendar did not date."""
+    from .blotter import OIS_TENORS
+    if not q.get("ok") or q.get("parts"):
+        return None
+    product, kind, unit = q.get("product"), q.get("kind"), q.get("unit")
+    t, m = list(q.get("tenors") or []), list(q.get("months") or [])
+    level = q.get("price") if type(q.get("price")) is float else None
+    if product == "OIS":
+        sig: Optional[Tuple[Any, ...]] = None
+        if kind in ("outright", "spread", "fly") and t and all(x in OIS_TENORS for x in t):
+            sig = ("ois", kind) + tuple(t)
+        elif kind in ("fra", "fwd") and len(m) == 2:
+            a, b = (m[0], m[1]) if kind == "fra" else (m[0], m[0] + m[1])
+            if a == int(a) and b == int(b) and 0 <= a < b <= 120 and not a % 3 and not b % 3:
+                sig = ("ois", "fra", int(a), int(b))
+        elif kind == "mpc" and (q.get("mpc") or {}).get("start"):
+            sig = ("ois", "mpc", q["mpc"]["start"], q["mpc"]["end"])
+        return None if sig is None else {"sig": sig, "level": level, "unit": unit}
+    if product == "FX" and kind == "outright" and t and re.match(r"^\d+[WMY]$", t[0]):
+        return {"sig": ("fwd", "USDTRY"), "level": level, "unit": "pts", "days": int(t[0][:-1]) * _TENOR_DAYS[t[0][-1]]}
+    if product == "DIBS" and kind != "switch" and q.get("isin"):
+        # a bill quoted on its yield: the blotter keeps a price - the yield is not compared with it
+        return {"sig": ("bond", q["isin"]), "level": level if unit == "px" else None, "unit": unit}
+    return None
+
+
+def _one_trade(b: Dict[str, Any], e: Dict[str, Any]) -> bool:
+    """Whether a chat trade (:func:`booked_as`) and a blotter entry are the same instrument at the same level."""
+    if b["sig"] != e.get("sig"):
+        return False
+    if b["sig"][0] == "fwd":
+        days = e.get("days")
+        if type(days) is not float or abs(days - b["days"]) > 4.0 + 0.03 * b["days"]:
+            return False                                     # "1M": a value date about a month away
+    if b["sig"][0] == "bond" and b.get("unit") == "yld":
+        return True                                          # the bond and the time alone
+    tol = _LEVEL_TOLERANCE.get(b.get("unit") or "")
+    return tol is not None and b.get("level") is not None and type(e.get("level")) is float and abs(e["level"] - b["level"]) <= tol
+
+
+def _stamp(text: Any) -> Optional[_dt.datetime]:
+    try:
+        return _dt.datetime.strptime(str(text)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def chat_note(q: Dict[str, Any]) -> str:
+    """The note "İşlem gir" gives a trade it fills from a chat line ("Chat 13:41:09 MIKE REES: 18m ois taken at 14")."""
+    return ("Chat " + " ".join(x for x in (q.get("time"), q.get("sender")) if x) + ": " + (q.get("raw") or ""))[:160]
+
+
+def reconcile(chats: List[Dict[str, Any]], entries: List[Dict[str, Any]], overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+              window: float = MATCH_WINDOW) -> Dict[Any, Dict[str, Any]]:
+    """Which trade of the desk said in the chat is in the blotter.  ``chats``: the chat's trade lines (records with
+    ``id``, ``date``, ``time``, ``sender``, ``raw``); ``entries``: the blotter's trades as ``blotter.trade_entries``
+    gives them; ``overrides``: what the desk decided by hand, by chat line id (text) - ``{"match": trade id}``,
+    ``{"ignore": True}``, ``{"reject": [trade ids]}`` (pairs that are not one).
+
+    In order: a pair made by hand; a trade entered from the chat line itself ("İşlem gir": its note names the line,
+    whenever it was entered); a trade of the same instrument at the same level entered within ``window`` seconds of
+    the time the chat says.  One entry for one line, the nearest in time first.  Returns ``{chat id: {"state",
+    "entry", "gap"}}``: state "manual", "linked", "auto" (in the blotter), "ignored", "missing" (not entered) or
+    "noform" (the blotter has no form for it); ``gap``: the entry's time − the chat's (seconds)."""
+    overrides = overrides or {}
+    entry_of = {i: e["id"] for e in entries for i in e.get("ids") or [e["id"]]}
+    by_id = {e["id"]: e for e in entries}
+    taken: set = set()
+    out: Dict[Any, Dict[str, Any]] = {}
+
+    def gap(q: Dict[str, Any], e: Dict[str, Any]) -> Optional[float]:
+        a, b = _stamp("%s %s" % (q.get("date"), q.get("time"))), _stamp(e.get("at"))
+        return None if a is None or b is None else (b - a).total_seconds()
+
+    pending = []
+    for q in chats:
+        o = overrides.get(str(q["id"])) or {}
+        if o.get("ignore"):
+            out[q["id"]] = {"state": "ignored"}
+            continue
+        eid = entry_of.get(o.get("match")) if o.get("match") is not None else None
+        if eid is not None and eid not in taken:
+            taken.add(eid)
+            out[q["id"]] = {"state": "manual", "entry": eid, "gap": gap(q, by_id[eid])}
+            continue                                         # (a pair whose trade was deleted is looked for again)
+        b = booked_as(q)
+        if b is None:
+            out[q["id"]] = {"state": "noform"}
+            continue
+        pending.append((q, b, {entry_of.get(x) for x in o.get("reject") or []}))
+    pairs = []
+    for q, b, rejected in pending:
+        note = chat_note(q)
+        for e in entries:
+            if e["id"] in rejected or e["id"] in taken or not e.get("sig"):
+                continue
+            d = gap(q, e)
+            if e.get("date") == q.get("date") and (e.get("note") or "").startswith(note) and e["sig"][0] == b["sig"][0]:
+                pairs.append((0, abs(d or 0.0), q, e, "linked", d))
+            elif d is not None and abs(d) <= window and _one_trade(b, e):
+                pairs.append((1, abs(d), q, e, "auto", d))
+    pairs.sort(key=lambda p: (p[0], p[1], str(p[2]["id"]), p[3]["id"]))
+    for _, _, q, e, how, d in pairs:
+        if q["id"] in out or e["id"] in taken:
+            continue
+        taken.add(e["id"])
+        out[q["id"]] = {"state": how, "entry": e["id"], "gap": d}
+    for q, _, _ in pending:
+        out.setdefault(q["id"], {"state": "missing"})
     return out

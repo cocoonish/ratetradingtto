@@ -916,6 +916,8 @@ class Service(object):
         ret = self.ret_meta() if tto is not None else None
         return {"mode": self.mode, "note": self.mode_note, "provider": prov, "gen": self.gen, "today": today,
                 "ret": ret, "server_date": _dt.date.today().isoformat(),
+                # today's trades of the desk said in the broker chat and not entered in Günlük İşlemler (the menu's badge)
+                "chat_missing": self.chat_unbooked(),
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
                                 "source": b.model.meta.get("source"), "left_out": list(getattr(b, "left_out", []))}
                           for bid, b in self.books.items()},
@@ -4086,7 +4088,8 @@ class Service(object):
     @staticmethod
     def _broker_model(mkt, q: Dict[str, Any]) -> Optional[float]:
         """Where the dashboard's own TRY OIS curve has an instrument of the chat (cross-currency: no answer); for a
-        bond, its screen price (or yield, for a bill) in the DİBS RV table."""
+        bond, its screen price (or yield, for a bill) in the DİBS RV table; for a meeting-dated swap, the bootstrap
+        rate of its two days in the 'MPC OIS' table (the trade form's "Piyasa mid")."""
         if mkt is not None and q.get("product") == "DIBS" and q.get("kind") == "switch":
             sw = Service._switch_screen(mkt, q)
             return sw["screen"] if sw else None
@@ -4095,7 +4098,70 @@ class Service(object):
             return sc.get("yield") if q.get("unit") == "yld" else sc.get("clean")
         if mkt is None or q.get("product") != "OIS":
             return None
-        return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months)
+        return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months,
+                              lambda a, b: mkt.mpc_span(Service._serial(a), Service._serial(b)))
+
+    @staticmethod
+    def _serial(iso: str) -> float:
+        return float(date_to_serial(_dt.date.fromisoformat(iso)))
+
+    def _mpc_calendar(self, mkt, day: str) -> Optional[Dict[str, Any]]:
+        """The meetings a chat's "dec mpc", "mpc1" are dated with (``bc.mpc_span``): every meeting the dashboard knows -
+        the ones held (the calendar's archive) and the workbook's list (OIS_MAIN!P10:P89) - with its effective day: the
+        'MPC OIS' table's own for the meetings it covers (the business day after the decision), the day after the
+        decision for the others; the OIS spot; ``day``, the day of the lines that do not say theirs."""
+        from .history import MEETING_ROWS
+        if mkt is None:
+            return None
+        try:
+            table = mkt.mpc_table()
+            listed = [mkt.value("OIS_MAIN!P%d" % r) for r in range(MEETING_ROWS[0], MEETING_ROWS[1] + 1)]
+        except Exception:  # noqa: BLE001 - a workbook without the table: nothing is dated
+            return None
+        effective = {serial_to_date(d): serial_to_date(e) for d, e in table["meetings"]}
+        days = set(effective) | {serial_to_date(v) for v in listed if type(v) is float}
+        for iso in self.history.archive():
+            days.add(_dt.date.fromisoformat(iso))
+        return {"meetings": [(d, effective.get(d, d + _dt.timedelta(days=1))) for d in sorted(days)],
+                "spot": serial_to_date(table["spot"]) if table["spot"] is not None else None, "on": _dt.date.fromisoformat(day)}
+
+    @staticmethod
+    def _overnight(rate: float, days: float) -> float:
+        """The overnight rate (ACT/365) that compounded every day for ``days`` gives the simple rate ``rate``: what
+        TLREF has to average over a meeting's period."""
+        return 365.0 * ((1.0 + rate * days / 365.0) ** (1.0 / days) - 1.0)
+
+    def _mpc_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
+        """A meeting swap of one period - from a meeting to the next - next to the MPC OIS bootstrap: the step at its
+        meeting that each of its levels stands for (``implied``, ``kind`` "mpc", bp) - the level's overnight
+        equivalent − that of the bootstrap's rate for the period before the meeting (from the meeting before it, or
+        from the OIS spot for the first one).  ``model``: the bootstrap's own step for the meeting."""
+        items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "best_bid", "best_ask")) for r in board or ()]
+        items = [(q, f) for q, f in items if q.get("kind") == "mpc" and (q.get("mpc") or {}).get("start") and (q.get("mpc") or {}).get("meeting")]
+        mkt = self._broker_market(user) if items else None
+        if mkt is None:
+            return
+        try:
+            days = sorted(mkt.mpc_table()["lndf"])
+        except Exception:  # noqa: BLE001 - a workbook without the table
+            return
+        for q, fields in items:
+            s, e = self._serial(q["mpc"]["start"]), self._serial(q["mpc"]["end"])
+            if s not in days or e not in days or days.index(s) == 0 or days.index(e) != days.index(s) + 1:
+                continue                                    # several periods, or days the table does not have
+            p = days[days.index(s) - 1]
+            prev, model = mkt.mpc_span(p, s), mkt.mpc_span(s, e)
+            if prev is None:
+                continue
+            base = self._overnight(prev, s - p)
+            out: Dict[str, Any] = {"kind": "mpc", "meeting": q["mpc"]["meeting"], "days": e - s, "prev": prev * 100.0,
+                                   "prev_on": base * 100.0, "prev_from": serial_to_date(p).isoformat(), "prev_to": q["mpc"]["start"],
+                                   "model": None if model is None else (self._overnight(model, e - s) - base) * 1e4,
+                                   "model_level": None if model is None else model * 100.0}
+            for f in fields:
+                if type(q.get(f)) is float:
+                    out[f] = (self._overnight(q[f] / 100.0, e - s) - base) * 1e4
+            q["implied"] = out
 
     def _fx_market(self, user: Optional[str]) -> Optional[Callable[[str, float, str], Optional[Dict[str, float]]]]:
         """What a USDTRY swap quote in points means as a TRY rate - with the Forward sheet's own numbers: the spot
@@ -4252,6 +4318,7 @@ class Service(object):
         """The TRY rate each FX swap quote in points stands for (``implied``: bid / ask / price / last, in per cent)."""
         self._bond_implied(user, rows, board)
         self._switch_implied(user, rows, board)
+        self._mpc_implied(user, rows, board)
         if not any(q.get("product") == "FX" for q in rows) and not any(r.get("product") == "FX" for r in board or ()):
             return
         fn = self._fx_market(user)
@@ -4325,7 +4392,7 @@ class Service(object):
                         said[r["isin"]] = lv                  # the last word on a bond stands
             return list(said.values()) + screen[0]
 
-        rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing, nearby)
+        rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing, nearby, self._mpc_calendar(mkt, day))
         self._bond_pick(mkt, rows)
         self._switch_legs(mkt, rows)
         now = _dt.datetime.now().strftime("%H:%M:%S")
@@ -4479,11 +4546,43 @@ class Service(object):
         rows, table, resets = self._broker_board(user, day, last)
         self._fx_implied(user, rows, table)
         return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
-                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen}
+                "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen,
+                # the desk's trades of the chat not in Günlük İşlemler, of the day shown (what "Chat ↔ blotter" lists)
+                "unbooked": self._broker_recon(day, last)["missing"],
+                # the best prices are the fresh ones: older than this a broker's quote is stale - on a board that ends today
+                "stale_minutes": self._broker_stale_minutes(), "live": last >= today, "now": now_iso()}
+
+    #: minutes after which a broker's quote is stale - greyed with its age, never the best price - unless the desk set it
+    BROKER_STALE_MINUTES = 10
+
+    def _broker_stale_minutes(self) -> int:
+        v = self.store.get("broker.settings", {})
+        m = v.get("stale_minutes") if isinstance(v, dict) else None
+        return m if type(m) is int and 1 <= m <= 1440 else self.BROKER_STALE_MINUTES
+
+    def broker_settings(self, user: str, stale_minutes: Any) -> Dict[str, Any]:
+        """The board's stale limit, for the whole desk: after how many minutes (1 - 1440) a broker's quote no longer
+        counts as the best price."""
+        user = self.require_user(user)
+        try:
+            m = int(str(stale_minutes).strip())
+        except (TypeError, ValueError):
+            raise ServiceError("bayat sınırı dakika olarak yazılır: %r" % stale_minutes)
+        if not 1 <= m <= 1440:
+            raise ServiceError("bayat sınırı 1 ile 1440 dakika arasında olmalı")
+        self.store.put("broker.settings", {"stale_minutes": m, "by": user, "at": now_iso()})
+        self.bump()
+        return {"stale_minutes": m}
+
+    @staticmethod
+    def _broker_house(q: Dict[str, Any]) -> str:
+        """Whose quote a line is on the board: its house (the source) - its sender when no source is known."""
+        return q.get("source") or q.get("sender") or ""
 
     def _broker_board(self, user, day: str, last: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """The kept lines of the days, each with whose it is, and the board they make (resets applied), each
-        instrument next to where the dashboard has it."""
+        instrument next to where the dashboard has it.  A board that ends today is read with the clock: its best
+        prices are the brokers' fresh quotes (``bc.board``); one of a day gone by stands as it was at the end."""
         rows = self.store.broker_quotes(day, last)
         # the list of names as it is now: a name assigned after its lines were kept shows them as its own
         people = self._people()
@@ -4502,7 +4601,9 @@ class Service(object):
                        and (stamp < r.get("at", "") or (type(r.get("upto")) is int and int(q.get("id") or 0) <= r["upto"]))
                        for r in resets)
 
-        table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz")
+        live = last >= self.today_iso()
+        table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz",
+                         _dt.datetime.now() if live else None, self._broker_stale_minutes() * 60.0 if live else None, self._broker_house)
         for row in table:
             row.update(bc.against(row, self._broker_model(mkt, row)))
         return rows, table, resets
@@ -4535,6 +4636,100 @@ class Service(object):
         self.bump()
         return self.broker(user, day)
 
+    # ------------------------------------------------------------------ the chat against the blotter
+    def broker_recon(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """The desk's own trades said in the chat (trade lines whose party is "biz") next to Günlük İşlemler: entered
+        or not (``bc.reconcile``: the same instrument at the same level within a quarter of an hour, or entered from
+        the line itself), with what was decided by hand.  ``missing``: how many are not entered."""
+        day = self._broker_day(date)
+        last = self._broker_day(date_to) if date_to else day
+        if last < day:
+            day, last = last, day
+        return self._broker_recon(day, last)
+
+    def _broker_recon(self, day: str, last: str) -> Dict[str, Any]:
+        people = self._people()
+        chats = []
+        for q in self.store.broker_trades(day, last):
+            if not q.get("ok"):
+                continue
+            q["source"], q["party"] = self._who(people, q, q.get("source") or "", q.get("party") or "")
+            if q["party"] == "biz":
+                chats.append(q)
+        entries = bl.trade_entries(self.store.trades(day, last))
+        overrides = self._recon_overrides()
+        states = bc.reconcile(chats, entries, overrides)
+        by_id = {e["id"]: e for e in entries}
+        matched = {s["entry"] for s in states.values() if s.get("entry") is not None}
+
+        def entry(e: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            if e is None:
+                return None
+            return {"id": e["id"], "ids": e["ids"], "kind": e["kind"], "label": e["label"], "date": e["date"],
+                    "time": str(e.get("at") or "")[11:16], "by": e.get("by"), "taken": e["id"] in matched}
+
+        items = []
+        for q in chats:
+            st = states.get(q["id"]) or {"state": "missing"}
+            o = overrides.get(str(q["id"])) or {}
+            items.append({"id": q["id"], "date": q["date"], "time": q["time"], "sender": q.get("sender") or "", "source": q.get("source") or "",
+                          "raw": q.get("raw") or "", "state": st["state"], "gap": st.get("gap"), "entry": entry(by_id.get(st.get("entry"))),
+                          "by": o.get("by") if st["state"] in ("manual", "ignored") else None, "q": q})
+        return {"date": day, "to": last, "ranged": day != last, "today": self.today_iso(), "items": items,
+                "missing": sum(1 for x in items if x["state"] == "missing"), "entries": [entry(e) for e in entries],
+                "window": bc.MATCH_WINDOW}
+
+    def _recon_overrides(self) -> Dict[str, Dict[str, Any]]:
+        v = self.store.get("broker.recon", {})
+        return v if isinstance(v, dict) else {}
+
+    def broker_recon_set(self, user: str, quote_id: Any, action: str, trade_id: Any = None) -> Dict[str, Any]:
+        """What the desk decides about one trade line of the chat, for everyone: ``match`` it with a trade of
+        Günlük İşlemler of its day (``trade_id``), ``ignore`` it (it will not be entered), ``reject`` the trade it was
+        matched with (not this one) or ``undo`` what was decided."""
+        user = self.require_user(user)
+        if action not in ("match", "ignore", "reject", "undo"):
+            raise ServiceError("bilinmeyen işlem: %r" % action)
+        try:
+            qid = int(quote_id)
+        except (TypeError, ValueError):
+            raise ServiceError("chat satırı bekleniyor")
+        q = self.store.broker_quote(qid)
+        if q is None or q.get("event") != "trade":
+            raise ServiceError("chat'te böyle bir işlem satırı yok", 404)
+        overrides = dict(self._recon_overrides())
+        key = str(qid)
+        if action == "undo":
+            overrides.pop(key, None)
+        elif action == "ignore":
+            overrides[key] = {"ignore": True, "by": user, "at": now_iso()}
+        else:
+            try:
+                t = self.store.trade(int(trade_id))
+            except (TypeError, ValueError):
+                t = None
+            if t is None:
+                raise ServiceError("Günlük İşlemler'de böyle bir işlem yok", 404)
+            if action == "match":
+                if t["trade_date"] != q["date"]:
+                    raise ServiceError("işlem başka bir günün (%s): chat satırı %s" % (t["trade_date"], q["date"]))
+                overrides[key] = {"match": t["id"], "by": user, "at": now_iso()}
+            else:
+                old = (overrides.get(key) or {}).get("reject") or []
+                overrides[key] = {"reject": sorted(set(old) | {t["id"]}), "by": user, "at": now_iso()}
+        if len(overrides) > 5000:                          # the oldest decisions go first
+            overrides = dict(sorted(overrides.items(), key=lambda kv: str(kv[1].get("at") or ""))[-5000:])
+        self.store.put("broker.recon", overrides)
+        self.bump()
+        return self._broker_recon(q["date"], q["date"])
+
+    def chat_unbooked(self) -> Optional[int]:
+        """How many of today's trades of the desk in the chat are not in Günlük İşlemler (the badge of the menu)."""
+        try:
+            return self._broker_recon(self.today_iso(), self.today_iso())["missing"]
+        except Exception:  # noqa: BLE001 - a status is never lost to it
+            return None
+
     def broker_delete_many(self, user: str, ids: List[Any]) -> Dict[str, Any]:
         """Delete the lines ticked in the log (for everyone)."""
         self.require_user(user)
@@ -4556,28 +4751,50 @@ class Service(object):
         return {"deleted": int(quote_id)}
 
     def broker_export(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None) -> Tuple[bytes, str]:
-        """The chat of a day or a period as an .xlsx file: the board, then every line."""
+        """The chat of a day or a period as an .xlsx file: the board (the brokers' best bid and offer, whose and how
+        old), every broker's quotes, then every line."""
         return self.et.call(self._broker_export, user, date, date_to)
 
     def _broker_export(self, user, date, date_to) -> Tuple[bytes, str]:
         from .xlsx import XlsxBook
         data = self._broker(user, date, date_to)
         names = {u["name"]: u["display"] for u in self.store.users()}
-        kinds = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "fwd": "Forward"}
+        kinds = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "fwd": "Forward", "mpc": "MPC"}
         events = {"quote": "Kota", "trade": "İşlem", "ref": "Geri çekildi", "interest": "İlgi", "level": "Seviye", "note": "Not",
                   "text": "Metin"}
+
+        def minutes(s: Any) -> Optional[float]:
+            return round(s / 60.0, 1) if type(s) is float else None
+
         wb = XlsxBook()
         ws = wb.add_sheet("Tahta")
         ws.row(1, 1, ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem", "İşlem saati",
-                      "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bizim bid", "Bizim ask", "İşlemi yapan"], bold=True, fill="E7E6E6")
+                      "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bizim bid", "Bizim ask", "İşlemi yapan", "Bid kimde", "Ask kimde",
+                      "Bid yaşı (dk)", "Ask yaşı (dk)"], bold=True, fill="E7E6E6")
         for i, r in enumerate(data["board"]):
             fmt = "#,##0.00" if r["unit"] == "pct" else "#,##0.0"
-            line = [r["product"], kinds.get(r["kind"], r["kind"]), r["label"], "%" if r["unit"] == "pct" else "bp", r["bid"], r["bid_time"],
-                    r["ask"], r["ask_time"], r["last"], r["last_time"], r["mid"], r["bid_diff"], r["ask_diff"], r.get("our_bid"),
-                    r.get("our_ask"), {"biz": "Biz", "broker": "Broker"}.get(r.get("last_by") or "", "")]
+            # the best bid and offer of the brokers (the fresh ones, on a board of today), with whose they are and their age
+            line = [r["product"], kinds.get(r["kind"], r["kind"]), r["label"], "%" if r["unit"] == "pct" else "bp", r.get("best_bid"),
+                    r.get("best_bid_time"), r.get("best_ask"), r.get("best_ask_time"), r["last"], r["last_time"], r["mid"],
+                    r.get("best_bid_diff"), r.get("best_ask_diff"), r.get("our_bid"), r.get("our_ask"),
+                    {"biz": "Biz", "broker": "Broker"}.get(r.get("last_by") or "", ""), r.get("best_bid_by"), r.get("best_ask_by"),
+                    minutes(r.get("best_bid_age")), minutes(r.get("best_ask_age"))]
             for k, v in enumerate(line):
-                ws.set(2 + i, 1 + k, v, fmt=fmt if k in (4, 6, 8, 10, 13, 14) else ("#,##0.0" if k in (11, 12) else None))
+                ws.set(2 + i, 1 + k, v, fmt=fmt if k in (4, 6, 8, 10, 13, 14) else ("#,##0.0" if k in (11, 12, 18, 19) else None))
         ws.autosize()
+        bs = wb.add_sheet("Brokerlar")
+        bs.row(1, 1, ["Ürün", "Enstrüman", "Broker", "Bid", "Bid saati", "Bid yaşı (dk)", "Bid bayat", "Ask", "Ask saati", "Ask yaşı (dk)",
+                      "Ask bayat"], bold=True, fill="E7E6E6")
+        n = 2
+        for r in data["board"]:
+            fmt = "#,##0.00" if r["unit"] == "pct" else "#,##0.0"
+            for b in r.get("brokers") or []:
+                line = [r["product"], r["label"], b["by"], b["bid"], b["bid_time"], minutes(b["bid_age"]), "bayat" if b["bid_stale"] else "",
+                        b["ask"], b["ask_time"], minutes(b["ask_age"]), "bayat" if b["ask_stale"] else ""]
+                for k, v in enumerate(line):
+                    bs.set(n, 1 + k, v, fmt=fmt if k in (3, 7) else ("#,##0.0" if k in (5, 9) else None))
+                n += 1
+        bs.autosize()
         ls = wb.add_sheet("Kayıt")
         ls.row(1, 1, ["Tarih", "Saat", "Kimden", "Kaynak", "Mesaj", "Ürün", "Tür", "Enstrüman", "Olay", "Bid", "Ask", "İşlem / seviye",
                       "Birim", "Not", "Giren", "Taraf"], bold=True, fill="E7E6E6")

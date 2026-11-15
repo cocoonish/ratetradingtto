@@ -468,6 +468,57 @@ selam""", ref, TODAY)
     assert bc.board([]) == []
 
 
+def test_the_best_price_broker_by_broker():
+    """The best bid and offer of the brokers, each with its house and time: a worse quote said later does not hide a
+    better one of another house; a quote withdrawn, traded away (and the rest of its "oco" message) or older than the
+    stale limit is never the best - a stale one stays in its house's row with its age; our own quotes stand apart."""
+    start = "13.11.2026\n10:00:00 ICAP: 18m ois 35.03/35.23\n10:01:00 BGC: 18m ois 35.05/35.30\n10:02:00 TULLETT: 18m ois 35.00/35.21"
+    r = bc.board(bc.parse_chat(start, ref, TODAY))[0]
+    assert (r["bid"], r["ask"]) == (35.00, 35.21)                             # the last word, whoever said it ...
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_time"]) == (35.05, "BGC", "2026-11-13 10:01:00")    # ... and the best, by house
+    assert (r["best_ask"], r["best_ask_by"]) == (35.21, "TULLETT")
+    assert [(b["by"], b["bid"], b["ask"]) for b in r["brokers"]] == [("BGC", 35.05, 35.30), ("ICAP", 35.03, 35.23), ("TULLETT", 35.00, 35.21)]
+    rows = bc.parse_chat(start + "\n10:03:00 BGC: ref 18m ois bid\n10:04:00 ICAP: 18m ois taken at 21\n"
+                         "10:05:00 BGC: 2yr ois 35.46 , oco with 18m 35.12 offer\n10:06:00 TULLETT: 18m ois paid 35.12\n"
+                         "10:07:00 MASA: 18m ois 35.10/35.15\n10:09:00 TULLETT: 18m ois 34.90 bid", ref, TODAY)
+    ours = lambda q: q["sender"] == "MASA"                                     # noqa: E731
+    at = lambda hhmm: dt.datetime(2026, 11, 13, *map(int, hhmm.split(":")))  # noqa: E731
+    board = lambda now=None, stale=None, records=rows: {x["key"]: x for x in bc.board(records, ours, now, stale)}    # noqa: E731
+    b = board()
+    r = b["OIS:outright:18M"]
+    # BGC's bid withdrawn; the offers at or under 35.21 traded away (TULLETT's), then BGC's new 35.12 - and with it the 2Y
+    # offer of its "oco" message; ours apart; without a clock nothing is stale
+    assert [(x["by"], x["bid"], x["ask"]) for x in r["brokers"]] == [("ICAP", 35.03, 35.23), ("TULLETT", 34.90, None)]
+    assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (35.03, "ICAP", 35.23, "ICAP")
+    assert (r["our_bid"], r["our_ask"], r["last"], r["last_src"]) == (35.10, 35.15, 35.12, "TULLETT")
+    assert (b["OIS:outright:2Y"]["brokers"], b["OIS:outright:2Y"]["best_ask"], b["OIS:outright:2Y"]["ask"]) == ([], None, 35.46)
+    assert all(x["bid_age"] is None and not x["bid_stale"] for x in r["brokers"])
+    # with a clock: older than the limit is stale - in its house's row with its age, never the best; a fresher worse quote is
+    r = board(at("10:12"), 600)["OIS:outright:18M"]
+    icap = r["brokers"][0]
+    assert (icap["by"], icap["bid_stale"], icap["bid_age"], icap["ask_stale"], icap["ask_age"]) == ("ICAP", True, 720.0, True, 720.0)
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_age"], r["best_ask"], r["best_ask_by"]) == (34.90, "TULLETT", 180.0, None, None)
+    assert (r["our_age"], r["our_stale"]) == (300.0, False)
+    r = board(at("10:30"), 600)["OIS:outright:18M"]
+    assert (r["best_bid"], r["best_ask"], r["our_stale"]) == (None, None, True) and all(x["bid_stale"] for x in r["brokers"])
+    r = board(at("10:08"), 600)["OIS:outright:18M"]
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_age"], r["best_ask_by"]) == (35.03, "ICAP", 480.0, "ICAP")
+    # a time ahead of the clock makes nothing fresh: the quote is as old as when it was kept
+    ahead = [dict(q, time="10:20:00", created_at="2026-11-13 10:00:30") if q.get("ok") and q["time"] == "10:00:00" else q for q in rows]
+    icap = board(at("10:12"), 600, ahead)["OIS:outright:18M"]["brokers"][0]
+    assert (icap["by"], icap["bid_time"], icap["bid_age"], icap["bid_stale"]) == ("ICAP", "2026-11-13 10:20:00", 690.0, True)
+    # in yield the best bid is the lowest yield (the highest price), the best offer the highest
+    (r,) = bc.board(bc.parse_chat("10:00:00 ICAP: feb27 zc 31.45/31.40\n10:01:00 BGC: feb27 zc 31.42/31.38", ref, TODAY))
+    assert r["unit"] == "yld" and (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (31.42, "BGC", 31.40, "ICAP")
+    # a trade at a level takes every offer at or under it; one without a level the trading house's own side only
+    rows = bc.parse_chat("10:00:00 ICAP: 3m ois 36.60/36.70\n10:01:00 BGC: 3m ois 36.55/36.75\n10:02:00 BGC: 3m ois taken", ref, TODAY)
+    assert rows[-1]["price"] == 36.75 and [(x["by"], x["ask"]) for x in bc.board(rows)[0]["brokers"]] == [("BGC", None), ("ICAP", None)]
+    rows[-1] = dict(rows[-1], price=None)
+    assert [(x["by"], x["ask"]) for x in bc.board(rows)[0]["brokers"]] == [("BGC", None), ("ICAP", 36.70)]
+    # nothing of a house left: no row of it
+    assert bc.board(bc.parse_chat("10:00:00 ICAP: 3m ois 36.60/36.70\n10:01:00 ICAP: ref 3m ois", ref, TODAY))[0]["brokers"] == []
+
+
 def test_one_instrument_against_another():
     # "A vs B": the spread of the two, the later one − the earlier (as "1y5y" is 5Y − 1Y); two FRAs are its parts -
     # its own instrument, not a quote of the 6x9 FRA with "9x12m" left beside it as a note
@@ -492,6 +543,157 @@ def test_one_instrument_against_another():
     assert one("mar28 vs jul30 switch -45/-40")["kind"] == "switch" and one("1y1y 34.50/34.80")["kind"] == "fwd"
 
 
+#: the meetings as the dashboard gives them to the parser: (decision, effective day), the OIS spot, the day of the chat
+D = dt.date
+CALENDAR = {"spot": D(2026, 11, 4), "on": TODAY,
+            "meetings": [(D(2026, 10, 22), D(2026, 10, 23)), (D(2026, 12, 10), D(2026, 12, 11)), (D(2027, 1, 21), D(2027, 1, 22)),
+                         (D(2027, 3, 18), D(2027, 3, 19)), (D(2027, 4, 22), D(2027, 4, 23)), (D(2027, 12, 9), D(2027, 12, 10)),
+                         (D(2028, 1, 20), D(2028, 1, 21))]}
+DEC = "OIS:mpc:2026-12-11/2027-01-22"
+
+
+def mpc(text, where=None, on=TODAY, calendar=CALENDAR):
+    # the chat's day on a line of its own (a day after "today" would not be taken for one)
+    rows = [q for q in bc.parse_chat("%s\n10:00:00 %s" % (on.strftime("%d.%m.%Y"), text), where, max(on, TODAY), calendar=calendar) if q.get("ok")]
+    assert all(q["date"] == on.isoformat() for q in rows)
+    assert len(rows) == 1, (text, rows)
+    return rows[0]
+
+
+@pytest.mark.parametrize("text", [
+    "dec mpc 3650/3700", "Dec MPC 36.50/37.00", "DEC MPC OIS 36.50/37.00", "december mpc 36.50/37.00", "mpc dec 36.50/37.00",
+    "aralık ppk 36.50/37.00", "ARALIK PPK 36.50/37.00", "Aralık toplantısı 36.50/37.00", "dec meeting 36.50/37.00", "dec26 mpc 36.50/37.00",
+    "dec'26 mpc 36.50/37.00", "dec 26 mpc 36.50/37.00", "mpc1 36.50/37.00", "MPC1 36.50/37.00", "mpc 1 36.50/37.00", "ppk1 36.50/37.00",
+    "1st mpc 36.50/37.00", "next mpc 36.50/37.00", "first mpc 36.50/37.00", "1. ppk 36.50/37.00", "dec/jan mpc 36.50/37.00",
+    "Dec/Jan MPC 36.50/37.00", "dec-jan mpc 36.50/37.00", "dec jan mpc 36.50/37.00", "dec / jan mpc 36.50/37.00", "mpc dec/jan 36.50/37.00",
+    "mpc1/2 36.50/37.00", "mpc1→2 36.50/37.00", "dec mpc 36.50 bid 37.00 offer", "dec mpc 36.50 bid, 37.00 offer"])
+def test_a_meeting_dated_quote_however_it_is_written(text):
+    # the December meeting (decision 10.12, effective 11.12) to the next one (effective 22.01): one instrument
+    q = mpc(text)
+    assert (q["product"], q["kind"], q["key"], q["label"], q["unit"], q["bid"], q["ask"], q["event"]) == \
+        ("OIS", "mpc", DEC, "MPC Ara26", "pct", 36.50, 37.00, "quote"), text
+    assert (q["mpc"]["start"], q["mpc"]["end"], q["mpc"]["meeting"], q["mpc"]["until"], q["mpc"]["periods"]) == \
+        ("2026-12-11", "2027-01-22", "2026-12-10", "2027-01-21", 1)
+    assert q["note"] == "" and q["flags"] == []
+
+
+def test_meeting_dated_quotes():
+    # which meeting: a month is its first meeting ahead, a number counts them from the day of the chat
+    assert mpc("jan mpc 35.90/36.10")["key"] == mpc("mpc2 35.90/36.10")["key"] == mpc("ocak ppk 35.90/36.10")["key"] == "OIS:mpc:2027-01-22/2027-03-19"
+    assert mpc("dec27 mpc 30/31")["key"] == mpc("dec 2027 mpc 30/31")["key"] == "OIS:mpc:2027-12-10/2028-01-21"
+    q = mpc("dec/mar mpc 36.20/36.40")                                       # two periods: one swap, December to March
+    assert (q["key"], q["label"], q["mpc"]["periods"], q["tenors"]) == ("OIS:mpc:2026-12-11/2027-03-19", "MPC Ara26–Mar27", 2, ["Ara26", "Mar27"])
+    q = mpc("spot/dec mpc 36.40/36.60")                                      # from the OIS spot to the December meeting
+    assert (q["key"], q["label"], q["mpc"]["meeting"], q["mpc"]["periods"]) == ("OIS:mpc:2026-11-04/2026-12-11", "MPC Spot–Ara26", None, None)
+    # after the December decision its period is running: "dec" is still that one, MPC1 is January
+    late = D(2026, 12, 20)
+    assert mpc("dec mpc 36.50/37.00", on=late)["key"] == DEC and mpc("mpc1 36.50/37.00", on=late)["key"] == "OIS:mpc:2027-01-22/2027-03-19"
+    assert mpc("mpc1 36.50/37.00", on=D(2026, 12, 10))["key"] == DEC              # the day of the decision: still the first ahead
+    # trades, refs, interest and the big figure completed from where the meeting swap stands
+    near = lambda q: 35.76 if q["key"] == DEC else None                       # noqa: E731
+    t = mpc("dec mpc paid 3675", near)
+    assert (t["event"], t["side"], t["price"], t["key"]) == ("trade", "ask", 36.75, DEC)
+    assert (mpc("dec mpc 70/80", near)["bid"], mpc("dec mpc 70/80", near)["ask"], mpc("dec mpc 70/80", near)["flags"]) == (35.70, 35.80, ["abbr"])
+    assert mpc("ref dec mpc offer")["event"] == "ref" and mpc("care dec mpc offer")["event"] == "interest"
+    # several in a line, and next to other quotes
+    rows = [q for q in bc.parse_chat("10:00:00 dec mpc 3650/3700 jan mpc 3600/3650", None, TODAY, calendar=CALENDAR) if q["ok"]]
+    assert [(q["key"], q["bid"], q["ask"]) for q in rows] == [(DEC, 36.50, 37.00), ("OIS:mpc:2027-01-22/2027-03-19", 36.00, 36.50)]
+    rows = [q for q in bc.parse_chat("10:00:00 1y x 38.60/38.80, dec mpc 36.50/37.00", None, TODAY, calendar=CALENDAR) if q["ok"]]
+    assert [(q["product"], q["kind"]) for q in rows] == [("XCCY", "outright"), ("OIS", "mpc")]
+    q = mpc("dec mpc ois 36.50/37.00 in 5m")                                 # a size after it is a size, not a 5M tenor
+    assert (q["key"], q["note"]) == (DEC, "5m")
+    # what is not one meeting's rate stays text: two periods against each other (a step), a date, no meeting named
+    for text in ("dec vs jan mpc -25/-20", "dec/jan mpc -25/-20", "dec/jan mpc spread -25/-20", "next mpc on 10 dec", "mpc 36.50/37.00",
+                 "after the meeting 36.50"):
+        assert not any(q.get("ok") for q in bc.parse_chat("10:00:00 " + text, None, TODAY, calendar=CALENDAR)), text
+    # a tenor said first is the instrument; a meeting the calendar does not have is read, flagged and left undated
+    assert one("18m ois 35.03/35.23 ahead of the dec meeting")["key"] == "OIS:outright:18M"
+    q = mpc("dec35 mpc 30.00/31.00")
+    assert (q["key"], q["label"], q["flags"], q["bid"]) == ("OIS:mpc:Ara35", "MPC Ara35", ["mpc?"], 30.0) and "start" not in q["mpc"]
+    # without a calendar (the parser alone): read as said, not dated
+    q = one("mpc1 36.50/37.00", None)
+    assert (q["kind"], q["key"], q["label"], q["mpc"]["from"]) == ("mpc", "OIS:mpc:1", "MPC1", {"n": 1})
+    assert one("dec/jan mpc 36.50/37.00", None)["label"] == "MPC Ara–Oca"
+    # on the board: a row of its own after the outrights, whichever way it was said
+    board = bc.board(bc.parse_chat("10:00:00 1y ois 35.00/35.20\n10:01:00 dec mpc 36.50/37.00\n10:02:00 mpc1 36.60 bid\n"
+                                   "10:03:00 dec/jan mpc paid 37.00\n10:04:00 2y5y ois -20/-15", None, TODAY, calendar=CALENDAR))
+    assert [(r["kind"], r["label"]) for r in board] == [("outright", "1Y"), ("mpc", "MPC Ara26"), ("spread", "2Y–5Y")]
+    assert (board[1]["bid"], board[1]["ask"], board[1]["last"], board[1]["mpc"]["start"]) == (36.60, 37.00, 37.00, "2026-12-11")
+    # where a curve has it: the rate between its two days
+    rates = {("2026-12-11", "2027-01-22"): 0.3576}
+    assert bc.model_level(mpc("dec mpc 36.50/37.00"), lambda t: None, None, lambda a, b: rates.get((a, b))) == pytest.approx(35.76)
+    assert bc.model_level(mpc("dec mpc 36.50/37.00"), lambda t: None) is None
+    assert bc.model_level(mpc("dec35 mpc 30.00/31.00"), lambda t: None, None, lambda a, b: 0.3) is None
+
+
+def stored(i, kind, at, package=None, **payload):
+    """A trade as the store gives it back (the day of the chat below, entered at ``at``)."""
+    return dict(payload, id=i, kind=kind, package=package, trade_date="2026-11-13", created_at="2026-11-13 " + at, created_by="masa")
+
+
+def test_the_desks_trades_against_the_blotter():
+    """The desk's trades of the chat against the blotter: the same instrument at the same level within a quarter of an
+    hour, one entry for one line - the nearest in time; a trade entered from the line itself ("İşlem gir": its note)
+    whenever it was entered; pairs made, undone and lines ignored by hand; what the blotter has no form for apart."""
+    chat = bc.parse_chat("13.11.2026\n10:00:00 18m ois paid 35.14\n10:10:00 1y5y ois given at -64\n10:20:00 2y ois trades 35.50\n"
+                         "11:00:00 3y ois paid 35.30\n11:20:00 3y ois paid 35.30\n12:00:00 MIKE REES: 9x12 ois fra paid 34.10\n"
+                         "12:30:00 1yr x 38.60 paid\n12:40:00 dec mpc paid 36.75\n12:50:00 fx 1m 12.750 paid\n13:00:00 15/3/28 100.550 paid\n"
+                         "13:10:00 4y ois paid 34.80\n13:20:00 5y ois paid 34.70", None, TODAY, calendar=CALENDAR)
+    for i, q in enumerate(chat):
+        q["id"] = 100 + i
+    by_raw = {q["raw"]: q["id"] for q in chat}
+    trades = [stored(1, "ois", "10:05:00", strategy="outright", tenor="18M", level=0.3514, role="outright", side="PAY", label="PAY 18M @ 35,14%"),
+              stored(2, "ois", "10:30:00", strategy="spread", tenor="1Y", level=-64.0, role="short", side="FLATTENER", label="FLAT", package="p1"),
+              stored(3, "ois", "10:30:00", strategy="spread", tenor="5Y", level=-64.0, role="long", side="FLATTENER", label="FLAT", package="p1"),
+              stored(4, "ois", "10:21:00", strategy="outright", tenor="2Y", level=0.3555, role="outright", side="PAY", label="2Y"),
+              stored(5, "ois", "11:12:00", strategy="outright", tenor="3Y", level=0.353, role="outright", side="PAY", label="3Y"),
+              stored(6, "ois", "14:00:00", strategy="fra", tenor="9M", level=0.341, role="start", side="PAY", label="FRA", package="p2",
+                     note="Chat 12:00:00 MIKE REES: 9x12 ois fra paid 34.10"),
+              stored(7, "ois", "14:00:00", strategy="fra", tenor="1Y", level=0.341, role="end", side="PAY", label="FRA", package="p2"),
+              stored(8, "ois", "12:41:00", strategy="mpc", tenor="MPC 11.12.26–22.01.27", level=0.3675, role="mpc", side="PAY", label="MPC",
+                     mpc={"start": 46367.0, "end": 46409.0, "days": 42.0}),
+              stored(9, "fwd", "12:52:00", pair="USDTRY", dir="B", amount=10e6, points=12750.0, days=31.0),
+              stored(10, "bond", "13:03:00", instrument="TRT150328T24", amount=50e6, price=100.55, name="15.03.28"),
+              stored(11, "ois", "13:11:00", strategy="outright", tenor="4Y", level=0.348, role="outright", side="PAY", label="4Y"),
+              stored(12, "ois", "13:21:00", strategy="outright", tenor="5Y", level=0.347, role="outright", side="PAY", label="5Y")]
+    entries = bl.trade_entries(trades)
+    assert [(e["id"], e["ids"], e["sig"], e["level"]) for e in entries][:3] == [
+        (1, [1], ("ois", "outright", "18M"), pytest.approx(35.14)), (2, [2, 3], ("ois", "spread", "1Y", "5Y"), -64.0),
+        (4, [4], ("ois", "outright", "2Y"), pytest.approx(35.55))]
+    assert {e["id"]: e["sig"] for e in entries}[6] == ("ois", "fra", 9, 12) and {e["id"]: e["sig"] for e in entries}[8] == ("ois", "mpc", "2026-12-11", "2027-01-22")
+
+    def states(overrides=None):
+        got = bc.reconcile(chat, entries, overrides)
+        return {raw: (got[i]["state"], got[i].get("entry")) for raw, i in by_raw.items()}
+
+    s = states()
+    assert s["18m ois paid 35.14"] == ("auto", 1) and bc.reconcile(chat, entries)[by_raw["18m ois paid 35.14"]]["gap"] == 300.0
+    assert s["1y5y ois given at -64"] == ("missing", None)                    # entered 20 minutes later: not taken for it
+    assert s["2y ois trades 35.50"] == ("missing", None)                      # another level
+    assert s["3y ois paid 35.30"] == ("auto", 5)                              # two lines, one trade: the nearer one (11:20, 8 min) has it
+    assert bc.reconcile(chat, entries)[next(q["id"] for q in chat if q["time"] == "11:00:00")]["state"] == "missing"
+    assert s["9x12 ois fra paid 34.10"] == ("linked", 6)                      # two hours later, from the line itself
+    assert s["1yr x 38.60 paid"] == ("noform", None)                          # no cross currency form in the blotter
+    assert s["dec mpc paid 36.75"] == ("auto", 8) and s["fx 1m 12.750 paid"] == ("auto", 9) and s["15/3/28 100.550 paid"] == ("auto", 10)
+    # by hand: a pair made (also out of the window), a line ignored, a pair taken apart - and each undone by leaving it out
+    four, five = by_raw["4y ois paid 34.80"], by_raw["5y ois paid 34.70"]
+    assert (s["4y ois paid 34.80"], s["5y ois paid 34.70"]) == (("auto", 11), ("auto", 12))
+    s = states({str(by_raw["1y5y ois given at -64"]): {"match": 3}, str(by_raw["2y ois trades 35.50"]): {"ignore": True},
+                str(four): {"reject": [11]}, str(five): {"match": 11}})
+    assert s["1y5y ois given at -64"] == ("manual", 2)                        # a leg's id is its package's
+    assert s["2y ois trades 35.50"] == ("ignored", None)
+    assert s["4y ois paid 34.80"] == ("missing", None) and s["5y ois paid 34.70"] == ("manual", 11)   # trade 12 is left without a line
+    # a pair made with a trade that was deleted since: looked for again
+    assert states({str(five): {"match": 99}})["5y ois paid 34.70"] == ("auto", 12)
+    # what the blotter books a chat trade as
+    booked = lambda text, where=ref: bc.booked_as(dict(one(text, where), ok=True))           # noqa: E731
+    assert booked("18m ois paid 35.14") == {"sig": ("ois", "outright", "18M"), "level": 35.14, "unit": "pct"}
+    assert booked("1y1y ois paid 34.50")["sig"] == ("ois", "fra", 12, 24)
+    assert booked("12y ois paid 30") is None and booked("6x9m vs 9x12m paid -40") is None
+    assert booked("t/n 375 paid") is None and booked("mpc1 paid 36.75", None) is None              # a meeting not dated
+    assert bc.chat_note(chat[5]) == "Chat 12:00:00 MIKE REES: 9x12 ois fra paid 34.10"
+
+
 def test_against_a_curve():
     par = {"6M": 0.3644, "1Y": 0.3555, "18M": 0.3559, "2Y": 0.3585, "3Y": 0.3566, "4Y": 0.3527, "5Y": 0.3471}.get
     fra = lambda a, b: {(9, 12): 0.3411, (12, 24): 0.3627}.get((a, b))      # noqa: E731
@@ -506,9 +708,13 @@ def test_against_a_curve():
     out = bc.against(row[0], 35.59)
     assert out["mid"] == 35.59 and out["bid_diff"] == pytest.approx(-56.0) and out["ask_diff"] == pytest.approx(-36.0)
     assert out["last_diff"] == pytest.approx(-36.0)
+    # the brokers' best: the offer lifted at 35.23 is gone from it
+    assert out["best_bid_diff"] == pytest.approx(-56.0) and out["best_ask_diff"] is None
     out = bc.against(row[1], -84.0)
     assert out["bid_diff"] == pytest.approx(20.0) and out["ask_diff"] == pytest.approx(24.0) and out["last_diff"] is None
-    assert bc.against(row[0], None) == {"mid": None, "bid_diff": None, "ask_diff": None, "last_diff": None}
+    assert bc.against(row[0], None) == {"mid": None, "bid_diff": None, "ask_diff": None, "last_diff": None, "best_bid_diff": None,
+                                        "best_ask_diff": None}
+    assert bc.against({"unit": "pct", "bid": 35.0}, 35.5) == {"mid": 35.5, "bid_diff": -50.0, "ask_diff": None, "last_diff": None}
 
 
 # ---------------------------------------------------------------------------------------------- kept by the dashboard
@@ -693,6 +899,110 @@ def test_switches_next_to_the_screen(desk):
     assert all(t.get("kind") != "switch" for t in svc.broker(u, day)["rows"] if t.get("isin"))
 
 
+def overnight(rate, days):
+    return 365.0 * ((1.0 + rate * days / 365.0) ** (1.0 / days) - 1.0)
+
+
+def test_meeting_dated_quotes_next_to_the_mpc_bootstrap(desk):
+    """ "dec mpc", "jan27 mpc", "dec/mar mpc", "spot/dec mpc" dated with the workbook's meetings; the model is the 'MPC OIS'
+    bootstrap - the trade form's market level for the same two days -, with the step at the meeting each level stands for."""
+    from conftest import cell
+    from tto.xl.values import date_to_serial
+    svc, u = desk
+    day = "2026-01-15"                                         # a day no other test keeps lines on
+    m = svc.ois_market(u)["mpc"]
+    e1, e2, e3, spot = m["dates"][0]["date"], m["dates"][1]["date"], m["dates"][2]["date"], m["spot"]
+    serial = lambda iso: float(date_to_serial(dt.date.fromisoformat(iso)))        # noqa: E731
+    market = lambda a, b: svc.quote_ois(u, {"strategy": "mpc", "side": "PAY", "start": a, "end": b, "level": "36"})["info"]["market"] * 100   # noqa: E731
+    text = ("10:00:00 dec mpc 3650/3700\n10:01:00 jan27 mpc 50/60\n10:02:00 dec/mar mpc 36.20/36.40\n10:03:00 spot/dec mpc 36.40/36.60\n"
+            "10:04:00 dec mpc paid 36.75\n10:05:00 dec40 mpc 30.00/31.00")
+    rows = {q["raw"].split(" mpc")[0]: q for q in svc.broker_parse(u, text, day)["rows"] if q["event"] != "trade"}
+    dec = rows["dec"]
+    assert (dec["key"], dec["label"], dec["bid"], dec["ask"]) == ("OIS:mpc:2026-12-11/2027-01-22", "MPC Ara26", 36.50, 37.00)
+    assert serial(dec["mpc"]["start"]) == e1 and serial(dec["mpc"]["end"]) == e2
+    assert dec["model"] == pytest.approx(cell(svc, "OIS_MAIN!D84", u) * 100, rel=1e-12) == pytest.approx(market(e1, e2), rel=1e-12)
+    jan = rows["jan27"]
+    assert jan["model"] == pytest.approx(cell(svc, "OIS_MAIN!D85", u) * 100, rel=1e-12)
+    assert jan["flags"] == ["abbr"] and (jan["bid"], jan["ask"]) == (int(jan["model"]) + 0.50, int(jan["model"]) + 0.60)   # the figure from the model
+    assert rows["dec/mar"]["model"] == pytest.approx(market(e1, e3), rel=1e-12) and rows["dec/mar"]["label"] == "MPC Ara26–Mar27"
+    assert rows["spot/dec"]["model"] == pytest.approx(market(spot, e1), rel=1e-12) and rows["spot/dec"]["label"] == "MPC Spot–Ara26"
+    far = rows["dec40"]
+    assert far["flags"] == ["mpc?"] and far["model"] is None and far["key"] == "OIS:mpc:Ara40"
+    # the step at the December meeting: overnight equivalent of the level − that of the bootstrap's period before it
+    stub = market(spot, e1) / 100
+    base = overnight(stub, e1 - spot)
+    step = dec["implied"]
+    assert step["kind"] == "mpc" and step["meeting"] == "2026-12-10" and step["days"] == e2 - e1
+    assert step["bid"] == pytest.approx((overnight(0.365, e2 - e1) - base) * 1e4) and step["ask"] == pytest.approx((overnight(0.37, e2 - e1) - base) * 1e4)
+    assert step["model"] == pytest.approx((overnight(dec["model"] / 100, e2 - e1) - base) * 1e4) and step["prev"] == pytest.approx(stub * 100)
+    assert -300 < step["model"] < 300 and step["bid"] < step["ask"]
+    assert "implied" not in rows["dec/mar"] and "implied" not in rows["spot/dec"]       # a step belongs to one meeting's period
+    # kept: one board row per meeting swap, after the outrights, with the bootstrap as its model and the trade on it
+    svc.broker_add(u, text + "\n10:06:00 1y ois 35.00/35.20", day, "Tullett")
+    board = svc.broker(u, day)["board"]
+    assert [r["label"] for r in board] == ["1Y", "MPC Spot–Ara26", "MPC Ara26", "MPC Ara26–Mar27", "MPC Oca27", "MPC Ara40"]
+    r = next(x for x in board if x["label"] == "MPC Ara26")
+    assert (r["kind"], r["bid"], r["ask"], r["last"]) == ("mpc", 36.50, 37.00, 36.75) and r["mid"] == pytest.approx(dec["model"])
+    assert r["bid_diff"] == pytest.approx((36.50 - dec["model"]) * 100) and r["implied"]["last"] == pytest.approx((overnight(0.3675, e2 - e1) - base) * 1e4)
+    # the trade form books it between the same two days, at the same market level
+    q = svc.quote_ois(u, {"strategy": "mpc", "side": "PAY", "start": serial(r["mpc"]["start"]), "end": serial(r["mpc"]["end"]), "level": "36,75"})
+    assert q["info"]["market"] * 100 == pytest.approx(r["mid"], rel=1e-12) and q["legs"][0]["tenor"] == "MPC 11.12.26–22.01.27"
+
+
+def test_the_best_price_board_with_the_clock_and_the_resets(desk):
+    """Today's board read with the clock: every best price with its house and age; older than the desk's stale limit
+    (10 minutes unless set, 1 - 1440) a quote stays in its house's row, greyed, never the best; a trade takes off what
+    it dealt on; a reset of the board takes what was said before it off the best prices too - what is said after it
+    stands; a day gone by is shown as it was at its end."""
+    svc, u = desk
+    day = svc.today_iso()
+    key = "OIS:outright:6Y"
+    six = lambda: {x["key"]: x for x in svc.broker(u)["board"]}.get(key)                      # noqa: E731
+    svc.broker_add(u, "6y ois 33.10/33.30", day, "ICAP")                     # typed without a time: said now
+    svc.broker_add(u, "6y ois 33.15/33.40", day, "BGC")
+    data = svc.broker(u)
+    assert (data["live"], data["stale_minutes"]) == (True, 10) and data["now"][:10] == day
+    r = six()
+    assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (33.15, "BGC", 33.30, "ICAP")
+    assert 0 <= r["best_bid_age"] < 300 and 0 <= r["best_ask_age"] < 300 and [b["by"] for b in r["brokers"]] == ["BGC", "ICAP"]
+    assert r["best_bid_diff"] == pytest.approx((33.15 - r["mid"]) * 100) and r["best_ask_diff"] == pytest.approx((33.30 - r["mid"]) * 100)
+    early = dt.datetime.now() - dt.timedelta(minutes=20)
+    if early.date().isoformat() == day:                                      # (just after midnight there was no "20 minutes ago" today)
+        svc.broker_add(u, early.strftime("%H:%M:%S") + " 6y ois 33.20/33.25", day, "TP")
+        r = six()
+        tp = next(b for b in r["brokers"] if b["by"] == "TP")
+        assert tp["bid_stale"] and tp["ask_stale"] and 1150 < tp["bid_age"] < 1800
+        assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (33.15, "BGC", 33.30, "ICAP")      # better, but stale
+        assert svc.broker_settings(u, "30") == {"stale_minutes": 30} and svc.broker(u)["stale_minutes"] == 30
+        r = six()
+        assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (33.20, "TP", 33.25, "TP")
+        svc.broker_settings(u, 10)
+        svc.broker_add(u, "6y ois given at 33.20", day, "TP")                 # TP's bid hit: it and every bid at or over it go
+        r = six()
+        assert [(b["by"], b["bid"]) for b in r["brokers"]] == [("BGC", 33.15), ("ICAP", 33.10), ("TP", None)] and r["last_src"] == "TP"
+    # a reset of the instrument: nothing said before it stands - the best prices neither; said after it, it does
+    svc.broker_reset(u, day, key)
+    assert six() is None
+    svc.broker_add(u, "6y ois 33.12 bid", day, "ICAP")
+    r = six()
+    assert (r["best_bid"], r["best_bid_by"], r["best_ask"]) == (33.12, "ICAP", None) and [(b["by"], b["ask"]) for b in r["brokers"]] == [("ICAP", None)]
+    svc.broker_reset(u, day, undo=True)
+    r = six()
+    assert (r["best_bid"], r["best_bid_by"]) == (33.15, "BGC") and next(b for b in r["brokers"] if b["by"] == "ICAP")["bid"] == 33.12
+    # the limit is the desk's: between 1 and 1440 minutes, set by a signed-in user
+    for bad in (0, 1441, "yarım", None):
+        with pytest.raises(ServiceError):
+            svc.broker_settings(u, bad)
+    with pytest.raises(ServiceError) as err:
+        svc.broker_settings(None, 10)
+    assert err.value.status == 401 and svc.broker(u)["stale_minutes"] == 10
+    # a day gone by: as it stood at its end - no clock, no stale quote, the times instead of the ages
+    old = svc.broker(u, "2026-01-15")
+    assert old["live"] is False
+    r = next(x for x in old["board"] if x["label"] == "1Y")
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_age"], r["best_bid_time"]) == (35.00, "Tullett", None, "2026-01-15 10:06:00")
+
+
 def test_days_periods_and_what_is_left_out(desk):
     svc, u = desk
     today = dt.date.today()
@@ -751,12 +1061,19 @@ def test_the_chat_as_a_workbook(desk):
     raw, name = svc.broker_export(u, day.isoformat())
     assert name == "BrokerChat_%s.xlsx" % day.strftime("%Y.%m.%d")
     book = read_xlsx(raw)
-    assert list(book) == ["Tahta", "Kayıt"]
+    assert list(book) == ["Tahta", "Brokerlar", "Kayıt"]
     board, log = book["Tahta"], book["Kayıt"]
-    assert [board[c + "1"] for c in "ABCDEFGHIJKLM"] == ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem",
-                                                         "İşlem saati", "Model mid", "Bid − mid (bp)", "Ask − mid (bp)"]
-    assert [board[c + "2"] for c in "ABCDEGI"] == ["OIS", "Outright", "18M", "%", 35.03, 35.23, 35.23]
+    assert [board[c + "1"] for c in "ABCDEFGHIJKLMQRST"] == ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem",
+                                                             "İşlem saati", "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bid kimde",
+                                                             "Ask kimde", "Bid yaşı (dk)", "Ask yaşı (dk)"]
+    # the brokers' best: the offer lifted at 35.23 is no longer there; a day gone by has no ages
+    assert [board[c + "2"] for c in "ABCDEIQ"] == ["OIS", "Outright", "18M", "%", 35.03, 35.23, "Tullett"]
+    assert "G2" not in board and "R2" not in board and "S2" not in board
     assert board["F2"] == day.isoformat() + " 10:00:00" and board["J2"] == day.isoformat() + " 10:02:00"
+    houses = book["Brokerlar"]
+    assert [houses[c + "1"] for c in "ABCDEFGHIJK"] == ["Ürün", "Enstrüman", "Broker", "Bid", "Bid saati", "Bid yaşı (dk)", "Bid bayat", "Ask",
+                                                        "Ask saati", "Ask yaşı (dk)", "Ask bayat"]
+    assert [houses[c + "2"] for c in "ABCDE"] == ["OIS", "18M", "Tullett", 35.03, day.isoformat() + " 10:00:00"] and "H2" not in houses
     assert board["K2"] == pytest.approx(svc.broker(u, day.isoformat())["board"][0]["mid"]) and board["L2"] == pytest.approx((35.03 - board["K2"]) * 100)
     assert [board[c + "3"] for c in "ABCDEG"] == ["OIS", "Spread", "1Y–5Y", "bp", -64, -60]
     assert log["A1"] == "Tarih" and log["B1"] == "Saat" and log["E1"] == "Mesaj" and "yyyy" in log["!formats"]["A2"]

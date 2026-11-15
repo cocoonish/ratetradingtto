@@ -508,6 +508,9 @@ async function shot(page, name) {
 
     // ------------------------------------------------------------------ broker chat
     console.log('broker chat');
+    // the board's stale limit: a day here, so that what the chat below said earlier today is still a best price whenever this
+    // runs (the limit itself is checked further down)
+    await api(page, 'ayşe yilmaz', 'POST', '/api/broker/settings', { stale_minutes: 1440 });
     await open(page, 'broker');
     check('Broker Chat is a page of the desk, next to the blotter',
       await page.evaluate(() => { const a = [...document.querySelectorAll('#nav .nav-item')].map((x) => x.dataset.page); return a.indexOf('broker') === a.indexOf('blotter') + 1; })
@@ -549,11 +552,13 @@ async function shot(page, name) {
     const chatKept = await api(page, 'ayşe yilmaz', 'GET', '/api/broker');
     const chat18 = chatBoard.find((r) => r[0] === 'OIS' && r[1] === '18M') || [];
     const model18 = chatKept.json.board.find((r) => r.key === 'OIS:outright:18M');
-    check('saved: the board shows where every instrument stands (the pulled offer is gone, the trade is the last one)',
-      chatBoard.length === 7 && chat18[3] === '35,10' && chat18[4] === '' && chat18[5] === '13:55:37' && chat18[6] === '35,14'
+    check('saved: the board shows where every instrument stands - the best bid with its broker, the offer lifted and pulled is gone, the trade is the last one',
+      chatBoard.length === 7 && chat18[3] === '35,10' && /^Tullett · (şimdi|\d+ dk|\d+ sa \d+ dk)$/.test(chat18[4]) && chat18[5] === '' && chat18[6] === ''
+      && chat18[7] === '13:55:37' && chat18[8] === '35,14'
       && JSON.stringify(chatBoard.map((r) => r[1])) === JSON.stringify(['6M', '18M', '1Y–5Y', '3Y–5Y', '2Y–3Y–4Y', '9x12', '1Y']) && chatBoard[6][0] === 'XCCY', chatBoard);
     check('the board compares with the dashboard\'s own curve (model, difference in bp)',
-      Math.abs(trNumber(chat18[8]) - model18.mid) < 0.006 && Math.abs(trNumber(chat18[9].replace('+', '')) - model18.bid_diff) < 0.06 && chatBoard[6][8] === '', [chat18, model18]);
+      Math.abs(trNumber(chat18[10]) - model18.mid) < 0.006 && Math.abs(trNumber(chat18[11].replace('+', '')) - model18.best_bid_diff) < 0.06 && chatBoard[6][10] === '',
+      [chat18, model18]);
     let chatLog = await brokerLog();
     check('the chat is kept line by line with its time, sender and source',
       chatLog.length === 12 && chatLog[0][0] === '10:23:58' && chatLog[0][2] === '3y5y ois /-75 offer' && chatLog[5][1] === 'MIKE REES' && chatLog[5][13] === 'Tullett'
@@ -653,7 +658,7 @@ async function shot(page, name) {
       null, { timeout: 15000 });
     const sw = (await brokerBoard()).find((r) => /15\.03\.28 \/ 10\.07\.30/.test(r[1]));
     check('a switch of two bonds is one instrument on the board: bid / ask in bp, the screen\'s switch as its model, where it stands on the curve',
-      sw[0] === 'DİBS' && sw[2] === 'Switch (bp)' && sw[3] === '-45' && sw[4] === '-40' && /^-?\d+,\d$/.test(sw[8]) && /bp (eğri|ekran) · uzun (ucuz|pahalı)/.test(sw[12]), sw);
+      sw[0] === 'DİBS' && sw[2] === 'Switch (bp)' && sw[3] === '-45' && sw[5] === '-40' && /^-?\d+,\d$/.test(sw[10]) && /bp (eğri|ekran) · uzun (ucuz|pahalı)/.test(sw[14]), sw);
     // a trade of the chat as the desk's: "⇢" on its line, the level and our side, then Günlük İşlemler filled
     const tradeLine = () => [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => x.querySelector('td.act button[data-act="trade"]'));
     check('a trade line of the chat has the "İşlem gir" button, a quote of the brokers has not',
@@ -673,6 +678,96 @@ async function shot(page, name) {
       && oisFilled[5] === 'Tullett', oisFilled);
     await open(page, 'broker');
     await shot(page, '04b-broker');
+    // a meeting-dated OIS: "mpc1" is the first meeting ahead - a row of its own with the MPC OIS bootstrap and the implied step;
+    // its trade opens the blotter's MPC form with the two days of the meeting
+    const mpcSaved = await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '17:30:00 mpc1 3650/3700\n17:31:00 mpc1 paid 36.75', source: 'Tullett' });
+    await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => /^MPC /.test(tr.children[1].textContent)),
+      null, { timeout: 15000 });
+    const mpcRow = (await brokerBoard()).find((r) => /^MPC /.test(r[1]));
+    const mpcKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker')).json.board.find((r) => r.kind === 'mpc') || {};
+    check('a meeting-dated OIS ("mpc1") is a board row of its own: the MPC OIS bootstrap as its model, the implied step beside it',
+      mpcSaved.json.saved === 2 && mpcRow[2] === 'MPC (PPK)' && mpcRow[3] === '36,50' && mpcRow[5] === '37,00' && mpcRow[8] === '36,75'
+      && /^\d\d,\d\d$/.test(mpcRow[10]) && /^adım [+-]?\d+ \/ [+-]?\d+ bp · model [+-]?\d+$/.test(mpcRow[14]) && /^\d{4}-\d\d-\d\d$/.test((mpcKept.mpc || {}).start || ''),
+      [mpcRow, mpcKept.mpc]);
+    await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => /mpc1 paid 36\.75/.test(x.textContent));
+      tr.querySelector('td.act button[data-act="trade"]').click(); });
+    await page.waitForSelector('#chat-trade');
+    await page.click('#chat-trade-open');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ois
+      && window.tto.state.page.ois.strategy === 'mpc' && window.tto.state.page.ois.level.value !== '', null, { timeout: 30000 });
+    const mpcFilled = await page.evaluate(() => { const o = window.tto.state.page.ois; return [o.strategy, o.side, o.f.start.value, o.f.end.value, o.level.value]; });
+    const serialOf = (iso) => String(Math.round((Date.parse(iso) - Date.UTC(1899, 11, 30)) / 86400000));
+    check('... and its "İşlem gir" opens the blotter\'s MPC form with the meeting\'s two days, the level and PAY',
+      JSON.stringify(mpcFilled) === JSON.stringify(['mpc', 'PAY', serialOf(mpcKept.mpc.start), serialOf(mpcKept.mpc.end), '36,75']), [mpcFilled, mpcKept.mpc]);
+    await open(page, 'broker');
+    // a trade of the desk said in the chat and not entered: "N işlem girilmedi" on Broker Chat in the menu, its list ("Yok say" and
+    // back), the warning before the day's archive; entered from the list ("⇢ Gir") it is in the blotter and the badge goes
+    const deskLine = await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '18m ois paid 35.20', party: 'biz' });
+    await page.waitForSelector('#nav-chat-missing', { timeout: 30000 });
+    check('a trade of the desk in the chat that is not in the blotter: "1 işlem girilmedi" on Broker Chat in the menu',
+      deskLine.json.saved === 1 && (await page.textContent('#nav-chat-missing')).trim() === '1 işlem girilmedi'
+      && await page.evaluate(() => !!document.querySelector('#nav .nav-item[data-page="broker"] #nav-chat-missing')), await page.textContent('#nav-chat-missing'));
+    await page.click('#nav-chat-missing');
+    await page.waitForSelector('#chat-recon-table');
+    await shot(page, '04c-chat-recon');
+    const reconRow = () => page.evaluate(() => [...document.querySelectorAll('#chat-recon-table tr')].slice(1).map((tr) => [tr.dataset.id]
+      .concat([...tr.children].map((td) => td.textContent))).find((r) => r[3] === '18m ois paid 35.20'));
+    let deskRow = await reconRow();
+    check('... a click on it lists the line: its trade, "Girilmedi"', !!deskRow && deskRow[4] === '18M @ 35,20' && deskRow[5] === 'Girilmedi', deskRow);
+    const deskId = deskRow[0];
+    await page.click('#recon-ignore-' + deskId);
+    await page.waitForFunction(() => /Yok sayıldı/.test(document.querySelector('#chat-recon-table').textContent) && !document.querySelector('#nav-chat-missing'),
+      null, { timeout: 15000 });
+    await page.click('#recon-undo-' + deskId);
+    await page.waitForSelector('#nav-chat-missing', { timeout: 15000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('#chat-recon-table tr')].some((tr) => /18m ois paid 35\.20/.test(tr.textContent)
+      && /Girilmedi/.test(tr.textContent)), null, { timeout: 15000 });
+    deskRow = await reconRow();
+    check('... "Yok say" takes it off the count, "Geri al" brings it back', deskRow[5] === 'Girilmedi', deskRow);
+    await page.click('#chat-recon .mfoot .btn');
+    await open(page, 'blotter');
+    await page.click('button:has-text("Gün sonu arşivi")');
+    await page.waitForSelector('#archive-warn');
+    const archiveWarn = await page.textContent('#archive-warn');
+    check('the day\'s archive warns of it first', /masanın 1 işlemi Günlük İşlemler'de görünmüyor/.test(archiveWarn) && /18M @ 35,20/.test(archiveWarn), archiveWarn);
+    await page.click('#archive-warn-list');
+    await page.waitForSelector('#recon-enter-' + deskId);
+    await page.click('#recon-enter-' + deskId);
+    await page.waitForSelector('#chat-trade');
+    await page.click('#chat-trade-open');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ois && window.tto.state.page.ois.level.value === '35,20'
+      && window.tto.state.page.ois.f.tenor && window.tto.state.page.ois.f.tenor.value === '18M', null, { timeout: 20000 });
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction(() => !document.querySelector('#nav-chat-missing'), null, { timeout: 20000 });
+    const deskAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json.items.find((x) => x.raw === '18m ois paid 35.20') || {};
+    check('... "⇢ Gir" in the list fills Günlük İşlemler; saved, the line is entered and the badge goes', ['linked', 'auto'].includes(deskAfter.state), deskAfter);
+    const [deskArchive] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
+    check('... and the archive downloads without a word', /^Blotter_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(deskArchive.suggestedFilename()), deskArchive.suggestedFilename());
+    await open(page, 'broker');
+    // the best price, broker by broker: a quote older than the stale limit is never the best - it stays greyed in its broker's row
+    // with its age; every best price says whose it is and how old (the desk's limit typed on the board: 10 minutes)
+    const halfHourAgo = new Date(Date.now() - 30 * 60000);
+    if (halfHourAgo.toDateString() === new Date().toDateString()) {          // (just after midnight there was no half an hour ago today)
+      await page.fill('#broker-stale', '10');
+      await page.dispatchEvent('#broker-stale', 'change');
+      await page.waitForFunction(() => window.tto.state.page.data && window.tto.state.page.data.stale_minutes === 10, null, { timeout: 15000 });
+      await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: halfHourAgo.toTimeString().slice(0, 8) + ' 7y ois 33.10/33.30', source: 'ICAP' });
+      await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '7y ois 33.05/33.40', source: 'BGC' });
+      // (both houses on the board: ICAP's stale quote alone has a row of its own already)
+      await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => tr.children[1].textContent === '↳ BGC'),
+        null, { timeout: 20000 });
+      const board7 = await brokerBoard();
+      const at7 = board7.findIndex((r) => r[1] === '7Y');
+      const [row7, bgc7, icap7] = board7.slice(at7, at7 + 3);
+      const icapGrey = await page.evaluate(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].find((tr) => tr.children[1].textContent === '↳ ICAP')
+        .children[3].classList.contains('stale'));
+      check('the best price is a fresh one, with its broker and age: ICAP\'s better 33,10 / 33,30 is half an hour old - greyed in its own row, never the best',
+        row7[3] === '33,05' && /^BGC · (şimdi|1 dk)$/.test(row7[4]) && row7[5] === '33,40' && /^BGC · (şimdi|1 dk)$/.test(row7[6])
+        && bgc7[1] === '↳ BGC' && bgc7[3] === '33,05' && icap7[1] === '↳ ICAP' && icap7[3] === '33,10' && /^bayat · 3\d dk$/.test(icap7[4]) && icapGrey,
+        [row7, bgc7, icap7]);
+      await shot(page, '04d-broker-best');
+    }
+    await api(page, 'ayşe yilmaz', 'POST', '/api/broker/settings', { stale_minutes: 10 });
 
     // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
     console.log('blotter: pairs, swap points, MPC');

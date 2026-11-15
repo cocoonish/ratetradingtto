@@ -216,6 +216,8 @@ export class BlotterPage {
     this.exportBtn.addEventListener('click', async () => {
       this.exportBtn.disabled = true;
       try {
+        // the desk's trades said in the broker chat that are not here: said before the day is archived
+        if (this.ctx.checkArchive && !(await this.ctx.checkArchive(this.data.date, this.data.ranged ? this.data.to : null))) return;
         const res = await api.download('/api/blotter/export', { date: this.date || undefined, to: this.to || undefined }, 'Blotter.xlsx');
         toast(res.name + ' indirildi', 'ok', 3200);
       } catch (err) { errorToast(err); } finally { this.exportBtn.disabled = false; }
@@ -338,6 +340,15 @@ export class BlotterPage {
           if (typeof m === 'number' && Number.isInteger(m) && m >= 0) pick(o.f[i ? 'end_months' : 'start_months'], m, label(m));
           else missing.push(String(m));
         });
+      }
+      if (o.strategy === 'mpc') {
+        // a meeting swap of the chat: its two days among the form's (OIS spot, the meetings' effective days)
+        for (const k of ['start', 'end']) {
+          const sel = o.f[k];
+          const v = String(spec[k]);
+          if (sel && [...sel.options].some((x) => x.value === v)) sel.value = v;
+          else missing.push(serialDate(spec[k]) || v);
+        }
       }
       o.level.value = spec.level || '';
       o.note.value = spec.note || '';
