@@ -753,6 +753,33 @@ def test_policy_cycle_holds_a_small_sample_to_its_own_critical_value():
             assert st["periods"] < 3 and (st["cv"] is None or st["cv"] > 5) and not [s for s in sigs if s]
 
 
+# ================================================================================================ the pairs
+def test_more_pairs_with_their_tickers_and_a_list_the_desk_keeps():
+    from tto.quant import fx_pair_list, history_defs, parse_pairs
+    specs = {s["key"]: s for s in series_specs()}
+    pairs = [k[3:] for k in specs if k.startswith("FX:")]
+    assert pairs[0] == "USDTRY" and {"GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "USDCNH", "USDCZK", "USDKRW", "USDCLP", "USDILS", "GBPTRY"} <= set(pairs)
+    tick = {k: s["ticker"] for k, s in specs.items()}
+    assert tick["FXP:GBPUSD:3M"] == "GBP3M Curncy" and tick["FXP:USDJPY:3M"] == "JPY3M Curncy" and tick["FXP:GBPTRY:3M"] == "GBPTRY3M Curncy"
+    assert tick["FXP:EURUSD:3M"] == "EUR3M Curncy" and tick["FXV:USDCNH"] == "USDCNHV3M BGN Curncy" and tick["FXR:USDILS"] == "USDILS25R3M BGN Curncy"
+    assert {"FXP:USDTRY:1M", "FXP:USDTRY:6M", "FXP:USDTRY:1Y"} <= set(specs) and "FXV:GBPTRY" not in specs and "FXV:EURTRY" not in specs
+    assert specs["FX:GBPUSD"]["group"] == "G10" and specs["FX:USDKRW"]["group"] == "EM" and specs["FX:GBPTRY"]["group"] == "TRY"
+    assert parse_pairs("eurusd; usdtry, USD/MXN") == ["USDTRY", "EURUSD", "USDMXN"]
+    for bad in ("USDTR", "USD1RY", "USDUSD"):
+        with pytest.raises(ValueError):
+            parse_pairs(bad)
+    q = Quant(_Svc())
+    q.svc.history = type("H", (), {"kick": lambda self: None})()
+    out = q.set_settings("ayse", {"fx_pairs": "EURUSD, USDNOK"})
+    assert out["values"]["fx_pairs"] == "USDTRY, EURUSD, USDNOK" and fx_pair_list(q.store) == ["USDTRY", "EURUSD", "USDNOK"]
+    assert q.svc.nudged >= 1                                              # the history reads its list again (bump)
+    defs = history_defs("BGN", fx_pair_list(q.store))
+    assert {d.ticker for d in defs} >= {"USDNOK Curncy", "NOK3M Curncy", "USDNOKV3M BGN Curncy"} and "GBPUSD Curncy" not in {d.ticker for d in defs}
+    assert all(d.info["tail"] == "daily" and d.info["backfill"] is True for d in defs)
+    with pytest.raises(Exception):
+        q.set_settings("ayse", {"fx_pairs": "EURUSD, XX"})
+
+
 def test_curve_signal_conditioned_on_the_policy_cycle():
     rnd = random.Random(18)
     tl, slope, lvl = [], [], 45.0
@@ -1045,7 +1072,7 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         short = {"USDCOPV3M BGN Curncy": 120, "USDIDR25R3M BGN Curncy": 200, "TURKEY CDS USD SR 5Y D14 Corp": 400, "INR3M Curncy": 60}
         none = {"BRL3M Curncy", "IDR3M Curncy"}
         quant = [d for d in snap["defs"] if d.group == "Quant"]
-        assert len(quant) == len(series_specs()) and {"EUR3M Curncy", "TRY1M Curncy", "USDZARV3M BGN Curncy"} <= {d.ticker for d in quant}
+        assert len(quant) == len(series_specs()) and {"GBP3M Curncy", "JPY3M Curncy", "USDCNHV3M BGN Curncy", "GBPTRY Curncy", "EUR3M Curncy"} <= {d.ticker for d in quant}
         for d in quant:
             if d.ticker not in none:
                 start = D(TODAY) - dt.timedelta(days=short.get(d.ticker, 900))

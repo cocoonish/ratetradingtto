@@ -48,7 +48,8 @@ DEFAULTS: Dict[str, Any] = {
     "dv01_base": 10000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
     "desk_alarm": "Güçlü", "carry_margin": 0.5, "fx_verdict": 0.3,
     "bt_mute": "kapalı", "bt_min_hit": 0.5, "bt_min_sharpe": 0.0, "bt_min_trades": 10,
-    "fx_pairs": "USDTRY, EURTRY, EURUSD, USDZAR, USDMXN, USDBRL, USDINR, USDIDR, USDHUF, USDPLN, USDCOP",
+    "fx_pairs": "USDTRY, EURTRY, GBPTRY, EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD, USDCNH, USDZAR, USDMXN, USDBRL, USDINR, USDIDR, "
+                "USDHUF, USDPLN, USDCOP, USDCZK, USDKRW, USDCLP, USDILS",
 }
 #: which signals also ring as the desk's alarms (deskalarms.py, for everyone): at least this strong, or none
 DESK_ALARM_CHOICES = ("kapalı", "Zayıf", "Orta", "Güçlü")
