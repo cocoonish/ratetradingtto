@@ -1680,6 +1680,72 @@ async function shot(page, name) {
     check('Enter goes to the table: its page, its tab', (await panelsOnPage(page)).includes('XAU4')
       && await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab) === 'calc');
 
+    // ------------------------------------------------------------------ the columns each user hides
+    console.log('hidden columns');
+    const rv = '.panel[data-panel="B3"]';
+    const colHidden = (sel, j) => page.evaluate(([s, k]) => {
+      const g = document.querySelector(s + ' table.grid').__grid;
+      return g.tds.every((line) => !line[k] || line[k].hidden);
+    }, [sel, j]);
+    const hiddenOf = async (user, table) => ((await api(page, user, 'GET', '/api/columns')).json.tables || {})[table];
+    await open(page, 'dibs');
+    await tab(page, '*');
+    await page.locator(rv + ' tr.hd td', { hasText: 'Kaynak (boş = genel)' }).click({ button: 'right' });
+    await page.click('.menu >> text=Sütunu gizle: Kaynak (boş = genel)');
+    await page.waitForFunction((s) => !document.querySelector(s + ' .colschip').classList.contains('hidden'), rv);
+    check('DİBS RV: a right click on a caption hides its column, the header says so',
+      await colHidden(rv, 1) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 1 sütun');
+    check('... kept with this user\'s account (by the table and the sheet\'s column), nobody else\'s view changes',
+      JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["B"]' && (await hiddenOf('mehmet', 'v/dibs/B3')) === undefined);
+    await (await cellHandle(page, 'DİBS RV!A4')).click();
+    await (await cellHandle(page, 'DİBS RV!D6')).click({ modifiers: ['Shift'] });
+    const visibleCopy = (await page.evaluate(() => window.tto.selectionText(false))).split('\r\n');
+    check('... a copy takes what is on screen', visibleCopy[0] === 'ISIN\tAd\tTip (S/T/E/B)' && visibleCopy.every((l) => l.split('\t').length === 3), visibleCopy);
+    await (await cellHandle(page, 'DİBS RV!A6')).click();
+    await page.keyboard.press('ArrowRight');
+    check('... the arrow keys step over it', await page.evaluate(() => document.querySelector('#content td.cur').__j) === 2);
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await page.waitForSelector(rv + ' table.grid');
+    check('... and stays hidden when the page is opened again', await colHidden(rv, 1));
+    await page.click(rv + ' .colschip');
+    await page.locator('.menu label.mcheck').filter({ has: page.locator('.t', { hasText: /^Ad$/ }) }).locator('input').click();
+    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 2 sütun', rv);
+    check('"Sütunlar": every column with a tick - untick one and it goes (the list stays open)',
+      await colHidden(rv, 2) && await page.locator('.menu label.mcheck').count() >= 60
+      && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["B","C"]');
+    await page.click('.menu >> text=Tümünü göster');
+    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').classList.contains('hidden'), rv);
+    check('... "Tümünü göster" brings every column back', !(await colHidden(rv, 1)) && !(await colHidden(rv, 2))
+      && (await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === undefined);
+    // a table of the dashboard's own: a column by its caption, across pages
+    await open(page, 'eod');
+    const eodCurve = '.panel[data-panel="curve"]';
+    await page.locator(eodCurve + ' tr.hd2 td', { hasText: /^Δ1G bp$/ }).first().click({ button: 'right' });       // TRY OIS's
+    await page.click('.menu >> text=/^Sütunu gizle/');
+    await open(page, 'masa');
+    await open(page, 'eod');
+    check('Gün Sonu: the column hidden is still hidden when the page is opened again, named by its caption',
+      await colHidden(eodCurve, 2) && JSON.stringify(await hiddenOf('ayşe yilmaz', 'h/curve')) === '["TRY OIS · par (%) · Δ1G bp"]',
+      await hiddenOf('ayşe yilmaz', 'h/curve'));
+    await page.click(eodCurve + ' .colschip');
+    await page.click('.menu >> text=Tümünü göster');
+    // a list built by hand (İzleme): a right click on its caption; the list is drawn again on every refresh
+    await open(page, 'watch');
+    await page.locator('#watch-table th', { hasText: /^Bant$/ }).click({ button: 'right' });
+    await page.click('.menu >> text=Sütunu gizle: Bant');
+    await page.evaluate(() => window.tto.refresh());
+    await page.waitForTimeout(600);
+    const bant = await page.evaluate(() => {
+      const t = document.getElementById('watch-table');
+      const j = [...t.rows[0].cells].findIndex((c) => c.textContent === 'Bant');
+      return { j, hidden: [...t.rows].every((r) => r.cells[j].hidden) };
+    });
+    check('İzleme: a column of the list stays hidden when the list is drawn again', bant.j > 0 && bant.hidden, bant);
+    await page.locator('#watch-table th', { hasText: /^Ad$/ }).click({ button: 'right' });
+    await page.click('.menu >> text=Gizlediğiniz sütunları göster (1)');
+    check('... and comes back from the same menu', !(await page.evaluate(() => [...document.getElementById('watch-table').rows[0].cells].some((c) => c.hidden))));
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
