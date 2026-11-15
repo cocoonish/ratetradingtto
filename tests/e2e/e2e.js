@@ -1361,7 +1361,8 @@ async function shot(page, name) {
       if (hist.phase === 'idle' && hist.mpc_days >= 21) break;
       await page.waitForTimeout(2000);
     }
-    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 && !hist.error, hist);
+    // (8 series of the workbook, and 6 of the quant package's that the file recorded too: USDTRY, its swap points, USD OIS 3M)
+    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 + 6 && !hist.error, hist);
     const rowsOf = (panel) => page.evaluate((p) => [...document.querySelectorAll('.panel[data-panel="' + p + '"] table.grid tr')]
       .map((tr) => [...tr.children].map((td) => td.textContent.trim())), panel);
     const rowOf = (rows, label) => rows.find((r) => r[0] === label || r[0].startsWith(label)) || [];
@@ -1501,7 +1502,8 @@ async function shot(page, name) {
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
-      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118, rowOf(series, 'TLREF'));
+      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 50       // (+ the quant package's 50)
+      && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), rowOf(series, 'TLREF'));
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
     check('settings: the pricing sources - OIS GFOF, offshore and XCCY ICPL, the workbook\'s BGN ticker last',
@@ -2099,6 +2101,21 @@ async function shot(page, name) {
       asked.length > 0 && asked.every((u) => u.includes('since=') && u.includes('panels=')), asked.slice(0, 3));
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!D2'] });
     for (const p of tabs) await p.close();
+
+    // ------------------------------------------------------------------ quant signals
+    console.log('quant signals');
+    await open(page, 'quant');
+    await page.waitForSelector('#quant-signals', { timeout: 30000 });
+    // the analyses run in their own thread a few seconds after the start: the page asks until the first result is there
+    await page.waitForFunction(() => /^Hesap /.test((document.getElementById('quant-status') || {}).textContent || ''), null, { timeout: 90000 });
+    const quantTables = await page.locator('#content .quantpage table.grid').count();
+    const deskAlarm = await page.locator('#quant-settings select#quant-set-desk_alarm').inputValue();
+    check('the Sinyaller page renders: signals, log, subscription, settings (desk alarms from Güçlü), status tables', quantTables >= 2
+      && await page.locator('#quant-subscribe input#quant-sub-on').count() === 1 && await page.locator('#quant-settings input#quant-set-entry_z').count() === 1
+      && deskAlarm === 'Güçlü', { tables: quantTables, deskAlarm });
+    const qs = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/status');
+    check('the quant analyses answer from their own thread', qs.status === 200 && qs.json.ready === true && qs.json.fits >= 1, qs.json);
+    await shot(page, 'quant-signals');
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

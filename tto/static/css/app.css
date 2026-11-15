@@ -942,3 +942,18 @@ table.plain.agenda td.what { width: 100%; white-space: normal; overflow-wrap: an
 table.plain.agenda td.who { width: 1%; font-size: 11.5px; }
 table.plain.agenda td.act { width: 1%; }
 table.plain.agenda tr.done td.what .txt, table.plain.agenda tr.done td.when { text-decoration: line-through; color: var(--ink-3); }
+/* Quant sinyaller */
+.quantpage .qnote:empty { display: none; }
+.quantpage .qnote { padding: 6px 12px 8px; font-size: 11.5px; border-top: 1px solid var(--line); }
+.quantpage .qdetails { padding: 4px 12px 10px; }
+.quantpage .qcols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; margin: 6px 0; }
+.quantpage table.plain.qkv th { text-align: left; color: var(--ink-3); font-weight: 500; padding-right: 12px; white-space: nowrap; }
+.quantpage .qline { padding: 2px 0; font-size: 11.5px; }
+.quantpage .qform, .quantpage .qsettings { padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.quantpage .qsettings .field { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--ink-3); }
+.quantpage .qsettings .field .inp { width: 120px; }
+.quantpage .qsettings .field .inp.wide { width: min(560px, 80vw); }
+.quantpage .qfams { display: flex; flex-wrap: wrap; gap: 4px 12px; width: 100%; }
+.quantpage .qrow { display: flex; gap: 8px; align-items: center; padding: 0 12px 10px; }
+table.grid td.qs-güçlü { color: var(--accent-ink); font-weight: 650; }
+.toast.qalert { cursor: pointer; }

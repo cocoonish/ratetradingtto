@@ -25,6 +25,7 @@ import { SocialPage } from './pages/social.js';
 import { AgendaPage } from './pages/agenda.js';
 import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
 import { openRecon, checkBeforeArchive } from './recon.js';
+import { quantPage, quantEvent } from './pages/quant.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
@@ -321,6 +322,7 @@ async function openPage(id, panel) {
   else if (id === 'fxvol') page = new FxVolPage(host, ctx);
   else if (id === 'social') page = new SocialPage(host, ctx);
   else if (id === 'agenda') page = new AgendaPage(host, ctx);
+  else if (id === 'quant' || id.startsWith('quant-')) page = quantPage(id, host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   try {
@@ -410,7 +412,7 @@ const events = {
     this.chan = new BroadcastChannel('tto-events');
     this.chan.onmessage = (e) => {
       const m = e.data || {};
-      if (typeof m.gen === 'number') { onGen(m.gen); deskEvent(m.desk); }
+      if (typeof m.gen === 'number') { onGen(m.gen); deskEvent(m.desk); quantEvent(m.quant); }
       else if (m.online === false) setOnline(false);
       else if (m.online === true) { deskReconnected(); onBack(); }
     };
@@ -452,9 +454,10 @@ const events = {
     es.onmessage = (e) => {
       let msg = null;
       try { msg = JSON.parse(e.data); } catch (x) { return; }
-      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk });
+      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant });
       onGen(msg.gen);
       deskEvent(msg.desk);                 // the chat, the reports, the agenda: their own counters (no new generation)
+      quantEvent(msg.quant);               // the quant signals: a new result, a signal alert
     };
     es.onerror = () => {
       if (this.chan) this.chan.postMessage({ online: false });

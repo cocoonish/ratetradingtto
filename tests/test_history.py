@@ -16,6 +16,7 @@ from tto.history import (DEFAULT_PAST_MEETINGS, DayProvider, History, add_months
 from tto.marketdata.base import bdp_key
 from tto.marketdata.bloomberg import BloombergProvider
 from tto.marketdata.replay import ReplayProvider, _recorded_rows
+from tto.quant import series_specs
 from tto.service import Service, ServiceError
 from tto.store import Store
 from tto.xl.engine import Clock
@@ -350,10 +351,13 @@ def test_the_series_come_from_the_workbook(hsvc):
 
 def test_offline_the_history_is_what_the_file_recorded(hsvc):
     st = hsvc.history.status()
-    assert (st["series"], st["last_day"], st["mode"], st["phase"], st["error"]) == (8, TODAY, "replay", "idle", "")
+    assert (st["series"], st["last_day"], st["mode"], st["phase"], st["error"]) == (14, TODAY, "replay", "idle", "")
     bounds = hsvc.store.hist_bounds()
-    assert sorted(bounds) == ["BISTTREF Index|PX_LAST", "TRYSAQ1 BGN Curncy|PX_LAST", "TYSO1 Curncy|PX_LAST", "TYSOA Curncy|PX_LAST",
-                              "TYSOB Curncy|PX_LAST", "TYSOC Curncy|PX_LAST", "TYSOF Curncy|PX_LAST", "TYSOI Curncy|PX_LAST"]
+    # (USDTRY, its swap points and USD OIS 3M are series of the quant package too - the VİOP sheet's BDH blocks have them)
+    assert sorted(bounds) == ["BISTTREF Index|PX_LAST", "TRY12M Curncy|PX_LAST", "TRY1M Curncy|PX_LAST", "TRY3M Curncy|PX_LAST",
+                              "TRY6M Curncy|PX_LAST", "TRYSAQ1 BGN Curncy|PX_LAST", "TYSO1 Curncy|PX_LAST", "TYSOA Curncy|PX_LAST",
+                              "TYSOB Curncy|PX_LAST", "TYSOC Curncy|PX_LAST", "TYSOF Curncy|PX_LAST", "TYSOI Curncy|PX_LAST",
+                              "USDTRY Curncy|PX_LAST", "USSOC Curncy|PX_LAST"]
     one_month = dict(hsvc.store.hist_series("TYSOA Curncy|PX_LAST"))
     assert len(one_month) == 22 and one_month["2026-10-05"] == 37.15 and one_month[TODAY] == 36.35      # the BDH block of the file
     assert one_month[TODAY] == hsvc.provider.snapshot[bdp_key("TYSOA Curncy", "PX_LAST")]                 # its last row is today's quote
@@ -1148,6 +1152,8 @@ def _fake_history(svc, snap):
         return [(d, round(level - 0.25 * math.log(1.0 + months) + drift(d) + 0.02 * math.sin((d - start).days / 7.0 + seed), 4)) for d in days]
 
     for k, d in enumerate(snap["defs"]):
+        if d.group == "Quant":
+            continue                                                        # the quant package's own series: none here
         if d.group == "ref":
             # the fixing of the workbook's day; one point higher until the meeting of 22 October; today's is not out yet
             hist[(d.ticker, d.field)] = [(x, 36.8159 if x <= D("2026-10-22") else 35.8159) for x in days if x < today]
@@ -1175,16 +1181,18 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
     try:
         h = svc.history
         snap = h.snapshot()
-        assert svc.mode == "live" and snap["today"] == D(TODAY) and len(snap["defs"]) == 59
+        quant = len(series_specs())                                          # the quant package's own series (two years back)
+        assert svc.mode == "live" and snap["today"] == D(TODAY) and len(snap["defs"]) == 59 + quant
         hist, days = _fake_history(svc, snap)
         server.history.update(hist)
 
         def asked():
             return [r for r in server.requests if r["op"] == "HistoricalDataRequest"]
 
-        # ---- the first pass: a year of everything, a handful of requests
+        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, five a pass)
         res = h.sync(only=[TODAY])
-        first = asked()
+        first = [r for r in asked() if r["options"]["startDate"] != "20241024"]
+        assert len(asked()) - len(first) == 1 and len(asked()[-1]["securities"]) == History.BACKFILL_PER_SYNC
         tickers = {s for r in first for s in r["securities"]}
         # (the bonds go out the way the API names them: the sheet's "TRT150328T24 @ISL1 ISIN" is Excel's spelling)
         assert {"TYSOA Curncy", "TYSOA GFOF Curncy", "BISTTREF Index", "TRYI1M BGN Curncy", "TRYSAQ5 BGN Curncy",
@@ -1237,12 +1245,13 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert "2026-10-29" not in plan and "2026-01-01" not in plan and plan["2026-10-28"]["spot"] == D("2026-10-30")
         assert plan["2026-10-21"]["meetings"][0] == D("2026-10-22") and len(plan) == len(in_window)
 
-        # ---- the next pass asks for the last days only; series without any history are left alone for a while
+        # ---- the next pass asks for the new days only - from each series' last close on, that close again (and the
+        #      next five quant series); series without any history are left alone for the rest of the day
         n = len(asked())
         res = h.sync(only=[TODAY])
-        later = asked()[n:]
-        assert res == {"fetched": 0, "computed": 0, "rev": h.rev}
-        assert {r["options"]["startDate"] for r in later} == {"20261024"} and len(later) <= 3
+        later = [r for r in asked()[n:] if r["options"]["startDate"] != "20241024"]
+        assert res == {"fetched": 0, "computed": 0, "rev": h.rev} and len(asked()[n:]) - len(later) == 1
+        assert {r["options"]["startDate"] for r in later} == {"20261031", "20261030"} and len(later) <= 3      # (TLREF: 2 Nov)
         assert not ({"TYSOA GFOF Curncy", "TRT150328T24 @ISL1 ISIN"} & {s for r in later for s in r["securities"]})
 
         # ---- a close moves (today's last price): one row is stored, today is solved again
@@ -1261,7 +1270,18 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert "TYSOA GFOF Curncy" in {s for r in asked()[n:] for s in r["securities"]}
         st = h.status()
         assert st["mode"] == "live" and st["mpc_days"] == 1 and st["mpc_partial"] == 0 and st["error"] == ""
-        assert provider.status()["hits_today"] < 600
+        # Bloomberg's hits (security × field per request) of the four passes, part by part instead of one round number:
+        # the workbook's own reference data, every pair asked once - however many fields the workbook uses (the bid /
+        # ask sizes added some) -, and what the history asked: exactly what its rules say
+        hist_hits = sum(len(r["securities"]) for r in asked())
+        refs = [(s, f, r["overrides"]) for r in server.requests if r["op"] != "HistoricalDataRequest" for s in r["securities"] for f in r["fields"]]
+        print("hits: %d = %d reference + %d history" % (provider.status()["hits_today"], len(refs), hist_hits))
+        assert provider.status()["hits_today"] == server.hits() == len(refs) + hist_hits and len(refs) == len(set(refs))
+        q, with_data, without = History.BACKFILL_PER_SYNC, len(svc.store.hist_bounds()), 117 - 58
+        # first pass: every series of the workbook in full and five quant ones; then the last days of the 58 with
+        # history and five more quant series, twice; by hand: the last days again, the 59 workbook series without
+        # history again and five more quant series (those never asked go first)
+        assert with_data == 58 and hist_hits == (117 + q) + 2 * (with_data + q) + (with_data + without + q)
     finally:
         svc.stop()
 
@@ -1319,7 +1339,8 @@ def test_history_api(client, hsvc, monkeypatch):
     page = client.get("/api/history/mpc", params={"n": 3}).json()
     assert page["days"] == DAYS and len(page["meetings"]) == 4
     assert client.get("/api/history/mpc", params={"days": "çok"}).status_code == 400
-    assert len(client.get("/api/history/series").json()["series"]) == 117           # 59 series, 58 of them with a backup ticker
+    # 59 series of the workbook, 58 of them with a backup ticker; and the quant package's own (no backups)
+    assert len(client.get("/api/history/series").json()["series"]) == 117 + len(series_specs())
     cal = client.get("/api/calendar").json()
     assert cal["next"] == "2026-12-10" and len(cal["meetings"]) == 95
     dates = [x["date"] for x in cal["meetings"]]

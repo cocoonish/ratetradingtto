@@ -233,6 +233,9 @@ class Service(object):
         # the desk's own corner: reports to the administrators, the chat (Sosyal), the agenda (Ajanda)
         from .desk import Desk
         self.desk = Desk(self)
+        # quant signals (quant.py): statistics of the closes in a thread of their own, never on the engine thread
+        from .quant import Quant
+        self.quant = Quant(self)
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -472,6 +475,7 @@ class Service(object):
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
             self.history.start()
             self.ops.start()
+            self.quant.start()
             self.warm()
             threading.Thread(target=self._build_ref_indexes, name="tto-refs", daemon=True).start()
 
@@ -577,6 +581,7 @@ class Service(object):
         self.history._stop.set()                   # no new work while the provider goes down
         self.history._kick.set()
         self.ops.stop()
+        self.quant.stop()
         self.fx.stop()
         if self.mode == "live":
             self._keep_bloomberg()
@@ -1341,6 +1346,8 @@ class Service(object):
             # the option market of the currency pairs: one pair in depth, and every pair's vols at a glance
             pages.append({"id": "fx", "title": "Spot / FX", "group": "FX", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "fxvol", "title": "FX Vol İzleme", "group": "FX", "book": "tto", "sheet": None, "custom": True})
+            # the quant signals and the analyses behind them (quant.py)
+            pages.extend(self.quant.pages())
         # the desk's own corner (desk.py): the traders' chat and the agenda - pages of the desk, apart from any workbook
         pages.append({"id": "social", "title": "Sosyal", "group": "Masa", "book": None, "sheet": None, "custom": True})
         pages.append({"id": "agenda", "title": "Ajanda", "group": "Masa", "book": None, "sheet": None, "custom": True})
