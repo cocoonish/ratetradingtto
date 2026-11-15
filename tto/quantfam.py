@@ -24,6 +24,9 @@ Families (``FAMILIES``) and what they score:
     cycle     2s10s / 1s2s over the next weeks, by the phase of the policy cycle (TLREF)
     fwdprem   the depreciation the USDTRY / EURTRY forwards imply against the forecast drift (carry timing)
     model     L2 logistic regression of next week's direction, walk-forward validated
+    imapath   the implied MPC / FOMC path against its grid: a period's kink against its neighbours (quantpath.py)
+    imacal    the priced bigger move against what was decided: a calibration bias (quantpath.py)
+    leadlag   who moves first: a follower that has not caught up with its leader's move yet (quantlead.py)
 
 Units: rates are kept in per cent and move in bp; spreads, flies, residuals and CDS are in bp; FX levels move in per
 cent (log); vols in vol points.
@@ -63,6 +66,9 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "iorb": ("Gün içi kırılım", "trend", "quant-intraday"),
     "irv": ("Gün içi RV", "mr", "quant-intraday"),
     "ipath": ("USDTRY carry patikası", "mr", "quant-intraday"),
+    "imapath": ("İma patikası ayrıklığı", "mr", "quant-path"),       # quantpath.py: kinks of the implied path
+    "imacal": ("İma kalibrasyonu", "model", "quant-path"),          # quantpath.py: a bias of the priced bigger move
+    "leadlag": ("Öncü-takipçi", "model", "quant-lead"),             # quantlead.py: a follower that has not caught up
 }
 
 ASSETS = ("TRY OIS", "Offshore", "VİOP", "DİBS", "FX", "FX vol", "EM carry", "Global")
@@ -591,7 +597,7 @@ def mr_monitor(ctx: Ctx, sid: str, family: str, asset: str, name: str, unit: str
 # ---------------------------------------------------------------------------------------------- leg texts
 #: what a position on a level is called, by the key's kind: (+1 profits when the level rises, −1 when it falls)
 def _verbs(key: str) -> Tuple[str, str]:
-    if key.startswith(("OIS:", "OFF:", "USD:")) or key == "TLREF":
+    if key.startswith(("OIS:", "OFF:", "USD:", "MPC:", "FOMC:")) or key == "TLREF":      # (MPC: / FOMC: meeting-dated OIS)
         return "Pay", "Receive"
     if key.startswith(("UST:", "DIBS:")):
         return "Sell", "Buy"

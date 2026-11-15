@@ -384,6 +384,29 @@ class Intraday(object):
     def live(self) -> bool:
         return self.svc.mode == "live" and bool(self.quant.use_live)
 
+    def series(self, key: str, minutes: int = 1) -> Optional[Tuple[List[str], List[float]]]:
+        """One key's bars for the lead-lag analysis (``quantlead``): its 1- or 5-minute closes over the days kept, as
+        ``(times, values)`` (``"YYYY-MM-DD HH:MM"``, the bar's end); ``None`` when there are none (replay, a key the
+        bars do not keep)."""
+        if key not in KEYS or minutes not in (1, BAR) or not self.live():
+            return None
+        b = self.bars()
+        if b is None:
+            return None
+        since = (_dt.date.today() - _dt.timedelta(days=KEEP_DAYS + 10)).strftime("%Y-%m-%d")
+        pts = b.load([key], since).get(key) or []
+        if not pts:
+            return None
+        if minutes == 1:
+            return [t for t, _ in pts], [v for _, v in pts]
+        times: List[str] = []
+        values: List[float] = []
+        for day, bars in five(pts).items():
+            for m, v in bars:
+                times.append("%s %02d:%02d" % (day, m // 60, m % 60))
+                values.append(v)
+        return times, values
+
     def sample(self, raw_live: Dict[str, float], now: _dt.datetime) -> int:
         """The minute's values as closes (live, a week day, in the session; once a minute)."""
         if not self.live() or now.weekday() >= 5:

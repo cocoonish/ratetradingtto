@@ -2282,6 +2282,61 @@ async function shot(page, name) {
     { rows: surfRows, smiles: op.pairs && op.pairs.map((p) => p.smiles.map((s) => s.model || s.why)) });
     await shot(page, 'quant-opt');
 
+    // ------------------------------------------------------------------ the implied path on its grid, the WIRP (quantpath.py)
+    console.log('implied path, WIRP');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/quant/recompute', {});          // (a fit with the recorded month of meeting pricing)
+    await open(page, 'quant-path');
+    await page.waitForSelector('#quant-path-meetings', { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelectorAll('#quant-path-meetings table.grid tr:not(.hd)').length >= 3, null, { timeout: 90000 });
+    const pathApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/path');
+    const pb = ((pathApi.json || {}).path || {}).banks || {};
+    const pt = pb.try || {};
+    check('İma Patikası: every TCMB meeting a mix of its two 50 bp outcomes, consecutive pairs with their discrete paths, kinks, calibration',
+      pathApi.status === 200 && pt.ok && pt.grid === 50 && pt.rows.length >= 3 && pt.rows.every((r) => Math.abs(r.p_lo * r.lo + r.p_hi * r.hi - r.step) < 1e-6)
+      && pt.pairs.length >= 1 && pt.pairs[0].paths.every((q) => q.p_min <= q.p_max) && pt.kinks.length >= 1 && pt.calibration.n >= 0
+      && await page.locator('#quant-path-pairs table.grid').count() === 1 && await page.locator('#quant-path-kinks table.grid').count() === 1
+      && await page.locator('#quant-path-calib table.grid').count() === 1, { rows: (pt.rows || []).length, why: pt.why });
+    check('... the replay note: live quotes drive it', await page.locator('#quant-path-mode:not(.hidden)').count() === 1);
+    await page.click('#quant-path-bank button[data-v="usd"]');
+    await page.waitForFunction(() => /Fed · FOMC/.test((document.querySelector('#quant-path-meetings h2') || {}).textContent || ''), null, { timeout: 10000 });
+    const usdRows = await page.locator('#quant-path-meetings table.grid tr:not(.hd)').count();
+    check('... the Fed from the USD workbook\'s FOMC table: ten meetings on a 25 bp grid', usdRows === 10 && pb.usd && pb.usd.ok && pb.usd.grid === 25, { usdRows });
+    await shot(page, 'quant-path');
+    await page.click('#quant-path-bank button[data-v="try"]');                 // (the choice is kept in the browser: TCMB again)
+    await open(page, 'quant-wirp');
+    await page.waitForSelector('#quant-wirp-matrix table.grid', { timeout: 30000 });
+    const wirpApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/wirp');
+    const wb = ((wirpApi.json || {}).wirp || {}).banks || {};
+    const wt = wb.try || {};
+    check('TCMB WIRP: ease / hold / hike per meeting, the matrix\'s expected path is the implied one, the policy rate from Masa (Q155) and its spread to TLREF',
+      wirpApi.status === 200 && wt.ok && wt.check < 1e-6 && wt.policy && wt.policy.rate === 36 && typeof wt.policy.spread === 'number'
+      && wt.rows.every((r) => Math.abs(r.ease + r.hold + r.hike - 1) < 1e-9)
+      && await page.locator('#quant-wirp-table table.grid tr:not(.hd)').count() === wt.rows.length
+      && await page.locator('#quant-wirp-bars svg.chart').count() === 1, { check: wt.check, policy: wt.policy });
+    await page.locator('#quant-wirp-table table.grid tr:not(.hd)').nth(1).locator('td').first().click();
+    const secondMeeting = (wt.rows[1] || {}).meeting || '';
+    await page.waitForFunction((d) => ((document.querySelector('#quant-wirp-bars h2') || {}).textContent || '').startsWith(d),
+      secondMeeting.split('-').reverse().join('.'), { timeout: 10000 });
+    check('... a click on a meeting draws its rate buckets', true);
+    await page.click('#quant-wirp-bank button[data-v="usd"]');
+    await page.waitForFunction(() => /Fed/.test((document.querySelector('#quant-wirp-table h2') || {}).textContent || ''), null, { timeout: 10000 });
+    check('... the Fed beside it: target ranges in bp from the FDTR upper bound', wb.usd && wb.usd.ok && wb.usd.policy.rate === 4
+      && wb.usd.buckets.every((b) => /^\d+–\d+$/.test(b.label)) && await page.locator('#quant-wirp-matrix table.grid tr:not(.hd)').count() === wb.usd.rows.length);
+    await shot(page, 'quant-wirp');
+    await page.click('#quant-wirp-bank button[data-v="try"]');
+
+    // ------------------------------------------------------------------ lead-lag (quantlead.py)
+    console.log('lead-lag');
+    await open(page, 'quant-lead');
+    await page.waitForSelector('#quant-lead-pairs table.grid', { timeout: 30000 });
+    const leadApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/lead');
+    const lr = ((leadApi.json || {}).lead || {}).rows || [];
+    check('Öncü-Takipçi: every candidate pair listed (the recorded month is short: each says why), no intraday bars yet',
+      leadApi.status === 200 && lr.length >= 4 && lr.every((r) => r.leader || r.why)
+      && await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count() === lr.length
+      && /gün içi barlar yok/.test(await page.textContent('#quant-lead-intraday')), { rows: lr.length });
+    await shot(page, 'quant-lead');
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
