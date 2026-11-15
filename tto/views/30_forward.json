@@ -851,14 +851,14 @@
    "scope": "user",
    "group": "bulk100-dates",
    "kind": "date",
-   "label": "toplu forward valör tarihleri (100 satır; ilk 20'si Forward!B144:B163)"
+   "label": "toplu forward valör tarihleri (100 satır, boş başlar)"
   },
   {
    "range": "EK_BULK!L5:L104",
    "scope": "user",
    "group": "bulk100-try",
    "kind": "number",
-   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; ilk 20'si Forward!L144:L163)"
+   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; boş başlar)"
   }
  ],
  "panels": [
@@ -1095,7 +1095,7 @@
   {
    "id": "B33",
    "type": "table",
-   "title": "BULK FORWARD FİYATLAMA (Excel'deki 20 satırlık tablo – ilk 20 valör üstteki tabloya gelir)",
+   "title": "BULK FORWARD FİYATLAMA (Excel'deki 20 satırlık tablo; sayfadaki 100 satırlık tablo kendi valörleriyle, boş başlar)",
    "range": "B142:Q163",
    "hidden": true,
    "keep_title": true

@@ -382,23 +382,22 @@ def test_bonds_are_added_to_a_pages_list_by_isin(tmp_path):
 
 # ---------------------------------------------------------------------------------------------- tables that grow
 def test_the_bulk_forward_table_has_a_hundred_rows_of_the_sheets_own_formulas(svc):
-    # the first twenty rows are the Forward sheet's table, value for value
-    for k in range(20):
-        for col in ex.BULK_COLS:
-            a, b = cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST + k)), cell(svc, "Forward!%s%d" % (col, 144 + k))
-            assert a == b or (type(a) is float and type(b) is float and a == pytest.approx(b, abs=1e-9)), (col, k, a, b)
+    # every value date and manual TRY rate starts empty (the file's dates of the day it was saved are nobody's today),
+    # and an empty row prices nothing
+    for k in range(ex.BULK_ROWS):
         for col in "BL":
-            a, b = cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST + k)), cell(svc, "Forward!%s%d" % (col, 144 + k))
-            assert a == (b if b is not None else "")
-    # a value date typed in a row the Forward sheet does not have is priced like the others
+            assert cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST + k)) is None, (col, k)
+    assert all(cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST)) in (None, "") for col in "NPQ")
+    # the Forward sheet's own table (its first rows) and the same value dates typed here - in its first row and in a
+    # row the sheet does not have - give the same prices: the sheet's formulas, row by row
     u = svc.login("Toplu Forward")["user"]
-    r = ex.BULK_FIRST + 60
-    typed = [{"ref": "%s!%s%d" % (ex.BULK_SHEET, col, r), "value": cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST))}
-             for col in "BL" if cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST)) not in (None, "")]
-    assert typed and not svc.set_inputs(u, "tto", typed)["errors"]
-    for col in ex.BULK_COLS:
-        assert cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, r), user=user_key(u)) == pytest.approx(
-            cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST)), abs=1e-9), col
+    for k, r in ((0, ex.BULK_FIRST), (3, ex.BULK_FIRST + 60)):
+        typed = [{"ref": "%s!%s%d" % (ex.BULK_SHEET, col, r), "value": cell(svc, "Forward!%s%d" % (col, 144 + k))}
+                 for col in "BL" if cell(svc, "Forward!%s%d" % (col, 144 + k)) not in (None, "")]
+        assert typed and not svc.set_inputs(u, "tto", typed)["errors"]
+        for col in ex.BULK_COLS:
+            a, b = cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, r), user=user_key(u)), cell(svc, "Forward!%s%d" % (col, 144 + k))
+            assert a == b or (type(a) is float and type(b) is float and a == pytest.approx(b, abs=1e-9)), (col, k, a, b)
     # the page shows the rows in use and one more; the panel says how
     view = svc.view(u, "forward")
     bk = next(p for p in view["panels"] if p["id"] == "BK1")

@@ -1466,8 +1466,9 @@ def _bulk_forward_check(model: Model) -> None:
 
 def _tto_bulk_forward(model: Model) -> None:
     """The Forward sheet's bulk forward table with 100 rows instead of 20 - the sheet's own formulas, row by row,
-    the curves and spots still read from the Forward sheet.  The first 20 value dates and manual TRY rates are
-    the Forward sheet's (typed over freely); the page shows as many rows as are filled, one more on demand."""
+    the curves and spots still read from the Forward sheet.  Every value date and manual TRY rate starts empty: the
+    dates the file was saved with are nobody's choice today (as ``EMPTY_BY_DEFAULT``); what a user types is theirs.
+    The page shows as many rows as are filled, one more on demand."""
     b = SheetBuilder(model, BULK_SHEET)
     b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid)")
     heads = [model.sheet("Forward").consts.get(parse_a1("%s143" % c)) for c in "BCDEFGHIJKLMNOPQ"]
@@ -1478,19 +1479,14 @@ def _tto_bulk_forward(model: Model) -> None:
         templates[col] = _ABSOLUTE.sub(lambda m: "Forward!" + m.group(0), text)       # the curves stay on the Forward sheet
     for k in range(BULK_ROWS):
         r = BULK_FIRST + k
-        src = 144 + k
-        if k < 20:
-            b.input("B%d" % r, '=IF(ISNUMBER(Forward!$B$%d),Forward!$B$%d,"")' % (src, src), fmt=DATE)
-            b.input("L%d" % r, '=IF(ISNUMBER(Forward!$L$%d),Forward!$L$%d,"")' % (src, src), fmt="0.0000")
-        else:
-            b.input("B%d" % r, None, fmt=DATE)
-            b.input("L%d" % r, None, fmt="0.0000")
+        b.input("B%d" % r, None, fmt=DATE)
+        b.input("L%d" % r, None, fmt="0.0000")
         for col in BULK_COLS:
             body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
             b.set("%s%d" % (col, r), "=" + body, like=None, fmt=_BULK_FMT.get(col, NUM4))
     b.note("B%d" % (BULK_FIRST + BULK_ROWS + 1),
-           "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. İlk 20 "
-           "satırın valörü ve manuel TRY faizi Forward sayfasındakidir; üzerine yazabilir, silerek ona dönebilirsiniz.")
+           "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. "
+           "Valör ve manuel TRY faizi boş başlar; yazdıklarınız sizin kalır (Excel'den bir sütun da yapıştırabilirsiniz).")
 
 
 _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", "H": "0.000", "J": "0.000", "K": "0.000",

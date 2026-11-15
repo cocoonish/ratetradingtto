@@ -702,9 +702,10 @@ veri modunda Bloomberg yanıtı olmadığından sayfa boş kalır.
 
 **Satır eklenen tablolar.** Bulk Bond tablosu 4 yerine 50 kâğıt alır (alttaki satırlar 6. satırın formülleridir,
 ISIN'i boşken hiçbir şey istemez); Forward'daki toplu forward fiyatlama 20 yerine **100 valör** alır (EK_BULK:
-sayfanın kendi formülleri, eğri ve faizler Forward sayfasından; ilk 20 satırın valörü ve manuel TRY faizi Forward
-sayfasınınkidir, üzerine yazılabilir). Sayfa dolu satırları ve bir boş satırı gösterir; **"+ Satır"** bir boş satır
-daha açar (tercih hatırlanır), **"Tümü"** hepsini gösterir.
+sayfanın kendi formülleri, eğri ve faizler Forward sayfasından). Valör ve manuel TRY faizi **boş başlar**: dosyanın
+kaydedildiği günün tarihleri bugün kimsenin seçimi değil. Yazılanlar kullanıcının kendisinin kalır. Sayfa dolu
+satırları ve bir boş satırı gösterir; **"+ Satır"** bir boş satır daha açar (tercih hatırlanır), **"Tümü"** hepsini
+gösterir.
 
 **Realized Vol · Carry.** İki bölümü vardır; ikisi de dashboard'un günlük kapanış tarihçesini (Gün Sonu Matrisi'nin
 kullandığı depo) kullanır.
