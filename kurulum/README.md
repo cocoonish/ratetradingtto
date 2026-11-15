@@ -5,25 +5,28 @@
 etmiyorsa bu dosya yeter; internetten bir şey indirmez, bir şey kurmaz, yalnızca kendi içindekini bir klasöre açar.
 Gereken tek şey Python 3.8 ya da üstüdür.
 
-1. Bu klasörde `tto_kur.py` → sağ üstte **Download raw file** (⬇). Dosya yaklaşık 4,7 MB'tır; GitHub içeriğini
-   göstermeyebilir ama indirme düğmesi çalışır.
+1. Bu klasörde `tto_kur.py` → sağ üstte **Download raw file** (⬇). Dosya yaklaşık 5,6 MB'tır; GitHub içeriğini
+   göstermeyebilir ama indirme düğmesi çalışır. **Aynı dosya `tto_kur.txt` olarak da burada:** ağınız `.py` indirmeye
+   izin vermiyorsa onu indirin, içerik birebir aynıdır.
 2. İndirdiğiniz klasörde bir komut penceresinde:
 
 ```bash
 python tto_kur.py
 ```
 
-   Yanına `ratetradingtto` klasörünü açar ve dashboard'u başlatmayı sorar. (Başka bir klasöre: `python tto_kur.py D:\tto`.)
+   ya da `.txt`'yi indirdiyseniz `python tto_kur.txt`. Yanına `ratetradingtto` klasörünü açar ve dashboard'u başlatmayı
+   sorar. (Başka bir klasöre: `python tto_kur.py D:\tto`.)
 3. Sonraki açılışlarda `ratetradingtto` klasöründeki `run.bat`'a çift tıklayın; tarayıcıdan `http://localhost:1057`.
 
-**Güncelleme:** yeni `tto_kur.py`'yi indirip aynı yerde yeniden çalıştırın. Değişen dosyalar yenilenir, artık olmayanlar
-silinir; `data` klasörüne (kullanıcılar, senaryolar, RET geçmişi, işlem defteri, tarihçe) ve `vendor/local`'a dokunulmaz.
+**Güncelleme:** yeni `tto_kur.py`'yi (ya da `tto_kur.txt`'yi) indirip aynı yerde yeniden çalıştırın. Değişen dosyalar
+yenilenir, artık olmayanlar silinir; `data` klasörüne (kullanıcılar, senaryolar, RET geçmişi, işlem defteri, tarihçe) ve
+`vendor/local`'a dokunulmaz.
 
-**E-postayla taşımak için** dosyanın adını `tto_kur.txt` yapın — içerik düz metindir, uzantı önemli değildir:
-`python tto_kur.txt` aynı şekilde çalışır.
+**E-postayla taşımak için** `tto_kur.txt`'yi ekleyin — içerik düz metindir, uzantı önemli değildir.
 
 Diğer seçenekler: `python tto_kur.py --list` (içindekiler), `--no-run` (başlatmayı sorma), `--run` (sormadan başlat),
 `python tto_kur.py --run -- --port 1060` (`--` sonrası dashboard'a verilir).
 
-Dosya elle düzenlenmez; `python tools/make_bundle.py` üretir ve bir test, repodaki dosyanın kodla aynı olduğunu denetler.
+İki dosya da elle düzenlenmez; `python tools/make_bundle.py` ikisini birlikte üretir ve bir test, repodaki dosyaların kodla
+ve birbiriyle aynı olduğunu denetler.
 İçinde testler ve kaynak Excel dosyaları yoktur (çalışmak için gerekmezler).

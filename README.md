@@ -80,22 +80,25 @@ kurulu olmayan bir Python'la denendi.
 Bazı ağlarda GitHub'ın "Download ZIP"i engellenir, e-posta servisleri de içinde `.bat` / `.js` bulunan arşivleri
 kabul etmez (Gmail: *"yürütülebilir dosyalara ve arşivlere yönelik politika"*). Dosyalar tek tek inebiliyorsa
 [`kurulum/tto_kur.py`](kurulum/tto_kur.py) yeter: dashboard'un çalışması için gereken her şeyi (program, içe aktarılmış
-çalışma kitapları, web paketleri) taşıyan **tek bir düz metin dosyası** (~4,7 MB).
+çalışma kitapları, web paketleri) taşıyan **tek bir düz metin dosyası** (~5,6 MB). Aynı dosya
+[`kurulum/tto_kur.txt`](kurulum/tto_kur.txt) olarak da yanında durur: ağ `.py` indirmeye izin vermiyorsa onu indirin
+(içerik birebir aynıdır).
 
-1. Repoda `kurulum/tto_kur.py` → **Download raw file**.
+1. Repoda `kurulum/tto_kur.py` (ya da `kurulum/tto_kur.txt`) → **Download raw file**.
 2. İndirdiğiniz yerde:
 
 ```bash
 python tto_kur.py
 ```
 
+(`.txt`'yi indirdiyseniz `python tto_kur.txt` - aynı şekilde çalışır.)
+
 Yanına `ratetradingtto` klasörünü açar (ZIP'ten çıkanla aynı program; testler ve kaynak Excel dosyaları hariç) ve
 dashboard'u başlatmayı sorar. Sonraki açılışlarda o klasördeki `run.bat`. İnternetten bir şey indirmez, bir şey kurmaz.
 
 * **Güncelleme:** yeni `tto_kur.py`'yi indirip aynı yerde yeniden çalıştırın; değişen dosyalar yenilenir, artık
   olmayanlar silinir, `data` klasörüne ve `vendor/local`'a dokunulmaz.
-* **E-postayla:** dosyanın adını `tto_kur.txt` yapıp ekleyin; içerik düz metindir ve `python tto_kur.txt` aynı şekilde
-  çalışır.
+* **E-postayla:** `tto_kur.txt`'yi ekleyin; içerik düz metindir ve `python tto_kur.txt` aynı şekilde çalışır.
 * Yarım inmiş ya da yolda bozulmuş dosya açılmaz, ne olduğunu söyler (içeriğin özeti dosyanın içindedir).
 * Dosya `python tools/make_bundle.py` ile üretilir; repodaki kopyanın kodla aynı olduğunu bir test denetler
   (`python tools/make_bundle.py --check` de söyler). Ayrıntı: [kurulum/README.md](kurulum/README.md).

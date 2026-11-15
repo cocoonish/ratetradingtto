@@ -6,8 +6,8 @@ the program, the imported workbooks and the bundled web packages as a base64 zip
 below its code and unpacks them next to itself (``tools/bundle_stub.py`` is the code of that script).  It downloads
 nothing and installs nothing.
 
-    python tools/make_bundle.py              # writes kurulum/tto_kur.py
-    python tools/make_bundle.py --check      # is the file in the repository still what the tree holds?
+    python tools/make_bundle.py              # writes kurulum/tto_kur.py and the same file as kurulum/tto_kur.txt
+    python tools/make_bundle.py --check      # are the two files in the repository still what the tree holds?
     python tools/make_bundle.py --out x.py   # somewhere else
 
 What goes in: ``tto/``, ``models/``, ``vendor/`` (not ``vendor/local``), ``tools/`` and the start scripts -
@@ -29,6 +29,8 @@ from typing import Dict, List, Optional, Tuple
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 STUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bundle_stub.py")
 OUT = os.path.join(ROOT, "kurulum", "tto_kur.py")
+#: the same file as .txt beside it: what a network that refuses a .py download (or a mail filter) lets through
+OUT_TXT = os.path.join(ROOT, "kurulum", "tto_kur.txt")
 
 #: what the bundle holds: these folders and these files of the repository root
 FOLDERS = ("tto", "models", "vendor", "tools")
@@ -132,6 +134,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--check", action="store_true", help="yazma; repodaki dosya ağaçla aynı mı, onu söyle")
     args = ap.parse_args(argv)
     files, execs = read_tree(ROOT)
+    twin = OUT_TXT if os.path.abspath(args.out) == os.path.abspath(OUT) else None      # (the repository's pair)
     if args.check:
         try:
             with open(args.out, encoding="utf-8") as fh:
@@ -139,6 +142,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         except (OSError, ValueError) as exc:
             print("%s okunamadı: %s" % (args.out, exc))
             return 1
+        if not diff and twin is not None:
+            try:
+                with open(twin, "rb") as a, open(args.out, "rb") as b:
+                    same = a.read() == b.read()
+            except OSError:
+                same = False
+            if not same:
+                diff = ["%s, %s ile aynı değil" % (os.path.relpath(twin, ROOT), os.path.relpath(args.out, ROOT))]
         if diff:
             print("%s güncel değil (%d fark):" % (os.path.relpath(args.out, ROOT), len(diff)))
             for line in diff[:20]:
@@ -151,10 +162,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     folder = os.path.dirname(os.path.abspath(args.out))
     if not os.path.isdir(folder):
         os.makedirs(folder)
-    with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(script)
+    for path in (args.out, twin):
+        if path is not None:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(script)
     print("%s  ->  sürüm %s, %d dosya, %.1f MB" % (os.path.relpath(args.out, ROOT), content_version(files), len(files),
-                                                    len(script.encode("utf-8")) / 1e6))
+                                                    len(script.encode("utf-8")) / 1e6)
+          + ("  (aynısı: %s)" % os.path.relpath(twin, ROOT) if twin else ""))
     return 0
 
 

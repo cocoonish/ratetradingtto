@@ -254,6 +254,10 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
         pytest.skip("kurulum/tto_kur.py is not part of this copy (archives leave it out)")
     files, _ = make_bundle.read_tree(ROOT)
     script = read(BUNDLE).decode("utf-8")
+    # the same file as .txt beside it (a network that refuses a .py download lets a .txt through)
+    txt = os.path.join(os.path.dirname(BUNDLE), "tto_kur.txt")
+    assert os.path.exists(txt) and read(txt) == read(BUNDLE), \
+        "kurulum/tto_kur.txt, tto_kur.py ile aynı olmalı - yenileyin:  python tools/make_bundle.py"
     diff = make_bundle.differences(script, files)
     assert diff == [], "kurulum/tto_kur.py güncel değil - yenileyin:  python tools/make_bundle.py   (%s)" % "; ".join(diff[:6])
     assert 'VERSION = "%s"' % make_bundle.content_version(files) in script
