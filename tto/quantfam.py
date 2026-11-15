@@ -1204,14 +1204,22 @@ def _pkg_carry(ctx: Ctx, legs: List[Dict[str, Any]]) -> Optional[float]:
     return total
 
 
+#: the workbook's TRY OIS (Motor!A325:K342, OIS_MAIN's DV01, the blotter): a single payment up to 3 months, quarterly
+#: coupons beyond - the notional a DV01 needs follows it
+OIS_SINGLE_MONTHS = 3
+OIS_COUPON_MONTHS = 3
+
+
 def _annuity(par: float, months: float) -> float:
-    """Annuity (years) of a par OIS from its own rate - one payment up to a year, annual coupons beyond (flat curve)."""
+    """Annuity (years) of a par OIS from its own rate, by the workbook's rule: one payment up to 3 months, quarterly
+    coupons beyond (a flat curve at the par rate)."""
     r = par / 100.0
-    if months <= 12:
+    if months <= OIS_SINGLE_MONTHS:
         t = months / 12.0
         return t / (1.0 + r * t)
-    years = int(round(months / 12.0))
-    return sum(1.0 / (1.0 + r) ** i for i in range(1, years + 1))
+    tau = OIS_COUPON_MONTHS / 12.0
+    n = max(1, int(round(months / OIS_COUPON_MONTHS)))
+    return sum(tau / (1.0 + r * tau) ** i for i in range(1, n + 1))
 
 
 def _pkg_name(tenors: List[str], kind: str, version: str = "pca") -> str:
