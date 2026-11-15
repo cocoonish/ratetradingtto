@@ -150,8 +150,13 @@ export class Columns {
       const open = (el) => { const r = el.getBoundingClientRect(); ui.owner.openMenu(r.left, r.bottom + 4); };
       btn.addEventListener('click', () => open(btn));
       chip.addEventListener('click', () => open(chip));
-      tools.insertBefore(btn, tools.firstChild);
       ui = tools.__columns = { btn, chip, tools, owner: null };
+      // once the panel is put together: right after its first tool ("Kopyala" stays where the desk knows it)
+      queueMicrotask(() => {
+        if (btn.parentNode) return;
+        const first = [...tools.children].find((x) => x.tagName === 'BUTTON');
+        tools.insertBefore(btn, first ? first.nextSibling : null);
+      });
     }
     ui.owner = this;
     this.ui = ui;
