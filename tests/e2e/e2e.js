@@ -1670,6 +1670,26 @@ async function shot(page, name) {
     const deskAfter = (await api(page, 'mehmet', 'GET', '/api/watch')).json.desk;
     check('... one answer is everyone\'s: "✓ Gördüm – Ayşe Yılmaz bakıyor", no longer counted, in the day\'s log',
       deskAfter.open.length === 0 && deskAfter.alarms[0].entry.ack_name === 'Ayşe Yılmaz' && deskAfter.log.some((e) => e.kind === 'ack'), deskAfter.open);
+    // muting is personal: Ayşe mutes it for herself; re-armed, it fires for everyone - and stays silent for her only
+    await page.click('#desk-table button[title^="Yalnızca benim için sustur"]');
+    await page.click('.menu >> text=15 dakika');
+    await page.waitForFunction(() => /Sizin için susturuldu/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    await page.waitForFunction(() => /sizin için susturuldu/.test((document.getElementById('desk-table') || {}).textContent || ''), null, { timeout: 15000 });
+    await page.click('#desk-table button[title="Aynı koşulla herkese yeniden kur"]');
+    let forMehmet = null;
+    for (let i = 0; i < 60; i++) {
+      forMehmet = (await api(page, 'mehmet', 'GET', '/api/alarms/fired?since=0&desk=0')).json.desk;
+      if (forMehmet.open.length === 1) break;
+      await page.waitForTimeout(500);
+    }
+    await page.waitForTimeout(2500);                      // the page has looked at what fired by now (a new generation)
+    const forAyse = (await api(page, 'ayşe yilmaz', 'GET', '/api/alarms/fired?since=0&desk=0')).json.desk;
+    const silent = await page.evaluate(() => document.getElementById('desk-alarm').classList.contains('hidden')
+      && document.querySelectorAll('.toast.alarm.desk:not(.answered)').length === 0);
+    const mutedLine = (await api(page, 'mehmet', 'GET', '/api/watch')).json.desk.log.find((e) => e.kind === 'mute');
+    check('... muting is personal: muted by Ayşe for herself, it fires again for everyone (open for Mehmet) - for her no toast, not counted; the log says she muted it for herself',
+      forMehmet.open.length === 1 && forMehmet.open[0].muted === false && forAyse.open.length === 1 && forAyse.open[0].muted === true && silent
+      && mutedLine && mutedLine.by_name === 'Ayşe Yılmaz' && /^kendisi için 15 dk susturdu/.test(mutedLine.text), [forMehmet.open, forAyse.open, silent, mutedLine]);
     await page.locator('#watch-desk').scrollIntoViewIfNeeded();
     await shot(page, 'masa-alarmlari');
 

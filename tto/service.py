@@ -2634,12 +2634,12 @@ class Service(object):
         mine = [e for e in self.watch.fired() if e.get("user") == user]
         last = max([int(e.get("seq") or 0) for e in self.watch.fired()] or [0])
         return {"fired": [e for e in mine if int(e.get("seq") or 0) > int(since or 0)], "last": last,
-                "desk": self.desk_alarms.since(desk)}
+                "desk": self.desk_alarms.since(desk, user)}
 
     # ================================================================== the desk's alarms (deskalarms.py)
     def _desk_view(self, user: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         """The desk's alarms as the alarms page shows them: the alarms an administrator set (with their last firing
-        of the day and their mute), the system's, the day's log, what nobody answered, the settings."""
+        of the day and this user's own mute of them), the system's, the day's log, what nobody answered, the settings."""
         from .deskalarms import ACTIONS
         desk = self.desk_alarms
         entries = desk.log()
@@ -2647,17 +2647,22 @@ class Service(object):
         def last_fired(alarm: str) -> Optional[Dict[str, Any]]:
             return next((e for e in reversed(entries) if e.get("alarm") == alarm and e.get("kind") == "fired"), None)
 
+        def mine(alarm: str) -> Optional[Dict[str, Any]]:
+            until = desk.muted(alarm, user)                # muting is personal: only this user's own mute
+            return {"until": until} if until else None
+
         for r in rows:
             e = last_fired(r["id"])
             r["entry"] = e if e is not None and (not r.get("active") or not e.get("closed_at")) else None
-            r["mute"] = desk.muted(r["id"])
+            r["mute"] = mine(r["id"])
             r["by_name"] = desk.name(r.get("by"))
         system = self.ops.system_rows()
         for s in system:
             s["entry"] = last_fired("sys:" + s["kind"])
-            s["mute"] = desk.muted("sys:" + s["kind"])
-        return {"alarms": rows, "system": system, "log": entries, "open": desk.opened(entries), "settings": self.ops.settings(),
-                "admin": (self.store.account(user) or {}).get("role") == "admin", "live": self.mode == "live", "actions": ACTIONS}
+            s["mute"] = mine("sys:" + s["kind"])
+        return {"alarms": rows, "system": system, "log": entries, "open": desk.for_user(desk.opened(entries), user),
+                "settings": self.ops.settings(), "admin": (self.store.account(user) or {}).get("role") == "admin",
+                "live": self.mode == "live", "actions": ACTIONS}
 
     def _desk_alarm(self, alarm_id: str) -> Dict[str, Any]:
         a = next((x for x in self.watch.desk_list() if x["id"] == alarm_id), None)
@@ -2675,27 +2680,44 @@ class Service(object):
         s = self._subject(subject, book_id, ref)
         if s["kind"] == "cell":
             self._book(s.get("book") or "tto")
-        res = self._watch_call(self.watch.add_alarm, "", s, str(op or ""), self._alarm_level(level), str(label or ""),
-                               str(note or ""), str(mode or "level"), minutes, days, me)
-        self.desk_alarms.note("set", res["alarm"]["id"], res["alarm"]["label"], res["condition"], by=me)
+        lvl = self._alarm_level(level)
+
+        def run() -> Dict[str, Any]:       # on the calculation thread, as the watch's rounds: "set" is logged before a firing
+            res = self.watch.add_alarm("", s, str(op or ""), lvl, str(label or ""), str(note or ""), str(mode or "level"),
+                                       minutes, days, me)
+            self.desk_alarms.note("set", res["alarm"]["id"], res["alarm"]["label"], res["condition"], by=me)
+            return res
+
+        res = self._watch_call(run)
         self.bump()
         return res
 
     def desk_alarm_remove(self, user: str, alarm_id: str) -> Dict[str, Any]:
         me = self.require_admin(user)
         a = self._desk_alarm(str(alarm_id or ""))
-        n = self.et.call(self.watch.remove_alarm, "", a["id"])
-        self.desk_alarms.close(a["id"], "silindi")
-        self.desk_alarms.note("removed", a["id"], a["label"], self.watch.cond_text(a), by=me)
+
+        def run() -> int:
+            n = self.watch.remove_alarm("", a["id"])
+            self.desk_alarms.close(a["id"], "silindi")
+            self.desk_alarms.note("removed", a["id"], a["label"], self.watch.cond_text(a), by=me)
+            return n
+
+        n = self._watch_call(run)
         self.bump()
         return {"removed": n}
 
     def desk_alarm_rearm(self, user: str, alarm_id: str, level: Any = None) -> Dict[str, Any]:
         me = self.require_admin(user)
         a = self._desk_alarm(str(alarm_id or ""))
-        res = self._watch_call(self.watch.rearm, "", a["id"], None if level in (None, "") else self._alarm_level(level))
-        self.desk_alarms.close(a["id"], "yeniden kuruldu")
-        self.desk_alarms.note("rearmed", a["id"], res["label"], self.watch.cond_text(res), by=me)
+        lvl = None if level in (None, "") else self._alarm_level(level)
+
+        def run() -> Dict[str, Any]:       # the earlier firing closed before a round of the watch can fire it again
+            res = self.watch.rearm("", a["id"], lvl)
+            self.desk_alarms.close(a["id"], "yeniden kuruldu")
+            self.desk_alarms.note("rearmed", a["id"], res["label"], self.watch.cond_text(res), by=me)
+            return res
+
+        res = self._watch_call(run)
         self.bump()
         return {"alarm": res}
 
@@ -2711,7 +2733,8 @@ class Service(object):
         return {"entry": entry}
 
     def desk_alarm_mute(self, user: str, alarm: Any, minutes: Any) -> Dict[str, Any]:
-        """Keep one of the desk's alarms (an id, or "sys:feed" …) from firing for a while, for everyone (by anyone)."""
+        """Mute one of the desk's alarms (an id, or "sys:feed" …) for oneself for a while: it still fires and everyone
+        else is told of it; the one who muted it is not."""
         from .deskalarms import SYSTEM, DeskAlarmError
         me = self.require_user(user)
         alarm = str(alarm or "")

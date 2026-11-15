@@ -1436,8 +1436,6 @@ class Watch(object):
             if (a.get("mode") or "level") == "z" and measure is not None and measure != a.get("last_z"):
                 a["last_z"] = measure
                 changed = True
-            if hit and a.get("desk") and desk is not None and desk.muted(a["id"]):
-                hit = False                 # the desk's alarm is muted for a while: it fires after, if it still holds
             if hit:
                 a["active"], a["fired_at"], a["fired_value"] = False, today + " " + now, v
                 show = a.get("show") or "raw"

@@ -58,8 +58,8 @@ DEFAULTS: Dict[str, Any] = {
     "market_close": "18:00",
     "tick_stale": 120,               # seconds without any tick in market hours: the prices on the screens are "stale"
     # the system alarms of the desk (deskalarms.py): each on / off, and when it fires
+    # (none on the RET curve: it may change at any time of the day, there is no time by which it must be loaded)
     "feed_alarm": True, "feed_minutes": 3,       # the Bloomberg data has been stale this many minutes in market hours
-    "ret_alarm": True, "ret_due": "10:00",       # today's RET curve is not loaded by then (on the desk's days)
     "tlref_alarm": True, "tlref_due": "14:00",   # today's TLREF fixing is not in by then (published after 12:45 by
                                                  # Borsa İstanbul's rules of 2019; the history fetches it every 15 min)
     "db_alarm": True,                            # the database's check at the start, or its nightly backup, failed
@@ -68,17 +68,15 @@ DEFAULTS: Dict[str, Any] = {
 RANGES = {"tick_stale": (10, 3600), "feed_minutes": (1, 240)}
 #: their names in the desk's log of changes
 NAMES = {"market_open": "piyasa açılışı", "market_close": "piyasa kapanışı", "tick_stale": "bayat sayılma (sn)",
-         "feed_alarm": "veri akışı alarmı", "feed_minutes": "veri akışı alarmı (dk)", "ret_alarm": "RET alarmı",
-         "ret_due": "RET saati", "tlref_alarm": "TLREF alarmı", "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı"}
-
-
+         "feed_alarm": "veri akışı alarmı", "feed_minutes": "veri akışı alarmı (dk)", "tlref_alarm": "TLREF alarmı",
+         "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı"}
 #: the system alarms, in the order the page lists them
 SYSTEM_KINDS = tuple(SYSTEM)
 _HHMM = re.compile(r"^([01]?\d|2[0-3])[:.]([0-5]\d)$")
 
 
 def changes(before: Dict[str, Any], after: Dict[str, Any]) -> str:
-    """What changed in the settings, as the desk's log says it ("RET saati: 10:00 → 10:30")."""
+    """What changed in the settings, as the desk's log says it ("TLREF saati: 14:00 → 14:30")."""
     def text(v: Any) -> str:
         return ("açık" if v else "kapalı") if isinstance(v, bool) else str(v)
     return "; ".join("%s: %s → %s" % (NAMES.get(k, k), text(before.get(k)), text(v)) for k, v in after.items() if before.get(k) != v)
@@ -440,23 +438,6 @@ class Ops(object):
             else:
                 self._feed_bad = None
                 state("feed", "ok", "akıyor" if market else "piyasa saati dışında: tick beklenmez")
-        # -- RET: today's curve loaded by its time
-        if not st["ret_alarm"]:
-            state("ret", "off")
-        elif not live:
-            state("ret", "na", "kayıtlı veride denetlenmez")
-        elif not day:
-            state("ret", "ok", "bugün piyasa kapalı")
-        else:
-            meta = self.svc.ret_meta() or {}
-            at = str(meta.get("updated_at") or "")
-            if at[:10] == today:
-                state("ret", "ok", "bugün yüklendi (%s)" % at[11:16])
-            elif now.time() < hhmm(st["ret_due"]):
-                state("ret", "ok", "bugün henüz yüklenmedi – son saat %s" % st["ret_due"])
-            else:
-                state("ret", "alarm", "RET eğrisi bugün yüklenmedi (son saat %s; son yükleme: %s)" % (st["ret_due"], at[:16] or "hiç"),
-                      st["ret_due"])
         # -- TLREF: today's fixing in by its time
         if not st["tlref_alarm"]:
             state("tlref", "off")
@@ -489,6 +470,7 @@ class Ops(object):
         self.sys_state = states
         desk = getattr(self.svc, "desk_alarms", None)
         if desk is not None:
+            desk.retire()                             # an earlier version's alarm that is no longer checked
             told = [desk.system(kind, states[kind]["state"] == "alarm", states[kind]["text"]) for kind in SYSTEM_KINDS]
             if any(told):
                 self.svc.bump()                       # the pages ask what fired / closed
@@ -497,8 +479,7 @@ class Ops(object):
     def system_rows(self) -> List[Dict[str, Any]]:
         """The system alarms as the alarms page shows them: their state at the last look and when they fire."""
         st = self.settings()
-        when = {"feed": "piyasa saatinde %d dk akmazsa" % st["feed_minutes"], "ret": "saat %s itibarıyla yüklenmemişse" % st["ret_due"],
-                "tlref": "saat %s itibarıyla gelmemişse" % st["tlref_due"],
+        when = {"feed": "piyasa saatinde %d dk akmazsa" % st["feed_minutes"], "tlref": "saat %s itibarıyla gelmemişse" % st["tlref_due"],
                 "db": "açılış denetimi ya da gece yedeği (%s) başarısızsa" % self.svc.settings.backup_time}
         rows = []
         for kind in SYSTEM_KINDS:

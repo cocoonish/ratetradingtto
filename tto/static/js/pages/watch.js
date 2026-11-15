@@ -3,8 +3,8 @@
 // click → "İzlemeye ekle") -, how each item moved today (open, change, low / high, its path, since a reference
 // taken on purpose), the alarms on them, the ones that fired today, and the desk's notes of the day.  A click on an
 // item (or an alarm) draws its past: the closes, the band of the z window and the z-score day by day.
-// The desk's alarms ring for everyone: the ones an administrator set, the system's own (the data feed, RET, TLREF,
-// the database), who answered them ("Gördüm – Ayşe bakıyor"), what is muted, and the day's log.
+// The desk's alarms ring for everyone: the ones an administrator set, the system's own (the data feed, TLREF, the
+// database), who answered them ("Gördüm – Ayşe bakıyor"), what this user muted for themselves, and the day's log.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, modal, confirmDialog } from '../ui.js';
 import { num } from '../format.js';
@@ -344,7 +344,7 @@ export class WatchPage {
         else if (entry.closed_at) out.push(h('span', { class: 'sub' }, entry.closed_why || 'kapandı'));
         else out.push(h('span', { class: 'sub' }, 'cevap bekliyor'));
       } else if (active !== undefined) out.push(h('span', { class: 'pill neu' }, active ? 'bekliyor' : 'çaldı'));
-      if (mute) out.push(h('span', { class: 'sub', title: mute.by_name ? 'Susturan: ' + mute.by_name : null }, '🔕 susturuldu · bitiş ' + mute.until.slice(11, 16)));
+      if (mute) out.push(h('span', { class: 'sub', title: 'Yalnızca sizin için: başkalarına çalmaya devam eder' }, '🔕 sizin için susturuldu · bitiş ' + mute.until.slice(11, 16)));
       return out;
     };
     const acts = (alarm, entry, mute, label) => {
@@ -357,7 +357,7 @@ export class WatchPage {
         });
         td.appendChild(ack);
       }
-      const m = h('button', { class: 'iconbtn', type: 'button', title: 'Herkes için sustur: ' + label }, mute ? '🔕' : '🔔');
+      const m = h('button', { class: 'iconbtn', type: 'button', title: 'Yalnızca benim için sustur: ' + label + ' (başkalarına çalmaya devam eder)' }, mute ? '🔕' : '🔔');
       m.addEventListener('click', (e) => { const r = m.getBoundingClientRect(); muteMenu(r.left, r.bottom + 2, alarm, !!mute, () => this.ctx.refreshNow()); e.stopPropagation(); });
       td.appendChild(m);
       return td;
@@ -416,8 +416,8 @@ export class WatchPage {
       else box.appendChild(this.deskSettings(cfg));
     } else {
       box.appendChild(h('div', { class: 'note' }, 'Piyasa saatleri ' + (cfg.market_open || '') + '–' + (cfg.market_close || '') + ' (masanın iş günleri) · '
-        + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı') + ' · RET '
-        + (cfg.ret_alarm ? cfg.ret_due : 'kapalı') + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + ' · ayarları yöneticiler değiştirir.'));
+        + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı')
+        + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + ' · ayarları yöneticiler değiştirir.'));
     }
     // ---- the day's log
     box.appendChild(h('div', { class: 'desk-sub' }, 'Bugünün kaydı'));
@@ -440,7 +440,6 @@ export class WatchPage {
     const form = h('div', { class: 'desk-settings', id: 'desk-settings' },
       f('Piyasa açılış', time('market_open')), f('Kapanış', time('market_close')), f('Tick gelmezse bayat', n('tick_stale', 'sn')),
       h('label', { class: 'check' }, on('feed_alarm'), 'Veri akışı alarmı'), f('akmazsa', n('feed_minutes', 'dk')),
-      h('label', { class: 'check' }, on('ret_alarm'), 'RET alarmı'), f('yüklenmediyse', time('ret_due')),
       h('label', { class: 'check' }, on('tlref_alarm'), 'TLREF alarmı'), f('fixing gelmediyse', time('tlref_due')),
       h('label', { class: 'check' }, on('db_alarm'), 'Veritabanı alarmı'));
     const save = h('button', { class: 'btn primary sm', type: 'button', id: 'desk-set-save' }, 'Ayarları kaydet');
