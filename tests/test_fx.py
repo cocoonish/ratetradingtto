@@ -15,7 +15,7 @@ import pytest
 from conftest import auth, cell, make_service
 from tto import extras as ex
 from tto import fx
-from tto.marketdata.base import bdp_key
+from tto.marketdata.base import REQUESTING, bdp_key
 
 
 def usdtry_quotes(tenor):
@@ -355,6 +355,39 @@ def test_pair_detail(svc):
     # a week ago only the ATM vol is known: no smile is drawn for that day (a flat one would claim there was no skew)
     assert res["smiles"]["now"]["ATM"] == pytest.approx(9.0, abs=0.05) and res["smiles"]["w1"] is None
     assert res["tenor"] == "3M" and "25D RR 1M" in res["series"]
+
+
+class _Pending(object):
+    """Wraps the replay provider: these quotes are still on their way (Bloomberg's first answer not in yet)."""
+
+    def __init__(self, inner, tickers):
+        self.inner = inner
+        self.keys = {bdp_key(t, "PX_LAST") for t in tickers}
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def get_bdp(self, key):
+        return REQUESTING if key in self.keys else self.inner.get_bdp(key)
+
+
+def test_pair_detail_quotes_on_their_way(svc, monkeypatch):
+    """The detail asks for the pair's whole surface the first time it is opened: what is still on its way is counted
+    (the page asks again sooner) and named under the smile.  The smile's vols at its own delta strikes do not wait for
+    the forward: every condition of the fit is in K/F, so without one the same smile is drawn."""
+    u = user(svc, "FX Detay Bekleyen")
+    full = svc.fx_pair(u, "EURUSD", "1M")
+    assert full["waiting"] == 0 and full["smile_why"] == "" and full["smiles"]["now"]["25P"] is not None
+    with monkeypatch.context() as m:                                               # the forward points not in yet
+        m.setattr(svc.fx, "curve", lambda user, pair: {"spot": None, "spot_date": None, "tenors": {}})
+        bare = svc.fx_pair(u, "EURUSD", "1M")
+    assert bare["smiles"]["now"] == pytest.approx(full["smiles"]["now"], rel=1e-9)
+    with monkeypatch.context() as m:                                               # the tenor's fly and a 2W vol on their way
+        m.setattr(svc, "provider", _Pending(svc.provider, [fx.vol_ticker("EURUSD", "BF25", "1M"), fx.vol_ticker("EURUSD", "ATM", "2W")]))
+        res = svc.fx_pair(u, "EURUSD", "1M")
+    assert res["waiting"] == 2 and res["structure"]["ATM"]["now"][fx.TENORS.index("2W")] is None
+    assert res["smiles"]["now"] is None and res["smile_why"] == "25D BF 1M bekleniyor"
+    assert svc.fx_pair(u, "USDJPY", "1M")["smile_why"] == "ATM 1M yok · 25D RR 1M yok · 25D BF 1M yok"   # no quotes at all
 
 
 class _HistoryProvider(object):

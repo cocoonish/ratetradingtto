@@ -873,30 +873,48 @@ class Fx(object):
             return vals[-n] if len(vals) >= n else None
 
         structure: Dict[str, Any] = {}
+        waiting = 0                          # quotes asked for the first time (the whole surface), still on their way
+        now_why: Dict[str, str] = {}
         for k in KINDS:
             structure[k] = {"now": [], "w1": [], "m1": []}
             for t in TENORS:
                 tk = vol_ticker(pair.code, k, t, src)
-                structure[k]["now"].append(self.value(tk)[0])
+                v, why = self.value(tk)
+                structure[k]["now"].append(v)
+                waiting += why == "bekleniyor"
+                if t == tenor:
+                    now_why[k] = why
                 structure[k]["w1"].append(back(tk, 5))
                 structure[k]["m1"].append(back(tk, 21))
-        # the smile of the tenor: now (as the FX page fits it), a week and a month ago from those days' closes
+        # the smile of the tenor: now (as the FX page fits it), a week and a month ago from those days' closes.  Its
+        # vols at its own delta strikes do not depend on the forward (every condition of the fit is in K/F, the deltas
+        # are forward deltas here): a forward not there yet does not hold it back - the spot, or 1, stands in for it.
         smiles: Dict[str, Any] = {}
+        smile_why = ""
         cur = self.curve(user, pair)
         row = cur["tenors"].get(tenor) or {}
+        start = add_week_days(today, 2)
+        days = row.get("days") or float((delivery(start, tenor) - start).days)
+        F = row.get("fwd") or cur.get("spot") or 1.0
         for name, idx in (("now", None), ("w1", 5), ("m1", 21)):
             vals = {k: (structure[k]["now"] if idx is None else structure[k][name])[TENORS.index(tenor)] for k in KINDS}
             # a smile needs its skew: without the risk reversal and the fly of that day there is none to draw
-            if not row.get("fwd") or not row.get("days") or any(vals[k] is None for k in ("ATM", "RR25", "BF25")):
+            missing = [k for k in ("ATM", "RR25", "BF25") if vals[k] is None]
+            if missing:
                 smiles[name] = None
+                if name == "now":
+                    smile_why = " · ".join("%s %s %s" % (KIND_LABEL[k], tenor, "bekleniyor" if now_why.get(k) == "bekleniyor" else "yok")
+                                           for k in missing)
                 continue
-            q = fv.Quotes(row["fwd"], row["days"] / 365.0, vals["ATM"] / 100.0, *[(vals[k] / 100.0 if vals[k] is not None else None)
-                                                                             for k in ("RR25", "BF25", "RR10", "BF10")],
+            q = fv.Quotes(F, days / 365.0, vals["ATM"] / 100.0, *[(vals[k] / 100.0 if vals[k] is not None else None)
+                                                                 for k in ("RR25", "BF25", "RR10", "BF10")],
                           premium=pair.premium, df=1.0)
             try:
                 smile, info = self._smile(pair, tenor + ":" + name, model, q)
             except fv.MATH_ERRORS:
                 smiles[name] = None
+                if name == "now":
+                    smile_why = "smile kurulamadı"
                 continue
             pts = info["points"]
             smiles[name] = {k: (pts[k][1] * 100.0 if pts.get(k) else None) for k, _, _ in fv.PILLARS}
@@ -907,8 +925,8 @@ class Fx(object):
             series["%s %s" % (KIND_LABEL[k], t)] = sorted((data.get(series_id(tk)) or {}).items())
         spot_closes = sorted((data.get(series_id(spot_ticker(pair))) or {}).items())
         return {"pair": pair.code, "pair_info": pair.info(), "tenor": tenor, "tenors": list(TENORS), "kinds": list(KINDS),
-                "structure": structure, "smiles": smiles, "series": series, "spot": spot_closes,
-                "realized": realized(spot_closes), "history": self.history_status(), "today": today.isoformat()}
+                "structure": structure, "smiles": smiles, "smile_why": smile_why, "waiting": waiting, "series": series,
+                "spot": spot_closes, "realized": realized(spot_closes), "history": self.history_status(), "today": today.isoformat()}
 
     def series(self, ticker: str = "", window: Any = 250, pair: Any = None, kind: Any = None, tenor: Any = None) -> Dict[str, Any]:
         """The daily closes of what a row or a cell shows, with the value now and where it stands: a ticker, or a pair's

@@ -151,9 +151,11 @@ export class FxVolPage {
     this.loadSeries();
   }
 
-  /** Quotes still on their way (the first answers of Bloomberg): the page is refreshed sooner. */
+  /** Quotes still on their way (the first answers of Bloomberg; the pair's detail asks for its whole surface the
+   * first time it is opened): the page is refreshed sooner. */
   waiting() {
-    return !!(this.mon && Object.values(this.mon.cells).some((c) => c.why === 'bekleniyor'));
+    return !!((this.mon && Object.values(this.mon.cells).some((c) => c.why === 'bekleniyor'))
+      || (this.on.has('pair') && this.det && this.det.waiting));
   }
 
   async refresh() {
@@ -665,22 +667,24 @@ export class FxVolPage {
     this.sections.pair.titleEl.textContent = d.pair + ' · ayrıntı (' + (d.pair_info ? d.pair_info.convention : '') + ')';
     const s = d.structure;
     const lineSpec = (title, cats, series, digits = 2, y = 'vol %') => ({ title, cats, auto: 'fit', decimals: digits, y_title: y, aspect: 0.5, series });
-    const three = (k, name) => [{ name: name + ' bugün', kind: 'line', color: BLUE, data: s[k].now, marker: true },
-      { name: name + ' 1H önce', kind: 'line', color: ORANGE, data: s[k].w1, marker: true, dash: true },
-      { name: name + ' 1A önce', kind: 'line', color: PURPLE, data: s[k].m1, marker: true, dash: true }];
+    // a tenor without a quote is passed over: the line joins its neighbours (a null would break it at every gap)
+    const joined = (arr) => (arr || []).map((v) => (isNum(v) ? v : 'c'));
+    const three = (k, name) => [{ name: name + ' bugün', kind: 'line', color: BLUE, data: joined(s[k].now), marker: true },
+      { name: name + ' 1H önce', kind: 'line', color: ORANGE, data: joined(s[k].w1), marker: true, dash: true },
+      { name: name + ' 1A önce', kind: 'line', color: PURPLE, data: joined(s[k].m1), marker: true, dash: true }];
     const specs = {
       term: lineSpec('ATM vade yapısı', d.tenors, three('ATM', 'ATM')),
-      rr: lineSpec('Risk reversal vade yapısı', d.tenors, [{ name: '25D bugün', kind: 'line', color: BLUE, data: s.RR25.now, marker: true },
-        { name: '25D 1A önce', kind: 'line', color: BLUE, data: s.RR25.m1, marker: true, dash: true },
-        { name: '10D bugün', kind: 'line', color: ORANGE, data: s.RR10.now, marker: true },
-        { name: '10D 1A önce', kind: 'line', color: ORANGE, data: s.RR10.m1, marker: true, dash: true }]),
+      rr: lineSpec('Risk reversal vade yapısı', d.tenors, [{ name: '25D bugün', kind: 'line', color: BLUE, data: joined(s.RR25.now), marker: true },
+        { name: '25D 1A önce', kind: 'line', color: BLUE, data: joined(s.RR25.m1), marker: true, dash: true },
+        { name: '10D bugün', kind: 'line', color: ORANGE, data: joined(s.RR10.now), marker: true },
+        { name: '10D 1A önce', kind: 'line', color: ORANGE, data: joined(s.RR10.m1), marker: true, dash: true }]),
       skew: lineSpec('25D RR / ATM vade yapısı', d.tenors, ['now', 'w1', 'm1'].map((k, i) => ({ name: ['bugün', '1H önce', '1A önce'][i], kind: 'line',
         color: [BLUE, ORANGE, PURPLE][i], marker: true, dash: i > 0,
-        data: d.tenors.map((_, j) => (isNum(s.RR25[k][j]) && isNum(s.ATM[k][j]) && s.ATM[k][j] > 0 ? s.RR25[k][j] / s.ATM[k][j] : null)) })), 3, 'RR/ATM'),
-      bf: lineSpec('Butterfly vade yapısı', d.tenors, [{ name: '25D bugün', kind: 'line', color: BLUE, data: s.BF25.now, marker: true },
-        { name: '25D 1A önce', kind: 'line', color: BLUE, data: s.BF25.m1, marker: true, dash: true },
-        { name: '10D bugün', kind: 'line', color: ORANGE, data: s.BF10.now, marker: true },
-        { name: '10D 1A önce', kind: 'line', color: ORANGE, data: s.BF10.m1, marker: true, dash: true }]),
+        data: joined(d.tenors.map((_, j) => (isNum(s.RR25[k][j]) && isNum(s.ATM[k][j]) && s.ATM[k][j] > 0 ? s.RR25[k][j] / s.ATM[k][j] : null))) })), 3, 'RR/ATM'),
+      bf: lineSpec('Butterfly vade yapısı', d.tenors, [{ name: '25D bugün', kind: 'line', color: BLUE, data: joined(s.BF25.now), marker: true },
+        { name: '25D 1A önce', kind: 'line', color: BLUE, data: joined(s.BF25.m1), marker: true, dash: true },
+        { name: '10D bugün', kind: 'line', color: ORANGE, data: joined(s.BF10.now), marker: true },
+        { name: '10D 1A önce', kind: 'line', color: ORANGE, data: joined(s.BF10.m1), marker: true, dash: true }]),
     };
     const names = ['10P', '25P', 'ATM', '25C', '10C'];
     const sm = (k) => (d.smiles[k] ? names.map((n) => d.smiles[k][n]) : names.map(() => null));
@@ -742,13 +746,16 @@ export class FxVolPage {
       if (empty) {
         if (this.charts[k]) { this.charts[k].destroy(); this.charts[k] = null; }
         clear(host);
-        host.appendChild(h('div', { class: 'chart-empty' }, k === 'smile' || k === 'term' || k === 'rr' || k === 'bf' || k === 'skew' ? 'Kota yok' : 'Tarihçe yok'));
+        const quotes = d.waiting ? 'Kota bekleniyor' : 'Kota yok';
+        host.appendChild(h('div', { class: 'chart-empty' }, k === 'smile' ? d.smile_why || quotes
+          : k === 'term' || k === 'rr' || k === 'bf' || k === 'skew' ? quotes : 'Tarihçe yok'));
         continue;
       }
       if (host.firstChild && host.firstChild.classList && host.firstChild.classList.contains('chart-empty')) clear(host);
       if (this.charts[k]) this.charts[k].update(spec); else this.charts[k] = new Chart(host, spec, { height: 240 });
     }
-    this.pairNote.textContent = '1H / 1A önce: 5 / 21 iş günü önceki kapanışlar (kesikli). Smile, o günün ATM, RR ve BF kapanışlarından aynı yöntemle (SVI) kurulur; '
-      + 'bir günün RR / BF kapanışı yoksa o gün için çizilmez. Zaman serileri ve gerçekleşen vol tarihçeden.';
+    this.pairNote.textContent = '1H / 1A önce: 5 / 21 iş günü önceki kapanışlar (kesikli). Vade yapısında kotası olmayan vade atlanır: çizgi komşu vadeleri birleştirir. '
+      + 'Smile, o günün ATM, RR ve BF kapanışlarından aynı yöntemle (SVI) kurulur; bir günün RR / BF kapanışı yoksa o gün için çizilmez. '
+      + 'Parite ilk açıldığında bütün yüzeyin kotaları istenir; gelene kadar sayfa birkaç saniyede bir yenilenir. Zaman serileri ve gerçekleşen vol tarihçeden.';
   }
 }
