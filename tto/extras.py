@@ -2431,18 +2431,39 @@ def _tto_viop_dv01(model: Model) -> None:
 # ---------------------------------------------------------------------------------------------- empty by default
 #: inputs the file brings filled in with the desk's choices of the day it was saved; every user starts with them
 #: empty: the scenario step per meeting (S1 / S2 / S3) of the PPK ima tab - a blank step follows the scenario base
-#: (OIS_MAIN!B3 / D3) -, the VİOP target table (also on the desk page) and the manual USDTRY spot of the VİOP sheet
+#: (OIS_MAIN!B3 / D3) -, the VİOP target table (also on the desk page), the manual USDTRY spot of the VİOP sheet
 #: (shared: blank = Bloomberg's spot; the file's 49,997 / 49,9975 replaced Bloomberg's spot on every page for the
-#: whole desk).  What a user types stays theirs, what the desk types stays the desk's.
-EMPTY_BY_DEFAULT = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"), ("VIOP", "AA9:AA10"))
+#: whole desk) and the hand calculators' values of that day: the trade of the TM OIS page, the day counter, the XAU leg's
+#: dates and swap and the bond carry calculator of the Forward page, the two dates of the OIS page's date-to-date rate,
+#: the TRY rates of the VİOP page's three Interest 2 SP calculators, a saved switch of DİBS RV and the own asks of the
+#: Eurobond page.  What a user types stays theirs, what the desk types stays the desk's.
+EMPTY_BY_DEFAULT = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"), ("VIOP", "AA9:AA10"),
+                    ("TM_OIS", "A10:C12"), ("Forward", "E20"), ("Forward", "E22"), ("Forward", "C59:C60"), ("Forward", "C63"),
+                    ("Forward", "E61"), ("Forward", "E67"), ("Forward", "V56:V58"), ("Forward", "V61:V62"),
+                    ("OIS_MAIN", "B122:B123"), ("VIOP", "M37"), ("VIOP", "P37"), ("VIOP", "S37"), ("DİBS RV", "A64:C64"),
+                    ("Bulk Bond", "D3:D5"))
+#: the same for the USD workbook: the FOMC scenario steps of that day (base / hawkish / dovish per meeting; a blank step
+#: moves nothing)
+EMPTY_BY_DEFAULT_USD = (("SOFR_FOMC", "R74:T83"),)
 #: the cells the first clean-up of stored copies (``migrated.empty_defaults``) went through: every shared value kept of
 #: them was a copy of the file's steps a calendar change had carried along, and went
 EMPTY_FIRST = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"))
 #: the name of that addition (left out where the file does not fit it: the cells keep the file's values)
 EMPTY_NAME = "Boş başlayan girdiler"
-#: where the addition notes the file's own values of the cells it empties ({"VIOP!AA9": 49.997, ...}, in the model's
-#: ``meta``): a shared value stored of one of them is dropped once only when it is that value (a copy, nobody's choice)
+#: where the additions note the file's own values of the input cells they empty or give a formula default
+#: ({"VIOP!AA9": 49.997, ...}, in the model's ``meta``): a shared value stored of one of them is dropped once, only when
+#: it is that value (a copy, nobody's choice)
 FILE_VALUES = "empty_file_values"
+#: what each of those cells must be next to, for the addition to fit the file
+_EMPTY_CAPTIONS = (("VIOP", "K330", "Target"), ("VIOP", "L330", "Yakın"), ("VIOP", "P330", "Hedef değer"),
+                   ("VIOP", "Z8", "Manuel SP"), ("VIOP", "Z9", "Bid"), ("VIOP", "Z10", "Ask"),
+                   ("TM_OIS", "A9", "Dönem başı"), ("TM_OIS", "C9", "Nominal (TL)"), ("Forward", "D20", "Start"),
+                   ("Forward", "D22", "End"), ("Forward", "B59", "Start"), ("Forward", "B60", "End"), ("Forward", "B63", "Swap"),
+                   ("Forward", "D61", "Customer Forward"), ("Forward", "D67", "Customer Start"), ("Forward", "U56", "ISIN"),
+                   ("Forward", "U58", "Settlement"), ("Forward", "U61", "Carry"), ("Forward", "U62", "End Date"),
+                   ("OIS_MAIN", "A122", "Başlangıç tarihi"), ("OIS_MAIN", "A123", "Bitiş tarihi"), ("VIOP", "L37", "TRY"),
+                   ("VIOP", "O37", "TRY"), ("VIOP", "R37", "TRY"), ("DİBS RV", "A63", "Sat (ISIN)"),
+                   ("DİBS RV", "C63", "Sat nominal (mn)"), ("Bulk Bond", "D2", "Ask"))
 
 
 def empty_default_refs(ranges: Sequence[Tuple[str, str]] = EMPTY_BY_DEFAULT) -> List[str]:
@@ -2454,23 +2475,27 @@ def empty_default_refs(ranges: Sequence[Tuple[str, str]] = EMPTY_BY_DEFAULT) -> 
     return out
 
 
+def _need_captions(model: Model, captions: Sequence[Tuple[str, str, str]]) -> None:
+    for sheet, addr, text in captions:
+        if model.sheet(sheet).consts.get(parse_a1(addr)) != text:
+            raise ValueError("%s!%s beklenen başlık değil (%s yok)" % (sheet, addr, text))
+
+
 def _empty_check(model: Model) -> None:
-    _need_sheets(model, "OIS_MAIN", "VIOP")
-    v = model.sheet("VIOP")
-    for addr, text in (("K330", "Target"), ("L330", "Yakın"), ("P330", "Hedef değer"), ("Z8", "Manuel SP"), ("Z9", "Bid"),
-                       ("Z10", "Ask")):
-        if v.consts.get(parse_a1(addr)) != text:
-            raise ValueError("VIOP!%s beklenen başlık değil (%s yok)" % (addr, text))
+    _need_sheets(model, *sorted({sheet for sheet, _ in EMPTY_BY_DEFAULT}))
+    _need_captions(model, _EMPTY_CAPTIONS)
     for col, step in (("X", "U"), ("Y", "V"), ("Z", "W")):           # a blank step: the scenario base decides
         _need_formula(model, "OIS_MAIN", "%s10" % col, 'IF(%s10<>"",%s10' % (step, step))
     for addr, cell in (("L99", "$AA$9"), ("L100", "$AA$10")):          # a blank manual spot: Bloomberg's
         _need_formula(model, "VIOP", addr, "IF(N(%s)>0,%s," % (cell, cell))
 
 
-def _tto_empty(model: Model) -> None:
+def _empty(model: Model, ranges: Sequence[Tuple[str, str]], first: Sequence[Tuple[str, str]] = ()) -> None:
+    """Take the constants out of the cells of ``ranges`` (a formula stays) and note what the file held there
+    (``FILE_VALUES``; not for the cells of ``first``, whose stored copies went all at once, long ago)."""
     kept = model.meta.setdefault(FILE_VALUES, {})
-    first = set(empty_default_refs(EMPTY_FIRST))               # (their stored copies went all at once, long ago)
-    for sheet, rng in EMPTY_BY_DEFAULT:
+    skip = set(empty_default_refs(first))
+    for sheet, rng in ranges:
         sh = model.sheet(sheet)
         r1, c1, r2, c2 = parse_range(rng)
         for r in range(r1, r2 + 1):
@@ -2479,8 +2504,81 @@ def _tto_empty(model: Model) -> None:
                 if rc not in sh.fml:
                     was = sh.consts.pop(rc, None)
                     ref = "%s!%s%d" % (sheet, index_to_col(c), r)
-                    if was is not None and ref not in first:
+                    if was is not None and ref not in skip:
                         kept[ref] = was
+
+
+def _tto_empty(model: Model) -> None:
+    _empty(model, EMPTY_BY_DEFAULT, EMPTY_FIRST)
+
+
+def _usd_empty_check(model: Model) -> None:
+    _need_sheets(model, "SOFR_FOMC")
+    _need_captions(model, (("SOFR_FOMC", "R73", "Baz adım (bp)"), ("SOFR_FOMC", "S73", "Şahin adım (bp)"),
+                           ("SOFR_FOMC", "T73", "Güvercin adım (bp)")))
+    _need_formula(model, "SOFR_FOMC", "U74", "R$74:R74")                  # the base path sums the steps: blank = no move
+
+
+def _usd_empty(model: Model) -> None:
+    _empty(model, EMPTY_BY_DEFAULT_USD)
+
+
+# ---------------------------------------------------------------------------------------------- market defaults
+#: hand calculators whose spot, dates and rates the file brings from the day it was saved start from the market instead
+#: (a formula default: what a user types over it is theirs, Delete brings the market back), as the Forward page's own
+#: calculators do: the Calculators sheet's top band (the first four calculators read its dates and spot, the swap points
+#: beside it its forward) and the XAU leg of the Forward sheet's customer gold forward (its spots, and the USD / TRY rates
+#: of the customer's forward date).  The TRY rate is the offshore (ICAP, FX swap implied) curve's mid - what an FX forward
+#: is priced on; the USD rate the Forward sheet's USD OIS curve.
+MARKET_NAME = "Hesaplayıcıların piyasa varsayılanları"
+
+
+def _usd_rate(days: str) -> str:
+    """The USD OIS mid (%) ``days`` after the USDTRY spot date: the Forward sheet's own curve, as it reads it."""
+    xs, ys, n = FR_MAJOR["USDTRY"]
+    return lin(days, xs, ys, n)
+
+
+def market_defaults(gold: bool = True) -> Dict[str, str]:
+    """{cell: formula} of the market defaults (``gold``: with the XAUUSD spot, which the gold sheet gives)."""
+    spot_date = FR_SPOT["USDTRY"]
+    g = "(Calculators!$AA$4-%s)" % spot_date
+    fwd = ('=IFERROR(Calculators!$AA$9*(1+(%s)/100*%s/360)/(1+(%s)/100*%s/360),"")'
+           % (fr_rate("Offshore", g), g, _usd_rate(g), g))
+    out = {"Calculators!AA3": "=" + spot_date, "Calculators!AA4": "=Forward!$D$2", "Calculators!AA9": "=Forward!$F$2",
+           "Calculators!AA10": fwd, "Forward!E59": "=Forward!$F$2",
+           # the rates of the customer's forward date (none before a date is typed: no rate of a day before the spot)
+           "Forward!E63": '=IF(N(Forward!$C$65)>0,IFERROR((%s)/100,""),"")' % _usd_rate("Forward!$C$65"),
+           "Forward!E64": '=IF(N(Forward!$C$65)>0,IFERROR((%s)/100,""),"")' % fr_rate("Offshore", "Forward!$C$65")}
+    if gold:
+        out["Forward!C61"] = '=IF(ISNUMBER(%s!$D$6),%s!$D$6,"")' % (XAU_SHEET, XAU_SHEET)
+    return out
+
+
+def _market_check(model: Model) -> None:
+    _need_sheets(model, "Calculators", "Forward")
+    _need_captions(model, (("Calculators", "Z3", "Start Date"), ("Calculators", "Z4", "End Date"), ("Calculators", "Z9", "Spot"),
+                           ("Calculators", "Z10", "Forward"), ("Forward", "B61", "Spot"), ("Forward", "D59", "USDTRY Spot"),
+                           ("Forward", "D63", "USD Faiz"), ("Forward", "D64", "TRY Faiz")))
+    for addr, text in (("C3", "AA3"), ("C4", "AA4"), ("C6", "AA9"), ("AA11", "AA10-AA9")):
+        _need_formula(model, "Calculators", addr, text)
+    _need_formula(model, "Forward", "E62", "$E$59*(1+$E$64/360*$C$65)/(1+$E$63/360*$C$65)")
+    _need_formula(model, "Forward", "C65", "E61-I2")
+    _need_formula(model, "Forward", "C62", "C61+C63/100")
+    for ref in market_defaults(XAU_SHEET in model.sheet_index):
+        sheet, addr = ref.split("!")
+        if parse_a1(addr) in model.sheet(sheet).fml:
+            raise ValueError("%s zaten bir formül" % ref)
+
+
+def _tto_market(model: Model) -> None:
+    kept = model.meta.setdefault(FILE_VALUES, {})
+    for ref, formula in market_defaults(XAU_SHEET in model.sheet_index).items():   # (no gold sheet: the spot stays typed)
+        sheet, addr = ref.split("!")
+        was = model.sheet(sheet).consts.get(parse_a1(addr))
+        if was is not None:
+            kept[ref] = was
+        SheetBuilder(model, sheet).patch(addr, formula)
 
 
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
@@ -2496,7 +2594,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
-            (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty)),
+            (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
+            (MARKET_NAME, _market_check, _tto_market)),
+    "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
 }
 
 

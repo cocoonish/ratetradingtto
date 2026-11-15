@@ -557,7 +557,7 @@ def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(servic
     for ref in ("M32", "M33", "M35", "M36", "P33", "S36"):
         c = _cell_of(vp, "B8", ref)
         assert c["i"] == "u" and c["fx"] == 1, ref
-    service.set_inputs(u, "tto", [{"ref": "VIOP!M35", "value": "50"}, {"ref": "VIOP!M36", "value": "4"}])
+    service.set_inputs(u, "tto", [{"ref": "VIOP!M35", "value": "50"}, {"ref": "VIOP!M36", "value": "4"}, {"ref": "VIOP!M37", "value": "34,05"}])
     n = cell(service, "VIOP!M34", u)
     assert cell(service, "VIOP!M38", u) == pytest.approx(50 * ((1 + 0.3405 / 360 * n) / (1 + 0.04 / 360 * n) - 1) * 10000, rel=1e-13)
     assert cell(service, "VIOP!P35", u) == 50.0                                 # the second calculator reads the first one's spot

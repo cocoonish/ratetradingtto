@@ -352,7 +352,7 @@
    "scope": "user",
    "group": "forward-32",
    "kind": "number",
-   "label": "XAU leg (B21): XAUUSD Spot"
+   "label": "XAU leg (B21): XAUUSD Spot (boş = piyasa: EK_XAU'nun kullandığı altın spotu)"
   },
   {
    "range": "C63",
@@ -366,7 +366,7 @@
    "scope": "user",
    "group": "forward-33",
    "kind": "number",
-   "label": "XARTRY leg (B21): USDTRY Spot"
+   "label": "XARTRY leg (B21): USDTRY Spot (boş = piyasa, F2)"
   },
   {
    "range": "E61",
@@ -380,14 +380,14 @@
    "scope": "user",
    "group": "forward-33",
    "kind": "pct",
-   "label": "XARTRY leg (B21): USD Faiz"
+   "label": "XARTRY leg (B21): USD Faiz (boş = müşteri forward tarihine USD OIS eğrisi)"
   },
   {
    "range": "E64",
    "scope": "user",
    "group": "forward-33",
    "kind": "pct",
-   "label": "XARTRY leg (B21): TRY Faiz"
+   "label": "XARTRY leg (B21): TRY Faiz (boş = müşteri forward tarihine offshore TRY eğrisi)"
   },
   {
    "range": "E67",

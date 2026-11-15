@@ -11,28 +11,28 @@
    "scope": "user",
    "group": "calc-0",
    "kind": "date",
-   "label": "master 'Start Date' (top band)"
+   "label": "master 'Start Date' (top band; boş = piyasa: USDTRY spot valörü)"
   },
   {
    "range": "AA4",
    "scope": "user",
    "group": "calc-1",
    "kind": "date",
-   "label": "master 'End Date' (top band)"
+   "label": "master 'End Date' (top band; boş = Forward sayfasının valör tarihi, Forward!D2)"
   },
   {
    "range": "AA9",
    "scope": "user",
    "group": "calc-2",
-   "kind": "auto",
-   "label": "master 'Spot'"
+   "kind": "number",
+   "label": "master 'Spot' (top band; boş = piyasa: USDTRY spot, Forward!F2)"
   },
   {
    "range": "AA10",
    "scope": "user",
    "group": "calc-3",
-   "kind": "auto",
-   "label": "master 'Forward' (outright)"
+   "kind": "number",
+   "label": "master 'Forward' (outright; boş = piyasa: End Date'e offshore TRY ve USD OIS eğrisiyle forward)"
   },
   {
    "range": "C7",

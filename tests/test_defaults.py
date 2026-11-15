@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from conftest import cell, make_service
 from tto import extras as ex
+from tto.inputs import parse_date
 from tto.store import Store
 
 
@@ -139,3 +140,68 @@ def test_the_manual_spot_starts_on_bloomberg_and_a_stored_copy_of_the_files_goes
         assert cell(fresh, "VIOP!AA9") is None and cell(fresh, "VIOP!AA10") is None and cell(fresh, "VIOP!AA8") == "BBG"
     finally:
         fresh.stop()
+
+
+def test_the_calculators_values_of_the_save_day_start_empty(service):
+    """The hand calculators' values of the day the file was saved are nobody's today: TM OIS's trade, the Forward page's
+    day counter, the XAU leg's dates and swap, the bond carry, the OIS page's two dates, the VİOP calculators' TRY rates,
+    DİBS RV's switch, the Eurobond page's own asks and the USD page's FOMC scenario steps start empty."""
+    for ref in ("TM_OIS!A10", "TM_OIS!B11", "TM_OIS!C12", "Forward!E20", "Forward!E22", "Forward!C59", "Forward!C60", "Forward!C63",
+                "Forward!E61", "Forward!E67", "Forward!V56", "Forward!V57", "Forward!V58", "Forward!V61", "Forward!V62",
+                "OIS_MAIN!B122", "OIS_MAIN!B123", "VIOP!M37", "VIOP!P37", "VIOP!S37", "DİBS RV!A64", "DİBS RV!B64", "DİBS RV!C64",
+                "Bulk Bond!D3", "Bulk Bond!D4", "Bulk Bond!D5"):
+        assert cell(service, ref) is None, ref
+    for ref in ("SOFR_FOMC!R74", "SOFR_FOMC!S77", "SOFR_FOMC!T83"):
+        assert cell(service, ref, book="sofr") is None, ref
+    # their captions, the formulas beside them and the rest of the lists stay
+    assert cell(service, "Forward!D59") == "USDTRY Spot" and cell(service, "Forward!U56") == "ISIN" and cell(service, "VIOP!L37") == "TRY"
+    assert cell(service, "Bulk Bond!A3") == "XS3429167243" and cell(service, "TM_OIS!F10") == 0.0
+    # no FOMC step: the base path stays where it starts
+    path = [cell(service, "SOFR_FOMC!U%d" % r, book="sofr") for r in range(74, 84)]
+    assert len(set(path)) == 1 and isinstance(path[0], float)
+    assert ex.FILE_VALUES in service.books["sofr"].model.meta
+    # what a user types is theirs
+    u = service.login("Boş Hesaplayıcı")["user"]
+    try:
+        assert service.set_inputs(u, "tto", [{"ref": "VIOP!M37", "value": "34,05"}, {"ref": "TM_OIS!C10", "value": "100m"}])["errors"] == []
+        assert cell(service, "VIOP!M37", u) == pytest.approx(0.3405) and cell(service, "TM_OIS!C10", u) == 100e6
+        assert cell(service, "VIOP!M37") is None
+    finally:
+        service.reset_inputs(u, "tto")
+
+
+def test_the_calculators_start_from_the_market(service):
+    """The Calculators sheet's top band (AA3 / AA4 / AA9 / AA10: 03.11.2026, a spot and a forward of that day, read by the
+    first four calculators) and the XAU leg's spots and rates start from the market, as the Forward page's calculators do:
+    whoever wants another types it over, Delete brings the market back."""
+    spot_date = parse_date("04.11.2026")
+    assert cell(service, "Calculators!AA3") == spot_date and cell(service, "Calculators!AA4") == cell(service, "Forward!D2")
+    assert cell(service, "Calculators!AA9") == cell(service, "Forward!F2")
+    # the forward of the end date: the offshore curve's mid - the Forward page's ICAP row at its value date
+    assert cell(service, "Calculators!AA10") == pytest.approx(cell(service, "Forward!E30"), rel=1e-6)
+    assert cell(service, "Calculators!C3") == spot_date and cell(service, "Calculators!C6") == cell(service, "Forward!F2")
+    u = service.login("Piyasa Hesaplayıcı")["user"]
+    try:
+        # the value date of the Forward page moves the end date and the forward with it
+        service.set_inputs(u, "tto", [{"ref": "Forward!D2", "value": "04.05.2027"}])
+        assert cell(service, "Calculators!AA4", u) == parse_date("04.05.2027") == cell(service, "Calculators!C4", u)
+        assert cell(service, "Calculators!AA10", u) == pytest.approx(cell(service, "Forward!E30", u), rel=1e-6)
+        # a spot of one's own: the forward follows it; Delete: the market again
+        service.set_inputs(u, "tto", [{"ref": "Calculators!AA9", "value": "50"}])
+        assert cell(service, "Calculators!C6", u) == 50.0
+        assert cell(service, "Calculators!AA10", u) == pytest.approx(cell(service, "Forward!E30", u) * 50 / cell(service, "Forward!F2"), rel=1e-6)
+        service.set_inputs(u, "tto", [{"ref": "Calculators!AA9", "value": ""}])
+        assert cell(service, "Calculators!AA9", u) == cell(service, "Forward!F2")
+        # the XAU leg: the spot from the market, the rates once the customer's forward date is there
+        assert cell(service, "Forward!E59") == cell(service, "Forward!F2") and cell(service, "Forward!E63") == cell(service, "Forward!E64") == ""
+        service.set_inputs(u, "tto", [{"ref": "Forward!E61", "value": "08.12.2026"}])
+        n = cell(service, "Forward!C65", u)
+        usd, tl = cell(service, "Forward!E63", u), cell(service, "Forward!E64", u)
+        assert n == 34.0 and 0.02 < usd < 0.06 and 0.2 < tl < 0.5
+        assert cell(service, "Forward!E62", u) == pytest.approx(cell(service, "Forward!F2") * (1 + tl / 360 * n) / (1 + usd / 360 * n), rel=1e-12)
+        service.set_inputs(u, "tto", [{"ref": "Forward!E64", "value": "40"}])                  # a rate of one's own
+        assert cell(service, "Forward!E64", u) == pytest.approx(0.4)
+        service.set_inputs(u, "tto", [{"ref": "Forward!E64", "value": ""}])
+        assert cell(service, "Forward!E64", u) == tl
+    finally:
+        service.reset_inputs(u, "tto")

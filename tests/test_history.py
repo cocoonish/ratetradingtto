@@ -1008,6 +1008,12 @@ def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
         user = svc.login("Roll Deneme")["user"]
         other = svc.login("Diğer Roll")["user"]
         pages = ("ois", "dv01", "carry", "motor")              # the pages that are built on the list of meetings
+
+        def file_dates():                                       # the two dates the file was saved with (they start empty)
+            book.engine.set_inputs({book.cell("OIS_MAIN!B122"): float(date_to_serial(D("2026-11-30"))),
+                                    book.cell("OIS_MAIN!B123"): float(date_to_serial(D("2026-12-31")))})
+        svc.et.call(file_dates)
+        svc.bump()
         usual = {v: panel_errors(svc, v) for v in pages}
         assert usual["ois"] == ([], set())
         h.sync(only=["2026-11-02", TODAY])
