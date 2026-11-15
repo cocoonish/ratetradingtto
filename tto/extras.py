@@ -1667,9 +1667,10 @@ UNI_LAST = UNI_FIRST + UNI_ROWS - 1
 #: the kinds in the order the desk thinks of them: (kind, caption, the value date it trades on)
 UNI_KINDS = (("bill", "Bono", "bill"), ("zero", "Kuponsuz", "bill"), ("fixed", "Sabit kuponlu", "bond"),
              ("float", "TLREF'e endeksli", "bond"), ("frn", "FRN", "bond"), ("cpi", "TÜFE'ye endeksli", "bond"))
+#: the kind's code of a bond's row, right of Bloomberg's answers (T:Z) and of what is added next to them (AA:AB)
+UNI_KIND = "AC"
 #: the cells of a bond's row the service writes: ISIN, name, kind and coupon as shown, maturity, the kind's code
-UNI_WRITTEN = ("A", "B", "C", "D", "E", "AA")
-UNI_KIND = "AA"
+UNI_WRITTEN = ("A", "B", "C", "D", "E", UNI_KIND)
 UNI_RAW = ("bid", "ask", "last", "date", "vol")
 #: what the trading list (DİBS RV) says of a bond that is on it: (column there, caption, number format)
 UNI_RV = (("T", "Getiri % (RV)", "0.00%"), ("Z", "ASW / DM (bp)", "0"), ("AC", "Sinyal", None), ("AI", "DV01 / 1mn", "0.0"))
@@ -1706,7 +1707,8 @@ def _tto_universe(model: Model) -> None:
     b.input("E2", "ISL1", align="center")
     b.head("A4", ["ISIN", "Kâğıt", "Tür", "Kupon", "Vade", "Kalan gün", "Kalan yıl", "Trading", "Bid", "Ask", "Son işlem",
                   "Son işlem günü", "Hacim"] + [cap for _, cap, _ in UNI_RV] + ["Kaynak"])
-    b.head("T4", ["RV satırı", "Menkul", "bid", "ask", "son", "gün", "hacim", "tür"])
+    b.head("T4", ["RV satırı", "Menkul", "bid", "ask", "son", "gün", "hacim"])
+    b.head("%s4" % UNI_KIND, ["tür"])
     for r in range(UNI_FIRST, UNI_LAST + 1):
         a = "$A%d" % r
         b.set("B%d" % r, None, bold=True)

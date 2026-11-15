@@ -465,7 +465,7 @@ class Service(object):
             if fired:
                 self.bump()
             try:
-                if self._uni_day != self._bond_day() and self.et.call(self._sync_universe):
+                if self._uni_day != self._bond_day() and self.et.submit(self._sync_universe).result(timeout=60):
                     self.bump()                    # a new day: the bonds past their maturity leave Tüm Kâğıtlar
                 if bd.pending() and time.time() - self._uni_tried >= self.BOND_RETRY:
                     self._classify_pending()
@@ -2441,6 +2441,7 @@ class Service(object):
         added: List[Dict[str, Any]] = []
         waiting: List[str] = []
         refused: List[Dict[str, Any]] = []
+        shipped = {x["isin"] for x in bd.shipped()}
         with self._desk_lock:
             desk = self._desk_now()
             room = ex.UNI_ROWS - len(bd.listed(day))
@@ -2460,9 +2461,8 @@ class Service(object):
                     refused.append({"isin": code, "why": "full", "text": self._refusal("full")})
                     continue
                 room -= 1
-                if code not in {x["isin"] for x in bd.shipped()} and code not in desk["added"] or \
-                        (code in desk["added"] and not desk["added"][code].get("kind")):
-                    desk["added"][code] = dict(b, by=user, at=now_iso())
+                if code not in shipped and not (desk["added"].get(code) or {}).get("kind"):
+                    desk["added"][code] = dict(b, by=user, at=now_iso())          # (one added before keeps its record)
                 desk["removed"].pop(code, None)
                 desk["refused"].pop(code, None)
                 if not b.get("kind"):

@@ -628,7 +628,7 @@ def test_every_bond_is_in_one_place_kind_by_kind(svc):
     assert len(at) == 77 and min(at.values()) == ex.UNI_FIRST and max(at.values()) == ex.UNI_FIRST + 76
     r = at["TRT150328T24"]
     assert [cell(svc, "EK_EVREN!%s%d" % (c, r)) for c in "ABCDE"] == ["TRT150328T24", "15.03.28", "Sabit", 0.368, 46827.0]
-    assert cell(svc, "EK_EVREN!AA%d" % r) == "fixed"
+    assert cell(svc, "EK_EVREN!%s%d" % (ex.UNI_KIND, r)) == "fixed"
     assert cell(svc, "EK_EVREN!F%d" % r) == 46827.0 - 46329.0 and cell(svc, "EK_EVREN!G%d" % r) == pytest.approx(498 / 365.25)
     # on the trading list: ★, its price from DİBS RV on the same source, what DİBS RV makes of it
     assert cell(svc, "EK_EVREN!H%d" % r) == "★" and cell(svc, "EK_EVREN!R%d" % r) == "ISL1"
@@ -642,7 +642,7 @@ def test_every_bond_is_in_one_place_kind_by_kind(svc):
     assert [cell(svc, "EK_EVREN!%s%d" % (c, rf)) for c in "CDHIKNP"] == ["TLREF", "TLREF", "", "", "", "", ""]
     assert cell(svc, "EK_EVREN!U%d" % rf) == "TRT130127T11 @ISL1 ISIN"
     rn = at["TRT020130T19"]
-    assert [cell(svc, "EK_EVREN!%s%d" % (c, rn)) for c in ("B", "C", "D", "AA")] == ["02.01.30 FRN", "FRN", "FRN", "frn"]
+    assert [cell(svc, "EK_EVREN!%s%d" % (c, rn)) for c in ("B", "C", "D", ex.UNI_KIND)] == ["02.01.30 FRN", "FRN", "FRN", "frn"]
     rc = at["TRT070727T13"]
     assert cell(svc, "EK_EVREN!D%d" % rc) == "reel %2,90" and cell(svc, "EK_EVREN!B%d" % rc) == "07.07.27 TÜFE"
     # the page: kind by kind, by maturity; ☆ / ★ to click, today's board, the card and ✕ on the right
@@ -745,7 +745,7 @@ def test_the_desk_adds_bonds_and_bloomberg_says_what_they_are(tmp_path, module_s
         # the catalog knows them (the chat, the card), each on a row of its own, in its kind's group on the page
         assert bd.by_isin(NEW_FRN)["kind"] == "frn" and bd.by_isin(NEW_FIXED)["coupon"] == 30.5
         r = s._uni_rows[NEW_FRN]
-        assert [cell(s, "EK_EVREN!%s%d" % (c, r)) for c in ("A", "B", "C", "D", "AA")] == [NEW_FRN, "15.06.32 FRN", "FRN", "FRN", "frn"]
+        assert [cell(s, "EK_EVREN!%s%d" % (c, r)) for c in ("A", "B", "C", "D", ex.UNI_KIND)] == [NEW_FRN, "15.06.32 FRN", "FRN", "FRN", "frn"]
         assert cell(s, "EK_EVREN!R%d" % s._uni_rows[NEW_FIXED]) == "ISL1" and cell(s, "EK_EVREN!D%d" % s._uni_rows[NEW_FIXED]) == 0.305
         d = s.view(u, "kagitlar")["panels"][0]["data"]
         captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
@@ -759,7 +759,7 @@ def test_the_desk_adds_bonds_and_bloomberg_says_what_they_are(tmp_path, module_s
         # what Bloomberg had not said, it says later: the bond takes its place
         provider.snapshot.update(_facts_of(NEW_LATER, "17.11.2034"))
         s._classify_pending()                                          # (the service asks again every few seconds)
-        assert bd.by_isin(NEW_LATER)["kind"] == "cpi" and cell(s, "EK_EVREN!AA%d" % s._uni_rows[NEW_LATER]) == "cpi"
+        assert bd.by_isin(NEW_LATER)["kind"] == "cpi" and cell(s, "EK_EVREN!%s%d" % (ex.UNI_KIND, s._uni_rows[NEW_LATER])) == "cpi"
         # kept for everyone, and for the next start (the store)
         desk = s.store.get(s.BOND_DESK)
         assert set(desk["added"]) == {NEW_TLREF, NEW_FRN, NEW_FIXED, NEW_LATER} and desk["added"][NEW_FRN]["by"] == user_key("Liste Ekleyen")
@@ -802,11 +802,6 @@ def test_a_bond_taken_off_the_list_and_one_past_its_maturity(tmp_path, module_se
         back = s.bond_list_add(other, ["TRT020130T19"])
         assert [(b["isin"], b["kind"]) for b in back["added"]] == [("TRT020130T19", "frn")] and "TRT020130T19" in s._uni_rows
         assert "TRT020130T19" not in s.store.get(s.BOND_DESK)["removed"]
-        hdr = auth(s, u)
-        with TestClient(create_app(s)) as client:
-            got = client.post("/api/bonds/list/remove", json={"isin": "TRT130127T11"}, headers=hdr)
-            assert got.status_code == 200 and got.json()["removed"] is True and got.json()["trading"] is False
-            assert client.post("/api/bonds/list/remove", json={"isin": "X"}, headers=hdr).status_code == 400
         # past its maturity: off the list the day after (06.01.2027), known still; one already past is refused
         assert "TRT060127T10" in {b["isin"] for b in bd.listed(dt.date(2027, 1, 6))}
         assert "TRT060127T10" not in {b["isin"] for b in bd.listed(dt.date(2027, 1, 7))} and bd.by_isin("TRT060127T10")
@@ -818,6 +813,12 @@ def test_a_bond_taken_off_the_list_and_one_past_its_maturity(tmp_path, module_se
         s.books["tto"].engine.clock.today = lambda: float(date_to_serial(dt.date(2027, 1, 7)))
         assert s.et.call(s._sync_universe) is True and "TRT060127T10" not in s._uni_rows
         assert s._uni_day == dt.date(2027, 1, 7) and "TRT060127T10" not in {b["isin"] for b in s.bond_catalog(u)["bonds"]}
+        # the page's ✕ - last: the app's shutdown stops the service
+        hdr = auth(s, u)
+        with TestClient(create_app(s)) as client:
+            got = client.post("/api/bonds/list/remove", json={"isin": "TRT130127T11"}, headers=hdr)
+            assert got.status_code == 200 and got.json()["removed"] is True and got.json()["trading"] is False
+            assert client.post("/api/bonds/list/remove", json={"isin": "X"}, headers=hdr).status_code == 400
     finally:
         s.stop()
 
