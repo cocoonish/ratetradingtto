@@ -62,6 +62,16 @@ def test_how_many_tables_a_user_may_keep(service, monkeypatch):
     assert service.columns(u)["tables"] == {"a": ["C"], "c": ["B"]}
 
 
+def test_how_much_a_user_may_keep_in_all(service, monkeypatch):
+    monkeypatch.setattr(service, "MAX_COLUMN_BYTES", 80)
+    u = service.login("Sütun Uzun")["user"]
+    service.set_columns(u, "v/dibs/B3", ["B", "C"])
+    with pytest.raises(ServiceError) as err:
+        service.set_columns(u, "eod/curve", ["TRY OIS · par (%) · Δ1G bp", "TRY OIS · par (%) · Δ1H bp", "Offshore · Son"])
+    assert err.value.status == 400 and "çok uzun" in str(err.value)
+    assert service.columns(u)["tables"] == {"v/dibs/B3": ["B", "C"]}           # what was kept stays
+
+
 def test_over_http(service):
     client = TestClient(create_app(service=service))                         # (no "with": the shared service stays up)
     h = auth(service, "Sütun Zeynep")

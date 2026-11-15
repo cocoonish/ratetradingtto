@@ -1501,6 +1501,7 @@ class Service(object):
     #: its caption.
     MAX_COLUMN_TABLES = 500
     MAX_HIDDEN_COLUMNS = 400
+    MAX_COLUMN_BYTES = 256 * 1024                       # all of one user's choices together (a few KB in practice)
     _columns_lock = threading.Lock()
 
     def columns(self, user: Optional[str]) -> Dict[str, Any]:
@@ -1526,6 +1527,8 @@ class Service(object):
             if len(saved) > self.MAX_COLUMN_TABLES:
                 raise ServiceError("en fazla %d tabloda sütun gizlenebilir – birkaç tablonun sütunlarını yeniden gösterin"
                                    % self.MAX_COLUMN_TABLES)
+            if len(json.dumps(saved, ensure_ascii=False)) > self.MAX_COLUMN_BYTES:
+                raise ServiceError("gizlenen sütunların listesi çok uzun – birkaç tablonun sütunlarını yeniden gösterin")
             self.store.put("cols." + key, saved)
         return {"table": table, "hidden": cols}
 

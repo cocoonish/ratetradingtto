@@ -2,7 +2,7 @@
 // in-place refresh with change flashes, the columns each user hides.
 import { h, clear, menu, closeMenu, inFormControl, toast } from './ui.js';
 import { raw } from './format.js';
-import { Columns, captionKey, markGaps } from './columns.js';
+import { Columns, captionKey, markGaps, uniqueKeys } from './columns.js';
 
 const hooks = {
   setInputs: null,     // async (book, items, adhoc, lenient) -> result   (lenient: cells that are not inputs are skipped)
@@ -162,7 +162,7 @@ function gridColumns(d, heads) {
     out.push({ j, key: sheet ? d.c[j] : (ck || caption || '#' + j),
       name: caption || (letter ? 'Sütun ' + letter : 'Sütun ' + (j + 1)), sub: caption ? letter : sample });
   }
-  return out;
+  return uniqueKeys(out);
 }
 
 export class Grid {

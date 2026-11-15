@@ -34,6 +34,17 @@ export function captionKey(text) {
 
 const short = (text, n = 38) => (text.length > n ? text.slice(0, n - 1) + '…' : text);
 
+/** Two columns under one caption are still two columns: the second one's key is "caption #2". */
+export function uniqueKeys(cols) {
+  const seen = new Map();
+  for (const c of cols) {
+    const n = (seen.get(c.key) || 0) + 1;
+    seen.set(c.key, n);
+    if (n > 1) c.key += ' #' + n;
+  }
+  return cols;
+}
+
 /** The tools (where "Kopyala" is) in the header of the panel an element is in; ``make``: added when the header has none. */
 export function toolsOf(el, make = false) {
   const panel = el && el.closest ? el.closest('.panel') : null;
@@ -226,7 +237,7 @@ function plainColumns(lay) {
     }
     out.push({ j, key: key || caption || '#' + j, name: caption || 'Sütun ' + (j + 1), sub: '' });
   }
-  return out;
+  return uniqueKeys(out);
 }
 
 /**
