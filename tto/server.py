@@ -206,7 +206,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def status(request: Request):
-        return ok(await call(svc().status))
+        return ok(await call(svc().status_for, _user(request)))
 
     @handler
     async def nav(request: Request):

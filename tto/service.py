@@ -923,6 +923,31 @@ class Service(object):
                 # how fresh the data is, the calculation thread's queue, the last fault a loop survived (ops.py)
                 "ops": self.ops.status(prov)}
 
+    def status_for(self, user: Optional[str]) -> Dict[str, Any]:
+        """:meth:`status` as a signed-in user gets it over HTTP: where the log, the database and its backups live on
+        the desk's computer is the administrators' to know (a database problem and a backup's date stay for all)."""
+        out = self.status()
+        try:
+            self.require_admin(user)
+            return out
+        except ServiceError:
+            pass
+        hide = [str(p) for p in (getattr(self.settings, "db_path", None), getattr(self.settings, "backup_dir", None),
+                                 out["ops"].get("log")) if p]
+
+        def clean(x: Any) -> Any:
+            if isinstance(x, dict):
+                return {k: clean(v) for k, v in x.items() if k not in ("path", "dir", "log")}
+            if isinstance(x, list):
+                return [clean(v) for v in x]
+            if isinstance(x, str):
+                for p in hide:
+                    x = x.replace(p, "…")
+            return x
+
+        out["ops"] = clean(out["ops"])
+        return out
+
     def nav(self) -> List[Dict[str, Any]]:
         pages = []
         for v in self.views:

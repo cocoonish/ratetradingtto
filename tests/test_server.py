@@ -59,6 +59,23 @@ def test_login(client, module_service):
     assert client.get("/api/users", headers=ANON).status_code == 401           # nothing but the sign-in without a session
 
 
+def test_where_the_desks_files_live_is_for_the_administrators(tmp_path):
+    """The status every signed-in user reads (data freshness, the queue, the last fault, a database problem) leaves
+    out where the log, the database and its backups live on the desk's computer; an administrator sees them."""
+    import json
+    from conftest import make_service
+    svc = make_service(tmp_path)
+    try:
+        with TestClient(create_app(svc)) as client:
+            user = client.get("/api/status", headers=auth(svc, "Durum Kullanıcı")).json()["ops"]
+            admin = client.get("/api/status", headers=auth(svc, "Durum Yönetici", admin=True)).json()["ops"]
+        assert "log" not in user and "dir" not in user["db"]["backup"] and str(tmp_path) not in json.dumps(user)
+        assert "log" in admin and admin["db"]["backup"]["dir"]
+        assert user["engine"] == admin["engine"] and user["feed"]["state"] == "replay" and "last_error" in user
+    finally:
+        svc.stop()
+
+
 def test_status_nav_header(client):
     st = client.get("/api/status").json()
     assert st["mode"] == "replay" and st["port"] == 1057
