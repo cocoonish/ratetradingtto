@@ -50,6 +50,8 @@ Z_DAYS = (20, 60, 250)  # closes a z-score looks back on: a month, a quarter, a 
 RECENT = 65 * 60        # seconds of readings kept for "within the last minutes" (an hour at most, and a margin)
 RECORD_EVERY = 300.0    # seconds between two writes of the day's last values (the watch's own closes)
 HEAT_EVERY = 10.0       # seconds between two readings of the heat map's points
+HOLIDAYS = (361, 523)   # the desk's holidays: Motor!A361:A523 (the days the Forward sheet's value dates skip)
+TR_MONTHS = ("Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara")
 
 RV = "DİBS RV"
 OIS_ROWS = {"1M": 9, "2M": 10, "3M": 11, "6M": 12, "9M": 13, "1Y": 14, "15M": 15, "18M": 16, "21M": 17, "2Y": 18,
@@ -119,6 +121,14 @@ def date_text(v: Any) -> str:
     if type(v) is float and v > 20000:
         return numfmt.format_value(v, "dd.mm.yyyy", numfmt.get_locale("tr"))
     return v.strip() if isinstance(v, str) else ""
+
+
+def month_label(day: str) -> str:
+    """A contract by the month it ends in, as the desk says it: "Kas26" for 30.11.2026 ("" for no date)."""
+    m = re.match(r"^\s*\d{1,2}\.(\d{1,2})\.(\d{4})\s*$", day or "")
+    if not m or not 1 <= int(m.group(1)) <= 12:
+        return ""
+    return TR_MONTHS[int(m.group(1)) - 1] + m.group(2)[2:]
 
 
 def move_text(v: Optional[float], show: str, loc=None) -> str:
@@ -236,6 +246,46 @@ class Watch(object):
         # the day the heat map was first opened: its points are read (and kept) from then on only - every point
         # of it is a live Bloomberg request, not to be made all day for a page no one looks at
         self._heat_day = ""
+        self._shut: Tuple[str, frozenset] = ("", frozenset())      # (day read, the desk's holidays as ISO days)
+
+    # ================================================================== the market's days
+    def holidays(self) -> frozenset:
+        """The desk's holidays (the workbook's Motor!A361:A523, as ISO days), read once a day."""
+        today = self.svc.today_iso()
+        if self._shut[0] != today:
+            days = set()
+            try:
+                rd = self._Reader(self, None)
+                for r in range(HOLIDAYS[0], HOLIDAYS[1] + 1):
+                    v = rd.get("Motor!A%d" % r)
+                    if type(v) is float and v > 20000:
+                        days.add((_dt.date(1899, 12, 30) + _dt.timedelta(days=int(v))).isoformat())
+            except (KeyError, ValueError):
+                pass                                       # no calendar in the book: Saturdays and Sundays only
+            self._shut = (today, frozenset(days))
+        return self._shut[1]
+
+    def market_open(self, day: str) -> bool:
+        """Whether the market trades on a day (ISO): a week day that is not one of the desk's holidays.  On any
+        other day nothing moves - no close is kept for it, and none is a "previous close"."""
+        try:
+            return _dt.date.fromisoformat(day).weekday() < 5 and day not in self.holidays()
+        except ValueError:
+            return False
+
+    def last_open_day(self, before: str) -> Optional[str]:
+        """The last day before ``before`` (ISO) the market traded."""
+        d = _dt.date.fromisoformat(before)
+        for _ in range(30):
+            d -= _dt.timedelta(days=1)
+            if self.market_open(d.isoformat()):
+                return d.isoformat()
+        return None
+
+    def shut_day(self, today: str) -> Optional[str]:
+        """On a Saturday or a Sunday, when no market trades: the last day the market did, whose close stands
+        (None on a week day - a holiday of the desk's included: offshore still trades in London then)."""
+        return self.last_open_day(today) if _dt.date.fromisoformat(today).weekday() >= 5 else None
 
     # ================================================================== subjects
     @staticmethod
@@ -746,7 +796,8 @@ class Watch(object):
             if out:
                 source.append("tarihçe")
         own = self.svc.store.closes([self.key(subject)], start).get(self.key(subject)) or {}
-        extra = {day: v for day, v in own.items() if day < today and day not in out}
+        # only the days the market traded: a value kept on a Saturday, a Sunday or a holiday is no close
+        extra = {day: v for day, v in own.items() if day < today and day not in out and self.market_open(day)}
         if extra:
             out.update(extra)
             source.append("kayıt")
@@ -814,11 +865,14 @@ class Watch(object):
 
     def record(self, force: bool = False) -> int:
         """Keep the day's last value of everything watched (the market's: no one's personal scenario) - the
-        closes a z-score and the heat map's "previous close" use where the market history has none."""
+        closes a z-score and the heat map's "previous close" use where the market history has none.  Not on a
+        day the market is shut: a Saturday's value is Friday's again, and no "previous close"."""
         epoch = time.time()
         if not force and epoch - self._recorded_at < RECORD_EVERY:
             return 0
         self._recorded_at = epoch
+        if not self.market_open(self.svc.today_iso()):
+            return 0
         subjects: Dict[str, Dict[str, Any]] = {}
         for items in self._items_all().values():
             for i in items or []:
@@ -883,7 +937,8 @@ class Watch(object):
                 contracts.append((" ".join(t.split()), t.replace(" Curncy", "").strip(), due))
         if contracts:
             out.append({"id": "viop", "title": "VİOP USDTRY kontratları",
-                        "cols": [{"id": c[0], "label": c[1], "tip": "vade " + c[2] if c[2] else ""} for c in contracts],
+                        "cols": [{"id": c[0], "label": month_label(c[2]) or c[1], "tip": c[1] + (" · vade " + c[2] if c[2] else "")}
+                                 for c in contracts],
                         "rows": [{"name": "OIS − VİOP", "cells": [{"kind": "viop", "ticker": c[0], "metric": "ois"} for c in contracts]},
                                  {"name": "ima TRY", "cells": [{"kind": "viop", "ticker": c[0], "metric": "try_mid"} for c in contracts]}]})
         listed = []
@@ -925,6 +980,9 @@ class Watch(object):
         rd = self._Reader(self, None)
         ref = self._heat_refs().get(user) if basis == "ref" else None
         today = self.svc.today_iso()
+        # a Saturday, a Sunday: the market is shut - its last day's close stands and nothing has moved since (a
+        # value read now may still differ from that close, e.g. a yield priced to another value date: no move)
+        shut = self.shut_day(today)
         if self._heat_day != today:
             self._heat_day = today                       # opened today: its points are read from now on
             self._heat_at = 0.0
@@ -949,6 +1007,8 @@ class Watch(object):
                         closes = self.history(subj, rd)[0]
                         prev = max((d for d in closes if d < today), default=None)
                         base, base_day = (closes[prev], prev) if prev else (None, None)
+                        if shut and prev == shut:
+                            v = base
                     k = SHOWS.get(show, SHOWS["raw"])[1]
                     chg = (v - base) * k if type(v) is float and type(base) is float else None
                     if chg is not None:
@@ -961,7 +1021,7 @@ class Watch(object):
         top = max(moves) if moves else 0.0
         cap = next((c for c in (5, 10, 15, 20, 25, 50, 75, 100, 150, 200, 300, 500) if top <= c), 1000)
         return {"basis": basis, "bases": {"close": "önceki kapanış", "open": "açılış", "ref": "referans"}, "panels": panels,
-                "cap": cap, "time": _now().strftime("%H:%M:%S"), "ref_at": (ref or {}).get("at"), "day": today}
+                "cap": cap, "time": _now().strftime("%H:%M:%S"), "ref_at": (ref or {}).get("at"), "day": today, "closed": shut}
 
     # ================================================================== what is kept
     def _items_all(self) -> Dict[str, List[Dict[str, Any]]]:
