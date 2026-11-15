@@ -71,7 +71,8 @@ def test_where_the_desks_files_live_is_for_the_administrators(tmp_path):
             admin = client.get("/api/status", headers=auth(svc, "Durum Yönetici", admin=True)).json()["ops"]
         assert "log" not in user and "dir" not in user["db"]["backup"] and str(tmp_path) not in json.dumps(user)
         assert "log" in admin and admin["db"]["backup"]["dir"]
-        assert user["engine"] == admin["engine"] and user["feed"]["state"] == "replay" and "last_error" in user
+        # the calculation thread's state is everybody's (its numbers move between the two reads: the warm-up runs)
+        assert set(user["engine"]) == set(admin["engine"]) and user["feed"]["state"] == "replay" and "last_error" in user
     finally:
         svc.stop()
 

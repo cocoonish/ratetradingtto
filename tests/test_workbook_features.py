@@ -179,7 +179,9 @@ def test_data_bar_limits():
 # ---------------------------------------------------------------------------------------------- shortcuts / picture
 def test_the_workbooks_go_to_links_become_shortcuts_to_page_and_panel(service):
     links = service.view(None, "masa")["links"]
-    assert len(links) == 29                               # 30 in the workbook; the one to YP DIBS went with that sheet
+    # 30 in the workbook; the one to YP DIBS went with that sheet, the one to the Motor sheet is an administrator's: not
+    # on the page everybody shares
+    assert len(links) == 28 and "motor" not in {l["page"] for l in links}
     by = {l["label"]: l for l in links}
     assert (by["Outright"]["page"], by["Outright"]["panel"]) == ("ois", "B3")
     assert (by["MPC ima"]["page"], by["MPC ima"]["panel"]) == ("ois", "B4")

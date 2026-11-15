@@ -1134,6 +1134,8 @@ def test_the_header_and_every_page_are_made_ahead_at_the_lowest_priority(tmp_pat
         svc._render = lambda *a: (made.append(a[3]), real(*a))[1]
         try:
             for v in svc.views:
+                if v.get("admin"):
+                    continue                             # (an administrators' page is kept per administrator: not made ahead)
                 assert svc.view(u, v["id"])["panels"]
         finally:
             del svc._render
