@@ -142,7 +142,7 @@ async function shot(page, name) {
     const tabs0 = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button')].map((b) => b.dataset.tab + (b.classList.contains('on') ? '!' : '')));
     const on0 = await panelsOnPage(page);
     check('forward page opens on the calculators, the value date pinned above the tabs',
-      tabs0.join(' ') === 'calc! fwd ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
+      tabs0.join(' ') === 'calc! fwd kot ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
     const caps = await page.evaluate(() => [...document.querySelectorAll('.panels.pinned .panel[data-panel="B1"] tr.hd td')].map((td) => td.textContent));
     check('the value date strip names its cells', caps.join('|') === '|Valör tarihi|USDTRY spot|EURTRY spot|USDTRY spot valörü|EURTRY spot valörü', caps);
     await page.click('.viewtabs button[data-tab="ret"]');
@@ -158,7 +158,7 @@ async function shot(page, name) {
     check('the open tab is remembered', (await panelsOnPage(page)).join(' ') === 'B1 B19 B20 B26');
     await tab(page, '*');
     check('forward page has many tables', (await page.locator('table.grid').count()) >= 20);
-    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 7);
+    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 8);
     await tab(page, 'calc');
     // (EK_FWD!E50: RET bid of the USDTRY table of the "Forward fiyatları" tab - the sheet's Forward!D33)
     check('a cell of another tab is found - its tab opens', (await cellText(page, 'EK_FWD!E50')) !== null
@@ -1054,8 +1054,12 @@ async function shot(page, name) {
     };
     await open(page, 'masa');
     await tab(page, 'fwd');
-    check('the forward quote matrices follow the forward pricing table: USDTRY, EURTRY, then the way back of each',
-      await order(['B14', 'EKF1', 'EKF5', 'EKF2', 'EKF6']));
+    check('the desk page keeps a summary of the USDTRY quote matrix (the matrices live on the Forward page)',
+      (await panelsOnPage(page)).join(' ') === 'EKS B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
+    await open(page, 'forward');
+    await tab(page, 'kot');
+    check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
+      await order(['EKF1', 'EKF5', 'EKF2', 'EKF6']));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('matrix starts from the desk spread (−150 bp on both sides)',
       (await cellText(page, 'EK_FWD!D4')).trim() === '-150' && Math.abs(trNumber(await cellText(page, 'EK_FWD!M5')) - (ois1m - 1.5)) < 0.011);
@@ -1100,7 +1104,7 @@ async function shot(page, name) {
     check('gold tab: the VİOP gold tables, the calculator, then spot / source, swap rate curve and forwards',
       await order(['B9', 'B10', 'B11', 'XAU4', 'XAU1', 'XAU2', 'XAU3', 'B11b']), await panelsOnPage(page));
     await tab(page, 'calc');
-    check('the gold calculator is with the calculators as well', (await panelsOnPage(page)).join(' ') === 'B8 XAU4');
+    check('the gold calculator is with the calculators as well (Interest 2 SP: Forward page)', (await panelsOnPage(page)).join(' ') === 'XAU4');
     await tab(page, 'gold');
     check('gold swap rate tickers are Bloomberg\'s XAUSR… roots with the yellow key next to them',
       (await cellText(page, 'EK_XAU!D16')).trim() === 'XAUSR1W' && (await cellText(page, 'EK_XAU!D17')).trim() === 'XAUSR1M'
@@ -1688,7 +1692,9 @@ async function shot(page, name) {
     await page.keyboard.type('interest');
     await page.waitForSelector('.findlist .hit');
     const hits = await page.evaluate(() => [...document.querySelectorAll('.findlist .hit')].map((x) => x.querySelector('.t').textContent + ' @ ' + x.querySelector('.w').textContent));
-    check('Ctrl+K lists the tables of every page by name', hits.length >= 6 && hits.some((x) => /^Interest 2 SP · TRY faizi.* @ Forward › Hesaplayıcılar$/.test(x)), hits);
+    // each calculator once, at its home: the copies on the Calculators and VİOP pages are helper tables, not offered
+    check('Ctrl+K lists the tables of every page by name', hits.length === 4 && hits.every((x) => / @ Forward › Hesaplayıcılar$/.test(x))
+      && hits.some((x) => /^Interest 2 SP · TRY faizi.* @ Forward › Hesaplayıcılar$/.test(x)), hits);
     await page.fill('#find', 'faizden fiyat');
     await page.waitForFunction(() => document.querySelectorAll('.findlist .hit').length === 1);
     await page.keyboard.press('Enter');

@@ -136,20 +136,20 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
 
 def test_tables_of_a_left_out_addition_are_not_shown(svc):
     assert all(b["left_out"] == [] for b in svc.status()["books"].values())        # with the real files everything fits
-    view = svc.view_index["masa"]
+    view = svc.view_index["forward"]
     saved = [dict(p) for p in view["panels"]]
     try:
         for p in view["panels"]:
             if p.get("sheet") == "EK_FWD":
                 p["sheet"] = "EK_YOK"                                               # as if the sheet had not been built
         svc._view_cache.clear()
-        ids = [p["id"] for p in svc.view(None, "masa", True)["panels"]]
-        assert "B14" in ids and not any(i.startswith("EKF") for i in ids)
-        assert all("error" not in p for p in svc.view(None, "masa", True)["panels"])
+        ids = [p["id"] for p in svc.view(None, "forward", True)["panels"]]
+        assert "B14" in ids and not any(i.startswith("EKF") or i.startswith("FR") for i in ids)
+        assert all("error" not in p for p in svc.view(None, "forward", True)["panels"])
     finally:
         view["panels"][:] = saved
         svc._view_cache.clear()
-    assert "EKF1" in [p["id"] for p in svc.view(None, "masa")["panels"]]
+    assert "EKF1" in [p["id"] for p in svc.view(None, "forward")["panels"]]
 
 
 # ============================================================================== forward quotes: OIS + spread
@@ -274,11 +274,13 @@ def test_points_typed_by_hand_give_back_their_spread(svc):
     assert cell(svc, "EK_FWD!K%d" % (FWD_ROWS[0] + back), u) == ""
 
 
-def test_matrix_panels_are_on_the_desk_page_with_their_inputs(svc):
-    page = svc.view(None, "masa")
+def test_matrix_panels_are_on_the_forward_page_with_their_inputs(svc):
+    """The forward quote matrices live on the Forward page's "Kotasyon" tab (they were on the desk page, which keeps a
+    summary of the USDTRY one)."""
+    page = svc.view(None, "forward")
     panels = {p["id"]: p for p in page["panels"]}
     ids = [p["id"] for p in page["panels"]]
-    assert ids.index("EKF1") == ids.index("B14") + 1 and ids.index("EKF2") == ids.index("EKF1") + 1
+    assert ids.index("EKF2") == ids.index("EKF1") + 1 and not any(i.startswith("EKF") for i in (p["id"] for p in svc.view(None, "masa", True)["panels"]))
     assert panels["EKF1"]["title"].startswith("FORWARD KOTASYON") and panels["EKF2"]["title"].startswith("PUAN → OIS SPREAD")
     rows = panels["EKF1"]["data"]["rows"]
     head = [c.get("t") for c in rows[1]]
@@ -287,7 +289,7 @@ def test_matrix_panels_are_on_the_desk_page_with_their_inputs(svc):
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
     assert len(inputs) == 1 + 1 + 2 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, general, dates, per date
     assert inputs[0][1] == list(extras.FWD_CURVES)                                       # the curve is a drop-down
-    assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "masa", True)["panels"]}
+    assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "forward", True)["panels"]}
 
 
 # ============================================================================== forward quotes: EURTRY, OIS + spread
@@ -376,11 +378,11 @@ def test_eurtry_points_typed_by_hand_give_their_spread_over_ois(svc):
     assert cell(svc, "EK_FWD!K%d" % (EUR_ROWS[0] + back), u) == ""
 
 
-def test_the_eurtry_matrix_is_on_the_desk_page_below_the_usdtry_one(svc):
-    page = svc.view(None, "masa")
+def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
+    page = svc.view(None, "forward")
     panels = {p["id"]: p for p in page["panels"]}
-    tab = next(s for s in page["sections"] if s["id"] == "fwd")["panels"]
-    assert tab[:5] == ["B14", "EKF1", "EKF5", "EKF2", "EKF6"]
+    tab = next(s for s in page["sections"] if s["id"] == "kot")
+    assert tab["title"] == "Kotasyon" and tab["panels"] == ["EKF1", "EKF5", "EKF2", "EKF6"]
     assert panels["EKF5"]["title"].startswith("FORWARD KOTASYON  ·  EURTRY, OIS + spread")
     assert panels["EKF6"]["title"].startswith("PUAN → OIS SPREAD  ·  EURTRY")
     rows = panels["EKF5"]["data"]["rows"]
@@ -390,7 +392,7 @@ def test_the_eurtry_matrix_is_on_the_desk_page_below_the_usdtry_one(svc):
     assert len(inputs) == 1 + 1 + 4 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, spreads and spot, dates, per date
     assert inputs[0][1] == list(extras.FWD_CURVES)
     assert len([c for row in panels["EKF6"]["data"]["rows"] for c in row if c.get("i")]) == 20
-    assert "EKF7" not in panels and "EKF7" in {p["id"] for p in svc.view(None, "masa", True)["panels"]}
+    assert "EKF7" not in panels and "EKF7" in {p["id"] for p in svc.view(None, "forward", True)["panels"]}
 
 
 # ============================================================================== gold: forwards from the swap rate

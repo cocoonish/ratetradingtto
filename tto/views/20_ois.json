@@ -455,9 +455,10 @@
   {
    "id": "B17",
    "type": "table",
-   "title": "İKİ TARİH ARASI SIMPLE RATE",
+   "title": "Yardımcı · İKİ TARİH ARASI SIMPLE RATE (tek yeri: Masa → Faiz · PPK → TARİH ARASI FAİZ)",
    "range": "A121:F129",
-   "hidden": false
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B18",
@@ -539,7 +540,6 @@
    "id": "calc",
    "title": "Hesaplayıcılar",
    "panels": [
-    "B17",
     "B18"
    ]
   },

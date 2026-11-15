@@ -306,3 +306,42 @@ def test_calculators_are_easy_to_reach():
     calc = next(v for v in VIEWS if v["id"] == "calc")
     names = [p.get("title", "") for p in calc["panels"] if not p.get("hidden")]
     assert len(names) == len(set(names)), [n for n in names if names.count(n) > 1]
+
+
+def test_each_calculator_has_one_home():
+    """Duplicated calculators each have one home; the copies are helper tables (the workbook's cells stay in a table):
+    Interest 2 SP / SP 2 Interest and the repo converter on the Forward page (the Calculators sheet's B1-B4 and B12-B22
+    and the VİOP page's B8 are copies), Forward DV01 on the Forward page (Calculators B10), the date-to-date rate on the
+    desk page (OIS B17, Forward B25), and the Calculators sheet's exact copies (B21, B22, B29, B30, B34).  The desk page's
+    forward quote matrices moved to the Forward page's "Kotasyon" tab - the desk page keeps a summary - and its
+    near-copy of the cross forward (B14) retired."""
+    by = {v["id"]: v for v in VIEWS}
+
+    def panel(view, pid):
+        return next(p for p in by[view]["panels"] if p["id"] == pid)
+
+    def tabs(view):
+        return {pid for s in by[view]["sections"] for pid in s["panels"]}
+
+    copies = {"calc": ["B%d" % k for k in (1, 2, 3, 4, 10) + tuple(range(12, 23)) + (29, 30, 34)], "viop": ["B8"],
+              "ois": ["B17"], "forward": ["B25"], "masa": ["B14"]}
+    for view, ids in copies.items():
+        for pid in ids:
+            p = panel(view, pid)
+            assert p["hidden"] and p["title"].startswith("Yardımcı · ") and pid not in tabs(view), (view, pid)
+    homes = {"forward": ["B7", "B8", "B9", "B10", "B11", "B18"], "masa": ["B9"]}
+    for view, ids in homes.items():
+        for pid in ids:
+            assert not panel(view, pid).get("hidden") and pid in tabs(view), (view, pid)
+    assert [s["id"] for s in by["calc"]["sections"]] == ["conv", "pos", "bond"] and by["calc"]["sections"][0]["panels"][0] == "B7"
+    # the quote matrices: the Forward page's own sheet now, a summary (borrowed) on the desk page
+    kot = next(s for s in by["forward"]["sections"] if s["id"] == "kot")
+    assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF6"]
+    assert not any(p.get("sheet") == "EK_FWD" and not p.get("borrowed") for p in by["masa"]["panels"])
+    eks = panel("masa", "EKS")
+    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A3:K14"
+    assert next(s for s in by["masa"]["sections"] if s["id"] == "fwd")["panels"] == ["EKS", "B10", "B22"]
+    assert not any(i["range"].startswith("EK_FWD!") for i in by["masa"]["inputs"])
+    assert {"EK_FWD!B2", "EK_FWD!D4:E4", "EK_FWD!D20:E29", "EK_FWD!D119:E128"} <= {i["range"] for i in by["forward"]["inputs"]}
+    # the hidden limit table of the Calculators sheet takes no input any more
+    assert not {"X63", "X64", "X65", "X66"} & {i["range"] for i in by["calc"]["inputs"]}

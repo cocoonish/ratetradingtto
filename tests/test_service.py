@@ -552,8 +552,8 @@ def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(servic
     assert cell(service, "Forward!O32", u) == 51.0 and cell(service, "Forward!F2") != 51.0
     service.reset_inputs(u, "tto")
     assert cell(service, "Forward!AH8", u) == cell(service, "Forward!F2")
-    # the three USDTRY contract calculators of the VİOP page
-    vp = service.view(u, "viop")
+    # the three USDTRY contract calculators of the VİOP page (helper tables now: Interest 2 SP lives on the Forward page)
+    vp = service.view(u, "viop", True)
     for ref in ("M32", "M33", "M35", "M36", "P33", "S36"):
         c = _cell_of(vp, "B8", ref)
         assert c["i"] == "u" and c["fx"] == 1, ref
@@ -568,7 +568,7 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     page = service.view(None, "forward")
     assert page["pinned"] == ["B1"]
     tabs = page["sections"]
-    assert [s["id"] for s in tabs] == ["calc", "fwd", "ret", "bulk", "curves", "off", "tick"]
+    assert [s["id"] for s in tabs] == ["calc", "fwd", "kot", "ret", "bulk", "curves", "off", "tick"]
     assert tabs[0]["title"] == "Hesaplayıcılar" and tabs[0]["panels"][:5] == ["B7", "B8", "B9", "B10", "B11"] and tabs[0]["note"]
     shown = [p["id"] for p in page["panels"]]
     listed = [pid for s in tabs for pid in s["panels"]]
@@ -590,7 +590,7 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     assert small["sections"] == [] and small["pinned"] == []
     # a calculator may be in two tabs (VİOP: the gold calculator)
     viop = {s["id"]: s for s in service.view(None, "viop")["sections"]}
-    assert viop["calc"]["panels"] == ["B8", "XAU4"] and "XAU4" in viop["gold"]["panels"]
+    assert viop["calc"]["panels"] == ["XAU4"] and "XAU4" in viop["gold"]["panels"]
     # the search box of the top bar: the tables of every page, with their tab
     pages = {p["id"]: p for p in service.nav()}
     tables = {t["id"]: t for t in pages["forward"]["tables"]}

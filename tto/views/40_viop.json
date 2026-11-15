@@ -719,9 +719,9 @@
   {
    "id": "B8",
    "type": "table",
-   "title": "USDTRY VİOP  ·  Interest 2 SP: TRY faizinden kontrat fiyatı  (1. kontrat | 2. kontrat | takvim: 1. → 2. kontrat)",
+   "title": "Yardımcı · USDTRY VİOP · Interest 2 SP: TRY faizinden kontrat fiyatı (kopya; tek yeri: Forward → Hesaplayıcılar)",
    "range": "L31:V43",
-   "hidden": false,
+   "hidden": true,
    "keep_title": true
   },
   {
@@ -869,7 +869,6 @@
    "id": "calc",
    "title": "Hesaplayıcılar",
    "panels": [
-    "B8",
     "XAU4"
    ],
    "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot, USD faizi ve VİOP fiyatı piyasadan gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz."
