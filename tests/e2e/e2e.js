@@ -1869,6 +1869,20 @@ async function shot(page, name) {
     check('ticked off by another trader: no longer late, on every screen', true);
     await ctxD.close();
 
+    // ------------------------------------------------------------------ quant signals
+    console.log('quant signals');
+    await open(page, 'quant');
+    await page.waitForSelector('#quant-signals', { timeout: 30000 });
+    // the analyses run in their own thread a few seconds after the start: the page asks until the first result is there
+    await page.waitForFunction(() => /^Hesap /.test((document.getElementById('quant-status') || {}).textContent || ''), null, { timeout: 90000 });
+    const quantTables = await page.locator('#content .quantpage table.grid').count();
+    check('the Sinyaller page renders: signals, log, subscription, settings, status tables', quantTables >= 2
+      && await page.locator('#quant-subscribe input#quant-sub-on').count() === 1 && await page.locator('#quant-settings input#quant-set-entry_z').count() === 1,
+    { tables: quantTables });
+    const qs = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/status');
+    check('the quant analyses answer from their own thread', qs.status === 200 && qs.json.ready === true && qs.json.fits >= 1, qs.json);
+    await shot(page, 'quant-signals');
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
