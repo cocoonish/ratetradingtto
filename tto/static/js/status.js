@@ -67,6 +67,20 @@ export async function openStatus(status) {
   head.appendChild(line('Son hata (dashboard)', le ? le.at + ' · ' + le.where + ' · ' + le.text + (le.count > 1 ? ' (toplam ' + le.count + ')' : '') : 'yok',
     le ? 'warn' : ''));
   if (ops.log) head.appendChild(line('Günlük dosyası', ops.log));
+  // the database: its check at the start, the nightly backups
+  const db = ops.db || {};
+  const chk = db.check;
+  if (chk) {
+    head.appendChild(line('Veritabanı denetimi', chk.ok ? 'tamam (açılışta, ' + num(chk.seconds, 2) + ' sn)'
+      : 'BAŞARISIZ: ' + (chk.problems || []).slice(0, 3).join('; ') + ' – en son yedeğe dönmek için README: "Yedekten dönme"', chk.ok ? '' : 'bad'));
+  }
+  const bk = db.backup || {};
+  if (bk.dir) {
+    const last = bk.last;
+    head.appendChild(line('Son yedek', (last ? last.at + ' · ' + num(last.bytes / 1048576, 1) + ' MB' : 'henüz yok')
+      + ' · ' + (bk.count || 0) + ' / ' + (bk.keep || 30) + ' yedek · her gece ' + (bk.time || '') + ' · ' + bk.dir
+      + (bk.error ? ' · SON DENEME BAŞARISIZ (' + bk.error.at + '): ' + bk.error.text : ''), bk.error ? 'bad' : (last ? '' : 'warn')));
+  }
   m.body.appendChild(head);
 
   const box = h('div', { class: 'unknown' }, h('div', { class: 'loading' }, 'Bloomberg\'in tanımadıkları yükleniyor…'));

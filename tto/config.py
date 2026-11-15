@@ -18,7 +18,8 @@ class Settings(object):
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
                  bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
                  bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
-                 history_pace: float = 1.0, log_dir: Optional[str] = None, bbg_silent_restart: float = 60.0):
+                 history_pace: float = 1.0, log_dir: Optional[str] = None, bbg_silent_restart: float = 60.0,
+                 backup_dir: Optional[str] = None, backup_time: str = "22:00"):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -44,10 +45,25 @@ class Settings(object):
         self.log_dir = log_dir or os.environ.get("TTO_LOG_DIR") or os.path.join(self.data_dir, "logs")
         # a Bloomberg helper silent this many seconds in market hours is started again (0: never; see bbg_process.py)
         self.bbg_silent_restart = max(0.0, float(bbg_silent_restart))
+        # the nightly backup of the database: where (the data folder's backups by default) and when (HH:MM)
+        self.backup_dir = backup_dir or os.environ.get("TTO_BACKUP_DIR") or os.path.join(self.data_dir, "backups")
+        self.backup_time = check_time(backup_time)
 
     @property
     def db_path(self) -> str:
         return os.path.join(self.data_dir, "tto.db")
+
+
+def check_time(text) -> str:
+    """A time of day as HH:MM ("2:30", "02.30" too)."""
+    parts = str(text or "").strip().replace(".", ":").split(":")
+    try:
+        h, m = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        raise ValueError("saat SS:DD biçiminde olmalı: %r" % (text,))
+    if len(parts) != 2 or not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError("saat SS:DD biçiminde olmalı: %r" % (text,))
+    return "%02d:%02d" % (h, m)
 
 
 def check_port(port) -> int:

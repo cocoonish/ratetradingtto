@@ -12,6 +12,10 @@
   settings).
 * **Settings the desk may tune** (``ops.settings`` in the store; the administrators change them on the alarms
   page): the market hours and how long without a tick counts as stale.
+* **The database.**  ``PRAGMA quick_check`` at every start (a failure is said on the console, in the log, in the
+  status); every night at ``--backup-time`` (22:00) an online copy to ``--backup-dir`` (``data/backups``) as
+  ``tto-YYYY-MM-DD.db``, the newest 30 kept.  A dashboard that was not running at that time takes the copy it
+  missed five minutes after it starts.  ``python -m tto yedekten-don <file>`` puts one back (see store.restore).
 """
 from __future__ import annotations
 
@@ -37,6 +41,14 @@ _LOG_FILE: List[str] = []           # the file ``python -m tto`` writes its log 
 HEARD_STALE = 10.0
 #: a fault repeated within this many seconds is counted, not written again
 REPEAT_QUIET = 60.0
+
+#: the nightly backups: tto-YYYY-MM-DD.db, the newest so many kept (nothing else in the folder is touched)
+BACKUP_KEEP = 30
+BACKUP_NAME = re.compile(r"^tto-(\d{4}-\d{2}-\d{2})\.db$")
+#: a dashboard that missed the night's backup (not running then) takes it once it has run this long
+BACKUP_CATCH_UP = 300.0
+#: a backup that failed is tried again after this long
+BACKUP_RETRY = 1800.0
 
 #: what the desk may tune (the administrators, on the alarms page)
 DEFAULTS: Dict[str, Any] = {
@@ -76,6 +88,37 @@ def hhmm(text: Any) -> Optional[_dt.time]:
 
 def clock_text(epoch: Optional[float]) -> str:
     return _dt.datetime.fromtimestamp(epoch).strftime("%H:%M:%S") if epoch else ""
+
+
+def backups(folder: str) -> List[Dict[str, Any]]:
+    """The dated backups in ``folder``, newest first: name, day, path, size, when written."""
+    out = []
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    for name in names:
+        m = BACKUP_NAME.match(name)
+        if not m:
+            continue
+        path = os.path.join(folder, name)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        out.append({"name": name, "day": m.group(1), "path": path, "bytes": st.st_size,
+                    "at": _dt.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")})
+    out.sort(key=lambda b: b["day"], reverse=True)
+    return out
+
+
+def open_failed(settings, exc: BaseException) -> str:
+    """What to say when the database cannot even be opened (a damaged file): where the newest backup is."""
+    last = backups(settings.backup_dir)
+    return ("Veritabanı açılamadı (%s): %s. Dosya bozulmuş olabilir. %s" % (
+        settings.db_path, exc, ("En son yedek: %s – dashboard kapalıyken 'python -m tto yedekten-don \"%s\"' ile ona dönülür "
+                                "(şimdiki dosya yanında saklanır)." % (last[0]["path"], last[0]["path"])) if last
+        else "Yedek klasöründe (%s) yedek yok." % settings.backup_dir))
 
 
 def feed_state(mode: str, status: Dict[str, Any], now: float, market: bool, started: float,
@@ -122,6 +165,9 @@ class Ops(object):
         self._market = (0.0, False)                         # (when worked out, in market hours then)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self.db_check: Optional[Dict[str, Any]] = None      # the check of the database file at the start
+        self.backup_error: Optional[Dict[str, Any]] = None  # the last backup that failed (until one succeeds)
+        self._backup_tried = 0.0
 
     # ================================================================== what went wrong
     def failure(self, where: str, exc: BaseException) -> None:
@@ -231,7 +277,75 @@ class Ops(object):
     def status(self, prov: Dict[str, Any]) -> Dict[str, Any]:
         et = self.svc.et
         return {"engine": {"queue": et.queued(), "busy": round(et.busy_for(), 1)}, "last_error": self.last_error,
-                "feed": self.feed(prov), "market": self.in_market(), "log": log_file(), "settings": self.settings()}
+                "feed": self.feed(prov), "market": self.in_market(), "log": log_file(), "settings": self.settings(),
+                "db": self.db_status()}
+
+    # ================================================================== the database: its check, its backups
+    def check_database(self) -> Dict[str, Any]:
+        """``PRAGMA quick_check`` of the database file (at the start): a failure is said loud - console, log, status."""
+        t0 = time.time()
+        found = self.svc.store.quick_check()
+        self.db_check = {"ok": not found, "problems": found[:10], "at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         "seconds": round(time.time() - t0, 2)}
+        if found:
+            last = backups(self.svc.settings.backup_dir)
+            text = "VERİTABANI DENETİMİ BAŞARISIZ (%s): %s. Kayıtlar eksik ya da okunamaz olabilir. %s" % (
+                self.svc.settings.db_path, "; ".join(found[:3]),
+                ("En son yedek: %s – dashboard kapalıyken 'python -m tto yedekten-don' ile ona dönülür." % last[0]["path"])
+                if last else "Yedek yok.")
+            log.error(text)
+            try:
+                print("UYARI: " + text, flush=True)          # the console of the desk machine
+            except Exception:  # noqa: BLE001 - a console that cannot print
+                pass
+        else:
+            log.info("veritabanı denetimi tamam (%.2f sn): %s", self.db_check["seconds"], self.svc.settings.db_path)
+        return self.db_check
+
+    def backup_now(self) -> Dict[str, Any]:
+        """An online copy of the database as ``tto-<today>.db`` in the backup folder (today's earlier copy is
+        replaced), then only the newest BACKUP_KEEP kept."""
+        folder = self.svc.settings.backup_dir
+        self._backup_tried = time.time()
+        try:
+            res = self.svc.store.backup_to(os.path.join(folder, "tto-%s.db" % _dt.date.today().isoformat()))
+        except Exception as exc:  # noqa: BLE001 - said, kept for the status, tried again later
+            self.backup_error = {"at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "text": "%s: %s" % (type(exc).__name__, exc)}
+            log.error("veritabanı yedeği alınamadı (%s): %s", folder, self.backup_error["text"])
+            raise
+        self.backup_error = None
+        removed = []
+        for old in backups(folder)[BACKUP_KEEP:]:
+            try:
+                os.remove(old["path"])
+                removed.append(old["name"])
+            except OSError as exc:
+                log.warning("eski yedek silinemedi: %s (%s)", old["path"], exc)
+        log.info("veritabanı yedeklendi: %s (%d bayt, %.1f sn)%s", res["path"], res["bytes"], res["seconds"],
+                 (" – eski yedekler silindi: %s" % ", ".join(removed)) if removed else "")
+        return dict(res, removed=removed)
+
+    def backup_due(self, now: Optional[_dt.datetime] = None) -> bool:
+        """The night's backup is due when its time (``--backup-time``) has come and no copy was taken since; a dashboard
+        that was not running then takes the copy it missed once it has run BACKUP_CATCH_UP seconds (a day without a
+        copy is not left behind)."""
+        now = now or _dt.datetime.now()
+        if self.backup_error and time.time() - self._backup_tried < BACKUP_RETRY:
+            return False
+        tonight = _dt.datetime.combine(now.date(), hhmm(self.svc.settings.backup_time) or _dt.time(22, 0))
+        found = backups(self.svc.settings.backup_dir)
+        last = max((_dt.datetime.strptime(b["at"], "%Y-%m-%d %H:%M:%S") for b in found), default=None)
+        if now >= tonight and (last is None or last < tonight):
+            return True
+        missed = last is None or now - last > _dt.timedelta(hours=26)
+        return missed and time.time() - self.svc.started_at >= BACKUP_CATCH_UP
+
+    def db_status(self) -> Dict[str, Any]:
+        folder = self.svc.settings.backup_dir
+        found = backups(folder)
+        return {"check": self.db_check, "backup": {"dir": folder, "count": len(found), "last": found[0] if found else None,
+                                                   "error": self.backup_error, "time": self.svc.settings.backup_time,
+                                                   "keep": BACKUP_KEEP}}
 
     # ================================================================== the loop
     def start(self) -> None:
@@ -250,8 +364,14 @@ class Ops(object):
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            now = _dt.datetime.now()
             try:
-                self.market_hours(_dt.datetime.now())
+                self.market_hours(now)
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything
                 self.failure("operasyon döngüsü", exc)
+            try:
+                if self.backup_due(now):
+                    self.backup_now()
+            except Exception:  # noqa: BLE001 - said in backup_now; tried again after BACKUP_RETRY
+                pass
             self._stop.wait(15.0)

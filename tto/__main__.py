@@ -9,6 +9,7 @@
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
     python -m tto yonetici "Ad Soyad"   # an administrator with a password typed here (the first one, or a forgotten one)
     python -m tto check-fx USDTRY       # which vol / forward point tickers of a pair the terminal knows (~70 items)
+    python -m tto yedekten-don          # the nightly backups; with a file (dashboard stopped): back to that one
 
 Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
 (see ``tto/bundled.py``).
@@ -56,6 +57,9 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--bbg-silent-restart", type=float, default=60.0,
                    help="Bloomberg yardımcı süreci piyasa saatinde bu kadar sn ses vermezse yeniden başlatılır "
                         "(günde en çok 3 kez, her seferinde iki kat bekleyerek; 0 = hiç)")
+    p.add_argument("--backup-dir", default=None,
+                   help="gece yedeklerinin klasörü (varsayılan: veri klasöründe backups; TTO_BACKUP_DIR ile de verilir)")
+    p.add_argument("--backup-time", default="22:00", help="gece yedeğinin saati (SS:DD; varsayılan 22:00)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     adm = sub.add_parser("yonetici", help="bir kullanıcıyı şifresiyle yönetici yap (ilk yönetici ya da unutulan şifre)")
     adm.add_argument("name", help="kullanıcı adı")
     adm.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
+    rst = sub.add_parser("yedekten-don", help="veritabanını bir gece yedeğinden geri getir (dashboard kapalıyken; "
+                                               "dosya verilmezse yedekler listelenir)")
+    rst.add_argument("backup", nargs="?", default=None, help="yedek dosyası (data/backups/tto-YYYY-AA-GG.db)")
+    rst.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
+    rst.add_argument("--backup-dir", default=None, help="yedeklerin klasörü (varsayılan: veri klasöründe backups)")
     cfx = sub.add_parser("check-fx", help="bir paritenin vol / forward puanı ticker'larını Bloomberg'de sına (~70 kalem)")
     cfx.add_argument("pair", nargs="?", default="USDTRY")
     cfx.add_argument("--source", default="BGN", help="vol ticker'larının fiyat kaynağı (varsayılan BGN; boş: kaynaksız)")
@@ -89,7 +98,8 @@ def settings_from(args) -> Settings:
                     bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll,
                     history=not args.no_history, history_refresh=args.history_refresh,
                     bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue,
-                    log_dir=args.log_dir, bbg_silent_restart=args.bbg_silent_restart)
+                    log_dir=args.log_dir, bbg_silent_restart=args.bbg_silent_restart, backup_dir=args.backup_dir,
+                    backup_time=args.backup_time)
 
 
 def cmd_run(args) -> int:
@@ -189,6 +199,33 @@ def cmd_admin(args) -> int:
     return 0
 
 
+def cmd_restore(args) -> int:
+    """Put a nightly backup back in the place of the database (the dashboard must be stopped).  Without a file: the
+    backups there are, newest first."""
+    from .ops import backups
+    from .store import restore
+    settings = Settings(data_dir=args.data_dir, backup_dir=args.backup_dir)
+    if not args.backup:
+        found = backups(settings.backup_dir)
+        if not found:
+            print("Yedek yok: %s" % settings.backup_dir)
+            return 1
+        print("Yedekler (%s), en yenisi önce:" % settings.backup_dir)
+        for b in found:
+            print("  %s   %s   %.1f MB" % (b["path"], b["at"], b["bytes"] / 1048576.0))
+        print("Geri dönmek için dashboard'u kapatıp: python -m tto yedekten-don <dosya>")
+        return 0
+    try:
+        res = restore(args.backup, settings.db_path)
+    except ValueError as exc:
+        print("HATA: %s" % exc, file=sys.stderr)
+        return 2
+    print("Veritabanı yedekten geri getirildi: %s  <-  %s" % (res["restored"], res["from"]))
+    if res["kept"]:
+        print("Önceki hali silinmedi, yanında duruyor: %s" % res["kept"])
+    return 0
+
+
 def cmd_check_fx(args) -> int:
     from . import bundled
     bundled.add_local()
@@ -214,6 +251,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_admin(args)
     if args.command == "check-fx":
         return cmd_check_fx(args)
+    if args.command == "yedekten-don":
+        return cmd_restore(args)
     return cmd_run(args)
 
 

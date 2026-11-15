@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -141,10 +142,15 @@ class Service(object):
                  clock: Optional[Clock] = None):
         self.settings = settings or Settings()
         self._clock_override = clock
-        self.store = store or Store(self.settings.db_path)
-        # operations: the log of what the loops survive, how fresh the market data is (ops.py)
-        from .ops import Ops
+        from .ops import Ops, open_failed
+        try:
+            self.store = store or Store(self.settings.db_path)
+        except sqlite3.DatabaseError as exc:          # a file that cannot even be opened: say where the backups are
+            raise RuntimeError(open_failed(self.settings, exc)) from exc
+        # operations: the log of what the loops survive, how fresh the market data is, the database's check and
+        # nightly backup (ops.py)
         self.ops = Ops(self)
+        self.ops.check_database()
         self.et = EngineThread()
         self.gen = 1
         self._gen_lock = threading.Lock()
@@ -2074,7 +2080,7 @@ class Service(object):
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         package = uuid.uuid4().hex[:12] if len(q["legs"]) > 1 else None
-        ids = []
+        recs = []
         for lg in q["legs"]:
             rec = {"dir": lg["dir"], "tenor": lg["tenor"], "rate": lg["rate"], "dv01": lg["dv01"],
                    "nominal": lg["nominal"], "cpt": lg["cpt"], "role": lg["role"], "strategy": q["strategy"],
@@ -2083,7 +2089,8 @@ class Service(object):
                    "market": q["info"].get("market"), "note": str(payload.get("note") or "").strip()[:200]}
             if lg.get("mpc"):
                 rec["mpc"] = lg["mpc"]
-            ids.append(self.store.add_trade(self.today_iso(), "ois", rec, user, package))
+            recs.append(rec)
+        ids = self.store.add_trades(self.today_iso(), "ois", recs, user, package)     # every leg, or none
         self._sync_blotter()
         q["ids"] = ids
         return q

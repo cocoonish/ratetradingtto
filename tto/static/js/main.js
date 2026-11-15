@@ -402,6 +402,12 @@ function applyStatus(status) {
     state.noteShown = true;
     toast(status.note, 'err', 9000);
   }
+  // the database file failed its check at the start: everyone hears it once (the badge's window says more)
+  const chk = status.ops && status.ops.db && status.ops.db.check;
+  if (chk && chk.ok === false && !state.dbShown) {
+    state.dbShown = true;
+    toast('Veritabanı denetimi başarısız: ' + (chk.problems || []).slice(0, 2).join('; ') + ' – yöneticiye haber verin (ayrıntı: rozete tıklayın).', 'err', 20000);
+  }
 }
 
 function pollStatus() {

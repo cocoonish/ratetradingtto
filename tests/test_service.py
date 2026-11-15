@@ -603,3 +603,61 @@ def test_market_hours_follow_the_desks_days_and_settings(module_service):
         assert ops.settings()["tick_stale"] == 300                                 # a refused change changes nothing
     finally:
         module_service.store.put("ops.settings", {})
+
+
+def test_a_damaged_database_is_told_at_the_start(tmp_path, capsys):
+    """``PRAGMA quick_check`` at every start: a damaged file is said on the console, in the log and the status (the
+    page tells everyone); the dashboard still runs on what it can read.  A file that cannot be opened at all stops
+    the start with where the newest backup is."""
+    import os
+    from test_store import damage, fill_history
+    from tto.config import Settings
+    from tto.service import Service
+    from tto.store import Store
+    data = tmp_path / "data"
+    s = Store(str(data / "tto.db"))
+    s.login("Ali")
+    s.backup_to(str(data / "backups" / "tto-2026-11-14.db"))
+    fill_history(s)
+    s.close()
+    damage(str(data / "tto.db"))
+    svc = Service(Settings(data_dir=str(data), mode="replay", history=False))
+    try:
+        out = capsys.readouterr().out
+        assert "UYARI: VERİTABANI DENETİMİ BAŞARISIZ" in out and "tto-2026-11-14.db" in out
+        db = svc.status()["ops"]["db"]
+        assert db["check"]["ok"] is False and db["check"]["problems"]
+        assert db["backup"]["count"] == 1 and db["backup"]["last"]["name"] == "tto-2026-11-14.db"
+        assert svc.store.user_exists("ali")                                   # what can be read still is
+    finally:
+        svc.stop()
+        svc.store.close()
+    # not a database at all: the start stops and says where the backup is
+    bad = tmp_path / "bad"
+    os.makedirs(str(bad / "backups"))
+    (bad / "tto.db").write_bytes(b"bozuk" * 2000)
+    (bad / "backups" / "tto-2026-11-13.db").write_bytes(b"")
+    with pytest.raises(RuntimeError) as err:
+        Service(Settings(data_dir=str(bad), mode="replay", history=False))
+    assert "Veritabanı açılamadı" in str(err.value) and "tto-2026-11-13.db" in str(err.value) and "yedekten-don" in str(err.value)
+
+
+def test_a_package_of_ois_legs_is_kept_whole(module_service, monkeypatch):
+    """The legs of a package go in one transaction: a leg that cannot be written leaves no leg of it."""
+    import sqlite3
+    store = module_service.store
+    u = module_service.login("Paket Giren")["user"]
+    before = len(store.trades(module_service.today_iso()))
+    store._db.execute("CREATE TRIGGER refuse_leg BEFORE INSERT ON trades WHEN NEW.payload LIKE '%\"tenor\": \"2Y\"%' "
+                      "BEGIN SELECT RAISE(ABORT, 'disk dolu'); END")
+    try:
+        with pytest.raises(sqlite3.DatabaseError):         # the second leg (2Y) of the spread is refused
+            module_service.add_ois(u, {"strategy": "spread", "side": "FLATTENER", "short": "1Y", "long": "2Y", "level": "25",
+                                       "dv01": 1000})
+    finally:
+        store._db.execute("DROP TRIGGER refuse_leg")
+    assert len(store.trades(module_service.today_iso())) == before               # the first leg is not left alone
+    res = module_service.add_ois(u, {"strategy": "spread", "side": "FLATTENER", "short": "1Y", "long": "2Y", "level": "25",
+                                     "dv01": 1000})
+    assert len(res["ids"]) == 2 and len(store.trades(module_service.today_iso())) == before + 2
+    module_service.delete_trade(u, res["ids"][0])                                 # (the module's other tests see no trades)
