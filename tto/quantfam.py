@@ -2799,6 +2799,140 @@ def _f1(v: Optional[float]) -> str:
     return ("%.1f" % v).replace(".", ",") if v is not None else "—"
 
 
+# ================================================================================================ the rationale of a signal
+ANALOG_K = 10                            # the nearest days shown
+ANALOG_GAP = 5                           # business days between two analogs (a week of the same episode is one analog)
+ANALOG_FEATURES = ("z", "eğim", "rejim", "vol", "carry")
+ANALOG_Z_WEIGHT = 2.0                    # the squared distance in z counts twice: the score is what the signal is about
+
+
+def analog_features(values: Sequence[float], zs: Optional[Sequence[Optional[float]]] = None,
+                    carry: Optional[Sequence[Optional[float]]] = None) -> List[Optional[List[float]]]:
+    """Each day's description, from the closes up to it: z (the signal's own where it keeps one, else the level's over 60
+    days), slope (the week's move over the daily σ × √5), regime (the lag-1 autocorrelation of the last 60 daily moves),
+    vol (the log of the 20-day σ over the 60-day one) and, where there is one, the carry."""
+    n = len(values)
+    ch = [0.0] + [b - a for a, b in zip(values, values[1:])]
+    out: List[Optional[List[float]]] = [None] * n
+    for t in range(60, n):
+        sd = qm.stdev(ch[t - 59:t + 1])
+        sd20 = qm.stdev(ch[t - 19:t + 1])
+        if not sd or not sd20:
+            continue
+        z = zs[t] if zs is not None and t < len(zs) and zs[t] is not None else None
+        if z is None:
+            w = values[t - 59:t + 1]
+            s_ = qm.stdev(w)
+            z = (values[t] - sum(w) / len(w)) / s_ if s_ else 0.0
+        rho = qm.corr(ch[t - 59:t], ch[t - 58:t + 1]) or 0.0
+        f = [z, (values[t] - values[t - 5]) / (sd * math.sqrt(5.0)), rho, math.log(sd20 / sd)]
+        if carry is not None:
+            c = carry[t] if t < len(carry) else None
+            if c is None:
+                continue
+            f.append(c)
+        out[t] = f
+    return out
+
+
+def _bdays_between(a: _dt.date, b: _dt.date, holidays: set) -> int:
+    n, d = 0, a
+    while d < b:
+        d += _dt.timedelta(days=1)
+        if d.weekday() < 5 and d not in holidays:
+            n += 1
+    return n
+
+
+def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str, Any], k: int = ANALOG_K) -> Dict[str, Any]:
+    """Why the signal: the ``k`` past days most like today (z, slope, regime, vol, carry - standardised, Euclidean, z
+    counting twice, a week apart at least) and what the level did over the holding after each (in the trade's direction, P&L units;
+    an FX trade's level is its excess return - carry in it -, a rate package's move is without its carry), and the conditions that undo it: the stop, a change of regime, an event inside the horizon."""
+    out: Dict[str, Any] = {"analogs": [], "summary": None, "invalidation": [], "features": list(ANALOG_FEATURES[:4])}
+    values, days = list(m.values), list(m.days)
+    if m.intraday or len(values) < 80 or m.level is None:
+        out["why"] = "benzer gün için seri kısa" if not m.intraday else "gün içi sinyal: benzer gün aranmaz"
+        return out
+    hold = int(round((sg or {}).get("hold") or m.hold or float(cfg.get("horizon") or 20)))
+    hold = max(1, min(hold, 60))
+    s = (sg or {}).get("direction") or (sign(m.z or 0) if m.follows else -sign(m.z or 0))
+    unit, factor = m.pnl or (None, None)
+    factor = factor or 1.0
+    zh = m.z_history()
+    carry = None
+    if m.fx:
+        cd = ctx.fx_carry_days(m.fx)
+        carry = [cd.get(d) for d in days]
+        out["features"].append("carry")
+    feats = analog_features(values + [m.level], zh + [m.z], carry + [(m.fxinfo or {}).get("carry_yr")] if carry is not None else None)
+    now = feats[-1]
+    usable = [t for t in range(len(values) - hold) if feats[t] is not None]
+    if now is None or len(usable) < 2 * k:
+        out["why"] = "benzer gün için geçmiş kısa (%d gün)" % len(usable)
+        return out
+    dim = len(now)
+    means = [sum(feats[t][j] for t in usable) / len(usable) for j in range(dim)]
+    sds = []
+    for j in range(dim):
+        v = sum((feats[t][j] - means[j]) ** 2 for t in usable) / max(1, len(usable) - 1)
+        sds.append(math.sqrt(v) if v > 1e-18 else 1.0)
+    wts = [ANALOG_Z_WEIGHT] + [1.0] * (dim - 1)              # the signal's own score counts double
+    dist = sorted((math.sqrt(sum(wts[j] * ((feats[t][j] - now[j]) / sds[j]) ** 2 for j in range(dim))), t) for t in usable)
+    picked: List[int] = []
+    for _, t in dist:
+        if all(abs(t - u) >= ANALOG_GAP for u in picked):
+            picked.append(t)
+        if len(picked) >= k:
+            break
+    outcomes = []
+    for t in sorted(picked, key=lambda x: -x):
+        res = s * (values[t + hold] - values[t]) * factor
+        outcomes.append(res)
+        out["analogs"].append({"day": days[t], "features": feats[t], "distance": next(dd for dd, tt in dist if tt == t), "outcome": res,
+                               "level": values[t], "end": days[t + hold]})
+    srt = sorted(outcomes)
+    n = len(srt)
+    out["summary"] = {"n": n, "hits": sum(1 for x in srt if x > 0), "share": sum(1 for x in srt if x > 0) / n if n else None,
+                      "mean": sum(srt) / n if n else None, "median": srt[n // 2] if n else None,
+                      "q25": srt[max(0, n // 4)] if n else None, "q75": srt[min(n - 1, (3 * n) // 4)] if n else None,
+                      "hold": hold, "unit": unit, "now": now, "carry_in": bool(m.fx)}
+    # ---- what undoes it
+    inv = []
+    if sg and sg.get("stop") is not None:
+        inv.append("Stop: seviye %s %s (giriş %s)%s" % (_g(sg["stop"], m.digits), m.unit, _g(sg["entry"], m.digits),
+                                                       " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
+    reg = m.regime or {}
+    if m.kind in ("mr", "surprise"):
+        inv.append("Rejim trende dönerse (varyans oranı z ≥ +%s; şimdi %s)" % (_g(Z_REGIME, 3), _sg(reg.get("vr_z"), 2)))
+    elif m.kind == "trend":
+        inv.append("Rejim ortalamaya dönüşe dönerse (varyans oranı z ≤ −%s; şimdi %s) ya da ortalamalar ters keserse" % (
+            _g(Z_REGIME, 3), _sg(reg.get("vr_z"), 2)))
+    if m.half_life:
+        inv.append("Yarı ömür ufkun %s katını aşarsa (şimdi %s gün)" % (_g(float(cfg["hl_max_mult"]), 0), _g(m.half_life, 1)))
+    if m.fx and (sg or {}).get("carry_yr") is not None:
+        inv.append("Carry tersine dönerse (şimdi işlemin yönünde %s%% / yıl)" % _sg(sg["carry_yr"], 1))
+    if m.family in ("pairs", "kalman"):
+        inv.append("Eşbütünleşme bozulursa (kalıntıya ADF %5'i geçemezse)")
+    if m.family == "model":
+        inv.append("Kayan pencereli doğrulamada isabet eşiğin altına düşerse")
+    # events inside the horizon: the coming PPK meetings (today's path), holidays
+    end = ctx.today
+    left = hold
+    while left > 0:
+        end += _dt.timedelta(days=1)
+        if end.weekday() < 5 and end not in ctx.holidays:
+            left -= 1
+    meetings = [d for d, _ in ((ctx.path or {}).get("steps") or []) if ctx.today <= d <= end]
+    for d in meetings:
+        inv.append("PPK toplantısı %s ufkun içinde (%d. iş günü): karar fiyatlanandan ayrılırsa" % (
+            _tr(d.isoformat()), _bdays_between(ctx.today, d, ctx.holidays)))
+    hol = sorted(d for d in ctx.holidays if ctx.today < d <= end and d.weekday() < 5)
+    if hol:
+        inv.append("Ufukta tatil: %s (işlem günü az)" % ", ".join(_tr(d.isoformat()) for d in hol))
+    out["invalidation"] = inv
+    return out
+
+
 # ================================================================================================ everything
 def run_all(ctx: Ctx, rv_items: List[Dict[str, Any]], timing: Optional[Dict[str, float]] = None,
             pause: Optional[Callable[[], None]] = None) -> Tuple[List[Monitor], Dict[str, Any]]:

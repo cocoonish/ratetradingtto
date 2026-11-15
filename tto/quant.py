@@ -1069,7 +1069,11 @@ class Quant(object):
             raise QuantError("böyle bir sinyal yok: %s" % sid)
         sg = next((s for s in v["signals"] + v["gated"] if s["id"] == m.sid), None)
         hist = m.history()
-        return _clean({"ready": True, "signal": sg, "monitor": {"sid": m.sid, "family": m.family, "family_label": qf.FAMILIES[m.family][0],
+        try:
+            why = qf.rationale(fit["ctx"], m, sg, fit["cfg"])
+        except Exception as exc:  # noqa: BLE001 - the rationale is not worth the chart
+            why = {"analogs": [], "invalidation": [], "why": "%s: %s" % (type(exc).__name__, str(exc)[:160])}
+        return _clean({"ready": True, "signal": sg, "rationale": why, "monitor": {"sid": m.sid, "family": m.family, "family_label": qf.FAMILIES[m.family][0],
                                                                  "name": m.name, "level": m.level, "z": m.z, "unit": m.unit, "digits": m.digits,
                                                                  "half_life": m.half_life, "regime": m.regime, "note": m.note, "mode": m.mode,
                                                                  "entry": m.entry or fit["cfg"]["entry_z"], "score_name": m.score_name,

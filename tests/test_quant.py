@@ -325,6 +325,32 @@ def test_pca_neutral_flies_and_spreads():
     assert k.family == "rv" and k.info["version"] == "klasik" and k.info["compare"] == fly["compare"]
 
 
+def test_rationale_finds_past_analogs_and_says_what_undoes_the_signal():
+    rnd = random.Random(51)
+    sd = 0.05 / math.sqrt(1 - 0.85 ** 2)
+    vals = [x * 100.0 for x in ar1(500, 0.85, 0.05, rnd)]               # bp, mean-reverting (half-life ~4 days)
+    vals[-1] = 3.0 * sd * 100.0
+    days = DAYS[-500:]
+    meeting = TODAY + dt.timedelta(days=6)
+    ctx = ctx_of({"X": dict(zip(days, vals))}, {"X": {"label": "X", "kind": "bp"}},
+                 path={"spot": TODAY, "base": 0.4, "steps": [(meeting, 0.39)], "day": TODAY.isoformat()})
+    m = qf.mr_monitor(ctx, "pca:X", "pca", "TRY OIS", "X", "bp", 1, days, vals, "bp", [{"key": "X", "name": "X", "weight": 1.0}],
+                      lambda live: vals[-1], pkg="rate")
+    m.score({}, {})
+    sg = qf.make_signal(m, cfg(), "10:00")
+    assert sg["direction"] == -1 and sg["z"] > 2
+    r = qf.rationale(ctx, m, sg, cfg())
+    sm = r["summary"]
+    a = sorted(dt.date.fromisoformat(x["day"]) for x in r["analogs"])
+    assert sm["n"] == qf.ANALOG_K and len(a) == qf.ANALOG_K
+    assert all(days.index(y.isoformat()) - days.index(x.isoformat()) >= qf.ANALOG_GAP for x, y in zip(a, a[1:]))  # a week apart
+    assert sum(x["features"][0] for x in r["analogs"]) / len(a) > 1.0                       # days that sat high too
+    assert sm["share"] >= 0.7 and sm["mean"] > 0 and sm["hold"] == round(sg["hold"])   # ... and came back after
+    inv = r["invalidation"]
+    assert inv[0].startswith("Stop: seviye") and any("Rejim trende dönerse" in x for x in inv)
+    assert any(x.startswith("PPK toplantısı %s ufkun içinde" % meeting.strftime("%d.%m.%y")) for x in inv)
+
+
 def test_classic_and_pca_weighted_packages_with_their_exposures():
     # three tenors, known loadings (PC1 not flat: the short end moves more) and variances (σ 10, 4, 2 bp a day)
     vec = [[0.62, 0.58, 0.53], [-0.70, 0.05, 0.71], [0.35, -0.81, 0.47]]
@@ -1247,6 +1273,10 @@ def test_quant_http_api(seeded):
         assert client.get("/api/quant/corr").json()["corr"]["matrices"]
         assert client.get("/api/quant/nonsense").status_code == 400
         assert client.get("/api/quant/signal", params={"id": "yok"}).status_code == 400
+        one = client.get("/api/quant/signal", params={"id": "pca:OIS:2Y"}).json()
+        why = one["rationale"]
+        assert why["summary"]["n"] == 10 and len(why["analogs"]) == 10 and why["invalidation"][0].startswith("Stop")
+        assert one["signal"]["thesis"] and one["signal"]["gates"] and "exp_pnl" in one["signal"]
         assert client.post("/api/quant/settings", json={"values": {"entry_z": "9"}}).status_code == 400
         res = client.post("/api/quant/settings", json={"values": {"entry_z": "2.2"}})
         assert res.status_code == 200 and res.json()["values"]["entry_z"] == 2.2

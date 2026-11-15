@@ -289,6 +289,41 @@ export class SignalChart {
     if (isNum(info.window)) extra.push('Pencere: ' + info.window + ' gün');
     if (m.note) extra.push(m.note);
     for (const t of extra) box.appendChild(h('div', { class: 'muted qline' }, t));
+    this.fillRationale(d);
+  }
+
+  /** "Gerekçe": the past days most like today and what followed them, and what would undo the signal. */
+  fillRationale(d) {
+    const r = d.rationale;
+    if (!r) return;
+    const box = h('div', { class: 'qrationale' }, h('div', { class: 'ct' }, 'Gerekçe'));
+    const sm = r.summary;
+    const s = d.signal || {};
+    const unit = (sm && sm.unit) || s.pnl_unit || '';
+    if (sm) {
+      box.appendChild(h('div', { class: 'qline' }, 'Bugüne en çok benzeyen ' + sm.n + ' gün (z, eğim, rejim, vol' + ((r.features || []).includes('carry') ? ', carry' : '')
+        + '; en az bir hafta arayla): ' + sm.hits + '\'inde ' + fmt(sm.hold, 0) + ' iş günü sonra işlemin yönünde kâr (' + pct(sm.share) + '); ortalama ' + sgn(sm.mean, 2) + ' '
+        + unit + ', medyan ' + sgn(sm.median, 2) + ', çeyrekler ' + sgn(sm.q25, 2) + ' / ' + sgn(sm.q75, 2) + (sm.carry_in ? ' (carry dahil getiri)' : ' (fiyat hareketi; carry ayrıca)') + '.'));
+      const t = h('table', { class: 'plain qanalogs' }, h('tr', null, ...['Gün', 'z', 'Eğim', 'Rejim (ρ)', 'Vol', (r.features || []).includes('carry') ? 'Carry' : null, 'Uzaklık',
+        'Sonra (' + unit + ')'].filter((x) => x !== null).map((x) => h('th', null, x))));
+      for (const a of r.analogs || []) {
+        const f = a.features || [];
+        const cells = [isoToTr(a.day), sgn(f[0], 2), sgn(f[1], 2), sgn(f[2], 2), sgn(f[3], 2)];
+        if ((r.features || []).includes('carry')) cells.push(sgn(f[4], 1));
+        cells.push(fmt(a.distance, 2), sgn(a.outcome, 2));
+        t.appendChild(h('tr', { class: isNum(a.outcome) && a.outcome > 0 ? 'ok' : 'fail' }, ...cells.map((c, i) => h('td', { class: i ? 'n' : '' }, c))));
+      }
+      box.appendChild(t);
+    } else if (r.why) {
+      box.appendChild(h('div', { class: 'muted qline' }, r.why));
+    }
+    if ((r.invalidation || []).length) {
+      box.appendChild(h('div', { class: 'ct' }, 'Geçersiz kılanlar'));
+      const ul = h('ul', { class: 'qinvalid' });
+      for (const x of r.invalidation) ul.appendChild(h('li', null, x));
+      box.appendChild(ul);
+    }
+    this.details.appendChild(box);
   }
 }
 
