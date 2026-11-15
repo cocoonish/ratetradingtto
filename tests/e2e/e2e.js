@@ -1538,6 +1538,8 @@ async function shot(page, name) {
 
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists
     console.log('bonds');
+    // (the morning's chat is pasted now: the desk's stale limit a day long while it is read, so its quotes stand fresh)
+    await api(page, 'ayşe yilmaz', 'POST', '/api/broker/settings', { stale_minutes: 1440 });
     await open(page, 'broker');
     await page.fill('#broker-source', 'ICAP');
     await page.fill('#broker-text', '09:14:59 Auction prices:\n15/03/2028.t1   100.650\n10:25:28 15/3/28 550/575\n'
@@ -1560,10 +1562,28 @@ async function shot(page, name) {
       const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
       return { head: head.slice(-7, -1), bond: bond.slice(-7, -1) };          // the dashboard's own columns, on the right (▸ last)
     });
-    check('DİBS RV: the day\'s broker chat next to each bond - bid, ask, the time, the yield of the mid against the screen',
-      rvBroker.head.join('|') === 'Broker bid|Broker ask|Son işlem|Saat|Broker getiri %|Broker − ekran (bp)'
-      && rvBroker.bond[0] === '100,550' && rvBroker.bond[1] === '100,575' && rvBroker.bond[3] === '10:25' && /^3\d,\d\d$/.test(rvBroker.bond[4])
-      && /^[+-]?\d+$/.test(rvBroker.bond[5]), rvBroker);
+    check('DİBS RV: the day\'s broker chat next to each bond - the best bid and ask, whose and how old, the yield of the mid against the screen',
+      rvBroker.head.join('|') === 'Broker bid|Broker ask|Son işlem|Kimde · yaş|Broker getiri %|Broker − ekran (bp)'
+      && rvBroker.bond[0] === '100,550' && rvBroker.bond[1] === '100,575' && /^ICAP · (şimdi|\d+ dk|\d+ sa \d+ dk)$/.test(rvBroker.bond[3])
+      && /^3\d,\d\d$/.test(rvBroker.bond[4]) && /^[+-]?\d+$/.test(rvBroker.bond[5]), rvBroker);
+    // the board's rules there too: a quote older than the desk's stale limit (10 minutes) never looks current - greyed, "bayat" with
+    // its broker and age, and no yield nor distance from the screen of it
+    const rvHalfHourAgo = new Date(Date.now() - 30 * 60000);
+    if (rvHalfHourAgo.toDateString() === new Date().toDateString()) {      // (just after midnight there was no half an hour ago today)
+      await api(page, 'ayşe yilmaz', 'POST', '/api/broker/settings', { stale_minutes: 10 });
+      await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: rvHalfHourAgo.toTimeString().slice(0, 8) + ' 16/4/31 94.000/94.200', source: 'BGC' });
+      await open(page, 'broker');
+      await open(page, 'dibs');
+      const rvStale = await page.evaluate(() => {
+        const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[0] || {}).textContent === 'TRT160431T35');
+        const cells = tr ? [...tr.children].slice(-7, -1) : [];
+        return { text: cells.map((td) => td.textContent), grey: cells.map((td) => td.classList.contains('stale')) };
+      });
+      check('... a quote half an hour old: greyed, "bayat" with its broker and age, no yield and no distance from the screen',
+        rvStale.text[0] === '94,000' && rvStale.text[1] === '94,200' && rvStale.grey[0] && rvStale.grey[1] && rvStale.grey[3]
+        && /^bayat · BGC · 3\d dk$/.test(rvStale.text[3]) && rvStale.text[4] === 'bayat' && rvStale.text[5] === '', rvStale);
+      // (the limit stays the desk's 10 minutes: what follows reads the levels, a stale one shows its level too, greyed)
+    }
     // a bond added from the catalog of the desk's list
     const rvIsins = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent).filter((t) => /^TR/.test(t || '')));
     const rvBefore = await rvIsins();

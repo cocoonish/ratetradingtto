@@ -127,16 +127,27 @@ export async function openBondCard(ctx, isin) {
     if (d.repo_note) m.body.appendChild(h('p', { class: 'muted', id: 'card-repo-note' }, 'İma O/N repo: ' + d.repo_note));
   }
   if (d.board) {
+    // the Broker Chat board's rules: the best fresh bid / offer; a stale one greyed, its broker and age beside it
     const imp = d.board.implied || {};
-    section('Broker Chat · bugün', table(['', 'Bid', 'Ask', 'Son işlem', 'Saat', 'Getiri (ima)'],
-      [['Tahta', d.board.bid, d.board.ask, d.board.last, d.board.time,
-        [imp.bid, imp.ask].some((v) => typeof v === 'number') ? px(imp.bid, 'yld') + ' / ' + px(imp.ask, 'yld') : px(imp.last, 'yld')]], 'nums'));
+    const stale = d.board.stale || {};
+    const tips = d.board.tips || {};
+    const cell = (k, cls) => h('td', { class: (cls || '') + (stale[k] ? ' soft stale' : ''), title: tips[k] || null }, d.board[k] || '');
+    section('Broker Chat · bugün', table(['', 'Bid', 'Ask', 'Son işlem', 'Kimde · yaş', 'Getiri (ima)'],
+      [['Tahta', cell('bid'), cell('ask'), cell('last'), cell('who', 'l'),
+        [imp.bid, imp.ask].some((v) => typeof v === 'number') ? px(imp.bid, 'yld') + ' / ' + px(imp.ask, 'yld') : px(imp.last, 'yld')]], 'nums', [0, 4]));
   }
   if (d.chat && d.chat.length) {
-    m.body.appendChild(table(['Saat', 'Kim', 'Mesaj', 'Olay', 'Bid', 'Ask', 'Fiyat'],
+    // a quote that no longer stands (said again, withdrawn, traded away, before a reset) or is stale: greyed
+    const STATE = { fresh: 'geçerli', stale: 'bayat', gone: 'geçmiş' };
+    const TIP = { fresh: 'Tahtada duruyor', stale: 'Tahtada duruyor ama bayat: en iyi fiyat sayılmaz',
+      gone: 'Artık durmuyor: sonra yeni kota, geri çekildi, işlem gördü ya da tahta sıfırlandı' };
+    const t = table(['Saat', 'Kim', 'Mesaj', 'Olay', 'Bid', 'Ask', 'Fiyat', 'Durum'],
       d.chat.map((q) => [q.time, q.who, h('td', { class: 'l said', title: q.raw }, q.raw),
         (EVENT_TEXT[q.event] || q.event) + (q.event === 'trade' && SIDE[q.side] ? ' · ' + SIDE[q.side] : ''),
-        px(q.bid, q.unit), px(q.ask, q.unit), px(q.price, q.unit)]), 'nums chat', [0, 1, 2, 3]));
+        px(q.bid, q.unit), px(q.ask, q.unit), px(q.price, q.unit),
+        q.state ? h('td', { class: 'l', title: TIP[q.state] }, STATE[q.state] + (q.age ? ' · ' + q.age : '')) : '']), 'nums chat', [0, 1, 2, 3, 7]);
+    d.chat.forEach((q, i) => { if (q.state === 'stale' || q.state === 'gone') t.rows[i + 1].classList.add('soft'); });
+    m.body.appendChild(t);
   }
   if (d.tape && d.tape.length) {
     section('Bugünün işlemleri', table(['Saat', 'Fiyat', 'Getiri %', 'Taraf', 'Valör', 'Kim', 'Not'],

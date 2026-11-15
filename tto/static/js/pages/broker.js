@@ -242,6 +242,21 @@ function kindText(q) {
   return (KIND[q.kind] || q.kind || '') + (q.unit === 'bp' ? ' (bp)' : '');
 }
 
+/**
+ * The board row's implied rate: from the best FRESH quotes only, else from a fresh last trade - a stale quote never
+ * looks current here either (the bond pages follow the same rule); nothing fresh: empty.
+ */
+function boardImpliedText(r) {
+  const m = r.implied;
+  if (!m || m.kind === 'switch') return impliedText(r) || impliedText(r, true);
+  const fresh = typeof m.best_bid === 'number' || typeof m.best_ask === 'number';
+  if (fresh) return impliedText({ implied: Object.assign({}, m, { bid: m.best_bid, ask: m.best_ask, best_bid: m.best_bid, best_ask: m.best_ask }) });
+  if (r.last_stale === false && typeof m.last === 'number') {
+    return impliedText({ implied: Object.assign({}, m, { bid: undefined, ask: undefined, best_bid: undefined, best_ask: undefined }) }, true);
+  }
+  return '';
+}
+
 /** The TRY rate an FX swap quote in points stands for: "31,31 / 31,67" (bid / ask), or the trade's / the last one's. */
 function impliedText(q, last) {
   const m = q.implied;
@@ -717,7 +732,7 @@ export class BrokerPage {
         diff(r.best_bid_diff, r.unit === 'yld' ? r.best_bid_diff < 0 : r.best_bid_diff > 0, r.unit),
         diff(r.best_ask_diff, r.unit === 'yld' ? r.best_ask_diff > 0 : r.best_ask_diff < 0, r.unit),
         { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
-        r.implied ? { t: impliedText(r) || impliedText(r, true), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' },
+        r.implied ? { t: boardImpliedText(r), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' },
         { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
         { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }]);
       for (const b of houses(r)) {

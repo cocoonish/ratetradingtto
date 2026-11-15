@@ -3123,12 +3123,27 @@ class Service(object):
         return said
 
     @staticmethod
+    def _age_text(s: Any) -> str:
+        """How old a quote is, as the Broker Chat board says it: "şimdi", "7 dk", "1 sa 5 dk"."""
+        if type(s) is not float:
+            return ""
+        if s < 60:
+            return "şimdi"
+        m = int(s // 60)
+        return "%d dk" % m if m < 60 else "%d sa %d dk" % (m // 60, m % 60)
+
+    @staticmethod
     def _bond_cells(q: Optional[Dict[str, Any]], loc) -> List[Dict[str, Any]]:
-        """Bid, ask, last trade (or a level said without a side, soft) and the time of the last word of a bond on
-        the board - four cells, empty for a bond nobody spoke of."""
+        """A bond of today's Broker Chat board in four cells - empty for a bond nobody spoke of - by the board's rules:
+        the brokers' best fresh bid and ask (a quote withdrawn, traded away or said before a reset is gone), the last
+        trade (or a level said without a side, soft) and whose the bid and ask are and how old (``Kimde · yaş``).  A
+        stale quote is never shown as current: a side with stale quotes only shows the freshest of them greyed, "bayat"
+        with its broker and age beside it.  A bond with no quote standing has the time of its last word there; a board
+        of a day gone by (no clock) the times instead of the ages."""
         if q is None:
             return [{"t": "", "k": ""} for _ in range(4)]
         unit = q.get("unit") or "px"
+        age_text = Service._age_text
 
         def lvl(v: Any, extra: str = "", cls: str = "") -> Dict[str, Any]:
             if type(v) is not float:
@@ -3138,24 +3153,63 @@ class Service(object):
                 cell["cls"] = cls
             return cell
 
+        def ago(stamp: Any, age: Any) -> str:
+            return age_text(age) if type(age) is float else str(stamp or "")[11:16]
+
+        cells: List[Dict[str, Any]] = []
+        shown: Dict[str, Tuple[str, str, bool, Any]] = {}                       # side -> (house, age, stale, when)
+        for side, name in (("bid", "bid"), ("ask", "offer")):
+            v = q.get("best_" + side)
+            if type(v) is float:
+                by, when, age = q.get("best_" + side + "_by") or "kaynaksız", q.get("best_" + side + "_time"), q.get("best_" + side + "_age")
+                shown[side] = (by, ago(when, age), False, age)
+                cells.append(dict(lvl(v), tip="En iyi %s: %s · %s%s" % (name, by, str(when or "")[11:19],
+                                                                       " (%s önce)" % age_text(age) if type(age) is float else "")))
+                continue
+            stale = [b for b in q.get("brokers") or [] if type(b.get(side)) is float and b.get(side + "_stale")]
+            if not stale:
+                cells.append({"t": "", "k": ""})
+                continue
+            b = max(stale, key=lambda x: x.get(side + "_time") or "")             # the freshest of the stale ones
+            shown[side] = (b["by"] or "kaynaksız", ago(b.get(side + "_time"), b.get(side + "_age")), True, b.get(side + "_age"))
+            cells.append(dict(lvl(b[side], "", "stale soft"), tip="Bayat, en iyi sayılmaz: %s %s · %s önce – taze %s yok"
+                              % (b["by"] or "kaynaksız", lvl(b[side])["t"], age_text(b.get(side + "_age")), name)))
         last = lvl(q.get("last"), " · biz" if q.get("last_by") == "biz" else "",
                    "buy" if q.get("last_side") == "ask" else ("sell" if q.get("last_side") == "bid" else ""))
-        if type(q.get("last")) is not float and type(q.get("level")) is float:
+        if type(q.get("last")) is float:
+            last["tip"] = "Son işlem: %s%s" % (str(q.get("last_time") or "")[11:19],
+                                                " · " + q["last_src"] if q.get("last_src") and q.get("last_by") != "biz" else "")
+        elif type(q.get("level")) is float:
             last = dict(lvl(q["level"], "", "soft"), tip="Seviye (işlem değil): " + (q.get("said") or ""))
         times = [x for x in (q.get("bid_time"), q.get("ask_time"), q.get("last_time"), q.get("level_time")) if x]
-        return [lvl(q.get("bid")), lvl(q.get("ask")), last,
-                {"t": max(times)[-8:-3] if times else "", "k": "s", "tip": max(times) if times else ""}]
+        if not shown:
+            who = {"t": max(times)[-8:-3] if times else "", "k": "s", "al": "c",
+                   "tip": "Duran kota yok · chat'te son söz: " + max(times) if times else ""}
+        else:
+            (b1, a1, s1, g1), (b2, a2, s2, g2) = shown.get("bid", shown.get("ask")), shown.get("ask", shown.get("bid"))
+            if (b1, s1) == (b2, s2):
+                older = max((g for g in (g1, g2) if type(g) is float), default=None)
+                text = ("bayat · " if s1 else "") + b1 + " · " + (age_text(older) if older is not None else a1)
+            else:
+                text = " / ".join(("bayat " if st else "") + by + " " + ag for by, ag, st, _ in (shown[x] for x in ("bid", "ask") if x in shown))
+            who = {"t": text, "k": "s", "al": "c", "cls": "who" + (" stale soft" if all(x[2] for x in shown.values()) else ""),
+                   "tip": "\n".join("%s: %s · %s%s" % ("Bid" if x == "bid" else "Offer", shown[x][0], shown[x][1], " (bayat, en iyi sayılmaz)" if shown[x][2] else "")
+                                    for x in ("bid", "ask") if x in shown)}
+        return cells + [last, who]
 
-    _BOARD_HEADS = [("Broker bid", "Broker Chat tahtasında bugün duran bid (bono / kuponsuzda getiri)"),
-                    ("Broker ask", "Broker Chat tahtasında bugün duran offer"),
+    _BOARD_HEADS = [("Broker bid", "Broker Chat tahtasındaki en iyi taze bid (bono / kuponsuzda getiri); taze bid yoksa en yeni bayat "
+                                   "bid soluk – en iyi sayılmaz. Geri çekilen, işlemle verilen ve tahta sıfırlanınca kalkan kota yok"),
+                    ("Broker ask", "Broker Chat tahtasındaki en iyi taze offer; taze offer yoksa en yeni bayat offer soluk"),
                     ("Son işlem", "Bugün chat'te geçen son işlem (biz: bizim masanın); işlem yoksa tarafı söylenmemiş son seviye "
                                   "(ihale fiyatı gibi), soluk"),
-                    ("Saat", "Kâğıt için chat'te söylenen son şeyin saati")]
+                    ("Kimde · yaş", "Bid ve offer'ın hangi broker'da olduğu ve kaç dakika önce söylendiği (bayat sınırı masanın, Broker "
+                                    "Chat tahtasında); bayatsa soluk. Duran kota yoksa kâğıt için chat'te söylenen son şeyin saati")]
 
     def _dibs_broker_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
-        """The day's broker chat next to the DİBS RV table: per bond the bid, the ask and the last trade where the
-        Broker Chat board has them (resets applied), the time of the last word, the yield the broker mid stands
-        for and how far it is from the screen's yield (bp; + : the brokers see it cheaper than the screen)."""
+        """The day's broker chat next to the DİBS RV table, by the Broker Chat board's rules (:meth:`_bond_cells`):
+        per bond the brokers' best fresh bid and ask, the last trade, whose the quotes are and how old, the yield
+        the mid of the fresh quotes stands for and how far it is from the screen's yield (bp; + : the brokers see it
+        cheaper than the screen).  Of stale quotes only there is no yield and no distance - "bayat" says so."""
         sheet = "DİBS RV"
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows or sheet not in book.model.sheet_index:
@@ -3165,10 +3219,12 @@ class Service(object):
         self._rv_quote_marks(book, calc, si, data, loc)
         said = self._board_bonds(user)
         mkt = self._broker_market(user) if said else None
+        stale_min = self._broker_stale_minutes()
         heads = self._BOARD_HEADS + [
-            ("Broker getiri %", "Broker orta fiyatının ima ettiği getiri: ekran getirisi − (fiyat − ekran fiyatı) / (ekran fiyatı · mod. süre); "
-                                "bonoda kotanın kendisi"),
-            ("Broker − ekran (bp)", "Broker orta getirisi − ekran getirisi (DİBS RV): + ise brokerlar kâğıdı ekrandan ucuz görüyor")]
+            ("Broker getiri %", "Brokerların en iyi taze bid / offer ortasının ima ettiği getiri: ekran getirisi − (fiyat − ekran fiyatı) / "
+                                "(ekran fiyatı · mod. süre); bonoda kotanın kendisi. Yalnız taze kotadan (taze kota yoksa taze son işlemden)"),
+            ("Broker − ekran (bp)", "Broker orta getirisi − ekran getirisi (DİBS RV): + ise brokerlar kâğıdı ekrandan ucuz görüyor. "
+                                    "Yalnız taze kotadan")]
         for i, r in enumerate(rnums):
             if r == 4:
                 rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in heads])
@@ -3181,15 +3237,16 @@ class Service(object):
                 rows[i].extend([{"t": "", "k": ""} for _ in heads])
                 continue
             unit = q.get("unit") or "px"
-            # the yield of the mid (of one side when only one stands; of the last trade when no side stands)
+            # the yield of the mid of the brokers' best fresh bid and offer (of one side when only one stands; of the
+            # last trade - or level - when no side stands, and it is fresh itself): nothing stale goes into it
             imp = q.get("implied") or {}
+            fresh = [k for k in ("last", "level") if type(q.get(k)) is float and not q.get(k + "_stale")]
             if unit == "yld":
-                sides = [q[k] for k in ("bid", "ask") if type(q.get(k)) is float] or \
-                    [q[k] for k in ("last", "level") if type(q.get(k)) is float][:1]
+                sides = [q[k] for k in ("best_bid", "best_ask") if type(q.get(k)) is float] or [q[k] for k in fresh][:1]
                 screen = (self._bond_screen(mkt, q["isin"]) or {}).get("yield")
             else:
-                sides = [imp[k] for k in ("bid", "ask") if type(imp.get(k)) is float] or \
-                    [imp[k] for k in ("last", "level") if type(imp.get(k)) is float][:1]
+                sides = [imp[k] for k in ("best_bid", "best_ask") if type(imp.get(k)) is float] or \
+                    [imp[k] for k in fresh if type(imp.get(k)) is float][:1]
                 screen = imp.get("screen_yield")
             mid = sum(sides) / len(sides) if sides else None
             gap = (mid - screen) * 100.0 if mid is not None and type(screen) is float else None
@@ -3202,6 +3259,11 @@ class Service(object):
                 if sq["stale"]:                              # the screen's yield is no live quote's
                     gap_cell = self._soft(gap_cell, "Ekranda iki taraflı canlı kota yok (%s): ekran getirisi bu fiyattan" % sq["status"])
             mid_cell = {"t": numfmt.format_value(mid, "0.00", loc), "v": mid, "k": "n"} if mid is not None else {"t": "", "k": ""}
+            has_fresh = bool(fresh) or any(type(q.get(k)) is float for k in ("best_bid", "best_ask"))
+            if mid is None and not has_fresh and (q.get("brokers") or any(type(q.get(k)) is float for k in ("last", "level"))):
+                # what the brokers said is all stale: no yield, no distance from the screen - said so
+                mid_cell = {"t": "bayat", "k": "s", "al": "c", "cls": "stale soft",
+                            "tip": "Taze broker kotası yok (bayat sınırı %d dk): getiri ve ekran farkı yalnız taze kotadan" % stale_min}
             rows[i].extend(self._bond_cells(q, loc) + [mid_cell, gap_cell])
         # ▸: the bond's card
         for i, r in enumerate(rnums):
@@ -3485,19 +3547,44 @@ class Service(object):
         board = self._board_bonds(user).get(code)
         out["board"] = None
         if board is not None:
+            # the board's rules: the best fresh bid and offer, a stale one greyed with its broker and age, the yields
+            # of the fresh ones only
             cells = self._bond_cells(board, loc)
-            out["board"] = {"bid": cells[0]["t"], "ask": cells[1]["t"], "last": cells[2]["t"], "time": cells[3]["t"],
-                            "implied": {k: v for k, v in (board.get("implied") or {}).items() if k in ("bid", "ask", "last", "screen_yield")}}
+            imp = board.get("implied") or {}
+            implied = {k: v for k, v in (("bid", imp.get("best_bid")), ("ask", imp.get("best_ask")),
+                                         ("last", imp.get("last") if not board.get("last_stale") else None)) if type(v) is float}
+            if implied and type(imp.get("screen_yield")) is float:
+                implied["screen_yield"] = imp["screen_yield"]
+            out["board"] = {"bid": cells[0]["t"], "ask": cells[1]["t"], "last": cells[2]["t"], "who": cells[3]["t"],
+                            "stale": {k: "stale" in (c.get("cls") or "") for k, c in zip(("bid", "ask", "last", "who"), cells)},
+                            "tips": {k: c.get("tip") or "" for k, c in zip(("bid", "ask", "last", "who"), cells)},
+                            "implied": implied}
         today = self.today_iso()
         lines = [q for q in self.store.broker_quotes(today, today) if q.get("ok") and q.get("isin") == code]
         people = self._people()
+        # each quote line of the chat: does it still stand on the board (fresh, or stale), or is it gone - said again,
+        # withdrawn, traded away, or before a reset
+        stands: Dict[Any, bool] = {}
+        for b in (board or {}).get("brokers") or []:
+            for side in ("bid", "ask"):
+                if b.get(side + "_id") is not None:
+                    stands[b[side + "_id"]] = stands.get(b[side + "_id"], True) and bool(b.get(side + "_stale"))
+        now = _dt.datetime.now()
         out["chat"] = []
         for q in lines:
             source, party = self._who(people, q, q.get("source") or "", q.get("party") or "")
+            state = None
+            if q.get("event") == "quote":
+                if party == "biz":
+                    mine = board is not None and q.get("id") is not None and q["id"] in (board.get("our_bid_id"), board.get("our_ask_id"))
+                    state = ("stale" if board.get("our_stale") else "fresh") if mine else "gone"
+                else:
+                    state = ("stale" if stands[q["id"]] else "fresh") if q.get("id") in stands else "gone"
             out["chat"].append({"time": q.get("time"), "who": ("Biz" if party == "biz" else (source or "Broker"))
                                 + (" · " + q["sender"] if q.get("sender") else ""), "raw": q.get("raw") or "",
                                 "event": q.get("event"), "side": q.get("side"), "bid": q.get("bid"), "ask": q.get("ask"),
-                                "price": q.get("price"), "unit": q.get("unit")})
+                                "price": q.get("price"), "unit": q.get("unit"), "state": state,
+                                "age": self._age_text(bc.line_age(q, now)) if state in ("fresh", "stale") else ""})
         out["tape"] = self._dibs_tape(user, loc, code)
         return out
 
@@ -4443,7 +4530,7 @@ class Service(object):
     def _bond_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
         """The yield a bond's price quote stands for, from the DİBS RV screen: yield − (price − screen price) /
         (screen price · modified duration) (``implied``, in per cent; ``kind`` "bond")."""
-        items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "level")) for r in board or ()]
+        items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "level", "best_bid", "best_ask")) for r in board or ()]
         if not any(q.get("product") == "DIBS" and q.get("unit") == "px" for q, _ in items):
             return
         book = self.books.get("tto")

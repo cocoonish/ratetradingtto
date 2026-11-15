@@ -4,6 +4,7 @@ shown next to it, and the tables that grow (Bulk Bond, the 100-row bulk forward)
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pytest
 from starlette.testclient import TestClient
@@ -307,26 +308,32 @@ def test_the_desks_bond_chat_is_read_against_the_screen(svc):
     assert (q["event"], q["side"], q["price"]) == ("trade", "bid", 100.4) and "standing" in q["flags"]
 
 
+AGE = r"(şimdi|\d+ dk|\d+ sa \d+ dk)"
+
+
 def test_the_dibs_rv_table_shows_the_days_broker_chat(tmp_path):
     s = make_service(tmp_path)
     try:
         u = s.login("Tahvil Masa")["user"]
+        s.broker_settings(u, 1440)                            # the morning's chat is fresh whenever this runs (staleness: below)
         s.broker_add(u, CHAT, s.today_iso(), source="ICAP")
         board = {r["isin"]: r for r in s.broker(u)["board"] if r.get("isin")}
         assert (board["TRT150328T24"]["bid"], board["TRT150328T24"]["ask"], board["TRT150328T24"]["last"]) == (100.4, 100.475, 100.4)
+        # the board's best: "mar28 given" hit the 100.400 bid - it no longer stands
+        assert (board["TRT150328T24"]["best_bid"], board["TRT150328T24"]["best_ask"], board["TRT150328T24"]["best_ask_by"]) == (None, 100.475, "ICAP")
         panel = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")
         data = panel["data"]
-        assert data["c"][-7:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Broker getiri %", "Broker − ekran (bp)", "Kart"]
+        assert data["c"][-7:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Broker getiri %", "Broker − ekran (bp)", "Kart"]
         assert data["added"] == 7 and panel["action"] == "add-isin" and panel["add"]["ref"] == "DİBS RV!A5:A54" and panel["card"] == "bond"
         rows = {row[0]["t"]: [c.get("t") for c in row[-7:-1]] for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t")}
         assert all(row[-1]["t"] == "▸" and row[-1]["tip"] == "Kâğıt kartı: " + row[0]["t"]
                    for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t"))
-        assert rows["TRT150328T24"][:4] == ["100,400", "100,475", "100,400", "14:13"]
-        assert rows["TRT160431T35"][:3] == ["94,100", "94,200", "94,100"]
-        assert rows["TRB100227T13"][2:4] == ["31,40", "09:14"]                    # an auction level, not a trade
+        assert rows["TRT150328T24"][:3] == ["", "100,475", "100,400"] and re.fullmatch("ICAP · " + AGE, rows["TRT150328T24"][3])
+        assert rows["TRT160431T35"][:3] == ["", "94,200", "94,100"]               # "16/4/31 100 given": the bid went with the trade
+        assert rows["TRB100227T13"][2:4] == ["31,40", "09:14"]                    # an auction level, not a trade: no quote, its time
         gap = next(c for row, r in zip(data["rows"], data["r"]) if row[0].get("t") == "TRT150328T24" for c in row[-2:-1])
         imp = board["TRT150328T24"]["implied"]
-        assert gap["v"] == pytest.approx(((imp["bid"] + imp["ask"]) / 2 - imp["screen_yield"]) * 100.0)
+        assert gap["v"] == pytest.approx((imp["best_ask"] - imp["screen_yield"]) * 100.0)          # of the fresh offer alone
         assert all(not any(v) for k, v in rows.items() if k not in {b for b in board})   # bonds nobody spoke of: empty
         # the export keeps to the sheet's own columns
         hdr = auth(s, u)
@@ -498,7 +505,7 @@ def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
         main = view["panels"][1]
         assert main["title"] == "Valörler · T0 / T1 / T2"
         assert main["card"] == "bond" and main["add"]["ref"] == "DİBS RV!A5:A54" and main["add"]["name"] == "dibs"
-        assert main["data"]["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Kart"]
+        assert main["data"]["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Kart"]
         assert [p["id"] for p in s.view(u, "dibslive", show_hidden=True)["panels"]] == ["L0", "L1", "L3", "L2"]
     finally:
         s.stop()
@@ -562,6 +569,7 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
     s = make_service(tmp_path)
     try:
         u = s.login("Kâğıt Kartı")["user"]
+        s.broker_settings(u, 1440)                            # the morning's chat is fresh whenever this runs (staleness: below)
         s.broker_add(u, CHAT, s.today_iso(), source="ICAP")
         card = s.bond_card(u, " trt150328t24 ")
         assert (card["isin"], card["label"], card["kind_text"], card["coupon"], card["maturity"], card["known"]) == (
@@ -572,10 +580,17 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
         assert [(g["cap"], g["src"], g["bid"], g["ask"]) for g in card["live"]] == [
             ("T0", "ISL0", "", ""), ("T1", "ISL1", "100,100", "100,125"), ("T2", "ISLN", "", "")]
         assert [x["name"] for x in card["repo"]] == ["T0→T1 repo %", "T1→T2 repo %", "T0→T1 − TLREF (bp)"] and card["extra"]["src"] == "BGN"
-        assert (card["board"]["bid"], card["board"]["ask"], card["board"]["last"], card["board"]["time"]) == ("100,400", "100,475", "100,400", "14:13")
-        assert card["board"]["implied"]["bid"] > card["board"]["implied"]["ask"]
+        # the board by its rules: the bid hit ("mar28 given") is gone, the offer stands - with its broker and age
+        board = card["board"]
+        assert (board["bid"], board["ask"], board["last"]) == ("", "100,475", "100,400") and re.fullmatch("ICAP · " + AGE, board["who"])
+        assert board["stale"] == {"bid": False, "ask": False, "last": False, "who": False} and "En iyi offer: ICAP · 14:05:26" in board["tips"]["ask"]
+        assert set(board["implied"]) == {"ask", "screen_yield", "last"} and board["implied"]["ask"] < board["implied"]["screen_yield"] + 5
         said = [(q["time"], q["event"]) for q in card["chat"]]
         assert said[0] == ("09:14:59", "level") and ("13:21:38", "trade") in said and all(q["who"].startswith("ICAP") for q in card["chat"])
+        # each quote line: still standing (its offer: "geçerli"), or gone - said again later, withdrawn, traded away
+        state = {q["time"]: (q["state"], q["age"]) for q in card["chat"]}
+        assert state["14:05:26"][0] == "fresh" and re.fullmatch(AGE, state["14:05:26"][1])
+        assert state["10:25:28"] == ("gone", "") and state["10:10:59"] == ("gone", "") and state["13:21:38"] == (None, "")
         assert [(x["time"], x["price"]) for x in card["tape"]] == [("14:13:22", 100.4), ("13:21:38", 100.55)]
         # a bond off the list: what the catalog knows, and nothing else
         off = s.bond_card(u, "TRT280432T14")
@@ -587,6 +602,78 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
         with TestClient(create_app(s)) as client:
             got = client.get("/api/bond/TRT160431T35", headers=hdr).json()
             assert got["label"] == "16.04.31" and got["board"]["last"] == "94,100"
+    finally:
+        s.stop()
+
+
+def test_the_bond_pages_show_the_broker_board_by_its_rules(tmp_path):
+    """DİBS RV, DİBS Trading (the summary and the value dates), Tüm Kâğıtlar and the bond card show the Broker Chat
+    board by its rules: the brokers' best fresh bid and offer with their broker and age; a stale quote never looks
+    current - greyed, "bayat" with its broker and age - and the broker's yield and distance from the screen are of
+    fresh quotes only; a quote withdrawn, traded away or said before a reset is gone."""
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Bayat Kâğıt")["user"]
+        today = s.today_iso()
+        early = dt.datetime.now() - dt.timedelta(minutes=30)
+        if early.date().isoformat() != today:
+            pytest.skip("just after midnight there was no half an hour ago today")
+        at = early.strftime("%H:%M:%S")
+        # 16/4/31: one quote, half an hour old - stale by the desk's 10 minutes; 15/3/28: a fresh one and a better stale one
+        s.broker_add(u, "%s 16/4/31 94.000/94.200" % at, today, "BGC")
+        s.broker_add(u, "%s 15/3/28 100.520/100.560" % at, today, "TULLETT")
+        s.broker_add(u, "15/3/28 100.500/100.600", today, "ICAP")
+        assert s.broker(u)["stale_minutes"] == 10
+
+        def rv(isin):
+            """DİBS RV's broker columns of a bond: bid, ask, last trade, whose and how old, yield, broker − screen."""
+            data = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")["data"]
+            return next(r for r in data["rows"] if r[0].get("t") == isin)[-7:-1]
+
+        def board_cells(view, panel, isin):
+            """The four board columns of a bond on another page."""
+            data = next(p for p in s.view(u, view)["panels"] if p["id"] == panel)["data"]
+            row = next(r for r in data["rows"] if any(c.get("t") == isin for c in r[:3]))
+            first = data["c"].index("Broker bid") if "Broker bid" in data["c"] else len(row) - 5
+            return row[first:first + 4]
+
+        old = rv("TRT160431T35")
+        assert (old[0]["t"], old[1]["t"]) == ("94,000", "94,200") and all("stale" in old[k]["cls"] for k in (0, 1))
+        assert re.fullmatch(r"bayat · BGC · 3\d dk", old[3]["t"]) and "stale" in old[3]["cls"]
+        assert old[0]["tip"].startswith("Bayat, en iyi sayılmaz: BGC 94,000")
+        assert (old[4]["t"], old[5]["t"]) == ("bayat", "")                       # no yield, no distance from the screen of a stale quote
+        new = rv("TRT150328T24")
+        assert (new[0]["t"], new[1]["t"]) == ("100,500", "100,600") and not any("stale" in (new[k].get("cls") or "") for k in (0, 1, 3))
+        assert re.fullmatch(r"ICAP · (şimdi|\d dk)", new[3]["t"])               # TULLETT's better quote is stale: not the best
+        imp = {r["isin"]: r for r in s.broker(u)["board"] if r.get("isin")}["TRT150328T24"]["implied"]
+        assert new[5]["v"] == pytest.approx(((imp["best_bid"] + imp["best_ask"]) / 2 - imp["screen_yield"]) * 100.0)
+        # the same on DİBS Trading (the summary, the value dates) and on Tüm Kâğıtlar
+        for view, panel in (("dibslive", "L0"), ("dibslive", "L1"), ("kagitlar", "U1")):
+            got = board_cells(view, panel, "TRT160431T35")
+            assert [c.get("t") for c in got[:2]] == ["94,000", "94,200"] and "stale" in got[0]["cls"], (view, panel, got)
+            assert re.fullmatch(r"bayat · BGC · 3\d dk", got[3]["t"]), (view, panel, got)
+            assert [c.get("t") for c in board_cells(view, panel, "TRT150328T24")[:2]] == ["100,500", "100,600"], (view, panel)
+        # the card: the board, and each quote line - standing and fresh, standing but stale, gone
+        card = s.bond_card(u, "TRT160431T35")
+        assert (card["board"]["bid"], card["board"]["stale"]["bid"], card["board"]["implied"]) == ("94,000", True, {})
+        assert [(q["state"], bool(re.fullmatch(r"3\d dk", q["age"]))) for q in card["chat"]] == [("stale", True)]
+        card = s.bond_card(u, "TRT150328T24")
+        assert {q["raw"]: q["state"] for q in card["chat"]} == {"15/3/28 100.520/100.560": "stale", "15/3/28 100.500/100.600": "fresh"}
+        assert {"bid", "ask"} <= set(card["board"]["implied"])
+        # traded away: the offer lifted at 100.600 takes every offer at or under it - ICAP's and TULLETT's stale one
+        s.broker_add(u, "15/3/28 100.600 paid", today, "ICAP")
+        new = rv("TRT150328T24")
+        assert (new[0]["t"], new[1]["t"], new[2]["t"]) == ("100,500", "", "100,600") and re.fullmatch(r"ICAP · (şimdi|\d dk)", new[3]["t"])
+        # withdrawn: BGC takes its quote off - nothing of it stands, nothing stale is shown; the line is gone on the card
+        s.broker_add(u, "16/4/31 ref", today, "BGC")
+        old = rv("TRT160431T35")
+        assert [old[k].get("t") for k in (0, 1, 4)] == ["", "", ""] and re.fullmatch(r"\d\d:\d\d", old[3]["t"])
+        assert [q["state"] for q in s.bond_card(u, "TRT160431T35")["chat"] if q["event"] == "quote"] == ["gone"]
+        # a reset of the bond: what was said before it is gone everywhere
+        s.broker_reset(u, today, "DIBS:TRT150328T24")
+        assert not any(c.get("t") for c in rv("TRT150328T24"))
+        card = s.bond_card(u, "TRT150328T24")
+        assert card["board"] is None and {q["state"] for q in card["chat"] if q["event"] == "quote"} == {"gone"}
     finally:
         s.stop()
 
@@ -615,6 +702,7 @@ def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
     try:
         u = s.login("Kota Bakan")["user"]
         uk = user_key(u)
+        s.broker_settings(u, 1440)                            # the morning's chat is fresh whenever this runs
         s.broker_add(u, CHAT, s.today_iso(), source="ICAP")
         sec, old = "TRT150328T24 @ISL1 ISIN", "TRT100730T13 @ISL1 ISIN"     # DİBS RV rows 8 and 23, priced on ISL1
         assert (cell(s, "DİBS RV!BT8"), cell(s, "DİBS RV!BT23")) == (sec, old)
@@ -801,7 +889,7 @@ def test_every_bond_is_in_one_place_kind_by_kind(svc):
     assert len(marks) == 77
     assert marks["TRT150328T24"]["t"] == "★" and "on" in marks["TRT150328T24"]["cls"] and marks["TRT150328T24"]["tip"].endswith("TRT150328T24")
     assert marks["TRT130127T11"]["t"] == "☆" and "on" not in marks["TRT130127T11"]["cls"]
-    assert d["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Saat", "Kart"]
+    assert d["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Kart"]
 
 
 def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
