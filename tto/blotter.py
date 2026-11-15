@@ -63,7 +63,8 @@ def pair_of(text: Any) -> str:
 
 
 def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: float, basis: str,
-                  manual: Optional[float] = None, pair: str = "USDTRY", spot: Optional[float] = None) -> Dict[str, Any]:
+                  manual: Optional[float] = None, pair: str = "USDTRY", spot: Optional[float] = None,
+                  spot_date: Optional[float] = None) -> Dict[str, Any]:
     """Price a forward for ``value_date`` exactly as the Forward sheet does.
 
     ``pair``   USDTRY and EURTRY are priced with the sheet's own tables (the value date typed into
@@ -73,6 +74,8 @@ def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: fl
                FWD  -> ``manual`` is the forward outright; the implied TRY rate is backed out
                SP   -> ``manual`` is the swap point (forward − spot, ×10.000): forward = spot + points
     ``spot``   the spot to use for a pair the workbook has none for
+    ``spot_date``  the spot date (serial) of such a pair when it has one of its own (EURUSD: two business days of
+               USD and EUR): its days count from it - from the USDTRY spot date of the sheet otherwise
     """
     if basis not in FWD_BASES:
         raise TradeError("bilinmeyen fiyatlama tipi: %r" % basis)
@@ -154,7 +157,7 @@ def price_forward(book, base_overlay: Dict[Tuple[int, int], Any], value_date: fl
         # a pair without a curve in the workbook: the forward is the one typed, as an outright or as points on a spot
         if basis not in ("FWD", "SP"):
             raise TradeError("%s için fiyat elle girilir: forward kur ya da swap puanı" % pair)
-        days = _num(v("Forward!U27"), "gün sayısı")
+        days = float(value_date) - spot_date if type(spot_date) is float else _num(v("Forward!U27"), "gün sayısı")
         if days <= 0:
             raise TradeError("valör spot tarihinden sonra olmalı")
         cross_bid, cross_ask = (v("Forward!L198"), v("Forward!M198")) if quote_ccy == "TRY" else (None, None)
@@ -229,8 +232,9 @@ def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
     basis = str(payload.get("basis", "RET_MID")).upper()
     manual = payload.get("manual")
     spot = payload.get("spot")
+    own = payload.get("spot_date")
     p = price_forward(book, overlay, vd, basis, manual if type(manual) is float else None, payload.get("pair") or "USDTRY",
-                      spot if type(spot) is float else None)
+                      spot if type(spot) is float else None, own if type(own) is float else None)
     rec = {
         "pair": p["pair"], "dir": direction, "amount": amount, "value_date": vd, "basis": basis,
         "manual": manual if type(manual) is float else None,

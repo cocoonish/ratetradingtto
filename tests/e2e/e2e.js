@@ -152,7 +152,8 @@ async function shot(page, name) {
     check('forward page opens on the calculators, the value date pinned above the tabs',
       tabs0.join(' ') === 'calc! fwd kot ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
     const caps = await page.evaluate(() => [...document.querySelectorAll('.panels.pinned .panel[data-panel="B1"] tr.hd td')].map((td) => td.textContent));
-    check('the value date strip names its cells', caps.join('|') === '|Valör tarihi|USDTRY spot|EURTRY spot|USDTRY spot valörü|EURTRY spot valörü', caps);
+    check('the value date strip names its cells - each spot date with Bloomberg\'s beside it', caps.join('|')
+      === '|Valör tarihi|USDTRY spot|EURTRY spot|USDTRY spot valörü|Bloomberg valörü|EURTRY spot valörü|Bloomberg valörü', caps);
     await page.click('.viewtabs button[data-tab="ret"]');
     const onRet = await panelsOnPage(page);
     check('a tab shows its own tables (and the pinned one)', onRet.join(' ') === 'B1 B19 B20 B26', onRet);
@@ -1530,21 +1531,56 @@ async function shot(page, name) {
     await page.fill('#carry-a', '1');
     await page.click('#carry-save');
     await page.waitForFunction(() => /bootstrap/i.test(document.getElementById('carry-info').textContent), null, { timeout: 20000 });
-    // the holidays: the TR list of both workbooks in one place, the US holidays and the FOMC meetings beside it
+    // the holidays: a list per currency - TRY of both TRY workbooks, USD and EUR of the FX value dates -, one tab each;
+    // the SIFMA holidays and the FOMC meetings beside them
     const holText = await page.inputValue('#holidays-text');
-    check('settings: the TR holidays of both workbooks in one list, with the US holidays and the FOMC meetings',
+    const holTabs = () => page.evaluate(() => [...document.querySelectorAll('#holidays-ccy button')].map((b) => b.textContent + (b.classList.contains('on') ? '!' : '')));
+    check('settings: the TR holidays of both workbooks in one list, with the US (SIFMA) holidays and the FOMC meetings',
       /^01\.01\.2026$/m.test(holText) && /^29\.10\.2026\tCumhuriyet$/m.test(holText) && holText.split('\n').length === 152
       && /FOMC toplantıları: 09\.12\.2026/.test(await page.textContent('#holidays-other')), holText.split('\n').slice(0, 3));
+    check('... one tab per currency, TRY first', (await holTabs()).join(' ') === 'TRY! USD EUR', await holTabs());
     await page.fill('#holidays-text', holText + '\n31.12.2026\tDeneme tatili');
+    await page.click('#holidays-ccy button[data-ccy="USD"]');
+    const usdText = await page.inputValue('#holidays-text');
+    check('... the USD list: the Fed\'s holidays - Thanksgiving, no Good Friday, nothing for 4 July 2026 (a Saturday)',
+      /^26\.11\.2026\tThanksgiving$/m.test(usdText) && !/^03\.04\.2026/m.test(usdText) && !/^0[34]\.07\.2026/m.test(usdText)
+      && usdText.split('\n').length === 212 && /212 USD tatili \(en çok 260\)/.test(await page.textContent('#holidays-info'))
+      && (await holTabs()).join(' ') === 'TRY • USD! EUR' && await page.locator('#holidays-save').isDisabled(), [usdText.split('\n').slice(0, 2), await holTabs()]);
+    await page.locator('.panel[data-panel="holidays"]').scrollIntoViewIfNeeded();
+    await shot(page, '15-settings-usd-holidays');
+    await page.click('#holidays-ccy button[data-ccy="EUR"]');
+    const eurText = await page.inputValue('#holidays-text');
+    check('... the EUR list: TARGET2 - Good Friday and Easter Monday', /^03\.04\.2026\tGood Friday$/m.test(eurText)
+      && /^06\.04\.2026\tEaster Monday$/m.test(eurText) && eurText.split('\n').length === 98, eurText.split('\n').slice(0, 2));
+    await page.fill('#holidays-text', eurText + '\n05.11.2026\tAB deneme');
+    await page.click('#holidays-save');
+    await page.waitForFunction(() => /99 EUR tatili/.test(document.getElementById('holidays-info').textContent), null, { timeout: 20000 });
+    const eurSaved = (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json;
+    check('... a day added to the EUR list is written for everyone (the TRY list typed into is not saved with it)',
+      eurSaved.lists.EUR.items.some((x) => x.date === '2026-11-05' && x.name === 'AB deneme') && eurSaved.lists.TRY.items.length === 152
+      && eurSaved.lists.USD.items.length === 212, [eurSaved.lists.EUR.items.length, eurSaved.lists.TRY.items.length]);
+    await page.click('#holidays-ccy button[data-ccy="TRY"]');
+    check('... back on TRY, what was typed is still there', (await page.inputValue('#holidays-text')).endsWith('31.12.2026\tDeneme tatili')
+      && !(await page.locator('#holidays-save').isDisabled()));
     await page.click('#holidays-save');
     await page.waitForFunction(() => /153 TR tatili/.test(document.getElementById('holidays-info').textContent), null, { timeout: 20000 });
     const holSaved = (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json;
     check('... a day added is written for everyone', holSaved.tr.some((x) => x.date === '2026-12-31' && x.name === 'Deneme tatili'), holSaved.tr.length);
+    await shot(page, '15-settings');
+    // the EURTRY spot date skips the day added to the EUR list (05.11.2026: the 6th); USDTRY and Bloomberg's own stay
+    await open(page, 'forward');
+    await waitCell(page, 'Forward!K2', "t === '06.11.2026'");
+    check('forward: the EURTRY spot date follows the EUR list, USDTRY and Bloomberg\'s dates beside them do not',
+      (await cellText(page, 'Forward!I2')) === '04.11.2026' && (await cellText(page, 'Forward!J2')) === '4.11.2026'
+      && (await cellText(page, 'Forward!L2')) === '5.11.2026', [await cellText(page, 'Forward!I2'), await cellText(page, 'Forward!L2')]);
     // the files' own lists again (nothing stored): the pages after this one see the holidays they always did
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Motor!A361:B523'], shared: true });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'asw', refs: ['ASW!LR2:LR200'], shared: true });
-    check('... and the lists of the files come back', (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json.tr.length === 152);
-    await shot(page, '15-settings');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_TATIL!A5:E264'], shared: true });
+    const holBack = (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json;
+    check('... and the lists of the files come back', holBack.tr.length === 152 && holBack.lists.EUR.items.length === 98
+      && holBack.lists.USD.items.length === 212);
+    await waitCell(page, 'Forward!K2', "t === '05.11.2026'");
 
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists
     console.log('bonds');

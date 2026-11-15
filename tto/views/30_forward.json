@@ -555,14 +555,14 @@
    "scope": "user",
    "group": "forward-spot",
    "kind": "date",
-   "label": "USDTRY spot valörü (boş = Bloomberg)"
+   "label": "USDTRY spot valörü (boş = bugünden 1 iş günü sonrası, TRY ve USD tatilleri atlanır; Bloomberg'inki yanında)"
   },
   {
    "range": "K2",
    "scope": "user",
    "group": "forward-spot",
    "kind": "date",
-   "label": "EURTRY spot valörü (boş = Bloomberg)"
+   "label": "EURTRY spot valörü (boş = bugünden 2 iş günü sonrası, TRY ve EUR tatilleri atlanır; Bloomberg'inki yanında)"
   },
   {
    "range": "AH5:AH6",
@@ -976,7 +976,7 @@
    "id": "B1",
    "type": "table",
    "title": "Valör tarihi ve spot  ·  aşağıdaki tek valörlü tabloların ve hesaplayıcıların tarihi",
-   "range": "C2:K2",
+   "range": "C2:L2",
    "hidden": false,
    "header": {
     "C": "",
@@ -984,7 +984,9 @@
     "F": "USDTRY spot",
     "G": "EURTRY spot",
     "I": "USDTRY spot valörü",
-    "K": "EURTRY spot valörü"
+    "J": "Bloomberg valörü",
+    "K": "EURTRY spot valörü",
+    "L": "Bloomberg valörü"
    }
   },
   {

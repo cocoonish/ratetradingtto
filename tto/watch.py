@@ -50,7 +50,7 @@ Z_DAYS = (20, 60, 250)  # closes a z-score looks back on: a month, a quarter, a 
 RECENT = 65 * 60        # seconds of readings kept for "within the last minutes" (an hour at most, and a margin)
 RECORD_EVERY = 300.0    # seconds between two writes of the day's last values (the watch's own closes)
 HEAT_EVERY = 10.0       # seconds between two readings of the heat map's points
-HOLIDAYS = (361, 523)   # the desk's holidays: Motor!A361:A523 (the days the Forward sheet's value dates skip)
+HOLIDAYS = (361, 523)   # the desk's holidays: Motor!A361:A523 (the TRY list; FX value dates skip the USD / EUR ones too)
 TR_MONTHS = ("Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara")
 
 RV = "DİBS RV"

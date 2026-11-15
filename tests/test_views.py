@@ -25,9 +25,9 @@ def sheets_of(view):
     return {view["sheet"]} | {p["sheet"] for p in view["panels"] if p.get("sheet") and not p.get("borrowed")}
 
 
-#: sheets without a page of their own (the sheet explorer shows them): the order of the pricing sources, which is on
-#: the settings page
-NO_PAGE = {("tto", "EK_KAYNAK")}
+#: sheets without a page of their own (the sheet explorer shows them): the order of the pricing sources and the USD /
+#: EUR holiday lists, which are on the settings page
+NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):

@@ -30,14 +30,20 @@ Two more change formulas of the TRY workbook, each for a reason given where it i
 * ``EK_CARRY``  the carry of the Carry & Roll sheet along a TLREF path of one's choice (the Motor sheet's carry
                 engine is pointed at it; the S1 cells it compounded stay for the OIS sheet's own pricing)
 * ``Motor``     the curve's nodes count their days with the desk's calendar instead of Bloomberg's maturities
+
+And one more for the value dates: ``EK_TATIL`` holds the USD and EUR holiday lists beside the workbook's TRY list,
+and the USDTRY / EURTRY spot dates and the FX tenors counted from them skip the holidays of both currencies of the pair;
+the TRY OIS / TLREF spot date (OIS_MAIN!B2) is the next business day of the TRY list (Bloomberg's dates beside them).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .xl.model import COLS, Model, Sheet, parse_a1, parse_range
 from .xl.tokenizer import index_to_col, to_template
+from .xl.values import date_to_serial
 
 NUM2 = "#,##0.00"
 NUM4 = "#,##0.0000"
@@ -302,6 +308,228 @@ def _borsa_filter(model: Model) -> None:
             bu.patch("%s%d" % (per, r), '=IF(N(%s%d)=0,"",%s%d/%s%d)' % (points, r, points, r, days, r))
 
 
+# ---------------------------------------------------------------------------------------------- holiday calendars
+#: The desk's holiday calendars.  TRY is the workbook's own list (Motor!A361:B523: every WORKDAY of the TRY workbook
+#: reads it - money market, bonds, VİOP, OIS, the meeting calendar - and DİBS ASW keeps a copy of it).  USD and EUR are
+#: lists of the dashboard's own on ``EK_TATIL``, for the FX value dates, which skip the holidays of both currencies of a
+#: pair (USDTRY: TRY and USD, EURTRY: TRY and EUR):
+#:
+#: * USD - the days New York does not settle FX: the Federal Reserve's holidays.  A holiday on a Sunday closes the
+#:   Monday after; one on a Saturday does not close the Friday before.  Good Friday is a settlement day.  (Not the US
+#:   bond market's SIFMA list of the USD workbook, which its SOFR / USD OIS sheets keep using.)
+#: * EUR - TARGET2's closing days: 1 January, Good Friday, Easter Monday, 1 May, 25 and 26 December.
+#:
+#: Both start from these rules for the years ``HOL_YEARS`` - fixed, so that no row moves with today - without the days
+#: that fall on a weekend, and are the desk's to edit (shared inputs, the settings page).  Between the two lists stands
+#: a copy of the TRY list: a pair's joint calendar is two of the columns side by side (WORKDAY takes any block of dates
+#: and leaves the empty cells out; the copy holds 0 for an empty row of the TRY list, a day long gone).
+HOL_SHEET = "EK_TATIL"
+HOL_FIRST = 5                            # the first row of the lists (title, notes and header above)
+HOL_ROWS = 260                           # room of each list: the defaults fill 212 USD and 98 EUR rows
+HOL_LAST = HOL_FIRST + HOL_ROWS - 1
+HOL_YEARS = (2020, 2040)
+#: where each list of the sheet is: (date column, name column)
+HOL_COLS = {"USD": ("B", "A"), "EUR": ("D", "E")}
+HOL_TRY_COL = "C"                        # the copy of the TRY list
+TRY_HOLIDAYS = "Motor!$A$361:$A$523"     # the workbook's TRY list, as its formulas name it
+TRY_HOLIDAY_ROWS = (361, 523)
+#: the currencies the desk keeps a holiday list of
+HOLIDAY_CCYS = ("TRY", "USD", "EUR")
+#: a pair's joint calendar: the holidays of both its currencies, as the formulas name it
+FX_HOLIDAYS = {"USDTRY": "%s!$B$%d:$C$%d" % (HOL_SHEET, HOL_FIRST, HOL_LAST),
+               "EURTRY": "%s!$C$%d:$D$%d" % (HOL_SHEET, HOL_FIRST, HOL_LAST)}
+
+
+def easter(year: int) -> _dt.date:
+    """Easter Sunday of the Gregorian calendar (the anonymous algorithm: Meeus / Jones / Butcher)."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    m = (32 + 2 * e + 2 * i - h - k) % 7
+    n = (a + 11 * h + 22 * m) // 451
+    month, day = divmod(h + m - 7 * n + 114, 31)
+    return _dt.date(year, month, day + 1)
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> _dt.date:
+    """The ``n``-th ``weekday`` (0 = Monday) of a month; ``n`` = -1: the last one."""
+    if n < 0:
+        d = _dt.date(year + month // 12, month % 12 + 1, 1) - _dt.timedelta(days=1)
+        return d - _dt.timedelta(days=(d.weekday() - weekday) % 7)
+    d = _dt.date(year, month, 1)
+    return d + _dt.timedelta(days=(weekday - d.weekday()) % 7 + 7 * (n - 1))
+
+
+def usd_holidays(first: int, last: int) -> List[Tuple[_dt.date, str]]:
+    """The Federal Reserve's holidays of the years ``first`` .. ``last``, in date order: a fixed day on a Sunday is
+    closed on the Monday after ("gözlenen"), one on a Saturday is not closed at all.  Juneteenth from 2022 (the Fed's
+    services were open on 18.06.2021)."""
+    out: List[Tuple[_dt.date, str]] = []
+    for y in range(first, last + 1):
+        fixed = [(_dt.date(y, 1, 1), "Yılbaşı"), (_dt.date(y, 7, 4), "Independence Day"),
+                 (_dt.date(y, 11, 11), "Veterans Day"), (_dt.date(y, 12, 25), "Noel")]
+        if y >= 2022:
+            fixed.append((_dt.date(y, 6, 19), "Juneteenth"))
+        for day, name in fixed:
+            if day.weekday() == 6:
+                out.append((day + _dt.timedelta(days=1), name + " (gözlenen)"))
+            elif day.weekday() < 5:
+                out.append((day, name))
+        out += [(_nth_weekday(y, 1, 0, 3), "Martin Luther King Day"), (_nth_weekday(y, 2, 0, 3), "Presidents' Day"),
+                (_nth_weekday(y, 5, 0, -1), "Memorial Day"), (_nth_weekday(y, 9, 0, 1), "Labor Day"),
+                (_nth_weekday(y, 10, 0, 2), "Columbus Day"), (_nth_weekday(y, 11, 3, 4), "Thanksgiving")]
+    return sorted(out)
+
+
+def eur_holidays(first: int, last: int) -> List[Tuple[_dt.date, str]]:
+    """TARGET2's closing days of the years ``first`` .. ``last`` that fall on a week day, in date order."""
+    out: List[Tuple[_dt.date, str]] = []
+    for y in range(first, last + 1):
+        e = easter(y)
+        for day, name in ((_dt.date(y, 1, 1), "Yılbaşı"), (e - _dt.timedelta(days=2), "Good Friday"),
+                          (e + _dt.timedelta(days=1), "Easter Monday"), (_dt.date(y, 5, 1), "1 Mayıs"),
+                          (_dt.date(y, 12, 25), "Noel"), (_dt.date(y, 12, 26), "Noel (26 Aralık)")):
+            if day.weekday() < 5:
+                out.append((day, name))
+    return sorted(out)
+
+
+def pair_calendar(pair: str) -> Tuple[str, ...]:
+    """The holiday lists an FX value date of ``pair`` skips: those of both its currencies when the desk keeps a list of
+    each (USDTRY, EURTRY, EURUSD); ``()`` for any other pair (whatever rule it had stands)."""
+    a, b = str(pair)[:3].upper(), str(pair)[3:6].upper()
+    return (a, b) if a != b and a in HOLIDAY_CCYS and b in HOLIDAY_CCYS else ()
+
+
+def fx_holidays(model: Model, pair: str) -> str:
+    """The holidays the formulas of ``pair``'s value dates skip: its joint calendar - or the TRY list in a file the
+    holiday sheet does not fit (as before)."""
+    return FX_HOLIDAYS[pair] if HOL_SHEET in model.sheet_index else TRY_HOLIDAYS
+
+
+def _holidays_check(model: Model) -> None:
+    """The TRY list the joint calendars copy is where the workbook keeps it (dates in Motor!A361:A523)."""
+    _need_sheets(model, "Motor")
+    sh = model.sheet("Motor")
+    r1, r2 = TRY_HOLIDAY_ROWS
+    if not any(type(sh.consts.get(parse_a1("A%d" % r))) is float for r in range(r1, r2 + 1)):
+        raise ValueError("Motor!A%d:A%d tatil listesi değil" % (r1, r2))
+    if HOL_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % HOL_SHEET)
+
+
+def _tto_holidays(model: Model) -> None:
+    """``EK_TATIL``: the USD and EUR holiday lists (date and name, the rules' days of ``HOL_YEARS`` to start with) and,
+    between them, the copy of the TRY list that makes the joint calendars of USDTRY and EURTRY."""
+    b = SheetBuilder(model, HOL_SHEET)
+    b.title("A1", "TATİL TAKVİMLERİ  ·  USD (New York · Fed) ve EUR (TARGET2)  ·  FX valörleri paritenin iki para biriminin tatilini de atlar")
+    b.note("A2", "USD: Fed tatilleri - pazara denk gelen tatil pazartesi kapalı, cumartesiye denk gelen tatil için cuma açık; Good "
+                 "Friday USD için iş günü (SIFMA listesi değil: o USD · FOMC sayfasında, SOFR / USD OIS'te kalır). EUR: TARGET2 - 1 Ocak, "
+                 "Good Friday, Easter Monday, 1 Mayıs, 25 ve 26 Aralık. Hafta sonuna düşen günler listede yok.")
+    b.note("A3", "Listeler masanın ortak verisidir, Ayarlar → Tatiller'den düzenlenir. USDTRY valörleri TRY + USD (B:C), EURTRY valörleri "
+                 "TRY + EUR (C:D) tatillerini atlar; C sütunu TRY listesinin (Motor!A361:A523) kopyasıdır. TRY para piyasası, tahvil, "
+                 "VİOP ve OIS tarihleri yalnız TRY listesini kullanır.")
+    b.head("A4", ["USD tatili", "USD tarihi", "TRY tarihi (Motor)", "EUR tarihi", "EUR tatili"])
+    lists = {"USD": usd_holidays(*HOL_YEARS), "EUR": eur_holidays(*HOL_YEARS)}
+    t1, t2 = TRY_HOLIDAY_ROWS
+    for k in range(HOL_ROWS):
+        r = HOL_FIRST + k
+        for ccy, days in lists.items():
+            dcol, ncol = HOL_COLS[ccy]
+            day, name = days[k] if k < len(days) else (None, None)
+            b.input("%s%d" % (dcol, r), float(date_to_serial(day)) if day else None, fmt=DATE)
+            b.input("%s%d" % (ncol, r), name)
+        if t1 + k <= t2:
+            b.set("%s%d" % (HOL_TRY_COL, r), "=N(Motor!$A$%d)" % (t1 + k), fmt=DATE + ";;", color=NOTE_COLOR)
+
+
+#: The FX value dates the workbook counts on the TRY list alone, moved to the pair's joint calendar.  The spot dates of
+#: the Forward sheet were Bloomberg's (``SETTLE_DT``, a date of the day the file was saved when offline): they are the
+#: dashboard's own now, from the desk's lists - USDTRY a business day of both TRY and USD after today, EURTRY two days
+#: that are business days of both TRY and EUR - and Bloomberg's stands beside each, for comparison:
+#: (spot cell, pair, business days after today, cell of Bloomberg's date, its security)
+FX_SPOTS = (("I2", "USDTRY", 1, "J2", "TRY Curncy"), ("K2", "EURTRY", 2, "L2", "EURTRY Curncy"))
+#: the workbook's tenor dates counted from the USDTRY spot date: MASA's forward pricing and broken date, the Forward
+#: sheet's cross forwards (their USDTRY leg) and the days of its XCCY nodes when Bloomberg has none
+FX_DATE_CELLS = (("MASA", "P94:P99"), ("MASA", "C171"), ("Forward", "B200:B205"), ("Forward", "K130:K134"))
+FX_DATE_NAME = "FX valörleri"
+
+
+def spot_date_formula(pair: str) -> str:
+    """The formula of a pair's spot date: ``WORKDAY(TODAY(), lag, joint calendar)``."""
+    lag = next(n for _, p, n, _, _ in FX_SPOTS if p == pair)
+    return "=WORKDAY(TODAY(),%d,%s)" % (lag, FX_HOLIDAYS[pair])
+
+
+def _need_spot_date(model: Model, addr: str) -> None:
+    """A spot date of the Forward sheet: Bloomberg's ``SETTLE_DT`` (the file's) or the dashboard's own (``FX_SPOTS``)."""
+    text = _need_formula(model, "Forward", addr).upper()
+    if "SETTLE_DT" not in text and HOL_SHEET not in text:
+        raise ValueError("Forward!%s spot valörü değil" % addr)
+
+
+def _fx_dates_check(model: Model) -> None:
+    _need_sheets(model, HOL_SHEET, "Forward", "MASA")
+    fw = model.sheet("Forward")
+    for spot, _, _, bbg, sec in FX_SPOTS:
+        _need_formula(model, "Forward", spot, '"%s","SETTLE_DT"' % sec)
+        if parse_a1(bbg) in fw.fml or parse_a1(bbg) in fw.consts:
+            raise ValueError("Forward!%s boş değil" % bbg)
+    for sheet, rng in FX_DATE_CELLS:
+        r1, c1, r2, c2 = parse_range(rng)
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                text = _need_formula(model, sheet, "%s%d" % (index_to_col(c), r), TRY_HOLIDAYS)
+                if "I$2" not in text:
+                    raise ValueError("%s!%s%d USDTRY spot valöründen sayılmıyor" % (sheet, index_to_col(c), r))
+
+
+def _tto_fx_dates(model: Model) -> None:
+    fw = SheetBuilder(model, "Forward")
+    for spot, pair, _, bbg, sec in FX_SPOTS:
+        fw.set(bbg, '=_xll.BDP("%s","SETTLE_DT")' % sec, fmt=DATE, color=NOTE_COLOR)
+        fw.recorded(bbg, recorded_value(model, "Forward", spot))          # offline: the file's, as the spot cell had it
+        fw.set(spot, spot_date_formula(pair), fmt=DATE)
+    for sheet, rng in FX_DATE_CELLS:
+        b = SheetBuilder(model, sheet)
+        r1, c1, r2, c2 = parse_range(rng)
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                addr = "%s%d" % (index_to_col(c), r)
+                b.patch(addr, "=" + formula_of(model, sheet, addr).replace(TRY_HOLIDAYS, FX_HOLIDAYS["USDTRY"]))
+
+
+#: The TRY OIS / TLREF spot date (OIS_MAIN!B2, the workbook's ``SPOTDATE``): the next business day of the TRY list -
+#: TLREF works on a US holiday.  It was Bloomberg's USDTRY settle date (OIS_MAIN!W2, ``TRY Curncy`` ``SETTLE_DT``), an FX
+#: date that skips the US holidays too (25.11.2026: 27.11, where TLREF settles on 26.11); that stands beside it now, for
+#: comparison (K2:L2).  The workbook's OIS, TLREF, meeting, money market and bond dates count from B2; its FX value
+#: dates from Forward!I2.
+OIS_SPOT_NAME = "OIS spot valörü"
+OIS_SPOT_CELLS = ("K2", "L2")            # the caption and Bloomberg's date, right of the OIS page's parameters
+
+
+def _ois_spot_check(model: Model) -> None:
+    _need_sheets(model, "OIS_MAIN", "Motor")
+    _need_formula(model, "OIS_MAIN", "B2", "W2")
+    _need_formula(model, "OIS_MAIN", "W2", '"TRY Curncy","SETTLE_DT"')
+    sh = model.sheet("OIS_MAIN")
+    for addr in OIS_SPOT_CELLS:
+        if parse_a1(addr) in sh.fml or parse_a1(addr) in sh.consts:
+            raise ValueError("OIS_MAIN!%s boş değil" % addr)
+
+
+def _tto_ois_spot(model: Model) -> None:
+    b = SheetBuilder(model, "OIS_MAIN")
+    b.patch("B2", "=WORKDAY(TODAY(),1,%s)" % TRY_HOLIDAYS)
+    caption, date = OIS_SPOT_CELLS
+    b.set(caption, "Bloomberg valörü", like="A2")
+    b.set(date, "=IFERROR(DATE(YEAR($W$2),MONTH($W$2),DAY($W$2)),$W$2)", fmt=DATE, color=NOTE_COLOR, align="center")
+
+
 # ---------------------------------------------------------------------------------------------- TRY workbook
 FWD_SHEET = "EK_FWD"
 FWD_ALL = 4                              # the "Tümü" row: general spreads (bid, ask) and the spot quotes
@@ -332,7 +560,7 @@ def _forward_check(model: Model) -> None:
     _need_formula(model, "MASA", "M60", "OIS_MAIN!$B$2")
     _need_formula(model, "VIOP", "L99")
     _need_formula(model, "VIOP", "L100")
-    _need_formula(model, "Forward", "I2", "SETTLE_DT")
+    _need_spot_date(model, "I2")
     _need_formula(model, "Forward", "I22", "$I$8:$I$21")         # the offshore implied curve's nodes: days in G, bid in I, ask in K
     _need_formula(model, "Forward", "K22", "$K$8:$K$21")
     _need_formula(model, "Forward", "I22", "$G$8:$G$21")
@@ -387,7 +615,7 @@ def _tto_forward(model: Model) -> None:
         f = {"r": r, "g": g}
         if r in months:
             b.set("A%d" % r, "%dM" % months[r], bold=True, align="center")
-            b.input("B%d" % r, "=WORKDAY(EDATE(Forward!$I$2,%d)-1,1,Motor!$A$361:$A$523)" % months[r], fmt=DATE)
+            b.input("B%d" % r, "=WORKDAY(EDATE(Forward!$I$2,%d)-1,1,%s)" % (months[r], fx_holidays(model, "USDTRY")), fmt=DATE)
         else:
             b.set("A%d" % r, "serbest", align="center", color=NOTE_COLOR)
             b.input("B%d" % r, None, fmt=DATE)
@@ -878,17 +1106,17 @@ FR_NODES = {"Offshore": ("Forward!$G$8:$G$21", ("Forward!$J$8:$J$21",), 14, 1),
             "OIS": ("Forward!$N$6:$N$18", ("Forward!$P$6:$P$18",), 13, 1),
             "VİOP": ("Forward!$B$6:$B$17", ("Forward!$D$6:$D$17",), 12, 100),
             "RET": ("Forward!$U$33:$U$47", ("Forward!$W$33:$W$47", "Forward!$X$33:$X$47"), 15, 100)}
-#: the spot date of a pair (Bloomberg's SETTLE_DT, or the date typed there) - a date even when it comes as a text
+#: the spot date of a pair (the Forward sheet's - its joint calendar's, Bloomberg's in a file the holiday sheet does not
+#: fit -, or the date typed there): a date even when it comes as a text
 FR_SPOT = {pair: "IFERROR(DATE(YEAR(%(d)s),MONTH(%(d)s),DAY(%(d)s)),%(d)s)" % {"d": d}
            for pair, d in (("USDTRY", "Forward!$I$2"), ("EURTRY", "Forward!$K$2"))}
 #: the OIS curve of a pair's major currency (days from the pair's spot date, mid %, nodes), as the sheet reads it
 FR_MAJOR = {"USDTRY": ("Forward!$U$7:$U$26", "Forward!$X$7:$X$26", 20),
             "EURTRY": ("Forward!$AA$7:$AA$26", "Forward!$AD$7:$AD$26", 20)}
 FR_REACH = 31          # a curve is read up to a month past its last node; further out it gives no rate (rather than a flat one)
-#: the usual tenors from the USDTRY spot date: days, or months (then the next business day)
+#: the usual tenors from the USDTRY spot date: days, or months (then the next business day of TRY and USD)
 FR_TENORS = (("1W", 7, 0), ("2W", 14, 0), ("1M", 0, 1), ("2M", 0, 2), ("3M", 0, 3), ("6M", 0, 6), ("9M", 0, 9), ("1Y", 0, 12),
              ("18M", 0, 18), ("2Y", 0, 24))
-FR_HOLIDAYS = "Motor!$A$361:$A$523"
 
 #: Input cells an earlier layout of the dashboard's own sheets had and that moved since: a value a user saved in one of
 #: them is dropped when it is loaded (it would land on whatever stands there now).  {book: (range, ...)}
@@ -1078,12 +1306,13 @@ def _tto_fwd_rates(model: Model) -> None:
     b.title("A%d" % t, "TRY FAİZLERİ VADELERE GÖRE  ·  simple zero (ACT/360, %) – offshore, OIS, VİOP ve RET aynı vadede")
     b.head("A%d" % h, ["Vade", "Tarih", "Gün"] + [n + " %" for n in FR_NAMES] + ["Offshore − OIS bp", "VİOP − OIS bp", "RET − OIS bp"])
     spot = FR_SPOT["USDTRY"]
+    hol = fx_holidays(model, "USDTRY")
     dates = [("Valör", "=Forward!$D$2")]
     for label, n_days, months in FR_TENORS:
         if months:
-            dates.append((label, "=WORKDAY(EDATE(%s,%d)-1,1,%s)" % (spot, months, FR_HOLIDAYS)))
+            dates.append((label, "=WORKDAY(EDATE(%s,%d)-1,1,%s)" % (spot, months, hol)))
         else:
-            dates.append((label, "=WORKDAY(%s+%d-1,1,%s)" % (spot, n_days, FR_HOLIDAYS)))
+            dates.append((label, "=WORKDAY(%s+%d-1,1,%s)" % (spot, n_days, hol)))
     dates += [("serbest", None)] * FR_FREE_DATES
     for k, (label, date) in enumerate(dates):
         r = h + 1 + k
@@ -1099,7 +1328,8 @@ def _tto_fwd_rates(model: Model) -> None:
             b.set("%s%d" % ("DEFG"[j], r), '=IFERROR(IF(ISNUMBER($C%d),%s,""),"")' % (r, fr_rate(name, "$C%d" % r)), fmt="0.00")
         for col, src in (("H", "D"), ("I", "F"), ("J", "G")):
             b.set("%s%d" % (col, r), '=IFERROR(IF(OR($%s%d="",$E%d=""),"",($%s%d-$E%d)*100),"")' % (src, r, r, src, r, r), fmt="0")
-    b.note("A%d" % (h + 1 + len(dates)), "Gün ve vadeler USDTRY spot valöründen (ay vadeleri sonraki iş gününe). Faizler eğrilerin mid'i, Forward "
+    b.note("A%d" % (h + 1 + len(dates)), "Gün ve vadeler USDTRY spot valöründen (vade TRY ya da USD tatiline düşerse ikisinin de açık olduğu "
+                                         "sonraki güne). Faizler eğrilerin mid'i, Forward "
                                          "sayfasının kendi düğümlerinden doğrusal: offshore = ICAP ima eğrisi, OIS = TRY OIS simple zero, VİOP = ima "
                                          "eğri, RET = bid / ask ortası. Fark sütunları bp. Bir eğrinin son düğümünden bir aydan uzak vadede faizi yoktur "
                                          "(VİOP yaklaşık 1 yıl, RET 2 yıl). 'serbest' satırlarına tarih yazılabilir.")
@@ -1116,7 +1346,7 @@ def _fwd_eur_check(model: Model) -> None:
     _need_sheets(model, "Forward", "MASA", "OIS_MAIN", "Motor", FWD_SHEET)
     _need_formula(model, "Forward", "F198", '"EURTRY Curncy","BID"')
     _need_formula(model, "Forward", "G198", '"EURTRY Curncy","ASK"')
-    _need_formula(model, "Forward", "K2", "SETTLE_DT")
+    _need_spot_date(model, "K2")
     _need_formula(model, "Forward", "AC27", "$AA$7:$AA$26")
     _need_formula(model, "Forward", "AD7", '"MID"')
     for _, _, src in FWD_DF_SOURCES:
@@ -1163,11 +1393,12 @@ def _tto_fwd_eur(model: Model) -> None:
     months = {r1: 1, r1 + 1: 2, r1 + 2: 3, r1 + 3: 6, r1 + 4: 9, r1 + 5: 12}
     eur_x, eur_y, eur_n = FR_MAJOR["EURTRY"]
     ret_x, ret_bid, ret_ask = "Forward!$U$33:$U$47", "Forward!$W$33:$W$47", "Forward!$X$33:$X$47"
+    hol = fx_holidays(model, "EURTRY")
     for r in range(r1, r2 + 1):
         f = {"r": r, "g": g, "c": c, "h": h}
         if r in months:
             b.set("A%d" % r, "%dM" % months[r], bold=True, align="center")
-            b.input("B%d" % r, "=WORKDAY(EDATE(%s,%d)-1,1,%s)" % (spot, months[r], FR_HOLIDAYS), fmt=DATE)
+            b.input("B%d" % r, "=WORKDAY(EDATE(%s,%d)-1,1,%s)" % (spot, months[r], hol), fmt=DATE)
         else:
             b.set("A%d" % r, "serbest", align="center", color=NOTE_COLOR)
             b.input("B%d" % r, None, fmt=DATE)
@@ -1209,7 +1440,7 @@ def _tto_fwd_eur(model: Model) -> None:
                              "offshore (ICAP) ima TRY faizi − OIS; 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır.")
     b.note("A%d" % (r2 + 2), "Fwd bid = spot bid·(1+TRY bid·g/360)/(1+EUR·g/360), ask tarafı spot ask ve TRY ask ile; g = valör − EURTRY spot "
                              "valörü, EUR faizi EUR OIS eğrisinden. Puan = (fwd − spot)·10000; P/gün = puan/gün. 'Bid/Ask − RET' = aynı valörde "
-                             "RET bid/ask faiziyle çıkan puana fark.")
+                             "RET bid/ask faiziyle çıkan puana fark. Ay vadeleri TRY ya da EUR tatiline düşerse ikisinin de açık olduğu sonraki güne.")
 
     # ---- the way back: EURTRY swap points typed by hand -> implied TRY rate -> spread over the chosen OIS curve
     t = r1 + FWD_BACK - 2
@@ -2707,7 +2938,10 @@ def _tto_viop_roll(model: Model) -> None:
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
-    "tto": ((FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
+    # (the holiday sheet and the FX value dates first: the forward tables below date their tenors on its calendars)
+    "tto": ((HOL_SHEET, _holidays_check, _tto_holidays), (FX_DATE_NAME, _fx_dates_check, _tto_fx_dates),
+            (OIS_SPOT_NAME, _ois_spot_check, _tto_ois_spot),
+            (FWD_SHEET, _forward_check, _tto_forward), (XAU_SHEET, _gold_check, _tto_gold),
             (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
             ("EK_FWD EURTRY", _fwd_eur_check, _tto_fwd_eur),
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),

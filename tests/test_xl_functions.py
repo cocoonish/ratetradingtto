@@ -232,6 +232,28 @@ def test_workday_with_holidays():
     assert ev("WORKDAY(DATE(2026,11,6),1,A1:A1)", cells) == 46336.0
 
 
+def test_workday_on_a_joint_calendar_of_two_lists():
+    """The FX value dates skip the holidays of two lists at once: two columns side by side (EK_TATIL: USD | TRY copy | EUR).
+    The block may hold empty cells, a 0 (the copy of an empty row of the other list), the same day twice and the days in
+    any order; a date written as text counts (as Excel reads it with Turkish settings).  Text that is no date - an empty
+    text included - makes it #VALUE!, as in Excel: the copy column must give numbers."""
+    oct29, oct30, nov11, nov12, nov26, nov27 = 46324.0, 46325.0, 46337.0, 46338.0, 46352.0, 46353.0
+    cells = {"A1": oct29, "A2": 0.0, "A4": oct29,                   # TRY: 29.10.2026 (twice), a 0, empty rows
+             "B1": nov26, "B2": nov11, "B6": oct29}                 # USD: Thanksgiving, Veterans Day - and 29.10 as well
+    assert ev("WORKDAY(DATE(2026,11,25),1,A1:B9)", cells) == nov27                # T+1 on 25.11: Thanksgiving skipped
+    assert ev("WORKDAY(DATE(2026,11,25),1,A1:A9)", cells) == nov26                # (TRY alone: 26.11 is a business day)
+    assert ev("WORKDAY(DATE(2026,10,28),1,A1:B9)", cells) == oct30                # 29.10 (both lists): 30.10
+    assert ev("WORKDAY(DATE(2026,11,10),1,A1:B9)", cells) == nov12                # 11.11 (USD only): 12.11
+    assert ev("WORKDAY(EDATE(DATE(2026,10,26),1)-1,1,A1:B9)", cells) == nov27     # the tenor rule: 1M from 26.10
+    unsorted = {"A1": nov26, "A2": nov11, "A3": nov26, "B5": oct29}
+    assert ev("WORKDAY(DATE(2026,11,25),1,A1:B6)", unsorted) == nov27
+    assert ev("WORKDAY(DATE(2026,11,25),1,A1:A3)", {"A1": "26.11.2026"}) == nov27   # a date as text
+    assert ev("WORKDAY(DATE(2026,11,25),1,A1:A3)", {"A1": "=N(A2)", "A3": nov26}) == nov27    # N() of an empty cell: 0
+    for bad in ("", "Şükran Günü"):
+        res = ev("WORKDAY(DATE(2026,11,25),1,A1:A3)", {"A1": bad, "A2": nov26})
+        assert type(res) is XlError and res.code == "#VALUE!", bad
+
+
 RAMAZAN = {"A1": "=DATE(2027,3,9)", "A2": "=DATE(2027,3,10)", "A3": "=DATE(2027,3,11)"}           # Tue - Thu
 KURBAN = {"A1": "=DATE(2027,5,1)", "A2": "=DATE(2027,5,16)", "A3": "=DATE(2027,5,17)", "A4": "=DATE(2027,5,18)",
           "A5": "=DATE(2027,5,19)"}                                   # 1 May and 16 May fall on a weekend
