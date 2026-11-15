@@ -806,3 +806,76 @@ def test_a_user_with_inputs_of_their_own_follows_the_market_every_few_seconds(tm
         assert cell(svc, "OIS_MAIN!J2", u) == 0.30 and u in eng.users
     finally:
         svc.stop()
+
+
+def test_the_header_and_every_page_are_made_ahead_at_the_lowest_priority(tmp_path):
+    """After the start (the day's turn, a new meeting calendar) the header and every page are made ahead for
+    everybody without inputs of their own - one page at a time at the lowest priority (a request goes first): the
+    first trader of the morning gets them made."""
+    import threading
+    import time as _time
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Sabahın İlki")
+        gate = threading.Event()
+        svc.et.submit_at(svc.et.WRITE, gate.wait, 30)
+        assert svc.warm() and not svc.warm()                     # (one round at a time)
+        header = svc.header_future(u)
+        gate.set()
+        assert header.result(timeout=120)["items"] and svc.warmed == 0       # the request went first
+        t0 = _time.time()
+        while svc.warmed < 1 and _time.time() - t0 < 300:
+            _time.sleep(0.2)
+        assert svc.warmed == 1
+        made = []
+        real = svc._render
+        svc._render = lambda *a: (made.append(a[3]), real(*a))[1]
+        try:
+            for v in svc.views:
+                assert svc.view(u, v["id"])["panels"]
+        finally:
+            del svc._render
+        assert made == []                                        # every page was made already
+    finally:
+        svc.stop()
+
+
+def test_the_days_bloomberg_count_and_answers_are_kept_for_a_restart(tmp_path):
+    """Live: every 30 s (and when the dashboard stops) the day's data points used and the reference answers got are
+    kept in the database; a provider started the same day is given both (a restart does not spend the daily limit
+    again).  Another day's are not given."""
+    import datetime as _d
+    svc = make_service(tmp_path)
+    try:
+        today = _d.date.today().isoformat()
+        answers = [(("BDP", "TRY Curncy", "SETTLE_DT", ()), 46330.0, 1000.0)]
+
+        class Stub(object):
+            def __init__(self):
+                self.got, self.carried = [], None
+
+            def status(self):
+                return {"hits_today": 1234}
+
+            def answers(self, since=0.0):
+                return [a for a in answers if a[2] > since]
+
+            def preload(self, kept):
+                self.got = list(kept)
+
+            def carry_hits(self, n):
+                self.carried = n
+
+        svc.provider = Stub()
+        svc._keep_bloomberg()
+        assert svc.store.get("bbg.hits") == {"day": today, "hits": 1234}
+        assert [(k, v) for k, v, _ in svc.store.bbg_answers(today)] == [(answers[0][0], 46330.0)]
+        fresh = Stub()
+        svc._kept_bloomberg(fresh)
+        assert fresh.carried == 1234 and [(k, v) for k, v, _ in fresh.got] == [(answers[0][0], 46330.0)]
+        svc.store.put("bbg.hits", {"day": "2000-01-01", "hits": 99})
+        old = Stub()
+        svc._kept_bloomberg(old)
+        assert old.carried is None                               # another day's count: not carried
+    finally:
+        svc.stop()

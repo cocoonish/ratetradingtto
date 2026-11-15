@@ -140,3 +140,17 @@ def test_what_the_history_polls_is_kept_until_the_history_changes(store, monkeyp
     bounds = store.hist_bounds()
     bounds["x"] = 1                                            # (a copy: what is kept is not changed by a caller)
     assert store.hist_bounds() == {}
+
+
+def test_bloombergs_answers_of_the_day_are_kept_and_the_days_before_go(store):
+    from tto.xl.values import XlArray
+    key = ("BDS", "TRT150328T24 ISIN", "DES_CASH_FLOW", ())
+    rows = XlArray([[46463.0, 184000.0], [46827.0, 1184000.0]])
+    store.bbg_keep("2026-11-14", [(("BDP", "X", "NAME", ()), "eski", 1.0)])
+    assert store.bbg_keep("2026-11-15", [(key, rows, 1234.5), (("BDP", "TRY Curncy", "SETTLE_DT", ()), 46330.0, 1200.0)]) == 2
+    got = {k: (v, t) for k, v, t in store.bbg_answers("2026-11-15")}
+    assert got[key][0].rows == rows.rows and got[key][1] == 1234.5
+    assert got[("BDP", "TRY Curncy", "SETTLE_DT", ())] == (46330.0, 1200.0)
+    assert store.bbg_answers("2026-11-14") == []                        # another day's: gone
+    store.bbg_keep("2026-11-15", [(key, rows, 2000.0)])                  # the same key again: replaced
+    assert {k: t for k, _, t in store.bbg_answers("2026-11-15")}[key] == 2000.0

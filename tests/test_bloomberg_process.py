@@ -514,3 +514,25 @@ def test_python_m_tto_live_keeps_up_with_a_busy_market(tmp_path):
             proc.kill()
             proc.wait(timeout=30)
         log.close()
+
+
+def test_a_restart_the_same_day_gives_the_helper_the_days_answers_and_count(fake, isolated):
+    """The answers kept from earlier today (and the data points used) are given to the helper: it takes them as
+    answered - the engine has them at once, nothing is asked again - and counts on from there."""
+    fake(securities=3)
+    first = isolated()
+    first.start()
+    settle_dt = bdp_key("TRY Curncy", "SETTLE_DT")
+    first.get_bdp(settle_dt)
+    first.get_bdp(bdp_key("USDTRY Curncy", "BID"))
+    settle(first)
+    kept = first.answers()
+    used = first.status()["hits_today"]
+    assert [k for k, _, _ in kept] == [settle_dt] and used == 2           # (the quote is not kept)
+    again = isolated()
+    again.preload(kept)
+    again.carry_hits(used)
+    again.start()
+    assert again.get_bdp(settle_dt) == "4.11.2026"                         # at once
+    settle(again)
+    assert again.status()["hits_today"] == used                            # not asked again

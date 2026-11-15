@@ -101,6 +101,7 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
                                  bfx="off", blpapi_module=module, reconnect_wait=cfg["reconnect_wait"],
                                  queue_size=cfg["queue_size"], interval=cfg["interval"])
         prov.hits = int(cfg.get("hits_start") or 0)        # what earlier helpers used today counts too
+        prov.preload(cfg.get("preload") or [])            # answers kept from earlier today
         prov.start()
     except ImportError as exc:
         send(("failed", "import", str(exc)))
@@ -201,6 +202,8 @@ class IsolatedBloombergProvider(BloombergProvider):
         self._quick_deaths = 0               # helpers in a row that did not live long
         self._gave_up = False
         self._carry = (None, 0)              # (day, data points used) by helpers that are gone
+        self._kept: List[Tuple] = []         # answers kept from earlier today (preload): the helper's too
+        self._got: Dict[Tuple, float] = {}   # key -> when its answer last came from the helper
 
     # ================================================================== lifecycle
     def start(self) -> None:
@@ -232,6 +235,7 @@ class IsolatedBloombergProvider(BloombergProvider):
             cfg = dict(self._cfg)
             day, used = self._carry
             cfg["hits_start"] = used if day == _dt.date.today() else 0
+            cfg["preload"] = self._kept
             proc = ctx.Process(target=_child_main, args=(child_rx, child_tx, cfg), name="tto-bloomberg", daemon=True)
             proc.start()
             child_rx.close()                 # ours are the other two ends; with these closed here the pipes
@@ -315,13 +319,43 @@ class IsolatedBloombergProvider(BloombergProvider):
     def _lookup(self, key: Tuple, refresh: float, rt_field: Optional[str] = None) -> Any:
         with self._lock:
             v = self._values.get(key)
-            if v is not None:
-                return v
             if key not in self._wanted:
+                # (an answer kept from earlier today is known here already: the helper is still told of the key -
+                # it keeps it as answered and asks again when it is due)
                 self._wanted[key] = (refresh, rt_field)
                 self._outbox.append((key, refresh, rt_field))
                 self._wake.set()
-            return REQUESTING
+            return v if v is not None else REQUESTING
+
+    def preload(self, answers) -> None:
+        """As :meth:`BloombergProvider.preload`: known here at once, and to every helper started."""
+        kept = [(k, v, float(t)) for k, v, t in answers if v is not None and v != REQUESTING]
+        with self._lock:
+            self._kept = kept
+            for key, value, fetched in kept:
+                self._values[key] = value
+                self._got[key] = fetched
+
+    def answers(self, since: float = 0.0) -> List[Tuple[Tuple, Any, float]]:
+        """As :meth:`BloombergProvider.answers`, from what the helper sent."""
+        from .bloomberg import KEEP_REFRESH
+        out = []
+        with self._lock:
+            for key, (refresh, rt) in self._wanted.items():
+                if rt is not None or refresh < KEEP_REFRESH:
+                    continue
+                t = self._got.get(key, 0.0)
+                v = self._values.get(key)
+                if t > since and v is not None and v != REQUESTING:
+                    out.append((key, v, t))
+        return out
+
+    def carry_hits(self, hits: int) -> None:
+        """As :meth:`BloombergProvider.carry_hits`: what the first helper starts counting from."""
+        day, used = self._carry
+        today = _dt.date.today()
+        self._carry = (today, max(int(hits), used if day == today else 0))
+        self.hits = self._carry[1]
 
     def busy(self) -> bool:
         if self._gave_up or self._stop.is_set():
@@ -449,6 +483,7 @@ class IsolatedBloombergProvider(BloombergProvider):
         self.resyncs = int(status.get("resyncs") or 0)
 
     def _apply(self, batch, seen: int, status: Dict[str, Any]) -> None:
+        now = time.time()
         with self._lock:
             for key, value in batch:
                 if value is None:
@@ -461,6 +496,9 @@ class IsolatedBloombergProvider(BloombergProvider):
                 if not same:
                     self._values[key] = value
                     self._changed.add(key)
+                    if value != REQUESTING:
+                        # (an answer kept from earlier today, sent back unchanged, keeps the time it was fetched)
+                        self._got[key] = now
             self._seen = max(self._seen, int(seen))
         self._take_status(status)
 

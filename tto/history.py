@@ -859,6 +859,7 @@ class History(object):
         res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, user, wanted, bool(roll))
         self._snap = None
         self.svc.bump()
+        self.svc.warm()                                # every page reads the meetings: made again ahead
         self.kick()
         res["gen"] = self.svc.gen
         return res
@@ -899,6 +900,7 @@ class History(object):
         self.store.put("mpc.autoroll", {"at": _dt.datetime.now().replace(microsecond=0).isoformat(sep=" "),
                                         "rolled": res["rolled"], "first": res["first"]})
         self.svc.bump()
+        self.svc.warm()
         self.kick()
         return res
 

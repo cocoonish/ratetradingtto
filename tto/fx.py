@@ -306,7 +306,10 @@ class Fx(object):
         self._starts: Dict[Tuple[str, str, str], Any] = {}               # last parameters: warm starts
         self._pair_locks: Dict[str, threading.Lock] = {}
         self._hist_wait: List[List[str]] = []
-        self._hist_asked: Dict[str, float] = {}                           # series -> when it was last fetched
+        # series -> when it was last fetched: kept in the database, so that a restart the same day does not ask
+        # Bloomberg for every series again (the daily data limit)
+        kept = service.store.get("fx.hist.asked")
+        self._hist_asked: Dict[str, float] = {k: float(v) for k, v in kept.items()} if isinstance(kept, dict) else {}
         self._hist_empty: Dict[str, float] = {}
         self._hist_kick = threading.Event()
         self._hist_thread: Optional[threading.Thread] = None
@@ -1033,6 +1036,7 @@ class Fx(object):
                 self._hist_asked[sid] = now
             if not todo:
                 return
+            self.store.put("fx.hist.asked", {k: v for k, v in self._hist_asked.items() if now - v < 24 * 3600.0})
             self._hist_wait.append(todo)
             self.hist_state["pending"] = sum(len(x) for x in self._hist_wait)
             if self._hist_thread is None:

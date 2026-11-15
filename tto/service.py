@@ -173,6 +173,7 @@ class Service(object):
         self._auth_lock = threading.Lock()               # account changes one at a time (two first administrators ...)
         self._hash_slots = threading.BoundedSemaphore(auth.HASH_SLOTS)    # password checks at a time
         self._listeners: List[Callable[[int], None]] = []
+        self._bbg_kept_at = 0.0                           # Bloomberg answers kept up to this time (_keep_bloomberg)
         self._seen: Dict[str, float] = {}                 # user -> when they last asked for anything (monotonic)
         self._streams: Dict[str, int] = {}               # user -> live-update streams open
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
@@ -181,6 +182,8 @@ class Service(object):
         self._renders: Dict[Tuple, Dict[str, Any]] = {}
         self._private_users: set = set()                 # users with inputs of their own (their pages are theirs)
         self._render_lock = threading.Lock()
+        self._warming = False                            # a round of warming up is under way (warm)
+        self.warmed = 0                                  # rounds done
         self._inflight: Dict[Tuple, "concurrent.futures.Future"] = {}     # pages / headers being made now
         # sessions looked up lately: token hash -> (user, role, until) - not a database query per request
         self._sessions: Dict[str, Tuple[str, Optional[str], float]] = {}
@@ -341,6 +344,7 @@ class Service(object):
             try:
                 provider = IsolatedBloombergProvider(s.bbg_host, s.bbg_port, interval=s.bbg_interval or 0.0,
                                                      blpapi_name=stand_in, **common)
+                self._kept_bloomberg(provider)
                 provider.start()
                 return provider
             except IsolationError as exc:
@@ -352,9 +356,45 @@ class Service(object):
             module = importlib.import_module(stand_in)
         provider = BloombergProvider(s.bbg_host, s.bbg_port, interval=1.0 if s.bbg_interval is None else s.bbg_interval,
                                      blpapi_module=module, **common)
+        self._kept_bloomberg(provider)
         provider.start()
         favour_reader()
         return provider
+
+    def _kept_bloomberg(self, provider) -> None:
+        """What an earlier run of today used and was answered (kept in the database by :meth:`_keep_bloomberg`): the
+        daily data limit counts it, and the reference answers are not asked again until they are due."""
+        today = _dt.date.today().isoformat()
+        self._bbg_kept_at = 0.0
+        try:
+            used = self.store.get("bbg.hits") or {}
+            if isinstance(used, dict) and used.get("day") == today:
+                provider.carry_hits(int(used.get("hits") or 0))
+            provider.preload(self.store.bbg_answers(today))
+        except Exception:  # noqa: BLE001 - a start from nothing, as before
+            pass
+
+    #: seconds between two keepings of the day's Bloomberg count and answers
+    BBG_KEEP_EVERY = 30.0
+
+    def _keep_bloomberg(self) -> None:
+        """Keep the data points used today and the reference answers got since the last time (live: every
+        ``BBG_KEEP_EVERY`` seconds and when the dashboard stops) - a restart the same day does not spend the daily
+        data limit on them again."""
+        prov = self.provider
+        answers = getattr(prov, "answers", None)
+        if answers is None:
+            return
+        today = _dt.date.today().isoformat()
+        try:
+            st = prov.status() or {}
+            self.store.put("bbg.hits", {"day": today, "hits": int(st.get("hits_today") or 0)})
+            got = answers(self._bbg_kept_at)
+            if got:
+                self.store.bbg_keep(today, got)
+                self._bbg_kept_at = max(t for _, _, t in got)
+        except Exception:  # noqa: BLE001 - kept the next time
+            pass
 
     # ================================================================== lifecycle / events
     def start(self) -> None:
@@ -364,7 +404,40 @@ class Service(object):
             if self.mode == "live":
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
             self.history.start()
+            self.warm()
             threading.Thread(target=self._build_ref_indexes, name="tto-refs", daemon=True).start()
+
+    # ------------------------------------------------------------------ warming up
+    def warm(self) -> bool:
+        """The header strip and every page made ahead for everybody without inputs of their own - at the calculation
+        thread's lowest priority, one page at a time (a request in between goes first): the first trader of the
+        morning does not wait for the workbook's first calculation.  After the start, the day's turn and a change of
+        the meeting calendar.  False: a round is under way already."""
+        with self._render_lock:
+            if self._warming:
+                return False
+            self._warming = True
+        self.et.submit_at(EngineThread.BACKGROUND, self._warm_step, 0)
+        return True
+
+    def _warm_step(self, i: int) -> None:
+        try:
+            if self._stop.is_set():
+                return
+            if i == 0:
+                key = self._render_key(None, "#header", False, None)
+                self._header_job(("warm",), key, None, None)
+            else:
+                vid = self.views[i - 1]["id"]
+                self._render_job(None, self._render_key(None, vid, False, None), None, vid, False, None, None)
+        except Exception:  # noqa: BLE001 - warming up is an optimisation only
+            pass
+        if i < len(self.views) and not self._stop.is_set():
+            self.et.submit_at(EngineThread.BACKGROUND, self._warm_step, i + 1)      # (after what waits now)
+        else:
+            with self._render_lock:
+                self._warming = False
+                self.warmed += 1
 
     #: seconds after the start before the reverse reference indexes are built (the first pages come first)
     REF_INDEX_DELAY = 45.0
@@ -434,6 +507,8 @@ class Service(object):
         self.history._stop.set()                   # no new work while the provider goes down
         self.history._kick.set()
         self.fx.stop()
+        if self.mode == "live":
+            self._keep_bloomberg()
         try:
             stop = getattr(self.provider, "stop", None)
             if stop:
@@ -451,6 +526,7 @@ class Service(object):
     def _market_loop(self) -> None:
         last_day = None
         last_roll = 0.0
+        kept = time.monotonic()
         busy = getattr(self.provider, "busy", None)
         while not self._stop.wait(0.3 if (busy is not None and busy()) else self.settings.tick_seconds):
             try:
@@ -466,6 +542,11 @@ class Service(object):
                         if day_changed:
                             self.et.call_at(EngineThread.WRITE, self._sync_blotter)
                         self.bump()
+                    if day_changed:
+                        self.warm()                      # a new day: TODAY moved everything
+                if self.mode == "live" and time.monotonic() - kept >= self.BBG_KEEP_EVERY:
+                    kept = time.monotonic()
+                    self._keep_bloomberg()
                 if first or day_changed or time.monotonic() - last_roll >= self.ROLL_CHECK_SECONDS:
                     # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
                     last_roll = time.monotonic()
@@ -1820,6 +1901,7 @@ class Service(object):
             self._note_private(user)
         if calendar:
             self._note_private()                        # (what was typed per meeting moved, for everybody)
+            self.warm()
         res: Dict[str, Any] = {"applied": len(shared_vals) + len(user_vals) + len(user_clear) + (len(meetings) if calendar else 0),
                                "errors": errors}
         if calendar:
