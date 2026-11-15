@@ -78,7 +78,9 @@ def test_dashboard_in_a_real_browser(tmp_path):
         res = subprocess.run([node, os.path.join(ROOT, "tests", "e2e", "e2e.js"), url, str(shots)], env=env,
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
         print(res.stdout[-6000:])
-        assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-2000:]
+        # the checks that failed first, wherever they are in the long output (only its end is shown otherwise)
+        failed = [line.strip() for line in res.stdout.splitlines() if line.lstrip().startswith("FAIL")]
+        assert res.returncode == 0, "\n".join(failed[:20]) + "\n...\n" + res.stdout[-3000:] + res.stderr[-2000:]
         assert " 0 failed" in res.stdout
     finally:
         server.terminate()
