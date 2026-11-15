@@ -87,7 +87,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     n = sofr.formula_count()
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
-                                                   "Bulk Bond satırları", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
+                                                   "Bulk Bond satırları", "EK_BULK", "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
+                                                   "Tüm Kâğıtlar canlı kota", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
                                                    "Boş başlayan girdiler"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
@@ -117,6 +118,14 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     b.patch("I67", "=" + extras.formula_of(tto, "MASA", "I67") + "*$I$60/$I$60")
     assert extras.apply("tto", tto)[0].startswith("EK_FWD: unqualified references left")
     assert "EK_FWD" not in tto.sheet_index and "EK_XAU" in tto.sheet_index
+    # a bid of DİBS RV written another way: what tells a live quote is left out (Tüm Kâğıtlar's part with it), the pages stay
+    tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
+    extras.SheetBuilder(tto, "DİBS RV").patch("K20", '=IF($A20="","",FD20)')
+    assert extras.apply("tto", tto) == ["DİBS RV canlı kota: DİBS RV!K20 beklenen formül değil (IF(N(FD20)>0,FD20, yok)",
+                                        "Tüm Kâğıtlar canlı kota: DİBS RV!XR5 bir formül değil"]
+    assert "EK_DIBS" in tto.sheet_index and "EK_EVREN" in tto.sheet_index
+    assert extras.formula_of(tto, "DİBS RV", "K5") == 'IF($A5="","",IF(N(FD5)>0,FD5,""))'
+    assert extras.formula_of(tto, "EK_EVREN", "I30") == 'IFERROR(IF(N(V30)>0,V30,""),"")'
     borsa = Model.load(os.path.join(root, "models", "borsa.json.gz"))
     borsa.sheet("bu").consts[parse_a1("H8")] = "Bid"
     assert extras.apply("borsa", borsa) == ["Borsa O/N: bu!H8 başlığı 'BID %' değil"]

@@ -2316,22 +2316,50 @@ class Service(object):
                 rows[i][flag_at] = self._flag_cell(bond, calc.get(si, r, 8) == "★")
             rows[i].extend(self._bond_cells(said.get(bond), loc)
                            + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + bond}])
+        self._universe_quote_marks(book, calc, si, rows, rnums, cols, loc)
         data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
         data["added"] = int(data.get("added") or 0) + len(self._BOARD_HEADS) + 1
+
+    def _universe_quote_marks(self, book, calc, si: int, rows, rnums, cols: List[str], loc) -> None:
+        """Tüm Kâğıtlar: each bond's bid / ask ("–" where no order stands, the size of a live one in the tip) and,
+        for a bond on the trading list whose price there is no live quote, DİBS RV's yield, ASW and signal soft."""
+        rv = book.model.sheet_index.get("DİBS RV")
+        soft = [index_to_col(ex._col("N") + k) for k, (col, _, _) in enumerate(ex.UNI_RV) if col != "AI"]     # not DV01
+        sides = [(vis, size, raw, side) for vis, size, raw, side in (("I", ex.UNI_SIZE[0], "V", "bid"), ("J", ex.UNI_SIZE[1], "W", "ask"))
+                 if vis in cols]
+        for i, r in enumerate(rnums):
+            def v(col: str) -> Any:
+                return calc.get(si, r, parse_a1("%s1" % col) % COLS)
+            if r < ex.UNI_OWN[0] or not v("U"):
+                continue
+            for vis, size, raw, side in sides:
+                j = cols.index(vis)
+                if j < len(rows[i]):
+                    rows[i][j] = self._quote_cell(rows[i][j], v(size), v(raw), side, loc)
+            at = v("T")                                       # the bond's place on the trading list
+            q = self._rv_quote(calc, rv, ex.LIVE_FIRST - 1 + int(at)) if rv is not None and type(at) is float else None
+            if q and q["stale"]:
+                for col in soft:
+                    if col in cols and cols.index(col) < len(rows[i]):
+                        rows[i][cols.index(col)] = self._soft(rows[i][cols.index(col)], q["tip"])
 
     #: the order of the kinds in the trading summary: DİBS RV's types (B / S / T / E)
     @staticmethod
     def _repo_note(txt: Callable[[str], str], layout: Dict[str, Any], row: int) -> str:
         """Why the T0 → T1 repo is not given while both value dates have a price: the prices are not of the same
-        day (the repo is worked out only from prices of one day)."""
+        day (the repo is worked out only from prices of one day: live quotes are today's, a last trade is of its
+        day)."""
         w = ex.LIVE_REPO[0]
-        g0, g1 = layout["groups"][0], layout["groups"][1]
-        priced = all(txt("%s%d" % (g[side], row)) for g in (g0, g1) for side in ("bid", "ask"))
-        when0, when1 = txt("%s%d" % (g0["when"], row)), txt("%s%d" % (g1["when"], row))
-        if txt("%s%d" % (w, row)) or not priced or (when0 and when0 == when1):
+        if txt("%s%d" % (w, row)) or not all(txt("%s%d" % (layout["mid"][k], row)) for k in (0, 1)):
             return ""
-        return "T0 ve T1 fiyatları aynı güne ait değil (T0 son işlem: %s · T1 son işlem: %s): repo hesaplanmadı" % (
-            when0 or "yok", when1 or "yok")
+        days = [txt("%s%d" % (layout["day"][k], row)) for k in (0, 1)]
+        if days[0] and days[0] == days[1]:
+            return ""
+
+        def said(k: int) -> str:
+            live = all(txt("%s%d" % (layout["size"][k][side], row)) not in ("", "0") for side in ("bid", "ask"))
+            return "%s %s: %s" % (layout["groups"][k]["cap"], "canlı kota" if live else "son işlem", days[k] or "yok")
+        return "T0 ve T1 fiyatları aynı güne ait değil (%s · %s): repo hesaplanmadı" % (said(0), said(1))
 
     def _repo_cell(self, cell: Callable[..., Dict[str, Any]], live: Optional[int], r: int) -> Dict[str, Any]:
         """The trading summary's T0 → T1 repo: the value, or a dash that says why there is none."""
@@ -2405,11 +2433,16 @@ class Service(object):
             due = cell("E", r)
             if not str(due.get("t") or "").strip() and type(mat) is float:
                 due = {"t": numfmt.format_value(mat, "dd.mm.yyyy", loc), "v": mat, "k": "n"}
+            q = self._rv_quote(calc, si, r)
+            priced = [cell("T", r), cell("Z", r), cell("AB", r), dict(cell("AC", r), b=1)]
+            if q["stale"]:
+                priced = [self._soft(c, q["tip"]) for c in priced]
             line = [self._flag_cell(code, True), label, {"t": code, "k": "s", "cls": "soft"}, due,
                     {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
-                    {"t": str(src or ""), "k": "s", "cls": "soft"}, cell("K", r), cell("L", r), dict(cell("AS", r), b=1), when,
-                    cell("T", r), cell("Z", r), cell("AB", r), dict(cell("AC", r), b=1), cell("AG", r), cell("AI", r), cell("AO", r),
-                    self._repo_cell(cell, live, r)]
+                    {"t": str(src or ""), "k": "s", "cls": "soft"},
+                    self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
+                    self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), dict(cell("AS", r), b=1), when] + priced + \
+                [cell("AG", r), cell("AI", r), cell("AO", r), self._repo_cell(cell, live, r)]
             line += self._bond_cells(said.get(code), loc) + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}]
             group = kind if kind in bonds else "S"
             bonds[group].append((mat if type(mat) is float else 1e9, line))
@@ -2694,6 +2727,7 @@ class Service(object):
             return
         si = book.model.sheet_index[sheet]
         calc = self._calc(user, book)
+        self._rv_quote_marks(book, calc, si, data, loc)
         said = self._board_bonds(user)
         mkt = self._broker_market(user) if said else None
         heads = self._BOARD_HEADS + [
@@ -2729,6 +2763,9 @@ class Service(object):
                 gap_cell = {"t": ("+" if gap > 0 else "") + numfmt.format_value(gap, "0", loc), "v": gap, "k": "n"}
                 if abs(gap) >= 0.5:
                     gap_cell["c"] = "pos" if gap > 0 else "neg"
+                sq = self._rv_quote(calc, si, r)
+                if sq["stale"]:                              # the screen's yield is no live quote's
+                    gap_cell = self._soft(gap_cell, "Ekranda iki taraflı canlı kota yok (%s): ekran getirisi bu fiyattan" % sq["status"])
             mid_cell = {"t": numfmt.format_value(mid, "0.00", loc), "v": mid, "k": "n"} if mid is not None else {"t": "", "k": ""}
             rows[i].extend(self._bond_cells(q, loc) + [mid_cell, gap_cell])
         # ▸: the bond's card
@@ -2741,6 +2778,70 @@ class Service(object):
                 rows[i].append({"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code} if code else {"t": "", "k": ""})
         data["c"] = list(data.get("c") or []) + [h for h, _ in heads] + ["Kart"]
         data["added"] = int(data.get("added") or 0) + len(heads) + 1
+
+    # ================================================================== live quotes: the sizes of the orders
+    #: DİBS RV's columns worked out of the clean price in use (their headers start so): soft while no live quote
+    #: stands behind that price
+    _RV_PRICED = ("BIST basit getiri", "BIST bileşik getiri", "Getiri − OIS", "ASW (S/B)", "Pahalı/ucuz", "Sinyal", "ASW FX")
+
+    @staticmethod
+    def _rv_quote(calc, si: int, r: int) -> Dict[str, Any]:
+        """What the sizes say of a row of DİBS RV: the size of its bid and ask (0: no order stands; not a number:
+        not known), Bloomberg's figures (FD / FE), and ``stale``: both sizes known and not both sides live - the
+        price in use and what the row works out of it rest on no live quote (``tip`` says so)."""
+        def v(col: str) -> Any:
+            return calc.get(si, r, parse_a1("%s1" % col) % COLS)
+        b, a = v(ex.RV_SIZE[0]), v(ex.RV_SIZE[1])
+        stale = type(b) is float and type(a) is float and not (b > 0 and a > 0)
+        status = v("J")
+        status = status if isinstance(status, str) else ""
+        tip = "Fiyat durumu: %s · iki taraflı canlı kota yok, değer bu fiyattan" % status if stale else ""
+        return {"bid": b, "ask": a, "raw_bid": v("FD"), "raw_ask": v("FE"), "stale": stale, "status": status, "tip": tip}
+
+    @staticmethod
+    def _quote_cell(cell: Dict[str, Any], size: Any, figure: Any, side: str, loc) -> Dict[str, Any]:
+        """A bid / ask as a page shows it: "–" (soft) where the sheet says no order stands, Bloomberg's figure in
+        the tip; a live quote with its size in the tip; anything else as it is."""
+        if str(cell.get("t") or "").strip() == ex.NO_QUOTE:
+            tip = "Kota yok: %s tarafında emir yok (%s boş)" % (side, "BID_SIZE" if side == "bid" else "ASK_SIZE")
+            if type(figure) is float and figure > 0:
+                tip += " · Bloomberg'in tekrar ettiği fiyat %s, canlı değil" % numfmt.format_value(figure, "0.000", loc)
+            return {"t": ex.NO_QUOTE, "k": "s", "al": "r", "cls": "soft", "tip": tip}
+        if type(size) is float and size > 0 and str(cell.get("t") or "").strip():
+            line = "%s boyutu: %s" % (side.capitalize(), numfmt.format_value(size, ex.INT0, loc))
+            return dict(cell, tip=cell["tip"] + "\n" + line if cell.get("tip") else line)
+        return cell
+
+    @staticmethod
+    def _soft(cell: Dict[str, Any], tip: str) -> Dict[str, Any]:
+        """A value worked out of a price that is no live quote: soft, the reason in the tip."""
+        if not str(cell.get("t") or "").strip():
+            return cell
+        return dict(cell, cls=((cell.get("cls") or "") + " soft").strip(), tip=cell["tip"] + "\n" + tip if cell.get("tip") else tip)
+
+    def _rv_priced_cols(self, book) -> List[str]:
+        """DİBS RV's columns (letters) worked out of the price in use (:attr:`_RV_PRICED`)."""
+        sh = book.model.sheets[book.model.sheet_index["DİBS RV"]]
+        return [index_to_col(c) for c in range(1, sh.max_col + 1)
+                if isinstance(sh.consts.get(4 * COLS + c), str) and sh.consts[4 * COLS + c].strip().startswith(self._RV_PRICED)]
+
+    def _rv_quote_marks(self, book, calc, si: int, data: Dict[str, Any], loc) -> None:
+        """The DİBS RV page: its bid / ask ("–" where no order stands, the size of a live one in the tip) and, on a
+        row whose price is no live quote, what it works out of that price soft."""
+        rows, rnums, cols = data.get("rows") or [], data.get("r") or [], list(data.get("c") or [])
+        at = {c: cols.index(c) for c in ["K", "L"] + self._rv_priced_cols(book) if c in cols}
+        for i, r in enumerate(rnums):
+            if not ex.LIVE_FIRST <= r <= ex.LIVE_LAST or not calc.get(si, r, 1):
+                continue
+            q = self._rv_quote(calc, si, r)
+            for col, j in at.items():
+                if j >= len(rows[i]):
+                    continue
+                if col in ("K", "L"):
+                    side = "bid" if col == "K" else "ask"
+                    rows[i][j] = self._quote_cell(rows[i][j], q[side], q["raw_" + side], side, loc)
+                elif q["stale"]:
+                    rows[i][j] = self._soft(rows[i][j], q["tip"])
 
     def _dibs_live_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """The DİBS Canlı table, completed: the last trade of each value date at the time the dashboard saw it
@@ -2755,6 +2856,12 @@ class Service(object):
         layout = ex._live_cols()
         said = self._board_bonds(user)
         where = {g["when"]: (cols.index(g["when"]), layout["sec"][k]) for k, g in enumerate(layout["groups"]) if g["when"] in cols}
+        # each value date's bid / ask and the extra source's: (visible column, size, Bloomberg's figure, side)
+        quotes = [(g[side], layout["size"][k][side], layout["raw"][k][side], side)
+                  for k, g in enumerate(layout["groups"]) for side in ("bid", "ask")]
+        quotes += [(col, layout["size_extra"][side], layout["raw_extra"][side], side)
+                   for col, side in ((ex.LIVE_EXTRA, "bid"), (index_to_col(ex._col(ex.LIVE_EXTRA) + 1), "ask"))]
+        quotes = [x for x in quotes if x[0] in cols]
         for i, r in enumerate(rnums):
             if r == 4:
                 rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in self._BOARD_HEADS]
@@ -2777,6 +2884,12 @@ class Service(object):
                                         + (" · fiyat %s" % numfmt.format_value(seen["price"], "0.000", loc) if type(seen.get("price")) is float else "")
                                         + (" · Bloomberg son işlem günü: %s" % was if was else "")})
                     rows[i][j] = cell
+            if isin:
+                for col, size, raw, side in quotes:
+                    j = cols.index(col)
+                    if j < len(rows[i]):
+                        rows[i][j] = self._quote_cell(rows[i][j], calc.get(si, r, parse_a1("%s1" % size) % COLS),
+                                                      calc.get(si, r, parse_a1("%s1" % raw) % COLS), side, loc)
             rows[i].extend(self._bond_cells(said.get(isin) if isin else None, loc))
             rows[i].append({"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + isin} if isin else {"t": "", "k": ""})
         data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
@@ -2890,12 +3003,16 @@ class Service(object):
                 want = ("Tip", "Kupon", "Fiyat durumu", "Kullanılan temiz", "Valör", "Kirli", "BIST bileşik getiri", "Alış−satış",
                         "Getiri − OIS", "ASW (S/B)", "Uydurulmuş ASW (bp)", "Pahalı/ucuz (bp", "Sinyal", "ASW FX swap", "Pahalı/ucuz FX",
                         "Mod. süre", "DV01 TL", "C+R (bp)", "Son işlem tarihi", "Son işlem fiyatı", "Bugün düşük", "Bugün yüksek")
+                q = self._rv_quote(calc, si, info["row"])
                 for c in range(1, sh.max_col + 1):
                     cap = sh.consts.get(4 * COLS + c)
                     if isinstance(cap, str) and any(cap.strip().startswith(w) for w in want):
                         cell = R.cell(calc, si, info["row"], c, loc)
                         if str(cell.get("t") or "").strip():
-                            out["rv"].append({"name": cap.strip(), "t": cell.get("t"), "c": cell.get("c")})
+                            item = {"name": cap.strip(), "t": cell.get("t"), "c": cell.get("c")}
+                            if q["stale"] and cap.strip().startswith(self._RV_PRICED):      # worked out of no live quote
+                                item.update(soft=True, tip=q["tip"])
+                            out["rv"].append(item)
                 out["row"] = info["row"]
             if ex.LIVE_SHEET in book.model.sheet_index:
                 si = book.model.sheet_index[ex.LIVE_SHEET]
@@ -2905,20 +3022,31 @@ class Service(object):
                     def txt(addr: str) -> str:
                         r0, c0 = divmod(parse_a1(addr), COLS)
                         return str(R.cell(calc, si, r0, c0, loc).get("t") or "")
+
+                    def quote(col: str, size: str, raw: str, side: str) -> Dict[str, str]:
+                        """A bid / ask: the price or "–" (``_tip`` says why), the size of a live quote."""
+                        s = calc.get(si, row, parse_a1("%s1" % size) % COLS)
+                        got = self._quote_cell({"t": txt("%s%d" % (col, row))}, s, calc.get(si, row, parse_a1("%s1" % raw) % COLS), side, loc)
+                        return {side: got["t"], side + "_size": numfmt.format_value(s, ex.INT0, loc) if type(s) is float and s > 0 else "",
+                                side + "_tip": (got.get("tip") or "") if got["t"] == ex.NO_QUOTE else ""}
+
                     for k, g in enumerate(layout["groups"]):
                         sec = calc.get(si, row, parse_a1("%s1" % layout["sec"][k]) % COLS)
                         seen = self.trades_seen(sec) if isinstance(sec, str) else None
-                        out["live"].append({"cap": g["cap"], "src": txt(g["src"]), "date": txt(g["date"]),
-                                            "bid": txt("%s%d" % (g["bid"], row)), "ask": txt("%s%d" % (g["ask"], row)),
-                                            "last": txt("%s%d" % (g["last"], row)), "when": txt("%s%d" % (g["when"], row)),
-                                            "vol": txt("%s%d" % (g["vol"], row)), "seen": seen["time"] if seen else ""})
+                        item = {"cap": g["cap"], "src": txt(g["src"]), "date": txt(g["date"]),
+                                "last": txt("%s%d" % (g["last"], row)), "when": txt("%s%d" % (g["when"], row)),
+                                "vol": txt("%s%d" % (g["vol"], row)), "seen": seen["time"] if seen else ""}
+                        for side in ("bid", "ask"):
+                            item.update(quote(g[side], layout["size"][k][side], layout["raw"][k][side], side))
+                        out["live"].append(item)
                     w, x, y = ex.LIVE_REPO
                     for name, col in (("T0→T1 repo %", w), ("T1→T2 repo %", x), ("T0→T1 − TLREF (bp)", y)):
                         out["repo"].append({"name": name, "t": txt("%s%d" % (col, row))})
                     out["repo_note"] = self._repo_note(txt, layout, row)
                     extra = ex.LIVE_EXTRA
-                    out["extra"] = {"src": txt("%s2" % extra), "bid": txt("%s%d" % (extra, row)),
-                                    "ask": txt("%s%d" % (index_to_col(ex._col(extra) + 1), row))}
+                    out["extra"] = {"src": txt("%s2" % extra)}
+                    for col, side in ((extra, "bid"), (index_to_col(ex._col(extra) + 1), "ask")):
+                        out["extra"].update(quote(col, layout["size_extra"][side], layout["raw_extra"][side], side))
         board = self._board_bonds(user).get(code)
         out["board"] = None
         if board is not None:

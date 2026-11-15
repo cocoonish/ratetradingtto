@@ -112,10 +112,16 @@ export async function openBondCard(ctx, isin) {
     return t;
   };
   if (d.live && d.live.length) {
-    const rows = d.live.map((g) => [g.cap + ' · ' + g.src, g.date, g.bid, g.ask, g.last,
+    // a bid / ask that is no live quote (no order stands: its size is empty) is "–", the reason and Bloomberg's figure in the tip
+    const quote = (t, tip) => (t === '–' ? h('td', { class: 'soft', title: tip || null }, '–') : t);
+    const rows = d.live.map((g) => [g.cap + ' · ' + g.src, g.date, g.bid_size, quote(g.bid, g.bid_tip), quote(g.ask, g.ask_tip), g.ask_size, g.last,
       g.seen ? h('td', { class: 'fresh', title: "Dashboard'un bu valörde işlem gördüğü an" }, 'bugün ' + g.seen) : g.when, g.vol]);
-    if (d.extra && (d.extra.bid || d.extra.ask)) rows.push(['Ek kaynak · ' + d.extra.src, '', d.extra.bid, d.extra.ask, '', '', '']);
-    section('Valörler (Bloomberg)', table(['Valör · kaynak', 'Tarih', 'Bid', 'Ask', 'Son işlem', 'Son işlem', 'Hacim'], rows, 'nums'));
+    if (d.extra && (d.extra.bid || d.extra.ask)) {
+      rows.push(['Ek kaynak · ' + d.extra.src, '', d.extra.bid_size, quote(d.extra.bid, d.extra.bid_tip), quote(d.extra.ask, d.extra.ask_tip),
+        d.extra.ask_size, '', '', '']);
+    }
+    section('Valörler (Bloomberg)', table(['Valör · kaynak', 'Tarih', 'Bid boyutu', 'Bid', 'Ask', 'Ask boyutu', 'Son işlem', 'Son işlem', 'Hacim'],
+      rows, 'nums'));
     const repo = (d.repo || []).filter((x) => x.t);
     if (repo.length) m.body.appendChild(h('p', { class: 'muted' }, 'İma O/N repo: ' + repo.map((x) => x.name + ' ' + x.t).join(' · ')));
     if (d.repo_note) m.body.appendChild(h('p', { class: 'muted', id: 'card-repo-note' }, 'İma O/N repo: ' + d.repo_note));
@@ -138,7 +144,11 @@ export async function openBondCard(ctx, isin) {
   }
   if (d.rv && d.rv.length) {
     const grid = h('div', { class: 'kv' });
-    for (const x of d.rv) grid.appendChild(h('div', null, h('span', { class: 'k' }, x.name), h('span', { class: 'v' + (x.c ? ' ' + x.c : '') }, x.t)));
+    // ``soft``: worked out of a price that is no live quote (the tip says which)
+    for (const x of d.rv) {
+      grid.appendChild(h('div', null, h('span', { class: 'k' }, x.name),
+        h('span', { class: 'v' + (x.c ? ' ' + x.c : '') + (x.soft ? ' soft' : ''), title: x.tip || null }, x.t)));
+    }
     section('DİBS RV', grid);
   } else {
     m.body.appendChild(h('p', { class: 'muted' }, 'Kâğıt DİBS RV listesinde değil: getiri, ASW ve canlı valör fiyatları için listeye ekleyin.'));

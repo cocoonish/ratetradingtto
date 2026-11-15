@@ -687,6 +687,7 @@ table.grid td.fresh, table.plain td.fresh { color: var(--pos, #2e9d5b); font-wei
 .modal.bondcard .kv .v { font-variant-numeric: tabular-nums; font-weight: 600; }
 .modal.bondcard .kv .v.pos { color: var(--pos, #2e9d5b); }
 .modal.bondcard .kv .v.neg { color: var(--neg, #d0504f); }
+.modal.bondcard .kv .v.soft { color: var(--ink-3); font-weight: 500; }
 
 /* ☆ / ★: onto / off the trading list; the kind captions of the trading summary */
 table.grid td.flag { cursor: pointer; text-align: center; color: var(--ink-3); font-size: 14px; }

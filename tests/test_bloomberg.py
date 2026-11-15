@@ -19,7 +19,7 @@ from tto.marketdata.replay import ReplayProvider
 from tto.service import Service
 from tto.xl.engine import Clock
 from tto.xl.errors import XlError
-from tto.xl.model import COLS, a1
+from tto.xl.model import COLS, a1, parse_a1
 from tto.xl.values import XlArray
 
 
@@ -201,6 +201,43 @@ def test_quotes_that_never_arrive_are_asked_less_and_less(server, monkeypatch):
         n = requests_for(server, quiet)
         time.sleep(1.2)
         assert requests_for(server, quiet) == n
+    finally:
+        p.stop()
+
+
+def test_a_size_the_stream_does_not_bring_is_not_asked_again(server, monkeypatch):
+    """The size of an order (BID_SIZE / ASK_SIZE) that a flowing subscription does not bring means that no order
+    stands, and a new one arrives as a tick: it is not asked again by request (on a closed market every bond of
+    Borsa İstanbul would cost a request an hour, all day).  A size whose subscription never says anything is asked
+    as before."""
+    monkeypatch.setattr(bloomberg, "SILENT_AFTER", 0.2)
+    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX_EMPTY", 0.4)
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), price_poll=0.2)
+    p.start()
+    try:
+        flowing, silent = "/isin/TRT150328T24@ISL1", "/isin/TRT160431T35@ISL1"
+        server.ref[(flowing, "LAST_PRICE", ())] = server.rt[(flowing, "LAST_PRICE")] = 100.5    # its first picture: no order
+        server.ref[(silent, "LAST_PRICE", ())] = 94.1                                             # its stream says nothing
+
+        def asked(sec, field):
+            return sum(1 for r in server.requests if sec in r["securities"] and field in r["fields"])
+
+        keys = {sec: [bdp_key(sec, f) for f in ("LAST_PRICE", "BID_SIZE", "ASK_SIZE")] for sec in (flowing, silent)}
+        for k in keys[flowing] + keys[silent]:
+            p.get_bdp(k)
+        settle(p)
+        assert [p.get_bdp(k) for k in keys[flowing]] == [100.5, NA_NA, NA_NA]
+        assert [p.get_bdp(k) for k in keys[silent]] == [94.1, NA_NA, NA_NA]
+        n_flowing, n_silent = asked(flowing, "BID_SIZE"), asked(silent, "BID_SIZE")
+        time.sleep(2.0)
+        assert asked(flowing, "BID_SIZE") == n_flowing and asked(flowing, "ASK_SIZE") == n_flowing
+        assert asked(silent, "BID_SIZE") > n_silent + 1
+        # an order arrives as a tick, and goes
+        server.tick(flowing, {"BID": 100.4, "BID_SIZE": 5e6})
+        assert wait_for(lambda: p.get_bdp(keys[flowing][1]) == 5e6)
+        server.tick(flowing, {"BID": None, "BID_SIZE": None})
+        assert wait_for(lambda: p.get_bdp(keys[flowing][1]) == NA_NA)
+        assert asked(flowing, "BID_SIZE") == n_flowing
     finally:
         p.stop()
 
@@ -765,6 +802,24 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
         differ = [k for k, v in expected.items()
                   if not (close(v, got[k], 1e-12) or (type(v) is XlError and type(got[k]) is XlError))]
         assert differ == [] and moved > 80000
+
+        # the size of an order: none in the stream (as on a closed market) - DİBS RV shows no quote; a tick brings one
+        si = live.books["tto"].model.sheet_index["DİBS RV"]
+
+        def rv8(col):
+            return live.et.call(lambda: live.books["tto"].engine.shared.get(si, 8, parse_a1(col + "1") % COLS))
+
+        assert (rv8("K"), rv8("L"), rv8("W")) == ("–", "–", "") and str(rv8("J")).startswith("Kota yok · ")
+        server.tick("/isin/TRT150328T24@ISL1", {"BID_SIZE": 5e6, "ASK_SIZE": 2.5e6})
+        sizes = {bdp_key("TRT150328T24 @ISL1 ISIN", f) for f in ("BID_SIZE", "ASK_SIZE")}
+        got = set()
+        deadline = time.time() + 10.0
+        while not sizes <= got and time.time() < deadline:
+            got |= set(provider.drain_changes())
+            time.sleep(0.05)
+        assert sizes <= got
+        live.et.call(live._apply_market, list(got))
+        assert (rv8("K"), rv8("L"), rv8("J")) == (100.1, 100.125, "Canlı kota") and type(rv8("W")) is float
     finally:
         direct.stop()
         live.stop()

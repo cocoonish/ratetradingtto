@@ -209,6 +209,13 @@
    "title": "Yardımcı · FX swap ASW fit toplamları",
    "range": "XF2:XQ3",
    "hidden": true
+  },
+  {
+   "id": "B9",
+   "type": "table",
+   "title": "Yardımcı · kota büyüklükleri (Bloomberg BID_SIZE / ASK_SIZE; 0: emir yok)",
+   "range": "XR4:XS54",
+   "hidden": true
   }
  ]
 }

@@ -1493,6 +1493,81 @@ _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", 
              "N": NUM4, "O": INT0, "P": NUM4, "Q": INT0}
 
 
+# ---------------------------------------------------------------------------------------------- live quotes
+#: Is a bid / ask of Borsa İstanbul a live quote?  When no order stands, Bloomberg's ``PX_BID`` / ``PX_ASK`` of the
+#: exchange's sources (ISL0 / ISL1 / ISLN) still give a price - the last trade, for a bill the last trade's yield on
+#: the next value date -, bid and ask the same figure.  The size of the order tells them apart: ``BID_SIZE`` /
+#: ``ASK_SIZE`` > 0 while an order stands, "#N/A N/A" (the field without a value) when none does - on a closed
+#: market there is no size at all.  A source without sizes (BGN, a composite: "#N/A Field Not Applicable") and a size
+#: not known yet (the recorded file, an answer on its way) tell nothing: the price is shown and used as before.
+RV_SIZE = ("XR", "XS")                 # DİBS RV: the sizes of the bid and the ask of the row's own security (BT)
+NO_QUOTE = "–"                         # shown instead of a price that is no live quote
+
+
+def size_of(expr: str) -> str:
+    """A Bloomberg size as the formulas use it: the size while an order stands (> 0), 0 when none does ("#N/A
+    N/A"), "" when nothing can be told (any other answer).  ``s=0``: no live quote; ``N(s)>0``: a live one."""
+    return 'LET(x,%s,IFERROR(IF(ISNUMBER(x),MAX(x,0),IF(x="#N/A N/A",0,"")),""))' % expr
+
+
+def quoted(price: str, size: str) -> str:
+    """A visible bid / ask: the price while it is (or may be) a live quote, "–" when its size says no order stands."""
+    return '=IFERROR(IF(N({p})>0,IF({s}=0,"{x}",{p}),""),"")'.format(p=price, s=size, x=NO_QUOTE)
+
+
+def _rv_quote_edits(r: int) -> Tuple[Tuple[str, str, str], ...]:
+    """What changes in a row of DİBS RV: (cell, the text of its formula, what it becomes).  The visible bid / ask
+    (K, L) say "–" for a price that is no live quote; the dirty bid / ask (FG, FH: the bid / ask yields, their
+    difference, the bid / ask ASW) and the ALIŞ / SATIŞ price types (FF) use a side only while it may be live."""
+    b, a = "$%s%d" % (RV_SIZE[0], r), "$%s%d" % (RV_SIZE[1], r)
+    f = {"r": r, "b": b, "a": a, "x": NO_QUOTE}
+    return (("K%d" % r, "IF(N(FD{r})>0,FD{r},".format(**f), 'IF(N(FD{r})>0,IF({b}=0,"{x}",FD{r}),'.format(**f)),
+            ("L%d" % r, "IF(N(FE{r})>0,FE{r},".format(**f), 'IF(N(FE{r})>0,IF({a}=0,"{x}",FE{r}),'.format(**f)),
+            ("FF%d" % r, '"ALIŞ",FD{r}>0)'.format(**f), '"ALIŞ",FD{r}>0,{b}<>0)'.format(**f)),
+            ("FF%d" % r, '"SATIŞ",FE{r}>0)'.format(**f), '"SATIŞ",FE{r}>0,{a}<>0)'.format(**f)),
+            ("FG%d" % r, "AND(DG{r},FD{r}>0)".format(**f), "AND(DG{r},FD{r}>0,{b}<>0)".format(**f)),
+            ("FH%d" % r, "AND(DG{r},FE{r}>0)".format(**f), "AND(DG{r},FE{r}>0,{a}<>0)".format(**f)))
+
+
+def _rv_quotes_check(model: Model) -> None:
+    _need_sheets(model, "DİBS RV")
+    sh = model.sheet("DİBS RV")
+    for r in range(LIVE_FIRST, LIVE_LAST + 1):
+        _need_formula(model, "DİBS RV", "BT%d" % r, '"/isin/"&$A{r}&"@"&BS{r}'.format(r=r))
+        for addr, old, _ in _rv_quote_edits(r):
+            if _need_formula(model, "DİBS RV", addr).count(old) != 1:
+                raise ValueError("DİBS RV!%s beklenen formül değil (%s yok)" % (addr, old))
+        _need_formula(model, "DİBS RV", "J%d" % r, '"Son fiyat ("')
+        taken = [c for c in RV_SIZE for rr in (4, r) if parse_a1("%s%d" % (c, rr)) in sh.fml or parse_a1("%s%d" % (c, rr)) in sh.consts]
+        if taken:
+            raise ValueError("DİBS RV!%s%d boş değil" % (taken[0], r))
+
+
+def _tto_rv_quotes(model: Model) -> None:
+    """DİBS RV: the sizes of each row's bid and ask (``BID_SIZE`` / ``ASK_SIZE`` of the security the row is priced
+    on).  A side that is no live quote shows "–" and stays out of what the sheet works out of the sides (bid / ask
+    yields, "Alış−satış", bid / ask ASW, the ALIŞ / SATIŞ price types); "Fiyat durumu" says whether the quotes are
+    live.  The clean price in use - the middle, Bloomberg's ``PX_MID`` (with no quote the last trade or the
+    exchange's price for the next value date) - and everything worked out of it stay as they were: the pages show
+    them soft when no live quote stands behind them."""
+    b = SheetBuilder(model, "DİBS RV")
+    bs, as_ = RV_SIZE
+    b.set("%s4" % bs, "bsz")
+    b.set("%s4" % as_, "asz")
+    for r in range(LIVE_FIRST, LIVE_LAST + 1):
+        for col, fld in ((bs, "BID_SIZE"), (as_, "ASK_SIZE")):
+            b.set("%s%d" % (col, r), '=IF($BT{r}="","",{v})'.format(r=r, v=size_of('_xll.BDP($BT%d,"%s")' % (r, fld))))
+        for addr, old, new in _rv_quote_edits(r):
+            b.patch(addr, "=" + formula_of(model, "DİBS RV", addr).replace(old, new))
+        f = {"r": r, "b": "$%s%d" % (bs, r), "a": "$%s%d" % (as_, r)}
+        state = ('IF(AND(N({b})>0,N({a})>0),"Canlı kota",IF(N({b})>0,"Canlı: yalnız bid",IF(N({a})>0,"Canlı: yalnız ask",'
+                 '"Kota yok · "&IF(N(DA{r})=TODAY(),"işlem bugün",IF(N(DA{r})>0,"son fiyat ("&DAY(DA{r})&"."&MONTH(DA{r})&"."'
+                 '&YEAR(DA{r})&")",IF(N(CV{r})>0,"referans fiyat","fiyat yok"))))))').format(**f)
+        # (both sizes known; otherwise - BGN, the recorded file - the sheet's own words)
+        b.patch("J%d" % r, ('=IF(AND($A{r}<>"",$N{r}="",ISNUMBER({b}),ISNUMBER({a})),'
+                            'IF($X$2<>"ORTA",$X$2&" · ","")&{state},{old})').format(state=state, old=formula_of(model, "DİBS RV", "J%d" % r), **f))
+
+
 # ---------------------------------------------------------------------------------------------- DİBS live
 LIVE_SHEET = "EK_DIBS"
 LIVE_FIRST, LIVE_LAST = 5, 54          # the rows of the DİBS RV list, row for row
@@ -1520,7 +1595,13 @@ def _live_cols() -> Dict[str, Any]:
                               "when": index_to_col(c + 3), "vol": index_to_col(c + 4)})
     out["raw_extra"] = {"bid": index_to_col(at), "ask": index_to_col(at + 1)}
     out["mid"] = [index_to_col(at + 2 + k) for k in range(3)]
-    out["last_help"] = index_to_col(at + 4)
+    # after them (the columns above keep their places): the sizes of the quotes and the day of each value date's price
+    at += 5
+    out["size"] = [{"bid": index_to_col(at + 2 * k), "ask": index_to_col(at + 2 * k + 1)} for k in range(len(LIVE_GROUPS))]
+    at += 2 * len(LIVE_GROUPS)
+    out["size_extra"] = {"bid": index_to_col(at), "ask": index_to_col(at + 1)}
+    out["day"] = [index_to_col(at + 2 + k) for k in range(len(LIVE_GROUPS))]
+    out["last_help"] = out["day"][-1]
     return out
 
 
@@ -1567,7 +1648,9 @@ def _tto_dibs_live(model: Model) -> None:
     b.head("A4", heads)
     b.head("%s4" % LIVE_HELP, ["Menkul T0", "Menkul T1", "Menkul T2", "Menkul ek"]
            + ["%s %s" % (g["cap"], f) for g in L["groups"] for f in ("bid", "ask", "son", "gün", "hacim", "işlemiş")]
-           + ["Ek bid", "Ek ask", "Orta T0", "Orta T1", "Orta T2"])
+           + ["Ek bid", "Ek ask", "Orta T0", "Orta T1", "Orta T2"]
+           + ["%s %s boyut" % (g["cap"], side) for g in L["groups"] for side in ("bid", "ask")]
+           + ["Ek bid boyut", "Ek ask boyut"] + ["Fiyat günü %s" % g["cap"] for g in L["groups"]])
 
     def source(cell: str, default: str) -> str:
         """The pricing source typed in a cell (its default when the cell was emptied)."""
@@ -1594,7 +1677,8 @@ def _tto_dibs_live(model: Model) -> None:
             src_cell = "$%s$2" % g["src"][:-1]
             b.set("%s%d" % (L["sec"][k], r), security(src_cell, g["default"], r))
             same = 'AND($A{r}<>"",{s}={rv}$BS{r})'.format(r=r, s=source(src_cell, g["default"]), rv=rv)
-            own = {"bid": "$K", "ask": "$L", "last": "$AS", "date": "$I"}
+            # (bid / ask: Bloomberg's figure, live quote or not - FD / FE, where DİBS RV keeps it before it says "–")
+            own = {"bid": "$FD", "ask": "$FE", "last": "$AS", "date": "$I"}
             fields = {"bid": "PX_BID", "ask": "PX_ASK", "last": "LAST_PRICE", "date": "LAST_TRADE_DATE"}
             for f in ("bid", "ask", "last", "date"):
                 b.set("%s%d" % (raw[f], r), '=IF($A{r}="","",IF({same},{rv}{own}{r},_xll.BDP({sec},"{fld}")))'.format(
@@ -1604,8 +1688,13 @@ def _tto_dibs_live(model: Model) -> None:
                   '=IF($A{r}="","",IF({rv}$D{r}="B",0,IF(AND({same},${d}=({rv}$DC{r})),{rv}$CW{r},'
                   '_xll.BDP({sec},"INT_ACC","SETTLE_DT",${d}))))'.format(r=r, rv=rv, same=same, sec=sec,
                                                                        d=g["date"][:-1] + "$2"))
-            b.set("%s%d" % (g["bid"], r), clean("%s%d" % (raw["bid"], r)), fmt="0.000")
-            b.set("%s%d" % (g["ask"], r), clean("%s%d" % (raw["ask"], r)), fmt="0.000")
+            sz = L["size"][k]
+            for side, fld, rv_col in (("bid", "BID_SIZE", RV_SIZE[0]), ("ask", "ASK_SIZE", RV_SIZE[1])):
+                b.set("%s%d" % (sz[side], r), '=IF($A{r}="","",{v})'.format(r=r, v=size_of(
+                    'IF({same},{rv}${c}{r},_xll.BDP({sec},"{fld}"))'.format(same=same, rv=rv, c=rv_col, r=r, sec=sec, fld=fld))),
+                      fmt=INT0)
+            b.set("%s%d" % (g["bid"], r), quoted("%s%d" % (raw["bid"], r), "%s%d" % (sz["bid"], r)), fmt="0.000")
+            b.set("%s%d" % (g["ask"], r), quoted("%s%d" % (raw["ask"], r), "%s%d" % (sz["ask"], r)), fmt="0.000")
             b.set("%s%d" % (g["last"], r), clean("%s%d" % (raw["last"], r)), fmt="0.000", bold=True)
             d = "%s%d" % (raw["date"], r)
             b.set("%s%d" % (g["when"], r),
@@ -1613,25 +1702,34 @@ def _tto_dibs_live(model: Model) -> None:
                   'VALUE(MID({d},FIND(".",{d})+1,FIND(".",{d},FIND(".",{d})+1)-FIND(".",{d})-1)),VALUE(LEFT({d},FIND(".",{d})-1))))),"")'
                   .format(d=d), fmt=DATE)
             b.set("%s%d" % (g["vol"], r), clean("%s%d" % (raw["vol"], r)), fmt=INT0)
-            b.set("%s%d" % (L["mid"][k], r), '=IF(AND(ISNUMBER({b}{r}),ISNUMBER({a}{r})),({b}{r}+{a}{r})/2,"")'.format(
-                b=g["bid"], a=g["ask"], r=r), fmt="0.0000")
+            # the price of the value date: the middle of its bid and ask, or - when a side is no live quote - its last
+            # trade; of today while both sides are live quotes, else of the day of the last trade
+            p = {"b": "%s%d" % (g["bid"], r), "a": "%s%d" % (g["ask"], r), "l": "%s%d" % (g["last"], r),
+                 "bs": "%s%d" % (sz["bid"], r), "as": "%s%d" % (sz["ask"], r), "w": "%s%d" % (g["when"], r)}
+            b.set("%s%d" % (L["mid"][k], r), '=IF(AND(ISNUMBER({b}),ISNUMBER({a})),({b}+{a})/2,'
+                                              'IF(AND(OR({bs}=0,{as}=0),ISNUMBER({l})),{l},""))'.format(**p), fmt="0.0000")
+            b.set("%s%d" % (L["day"][k], r), '=IF(AND(N({bs})>0,N({as})>0),TODAY(),{w})'.format(**p), fmt=DATE)
         # one more source
         b.set("%s%d" % (L["sec_extra"], r), security("$%s$2" % LIVE_EXTRA, "BGN", r))
         ex_bid, ex_ask = L["raw_extra"]["bid"], L["raw_extra"]["ask"]
         b.set("%s%d" % (ex_bid, r), '=IF($A{r}="","",_xll.BDP(${s}{r},"PX_BID"))'.format(r=r, s=L["sec_extra"]))
         b.set("%s%d" % (ex_ask, r), '=IF($A{r}="","",_xll.BDP(${s}{r},"PX_ASK"))'.format(r=r, s=L["sec_extra"]))
+        se = L["size_extra"]
+        for side, fld in (("bid", "BID_SIZE"), ("ask", "ASK_SIZE")):
+            b.set("%s%d" % (se[side], r), '=IF($A{r}="","",{v})'.format(r=r, v=size_of('_xll.BDP(${s}{r},"{fld}")'.format(
+                s=L["sec_extra"], r=r, fld=fld))), fmt=INT0)
         e1 = index_to_col(_col(LIVE_EXTRA) + 1)
-        b.set("%s%d" % (LIVE_EXTRA, r), clean("%s%d" % (ex_bid, r)), fmt="0.000")
-        b.set("%s%d" % (e1, r), clean("%s%d" % (ex_ask, r)), fmt="0.000")
-        # the overnight repo the dirty prices of two value dates imply - only from prices of the same day (the last
-        # trades of both value dates on one day: a T0 price of two weeks ago against today's T1 implies nothing);
-        # none for a CPI linker (its TL price moves with the index ratio of each value date)
+        b.set("%s%d" % (LIVE_EXTRA, r), quoted("%s%d" % (ex_bid, r), "%s%d" % (se["bid"], r)), fmt="0.000")
+        b.set("%s%d" % (e1, r), quoted("%s%d" % (ex_ask, r), "%s%d" % (se["ask"], r)), fmt="0.000")
+        # the overnight repo the dirty prices of two value dates imply - only from prices of the same day (live quotes
+        # on both, or the last trades of both on one day: a T0 price of two weeks ago against today's T1 implies
+        # nothing); none for a CPI linker (its TL price moves with the index ratio of each value date)
         for col, (k0, k1) in ((w, (0, 1)), (x, (1, 2))):
             g0, g1 = L["groups"][k0], L["groups"][k1]
             m0, m1 = "%s%d" % (L["mid"][k0], r), "%s%d" % (L["mid"][k1], r)
             a0, a1 = "%s%d" % (L["raw"][k0]["acc"], r), "%s%d" % (L["raw"][k1]["acc"], r)
             d0, d1 = "$%s$2" % g0["date"][:-1], "$%s$2" % g1["date"][:-1]
-            t0, t1 = "%s%d" % (g0["when"], r), "%s%d" % (g1["when"], r)
+            t0, t1 = "%s%d" % (L["day"][k0], r), "%s%d" % (L["day"][k1], r)
             b.set("%s%d" % (col, r),
                   '=IF(OR($A{r}="",{rv}$D{r}="E"),"",IFERROR(IF(AND(ISNUMBER({m0}),ISNUMBER({m1}),ISNUMBER({a0}),ISNUMBER({a1}),{d1}>{d0},'
                   'ISNUMBER({t0}),ISNUMBER({t1}),{t0}={t1}),'
@@ -1645,7 +1743,9 @@ def _tto_dibs_live(model: Model) -> None:
            "yazılabilir. Kâğıdın DİBS RV'de fiyatlandığı kaynak o sayfadan okunur. Repo: iki valörün kirli fiyatlarından "
            "(temiz + o valördeki işlemiş faiz), (kirli2 / kirli1 − 1) · 365 / gün; tek bir fiyat adımı (0,005) bir günde "
            "~1,8 puan eder. Repo yalnız iki valörün fiyatı aynı güne aitse (son işlemleri aynı gündeyse) hesaplanır: "
-           "eski bir T0 fiyatıyla bugünün T1 fiyatı bir repo söylemez.")
+           "eski bir T0 fiyatıyla bugünün T1 fiyatı bir repo söylemez. Bid / ask yalnız o tarafta emir varsa (Bloomberg "
+           "BID_SIZE / ASK_SIZE > 0) fiyattır; emir yoksa \"–\" (kaynak son fiyatı tekrar eder). Fiyat: bid ve ask'ın "
+           "ortası, bir taraf kotasızsa son işlem; iki taraf da canlıysa bugünün fiyatıdır.")
     b.sheet.freeze = [4, 2]
 
 
@@ -1775,6 +1875,59 @@ def _tto_universe(model: Model) -> None:
            "(bono ve kuponsuz kendi valöründe, diğerleri ertesi gün; kaynaklar sarı hücrelerde). Getiri, ASW ve sinyal yalnızca "
            "trading listesindeki kâğıtlar için hesaplanır.")
     b.sheet.freeze = [4, 2]
+
+
+#: EK_EVREN: the sizes of a bond's bid and ask, next to Bloomberg's other answers (T:Z)
+UNI_SIZE = ("AA", "AB")
+
+
+def _universe_quote_rows(model: Model) -> List[int]:
+    """The rows of EK_EVREN that price a bond: those that ask Bloomberg for one (a security in U)."""
+    sh = model.sheet(UNI_SHEET)
+    return [r for r in range(UNI_OWN[0], sh.max_row + 1) if parse_a1("U%d" % r) in sh.fml]
+
+
+def _universe_quote_edits(r: int) -> Tuple[Tuple[str, str, str], ...]:
+    """What changes in a bond's row of EK_EVREN: (cell, the text of its formula, what it becomes).  The price from
+    DİBS RV is Bloomberg's figure (FD / FE: live quote or not); the visible bid / ask (I, J) say "–" for a price that
+    is no live quote."""
+    f = {"r": r, "b": "$%s%d" % (UNI_SIZE[0], r), "a": "$%s%d" % (UNI_SIZE[1], r), "x": NO_QUOTE}
+    return (("V%d" % r, "'DİBS RV'!$K$5:$K$54", "'DİBS RV'!$FD$5:$FD$54"),
+            ("W%d" % r, "'DİBS RV'!$L$5:$L$54", "'DİBS RV'!$FE$5:$FE$54"),
+            ("I%d" % r, "IF(N(V{r})>0,V{r},".format(**f), 'IF(N(V{r})>0,IF({b}=0,"{x}",V{r}),'.format(**f)),
+            ("J%d" % r, "IF(N(W{r})>0,W{r},".format(**f), 'IF(N(W{r})>0,IF({a}=0,"{x}",W{r}),'.format(**f)))
+
+
+def _universe_quotes_check(model: Model) -> None:
+    _need_sheets(model, UNI_SHEET)
+    _need_formula(model, "DİBS RV", "%s%d" % (RV_SIZE[0], LIVE_FIRST), "BID_SIZE")        # DİBS RV has its sizes
+    rows = _universe_quote_rows(model)
+    if not rows:
+        raise ValueError("%s: kâğıt satırı yok" % UNI_SHEET)
+    sh = model.sheet(UNI_SHEET)
+    for r in rows:
+        _need_formula(model, UNI_SHEET, "V%d" % r, "$R{r}=INDEX('DİBS RV'!$BS$5:$BS$54,$T{r})".format(r=r))
+        for addr, old, _ in _universe_quote_edits(r):
+            if _need_formula(model, UNI_SHEET, addr).count(old) != 1:
+                raise ValueError("%s!%s beklenen formül değil (%s yok)" % (UNI_SHEET, addr, old))
+        taken = [c for c in UNI_SIZE for rr in (4, r) if parse_a1("%s%d" % (c, rr)) in sh.fml or parse_a1("%s%d" % (c, rr)) in sh.consts]
+        if taken:
+            raise ValueError("%s!%s%d boş değil" % (UNI_SHEET, taken[0], r))
+
+
+def _tto_universe_quotes(model: Model) -> None:
+    """Tüm Kâğıtlar: the sizes of each bond's bid and ask (from DİBS RV for a bond priced there on the same source,
+    else ``BID_SIZE`` / ``ASK_SIZE`` of its own security); a side that is no live quote shows "–"."""
+    b = SheetBuilder(model, UNI_SHEET)
+    b.head("%s4" % UNI_SIZE[0], ["bid boyut", "ask boyut"])
+    for r in _universe_quote_rows(model):
+        same = "IF(ISNUMBER($T{r}),$R{r}=INDEX('DİBS RV'!$BS$5:$BS$54,$T{r}),FALSE)".format(r=r)
+        for col, fld, rv_col in ((UNI_SIZE[0], "BID_SIZE", RV_SIZE[0]), (UNI_SIZE[1], "ASK_SIZE", RV_SIZE[1])):
+            b.set("%s%d" % (col, r), '=IF($A{r}="","",{v})'.format(r=r, v=size_of(
+                "IF({same},INDEX('DİBS RV'!${c}$5:${c}$54,$T{r}),_xll.BDP($U{r},\"{fld}\"))".format(same=same, c=rv_col, r=r, fld=fld))),
+                  fmt=INT0)
+        for addr, old, new in _universe_quote_edits(r):
+            b.patch(addr, "=" + formula_of(model, UNI_SHEET, addr).replace(old, new))
 
 
 # ---------------------------------------------------------------------------------------------- carry path
@@ -2321,8 +2474,10 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (VH_SHEET, _viop_hist_check, _tto_viop_history), ("EK_FWD vade faizleri", _fwd_rates_check, _tto_fwd_rates),
             ("EK_FWD EURTRY", _fwd_eur_check, _tto_fwd_eur),
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
-            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
-            (UNI_SHEET, _universe_check, _tto_universe), (CARRY_SHEET, _carry_check, _tto_carry),
+            (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
+            ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
+            (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
+            (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty)),
