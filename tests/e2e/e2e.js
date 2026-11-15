@@ -739,8 +739,8 @@ async function shot(page, name) {
       && window.tto.state.page.ois.f.tenor && window.tto.state.page.ois.f.tenor.value === '18M', null, { timeout: 20000 });
     await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
     await page.waitForFunction(() => !document.querySelector('#nav-chat-missing'), null, { timeout: 20000 });
-    const deskAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json.items.find((x) => x.raw === '18m ois paid 35.20') || {};
-    check('... "⇢ Gir" in the list fills Günlük İşlemler; saved, the line is entered and the badge goes', ['linked', 'auto'].includes(deskAfter.state), deskAfter);
+    const reconAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json.items.find((x) => x.raw === '18m ois paid 35.20') || {};
+    check('... "⇢ Gir" in the list fills Günlük İşlemler; saved, the line is entered and the badge goes', ['linked', 'auto'].includes(reconAfter.state), reconAfter);
     const [deskArchive] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
     check('... and the archive downloads without a word', /^Blotter_\d{4}\.\d{2}\.\d{2}\.xlsx$/.test(deskArchive.suggestedFilename()), deskArchive.suggestedFilename());
     await open(page, 'broker');
