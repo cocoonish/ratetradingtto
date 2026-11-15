@@ -56,7 +56,7 @@
    "id": "U2",
    "type": "table",
    "title": "Yardımcı · Bloomberg yanıtları (RV satırı, menkul, fiyatlar, hacim)",
-   "range": "T4:Z103",
+   "range": "T4:AB103",
    "hidden": true
   }
  ]

@@ -12,6 +12,7 @@ from conftest import auth, cell, make_service
 from tto import bonds as bd
 from tto import brokerchat as bc
 from tto import extras as ex
+from tto.marketdata.base import NOT_APPLICABLE, bdp_key
 from tto.server import create_app
 from tto.service import ServiceError
 from tto.store import user_key
@@ -564,6 +565,171 @@ def test_the_bond_card_has_everything_on_one_bond(tmp_path):
         with TestClient(create_app(s)) as client:
             got = client.get("/api/bond/TRT160431T35", headers=hdr).json()
             assert got["label"] == "16.04.31" and got["board"]["last"] == "94,100"
+    finally:
+        s.stop()
+
+
+# ---------------------------------------------------------------------------------------------- live quote or not
+def _answers(s, values):
+    """Bloomberg's answers the recorded file does not have (the sizes of the orders, another source's quote), handed
+    over as the live provider does: the cells that use them are calculated again and the pages see it."""
+    s.et.call(s._apply_market, s.provider.update({bdp_key(sec, fld): v for (sec, fld), v in values.items()}))
+    s.bump()
+
+
+def _summary(s, u, isin):
+    """The trading summary's header and the line of a bond."""
+    rows = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
+    return [c["t"] for c in rows[0]], next(row for row in rows if any(c.get("t") == isin for c in row))
+
+
+def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
+    """Borsa İstanbul's sources repeat a price as bid and ask when no order stands (the last trade; a bill's at its
+    yield on the next value date).  The size of the order tells a live quote from it: with no order ("#N/A N/A") the
+    side is "–" with Bloomberg's figure in the tip, nothing is worked out of it, and what is worked out of the price
+    in use is soft; a live quote has its size in the tip and on the card.  A size that tells nothing (the recorded
+    file, a source without sizes such as BGN) leaves everything as it was."""
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Kota Bakan")["user"]
+        uk = user_key(u)
+        s.broker_add(u, CHAT, s.today_iso(), source="ICAP")
+        sec, old = "TRT150328T24 @ISL1 ISIN", "TRT100730T13 @ISL1 ISIN"     # DİBS RV rows 8 and 23, priced on ISL1
+        assert (cell(s, "DİBS RV!BT8"), cell(s, "DİBS RV!BT23")) == (sec, old)
+        # the recorded file has no sizes: everything as it was
+        cols = ("K", "L", "M", "O", "T", "U", "V", "W", "Z", "AB", "AC", "AD", "AE")
+        before = {c: cell(s, "DİBS RV!%s8" % c) for c in cols}
+        assert (before["K"], before["L"], before["W"], cell(s, "DİBS RV!J8")) == (100.1, 100.125, 2.5, "Canlı")
+        assert (cell(s, "DİBS RV!XR8"), cell(s, "DİBS RV!XS8"), cell(s, "DİBS RV!J23")) == ("", "", "Son fiyat (26.10.2026)")
+
+        # no order on either side (a closed market): "#N/A N/A"
+        _answers(s, {(x, f): "#N/A N/A" for x in (sec, old) for f in ("BID_SIZE", "ASK_SIZE")})
+        assert [cell(s, "DİBS RV!%s8" % c) for c in ("XR", "XS", "K", "L")] == [0.0, 0.0, "–", "–"]
+        assert [cell(s, "DİBS RV!%s8" % c) for c in ("U", "V", "W", "AD", "AE")] == ["", "", "", "", ""]   # nothing of the sides
+        kept = ("M", "O", "T", "Z", "AB", "AC")                    # the price in use and what is worked out of it
+        assert {c: cell(s, "DİBS RV!%s8" % c) for c in kept} == {c: before[c] for c in kept}
+        assert (cell(s, "DİBS RV!J8"), cell(s, "DİBS RV!J23")) == ("Kota yok · işlem bugün", "Kota yok · son fiyat (26.10.2026)")
+        # the trading summary
+        heads, line = _summary(s, u, "TRT150328T24")
+        bid, ask = line[heads.index("Bid")], line[heads.index("Ask")]
+        assert (bid["t"], bid["cls"], ask["t"], ask["cls"]) == ("–", "soft", "–", "soft")
+        assert bid["tip"] == "Kota yok: bid tarafında emir yok (BID_SIZE boş) · Bloomberg'in tekrar ettiği fiyat 100,100, canlı değil"
+        assert "ASK_SIZE" in ask["tip"] and "100,125" in ask["tip"]
+        for h in ("Getiri %", "ASW / DM", "Pahalı / ucuz", "Sinyal"):
+            got = line[heads.index(h)]
+            assert "soft" in got["cls"] and got["tip"] == "Fiyat durumu: Kota yok · işlem bugün · iki taraflı canlı kota yok, değer bu fiyattan", h
+        assert "soft" not in (line[heads.index("Mod. süre")].get("cls") or "")
+        heads, other = _summary(s, u, "TRT160431T35")             # a bond whose sizes are not known: as before
+        assert other[heads.index("Bid")]["t"] == "94,380" and "soft" not in (other[heads.index("Getiri %")].get("cls") or "")
+        # the DİBS RV page: its bid / ask, the values of the price in use, the broker's distance from the screen
+        d = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")["data"]
+        row = next(r for r, n in zip(d["rows"], d["r"]) if n == 8)
+        k, t, g = d["c"].index("K"), d["c"].index("T"), d["c"].index("G")
+        assert (row[k]["t"], row[k]["cls"]) == ("–", "soft") and "soft" in row[t]["cls"] and "soft" not in (row[g].get("cls") or "")
+        gap = row[d["c"].index("Broker − ekran (bp)")]
+        assert "soft" in gap["cls"] and gap["tip"] == "Ekranda iki taraflı canlı kota yok (Kota yok · işlem bugün): ekran getirisi bu fiyattan"
+        row13 = next(r for r, n in zip(d["rows"], d["r"]) if n == 13)
+        assert type(row13[k]["v"]) is float and "soft" not in (row13[d["c"].index("Broker − ekran (bp)")].get("cls") or "")
+        # DİBS Trading's value dates: T1 says no quote; its price for the repo is the last trade, of that trade's day
+        L = ex._live_cols()
+        g1 = L["groups"][1]
+        d = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L1")["data"]
+        row = next(r for r, n in zip(d["rows"], d["r"]) if n == 8)
+        got = row[d["c"].index(g1["bid"])]
+        assert (got["t"], got["cls"]) == ("–", "soft") and "100,100" in got["tip"]
+        assert cell(s, "EK_DIBS!%s8" % L["mid"][1]) == 100.2 and cell(s, "EK_DIBS!%s8" % L["day"][1]) == cell(s, "EK_DIBS!%s8" % g1["when"])
+        # the card
+        card = s.bond_card(u, "TRT150328T24")
+        t1 = card["live"][1]
+        assert (t1["cap"], t1["bid"], t1["ask"], t1["bid_size"], t1["ask_size"]) == ("T1", "–", "–", "", "")
+        assert t1["bid_tip"] == bid["tip"] and "100,125" in t1["ask_tip"]
+        rv = {x["name"]: x for x in card["rv"]}
+        assert rv["Fiyat durumu"]["t"] == "Kota yok · işlem bugün" and not rv["Fiyat durumu"].get("soft")
+        assert rv["BIST bileşik getiri"]["soft"] and rv["Sinyal"]["soft"] and rv["BIST bileşik getiri"]["tip"] == line[heads.index("Getiri %")]["tip"]
+        assert not rv["Kupon"].get("soft") and not any(name.startswith("Alış−satış") for name in rv)
+        # Tüm Kâğıtlar
+        d = s.view(u, "kagitlar")["panels"][0]["data"]
+        row = next(r for r in d["rows"] if r[0].get("t") == "TRT150328T24")
+        at = {c: d["c"].index(c) for c in "IJNOPQ"}
+        assert (row[at["I"]]["t"], row[at["I"]]["cls"], row[at["J"]]["t"]) == ("–", "soft", "–") and "100,100" in row[at["I"]]["tip"]
+        assert all("soft" in row[at[c]]["cls"] for c in "NOP") and "soft" not in (row[at["Q"]].get("cls") or "")        # (DV01)
+        # the ALIŞ price type uses the bid only while it is a live quote: the middle now
+        w = s.login("Alış Fiyatı")["user"]
+        s.set_inputs(w, "tto", [{"ref": "DİBS RV!X2", "value": "ALIŞ"}])
+        assert cell(s, "DİBS RV!O8", user=user_key(w)) == before["M"] and cell(s, "DİBS RV!J8", user=user_key(w)) == "ALIŞ · Kota yok · işlem bugün"
+
+        # live quotes on both sides: the sheet as it was, the sizes in the tips and on the card
+        _answers(s, {(sec, "BID_SIZE"): 5e6, (sec, "ASK_SIZE"): 2.5e6})
+        assert {c: cell(s, "DİBS RV!%s8" % c) for c in cols} == before and cell(s, "DİBS RV!J8") == "Canlı kota"
+        assert cell(s, "DİBS RV!O8", user=user_key(w)) == 100.1                             # ALIŞ: the live bid
+        heads, line = _summary(s, u, "TRT150328T24")
+        bid = line[heads.index("Bid")]
+        assert (bid["t"], bid.get("cls"), bid["tip"]) == ("100,100", None, "Bid boyutu: 5.000.000")
+        assert line[heads.index("Ask")]["tip"] == "Ask boyutu: 2.500.000" and "soft" not in (line[heads.index("Sinyal")].get("cls") or "")
+        t1 = s.bond_card(u, "TRT150328T24")["live"][1]
+        assert (t1["bid"], t1["ask"], t1["bid_size"], t1["ask_size"], t1["bid_tip"]) == ("100,100", "100,125", "5.000.000", "2.500.000", "")
+
+        # one side: the bid stands, the ask does not
+        _answers(s, {(sec, "ASK_SIZE"): "#N/A N/A"})
+        assert [cell(s, "DİBS RV!%s8" % c) for c in ("K", "L", "V", "W", "AE", "J")] == [100.1, "–", "", "", "", "Canlı: yalnız bid"]
+        assert (cell(s, "DİBS RV!U8"), cell(s, "DİBS RV!AD8")) == (before["U"], before["AD"])
+        heads, line = _summary(s, u, "TRT150328T24")
+        assert "Canlı: yalnız bid" in line[heads.index("Getiri %")]["tip"] and line[heads.index("Bid")]["t"] == "100,100"
+
+        # another source without sizes (BGN): its quote as it is
+        bgn = "TRT150328T24 @BGN ISIN"
+        _answers(s, {(bgn, "PX_BID"): 100.377, (bgn, "PX_ASK"): 100.597, (bgn, "BID_SIZE"): NOT_APPLICABLE, (bgn, "ASK_SIZE"): NOT_APPLICABLE})
+        assert [cell(s, "EK_DIBS!%s8" % c) for c in (ex.LIVE_EXTRA, "V")] == [100.377, 100.597]
+        extra = s.bond_card(u, "TRT150328T24")["extra"]
+        assert {k: extra[k] for k in ("src", "bid", "ask", "bid_size", "bid_tip")} == {"src": "BGN", "bid": "100,377", "ask": "100,597",
+                                                                                          "bid_size": "", "bid_tip": ""}
+
+        # the repo: live quotes are prices of today - T0 last traded on 20.10, but its live quotes and T1's make a repo
+        _answers(s, {(sec, "ASK_SIZE"): 2.5e6})
+        raw0, size0, wcol = L["raw"][0], L["size"][0], ex.LIVE_REPO[0]
+        res = s.set_inputs(u, "tto", [{"ref": "EK_DIBS!%s8" % raw0["bid"], "value": 100.0}, {"ref": "EK_DIBS!%s8" % raw0["ask"], "value": 100.03},
+                                      {"ref": "EK_DIBS!%s8" % raw0["acc"], "value": 4.86},
+                                      {"ref": "EK_DIBS!%s8" % raw0["date"], "value": 46315.0}], allow_adhoc=True)
+        assert not res["errors"]
+        assert cell(s, "EK_DIBS!%s8" % wcol, user=uk) == ""                     # T0's sizes not known: the day of its last trade
+        assert s.bond_card(u, "TRT150328T24")["repo_note"] == (
+            "T0 ve T1 fiyatları aynı güne ait değil (T0 son işlem: 20.10.2026 · T1 canlı kota: 03.11.2026): repo hesaplanmadı")
+        res = s.set_inputs(u, "tto", [{"ref": "EK_DIBS!%s8" % size0[side], "value": 3e6} for side in ("bid", "ask")], allow_adhoc=True)
+        assert not res["errors"]
+        assert cell(s, "EK_DIBS!%s8" % L["day"][0], user=uk) == cell(s, "EK_DIBS!%s8" % L["day"][1], user=uk) == 46329.0     # today
+        dirty0, dirty1 = 100.015 + 4.86, cell(s, "DİBS RV!M8") + cell(s, "DİBS RV!CW8")
+        assert cell(s, "EK_DIBS!%s8" % wcol, user=uk) == pytest.approx((dirty1 / dirty0 - 1) * 365 * 100)
+        assert s.bond_card(u, "TRT150328T24")["repo_note"] == ""
+    finally:
+        s.stop()
+
+
+def test_on_a_closed_market_no_bid_or_ask_is_shown_as_a_quote(tmp_path):
+    """A Sunday: Bloomberg has no size for any bond on Borsa İstanbul's sources (and BGN none at all).  No page shows
+    a bid or ask of the exchange as a quote, every bond of the trading list says so ("Kota yok · …"), and the
+    yields, ASW and signals are still there - soft."""
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Pazar Masa")["user"]
+        L = ex._live_cols()
+        listed = [r for r in range(ex.LIVE_FIRST, ex.LIVE_LAST + 1) if cell(s, "DİBS RV!A%d" % r)]
+        secs = {cell(s, "EK_DIBS!%s%d" % (c, r)) for r in listed for c in L["sec"] + [L["sec_extra"]]}
+        secs |= {cell(s, "EK_EVREN!U%d" % r) for r, b, _ in ex.universe_rows() if b}
+        assert len(listed) >= 15 and len(secs) > 100
+        _answers(s, {(x, f): NOT_APPLICABLE if "@BGN" in x else "#N/A N/A" for x in secs for f in ("BID_SIZE", "ASK_SIZE")})
+        assert all(str(cell(s, "DİBS RV!J%d" % r)).startswith("Kota yok · ") for r in listed)
+        assert not any(type(cell(s, "DİBS RV!%s%d" % (c, r))) is float for r in listed for c in ("K", "L", "W"))
+        assert sum(1 for r in listed if cell(s, "DİBS RV!K%d" % r) == "–") >= 15
+        heads, _ = _summary(s, u, "TRT150328T24")
+        rows = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
+        bonds = [row for row in rows[1:] if row[-1].get("t") == "▸"]
+        assert len(bonds) == len(listed)
+        assert all(row[heads.index(h)]["t"] in ("–", "") for row in bonds for h in ("Bid", "Ask"))
+        priced = [row[heads.index("Getiri %")] for row in bonds if row[heads.index("Getiri %")]["t"]]
+        assert len(priced) >= 15 and all("soft" in c["cls"] for c in priced)
+        quotes = [g[side] for g in L["groups"] for side in ("bid", "ask")]
+        assert not any(type(cell(s, "EK_DIBS!%s%d" % (c, r))) is float for r in listed for c in quotes)
+        assert not any(type(cell(s, "EK_EVREN!%s%d" % (c, r))) is float for r, b, _ in ex.universe_rows() if b for c in "IJ")
     finally:
         s.stop()
 

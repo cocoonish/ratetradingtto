@@ -75,7 +75,7 @@
    "id": "L2",
    "type": "table",
    "title": "Yardımcı · Bloomberg yanıtları (menkul, valör başına fiyat, hacim, işlemiş faiz)",
-   "range": "AA4:BA54",
+   "range": "AA4:BL54",
    "hidden": true
   }
  ],

@@ -146,7 +146,7 @@ class _Request(object):
 
 
 class _Sub(object):
-    __slots__ = ("cid", "fields", "sent_fields", "names", "state", "bad", "since", "created", "plain")
+    __slots__ = ("cid", "fields", "sent_fields", "names", "state", "bad", "since", "created", "plain", "heard")
 
     def __init__(self, cid: int):
         self.cid = cid
@@ -158,6 +158,7 @@ class _Sub(object):
         self.since = 0.0
         self.created = time.time()
         self.plain = False           # subscribe without the conflation option (it was refused with it)
+        self.heard = False           # a message of the stream has arrived (its first picture, a tick)
 
 
 def favour_reader(interval: float = 0.001) -> Dict[str, Any]:
@@ -534,6 +535,7 @@ class BloombergProvider(Provider):
                 sub.sent_fields = set()
                 sub.names = ()
                 sub.created = now
+                sub.heard = False
             self.slow = False
 
     def _roll_day(self) -> None:
@@ -605,12 +607,15 @@ class BloombergProvider(Provider):
                 if now - last >= max(it.refresh, it.poll):
                     it.state = "queued"
                     self._queue.append(key)
-            # real-time keys whose subscription does not deliver are polled instead
+            # real-time keys whose subscription does not deliver are polled instead - but not the size of an order
+            # while the stream of its security flows: no size in it means no order stands, and a new one arrives as
+            # a tick (asked again, every security of a closed market would cost a request an hour, all day)
             if self.stream and self.price_poll > 0:
                 for (sec, field), keys in self._rt_keys.items():
                     sub = self._subs.get(sec)
                     dead = sub is None or sub.state == "failed" or field in sub.bad or \
-                        (sub.state == "started" and now - sub.since > SILENT_AFTER)
+                        (sub.state == "started" and now - sub.since > SILENT_AFTER
+                         and not (sub.heard and field in CLEARED_WHEN_NULL))
                     if not dead:
                         continue
                     for key in keys:
@@ -966,6 +971,7 @@ class BloombergProvider(Provider):
             sub = self._subs.get(sec) if sec is not None else None
             if sub is None:
                 continue
+            sub.heard = True
             if root is None:
                 root = msg.asElement()
             got: List[Tuple[str, Any]] = []

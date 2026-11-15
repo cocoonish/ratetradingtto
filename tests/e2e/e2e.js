@@ -1499,7 +1499,8 @@ async function shot(page, name) {
     const cardText = await page.textContent('.modal.bondcard');
     check('the bond card: what it is, its value dates, the board, the chat and its row of DİBS RV',
       /15\.03\.28 · TRT150328T24/.test(cardText) && /Sabit · kupon %36,80 · vade 15\.03\.2028/.test(cardText) && /T1 · ISL1/.test(cardText)
-      && /Broker Chat · bugün/.test(cardText) && /BIST bileşik getiri/.test(cardText) && /Sinyal/.test(cardText), cardText.slice(0, 300));
+      && /Broker Chat · bugün/.test(cardText) && /BIST bileşik getiri/.test(cardText) && /Sinyal/.test(cardText) && /Bid boyutu/.test(cardText),
+      cardText.slice(0, 300));
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
     await open(page, 'dibs');
