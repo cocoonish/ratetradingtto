@@ -247,7 +247,28 @@ class Service(object):
             if key not in book.inputs:
                 book.declare(ref, scope="shared", group="adhoc-shared")
             book.engine.set_inputs({key: _from_json(val)})
-        self._sync_blotter()
+        self._declare_saved_cells()
+        self._sync_blotter()                     # (may compute: a meeting-dated OIS of the day is priced)
+
+    def _declare_saved_cells(self) -> None:
+        """Every cell any user typed a value over ("Elle değer") or keeps in a saved scenario: declared now, in one go,
+        before anything is computed - when that costs nothing.  Declared on the user's first request instead (or when
+        a scenario was loaded), a constant among them made every value of every user computed again (~10 s for
+        everybody, after every restart)."""
+        cells: Dict[str, List[Tuple[int, int]]] = {}
+        for bid, ref in self.store.saved_cells():
+            book = self.books.get(bid)
+            if book is None:
+                continue
+            try:
+                cell = book.cell(ref)
+            except (KeyError, ValueError):
+                continue
+            if cell in book.inputs or cell in self._retired_cells(book):
+                continue                       # (a page's input already - shared ones included -, or one that moved)
+            cells.setdefault(bid, []).append(cell)
+        for bid, found in cells.items():
+            self.books[bid].declare_cells(found, scope="user", group="adhoc")
 
     def _bloomberg(self):
         """A started Bloomberg provider: its session in a helper process, or - when that is switched off or
@@ -286,6 +307,24 @@ class Service(object):
             if self.mode == "live":
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
             self.history.start()
+            threading.Thread(target=self._build_ref_indexes, name="tto-refs", daemon=True).start()
+
+    #: seconds after the start before the reverse reference indexes are built (the first pages come first)
+    REF_INDEX_DELAY = 45.0
+
+    def _build_ref_indexes(self) -> None:
+        """Which formulas read which cell (engine.ref_index, ~10 s, ~45 MB for the four workbooks): built ahead, in the
+        background, so that the first constant typed over on a page does not wait for it (it is followed through the
+        formulas that name it instead of every value of every user being computed again)."""
+        if self._stop.wait(self.REF_INDEX_DELAY):
+            return
+        for book in list(self.books.values()):
+            if self._stop.is_set():
+                return
+            try:
+                book.engine.ref_index()
+            except Exception:  # noqa: BLE001 - built when first needed instead
+                continue
 
     def _warmup_safe(self) -> None:
         try:

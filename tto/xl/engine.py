@@ -134,6 +134,9 @@ class Engine(object):
         self.spill_blocked: List[set] = [set() for _ in range(n)]
         self._mask_pool: Dict[int, int] = {}
         self.circular: List[str] = []
+        self._refs = None                                 # RefIndex (ref_index)
+        self._refs_lock = threading.Lock()
+        self.marked = 0                                   # late declarations followed by the references (not a reset)
         self.shared = Calc(self, None, None)
         self.users: Dict[str, "Calc"] = {}
         self.lock = threading.RLock()
@@ -176,22 +179,103 @@ class Engine(object):
         with, so the values that carry them all - the cell's dependents and a few more - are marked with the new
         bit and kept.  Dropping every value of every user instead made the next page compute the whole workbook
         again (a ~20 s pause for everybody).  A cell whose dependents cannot be told that way (a constant, or one
-        that depends on no input) still makes everything computed again.
+        that depends on no input) is followed through the formulas that name it (:mod:`.refs`): the values
+        downstream of it are marked the same way.  Only when that cannot be told either (a workbook with OFFSET /
+        INDIRECT, a cell an array formula writes into) is everything computed again.
+
+        Before anything is computed (since the last reset) nothing has to be dropped or marked: the cell gets its bit
+        the way a reset would give it, nothing is computed (a formula gets its own bit with its value).  The service
+        declares every input it knows of - the pages', and every cell a user typed over or keeps in a scenario -
+        at that point.
         """
-        fresh = False
+        pristine = self._pristine()
+        late: List[Tuple[int, int, int]] = []
+        seeded = []
         for si, rc in cells:
-            if rc not in self.input_mask[si]:
-                mask = self._computed_mask(si, rc)
-                if mask:
-                    b = self.bit(("cell", si, rc))             # its own bit: what follows the cell is found exactly
-                    self._set_input(si, rc, b)
-                    self._mark_dependents(mask, b)
-                    continue
-                key = ("group", group) if group else ("cell", si, rc)
-                self._set_input(si, rc, self.bit(key))
-                fresh = True
-        if fresh:
+            if rc in self.input_mask[si]:
+                continue
+            if pristine:
+                if rc in self.fml[si] and rc not in self.pins[si] and rc not in self.input_value[si]:
+                    self._set_input(si, rc, self.bit(("cell", si, rc)))     # (the bit comes with the value: _eval)
+                else:
+                    self._set_input(si, rc, self.bit(("group", group) if group else ("cell", si, rc)))
+                    seeded.append((si, rc))
+                continue
+            mask = self._computed_mask(si, rc)
+            if mask:
+                b = self.bit(("cell", si, rc))             # its own bit: what follows the cell is found exactly
+                self._set_input(si, rc, b)
+                self._mark_dependents(si, rc, mask, b)
+                continue
+            key = ("group", group) if group else ("cell", si, rc)
+            b = self.bit(key)
+            self._set_input(si, rc, b)
+            late.append((si, rc, b))
+        if late and not self._mark_downstream(late):
             self.reset()
+        elif seeded:
+            # what a reset gives an input cell: its bit, and a value (empty when the workbook holds none)
+            shared = self.shared
+            for si, rc in seeded:
+                if rc not in shared.memo[si]:
+                    shared.memo[si][rc] = None
+                shared._mark(si, rc, self.input_mask[si][rc])
+            for calc in self.users.values():
+                calc._seed_overlay()
+
+    def ref_index(self):
+        """The reverse index of the formulas' references (:class:`.refs.RefIndex`), built on first use (~4 s for the
+        TRY workbook - the service builds it ahead, in the background)."""
+        with self._refs_lock:
+            if self._refs is None:
+                from .refs import RefIndex
+                self._refs = RefIndex(self)
+            return self._refs
+
+    def _mark_downstream(self, late: List[Tuple[int, int, int]]) -> bool:
+        """Cells declared once values are computed whose dependents no mask tells - ``[(sheet, rc, bit)]``, constants
+        mostly: every computed value downstream of them (by the formulas' references) is marked with the bit, as if it
+        had been computed after the declaration.  Nothing is dropped.  False: that cannot be told (the caller resets)."""
+        for si, rc, _ in late:
+            if rc in self.spill_zone[si] or rc in self.members[si]:
+                return False                             # a cell an array formula writes into
+        idx = self.ref_index()
+        if not idx.complete:
+            return False
+        by_bit: Dict[int, List[Tuple[int, int]]] = {}
+        for si, rc, b in late:
+            by_bit.setdefault(b, []).append((si, rc))
+        intern = self.intern_mask
+        calcs = [self.shared] + list(self.users.values())
+        for b, cells in by_bit.items():
+            down = idx.downstream(cells)
+            down.update(c for c in cells if c[1] in self.fml[c[0]])        # a formula's own value (it read no input)
+            for calc in calcs:
+                memo, maskd = calc.memo, calc.maskd
+                for si, rc in down:
+                    if rc in memo[si]:
+                        calc._mark(si, rc, intern(maskd[si].get(rc, 0) | b))
+        for calc in calcs:
+            calc.rcache = {}                             # a range read does not know the cells' new bit: read again
+        shared = self.shared
+        for si, rc, b in late:
+            if rc in self.fml[si] and rc not in self.input_value[si] and rc not in self.pins[si]:
+                continue                                 # (a formula default carries its bit with its value)
+            if rc not in shared.memo[si]:
+                shared.memo[si][rc] = None
+            shared._mark(si, rc, b)
+        for calc in self.users.values():
+            calc._seed_overlay()
+        self.marked += 1
+        return True
+
+    def _pristine(self) -> bool:
+        """Nothing computed since the last reset: no calculation evaluated a formula (nothing holds a value read from
+        another cell)."""
+        shared = getattr(self, "shared", None)
+        if shared is None or shared.evals != shared._evals0:
+            return False
+        return all(c.evals == c._evals0 for c in self.users.values())
 
     def _set_input(self, si: int, rc: int, b: int) -> None:
         self.input_mask[si][rc] = b
@@ -210,24 +294,32 @@ class Engine(object):
                 return 0
         return shared.maskd[si].get(rc, 0)
 
-    def _mark_dependents(self, mask: int, b: int) -> None:
-        """Add bit ``b`` to every computed value - of every calculation - that carries all of ``mask``."""
+    def _mark_dependents(self, si: int, rc: int, mask: int, b: int) -> None:
+        """Add bit ``b`` to every computed value - of every calculation - that read the formula cell (si, rc): what
+        carries all of the mask the cell was computed with.  That is the shared value's ``mask``, and in a user's
+        calculation also the mask of the user's own value of the cell - a user who typed over something upstream
+        computed it (and what read it) with other bits: those values do not carry all of the shared mask."""
         intern = self.intern_mask
         for calc in [self.shared] + list(self.users.values()):
+            masks = [mask]
+            own = calc.maskd[si].get(rc) if calc.parent is not None else None
+            if own and own != mask:
+                masks.append(own)
             groups = calc.groups
-            for k in [k for k in groups if k & mask == mask]:
-                nk = intern(k | b)
-                if nk == k:
-                    continue
-                for si, rcs in groups.pop(k).items():
-                    md = calc.maskd[si]
-                    moved = [rc for rc in rcs if md.get(rc) == k]
-                    for rc in moved:
-                        md[rc] = nk
-                    if moved:
-                        calc._group(nk, si).extend(moved)
+            for m in masks:
+                for k in [k for k in groups if k & m == m]:
+                    nk = intern(k | b)
+                    if nk == k:
+                        continue
+                    for gsi, rcs in groups.pop(k).items():
+                        md = calc.maskd[gsi]
+                        moved = [x for x in rcs if md.get(x) == k]
+                        for x in moved:
+                            md[x] = nk
+                        if moved:
+                            calc._group(nk, gsi).extend(moved)
             for key, ent in list(calc.rcache.items()):
-                if ent[2] & mask == mask:
+                if any(ent[2] & m == m for m in masks):
                     calc.rcache[key] = (ent[0], ent[1], intern(ent[2] | b))
 
     def is_input(self, si: int, rc: int) -> bool:
@@ -321,8 +413,9 @@ class Engine(object):
         self.users.pop(name, None)
 
     # ------------------------------------------------------------------ spill anchors
-    def register_spill(self, si: int, anchor_rc: int, max_rows: int, max_cols: int) -> None:
-        """Declare that the formula at ``anchor_rc`` may write an array over the cells below / right."""
+    def register_spill(self, si: int, anchor_rc: int, max_rows: int, max_cols: int, reset: bool = True) -> None:
+        """Declare that the formula at ``anchor_rc`` may write an array over the cells below / right (``reset``:
+        False when the caller resets once after registering many)."""
         self.spill_anchors[si][anchor_rc] = (max_rows, max_cols)
         r0, c0 = divmod(anchor_rc, COLS)
         zone = self.spill_zone[si]
@@ -335,7 +428,8 @@ class Engine(object):
                     continue
                 prev = zone.get(rc)
                 zone[rc] = (anchor_rc,) if prev is None else prev + (anchor_rc,)
-        self.reset()
+        if reset:
+            self.reset()
 
 
 class Calc(object):
@@ -370,6 +464,7 @@ class Calc(object):
         self.cm = 0
         self.depth = 0
         self.busy = [set() for _ in range(n)]
+        self._evals0 = self.evals                   # (nothing evaluated since: Engine._pristine)
         if self.parent is None:
             self.memo = []
             self.maskd = []

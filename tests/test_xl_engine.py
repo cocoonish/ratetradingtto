@@ -92,6 +92,24 @@ def test_a_formula_typed_over_later_drops_no_computed_value():
     assert eng.user("ali").value("S!D1") == 2060.0
 
 
+def test_a_formula_typed_over_later_reaches_the_values_of_a_user_who_changed_what_it_reads():
+    """A user who typed over a formula upstream (B1) computed the cells below with masks of their own: the shared
+    mask of C1 ({A1, B1}) is not all in them.  Typed over later, C1 must still reach that user's values (regression:
+    the user's own value typed into C1 left D1 at its old value)."""
+    eng = mini_engine({"A1": 10, "B1": "=A1*2", "C1": "=B1+1", "D1": "=C1*10"})
+    a1, b1, c1 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "B1", "C1"))
+    eng.declare_inputs([a1])
+    eng.declare_inputs([b1])
+    ali = eng.set_user_inputs("ali", {b1: 100.0})
+    assert ali.value("S!D1") == 1010.0 and eng.shared.value("S!D1") == 210.0
+    eng.declare_inputs([c1], group="adhoc")
+    ali = eng.set_user_inputs("ali", {b1: 100.0, c1: 5.0})
+    assert ali.value("S!D1") == 50.0 and eng.shared.value("S!D1") == 210.0
+    eng.set_inputs({c1: 7.0})                               # ... and a shared value of it reaches the others
+    veli = eng.set_user_inputs("veli", {b1: 1.0})
+    assert veli.value("S!D1") == 70.0 and eng.shared.value("S!D1") == 70.0 and ali.value("S!D1") == 50.0
+
+
 def test_a_formula_at_the_end_of_a_long_chain_typed_over_later_drops_nothing():
     """The cell is computed first when it has not been - through the guard that unwinds long chains (300 deep here),
     which must not end in dropping everything."""
@@ -110,15 +128,69 @@ def test_a_formula_at_the_end_of_a_long_chain_typed_over_later_drops_nothing():
     assert eng.shared.value("S!A300") == 301.0 and ali.value("S!A300") == 0.0
 
 
-def test_a_constant_typed_over_later_still_computes_everything_again():
-    """A cell that depends on no input (a constant): nothing tells what read it, so every value is computed again."""
-    eng = chain()
-    a1, a2 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "A2"))
+def test_a_constant_typed_over_later_is_followed_through_the_formulas_that_name_it():
+    """A constant carries no dependency bit, so no mask tells what read it: the formulas that name it - directly, in a
+    range, through a defined name, inside the box A1:INDEX(..) spans, and what those write and their readers - are
+    followed instead, and their values are marked with the new bit.  Nothing is dropped or computed again (it used to
+    drop every value of every user: ~10 s for everybody)."""
+    eng = mini_engine({"A1": 10, "A2": 5, "A3": 7, "A4": 1, "B1": "=A2*2", "B2": "=SUM(A1:A3)", "B3": "=Q+1",
+                       "B4": "=SUM(A1:INDEX(A1:A9,2))", "B5": "=B1+B2+B3+B4", "B6": "=A4*3", "C1": "=TODAY()+B5"},
+                      names={"Q": "`S!R2C1`"})
+    a1, a2, a4 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "A2", "A4"))
     eng.declare_inputs([a1])
-    assert eng.shared.value("S!D1") == 260.0
-    eng.declare_inputs([a2], group="adhoc")
+    shared = eng.shared
+    assert shared.value("S!C1") == 46329.0 + 10 + 22 + 6 + 15
+    assert shared.value("S!B6") == 3.0
+    evals, memo = shared.evals, sum(len(m) for m in shared.memo)
+    eng.declare_inputs([a2], group="adhoc")                        # A2: read by B1 (cell), B2 (range), B3 (name), B4 (box)
+    assert eng.marked == 1 and sum(len(m) for m in shared.memo) >= memo  # nothing dropped
     ali = eng.set_user_inputs("ali", {a2: 0.0})
-    assert ali.value("S!D1") == 210.0 and eng.shared.value("S!D1") == 260.0
+    assert ali.value("S!B1") == 0.0 and ali.value("S!B2") == 17.0 and ali.value("S!B3") == 1.0 and ali.value("S!B4") == 10.0
+    assert ali.value("S!C1") == 46329.0 + 0 + 17 + 1 + 10 and ali.value("S!B6") == 3.0
+    assert shared.value("S!C1") == 46329.0 + 53 and shared.evals == evals          # everybody else: as it was
+    # a group's second cell (the same bit), and a shared change underneath
+    eng.declare_inputs([a4], group="adhoc")
+    eng.set_user_inputs("veli", {a4: 2.0})
+    assert eng.user("veli").value("S!B6") == 6.0 and shared.value("S!B6") == 3.0 and shared.evals == evals
+    eng.set_inputs({a1: 20.0})
+    assert ali.value("S!C1") == 46329.0 + 0 + 27 + 1 + 20 and shared.value("S!C1") == 46329.0 + 10 + 32 + 6 + 25
+
+
+def test_a_constant_an_array_formula_writes_into_still_computes_everything_again():
+    """A cell inside the area a formula spills into is the formula's to fill: typed over later, every value is
+    computed again (the safe way, as before)."""
+    from helpers import mini_book
+    book = mini_book({"A1": 1.0, "A2": 2.0, "A3": 3.0, "C1": "=FILTER(A1:A3,A1:A3>0)", "D1": "=C2*10"}, dynamic=("C1",))
+    eng = book.engine
+    assert eng.shared.value("S!D1") == 20.0
+    c2 = eng.model.cell_ref("S!C2")
+    assert c2[1] in eng.spill_zone[c2[0]]
+    resets = []
+    real = eng.reset
+    eng.reset = lambda: (resets.append(1), real())
+    eng.declare_inputs([c2], group="adhoc")
+    assert eng.marked == 0 and resets == [1]
+    ali = eng.set_user_inputs("ali", {c2: 7.0})
+    assert ali.value("S!D1") == 70.0
+
+
+def test_inputs_declared_before_anything_is_computed_cost_nothing():
+    """The service declares every input it knows of before the first value is computed: nothing is dropped (there
+    is nothing yet) and nothing is computed to find a formula's dependents - a formula gets its own bit, which comes
+    with its value."""
+    eng = chain()
+    a1, b1, f1 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "B1", "F1"))
+    resets = []
+    real = eng.reset
+    eng.reset = lambda: (resets.append(1), real())
+    eng.declare_inputs([a1, b1, f1], group="g")
+    assert resets == [] and eng.shared.evals == 0
+    assert eng.input_mask[b1[0]][b1[1]] != eng.input_mask[a1[0]][a1[1]]            # the formula: a bit of its own
+    assert eng.shared.value("S!D1") == 260.0 and eng.shared.maskd[b1[0]][b1[1]] & eng.input_mask[b1[0]][b1[1]]
+    ali = eng.set_user_inputs("ali", {a1: 1.0})
+    veli = eng.set_user_inputs("veli", {b1: 100.0})
+    assert ali.value("S!D1") == 80.0 and veli.value("S!D1") == 1060.0 and ali.value("S!F1") == "küçük"
+    assert resets == []
 
 
 def test_input_group_shares_one_dependency_bit():
@@ -305,9 +377,9 @@ def _check_groups(calc):
 
 
 def test_invalidation_matches_a_calculation_from_scratch_at_random():
-    """Shared values, users' own values, values typed over formulas later and the clock, in random order: after every
-    step every user's every cell is what a fresh calculation of the same inputs gives, and each computed value is
-    listed under its mask (an invalidation tests the masks, not the values)."""
+    """Shared values, users' own values, values typed over formulas and constants later and the clock, in random order:
+    after every step every user's every cell is what a fresh calculation of the same inputs gives (one that knew every
+    input from the start), and each computed value is listed under its mask (an invalidation tests the masks)."""
     import random
     for seed in range(6):
         rnd = random.Random(seed)
@@ -322,7 +394,7 @@ def test_invalidation_matches_a_calculation_from_scratch_at_random():
         users = {"ali": {}, "veli": {}}
         today = [46329.0]
         formula_cells = ["B%d" % i for i in range(1, 41)]
-        for step in range(40):
+        for step in range(60):
             op = rnd.random()
             if op < 0.25:
                 c = rnd.choice(declared)
@@ -343,7 +415,8 @@ def test_invalidation_matches_a_calculation_from_scratch_at_random():
                 users[name] = ov
                 eng.set_user_inputs(name, ov)
             elif op < 0.8:
-                c = ref("S!" + rnd.choice(formula_cells))      # a value typed over a formula, later
+                # a value typed over a formula or over a constant, later
+                c = ref("S!" + rnd.choice(formula_cells + ["C1", "C2", "C3", "C4", "A7", "A8"]))
                 if c not in declared:
                     eng.declare_inputs([c], group="adhoc")
                     declared.append(c)

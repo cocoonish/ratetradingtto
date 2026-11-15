@@ -229,6 +229,16 @@ class Store(object):
             rows = self._q("SELECT book, cell, value FROM user_inputs WHERE user=? AND book=?", (user, book))
         return {(r["book"], r["cell"]): json.loads(r["value"]) for r in rows}
 
+    def saved_cells(self) -> List[Tuple[str, str]]:
+        """Every (book, cell) any user keeps a value of: personal inputs and the cells of saved scenarios."""
+        out = {(r["book"], r["cell"]) for r in self._q("SELECT DISTINCT book, cell FROM user_inputs")}
+        for r in self._q("SELECT payload FROM scenarios"):
+            try:
+                out.update((b, c) for b, c, _ in json.loads(r["payload"]))
+            except (TypeError, ValueError):
+                continue
+        return sorted(out)
+
     def set_user_inputs(self, user: str, book: str, values: Dict[str, Any]) -> None:
         ts = now_iso()
         with self._lock:

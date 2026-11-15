@@ -5,6 +5,7 @@ from conftest import cell, make_service
 from tto.inputs import parse_date
 from tto.service import ServiceError
 from tto.views import load_views
+from tto.xl.model import COLS, parse_a1
 
 VIEW_IDS = [v["id"] for v in load_views()]
 
@@ -536,3 +537,90 @@ def test_the_calculation_thread_evaluates_long_chains_in_one_go(service):
     before = eng.shared.restarts
     assert service.header(None)["items"]
     assert eng.shared.restarts == before                 # nothing unwound
+
+
+def _constant_read_by(book, cells):
+    """A constant (no input, no formula) that one of ``cells`` reads."""
+    eng = book.engine
+    idx = eng.ref_index()
+    for s in book.model.sheets:
+        si = s.index
+        for rc, v in sorted(s.consts.items()):
+            if type(v) is not float or (si, rc) in book.inputs or rc in s.fml or rc in eng.spill_zone[si] or rc in eng.members[si]:
+                continue
+            if any(h in cells for h in idx.readers(si, rc)):
+                return book.ref(si, rc), v
+    raise AssertionError("no constant found")
+
+
+def _page_cells(book, page):
+    out = set()
+    for p in page["panels"]:
+        d = p.get("data") or {}
+        if d.get("sheet") in book.model.sheet_index and d.get("r"):
+            si = book.model.sheet_index[d["sheet"]]
+            out.update((si, r * COLS + parse_a1(c + "1") % COLS) for r in d["r"] for c in d["c"])
+    return out
+
+
+def test_a_constant_typed_over_on_a_page_drops_nobodys_values(tmp_path):
+    """"Elle değer" over a constant: the values that follow from it (by the formulas that name it) are marked, nothing
+    of anybody's is dropped - it used to drop every value of every user (the next pages ~10 s, for everybody).  The
+    user's pages are what a calculation from scratch gives; everybody else's stay, without being computed again."""
+    svc = make_service(tmp_path)
+    try:
+        u, w = login(svc, "Sabit A"), login(svc, "Sabit B")
+        book = svc.books["tto"]
+        eng = book.engine
+        page_w = svc.view(w, "ois")
+        svc.header(None)
+        ref, v = svc.et.call(_constant_read_by, book, _page_cells(book, page_w))      # (Motor!C4: deep in the chain)
+        memo = sum(len(m) for m in eng.shared.memo)
+        res = svc.set_inputs(u, "tto", [{"ref": ref, "value": repr(v * 3 + 1)}], True, "en")
+        assert res["errors"] == [] and eng.marked >= 1
+        assert sum(len(m) for m in eng.shared.memo) >= memo                       # nothing dropped
+        evals = eng.shared.evals
+        assert svc.view(w, "ois")["panels"] == page_w["panels"]                   # the others: as they were ...
+        assert eng.shared.evals == evals                                           # ... without a calculation
+        mine = svc.view(u, "ois", True)
+        mine_header = svc.header(u)
+        assert mine["panels"] != svc.view(w, "ois", True)["panels"]               # (the value reaches the page)
+        svc.et.call(eng.reset)                                                     # from scratch: the same
+        svc.bump()
+        assert svc.view(u, "ois", True)["panels"] == mine["panels"]
+        assert svc.header(u)["items"] == mine_header["items"]
+    finally:
+        svc.stop()
+
+
+def test_hand_values_and_scenarios_saved_earlier_are_declared_at_the_start(tmp_path):
+    """Every cell a user typed over or keeps in a scenario is declared when the service starts, before anything is
+    computed: nobody's first request after a restart - nor loading a scenario - drops everybody's values any more."""
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Kayıtlı Elle")
+        book = svc.books["tto"]
+        s = book.model.sheets[book.model.sheet_index["MASA"]]
+        consts = [book.ref(s.index, rc) for rc, v in sorted(s.consts.items())
+                  if type(v) is float and (s.index, rc) not in book.inputs and rc not in s.fml][:2]
+        svc.set_inputs(u, "tto", [{"ref": consts[0], "value": "7"}], True, "en")
+        svc.save_scenario(u, "S1")
+        svc.set_inputs(u, "tto", [{"ref": consts[0], "value": ""}, {"ref": consts[1], "value": "8"}], True, "en")
+    finally:
+        svc.stop()
+    again = make_service(tmp_path)
+    try:
+        book = again.books["tto"]
+        eng = book.engine
+        assert all(book.cell(r) in book.inputs for r in consts)               # (declared at the start)
+        resets = []
+        real = eng.reset
+        eng.reset = lambda: (resets.append(1), real())
+        again.header(None)
+        memo = sum(len(m) for m in eng.shared.memo)
+        assert cell(again, consts[1], u) == 8.0 and again.header(u)["items"]
+        again.load_scenario(u, "S1")
+        assert cell(again, consts[0], u) == 7.0
+        assert resets == [] and sum(len(m) for m in eng.shared.memo) >= memo
+    finally:
+        again.stop()
