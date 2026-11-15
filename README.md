@@ -768,11 +768,11 @@ vadede toplam olasılık, ortalamanın forward'a uzaklığı ve yoğunluğun hi�
 **Spot / FX sayfası.**
 
 * **Pariteler · spot ve vol**: her paritenin spotu, son kapanışa göre değişimi, ATM 1W / 1M / 3M / 1Y, 25D RR 1M / 3M,
-  25D BF 1M, 10D RR 1M, **1M ↑1σ / ↓1σ** (skew dahil, aşağıda; yalnız ATM ile ±1σ = spot × ATM 1M × √(30/365)
-  hücrenin ipucunda) ve günlük başabaş hareket (spot × ATM 1M / √252). Satıra tıklayınca parite açılır (USDTRY
+  25D BF 1M, 10D RR 1M, **1M ATM ±1σ** (yalnız ATM vol'le, simetrik), **1M ↑1σ / ↓1σ** (skew dahil; ikisi de
+  aşağıda) ve günlük başabaş hareket (spot × ATM 1M / √252). Satıra tıklayınca parite açılır (USDTRY
   varsayılan; seçim hatırlanır); bir vol hücresine tıklamak o vadeyi "Vade geçmişi"nde de açar.
 * **Vol yüzeyi**: vade, teslim tarihi, gün, forward, beş kota, smile'ın kendi 10P / 25P / 25C / 10C vol'leri (üzerine
-  gelince strike), **↑1σ / ↓1σ**, dağılımın %5 / medyan / %95'i, **Uyum** (modelin kotalardan en büyük sapması, vol
+  gelince strike), **ATM ±1σ**, **↑1σ / ↓1σ**, dağılımın %5 / medyan / %95'i, **Uyum** (modelin kotalardan en büyük sapması, vol
   puanı; ayrıntısı üzerine gelince) ve **Yoğunluk** denetimi. Satıra tıklayınca o vade "Vade geçmişi"nde çizilir (smile
   ve yoğunluk da o vadeye geçer). Bir kotaya ya da forward'a **çift tıklayınca** kendi değerinizi
   yazarsınız ("ya şöyle olsa" ya da Bloomberg'den gelmeyen kota): yalnız sizin görünümünüzü değiştirir, hücre mor olur,
@@ -791,13 +791,15 @@ vadede toplam olasılık, ortalamanın forward'a uzaklığı ve yoğunluğun hi�
 * **Smile ve yoğunluk**: seçilen vadenin smile'ı (vol – strike, pillar'larıyla) ve vade sonundaki spotun yoğunluğu
   (forward ve spot çizgileriyle).
 
-**↑1σ / ↓1σ (skew dahil).** Vade sonundaki spotun dağılımının **%84 yüzdeliği − forward** ve **forward − %16
-yüzdeliği**: normal dağılımda bir standart sapmaya denk gelen olasılıklar, smile'ın çarpıklığıyla birlikte. Smile yoksa
-lognormal yasanın bir sigması çıkar (testle doğrulanır); yalnız ATM vol'le hesaplanan ±1σ simetriktir ve karşılaştırma
-için ipucunda yazar. Dağılımın ortalaması forward'dır: **USDTRY**'de uzun bir sağ kuyruk (büyük yukarı sıçrama
-olasılığı) ortalamayı gövdenin üstüne çeker; ↑1σ küçülür – eksi bile olabilir, yani %84 yüzdelik forward'ın altındadır
-– ve ↓1σ büyür (USDTRY'nin kısa vadelerinde ↑1σ sıfıra yakın çıkabilir; ikisinin toplamı da yalnız ATM'nin
-±1σ'sından belirgin dar). Kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür. EURUSD gibi bir G10 paritesinde ikisi ATM'nin sigmasına yakındır.
+**↑1σ / ↓1σ (skew dahil) ve ATM ±1σ.** ↑1σ / ↓1σ, vade sonundaki spotun dağılımının **%84 yüzdeliği − forward**
+ve **forward − %16 yüzdeliği**: normal dağılımda bir standart sapmaya denk gelen olasılıklar, smile'ın çarpıklığıyla
+birlikte. Smile yoksa lognormal yasanın bir sigması çıkar (testle doğrulanır). **ATM ±1σ** yalnız ATM vol'le hesaplanan
+simetrik harekettir: **forward × ATM × √T**, ↑1σ / ↓1σ ile aynı forward ve aynı gün sayısıyla, böylece yan yana
+karşılaştırılır (smile kurulamasa da yazar). Dağılımın ortalaması forward'dır: **USDTRY**'de uzun bir sağ kuyruk (büyük
+yukarı sıçrama olasılığı) ortalamayı gövdenin üstüne çeker; ↑1σ küçülür – eksi bile olabilir, yani %84 yüzdelik
+forward'ın altındadır – ve ↓1σ büyür (USDTRY'nin kısa vadelerinde ↑1σ sıfıra yakın çıkabilir; ikisinin toplamı da ATM
+±1σ'nın iki katından belirgin dar). Kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür. EURUSD gibi bir G10 paritesinde
+ikisi de ATM ±1σ'ya yakındır.
 
 **FX Vol İzleme sayfası.** Üstteki düğmelerle her bölüm gösterilir ya da gizlenir (tercih tarayıcıda hatırlanır);
 **Pencere** (3A / 6A / 1Y = 63 / 126 / 250 kapanış) z-skoru, yüzdelik ve aralığın penceresidir.

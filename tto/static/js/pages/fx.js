@@ -3,7 +3,7 @@
 // the forwards (USDTRY: the Forward page's offshore curve), the smile fitted through each tenor's quotes, and what
 // that says about the spot - the implied path with its cloud of percentiles, the probabilities of being above /
 // below / between price levels at every tenor, and each tenor's smile and density.  One standard deviation up and
-// down is read off the distribution, the skew included (the ATM vol alone gives a symmetric ±1σ).  A row of the surface
+// down is read off the distribution, the skew included, beside the symmetric ±1σ of the ATM vol alone.  A row of the surface
 // clicked draws that tenor through time: its quotes and its skew (25D RR / ATM) with the z-score.  A quote can be typed
 // over (one's own view, back to Bloomberg with an empty value).
 import { api } from '../api.js';
@@ -251,7 +251,8 @@ export class FxPage {
         h('code', null, '10R'), ') ve butterfly (', h('code', null, '25B'), ', ', h('code', null, '10B'), '). Butterfly market (broker) strangle\'dır: smile, ATM + BF tek vol\'le fiyatlanan strangle\'ı aynı fiyatlar; RR smile\'ın kendi delta strike\'larındaki vol farkıdır. ATM = delta-neutral straddle.'),
       h('p', null, 'Smile: SVI (toplam varyans, log-moneyness) beş kotaya en küçük kareler ile, Gatheral\'ın kelebek arbitrajı koşulu ve Lee kanat sınırı ceza olarak — yoğunluk hiçbir yerde negatif olmaz. USDTRY\'nin orta kotaları kendi aralarında arbitrajsız olmayabilir; o zaman en yakın arbitrajsız smile alınır ve sapma "Uyum" sütununda vol olarak yazar. SABR ve Vanna-Volga karşılaştırma içindir.'),
       h('p', null, '↑1σ / ↓1σ: vade sonundaki spotun %84 yüzdeliği − forward ve forward − %16 yüzdeliği, yani normal dağılımın bir standart sapmasına denk gelen olasılıklar, '
-        + 'smile\'ın çarpıklığıyla (skew) birlikte; yalnız ATM vol\'le hesaplanan ±1σ (spot × ATM × √T) simetriktir ve karşılaştırma için hücrenin ipucunda yazar. '
+        + 'smile\'ın çarpıklığıyla (skew) birlikte. ATM ±1σ yalnız ATM vol\'le hesaplanan simetrik harekettir (forward × ATM × √T: aynı forward, aynı gün) '
+        + 've karşılaştırma için yanlarındaki sütunda durur. '
         + 'Dağılımın ortalaması forward\'dır: USDTRY gibi uzun bir sağ kuyruk (devalüasyon sıçraması) taşıyan bir paritede gövde forward\'ın altında kalır, '
         + '↑1σ küçülür (eksi bile olabilir: %84 yüzdelik forward\'ın altında) ve ↓1σ büyür; kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür.'),
       h('p', null, 'Dağılım risk-nötrdür (forward ölçüsü): vade sonundaki spotun beklenen değeri forward\'dır, yani USDTRY\'de bulutun merkezi faiz farkı kadar yukarıdadır — gerçek dünya olasılığı değil, opsiyon piyasasının fiyatladığıdır. P(S > K) = N(d2) − F·n(d1)·√T·σ\'(K) (Breeden–Litzenberger).'),
@@ -304,14 +305,13 @@ export class FxPage {
         isNum(r.chg) ? { t: (r.chg > 0 ? '+' : '') + num(r.chg, 2, false) + '%', v: r.chg, k: 'n', cls: pick.trim(),
           tip: 'Son kapanışa göre' } : { t: '', k: '', cls: pick.trim() },
         c(r.ATM_1W, 2), c(r.ATM_1M, 2), c(r.ATM_3M, 2), c(r.ATM_1Y, 2), c(r.RR25_1M, 2), c(r.RR25_3M, 2), c(r.BF25_1M, 2), c(r.RR10_1M, 2),
-        cellNum(r.up_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ yukarı, skew dahil: 1M dağılımının %84 yüzdeliği − forward'
-          + (isNum(r.move_1m) ? '\nYalnız ATM ile ±1σ: ' + num(r.move_1m, d, false) : '') }),
-        cellNum(r.down_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ aşağı, skew dahil: forward − 1M dağılımının %16 yüzdeliği'
-          + (isNum(r.move_1m) ? '\nYalnız ATM ile ±1σ: ' + num(r.move_1m, d, false) : '') }),
+        cellNum(r.move_1m, d, { cls: pick.trim(), tip: '1 ayda ±1σ, yalnız ATM 1M vol ile: forward × ATM × √(gün / 365) — simetrik, skew yok' }),
+        cellNum(r.up_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ yukarı, skew dahil: 1M dağılımının %84 yüzdeliği − forward' }),
+        cellNum(r.down_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ aşağı, skew dahil: forward − 1M dağılımının %16 yüzdeliği' }),
         cellNum(r.breakeven, d, { cls: pick.trim(), tip: 'Günlük başabaş hareket: spot × ATM 1M / √252' })];
     });
     this.setGrid('board', this.boardBody, ['Parite', 'Grup', 'Spot', 'Gün %', 'ATM 1W', 'ATM 1M', 'ATM 3M', 'ATM 1Y', '25D RR 1M', '25D RR 3M',
-      '25D BF 1M', '10D RR 1M', '1M ↑1σ', '1M ↓1σ', 'Başabaş / gün'], cells, 'Parite yok', (i, j) => {
+      '25D BF 1M', '10D RR 1M', '1M ATM ±1σ', '1M ↑1σ', '1M ↓1σ', 'Başabaş / gün'], cells, 'Parite yok', (i, j) => {
       const r = rows[i];
       // a vol of the board clicked: its tenor is the one drawn through time below
       const t = { 4: '1W', 5: '1M', 6: '3M', 7: '1Y', 8: '1M', 9: '3M', 10: '1M', 11: '1M' }[j];
@@ -368,8 +368,9 @@ export class FxPage {
           : { t: '–', k: 's', cls: 'soft', tip: 'Forward yok · çift tık: yazın' },
         quote(r, 'ATM'), quote(r, 'RR25'), quote(r, 'BF25'), quote(r, 'RR10'), quote(r, 'BF10'),
         pt(r, '10P'), pt(r, '25P'), pt(r, '25C'), pt(r, '10C'),
-        cellNum(r.up_1s, d, { tip: '1σ yukarı, skew dahil: dağılımın %84 yüzdeliği − forward' + (isNum(r.move_1sd) ? '\nYalnız ATM ile ±1σ (spot × ATM × √T): ' + num(r.move_1sd, d, false) : '') }),
-        cellNum(r.down_1s, d, { tip: '1σ aşağı, skew dahil: forward − dağılımın %16 yüzdeliği' + (isNum(r.move_1sd) ? '\nYalnız ATM ile ±1σ (spot × ATM × √T): ' + num(r.move_1sd, d, false) : '') }),
+        cellNum(r.move_1sd, d, { tip: '±1σ, yalnız ATM vol ile: forward × ATM × √T — simetrik, skew yok' }),
+        cellNum(r.up_1s, d, { tip: '1σ yukarı, skew dahil: dağılımın %84 yüzdeliği − forward' }),
+        cellNum(r.down_1s, d, { tip: '1σ aşağı, skew dahil: forward − dağılımın %16 yüzdeliği' }),
         cellNum(q['0.05'], d), cellNum(q['0.5'], d, { b: 1 }), cellNum(q['0.95'], d),
         isNum(fit) ? { t: num(fit, 2, false), v: fit, k: 'n', cls: fit > 0.5 ? 'thru' : 'soft', tip: 'Kotalardan sapma (vol puanı)\n' + fitTip + (r.note ? '\n' + r.note : '') }
           : { t: r.error || '', k: 's', cls: 'soft' },
@@ -380,7 +381,7 @@ export class FxPage {
     const marked = rows.map((row, i) => (s.rows[i].tenor === this.histTenor
       ? row.map((c) => Object.assign({}, c, { cls: ((c.cls || '') + ' pick').trim() })) : row));
     const g = this.setGrid('surf', this.surfBody, ['Vade', 'Teslim', 'Gün', 'Forward', 'ATM', '25D RR', '25D BF', '10D RR', '10D BF', '10P', '25P', '25C', '10C',
-      '↑1σ', '↓1σ', '%5', 'Medyan', '%95', 'Uyum', 'Yoğunluk'], marked, 'Vade yok', (i) => {
+      'ATM ±1σ', '↑1σ', '↓1σ', '%5', 'Medyan', '%95', 'Uyum', 'Yoğunluk'], marked, 'Vade yok', (i) => {
       const r = this.surf.rows[i];
       if (r) this.setTenor(r.tenor);
     });
@@ -394,8 +395,9 @@ export class FxPage {
         if (col && r) this.typeQuote(r, col);
       });
     }
-    this.surfNote.textContent = 'Vol\'ler vol puanı (%). 10P … 10C: smile\'ın kendi delta strike\'larındaki vol (üzerine gelince strike). ↑1σ / ↓1σ: vade sonunda spotun '
-      + 'forward\'dan bir standart sapma yukarı / aşağı hareketi, skew dahil (dağılımın %84 ve %16 yüzdelikleri; yalnız ATM ile simetrik ±1σ üzerine gelince). '
+    this.surfNote.textContent = 'Vol\'ler vol puanı (%). 10P … 10C: smile\'ın kendi delta strike\'larındaki vol (üzerine gelince strike). ATM ±1σ: yalnız ATM vol ile '
+      + 'simetrik bir standart sapma (forward × ATM × √T). ↑1σ / ↓1σ: vade sonunda spotun forward\'dan bir standart sapma yukarı / aşağı hareketi, skew dahil '
+      + '(dağılımın %84 ve %16 yüzdelikleri). '
       + 'USDTRY\'de ↑1σ küçük, hatta eksi çıkabilir: büyük yukarı sıçrama kuyruğu ortalamayı (forward\'ı) dağılımın gövdesinin üstüne çeker. %5 / Medyan / %95: '
       + 'risk-nötr dağılımın yüzdelikleri. Uyum: modelin kotalardan en büyük sapması (vol puanı; ayrıntı üzerine gelince). Satıra tıklayınca o vadenin geçmişi "Vade geçmişi"nde çizilir. '
       + 'Bir kotayı ya da forward\'ı değiştirmek için çift tıklayın: değer yalnız sizin görünümünüzü değiştirir, boş bırakınca Bloomberg\'e döner.';

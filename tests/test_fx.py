@@ -221,7 +221,8 @@ def test_the_board(svc):
     assert list(rows)[:2] == ["USDTRY", "EURTRY"] and len(rows) == len(fx.PAIRS)
     t = rows["USDTRY"]
     assert t["spot"] == cell(svc, "EK_FWD!F%d" % (ex.FR_USD + 1)) and t["ATM_1M"] == 5.0 and t["RR25_1M"] == 4.5
-    assert t["move_1m"] == pytest.approx(t["spot"] * 0.05 * math.sqrt(30 / 365))
+    one = next(r for r in svc.fx_surface(u, "USDTRY", "svi", None)["rows"] if r["tenor"] == "1M")
+    assert t["move_1m"] == pytest.approx(one["fwd"] * 0.05 * math.sqrt(one["T"]))      # ATM ±1σ: forward × ATM × √T
     assert rows["USDJPY"]["spot"] is None and rows["USDJPY"]["spot_why"] == "veri yok"
     assert rows["EURTRY"]["spot"] == pytest.approx(1.10 * t["spot"])            # its USD legs, as the page prices it
 
@@ -557,14 +558,14 @@ def test_one_standard_deviation_up_and_down_with_the_skew(svc):
         for t, r in rows.items():
             F = r["fwd"]
             assert r["up_1s"] == pytest.approx(r["q"]["0.84"] - F) and r["down_1s"] == pytest.approx(F - r["q"]["0.16"])
-            ratio = (r["up_1s"] + r["down_1s"]) / (2.0 * F * r["ATM"] / 100.0 * math.sqrt(r["T"]))   # against the ATM vol's σ
+            assert r["move_1sd"] == pytest.approx(F * r["ATM"] / 100.0 * math.sqrt(r["T"]))     # ATM ±1σ: the same forward
+            ratio = (r["up_1s"] + r["down_1s"]) / (2.0 * r["move_1sd"])                       # against the ATM vol's σ
             if pair == "EURUSD":
                 assert 0.9 < ratio < 1.0, t                      # a G10 smile: about the ATM move, the wings' weight aside
             else:
                 assert r["down_1s"] > r["up_1s"] and ratio < 0.7, t      # most of USDTRY's variance is in its right tail
         one = rows["1M"]
         tails[pair] = (one["q"]["0.99"] - one["fwd"]) / (one["fwd"] - one["q"]["0.01"])
-        assert one["move_1sd"] == pytest.approx(svc.fx.quotes(u, svc.fx.pair(pair))["spot"] * one["ATM"] / 100.0 * math.sqrt(one["T"]))
     assert tails["USDTRY"] > 1.2 and tails["EURUSD"] < 1.0
     # no smile (one's own flat quotes): the lognormal law around the forward
     for kind in ("RR25", "BF25", "RR10", "BF10"):
@@ -583,7 +584,25 @@ def test_one_standard_deviation_up_and_down_with_the_skew(svc):
         b = board[pair]
         assert b["fwd_1m"] == pytest.approx(one["fwd"], rel=1e-12)
         assert b["up_1m"] == pytest.approx(one["up_1s"], rel=1e-9) and b["down_1m"] == pytest.approx(one["down_1s"], rel=1e-9)
-    assert "up_1m" not in board["USDJPY"]                                        # no quotes, no spot: nothing to say
+        assert b["move_1m"] == pytest.approx(one["move_1sd"], rel=1e-12)
+    assert "up_1m" not in board["USDJPY"] and "move_1m" not in board["USDJPY"]   # no quotes, no spot: nothing to say
+
+
+def test_atm_one_sigma_needs_no_smile(svc, monkeypatch):
+    """ATM ±1σ is the forward and the ATM vol alone: when no smile can be built from the quotes the board and the
+    surface still show it - only ↑1σ / ↓1σ, which are read off the smile's distribution, are missing."""
+    from tto import fxvol as fv
+    u = user(svc, "FX ATM Sigma")
+
+    def no_smile(*args, **kwargs):
+        raise fv.SmileError("deneme")
+
+    monkeypatch.setattr(svc.fx, "_smile", no_smile)
+    b = next(r for r in svc.fx_board(u)["rows"] if r["pair"] == "EURUSD")
+    one = next(r for r in svc.fx_surface(u, "EURUSD", "svi", None)["rows"] if r["tenor"] == "1M")
+    assert one["error"].startswith("smile kurulamadı") and "up_1s" not in one and "up_1m" not in b
+    assert one["move_1sd"] == pytest.approx(one["fwd"] * one["ATM"] / 100.0 * math.sqrt(one["T"]))
+    assert b["move_1m"] == pytest.approx(one["move_1sd"], rel=1e-12) and b["fwd_1m"] == pytest.approx(one["fwd"], rel=1e-12)
 
 
 def test_http_series_and_tenor(svc):

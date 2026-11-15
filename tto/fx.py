@@ -684,7 +684,8 @@ class Fx(object):
         T = days / 365.0
         pct = lambda k: row.get(k) / 100.0 if row.get(k) is not None else None   # noqa: E731
         q = fv.Quotes(F, T, atm / 100.0, pct("RR25"), pct("BF25"), pct("RR10"), pct("BF10"), premium=pair.premium, df=df)
-        out.update({"T": T, "df": df, "delta": ("spot" if df != 1.0 else "forward"), "df_note": df_note})
+        out.update({"T": T, "df": df, "delta": ("spot" if df != 1.0 else "forward"), "df_note": df_note,
+                    "move_1sd": F * atm / 100.0 * math.sqrt(T)})   # ± one sigma from the ATM vol alone, around the same forward
         try:
             smile, info = self._smile(pair, t, model, q)
         except fv.MATH_ERRORS as exc:
@@ -701,9 +702,6 @@ class Fx(object):
         out["check"] = {"mass": chk["mass"], "mean_error": chk["mean_error"], "arbitrage": chk["arbitrage"]}
         out["q"] = {"%g" % p: v for p, v in qs.items()}
         out["params"] = info.get("svi") or ({"alpha": info["alpha"], "rho": info["rho"], "nu": info["nu"]} if "alpha" in info else None)
-        if spot:
-            sd = atm / 100.0 * math.sqrt(T)
-            out["move_1sd"] = spot * sd                        # ± one standard deviation from the ATM vol alone, in price
         if qs.get(0.84) is not None and qs.get(0.16) is not None:
             out["up_1s"] = qs[0.84] - F                       # one standard deviation up and down, the skew included
             out["down_1s"] = F - qs[0.16]
@@ -759,15 +757,15 @@ class Fx(object):
                 row["%s_%s" % (kind, tenor)] = self.value(vol_ticker(p.code, kind, tenor, src))[0]
             atm = row.get("ATM_1M")
             if spot and atm:
-                row["move_1m"] = spot * atm / 100.0 * math.sqrt(30.0 / 365.0)
                 row["breakeven"] = spot * atm / 100.0 / math.sqrt(252.0)
                 row.update(self._one_month(user, p, spot) or {})
             rows.append(row)
         return {"rows": rows, "source": src, "today": today.isoformat()}
 
     def _one_month(self, user: Optional[str], pair: Pair, spot: float) -> Optional[Dict[str, float]]:
-        """The 1M move one standard deviation up and down, the skew included (the 84th and 16th percentiles of the
-        spot one month on, around the forward): the forward and the smile as the Spot / FX page builds them."""
+        """The 1M move one standard deviation either way from the ATM vol alone (forward × ATM × √T) and up and down
+        with the skew included (the 84th and 16th percentiles of the spot one month on, around the forward): the
+        forward and the smile as the Spot / FX page builds them."""
         src = self.source()
         vols = {k: self.value(vol_ticker(pair.code, k, "1M", src))[0] for k in KINDS}
         if not vols["ATM"]:
@@ -779,15 +777,17 @@ class Fx(object):
         F, days = row.get("fwd"), row.get("days")
         if not F or not days:
             return None
+        out = {"fwd_1m": F, "move_1m": F * vols["ATM"] / 100.0 * math.sqrt(days / 365.0)}   # the surface's 1M move_1sd
         df, _ = self._base_df(user, pair, "1M", row, spot)
         q = fv.Quotes(F, days / 365.0, vols["ATM"] / 100.0, *[(vols[k] / 100.0 if vols[k] is not None else None)
                                                              for k in ("RR25", "BF25", "RR10", "BF10")], premium=pair.premium, df=df)
         try:
             smile, _ = self._smile(pair, "1M", "svi", q)
             dist = fv.Distribution(smile)
-            return {"up_1m": dist.quantile(0.84) - F, "down_1m": F - dist.quantile(0.16), "fwd_1m": F}
+            out.update({"up_1m": dist.quantile(0.84) - F, "down_1m": F - dist.quantile(0.16)})
         except fv.MATH_ERRORS:
-            return None
+            pass                                                                 # no smile: the ATM's move alone
+        return out
 
     # ================================================================== the vol monitor
     def _series(self, tickers: Sequence[str], today: _dt.date) -> Dict[str, Dict[str, float]]:
