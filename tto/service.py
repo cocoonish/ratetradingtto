@@ -56,9 +56,10 @@ def _payer_plus(leg: Dict[str, Any]) -> Optional[float]:
 
 
 class ServiceError(Exception):
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, data: Optional[Dict[str, Any]] = None):
         Exception.__init__(self, message)
         self.status = status
+        self.data = data                    # more for the page beside the message (the error of each field of a form)
 
 
 class EngineThread(object):
@@ -1139,6 +1140,40 @@ class Service(object):
         self.store.update_account(acc["name"], status="disabled", decided_by=me, decided_at=now_iso())
         self.store.drop_sessions(acc["name"])
 
+    # ------------------------------------------------------------------ the daily backup (the administrators' page)
+    def backup_settings(self, user: Optional[str]) -> Dict[str, Any]:
+        """When and where the database's daily backup goes (Araçlar → Yedekleme, administrators only): the settings as
+        they stand, where each comes from, the newest backups of each folder (ops.Ops.backup_page)."""
+        self.require_admin(user)
+        return self.ops.backup_page()
+
+    def set_backup_settings(self, user: Optional[str], values: Any = None, reset: bool = False) -> Dict[str, Any]:
+        """The administrators' choice of the backup (``time``, ``dir``, ``copy_dir``; empty ``copy_dir``: no second
+        copy), or back to the command line / defaults (``reset``).  A folder that cannot be taken is refused with the
+        reason of each field (``errors``); it applies without a restart."""
+        from .ops import BackupError
+        me = self.require_admin(user)
+        if reset:
+            self.ops.reset_backup(me)
+        else:
+            try:
+                self.ops.set_backup(values if isinstance(values, dict) else {}, me)
+            except BackupError as exc:
+                raise ServiceError(str(exc), 400, {"errors": exc.errors})
+        self.bump()                                        # (the alarms page says the backup's time)
+        return self.ops.backup_page()
+
+    def backup_run(self, user: Optional[str]) -> Dict[str, Any]:
+        """"Şimdi yedek al": a backup with the settings as they stand (administrators) - the file, its size, whether
+        the second copy was written - and the page again."""
+        me = self.require_admin(user)
+        try:
+            res = self.ops.backup_now(by=me)
+        except Exception as exc:  # noqa: BLE001 - said in the log, kept for the status and the alarm
+            raise ServiceError("Yedek alınamadı: %s: %s" % (type(exc).__name__, exc), 500)
+        self.bump()
+        return dict(self.ops.backup_page(), result=res)
+
     def _overlay(self, user: str, book: Book) -> Dict[Tuple[int, int], Any]:
         key = (user, book.id)
         ov = self._overlays.get(key)
@@ -1284,15 +1319,16 @@ class Service(object):
 
     def status_for(self, user: Optional[str]) -> Dict[str, Any]:
         """:meth:`status` as a signed-in user gets it over HTTP: where the log, the database and its backups live on
-        the desk's computer is the administrators' to know (a database problem and a backup's date stay for all)."""
+        the desk's computer - the folders the administrators chose too - is the administrators' to know (a database
+        problem and a backup's date stay for all)."""
+        from .ops import hide_paths
         out = self.status()
         try:
             self.require_admin(user)
             return out
         except ServiceError:
             pass
-        hide = [str(p) for p in (getattr(self.settings, "db_path", None), getattr(self.settings, "backup_dir", None),
-                                 out["ops"].get("log")) if p]
+        hide = self.ops.private_paths()
 
         def clean(x: Any) -> Any:
             if isinstance(x, dict):
@@ -1300,8 +1336,7 @@ class Service(object):
             if isinstance(x, list):
                 return [clean(v) for v in x]
             if isinstance(x, str):
-                for p in hide:
-                    x = x.replace(p, "…")
+                return hide_paths(x, hide)
             return x
 
         out["ops"] = clean(out["ops"])

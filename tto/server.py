@@ -197,7 +197,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             try:
                 return await fn(request)
             except ServiceError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=exc.status)
+                return JSONResponse(dict(getattr(exc, "data", None) or {}, error=str(exc)), status_code=exc.status)
             except Exception as exc:  # noqa: BLE001 - never leak a traceback to the browser (it goes to the log)
                 s = state["service"]
                 if s is not None:
@@ -260,6 +260,18 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         data = await _body(request)
         return ok(await call_free(svc().admin_action, _user(request), request.path_params["action"], data,
                              request.scope.get("tto_token")))
+
+    @handler
+    async def admin_backup(request: Request):
+        # when and where the daily backup goes (administrators only): GET reads, POST saves - or {"reset": true}
+        if request.method == "GET":
+            return ok(await call_free(svc().backup_settings, _user(request)))
+        data = await _body(request)
+        return ok(await call_free(svc().set_backup_settings, _user(request), data.get("values"), bool(data.get("reset"))))
+
+    @handler
+    async def admin_backup_now(request: Request):
+        return ok(await call_free(svc().backup_run, _user(request)))
 
     # ------------------------------------------------------------------ session / status
 
@@ -890,6 +902,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/password", password, methods=["POST"]),
         Route("/api/admin/users", admin_users),
         Route("/api/admin/users/{action}", admin_action, methods=["POST"]),
+        Route("/api/admin/backup", admin_backup, methods=["GET", "POST"]),
+        Route("/api/admin/backup/now", admin_backup_now, methods=["POST"]),
         Route("/api/users", users),
         Route("/api/status", status),
         Route("/api/nav", nav),

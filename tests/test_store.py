@@ -275,7 +275,7 @@ def test_the_nightly_backups_are_taken_when_due_and_thirty_are_kept(tmp_path, mo
     from tto import ops as ops_mod
     from tto.config import Settings
     settings = Settings(data_dir=str(tmp_path / "data"))
-    assert settings.backup_dir == os.path.join(str(tmp_path / "data"), "backups") and settings.backup_time == "22:00"
+    assert settings.backup_dir == os.path.join(str(tmp_path / "data"), "backups") and settings.backup_time == "17:30"
     s = Store(settings.db_path)
     s.login("Ali")
     svc = SimpleNamespace(store=s, settings=settings, started_at=_time.time() - 3600)
@@ -296,9 +296,9 @@ def test_the_nightly_backups_are_taken_when_due_and_thirty_are_kept(tmp_path, mo
             fh.write(b"x")
         os.utime(path, (_time.mktime(when.timetuple()),) * 2)
 
-    put("tto-2026-11-16.db", at(8))                  # taken this morning (the night before, the machine was off)
-    assert not o.backup_due(at(21, 59)) and o.backup_due(at(22, 0)) and o.backup_due(at(23, 30))
-    put("tto-2026-11-16.db", at(22, 1))              # tonight's
+    put("tto-2026-11-16.db", at(8))                  # taken this morning (the day before, the machine was off)
+    assert not o.backup_due(at(17, 29)) and o.backup_due(at(17, 30)) and o.backup_due(at(23, 30))
+    put("tto-2026-11-16.db", at(17, 31))             # this evening's
     assert not o.backup_due(at(23, 30))
     os.remove(os.path.join(folder, "tto-2026-11-16.db"))
     put("tto-2026-11-14.db", _dt.datetime(2026, 11, 14, 22, 0))
@@ -348,8 +348,11 @@ def test_restoring_from_the_command_line(tmp_path, capsys):
 
 def test_the_second_copy_goes_to_another_drive_only_for_the_installed_dashboard(tmp_path, monkeypatch):
     """D:\\tto-yedek by default - for the installed dashboard only (no git checkout, its own data folder): a checkout
-    (a developer's, the tests') or another data folder never writes over the desk's copies unless asked."""
+    (a developer's, the tests') or another data folder never writes over the desk's copies unless asked.  (A machine
+    without a D: drive: test_backup.py.)"""
+    from tto import config
     from tto.config import DEFAULT_BACKUP_COPY_DIR, Settings, backup_copy_default
+    monkeypatch.setattr(config, "drive_exists", lambda path: True)
     installed = tmp_path / "kurulum"
     (installed / "data").mkdir(parents=True)
     assert DEFAULT_BACKUP_COPY_DIR == "D:\\tto-yedek"
@@ -417,7 +420,7 @@ def test_the_nightly_backup_keeps_a_second_copy_and_never_fails_because_of_it(tm
     said = [r for r in caplog.records if "ikinci kopyası alınamadı" in r.getMessage()]
     assert len(said) == 1 and said[0].levelno == logging.WARNING
     db = o.system_checks(_dt.datetime(2026, 11, 17, 23, 0))["db"]
-    assert db["state"] == "alarm" and "ikinci kopyası 2 gecedir alınamadı" in db["text"]
+    assert db["state"] == "alarm" and "ikinci kopyası 2 gündür alınamadı" in db["text"]
     # the drive back: the copy works again, the alarm's condition ends, the log says so
     settings.backup_copy_dir = str(copies)
     with caplog.at_level(logging.INFO, logger="tto.ops"):
