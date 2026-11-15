@@ -9,7 +9,10 @@ FORBIDDEN_PORTS = (5000, 5001)
 DEFAULT_PORT = 1057
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-#: the second copy of each night's database backup: another drive of the desk machine (the installed dashboard's default)
+#: the daily backup of the database: at the end of the desk's day, while the office computer is still on
+DEFAULT_BACKUP_TIME = "17:30"
+#: the second copy of each day's database backup: another drive of the desk machine (the installed dashboard's default,
+#: when the machine has that drive)
 DEFAULT_BACKUP_COPY_DIR = r"D:\tto-yedek"
 
 
@@ -21,7 +24,7 @@ class Settings(object):
                  bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
                  bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
                  history_pace: float = 1.0, log_dir: Optional[str] = None, bbg_silent_restart: float = 60.0,
-                 backup_dir: Optional[str] = None, backup_time: str = "22:00", backup_copy_dir: Optional[str] = None,
+                 backup_dir: Optional[str] = None, backup_time: Optional[str] = None, backup_copy_dir: Optional[str] = None,
                  private_refresh: float = 5.0, idle_minutes: float = 30.0):
         self.host = host
         self.port = check_port(port)
@@ -48,15 +51,20 @@ class Settings(object):
         self.log_dir = log_dir or os.environ.get("TTO_LOG_DIR") or os.path.join(self.data_dir, "logs")
         # a Bloomberg helper silent this many seconds in market hours is started again (0: never; see bbg_process.py)
         self.bbg_silent_restart = max(0.0, float(bbg_silent_restart))
-        # the nightly backup of the database: where (the data folder's backups by default) and when (HH:MM)
-        self.backup_dir = backup_dir or os.environ.get("TTO_BACKUP_DIR") or os.path.join(self.data_dir, "backups")
-        self.backup_time = check_time(backup_time)
+        # the daily backup of the database: where (the data folder's backups by default) and when (HH:MM) - as the
+        # command line / environment say; an administrator's choice in the dashboard comes before them (ops.Ops.backup_conf)
+        dir_given = backup_dir or os.environ.get("TTO_BACKUP_DIR")
+        self.backup_dir = dir_given or os.path.join(self.data_dir, "backups")
+        self.backup_time = check_time(DEFAULT_BACKUP_TIME if backup_time is None else backup_time)
         # ... and a second copy of each one in another folder - another drive (None: no second copy)
         given = backup_copy_dir if backup_copy_dir is not None else os.environ.get("TTO_BACKUP_COPY_DIR")
         if given is not None:
             self.backup_copy_dir = None if given.strip() in ("", "-") else given.strip()
         else:
             self.backup_copy_dir = backup_copy_default(self.data_dir)
+        # where each came from: "cli" (the command line / the environment) or "default"
+        self.backup_from = {"time": "default" if backup_time is None else "cli", "dir": "cli" if dir_given else "default",
+                            "copy_dir": "default" if given is None else "cli"}
         # a user with inputs of their own: their header, pages and watch list follow the market at most this often
         # (seconds; their own changes show at once) - each is a calculation of its own (0: every time)
         self.private_refresh = max(0.0, float(private_refresh))
@@ -68,13 +76,21 @@ class Settings(object):
         return os.path.join(self.data_dir, "tto.db")
 
 
+def drive_exists(path: str) -> bool:
+    """Whether this machine has the drive of ``path`` (``D:`` of ``D:\\tto-yedek``)."""
+    drive = os.path.splitdrive(path)[0]
+    return bool(drive) and os.path.isdir(drive + os.sep)
+
+
 def backup_copy_default(data_dir: str, root: str = ROOT, windows: bool = os.name == "nt") -> Optional[str]:
     """Where the second copy of the backups goes when nothing says: D:\\tto-yedek for the installed dashboard (on
-    Windows, in a folder that is no git checkout, with its own data folder).  A checkout - a developer's, the tests' -
-    or a dashboard given another data folder has none unless asked: its copies must never land on the desk's."""
+    Windows, in a folder that is no git checkout, with its own data folder) on a machine that has a D: drive - an
+    office computer without one has no second copy (and no alarm about it) until an administrator chooses a folder.
+    A checkout - a developer's, the tests' - or a dashboard given another data folder has none unless asked: its
+    copies must never land on the desk's."""
     installed = windows and not os.path.exists(os.path.join(root, ".git"))
     own = os.path.normcase(os.path.abspath(data_dir)) == os.path.normcase(os.path.abspath(os.path.join(root, "data")))
-    return DEFAULT_BACKUP_COPY_DIR if installed and own else None
+    return DEFAULT_BACKUP_COPY_DIR if installed and own and drive_exists(DEFAULT_BACKUP_COPY_DIR) else None
 
 
 def check_time(text) -> str:

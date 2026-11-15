@@ -67,7 +67,7 @@ export async function openStatus(status) {
   head.appendChild(line('Son hata (dashboard)', le ? le.at + ' · ' + le.where + ' · ' + le.text + (le.count > 1 ? ' (toplam ' + le.count + ')' : '') : 'yok',
     le ? 'warn' : ''));
   if (ops.log) head.appendChild(line('Günlük dosyası', ops.log));
-  // the database: its check at the start, the nightly backups
+  // the database: its check at the start, the daily backups
   const db = ops.db || {};
   const chk = db.check;
   if (chk) {
@@ -78,15 +78,21 @@ export async function openStatus(status) {
   if (bk.dir) {
     const last = bk.last;
     head.appendChild(line('Son yedek', (last ? last.at + ' · ' + num(last.bytes / 1048576, 1) + ' MB' : 'henüz yok')
-      + ' · ' + (bk.count || 0) + ' / ' + (bk.keep || 30) + ' yedek · her gece ' + (bk.time || '') + ' · ' + bk.dir
+      + ' · ' + (bk.count || 0) + ' / ' + (bk.keep || 30) + ' yedek · her gün ' + (bk.time || '') + ' · ' + bk.dir
       + (bk.error ? ' · SON DENEME BAŞARISIZ (' + bk.error.at + '): ' + bk.error.text : ''), bk.error ? 'bad' : (last ? '' : 'warn')));
-    // its second copy on another drive (D:\tto-yedek): a failure does not stop the backup; two nights in a row: an alarm
+    // its second copy on another drive or share: a failure does not stop the backup; two days in a row: an alarm
     const cp = bk.copy;
     if (cp) {
       head.appendChild(line('İkinci kopya', (cp.last ? cp.last.at + ' · ' : '') + (cp.count || 0) + ' / ' + (bk.keep || 30) + ' kopya · ' + cp.dir
-        + (cp.error ? ' · ALINAMADI' + (cp.failed_nights > 1 ? ' (' + cp.failed_nights + ' gecedir)' : '') + ': ' + cp.error.text : ''),
+        + (cp.error ? ' · ALINAMADI' + (cp.failed_nights > 1 ? ' (' + cp.failed_nights + ' gündür)' : '') + ': ' + cp.error.text : ''),
         cp.error ? (cp.failed_nights > 1 ? 'bad' : 'warn') : (cp.last ? '' : 'warn')));
+    } else {
+      head.appendChild(line('İkinci kopya', 'seçilmedi – yedekler tek klasörde'));
     }
+    // (the folders are the administrators' to see - and to choose)
+    const go = h('a', { href: '#/backup', id: 'status-backup' }, 'Araçlar → Yedekleme');
+    go.addEventListener('click', () => m.close());
+    head.appendChild(line('Yedek ayarları', go));
   }
   m.body.appendChild(head);
 

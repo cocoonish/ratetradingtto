@@ -31,6 +31,7 @@ async function request(method, path, body, query) {
   if (!res.ok) {
     const err = new Error((data && data.error) || ('HTTP ' + res.status));
     err.status = res.status;
+    err.data = data;                       // more than the message (a form's error of each field)
     // the session ended (signed out elsewhere, expired, account closed): back to the sign-in screen
     if (res.status === 401 && data && data.login && session.user && session.onUnauthorized) session.onUnauthorized();
     throw err;

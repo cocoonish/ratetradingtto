@@ -20,6 +20,7 @@ import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
 import { UsersPage } from './pages/users.js';
+import { BackupPage } from './pages/backup.js';
 import { loadHiddenColumns } from './columns.js';
 import { SocialPage } from './pages/social.js';
 import { AgendaPage } from './pages/agenda.js';
@@ -252,9 +253,10 @@ function buildNav() {
     groups.get(g).push(p);
   }
   if (!groups.has('Araçlar')) groups.set('Araçlar', []);
-  if (session.role === 'admin') {                    // the sheet explorer and the accounts: administrators only
+  if (session.role === 'admin') {                    // the sheet explorer, the accounts, the backup: administrators only
     groups.get('Araçlar').push({ id: 'explorer', title: 'Sayfa gezgini' });
     groups.get('Araçlar').push({ id: 'users', title: 'Kullanıcılar' });
+    groups.get('Araçlar').push({ id: 'backup', title: 'Yedekleme' });
   }
   if (!groups.get('Araçlar').length) groups.delete('Araçlar');
   // the blotter belongs right under the desk overview
@@ -277,6 +279,7 @@ function buildNav() {
 function pageTitle(id) {
   if (id === 'explorer') return 'Sayfa gezgini';
   if (id === 'users') return 'Kullanıcılar';
+  if (id === 'backup') return 'Yedekleme';
   const p = state.pages.find((x) => x.id === id);
   return p ? p.title : id;
 }
@@ -288,7 +291,7 @@ function route() {
   let id = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
   const panel = cut < 0 ? null : new URLSearchParams(raw.slice(cut + 1)).get('p');
   const admin = session.role === 'admin';
-  const known = ((id === 'explorer' || id === 'users') && admin) || state.pages.some((p) => p.id === id);
+  const known = ((id === 'explorer' || id === 'users' || id === 'backup') && admin) || state.pages.some((p) => p.id === id);
   if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : (admin ? 'explorer' : 'masa'));
   if (id !== state.pageId) openPage(id, panel);
   else if (panel && state.page && state.page.ready && state.page.focusPanel) state.page.focusPanel(panel);
@@ -313,6 +316,7 @@ async function openPage(id, panel) {
   else if (id === 'heat') page = new HeatPage(host, ctx);
   else if (id === 'explorer') page = new ExplorerPage(host, ctx);
   else if (id === 'users') page = new UsersPage(host, ctx);
+  else if (id === 'backup') page = new BackupPage(host, ctx);
   else if (id === 'eod') page = new EodPage(host, ctx);
   else if (id === 'mpc') page = new MpcPage(host, ctx);
   else if (id === 'spreads') page = new SpreadsPage(host, ctx);

@@ -495,6 +495,8 @@ async function shot(page, name) {
     pageB.on('pageerror', (e) => errors.push('pageerror(B): ' + e.message));
     await login(pageB, 'Mehmet');
     check('a user has no Kullanıcılar page', (await pageB.locator('#nav .nav-item[data-page=users]').count()) === 0);
+    check('the Yedekleme page is for administrators: not in the menu of a user, in the menu of the administrator',
+      (await pageB.locator('#nav .nav-item[data-page=backup]').count()) === 0 && (await page.locator('#nav .nav-item[data-page=backup]').count()) === 1);
     check('a user has no sheet explorer', (await pageB.locator('#nav .nav-item[data-page=explorer]').count()) === 0);
     check('the Motor page is for administrators: not in the menu of a user, in the menu of the administrator',
       (await pageB.locator('#nav .nav-item[data-page=motor]').count()) === 0 && (await page.locator('#nav .nav-item[data-page=motor]').count()) === 1);
@@ -2069,6 +2071,58 @@ async function shot(page, name) {
     await page.waitForFunction(() => !document.querySelector('#agenda-list .agenda-day.late'), null, { timeout: 15000 });
     check('ticked off by another trader: no longer late, on every screen', true);
     await ctxD.close();
+
+    // ------------------------------------------------------------------ the daily backup: the administrators' page
+    console.log('backup');
+    await open(page, 'backup');
+    const bk0 = (await api(page, 'ayşe yilmaz', 'GET', '/api/admin/backup')).json;
+    const sep = bk0.dir.includes('\\') ? '\\' : '/';
+    check('Yedekleme: 17:30 by default, the data folder\'s backups, no second copy here (a checkout) - said, with a hint to choose one',
+      (await page.inputValue('#bk-time')) === '17:30' && (await page.inputValue('#bk-dir')) === bk0.dir && (await page.inputValue('#bk-copy')) === ''
+      && await page.isVisible('#bk-copy-hint') && /İkinci kopya seçilmedi/.test(await page.textContent('#bk-copy-hint'))
+      && /varsayılan/.test(await page.textContent('#bk-sources tr[data-key="time"]')), bk0);
+    await page.fill('#bk-dir', 'yedekler');
+    await page.fill('#bk-copy', bk0.dir + sep + 'OneDrive' + sep + 'tto-yedek');
+    await page.click('#bk-save');
+    await page.waitForFunction(() => document.getElementById('bk-dir-err').textContent && document.getElementById('bk-copy-err').textContent,
+      null, { timeout: 15000 });
+    check('a relative folder is refused next to its field', /Tam yol/.test(await page.textContent('#bk-dir-err')));
+    check('... a folder OneDrive synchronises too, saying why - and nothing is saved',
+      /OneDrive/.test(await page.textContent('#bk-copy-err')) && /Bloomberg verisi ve şifre özetleri/.test(await page.textContent('#bk-copy-err'))
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/admin/backup')).json.source.dir === 'default');
+    const chosenDir = bk0.dir + '-secilen';
+    const chosenCopy = bk0.dir + '-kopya';
+    await page.fill('#bk-time', '17:45');
+    await page.fill('#bk-dir', chosenDir);
+    await page.fill('#bk-copy', chosenCopy);
+    await page.click('#bk-save');
+    await page.waitForFunction(() => /yönetici seçimi/.test(document.querySelector('#bk-sources tr[data-key="dir"]').textContent), null, { timeout: 15000 });
+    check('folders that are fine: saved, before the command line / defaults, the errors gone, the hint too',
+      /17:45/.test(await page.textContent('#bk-sources tr[data-key="time"]')) && (await page.textContent('#bk-dir-err')) === ''
+      && /Kaydeden: Ayşe Yılmaz/.test(await page.textContent('#bk-saved')) && !(await page.isVisible('#bk-copy-hint')));
+    const bk1 = (await api(page, 'ayşe yilmaz', 'GET', '/api/admin/backup')).json;       // (the folders as the server wrote them down)
+    await page.click('#bk-now');
+    await page.waitForFunction(() => /İkinci kopya yazıldı/.test(document.getElementById('bk-result').textContent), null, { timeout: 60000 });
+    const bkDone = await page.textContent('#bk-result');
+    check('a backup now: the file, its size, its second copy written - in the folders just chosen',
+      /tto-\d{4}-\d{2}-\d{2}\.db/.test(bkDone) && /MB/.test(bkDone) && bk1.source.dir === 'saved' && bkDone.includes(bk1.dir)
+      && bkDone.includes(bk1.copy_dir), [bkDone, bk1.dir, bk1.copy_dir]);
+    check('... the newest backups of each folder are listed', (await page.locator('#bk-list tr').count()) === 2
+      && (await page.locator('#bk-copies tr').count()) === 2);
+    const esc = (s) => JSON.stringify(s).slice(1, -1);
+    const userStatus = JSON.stringify((await api(page, 'mehmet', 'GET', '/api/status')).json);
+    const userCalls = [await api(page, 'mehmet', 'GET', '/api/admin/backup'), await api(page, 'mehmet', 'POST', '/api/admin/backup', { values: { time: '18:00' } }),
+      await api(page, 'mehmet', 'POST', '/api/admin/backup/now', {})];
+    check('a user gets 403 from the backup settings and from a backup now, and the status names none of the folders',
+      userCalls.every((r) => r.status === 403) && !userStatus.includes(esc(bk1.dir)) && !userStatus.includes(esc(bk1.copy_dir)),
+      userCalls.map((r) => r.status));
+    await page.click('#bk-reset');
+    await page.click('.modal .mfoot .btn.primary');
+    await page.waitForFunction(() => /varsayılan/.test(document.querySelector('#bk-sources tr[data-key="dir"]').textContent), null, { timeout: 15000 });
+    check('"Varsayılanlara dön": the defaults again, the backups taken stay where they are',
+      (await page.inputValue('#bk-time')) === '17:30' && (await page.inputValue('#bk-dir')) === bk0.dir && await page.isVisible('#bk-copy-hint')
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/admin/backup')).json.saved === null);
+    await shot(page, '30-backup');
 
     // ------------------------------------------------------------------ one live stream per browser, however many tabs
     console.log('many tabs');

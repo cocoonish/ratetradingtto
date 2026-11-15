@@ -9,7 +9,7 @@
     python -m tto check-bloomberg       # connection / entitlement check for the fields the workbook uses
     python -m tto yonetici "Ad Soyad"   # an administrator with a password typed here (the first one, or a forgotten one)
     python -m tto check-fx USDTRY       # which vol / forward point tickers of a pair the terminal knows (~70 items)
-    python -m tto yedekten-don          # the nightly backups; with a file (dashboard stopped): back to that one
+    python -m tto yedekten-don          # the daily backups; with a file (dashboard stopped): back to that one
 
 Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
 (see ``tto/bundled.py``).
@@ -19,9 +19,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from .config import DEFAULT_PORT, FORBIDDEN_PORTS, ROOT, Settings
+from .config import DEFAULT_BACKUP_TIME, DEFAULT_PORT, FORBIDDEN_PORTS, ROOT, Settings
 
 
 def _add_server_args(p: argparse.ArgumentParser) -> None:
@@ -57,12 +57,17 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--bbg-silent-restart", type=float, default=60.0,
                    help="Bloomberg yardımcı süreci piyasa saatinde bu kadar sn ses vermezse yeniden başlatılır "
                         "(günde en çok 3 kez, her seferinde iki kat bekleyerek; 0 = hiç)")
+    # (an administrator's choice in the dashboard - Araçlar → Yedekleme - comes before these three)
     p.add_argument("--backup-dir", default=None,
-                   help="gece yedeklerinin klasörü (varsayılan: veri klasöründe backups; TTO_BACKUP_DIR ile de verilir)")
-    p.add_argument("--backup-time", default="22:00", help="gece yedeğinin saati (SS:DD; varsayılan 22:00)")
+                   help="günlük yedeklerin klasörü (varsayılan: veri klasöründe backups; TTO_BACKUP_DIR ile de verilir; "
+                        "yöneticinin dashboard'da seçtiği klasör bunun önündedir)")
+    p.add_argument("--backup-time", default=None,
+                   help="günlük yedeğin saati (SS:DD; varsayılan %s; yöneticinin dashboard'da seçtiği saat bunun önündedir)"
+                        % DEFAULT_BACKUP_TIME)
     p.add_argument("--backup-copy-dir", default=None,
-                   help="her gece yedeğin ikinci kopyasının klasörü - başka bir sürücü (kurulu dashboard'da varsayılan "
-                        "D:\\tto-yedek; \"\" = ikinci kopya yok; TTO_BACKUP_COPY_DIR ile de verilir)")
+                   help="her gün yedeğin ikinci kopyasının klasörü - başka bir sürücü ya da ağ paylaşımı (kurulu dashboard'da "
+                        "varsayılan D:\\tto-yedek, bilgisayarda D: sürücüsü varsa; \"\" = ikinci kopya yok; TTO_BACKUP_COPY_DIR "
+                        "ile de verilir; yöneticinin dashboard'da seçtiği klasör bunun önündedir)")
     p.add_argument("--private-refresh", type=float, default=5.0,
                    help="kendi girdisi olan kullanıcının şerit, sayfa ve izleme listesi piyasaya en çok bu sıklıkla "
                         "yeniden hesaplanır (sn; kendi değişikliği hemen görünür; 0 = her seferinde)")
@@ -88,13 +93,15 @@ def build_parser() -> argparse.ArgumentParser:
     adm = sub.add_parser("yonetici", help="bir kullanıcıyı şifresiyle yönetici yap (ilk yönetici ya da unutulan şifre)")
     adm.add_argument("name", help="kullanıcı adı")
     adm.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
-    rst = sub.add_parser("yedekten-don", help="veritabanını bir gece yedeğinden geri getir (dashboard kapalıyken; "
+    rst = sub.add_parser("yedekten-don", help="veritabanını bir günlük yedekten geri getir (dashboard kapalıyken; "
                                                "dosya verilmezse yedekler listelenir)")
     rst.add_argument("backup", nargs="?", default=None,
                      help="yedek dosyası (data/backups/tto-YYYY-AA-GG.db ya da ikinci kopyası; yalnızca adı da yeter)")
     rst.add_argument("--data-dir", default=None, help="dashboard'un veri klasörü (varsayılan ./data)")
-    rst.add_argument("--backup-dir", default=None, help="yedeklerin klasörü (varsayılan: veri klasöründe backups)")
-    rst.add_argument("--backup-copy-dir", default=None, help="ikinci kopyaların klasörü (kurulu dashboard'da varsayılan D:\\tto-yedek)")
+    rst.add_argument("--backup-dir", default=None, help="yedeklerin klasörü (varsayılan: veri klasöründe backups; yöneticinin "
+                                                        "dashboard'da seçtiği klasörlere de bakılır)")
+    rst.add_argument("--backup-copy-dir", default=None, help="ikinci kopyaların klasörü (kurulu dashboard'da varsayılan "
+                                                             "D:\\tto-yedek, D: sürücüsü varsa)")
     cfx = sub.add_parser("check-fx", help="bir paritenin vol / forward puanı ticker'larını Bloomberg'de sına (~70 kalem)")
     cfx.add_argument("pair", nargs="?", default="USDTRY")
     cfx.add_argument("--source", default="BGN", help="vol ticker'larının fiyat kaynağı (varsayılan BGN; boş: kaynaksız)")
@@ -212,15 +219,23 @@ def cmd_admin(args) -> int:
 
 
 def cmd_restore(args) -> int:
-    """Put a nightly backup back in the place of the database (the dashboard must be stopped), from the backup folder
-    or from the second copies.  Without a file: the backups of both folders, newest first."""
-    from .ops import backups
+    """Put a daily backup back in the place of the database (the dashboard must be stopped), from the backup folder
+    or from the second copies - the folders the administrators chose in the dashboard first, then those of the command
+    line / the defaults (a changed folder keeps the backups taken before).  Without a file: the backups of every
+    folder, newest first."""
+    from .ops import backups, same_folder, saved_folders
     from .store import restore
     settings = Settings(data_dir=args.data_dir, backup_dir=args.backup_dir, backup_copy_dir=args.backup_copy_dir)
-    folders = [settings.backup_dir] + ([settings.backup_copy_dir] if settings.backup_copy_dir else [])
+    chosen = saved_folders(settings.db_path)
+    folders: List[Tuple[str, str]] = []
+    for folder, what in ((chosen.get("dir"), "Yedekler · dashboard'da seçilen klasör"),
+                         (chosen.get("copy_dir"), "İkinci kopyalar · dashboard'da seçilen klasör"),
+                         (settings.backup_dir, "Yedekler"), (settings.backup_copy_dir, "İkinci kopyalar")):
+        if folder and not any(same_folder(folder, f) for f, _ in folders):
+            folders.append((folder, what))
     if not args.backup:
         shown = 0
-        for folder, what in zip(folders, ("Yedekler", "İkinci kopyalar")):
+        for folder, what in folders:
             found = backups(folder)
             print("%s (%s)%s" % (what, folder, ", en yenisi önce:" if found else ": yok"))
             for b in found:
@@ -231,8 +246,8 @@ def cmd_restore(args) -> int:
         print("Geri dönmek için dashboard'u kapatıp: python -m tto yedekten-don <dosya>  (yalnızca adı da yeter: tto-YYYY-AA-GG.db)")
         return 0
     path = args.backup
-    if not os.path.exists(path) and os.path.basename(path) == path:     # a name alone: from either folder
-        path = next((os.path.join(f, path) for f in folders if os.path.isfile(os.path.join(f, path))), path)
+    if not os.path.exists(path) and os.path.basename(path) == path:     # a name alone: from any of the folders
+        path = next((os.path.join(f, path) for f, _ in folders if os.path.isfile(os.path.join(f, path))), path)
     try:
         res = restore(path, settings.db_path)
     except ValueError as exc:

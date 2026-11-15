@@ -74,8 +74,9 @@ def test_dashboard_in_a_real_browser(tmp_path):
                 time.sleep(0.5)
         else:
             pytest.fail("server did not answer")
+        # (node writes UTF-8: read as the locale's code page - cp1254 on the desk machine - an "Ş" in its output stopped the test)
         res = subprocess.run([node, os.path.join(ROOT, "tests", "e2e", "e2e.js"), url, str(shots)], env=env,
-                             capture_output=True, text=True, timeout=900)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
         print(res.stdout[-6000:])
         assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-2000:]
         assert " 0 failed" in res.stdout
