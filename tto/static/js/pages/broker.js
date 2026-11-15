@@ -51,6 +51,7 @@ const OIS_SIDES = {
  * null (a product without a form there: cross currency, IRS, O/N - T/N swaps). */
 export function tradeKind(q) {
   if (!q || !q.ok) return null;
+  if (q.parts) return null;                     // a spread of two FRAs ("6x9m vs 9x12m"): no form for it there
   if (q.product === 'OIS' && OIS_SIDES[q.kind === 'fwd' ? 'fra' : q.kind]) return 'ois';
   if (q.product === 'FX' && q.kind === 'outright' && /^\d+[WMY]$/i.test(String((q.tenors || [])[0] || ''))) return 'fwd';
   if (q.product === 'DIBS' && q.kind !== 'switch') return 'bond';
@@ -153,6 +154,7 @@ const EXAMPLES = [
   ['1v5y ois -62 bid', 'spread, "v" ile'],
   ['12:18:04 2y3y4y ois 12/ bid', 'fly (2×3Y − 2Y − 4Y, bp)'],
   ['12:11:55 9x12m ois fra 33.80/34.10', 'FRA ("9x12" ya da "fra" kelimesi)'],
+  ['6x9m vs 9x12m -65/-35 · 2y vs 5y -10/-5', '"vs" (v, vs.) ile iki enstrüman: spread, geç olan − erken olan (9x12 − 6x9, bp); iki FRA kendi satırında'],
   ['18m ois taken at 14', 'işlem: offer 35,14\'ten alındı'],
   ['ref 18m ois offer', 'offer geri çekildi'],
   ['2yr ois 35.46, oco with 18m 35.14 offer', 'iki offer, biri öbürünü iptal eder'],

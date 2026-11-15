@@ -469,6 +469,7 @@ okunduğu** hemen görünür (hiçbir şey kaydedilmeden); "Kaydet" (Ctrl+Enter)
 | `2y3y4y ois 12/14` · `2y/3y/4y` · `2s3s4s` | **fly** (2 × gövde − kanatlar, bp) |
 | `9x12 33.80/34.10` · `9x12m ois fra` · `9m12m fra` | **FRA**: "AxB" yazımı ya da "fra" kelimesi |
 | `1y1y 34.50/34.80` | forward (aynı vade iki kez spread olamaz) |
+| `6x9m vs 9x12m -65/-35` · `6x9 fra v 9x12 fra` · `1y1y vs 2y1y` · `5y vs. 2y` · `2y ois versus 5y ois` | **"vs" ile iki enstrüman** (`vs`, `v`, `vs.`, `versus`): spread (bp), geç olan − erken olan (9x12 − 6x9, 5Y − 2Y), yazılış sırası fark etmez. İki FRA ya da forward tahtada **kendi satırında** durur (6x9 FRA'nın kotası sayılmaz); modeli iki FRA'nın eğrideki farkı. Günlük İşlemler'de formu olmadığından "İşlem gir" çıkmaz |
 | `1y 35.00/35.20 18m 35.03/35.23 2y 35.26/35.46` | bir satırda birkaç kota (virgülle ayrılmış da olabilir) |
 | `18m ois taken at 14` · `paid` · `mine` · `given at 03` · `hit` · `trades 35.14` | **işlem**: taken / paid / mine offer'ın alındığını, given / hit bid'e verildiğini söyler. Fiyat yazılmamışsa ("18m taken") o an duran kota alınır |
 | `ref 18m ois offer` · `18m ois off` | kota geri çekildi (taraf söylenmişse yalnızca o taraf) |
