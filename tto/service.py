@@ -1034,7 +1034,8 @@ class Service(object):
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
                                 "source": b.model.meta.get("source"), "left_out": list(getattr(b, "left_out", []))}
                           for bid, b in self.books.items()},
-                "port": self.settings.port}
+                "port": self.settings.port,
+                "streams": len(self._listeners)}            # live-update streams open (one per browser)
 
     def nav(self) -> List[Dict[str, Any]]:
         pages = []

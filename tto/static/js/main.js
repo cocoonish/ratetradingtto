@@ -23,8 +23,8 @@ import { UsersPage } from './pages/users.js';
 import { loadHiddenColumns } from './columns.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null, es: null,
-  online: true, booted: false, pending: 0 };
+const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
+  online: true, booted: false, pending: 0, behind: false, headerGen: 0, headerAs: null };
 
 function store(key, value) {
   try {
@@ -97,7 +97,7 @@ async function showLogin(message) {
   session.user = null;
   session.display = null;
   session.role = null;
-  if (state.es) { state.es.close(); state.es = null; }
+  events.stop();
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   $('app').classList.add('hidden');
   // the card is ready at once; what is typed into it while the server answers stays (a busy server answers late)
@@ -205,8 +205,10 @@ async function enter(me) {
   state.pages = nav.pages;
   for (const u of users.users) state.users[u.name] = u.display;
   applyStatus(status);
+  state.gen = status.gen || 0;                         // (a generation heard later than this one: a change)
+  checkAlarms();                                     // (what fired before: not again)
   buildNav();
-  connectEvents();
+  events.start();
   loadHeader().catch(() => {});
   route();
   if (me.role === 'admin' && state.pending) {
@@ -324,30 +326,145 @@ async function runRefresh() {
   }
 }
 
-function connectEvents() {
-  if (state.es) state.es.close();
-  const es = new EventSource('/api/events');
-  state.es = es;
-  es.onmessage = (e) => {
-    let gen = 0;
-    try { gen = JSON.parse(e.data).gen; } catch (x) { return; }
-    setOnline(true);
-    if (gen !== state.gen) {
-      const first = state.gen === 0;
-      state.gen = gen;
-      if (!first) runRefresh();
-      checkAlarms();
-    }
-  };
-  es.onerror = () => setOnline(false);
-  es.onopen = () => {
-    if (!state.online) {
-      api.get('/api/status').then(applyStatus).catch(() => {});
-      runRefresh();
-    }
-    setOnline(true);
-  };
+// ---------------------------------------------------------------------- one live stream per browser
+// Every tab used to keep its own stream of generations (EventSource): a browser opens at most 6 connections to one
+// server (HTTP/1.1), so the 7th tab of the dashboard waited for nothing.  One tab in view keeps the stream and passes
+// each generation on to the others (BroadcastChannel); which one is agreed through localStorage (the dashboard is
+// plain HTTP on the desk's network: Web Locks need HTTPS).  A tab out of view never takes the stream and hands it to
+// one in view; with every tab out of view one of them keeps it (alarms still come).  A browser without BroadcastChannel or
+// localStorage: each tab its own stream, closed while the tab is out of view.
+const LEAD_KEY = 'tto.events.lead';
+const LEAD_MS = 3500;                                // a leader not heard of for this long is gone
+
+function readLead() {
+  try { return JSON.parse(localStorage.getItem(LEAD_KEY) || 'null'); } catch (e) { return null; }
 }
+
+function writeLead(v) {
+  try { localStorage.setItem(LEAD_KEY, JSON.stringify(v)); } catch (e) { /* storage unavailable */ }
+}
+
+/** A generation heard (from this tab's stream or another tab's). */
+function onGen(gen) {
+  setOnline(true);
+  if (typeof gen !== 'number' || gen === state.gen) return;
+  state.gen = gen;
+  runRefresh();
+  checkAlarms();
+}
+
+/** The stream is back (after the server or the network was gone): what changed meanwhile, once. */
+function onBack() {
+  if (!state.online) {
+    api.get('/api/status').then(applyStatus).catch(() => {});
+    runRefresh();
+  }
+  setOnline(true);
+}
+
+const events = {
+  id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+  es: null,
+  chan: null,
+  timer: null,
+  leading: false,
+  shared: false,
+
+  start() {
+    this.stop();
+    let storage = false;
+    try { localStorage.setItem(LEAD_KEY + '.t', '1'); localStorage.removeItem(LEAD_KEY + '.t'); storage = true; } catch (e) { storage = false; }
+    this.shared = storage && typeof window.BroadcastChannel === 'function';
+    if (!this.shared) { if (!document.hidden) this.open(); return; }
+    this.chan = new BroadcastChannel('tto-events');
+    this.chan.onmessage = (e) => {
+      const m = e.data || {};
+      if (typeof m.gen === 'number') onGen(m.gen);
+      else if (m.online === false) setOnline(false);
+      else if (m.online === true) onBack();
+    };
+    this.timer = setInterval(() => this.tick(), 1000);
+    window.addEventListener('pagehide', this.bye);
+    this.tick();
+  },
+
+  /** Every second: the leader says it is still there; a tab in view takes the stream when nobody (in view) has it. */
+  tick() {
+    const now = Date.now();
+    const cur = readLead();
+    if (this.leading) {
+      if (cur && cur.id !== this.id && cur.until > now) { this.lead(false); return; }      // another tab took it
+      writeLead({ id: this.id, until: now + LEAD_MS, hidden: document.hidden });
+      return;
+    }
+    // a tab in view takes the stream when nobody has it or its holder is out of view; a tab out of view only when
+    // nobody (in view) took it for a while - so that alarms still come with every tab out of view
+    const take = document.hidden ? (!cur || cur.until < now - LEAD_MS) : (!cur || cur.until < now || cur.hidden);
+    if (take) {
+      writeLead({ id: this.id, until: now + LEAD_MS, hidden: document.hidden });
+      setTimeout(() => {                                // two tabs at once: the one written last leads
+        const c = readLead();
+        if (!this.leading && this.chan && c && c.id === this.id) this.lead(true);
+      }, 150);
+    }
+  },
+
+  lead(on) {
+    this.leading = on;
+    if (on) this.open(); else this.close();
+  },
+
+  open() {
+    this.close();
+    const es = new EventSource('/api/events');
+    this.es = es;
+    es.onmessage = (e) => {
+      let gen = 0;
+      try { gen = JSON.parse(e.data).gen; } catch (x) { return; }
+      if (this.chan) this.chan.postMessage({ gen });
+      onGen(gen);
+    };
+    es.onerror = () => {
+      if (this.chan) this.chan.postMessage({ online: false });
+      setOnline(false);
+    };
+    es.onopen = () => {
+      if (this.chan) this.chan.postMessage({ online: true });
+      onBack();
+    };
+  },
+
+  close() {
+    if (this.es) { this.es.close(); this.es = null; }
+  },
+
+  /** The tab came into view or went out of it. */
+  visible() {
+    if (!session.user) return;
+    if (!this.shared) {
+      if (document.hidden) this.close();
+      else if (!this.es) this.open();
+      return;
+    }
+    this.tick();
+  },
+
+  bye: () => {
+    const cur = readLead();
+    if (events.leading && cur && cur.id === events.id) {
+      try { localStorage.removeItem(LEAD_KEY); } catch (e) { /* storage unavailable */ }
+    }
+  },
+
+  stop() {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    this.bye();
+    this.close();
+    this.leading = false;
+    if (this.chan) { this.chan.close(); this.chan = null; }
+    window.removeEventListener('pagehide', this.bye);
+  },
+};
 
 function setOnline(on) {
   if (state.online === on) return;
@@ -561,8 +678,9 @@ function boot() {
   window.addEventListener('hashchange', () => { if (session.user) route(); });
   // back in view: what changed meanwhile is asked for once
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden || !session.user) return;
-    if (state.behind) { state.behind = false; runRefresh(); }
+    if (!session.user) return;
+    events.visible();
+    if (!document.hidden && state.behind) { state.behind = false; runRefresh(); }
   });
   setInterval(pollStatus, 15000);
 
@@ -575,6 +693,6 @@ function findCellAnywhere(ref) {
   return findCell(ref) || (state.page && state.page.findCell ? state.page.findCell(ref) : null);
 }
 
-window.tto = { findCell: findCellAnywhere, selectionText, state, refresh: () => runRefresh() };
+window.tto = { findCell: findCellAnywhere, selectionText, state, events, refresh: () => runRefresh() };
 
 boot();
