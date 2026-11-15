@@ -3,7 +3,7 @@
 // the forwards (USDTRY: the Forward page's offshore curve), the smile fitted through each tenor's quotes, and what
 // that says about the spot - the implied path with its cloud of percentiles, the probabilities of being above /
 // below / between price levels at every tenor, and each tenor's smile and density.  One standard deviation up and
-// down is read off the distribution, the skew included (the ATM vol alone gives a symmetric ±1σ).  A row of the surface
+// down is read off the distribution, the skew included, beside the symmetric ±1σ of the ATM vol alone.  A row of the surface
 // clicked draws that tenor through time: its quotes and its skew (25D RR / ATM) with the z-score.  A quote can be typed
 // over (one's own view, back to Bloomberg with an empty value).
 import { api } from '../api.js';
@@ -18,13 +18,18 @@ const MODELS = [['svi', 'SVI', 'Arbitrajsız SVI: beş kotaya en küçük karele
   ['sabr', 'SABR', 'SABR (β = 1): ATM tam, diğerleri en küçük kareler — USDTRY gibi çarpık smile\'ı tutamayabilir'],
   ['vv', 'Vanna-Volga', '25D pillar\'lardan Vanna-Volga — 10D kotalar kullanılmaz']];
 const BANDS = [['0.01', '0.99'], ['0.05', '0.95'], ['0.1', '0.9'], ['0.25', '0.75']];
+/** the cloud drawn by percentiles (the same probability left in either tail, the median in the middle) or by the
+ * narrowest ranges (where the market sees the spot most likely, the peak in the middle): a band's mass in the latter */
+const BAND_KINDS = [['pct', 'Yüzdelik', 'Bantlar yüzdelik aralıklar (iki kuyrukta eşit olasılık), orta çizgi medyan'],
+  ['hdi', 'En olası', 'Bantlar en dar aralıklar (içindeki her seviye dışındakilerden olası), orta çizgi tepe: en olası seviye']];
+const LIKELY_OF = { '0.01': '0.98', '0.05': '0.9', '0.1': '0.8', '0.25': '0.5' };
 const MODES = [['above', 'Üstünde', 'Vade sonunda seviyenin üstünde olma olasılığı'],
   ['below', 'Altında', 'Vade sonunda seviyenin altında olma olasılığı'],
   ['between', 'Aralıkta', 'Vade sonunda iki seviye arasında olma olasılığı']];
 const HORIZONS = [['3M', '3A'], ['6M', '6A'], ['1Y', '1Y'], ['2Y', '2Y']];
 const KINDS = [['ATM', 'ATM'], ['RR25', '25D RR'], ['BF25', '25D BF'], ['RR10', '10D RR'], ['BF10', '10D BF']];
 const KIND_NAME = Object.fromEntries(KINDS);
-const BLUE = '4F81BD', ORANGE = 'F79646', PURPLE = '8064A2';
+const BLUE = '4F81BD', ORANGE = 'F79646', PURPLE = '8064A2', GREEN = '9BBB59';
 const REFRESH_MS = 12000;
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
@@ -81,6 +86,7 @@ export class FxPage {
     this.histTenor = pref('tto.fx.histtenor', this.tenor);           // the tenor drawn through time
     this.showLevels = pref('tto.fx.levels.on', '1') === '1';
     this.bandsOn = new Set((pref('tto.fx.bands', '0.05,0.25') || '').split(',').filter(Boolean));
+    this.bandKind = pref('tto.fx.bandkind', 'pct') === 'hdi' ? 'hdi' : 'pct';
     this.grids = {};
     this.charts = {};
     this.loaded = 0;
@@ -200,8 +206,9 @@ export class FxPage {
     this.fanNote = h('div', { class: 'note' });
     const hz = seg(HORIZONS.map(([v, t]) => [v, t, 'Grafiğin sağ ucu: ' + t]), this.horizon, (v) => { this.horizon = v; keep('tto.fx.horizon', v); this.fillFan(); }, 'fx-horizon');
     const bands = h('div', { class: 'seg', id: 'fx-bands' });
+    const bandButtons = [];
     for (const [lo, hi] of BANDS) {
-      const b = h('button', { type: 'button', title: 'Bandı göster / gizle' }, '%' + Math.round(lo * 100) + '–' + Math.round(hi * 100));
+      const b = h('button', { type: 'button', title: 'Bandı göster / gizle' });
       b.dataset.v = lo;
       b.classList.toggle('on', this.bandsOn.has(lo));
       b.addEventListener('click', () => {
@@ -211,11 +218,20 @@ export class FxPage {
         this.fillFan();
       });
       bands.appendChild(b);
+      bandButtons.push([b, lo, hi]);
     }
+    // the same four bands either way: a percentile range or the narrowest range of that mass (%25–75 ~ the likeliest %50)
+    const bandText = () => {
+      for (const [b, lo, hi] of bandButtons) {
+        b.textContent = this.bandKind === 'hdi' ? '%' + Math.round(LIKELY_OF[lo] * 100) : '%' + Math.round(lo * 100) + '–' + Math.round(hi * 100);
+      }
+    };
+    bandText();
+    const kind = seg(BAND_KINDS, this.bandKind, (v) => { this.bandKind = v; keep('tto.fx.bandkind', v); bandText(); this.fillFan(); }, 'fx-bandkind');
     const lvBtn = h('button', { type: 'button', title: 'Olasılık tablosundaki seviyeleri grafikte çiz' }, 'Seviyeler');
     lvBtn.classList.toggle('on', this.showLevels);
     lvBtn.addEventListener('click', () => { this.showLevels = !this.showLevels; lvBtn.classList.toggle('on', this.showLevels); keep('tto.fx.levels.on', this.showLevels ? '1' : '0'); this.fillFan(); });
-    this.fanPanel = panel('fx-fan', 'İma edilen yol ve olasılık bulutu', [h('span', { class: 'muted' }, 'Ufuk'), hz, bands,
+    this.fanPanel = panel('fx-fan', 'İma edilen yol ve olasılık bulutu', [h('span', { class: 'muted' }, 'Ufuk'), hz, kind, bands,
       h('div', { class: 'seg' }, lvBtn)], this.fanHost, this.fanNote);
     this.host.appendChild(this.fanPanel);
 
@@ -251,7 +267,8 @@ export class FxPage {
         h('code', null, '10R'), ') ve butterfly (', h('code', null, '25B'), ', ', h('code', null, '10B'), '). Butterfly market (broker) strangle\'dır: smile, ATM + BF tek vol\'le fiyatlanan strangle\'ı aynı fiyatlar; RR smile\'ın kendi delta strike\'larındaki vol farkıdır. ATM = delta-neutral straddle.'),
       h('p', null, 'Smile: SVI (toplam varyans, log-moneyness) beş kotaya en küçük kareler ile, Gatheral\'ın kelebek arbitrajı koşulu ve Lee kanat sınırı ceza olarak — yoğunluk hiçbir yerde negatif olmaz. USDTRY\'nin orta kotaları kendi aralarında arbitrajsız olmayabilir; o zaman en yakın arbitrajsız smile alınır ve sapma "Uyum" sütununda vol olarak yazar. SABR ve Vanna-Volga karşılaştırma içindir.'),
       h('p', null, '↑1σ / ↓1σ: vade sonundaki spotun %84 yüzdeliği − forward ve forward − %16 yüzdeliği, yani normal dağılımın bir standart sapmasına denk gelen olasılıklar, '
-        + 'smile\'ın çarpıklığıyla (skew) birlikte; yalnız ATM vol\'le hesaplanan ±1σ (spot × ATM × √T) simetriktir ve karşılaştırma için hücrenin ipucunda yazar. '
+        + 'smile\'ın çarpıklığıyla (skew) birlikte. ATM ±1σ yalnız ATM vol\'le hesaplanan simetrik harekettir (forward × ATM × √T: aynı forward, aynı gün) '
+        + 've karşılaştırma için yanlarındaki sütunda durur. '
         + 'Dağılımın ortalaması forward\'dır: USDTRY gibi uzun bir sağ kuyruk (devalüasyon sıçraması) taşıyan bir paritede gövde forward\'ın altında kalır, '
         + '↑1σ küçülür (eksi bile olabilir: %84 yüzdelik forward\'ın altında) ve ↓1σ büyür; kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür.'),
       h('p', null, 'Dağılım risk-nötrdür (forward ölçüsü): vade sonundaki spotun beklenen değeri forward\'dır, yani USDTRY\'de bulutun merkezi faiz farkı kadar yukarıdadır — gerçek dünya olasılığı değil, opsiyon piyasasının fiyatladığıdır. P(S > K) = N(d2) − F·n(d1)·√T·σ\'(K) (Breeden–Litzenberger).'),
@@ -304,14 +321,13 @@ export class FxPage {
         isNum(r.chg) ? { t: (r.chg > 0 ? '+' : '') + num(r.chg, 2, false) + '%', v: r.chg, k: 'n', cls: pick.trim(),
           tip: 'Son kapanışa göre' } : { t: '', k: '', cls: pick.trim() },
         c(r.ATM_1W, 2), c(r.ATM_1M, 2), c(r.ATM_3M, 2), c(r.ATM_1Y, 2), c(r.RR25_1M, 2), c(r.RR25_3M, 2), c(r.BF25_1M, 2), c(r.RR10_1M, 2),
-        cellNum(r.up_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ yukarı, skew dahil: 1M dağılımının %84 yüzdeliği − forward'
-          + (isNum(r.move_1m) ? '\nYalnız ATM ile ±1σ: ' + num(r.move_1m, d, false) : '') }),
-        cellNum(r.down_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ aşağı, skew dahil: forward − 1M dağılımının %16 yüzdeliği'
-          + (isNum(r.move_1m) ? '\nYalnız ATM ile ±1σ: ' + num(r.move_1m, d, false) : '') }),
+        cellNum(r.move_1m, d, { cls: pick.trim(), tip: '1 ayda ±1σ, yalnız ATM 1M vol ile: forward × ATM × √(gün / 365) — simetrik, skew yok' }),
+        cellNum(r.up_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ yukarı, skew dahil: 1M dağılımının %84 yüzdeliği − forward' }),
+        cellNum(r.down_1m, d, { cls: pick.trim(), tip: '1 ayda 1σ aşağı, skew dahil: forward − 1M dağılımının %16 yüzdeliği' }),
         cellNum(r.breakeven, d, { cls: pick.trim(), tip: 'Günlük başabaş hareket: spot × ATM 1M / √252' })];
     });
     this.setGrid('board', this.boardBody, ['Parite', 'Grup', 'Spot', 'Gün %', 'ATM 1W', 'ATM 1M', 'ATM 3M', 'ATM 1Y', '25D RR 1M', '25D RR 3M',
-      '25D BF 1M', '10D RR 1M', '1M ↑1σ', '1M ↓1σ', 'Başabaş / gün'], cells, 'Parite yok', (i, j) => {
+      '25D BF 1M', '10D RR 1M', '1M ATM ±1σ', '1M ↑1σ', '1M ↓1σ', 'Başabaş / gün'], cells, 'Parite yok', (i, j) => {
       const r = rows[i];
       // a vol of the board clicked: its tenor is the one drawn through time below
       const t = { 4: '1W', 5: '1M', 6: '3M', 7: '1Y', 8: '1M', 9: '3M', 10: '1M', 11: '1M' }[j];
@@ -357,6 +373,10 @@ export class FxPage {
       const p = r.points_smile && r.points_smile[name];
       return p ? { t: num(p.vol, 2, false), v: p.vol, k: 'n', tip: name + ' strike: ' + num(p.strike, d, false) } : { t: '', k: '' };
     };
+    const span = (x) => (x ? num(x[0], d, false) + ' – ' + num(x[1], d, false) : '–');
+    const likelyCell = (lk) => (lk && isNum(lk.mode) ? cellNum(lk.mode, d, { b: 1, tip: 'En olası seviye: yoğunluğun tepesi (piyasanın fiyatladığı)\n'
+      + 'En olası %50 aralık: ' + span(lk.hdi['0.5']) + '\nEn olası %80 aralık: ' + span(lk.hdi['0.8']) + '\n(en dar aralıklar: içindeki her seviye dışındakilerden olası)' })
+      : { t: '', k: '' });
     const rows = s.rows.map((r) => {
       const fit = r.fit ? Math.max(...Object.values(r.fit).filter(isNum).map(Math.abs)) : null;
       const fitTip = r.fit ? Object.entries(r.fit).map(([k, v]) => k + ': ' + (isNum(v) ? (v > 0 ? '+' : '') + num(v, 3, false) : '–')).join('\n') : '';
@@ -368,9 +388,10 @@ export class FxPage {
           : { t: '–', k: 's', cls: 'soft', tip: 'Forward yok · çift tık: yazın' },
         quote(r, 'ATM'), quote(r, 'RR25'), quote(r, 'BF25'), quote(r, 'RR10'), quote(r, 'BF10'),
         pt(r, '10P'), pt(r, '25P'), pt(r, '25C'), pt(r, '10C'),
-        cellNum(r.up_1s, d, { tip: '1σ yukarı, skew dahil: dağılımın %84 yüzdeliği − forward' + (isNum(r.move_1sd) ? '\nYalnız ATM ile ±1σ (spot × ATM × √T): ' + num(r.move_1sd, d, false) : '') }),
-        cellNum(r.down_1s, d, { tip: '1σ aşağı, skew dahil: forward − dağılımın %16 yüzdeliği' + (isNum(r.move_1sd) ? '\nYalnız ATM ile ±1σ (spot × ATM × √T): ' + num(r.move_1sd, d, false) : '') }),
-        cellNum(q['0.05'], d), cellNum(q['0.5'], d, { b: 1 }), cellNum(q['0.95'], d),
+        cellNum(r.move_1sd, d, { tip: '±1σ, yalnız ATM vol ile: forward × ATM × √T — simetrik, skew yok' }),
+        cellNum(r.up_1s, d, { tip: '1σ yukarı, skew dahil: dağılımın %84 yüzdeliği − forward' }),
+        cellNum(r.down_1s, d, { tip: '1σ aşağı, skew dahil: forward − dağılımın %16 yüzdeliği' }),
+        cellNum(q['0.05'], d), cellNum(q['0.5'], d, { b: 1 }), likelyCell(r.likely), cellNum(q['0.95'], d),
         isNum(fit) ? { t: num(fit, 2, false), v: fit, k: 'n', cls: fit > 0.5 ? 'thru' : 'soft', tip: 'Kotalardan sapma (vol puanı)\n' + fitTip + (r.note ? '\n' + r.note : '') }
           : { t: r.error || '', k: 's', cls: 'soft' },
         r.check ? { t: r.check.arbitrage ? 'arbitraj!' : '✓', k: 's', cls: r.check.arbitrage ? 'thru' : 'soft',
@@ -380,7 +401,7 @@ export class FxPage {
     const marked = rows.map((row, i) => (s.rows[i].tenor === this.histTenor
       ? row.map((c) => Object.assign({}, c, { cls: ((c.cls || '') + ' pick').trim() })) : row));
     const g = this.setGrid('surf', this.surfBody, ['Vade', 'Teslim', 'Gün', 'Forward', 'ATM', '25D RR', '25D BF', '10D RR', '10D BF', '10P', '25P', '25C', '10C',
-      '↑1σ', '↓1σ', '%5', 'Medyan', '%95', 'Uyum', 'Yoğunluk'], marked, 'Vade yok', (i) => {
+      'ATM ±1σ', '↑1σ', '↓1σ', '%5', 'Medyan', 'En olası', '%95', 'Uyum', 'Yoğunluk'], marked, 'Vade yok', (i) => {
       const r = this.surf.rows[i];
       if (r) this.setTenor(r.tenor);
     });
@@ -394,10 +415,11 @@ export class FxPage {
         if (col && r) this.typeQuote(r, col);
       });
     }
-    this.surfNote.textContent = 'Vol\'ler vol puanı (%). 10P … 10C: smile\'ın kendi delta strike\'larındaki vol (üzerine gelince strike). ↑1σ / ↓1σ: vade sonunda spotun '
-      + 'forward\'dan bir standart sapma yukarı / aşağı hareketi, skew dahil (dağılımın %84 ve %16 yüzdelikleri; yalnız ATM ile simetrik ±1σ üzerine gelince). '
+    this.surfNote.textContent = 'Vol\'ler vol puanı (%). 10P … 10C: smile\'ın kendi delta strike\'larındaki vol (üzerine gelince strike). ATM ±1σ: yalnız ATM vol ile '
+      + 'simetrik bir standart sapma (forward × ATM × √T). ↑1σ / ↓1σ: vade sonunda spotun forward\'dan bir standart sapma yukarı / aşağı hareketi, skew dahil '
+      + '(dağılımın %84 ve %16 yüzdelikleri). '
       + 'USDTRY\'de ↑1σ küçük, hatta eksi çıkabilir: büyük yukarı sıçrama kuyruğu ortalamayı (forward\'ı) dağılımın gövdesinin üstüne çeker. %5 / Medyan / %95: '
-      + 'risk-nötr dağılımın yüzdelikleri. Uyum: modelin kotalardan en büyük sapması (vol puanı; ayrıntı üzerine gelince). Satıra tıklayınca o vadenin geçmişi "Vade geçmişi"nde çizilir. '
+      + 'risk-nötr dağılımın yüzdelikleri. En olası: yoğunluğun tepesi, piyasanın fiyatladığı en olası seviye (üzerine gelince en dar %50 / %80 aralık). Uyum: modelin kotalardan en büyük sapması (vol puanı; ayrıntı üzerine gelince). Satıra tıklayınca o vadenin geçmişi "Vade geçmişi"nde çizilir. '
       + 'Bir kotayı ya da forward\'ı değiştirmek için çift tıklayın: değer yalnız sizin görünümünüzü değiştirir, boş bırakınca Bloomberg\'e döner.';
   }
 
@@ -514,19 +536,38 @@ export class FxPage {
     if (!s) return;
     const today = serialOfIso(s.today);
     const horizonTenor = { '3M': '3M', '6M': '6M', '1Y': '1Y', '2Y': '2Y' }[this.horizon];
-    const points = s.rows.filter((r) => r.q && r.date && isNum(r.fwd)).map((r) => ({ x: serialOfIso(r.date), label: r.tenor, fwd: r.fwd, q: r.q }));
+    const hdi = this.bandKind === 'hdi';
+    // the likeliest: each band's edges are the narrowest range of its mass, the middle line the peak
+    const likelyQ = (lk) => {
+      const q = { '0.5': lk.mode };
+      for (const [lo, hi] of BANDS) {
+        const r = lk.hdi[LIKELY_OF[lo]];
+        if (r) { q[lo] = r[0]; q[hi] = r[1]; }
+      }
+      return q;
+    };
+    const points = s.rows.filter((r) => r.q && r.date && isNum(r.fwd) && (!hdi || (r.likely && isNum(r.likely.mode))))
+      .map((r) => ({ x: serialOfIso(r.date), label: r.tenor, fwd: r.fwd, q: hdi ? likelyQ(r.likely) : r.q }));
     const hz = (s.rows.find((r) => r.tenor === horizonTenor) || {}).date;
+    const pctOf = (k) => Math.round(LIKELY_OF[k] * 100);
     const data = {
       today, spot: s.spot, hist: (s.spot_history || []).map(([day, v]) => [serialOfIso(day), v]), points,
       bands: BANDS.filter(([lo]) => this.bandsOn.has(lo)), median: true,
+      names: hdi ? { center: 'tepe', band: Object.fromEntries(BANDS.map(([lo]) => [lo, 'en olası %' + pctOf(lo)])),
+        edge: Object.fromEntries([].concat(...BANDS.map(([lo, hi]) => [[lo, '%' + pctOf(lo) + ' alt'], [hi, '%' + pctOf(lo) + ' üst']]))) } : null,
       levels: this.showLevels ? (s.levels || []) : [], decimals: (s.pair_info && s.pair_info.decimals) || 4,
       horizon: hz ? serialOfIso(hz) : (points.length ? points[points.length - 1].x : today + 365),
     };
     if (this.charts.fan) this.charts.fan.update(data);
     else this.charts.fan = new FanChart(this.fanHost, data, { height: 400 });
-    this.fanPanel.titleEl.textContent = s.pair + ' · ima edilen yol ve olasılık bulutu';
-    this.fanNote.textContent = 'Kesikli çizgi forward patikası (ima edilen yol), mavi çizgi medyan; bantlar vade sonundaki spotun risk-nötr dağılımının yüzdelik aralıkları '
-      + '(her vadede, aralarında doğrusal). Geçmiş: spotun son kapanışları (tarihçe). Üzerine gelince o tarihteki değerler.';
+    this.fanPanel.titleEl.textContent = s.pair + ' · ima edilen yol ve olasılık bulutu' + (hdi ? ' · en olası' : '');
+    this.fanNote.textContent = (hdi
+      ? 'Kesikli çizgi forward patikası (ima edilen yol). Mavi çizgi tepe: her vadede yoğunluğun zirvesi, piyasanın fiyatladığı en olası seviye. Bantlar en dar '
+        + 'aralıklar: %50 bandı, olasılığın yarısını taşıyan en dar aralıktır; içindeki her seviye dışındakilerden daha olasıdır. Yüzdelik bantlardan farkı: iki '
+        + 'kuyruğa eşit pay bırakmaz, tepeye doğru kayar (USDTRY\'de forward\'ın altına, put skew\'lü bir paritede üstüne). Dağılım risk-nötrdür: ortalaması forward. '
+      : 'Kesikli çizgi forward patikası (ima edilen yol), mavi çizgi medyan; bantlar vade sonundaki spotun risk-nötr dağılımının yüzdelik aralıkları. ')
+      + '(Her vadede, aralarında doğrusal.) Geçmiş: spotun son kapanışları (tarihçe). Dikey eksen çizilene oturur; olasılık tablosunun bu aralığa düşen '
+      + 'seviyeleri noktalı çizgi. Üzerine gelince o tarihteki değerler.';
   }
 
   fillMatrix() {
@@ -544,10 +585,14 @@ export class FxPage {
       rows = s.matrix.map((m) => {
         if (!m.above) return [{ t: m.tenor, k: 's', b: 1 }];
         const a = m.above;
-        const out = [{ t: m.tenor, k: 's', b: 1 }, pc(isNum(a[0]) ? 1 - a[0] : null)];
-        for (let i = 1; i < a.length; i++) out.push(pc(isNum(a[i - 1]) && isNum(a[i]) ? a[i - 1] - a[i] : null));
-        out.push(pc(a[a.length - 1]));
-        return out;
+        const ps = [isNum(a[0]) ? 1 - a[0] : null];
+        for (let i = 1; i < a.length; i++) ps.push(isNum(a[i - 1]) && isNum(a[i]) ? a[i - 1] - a[i] : null);
+        ps.push(a[a.length - 1]);
+        // the likeliest of the closed ranges (an open end "<" / "≥" is no place to be in)
+        let best = -1;
+        for (let i = 1; i < ps.length - 1; i++) if (isNum(ps[i]) && (best < 0 || ps[i] > ps[best])) best = i;
+        return [{ t: m.tenor, k: 's', b: 1 }].concat(ps.map((p, i) => (i === best
+          ? Object.assign(pc(p, 'Bu vadenin en olası aralığı (iki seviye arasındakiler içinde)'), { b: 1 }) : pc(p))));
       });
     } else {
       const above = this.mode === 'above';
@@ -556,7 +601,8 @@ export class FxPage {
     }
     this.setGrid('matrix', this.matrixBody, header, lv.length ? rows : [], 'Seviye yok: yukarıya fiyat seviyeleri yazın');
     this.matrixNote.textContent = 'Her hücre, o vadenin sonunda spotun seviyenin ' + (this.mode === 'above' ? 'üstünde' : this.mode === 'below' ? 'altında' : 'iki değeri arasında')
-      + ' olma olasılığı (opsiyon piyasasının fiyatladığı risk-nötr olasılık: forward\'ın faiz farkı dahil). Seviyeler '
+      + ' olma olasılığı (opsiyon piyasasının fiyatladığı risk-nötr olasılık: forward\'ın faiz farkı dahil). '
+      + (this.mode === 'between' ? 'Kalın: o vadenin en olası aralığı (iki seviye arasındakiler içinde). ' : '') + 'Seviyeler '
       + (this.levelsInput.value.trim() ? 'sizin yazdıklarınız (bu parite için hatırlanır).' : 'otomatik: 1Y dağılımının %5–%95 aralığında yuvarlak adımlar.');
   }
 
@@ -584,12 +630,15 @@ export class FxPage {
         { name: 'pillar\'lar', kind: 'scatter', noline: true, marker: true, color: ORANGE, x: pts.map(([, p]) => p.strike), data: pts.map(([, p]) => p.vol),
           labels: pts.map(([n]) => n) }] };
     const top = Math.max(...r.curve.map((c) => c[2]));
+    const peak = r.likely && isNum(r.likely.mode) ? r.likely.mode : null;
     const dens = { scatter: true, title: s.pair + ' ' + r.tenor + ' yoğunluk', auto: 'fit', decimals: 3, aspect: 0.55, x_title: 'vade sonunda spot', y_title: 'yoğunluk',
       series: [{ name: 'risk-nötr yoğunluk', kind: 'scatter', color: BLUE, x: ks, data: r.curve.map((c) => c[2]) },
         { name: 'forward', kind: 'scatter', color: PURPLE, dash: true, x: [r.fwd, r.fwd], data: [0, top] }]
-        .concat(isNum(s.spot) ? [{ name: 'spot', kind: 'scatter', color: ORANGE, dash: true, x: [s.spot, s.spot], data: [0, top] }] : []) };
+        .concat(isNum(s.spot) ? [{ name: 'spot', kind: 'scatter', color: ORANGE, dash: true, x: [s.spot, s.spot], data: [0, top] }] : [])
+        .concat(peak !== null ? [{ name: 'tepe (en olası)', kind: 'scatter', color: GREEN, dash: true, x: [peak, peak], data: [0, top] }] : []) };
     this.smileTitle.textContent = r.tenor + ' smile · vol − strike (' + (r.delta === 'spot' ? 'spot' : 'forward') + ' delta' + (s.pair_info && s.pair_info.premium ? ', primli' : '') + ')';
-    this.densTitle.textContent = r.tenor + ' · vade sonunda spotun dağılımı (' + isoToTr(r.date) + ', forward ' + num(r.fwd, d, false) + ')';
+    this.densTitle.textContent = r.tenor + ' · vade sonunda spotun dağılımı (' + isoToTr(r.date) + ', forward ' + num(r.fwd, d, false)
+      + (peak !== null ? ', en olası ' + num(peak, d, false) + ', en olası %50: ' + num(r.likely.hdi['0.5'][0], d, false) + ' – ' + num(r.likely.hdi['0.5'][1], d, false) : '') + ')';
     if (this.charts.smile) this.charts.smile.update(smile); else this.charts.smile = new Chart(this.smileHost, smile, { height: 280 });
     if (this.charts.dens) this.charts.dens.update(dens); else this.charts.dens = new Chart(this.densHost, dens, { height: 280 });
   }

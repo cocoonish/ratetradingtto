@@ -15,7 +15,7 @@ import pytest
 from conftest import auth, cell, make_service
 from tto import extras as ex
 from tto import fx
-from tto.marketdata.base import bdp_key
+from tto.marketdata.base import REQUESTING, bdp_key
 
 
 def usdtry_quotes(tenor):
@@ -221,7 +221,8 @@ def test_the_board(svc):
     assert list(rows)[:2] == ["USDTRY", "EURTRY"] and len(rows) == len(fx.PAIRS)
     t = rows["USDTRY"]
     assert t["spot"] == cell(svc, "EK_FWD!F%d" % (ex.FR_USD + 1)) and t["ATM_1M"] == 5.0 and t["RR25_1M"] == 4.5
-    assert t["move_1m"] == pytest.approx(t["spot"] * 0.05 * math.sqrt(30 / 365))
+    one = next(r for r in svc.fx_surface(u, "USDTRY", "svi", None)["rows"] if r["tenor"] == "1M")
+    assert t["move_1m"] == pytest.approx(one["fwd"] * 0.05 * math.sqrt(one["T"]))      # ATM ±1σ: forward × ATM × √T
     assert rows["USDJPY"]["spot"] is None and rows["USDJPY"]["spot_why"] == "veri yok"
     assert rows["EURTRY"]["spot"] == pytest.approx(1.10 * t["spot"])            # its USD legs, as the page prices it
 
@@ -356,6 +357,39 @@ def test_pair_detail(svc):
     assert res["tenor"] == "3M" and "25D RR 1M" in res["series"]
 
 
+class _Pending(object):
+    """Wraps the replay provider: these quotes are still on their way (Bloomberg's first answer not in yet)."""
+
+    def __init__(self, inner, tickers):
+        self.inner = inner
+        self.keys = {bdp_key(t, "PX_LAST") for t in tickers}
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def get_bdp(self, key):
+        return REQUESTING if key in self.keys else self.inner.get_bdp(key)
+
+
+def test_pair_detail_quotes_on_their_way(svc, monkeypatch):
+    """The detail asks for the pair's whole surface the first time it is opened: what is still on its way is counted
+    (the page asks again sooner) and named under the smile.  The smile's vols at its own delta strikes do not wait for
+    the forward: every condition of the fit is in K/F, so without one the same smile is drawn."""
+    u = user(svc, "FX Detay Bekleyen")
+    full = svc.fx_pair(u, "EURUSD", "1M")
+    assert full["waiting"] == 0 and full["smile_why"] == "" and full["smiles"]["now"]["25P"] is not None
+    with monkeypatch.context() as m:                                               # the forward points not in yet
+        m.setattr(svc.fx, "curve", lambda user, pair: {"spot": None, "spot_date": None, "tenors": {}})
+        bare = svc.fx_pair(u, "EURUSD", "1M")
+    assert bare["smiles"]["now"] == pytest.approx(full["smiles"]["now"], rel=1e-9)
+    with monkeypatch.context() as m:                                               # the tenor's fly and a 2W vol on their way
+        m.setattr(svc, "provider", _Pending(svc.provider, [fx.vol_ticker("EURUSD", "BF25", "1M"), fx.vol_ticker("EURUSD", "ATM", "2W")]))
+        res = svc.fx_pair(u, "EURUSD", "1M")
+    assert res["waiting"] == 2 and res["structure"]["ATM"]["now"][fx.TENORS.index("2W")] is None
+    assert res["smiles"]["now"] is None and res["smile_why"] == "25D BF 1M bekleniyor"
+    assert svc.fx_pair(u, "USDJPY", "1M")["smile_why"] == "ATM 1M yok · 25D RR 1M yok · 25D BF 1M yok"   # no quotes at all
+
+
 class _HistoryProvider(object):
     """Wraps the replay provider: answers ``history`` with made-up closes, counts what is asked."""
 
@@ -448,6 +482,30 @@ def test_a_spot_tick_moves_the_smile_without_fitting_it_again(svc):
     again = fv.residuals(q2, s2)
     assert all(abs(again[k] - i1["fit"][k]) < 1e-9 for k in again)
     assert i2["points"]["25C"][0] == pytest.approx(i1["points"]["25C"][0] * 1.01, rel=1e-12)
+
+
+def test_the_likeliest_level_and_ranges_of_every_tenor(svc):
+    """Every tenor of the surface has its peak and its narrowest ranges (``fxvol.likely``): USDTRY's calls over its
+    puts put the peak below the forward, EURUSD's put skew lifts it over the lognormal law's.  They are kept with the
+    smile's quotes over the forward: a spot that ticked only scales them."""
+    from tto import fxvol as fv
+    u = user(svc, "FX En Olası")
+    for pair in ("USDTRY", "EURUSD"):
+        for r in svc.fx_surface(u, pair, "svi", None)["rows"]:
+            lk = r["likely"]
+            a, b = lk["hdi"]["0.5"]
+            assert set(lk["hdi"]) == {"0.5", "0.8", "0.9", "0.98"} and a < lk["mode"] < b, (pair, r["tenor"])
+            if pair == "USDTRY":
+                assert lk["mode"] < r["fwd"], r["tenor"]
+            else:
+                assert lk["mode"] > r["fwd"] * math.exp(-1.5 * (r["ATM"] / 100.0) ** 2 * r["T"]), r["tenor"]
+    pair = svc.fx.pair("USDTRY")
+    args = (0.25, 0.09, 0.073, 0.0135, 0.146, 0.045)
+    q1, q2 = fv.Quotes(50.0, *args, premium=True), fv.Quotes(50.5, *args, premium=True)
+    l1 = svc.fx._likely(pair, "likely-tick", "svi", q1, fv.Distribution(svc.fx._smile(pair, "likely-tick", "svi", q1)[0]))
+    l2 = svc.fx._likely(pair, "likely-tick", "svi", q2, fv.Distribution(svc.fx._smile(pair, "likely-tick", "svi", q2)[0]))
+    assert l2["mode"] == pytest.approx(l1["mode"] * 1.01, rel=1e-12)
+    assert l2["hdi"]["0.8"] == pytest.approx([x * 1.01 for x in l1["hdi"]["0.8"]], rel=1e-12)
 
 
 def test_check_fx_asks_once_for_a_pairs_tickers():
@@ -557,14 +615,14 @@ def test_one_standard_deviation_up_and_down_with_the_skew(svc):
         for t, r in rows.items():
             F = r["fwd"]
             assert r["up_1s"] == pytest.approx(r["q"]["0.84"] - F) and r["down_1s"] == pytest.approx(F - r["q"]["0.16"])
-            ratio = (r["up_1s"] + r["down_1s"]) / (2.0 * F * r["ATM"] / 100.0 * math.sqrt(r["T"]))   # against the ATM vol's σ
+            assert r["move_1sd"] == pytest.approx(F * r["ATM"] / 100.0 * math.sqrt(r["T"]))     # ATM ±1σ: the same forward
+            ratio = (r["up_1s"] + r["down_1s"]) / (2.0 * r["move_1sd"])                       # against the ATM vol's σ
             if pair == "EURUSD":
                 assert 0.9 < ratio < 1.0, t                      # a G10 smile: about the ATM move, the wings' weight aside
             else:
                 assert r["down_1s"] > r["up_1s"] and ratio < 0.7, t      # most of USDTRY's variance is in its right tail
         one = rows["1M"]
         tails[pair] = (one["q"]["0.99"] - one["fwd"]) / (one["fwd"] - one["q"]["0.01"])
-        assert one["move_1sd"] == pytest.approx(svc.fx.quotes(u, svc.fx.pair(pair))["spot"] * one["ATM"] / 100.0 * math.sqrt(one["T"]))
     assert tails["USDTRY"] > 1.2 and tails["EURUSD"] < 1.0
     # no smile (one's own flat quotes): the lognormal law around the forward
     for kind in ("RR25", "BF25", "RR10", "BF10"):
@@ -583,7 +641,25 @@ def test_one_standard_deviation_up_and_down_with_the_skew(svc):
         b = board[pair]
         assert b["fwd_1m"] == pytest.approx(one["fwd"], rel=1e-12)
         assert b["up_1m"] == pytest.approx(one["up_1s"], rel=1e-9) and b["down_1m"] == pytest.approx(one["down_1s"], rel=1e-9)
-    assert "up_1m" not in board["USDJPY"]                                        # no quotes, no spot: nothing to say
+        assert b["move_1m"] == pytest.approx(one["move_1sd"], rel=1e-12)
+    assert "up_1m" not in board["USDJPY"] and "move_1m" not in board["USDJPY"]   # no quotes, no spot: nothing to say
+
+
+def test_atm_one_sigma_needs_no_smile(svc, monkeypatch):
+    """ATM ±1σ is the forward and the ATM vol alone: when no smile can be built from the quotes the board and the
+    surface still show it - only ↑1σ / ↓1σ, which are read off the smile's distribution, are missing."""
+    from tto import fxvol as fv
+    u = user(svc, "FX ATM Sigma")
+
+    def no_smile(*args, **kwargs):
+        raise fv.SmileError("deneme")
+
+    monkeypatch.setattr(svc.fx, "_smile", no_smile)
+    b = next(r for r in svc.fx_board(u)["rows"] if r["pair"] == "EURUSD")
+    one = next(r for r in svc.fx_surface(u, "EURUSD", "svi", None)["rows"] if r["tenor"] == "1M")
+    assert one["error"].startswith("smile kurulamadı") and "up_1s" not in one and "up_1m" not in b
+    assert one["move_1sd"] == pytest.approx(one["fwd"] * one["ATM"] / 100.0 * math.sqrt(one["T"]))
+    assert b["move_1m"] == pytest.approx(one["move_1sd"], rel=1e-12) and b["fwd_1m"] == pytest.approx(one["fwd"], rel=1e-12)
 
 
 def test_http_series_and_tenor(svc):
