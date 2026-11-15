@@ -1399,8 +1399,11 @@ fazı eşiği 100 bp ve |t| ≥ 2, paket DV01'i 10.000 TRY / bp, PCA-nötr liste
 
 **Yeni tarihçe serileri.** Dosyanın tutmadığı seriler tarihçenin listesine eklendi (*Ayarlar → Tarihçe serileri*'nde
 "Quant" grubu): canlı dashboard normal tarihçe güncellemesiyle bunları **iki yıl** geriye çeker (diğer serilerin
-geriye bakışı değişmez), sonra her turda son 10 günü. Hepsi **terminalde doğrulanacak**; FX vol ticker'ları FX
-sayfalarının fiyat kaynağıyla (varsayılan BGN) kurulur:
+geriye bakışı değişmez). İlk doldurma Bloomberg'in günlük limiti için **yayılır**: her tarihçe turunda (15 dk) en çok
+5 seri, önce küresel sürücüler, sonra spotlar, ATM vol'ler, forward puanları, risk reversal'lar - 50 seri ~10 turda
+(~2,5 saat). Bu sırada quant sayfaları eldekiyle çalışır; kapsam tablosu dolmamış serilere **"geçmiş doluyor"** der,
+sayfanın üstündeki not kaç seri kaldığını söyler. Sonra her tur yalnızca yeni günleri ister (yukarıdaki kural).
+Hepsi **terminalde doğrulanacak**; FX vol ticker'ları FX sayfalarının fiyat kaynağıyla (varsayılan BGN) kurulur:
 
 | Seri | Ticker'lar (terminalde doğrulanacak) |
 |---|---|

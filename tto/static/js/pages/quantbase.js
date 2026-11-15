@@ -297,7 +297,8 @@ export function statusRows(st) {
   const rows = [[T('Son tam hesap'), T(st.fit_at || 'henüz yok')], [T('Tam hesabın süresi'), N(st.fit_ms, 0, { unit: 'ms' })],
     [T('Son canlı yenileme'), T(st.live_at || '—')], [T('Canlı yenilemenin süresi'), N(st.live_ms, 0, { unit: 'ms' })],
     [T('Motor iş parçacığında geçen (son okuma)'), N(st.engine_ms, 1, { unit: 'ms', tip: 'Çalışma kitabından kısa okuma; hesapların kendisi ayrı iş parçacığında' })],
-    [T('İzlenen enstrüman'), N(st.monitors, 0)], [T('Durum'), T(st.phase === 'fit' ? 'hesaplanıyor…' : (st.error ? 'hata: ' + st.error : 'hazır'))]];
+    [T('İzlenen enstrüman'), N(st.monitors, 0)], [T('Geçmişi dolan seri'), N(st.filling || 0, 0, { tip: 'İlk iki yıllık geçmişi henüz gelmemiş seriler (canlıda her tarihçe turunda birkaç seri)' })],
+    [T('Durum'), T(st.phase === 'fit' ? 'hesaplanıyor…' : (st.error ? 'hata: ' + st.error : 'hazır'))]];
   for (const [k, v] of Object.entries(t)) rows.push([T('  · ' + k), N(v, 0, { unit: 'ms' })]);
   for (const [k, v] of Object.entries(st.errors || {})) rows.push([T('  ! ' + k), T(v, { cls: 'soft' })]);
   return rows;
@@ -399,16 +400,18 @@ export class QuantPage {
     }
     if (this.banner) {
       const errs = Object.entries(d.errors || {});
-      this.banner.classList.toggle('hidden', !!d.ready && !errs.length);
+      const filling = st.filling || 0;
+      this.banner.classList.toggle('hidden', !!d.ready && !errs.length && !filling);
       this.banner.textContent = !d.ready ? 'Analizler hesaplanıyor (ayrı iş parçacığında); sonuç gelince sayfa kendiliğinden dolar.'
-        : errs.map(([k, v]) => k + ': ' + v).join(' · ');
+        : [filling ? 'Geçmiş doluyor: ' + filling + ' seri henüz iki yıl geriye inmedi (canlıda her tarihçe turunda birkaç seri; '
+          + 'Bloomberg\'in günlük veri limiti için). Analizler eldekiyle çalışır.' : ''].concat(errs.map(([k, v]) => k + ': ' + v)).filter(Boolean).join(' · ');
     }
     if (this.boxes.status) this.boxes.status.set(['Hesap', 'Değer'], statusRows(st), null, 'Durum yok');
     if (this.boxes.coverage) {
       const cov = d.coverage || [];
-      this.boxes.coverage.set(['Seri', 'Grup', 'Ticker', 'Gün', 'İlk', 'Son', 'Canlı'], cov.map((c) => [T(c.label, { b: 1 }), T(c.group), T(c.ticker),
-        N(c.n, 0, { cls: c.n < ((d.settings || {}).min_obs || 120) ? 'soft' : '' }), T(isoToTr(c.first)), T(isoToTr(c.last)), T(c.live ? '●' : '')]), null,
-      'Kapsam bilgisi henüz yok');
+      this.boxes.coverage.set(['Seri', 'Grup', 'Ticker', 'Gün', 'İlk', 'Son', 'Durum', 'Canlı'], cov.map((c) => [T(c.label, { b: 1 }), T(c.group), T(c.ticker),
+        N(c.n, 0, { cls: c.n < ((d.settings || {}).min_obs || 120) ? 'soft' : '' }), T(isoToTr(c.first)), T(isoToTr(c.last)),
+        T(c.state || '', { cls: c.state === 'var' ? '' : 'soft' }), T(c.live ? '●' : '')]), null, 'Kapsam bilgisi henüz yok');
     }
   }
 

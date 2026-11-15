@@ -296,11 +296,13 @@ class Quant(object):
         return self._data_mark() != self._fit.get("mark")
 
     def _data_mark(self) -> str:
-        """What the fit was made of: the last day and the count of every series kept, the meeting-pricing days."""
+        """What the fit was made of: the last day and the count of every series kept, the meeting-pricing days - and how
+        many series the history has asked in full (a backfill turn that brought nothing still changes the coverage)."""
         bounds = self.store.hist_bounds()
         days = self.store.mpc_days(None, None)
         last = max(days) if days else None
-        text = repr(sorted((k, v[1], v[2]) for k, v in bounds.items())) + repr((len(days), last, days[last].get("computed_at") if last else None))
+        asked = len(self.svc.history.fetch_records())
+        text = repr(sorted((k, v[1], v[2]) for k, v in bounds.items())) + repr((len(days), last, days[last].get("computed_at") if last else None, asked))
         return hashlib.sha1(text.encode()).hexdigest()
 
     def pause(self) -> None:
@@ -462,6 +464,10 @@ class Quant(object):
         defs = snap["defs"]
         data = self.store.hist_many([i for d in defs for i in d.ids()], start, today.isoformat())
         qmeta = self._quant_meta()
+        try:
+            fill = svc.history.fill_states()                # "geçmiş doluyor": the series whose first backfill still waits
+        except Exception:  # noqa: BLE001 - the coverage table only
+            fill = {}
         series: Dict[str, Dict[str, float]] = {}
         meta: Dict[str, Dict[str, Any]] = {}
         for d in defs:
@@ -486,6 +492,7 @@ class Quant(object):
                 m = {"label": info.get("name") or info.get("isin") or d.label, "kind": "rate" if d.unit == "pct" else "index",
                      "group": "dibs", "unit": d.unit, "maturity": info.get("maturity"), "name": info.get("name") or info.get("isin"),
                      "type": info.get("type"), "ticker": d.ticker}
+            m["fill"] = fill.get(d.id)
             series[key] = points
             meta[key] = m
         eng = self._engine_read(True)
@@ -669,8 +676,11 @@ class Quant(object):
             if key.startswith("DIBS:"):
                 continue
             pts = ctx.pts(key)
+            fill = m.get("fill")
+            state = "geçmiş doluyor" if fill == "filling" else ("geçmiş yok" if fill == "none" or not pts else "var")
             rows.append({"key": key, "label": m.get("label") or key, "group": m.get("group") or "", "ticker": m.get("ticker") or "",
-                         "n": len(pts), "first": pts[0][0] if pts else None, "last": pts[-1][0] if pts else None, "live": key in ctx.live})
+                         "n": len(pts), "first": pts[0][0] if pts else None, "last": pts[-1][0] if pts else None, "live": key in ctx.live,
+                         "state": state})
         return rows
 
     # ================================================================== the log
@@ -847,7 +857,8 @@ class Quant(object):
                    "mode": self.svc.mode, "alerts": self._alert_seq})
         fit = self._fit
         if fit is not None:
-            st.update({"monitors": len(fit["mons"]), "today": fit["today"], "errors": fit["tables"].get("errors") or {}})
+            st.update({"monitors": len(fit["mons"]), "today": fit["today"], "errors": fit["tables"].get("errors") or {},
+                       "filling": sum(1 for c in fit["coverage"] if c.get("state") == "geçmiş doluyor")})
         return _clean(st)
 
     def view(self, what: str, user: Optional[str], q: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
