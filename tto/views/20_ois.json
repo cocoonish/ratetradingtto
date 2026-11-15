@@ -10,8 +10,8 @@
    "range": "F2",
    "scope": "user",
    "group": "ois-0",
-   "kind": "auto",
-   "label": "'DV01/bacak $' – DV01 target per leg (fly wings ½)"
+   "kind": "amount",
+   "label": "'DV01/bacak $' – DV01 target per leg (fly wings ½), full dollars: 1000, 5k, 2,5k"
   },
   {
    "range": "H2",

@@ -238,6 +238,24 @@ def test_buy_or_sell_of_the_forward_dv01_blocks_is_b_or_s_and_nothing_else(servi
         service.reset_inputs(u, "tto")
 
 
+def test_dv01_targets_and_pnl_take_the_desks_shorthand(service):
+    """OIS "DV01/bacak $" (F2, read by ~900 formulas), USD "Hedef DV01" (B12) and the DV01 page's P&L (C140 / C141) hold
+    full amounts; "5k" typed there stayed text and the pages went empty.  They are amount cells now."""
+    u = login(service, "Servis Tutar")
+    try:
+        assert service.set_inputs(u, "tto", [{"ref": "OIS_MAIN!F2", "value": "5k"}, {"ref": "DV01_RISK!C140", "value": "-2,5m"},
+                                             {"ref": "DV01_RISK!C141", "value": "150 bin"}])["errors"] == []
+        assert service.set_inputs(u, "sofr", [{"ref": "SOFR_FOMC!B12", "value": "10k"}])["errors"] == []
+        assert cell(service, "OIS_MAIN!F2", u) == 5000.0 and cell(service, "SOFR_FOMC!B12", u, book="sofr") == 10000.0
+        assert cell(service, "DV01_RISK!C140", u) == -2.5e6 and cell(service, "DV01_RISK!C141", u) == 150e3
+        assert cell(service, "DV01_RISK!C142", u) == pytest.approx(-2.5e6 - 150e3 - cell(service, "DV01_RISK!C139", u))
+        bad = service.set_inputs(u, "tto", [{"ref": "OIS_MAIN!F2", "value": "beş bin"}])
+        assert len(bad["errors"]) == 1 and "tutar anlaşılamadı" in bad["errors"][0] and cell(service, "OIS_MAIN!F2", u) == 5000.0
+    finally:
+        service.reset_inputs(u, "tto")
+        service.reset_inputs(u, "sofr")
+
+
 def test_blanking_an_input_returns_to_the_formula_or_empties_the_cell(service):
     u = login(service, "Servis Blank")
     base = cell(service, "MASA!C60")                        # a formula default (start date)

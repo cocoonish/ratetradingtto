@@ -213,15 +213,15 @@
    "range": "C140",
    "scope": "user",
    "group": "dv01-25",
-   "kind": "auto",
-   "label": "'Murex P&L'"
+   "kind": "amount",
+   "label": "'Murex P&L' (TL, full amount: -2,5m, 750k)"
   },
   {
    "range": "C141",
    "scope": "user",
    "group": "dv01-26",
-   "kind": "auto",
-   "label": "'Yeni işlem / day-1 P&L'"
+   "kind": "amount",
+   "label": "'Yeni işlem / day-1 P&L' (TL, full amount: 150k)"
   }
  ],
  "panels": [

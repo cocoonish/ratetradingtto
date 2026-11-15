@@ -52,8 +52,8 @@
    "range": "B12",
    "scope": "user",
    "group": "usd-param",
-   "kind": "number",
-   "label": "Hedef DV01 ($/bp)"
+   "kind": "amount",
+   "label": "Hedef DV01 ($/bp) – tam dolar: 10000, 10k"
   },
   {
    "range": "B13",
