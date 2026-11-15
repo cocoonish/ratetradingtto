@@ -216,6 +216,27 @@ def test_the_auction_says_which_bids_won_and_where_they_stand(auction):
     assert get(svc, "B21") == pytest.approx((50 * 104.491 + 8 * 104.45) / 58)
 
 
+def test_a_nominal_is_typed_the_way_the_desk_says_it(auction):
+    """"35m", "2,5 mn", "500k": a nominal the page did not understand stayed text - its amount, the totals and the
+    average of what was won quietly went blank."""
+    svc, user, _ = auction
+    fill(svc, user, {"B2": "23.10.2026", "A7": "TRT150328T24", "B10": "35m", "C10": "100,70", "B11": "2,5 mn", "C11": "100,725",
+                     "B12": "500k", "C12": "100,75", "P12": "250k", "B18": "104,450", "B19": "104,470", "B20": "104,520"})
+    assert [get(svc, "B%d" % r) for r in (10, 11, 12)] == [35e6, 2.5e6, 500e3] and get(svc, "P12") == 250e3
+    assert get(svc, "K10") == pytest.approx(35e6 * 104.441 / 100) and get(svc, "B15") == 38e6
+    assert get(svc, "K15") == pytest.approx(sum(get(svc, "K%d" % r) for r in (10, 11, 12)))
+    # 104.441 is not won, 104.466 is (in full), 104.491 is with the 250k typed as allotted
+    assert [get(svc, "Q%d" % r) for r in (10, 11, 12)] == [0.0, 2.5e6, 250e3] and get(svc, "H21") == 2.75e6
+    assert get(svc, "B21") == pytest.approx((2.5 * 104.466 + 0.25 * 104.491) / 2.75)
+    # pasted from Excel the same way
+    res = svc.paste(user, "tto", "EK_IHALE!B13", "1,5m\t100,70\n20mn\t100,70")
+    assert not res["errors"] and get(svc, "B13") == 1.5e6 and get(svc, "B14") == 20e6 and get(svc, "B15") == 59.5e6
+    # a size that is not understood is refused - not kept as text the totals would skip
+    res = svc.set_inputs(user, "tto", [{"ref": "EK_IHALE!B13", "value": "yüz milyon"}])
+    assert len(res["errors"]) == 1 and "tutar anlaşılamadı" in res["errors"][0]
+    assert get(svc, "B13") == 1.5e6 and get(svc, "B15") == 59.5e6
+
+
 def test_bills_floaters_and_cpi_linkers(auction):
     svc, user, _ = auction
     fill(svc, user, {"B2": "23.10.2026", "A7": "TRB170327T15", "B10": "10000000", "C10": "88,50", "D11": "40", "E12": "45",

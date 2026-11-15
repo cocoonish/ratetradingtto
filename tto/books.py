@@ -24,7 +24,7 @@ class InputDef(object):
                  label: str = "", options: Optional[List[str]] = None, view: str = ""):
         self.scope = scope            # "user" (personal / scenario) or "shared" (whole desk)
         self.group = group
-        self.kind = kind              # auto | number | pct | date | text | list
+        self.kind = kind              # auto | number | amount | pct | date | text | list
         self.label = label
         self.options = options
         self.view = view

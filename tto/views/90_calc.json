@@ -262,7 +262,7 @@
    "range": "X30",
    "scope": "user",
    "group": "calc-29",
-   "kind": "auto",
+   "kind": "amount",
    "label": "B10 'Tutar'"
   },
   {
@@ -976,28 +976,28 @@
    "range": "X63",
    "scope": "user",
    "group": "calc-88",
-   "kind": "auto",
+   "kind": "amount",
    "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
   },
   {
    "range": "X64",
    "scope": "user",
    "group": "calc-88",
-   "kind": "auto",
+   "kind": "amount",
    "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
   },
   {
    "range": "X65",
    "scope": "user",
    "group": "calc-88",
-   "kind": "auto",
+   "kind": "amount",
    "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
   },
   {
    "range": "X66",
    "scope": "user",
    "group": "calc-88",
-   "kind": "auto",
+   "kind": "amount",
    "label": "B35 'Limit' column (USD, EUR, TRY, unlabelled)"
   },
   {

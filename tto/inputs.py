@@ -138,6 +138,8 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
     * date cells accept dates (or serial numbers)
     * percent cells store a fraction: ``35,5`` / ``35,5%`` / ``0,355`` all give 0.355 (Excel's automatic
       percent entry: a typed number of 1 or more is a percentage, a smaller one is the fraction itself)
+    * amount cells (a nominal, a trade size) take the desk's shorthand as well: ``100m``, ``2,5 mn``, ``500k`` -
+      and nothing else, so that a size that was not understood cannot quietly empty the totals
     * anything that is not a number stays text
     """
     if raw is None:
@@ -160,6 +162,13 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
             if _fold(o) == typed:
                 n = parse_number(o, lang)
                 return n if n is not None and re.match(r"^[+-]?[\d.,]+$", o) else o
+    if kind == "amount":
+        n = parse_amount(s, lang)
+        if n is None:
+            n = parse_number(s, lang)
+        if n is None:
+            raise InputError("tutar anlaşılamadı: %r (örn. 100m, 2,5mn, 500k, 100.000.000)" % s)
+        return n
     if date_cell or kind == "date":
         d = parse_date(s)
         if d is not None:

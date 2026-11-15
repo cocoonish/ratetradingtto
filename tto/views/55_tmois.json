@@ -38,7 +38,7 @@
    "range": "C10:C34",
    "scope": "user",
    "group": "tmois-4",
-   "kind": "auto",
+   "kind": "amount",
    "label": "'Nominal (TL)'"
   },
   {

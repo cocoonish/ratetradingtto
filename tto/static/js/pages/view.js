@@ -95,6 +95,12 @@ export class ViewPage {
     for (const p of data.panels) {
       const it = this.items.get(p.id);
       if (!it) continue;
+      if (typeof p.title === 'string' && p.title !== it.title && it.titleEl) {
+        // a caption the workbook works out from what is typed (the auction's "KÂĞIT 1 · 15.03.28 · TRT…") follows it
+        it.title = p.title;
+        it.titleEl.textContent = p.title;
+        it.titleEl.title = p.title;
+      }
       if (p.type === 'chart') {
         it.data = p.data;
         if (!it.el.isConnected) { it.stale = true; continue; }       // drawn when its tab is opened
@@ -367,6 +373,7 @@ export class ViewPage {
     const body = h('div', { class: 'body' });
     const tools = h('div', { class: 'tools' });
     const title = h('h2', { title: p.title || '' }, p.title || '');
+    it.titleEl = title;
     const head = h('header', null, title);
     if (p.range && p.data) head.appendChild(h('span', { class: 'rng' }, p.range));
     if (p.action === 'add-isin' && p.add) {

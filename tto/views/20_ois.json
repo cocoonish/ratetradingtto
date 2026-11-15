@@ -17,7 +17,7 @@
    "range": "H2",
    "scope": "user",
    "group": "ois-1",
-   "kind": "auto",
+   "kind": "amount",
    "label": "'Yuvarlama TL' – nominal rounding lot"
   },
   {
@@ -52,7 +52,7 @@
    "range": "H3",
    "scope": "user",
    "group": "ois-6",
-   "kind": "auto",
+   "kind": "amount",
    "label": "'Nominal C+R'"
   },
   {

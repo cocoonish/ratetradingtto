@@ -80,6 +80,21 @@ def test_date_cells():
         parse_input("yarın", date_cell=True)
 
 
+def test_amount_cells_take_the_desks_shorthand():
+    """A nominal is typed the way the desk says it: "100m" was text before, and a total over it quietly empty."""
+    for text, expected in (("100m", 100e6), ("100M", 100e6), ("2,5mn", 2.5e6), ("2,5 milyon", 2.5e6), ("1,5 mio", 1.5e6),
+                           ("500k", 500e3), ("500 bin", 500e3), ("1,5b", 1.5e9), ("2 milyar", 2e9), ("100.000.000", 100e6),
+                           ("35000000", 35e6), ("1e6", 1e6), ("-10m", -10e6)):
+        assert parse_input(text, kind="amount") == expected, text
+    assert parse_input("100,000,000", kind="amount", lang="en") == 100e6
+    assert parse_input("1.5m", kind="amount", lang="en") == 1.5e6
+    assert parse_input(25e6, kind="amount") == 25e6 and parse_input("", kind="amount") is None
+    for text in ("yüz milyon", "100 TL", "m", "35%x"):
+        with pytest.raises(InputError):
+            parse_input(text, kind="amount")               # not understood: refused, never kept as text
+    assert parse_input("3m") == "3m"                       # any other cell (a tenor, say) keeps it as typed
+
+
 def test_options_are_matched_case_insensitively():
     assert parse_input("receive", options=["PAY", "RECEIVE"]) == "RECEIVE"
     assert parse_input("1", options=["0", "1"]) == 1.0

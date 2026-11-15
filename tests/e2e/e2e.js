@@ -1010,6 +1010,27 @@ async function shot(page, name) {
       && !['MOBIL MK', 'YP DIBS', 'Ivır Zıvır', 'USDTRY IYIX'].some((s) => gone.sheets.includes(s)) && gone.sheets.includes('MASA')
       && gone.nav.includes('ihale'), gone);
 
+    // the Treasury auction: a nominal typed the way the desk says it; the table's title (worked out from the bond)
+    // follows what is typed without a reload
+    await open(page, 'ihale');
+    const auctionTitle = () => page.textContent('.panel[data-panel="H1"] header h2');
+    const title0 = await auctionTitle();
+    await typeInto(page, 'EK_IHALE!B10', '35m');
+    await waitCell(page, 'EK_IHALE!B10', "t.replace(/[.,\\s]/g, '') === '35000000'");
+    await waitCell(page, 'EK_IHALE!B15', "t.replace(/[.,\\s]/g, '') === '35000000'");
+    check('a nominal typed as "35m" is 35 million, and the total counts it', true);
+    await page.click('#hand-mode');
+    await typeInto(page, 'EK_IHALE!C7', 'DENEME');          // the bond's name by hand (no Bloomberg in replay)
+    await page.waitForFunction(() => document.querySelector('.panel[data-panel="H1"] header h2').textContent.includes('DENEME'), null, { timeout: 20000 });
+    await (await cellHandle(page, 'EK_IHALE!C7')).click();
+    await page.keyboard.press('Delete');
+    await page.waitForFunction((t) => document.querySelector('.panel[data-panel="H1"] header h2').textContent === t, title0, { timeout: 20000 });
+    check('the auction table\'s title follows the bond typed, and back, without a reload', title0 === 'KÂĞIT 1', title0);
+    await page.click('#hand-mode');
+    await (await cellHandle(page, 'EK_IHALE!B10')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_IHALE!B10', "t.trim() === ''");
+
     await open(page, 'blotter');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Gün sonu arşivi")')]);
     const saved = await download.path();

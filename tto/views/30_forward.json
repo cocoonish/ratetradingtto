@@ -73,7 +73,7 @@
    "range": "O45",
    "scope": "user",
    "group": "forward-9",
-   "kind": "auto",
+   "kind": "amount",
    "label": "Forward DV01 'Tutar'"
   },
   {
