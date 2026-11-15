@@ -1385,10 +1385,14 @@ kapanan süre dolmuşlar ÷ kapananlar). Bu bir **backtest değildir**: yalnızc
 
 **Alarmlar.** *Sinyal alarmı aboneliği* (Sinyaller sayfası): açık / kapalı, aileler, en az güç. Bir geçiş olunca canlı
 akış (`/api/events`) `quant.alerts` sayacını artırır; açık sayfa `/api/quant/alerts?since=` ile abone olduğu yeni
-sinyalleri alır ve köşede gösterir (tıklayınca sinyal açılır). **Masa alarmlarına bağlama:** `tto/watch.py`
-değiştirilmedi; iki dal birleşince masa alarmları `service.quant.add_alert_hook(fn)` ile her yeni sinyal alarmını
-(`{seq, sid, family, family_label, asset, expression, z, level, unit, strength, day, time}`) alabilir ve kendi "çalan
-alarmlar" listesine ekleyebilir.
+sinyalleri alır ve köşede gösterir (tıklayınca sinyal açılır). **Masa alarmları:** *Masa ayarları*ndaki "masa
+alarmına düşen en az güç" (varsayılan **Güçlü**; Zayıf / Orta / kapalı) ve üstündeki her geçiş ayrıca masanın
+alarmı olur (`tto/deskalarms.py`: herkese çalar, "Gördüm" ile cevaplanır, günün kaydına girer): her sinyal kendi
+alarmıdır (`quant:<sinyal>`), kaydı hedef / stop / süreyle kapanınca alarm da kapanır; susturma masa alarmlarında
+olduğu gibi kişiseldir (bir trader onu kendisi için susturur, alarm herkese yine çalar). Masa alarmları olmayan bir
+sürümde bu adım atlanır. Başka dinleyiciler için
+`service.quant.add_alert_hook(fn)` her yeni sinyal alarmını (`{seq, sid, family, family_label, asset, expression, z,
+level, unit, strength, day, time}`) verir.
 
 **Ayarlar** (*Masa ayarları*, herkes için ortak; kim değiştirdiği yazar): giriş |z| 2, hedef z 0, stop |z| 3,5,
 ufuk 20 iş günü, yarı ömür sınırı ufkun 2 katı, en az 120 gözlem, tahmin penceresi 250 gün, korelasyon pencereleri

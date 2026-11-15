@@ -1878,9 +1878,10 @@ async function shot(page, name) {
     // the analyses run in their own thread a few seconds after the start: the page asks until the first result is there
     await page.waitForFunction(() => /^Hesap /.test((document.getElementById('quant-status') || {}).textContent || ''), null, { timeout: 90000 });
     const quantTables = await page.locator('#content .quantpage table.grid').count();
-    check('the Sinyaller page renders: signals, log, subscription, settings, status tables', quantTables >= 2
-      && await page.locator('#quant-subscribe input#quant-sub-on').count() === 1 && await page.locator('#quant-settings input#quant-set-entry_z').count() === 1,
-    { tables: quantTables });
+    const deskAlarm = await page.locator('#quant-settings select#quant-set-desk_alarm').inputValue();
+    check('the Sinyaller page renders: signals, log, subscription, settings (desk alarms from Güçlü), status tables', quantTables >= 2
+      && await page.locator('#quant-subscribe input#quant-sub-on').count() === 1 && await page.locator('#quant-settings input#quant-set-entry_z').count() === 1
+      && deskAlarm === 'Güçlü', { tables: quantTables, deskAlarm });
     const qs = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/status');
     check('the quant analyses answer from their own thread', qs.status === 200 && qs.json.ready === true && qs.json.fits >= 1, qs.json);
     await shot(page, 'quant-signals');

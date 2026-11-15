@@ -45,7 +45,10 @@ DEFAULTS: Dict[str, Any] = {
     "corr_windows": [20, 60, 120], "corr_min": 0.3, "mom_entry": 1.5, "ma_fast": 20, "ma_slow": 60, "vr_q": 10, "regime_window": 250,
     "log_days": 20, "kalman_q": 0.01, "model_hit": 0.55, "model_min_tests": 40, "model_l2": 5.0, "cycle_bp": 100.0, "cycle_t": 2.0,
     "dv01_base": 10000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
+    "desk_alarm": "Güçlü",
 }
+#: which signals also ring as the desk's alarms (deskalarms.py, for everyone): at least this strong, or none
+DESK_ALARM_CHOICES = ("kapalı", "Zayıf", "Orta", "Güçlü")
 #: name -> (lowest, highest, type)
 LIMITS: Dict[str, Tuple[float, float, type]] = {
     "entry_z": (0.5, 5.0, float), "target_z": (-1.0, 2.0, float), "stop_z": (1.0, 10.0, float), "horizon": (2, 120, int),
@@ -62,6 +65,7 @@ LABELS = {
     "log_days": "Sinyal kaydı süresi (iş günü)", "kalman_q": "Kalman β değişkenliği (q)", "model_hit": "Model isabet eşiği",
     "model_min_tests": "Model en az test noktası", "model_l2": "Model L2 cezası", "cycle_bp": "PPK fazı eşiği (TLREF 3A değişimi, bp)",
     "cycle_t": "PPK sinyali için |t| en az", "dv01_base": "Paket DV01'i (TRY / bp, ana bacak)", "rv_items": "PCA-nötr spread ve fly'lar",
+    "desk_alarm": "Masa alarmına düşen en az güç",
 }
 
 #: the history keeps this series this many calendar days back (about two years)
@@ -230,6 +234,11 @@ class Quant(object):
                 if not items or any(it["product"] != "OIS" or it["kind"] not in ("spread", "fly") for it in items):
                     raise QuantError("yalnızca OIS spread'i (1y2y) ve fly'ı (2y5y10y) yazılabilir")
                 cur[name] = ", ".join(it["raw"] for it in items)
+            elif name == "desk_alarm":
+                choice = next((c for c in DESK_ALARM_CHOICES if c.casefold() == str(raw or "").strip().casefold()), None)
+                if choice is None:
+                    raise QuantError("%s: %s" % (LABELS[name], " / ".join(DESK_ALARM_CHOICES)))
+                cur[name] = choice
         if not cur["stop_z"] > cur["entry_z"] > cur["target_z"]:
             raise QuantError("stop |z| > giriş |z| > hedef z olmalı")
         if cur["ma_slow"] <= cur["ma_fast"]:
@@ -244,7 +253,7 @@ class Quant(object):
 
     def settings_view(self) -> Dict[str, Any]:
         saved = self.store.get(self.SET_KEY) or {}
-        return _clean({"values": self.settings(), "defaults": DEFAULTS, "labels": LABELS,
+        return _clean({"values": self.settings(), "defaults": DEFAULTS, "labels": LABELS, "choices": {"desk_alarm": list(DESK_ALARM_CHOICES)},
                        "limits": {k: [lo, hi, "int" if t is int else "float"] for k, (lo, hi, t) in LIMITS.items()},
                        "by": saved.get("by") if isinstance(saved, dict) else None, "at": saved.get("at") if isinstance(saved, dict) else None})
 
@@ -710,8 +719,8 @@ class Quant(object):
                 continue
             seq += 1
             e = {"seq": seq, "sid": sg["id"], "family": sg["family"], "family_label": sg["family_label"], "asset": sg["asset"],
-                 "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "level": sg["level"], "target": sg["target"],
-                 "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
+                 "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "entry_z": sg["entry_z"], "level": sg["level"],
+                 "target": sg["target"], "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
             log.append(e)
             open_sids.add(sg["id"])
@@ -726,6 +735,7 @@ class Quant(object):
             if level is None:
                 if held >= int(cfg["log_days"]):
                     e.update({"status": "veri yok", "closed_day": today, "closed_time": stamp.strftime("%H:%M"), "held": held})
+                    self._desk_close(e["sid"], "veri yok")
                     changed = True
                 continue
             s = e["dir"]
@@ -740,6 +750,7 @@ class Quant(object):
                 pnl = s * (level - e["level"])
                 e.update({"status": outcome, "closed_day": today, "closed_time": stamp.strftime("%H:%M"), "closed_level": level,
                           "closed_z": m.z, "pnl": pnl, "pnl_sigma": pnl / e["scale"] if e.get("scale") else None, "held": held})
+                self._desk_close(e["sid"], {"hedef": "hedefe ulaştı", "stop": "stop oldu", "süre": "süresi doldu"}[outcome])
                 changed = True
         if changed:
             opened = [e for e in log if e.get("status") == "open"]
@@ -791,15 +802,48 @@ class Quant(object):
                  "expression": e["expression"], "z": e["z"], "level": e["level"], "unit": e["unit"], "digits": e["digits"],
                  "strength": e["strength"], "day": e["day"], "time": e["time"]}
             self.store.put(self.ALERT_KEY, (self._alerts() + [a])[-ALERT_KEEP:])
+        self._desk_alarm(a, e)
         for fn in list(self._hooks):
             try:
                 fn(dict(a))
             except Exception:  # noqa: BLE001 - a listener that fails does not stop the others
                 pass
 
+    def _desk_alarm(self, a: Dict[str, Any], e: Dict[str, Any]) -> None:
+        """A signal at least as strong as the desk's setting rings as one of the desk's alarms (deskalarms.py): for
+        everyone, answered with "Gördüm", in the day's log - one alarm per signal (``quant:<id>``), closed when its log
+        entry closes.  Muting is the desk's and personal (a trader mutes ``quant:<id>`` for themselves there): it
+        fires all the same.  Without the desk's alarms (an older dashboard) nothing happens."""
+        desk = getattr(self.svc, "desk_alarms", None)
+        minimum = self.settings().get("desk_alarm") or "kapalı"
+        if desk is None or minimum not in DESK_ALARM_CHOICES[1:]:
+            return
+        rank = {s: i for i, s in enumerate(qf.STRENGTHS)}
+        if rank.get(a.get("strength"), -1) < rank[minimum]:
+            return
+        alarm = "quant:" + a["sid"]
+        try:
+            z = ("%+.2f" % a["z"]).replace(".", ",")
+            desk.fired([{"id": alarm, "label": "Sinyal · %s: %s" % (a["family_label"], a["expression"]), "time": _now().strftime("%H:%M:%S"),
+                         "mode": "level", "value_text": "z %s (%s)" % (z, a["strength"]),
+                         "condition": "giriş eşiği |z| ≥ %s" % _txt(float(e.get("entry_z") or DEFAULTS["entry_z"])), "measure_text": "",
+                         "note": "Sinyaller sayfası", "by": ""}])
+            self.svc.bump()                                  # the pages ask what fired
+        except Exception:  # noqa: BLE001 - the desk's alarms are not worth the signal log
+            pass
+
+    def _desk_close(self, sid: str, why: str) -> None:
+        desk = getattr(self.svc, "desk_alarms", None)
+        if desk is not None:
+            try:
+                desk.close("quant:" + sid, why)
+                self.svc.bump()                              # the top bar's count of open alarms
+            except Exception:  # noqa: BLE001
+                pass
+
     def add_alert_hook(self, fn: Callable[[Dict[str, Any]], None]) -> None:
         """Called with every new signal alert ``{seq, sid, family, family_label, asset, expression, z, level, unit,
-        strength, day, time}`` - the desk-wide alarms (``tto/watch.py``) can take them in here."""
+        strength, day, time}`` - for other listeners (the desk's alarms are wired in already: :meth:`_desk_alarm`)."""
         self._hooks.append(fn)
 
     def counters(self) -> Dict[str, int]:

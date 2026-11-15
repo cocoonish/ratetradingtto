@@ -562,6 +562,9 @@ class _Svc(object):
     def nudge(self):
         self.nudged += 1
 
+    def bump(self):
+        self.nudged += 1
+
 
 def test_signal_log_follows_entries_to_target_stop_and_expiry():
     svc = _Svc()
@@ -604,6 +607,62 @@ def test_signal_log_follows_entries_to_target_stop_and_expiry():
     assert q.alerts("mehmet", 0)["alerts"] == [] and q.alerts("zeynep", 0)["alerts"] == []
     assert q.alerts("ayse", None)["alerts"] == [] and q.counters()["alerts"] == 3
     assert got[0]["expression"] == "Receive a" and got[0]["family"] == "pca"
+
+
+def test_strong_signals_ring_as_the_desk_s_alarms():
+    """Through the desk's alarms (deskalarms.py, the operations branch): what its ``fired`` / ``close`` get - a
+    stand-in with just those two (muting there is personal and on its side: a firing is for everyone)."""
+    class Desk(object):
+        def __init__(self):
+            self.events, self.closed = [], []
+
+        def fired(self, events):
+            self.events.extend(events)
+
+        def close(self, alarm, why):
+            self.closed.append((alarm, why))
+
+    svc = _Svc()
+    svc.desk_alarms = desk = Desk()
+    q = Quant(svc)
+    c = cfg()
+
+    def look(day, mons, signals):
+        q._track({"cfg": c, "today": day, "mons": {m.sid: m for m in mons}}, signals)
+
+    def at(m, z):
+        m.zfn = lambda level, live, z=z: z
+        m.score({}, {})
+        m.level = z
+
+    strong, medium = _mon("a", "pca", 1.0), _mon("b", "pairs", 1.0)
+    look("2026-11-02", [strong, medium], [])
+    at(strong, 3.2)                                      # 3,2 / 2 = 1,6: Güçlü
+    at(medium, 2.6)                                      # Orta
+    look("2026-11-03", [strong, medium], [qf.make_signal(m, c, "10:00") for m in (strong, medium)])
+    assert [e["id"] for e in desk.events] == ["quant:a"] and svc.nudged >= 1          # the desk's setting: Güçlü and up
+    e = desk.events[0]
+    assert e["label"] == "Sinyal · PCA kalıntısı: Receive a" and e["value_text"] == "z +3,20 (Güçlü)" and e["mode"] == "level"
+    assert e["condition"] == "giriş eşiği |z| ≥ 2"
+    at(strong, 0.0)                                      # the target: its desk alarm closes
+    look("2026-11-04", [strong, medium], [])
+    assert desk.closed == [("quant:a", "hedefe ulaştı")]
+    # the desk's setting: from Orta up; then switched off (the alert itself is there all the same)
+    q.set_settings("ayse", {"desk_alarm": "orta"})
+    assert q.settings()["desk_alarm"] == "Orta"
+    with pytest.raises(Exception):
+        q.set_settings("ayse", {"desk_alarm": "bazen"})
+    third = _mon("e", "rv", 1.0)
+    look("2026-11-05", [third], [])
+    at(third, 2.6)
+    look("2026-11-06", [third], [qf.make_signal(third, c, "10:00")])
+    assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and desk.events[1]["value_text"] == "z +2,60 (Orta)"
+    q.set_settings("ayse", {"desk_alarm": "kapalı"})
+    fourth = _mon("f", "rv", 1.0)
+    look("2026-11-09", [fourth], [])
+    at(fourth, 3.4)
+    look("2026-11-10", [fourth], [qf.make_signal(fourth, c, "10:00")])
+    assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and q.counters()["alerts"] == 4
 
 
 def test_settings_are_validated_and_shared():

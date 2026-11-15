@@ -138,7 +138,8 @@ class SignalsPage extends QuantPage {
     });
     p.body.append(h('div', { class: 'qform' }, h('label', { class: 'check' }, on, ' Bir sinyal giriş eşiğini geçince bana bildir'),
       h('div', { class: 'muted' }, 'Aileler (hiçbiri seçili değilse hepsi):'), fams, h('div', { class: 'qrow' }, h('span', { class: 'muted' }, 'En az güç'), strength, save)));
-    p.note.textContent = 'Bildirim, dashboard açıkken ekranın köşesinde çıkar; tıklayınca sinyal açılır. Masa alarmlarına bağlantı: quant.Quant.add_alert_hook (README).';
+    p.note.textContent = 'Bildirim, dashboard açıkken ekranın köşesinde çıkar; tıklayınca sinyal açılır. Masa ayarlarındaki "masa alarmına düşen en az güç" '
+      + 've üstündeki sinyaller ayrıca masa alarmı olarak herkese çalar (Gördüm / susturma, günün kaydı).';
   }
 
   async loadSettings() {
@@ -150,8 +151,11 @@ class SignalsPage extends QuantPage {
     const inputs = {};
     for (const [k, label] of Object.entries(d.labels || {})) {
       const v = d.values[k];
-      const inp = h('input', { class: 'inp', id: 'quant-set-' + k, value: Array.isArray(v) ? v.join(', ') : String(v),
-        title: d.limits[k] ? 'aralık ' + d.limits[k][0] + ' – ' + d.limits[k][1] : '' });
+      const choices = (d.choices || {})[k];
+      const inp = choices ? h('select', { class: 'inp', id: 'quant-set-' + k }, choices.map((c) => h('option', { value: c }, c)))
+        : h('input', { class: 'inp', id: 'quant-set-' + k, value: Array.isArray(v) ? v.join(', ') : String(v),
+          title: d.limits[k] ? 'aralık ' + d.limits[k][0] + ' – ' + d.limits[k][1] : '' });
+      if (choices) inp.value = String(v);
       if (k === 'rv_items') inp.classList.add('wide');
       inputs[k] = inp;
       form.appendChild(h('label', { class: 'field' }, h('span', null, label), inp));
