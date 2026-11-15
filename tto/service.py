@@ -2396,14 +2396,41 @@ class Service(object):
 
     _TYPE_GROUPS = (("B", "Bono · kuponsuz"), ("S", "Sabit kuponlu"), ("T", "TLREF'e endeksli"), ("E", "TÜFE'ye endeksli"))
 
+    #: the trading list's nominal for a round USD DV01: what the desk sizes a bond trade by
+    USD_DV01 = 1000.0
+    USD_DV01_STEP = 5e6
+    USD_DV01_HEAD = "1.000$ DV01 nominal"
+
+    @staticmethod
+    def _usdtry_mid(book: Book, calc) -> Optional[float]:
+        """USDTRY as the desk's sheets use it (VİOP!L99 / L100: the manual spot, else Bloomberg's bid / ask), mid."""
+        vi = book.model.sheet_index.get("VIOP")
+        if vi is None:
+            return None
+        sides = [x for x in (calc.get(vi, 99, 12), calc.get(vi, 100, 12)) if type(x) is float and x > 0]
+        return sum(sides) / len(sides) if sides else None
+
+    def _usd_dv01_cell(self, dv01: Any, spot: Optional[float], kind: Any, loc) -> Dict[str, Any]:
+        """The TL nominal whose DV01 is USD 1,000: 1,000 × USDTRY ÷ (DV01 per 1 mn), to the nearest 5 mn."""
+        if type(dv01) is not float or dv01 <= 0 or not spot:
+            return {"t": "", "k": ""}
+        exact = self.USD_DV01 * spot / dv01 * 1e6
+        nominal = max(1, round(exact / self.USD_DV01_STEP)) * self.USD_DV01_STEP
+        what = "spread DV01'i (TLREF)" if kind == "T" else "DV01"
+        tip = ("%s USD %s için nominal: %s × USDTRY %s ÷ %s TL (1 mn başına) = %s, 5 mn'a yuvarlı"
+               % (numfmt.format_value(self.USD_DV01, "#,##0", loc), what, numfmt.format_value(self.USD_DV01, "#,##0", loc),
+                  numfmt.format_value(spot, "0.0000", loc), numfmt.format_value(dv01, "0.0", loc),
+                  numfmt.format_value(exact, "#,##0", loc)))
+        return {"t": numfmt.format_value(nominal / 1e6, "#,##0", loc) + "m", "v": nominal, "k": "n", "tip": tip}
+
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
         """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity - the price on
         the value date the bond is priced on (bid, ask, the last trade and when), what DİBS RV makes of it (yield,
         ASW, cheap / rich, signal, duration, DV01, carry), the repo T0 -> T1 implies and today's chat board."""
         book = self.books.get("tto")
         heads = ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %",
-                 "ASW / DM", "Pahalı / ucuz", "Sinyal", "Mod. süre", "DV01 / 1mn", "C+R (bp)", "T0→T1 repo %"] + \
-                [h for h, _ in self._BOARD_HEADS] + ["Kart"]
+                 "ASW / DM", "Pahalı / ucuz", "Sinyal", "Mod. süre", "DV01 / 1mn", self.USD_DV01_HEAD, "C+R (bp)",
+                 "T0→T1 repo %"] + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
         rows: List[List[Dict[str, Any]]] = [[{"t": x, "k": "s", "b": 1, "f": "hd"} for x in heads]]
         out = {"rows": rows, "r": [], "c": [index_to_col(k + 1) for k in range(len(heads))], "added": len(heads)}
         if book is None or "DİBS RV" not in book.model.sheet_index:
@@ -2414,6 +2441,7 @@ class Service(object):
         live = book.model.sheet_index.get(ex.LIVE_SHEET)
         said = self._board_bonds(user)
         today = _dt.date.fromisoformat(self.today_iso())
+        spot = self._usdtry_mid(book, calc)
 
         def cell(c: str, r: int, s: int = si) -> Dict[str, Any]:
             got = R.cell(calc, s, r, parse_a1("%s1" % c) % COLS, loc)
@@ -2460,7 +2488,8 @@ class Service(object):
                     {"t": str(src or ""), "k": "s", "cls": "soft"},
                     self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
                     self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), dict(cell("AS", r), b=1), when] + priced + \
-                [cell("AG", r), cell("AI", r), cell("AO", r), self._repo_cell(cell, live, r)]
+                [cell("AG", r), cell("AI", r), self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
+                 cell("AO", r), self._repo_cell(cell, live, r)]
             line += self._bond_cells(said.get(code), loc) + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}]
             group = kind if kind in bonds else "S"
             bonds[group].append((mat if type(mat) is float else 1e9, line))

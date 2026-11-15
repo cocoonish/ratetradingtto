@@ -652,6 +652,9 @@ bu sütunlar da boşalır; Excel'e aktarmada bu sütunlar yoktur (sayfanın hüc
   kâğıdın fiyatlandığı valör ve kaynağı, bid / ask, son işlem ve ne zaman olduğu (canlıda görüldüğü saat), DİBS
   RV'den getiri, ASW / DM, pahalı / ucuz, sinyal, mod. süre, DV01 / 1mn, C+R, T0→T1 ima repo, bugünün Broker Chat
   tahtası, ★ (listeden çıkar) ve ▸ (kart). Ayrıntı altta (valörler, günün işlemleri) ve DİBS RV'de.
+  **1.000$ DV01 nominal** sütunu, DV01'i 1.000 USD olan TL nominali verir: 1.000 × USDTRY ÷ DV01 / 1mn, en yakın
+  5 mn'a yuvarlı (`500m`; TLREF'te spread DV01'i). USDTRY masanın kullandığı kurdur: VİOP!L99 / L100'ün ortası
+  (manuel spot, boşsa Bloomberg). Üzerine gelince hesap görünür.
 
 **DİBS Trading · valörler.** Trading listesindeki her kâğıt (DİBS RV listesi; başlıktaki "+ ISIN ekle" aynı listeye
 ekler) üç valörde yan yana: **T0** (aynı gün), **T1** (ertesi iş günü), **T2** - her valör bir Bloomberg fiyat kaynağıdır

@@ -381,6 +381,29 @@ def test_bonds_are_added_to_a_pages_list_by_isin(tmp_path):
         s.stop()
 
 
+def test_the_trading_list_gives_the_nominal_of_a_thousand_dollar_dv01(svc):
+    """The trading list sizes each bond for USD 1,000 DV01: 1,000 × USDTRY (the desk's mid, VİOP!L99 / L100) ÷ the
+    DV01 per 1 mn, to the nearest 5 mn - beside the DV01 it comes from."""
+    u = svc.login("DV01 Nominal")["user"]
+    rows = next(p for p in svc.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
+    heads = [c["t"] for c in rows[0]]
+    i_dv, i_nom = heads.index("DV01 / 1mn"), heads.index(svc.USD_DV01_HEAD)
+    assert i_nom == i_dv + 1
+    spot = (cell(svc, "VIOP!L99") + cell(svc, "VIOP!L100")) / 2
+    seen = 0
+    for row in rows[1:]:
+        dv = row[i_dv].get("v")
+        if type(dv) is not float or dv <= 0:
+            continue
+        want = max(1, round(1000 * spot / dv * 1e6 / 5e6)) * 5e6
+        got = row[i_nom]
+        assert got["v"] == want and got["t"] == "{:,.0f}m".format(want / 1e6).replace(",", ".") and "USDTRY" in got["tip"], got
+        seen += 1
+    assert seen >= 5
+    # e.g. a 1.3-year bond with a DV01 of ~100 TL per 1 mn: some 500 mn for USD 1,000
+    assert svc._usd_dv01_cell(100.0, 50.0, "S", __import__("tto.xl.numfmt", fromlist=["x"]).get_locale("tr"))["v"] == 500e6
+
+
 # ---------------------------------------------------------------------------------------------- tables that grow
 def test_the_bulk_forward_table_has_a_hundred_rows_of_the_sheets_own_formulas(svc):
     # every value date and manual TRY rate starts empty (the file's dates of the day it was saved are nobody's today),
