@@ -487,9 +487,11 @@ def bar_source(svc: Any) -> Optional[BarSource]:
 def bars_of(quant: Any) -> Optional[BarSource]:
     """The bars the lead-lag analysis reads: the quant worker's own (``quantintraday.Intraday.series``: the minute
     closes it keeps of the live feed), else whatever the service offers (``bar_source``)."""
-    fn = getattr(getattr(quant, "intraday", None), "series", None)
+    intra = getattr(quant, "intraday", None)
+    fn = getattr(intra, "series", None)
     if callable(fn):
-        return fn
+        live = getattr(intra, "live", None)
+        return fn if not callable(live) or live() else None              # (replay keeps no bars: none at all)
     return bar_source(getattr(quant, "svc", None))
 
 

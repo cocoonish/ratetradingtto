@@ -189,9 +189,9 @@ def test_the_quant_workers_own_bars_feed_the_lead_lag(tmp_path):
     assert len(times5) == 7 and times5[0].endswith("10:00") and times5[1].endswith("10:05") and values5[-1] == pytest.approx(30.29)
     assert src("FX:USDJPY", 1) is None and src("OIS:1Y", 15) is None       # (a key the bars do not keep; no 15-minute bars)
     svc.mode = "replay"
-    assert src("OIS:1Y", 1) is None                                       # replay: no bars
-    out = ql.intraday(src, [("OIS:1Y", "OIS:2Y", "Eğri içi")], {"OIS:1Y": "rate", "OIS:2Y": "rate"}, 2.0)
-    assert out["ok"] and out["rows"] == []                                 # (nothing to pair in replay)
+    assert src("OIS:1Y", 1) is None and ql.bars_of(quant) is None         # replay: no bars
+    out = ql.intraday(ql.bars_of(quant), [("OIS:1Y", "OIS:2Y", "Eğri içi")], {"OIS:1Y": "rate", "OIS:2Y": "rate"}, 2.0)
+    assert out == {"ok": False, "why": "gün içi barlar yok", "rows": []}
 
 
 # ================================================================================================ the service
