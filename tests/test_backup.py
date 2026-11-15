@@ -241,6 +241,143 @@ def test_the_second_copy_goes_to_d_by_default_only_on_a_machine_with_that_drive(
         s.close()
 
 
+def test_a_chosen_folder_that_cannot_be_written_falls_back_to_the_dashboards_own(tmp_path):
+    """The share of the chosen folder is down at the backup time: the day's backup goes to the dashboard's own folder
+    (data/backups), its second copy is still made from it, the database's alarm rings (no folder in its text); the day
+    counts as backed up - no second full backup however often the loop looks, across a restart too.  The chosen folder
+    is tried again every half hour; once it can be written the file is copied there and the alarm ends."""
+    o, s, settings = make_ops(tmp_path)
+    try:
+        now = _dt.datetime.now().replace(microsecond=0)
+        if now.hour == 23 and now.minute >= 50:
+            pytest.skip("the day must not end during the test")
+        share, second = tmp_path / "paylasim", tmp_path / "E" / "kopya"
+        chosen = share / "tto"
+        o.set_backup({"time": now.strftime("%H:%M"), "dir": str(chosen), "copy_dir": str(second)}, by="ali")
+        own = os.path.join(str(tmp_path / "data"), "backups")
+        name = "tto-%s.db" % now.date().isoformat()
+        assert o.own_backup_dir() == own
+        shutil.rmtree(str(share))
+        share.write_text("paylaşım kapalı")
+        o.look(now)                                                # the backup is due: the chosen folder cannot be written
+        assert os.listdir(own) == [name] and not os.path.exists(str(chosen))
+        assert os.path.isfile(str(second / name)) and o.copy_state()["failed_days"] == []        # the second copy, from it
+        assert o.backup_error is None
+        db = o.system_checks(now)["db"]
+        assert db["state"] == "alarm" and ("seçilen yedek klasörüne yazılamadı – bugünkü yedek dashboard'un kendi klasörüne (%s) alındı"
+                                           % os.path.join("data", "backups")) in db["text"]
+        assert not names(db, [str(tmp_path)])
+        view = o.fallback_view()
+        assert (view["today"], view["waiting"], view["reached_at"], view["dir"]) == (True, [now.date().isoformat()], None, own)
+        assert o.backup_page()["own"]["backups"][0]["name"] == name and o.db_status()["backup"]["fallback"]["waiting"]
+        # the day is backed up: the loop takes no other backup, and the chosen folder is not tried before half an hour
+        written = os.path.getmtime(os.path.join(own, name))
+        later = [min(now + _dt.timedelta(minutes=m), now.replace(hour=23, minute=59, second=59)) for m in (1, 29, 31, 9)]
+        for t in later:
+            o.look(t)
+            assert not o.backup_due(t)
+        assert os.listdir(own) == [name] and os.path.getmtime(os.path.join(own, name)) == written
+        assert not ops_mod.Ops(o.svc).backup_due(later[-1])                                  # (a restart knows it)
+        # half an hour later, still down: tried, the day still waits, the alarm stays
+        o._fallback_tried -= ops_mod.BACKUP_RETRY
+        assert o.catch_up() == [] and o.fallback_pending() and o.system_checks(now)["db"]["state"] == "alarm"
+        # the share is back: not tried before the next half hour ...
+        share.unlink()
+        assert o.catch_up() == [] and not os.path.exists(str(chosen / name))
+        # ... then the day's file is copied there whole, and the alarm ends
+        o._fallback_tried -= ops_mod.BACKUP_RETRY
+        o.look(later[-1])
+        assert os.path.getsize(str(chosen / name)) == os.path.getsize(os.path.join(own, name))
+        copied = Store(str(chosen / name))
+        assert copied.user_exists("ali") and copied.quick_check() == []
+        copied.close()
+        assert not o.fallback_pending() and o.system_checks(now)["db"]["state"] == "ok"
+        view = o.fallback_view()                                   # today's backup went there first - and it reached the folder
+        assert view["today"] and view["waiting"] == [] and view["reached_at"]
+        assert not o.backup_due(later[-1]) and os.listdir(own) == [name]
+    finally:
+        s.close()
+
+
+def test_no_fallback_from_the_dashboards_own_folder_and_none_when_both_fail(tmp_path):
+    """The chosen folder is the dashboard's own: a backup that fails there is a failure, as before (said, tried again
+    after half an hour).  A chosen folder and the dashboard's own folder both failing: no backup, both reasons said."""
+    o, s, settings = make_ops(tmp_path)
+    try:
+        own = o.own_backup_dir()
+        assert same(o.backup_conf()["dir"], own)
+        with open(own, "w") as fh:
+            fh.write("klasör değil")
+        with pytest.raises(Exception):
+            o.backup_now()
+        assert o.backup_error and o.fallback_state()["days"] == {} and not o.backup_due(_dt.datetime.now())
+        db = o.system_checks(_dt.datetime.now())["db"]
+        assert db["state"] == "alarm" and "yedek alınamadı" in db["text"] and "seçilen yedek klasörüne" not in db["text"]
+        share = tmp_path / "paylasim"
+        o.set_backup({"dir": str(share / "tto")}, by="ali")
+        shutil.rmtree(str(share))
+        share.write_text("paylaşım kapalı")
+        with pytest.raises(Exception):
+            o.backup_now()
+        assert "seçilen klasör: " in o.backup_error["text"] and "dashboard'un kendi klasörü: " in o.backup_error["text"]
+        assert o.fallback_state()["days"] == {}
+    finally:
+        s.close()
+
+
+def test_the_days_that_waited_follow_the_first_backup_that_reaches_the_chosen_folder(tmp_path):
+    """Two days in the dashboard's own folder (the alarm counts them); the share back, the next day's backup goes there
+    and the two follow at once.  A day that reached the chosen folder meanwhile needs nothing: its later backup there is
+    never overwritten by the earlier file.  A second copy that is the dashboard's own folder holds the fallback itself."""
+    o, s, settings = make_ops(tmp_path)
+    try:
+        share = tmp_path / "paylasim"
+        chosen, own = share / "tto", o.own_backup_dir()
+
+        def down():
+            shutil.rmtree(str(share))
+            share.write_text("paylaşım kapalı")
+
+        o.set_backup({"dir": str(chosen), "copy_dir": own}, by="ali")
+        down()
+        r1 = o.backup_now(_dt.date(2026, 11, 16))
+        assert r1["fallback"] and r1["copy"]["path"] == r1["path"] and "error" not in r1["copy"]
+        o.backup_now(_dt.date(2026, 11, 17))
+        db = o.system_checks(_dt.datetime(2026, 11, 17, 18, 0))["db"]
+        assert db["state"] == "alarm" and "2 gündür yazılamıyor" in db["text"]
+        share.unlink()                                             # the share is back
+        r3 = o.backup_now(_dt.date(2026, 11, 18))
+        assert not r3["fallback"] and sorted(os.listdir(str(chosen))) == ["tto-2026-11-%d.db" % d for d in (16, 17, 18)]
+        assert not o.fallback_pending() and o.system_checks(_dt.datetime(2026, 11, 18, 18, 0))["db"]["state"] == "ok"
+        # the 19th: down at its backup, back, then "Şimdi yedek al" writes the day there itself - it waits no more
+        down()
+        o.backup_now(_dt.date(2026, 11, 19))
+        share.unlink()
+        s.login("Veli")
+        o.backup_now(_dt.date(2026, 11, 19))
+        assert not o.fallback_pending() and o.catch_up(force=True) == []
+        later = Store(str(chosen / "tto-2026-11-19.db"))
+        assert later.user_exists("veli")
+        later.close()
+        # the 20th: down, and the chosen folder gets that day's file by other means before the retry - nothing copied over it
+        down()
+        o.backup_now(_dt.date(2026, 11, 20))
+        share.unlink()
+        s.login("Zeynep")
+        s.backup_to(str(chosen / "tto-2026-11-20.db"))
+        o._fallback_tried -= ops_mod.BACKUP_RETRY
+        assert o.catch_up() == ["2026-11-20"] and not o.fallback_pending()
+        there = Store(str(chosen / "tto-2026-11-20.db"))
+        assert there.user_exists("zeynep")                         # (the file put there, not the earlier one of the dashboard's)
+        there.close()
+    finally:
+        s.close()
+
+
+def same(a, b):
+    return ops_mod.same_folder(a, b)
+
+
 def test_restoring_looks_in_the_chosen_folders_too(tmp_path, capsys):
     """``yedekten-don`` reads the administrators' choice from the database: its folders first, then those of the
     command line / defaults (a changed folder keeps the backups taken before it)."""
@@ -316,6 +453,25 @@ def test_only_administrators_choose_and_take_backups_and_nobody_else_sees_the_fo
             assert status["ops"]["db"]["backup"]["count"] == 1 and status["ops"]["db"]["backup"]["time"] == "17:30"
             mine = client.get("/api/status", headers=adm).json()["ops"]["db"]["backup"]
             assert mine["dir"] == str(main) and mine["copy"]["dir"] == str(second)
+            # the chosen folder's drive is gone: "Şimdi yedek al" goes to the dashboard's own folder, the second copy is
+            # made from it; the alarm rings for everyone - neither it nor a user's status names a folder
+            shutil.rmtree(str(tmp_path / "E"))
+            (tmp_path / "E").write_text("sürücü yok")
+            own, today = os.path.join(str(tmp_path / "data"), "backups"), _dt.date.today().isoformat()
+            res = client.post("/api/admin/backup/now", json={}, headers=adm).json()
+            assert res["result"]["fallback"] and res["result"]["path"] == os.path.join(own, name)
+            assert res["result"]["copy"]["path"] == str(second / name) and res["fallback"]["waiting"] == [today]
+            assert res["own"]["backups"][0]["name"] == name
+            svc.ops.system_checks()
+            status = client.get("/api/status", headers=usr).json()
+            fb = status["ops"]["db"]["backup"]["fallback"]
+            assert fb["waiting"] == [today] and fb["today"] and "dir" not in fb and "path" not in fb
+            assert not names(status, [str(main), str(second), str(tmp_path)])
+            desk = client.get("/api/watch", headers=usr).json()["desk"]
+            db = next(r for r in desk["system"] if r["kind"] == "db")
+            assert db["state"] == "alarm" and "seçilen yedek klasörüne yazılamadı" in db["text"] and not names(desk, [str(tmp_path)])
+            mine = client.get("/api/status", headers=adm).json()["ops"]["db"]["backup"]["fallback"]
+            assert mine["dir"] == own and mine["path"] == os.path.join(own, name)
             res = client.post("/api/admin/backup", json={"reset": True}, headers=adm)
             assert res.status_code == 200 and res.json()["source"]["dir"] == "default" and res.json()["saved"] is None
     finally:

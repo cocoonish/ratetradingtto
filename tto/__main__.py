@@ -230,7 +230,9 @@ def cmd_restore(args) -> int:
     folders: List[Tuple[str, str]] = []
     for folder, what in ((chosen.get("dir"), "Yedekler · dashboard'da seçilen klasör"),
                          (chosen.get("copy_dir"), "İkinci kopyalar · dashboard'da seçilen klasör"),
-                         (settings.backup_dir, "Yedekler"), (settings.backup_copy_dir, "İkinci kopyalar")):
+                         (settings.backup_dir, "Yedekler"), (settings.backup_copy_dir, "İkinci kopyalar"),
+                         # (where a day's backup goes when the chosen folder cannot be written)
+                         (os.path.join(settings.data_dir, "backups"), "Yedekler · dashboard'un kendi klasörü")):
         if folder and not any(same_folder(folder, f) for f, _ in folders):
             folders.append((folder, what))
     if not args.backup:

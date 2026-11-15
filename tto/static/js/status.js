@@ -80,6 +80,17 @@ export async function openStatus(status) {
     head.appendChild(line('Son yedek', (last ? last.at + ' · ' + num(last.bytes / 1048576, 1) + ' MB' : 'henüz yok')
       + ' · ' + (bk.count || 0) + ' / ' + (bk.keep || 30) + ' yedek · her gün ' + (bk.time || '') + ' · ' + bk.dir
       + (bk.error ? ' · SON DENEME BAŞARISIZ (' + bk.error.at + '): ' + bk.error.text : ''), bk.error ? 'bad' : (last ? '' : 'warn')));
+    // the chosen folder could not be written: the day's backup went to the dashboard's own folder - reached it since?
+    const fb = bk.fallback;
+    if (fb) {
+      const waiting = (fb.waiting || []).length;
+      const day = fb.today ? 'bugünkü yedek' : fb.day + ' yedeği';
+      head.appendChild(line('Seçilen klasöre yazılamadı', waiting
+        ? (waiting > 1 ? waiting + ' günün yedeği' : day) + ' dashboard\'un kendi klasörüne alındı (' + fb.at + ' · ' + fb.dir + ') – seçilen klasöre '
+          + 'henüz ulaşmadı, yarım saatte bir denenir' + (fb.error ? ' (son deneme ' + fb.error.at + ': ' + fb.error.text + ')' : '')
+        : day + ' önce dashboard\'un kendi klasörüne alındı (' + fb.at + '), ' + fb.reached_at + ' itibarıyla seçilen klasörde',
+      waiting ? 'bad' : 'warn'));
+    }
     // its second copy on another drive or share: a failure does not stop the backup; two days in a row: an alarm
     const cp = bk.copy;
     if (cp) {

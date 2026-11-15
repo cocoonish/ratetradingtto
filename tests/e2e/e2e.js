@@ -2109,6 +2109,24 @@ async function shot(page, name) {
       && bkDone.includes(bk1.copy_dir), [bkDone, bk1.dir, bk1.copy_dir]);
     check('... the newest backups of each folder are listed', (await page.locator('#bk-list tr').count()) === 2
       && (await page.locator('#bk-copies tr').count()) === 2);
+    // the chosen folder cannot be written (its drive is gone: a file where it was): the backup goes to the dashboard's
+    // own folder, its second copy is made from it - the page and the status say so; the folder back, the next backup
+    // reaches it and the page says the day is there too
+    const fs = require('fs');
+    fs.rmSync(bk1.dir, { recursive: true, force: true });
+    fs.writeFileSync(bk1.dir, 'surucu yok');
+    await page.click('#bk-now');
+    await page.waitForFunction(() => /henüz ulaşmadı/.test((document.getElementById('bk-fallback') || {}).textContent || ''), null, { timeout: 60000 });
+    const bkFell = await page.textContent('#bk-result');
+    const fellStatus = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json.ops.db.backup.fallback;
+    check('the chosen folder cannot be written: the backup goes to the dashboard\'s own folder, the second copy from it, the status says so',
+      /yazılamadı/.test(bkFell) && /İkinci kopya yazıldı/.test(bkFell) && (await page.locator('#bk-own tr').count()) >= 2
+      && fellStatus && fellStatus.waiting.length === 1, [bkFell, fellStatus]);
+    fs.rmSync(bk1.dir, { force: true });
+    await page.click('#bk-now');
+    await page.waitForFunction(() => /seçilen klasörde de/.test((document.getElementById('bk-fallback') || {}).textContent || ''), null, { timeout: 60000 });
+    check('... the folder back: the next backup reaches it, the page says the day is there too',
+      !(await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json.ops.db.backup.fallback.waiting.length);
     const esc = (s) => JSON.stringify(s).slice(1, -1);
     const userStatus = JSON.stringify((await api(page, 'mehmet', 'GET', '/api/status')).json);
     const userCalls = [await api(page, 'mehmet', 'GET', '/api/admin/backup'), await api(page, 'mehmet', 'POST', '/api/admin/backup', { values: { time: '18:00' } }),

@@ -27,6 +27,10 @@
   synchronises (OneDrive, Dropbox, Google Drive, iCloud Drive, Box) is refused: the database holds Bloomberg data and
   password hashes, and by the desk's rule these never go to an outside service.  Changing a folder moves nothing: the
   old backups stay where they are, each folder keeps its own newest 30.
+* **A chosen folder that cannot be written** at the backup time (a share that is down, a drive that is gone) does not
+  leave the day without a backup: it goes to the dashboard's own folder (``data/backups``) - the day counts as backed
+  up, its second copy is still made from it - and the database's alarm rings.  The chosen folder is tried again every
+  30 minutes; the file is copied there once it can be written, and the alarm ends.
 """
 from __future__ import annotations
 
@@ -71,6 +75,8 @@ BACKUP_KEYS = ("time", "dir", "copy_dir")
 BACKUP_NAMES = {"time": "yedek saati", "dir": "yedek klasörü", "copy_dir": "ikinci kopya klasörü"}
 #: the newest backups of each folder the administrators' page lists
 BACKUP_SHOWN = 10
+#: the days whose backup went to the dashboard's own folder because the chosen one could not be written: so many kept
+FALLBACK_KEEP = 30
 #: the status lists the backup folders at most this often (seconds): every open page asks for the status, and a share
 #: of the network that does not answer must hold one request at a time, not all of them
 LIST_FRESH = 60.0
@@ -263,6 +269,27 @@ def check_folder(text: Any) -> str:
     return path
 
 
+def _stamp() -> str:
+    return _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _when(stamp: Any) -> Optional[_dt.datetime]:
+    """"YYYY-MM-DD HH:MM:SS" as a time (``None`` when it is not one)."""
+    try:
+        return _dt.datetime.strptime(str(stamp), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _written_since(path: str, stamp: Any) -> bool:
+    """Whether ``path`` is a file written at ``stamp`` ("YYYY-MM-DD HH:MM:SS") or later."""
+    since = _when(stamp)
+    try:
+        return since is not None and os.path.isfile(path) and _dt.datetime.fromtimestamp(os.path.getmtime(path)) >= since
+    except OSError:
+        return False
+
+
 def same_folder(a: Optional[str], b: Optional[str]) -> bool:
     """Whether two folders are one (``None`` / empty: no folder)."""
     if a and b:
@@ -353,7 +380,8 @@ class Ops(object):
         self.db_check: Optional[Dict[str, Any]] = None      # the check of the database file at the start
         self.backup_error: Optional[Dict[str, Any]] = None  # the last backup that failed (until one succeeds)
         self._backup_tried = 0.0
-        self._backup_lock = threading.Lock()                # one backup at a time (the loop's, "Şimdi yedek al")
+        self._fallback_tried = 0.0                          # when the chosen folder was last tried for the days that wait
+        self._backup_lock = threading.RLock()               # one backup at a time (the loop's, "Şimdi yedek al", catching up)
         self._choice_lock = threading.Lock()                # one change of the administrators' choice at a time
         self._lists: Dict[str, tuple] = {}                  # folder -> (when listed, its backups, being listed)
         self._days: Dict[str, bool] = {}                    # day -> the desk's market trades on it
@@ -506,28 +534,164 @@ class Ops(object):
         """An online copy of the database as ``tto-<day>.db`` (today's) in the backup folder (that day's earlier copy
         is replaced), then only the newest BACKUP_KEEP kept; then its second copy (:meth:`copy_backup`), which never
         fails the backup.  The folders as they stand now (:meth:`backup_conf`); one backup at a time - the loop's and
-        an administrator's "Şimdi yedek al" (``by``: who asked)."""
+        an administrator's "Şimdi yedek al" (``by``: who asked).
+
+        A chosen folder that cannot be written (a share that is down, a drive that is gone) does not leave the day
+        without a backup: it goes to the dashboard's own folder (data/backups) - ``fallback`` says so -, the day counts
+        as backed up, the database's alarm rings until the file reaches the chosen folder (:meth:`catch_up`)."""
         with self._backup_lock:
             conf = self.backup_conf()
             day = day or _dt.date.today()
-            folder = conf["dir"]
+            folder, own = conf["dir"], self.own_backup_dir()
+            name = "tto-%s.db" % day.isoformat()
             self._backup_tried = time.time()
+            fallback = None
             try:
                 try:
-                    res = self.svc.store.backup_to(os.path.join(folder, "tto-%s.db" % day.isoformat()))
+                    res = self.svc.store.backup_to(os.path.join(folder, name))
                 except Exception as exc:  # noqa: BLE001 - said, kept for the status, tried again later
-                    self.backup_error = {"at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                         "text": "%s: %s" % (type(exc).__name__, exc)}
-                    log.error("veritabanı yedeği alınamadı (%s): %s", folder, self.backup_error["text"])
-                    raise
+                    first = "%s: %s" % (type(exc).__name__, exc)
+                    if same_folder(folder, own):                 # (the dashboard's own folder itself: nowhere else to go)
+                        self._backup_failed(folder, first)
+                        raise
+                    log.error("seçilen yedek klasörüne yazılamadı (%s): %s – yedek dashboard'un kendi klasörüne alınıyor: %s",
+                              folder, first, own)
+                    try:
+                        res = self.svc.store.backup_to(os.path.join(own, name))
+                    except Exception as exc2:  # noqa: BLE001
+                        self._backup_failed(own, "seçilen klasör: %s · dashboard'un kendi klasörü: %s: %s" % (first, type(exc2).__name__, exc2))
+                        raise
+                    fallback = {"dir": folder, "error": {"at": _stamp(), "text": first}}
                 self.backup_error = None
-                removed = self._prune(folder)
+                removed = self._prune(own if fallback else folder)
                 log.info("veritabanı yedeklendi%s: %s (%d bayt, %.1f sn)%s", " (elle, %s)" % by if by else "", res["path"],
                          res["bytes"], res["seconds"], (" – eski yedekler silindi: %s" % ", ".join(removed)) if removed else "")
-                return dict(res, removed=removed, copy=self.copy_backup(res["path"], day, conf))
+                if fallback:
+                    self._fell_back(day, res["path"], folder, fallback["error"])
+                else:
+                    self._reached(day, conf)
+                return dict(res, removed=removed, fallback=fallback, copy=self.copy_backup(res["path"], day, conf))
             finally:
                 with self._lock:
                     self._lists.clear()                      # the status lists the folders again
+
+    def _backup_failed(self, folder: str, text: str) -> None:
+        self.backup_error = {"at": _stamp(), "text": text}
+        log.error("veritabanı yedeği alınamadı (%s): %s", folder, text)
+
+    # ------------------------------------------------------------------ the dashboard's own folder, when the chosen one fails
+    def own_backup_dir(self) -> str:
+        """The dashboard's own backup folder (``data/backups``): where a day's backup goes when the chosen folder cannot
+        be written."""
+        return os.path.join(self.svc.settings.data_dir, "backups")
+
+    def fallback_state(self) -> Dict[str, Any]:
+        """The days whose backup went to the dashboard's own folder (``ops.backup_fallback``): day -> the file, the chosen
+        folder it is for, when, why, when it reached that folder (``None``: it waits); the last failure to write there."""
+        try:
+            v = self.svc.store.get("ops.backup_fallback", {})
+        except Exception:  # noqa: BLE001 - a database that cannot be read: nothing waits
+            v = {}
+        v = v if isinstance(v, dict) else {}
+        v["days"] = v.get("days") if isinstance(v.get("days"), dict) else {}
+        return v
+
+    def fallback_pending(self, conf: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+        """The days whose backup still waits to reach the chosen folder (the one chosen now)."""
+        conf = conf or self.backup_conf()
+        return {d: r for d, r in self.fallback_state()["days"].items()
+                if isinstance(r, dict) and not r.get("reached_at") and not r.get("gone") and same_folder(r.get("dir"), conf["dir"])}
+
+    def fallback_view(self, conf: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """What the administrators' page and the status say of it: the latest day that went to the dashboard's own folder
+        (while one waits, or when it is today's), whether it has reached the chosen folder since, the days that wait."""
+        conf = conf or self.backup_conf()
+        state = self.fallback_state()
+        mine = {d: r for d, r in state["days"].items() if isinstance(r, dict) and same_folder(r.get("dir"), conf["dir"])}
+        waiting = sorted(d for d, r in mine.items() if not r.get("reached_at") and not r.get("gone"))
+        today = _dt.date.today().isoformat()
+        if not mine or (not waiting and max(mine) != today):
+            return None
+        day = max(mine)
+        rec = mine[day]
+        return {"day": day, "today": day == today, "at": rec.get("at"), "path": rec.get("path"), "dir": self.own_backup_dir(),
+                "reached_at": rec.get("reached_at"), "waiting": waiting, "error": state.get("error") if waiting else None}
+
+    def _fell_back(self, day: _dt.date, path: str, folder: str, error: Dict[str, Any]) -> None:
+        state = self.fallback_state()
+        state["days"][day.isoformat()] = {"path": path, "dir": folder, "at": _stamp(), "error": error["text"], "reached_at": None}
+        state["error"] = error
+        for old in sorted(state["days"])[:-FALLBACK_KEEP]:
+            del state["days"][old]
+        self.svc.store.put("ops.backup_fallback", state)
+        self._fallback_tried = time.time()                   # (the chosen folder is tried again after BACKUP_RETRY)
+
+    def _reached(self, day: _dt.date, conf: Dict[str, Any]) -> None:
+        """A backup of ``day`` written to the chosen folder itself: that day waits no more; the days still waiting are
+        copied there now (the folder answers)."""
+        state = self.fallback_state()
+        rec = state["days"].get(day.isoformat())
+        if isinstance(rec, dict) and not rec.get("reached_at") and same_folder(rec.get("dir"), conf["dir"]):
+            rec["reached_at"] = _stamp()
+            if not any(not r.get("reached_at") and not r.get("gone") for r in state["days"].values() if isinstance(r, dict)):
+                state["error"] = None
+            self.svc.store.put("ops.backup_fallback", state)
+        if self.fallback_pending(conf):
+            self.catch_up(force=True)
+
+    def catch_up(self, force: bool = False) -> List[str]:
+        """The days whose backup went to the dashboard's own folder, copied to the chosen folder once it can be written
+        again - tried every BACKUP_RETRY seconds (``force``: now), oldest first.  A day the chosen folder has meanwhile (a
+        later backup of that day) needs nothing; the alarm ends with the last day that waited.  Returns the days that
+        arrived."""
+        with self._backup_lock:
+            conf = self.backup_conf()
+            pending = self.fallback_pending(conf)
+            if not pending or (not force and time.time() - self._fallback_tried < BACKUP_RETRY):
+                return []
+            self._fallback_tried = time.time()
+            state = self.fallback_state()
+            folder = os.path.abspath(conf["dir"])
+            arrived: List[str] = []
+            for day in sorted(pending):
+                rec = state["days"][day]
+                src = str(rec.get("path") or "")
+                dst = os.path.join(folder, os.path.basename(src))
+                if not _written_since(dst, rec.get("at")):        # (a later backup of that day is there already)
+                    if not os.path.isfile(src):
+                        rec["gone"] = _stamp()
+                        log.warning("seçilen klasöre kopyalanacak yedek dashboard'un kendi klasöründe artık yok: %s", src)
+                        continue
+                    try:
+                        os.makedirs(folder, exist_ok=True)
+                        shutil.copyfile(src, dst + ".part")
+                        if os.path.getsize(dst + ".part") != os.path.getsize(src):
+                            raise OSError("kopya eksik yazıldı")
+                        os.replace(dst + ".part", dst)
+                    except Exception as exc:  # noqa: BLE001 - the folder still does not answer: tried again later
+                        try:
+                            if os.path.exists(dst + ".part"):
+                                os.remove(dst + ".part")
+                        except OSError:
+                            pass
+                        error = {"at": _stamp(), "text": "%s: %s" % (type(exc).__name__, exc)}
+                        if (state.get("error") or {}).get("text") != error["text"]:
+                            log.warning("seçilen yedek klasörü hâlâ yazılamıyor (%s): %s – yarım saat sonra yeniden denenecek",
+                                        folder, error["text"])
+                        state["error"] = error
+                        break
+                rec["reached_at"] = _stamp()
+                arrived.append(day)
+            if arrived:
+                removed = self._prune(folder)
+                log.info("dashboard'un kendi klasörüne alınan yedek seçilen klasöre ulaştı (%s): %s%s", folder, ", ".join(arrived),
+                         (" – eski yedekler silindi: %s" % ", ".join(removed)) if removed else "")
+            if not any(not r.get("reached_at") and not r.get("gone") for r in state["days"].values() if isinstance(r, dict)):
+                state["error"] = None
+            self.svc.store.put("ops.backup_fallback", state)
+            with self._lock:
+                self._lists.clear()
+            return arrived
 
     @staticmethod
     def _prune(folder: str) -> List[str]:
@@ -563,12 +727,15 @@ class Ops(object):
         try:
             if same_folder(folder, conf["dir"]):
                 raise OSError("ikinci kopyanın klasörü yedek klasörünün kendisi")
-            os.makedirs(folder, exist_ok=True)
-            shutil.copyfile(path, dst + ".part")
-            if os.path.getsize(dst + ".part") != os.path.getsize(path):
-                raise OSError("kopya eksik yazıldı")
-            os.replace(dst + ".part", dst)
-            removed = self._prune(folder)
+            if same_folder(folder, os.path.dirname(os.path.abspath(path))):
+                removed = []                     # (the backup itself went there: the dashboard's own folder, the chosen one failing)
+            else:
+                os.makedirs(folder, exist_ok=True)
+                shutil.copyfile(path, dst + ".part")
+                if os.path.getsize(dst + ".part") != os.path.getsize(path):
+                    raise OSError("kopya eksik yazıldı")
+                os.replace(dst + ".part", dst)
+                removed = self._prune(folder)
         except Exception as exc:  # noqa: BLE001 - the backup itself stands
             try:
                 if os.path.exists(dst + ".part"):
@@ -596,8 +763,11 @@ class Ops(object):
             return False
         conf = self.backup_conf()
         due = _dt.datetime.combine(now.date(), hhmm(conf["time"]) or hhmm(_config.DEFAULT_BACKUP_TIME))
-        found = backups(conf["dir"])
-        last = max((_dt.datetime.strptime(b["at"], "%Y-%m-%d %H:%M:%S") for b in found), default=None)
+        taken = [_when(b["at"]) for b in backups(conf["dir"])]
+        # a day whose backup went to the dashboard's own folder (the chosen one could not be written) is backed up too
+        taken += [_when(r.get("at")) for r in self.fallback_state()["days"].values()
+                  if isinstance(r, dict) and same_folder(r.get("dir"), conf["dir"])]
+        last = max((t for t in taken if t), default=None)
         if now >= due and (last is None or last < due):
             return True
         missed = last is None or now - last > _dt.timedelta(hours=26)
@@ -636,7 +806,7 @@ class Ops(object):
                     "failed_nights": len(state.get("failed_days") or [])}
         return {"check": self.db_check, "backup": {"dir": conf["dir"], "count": len(found), "last": found[0] if found else None,
                                                    "error": self.backup_error, "time": conf["time"],
-                                                   "keep": BACKUP_KEEP, "copy": copy}}
+                                                   "keep": BACKUP_KEEP, "copy": copy, "fallback": self.fallback_view(conf)}}
 
     # ================================================================== the backup: the administrators' choice
     def saved_backup(self) -> Dict[str, Any]:
@@ -716,7 +886,8 @@ class Ops(object):
 
     def _backup_changed(self, before: Dict[str, Any], by: Optional[str]) -> Dict[str, Any]:
         """After a change of the choice: the log says what changed; a failure that was the old folder's is forgotten
-        (a new backup folder is tried at once - it has no backup yet -, a new second folder at the next backup)."""
+        (a new backup folder is tried at once - it has no backup yet -, a new second folder at the next backup) - and so
+        are the days that waited to reach the old folder (their files stay in the dashboard's own folder)."""
         after = self.backup_conf()
         said = "; ".join("%s: %s → %s" % (BACKUP_NAMES[k], before[k] or "yok", after[k] or "yok")
                          for k in BACKUP_KEYS if before[k] != after[k])
@@ -724,6 +895,10 @@ class Ops(object):
             log.info("yedek ayarları değişti (%s): %s", by or "?", said)
         if not same_folder(before["dir"], after["dir"]):
             self.backup_error = None
+            with self._backup_lock:
+                if self.fallback_state()["days"]:
+                    self.svc.store.put("ops.backup_fallback", {})
+                self._fallback_tried = 0.0
         if not same_folder(before["copy_dir"], after["copy_dir"]):
             state = self.copy_state()
             if state.get("failed_days") or state.get("error"):
@@ -741,22 +916,29 @@ class Ops(object):
         copies = backups(conf["copy_dir"]) if conf["copy_dir"] else []
         state = self.copy_state()
         failing = bool(conf["copy_dir"] and state.get("failed_days"))
+        fallback = self.fallback_view(conf)
+        own = None
+        if fallback is not None:                             # the dashboard's own folder, where the day's backup went
+            mine = backups(fallback["dir"])
+            own = {"dir": fallback["dir"], "backups": mine[:BACKUP_SHOWN], "count": len(mine)}
         return {"time": conf["time"], "dir": conf["dir"], "copy_dir": conf["copy_dir"], "source": conf["source"],
                 "base": conf["base"], "keep": BACKUP_KEEP, "default_time": _config.DEFAULT_BACKUP_TIME,
                 "saved": {"by": saved.get("by"), "at": saved.get("at")} if any(k in saved for k in BACKUP_KEYS) else None,
                 "backups": found[:BACKUP_SHOWN], "count": len(found), "copies": copies[:BACKUP_SHOWN], "copy_count": len(copies),
                 "error": self.backup_error, "copy_error": state.get("error") if failing else None,
-                "copy_failed": len(state.get("failed_days") or []) if failing else 0,
+                "copy_failed": len(state.get("failed_days") or []) if failing else 0, "fallback": fallback, "own": own,
                 # no second copy: whether this machine has the drive of the installed dashboard's default (a hint)
                 "d_drive": None if conf["copy_dir"] else _config.drive_exists(_config.DEFAULT_BACKUP_COPY_DIR)}
 
     def private_paths(self) -> List[str]:
         """Where the desk's files live on its computer - the database and its folder, the backup folders (chosen or
-        not), the log: the administrators' to know, left out of what everyone reads.  The longest first."""
+        not, the dashboard's own), the log: the administrators' to know, left out of what everyone reads.  The longest
+        first."""
         st = self.svc.settings
         conf = self.backup_conf()
         found = {os.path.abspath(str(p)) for p in (getattr(st, "db_path", None), getattr(st, "data_dir", None), conf["dir"],
-                                                   conf["copy_dir"], conf["base"]["dir"], conf["base"]["copy_dir"], log_file()) if p}
+                                                   conf["copy_dir"], conf["base"]["dir"], conf["base"]["copy_dir"],
+                                                   self.own_backup_dir(), log_file()) if p}
         return sorted(found, key=len, reverse=True)
 
     # ================================================================== the desk's system alarms
@@ -844,6 +1026,15 @@ class Ops(object):
                 bad.append("açılış denetimi başarısız: %s" % "; ".join(self.db_check["problems"][:2]))
             if self.backup_error:
                 bad.append("yedek alınamadı (%s): %s" % (self.backup_error["at"][:16], hide_paths(self.backup_error["text"], hide)))
+            waiting = sorted(self.fallback_pending(conf))   # backed up in the dashboard's own folder, not yet in the chosen one
+            if waiting:
+                own = os.path.join("data", "backups")
+                if len(waiting) == 1:
+                    which = "bugünkü yedek" if waiting[0] == today else "%s yedeği" % ".".join(reversed(waiting[0].split("-")))
+                    bad.append("seçilen yedek klasörüne yazılamadı – %s dashboard'un kendi klasörüne (%s) alındı" % (which, own))
+                else:
+                    bad.append("seçilen yedek klasörüne %d gündür yazılamıyor – yedekler dashboard'un kendi klasörüne (%s) alındı"
+                               % (len(waiting), own))
             copy = self.copy_state()
             # one day is said in the status only; two in a row: an alarm (no second folder chosen: nothing to say)
             if conf["copy_dir"] and len(copy.get("failed_days") or []) >= 2:
@@ -864,8 +1055,8 @@ class Ops(object):
         """The system alarms as the alarms page shows them: their state at the last look and when they fire."""
         st = self.settings()
         when = {"feed": "piyasa saatinde %d dk akmazsa" % st["feed_minutes"], "tlref": "saat %s itibarıyla gelmemişse" % st["tlref_due"],
-                "db": "açılış denetimi ya da günlük yedek (%s) başarısızsa; ikinci kopyası 2 gün üst üste alınamazsa"
-                      % self.backup_conf()["time"]}
+                "db": "açılış denetimi ya da günlük yedek (%s) başarısızsa, yedek seçilen klasöre yazılamayıp dashboard'un kendi "
+                      "klasörüne alındıysa; ikinci kopyası 2 gün üst üste alınamazsa" % self.backup_conf()["time"]}
         rows = []
         for kind in SYSTEM_KINDS:
             s = self.sys_state.get(kind) or {"state": "na", "text": "henüz denetlenmedi", "since": "", "checked": ""}
@@ -889,18 +1080,26 @@ class Ops(object):
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            now = _dt.datetime.now()
-            try:
-                self.market_hours(now)
-            except Exception as exc:  # noqa: BLE001 - the loop must survive anything
-                self.failure("operasyon döngüsü", exc)
-            try:
-                if self.backup_due(now):
-                    self.backup_now()
-            except Exception:  # noqa: BLE001 - said in backup_now; tried again after BACKUP_RETRY
-                pass
-            try:
-                self.system_checks(now)
-            except Exception as exc:  # noqa: BLE001
-                self.failure("sistem alarmları", exc)
+            self.look(_dt.datetime.now())
             self._stop.wait(15.0)
+
+    def look(self, now: _dt.datetime) -> None:
+        """One look of the loop (every 15 s): market hours, the day's backup when due, the days that wait to reach the
+        chosen folder (every BACKUP_RETRY), the system alarms."""
+        try:
+            self.market_hours(now)
+        except Exception as exc:  # noqa: BLE001 - the loop must survive anything
+            self.failure("operasyon döngüsü", exc)
+        try:
+            if self.backup_due(now):
+                self.backup_now()
+        except Exception:  # noqa: BLE001 - said in backup_now; tried again after BACKUP_RETRY
+            pass
+        try:
+            self.catch_up()
+        except Exception as exc:  # noqa: BLE001
+            self.failure("yedeğin seçilen klasöre kopyası", exc)
+        try:
+            self.system_checks(now)
+        except Exception as exc:  # noqa: BLE001
+            self.failure("sistem alarmları", exc)

@@ -148,9 +148,25 @@ export class BackupPage {
     clear(this.sources).appendChild(t);
   }
 
-  /** The last failures: of the backup (tried again after half an hour), of its second copy (two days: the alarm). */
+  /** The last failures: of the backup (tried again after half an hour), of its second copy (two days: the alarm) - and a
+   * day's backup that went to the dashboard's own folder because the chosen one could not be written: whether it has
+   * reached the chosen folder since. */
   renderState(d) {
     const box = clear(this.state);
+    const fb = d.fallback;
+    if (fb) {
+      const day = fb.today ? 'Bugünkü yedek' : isoToTr(fb.day) + ' yedeği';
+      const waiting = (fb.waiting || []).length;
+      if (waiting) {
+        box.appendChild(h('div', { class: 'errtxt', id: 'bk-fallback' }, (waiting > 1 ? waiting + ' günün yedeği' : day)
+          + ' seçilen klasöre yazılamadı (' + when(fb.at) + ') – dashboard\'un kendi klasörüne alındı: ', h('span', { class: 'mono' }, fb.dir),
+          '. Seçilen klasöre henüz ulaşmadı: yarım saatte bir yeniden denenir'
+          + (fb.error ? ' (son deneme ' + when(fb.error.at) + ': ' + fb.error.text + ')' : '') + '; ulaşınca veritabanı alarmı kapanır.'));
+      } else {
+        box.appendChild(h('div', { class: 'bk-hint', id: 'bk-fallback' }, day + ' seçilen klasöre yazılamadığı için önce dashboard\'un kendi '
+          + 'klasörüne alındı (' + when(fb.at) + '); ' + when(fb.reached_at) + ' itibarıyla seçilen klasörde de.'));
+      }
+    }
     if (d.error) {
       box.appendChild(h('div', { class: 'errtxt' }, 'Son yedek denemesi başarısız (' + when(d.error.at) + '): ' + d.error.text
         + ' – yarım saat sonra yeniden denenir.'));
@@ -176,6 +192,8 @@ export class BackupPage {
     } else {
       box.appendChild(h('div', { class: 'bk-sub' }, 'İkinci kopya · seçilmedi'));
     }
+    // (where the day's backup went while the chosen folder could not be written)
+    if (d.own) block('Dashboard\'un kendi klasörü', d.own.dir, d.own.backups, d.own.count, 'bk-own', 'Bu klasörde yedek yok.');
   }
 
   showErrors(errors) {
@@ -225,7 +243,8 @@ export class BackupPage {
       if (this.dead) return;
       this.show(d);
       this.renderResult(d.result);
-      toast('Yedek alındı', 'ok');
+      if (d.result.fallback) toast('Seçilen klasöre yazılamadı: yedek dashboard\'un kendi klasörüne alındı', 'err', 6000);
+      else toast('Yedek alındı', 'ok');
       this.ctx.refreshNow();
     } catch (err) {
       clear(this.result).appendChild(h('div', { class: 'errtxt' }, err.message));
@@ -235,10 +254,15 @@ export class BackupPage {
     }
   }
 
-  /** The backup just taken: its file and size, and whether its second copy was written. */
+  /** The backup just taken: its file and size - in the dashboard's own folder when the chosen one could not be
+   * written -, and whether its second copy was written. */
   renderResult(r) {
     const box = clear(this.result);
     const name = String(r.path || '').split(/[\\/]/).pop();
+    if (r.fallback) {
+      box.appendChild(h('div', { class: 'errtxt' }, '⚠ Seçilen yedek klasörüne yazılamadı (' + r.fallback.error.text + ') – yedek dashboard\'un '
+        + 'kendi klasörüne alındı; seçilen klasör yarım saatte bir yeniden denenir, yazılabilince dosya oraya kopyalanır.'));
+    }
     box.appendChild(h('div', { class: 'bk-ok' }, '✓ Yedek alındı: ', h('b', { class: 'mono' }, name), ' · ' + mb(r.bytes) + ' · '
       + num(r.seconds, 1) + ' sn · ', h('span', { class: 'mono' }, folderOf(r.path))));
     const c = r.copy;
