@@ -1300,11 +1300,36 @@ def curve_df(spot: _dt.date, pillars: List[Tuple[_dt.date, float]], end: _dt.dat
     return math.exp(_interp(pts, x))
 
 
+def mpc_periods(spot: _dt.date, steps: List[Tuple[_dt.date, float]], reach: _dt.date, count: int = 4) -> List[Tuple[_dt.date, _dt.date, _dt.date]]:
+    """The periods between the coming meetings, as a meeting-dated OIS runs: ``(meeting, start, end)`` - from the day
+    after one decision to the day after the next, the first ``count`` that end within the curve's ``reach``."""
+    dates = [d for d, _ in steps if d >= spot]
+    out = []
+    for a, b in zip(dates, dates[1:]):
+        start, end = a + _dt.timedelta(days=1), b + _dt.timedelta(days=1)
+        if end > reach:
+            break
+        out.append((a, start, end))
+        if len(out) >= count:
+            break
+    return out
+
+
 def frapath_day(spot: _dt.date, base: float, steps: List[Tuple[_dt.date, float]], quotes: Dict[int, float], holidays: set) -> Dict[str, Any]:
-    """One day: each FRA bucket's forward from the curve and from the meeting path (bp apart), and each tenor's par rate
-    against the path's own."""
+    """One day: each FRA bucket's forward and each coming meeting period's forward from the curve and from the meeting
+    path (bp apart), and each tenor's par rate against the path's own."""
     pillars = sorted((_add_months(spot, m), r) for m, r in quotes.items())
-    out: Dict[str, Any] = {"fra": {}, "tenor": {}}
+    out: Dict[str, Any] = {"fra": {}, "tenor": {}, "mpc": {}}
+    reach = max(d for d, _ in pillars) if pillars else spot
+    for meeting, a, b in mpc_periods(spot, steps, reach):
+        ca, cb = curve_df(spot, pillars, a), curve_df(spot, pillars, b)
+        if ca is None or cb is None:
+            continue
+        pa, pb = path_df(spot, base, steps, a, holidays), path_df(spot, base, steps, b, holidays)
+        fc = (ca / cb - 1.0) * 365.0 / (b - a).days
+        fp = (pa / pb - 1.0) * 365.0 / (b - a).days
+        out["mpc"][meeting.isoformat()] = {"start": a.isoformat(), "end": b.isoformat(), "curve": fc * 100.0, "path": fp * 100.0,
+                                           "dev": (fc - fp) * 10000.0}
     for m1, m2 in FRA_BUCKETS:
         a, b = _add_months(spot, m1), _add_months(spot, m2)
         ca, cb = curve_df(spot, pillars, a), curve_df(spot, pillars, b)
@@ -1335,6 +1360,7 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         return [], {"ok": False, "why": "1A – 1Y OIS vadelerinin geçmişi yok", "rows": [], "tenors": []}
     series: Dict[str, List[Tuple[str, float]]] = {}
     tenor_series: Dict[int, List[Tuple[str, float]]] = {}
+    mpc_series: Dict[str, List[Tuple[str, float]]] = {}
     for d in sorted(by_day):
         meta = days_meta.get(d) or {}
         if d >= ctx.today_iso or meta.get("flag") in ("inconsistent", "error") or not meta.get("spot") or meta.get("base") is None:
@@ -1349,6 +1375,8 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             series.setdefault(name, []).append((d, v["dev"]))
         for m, v in res["tenor"].items():
             tenor_series.setdefault(m, []).append((d, v["dev"]))
+        for meeting, v in res["mpc"].items():
+            mpc_series.setdefault(meeting, []).append((d, v["dev"]))
     now = None
     p = ctx.path
     if p and p.get("spot") and p.get("base") is not None and p.get("steps"):
@@ -1398,7 +1426,38 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         tenors.append({"months": m, "label": _MONTH_LABEL.get(m, "%dM" % m), "dev": cur["dev"] if cur else (vals[-1] if vals else None),
                        "quote": cur["quote"] if cur else None, "path": cur["path"] if cur else None,
                        "z": qm.zscore(cur["dev"] if cur else vals[-1], vals) if len(vals) >= 20 else None, "n": len(vals)})
-    return mons, {"ok": True, "rows": rows, "tenors": tenors, "live": now is not None}
+    # the coming meeting periods (today's path): the meeting-dated OIS of each against the path's level for it
+    periods = []
+    for meeting, cur in sorted(((now or {}).get("mpc") or {}).items()):
+        pts = mpc_series.get(meeting) or []
+        row = {"meeting": meeting, "start": cur["start"], "end": cur["end"], "curve": cur["curve"], "path": cur["path"], "dev": cur["dev"],
+               "n": len(pts)}
+        name = "PPK dönemi %s – %s" % (_tr(cur["start"]), _tr(cur["end"]))
+
+        def pcalc(live, meeting=meeting, last=pts[-1][1] if pts else None):
+            q = {m: ctx.cur(k, live) for m, k in tenor_keys.items()}
+            q = {m: v for m, v in q.items() if v is not None}
+            if ctx.path is None or len(q) < 4:
+                return last
+            r = frapath_day(ctx.path["spot"], ctx.path["base"], ctx.path["steps"], q, ctx.holidays)
+            v = (r["mpc"].get(meeting) or {}).get("dev")
+            return v if v is not None else last
+
+        if pts:
+            mon = mr_monitor(ctx, "frapath:mpc:" + meeting, "frapath", "TRY OIS", name + " (toplantı tarihli OIS)", "bp", 1, [d for d, _ in pts],
+                             [v for _, v in pts], "bp", [{"key": "MPC:" + meeting, "name": name, "weight": 1.0}], pcalc, pkg="rate",
+                             min_share=60.0 / max(60.0, ctx.min_obs()),
+                             note="Eğrinin bu toplantı dönemi için forward'ı (OIS kotalarından) − PPK patikasının aynı dönemdeki seviyesi (bp): + ise "
+                                  "toplantı tarihli OIS patikaya göre ucuz (receive), − ise pahalı (pay).")
+            if mon is not None:
+                row.update({"z": mon.zof(row["dev"]), "half_life": mon.half_life, "sid": mon.sid})
+                mons.append(mon)
+        periods.append(row)
+    return mons, {"ok": True, "rows": rows, "tenors": tenors, "periods": periods, "live": now is not None}
+
+
+def _tr(iso: str) -> str:
+    return "%s.%s.%s" % (iso[8:10], iso[5:7], iso[2:4])
 
 
 # ---------------------------------------------------------------------------------------------- 8/9. momentum and regime

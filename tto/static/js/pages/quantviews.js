@@ -118,9 +118,13 @@ class PcaPage extends AnalysisPage {
     this.fra.note.textContent = 'Eğri forward\'ı: OIS kotalarından (tek ödemeli, ≤ 1Y) log-doğrusal iskonto. Patika: tarihçenin PPK hesabı (TLREF\'ten başlayıp her '
       + 'toplantıdan sonraki seviye, iş günü bileşik). Fark + ise uzak bacak ucuz (FRA receive), − ise pahalı.';
     this.boxes.fra = new GridBox(this.fra, 'quant/pca/fra', (sid) => this.pick(sid));
+    this.periods = panel('quant-pca-periods', 'Toplantı dönemleri · eğrinin forward\'ı − PPK patikasının seviyesi');
+    this.periods.note.textContent = 'Her dönem bir kararın ertesi gününden sonrakinin ertesi gününe (toplantı tarihli OIS gibi). Fark + ise o dönemin toplantı tarihli '
+      + 'OIS\'i patikaya göre ucuz (receive), − ise pahalı.';
+    this.boxes.periods = new GridBox(this.periods, 'quant/pca/periods', (sid) => this.pick(sid));
     this.tenors = panel('quant-pca-tenors', 'Vade başına: kota − patikanın verdiği par faiz', { cls: 'aux' });
     this.boxes.tenors = new GridBox(this.tenors, 'quant/pca/tenors');
-    this.frame('PCA / RV', [this.factors, this.loadings, this.resid, this.rv, this.fra, this.tenors]);
+    this.frame('PCA / RV', [this.factors, this.loadings, this.resid, this.rv, this.fra, this.periods, this.tenors]);
   }
 
   destroy() {
@@ -157,6 +161,10 @@ class PcaPage extends AnalysisPage {
     this.boxes.fra.set(['Dönem', 'Eğri fwd %', 'Patika fwd %', 'Fark (bp)', 'z', 'Yarı ömür (g)', 'Gün'], (fra.rows || []).map((r) => [T(r.bucket, { b: 1 }),
       N(r.now && r.now.curve, 3), N(r.now && r.now.path, 3), N(r.now ? r.now.dev : r.dev, 1, { sign: true }), Z(r.z, entry), N(r.half_life, 1), N(r.n, 0)]),
     (fra.rows || []).map((r) => r.sid || null), fra.why || 'Toplantı fiyatlama tarihçesi yok', this.picked);
+    const per = fra.periods || [];
+    this.boxes.periods.set(['Toplantı', 'Dönem', 'Eğri fwd %', 'Patika %', 'Fark (bp)', 'z', 'Yarı ömür (g)', 'Gün'], per.map((r) => [T(isoToTr(r.meeting), { b: 1 }),
+      T(isoToTr(r.start) + ' – ' + isoToTr(r.end)), N(r.curve, 3), N(r.path, 3), N(r.dev, 1, { sign: true }), Z(r.z, entry), N(r.half_life, 1), N(r.n, 0)]),
+    per.map((r) => r.sid || null), 'PPK patikası yok (tarihçenin toplantı fiyatlama hesabı gerekli)', this.picked);
     this.boxes.tenors.set(['Vade', 'Kota %', 'Patika par %', 'Fark (bp)', 'z', 'Gün'], (fra.tenors || []).map((r) => [T(r.label, { b: 1 }), N(r.quote, 3), N(r.path, 3),
       N(r.dev, 1, { sign: true }), Z(r.z, entry), N(r.n, 0)]), null, '—');
   }
