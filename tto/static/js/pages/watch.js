@@ -3,10 +3,12 @@
 // click → "İzlemeye ekle") -, how each item moved today (open, change, low / high, its path, since a reference
 // taken on purpose), the alarms on them, the ones that fired today, and the desk's notes of the day.  A click on an
 // item (or an alarm) draws its past: the closes, the band of the z window and the z-score day by day.
+// The desk's alarms ring for everyone: the ones an administrator set, the system's own (the data feed, RET, TLREF,
+// the database), who answered them ("Gördüm – Ayşe bakıyor"), what is muted, and the day's log.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, modal, confirmDialog } from '../ui.js';
 import { num } from '../format.js';
-import { openWatchDialog, askPermission } from '../alarms.js';
+import { openWatchDialog, askPermission, ackDesk, muteMenu } from '../alarms.js';
 import { SeriesView, watchSpec } from '../serieschart.js';
 import { TableColumns, toolsOf } from '../columns.js';
 
@@ -135,6 +137,10 @@ export class WatchPage {
     this.host.appendChild(this.seriesSec);
     this.sv = new SeriesView(seriesBody, { rule: 'raw', windowSeg: false, window: this.zdays, height: 220 });
     this.alarmBox = panel('watch-alarms', 'Alarmlar');
+    this.deskBox = panel('watch-desk', 'Masa alarmları · herkese');
+    this.deskAdd = h('button', { class: 'btn sm hidden', type: 'button', id: 'desk-add', title: 'Herkese çalan bir alarm (yalnızca yöneticiler)' }, 'Masa alarmı kur…');
+    this.deskAdd.addEventListener('click', () => openWatchDialog(this.ctx, { focus: 'alarm', desk: true }));
+    this.deskBox.parentElement.querySelector('header').appendChild(this.deskAdd);
     this.firedBox = panel('watch-fired', 'Bugün çalan alarmlar');
     const notesBody = panel('watch-notes', 'Masa notları · bugün (herkes görür)');
     this.notes = h('textarea', { class: 'inp chatbox', id: 'notes-text', rows: '6', spellcheck: 'false',
@@ -159,6 +165,7 @@ export class WatchPage {
     this.data = d;
     this.fillList(d);
     this.fillAlarms(d);
+    this.fillDesk(d);
     this.fillFired(d);
     this.liveHistory(d);
     if (document.activeElement !== this.notes && !this.notesDirty) this.notes.value = (d.notes && d.notes.text) || '';
@@ -317,6 +324,147 @@ export class WatchPage {
     }
     box.appendChild(t);
     this.columns('alarms', t, box);
+  }
+
+  // ------------------------------------------------------------------ the desk's alarms (everyone's)
+  fillDesk(d) {
+    const desk = d.desk || { alarms: [], system: [], log: [], open: [] };
+    const admin = !!desk.admin;
+    this.deskAdd.classList.toggle('hidden', !admin);
+    const box = this.deskBox;
+    // the settings form keeps what is being typed into it while the page refreshes
+    const editing = this.deskForm && this.deskForm.contains(document.activeElement);
+    const keep = editing ? this.deskForm : null;
+    clear(box);
+    const status = (entry, mute, active) => {
+      const out = [];
+      if (entry) {
+        out.push(h('span', { class: 'pill ' + (entry.ack_by || entry.closed_at ? 'neu' : 'warn') }, 'çaldı · ' + entry.at));
+        if (entry.ack_name) out.push(h('span', { class: 'ack' }, '✓ Gördüm – ' + entry.ack_name + ' bakıyor (' + entry.ack_at + ')'));
+        else if (entry.closed_at) out.push(h('span', { class: 'sub' }, entry.closed_why || 'kapandı'));
+        else out.push(h('span', { class: 'sub' }, 'cevap bekliyor'));
+      } else if (active !== undefined) out.push(h('span', { class: 'pill neu' }, active ? 'bekliyor' : 'çaldı'));
+      if (mute) out.push(h('span', { class: 'sub', title: mute.by_name ? 'Susturan: ' + mute.by_name : null }, '🔕 susturuldu · bitiş ' + mute.until.slice(11, 16)));
+      return out;
+    };
+    const acts = (alarm, entry, mute, label) => {
+      const td = h('td', { class: 'l acts' });
+      if (entry && !entry.ack_by && !entry.closed_at) {
+        const ack = h('button', { class: 'iconbtn', type: 'button', title: 'Herkese "ben bakıyorum" der' }, 'Gördüm');
+        ack.addEventListener('click', async () => {
+          ack.disabled = true;
+          try { await ackDesk(entry.seq); this.ctx.refreshNow(); } catch (err) { errorToast(err); ack.disabled = false; }
+        });
+        td.appendChild(ack);
+      }
+      const m = h('button', { class: 'iconbtn', type: 'button', title: 'Herkes için sustur: ' + label }, mute ? '🔕' : '🔔');
+      m.addEventListener('click', (e) => { const r = m.getBoundingClientRect(); muteMenu(r.left, r.bottom + 2, alarm, !!mute, () => this.ctx.refreshNow()); e.stopPropagation(); });
+      td.appendChild(m);
+      return td;
+    };
+    // ---- the alarms an administrator set
+    box.appendChild(h('div', { class: 'desk-sub' }, 'Masanın alarmları'));
+    if (!desk.alarms.length) {
+      box.appendChild(h('div', { class: 'empty' }, admin ? 'Masa alarmı yok: "Masa alarmı kur…" ile herkese çalan bir alarm kurun (ya da alarm penceresinde '
+        + '"Masa alarmı: herkese çalar"ı işaretleyin). Piyasanın değerleriyle denetlenir.' : 'Masa alarmı yok (yöneticiler kurar; çalınca herkesin ekranında uyarı çıkar).'));
+    } else {
+      const t = h('table', { class: 'plain watch', id: 'desk-table' });
+      t.appendChild(h('tr', null, ...['Ad', 'Koşul', 'Şimdi', 'Hareket / z', 'Uzaklık', 'Durum', 'Kuran', 'Not', ''].map((x, i) => h('th', { class: [0, 1, 5, 6, 7, 8].includes(i) ? 'l' : '' }, x))));
+      for (const a of desk.alarms) {
+        const td = acts(a.id, a.entry && a.entry.kind === 'fired' ? a.entry : null, a.mute, a.label);
+        if (admin) {
+          if (!a.active) {
+            const re = h('button', { class: 'iconbtn', type: 'button', title: 'Aynı koşulla herkese yeniden kur' }, 'Yeniden kur');
+            re.addEventListener('click', () => this.act('/api/alarms/rearm', { id: a.id, desk: true }, 'Masa alarmı yeniden kuruldu'));
+            td.appendChild(re);
+          }
+          const del = h('button', { class: 'iconbtn', type: 'button', title: 'Masa alarmını sil (herkesten)' }, '✕');
+          del.addEventListener('click', async () => {
+            if (!(await confirmDialog('Masa alarmını sil', a.label + ' (' + (a.condition || '') + ') herkesten silinsin mi?', 'Sil', true))) return;
+            await this.act('/api/alarms/remove', { id: a.id, desk: true }, 'Masa alarmı silindi');
+          });
+          td.appendChild(del);
+        }
+        const open = a.entry && !a.entry.ack_by && !a.entry.closed_at;
+        t.appendChild(h('tr', { 'data-id': a.id, class: (a.active ? '' : 'fired') + (open ? ' open' : '') },
+          h('td', { class: 'l', title: a.what + (a.detail ? ' · ' + a.detail : '') }, a.label, !isNum(a.now) && a.detail ? h('span', { class: 'sub' }, a.detail) : null),
+          h('td', { class: 'l cond' }, a.condition || ''), h('td', null, a.now_text || ''),
+          h('td', null, a.mode && a.mode !== 'level' ? (a.measure_text || '–') : ''), h('td', { title: 'Koşulun sağlanmasına kalan' }, a.distance_text || ''),
+          h('td', { class: 'l' }, ...status(a.entry && a.entry.kind === 'fired' ? a.entry : null, a.mute, a.active)),
+          h('td', { class: 'l muted' }, a.by_name || ''), h('td', { class: 'l muted' }, a.note || ''), td));
+      }
+      box.appendChild(t);
+    }
+    // ---- the system's own
+    box.appendChild(h('div', { class: 'desk-sub' }, 'Sistem alarmları'));
+    const st = h('table', { class: 'plain watch', id: 'desk-system' });
+    st.appendChild(h('tr', null, ...['Ad', 'Durum', 'Ne zaman', 'Ayrıntı', ''].map((x) => h('th', { class: 'l' }, x))));
+    for (const s of desk.system || []) {
+      const state = s.state === 'alarm' ? h('span', { class: 'pill warn' }, 'ALARM' + (s.since ? ' · ' + s.since : ''))
+        : s.state === 'ok' ? h('span', { class: 'pill ok' }, 'normal')
+          : h('span', { class: 'pill neu' }, s.state === 'off' ? 'kapalı' : 'denetlenmiyor');
+      const open = s.entry && !s.entry.ack_by && !s.entry.closed_at;
+      st.appendChild(h('tr', { 'data-kind': s.kind, class: open ? 'open' : '' }, h('td', { class: 'l' }, s.label),
+        h('td', { class: 'l' }, state, ...status(s.entry, s.mute)), h('td', { class: 'l muted' }, s.threshold || ''),
+        h('td', { class: 'l', style: { whiteSpace: 'normal' } }, s.text || ''), acts('sys:' + s.kind, s.entry, s.mute, s.label)));
+    }
+    box.appendChild(st);
+    // ---- the settings: the administrators change them, everyone reads them
+    const cfg = desk.settings || {};
+    if (admin) {
+      if (keep) box.appendChild(keep);
+      else box.appendChild(this.deskSettings(cfg));
+    } else {
+      box.appendChild(h('div', { class: 'note' }, 'Piyasa saatleri ' + (cfg.market_open || '') + '–' + (cfg.market_close || '') + ' (masanın iş günleri) · '
+        + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı') + ' · RET '
+        + (cfg.ret_alarm ? cfg.ret_due : 'kapalı') + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + ' · ayarları yöneticiler değiştirir.'));
+    }
+    // ---- the day's log
+    box.appendChild(h('div', { class: 'desk-sub' }, 'Bugünün kaydı'));
+    if (!desk.log.length) { box.appendChild(h('div', { class: 'empty' }, 'Bugün masa alarmlarında bir şey olmadı.')); return; }
+    const lt = h('table', { class: 'plain watch', id: 'desk-log' });
+    lt.appendChild(h('tr', null, ...['Saat', 'Olay', 'Alarm', 'Kim', 'Ayrıntı'].map((x) => h('th', { class: 'l' }, x))));
+    for (const e of desk.log.slice().reverse()) {
+      lt.appendChild(h('tr', null, h('td', { class: 'l' }, e.at), h('td', { class: 'l' }, (desk.actions || {})[e.kind] || e.kind),
+        h('td', { class: 'l' }, e.label || ''), h('td', { class: 'l' }, e.by_name || ''), h('td', { class: 'l', style: { whiteSpace: 'normal' } }, e.text || '')));
+    }
+    box.appendChild(lt);
+  }
+
+  /** The administrators' settings of the desk: market hours, when data counts as stale, the system alarms. */
+  deskSettings(cfg) {
+    const time = (key) => h('input', { class: 'inp', id: 'desk-set-' + key, value: cfg[key] || '', placeholder: 'SS:DD', maxlength: '5' });
+    const n = (key, unit) => h('div', { class: 'lvl' }, h('input', { class: 'inp num', id: 'desk-set-' + key, value: String(cfg[key] || ''), inputmode: 'numeric' }), h('span', { class: 'unit muted' }, unit));
+    const on = (key) => h('input', { type: 'checkbox', id: 'desk-set-' + key, checked: cfg[key] ? true : null });
+    const f = (label, el) => h('div', { class: 'field' }, h('label', null, label), el);
+    const form = h('div', { class: 'desk-settings', id: 'desk-settings' },
+      f('Piyasa açılış', time('market_open')), f('Kapanış', time('market_close')), f('Tick gelmezse bayat', n('tick_stale', 'sn')),
+      h('label', { class: 'check' }, on('feed_alarm'), 'Veri akışı alarmı'), f('akmazsa', n('feed_minutes', 'dk')),
+      h('label', { class: 'check' }, on('ret_alarm'), 'RET alarmı'), f('yüklenmediyse', time('ret_due')),
+      h('label', { class: 'check' }, on('tlref_alarm'), 'TLREF alarmı'), f('fixing gelmediyse', time('tlref_due')),
+      h('label', { class: 'check' }, on('db_alarm'), 'Veritabanı alarmı'));
+    const save = h('button', { class: 'btn primary sm', type: 'button', id: 'desk-set-save' }, 'Ayarları kaydet');
+    save.addEventListener('click', async () => {
+      const values = {};
+      for (const el of form.querySelectorAll('input')) values[el.id.replace('desk-set-', '')] = el.type === 'checkbox' ? el.checked : el.value;
+      save.disabled = true;
+      const res = await this.act('/api/alarms/settings', { values }, 'Masa ayarları kaydedildi');
+      save.disabled = false;
+      if (res) { this.deskForm = null; this.ctx.refreshNow(); }
+    });
+    form.appendChild(save);
+    this.deskForm = form;
+    return form;
+  }
+
+  /** The top bar's "masa alarmı" leads here. */
+  focusPanel(id) {
+    const el = this.host.querySelector('#' + id);
+    if (!el) return;
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    el.classList.remove('focus');
+    void el.offsetWidth;
+    el.classList.add('focus');
   }
 
   fillFired(d) {

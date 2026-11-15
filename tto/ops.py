@@ -30,6 +30,8 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional
 
+from .deskalarms import SYSTEM
+
 log = logging.getLogger("tto.ops")
 
 LOG_NAME = "tto.log"
@@ -55,8 +57,31 @@ DEFAULTS: Dict[str, Any] = {
     "market_open": "09:00",          # market hours on the desk's days (week days that are not its holidays)
     "market_close": "18:00",
     "tick_stale": 120,               # seconds without any tick in market hours: the prices on the screens are "stale"
+    # the system alarms of the desk (deskalarms.py): each on / off, and when it fires
+    "feed_alarm": True, "feed_minutes": 3,       # the Bloomberg data has been stale this many minutes in market hours
+    "ret_alarm": True, "ret_due": "10:00",       # today's RET curve is not loaded by then (on the desk's days)
+    "tlref_alarm": True, "tlref_due": "14:00",   # today's TLREF fixing is not in by then (published after 12:45 by
+                                                 # Borsa İstanbul's rules of 2019; the history fetches it every 15 min)
+    "db_alarm": True,                            # the database's check at the start, or its nightly backup, failed
 }
+#: the bounds of the numbers among them
+RANGES = {"tick_stale": (10, 3600), "feed_minutes": (1, 240)}
+#: their names in the desk's log of changes
+NAMES = {"market_open": "piyasa açılışı", "market_close": "piyasa kapanışı", "tick_stale": "bayat sayılma (sn)",
+         "feed_alarm": "veri akışı alarmı", "feed_minutes": "veri akışı alarmı (dk)", "ret_alarm": "RET alarmı",
+         "ret_due": "RET saati", "tlref_alarm": "TLREF alarmı", "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı"}
+
+
+#: the system alarms, in the order the page lists them
+SYSTEM_KINDS = tuple(SYSTEM)
 _HHMM = re.compile(r"^([01]?\d|2[0-3])[:.]([0-5]\d)$")
+
+
+def changes(before: Dict[str, Any], after: Dict[str, Any]) -> str:
+    """What changed in the settings, as the desk's log says it ("RET saati: 10:00 → 10:30")."""
+    def text(v: Any) -> str:
+        return ("açık" if v else "kapalı") if isinstance(v, bool) else str(v)
+    return "; ".join("%s: %s → %s" % (NAMES.get(k, k), text(before.get(k)), text(v)) for k, v in after.items() if before.get(k) != v)
 
 
 def setup_logging(folder: str) -> str:
@@ -168,6 +193,10 @@ class Ops(object):
         self.db_check: Optional[Dict[str, Any]] = None      # the check of the database file at the start
         self.backup_error: Optional[Dict[str, Any]] = None  # the last backup that failed (until one succeeds)
         self._backup_tried = 0.0
+        self._days: Dict[str, bool] = {}                    # day -> the desk's market trades on it
+        self.sys_state: Dict[str, Dict[str, Any]] = {}      # the system alarms' conditions at the last look
+        self._feed_bad: Optional[float] = None              # since when the data has been stale in market hours
+        self._tlref_def: Optional[tuple] = None             # (day, the history's TLREF series)
 
     # ================================================================== what went wrong
     def failure(self, where: str, exc: BaseException) -> None:
@@ -215,8 +244,9 @@ class Ops(object):
                     n = int(float(str(v).replace(",", ".")))
                 except (TypeError, ValueError):
                     raise ValueError("sayı değil: %s = %r" % (k, v))
-                if not 1 <= n <= 24 * 3600:
-                    raise ValueError("aralık dışında: %s = %r" % (k, v))
+                lo, hi = RANGES.get(k, (1, 24 * 3600))
+                if not lo <= n <= hi:
+                    raise ValueError("%s %d – %d arasında olmalı (%r)" % (k, lo, hi, v))
                 cur[k] = n
             else:
                 t = hhmm(v)
@@ -245,12 +275,19 @@ class Ops(object):
         watch = getattr(self.svc, "watch", None)
         if watch is None:
             return True
+        hit = self._days.get(day)
+        if hit is not None:
+            return hit
         try:                                  # the holidays are the workbook's: read on the calculation thread
-            return bool(self.svc.et.submit(watch.market_open, day).result(timeout=20))
+            hit = bool(self.svc.et.submit(watch.market_open, day).result(timeout=20))
         except concurrent.futures.TimeoutError:
-            return True                       # a busy engine: a week day it is
+            return True                       # a busy engine: a week day it is (asked again next time)
         except Exception:  # noqa: BLE001
             return True
+        if len(self._days) > 60:
+            self._days.clear()
+        self._days[day] = hit
+        return hit
 
     def market_hours(self, now: Optional[_dt.datetime] = None) -> bool:
         """Whether the market is open now (worked out again every 20 seconds)."""
@@ -347,6 +384,128 @@ class Ops(object):
                                                    "error": self.backup_error, "time": self.svc.settings.backup_time,
                                                    "keep": BACKUP_KEEP}}
 
+    # ================================================================== the desk's system alarms
+    def tlref_fixing(self, today: str) -> tuple:
+        """Whether today's TLREF fixing is in: the history's TLREF closes (Bloomberg's, fetched every 15 minutes in
+        live mode) have today's point.  Returns ``(in, the last fixing as "day: value")``."""
+        cached = self._tlref_def
+        if cached is None or cached[0] != today:
+            ref = next((d for d in self.svc.history.snapshot().get("defs") or [] if d.group == "ref"), None)
+            self._tlref_def = cached = (today, ref)
+        ref = cached[1]
+        if ref is None:
+            return False, "tarihçede TLREF serisi yok"
+        start = (_dt.date.fromisoformat(today) - _dt.timedelta(days=12)).isoformat()
+        points = ref.pick(self.svc.store.hist_many(ref.ids(), start))[1]
+        if not points:
+            return False, "son günlerin fixingi yok"
+        last = max(points)
+        shown = "%s: %s%%" % (".".join(reversed(last.split("-"))), ("%.2f" % points[last]).replace(".", ","))
+        return last == today, shown
+
+    def system_checks(self, now: Optional[_dt.datetime] = None) -> Dict[str, Dict[str, Any]]:
+        """The system alarms' conditions now (every pass of the loop).  Each goes to the desk's alarms, which fire it
+        when it starts to hold and close it when it ends; a page that is open is told (a new generation).  Only the
+        database's check is looked at on the saved data: the rest needs the live market."""
+        now = now or _dt.datetime.now()
+        st = self.settings()
+        live = self.svc.mode == "live"
+        today = now.date().isoformat()
+        stamp = now.strftime("%H:%M:%S")
+
+        def state(kind: str, s: str, text: str = "", since: str = "") -> None:
+            states[kind] = {"state": s, "text": text, "since": since, "checked": stamp}
+
+        states: Dict[str, Dict[str, Any]] = {}
+        day = self.market_day(today)
+        market = self.market_hours(now) if live else False
+        # -- the data feed: stale (A4's heartbeat and tick age) for so many minutes in market hours
+        if not st["feed_alarm"]:
+            state("feed", "off")
+        elif not live:
+            state("feed", "na", "kayıtlı veride denetlenmez")
+        else:
+            try:
+                prov = self.svc.provider.status()
+            except Exception:  # noqa: BLE001
+                prov = {}
+            feed = self.feed(prov)
+            if feed["state"] in ("stale", "silent", "down") and market:
+                self._feed_bad = self._feed_bad or time.time()
+                since = clock_text(self._feed_bad)
+                if time.time() - self._feed_bad >= 60.0 * st["feed_minutes"]:
+                    state("feed", "alarm", "Bloomberg verisi akmıyor (%s itibarıyla): %s" % (since[:5], feed["reason"]), since[:5])
+                else:
+                    state("feed", "ok", "%s itibarıyla bayat – %d dk sürerse alarm" % (since, st["feed_minutes"]))
+            else:
+                self._feed_bad = None
+                state("feed", "ok", "akıyor" if market else "piyasa saati dışında: tick beklenmez")
+        # -- RET: today's curve loaded by its time
+        if not st["ret_alarm"]:
+            state("ret", "off")
+        elif not live:
+            state("ret", "na", "kayıtlı veride denetlenmez")
+        elif not day:
+            state("ret", "ok", "bugün piyasa kapalı")
+        else:
+            meta = self.svc.ret_meta() or {}
+            at = str(meta.get("updated_at") or "")
+            if at[:10] == today:
+                state("ret", "ok", "bugün yüklendi (%s)" % at[11:16])
+            elif now.time() < hhmm(st["ret_due"]):
+                state("ret", "ok", "bugün henüz yüklenmedi – son saat %s" % st["ret_due"])
+            else:
+                state("ret", "alarm", "RET eğrisi bugün yüklenmedi (son saat %s; son yükleme: %s)" % (st["ret_due"], at[:16] or "hiç"),
+                      st["ret_due"])
+        # -- TLREF: today's fixing in by its time
+        if not st["tlref_alarm"]:
+            state("tlref", "off")
+        elif not live:
+            state("tlref", "na", "kayıtlı veride denetlenmez")
+        elif not getattr(self.svc.settings, "history", True):
+            state("tlref", "na", "tarihçe kapalı (--no-history): fixing görülemez")
+        elif not day:
+            state("tlref", "ok", "bugün piyasa kapalı")
+        else:
+            fixed, last = self.tlref_fixing(today)
+            if fixed:
+                state("tlref", "ok", "bugünün fixingi geldi (%s)" % last)
+            elif now.time() < hhmm(st["tlref_due"]):
+                state("tlref", "ok", "henüz gelmedi – son saat %s (son fixing %s)" % (st["tlref_due"], last))
+            else:
+                state("tlref", "alarm", "Bugünün TLREF fixingi %s itibarıyla gelmedi (son fixing %s)" % (st["tlref_due"], last),
+                      st["tlref_due"])
+        # -- the database: its check at the start, the nightly backup
+        if not st["db_alarm"]:
+            state("db", "off")
+        else:
+            bad = []
+            if self.db_check and not self.db_check["ok"]:
+                bad.append("açılış denetimi başarısız: %s" % "; ".join(self.db_check["problems"][:2]))
+            if self.backup_error:
+                bad.append("yedek alınamadı (%s): %s" % (self.backup_error["at"][:16], self.backup_error["text"]))
+            last = backups(self.svc.settings.backup_dir)
+            state("db", "alarm" if bad else "ok", " · ".join(bad) if bad else ("son yedek %s" % last[0]["at"][:16] if last else "henüz yedek yok"))
+        self.sys_state = states
+        desk = getattr(self.svc, "desk_alarms", None)
+        if desk is not None:
+            told = [desk.system(kind, states[kind]["state"] == "alarm", states[kind]["text"]) for kind in SYSTEM_KINDS]
+            if any(told):
+                self.svc.bump()                       # the pages ask what fired / closed
+        return states
+
+    def system_rows(self) -> List[Dict[str, Any]]:
+        """The system alarms as the alarms page shows them: their state at the last look and when they fire."""
+        st = self.settings()
+        when = {"feed": "piyasa saatinde %d dk akmazsa" % st["feed_minutes"], "ret": "saat %s itibarıyla yüklenmemişse" % st["ret_due"],
+                "tlref": "saat %s itibarıyla gelmemişse" % st["tlref_due"],
+                "db": "açılış denetimi ya da gece yedeği (%s) başarısızsa" % self.svc.settings.backup_time}
+        rows = []
+        for kind in SYSTEM_KINDS:
+            s = self.sys_state.get(kind) or {"state": "na", "text": "henüz denetlenmedi", "since": "", "checked": ""}
+            rows.append(dict(s, kind=kind, label=SYSTEM[kind], threshold=when[kind], on=bool(st["%s_alarm" % kind])))
+        return rows
+
     # ================================================================== the loop
     def start(self) -> None:
         if self._thread is not None:
@@ -374,4 +533,8 @@ class Ops(object):
                     self.backup_now()
             except Exception:  # noqa: BLE001 - said in backup_now; tried again after BACKUP_RETRY
                 pass
+            try:
+                self.system_checks(now)
+            except Exception as exc:  # noqa: BLE001
+                self.failure("sistem alarmları", exc)
             self._stop.wait(15.0)

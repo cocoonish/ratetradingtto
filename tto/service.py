@@ -151,6 +151,9 @@ class Service(object):
         # nightly backup (ops.py)
         self.ops = Ops(self)
         self.ops.check_database()
+        # the desk's alarms: set once, they ring for everyone; the system's own (deskalarms.py)
+        from .deskalarms import DeskAlarms
+        self.desk_alarms = DeskAlarms(self)
         self.et = EngineThread()
         self.gen = 1
         self._gen_lock = threading.Lock()
@@ -895,10 +898,7 @@ class Service(object):
         today = None
         if tto is not None:
             today = serial_to_date(tto.engine.clock.today()).isoformat()
-        ret = None
-        if tto is not None:
-            cells = ["Forward!%s%d" % (col, RET_FIRST_ROW + i) for i in range(len(RET_TENORS)) for col in ("W", "X")]
-            ret = self.store.shared_meta("tto", cells)
+        ret = self.ret_meta() if tto is not None else None
         return {"mode": self.mode, "note": self.mode_note, "provider": prov, "gen": self.gen, "today": today,
                 "ret": ret, "server_date": _dt.date.today().isoformat(),
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
@@ -1614,6 +1614,11 @@ class Service(object):
 
     def ret_history(self) -> List[Dict[str, Any]]:
         return self.store.ret_history(30)
+
+    def ret_meta(self) -> Optional[Dict[str, Any]]:
+        """Who loaded the RET curve last, and when (``None``: never - the file's curve is in use)."""
+        cells = ["Forward!%s%d" % (col, RET_FIRST_ROW + i) for i in range(len(RET_TENORS)) for col in ("W", "X")]
+        return self.store.shared_meta("tto", cells)
 
     # ================================================================== blotter
     def today_iso(self) -> str:
@@ -2509,7 +2514,13 @@ class Service(object):
             days = int(days)
         except (TypeError, ValueError):
             days = 60
-        out = self.et.call(self.watch.snapshot, user, loc, days)
+
+        def run() -> Dict[str, Any]:
+            out = self.watch.snapshot(user, loc, days)
+            out["desk"] = self._desk_view(user, self.watch.desk_rows(loc))
+            return out
+
+        out = self.et.call(run)
         out["gen"] = self.gen
         return out
 
@@ -2575,6 +2586,14 @@ class Service(object):
         self.bump()
         return {"taken": n}
 
+    @staticmethod
+    def _alarm_level(level: Any) -> float:
+        """An alarm's level as typed (35,80 · -12,5 · 250)."""
+        try:
+            return float(str(level).strip().replace(" ", "").replace("−", "-").replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
+        except (TypeError, ValueError):
+            raise ServiceError("seviye bir sayı olmalı")
+
     def alarm_add(self, user: str, book_id: str = "tto", ref: str = "", op: str = "", level: Any = None, label: str = "",
                   note: str = "", subject: Any = None, mode: str = "level", minutes: Any = None, days: Any = None) -> Dict[str, Any]:
         """An alarm on anything that can be watched: on its level (typed as the subject is shown: 35,80 on a rate
@@ -2584,10 +2603,7 @@ class Service(object):
         s = self._subject(subject, book_id, ref)
         if s["kind"] == "cell":
             self._book(s.get("book") or "tto")
-        try:
-            lvl = float(str(level).strip().replace(" ", "").replace("−", "-").replace(",", ".")) if not isinstance(level, (int, float)) else float(level)
-        except (TypeError, ValueError):
-            raise ServiceError("seviye bir sayı olmalı")
+        lvl = self._alarm_level(level)
         res = self._watch_call(self.watch.add_alarm, user, s, str(op or ""), lvl, str(label or ""), str(note or ""),
                                str(mode or "level"), minutes, days)
         self.bump()
@@ -2611,12 +2627,116 @@ class Service(object):
         self.bump()
         return {"alarm": res}
 
-    def alarms_fired(self, user: str, since: int = 0) -> Dict[str, Any]:
-        """The user's alarms that fired today after ``since`` (the last one the page has shown)."""
+    def alarms_fired(self, user: str, since: int = 0, desk: Any = None) -> Dict[str, Any]:
+        """The user's alarms that fired today after ``since`` (the last one the page has shown) - and the desk's:
+        the lines of its day's log after ``desk`` and the firings nobody has answered (the top bar's count)."""
         user = self.require_user(user)
         mine = [e for e in self.watch.fired() if e.get("user") == user]
         last = max([int(e.get("seq") or 0) for e in self.watch.fired()] or [0])
-        return {"fired": [e for e in mine if int(e.get("seq") or 0) > int(since or 0)], "last": last}
+        return {"fired": [e for e in mine if int(e.get("seq") or 0) > int(since or 0)], "last": last,
+                "desk": self.desk_alarms.since(desk)}
+
+    # ================================================================== the desk's alarms (deskalarms.py)
+    def _desk_view(self, user: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The desk's alarms as the alarms page shows them: the alarms an administrator set (with their last firing
+        of the day and their mute), the system's, the day's log, what nobody answered, the settings."""
+        from .deskalarms import ACTIONS
+        desk = self.desk_alarms
+        entries = desk.log()
+
+        def last_fired(alarm: str) -> Optional[Dict[str, Any]]:
+            return next((e for e in reversed(entries) if e.get("alarm") == alarm and e.get("kind") == "fired"), None)
+
+        for r in rows:
+            e = last_fired(r["id"])
+            r["entry"] = e if e is not None and (not r.get("active") or not e.get("closed_at")) else None
+            r["mute"] = desk.muted(r["id"])
+            r["by_name"] = desk.name(r.get("by"))
+        system = self.ops.system_rows()
+        for s in system:
+            s["entry"] = last_fired("sys:" + s["kind"])
+            s["mute"] = desk.muted("sys:" + s["kind"])
+        return {"alarms": rows, "system": system, "log": entries, "open": desk.opened(entries), "settings": self.ops.settings(),
+                "admin": (self.store.account(user) or {}).get("role") == "admin", "live": self.mode == "live", "actions": ACTIONS}
+
+    def _desk_alarm(self, alarm_id: str) -> Dict[str, Any]:
+        a = next((x for x in self.watch.desk_list() if x["id"] == alarm_id), None)
+        if a is None:
+            raise ServiceError("masa alarmı bulunamadı", 404)
+        return a
+
+    def desk_alarm_add(self, user: str, book_id: str = "tto", ref: str = "", op: str = "", level: Any = None, label: str = "",
+                       note: str = "", subject: Any = None, mode: str = "level", minutes: Any = None, days: Any = None) -> Dict[str, Any]:
+        """An alarm for the whole desk (administrators only): as a personal one, but read on the market's values and
+        told on everyone's screen."""
+        me = self.require_admin(user)
+        if mode == "ref":                                  # a reference is one user's (their watch list's ⟲)
+            raise ServiceError("masa alarmında izleme referansı yok: açılıştan, şimdiki seviyeden ya da son dakikalarda seçin")
+        s = self._subject(subject, book_id, ref)
+        if s["kind"] == "cell":
+            self._book(s.get("book") or "tto")
+        res = self._watch_call(self.watch.add_alarm, "", s, str(op or ""), self._alarm_level(level), str(label or ""),
+                               str(note or ""), str(mode or "level"), minutes, days, me)
+        self.desk_alarms.note("set", res["alarm"]["id"], res["alarm"]["label"], res["condition"], by=me)
+        self.bump()
+        return res
+
+    def desk_alarm_remove(self, user: str, alarm_id: str) -> Dict[str, Any]:
+        me = self.require_admin(user)
+        a = self._desk_alarm(str(alarm_id or ""))
+        n = self.et.call(self.watch.remove_alarm, "", a["id"])
+        self.desk_alarms.close(a["id"], "silindi")
+        self.desk_alarms.note("removed", a["id"], a["label"], self.watch.cond_text(a), by=me)
+        self.bump()
+        return {"removed": n}
+
+    def desk_alarm_rearm(self, user: str, alarm_id: str, level: Any = None) -> Dict[str, Any]:
+        me = self.require_admin(user)
+        a = self._desk_alarm(str(alarm_id or ""))
+        res = self._watch_call(self.watch.rearm, "", a["id"], None if level in (None, "") else self._alarm_level(level))
+        self.desk_alarms.close(a["id"], "yeniden kuruldu")
+        self.desk_alarms.note("rearmed", a["id"], res["label"], self.watch.cond_text(res), by=me)
+        self.bump()
+        return {"alarm": res}
+
+    def desk_alarm_ack(self, user: str, seq: Any) -> Dict[str, Any]:
+        """"Gördüm, ben bakıyorum": a firing of the desk's alarms answered for everyone (by anyone signed in)."""
+        from .deskalarms import DeskAlarmError
+        me = self.require_user(user)
+        try:
+            entry = self.desk_alarms.ack(me, seq)
+        except DeskAlarmError as exc:
+            raise ServiceError(str(exc), 404)
+        self.bump()
+        return {"entry": entry}
+
+    def desk_alarm_mute(self, user: str, alarm: Any, minutes: Any) -> Dict[str, Any]:
+        """Keep one of the desk's alarms (an id, or "sys:feed" …) from firing for a while, for everyone (by anyone)."""
+        from .deskalarms import SYSTEM, DeskAlarmError
+        me = self.require_user(user)
+        alarm = str(alarm or "")
+        label = SYSTEM[alarm[4:]] if alarm.startswith("sys:") and alarm[4:] in SYSTEM else self._desk_alarm(alarm)["label"]
+        try:
+            out = self.desk_alarms.mute(me, alarm, minutes, label)
+        except DeskAlarmError as exc:
+            raise ServiceError(str(exc))
+        self.bump()
+        return out
+
+    def desk_alarm_settings(self, user: str, values: Any) -> Dict[str, Any]:
+        """The desk's settings (administrators): market hours, when the data is stale, the system alarms."""
+        from .ops import changes
+        me = self.require_admin(user)
+        before = self.ops.settings()
+        try:
+            cur = self.ops.set_settings(values if isinstance(values, dict) else {})
+        except ValueError as exc:
+            raise ServiceError(str(exc))
+        said = changes(before, cur)
+        if said:
+            self.desk_alarms.note("settings", "ayarlar", "Ayarlar", said, by=me)
+        self.bump()
+        return cur
 
     def heat_view(self, user: str, basis: str = "close", locale: Optional[str] = None) -> Dict[str, Any]:
         """The heat map of the curves: every point's change since the previous close, the day's open or the
