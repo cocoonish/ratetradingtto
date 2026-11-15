@@ -1505,7 +1505,7 @@ async function shot(page, name) {
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
-      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 50       // (+ the quant package's 50)
+      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 74       // (+ the quant package's 74)
       && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), rowOf(series, 'TLREF'));
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
@@ -2231,6 +2231,32 @@ async function shot(page, name) {
     const qs = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/status');
     check('the quant analyses answer from their own thread', qs.status === 200 && qs.json.ready === true && qs.json.fits >= 1, qs.json);
     await shot(page, 'quant-signals');
+    // curve fair value: the NSS fits of the OIS quotes and of the DİBS RV list's fixed-coupon bonds and bills (today's
+    // quotes of the workbook; the recorded data has no DİBS history, so no z yet)
+    await open(page, 'quant-curve');
+    await page.waitForSelector('#quant-curve-ois table.grid', { timeout: 60000 });
+    const qcv = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/curve');
+    const oisRows = await page.locator('#quant-curve-ois table.grid tbody tr:not(.hd)').count();
+    const dibsRows = await page.locator('#quant-curve-dibs table.grid tbody tr:not(.hd)').count();
+    const cv = (qcv.json || {}).curve || {}, dv = (qcv.json || {}).dibsfv || {};
+    check('Eğri Adil Değeri: every OIS tenor against its NSS fit (bp), every fixed-coupon bond and bill against the DİBS fit, with carry + roll',
+      qcv.status === 200 && cv.ok && cv.rows.length >= 12 && oisRows === cv.rows.length && cv.rmse < 50 && dv.ok && dv.rows.length >= 6
+      && dibsRows === dv.rows.length && dv.rows.every((r) => (r.kind === 'fixed' || r.kind === 'bill') && r.total_1m !== null)
+      && await page.locator('#quant-curve-ois svg.chart').count() === 1,
+    { ois: oisRows, dibs: dibsRows, rmse: cv.rmse, why: cv.why || dv.why });
+    await shot(page, 'quant-curve');
+    // options: the vol surface of USDTRY and EURUSD by tenor and the smile's probabilities (the recorded data has no vol
+    // quotes: the rows are there, empty, and the smile says why)
+    await open(page, 'quant-opt');
+    await page.waitForSelector('#quant-opt-surface table.grid', { timeout: 60000 });
+    const qop = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/opt');
+    const surfRows = await page.locator('#quant-opt-surface table.grid tbody tr:not(.hd)').count();
+    const op = (qop.json || {}).opt || {};
+    check('Opsiyon: the surface by pair and tenor, the probability table, and why a smile is missing',
+      qop.status === 200 && op.ok && op.pairs.length === 2 && surfRows === 10
+      && op.pairs.every((p) => p.smiles.length === 2 && p.smiles.every((s) => s.probs.length === 3 && (s.model || s.why))),
+    { rows: surfRows, smiles: op.pairs && op.pairs.map((p) => p.smiles.map((s) => s.model || s.why)) });
+    await shot(page, 'quant-opt');
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

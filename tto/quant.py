@@ -35,9 +35,17 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import fx as fxm
+from . import quantcurve as qcurve
 from . import quantfam as qf
+from . import quantopt as qopt
 from . import volcarry as vc
 from .service import ServiceError
+
+#: the analyses beside quantfam's families, each with its families, page, series, part of the engine read, live
+#: values, run after ``quantfam.run_all``, live tables, view and coverage (Eğri Adil Değeri, Opsiyon)
+EXTRAS = (qcurve, qopt)
+for _x in EXTRAS:
+    qf.FAMILIES.update(_x.FAMILIES)
 
 # ---------------------------------------------------------------------------------------------- settings
 DEFAULTS: Dict[str, Any] = {
@@ -78,6 +86,7 @@ ALERT_KEEP = 300
 PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"),
          ("quant-regime", "Rejim & Momentum"), ("quant-fx", "FX Vol Primi & Carry"), ("quant-macro", "Makro Beta"),
          ("quant-model", "Tahmin Modeli"))
+PAGES += tuple(p for _x in EXTRAS for p in _x.PAGES)
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -109,6 +118,8 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
     add("BRENT", "Brent", "CO1 Comdty", "index", "Global")
     add("CDS", "Türkiye 5Y CDS", "TURKEY CDS USD SR 5Y D14 Corp", "bp", "Global")
     add("USD:3M", "USD OIS 3M", "USSOC Curncy", "rate", "Global")
+    for x in EXTRAS:
+        out.extend(x.series_specs(source))
     return out
 
 
@@ -410,6 +421,8 @@ class Quant(object):
                     out["carry"] = {m: (row["a"] * 5.0 / days_a if row.get("a") is not None else None) for m, row in engine.items()}
             except Exception:  # noqa: BLE001 - no carry is a signal without carry, not a failed fit
                 out["carry"] = {}
+        for x in EXTRAS:
+            x.read_engine(out, index, reader, num)
         return out
 
     def _quant_meta(self) -> Dict[str, Dict[str, str]]:
@@ -460,6 +473,8 @@ class Quant(object):
                 v = None
             if v is not None and math.isfinite(v):
                 out[key] = v
+        for x in EXTRAS:
+            out.update(x.live_values(eng))
         return out
 
     def snapshot(self) -> Tuple[qf.Ctx, Dict[str, Any], Dict[str, float]]:
@@ -582,6 +597,8 @@ class Quant(object):
                 items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
                 timing: Dict[str, float] = {}
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
+                for x in EXTRAS:
+                    x.run(ctx, eng, mons, tables, timing, self.pause)
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx)}
@@ -677,6 +694,8 @@ class Quant(object):
             if m is not None and m.z is not None:
                 r["score"] = m.z
                 r["level"] = m.level
+        for x in EXTRAS:
+            x.live_tables(t, ctx)
         return t
 
     @staticmethod
@@ -944,6 +963,7 @@ class Quant(object):
             return self.signal_view(q.get("id"))
         pages = {"corr": ("corr",), "pca": ("pca", "rv", "frapath"), "pairs": ("pairs", "viopcal"), "regime": ("momentum", "cycle", "regime"),
                  "fx": ("vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",)}
+        pages.update({x.VIEW: x.TABLES for x in EXTRAS})
         if what not in pages:
             raise QuantError("bilinmeyen görünüm: %s" % what)
         for name in pages[what]:
@@ -956,6 +976,9 @@ class Quant(object):
 
     @staticmethod
     def _covers(what: str, key: str) -> bool:
+        for x in EXTRAS:
+            if what == x.VIEW:
+                return x.covers(key)
         if what == "corr":
             return key in qf.CORR_UNIVERSE
         if what == "pca":

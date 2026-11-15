@@ -10,6 +10,7 @@ import { api } from '../api.js';
 import { h, clear, errorToast, toast } from '../ui.js';
 import { isoToTr } from '../format.js';
 import { quantView } from './quantviews.js';
+import { fitPage } from './quantfit.js';
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
 
 // ------------------------------------------------------------------------------------------------ Sinyaller
@@ -178,7 +179,7 @@ class SignalsPage extends QuantPage {
 // ------------------------------------------------------------------------------------------------ the factory, alerts
 export function quantPage(id, host, ctx) {
   if (id === 'quant') return new SignalsPage(host, ctx);
-  return quantView(id, host, ctx);
+  return fitPage(id, host, ctx) || quantView(id, host, ctx);
 }
 
 /** The live stream's quant counters: reload the open quant page when the result moved; show new alerts. */

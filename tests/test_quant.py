@@ -740,10 +740,12 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
                     fulls[s] = fulls.get(s, 0) + 1
         assert max(fulls.values()) == 1                      # no series' full range twice in a day
         per_sync = [sum(1 for r in s if r["options"]["startDate"] < old for x in r["securities"] if x in qt) for s in syncs]
-        assert per_sync[:10] == [History.BACKFILL_PER_SYNC] * 10 and not any(per_sync[10:])      # 5 a sync, all 50 in 10 syncs
+        full, rest = divmod(len(qt), History.BACKFILL_PER_SYNC)
+        filled = full + (1 if rest else 0)
+        assert per_sync[:filled] == [History.BACKFILL_PER_SYNC] * full + ([rest] if rest else []) and not any(per_sync[filled:])  # 5 a sync
         stored = svc.store.hist_bounds()
         news = {(D(b[1]) - dt.timedelta(days=History.OVERLAP_DAYS)).strftime("%Y%m%d") for b in stored.values()}
-        assert {r["options"]["startDate"] for s in syncs[10:] for r in s} == news == {"20261030", "20261031"}   # then new days only
+        assert {r["options"]["startDate"] for s in syncs[filled:] for r in s} == news == {"20261030", "20261031"}   # then new days only
         records = h.fetch_records()
         for t, back in short.items():                        # Bloomberg's own start of the short ones is kept
             rec = records[t + "|PX_LAST"]
@@ -906,7 +908,7 @@ def test_quant_http_api(seeded):
         assert res.status_code == 200 and res.json()["ready"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
-        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 8
+        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 10
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401
