@@ -576,6 +576,13 @@ table.plain.people tr.fresh td.b { color: var(--warn); }
 .chathelp table.plain td { white-space: normal; padding: 3px 8px 3px 0; border-bottom: 0; vertical-align: top; }
 .chathelp td.mono { white-space: nowrap; }
 .chathelp .pad0 { margin-top: 8px; font-size: 11.5px; line-height: 1.5; }
+/* the best-price board: whose each best price is and how old; a broker's own row under its instrument; a stale quote greyed */
+table.grid td.who { color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
+table.grid td.brk { color: var(--ink-2); padding-left: 14px; }
+table.grid td.stale { color: var(--ink-3); opacity: .75; }
+table.grid td.who.stale { font-style: italic; }
+table.grid td.ours.stale { color: var(--ink-3); font-weight: 500; }
+.panel > header label.stalebox .inp.stalemin { width: 56px; padding: 2px 4px; margin: 0 4px; }
 /* the desk's trades of the chat not in Günlük İşlemler: the menu's badge (the words go when the menu is narrow), the list */
 .nav-item .nav-count.chat { background: var(--warn); color: #1d1600; cursor: pointer; white-space: nowrap; font-weight: 650; }
 .nav-item .nav-count.chat .txt { font-weight: 500; }

@@ -468,6 +468,57 @@ selam""", ref, TODAY)
     assert bc.board([]) == []
 
 
+def test_the_best_price_broker_by_broker():
+    """The best bid and offer of the brokers, each with its house and time: a worse quote said later does not hide a
+    better one of another house; a quote withdrawn, traded away (and the rest of its "oco" message) or older than the
+    stale limit is never the best - a stale one stays in its house's row with its age; our own quotes stand apart."""
+    start = "13.11.2026\n10:00:00 ICAP: 18m ois 35.03/35.23\n10:01:00 BGC: 18m ois 35.05/35.30\n10:02:00 TULLETT: 18m ois 35.00/35.21"
+    r = bc.board(bc.parse_chat(start, ref, TODAY))[0]
+    assert (r["bid"], r["ask"]) == (35.00, 35.21)                             # the last word, whoever said it ...
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_time"]) == (35.05, "BGC", "2026-11-13 10:01:00")    # ... and the best, by house
+    assert (r["best_ask"], r["best_ask_by"]) == (35.21, "TULLETT")
+    assert [(b["by"], b["bid"], b["ask"]) for b in r["brokers"]] == [("BGC", 35.05, 35.30), ("ICAP", 35.03, 35.23), ("TULLETT", 35.00, 35.21)]
+    rows = bc.parse_chat(start + "\n10:03:00 BGC: ref 18m ois bid\n10:04:00 ICAP: 18m ois taken at 21\n"
+                         "10:05:00 BGC: 2yr ois 35.46 , oco with 18m 35.12 offer\n10:06:00 TULLETT: 18m ois paid 35.12\n"
+                         "10:07:00 MASA: 18m ois 35.10/35.15\n10:09:00 TULLETT: 18m ois 34.90 bid", ref, TODAY)
+    ours = lambda q: q["sender"] == "MASA"                                     # noqa: E731
+    at = lambda hhmm: dt.datetime(2026, 11, 13, *map(int, hhmm.split(":")))  # noqa: E731
+    board = lambda now=None, stale=None, records=rows: {x["key"]: x for x in bc.board(records, ours, now, stale)}    # noqa: E731
+    b = board()
+    r = b["OIS:outright:18M"]
+    # BGC's bid withdrawn; the offers at or under 35.21 traded away (TULLETT's), then BGC's new 35.12 - and with it the 2Y
+    # offer of its "oco" message; ours apart; without a clock nothing is stale
+    assert [(x["by"], x["bid"], x["ask"]) for x in r["brokers"]] == [("ICAP", 35.03, 35.23), ("TULLETT", 34.90, None)]
+    assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (35.03, "ICAP", 35.23, "ICAP")
+    assert (r["our_bid"], r["our_ask"], r["last"], r["last_src"]) == (35.10, 35.15, 35.12, "TULLETT")
+    assert (b["OIS:outright:2Y"]["brokers"], b["OIS:outright:2Y"]["best_ask"], b["OIS:outright:2Y"]["ask"]) == ([], None, 35.46)
+    assert all(x["bid_age"] is None and not x["bid_stale"] for x in r["brokers"])
+    # with a clock: older than the limit is stale - in its house's row with its age, never the best; a fresher worse quote is
+    r = board(at("10:12"), 600)["OIS:outright:18M"]
+    icap = r["brokers"][0]
+    assert (icap["by"], icap["bid_stale"], icap["bid_age"], icap["ask_stale"], icap["ask_age"]) == ("ICAP", True, 720.0, True, 720.0)
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_age"], r["best_ask"], r["best_ask_by"]) == (34.90, "TULLETT", 180.0, None, None)
+    assert (r["our_age"], r["our_stale"]) == (300.0, False)
+    r = board(at("10:30"), 600)["OIS:outright:18M"]
+    assert (r["best_bid"], r["best_ask"], r["our_stale"]) == (None, None, True) and all(x["bid_stale"] for x in r["brokers"])
+    r = board(at("10:08"), 600)["OIS:outright:18M"]
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_age"], r["best_ask_by"]) == (35.03, "ICAP", 480.0, "ICAP")
+    # a time ahead of the clock makes nothing fresh: the quote is as old as when it was kept
+    ahead = [dict(q, time="10:20:00", created_at="2026-11-13 10:00:30") if q.get("ok") and q["time"] == "10:00:00" else q for q in rows]
+    icap = board(at("10:12"), 600, ahead)["OIS:outright:18M"]["brokers"][0]
+    assert (icap["by"], icap["bid_time"], icap["bid_age"], icap["bid_stale"]) == ("ICAP", "2026-11-13 10:20:00", 690.0, True)
+    # in yield the best bid is the lowest yield (the highest price), the best offer the highest
+    (r,) = bc.board(bc.parse_chat("10:00:00 ICAP: feb27 zc 31.45/31.40\n10:01:00 BGC: feb27 zc 31.42/31.38", ref, TODAY))
+    assert r["unit"] == "yld" and (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (31.42, "BGC", 31.40, "ICAP")
+    # a trade at a level takes every offer at or under it; one without a level the trading house's own side only
+    rows = bc.parse_chat("10:00:00 ICAP: 3m ois 36.60/36.70\n10:01:00 BGC: 3m ois 36.55/36.75\n10:02:00 BGC: 3m ois taken", ref, TODAY)
+    assert rows[-1]["price"] == 36.75 and [(x["by"], x["ask"]) for x in bc.board(rows)[0]["brokers"]] == [("BGC", None), ("ICAP", None)]
+    rows[-1] = dict(rows[-1], price=None)
+    assert [(x["by"], x["ask"]) for x in bc.board(rows)[0]["brokers"]] == [("BGC", None), ("ICAP", 36.70)]
+    # nothing of a house left: no row of it
+    assert bc.board(bc.parse_chat("10:00:00 ICAP: 3m ois 36.60/36.70\n10:01:00 ICAP: ref 3m ois", ref, TODAY))[0]["brokers"] == []
+
+
 def test_one_instrument_against_another():
     # "A vs B": the spread of the two, the later one − the earlier (as "1y5y" is 5Y − 1Y); two FRAs are its parts -
     # its own instrument, not a quote of the 6x9 FRA with "9x12m" left beside it as a note
@@ -657,9 +708,13 @@ def test_against_a_curve():
     out = bc.against(row[0], 35.59)
     assert out["mid"] == 35.59 and out["bid_diff"] == pytest.approx(-56.0) and out["ask_diff"] == pytest.approx(-36.0)
     assert out["last_diff"] == pytest.approx(-36.0)
+    # the brokers' best: the offer lifted at 35.23 is gone from it
+    assert out["best_bid_diff"] == pytest.approx(-56.0) and out["best_ask_diff"] is None
     out = bc.against(row[1], -84.0)
     assert out["bid_diff"] == pytest.approx(20.0) and out["ask_diff"] == pytest.approx(24.0) and out["last_diff"] is None
-    assert bc.against(row[0], None) == {"mid": None, "bid_diff": None, "ask_diff": None, "last_diff": None}
+    assert bc.against(row[0], None) == {"mid": None, "bid_diff": None, "ask_diff": None, "last_diff": None, "best_bid_diff": None,
+                                        "best_ask_diff": None}
+    assert bc.against({"unit": "pct", "bid": 35.0}, 35.5) == {"mid": 35.5, "bid_diff": -50.0, "ask_diff": None, "last_diff": None}
 
 
 # ---------------------------------------------------------------------------------------------- kept by the dashboard
@@ -894,6 +949,60 @@ def test_meeting_dated_quotes_next_to_the_mpc_bootstrap(desk):
     assert q["info"]["market"] * 100 == pytest.approx(r["mid"], rel=1e-12) and q["legs"][0]["tenor"] == "MPC 11.12.26–22.01.27"
 
 
+def test_the_best_price_board_with_the_clock_and_the_resets(desk):
+    """Today's board read with the clock: every best price with its house and age; older than the desk's stale limit
+    (10 minutes unless set, 1 - 1440) a quote stays in its house's row, greyed, never the best; a trade takes off what
+    it dealt on; a reset of the board takes what was said before it off the best prices too - what is said after it
+    stands; a day gone by is shown as it was at its end."""
+    svc, u = desk
+    day = svc.today_iso()
+    key = "OIS:outright:6Y"
+    six = lambda: {x["key"]: x for x in svc.broker(u)["board"]}.get(key)                      # noqa: E731
+    svc.broker_add(u, "6y ois 33.10/33.30", day, "ICAP")                     # typed without a time: said now
+    svc.broker_add(u, "6y ois 33.15/33.40", day, "BGC")
+    data = svc.broker(u)
+    assert (data["live"], data["stale_minutes"]) == (True, 10) and data["now"][:10] == day
+    r = six()
+    assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (33.15, "BGC", 33.30, "ICAP")
+    assert 0 <= r["best_bid_age"] < 300 and 0 <= r["best_ask_age"] < 300 and [b["by"] for b in r["brokers"]] == ["BGC", "ICAP"]
+    assert r["best_bid_diff"] == pytest.approx((33.15 - r["mid"]) * 100) and r["best_ask_diff"] == pytest.approx((33.30 - r["mid"]) * 100)
+    early = dt.datetime.now() - dt.timedelta(minutes=20)
+    if early.date().isoformat() == day:                                      # (just after midnight there was no "20 minutes ago" today)
+        svc.broker_add(u, early.strftime("%H:%M:%S") + " 6y ois 33.20/33.25", day, "TP")
+        r = six()
+        tp = next(b for b in r["brokers"] if b["by"] == "TP")
+        assert tp["bid_stale"] and tp["ask_stale"] and 1150 < tp["bid_age"] < 1800
+        assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (33.15, "BGC", 33.30, "ICAP")      # better, but stale
+        assert svc.broker_settings(u, "30") == {"stale_minutes": 30} and svc.broker(u)["stale_minutes"] == 30
+        r = six()
+        assert (r["best_bid"], r["best_bid_by"], r["best_ask"], r["best_ask_by"]) == (33.20, "TP", 33.25, "TP")
+        svc.broker_settings(u, 10)
+        svc.broker_add(u, "6y ois given at 33.20", day, "TP")                 # TP's bid hit: it and every bid at or over it go
+        r = six()
+        assert [(b["by"], b["bid"]) for b in r["brokers"]] == [("BGC", 33.15), ("ICAP", 33.10), ("TP", None)] and r["last_src"] == "TP"
+    # a reset of the instrument: nothing said before it stands - the best prices neither; said after it, it does
+    svc.broker_reset(u, day, key)
+    assert six() is None
+    svc.broker_add(u, "6y ois 33.12 bid", day, "ICAP")
+    r = six()
+    assert (r["best_bid"], r["best_bid_by"], r["best_ask"]) == (33.12, "ICAP", None) and [(b["by"], b["ask"]) for b in r["brokers"]] == [("ICAP", None)]
+    svc.broker_reset(u, day, undo=True)
+    r = six()
+    assert (r["best_bid"], r["best_bid_by"]) == (33.15, "BGC") and next(b for b in r["brokers"] if b["by"] == "ICAP")["bid"] == 33.12
+    # the limit is the desk's: between 1 and 1440 minutes, set by a signed-in user
+    for bad in (0, 1441, "yarım", None):
+        with pytest.raises(ServiceError):
+            svc.broker_settings(u, bad)
+    with pytest.raises(ServiceError) as err:
+        svc.broker_settings(None, 10)
+    assert err.value.status == 401 and svc.broker(u)["stale_minutes"] == 10
+    # a day gone by: as it stood at its end - no clock, no stale quote, the times instead of the ages
+    old = svc.broker(u, "2026-01-15")
+    assert old["live"] is False
+    r = next(x for x in old["board"] if x["label"] == "1Y")
+    assert (r["best_bid"], r["best_bid_by"], r["best_bid_age"], r["best_bid_time"]) == (35.00, "Tullett", None, "2026-01-15 10:06:00")
+
+
 def test_days_periods_and_what_is_left_out(desk):
     svc, u = desk
     today = dt.date.today()
@@ -952,12 +1061,19 @@ def test_the_chat_as_a_workbook(desk):
     raw, name = svc.broker_export(u, day.isoformat())
     assert name == "BrokerChat_%s.xlsx" % day.strftime("%Y.%m.%d")
     book = read_xlsx(raw)
-    assert list(book) == ["Tahta", "Kayıt"]
+    assert list(book) == ["Tahta", "Brokerlar", "Kayıt"]
     board, log = book["Tahta"], book["Kayıt"]
-    assert [board[c + "1"] for c in "ABCDEFGHIJKLM"] == ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem",
-                                                         "İşlem saati", "Model mid", "Bid − mid (bp)", "Ask − mid (bp)"]
-    assert [board[c + "2"] for c in "ABCDEGI"] == ["OIS", "Outright", "18M", "%", 35.03, 35.23, 35.23]
+    assert [board[c + "1"] for c in "ABCDEFGHIJKLMQRST"] == ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem",
+                                                             "İşlem saati", "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bid kimde",
+                                                             "Ask kimde", "Bid yaşı (dk)", "Ask yaşı (dk)"]
+    # the brokers' best: the offer lifted at 35.23 is no longer there; a day gone by has no ages
+    assert [board[c + "2"] for c in "ABCDEIQ"] == ["OIS", "Outright", "18M", "%", 35.03, 35.23, "Tullett"]
+    assert "G2" not in board and "R2" not in board and "S2" not in board
     assert board["F2"] == day.isoformat() + " 10:00:00" and board["J2"] == day.isoformat() + " 10:02:00"
+    houses = book["Brokerlar"]
+    assert [houses[c + "1"] for c in "ABCDEFGHIJK"] == ["Ürün", "Enstrüman", "Broker", "Bid", "Bid saati", "Bid yaşı (dk)", "Bid bayat", "Ask",
+                                                        "Ask saati", "Ask yaşı (dk)", "Ask bayat"]
+    assert [houses[c + "2"] for c in "ABCDE"] == ["OIS", "18M", "Tullett", 35.03, day.isoformat() + " 10:00:00"] and "H2" not in houses
     assert board["K2"] == pytest.approx(svc.broker(u, day.isoformat())["board"][0]["mid"]) and board["L2"] == pytest.approx((35.03 - board["K2"]) * 100)
     assert [board[c + "3"] for c in "ABCDEG"] == ["OIS", "Spread", "1Y–5Y", "bp", -64, -60]
     assert log["A1"] == "Tarih" and log["B1"] == "Saat" and log["E1"] == "Mesaj" and "yyyy" in log["!formats"]["A2"]

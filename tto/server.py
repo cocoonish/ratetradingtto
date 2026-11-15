@@ -465,6 +465,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                              bool(data.get("undo"))))
 
     @handler
+    async def broker_settings(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().broker_settings, _user(request), data.get("stale_minutes")))
+
+    @handler
     async def broker_recon(request: Request):
         if request.method == "POST":
             data = await _body(request)
@@ -755,6 +760,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/broker/delete", broker_delete_many, methods=["POST"]),
         Route("/api/broker/reset", broker_reset, methods=["POST"]),
         Route("/api/broker/recon", broker_recon, methods=["GET", "POST"]),
+        Route("/api/broker/settings", broker_settings, methods=["POST"]),
         Route("/api/broker/{quote_id:int}", broker_delete, methods=["DELETE"]),
         Route("/api/blotter", blotter),
         Route("/api/blotter/export", blotter_export),

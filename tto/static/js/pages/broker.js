@@ -27,6 +27,14 @@ const FLAG = {
     + 'Günlük İşlemler\'e aktarılamaz. Toplantı takvimi: Ayarlar · Toplantı takvimi'],
 };
 
+/** How old a quote is: "şimdi" (under a minute), "7 dk", "1 sa 5 dk". */
+export function ageText(s) {
+  if (typeof s !== 'number' || !isFinite(s)) return '';
+  if (s < 60) return 'şimdi';
+  const m = Math.floor(s / 60);
+  return m < 60 ? m + ' dk' : Math.floor(m / 60) + ' sa ' + (m % 60) + ' dk';
+}
+
 /** An ISO day as the Excel serial the trade form's meeting dates carry (``46367`` for 2026-12-11). */
 function serialOf(iso) {
   const [y, m, d] = String(iso || '').split('-').map(Number);
@@ -378,6 +386,7 @@ export class BrokerPage {
     this.picked = new Set();      // log: the lines ticked (to delete them together)
     this.logSort = (() => { try { return JSON.parse(localStorage.getItem('tto.broker.sort') || 'null'); } catch (e) { return null; } })();
     this.pasteParty = pref('tto.broker.party', 'broker');      // whose the lines of a paste are when no name says it
+    this.showBrokers = pref('tto.broker.brokers', '1') !== '0'; // board: every house's own quotes under its instrument
     this.seq = 0;
     this.parsed = null;
     this.preview = debounce(() => this.doPreview(), 240);
@@ -399,6 +408,9 @@ export class BrokerPage {
     this.build();
     this.fill();
     if (this.draft.trim()) this.doPreview();
+    // the board of today ages while nothing is said: read again now and then, so that a quote turning stale leaves the
+    // best prices without a word from anyone (and every age moves on)
+    if (!this.ticker) this.ticker = setInterval(() => { if (!this.dead && this.data && this.data.live) this.refresh().catch(() => {}); }, 20000);
   }
 
   async refresh() {
@@ -410,6 +422,7 @@ export class BrokerPage {
 
   destroy() {
     this.dead = true;
+    if (this.ticker) clearInterval(this.ticker);
     this.preview.cancel();
     if (this.text) this.draft = this.text.value;
   }
@@ -537,9 +550,25 @@ export class BrokerPage {
       title: 'Tahtadaki bütün kotaları şu andan itibaren sıfırla – kayıttaki satırlar silinmez; sonra söylenenler tahtaya yeniden gelir' }, 'Tahtayı sıfırla');
     resetBtn.addEventListener('click', () => this.reset(null));
     this.resetInfo = h('span', { class: 'muted resetinfo', id: 'broker-reset-info' });
-    this.board = this.panel('board', 'Tahta · son durum', [seg, this.resetInfo, resetBtn],
-      'Bid / ask: en son söylenen kota (geri çekilen taraf boş). Model: dashboard\'un kendi TRY OIS eğrisi (sizin senaryonuzla); '
-      + 'farklar baz puan – bid model\'in üstünde ya da ask model\'in altındaysa vurgulanır.');
+    // every house's own quotes under its instrument (when there are two or more, or one is stale)
+    const housesBox = h('input', { type: 'checkbox', id: 'broker-brokers' });
+    housesBox.checked = this.showBrokers;
+    housesBox.addEventListener('change', () => {
+      this.showBrokers = housesBox.checked;
+      try { localStorage.setItem('tto.broker.brokers', this.showBrokers ? '1' : '0'); } catch (e) { /* ignore */ }
+      this.fill();
+    });
+    // after how many minutes a broker's quote is stale - for the whole desk
+    this.staleInp = h('input', { type: 'number', class: 'inp stalemin', id: 'broker-stale', min: '1', max: '1440', step: '1',
+      title: 'Bu kadar dakikadan eski broker kotası en iyi fiyat sayılmaz: broker satırında soluk ve yaşıyla durur (masa için ortak)' });
+    this.staleInp.addEventListener('change', () => this.setStale(this.staleInp.value));
+    this.board = this.panel('board', 'Tahta · en iyi fiyat', [seg,
+      h('label', { class: 'check', title: 'Bir enstrümanın birden çok broker\'ı ya da bayat kotası varsa altında her broker\'ın kendi satırı' }, housesBox, ' Brokerlar'),
+      h('label', { class: 'check stalebox', title: this.staleInp.title }, 'Bayat', this.staleInp, 'dk'), this.resetInfo, resetBtn],
+      'Bid / ask: brokerların taze kotalarının en iyisi (en yüksek bid, en düşük offer; getiride tersi), yanında hangi broker\'da ve kaç dakika önce '
+      + 'söylendiği. Bayat sınırından eski kota en iyi sayılmaz: broker satırında soluk ve yaşıyla durur. Geri çekilen, işlemle alınan / verilen '
+      + '(o seviyede ve daha iyi olanlar) ve tahta sıfırlanınca kalkan kota tahtadan iner. Bizim kotamız ayrı sütunda. Model: dashboard\'un kendi '
+      + 'TRY OIS eğrisi (sizin senaryonuzla); farklar baz puan – en iyi bid model\'in üstünde ya da en iyi ask model\'in altındaysa vurgulanır.');
     // ---- log: the chat in the order it was said
     this.findInp = h('input', { type: 'search', class: 'inp', id: 'broker-find', placeholder: 'Ara: 18m, spread, isim…', autocomplete: 'off' });
     this.findInp.value = this.find;
@@ -627,41 +656,83 @@ export class BrokerPage {
     this.reconBtn.textContent = d.unbooked ? d.unbooked + ' işlem girilmedi' : 'Chat ↔ blotter';
     this.reconBtn.classList.toggle('warn', !!d.unbooked);
 
-    // ---- board
+    // ---- board: the brokers' best fresh bid and offer, each with its house and age - every house's own quotes under it
     for (const b of this.productSeg.children) b.classList.toggle('on', b.dataset.v === this.product);
+    if (document.activeElement !== this.staleInp) this.staleInp.value = String(d.stale_minutes || 10);
     const when = (stamp) => {
       if (!stamp) return '';
       const [day, time] = stamp.split(' ');
       return d.ranged ? isoToTr(day).slice(0, 5) + ' ' + (time || '') : (time || day);
     };
-    const side = (v, unit, stamp, name) => (typeof v === 'number' ? { t: level(v, unit), v, k: 'n', tip: name + ': ' + when(stamp) } : { t: '', k: '', tip: stamp ? name + ' yok: ' + when(stamp) : '' });
+    const live = !!d.live;
+    // a quote's age on a board of today; on a day gone by the time it was said
+    const age = (s, stamp) => (live && typeof s === 'number' ? ageText(s) : when(stamp));
+    const staleOf = (r, side) => (r.brokers || []).filter((b) => typeof b[side] === 'number' && b[side + '_stale']);
+    const staleTip = (r, side) => staleOf(r, side).map((b) => b.by + ' ' + level(b[side], r.unit) + ' · ' + ageText(b[side + '_age']) + ' önce').join('\n');
+    const name = (side) => (side === 'bid' ? 'bid' : 'offer');
+    const best = (r, side) => {
+      const v = r['best_' + side];
+      if (typeof v !== 'number') {
+        const stale = staleOf(r, side);
+        return { t: '', k: '', tip: stale.length ? 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) : '' };
+      }
+      return { t: level(v, r.unit), v, k: 'n', tip: 'En iyi ' + name(side) + ': ' + (r['best_' + side + '_by'] || 'kaynaksız') + ' · '
+        + when(r['best_' + side + '_time']) + (live ? ' (' + ageText(r['best_' + side + '_age']) + ' önce)' : '') };
+    };
+    const whose = (r, side) => {
+      if (typeof r['best_' + side] === 'number') {
+        return { t: (r['best_' + side + '_by'] || 'kaynaksız') + ' · ' + age(r['best_' + side + '_age'], r['best_' + side + '_time']), k: 's', cls: 'who' };
+      }
+      return staleOf(r, side).length ? { t: 'bayat', k: 's', cls: 'who stale', tip: 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) }
+        : { t: '', k: '' };
+    };
     const diff = (v, through, unit) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, unit === 'px' ? 3 : 1, false), v, k: 'n', cls: through ? 'thru' : '',
       tip: (unit === 'px' ? 'DİBS: fiyat farkı (puan), bp değil – ekran fiyatına göre' : (unit === 'yld' ? 'Bono: getiri farkı (bp)' : ''))
         + (through ? (unit === 'px' || unit === 'yld' ? '\n' : '') + 'Kota model seviyesinin öbür tarafında' : '') } : { t: '', k: '' });
     const board = d.board.filter((r) => this.product === 'all' || r.product === this.product);
     const ours = (r) => (typeof r.our_bid === 'number' || typeof r.our_ask === 'number'
       ? { t: (typeof r.our_bid === 'number' ? level(r.our_bid, r.unit) : '') + ' / ' + (typeof r.our_ask === 'number' ? level(r.our_ask, r.unit) : ''),
-        k: 's', cls: 'ours', tip: 'Bizim son kotamız · ' + when(r.our_time) } : { t: '', k: '' });
-    this.setGrid('board', this.board,
-      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Ask', 'Saat', 'Son işlem', 'Bizim kota', 'Model', 'Bid − model (bp)', 'Ask − model (bp)', 'Son mesaj', 'TRY % / getiri (ima)', '', ''],
-      board.map((r) => [r.product === 'DIBS' ? 'DİBS' : r.product, { t: r.label, k: 's', b: 1, tip: r.isin || '' }, kindText(r),
-        side(r.bid, r.unit, r.bid_time, 'Bid'), side(r.ask, r.unit, r.ask_time, 'Ask'),
+        k: 's', cls: 'ours' + (r.our_stale ? ' stale' : ''), tip: 'Bizim son kotamız · ' + when(r.our_time)
+          + (live && typeof r.our_age === 'number' ? ' (' + ageText(r.our_age) + ' önce' + (r.our_stale ? ', bayat' : '') + ')' : '') } : { t: '', k: '' });
+    // every house's own quotes under its instrument: when there are two or more, or one is stale (what the best cells leave out)
+    const houses = (r) => (this.showBrokers && ((r.brokers || []).length > 1 || (r.brokers || []).some((b) => b.bid_stale || b.ask_stale)) ? r.brokers : []);
+    const houseSide = (b, r, side) => (typeof b[side] === 'number' ? { t: level(b[side], r.unit), v: b[side], k: 'n', cls: b[side + '_stale'] ? 'stale' : '',
+      tip: b.by + ' ' + name(side) + ' · ' + when(b[side + '_time']) + (b[side + '_stale'] ? ' – bayat, en iyi sayılmaz' : '') } : { t: '', k: '' });
+    const houseAge = (b, side) => (typeof b[side] === 'number' ? { t: (b[side + '_stale'] ? 'bayat · ' : '') + age(b[side + '_age'], b[side + '_time']), k: 's',
+      cls: 'who' + (b[side + '_stale'] ? ' stale' : '') } : { t: '', k: '' });
+    const lines = [];
+    for (const r of board) {
+      lines.push([r.product === 'DIBS' ? 'DİBS' : r.product, { t: r.label, k: 's', b: 1, tip: instTip(r) || r.isin || '' }, kindText(r),
+        best(r, 'bid'), whose(r, 'bid'), best(r, 'ask'), whose(r, 'ask'),
         when(r.time), typeof r.last === 'number' ? { t: level(r.last, r.unit) + (r.last_by === 'biz' ? ' · biz' : ''), v: r.last, k: 'n',
           cls: r.last_side === 'ask' ? 'buy' : (r.last_side === 'bid' ? 'sell' : ''),
           tip: when(r.last_time) + (r.last_side === 'ask' ? ' · offer alındı' : (r.last_side === 'bid' ? ' · bid\'e verildi' : ''))
-            + (r.last_by === 'biz' ? ' · bizim işlemimiz' : '') } : { t: '', k: '' },
+            + (r.last_by === 'biz' ? ' · bizim işlemimiz' : (r.last_src ? ' · ' + r.last_src : '')) } : { t: '', k: '' },
         ours(r),
         typeof r.mid === 'number' ? { t: num(r.mid, r.unit === 'px' ? 3 : (r.unit === 'pct' || r.unit === 'yld' ? 2 : 1), false), v: r.mid, k: 'n', cls: 'soft',
-          tip: r.product === 'DIBS' ? 'DİBS RV ekranındaki ' + (r.unit === 'yld' ? 'getiri' : 'temiz fiyat') : '' } : { t: '', k: '' },
+          tip: r.product === 'DIBS' ? 'DİBS RV ekranındaki ' + (r.unit === 'yld' ? 'getiri' : 'temiz fiyat')
+            : (r.kind === 'mpc' ? 'OIS sayfasındaki "MPC OIS" tablosunun bootstrap seviyesi (Günlük İşlemler\'in MPC formundaki piyasa)' : '') } : { t: '', k: '' },
         // through the model: a bid above it, an ask below it - in yield the other way round (a bid's yield below the model's)
-        diff(r.bid_diff, r.unit === 'yld' ? r.bid_diff < 0 : r.bid_diff > 0, r.unit), diff(r.ask_diff, r.unit === 'yld' ? r.ask_diff > 0 : r.ask_diff < 0, r.unit),
+        diff(r.best_bid_diff, r.unit === 'yld' ? r.best_bid_diff < 0 : r.best_bid_diff > 0, r.unit),
+        diff(r.best_ask_diff, r.unit === 'yld' ? r.best_ask_diff > 0 : r.best_ask_diff < 0, r.unit),
         { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
         r.implied ? { t: impliedText(r) || impliedText(r, true), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' },
         { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
-        { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }]),
-      d.board.length ? board.length + ' enstrüman' : '', d.board.length ? 'Bu üründe kota yok' : 'Henüz kota yok – soldaki kutuya chat\'i yapıştırın',
-      JSON.stringify([d.ranged, board.map((r) => [r.key, r.bid, r.ask, r.last, r.last_side, r.last_by, r.bid_time, r.ask_time, r.last_time, r.time, r.said,
-        r.our_bid, r.our_ask, r.our_time, typeof r.mid === 'number', impliedText(r)])]));
+        { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }]);
+      for (const b of houses(r)) {
+        lines.push(['', { t: '↳ ' + (b.by || 'kaynaksız'), k: 's', cls: 'brk', tip: (b.by || 'Kaynağı belli olmayan satırlar') + ': ' + r.label + ' kotası' },
+          { t: 'broker', k: 's', cls: 'soft' }, houseSide(b, r, 'bid'), houseAge(b, 'bid'), houseSide(b, r, 'ask'), houseAge(b, 'ask'),
+          when(b.time), '', '', '', '', '', '', '', '', '']);
+      }
+    }
+    this.setGrid('board', this.board,
+      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Bid · kimde', 'Ask', 'Ask · kimde', 'Saat', 'Son işlem', 'Bizim kota', 'Model', 'Bid − model (bp)', 'Ask − model (bp)',
+        'Son mesaj', 'İma (TRY % / getiri / PPK adımı)', '', ''],
+      lines, d.board.length ? board.length + ' enstrüman' : '', d.board.length ? 'Bu üründe kota yok' : 'Henüz kota yok – soldaki kutuya chat\'i yapıştırın',
+      // the same rows and the same best prices: patched in place (the ages move); anything else rebuilds the table
+      JSON.stringify([d.ranged, live, board.map((r) => [r.key, r.best_bid, r.best_ask, r.best_bid_by, r.best_ask_by, r.last, r.last_side, r.last_by, r.time,
+        r.said, r.our_bid, r.our_ask, r.our_time, r.our_stale, typeof r.mid === 'number', impliedText(r),
+        houses(r).map((b) => [b.by, b.bid, b.ask, b.bid_stale, b.ask_stale])])]));
     // resets of the board in what is shown, the last one can be taken back
     clear(this.resetInfo);
     const resets = d.resets || [];
@@ -687,6 +758,18 @@ export class BrokerPage {
       toast(undo ? 'Sıfırlama geri alındı' : (r ? r.label + ' sıfırlandı' : 'Tahta sıfırlandı') , 'ok');
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); }
+  }
+
+  /** The desk's stale limit (minutes): kept for everyone, the board read again with it. */
+  async setStale(v) {
+    try {
+      const res = await api.post('/api/broker/settings', { stale_minutes: v });
+      toast('Bayat sınırı ' + res.stale_minutes + ' dakika (herkes için)', 'ok', 2600);
+      this.ctx.refreshNow();
+    } catch (err) {
+      errorToast(err);
+      if (this.data) this.staleInp.value = String(this.data.stale_minutes || 10);
+    }
   }
 
   updatePicked() {

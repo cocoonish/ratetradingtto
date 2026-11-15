@@ -289,6 +289,13 @@ def test_the_desks_chat_trades_against_the_blotter_over_http(client, user):
     assert client.post("/api/broker/recon", json={"quote": "x", "action": "ignore"}, headers=h).status_code == 400
     assert client.get("/api/broker/recon", params={"date": "dün"}).status_code == 400
     assert client.get("/static/js/recon.js").status_code == 200
+    # the board's stale limit: the desk's, set by a signed-in user, between 1 and 1440 minutes
+    assert client.get("/api/broker").json()["stale_minutes"] == 10
+    assert client.post("/api/broker/settings", json={"stale_minutes": 15}, headers=ANON).status_code == 401
+    assert client.post("/api/broker/settings", json={"stale_minutes": "0"}, headers=h).status_code == 400
+    assert client.post("/api/broker/settings", json={"stale_minutes": "15"}, headers=h).json() == {"stale_minutes": 15}
+    assert client.get("/api/broker").json()["stale_minutes"] == 15
+    assert client.post("/api/broker/settings", json={"stale_minutes": 10}, headers=h).status_code == 200
 
 
 def test_errors_are_json_and_never_tracebacks(client):

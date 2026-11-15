@@ -4321,11 +4321,41 @@ class Service(object):
         return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
                 "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen,
                 # the desk's trades of the chat not in Günlük İşlemler, of the day shown (what "Chat ↔ blotter" lists)
-                "unbooked": self._broker_recon(day, last)["missing"]}
+                "unbooked": self._broker_recon(day, last)["missing"],
+                # the best prices are the fresh ones: older than this a broker's quote is stale - on a board that ends today
+                "stale_minutes": self._broker_stale_minutes(), "live": last >= today, "now": now_iso()}
+
+    #: minutes after which a broker's quote is stale - greyed with its age, never the best price - unless the desk set it
+    BROKER_STALE_MINUTES = 10
+
+    def _broker_stale_minutes(self) -> int:
+        v = self.store.get("broker.settings", {})
+        m = v.get("stale_minutes") if isinstance(v, dict) else None
+        return m if type(m) is int and 1 <= m <= 1440 else self.BROKER_STALE_MINUTES
+
+    def broker_settings(self, user: str, stale_minutes: Any) -> Dict[str, Any]:
+        """The board's stale limit, for the whole desk: after how many minutes (1 - 1440) a broker's quote no longer
+        counts as the best price."""
+        user = self.require_user(user)
+        try:
+            m = int(str(stale_minutes).strip())
+        except (TypeError, ValueError):
+            raise ServiceError("bayat sınırı dakika olarak yazılır: %r" % stale_minutes)
+        if not 1 <= m <= 1440:
+            raise ServiceError("bayat sınırı 1 ile 1440 dakika arasında olmalı")
+        self.store.put("broker.settings", {"stale_minutes": m, "by": user, "at": now_iso()})
+        self.bump()
+        return {"stale_minutes": m}
+
+    @staticmethod
+    def _broker_house(q: Dict[str, Any]) -> str:
+        """Whose quote a line is on the board: its house (the source) - its sender when no source is known."""
+        return q.get("source") or q.get("sender") or ""
 
     def _broker_board(self, user, day: str, last: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """The kept lines of the days, each with whose it is, and the board they make (resets applied), each
-        instrument next to where the dashboard has it."""
+        instrument next to where the dashboard has it.  A board that ends today is read with the clock: its best
+        prices are the brokers' fresh quotes (``bc.board``); one of a day gone by stands as it was at the end."""
         rows = self.store.broker_quotes(day, last)
         # the list of names as it is now: a name assigned after its lines were kept shows them as its own
         people = self._people()
@@ -4344,7 +4374,9 @@ class Service(object):
                        and (stamp < r.get("at", "") or (type(r.get("upto")) is int and int(q.get("id") or 0) <= r["upto"]))
                        for r in resets)
 
-        table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz")
+        live = last >= self.today_iso()
+        table = bc.board([q for q in rows if not cleared(q)] if resets else rows, lambda q: q.get("party") == "biz",
+                         _dt.datetime.now() if live else None, self._broker_stale_minutes() * 60.0 if live else None, self._broker_house)
         for row in table:
             row.update(bc.against(row, self._broker_model(mkt, row)))
         return rows, table, resets
@@ -4492,7 +4524,8 @@ class Service(object):
         return {"deleted": int(quote_id)}
 
     def broker_export(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None) -> Tuple[bytes, str]:
-        """The chat of a day or a period as an .xlsx file: the board, then every line."""
+        """The chat of a day or a period as an .xlsx file: the board (the brokers' best bid and offer, whose and how
+        old), every broker's quotes, then every line."""
         return self.et.call(self._broker_export, user, date, date_to)
 
     def _broker_export(self, user, date, date_to) -> Tuple[bytes, str]:
@@ -4502,18 +4535,39 @@ class Service(object):
         kinds = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "fwd": "Forward", "mpc": "MPC"}
         events = {"quote": "Kota", "trade": "İşlem", "ref": "Geri çekildi", "interest": "İlgi", "level": "Seviye", "note": "Not",
                   "text": "Metin"}
+
+        def minutes(s: Any) -> Optional[float]:
+            return round(s / 60.0, 1) if type(s) is float else None
+
         wb = XlsxBook()
         ws = wb.add_sheet("Tahta")
         ws.row(1, 1, ["Ürün", "Tür", "Enstrüman", "Birim", "Bid", "Bid saati", "Ask", "Ask saati", "Son işlem", "İşlem saati",
-                      "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bizim bid", "Bizim ask", "İşlemi yapan"], bold=True, fill="E7E6E6")
+                      "Model mid", "Bid − mid (bp)", "Ask − mid (bp)", "Bizim bid", "Bizim ask", "İşlemi yapan", "Bid kimde", "Ask kimde",
+                      "Bid yaşı (dk)", "Ask yaşı (dk)"], bold=True, fill="E7E6E6")
         for i, r in enumerate(data["board"]):
             fmt = "#,##0.00" if r["unit"] == "pct" else "#,##0.0"
-            line = [r["product"], kinds.get(r["kind"], r["kind"]), r["label"], "%" if r["unit"] == "pct" else "bp", r["bid"], r["bid_time"],
-                    r["ask"], r["ask_time"], r["last"], r["last_time"], r["mid"], r["bid_diff"], r["ask_diff"], r.get("our_bid"),
-                    r.get("our_ask"), {"biz": "Biz", "broker": "Broker"}.get(r.get("last_by") or "", "")]
+            # the best bid and offer of the brokers (the fresh ones, on a board of today), with whose they are and their age
+            line = [r["product"], kinds.get(r["kind"], r["kind"]), r["label"], "%" if r["unit"] == "pct" else "bp", r.get("best_bid"),
+                    r.get("best_bid_time"), r.get("best_ask"), r.get("best_ask_time"), r["last"], r["last_time"], r["mid"],
+                    r.get("best_bid_diff"), r.get("best_ask_diff"), r.get("our_bid"), r.get("our_ask"),
+                    {"biz": "Biz", "broker": "Broker"}.get(r.get("last_by") or "", ""), r.get("best_bid_by"), r.get("best_ask_by"),
+                    minutes(r.get("best_bid_age")), minutes(r.get("best_ask_age"))]
             for k, v in enumerate(line):
-                ws.set(2 + i, 1 + k, v, fmt=fmt if k in (4, 6, 8, 10, 13, 14) else ("#,##0.0" if k in (11, 12) else None))
+                ws.set(2 + i, 1 + k, v, fmt=fmt if k in (4, 6, 8, 10, 13, 14) else ("#,##0.0" if k in (11, 12, 18, 19) else None))
         ws.autosize()
+        bs = wb.add_sheet("Brokerlar")
+        bs.row(1, 1, ["Ürün", "Enstrüman", "Broker", "Bid", "Bid saati", "Bid yaşı (dk)", "Bid bayat", "Ask", "Ask saati", "Ask yaşı (dk)",
+                      "Ask bayat"], bold=True, fill="E7E6E6")
+        n = 2
+        for r in data["board"]:
+            fmt = "#,##0.00" if r["unit"] == "pct" else "#,##0.0"
+            for b in r.get("brokers") or []:
+                line = [r["product"], r["label"], b["by"], b["bid"], b["bid_time"], minutes(b["bid_age"]), "bayat" if b["bid_stale"] else "",
+                        b["ask"], b["ask_time"], minutes(b["ask_age"]), "bayat" if b["ask_stale"] else ""]
+                for k, v in enumerate(line):
+                    bs.set(n, 1 + k, v, fmt=fmt if k in (3, 7) else ("#,##0.0" if k in (5, 9) else None))
+                n += 1
+        bs.autosize()
         ls = wb.add_sheet("Kayıt")
         ls.row(1, 1, ["Tarih", "Saat", "Kimden", "Kaynak", "Mesaj", "Ürün", "Tür", "Enstrüman", "Olay", "Bid", "Ask", "İşlem / seviye",
                       "Birim", "Not", "Giren", "Taraf"], bold=True, fill="E7E6E6")
