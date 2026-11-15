@@ -1,6 +1,6 @@
-"""The implied policy path as a mixture of discrete decisions: the "İma Patikası" page, on the quant package's worker
-(``tto.quant`` calls :func:`run` on a full fit and :func:`refresh` on the minute's live refresh, the page reads
-:func:`view`).
+"""The implied policy path as a mixture of discrete decisions: the "İma Patikası" page and the WIRP of the TCMB and
+the Fed ("TCMB WIRP") - both on the quant package's worker (``tto.quant`` calls :func:`run` on a full fit and
+:func:`refresh` on the minute's live refresh, the pages read :func:`view`).
 
 **The idea (the desk's).**  The implied step of a meeting is an expectation over discrete decisions: the CBRT moves in
 multiples of 50 bp (250 / 300 / 350 too), the Fed in multiples of 25 - each bank's grid is a desk setting.  An implied
@@ -42,6 +42,15 @@ of the bigger of its two outcomes against what was decided.  Buckets of the pric
 counts; the interval and the test count meetings, not days (the days of one meeting are one outcome).  A bias over at
 least 8 meetings (calibration z = Σ (frequency − price) ÷ √Σ p(1 − p), one term a meeting) past the entry threshold
 is a signal (family "İma kalibrasyonu"): the next meeting's period towards the outcome the market under-prices.
+
+**WIRP (Bloomberg's WIRP, CME's FedWatch).**  Each meeting's step split as above, the steps taken as independent
+given the expected path: the distribution after a meeting is the one after the meeting before convolved with this
+meeting's two-point step - the conditional probability matrix (meetings × rate buckets), whose expected values give
+the implied path back (shown as a check).  The path is in TLREF (SOFR) terms; the policy rate is mapped with today's
+spread to it held constant (the one-week repo rate: the desk's setting "Politika faizi (elle)", else the rate the
+desk types on Masa - ``MASA!Q155``, the workbook's own "PPK · piyasa ima vs anket" table maps it the same way; the
+Fed: its upper bound ``FDTR``).  History: the next three meetings' probabilities 1 day, 1, 2 and 4 weeks ago, in the
+rate buckets of today (the decisions in between from TLREF on the grid).
 """
 from __future__ import annotations
 
@@ -60,26 +69,34 @@ from . import quantmath as qm
 
 # ---------------------------------------------------------------------------------------------- settings
 #: the desk's settings of this module (quant.py adds them to its own: "Masa ayarları", for everyone)
-DEFAULTS: Dict[str, Any] = {"path_grid_try": 50.0, "path_grid_usd": 25.0}
-LIMITS: Dict[str, Tuple[float, float, type]] = {"path_grid_try": (5.0, 500.0, float), "path_grid_usd": (5.0, 100.0, float)}
-LABELS = {"path_grid_try": "PPK adım ızgarası (bp)", "path_grid_usd": "FOMC adım ızgarası (bp)"}
+DEFAULTS: Dict[str, Any] = {"path_grid_try": 50.0, "path_grid_usd": 25.0, "path_policy": 0.0}
+LIMITS: Dict[str, Tuple[float, float, type]] = {"path_grid_try": (5.0, 500.0, float), "path_grid_usd": (5.0, 100.0, float),
+                                                "path_policy": (0.0, 200.0, float)}
+LABELS = {"path_grid_try": "PPK adım ızgarası (bp)", "path_grid_usd": "FOMC adım ızgarası (bp)",
+          "path_policy": "Politika faizi, elle (%; 0: Masa!Q155)"}
 
 #: the families of this module (quantfam.FAMILIES) and the pages that show them (what -> page id)
 FAMILY_KINK, FAMILY_CAL = "imapath", "imacal"
-VIEWS = {"path": "quant-path"}
+VIEWS = {"path": "quant-path", "wirp": "quant-wirp"}
 
 #: bank -> what it is called, the grid's setting, the key of its meeting-dated periods (a trade's leg), its asset
 BANKS: Dict[str, Dict[str, str]] = {
     "try": {"label": "TCMB · PPK", "short": "PPK", "grid": "path_grid_try", "leg": "MPC:", "asset": "TRY OIS", "rate": "TLREF"},
     "usd": {"label": "Fed · FOMC", "short": "FOMC", "grid": "path_grid_usd", "leg": "FOMC:", "asset": "Global", "rate": "SOFR"},
 }
+POLICY_CELL = ("MASA", "Q155")                 # "Politika faizi %": the desk types it (the workbook's PPK vs survey table)
 FOMC_SHEET = "SOFR_FOMC"
 FOMC_ROWS = (74, 83)                           # SOFR_FOMC!B74:B83 - the FOMC meetings of the USD workbook
+FED_RANGE = 25.0                               # bp: the width of the Fed's target range (its buckets' labels)
 
 SHOW_MEETINGS = 16                             # meetings in the per-meeting table
 PAIRS = 4                                      # consecutive pairs with their scenarios
 KINK_MEETINGS = 8                              # meetings measured for kinks
-KINK_MIN_OBS = 40                             # days of a kink's own history before it can be a signal
+WIRP_MEETINGS = 12                             # meetings of the WIRP and its matrix
+WIRP_HISTORY = 3                               # next meetings whose probabilities are followed back
+WIRP_CHART_DAYS = 40                           # business days of the implied steps' chart
+LOOKBACKS = ((0, "bugün"), (1, "1 gün önce"), (5, "1 hafta önce"), (10, "2 hafta önce"), (20, "4 hafta önce"))
+KINK_MIN_OBS = 40                              # days of a kink's own history before it can be a signal
 Z_MIN_OBS = 20                                 # ... before its z is shown
 CAL_WINDOW = 20                                # business days before a meeting whose pricing the calibration reads
 CAL_MIN_MEETINGS = 8                           # meetings before a calibration bias can be a signal
@@ -114,6 +131,16 @@ def _bdays(a: str, b: str) -> int:
         if d0.weekday() < 5:
             n += 1
     return sgn * n
+
+
+def _back(day: str, n: int) -> str:
+    """The week day ``n`` week days before ``day``."""
+    d = _dt.date.fromisoformat(day)
+    while n > 0:
+        d -= _dt.timedelta(days=1)
+        if d.weekday() < 5:
+            n -= 1
+    return d.isoformat()
 
 
 def _n(v: float, digits: int = 1) -> str:
@@ -408,6 +435,40 @@ def calibration(paths: Dict[str, Dict[str, Any]], decided: Dict[str, Dict[str, A
             "bias": e_sum / n if n else None, "z": z, "window": window, "min_meetings": CAL_MIN_MEETINGS}
 
 
+# ---------------------------------------------------------------------------------------------- 5. WIRP
+def convolve(dist: Dict[int, float], b: Dict[str, float]) -> Dict[int, float]:
+    """The distribution after a meeting: the one before it (grid steps from today -> probability) convolved with the
+    meeting's two-point step."""
+    out: Dict[int, float] = {}
+    for k, p in dist.items():
+        for kk, q in ((b["k"], b["p_lo"]), (b["k"] + 1, b["p_hi"])):
+            if q > PROB_EPS:
+                out[kk + k] = out.get(kk + k, 0.0) + p * q
+    return {k: p for k, p in out.items() if p > PROB_EPS}
+
+
+def wirp(rows: List[Dict[str, Any]], grid: float, count: int = WIRP_MEETINGS) -> List[Dict[str, Any]]:
+    """The WIRP of a decomposed path: after each meeting the distribution of the cumulative move (grid steps), the
+    probabilities of a lower / the same / a higher rate than today's, the expected move (the implied one: the check)."""
+    dist: Dict[int, float] = {0: 1.0}
+    out = []
+    for r in rows[:count]:
+        dist = convolve(dist, r)
+        expected = sum(k * p for k, p in dist.items()) * grid
+        out.append({"meeting": r["meeting"], "level": r["level"], "step": r["step"], "cum": r["cum"], "moves": r["moves"],
+                    "lo": r["lo"], "hi": r["hi"], "p_lo": r["p_lo"], "p_hi": r["p_hi"],
+                    "ease": sum(p for k, p in dist.items() if k < 0), "hold": dist.get(0, 0.0), "hike": sum(p for k, p in dist.items() if k > 0),
+                    "expected": expected, "check": expected - r["cum"], "dist": dict(sorted(dist.items()))})
+    return out
+
+
+def wirp_buckets(items: List[Dict[str, Any]], least: float = 5e-4) -> List[int]:
+    """The rate buckets (grid steps from today) worth a column: every one some meeting gives at least ``least``, and
+    today's (the axis reads from where the rate is)."""
+    keys = {k for it in items for k, p in it["dist"].items() if p >= least} | {0}
+    return list(range(min(keys), max(keys) + 1))
+
+
 # ---------------------------------------------------------------------------------------------- the inputs
 def try_paths(mpc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Every day's TRY path the history computed (``{"days": {day: meta}, "values": [rows]}`` as the quant snapshot
@@ -434,15 +495,20 @@ def try_paths(mpc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def read_engine(svc) -> Dict[str, Any]:
-    """Engine thread, short: the FOMC table of the USD workbook (``SOFR_FOMC``) - nothing the solver of the TRY
-    workbook computes."""
+    """Engine thread, short: the FOMC table of the USD workbook (``SOFR_FOMC``) and the policy rate the desk types on
+    Masa (``MASA!Q155``) - nothing the solver of the TRY workbook computes."""
     from .xl.model import COLS, parse_a1
     from .xl.values import serial_to_date
-    out: Dict[str, Any] = {"usd": None}
+    out: Dict[str, Any] = {"usd": None, "policy": None}
 
     def iso(v: Any) -> Optional[str]:
         return serial_to_date(v).isoformat() if type(v) is float and 20000 < v < 80000 else None
 
+    book = svc.books.get("tto")
+    if book is not None and POLICY_CELL[0] in book.model.sheet_index:
+        si = book.model.sheet_index[POLICY_CELL[0]]
+        v = _num(svc._calc(None, book).get(si, *divmod(parse_a1(POLICY_CELL[1]), COLS)))
+        out["policy"] = v if v is not None and 0.0 < v < 200.0 else None
     book = svc.books.get("sofr")
     if book is None or FOMC_SHEET not in book.model.sheet_index:
         return out
@@ -515,6 +581,7 @@ class State(object):
 
     def __init__(self):
         self.kept: Tuple[Optional[str], float, Optional[str]] = (None, 0.0, None)    # the last USD snapshot written
+        self.policy: Optional[float] = None          # MASA!Q155, as last read
         self.usd: Optional[Dict[str, Any]] = None    # the USD path as last read (the engine)
         self.usd_at: Optional[str] = None
         self.engine_ms: Optional[float] = None
@@ -534,20 +601,111 @@ def state_of(quant: Any) -> State:
 
 
 def _read(quant: Any, st: State) -> None:
-    """The engine's part (one short call at the lowest priority): the USD path."""
+    """The engine's part (one short call at the lowest priority): the USD path, the policy rate on Masa."""
     t0 = time.perf_counter()
     try:
         svc = quant.svc
         got = svc.et.call_at(svc.et.BACKGROUND, read_engine, svc)
     except Exception:  # noqa: BLE001 - no workbook read is the history's path alone
-        got = {"usd": None}
+        got = {"usd": None, "policy": None}
     st.engine_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    st.policy = got.get("policy")
     if got.get("usd") is not None:
         st.usd = got["usd"]
         st.usd_at = _dt.datetime.now().strftime("%H:%M:%S")
 
 
 # ---------------------------------------------------------------------------------------------- one bank
+def policy_of(bank: str, cfg: Dict[str, Any], st: State, path: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The policy rate the WIRP's buckets are read in and where it comes from; its spread to the path's base (bp)."""
+    rate, source = None, ""
+    if bank == "try":
+        manual = _num(cfg.get("path_policy")) or 0.0
+        if manual > 0.0:
+            rate, source = manual, "masa ayarı (elle)"
+        elif st.policy is not None:
+            rate, source = st.policy, "Masa!Q155 (Politika faizi %)"
+    elif path is not None and _num(path.get("upper")) is not None:
+        rate, source = path["upper"], "SOFR_FOMC!B8 (FDTR Index, üst bant)"
+    spread = None
+    if rate is not None and path is not None:
+        mid = rate - FED_RANGE / 200.0 if bank == "usd" else rate
+        spread = (mid - path["base"]) * 100.0
+    return {"rate": rate, "source": source, "spread": spread, "base": path["base"] if path else None,
+            "fixing": path.get("fixing") if path else None}
+
+
+def _bucket(bank: str, k: int, grid: float, policy: Dict[str, Any]) -> Dict[str, Any]:
+    rate = policy["rate"]
+    out = {"k": k, "change": k * grid, "rate": None if rate is None else rate + k * grid / 100.0}
+    if rate is None:
+        out["label"] = _s(k * grid) + " bp"
+    elif bank == "usd":
+        up = (rate + k * grid / 100.0) * 100.0
+        out["label"] = "%s–%s" % (_n(up - FED_RANGE), _n(up))
+    else:
+        out["label"] = ("%.2f" % out["rate"]).replace(".", ",")
+    return out
+
+
+def wirp_table(bank: str, path: Dict[str, Any], hist: Dict[str, Dict[str, Any]], grid: float, policy: Dict[str, Any]) -> Dict[str, Any]:
+    """The WIRP of one bank: per meeting, the matrix, and the history of the next meetings."""
+    rows = decompose(path, grid)
+    items = wirp(rows, grid)
+    keys = wirp_buckets(items)
+    buckets = [_bucket(bank, k, grid, policy) for k in keys]
+    rate = policy["rate"]
+    for it in items:
+        it["rate"] = None if rate is None else rate + it["cum"] / 100.0
+        it["matrix"] = [it["dist"].get(k, 0.0) for k in keys]
+        it["dist"] = [{"k": k, "p": p} for k, p in it["dist"].items()]
+    # ---- history: the next meetings' distributions some days back, in today's buckets
+    now_day = path["day"]
+    days = sorted(d for d in hist if d < now_day)
+    back = []
+    nxt = [r["meeting"] for r in rows[:WIRP_HISTORY]]
+    for meeting in nxt:
+        for lb, label in LOOKBACKS:
+            if lb == 0:
+                day, p = now_day, path
+            else:
+                target = _back(now_day, lb)
+                slack = min(5, max(1, lb // 2))                            # a holiday's gap, not another lookback's day
+                day = next((d for d in reversed(days) if d <= target and _bdays(d, target) <= slack), None)
+                p = hist.get(day) if day else None
+            if p is None:
+                back.append({"meeting": meeting, "lookback": label, "day": None})
+                continue
+            prow = decompose(p, grid)
+            idx = next((i for i, r in enumerate(prow) if r["meeting"] == meeting), None)
+            if idx is None:
+                back.append({"meeting": meeting, "lookback": label, "day": day})
+                continue
+            shift = int(round((p["base"] - path["base"]) * 100.0 / grid))       # the decisions between that day and today
+            dist: Dict[int, float] = {shift: 1.0}
+            for r in prow[:idx + 1]:
+                dist = convolve(dist, r)
+            back.append({"meeting": meeting, "lookback": label, "day": day, "step": prow[idx]["step"], "p_lo": prow[idx]["p_lo"],
+                         "lo": prow[idx]["lo"], "hi": prow[idx]["hi"], "p_hi": prow[idx]["p_hi"],
+                         "cum": shift * grid + prow[idx]["cum"], "rate": None if rate is None else rate + (shift * grid + prow[idx]["cum"]) / 100.0,
+                         "dist": [{"k": k, "p": q} for k, q in sorted(dist.items())]})
+    hk = sorted({x["k"] for b in back for x in b.get("dist") or () if x["p"] >= 5e-4} | ({0} if back else set()))
+    hbuckets = [_bucket(bank, k, grid, policy) for k in (range(hk[0], hk[-1] + 1) if hk else [])]
+    for b in back:
+        dd = {x["k"]: x["p"] for x in b.get("dist") or ()}
+        b["matrix"] = [dd.get(x["k"], 0.0) for x in hbuckets] if b.get("dist") else None
+    # ---- the implied steps of the next meetings, day by day (the chart)
+    chart_days = [d for d in days if _bdays(d, now_day) <= WIRP_CHART_DAYS] + [now_day]
+    series = {m: [] for m in nxt}
+    for d in chart_days:
+        p = path if d == now_day else hist[d]
+        steps = {r["meeting"]: r["step"] for r in decompose(p, grid)}
+        for m in nxt:
+            series[m].append(steps.get(m))
+    return {"rows": items, "buckets": buckets, "check": max((abs(it["check"]) for it in items), default=None),
+            "history": back, "history_buckets": hbuckets, "chart": {"days": chart_days, "series": [{"meeting": m, "steps": series[m]} for m in nxt]}}
+
+
 def bank_fixed(bank: str, paths: Dict[str, Dict[str, Any]], fixings: Dict[str, float], grid: float, today: str) -> Dict[str, Any]:
     """What a bank's history gives (days before today): the kink series, the decisions and the calibration.  The
     decisions: TLREF's fixing of the meeting day does not carry its decision yet; the Fed's upper bound of a snapshot
@@ -561,7 +719,7 @@ def bank_fixed(bank: str, paths: Dict[str, Dict[str, Any]], fixings: Dict[str, f
 
 def bank_now(bank: str, path: Optional[Dict[str, Any]], fixed: Dict[str, Any], cfg: Dict[str, Any], st: State,
              live: bool) -> Dict[str, Any]:
-    """Today's tables of one bank: per meeting, the consecutive pairs, the kinks against their history."""
+    """Today's tables of one bank: per meeting, the consecutive pairs, the kinks against their history, the WIRP."""
     info = BANKS[bank]
     grid = float(cfg[info["grid"]])
     out: Dict[str, Any] = {"bank": bank, "label": info["label"], "grid": grid, "ok": False, "live": live}
@@ -570,6 +728,7 @@ def bank_now(bank: str, path: Optional[Dict[str, Any]], fixed: Dict[str, Any], c
                       else "USD çalışma kitabının FOMC tablosu okunamadı (SOFR_FOMC)")
         return out
     rows = decompose(path, grid)
+    hist = {d: p for d, p in fixed["paths"].items() if d < path["day"]}
     window = int(cfg.get("lookback") or 250)
     ks = kinks(rows, grid)
     for k in ks:
@@ -577,10 +736,11 @@ def bank_now(bank: str, path: Optional[Dict[str, Any]], fixed: Dict[str, Any], c
         k["n"] = len(pts)
         k["z"] = qm.zscore(k["d"], pts) if len(pts) >= Z_MIN_OBS else None
         k["mean"] = sum(pts) / len(pts) if pts else None
+    pol = policy_of(bank, cfg, st, path)
     out.update({"ok": True, "day": path["day"], "spot": path["spot"], "base": path["base"], "fixing": path.get("fixing"),
                 "decision": path.get("decision"), "status": path.get("status") or "", "rows": rows[:SHOW_MEETINGS], "meetings": len(rows),
                 "pairs": [pair_table(rows, k, grid) for k in range(min(PAIRS, len(rows) - 1))], "kinks": ks,
-                "calibration": fixed["calibration"]})
+                "calibration": fixed["calibration"], "policy": pol, "wirp": wirp_table(bank, path, hist, grid, pol)})
     return out
 
 
@@ -721,7 +881,14 @@ def _build(quant: Any, ctx: qf.Ctx, st: State, refit: bool) -> None:
 
 
 def _publish_tables(quant: Any, ctx: qf.Ctx, st: State, tables: Dict[str, Any], raw_live: Dict[str, float]) -> None:
-    banks = {b: {k: v for k, v in st.now[b].items() if k != "_hist"} for b in BANKS}
+    banks = {b: {k: v for k, v in st.now[b].items() if k not in ("wirp", "_hist")} for b in BANKS}
+    wirps = {}
+    for b in BANKS:
+        n = st.now[b]
+        w = dict(n.get("wirp") or {})
+        w.update({"bank": b, "label": n["label"], "ok": n.get("ok"), "why": n.get("why"), "grid": n["grid"], "day": n.get("day"),
+                  "policy": n.get("policy"), "base": n.get("base"), "live": n.get("live")})
+        wirps[b] = w
     usd = st.fixed["usd"]
     tr = st.fixed["try"]
     coverage = [
@@ -737,6 +904,7 @@ def _publish_tables(quant: Any, ctx: qf.Ctx, st: State, tables: Dict[str, Any], 
     common = {"today": ctx.today_iso, "engine_ms": st.engine_ms, "usd_at": st.usd_at, "coverage": coverage,
               "settings": {k: ctx.cfg.get(k) for k in DEFAULTS}}
     tables["imapath"] = dict(common, banks=banks)
+    tables["wirp"] = dict(common, banks=wirps)
     for b in BANKS:
         if banks[b].get("live"):
             raw_live["PATH:" + b.upper()] = 1.0
@@ -745,7 +913,7 @@ def _publish_tables(quant: Any, ctx: qf.Ctx, st: State, tables: Dict[str, Any], 
 def run(quant: Any, ctx: qf.Ctx, mons: List[qf.Monitor], tables: Dict[str, Any], raw_live: Dict[str, float],
         timing: Optional[Dict[str, float]] = None) -> None:
     """The full fit's part (``Quant.compute``, the quant worker's thread): the engine's short read, today's USD
-    snapshot, both banks' history and today's tables (``tables["imapath"]``), the monitors.
+    snapshot, both banks' history and today's tables (``tables["imapath"]`` and ``tables["wirp"]``), the monitors.
     Never raises: a failure is the fit's error ``imapath`` and the other families stand."""
     t0 = time.perf_counter()
     st = state_of(quant)
@@ -766,13 +934,14 @@ def run(quant: Any, ctx: qf.Ctx, mons: List[qf.Monitor], tables: Dict[str, Any],
     except Exception as exc:  # noqa: BLE001 - this module failing must not take the other families with it
         tables.setdefault("errors", {})["imapath"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
         tables["imapath"] = {"banks": {}, "why": tables["errors"]["imapath"], "coverage": []}
+        tables["wirp"] = {"banks": {}, "why": tables["errors"]["imapath"], "coverage": []}
     if timing is not None:
         timing["imapath"] = time.perf_counter() - t0
 
 
 def refresh(quant: Any, fit: Dict[str, Any], raw_live: Dict[str, float]) -> None:
-    """The minute's live refresh (``Quant.refresh_live``): the USD path read again, today's USD snapshot, today's
-    tables of both banks again; the monitors' notes follow."""
+    """The minute's live refresh (``Quant.refresh_live``): the USD path and the policy rate read again, today's USD
+    snapshot, today's tables of both banks again; the monitors' notes follow."""
     st = state_of(quant)
     if not st.fixed or "try" not in st.fixed:
         return
@@ -799,10 +968,10 @@ def refresh(quant: Any, fit: Dict[str, Any], raw_live: Dict[str, float]) -> None
 
 
 def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Dict[str, Any]) -> Dict[str, Any]:
-    """What the page "İma Patikası" (``path``) reads: the published tables, the kinks' z of their monitors now, this
-    page's signals, the settings, the coverage and the mode (a note in replay)."""
+    """What the pages "İma Patikası" (``path``) and "TCMB WIRP" (``wirp``) read: the published tables, the kinks'
+    z of their monitors now, this page's signals, the settings, the coverage and the mode (a note in replay)."""
     from .quant import _clean
-    name = "imapath"
+    name = "imapath" if what == "path" else "wirp"
     tab = copy.deepcopy((v.get("tables") or {}).get(name) or {})
     if name == "imapath":
         for b in (tab.get("banks") or {}).values():

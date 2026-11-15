@@ -1,8 +1,9 @@
 """The implied path as a mixture of discrete decisions (tto/quantpath.py): a step on its grid, the paths two meetings
 allow and their probability ranges (the desk's −40 / −60 among them, checked against a brute-force search), the P&L
 of the meeting-dated OIS periods, kinks and zig-zags, the decisions read from TLREF, the calibration on a planted
-bias, the USD snapshots - then the service on a synthetic year of meeting pricing (signals of both families), the
-real solver's output of the recorded month, the HTTP API and the page's registration."""
+bias, the WIRP's convolution and its check, the policy rate's mapping, the USD snapshots - then the service on a
+synthetic year of meeting pricing (signals of both families), the real solver's output of the recorded month, the
+HTTP API and the pages' registration."""
 from __future__ import annotations
 
 import datetime as dt
@@ -233,6 +234,58 @@ def test_calibration_finds_a_bias_and_says_when_the_sample_is_small():
     assert "Taşıma 0" in s["note"] and s["carry_week"] == 0.0 and s["info"]["scenarios"][0]["outcome"] == -50.0
 
 
+# ================================================================================================ the WIRP
+def test_wirp_splits_each_step_and_convolves_the_meetings():
+    rows = qp.decompose(path_of(40.0, [-40.0, -60.0]), 50.0)
+    w = qp.wirp(rows, 50.0)
+    one, two = ({k: round(p, 9) for k, p in x["dist"].items()} for x in w)
+    assert one == {-1: 0.8, 0: 0.2}                                       # −40: 80 % −50, 20 % no change
+    assert two == {-3: 0.16, -2: 0.68, -1: 0.16}                          # convolved with −60: 80 % −50, 20 % −100
+    assert close(w[0]["ease"], 0.8) and close(w[0]["hold"], 0.2) and w[0]["hike"] == 0.0
+    assert close(w[1]["ease"], 1.0) and w[1]["hold"] == 0.0
+    # the matrix's expected values give the implied path back, for any path
+    rnd = random.Random(5)
+    for _ in range(20):
+        steps = [rnd.uniform(-180, 120) for _ in range(12)]
+        items = qp.wirp(qp.decompose(path_of(35.0, steps), 50.0), 50.0)
+        assert max(abs(it["check"]) for it in items) < 1e-6
+        assert all(abs(sum(it["dist"].values()) - 1.0) < 1e-9 for it in items)
+    keys = qp.wirp_buckets(w)
+    assert keys == [-3, -2, -1, 0]                                        # today's bucket always among the columns
+
+
+def test_policy_rate_mapping_buckets_and_the_history_in_today_s_buckets():
+    st = qp.State()
+    st.policy = 36.0
+    p = path_of(35.8159, [-85.5, -27.2], meetings=list(FUTURE[:2]))
+    pol = qp.policy_of("try", dict(DEFAULTS), st, p)
+    assert pol["rate"] == 36.0 and pol["source"].startswith("Masa!Q155") and close(pol["spread"], 18.41, 1e-6)
+    manual = qp.policy_of("try", dict(DEFAULTS, path_policy=37.5), st, p)
+    assert manual["rate"] == 37.5 and manual["source"] == "masa ayarı (elle)"
+    st.policy = None
+    assert qp.policy_of("try", dict(DEFAULTS), st, p)["rate"] is None
+    assert qp._bucket("try", -2, 50.0, {"rate": 36.0})["label"] == "35,00"
+    assert qp._bucket("usd", 1, 25.0, {"rate": 4.0})["label"] == "400–425"
+    assert qp._bucket("try", -1, 50.0, {"rate": None})["label"] == "−50 bp"
+    fed = qp.policy_of("usd", dict(DEFAULTS), st, dict(path_of(3.88, [19.0]), upper=4.0))
+    assert fed["rate"] == 4.0 and close(fed["spread"], (3.875 - 3.88) * 100, 1e-9)
+    # a day a week ago, before a −100 decision: its distribution in today's buckets (the decision from the bases)
+    back = path_of(36.8159, [-100.0, -85.0, -30.0], meetings=["2026-10-22"] + list(FUTURE[:2]))
+    back["day"] = "2026-10-27"
+    now = dict(p, day="2026-11-03")
+    w = qp.wirp_table("try", now, {"2026-10-27": back}, 50.0, {"rate": 36.0})
+    dec = next(x for x in w["history"] if x["meeting"] == FUTURE[0] and x["lookback"] == "1 hafta önce")
+    assert dec["day"] == "2026-10-27" and close(dec["step"], -85.0, 1e-9) and close(dec["cum"], -85.0, 1e-9)
+    assert {x["k"]: round(x["p"], 9) for x in dec["dist"]} == {-2: 0.7, -1: 0.3}
+    cells = {bk["k"]: round(p, 9) for bk, p in zip(w["history_buckets"], dec["matrix"])}
+    assert cells == {-3: 0.0, -2: 0.7, -1: 0.3, 0: 0.0} and [bk["label"] for bk in w["history_buckets"]] == ["34,50", "35,00", "35,50", "36,00"]
+    day_before = next(x for x in w["history"] if x["meeting"] == FUTURE[0] and x["lookback"] == "1 gün önce")
+    assert day_before["day"] is None                                      # four days older than the day asked: not shown as yesterday
+    assert w["chart"]["days"] == ["2026-10-27", "2026-11-03"]
+    assert [round(v, 6) for v in w["chart"]["series"][0]["steps"]] == [-85.0, -85.5]
+    assert close(w["check"], 0.0, 1e-9)
+
+
 def test_usd_snapshots_are_kept_a_day_each():
     class KV(object):
         def __init__(self):
@@ -322,10 +375,18 @@ def test_the_fit_reads_both_paths_and_finds_the_planted_signals(pathsvc):
     assert TODAY.isoformat() in (svc.store.get(qp.USD_KEY) or {}).get("days", {})
     cov = {c["key"]: c for c in v["coverage"]}
     assert cov["mpc"]["n"] == len([d for d in svc.store.mpc_days()]) and cov["usd"]["state"] == "birikiyor" and cov["TLREF"]["n"] > 200
+    # the WIRP of both banks: the matrix gives the implied path back; the policy rate from Masa (Q155) in replay
+    w = svc.quant.view("wirp", user, {})["wirp"]["banks"]
+    assert w["try"]["ok"] and w["try"]["check"] < 1e-9 and w["try"]["policy"]["rate"] == 36.0 and len(w["try"]["rows"]) == 6
+    assert w["usd"]["ok"] and w["usd"]["check"] < 1e-9 and w["usd"]["policy"]["rate"] == 4.0
+    first = w["try"]["rows"][0]
+    assert close(first["p_lo"], 0.8, 1e-9) and close(first["ease"], 0.8, 1e-9) and close(first["rate"], 36.0 - 0.40, 1e-9)
+    assert sum(first["matrix"]) == pytest.approx(1.0) and len(first["matrix"]) == len(w["try"]["buckets"])
+    assert [h["lookback"] for h in w["try"]["history"][:5]] == [lb for _, lb in qp.LOOKBACKS]
     # the minute's refresh: the USD path read again, the tables published again
     before = svc.quant.state["refreshes"]
     svc.quant.refresh_live()
-    assert svc.quant.state["refreshes"] == before + 1 and svc.quant.view("path", user, {})["path"]["banks"]["usd"]["ok"]
+    assert svc.quant.state["refreshes"] == before + 1 and svc.quant.view("wirp", user, {})["wirp"]["banks"]["usd"]["ok"]
 
 
 def test_the_engine_read_is_one_short_call_at_the_lowest_priority(pathsvc, monkeypatch):
@@ -341,7 +402,7 @@ def test_the_engine_read_is_one_short_call_at_the_lowest_priority(pathsvc, monke
     st = qp.State()
     qp._read(svc.quant, st)
     assert seen == [(svc.et.BACKGROUND, "read_engine")]
-    assert st.usd["day"] == TODAY.isoformat() and len(st.usd["meetings"]) == 10 and st.usd["upper"] == 4.0
+    assert st.policy == 36.0 and st.usd["day"] == TODAY.isoformat() and len(st.usd["meetings"]) == 10 and st.usd["upper"] == 4.0
     assert st.usd["status"] == "OK" and st.engine_ms < 2000
 
 
@@ -349,25 +410,25 @@ def test_quantpath_http_api_and_the_pages(pathsvc):
     svc = pathsvc
     app = create_app(svc)
     with TestClient(app, headers=auth(svc, "İma HTTP")) as client:
-        for what in ("path",):
+        for what in ("path", "wirp"):
             r = client.get("/api/quant/" + what)
             assert r.status_code == 200 and r.json()["ready"] and set(r.json()[what]["banks"]) == {"try", "usd"}
         assert client.get("/api/quant/path").json()["mode"] == "replay"
         assert client.post("/api/quant/settings", json={"values": {"path_grid_try": "1"}}).status_code == 400
-        res = client.post("/api/quant/settings", json={"values": {"path_grid_try": "25"}})
-        assert res.status_code == 200 and res.json()["values"]["path_grid_try"] == 25.0
+        res = client.post("/api/quant/settings", json={"values": {"path_grid_try": "25", "path_policy": "37,5"}})
+        assert res.status_code == 200 and res.json()["values"]["path_grid_try"] == 25.0 and res.json()["values"]["path_policy"] == 37.5
         client.post("/api/quant/recompute", json={})
         if svc.quant._thread is not None:                                 # (no worker in the tests: recompute ran it already)
             svc.quant.compute()
-        w = client.get("/api/quant/path").json()["path"]["banks"]["try"]
-        assert w["grid"] == 25.0
+        w = client.get("/api/quant/wirp").json()["wirp"]["banks"]["try"]
+        assert w["grid"] == 25.0 and w["policy"]["rate"] == 37.5 and w["policy"]["source"] == "masa ayarı (elle)"
         first = w["rows"][0]
         assert (first["lo"], first["hi"]) == (-50.0, -25.0) and close(first["p_lo"], 0.6, 1e-9)       # −40 on a 25 grid
-        client.post("/api/quant/settings", json={"values": {"path_grid_try": "50"}})
+        client.post("/api/quant/settings", json={"values": {"path_grid_try": "50", "path_policy": "0"}})
         svc.quant.compute()
         nav = client.get("/api/nav").json()["pages"]
         quant = [p["id"] for p in nav if p["group"] == "Quant"]
-        assert quant[-1:] == ["quant-path"] and ("quant-path", "İma Patikası") in PAGES
+        assert quant[-2:] == ["quant-path", "quant-wirp"] and ("quant-path", "İma Patikası") in PAGES and ("quant-wirp", "TCMB WIRP") in PAGES
         assert client.get("/static/js/pages/quantpath.js").status_code == 200
         assert client.get("/api/quant/path", headers={"Authorization": ""}).status_code == 401
 
@@ -391,5 +452,7 @@ def test_the_recorded_month_through_the_workbook_s_own_solver(tmp_path):
         cal = t["calibration"]
         assert cal["n"] == 1 and cal["meetings"][0]["meeting"] == "2026-10-22" and cal["meetings"][0]["decided"] == -100.0
         assert cal["meetings"][0]["big"] == -100.0 and cal["meetings"][0]["hit"] == 1
+        w = svc.quant.view("wirp", user, {})["wirp"]["banks"]["try"]
+        assert w["ok"] and w["check"] < 1e-9 and w["policy"]["rate"] == 36.0
     finally:
         svc.stop()

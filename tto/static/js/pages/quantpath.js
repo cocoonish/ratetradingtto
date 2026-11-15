@@ -1,22 +1,27 @@
-// İma Patikası (tto/quantpath.py): the implied MPC / FOMC path as a mixture of discrete decisions on each bank's grid
-// (PPK 50 bp, FOMC 25 bp - desk settings): every meeting's two grid outcomes, the discrete paths two consecutive
-// meetings allow with their probability ranges and the P&L per DV01 of the meeting-dated OIS periods under each, the
-// path's kinks against their own history, the calibration of the priced bigger move.  The page switches between the
-// TCMB and the Fed; the server computes everything in the quant worker's thread, the page reads the result.
+// İma Patikası and TCMB WIRP (tto/quantpath.py): the implied MPC / FOMC path as a mixture of discrete decisions on
+// each bank's grid (PPK 50 bp, FOMC 25 bp - desk settings).  İma Patikası: every meeting's two grid outcomes, the
+// discrete paths two consecutive meetings allow with their probability ranges and the P&L per DV01 of the
+// meeting-dated OIS periods under each, the path's kinks against their own history, the calibration of the priced
+// bigger move.  TCMB WIRP (Bloomberg's WIRP, CME's FedWatch): per meeting the implied rate, the moves priced, ease /
+// hold / hike, the rate buckets after a meeting (bars), the conditional matrix, and how the next meetings'
+// probabilities moved.  Both pages switch between the TCMB and the Fed; the server computes everything in the quant
+// worker's thread, a page reads the result.
 import { api } from '../api.js';
 import { h, clear, errorToast, toast } from '../ui.js';
+import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum,
+  BLUE, ORANGE, GREEN, PURPLE, GREY } from './quantbase.js';
 
 const BANK_PREF = 'tto.quant.path.bank';
 const BANKS = [['try', 'TCMB · PPK'], ['usd', 'Fed · FOMC']];
-const OWN_SETTINGS = ['path_grid_try', 'path_grid_usd'];
+const OWN_SETTINGS = ['path_grid_try', 'path_grid_usd', 'path_policy'];
 const serialOf = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000) + 25569;
 const bp = (v) => (isNum(v) ? (Math.abs(v - Math.round(v)) < 0.05 ? sgn(Math.round(v), 0) : sgn(v, 1)) : '');
 const outcome = (v, p) => (isNum(v) ? (Math.abs(v) < 0.05 ? '0' : sgn(v, 0)) + ' · ' + pct(p) : '');
 const daysTo = (iso, from) => Math.round((serialOf(iso) - serialOf(from)));
 
-/** The frame of the page: the bank toggle, the replay note, the desk's grid settings, the status. */
+/** What the two pages share: the bank toggle, the replay note, the desk's grid / policy-rate settings, the status. */
 class PathBase extends QuantPage {
   constructor(host, ctx, what) {
     super(host, ctx, what);
@@ -40,7 +45,7 @@ class PathBase extends QuantPage {
       page.append(sp.el, cp.el);
     }
     for (const p of panels) page.appendChild(p.el);
-    this.setPanel = panel('quant-' + this.what + '-settings', 'Izgara · masa ayarı (herkes için)', { cls: 'aux' });
+    this.setPanel = panel('quant-' + this.what + '-settings', 'Izgara ve politika faizi · masa ayarı (herkes için)', { cls: 'aux' });
     page.appendChild(this.setPanel.el);
     this.addStatus(page);
     this.host.appendChild(page);
@@ -104,7 +109,8 @@ class PathBase extends QuantPage {
       } catch (e) { errorToast(e); }
     });
     p.body.append(form, h('div', { class: 'qrow' }, save));
-    p.note.textContent = 'Izgara: bankanın adım katı (TCMB 50, Fed 25 bp). Sinyaller sayfasındaki masa ayarlarıyla aynı ayarlardır.'
+    p.note.textContent = 'Izgara: bankanın adım katı (TCMB 50, Fed 25 bp). Politika faizi (elle) 0 iken Masa sayfasındaki "Politika faizi %" (Q155) okunur; '
+      + 'WIRP faizleri buna, TLREF ile farkı sabit tutularak çevrilir. Sinyaller sayfasındaki masa ayarlarıyla aynı ayarlardır.'
       + (d.by ? ' Son değiştiren: ' + this.ctx.displayName(d.by) + ' (' + d.at + ').' : '');
   }
 }
@@ -185,5 +191,125 @@ class PathPage extends PathBase {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ TCMB WIRP
+class WirpPage extends PathBase {
+  constructor(host, ctx) { super(host, ctx, 'wirp'); this.meeting = null; }
+
+  build() {
+    this.head = panel('quant-wirp-head', 'Politika faizi ve patika');
+    this.boxes.head = new GridBox(this.head, 'quant/wirp/head');
+    this.table = panel('quant-wirp-table', 'WIRP · toplantı başına');
+    this.table.note.textContent = 'İma faiz: politika faizi + toplantıya kadar kümülatif ima hareket (politika faizi ile patikanın O/N faizi - TLREF, SOFR - arasındaki '
+      + 'fark sabit). İndirim / sabit / artırım: toplantı sonrası faizin bugünküne göre (FedWatch gibi). Bu toplantıda: adımın iki ızgara sonucu. Satıra tıklayın: '
+      + 'o toplantının faiz olasılıkları aşağıda.';
+    this.boxes.table = new GridBox(this.table, 'quant/wirp/table', (m) => { this.meeting = m; this.fillPage(); });
+    this.barHost = h('div', { class: 'volchart' });
+    this.bars = panel('quant-wirp-bars', 'Toplantı sonrası faiz olasılıkları');
+    this.bars.body.appendChild(this.barHost);
+    this.matrix = panel('quant-wirp-matrix', 'Koşullu toplantı olasılıkları (%)');
+    this.matrix.note.textContent = 'Her toplantının adımı iki ızgara sonucuna bölünür ve adımlar beklenen patika verildiğinde bağımsız sayılır: bir toplantı sonrasının '
+      + 'dağılımı öncekinin bu toplantının iki noktalı adımıyla evrişimi (FedWatch\'ın ağacı). Son sütun kontrol: matrisin beklenen değeri − ima (bp; 0 olmalı).';
+    this.boxes.matrix = new GridBox(this.matrix, 'quant/wirp/matrix', (m) => { this.meeting = m; this.fillPage(); });
+    this.histHost = h('div', { class: 'volchart' });
+    this.hist = panel('quant-wirp-history', 'Sıradaki toplantıların olasılıkları · son haftalar', { top: this.histHost });
+    this.hist.note.textContent = 'Aynı toplantı için geçmiş günlerin fiyatlaması, bugünkü faiz kovalarında (aradaki kararlar TLREF / üst bandın ızgaraya yuvarlanmış '
+      + 'değişiminden). Grafik: bu toplantıların ima adımı (bp) gün gün.';
+    this.boxes.hist = new GridBox(this.hist, 'quant/wirp/history');
+    this.frame('TCMB WIRP', [this.head, this.table, this.bars, this.matrix, this.hist], false);
+  }
+
+  fillPage() {
+    const b = this.bankData();
+    this.bankSeg.set(this.bank);
+    const name = this.bank === 'try' ? 'TCMB' : 'Fed';
+    this.table.setTitle('WIRP · ' + name + ' · toplantı başına' + (b.ok ? ' · ' + isoToTr(b.day) + (b.live ? ' ●' : '') : ''));
+    if (!b.ok) {
+      for (const k of ['head', 'table', 'matrix', 'hist']) this.boxes[k].set([], [], null, b.why || 'Patika yok');
+      this.drawBars(null, b);
+      return;
+    }
+    const pol = b.policy || {};
+    const rateName = this.bank === 'try' ? 'TLREF' : 'SOFR';
+    const hasRate = isNum(pol.rate);
+    this.boxes.head.set(['', 'Değer', 'Kaynak / not'], [
+      [T('Politika faizi' + (this.bank === 'usd' ? ' (üst bant)' : ''), { b: 1 }), hasRate ? N(pol.rate, 2, { unit: '%', b: 1 }) : T('yok'),
+        T(hasRate ? pol.source : (this.bank === 'try' ? 'Masa ayarına (Politika faizi, elle) ya da Masa sayfasındaki Q155\'e girin: kovalar o zaman faiz olur' : 'FDTR yok'))],
+      [T('Patikanın başladığı ' + rateName, { b: 1 }), N(b.base, 4, { unit: '%' }), T(isNum(pol.fixing) ? 'fixing ' + fmt(pol.fixing, 4) + ' %' : '')],
+      [T('Fark: politika − ' + rateName, { b: 1 }), N(pol.spread, 1, { sign: true, unit: 'bp' }), T(this.bank === 'usd' ? 'bandın ortası − SOFR; ' + 'sabit tutulur'
+        : 'sabit tutulur: ima politika faizi = bugünkü + kümülatif ima hareket')],
+      [T('Izgara', { b: 1 }), N(b.grid, 0, { unit: 'bp' }), T('masa ayarı')],
+      [T('Kontrol', { b: 1 }), N(b.check, 6, { unit: 'bp' }), T('matrisin beklenen değeri − ima patika, en büyük mutlak fark')]], null, '—');
+    const rows = b.rows || [];
+    if (!this.meeting || !rows.some((r) => r.meeting === this.meeting)) this.meeting = rows.length ? rows[0].meeting : null;
+    const sel = rows.find((r) => r.meeting === this.meeting);
+    this.boxes.table.set(['Toplantı', 'İma faiz %', 'İma ' + rateName + ' %', 'Bugüne göre (bp)', 'Önceki toplantıya göre (bp)', 'Fiyatlanan adım', 'Bu toplantıda',
+      'İndirim', 'Sabit', 'Artırım'], rows.map((r) => [T(isoToTr(r.meeting), { b: 1 }), hasRate ? N(r.rate, 3, { b: 1 }) : T('—'), N(r.level, 3),
+      N(r.cum, 1, { sign: true }), N(r.step, 1, { sign: true }), N(r.moves, 2, { sign: true }),
+      T(outcome(r.lo, r.p_lo) + '  ' + outcome(r.hi, r.p_hi)), T(pct(r.ease, 1)), T(pct(r.hold, 1)), T(pct(r.hike, 1))]),
+    rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
+    const buckets = b.buckets || [];
+    this.boxes.matrix.set([this.bank === 'usd' ? 'Toplantı · hedef aralık (bp)' : 'Toplantı · politika faizi %'].concat(buckets.map((x) => ({ t: x.label, k: 's', b: 1, f: 'hd' })),
+      ['E[faiz] − ima (bp)']), rows.map((r) => [T(isoToTr(r.meeting), { b: 1 })].concat((r.matrix || []).map((p, i) => (p >= 0.0005
+      ? { t: fmt(p * 100, 1), v: p * 100, k: 'n', heat: heatHex(-p) || undefined, b: buckets[i] && buckets[i].k === 0 ? 1 : 0 } : { t: '', k: '' })),
+    [N(r.check, 6)])), rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
+    this.drawBars(sel, b);
+    this.fillHistory(b);
+  }
+
+  drawBars(sel, b) {
+    if (!sel) {
+      if (this.charts.bars) { this.charts.bars.destroy(); this.charts.bars = null; }
+      clear(this.barHost);
+      return;
+    }
+    // the buckets this meeting gives a probability, and every one between them and today's rate (the axis reads from it)
+    const all = b.buckets || [];
+    const idx = all.map((x, i) => i).filter((i) => (sel.matrix || [])[i] >= 0.0005 || all[i].k === 0);
+    const lo = Math.min(...idx), hi = Math.max(...idx);
+    const buckets = all.slice(lo, hi + 1);
+    const probs = (sel.matrix || []).slice(lo, hi + 1);
+    const cats = buckets.map((x) => x.label);
+    const cur = buckets.map((x, i) => (x.k === 0 ? probs[i] * 100 : null));
+    const other = buckets.map((x, i) => (x.k !== 0 ? probs[i] * 100 : null));
+    this.bars.setTitle(isoToTr(sel.meeting) + ' toplantısı sonrası ' + (this.bank === 'usd' ? 'hedef aralık' : 'politika faizi') + ' olasılıkları (%) · ima '
+      + (isNum(sel.rate) ? fmt(sel.rate, 3) + ' %' : bp(sel.cum) + ' bp'));
+    const spec = { title: 'Olasılık', cats, auto: 'fit', decimals: 1, y_title: '%', aspect: 0.3,
+      series: [{ name: 'bugünkü faiz', kind: 'bar', stacked: true, color: ORANGE, data: cur }, { name: 'diğer', kind: 'bar', stacked: true, color: BLUE, data: other }] };
+    if (this.charts.bars) this.charts.bars.update(spec); else this.charts.bars = new Chart(this.barHost, spec, { height: 230 });
+  }
+
+  fillHistory(b) {
+    const w = b;
+    const hb = w.history_buckets || [];
+    const rows = (w.history || []).map((x, i, all) => [i && all[i - 1].meeting === x.meeting ? T('') : T(isoToTr(x.meeting), { b: 1 }), T(x.lookback),
+      T(x.day ? isoToTr(x.day) : 'gün yok', { cls: x.day ? '' : 'soft' }), N(x.step, 1, { sign: true }),
+      T(isNum(x.step) ? outcome(x.lo, x.p_lo) + '  ' + outcome(x.hi, x.p_hi) : ''), isNum(x.rate) ? N(x.rate, 3) : N(x.cum, 1, { sign: true })]
+      .concat(hb.map((bk, j) => {
+        const p = x.matrix ? x.matrix[j] : null;
+        return isNum(p) && p >= 0.0005 ? { t: fmt(p * 100, 1), v: p * 100, k: 'n', heat: heatHex(-p) || undefined } : { t: '', k: '' };
+      })));
+    this.boxes.hist.set(['Toplantı', 'Ne zaman', 'Gün', 'İma adım (bp)', 'Bu toplantıda', isNum((b.policy || {}).rate) ? 'İma faiz %' : 'Kümülatif (bp)']
+      .concat(hb.map((x) => ({ t: x.label, k: 's', b: 1, f: 'hd' }))), rows, null, 'Geçmiş yok');
+    const ch = w.chart || {};
+    const days = ch.days || [];
+    if (days.length >= 2) {
+      const colors = [BLUE, ORANGE, GREEN, PURPLE];
+      const series = (ch.series || []).map((s, k) => ({ name: isoToTr(s.meeting), kind: 'line', color: colors[k % colors.length], data: s.steps, marker: days.length < 25 }));
+      const lo = Math.min(...(ch.series || []).flatMap((s) => s.steps.filter(isNum)), 0);
+      const hi = Math.max(...(ch.series || []).flatMap((s) => s.steps.filter(isNum)), 0);
+      const g = b.grid || 50;
+      for (let k = Math.floor(lo / g); k <= Math.ceil(hi / g); k++) {
+        series.push({ name: 'ızgara', kind: 'line', color: GREY, dash: true, data: days.map(() => k * g), marker: false, legend: k === Math.floor(lo / g) ? 1 : 0 });
+      }
+      const spec = { title: 'İma adım (bp)', cats: days.map(isoToTr), x: { type: 'date', values: days.map(serialOf), format: 'dd.mm' }, auto: 'fit', decimals: 0,
+        y_title: 'bp', aspect: 0.3, series };
+      this.histHost.classList.remove('hidden');
+      if (this.charts.hist) this.charts.hist.update(spec); else this.charts.hist = new Chart(this.histHost, spec, { height: 220 });
+    } else {
+      this.histHost.classList.add('hidden');
+    }
+  }
+}
+
 /** The pages of this module by id (quant.js asks here first). */
-export const PATH_PAGES = { 'quant-path': PathPage };
+export const PATH_PAGES = { 'quant-path': PathPage, 'quant-wirp': WirpPage };

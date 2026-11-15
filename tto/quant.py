@@ -68,7 +68,7 @@ LABELS = {
     "cycle_t": "PPK sinyali için |t| en az", "dv01_base": "Paket DV01'i (TRY / bp, ana bacak)", "rv_items": "PCA-nötr spread ve fly'lar",
     "desk_alarm": "Masa alarmına düşen en az güç",
 }
-DEFAULTS.update(qp.DEFAULTS)                    # the implied path's grids (quantpath.py)
+DEFAULTS.update(qp.DEFAULTS)                    # the implied path's grids and the policy rate (quantpath.py)
 LIMITS.update(qp.LIMITS)
 LABELS.update(qp.LABELS)
 
@@ -82,7 +82,7 @@ ALERT_KEEP = 300
 PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"),
          ("quant-regime", "Rejim & Momentum"), ("quant-fx", "FX Vol Primi & Carry"), ("quant-macro", "Makro Beta"),
          ("quant-model", "Tahmin Modeli"))
-PAGES += (("quant-path", "İma Patikası"),)                                     # quantpath.py
+PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"))          # quantpath.py
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -587,7 +587,7 @@ class Quant(object):
                 items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
                 timing: Dict[str, float] = {}
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
-                qp.run(self, ctx, mons, tables, raw_live, timing)          # the implied path on its grid (quantpath.py)
+                qp.run(self, ctx, mons, tables, raw_live, timing)          # the implied path, the WIRP (quantpath.py)
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx)}
@@ -932,7 +932,7 @@ class Quant(object):
         if v is None or fit is None:
             return base
         t = v["tables"]
-        if what in qp.VIEWS:                                # İma Patikası (quantpath.py)
+        if what in qp.VIEWS:                                # İma Patikası, TCMB WIRP (quantpath.py)
             return qp.view(self, what, base, v, fit)
         if what == "signals":
             fam, asset = q.get("family") or "", q.get("asset") or ""
