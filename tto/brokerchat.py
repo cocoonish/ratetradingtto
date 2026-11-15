@@ -1553,7 +1553,7 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
     is empty; a side nobody has spoken of since keeps its level and its time.
 
     ``ours(record)`` tells the lines of our own desk: our prices are not the market's, so they are kept apart
-    (``our_bid`` / ``our_ask``) and do not move its bid and ask.  A trade is a trade, whoever says it
+    (``our_bid`` / ``our_ask``; ``our_bid_id`` ...: the line each came from) and do not move its bid and ask.  A trade is a trade, whoever says it
     (``last_by``: "biz" when it was ours).
 
     **The best price, broker by broker.**  The brokers' quotes are also kept by house (``brokers``; ``by(record)``:
@@ -1582,8 +1582,9 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
             row = rows[q["key"]] = {"key": q["key"], "product": q["product"], "kind": q["kind"], "tenors": q["tenors"],
                                     "months": q.get("months") or [], "label": q["label"], "unit": q["unit"],
                                     "bid": None, "bid_time": None, "ask": None, "ask_time": None, "last": None,
-                                    "last_time": None, "last_side": None, "last_by": None, "last_src": None, "level": None,
-                                    "level_time": None, "our_bid": None, "our_ask": None, "our_time": None, "our_at": None, "said": ""}
+                                    "last_time": None, "last_at": None, "last_side": None, "last_by": None, "last_src": None,
+                                    "level": None, "level_time": None, "level_at": None, "our_bid": None, "our_ask": None,
+                                    "our_bid_id": None, "our_ask_id": None, "our_time": None, "our_at": None, "said": ""}
             books[q["key"]] = {}
             if q.get("isin"):
                 row["isin"] = q["isin"]                     # a bond's ISIN, for the screen and the bond pages
@@ -1594,8 +1595,7 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
             if q.get("mpc"):
                 row["mpc"] = q["mpc"]                       # a meeting-dated swap: its meetings and dates
         when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
-        kept = str(q.get("created_at") or "")[:19]
-        at = min(when, kept) if q.get("date") and _stamp(kept) is not None else when
+        at = _said_at(q)
         house = (by(q) if by is not None else (q.get("source") or q.get("sender"))) or ""
         book = books[q["key"]]
         ev = q["event"]
@@ -1604,6 +1604,7 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
                 for side in ("bid", "ask"):
                     if q.get(side) is not None or side in (q.get("clear") or []):
                         row["our_" + side] = q.get(side)
+                        row["our_" + side + "_id"] = q.get("id") if q.get(side) is not None else None
                 row["our_time"], row["our_at"] = when, at
             else:
                 origin = "%s|%s|%s|%s" % (when, q.get("sender") or "", q.get("raw") or "", q["oco"]) if q.get("oco") else None
@@ -1611,7 +1612,7 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
                 for side in ("bid", "ask"):
                     if q.get(side) is not None:
                         row[side], row[side + "_time"] = q[side], when
-                        sides[side] = {"v": q[side], "time": when, "at": at, "origin": origin}
+                        sides[side] = {"v": q[side], "time": when, "at": at, "origin": origin, "id": q.get("id")}
                         if origin:
                             oco.setdefault(origin, []).append((q["key"], house, side))
                     elif side in (q.get("clear") or []):
@@ -1619,21 +1620,21 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
                         sides[side] = None
         elif ev == "trade":
             if q.get("price") is not None:
-                row["last"], row["last_time"], row["last_side"] = q["price"], when, q.get("side")
+                row["last"], row["last_time"], row["last_at"], row["last_side"] = q["price"], when, at, q.get("side")
                 row["last_by"] = "biz" if mine else "broker"
                 row["last_src"] = house
             _trade_away(books, oco, q, house)
         elif ev == "ref":
             for side in ((q["side"],) if q.get("side") else ("bid", "ask")):
                 if mine:
-                    row["our_" + side] = None
+                    row["our_" + side] = row["our_" + side + "_id"] = None
                     row["our_time"], row["our_at"] = when, at
                 else:
                     row[side], row[side + "_time"] = None, when
                     if house in book:
                         book[house][side] = None
         elif ev == "level" and not mine:
-            row["level"], row["level_time"] = q.get("price"), when
+            row["level"], row["level_time"], row["level_at"] = q.get("price"), when, at
         row["said"] = q.get("raw") or ""
         row["time"] = when
     for key, row in rows.items():
@@ -1678,8 +1679,23 @@ def _age(now: Optional[_dt.datetime], stamp: Optional[str]) -> Optional[float]:
     return None if t is None else max(0.0, (now - t).total_seconds())
 
 
+def _said_at(q: Dict[str, Any]) -> str:
+    """When a line can have been said at the latest: the time it says - or the time it was kept, when that is
+    earlier (a time typed ahead of the clock makes nothing fresh)."""
+    when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
+    kept = str(q.get("created_at") or "")[:19]
+    return min(when, kept) if q.get("date") and _stamp(kept) is not None else when
+
+
+def line_age(q: Dict[str, Any], now: Optional[_dt.datetime]) -> Optional[float]:
+    """How old a line of the chat is (seconds) by the board's rule (:func:`_said_at`); ``None`` without a clock."""
+    return _age(now, _said_at(q))
+
+
 def _best(row: Dict[str, Any], book: Dict[str, Dict[str, Any]], now: Optional[_dt.datetime], stale_after: Optional[float]) -> None:
-    """The brokers' quotes of a board row (``brokers``, by house) and the best of the fresh ones (``best_bid`` ...)."""
+    """The brokers' quotes of a board row (``brokers``, by house; ``bid_id`` / ``ask_id``: the line each side came
+    from) and the best of the fresh ones (``best_bid`` ...); how old the last trade, the last level and our own quote
+    are (``last_age``, ``last_stale`` ...)."""
     brokers = []
     for house in sorted(book, key=lambda x: (x.lower(), x)):
         entry: Dict[str, Any] = {"by": house}
@@ -1687,7 +1703,8 @@ def _best(row: Dict[str, Any], book: Dict[str, Dict[str, Any]], now: Optional[_d
             x = book[house].get(side)
             age = _age(now, x["at"]) if x else None
             entry.update({side: x["v"] if x else None, side + "_time": x["time"] if x else None, side + "_age": age,
-                          side + "_stale": bool(x) and age is not None and stale_after is not None and age > stale_after})
+                          side + "_stale": bool(x) and age is not None and stale_after is not None and age > stale_after,
+                          side + "_id": x.get("id") if x else None})
         if entry["bid"] is None and entry["ask"] is None:
             continue                                        # withdrawn, traded away: nothing of this house stands
         entry["time"] = max(t for t in (entry["bid_time"], entry["ask_time"]) if t)
@@ -1707,6 +1724,10 @@ def _best(row: Dict[str, Any], book: Dict[str, Dict[str, Any]], now: Optional[_d
     age = _age(now, row.get("our_at")) if row.get("our_bid") is not None or row.get("our_ask") is not None else None
     row["our_age"] = age
     row["our_stale"] = age is not None and stale_after is not None and age > stale_after
+    for k in ("last", "level"):                                         # a trade or a level said long ago: no current price either
+        age = _age(now, row.get(k + "_at")) if row.get(k) is not None else None
+        row[k + "_age"] = age
+        row[k + "_stale"] = age is not None and stale_after is not None and age > stale_after
 
 
 # ---------------------------------------------------------------------------------------------- who said it
