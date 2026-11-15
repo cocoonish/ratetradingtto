@@ -295,6 +295,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         data = await _body(request)
         return ok(await call(svc().load_scenario, _user(request), str(data.get("name") or "")))
 
+    # ------------------------------------------------------------------ the columns a user hides
+    @handler
+    async def columns(request: Request):
+        if request.method == "GET":
+            return ok(await call(svc().columns, _user(request)))
+        data = await _body(request)
+        return ok(await call(svc().set_columns, _user(request), data.get("table"), data.get("hidden")))
+
     # ------------------------------------------------------------------ RET curve
     @handler
     async def ret(request: Request):
@@ -720,6 +728,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/my-inputs", my_inputs),
         Route("/api/scenarios", scenarios, methods=["GET", "POST", "DELETE"]),
         Route("/api/scenarios/load", scenario_load, methods=["POST"]),
+        Route("/api/columns", columns, methods=["GET", "POST"]),
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
         Route("/api/market/unknown", market_unknown),
