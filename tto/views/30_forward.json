@@ -301,144 +301,151 @@
    "label": "start / end date of the day counter (B13)"
   },
   {
-   "range": "B25:D27",
+   "range": "B25:C27",
    "scope": "user",
    "group": "forward-31",
    "kind": "date",
-   "label": "ad-hoc forward list: Start, End, Spot, Major rate, Minor rate (B14)"
+   "label": "ad-hoc forward list (B14): Start, End"
+  },
+  {
+   "range": "D25:D27",
+   "scope": "user",
+   "group": "forward-31",
+   "kind": "number",
+   "label": "ad-hoc forward list (B14): Spot"
   },
   {
    "range": "G25:H27",
    "scope": "user",
    "group": "forward-31",
-   "kind": "date",
-   "label": "ad-hoc forward list: Start, End, Spot, Major rate, Minor rate (B14)"
+   "kind": "pct",
+   "label": "ad-hoc forward list (B14): Major rate, Minor rate (%)"
   },
   {
    "range": "C59",
    "scope": "user",
    "group": "forward-32",
    "kind": "date",
-   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+   "label": "XAU leg (B21): Start"
   },
   {
    "range": "C60",
    "scope": "user",
    "group": "forward-32",
    "kind": "date",
-   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+   "label": "XAU leg (B21): End"
   },
   {
    "range": "C61",
    "scope": "user",
    "group": "forward-32",
-   "kind": "date",
-   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+   "kind": "number",
+   "label": "XAU leg (B21): XAUUSD Spot"
   },
   {
    "range": "C63",
    "scope": "user",
    "group": "forward-32",
-   "kind": "date",
-   "label": "XAU leg: Start, End, XAUUSD Spot, Swap (B21)"
+   "kind": "number",
+   "label": "XAU leg (B21): Swap (points, forward = spot + swap/100)"
   },
   {
    "range": "E59",
    "scope": "user",
    "group": "forward-33",
-   "kind": "date",
-   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+   "kind": "number",
+   "label": "XARTRY leg (B21): USDTRY Spot"
   },
   {
    "range": "E61",
    "scope": "user",
    "group": "forward-33",
    "kind": "date",
-   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+   "label": "XARTRY leg (B21): Customer Forward date"
   },
   {
    "range": "E63",
    "scope": "user",
    "group": "forward-33",
-   "kind": "date",
-   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+   "kind": "pct",
+   "label": "XARTRY leg (B21): USD Faiz"
   },
   {
    "range": "E64",
    "scope": "user",
    "group": "forward-33",
-   "kind": "date",
-   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+   "kind": "pct",
+   "label": "XARTRY leg (B21): TRY Faiz"
   },
   {
    "range": "E67",
    "scope": "user",
    "group": "forward-33",
    "kind": "date",
-   "label": "XARTRY leg: USDTRY Spot, Customer Forward date, USD Faiz, TRY Faiz, Customer Start (B21)"
+   "label": "XARTRY leg (B21): Customer Start"
   },
   {
    "range": "V56",
    "scope": "user",
    "group": "forward-34",
-   "kind": "date",
-   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+   "kind": "text",
+   "label": "bond carry (B24): ISIN"
   },
   {
    "range": "V57",
    "scope": "user",
    "group": "forward-34",
-   "kind": "date",
-   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+   "kind": "number",
+   "label": "bond carry (B24): Temiz Fiyat"
   },
   {
    "range": "V58",
    "scope": "user",
    "group": "forward-34",
    "kind": "date",
-   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+   "label": "bond carry (B24): Settlement"
   },
   {
    "range": "V61",
    "scope": "user",
    "group": "forward-34",
-   "kind": "date",
-   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+   "kind": "pct",
+   "label": "bond carry (B24): Carry (repo rate)"
   },
   {
    "range": "V62",
    "scope": "user",
    "group": "forward-34",
    "kind": "date",
-   "label": "bond carry: ISIN, Temiz Fiyat, Settlement, Carry, End Date (B24)"
+   "label": "bond carry (B24): End Date"
   },
   {
    "range": "V73",
    "scope": "user",
    "group": "forward-35",
    "kind": "date",
-   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+   "label": "forward rate (B25): Start Date"
   },
   {
    "range": "V74",
    "scope": "user",
    "group": "forward-35",
    "kind": "date",
-   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+   "label": "forward rate (B25): End Date"
   },
   {
    "range": "V78",
    "scope": "user",
    "group": "forward-35",
-   "kind": "date",
-   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+   "kind": "pct",
+   "label": "forward rate (B25): Start Rate"
   },
   {
    "range": "V79",
    "scope": "user",
    "group": "forward-35",
-   "kind": "date",
-   "label": "forward rate: Start Date, End Date, Start Rate, End Rate (B25)"
+   "kind": "pct",
+   "label": "forward rate (B25): End Rate"
   },
   {
    "range": "U6",
@@ -486,43 +493,43 @@
    "range": "AB1",
    "scope": "user",
    "group": "forward-41",
-   "kind": "date",
-   "label": "scratch constants (see §6)"
+   "kind": "number",
+   "label": "scratch constant AB1 (no formula reads it)"
   },
   {
    "range": "AB2",
    "scope": "user",
    "group": "forward-41",
-   "kind": "date",
-   "label": "scratch constants (see §6)"
+   "kind": "number",
+   "label": "scratch constant AB2 (no formula reads it)"
   },
   {
    "range": "N71",
    "scope": "user",
    "group": "forward-41",
-   "kind": "date",
-   "label": "scratch constants (see §6)"
+   "kind": "number",
+   "label": "scratch constant N71 (no formula reads it)"
   },
   {
    "range": "AA55",
    "scope": "user",
    "group": "forward-41",
    "kind": "date",
-   "label": "scratch constants (see §6)"
+   "label": "scratch day count (S4): later date"
   },
   {
    "range": "AA56",
    "scope": "user",
    "group": "forward-41",
    "kind": "date",
-   "label": "scratch constants (see §6)"
+   "label": "scratch day count (S4): earlier date"
   },
   {
    "range": "AA58",
    "scope": "user",
    "group": "forward-41",
-   "kind": "date",
-   "label": "scratch constants (see §6)"
+   "kind": "number",
+   "label": "scratch day count (S4): points scaled by the days (AB58)"
   },
   {
    "range": "F2:G2",

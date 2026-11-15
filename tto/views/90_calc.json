@@ -774,14 +774,14 @@
    "scope": "user",
    "group": "calc-75",
    "kind": "date",
-   "label": "B27 'Tarih', 'Fiyat'"
+   "label": "B27 'Tarih'"
   },
   {
    "range": "C54",
    "scope": "user",
    "group": "calc-75",
-   "kind": "date",
-   "label": "B27 'Tarih', 'Fiyat'"
+   "kind": "number",
+   "label": "B27 'Fiyat'"
   },
   {
    "range": "F52",
@@ -816,21 +816,21 @@
    "scope": "user",
    "group": "calc-77",
    "kind": "date",
-   "label": "B29 'Valör', 'Tarih', 'Fiyat'"
+   "label": "B29 'Valör'"
   },
   {
    "range": "I53",
    "scope": "user",
    "group": "calc-77",
    "kind": "date",
-   "label": "B29 'Valör', 'Tarih', 'Fiyat'"
+   "label": "B29 'Tarih'"
   },
   {
    "range": "I54",
    "scope": "user",
    "group": "calc-77",
-   "kind": "date",
-   "label": "B29 'Valör', 'Tarih', 'Fiyat'"
+   "kind": "number",
+   "label": "B29 'Fiyat'"
   },
   {
    "range": "L52",

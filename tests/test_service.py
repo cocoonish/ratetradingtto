@@ -182,6 +182,39 @@ def test_inputs_are_parsed_like_excel_would(service):
     assert service.my_inputs(u)["inputs"] == []
 
 
+def test_spots_rates_prices_and_an_isin_are_typed_where_they_were_refused_as_dates(service):
+    """These cells were declared dates: "45,5" typed into them gave "tarih anlaşılamadı".  Each column now takes what it
+    holds - a spot, a rate (35,25 = %35,25), a price, an ISIN - and the date columns beside them still take dates only."""
+    u = login(service, "Servis Girdi Türü")
+    try:
+        res = service.set_inputs(u, "tto", [
+            {"ref": "Forward!D25", "value": "45,5"}, {"ref": "Forward!G25", "value": "4,25"}, {"ref": "Forward!H27", "value": "35,25"},
+            {"ref": "Forward!C61", "value": "4.100,5"}, {"ref": "Forward!C63", "value": "1414"}, {"ref": "Forward!E59", "value": "45,5"},
+            {"ref": "Forward!E63", "value": "4"}, {"ref": "Forward!E64", "value": "35,25"}, {"ref": "Forward!V56", "value": "TRT150328T24"},
+            {"ref": "Forward!V57", "value": "98,5"}, {"ref": "Forward!V61", "value": "40"}, {"ref": "Forward!V78", "value": "35"},
+            {"ref": "Forward!V79", "value": "36,5"}, {"ref": "Forward!AB1", "value": "34,5"}, {"ref": "Forward!N71", "value": "35,75"},
+            {"ref": "Forward!AA58", "value": "13432"}, {"ref": "MASA!W94", "value": "45,5"}, {"ref": "Calculators!C54", "value": "98,7"},
+            {"ref": "Calculators!I54", "value": "101,7"}, {"ref": "Forward!B25", "value": "03.12.2026"}])
+        assert res["errors"] == []
+        got = {ref: cell(service, ref, u) for ref in ("Forward!D25", "Forward!G25", "Forward!H27", "Forward!C61", "Forward!E59",
+                                                      "Forward!E63", "Forward!E64", "Forward!V56", "Forward!V57", "Forward!V61",
+                                                      "Forward!V78", "Forward!V79", "Forward!AB1", "MASA!W94", "Calculators!C54",
+                                                      "Calculators!I54", "Forward!B25")}
+        assert got == pytest.approx({"Forward!D25": 45.5, "Forward!G25": 0.0425, "Forward!H27": 0.3525, "Forward!C61": 4100.5,
+                                     "Forward!E59": 45.5, "Forward!E63": 0.04, "Forward!E64": 0.3525, "Forward!V56": "TRT150328T24",
+                                     "Forward!V57": 98.5, "Forward!V61": 0.4, "Forward!V78": 0.35, "Forward!V79": 0.365,
+                                     "Forward!AB1": 34.5, "MASA!W94": 45.5, "Calculators!C54": 98.7, "Calculators!I54": 101.7,
+                                     "Forward!B25": parse_date("03.12.2026")})
+        # the rows compute with them: the forward of the list's first row, the TLREF spread of the price
+        n = cell(service, "Forward!A25", u)
+        assert n == 15.0 and cell(service, "Forward!F25", u) == pytest.approx(45.5 * (1 + 0.37 / 360 * n) / (1 + 0.0425 / 360 * n), rel=1e-12)
+        assert cell(service, "Calculators!C56", u) == pytest.approx((100 - 98.7) / 100 * 365 / 1162 * 10000, rel=1e-12)
+        bad = service.set_inputs(u, "tto", [{"ref": "Forward!B25", "value": "45,5"}, {"ref": "Forward!V58", "value": "TRT150328T24"}])
+        assert len(bad["errors"]) == 2 and all("tarih anlaşılamadı" in e for e in bad["errors"])
+    finally:
+        service.reset_inputs(u, "tto")
+
+
 def test_blanking_an_input_returns_to_the_formula_or_empties_the_cell(service):
     u = login(service, "Servis Blank")
     base = cell(service, "MASA!C60")                        # a formula default (start date)

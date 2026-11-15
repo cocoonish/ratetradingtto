@@ -135,6 +135,34 @@ def test_panels_and_inputs_point_at_real_cells(models, view):
             parse_range(ref)
 
 
+def test_an_input_declared_a_date_holds_a_date(models):
+    """A cell declared a date takes nothing but a date ("tarih anlaşılamadı"): the ad-hoc forward list's spot and rates,
+    the XAU leg's spot, swap and rates, the bond carry's ISIN, price and rate, Masa's manual TRY % ... were declared
+    dates and could not be typed at all.  Every cell declared a date holds a date (or nothing) in its workbook."""
+    from tto.inputs import parse_date
+    bad = []
+    for v in VIEWS:
+        model = models[v["book"]]
+        for inp in v["inputs"]:
+            if inp.get("kind") != "date":
+                continue
+            sheet, _, addr = inp["range"].rpartition("!")
+            sh = model.sheet(sheet.strip("'") or v["sheet"])
+            r1, c1, r2, c2 = parse_range(addr)
+            for r in range(r1, r2 + 1):
+                for c in range(c1, c2 + 1):
+                    x = sh.consts.get(r * COLS + c)
+                    if x is None or (type(x) is float and 20000 < x < 80000) or (isinstance(x, str) and parse_date(x)):
+                        continue
+                    bad.append((v["id"], sh.name, r, c, x))
+    assert bad == []
+    kinds = {(v["id"], i["range"]): i["kind"] for v in VIEWS for i in v["inputs"]}
+    assert kinds[("forward", "B25:C27")] == "date" and kinds[("forward", "D25:D27")] == "number"
+    assert kinds[("forward", "G25:H27")] == kinds[("forward", "E63")] == kinds[("forward", "V78")] == "pct"
+    assert kinds[("forward", "V56")] == "text" and kinds[("masa", "W94:W99")] == "number"
+    assert kinds[("calc", "C54")] == kinds[("calc", "I54")] == "number"
+
+
 def test_ret_curve_is_a_shared_desk_input():
     fwd = next(v for v in VIEWS if v["id"] == "forward")
     ret = [i for i in fwd["inputs"] if i.get("group") == "ret"]

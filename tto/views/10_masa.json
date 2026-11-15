@@ -38,8 +38,8 @@
    "range": "W94:W99",
    "scope": "user",
    "group": "masa-4",
-   "kind": "date",
-   "label": "Manuel TRY % — manual TRY rate per value date"
+   "kind": "number",
+   "label": "Manuel TRY % — manual TRY rate per value date, in percent (35,5 = %35,5; the formulas divide by 100)"
   },
   {
    "range": "Q100",
