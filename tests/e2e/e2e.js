@@ -1923,7 +1923,7 @@ async function shot(page, name) {
     await (await cellHandle(page, 'DİBS RV!A4')).click();
     await (await cellHandle(page, 'DİBS RV!D6')).click({ modifiers: ['Shift'] });
     const visibleCopy = (await page.evaluate(() => window.tto.selectionText(false))).split('\r\n');
-    check('... a copy takes what is on screen', visibleCopy[0] === 'ISIN\tAd\tTip (S/T/E/B)' && visibleCopy.every((l) => l.split('\t').length === 3), visibleCopy);
+    check('... a copy takes what is on screen', visibleCopy[0] === 'ISIN\tAd\tTip (S/T/F/E/B)' && visibleCopy.every((l) => l.split('\t').length === 3), visibleCopy);
     await (await cellHandle(page, 'DİBS RV!A6')).click();
     await page.keyboard.press('ArrowRight');
     check('... the arrow keys step over it', await page.evaluate(() => document.querySelector('#content td.cur').__j) === 2);
