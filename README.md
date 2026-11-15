@@ -1759,13 +1759,13 @@ serilerini aynı kuralla doldurur:
 
 Gruplar: TRY (USDTRY ve TRY çaprazları), G10 (iki para birimi de G10), EM (gerisi: EM FX sepeti ve EM carry bunlardan).
 **Bloomberg maliyeti** (sahte terminalle ölçülen bir canlı gün, `tests/test_quant.py`; hit = istek başına güvenlik ×
-alan): 22 paritenin 93 quant serisi - önceki listeye göre 11 parite, 42 seri fazla - ilk gün iki yıllık doldurmada seri
-başına bir kez (42 hit, ~22.000 veri noktası daha; turda 5 seriyle ~9 tur, ~2 saat), sonra **günde bir kez** yeni
-günleri (42 hit / gün daha). Ölçülen gün: 97 tur, 5.778 hit, 72.972 veri noktası (93 quant serisi; önceki listeyle 51
-seri: 5.736 hit, 50.754 nokta). Quant serilerinin yeni günlerinin her turda değil günde bir kez istenmesi, önceki sürüme
-göre günde ~4.800 hit kazandırır (50 seri × 96 tur). Tarihçenin kendi serilerinin iki yıla uzatılması (C): ertesi gün
-seri başına bir kez, yalnızca eksik yılı (gerçekte ~117 ticker, ~117 hit ve ~29.000 veri noktası bir kerelik; sahte
-terminalle ölçülen ertesi gün: 14 turda 964 hit, sonra turda 58). Hepsi `--max-hits` (400.000 / gün) içinde.
+alan): 116 quant serisi (22 parite, küresel sürücüler, Opsiyon sayfasının vol'leri) ilk gün iki yıllık doldurmada seri
+başına bir kez (turda 5 seriyle ~24 tur, ~6 saat), sonra - tarihçenin diğer serileri gibi - **her turda** yalnızca yeni
+günleri (masa 15 dakikalık güncellemeyi bütün seriler için tutar). Ölçülen ilk canlı gün: 97 tur, 567 istek, 15.474 hit,
+104.485 veri noktası (233 menkul, 172'sinin geçmişi var, 116 quant serisi). Tarihçenin kendi serilerinin iki yıla
+uzatılması (C): ertesi gün seri başına bir kez, yalnızca eksik yılı (gerçekte ~117 ticker, ~117 hit ve ~29.000 veri
+noktası bir kerelik; sahte terminalle ölçülen ertesi gün: 14 turda 2.469 hit, sonra turda 172). Hepsi `--max-hits`
+(400.000 / gün) içinde: bir gün ~%4.
 Bunlardan altısı (`USDTRY Curncy`, `TRY1M` / `TRY3M` / `TRY6M` / `TRY12M Curncy`, `USSOC Curncy`) çalışma kitabının
 kendi `BDH` bloklarında da var; kayıtlı veri modunda tarihçeye dosyanın kaydettiği son bir ay girer.
 Forward puanı okunurken: spota yakın (spotun 0,8 – 1,25 katı) bir kota outright forward sayılır (NDF ticker'ları),
