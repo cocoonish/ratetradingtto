@@ -115,6 +115,52 @@ def tenor_label(value: float, unit: str) -> str:
     return "%gM" % months
 
 
+#: what puts one instrument against another: "2y vs 5y", "6x9m vs 9x12m", "1y1y v. 2y1y" - a spread of the two
+_VERSUS = {"vs", "vs.", "v", "v.", "versus"}
+
+
+def _reading(pieces: List[Tuple[float, str]], sep: str, fra_word: bool) -> Tuple[str, List[str], List[float]]:
+    """What a tenor expression names: (kind, tenor labels, months).  One tenor is an outright, three a fly; two
+    are a FRA with an "x" (or the word), a spread when written with "v" / "vs" / "-" in between - long − short,
+    in whichever order -, else a spread when the second is the longer ("1y5y") and a forward when not ("1y1y")."""
+    tenors = [tenor_label(v, u) for v, u in pieces]
+    months = [tenor_months(v, u) for v, u in pieces]
+    if len(tenors) == 1:
+        return "outright", tenors, months
+    if len(tenors) == 3:
+        return "fly", tenors, months
+    if sep == "x" or fra_word:
+        return "fra", tenors, months
+    if sep == "v" and months[0] > months[1]:
+        return "spread", tenors[::-1], months[::-1]          # "5y vs 2y": still 5Y − 2Y
+    if sep != "v" and months[0] >= months[1]:
+        return "fwd", tenors, months                        # "1y1y", "5y5y": a forward, not a spread
+    return "spread", tenors, months
+
+
+def _versus(low: List[str], j: int, fra_word: bool) -> Optional[Tuple[int, int, Tuple[int, List[Tuple[float, str]], str]]]:
+    """A second instrument put against the one that ends before ``low[j]``: "6x9m vs 9x12m", "6x9 fra vs 9x12 fra",
+    "2y ois v. 5y ois" -> (where the "vs" is, where the second starts, its tenor expression)."""
+    while j < len(low) and (low[j] in _PRODUCTS or low[j] in _FRA):
+        j += 1
+    if j >= len(low) or low[j] not in _VERSUS:
+        return None
+    k = j + 1
+    while k < len(low) and (low[k] in _PRODUCTS or low[k] in _FRA):
+        k += 1
+    second = _tenor_expression(low, k, fra_word) if k < len(low) else None
+    return (j, k, second) if second else None
+
+
+def _leg_span(kind: str, months: List[float]) -> Tuple[float, float]:
+    """Where an instrument's rate runs, in months: (start, end) - a FRA or a forward from its start, an outright from 0."""
+    if kind == "fra":
+        return months[0], months[1]
+    if kind == "fwd":
+        return months[0], months[0] + months[1]
+    return 0.0, months[0]
+
+
 def _tenor_expression(tokens: List[str], start: int, fra_word: bool) -> Optional[Tuple[int, List[Tuple[float, str]], str]]:
     """The tenors that start at ``tokens[start]``: (tokens used, [(number, unit), ...], separator) - "18m",
     "3y5y", "1v5y", "1y v 5y", "2y3y4y", "9x12m", "9 x 12" ...  The longest reading wins."""
@@ -526,6 +572,7 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         return None                                        # three bonds or more: kept as it was written
     bond = None
     switch: Optional[List[Dict[str, Any]]] = None
+    parts: Optional[List[Dict[str, Any]]] = None           # the two FRAs (forwards) of a spread written "A vs B"
     if len(bonds) == 2:
         (u1, _), (u2, _) = bonds
         if any(_is_level(low[k]) for k in range(u1[-1] + 1, u2[0])) and any(_is_level(low[k]) for k in range(u2[-1] + 1, len(low))):
@@ -560,20 +607,26 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
         idx = [k for k in range(len(low)) if k != short]
     elif found:
         used, pieces, sep = found
-        tenors = [tenor_label(v, u) for v, u in pieces]
-        months = [tenor_months(v, u) for v, u in pieces]
-        idx = [k for k in range(len(low)) if not at <= k < at + used]       # the words around the tenors
+        kind, tenors, months = _reading(pieces, sep, fra_word)
+        taken = set(range(at, at + used))
+        # one instrument against another - "6x9m vs 9x12m", "2y ois vs. 5y ois": the spread of the two, the later
+        # one − the earlier (bp), as "1y5y" is 5Y − 1Y; two FRAs or forwards are kept as its parts
+        vs = _versus(low, at + used, fra_word) if kind in ("outright", "fra", "fwd") else None
+        if vs is not None:
+            j, k2, (used2, pieces2, sep2) = vs
+            kind2, tenors2, months2 = _reading(pieces2, sep2, fra_word)
+            if kind2 in ("outright", "fra", "fwd"):
+                taken |= {j} | set(range(k2, k2 + used2))
+                legs = sorted([(kind, tenors, months), (kind2, tenors2, months2)], key=lambda g: _leg_span(g[0], g[2])[::-1])
+                if kind == kind2 == "outright":
+                    tenors, months = [g[1][0] for g in legs], [g[2][0] for g in legs]
+                else:
+                    parts = [{"kind": g[0], "tenors": g[1], "months": g[2]} for g in legs]
+                    tenors = [instrument_label(g[0], g[1]) for g in legs]
+                    months = [_leg_span(g[0], g[2])[1] for g in legs]
+                kind = "spread"
+        idx = [k for k in range(len(low)) if k not in taken]                # the words around the tenors
         product = next((_PRODUCTS[low[k]] for k in idx if low[k] in _PRODUCTS), "OIS")
-        if len(tenors) == 1:
-            kind = "outright"
-        elif len(tenors) == 3:
-            kind = "fly"
-        elif sep == "x" or fra_word:
-            kind = "fra"
-        elif months[0] >= months[1]:
-            kind = "fwd"                                     # "1y1y", "5y5y": a forward, not a spread
-        else:
-            kind = "spread"                                  # two tenors, with or without a "v": long − short
     elif instrument is not None:
         tenors, months, kind = list(instrument["tenors"]), list(instrument["months"]), instrument["kind"]
         idx = list(range(len(low)))
@@ -594,6 +647,8 @@ def parse_quote(text: str, ref: Optional[Callable[[Dict[str, Any]], Optional[flo
                            "label": instrument_label(kind, tenors), "key": instrument_key(product, kind, tenors),
                            "unit": unit, "event": "quote", "bid": None, "ask": None, "price": None, "side": None,
                            "clear": [], "flags": [], "note": ""}
+    if parts:
+        out["parts"] = parts
     if switch is not None:
         out["label"] = " / ".join(tenors)
         isins = [b.get("isin") for b in switch]
@@ -1248,6 +1303,8 @@ def board(records: List[Dict[str, Any]], ours: Optional[Callable[[Dict[str, Any]
                 row["isin"] = q["isin"]                     # a bond's ISIN, for the screen and the bond pages
             if q.get("legs"):
                 row["legs"] = q["legs"]                     # the two bonds of a switch
+            if q.get("parts"):
+                row["parts"] = q["parts"]                   # the two FRAs of a spread written "6x9m vs 9x12m"
         when = ((q.get("date") or "") + " " + (q.get("time") or "")).strip()
         ev = q["event"]
         if ev == "quote":
@@ -1309,6 +1366,10 @@ def model_level(q: Dict[str, Any], par: Callable[[str], Optional[float]],
     spread (long − short) and fly (2·body − wings) in bp.  ``None`` where the curve has no answer."""
     t = q["tenors"]
     try:
+        if q["kind"] == "spread" and q.get("parts"):
+            # "6x9m vs 9x12m": the later part − the earlier, each where the curve has it (per cent) -> bp
+            lv = [model_level(p, par, fra) for p in q["parts"]]
+            return None if None in lv else (lv[1] - lv[0]) * 100.0
         if q["kind"] == "outright":
             v = par(t[0])
             return None if v is None else v * 100.0

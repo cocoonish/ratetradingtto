@@ -199,6 +199,14 @@ def test_the_chat_on_the_phone():
     ("3x6 36.10/36.30", "fra", "3x6"),
     ("9m12m fra 33.80/34.10", "fra", "9x12"),                 # ... and so is anything called one
     ("1y1y 34.50/34.80", "fwd", "1Y1Y"),                      # the same tenor twice cannot be a spread
+    ("5y vs 2y -10/-5", "spread", "2Y–5Y"),                   # one against another: a spread, whichever comes first
+    ("2y vs. 5y -10/-5", "spread", "2Y–5Y"),
+    ("2y ois versus 5y ois -10/-5", "spread", "2Y–5Y"),
+    ("6x9m vs 9x12m -65/-35", "spread", "6x9–9x12"),          # two FRAs: the later one − the earlier
+    ("9x12m vs 6x9m -65/-35", "spread", "6x9–9x12"),
+    ("6x9 v 9x12 -60/-40", "spread", "6x9–9x12"),
+    ("6x9 fra vs 9x12 fra -60/-40", "spread", "6x9–9x12"),
+    ("1y1y vs 2y1y 10/12", "spread", "1Y1Y–2Y1Y"),
     ("18m ois 35.03/35.23", "outright", "18M"),
     ("1.5y ois 35.03/35.23", "outright", "18M"),
     ("24m ois 35.26/35.46", "outright", "2Y"),
@@ -460,6 +468,30 @@ selam""", ref, TODAY)
     assert bc.board([]) == []
 
 
+def test_one_instrument_against_another():
+    # "A vs B": the spread of the two, the later one − the earlier (as "1y5y" is 5Y − 1Y); two FRAs are its parts -
+    # its own instrument, not a quote of the 6x9 FRA with "9x12m" left beside it as a note
+    q = one("6x9m vs 9x12m -65/-35")
+    assert (q["product"], q["kind"], q["key"], q["unit"], q["bid"], q["ask"], q["note"]) == \
+        ("OIS", "spread", "OIS:spread:6x9/9x12", "bp", -65.0, -35.0, "")
+    assert q["parts"] == [{"kind": "fra", "tenors": ["6M", "9M"], "months": [6.0, 9.0]},
+                          {"kind": "fra", "tenors": ["9M", "1Y"], "months": [9.0, 12.0]}]
+    assert one("9x12m vs 6x9m -65/-35")["key"] == q["key"]
+    # two tenors: the spread the desk also writes without the "vs" - the same instrument, without parts
+    assert one("2y vs 5y -10/-5")["key"] == one("2y5y -10/-5")["key"] == one("5y v. 2y -10/-5")["key"] == "OIS:spread:2Y/5Y"
+    assert "parts" not in one("2y vs 5y -10/-5")
+    # where the curve has it: 9x12 − 6x9 (bp); a part the curve cannot answer leaves the spread without one
+    fra = lambda a, b: {(6, 9): 0.3428, (9, 12): 0.3396}.get((a, b))      # noqa: E731
+    assert bc.model_level(q, lambda t: None, fra) == pytest.approx(-32.0)
+    assert bc.model_level(one("6x9 vs 12x15 -40/-30"), lambda t: None, fra) is None
+    # on the board: a row of its own, next to the 6x9 FRA's - which keeps its own quote
+    board = bc.board(bc.parse_chat("10:00:00 6x9 ois 34.10/34.30\n10:01:00 6x9m vs 9x12m -65/-35", ref, TODAY))
+    assert [(r["label"], r["bid"], r["ask"]) for r in board] == [("6x9–9x12", -65.0, -35.0), ("6x9", 34.10, 34.30)]
+    assert board[0]["parts"] == q["parts"]
+    # two bonds are still a switch, the same tenor twice still a forward
+    assert one("mar28 vs jul30 switch -45/-40")["kind"] == "switch" and one("1y1y 34.50/34.80")["kind"] == "fwd"
+
+
 def test_against_a_curve():
     par = {"6M": 0.3644, "1Y": 0.3555, "18M": 0.3559, "2Y": 0.3585, "3Y": 0.3566, "4Y": 0.3527, "5Y": 0.3471}.get
     fra = lambda a, b: {(9, 12): 0.3411, (12, 24): 0.3627}.get((a, b))      # noqa: E731
@@ -610,6 +642,11 @@ def test_the_board_next_to_the_curve(desk):
     # OIS first, outrights by tenor, then spreads, flies, forwards
     kinds = [r["kind"] for r in svc.broker(u)["board"] if r["product"] == "OIS"]
     assert kinds == sorted(kinds, key=bc.KINDS.index)
+    # a spread of two FRAs ("6x9m vs 9x12m"): the curve's 9x12 − its 6x9, in bp (read without keeping it)
+    f = svc.et.call(lambda: (mkt.fra_months(6, 9), mkt.fra_months(9, 12)))
+    row = svc.broker_parse(u, "16:00:08 6x9m vs 9x12m -65/-35")["rows"][0]
+    assert (row["key"], row["bid"], row["ask"]) == ("OIS:spread:6x9/9x12", -65.0, -35.0)
+    assert row["model"] == pytest.approx((f[1] - f[0]) * 1e4)
     # the curve of the user's own scenario
     other = svc.login("Broker B")["user"]
     svc.set_inputs(other, "tto", [{"ref": "OIS_MAIN!B14", "value": "40"}], allow_adhoc=True)
