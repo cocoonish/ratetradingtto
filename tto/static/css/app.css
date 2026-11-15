@@ -813,3 +813,18 @@ table.fxheat th.skew { color: var(--ink-2); }
 #watch-table tr.pick td, #alarm-table tr.pick td { background-color: var(--accent-soft); }
 #watch-table tr.pick td:first-child, #alarm-table tr.pick td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 table.heat td.pick { box-shadow: inset 0 0 0 2px var(--accent); }
+/* the columns each user hides (columns.js): the label in a panel's header while some are hidden, the list, the mark
+   on the captions next to where they were */
+.panel > header .colschip { font-size: 10.5px; color: var(--accent-ink); background: var(--accent-soft); border: 1px solid transparent;
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap; cursor: pointer; }
+.panel > header .colschip:hover { border-color: var(--accent); }
+.iconbtn.colsbtn.on { color: var(--accent-ink); }
+table td[hidden], table th[hidden] { display: none !important; }
+table.grid tr.hd td[data-gapl], table th[data-gapl] { box-shadow: inset 2px 0 0 var(--accent); }
+table.grid tr.hd td[data-gapr], table th[data-gapr] { box-shadow: inset -2px 0 0 var(--accent); }
+table.grid tr.hd td[data-gapl][data-gapr], table th[data-gapl][data-gapr] { box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent); }
+.menu label.mcheck { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 6px; cursor: pointer; color: var(--ink); max-width: 420px; }
+.menu label.mcheck:hover { background: var(--accent-soft); }
+.menu label.mcheck input { margin: 0; accent-color: var(--accent); }
+.menu label.mcheck .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu label.mcheck .sub { color: var(--ink-3); font-size: 11px; font-family: var(--mono); white-space: nowrap; }

@@ -431,7 +431,9 @@ export class ViewPage {
         body.appendChild(h('div', { class: 'chart-empty' }, 'Grafik bulunamadı'));
       }
     } else if (p.data) {
-      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: this.adhoc });
+      // each user hides columns of their own: by the page and the table, a column by its letter in the sheet
+      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: this.adhoc,
+        name: p.type === 'notes' ? null : 'v/' + this.id + '/' + p.id, tools });
       body.appendChild(it.grid.el);
       if (p.data.hc) {
         // Excel hides some columns of this table: say so, one click shows them

@@ -20,6 +20,7 @@ import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
 import { UsersPage } from './pages/users.js';
+import { loadHiddenColumns } from './columns.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null, es: null,
@@ -193,7 +194,9 @@ async function enter(me) {
   $('app').classList.remove('hidden');
   $('user-name').textContent = me.display;
   $('user-av').textContent = (me.display.trim()[0] || '?').toLocaleUpperCase('tr');
+  const hiddenColumns = loadHiddenColumns();          // the columns this user hid: in hand before a table is drawn
   const [nav, status, users] = await Promise.all([api.get('/api/nav'), api.get('/api/status'), api.get('/api/users')]);
+  await hiddenColumns;
   state.pages = nav.pages;
   for (const u of users.users) state.users[u.name] = u.display;
   applyStatus(status);
