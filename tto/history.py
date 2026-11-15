@@ -978,6 +978,7 @@ class History(object):
                 engine.set_user_inputs(name, svc._overlay(name, book))
             for key in [k for k in svc._overlays if k[1] == BOOK]:
                 svc._overlays.pop(key, None)
+            svc._note_private()
         self.store.put("mpc.archive", sorted(set(archive)))
         rolled = [d for d in old if d not in new and _day(d) < cutoff]
         return {"meetings": len(new), "archive": len(archive), "rolled": rolled, "first": new[0],

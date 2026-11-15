@@ -233,6 +233,10 @@ class Store(object):
             rows = self._q("SELECT book, cell, value FROM user_inputs WHERE user=? AND book=?", (user, book))
         return {(r["book"], r["cell"]): json.loads(r["value"]) for r in rows}
 
+    def users_with_inputs(self) -> List[str]:
+        """The users who keep personal inputs (their pages are their own)."""
+        return [r["user"] for r in self._q("SELECT DISTINCT user FROM user_inputs")]
+
     def saved_cells(self) -> List[Tuple[str, str]]:
         """Every (book, cell) any user keeps a value of: personal inputs and the cells of saved scenarios."""
         out = {(r["book"], r["cell"]) for r in self._q("SELECT DISTINCT book, cell FROM user_inputs")}

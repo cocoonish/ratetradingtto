@@ -653,14 +653,118 @@ def test_the_same_page_asked_again_while_it_is_made_is_made_once(service):
     service.et.submit_at(service.et.WRITE, gate.wait, 10)
     service.bump()
     made = []
-    real = service._view
-    service._view = lambda *a: (made.append(a[1]), real(*a))[1]
+    real = service._render
+    service._render = lambda *a: (made.append(a[3]), real(*a))[1]
     try:
+        before = len(service._inflight)
         f1, f2 = service.view_future(u, "calc"), service.view_future(u, "calc")
         h1, h2 = service.header_future(u), service.header_future(u)
-        assert f1 is f2 and h1 is h2 and not f1.done()
+        assert len(service._inflight) == before + 2 and not f1.done()      # one page job, one header job
         gate.set()
-        assert f1.result(timeout=120)["panels"] and h1.result(timeout=120)["items"]
+        assert f1.result(timeout=120)["panels"] == f2.result(timeout=120)["panels"]
+        assert h1.result(timeout=120)["items"] == h2.result(timeout=120)["items"]
         assert made == ["calc"]
     finally:
-        del service._view
+        del service._render
+
+
+# ---------------------------------------------------------------------------------------------- pages kept
+def _made_panels(svc):
+    """Count the panels made (not kept) from now on: (counter, undo)."""
+    made = []
+    real = svc._panel
+    svc._panel = lambda *a: (made.append(a[0].get("id")), real(*a))[1]
+    return made, lambda: svc.__dict__.pop("_panel", None)
+
+
+def test_a_page_is_made_once_for_everybody_without_inputs_and_only_what_changed_again(tmp_path):
+    """Pages are kept per calculation: two users without inputs of their own share one; a new generation in which
+    nothing they read changed makes no panel again (and ``since`` answers "unchanged"); a shared input makes again only
+    the panels that read it - what is kept equals a page made from scratch."""
+    svc = make_service(tmp_path)
+    try:
+        a, b = login(svc, "Pay A"), login(svc, "Pay B")
+        made, undo = _made_panels(svc)
+        try:
+            first = svc.view(a, "forward")
+            n = len(made)
+            assert n > 30 and svc.view(b, "forward")["panels"] == first["panels"] and len(made) == n   # B: kept
+            svc.bump()
+            again = svc.view(b, "forward")
+            assert len(made) == n and again["panels"] == first["panels"] and again["gen"] == svc.gen
+            assert svc.view(a, "forward", since=first["gen"]) == {"id": "forward", "gen": svc.gen, "unchanged": True, "as": "s"}
+            # the RET curve (a shared input): the panels that read it, and only those
+            svc.set_inputs(a, "tto", [{"ref": "Forward!W40", "value": "41,5"}])
+            g = svc.gen
+            made.clear()
+            part = svc.view(b, "forward", since=again["gen"])
+            assert part["partial"] and 0 < len(part["panels"]) < len(first["panels"])
+            assert set(made) >= {p["id"] for p in part["panels"]} and len(made) < n
+            assert svc.view(a, "forward")["panels"] == svc.et.call(svc._view, a, "forward", False, None)["panels"]
+            assert svc.view(a, "forward", since=g) ["unchanged"]
+        finally:
+            undo()
+    finally:
+        svc.stop()
+
+
+def test_only_the_panels_asked_for_are_made_and_sent(service):
+    """The browser asks for the panels of the open tab: only those are made (and sent); another tab's are made when
+    they are asked for."""
+    u = login(service, "Sekme Kullanıcı")
+    page = service.view(u, "forward")
+    tabs = {s["id"]: s["panels"] for s in page["sections"]}
+    service.bump()
+    made, undo = _made_panels(service)
+    try:
+        calc = tabs["calc"] + page["pinned"]
+        part = service.view(u, "forward", panels=calc)
+        assert part["partial"] and [p["id"] for p in part["panels"]] == [i.split(":")[0] for i in page["ids"] if i.split(":")[0] in calc]
+        assert part["ids"] == page["ids"] and part["sections"] == page["sections"]
+        other = service.view(u, "forward", panels=tabs["ret"])
+        assert {p["id"] for p in other["panels"]} == set(tabs["ret"])
+    finally:
+        undo()
+
+
+def test_a_user_who_types_a_value_gets_a_page_of_their_own_at_once(service):
+    """A value typed by a user makes their page their own (``as``: "p") at once - also when the browser asks "since" a
+    generation of the page everybody shares (then it gets the whole page); blanking it gives the shared page back."""
+    u = login(service, "Kendi Sayfası")
+    shared = service.view(u, "forward")
+    assert shared["as"] == "s"
+    service.set_inputs(u, "tto", [{"ref": "Forward!D2", "value": "15.12.2026"}])
+    mine = service.view(u, "forward", since=shared["gen"], as_="s")
+    assert mine["as"] == "p" and len(mine["panels"]) == len(shared["panels"])
+    assert any(c.get("m") == 1 for p in mine["panels"] for row in (p.get("data") or {}).get("rows", []) for c in row)
+    assert service.header(u)["as"] == "p"
+    service.reset_inputs(u, "tto")
+    back = service.view(u, "forward", since=mine["gen"], as_="p")
+    assert back["as"] == "s" and len(back["panels"]) == len(shared["panels"])
+
+
+def test_the_pages_are_told_of_new_generations_at_most_once_a_second(service):
+    """A busy market bumps the generation every 0.3 s and every page asks again when told: they are told at most once
+    a second - of the last generation."""
+    import time
+    told = []
+    service.add_listener(told.append)
+    try:
+        time.sleep(1.1)
+        for _ in range(5):
+            service.bump()
+        assert len(told) == 1
+        time.sleep(1.3)
+        assert len(told) == 2 and told[-1] == service.gen
+    finally:
+        service.remove_listener(told.append)
+
+
+def test_the_header_is_kept_and_answers_unchanged(service):
+    u = login(service, "Şerit")
+    h = service.header(u)
+    service.bump()
+    again = service.header(u, since=h["gen"])
+    assert again["unchanged"] and again["as"] == "s"
+    assert service.header(u)["items"] == h["items"]
+

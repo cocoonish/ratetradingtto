@@ -234,6 +234,8 @@ def calc_value(calc, fn, si: int, r: int, c: int) -> Any:
     from .xl.values import intersect
     calc.depth = 0
     v = fn(calc, si, r, c)
+    if calc.track is not None:
+        calc.track |= calc.cm                       # (what a conditional format read counts as read by the page)
     return intersect(v, r, c)
 
 

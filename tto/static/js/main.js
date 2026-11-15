@@ -36,6 +36,10 @@ function store(key, value) {
 
 const ctx = {
   refreshNow: () => { runRefresh(); pollStatus(); },
+  /** The latest generation the server announced (a panel drawn from an older one is not up to date). */
+  gen: () => state.gen,
+  /** Bring the page up to date now (a tab opened whose panels were not, while another was). */
+  refreshPage: () => { runRefresh(); },
   setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
   displayName: (key) => state.users[key] || key || '',
   openRet: () => openRetEditor(ctx),
@@ -190,6 +194,7 @@ async function enter(me) {
   session.display = me.display;
   session.role = me.role;
   state.pending = me.pending || 0;
+  state.headerGen = 0;
   $('login').classList.add('hidden');
   $('app').classList.remove('hidden');
   $('user-name').textContent = me.display;
@@ -300,6 +305,8 @@ async function openPage(id, panel) {
 
 // ---------------------------------------------------------------------- live refresh
 async function runRefresh() {
+  // a browser tab that is not in view does not ask: it catches up when it is looked at again
+  if (document.hidden) { state.behind = true; return; }
   if (state.refreshing) { state.dirty = true; return; }
   state.refreshing = true;
   try {
@@ -397,12 +404,16 @@ function applyStatus(status) {
 }
 
 function pollStatus() {
-  if (!session.user) return;
+  if (!session.user || document.hidden) return;
   api.get('/api/status').then(applyStatus).catch(() => {});
 }
 
 async function loadHeader() {
-  const res = await api.get('/api/header');
+  // only when it changed since the strip was drawn (the same strip for everybody without inputs of their own)
+  const res = await api.get('/api/header', state.headerGen ? { since: state.headerGen, as: state.headerAs } : null);
+  state.headerAs = res.as;
+  if (res.unchanged) return;
+  state.headerGen = res.gen || 0;
   const box = $('kpis');
   const items = res.items || [];
   if (box.children.length !== items.length) {
@@ -527,6 +538,7 @@ function boot() {
     toast(settings.lang === 'en' ? 'Sayı biçimi: 1,234.56 (İngilizce Excel)' : 'Sayı biçimi: 1.234,56 (Türkçe Excel)', '', 2600);
     const id = state.pageId;
     state.pageId = null;
+    state.headerGen = 0;                            // (another number format: the whole strip again)
     loadHeader().catch(() => {});
     if (id) openPage(id);
   });
@@ -547,6 +559,11 @@ function boot() {
       [{ sep: true }, { label: 'Çıkış', action: () => signOut() }]));
   });
   window.addEventListener('hashchange', () => { if (session.user) route(); });
+  // back in view: what changed meanwhile is asked for once
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !session.user) return;
+    if (state.behind) { state.behind = false; runRefresh(); }
+  });
   setInterval(pollStatus, 15000);
 
   showLogin('');                                     // straight in when this browser's session is still valid

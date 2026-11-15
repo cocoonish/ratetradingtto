@@ -67,6 +67,19 @@ def _user(request: Request) -> Optional[str]:
     return request.scope.get("tto_user")
 
 
+def _role(request: Request) -> str:
+    """The signed-in user's role ("admin" / "user"), as the session gate found it."""
+    return request.scope.get("tto_role") or "user"
+
+
+def _since(request: Request) -> Optional[int]:
+    """``?since=<generation>``: what the page has already (``None``: everything is asked for)."""
+    try:
+        return int(request.query_params["since"])
+    except (KeyError, ValueError):
+        return None
+
+
 def _token(request: Request) -> Optional[str]:
     """The session token: the cookie the browser keeps, or ``Authorization: Bearer …`` (scripts, tests)."""
     head = request.headers.get("authorization") or ""
@@ -260,7 +273,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def header(request: Request):
-        return ok(await engine(svc().header_future(_user(request), _lang(request))))
+        return ok(await engine(svc().header_future(_user(request), _lang(request), _since(request), _role(request),
+                                                   request.query_params.get("as"))))
 
     @handler
     async def spot(request: Request):
@@ -270,7 +284,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def view(request: Request):
         show = request.query_params.get("all") in ("1", "true")
-        return ok(await engine(svc().view_future(_user(request), request.path_params["view_id"], show, _lang(request))))
+        panels = [x for x in (request.query_params.get("panels") or "").split(",") if x][:400] or None
+        return ok(await engine(svc().view_future(_user(request), request.path_params["view_id"], show, _lang(request),
+                                                 _since(request), panels, _role(request), request.query_params.get("as"))))
 
     @handler
     async def image(request: Request):
@@ -732,9 +748,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                 pass
 
         service = svc()
-        service.add_listener(push)
 
         async def stream():
+            service.add_listener(push)
             try:
                 yield "data: %s\n\n" % json.dumps({"gen": service.gen})
                 while True:

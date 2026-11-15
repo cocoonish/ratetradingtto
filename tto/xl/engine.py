@@ -18,6 +18,7 @@ evaluated the bits of everything it reads are OR-ed together and stored next to 
 from __future__ import annotations
 
 import datetime as _dt
+import itertools
 import sys
 import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -29,7 +30,8 @@ from .parser import parse_template, walk
 from .values import XlArray, XlRange, date_to_serial
 
 _MISS = object()
-DEPTH_LIMIT = 90          # nested cell evaluations before the engine unwinds and restarts bottom-up
+_SERIALS = itertools.count(1)          # every calculation's own number (a dropped user's new one is another)
+DEPTH_LIMIT = 90         # nested cell evaluations before the engine unwinds and restarts bottom-up
 DEEP_LIMIT = 1000         # ... on a thread started with a big stack (the calculation threads)
 # Windows takes a thread stack *below* 256 MiB only (256 MiB itself is refused - for years the calculation thread ran
 # on the default ~2 MB stack, where a chain of 500-700 nested cells already ends the process); a multiple of 4 KiB
@@ -137,6 +139,9 @@ class Engine(object):
         self._refs = None                                 # RefIndex (ref_index)
         self._refs_lock = threading.Lock()
         self.marked = 0                                   # late declarations followed by the references (not a reset)
+        # increases whenever masks change without a value changing (a reset, an input declared): what remembered
+        # the masks of what it read (a page's panel) has to read again
+        self.layout = 0
         self.shared = Calc(self, None, None)
         self.users: Dict[str, "Calc"] = {}
         self.lock = threading.RLock()
@@ -194,6 +199,7 @@ class Engine(object):
         for si, rc in cells:
             if rc in self.input_mask[si]:
                 continue
+            self.layout += 1
             if pristine:
                 if rc in self.fml[si] and rc not in self.pins[si] and rc not in self.input_value[si]:
                     self._set_input(si, rc, self.bit(("cell", si, rc)))     # (the bit comes with the value: _eval)
@@ -366,6 +372,7 @@ class Engine(object):
     # ------------------------------------------------------------------ invalidation
     def reset(self) -> None:
         """Drop every computed value."""
+        self.layout += 1
         self.shared._reset()
         for calc in self.users.values():
             calc._reset()
@@ -454,7 +461,40 @@ class Calc(object):
         self.busy: List[set] = [set() for _ in range(n)]
         self.evals = 0
         self.restarts = 0                     # chains unwound at the depth limit and restarted from their deep end
+        # what changed, for those who remember what they read (a page's panel): every invalidation's mask, numbered
+        self.serial = next(_SERIALS)
+        self.epoch = 0
+        self._log: List[Tuple[int, int]] = []
+        self._floor = 0                       # invalidations up to this epoch are no longer in the log
+        self.track: Optional[int] = None      # not None: the masks of the cells read through get() are OR-ed in
         self._reset()
+
+    # ------------------------------------------------------------------ what changed
+    LOG_MAX = 512
+
+    def changed_since(self, epoch: int) -> Optional[int]:
+        """The masks of what was invalidated after ``epoch`` OR-ed together (0: nothing; None: reset since, or too
+        long ago to tell)."""
+        if epoch < self._floor:
+            return None
+        m = 0
+        for e, k in reversed(self._log):
+            if e <= epoch:
+                break
+            m |= k
+        return m
+
+    def _logged(self, changed: Optional[int]) -> None:
+        self.epoch += 1
+        if changed is None:                   # (a reset: everything)
+            self._log = []
+            self._floor = self.epoch
+            return
+        self._log.append((self.epoch, changed))
+        if len(self._log) > self.LOG_MAX:
+            drop = len(self._log) - self.LOG_MAX // 2
+            self._floor = self._log[drop - 1][0]
+            del self._log[:drop]
 
     # ------------------------------------------------------------------ state management
     def _reset(self) -> None:
@@ -465,6 +505,7 @@ class Calc(object):
         self.depth = 0
         self.busy = [set() for _ in range(n)]
         self._evals0 = self.evals                   # (nothing evaluated since: Engine._pristine)
+        self._logged(None)
         if self.parent is None:
             self.memo = []
             self.maskd = []
@@ -573,6 +614,7 @@ class Calc(object):
     def _invalidate(self, changed: int) -> None:
         eng = self.engine
         shared = self.parent is None
+        self._logged(changed)
         if self._stale > self.STALE_MAX:
             self._rebuild_groups()
         groups = self.groups
@@ -644,6 +686,8 @@ class Calc(object):
                 guard += 1
                 if guard > 2000000:
                     raise RuntimeError("evaluation does not converge")
+        if self.track is not None:
+            self.track |= self.cm                # (the mask of the cell asked for)
         return v
 
     def value(self, ref: str) -> Any:
