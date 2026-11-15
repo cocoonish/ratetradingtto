@@ -3859,7 +3859,8 @@ class Service(object):
     @staticmethod
     def _broker_model(mkt, q: Dict[str, Any]) -> Optional[float]:
         """Where the dashboard's own TRY OIS curve has an instrument of the chat (cross-currency: no answer); for a
-        bond, its screen price (or yield, for a bill) in the DİBS RV table."""
+        bond, its screen price (or yield, for a bill) in the DİBS RV table; for a meeting-dated swap, the bootstrap
+        rate of its two days in the 'MPC OIS' table (the trade form's "Piyasa mid")."""
         if mkt is not None and q.get("product") == "DIBS" and q.get("kind") == "switch":
             sw = Service._switch_screen(mkt, q)
             return sw["screen"] if sw else None
@@ -3868,7 +3869,70 @@ class Service(object):
             return sc.get("yield") if q.get("unit") == "yld" else sc.get("clean")
         if mkt is None or q.get("product") != "OIS":
             return None
-        return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months)
+        return bc.model_level(q, lambda t: mkt.par(t) if t in bl.OIS_TENORS else None, mkt.fra_months,
+                              lambda a, b: mkt.mpc_span(Service._serial(a), Service._serial(b)))
+
+    @staticmethod
+    def _serial(iso: str) -> float:
+        return float(date_to_serial(_dt.date.fromisoformat(iso)))
+
+    def _mpc_calendar(self, mkt, day: str) -> Optional[Dict[str, Any]]:
+        """The meetings a chat's "dec mpc", "mpc1" are dated with (``bc.mpc_span``): every meeting the dashboard knows -
+        the ones held (the calendar's archive) and the workbook's list (OIS_MAIN!P10:P89) - with its effective day: the
+        'MPC OIS' table's own for the meetings it covers (the business day after the decision), the day after the
+        decision for the others; the OIS spot; ``day``, the day of the lines that do not say theirs."""
+        from .history import MEETING_ROWS
+        if mkt is None:
+            return None
+        try:
+            table = mkt.mpc_table()
+            listed = [mkt.value("OIS_MAIN!P%d" % r) for r in range(MEETING_ROWS[0], MEETING_ROWS[1] + 1)]
+        except Exception:  # noqa: BLE001 - a workbook without the table: nothing is dated
+            return None
+        effective = {serial_to_date(d): serial_to_date(e) for d, e in table["meetings"]}
+        days = set(effective) | {serial_to_date(v) for v in listed if type(v) is float}
+        for iso in self.history.archive():
+            days.add(_dt.date.fromisoformat(iso))
+        return {"meetings": [(d, effective.get(d, d + _dt.timedelta(days=1))) for d in sorted(days)],
+                "spot": serial_to_date(table["spot"]) if table["spot"] is not None else None, "on": _dt.date.fromisoformat(day)}
+
+    @staticmethod
+    def _overnight(rate: float, days: float) -> float:
+        """The overnight rate (ACT/365) that compounded every day for ``days`` gives the simple rate ``rate``: what
+        TLREF has to average over a meeting's period."""
+        return 365.0 * ((1.0 + rate * days / 365.0) ** (1.0 / days) - 1.0)
+
+    def _mpc_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
+        """A meeting swap of one period - from a meeting to the next - next to the MPC OIS bootstrap: the step at its
+        meeting that each of its levels stands for (``implied``, ``kind`` "mpc", bp) - the level's overnight
+        equivalent − that of the bootstrap's rate for the period before the meeting (from the meeting before it, or
+        from the OIS spot for the first one).  ``model``: the bootstrap's own step for the meeting."""
+        items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "best_bid", "best_ask")) for r in board or ()]
+        items = [(q, f) for q, f in items if q.get("kind") == "mpc" and (q.get("mpc") or {}).get("start") and (q.get("mpc") or {}).get("meeting")]
+        mkt = self._broker_market(user) if items else None
+        if mkt is None:
+            return
+        try:
+            days = sorted(mkt.mpc_table()["lndf"])
+        except Exception:  # noqa: BLE001 - a workbook without the table
+            return
+        for q, fields in items:
+            s, e = self._serial(q["mpc"]["start"]), self._serial(q["mpc"]["end"])
+            if s not in days or e not in days or days.index(s) == 0 or days.index(e) != days.index(s) + 1:
+                continue                                    # several periods, or days the table does not have
+            p = days[days.index(s) - 1]
+            prev, model = mkt.mpc_span(p, s), mkt.mpc_span(s, e)
+            if prev is None:
+                continue
+            base = self._overnight(prev, s - p)
+            out: Dict[str, Any] = {"kind": "mpc", "meeting": q["mpc"]["meeting"], "days": e - s, "prev": prev * 100.0,
+                                   "prev_on": base * 100.0, "prev_from": serial_to_date(p).isoformat(), "prev_to": q["mpc"]["start"],
+                                   "model": None if model is None else (self._overnight(model, e - s) - base) * 1e4,
+                                   "model_level": None if model is None else model * 100.0}
+            for f in fields:
+                if type(q.get(f)) is float:
+                    out[f] = (self._overnight(q[f] / 100.0, e - s) - base) * 1e4
+            q["implied"] = out
 
     def _fx_market(self, user: Optional[str]) -> Optional[Callable[[str, float, str], Optional[Dict[str, float]]]]:
         """What a USDTRY swap quote in points means as a TRY rate - with the Forward sheet's own numbers: the spot
@@ -4025,6 +4089,7 @@ class Service(object):
         """The TRY rate each FX swap quote in points stands for (``implied``: bid / ask / price / last, in per cent)."""
         self._bond_implied(user, rows, board)
         self._switch_implied(user, rows, board)
+        self._mpc_implied(user, rows, board)
         if not any(q.get("product") == "FX" for q in rows) and not any(r.get("product") == "FX" for r in board or ()):
             return
         fn = self._fx_market(user)
@@ -4098,7 +4163,7 @@ class Service(object):
                         said[r["isin"]] = lv                  # the last word on a bond stands
             return list(said.values()) + screen[0]
 
-        rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing, nearby)
+        rows = bc.parse_chat(str(text or "")[:200000], ref, _dt.date.today(), standing, nearby, self._mpc_calendar(mkt, day))
         self._bond_pick(mkt, rows)
         self._switch_legs(mkt, rows)
         now = _dt.datetime.now().strftime("%H:%M:%S")
@@ -4336,7 +4401,7 @@ class Service(object):
         from .xlsx import XlsxBook
         data = self._broker(user, date, date_to)
         names = {u["name"]: u["display"] for u in self.store.users()}
-        kinds = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "fwd": "Forward"}
+        kinds = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "fwd": "Forward", "mpc": "MPC"}
         events = {"quote": "Kota", "trade": "İşlem", "ref": "Geri çekildi", "interest": "İlgi", "level": "Seviye", "note": "Not",
                   "text": "Metin"}
         wb = XlsxBook()

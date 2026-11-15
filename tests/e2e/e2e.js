@@ -673,6 +673,28 @@ async function shot(page, name) {
       && oisFilled[5] === 'Tullett', oisFilled);
     await open(page, 'broker');
     await shot(page, '04b-broker');
+    // a meeting-dated OIS: "mpc1" is the first meeting ahead - a row of its own with the MPC OIS bootstrap and the implied step;
+    // its trade opens the blotter's MPC form with the two days of the meeting
+    const mpcSaved = await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '17:30:00 mpc1 3650/3700\n17:31:00 mpc1 paid 36.75', source: 'Tullett' });
+    await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => /^MPC /.test(tr.children[1].textContent)),
+      null, { timeout: 15000 });
+    const mpcRow = (await brokerBoard()).find((r) => /^MPC /.test(r[1]));
+    const mpcKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker')).json.board.find((r) => r.kind === 'mpc') || {};
+    check('a meeting-dated OIS ("mpc1") is a board row of its own: the MPC OIS bootstrap as its model, the implied step beside it',
+      mpcSaved.json.saved === 2 && mpcRow[2] === 'MPC (toplantı)' && mpcRow[3] === '36,50' && mpcRow[4] === '37,00' && mpcRow[6] === '36,75'
+      && /^\d\d,\d\d$/.test(mpcRow[8]) && /^adım [+-]?\d+ \/ [+-]?\d+ bp · model [+-]?\d+$/.test(mpcRow[12]) && /^\d{4}-\d\d-\d\d$/.test((mpcKept.mpc || {}).start || ''),
+      [mpcRow, mpcKept.mpc]);
+    await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => /mpc1 paid 36\.75/.test(x.textContent));
+      tr.querySelector('td.act button[data-act="trade"]').click(); });
+    await page.waitForSelector('#chat-trade');
+    await page.click('#chat-trade-open');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ois
+      && window.tto.state.page.ois.strategy === 'mpc' && window.tto.state.page.ois.level.value !== '', null, { timeout: 30000 });
+    const mpcFilled = await page.evaluate(() => { const o = window.tto.state.page.ois; return [o.strategy, o.side, o.f.start.value, o.f.end.value, o.level.value]; });
+    const serialOf = (iso) => String(Math.round((Date.parse(iso) - Date.UTC(1899, 11, 30)) / 86400000));
+    check('... and its "İşlem gir" opens the blotter\'s MPC form with the meeting\'s two days, the level and PAY',
+      JSON.stringify(mpcFilled) === JSON.stringify(['mpc', 'PAY', serialOf(mpcKept.mpc.start), serialOf(mpcKept.mpc.end), '36,75']), [mpcFilled, mpcKept.mpc]);
+    await open(page, 'broker');
 
     // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
     console.log('blotter: pairs, swap points, MPC');

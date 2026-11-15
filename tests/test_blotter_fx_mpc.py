@@ -295,6 +295,32 @@ def test_any_two_dates_and_a_nominal(desk):
         svc.quote_ois(u, {"strategy": "mpc", "side": "FLATTENER", "start": spot, "end": end, "level": "36"})
 
 
+def test_the_mpc_table_prices_any_two_of_its_days(desk):
+    """The 'MPC OIS' table's own discount factors price a swap between any two of its days - the spot and the meetings'
+    effective days - as the two-date calculator does, without a calculation of its own (the broker chat's MPC model)."""
+    svc, u = desk
+    book = svc.books["tto"]
+    m = svc.ois_market(u)["mpc"]
+
+    def run():
+        mkt = bl.OisMarket(book, svc._calc(None, book))
+        t = mkt.mpc_table()
+        return t, {(a, b): mkt.mpc_span(a, b) for a, b in ((m["spot"], m["dates"][0]["date"]), (m["dates"][0]["date"], m["dates"][1]["date"]),
+                                                          (m["dates"][0]["date"], m["dates"][2]["date"]), (m["spot"], m["dates"][3]["date"]),
+                                                          (m["dates"][5]["date"], m["dates"][16]["date"]))}, \
+            (mkt.mpc_span(m["dates"][1]["date"], m["dates"][0]["date"]), mkt.mpc_span(m["spot"] + 1, m["dates"][0]["date"]))
+
+    table, spans, bad = svc.et.call(run)
+    assert table["spot"] == m["spot"] and [e for _, e in table["meetings"]] == [d["date"] for d in m["dates"]]
+    assert [d for d, _ in table["meetings"][:2]] == [cell(svc, "OIS_MAIN!P10"), cell(svc, "OIS_MAIN!P11")]     # each with its decision day
+    assert table["lndf"][m["spot"]] == 0.0 and table["lndf"][m["dates"][0]["date"]] == cell(svc, "OIS_MAIN!BK84")
+    for (a, b), level in spans.items():
+        assert level == pytest.approx(svc.quote_ois(None, {"strategy": "mpc", "side": "PAY", "start": a, "end": b, "level": "36"})["info"]["market"],
+                                      rel=1e-12), (a, b)
+    assert spans[(m["dates"][0]["date"], m["dates"][1]["date"])] == pytest.approx(cell(svc, "OIS_MAIN!D84"), rel=1e-12)
+    assert bad == (None, None)                                                 # backwards, or a day the table does not have
+
+
 def test_meeting_dated_trades_in_the_blotter(book_of_trades):
     svc, u, t, m = book_of_trades
     data = svc.blotter(u)

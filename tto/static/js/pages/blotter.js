@@ -339,6 +339,15 @@ export class BlotterPage {
           else missing.push(String(m));
         });
       }
+      if (o.strategy === 'mpc') {
+        // a meeting swap of the chat: its two days among the form's (OIS spot, the meetings' effective days)
+        for (const k of ['start', 'end']) {
+          const sel = o.f[k];
+          const v = String(spec[k]);
+          if (sel && [...sel.options].some((x) => x.value === v)) sel.value = v;
+          else missing.push(serialDate(spec[k]) || v);
+        }
+      }
       o.level.value = spec.level || '';
       o.note.value = spec.note || '';
       if (spec.cpt) o.cpt.value = spec.cpt;

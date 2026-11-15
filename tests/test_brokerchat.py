@@ -492,6 +492,89 @@ def test_one_instrument_against_another():
     assert one("mar28 vs jul30 switch -45/-40")["kind"] == "switch" and one("1y1y 34.50/34.80")["kind"] == "fwd"
 
 
+#: the meetings as the dashboard gives them to the parser: (decision, effective day), the OIS spot, the day of the chat
+D = dt.date
+CALENDAR = {"spot": D(2026, 11, 4), "on": TODAY,
+            "meetings": [(D(2026, 10, 22), D(2026, 10, 23)), (D(2026, 12, 10), D(2026, 12, 11)), (D(2027, 1, 21), D(2027, 1, 22)),
+                         (D(2027, 3, 18), D(2027, 3, 19)), (D(2027, 4, 22), D(2027, 4, 23)), (D(2027, 12, 9), D(2027, 12, 10)),
+                         (D(2028, 1, 20), D(2028, 1, 21))]}
+DEC = "OIS:mpc:2026-12-11/2027-01-22"
+
+
+def mpc(text, where=None, on=TODAY, calendar=CALENDAR):
+    # the chat's day on a line of its own (a day after "today" would not be taken for one)
+    rows = [q for q in bc.parse_chat("%s\n10:00:00 %s" % (on.strftime("%d.%m.%Y"), text), where, max(on, TODAY), calendar=calendar) if q.get("ok")]
+    assert all(q["date"] == on.isoformat() for q in rows)
+    assert len(rows) == 1, (text, rows)
+    return rows[0]
+
+
+@pytest.mark.parametrize("text", [
+    "dec mpc 3650/3700", "Dec MPC 36.50/37.00", "DEC MPC OIS 36.50/37.00", "december mpc 36.50/37.00", "mpc dec 36.50/37.00",
+    "aralık ppk 36.50/37.00", "ARALIK PPK 36.50/37.00", "Aralık toplantısı 36.50/37.00", "dec meeting 36.50/37.00", "dec26 mpc 36.50/37.00",
+    "dec'26 mpc 36.50/37.00", "dec 26 mpc 36.50/37.00", "mpc1 36.50/37.00", "MPC1 36.50/37.00", "mpc 1 36.50/37.00", "ppk1 36.50/37.00",
+    "1st mpc 36.50/37.00", "next mpc 36.50/37.00", "first mpc 36.50/37.00", "1. ppk 36.50/37.00", "dec/jan mpc 36.50/37.00",
+    "Dec/Jan MPC 36.50/37.00", "dec-jan mpc 36.50/37.00", "dec jan mpc 36.50/37.00", "dec / jan mpc 36.50/37.00", "mpc dec/jan 36.50/37.00",
+    "mpc1/2 36.50/37.00", "mpc1→2 36.50/37.00", "dec mpc 36.50 bid 37.00 offer", "dec mpc 36.50 bid, 37.00 offer"])
+def test_a_meeting_dated_quote_however_it_is_written(text):
+    # the December meeting (decision 10.12, effective 11.12) to the next one (effective 22.01): one instrument
+    q = mpc(text)
+    assert (q["product"], q["kind"], q["key"], q["label"], q["unit"], q["bid"], q["ask"], q["event"]) == \
+        ("OIS", "mpc", DEC, "MPC Ara26", "pct", 36.50, 37.00, "quote"), text
+    assert (q["mpc"]["start"], q["mpc"]["end"], q["mpc"]["meeting"], q["mpc"]["until"], q["mpc"]["periods"]) == \
+        ("2026-12-11", "2027-01-22", "2026-12-10", "2027-01-21", 1)
+    assert q["note"] == "" and q["flags"] == []
+
+
+def test_meeting_dated_quotes():
+    # which meeting: a month is its first meeting ahead, a number counts them from the day of the chat
+    assert mpc("jan mpc 35.90/36.10")["key"] == mpc("mpc2 35.90/36.10")["key"] == mpc("ocak ppk 35.90/36.10")["key"] == "OIS:mpc:2027-01-22/2027-03-19"
+    assert mpc("dec27 mpc 30/31")["key"] == mpc("dec 2027 mpc 30/31")["key"] == "OIS:mpc:2027-12-10/2028-01-21"
+    q = mpc("dec/mar mpc 36.20/36.40")                                       # two periods: one swap, December to March
+    assert (q["key"], q["label"], q["mpc"]["periods"], q["tenors"]) == ("OIS:mpc:2026-12-11/2027-03-19", "MPC Ara26–Mar27", 2, ["Ara26", "Mar27"])
+    q = mpc("spot/dec mpc 36.40/36.60")                                      # from the OIS spot to the December meeting
+    assert (q["key"], q["label"], q["mpc"]["meeting"], q["mpc"]["periods"]) == ("OIS:mpc:2026-11-04/2026-12-11", "MPC Spot–Ara26", None, None)
+    # after the December decision its period is running: "dec" is still that one, MPC1 is January
+    late = D(2026, 12, 20)
+    assert mpc("dec mpc 36.50/37.00", on=late)["key"] == DEC and mpc("mpc1 36.50/37.00", on=late)["key"] == "OIS:mpc:2027-01-22/2027-03-19"
+    assert mpc("mpc1 36.50/37.00", on=D(2026, 12, 10))["key"] == DEC              # the day of the decision: still the first ahead
+    # trades, refs, interest and the big figure completed from where the meeting swap stands
+    near = lambda q: 35.76 if q["key"] == DEC else None                       # noqa: E731
+    t = mpc("dec mpc paid 3675", near)
+    assert (t["event"], t["side"], t["price"], t["key"]) == ("trade", "ask", 36.75, DEC)
+    assert (mpc("dec mpc 70/80", near)["bid"], mpc("dec mpc 70/80", near)["ask"], mpc("dec mpc 70/80", near)["flags"]) == (35.70, 35.80, ["abbr"])
+    assert mpc("ref dec mpc offer")["event"] == "ref" and mpc("care dec mpc offer")["event"] == "interest"
+    # several in a line, and next to other quotes
+    rows = [q for q in bc.parse_chat("10:00:00 dec mpc 3650/3700 jan mpc 3600/3650", None, TODAY, calendar=CALENDAR) if q["ok"]]
+    assert [(q["key"], q["bid"], q["ask"]) for q in rows] == [(DEC, 36.50, 37.00), ("OIS:mpc:2027-01-22/2027-03-19", 36.00, 36.50)]
+    rows = [q for q in bc.parse_chat("10:00:00 1y x 38.60/38.80, dec mpc 36.50/37.00", None, TODAY, calendar=CALENDAR) if q["ok"]]
+    assert [(q["product"], q["kind"]) for q in rows] == [("XCCY", "outright"), ("OIS", "mpc")]
+    q = mpc("dec mpc ois 36.50/37.00 in 5m")                                 # a size after it is a size, not a 5M tenor
+    assert (q["key"], q["note"]) == (DEC, "5m")
+    # what is not one meeting's rate stays text: two periods against each other (a step), a date, no meeting named
+    for text in ("dec vs jan mpc -25/-20", "dec/jan mpc -25/-20", "dec/jan mpc spread -25/-20", "next mpc on 10 dec", "mpc 36.50/37.00",
+                 "after the meeting 36.50"):
+        assert not any(q.get("ok") for q in bc.parse_chat("10:00:00 " + text, None, TODAY, calendar=CALENDAR)), text
+    # a tenor said first is the instrument; a meeting the calendar does not have is read, flagged and left undated
+    assert one("18m ois 35.03/35.23 ahead of the dec meeting")["key"] == "OIS:outright:18M"
+    q = mpc("dec35 mpc 30.00/31.00")
+    assert (q["key"], q["label"], q["flags"], q["bid"]) == ("OIS:mpc:Ara35", "MPC Ara35", ["mpc?"], 30.0) and "start" not in q["mpc"]
+    # without a calendar (the parser alone): read as said, not dated
+    q = one("mpc1 36.50/37.00", None)
+    assert (q["kind"], q["key"], q["label"], q["mpc"]["from"]) == ("mpc", "OIS:mpc:1", "MPC1", {"n": 1})
+    assert one("dec/jan mpc 36.50/37.00", None)["label"] == "MPC Ara–Oca"
+    # on the board: a row of its own after the outrights, whichever way it was said
+    board = bc.board(bc.parse_chat("10:00:00 1y ois 35.00/35.20\n10:01:00 dec mpc 36.50/37.00\n10:02:00 mpc1 36.60 bid\n"
+                                   "10:03:00 dec/jan mpc paid 37.00\n10:04:00 2y5y ois -20/-15", None, TODAY, calendar=CALENDAR))
+    assert [(r["kind"], r["label"]) for r in board] == [("outright", "1Y"), ("mpc", "MPC Ara26"), ("spread", "2Y–5Y")]
+    assert (board[1]["bid"], board[1]["ask"], board[1]["last"], board[1]["mpc"]["start"]) == (36.60, 37.00, 37.00, "2026-12-11")
+    # where a curve has it: the rate between its two days
+    rates = {("2026-12-11", "2027-01-22"): 0.3576}
+    assert bc.model_level(mpc("dec mpc 36.50/37.00"), lambda t: None, None, lambda a, b: rates.get((a, b))) == pytest.approx(35.76)
+    assert bc.model_level(mpc("dec mpc 36.50/37.00"), lambda t: None) is None
+    assert bc.model_level(mpc("dec35 mpc 30.00/31.00"), lambda t: None, None, lambda a, b: 0.3) is None
+
+
 def test_against_a_curve():
     par = {"6M": 0.3644, "1Y": 0.3555, "18M": 0.3559, "2Y": 0.3585, "3Y": 0.3566, "4Y": 0.3527, "5Y": 0.3471}.get
     fra = lambda a, b: {(9, 12): 0.3411, (12, 24): 0.3627}.get((a, b))      # noqa: E731
@@ -691,6 +774,56 @@ def test_switches_next_to_the_screen(desk):
     assert r["bid_diff"] == pytest.approx(-45.0 - screen) and r["implied"]["kind"] == "switch"
     # not a bond's own trade: the DİBS pages leave a switch out
     assert all(t.get("kind") != "switch" for t in svc.broker(u, day)["rows"] if t.get("isin"))
+
+
+def overnight(rate, days):
+    return 365.0 * ((1.0 + rate * days / 365.0) ** (1.0 / days) - 1.0)
+
+
+def test_meeting_dated_quotes_next_to_the_mpc_bootstrap(desk):
+    """ "dec mpc", "jan27 mpc", "dec/mar mpc", "spot/dec mpc" dated with the workbook's meetings; the model is the 'MPC OIS'
+    bootstrap - the trade form's market level for the same two days -, with the step at the meeting each level stands for."""
+    from conftest import cell
+    from tto.xl.values import date_to_serial
+    svc, u = desk
+    day = "2026-01-15"                                         # a day no other test keeps lines on
+    m = svc.ois_market(u)["mpc"]
+    e1, e2, e3, spot = m["dates"][0]["date"], m["dates"][1]["date"], m["dates"][2]["date"], m["spot"]
+    serial = lambda iso: float(date_to_serial(dt.date.fromisoformat(iso)))        # noqa: E731
+    market = lambda a, b: svc.quote_ois(u, {"strategy": "mpc", "side": "PAY", "start": a, "end": b, "level": "36"})["info"]["market"] * 100   # noqa: E731
+    text = ("10:00:00 dec mpc 3650/3700\n10:01:00 jan27 mpc 50/60\n10:02:00 dec/mar mpc 36.20/36.40\n10:03:00 spot/dec mpc 36.40/36.60\n"
+            "10:04:00 dec mpc paid 36.75\n10:05:00 dec40 mpc 30.00/31.00")
+    rows = {q["raw"].split(" mpc")[0]: q for q in svc.broker_parse(u, text, day)["rows"] if q["event"] != "trade"}
+    dec = rows["dec"]
+    assert (dec["key"], dec["label"], dec["bid"], dec["ask"]) == ("OIS:mpc:2026-12-11/2027-01-22", "MPC Ara26", 36.50, 37.00)
+    assert serial(dec["mpc"]["start"]) == e1 and serial(dec["mpc"]["end"]) == e2
+    assert dec["model"] == pytest.approx(cell(svc, "OIS_MAIN!D84", u) * 100, rel=1e-12) == pytest.approx(market(e1, e2), rel=1e-12)
+    jan = rows["jan27"]
+    assert jan["model"] == pytest.approx(cell(svc, "OIS_MAIN!D85", u) * 100, rel=1e-12)
+    assert jan["flags"] == ["abbr"] and (jan["bid"], jan["ask"]) == (int(jan["model"]) + 0.50, int(jan["model"]) + 0.60)   # the figure from the model
+    assert rows["dec/mar"]["model"] == pytest.approx(market(e1, e3), rel=1e-12) and rows["dec/mar"]["label"] == "MPC Ara26–Mar27"
+    assert rows["spot/dec"]["model"] == pytest.approx(market(spot, e1), rel=1e-12) and rows["spot/dec"]["label"] == "MPC Spot–Ara26"
+    far = rows["dec40"]
+    assert far["flags"] == ["mpc?"] and far["model"] is None and far["key"] == "OIS:mpc:Ara40"
+    # the step at the December meeting: overnight equivalent of the level − that of the bootstrap's period before it
+    stub = market(spot, e1) / 100
+    base = overnight(stub, e1 - spot)
+    step = dec["implied"]
+    assert step["kind"] == "mpc" and step["meeting"] == "2026-12-10" and step["days"] == e2 - e1
+    assert step["bid"] == pytest.approx((overnight(0.365, e2 - e1) - base) * 1e4) and step["ask"] == pytest.approx((overnight(0.37, e2 - e1) - base) * 1e4)
+    assert step["model"] == pytest.approx((overnight(dec["model"] / 100, e2 - e1) - base) * 1e4) and step["prev"] == pytest.approx(stub * 100)
+    assert -300 < step["model"] < 300 and step["bid"] < step["ask"]
+    assert "implied" not in rows["dec/mar"] and "implied" not in rows["spot/dec"]       # a step belongs to one meeting's period
+    # kept: one board row per meeting swap, after the outrights, with the bootstrap as its model and the trade on it
+    svc.broker_add(u, text + "\n10:06:00 1y ois 35.00/35.20", day, "Tullett")
+    board = svc.broker(u, day)["board"]
+    assert [r["label"] for r in board] == ["1Y", "MPC Spot–Ara26", "MPC Ara26", "MPC Ara26–Mar27", "MPC Oca27", "MPC Ara40"]
+    r = next(x for x in board if x["label"] == "MPC Ara26")
+    assert (r["kind"], r["bid"], r["ask"], r["last"]) == ("mpc", 36.50, 37.00, 36.75) and r["mid"] == pytest.approx(dec["model"])
+    assert r["bid_diff"] == pytest.approx((36.50 - dec["model"]) * 100) and r["implied"]["last"] == pytest.approx((overnight(0.3675, e2 - e1) - base) * 1e4)
+    # the trade form books it between the same two days, at the same market level
+    q = svc.quote_ois(u, {"strategy": "mpc", "side": "PAY", "start": serial(r["mpc"]["start"]), "end": serial(r["mpc"]["end"]), "level": "36,75"})
+    assert q["info"]["market"] * 100 == pytest.approx(r["mid"], rel=1e-12) and q["legs"][0]["tenor"] == "MPC 11.12.26–22.01.27"
 
 
 def test_days_periods_and_what_is_left_out(desk):

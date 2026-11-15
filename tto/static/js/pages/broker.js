@@ -8,7 +8,7 @@ import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { num, isoToTr } from '../format.js';
 
-const KIND = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward', switch: 'Switch' };
+const KIND = { outright: 'Outright', mpc: 'MPC', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward', switch: 'Switch' };
 const EVENT = { quote: 'Kota', trade: 'İşlem', ref: 'Ref', interest: 'İlgi', level: 'Seviye', note: 'Not', text: 'Metin' };
 const FLAG = {
   abbr: ['tamamlandı', '', 'Büyük rakam yazılmamış ("90 bid", "90/10"): kotanın öbür tarafından, bu enstrümanın son seviyesinden ya da eğriden tamamlandı'],
@@ -23,7 +23,15 @@ const FLAG = {
   notfixed: ['sabit kuponlu değil', '', 'Ay ve yıl tek başına önce sabit kuponlu kâğıt demektir; bu ayda sabit kuponlu olmadığı için ayın öbür kâğıdı alındı '
     + '(önce TLREF, sonra TÜFE, sonra bono / kuponsuz; birden çoksa ekrandaki fiyata en yakın olan) – yanlışsa türü yazın ("jun29 cpi").'],
   par: ['100\'e göre', 'warn', 'Bu kâğıdın ne ekran fiyatı ne önceki kotası var, yakınında fiyatı bilinen aynı tür kâğıt da yok: TLREF / TÜFE kâğıdı 100 civarı sayılarak tamamlandı – yanlışsa fiyatı tam yazın'],
+  'mpc?': ['toplantı?', 'warn', 'Söylenen toplantı takvimde yok (geçmiş ya da listede olmayan bir toplantı): kota okundu ama tarihlenemedi – modeli yok, '
+    + 'Günlük İşlemler\'e aktarılamaz. Toplantı takvimi: Ayarlar · Toplantı takvimi'],
 };
+
+/** An ISO day as the Excel serial the trade form's meeting dates carry (``46367`` for 2026-12-11). */
+function serialOf(iso) {
+  const [y, m, d] = String(iso || '').split('-').map(Number);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+}
 
 /** What a flag says, with what it was about (the bond a big figure was taken from). */
 function flagTip(q, f) {
@@ -43,6 +51,7 @@ function instText(q) {
 /** Günlük İşlemler's sides of an OIS strategy: [the buy (paying the rate, the spread or the fly's body), the sale]. */
 const OIS_SIDES = {
   outright: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
+  mpc: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   fra: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   spread: [['STEEPENER', 'STEEPENER (spread öde)'], ['FLATTENER', 'FLATTENER (spread al)']],
   fly: [['PAY GÖVDE', 'PAY GÖVDE (fly öde)'], ['REC GÖVDE', 'REC GÖVDE (fly al)']],
@@ -53,6 +62,7 @@ const OIS_SIDES = {
 export function tradeKind(q) {
   if (!q || !q.ok) return null;
   if (q.parts) return null;                     // a spread of two FRAs ("6x9m vs 9x12m"): no form for it there
+  if (q.kind === 'mpc') return q.mpc && q.mpc.start && q.mpc.end ? 'ois' : null;     // a meeting the calendar did not date: no dates to fill
   if (q.product === 'OIS' && OIS_SIDES[q.kind === 'fwd' ? 'fra' : q.kind]) return 'ois';
   if (q.product === 'FX' && q.kind === 'outright' && /^\d+[WMY]$/i.test(String((q.tenors || [])[0] || ''))) return 'fwd';
   if (q.product === 'DIBS' && q.kind !== 'switch') return 'bond';
@@ -97,6 +107,12 @@ export function tradeSpec(q, key, buy) {
   const note = ('Chat ' + [q.time, q.sender].filter(Boolean).join(' ') + ': ' + (q.raw || '')).slice(0, 160);
   const cpt = q.party === 'broker' ? (q.source || '') : '';
   const months = q.months || [];
+  if (kind === 'ois' && q.kind === 'mpc') {
+    // the trade form's MPC strategy: one swap between two days, the meetings' effective days (or the OIS spot)
+    const pair = OIS_SIDES.mpc;
+    return { kind: 'ois', strategy: 'mpc', side: buy === null ? null : pair[buy ? 0 : 1][0], tenors: [], months: null,
+      start: serialOf(q.mpc.start), end: serialOf(q.mpc.end), level: text, note, cpt };
+  }
   if (kind === 'ois') {
     const strategy = q.kind === 'fwd' ? 'fra' : q.kind;
     const pair = OIS_SIDES[strategy];
@@ -113,8 +129,16 @@ export function tradeSpec(q, key, buy) {
   return null;
 }
 
-/** A bond's ISIN and what it is, for the tip of its name. */
+/** A bond's ISIN and what it is, for the tip of its name; a meeting swap's meeting and days. */
 function instTip(q) {
+  if (q.kind === 'mpc') {
+    const m = q.mpc || {};
+    if (!m.start) return 'MPC tarihli OIS · söylenen: "' + (m.said || '') + '" – toplantı takvimde bulunamadı, tarihlenemedi';
+    const days = Math.round((Date.parse(m.end) - Date.parse(m.start)) / 86400000);
+    return 'MPC tarihli OIS: ' + (m.meeting ? isoToTr(m.meeting) + ' PPK kararından sonraki gün' : 'OIS spot') + ' ' + isoToTr(m.start)
+      + ' → ' + isoToTr(m.until) + ' kararının ertesi ' + isoToTr(m.end) + ' (' + days + ' gün' + (m.periods > 1 ? ', ' + m.periods + ' toplantı dönemi' : '')
+      + ') · söylenen: "' + (m.said || '') + '" · Günlük İşlemler\'de MPC ' + isoToTr(m.start) + '–' + isoToTr(m.end);
+  }
   if (q.product !== 'DIBS') return '';
   if (q.kind === 'switch') {
     return 'Switch: ' + (q.legs || []).map((l) => l.label + (l.isin ? ' (' + l.isin + ')' : '')).join(' → ')
@@ -166,6 +190,8 @@ const EXAMPLES = [
   ['mar28 .400/475 · Jan30 tlref 98.650/750', 'DİBS (ay ve yılla; tlref, cpi, zc türü söyler)'],
   ['06/01/2027.t1 31.450', 'ihale fiyat listesi: seviye (bono / kuponsuzda getiri)'],
   ['mar28 vs jul30 switch -45/-40', 'switch: iki kâğıt, uzun vadelinin getirisi − kısanınki (bp); yanında ekrana ve ASW eğrisine göre ucuz / pahalı'],
+  ['dec mpc 3650/3700 · mpc1 36.50 bid · aralık ppk', 'MPC tarihli OIS: Aralık toplantısından bir sonrakine (36,50 / 37,00); model "MPC OIS" bootstrap\'ı, yanında ima PPK adımı'],
+  ['dec/jan mpc · spot/dec mpc · mpc1/2', 'iki toplantı arası (Aralık → Ocak); OIS spot\'tan Aralık\'a; "vs" ya da "spread" ile iki dönem (adım) okunmaz'],
 ];
 
 /** A level as it is quoted: per cent with at least two decimals, basis points with as many as were typed. */
@@ -201,6 +227,7 @@ export function eventText(q) {
 
 function kindText(q) {
   if (q.ok === false) return '';
+  if (q.kind === 'mpc') return 'MPC (toplantı)';
   if (q.product === 'FX') return 'FX swap (puan)';
   if (q.product === 'DIBS' && q.kind === 'switch') return 'Switch (bp)';
   if (q.product === 'DIBS') return q.unit === 'yld' ? 'DİBS (getiri)' : 'DİBS (fiyat)';
@@ -211,6 +238,15 @@ function kindText(q) {
 function impliedText(q, last) {
   const m = q.implied;
   if (!m) return '';
+  if (m.kind === 'mpc') {
+    // the step at the meeting each level stands for, beside the bootstrap's own (bp)
+    const bp = (v) => (typeof v === 'number' ? (v > 0 ? '+' : '') + num(v, 0, false) : '');
+    const bb = typeof m.best_bid === 'number' || typeof m.best_ask === 'number';
+    const pair = bb ? [m.best_bid, m.best_ask] : [m.bid, m.ask];
+    const said = typeof pair[0] === 'number' || typeof pair[1] === 'number' ? bp(pair[0]) + ' / ' + bp(pair[1])
+      : bp(last ? m.last : m.price);
+    return 'adım ' + (said || '–') + ' bp' + (typeof m.model === 'number' ? ' · model ' + bp(m.model) : '');
+  }
   if (m.kind === 'switch') {
     // the longer bond's cheapness against the shorter one at the level said: on the fitted ASW curve, else the screen
     const v = typeof m.vs_curve === 'number' ? m.vs_curve : m.vs_screen;
@@ -225,6 +261,13 @@ function impliedText(q, last) {
 function impliedTip(q) {
   const m = q.implied;
   if (!m) return '';
+  if (m.kind === 'mpc') {
+    return 'İma PPK adımı (' + isoToTr(m.meeting) + ' toplantısı, bp): seviyenin günlük bileşik ON karşılığı (' + num(m.days, 0) + ' gün, ACT/365) − '
+      + 'toplantıdan önceki dönemin MPC OIS bootstrap seviyesinin ON karşılığı (' + isoToTr(m.prev_from) + ' → ' + isoToTr(m.prev_to) + ': '
+      + num(m.prev, 2, false) + ' % → ON ' + num(m.prev_on, 2, false) + ' %). Model: bootstrap\'ın kendi dönem seviyesi '
+      + (typeof m.model_level === 'number' ? num(m.model_level, 2, false) + ' % → adım ' + num(m.model, 0, false) + ' bp' : 'yok')
+      + '. PPK Fiyatlama Geçmişi\'ndeki adım MPC çözücüsünündür; burada piyasa bootstrap\'ı kullanılır.';
+  }
   if (m.kind === 'switch') {
     const legs = (m.legs || []).map((l) => l.label + ' getiri ' + num(l.yield, 2, false) + '%' + (typeof l.rv === 'number' ? ', eğriye göre ' + num(l.rv, 1, false) + ' bp' : ''));
     return 'DİBS RV ekranı: ' + legs.join(' · ') + ' → ekrandaki switch ' + num(m.screen, 1, false) + ' bp'
@@ -835,7 +878,8 @@ export class BrokerPage {
         h('td', { class: 'l', title: instTip(q) }, h('b', null, instText(q)),
           q.kind === 'outright' ? null : h('span', { class: 'kind' }, (KIND[q.kind] || q.kind).toLowerCase() + (q.unit === 'bp' ? ' · bp' : ''))),
         numCell(q.bid), numCell(q.ask), numCell(q.price, q.event === 'trade' ? (q.side === 'ask' ? 'buy' : (q.side === 'bid' ? 'sell' : '')) : ''),
-        h('td', { class: 'l what', title: impliedTip(q) }, eventText(q) + (q.implied ? ' · TRY ' + (impliedText(q) || '') + '%' : '') + (q.note ? ' · ' + q.note : ''), marks)));
+        h('td', { class: 'l what', title: impliedTip(q) }, eventText(q) + (q.implied ? (q.implied.kind === 'mpc' ? ' · ' + impliedText(q)
+          : ' · TRY ' + (impliedText(q) || '') + '%') : '') + (q.note ? ' · ' + q.note : ''), marks)));
     }
     if (rows.length) this.previewBox.appendChild(table);
     const fresh = rows.filter((q) => !q.dup);

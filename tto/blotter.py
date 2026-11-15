@@ -253,6 +253,7 @@ class OisMarket(object):
         self.calc = calc
         self.overlay = dict(overlay or {})      # the user's own inputs, for what is priced with a date typed in
         self._fn_cache: Dict[str, Any] = {}
+        self._mpc: Optional[Dict[str, Any]] = None
 
     def value(self, ref: str) -> Any:
         si, rc = self.book.cell(ref)
@@ -351,6 +352,41 @@ class OisMarket(object):
             level = self.value("OIS_MAIN!D%d" % r)
             market.append(level if type(level) is float else None)
         return {"spot": spot if type(spot) is float else None, "dates": dates, "market": market}
+
+    def mpc_table(self) -> Dict[str, Any]:
+        """The 'MPC OIS' table of OIS_MAIN as days and discount factors: the OIS spot (B2) and, for every meeting it
+        covers, its decision day (the workbook's list, P10…) and effective day (B / C), with the bootstrap ln
+        discount factor of each day (BK / BL; 0 at the spot).  ``{"spot", "meetings": [(decision, effective)],
+        "lndf": {day: ln DF}}`` (Excel serials).  Read once per market object: what :meth:`mpc_span` prices with."""
+        if self._mpc is not None:
+            return self._mpc
+        spot = self.value("OIS_MAIN!B2")
+        out: Dict[str, Any] = {"spot": spot if type(spot) is float else None, "meetings": [], "lndf": {}}
+        if out["spot"] is not None:
+            out["lndf"][spot] = 0.0
+        for k, r in enumerate(range(MPC_ROWS[0], MPC_ROWS[1] + 1)):
+            start, end = self.value("OIS_MAIN!B%d" % r), self.value("OIS_MAIN!C%d" % r)
+            a, b = self.value("OIS_MAIN!BK%d" % r), self.value("OIS_MAIN!BL%d" % r)
+            if not all(type(x) is float for x in (start, end, a, b)):
+                break
+            if k == 0:
+                first = self.value("OIS_MAIN!P%d" % (10 + k))
+                out["meetings"].append((first if type(first) is float else start - 1.0, start))
+                out["lndf"][start] = a
+            decision = self.value("OIS_MAIN!P%d" % (11 + k))
+            out["meetings"].append((decision if type(decision) is float else end - 1.0, end))
+            out["lndf"][end] = b
+        self._mpc = out
+        return out
+
+    def mpc_span(self, start: float, end: float) -> Optional[float]:
+        """The bootstrap rate (simple ACT/365) of a swap between two days of the 'MPC OIS' table - the OIS spot or a
+        meeting's effective day: (DF(start) / DF(end) − 1) · 365 / days, with the table's own discount factors (what
+        :meth:`between` gives for those days, without a calculation of its own).  ``None`` for any other day."""
+        lndf = self.mpc_table()["lndf"]
+        if start not in lndf or end not in lndf or end <= start:
+            return None
+        return (math.exp(lndf[start] - lndf[end]) - 1.0) * 365.0 / (end - start)
 
     def between(self, start: float, end: float) -> Dict[str, Any]:
         """A swap from one date to another, paid once at the end - how a meeting-dated OIS trades.  The numbers
