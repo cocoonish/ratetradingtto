@@ -81,7 +81,9 @@ def _num(v: Any) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------------------------- series kinds
-#: how a level moves: rate (per cent, moves in bp), bp, vol / pts (moves as they are), fx / index (moves in % log)
+#: how a level moves: rate (per cent, moves in bp), bp, vol / pts (moves as they are), fx / index (moves in % log), xr
+#: (an FX pair's excess-return index: the cumulative log return of holding the pair through its forwards, carry
+#: included, in per cent - it moves as it is)
 def change(kind: str, a: float, b: float) -> Optional[float]:
     if kind == "rate":
         return (b - a) * 100.0
@@ -100,11 +102,53 @@ def to_level(kind: str, amount: float, level: float) -> float:
 
 
 def change_unit(kind: str) -> str:
-    return {"rate": "bp", "fx": "%", "index": "%", "vol": "vol", "pts": "puan"}.get(kind, "bp")
+    return {"rate": "bp", "fx": "%", "index": "%", "xr": "%", "vol": "vol", "pts": "puan"}.get(kind, "bp")
 
 
 def level_unit(kind: str) -> str:
-    return {"rate": "%", "bp": "bp", "vol": "vol", "pts": "puan"}.get(kind, "")
+    return {"rate": "%", "bp": "bp", "vol": "vol", "pts": "puan", "xr": "%"}.get(kind, "")
+
+
+def pnl_scale(kind: str, level: Optional[float]) -> Tuple[str, Optional[float]]:
+    """How a move of a level reads as profit and loss: (unit, factor) - a rate's move in bp, an excess-return index's
+    in per cent of the notional, a spot's or an index's in per cent (log, near the level), vol in vol points."""
+    if kind == "rate":
+        return "bp", 100.0
+    if kind == "xr":
+        return "%", 1.0
+    if kind in ("fx", "index"):
+        return "%", (100.0 / level) if level else None
+    if kind == "vol":
+        return "vol", 1.0
+    return "bp", 1.0
+
+
+def shrunk_mean(values: Sequence[float], ewma: Optional[float] = None) -> Optional[Dict[str, float]]:
+    """The mean of daily changes with its precision, shrunk towards zero by it: ``m × max(0, 1 − 4 / t²)`` where t is
+    the mean over its standard error - a mean within two standard errors of zero is noise and contributes nothing.  ``ewma``: an exponentially weighted
+    mean with this λ instead of the plain one (its standard error from the effective sample, (1 − λ) / (1 + λ))."""
+    xs = [x for x in values if x is not None]
+    if len(xs) < 10:
+        return None
+    sd = qm.stdev(xs)
+    if not sd:
+        return None
+    if ewma:
+        m = sum(xs[:20]) / min(20, len(xs))
+        for x in xs[20:]:
+            m = ewma * m + (1.0 - ewma) * x
+        se = sd * math.sqrt((1.0 - ewma) / (1.0 + ewma))
+    else:
+        m = sum(xs) / len(xs)
+        se = sd / math.sqrt(len(xs))
+    t = m / se if se else 0.0
+    w = shrink(t)
+    return {"mean": m, "raw": m, "t": t, "w": w, "shrunk": m * w, "sd": sd, "n": len(xs)}
+
+
+def shrink(t: float, k: float = 2.0) -> float:
+    """The weight an estimate with this t keeps (positive-part James-Stein): 0 within ±k standard errors."""
+    return max(0.0, 1.0 - k * k / (t * t)) if t else 0.0
 
 
 # ---------------------------------------------------------------------------------------------- what the families read
@@ -232,6 +276,100 @@ class Ctx(object):
                 self.series[key] = fwd
                 self.meta[key] = {"label": "%s %s forward" % (pair, tenor), "kind": "fx", "group": "FX", "asset": "FX",
                                   "pair": pair, "tenor": tenor, "days": _tenor_days(tenor)}
+        # the excess return of holding each pair through its forwards (carry included): what a directional FX trade
+        # earns - only over the days a forward says what the carry was (never a carry made up)
+        self._xr_last: Dict[str, Tuple[str, float]] = {}
+        for pair in sorted({k.split(":")[1] for k in self.series if k.startswith("FWD:")}):
+            spot = self.series.get("FX:" + pair) or {}
+            carry = self.fx_carry_days(pair)
+            if len(spot) < 2 or not carry:
+                continue
+            xr: Dict[str, float] = {}
+            level = 0.0
+            prev = None
+            last_c: Optional[Tuple[str, float]] = None
+            for d in sorted(spot):
+                if prev is not None and last_c is not None:
+                    if (_dt.date.fromisoformat(prev) - _dt.date.fromisoformat(last_c[0])).days <= 7:
+                        gap = (_dt.date.fromisoformat(d) - _dt.date.fromisoformat(prev)).days
+                        if spot[prev] > 0 and spot[d] > 0:
+                            level += math.log(spot[d] / spot[prev]) * 100.0 + last_c[1] * gap / 365.0
+                        xr[d] = level
+                    else:
+                        xr, level = {}, 0.0                  # the forwards stopped for a while: start again after it
+                if d in carry:
+                    last_c = (d, carry[d])
+                    if not xr:
+                        xr[d] = level
+                prev = d
+            if len(xr) >= 2:
+                key = "XR:" + pair
+                self.series[key] = xr
+                g = (self.meta.get("FX:" + pair) or {}).get("group") or "FX"
+                self.meta[key] = {"label": "%s forward (carry dahil)" % pair, "kind": "xr", "group": g, "asset": "FX", "pair": pair}
+                if last_c is not None:
+                    self._xr_last[pair] = last_c
+
+    # ---- FX carry: what holding a pair through its forwards pays or costs
+    def fx_pairs(self) -> List[str]:
+        """The pairs with a spot history, in the order of their keys."""
+        return sorted(k[3:] for k in self.meta if k.startswith("FX:") and self.series.get(k))
+
+    def fx_tenors(self, pair: str) -> List[Tuple[str, float]]:
+        """The forward tenors kept for a pair, shortest first: (tenor, calendar days)."""
+        out = [(k.split(":")[2], float(self.meta[k]["days"])) for k in self.series if k.startswith("FWD:%s:" % pair) and k in self.meta]
+        return sorted(out, key=lambda t: t[1])
+
+    def fx_carry_days(self, pair: str) -> Dict[str, float]:
+        """Each close's carry of holding the pair long (see :meth:`fx_carry`), from the shortest forward kept that day."""
+        out: Dict[str, float] = {}
+        spot = self.series.get("FX:" + pair) or {}
+        for tenor, days in reversed(self.fx_tenors(pair)):          # the shortest last: it wins
+            for d, f in (self.series.get("FWD:%s:%s" % (pair, tenor)) or {}).items():
+                s = spot.get(d)
+                if s and f and s > 0 and f > 0:
+                    out[d] = (math.log(s) - math.log(f)) * 365.0 / days * 100.0
+        return out
+
+    def fx_carry(self, pair: str, live: Optional[Dict[str, float]] = None, days: Optional[float] = None) -> Optional[float]:
+        """The carry of holding the pair long - the base currency against the quote - through its forward, annualised
+        (%, log, a year of 365 days): (ln S − ln F) × 365 / days.  Negative when the forward is above the spot (long
+        USDTRY pays the TRY rate).  ``days``: over a holding of that many calendar days, interpolated along the
+        forwards kept (flat beyond them); else the shortest forward's.  ``None`` without a forward: no carry is made up."""
+        live = self.live if live is None else live
+        s = self.cur("FX:" + pair, live)
+        if not s or s <= 0:
+            return None
+        pts = []
+        for tenor, n in self.fx_tenors(pair):
+            f = self.cur("FWD:%s:%s" % (pair, tenor), live)
+            if live.get("FX:" + pair) is not None or live.get("FXP:%s:%s" % (pair, tenor)) is not None:
+                f = self.forward(pair, s, self.cur("FXP:%s:%s" % (pair, tenor), live))
+            if f and f > 0:
+                pts.append((n, (math.log(s) - math.log(f)) * 365.0 / n * 100.0))
+        if not pts:
+            return None
+        if days is None:
+            return pts[0][1]
+        return _interp(pts, float(days))
+
+    def try_per(self, ccy: str, live: Optional[Dict[str, float]] = None) -> Optional[float]:
+        """TRY a unit of ``ccy`` is worth now (through USDTRY and the dollar pair of the currency)."""
+        if ccy == "TRY":
+            return 1.0
+        usdtry = self.cur("FX:USDTRY", live)
+        if not usdtry:
+            return None
+        if ccy == "USD":
+            return usdtry
+        direct = self.cur("FX:%sTRY" % ccy, live)
+        if direct:
+            return direct
+        x = self.cur("FX:USD" + ccy, live)
+        if x:
+            return usdtry / x
+        y = self.cur("FX:%sUSD" % ccy, live)
+        return usdtry * y if y else None
 
     def forward(self, pair: str, spot: Optional[float], quote: Optional[float]) -> Optional[float]:
         """The outright forward from a forward quote: a quote near the spot is an outright already (NDF tickers),
@@ -260,6 +398,14 @@ class Ctx(object):
                 f = self.forward(pair, s if s is not None else self.last("FX:" + pair), q if q is not None else self.last("FXP:%s:%s" % (pair, tenor)))
                 if f is not None:
                     out[k] = f
+        # the excess-return index now: the spot's move since the last close plus the carry of the days since
+        for pair, (cday, c) in self._xr_last.items():
+            key = "XR:" + pair
+            s, s0, x0, d0 = live.get("FX:" + pair), self.last("FX:" + pair), self.last(key), self.last_day(key)
+            if s is None or not s0 or x0 is None or d0 is None or s <= 0:
+                continue
+            gap = max(0, (self.today - _dt.date.fromisoformat(d0)).days)
+            out[key] = x0 + math.log(s / s0) * 100.0 + c * gap / 365.0
         return out
 
 
@@ -326,6 +472,24 @@ class Monitor(object):
         self.note: str = kw.get("note", "")
         self.info: Dict[str, Any] = kw.get("info") or {}
         self.score_name: str = kw.get("score_name", "z")
+        # the decision: the expected move of the level over the holding (level units, + up; a number or a function of
+        # the level and the score), the standard deviation of its daily moves, how a move reads as profit (unit, factor),
+        # the FX pair whose carry the trade earns or pays (its level then is the excess-return index: carry inside), a
+        # one-sentence thesis (a function of the signal), a minimum distance of the level from 0 (a tolerance) and the
+        # sample behind it (n, the independent periods in it, the threshold it was held to)
+        self.fcast: Any = kw.get("fcast")
+        self.dsd: Optional[float] = kw.get("dsd")
+        self.pnl: Optional[Tuple[str, Optional[float]]] = kw.get("pnl")
+        self.fx: Optional[str] = kw.get("fx")
+        self.thesis: Optional[Callable[[Dict[str, Any]], str]] = kw.get("thesis")
+        self.min_abs: Optional[float] = kw.get("min_abs")
+        self.sample: Optional[Dict[str, Any]] = kw.get("sample")
+        self.gate_name: str = kw.get("gate_name", "Onay")
+        self.expect: Optional[Callable[[int, float], Optional[float]]] = kw.get("expect")    # (side, hold) -> P&L, carry in
+        self.pnl_sd: Optional[float] = kw.get("pnl_sd")                       # a day's (a bar's) σ of the P&L, when not dsd × factor
+        self.horizon_unit: str = kw.get("horizon_unit", "gün")
+        self.intraday: bool = bool(kw.get("intraday", False))
+        self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
         self.live = False
@@ -413,6 +577,8 @@ def mr_monitor(ctx: Ctx, sid: str, family: str, asset: str, name: str, unit: str
     if not sd:
         return None
     ou = ou_of(values)
+    kw.setdefault("dsd", qm.stdev([b - a for a, b in zip(values, values[1:])]))         # level units
+    kw.setdefault("pnl", ("bp", 1.0) if unit == "bp" else pnl_scale(kind, values[-1]))
     return Monitor(sid, family, asset, name, unit, digits, days, values, legs, calc, mean=mean, sd=sd,
                    half_life=ou["half_life"] if ou else None, regime=kw.pop("regime", None) or regime_of(values, kind, ctx.cfg),
                    info=dict(kw.pop("info", {}), ou=ou), **kw)
@@ -484,8 +650,37 @@ def hl_factor(kind: str, hl: Optional[float], cfg: Dict[str, Any]) -> Tuple[floa
     return 0.0, "yarı ömür %.0f gün: ufkun (%d gün) %g katından uzun" % (hl, int(horizon), float(cfg["hl_max_mult"]))
 
 
+def _gate(name: str, ok: bool, text: str, part: Optional[float] = None) -> Dict[str, Any]:
+    return {"name": name, "ok": bool(ok), "text": text, "part": part}
+
+
+def _g(v: Optional[float], d: int = 1) -> str:
+    """A number for the texts, Turkish style (decimal comma)."""
+    if v is None:
+        return "—"
+    return ("%.*f" % (d, v)).replace(".", ",")
+
+
+def _sg(v: Optional[float], d: int = 1) -> str:
+    return "—" if v is None else ("+" if v > 0 else "") + _g(v, d)
+
+
+def fx_info(ctx: "Ctx", pair: str, live: Dict[str, float], hold: Optional[float]) -> Dict[str, Any]:
+    """What an FX trade's decision needs now: the spot, the carry of a long (annualised, the shortest forward's and the
+    holding's), the forward of the holding's end and what a unit of the quote currency is in TRY."""
+    cal = (hold or 20.0) * 7.0 / 5.0
+    s = ctx.cur("FX:" + pair, live)
+    c = ctx.fx_carry(pair, live)
+    ch = ctx.fx_carry(pair, live, days=cal)
+    return {"pair": pair, "spot": s, "carry_yr": c, "carry_h_yr": ch, "cal_days": cal,
+            "fwd_h": s * math.exp(-ch * cal / 365.0 / 100.0) if s and ch is not None else None,
+            "try_per_quote": ctx.try_per(pair[3:], live), "tenors": [t for t, _ in ctx.fx_tenors(pair)]}
+
+
 def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[str, Any]]:
-    """A monitor past its entry threshold as a signal of the common format (``None`` below it)."""
+    """A monitor past its entry threshold as a signal of the common format (``None`` below it), with its decision:
+    every gate it passed or failed, the expected profit over the holding with carry + roll in it (bp, % or vol points,
+    and TRY where it can be told), risk / reward, the thesis in one sentence.  A signal a gate keeps out is "elendi"."""
     if m.z is None or m.level is None:
         return None
     thr = float(m.entry or cfg["entry_z"])
@@ -496,12 +691,14 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     pkg_s = m.legs_sign if m.legs_sign is not None else s
     target_z, stop_z = float(cfg["target_z"]), float(cfg["stop_z"])
     gated = ""
+    gates = [_gate("Eşik", True, "|%s| %s ≥ %s" % (m.score_name, _g(abs(m.z), 2), _g(thr, 2)))]
     if m.mode == "mr" and m.mean is not None and m.sd:
         target = m.inv(m.mean + zs * target_z * m.sd)
         stop = m.inv(m.mean + zs * stop_z * m.sd)
         scale = m.sd
         if abs(m.z) >= stop_z:
             gated = "stop bölgesinde (|z| ≥ %s)" % ("%g" % stop_z).replace(".", ",")
+        gates.append(_gate("Stop bölgesi", not gated, gated or "|z| %s < stop %s" % (_g(abs(m.z), 2), _g(stop_z, 1))))
     else:
         target = m.level + s * (m.reward or 0.0)
         stop = m.level - s * (m.risk or 0.0)
@@ -519,31 +716,128 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         expression = "Korelasyon normale döner: %s · %s" % (m.name, " / ".join(l["text"] for l in legs))
     else:
         expression = " / ".join(l["text"] for l in legs)
-    rf, why_r = regime_factor(m.kind, (m.regime or {}).get("tag"))
+    tag = (m.regime or {}).get("tag")
+    rf, why_r = regime_factor(m.kind, tag)
+    if m.kind in ("mr", "surprise", "trend"):
+        gates.append(_gate("Rejim", rf > 0, why_r or "%s%s" % (REGIME_TEXT.get(tag), " · yarım ağırlık" if rf == 0.5 else ""), rf))
     hf, why_h = hl_factor(m.kind, m.half_life, cfg)
+    if m.kind in ("mr", "corr"):
+        gates.append(_gate("Yarı ömür", hf > 0, why_h or ("%s gün%s" % (_g(m.half_life, 1), "" if hf >= 1.0 else " · ağırlık %s" % _g(hf, 2))), hf))
     if m.gate is not None:
         g, why_g = m.gate(pkg_s)
+        gates.append(_gate(m.gate_name, g > 0.0, why_g or "geçti"))
         if g == 0.0:
             rf, why_r = 0.0, why_g
-    carry = pkg_s * m.carry_up if m.carry_up is not None else None
-    cf = 0.5 if carry is not None and carry < 0 else 1.0
+    why_x = ""
+    if m.sample is not None:
+        gates.append(_gate("Örneklem", bool(m.sample.get("ok")), m.sample.get("text") or ""))
+        if not m.sample.get("ok"):
+            why_x = m.sample.get("text") or "örneklem yetersiz"
+    if m.min_abs is not None and not why_x:
+        ok = abs(m.level) >= m.min_abs
+        gates.append(_gate("Tolerans", ok, "|%s| %s %s %s %s" % ("fark", _g(abs(m.level), 1), "≥" if ok else "<", _g(m.min_abs, 1), m.unit)))
+        if not ok:
+            why_x = "fark %s %s: çözücünün toleransı içinde (en az %s)" % (_g(abs(m.level), 1), m.unit, _g(m.min_abs, 1))
+    hold = m.hold
+    if hold is None and m.half_life:
+        hold = m.half_life * max(1.0, math.log(abs(m.z) / 0.5, 2))        # expected z falls to 0.5
+    # ---- what it is expected to earn over the holding, carry + roll in it
+    unit, factor = m.pnl or (None, None)
+    move = None
+    try:
+        if callable(m.fcast):
+            move = m.fcast(m.level, m.z)
+        elif m.fcast is not None:
+            move = float(m.fcast)
+        elif m.mode == "mr" and m.mean is not None and m.half_life and hold:
+            move = (m.inv(m.mean) - m.level) * (1.0 - 0.5 ** (hold / m.half_life))   # OU: the share of the gap closed in the hold
+    except Exception:  # noqa: BLE001 - no forecast is no expected profit, not a failed signal
+        move = None
+    fx = m.fxinfo if m.fx else {}
+    carry_yr = carry_week = carry_h = None
+    if m.fx:
+        if fx.get("carry_yr") is not None:
+            carry_yr = pkg_s * fx["carry_yr"]
+            carry_week = carry_yr * 7.0 / 365.0
+        if fx.get("carry_h_yr") is not None:
+            carry_h = pkg_s * fx["carry_h_yr"] * fx["cal_days"] / 365.0
+    elif m.carry_up is not None:
+        carry_week = pkg_s * m.carry_up
+        carry_h = carry_week * (hold or 0.0) / 5.0
+    exp = None
+    if m.expect is not None:
+        try:
+            exp = m.expect(pkg_s, hold or 0.0)
+        except Exception:  # noqa: BLE001
+            exp = None
+    elif move is not None and factor:
+        exp = s * move * factor
+        if not m.fx and carry_h is not None:
+            exp += carry_h                                   # (an FX trade's level is its excess return: carry is in it)
+    daily = m.pnl_sd if m.pnl_sd is not None else (m.dsd * factor if m.dsd and factor else None)
+    sig_h = daily * math.sqrt(hold) if daily and hold else None
+    margin = float(cfg.get("carry_margin", 0.5)) * sig_h if sig_h else 0.0
+    cf = 1.0
+    if m.fx:
+        if carry_h is None:
+            gates.append(_gate("Carry", False, "forward yok: carry bilinmiyor"))
+            why_x = why_x or "forward yok: carry bilinmiyor"
+        elif carry_h < 0:
+            ok = exp is not None and exp >= margin
+            text = ("carry aleyhte (%s%% ufukta) · beklenen %s%% ≥ tampon %s%%" if ok else
+                    "carry'yi karşılamıyor: beklenen %s%% < tampon %s%% (carry ufukta %s%%)")
+            gates.append(_gate("Carry", ok, text % ((_sg(carry_h, 2), _sg(exp, 2), _g(margin, 2)) if ok else (_sg(exp, 2), _g(margin, 2), _sg(carry_h, 2)))))
+            if not ok:
+                why_x = why_x or "carry'yi karşılamıyor (beklenen %s%%, carry ufukta %s%%)" % (_sg(exp, 2), _sg(carry_h, 2))
+        else:
+            gates.append(_gate("Carry", True, "carry lehte (%s%% / yıl, ufukta %s%%)" % (_sg(carry_yr, 1), _sg(carry_h, 2))))
+    elif carry_week is not None:
+        cf = 0.5 if carry_week < 0 else 1.0
+        gates.append(_gate("Carry", True, "carry + roll %s %s / hafta%s" % (_sg(carry_week, 2), unit or "bp", " · aleyhte: ağırlık 0,5" if cf < 1 else ""), cf))
+    if exp is not None and not why_x and not (m.fx and carry_h is not None and carry_h < 0):
+        ok = exp > 0
+        gates.append(_gate("Beklenen kâr", ok, "%s %s ufukta%s" % (_sg(exp, 2), unit or "", " (carry dahil)" if carry_h is not None else "")))
+        if not ok:
+            why_x = "beklenen kâr yok (%s %s, carry dahil)" % (_sg(exp, 2), unit or "")
     # |z| on the desk's scale (a family with its own threshold is brought to it), counted at most up to the stop: no
     # family's score can outrank the others by its scale alone
     base = min(abs(m.z) * float(cfg["entry_z"]) / thr, stop_z)
     composite = base * rf * hf * cf
-    gated = gated or why_r or why_h
-    hold = m.hold
-    if hold is None and m.half_life:
-        hold = m.half_life * max(1.0, math.log(abs(m.z) / 0.5, 2))        # expected z falls to 0.5
-    return {"id": m.sid, "family": m.family, "family_label": FAMILIES[m.family][0], "page": FAMILIES[m.family][2], "kind": m.kind,
-            "asset": m.asset, "instrument": m.name, "expression": expression, "legs": legs, "direction": s, "z": m.z,
-            "score_name": m.score_name, "entry_z": thr, "strength": strength(abs(m.z) / thr), "level": m.level, "unit": m.unit,
-            "digits": m.digits, "entry": m.level, "target": target, "stop": stop, "scale": scale, "target_z": target_z, "stop_z": stop_z,
-            "mode": m.mode, "half_life": m.half_life, "hold": hold, "carry_week": carry,
-            "regime": REGIME_TEXT.get((m.regime or {}).get("tag")), "regime_info": m.regime, "composite": 0.0 if gated else composite,
-            "parts": {"z": base, "regime": rf, "hl": hf, "carry": cf}, "gated": gated, "live": m.live, "time": stamp,
-            "note": m.note, "info": {k: v for k, v in m.info.items() if k not in ("ou", "inputs")}, "agree": 0, "conflict": 0,
-            "agree_with": [], "conflict_with": []}
+    gated = gated or why_r or why_h or why_x
+    reward = abs(target - m.level) * factor if factor and target is not None else None
+    risk = abs(stop - m.level) * factor if factor and stop is not None else None
+    pnl_try = None
+    if exp is not None:
+        if unit == "bp":
+            pnl_try = exp * float(cfg.get("dv01_base") or 0.0)
+        elif unit == "%" and m.fx and fx.get("spot") and fx.get("try_per_quote"):
+            pnl_try = exp / 100.0 * 1e6 * fx["spot"] * fx["try_per_quote"]
+    sg = {"id": m.sid, "family": m.family, "family_label": FAMILIES[m.family][0], "page": FAMILIES[m.family][2], "kind": m.kind,
+          "asset": m.asset, "instrument": m.name, "expression": expression, "legs": legs, "direction": s, "z": m.z,
+          "score_name": m.score_name, "entry_z": thr, "strength": "elendi" if gated else strength(abs(m.z) / thr), "level": m.level,
+          "unit": m.unit, "digits": m.digits, "entry": m.level, "target": target, "stop": stop, "scale": scale, "target_z": target_z,
+          "stop_z": stop_z, "mode": m.mode, "half_life": m.half_life, "hold": hold, "carry_week": carry_week, "carry_yr": carry_yr,
+          "carry_h": carry_h, "exp_pnl": exp, "pnl_unit": unit, "pnl_try": pnl_try, "sigma_h": sig_h, "reward": reward, "risk": risk,
+          "rr": reward / risk if reward is not None and risk else None, "exp_r": exp / risk if exp is not None and risk else None,
+          "gates": gates, "fx": dict(fx) if fx else None, "intraday": m.intraday, "horizon_unit": m.horizon_unit,
+          "regime": REGIME_TEXT.get(tag), "regime_info": m.regime, "composite": 0.0 if gated else composite,
+          "parts": {"z": base, "regime": rf, "hl": hf, "carry": cf}, "gated": gated, "live": m.live, "time": stamp,
+          "note": m.note, "info": {k: v for k, v in m.info.items() if k not in ("ou", "inputs")}, "agree": 0, "conflict": 0,
+          "agree_with": [], "conflict_with": []}
+    try:
+        sg["thesis"] = m.thesis(sg) if m.thesis is not None else default_thesis(m, sg)
+    except Exception:  # noqa: BLE001 - a sentence that cannot be written is no reason to lose the signal
+        sg["thesis"] = default_thesis(m, sg)
+    return sg
+
+
+def default_thesis(m: Monitor, sg: Dict[str, Any]) -> str:
+    """One sentence: what is out of line, by how much, and the trade - with what it is expected to earn."""
+    where = "ortalamasının %s" % ("üstünde" if (m.z or 0) > 0 else "altında") if m.mode == "mr" else "eşiğin ötesinde"
+    tail = ""
+    if sg.get("exp_pnl") is not None:
+        tail = "; beklenen %s %s%s" % (_sg(sg["exp_pnl"], 2), sg.get("pnl_unit") or "", " (carry dahil)" if sg.get("carry_h") is not None else "")
+    return "%s %s (%s %s) → %s%s." % (m.name, where, m.score_name, _sg(m.z, 2), sg["expression"], tail)
 
 
 def rank(signals: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -834,21 +1128,61 @@ def _annuity(par: float, months: float) -> float:
     return sum(1.0 / (1.0 + r) ** i for i in range(1, years + 1))
 
 
-def _pkg_name(tenors: List[str], kind: str) -> str:
-    if all(t.upper().endswith("Y") for t in tenors):
-        return "".join("%ss" % t[:-1] for t in tenors) + (" PCA-nötr fly" if kind == "fly" else " PC1-nötr spread")
-    return "/".join(t.upper() for t in tenors) + (" PCA-nötr fly" if kind == "fly" else " PC1-nötr spread")
+def _pkg_name(tenors: List[str], kind: str, version: str = "pca") -> str:
+    head = "".join("%ss" % t[:-1] for t in tenors) if all(t.upper().endswith("Y") for t in tenors) else "/".join(t.upper() for t in tenors)
+    if version == "klasik":
+        return head + (" klasik 50/50 fly" if kind == "fly" else " 1:1 spread")
+    return head + (" PCA ağırlıklı fly" if kind == "fly" else " PCA ağırlıklı spread")
+
+
+def rv_weights(kind: str, js: List[int], vec: List[List[float]], version: str) -> Optional[Dict[int, float]]:
+    """A spread's / fly's DV01 weights by tenor index: ``klasik`` the desk's convention - a spread 1:1 (long leg +1, short
+    −1), a fly 50/50 (body 1, wings −0.5 each): neutral to a parallel move -; ``pca`` neutral to the risk factors - a
+    spread to PC1 (long leg 1), a fly to PC1 and PC2 (body 1)."""
+    if kind == "spread":
+        s_, l_ = js
+        if version == "klasik":
+            return {l_: 1.0, s_: -1.0}
+        return {l_: 1.0, s_: -vec[0][l_] / vec[0][s_]} if vec[0][s_] else None
+    w1_, b_, w2_ = js
+    if version == "klasik":
+        return {b_: 1.0, w1_: -0.5, w2_: -0.5}
+    sol = qm.solve([[vec[0][w1_], vec[0][w2_]], [vec[1][w1_], vec[1][w2_]]], [-vec[0][b_], -vec[1][b_]])
+    return {b_: 1.0, w1_: sol[0], w2_: sol[1]} if sol is not None else None
+
+
+def pkg_exposures(weights: Dict[int, float], vec: List[List[float]], values: List[float]) -> List[float]:
+    """What is left of the risk factors in a package: its move (bp) for a 1σ move of PC1 / PC2 / PC3,
+    Σ wᵢ · e_k[i] · √λ_k."""
+    return [sum(w * vec[k][i] for i, w in weights.items()) * math.sqrt(max(values[k], 0.0)) for k in range(min(3, len(vec), len(values)))]
+
+
+def rv_compare(kind: str, versions: Dict[str, Dict[str, Any]]) -> str:
+    """One line on what the two versions leave: the classic one's hidden factor exposure, the PCA one's net DV01."""
+    k, p = versions.get("klasik"), versions.get("pca")
+    if not k or not p:
+        return ""
+    ek, ep = k["exposures"], p["exposures"]
+    hidden = max(range(len(ek)), key=lambda i: abs(ek[i])) if ek else 0
+    names = ("seviye", "eğim", "eğrilik")
+    return ("klasik: paralel kaymaya nötr (net DV01 %s TL/bp), gizli %s maruziyeti %s bp/σ; PCA: %s nötr (%s), net DV01 %s TL/bp" % (
+        _g(k["net_dv01"], 0), names[hidden], _sg(ek[hidden], 2), "seviyeye" if kind == "spread" else "seviye ve eğime",
+        " · ".join("PC%d %s" % (i + 1, _sg(x, 2)) for i, x in enumerate(ep)), _g(p["net_dv01"], 0)))
 
 
 def fam_rv(ctx: Ctx, fit: Optional[Dict[str, Any]], items: List[Dict[str, Any]]) -> Tuple[List[Monitor], Dict[str, Any]]:
+    """The desk's spreads and flies in both conventions side by side: the classic one (1:1 / 50/50 in DV01, neutral to a
+    parallel move) and the PCA-weighted one (neutral to PC1 / PC1 + PC2) - each with its series, z, half-life, regime,
+    carry + roll, legs (DV01, nominal), net DV01 and what is left of the risk factors; both may signal."""
     if fit is None:
         return [], {"ok": False, "rows": []}
-    keys, rows, vec = fit["keys"], fit["rows"], fit["vectors"]
+    keys, rows, vec, values = fit["keys"], fit["rows"], fit["vectors"], fit["values"]
+    win_ = fit.get("window") or ctx.window()
     index = {key: j for j, key in enumerate(keys)}
-    e1, e2 = vec[0], vec[1]
     base = float(ctx.cfg["dv01_base"])
     mons: List[Monitor] = []
     table = []
+    today = [ctx.cur(k_) for k_ in keys]
     for it in items:
         if it.get("product") != "OIS" or it.get("kind") not in ("spread", "fly"):
             continue
@@ -857,53 +1191,68 @@ def fam_rv(ctx: Ctx, fit: Optional[Dict[str, Any]], items: List[Dict[str, Any]])
             table.append({"label": it["label"], "error": "vadesi PCA eğrisinde yok"})
             continue
         js = [index[t] for t in tk]
-        if it["kind"] == "spread":
-            s_, l_ = js
-            if not e1[s_]:
+        row: Dict[str, Any] = {"label": _pkg_name(it["tenors"], it["kind"], "pca"), "item": it["label"], "kind": it["kind"], "tenors": it["tenors"],
+                               "versions": {}}
+        for version in ("klasik", "pca"):
+            weights = rv_weights(it["kind"], js, vec, version)
+            if weights is None:
+                row["versions"][version] = {"error": "PC1/PC2 sistemi çözülemedi"}
                 continue
-            weights = {l_: 1.0, s_: -e1[l_] / e1[s_]}
-        else:
-            w1_, b_, w2_ = js
-            sol = qm.solve([[e1[w1_], e1[w2_]], [e2[w1_], e2[w2_]]], [-e1[b_], -e2[b_]])
-            if sol is None:
-                table.append({"label": it["label"], "error": "PC1/PC2 sistemi çözülemedi"})
-                continue
-            weights = {b_: 1.0, w1_: sol[0], w2_: sol[1]}
-        series = [sum(w * r[j] for j, w in weights.items()) * 100.0 for r in rows]
-        today = [ctx.cur(k_) for k_ in keys]
-        legs = []
-        for j, w in sorted(weights.items(), key=lambda x: fit["months"][x[0]]):
-            par = today[j]
-            ann = _annuity(par, fit["months"][j]) if par is not None else None
-            dv01 = w * base
-            legs.append({"key": keys[j], "name": _ois_name(ctx, keys[j]), "weight": w, "dv01": dv01,
-                         "notional": abs(dv01) / (ann * 1e-4) / 1e6 if ann else None})
+            series = [sum(w * r[j] for j, w in weights.items()) * 100.0 for r in rows]
+            legs = []
+            for j, w in sorted(weights.items(), key=lambda x: fit["months"][x[0]]):
+                par = today[j]
+                ann = _annuity(par, fit["months"][j]) if par is not None else None
+                dv01 = w * base
+                legs.append({"key": keys[j], "name": _ois_name(ctx, keys[j]), "weight": w, "dv01": dv01,
+                             "notional": abs(dv01) / (ann * 1e-4) / 1e6 if ann else None})
+            expo = pkg_exposures(weights, vec, values)
+            net = sum(weights.values()) * base
 
-        def calc(live, weights=weights):
-            lv = {j: ctx.cur(keys[j], live) for j in weights}
-            if any(v is None for v in lv.values()):
-                return None
-            return sum(w * lv[j] for j, w in weights.items()) * 100.0
+            def calc(live, weights=weights):
+                lv = {j: ctx.cur(keys[j], live) for j in weights}
+                if any(v is None for v in lv.values()):
+                    return None
+                return sum(w * lv[j] for j, w in weights.items()) * 100.0
 
-        name = _pkg_name(it["tenors"], it["kind"])
-        mon = mr_monitor(ctx, "rv:%s:%s" % (it["kind"], "/".join(t.upper() for t in it["tenors"])), "rv", "TRY OIS", name, "bp", 1, fit["days"],
-                         series, "bp", legs, calc, carry_up=_pkg_carry(ctx, legs), pkg="rate",
-                         note=("Ağırlıklar PC1 ve PC2'ye nötr (gövde 1)" if it["kind"] == "fly" else "Ağırlıklar PC1'e nötr (uzun bacak 1)")
-                         + "; DV01 cinsinden. + ise paket seviyesi yüksek (receive ile ortalamaya dönüş).")
-        row = {"label": name, "kind": it["kind"], "tenors": it["tenors"], "legs": legs}
-        if mon is not None:
-            mons.append(mon)
-            row.update({"level": series[-1], "z": mon.zof(series[-1]), "half_life": mon.half_life, "carry": mon.carry_up,
-                        "regime": (mon.regime or {}).get("tag"), "sid": mon.sid})
-        else:
-            row["error"] = "gün sayısı az"
+            name = _pkg_name(it["tenors"], it["kind"], version)
+            sid = "rv:%s:%s" % (it["kind"], "/".join(t.upper() for t in it["tenors"])) + (":klasik" if version == "klasik" else "")
+            if version == "klasik":
+                how = "Ağırlıklar masanın usulü: %s, DV01 cinsinden - paralel kaymaya nötr" % ("1:1" if it["kind"] == "spread" else "50/50 (gövde 1, kanatlar −0,5)")
+            else:
+                how = "Ağırlıklar %s, DV01 cinsinden" % ("PC1 ve PC2'ye nötr (gövde 1)" if it["kind"] == "fly" else "PC1'e nötr (uzun bacak 1)")
+            ver = {"name": name, "sid": sid, "legs": legs, "net_dv01": net, "exposures": expo, "weights": {keys[j]: w for j, w in weights.items()}}
+            mon = mr_monitor(ctx, sid, "rv", "TRY OIS", name, "bp", 1, fit["days"], series, "bp", legs, calc, carry_up=_pkg_carry(ctx, legs), pkg="rate",
+                             info={"window": win_, "version": version, "net_dv01": net, "exposures": expo},
+                             note="%s; %d günlük pencere. Net DV01 %s TL/bp; 1σ PC1 / PC2 / PC3 hareketinde paket %s bp. + ise paket seviyesi yüksek "
+                                  "(receive ile ortalamaya dönüş)." % (how, win_, _g(net, 0), " / ".join(_sg(x, 2) for x in expo)))
+            if mon is not None:
+                mons.append(mon)
+                ver.update({"level": series[-1], "z": mon.zof(series[-1]), "half_life": mon.half_life, "carry": mon.carry_up,
+                            "regime": (mon.regime or {}).get("tag")})
+            else:
+                ver["error"] = "gün sayısı az"
+            row["versions"][version] = ver
+        row["compare"] = rv_compare(it["kind"], row["versions"])
+        for v in row["versions"].values():
+            m = next((x for x in mons if x.sid == v.get("sid")), None)
+            if m is not None:
+                m.info["compare"] = row["compare"]
+        # (the PCA version's fields on the row itself, as before)
+        p = row["versions"].get("pca") or {}
+        row.update({k: p.get(k) for k in ("legs", "level", "z", "half_life", "carry", "regime", "sid", "error") if k in p})
         table.append(row)
-    return mons, {"ok": True, "rows": table}
+    return mons, {"ok": True, "rows": table, "window": win_}
 
 
 # ---------------------------------------------------------------------------------------------- 4. macro betas
-MACRO_TARGETS = ("OIS:3M", "OIS:1Y", "OIS:2Y", "OIS:5Y", "OIS:10Y")
+MACRO_TARGETS = ("OIS:3M", "OIS:1Y", "OIS:2Y", "OIS:5Y", "OIS:10Y", "XR:USDTRY")
 MACRO_DRIVERS = ("UST:2Y", "UST:10Y", "DXY", "EMFX", "BRENT", "CDS")
+MACRO_HOLD = 5                            # business days: the residual is expected back within a week
+
+
+def _macro_name(ctx: Ctx, t: str) -> str:
+    return "%s forward (carry dahil)" % t[3:] if t.startswith("XR:") else _ois_name(ctx, t)
 
 
 def fam_macro(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
@@ -914,25 +1263,33 @@ def fam_macro(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
     if not drivers:
         return [], {"ok": False, "why": "küresel sürücülerin (UST, DXY, EM FX, Brent, CDS) geçmişi yok", "drivers": [], "rows": []}
     for t in targets:
+        tk = ctx.kind(t)                                  # rate (bp moves) or xr (an FX pair's excess return, %)
+        fx = t[3:] if t.startswith("XR:") else None
         days, vals = aligned(ctx, [t] + drivers, ctx.window() + 1)
         if len(days) < ctx.min_obs() + 1:
-            rows.append({"key": t, "label": _ois_name(ctx, t), "error": "ortak gün az (%d)" % len(days)})
+            rows.append({"key": t, "label": _macro_name(ctx, t), "error": "ortak gün az (%d)" % len(days)})
             continue
-        y = diffs("rate", vals[0])
+        y = diffs(tk, vals[0])
         xs = [diffs(ctx.kind(d), vals[1 + i]) for i, d in enumerate(drivers)]
         r = qm.ols(y, xs)
         if r is None:
-            rows.append({"key": t, "label": _ois_name(ctx, t), "error": "regresyon kurulamadı"})
+            rows.append({"key": t, "label": _macro_name(ctx, t), "error": "regresyon kurulamadı"})
             continue
         sigma = math.sqrt(r["sigma2"])
         coef = r["coef"]
         last = [v[-1] for v in vals]
         resid_hist = r["resid"]
+        # how much of a day's residual the following week took back: the next five days' move on the residual (OLS);
+        # a residual that is not taken back is no trade (its expected profit is about nothing)
+        nxt = [sum(y[i + 1:i + 1 + MACRO_HOLD]) for i in range(len(y) - MACRO_HOLD)]
+        rv = qm.ols(nxt, [resid_hist[:len(nxt)]]) if len(nxt) >= 30 else None
+        rev_beta = rv["coef"][1] if rv else None
+        rev_t = rv["t"][1] if rv else None
 
-        def attribution(live, t=t, last=last, coef=coef):
+        def attribution(live, t=t, last=last, coef=coef, tk=tk):
             now = [live.get(k) for k in [t] + drivers]
             if all(v is not None for v in now):
-                dy = change("rate", last[0], now[0])
+                dy = change(tk, last[0], now[0])
                 dx = [change(ctx.kind(d), last[1 + i], now[1 + i]) for i, d in enumerate(drivers)]
                 when = "canlı"
             else:
@@ -948,20 +1305,43 @@ def fam_macro(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             return a["resid"] / sigma if a and sigma else None
 
         cur = attribution(ctx.live)
-        row = {"key": t, "label": _ois_name(ctx, t), "n": r["n"], "r2": r["r2"], "alpha": coef[0], "sigma": sigma,
-               "betas": coef[1:], "t": r["t"][1:], "today": cur, "z": (cur["resid"] / sigma) if cur and sigma else None}
+        row = {"key": t, "label": _macro_name(ctx, t), "n": r["n"], "r2": r["r2"], "alpha": coef[0], "sigma": sigma,
+               "betas": coef[1:], "t": r["t"][1:], "today": cur, "z": (cur["resid"] / sigma) if cur and sigma else None,
+               "rev_beta": rev_beta, "rev_t": rev_t, "unit": change_unit(tk)}
         rows.append(row)
-        reg = regime_of(vals[0], "rate", ctx.cfg)
+        reg = regime_of(vals[0], tk, ctx.cfg)
         zh = [e / sigma for e in resid_hist] if sigma else None
-        mon = Monitor("macro:" + t, "macro", "TRY OIS", _ois_name(ctx, t), "%", 3, days[1:][-ctx.window():], vals[0][1:][-ctx.window():],
-                      [{"key": t, "name": _ois_name(ctx, t), "weight": 1.0}], lambda live, t=t: ctx.cur(t, live), zfn=zfn,
-                      zvalues=zh[-ctx.window():] if zh else None, mode="drift", hold=5.0, regime=reg, pkg="rate",
-                      carry_up=ctx.carry_week(t), info={"inputs": list(drivers)},
-                      note="Bugünkü hareketin küresel sürücülerin (β × değişim) açıklamadığı kısmı: + ise TRY'ye özgü yükseliş (receive ile geri dönüş beklenir).")
+        div = 100.0 if tk == "rate" else 1.0             # a change (bp / %) in level units
+
+        def mfcast(level, z, sigma=sigma, rev_beta=rev_beta, div=div):
+            # the week's expected move: what the residual's history says the next week takes back of it
+            return (rev_beta or 0.0) * (z or 0.0) * sigma / div if rev_beta is not None and rev_beta < 0 else 0.0
+
+        def mthesis(sg, t=t, fx=fx, rev_beta=rev_beta):
+            a = attribution(ctx.derive_live(ctx.live)) or {}
+            u = change_unit(tk)
+            return ("%s bugün %s %s hareket etti; küresel sürücüler %s %s açıklıyor, %s %s TRY'ye özgü (z %s). Geçmişte böyle bir kalıntının %%%s'i "
+                    "ertesi hafta geri döndü → %s; beklenen %s %s%s." % (
+                        _macro_name(ctx, t), _sg(a.get("dy"), 1), u, _sg(a.get("global"), 1), u, _sg(a.get("resid"), 1), u, _sg(sg["z"], 2),
+                        _g(max(0.0, -(rev_beta or 0.0)) * 100.0, 0), sg["expression"], _sg(sg.get("exp_pnl"), 2), sg.get("pnl_unit") or "",
+                        " (carry dahil)" if sg.get("carry_h") is not None else ""))
+
+        legs = [{"key": "FX:" + fx, "name": "%s forward" % fx, "weight": 1.0}] if fx else [{"key": t, "name": _ois_name(ctx, t), "weight": 1.0}]
+        mon = Monitor("macro:" + t, "macro", "FX" if fx else "TRY OIS", "%s forward" % fx if fx else _ois_name(ctx, t), "%", 3,
+                      days[1:][-ctx.window():], vals[0][1:][-ctx.window():],
+                      legs, lambda live, t=t: ctx.cur(t, live), zfn=zfn,
+                      zvalues=zh[-ctx.window():] if zh else None, mode="drift", hold=float(MACRO_HOLD), regime=reg, pkg="fx" if fx else "rate",
+                      carry_up=None if fx else ctx.carry_week(t), info={"inputs": list(drivers) + (["FX:" + fx] if fx else []), "rev_beta": rev_beta,
+                                                                      "rev_t": rev_t},
+                      fx=fx, dsd=sigma / div, pnl=pnl_scale(tk, None), fcast=mfcast, thesis=mthesis,
+                      note="Bugünkü hareketin küresel sürücülerin (β × değişim) açıklamadığı kısmı: + ise TRY'ye özgü yükseliş (geri dönüş beklenir). "
+                           "Beklenen: geçmişte kalıntının ertesi hafta geri dönen payı (sonraki 5 günün hareketinin kalıntıya regresyonu, β %s, t %s) "
+                           "× bugünkü kalıntı%s." % (_f2(rev_beta), _f2(rev_t), "; FX'te carry dahil getiri üzerinden" if fx else ""))
         mon.reward = None
         mon.risk = None
         mon._sigma = sigma                       # type: ignore[attr-defined]
         mon._attr = attribution                  # type: ignore[attr-defined]
+        mon._div = div                           # type: ignore[attr-defined]
         mons.append(mon)
     labels = {"UST:2Y": "UST 2Y (bp)", "UST:10Y": "UST 10Y (bp)", "DXY": "DXY (%)", "EMFX": "EM FX (%)", "BRENT": "Brent (%)", "CDS": "CDS (bp)"}
     return mons, {"ok": True, "drivers": drivers, "driver_labels": [labels.get(d, d) for d in drivers], "rows": rows}
@@ -973,8 +1353,9 @@ def macro_levels(m: Monitor, cfg: Dict[str, Any]) -> None:
     sigma = getattr(m, "_sigma", None)
     if m.z is None or not sigma:
         return
-    m.reward = abs(m.z) * sigma / 100.0
-    m.risk = max(float(cfg["stop_z"]) - abs(m.z), 0.5) * sigma / 100.0
+    div = getattr(m, "_div", 100.0)
+    m.reward = abs(m.z) * sigma / div
+    m.risk = max(float(cfg["stop_z"]) - abs(m.z), 0.5) * sigma / div
 
 
 # ---------------------------------------------------------------------------------------------- 5. pairs, 7. Kalman
@@ -1265,6 +1646,82 @@ def _add_months(d: _dt.date, months: int) -> _dt.date:
     return _dt.date(y, m, min(d.day, last))
 
 
+def business_on_or_after(d: _dt.date, holidays: set) -> _dt.date:
+    while d.weekday() >= 5 or d in holidays:
+        d += _dt.timedelta(days=1)
+    return d
+
+
+def tenor_end(spot: _dt.date, months: int, holidays: set) -> _dt.date:
+    """A TRY OIS tenor's end as the workbook counts it (Motor!B325: ``WORKDAY(EDATE(spot, m) − 1, 1, holidays)``): the
+    same day ``months`` later, or the first business day after it."""
+    return business_on_or_after(_add_months(spot, months), holidays)
+
+
+#: TRY OIS conventions (the workbook's Motor!G325:K342): up to 3 months one payment at the end, ACT/365 simple; longer
+#: tenors pay quarterly (each quarter's end as a tenor's end), the par rate (1 − DF_T) / Σ accrual × DF; the overnight
+#: rate compounds business day by business day (a weekend or a holiday accrues simply at the rate before it)
+SINGLE_PAYMENT_MONTHS = 3
+
+
+def par_rate(spot: _dt.date, df: Callable[[_dt.date], Optional[float]], months: int, holidays: set) -> Optional[float]:
+    """The par rate (%) of a TRY OIS of ``months`` from discount factors ``df(date)``, in the convention above."""
+    end = tenor_end(spot, months, holidays)
+    dfe = df(end)
+    if dfe is None or dfe <= 0:
+        return None
+    if months <= SINGLE_PAYMENT_MONTHS:
+        return (1.0 / dfe - 1.0) * 365.0 / (end - spot).days * 100.0
+    ann = 0.0
+    prev = spot
+    for k in range(1, int(math.ceil(months / 3.0)) + 1):
+        t = tenor_end(spot, min(3 * k, months), holidays)
+        dft = df(t)
+        if dft is None:
+            return None
+        ann += (t - prev).days / 365.0 * dft
+        prev = t
+    return (1.0 - dfe) / ann * 100.0 if ann > 0 else None
+
+
+def curve_dfs(spot: _dt.date, quotes: Dict[int, float], holidays: set) -> List[Tuple[_dt.date, float]]:
+    """Discount factors at each quoted tenor's end, bootstrapped in the convention above (the quarters inside a longer
+    tenor read off the factors found so far, log-linear in days, the tenor's own one solved with them)."""
+    pillars: List[Tuple[_dt.date, float]] = []
+
+    def interp(d: _dt.date, pts: List[Tuple[_dt.date, float]]) -> Optional[float]:
+        return curve_df(spot, [], d, pts)
+
+    for m in sorted(quotes):
+        r = quotes[m] / 100.0
+        end = tenor_end(spot, m, holidays)
+        days = (end - spot).days
+        if days <= 0:
+            continue
+        if m <= SINGLE_PAYMENT_MONTHS:
+            pillars.append((end, 1.0 / (1.0 + r * days / 365.0)))
+            continue
+        guess = 1.0 / (1.0 + r * days / 365.0)
+        for _ in range(4):                                # the quarters past the last pillar lean on this one: iterate
+            pts = pillars + [(end, guess)]
+            known, prev, ok = 0.0, spot, True
+            dates = [tenor_end(spot, min(3 * k, m), holidays) for k in range(1, int(math.ceil(m / 3.0)) + 1)]
+            for t in dates[:-1]:
+                dft = interp(t, pts)
+                if dft is None:
+                    ok = False
+                    break
+                known += (t - prev).days / 365.0 * dft
+                prev = t
+            if not ok:
+                break
+            acc = (end - prev).days / 365.0
+            guess = (1.0 - r * known) / (1.0 + r * acc)
+        pillars.append((end, guess))
+        pillars.sort()
+    return pillars
+
+
 def path_df(spot: _dt.date, base: float, steps: List[Tuple[_dt.date, float]], end: _dt.date, holidays: set) -> float:
     """The discount factor to ``end`` of the overnight path: ``base`` (a fraction) until the first meeting, then the
     level after each meeting from the day after it - compounded business day by business day (ACT/365, a weekend or
@@ -1286,13 +1743,21 @@ def path_df(spot: _dt.date, base: float, steps: List[Tuple[_dt.date, float]], en
     return df
 
 
-def curve_df(spot: _dt.date, pillars: List[Tuple[_dt.date, float]], end: _dt.date) -> Optional[float]:
-    """Discount factor to ``end`` from par OIS rates of one payment (≤ 1Y): log-linear between the pillars."""
+def curve_df(spot: _dt.date, pillars: List[Tuple[_dt.date, float]], end: _dt.date,
+             dfs: Optional[List[Tuple[_dt.date, float]]] = None) -> Optional[float]:
+    """Discount factor to ``end``: log-linear in days between discount factors ``dfs`` (date, factor) - or, from par
+    rates of one payment ``pillars`` (date, %), their own factors."""
     pts = [(0.0, 0.0)]
-    for d, r in pillars:
-        t = (d - spot).days
-        if t > 0:
-            pts.append((float(t), math.log(1.0 / (1.0 + r / 100.0 * t / 365.0))))
+    if dfs is not None:
+        for d, f in dfs:
+            t = (d - spot).days
+            if t > 0 and f > 0:
+                pts.append((float(t), math.log(f)))
+    else:
+        for d, r in pillars:
+            t = (d - spot).days
+            if t > 0:
+                pts.append((float(t), math.log(1.0 / (1.0 + r / 100.0 * t / 365.0))))
     pts.sort()
     x = float((end - spot).days)
     if x > pts[-1][0] + 1e-9 or len(pts) < 2:
@@ -1316,35 +1781,49 @@ def mpc_periods(spot: _dt.date, steps: List[Tuple[_dt.date, float]], reach: _dt.
 
 
 def frapath_day(spot: _dt.date, base: float, steps: List[Tuple[_dt.date, float]], quotes: Dict[int, float], holidays: set) -> Dict[str, Any]:
-    """One day: each FRA bucket's forward and each coming meeting period's forward from the curve and from the meeting
-    path (bp apart), and each tenor's par rate against the path's own."""
-    pillars = sorted((_add_months(spot, m), r) for m, r in quotes.items())
+    """One day, in the workbook's own convention (``SINGLE_PAYMENT_MONTHS``): each quoted tenor's par rate from the
+    meeting path against its quote - the path was solved from these quotes, so they should agree to a basis point or
+    two -, each FRA bucket's forward from the curve (the quotes bootstrapped) and from the path, and the path's level
+    for each coming meeting period."""
+    dfs = curve_dfs(spot, quotes, holidays)
+    reach = max(d for d, _ in dfs) if dfs else spot
     out: Dict[str, Any] = {"fra": {}, "tenor": {}, "mpc": {}}
-    reach = max(d for d, _ in pillars) if pillars else spot
-    for meeting, a, b in mpc_periods(spot, steps, reach):
-        ca, cb = curve_df(spot, pillars, a), curve_df(spot, pillars, b)
-        if ca is None or cb is None:
-            continue
-        pa, pb = path_df(spot, base, steps, a, holidays), path_df(spot, base, steps, b, holidays)
-        fc = (ca / cb - 1.0) * 365.0 / (b - a).days
-        fp = (pa / pb - 1.0) * 365.0 / (b - a).days
-        out["mpc"][meeting.isoformat()] = {"start": a.isoformat(), "end": b.isoformat(), "curve": fc * 100.0, "path": fp * 100.0,
-                                           "dev": (fc - fp) * 10000.0}
+
+    def pdf(d: _dt.date) -> float:
+        return path_df(spot, base, steps, d, holidays)
+
+    def cdf(d: _dt.date) -> Optional[float]:
+        return curve_df(spot, [], d, dfs)
+
+    for m, r in quotes.items():
+        par = par_rate(spot, pdf, m, holidays)
+        if par is not None:
+            out["tenor"][m] = {"quote": r, "path": par, "dev": (r - par) * 100.0}
     for m1, m2 in FRA_BUCKETS:
-        a, b = _add_months(spot, m1), _add_months(spot, m2)
-        ca, cb = curve_df(spot, pillars, a), curve_df(spot, pillars, b)
+        a, b = tenor_end(spot, m1, holidays), tenor_end(spot, m2, holidays)
+        if b > reach or b <= a:
+            continue
+        ca, cb = cdf(a), cdf(b)
         if ca is None or cb is None:
             continue
-        pa, pb = path_df(spot, base, steps, a, holidays), path_df(spot, base, steps, b, holidays)
+        pa, pb = pdf(a), pdf(b)
         fc = (ca / cb - 1.0) * 365.0 / (b - a).days
         fp = (pa / pb - 1.0) * 365.0 / (b - a).days
         out["fra"]["%dx%d" % (m1, m2)] = {"curve": fc * 100.0, "path": fp * 100.0, "dev": (fc - fp) * 10000.0}
-    for m, r in quotes.items():
-        e = _add_months(spot, m)
-        pdf = path_df(spot, base, steps, e, holidays)
-        par = (1.0 / pdf - 1.0) * 365.0 / (e - spot).days * 100.0
-        out["tenor"][m] = {"quote": r, "path": par, "dev": (r - par) * 100.0}
+    prev = base
+    for meeting, a, b in mpc_periods(spot, steps, reach):
+        level = next((lv for d, lv in steps if d == meeting), None)
+        if level is None:
+            continue
+        pa, pb = pdf(a), pdf(b)
+        out["mpc"][meeting.isoformat()] = {"start": a.isoformat(), "end": b.isoformat(), "path": level * 100.0,
+                                           "fwd": (pa / pb - 1.0) * 365.0 / max(1, (b - a).days) * 100.0, "step": (level - prev) * 10000.0}
+        prev = level
     return out
+
+
+#: an FRA bucket the path does not reproduce by at least this much (bp) is a deviation; below it, the solver's tolerance
+FRA_MIN_BP = 5.0
 
 
 def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
@@ -1360,7 +1839,7 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         return [], {"ok": False, "why": "1A – 1Y OIS vadelerinin geçmişi yok", "rows": [], "tenors": []}
     series: Dict[str, List[Tuple[str, float]]] = {}
     tenor_series: Dict[int, List[Tuple[str, float]]] = {}
-    mpc_series: Dict[str, List[Tuple[str, float]]] = {}
+    last_day: Optional[str] = None
     for d in sorted(by_day):
         meta = days_meta.get(d) or {}
         if d >= ctx.today_iso or meta.get("flag") in ("inconsistent", "error") or not meta.get("spot") or meta.get("base") is None:
@@ -1370,26 +1849,29 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             continue
         spot = _dt.date.fromisoformat(meta["spot"])
         steps = sorted((_dt.date.fromisoformat(mt), lv) for mt, lv in by_day[d])
-        res = frapath_day(spot, meta["base"], steps, quotes, ctx.holidays)
+        base = meta["fit_base"] if meta.get("fit_base") is not None else meta["base"]
+        res = frapath_day(spot, base, steps, quotes, ctx.holidays)
         for name, v in res["fra"].items():
             series.setdefault(name, []).append((d, v["dev"]))
         for m, v in res["tenor"].items():
             tenor_series.setdefault(m, []).append((d, v["dev"]))
-        for meeting, v in res["mpc"].items():
-            mpc_series.setdefault(meeting, []).append((d, v["dev"]))
+        last_day = d
+    # today: the path the history solved today with today's quotes (the same day); an earlier path is not compared
+    # with today's quotes - their difference would be the market's move since, not the path's fit
     now = None
     p = ctx.path
-    if p and p.get("spot") and p.get("base") is not None and p.get("steps"):
+    same_day = bool(p and p.get("day") == ctx.today_iso)
+    if same_day and p.get("spot") and p.get("base") is not None and p.get("steps"):
         now_quotes = {m: ctx.cur(k) for m, k in tenor_keys.items() if ctx.cur(k) is not None}
         if len(now_quotes) >= 4:
-            now = frapath_day(p["spot"], p["base"], p["steps"], now_quotes, ctx.holidays)
+            now = frapath_day(p["spot"], p.get("fit_base") if p.get("fit_base") is not None else p["base"], p["steps"], now_quotes, ctx.holidays)
     mons: List[Monitor] = []
     rows = []
     for m1, m2 in FRA_BUCKETS:
         name = "%dx%d" % (m1, m2)
         pts = series.get(name) or []
         far, near = tenor_keys.get(m2), tenor_keys.get(m1)
-        row = {"bucket": name, "n": len(pts), "now": (now or {}).get("fra", {}).get(name)}
+        row = {"bucket": name, "n": len(pts), "now": (now or {}).get("fra", {}).get(name), "dev": pts[-1][1] if pts else None}
         if not pts or not far or not near:
             rows.append(row)
             continue
@@ -1400,24 +1882,33 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                 {"key": near, "name": _ois_name(ctx, near), "weight": -ann_near / span if span > 0 else -1.0}]
 
         def calc(live, name=name, last=pts[-1][1]):
-            # today: the latest meeting path the history computed with the quotes now; without one, the last close's
+            # today with today's path and quotes (live where there are); before today's path, the last close's
             q = {m: ctx.cur(k, live) for m, k in tenor_keys.items()}
             q = {m: v for m, v in q.items() if v is not None}
-            if ctx.path is None or len(q) < 4:
+            if not same_day or len(q) < 4:
                 return last
-            r = frapath_day(ctx.path["spot"], ctx.path["base"], ctx.path["steps"], q, ctx.holidays)
+            pp = ctx.path
+            r = frapath_day(pp["spot"], pp.get("fit_base") if pp.get("fit_base") is not None else pp["base"], pp["steps"], q, ctx.holidays)
             v = (r["fra"].get(name) or {}).get("dev")
             return v if v is not None else last
 
+        def fthesis(sg, name=name):
+            return ("Eğrinin %s forward'ı, aynı günün kotalarından çözülen PPK patikasının verdiğinden %s bp %s (z %s) → %s; beklenen %s bp "
+                    "(carry dahil)." % (name, _g(abs(sg["level"]), 1), "yüksek" if sg["level"] > 0 else "düşük", _sg(sg["z"], 2),
+                                         sg["expression"], _sg(sg.get("exp_pnl"), 1)))
+
         mon = mr_monitor(ctx, "frapath:" + name, "frapath", "TRY OIS", "%s FRA (PPK patikasına göre)" % name, "bp", 1, [d for d, _ in pts],
-                         [v for _, v in pts], "bp", legs, calc, pkg="rate", carry_up=_pkg_carry(ctx, legs),
-                         note="Eğrinin (OIS kotalarından) %s forward'ı ile toplantı tarihli PPK patikasının aynı dönem için verdiği forward "
-                              "arasındaki fark (bp): + ise eğri patikadan yüksek, uzak bacak ucuz (FRA receive: %s receive / %s pay)." % (
-                                  name, _ois_name(ctx, far), _ois_name(ctx, near)))
+                         [v for _, v in pts], "bp", legs, calc, pkg="rate", carry_up=_pkg_carry(ctx, legs), min_abs=FRA_MIN_BP, thesis=fthesis,
+                         min_share=60.0 / max(60.0, ctx.min_obs()),
+                         note="Eğrinin (OIS kotaları, masa konvansiyonuyla: ≤ 3A tek ödeme, uzunlar üç ayda bir kupon) %s forward'ı ile aynı günün "
+                              "kotalarından çözülen toplantı tarihli PPK patikasının aynı dönem için verdiği forward arasındaki fark (bp). Patika kotaları "
+                              "yeniden üretir; fark yalnızca %s bp'yi aşınca (çözücünün toleransı) sinyaldir: + ise eğri patikadan yüksek, uzak bacak "
+                              "ucuz (FRA receive: %s receive / %s pay)." % (name, _g(FRA_MIN_BP, 0), _ois_name(ctx, far), _ois_name(ctx, near)))
         if mon is not None:
-            row.update({"z": mon.zof(pts[-1][1]), "half_life": mon.half_life, "sid": mon.sid, "dev": pts[-1][1]})
+            row.update({"z": mon.zof(pts[-1][1]), "half_life": mon.half_life, "sid": mon.sid})
             mons.append(mon)
         rows.append(row)
+    # the path's fit: quote − the path's own par rate, tenor by tenor (≈ 0: the same day, the same convention)
     tenors = []
     for m in sorted(tenor_series):
         pts = tenor_series[m]
@@ -1425,35 +1916,15 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         cur = ((now or {}).get("tenor") or {}).get(m)
         tenors.append({"months": m, "label": _MONTH_LABEL.get(m, "%dM" % m), "dev": cur["dev"] if cur else (vals[-1] if vals else None),
                        "quote": cur["quote"] if cur else None, "path": cur["path"] if cur else None,
-                       "z": qm.zscore(cur["dev"] if cur else vals[-1], vals) if len(vals) >= 20 else None, "n": len(vals)})
-    # the coming meeting periods (today's path): the meeting-dated OIS of each against the path's level for it
-    periods = []
-    for meeting, cur in sorted(((now or {}).get("mpc") or {}).items()):
-        pts = mpc_series.get(meeting) or []
-        row = {"meeting": meeting, "start": cur["start"], "end": cur["end"], "curve": cur["curve"], "path": cur["path"], "dev": cur["dev"],
-               "n": len(pts)}
-        name = "PPK dönemi %s – %s" % (_tr(cur["start"]), _tr(cur["end"]))
-
-        def pcalc(live, meeting=meeting, last=pts[-1][1] if pts else None):
-            q = {m: ctx.cur(k, live) for m, k in tenor_keys.items()}
-            q = {m: v for m, v in q.items() if v is not None}
-            if ctx.path is None or len(q) < 4:
-                return last
-            r = frapath_day(ctx.path["spot"], ctx.path["base"], ctx.path["steps"], q, ctx.holidays)
-            v = (r["mpc"].get(meeting) or {}).get("dev")
-            return v if v is not None else last
-
-        if pts:
-            mon = mr_monitor(ctx, "frapath:mpc:" + meeting, "frapath", "TRY OIS", name + " (toplantı tarihli OIS)", "bp", 1, [d for d, _ in pts],
-                             [v for _, v in pts], "bp", [{"key": "MPC:" + meeting, "name": name, "weight": 1.0}], pcalc, pkg="rate",
-                             min_share=60.0 / max(60.0, ctx.min_obs()),
-                             note="Eğrinin bu toplantı dönemi için forward'ı (OIS kotalarından) − PPK patikasının aynı dönemdeki seviyesi (bp): + ise "
-                                  "toplantı tarihli OIS patikaya göre ucuz (receive), − ise pahalı (pay).")
-            if mon is not None:
-                row.update({"z": mon.zof(row["dev"]), "half_life": mon.half_life, "sid": mon.sid})
-                mons.append(mon)
-        periods.append(row)
-    return mons, {"ok": True, "rows": rows, "tenors": tenors, "periods": periods, "live": now is not None}
+                       "max_abs": max((abs(v) for v in vals[-60:]), default=None), "n": len(vals),
+                       "convention": "tek ödeme, ACT/365" if m <= SINGLE_PAYMENT_MONTHS else "üç ayda bir kupon, ACT/365"})
+    periods = [dict(v, meeting=k) for k, v in sorted(((now or {}).get("mpc") or {}).items())]
+    return mons, {"ok": True, "rows": rows, "tenors": tenors, "periods": periods, "live": now is not None, "path_day": (p or {}).get("day"),
+                  "last_day": last_day, "min_bp": FRA_MIN_BP,
+                  "convention": "TRY OIS: ≤ 3 ay vade sonunda tek ödeme (ACT/365, basit); daha uzunlar üç ayda bir kupon, par = (1 − DF) ÷ Σ "
+                                "(gün / 365 × DF); vade sonu WORKDAY(EDATE(spot, ay) − 1, 1). Patika: TLREF (çözücünün taban seviyesi) her "
+                                "toplantının ertesi iş gününden yeni seviyeye geçer, iş günü bileşik, tatil / hafta sonu basit. Çalışma kitabının "
+                                "Motor!G325:K342 hesabıyla aynı."}
 
 
 def _tr(iso: str) -> str:
@@ -1462,8 +1933,17 @@ def _tr(iso: str) -> str:
 
 # ---------------------------------------------------------------------------------------------- 8/9. momentum and regime
 MOM_UNIVERSE = (("OIS:3M", "Eğri"), ("OIS:6M", "Eğri"), ("OIS:1Y", "Eğri"), ("OIS:2Y", "Eğri"), ("OIS:3Y", "Eğri"), ("OIS:5Y", "Eğri"),
-                ("OIS:10Y", "Eğri"), ("OFF:3M", "Eğri"), ("OFF:1Y", "Eğri"), ("FX:USDTRY", "FX"), ("FX:EURUSD", "FX"), ("FX:EURTRY", "FX"),
+                ("OIS:10Y", "Eğri"), ("OFF:3M", "Eğri"), ("OFF:1Y", "Eğri"),
                 ("UST:2Y", "Küresel"), ("UST:10Y", "Küresel"), ("DXY", "Küresel"), ("BRENT", "Küresel"), ("CDS", "Küresel"))
+
+
+def mom_universe(ctx: Ctx) -> List[Tuple[str, str]]:
+    """What the momentum board follows: the curve and the global drivers, and every FX pair kept - on the excess return
+    of holding it through its forwards (``XR:``), carry included; a pair without forwards on its spot, told so."""
+    out = list(MOM_UNIVERSE)
+    for pair in ctx.fx_pairs():
+        out.append(("XR:" + pair if "XR:" + pair in ctx.series else "FX:" + pair, "FX"))
+    return out
 
 
 def momentum_of(ctx: Ctx, key: str, live: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
@@ -1502,22 +1982,47 @@ def momentum_of(ctx: Ctx, key: str, live: Optional[Dict[str, float]] = None) -> 
     return {"score": score, "sd": sd, "ma_fast": ma_f, "ma_slow": ma_s, "state": state, "since": since, "level": now, **m}
 
 
+def _mom_thesis(m: Monitor, sg: Dict[str, Any]) -> str:
+    up = (m.z or 0) > 0
+    i = m.info
+    if m.fx:
+        c = sg.get("carry_yr")
+        return ("%s'nin carry dahil getirisi %s (1H %s · 1A %s · 3A %s, skor %s), ortalamalar %s; carry işlemin %s (%s%% / yıl) → %s: "
+                "ufukta beklenen %s%% (carry dahil)." % (
+                    m.fx, "yükseliyor" if up else "düşüyor", _sg(i.get("w1"), 2), _sg(i.get("m1"), 2), _sg(i.get("m3"), 2), _sg(m.z, 2),
+                    "aynı yönde" if i.get("ma") == sign(m.z or 0) else "ters yönde", "lehine" if (c or 0) >= 0 else "aleyhine", _sg(c, 1),
+                    sg["expression"], _sg(sg.get("exp_pnl"), 2)))
+    return ("%s 1H / 1A / 3A'da %s (skor %s), hareketli ortalamalar %s → %s; ufukta beklenen %s %s%s." % (
+        m.name, "yükseliyor" if up else "düşüyor", _sg(m.z, 2), "aynı yönde" if i.get("ma") == sign(m.z or 0) else "ters yönde",
+        sg["expression"], _sg(sg.get("exp_pnl"), 1), sg.get("pnl_unit") or "", " (carry + roll dahil)" if sg.get("carry_h") is not None else ""))
+
+
 def fam_momentum(ctx: Ctx, extra: Sequence[Tuple[str, str]] = ()) -> Tuple[List[Monitor], Dict[str, Any]]:
     cfg = ctx.cfg
     horizon = float(cfg["horizon"])
     mons: List[Monitor] = []
     rows = []
-    universe = list(MOM_UNIVERSE) + list(extra)
+    universe = mom_universe(ctx) + list(extra)
     for key, group in universe:
+        if key.startswith("FX:"):
+            pair = key[3:]
+            if ctx.has(key, 66):
+                rows.append({"key": key, "label": pair, "group": group, "error": "forward yok: carry hesaplanamadı (sinyal üretilmez)",
+                             "carry": None})
+            continue
         mo = momentum_of(ctx, key)
         if mo is None:
+            if key.startswith("XR:") and ctx.has("FX:" + key[3:], 66):
+                rows.append({"key": key, "label": key[3:], "group": group, "error": "carry geçmişi kısa (%d gün)" % len(ctx.series.get(key) or ()),
+                             "carry": ctx.fx_carry(key[3:])})
             continue
         kind = ctx.kind(key)
         pts = ctx.pts(key)
         values = [v for _, v in pts][-ctx.window():]
         reg = regime_of(values, kind, cfg)
-        row = dict(mo, key=key, label=ctx.label(key), group=group, regime=reg["tag"], hurst=reg["hurst"], vr=reg["vr"], vr_z=reg["vr_z"],
-                   vol_pct=reg["vol_pct"], unit=level_unit(kind))
+        fx = key[3:] if key.startswith("XR:") else None
+        row = dict(mo, key=key, label=fx or ctx.label(key), group=group, regime=reg["tag"], hurst=reg["hurst"], vr=reg["vr"], vr_z=reg["vr_z"],
+                   vol_pct=reg["vol_pct"], unit=level_unit(kind), carry=ctx.fx_carry(fx) if fx else None)
         rows.append(row)
 
         def calc(live, key=key):
@@ -1528,25 +2033,32 @@ def fam_momentum(ctx: Ctx, extra: Sequence[Tuple[str, str]] = ()) -> Tuple[List[
             return r["score"] if r else None
 
         level = mo["level"]
-        reward = to_level(kind, mo["sd"] * math.sqrt(horizon), level)
+        steps = [b - a for a, b in zip(values, values[1:])]
+        drift = shrunk_mean(steps[-63:])
+        dsd = qm.stdev(steps[-60:])
+        reward = (dsd or 0.0) * math.sqrt(horizon)
         to_ma = abs(level - mo["ma_slow"])
-        mon = Monitor("momentum:" + key, "momentum", _asset_of(key), ctx.label(key), level_unit(kind), 3 if kind == "rate" else 4,
-                      [d for d, _ in pts][-ctx.window():], values, [{"key": key, "name": ctx.label(key), "weight": 1.0}], calc, zfn=zfn,
+        legs = [{"key": "FX:" + fx, "name": "%s forward" % fx, "weight": 1.0}] if fx else [{"key": key, "name": ctx.label(key), "weight": 1.0}]
+        mon = Monitor("momentum:" + key, "momentum", _asset_of("FX:" if fx else key), "%s forward" % fx if fx else ctx.label(key),
+                      level_unit(kind), 3 if kind in ("rate", "xr") else 4, [d for d, _ in pts][-ctx.window():], values, legs, calc, zfn=zfn,
                       entry=float(cfg["mom_entry"]), follows=True, mode="drift", reward=reward,
                       risk=to_ma if 0.25 * reward <= to_ma <= 3 * reward else reward, hold=horizon, regime=reg,
-                      pkg={"rate": "rate", "fx": "fx", "index": "fx", "bp": "cds", "vol": "vol"}.get(kind, "fx") if key != "CDS" else "cds",
-                      carry_up=ctx.carry_week(key), score_name="mom",
+                      pkg={"rate": "rate", "fx": "fx", "xr": "fx", "index": "fx", "bp": "cds", "vol": "vol"}.get(kind, "fx") if key != "CDS" else "cds",
+                      carry_up=None if fx else ctx.carry_week(key), score_name="mom", fx=fx, dsd=dsd, pnl=pnl_scale(kind, level),
+                      fcast=(drift["shrunk"] * horizon) if drift else None, thesis=_mom_thesis, gate_name="Ortalamalar",
                       gate=lambda s, mo=mo: (0.0, "hareketli ortalamalar onaylamıyor (%d / %d gün)" % (int(cfg["ma_fast"]), int(cfg["ma_slow"])))
-                      if s != mo["state"] else (1.0, ""),
-                      note="1H / 1A / 3A değişimlerin günlük vol × √gün'e bölümünün ortalaması; %d / %d günlük ortalamalar aynı yönü göstermeli. "
-                           "Hedef: ufuk boyunca 1σ; stop: %d günlük ortalama." % (int(cfg["ma_fast"]), int(cfg["ma_slow"]), int(cfg["ma_slow"])),
-                      info={"w1": mo["w1"], "m1": mo["m1"], "m3": mo["m3"], "ma": mo["state"]})
+                      if s != mo["state"] else (1.0, "%d / %d günlük ortalamalar aynı yönde" % (int(cfg["ma_fast"]), int(cfg["ma_slow"]))),
+                      note=("1H / 1A / 3A değişimlerin günlük vol × √gün'e bölümünün ortalaması; %d / %d günlük ortalamalar aynı yönü göstermeli. "
+                            "Hedef: ufuk boyunca 1σ; stop: %d günlük ortalama. Beklenen: son 63 günün ortalama günlük değişimi (kesinliğiyle "
+                            "küçültülmüş) × ufuk." % (int(cfg["ma_fast"]), int(cfg["ma_slow"]), int(cfg["ma_slow"])))
+                      + (" FX: seviye, forward'la tutmanın getirisi (spot getirisi − forward primi; carry dahil, %)." if fx else ""),
+                      info={"w1": mo["w1"], "m1": mo["m1"], "m3": mo["m3"], "ma": mo["state"], "drift_t": drift["t"] if drift else None})
         if key.startswith("UST:"):
             mon.pkg = "bond"
         mons.append(mon)
     # cross-sectional rank within the curve and within FX
     for group in ("Eğri", "FX", "Küresel"):
-        members = sorted((r for r in rows if r["group"] == group), key=lambda r: -r["score"])
+        members = sorted((r for r in rows if r["group"] == group and r.get("score") is not None), key=lambda r: -r["score"])
         for i, r in enumerate(members):
             r["rank"] = i + 1
             r["of"] = len(members)
@@ -1600,11 +2112,15 @@ def fam_cycle(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         for p in PHASES:
             fwd = [s[i + horizon] - s[i] for i in range(len(s) - horizon) if phases.get(days[i]) == p]
             nw = qm.newey_west(fwd, horizon - 1) if len(fwd) >= 3 else None
-            stats[p] = {"n": len(fwd), "mean": nw["mean"] if nw else None, "t": nw["t"] if nw else None, "sd": nw["sd"] if nw else None}
+            cv = qm.nw_critical(len(fwd), horizon)
+            stats[p] = {"n": len(fwd), "mean": nw["mean"] if nw else None, "t": nw["t"] if nw else None, "sd": nw["sd"] if nw else None,
+                        "periods": len(fwd) / float(horizon), "cv": cv}
         cur = stats.get(now_phase) or {}
         row = {"slope": name, "level": s[-1] if s else None, "stats": stats, "phase": now_phase}
         rows.append(row)
-        if cur.get("t") is None or cur.get("n", 0) < 3 * horizon or not cur.get("sd"):
+        # the overlapping changes of a phase carry n / horizon independent periods: at least two are needed for any
+        # test, and the t is held to the critical value of that sample (nw_critical) - not to 1.96
+        if cur.get("t") is None or cur.get("n", 0) < 2 * horizon or not cur.get("sd"):
             continue
 
         def calc(live, long_k=long_k, short_k=short_k):
@@ -1612,14 +2128,28 @@ def fam_cycle(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             return (a - b) * 100.0 if a is not None and b is not None else None
 
         t_now = cur["t"]
+        cv = cur["cv"]
+        entry = max(float(cfg["cycle_t"]), cv or 0.0)
         legs = [{"key": long_k, "name": _ois_name(ctx, long_k), "weight": 1.0}, {"key": short_k, "name": _ois_name(ctx, short_k), "weight": -1.0}]
+        sample = {"ok": cv is not None, "n": cur["n"], "periods": cur["periods"], "cv": cv,
+                  "text": "%d örtüşen gözlem ≈ %s bağımsız %d günlük dönem; küçük örneklem eşiği |t| ≥ %s" % (
+                      cur["n"], _g(cur["periods"], 1), horizon, _g(cv, 2)) if cv is not None else "bağımsız dönem 2'den az: test yapılamaz"}
+
+        def cthesis(sg, name=name, cur=cur, now_phase=now_phase):
+            return ("TLREF %s fazında; bu fazda geçmişte %s sonraki %d iş gününde ortalama %s bp değişti (t %s, %s bağımsız dönem, eşik %s) → %s; "
+                    "beklenen %s bp (carry dahil)." % (now_phase, name, horizon, _sg(cur["mean"], 1), _g(cur["t"], 2), _g(cur["periods"], 1),
+                                                       _g(cur["cv"], 2), sg["expression"], _sg(sg.get("exp_pnl"), 1)))
+
         mon = Monitor("cycle:" + name, "cycle", "TRY OIS", name, "bp", 1, days[-ctx.window():], s[-ctx.window():], legs, calc,
-                      zfn=lambda level, live, t_now=t_now: t_now, entry=float(cfg["cycle_t"]), follows=True, mode="drift",
+                      zfn=lambda level, live, t_now=t_now: t_now, entry=entry, follows=True, mode="drift",
                       reward=abs(cur["mean"]), risk=cur["sd"], hold=float(horizon), pkg="slope", carry_up=_pkg_carry(ctx, legs),
-                      regime={"tag": None}, score_name="t", zvalues=None,
-                      note="Bugünkü faz: %s. Bu fazdaki günlerden sonraki %d iş gününde %s ortalama %s bp değişti (n = %d, Newey-West t = %s)."
-                      % (now_phase, horizon, name, _f2(cur["mean"]), cur["n"], _f2(t_now)),
-                      info={"phase": now_phase, "mean": cur["mean"], "n": cur["n"], "t": t_now})
+                      regime={"tag": None}, score_name="t", zvalues=None, sample=sample, fcast=cur["mean"], pnl=("bp", 1.0),
+                      dsd=qm.stdev([b - a for a, b in zip(s, s[1:])][-ctx.window():]), thesis=cthesis,
+                      note="Bugünkü faz: %s. Bu fazdaki günlerden sonraki %d iş gününde %s ortalama %s bp değişti (n = %d örtüşen gözlem ≈ %s "
+                           "bağımsız dönem, Newey-West t = %s). Eşik: masanın |t|'si ile bu örneklemin kritik değerinin (%s) büyüğü - az dönemle "
+                           "Newey-West t'si şişer." % (now_phase, horizon, name, _f2(cur["mean"]), cur["n"], _g(cur["periods"], 1), _f2(t_now),
+                                                     _g(cv, 2)),
+                      info={"phase": now_phase, "mean": cur["mean"], "n": cur["n"], "t": t_now, "cv": cv, "periods": cur["periods"]})
         mon.zvalues = [None] * len(mon.values)
         mons.append(mon)
     return mons, {"ok": True, "phase": now_phase, "rows": rows, "counts": counts, "horizon": horizon, "rule": float(cfg["cycle_bp"])}
@@ -1627,6 +2157,12 @@ def fam_cycle(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
 
 # ---------------------------------------------------------------------------------------------- 11. vol premium, m. vol forecast
 VOL_PAIRS = ("USDTRY", "EURUSD", "USDZAR", "USDMXN", "USDBRL", "USDINR", "USDIDR", "USDHUF", "USDPLN", "USDCOP")
+
+
+def vol_pairs(ctx: Ctx) -> List[str]:
+    """The pairs with an ATM 3M vol history kept (USDTRY first, then by name)."""
+    out = [p for p in ctx.fx_pairs() if ctx.series.get("FXV:" + p)]
+    return sorted(out, key=lambda p: (p != "USDTRY", p))
 FC_HORIZON = 63                          # business days of a 3M option
 
 
@@ -1638,7 +2174,7 @@ def fam_vol(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
     mons: List[Monitor] = []
     rows = []
     win = ctx.window()
-    for pair in VOL_PAIRS:
+    for pair in vol_pairs(ctx):
         sk, vk, rk = "FX:" + pair, "FXV:" + pair, "FXR:" + pair
         if not ctx.has(sk, 130) or not ctx.has(vk, 60):
             continue
@@ -1721,6 +2257,16 @@ def fam_vol(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
 CARRY_CCYS = ("TRY", "ZAR", "MXN", "BRL", "INR", "IDR", "HUF", "PLN", "COP")
 
 
+def carry_ccys(ctx: Ctx) -> List[str]:
+    """TRY and the emerging currencies quoted against the dollar (USD<ccy>) with a 3M forward and an ATM vol kept."""
+    out = []
+    for p in ctx.fx_pairs():
+        g = (ctx.meta.get("FX:" + p) or {}).get("group")
+        if p.startswith("USD") and (p == "USDTRY" or g == "EM") and "FWD:%s:3M" % p in ctx.series and ctx.series.get("FXV:" + p):
+            out.append(p[3:])
+    return sorted(out, key=lambda c: (c != "TRY", c))
+
+
 def carry_series(ctx: Ctx, ccy: str) -> Dict[str, float]:
     """The annualised carry of the currency against USD (%): what the 3M forward implies, (F/S − 1)·365/days."""
     pair = "USD" + ccy
@@ -1733,7 +2279,7 @@ def fam_emcarry(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
     win = ctx.window()
     cv: Dict[str, Dict[str, float]] = {}
     rows = []
-    for ccy in CARRY_CCYS:
+    for ccy in carry_ccys(ctx):
         pair = "USD" + ccy
         c = carry_series(ctx, ccy)
         vol = ctx.series.get("FXV:" + pair) or {}
@@ -1783,15 +2329,27 @@ def fam_emcarry(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                 fv = [v for _, v in fwd]
                 sd_f = qm.stdev(diffs("fx", fv)[-60:]) or 1.0
                 horizon = float(ctx.cfg["horizon"])
+                ol = fx_outlook(ctx, "USDTRY")
+
+                def eexpect(side, hold, ol=ol):
+                    # the USDTRY leg's expected excess return (the carry less the expected drift) over the holding, for its side
+                    return side * ol["exp_long"] * hold * 7.0 / 5.0 / 365.0 if ol and ol.get("exp_long") is not None else None
+
+                def ethesis(sg, ol=ol):
+                    return ("TRY'nin carry / vol'ü EM sepetine göre %s (z %s; carry %s%% / yıl, beklenen kayma %s%% / yıl) → %s; ufukta beklenen %s%% "
+                            "(carry dahil)." % ("yüksek" if (sg["z"] or 0) > 0 else "düşük", _sg(sg["z"], 2), _sg((ol or {}).get("carry_long"), 1),
+                                                _sg((ol or {}).get("drift"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 2)))
+
                 mon = Monitor("emcarry:TRY", "emcarry", "EM carry", "USDTRY 3M forward (EM sepetine karşı)", "", 4, [d for d, _ in fwd][-win:], fv[-win:],
                               [{"key": "FX:USDTRY", "name": "USDTRY 3M forward", "weight": 1.0}, {"key": "EMFX", "name": "USD / EM sepeti", "weight": -1.0}],
                               lambda live: ctx.cur("FWD:USDTRY:3M", live), zfn=lambda level, live: (rel_now(live) - mean) / sd if rel_now(live) is not None else None,
                               mode="drift", reward=(f_now - s_now) * horizon / 63.0, risk=to_level("fx", sd_f * math.sqrt(horizon), f_now),
-                              hold=horizon, regime={"tag": None}, pkg="fx", score_name="z",
+                              hold=horizon, regime={"tag": None}, pkg="fx", score_name="z", fx="USDTRY", expect=eexpect, thesis=ethesis,
+                              pnl=("%", None), pnl_sd=(ol or {}).get("daily_sd"),
                               zvalues=None, info={"rel": rel[-1], "mean": mean, "sd": sd, "inputs": ["FXV:USDTRY", "FX:USDTRY"]},
                               note="TRY'nin carry / vol oranı (3M forward'ın ima ettiği yıllık getiri farkı ÷ ATM 3M vol) ile EM sepetinin ortalaması "
                                    "arasındaki farkın z'si: + ise TRY carry'si göreli cazip (USDTRY forward sat, EM sepetine karşı). Hedef: ufuk boyunca "
-                                   "carry kadar; stop: ufuk σ'sı kadar ters hareket.")
+                                   "carry kadar; stop: ufuk σ'sı kadar ters hareket. Beklenen: USDTRY bacağının carry − beklenen kayması ufuk boyunca.")
                 rel_at = dict(zip(rel_days, rel))
                 mon.zvalues = [(rel_at[d] - mean) / sd if d in rel_at else None for d in mon.days]
                 mon.follows = False
@@ -1812,9 +2370,88 @@ def _carry_now(ctx: Ctx, ccy: str, live: Dict[str, float]) -> Optional[float]:
 FWD_TENORS = (("USDTRY", "1M", 21), ("USDTRY", "3M", 63), ("USDTRY", "6M", 126), ("USDTRY", "1Y", 252), ("EURTRY", "3M", 63))
 
 
+def ewma_drift(rets: Sequence[float], days: Sequence[str], lam: float = 0.97) -> Dict[str, float]:
+    """Day by day: the annualised EWMA (λ) of the daily log returns (%), shrunk towards zero by its precision - the
+    t of the EWMA mean (its variance an EWMA too), nothing kept within three standard errors: a free float's month of
+    noise is no drift, a managed crawl's is (USDTRY: t ≈ 10)."""
+    out: Dict[str, float] = {}
+    if len(rets) < 21:
+        return out
+    m = sum(rets[:20]) / 20.0
+    v = sum((r - m) ** 2 for r in rets[:20]) / 19.0
+    k = math.sqrt((1.0 - lam) / (1.0 + lam))
+    for i in range(20, len(rets)):
+        r = rets[i]
+        v = lam * v + (1.0 - lam) * (r - m) ** 2
+        m = lam * m + (1.0 - lam) * r
+        se = math.sqrt(v) * k if v > 0 else 0.0
+        t = m / se if se else 0.0
+        out[days[i]] = m * shrink(t, 3.0) * 252.0
+    return out
+
+
+def fx_outlook(ctx: Ctx, pair: str, live: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
+    """A pair's carry and what the spot is expected to do against it: the carry of a long (%/yr, the shortest forward),
+    the expected drift (%/yr: the EWMA of the daily log returns shrunk by its precision), the expected excess return of a
+    long (drift + carry), the buffer of the carry side (its expected excess), the vol it is weighed with (the ATM 3M,
+    else the realized one of the excess returns) and the verdict on the pair's currency of interest."""
+    spot = ctx.pts("FX:" + pair)
+    if len(spot) < 30:
+        return None
+    sv = [v for _, v in spot]
+    days = [d for d, _ in spot]
+    rets = [math.log(b / a) * 100.0 if a > 0 and b > 0 else 0.0 for a, b in zip(sv, sv[1:])]
+    dr = ewma_drift(rets, days[1:])
+    drift = dr.get(days[-1]) if dr else None
+    raw = shrunk_mean(rets[-250:], ewma=0.97)
+    if raw:
+        raw["w"] = shrink(raw["t"], 3.0)
+    carry = ctx.fx_carry(pair, live)
+    xr = [v for _, v in ctx.pts("XR:" + pair)]
+    xs = [b - a for a, b in zip(xr, xr[1:])][-60:] if len(xr) > 20 else rets[-60:]
+    daily_sd = qm.stdev(xs)
+    iv = ctx.cur("FXV:" + pair, live)
+    vol = iv if iv else (daily_sd * math.sqrt(252.0) if daily_sd else None)
+    base, quote = pair[:3], pair[3:]
+    focus = "TRY" if "TRY" in pair else (quote if base == "USD" else base)
+    out = {"pair": pair, "spot": ctx.cur("FX:" + pair, live), "carry_long": carry, "drift": drift, "drift_raw": raw["raw"] * 252.0 if raw else None,
+           "drift_w": raw["w"] if raw else None, "vol": vol, "vol_src": "ATM 3M" if iv else "gerçekleşen", "daily_sd": daily_sd, "focus": focus,
+           "tenors": [t for t, _ in ctx.fx_tenors(pair)], "exp_long": None, "buffer": None, "sharpe": None, "verdict": None, "carry_side": None}
+    if carry is None:
+        out["verdict"] = "forward yok"
+        return out
+    if drift is None:
+        return out
+    exp_long = drift + carry
+    side = 1 if carry > 0 else -1                        # the side the carry pays
+    out.update({"exp_long": exp_long, "buffer": side * exp_long, "carry_side": side, "sharpe": exp_long / vol if vol else None})
+    thr = float(ctx.cfg.get("fx_verdict", 0.3))
+    sh = out["sharpe"]
+    if sh is None or abs(sh) < thr:
+        out["verdict"] = "nötr"
+    else:
+        long_base = sh > 0
+        out["verdict"] = "%s %s" % (focus, "long" if (long_base == (focus == base)) else "short")
+    return out
+
+
+def fx_summary(ctx: Ctx) -> List[Dict[str, Any]]:
+    """One line per pair: carry %/yr, expected drift, buffer, the verdict on its currency (TRY first)."""
+    rows = []
+    for pair in sorted(ctx.fx_pairs(), key=lambda p: ("TRY" not in p, (ctx.meta.get("FX:" + p) or {}).get("group") or "", p)):
+        ol = fx_outlook(ctx, pair)
+        if ol is None:
+            continue
+        ol["group"] = (ctx.meta.get("FX:" + pair) or {}).get("group") or ""
+        ol["term"] = {t: ctx.fx_carry(pair, days=n) for t, n in ctx.fx_tenors(pair)}
+        rows.append(ol)
+    return rows
+
+
 def fam_fwdprem(ctx: Ctx, usdtry_trend: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dict[str, Any]]:
     win = ctx.window()
     mons: List[Monitor] = []
+    mons_by: Dict[str, Monitor] = {}
     rows = []
     for pair, tenor, n in FWD_TENORS:
         fk = "FWD:%s:%s" % (pair, tenor)
@@ -1825,16 +2462,9 @@ def fam_fwdprem(ctx: Ctx, usdtry_trend: Optional[Dict[str, Any]]) -> Tuple[List[
         sd_days = [d for d, _ in spot]
         sv = [v for _, v in spot]
         rets = [math.log(b / a) * 100.0 if a > 0 and b > 0 else 0.0 for a, b in zip(sv, sv[1:])]
-        # the forecast drift: the EWMA (λ 0.97, a half-life of about 23 days) of the daily log returns, a year's worth
-        drift: Dict[str, float] = {}
-        m = 0.0
-        for i, r in enumerate(rets):
-            if i < 20:
-                continue
-            if i == 20:
-                m = sum(rets[:20]) / 20.0
-            m = 0.97 * m + 0.03 * r
-            drift[sd_days[i + 1]] = m * 252.0
+        # the forecast drift: the EWMA (λ 0.97, a half-life of about 23 days) of the daily log returns, a year's worth,
+        # shrunk towards zero by its own precision (shrunk_mean): a drift that is noise is no forecast
+        drift: Dict[str, float] = ewma_drift(rets, sd_days[1:])
         realized = {sd_days[i]: (math.log(sv[i] / sv[i - n])) * 252.0 / n * 100.0 for i in range(n, len(sv))}
         days_t = _tenor_days(tenor)
         f = ctx.series[fk]
@@ -1866,13 +2496,31 @@ def fam_fwdprem(ctx: Ctx, usdtry_trend: Optional[Dict[str, Any]]) -> Tuple[List[
             return 1.0, ""
 
         legs = [{"key": "FX:" + pair, "name": "%s %s forward" % (pair, tenor), "weight": 1.0}]
-        mon = mr_monitor(ctx, "fwdprem:%s:%s" % (pair, tenor), "fwdprem", "FX", "%s %s forward" % (pair, tenor), "%", 2, days, cushion, "bp",
-                         legs, calc, pkg="fx", gate=gate, info={"inputs": [fk, sk]},
-                         note="Forward'ın ima ettiği yıllık değer kaybı − beklenen kayma (günlük getirilerin EWMA'sı, λ 0,97, yıllık): + ise forward "
-                              "değer kaybını fazla fiyatlıyor → carry lehine (%s forward sat, TRY al); − ise tersi. USDTRY'de trend rejimi sinyali "
+        ol = fx_outlook(ctx, pair)
+        sid = "fwdprem:%s:%s" % (pair, tenor)
+
+        def fexpect(side, hold, sid=sid):
+            # holding the forward: a short earns the premium the forward prices less the drift (the cushion), a long the reverse
+            m = mons_by.get(sid)
+            cushion_now = m.level if m is not None and m.level is not None else None
+            return -side * cushion_now * hold * 7.0 / 5.0 / 365.0 if cushion_now is not None else None
+
+        def fthesis(sg, pair=pair, tenor=tenor):
+            i = (sg.get("info") or {})
+            return ("%s %s forward'ı yıllık %%%s değer kaybı fiyatlıyor, beklenen kayma %%%s (EWMA, kesinliğiyle küçültülmüş): tampon %s puan "
+                    "(z %s) → %s; ufukta beklenen %s%% (carry dahil)." % (pair, tenor, _g(i.get("implied"), 1), _g(i.get("drift"), 1),
+                                                                          _sg(sg["level"], 1), _sg(sg["z"], 2), sg["expression"], _sg(sg.get("exp_pnl"), 2)))
+
+        mon = mr_monitor(ctx, sid, "fwdprem", "FX", "%s %s forward" % (pair, tenor), "%", 2, days, cushion, "bp",
+                         legs, calc, pkg="fx", gate=gate, gate_name="USDTRY trendi", info={"inputs": [fk, sk], "implied": row["implied"], "drift": last_drift},
+                         fx=pair, expect=fexpect, thesis=fthesis, pnl=("%", None), pnl_sd=(ol or {}).get("daily_sd"),
+                         note="Forward'ın ima ettiği yıllık değer kaybı − beklenen kayma (günlük getirilerin EWMA'sı, λ 0,97, yıllık, kesinliğiyle "
+                              "küçültülmüş): + ise forward değer kaybını fazla fiyatlıyor → carry lehine (%s forward sat); − ise tersi. Beklenen: "
+                              "tamponun ufuk boyunca payı (forward'ı tutmanın getirisi). USDTRY'de carry dahil getirinin trend rejimi sinyali "
                               "bekletir." % pair)
         if mon is not None:
             mon.kind = "carry"
+            mons_by[sid] = mon
             row.update({"cushion": cushion[-1], "z": mon.zof(cushion[-1]), "half_life": mon.half_life, "sid": mon.sid})
             mons.append(mon)
         rows.append(row)
@@ -1880,7 +2528,7 @@ def fam_fwdprem(ctx: Ctx, usdtry_trend: Optional[Dict[str, Any]]) -> Tuple[List[
 
 
 # ---------------------------------------------------------------------------------------------- r. forecast model
-MODEL_UNIVERSE = ("OIS:1Y", "OIS:2Y", "OIS:5Y", "OIS:10Y", "FX:USDTRY", "CDS", "UST:10Y")
+MODEL_UNIVERSE = ("OIS:1Y", "OIS:2Y", "OIS:5Y", "OIS:10Y", "XR:USDTRY", "CDS", "UST:10Y")
 MODEL_FEATURES = ("z60", "mom1h", "mom1a", "carry", "rejim", "vol")
 MODEL_STEP = 5                          # a week: the label's horizon and the step between test points
 MODEL_REFIT = 4                         # refit every 4 test points (four weeks)
@@ -1972,9 +2620,13 @@ def fam_model(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
     tl = ctx.series.get("TLREF") or {}
     for key in MODEL_UNIVERSE:
         pts = ctx.pts(key)
+        fx = key[3:] if key.startswith("XR:") else None
+        if fx and not pts and ctx.has("FX:" + fx):
+            rows.append({"key": key, "label": fx, "error": "forward yok: carry hesaplanamadı"})
+            continue
         if len(pts) < 125 + min_train + 2 * MODEL_STEP:
             if pts:
-                rows.append({"key": key, "label": ctx.label(key), "error": "geçmiş kısa (%d kapanış)" % len(pts)})
+                rows.append({"key": key, "label": fx or ctx.label(key), "error": "geçmiş kısa (%d kapanış)" % len(pts)})
             continue
         kind = ctx.kind(key)
         days = [d for d, _ in pts]
@@ -1989,8 +2641,8 @@ def fam_model(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                     last_tl = tls[j][1]
                     j += 1
                 carry.append((v - last_tl) * 100.0 if last_tl is not None else None)
-        elif key == "FX:USDTRY":
-            cs = carry_series(ctx, "TRY")
+        elif fx:
+            cs = ctx.fx_carry_days(fx)                   # the carry of a long, annualised: the trade's own
             carry = [cs.get(d) for d in days]
         else:
             carry = [None] * len(days)
@@ -2003,7 +2655,7 @@ def fam_model(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         wf = walk_forward(feats, labels, train, min_train, l2)
         # the model of today: the latest window whose labels are known
         sample = [t for t in range(max(0, len(values) - MODEL_STEP - train), len(values) - MODEL_STEP) if feats[t] is not None and labels[t] is not None]
-        row = {"key": key, "label": ctx.label(key), "n_test": wf["n"], "hit_rate": wf.get("hit_rate"), "log_loss": wf.get("log_loss"),
+        row = {"key": key, "label": fx or ctx.label(key), "n_test": wf["n"], "hit_rate": wf.get("hit_rate"), "log_loss": wf.get("log_loss"),
                "base_rate": wf.get("base_rate"), "features": list(MODEL_FEATURES)}
         if len(sample) < min_train // 2 or feats[-1] is None:
             row["error"] = "eğitim örneği az"
@@ -2021,20 +2673,37 @@ def fam_model(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         valid = (wf.get("hit_rate") or 0.0) >= float(cfg["model_hit"]) and wf["n"] >= int(cfg["model_min_tests"])
         row["valid"] = valid
         rows.append(row)
-        sd = qm.stdev(diffs(kind, values)[-60:]) or 0.0
+        steps = [b - a for a, b in zip(values, values[1:])]
+        sd = qm.stdev(steps[-60:]) or 0.0
         level = ctx.cur(key)
+        # what a week is expected to bring: (2p − 1) × the average size of a week's move (level units)
+        week = [abs(values[t + MODEL_STEP] - values[t]) for t in range(max(0, len(values) - 250), len(values) - MODEL_STEP)]
+        size = sum(week) / len(week) if week else 0.0
         explain = " · ".join("%s %s%s" % (name, "+" if c >= 0 else "−", _f2(abs(c))) for name, c in zip(MODEL_FEATURES, coef[1:]))
-        mon = Monitor("model:" + key, "model", _asset_of(key), ctx.label(key), level_unit(kind), 3 if kind == "rate" else 4, days[-ctx.window():],
-                      values[-ctx.window():], [{"key": key, "name": ctx.label(key), "weight": 1.0}], lambda live, key=key: ctx.cur(key, live),
+        legs = [{"key": "FX:" + fx, "name": "%s forward" % fx, "weight": 1.0}] if fx else [{"key": key, "name": ctx.label(key), "weight": 1.0}]
+
+        def mthesis(sg, p_now=p_now, wf=wf, fx=fx):
+            return ("Lojistik model gelecek haftanın %s yönlü olma olasılığını %%%s veriyor (kayan pencereli doğrulamada isabet %%%s, %d test)%s → "
+                    "%s; beklenen %s %s%s." % (
+                        ("carry dahil getirisinin yukarı" if fx else "yukarı"), _f1(p_now * 100), _f1((wf.get("hit_rate") or 0) * 100), wf["n"],
+                        "" if not fx else "; carry %s%% / yıl" % _sg(sg.get("carry_yr"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 2),
+                        sg.get("pnl_unit") or "", " (carry dahil)" if sg.get("carry_h") is not None else ""))
+
+        mon = Monitor("model:" + key, "model", _asset_of("FX:" if fx else key), "%s forward" % fx if fx else ctx.label(key), level_unit(kind),
+                      3 if kind in ("rate", "xr") else 4, days[-ctx.window():],
+                      values[-ctx.window():], legs, lambda live, key=key: ctx.cur(key, live),
                       zfn=lambda level, live, p_now=p_now: (p_now - 0.5) / 0.05, follows=True, mode="drift",
-                      reward=to_level(kind, sd * math.sqrt(MODEL_STEP), level or 0.0), risk=to_level(kind, sd * math.sqrt(MODEL_STEP), level or 0.0),
-                      hold=float(MODEL_STEP), regime={"tag": None}, pkg={"rate": "rate", "bp": "cds", "fx": "fx"}.get(kind, "fx"),
-                      carry_up=ctx.carry_week(key), score_name="z(p)",
+                      reward=sd * math.sqrt(MODEL_STEP), risk=sd * math.sqrt(MODEL_STEP),
+                      hold=float(MODEL_STEP), regime={"tag": None}, pkg={"rate": "rate", "bp": "cds", "fx": "fx", "xr": "fx"}.get(kind, "fx"),
+                      carry_up=None if fx else ctx.carry_week(key), score_name="z(p)", fx=fx, dsd=sd, pnl=pnl_scale(kind, level),
+                      fcast=(2.0 * p_now - 1.0) * size, thesis=mthesis,
                       info={"p": p_now, "hit_rate": wf.get("hit_rate"), "n_test": wf["n"], "log_loss": wf.get("log_loss"), "valid": valid,
                             "coef": dict(zip(MODEL_FEATURES, coef[1:]))},
                       note="Gelecek haftanın yönü için L2 lojistik regresyon (özellikler standart: %s). Yukarı olasılığı %%%s; kayan "
-                           "pencereli doğrulamada isabet %%%s (%d test, log-loss %s). z = (p − 0,5) / 0,05." % (
-                               explain, _f1(p_now * 100), _f1((wf.get("hit_rate") or 0) * 100), wf["n"], _f2(wf.get("log_loss"))))
+                           "pencereli doğrulamada isabet %%%s (%d test, log-loss %s). z = (p − 0,5) / 0,05. Beklenen: (2p − 1) × bir haftalık "
+                           "hareketin ortalama büyüklüğü.%s" % (
+                               explain, _f1(p_now * 100), _f1((wf.get("hit_rate") or 0) * 100), wf["n"], _f2(wf.get("log_loss")),
+                               " FX: etiket ve seviye carry dahil getiri (forward'la tutmak)." if fx else ""))
         if key.startswith("UST:"):
             mon.pkg = "bond"
         mon.zvalues = [None] * len(mon.values)
@@ -2091,7 +2760,7 @@ def run_all(ctx: Ctx, rv_items: List[Dict[str, Any]], timing: Optional[Dict[str,
     step("cycle", lambda: fam_cycle(ctx))
     step("vol", lambda: fam_vol(ctx))
     step("emcarry", lambda: fam_emcarry(ctx))
-    usd = next((r for r in (tables.get("momentum") or {}).get("rows", []) if r["key"] == "FX:USDTRY"), None)
+    usd = next((r for r in (tables.get("momentum") or {}).get("rows", []) if r["key"] in ("XR:USDTRY", "FX:USDTRY") and r.get("score") is not None), None)
     step("fwdprem", lambda: fam_fwdprem(ctx, usd))
     step("model", lambda: fam_model(ctx))
     tables["regime"] = regime_table(ctx, mons)
@@ -2105,3 +2774,8 @@ def score_all(ctx: Ctx, mons: List[Monitor], raw_live: Dict[str, float]) -> None
         m.score(live, raw_live)
         if m.family == "macro":
             macro_levels(m, ctx.cfg)
+        if m.fx:
+            try:
+                m.fxinfo = fx_info(ctx, m.fx, live, m.hold)
+            except Exception:  # noqa: BLE001 - a carry that cannot be read is told as missing
+                m.fxinfo = {"pair": m.fx}

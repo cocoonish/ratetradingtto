@@ -243,19 +243,49 @@ def test_pca_neutral_flies_and_spreads():
     e = fit["vectors"]
     idx = {k: i for i, k in enumerate(fit["keys"])}
     rows = {r["label"]: r for r in table["rows"]}
-    fly = rows["1s2s3s PCA-nötr fly"]
+    fly = rows["1s2s3s PCA ağırlıklı fly"]
     assert [l["key"] for l in fly["legs"] if l["weight"] == 1.0] == ["OIS:2Y"]           # the body
     for f in (0, 1):
         assert abs(sum(l["weight"] * e[f][idx[l["key"]]] for l in fly["legs"])) < 1e-9
-    spread = rows["2s5s PC1-nötr spread"]
+    assert all(abs(x) < 1e-6 for x in fly["versions"]["pca"]["exposures"][:2])
+    classic = fly["versions"]["klasik"]
+    assert classic["name"] == "1s2s3s klasik 50/50 fly" and classic["net_dv01"] == 0.0
+    assert sorted(l["weight"] for l in classic["legs"]) == [-0.5, -0.5, 1.0] and "klasik: paralel kaymaya nötr" in fly["compare"]
+    spread = rows["2s5s PCA ağırlıklı spread"]
     assert abs(sum(l["weight"] * e[0][idx[l["key"]]] for l in spread["legs"])) < 1e-9
+    assert spread["versions"]["klasik"]["name"] == "2s5s 1:1 spread" and spread["versions"]["klasik"]["net_dv01"] == 0.0
     assert all(l["notional"] > 0 and abs(l["dv01"] - l["weight"] * DEFAULTS["dv01_base"]) < 1e-6 for l in fly["legs"])
     m = next(x for x in mons if x.sid == "rv:fly:1Y/2Y/3Y")
     m.score({}, {})
     assert m.z > 2.0
     s = qf.make_signal(m, cfg(), "10:00")
-    assert s["expression"] == "Receive 1s2s3s PCA-nötr fly"
+    assert s["expression"] == "Receive 1s2s3s PCA ağırlıklı fly"
     assert {l["key"]: l["side"] for l in s["legs"]} == {"OIS:1Y": 1, "OIS:2Y": -1, "OIS:3Y": 1}
+    k = next(x for x in mons if x.sid == "rv:fly:1Y/2Y/3Y:klasik")
+    assert k.family == "rv" and k.info["version"] == "klasik" and k.info["compare"] == fly["compare"]
+
+
+def test_classic_and_pca_weighted_packages_with_their_exposures():
+    # three tenors, known loadings (PC1 not flat: the short end moves more) and variances (σ 10, 4, 2 bp a day)
+    vec = [[0.62, 0.58, 0.53], [-0.70, 0.05, 0.71], [0.35, -0.81, 0.47]]
+    values = [100.0, 16.0, 4.0]
+    k = qf.rv_weights("fly", [0, 1, 2], vec, "klasik")
+    assert k == {1: 1.0, 0: -0.5, 2: -0.5}
+    ek = qf.pkg_exposures(k, vec, values)
+    assert ek == pytest.approx([(0.58 - 0.31 - 0.265) * 10.0, (0.05 + 0.35 - 0.355) * 4.0, (-0.81 - 0.175 - 0.235) * 2.0])
+    p = qf.rv_weights("fly", [0, 1, 2], vec, "pca")
+    ep = qf.pkg_exposures(p, vec, values)
+    assert p[1] == 1.0 and abs(ep[0]) < 1e-12 and abs(ep[1]) < 1e-12 and abs(ep[2]) > 1.0
+    net = sum(p.values()) * 10000.0
+    assert abs(net) > 100.0                                                # neutral to the factors, not to a parallel move
+    versions = {"klasik": {"exposures": ek, "net_dv01": 0.0}, "pca": {"exposures": ep, "net_dv01": net}}
+    line = qf.rv_compare("fly", versions)
+    assert line.startswith("klasik: paralel kaymaya nötr (net DV01 0 TL/bp), gizli eğrilik maruziyeti") and "PCA: seviye ve eğime nötr" in line
+    assert ("net DV01 %s TL/bp" % qf._g(net, 0)) in line
+    s = qf.rv_weights("spread", [0, 2], vec, "klasik")
+    assert s == {2: 1.0, 0: -1.0} and qf.pkg_exposures(s, vec, values)[0] == pytest.approx((0.53 - 0.62) * 10.0)
+    sp = qf.rv_weights("spread", [0, 2], vec, "pca")
+    assert sp == {2: 1.0, 0: pytest.approx(-0.53 / 0.62)} and abs(qf.pkg_exposures(sp, vec, values)[0]) < 1e-12
 
 
 def test_pairs_scanner_finds_the_cointegrated_basis_and_kalman():
@@ -372,55 +402,269 @@ def test_viop_calendar_spread_against_cip_fair_value():
     assert s["legs"][0]["text"].startswith("Sell VİOP Mar 27") and s["expression"].startswith("Sell VİOP takvim")
 
 
-def test_fra_forwards_against_the_meeting_path():
+def test_fra_path_reproduces_its_quotes_in_the_desk_s_convention():
     spot = dt.date(2026, 11, 5)
-    steps = [(dt.date(2026, 12, 11), 0.385), (dt.date(2027, 1, 22), 0.37), (dt.date(2027, 3, 12), 0.355)]
+    steps = [(dt.date(2026, 12, 11), 0.385), (dt.date(2027, 1, 22), 0.37), (dt.date(2027, 3, 12), 0.355), (dt.date(2027, 6, 10), 0.34)]
     base = 0.395
-    quotes = {}
-    for m in qf.PATH_TENORS:                                              # quotes that are the path's own par rates
-        e = qf._add_months(spot, m)
-        quotes[m] = (1.0 / qf.path_df(spot, base, steps, e, set()) - 1.0) * 365.0 / (e - spot).days * 100.0
-    same = qf.frapath_day(spot, base, steps, quotes, set())
-    assert all(abs(v["dev"]) < 0.5 for v in same["tenor"].values())
-    assert all(abs(v["dev"]) < 3.0 for v in same["fra"].values())                # log-linear between pillars: a few bp at most
+    hol = set()
+
+    def pdf(d):
+        return qf.path_df(spot, base, steps, d, hol)
+
+    quotes = {m: qf.par_rate(spot, pdf, m, hol) for m in qf.PATH_TENORS}          # the path's own par rates, the desk's convention
+    # up to 3M one payment, longer quarterly: the 1Y quote is far below the one-payment rate of the same path (the old mismatch)
+    end = qf.tenor_end(spot, 12, hol)
+    single = (1.0 / pdf(end) - 1.0) * 365.0 / (end - spot).days * 100.0
+    assert single - quotes[12] > 3.0                                  # more than 300 bp
+    same = qf.frapath_day(spot, base, steps, quotes, hol)
+    assert all(abs(v["dev"]) < 0.01 for v in same["tenor"].values())                # the path reproduces the quotes it was solved from
+    assert all(abs(v["dev"]) < 0.5 for v in same["fra"].values())                  # ... and the forwards between them
     bumped = dict(quotes)
     bumped[6] += 0.20                                                     # the 6M quote 20 bp too high
-    out = qf.frapath_day(spot, base, steps, bumped, set())
-    assert out["tenor"][6]["dev"] > 19 and out["fra"]["3x6"]["dev"] > 30 and out["fra"]["6x9"]["dev"] < -30
-    # the periods between the coming meetings: from the day after one decision to the day after the next
-    assert set(same["mpc"]) == {"2026-12-11", "2027-01-22"}
+    out = qf.frapath_day(spot, base, steps, bumped, hol)
+    assert abs(out["tenor"][6]["dev"] - 20.0) < 0.01 and out["fra"]["3x6"]["dev"] > 30 and out["fra"]["6x9"]["dev"] < -30
+    # the coming meeting periods: from the day after one decision to the day after the next, the level and the priced step
     first = same["mpc"]["2026-12-11"]
-    assert (first["start"], first["end"]) == ("2026-12-12", "2027-01-23") and 38.5 < first["path"] < 40.0
-    higher = dict(quotes)
-    higher[2] += 0.50                                                     # the 2M quote up: the period around it gets dearer
-    assert qf.frapath_day(spot, base, steps, higher, set())["mpc"]["2026-12-11"]["dev"] - first["dev"] > 8
-    # day by day: the 3x6 deviation mean-reverts and ends 3σ high -> receive the FRA (receive 6M, pay 3M)
-    rnd = random.Random(17)
-    noise = ar1(300, 0.7, 0.03, rnd)
-    noise[-1] = 3.0 * 0.03 / math.sqrt(1 - 0.49)
-    days = DAYS[-300:]
-    series = {"OIS:%s" % lbl: {} for lbl in ("1M", "2M", "3M", "6M", "9M", "1Y")}
-    meta = {k: {"label": k[4:] + " OIS", "kind": "rate", "months": {"1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9, "1Y": 12}[k[4:]]} for k in series}
-    values = []
-    mdays = {}
-    for i, d in enumerate(days):
-        sp = dt.date.fromisoformat(d) + dt.timedelta(days=2)
-        for m, lbl in zip(qf.PATH_TENORS, ("1M", "2M", "3M", "6M", "9M", "1Y")):
-            e = qf._add_months(sp, m)
-            par = (1.0 / qf.path_df(sp, base, [], e, set()) - 1.0) * 365.0 / (e - sp).days * 100.0
-            series["OIS:" + lbl][d] = par + (noise[i] if m == 6 else 0.0)
-        mdays[d] = {"spot": sp.isoformat(), "base": base, "flag": ""}
-        values.append({"day": d, "meeting": "2030-01-01", "level": base})
-    sp = dt.date.fromisoformat(days[-1]) + dt.timedelta(days=2)
-    path = {"spot": sp, "base": base, "steps": [(sp + dt.timedelta(days=40), base), (sp + dt.timedelta(days=90), base)]}
-    ctx = ctx_of(series, meta, mpc={"days": mdays, "values": values}, path=path)
-    mons, table = qf.fam_frapath(ctx)
-    assert [p["meeting"] for p in table["periods"]] == [(sp + dt.timedelta(days=40)).isoformat()] and abs(table["periods"][0]["dev"]) < 1.0
-    m = next(x for x in mons if x.sid == "frapath:3x6")
-    m.score({}, {})
+    assert (first["start"], first["end"]) == ("2026-12-12", "2027-01-23") and first["path"] == pytest.approx(38.5) and first["step"] == pytest.approx(-100.0)
+    # day by day: the 3x6 deviation mean-reverts and ends 3σ high -> receive the FRA (receive 6M, pay 3M); a deviation inside
+    # the solver's tolerance is no signal
+    for sd, ok in ((0.03, True), (0.003, False)):
+        rnd = random.Random(17)
+        noise = ar1(300, 0.7, sd, rnd)
+        noise[-1] = 3.0 * sd / math.sqrt(1 - 0.49)
+        days = DAYS[-300:]
+        series = {"OIS:%s" % lbl: {} for lbl in ("1M", "2M", "3M", "6M", "9M", "1Y")}
+        meta = {k: {"label": k[4:] + " OIS", "kind": "rate", "months": {"1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9, "1Y": 12}[k[4:]]} for k in series}
+        values = []
+        mdays = {}
+        for i, d in enumerate(days):
+            sp = dt.date.fromisoformat(d) + dt.timedelta(days=2)
+            for m, lbl in zip(qf.PATH_TENORS, ("1M", "2M", "3M", "6M", "9M", "1Y")):
+                par = qf.par_rate(sp, lambda x, sp=sp: qf.path_df(sp, base, [], x, set()), m, set())
+                series["OIS:" + lbl][d] = par + (noise[i] if m == 6 else 0.0)
+            mdays[d] = {"spot": sp.isoformat(), "base": base, "flag": ""}
+            values.append({"day": d, "meeting": "2030-01-01", "level": base})
+        ctx = ctx_of(series, meta, mpc={"days": mdays, "values": values}, path=None)
+        mons, table = qf.fam_frapath(ctx)
+        assert table["tenors"] and all(abs(r["dev"]) < 0.01 for r in table["tenors"] if r["months"] != 6)
+        m = next(x for x in mons if x.sid == "frapath:3x6")
+        m.score({}, {})
+        s = qf.make_signal(m, cfg(), "10:00")
+        assert s["z"] > 2 and s["expression"].startswith("Receive 3x6 FRA")
+        assert {l["key"]: l["side"] for l in s["legs"]} == {"OIS:6M": -1, "OIS:3M": 1}
+        if ok:
+            assert not s["gated"] and s["exp_pnl"] > 0 and "FRA" in s["thesis"]
+        else:
+            assert "tolerans" in s["gated"] and s["strength"] == "elendi" and s["composite"] == 0
+
+
+def test_the_workbook_s_own_path_reproduces_its_quotes():
+    """The saved workbook as Excel left it: OIS_MAIN's meeting levels (S10…), the solver's own base (Motor!K4) and the
+    quotes (B9:B14, 1M … 1Y): in the convention frapath_day uses the path's par rates are the quotes to a basis point -
+    the one-payment reading of the 6M / 9M / 1Y quotes was 1.5 – 5 points off."""
+    import os
+    from conftest import ROOT
+    from tto.xl.model import Model, parse_a1
+    from tto.xl.values import serial_to_date
+    model = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))
+    ois, motor = model.sheet("OIS_MAIN"), model.sheet("Motor")
+
+    def val(s, ref):
+        rc = parse_a1(ref)
+        return s.consts.get(rc, s.cached.get(rc))
+
+    spot = serial_to_date(val(ois, "B2"))
+    hol = {serial_to_date(v) for v in (val(motor, "A%d" % r) for r in range(361, 524)) if isinstance(v, float) and v > 20000}
+    steps = sorted((serial_to_date(val(ois, "P%d" % r)), val(ois, "S%d" % r)) for r in range(10, 90)
+                   if isinstance(val(ois, "S%d" % r), float) and isinstance(val(ois, "P%d" % r), float))
+    quotes = {m: val(ois, "B%d" % r) * 100.0 for m, r in zip((1, 2, 3, 6, 9, 12), range(9, 15))}
+    assert [val(motor, "B%d" % r) for r in range(325, 331)] == [float((qf.tenor_end(spot, m, hol) - spot).days) for m in (1, 2, 3, 6, 9, 12)]
+    out = qf.frapath_day(spot, val(motor, "K4"), steps, quotes, hol)
+    # the workbook's own par rates of its solved path (Motor!K325:K330) to a twentieth of a basis point - the same convention
+    for m, r in zip((1, 2, 3, 6, 9, 12), range(325, 331)):
+        assert abs(out["tenor"][m]["path"] - val(motor, "K%d" % r) * 100.0) < 0.05, (m, out["tenor"][m])
+    # and so the quotes, to the solver's own fit (its 1M is 2 bp off in the workbook too)
+    assert len(out["tenor"]) == 6 and all(abs(v["dev"]) < 2.5 for v in out["tenor"].values()), out["tenor"]
+    assert sum(abs(v["dev"]) for m, v in out["tenor"].items() if m > 1) < 0.5
+
+
+# ================================================================================================ FX: carry inside
+def fx_series(pair="USDTRY", mu=0.20, carry=0.30, vol=0.01, n=520, seed=31, tenors=("1M", "3M"), s0=34.0, group="TRY", points=True):
+    """A spot with a known drift (log, a year of 252 days) and vol, and forward points built from a known carry (the
+    forward above the spot by ``carry`` a year, continuously compounded)."""
+    rnd = random.Random(seed)
+    days = DAYS[-n:]
+    s = s0
+    spot = []
+    for _ in days:
+        s *= math.exp(mu / 252.0 + rnd.gauss(0, vol / math.sqrt(252.0)))
+        spot.append(s)
+    series = {"FX:" + pair: dict(zip(days, spot))}
+    meta = {"FX:" + pair: {"label": pair, "kind": "fx", "group": group}}
+    if points:
+        for t in tenors:
+            dd = qf._tenor_days(t)
+            series["FXP:%s:%s" % (pair, t)] = {d: (v * math.exp(carry * dd / 365.0) - v) * 1e4 for d, v in zip(days, spot)}
+            meta["FXP:%s:%s" % (pair, t)] = {"label": "%s %s swap puanı" % (pair, t), "kind": "pts"}
+    return series, meta
+
+
+def test_fx_excess_return_takes_the_carry_out():
+    # USDTRY: a crawl of 20 % a year against forwards that price 30 %: long USDTRY loses about 10 % a year of carry
+    series, meta = fx_series()
+    ctx = ctx_of(series, meta)
+    assert ctx.fx_carry("USDTRY") == pytest.approx(-30.0, abs=1e-6)              # a long pays the TRY rate
+    assert ctx.fx_carry("USDTRY", days=60.0) == pytest.approx(-30.0, abs=1e-6)
+    xr = [v for _, v in ctx.pts("XR:USDTRY")]
+    per_year = (xr[-1] - xr[0]) / (len(xr) - 1) * 252.0
+    assert -14.0 < per_year < -6.0                                                # the excess return of a long: −10 % a year
+    ol = qf.fx_outlook(ctx, "USDTRY")
+    assert ol["carry_long"] == pytest.approx(-30.0, abs=1e-6) and 8.0 < ol["drift"] < 30.0 and ol["exp_long"] < -2.0
+    assert ol["buffer"] > 2.0 and ol["carry_side"] == -1 and ol["verdict"] == "TRY long"
+    # momentum on the excess return: the crawl does not make a "buy USDTRY"; the excess return falls - sell, with carry
+    mons, table = qf.fam_momentum(ctx)
+    assert "momentum:FX:USDTRY" not in {m.sid for m in mons}
+    m = next(x for x in mons if x.sid == "momentum:XR:USDTRY")
+    qf.score_all(ctx, [m], {})
     s = qf.make_signal(m, cfg(), "10:00")
-    assert s["z"] > 2 and s["expression"].startswith("Receive 3x6 FRA")
-    assert {l["key"]: l["side"] for l in s["legs"]} == {"OIS:6M": -1, "OIS:3M": 1}
+    assert s["expression"] == "Sell USDTRY forward" and s["direction"] == -1 and s["legs"][0]["key"] == "FX:USDTRY"
+    assert s["carry_yr"] == pytest.approx(30.0, abs=1e-6) and s["carry_week"] == pytest.approx(30.0 * 7 / 365, abs=1e-6)
+    assert s["exp_pnl"] > 0 and s["pnl_unit"] == "%" and s["pnl_try"] == pytest.approx(s["exp_pnl"] / 100 * 1e6 * ctx.last("FX:USDTRY"))
+    carry_gate = next(g for g in s["gates"] if g["name"] == "Carry")
+    assert carry_gate["ok"] and "lehte" in carry_gate["text"] and "carry" in s["thesis"]
+    row = next(r for r in table["rows"] if r["key"] == "XR:USDTRY")
+    assert row["carry"] == pytest.approx(-30.0, abs=1e-6) and row["score"] < -1.5
+    # a pair without forwards: its spot alone is no trade - told so, no carry made up
+    s2, m2 = fx_series("USDKRW", mu=0.0, vol=0.08, s0=1400.0, group="EM", points=False, seed=32)
+    series.update(s2)
+    meta.update(m2)
+    ctx = ctx_of(series, meta)
+    assert ctx.fx_carry("USDKRW") is None and "XR:USDKRW" not in ctx.series
+    mons, table = qf.fam_momentum(ctx)
+    assert not [m for m in mons if "USDKRW" in m.sid]
+    assert next(r for r in table["rows"] if r["key"] == "FX:USDKRW")["error"].startswith("forward yok")
+    assert qf.fx_outlook(ctx, "USDKRW")["verdict"] == "forward yok"
+
+
+def _fx_mon(z, fcast, carry_yr=-30.0):
+    m = qf.Monitor("momentum:XR:USDTRY", "momentum", "FX", "USDTRY forward", "%", 3, DAYS[-200:], [0.0] * 200,
+                   [{"key": "FX:USDTRY", "name": "USDTRY forward", "weight": 1.0}], lambda live: 0.0, follows=True, mode="drift", entry=1.5,
+                   reward=1.0, risk=1.0, hold=20.0, regime={"tag": "Trend"}, pkg="fx", fx="USDTRY", dsd=0.1, pnl=("%", 1.0), fcast=fcast)
+    m.zfn = lambda level, live, z=z: z
+    m.score({}, {})
+    m.level = 0.0
+    m.fxinfo = {"pair": "USDTRY", "spot": 34.0, "carry_yr": carry_yr, "carry_h_yr": carry_yr, "cal_days": 28.0, "try_per_quote": 1.0,
+                "tenors": ["1M"], "fwd_h": 34.0 * math.exp(-carry_yr * 28.0 / 365.0 / 100.0)}
+    return m
+
+
+def test_a_trade_against_carry_needs_an_expected_move_that_beats_it():
+    margin = 0.5 * 0.1 * math.sqrt(20.0)                                  # half the holding's σ (the desk's tampon)
+    # buy USDTRY: against the carry; an expected excess return (carry already in it) above the margin passes
+    s = qf.make_signal(_fx_mon(2.5, 0.40), cfg(), "10:00")
+    g = next(x for x in s["gates"] if x["name"] == "Carry")
+    assert s["direction"] == 1 and s["carry_h"] == pytest.approx(-30.0 * 28 / 365) and g["ok"] and "aleyhte" in g["text"] and not s["gated"]
+    assert s["exp_pnl"] == pytest.approx(0.40) and s["pnl_try"] == pytest.approx(0.004 * 1e6 * 34.0)
+    # ... one below it is held back: carry'yi karşılamıyor, "elendi", no composite
+    s = qf.make_signal(_fx_mon(2.5, 0.5 * margin), cfg(), "10:00")
+    assert "carry'yi karşılamıyor" in s["gated"] and s["strength"] == "elendi" and s["composite"] == 0.0
+    assert not next(x for x in s["gates"] if x["name"] == "Carry")["ok"]
+    # selling USDTRY earns the carry: no extra hurdle, only an expected profit
+    s = qf.make_signal(_fx_mon(-2.5, -0.05), cfg(), "10:00")
+    assert s["direction"] == -1 and s["carry_yr"] == pytest.approx(30.0) and not s["gated"] and s["exp_pnl"] == pytest.approx(0.05)
+    # without a forward the carry is unknown: no FX trade
+    m = _fx_mon(2.5, 1.0)
+    m.fxinfo = {"pair": "USDTRY"}
+    assert "forward yok" in qf.make_signal(m, cfg(), "10:00")["gated"]
+
+
+def test_fx_pair_summary_tells_carry_drift_buffer_and_verdict():
+    series, meta = fx_series()
+    for pair, mu, carry, vol, s0, seed in (("USDZAR", 0.0, 0.07, 0.15, 18.0, 33), ("EURUSD", 0.0, -0.015, 0.07, 1.15, 34)):
+        s, m = fx_series(pair, mu=mu, carry=carry, vol=vol, s0=s0, seed=seed, tenors=("3M",), group="EM" if pair == "USDZAR" else "G10")
+        series.update(s)
+        meta.update(m)
+    series["FXV:USDZAR"] = {d: 15.0 for d in DAYS}
+    meta["FXV:USDZAR"] = {"label": "USDZAR ATM 3M vol", "kind": "vol"}
+    ctx = ctx_of(series, meta)
+    rows = {r["pair"]: r for r in qf.fx_summary(ctx)}
+    assert list(rows)[0] == "USDTRY" and rows["USDTRY"]["verdict"] == "TRY long" and set(rows["USDTRY"]["term"]) == {"1M", "3M"}
+    z = rows["USDZAR"]
+    # a free float without a drift: the drift is shrunk towards 0, the carry is what is left; ZAR's 7 % against a 15 % vol
+    assert z["carry_long"] == pytest.approx(-7.0, abs=1e-6) and abs(z["drift"]) < 6.0 and z["vol_src"] == "ATM 3M" and z["vol"] == 15.0
+    assert z["buffer"] == pytest.approx(-z["exp_long"]) and z["verdict"] in ("ZAR long", "nötr")
+    e = rows["EURUSD"]
+    assert e["carry_long"] == pytest.approx(1.5, abs=1e-6) and e["focus"] == "EUR" and e["verdict"] in ("nötr", "EUR long")
+
+
+def test_every_signal_carries_its_decision():
+    def mon(carry):
+        m = qf.Monitor("pca:OIS:2Y", "pca", "TRY OIS", "2Y OIS (PC1–PC2 hedge'li)", "bp", 1, DAYS[-200:], [0.0] * 200,
+                       [{"key": "OIS:2Y", "name": "2Y OIS", "weight": 1.0}], lambda live: 0.0, mean=0.0, sd=1.0, half_life=5.0,
+                       regime={"tag": "MR"}, carry_up=carry, pkg="rate", dsd=0.4, pnl=("bp", 1.0))
+        m.zfn = lambda level, live: 3.0
+        m.score({}, {})
+        m.level = 3.0
+        return m
+
+    hold = 5.0 * math.log(6, 2)
+    back = 3.0 * (1.0 - 0.5 ** (hold / 5.0))                             # OU: the share of the gap closed in the holding
+    s = qf.make_signal(mon(-1.0), cfg(), "10:00")                         # receive 2Y, which also earns 1 bp a week
+    assert s["direction"] == -1 and s["hold"] == pytest.approx(hold) and s["carry_week"] == pytest.approx(1.0)
+    assert s["exp_pnl"] == pytest.approx(back + hold / 5.0) and s["pnl_unit"] == "bp" and s["pnl_try"] == pytest.approx(s["exp_pnl"] * 10000.0)
+    assert s["reward"] == pytest.approx(3.0) and s["risk"] == pytest.approx(0.5) and s["rr"] == pytest.approx(6.0)
+    assert s["sigma_h"] == pytest.approx(0.4 * math.sqrt(hold))
+    assert [g["name"] for g in s["gates"]] == ["Eşik", "Stop bölgesi", "Rejim", "Yarı ömür", "Carry", "Beklenen kâr"] and all(g["ok"] for g in s["gates"])
+    assert s["strength"] == "Güçlü" and "Receive 2Y OIS" in s["thesis"] and "beklenen" in s["thesis"]
+    # the same signal paying more carry than the reversion is worth: no expected profit, eliminated - and said so
+    s = qf.make_signal(mon(1.5), cfg(), "10:00")
+    assert s["exp_pnl"] < 0 and "beklenen kâr yok" in s["gated"] and s["strength"] == "elendi"
+    assert [g["name"] for g in s["gates"] if not g["ok"]] == ["Beklenen kâr"]
+    live, gated = qf.rank([s])
+    assert not live and gated[0]["strength"] == "elendi"
+
+
+def test_policy_cycle_holds_a_small_sample_to_its_own_critical_value():
+    # the critical values: many independent periods tend to 1.96; two of them need a t near 8 (simulated on random walks)
+    assert qm.nw_critical(30, 20) is None and qm.nw_critical(40, 20) == pytest.approx(7.8)
+    assert qm.nw_critical(200, 20) == pytest.approx(3.0) and qm.nw_critical(20000, 20) == pytest.approx(1.96)
+    cvs = [qm.nw_critical(n, 20) for n in range(40, 2000, 40)]
+    assert all(a >= b for a, b in zip(cvs, cvs[1:]))
+    rnd = random.Random(41)
+    ts = []
+    for _ in range(400):                                                  # the 5 % value holds on random walks (r = 4)
+        e = [rnd.gauss(0, 1) for _ in range(50)]
+        x = [sum(e[i:i + 10]) for i in range(40)]
+        ts.append(abs(qm.newey_west(x, 9)["t"]))
+    rej = sum(1 for t in ts if t > qm.nw_critical(40, 10)) / len(ts)
+    assert rej < 0.10 and sum(1 for t in ts if t > 1.96) / len(ts) > 0.2  # (1.96 would find a drift in noise a third of the time)
+    # a short cutting phase (~2.4 periods): a t of ~5 is no signal; the same drift over a long phase is
+    for start, signal in ((470, False), (200, True)):
+        rnd = random.Random(42)
+        tl, two, ten = [], [], []
+        lvl, slope = 45.0, 0.0
+        for i in range(520):
+            cutting = i >= start
+            if cutting and i % 20 == 0:
+                lvl -= 1.0
+            tl.append(lvl)
+            slope += (0.02 if cutting else 0.0) + rnd.gauss(0, 0.01)
+            two.append(40.0 + rnd.gauss(0, 0.01))
+            ten.append(two[-1] + slope)
+        series = {"TLREF": dict(zip(DAYS, tl)), "OIS:2Y": dict(zip(DAYS, two)), "OIS:10Y": dict(zip(DAYS, ten))}
+        meta = {"TLREF": {"label": "TLREF", "kind": "rate"}, "OIS:2Y": {"label": "2Y OIS", "kind": "rate", "months": 24.0},
+                "OIS:10Y": {"label": "10Y OIS", "kind": "rate", "months": 120.0}}
+        mons, table = qf.fam_cycle(ctx_of(series, meta))
+        row = next(r for r in table["rows"] if r["slope"] == "2s10s")
+        st = row["stats"]["indirim"]
+        for m in mons:
+            m.score({}, {})
+        sigs = [qf.make_signal(m, cfg(), "10:00") for m in mons if m.sid == "cycle:2s10s"]
+        if signal:
+            assert st["periods"] > 10 and st["cv"] < 3.1 and sigs and sigs[0] and sigs[0]["expression"] == "Steepener 2s10s"
+            assert next(g for g in sigs[0]["gates"] if g["name"] == "Örneklem")["ok"] and sigs[0]["exp_pnl"] > 0
+        else:
+            assert st["periods"] < 3 and (st["cv"] is None or st["cv"] > 5) and not [s for s in sigs if s]
 
 
 def test_curve_signal_conditioned_on_the_policy_cycle():
@@ -468,11 +712,13 @@ def test_forward_premium_carry_timing_and_its_regime_gate():
     row = table["rows"][0]
     assert row["tenor"] == "3M" and abs(row["implied"] - 45.0) < 0.5 and row["z"] > 3
     m = mons[0]
-    m.score({}, {})
+    qf.score_all(ctx, [m], {})
     s = qf.make_signal(m, cfg(stop_z=20.0), "10:00")
     assert s["expression"] == "Sell USDTRY 3M forward" and not s["gated"]
+    # selling the forward earns its premium less the drift: carry with the trade, the cushion over the holding expected
+    assert s["carry_yr"] > 30.0 and s["exp_pnl"] == pytest.approx(m.level * s["hold"] * 7 / 5 / 365) and "tampon" in s["thesis"]
     mons, _ = qf.fam_fwdprem(ctx, {"regime": "Trend", "score": 2.5})
-    mons[0].score({}, {})
+    qf.score_all(ctx, [mons[0]], {})
     s = qf.make_signal(mons[0], cfg(stop_z=20.0), "10:00")
     assert "trend" in s["gated"] and s["composite"] == 0
 
@@ -678,11 +924,16 @@ def test_settings_are_validated_and_shared():
 
 # ================================================================================================ Bloomberg's daily budget
 def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
-    """The fake terminal through a first sync and a whole day of 15-minute syncs: every series' full range is asked
-    once (Bloomberg's own start of the short ones is kept, nothing is asked again in full), the quant series' first
-    backfill five at a time, then only the recent days - and the day's requests stay bounded.  The next day: the
-    series without any history are asked once more, everything else its recent days.  A longer window whose answers
-    do not come in time: asked once that day, once more the day after, then never again."""
+    """The fake terminal through a first sync and a whole day of 15-minute syncs, then the next days:
+
+    * no series' full range twice in a day; Bloomberg's own start of the short ones is kept and never asked again;
+    * the quant series (every pair of the desk's list) get their first two years five a sync, those never asked first;
+    * the history's own series the analyses read (OIS, offshore, TLREF, DİBS) get their own window at once, and the year
+      before it from the next day on - only the part they miss, a week into what they have - five a sync too;
+    * afterwards only the new days: the history's own every sync from their last close, the quant series once a day
+      (after 07:00; none on the day of their full range) - the day's hits and data points stay bounded;
+    * the next day: the series without any history once more, the quant series their new days once;
+    * a longer window whose answers do not come in time: asked once that day, once more the day after, then never."""
     import fake_blpapi
     from test_history import TODAY, D, _fake_history, _weekdays
     from tto.config import Settings
@@ -696,9 +947,10 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
     provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
     provider.start()
     today = float(date_to_serial(D(TODAY)))
-    clock = Clock(today + 0.5)
+    clock = Clock(today + 0.5)                               # 12:00: past the 07:00 of the once-a-day series
     clock.today = lambda: today
     svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=provider, clock=clock)
+    q = History.BACKFILL_PER_SYNC
     try:
         h = svc.history
         snap = h.snapshot()
@@ -707,6 +959,7 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         short = {"USDCOPV3M BGN Curncy": 120, "USDIDR25R3M BGN Curncy": 200, "TURKEY CDS USD SR 5Y D14 Corp": 400, "INR3M Curncy": 60}
         none = {"BRL3M Curncy", "IDR3M Curncy"}
         quant = [d for d in snap["defs"] if d.group == "Quant"]
+        assert len(quant) == len(series_specs()) and {"EUR3M Curncy", "TRY1M Curncy", "USDZARV3M BGN Curncy"} <= {d.ticker for d in quant}
         for d in quant:
             if d.ticker not in none:
                 start = D(TODAY) - dt.timedelta(days=short.get(d.ticker, 900))
@@ -726,52 +979,83 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
             a, b = (dt.datetime.strptime(r["options"][k], "%Y%m%d").date() for k in ("startDate", "endDate"))
             return sum(sum(1 for x, _ in known(s, r["fields"][0]) if a <= x <= b) for s in r["securities"])
 
-        syncs = []
-        for _ in range(1 + 4 * 24):                          # the first sync, then a day of 15-minute syncs
-            n = len(requests())
-            h._fetch()
-            syncs.append(requests()[n:])
+        def kind(r, day=D(TODAY)):
+            """full: from far back to the day; gap: the part before a series' first close; tail: the new days."""
+            start, end = r["options"]["startDate"], r["options"]["endDate"]
+            if end < day.strftime("%Y%m%d"):
+                return "gap"
+            return "full" if start < (day - dt.timedelta(days=30)).strftime("%Y%m%d") else "tail"
+
+        def run(n):
+            out = []
+            for _ in range(n):
+                m = len(requests())
+                h._fetch()
+                out.append(requests()[m:])
+            return out
+
+        syncs = run(1 + 4 * 24)                              # the first sync, then a day of 15-minute syncs
         reqs = [r for s in syncs for r in s]
-        old = (D(TODAY) - dt.timedelta(days=30)).strftime("%Y%m%d")         # a request from further back: a full range
-        fulls = {}
+        full = {}
         for r in reqs:
-            if r["options"]["startDate"] < old:
+            if kind(r) == "full":
                 for s in r["securities"]:
-                    fulls[s] = fulls.get(s, 0) + 1
-        assert max(fulls.values()) == 1                      # no series' full range twice in a day
-        per_sync = [sum(1 for r in s if r["options"]["startDate"] < old for x in r["securities"] if x in qt) for s in syncs]
-        assert per_sync[:10] == [History.BACKFILL_PER_SYNC] * 10 and not any(per_sync[10:])      # 5 a sync, all 50 in 10 syncs
+                    full[s] = full.get(s, 0) + 1
+        assert max(full.values()) == 1 and not any(kind(r) == "gap" for r in reqs)     # no range twice; no older year today
         stored = svc.store.hist_bounds()
-        news = {(D(b[1]) - dt.timedelta(days=History.OVERLAP_DAYS)).strftime("%Y%m%d") for b in stored.values()}
-        assert {r["options"]["startDate"] for s in syncs[10:] for r in s} == news == {"20261030", "20261031"}   # then new days only
+        own = {s for r in syncs[0] for s in r["securities"]} - qt
+        # the first sync: the history's own series in full (their own window) and the first five quant series
+        first = {s for r in syncs[0] if kind(r) == "full" for s in r["securities"]}
+        assert len(first - qt) == 117 and len(first & qt) == q
+        # the quant series: five a sync until every one of them was asked; afterwards only the new days, of the history's
+        # own series (every quant series was asked in full today)
+        per_q = [sum(1 for r in s if kind(r) == "full" for x in r["securities"] if x in qt) for s in syncs]
+        nq = len(quant)
+        k = -(-nq // q)
+        assert per_q[:k] == [q] * (k - 1) + [nq - q * (k - 1)] and not any(per_q[k:])
+        news = {(D(b[1]) - dt.timedelta(days=History.OVERLAP_DAYS)).strftime("%Y%m%d") for s, b in stored.items() if s.split("|")[0] not in qt}
+        assert {r["options"]["startDate"] for s in syncs[k:] for r in s} == news == {"20261030", "20261031"}
+        assert not ({x for s in syncs[k:] for r in s for x in r["securities"]} & qt)
         records = h.fetch_records()
         for t, back in short.items():                        # Bloomberg's own start of the short ones is kept
             rec = records[t + "|PX_LAST"]
-            assert fulls[t] == 1 and rec["first"] > rec["from"] and rec["first"] >= (D(TODAY) - dt.timedelta(days=back)).isoformat()
-        assert all(fulls.get(t) == 1 for t in none)          # asked once today, nothing came
-        with_data = len(stored)
+            assert full[t] == 1 and rec["first"] > rec["from"] and rec["first"] >= (D(TODAY) - dt.timedelta(days=back)).isoformat()
+        assert all(full.get(t) == 1 for t in none)          # asked once today, nothing came
         everything = len({s for r in reqs for s in r["securities"]})
         hits = sum(len(r["securities"]) for r in reqs)       # security × field per request: the terminal's hits
         points = sum(rows(r) for r in reqs)
-        # bounded: one full range per series, then at most one request of the recent days per series with data a sync
-        assert hits <= everything + len(syncs) * with_data
+        own_data = [s for s in stored if s.split("|")[0] not in qt]
+        # bounded: one full range a series, then one request of the new days per own series with data a sync
+        assert hits <= everything + len(syncs) * len(own_data)
         new_rows = len(list(_weekdays(D(TODAY) - dt.timedelta(days=History.OVERLAP_DAYS + 1), D(TODAY))))     # (3: the TLREF's)
         full_rows = sum(len(v) for v in hist.values())
-        assert points <= full_rows + len(syncs) * with_data * new_rows
-        print("live day: %d syncs, %d requests, %d hits, %d data points (%d series, %d with history)"
-              % (len(syncs), len(reqs), hits, points, everything, with_data))
-        # the next day: the series without any history once more, everything else its recent days
+        assert points <= full_rows + len(syncs) * len(own_data) * new_rows
+        print("live day: %d syncs, %d requests, %d hits, %d data points (%d securities, %d with history, %d quant series)"
+              % (len(syncs), len(reqs), hits, points, everything, len(stored), nq))
+        # the next day: the series without any history once more, the quant series their new days once (first sync), the
+        # history's own series their new days every sync - and their older year, five a sync
         clock.today = lambda: today + 1
         svc.bump()
-        n = len(requests())
-        h._fetch()
-        nxt = requests()[n:]
-        full_next = {s for r in nxt if r["options"]["startDate"] < old for s in r["securities"]}
+        day1 = D(TODAY) + dt.timedelta(days=1)
+        ng = len(own_data)
+        nxt = run(-(-ng // q) + 2)
+        full_next = [s for x in nxt for r in x if kind(r, day1) == "full" for s in r["securities"]]
         missing = {s for r in reqs for s in r["securities"] if not known(s, r["fields"][0])}
-        assert full_next == missing and none <= full_next
-        assert {r["options"]["startDate"] for r in nxt if r["options"]["startDate"] >= old} == news      # (no new close here)
-        # the window grows (Ayarlar → Geriye bakış) and the answers do not come in time: the longer range is asked
-        # once that day and does not count as had; the day after once more, then never again
+        assert set(full_next) == missing and len(full_next) == len(missing) and none <= set(full_next)    # once each
+        tails_q = [{x for r in s if kind(r, day1) == "tail" for x in r["securities"] if x in qt} for s in nxt]
+        assert tails_q[0] == qt - none and not any(tails_q[1:])
+        gaps = [[x for r in s if kind(r, day1) == "gap" for x in r["securities"]] for s in nxt]
+        flat = [x for g in gaps for x in g]
+        assert len(flat) == len(set(flat)) == ng and all(len(g) <= q for g in gaps) and not gaps[-1]
+        far = (day1 - dt.timedelta(days=HISTORY_DAYS)).isoformat()
+        records = h.fetch_records()
+        nb = svc.store.hist_bounds()
+        assert all(records[s]["from"] == far and records[s]["first"] == nb[s][0] for s in own_data)
+        hits1 = sum(len(r["securities"]) for s in nxt for r in s)
+        print("next day: %d hits in %d syncs (the older year of %d series in them), then %d a sync"
+              % (hits1, len(nxt), ng, sum(len(r["securities"]) for r in nxt[-1])))
+        # the window grows past two years (Ayarlar → Geriye bakış) and the answers do not come in time: each series' older
+        # part is asked once that day (five a sync) and does not count as had; the day after once more, then never again
         silent = []
 
         class Silent(object):
@@ -779,30 +1063,38 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
                 silent.extend((start, "%s|%s" % (t, f)) for t, f in items)
                 return {}
 
-        def day(k):
-            return D(TODAY) + dt.timedelta(days=k)
+        def day(n):
+            return D(TODAY) + dt.timedelta(days=n)
 
-        h.set_settings({"lookback_days": 500})
+        h.set_settings({"lookback_days": 1000})
+        stored = svc.store.hist_bounds()
+        clock.today = lambda: today + 2
+        svc.bump()
         before = h.fetch_records()
         real, svc.provider = svc.provider, Silent()
         try:
-            for _ in range(3):
+            for _ in range(60):
                 h._fetch()
         finally:
             svc.provider = real
-        grown = [s for start, s in silent if start == (day(1) - dt.timedelta(days=500)).strftime("%Y%m%d")]
-        assert len(grown) == len(set(grown)) and set(grown) == {s for s in stored if s.split("|")[0] not in qt}
+        grown = [s for start, s in silent if start == (day(2) - dt.timedelta(days=1000)).strftime("%Y%m%d") and s in stored]
+        assert len(grown) == len(set(grown)) and set(grown) == set(stored)
         rec = h.fetch_records()
-        assert all(rec[s]["day"] == day(1).isoformat() and rec[s]["from"] == before[s]["from"] for s in grown)
-        clock.today = lambda: today + 2
-        svc.bump()
-        h._fetch()
-        rec = h.fetch_records()
-        assert all(rec[s]["day"] == day(2).isoformat() and rec[s]["from"] == (day(2) - dt.timedelta(days=500)).isoformat() for s in grown)
+        assert all(rec[s]["day"] == day(2).isoformat() and rec[s].get("from") == (before.get(s) or {}).get("from") for s in grown)
         clock.today = lambda: today + 3
         svc.bump()
+        n = len(requests())
+        for _ in range(60):
+            h._fetch()
+        again = [s for r in requests()[n:] if r["options"]["startDate"] == (day(3) - dt.timedelta(days=1000)).strftime("%Y%m%d")
+                 for s in r["securities"] if known(s, r["fields"][0])]
+        assert len(again) == len(set(again)) == len(grown)
+        rec = h.fetch_records()
+        assert all(rec[s]["day"] == day(3).isoformat() and rec[s]["from"] == (day(3) - dt.timedelta(days=1000)).isoformat() for s in grown)
+        clock.today = lambda: today + 4
+        svc.bump()
         h._fetch()
-        assert all(h.fetch_records()[s]["day"] == day(2).isoformat() for s in grown)
+        assert all(h.fetch_records()[s]["day"] == day(3).isoformat() for s in grown)
     finally:
         svc.stop()
 

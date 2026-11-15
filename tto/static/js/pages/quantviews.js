@@ -110,20 +110,23 @@ class PcaPage extends AnalysisPage {
     this.resid = panel('quant-pca-resid', 'Zengin / ucuz · PC1–PC2 sonrası kalıntı');
     this.resid.note.textContent = 'Kalıntı (bp) + ise tenor eğriye göre ucuz (receive), − ise pahalı (pay). Hedge: paketi PC1 ve PC2\'ye nötr yapan iki komşu vade (DV01 ağırlığı).';
     this.boxes.resid = new GridBox(this.resid, 'quant/pca/resid', (sid) => this.pick(sid));
-    this.rv = panel('quant-pca-rv', 'PCA-nötr fly ve spread\'ler');
-    this.rv.note.textContent = 'Spread: PC1\'e nötr (uzun bacak 1); fly: PC1 ve PC2\'ye nötr (gövde 1). Ağırlıklar DV01 cinsinden; nominal, masa ayarındaki paket DV01\'i için. '
-      + 'Carry + roll: Carry & Roll sayfasının vade motorundan, ufuk A, haftalık.';
+    this.rv = panel('quant-pca-rv', 'Fly ve spread\'ler · klasik (DV01 1:1 / 50/50) ve PCA ağırlıklı yan yana');
+    this.rv.note.textContent = 'Klasik: masanın usulü, spread 1:1 (uzun bacak +1, kısa −1), fly 50/50 (gövde 1, kanatlar −0,5) - DV01 cinsinden, paralel kaymaya nötr. '
+      + 'PCA ağırlıklı: spread PC1\'e nötr (uzun bacak 1), fly PC1 ve PC2\'ye nötr (gövde 1). Net DV01: Σ ağırlık × paket DV01\'i (TL/bp). PC1 / PC2 / PC3: '
+      + 'bileşenin 1σ\'luk (günlük) hareketinde paketin hareketi (bp) = Σ ağırlık × yük × √λ - klasik fly\'ın gizli seviye / eğim maruziyetini, PCA fly\'ın sıfır olmayan '
+      + 'net DV01\'ini gösterir. Nominal, masa ayarındaki paket DV01\'i için. Carry + roll: Carry & Roll sayfasının vade motorundan, ufuk A, haftalık. İkisi ayrı sinyal verebilir.';
     this.boxes.rv = new GridBox(this.rv, 'quant/pca/rv', (sid) => this.pick(sid));
     this.fra = panel('quant-pca-fra', 'FRA / OIS forward\'ları · toplantı tarihli PPK patikasına göre');
-    this.fra.note.textContent = 'Eğri forward\'ı: OIS kotalarından (tek ödemeli, ≤ 1Y) log-doğrusal iskonto. Patika: tarihçenin PPK hesabı (TLREF\'ten başlayıp her '
-      + 'toplantıdan sonraki seviye, iş günü bileşik). Fark + ise uzak bacak ucuz (FRA receive), − ise pahalı.';
+    this.fra.note.textContent = 'Eğri forward\'ı: OIS kotalarından masanın konvansiyonuyla (≤ 3A tek ödeme, uzunlar üç ayda bir kupon) çözülen iskonto, '
+      + 'log-doğrusal. Patika: tarihçenin PPK hesabı, aynı günün kotalarından (çözücünün taban seviyesinden başlar, her toplantının ertesi iş günü yeni '
+      + 'seviye, iş günü bileşik). Patika kotaları yeniden ürettiği için fark normalde çözücünün toleransı içindedir; aşınca sinyal: + ise uzak bacak ucuz (FRA receive).';
     this.boxes.fra = new GridBox(this.fra, 'quant/pca/fra', (sid) => this.pick(sid));
-    this.periods = panel('quant-pca-periods', 'Toplantı dönemleri · eğrinin forward\'ı − PPK patikasının seviyesi');
-    this.periods.note.textContent = 'Her dönem bir kararın ertesi gününden sonrakinin ertesi gününe (toplantı tarihli OIS gibi). Fark + ise o dönemin toplantı tarihli '
-      + 'OIS\'i patikaya göre ucuz (receive), − ise pahalı.';
-    this.boxes.periods = new GridBox(this.periods, 'quant/pca/periods', (sid) => this.pick(sid));
-    this.tenors = panel('quant-pca-tenors', 'Vade başına: kota − patikanın verdiği par faiz', { cls: 'aux' });
+    this.tenors = panel('quant-pca-tenors', 'Patikanın kotaları yeniden üretmesi · kota − patikanın par faizi (aynı gün, aynı konvansiyon)');
     this.boxes.tenors = new GridBox(this.tenors, 'quant/pca/tenors');
+    this.periods = panel('quant-pca-periods', 'Toplantı dönemleri · patikanın seviyesi ve fiyatlanan adım', { cls: 'aux' });
+    this.periods.note.textContent = 'Her dönem bir kararın ertesi gününden sonrakinin ertesi gününe (toplantı tarihli OIS gibi): patikanın o dönemki gecelik seviyesi '
+      + 've bir önceki seviyeye göre fiyatlanan adım (bp).';
+    this.boxes.periods = new GridBox(this.periods, 'quant/pca/periods');
     this.frame('PCA / RV', [this.factors, this.loadings, this.resid, this.rv, this.fra, this.periods, this.tenors]);
   }
 
@@ -153,20 +156,43 @@ class PcaPage extends AnalysisPage {
         T((r.hedge || []).map((x) => x.key.split(':')[1] + ' ' + sgn(x.weight, 2)).join(' · '))]), rows.map((r) => 'pca:' + r.key), '—', this.picked);
     }
     const rv = (this.data.rv || {}).rows || [];
-    this.boxes.rv.set(['Paket', 'Bacaklar (DV01 ağırlığı)', 'Seviye (bp)', 'z', 'Yarı ömür (g)', 'Carry / hf (bp)', 'Rejim'], rv.map((r) => [T(r.label, { b: 1 }),
-      T((r.legs || []).map((l) => l.key.split(':')[1] + ' ' + sgn(l.weight, 2) + (isNum(l.notional) ? ' (' + fmt(l.notional, 1) + ' mn)' : '')).join(' · ') || r.error || ''),
-      N(r.level, 1), Z(r.z, entry), N(r.half_life, 1), N(r.carry, 2, { sign: true, tip: 'Paketin yükselişi (pay) için' }), T(REGIME[r.regime] || '—')]),
-    rv.map((r) => r.sid || null), 'Paket yok (Masa ayarları: PCA-nötr spread ve fly\'lar)', this.picked);
+    const rvRows = [];
+    const rvKeys = [];
+    for (const r of rv) {
+      if (!r.versions) {
+        rvRows.push([T(r.label, { b: 1 }), T(''), T(r.error || '', { cls: 'soft' })].concat(Array(10).fill(T(''))));
+        rvKeys.push(null);
+        continue;
+      }
+      for (const ver of ['klasik', 'pca']) {
+        const v = r.versions[ver] || {};
+        const ex = v.exposures || [];
+        rvRows.push([T(v.name || r.label, { b: 1 }), T(ver === 'klasik' ? (r.kind === 'fly' ? 'klasik 50/50' : '1:1') : 'PCA ağırlıklı'),
+          T((v.legs || []).map((l) => l.key.split(':')[1] + ' ' + sgn(l.weight, 2) + (isNum(l.notional) ? ' (' + fmt(l.notional, 1) + ' mn)' : '')).join(' · ') || v.error || ''),
+          N(v.net_dv01, 0, { sign: true }), N(ex[0], 2, { sign: true }), N(ex[1], 2, { sign: true }), N(ex[2], 2, { sign: true }),
+          N(v.level, 1), Z(v.z, entry), N(v.half_life, 1), N(v.carry, 2, { sign: true, tip: 'Paketin yükselişi (pay) için' }), T(REGIME[v.regime] || '—'),
+          T(ver === 'klasik' ? (r.compare || '') : '', { cls: 'soft' })]);
+        rvKeys.push(v.sid || null);
+      }
+    }
+    this.boxes.rv.set(['Paket', 'Sürüm', 'Bacaklar (DV01 ağırlığı)', 'Net DV01 (TL/bp)', 'PC1 1σ (bp)', 'PC2 1σ (bp)', 'PC3 1σ (bp)', 'Seviye (bp)', 'z',
+      'Yarı ömür (g)', 'Carry / hf (bp)', 'Rejim', 'Fark'], rvRows, rvKeys, 'Paket yok (Masa ayarları: PCA-nötr spread ve fly\'lar)', this.picked);
     const fra = this.data.frapath || {};
+    const minBp = isNum(fra.min_bp) ? fra.min_bp : 5;
     this.boxes.fra.set(['Dönem', 'Eğri fwd %', 'Patika fwd %', 'Fark (bp)', 'z', 'Yarı ömür (g)', 'Gün'], (fra.rows || []).map((r) => [T(r.bucket, { b: 1 }),
-      N(r.now && r.now.curve, 3), N(r.now && r.now.path, 3), N(r.now ? r.now.dev : r.dev, 1, { sign: true }), Z(r.z, entry), N(r.half_life, 1), N(r.n, 0)]),
+      N(r.now && r.now.curve, 3), N(r.now && r.now.path, 3), N(r.now ? r.now.dev : r.dev, 1, { sign: true, cls: Math.abs((r.now ? r.now.dev : r.dev) || 0) < minBp ? 'soft' : '' }),
+      Z(r.z, entry), N(r.half_life, 1), N(r.n, 0)]),
     (fra.rows || []).map((r) => r.sid || null), fra.why || 'Toplantı fiyatlama tarihçesi yok', this.picked);
+    this.fra.setTitle('FRA / OIS forward\'ları · toplantı tarihli PPK patikasına göre' + (fra.live ? ' (bugünün patikası, canlı kotalar)'
+      : (fra.last_day ? ' (son hesaplanan gün: ' + isoToTr(fra.last_day) + ')' : '')));
+    this.tenors.note.textContent = (fra.convention || '') + ' Fark ' + fmt(minBp, 0) + ' bp\'yi aşmıyorsa patika kotaları yeniden üretiyor demektir.';
+    this.boxes.tenors.set(['Vade', 'Konvansiyon', 'Kota %', 'Patika par %', 'Fark (bp)', 'En büyük |fark| (60 gün)', 'Gün'], (fra.tenors || []).map((r) => [T(r.label, { b: 1 }),
+      T(r.convention || ''), N(r.quote, 3), N(r.path, 3), N(r.dev, 1, { sign: true, cls: Math.abs(r.dev || 0) >= minBp ? 'thru' : '' }), N(r.max_abs, 1), N(r.n, 0)]), null,
+    'Patika yok (tarihçenin toplantı fiyatlama hesabı gerekli)');
     const per = fra.periods || [];
-    this.boxes.periods.set(['Toplantı', 'Dönem', 'Eğri fwd %', 'Patika %', 'Fark (bp)', 'z', 'Yarı ömür (g)', 'Gün'], per.map((r) => [T(isoToTr(r.meeting), { b: 1 }),
-      T(isoToTr(r.start) + ' – ' + isoToTr(r.end)), N(r.curve, 3), N(r.path, 3), N(r.dev, 1, { sign: true }), Z(r.z, entry), N(r.half_life, 1), N(r.n, 0)]),
-    per.map((r) => r.sid || null), 'PPK patikası yok (tarihçenin toplantı fiyatlama hesabı gerekli)', this.picked);
-    this.boxes.tenors.set(['Vade', 'Kota %', 'Patika par %', 'Fark (bp)', 'z', 'Gün'], (fra.tenors || []).map((r) => [T(r.label, { b: 1 }), N(r.quote, 3), N(r.path, 3),
-      N(r.dev, 1, { sign: true }), Z(r.z, entry), N(r.n, 0)]), null, '—');
+    this.boxes.periods.set(['Toplantı', 'Dönem', 'Patika %', 'Fiyatlanan adım (bp)', 'Dönem forward\'ı %'], per.map((r) => [T(isoToTr(r.meeting), { b: 1 }),
+      T(isoToTr(r.start) + ' – ' + isoToTr(r.end)), N(r.path, 3), N(r.step, 1, { sign: true }), N(r.fwd, 3)]), null,
+    fra.live ? 'Patikada dönem yok' : 'Bugünün patikası henüz yok (tarihçenin bugünkü PPK hesabından sonra)');
   }
 }
 
@@ -206,12 +232,14 @@ class RegimePage extends AnalysisPage {
 
   build() {
     this.mom = panel('quant-regime-momentum', 'Momentum panosu');
-    this.mom.note.textContent = '1H / 1A / 3A: değişim ÷ (günlük vol × √gün); skor üçünün ortalaması. Sıra: eğri, FX ve küresel gruplar içinde. Ortalamalar: hızlı / yavaş '
-      + 'hareketli ortalama (↑ hızlı üstte) ve kaç gündür. Sinyal: |skor| ≥ momentum eşiği, ortalamalar aynı yönde, rejim trend (nötrde yarım ağırlık).';
+    this.mom.note.textContent = '1H / 1A / 3A: değişim ÷ (günlük vol × √gün); skor üçünün ortalaması. FX: spot değil, forward\'la tutmanın getirisi (spot getirisi − '
+      + 'forward primi, carry dahil) - carry aleyhine bir işlem, beklenen getirisi carry\'yi tamponla karşılamıyorsa elenir. Sıra: eğri, FX ve küresel gruplar içinde. '
+      + 'Ortalamalar: hızlı / yavaş hareketli ortalama (↑ hızlı üstte) ve kaç gündür. Sinyal: |skor| ≥ momentum eşiği, ortalamalar aynı yönde, rejim trend (nötrde yarım ağırlık).';
     this.boxes.mom = new GridBox(this.mom, 'quant/regime/momentum', (sid) => this.pick(sid));
     this.cycle = panel('quant-regime-cycle', 'PPK döngüsü · eğim davranışı');
     this.cycle.note.textContent = 'Faz: TLREF\'in son 63 iş günündeki değişimi ≤ −eşik indirim, ≥ +eşik artırım, arası sabit. Her fazda eğimin sonraki ufuk boyunca değişimi; '
-      + 't Newey-West ile (çakışan gözlemler). Bugünkü fazda |t| ≥ eşik ve yeterli gözlem varsa steepener / flattener sinyali.';
+      + 't Newey-West ile (çakışan gözlemler). Küçük örneklem: n çakışan gözlem ≈ n ÷ ufuk bağımsız dönem; az dönemle Newey-West t\'si şişer, eşik o örneklemin '
+      + 'benzetimle bulunan %5 kritik değeri (2 dönemde ≈ 7,8, 5 dönemde ≈ 3,8, 20 dönemde ≈ 2,6). Bugünkü fazda |t| bu eşiği geçerse steepener / flattener sinyali.';
     this.boxes.cycle = new GridBox(this.cycle, 'quant/regime/cycle');
     this.reg = panel('quant-regime-table', 'İzlenen serilerin rejimi', { cls: 'aux' });
     this.reg.note.textContent = 'Varyans oranı VR(q) (Lo-MacKinlay, değişen varyansa dayanıklı z): z ≤ −1,645 ortalamaya dönüş, ≥ +1,645 trend, arası nötr. H: varyans-zaman '
@@ -223,20 +251,25 @@ class RegimePage extends AnalysisPage {
   fillPage() {
     const st = this.data.settings || {};
     const rows = (this.data.momentum || {}).rows || [];
-    this.boxes.mom.set(['Enstrüman', 'Grup', 'Seviye', '1H', '1A', '3A', 'Skor', 'Sıra', 'Ortalamalar', 'Rejim', 'H', 'VR z', 'Vol yüzd.'],
-      rows.map((r) => [T(r.label, { b: 1 }), T(r.group), N(r.level, r.unit === '%' ? 3 : 4), N(r.w1, 2, { sign: true }), N(r.m1, 2, { sign: true }), N(r.m3, 2, { sign: true }),
-        Z(r.score, st.mom_entry || 1.5), T(r.rank ? r.rank + '/' + r.of : ''), T(ARROW(r.state) + ' ' + (r.since || 0) + 'g'), T(REGIME[r.regime] || '—'), N(r.hurst, 2),
-        N(r.vr_z, 2, { sign: true }), T(pct(r.vol_pct))]), rows.map((r) => 'momentum:' + r.key), 'Momentum için geçmiş yok', this.picked);
+    this.boxes.mom.set(['Enstrüman', 'Grup', 'Seviye', '1H', '1A', '3A', 'Skor', 'Sıra', 'Ortalamalar', 'Rejim', 'H', 'VR z', 'Vol yüzd.', 'Carry % / yıl (long)'],
+      rows.map((r) => (r.error ? [T(r.label, { b: 1 }), T(r.group), T(r.error, { cls: 'soft' }), T(''), T(''), T(''), T(''), T(''), T(''), T(''), T(''), T(''), T(''),
+        N(r.carry, 1, { sign: true })]
+        : [T(r.label + (r.key.startsWith('XR:') ? ' · carry dahil' : ''), { b: 1 }), T(r.group), N(r.level, r.unit === '%' ? 3 : 4), N(r.w1, 2, { sign: true }),
+          N(r.m1, 2, { sign: true }), N(r.m3, 2, { sign: true }), Z(r.score, st.mom_entry || 1.5), T(r.rank ? r.rank + '/' + r.of : ''),
+          T(ARROW(r.state) + ' ' + (r.since || 0) + 'g'), T(REGIME[r.regime] || '—'), N(r.hurst, 2), N(r.vr_z, 2, { sign: true }), T(pct(r.vol_pct)),
+          N(r.carry, 1, { sign: true })])), rows.map((r) => (r.error ? null : 'momentum:' + r.key)), 'Momentum için geçmiş yok', this.picked);
     const cy = this.data.cycle || {};
     const crow = [];
     for (const r of cy.rows || []) {
       for (const ph of ['indirim', 'sabit', 'artırım']) {
         const s = (r.stats || {})[ph] || {};
-        crow.push([T(r.slope, { b: 1 }), T(ph + (ph === cy.phase ? ' (bugün)' : ''), { b: ph === cy.phase ? 1 : 0 }), N(s.mean, 1, { sign: true }), Z(s.t, st.cycle_t || 2),
-          N(s.sd, 1), N(s.n, 0), N(r.level, 1)]);
+        const thr = Math.max(st.cycle_t || 2, isNum(s.cv) ? s.cv : 0);
+        crow.push([T(r.slope, { b: 1 }), T(ph + (ph === cy.phase ? ' (bugün)' : ''), { b: ph === cy.phase ? 1 : 0 }), N(s.mean, 1, { sign: true }), Z(s.t, thr),
+          N(s.sd, 1), N(s.n, 0), N(s.periods, 1), T(isNum(s.cv) ? fmt(s.cv, 2) : (s.n ? 'test yok' : ''), { cls: isNum(s.cv) ? '' : 'soft' }), N(r.level, 1)]);
       }
     }
-    this.boxes.cycle.set(['Eğim', 'Faz', 'Ort. değişim (bp, ufukta)', 't (NW)', 'σ', 'Gözlem', 'Bugün (bp)'], crow, null, cy.why || 'TLREF / eğim geçmişi yok');
+    this.boxes.cycle.set(['Eğim', 'Faz', 'Ort. değişim (bp, ufukta)', 't (NW)', 'σ', 'Gözlem', 'Bağımsız dönem', 'Eşik |t|', 'Bugün (bp)'], crow, null,
+      cy.why || 'TLREF / eğim geçmişi yok');
     this.cycle.setTitle('PPK döngüsü · bugünkü faz: ' + (cy.phase || '—') + (cy.counts ? ' (gün: indirim ' + cy.counts['indirim'] + ', sabit ' + cy.counts['sabit']
       + ', artırım ' + cy.counts['artırım'] + ')' : ''));
     const reg = this.data.regime || [];
@@ -250,6 +283,12 @@ class FxPage extends AnalysisPage {
   constructor(host, ctx) { super(host, ctx, 'fx'); }
 
   build() {
+    this.sum = panel('quant-fx-summary', 'Parite özeti · carry, beklenen kayma, tampon, karar');
+    this.sum.note.textContent = 'Carry: bazı forward\'la tutmanın yıllık getirisi (ln S − ln F) × 365 / gün, en kısa forward\'tan (USDTRY: 1A / 3A / 6A / 1Y de). '
+      + 'Beklenen kayma: günlük log getirilerin EWMA\'sı (λ 0,97) yıllık, kendi kesinliğiyle sıfıra doğru küçültülmüş (gürültü olan kayma tahmin sayılmaz; ağırlık '
+      + 'sütunda). Beklenen getiri (long): kayma + carry. Tampon: carry\'yi alan tarafın beklenen getirisi (− ise kayma carry\'yi yiyor). Karar: beklenen getiri ÷ vol '
+      + 'masa eşiğini geçerse ilgili para birimi long / short, yoksa nötr. Forward\'ı olmayan pariteye carry uydurulmaz.';
+    this.boxes.sum = new GridBox(this.sum, 'quant/fx/summary');
     this.vol = panel('quant-fx-vol', 'İma − gerçekleşen vol ve GARCH tahmini (3M ATM)');
     this.vol.note.textContent = 'Gerçekleşen: günlük log getirilerin σ\'sı × √252, 21 / 63 / 126 gün. Vol primi = ima − 63 günlük; GARCH(1,1) (ızgara üzerinde en çok olabilirlik, '
       + 'uzun dönem varyans hedefli) önümüzdeki 63 iş gününün ortalama vol\'ü; EWMA λ 0,94. + z: vol pahalı (sat), − z: ucuz (al). Skew β: 25D RR\'nin spotun %1\'lik '
@@ -263,11 +302,19 @@ class FxPage extends AnalysisPage {
     this.fwd.note.textContent = 'İma değer kaybı: (F/S − 1) × 365 / gün; beklenen kayma: günlük getirilerin EWMA\'sı (λ 0,97) yıllık; gerçekleşen: vade kadar geriye. '
       + 'Tampon = ima − beklenen; + z: forward kaybı fazla fiyatlıyor → carry (TRY al), − z: tersi. USDTRY trendde ise sinyal bekletilir.';
     this.boxes.fwd = new GridBox(this.fwd, 'quant/fx/fwd', (sid) => this.pick(sid));
-    this.frame('FX Vol Primi & Carry', [this.vol, this.carry, this.fwd]);
+    this.frame('FX Vol Primi & Carry', [this.sum, this.vol, this.carry, this.fwd]);
   }
 
   fillPage() {
     const entry = (this.data.settings || {}).entry_z || 2;
+    const fs = this.data.fxsum || {};
+    const term = (r) => Object.entries(r.term || {}).map(([t, v]) => t + ' ' + sgn(v, 1)).join(' · ');
+    this.boxes.sum.set(['Parite', 'Grup', 'Spot', 'Carry % / yıl (long)', 'Forward\'lar', 'Beklenen kayma % / yıl', 'Kayma ağırlığı', 'Beklenen getiri (long) % / yıl',
+      'Tampon (carry tarafı)', 'Vol', 'Getiri / vol', 'Karar'], (fs.rows || []).map((r) => [T(r.pair, { b: 1 }), T(r.group), N(r.spot, 4), N(r.carry_long, 1, { sign: true }),
+      T(term(r)), N(r.drift, 1, { sign: true, tip: isNum(r.drift_raw) ? 'küçültülmeden: ' + sgn(r.drift_raw, 1) : '' }), T(pct(r.drift_w)), N(r.exp_long, 1, { sign: true }),
+      N(r.buffer, 1, { sign: true, cls: isNum(r.buffer) && r.buffer < 0 ? 'soft' : '' }), T(isNum(r.vol) ? fmt(r.vol, 1) + ' (' + r.vol_src + ')' : ''),
+      N(r.sharpe, 2, { sign: true }), T(r.verdict || '', { b: 1, cls: r.verdict && r.verdict.endsWith('long') ? 'thru' : (r.verdict === 'nötr' ? 'soft' : '') })]), null,
+    fs.why || 'Spot / forward tarihçesi yok');
     const rows = (this.data.vol || {}).rows || [];
     this.boxes.vol.set(['Parite', 'İma', 'Gerç. 21g', 'Gerç. 63g', 'Gerç. 126g', 'Prim', 'Prim z', 'EWMA', 'GARCH', 'α', 'β', 'İma − GARCH', 'z', 'Skew β (t)'],
       rows.map((r) => [T(r.pair, { b: 1 }), N(r.iv, 2), N(r.rv21, 2), N(r.rv63, 2), N(r.rv126, 2), N(r.vrp, 2, { sign: true }), Z(r.vrp_z, entry), N(r.ewma, 2), N(r.garch, 2),
@@ -305,7 +352,9 @@ class MacroPage extends AnalysisPage {
     const entry = (this.data.settings || {}).entry_z || 2;
     const labels = m.driver_labels || [];
     const rows = m.rows || [];
-    this.boxes.betas.set(['Vade', 'Gün', 'R²', 'σ (bp)'].concat(labels.map((l) => 'β ' + l)), rows.map((r) => [T(r.label, { b: 1 }), N(r.n, 0), N(r.r2, 2), N(r.sigma, 1)]
+    this.boxes.betas.set(['Hedef', 'Gün', 'R²', 'σ', 'Geri dönüş β (t)'].concat(labels.map((l) => 'β ' + l)), rows.map((r) => [T(r.label, { b: 1 }), N(r.n, 0), N(r.r2, 2),
+      N(r.sigma, r.unit === '%' ? 3 : 1, { unit: r.unit || 'bp' }), T(isNum(r.rev_beta) ? sgn(r.rev_beta, 2) + ' (' + fmt(r.rev_t, 1) + ')' : '',
+        { tip: 'Kalıntının ertesi hafta geri dönen payı: sonraki 5 günün hareketinin bugünkü kalıntıya regresyonu (− ise geri döner)' })]
       .concat(labels.map((_, i) => (r.betas ? N(r.betas[i], 3, { sign: true, tip: 't = ' + fmt((r.t || [])[i], 1), cls: isNum((r.t || [])[i]) && Math.abs(r.t[i]) >= 2 ? 'thru' : '' })
         : T(r.error || '', { cls: 'soft' }))))), rows.map((r) => 'macro:' + r.key), m.why || 'Veri yok', this.picked);
     this.boxes.attr.set(['Vade', 'Ne zaman', 'Hareket', 'Küresel', 'TRY\'ye özgü', 'z'].concat(labels), rows.filter((r) => r.today).map((r) => [T(r.label, { b: 1 }), T(r.today.when),

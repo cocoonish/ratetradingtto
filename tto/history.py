@@ -520,9 +520,10 @@ class MpcMachine(object):
         control = calc.get(si, *divmod(parse_a1("AU11"), COLS))
         allowed = calc.get(si, *divmod(parse_a1("AU6"), COLS))         # the sheet's own rule: AU11 > 5·AU6 is "tutarsız"
         b2 = calc.get(si, *divmod(parse_a1("B2"), COLS))
+        fit_base = calc.get(mi, *divmod(parse_a1("K4"), COLS))         # the level the solver itself starts the path from
         self.solves += 1
         return {"rows": rows, "status": status if isinstance(status, str) else "",
-                "control": control if type(control) is float else None,
+                "control": control if type(control) is float else None, "fit_base": fit_base if type(fit_base) is float else None,
                 "tolerance": 5.0 * allowed if type(allowed) is float else None, "base": base, "decision": decision,
                 "spot": _iso(serial_to_date(b2)) if type(b2) is float and 20000 < b2 < 80000 else None,
                 "unknown": sorted(prov.unknown)}
@@ -554,6 +555,7 @@ class History(object):
         self._snap: Optional[Tuple[int, Dict[str, Any]]] = None
         self._empty: Dict[str, str] = {}               # series without any history -> the day it was asked (once a day)
         self._empty_day = ""                           # the day _empty was read for (from the store's records)
+        self._tailed: Dict[str, Tuple[str, bool]] = {}  # a once-a-day series -> the day its new days were asked, after 07:00
         self._force = False                            # the next pass recomputes every day
         self.state: Dict[str, Any] = {"phase": "idle", "done": 0, "total": 0, "error": "", "last_sync": None,
                                       "fetched": 0, "computed": 0}
@@ -699,10 +701,12 @@ class History(object):
                                       info={"isin": isin, "name": "" if name.startswith("#") else name, "type": kind,
                                             "maturity": _iso(maturity) if maturity else None, "row": r,
                                             "bist": bist if type(bist) is float else None}))
-        # the global drivers and FX series of the quant signals (tto.quant): kept like the others, two years back
-        from .quant import history_defs
+        # the global drivers and FX series of the quant signals (tto.quant): kept like the others, two years back - and
+        # the series of the history's own the quant analyses read, two years back as well
+        from .quant import extend_for_quant, fx_pair_list, history_defs
+        extend_for_quant(defs)
         fx = getattr(self.svc, "fx", None)
-        defs.extend(history_defs(fx.source() if fx is not None else "BGN"))
+        defs.extend(history_defs(fx.source() if fx is not None else "BGN", fx_pair_list(self.store)))
         holidays: List[float] = []
         mi = model.sheet_index.get("Motor")
         if mi is not None:
@@ -1010,6 +1014,7 @@ class History(object):
         if recompute:
             self._force = True
         self._empty.clear()                            # series that had no history are asked again
+        self._tailed.clear()                           # ... and the once-a-day ones their new days
         self.kick()
         self.start(force=True)
         return self.status()
@@ -1092,7 +1097,11 @@ class History(object):
         * otherwise only the **new days**: from the last close on (``OVERLAP_DAYS`` before it, for its final value);
         * a series without any history is asked once a day (a manual update asks again: :meth:`request_sync`);
         * live, the series marked ``backfill`` get their first full range ``BACKFILL_PER_SYNC`` at a time (the others
-          wait for the next syncs: ``state["backfill"]``)."""
+          wait for the next syncs: ``state["backfill"]``); the ones marked ``"extend"`` (the history's own the quant
+          analyses read two years back) fill their own window first, in full, and the older part afterwards that way -
+          only the part they miss, a week into what they have (an answer with nothing in it is no answer);
+        * the series marked ``tail: "daily"`` (the quant package's: the analyses read the closes before today) ask
+          their new days once a day - after 07:00, when yesterday's close is final (and once at a start before it)."""
         snap = self.snapshot()
         today = snap["today"]
         today_iso = _iso(today)
@@ -1105,22 +1114,38 @@ class History(object):
             self._empty_day = today_iso
             self._empty = {sid: today_iso for sid, r in records.items() if r.get("day") == today_iso and sid not in bounds}
         rationed = self.svc.mode == "live"
-        backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]]]] = []
-        full: Dict[Tuple[str, _dt.date], List[str]] = {}
-        tail: Dict[Tuple[str, _dt.date], List[str]] = {}
+        hour = self._hour()
+        backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], bool]] = []
+        full: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
+        tail: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
 
-        def recent(field: str, t: str, b: Tuple[str, str, int]) -> None:
+        def recent(field: str, t: str, b: Tuple[str, str, int], daily: bool) -> None:
+            if daily:
+                sid = "%s|%s" % (t, field)
+                last = self._tailed.get(sid)
+                if last is not None and last[0] == today_iso and (last[1] or hour < 7.0):
+                    return                                     # asked today already (after 07:00, or it is not 07:00 yet)
+                self._tailed[sid] = (today_iso, hour >= 7.0)
             start = min(today, _day(b[1])) - _dt.timedelta(days=self.OVERLAP_DAYS)
-            tail.setdefault((field, start), []).append(t)
+            tail.setdefault((field, start, today), []).append(t)
+
+        def ask(field: str, t: str, since: _dt.date, b: Optional[Tuple[str, str, int]]) -> None:
+            # the whole window for a series without closes; the part before its first close (a week into it) else
+            end = today if b is None else min(today, _day(b[0]) + _dt.timedelta(days=7))
+            full.setdefault((field, since, end), []).append(t)
 
         for d in snap["defs"]:
-            # a series may ask for a longer past than the setting (the quant package's own: two years)
-            since = min(first, today - _dt.timedelta(days=int(d.info.get("lookback") or 0)))
-            reach = _iso(since + _dt.timedelta(days=20))
+            ext = d.info.get("backfill") == "extend"
+            daily = d.info.get("tail") == "daily"
+            lookback = int(d.info.get("lookback") or 0)
             for t in [d.ticker] + d.alts:
                 sid = "%s|%s" % (t, d.field)
                 b = bounds.get(sid)
                 rec = records.get(sid) or {}
+                # a series may ask for a longer past than the setting (the quant package's: two years; the history's own
+                # it reads: two years too, once their own window is in)
+                since = min(first, today - _dt.timedelta(days=lookback)) if lookback and (not ext or b is not None) else first
+                reach = _iso(since + _dt.timedelta(days=20))
                 if b is None:
                     if self._empty.get(sid) == today_iso:
                         continue                               # asked today, nothing came: not again before tomorrow
@@ -1128,30 +1153,29 @@ class History(object):
                 else:
                     # the window reaches further back than anything asked so far (and not asked today)
                     wanted = b[0] > reach and str(rec.get("from") or "9999") > reach and rec.get("day") != today_iso
-                if wanted and rationed and d.info.get("backfill"):
+                if wanted and rationed and (d.info.get("backfill") is True or (ext and b is not None)):
                     # (in turn: a series never asked before goes ahead of one asked again by hand)
-                    backfill.append((1 if sid in records else 0, len(backfill), d.field, t, since, b))
+                    backfill.append((1 if sid in records else 0, len(backfill), d.field, t, since, b, daily))
                 elif wanted:
-                    full.setdefault((d.field, since), []).append(t)
-                elif b is not None:
-                    recent(d.field, t, b)
+                    ask(d.field, t, since, b)
+                elif b is not None and not (daily and rec.get("day") == today_iso and rec.get("from")):
+                    recent(d.field, t, b, daily)               # (a once-a-day series asked in full today has its last close)
         backfill.sort()
-        for _, _, field, t, since, b in backfill[:self.BACKFILL_PER_SYNC]:
-            full.setdefault((field, since), []).append(t)
-        for _, _, field, t, since, b in backfill[self.BACKFILL_PER_SYNC:]:
+        for _, _, field, t, since, b, _ in backfill[:self.BACKFILL_PER_SYNC]:
+            ask(field, t, since, b)
+        for _, _, field, t, since, b, daily in backfill[self.BACKFILL_PER_SYNC:]:
             if b is not None:
-                recent(field, t, b)                            # what it has stays up to date meanwhile
-        self.state["backfill"] = {"waiting": ["%s|%s" % (t, f) for _, _, f, t, _, _ in backfill[self.BACKFILL_PER_SYNC:]],
+                recent(field, t, b, daily)                     # what it has stays up to date meanwhile
+        self.state["backfill"] = {"waiting": ["%s|%s" % (t, f) for _, _, f, t, _, _, _ in backfill[self.BACKFILL_PER_SYNC:]],
                                   "per_sync": self.BACKFILL_PER_SYNC if rationed else None}
         prov = self.svc.provider
         changed = 0
-        end = today.strftime("%Y%m%d")
         for group in (full, tail):
-            for (field, start), tickers in group.items():
+            for (field, start, stop), tickers in group.items():
                 tickers = sorted(set(tickers))
                 if not tickers or self._stop.is_set():
                     continue
-                got = prov.history([(t, field) for t in tickers], start.strftime("%Y%m%d"), end, timeout=120.0)
+                got = prov.history([(t, field) for t in tickers], start.strftime("%Y%m%d"), stop.strftime("%Y%m%d"), timeout=120.0)
                 for t in tickers:
                     rows = got.get((t, field))
                     sid = "%s|%s" % (t, field)
@@ -1169,6 +1193,15 @@ class History(object):
                 if group is full:
                     self.store.put(self.FETCH_KEY, records)     # at once: a sync cut short still counts what it asked
         return changed
+
+    def _hour(self) -> float:
+        """The hour of the day by the workbook's clock (a test's fixed one, else the machine's)."""
+        book = self.svc.books.get(BOOK)
+        try:
+            return (float(book.engine.clock.now()) % 1.0) * 24.0
+        except Exception:  # noqa: BLE001 - no workbook: the machine's
+            n = _dt.datetime.now()
+            return n.hour + n.minute / 60.0
 
     def fill_states(self) -> Dict[str, str]:
         """Per series (by its main id): ``"ok"`` (it has closes), ``"filling"`` (its first full range is still waiting
@@ -1296,7 +1329,7 @@ class History(object):
                                      "status": res["status"], "note": note, "base": res["base"],
                                      "decision": res["decision"], "control": res.get("control"),
                                      "tolerance": res.get("tolerance"), "carried": p.get("carried"),
-                                     "cleaned": p.get("cleaned") or ""}, res["rows"])
+                                     "cleaned": p.get("cleaned") or "", "fit_base": res.get("fit_base")}, res["rows"])
             except Exception as exc:  # noqa: BLE001 - one bad day must not stop the others
                 self.store.mpc_save(_iso(p["day"]), p["basis"],
                                     {"spot": _iso(p["spot"]), "tlref": p["tlref"], "quotes": len(p["quotes"]),

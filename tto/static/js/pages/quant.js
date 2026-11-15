@@ -156,7 +156,7 @@ class SignalsPage extends QuantPage {
         : h('input', { class: 'inp', id: 'quant-set-' + k, value: Array.isArray(v) ? v.join(', ') : String(v),
           title: d.limits[k] ? 'aralık ' + d.limits[k][0] + ' – ' + d.limits[k][1] : '' });
       if (choices) inp.value = String(v);
-      if (k === 'rv_items') inp.classList.add('wide');
+      if (k === 'rv_items' || k === 'fx_pairs') inp.classList.add('wide');
       inputs[k] = inp;
       form.appendChild(h('label', { class: 'field' }, h('span', null, label), inp));
     }

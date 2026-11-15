@@ -45,7 +45,8 @@ DEFAULTS: Dict[str, Any] = {
     "corr_windows": [20, 60, 120], "corr_min": 0.3, "mom_entry": 1.5, "ma_fast": 20, "ma_slow": 60, "vr_q": 10, "regime_window": 250,
     "log_days": 20, "kalman_q": 0.01, "model_hit": 0.55, "model_min_tests": 40, "model_l2": 5.0, "cycle_bp": 100.0, "cycle_t": 2.0,
     "dv01_base": 10000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
-    "desk_alarm": "Güçlü",
+    "desk_alarm": "Güçlü", "carry_margin": 0.5, "fx_verdict": 0.3,
+    "fx_pairs": "USDTRY, EURTRY, EURUSD, USDZAR, USDMXN, USDBRL, USDINR, USDIDR, USDHUF, USDPLN, USDCOP",
 }
 #: which signals also ring as the desk's alarms (deskalarms.py, for everyone): at least this strong, or none
 DESK_ALARM_CHOICES = ("kapalı", "Zayıf", "Orta", "Güçlü")
@@ -56,6 +57,7 @@ LIMITS: Dict[str, Tuple[float, float, type]] = {
     "mom_entry": (0.25, 5.0, float), "ma_fast": (2, 120, int), "ma_slow": (5, 250, int), "vr_q": (2, 30, int), "regime_window": (60, 750, int),
     "log_days": (1, 120, int), "kalman_q": (1e-6, 1.0, float), "model_hit": (0.5, 0.9, float), "model_min_tests": (10, 200, int),
     "model_l2": (0.0, 100.0, float), "cycle_bp": (10.0, 1000.0, float), "cycle_t": (0.5, 10.0, float), "dv01_base": (1.0, 1e9, float),
+    "carry_margin": (0.0, 3.0, float), "fx_verdict": (0.0, 3.0, float),
 }
 LABELS = {
     "entry_z": "Giriş eşiği |z|", "target_z": "Hedef z (ortalamaya göre)", "stop_z": "Stop |z|", "horizon": "Elde tutma ufku (iş günü)",
@@ -66,6 +68,8 @@ LABELS = {
     "model_min_tests": "Model en az test noktası", "model_l2": "Model L2 cezası", "cycle_bp": "PPK fazı eşiği (TLREF 3A değişimi, bp)",
     "cycle_t": "PPK sinyali için |t| en az", "dv01_base": "Paket DV01'i (TRY / bp, ana bacak)", "rv_items": "PCA-nötr spread ve fly'lar",
     "desk_alarm": "Masa alarmına düşen en az güç",
+    "carry_margin": "Carry aleyhine işlemde tampon (ufuk σ'sı)", "fx_verdict": "Parite kararı için en az beklenen getiri / vol",
+    "fx_pairs": "FX pariteleri (Bloomberg geçmişi: ilk doldurma turda 5 seri)",
 }
 
 #: the history keeps this series this many calendar days back (about two years)
@@ -81,28 +85,69 @@ PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PC
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
-EM_PAIRS = ("USDZAR", "USDMXN", "USDBRL", "USDINR", "USDIDR", "USDHUF", "USDPLN", "USDCOP")
+G10 = ("USD", "EUR", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD", "NOK", "SEK", "DKK")
+#: the forward tenors kept per pair: USDTRY its term structure (the carry of any holding), the others the 3M
+TRY_TENORS = ("1M", "3M", "6M", "1Y")
 
 
-def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
-    """The tickers the quant analyses need that the workbook does not keep: ``{key, label, ticker, kind, group}``.
-    Every one of them is to be checked on the terminal (README, "Quant sinyaller")."""
+def pair_group(code: str) -> str:
+    """TRY (USDTRY and the TRY crosses), G10 (both currencies), EM (the rest - the EM FX basket's members)."""
+    if "TRY" in code:
+        return "TRY"
+    if code[:3] in G10 and code[3:] in G10 and "CNH" not in code:
+        return "G10"
+    return "EM"
+
+
+def parse_pairs(text: Any) -> List[str]:
+    """The pair codes of a setting ("USDTRY, EURUSD …"): six letters each, USDTRY always first, no repeats."""
+    raw = text if isinstance(text, (list, tuple)) else str(text or "").replace(";", ",").replace("\n", ",").split(",")
+    out = ["USDTRY"]
+    for x in raw:
+        code = str(x).strip().upper().replace("/", "").replace(" ", "")
+        if not code:
+            continue
+        if len(code) != 6 or not code.isalpha() or code[:3] == code[3:]:
+            raise ValueError("parite anlaşılamadı: %r (örn. USDTRY, EURUSD)" % str(x).strip())
+        if code not in out:
+            out.append(code)
+    if len(out) > 40:
+        raise ValueError("en çok 40 parite")
+    return out
+
+
+def fx_pair_list(store: Any) -> List[str]:
+    """The pairs of the desk's quant setting (the defaults without one) - the history keeps their series."""
+    saved = store.get(Quant.SET_KEY) if store is not None else None
+    text = saved.get("fx_pairs") if isinstance(saved, dict) and saved.get("fx_pairs") else DEFAULTS["fx_pairs"]
+    try:
+        return parse_pairs(text)
+    except ValueError:
+        return parse_pairs(DEFAULTS["fx_pairs"])
+
+
+def series_specs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None) -> List[Dict[str, str]]:
+    """The tickers the quant analyses need that the workbook does not keep: ``{key, label, ticker, kind, group}`` - per
+    pair of ``pairs`` (the setting's list; its defaults) the spot, the 3M forward points (USDTRY 1M / 3M / 6M / 1Y) and,
+    but for the TRY crosses, the ATM 3M vol and the 25D risk reversal; the global drivers.  Every one of them is to be
+    checked on the terminal (README, "Quant sinyaller")."""
     out: List[Dict[str, str]] = []
 
     def add(key: str, label: str, ticker: str, kind: str, group: str) -> None:
         out.append({"key": key, "label": label, "ticker": ticker, "kind": kind, "group": group})
 
-    pairs = {code: fxm._pair(code, "EM" if code in EM_PAIRS else "FX", 4) for code in ("USDTRY", "EURUSD", "EURTRY") + EM_PAIRS}
-    for code, p in pairs.items():
-        add("FX:" + code, code, fxm.spot_ticker(p), "fx", p.group)
-    for code in ("USDTRY", "EURUSD") + EM_PAIRS:
-        add("FXV:" + code, "%s ATM 3M vol" % code, fxm.vol_ticker(code, "ATM", "3M", source), "vol", pairs[code].group)
-        add("FXR:" + code, "%s 25D RR 3M" % code, fxm.vol_ticker(code, "RR25", "3M", source), "vol", pairs[code].group)
-    for tenor in ("1M", "3M", "6M", "1Y"):
-        add("FXP:USDTRY:" + tenor, "USDTRY %s swap puanı" % tenor, fxm.points_ticker(pairs["USDTRY"], tenor), "pts", "FX")
-    add("FXP:EURTRY:3M", "EURTRY 3M swap puanı", fxm.points_ticker(pairs["EURTRY"], "3M"), "pts", "FX")
-    for code in EM_PAIRS:
-        add("FXP:%s:3M" % code, "%s 3M swap puanı" % code, fxm.points_ticker(pairs[code], "3M"), "pts", "EM")
+    codes = parse_pairs(DEFAULTS["fx_pairs"] if pairs is None else pairs)
+    known = {p.code: p for p in fxm.PAIRS}
+    objs = {code: known.get(code) or fxm._pair(code, pair_group(code), 3 if code.endswith("JPY") else 4) for code in codes}
+    for code in codes:
+        add("FX:" + code, code, fxm.spot_ticker(objs[code]), "fx", pair_group(code))
+    for code in codes:
+        if code == "USDTRY" or "TRY" not in code:
+            add("FXV:" + code, "%s ATM 3M vol" % code, fxm.vol_ticker(code, "ATM", "3M", source), "vol", pair_group(code))
+            add("FXR:" + code, "%s 25D RR 3M" % code, fxm.vol_ticker(code, "RR25", "3M", source), "vol", pair_group(code))
+    for code in codes:
+        for tenor in (TRY_TENORS if code == "USDTRY" else ("3M",)):
+            add("FXP:%s:%s" % (code, tenor), "%s %s swap puanı" % (code, tenor), fxm.points_ticker(objs[code], tenor), "pts", pair_group(code))
     add("UST:2Y", "UST 2Y", "USGG2YR Index", "rate", "Global")
     add("UST:10Y", "UST 10Y", "USGG10YR Index", "rate", "Global")
     add("DXY", "DXY", "DXY Curncy", "index", "Global")
@@ -112,9 +157,9 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
     return out
 
 
-#: the order the first backfill takes them in (live: a few a sync): the global drivers, the spots, the ATM vols, the
-#: forward points, the risk reversals
-BACKFILL_ORDER = ("Global", "FX:", "FXV:", "FXP:", "FXR:")
+#: the order the first backfill takes them in (live: a few a sync): the global drivers, the spots, the forward points
+#: (with the spots: the carry of every pair), the ATM vols, the risk reversals
+BACKFILL_ORDER = ("Global", "FX:", "FXP:", "FXV:", "FXR:")
 
 
 def _backfill_rank(spec: Dict[str, str]) -> int:
@@ -123,15 +168,28 @@ def _backfill_rank(spec: Dict[str, str]) -> int:
     return next((i for i, p in enumerate(BACKFILL_ORDER) if i and spec["key"].startswith(p)), len(BACKFILL_ORDER))
 
 
-def history_defs(source: str = fxm.DEFAULT_SOURCE) -> List[Any]:
+def history_defs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None) -> List[Any]:
     """The series above as definitions of the history (``tto.history.SeriesDef``): fetched with its normal sync, two
     years back (``info["lookback"]``) - the first time a few per sync in live mode (``info["backfill"]``), in the order
-    of ``BACKFILL_ORDER`` - and shown on the settings page's coverage table under "Quant"."""
+    of ``BACKFILL_ORDER`` -, their recent days once a day only (``info["tail"]``: the analyses read the closes before
+    today; today's values stream), shown on the settings page's coverage table under "Quant"."""
     from .history import SeriesDef
-    specs = sorted(series_specs(source), key=_backfill_rank)
+    specs = sorted(series_specs(source, pairs), key=_backfill_rank)
     return [SeriesDef("Quant", s["label"], s["ticker"], "PX_LAST", unit="pct" if s["kind"] == "rate" else "px",
-                      info={"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": HISTORY_DAYS, "backfill": True})
+                      info={"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": HISTORY_DAYS, "backfill": True, "tail": "daily"})
             for s in specs]
+
+
+#: the history's own series the analyses read (the OIS curve, offshore, the XCCY, TLREF, DİBS): kept two years back as
+#: well - the first fill as the history's own setting says, the year before it afterwards, a few series a sync
+QUANT_GROUPS = ("ref", "ois", "off", "xccy", "dibs")
+
+
+def extend_for_quant(defs: Sequence[Any]) -> None:
+    """Mark the history's own series the quant analyses read for two years of closes (see ``QUANT_GROUPS``)."""
+    for d in defs:
+        if d.group in QUANT_GROUPS:
+            d.info = dict(d.info or {}, lookback=HISTORY_DAYS, backfill="extend")
 
 
 # ---------------------------------------------------------------------------------------------- small helpers
@@ -210,6 +268,7 @@ class Quant(object):
         if not isinstance(values, dict):
             raise QuantError("ayarlar anlaşılamadı")
         cur = self.settings()
+        pairs_changed = False
         for name, raw in values.items():
             if name in LIMITS:
                 lo, hi, typ = LIMITS[name]
@@ -234,6 +293,14 @@ class Quant(object):
                 if not items or any(it["product"] != "OIS" or it["kind"] not in ("spread", "fly") for it in items):
                     raise QuantError("yalnızca OIS spread'i (1y2y) ve fly'ı (2y5y10y) yazılabilir")
                 cur[name] = ", ".join(it["raw"] for it in items)
+            elif name == "fx_pairs":
+                try:
+                    codes = parse_pairs(raw)
+                except ValueError as exc:
+                    raise QuantError(str(exc))
+                if codes != parse_pairs(cur.get("fx_pairs") or DEFAULTS["fx_pairs"]):
+                    pairs_changed = True
+                cur[name] = ", ".join(codes)
             elif name == "desk_alarm":
                 choice = next((c for c in DESK_ALARM_CHOICES if c.casefold() == str(raw or "").strip().casefold()), None)
                 if choice is None:
@@ -248,6 +315,12 @@ class Quant(object):
         cur["by"], cur["at"] = user, _now().isoformat(sep=" ")
         self.store.put(self.SET_KEY, cur)
         self._force = True
+        if pairs_changed:
+            try:
+                self.svc.bump()                              # the history reads its list of series again (a new pair's tickers)
+                self.svc.history.kick()
+            except Exception:  # noqa: BLE001
+                pass
         self.kick()
         return self.settings_view()
 
@@ -417,7 +490,11 @@ class Quant(object):
             source = self.svc.fx.source()
         except Exception:  # noqa: BLE001
             source = fxm.DEFAULT_SOURCE
-        return {s["key"]: s for s in series_specs(source)}
+        try:
+            pairs = parse_pairs(self.settings().get("fx_pairs") or DEFAULTS["fx_pairs"])
+        except ValueError:
+            pairs = None
+        return {s["key"]: s for s in series_specs(source, pairs)}
 
     def _fwd_scales(self, live: bool) -> Dict[str, int]:
         """Bloomberg's FWD_SCALE of each forward-points ticker (live only, asked once a day); 4 (2 for the yen) else."""
@@ -541,7 +618,8 @@ class Quant(object):
                        if r["day"] == day and r.get("level") is not None)
         if not steps:
             return None
-        return {"day": day, "spot": _dt.date.fromisoformat(days[day]["spot"]), "base": days[day]["base"], "steps": steps}
+        return {"day": day, "spot": _dt.date.fromisoformat(days[day]["spot"]), "base": days[day]["base"], "steps": steps,
+                "fit_base": days[day].get("fit_base")}
 
     @staticmethod
     def _front(viop: List[Dict[str, Any]], today: _dt.date) -> Optional[Dict[str, Any]]:
@@ -677,6 +755,14 @@ class Quant(object):
             if m is not None and m.z is not None:
                 r["score"] = m.z
                 r["level"] = m.level
+        try:
+            live = ctx.derive_live(ctx.live)
+            rows = []
+            for r in qf.fx_summary(ctx):
+                rows.append(dict(r, spot=ctx.cur("FX:" + r["pair"], live)))
+            t["fxsum"] = {"rows": rows, "threshold": float(fit["cfg"].get("fx_verdict", 0.3))}
+        except Exception as exc:  # noqa: BLE001 - the summary is not worth the page
+            t["fxsum"] = {"rows": [], "why": "%s: %s" % (type(exc).__name__, str(exc)[:160])}
         return t
 
     @staticmethod
@@ -943,7 +1029,7 @@ class Quant(object):
         if what == "signal":
             return self.signal_view(q.get("id"))
         pages = {"corr": ("corr",), "pca": ("pca", "rv", "frapath"), "pairs": ("pairs", "viopcal"), "regime": ("momentum", "cycle", "regime"),
-                 "fx": ("vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",)}
+                 "fx": ("fxsum", "vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",)}
         if what not in pages:
             raise QuantError("bilinmeyen görünüm: %s" % what)
         for name in pages[what]:
@@ -963,9 +1049,9 @@ class Quant(object):
         if what == "pairs":
             return key.startswith(("OFF:", "OIS:", "VIOP", "USD:", "FXP:USDTRY"))
         if what == "regime":
-            return any(key == k for k, _ in qf.MOM_UNIVERSE) or key == "TLREF"
+            return any(key == k for k, _ in qf.MOM_UNIVERSE) or key == "TLREF" or key.startswith(("FX:", "XR:"))
         if what == "fx":
-            return key.startswith(("FX", "FWD"))
+            return key.startswith(("FX", "FWD", "XR:"))
         if what == "macro":
             return key in qf.MACRO_DRIVERS or key in qf.MACRO_TARGETS
         if what == "model":

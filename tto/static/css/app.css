@@ -976,4 +976,9 @@ table.plain.agenda tr.done td.what .txt, table.plain.agenda tr.done td.when { te
 .quantpage .qfams { display: flex; flex-wrap: wrap; gap: 4px 12px; width: 100%; }
 .quantpage .qrow { display: flex; gap: 8px; align-items: center; padding: 0 12px 10px; }
 table.grid td.qs-güçlü { color: var(--accent-ink); font-weight: 650; }
+table.grid td.qs-elendi { color: var(--ink-3); font-style: italic; }
+table.grid td.qgate { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.quantpage table.plain.qgates { margin-top: 8px; }
+.quantpage table.plain.qgates tr.fail td { color: var(--ink-3); }
+.quantpage table.plain.qkv td { max-width: 640px; }
 .toast.qalert { cursor: pointer; }
