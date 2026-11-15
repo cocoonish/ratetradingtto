@@ -1092,7 +1092,7 @@ def test_a_user_with_inputs_of_their_own_follows_the_market_every_few_seconds(tm
         h = svc.header(u)
         evals = calc.evals
         svc.et.call(eng.invalidate, eng.input_mask[pinned[0][0]][pinned[0][1]] | eng.input_mask[pinned[-1][0]][pinned[-1][1]])
-        svc.bump()
+        svc.bump(market=True)                                                     # (a market move, as the market loop's)
         assert svc.header(u)["items"] == h["items"] and calc.evals == evals     # (kept: the market waits)
         svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!J2", "value": "0,30"}])  # their own change: at once
         mine = svc.header(u)
@@ -1101,7 +1101,7 @@ def test_a_user_with_inputs_of_their_own_follows_the_market_every_few_seconds(tm
         svc.set_inputs(w, "tto", [{"ref": "Forward!W40", "value": "41,5"}])
         assert svc.header(u)["gen"] == svc.gen != mine["gen"]                    # (checked now, not kept)
         svc.et.call(eng.invalidate, eng.input_mask[pinned[0][0]][pinned[0][1]])
-        svc.bump()
+        svc.bump(market=True)
         assert svc.header(u)["gen"] != svc.gen                                  # (the market: kept a while)
         # gone a while: their calculation is given back; back, it is made again with their value
         svc._seen[u] = -1e9
