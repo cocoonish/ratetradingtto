@@ -906,7 +906,7 @@ def test_quant_http_api(seeded):
         assert res.status_code == 200 and res.json()["ready"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
-        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 10          # (with İma Patikası and TCMB WIRP)
+        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 11          # (with İma Patikası, TCMB WIRP, Öncü-Takipçi)
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401

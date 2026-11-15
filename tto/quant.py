@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import fx as fxm
 from . import quantfam as qf
+from . import quantlead as ql
 from . import quantpath as qp
 from . import volcarry as vc
 from .service import ServiceError
@@ -68,9 +69,10 @@ LABELS = {
     "cycle_t": "PPK sinyali için |t| en az", "dv01_base": "Paket DV01'i (TRY / bp, ana bacak)", "rv_items": "PCA-nötr spread ve fly'lar",
     "desk_alarm": "Masa alarmına düşen en az güç",
 }
-DEFAULTS.update(qp.DEFAULTS)                    # the implied path's grids and the policy rate (quantpath.py)
-LIMITS.update(qp.LIMITS)
-LABELS.update(qp.LABELS)
+for _mod in (qp, ql):                           # the implied path's grids and policy rate, lead-lag's k and lag
+    DEFAULTS.update(_mod.DEFAULTS)
+    LIMITS.update(_mod.LIMITS)
+    LABELS.update(_mod.LABELS)
 
 #: the history keeps this series this many calendar days back (about two years)
 HISTORY_DAYS = 740
@@ -82,7 +84,7 @@ ALERT_KEEP = 300
 PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"),
          ("quant-regime", "Rejim & Momentum"), ("quant-fx", "FX Vol Primi & Carry"), ("quant-macro", "Makro Beta"),
          ("quant-model", "Tahmin Modeli"))
-PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"))          # quantpath.py
+PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))   # quantpath.py, quantlead.py
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -588,6 +590,7 @@ class Quant(object):
                 timing: Dict[str, float] = {}
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
                 qp.run(self, ctx, mons, tables, raw_live, timing)          # the implied path, the WIRP (quantpath.py)
+                ql.run(self, ctx, mons, tables, timing)                    # lead-lag (quantlead.py)
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx)}
@@ -619,6 +622,7 @@ class Quant(object):
             if front is not None and front["live"].get("imp") is not None:
                 raw_live["VIOPI:FRONT"] = front["live"]["imp"]
             qp.refresh(self, fit, raw_live)                                # the USD path now (quantpath.py)
+            ql.refresh(self, fit)                                          # intraday bars, when there are some (quantlead.py)
             ctx.live = dict(raw_live)
             qf.score_all(ctx, list(fit["mons"].values()), raw_live)
             self._publish(fit, raw_live, eng)
@@ -934,6 +938,8 @@ class Quant(object):
         t = v["tables"]
         if what in qp.VIEWS:                                # İma Patikası, TCMB WIRP (quantpath.py)
             return qp.view(self, what, base, v, fit)
+        if what in ql.VIEWS:                                # Öncü-Takipçi (quantlead.py)
+            return ql.view(self, what, base, v, fit)
         if what == "signals":
             fam, asset = q.get("family") or "", q.get("asset") or ""
 

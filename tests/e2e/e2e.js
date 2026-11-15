@@ -2275,6 +2275,18 @@ async function shot(page, name) {
     await shot(page, 'quant-wirp');
     await page.click('#quant-wirp-bank button[data-v="try"]');
 
+    // ------------------------------------------------------------------ lead-lag (quantlead.py)
+    console.log('lead-lag');
+    await open(page, 'quant-lead');
+    await page.waitForSelector('#quant-lead-pairs table.grid', { timeout: 30000 });
+    const leadApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/lead');
+    const lr = ((leadApi.json || {}).lead || {}).rows || [];
+    check('Öncü-Takipçi: every candidate pair listed (the recorded month is short: each says why), no intraday bars yet',
+      leadApi.status === 200 && lr.length >= 4 && lr.every((r) => r.leader || r.why)
+      && await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count() === lr.length
+      && /gün içi barlar yok/.test(await page.textContent('#quant-lead-intraday')), { rows: lr.length });
+    await shot(page, 'quant-lead');
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));

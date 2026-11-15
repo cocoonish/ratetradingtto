@@ -26,6 +26,7 @@ Families (``FAMILIES``) and what they score:
     model     L2 logistic regression of next week's direction, walk-forward validated
     imapath   the implied MPC / FOMC path against its grid: a period's kink against its neighbours (quantpath.py)
     imacal    the priced bigger move against what was decided: a calibration bias (quantpath.py)
+    leadlag   who moves first: a follower that has not caught up with its leader's move yet (quantlead.py)
 
 Units: rates are kept in per cent and move in bp; spreads, flies, residuals and CDS are in bp; FX levels move in per
 cent (log); vols in vol points.
@@ -63,6 +64,7 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "model": ("Tahmin modeli", "model", "quant-model"),
     "imapath": ("İma patikası ayrıklığı", "mr", "quant-path"),       # quantpath.py: kinks of the implied path
     "imacal": ("İma kalibrasyonu", "model", "quant-path"),          # quantpath.py: a bias of the priced bigger move
+    "leadlag": ("Öncü-takipçi", "model", "quant-lead"),             # quantlead.py: a follower that has not caught up
 }
 
 ASSETS = ("TRY OIS", "Offshore", "VİOP", "DİBS", "FX", "FX vol", "EM carry", "Global")

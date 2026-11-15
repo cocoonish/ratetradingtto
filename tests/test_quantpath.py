@@ -428,7 +428,7 @@ def test_quantpath_http_api_and_the_pages(pathsvc):
         svc.quant.compute()
         nav = client.get("/api/nav").json()["pages"]
         quant = [p["id"] for p in nav if p["group"] == "Quant"]
-        assert quant[-2:] == ["quant-path", "quant-wirp"] and ("quant-path", "İma Patikası") in PAGES and ("quant-wirp", "TCMB WIRP") in PAGES
+        assert quant.index("quant-wirp") == quant.index("quant-path") + 1 and ("quant-path", "İma Patikası") in PAGES and ("quant-wirp", "TCMB WIRP") in PAGES
         assert client.get("/static/js/pages/quantpath.js").status_code == 200
         assert client.get("/api/quant/path", headers={"Authorization": ""}).status_code == 401
 
