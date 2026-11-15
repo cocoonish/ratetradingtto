@@ -1623,6 +1623,12 @@ async function shot(page, name) {
       await open(page, 'broker');
       await open(page, 'dibs');
       await fresh(page);                                                  // (the page kept from before is dimmed until current)
+      // (a change made through the API reaches this tab with the next generation - within a second: the page kept from
+      // before shows until then)
+      await page.waitForFunction(() => {
+        const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[0] || {}).textContent === 'TRT160431T35');
+        return !!tr && /BGC/.test(tr.textContent);
+      }, null, { timeout: 20000 }).catch(() => {});
       const rvStale = await page.evaluate(() => {
         const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[0] || {}).textContent === 'TRT160431T35');
         const cells = tr ? [...tr.children].slice(-7, -1) : [];
