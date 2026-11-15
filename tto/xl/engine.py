@@ -152,7 +152,7 @@ class Engine(object):
             return 0
         if rc not in shared.memo[si]:
             try:
-                shared.cv(si, *divmod(rc, COLS))
+                shared.get(si, *divmod(rc, COLS))        # (get, not cv: a long chain is unwound and restarted)
             except Exception:  # noqa: BLE001 - a cell that cannot be computed now: the safe way, everything again
                 return 0
         return shared.maskd[si].get(rc, 0)

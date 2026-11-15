@@ -92,6 +92,24 @@ def test_a_formula_typed_over_later_drops_no_computed_value():
     assert eng.user("ali").value("S!D1") == 2060.0
 
 
+def test_a_formula_at_the_end_of_a_long_chain_typed_over_later_drops_nothing():
+    """The cell is computed first when it has not been - through the guard that unwinds long chains (300 deep here),
+    which must not end in dropping everything."""
+    cells = {"A1": 1, "B1": 5, "C1": "=B1*2"}
+    cells.update({"A%d" % i: "=A%d+1" % (i - 1) for i in range(2, 301)})
+    eng = mini_engine(cells)
+    a1, b1, a300 = (eng.model.cell_ref("S!%s" % a) for a in ("A1", "B1", "A300"))
+    c1 = eng.model.cell_ref("S!C1")
+    eng.declare_inputs([a1, b1])
+    assert eng.shared.value("S!C1") == 10.0
+    eng.declare_inputs([a300], group="adhoc")
+    assert eng.shared.memo[c1[0]].get(c1[1]) == 10.0                      # C1 kept: nothing was dropped
+    ali = eng.set_user_inputs("ali", {a300: 0.0})
+    assert ali.value("S!A300") == 0.0 and eng.shared.value("S!A300") == 300.0
+    eng.set_inputs({a1: 2.0})
+    assert eng.shared.value("S!A300") == 301.0 and ali.value("S!A300") == 0.0
+
+
 def test_a_constant_typed_over_later_still_computes_everything_again():
     """A cell that depends on no input (a constant): nothing tells what read it, so every value is computed again."""
     eng = chain()
