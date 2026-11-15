@@ -1344,7 +1344,7 @@ def test_quant_http_api(seeded):
         assert res.status_code == 200 and res.json()["ready"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
-        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 9 and quant[-1]["id"] == "quant-intraday"
+        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 11 and quant[8]["id"] == "quant-intraday" and quant[-1]["id"] == "quant-opt"
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401
