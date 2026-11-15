@@ -23,7 +23,7 @@ import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .compiler import ADDINS, Compiler
-from .errors import E_NA, E_NAME, E_REF, E_SPILL, E_VALUE, XlError
+from .errors import E_NA, E_NAME, E_NUM, E_REF, E_SPILL, E_VALUE, XlError
 from .model import COLS, Model, a1
 from .parser import parse_template, walk
 from .values import XlArray, XlRange, date_to_serial
@@ -522,6 +522,10 @@ class Calc(object):
         return _MISS
 
     def _store(self, si: int, rc: int, v: Any, k: int) -> Any:
+        if type(v) is float and v - v != 0.0:
+            # an overflow (1E308*10) or what follows from one (inf - inf): Excel shows #NUM! - and JSON has no
+            # infinity, a page holding one could not be sent at all
+            v = E_NUM
         parent = self.parent
         target = self if (parent is None or (k & self.omask)) else parent
         target.memo[si][rc] = v

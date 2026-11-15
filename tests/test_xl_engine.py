@@ -208,3 +208,34 @@ def test_deep_dependency_chain_does_not_overflow_the_stack():
         cells["A%d" % i] = "=A%d+1" % (i - 1)
     eng = mini_engine(cells)
     assert eng.shared.value("S!A4000") == 4000.0
+
+
+# ---------------------------------------------------------------------------------------------- overflow
+def test_an_overflow_is_num_not_infinity():
+    """Arithmetic past the largest float gives Python's infinity; Excel shows #NUM!.  JSON has no infinity: one such
+    value used to fail the whole page (a 500).  Whatever reads the cell sees #NUM! as well."""
+    from tto.xl.errors import E_NUM
+    eng = mini_engine({"A1": 1e308, "B1": "=A1*10", "B2": "=A1+A1", "B3": "=-A1*10", "B4": "=A1/1E-10",
+                       "B5": "=(A1*10)-(A1*10)", "B6": "=SUM(A1,A1)", "C1": "=ISERROR(B1)", "C2": "=IFERROR(B2,7)",
+                       "D1": "=A1*2/4", "D2": "=A1-1"})
+    calc = eng.shared
+    for ref in ("B1", "B2", "B3", "B4", "B5", "B6"):
+        assert calc.value("S!" + ref) is E_NUM, ref
+    assert calc.value("S!C1") is True and calc.value("S!C2") == 7.0
+    assert calc.value("S!D2") == 1e308                   # large but finite stays a number
+    # (the elements of an array result are stored one by one, through the same place)
+
+
+def test_an_infinity_that_reaches_the_renderer_is_shown_as_num():
+    """A value that never passed through a calculation (a pinned add-in result, a constant of the file) is not cleaned
+    by the engine: the renderer shows it as #NUM! too, and a chart leaves the point out."""
+    from helpers import mini_book
+    from tto.render import Renderer
+    from tto.xl import numfmt
+    from tto.xl.model import COLS, parse_a1
+    book = mini_book({"A1": 1.0, "A2": 2.0})
+    calc = book.engine.shared
+    rc = parse_a1("A2")
+    calc.memo[0][rc] = float("inf")
+    cell = Renderer(book).cell(calc, 0, *divmod(rc, COLS), numfmt.get_locale("tr"))
+    assert cell["t"] == "#NUM!" and cell["k"] == "e" and "v" not in cell

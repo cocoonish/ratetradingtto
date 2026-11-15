@@ -276,3 +276,20 @@ def test_errors_are_json_and_never_tracebacks(client):
     # a name in the query string (or in the old X-TTO-User header) signs nobody in: only a session does
     assert client.get("/api/view/masa?user=%s" % quote("çağrı öztürk"), headers=ANON).status_code == 401
     assert client.get("/api/view/masa", headers=dict(ANON, **{"X-TTO-User": quote("çağrı öztürk")})).status_code == 401
+
+
+def test_a_number_json_cannot_hold_is_sent_as_null_not_a_500(client, module_service, monkeypatch):
+    """Starlette writes JSON without infinity / NaN: one such number (a ratio worked out outside the engine) used to
+    turn the whole answer into a 500.  It is sent as null; everything else of the answer stays."""
+    real = module_service.status
+
+    def status():
+        out = real()
+        out["odd"] = {"inf": float("inf"), "nan": float("nan"), "list": [1.5, float("-inf")], "ok": 2.5}
+        return out
+
+    monkeypatch.setattr(module_service, "status", status)
+    res = client.get("/api/status")
+    assert res.status_code == 200
+    assert res.json()["odd"] == {"inf": None, "nan": None, "list": [1.5, None], "ok": 2.5}
+    assert res.json()["mode"] == "replay"

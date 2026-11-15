@@ -30,6 +30,29 @@ if not mimetypes.inited:
     mimetypes.init()
 
 
+def _finite(v: Any) -> Any:
+    """``v`` with every infinity / NaN replaced by ``None`` (JSON has neither)."""
+    if type(v) is float:
+        return v if v - v == 0.0 else None
+    if isinstance(v, dict):
+        return {k: _finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_finite(x) for x in v]
+    return v
+
+
+class _Json(JSONResponse):
+    """A JSON answer that survives a stray infinity / NaN: the engine turns those into ``#NUM!``, but a number worked
+    out elsewhere (a ratio of two closes, a z-score) could still be one - one such number used to fail the whole page
+    with a 500.  The common case costs nothing: the payload is cleaned only when it cannot be written as it is."""
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return super().render(content)
+        except ValueError:
+            return super().render(_finite(content))
+
+
 class _Static(StaticFiles):
     """Static files that the browser always revalidates (so an updated dashboard is picked up at once)."""
 
@@ -127,7 +150,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return await run_in_threadpool(fn, *args, **kw)
 
     def ok(data: Any) -> JSONResponse:
-        return JSONResponse(data)
+        return _Json(data)
 
     def handler(fn):
         async def wrapped(request: Request):
@@ -146,7 +169,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     # ------------------------------------------------------------------ sign-in, accounts
     def signed_in(request: Request, token: str, me: Dict[str, Any]) -> JSONResponse:
-        resp = JSONResponse(me)
+        resp = _Json(me)
         resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, path="/", httponly=True, samesite="strict",
                         secure=request.url.scheme == "https")
         return resp
