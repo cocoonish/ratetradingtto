@@ -10,11 +10,13 @@ in the vol tickers.  All of these were checked on the desk's terminal.
 
 **Forwards.**  USDTRY is the TRY desk's own: the forward of each tenor is the one the Forward page prices with the
 offshore curve (the ICAP implied TRY rates, ``EK_FWD``'s "TRY rates by tenor" table - its dates are the USDTRY spot
-date plus the tenor on the desk's holiday calendar) and the USD OIS of the same days:
+date plus the tenor on the desk's TRY and USD holiday lists) and the USD OIS of the same days:
 ``F = spot·(1 + TRY·g/360)/(1 + USD·g/360)``, the very formula of the free forward list.  A TRY cross (EURTRY) is
 the product of its USD legs: ``F = F(EURUSD)·F(USDTRY)``, so its TRY side is the offshore curve as well.  Any other
 pair: Bloomberg's spot plus its forward points.  Delivery dates of those: the spot date (two week days on) plus the
-tenor, the next week day.
+tenor, the next week day.  A pair of two currencies the desk keeps a holiday list of (TRY, USD, EUR: USDTRY, EURTRY,
+EURUSD) skips the holidays of both: its spot date is so many business days of both on (USDTRY one, as the Forward
+sheet's spot date, the others two), its tenors roll to the next such day.
 
 **Time.**  ``T`` is the days from the spot date to delivery over 365 - the time from today to expiry, give or take
 the two days of the spot lag at both ends.
@@ -156,23 +158,30 @@ def series_id(ticker: str) -> str:
 
 
 # ---------------------------------------------------------------------------------------------- dates
-def week_day_on_or_after(d: _dt.date) -> _dt.date:
-    while d.weekday() >= 5:
+#: the spot lag of a pair in business days, two unless named here: USDTRY settles the next day (the Forward sheet's
+#: spot date, Forward!I2)
+SPOT_LAG = {"USDTRY": 1}
+
+
+def week_day_on_or_after(d: _dt.date, holidays: Any = ()) -> _dt.date:
+    """The first week day from ``d`` on that is not one of ``holidays`` (dates)."""
+    while d.weekday() >= 5 or d in holidays:
         d += _dt.timedelta(days=1)
     return d
 
 
-def add_week_days(d: _dt.date, n: int) -> _dt.date:
+def add_week_days(d: _dt.date, n: int, holidays: Any = ()) -> _dt.date:
+    """``n`` week days after ``d``, ``holidays`` (dates) not counted."""
     while n > 0:
         d += _dt.timedelta(days=1)
-        if d.weekday() < 5:
+        if d.weekday() < 5 and d not in holidays:
             n -= 1
     return d
 
 
-def delivery(spot: _dt.date, tenor: str) -> _dt.date:
+def delivery(spot: _dt.date, tenor: str, holidays: Any = ()) -> _dt.date:
     weeks, months = TENOR_SPEC[tenor]
-    return week_day_on_or_after(spot + _dt.timedelta(days=weeks) if weeks else add_months(spot, months))
+    return week_day_on_or_after(spot + _dt.timedelta(days=weeks) if weeks else add_months(spot, months), holidays)
 
 
 def _lin(x: float, xs: Sequence[float], ys: Sequence[float]) -> float:
@@ -459,6 +468,22 @@ class Fx(object):
     def today(self) -> _dt.date:
         return self.svc.history.today()
 
+    def calendar(self, pair: Pair) -> frozenset:
+        """The days a value date of the pair skips besides the weekend: the desk's holidays of both its currencies when it
+        keeps a list of each (USDTRY, EURTRY, EURUSD); none for any other pair."""
+        from . import extras as ex
+        ccys = ex.pair_calendar(pair.code)
+        if not ccys:
+            return frozenset()
+        try:
+            return self._memoized(("calendar", ccys), lambda: self.svc.holiday_dates(ccys))
+        except Exception:  # noqa: BLE001 - a workbook without the lists: week days, as for any other pair
+            return frozenset()
+
+    def spot_date(self, pair: Pair, today: Optional[_dt.date] = None) -> _dt.date:
+        """The pair's spot date: its spot lag (``SPOT_LAG``) in business days of its calendar."""
+        return add_week_days(today or self.today(), SPOT_LAG.get(pair.code, 2), self.calendar(pair))
+
     def _try_book(self, user: Optional[str]) -> Optional[Dict[str, Any]]:
         """USDTRY from the TRY workbook: the spot of the Forward page's USDTRY table, the offshore curve's simple zero
         rate at each tenor of ``EK_FWD``'s rates-by-tenor table, the USD OIS of as many days."""
@@ -512,12 +537,13 @@ class Fx(object):
         """Spot and forward of each tenor from Bloomberg (spot + points / 10^FWD_SCALE)."""
         spot, why = self.value(spot_ticker(pair))
         out: Dict[str, Any] = {"spot": spot, "spot_why": why, "tenors": {}, "spot_date": spot_date, "source": "bbg"}
+        holidays = self.calendar(pair)
         for t in tenors:
             tk = points_ticker(pair, t)
             pts, pwhy = self.value(tk)
             scale, _ = self.value(tk, "FWD_SCALE")
             sc = int(scale) if scale is not None and 0 <= scale <= 8 else pair.scale
-            day = delivery(spot_date, t)
+            day = delivery(spot_date, t, holidays)
             row: Dict[str, Any] = {"date": day, "days": float((day - spot_date).days), "points": pts, "scale": sc,
                                    "ticker": tk, "why": pwhy}
             if spot is not None and pts is not None:
@@ -531,7 +557,7 @@ class Fx(object):
 
     def _curve(self, user: Optional[str], pair: Pair) -> Dict[str, Any]:
         today = self.today()
-        spot_date = add_week_days(today, 2)
+        spot_date = self.spot_date(pair, today)
         if pair.code == "USDTRY":
             book = self._try_book(user)
             if book and book.get("tenors"):
@@ -542,13 +568,22 @@ class Fx(object):
         if pair.quote == "TRY" and pair.base != "USD":
             leg = self.curve(user, self.pair_or_build(pair.base + "USD"))
             usd = self.curve(user, self.pair("USDTRY"))
-            out: Dict[str, Any] = {"spot": None, "tenors": {}, "spot_date": usd["spot_date"], "source": "cross",
-                                   "legs": [pair.base + "USD", "USDTRY"]}
+            # EURTRY dates its tenors on its own calendar (TRY and EUR, from its own spot date); any other cross takes
+            # those of its USDTRY leg
+            from . import extras as ex
+            own = bool(ex.pair_calendar(pair.code))
+            holidays = self.calendar(pair)
+            out: Dict[str, Any] = {"spot": None, "tenors": {}, "spot_date": spot_date if own else usd["spot_date"],
+                                   "source": "cross", "legs": [pair.base + "USD", "USDTRY"]}
             if leg.get("spot") and usd.get("spot"):
                 out["spot"] = leg["spot"] * usd["spot"]
             for t in TENORS:
                 a, b = leg["tenors"].get(t) or {}, usd["tenors"].get(t) or {}
-                row = {"date": b.get("date") or a.get("date"), "days": b.get("days") or a.get("days")}
+                if own:
+                    day = delivery(spot_date, t, holidays)
+                    row: Dict[str, Any] = {"date": day, "days": float((day - spot_date).days)}
+                else:
+                    row = {"date": b.get("date") or a.get("date"), "days": b.get("days") or a.get("days")}
                 if a.get("fwd") and b.get("fwd"):
                     row["fwd"] = a["fwd"] * b["fwd"]
                 out["tenors"][t] = row
@@ -797,7 +832,7 @@ class Fx(object):
         if pair.code == "USDTRY" or (pair.quote == "TRY" and pair.base != "USD"):
             row = dict(self.curve(user, pair)["tenors"].get("1M") or {})          # the offshore curve / the USD legs
         else:                                                                    # Bloomberg's 1M points only
-            row = self._points_curve(pair, add_week_days(self.today(), 2), ("1M",))["tenors"]["1M"]
+            row = self._points_curve(pair, self.spot_date(pair), ("1M",))["tenors"]["1M"]
         F, days = row.get("fwd"), row.get("days")
         if not F or not days:
             return None
@@ -917,8 +952,8 @@ class Fx(object):
         smile_why = ""
         cur = self.curve(user, pair)
         row = cur["tenors"].get(tenor) or {}
-        start = add_week_days(today, 2)
-        days = row.get("days") or float((delivery(start, tenor) - start).days)
+        start = self.spot_date(pair, today)
+        days = row.get("days") or float((delivery(start, tenor, self.calendar(pair)) - start).days)
         F = row.get("fwd") or cur.get("spot") or 1.0
         for name, idx in (("now", None), ("w1", 5), ("m1", 21)):
             vals = {k: (structure[k]["now"] if idx is None else structure[k][name])[TENORS.index(tenor)] for k in KINDS}

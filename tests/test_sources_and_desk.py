@@ -297,7 +297,8 @@ def test_the_try_rates_by_tenor_side_by_side(svc):
     assert cell(svc, "EK_FWD!H%d" % v) == pytest.approx((cell(svc, "EK_FWD!D%d" % v) - cell(svc, "EK_FWD!E%d" % v)) * 100)
     tenors = {cell(svc, "EK_FWD!A%d" % r): r for r in range(t + 3, t + 3 + len(ex.FR_TENORS))}
     assert list(tenors) == [x[0] for x in ex.FR_TENORS]
-    assert cell(svc, "EK_FWD!C%d" % tenors["1W"]) == 7
+    assert cell(svc, "EK_FWD!C%d" % tenors["1W"]) == 8          # spot 04.11.2026 + 7 is Veterans Day (USD): the 12th
+    assert cell(svc, "EK_FWD!C%d" % tenors["2W"]) == 14
     assert cell(svc, "EK_FWD!B%d" % tenors["3M"]) == cell(svc, "EK_FWD!B7")      # as the desk's matrix dates 3M
     assert cell(svc, "EK_FWD!F%d" % tenors["2Y"]) == "" and cell(svc, "EK_FWD!I%d" % tenors["2Y"]) == ""   # VİOP ends near 1Y
     assert all(isinstance(cell(svc, "EK_FWD!%s%d" % (c, tenors["2Y"])), float) for c in "DEG")

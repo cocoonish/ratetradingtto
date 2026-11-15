@@ -766,7 +766,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         items = data.get("items")
         if not isinstance(items, list):
             raise ServiceError("items listesi gerekli")
-        return ok(await call(svc().set_holidays, _user(request), items))
+        # {"ccy": "USD", "items": [...]}: one currency's list (TRY when left out)
+        return ok(await call(svc().set_holidays, _user(request), items, data.get("ccy") or "TRY"))
 
     @handler
     async def calendar_preview(request: Request):

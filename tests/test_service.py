@@ -337,9 +337,9 @@ def test_cell_info_and_grid(service):
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
     # the dashboard's own sheets come last; four of the workbook's 17 are taken out (MOBIL MK, YP DIBS, Ivır Zıvır,
     # USDTRY IYIX)
-    assert [s["name"] for s in service.sheets("tto")][-9:] == ["EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN",
-                                                                "EK_CARRY", "EK_IHALE"]
-    assert len(service.sheets("tto")) == 17 - 4 + 9
+    assert [s["name"] for s in service.sheets("tto")][-10:] == ["EK_TATIL", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS",
+                                                                 "EK_EVREN", "EK_CARRY", "EK_IHALE"]
+    assert len(service.sheets("tto")) == 17 - 4 + 10
     assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2"] and [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX"]
 
 
@@ -577,9 +577,11 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     assert sorted(listed + page["pinned"]) == sorted(shown) and len(listed) == len(set(listed))
     # the value date strip: captions of the dashboard's own above the cells the sheet leaves unnamed
     b1 = next(p for p in page["panels"] if p["id"] == "B1")["data"]
-    assert b1["r"] == [0, 2] and b1["c"] == ["C", "D", "F", "G", "I", "K"]
-    assert [c["t"] for c in b1["rows"][0]] == ["", "Valör tarihi", "USDTRY spot", "EURTRY spot", "USDTRY spot valörü", "EURTRY spot valörü"]
-    assert b1["rows"][1][0]["t"] == "Tarih" and [c.get("i") for c in b1["rows"][1]] == [None, "u", "u", "u", "u", "u"]
+    assert b1["r"] == [0, 2] and b1["c"] == ["C", "D", "F", "G", "I", "J", "K", "L"]
+    assert [c["t"] for c in b1["rows"][0]] == ["", "Valör tarihi", "USDTRY spot", "EURTRY spot", "USDTRY spot valörü", "Bloomberg valörü",
+                                               "EURTRY spot valörü", "Bloomberg valörü"]
+    # (each spot date the desk's - typed over, a user's own -, Bloomberg's beside it for comparison)
+    assert b1["rows"][1][0]["t"] == "Tarih" and [c.get("i") for c in b1["rows"][1]] == [None, "u", "u", "u", "u", None, "u", None]
     # the RET table has the button of the RET editor
     assert next(p for p in page["panels"] if p["id"] == "B19")["action"] == "ret"
     # with the helper tables: they get a tab of their own, nothing is left out

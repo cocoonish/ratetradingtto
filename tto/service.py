@@ -302,6 +302,12 @@ class Service(object):
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
                 tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
                             label="Bloomberg fiyat kaynağı sırası (OIS / offshore / XCCY)", view="settings")
+            if ex.HOL_SHEET in tto.model.sheet_index:          # the USD and EUR holiday lists (settings page)
+                for ccy, (dcol, ncol) in ex.HOL_COLS.items():
+                    for col, kind, group, label in ((dcol, "date", ccy.lower(), "%s tatilleri (FX valörleri)" % ccy),
+                                                    (ncol, "text", ccy.lower() + "-names", "%s tatil adları" % ccy)):
+                        tto.declare("%s!%s%d:%s%d" % (ex.HOL_SHEET, col, ex.HOL_FIRST, col, ex.HOL_LAST), scope="shared",
+                                    group="holidays-" + group, kind=kind, label=label, view="settings")
         if replay:
             if isinstance(provider, ReplayProvider):
                 if tto is not None:
@@ -1956,22 +1962,28 @@ class Service(object):
 
     # ================================================================== inputs
     # ================================================================== holidays
-    #: the TR holidays are kept twice: the TRY workbook's list (date and name; every WORKDAY of the workbook reads it)
-    #: and the ASW workbook's (dates).  The settings page edits them as one list; the USD workbook's US holidays and
-    #: FOMC meetings are shown beside it.  (book, sheet, first row, last row, date column, name column or None)
-    HOLIDAY_LISTS = (("tto", "Motor", 361, 523, "A", "B"), ("asw", "ASW", 2, 200, "LR", None))
+    #: the desk's holiday lists, per currency: (book, sheet, first row, last row, date column, name column or None).
+    #: TRY is kept twice - the TRY workbook's list (date and name; every WORKDAY of the workbook reads it) and the ASW
+    #: workbook's (dates) - and edited as one list.  USD and EUR are the dashboard's own (``extras.HOL_SHEET``): the FX
+    #: value dates skip the holidays of both currencies of a pair.  The first list of each is the one the TRY workbook's
+    #: formulas read.  The USD workbook's US holidays (SIFMA: its SOFR / USD OIS sheets) and FOMC meetings are shown beside
+    #: them, read only.
+    HOLIDAY_LISTS = {"TRY": (("tto", "Motor", 361, 523, "A", "B"), ("asw", "ASW", 2, 200, "LR", None)),
+                     "USD": (("tto", ex.HOL_SHEET, ex.HOL_FIRST, ex.HOL_LAST) + ex.HOL_COLS["USD"],),
+                     "EUR": (("tto", ex.HOL_SHEET, ex.HOL_FIRST, ex.HOL_LAST) + ex.HOL_COLS["EUR"],)}
     HOLIDAYS_US = ("sofr", "SOFR_FOMC!BO4:BO70")
     FOMC_DATES = ("sofr", "SOFR_FOMC!B74:B83")
 
     def holidays(self) -> Dict[str, Any]:
-        """``{"tr": [{"date", "name"}], "us": [iso], "fomc": [iso], "slots", "books"}`` - the TR list is the dates of both
-        workbooks (a name from the TRY one)."""
+        """``{"lists": {"TRY" | "USD" | "EUR": {"items": [{"date", "name"}], "slots", "books"}}, "ccys", "us": [iso],
+        "fomc": [iso]}`` - and the TRY list again as ``tr`` / ``slots`` / ``books``, as before.  The TRY list is the dates
+        of both workbooks (a name from the TRY one)."""
         return self.et.call(self._holidays)
 
-    def _holiday_cells(self) -> List[Tuple[Book, List[Tuple[Tuple[int, int], Optional[Tuple[int, int]]]]]]:
-        """The TR holiday lists that are loaded: (book, [(date cell, name cell or None), ...])."""
+    def _holiday_cells(self, ccy: str = "TRY") -> List[Tuple[Book, List[Tuple[Tuple[int, int], Optional[Tuple[int, int]]]]]]:
+        """A currency's holiday lists that are loaded: (book, [(date cell, name cell or None), ...])."""
         out = []
-        for book_id, sheet, r1, r2, dcol, ncol in self.HOLIDAY_LISTS:
+        for book_id, sheet, r1, r2, dcol, ncol in self.HOLIDAY_LISTS[ccy]:
             book = self.books.get(book_id)
             if book is None or sheet not in book.model.sheet_index:
                 continue
@@ -1981,9 +1993,9 @@ class Service(object):
             out.append((book, [((si, r * COLS + dc), (si, r * COLS + nc) if nc is not None else None) for r in range(r1, r2 + 1)]))
         return out
 
-    def _holidays(self) -> Dict[str, Any]:
+    def _holiday_list(self, ccy: str) -> Dict[str, Any]:
         days: Dict[str, str] = {}
-        lists = self._holiday_cells()
+        lists = self._holiday_cells(ccy)
         for book, cells in lists:
             calc = book.engine.shared
             for (si, rc), name_cell in cells:
@@ -1995,6 +2007,31 @@ class Service(object):
                 name = name.strip() if isinstance(name, str) else ""
                 if name or iso not in days:
                     days[iso] = name or days.get(iso, "")
+        return {"items": [{"date": d, "name": days[d]} for d in sorted(days)], "available": bool(lists),
+                "slots": min((len(cells) for _, cells in lists), default=0), "books": [b.id for b, _ in lists]}
+
+    def _calendar_serials(self, ccys) -> set:
+        """The days (serials) the desk's holiday lists of these currencies close, together - the lists the TRY workbook's
+        formulas read (Motor for TRY, ``extras.HOL_SHEET`` for USD and EUR).  On the calculation thread."""
+        out: set = set()
+        for ccy in ccys:
+            spec = self.HOLIDAY_LISTS.get(ccy)
+            cells = self._holiday_cells(ccy)[:1] if spec else []
+            for book, rows in cells:
+                calc = book.engine.shared
+                for (si, rc), _ in rows:
+                    v = calc.get(si, *divmod(rc, COLS))
+                    if type(v) is float and 20000 < v < 80000:
+                        out.add(int(v))
+        return out
+
+    def holiday_dates(self, ccys) -> frozenset:
+        """The days the desk's holiday lists of these currencies close, together (dates) - from any thread."""
+        return frozenset(serial_to_date(s) for s in self.et.call(self._calendar_serials, tuple(ccys)))
+
+    def _holidays(self) -> Dict[str, Any]:
+        lists = {ccy: self._holiday_list(ccy) for ccy in self.HOLIDAY_LISTS}
+        tr = lists["TRY"]
 
         def dates(where) -> List[str]:
             book = self.books.get(where[0])
@@ -2007,14 +2044,18 @@ class Service(object):
             vals = [book.engine.shared.get(si, *divmod(rc, COLS)) for si, rc in cells]
             return sorted(serial_to_date(v).isoformat() for v in vals if type(v) is float and 20000 < v < 80000)
 
-        return {"available": bool(lists), "tr": [{"date": d, "name": days[d]} for d in sorted(days)],
-                "us": dates(self.HOLIDAYS_US), "fomc": dates(self.FOMC_DATES),
-                "slots": min((len(cells) for _, cells in lists), default=0), "books": [b.id for b, _ in lists], "gen": self.gen}
+        return {"available": any(x["available"] for x in lists.values()), "lists": lists, "ccys": list(lists),
+                "tr": tr["items"], "slots": tr["slots"], "books": tr["books"],
+                "us": dates(self.HOLIDAYS_US), "fomc": dates(self.FOMC_DATES), "gen": self.gen}
 
-    def set_holidays(self, user: str, items: List[Any]) -> Dict[str, Any]:
-        """The TR holidays, for everybody: ``[{"date": "29.10.2026", "name": "Cumhuriyet"}, ...]`` (a date as text or a
-        serial; a day given twice once).  Written to both workbooks, in date order; the rows below stay empty."""
+    def set_holidays(self, user: str, items: List[Any], ccy: Any = "TRY") -> Dict[str, Any]:
+        """A currency's holidays (TRY when left out), for everybody: ``[{"date": "29.10.2026", "name": "Cumhuriyet"}, ...]``
+        (a date as text or a serial; a day given twice once).  Written in date order - TRY to both workbooks -, the rows
+        below stay empty."""
         user = self.require_user(user)
+        ccy = str(ccy or "TRY").strip().upper()
+        if ccy not in self.HOLIDAY_LISTS:
+            raise ServiceError("tatil listesi yok: %s (%s)" % (ccy, ", ".join(self.HOLIDAY_LISTS)))
         if not isinstance(items, list):
             raise ServiceError("tatil listesi gerekli")
         days: Dict[str, str] = {}
@@ -2036,19 +2077,20 @@ class Service(object):
                 days[iso] = name
         if bad:
             raise ServiceError("tarih anlaşılamadı: %s" % ", ".join(bad[:8]))
-        res = self.et.call(self._set_holidays, user, days)
+        res = self.et.call_at(EngineThread.WRITE, self._set_holidays, user, ccy, days)
         self.bump()
         res["gen"] = self.gen
         return res
 
-    def _set_holidays(self, user: str, days: Dict[str, str]) -> Dict[str, Any]:
-        lists = self._holiday_cells()
+    def _set_holidays(self, user: str, ccy: str, days: Dict[str, str]) -> Dict[str, Any]:
+        lists = self._holiday_cells(ccy)
         if not lists:
-            raise ServiceError("tatil listesi bu dosyalarda yok", 404)
+            raise ServiceError("%s tatil listesi bu dosyalarda yok" % ccy, 404)
         dates = sorted(days)
         room = min(len(cells) for _, cells in lists)
         if len(dates) > room:
             raise ServiceError("en çok %d tatil yazılabilir (%d verildi)" % (room, len(dates)))
+        changed = False
         for book, cells in lists:
             engine = book.engine
             want: Dict[Tuple[int, int], Any] = {}
@@ -2075,8 +2117,20 @@ class Service(object):
             if sets:
                 engine.set_inputs(sets)
                 self.store.set_shared_inputs(book.id, {book.ref(*k): _to_json(v) for k, v in sets.items()}, user)
+            changed = changed or bool(sets or clears)
+        if changed:
+            # value dates moved for everybody - the forward pages, the blotter's tenors, the FX page's dates: every page
+            # is made again (as after a change of the meeting calendar), the shared ones ahead of the first request
+            self._note_private()
+            self.warm()
+            if ccy == "TRY":                             # the desk's market days too (read once a day otherwise)
+                watch = getattr(self, "watch", None)
+                if watch is not None:
+                    watch._shut = ("", frozenset())
+                self.ops._days.clear()
         out = self._holidays()
         out["saved"] = len(dates)
+        out["ccy"] = ccy
         return out
 
     def set_inputs(self, user: str, book_id: str, items: List[Dict[str, Any]], allow_adhoc: bool = False,
@@ -2684,28 +2738,28 @@ class Service(object):
 
     def _tenor_date(self, text: str, pair: str = "USDTRY") -> Optional[float]:
         """The value date of a tenor ("2W", "3M", "1Y") from the pair's spot date: n weeks, or n months and then the
-        next business day of the desk's calendar (Motor!A361:A523) - as the Forward sheet dates its tenors."""
+        next business day of the pair's calendar - the holidays of both its currencies (USDTRY: TRY and USD, EURTRY: TRY
+        and EUR, EURUSD: USD and EUR; any other pair the TRY list, as before) - as the Forward sheet dates its tenors."""
         m = re.match(r"^\s*(\d{1,3})\s*([WMYwmy])\s*$", str(text or ""))
         book = self.books.get("tto")
         if m is None or book is None:
             return None
         calc = book.engine.shared
+        try:
+            code = bl.pair_of(pair)
+        except bl.TradeError:
+            code = "USDTRY"
 
         def value(ref: str) -> Any:
             si, rc = book.cell(ref)
             return calc.get(si, *divmod(rc, COLS))
 
-        spot = value("Forward!K2" if str(pair).upper().startswith("EUR") else "Forward!I2")
+        spot = value("Forward!K2" if code.startswith("EUR") else "Forward!I2")
         if isinstance(spot, str):
             spot = parse_date(spot)
         if type(spot) is not float:
             return None
-        holidays = set()
-        if "Motor" in book.model.sheet_index:
-            for si, rc in book.cells_of("Motor!A361:A523"):
-                h = calc.get(si, *divmod(rc, COLS))
-                if type(h) is float:
-                    holidays.add(int(h))
+        holidays = self._calendar_serials(ex.pair_calendar(code) or ("TRY",))
         n, unit = int(m.group(1)), m.group(2).upper()
         start = serial_to_date(spot)
         if unit == "W":
