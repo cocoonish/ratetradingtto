@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS watch_closes (
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY, user TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, ip TEXT);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user);
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, page TEXT, page_title TEXT,
+    created_by TEXT NOT NULL, created_at TEXT NOT NULL, done_by TEXT, done_at TEXT);
+CREATE INDEX IF NOT EXISTS feedback_user ON feedback (created_by, created_at);
+CREATE TABLE IF NOT EXISTS chat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS chat_user ON chat (user, created_at);
+CREATE TABLE IF NOT EXISTS agenda (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, day TEXT NOT NULL, time TEXT, text TEXT NOT NULL,
+    deadline INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL, done_by TEXT, done_at TEXT);
+CREATE INDEX IF NOT EXISTS agenda_day ON agenda (day);
+CREATE INDEX IF NOT EXISTS agenda_user ON agenda (created_by, created_at);
 """
 
 
@@ -677,3 +689,103 @@ class Store(object):
     def put(self, key: str, value: Any) -> None:
         self._x("INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(value, ensure_ascii=False)))
+
+    # ------------------------------------------------------------------ the desk's own: reports, chat, agenda
+    #: the tables a user writes rows of, and the column that names the writer (how many lately: ``written_since``)
+    _WRITERS = {"feedback": "created_by", "chat": "user", "agenda": "created_by"}
+
+    def written_since(self, table: str, user: str, since: str) -> int:
+        """How many rows of ``table`` the user wrote at ``since`` (``yyyy-mm-dd hh:mm:ss``) or later."""
+        col = self._WRITERS[table]
+        return int(self._q("SELECT COUNT(*) AS n FROM %s WHERE %s=? AND created_at>=?" % (table, col), (user, since))[0]["n"])
+
+    def add_feedback(self, kind: str, text: str, page: Optional[str], page_title: Optional[str], user: str) -> int:
+        return self._x("INSERT INTO feedback (kind, text, page, page_title, created_by, created_at) VALUES (?,?,?,?,?,?)",
+                       (kind, text, page, page_title, user, now_iso()))
+
+    def feedback(self, done: bool, limit: int = 200) -> List[Dict[str, Any]]:
+        """The reports still open, or the ones dealt with - the latest first."""
+        if done:
+            rows = self._q("SELECT * FROM feedback WHERE done_at IS NOT NULL ORDER BY done_at DESC, id DESC LIMIT ?", (limit,))
+        else:
+            rows = self._q("SELECT * FROM feedback WHERE done_at IS NULL ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
+
+    def feedback_item(self, fid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM feedback WHERE id=?", (fid,))
+        return dict(rows[0]) if rows else None
+
+    def feedback_open(self) -> int:
+        return int(self._q("SELECT COUNT(*) AS n FROM feedback WHERE done_at IS NULL")[0]["n"])
+
+    def set_feedback_done(self, fid: int, user: Optional[str]) -> bool:
+        """A report dealt with by ``user`` - or open again (``None``).  False: no such report, or it already is."""
+        if user:
+            sql, args = "UPDATE feedback SET done_by=?, done_at=? WHERE id=? AND done_at IS NULL", (user, now_iso(), fid)
+        else:
+            sql, args = "UPDATE feedback SET done_by=NULL, done_at=NULL WHERE id=? AND done_at IS NOT NULL", (fid,)
+        with self._lock:
+            return self._db.execute(sql, args).rowcount > 0
+
+    def add_chat(self, user: str, text: str) -> Dict[str, Any]:
+        ts = now_iso()
+        mid = self._x("INSERT INTO chat (user, text, created_at) VALUES (?,?,?)", (user, text, ts))
+        return {"id": mid, "user": user, "text": text, "created_at": ts}
+
+    def chat(self, before: Optional[int] = None, since: Optional[int] = None, limit: int = 200) -> Tuple[List[Dict[str, Any]], bool]:
+        """Chat messages, oldest first: the last ``limit`` (those before the message ``before``), or - ``since`` - the
+        last ``limit`` from that message on; and whether there are earlier ones."""
+        if since is not None:
+            rows = self._q("SELECT * FROM chat WHERE id>=? ORDER BY id DESC LIMIT ?", (since, limit))
+        elif before is not None:
+            rows = self._q("SELECT * FROM chat WHERE id<? ORDER BY id DESC LIMIT ?", (before, limit))
+        else:
+            rows = self._q("SELECT * FROM chat ORDER BY id DESC LIMIT ?", (limit,))
+        out = [dict(r) for r in reversed(rows)]
+        more = bool(out) and bool(self._q("SELECT 1 FROM chat WHERE id<? LIMIT 1", (out[0]["id"],)))
+        return out, more
+
+    def chat_item(self, mid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM chat WHERE id=?", (mid,))
+        return dict(rows[0]) if rows else None
+
+    def chat_last(self) -> int:
+        return int(self._q("SELECT COALESCE(MAX(id), 0) AS n FROM chat")[0]["n"])
+
+    def chat_unread(self, user: str, after: int) -> int:
+        """Messages of the others after the message ``after``."""
+        return int(self._q("SELECT COUNT(*) AS n FROM chat WHERE id>? AND user<>?", (after, user))[0]["n"])
+
+    def delete_chat(self, mid: int, user: str) -> bool:
+        with self._lock:
+            return self._db.execute("DELETE FROM chat WHERE id=? AND user=?", (mid, user)).rowcount > 0
+
+    def add_agenda(self, owner: Optional[str], day: str, time: Optional[str], text: str, deadline: bool, user: str) -> int:
+        """An item of the agenda: the desk's (``owner`` None) or one user's own."""
+        return self._x("INSERT INTO agenda (owner, day, time, text, deadline, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
+                       (owner, day, time, text, 1 if deadline else 0, user, now_iso()))
+
+    def agenda(self, user: str, start: str) -> List[Dict[str, Any]]:
+        """The desk's items and the user's own from the day ``start`` on, and every deadline before it still not met;
+        by day, then time (an item without a time first in its day)."""
+        return [dict(r) for r in self._q(
+            "SELECT * FROM agenda WHERE (owner IS NULL OR owner=?) AND (day>=? OR (deadline=1 AND done_at IS NULL)) "
+            "ORDER BY day, time IS NOT NULL, time, id", (user, start))]
+
+    def agenda_due(self, user: str, today: str, tomorrow: str) -> List[Dict[str, Any]]:
+        """What is not done yet of today, of tomorrow, and the deadlines of the days before (the reminders, the badge)."""
+        return [dict(r) for r in self._q(
+            "SELECT * FROM agenda WHERE (owner IS NULL OR owner=?) AND done_at IS NULL "
+            "AND (day IN (?, ?) OR (deadline=1 AND day<?)) ORDER BY day, time IS NOT NULL, time, id LIMIT 500",
+            (user, today, tomorrow, today))]
+
+    def agenda_item(self, aid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM agenda WHERE id=?", (aid,))
+        return dict(rows[0]) if rows else None
+
+    def set_agenda_done(self, aid: int, user: Optional[str]) -> None:
+        """Done by ``user`` - or not done (``None``)."""
+        self._x("UPDATE agenda SET done_by=?, done_at=? WHERE id=?", (user, now_iso() if user else None, aid))
+
+    def delete_agenda(self, aid: int) -> None:
+        self._x("DELETE FROM agenda WHERE id=?", (aid,))

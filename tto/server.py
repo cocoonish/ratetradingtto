@@ -656,6 +656,51 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             raise ServiceError("current ve dates listeleri gerekli")
         return ok(await call(svc().history.preview_calendar, current, dates, str(data.get("mode") or "correct")))
 
+    # ------------------------------------------------------------------ the desk's own: reports, chat, agenda (desk.py)
+    @handler
+    async def desk_state(request: Request):
+        return ok(await call(svc().desk.state, _user(request), request.query_params.get("seen")))
+
+    @handler
+    async def feedback(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().desk.report, _user(request), data.get("kind"), data.get("text"), data.get("page"),
+                                 data.get("title")))
+        return ok(await call(svc().desk.reports, _user(request)))
+
+    @handler
+    async def feedback_done(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().desk.report_done, _user(request), request.path_params["fid"], data.get("done", True)))
+
+    @handler
+    async def social(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().desk.say, _user(request), data.get("text")))
+        q = request.query_params
+        return ok(await call(svc().desk.chat, _user(request), q.get("before"), q.get("since")))
+
+    @handler
+    async def social_delete(request: Request):
+        return ok(await call(svc().desk.unsay, _user(request), request.path_params["mid"]))
+
+    @handler
+    async def agenda(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().desk.add, _user(request), data.get("day"), data.get("time"), data.get("text"),
+                                 data.get("deadline"), data.get("shared", True)))
+        return ok(await call(svc().desk.agenda, _user(request)))
+
+    @handler
+    async def agenda_item(request: Request):
+        if request.method == "DELETE":
+            return ok(await call(svc().desk.remove, _user(request), request.path_params["aid"]))
+        data = await _body(request)
+        return ok(await call(svc().desk.mark, _user(request), request.path_params["aid"], data.get("done", True)))
+
     # ------------------------------------------------------------------ live updates (SSE)
     async def events(request: Request):
         loop = asyncio.get_running_loop()
@@ -677,13 +722,17 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         service = svc()
         service.add_listener(push)
 
+        def message(gen: int) -> str:
+            # the generation, and the counters of the desk's own corner (a chat message makes no new generation)
+            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters()})
+
         async def stream():
             try:
-                yield "data: %s\n\n" % json.dumps({"gen": service.gen})
+                yield message(service.gen)
                 while True:
                     try:
                         gen = await asyncio.wait_for(q.get(), timeout=15.0)
-                        yield "data: %s\n\n" % json.dumps({"gen": gen})
+                        yield message(gen)
                     except asyncio.TimeoutError:
                         yield ": ping\n\n"
                     if await request.is_disconnected():
@@ -779,6 +828,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/fx/tickers", fx_tickers, methods=["GET", "POST"]),
         Route("/api/fx/history", fx_history, methods=["POST"]),
         Route("/api/events", events),
+        Route("/api/desk", desk_state),
+        Route("/api/feedback", feedback, methods=["GET", "POST"]),
+        Route("/api/feedback/{fid:int}", feedback_done, methods=["POST"]),
+        Route("/api/social", social, methods=["GET", "POST"]),
+        Route("/api/social/{mid:int}", social_delete, methods=["DELETE"]),
+        Route("/api/agenda", agenda, methods=["GET", "POST"]),
+        Route("/api/agenda/{aid:int}", agenda_item, methods=["POST", "DELETE"]),
         Mount("/static", app=_Static(directory=STATIC), name="static"),
     ]
 

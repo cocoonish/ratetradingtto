@@ -154,6 +154,9 @@ class Service(object):
         # Spot / FX and FX vol: the option market's quotes of a pair, its smile and distribution, the vol monitor
         from .fx import Fx
         self.fx = Fx(self)
+        # the desk's own corner: reports to the administrators, the chat (Sosyal), the agenda (Ajanda)
+        from .desk import Desk
+        self.desk = Desk(self)
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -463,12 +466,24 @@ class Service(object):
             g = self.gen
             self._view_cache.clear()
             listeners = list(self._listeners)
+        self._tell(listeners, g)
+        return g
+
+    def nudge(self) -> None:
+        """Tell the open pages that something of the desk's own corner changed (a chat message, a report, the agenda):
+        no new generation - their tables are not read again; the live stream carries the corner's counters."""
+        with self._gen_lock:
+            g = self.gen
+            listeners = list(self._listeners)
+        self._tell(listeners, g)
+
+    @staticmethod
+    def _tell(listeners: List[Callable[[int], None]], gen: int) -> None:
         for fn in listeners:
             try:
-                fn(g)
+                fn(gen)
             except Exception:  # noqa: BLE001
                 pass
-        return g
 
     def add_listener(self, fn: Callable[[int], None]) -> None:
         with self._gen_lock:
@@ -900,6 +915,9 @@ class Service(object):
             # the option market of the currency pairs: one pair in depth, and every pair's vols at a glance
             pages.append({"id": "fx", "title": "Spot / FX", "group": "FX", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "fxvol", "title": "FX Vol İzleme", "group": "FX", "book": "tto", "sheet": None, "custom": True})
+        # the desk's own corner (desk.py): the traders' chat and the agenda - pages of the desk, apart from any workbook
+        pages.append({"id": "social", "title": "Sosyal", "group": "Masa", "book": None, "sheet": None, "custom": True})
+        pages.append({"id": "agenda", "title": "Ajanda", "group": "Masa", "book": None, "sheet": None, "custom": True})
         return pages
 
     # ================================================================== rendering
