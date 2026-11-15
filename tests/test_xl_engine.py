@@ -239,3 +239,36 @@ def test_an_infinity_that_reaches_the_renderer_is_shown_as_num():
     calc.memo[0][rc] = float("inf")
     cell = Renderer(book).cell(calc, 0, *divmod(rc, COLS), numfmt.get_locale("tr"))
     assert cell["t"] == "#NUM!" and cell["k"] == "e" and "v" not in cell
+
+
+# ---------------------------------------------------------------------------------------------- depth
+def _long_chain(n: int):
+    """A chain of ``n`` cells, each reading the one above, with a side branch and a range every 50 cells."""
+    cells = {"A1": 1, "B1": 2}
+    for i in range(2, n + 1):
+        cells["A%d" % i] = "=A%d+B1" % (i - 1) if i % 50 else "=SUM(A%d:A%d)/10" % (i - 3, i - 1)
+    cells["C1"] = "=A%d*2" % n
+    return mini_engine(cells)
+
+
+def test_a_thread_with_a_big_stack_evaluates_long_chains_without_unwinding():
+    """The calculation threads (a 255 MiB stack) evaluate ~1000 nested cells in one go; any other thread unwinds at
+    DEPTH_LIMIT and restarts the chain from its deep end - ~7x slower on the Motor sheet, with the same values."""
+    from tto.xl.engine import DEEP_LIMIT, DEPTH_LIMIT, depth_limit, run_with_big_stack
+    assert depth_limit() == DEPTH_LIMIT                                # this (the main) thread
+    assert run_with_big_stack(depth_limit) == DEEP_LIMIT
+    small = _long_chain(600)
+    b1 = small.model.cell_ref("S!B1")
+    small.declare_inputs([b1])
+    v_small = small.shared.value("S!C1")
+    assert small.shared.restarts > 0                                  # unwound (and restarted) on this thread
+    big = _long_chain(600)
+    big.declare_inputs([big.model.cell_ref("S!B1")])
+    assert run_with_big_stack(big.shared.value, "S!C1") == v_small
+    assert big.shared.restarts == 0                                   # in one go
+    # the same values and dependency masks either way
+    assert big.shared.memo == small.shared.memo
+    assert big.shared.maskd == small.shared.maskd
+    # deeper than DEEP_LIMIT still unwinds (and works) on the big stack
+    deep = _long_chain(3000)
+    assert run_with_big_stack(deep.shared.value, "S!A3000") == deep.shared.value("S!A3000")

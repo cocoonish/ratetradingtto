@@ -522,3 +522,17 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     tables = {t["id"]: t for t in pages["forward"]["tables"]}
     assert tables["B7"]["tab"] == "Hesaplayıcılar" and tables["B7"]["title"].startswith("Interest 2 SP")
     assert tables["B19"]["tab"] == "RET" and "B22" not in tables and "tables" not in pages["blotter"]
+
+
+def test_the_calculation_thread_evaluates_long_chains_in_one_go(service):
+    """The calculation thread runs on a big stack (255 MiB: Windows refuses 256) and evaluates DEEP_LIMIT nested
+    cells before unwinding - the header's Motor chain is no longer unwound and restarted (~7x slower).  Every other
+    thread keeps DEPTH_LIMIT.  (``tools/depth_check.py`` renders every page both ways: identical.)"""
+    from tto.xl.engine import DEEP_LIMIT, DEPTH_LIMIT, depth_limit
+    assert service.et.call(depth_limit) == DEEP_LIMIT and depth_limit() == DEPTH_LIMIT
+    eng = service.books["tto"].engine
+    service.et.call(eng.reset)                           # from cold
+    service.bump()
+    before = eng.shared.restarts
+    assert service.header(None)["items"]
+    assert eng.shared.restarts == before                 # nothing unwound

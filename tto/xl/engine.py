@@ -30,7 +30,55 @@ from .values import XlArray, XlRange, date_to_serial
 
 _MISS = object()
 DEPTH_LIMIT = 90          # nested cell evaluations before the engine unwinds and restarts bottom-up
+DEEP_LIMIT = 1000         # ... on a thread started with a big stack (the calculation threads)
+# Windows takes a thread stack *below* 256 MiB only (256 MiB itself is refused - for years the calculation thread ran
+# on the default ~2 MB stack, where a chain of 500-700 nested cells already ends the process); a multiple of 4 KiB
+BIG_STACKS = (255 << 20, 128 << 20, 64 << 20)
 _RECURSION_LIMIT = 30000
+_TLS = threading.local()
+
+
+def set_depth_limit(limit: int) -> None:
+    """How deep this thread evaluates before unwinding.  Unwinding a long chain (the Motor sheet: thousands of cells,
+    each reading the one above) and restarting it from the deep end works on any stack, but it is ~7x slower than
+    evaluating the chain in one go - which only a thread with a big stack can do: on the default ~2 MB stack of a
+    Windows thread 500-700 nested cells end the process (a crash, not an exception).  Only the threads started by
+    :func:`big_stack_thread` raise it; every other thread (the main thread, a test) keeps ``DEPTH_LIMIT``."""
+    _TLS.limit = max(DEPTH_LIMIT, int(limit))
+
+
+def depth_limit() -> int:
+    """The depth this thread evaluates before unwinding (``DEPTH_LIMIT`` unless :func:`set_depth_limit` raised it)."""
+    return getattr(_TLS, "limit", DEPTH_LIMIT)
+
+
+def big_stack_thread(target: Callable, name: str, daemon: bool = False) -> threading.Thread:
+    """A started thread with the largest stack of ``BIG_STACKS`` the platform takes, evaluating ``DEEP_LIMIT`` deep
+    (``DEPTH_LIMIT`` when it takes none of them)."""
+    old = threading.stack_size()
+    big = False
+    for size in BIG_STACKS:
+        try:
+            threading.stack_size(size)
+            big = True
+            break
+        except (ValueError, RuntimeError):
+            continue
+
+    def run():
+        if big:
+            set_depth_limit(DEEP_LIMIT)
+        target()
+
+    try:
+        t = threading.Thread(target=run, name=name, daemon=daemon)
+        t.start()
+    finally:
+        try:
+            threading.stack_size(old)
+        except (ValueError, RuntimeError):
+            pass
+    return t
 
 
 class _Deep(Exception):
@@ -293,6 +341,7 @@ class Calc(object):
         self.depth = 0
         self.busy: List[set] = [set() for _ in range(n)]
         self.evals = 0
+        self.restarts = 0                     # chains unwound at the depth limit and restarted from their deep end
         self._reset()
 
     # ------------------------------------------------------------------ state management
@@ -427,6 +476,7 @@ class Calc(object):
                 for b in self.busy:
                     b.clear()
                 stack.append(d.cell)
+                self.restarts += 1
                 guard += 1
                 if guard > 2000000:
                     raise RuntimeError("evaluation does not converge")
@@ -540,7 +590,7 @@ class Calc(object):
             if len(eng.circular) < 200:
                 eng.circular.append(eng.addr(si, rc))
             return 0.0
-        if self.depth >= DEPTH_LIMIT:
+        if self.depth >= DEPTH_LIMIT and self.depth >= depth_limit():
             raise _Deep((si, r, c))
         eng = self.engine
         fn = eng._code[si].get(rc)
@@ -780,19 +830,7 @@ def run_with_big_stack(fn: Callable, *args, **kwargs):
         except BaseException as exc:  # noqa: BLE001 - re-raised in the caller
             result["error"] = exc
 
-    old = threading.stack_size()
-    try:
-        threading.stack_size(256 * 1024 * 1024)
-    except (ValueError, RuntimeError):
-        pass
-    try:
-        t = threading.Thread(target=target, name="tto-engine")
-        t.start()
-    finally:
-        try:
-            threading.stack_size(old)
-        except (ValueError, RuntimeError):
-            pass
+    t = big_stack_thread(target, "tto-engine")
     t.join()
     if "error" in result:
         raise result["error"]

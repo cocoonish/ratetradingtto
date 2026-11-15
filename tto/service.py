@@ -33,7 +33,7 @@ from .render import Renderer
 from .store import Store, now_iso, user_key
 from .views import layout as view_layout, load_views
 from .xl import numfmt
-from .xl.engine import Calc, Clock
+from .xl.engine import Calc, Clock, big_stack_thread
 from .xl.errors import XlError
 from .xl.model import COLS, a1, parse_a1, parse_range
 from .xl.tokenizer import index_to_col
@@ -63,17 +63,8 @@ class EngineThread(object):
 
     def __init__(self, name: str = "tto-engine"):
         self._q: "queue.Queue" = queue.Queue()
-        old = threading.stack_size()
-        try:
-            threading.stack_size(256 * 1024 * 1024)
-        except (ValueError, RuntimeError):
-            pass
-        self._t = threading.Thread(target=self._loop, name=name, daemon=True)
-        self._t.start()
-        try:
-            threading.stack_size(old)
-        except (ValueError, RuntimeError):
-            pass
+        # a big stack: long chains are evaluated in one go (engine.DEEP_LIMIT deep) instead of unwound and restarted
+        self._t = big_stack_thread(self._loop, name, daemon=True)
 
     def _loop(self) -> None:
         while True:
