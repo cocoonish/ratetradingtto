@@ -596,3 +596,62 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     tables = {t["id"]: t for t in pages["forward"]["tables"]}
     assert tables["B7"]["tab"] == "Hesaplayıcılar" and tables["B7"]["title"].startswith("Interest 2 SP")
     assert tables["B19"]["tab"] == "RET" and "B22" not in tables and "tables" not in pages["blotter"]
+
+
+def test_holidays_are_edited_in_one_place_for_both_workbooks(tmp_path):
+    """The TR holidays live twice: the TRY workbook's Motor!A361:B523 (date and name, read by every WORKDAY) and the ASW
+    workbook's ASW!LR2:LR200 (dates).  The settings page edits them as one list and writes both; the US holidays and the
+    FOMC meetings of the USD workbook come with it.  Kept by the store: a restart has the same list."""
+    from starlette.testclient import TestClient
+    from conftest import auth
+    from tto.server import create_app
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Tatil Yazan")
+        hol = svc.holidays()
+        assert hol["available"] and hol["books"] == ["tto", "asw"] and hol["slots"] == 163
+        days = {x["date"]: x["name"] for x in hol["tr"]}
+        # the ASW list has 2026's earlier holidays as well: both lists together, the names from the TRY one
+        assert len(days) == 152 and days["2026-01-01"] == "" and days["2026-10-29"] == "Cumhuriyet" and days["2027-01-01"] == "Yılbaşı"
+        assert hol["us"][:2] == ["2026-01-01", "2026-01-19"] and len(hol["fomc"]) == 10 and hol["fomc"][0] == "2026-12-09"
+        # 04.11.2026 a holiday: the next business day of the save day (03.11.2026) moves for everyone, in both workbooks
+        assert cell(svc, "DİBS RV!D2") == parse_date("04.11.2026")
+        items = [{"date": d, "name": n} for d, n in days.items() if d != "2027-01-01"] + [{"date": "04.11.2026", "name": "Deneme tatili"},
+                                                                                         {"date": "2026-11-04", "name": ""}]
+        res = svc.set_holidays(u, items)
+        assert res["saved"] == 152 and res["tr"][len([d for d in days if d < "2026-11-04"])] == {"date": "2026-11-04", "name": "Deneme tatili"}
+        assert cell(svc, "DİBS RV!D2") == parse_date("05.11.2026")
+        motor = [cell(svc, "Motor!A%d" % r) for r in range(361, 524)]
+        names = [cell(svc, "Motor!B%d" % r) for r in range(361, 524)]
+        asw = [cell(svc, "ASW!LR%d" % r, book="asw") for r in range(2, 201)]
+        serial = parse_date("04.11.2026")
+        assert serial in motor and serial in asw and names[motor.index(serial)] == "Deneme tatili"
+        assert parse_date("01.01.2027") not in motor and parse_date("01.01.2027") not in asw
+        assert motor == sorted(x for x in motor if x is not None) + [None] * motor.count(None)          # in date order
+        assert motor.count(None) == 163 - 152 and asw.count(None) == 199 - 152
+        # refused: a day that is no date, more days than the list has rows
+        with pytest.raises(ServiceError):
+            svc.set_holidays(u, [{"date": "31.02.2027"}])
+        with pytest.raises(ServiceError):
+            svc.set_holidays(u, ["%02d.01.2030" % d for d in range(1, 32)] + ["%02d.%02d.2031" % (d, m) for m in range(1, 7) for d in range(1, 29)])
+        assert len(svc.holidays()["tr"]) == 152
+        with TestClient(create_app(svc)) as client:                     # (its shutdown stops the service)
+            hdr = auth(svc, "Tatil Okuyan")
+            got = client.get("/api/holidays", headers=hdr).json()
+            assert got["tr"] == res["tr"] and got["fomc"] == hol["fomc"]
+            back = client.post("/api/holidays", json={"items": [{"date": d, "name": n} for d, n in days.items()]}, headers=hdr)
+            assert back.status_code == 200 and back.json()["tr"] == hol["tr"]
+            assert client.post("/api/holidays", json={"items": "x"}, headers=hdr).status_code == 400
+            assert cell(svc, "DİBS RV!D2") == parse_date("04.11.2026")
+            # the file's own list again everywhere the file had it: nothing stored for those rows
+            stored = svc.store.shared_inputs("asw")
+            assert not any(ref.startswith("ASW!LR") for _, ref in stored)
+            svc.set_holidays(u, items)
+    finally:
+        svc.stop()
+    again = make_service(tmp_path)
+    try:
+        assert {x["date"]: x["name"] for x in again.holidays()["tr"]}["2026-11-04"] == "Deneme tatili"
+        assert cell(again, "DİBS RV!D2") == parse_date("05.11.2026")
+    finally:
+        again.stop()

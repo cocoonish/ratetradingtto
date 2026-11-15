@@ -631,6 +631,10 @@ table.grid td.chartlink:hover { color: var(--accent-ink); text-decoration: under
 .set-actions, .carry-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
 .set-actions .grow, .carry-actions .grow { flex: 1; }
 .set-scroll { max-height: 56vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.hol-text { width: 100%; min-height: 220px; font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; tab-size: 14; white-space: pre; resize: vertical; }
+.hol-other { display: flex; flex-direction: column; gap: 4px; color: var(--ink-2); font-size: 12.5px; }
+.hol-other b { color: var(--ink); font-weight: 600; }
 .set-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .set-table th { position: sticky; top: 0; background: var(--hd-bg); color: var(--ink-2); font-weight: 600; font-size: 11.5px; text-align: left;
   padding: 6px 10px; z-index: 1; }

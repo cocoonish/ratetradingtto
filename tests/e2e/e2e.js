@@ -1423,6 +1423,20 @@ async function shot(page, name) {
     await page.fill('#carry-a', '1');
     await page.click('#carry-save');
     await page.waitForFunction(() => /bootstrap/i.test(document.getElementById('carry-info').textContent), null, { timeout: 20000 });
+    // the holidays: the TR list of both workbooks in one place, the US holidays and the FOMC meetings beside it
+    const holText = await page.inputValue('#holidays-text');
+    check('settings: the TR holidays of both workbooks in one list, with the US holidays and the FOMC meetings',
+      /^01\.01\.2026$/m.test(holText) && /^29\.10\.2026\tCumhuriyet$/m.test(holText) && holText.split('\n').length === 152
+      && /FOMC toplantıları: 09\.12\.2026/.test(await page.textContent('#holidays-other')), holText.split('\n').slice(0, 3));
+    await page.fill('#holidays-text', holText + '\n31.12.2026\tDeneme tatili');
+    await page.click('#holidays-save');
+    await page.waitForFunction(() => /153 TR tatili/.test(document.getElementById('holidays-info').textContent), null, { timeout: 20000 });
+    const holSaved = (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json;
+    check('... a day added is written for everyone', holSaved.tr.some((x) => x.date === '2026-12-31' && x.name === 'Deneme tatili'), holSaved.tr.length);
+    // the files' own lists again (nothing stored): the pages after this one see the holidays they always did
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Motor!A361:B523'], shared: true });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'asw', refs: ['ASW!LR2:LR200'], shared: true });
+    check('... and the lists of the files come back', (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json.tr.length === 152);
     await shot(page, '15-settings');
 
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists

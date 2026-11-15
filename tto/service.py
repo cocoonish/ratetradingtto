@@ -1296,6 +1296,130 @@ class Service(object):
         return b
 
     # ================================================================== inputs
+    # ================================================================== holidays
+    #: the TR holidays are kept twice: the TRY workbook's list (date and name; every WORKDAY of the workbook reads it)
+    #: and the ASW workbook's (dates).  The settings page edits them as one list; the USD workbook's US holidays and
+    #: FOMC meetings are shown beside it.  (book, sheet, first row, last row, date column, name column or None)
+    HOLIDAY_LISTS = (("tto", "Motor", 361, 523, "A", "B"), ("asw", "ASW", 2, 200, "LR", None))
+    HOLIDAYS_US = ("sofr", "SOFR_FOMC!BO4:BO70")
+    FOMC_DATES = ("sofr", "SOFR_FOMC!B74:B83")
+
+    def holidays(self) -> Dict[str, Any]:
+        """``{"tr": [{"date", "name"}], "us": [iso], "fomc": [iso], "slots", "books"}`` - the TR list is the dates of both
+        workbooks (a name from the TRY one)."""
+        return self.et.call(self._holidays)
+
+    def _holiday_cells(self) -> List[Tuple[Book, List[Tuple[Tuple[int, int], Optional[Tuple[int, int]]]]]]:
+        """The TR holiday lists that are loaded: (book, [(date cell, name cell or None), ...])."""
+        out = []
+        for book_id, sheet, r1, r2, dcol, ncol in self.HOLIDAY_LISTS:
+            book = self.books.get(book_id)
+            if book is None or sheet not in book.model.sheet_index:
+                continue
+            si = book.model.sheet_index[sheet]
+            dc = parse_a1(dcol + "1") % COLS
+            nc = parse_a1(ncol + "1") % COLS if ncol else None
+            out.append((book, [((si, r * COLS + dc), (si, r * COLS + nc) if nc is not None else None) for r in range(r1, r2 + 1)]))
+        return out
+
+    def _holidays(self) -> Dict[str, Any]:
+        days: Dict[str, str] = {}
+        lists = self._holiday_cells()
+        for book, cells in lists:
+            calc = book.engine.shared
+            for (si, rc), name_cell in cells:
+                v = calc.get(si, *divmod(rc, COLS))
+                if type(v) is not float or not 20000 < v < 80000:
+                    continue
+                iso = serial_to_date(v).isoformat()
+                name = calc.get(name_cell[0], *divmod(name_cell[1], COLS)) if name_cell else None
+                name = name.strip() if isinstance(name, str) else ""
+                if name or iso not in days:
+                    days[iso] = name or days.get(iso, "")
+
+        def dates(where) -> List[str]:
+            book = self.books.get(where[0])
+            if book is None:
+                return []
+            try:
+                cells = book.cells_of(where[1])
+            except (KeyError, ValueError):
+                return []
+            vals = [book.engine.shared.get(si, *divmod(rc, COLS)) for si, rc in cells]
+            return sorted(serial_to_date(v).isoformat() for v in vals if type(v) is float and 20000 < v < 80000)
+
+        return {"available": bool(lists), "tr": [{"date": d, "name": days[d]} for d in sorted(days)],
+                "us": dates(self.HOLIDAYS_US), "fomc": dates(self.FOMC_DATES),
+                "slots": min((len(cells) for _, cells in lists), default=0), "books": [b.id for b, _ in lists], "gen": self.gen}
+
+    def set_holidays(self, user: str, items: List[Any]) -> Dict[str, Any]:
+        """The TR holidays, for everybody: ``[{"date": "29.10.2026", "name": "Cumhuriyet"}, ...]`` (a date as text or a
+        serial; a day given twice once).  Written to both workbooks, in date order; the rows below stay empty."""
+        user = self.require_user(user)
+        if not isinstance(items, list):
+            raise ServiceError("tatil listesi gerekli")
+        days: Dict[str, str] = {}
+        bad: List[str] = []
+        for it in items:
+            raw = it.get("date") if isinstance(it, dict) else it
+            name = it.get("name") if isinstance(it, dict) else None
+            name = " ".join(str(name).split())[:80] if name is not None else ""
+            serial = float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else parse_date(str(raw or ""))
+            try:
+                day = serial_to_date(serial) if serial is not None else None
+            except (ValueError, OverflowError):
+                day = None
+            if day is None or not 2000 <= day.year <= 2100:
+                bad.append(str(raw))
+                continue
+            iso = day.isoformat()
+            if name or iso not in days:
+                days[iso] = name
+        if bad:
+            raise ServiceError("tarih anlaşılamadı: %s" % ", ".join(bad[:8]))
+        res = self.et.call(self._set_holidays, user, days)
+        self.bump()
+        res["gen"] = self.gen
+        return res
+
+    def _set_holidays(self, user: str, days: Dict[str, str]) -> Dict[str, Any]:
+        lists = self._holiday_cells()
+        if not lists:
+            raise ServiceError("tatil listesi bu dosyalarda yok", 404)
+        dates = sorted(days)
+        room = min(len(cells) for _, cells in lists)
+        if len(dates) > room:
+            raise ServiceError("en çok %d tatil yazılabilir (%d verildi)" % (room, len(dates)))
+        for book, cells in lists:
+            engine = book.engine
+            want: Dict[Tuple[int, int], Any] = {}
+            for k, (dcell, ncell) in enumerate(cells):
+                iso = dates[k] if k < len(dates) else None
+                want[dcell] = float(date_to_serial(_dt.date.fromisoformat(iso))) if iso else None
+                if ncell is not None:
+                    want[ncell] = (days[iso] or None) if iso else None
+            sets: Dict[Tuple[int, int], Any] = {}
+            clears: List[Tuple[int, int]] = []
+            for (si, rc), val in want.items():
+                held = engine.input_value[si]
+                if _same_value(val, engine.base_value(si, rc)):
+                    if rc in held:
+                        clears.append((si, rc))                  # the file's own value again
+                elif rc not in held or not _same_value(held[rc], val):
+                    sets[(si, rc)] = val
+            for key in list(sets) + clears:
+                if key not in book.inputs:
+                    book.declare(book.ref(*key), scope="shared", group="adhoc-shared")
+            if clears:
+                engine.clear_inputs(clears)
+                self.store.clear_shared_inputs(book.id, [book.ref(*k) for k in clears])
+            if sets:
+                engine.set_inputs(sets)
+                self.store.set_shared_inputs(book.id, {book.ref(*k): _to_json(v) for k, v in sets.items()}, user)
+        out = self._holidays()
+        out["saved"] = len(dates)
+        return out
+
     def set_inputs(self, user: str, book_id: str, items: List[Dict[str, Any]], allow_adhoc: bool = False,
                    lang: Optional[str] = None, lenient: bool = False) -> Dict[str, Any]:
         """items: [{"ref": "Forward!D2", "value": "03.12.2026"} ...] (value None / "" clears).
@@ -2278,6 +2402,46 @@ class Service(object):
     #: what goes with a bond's row of the trading list and is cleared when the bond leaves it: its source
     #: (the desk's) and each user's known coupon, manual clean price and repo
     _ROW_SHARED, _ROW_PERSONAL = ("B",), ("H", "N", "AL")
+    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: ★ / ☆ there too.  What goes
+    #: with its row: the source (the desk's), each user's manual clean price and curve flag
+    ASW_LIST = ("asw", "ASW!B7:B56")
+    _ASW_ROW_SHARED, _ASW_ROW_PERSONAL = ("C",), ("D", "E")
+
+    def _list_off(self, user: str, book_id: str, ref: str, code: str, shared: Tuple[str, ...], personal: Tuple[str, ...]) -> int:
+        """A bond off a list of bonds: its rows empty, with what goes with them (``shared``: the desk's columns,
+        ``personal``: every user's).  Returns the rows emptied."""
+        book = self._book(book_id)
+        cells = book.cells_of(ref)
+        current = self._list_values(user, book_id, ref)
+        rows = [cells[k][1] // COLS for k, v in enumerate(current) if v == code]
+        if not rows:
+            return 0
+        sheet = ref.split("!")[0]
+        col = re.match(r"[A-Z]+", ref.split("!")[1]).group(0)
+        items = [{"ref": "%s!%s%d" % (sheet, c, r), "value": None} for r in rows for c in (col,) + shared]
+        res = self.set_inputs(user, book_id, items)
+        if res["errors"]:
+            raise ServiceError("; ".join(res["errors"]))
+        self.et.call(self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in personal])
+        return len(rows)
+
+    def _asw_follows(self, user: str, code: str, on: bool) -> Optional[bool]:
+        """The ASW workbook's list with the trading list: the bond added (``on``) or taken off there too.  ``None``: no
+        ASW list here; False: nothing to do (already listed / not listed, or no room left - the trading list still
+        takes it)."""
+        book_id, ref = self.ASW_LIST
+        book = self.books.get(book_id)
+        try:
+            if book is None or not all(c in book.inputs for c in book.cells_of(ref)):
+                return None
+        except (KeyError, ValueError):
+            return None
+        if on:
+            try:
+                return bool(self.list_add(user, book_id, ref, [code])["added"])
+            except ServiceError:
+                return False
+        return self._list_off(user, book_id, ref, code, self._ASW_ROW_SHARED, self._ASW_ROW_PERSONAL) > 0
 
     def bond_flag(self, user: str, isin: str, on: bool) -> Dict[str, Any]:
         """★ a bond: onto the trading list (below its last bond) or off it - for everyone.  A bond taken off leaves
@@ -2290,21 +2454,12 @@ class Service(object):
         book_id, ref = self.TRADING_LIST
         if on:
             res = self.list_add(user, book_id, ref, [code])
-            return {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "gen": self.gen}
-        book = self._book(book_id)
-        cells = book.cells_of(ref)
-        current = self._list_values(user, book_id, ref)
-        rows = [cells[k][1] // COLS for k, v in enumerate(current) if v == code]
-        if not rows:
-            return {"isin": code, "on": False, "removed": 0, "gen": self.gen}
-        sheet = ref.split("!")[0]
-        items = [{"ref": "%s!%s%d" % (sheet, c, r), "value": None} for r in rows for c in ("A",) + self._ROW_SHARED]
-        res = self.set_inputs(user, book_id, items)
-        if res["errors"]:
-            raise ServiceError("; ".join(res["errors"]))
-        self.et.call(self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in self._ROW_PERSONAL])
+            asw = self._asw_follows(user, code, True)
+            return {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "asw": asw, "gen": self.gen}
+        removed = self._list_off(user, book_id, ref, code, self._ROW_SHARED, self._ROW_PERSONAL)
+        asw = self._asw_follows(user, code, False)
         self.bump()
-        return {"isin": code, "on": False, "removed": len(rows), "gen": self.gen}
+        return {"isin": code, "on": False, "removed": removed, "asw": asw, "gen": self.gen}
 
     def _clear_rows_for_everyone(self, book, refs: List[str]) -> None:
         """Every user's personal values of these cells: gone (the bond they were for left its row)."""

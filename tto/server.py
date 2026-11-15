@@ -657,6 +657,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().history.set_calendar, _user(request), dates, bool(data.get("roll"))))
 
     @handler
+    async def holidays(request: Request):
+        if request.method == "GET":
+            return ok(await call(svc().holidays))
+        data = await _body(request)
+        items = data.get("items")
+        if not isinstance(items, list):
+            raise ServiceError("items listesi gerekli")
+        return ok(await call(svc().set_holidays, _user(request), items))
+
+    @handler
     async def calendar_preview(request: Request):
         data = await _body(request)
         current, dates = data.get("current"), data.get("dates")
@@ -777,6 +787,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/history/closes", history_closes),
         Route("/api/history/mpc", history_mpc),
         Route("/api/calendar", calendar, methods=["GET", "POST"]),
+        Route("/api/holidays", holidays, methods=["GET", "POST"]),
         Route("/api/calendar/preview", calendar_preview, methods=["POST"]),
         Route("/api/fx/board", fx_board),
         Route("/api/fx/surface", fx_surface, methods=["POST"]),
