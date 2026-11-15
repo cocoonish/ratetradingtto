@@ -1251,9 +1251,9 @@
   {
    "id": "B35",
    "type": "table",
-   "title": "Limit",
+   "title": "Yardımcı · limit (kullanılmıyor)",
    "range": "W62:AA66",
-   "hidden": false
+   "hidden": true
   },
   {
    "id": "B11",
@@ -1311,8 +1311,7 @@
    "title": "Maliyet · DV01",
    "panels": [
     "B26",
-    "B10",
-    "B35"
+    "B10"
    ]
   },
   {

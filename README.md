@@ -266,7 +266,7 @@ etiketi (Mar28, Eyl35 …), üstünde kesik çizgiyle uydurulan eğri; geçmiş 
 * Yüzde hücrelerine `35,5`, `35,5%` ya da `0,355` yazılabilir (Excel'in otomatik yüzde girişi gibi).
 * **Nominal / tutar** hücrelerine masanın kısaltmasıyla da yazılır: `100m`, `2,5mn`, `1,5 milyon`, `500k`, `500 bin`,
   `1,5b`, `2 milyar` (Hazine İhalesi'nin teklif ve gerçekleşen nominali; OIS'in "Yuvarlama TL" ve "Nominal C+R"'si,
-  TM OIS'in "Nominal (TL)"'si, Forward ve Hesaplayıcılar'ın "Tutar"ı, Hesaplayıcılar'ın limitleri). Bu hücrelerde anlaşılmayan bir tutar hata
+  TM OIS'in "Nominal (TL)"'si, Forward ve Hesaplayıcılar'ın "Tutar"ı). Bu hücrelerde anlaşılmayan bir tutar hata
   verir, metin olarak kalmaz (kalsaydı tutarlar ve toplamlar sessizce boş görünürdü). DİBS RV'nin "Sat nominal
   (mn)"'si zaten milyon cinsindendir, kısaltma almaz.
 * Sayılar seçili **sayı biçimine** göre okunur (sağ üstteki `1.234,56` düğmesi): Türkçe biçimde `12.345` on iki bin
