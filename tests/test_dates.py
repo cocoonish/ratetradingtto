@@ -113,7 +113,8 @@ def check_pages(svc):
             return (x.get("k") == "e" and x.get("t") == "#ERR") or any(failed(v) for v in x.values())
         return isinstance(x, list) and any(failed(v) for v in x)
     for v in svc.views:
-        assert not failed(svc.view(USER, v["id"])), v["id"]
+        who = None if v.get("admin") else USER            # an administrators' page (Motor): the service itself renders it
+        assert not failed(svc.view(who, v["id"])), v["id"]
 
 
 # ---------------------------------------------------------------------------------------------- the recorded day

@@ -488,6 +488,8 @@ async function shot(page, name) {
     await login(pageB, 'Mehmet');
     check('a user has no Kullanıcılar page', (await pageB.locator('#nav .nav-item[data-page=users]').count()) === 0);
     check('a user has no sheet explorer', (await pageB.locator('#nav .nav-item[data-page=explorer]').count()) === 0);
+    check('the Motor page is for administrators: not in the menu of a user, in the menu of the administrator',
+      (await pageB.locator('#nav .nav-item[data-page=motor]').count()) === 0 && (await page.locator('#nav .nav-item[data-page=motor]').count()) === 1);
     await open(pageB, 'blotter');
     await pageB.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 3);
     check('another user sees the saved forwards', true);

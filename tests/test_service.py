@@ -655,3 +655,24 @@ def test_holidays_are_edited_in_one_place_for_both_workbooks(tmp_path):
         assert cell(again, "DİBS RV!D2") == parse_date("05.11.2026")
     finally:
         again.stop()
+
+
+def test_the_motor_page_is_for_administrators_and_two_pages_have_their_desk_names(service):
+    """The Motor sheet (the workbook's engine: bootstrap, solver, holidays) is an administrator's page: not in anyone
+    else's menu, search or shortcuts, and refused to them; the service itself (no user) still renders it.  "Bulk Bond"
+    holds the desk's Eurobonds (XS ISINs, dealer pricing sources) and is named so; "TM OIS" is the cash-flow OIS."""
+    user = login(service, "Motor Görmeyen")
+    admin = login(service, "Motor Yöneticisi")
+    service.store.update_account(admin, role="admin")
+    assert "motor" not in [p["id"] for p in service.nav(user)] and "motor" in [p["id"] for p in service.nav(admin)]
+    assert "motor" in [p["id"] for p in service.nav()]
+    with pytest.raises(ServiceError) as exc:
+        service.view(user, "motor")
+    assert exc.value.status == 403
+    assert service.view(admin, "motor")["id"] == "motor" and service.view(None, "motor")["id"] == "motor"
+    assert "motor" not in {link["page"] for link in service.view(user, "masa")["links"]}
+    assert "motor" in {link["page"] for link in service.view(admin, "masa")["links"]}
+    titles = {p["id"]: p["title"] for p in service.nav(user)}
+    assert titles["bulk"] == "Eurobond Kotaları" and titles["tmois"] == "OIS · Nakit Akışı"
+    isins = [cell(service, "Bulk Bond!A%d" % r) for r in (3, 4, 5)]
+    assert all(i.startswith("XS") for i in isins)                     # international (Euroclear / Clearstream) bonds

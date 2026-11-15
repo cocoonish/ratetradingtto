@@ -207,7 +207,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def nav(request: Request):
-        return ok({"pages": await call(svc().nav)})
+        return ok({"pages": await call(svc().nav, _user(request))})
 
     @handler
     async def header(request: Request):

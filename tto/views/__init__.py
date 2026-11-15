@@ -16,6 +16,8 @@
   are not listed are gathered in a last tab of their own.
 * ``pinned`` (optional)  ids of the panels that stay above the tabs whichever tab is open (the value date of
   the Forward page)
+* ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
+  anyone else's menu, search or shortcuts, and refused to them
 """
 from __future__ import annotations
 

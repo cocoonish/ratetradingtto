@@ -5,6 +5,7 @@
  "book": "tto",
  "sheet": "Motor",
  "order": 98,
+ "admin": true,
  "inputs": [
   {
    "range": "A361:A523",

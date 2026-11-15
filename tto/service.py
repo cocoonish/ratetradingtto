@@ -901,9 +901,22 @@ class Service(object):
                           for bid, b in self.books.items()},
                 "port": self.settings.port}
 
-    def nav(self) -> List[Dict[str, Any]]:
+    def _is_admin(self, user: Optional[str]) -> bool:
+        return bool(user) and (self.store.account(user_key(user)) or {}).get("role") == "admin"
+
+    def _hidden_pages(self, user: Optional[str]) -> set:
+        """The pages a user does not get (administrators' pages for everybody else).  ``None``: the service itself."""
+        if user is None or self._is_admin(user):
+            return set()
+        return {v["id"] for v in self.views if v.get("admin")}
+
+    def nav(self, user: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The pages of the menu (and of the search box) - an administrators' page only for them."""
+        hidden = self._hidden_pages(user)
         pages = []
         for v in self.views:
+            if v["id"] in hidden:
+                continue
             # the tables of the page (as the page definition names them): what the search box of the top bar finds
             tab = {}
             for sec in v.get("sections", []):
@@ -952,12 +965,14 @@ class Service(object):
         v = self.view_index.get(view_id)
         if v is None:
             raise ServiceError("sayfa bulunamadı: %s" % view_id, 404)
+        if v.get("admin") and user is not None and not self._is_admin(user):
+            raise ServiceError("bu sayfa yalnızca yöneticilere açıktır", 403)
         book = self.books[v["book"]]
         loc = numfmt.get_locale(locale or self.settings.locale)
         calc = self._calc(user, book)
         overlay = self._overlay(user, book) if user else None
         R = self.renderers[book.id]
-        explorer = bool(user) and (self.store.account(user_key(user)) or {}).get("role") == "admin"   # the sheet explorer is theirs
+        explorer = self._is_admin(user)                    # the sheet explorer is theirs
         gen = self.gen
         panels = []
         sheet_default = v.get("sheet")
@@ -1081,7 +1096,8 @@ class Service(object):
         out = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "gen": gen,
                "panels": panels, "ms": int((time.time() - t0) * 1000), "note": note}
         out.update(view_layout(v, [p["id"] for p in panels]))
-        links = self._shortcuts(v)
+        hidden = self._hidden_pages(user)
+        links = [link for link in self._shortcuts(v) if link["page"] not in hidden]      # (an administrators' page: theirs)
         if links:
             out["links"] = links
         return out
