@@ -62,6 +62,9 @@ def test_login(client, module_service):
 def test_status_nav_header(client):
     st = client.get("/api/status").json()
     assert st["mode"] == "replay" and st["port"] == 1057
+    # operations: the calculation thread's queue, the last fault a loop survived, how fresh the data is
+    ops = st["ops"]
+    assert ops["engine"]["queue"] >= 0 and ops["feed"]["state"] == "replay" and "last_error" in ops
     pages = client.get("/api/nav").json()["pages"]
     assert {"masa", "forward", "ois", "usd", "blotter"} <= {p["id"] for p in pages}
     assert len(client.get("/api/header").json()["items"]) >= 5
@@ -270,9 +273,17 @@ def test_blotter_archive_download(client, user):
     assert client.get("/api/blotter/export?date=bozuk").status_code == 400
 
 
-def test_errors_are_json_and_never_tracebacks(client):
+def test_errors_are_json_and_never_tracebacks(client, module_service, monkeypatch):
     res = client.get("/api/cell?book=tto&ref=bozuk")
     assert res.status_code == 404 and set(res.json()) == {"error"}
+    # an unexpected fault: a short answer to the browser, the whole story to the log (and the status)
+    def broken(*args, **kwargs):
+        raise RuntimeError("beklenmeyen durum")
+    monkeypatch.setattr(module_service, "ret_history", broken)
+    res = client.get("/api/ret/history")
+    assert res.status_code == 500 and res.json() == {"error": "sunucu hatası: beklenmeyen durum"}
+    le = module_service.status()["ops"]["last_error"]
+    assert le["where"] == "GET /api/ret/history" and le["text"] == "RuntimeError: beklenmeyen durum"
     # a name in the query string (or in the old X-TTO-User header) signs nobody in: only a session does
     assert client.get("/api/view/masa?user=%s" % quote("çağrı öztürk"), headers=ANON).status_code == 401
     assert client.get("/api/view/masa", headers=dict(ANON, **{"X-TTO-User": quote("çağrı öztürk")})).status_code == 401

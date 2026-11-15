@@ -135,7 +135,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                 return await fn(request)
             except ServiceError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=exc.status)
-            except Exception as exc:  # noqa: BLE001 - never leak a traceback to the browser
+            except Exception as exc:  # noqa: BLE001 - never leak a traceback to the browser (it goes to the log)
+                s = state["service"]
+                if s is not None:
+                    s.ops.failure("%s %s" % (request.method, request.url.path), exc)
                 return JSONResponse({"error": "sunucu hatası: %s" % (str(exc)[:300] or type(exc).__name__)},
                                     status_code=500)
         return wrapped

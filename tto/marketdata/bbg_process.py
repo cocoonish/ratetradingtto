@@ -22,22 +22,31 @@ values (never blocking), so a burst of ticks reaches the engine as "the latest v
 busy the engine is.  A helper that dies is started again and asked for everything once more; a helper that
 cannot be started at all raises :class:`IsolationError`, on which the dashboard falls back to a session
 inside its own process.
+
+The helper sends its values at least once a second (an empty batch when nothing changed): that is its
+heartbeat.  A helper that is alive but silent - hung in a call, deadlocked - would otherwise leave the last
+prices on every screen with nothing to tell them apart from live ones: the dashboard notes when it last heard
+from it (``heard`` in the status; the badge turns "stale"), and after ``silent_restart`` seconds of silence in
+market hours it ends that helper and starts a new one (see :data:`SILENT_RESTART`).
 """
 from __future__ import annotations
 
 import datetime as _dt
 import importlib
 import importlib.util
+import logging
 import multiprocessing
 import pickle
 import signal
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..xl.values import XlArray
 from .base import REQUESTING
 from .bloomberg import NA_NA, QUEUE_SIZE, BloombergProvider
+
+log = logging.getLogger("tto.bloomberg")
 
 #: seconds the helper waits for a message of the dashboard before it looks for changed values again
 PUMP = 0.1
@@ -48,6 +57,12 @@ QUICK = 300.0
 #: ... and after so many quick deaths in a row no new one is started: every new helper asks Bloomberg for
 #: everything again, and a helper that keeps dying must not use up the terminal's daily data limit that way
 MAX_QUICK_DEATHS = 5
+#: a helper that says nothing for this many seconds (it reports every second) is taken as hung and started
+#: again - in market hours only, at most MAX_SILENT_RESTARTS times a day, and each time of the day only after
+#: twice as long a silence as the time before (60 s, 120 s, 240 s): a new helper asks Bloomberg for everything
+#: again, so this must never turn into a loop that eats the terminal's daily data limit
+SILENT_RESTART = 60.0
+MAX_SILENT_RESTARTS = 3
 
 
 class IsolationError(RuntimeError):
@@ -174,7 +189,8 @@ class IsolatedBloombergProvider(BloombergProvider):
     def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 120.0,
                  request_timeout: float = 45.0, max_hits_per_day: int = 400000, bfx: str = "off",
                  reconnect_wait: float = 10.0, queue_size: int = QUEUE_SIZE, interval: float = 0.0,
-                 blpapi_name: Optional[str] = None, start_timeout: float = 60.0, pump: float = PUMP):
+                 blpapi_name: Optional[str] = None, start_timeout: float = 60.0, pump: float = PUMP,
+                 silent_restart: float = SILENT_RESTART):
         super(IsolatedBloombergProvider, self).__init__(
             host, port, stream=stream, price_poll=price_poll, request_timeout=request_timeout,
             max_hits_per_day=max_hits_per_day, bfx=bfx, reconnect_wait=reconnect_wait, queue_size=queue_size,
@@ -201,6 +217,16 @@ class IsolatedBloombergProvider(BloombergProvider):
         self._quick_deaths = 0               # helpers in a row that did not live long
         self._gave_up = False
         self._carry = (None, 0)              # (day, data points used) by helpers that are gone
+        # the heartbeat: when the present helper last said anything; silent that long, it is started again
+        self.silent_restart = max(0.0, float(silent_restart or 0.0))
+        #: asked (from this provider's own thread, so it must not block) whether a silent helper may be started
+        #: again now - the dashboard answers "in market hours"; None: always
+        self.restart_allowed: Optional[Callable[[], bool]] = None
+        self._heard = 0.0                    # epoch seconds, as the ticks' times (shown)
+        self._quiet_since = 0.0              # the same on the monotonic clock (measured: a clock set right is no silence)
+        self._silent = (None, 0)             # (day, helpers started again today because they went silent)
+        self._silence_told = False           # the present silence is in the log already
+        self._said = ""                      # the last word of this side in the log (a fault repeats every few seconds)
 
     # ================================================================== lifecycle
     def start(self) -> None:
@@ -270,7 +296,9 @@ class IsolatedBloombergProvider(BloombergProvider):
             raise RuntimeError(first[2])
         with self._tx_lock:
             self._proc, self._rx, self._tx = proc, rx, tx
-        self._born = time.time()
+        self._born = self._heard = time.time()
+        self._quiet_since = time.monotonic()
+        self._silence_told = False
         self._take_status(first[1])
 
     @staticmethod
@@ -359,7 +387,11 @@ class IsolatedBloombergProvider(BloombergProvider):
                        "pending": int(st.get("pending") or 0) + waiting, "connected": bool(self.connected and alive),
                        "streaming": bool(st.get("streaming", self.stream)), "error": self.last_error,
                        "bfx": self.bfx_mode, "isolated": True, "restarts": self.restarts,
-                       "worker": "running" if alive else ("stopped" if self._gave_up or self._stop.is_set() else "restarting")})
+                       "worker": "running" if alive else ("stopped" if self._gave_up or self._stop.is_set() else "restarting"),
+                       # the heartbeat: when the helper last said anything (epoch seconds), and the restarts of
+                       # helpers that went silent today
+                       "heard": self._heard if alive else 0.0,
+                       "silent_restarts": self._silent[1] if self._silent[0] == _dt.date.today() else 0})
             for name, default in (("subscriptions", 0), ("subscriptions_failed", 0), ("subscriptions_invalid", 0),
                                   ("requests", 0), ("hits_today", 0), ("ticks", 0), ("last_tick", 0.0),
                                   ("limit_reached", False), ("interval", self.interval), ("queue_size", self.queue_size),
@@ -411,8 +443,12 @@ class IsolatedBloombergProvider(BloombergProvider):
                     proc = self._proc
                     if proc is not None and not proc.is_alive() and not rx.poll(0):
                         raise EOFError("helper ended")
+                    self._watchdog()
                     continue
                 msg = rx.recv()
+                self._heard = time.time()
+                self._quiet_since = time.monotonic()
+                self._silence_told = False
             except (EOFError, OSError):
                 if self._stop.is_set():
                     return
@@ -470,27 +506,66 @@ class IsolatedBloombergProvider(BloombergProvider):
         for w in waiters:
             w[0].set()
 
-    def _lost(self) -> None:
-        """The helper is gone without having been told to stop."""
+    def _say(self, level: int, text: str) -> None:
+        """Into the dashboard's log - a word repeated (a helper that cannot be started, every few seconds) once."""
+        if text != self._said:
+            self._said = text
+            log.log(level, text)
+
+    def _lost(self, why: str = "") -> None:
+        """The helper is gone without having been told to stop (``why``: it was ended here, e.g. gone silent)."""
         with self._tx_lock:
             proc, rx, tx = self._proc, self._rx, self._tx
             self._proc = self._rx = self._tx = None
         self.connected = False
-        self.last_error = "Bloomberg yardımcı süreci kapandı – yeniden başlatılıyor"
+        self.last_error = "Bloomberg yardımcı süreci %s – yeniden başlatılıyor" % (why or "kapandı")
         self._quick_deaths = self._quick_deaths + 1 if time.time() - self._born < QUICK else 0
         self._carry = (_dt.date.today(), int(self.hits))    # the daily count goes on with the next helper
+        code = proc.exitcode if proc is not None else None
         for end in (rx, tx):
             if end is not None:
                 self._close(end)
         if proc is not None:
             self._kill(proc)
         self._release_waiters()
+        self._say(logging.WARNING, "Bloomberg yardımcı süreci %s%s – yeniden başlatılacak (art arda kısa ömürlü: %d)"
+                  % (why or "kapandı", "" if why or code is None else " (çıkış kodu %s)" % code, self._quick_deaths))
+
+    def _watchdog(self) -> None:
+        """A helper that is alive but has said nothing for ``silent_restart`` seconds (it reports every second:
+        it hangs) is ended and a new one started - in market hours only (``restart_allowed``), and at most
+        MAX_SILENT_RESTARTS times a day, the n-th time after twice as long a silence as the one before.  Beyond
+        that the badge stays "stale" and the status says why: someone has to look."""
+        if not self.silent_restart or not self._quiet_since or self._stop.is_set():
+            return
+        silent = time.monotonic() - self._quiet_since
+        if silent < self.silent_restart:
+            return
+        today = _dt.date.today()
+        used = self._silent[1] if self._silent[0] == today else 0
+        if silent < self.silent_restart * (2 ** used):
+            return
+        try:
+            allowed = self.restart_allowed is None or bool(self.restart_allowed())
+        except Exception:  # noqa: BLE001 - when in doubt, nothing is started
+            allowed = False
+        if used >= MAX_SILENT_RESTARTS or not allowed:
+            if not self._silence_told:
+                self._silence_told = True
+                why = ("bugün %d kez yeniden başlatıldı, artık kendiliğinden başlatılmıyor – dashboard'u yeniden başlatın"
+                       % used) if used >= MAX_SILENT_RESTARTS else "piyasa saatleri dışında yeniden başlatılmıyor"
+                self.last_error = "Bloomberg yardımcı süreci %d sn'dir ses vermiyor; %s" % (silent, why)
+                self._say(logging.ERROR if used >= MAX_SILENT_RESTARTS else logging.WARNING, self.last_error)
+            return
+        self._silent = (today, used + 1)
+        self._lost("%d sn ses vermedi (bugün %d. kez)" % (silent, used + 1))
 
     def _respawn(self) -> None:
         if self._quick_deaths >= MAX_QUICK_DEATHS:
             self._gave_up = True
             self.last_error = ("Bloomberg yardımcı süreci art arda %d kez kapandı – yeniden başlatılmıyor; "
                                "dashboard'u kapatıp yeniden açın" % self._quick_deaths)
+            self._say(logging.ERROR, self.last_error)
             self._stop.wait(5.0)
             return
         # each quick death doubles the wait: 10 s, 20 s, 40 s ...
@@ -500,6 +575,7 @@ class IsolatedBloombergProvider(BloombergProvider):
             self._spawn()
         except Exception as exc:  # noqa: BLE001 - tried again after the next wait
             self.last_error = "Bloomberg yardımcı süreci başlatılamadı: %s" % (str(exc)[:160],)
+            self._say(logging.WARNING, self.last_error)
             return
         if self._stop.is_set():                # stopped while the helper was coming up
             with self._tx_lock:
@@ -517,3 +593,5 @@ class IsolatedBloombergProvider(BloombergProvider):
             self._seen = 0
             self.restarts += 1
         self._wake.set()
+        self._say(logging.INFO, "Bloomberg yardımcı süreci yeniden başladı (%d. kez); %d kalem yeniden isteniyor"
+                  % (self.restarts, len(self._outbox)))

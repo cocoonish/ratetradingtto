@@ -63,6 +63,7 @@ class EngineThread(object):
 
     def __init__(self, name: str = "tto-engine"):
         self._q: "queue.Queue" = queue.Queue()
+        self._busy_since = 0.0                 # when the job running now began (0: idle)
         old = threading.stack_size()
         try:
             threading.stack_size(256 * 1024 * 1024)
@@ -83,10 +84,22 @@ class EngineThread(object):
             fut, fn, args, kw = item
             if not fut.set_running_or_notify_cancel():
                 continue
+            self._busy_since = time.time()
             try:
                 fut.set_result(fn(*args, **kw))
             except BaseException as exc:  # noqa: BLE001 - delivered to the caller
                 fut.set_exception(exc)
+            finally:
+                self._busy_since = 0.0
+
+    def queued(self) -> int:
+        """Jobs waiting for the calculation thread (the one running not counted)."""
+        return self._q.qsize()
+
+    def busy_for(self) -> float:
+        """Seconds the job running now has been running (0: idle)."""
+        since = self._busy_since
+        return time.time() - since if since else 0.0
 
     def submit(self, fn: Callable, *args, **kw) -> "concurrent.futures.Future":
         fut: "concurrent.futures.Future" = concurrent.futures.Future()
@@ -129,6 +142,9 @@ class Service(object):
         self.settings = settings or Settings()
         self._clock_override = clock
         self.store = store or Store(self.settings.db_path)
+        # operations: the log of what the loops survive, how fresh the market data is (ops.py)
+        from .ops import Ops
+        self.ops = Ops(self)
         self.et = EngineThread()
         self.gen = 1
         self._gen_lock = threading.Lock()
@@ -271,7 +287,9 @@ class Service(object):
             from .marketdata.bbg_process import IsolatedBloombergProvider, IsolationError
             try:
                 provider = IsolatedBloombergProvider(s.bbg_host, s.bbg_port, interval=s.bbg_interval or 0.0,
-                                                     blpapi_name=stand_in, **common)
+                                                     blpapi_name=stand_in, silent_restart=s.bbg_silent_restart, **common)
+                # a helper gone silent is started again in market hours only (each new one asks for everything)
+                provider.restart_allowed = self.ops.in_market
                 provider.start()
                 return provider
             except IsolationError as exc:
@@ -295,6 +313,7 @@ class Service(object):
             if self.mode == "live":
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
             self.history.start()
+            self.ops.start()
 
     def _warmup_safe(self) -> None:
         try:
@@ -346,6 +365,7 @@ class Service(object):
         self._stop.set()
         self.history._stop.set()                   # no new work while the provider goes down
         self.history._kick.set()
+        self.ops.stop()
         self.fx.stop()
         try:
             stop = getattr(self.provider, "stop", None)
@@ -383,7 +403,8 @@ class Service(object):
                     # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
                     last_roll = time.monotonic()
                     self.history.auto_roll()
-            except Exception:  # noqa: BLE001 - the loop must survive anything
+            except Exception as exc:  # noqa: BLE001 - the loop must survive anything (and say so in the log)
+                self.ops.failure("piyasa döngüsü", exc)
                 continue
 
     def _apply_market(self, keys) -> bool:
@@ -449,7 +470,12 @@ class Service(object):
                 break
             try:
                 fired = self.et.submit(self.watch.tick).result(timeout=60)
-            except Exception:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
+            except concurrent.futures.TimeoutError:
+                self.ops.failure("izleme / alarm döngüsü", RuntimeError("tur 60 sn'de bitmedi – hesap motoru meşgul (%d iş bekliyor)"
+                                                                        % self.et.queued()))
+                continue
+            except Exception as exc:  # noqa: BLE001 - the loop must survive anything (and a calculation thread gone)
+                self.ops.failure("izleme / alarm döngüsü", exc)
                 continue
             if fired:
                 self.bump()
@@ -872,7 +898,9 @@ class Service(object):
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
                                 "source": b.model.meta.get("source"), "left_out": list(getattr(b, "left_out", []))}
                           for bid, b in self.books.items()},
-                "port": self.settings.port}
+                "port": self.settings.port,
+                # how fresh the data is, the calculation thread's queue, the last fault a loop survived (ops.py)
+                "ops": self.ops.status(prov)}
 
     def nav(self) -> List[Dict[str, Any]]:
         pages = []

@@ -18,7 +18,7 @@ class Settings(object):
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
                  bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
                  bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
-                 history_pace: float = 1.0):
+                 history_pace: float = 1.0, log_dir: Optional[str] = None, bbg_silent_restart: float = 60.0):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -40,6 +40,10 @@ class Settings(object):
         self.bbg_queue = int(bbg_queue)         # undelivered events the Bloomberg session may hold
         # live mode: after a day of the meeting-pricing history has been computed, rest this many times as long
         self.history_pace = max(0.0, float(history_pace))
+        # the log file (tto.log, rotated): in the data folder - the install's, never a folder git keeps
+        self.log_dir = log_dir or os.environ.get("TTO_LOG_DIR") or os.path.join(self.data_dir, "logs")
+        # a Bloomberg helper silent this many seconds in market hours is started again (0: never; see bbg_process.py)
+        self.bbg_silent_restart = max(0.0, float(bbg_silent_restart))
 
     @property
     def db_path(self) -> str:

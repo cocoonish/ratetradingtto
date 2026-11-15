@@ -51,6 +51,11 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
                    help="günlük tarihçeyi (gün sonu matrisi, PPK fiyatlama geçmişi) arka planda güncelleme")
     p.add_argument("--history-refresh", type=float, default=900.0,
                    help="canlı veride tarihçenin güncellenme aralığı (sn; 0 = yalnızca açılışta)")
+    p.add_argument("--log-dir", default=None,
+                   help="günlük dosyasının (tto.log) klasörü (varsayılan: veri klasöründe logs; TTO_LOG_DIR ile de verilir)")
+    p.add_argument("--bbg-silent-restart", type=float, default=60.0,
+                   help="Bloomberg yardımcı süreci piyasa saatinde bu kadar sn ses vermezse yeniden başlatılır "
+                        "(günde en çok 3 kez, her seferinde iki kat bekleyerek; 0 = hiç)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +88,8 @@ def settings_from(args) -> Settings:
                     bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale, bbg_stream=not args.no_stream,
                     bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll,
                     history=not args.no_history, history_refresh=args.history_refresh,
-                    bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue)
+                    bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue,
+                    log_dir=args.log_dir, bbg_silent_restart=args.bbg_silent_restart)
 
 
 def cmd_run(args) -> int:
@@ -100,11 +106,19 @@ def cmd_run(args) -> int:
         return 2
     import uvicorn
 
+    from .ops import setup_logging
+    try:
+        logfile = setup_logging(settings.log_dir)
+    except OSError as exc:                         # a folder that cannot be written: run without the file
+        logfile = "yazılamadı (%s)" % exc
     from .server import create_app
     app = create_app(settings=settings)
     shown = "localhost" if settings.host in ("0.0.0.0", "::") else settings.host
     how = ", web paketleri: gömülü kopya (vendor/%s)" % packages["bundled"] if packages["bundled"] else ""
     print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
+    print("Günlük: %s" % logfile)
+    import logging
+    logging.getLogger("tto").info("dashboard başlıyor: port %d, mod %s, veri %s", settings.port, settings.mode, settings.data_dir)
     # no proxy in front of the dashboard: the address a request came from is the connection's own (an
     # X-Forwarded-For header could otherwise make a request from the network look like one from this computer)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning", proxy_headers=False)

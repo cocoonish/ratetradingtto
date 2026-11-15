@@ -127,6 +127,9 @@ a { color: var(--accent-ink); }
 .badge.live .led { background: var(--pos); box-shadow: 0 0 0 3px rgba(12, 163, 12, .18); }
 .badge.live.slow { border-color: rgba(250, 178, 25, .6); color: var(--warn); }
 .badge.live.slow .led { background: var(--warn); box-shadow: 0 0 0 3px rgba(250, 178, 25, .2); }
+.badge.live.stale { border-color: rgba(230, 103, 103, .7); color: var(--neg); font-weight: 650; }
+.badge.live.stale .led { background: var(--neg); box-shadow: 0 0 0 3px rgba(230, 103, 103, .22); animation: led-blink 1.2s steps(2, start) infinite; }
+@keyframes led-blink { to { visibility: hidden; } }
 .badge.replay { border-color: rgba(250, 178, 25, .5); color: var(--warn); }
 .badge.replay .led { background: var(--warn); }
 /* "Tablo bul": the tables of every page by name */

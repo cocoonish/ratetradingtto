@@ -29,13 +29,23 @@ function cellLink(c, close) {
   return a;
 }
 
+const FEED = { ok: 'akıyor', stale: 'BAYAT', silent: 'BAYAT (yardımcı süreç sessiz)', down: 'bağlantı yok', replay: 'kayıtlı veri' };
+
 export async function openStatus(status) {
   const st = status || {};
   const p = st.provider || {};
+  const ops = st.ops || {};
+  const feed = ops.feed || {};
   const m = modal({ title: 'Veri kaynağı', width: 1100 });
   m.box.classList.add('statusbox');
   const head = h('div', { class: 'stgrid' });
   if (st.mode === 'live') {
+    head.appendChild(line('Veri', (FEED[feed.state] || feed.state || '—') + (feed.as_of ? ' · ' + feed.as_of + ' itibarıyla' : '')
+      + (feed.reason ? ' – ' + feed.reason : ''), feed.state === 'ok' ? '' : 'bad'));
+    if (p.isolated) {
+      head.appendChild(line('Yardımcı süreç son ses', clock(p.heard) + (p.silent_restarts ? ' · sessiz kaldığı için bugün ' + p.silent_restarts
+        + ' kez yeniden başlatıldı' : ''), p.silent_restarts ? 'warn' : ''));
+    }
     head.appendChild(line('Bağlantı', p.connected === false ? 'YOK – yeniden bağlanılıyor' : 'Bloomberg ' + (p.host || ''), p.connected === false ? 'bad' : ''));
     head.appendChild(line('Abonelik', num(p.subscriptions || 0, 0) + (p.subscriptions_failed ? ' · ' + p.subscriptions_failed + ' başarısız' : '')));
     head.appendChild(line('Bloomberg\'in tanımadığı', num(p.subscriptions_invalid || 0, 0) + ' ticker (abone olunmadı)', p.subscriptions_invalid ? 'warn' : ''));
@@ -49,6 +59,14 @@ export async function openStatus(status) {
     head.appendChild(line('Veri', 'Kayıtlı veri (Excel dosyalarındaki son piyasa verisi)'));
     if (st.note) head.appendChild(line('Not', st.note, 'warn'));
   }
+  // the dashboard itself: the calculation thread's queue, the last fault a background loop survived, the log
+  const eng = ops.engine || {};
+  head.appendChild(line('Hesap motoru', (eng.queue || 0) + ' iş bekliyor' + (eng.busy ? ' · şu anki iş ' + num(eng.busy, 1) + ' sn\'dir sürüyor' : ''),
+    (eng.queue || 0) > 20 || (eng.busy || 0) > 30 ? 'warn' : ''));
+  const le = ops.last_error;
+  head.appendChild(line('Son hata (dashboard)', le ? le.at + ' · ' + le.where + ' · ' + le.text + (le.count > 1 ? ' (toplam ' + le.count + ')' : '') : 'yok',
+    le ? 'warn' : ''));
+  if (ops.log) head.appendChild(line('Günlük dosyası', ops.log));
   m.body.appendChild(head);
 
   const box = h('div', { class: 'unknown' }, h('div', { class: 'loading' }, 'Bloomberg\'in tanımadıkları yükleniyor…'));
