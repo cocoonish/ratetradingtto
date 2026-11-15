@@ -698,6 +698,10 @@ class History(object):
                                       info={"isin": isin, "name": "" if name.startswith("#") else name, "type": kind,
                                             "maturity": _iso(maturity) if maturity else None, "row": r,
                                             "bist": bist if type(bist) is float else None}))
+        # the global drivers and FX series of the quant signals (tto.quant): kept like the others, two years back
+        from .quant import history_defs
+        fx = getattr(self.svc, "fx", None)
+        defs.extend(history_defs(fx.source() if fx is not None else "BGN"))
         holidays: List[float] = []
         mi = model.sheet_index.get("Motor")
         if mi is not None:
@@ -1064,25 +1068,27 @@ class History(object):
         first = today - _dt.timedelta(days=look)
         bounds = self.store.hist_bounds()
         now = time.time()
-        full: Dict[str, List[str]] = {}
-        tail: Dict[str, List[str]] = {}
+        full: Dict[Tuple[str, _dt.date], List[str]] = {}
+        tail: Dict[Tuple[str, _dt.date], List[str]] = {}
         for d in snap["defs"]:
+            # a series may ask for a longer past than the setting (the quant package's own: two years)
+            since = min(first, today - _dt.timedelta(days=int(d.info.get("lookback") or 0)))
             for t in [d.ticker] + d.alts:
                 sid = "%s|%s" % (t, d.field)
                 b = bounds.get(sid)
                 if b is None:
                     if now - self._empty.get(sid, 0.0) < 6 * 3600.0:
                         continue                               # no history a moment ago: not asked again so soon
-                    full.setdefault(d.field, []).append(t)
-                elif _day(b[1]) < today - _dt.timedelta(days=10) or _day(b[0]) > first + _dt.timedelta(days=20):
-                    full.setdefault(d.field, []).append(t)     # a gap, or the window grew
+                    full.setdefault((d.field, since), []).append(t)
+                elif _day(b[1]) < today - _dt.timedelta(days=10) or _day(b[0]) > since + _dt.timedelta(days=20):
+                    full.setdefault((d.field, since), []).append(t)     # a gap, or the window grew
                 else:
-                    tail.setdefault(d.field, []).append(t)
+                    tail.setdefault((d.field, today - _dt.timedelta(days=10)), []).append(t)
         prov = self.svc.provider
         changed = 0
         end = today.strftime("%Y%m%d")
-        for group, start in ((full, first), (tail, today - _dt.timedelta(days=10))):
-            for field, tickers in group.items():
+        for group in (full, tail):
+            for (field, start), tickers in group.items():
                 tickers = sorted(set(tickers))
                 if not tickers or self._stop.is_set():
                     continue

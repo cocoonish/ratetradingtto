@@ -709,6 +709,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         data = await _body(request)
         return ok(await call(svc().desk.mark, _user(request), request.path_params["aid"], data.get("done", True)))
 
+    # ------------------------------------------------------------------ quant signals (quant.py)
+    @handler
+    async def quant_get(request: Request):
+        return ok(await call(svc().quant.view, request.path_params["what"], _user(request), dict(request.query_params)))
+
+    @handler
+    async def quant_post(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().quant.action, request.path_params["what"], _user(request), data))
+
     # ------------------------------------------------------------------ live updates (SSE)
     async def events(request: Request):
         loop = asyncio.get_running_loop()
@@ -734,7 +744,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         service.add_listener(push)
 
         def message(gen: int) -> str:
-            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters(admin)})
+            # (the quant signals' counters: the last alert's number, the version of the results - see quant.Quant.counters)
+            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters(admin), "quant": service.quant.counters()})
 
         async def stream():
             try:
@@ -846,6 +857,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/social/{mid:int}", social_delete, methods=["DELETE"]),
         Route("/api/agenda", agenda, methods=["GET", "POST"]),
         Route("/api/agenda/{aid:int}", agenda_item, methods=["POST", "DELETE"]),
+        Route("/api/quant/{what}", quant_get),
+        Route("/api/quant/{what}", quant_post, methods=["POST"]),
         Mount("/static", app=_Static(directory=STATIC), name="static"),
     ]
 
