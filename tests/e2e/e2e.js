@@ -1257,7 +1257,8 @@ async function shot(page, name) {
       if (hist.phase === 'idle' && hist.mpc_days >= 21) break;
       await page.waitForTimeout(2000);
     }
-    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 && !hist.error, hist);
+    // (8 series of the workbook, and 6 of the quant package's that the file recorded too: USDTRY, its swap points, USD OIS 3M)
+    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 + 6 && !hist.error, hist);
     const rowsOf = (panel) => page.evaluate((p) => [...document.querySelectorAll('.panel[data-panel="' + p + '"] table.grid tr')]
       .map((tr) => [...tr.children].map((td) => td.textContent.trim())), panel);
     const rowOf = (rows, label) => rows.find((r) => r[0] === label || r[0].startsWith(label)) || [];
@@ -1397,7 +1398,8 @@ async function shot(page, name) {
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
-      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118, rowOf(series, 'TLREF'));
+      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 50       // (+ the quant package's 50)
+      && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), rowOf(series, 'TLREF'));
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
     check('settings: the pricing sources - OIS GFOF, offshore and XCCY ICPL, the workbook\'s BGN ticker last',
