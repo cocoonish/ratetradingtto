@@ -1257,6 +1257,34 @@ def test_fit_runs_off_the_engine_thread_and_finds_the_planted_signals(seeded, mo
     assert svc.quant.state["refreshes"] == t0 + 1 and svc.quant.state["live_ms"] < 2000
 
 
+def test_the_service_backtests_every_family_and_shows_it_beside_each_signal(seeded):
+    import time as _time
+    svc = seeded
+    q = svc.quant
+    q.compute()
+    t0 = _time.perf_counter()
+    res = q.run_backtest(days=120, step=20)
+    took = _time.perf_counter() - t0
+    print("backtest: %d days, %d refits, %d trades, %.1f s" % (res["days"], res["refits"], res["n_trades"], took))
+    assert res["complete"] and res["refits"] == 6 and res["families"] and q.backtest_result() is res
+    assert res["key"] == q._bt_key() and svc.store.get(q.BT_KEY)["n_trades"] == res["n_trades"]
+    q.compute()                                                          # the signals now carry their family's record
+    user = svc.login("quant okuyucu")["user"]
+    sigs = q.view("signals", user, {})["signals"]
+    assert sigs and all(s["bt"] is not None and s["bt"]["text"].startswith(("bu aile", "geri testte")) for s in sigs)
+    assert all(any(g["name"] == "Geri test" for g in s["gates"]) for s in sigs)
+    view = q.view("backtest", user, {})
+    assert view["ready"] and view["rows"] and {"trades", "hit", "avg_sigma", "sharpe", "max_dd"} <= set(view["rows"][0])
+    # the desk's floor: a family whose record is below it has its signals held back ("geri testte zayıf")
+    fam = sigs[0]["family"]
+    q.set_settings(user, {"bt_mute": "açık", "bt_min_trades": 1, "bt_min_hit": 1.0})
+    q.compute()
+    held = [s for s in q.view("signals", user, {})["gated"] if s["family"] == fam and (q.backtest_result()["families"].get(fam) or {}).get("trades")]
+    assert held and all(s["strength"] == "elendi" for s in held) and any("geri testte zayıf" in s["gated"] for s in held)
+    q.set_settings(user, {"bt_mute": "kapalı", "bt_min_trades": 10, "bt_min_hit": 0.5})
+    q.compute()
+
+
 def test_quant_http_api(seeded):
     svc = seeded
     if not svc.quant.status()["ready"]:
@@ -1293,3 +1321,71 @@ def test_quant_http_api(seeded):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401
     assert set(svc.quant.counters()) == {"alerts", "version"}
+
+
+# ================================================================================================ the backtest
+def _bt_inputs(n=520, seed=61):
+    rnd = random.Random(seed)
+    days = DAYS[-n:]
+    ou = [x * 100.0 for x in ar1(n, 0.8, 0.05, rnd)]                    # bp: mean-reverting, a half-life of ~3 days
+    rw = [x * 100.0 for x in walk(n, 0.05, rnd)]                        # bp: a random walk
+    series = {"OU": dict(zip(days, ou)), "RW": dict(zip(days, rw))}
+    meta = {"OU": {"label": "OU", "kind": "bp"}, "RW": {"label": "RW", "kind": "bp"}}
+
+    def make_ctx(T, series=series):
+        return qf.Ctx(cfg(), dt.date.fromisoformat(T) + dt.timedelta(days=1), series, {k: dict(v) for k, v in meta.items()})
+
+    def runner(ctx):
+        out = []
+        for key in ("OU", "RW"):
+            pts = ctx.pts(key)
+            m = qf.mr_monitor(ctx, "pca:" + key, "pca", "TRY OIS", key, "bp", 1, [d for d, _ in pts], [v for _, v in pts], "bp",
+                              [{"key": key, "name": key, "weight": 1.0}], lambda live, key=key, ctx=ctx: ctx.cur(key, live), pkg="rate")
+            if m is not None:
+                out.append(m)
+        return out
+
+    return days, series, make_ctx, runner
+
+
+def test_backtest_walks_forward_with_the_live_rules():
+    from tto import quantbt as qbt
+    days, series, make_ctx, runner = _bt_inputs()
+    res = qbt.backtest(days[-250:], make_ctx, runner, series, cfg(), step=10)
+    ou = [t for t in res["trades"] if t["sid"] == "pca:OU"]
+    rw = [t for t in res["trades"] if t["sid"] == "pca:RW"]
+    assert res["refits"] == 25 and res["complete"] and res["first"] == days[-250]
+    # the mean-reverting series: entered past |z| 2, mostly back at its mean; the random walk: its half-life keeps it out
+    assert len(ou) >= 8 and sum(1 for t in ou if t["pnl"] > 0) / len(ou) >= 0.65 and sum(t["pnl_sigma"] for t in ou) / len(ou) > 0.3
+    assert len(rw) <= len(ou) / 2
+    assert all(t["outcome"] in ("hedef", "stop", "süre") and 1 <= t["held"] <= 20 and t["unit"] == "bp" for t in res["trades"])
+    assert all(t["entry_day"] < t["exit_day"] for t in res["trades"])
+    fam = res["families"]["pca"]
+    assert fam["trades"] == len(ou) + len(rw) and set(fam["types"]) == {"TRY OIS"} and fam["avg_try"] == pytest.approx(fam["avg"] * 10000.0)
+    # no look-ahead: the future rewritten after a day changes nothing decided by that day
+    cut = days[-100]
+    later = {k: {d: (v + 50.0 if d > cut else v) for d, v in pts.items()} for k, pts in series.items()}
+    _, _, make2, run2 = _bt_inputs()
+    res2 = qbt.backtest(days[-250:], lambda T: make2(T, later), run2, later, cfg(), step=10)
+    def before(r):
+        return sorted((t["sid"], t["entry_day"], round(t["entry"], 9), t["exit_day"], round(t["pnl"], 9)) for t in r["trades"] if t["exit_day"] <= cut)
+    entries = lambda r: sorted((t["sid"], t["entry_day"], round(t["entry"], 9)) for t in r["trades"] if t["entry_day"] <= cut)
+    assert before(res) == before(res2) and entries(res)[:len(before(res))] == entries(res2)[:len(before(res))]
+
+
+def test_backtest_statistics_and_the_desk_s_floor():
+    from tto import quantbt as qbt
+    trades = [{"sid": "a", "exit_day": "2026-01-%02d" % (i + 1), "pnl": p, "pnl_sigma": p, "unit": "bp", "pnl_try": p * 10000.0}
+              for i, p in enumerate([1.0, -2.0, 1.5, 0.5, -0.5, 2.0])]
+    st = qbt.summarize(trades, "2025-01-01", "2026-01-01")
+    m = 2.5 / 6.0
+    sd = math.sqrt(sum((x - m) ** 2 for x in [1.0, -2.0, 1.5, 0.5, -0.5, 2.0]) / 5.0)
+    assert st["trades"] == 6 and st["hits"] == 4 and st["hit"] == pytest.approx(4 / 6) and st["avg_sigma"] == pytest.approx(m)
+    assert st["sharpe"] == pytest.approx(m / sd * math.sqrt(6.0)) and st["max_dd"] == pytest.approx(2.0) and st["avg_try"] == pytest.approx(m * 10000.0)
+    assert qbt.bt_text(st, 2.0) == "bu aile son 2 yılda 6 işlem, %67 isabet, ort. +0,4σ"
+    weak = {"trades": 20, "hit": 0.42, "sharpe": -0.3}
+    assert qbt.bt_gate(weak, cfg()) is None                               # the default: the stats shown, nothing muted
+    on = cfg(bt_mute="açık", bt_min_hit=0.5, bt_min_sharpe=0.0, bt_min_trades=10)
+    assert qbt.bt_gate(weak, on) == "geri testte zayıf: isabet %42 < %50"
+    assert qbt.bt_gate(dict(weak, hit=0.6), on) == "geri testte zayıf: Sharpe -0,30 < 0,00"
+    assert qbt.bt_gate(dict(weak, trades=5), on) is None                  # too few trades to judge

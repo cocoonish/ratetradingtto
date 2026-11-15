@@ -35,6 +35,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import fx as fxm
+from . import quantbt as qbt
 from . import quantfam as qf
 from . import volcarry as vc
 from .service import ServiceError
@@ -46,10 +47,13 @@ DEFAULTS: Dict[str, Any] = {
     "log_days": 20, "kalman_q": 0.01, "model_hit": 0.55, "model_min_tests": 40, "model_l2": 5.0, "cycle_bp": 100.0, "cycle_t": 2.0,
     "dv01_base": 10000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
     "desk_alarm": "Güçlü", "carry_margin": 0.5, "fx_verdict": 0.3,
+    "bt_mute": "kapalı", "bt_min_hit": 0.5, "bt_min_sharpe": 0.0, "bt_min_trades": 10,
     "fx_pairs": "USDTRY, EURTRY, EURUSD, USDZAR, USDMXN, USDBRL, USDINR, USDIDR, USDHUF, USDPLN, USDCOP",
 }
 #: which signals also ring as the desk's alarms (deskalarms.py, for everyone): at least this strong, or none
 DESK_ALARM_CHOICES = ("kapalı", "Zayıf", "Orta", "Güçlü")
+#: the backtest's floor: off (the stats are shown), or on (a family below it has its signals held back)
+BT_MUTE_CHOICES = ("kapalı", "açık")
 #: name -> (lowest, highest, type)
 LIMITS: Dict[str, Tuple[float, float, type]] = {
     "entry_z": (0.5, 5.0, float), "target_z": (-1.0, 2.0, float), "stop_z": (1.0, 10.0, float), "horizon": (2, 120, int),
@@ -58,6 +62,7 @@ LIMITS: Dict[str, Tuple[float, float, type]] = {
     "log_days": (1, 120, int), "kalman_q": (1e-6, 1.0, float), "model_hit": (0.5, 0.9, float), "model_min_tests": (10, 200, int),
     "model_l2": (0.0, 100.0, float), "cycle_bp": (10.0, 1000.0, float), "cycle_t": (0.5, 10.0, float), "dv01_base": (1.0, 1e9, float),
     "carry_margin": (0.0, 3.0, float), "fx_verdict": (0.0, 3.0, float),
+    "bt_min_hit": (0.0, 1.0, float), "bt_min_sharpe": (-5.0, 5.0, float), "bt_min_trades": (1, 1000, int),
 }
 LABELS = {
     "entry_z": "Giriş eşiği |z|", "target_z": "Hedef z (ortalamaya göre)", "stop_z": "Stop |z|", "horizon": "Elde tutma ufku (iş günü)",
@@ -70,6 +75,8 @@ LABELS = {
     "desk_alarm": "Masa alarmına düşen en az güç",
     "carry_margin": "Carry aleyhine işlemde tampon (ufuk σ'sı)", "fx_verdict": "Parite kararı için en az beklenen getiri / vol",
     "fx_pairs": "FX pariteleri (Bloomberg geçmişi: ilk doldurma turda 5 seri)",
+    "bt_mute": "Geri testi zayıf aileyi sustur", "bt_min_hit": "Geri test: en az isabet", "bt_min_sharpe": "Geri test: en az Sharpe",
+    "bt_min_trades": "Geri test: karar için en az işlem",
 }
 
 #: the history keeps this series this many calendar days back (about two years)
@@ -249,6 +256,9 @@ class Quant(object):
         self._hooks: List[Callable[[Dict[str, Any]], None]] = []
         self._scale: Dict[str, Tuple[str, Optional[int]]] = {}
         self.use_live = True                        # False: the last close stands for today (tests on synthetic history)
+        self._last_base: Optional[Dict[str, Any]] = None   # the last fit's inputs (the backtest refits on them)
+        self._bt: Optional[Dict[str, Any]] = None
+        self._bt_thread: Optional[threading.Thread] = None
         self.version = 0
         self.state: Dict[str, Any] = {"phase": "idle", "fit_at": None, "fit_ms": None, "live_at": None, "live_ms": None, "engine_ms": None,
                                       "error": "", "timing": {}, "fits": 0, "refreshes": 0}
@@ -301,10 +311,11 @@ class Quant(object):
                 if codes != parse_pairs(cur.get("fx_pairs") or DEFAULTS["fx_pairs"]):
                     pairs_changed = True
                 cur[name] = ", ".join(codes)
-            elif name == "desk_alarm":
-                choice = next((c for c in DESK_ALARM_CHOICES if c.casefold() == str(raw or "").strip().casefold()), None)
+            elif name in ("desk_alarm", "bt_mute"):
+                options = DESK_ALARM_CHOICES if name == "desk_alarm" else BT_MUTE_CHOICES
+                choice = next((c for c in options if c.casefold() == str(raw or "").strip().casefold()), None)
                 if choice is None:
-                    raise QuantError("%s: %s" % (LABELS[name], " / ".join(DESK_ALARM_CHOICES)))
+                    raise QuantError("%s: %s" % (LABELS[name], " / ".join(options)))
                 cur[name] = choice
         if not cur["stop_z"] > cur["entry_z"] > cur["target_z"]:
             raise QuantError("stop |z| > giriş |z| > hedef z olmalı")
@@ -326,7 +337,7 @@ class Quant(object):
 
     def settings_view(self) -> Dict[str, Any]:
         saved = self.store.get(self.SET_KEY) or {}
-        return _clean({"values": self.settings(), "defaults": DEFAULTS, "labels": LABELS, "choices": {"desk_alarm": list(DESK_ALARM_CHOICES)},
+        return _clean({"values": self.settings(), "defaults": DEFAULTS, "labels": LABELS, "choices": {"desk_alarm": list(DESK_ALARM_CHOICES), "bt_mute": list(BT_MUTE_CHOICES)},
                        "limits": {k: [lo, hi, "int" if t is int else "float"] for k, (lo, hi, t) in LIMITS.items()},
                        "by": saved.get("by") if isinstance(saved, dict) else None, "at": saved.get("at") if isinstance(saved, dict) else None})
 
@@ -359,6 +370,7 @@ class Quant(object):
             try:
                 if self._needs_fit():
                     self.compute()
+                    self._backtest_soon()
                 elif self._fit is not None and time.time() - (self.state.get("live_t") or 0.0) >= LIVE_EVERY - 1.0:
                     self.refresh_live()
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything
@@ -386,6 +398,90 @@ class Quant(object):
         asked = len(self.svc.history.fetch_records())
         text = repr(sorted((k, v[1], v[2]) for k, v in bounds.items())) + repr((len(days), last, days[last].get("computed_at") if last else None, asked))
         return hashlib.sha1(text.encode()).hexdigest()
+
+    # ================================================================== the backtest
+    BT_KEY = "quant.backtest"
+
+    def _bt_key(self) -> Optional[str]:
+        base = self._last_base
+        if base is None:
+            return None
+        cfg = {k: v for k, v in base["cfg"].items() if k not in ("by", "at", "desk_alarm", "bt_mute", "bt_min_hit", "bt_min_sharpe", "bt_min_trades")}
+        return hashlib.sha1(repr((base["today"].isoformat(), sorted(cfg.items()))).encode()).hexdigest()
+
+    def backtest_result(self) -> Optional[Dict[str, Any]]:
+        if self._bt is None:
+            v = self.store.get(self.BT_KEY)
+            self._bt = v if isinstance(v, dict) else None
+        return self._bt
+
+    def _backtest_soon(self) -> None:
+        """Once a day (and after a change of the settings): the walk-forward backtest, in a thread of its own at the
+        engine's pace (it pauses between families as the fit does)."""
+        key = self._bt_key()
+        cur = self.backtest_result()
+        if key is None or (cur is not None and cur.get("key") == key) or (self._bt_thread is not None and self._bt_thread.is_alive()):
+            return
+        self._bt_thread = threading.Thread(target=self._bt_worker, name="tto-quant-bt", daemon=True)
+        self._bt_thread.start()
+
+    def _bt_worker(self) -> None:
+        try:
+            self.run_backtest()
+            self.kick()                                     # the signals carry the new stats at the next refresh
+        except Exception as exc:  # noqa: BLE001 - the backtest is not worth the signals
+            self.state["bt_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+
+    def run_backtest(self, days: int = qbt.BT_DAYS, step: int = qbt.BT_STEP, budget: float = 900.0) -> Optional[Dict[str, Any]]:
+        """The walk-forward backtest (``tto.quantbt``) on the inputs of the last fit: every family fitted every ``step``
+        business days on the closes up to that day only, scored day by day with the very same rules."""
+        base = self._last_base
+        if base is None:
+            return None
+        self.state["bt_phase"] = "çalışıyor"
+        try:
+            cfg = dict(base["cfg"])
+            today_iso = base["today"].isoformat()
+            series = {k: {d: v for d, v in pts.items() if d < today_iso} for k, pts in base["series"].items()}
+            test = sorted({d for k, pts in series.items() if k.startswith(("OIS:", "FX:")) for d in pts})[-days:]
+            items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
+            mpc = base["mpc"]
+
+            def make_ctx(T: str) -> qf.Ctx:
+                nxt = _dt.date.fromisoformat(T) + _dt.timedelta(days=1)
+                mp = {"days": {d: x for d, x in (mpc.get("days") or {}).items() if d <= T},
+                      "values": [r for r in mpc.get("values") or [] if r["day"] <= T]}
+                viop = [dict(c, **{f: {d: v for d, v in (c.get(f) or {}).items() if d <= T} for f in ("px", "days", "imp", "baz", "ois360")}, live={})
+                        for c in base["viop"]]
+                meta = {k: dict(v) for k, v in base["meta"].items()}
+                return qf.Ctx(cfg, nxt, series, meta, {}, viop=viop, carry={}, mpc=mp, path=self._path(mp), holidays=base["holidays"],
+                              fwd_scale=base["fwd_scale"])
+
+            res = qbt.backtest(test, make_ctx, lambda ctx: qf.run_all(ctx, items, None, self.pause)[0], series, cfg, step=step,
+                               pause=self.pause, deadline=time.perf_counter() + budget)
+            first, last = res.get("first"), res.get("last")
+            res.update({"at": _now().isoformat(sep=" "), "today": today_iso, "key": self._bt_key(),
+                        "years": ((_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.0) if first and last else None})
+            self.store.put(self.BT_KEY, _clean(res))
+            self._bt = _clean(res)
+            self.state.update({"bt_at": res["at"], "bt_ms": res["ms"], "bt_error": ""})
+            return self._bt
+        finally:
+            self.state["bt_phase"] = ""
+
+    def backtest_view(self) -> Dict[str, Any]:
+        bt = self.backtest_result()
+        if not bt:
+            return {"ready": False, "running": self._bt_thread is not None and self._bt_thread.is_alive()}
+        rows = []
+        for fam, st in sorted((bt.get("families") or {}).items(), key=lambda kv: qf.FAMILIES.get(kv[0], (kv[0],))[0]):
+            rows.append(dict({k: v for k, v in st.items() if k != "types"}, family=fam, label=qf.FAMILIES.get(fam, (fam,))[0], type=""))
+            for ty, s in (st.get("types") or {}).items():
+                rows.append(dict(s, family=fam, label=qf.FAMILIES.get(fam, (fam,))[0], type=ty))
+        return _clean({"ready": True, "rows": rows, "trades": list(reversed(bt.get("trades") or []))[:150], "first": bt.get("first"),
+                       "last": bt.get("last"), "years": bt.get("years"), "at": bt.get("at"), "ms": bt.get("ms"), "refits": bt.get("refits"),
+                       "step": bt.get("step"), "days": bt.get("days"), "n_trades": bt.get("n_trades"), "complete": bt.get("complete"),
+                       "running": self._bt_thread is not None and self._bt_thread.is_alive()})
 
     def pause(self) -> None:
         """Between two families: the engine thread gets the interpreter (a calculation waiting for it goes first)."""
@@ -604,6 +700,9 @@ class Quant(object):
         holidays = {serial_to_date(x) for x in snap.get("holidays") or [] if 20000 < x < 80000}
         ctx = qf.Ctx(cfg, today, series, meta, raw_live, viop=viop, carry=eng.get("carry") or {}, mpc=mpc, path=self._path(mpc),
                      holidays=holidays, fwd_scale=self._fwd_scales(self.svc.mode == "live"))
+        # (what the fit was made of: the backtest fits on it again, day by day)
+        ctx.base = {"series": series, "meta": {k: dict(v) for k, v in meta.items()}, "viop": viop, "mpc": mpc, "holidays": holidays,
+                    "fwd_scale": ctx.fwd_scale, "cfg": cfg, "today": today}
         return ctx, eng, raw_live
 
     @staticmethod
@@ -657,6 +756,7 @@ class Quant(object):
             try:
                 ctx, eng, raw_live = self.snapshot()
                 cfg = ctx.cfg
+                self._last_base = ctx.base
                 items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
                 timing: Dict[str, float] = {}
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
@@ -706,6 +806,7 @@ class Quant(object):
             if s is not None:
                 s["day"] = fit["today"]
                 signals.append(s)
+        self._bt_attach(fit, signals, cfg)
         live, gated = qf.rank(signals)
         ctx: qf.Ctx = fit["ctx"]
         view = {"signals": live, "gated": gated, "tables": self._tables(fit, ctx), "live_keys": sorted(raw_live), "today": fit["today"],
@@ -721,6 +822,27 @@ class Quant(object):
             self.svc.nudge()
         except Exception:  # noqa: BLE001
             pass
+
+    def _bt_attach(self, fit: Dict[str, Any], signals: List[Dict[str, Any]], cfg: Dict[str, Any]) -> None:
+        """Each signal with its family's backtest ("bu aile son 2 yılda 41 işlem, %58 isabet, ort. +0,4σ"; its type's when
+        that has trades enough) and, if the desk set a floor, held back below it."""
+        bt = self.backtest_result()
+        fams = (bt or {}).get("families") or {}
+        years = (bt or {}).get("years")
+        for s in signals:
+            fam = fams.get(s["family"])
+            m = fit["mons"].get(s["id"])
+            ty = ((fam or {}).get("types") or {}).get(qbt.bt_type(m)) if m is not None else None
+            use = ty if ty and (ty.get("trades") or 0) >= 5 else fam
+            if bt is None:
+                s["bt"] = None
+                continue
+            short = {k: (use or {}).get(k) for k in ("trades", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
+            s["bt"] = dict(short, text=qbt.bt_text(use, years), scope="tür" if use is ty and ty else "aile")
+            why = qbt.bt_gate(fam, cfg)
+            s["gates"].append({"name": "Geri test", "ok": not why, "text": why or s["bt"]["text"], "part": None})
+            if why and not s["gated"]:
+                s.update({"gated": why, "strength": "elendi", "composite": 0.0})
 
     def _tables(self, fit: Dict[str, Any], ctx: qf.Ctx) -> Dict[str, Any]:
         t = dict(fit["tables"])
@@ -985,7 +1107,7 @@ class Quant(object):
     def status(self) -> Dict[str, Any]:
         st = {k: v for k, v in self.state.items() if k != "live_t"}
         st.update({"ready": self._view is not None, "version": self.version, "running": self._thread is not None and self._thread.is_alive(),
-                   "mode": self.svc.mode, "alerts": self._alert_seq})
+                   "mode": self.svc.mode, "alerts": self._alert_seq, "bt_running": self._bt_thread is not None and self._bt_thread.is_alive()})
         fit = self._fit
         if fit is not None:
             st.update({"monitors": len(fit["mons"]), "today": fit["today"], "errors": fit["tables"].get("errors") or {},
@@ -1005,6 +1127,8 @@ class Quant(object):
             return self.alerts(user, q.get("since"))
         if what == "log":
             return self.log_view()
+        if what == "backtest":
+            return self.backtest_view()
         v = self._view
         fit = self._fit
         base = {"ready": v is not None, "status": self.status(), "version": self.version}
