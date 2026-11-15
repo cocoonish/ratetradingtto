@@ -6,8 +6,10 @@ import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu } from '../ui.js';
 import { openWatchDialog, watchSubject } from '../alarms.js';
 import { SeriesView, watchSpec } from '../serieschart.js';
+import { isoToTr } from '../format.js';
 
-const BASES = [['close', 'Önceki kapanış', 'Bir önceki iş gününün kapanışına göre (OIS, TLREF, offshore: tarihçe; diğerleri: dashboard\'un kaydettiği kapanış)'],
+const BASES = [['close', 'Önceki kapanış', 'Bir önceki iş gününün kapanışına göre (OIS, TLREF, offshore: tarihçe; diğerleri: dashboard\'un iş günlerinde kaydettiği kapanış). '
+  + 'Hafta sonu piyasa kapalı: son iş gününün kapanışı gösterilir, değişim yoktur'],
   ['open', 'Açılış', 'Dashboard\'un bugün gördüğü ilk değere göre'],
   ['ref', 'Referans', '"Referansı şimdi al" ile alınan seviyelere göre (ör. sabah toplantısı)']];
 const KEY = 'tto.heat.basis';
@@ -96,7 +98,8 @@ export class HeatPage {
     this.legend.appendChild(h('span', null, '+' + d.cap + ' bp yükseldi'));
     const base = (BASES.find((b) => b[0] === d.basis) || BASES[0])[1].toLowerCase();
     this.info.textContent = d.basis === 'ref' && !d.ref_at ? 'Bugün referans alınmadı: "Referansı şimdi al"'
-      : 'Değişim ' + (d.basis === 'ref' ? 'referanstan (' + d.ref_at + ')' : base + 'tan') + ' · ' + d.time;
+      : d.basis === 'close' && d.closed ? 'Hafta sonu, piyasa kapalı: son iş günü ' + isoToTr(d.closed) + ' kapanışı olan noktalarda değişim yok · ' + d.time
+        : 'Değişim ' + (d.basis === 'ref' ? 'referanstan (' + d.ref_at + ')' : base + 'tan') + ' · ' + d.time;
     const box = clear(this.box);
     for (const p of d.panels) {
       const t = h('table', { class: 'heat', 'data-panel': p.id });

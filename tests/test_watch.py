@@ -437,7 +437,7 @@ def test_alarms_on_a_move(svc, clock):
     assert svc.watch_view(u)["items"][0]["open_text"] == "35,55%"
 
 
-def test_z_scores_and_the_band_of_the_past(svc):
+def test_z_scores_and_the_band_of_the_past(svc, monkeypatch):
     u = svc.login("Z Bakan")["user"]
     one = {"kind": "ois", "tenor": "1Y"}
     ones = [35.0 + 0.02 * i for i in range(30)]
@@ -461,9 +461,12 @@ def test_z_scores_and_the_band_of_the_past(svc):
     assert vz["source"] == "kayıt" and vz["n"] == 20 and vz["z"] > 0
     assert preview(svc, u, {"kind": "viop", "ticker": "A1F7 Curncy", "metric": "ois"})["z"]["20"] == \
         {"z": None, "z_text": "", "n": 0, "need": 15, "pct": None, "source": ""}
-    # ... kept every day for what is watched (the market's level, whoever watches it)
+    # ... kept every day for what is watched (the market's level, whoever watches it) - on a day the market
+    # trades (the tests run on any day; a Saturday keeps none: see the test of the days the market is shut)
     svc.watch_add(u, subject=viop)
+    monkeypatch.setattr(svc.watch, "market_open", lambda day: True)
     assert svc.et.call(svc.watch.record, True) >= 1
+    monkeypatch.undo()
     today = svc.store.closes([key])[key][svc.today_iso()]
     assert today == pytest.approx(preview(svc, u, viop)["value"])
     # the watch list: z and the band over the window asked for
@@ -480,7 +483,9 @@ def test_z_scores_and_the_band_of_the_past(svc):
     assert e["measure"] == pytest.approx((35.70 - statistics.mean(last)) / statistics.stdev(last)) and e["condition"] == "z(20g) ≥ 2,00"
 
 
-def test_the_heat_map_of_the_curves(svc):
+def test_the_heat_map_of_the_curves(svc, monkeypatch):
+    # a week day's map (the tests run on any day; a Saturday or a Sunday: see the test of the days the market is shut)
+    monkeypatch.setattr(svc.watch, "shut_day", lambda today: None)
     u = svc.login("Isı Haritası")["user"]
     tick(svc)
     assert not any(user == "" for user, _ in svc.watch.days)          # not read before anyone opens it (Bloomberg hits)
@@ -502,7 +507,8 @@ def test_the_heat_map_of_the_curves(svc):
     assert basis["subject"] == {"kind": "expr", "text": "[Offshore 1M] - [OIS 1M]"} and basis["show"] == "bp"
     assert basis["now"] == pytest.approx((rows["Offshore"][cols.index("1M")]["now"] - rows["OIS"][cols.index("1M")]["now"]) * 100)
     viop = h["panels"][1]
-    assert viop["cols"][1] == {"id": "A1Z6 Curncy", "label": "A1Z6", "tip": "vade 31.12.2026"}
+    assert viop["cols"][1] == {"id": "A1Z6 Curncy", "label": "Ara26", "tip": "A1Z6 · vade 31.12.2026"}       # by its month
+    assert [c["label"] for c in viop["cols"]][:3] == ["Kas26", "Ara26", "Oca27"]
     assert [r["name"] for r in viop["rows"]] == ["OIS − VİOP", "ima TRY"]
     dibs = h["panels"][2]
     assert [r["name"] for r in dibs["rows"]] == ["getiri", "ASW", "pahalı/ucuz"] and "TRT150328T24" in [c["id"] for c in dibs["cols"]]
@@ -518,7 +524,7 @@ def test_the_heat_map_of_the_curves(svc):
     yesterday = past_days(1)[0]
     seed(svc, "ois", "1Y", [35.40])
     key = svc.watch.key({"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"})
-    svc.store.close_upsert([(key, yesterday, 200.0)])
+    svc.store.close_upsert([(key, svc.watch.last_open_day(svc.today_iso()), 200.0)])     # the last day the market traded
     h = svc.heat_view(u, "close")
     one = {r["name"]: r["cells"] for r in h["panels"][0]["rows"]}["OIS"][cols.index("1Y")]
     assert (one["chg"], one["base_day"], one["base_text"]) == (pytest.approx(27.0), yesterday, "35,40%")
@@ -546,3 +552,48 @@ def test_the_heat_map_of_the_curves(svc):
                                                     "level": "4"}, headers=hdr).status_code == 400
         got = client.get("/api/watch?days=250", headers=hdr).json()
         assert got["days"] == 250 and got["z_days"] == [20, 60, 250] and got["modes"]["window"] == "son dakikalarda"
+
+
+def test_a_day_the_market_is_shut(svc, monkeypatch):
+    w = svc.watch
+    # the market's days: the week days that are not the desk's holidays (the workbook's Motor!A361:A523: 29.10.2026)
+    assert w.market_open("2026-11-13") and not w.market_open("2026-11-14") and not w.market_open("2026-11-15")
+    assert w.market_open("2026-10-28") and not w.market_open("2026-10-29") and not w.market_open("2026-13-01")
+    assert w.last_open_day("2026-11-16") == "2026-11-13" and w.last_open_day("2026-10-30") == "2026-10-28"
+    assert (w.shut_day("2026-11-14"), w.shut_day("2026-11-15"), w.shut_day("2026-11-16"), w.shut_day("2026-10-29")) == \
+        ("2026-11-13", "2026-11-13", None, None)              # a holiday is no weekend: offshore trades in London
+    u = svc.login("Hafta Sonu")["user"]
+    viop = {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"}
+    key = w.key(viop)
+    svc.watch_add(u, subject=viop)
+    # a Saturday keeps no close of its own, even when asked
+    monkeypatch.setattr(svc, "today_iso", lambda: "2026-11-14")
+    assert svc.et.call(w.record, True) == 0 and not svc.store.closes([key]).get(key)
+    # ... and one kept on a Saturday by an earlier version is no close: Monday's previous close is Friday's
+    svc.store.close_upsert([(key, "2026-11-12", 190.0), (key, "2026-11-13", 200.0), (key, "2026-11-14", 250.0)])
+    d = svc.et.call(w._hist_defs)[("ois", "1Y")]
+    svc.store.hist_upsert(d.id, [("2026-11-12", 35.30), ("2026-11-13", 35.40)])
+    svc.history.rev += 1
+    monkeypatch.setattr(svc, "today_iso", lambda: "2026-11-16")
+    assert sorted(svc.et.call(w.history, viop)[0]) == ["2026-11-12", "2026-11-13"]
+
+    def points(h):
+        cols = [c["id"] for c in h["panels"][0]["cols"]]
+        curve = {r["name"]: r["cells"] for r in h["panels"][0]["rows"]}
+        viops = {r["name"]: r["cells"] for r in h["panels"][1]["rows"]}
+        return curve["OIS"][cols.index("1Y")], viops["OIS − VİOP"][1], curve["OIS"][cols.index("2Y")]
+
+    h = svc.heat_view(u, "close")
+    one, z6, _ = points(h)
+    assert h["closed"] is None and (one["base_day"], one["base"]) == ("2026-11-13", 35.40) and one["chg"] == pytest.approx(15.0)
+    assert (z6["base_day"], z6["base"]) == ("2026-11-13", 200.0) and z6["chg"] == pytest.approx(z6["now"] - 200.0)
+    # a Sunday (a Saturday the same): the market is shut - Friday's close stands and nothing has moved, whatever is read
+    # now (the live 35,55 here; a bond's yield priced to another value date)
+    for day in ("2026-11-15", "2026-11-14"):
+        monkeypatch.setattr(svc, "today_iso", lambda day=day: day)
+        h = svc.heat_view(u, "close")
+        one, z6, two = points(h)
+        assert h["closed"] == "2026-11-13"
+        assert (one["base_day"], one["now"], one["chg"], one["now_text"]) == ("2026-11-13", 35.40, 0.0, "35,40")
+        assert (z6["base_day"], z6["now"], z6["chg"]) == ("2026-11-13", 200.0, 0.0)
+        assert two["chg"] is None and type(two["now"]) is float      # no close kept for it: read as it is, no change
