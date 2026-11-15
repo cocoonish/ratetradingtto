@@ -235,7 +235,7 @@ export function eventText(q) {
 
 function kindText(q) {
   if (q.ok === false) return '';
-  if (q.kind === 'mpc') return 'MPC (toplantı)';
+  if (q.kind === 'mpc') return 'MPC (PPK)';
   if (q.product === 'FX') return 'FX swap (puan)';
   if (q.product === 'DIBS' && q.kind === 'switch') return 'Switch (bp)';
   if (q.product === 'DIBS') return q.unit === 'yld' ? 'DİBS (getiri)' : 'DİBS (fiyat)';
@@ -679,11 +679,12 @@ export class BrokerPage {
       return { t: level(v, r.unit), v, k: 'n', tip: 'En iyi ' + name(side) + ': ' + (r['best_' + side + '_by'] || 'kaynaksız') + ' · '
         + when(r['best_' + side + '_time']) + (live ? ' (' + ageText(r['best_' + side + '_age']) + ' önce)' : '') };
     };
+    // (centred: a text of its own column, never run over the empty ask beside it as a long text of the grid would)
     const whose = (r, side) => {
       if (typeof r['best_' + side] === 'number') {
-        return { t: (r['best_' + side + '_by'] || 'kaynaksız') + ' · ' + age(r['best_' + side + '_age'], r['best_' + side + '_time']), k: 's', cls: 'who' };
+        return { t: (r['best_' + side + '_by'] || 'kaynaksız') + ' · ' + age(r['best_' + side + '_age'], r['best_' + side + '_time']), k: 's', cls: 'who', al: 'c' };
       }
-      return staleOf(r, side).length ? { t: 'bayat', k: 's', cls: 'who stale', tip: 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) }
+      return staleOf(r, side).length ? { t: 'bayat', k: 's', cls: 'who stale', al: 'c', tip: 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) }
         : { t: '', k: '' };
     };
     const diff = (v, through, unit) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, unit === 'px' ? 3 : 1, false), v, k: 'n', cls: through ? 'thru' : '',
@@ -699,7 +700,7 @@ export class BrokerPage {
     const houseSide = (b, r, side) => (typeof b[side] === 'number' ? { t: level(b[side], r.unit), v: b[side], k: 'n', cls: b[side + '_stale'] ? 'stale' : '',
       tip: b.by + ' ' + name(side) + ' · ' + when(b[side + '_time']) + (b[side + '_stale'] ? ' – bayat, en iyi sayılmaz' : '') } : { t: '', k: '' });
     const houseAge = (b, side) => (typeof b[side] === 'number' ? { t: (b[side + '_stale'] ? 'bayat · ' : '') + age(b[side + '_age'], b[side + '_time']), k: 's',
-      cls: 'who' + (b[side + '_stale'] ? ' stale' : '') } : { t: '', k: '' });
+      cls: 'who' + (b[side + '_stale'] ? ' stale' : ''), al: 'c' } : { t: '', k: '' });
     const lines = [];
     for (const r of board) {
       lines.push([r.product === 'DIBS' ? 'DİBS' : r.product, { t: r.label, k: 's', b: 1, tip: instTip(r) || r.isin || '' }, kindText(r),

@@ -686,7 +686,7 @@ async function shot(page, name) {
     const mpcRow = (await brokerBoard()).find((r) => /^MPC /.test(r[1]));
     const mpcKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker')).json.board.find((r) => r.kind === 'mpc') || {};
     check('a meeting-dated OIS ("mpc1") is a board row of its own: the MPC OIS bootstrap as its model, the implied step beside it',
-      mpcSaved.json.saved === 2 && mpcRow[2] === 'MPC (toplantı)' && mpcRow[3] === '36,50' && mpcRow[5] === '37,00' && mpcRow[8] === '36,75'
+      mpcSaved.json.saved === 2 && mpcRow[2] === 'MPC (PPK)' && mpcRow[3] === '36,50' && mpcRow[5] === '37,00' && mpcRow[8] === '36,75'
       && /^\d\d,\d\d$/.test(mpcRow[10]) && /^adım [+-]?\d+ \/ [+-]?\d+ bp · model [+-]?\d+$/.test(mpcRow[14]) && /^\d{4}-\d\d-\d\d$/.test((mpcKept.mpc || {}).start || ''),
       [mpcRow, mpcKept.mpc]);
     await page.evaluate(() => { const tr = [...document.querySelectorAll('#broker-log-panel table.grid tr')].find((x) => /mpc1 paid 36\.75/.test(x.textContent));
@@ -753,7 +753,8 @@ async function shot(page, name) {
       await page.waitForFunction(() => window.tto.state.page.data && window.tto.state.page.data.stale_minutes === 10, null, { timeout: 15000 });
       await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: halfHourAgo.toTimeString().slice(0, 8) + ' 7y ois 33.10/33.30', source: 'ICAP' });
       await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '7y ois 33.05/33.40', source: 'BGC' });
-      await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => tr.children[1].textContent === '↳ ICAP'),
+      // (both houses on the board: ICAP's stale quote alone has a row of its own already)
+      await page.waitForFunction(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')].some((tr) => tr.children[1].textContent === '↳ BGC'),
         null, { timeout: 20000 });
       const board7 = await brokerBoard();
       const at7 = board7.findIndex((r) => r[1] === '7Y');
