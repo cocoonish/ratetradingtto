@@ -1584,6 +1584,7 @@ async function shot(page, name) {
       await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: rvHalfHourAgo.toTimeString().slice(0, 8) + ' 16/4/31 94.000/94.200', source: 'BGC' });
       await open(page, 'broker');
       await open(page, 'dibs');
+      await fresh(page);                                                  // (the page kept from before is dimmed until current)
       const rvStale = await page.evaluate(() => {
         const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[0] || {}).textContent === 'TRT160431T35');
         const cells = tr ? [...tr.children].slice(-7, -1) : [];

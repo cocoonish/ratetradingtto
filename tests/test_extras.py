@@ -142,13 +142,15 @@ def test_tables_of_a_left_out_addition_are_not_shown(svc):
         for p in view["panels"]:
             if p.get("sheet") == "EK_FWD":
                 p["sheet"] = "EK_YOK"                                               # as if the sheet had not been built
-        svc._view_cache.clear()
+        with svc._render_lock:
+            svc._renders.clear()                                                    # (the pages kept: made again)
         ids = [p["id"] for p in svc.view(None, "forward", True)["panels"]]
         assert "B14" in ids and not any(i.startswith("EKF") or i.startswith("FR") for i in ids)
         assert all("error" not in p for p in svc.view(None, "forward", True)["panels"])
     finally:
         view["panels"][:] = saved
-        svc._view_cache.clear()
+        with svc._render_lock:
+            svc._renders.clear()                                                    # (the pages kept: made again)
     assert "EKF1" in [p["id"] for p in svc.view(None, "forward")["panels"]]
 
 

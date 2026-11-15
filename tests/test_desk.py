@@ -27,6 +27,9 @@ class _Svc(object):
     def nudge(self):
         self.told += 1
 
+    def saw(self, user):
+        pass                                            # (who has the dashboard open: nothing kept here)
+
 
 def _desk(path):
     store = Store(str(path))
