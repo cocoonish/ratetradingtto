@@ -424,8 +424,52 @@ class ModelPage extends AnalysisPage {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ Gün İçi
+class IntradayPage extends AnalysisPage {
+  constructor(host, ctx) { super(host, ctx, 'intraday'); }
+
+  build() {
+    this.st = panel('quant-intraday-bars', 'Gün içi barlar · dashboard\'un zaten okuduğu canlı değerlerden');
+    this.st.note.textContent = 'Bloomberg\'e ayrı istek yok: quant iş parçacığı dakikada bir okuduğu canlı değerleri (OIS / offshore kotaları, FX spotları, USDTRY 1A '
+      + 'puanı) canlı modda, iş günü 09:30 – 18:00 arasında dakikalık kapanış olarak saklar (son 20 işlem günü, küçük bir SQLite dosyası); 5 dakikalık barlar bunlardan. '
+      + 'Gün içi sinyaller dakikada bir yenilenir, kendi ufukları (bar) ve stop\'larıyla; seans sonunda kapanır, gece taşınmaz. PPK günü 13:45 – 15:30 arası ortalamaya '
+      + 'dönüş sinyali verilmez; 17:00\'den sonra yeni gün içi işlem yok.';
+    this.boxes.st = new GridBox(this.st, 'quant/intraday/bars');
+    this.z = panel('quant-intraday-z', 'Gün içi z ve açılış aralığı');
+    this.z.note.textContent = 'Uzaklık: seviyenin günün son 60 dakikalık ortalamasına uzaklığı (faizde bp, kurda %), z son 20 günün 5 dakikalık dağılımına göre; '
+      + 'yarı ömür bar (5 dk) cinsinden. Açılış aralığı: ilk 30 dakika; skor (seviye − orta) ÷ yarı genişlik, ±1,5 kırılım; kırılım sayısı ve kapanışa kadar ortalama devamı '
+      + 'son günlerden.';
+    this.boxes.z = new GridBox(this.z, 'quant/intraday/z', (sid) => this.pick(sid));
+    this.rv = panel('quant-intraday-rv', 'Gün içi RV · spread\'ler 5 dakikalık barlarda');
+    this.boxes.rv = new GridBox(this.rv, 'quant/intraday/rv', (sid) => this.pick(sid));
+    this.path = panel('quant-intraday-path', 'USDTRY · carry\'nin ima ettiği gün içi patika');
+    this.path.note.textContent = 'Patika: günün açılışından forward priminin dakika dakika ima ettiği değer kaybıyla; fark (%, log) bar gürültüsü × √bar ile z. '
+      + '+ ise spot patikanın önünde (sat), − ise gerisinde (al).';
+    this.boxes.path = new GridBox(this.path, 'quant/intraday/path', (sid) => this.pick(sid));
+    this.frame('Gün İçi', [this.st, this.z, this.rv, this.path]);
+  }
+
+  fillPage() {
+    const d = this.data.intraday || {};
+    const entry = (this.data.settings || {}).entry_z || 2;
+    const s = d.stats || {};
+    this.boxes.st.set(['Durum', 'Değer'], [[T('Bar kaydı'), T(d.ok ? s.days + ' gün · ' + s.rows + ' dakika kapanışı' : (d.why || '—'), { cls: d.ok ? '' : 'soft' })],
+      [T('Son bar'), T(s.last || '—')], [T('Bugün PPK günü'), T(d.meeting_day ? 'evet (13:45 – 15:30 ortalamaya dönüş yok)' : 'hayır')]], null, '—');
+    const zr = d.z || [];
+    this.boxes.z.set(['Seri', 'Son', 'Uzaklık', 'z', 'Yarı ömür (bar)', 'Aralık alt', 'Aralık üst', 'Aralık skoru', 'Kırılım (gün)', 'Ort. devam'], zr.map((r) => [T(r.label, { b: 1 }),
+      N(r.last, 4), N(r.dev, 2, { sign: true, unit: r.unit }), Z(r.z, entry), N(r.half_life, 1), N(r.or_low, 4), N(r.or_high, 4), Z(r.or_score, 1.5), N(r.breaks, 0),
+      N(r.cont, 2, { sign: true, unit: r.unit })]), zr.map((r) => r.sid || null), d.why || 'Gün içi bar yok', this.picked);
+    const rv = d.rv || [];
+    this.boxes.rv.set(['Spread', 'Şimdi (bp)', 'Ortalama', 'σ', 'z', 'Yarı ömür (bar)'], rv.map((r) => [T(r.name, { b: 1 }), N(r.now, 1), N(r.mean, 1), N(r.sd, 2), Z(r.z, entry),
+      N(r.half_life, 1)]), rv.map((r) => r.sid || null), d.why || 'Gün içi bar yok', this.picked);
+    const p = d.path;
+    this.boxes.path.set(['Açılış', 'Spot', 'Patika', 'Fark %', 'z', 'Carry % / yıl (long)', 'Bar σ %'], p ? [[N(p.open, 4), N(p.spot, 4), N(p.path, 4), N(p.dev, 3, { sign: true }),
+      Z(p.z, entry), N(p.carry, 1, { sign: true }), N(p.sigma_bar, 3)]] : [], p ? [p.sid] : [], d.why || 'USDTRY barı ya da forward yok', this.picked);
+  }
+}
+
 const PAGES = { 'quant-corr': CorrPage, 'quant-pca': PcaPage, 'quant-pairs': PairsPage, 'quant-regime': RegimePage, 'quant-fx': FxPage, 'quant-macro': MacroPage,
-  'quant-model': ModelPage };
+  'quant-model': ModelPage, 'quant-intraday': IntradayPage };
 
 export function quantView(id, host, ctx) {
   const P = PAGES[id] || CorrPage;

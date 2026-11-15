@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from . import fx as fxm
 from . import quantbt as qbt
 from . import quantfam as qf
+from . import quantintraday as qi
 from . import volcarry as vc
 from .service import ServiceError
 
@@ -89,7 +90,7 @@ LOG_KEEP = 1500
 ALERT_KEEP = 300
 PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"),
          ("quant-regime", "Rejim & Momentum"), ("quant-fx", "FX Vol Primi & Carry"), ("quant-macro", "Makro Beta"),
-         ("quant-model", "Tahmin Modeli"))
+         ("quant-model", "Tahmin Modeli"), ("quant-intraday", "Gün İçi"))
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -260,6 +261,7 @@ class Quant(object):
         self._last_base: Optional[Dict[str, Any]] = None   # the last fit's inputs (the backtest refits on them)
         self._bt: Optional[Dict[str, Any]] = None
         self._bt_thread: Optional[threading.Thread] = None
+        self.intraday = qi.Intraday(self)
         self.version = 0
         self.state: Dict[str, Any] = {"phase": "idle", "fit_at": None, "fit_ms": None, "live_at": None, "live_ms": None, "engine_ms": None,
                                       "error": "", "timing": {}, "fits": 0, "refreshes": 0}
@@ -761,6 +763,8 @@ class Quant(object):
                 items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
                 timing: Dict[str, float] = {}
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
+                imons, tables["intraday"] = self._intraday_step(ctx, raw_live)
+                mons = mons + imons
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx)}
@@ -792,6 +796,10 @@ class Quant(object):
             if front is not None and front["live"].get("imp") is not None:
                 raw_live["VIOPI:FRONT"] = front["live"]["imp"]
             ctx.live = dict(raw_live)
+            imons, fit["tables"]["intraday"] = self._intraday_step(ctx, raw_live)
+            for sid in [s for s, m in fit["mons"].items() if m.intraday]:
+                del fit["mons"][sid]
+            fit["mons"].update({m.sid: m for m in imons})
             qf.score_all(ctx, list(fit["mons"].values()), raw_live)
             self._publish(fit, raw_live, eng)
             self.state.update({"live_at": _now().isoformat(sep=" "), "live_ms": round((time.perf_counter() - t0) * 1000.0, 1),
@@ -823,6 +831,15 @@ class Quant(object):
             self.svc.nudge()
         except Exception:  # noqa: BLE001
             pass
+
+    def _intraday_step(self, ctx: qf.Ctx, raw_live: Dict[str, float]) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
+        """The minute's values into the bars (live), and the intraday monitors on them."""
+        now = _now()
+        try:
+            self.intraday.sample(raw_live, now)
+            return self.intraday.monitors(ctx, now)
+        except Exception as exc:  # noqa: BLE001 - the intraday part is not worth the daily one
+            return [], {"ok": False, "why": "%s: %s" % (type(exc).__name__, str(exc)[:160]), "z": [], "rv": []}
 
     def _bt_attach(self, fit: Dict[str, Any], signals: List[Dict[str, Any]], cfg: Dict[str, Any]) -> None:
         """Each signal with its family's backtest ("bu aile son 2 yılda 41 işlem, %58 isabet, ort. +0,4σ"; its type's when
@@ -928,7 +945,13 @@ class Quant(object):
             if first_look or prev_z is None or abs(prev_z) >= sg["entry_z"] or sg["id"] in open_sids:
                 continue
             seq += 1
+            expires = None
+            if sg.get("intraday"):
+                mins = stamp.hour * 60 + stamp.minute + int(round(sg.get("hold") or 12)) * qi.BAR
+                mins = min(mins, qi.SESSION[1])
+                expires = "%02d:%02d" % (mins // 60, mins % 60)
             e = {"seq": seq, "sid": sg["id"], "family": sg["family"], "family_label": sg["family_label"], "asset": sg["asset"],
+                 "intraday": bool(sg.get("intraday")), "expires": expires,
                  "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "entry_z": sg["entry_z"], "level": sg["level"],
                  "target": sg["target"], "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
@@ -942,8 +965,12 @@ class Quant(object):
             m = mons.get(e["sid"])
             level = m.level if m is not None else None
             held = _bdays(e["day"], today)
+            # an intraday entry closes at its horizon or the session's end - and never lives over night
+            gone = bool(e.get("intraday")) and (today != e["day"] or stamp.strftime("%H:%M") >= (e.get("expires") or "18:00"))
+            if e.get("intraday") and today != e["day"]:
+                level = None                                 # (today's monitor is another day's)
             if level is None:
-                if held >= int(cfg["log_days"]):
+                if held >= int(cfg["log_days"]) or gone:
                     e.update({"status": "veri yok", "closed_day": today, "closed_time": stamp.strftime("%H:%M"), "held": held})
                     self._desk_close(e["sid"], "veri yok")
                     changed = True
@@ -954,7 +981,7 @@ class Quant(object):
                 outcome = "hedef"
             elif e.get("stop") is not None and s * (level - e["stop"]) <= 0:
                 outcome = "stop"
-            elif held >= int(cfg["log_days"]):
+            elif held >= int(cfg["log_days"]) or gone:
                 outcome = "süre"
             if outcome:
                 pnl = s * (level - e["level"])
@@ -1154,7 +1181,7 @@ class Quant(object):
         if what == "signal":
             return self.signal_view(q.get("id"))
         pages = {"corr": ("corr",), "pca": ("pca", "rv", "frapath"), "pairs": ("pairs", "viopcal"), "regime": ("momentum", "cycle", "regime"),
-                 "fx": ("fxsum", "vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",)}
+                 "fx": ("fxsum", "vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",), "intraday": ("intraday",)}
         if what not in pages:
             raise QuantError("bilinmeyen görünüm: %s" % what)
         for name in pages[what]:
@@ -1181,6 +1208,8 @@ class Quant(object):
             return key in qf.MACRO_DRIVERS or key in qf.MACRO_TARGETS
         if what == "model":
             return key in qf.MODEL_UNIVERSE
+        if what == "intraday":
+            return key in qi.KEYS
         return False
 
     def signal_view(self, sid: Any) -> Dict[str, Any]:

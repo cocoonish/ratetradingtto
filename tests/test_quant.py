@@ -1343,7 +1343,7 @@ def test_quant_http_api(seeded):
         assert res.status_code == 200 and res.json()["ready"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
-        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 8
+        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 9 and quant[-1]["id"] == "quant-intraday"
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401
@@ -1416,3 +1416,126 @@ def test_backtest_statistics_and_the_desk_s_floor():
     assert qbt.bt_gate(weak, on) == "geri testte zayıf: isabet %42 < %50"
     assert qbt.bt_gate(dict(weak, hit=0.6), on) == "geri testte zayıf: Sharpe -0,30 < 0,00"
     assert qbt.bt_gate(dict(weak, trades=5), on) is None                  # too few trades to judge
+
+
+# ================================================================================================ intraday
+def _ibars(today, n_days=12, seed=71, plant=None):
+    """Five-minute bars (09:35 … 18:00) of a few keys over ``n_days`` past days and today until 12:00, mean-reverting
+    noise around their levels; ``plant(key, day, k, value)`` may change a bar."""
+    rnd = random.Random(seed)
+    base = {"OIS:1Y": 36.0, "OIS:2Y": 35.0, "OFF:1Y": 34.0, "FX:USDTRY": 42.0}
+    days, d = [], today
+    while len(days) < n_days:
+        d -= dt.timedelta(days=1)
+        if d.weekday() < 5:
+            days.append(d)
+    days = sorted(days) + [today]
+    out = {k: {} for k in base}
+    for day in days:
+        last = 12 * 60 if day == today else 18 * 60
+        mins = list(range(9 * 60 + 35, last + 1, 5))
+        for k, b in base.items():
+            x, rows = 0.0, []
+            for i, m in enumerate(mins):
+                x = 0.7 * x + rnd.gauss(0, 0.004 if k != "FX:USDTRY" else 0.003)
+                v = b + x if k != "FX:USDTRY" else b * (1.0 + x / 100.0)
+                if plant:
+                    v = plant(k, day, i, v, mins)
+                rows.append((m, v))
+            out[k][day.isoformat()] = rows
+    return out
+
+
+def test_intraday_bars_are_kept_small_and_made_five_minutes(tmp_path):
+    from tto import quantintraday as qi
+    b = qi.Bars(str(tmp_path / "bars.sqlite3"))
+    start = dt.datetime(2026, 10, 1, 9, 30)
+    day, kept = start, 0
+    while kept < 25:
+        if day.weekday() < 5:
+            for m in (0, 1, 2, 3, 4, 5, 6):
+                b.record(day + dt.timedelta(minutes=m), {"OIS:1Y": 36.0 + m * 0.01, "FX:USDTRY": 42.0, "NOT:A:KEY": 1.0})
+            kept += 1
+        day += dt.timedelta(days=1)
+    st = b.stats()
+    assert st["days"] == qi.KEEP_DAYS and st["rows"] == qi.KEEP_DAYS * 7 * 2       # 20 trading days, the known keys only
+    pts = b.load(["OIS:1Y"])["OIS:1Y"]
+    bars = qi.five(pts)
+    first = sorted(bars)[-1]
+    assert bars[first] == [(9 * 60 + 30, 36.0), (9 * 60 + 35, 36.05), (9 * 60 + 40, 36.06)]   # each bar its last minute's close
+    b.close()
+
+
+def test_intraday_families_on_planted_bars():
+    from tto import quantintraday as qi
+    today = dt.date(2026, 11, 3)
+    now = dt.datetime(2026, 11, 3, 12, 0)
+
+    def plant(key, day, i, v, mins):
+        if key == "OIS:2Y":                                  # every day: a 30-minute range, a break up at 11:00 that carries on
+            if i < qi.OR_BARS:
+                return 35.0 + (0.02 if i % 2 else -0.02)
+            if mins[i] >= 11 * 60:
+                return 35.05 + 0.001 * (mins[i] - 11 * 60)
+            return 35.0
+        if day == today and i == len(mins) - 1:
+            if key == "OIS:1Y":
+                return v + 0.01                              # 1 bp more above its 60-minute mean: fade it
+            if key == "OFF:1Y":
+                return v - 0.006                             # offshore − OIS 1Y ~1,6 bp narrower than usual
+            if key == "FX:USDTRY":
+                return 42.0 * 1.0006                         # 0,06 % ahead of the path its carry implies
+        return v
+
+    raw = _ibars(today, plant=plant)
+    series, meta = fx_series(n=300)                          # USDTRY's forwards: a carry of −30 % a year
+    for k, lab in (("OIS:1Y", "1Y OIS"), ("OIS:2Y", "2Y OIS"), ("OFF:1Y", "Offshore 1Y")):
+        meta[k] = {"label": lab, "kind": "rate", "months": 12.0}
+    ctx = ctx_of(series, meta, today=today)
+    mons, table = qi.intraday_monitors(ctx, raw, now)
+    live = {k: rows[today.isoformat()][-1][1] for k, rows in raw.items()}
+    qf.score_all(ctx, mons, live)
+    sig = {m.sid: qf.make_signal(m, cfg(), "12:00") for m in mons}
+    z1 = sig["izscore:OIS:1Y"]
+    assert z1 and z1["expression"].startswith("Receive") and z1["intraday"] and z1["horizon_unit"] == "bar" and not z1["gated"]
+    assert 2 < z1["z"] < 3.5 and z1["exp_pnl"] > 0 and z1["pnl_unit"] == "bp"
+    orb = sig["iorb:OIS:2Y"]
+    row = next(r for r in table["z"] if r["key"] == "OIS:2Y")
+    assert row["breaks"] >= qi.MIN_BREAKS and row["cont"] > 0 and orb and orb["expression"].startswith("Pay 2Y OIS")
+    assert orb["direction"] == 1 and orb["exp_pnl"] > 0 and next(g for g in orb["gates"] if g["name"] == "Örneklem")["ok"]
+    rv = sig["irv:OFF:1Y|OIS:1Y"]
+    assert rv and rv["z"] < -2 and not rv["gated"]
+    path = sig["ipath:USDTRY"]
+    assert table["path"]["carry"] == pytest.approx(-30.0, abs=1e-6) and path and path["expression"].startswith("Sell USDTRY")
+    assert path["z"] > 2 and path["carry_yr"] > 25.0 and path["fx"]["cal_days"] < 1.0           # selling it earns the carry
+    # a PPK day's announcement window holds the mean-reversion ones back; after 17:00 no new intraday trade at all
+    m2, _ = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 14, 0), meeting_day=True)
+    qf.score_all(ctx, m2, live)
+    held = {m.sid: qf.make_signal(m, cfg(), "14:00") for m in m2}
+    assert "PPK açıklama penceresi" in held["izscore:OIS:1Y"]["gated"] and held["izscore:OIS:1Y"]["strength"] == "elendi"
+    assert not held["iorb:OIS:2Y"]["gated"]                 # a breakout may follow the decision
+    m3, _ = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 17, 30))
+    qf.score_all(ctx, m3, live)
+    late = [s for s in (qf.make_signal(m, cfg(), "17:30") for m in m3) if s]
+    assert late and all(s["gated"] and any(g["name"] == "Seans" and not g["ok"] and "seans sonuna" in g["text"] for g in s["gates"]) for s in late)
+
+
+def test_intraday_needs_live_prices_and_its_log_does_not_stay_over_night():
+    from tto import quantintraday as qi
+    svc = _Svc()
+    q = Quant(svc)
+    mons, table = q.intraday.monitors(qf.Ctx(cfg(), TODAY, {}, {}), dt.datetime(2026, 11, 3, 12, 0))
+    assert not mons and "Kayıtlı veri modunda gün içi bar yok" in table["why"]       # replay: no bars, said so
+    assert q.intraday.sample({"OIS:1Y": 36.0}, dt.datetime(2026, 11, 3, 12, 0)) == 0
+    c = cfg()
+    m = _mon("izscore:OIS:1Y", "izscore", 0.5)
+    m.intraday, m.horizon_unit = True, "bar"
+    q._track({"cfg": c, "today": "2026-11-03", "mons": {m.sid: m}}, [])
+    m.zfn = lambda level, live: 2.6
+    m.score({}, {})
+    m.level = 2.6
+    q._track({"cfg": c, "today": "2026-11-03", "mons": {m.sid: m}}, [qf.make_signal(m, c, "12:00")])
+    e = q._log()[-1]
+    assert e["intraday"] and e["status"] == "open" and e["expires"] and e["expires"] <= "18:00"
+    q._track({"cfg": c, "today": "2026-11-04", "mons": {m.sid: m}}, [])              # the next day: closed, never carried
+    assert q._log()[-1]["status"] == "veri yok"

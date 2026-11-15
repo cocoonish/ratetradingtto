@@ -27,8 +27,8 @@ def test_status_and_navigation(service):
     # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, spreads, settings)
     custom = [p["id"] for p in pages if p.get("custom")]
     assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol", "quant", "quant-corr",
-                      "quant-pca", "quant-pairs", "quant-regime", "quant-fx", "quant-macro", "quant-model", "social", "agenda"]
-    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 21
+                      "quant-pca", "quant-pairs", "quant-regime", "quant-fx", "quant-macro", "quant-model", "quant-intraday", "social", "agenda"]
+    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 22
 
 
 @pytest.mark.parametrize("view_id", VIEW_IDS)

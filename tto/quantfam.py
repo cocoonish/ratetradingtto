@@ -59,6 +59,10 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "emcarry": ("EM carry", "carry", "quant-fx"),
     "fwdprem": ("Forward primi", "carry", "quant-fx"),
     "model": ("Tahmin modeli", "model", "quant-model"),
+    "izscore": ("Gün içi z", "mr", "quant-intraday"),
+    "iorb": ("Gün içi kırılım", "trend", "quant-intraday"),
+    "irv": ("Gün içi RV", "mr", "quant-intraday"),
+    "ipath": ("USDTRY carry patikası", "mr", "quant-intraday"),
 }
 
 ASSETS = ("TRY OIS", "Offshore", "VİOP", "DİBS", "FX", "FX vol", "EM carry", "Global")
@@ -665,10 +669,11 @@ def _sg(v: Optional[float], d: int = 1) -> str:
     return "—" if v is None else ("+" if v > 0 else "") + _g(v, d)
 
 
-def fx_info(ctx: "Ctx", pair: str, live: Dict[str, float], hold: Optional[float]) -> Dict[str, Any]:
+def fx_info(ctx: "Ctx", pair: str, live: Dict[str, float], hold: Optional[float], cal_days: Optional[float] = None) -> Dict[str, Any]:
     """What an FX trade's decision needs now: the spot, the carry of a long (annualised, the shortest forward's and the
-    holding's), the forward of the holding's end and what a unit of the quote currency is in TRY."""
-    cal = (hold or 20.0) * 7.0 / 5.0
+    holding's), the forward of the holding's end and what a unit of the quote currency is in TRY.  ``hold`` in business
+    days (``cal_days``: calendar days instead - an intraday holding)."""
+    cal = cal_days if cal_days is not None else (hold or 20.0) * 7.0 / 5.0
     s = ctx.cur("FX:" + pair, live)
     c = ctx.fx_carry(pair, live)
     ch = ctx.fx_carry(pair, live, days=cal)
@@ -2991,6 +2996,6 @@ def score_all(ctx: Ctx, mons: List[Monitor], raw_live: Dict[str, float]) -> None
             macro_levels(m, ctx.cfg)
         if m.fx:
             try:
-                m.fxinfo = fx_info(ctx, m.fx, live, m.hold)
+                m.fxinfo = fx_info(ctx, m.fx, live, m.hold, cal_days=(m.hold or 12.0) * 5.0 / 1440.0 if m.intraday else None)
             except Exception:  # noqa: BLE001 - a carry that cannot be read is told as missing
                 m.fxinfo = {"pair": m.fx}
