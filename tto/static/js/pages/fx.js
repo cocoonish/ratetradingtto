@@ -528,7 +528,8 @@ export class FxPage {
     else this.charts.fan = new FanChart(this.fanHost, data, { height: 400 });
     this.fanPanel.titleEl.textContent = s.pair + ' · ima edilen yol ve olasılık bulutu';
     this.fanNote.textContent = 'Kesikli çizgi forward patikası (ima edilen yol), mavi çizgi medyan; bantlar vade sonundaki spotun risk-nötr dağılımının yüzdelik aralıkları '
-      + '(her vadede, aralarında doğrusal). Geçmiş: spotun son kapanışları (tarihçe). Üzerine gelince o tarihteki değerler.';
+      + '(her vadede, aralarında doğrusal). Geçmiş: spotun son kapanışları (tarihçe). Dikey eksen çizilene oturur; olasılık tablosunun bu aralığa düşen '
+      + 'seviyeleri noktalı çizgi. Üzerine gelince o tarihteki değerler.';
   }
 
   fillMatrix() {

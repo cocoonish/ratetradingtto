@@ -783,7 +783,8 @@ vadede toplam olasılık, ortalamanın forward'a uzaklığı ve yoğunluğun hi�
   kapanışları istenir (bir yıl geriye; sonra son günler).
 * **İma edilen yol ve olasılık bulutu**: spotun son kapanışları, bugünden itibaren forward patikası (kesikli), medyan
   ve vade sonu dağılımının yüzdelik bantları (%1–99, %5–95, %10–90, %25–75; açılıp kapanır), bantlar vadeler arasında
-  doğrusal. Ufuk 3A / 6A / 1Y / 2Y; matrisin seviyeleri grafikte noktalı çizgi. Üzerine gelince o tarihteki forward,
+  doğrusal. Ufuk 3A / 6A / 1Y / 2Y. Dikey eksen çizilene oturur (geçmiş, forward, medyan ve açık bantlar); matrisin
+  bu aralığa düşen seviyeleri noktalı çizgi ("Seviyeler" ile açılıp kapanır). Üzerine gelince o tarihteki forward,
   medyan ve bantlar.
 * **Olasılık matrisi**: satır vade, sütun fiyat seviyesi; **Üstünde** (vade sonunda seviyenin üstünde olma
   olasılığı), **Altında** ya da **Aralıkta** (iki seviye arası; uçlarda "<" ve "≥"). Seviyeler yazılır (`50 52,5 55`;

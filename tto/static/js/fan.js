@@ -123,7 +123,9 @@ export class FanChart {
     const cut = [{ x: d.today, fwd: d.spot, q: null }].concat(pts);
     const end = this.at(x1);
     if (end && (!pts.length || pts[pts.length - 1].x < x1 - 0.5)) cut.push({ x: x1, fwd: end.fwd, q: end.q });
-    // ---- the value range: the past, every band shown, the levels
+    // ---- the value range fits what is drawn: the past, the forward, every band shown, the median.  The levels of the
+    // probability table are not part of it (they are set for the whole year: taken in, they would spread a short
+    // horizon thin) - they are drawn where they fall inside it.
     const vals = hist.map((p) => p[1]).concat([d.spot]);
     for (const p of cut) {
       if (isNum(p.fwd)) vals.push(p.fwd);
@@ -131,7 +133,6 @@ export class FanChart {
       for (const [lo, hi] of d.bands) { if (isNum(p.q[lo])) vals.push(p.q[lo]); if (isNum(p.q[hi])) vals.push(p.q[hi]); }
       if (d.median && isNum(p.q['0.5'])) vals.push(p.q['0.5']);
     }
-    for (const L of d.levels || []) if (isNum(L)) vals.push(L);
     const top = 14, bottom = 26;
     const ph = H - top - bottom;
     const scale = valueScale({ auto: 'fit' }, Math.min(...vals), Math.max(...vals), ph);
