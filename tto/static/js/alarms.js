@@ -1,8 +1,10 @@
 // Watching anything and alarms on it: the "Ekle…" window (a VİOP contract, a bond, an OIS tenor, offshore, the
 // desk strip, a free expression of them, any cell), and telling the user an alarm fired - on whatever page is
 // open: a toast that stays a while, a short tone, and the browser's own notification when it is allowed.
-import { api } from './api.js';
-import { h, clear, modal, toast, errorToast } from './ui.js';
+// The desk's alarms (set by an administrator, and the system's own: the data feed, RET, TLREF, the database)
+// ring for everyone: their toast has "Gördüm, ben bakıyorum", and the top bar counts the ones nobody answered.
+import { api, session } from './api.js';
+import { h, clear, modal, toast, errorToast, menu } from './ui.js';
 
 export const OPS = [['>=', '≥', 'Seviyeye ulaşınca ya da üstüne çıkınca'], ['<=', '≤', 'Seviyeye inince ya da altına düşünce'],
   ['x', 'kesişir', 'Seviyeyi hangi yönde olursa olsun geçince']];
@@ -38,11 +40,11 @@ function levelOf(text) { return String(text || '').trim(); }
  * Watch something, or set an alarm on it.  ``subject`` given (right click on a cell, the bell of a watched item):
  * that subject; none: the user picks what (VİOP · Kâğıt · OIS · Offshore · Masa · İfade · Hücre).
  */
-export async function openWatchDialog(ctx, { subject = null, label = '', hint = '', focus = 'watch', kind = null, mode = 'level' } = {}) {
+export async function openWatchDialog(ctx, { subject = null, label = '', hint = '', focus = 'watch', kind = null, mode = 'level', desk = false } = {}) {
   let cat;
   try { cat = await catalog(); } catch (err) { errorToast(err); return; }
   const fixed = !!subject;
-  const m = modal({ title: focus === 'alarm' ? 'Alarm kur' : 'İzle · alarm kur', width: 640 });
+  const m = modal({ title: desk ? 'Masa alarmı kur (herkese)' : (focus === 'alarm' ? 'Alarm kur' : 'İzle · alarm kur'), width: 640 });
   m.box.classList.add('pick');
   const state = { kind: kind || (fixed ? subject.kind : 'viop'), preview: null, typedLevel: false, exprText: '' };
 
@@ -170,11 +172,15 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
   const zlevel = h('input', { class: 'inp num', id: 'alarm-z', inputmode: 'decimal', value: '2' });
   const zinfo = h('span', { class: 'muted', id: 'alarm-zinfo' });
   const note = h('input', { class: 'inp', id: 'alarm-note', placeholder: 'not (isteğe bağlı): örn. "spread 250 üstünde öde"', maxlength: '200' });
-  const both = h('input', { type: 'checkbox', id: 'alarm-watch-too', checked: !fixed || null });
+  const both = h('input', { type: 'checkbox', id: 'alarm-watch-too', checked: (!fixed && !desk) || null });
+  // an administrator sets an alarm for the whole desk: read on the market's values, it rings on every screen
+  const forDesk = h('input', { type: 'checkbox', id: 'alarm-desk', checked: desk || null });
   const modeBox = h('div', { class: 'pick-mode' });
   const help = h('p', { class: 'muted' });
   const alarmBox = h('div', { class: 'pick-alarm' }, field('Alarm', modeSeg), modeBox, field('Not', note),
-    h('label', { class: 'check' }, both, ' Alarmı kurarken izleme listesine de ekle'), help);
+    h('label', { class: 'check' }, both, ' Alarmı kurarken izleme listesine de ekle'),
+    session.role === 'admin' ? h('label', { class: 'check', title: 'Piyasanın değerleriyle (kimsenin senaryosuyla değil) denetlenir; çalınca '
+      + 'herkesin ekranında uyarı çıkar, biri "Gördüm" deyince herkes görür.' }, forDesk, ' Masa alarmı: herkese çalar') : null, help);
   m.body.appendChild(alarmBox);
   function showZ() {
     const z = state.preview && state.preview.z ? state.preview.z[String(zdays)] : null;
@@ -201,6 +207,14 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
     }
   }
   from.addEventListener('change', drawAlarm);
+  // a watch list's reference (⟲) is one user's: the desk's alarm moves from the open, from now or within minutes
+  const deskFrom = () => {
+    const ref = from.querySelector('option[value="ref"]');
+    ref.disabled = forDesk.checked;
+    if (forDesk.checked && from.value === 'ref') { from.value = 'open'; drawAlarm(); }
+  };
+  forDesk.addEventListener('change', deskFrom);
+  deskFrom();
   drawAlarm();
 
   // ---------------------------------------------------------------- preview
@@ -281,12 +295,14 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
     try {
       const cellHint = state.preview && state.preview.subject.kind === 'cell' ? hint : '';
       const body = { subject: s, label: name.value.trim() || cellHint, note: note.value, level: levelOf(box.value),
-        mode: amode === 'move' ? from.value : amode, op: amode === 'level' ? op : (amode === 'z' ? zop : dir), minutes: minutes.value, days: zdays };
+        mode: amode === 'move' ? from.value : amode, op: amode === 'level' ? op : (amode === 'z' ? zop : dir), minutes: minutes.value, days: zdays,
+        desk: session.role === 'admin' && forDesk.checked };
       const res = await api.post('/api/alarms/add', body);
       if (both.checked) await api.post('/api/watch/add', { subject: s, label: name.value.trim(), hint });
       askPermission();
       const what = (res.alarm && res.alarm.label) || name.value;
-      toast(res.already ? 'Alarm kuruldu – koşul şu an zaten sağlanıyor: hemen çalar' : 'Alarm kuruldu: ' + what + ' · ' + (res.condition || ''), res.already ? 'warn' : 'ok', 5000);
+      const head = body.desk ? 'Masa alarmı kuruldu' : 'Alarm kuruldu';
+      toast(res.already ? head + ' – koşul şu an zaten sağlanıyor: hemen çalar' : head + ': ' + what + ' · ' + (res.condition || ''), res.already ? 'warn' : 'ok', 5000);
       m.close();
       if (ctx && ctx.refreshNow) ctx.refreshNow();
     } catch (err) { errorToast(err); alarmBtn.disabled = false; }
@@ -351,13 +367,103 @@ function tone() {
   } catch (e) { /* no sound */ }
 }
 
-const seen = { last: null };
+const seen = { last: null, desk: null };
+const deskToasts = new Map();             // the firing's number in the day's log -> its toast on this page
 
-/** What fired since the last look: told once each (the first look of a session only learns where it stands). */
+function notify(title, body) {
+  try {
+    if (window.Notification && Notification.permission === 'granted') new Notification(title, { body });
+  } catch (x) { /* no notification */ }
+}
+
+/** "Gördüm, ben bakıyorum": a desk alarm's firing answered for everyone. */
+export async function ackDesk(seq) {
+  return api.post('/api/alarms/ack', { seq });
+}
+
+/** Keep a desk alarm (an id, or "sys:feed" …) from firing for a while: 15 / 30 / 60 / 120 minutes, "gün", 0 = lift. */
+export async function muteDesk(alarm, minutes) {
+  return api.post('/api/alarms/mute', { alarm, minutes });
+}
+
+/** The choices of a mute, as a menu under (x, y). */
+export function muteMenu(x, y, alarm, muted, after) {
+  const pick = (minutes) => muteDesk(alarm, minutes).then((r) => {
+    toast(minutes ? 'Herkes için susturuldu · bitiş ' + (r.until || '').slice(11, 16) : 'Susturma kaldırıldı', 'ok');
+    if (after) after();
+  }).catch(errorToast);
+  menu(x, y, [{ header: 'Herkes için sustur' }, ...[15, 30, 60, 120].map((n) => ({ label: n + ' dakika', action: () => pick(n) })),
+    { label: 'Gün sonuna kadar', action: () => pick('gün') }].concat(muted ? [{ sep: true }, { label: 'Susturmayı kaldır', action: () => pick(0) }] : []));
+}
+
+function deskCounter(open) {
+  const b = document.getElementById('desk-alarm');
+  if (!b) return;
+  const n = (open || []).length;
+  b.classList.toggle('hidden', !n);
+  b.textContent = '🔔 ' + n + ' masa alarmı';
+  b.title = n ? 'Kimsenin "Gördüm" demediği masa alarmları:\n' + open.map((e) => e.at + ' · ' + e.label + (e.text ? ': ' + e.text : '')).join('\n')
+    + '\nTıklayın: İzleme · Alarmlar → Masa alarmları' : '';
+  if (!b.dataset.bound) {
+    b.dataset.bound = '1';
+    b.addEventListener('click', () => { window.location.hash = '#/watch?p=watch-desk'; });
+  }
+}
+
+function deskToast(e) {
+  const ack = h('button', { class: 'btn sm', type: 'button', title: 'Herkese "ben bakıyorum" der' }, 'Gördüm, ben bakıyorum');
+  const body = h('span', { class: 'desk-text' }, '🔔 MASA ALARMI · ' + e.label + (e.text ? ': ' + e.text : '') + ' · ' + e.at
+    + (e.note ? ' · ' + e.note : ''));
+  const el = toast(h('span', null, body, ' ', ack), 'alarm desk', 120000);
+  el.dataset.seq = String(e.seq);
+  el.dataset.alarm = e.alarm;
+  ack.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    ack.disabled = true;
+    try { answered(el, await ackDesk(e.seq).then((r) => r.entry)); } catch (err) { errorToast(err); ack.disabled = false; }
+  });
+  el.addEventListener('click', () => { el.remove(); deskToasts.delete(e.seq); });
+  deskToasts.set(e.seq, el);
+  notify('TTO masa alarmı · ' + e.label, e.text || '');
+}
+
+/** A firing someone answered: its toast says who, and goes a little later. */
+function answered(el, entry) {
+  if (!el || !entry) return;
+  const btn = el.querySelector('button');
+  if (btn) btn.remove();
+  el.classList.add('answered');
+  el.appendChild(h('div', { class: 'desk-ack' }, entry.ack_name ? '✓ Gördüm – ' + entry.ack_name + ' bakıyor (' + entry.ack_at + ')' : '✓ kapandı'));
+  setTimeout(() => el.remove(), 8000);
+  deskToasts.delete(entry.seq);
+}
+
+/** What fired since the last look: told once each (the first look of a session only learns where it stands).  One
+ * look at a time: generations arriving in a burst (a live tick, an alarm, an answer) asked two looks at once, and both
+ * showed what fired - the same alarm twice, one of its toasts left with the "Gördüm" button after the answer. */
+let looking = null;
+let lookAgain = false;
 export async function checkAlarms() {
+  if (looking) { lookAgain = true; return looking; }
+  looking = (async () => {
+    let fired = [];
+    do {
+      lookAgain = false;
+      fired = fired.concat(await lookOnce());
+    } while (lookAgain);
+    return fired;
+  })();
+  try { return await looking; } finally { looking = null; }
+}
+
+async function lookOnce() {
   let res;
-  try { res = await api.get('/api/alarms/fired?since=' + (seen.last == null ? 0 : seen.last)); } catch (e) { return []; }
-  if (seen.last == null) { seen.last = res.last; return []; }
+  try {
+    res = await api.get('/api/alarms/fired', { since: seen.last == null ? 0 : seen.last, desk: seen.desk == null ? 0 : seen.desk });
+  } catch (e) { return []; }
+  const d = res.desk || { events: [], last: 0, open: [] };
+  deskCounter(d.open);
+  if (seen.last == null) { seen.last = res.last; seen.desk = d.last; return []; }
   const op = Object.fromEntries(OPS.map(([v, t]) => [v, t]));
   for (const e of res.fired) {
     const cond = e.mode && e.mode !== 'level' ? (e.measure_text ? e.measure_text + ', ' : '') + (e.condition || '')
@@ -365,11 +471,26 @@ export async function checkAlarms() {
     const text = '🔔 ' + e.label + ': ' + (e.value_text || e.value) + '  (' + cond + ') · ' + e.time + (e.note ? ' · ' + e.note : '');
     const el = toast(text, 'alarm', 15000);
     el.addEventListener('click', () => el.remove());
-    try {
-      if (window.Notification && Notification.permission === 'granted') new Notification('TTO alarm · ' + e.label, { body: text.slice(2) });
-    } catch (x) { /* no notification */ }
+    notify('TTO alarm · ' + e.label, text.slice(2));
   }
-  if (res.fired.length) tone();
+  // the desk's: a firing for everyone, an answer, a condition that ended
+  let rang = res.fired.length > 0;
+  for (const e of d.events) {
+    if (e.kind === 'fired' && !deskToasts.has(e.seq)) { deskToast(e); rang = true; }
+    else if (e.kind === 'resolved') {
+      for (const [seq, el] of deskToasts) if (el.dataset.alarm === e.alarm) answered(el, { seq });
+      toast('✓ ' + e.label + ': ' + (e.text || 'düzeldi') + ' · ' + e.at, 'ok', 6000);
+    }
+  }
+  // toasts of firings that are no longer open: answered here or on another screen, closed
+  const open = new Set((d.open || []).map((e) => e.seq));
+  for (const [seq, el] of deskToasts) {
+    if (open.has(seq)) continue;
+    const ack = d.events.find((x) => x.kind === 'ack' && x.ref === seq);
+    answered(el, ack ? { seq, ack_name: ack.by_name, ack_at: ack.at } : { seq });
+  }
+  if (rang) tone();
   seen.last = Math.max(seen.last, res.last || 0);
+  seen.desk = d.last < seen.desk ? d.last : Math.max(seen.desk, d.last || 0);     // a new day starts its log again
   return res.fired;
 }

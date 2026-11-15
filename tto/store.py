@@ -1,12 +1,22 @@
-"""SQLite persistence: users, personal inputs, named scenarios, shared inputs (RET curve ...), blotter."""
+"""SQLite persistence: users, personal inputs, named scenarios, shared inputs (RET curve ...), blotter.
+
+A write of several steps (a package of trades deleted, a broker chat pasted, an account removed) is one
+transaction: it lands whole or not at all.  Every commit is on the disk before it returns (``synchronous=FULL``):
+a trade entered a moment before a power cut is kept.  :meth:`Store.backup_to` makes an online copy (SQLite's backup
+API, consistent while the dashboard keeps writing); :func:`restore` puts one back in place.
+"""
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
 import os
+import pathlib
+import shutil
 import sqlite3
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -87,6 +97,47 @@ def user_key(name: str) -> str:
     return key.replace("\u0307", "").replace("\u0131", "i")
 
 
+def restore(backup: str, db_path: str) -> Dict[str, Any]:
+    """Put a backup in the place of the database - with the dashboard stopped.  The backup is checked first (a
+    sound SQLite file with the dashboard's tables); the database as it was is kept beside it, with its write-ahead
+    log (``tto.db.onceki-<time>``): nothing is deleted.  On Windows a database the dashboard still has open cannot be
+    moved: that stops the restore before anything changed."""
+    backup, db_path = os.path.abspath(backup), os.path.abspath(db_path)
+    if not os.path.isfile(backup):
+        raise ValueError("yedek dosyası yok: %s" % backup)
+    if backup == db_path:
+        raise ValueError("yedek, veritabanının kendisi")
+    try:
+        con = sqlite3.connect(pathlib.Path(backup).as_uri() + "?mode=ro", uri=True)
+        try:
+            found = [str(r[0]) for r in con.execute("PRAGMA quick_check(5)").fetchall()]
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        finally:
+            con.close()
+    except sqlite3.DatabaseError as exc:
+        raise ValueError("yedek açılamadı: %s" % exc)
+    if found != ["ok"]:
+        raise ValueError("yedeğin denetimi başarısız: %s" % "; ".join(found))
+    if not {"users", "trades", "kv"} <= tables:
+        raise ValueError("bu bir TTO Masa veritabanı değil: %s" % backup)
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    kept = db_path + ".onceki-" + stamp
+    moved: List[Tuple[str, str]] = []
+    try:
+        for suffix in ("", "-wal", "-shm"):          # the database with its log: the log belongs to it, not to the backup
+            if os.path.exists(db_path + suffix):
+                os.replace(db_path + suffix, kept + suffix)
+                moved.append((db_path + suffix, kept + suffix))
+    except OSError as exc:
+        for src, dst in reversed(moved):             # back as it was
+            os.replace(dst, src)
+        raise ValueError("veritabanı yerinden alınamadı (%s) – dashboard açık mı? Önce kapatın." % exc)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    shutil.copy2(backup, db_path + ".part")
+    os.replace(db_path + ".part", db_path)
+    return {"restored": db_path, "from": backup, "kept": kept if moved else None}
+
+
 class Store(object):
     def __init__(self, path: str):
         if path != ":memory:":
@@ -97,7 +148,11 @@ class Store(object):
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
-            self._db.execute("PRAGMA synchronous=NORMAL")
+            # every commit waits until the write-ahead log is on the disk (NORMAL leaves the last commits to the next
+            # checkpoint: a power cut could take back a trade the blotter had shown as entered).  Measured on the desk
+            # machine with commits like the dashboard's: ~0.6-1.1 ms a commit (p99 ~4 ms) against ~0.03 ms - the
+            # dashboard commits a few times a second at most, so for every table rather than for the trades alone
+            self._db.execute("PRAGMA synchronous=FULL")
             self._db.executescript(_SCHEMA)
             for table, columns in _ADDED_COLUMNS.items():
                 self._add_columns(table, columns)
@@ -112,6 +167,70 @@ class Store(object):
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """One transaction: what is written inside lands together or - on any error - not at all.  A write inside
+        another one's transaction joins it."""
+        with self._lock:
+            if self._db.in_transaction:
+                yield self._db
+                return
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._db
+                self._db.execute("COMMIT")
+            except BaseException:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                raise
+
+    # ------------------------------------------------------------------ the file itself: its check, its copy
+    def quick_check(self, limit: int = 20) -> List[str]:
+        """SQLite's own check of the file (``PRAGMA quick_check``): ``[]`` when it is sound, else what it found."""
+        try:
+            found = [str(r[0]) for r in self._q("PRAGMA quick_check(%d)" % int(limit))]
+        except sqlite3.DatabaseError as exc:
+            return ["%s: %s" % (type(exc).__name__, exc)]
+        return [] if found == ["ok"] else found
+
+    def backup_to(self, path: str) -> Dict[str, Any]:
+        """An online copy of the database at ``path`` (SQLite's backup API: one consistent state, while the dashboard
+        goes on writing).  The copy is checked before it takes its name; an existing file of that name is replaced
+        only then.  Returns the path, its size and how long it took."""
+        path = os.path.abspath(path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        part = path + ".part"
+        if os.path.exists(part):
+            os.remove(part)
+        t0 = time.time()
+        try:
+            dst = sqlite3.connect(part)
+            try:
+                if self.path == ":memory:":
+                    with self._lock:
+                        self._db.backup(dst)
+                else:
+                    src = sqlite3.connect(self.path, timeout=30.0)
+                    try:
+                        src.backup(dst)              # in one step: the reader sees one committed state throughout
+                    finally:
+                        src.close()
+                # one self-contained file (the copy would otherwise keep the write-ahead mode and grow -wal / -shm
+                # files next to it whenever it is opened): what is copied off the machine is the whole backup
+                dst.execute("PRAGMA journal_mode=DELETE")
+                found = [str(r[0]) for r in dst.execute("PRAGMA quick_check(5)").fetchall()]
+            finally:
+                dst.close()
+            if found != ["ok"]:
+                raise sqlite3.DatabaseError("yedeğin denetimi başarısız: %s" % "; ".join(found))
+        except BaseException:
+            for leftover in (part, part + "-journal"):    # a copy that is not sound is not kept, half or whole
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+            raise
+        os.replace(part, path)
+        return {"path": path, "bytes": os.path.getsize(path), "seconds": round(time.time() - t0, 2)}
 
     def _q(self, sql: str, args: tuple = ()) -> List[sqlite3.Row]:
         with self._lock:
@@ -182,9 +301,9 @@ class Store(object):
             self._x("UPDATE users SET %s WHERE name=?" % sets, tuple(fields.values()) + (key,))
 
     def delete_account(self, key: str) -> None:
-        with self._lock:
-            self._db.execute("DELETE FROM sessions WHERE user=?", (key,))
-            self._db.execute("DELETE FROM users WHERE name=?", (key,))
+        with self.transaction() as db:               # the sessions and the account together, or neither
+            db.execute("DELETE FROM sessions WHERE user=?", (key,))
+            db.execute("DELETE FROM users WHERE name=?", (key,))
 
     def admins(self) -> List[str]:
         """The administrators who can sign in (active, with a password)."""
@@ -363,6 +482,12 @@ class Store(object):
                        "updated_at) VALUES (?,?,?,?,?,?,?,?)",
                        (trade_date, kind, package, json.dumps(payload, ensure_ascii=False), user, ts, user, ts))
 
+    def add_trades(self, trade_date: str, kind: str, payloads: List[Dict[str, Any]], user: Optional[str],
+                   package: Optional[str] = None) -> List[int]:
+        """The legs of a package in one transaction: all of them are kept, or - on any error - none."""
+        with self.transaction():
+            return [self.add_trade(trade_date, kind, p, user, package) for p in payloads]
+
     def update_trade(self, trade_id: int, payload: Dict[str, Any], user: Optional[str]) -> bool:
         with self._lock:
             cur = self._db.execute("UPDATE trades SET payload=?, updated_by=?, updated_at=? WHERE id=? AND deleted=0",
@@ -370,20 +495,19 @@ class Store(object):
             return cur.rowcount > 0
 
     def delete_trade(self, trade_id: int, user: Optional[str]) -> List[int]:
-        """Soft-delete a trade (and the other legs of its package); returns the ids removed."""
-        with self._lock:
-            rows = self._db.execute("SELECT id, package FROM trades WHERE id=? AND deleted=0", (trade_id,)).fetchall()
+        """Soft-delete a trade (and the other legs of its package, in the same transaction: a package is never left
+        half deleted); returns the ids removed."""
+        with self.transaction() as db:
+            rows = db.execute("SELECT id, package FROM trades WHERE id=? AND deleted=0", (trade_id,)).fetchall()
             if not rows:
                 return []
             pkg = rows[0]["package"]
             if pkg:
-                ids = [r["id"] for r in self._db.execute(
-                    "SELECT id FROM trades WHERE package=? AND deleted=0", (pkg,)).fetchall()]
+                ids = [r["id"] for r in db.execute("SELECT id FROM trades WHERE package=? AND deleted=0", (pkg,)).fetchall()]
             else:
                 ids = [trade_id]
             ts = now_iso()
-            self._db.executemany("UPDATE trades SET deleted=1, updated_by=?, updated_at=? WHERE id=?",
-                                 [(user, ts, i) for i in ids])
+            db.executemany("UPDATE trades SET deleted=1, updated_by=?, updated_at=? WHERE id=?", [(user, ts, i) for i in ids])
             return ids
 
     def trades(self, trade_date: str, until: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -406,20 +530,21 @@ class Store(object):
     def add_broker_quotes(self, rows: List[Dict[str, Any]], user: Optional[str]) -> Tuple[List[int], int]:
         """Keep what a broker chat said: one row per quote (or line).  A row that is already there - the same
         day, time, sender, text and reading, as when the same stretch of chat is pasted again - is skipped.
-        Returns (ids of the new rows, number skipped)."""
+        Returns (ids of the new rows, number skipped).  One paste is one transaction: a row that cannot be kept
+        leaves none of the paste behind (pasted again, it is all new)."""
         ids: List[int] = []
         skipped = 0
         ts = now_iso()
-        with self._lock:
+        with self.transaction() as db:
             for row in rows:
-                day, time, mark = row["date"], row["time"], row["mark"]
-                found = self._db.execute("SELECT id FROM broker_quotes WHERE quote_date=? AND quote_time=? AND mark=? AND deleted=0",
-                                         (day, time, mark)).fetchone()
+                day, at, mark = row["date"], row["time"], row["mark"]
+                found = db.execute("SELECT id FROM broker_quotes WHERE quote_date=? AND quote_time=? AND mark=? AND deleted=0",
+                                   (day, at, mark)).fetchone()
                 if found:
                     skipped += 1
                     continue
-                cur = self._db.execute("INSERT INTO broker_quotes (quote_date, quote_time, mark, payload, created_by, created_at) "
-                                       "VALUES (?,?,?,?,?,?)", (day, time, mark, json.dumps(row, ensure_ascii=False), user, ts))
+                cur = db.execute("INSERT INTO broker_quotes (quote_date, quote_time, mark, payload, created_by, created_at) "
+                                 "VALUES (?,?,?,?,?,?)", (day, at, mark, json.dumps(row, ensure_ascii=False), user, ts))
                 ids.append(cur.lastrowid)
         return ids, skipped
 

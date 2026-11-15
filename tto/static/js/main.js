@@ -364,7 +364,9 @@ function applyStatus(status) {
   if (!status) return;
   state.status = status;
   const badge = $('mode-badge');
-  badge.classList.remove('live', 'replay', 'slow');
+  badge.classList.remove('live', 'replay', 'slow', 'stale');
+  // how fresh the prices are (the server works it out: the helper's heartbeat, the age of the last tick in market hours)
+  const feed = (status.ops && status.ops.feed) || {};
   if (!state.online) {
     $('mode-text').textContent = 'Bağlantı yok';
     badge.title = 'Sunucuya ulaşılamıyor – yeniden bağlanılıyor';
@@ -373,6 +375,12 @@ function applyStatus(status) {
     if (p.connected === false) {
       $('mode-text').textContent = 'Bloomberg bağlantısı yok';
       badge.title = (p.error || 'Bloomberg bağlantısı koptu') + ' – yeniden bağlanılıyor';
+    } else if (feed.state === 'stale' || feed.state === 'silent') {
+      // prices that stopped must not look live: "as of" the last tick (or the helper's last word)
+      badge.classList.add('live', 'stale');
+      $('mode-text').textContent = 'BAYAT VERİ · ' + (feed.as_of || '—') + ' itibarıyla';
+      badge.title = (feed.reason || 'Veri akmıyor') + (p.error ? ' · ' + p.error : '')
+        + ' · ayrıntı için tıklayın';
     } else {
       badge.classList.add('live');
       // Bloomberg says its event queue is filling up: prices may arrive late (and are asked again if any were dropped)
@@ -405,6 +413,12 @@ function applyStatus(status) {
   if (status.note && !state.noteShown) {
     state.noteShown = true;
     toast(status.note, 'err', 9000);
+  }
+  // the database file failed its check at the start: everyone hears it once (the badge's window says more)
+  const chk = status.ops && status.ops.db && status.ops.db.check;
+  if (chk && chk.ok === false && !state.dbShown) {
+    state.dbShown = true;
+    toast('Veritabanı denetimi başarısız: ' + (chk.problems || []).slice(0, 2).join('; ') + ' – yöneticiye haber verin (ayrıntı: rozete tıklayın).', 'err', 20000);
   }
 }
 

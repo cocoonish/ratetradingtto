@@ -25,6 +25,7 @@ from tto.marketdata import bbg_process
 from tto.marketdata.base import INVALID_SECURITY, REQUESTING, bdp_key
 from tto.marketdata.bbg_process import IsolatedBloombergProvider, IsolationError
 from tto.marketdata.bloomberg import NA_NA, NO_BFX, BloombergProvider
+from tto.ops import feed_state
 from tto.service import Service
 from tto.xl.values import XlArray
 
@@ -282,6 +283,92 @@ def test_a_helper_that_keeps_dying_is_not_restarted_for_ever(fake, isolated, mon
     assert [p.get_bdp(k) for k in keys] == [10.0, 11.0]          # the last values stay readable
     time.sleep(1.0)
     assert not helpers() and p.status()["restarts"] == 1          # and it stays that way
+
+
+def test_a_helper_that_goes_silent_is_seen_stale_and_started_again(fake, isolated, tmp_path):
+    """A helper that is alive but says nothing (hung in a call) used to leave the last prices on every screen
+    looking live: only a helper that ended was noticed.  It reports every second; the dashboard notes when it
+    last heard from it - the data is "stale" as of then - and after the silence limit, in market hours only, it
+    starts a new one that is asked for everything again."""
+    fake(securities=3, hang_once=str(tmp_path / "hung"))
+    p = isolated(silent_restart=1.5)
+    market = {"open": False}
+    p.restart_allowed = lambda: market["open"]
+    p.start()
+    keys = [bdp_key("TEST%04d Curncy" % i, "BID") for i in range(3)]
+    for k in keys:
+        p.get_bdp(k)
+    settle(p)
+    st = p.status()
+    assert time.time() - st["heard"] < 2.5 and st["silent_restarts"] == 0       # the heartbeat: every second at least
+    assert feed_state("live", st, time.time(), True, time.time() - 5)["state"] == "ok"
+    p.get_bdp(bdp_key("HANG Curncy", "PX_LAST"))                  # the helper hangs on this request
+    assert wait_for(lambda: time.time() - p.status()["heard"] > 3.0, 15)
+    st = p.status()
+    stale = feed_state("live", st, time.time(), False, time.time() - 100, heard_stale=2.0)
+    assert stale["state"] == "silent" and stale["as_of"] and "ses vermiyor" in stale["reason"]
+    # outside market hours it is said, not started again
+    assert wait_for(lambda: "piyasa saatleri dışında" in p.status()["error"], 10)
+    assert p.status()["restarts"] == 0 and p.status()["worker"] == "running"
+    assert [p.get_bdp(k) for k in keys] == [10.0, 11.0, 12.0]                     # the last values stay readable
+    # in market hours: a new helper, asked for everything again; the data flows again
+    market["open"] = True
+    assert wait_for(lambda: p.status()["restarts"] == 1, 20)
+    assert wait_for(lambda: p.status()["connected"] and time.time() - p.status()["heard"] < 2.5, 15)
+    settle(p)
+    st = p.status()
+    assert st["silent_restarts"] == 1 and feed_state("live", st, time.time(), True, time.time() - 5)["state"] == "ok"
+    assert p.get_bdp(bdp_key("HANG Curncy", "PX_LAST")) == NA_NA                  # the request was repeated, answered
+    new = bdp_key("TEST0000 Curncy", "ASK")
+    p.get_bdp(new)
+    settle(p)
+    assert p.get_bdp(new) == 10.5
+
+
+def test_a_helper_that_keeps_going_silent_is_not_started_again_in_a_loop(fake, isolated, monkeypatch):
+    """Every new helper asks Bloomberg for everything again: a helper that hangs again and again must not use up
+    the terminal's daily data limit.  The n-th restart of a day waits for twice as long a silence as the one
+    before, and after MAX_SILENT_RESTARTS no new one is started that day - the status says so."""
+    monkeypatch.setattr(bbg_process, "MAX_SILENT_RESTARTS", 1)
+    fake(securities=2, hang_always=True)
+    p = isolated(silent_restart=1.0)
+    p.start()
+    keys = [bdp_key("TEST%04d Curncy" % i, "BID") for i in range(2)]
+    for k in keys:
+        p.get_bdp(k)
+    settle(p)
+    p.get_bdp(bdp_key("HANG Curncy", "PX_LAST"))                  # hangs, and the next helper hangs on it too
+    assert wait_for(lambda: p.status()["restarts"] == 1, 20)
+    assert wait_for(lambda: "artık kendiliğinden başlatılmıyor" in p.status()["error"], 20)
+    st = p.status()
+    assert st["silent_restarts"] == 1 and st["worker"] == "running" and "bugün 1 kez" in st["error"]
+    time.sleep(2.5)
+    assert p.status()["restarts"] == 1 and len(helpers()) == 1    # and it stays that way
+    assert [p.get_bdp(k) for k in keys] == [10.0, 11.0]
+
+
+def test_the_state_of_the_data_feed():
+    """What the badge shows: live, stale (no tick in market hours / a silent helper) with the time the data is as
+    of, no connection - or the saved data."""
+    now = 1_800_000_000.0
+    live = {"connected": True, "isolated": True, "worker": "running", "subscriptions": 240, "last_tick": now - 3, "heard": now - 0.4}
+    assert feed_state("replay", live, now, True, now - 999)["state"] == "replay"
+    ok = feed_state("live", live, now, True, now - 999)
+    assert ok["state"] == "ok" and ok["age"] == 3.0 and ok["as_of"] == time.strftime("%H:%M:%S", time.localtime(now - 3))
+    quiet = dict(live, last_tick=now - 300)
+    stale = feed_state("live", quiet, now, True, now - 999)
+    assert stale["state"] == "stale" and "300 sn" in stale["reason"] and stale["as_of"] == time.strftime("%H:%M:%S", time.localtime(now - 300))
+    assert feed_state("live", quiet, now, False, now - 999)["state"] == "ok"            # no ticks expected out of hours
+    assert feed_state("live", quiet, now, True, now - 999, tick_stale=600)["state"] == "ok"
+    never = dict(live, last_tick=0.0)
+    assert feed_state("live", never, now, True, now - 30)["state"] == "ok"               # just started
+    assert "hiç gelmedi" in feed_state("live", never, now, True, now - 999)["reason"]
+    silent = feed_state("live", dict(live, heard=now - 25), now, False, now - 999)
+    assert silent["state"] == "silent" and "25 sn" in silent["reason"]
+    down = feed_state("live", dict(live, connected=False, worker="restarting", error="Bloomberg yardımcı süreci kapandı"), now, True, 0)
+    assert down["state"] == "down" and "kapandı" in down["reason"]
+    inproc = {"connected": True, "isolated": False, "subscriptions": 3, "last_tick": now - 1}     # no heartbeat to read
+    assert feed_state("live", inproc, now, True, now - 999)["state"] == "ok"
 
 
 def test_a_value_that_cannot_cross_the_pipe_does_not_hold_up_the_rest():

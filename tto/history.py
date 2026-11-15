@@ -1029,9 +1029,12 @@ class History(object):
             try:
                 force, self._force = self._force, False
                 self.sync(recompute=force)
-            except Exception as exc:  # noqa: BLE001 - the loop must survive anything
+            except Exception as exc:  # noqa: BLE001 - the loop must survive anything (the log says what it was)
                 self.state["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
                 self.state["phase"] = "idle"
+                ops = getattr(self.svc, "ops", None)
+                if ops is not None:
+                    ops.failure("tarihçe", exc)
             interval = float(getattr(self.svc.settings, "history_refresh", 900.0) or 0.0)
             self._kick.wait(interval if (live and interval > 0) else None)
 

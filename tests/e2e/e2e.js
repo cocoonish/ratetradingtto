@@ -1648,6 +1648,30 @@ async function shot(page, name) {
     await page.click('#alarm-save');
     await page.waitForFunction(() => /z\(20g\) ≥ 5,00/.test(document.getElementById('watch-alarms').textContent), null, { timeout: 20000 });
     check('... an alarm on the z-score (the window\'s closes and z now shown as it is set)', /^şu an z = −?\d+,\d\d · \d+ kapanış/.test(zInfo), zInfo);
+    // the desk's alarms: an administrator sets one for everyone; it rings on every open page; one answer is everyone's
+    await page.click('#desk-add');
+    await page.waitForSelector('#alarm-desk');
+    const deskTicked = await page.isChecked('#alarm-desk');
+    await page.click('#pick-kind button[data-k="ois"]');
+    await page.selectOption('#pick-ois', '1Y');
+    await pickNow('OIS 1Y');
+    await page.fill('#alarm-level', '30,00');
+    await page.click('#alarm-save');
+    await page.waitForFunction(() => /MASA ALARMI · OIS 1Y/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    await page.waitForFunction(() => !document.getElementById('desk-alarm').classList.contains('hidden'), null, { timeout: 15000 });
+    const deskCounter = await page.textContent('#desk-alarm');
+    const deskOthers = (await api(page, 'mehmet', 'GET', '/api/alarms/fired?since=0&desk=0')).json.desk;
+    check('Masa alarmı: set by an administrator for everyone ("Masa alarmı kur…" ticks the box) - it rings with "Gördüm, ben bakıyorum", the top bar counts it, everyone has it open',
+      deskTicked && deskCounter === '🔔 1 masa alarmı' && deskOthers.open.length === 1 && deskOthers.open[0].label === 'OIS 1Y', [deskTicked, deskCounter, deskOthers.open]);
+    await page.click('.toast.alarm.desk button');
+    await page.waitForFunction(() => /✓ Gördüm – Ayşe Yılmaz bakıyor/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    await page.waitForFunction(() => document.getElementById('desk-alarm').classList.contains('hidden'), null, { timeout: 15000 });
+    await page.waitForFunction(() => /Ayşe Yılmaz bakıyor/.test((document.getElementById('desk-table') || {}).textContent || ''), null, { timeout: 15000 });
+    const deskAfter = (await api(page, 'mehmet', 'GET', '/api/watch')).json.desk;
+    check('... one answer is everyone\'s: "✓ Gördüm – Ayşe Yılmaz bakıyor", no longer counted, in the day\'s log',
+      deskAfter.open.length === 0 && deskAfter.alarms[0].entry.ack_name === 'Ayşe Yılmaz' && deskAfter.log.some((e) => e.kind === 'ack'), deskAfter.open);
+    await page.locator('#watch-desk').scrollIntoViewIfNeeded();
+    await shot(page, 'masa-alarmlari');
 
     // ------------------------------------------------------------------ the heat map of the curves
     console.log('heat map');

@@ -523,3 +523,142 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     tables = {t["id"]: t for t in pages["forward"]["tables"]}
     assert tables["B7"]["tab"] == "Hesaplayıcılar" and tables["B7"]["title"].startswith("Interest 2 SP")
     assert tables["B19"]["tab"] == "RET" and "B22" not in tables and "tables" not in pages["blotter"]
+
+
+# ====================================================================================== operations (ops.py)
+@pytest.fixture()
+def log_to(tmp_path):
+    """The dashboard's rotating log file in a folder of the test (taken off again afterwards)."""
+    import logging
+    from tto import ops
+    logger = logging.getLogger("tto")
+    before, level = list(logger.handlers), logger.level
+
+    def setup(folder):
+        return ops.setup_logging(str(folder))
+
+    yield setup
+    for h in list(logger.handlers):
+        if h not in before:
+            logger.removeHandler(h)
+            h.close()
+    logger.setLevel(level)
+    ops._LOG_FILE[:] = []
+
+
+def test_the_loops_say_what_they_survive_and_the_status_tells_it(tmp_path, log_to):
+    """The market and watch loops used to swallow every exception without a word.  Now each fault goes to the log
+    file (the first time with its traceback, then once a minute with a count) and the status shows the last one,
+    with the calculation thread's queue."""
+    import time as _time
+    from tto.config import Settings
+    from tto.service import Service
+    path = log_to(tmp_path / "logs")
+    svc = Service(Settings(data_dir=str(tmp_path / "data"), mode="replay", history=False, tick_seconds=0.1))
+    try:
+        st = svc.status()["ops"]
+        assert st["engine"] == {"queue": 0, "busy": 0.0} and st["last_error"] is None
+        assert st["feed"]["state"] == "replay" and st["log"] == path and st["settings"]["market_open"] == "09:00"
+
+        def broken():
+            raise KeyError("bozuk anahtar")
+
+        svc.provider.drain_changes = broken                      # the market loop fails on every round
+        svc.start()
+        deadline = _time.time() + 15
+        while _time.time() < deadline and ((svc.ops.last_error or {}).get("count") or 0) < 5:
+            _time.sleep(0.05)
+        le = svc.status()["ops"]["last_error"]
+        assert le["where"] == "piyasa döngüsü" and le["text"] == "KeyError: 'bozuk anahtar'" and le["count"] >= 5
+        # the watch loop's faults as well
+        svc.watch.tick = lambda: 1 / 0
+        svc._watch_kick.set()
+        while _time.time() < deadline and svc.ops.last_error["where"] != "izleme / alarm döngüsü":
+            _time.sleep(0.05)
+        assert svc.ops.last_error["text"].startswith("ZeroDivisionError")
+    finally:
+        svc.stop()
+        svc.store.close()
+    text = open(path, encoding="utf-8").read()
+    # written once with where it came from, not on every round (the loop went round dozens of times)
+    assert text.count("piyasa döngüsü: KeyError: 'bozuk anahtar'") == 1 and "Traceback" in text and "in broken" in text
+    assert "izleme / alarm döngüsü: ZeroDivisionError" in text
+
+
+def test_market_hours_follow_the_desks_days_and_settings(module_service):
+    import datetime as _dt
+    ops = module_service.ops
+    assert ops.market_hours(_dt.datetime(2026, 11, 13, 10, 0)) is True             # a Friday
+    assert ops.in_market() is True                                                 # the last answer, at hand
+    assert ops.market_hours(_dt.datetime(2026, 11, 13, 8, 59)) is False
+    assert ops.market_hours(_dt.datetime(2026, 11, 13, 18, 0)) is False
+    assert ops.market_hours(_dt.datetime(2026, 11, 14, 10, 0)) is False            # a Saturday
+    assert ops.market_hours(_dt.datetime(2026, 10, 29, 10, 0)) is False            # a holiday of the desk (the workbook's list)
+    cur = ops.set_settings({"market_open": "8.30", "market_close": "18:30", "tick_stale": "300"})
+    try:
+        assert (cur["market_open"], cur["market_close"], cur["tick_stale"]) == ("08:30", "18:30", 300)
+        assert ops.market_hours(_dt.datetime(2026, 11, 13, 8, 45)) is True
+        for bad in ({"market_open": "25:00"}, {"market_open": "19:00"}, {"tick_stale": "yok"}, {"tick_stale": 0}):
+            with pytest.raises(ValueError):
+                ops.set_settings(bad)
+        assert ops.settings()["tick_stale"] == 300                                 # a refused change changes nothing
+    finally:
+        module_service.store.put("ops.settings", {})
+
+
+def test_a_damaged_database_is_told_at_the_start(tmp_path, capsys):
+    """``PRAGMA quick_check`` at every start: a damaged file is said on the console, in the log and the status (the
+    page tells everyone); the dashboard still runs on what it can read.  A file that cannot be opened at all stops
+    the start with where the newest backup is."""
+    import os
+    from test_store import damage, fill_history
+    from tto.config import Settings
+    from tto.service import Service
+    from tto.store import Store
+    data = tmp_path / "data"
+    s = Store(str(data / "tto.db"))
+    s.login("Ali")
+    s.backup_to(str(data / "backups" / "tto-2026-11-14.db"))
+    fill_history(s)
+    s.close()
+    damage(str(data / "tto.db"))
+    svc = Service(Settings(data_dir=str(data), mode="replay", history=False))
+    try:
+        out = capsys.readouterr().out
+        assert "UYARI: VERİTABANI DENETİMİ BAŞARISIZ" in out and "tto-2026-11-14.db" in out
+        db = svc.status()["ops"]["db"]
+        assert db["check"]["ok"] is False and db["check"]["problems"]
+        assert db["backup"]["count"] == 1 and db["backup"]["last"]["name"] == "tto-2026-11-14.db"
+        assert svc.store.user_exists("ali")                                   # what can be read still is
+    finally:
+        svc.stop()
+        svc.store.close()
+    # not a database at all: the start stops and says where the backup is
+    bad = tmp_path / "bad"
+    os.makedirs(str(bad / "backups"))
+    (bad / "tto.db").write_bytes(b"bozuk" * 2000)
+    (bad / "backups" / "tto-2026-11-13.db").write_bytes(b"")
+    with pytest.raises(RuntimeError) as err:
+        Service(Settings(data_dir=str(bad), mode="replay", history=False))
+    assert "Veritabanı açılamadı" in str(err.value) and "tto-2026-11-13.db" in str(err.value) and "yedekten-don" in str(err.value)
+
+
+def test_a_package_of_ois_legs_is_kept_whole(module_service, monkeypatch):
+    """The legs of a package go in one transaction: a leg that cannot be written leaves no leg of it."""
+    import sqlite3
+    store = module_service.store
+    u = module_service.login("Paket Giren")["user"]
+    before = len(store.trades(module_service.today_iso()))
+    store._db.execute("CREATE TRIGGER refuse_leg BEFORE INSERT ON trades WHEN NEW.payload LIKE '%\"tenor\": \"2Y\"%' "
+                      "BEGIN SELECT RAISE(ABORT, 'disk dolu'); END")
+    try:
+        with pytest.raises(sqlite3.DatabaseError):         # the second leg (2Y) of the spread is refused
+            module_service.add_ois(u, {"strategy": "spread", "side": "FLATTENER", "short": "1Y", "long": "2Y", "level": "25",
+                                       "dv01": 1000})
+    finally:
+        store._db.execute("DROP TRIGGER refuse_leg")
+    assert len(store.trades(module_service.today_iso())) == before               # the first leg is not left alone
+    res = module_service.add_ois(u, {"strategy": "spread", "side": "FLATTENER", "short": "1Y", "long": "2Y", "level": "25",
+                                     "dv01": 1000})
+    assert len(res["ids"]) == 2 and len(store.trades(module_service.today_iso())) == before + 2
+    module_service.delete_trade(u, res["ids"][0])                                 # (the module's other tests see no trades)

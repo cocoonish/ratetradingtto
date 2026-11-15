@@ -20,6 +20,8 @@ variable ``TTO_FAKE_BBG`` (JSON), which a spawned process inherits:
      "hang_start": 30,             # ... or does not answer for so many seconds
      "crash_once": "/path/marker", # the process dies on the request for CRASH Curncy, once (the marker file)
      "crash_always": true,         # ... or every time
+     "hang_once": "/path/marker",  # the helper stops talking on the request for HANG Curncy - alive, but its loop
+     "hang_always": true,          #     blocks for good (a call that never returns) - once, or every time
      "stats": "/path/file.json"}   # written twice a second: ticks pushed / dropped, subscriptions, process id
 """
 from __future__ import annotations
@@ -180,7 +182,22 @@ class Session(fake_blpapi.Session):
                 with open(marker, "w") as fh:
                     fh.write("crashed")
                 os._exit(3)
+        hang = CONFIG.get("hang_once")
+        if "HANG Curncy" in request.data.get("securities", []) and (CONFIG.get("hang_always") or (hang and not os.path.exists(hang))):
+            if hang:
+                with open(hang, "w") as fh:
+                    fh.write("hung")
+            _freeze()
         return super(Session, self).sendRequest(request, correlationId=correlationId, **kwargs)
+
+
+def _freeze() -> None:
+    """The helper goes silent without dying: the loop that sends its batches to the dashboard blocks for good
+    from its next batch on (as in a call that never returns); the process and its threads stay alive."""
+    import sys
+    mod = sys.modules.get("tto.marketdata.bbg_process")
+    if mod is not None:
+        mod._send_values = lambda *args, **kwargs: time.sleep(3600)
 
 
 def _market() -> None:

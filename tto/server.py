@@ -135,7 +135,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                 return await fn(request)
             except ServiceError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=exc.status)
-            except Exception as exc:  # noqa: BLE001 - never leak a traceback to the browser
+            except Exception as exc:  # noqa: BLE001 - never leak a traceback to the browser (it goes to the log)
+                s = state["service"]
+                if s is not None:
+                    s.ops.failure("%s %s" % (request.method, request.url.path), exc)
                 return JSONResponse({"error": "sunucu hatası: %s" % (str(exc)[:300] or type(exc).__name__)},
                                     status_code=500)
         return wrapped
@@ -592,15 +595,23 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         what = request.path_params["what"]
         u = _user(request)
         s = svc()
+        desk = bool(data.get("desk"))                 # the desk's alarm (for everyone): administrators set it
         if what == "add":
             subject = data.get("subject") if isinstance(data.get("subject"), dict) else None
-            return ok(await call(s.alarm_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
+            return ok(await call(s.desk_alarm_add if desk else s.alarm_add, u, str(data.get("book") or "tto"), str(data.get("ref") or ""),
                                  str(data.get("op") or ""), data.get("level"), str(data.get("label") or ""), str(data.get("note") or ""),
                                  subject, str(data.get("mode") or "level"), data.get("minutes"), data.get("days")))
         if what == "remove":
-            return ok(await call(s.alarm_remove, u, str(data.get("id") or "")))
+            return ok(await call(s.desk_alarm_remove if desk else s.alarm_remove, u, str(data.get("id") or "")))
         if what == "rearm":
-            return ok(await call(s.alarm_rearm, u, str(data.get("id") or ""), data.get("level")))
+            return ok(await call(s.desk_alarm_rearm if desk else s.alarm_rearm, u, str(data.get("id") or ""), data.get("level")))
+        # the desk's alarms: "Gördüm, ben bakıyorum", a mute (anyone), the settings (administrators)
+        if what == "ack":
+            return ok(await call(s.desk_alarm_ack, u, data.get("seq")))
+        if what == "mute":
+            return ok(await call(s.desk_alarm_mute, u, data.get("alarm"), data.get("minutes")))
+        if what == "settings":
+            return ok(await call(s.desk_alarm_settings, u, data.get("values")))
         raise ServiceError("bilinmeyen işlem: %s" % what, 404)
 
     @handler
@@ -609,7 +620,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             since = int(request.query_params.get("since") or 0)
         except ValueError:
             since = 0
-        return ok(await call(svc().alarms_fired, _user(request), since))
+        return ok(await call(svc().alarms_fired, _user(request), since, request.query_params.get("desk")))
 
     @handler
     async def notes(request: Request):

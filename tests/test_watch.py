@@ -597,3 +597,211 @@ def test_a_day_the_market_is_shut(svc, monkeypatch):
         assert (one["base_day"], one["now"], one["chg"], one["now_text"]) == ("2026-11-13", 35.40, 0.0, "35,40")
         assert (z6["base_day"], z6["now"], z6["chg"]) == ("2026-11-13", 200.0, 0.0)
         assert two["chg"] is None and type(two["now"]) is float      # no close kept for it: read as it is, no change
+
+
+# ====================================================================================== the desk's alarms (deskalarms.py)
+def move_market(s, ref, value):
+    """The market's value of a cell (everyone's, not anyone's scenario)."""
+    book = s.books["tto"]
+    si, rc = book.cell(ref)
+    s.et.call(book.engine.set_inputs, {(si, rc): value})
+
+
+def desk_events(s, user, since=0):
+    return s.alarms_fired(user, 0, since)["desk"]
+
+
+def test_desk_alarms_ring_for_everyone_and_one_answer_is_seen_by_all(svc):
+    admin = svc.login("Masa Şefi")["user"]
+    svc.store.update_account(admin, role="admin")
+    trader = svc.login("Masa Trader")["user"]
+    one_y = {"kind": "ois", "tenor": "1Y"}
+    # set once for everyone - by an administrator only
+    with pytest.raises(ServiceError) as err:
+        svc.desk_alarm_add(trader, subject=one_y, op=">=", level="35,80")
+    assert err.value.status == 403
+    with pytest.raises(ServiceError) as err:                                      # a watch list's reference is one user's
+        svc.desk_alarm_add(admin, subject=one_y, op="up", level="5", mode="ref")
+    assert "referans" in str(err.value)
+    res = svc.desk_alarm_add(admin, subject=one_y, op=">=", level="35,80", label="1Y masa", note="herkes baksın")
+    a = res["alarm"]
+    assert (a["desk"], a["user"], a["by"], res["already"]) == (True, "", admin, False)
+    # in nobody's own list; on everyone's page, with who set it
+    assert svc.watch_view(admin)["alarms"] == [] and svc.watch_view(trader)["alarms"] == []
+    dv = svc.watch_view(trader)["desk"]
+    row = dv["alarms"][0]
+    assert (row["label"], row["by_name"], row["now_text"], row["condition"], dv["admin"]) == ("1Y masa", "Masa Şefi", "35,55%", "≥ 35,80%", False)
+    assert svc.watch_view(admin)["desk"]["admin"] is True
+    start = desk_events(svc, trader)["last"]
+    assert [e["kind"] for e in desk_events(svc, trader)["events"]] == ["set"]
+    # read on the market's values: one trader's scenario does not fire it for the desk
+    svc.set_inputs(trader, "tto", [{"ref": "OIS_MAIN!B14", "value": "36,00%"}], allow_adhoc=True)
+    tick(svc)
+    assert desk_events(svc, trader, start)["events"] == []
+    # the market moves: it fires - once, for everyone (and as nobody's personal alarm)
+    move_market(svc, "OIS_MAIN!B14", 0.3590)
+    tick(svc)
+    for who in (trader, admin):
+        d = desk_events(svc, who, start)
+        assert [e["kind"] for e in d["events"]] == ["fired"] and d["open"] == d["events"]
+    fired = d["events"][0]
+    assert fired["label"] == "1Y masa" and fired["text"] == "35,90% (≥ 35,80%)" and fired["note"] == "herkes baksın" and not fired["system"]
+    assert svc.alarms_fired(trader, 0)["fired"] == [] and svc.alarms_fired(admin, 0)["fired"] == []
+    tick(svc)
+    assert desk_events(svc, admin, fired["seq"])["events"] == []                    # told once
+    # "Gördüm, ben bakıyorum": the first answer stands, everyone sees it, the alarm is no longer open
+    e = svc.desk_alarm_ack(trader, fired["seq"])["entry"]
+    assert (e["ack_by"], e["ack_name"]) == (trader, "Masa Trader")
+    assert svc.desk_alarm_ack(admin, fired["seq"])["entry"]["ack_name"] == "Masa Trader"
+    d = desk_events(svc, admin, fired["seq"])
+    assert d["open"] == [] and [(x["kind"], x["text"], x["ref"]) for x in d["events"]] == [("ack", "Gördüm – Masa Trader bakıyor", fired["seq"])]
+    row = svc.watch_view(admin)["desk"]["alarms"][0]
+    assert row["active"] is False and row["entry"]["ack_name"] == "Masa Trader" and row["fired_text"] == "35,90%"
+    with pytest.raises(ServiceError):
+        svc.desk_alarm_ack(trader, 9999)
+    # muted (by anyone, for everyone) and re-armed by an administrator: it does not fire while muted ...
+    with pytest.raises(ServiceError):
+        svc.desk_alarm_mute(trader, a["id"], 7)                                   # 15 / 30 / 60 / 120 minutes, or the day
+    m = svc.desk_alarm_mute(trader, a["id"], 15)
+    assert m["by_name"] == "Masa Trader" and m["until"] > svc.today_iso()
+    last = desk_events(svc, admin)["last"]
+    with pytest.raises(ServiceError):
+        svc.desk_alarm_rearm(trader, a["id"])
+    svc.desk_alarm_rearm(admin, a["id"])
+    tick(svc)
+    assert [x["kind"] for x in desk_events(svc, admin, last)["events"]] == ["rearmed"]
+    row = svc.watch_view(trader)["desk"]["alarms"][0]
+    assert row["active"] is True and row["mute"]["by_name"] == "Masa Trader" and row["entry"] is None
+    # ... and fires when the mute is lifted (the condition still holds; the watch loop may be quicker than this tick)
+    svc.desk_alarm_mute(admin, a["id"], 0)
+    tick(svc)
+    assert [x["kind"] for x in desk_events(svc, admin, last)["events"]] == ["rearmed", "unmute", "fired"]
+    # removed - by an administrator only
+    with pytest.raises(ServiceError):
+        svc.desk_alarm_remove(trader, a["id"])
+    assert svc.desk_alarm_remove(admin, a["id"]) == {"removed": 1}
+    view = svc.watch_view(trader)["desk"]
+    assert view["alarms"] == [] and view["open"] == []                             # its firing closed with it
+    # the day's log tells all of it, with who did what
+    log = [(x["kind"], x.get("by_name") or "") for x in view["log"]]
+    assert log == [("set", "Masa Şefi"), ("fired", ""), ("ack", "Masa Trader"), ("mute", "Masa Trader"), ("rearmed", "Masa Şefi"),
+                   ("unmute", "Masa Şefi"), ("fired", ""), ("removed", "Masa Şefi")]
+
+
+def test_desk_alarms_over_http(svc):
+    admin = svc.login("HTTP Şef")["user"]
+    svc.store.update_account(admin, role="admin")
+    trader = svc.login("HTTP Trader")["user"]
+    ha, ht = auth(svc, admin), auth(svc, trader)
+    with TestClient(create_app(svc)) as client:
+        body = {"subject": {"kind": "ois", "tenor": "2Y"}, "op": "<=", "level": "40", "label": "2Y masa", "desk": True}
+        assert client.post("/api/alarms/add", json=body, headers=ht).status_code == 403
+        res = client.post("/api/alarms/add", json=body, headers=ha)
+        assert res.status_code == 200 and res.json()["already"] is True and res.json()["alarm"]["desk"] is True
+        tick(svc)
+        d = client.get("/api/alarms/fired?since=0&desk=0", headers=ht).json()["desk"]
+        fired = [e for e in d["events"] if e["kind"] == "fired"]
+        assert len(fired) == 1 and d["open"][0]["seq"] == fired[0]["seq"]
+        assert client.post("/api/alarms/ack", json={"seq": fired[0]["seq"]}, headers=ht).json()["entry"]["ack_name"] == "HTTP Trader"
+        assert client.get("/api/alarms/fired?since=0&desk=%d" % d["last"], headers=ha).json()["desk"]["open"] == []
+        assert client.post("/api/alarms/mute", json={"alarm": "sys:ret", "minutes": "gün"}, headers=ht).json()["until"].endswith("23:59:59")
+        assert client.post("/api/alarms/mute", json={"alarm": "yok", "minutes": 15}, headers=ht).status_code == 404
+        # the settings: the administrators'
+        assert client.post("/api/alarms/settings", json={"values": {"ret_due": "10:30"}}, headers=ht).status_code == 403
+        bad = client.post("/api/alarms/settings", json={"values": {"ret_due": "25:00"}}, headers=ha)
+        assert bad.status_code == 400 and "SS:DD" in bad.json()["error"]
+        cur = client.post("/api/alarms/settings", json={"values": {"ret_due": "10:30", "feed_minutes": "5", "tlref_alarm": False}},
+                          headers=ha).json()
+        assert (cur["ret_due"], cur["feed_minutes"], cur["tlref_alarm"]) == ("10:30", 5, False)
+        page = client.get("/api/watch", headers=ht).json()["desk"]
+        assert page["settings"]["ret_due"] == "10:30" and [s["kind"] for s in page["system"]] == ["feed", "ret", "tlref", "db"]
+        assert {s["kind"]: s for s in page["system"]}["ret"]["mute"]["by_name"] == "HTTP Trader"
+        assert page["log"][-1]["kind"] == "settings" and "RET" in page["log"][-1]["text"]
+        rm = client.post("/api/alarms/remove", json={"id": res.json()["alarm"]["id"], "desk": True}, headers=ha)
+        assert rm.json() == {"removed": 1}
+        assert client.get("/api/alarms/fired?since=0&desk=0").status_code == 401
+
+
+def test_system_alarms_of_the_desk(svc, monkeypatch):
+    """The data feed silent for minutes in market hours, the RET curve not loaded by its time, no TLREF fixing by
+    its time, the database's check or backup failed: each fires once when it starts, closes when it ends; muted, it
+    does not fire."""
+    ops, desk = svc.ops, svc.desk_alarms
+    user = svc.login("Sistem Bekçisi")["user"]
+    today = _dt.date.today()
+
+    def at(h, m=0):
+        return _dt.datetime.combine(today, _dt.time(h, m))
+
+    def fired(kind):
+        return [e for e in desk.log() if e["alarm"] == "sys:" + kind and e["kind"] == "fired"]
+
+    def resolved(kind):
+        return [e for e in desk.log() if e["alarm"] == "sys:" + kind and e["kind"] == "resolved"]
+
+    # the saved data (replay): nothing to watch but the database
+    states = ops.system_checks(at(11))
+    assert (states["feed"]["state"], states["ret"]["state"], states["tlref"]["state"], states["db"]["state"]) == ("na", "na", "na", "ok")
+    # live, on a day the desk's market trades
+    monkeypatch.setattr(svc, "mode", "live")
+    monkeypatch.setattr(svc.settings, "history", True)
+    monkeypatch.setattr(ops, "market_day", lambda day=None: True)
+    prov = {"connected": True, "isolated": True, "worker": "running", "subscriptions": 240}
+    monkeypatch.setattr(svc.provider, "status", lambda: prov)
+
+    def feed(stale=False):
+        """The helper speaks; its last tick is fresh, or 500 s old (stale in market hours)."""
+        prov.update(heard=time.time(), last_tick=time.time() - (500 if stale else 1))
+
+    feed()
+    # -- RET: not loaded by 10:00 - fired; loaded - closed
+    assert ops.system_checks(at(9, 59))["ret"]["state"] == "ok" and not fired("ret")
+    st = ops.system_checks(at(10, 1))["ret"]
+    assert st["state"] == "alarm" and len(fired("ret")) == 1 and "yüklenmedi" in fired("ret")[0]["text"]
+    ops.system_checks(at(10, 2))
+    assert len(fired("ret")) == 1                                                      # once, not on every look
+    svc.set_ret(user, [{"tenor": "1M", "bid": "34,45", "ask": "34,65"}])
+    assert ops.system_checks(at(10, 3))["ret"]["state"] == "ok" and len(resolved("ret")) == 1
+    # -- TLREF: yesterday's fixing only, by 14:00 - fired; today's arrives (the history's closes) - closed
+    yesterday = (today - _dt.timedelta(days=1)).isoformat()
+    svc.store.hist_upsert("BISTTREF Index|PX_LAST", [(yesterday, 39.51)])
+    assert ops.system_checks(at(13, 59))["tlref"]["state"] == "ok" and not fired("tlref")
+    st = ops.system_checks(at(14))["tlref"]
+    assert st["state"] == "alarm" and len(fired("tlref")) == 1 and "39,51" in fired("tlref")[0]["text"]
+    svc.store.hist_upsert("BISTTREF Index|PX_LAST", [(today.isoformat(), 39.48)])
+    assert ops.system_checks(at(14, 15))["tlref"]["state"] == "ok" and len(resolved("tlref")) == 1
+    # -- the data feed: stale for less than the minutes set - watched, not fired; longer - fired, once
+    feed(stale=True)
+    assert ops.system_checks(at(11))["feed"]["state"] == "ok" and not fired("feed")
+    ops._feed_bad -= ops.settings()["feed_minutes"] * 60
+    st = ops.system_checks(at(11))["feed"]
+    assert st["state"] == "alarm" and len(fired("feed")) == 1 and "akmıyor" in fired("feed")[0]["text"]
+    ops.system_checks(at(11, 1))
+    assert len(fired("feed")) == 1
+    feed()                                                                             # flows again: closed
+    assert ops.system_checks(at(11, 2))["feed"]["state"] == "ok" and len(resolved("feed")) == 1
+    assert desk.opened(desk.log()) == []
+    # ... and out of market hours no tick is expected
+    feed(stale=True)
+    ops._feed_bad = time.time() - 3600
+    assert ops.system_checks(at(20))["feed"]["state"] == "ok" and len(fired("feed")) == 1
+    feed()
+    # -- muted (by anyone, for everyone): the database's backup fails meanwhile - no firing; the mute lifted, it fires
+    svc.desk_alarm_mute(user, "sys:db", 30)
+    ops.backup_error = {"at": "2026-11-13 22:00:00", "text": "OSError: disk dolu"}
+    assert ops.system_checks(at(15))["db"]["state"] == "alarm" and not fired("db")
+    svc.desk_alarm_mute(user, "sys:db", 0)
+    ops.system_checks(at(15, 1))
+    assert len(fired("db")) == 1 and "disk dolu" in fired("db")[0]["text"]
+    ops.backup_error = None
+    ops.system_checks(at(15, 2))
+    assert len(resolved("db")) == 1
+    # -- switched off by the settings: an alarm that holds closes, and is not checked
+    feed(stale=True)
+    ops._feed_bad = time.time() - 3600
+    ops.system_checks(at(11))
+    assert len(fired("feed")) == 2
+    ops.set_settings({"feed_alarm": False})
+    assert ops.system_checks(at(11, 1))["feed"]["state"] == "off" and len(resolved("feed")) == 2
+    rows = {r["kind"]: r for r in svc.watch_view(user)["desk"]["system"]}
+    assert rows["feed"]["state"] == "off" and rows["ret"]["state"] == "ok" and rows["tlref"]["threshold"] == "saat 14:00 itibarıyla gelmemişse"

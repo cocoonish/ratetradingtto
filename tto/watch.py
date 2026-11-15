@@ -1051,9 +1051,14 @@ class Watch(object):
             self.svc.store.put("watch.items", allv)
 
     def alarms(self, user: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Every alarm (``user`` None), or one user's own; the desk's alarms are the market's: user ``""``."""
         v = self.svc.store.get("watch.alarms", [])
         v = [self._alarm(a) for a in v if isinstance(a, dict)] if isinstance(v, list) else []
         return [a for a in v if user is None or a.get("user") == user]
+
+    def desk_list(self) -> List[Dict[str, Any]]:
+        """The desk's alarms: set by an administrator for everyone, read on the market's values (deskalarms.py)."""
+        return [a for a in self.alarms("") if a.get("desk")]
 
     @staticmethod
     def _alarm(a: Dict[str, Any]) -> Dict[str, Any]:
@@ -1146,11 +1151,15 @@ class Watch(object):
 
     # ------------------------------------------------------------------ alarms
     def add_alarm(self, user: str, subject: Dict[str, Any], op: str, level: float, label: str = "", note: str = "",
-                  mode: str = "level", minutes: Optional[int] = None, days: Optional[int] = None) -> Dict[str, Any]:
+                  mode: str = "level", minutes: Optional[int] = None, days: Optional[int] = None,
+                  desk_by: Optional[str] = None) -> Dict[str, Any]:
         """An alarm on a subject.  ``mode``: ``level`` (``op`` ≥ / ≤ / crossing ``level``, as shown); a move of
         ``level`` (bp for rates and spreads, else its own unit) ``op`` up / down / either way - from the day's
         ``open``, from the level when it is ``set``, from the watch list's ``ref``erence, or within the last
-        ``minutes`` (``window``); ``z``: the z-score over ``days`` closes ≥ / ≤ / crossing ``level``."""
+        ``minutes`` (``window``); ``z``: the z-score over ``days`` closes ≥ / ≤ / crossing ``level``.
+        ``desk_by``: the desk's alarm, set by that administrator for everyone (``user`` is then ``""``: the market)."""
+        if desk_by is not None:
+            user = ""
         mode = mode or "level"
         if mode not in MODES:
             raise ValueError("alarm türü yok: %s" % mode)
@@ -1187,6 +1196,8 @@ class Watch(object):
         a = {"id": uuid.uuid4().hex[:10], "user": user, "subject": s, "mode": mode, "op": op, "level": level, "show": show,
              "label": (label or self.label(s)).strip()[:60], "note": (note or "").strip()[:200], "active": True,
              "created": _now().strftime("%Y-%m-%d %H:%M:%S"), "fired_at": None, "fired_value": None, "last": v}
+        if desk_by is not None:
+            a["desk"], a["by"] = True, desk_by
         if mode == "window":
             a["minutes"] = minutes
         if mode == "z":
@@ -1407,6 +1418,7 @@ class Watch(object):
             self.svc.store.put("watch.open:%s" % today, opened)
         fired: List[Dict[str, Any]] = []
         changed = False
+        desk = getattr(self.svc, "desk_alarms", None)
         for a in alarms:
             if not a.get("active"):
                 continue
@@ -1424,6 +1436,8 @@ class Watch(object):
             if (a.get("mode") or "level") == "z" and measure is not None and measure != a.get("last_z"):
                 a["last_z"] = measure
                 changed = True
+            if hit and a.get("desk") and desk is not None and desk.muted(a["id"]):
+                hit = False                 # the desk's alarm is muted for a while: it fires after, if it still holds
             if hit:
                 a["active"], a["fired_at"], a["fired_value"] = False, today + " " + now, v
                 show = a.get("show") or "raw"
@@ -1431,17 +1445,21 @@ class Watch(object):
                               "mode": a.get("mode") or "level", "level": a["level"], "value": v, "measure": measure, "time": now,
                               "note": a.get("note", ""), "level_text": value_text(a["level"], show) if (a.get("mode") or "level") == "level"
                               else self.cond_text(a), "value_text": value_text(v, show), "condition": self.cond_text(a),
-                              "measure_text": self.measure_text(a, measure)})
+                              "measure_text": self.measure_text(a, measure), "desk": bool(a.get("desk")), "by": a.get("by")})
                 changed = True
         if changed:
             self._put_alarms(alarms)
-        if fired:
+        mine = [e for e in fired if not e["desk"]]
+        if mine:
             log = self.fired(today)
             seq = max([int(e.get("seq") or 0) for e in log] or [0])
-            for e in fired:
+            for e in mine:
                 seq += 1
                 e["seq"] = seq
-            self.svc.store.put("watch.fired:%s" % today, (log + fired)[-500:])
+            self.svc.store.put("watch.fired:%s" % today, (log + mine)[-500:])
+        ours = [e for e in fired if e["desk"]]
+        if ours and desk is not None:
+            desk.fired(ours)                # the desk's: into the day's log of the desk alarms, for everyone
         try:
             self.record()
         except Exception:  # noqa: BLE001 - the closes are kept at the next round
@@ -1449,6 +1467,42 @@ class Watch(object):
         return fired
 
     # ------------------------------------------------------------------ what the page shows
+    def alarm_rows(self, alarms: List[Dict[str, Any]], user: str, rd: "Watch._Reader", loc) -> List[Dict[str, Any]]:
+        """Alarms as the page lists them: the value now, the measure (move, z), the condition, what is left to it."""
+        out = []
+        for a in alarms:
+            v, show, _ = self.resolve(a["subject"], rd)
+            show = a.get("show") or show
+            name, k = SHOWS.get(show, SHOWS["raw"])
+            mode = a.get("mode") or "level"
+            measure = None
+            if type(v) is float:
+                try:
+                    measure = self._alarm_state(a, v, user, rd)[0]
+                except Exception:  # noqa: BLE001
+                    measure = None
+            if mode == "level":
+                distance = (a["level"] - v) * k if type(v) is float else None
+                dist_text = move_text(distance, "bp" if name == "bp" else show, loc) if distance is not None else ""
+            elif mode == "z":
+                distance = a["level"] - measure if type(measure) is float else None
+                dist_text = ("%s z" % z_text(distance, loc)) if distance is not None else ""
+            else:
+                left = None
+                if type(measure) is float:
+                    left = a["level"] - (abs(measure) if a.get("op") == "any" else (measure if a.get("op") == "up" else -measure))
+                distance = left
+                dist_text = move_text(left, "bp" if name == "bp" else show, loc).lstrip("+") if left is not None else ""
+            out.append(dict(a, mode=mode, now=v, unit_name=name, what=self.label(a["subject"]), detail=self.explain(a["subject"], rd, v),
+                            now_text=value_text(v, show, loc), measure=measure, measure_text=self.measure_text(a, measure, loc),
+                            condition=self.cond_text(a, loc), level_text=value_text(a["level"], show, loc) if mode == "level" else self.cond_text(a, loc),
+                            fired_text=value_text(a.get("fired_value"), show, loc), distance=distance, distance_text=dist_text))
+        return out
+
+    def desk_rows(self, loc) -> List[Dict[str, Any]]:
+        """The desk's alarms as the page lists them (read on the market's values)."""
+        return self.alarm_rows(self.desk_list(), "", self._Reader(self, None), loc)
+
     def snapshot(self, user: str, loc, days: int = 60) -> Dict[str, Any]:
         days = days if days in Z_DAYS else 60
         rd = self._Reader(self, user)
@@ -1482,34 +1536,7 @@ class Watch(object):
                                   change=chg(d.get("open")), since_base=chg(i.get("base")), unit_name=name,
                                   what=self.label(i["subject"]), detail=self.explain(i["subject"], rd, v),
                                   path=[p[1] for p in d.get("path") or []][-240:], z=z))
-        alarms = []
-        for a in self.alarms(user):
-            v, show, _ = self.resolve(a["subject"], rd)
-            show = a.get("show") or show
-            name, k = SHOWS.get(show, SHOWS["raw"])
-            mode = a.get("mode") or "level"
-            measure = None
-            if type(v) is float:
-                try:
-                    measure = self._alarm_state(a, v, user, rd)[0]
-                except Exception:  # noqa: BLE001
-                    measure = None
-            if mode == "level":
-                distance = (a["level"] - v) * k if type(v) is float else None
-                dist_text = move_text(distance, "bp" if name == "bp" else show, loc) if distance is not None else ""
-            elif mode == "z":
-                distance = a["level"] - measure if type(measure) is float else None
-                dist_text = ("%s z" % z_text(distance, loc)) if distance is not None else ""
-            else:
-                left = None
-                if type(measure) is float:
-                    left = a["level"] - (abs(measure) if a.get("op") == "any" else (measure if a.get("op") == "up" else -measure))
-                distance = left
-                dist_text = move_text(left, "bp" if name == "bp" else show, loc).lstrip("+") if left is not None else ""
-            alarms.append(dict(a, mode=mode, now=v, unit_name=name, what=self.label(a["subject"]), detail=self.explain(a["subject"], rd, v),
-                               now_text=value_text(v, show, loc), measure=measure, measure_text=self.measure_text(a, measure, loc),
-                               condition=self.cond_text(a, loc), level_text=value_text(a["level"], show, loc) if mode == "level" else self.cond_text(a, loc),
-                               fired_text=value_text(a.get("fired_value"), show, loc), distance=distance, distance_text=dist_text))
+        alarms = self.alarm_rows(self.alarms(user), user, rd, loc)
         notes = self.svc.store.get("desk.notes:%s" % self.svc.today_iso(), {})
         return {"items": out_items, "alarms": alarms, "fired": [e for e in self.fired() if e.get("user") == user],
                 "notes": notes if isinstance(notes, dict) else {}, "presets": [{"group": g, "items": [self.label(s) for s in p]} for g, p in PRESETS],
