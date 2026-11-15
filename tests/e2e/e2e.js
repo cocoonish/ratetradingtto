@@ -1680,12 +1680,113 @@ async function shot(page, name) {
     check('Enter goes to the table: its page, its tab', (await panelsOnPage(page)).includes('XAU4')
       && await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab) === 'calc');
 
+    // ------------------------------------------------------------------ the desk's own: Hata / Öneri, Sosyal, Ajanda
+    console.log('reports, chat, agenda');
+    const ctxD = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const pageD = await ctxD.newPage();
+    pageD.on('pageerror', (e) => errors.push('pageerror(D): ' + e.message));
+    await login(pageD, 'Mehmet');
+    check('no report open: no "!" for the administrator', await page.isHidden('#fb-alert'));
+    await open(pageD, 'social');
+    await pageD.click('#btn-feedback');
+    await pageD.waitForSelector('#fb-text');
+    await pageD.click('#fb-kind button[data-v="idea"]');
+    await pageD.fill('#fb-text', 'Forward sayfasına 2Y satırı için kısayol olsun');
+    await pageD.click('#fb-send');
+    await pageD.waitForFunction(() => /yöneticilere iletildi/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    await page.waitForSelector('#fb-alert:not(.hidden)', { timeout: 15000 });
+    check('a report comes to the administrator as a "!" at once - never to a user, who cannot list them either',
+      await pageD.isHidden('#fb-alert') && (await api(page, 'mehmet', 'GET', '/api/feedback')).status === 403);
+    await page.click('#btn-feedback');
+    await page.waitForSelector('#fb-list .fb-item');
+    const report = await page.textContent('#fb-list .fb-item');
+    check('the administrator sees what, by whom, from which page', /2Y satırı için kısayol/.test(report) && /Öneri/.test(report)
+      && /Mehmet/.test(report) && /Sosyal/.test(report), report);
+    await page.click('#fb-list .fb-item .btn.primary');
+    await page.waitForSelector('#fb-list details.fb-done .fb-item', { state: 'attached', timeout: 15000 });
+    check('"İlgilenildi": the report leaves the badge and goes to the history', await page.isHidden('#fb-alert')
+      && /İlgilenildi: Ayşe Yılmaz/.test(await page.textContent('#fb-list details.fb-done')));
+    await page.keyboard.press('Escape');
+    // Sosyal: two traders, each line on the other's screen at once
+    await open(page, 'social');
+    const chatTexts = (p) => p.evaluate(() => [...document.querySelectorAll('#chat-log .msg .mt')].map((x) => x.textContent));
+    await pageD.fill('#chat-text', 'Günaydın, 2Y OIS alıcı var mı?');
+    await pageD.press('#chat-text', 'Enter');
+    await page.waitForFunction(() => /alıcı var mı/.test(document.getElementById('chat-log').textContent), null, { timeout: 15000 });
+    await page.fill('#chat-text', 'Var: 35,10');
+    await page.press('#chat-text', 'Shift+Enter');
+    await page.type('#chat-text', '5Y da bakarım');
+    await page.press('#chat-text', 'Enter');
+    await pageD.waitForFunction(() => /5Y da bakarım/.test(document.getElementById('chat-log').textContent), null, { timeout: 15000 });
+    const seenD = await chatTexts(pageD);
+    check('a chat line shows up on the other trader\'s screen at once, with its name and time (and its second line)',
+      seenD.slice(-2).join('|') === 'Günaydın, 2Y OIS alıcı var mı?|Var: 35,10\n5Y da bakarım'
+      && /Ayşe Yılmaz/.test(await pageD.textContent('#chat-log .msg:last-child .who')) && /\d\d:\d\d/.test(await pageD.textContent('#chat-log .msg:last-child time')), seenD);
+    await pageD.fill('#chat-text', '<img src=x onerror="window.hacked=1"> sağ ol');
+    await pageD.press('#chat-text', 'Enter');
+    await page.waitForFunction(() => /sağ ol/.test(document.getElementById('chat-log').textContent), null, { timeout: 15000 });
+    check('what is written is shown as text, never as page code', await page.evaluate(() => !document.querySelector('#chat-log img') && !window.hacked));
+    await open(page, 'masa');
+    await pageD.fill('#chat-text', 'PPK 14:00\'te');
+    await pageD.press('#chat-text', 'Enter');
+    await page.waitForSelector('#nav .nav-item[data-page="social"] .nav-count', { timeout: 15000 });
+    check('on another page the menu counts the messages not read', (await page.textContent('#nav .nav-item[data-page="social"] .nav-count')) === '1');
+    await open(page, 'social');
+    check('... and the count goes when the chat is read', await page.locator('#nav .nav-item[data-page="social"] .nav-count').count() === 0);
+    await pageD.hover('#chat-log .msg.mine:last-child');
+    await pageD.click('#chat-log .msg.mine:last-child .del');
+    await pageD.click('.modal .mfoot .btn.primary');
+    await page.waitForFunction(() => !/PPK 14:00/.test(document.getElementById('chat-log').textContent), null, { timeout: 15000 });
+    check('a message taken back by its writer goes from every screen', (await chatTexts(page)).length === 3);
+    // Ajanda: a deadline in ten minutes is told; one not met comes first; one's own item is nobody else's
+    await open(page, 'agenda');
+    await open(pageD, 'agenda');
+    const soon = await page.evaluate(() => {
+      const p = (n) => String(n).padStart(2, '0');
+      const iso = (d) => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+      const now = new Date();
+      const at = new Date(now.getTime() + 10 * 60000);
+      return { today: iso(now) === iso(at), day: iso(at), time: p(at.getHours()) + ':' + p(at.getMinutes()),
+        yesterday: iso(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)),
+        tomorrow: iso(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)) };
+    });
+    if (soon.today) await page.click('#agenda-today'); else await page.fill('#agenda-day', soon.day);
+    await page.fill('#agenda-time', soon.time);
+    await page.fill('#agenda-text', 'İhale sonuçlarını masaya ilet');
+    await page.check('#agenda-deadline');
+    await page.click('#agenda-add');
+    await page.waitForFunction(() => /Deadline yaklaşıyor \(\d+ dk\): .*İhale sonuçlarını masaya ilet/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    check('a deadline coming within 15 minutes is told on the screen', true);
+    await pageD.waitForFunction(() => /İhale sonuçlarını/.test(document.getElementById('agenda-list').textContent), null, { timeout: 15000 });
+    check('the desk\'s item is on the other trader\'s agenda at once, marked a deadline',
+      /Deadline/.test(await pageD.textContent('#agenda-list tr[data-id]:has-text("İhale sonuçlarını")')));
+    const late = await api(page, 'ayşe yilmaz', 'POST', '/api/agenda', { day: soon.yesterday, text: 'Aylık rapor', deadline: true });
+    await page.fill('#agenda-day', soon.tomorrow);
+    await page.fill('#agenda-time', '09:30');
+    await page.fill('#agenda-text', 'Kendi notum: bankayı ara');
+    await page.click('#agenda-scope button[data-v="own"]');
+    await page.click('#agenda-add');
+    await page.waitForFunction(() => /bankayı ara/.test(document.getElementById('agenda-list').textContent)
+      && document.querySelector('#agenda-list .agenda-day.late'), null, { timeout: 15000 });
+    const groups = await page.evaluate(() => [...document.querySelectorAll('#agenda-list .agenda-day')].map((s) => s.dataset.group));
+    check('a deadline not met comes first, then today, then the days ahead', late.status === 200 && groups[0] === 'late' && groups[1] === 'today'
+      && /Aylık rapor/.test(await page.textContent('#agenda-list .agenda-day.late')), groups);
+    await page.waitForSelector('#nav .nav-item[data-page="agenda"] .nav-count.alert', { timeout: 15000 });
+    check('the menu counts today\'s items and the deadline not met (red)',
+      Number(await page.textContent('#nav .nav-item[data-page="agenda"] .nav-count')) >= 1);
+    await pageD.waitForFunction(() => /Aylık rapor/.test(document.getElementById('agenda-list').textContent), null, { timeout: 15000 });
+    check('one\'s own item is nobody else\'s', !/bankayı ara/.test(await pageD.textContent('#agenda-list')));
+    await pageD.check('#agenda-list .agenda-day.late tr[data-id] input[type=checkbox]');
+    await page.waitForFunction(() => !document.querySelector('#agenda-list .agenda-day.late'), null, { timeout: 15000 });
+    check('ticked off by another trader: no longer late, on every screen', true);
+    await ctxD.close();
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
     for (const id of ids) {
       await open(page, id);
-      const n = await page.locator('#content table.grid, #content table.plain, #content table.heat').count();
+      const n = await page.locator('#content table.grid, #content table.plain, #content table.heat, #content .chatlog').count();
       const bad = await page.locator('#content .panel .err').count();
       check('page "' + id + '" renders tables without panel errors', n >= 1 && bad === 0, { tables: n, errors: bad });
     }

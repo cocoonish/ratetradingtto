@@ -813,3 +813,68 @@ table.fxheat th.skew { color: var(--ink-2); }
 #watch-table tr.pick td, #alarm-table tr.pick td { background-color: var(--accent-soft); }
 #watch-table tr.pick td:first-child, #alarm-table tr.pick td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 table.heat td.pick { box-shadow: inset 0 0 0 2px var(--accent); }
+/* ---------------------------------------------------------------- the desk's own (desk.js): reports, Sosyal, Ajanda */
+#btn-feedback { position: relative; white-space: nowrap; }
+#btn-feedback .fb-alert { position: absolute; top: -6px; right: -6px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px;
+  background: var(--neg); color: #fff; font-size: 11.5px; font-weight: 800; line-height: 17px; text-align: center;
+  box-shadow: 0 0 0 2px var(--surface); }
+.nav-item .nav-count.alert { background: var(--neg); }
+.toast.warn { border-left-color: var(--warn); }
+.toast.click { cursor: pointer; }
+.desk-tag { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 650;
+  line-height: 16px; border: 1px solid var(--line-2); color: var(--ink-2); vertical-align: 1px; white-space: nowrap; }
+.desk-tag.bug { color: var(--neg); border-color: var(--neg); margin-left: 0; }
+.desk-tag.idea { color: var(--accent-ink); border-color: var(--accent); margin-left: 0; }
+.desk-tag.deadline { color: var(--warn); border-color: var(--warn); }
+.fb-form { display: flex; flex-direction: column; gap: 10px; }
+.fb-form textarea { width: 100%; min-height: 130px; resize: vertical; line-height: 1.45; }
+.fb-list h3 { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-2); }
+.fb-list .fb-item { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; margin-bottom: 8px; background: var(--surface-2); }
+.fb-list .fb-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 12px; }
+.fb-list .fb-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; line-height: 1.45; }
+.fb-list .fb-act { display: flex; justify-content: flex-end; align-items: center; gap: 8px; font-size: 11.5px; }
+.fb-list .fb-done { margin-top: 12px; }
+.fb-list .fb-done > summary { cursor: pointer; color: var(--ink-2); font-weight: 600; font-size: 12.5px; margin-bottom: 8px; }
+.fb-list .fb-done .fb-item { background: none; }
+/* Sosyal: the desk's chat */
+.social .chatwrap { position: relative; }
+.social .chatlog { height: calc(100vh - 300px); min-height: 240px; overflow-y: auto; padding: 6px 12px 10px; }
+.chat-more { text-align: center; padding: 6px 0 2px; }
+.chatday { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font-size: 11px; font-weight: 600; margin: 14px 0 4px; }
+.chatday::before, .chatday::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.msg { position: relative; display: flex; gap: 9px; padding: 2px 30px 2px 4px; border-radius: 8px; }
+.msg:not(.joined) { margin-top: 8px; }
+.msg:hover { background: var(--sub-bg); }
+.msg .av { width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  background: var(--surface-3); color: var(--ink-2); }
+.msg.mine .av { background: var(--accent); color: #fff; }
+.msg.joined .av { visibility: hidden; height: 0; }
+.msg .mb { min-width: 0; flex: 1; }
+.msg .mh { display: flex; gap: 8px; align-items: baseline; }
+.msg .mh time { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.msg .mt { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.msg .del { position: absolute; right: 4px; top: 2px; opacity: 0; }
+.msg:hover .del, .msg .del:focus { opacity: 1; }
+.chat-newer { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); border: 1px solid var(--accent); background: var(--accent);
+  color: #fff; border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600; box-shadow: var(--shadow); }
+.chatin { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
+.chatin textarea { flex: 1; min-height: 36px; max-height: 160px; resize: none; line-height: 1.4; }
+.chatside { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.chat-count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* Ajanda */
+.agenda-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; }
+.agenda-form #agenda-text { flex: 1 1 280px; }
+.agenda-form label.check { padding-bottom: 0; }
+.agenda-list { padding: 4px 0 8px; }
+.agenda-day h3, .agenda-past > summary { margin: 0; padding: 10px 12px 4px; font-size: 12.5px; font-weight: 650; color: var(--ink-2); }
+.agenda-day.today h3 { color: var(--accent-ink); }
+.agenda-day.late h3 { color: var(--neg); }
+.agenda-day.late table.plain td.when { color: var(--neg); font-weight: 650; }
+.agenda-past > summary { cursor: pointer; }
+table.plain.agenda td { vertical-align: top; }
+table.plain.agenda td.chk { width: 28px; }
+table.plain.agenda td.when { width: 1%; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+table.plain.agenda td.what { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+table.plain.agenda td.who { width: 1%; font-size: 11.5px; }
+table.plain.agenda td.act { width: 1%; }
+table.plain.agenda tr.done td.what .txt, table.plain.agenda tr.done td.when { text-decoration: line-through; color: var(--ink-3); }

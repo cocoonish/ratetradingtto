@@ -20,6 +20,9 @@ import { setupFind } from './find.js';
 import { openSpotEditor } from './spot.js';
 import { openScenarios } from './scenarios.js';
 import { UsersPage } from './pages/users.js';
+import { SocialPage } from './pages/social.js';
+import { AgendaPage } from './pages/agenda.js';
+import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null, es: null,
@@ -93,6 +96,7 @@ async function showLogin(message) {
   session.display = null;
   session.role = null;
   if (state.es) { state.es.close(); state.es = null; }
+  stopDesk();
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   $('app').classList.add('hidden');
   // the card is ready at once; what is typed into it while the server answers stays (a busy server answers late)
@@ -199,6 +203,7 @@ async function enter(me) {
   applyStatus(status);
   buildNav();
   connectEvents();
+  startDesk();
   loadHeader().catch(() => {});
   route();
   if (me.role === 'admin' && state.pending) {
@@ -234,6 +239,7 @@ function buildNav() {
     nav.appendChild(box);
   }
   ctx.setPending(state.pending);
+  paintDeskNav();
 }
 
 function pageTitle(id) {
@@ -262,6 +268,7 @@ async function openPage(id, panel) {
   state.pageId = id;
   store('tto.page', id);
   for (const a of document.querySelectorAll('#nav .nav-item')) a.classList.toggle('active', a.dataset.page === id);
+  paintDeskNav();
   $('page-title').textContent = pageTitle(id);
   document.title = pageTitle(id) + ' · TTO Masa';
   const host = clear($('content'));
@@ -280,6 +287,8 @@ async function openPage(id, panel) {
   else if (id === 'settings') page = new SettingsPage(host, ctx);
   else if (id === 'fx') page = new FxPage(host, ctx);
   else if (id === 'fxvol') page = new FxVolPage(host, ctx);
+  else if (id === 'social') page = new SocialPage(host, ctx);
+  else if (id === 'agenda') page = new AgendaPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   try {
@@ -319,8 +328,9 @@ function connectEvents() {
   const es = new EventSource('/api/events');
   state.es = es;
   es.onmessage = (e) => {
-    let gen = 0;
-    try { gen = JSON.parse(e.data).gen; } catch (x) { return; }
+    let msg = null;
+    try { msg = JSON.parse(e.data); } catch (x) { return; }
+    const gen = msg.gen;
     setOnline(true);
     if (gen !== state.gen) {
       const first = state.gen === 0;
@@ -328,9 +338,11 @@ function connectEvents() {
       if (!first) runRefresh();
       checkAlarms();
     }
+    deskEvent(msg.desk);                 // the chat, the reports, the agenda: their own counters (no new generation)
   };
   es.onerror = () => setOnline(false);
   es.onopen = () => {
+    deskReconnected();
     if (!state.online) {
       api.get('/api/status').then(applyStatus).catch(() => {});
       runRefresh();
@@ -534,6 +546,7 @@ function boot() {
   $('btn-ret').addEventListener('click', () => openRetEditor(ctx));
   setupFind($('findbox'), () => state.pages || [], (page, panel) => ctx.goto(page, panel));
   $('btn-scen').addEventListener('click', () => openScenarios(ctx));
+  setupDesk({ page: () => state.page, pageId: () => state.pageId, where: () => ({ id: state.pageId, title: pageTitle(state.pageId) }) });
   $('btn-user').addEventListener('click', (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     menu(r.left, r.bottom + 4, [
