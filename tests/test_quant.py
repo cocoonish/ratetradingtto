@@ -676,6 +676,137 @@ def test_settings_are_validated_and_shared():
     assert q.settings()["entry_z"] == 2.5
 
 
+# ================================================================================================ Bloomberg's daily budget
+def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
+    """The fake terminal through a first sync and a whole day of 15-minute syncs: every series' full range is asked
+    once (Bloomberg's own start of the short ones is kept, nothing is asked again in full), the quant series' first
+    backfill five at a time, then only the recent days - and the day's requests stay bounded.  The next day: the
+    series without any history are asked once more, everything else its recent days.  A longer window whose answers
+    do not come in time: asked once that day, once more the day after, then never again."""
+    import fake_blpapi
+    from test_history import TODAY, D, _fake_history, _weekdays
+    from tto.config import Settings
+    from tto.history import History
+    from tto.marketdata.bloomberg import BloombergProvider
+    from tto.service import Service
+    from tto.xl.engine import Clock
+    from tto.xl.values import date_to_serial
+
+    server = fake_blpapi.Server()
+    provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    provider.start()
+    today = float(date_to_serial(D(TODAY)))
+    clock = Clock(today + 0.5)
+    clock.today = lambda: today
+    svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=provider, clock=clock)
+    try:
+        h = svc.history
+        snap = h.snapshot()
+        hist, _ = _fake_history(svc, snap)
+        # the quant series: more than two years for most; Bloomberg's history of four is shorter, of two there is none
+        short = {"USDCOPV3M BGN Curncy": 120, "USDIDR25R3M BGN Curncy": 200, "TURKEY CDS USD SR 5Y D14 Corp": 400, "INR3M Curncy": 60}
+        none = {"BRL3M Curncy", "IDR3M Curncy"}
+        quant = [d for d in snap["defs"] if d.group == "Quant"]
+        for d in quant:
+            if d.ticker not in none:
+                start = D(TODAY) - dt.timedelta(days=short.get(d.ticker, 900))
+                hist[(d.ticker, "PX_LAST")] = [(x, 1.0 + 0.001 * i) for i, x in enumerate(_weekdays(start, D(TODAY)))]
+        server.history.update(hist)
+        qt = {d.ticker for d in quant}
+
+        def requests():
+            return [r for r in server.requests if r["op"] == "HistoricalDataRequest"]
+
+        def known(s, field):
+            """The fake terminal's history of a security, however the request spelled it (``/isin/…`` for a bond)."""
+            return server.stored(server.history, s, field) or ()
+
+        def rows(r):
+            """What the fake terminal gave back for a request (data points)."""
+            a, b = (dt.datetime.strptime(r["options"][k], "%Y%m%d").date() for k in ("startDate", "endDate"))
+            return sum(sum(1 for x, _ in known(s, r["fields"][0]) if a <= x <= b) for s in r["securities"])
+
+        syncs = []
+        for _ in range(1 + 4 * 24):                          # the first sync, then a day of 15-minute syncs
+            n = len(requests())
+            h._fetch()
+            syncs.append(requests()[n:])
+        reqs = [r for s in syncs for r in s]
+        old = (D(TODAY) - dt.timedelta(days=30)).strftime("%Y%m%d")         # a request from further back: a full range
+        fulls = {}
+        for r in reqs:
+            if r["options"]["startDate"] < old:
+                for s in r["securities"]:
+                    fulls[s] = fulls.get(s, 0) + 1
+        assert max(fulls.values()) == 1                      # no series' full range twice in a day
+        per_sync = [sum(1 for r in s if r["options"]["startDate"] < old for x in r["securities"] if x in qt) for s in syncs]
+        assert per_sync[:10] == [History.BACKFILL_PER_SYNC] * 10 and not any(per_sync[10:])      # 5 a sync, all 50 in 10 syncs
+        stored = svc.store.hist_bounds()
+        news = {(D(b[1]) - dt.timedelta(days=History.OVERLAP_DAYS)).strftime("%Y%m%d") for b in stored.values()}
+        assert {r["options"]["startDate"] for s in syncs[10:] for r in s} == news == {"20261030", "20261031"}   # then new days only
+        records = h.fetch_records()
+        for t, back in short.items():                        # Bloomberg's own start of the short ones is kept
+            rec = records[t + "|PX_LAST"]
+            assert fulls[t] == 1 and rec["first"] > rec["from"] and rec["first"] >= (D(TODAY) - dt.timedelta(days=back)).isoformat()
+        assert all(fulls.get(t) == 1 for t in none)          # asked once today, nothing came
+        with_data = len(stored)
+        everything = len({s for r in reqs for s in r["securities"]})
+        hits = sum(len(r["securities"]) for r in reqs)       # security × field per request: the terminal's hits
+        points = sum(rows(r) for r in reqs)
+        # bounded: one full range per series, then at most one request of the recent days per series with data a sync
+        assert hits <= everything + len(syncs) * with_data
+        new_rows = len(list(_weekdays(D(TODAY) - dt.timedelta(days=History.OVERLAP_DAYS + 1), D(TODAY))))     # (3: the TLREF's)
+        full_rows = sum(len(v) for v in hist.values())
+        assert points <= full_rows + len(syncs) * with_data * new_rows
+        print("live day: %d syncs, %d requests, %d hits, %d data points (%d series, %d with history)"
+              % (len(syncs), len(reqs), hits, points, everything, with_data))
+        # the next day: the series without any history once more, everything else its recent days
+        clock.today = lambda: today + 1
+        svc.bump()
+        n = len(requests())
+        h._fetch()
+        nxt = requests()[n:]
+        full_next = {s for r in nxt if r["options"]["startDate"] < old for s in r["securities"]}
+        missing = {s for r in reqs for s in r["securities"] if not known(s, r["fields"][0])}
+        assert full_next == missing and none <= full_next
+        assert {r["options"]["startDate"] for r in nxt if r["options"]["startDate"] >= old} == news      # (no new close here)
+        # the window grows (Ayarlar → Geriye bakış) and the answers do not come in time: the longer range is asked
+        # once that day and does not count as had; the day after once more, then never again
+        silent = []
+
+        class Silent(object):
+            def history(self, items, start, end, timeout=60.0):
+                silent.extend((start, "%s|%s" % (t, f)) for t, f in items)
+                return {}
+
+        def day(k):
+            return D(TODAY) + dt.timedelta(days=k)
+
+        h.set_settings({"lookback_days": 500})
+        before = h.fetch_records()
+        real, svc.provider = svc.provider, Silent()
+        try:
+            for _ in range(3):
+                h._fetch()
+        finally:
+            svc.provider = real
+        grown = [s for start, s in silent if start == (day(1) - dt.timedelta(days=500)).strftime("%Y%m%d")]
+        assert len(grown) == len(set(grown)) and set(grown) == {s for s in stored if s.split("|")[0] not in qt}
+        rec = h.fetch_records()
+        assert all(rec[s]["day"] == day(1).isoformat() and rec[s]["from"] == before[s]["from"] for s in grown)
+        clock.today = lambda: today + 2
+        svc.bump()
+        h._fetch()
+        rec = h.fetch_records()
+        assert all(rec[s]["day"] == day(2).isoformat() and rec[s]["from"] == (day(2) - dt.timedelta(days=500)).isoformat() for s in grown)
+        clock.today = lambda: today + 3
+        svc.bump()
+        h._fetch()
+        assert all(h.fetch_records()[s]["day"] == day(2).isoformat() for s in grown)
+    finally:
+        svc.stop()
+
+
 # ================================================================================================ the service and the API
 @pytest.fixture(scope="module")
 def seeded(module_service):
