@@ -240,10 +240,12 @@ class Service(object):
         # of the file's old values kept as shared inputs (a calendar change carried them along) go - once
         # (only where they do start empty: a file that the addition does not fit keeps its steps, and their copies)
         tto = self.books.get("tto")
-        if tto is not None and not self.store.get("migrated.empty_defaults") \
-                and not any(x.startswith(ex.EMPTY_NAME + ":") for x in tto.left_out):
-            self.store.clear_shared_inputs("tto", ex.empty_default_refs())
-            self.store.put("migrated.empty_defaults", now_iso())
+        if tto is not None and not any(x.startswith(ex.EMPTY_NAME + ":") for x in tto.left_out):
+            if not self.store.get("migrated.empty_defaults"):
+                self.store.clear_shared_inputs("tto", ex.empty_default_refs(ex.EMPTY_FIRST))
+                self.store.put("migrated.empty_defaults", now_iso())
+        for book in self.books.values():
+            self._drop_file_copies(book)
         # shared inputs saved earlier (RET curve, calendars ...)
         for (bid, ref), val in self.store.shared_inputs().items():
             book = self.books.get(bid)
@@ -257,6 +259,31 @@ class Service(object):
                 book.declare(ref, scope="shared", group="adhoc-shared")
             book.engine.set_inputs({key: _from_json(val)})
         self._sync_blotter()
+
+    #: the cells whose stored shared copies of the file's value went already (``_drop_file_copies``): {book: [ref, ...]}
+    FILE_COPIES_DONE = "migrated.file_copies"
+
+    def _drop_file_copies(self, book: Book) -> None:
+        """Input cells the dashboard's additions empty or give a formula default later on (the manual USDTRY spot ...):
+        the file's value of the day it was saved is nobody's choice today.  A shared value stored of such a cell goes -
+        once per cell, and only when it is the file's own value (a copy); a value the desk typed that differs stays.
+        The additions note the file's values in the model (``extras.FILE_VALUES``); a cell of a file an addition does
+        not fit is not noted, and so waits for a file it fits."""
+        file_values = book.model.meta.get(ex.FILE_VALUES) or {}
+        if not file_values:
+            return
+        done_all = self.store.get(self.FILE_COPIES_DONE) or {}
+        done = set(done_all.get(book.id) or [])
+        todo = [ref for ref in file_values if ref not in done]
+        if not todo:
+            return
+        stored = self.store.shared_inputs(book.id)
+        drop = [ref for ref in todo if (book.id, ref) in stored and _same_value(_from_json(stored[(book.id, ref)]), file_values[ref])]
+        if drop:
+            self.store.clear_shared_inputs(book.id, drop)
+        done_all = dict(done_all)
+        done_all[book.id] = sorted(done | set(todo))
+        self.store.put(self.FILE_COPIES_DONE, done_all)
 
     def _bloomberg(self):
         """A started Bloomberg provider: its session in a helper process, or - when that is switched off or
@@ -4451,3 +4478,10 @@ def _from_json(v: Any) -> Any:
     if isinstance(v, (int, float)):
         return float(v)
     return v
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """The same cell value: equal numbers (to the last digits a number typed again may differ in), or equal anything else."""
+    if isinstance(a, float) and isinstance(b, float):
+        return abs(a - b) <= 1e-12 * max(1.0, abs(a), abs(b))
+    return type(a) is type(b) and a == b

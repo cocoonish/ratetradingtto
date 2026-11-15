@@ -2431,16 +2431,24 @@ def _tto_viop_dv01(model: Model) -> None:
 # ---------------------------------------------------------------------------------------------- empty by default
 #: inputs the file brings filled in with the desk's choices of the day it was saved; every user starts with them
 #: empty: the scenario step per meeting (S1 / S2 / S3) of the PPK ima tab - a blank step follows the scenario base
-#: (OIS_MAIN!B3 / D3) - and the VİOP target table (also on the desk page).  What a user types stays theirs.
-EMPTY_BY_DEFAULT = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"))
+#: (OIS_MAIN!B3 / D3) -, the VİOP target table (also on the desk page) and the manual USDTRY spot of the VİOP sheet
+#: (shared: blank = Bloomberg's spot; the file's 49,997 / 49,9975 replaced Bloomberg's spot on every page for the
+#: whole desk).  What a user types stays theirs, what the desk types stays the desk's.
+EMPTY_BY_DEFAULT = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"), ("VIOP", "AA9:AA10"))
+#: the cells the first clean-up of stored copies (``migrated.empty_defaults``) went through: every shared value kept of
+#: them was a copy of the file's steps a calendar change had carried along, and went
+EMPTY_FIRST = (("OIS_MAIN", "U10:W89"), ("VIOP", "L331:P338"))
 #: the name of that addition (left out where the file does not fit it: the cells keep the file's values)
 EMPTY_NAME = "Boş başlayan girdiler"
+#: where the addition notes the file's own values of the cells it empties ({"VIOP!AA9": 49.997, ...}, in the model's
+#: ``meta``): a shared value stored of one of them is dropped once only when it is that value (a copy, nobody's choice)
+FILE_VALUES = "empty_file_values"
 
 
-def empty_default_refs() -> List[str]:
-    """The cells of ``EMPTY_BY_DEFAULT`` as references ("OIS_MAIN!U10", ...)."""
+def empty_default_refs(ranges: Sequence[Tuple[str, str]] = EMPTY_BY_DEFAULT) -> List[str]:
+    """The cells of ``EMPTY_BY_DEFAULT`` (or of other ``(sheet, range)`` pairs) as references ("OIS_MAIN!U10", ...)."""
     out = []
-    for sheet, rng in EMPTY_BY_DEFAULT:
+    for sheet, rng in ranges:
         r1, c1, r2, c2 = parse_range(rng)
         out += ["%s!%s%d" % (sheet, index_to_col(c), r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
     return out
@@ -2449,14 +2457,19 @@ def empty_default_refs() -> List[str]:
 def _empty_check(model: Model) -> None:
     _need_sheets(model, "OIS_MAIN", "VIOP")
     v = model.sheet("VIOP")
-    for addr, text in (("K330", "Target"), ("L330", "Yakın"), ("P330", "Hedef değer")):
+    for addr, text in (("K330", "Target"), ("L330", "Yakın"), ("P330", "Hedef değer"), ("Z8", "Manuel SP"), ("Z9", "Bid"),
+                       ("Z10", "Ask")):
         if v.consts.get(parse_a1(addr)) != text:
             raise ValueError("VIOP!%s beklenen başlık değil (%s yok)" % (addr, text))
     for col, step in (("X", "U"), ("Y", "V"), ("Z", "W")):           # a blank step: the scenario base decides
         _need_formula(model, "OIS_MAIN", "%s10" % col, 'IF(%s10<>"",%s10' % (step, step))
+    for addr, cell in (("L99", "$AA$9"), ("L100", "$AA$10")):          # a blank manual spot: Bloomberg's
+        _need_formula(model, "VIOP", addr, "IF(N(%s)>0,%s," % (cell, cell))
 
 
 def _tto_empty(model: Model) -> None:
+    kept = model.meta.setdefault(FILE_VALUES, {})
+    first = set(empty_default_refs(EMPTY_FIRST))               # (their stored copies went all at once, long ago)
     for sheet, rng in EMPTY_BY_DEFAULT:
         sh = model.sheet(sheet)
         r1, c1, r2, c2 = parse_range(rng)
@@ -2464,7 +2477,10 @@ def _tto_empty(model: Model) -> None:
             for c in range(c1, c2 + 1):
                 rc = r * COLS + c
                 if rc not in sh.fml:
-                    sh.consts.pop(rc, None)
+                    was = sh.consts.pop(rc, None)
+                    ref = "%s!%s%d" % (sheet, index_to_col(c), r)
+                    if was is not None and ref not in first:
+                        kept[ref] = was
 
 
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {

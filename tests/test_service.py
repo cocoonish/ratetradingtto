@@ -99,34 +99,35 @@ def test_manual_spot_is_at_the_top_and_can_be_typed_from_the_header(service, tmp
             first = next(p for p in svc.view(user, view_id)["panels"] if not p["hidden"])
             assert first["title"].startswith("Manuel spot") and first["range"] == "Z8:AA11", view_id
             texts = [c.get("t", "") for row in first["data"]["rows"] for c in row]
-            assert "Bid" in texts and "Ask" in texts and "MANUEL" in texts
+            assert "Bid" in texts and "Ask" in texts and "BBG" in texts
             inputs = [c for row in first["data"]["rows"] for c in row if c.get("i")]
             assert len(inputs) == 2                                   # the two cells can be typed into right there
         items = svc.header(user)["items"]
         source = next(i for i in items if i["label"] == "Spot kaynağı")
-        assert source["edit"] == "spot" and source["text"] == "MANUEL"
+        assert source["edit"] == "spot" and source["text"] == "BBG"
         assert [i["label"] for i in items if i.get("edit")] == ["Spot kaynağı"]
 
         def shown():
             return {i["label"]: i["v"] if isinstance(i["v"], float) else i["text"] for i in svc.header(None)["items"]}
 
-        # the file was saved with a manual spot
-        assert svc.manual_spot(user) == {"book": "tto", "refs": {"bid": "VIOP!AA9", "ask": "VIOP!AA10"}, "bid": 49.997,
-                                         "ask": 49.9975, "source": "MANUEL", "available": True}
-        assert (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (49.997, 49.9975)
-        # cleared: Bloomberg's spot, for everybody
-        res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": ""}, {"ref": "VIOP!AA10", "value": ""}])
-        assert res["errors"] == []
-        spot = svc.manual_spot(None)
-        assert (spot["bid"], spot["ask"], spot["source"]) == (None, None, "BBG")
-        assert shown()["Spot kaynağı"] == "BBG" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
-        # typed again (Turkish decimals): used on every page
+        # the file was saved with a manual spot (49,997 / 49,9975): the desk's choice of that day, nobody's today - every
+        # page starts on Bloomberg's spot
+        assert svc.manual_spot(user) == {"book": "tto", "refs": {"bid": "VIOP!AA9", "ask": "VIOP!AA10"}, "bid": None,
+                                         "ask": None, "source": "BBG", "available": True}
+        assert (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
+        # typed (Turkish decimals): used on every page
         res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": "50,3667"}, {"ref": "VIOP!AA10", "value": "50,3688"}], lang="tr")
         assert res["errors"] == []
         spot = svc.manual_spot(None)
         assert (spot["bid"], spot["ask"], spot["source"]) == (50.3667, 50.3688, "MANUEL")
         assert shown()["Spot kaynağı"] == "MANUEL" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.3667, 50.3688)
         assert cell(svc, "VIOP!L99") == 50.3667 and cell(svc, "VIOP!L100") == 50.3688
+        # cleared: Bloomberg's spot again, for everybody
+        res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": ""}, {"ref": "VIOP!AA10", "value": ""}])
+        assert res["errors"] == []
+        spot = svc.manual_spot(None)
+        assert (spot["bid"], spot["ask"], spot["source"]) == (None, None, "BBG")
+        assert shown()["Spot kaynağı"] == "BBG" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
     finally:
         svc.stop()
 

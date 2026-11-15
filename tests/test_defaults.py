@@ -10,7 +10,8 @@ from tto.store import Store
 
 def test_the_steps_and_the_target_table_start_empty(service):
     refs = ex.empty_default_refs()
-    assert len(refs) == 3 * 80 + 5 * 8 and refs[0] == "OIS_MAIN!U10" and refs[-1] == "VIOP!P338"
+    assert refs[:3 * 80 + 5 * 8] == ex.empty_default_refs(ex.EMPTY_FIRST) and refs[0] == "OIS_MAIN!U10"
+    assert len(ex.empty_default_refs(ex.EMPTY_FIRST)) == 3 * 80 + 5 * 8 and "VIOP!P338" in refs
     for ref in ("OIS_MAIN!U10", "OIS_MAIN!V11", "OIS_MAIN!W12", "OIS_MAIN!W89", "VIOP!L331", "VIOP!N332", "VIOP!P338"):
         assert cell(service, ref) is None, ref
     assert cell(service, "VIOP!K330") == "Target" and cell(service, "VIOP!P330") == "Hedef değer"     # the table is there
@@ -106,3 +107,35 @@ def test_old_shared_copies_of_the_file_values_go_once(tmp_path):
         assert again.store.shared_inputs("tto")[("tto", "OIS_MAIN!U12")] == -25.0
     finally:
         again.stop()
+
+
+def test_the_manual_spot_starts_on_bloomberg_and_a_stored_copy_of_the_files_goes_once(tmp_path):
+    """The manual USDTRY spot (VİOP AA9:AA10, the desk's: blank = Bloomberg) came with the file's 49,997 / 49,9975, which
+    replaced Bloomberg's spot on every page for everybody.  It starts empty.  A value stored of it goes once - only when it
+    is the file's own value (a copy, nobody's choice); a spot the desk typed stays, and so does one typed later."""
+    assert ex.FILE_VALUES and ("VIOP", "AA9:AA10") in ex.EMPTY_BY_DEFAULT
+    store = Store(str(tmp_path / "tto.db"))
+    store.set_shared_inputs("tto", {"VIOP!AA9": 49.997, "VIOP!AA10": 50.12}, "masa")
+    store.close()
+    svc = make_service(tmp_path)
+    try:
+        model = svc.books["tto"].model
+        assert model.meta[ex.FILE_VALUES]["VIOP!AA9"] == 49.997 and model.meta[ex.FILE_VALUES]["VIOP!AA10"] == 49.9975
+        assert "OIS_MAIN!U10" not in model.meta[ex.FILE_VALUES]           # (the first clean-up dropped those long ago)
+        assert svc.store.shared_inputs("tto") == {("tto", "VIOP!AA10"): 50.12}
+        assert cell(svc, "VIOP!AA9") is None and cell(svc, "VIOP!AA10") == 50.12 and cell(svc, "VIOP!AA8") == "MANUEL"
+        assert {"VIOP!AA9", "VIOP!AA10"} <= set(svc.store.get(svc.FILE_COPIES_DONE)["tto"])
+        svc.store.set_shared_inputs("tto", {"VIOP!AA9": 49.997}, "masa")      # the desk types the same spot again
+    finally:
+        svc.stop()
+    again = make_service(tmp_path)                                           # ... and a restart keeps it
+    try:
+        assert again.store.shared_inputs("tto") == {("tto", "VIOP!AA9"): 49.997, ("tto", "VIOP!AA10"): 50.12}
+        assert cell(again, "VIOP!AA9") == 49.997
+    finally:
+        again.stop()
+    fresh = make_service(tmp_path / "bos")                                   # a new desk: Bloomberg's spot
+    try:
+        assert cell(fresh, "VIOP!AA9") is None and cell(fresh, "VIOP!AA10") is None and cell(fresh, "VIOP!AA8") == "BBG"
+    finally:
+        fresh.stop()

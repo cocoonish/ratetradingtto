@@ -1176,11 +1176,12 @@ async function shot(page, name) {
     await tab(page, 'over');
     check('main page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
     const spotKpi = await page.evaluate(() => (document.querySelector('#kpi-spot') || {}).textContent || '');
-    check('header strip: "Spot kaynağı" says where the spot comes from', /Spot kaynağı/.test(spotKpi) && /MANUEL/.test(spotKpi), spotKpi);
+    // the file's manual spot (49,997 / 49,9975 of the day it was saved) is nobody's today: the desk starts on Bloomberg's
+    check('header strip: "Spot kaynağı" says where the spot comes from - Bloomberg', /Spot kaynağı/.test(spotKpi) && /BBG/.test(spotKpi), spotKpi);
     await page.click('#kpi-spot');
     await page.waitForSelector('#spot-bid');
     const dlg = { bid: await page.inputValue('#spot-bid'), ask: await page.inputValue('#spot-ask'), src: await page.textContent('#spot-source') };
-    check('a click on it opens the manual spot: the two cells of the VİOP sheet', dlg.bid === '49,997' && dlg.ask === '49,9975' && dlg.src === 'MANUEL', dlg);
+    check('a click on it opens the manual spot: the two cells of the VİOP sheet, empty', dlg.bid === '' && dlg.ask === '' && dlg.src === 'BBG', dlg);
     await page.fill('#spot-bid', '50,40');
     await page.fill('#spot-ask', '50,30');
     await page.click('.modal .btn.primary');
@@ -1201,13 +1202,6 @@ async function shot(page, name) {
     await waitCell(page, 'VIOP!AA9', 't.trim() === ""');
     check('"Bloomberg\'e dön" empties the two cells: the source is Bloomberg again', (await cellText(page, 'VIOP!AA9')).trim() === ''
       && (await cellText(page, 'VIOP!AA10')).trim() === '', [await cellText(page, 'VIOP!AA9'), await cellText(page, 'VIOP!AA10')]);
-    await page.click('#kpi-spot');                           // put the file's own manual spot back
-    await page.waitForSelector('#spot-bid');
-    await page.fill('#spot-bid', '49,997');
-    await page.fill('#spot-ask', '49,9975');
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('#spot-bid', { state: 'detached' });
-    await waitCell(page, 'VIOP!AA9', 't.trim() === "49,9970"');
 
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
