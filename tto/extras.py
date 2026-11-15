@@ -2581,6 +2581,64 @@ def _tto_market(model: Model) -> None:
         SheetBuilder(model, sheet).patch(addr, formula)
 
 
+# ---------------------------------------------------------------------------------------------- VİOP contracts roll
+#: the VİOP futures of the VİOP page (the desk's: shared inputs) as Bloomberg names them - USDTRY monthly (contract 1-12,
+#: "A1X6 Curncy"), gold TRY and gold USD (even months: "XLZ6 Comdty", "XLTZ6 Comdty"): (cells, root, yellow key, months
+#: apart).  They roll by themselves: a formula default builds the codes of the contracts trading today; what the desk
+#: types over one of them still wins (Delete: back to the roll).
+VIOP_ROLLS = (("L1:W1", "A1", "Curncy", 1), ("M45:O45", "XL", "Comdty", 2), ("M60:O60", "XLT", "Comdty", 2))
+VIOP_ROLL_NAME = "VİOP kontratları"
+VIOP_MONTHS = "FGHJKMNQUVXZ"                     # the futures month codes, January to December
+_HOLIDAYS = "Motor!$A$361:$A$523"
+_HOLIDAY_NAMES = "Motor!$B$361:$B$523"
+
+
+def viop_expiry(day: str) -> str:
+    """The expiry of the VİOP contract of ``day``'s month (an expression, ``LET`` names ``h`` / ``l`` / ``e`` - the
+    holidays, the month's last business day, the expiry): its last business day - or the business day before when that
+    one is a half day, the eve of 29 October or of a bayram (the workbook's contracts: 30.11.2026, 31.12.2026 ... and
+    27.10.2027, where 28.10 is the eve of the 29th)."""
+    return ('h,%(h)s,l,WORKDAY(EOMONTH(%(d)s,0)+1,-1,h),'
+            'e,IF(OR(AND(MONTH(l+1)=10,DAY(l+1)=29),ISNUMBER(SEARCH("Bayram",IFERROR(INDEX(%(n)s,MATCH(l+1,h,0)),"")))),'
+            'WORKDAY(l,-1,h),l)' % {"h": _HOLIDAYS, "n": _HOLIDAY_NAMES, "d": day})
+
+
+def viop_ticker(root: str, key: str, step: int, k: int) -> str:
+    """The formula of the ``k``-th (0: the nearest) contract trading today: a contract trades until its expiry (the day
+    included); ``step`` 2: only the even months are listed (the gold contracts)."""
+    if step == 1:
+        first = "IF(t<=e,0,1)"
+    else:
+        first = "IF(MOD(MONTH(t),2)=1,1,IF(t<=e,0,2))"
+    return ('=LET(t,TODAY(),%s,m,EDATE(EOMONTH(t,-1)+1,%s+%d),"%s"&MID("%s",MONTH(m),1)&MOD(YEAR(m),10)&" %s")'
+            % (viop_expiry("t"), first, step * k, root, VIOP_MONTHS, key))
+
+
+def _viop_roll_check(model: Model) -> None:
+    _need_sheets(model, "VIOP", "Motor")
+    sh = model.sheet("VIOP")
+    for rng, root, key, _ in VIOP_ROLLS:
+        r1, c1, r2, c2 = parse_range(rng)
+        for c in range(c1, c2 + 1):
+            rc = r1 * COLS + c
+            text = sh.consts.get(rc)
+            if rc in sh.fml or not isinstance(text, str) or not re.fullmatch(r"%s[%s]\d %s" % (root, VIOP_MONTHS, key), text):
+                raise ValueError("VIOP!%s%d beklenen kontrat değil (%s… %s)" % (index_to_col(c), r1, root, key))
+    for addr in ("L5", "M46", "M61"):                         # the expiry of the contracts: Bloomberg's, next to them
+        _need_formula(model, "VIOP", addr, "LAST_TRADEABLE_DT")
+
+
+def _tto_viop_roll(model: Model) -> None:
+    kept = model.meta.setdefault(FILE_VALUES, {})
+    b = SheetBuilder(model, "VIOP")
+    for rng, root, key, step in VIOP_ROLLS:
+        r1, c1, r2, c2 = parse_range(rng)
+        for k, c in enumerate(range(c1, c2 + 1)):
+            addr = "%s%d" % (index_to_col(c), r1)
+            kept["VIOP!" + addr] = b.sheet.consts.get(parse_a1(addr))
+            b.patch(addr, viop_ticker(root, key, step, k))
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
@@ -2595,7 +2653,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
-            (MARKET_NAME, _market_check, _tto_market)),
+            (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
 }
 

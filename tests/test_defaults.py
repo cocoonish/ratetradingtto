@@ -244,3 +244,61 @@ def test_desk_reference_data_is_the_desks_and_the_carry_horizon_each_users(tmp_p
         assert svc.store.shared_inputs("tto")[("tto", "MASA!S171")] == "CMPN"
     finally:
         svc.stop()
+
+
+def test_the_viop_contracts_roll_by_themselves(tmp_path):
+    """The VİOP page's futures (USDTRY 1-12, gold TRY and gold USD: even months) are built from today: a contract trades
+    until its expiry - the last business day of its month, or the business day before when that one is a half day (the
+    eve of 29 October or of a bayram).  The rule gives the workbook's own contract dates: on each the contract is still
+    the nearest, the day after the next one is.  What the desk types still wins; Delete brings the roll back.  A stored
+    copy of the file's tickers goes once."""
+    import datetime as dt
+    from tto.xl.values import date_to_serial
+    store = Store(str(tmp_path / "tto.db"))
+    store.set_shared_inputs("tto", {"VIOP!L1": "A1X6 Curncy", "VIOP!M45": "XLG7 Comdty"}, "masa")      # a copy, and a choice
+    store.close()
+    svc = make_service(tmp_path)
+    book = svc.books["tto"]
+    clock = book.engine.clock
+    today = clock.today
+
+    def on(day):
+        clock.today = (lambda x=float(date_to_serial(day)): x)
+        svc.et.call(book.engine.clock_tick)
+
+    try:
+        assert svc.store.shared_inputs("tto") == {("tto", "VIOP!M45"): "XLG7 Comdty"}
+        assert cell(svc, "VIOP!M45") == "XLG7 Comdty"                               # the desk's choice wins ...
+        u = svc.login("Kontrat Rolü")["user"]
+        assert svc.set_inputs(u, "tto", [{"ref": "VIOP!M45", "value": ""}])["errors"] == []
+        assert cell(svc, "VIOP!M45") == "XLZ6 Comdty" and svc.store.shared_inputs("tto") == {}     # ... Delete: the roll
+        # the day the file was saved: the workbook's own tickers
+        files = book.model.meta[ex.FILE_VALUES]
+        for rng, _, _, _ in ex.VIOP_ROLLS:
+            for ref in ex.empty_default_refs((("VIOP", rng),)):
+                assert cell(svc, ref) == files[ref], ref
+        assert (cell(svc, "VIOP!L1"), cell(svc, "VIOP!W1"), cell(svc, "VIOP!O60")) == ("A1X6 Curncy", "A1V7 Curncy", "XLTJ7 Comdty")
+        # the workbook's contract dates: the contract trades on its date, the next one is the nearest the day after
+        tickers = [files["VIOP!%s1" % c] for c in "LMNOPQRSTUVW"]
+        days = [cell(svc, "VIOP!%s19" % c) for c in "MNOPQRSTUVWX"]               # "30.11.2026" ... "27.10.2027"
+        assert days[0] == "30.11.2026" and days[-1] == "27.10.2027"
+        for k, text in enumerate(days[:-1]):
+            day = dt.date(int(text[6:]), int(text[3:5]), int(text[:2]))
+            on(day)
+            assert cell(svc, "VIOP!L1") == tickers[k], text
+            on(day + dt.timedelta(days=1))
+            assert cell(svc, "VIOP!L1") == tickers[k + 1], text
+        on(dt.date(2027, 10, 27))                                                  # 28.10.2027 is the eve of the 29th
+        assert cell(svc, "VIOP!L1") == "A1V7 Curncy" and cell(svc, "VIOP!M45") == "XLV7 Comdty"
+        on(dt.date(2027, 10, 28))
+        assert [cell(svc, "VIOP!%s1" % c) for c in "LMW"] == ["A1X7 Curncy", "A1Z7 Curncy", "A1V8 Curncy"]
+        assert [cell(svc, "VIOP!%s45" % c) for c in "MNO"] == ["XLZ7 Comdty", "XLG8 Comdty", "XLJ8 Comdty"]
+        assert [cell(svc, "VIOP!%s60" % c) for c in "MNO"] == ["XLTZ7 Comdty", "XLTG8 Comdty", "XLTJ8 Comdty"]
+        on(dt.date(2027, 1, 1))                                                    # an odd month: the next even one
+        assert cell(svc, "VIOP!L1") == "A1F7 Curncy" and cell(svc, "VIOP!M45") == "XLG7 Comdty" and cell(svc, "VIOP!O45") == "XLM7 Comdty"
+        # a contract the desk types still wins on any day
+        assert svc.set_inputs(u, "tto", [{"ref": "VIOP!L1", "value": "A1Z6 Curncy"}])["errors"] == []
+        assert cell(svc, "VIOP!L1") == cell(svc, "VIOP!L1", u) == "A1Z6 Curncy" and cell(svc, "VIOP!M1") == "A1G7 Curncy"
+    finally:
+        clock.today = today
+        svc.stop()

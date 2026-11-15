@@ -11,7 +11,7 @@
    "scope": "shared",
    "group": "viop-0",
    "kind": "text",
-   "label": "VIOP USDTRY futures tickers (contract 1–12) – masanın ortak kontratları"
+   "label": "VIOP USDTRY futures tickers (contract 1–12) – masanın ortak kontratları; boş = bugünün kontratları (kendiliğinden döner)"
   },
   {
    "range": "K3",
@@ -95,14 +95,14 @@
    "scope": "shared",
    "group": "viop-12",
    "kind": "text",
-   "label": "VIOP gold-TRY futures tickers – masanın ortak kontratları"
+   "label": "VIOP gold-TRY futures tickers – masanın ortak kontratları; boş = bugünün kontratları (kendiliğinden döner)"
   },
   {
    "range": "M60:O60",
    "scope": "shared",
    "group": "viop-13",
    "kind": "text",
-   "label": "VIOP gold-USD futures tickers – masanın ortak kontratları"
+   "label": "VIOP gold-USD futures tickers – masanın ortak kontratları; boş = bugünün kontratları (kendiliğinden döner)"
   },
   {
    "range": "U63",

@@ -1316,6 +1316,7 @@ class Service(object):
         user_vals: Dict[Tuple[int, int], Any] = {}
         user_clear: List[Tuple[int, int]] = []
         shared_vals: Dict[Tuple[int, int], Any] = {}
+        shared_clear: List[Tuple[int, int]] = []
         meetings: Dict[int, Any] = {}
         errors: List[str] = []
         skipped = 0
@@ -1355,7 +1356,10 @@ class Service(object):
                 errors.append("%s: %s" % (ref, exc))
                 continue
             if d.scope == "shared":
-                shared_vals[(si, rc)] = val
+                if val is None and rc in sheet.fml:
+                    shared_clear.append((si, rc))      # a desk input with a formula default: the formula, for everybody
+                else:
+                    shared_vals[(si, rc)] = val
             elif val is None and (rc in sheet.fml or d.group == "adhoc"):
                 # blanking a formula default = back to the formula; blanking a value typed over any other cell
                 # ("elle değer") = back to what the workbook holds there
@@ -1369,6 +1373,9 @@ class Service(object):
                 calendar = self.history._typed_rows(user, meetings)
             except ServiceError as exc:
                 errors.append("toplantı takvimi: %s" % exc)
+        if shared_clear:
+            book.engine.clear_inputs(shared_clear)
+            self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in shared_clear])
         if shared_vals:
             book.engine.set_inputs(shared_vals)
             self.store.set_shared_inputs(book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in shared_vals.items()}, user)
@@ -1385,7 +1392,8 @@ class Service(object):
                 self.store.set_user_inputs(user, book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in user_vals.items()})
             if user_clear:
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in user_clear])
-        res: Dict[str, Any] = {"applied": len(shared_vals) + len(user_vals) + len(user_clear) + (len(meetings) if calendar else 0),
+        res: Dict[str, Any] = {"applied": len(shared_vals) + len(shared_clear) + len(user_vals) + len(user_clear)
+                               + (len(meetings) if calendar else 0),
                                "errors": errors}
         if calendar:
             res["calendar"] = calendar
