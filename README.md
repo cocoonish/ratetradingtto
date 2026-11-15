@@ -31,6 +31,11 @@ kayıtlı son veriyle çalışır.
   değişimleri, tarihsel yeri, ısı haritası, vade yapısı ve skew grafikleri) ([aşağıda](#fx-spot--fx-ve-vol-izleme-sayfaları)).
   Bir satıra ya da hücreye tıklayınca geçmişi z-skoruyla çizilir – FX sayfalarında, Gün Sonu Matrisi'nde, İzleme ·
   Alarmlar'da ve Eğri Hareketi'nde ([aşağıda](#tıkla--grafik-bir-satırın-geçmişi)).
+* **Quant sinyaller:** korelasyon kırılması, OIS eğrisinin PCA'sı (zengin / ucuz, PCA-nötr fly ve spread'ler),
+  eşbütünleşik çiftler (Kalman hedge oranıyla), VİOP takvim ve FRA / PPK patikası tutarsızlıkları, makro betalar,
+  rejim, momentum, PPK döngüsü, FX vol primi ve GARCH, EM carry, forward primi ve doğrulanmış bir tahmin modeli - hepsi
+  aynı biçimde sinyal (işlem, z, giriş / hedef / stop, yarı ömür, carry, rejim, uyum), tek listede sıralı, kayıtlı ve
+  abonelere bildirilen; hesaplar motoru bekletmeden ayrı iş parçacığında ([aşağıda](#quant-sinyaller)).
 * **Masanın kendi köşesi:** sağ üstte **Hata / Öneri** (yöneticilere gider; açık bildirim yalnız yöneticide "!" olarak
   görünür), **Sosyal** (masanın canlı sohbeti) ve **Ajanda** (gün, saat, deadline; yaklaşınca ve gelince uyarı)
   ([aşağıda](#masanın-kendi-köşesi-hata--öneri-sosyal-ajanda)).
@@ -1304,6 +1309,131 @@ düzeltilir (gg.aa.yyyy), yeni toplantı eklenir, silinir ya da Excel'den bir ta
   hesapla". *Tarihçe serileri* tablosu her ticker için ilk / son gün ve gün sayısını gösterir — matriste boş kalan
   bir satırın nedeni (Bloomberg o ticker ya da alan için geçmiş vermiyor) buradan görülür.
 
+### Quant sinyaller
+
+**Quant** grubundaki sekiz sayfa, masanın istatistik analizlerini **işlem sinyaline** çevirir: her analiz aynı biçimde
+sinyal üretir, **Sinyaller** sayfası hepsini tek listede açıklanabilir bir puanla sıralar, bir sinyal giriş eşiğini
+geçtiği an kaydedilir, izlenir ve abone olan kullanıcıya bildirilir. Analiz sayfaları: **Korelasyon**, **PCA / RV**,
+**Çiftler**, **Rejim & Momentum**, **FX Vol Primi & Carry**, **Makro Beta**, **Tahmin Modeli**; her biri kendi
+sinyallerini üstte listeler, satıra tıklayınca serisi çizilir.
+
+**Motoru bloklamaz.** Bütün hesaplar `tto-quant` iş parçacığında, tarihçenin kapanışlarının bir kopyası üzerinde
+yapılır (saf Python; numpy yok: `tto/quantmath.py`). Yeni bir kapanış gelince (tarihçe deposu her 5 dakikada bir
+yoklanır), gün dönünce ya da ayar değişince **tam hesap**; arada **dakikada en çok bir kez** yalnızca son nokta canlı
+değerlerle yenilenir (her enstrüman, seviyesini canlı değerden okuyan küçük bir fonksiyon tutar), sonuç önbellekte
+durur, sayfalar yalnızca onu okur. Motor iş parçacığında geçen tek şey kısa bir okumadır: kaynak sayfasındaki canlı
+OIS / offshore kotaları, VİOP geçmişi ve canlı satırı, Carry & Roll'un vade motoru (ilk okuma ~0,3 sn, sonrakiler
+milisaniyeler). PPK patikası OIS_MAIN'den okunmaz (çözücüyü motor iş parçacığında çalıştırırdı); tarihçenin kendi
+motorunda hesapladığı son gün kullanılır. Masa bilgisayarında iki yıllık sentetik tarihçeyle tam hesap ~2,6 sn
+(en ağırları model ~1,1 sn, GARCH ~0,5 sn), canlı yenileme ~15 ms; süreler her sayfanın altındaki *Hesap durumu*
+tablosunda yazar. Arka plan işi tarihçe güncellemesiyle birlikte çalışır (`--no-history` ile ikisi de durur;
+"Şimdi hesapla" yine çalışır).
+
+**Bir sinyal** şunları taşır:
+
+| Alan | Anlamı |
+|---|---|
+| Aile, varlık | Hangi analizden geldiği; TRY OIS, Offshore, VİOP, DİBS, FX, FX vol, EM carry, Küresel (süzgeçler bunlara göre) |
+| İşlem | İfade ve bacaklar, ağırlıklarıyla: "Receive 2Y OIS (PC1–PC2 hedge'li)", "Receive 2s5s10s PCA-nötr fly", "Pay 1s2s PC1-nötr spread", "Sell USDTRY 3M ATM vol", "Steepener 2s10s"; fly / spread'lerde DV01 ağırlığı ve paket DV01'i için nominal |
+| Yön, skor, güç | z (ailenin skoru); güç |z| ÷ giriş eşiğine göre: Zayıf < 1,25 ≤ Orta < 1,5 ≤ Güçlü |
+| Giriş / hedef / stop | Giriş = şimdiki seviye. Ortalamaya dönüş ailelerinde hedef ortalamada (hedef z, varsayılan 0), stop seviyenin |z| = 3,5 olduğu yerde; momentum / model / döngü / carry sinyallerinde hedef ve stop ufuk boyunca beklenen hareketten (her ailenin notunda yazar) |
+| Yarı ömür, tutma | Seviyenin AR(1) regresyonundan Ornstein-Uhlenbeck yarı ömrü (iş günü); beklenen tutma = yarı ömür × log₂(|z| ÷ 0,5) - beklenen z'nin 0,5'e inme süresi |
+| Carry + roll / hafta | Carry & Roll sayfasının vade motorundan (ufuk A, haftalığa çevrilmiş), işlemin yönünde, bp |
+| Rejim | Ortalamaya dönüş / Trend / Nötr (varyans oranı testi), Hurst üsteli, vol yüzdeliği |
+| Uyum | Aynı bacağı aynı yönde isteyen **başka aile** sayısı (ve ters yöndekiler) |
+| Saat, geçmiş | Hesap saati (● canlı değerle); tıklayınca serisi, ±giriş / ±stop bantları ve giriş / hedef / stop çizgileri |
+
+**Sıralama (bileşik puan)** = |z| × rejim uyumu × yarı ömür uyumu × carry yönü, ve her çarpan açıklanır:
+
+* |z| masanın ölçeğinde (kendi eşiği olan aile – momentum, döngü – eşiğine göre ölçeklenir), en çok stop eşiği kadar sayılır;
+* rejim: ortalamaya dönüş sinyali ortalamaya dönen rejimde 1, nötrde 0,5, trendde 0 (elenir); momentum tersi;
+* yarı ömür: ufuk (20 iş günü) içindeyse 1, ufkun iki katına kadar ufuk ÷ yarı ömür, ötesi 0 (elenir);
+* carry işlemin aleyhineyse 0,5.
+
+Eşiği geçip bir kapının (rejim, yarı ömür, stop bölgesi, hareketli ortalama, trend) tuttuğu sinyaller ayrı listede,
+nedeniyle görünür.
+
+**Aileler:**
+
+| Aile | Ne hesaplar | Sinyal |
+|---|---|---|
+| Korelasyon kırılması | OIS 3M–10Y, offshore 3M / 1Y, VİOP ön vade ima, USDTRY spot ve 3M swap puanı, CDS, UST 2Y / 10Y, DXY, EM FX, Brent: günlük değişimlerin 20 / 60 / 120 günlük korelasyonu (ısı haritası) | 20 günlük korelasyonun Fisher dönüşümüyle kendi uzun dönem dağılımına göre z'si (uzun dönem \|ρ\| ≥ 0,3 olan çiftlerde); işlem: son 20 günde ayrışan çiftin β ile yakınsaması |
+| PCA kalıntısı | TRY OIS eğrisinin (≥ %80 kapanışı olan vadeler) değişimlerinin kovaryansı, Jacobi ile PC1 seviye / PC2 eğim / PC3 eğrilik; açıklanan varyans, bugünkü skorlar ve z | Her vadenin PC1–PC2 sonrası kalıntısı (bp): + ucuz → receive, − pahalı → pay; hedge bacakları paketi PC1 ve PC2'ye nötr yapar |
+| PCA-nötr fly / spread | Masa ayarındaki listedeki spread'ler (PC1'e nötr) ve fly'lar (PC1 + PC2'ye nötr), DV01 ağırlıklı | Paketin z'si, yarı ömrü, carry + roll'u |
+| FRA / PPK patikası | 1x3, 3x6, 6x9, 9x12 forward'ı: OIS kotalarından (≤ 1Y, log-doğrusal iskonto) ve toplantı tarihli PPK patikasından (tarihçenin PPK hesabı; TLREF'ten başlayıp her toplantının seviyesi, iş günü bileşik); vade başına kota − patika par faizi | Farkın z'si: + ise uzak bacak ucuz → FRA receive (uzak receive / yakın pay) |
+| Makro artık | TRY OIS 3M–10Y günlük değişimleri ~ UST 2Y / 10Y, DXY, EM FX endeksi, Brent, CDS (EKK, betalar ve t'leri); bugünkü hareket = küresel + TRY'ye özgü | TRY'ye özgü kalıntının z'si: açıklanmayan yükseliş → receive |
+| Eşbütünleşik çift | Offshore − OIS (vade vade), VİOP ima − OIS (kontrat kontrat), DİBS getirisi − vadesindeki OIS, TLREF FRN iskonto marjı − OIS, USDTRY 3M puan farkı − (OIS 3M − USD OIS 3M): Engle-Granger (EKK + kalıntıya ADF, MacKinnon 2010 kritik değerleri) | Yalnızca geçen çiftlerde (ADF %5 ve \|t(β)\| ≥ 2) spread'in z'si |
+| Kalman çift | Aynı çiftler, hedge oranı rastgele yürüyüş (skaler Kalman filtresi) | Bir gün önceki β ile kalıntının z'si (ADF geçerse), statik olanla yan yana |
+| VİOP takvim | Her VİOP vade çifti: fiyatlardan ima TRY forward faizi − aynı tarihler için OIS forward'ı (USD faiziyle faiz paritesi) | Farkın z'si: + ise uzak vade pahalı → uzak sat / yakın al |
+| Momentum | OIS vadeleri, offshore, USDTRY / EURUSD / EURTRY, UST, DXY, Brent, CDS: 1H / 1A / 3A değişim ÷ (vol × √gün), gruplar içinde sıra, 20 / 60 günlük ortalama kesişimi | \|skor\| ≥ 1,5, ortalamalar aynı yönde, rejim trend (nötrde yarım ağırlık) |
+| PPK döngüsü | Her günün fazı (TLREF'in 63 iş günlük değişimi ≤ −100 bp indirim, ≥ +100 bp artırım, arası sabit); 2s10s, 1s2s, 2s5s'in sonraki ufuk boyunca değişimi faz başına, Newey-West t | Bugünkü fazda \|t\| ≥ 2 ve yeterli gözlem: steepener / flattener |
+| Vol primi | USDTRY, EURUSD, ZAR, MXN, BRL, INR, IDR, HUF, PLN, COP: ATM 3M ima − gerçekleşen (21 / 63 / 126 gün), 25D RR'nin spota duyarlılığı | İma − 63 günlük gerçekleşenin z'si: pahalı → vol sat, ucuz → al |
+| Vol tahmini | Aynı pariteler: EWMA (λ 0,94) ve GARCH(1,1) (ızgarada en çok olabilirlik, uzun dönem varyans hedefli) ile önümüzdeki 63 iş gününün ortalama vol'ü | İma − GARCH tahmininin z'si; vol primiyle aynı yöndeyse ikisi birbirini "uyum" olarak sayar |
+| EM carry | Her para birimi: 3M forward'ın ima ettiği yıllık getiri farkı ÷ ATM 3M vol, sıralama, kendi z'si | TRY'nin carry / vol'ü − EM sepeti ortalamasının z'si: cazip → USDTRY 3M forward sat (EM sepetine karşı) |
+| Forward primi | USDTRY 1M / 3M / 6M / 1Y, EURTRY 3M: forward'ın ima ettiği yıllık değer kaybı − beklenen kayma (getirilerin EWMA'sı, λ 0,97); gerçekleşen kayma yanında | Tamponun z'si: + forward kaybı fazla fiyatlıyor → carry (forward sat), − tersi; USDTRY trendde ise bekletilir |
+| Tahmin modeli | OIS 1Y / 2Y / 5Y / 10Y, USDTRY, CDS, UST 10Y: gelecek haftanın yönü için L2 lojistik regresyon (özellikler: 60 günlük z, 1H / 1A momentum, carry, rejim, vol; katsayılar gösterilir); **zorunlu kayan pencereli doğrulama** - her hafta bir test noktası, model yalnızca etiketi o güne kadar bilinen örneklerle kurulur | Yalnızca doğrulanmış isabet ≥ %55 ve ≥ 40 test noktası olan enstrümanlarda; z = (p − 0,5) ÷ 0,05; isabet, log-loss ve test sayısı sinyalin yanında |
+
+**Sinyal kaydı.** Bir sinyal giriş eşiğini geçtiği an (önceki bakışta altındaydı) saat, seviye, z, hedef ve stop ile
+yazılır (`quant.log`), sonra izlenir: **hedef**, **stop** ya da 20 iş günü sonra (**süre**) kapanır; kâr / zarar
+seviye birimi ve sinyalin σ'sı cinsinden. Sinyaller sayfasında aile başına isabet tablosu (isabet = hedef + kârda
+kapanan süre dolmuşlar ÷ kapananlar). Bu bir **backtest değildir**: yalnızca dashboard çalışırken görülen geçişler.
+
+**Alarmlar.** *Sinyal alarmı aboneliği* (Sinyaller sayfası): açık / kapalı, aileler, en az güç. Bir geçiş olunca canlı
+akış (`/api/events`) `quant.alerts` sayacını artırır; açık sayfa `/api/quant/alerts?since=` ile abone olduğu yeni
+sinyalleri alır ve köşede gösterir (tıklayınca sinyal açılır). **Masa alarmlarına bağlama:** `tto/watch.py`
+değiştirilmedi; iki dal birleşince masa alarmları `service.quant.add_alert_hook(fn)` ile her yeni sinyal alarmını
+(`{seq, sid, family, family_label, asset, expression, z, level, unit, strength, day, time}`) alabilir ve kendi "çalan
+alarmlar" listesine ekleyebilir.
+
+**Ayarlar** (*Masa ayarları*, herkes için ortak; kim değiştirdiği yazar): giriş |z| 2, hedef z 0, stop |z| 3,5,
+ufuk 20 iş günü, yarı ömür sınırı ufkun 2 katı, en az 120 gözlem, tahmin penceresi 250 gün, korelasyon pencereleri
+20 / 60 / 120, kırılma için uzun dönem |ρ| ≥ 0,3, momentum eşiği 1,5, ortalamalar 20 / 60, varyans oranı q = 10,
+rejim penceresi 250, kayıt süresi 20 iş günü, Kalman q = 0,01, model isabet eşiği %55, en az 40 test, L2 = 5, PPK
+fazı eşiği 100 bp ve |t| ≥ 2, paket DV01'i 10.000 TRY / bp, PCA-nötr liste `1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y,
+1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y`.
+
+**Yeni tarihçe serileri.** Dosyanın tutmadığı seriler tarihçenin listesine eklendi (*Ayarlar → Tarihçe serileri*'nde
+"Quant" grubu): canlı dashboard normal tarihçe güncellemesiyle bunları **iki yıl** geriye çeker (diğer serilerin
+geriye bakışı değişmez), sonra her turda son 10 günü. Hepsi **terminalde doğrulanacak**; FX vol ticker'ları FX
+sayfalarının fiyat kaynağıyla (varsayılan BGN) kurulur:
+
+| Seri | Ticker'lar (terminalde doğrulanacak) |
+|---|---|
+| Spot | `USDTRY Curncy`, `EURUSD Curncy`, `EURTRY Curncy`, `USDZAR Curncy`, `USDMXN Curncy`, `USDBRL Curncy`, `USDINR Curncy`, `USDIDR Curncy`, `USDHUF Curncy`, `USDPLN Curncy`, `USDCOP Curncy` |
+| ATM 3M vol | `USDTRYV3M BGN Curncy`, `EURUSDV3M BGN Curncy`, `USDZARV3M BGN Curncy`, `USDMXNV3M BGN Curncy`, `USDBRLV3M BGN Curncy`, `USDINRV3M BGN Curncy`, `USDIDRV3M BGN Curncy`, `USDHUFV3M BGN Curncy`, `USDPLNV3M BGN Curncy`, `USDCOPV3M BGN Curncy` |
+| 25D RR 3M | `USDTRY25R3M BGN Curncy`, `EURUSD25R3M BGN Curncy`, `USDZAR25R3M BGN Curncy`, `USDMXN25R3M BGN Curncy`, `USDBRL25R3M BGN Curncy`, `USDINR25R3M BGN Curncy`, `USDIDR25R3M BGN Curncy`, `USDHUF25R3M BGN Curncy`, `USDPLN25R3M BGN Curncy`, `USDCOP25R3M BGN Curncy` |
+| Forward puanı | `TRY1M Curncy`, `TRY3M Curncy`, `TRY6M Curncy`, `TRY12M Curncy`, `EURTRY3M Curncy`, `ZAR3M Curncy`, `MXN3M Curncy`, `BRL3M Curncy`, `INR3M Curncy`, `IDR3M Curncy`, `HUF3M Curncy`, `PLN3M Curncy`, `COP3M Curncy` (BRL, INR, IDR, COP NDF'tir: puan yoksa NDF ticker'ı, ör. `BCN3M`, `IRN3M`, `IHN3M`, gerekebilir) |
+| Küresel | `USGG2YR Index`, `USGG10YR Index`, `DXY Curncy`, `CO1 Comdty` (Brent), `TURKEY CDS USD SR 5Y D14 Corp`, `USSOC Curncy` (USD OIS 3M) |
+
+Bunlardan altısı (`USDTRY Curncy`, `TRY1M` / `TRY3M` / `TRY6M` / `TRY12M Curncy`, `USSOC Curncy`) çalışma kitabının
+kendi `BDH` bloklarında da var; kayıtlı veri modunda tarihçeye dosyanın kaydettiği son bir ay girer.
+Forward puanı okunurken: spota yakın (spotun 0,8 – 1,25 katı) bir kota outright forward sayılır (NDF ticker'ları),
+değilse puan × 10^−ölçek; ölçek canlıda Bloomberg'in `FWD_SCALE` alanından günde bir kez okunur, yoksa 4 (yen 2).
+
+**Sınırlar.**
+
+* **Backtest değildir.** Sinyaller tarihsel istatistiklerdir; kayıt yalnızca canlı geçişleri izler.
+* **Tarihçe uzunluğu.** OIS / offshore / DİBS serileri tarihçenin geriye bakışı kadardır (varsayılan 370 gün ≈ 260
+  kapanış); PCA, eşbütünleşme ve model için *Ayarlar → Geriye bakış*'ı 740 güne çıkarmak önerilir. Yeni seriler iki
+  yıl geriye çekilir. En az 120 gözlemi olmayan analiz sinyal üretmez (sayfasında nedeni yazar).
+* **VİOP** geçmişi VİOP Geçmişi sayfasının "Geçmiş" günü kadardır (varsayılan 120, en çok 240 iş günü); VİOP aileleri
+  100 gözlemle yetinir. Kayıtlı veri modunda VİOP geçmişi yoktur.
+* **DİBS** çiftleri canlı getiri okumaz (son kapanış); FRA / PPK ailesi PPK patikasını tarihçenin son hesabından alır
+  (canlıda 15 dakikada bir).
+* Kapanış saatleri farklı piyasaların (TRY, ABD, Brent) günlük değişimleri aynı güne yazılır: betalar ve
+  korelasyonlar biraz küçük çıkar.
+* PPK fazı politika faizi yerine **TLREF**'ten okunur; GARCH parametreleri penceredeki veriyle bir kez kestirilir
+  (tahmin serisinin geçmişi bu parametrelerle); forward primindeki beklenen kayma gürültülüdür (yıllık birkaç puan).
+* Kayıtlı veri modunda tarihçe dosyanın son ayıdır: sayfalar açılır, çoğu analiz "geçmiş kısa" der.
+
+**Açık kararlar** (sorulmadan seçilen, ayarlardan değiştirilebilir ya da kodda tek yerde duran varsayılanlar):
+yukarıdaki ayar değerleri; bileşik puandaki çarpanlar (nötr rejim 0,5, carry aleyhte 0,5, |z| stop'ta kırpılır);
+rejimin varyans oranı z'si ±1,645 ile ayrılması; yarı ömür ≤ 0 olan (bir günde dönen) serinin "0 gün" sayılması;
+çiftlerde ADF'nin yanında |t(β)| ≥ 2 şartı; EM sepeti (ZAR, MXN, BRL, INR, IDR, HUF, PLN, COP) ve 3M vade; carry =
+forward'ın ima ettiği fark (USD faizi gerekmez); EM FX endeksi = sepetin eşit ağırlıklı log getirisi; politika fazı
+için TLREF ve 63 gün; model için haftalık etiket, dört haftada bir yeniden kurma, z = (p − 0,5) ÷ 0,05; alarmlar
+varsayılan kapalı (abonelikle açılır); arka plan hesabının tarihçe ayarına bağlı olması.
+
 ### Excel'deki diğer özelliklerin karşılığı
 
 | Excel'de | Dashboard'da |
@@ -1569,6 +1699,7 @@ Bloomberg ve ağ gerekmez (~8–11 dk; masa bilgisayarında ~35 dk). 980 test (g
 | `test_service.py`, `test_server.py`, `test_store.py`, `test_inputs.py`, `test_config_cli.py` | Kişisel/ortak girdiler, senaryolar, RET, kalıcılık, HTTP API, yapıştırma/ayrıştırma (nominal hücrelerinde `100m` / `2,5mn` / `500k`; anlaşılmayanın reddi, başka hücrede `3m`'nin metin kalması), port kuralı, manuel spot (VİOP ve Masa'nın ilk tablosu, üst şeritten giriş, temizleyince Bloomberg spotu), **elle değer** (formülün üzerine yazma: yalnızca sahibinin, yalnızca ona girdi görünür, silince / "formüle dön"le formül geri gelir, yeniden başlatmada kalır), hesaplayıcıların otomatik dolan girdileri (Forward ve VİOP: tarih, spot, döviz faizi), sekmeli sayfa çıktısı ve arama kutusunun verisi, işlem defterinin aralık / DV01 / tahvil fiyatı uçları |
 | `test_views.py` | Sayfa tanımları: her panel ve girdi gerçek hücrelere bakıyor, **her formül bir tabloda** (dört kitap + ekler, sıfır istisna), her girdi hücresine sayfasından ulaşılıyor, Forward'daki elle hesaplama araçları (USDTRY ve EURTRY) görünür tablolarda; **sekmeler**: 12'den çok tablosu olan her sayfa sekmeli, her görünen tablo bir sekmede ya da sekmelerin üstünde, sekmeler var olan görünür tabloları gösteriyor, Forward hesaplayıcılarla başlıyor, Hesaplayıcılar sayfasında aynı adlı iki tablo yok; **kaldırılan dört sayfa** (MOBIL MK, YP DIBS, Ivır Zıvır, USDTRY IYIX: yüklenen kitapta ve Sayfa gezgini'nde yok, 45 `BDP` çağrısı gitti, kalan sayfaların sırası ve numaraları, model dosyasının onları tutması, başka bir formülün başvurduğu sayfanın kalması) |
 | `test_bundled.py` | Kurulumsuz çalıştırma: her Python kuşağının paket seti, wheel özetleri ve lisansları, kurulu paketlerin önceliği, `vendor/local`, ve hiçbir paketi olmayan bir Python'la (`python -S`) sunucunun açılıp sayfa, statik dosya, giriş ve canlı akış vermesi |
+| `test_quant.py` (`quant_synth.py`: sentetik tarihçe) | **Quant sinyaller**, cevabı bilinen sentetik serilerle: kayan korelasyon ve dikilmiş bir kırılma, PCA'nın dikilmiş seviye / eğimi bulması ve dikilmiş ucuz vadeyi (receive, hedge'in PC1 / PC2'ye nötrlüğü), PCA-nötr fly / spread ağırlıkları ve DV01'leri, β'sı ve yarı ömrü bilinen eşbütünleşik çift (offshore − OIS), iki rastgele yürüyüşün çift olmaması, OU yarı ömrü, ADF'nin MacKinnon değerleri ve boyutu (rastgele yürüyüşlerin ~%5'i), Kalman'ın kayan β'yı izlemesi, rejim değişiminin bulunması (varyans oranı, Hurst), trendde momentum sinyali (pay, hareketli ortalamalar), makro betalar ve TRY'ye özgü hareket (receive), vol primi ve GARCH tahmini (sat; iki ailenin uyumu), EM carry sıralaması, VİOP takviminin faiz paritesine göre sapması (uzak sat / yakın al), FRA'nın PPK patikasına göre sapması (patikanın kendi kotalarında sıfır; 6M kotası bozulunca 3x6 / 6x9), PPK fazına göre eğim sinyali (steepener, Newey-West t), forward primi ve trend kapısı, modelin kayan pencereli doğrulaması (OU geçer, rastgele yürüyüş geçmez) ve **ileriye bakmaması** (gelecek değiştirilince geçmiş tahminlerin aynı kalması); sinyal biçimi, bileşik puan ve kapılar (rejim, yarı ömür, stop bölgesi), uyum sayısı; kaydın hedef / stop / süre sonuçları ve aile başına isabet; abonelere göre süzülen alarmlar; ayarların denetimi; yeni ticker'ların tarihçeye iki yıl geriye eklenmesi; hesabın motor iş parçacığı dışında çalışıp dikilmiş sinyalleri bulması; API (her sayfa, süzgeçler, hatalı istekler, nav) |
 | `test_history.py` | **Toplantı takvimi**: açıklanan tarihlerle toplu düzeltme (en yakın toplantının düzeltilmesi, 45 günden uzak tarihin eklenmesi, açıklanmamış yılların ve geçmişin kalması, 80 sınırının nedeniyle reddi, listeye ekleme, gelecektekilerin yerine koyma, kaydedince adımların toplantısıyla gitmesi, önizleme ucu) ve **geçen toplantının listeden kendiliğinden çıkması** (açılışta ve gün içinde spot değişince: MPC1 sıradaki toplantı, adım toplantısıyla, "otomatik" kaydı), **OIS sayfasında yazılan toplantı tarihinin takvimden geçmesi** (adımın toplantısıyla kalması, çıkarılan toplantının adımıyla gitmesi, dosya tarihlerine dönüşün reddi); günlük tarihçe: kapanış deposu, kayıtlı `BDH` bloklarının tarihlenmesi, serilerin dosyadan okunuşu, **tarihçenin bugünkü satırı = OIS sayfası** (80 toplantı, hücre hücre), toplantı bazında fiyatlama (yapılan toplantının serisi, gerçekleşen TLREF değişimi, toplantı günü ölçümü, kotaların eriştiği ufuk), gün sonu matrisi (1 / 5 / 21 iş günü kuralı, tatil, geçmiş gün), takvim (tarih düzeltme / ekleme / çıkarma: adımların ve kayıtlı senaryoların toplantıyla taşınması; **toplantı geçince ve liste kaydırılınca** sayfalar ve her toplantının değerleri), sahte Bloomberg'le canlı tarihçe (istek gruplama, yalnızca son günlerin yenilenmesi, yedek ticker, zaman aşımı), HTTP uçları; **bir günün kotaları** (kapanışı olmayan vadenin komşularının hareketiyle taşınması, komşularından ayrılıp geri dönen kapanışın ayıklanması, piyasa hareketinin korunması), günlerin Excel'in kendi durumuna göre sınıflanması, çözücünün tutturamadığı günün seriden / min-maks'tan / değişimlerden çıkması, hatalı bir kapanışın kayıtlı ayda çözücüye ulaşmaması, eski sürümün veritabanının korunması |
 | `test_bundle.py` | Tek dosyalık kurulum (`kurulum/tto_kur.py`): içine ne girdiği, aynı içeriğin aynı dosyayı vermesi, boş klasöre açma, güncelleme (değişen yenilenir, kalkan silinir, `data` / `vendor/local` / kullanıcının kendi dosyaları kalır), ZIP'ten gelmiş klasör, yarım inmiş / bozulmuş / satır sonları değişmiş dosya, klasör dışına çıkan adların reddi, seçenekler; **repodaki dosyanın kodla aynı olduğu** ve hiçbir paketi olmayan bir Python'la açılıp sunucunun ondan çalıştığı |
 | `test_bloomberg.py` | `blpapi` katmanı (sahte sunucuyla): gruplama, abonelik (kota büyüklükleri dahil), sessiz kalan kotaların giderek seyrek sorulması, hata metinleri, BDH/BDS, limit koruması, canlı–doğrudan eşdeğerlik (dört kitap); **Bloomberg'in tanımadığı ticker'lara abone olunmaması**, ertesi gün yeniden sorulması, seyreltme seçeneği ve reddedilince seçeneksiz deneme, uzun olay kuyruğu, **kuyruk taşınca sayım ve düşen değerlerin yeniden istenmesi** (günlük üst sınırıyla); **Excel eklentisi için yazılmış kimliklerin API biçimine çevrilmesi** (`… @ISL1 ISIN` → `/isin/…@ISL1`: istek, geçmiş, abonelik), geri çekilen emrin miktarının boşalması, **aboneliği akan menkulde kota büyüklüğünün yeniden sorulmaması** (akmayanda eskisi gibi), canlı–doğrudan eşdeğerlikte büyüklüğün tick'le gelip DİBS RV'de kotayı açması |
@@ -1665,6 +1796,10 @@ tto/fx.py          Spot / FX ve FX Vol İzleme: pariteler, ticker'lar, forward'l
                    olasılık matrisi, izleme istatistikleri (Makro bloğunun tanımı), FX tarihçesi, check-fx
 tto/desk.py        masanın kendi köşesi: Hata / Öneri (yöneticilere), Sosyal (sohbet), Ajanda; yetki, uzunluk ve hız
                    sınırları, canlı akışın bu üç parçaya ait sayaçları
+tto/quantmath.py   quant istatistikleri, saf Python: EKK, Jacobi PCA, ADF (MacKinnon), Engle-Granger, OU, Kalman,
+                   varyans oranı, Hurst, EWMA / GARCH, L2 lojistik regresyon, Newey-West
+tto/quantfam.py    quant sinyal aileleri (15), ortak sinyal biçimi, bileşik puan ve uyum
+tto/quant.py       quant servisi: ayrı iş parçacığı, tarihçeye eklenen seriler, ayarlar, sinyal kaydı, alarmlar, API
 tto/xlsx.py        gün sonu arşivi için küçük .xlsx yazıcı (yalnızca değerler ve biçimler)
 tto/server.py      HTTP API + canlı güncelleme (server-sent events); oturum kapısı: girişsiz /api isteği 401
 tto/auth.py        şifre özeti (PBKDF2-SHA256), oturum anahtarı, kilit ve süre ayarları
