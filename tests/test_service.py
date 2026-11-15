@@ -100,34 +100,35 @@ def test_manual_spot_is_at_the_top_and_can_be_typed_from_the_header(service, tmp
             first = next(p for p in svc.view(user, view_id)["panels"] if not p["hidden"])
             assert first["title"].startswith("Manuel spot") and first["range"] == "Z8:AA11", view_id
             texts = [c.get("t", "") for row in first["data"]["rows"] for c in row]
-            assert "Bid" in texts and "Ask" in texts and "MANUEL" in texts
+            assert "Bid" in texts and "Ask" in texts and "BBG" in texts
             inputs = [c for row in first["data"]["rows"] for c in row if c.get("i")]
             assert len(inputs) == 2                                   # the two cells can be typed into right there
         items = svc.header(user)["items"]
         source = next(i for i in items if i["label"] == "Spot kaynağı")
-        assert source["edit"] == "spot" and source["text"] == "MANUEL"
+        assert source["edit"] == "spot" and source["text"] == "BBG"
         assert [i["label"] for i in items if i.get("edit")] == ["Spot kaynağı"]
 
         def shown():
             return {i["label"]: i["v"] if isinstance(i["v"], float) else i["text"] for i in svc.header(None)["items"]}
 
-        # the file was saved with a manual spot
-        assert svc.manual_spot(user) == {"book": "tto", "refs": {"bid": "VIOP!AA9", "ask": "VIOP!AA10"}, "bid": 49.997,
-                                         "ask": 49.9975, "source": "MANUEL", "available": True}
-        assert (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (49.997, 49.9975)
-        # cleared: Bloomberg's spot, for everybody
-        res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": ""}, {"ref": "VIOP!AA10", "value": ""}])
-        assert res["errors"] == []
-        spot = svc.manual_spot(None)
-        assert (spot["bid"], spot["ask"], spot["source"]) == (None, None, "BBG")
-        assert shown()["Spot kaynağı"] == "BBG" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
-        # typed again (Turkish decimals): used on every page
+        # the file was saved with a manual spot (49,997 / 49,9975): the desk's choice of that day, nobody's today - every
+        # page starts on Bloomberg's spot
+        assert svc.manual_spot(user) == {"book": "tto", "refs": {"bid": "VIOP!AA9", "ask": "VIOP!AA10"}, "bid": None,
+                                         "ask": None, "source": "BBG", "available": True}
+        assert (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
+        # typed (Turkish decimals): used on every page
         res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": "50,3667"}, {"ref": "VIOP!AA10", "value": "50,3688"}], lang="tr")
         assert res["errors"] == []
         spot = svc.manual_spot(None)
         assert (spot["bid"], spot["ask"], spot["source"]) == (50.3667, 50.3688, "MANUEL")
         assert shown()["Spot kaynağı"] == "MANUEL" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.3667, 50.3688)
         assert cell(svc, "VIOP!L99") == 50.3667 and cell(svc, "VIOP!L100") == 50.3688
+        # cleared: Bloomberg's spot again, for everybody
+        res = svc.set_inputs(user, "tto", [{"ref": "VIOP!AA9", "value": ""}, {"ref": "VIOP!AA10", "value": ""}])
+        assert res["errors"] == []
+        spot = svc.manual_spot(None)
+        assert (spot["bid"], spot["ask"], spot["source"]) == (None, None, "BBG")
+        assert shown()["Spot kaynağı"] == "BBG" and (shown()["USDTRY bid"], shown()["USDTRY ask"]) == (50.36, 50.37)
     finally:
         svc.stop()
 
@@ -181,6 +182,79 @@ def test_inputs_are_parsed_like_excel_would(service):
     assert bad["applied"] == 0 and len(bad["errors"]) == 2
     service.reset_inputs(u, "tto")
     assert service.my_inputs(u)["inputs"] == []
+
+
+def test_spots_rates_prices_and_an_isin_are_typed_where_they_were_refused_as_dates(service):
+    """These cells were declared dates: "45,5" typed into them gave "tarih anlaşılamadı".  Each column now takes what it
+    holds - a spot, a rate (35,25 = %35,25), a price, an ISIN - and the date columns beside them still take dates only."""
+    u = login(service, "Servis Girdi Türü")
+    try:
+        res = service.set_inputs(u, "tto", [
+            {"ref": "Forward!D25", "value": "45,5"}, {"ref": "Forward!G25", "value": "4,25"}, {"ref": "Forward!H27", "value": "35,25"},
+            {"ref": "Forward!C61", "value": "4.100,5"}, {"ref": "Forward!C63", "value": "1414"}, {"ref": "Forward!E59", "value": "45,5"},
+            {"ref": "Forward!E63", "value": "4"}, {"ref": "Forward!E64", "value": "35,25"}, {"ref": "Forward!V56", "value": "TRT150328T24"},
+            {"ref": "Forward!V57", "value": "98,5"}, {"ref": "Forward!V61", "value": "40"}, {"ref": "Forward!V78", "value": "35"},
+            {"ref": "Forward!V79", "value": "36,5"}, {"ref": "Forward!AB1", "value": "34,5"}, {"ref": "Forward!N71", "value": "35,75"},
+            {"ref": "Forward!AA58", "value": "13432"}, {"ref": "MASA!W94", "value": "45,5"}, {"ref": "Calculators!C54", "value": "98,7"},
+            {"ref": "Calculators!I54", "value": "101,7"}, {"ref": "Forward!B25", "value": "03.12.2026"}])
+        assert res["errors"] == []
+        got = {ref: cell(service, ref, u) for ref in ("Forward!D25", "Forward!G25", "Forward!H27", "Forward!C61", "Forward!E59",
+                                                      "Forward!E63", "Forward!E64", "Forward!V56", "Forward!V57", "Forward!V61",
+                                                      "Forward!V78", "Forward!V79", "Forward!AB1", "MASA!W94", "Calculators!C54",
+                                                      "Calculators!I54", "Forward!B25")}
+        assert got == pytest.approx({"Forward!D25": 45.5, "Forward!G25": 0.0425, "Forward!H27": 0.3525, "Forward!C61": 4100.5,
+                                     "Forward!E59": 45.5, "Forward!E63": 0.04, "Forward!E64": 0.3525, "Forward!V56": "TRT150328T24",
+                                     "Forward!V57": 98.5, "Forward!V61": 0.4, "Forward!V78": 0.35, "Forward!V79": 0.365,
+                                     "Forward!AB1": 34.5, "MASA!W94": 45.5, "Calculators!C54": 98.7, "Calculators!I54": 101.7,
+                                     "Forward!B25": parse_date("03.12.2026")})
+        # the rows compute with them: the forward of the list's first row, the TLREF spread of the price
+        n = cell(service, "Forward!A25", u)
+        assert n == 15.0 and cell(service, "Forward!F25", u) == pytest.approx(45.5 * (1 + 0.37 / 360 * n) / (1 + 0.0425 / 360 * n), rel=1e-12)
+        assert cell(service, "Calculators!C56", u) == pytest.approx((100 - 98.7) / 100 * 365 / 1162 * 10000, rel=1e-12)
+        bad = service.set_inputs(u, "tto", [{"ref": "Forward!B25", "value": "45,5"}, {"ref": "Forward!V58", "value": "TRT150328T24"}])
+        assert len(bad["errors"]) == 2 and all("tarih anlaşılamadı" in e for e in bad["errors"])
+    finally:
+        service.reset_inputs(u, "tto")
+
+
+def test_buy_or_sell_of_the_forward_dv01_blocks_is_b_or_s_and_nothing_else(service):
+    """Forward!O44 and Calculators!X29 (B/S) had no list and their formulas test for "S" only: "Sat" priced a sale as a
+    buy, silently.  Both offer B / S, take Al / Sat (Alış, Satış, Buy, Sell) for them and refuse anything else."""
+    u = login(service, "Servis BS")
+    try:
+        for sheet, side, usd, view, panel in (("Forward", "O44", "O47", "forward", "B18"), ("Calculators", "X29", "X32", "calc", "B10")):
+            ref = "%s!%s" % (sheet, side)
+            info = service.cell_info(u, "tto", ref)["cell"]
+            assert info["o"] == ["B", "S"] and info["i"] == "u", ref
+            res = service.set_inputs(u, "tto", [{"ref": ref, "value": "B"}])
+            assert res["errors"] == []
+            buy = cell(service, "%s!%s" % (sheet, usd), u)
+            for typed in ("Sat", "satış", "s", "Sell"):
+                assert service.set_inputs(u, "tto", [{"ref": ref, "value": typed}])["errors"] == [], typed
+                assert cell(service, ref, u) == "S" and cell(service, "%s!%s" % (sheet, usd), u) == pytest.approx(-buy), typed
+            assert service.set_inputs(u, "tto", [{"ref": ref, "value": "al"}])["errors"] == [] and cell(service, ref, u) == "B"
+            bad = service.set_inputs(u, "tto", [{"ref": ref, "value": "Satıcı"}])
+            assert len(bad["errors"]) == 1 and "listede yok" in bad["errors"][0] and cell(service, ref, u) == "B"
+    finally:
+        service.reset_inputs(u, "tto")
+
+
+def test_dv01_targets_and_pnl_take_the_desks_shorthand(service):
+    """OIS "DV01/bacak $" (F2, read by ~900 formulas), USD "Hedef DV01" (B12) and the DV01 page's P&L (C140 / C141) hold
+    full amounts; "5k" typed there stayed text and the pages went empty.  They are amount cells now."""
+    u = login(service, "Servis Tutar")
+    try:
+        assert service.set_inputs(u, "tto", [{"ref": "OIS_MAIN!F2", "value": "5k"}, {"ref": "DV01_RISK!C140", "value": "-2,5m"},
+                                             {"ref": "DV01_RISK!C141", "value": "150 bin"}])["errors"] == []
+        assert service.set_inputs(u, "sofr", [{"ref": "SOFR_FOMC!B12", "value": "10k"}])["errors"] == []
+        assert cell(service, "OIS_MAIN!F2", u) == 5000.0 and cell(service, "SOFR_FOMC!B12", u, book="sofr") == 10000.0
+        assert cell(service, "DV01_RISK!C140", u) == -2.5e6 and cell(service, "DV01_RISK!C141", u) == 150e3
+        assert cell(service, "DV01_RISK!C142", u) == pytest.approx(-2.5e6 - 150e3 - cell(service, "DV01_RISK!C139", u))
+        bad = service.set_inputs(u, "tto", [{"ref": "OIS_MAIN!F2", "value": "beş bin"}])
+        assert len(bad["errors"]) == 1 and "tutar anlaşılamadı" in bad["errors"][0] and cell(service, "OIS_MAIN!F2", u) == 5000.0
+    finally:
+        service.reset_inputs(u, "tto")
+        service.reset_inputs(u, "sofr")
 
 
 def test_blanking_an_input_returns_to_the_formula_or_empties_the_cell(service):
@@ -479,12 +553,12 @@ def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(servic
     assert cell(service, "Forward!O32", u) == 51.0 and cell(service, "Forward!F2") != 51.0
     service.reset_inputs(u, "tto")
     assert cell(service, "Forward!AH8", u) == cell(service, "Forward!F2")
-    # the three USDTRY contract calculators of the VİOP page
-    vp = service.view(u, "viop")
+    # the three USDTRY contract calculators of the VİOP page (helper tables now: Interest 2 SP lives on the Forward page)
+    vp = service.view(u, "viop", True)
     for ref in ("M32", "M33", "M35", "M36", "P33", "S36"):
         c = _cell_of(vp, "B8", ref)
         assert c["i"] == "u" and c["fx"] == 1, ref
-    service.set_inputs(u, "tto", [{"ref": "VIOP!M35", "value": "50"}, {"ref": "VIOP!M36", "value": "4"}])
+    service.set_inputs(u, "tto", [{"ref": "VIOP!M35", "value": "50"}, {"ref": "VIOP!M36", "value": "4"}, {"ref": "VIOP!M37", "value": "34,05"}])
     n = cell(service, "VIOP!M34", u)
     assert cell(service, "VIOP!M38", u) == pytest.approx(50 * ((1 + 0.3405 / 360 * n) / (1 + 0.04 / 360 * n) - 1) * 10000, rel=1e-13)
     assert cell(service, "VIOP!P35", u) == 50.0                                 # the second calculator reads the first one's spot
@@ -495,7 +569,7 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     page = service.view(None, "forward")
     assert page["pinned"] == ["B1"]
     tabs = page["sections"]
-    assert [s["id"] for s in tabs] == ["calc", "fwd", "ret", "bulk", "curves", "off", "tick"]
+    assert [s["id"] for s in tabs] == ["calc", "fwd", "kot", "ret", "bulk", "curves", "off", "tick"]
     assert tabs[0]["title"] == "Hesaplayıcılar" and tabs[0]["panels"][:5] == ["B7", "B8", "B9", "B10", "B11"] and tabs[0]["note"]
     shown = [p["id"] for p in page["panels"]]
     listed = [pid for s in tabs for pid in s["panels"]]
@@ -517,7 +591,7 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     assert small["sections"] == [] and small["pinned"] == []
     # a calculator may be in two tabs (VİOP: the gold calculator)
     viop = {s["id"]: s for s in service.view(None, "viop")["sections"]}
-    assert viop["calc"]["panels"] == ["B8", "XAU4"] and "XAU4" in viop["gold"]["panels"]
+    assert viop["calc"]["panels"] == ["XAU4"] and "XAU4" in viop["gold"]["panels"]
     # the search box of the top bar: the tables of every page, with their tab
     pages = {p["id"]: p for p in service.nav()}
     tables = {t["id"]: t for t in pages["forward"]["tables"]}
@@ -662,3 +736,83 @@ def test_a_package_of_ois_legs_is_kept_whole(module_service, monkeypatch):
                                      "dv01": 1000})
     assert len(res["ids"]) == 2 and len(store.trades(module_service.today_iso())) == before + 2
     module_service.delete_trade(u, res["ids"][0])                                 # (the module's other tests see no trades)
+
+
+def test_holidays_are_edited_in_one_place_for_both_workbooks(tmp_path):
+    """The TR holidays live twice: the TRY workbook's Motor!A361:B523 (date and name, read by every WORKDAY) and the ASW
+    workbook's ASW!LR2:LR200 (dates).  The settings page edits them as one list and writes both; the US holidays and the
+    FOMC meetings of the USD workbook come with it.  Kept by the store: a restart has the same list."""
+    from starlette.testclient import TestClient
+    from conftest import auth
+    from tto.server import create_app
+    svc = make_service(tmp_path)
+    try:
+        u = login(svc, "Tatil Yazan")
+        hol = svc.holidays()
+        assert hol["available"] and hol["books"] == ["tto", "asw"] and hol["slots"] == 163
+        days = {x["date"]: x["name"] for x in hol["tr"]}
+        # the ASW list has 2026's earlier holidays as well: both lists together, the names from the TRY one
+        assert len(days) == 152 and days["2026-01-01"] == "" and days["2026-10-29"] == "Cumhuriyet" and days["2027-01-01"] == "Yılbaşı"
+        assert hol["us"][:2] == ["2026-01-01", "2026-01-19"] and len(hol["fomc"]) == 10 and hol["fomc"][0] == "2026-12-09"
+        # 04.11.2026 a holiday: the next business day of the save day (03.11.2026) moves for everyone, in both workbooks
+        assert cell(svc, "DİBS RV!D2") == parse_date("04.11.2026")
+        items = [{"date": d, "name": n} for d, n in days.items() if d != "2027-01-01"] + [{"date": "04.11.2026", "name": "Deneme tatili"},
+                                                                                         {"date": "2026-11-04", "name": ""}]
+        res = svc.set_holidays(u, items)
+        assert res["saved"] == 152 and res["tr"][len([d for d in days if d < "2026-11-04"])] == {"date": "2026-11-04", "name": "Deneme tatili"}
+        assert cell(svc, "DİBS RV!D2") == parse_date("05.11.2026")
+        motor = [cell(svc, "Motor!A%d" % r) for r in range(361, 524)]
+        names = [cell(svc, "Motor!B%d" % r) for r in range(361, 524)]
+        asw = [cell(svc, "ASW!LR%d" % r, book="asw") for r in range(2, 201)]
+        serial = parse_date("04.11.2026")
+        assert serial in motor and serial in asw and names[motor.index(serial)] == "Deneme tatili"
+        assert parse_date("01.01.2027") not in motor and parse_date("01.01.2027") not in asw
+        assert motor == sorted(x for x in motor if x is not None) + [None] * motor.count(None)          # in date order
+        assert motor.count(None) == 163 - 152 and asw.count(None) == 199 - 152
+        # refused: a day that is no date, more days than the list has rows
+        with pytest.raises(ServiceError):
+            svc.set_holidays(u, [{"date": "31.02.2027"}])
+        with pytest.raises(ServiceError):
+            svc.set_holidays(u, ["%02d.01.2030" % d for d in range(1, 32)] + ["%02d.%02d.2031" % (d, m) for m in range(1, 7) for d in range(1, 29)])
+        assert len(svc.holidays()["tr"]) == 152
+        with TestClient(create_app(svc)) as client:                     # (its shutdown stops the service)
+            hdr = auth(svc, "Tatil Okuyan")
+            got = client.get("/api/holidays", headers=hdr).json()
+            assert got["tr"] == res["tr"] and got["fomc"] == hol["fomc"]
+            back = client.post("/api/holidays", json={"items": [{"date": d, "name": n} for d, n in days.items()]}, headers=hdr)
+            assert back.status_code == 200 and back.json()["tr"] == hol["tr"]
+            assert client.post("/api/holidays", json={"items": "x"}, headers=hdr).status_code == 400
+            assert cell(svc, "DİBS RV!D2") == parse_date("04.11.2026")
+            # the file's own list again everywhere the file had it: nothing stored for those rows
+            stored = svc.store.shared_inputs("asw")
+            assert not any(ref.startswith("ASW!LR") for _, ref in stored)
+            svc.set_holidays(u, items)
+    finally:
+        svc.stop()
+    again = make_service(tmp_path)
+    try:
+        assert {x["date"]: x["name"] for x in again.holidays()["tr"]}["2026-11-04"] == "Deneme tatili"
+        assert cell(again, "DİBS RV!D2") == parse_date("05.11.2026")
+    finally:
+        again.stop()
+
+
+def test_the_motor_page_is_for_administrators_and_two_pages_have_their_desk_names(service):
+    """The Motor sheet (the workbook's engine: bootstrap, solver, holidays) is an administrator's page: not in anyone
+    else's menu, search or shortcuts, and refused to them; the service itself (no user) still renders it.  "Bulk Bond"
+    holds the desk's Eurobonds (XS ISINs, dealer pricing sources) and is named so; "TM OIS" is the cash-flow OIS."""
+    user = login(service, "Motor Görmeyen")
+    admin = login(service, "Motor Yöneticisi")
+    service.store.update_account(admin, role="admin")
+    assert "motor" not in [p["id"] for p in service.nav(user)] and "motor" in [p["id"] for p in service.nav(admin)]
+    assert "motor" in [p["id"] for p in service.nav()]
+    with pytest.raises(ServiceError) as exc:
+        service.view(user, "motor")
+    assert exc.value.status == 403
+    assert service.view(admin, "motor")["id"] == "motor" and service.view(None, "motor")["id"] == "motor"
+    assert "motor" not in {link["page"] for link in service.view(user, "masa")["links"]}
+    assert "motor" in {link["page"] for link in service.view(admin, "masa")["links"]}
+    titles = {p["id"]: p["title"] for p in service.nav(user)}
+    assert titles["bulk"] == "Eurobond Kotaları" and titles["tmois"] == "OIS · Nakit Akışı"
+    isins = [cell(service, "Bulk Bond!A%d" % r) for r in (3, 4, 5)]
+    assert all(i.startswith("XS") for i in isins)                     # international (Euroclear / Clearstream) bonds

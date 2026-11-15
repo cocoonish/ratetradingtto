@@ -268,10 +268,12 @@ def test_a_block_from_excel_skips_what_is_not_an_input(module_service):
     res = svc.set_inputs(u, "tto", items, False, "tr", True)
     assert (res["applied"], res["skipped"], res["errors"]) == (4, 2, [])
     assert cell(svc, "VIOP!C16", u) == "USSO2Z" and cell(svc, "VIOP!D17", u) == "1W"
-    assert cell(svc, "VIOP!C16") == "USSO1Z"                                     # other users are untouched
+    assert cell(svc, "VIOP!C16") == "USSO2Z"                                     # the tickers are the desk's: everybody's
     # typing into a cell that is not an input is still an error
     res = svc.set_inputs(u, "tto", [{"ref": "VIOP!B16", "value": "1"}])
     assert res["applied"] == 0 and "skipped" not in res and "girdi hücresi değil" in res["errors"][0]
+    svc.reset_inputs(u, "tto", ["VIOP!C16:D17"], shared=True)
+    assert cell(svc, "VIOP!C16") == "USSO1Z" and cell(svc, "VIOP!D16") == "1W"
 
 
 # ---------------------------------------------------------------------------------------------- end-of-day archive

@@ -11,7 +11,7 @@
    "scope": "shared",
    "group": "viop-0",
    "kind": "text",
-   "label": "VIOP USDTRY futures tickers (contract 1–12) – masanın ortak kontratları"
+   "label": "VIOP USDTRY futures tickers (contract 1–12) – masanın ortak kontratları; boş = bugünün kontratları (kendiliğinden döner)"
   },
   {
    "range": "K3",
@@ -36,17 +36,17 @@
   },
   {
    "range": "C16:C35",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-4",
    "kind": "text",
-   "label": "USD OIS tickers (without \" Curncy\")"
+   "label": "USD OIS tickers (without \" Curncy\") – masanın ortak verisi"
   },
   {
    "range": "D16:D35",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-5",
    "kind": "text",
-   "label": "USD OIS maturity labels"
+   "label": "USD OIS maturity labels – masanın ortak verisi"
   },
   {
    "range": "B44",
@@ -57,17 +57,17 @@
   },
   {
    "range": "C43:C52",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-7",
    "kind": "text",
-   "label": "TRY OIS tickers"
+   "label": "TRY OIS tickers – masanın ortak verisi"
   },
   {
    "range": "C58:C69",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-8",
    "kind": "text",
-   "label": "ICAP implied TRY tickers (full, incl. \" ICPL Curncy\")"
+   "label": "ICAP implied TRY tickers (full, incl. \" ICPL Curncy\") – masanın ortak verisi"
   },
   {
    "range": "M37",
@@ -95,14 +95,14 @@
    "scope": "shared",
    "group": "viop-12",
    "kind": "text",
-   "label": "VIOP gold-TRY futures tickers – masanın ortak kontratları"
+   "label": "VIOP gold-TRY futures tickers – masanın ortak kontratları; boş = bugünün kontratları (kendiliğinden döner)"
   },
   {
    "range": "M60:O60",
    "scope": "shared",
    "group": "viop-13",
    "kind": "text",
-   "label": "VIOP gold-USD futures tickers – masanın ortak kontratları"
+   "label": "VIOP gold-USD futures tickers – masanın ortak kontratları; boş = bugünün kontratları (kendiliğinden döner)"
   },
   {
    "range": "U63",
@@ -169,17 +169,17 @@
   },
   {
    "range": "S340",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-23",
    "kind": "text",
-   "label": "'Spot ticker' for history / live spot"
+   "label": "'Spot ticker' for history / live spot – masanın ortak verisi"
   },
   {
    "range": "R353",
-   "scope": "user",
+   "scope": "shared",
    "group": "viop-24",
    "kind": "auto",
-   "label": "'Swap gün bazı' — day basis of the TRYSAQ1 1Y swap quote (used as ×360/$R$353)"
+   "label": "'Swap gün bazı' — day basis of the TRYSAQ1 1Y swap quote (used as ×360/$R$353) – masanın ortak verisi"
   },
   {
    "range": "EK_XAU!B3",
@@ -719,9 +719,9 @@
   {
    "id": "B8",
    "type": "table",
-   "title": "USDTRY VİOP  ·  Interest 2 SP: TRY faizinden kontrat fiyatı  (1. kontrat | 2. kontrat | takvim: 1. → 2. kontrat)",
+   "title": "Yardımcı · USDTRY VİOP · Interest 2 SP: TRY faizinden kontrat fiyatı (kopya; tek yeri: Forward → Hesaplayıcılar)",
    "range": "L31:V43",
-   "hidden": false,
+   "hidden": true,
    "keep_title": true
   },
   {
@@ -869,7 +869,6 @@
    "id": "calc",
    "title": "Hesaplayıcılar",
    "panels": [
-    "B8",
     "XAU4"
    ],
    "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot, USD faizi ve VİOP fiyatı piyasadan gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz."

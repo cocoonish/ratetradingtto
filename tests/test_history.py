@@ -889,9 +889,9 @@ def test_announced_dates_carry_the_steps_typed_for_their_meetings(tmp_path):
         svc.stop()
 
 
-def panel_errors(svc, view_id, user=None):
-    """(panels that failed, the cells of the page that show an error)."""
-    page = svc.view(user, view_id)
+def panel_errors(svc, view_id, user=None, hidden=False):
+    """(panels that failed, the cells of the page that show an error; ``hidden``: of its helper tables too)."""
+    page = svc.view(user, view_id, hidden)
     bad = set()
     for p in page["panels"]:
         data = p.get("data") if p["type"] in ("table", "notes") else None
@@ -1008,8 +1008,15 @@ def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
         user = svc.login("Roll Deneme")["user"]
         other = svc.login("Diğer Roll")["user"]
         pages = ("ois", "dv01", "carry", "motor")              # the pages that are built on the list of meetings
+
+        def file_dates():                                       # the two dates the file was saved with (they start empty)
+            book.engine.set_inputs({book.cell("OIS_MAIN!B122"): float(date_to_serial(D("2026-11-30"))),
+                                    book.cell("OIS_MAIN!B123"): float(date_to_serial(D("2026-12-31")))})
+        svc.et.call(file_dates)
+        svc.bump()
         usual = {v: panel_errors(svc, v) for v in pages}
         assert usual["ois"] == ([], set())
+        usual_helpers = panel_errors(svc, "ois", hidden=True)[1]
         h.sync(only=["2026-11-02", TODAY])
         plan_before = [(p["day"], p["basis"]) for p in h._plan(h.snapshot())[0]]
         assert len(plan_before) == 21
@@ -1021,9 +1028,11 @@ def test_after_a_meeting_has_passed_and_after_the_roll(tmp_path):
         svc.et.call(move_spot)
         svc.bump()
         # a date typed into the page before (the "two dates" calculator starts on 30.11.2026) is now behind the
-        # spot: that block shows #N/A until a new date is typed - as it does in Excel - and nothing else does
-        stale = panel_errors(svc, "ois")
-        assert stale[0] == [] and stale[1] == {"OIS_MAIN!%s%d" % (c, r) for c in "BCDF" for r in range(125, 130)}
+        # spot: that block (a helper table: the date-to-date rate lives on the desk page) shows #N/A until a new date
+        # is typed - as it does in Excel - and nothing else does
+        assert panel_errors(svc, "ois") == ([], set())
+        stale = panel_errors(svc, "ois", hidden=True)
+        assert stale[0] == [] and stale[1] - usual_helpers == {"OIS_MAIN!%s%d" % (c, r) for c in "BCDF" for r in range(125, 130)}
 
         def new_dates():
             book.engine.set_inputs({book.cell("OIS_MAIN!B122"): float(date_to_serial(D("2026-12-14"))),

@@ -142,7 +142,7 @@ async function shot(page, name) {
     const tabs0 = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button')].map((b) => b.dataset.tab + (b.classList.contains('on') ? '!' : '')));
     const on0 = await panelsOnPage(page);
     check('forward page opens on the calculators, the value date pinned above the tabs',
-      tabs0.join(' ') === 'calc! fwd ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
+      tabs0.join(' ') === 'calc! fwd kot ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
     const caps = await page.evaluate(() => [...document.querySelectorAll('.panels.pinned .panel[data-panel="B1"] tr.hd td')].map((td) => td.textContent));
     check('the value date strip names its cells', caps.join('|') === '|Valör tarihi|USDTRY spot|EURTRY spot|USDTRY spot valörü|EURTRY spot valörü', caps);
     await page.click('.viewtabs button[data-tab="ret"]');
@@ -158,7 +158,7 @@ async function shot(page, name) {
     check('the open tab is remembered', (await panelsOnPage(page)).join(' ') === 'B1 B19 B20 B26');
     await tab(page, '*');
     check('forward page has many tables', (await page.locator('table.grid').count()) >= 20);
-    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 7);
+    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 8);
     await tab(page, 'calc');
     // (EK_FWD!E50: RET bid of the USDTRY table of the "Forward fiyatları" tab - the sheet's Forward!D33)
     check('a cell of another tab is found - its tab opens', (await cellText(page, 'EK_FWD!E50')) !== null
@@ -488,6 +488,8 @@ async function shot(page, name) {
     await login(pageB, 'Mehmet');
     check('a user has no Kullanıcılar page', (await pageB.locator('#nav .nav-item[data-page=users]').count()) === 0);
     check('a user has no sheet explorer', (await pageB.locator('#nav .nav-item[data-page=explorer]').count()) === 0);
+    check('the Motor page is for administrators: not in the menu of a user, in the menu of the administrator',
+      (await pageB.locator('#nav .nav-item[data-page=motor]').count()) === 0 && (await page.locator('#nav .nav-item[data-page=motor]').count()) === 1);
     await open(pageB, 'blotter');
     await pageB.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 3);
     check('another user sees the saved forwards', true);
@@ -1073,7 +1075,8 @@ async function shot(page, name) {
     await page.click('.page-tools button:has-text("Yardımcı tablolar")');
     await page.waitForFunction(() => window.tto.findCell('VIOP!C16') === null, null, { timeout: 15000 });
     // the curve as it was
-    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!C16', 'VIOP!C17', 'VIOP!D16', 'VIOP!D17'] });
+    // (the curve's tickers and maturities are the desk's: back to the file's for everyone)
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!C16', 'VIOP!C17', 'VIOP!D16', 'VIOP!D17'], shared: true });
     await page.waitForFunction(() => { const td = window.tto.findCell('VIOP!D16'); return td && td.textContent === '1W'; }, null, { timeout: 15000 });
 
     await open(page, 'dibs');
@@ -1148,8 +1151,12 @@ async function shot(page, name) {
     };
     await open(page, 'masa');
     await tab(page, 'fwd');
-    check('the forward quote matrices follow the forward pricing table: USDTRY, EURTRY, then the way back of each',
-      await order(['B14', 'EKF1', 'EKF5', 'EKF2', 'EKF6']));
+    check('the desk page keeps a summary of the USDTRY quote matrix (the matrices live on the Forward page)',
+      (await panelsOnPage(page)).join(' ') === 'EKS B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
+    await open(page, 'forward');
+    await tab(page, 'kot');
+    check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
+      await order(['EKF1', 'EKF5', 'EKF2', 'EKF6']));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('matrix starts from the desk spread (−150 bp on both sides)',
       (await cellText(page, 'EK_FWD!D4')).trim() === '-150' && Math.abs(trNumber(await cellText(page, 'EK_FWD!M5')) - (ois1m - 1.5)) < 0.011);
@@ -1194,7 +1201,7 @@ async function shot(page, name) {
     check('gold tab: the VİOP gold tables, the calculator, then spot / source, swap rate curve and forwards',
       await order(['B9', 'B10', 'B11', 'XAU4', 'XAU1', 'XAU2', 'XAU3', 'B11b']), await panelsOnPage(page));
     await tab(page, 'calc');
-    check('the gold calculator is with the calculators as well', (await panelsOnPage(page)).join(' ') === 'B8 XAU4');
+    check('the gold calculator is with the calculators as well (Interest 2 SP: Forward page)', (await panelsOnPage(page)).join(' ') === 'XAU4');
     await tab(page, 'gold');
     check('gold swap rate tickers are Bloomberg\'s XAUSR… roots with the yellow key next to them',
       (await cellText(page, 'EK_XAU!D16')).trim() === 'XAUSR1W' && (await cellText(page, 'EK_XAU!D17')).trim() === 'XAUSR1M'
@@ -1271,11 +1278,12 @@ async function shot(page, name) {
     await tab(page, 'over');
     check('main page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
     const spotKpi = await page.evaluate(() => (document.querySelector('#kpi-spot') || {}).textContent || '');
-    check('header strip: "Spot kaynağı" says where the spot comes from', /Spot kaynağı/.test(spotKpi) && /MANUEL/.test(spotKpi), spotKpi);
+    // the file's manual spot (49,997 / 49,9975 of the day it was saved) is nobody's today: the desk starts on Bloomberg's
+    check('header strip: "Spot kaynağı" says where the spot comes from - Bloomberg', /Spot kaynağı/.test(spotKpi) && /BBG/.test(spotKpi), spotKpi);
     await page.click('#kpi-spot');
     await page.waitForSelector('#spot-bid');
     const dlg = { bid: await page.inputValue('#spot-bid'), ask: await page.inputValue('#spot-ask'), src: await page.textContent('#spot-source') };
-    check('a click on it opens the manual spot: the two cells of the VİOP sheet', dlg.bid === '49,997' && dlg.ask === '49,9975' && dlg.src === 'MANUEL', dlg);
+    check('a click on it opens the manual spot: the two cells of the VİOP sheet, empty', dlg.bid === '' && dlg.ask === '' && dlg.src === 'BBG', dlg);
     await page.fill('#spot-bid', '50,40');
     await page.fill('#spot-ask', '50,30');
     await page.click('.modal .btn.primary');
@@ -1296,13 +1304,6 @@ async function shot(page, name) {
     await waitCell(page, 'VIOP!AA9', 't.trim() === ""');
     check('"Bloomberg\'e dön" empties the two cells: the source is Bloomberg again', (await cellText(page, 'VIOP!AA9')).trim() === ''
       && (await cellText(page, 'VIOP!AA10')).trim() === '', [await cellText(page, 'VIOP!AA9'), await cellText(page, 'VIOP!AA10')]);
-    await page.click('#kpi-spot');                           // put the file's own manual spot back
-    await page.waitForSelector('#spot-bid');
-    await page.fill('#spot-bid', '49,997');
-    await page.fill('#spot-ask', '49,9975');
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('#spot-bid', { state: 'detached' });
-    await waitCell(page, 'VIOP!AA9', 't.trim() === "49,9970"');
 
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
@@ -1519,6 +1520,20 @@ async function shot(page, name) {
     await page.fill('#carry-a', '1');
     await page.click('#carry-save');
     await page.waitForFunction(() => /bootstrap/i.test(document.getElementById('carry-info').textContent), null, { timeout: 20000 });
+    // the holidays: the TR list of both workbooks in one place, the US holidays and the FOMC meetings beside it
+    const holText = await page.inputValue('#holidays-text');
+    check('settings: the TR holidays of both workbooks in one list, with the US holidays and the FOMC meetings',
+      /^01\.01\.2026$/m.test(holText) && /^29\.10\.2026\tCumhuriyet$/m.test(holText) && holText.split('\n').length === 152
+      && /FOMC toplantıları: 09\.12\.2026/.test(await page.textContent('#holidays-other')), holText.split('\n').slice(0, 3));
+    await page.fill('#holidays-text', holText + '\n31.12.2026\tDeneme tatili');
+    await page.click('#holidays-save');
+    await page.waitForFunction(() => /153 TR tatili/.test(document.getElementById('holidays-info').textContent), null, { timeout: 20000 });
+    const holSaved = (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json;
+    check('... a day added is written for everyone', holSaved.tr.some((x) => x.date === '2026-12-31' && x.name === 'Deneme tatili'), holSaved.tr.length);
+    // the files' own lists again (nothing stored): the pages after this one see the holidays they always did
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Motor!A361:B523'], shared: true });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'asw', refs: ['ASW!LR2:LR200'], shared: true });
+    check('... and the lists of the files come back', (await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json.tr.length === 152);
     await shot(page, '15-settings');
 
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists
@@ -1812,7 +1827,9 @@ async function shot(page, name) {
     await page.keyboard.type('interest');
     await page.waitForSelector('.findlist .hit');
     const hits = await page.evaluate(() => [...document.querySelectorAll('.findlist .hit')].map((x) => x.querySelector('.t').textContent + ' @ ' + x.querySelector('.w').textContent));
-    check('Ctrl+K lists the tables of every page by name', hits.length >= 6 && hits.some((x) => /^Interest 2 SP · TRY faizi.* @ Forward › Hesaplayıcılar$/.test(x)), hits);
+    // each calculator once, at its home: the copies on the Calculators and VİOP pages are helper tables, not offered
+    check('Ctrl+K lists the tables of every page by name', hits.length === 4 && hits.every((x) => / @ Forward › Hesaplayıcılar$/.test(x))
+      && hits.some((x) => /^Interest 2 SP · TRY faizi.* @ Forward › Hesaplayıcılar$/.test(x)), hits);
     await page.fill('#find', 'faizden fiyat');
     await page.waitForFunction(() => document.querySelectorAll('.findlist .hit').length === 1);
     await page.keyboard.press('Enter');

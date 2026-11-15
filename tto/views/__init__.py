@@ -3,7 +3,9 @@
 ``{"id", "title", "group", "book", "sheet", "order", "inputs": [...], "panels": [...]}``
 
 * ``inputs``  cells the user may type into: ``{"range": "W33:X47", "scope": "user"|"shared", "group": "...",
-  "kind": "auto|number|pct|date|text", "label": "..."}`` (ranges without a sheet refer to the page's sheet)
+  "kind": "auto|number|amount|pct|date|text|list", "label": "..."}`` (ranges without a sheet refer to the page's sheet);
+  ``"options": ["B", "S"]`` offers a list (``"kind": "list"``: nothing else is taken) and ``"aliases": {"Sat": "S"}``
+  names words that mean one of its items
 * ``panels``  ``{"type": "table", "range": "B29:J39", "title": "...", "hidden": false}`` |
               (``"sheet": "VIOP", "borrowed": true``: a few cells of another page's sheet, shown here as well) |
   ``{"type": "chart", "chart": <index of the chart on the sheet>}`` | ``{"type": "notes", "range": ...}`` |
@@ -14,6 +16,8 @@
   are not listed are gathered in a last tab of their own.
 * ``pinned`` (optional)  ids of the panels that stay above the tabs whichever tab is open (the value date of
   the Forward page)
+* ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
+  anyone else's menu, search or shortcuts, and refused to them
 """
 from __future__ import annotations
 

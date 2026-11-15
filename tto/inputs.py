@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .xl.values import date_to_serial
 
@@ -131,7 +131,7 @@ def _fold(text: str) -> str:
 
 
 def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, kind: str = "auto",
-                options: Optional[List[str]] = None, lang: str = "tr") -> Any:
+                options: Optional[List[str]] = None, lang: str = "tr", aliases: Optional[Dict[str, str]] = None) -> Any:
     """Convert user text to the value stored in the cell.
 
     * empty text -> ``None`` (blank cell)
@@ -140,6 +140,8 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
       percent entry: a typed number of 1 or more is a percentage, a smaller one is the fraction itself)
     * amount cells (a nominal, a trade size) take the desk's shorthand as well: ``100m``, ``2,5 mn``, ``500k`` -
       and nothing else, so that a size that was not understood cannot quietly empty the totals
+    * list cells (``kind="list"``) take one of their ``options`` (or a word ``aliases`` maps to one: "Sat" is "S") and
+      nothing else - a cell whose formulas test for one item would otherwise take any other text for the other
     * anything that is not a number stays text
     """
     if raw is None:
@@ -156,6 +158,12 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
         return None
     if len(s) > 2000:
         raise InputError("girdi çok uzun")
+    if aliases:
+        typed = _fold(s)
+        for word, item in aliases.items():
+            if _fold(word) == typed:
+                s = item
+                break
     if options:
         typed = _fold(s)
         for o in options:
@@ -169,6 +177,8 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
             for o in options:
                 if parse_date(o) == day:
                     return o
+        if kind == "list":
+            raise InputError("listede yok: %r (%s)" % (s, ", ".join(options)))
     if kind == "amount":
         n = parse_amount(s, lang)
         if n is None:

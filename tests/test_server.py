@@ -256,8 +256,12 @@ def test_workbook_extras_over_http(client, user, module_service, monkeypatch):
     assert res.status_code == 200 and res.headers["content-type"] == "image/png" and res.content[:4] == b"\x89PNG"
     assert "max-age" in res.headers["cache-control"]
     assert client.get("/api/image?book=tto&sheet=MASA&i=x", headers=h).status_code == 404
-    # shortcuts of the desk sheet; columns hidden in Excel only with the helper tables
-    assert len(client.get("/api/view/masa").json()["links"]) == 29
+    # shortcuts of the desk sheet (29; the one to the Motor page is an administrator's); columns hidden in Excel only with
+    # the helper tables
+    links = client.get("/api/view/masa").json()["links"]
+    assert len(links) == 28 and "motor" not in {link["page"] for link in links}
+    admin = auth(module_service, "HTTP Yönetici", admin=True)
+    assert len(client.get("/api/view/masa", headers=admin).json()["links"]) == 29
 
     def columns(query):
         return next(p for p in client.get("/api/view/viop" + query).json()["panels"] if p["id"] == "B2")["data"]["c"]

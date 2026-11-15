@@ -811,10 +811,17 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         other = s.login("Öbür Masa")["user"]
         before = s._list_values(u, "tto", "DİBS RV!A5:A54")
         last = max(k for k, v in enumerate(before) if v)
+        asw_before = s._list_values(u, "asw", "ASW!B7:B56")
+        asw_last = max(k for k, v in enumerate(asw_before) if v)
         res = s.bond_flag(u, "trt190128t14", True)
-        assert res == {"isin": "TRT190128T14", "on": True, "added": True, "cells": ["DİBS RV!A%d" % (5 + last + 1)], "gen": res["gen"]}
+        assert res == {"isin": "TRT190128T14", "on": True, "added": True, "cells": ["DİBS RV!A%d" % (5 + last + 1)], "asw": True,
+                       "gen": res["gen"]}
         r = 5 + last + 1
-        assert s.bond_flag(u, "TRT190128T14", True)["added"] is False                   # already there
+        # the ASW workbook's list follows the trading list: below its last bond, for everyone
+        ra = 7 + asw_last + 1
+        assert cell(s, "ASW!B%d" % ra, book="asw") == "TRT190128T14" and "TRT190128T14" not in asw_before
+        again = s.bond_flag(u, "TRT190128T14", True)
+        assert again["added"] is False and again["asw"] is False                          # already there
         assert s._list_values(other, "tto", "DİBS RV!A5:A54")[last + 1] == "TRT190128T14"  # for everyone
         # the page of every bond marks it, the trading summary has it under its kind
         rows = {b["isin"]: n for n, b, _ in ex.universe_rows() if b}
@@ -832,9 +839,14 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         # what goes with a row: the desk's source and everyone's own values for it
         s.set_inputs(u, "tto", [{"ref": "DİBS RV!B%d" % r, "value": "ISL0"}, {"ref": "DİBS RV!N%d" % r, "value": 100.5}])
         s.set_inputs(other, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": 40.0}])
+        s.set_inputs(u, "asw", [{"ref": "ASW!C%d" % ra, "value": "ISL0"}])
+        s.set_inputs(other, "asw", [{"ref": "ASW!D%d" % ra, "value": 99.5}])
         assert cell(s, "DİBS RV!N%d" % r, user=user_key(u)) == 100.5
         res = s.bond_flag(u, "TRT190128T14", False)
-        assert (res["on"], res["removed"]) == (False, 1)
+        assert (res["on"], res["removed"], res["asw"]) == (False, 1, True)
+        assert cell(s, "ASW!B%d" % ra, book="asw") is None and cell(s, "ASW!C%d" % ra, book="asw") is None
+        assert cell(s, "ASW!D%d" % ra, user=user_key(other), book="asw") is None
+        assert s._list_values(u, "asw", "ASW!B7:B56") == asw_before
         assert cell(s, "DİBS RV!A%d" % r) is None and cell(s, "DİBS RV!B%d" % r) is None
         assert cell(s, "DİBS RV!N%d" % r, user=user_key(u)) is None and cell(s, "DİBS RV!AL%d" % r, user=user_key(other)) is None
         assert s.store.user_inputs(user_key(other), "tto").get(("tto", "DİBS RV!AL%d" % r)) is None

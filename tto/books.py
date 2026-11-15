@@ -18,16 +18,18 @@ MAX_SPILL_COLS = 12
 class InputDef(object):
     """One declared input cell."""
 
-    __slots__ = ("scope", "group", "kind", "label", "options", "view")
+    __slots__ = ("scope", "group", "kind", "label", "options", "view", "aliases")
 
     def __init__(self, scope: str = "user", group: Optional[str] = None, kind: str = "auto",
-                 label: str = "", options: Optional[List[str]] = None, view: str = ""):
+                 label: str = "", options: Optional[List[str]] = None, view: str = "",
+                 aliases: Optional[Dict[str, str]] = None):
         self.scope = scope            # "user" (personal / scenario) or "shared" (whole desk)
         self.group = group
-        self.kind = kind              # auto | number | amount | pct | date | text | list
+        self.kind = kind              # auto | number | amount | pct | date | text | list (one of the options only)
         self.label = label
         self.options = options
         self.view = view
+        self.aliases = aliases        # words that mean an option ({"Sat": "S"})
 
 
 class Book(object):

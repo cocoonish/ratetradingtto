@@ -852,13 +852,15 @@ export class SettingsPage {
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
-    const [cal, cov, src, carry] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
-      api.get('/api/carry').catch(() => ({ available: false }))]);
+    const [cal, cov, src, carry, hol] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
+      api.get('/api/carry').catch(() => ({ available: false })), api.get('/api/holidays').catch(() => ({ available: false }))]);
     if (this.dead) return;
     this.cal = cal;
     this.cov = cov;
     this.src = src;
     this.carry = carry;
+    this.hol = hol;
+    this.holDirty = false;
     this.rows = cal.meetings.map((m) => ({ date: m.date, was: m.date }));
     this.dirty = false;
     clear(this.host);
@@ -866,6 +868,7 @@ export class SettingsPage {
     this.renderCarry();
     this.renderSources(true);
     this.renderCalendar();
+    this.renderHolidays(true);
     this.renderHistory();
     this.timer = setInterval(() => { this.pollState().catch(() => {}); }, 4000);
   }
@@ -997,6 +1000,25 @@ export class SettingsPage {
       + 'kalınca) liste açılışta ve gün dönünce kendiliğinden kayar: MPC1 her zaman sıradaki toplantıdır. Açıklanan yeni tarihler '
       + '"Toplu yapıştır… → Açıklanan tarihlerle düzelt" ile tek seferde girilir.');
 
+    // ---- the holidays: the TR list of both workbooks in one place, the US holidays and FOMC meetings beside it
+    this.holPanel = panel('Tatiller · TR (TRY ve DİBS ASW kitapları) · ABD · FOMC', { wide: true, id: 'holidays' });
+    this.holInfo = h('div', { class: 'set-info', id: 'holidays-info' });
+    this.holText = h('textarea', { class: 'inp hol-text', id: 'holidays-text', rows: '14', spellcheck: 'false', wrap: 'off' });
+    this.holText.addEventListener('input', () => { this.holDirty = true; this.holSave.disabled = false; });
+    this.holSave = h('button', { class: 'btn primary', type: 'button', id: 'holidays-save' }, 'Kaydet');
+    this.holSave.addEventListener('click', () => this.saveHolidays());
+    const holUndo = h('button', { class: 'btn', type: 'button' }, 'Vazgeç');
+    holUndo.addEventListener('click', () => this.renderHolidays(true));
+    const holCopy = h('button', { class: 'btn', type: 'button', title: 'Listeyi (gg.aa.yyyy ve adı, sekmeyle) Excel\'e yapıştırmak için kopyala' }, 'Kopyala');
+    holCopy.addEventListener('click', () => copyText(this.holText.value, 'Tatiller kopyalandı'));
+    this.holOther = h('div', { class: 'hol-other', id: 'holidays-other' });
+    this.holPanel.body.appendChild(h('div', { class: 'set-body' }, this.holInfo, this.holText,
+      h('div', { class: 'set-actions' }, holCopy, h('span', { class: 'grow' }), holUndo, this.holSave), this.holOther));
+    this.holPanel.setNote('Her satıra bir gün: tarih (gg.aa.yyyy) ve isterseniz adı - Excel\'den iki sütun yapıştırılabilir. Liste herkes için '
+      + 'ortaktır ve iki kitaba birden yazılır: TRY kitabının tatilleri (Motor!A361:B523; bütün WORKDAY hesapları, valörler, kontrat vadeleri '
+      + 'bunu okur) ve DİBS ASW kitabınınki (ASW!LR2:LR200). Arife yarım günleri iş günü sayılır (listeye yazılmaz). ABD tatilleri ve FOMC '
+      + 'toplantıları USD · FOMC sayfasındadır; burada bilgi için gösterilir.');
+
     // ---- history
     this.histPanel = panel('Tarihçe', { wide: true, id: 'history' });
     this.histInfo = h('div', { class: 'set-info' });
@@ -1025,8 +1047,8 @@ export class SettingsPage {
         h('div', { class: 'field' }, h('label', null, 'Geriye bakış (gün)'), this.daysInp),
         saveSet, h('span', { class: 'grow' }), sync, redo)));
     this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el, this.calPanel.el, this.histPanel.el,
-      this.seriesPanel.el));
+    this.host.appendChild(h('div', { class: 'panels' }, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el, this.calPanel.el, this.holPanel.el,
+      this.histPanel.el, this.seriesPanel.el));
   }
 
   renderCarry() {
@@ -1106,6 +1128,48 @@ export class SettingsPage {
       this.srcDirty = false;
       this.renderSources(true);
       toast('Kaynak sırası kaydedildi – canlı sayfalar ve tarihçe yeni sırayla güncelleniyor', 'ok');
+    } catch (err) { errorToast(err); }
+  }
+
+  renderHolidays(force) {
+    const d = this.hol;
+    if (!d || !d.available) {
+      this.holPanel.el.classList.add('hidden');
+      return;
+    }
+    if (force || !this.holDirty) {
+      this.holText.value = d.tr.map((x) => isoToTr(x.date) + (x.name ? '\t' + x.name : '')).join('\n');
+      this.holDirty = false;
+      this.holSave.disabled = true;
+    }
+    const next = d.tr.find((x) => x.date >= (this.cal && this.cal.today ? this.cal.today : ''));
+    clear(this.holInfo).append(h('span', null, h('b', null, String(d.tr.length)), ' TR tatili (en çok ' + d.slots + ')'),
+      h('span', null, 'Sıradaki: ', h('b', null, next ? isoToTr(next.date) + (next.name ? ' · ' + next.name : '') : '–')),
+      h('span', null, 'Yazıldığı kitaplar: ' + (d.books || []).map((b) => (b === 'tto' ? 'TRY (Motor)' : b === 'asw' ? 'DİBS ASW' : b)).join(' · ')));
+    const chips = (list) => (list.length ? list.map(isoToTr).join(', ') : '–');
+    clear(this.holOther).append(h('div', null, h('b', null, 'ABD tatilleri (SIFMA): '), chips(d.us)),
+      h('div', null, h('b', null, 'FOMC toplantıları: '), chips(d.fomc)));
+  }
+
+  async saveHolidays() {
+    const items = [];
+    const bad = [];
+    for (const line of this.holText.value.split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s) continue;
+      const m = /^(\S+)\s*(.*)$/.exec(s);
+      const iso = parseTrDate(m[1]);
+      if (!iso) { bad.push(m[1]); continue; }
+      items.push({ date: iso, name: m[2].trim() });
+    }
+    if (bad.length) {
+      toast('Tarih anlaşılamadı: ' + bad.slice(0, 5).join(', '), 'err', 6000);
+      return;
+    }
+    try {
+      this.hol = await api.post('/api/holidays', { items });
+      this.renderHolidays(true);
+      toast('Tatiller kaydedildi: ' + this.hol.tr.length + ' gün (TRY ve DİBS ASW kitapları)', 'ok');
     } catch (err) { errorToast(err); }
   }
 
