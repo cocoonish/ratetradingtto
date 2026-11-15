@@ -879,3 +879,25 @@ def test_the_days_bloomberg_count_and_answers_are_kept_for_a_restart(tmp_path):
         assert old.carried is None                               # another day's count: not carried
     finally:
         svc.stop()
+
+
+def test_a_shared_change_reaches_another_tabs_panel_after_one_tab_was_refreshed(tmp_path):
+    """Regression (browser test, the RET editor): a user with inputs of their own and the market throttle; a shared
+    input changes (the RET curve), the open tab is refreshed, then another tab is opened and asked "since" the
+    page was loaded - its RET table changed and must come, not "unchanged"."""
+    svc = make_service(tmp_path)
+    try:
+        u, w = login(svc, "Sekmeler A"), login(svc, "Sekmeler B")
+        svc.settings.private_refresh = 60.0
+        svc.set_inputs(u, "tto", [{"ref": "Forward!D2", "value": "15.12.2026"}])            # (a calculation of her own)
+        page = svc.view(u, "forward")
+        tabs = {s["id"]: s["panels"] for s in page["sections"]}
+        pinned = page["pinned"]
+        svc.set_inputs(w, "tto", [{"ref": "Forward!W38", "value": "34,00"}])                # the RET curve: shared
+        svc.view(u, "forward", since=page["gen"], panels=tabs["fwd"] + pinned, as_="p")
+        ret = svc.view(u, "forward", since=page["gen"], panels=tabs["ret"] + pinned, as_="p")
+        assert not ret.get("unchanged")
+        b19 = next(p for p in ret["panels"] if p["id"] == "B19")["data"]
+        assert b19["rows"][b19["r"].index(38)][b19["c"].index("W")]["t"] == "34,00%"
+    finally:
+        svc.stop()

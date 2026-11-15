@@ -102,11 +102,19 @@ export class ViewPage {
     const data = await this.fetch({ since, panels: ids.join(','), as: this.as });
     if (this.dead) return;
     // (the generations are those of the page the server says this is: everybody's, or the user's own)
-    const seen = () => { this.as = data.as; for (const id of ids) { const it = this.items.get(id); if (it) it.gen = Math.max(it.gen || 0, data.gen || 0); } };
+    const seen = (held) => {
+      this.as = data.as;
+      for (const id of ids) {
+        const it = this.items.get(id);
+        if (!it || (held && held.has(id))) continue;     // (held back: asked for again next time)
+        it.gen = Math.max(it.gen || 0, data.gen || 0);
+        it.el.classList.remove('stale');                  // (as current as the server has it)
+      }
+    };
     if (data.unchanged) { seen(); return; }
     if (this.signature(data) !== this.order) { this.build(await this.fetch()); return; }    // the page changed shape
-    this.apply(data.panels);
-    seen();
+    const held = this.apply(data.panels);
+    seen(held);
     this.showOverrides();
   }
 
@@ -116,8 +124,9 @@ export class ViewPage {
     return (this.placed || []).some((id) => { const it = this.items.get(id); return it && (it.gen || 0) < gen; });
   }
 
-  /** New data of panels, drawn in place. */
+  /** New data of panels, drawn in place; returns the ids of those held back (a cell of theirs is being typed into). */
   apply(panels) {
+    const held = new Set();
     for (const p of panels) {
       const it = this.items.get(p.id);
       if (!it) continue;
@@ -133,11 +142,12 @@ export class ViewPage {
         if (it.chart && p.data) it.chart.update(p.data);
         if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
       } else if (it.grid && p.data) {
+        if (it.grid.update(p.data, true) === false) { held.add(p.id); continue; }
         it.data = p.data;
-        it.grid.update(p.data, true);
         if (it.grow) it.grow();
       }
     }
+    return held;
   }
 
   destroy() {
@@ -287,8 +297,13 @@ export class ViewPage {
     this.secNote.textContent = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
     this.secNote.classList.toggle('hidden', !this.secNote.textContent);
     this.placed = placed;
-    // a tab whose panels were not brought up to date while another was open: now
-    if (this.stale() && this.ctx.refreshPage) this.ctx.refreshPage();
+    // a tab whose panels were not brought up to date while another was open: now - shown dimmed until then, so that
+    // nobody reads a number from before the change
+    if (this.stale() && this.ctx.refreshPage) {
+      const gen = this.ctx.gen();
+      for (const id of placed) { const it = this.items.get(id); if (it && (it.gen || 0) < gen) it.el.classList.add('stale'); }
+      this.ctx.refreshPage();
+    }
   }
 
   toggleAll() {

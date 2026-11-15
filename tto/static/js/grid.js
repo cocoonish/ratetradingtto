@@ -223,17 +223,21 @@ export class Grid {
     return true;
   }
 
+  /** New data drawn in place.  False: not drawn - its shape changed while a cell of it is being typed into (the
+   *  edit would be lost or go to another cell); the next refresh brings it. */
   update(data, flash = true) {
-    if (!data || !data.rows) return;
+    if (!data || !data.rows) return true;
     prepare(data);
     if (this.sameShape(data)) {
       this._patch(data, flash);
-    } else {
-      const hadSel = sel.grid === this;
-      if (hadSel) clearSelection();
-      this.data = data;
-      this._build();
+      return true;
     }
+    if (editing && editing.grid === this) return false;
+    const hadSel = sel.grid === this;
+    if (hadSel) clearSelection();
+    this.data = data;
+    this._build();
+    return true;
   }
 
   /** Rebuild from scratch (client-built tables whose rows carry their own actions). */

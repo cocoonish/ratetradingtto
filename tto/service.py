@@ -1265,9 +1265,11 @@ class Service(object):
         return (who, what, bool(show_hidden), locale or self.settings.locale)
 
     def _fresh(self, rec: Dict[str, Any], gen: int, wanted: Optional[Tuple], key: Tuple) -> bool:
-        """Whether the asked panels are known as of ``gen`` (one with inputs of their own: or checked lately)."""
+        """Whether the asked panels are known as of ``gen`` - or, for a user with inputs of their own (a calculation of
+        their own), checked lately with no shared input changed since (only the market moved)."""
         throttle = self.settings.private_refresh
-        recent = time.monotonic() - throttle if key[0] and throttle > 0 else None
+        recent = time.monotonic() - throttle if (throttle > 0 and key[0] and key[0] in self._private_users) else None
+        shared = self._shared_changes(rec)
         panels = rec["panels"]
         for pid in (wanted if wanted is not None else rec["order"]):
             p = panels.get(pid)
@@ -1275,8 +1277,8 @@ class Service(object):
                 continue                                 # (not a panel of the page: nothing to make)
             if p["entry"] is None:
                 return False
-            if p["checked"] != gen and (recent is None or p["at"] < recent or self._shared_changes(rec) != rec["inputs"]):
-                return False                             # (a shared input changed since - not the market: at once)
+            if p["checked"] != gen and (recent is None or p["at"] < recent or p.get("inputs") != shared):
+                return False                             # (a shared input changed since it was checked: at once)
         return True
 
     def _shared_changes(self, rec: Dict[str, Any]) -> int:
@@ -1327,7 +1329,8 @@ class Service(object):
                 return old
             if reusable and old["meta"] is not None and self._still(old["meta"], calc):
                 meta = old["meta"]
-                return dict(old, checked=gen, at=now, meta=(meta[0], meta[1], calc.epoch, meta[3]))
+                return dict(old, checked=gen, at=now, meta=(meta[0], meta[1], calc.epoch, meta[3]),
+                            inputs=calc.engine.input_changes)
         calc.track = 0
         try:
             entry = make()
@@ -1336,7 +1339,8 @@ class Service(object):
             calc.track = None
         meta = (calc.serial, calc.engine.layout, calc.epoch, mask) if reusable else None
         same = old is not None and old["entry"] is not None and old["entry"] == entry
-        return {"entry": entry, "meta": meta, "content": old["content"] if same else gen, "checked": gen, "at": now}
+        return {"entry": entry, "meta": meta, "content": old["content"] if same else gen, "checked": gen, "at": now,
+                "inputs": calc.engine.input_changes}      # (shared inputs changed so far: _fresh)
 
     def _answer(self, rec: Dict[str, Any], since: Optional[int], wanted: Optional[Tuple],
                 as_: Optional[str] = None) -> Dict[str, Any]:
@@ -1442,8 +1446,7 @@ class Service(object):
         if links:
             top["links"] = links
         return {"key": key, "top": top, "order": order, "ids": ["%s:%s" % (pid, t) for pid, t in shown],
-                "panels": panels, "gen": gen, "ms": int((time.time() - t0) * 1000), "book": book.id,
-                "inputs": book.engine.input_changes}
+                "panels": panels, "gen": gen, "ms": int((time.time() - t0) * 1000), "book": book.id}
 
     @staticmethod
     def _sheet_chart(R, calc: Calc, ch: Dict[str, Any], loc, pid: str) -> Dict[str, Any]:
@@ -1688,8 +1691,7 @@ class Service(object):
                 part = {"entry": self._header(user, locale), "meta": None, "content": gen, "checked": gen, "at": time.monotonic()}
             else:
                 part = self._made(old, calc, gen, True, lambda: {"items": self._header(user, locale)["items"]})
-            rec = {"key": key, "panels": {"#": part}, "order": ["#"], "gen": gen, "book": "tto",
-                   "inputs": book.engine.input_changes if book is not None else 0}
+            rec = {"key": key, "panels": {"#": part}, "order": ["#"], "gen": gen, "book": "tto"}
             self._keep(key, rec)
             return rec
         finally:

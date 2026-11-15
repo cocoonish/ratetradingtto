@@ -55,11 +55,19 @@ async function tab(page, id) {
 
 const panelsOnPage = (page) => page.evaluate(() => [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel));
 
+/** A tab opened to find a cell may show its panels from before the last change for a moment (dimmed): wait. */
+async function fresh(page) {
+  await page.waitForFunction(() => !document.querySelector('#content .panel.stale'), null, { timeout: 30000 });
+}
+
 async function cellText(page, ref) {
+  const found = await page.evaluate((r) => !!window.tto.findCell(r), ref);
+  if (found) await fresh(page);
   return page.evaluate((r) => { const td = window.tto.findCell(r); return td ? td.textContent : null; }, ref);
 }
 
 async function cellHandle(page, ref) {
+  if (await page.evaluate((r) => !!window.tto.findCell(r), ref)) await fresh(page);      // (its tab may have opened)
   const h = await page.evaluateHandle((r) => window.tto.findCell(r), ref);
   const el = h.asElement();
   if (!el) throw new Error('cell not on screen: ' + ref);
