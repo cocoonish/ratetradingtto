@@ -2872,6 +2872,69 @@ async function shot(page, name) {
     await shot(page, 'quant-viop');
     await page.click('#quant-viop-contract button[data-v="A1X6 Curncy"]');          // (the choice is kept in the browser: the front again)
 
+    // ------------------------------------------------------------------ Trend (quanttrend.py): a tab of Sinyaller
+    console.log('quant trend');
+    await open(page, 'quant-trend');
+    await page.waitForSelector('#quant-trend-table', { timeout: 30000 });
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ready, null, { timeout: 90000 }).catch(() => null);
+    const trendApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/trend');
+    const trRows = ((trendApi.json || {}).trend || {}).rows || [];
+    await page.waitForFunction((n) => document.querySelectorAll('#quant-trend-table table.grid tr:not(.hd)').length === n, trRows.length, { timeout: 15000 }).catch(() => null);
+    const trendShown = await page.locator('#quant-trend-table table.grid tr:not(.hd)').count();
+    const trendRead = await page.evaluate(() => [...document.querySelectorAll('section.panel[id^="quant-trend-"]')].map((p) => {
+      const r = p.querySelector(':scope > .qread');
+      return { id: p.id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER' };
+    }));
+    const trendTabs = await page.evaluate(() => [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent));
+    check('Trend: a tab of Sinyaller; its table lists every instrument of the universe (the recorded month is too short for a line: each says why), each table\'s read line under its title',
+      trendApi.status === 200 && trRows.length > 0 && trendShown === trRows.length && trendTabs.join(',') === 'Sinyaller,Gün içi,Model,Trend'
+      && trRows.every((r) => r.sid || /^geçmiş kısa: \d+ gün \(en az 63\)$|^seviye oynamıyor/.test(r.why))
+      && ['quant-trend-table', 'quant-trend-chart', 'quant-trend-buckets', 'quant-trend-groups'].every((id) => trendRead.some((p) => p.id === id && p.read.length >= 40 && p.under)),
+    { rows: trRows.length, shown: trendShown, tabs: trendTabs, read: trendRead.map((p) => p.id + ':' + p.read.length), first: trRows[0] });
+    // its group buttons filter the table, remembered by the group's name
+    const trGroup = (trRows.find((r) => r.group === 'TRY OIS') || trRows[0] || {}).group;
+    await page.click('#quant-trend-group button[data-v="' + trGroup + '"]');
+    await page.waitForFunction((n) => document.querySelectorAll('#quant-trend-table table.grid tr:not(.hd)').length === n,
+      trRows.filter((r) => r.group === trGroup).length, { timeout: 10000 }).catch(() => null);
+    const trOne = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#quant-trend-table table.grid tr:not(.hd)')].map((tr) => tr.children[1] && tr.children[1].textContent),
+      kept: (() => { try { return localStorage.getItem('tto.quant.trend.group'); } catch (e) { return null; } })() }));
+    await page.click('#quant-trend-group button[data-v=""]');
+    check('... its group buttons show one group\'s rows, the choice remembered by the group\'s name',
+      trOne.rows.length === trRows.filter((r) => r.group === trGroup).length && trOne.kept === trGroup, { trGroup, trOne });
+    await shot(page, 'quant-trend');
+    // the Sinyaller list shows a Trend line in the plan's format (the recorded month has none: one as the server sends it);
+    // its card: the sentence first, the trade at the line's own size, the score without an entry threshold
+    const TREND_LINE = 'YENİ · SAT USDTRY 1A forward · 1 mn USD · offshore limiti · giriş 44,3500 · hedef 44,0500 · stop 44,5500 · beklenen +300 bin TRY'
+      + ' · isabet %61 (148) · model: Trend';
+    const trendCard = await page.evaluate(async (line) => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const s = { id: 'trend:FWD:USDTRY:1M', family: 'trend', family_label: 'Trend', kind: 'sys', daily: true, new: true, asset: 'Offshore', group: 'Offshore',
+        tier: null, tag: 'offshore limiti', expression: 'SAT USDTRY 1A forward', line, z: -1.2, entry_z: 1, strength: 'Güçlü', score_name: 'skor', gates: [],
+        legs: [{ key: 'FX:USDTRY', name: 'USDTRY 1A forward', action: 'Sell', side: -1, weight: 1, text: 'Sell USDTRY 1A forward' }], agree: 0, conflict: 0,
+        parts: { z: 2.4, regime: 1, hl: 1, carry: 1 }, composite: 2.4, hold: 21, horizon_unit: 'gün', bt: null, direction: -1, unit: '', digits: 4,
+        entry: 44.35, target: 44.05, stop: 44.55, pnl_unit: '%', exp_pnl: 0.68, trade_tr: 'USDTRY 1A forward sat', info: { size: '1,4 mn USD' },
+        plain: 'YENİ - yön bugün döndü. SAT USDTRY 1A forward · 1,4 mn USD · offshore limiti. Neden: 1A ↓, 3A ↓, 1Y ↓ - üç ufuk da düşüşte.',
+        px: { pair: 'USDTRY', inst: 'USDTRY 1A forward', label: 'USDTRY 1A fwd', tenor: '1A', days: 30.4, note: 'bugünkü 1A forward', digits: 4, unit: 'TRY',
+          entry: 44.35, target: 44.05, stop: 44.55, exit: 44.05, spot: 44.0, spot_exp: 43.9, fwd_h: 44.35 },
+        money: { ccy: 'TRY', base: 'USD', notional: 1e6, total: 300000, carry: 350000, move: -50000, target: 300000, stop: -200000, try_per: 1, usd_per: 1 / 44 } };
+      const rows = q.signalRows([s], { rank: true, group: true });
+      const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
+      const host = document.createElement('div');
+      const c = new q.SignalChart(host);
+      const data = { monitor: { name: 'USDTRY 1A forward', family_label: 'Trend' }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null };
+      c.show(data);
+      c.fillDetails(data);                       // (a one-day history draws no chart and no details: the score's row asked for here)
+      const text = (sel) => (host.querySelector(sel) || {}).textContent || '';
+      const out = { cell: rows[0][head.indexOf('İşlem')].t, group: rows[0][1].t, plain: text('#quant-sig-plain'), trade: text('#quant-sig-trade'),
+        score: ([...host.querySelectorAll('.qkv tr')].find((tr) => tr.firstChild && tr.firstChild.textContent === 'Skor') || {}).textContent || '' };
+      c.destroy();
+      return out;
+    }, TREND_LINE);
+    check('... the Sinyaller list shows a Trend line in the plan\'s format ("YENİ · SAT USDTRY 1A forward · 1 mn USD · … · isabet %61 (148) · model: Trend"); '
+      + 'its card: the sentence, the trade at the line\'s size, the score without an entry threshold',
+      trendCard.cell === TREND_LINE && trendCard.group === 'Offshore · offshore limiti' && trendCard.plain.startsWith('YENİ - yön bugün döndü. SAT USDTRY 1A forward')
+      && trendCard.trade === 'USDTRY 1A forward sat · 1,4 mn USD' && trendCard.score === 'Skorskor -1,20 · Güçlü', trendCard);
+
     // ------------------------------------------------------------------ launchpad, side drawer, pop-out, fast switching
     console.log('launchpad and navigation');
     const boxKeys = () => page.evaluate(() => [...document.querySelectorAll('#lp-grid .lp-item')].map((x) => x.dataset.key + ':' + x.dataset.w));
@@ -3457,7 +3520,7 @@ async function shot(page, name) {
       const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
       return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
     });
-    check('the quant menu: four entries - Sinyaller (4 tabs), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:4","Faiz:8","FX:3","VİOP:0"]', quantMenu);
+    check('the quant menu: four entries - Sinyaller (5 tabs: Trend and Carry + momentum among them), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:5","Faiz:8","FX:3","VİOP:0"]', quantMenu);
     await open(page, 'quant-regime');                                       // an address of before
     const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));

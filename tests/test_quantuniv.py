@@ -538,11 +538,15 @@ def _plugged(ctx, reg, cfg_):
 
 @pytest.fixture()
 def plugged():
+    real = qu.RUNNERS.get("trend")                    # (Trend's own module: back after the test, for the tests after it)
     qu.RUNNERS["trend"] = _plugged
     try:
         yield
     finally:
-        qu.RUNNERS.pop("trend", None)
+        if real is not None:
+            qu.RUNNERS["trend"] = real
+        else:
+            qu.RUNNERS.pop("trend", None)
 
 
 def test_a_plugged_family_lists_by_group_keeps_its_low_confidence_lines_and_alerts_only_the_confident(seeded, plugged):
@@ -607,7 +611,7 @@ def test_a_family_s_module_is_imported_when_it_is_there_and_its_failure_is_its_o
         raise ModuleNotFoundError("no", name=name)
 
     monkeypatch.setattr(importlib, "import_module", fake)
-    monkeypatch.setattr(qu, "RUNNERS", {})                    # (none registered yet: a family module tto.quant imports is)
+    monkeypatch.setattr(qu, "RUNNERS", {})                    # (none plugged yet: tto.quant imports the families' modules itself)
     errors = {}
     assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml"]
     assert list(errors) == ["ml"] and "bozuk" in errors["ml"]

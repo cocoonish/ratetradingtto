@@ -1493,8 +1493,9 @@ def test_fit_runs_off_the_engine_thread_and_finds_the_planted_signals(seeded, mo
     keys = [(s["priority"], bool(s["gated"])) for s in v["signals"]]
     assert keys == sorted(keys) and any(not s["gated"] for s in v["signals"])
     for p in {s["priority"] for s in v["signals"]}:
-        ranks = [s["composite"] for s in v["signals"] if s["priority"] == p and not s["gated"]]
-        assert ranks == sorted(ranks, reverse=True)
+        # (a Trend line whose direction turned since the last close - "YENİ" - first in its group)
+        ranks = [(0 if s.get("new") else 1, -s["composite"]) for s in v["signals"] if s["priority"] == p and not s["gated"]]
+        assert ranks == sorted(ranks)
     assert {f["id"] for f in v["families"]} == set(qf.FAMILIES)
     only = svc.quant.view("signals", user, {"family": "pca"})["signals"]
     assert only and all(s["family"] == "pca" for s in only)
@@ -1612,7 +1613,7 @@ def test_quant_http_api(seeded):
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
         # (in the menu's order: Sinyaller, Faiz, FX - each an entry with tabs - and VİOP)
-        assert [p["id"] for p in quant][:5] == ["quant", "quant-intraday", "quant-model", "quant-sira", "quant-pca"] and len(quant) == 16
+        assert [p["id"] for p in quant][:6] == ["quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira", "quant-pca"] and len(quant) == 17
         assert quant[4]["menu"] == "quant.faiz" and quant[-1]["id"] == "quant-viop" and "menu" not in quant[-1]
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200

@@ -48,6 +48,7 @@ from . import quantuniv as qu
 from . import quantsira as qs                    # Carry + momentum (on the universe; registers itself)
 from . import quantviop as qv
 from . import quantpath as qp
+from . import quanttrend as qtr               # Trend: its setting, page and view (its family plugs in through quantuniv)
 from . import volcarry as vc
 from .service import ServiceError
 
@@ -98,8 +99,8 @@ LABELS = {
     "bt_mute": "Geri testi zayıf aileyi sustur", "bt_min_hit": "Geri test: en az isabet", "bt_min_sharpe": "Geri test: en az Sharpe",
     "bt_min_trades": "Geri test: karar için en az işlem",
 }
-for _mod in (qp, ql, qv):                       # the implied path's grids and policy rate, lead-lag's k and lag, VİOP's window
-    DEFAULTS.update(_mod.DEFAULTS)
+for _mod in (qp, ql, qv, qtr):                  # the implied path's grids and policy rate, lead-lag's k and lag, VİOP's window,
+    DEFAULTS.update(_mod.DEFAULTS)              # Trend's daily risk
     LIMITS.update(_mod.LIMITS)
     LABELS.update(_mod.LABELS)
 
@@ -116,11 +117,12 @@ PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PC
 PAGES += tuple(p for _x in EXTRAS for p in _x.PAGES)
 PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))   # quantpath.py, quantlead.py
 PAGES += qv.PAGES                                                                                          # quantviop.py
+PAGES += qtr.PAGES                                                                                         # quanttrend.py
 PAGES += qs.PAGES                                                                                          # quantsira.py
 #: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
 #: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
 MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"),
-                                       ("quant-sira", "Carry + momentum"))),
+                                       ("quant-trend", "Trend"), ("quant-sira", "Carry + momentum"))),
         ("quant.faiz", "Faiz", (("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"), ("quant-corr", "Korelasyon"),
                                 ("quant-regime", "Rejim"), ("quant-curve", "Eğri Adil Değeri"), ("quant-path", "İma Patikası"),
                                 ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
@@ -1042,12 +1044,31 @@ class Quant(object):
         log = self._log()
         changed = False
         open_sids = {e["sid"] for e in log if e.get("status") == "open"}
+        open_by = {e["sid"]: e for e in log if e.get("status") == "open"}
+        logged_today = {e["sid"] for e in log if e.get("day") == today}
         new_alerts = []
         seq = max([int(e.get("seq") or 0) for e in log] or [0])
         for sg in live_signals:
             prev = last.get(sg["id"])
             prev_z = prev[0] if isinstance(prev, list) and prev else None
-            if first_look or prev_z is None or abs(prev_z) >= sg["entry_z"] or sg["id"] in open_sids:
+            daily = bool(sg.get("daily"))
+            if daily:
+                # a daily line (Trend's: there every day) is written down the first time on a day it is "YENİ" (its
+                # direction turned since the previous close) - the entry of its old direction closing on it
+                if first_look or not sg.get("new") or sg["id"] in logged_today:
+                    continue
+                old = open_by.get(sg["id"])
+                if old is not None and old["dir"] != sg["direction"]:
+                    pnl = old["dir"] * (sg["level"] - old["level"])
+                    old.update({"status": "dönüş", "closed_day": today, "closed_time": stamp.strftime("%H:%M"), "closed_level": sg["level"],
+                                "closed_z": sg["z"], "pnl": pnl, "pnl_sigma": pnl / old["scale"] if old.get("scale") else None,
+                                "held": _bdays(old["day"], today)})
+                    self._desk_close(old["sid"], "yön döndü")
+                    open_sids.discard(sg["id"])
+                    changed = True
+                if sg["id"] in open_sids:
+                    continue
+            elif first_look or prev_z is None or abs(prev_z) >= sg["entry_z"] or sg["id"] in open_sids:
                 continue
             seq += 1
             expires = None
@@ -1060,6 +1081,8 @@ class Quant(object):
                  "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "entry_z": sg["entry_z"], "level": sg["level"],
                  "target": sg["target"], "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
+            if daily:
+                e["daily"] = True                            # (followed to its stop or its direction's turn: no target, no time)
             log.append(e)
             open_sids.add(sg["id"])
             new_alerts.append(e)
@@ -1082,11 +1105,12 @@ class Quant(object):
                 continue
             s = e["dir"]
             outcome = None
-            if e.get("target") is not None and s * (level - e["target"]) >= 0:
+            daily = bool(e.get("daily"))
+            if not daily and e.get("target") is not None and s * (level - e["target"]) >= 0:
                 outcome = "hedef"
             elif e.get("stop") is not None and s * (level - e["stop"]) <= 0:
                 outcome = "stop"
-            elif held >= int(cfg["log_days"]) or gone:
+            elif not daily and (held >= int(cfg["log_days"]) or gone):
                 outcome = "süre"
             if outcome:
                 pnl = s * (level - e["level"])
@@ -1116,7 +1140,7 @@ class Quant(object):
                 f["open"] += 1
                 continue
             f[st] = f.get(st, 0) + 1
-            if st == "hedef" or (st == "süre" and (e.get("pnl") or 0) > 0):
+            if st == "hedef" or (st in ("süre", "dönüş") and (e.get("pnl") or 0) > 0):        # (dönüş: a daily line's turn)
                 f["wins"] += 1
             if e.get("pnl_sigma") is not None:
                 f["pnl_sigma"].append(e["pnl_sigma"])
@@ -1168,7 +1192,8 @@ class Quant(object):
             z = ("%+.2f" % a["z"]).replace(".", ",")
             desk.fired([{"id": alarm, "label": "Sinyal · %s: %s" % (a["family_label"], a["expression"]), "time": _now().strftime("%H:%M:%S"),
                          "mode": "level", "value_text": "z %s (%s)" % (z, a["strength"]),
-                         "condition": "giriş eşiği |z| ≥ %s" % _txt(float(e.get("entry_z") or DEFAULTS["entry_z"])), "measure_text": "",
+                         "condition": "yön döndü (YENİ)" if e.get("daily") else "giriş eşiği |z| ≥ %s" % _txt(float(e.get("entry_z") or DEFAULTS["entry_z"])),
+                         "measure_text": "",
                          "note": "Sinyaller sayfası", "by": ""}])
             self.svc.bump()                                  # the pages ask what fired
         except Exception:  # noqa: BLE001 - the desk's alarms are not worth the signal log
@@ -1298,6 +1323,8 @@ class Quant(object):
             return ql.view(self, what, base, v, fit)
         if what in qv.VIEWS:                                # VİOP (quantviop.py)
             return qv.view(self, what, base, v, fit)
+        if what in qtr.VIEWS:                               # Trend (quanttrend.py)
+            return qtr.view(self, what, base, v, fit)
         if what in qs.VIEWS:                                # Carry + momentum (quantsira.py)
             return qs.view(self, what, base, v, fit)
         if what == "signals":

@@ -68,7 +68,7 @@ from . import quantviop as qv
 #: id -> (label, kind, page), as ``quantfam.FAMILIES`` (``tto.quant`` adds them there): "sys" a systematic line every
 #: day - no regime or half-life gate of make_signal's (the family's own rules decide)
 FAMILIES: Dict[str, Tuple[str, str, str]] = {
-    "trend": ("Trend", "sys", "quant"),
+    "trend": ("Trend", "sys", "quant-trend"),                   # (its page: a tab of Sinyaller - quanttrend.py)
     "sira": ("Carry + momentum", "carry", "quant"),
     "ml": ("Makine öğrenmesi", "model", "quant"),
 }
@@ -241,10 +241,11 @@ def classify(sg: Dict[str, Any]) -> Dict[str, Any]:
 
 def order(live: List[Dict[str, Any]], gated: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The Sinyaller list: the groups in their order (TRY OIS's short end first), within a group the confident lines
-    by strength (the composite, as ``quantfam.rank`` has them), then the ones a gate holds ("düşük güven") by |z|."""
+    by strength (the composite, as ``quantfam.rank`` has them) - a systematic line whose direction turned since the
+    previous close ("YENİ", ``new``: Trend's) before the others -, then the ones a gate holds ("düşük güven") by |z|."""
     for s in live + gated:
         classify(s)
-    conf = sorted(live, key=lambda s: (s["priority"], -s["composite"], -s["agree"], -abs(s["z"])))
+    conf = sorted(live, key=lambda s: (s["priority"], 0 if s.get("new") else 1, -s["composite"], -s["agree"], -abs(s["z"])))
     low = sorted(gated, key=lambda s: (s["priority"], -abs(s["z"])))
     return sorted(conf + low, key=lambda s: (s["priority"], 1 if s["gated"] else 0))         # (stable: each part's order kept)
 

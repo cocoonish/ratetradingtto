@@ -113,13 +113,13 @@ def test_the_quant_pages_are_four_menu_entries_with_tabs(service):
         entries[-1][2].append((p["id"], p.get("tab")))
     assert [(k, t) for k, t, _ in entries] == [("quant.sinyal", "Sinyaller"), ("quant.faiz", "Faiz"), ("quant.fx", "FX"), ("quant-viop", "VİOP")]
     tabs = {k: [x for x, _ in pages] for k, _, pages in entries}
-    assert tabs["quant.sinyal"] == ["quant", "quant-intraday", "quant-model", "quant-sira"]
+    assert tabs["quant.sinyal"] == ["quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira"]
     assert tabs["quant.faiz"] == ["quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-path", "quant-wirp", "quant-lead"]
     assert tabs["quant.fx"] == ["quant-fx", "quant-macro", "quant-opt"] and tabs["quant-viop"] == ["quant-viop"]
     names = {pid: tab for _, _, pages in entries for pid, tab in pages}
     assert [names[x] for x in tabs["quant.faiz"]] == ["PCA / RV", "Çiftler", "Korelasyon", "Rejim", "Eğri Adil Değeri", "İma Patikası",
                                                       "TCMB WIRP", "Öncü-Takipçi"]
-    assert [names[x] for x in tabs["quant.sinyal"] + tabs["quant.fx"]] == ["Sinyaller", "Gün içi", "Model", "Carry + momentum", "FX", "Makro", "Opsiyon"]
+    assert [names[x] for x in tabs["quant.sinyal"] + tabs["quant.fx"]] == ["Sinyaller", "Gün içi", "Model", "Trend", "Carry + momentum", "FX", "Makro", "Opsiyon"]
     # a page keeps its own title (Ctrl+K finds it by it) and its address; VİOP is an entry of one page
     by = {p["id"]: p for p in quant}
     assert by["quant-regime"]["title"] == "Rejim & Momentum" and by["quant-fx"]["title"] == "FX Vol Primi & Carry"

@@ -551,6 +551,9 @@ class Monitor(object):
         # list: the gates are told on its card, none of them holds it ("düşük güven")
         self.expression: Optional[str] = kw.get("expression")
         self.ungated: bool = bool(kw.get("ungated", False))
+        # the family's own last word on its signal (a function of it, called at the end of make_signal: a systematic
+        # family's strength, rank, line and sentence - quanttrend.py)
+        self.finish: Optional[Callable[[Dict[str, Any]], None]] = kw.get("finish")
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -1168,6 +1171,11 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         sg["thesis"] = m.thesis(sg) if m.thesis is not None else default_thesis(m, sg)
     except Exception:  # noqa: BLE001 - a sentence that cannot be written is no reason to lose the signal
         sg["thesis"] = default_thesis(m, sg)
+    if m.finish is not None:
+        try:
+            m.finish(sg)
+        except Exception:  # noqa: BLE001 - the family's extras are not worth the signal
+            pass
     return sg
 
 

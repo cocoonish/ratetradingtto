@@ -28,7 +28,7 @@ def test_status_and_navigation(service):
     custom = [p["id"] for p in pages if p.get("custom")]
     # (the quant pages in the order of their four menu entries: Sinyaller, Faiz, FX, VİOP - see menu.js)
     assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
-                      "quant", "quant-intraday", "quant-model", "quant-sira",
+                      "quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira",
                       "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-path", "quant-wirp", "quant-lead",
                       "quant-fx", "quant-macro", "quant-opt",
                       "quant-viop", "social", "agenda"]
