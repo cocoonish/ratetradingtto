@@ -3966,10 +3966,16 @@ class Service(object):
         except (KeyError, ValueError) as exc:
             raise ServiceError(str(exc.args[0]) if exc.args else "hücre bulunamadı")
 
-    def watch_view(self, user: str, locale: Optional[str] = None, days: Any = 60) -> Dict[str, Any]:
+    #: one list of the watch page, alone (a box of it): the watch list, the alarms, what fired today
+    WATCH_PARTS = ("items", "alarms", "fired")
+
+    def watch_view(self, user: str, locale: Optional[str] = None, days: Any = 60, part: Optional[str] = None) -> Dict[str, Any]:
         """The user's watch list (with each item's z-score over ``days`` closes) and alarms, what fired today,
-        the desk's notes."""
+        the desk's notes.  ``part``: one of ``WATCH_PARTS`` alone - a box of it on a launchpad, in the side drawer,
+        in a window of its own (the other lists and the desk's alarms are not read)."""
         user = self.require_user(user)
+        if part not in (None, "") and part not in self.WATCH_PARTS:
+            raise ServiceError("bilinmeyen liste: %s" % str(part)[:40])
         loc = numfmt.get_locale(locale or self.settings.locale)
         try:
             days = int(days)
@@ -3977,6 +3983,8 @@ class Service(object):
             days = 60
 
         def run() -> Dict[str, Any]:
+            if part:
+                return self.watch.snapshot(user, loc, days, part)
             out = self.watch.snapshot(user, loc, days)
             out["desk"] = self._desk_view(user, self.watch.desk_rows(loc))
             return out
@@ -6029,18 +6037,26 @@ class Service(object):
         return {"saved": len(ids), "skipped": skipped, "quotes": sum(1 for q in rows if q.get("ok")), "ids": ids,
                 "dates": sorted({q["date"] for q in rows})}
 
-    def broker(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+    def broker(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None,
+               part: Optional[str] = None) -> Dict[str, Any]:
         """The chat of a day (or of every day between two dates) in the order it was said, and where every
-        instrument stands after it, next to the dashboard's own curve."""
-        return self.et.call(self._broker, user, date, date_to)
+        instrument stands after it, next to the dashboard's own curve.  ``part="board"``: the board alone (a box of it
+        on a launchpad, in the side drawer, in a window of its own) - not the lines, the days or the trades not entered."""
+        if part not in (None, "", "board"):
+            raise ServiceError("bilinmeyen kısım: %s" % str(part)[:40])
+        return self.et.call(self._broker, user, date, date_to, part == "board")
 
-    def _broker(self, user, date, date_to) -> Dict[str, Any]:
+    def _broker(self, user, date, date_to, board_only: bool = False) -> Dict[str, Any]:
         today = self.today_iso()
         day = self._broker_day(date)
         last = self._broker_day(date_to) if date_to else day
         if last < day:
             day, last = last, day
         rows, table, resets = self._broker_board(user, day, last)
+        if board_only:
+            self._fx_implied(user, [], table)
+            return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last, "board": table,
+                    "gen": self.gen, "stale_minutes": self._broker_stale_minutes(), "live": last >= today, "now": now_iso()}
         self._fx_implied(user, rows, table)
         return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
                 "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen,

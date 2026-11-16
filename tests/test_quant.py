@@ -1516,6 +1516,44 @@ def test_the_service_backtests_every_family_and_shows_it_beside_each_signal(seed
     q.compute()
 
 
+def test_a_quant_box_reads_a_light_part_of_its_page(seeded):
+    """A box of a quant page (a launchpad, the side drawer, a window of its own) reads ``/api/quant/box``: the same numbers
+    as its page, without the rest of the page - the signals list (its filters as the page's), VİOP's contracts with
+    their order levels, each bank's WIRP table without its matrices and history, the FX pair summary.  (Before the HTTP
+    test: leaving its client stops the module's service.)"""
+    svc = seeded
+    q = svc.quant
+    if not q.status()["ready"]:
+        q.compute()
+    user = svc.login("quant kutu")["user"]
+    page = q.view("signals", user, {})
+    box = q.view("box", user, {"of": "signals"})
+    assert box["ready"] and box["version"] == q.version and box["signals"] == page["signals"] and box["signals"]
+    assert box["entry_z"] == page["settings"]["entry_z"] and not {"gated", "coverage", "hits", "status", "settings"} & set(box)
+    assert [f["id"] for f in box["families"]] == [f["id"] for f in page["families"]] and box["assets"] == page["assets"]
+    pca = q.view("box", user, {"of": "signals", "family": "pca"})
+    assert pca["signals"] == q.view("signals", user, {"family": "pca"})["signals"] and pca["family_label"] == qf.FAMILIES["pca"][0]
+    assert q.view("box", user, {"of": "signals", "family": "pca", "asset": "yok"})["signals"] == []
+    viop = q.view("box", user, {"of": "viop"})
+    vpage = q.view("viop", user, {})["viop"]
+    assert viop["rows"] == (vpage.get("live") or {}).get("rows", []) and viop["mode"] == svc.mode
+    assert not {"calendar", "calibration", "history", "intraday", "coverage"} & set(viop)
+    wirp = q.view("box", user, {"of": "wirp"})
+    wpage = q.view("wirp", user, {})["wirp"]["banks"]
+    assert set(wirp["banks"]) == set(wpage) == {"try", "usd"}
+    for bank, b in wirp["banks"].items():
+        full = wpage[bank]
+        assert b["ok"] == full["ok"] and b["policy"] == full["policy"] and b["grid"] == full["grid"]
+        assert b["rows"] == [{k: v for k, v in r.items() if k not in ("matrix", "dist")} for r in full.get("rows") or []]
+        assert not {"history", "chart", "buckets", "history_buckets"} & set(b)
+    fx = q.view("box", user, {"of": "fxsum"})
+    assert fx["fxsum"] == q.view("fx", user, {})["fxsum"]
+    # each answer says the result's version: a box asks again when the live stream says it moved
+    before = q.version
+    q.refresh_live()
+    assert q.view("box", user, {"of": "fxsum"})["version"] == before + 1
+
+
 def test_quant_http_api(seeded):
     svc = seeded
     if not svc.quant.status()["ready"]:
@@ -1552,7 +1590,9 @@ def test_quant_http_api(seeded):
         assert res.status_code == 200 and res.json()["ready"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
-        assert [p["id"] for p in quant][:2] == ["quant", "quant-corr"] and len(quant) == 15 and quant[8]["id"] == "quant-intraday" and quant[-1]["id"] == "quant-viop"
+        # (in the menu's order: Sinyaller, Faiz, FX - each an entry with tabs - and VİOP)
+        assert [p["id"] for p in quant][:4] == ["quant", "quant-intraday", "quant-model", "quant-pca"] and len(quant) == 15
+        assert quant[3]["menu"] == "quant.faiz" and quant[-1]["id"] == "quant-viop" and "menu" not in quant[-1]
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401

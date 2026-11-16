@@ -1573,9 +1573,14 @@ class Watch(object):
         """The desk's alarms as the page lists them (read on the market's values)."""
         return self.alarm_rows(self.desk_list(), "", self._Reader(self, None), loc)
 
-    def snapshot(self, user: str, loc, days: int = 60) -> Dict[str, Any]:
+    def snapshot(self, user: str, loc, days: int = 60, part: Optional[str] = None) -> Dict[str, Any]:
+        """The page's lists - or one of them alone (``part``: "items", "alarms", "fired"), as a box of it reads it."""
         days = days if days in Z_DAYS else 60
         rd = self._Reader(self, user)
+        if part == "alarms":
+            return {"alarms": self.alarm_rows(self.alarms(user), user, rd, loc), "day": self.svc.today_iso()}
+        if part == "fired":
+            return {"fired": [e for e in self.fired() if e.get("user") == user], "day": self.svc.today_iso()}
         out_items = []
         for i in self.items(user):
             v, show, text = self.resolve(i["subject"], rd)
@@ -1606,6 +1611,8 @@ class Watch(object):
                                   change=chg(d.get("open")), since_base=chg(i.get("base")), unit_name=name,
                                   what=self.label(i["subject"]), detail=self.explain(i["subject"], rd, v),
                                   path=[p[1] for p in d.get("path") or []][-240:], z=z))
+        if part == "items":
+            return {"items": out_items, "days": days, "day": self.svc.today_iso()}
         alarms = self.alarm_rows(self.alarms(user), user, rd, loc)
         notes = self.svc.store.get("desk.notes:%s" % self.svc.today_iso(), {})
         return {"items": out_items, "alarms": alarms, "fired": [e for e in self.fired() if e.get("user") == user],
