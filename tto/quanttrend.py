@@ -188,6 +188,12 @@ def track(inst: qu.Instrument) -> Dict[str, Any]:
             "terms": terms, "d": d, "turn": turn}
 
 
+def _no_track() -> Dict[str, Any]:
+    """An instrument without a readable series: no close, no line."""
+    return {"days": [], "dates": [], "lv": [], "n": 0, "rate": [], "carry": False, "dx": [], "x": [], "sig": [], "score": [],
+            "terms": [], "d": [], "turn": []}
+
+
 def score_now(tr: Dict[str, Any], kind: str, level: Optional[float], today: _dt.date, rolled: bool = False
               ) -> Optional[Tuple[float, Tuple[float, float, float], int]]:
     """The score with the level now (the closes before today, then ``level``): (score, the three terms, the long
@@ -621,7 +627,14 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
     t0 = time.perf_counter()
     target = float(cfg.get("trend_risk_usd") or DEFAULTS["trend_risk_usd"])
     insts = list(reg)
-    tracks = [track(inst) for inst in insts]
+    broken: Dict[str, str] = {}                     # (an instrument whose series cannot be read: its row says why, the rest go on)
+    tracks = []
+    for inst in insts:
+        try:
+            tracks.append(track(inst))
+        except Exception as exc:  # noqa: BLE001 - one instrument is not worth the family
+            broken[inst.key] = "hesaplanamadı: %s: %s" % (type(exc).__name__, str(exc)[:120])
+            tracks.append(_no_track())
     groups = [inst.group for inst in insts]
     t_track = time.perf_counter()
     pooled, lines = walk(tracks, groups)
@@ -655,8 +668,8 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
                                "trades": stats["trades"], "hits": stats["hits"], "hit": stats["hit"], "scope": stats["scope"],
                                "sharpe": own_sharpe, "own_trades": sx["closed"], "sid": None, "why": ""}
         sigma = tr["sig"][-1] if tr["n"] else None
-        if tr["n"] < MIN_DAYS:
-            row["why"] = "geçmiş kısa: %d gün (en az %d)" % (tr["n"], MIN_DAYS)
+        if inst.key in broken or tr["n"] < MIN_DAYS:
+            row["why"] = broken.get(inst.key) or "geçmiş kısa: %d gün (en az %d)" % (tr["n"], MIN_DAYS)
             rows.append(row)
             continue
         if not sigma:
@@ -668,9 +681,14 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
         buckets = [bucket_stats(pooled, i, inst.group, b) for b in range(len(BUCKETS))]
         line = _Line(inst, tr, k, stats, buckets, cfg)
         sid = "trend:" + inst.key
-        mon = inst.monitor(sid, "trend", k=k, zfn=line.zfn, mode="drift", follows=True, entry=ENTRY_ANY, hold=HOLD0, reward=0.0,
-                           risk=0.0, fcast=0.0, score_name="skor", zvalues=list(tr["score"]), finish=line.finish, note=NOTE,
-                           info={"k": k, "risk_usd": risk1, "trend_risk_usd": target})
+        try:
+            mon = inst.monitor(sid, "trend", k=k, zfn=line.zfn, mode="drift", follows=True, entry=ENTRY_ANY, hold=HOLD0, reward=0.0,
+                               risk=0.0, fcast=0.0, score_name="skor", zvalues=list(tr["score"]), finish=line.finish, note=NOTE,
+                               info={"k": k, "risk_usd": risk1, "trend_risk_usd": target})
+        except Exception as exc:  # noqa: BLE001 - a line that cannot be made is its row's reason, not the family's end
+            row["why"] = "satır kurulamadı: %s: %s" % (type(exc).__name__, str(exc)[:120])
+            rows.append(row)
+            continue
         line.mon = mon
         mon.trend = line
         last = tr["score"][-1]
