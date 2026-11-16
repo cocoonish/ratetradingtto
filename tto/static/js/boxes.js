@@ -267,7 +267,7 @@ export class PanelBox {
         this.dropContent();
         clear(this.body);
         this.grid = new Grid({ book: this.book, data: e.data, editable: true, adhoc: this.opts.adhoc ? this.opts.adhoc() : false,
-          name: e.type === 'notes' ? null : 'v/' + this.item.view + '/' + this.item.panel, tools: this.tools });
+          name: e.type === 'notes' ? null : 'v/' + this.item.view + '/' + this.item.panel, order: true, tools: this.tools });
         this.body.appendChild(this.grid.el);
         if (e.card === 'bond') bondCardLinks(this.ctx, this.grid.el);
         if (e.flags === 'dibs') bondFlags(this.ctx, this.grid.el);

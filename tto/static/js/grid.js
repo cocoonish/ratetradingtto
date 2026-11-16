@@ -2,7 +2,7 @@
 // in-place refresh with change flashes, the columns each user hides.
 import { h, clear, menu, closeMenu, inFormControl, toast } from './ui.js';
 import { raw } from './format.js';
-import { Columns, captionKey, markGaps, uniqueKeys } from './columns.js';
+import { Columns, captionKey, columnOrder, markGaps, uniqueKeys } from './columns.js';
 
 const hooks = {
   setInputs: null,     // async (book, items, adhoc, lenient) -> result   (lenient: cells that are not inputs are skipped)
@@ -88,7 +88,7 @@ function prepare(data) {
       if (n > 0) {
         c.cs = n + 1;
         c.ov = 1;
-        for (let k = 1; k <= n; k++) row[j + k].sk = 1;
+        for (let k = 1; k <= n; k++) { row[j + k].sk = 1; row[j + k].ovk = 1; }      // (ovk: run over, no merged cell)
         j += n;
       }
     }
@@ -165,11 +165,62 @@ function gridColumns(d, heads) {
   return uniqueKeys(out);
 }
 
+/**
+ * The columns of a table in the order this user put them (``order``: column keys, ``keys``: the table's own, left to
+ * right; a column not in the order follows the ordered ones, in the table's order).  A new table: every cell keeps its
+ * reference (``c`` moves with it), a merged cell whose columns are no longer side by side is split (its text stays in
+ * its own first column), the frozen columns are those still at the left; text that ran over empty cells (prepare) is
+ * laid out again on the new order.
+ */
+function ordered(data, keys, order) {
+  const n = data.rows.length ? data.rows[0].length : 0;
+  if (!n || keys.length !== n) return data;
+  const rank = new Map(order.map((k, i) => [k, i]));
+  const at = (j) => (rank.has(keys[j]) ? rank.get(keys[j]) : order.length + j);
+  const perm = [...Array(n).keys()].sort((a, b) => at(a) - at(b));
+  if (perm.every((j, p) => j === p)) return data;
+  const pos = new Array(n);
+  perm.forEach((j, p) => { pos[j] = p; });
+  const rows = data.rows.map((row) => row.map(() => ({ t: '', k: '' })));
+  data.rows.forEach((row, i) => {
+    row.forEach((cell, j) => {
+      if (!cell || (cell.sk && !cell.ovk)) return;                 // (covered by a merged cell: placed with it)
+      const c = Object.assign({}, cell);
+      if (c.ovk) { delete c.sk; delete c.ovk; rows[i][pos[j]] = c; return; }
+      if (c.ov) { delete c.ov; delete c.cs; }
+      const cs = c.cs || 1;
+      const rs = c.rs || 1;
+      const ps = [];
+      for (let k = j; k < j + cs && k < n; k++) ps.push(pos[k]);
+      const lo = Math.min(...ps);
+      const together = Math.max(...ps) - lo + 1 === ps.length;
+      if (!together) delete c.cs;
+      const own = together ? lo : pos[j];
+      rows[i][own] = c;
+      for (let r = 0; r < rs; r++) {
+        if (!rows[i + r]) continue;
+        for (const p of (together ? ps : [pos[j]])) if (r || p !== own) rows[i + r][p] = { sk: 1 };
+      }
+    });
+  });
+  const out = Object.assign({}, data, { rows });
+  delete out.__prepared;
+  if (data.c && data.c.length === n) out.c = perm.map((j) => data.c[j]);
+  if (data.fz) {
+    let k = 0;
+    while (k < n && perm[k] < data.fz) k += 1;
+    if (k > 0 && k < n) out.fz = k; else delete out.fz;
+  }
+  return out;
+}
+
 export class Grid {
   /**
    * opts: book, data {sheet, rows, r, c}, editable (bool), adhoc (bool: any cell may be overridden),
    *       axis (bool: show A/B/C and 1/2/3 headers), header (bool: detect header rows),
    *       name (the table's stable name: each user hides columns of it, kept with the account),
+   *       order (bool: the user may put its columns in an order of their own - a table of a workbook page, whose
+   *              cells are known by their letter; the dashboard's own tables find a column by its place),
    *       tools (the panel's tools: the "Sütunlar" button goes there)
    */
   constructor(opts) {
@@ -184,7 +235,8 @@ export class Grid {
     this.el.addEventListener('mouseover', (e) => this._mouseOver(e));
     this.el.addEventListener('dblclick', (e) => this._dblClick(e));
     this.el.addEventListener('contextmenu', (e) => this._context(e));
-    this.columns = this.opts.name && !this.opts.axis ? new Columns(this.opts.name, () => this._showColumns()) : null;
+    this.columns = this.opts.name && !this.opts.axis
+      ? new Columns(this.opts.name, () => this._showColumns(), this.opts.order ? () => this._reorder() : null) : null;
     if (this.columns) this.columns.mount(this.opts.tools);
     this.update(this.opts.data, false);
     if (window.ResizeObserver) {
@@ -227,6 +279,8 @@ export class Grid {
    *  edit would be lost or go to another cell); the next refresh brings it. */
   update(data, flash = true) {
     if (!data || !data.rows) return true;
+    this.source = data;
+    data = this._ordered(data);
     prepare(data);
     if (this.sameShape(data)) {
       this._patch(data, flash);
@@ -244,6 +298,26 @@ export class Grid {
   replace(data) {
     if (sel.grid === this) clearSelection();
     if (editing && editing.grid === this) editing = null;
+    this.source = data;
+    data = this._ordered(data);
+    prepare(data);
+    this.data = data;
+    this._build();
+  }
+
+  /** The table as it came, in this user's column order (a new one), or as it is. */
+  _ordered(data) {
+    const order = this.columns && this.columns.orderable ? columnOrder(this.columns.name) : null;
+    if (!order || !order.length || !data.rows || !data.rows.length) return data;
+    return ordered(data, gridColumns(data, headerRows(data, this.opts)).map((c) => c.key), order);
+  }
+
+  /** The user put the columns in another order: drawn again in it. */
+  _reorder() {
+    if (!this.source) return;
+    if (editing && editing.grid === this) commitEdit();
+    if (sel.grid === this) clearSelection();
+    const data = this._ordered(this.source);
     prepare(data);
     this.data = data;
     this._build();

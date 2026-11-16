@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, confirmDialog, promptDialog } from '../ui.js';
 import { hub, PanelBox, changed } from '../boxes.js';
-import { layout, onLayout, loadLayout, launchpads, findLaunchpad, changeLaunchpad, createLaunchpad, saveLayout, landing,
+import { onLayout, loadLayout, launchpads, findLaunchpad, changeLaunchpad, createLaunchpad, saveLayout, landing,
   pinToDrawer } from '../layout.js';
 
 const nameKey = (s) => String(s || '').replace(/I/g, 'ı').replace(/İ/g, 'i').toLocaleLowerCase('tr');
@@ -42,7 +42,7 @@ export class LaunchpadPage {
   }
 
   async load() {
-    if (!layout.data) await loadLayout();
+    await loadLayout();                     // (changed on another computer since the sign-in, maybe)
     if (this.dead) return;
     if (!this.off) this.off = onLayout(() => this.sync());
     this.build();

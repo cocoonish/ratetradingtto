@@ -371,9 +371,11 @@ function tone() {
 const seen = { last: null, desk: null };
 const deskToasts = new Map();             // the firing's number in the day's log -> its toast on this page
 
-function notify(title, body) {
+/** A desktop notification; ``tag`` names the firing, so that the same one shown by two windows of the dashboard (two
+ *  tabs both hear the alarm) is one notification, not two. */
+function notify(title, body, tag) {
   try {
-    if (window.Notification && Notification.permission === 'granted') new Notification(title, { body });
+    if (window.Notification && Notification.permission === 'granted') new Notification(title, tag ? { body, tag } : { body });
   } catch (x) { /* no notification */ }
 }
 
@@ -430,7 +432,7 @@ function deskToast(e) {
   });
   el.addEventListener('click', () => { el.remove(); deskToasts.delete(e.seq); });
   deskToasts.set(e.seq, el);
-  notify('TTO masa alarmı · ' + e.label, e.text || '');
+  notify('TTO masa alarmı · ' + e.label, e.text || '', 'tto-desk-' + e.seq + '-' + (e.at || ''));
 }
 
 /** A firing someone answered: its toast says who, and goes a little later. */
@@ -477,7 +479,7 @@ async function lookOnce() {
     const text = '🔔 ' + e.label + ': ' + (e.value_text || e.value) + '  (' + cond + ') · ' + e.time + (e.note ? ' · ' + e.note : '');
     const el = toast(text, 'alarm', 15000);
     el.addEventListener('click', () => el.remove());
-    notify('TTO alarm · ' + e.label, text.slice(2));
+    notify('TTO alarm · ' + e.label, text.slice(2), 'tto-alarm-' + (e.id || '') + '-' + (e.seq || '') + '-' + (e.time || ''));
   }
   // the desk's: a firing for everyone, an answer, a condition that ended - silent for this user when they muted it
   let rang = res.fired.length > 0;

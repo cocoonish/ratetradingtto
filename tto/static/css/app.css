@@ -1022,6 +1022,7 @@ table.grid td.qgate { font-size: 11px; color: var(--ink-3); white-space: nowrap;
 #app.pop { grid-template-columns: minmax(0, 1fr); }
 #app.pop #side, #app.pop #kpis, #app.pop #drawer, #app.pop #btn-fav, #app.pop #favs, #app.pop #findbox, #app.pop #btn-ret,
 #app.pop #btn-scen, #app.pop #btn-drawer, #app.pop #btn-feedback, #app.pop #btn-lang, #app.pop #desk-alarm, #app.pop #btn-user { display: none !important; }
+#app.pop #main { grid-template-rows: auto minmax(0, 1fr) auto; }       /* (no header strip: one row less) */
 #app.pop #content { padding: 10px; }
 /* the launchpad */
 .lp-tabs .lp-tab { cursor: pointer; }

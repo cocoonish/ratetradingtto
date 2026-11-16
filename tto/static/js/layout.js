@@ -27,10 +27,13 @@ export function onLayout(fn) {
   return () => listeners.delete(fn);
 }
 
-/** The signed-in user's layout (on signing in, and when another window changed it). */
+/** The signed-in user's layout (on signing in, when another window changed it, when a launchpad is opened: it may have
+ *  changed on another computer).  A change of this window on its way is not overwritten by an older answer. */
 export async function loadLayout() {
   try {
-    layout.data = await api.get('/api/layout');
+    const res = await api.get('/api/layout');
+    if (pending) return layout.data;
+    layout.data = res;
   } catch (e) {
     layout.data = layout.data || EMPTY();
     if (e.status !== 401) toast('Launchpad / yan panel düzeniniz okunamadı: ' + e.message, 'err', 6000);
