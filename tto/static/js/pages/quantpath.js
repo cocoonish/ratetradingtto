@@ -12,6 +12,7 @@ import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum,
   BLUE, ORANGE, GREEN, PURPLE, GREY } from './quantbase.js';
+import { boxTools } from '../pagebox.js';
 
 const BANK_PREF = 'tto.quant.path.bank';
 const BANKS = [['try', 'TCMB · PPK'], ['usd', 'Fed · FOMC']];
@@ -203,6 +204,7 @@ class WirpPage extends PathBase {
       + 'fark sabit). İndirim / sabit / artırım: toplantı sonrası faizin bugünküne göre (FedWatch gibi). Bu toplantıda: adımın iki ızgara sonucu. Satıra tıklayın: '
       + 'o toplantının faiz olasılıkları aşağıda.';
     this.boxes.table = new GridBox(this.table, 'quant/wirp/table', (m) => { this.meeting = m; this.fillPage(); });
+    this.table.tools.append(...boxTools(() => ({ type: 'wirp', bank: this.bank, w: 12 }), this.ctx));
     this.barHost = h('div', { class: 'volchart' });
     this.bars = panel('quant-wirp-bars', 'Toplantı sonrası faiz olasılıkları');
     this.bars.body.appendChild(this.barHost);
@@ -242,11 +244,7 @@ class WirpPage extends PathBase {
     const rows = b.rows || [];
     if (!this.meeting || !rows.some((r) => r.meeting === this.meeting)) this.meeting = rows.length ? rows[0].meeting : null;
     const sel = rows.find((r) => r.meeting === this.meeting);
-    this.boxes.table.set(['Toplantı', 'İma faiz %', 'İma ' + rateName + ' %', 'Bugüne göre (bp)', 'Önceki toplantıya göre (bp)', 'Fiyatlanan adım', 'Bu toplantıda',
-      'İndirim', 'Sabit', 'Artırım'], rows.map((r) => [T(isoToTr(r.meeting), { b: 1 }), hasRate ? N(r.rate, 3, { b: 1 }) : T('—'), N(r.level, 3),
-      N(r.cum, 1, { sign: true }), N(r.step, 1, { sign: true }), N(r.moves, 2, { sign: true }),
-      T(outcome(r.lo, r.p_lo) + '  ' + outcome(r.hi, r.p_hi)), T(pct(r.ease, 1)), T(pct(r.hold, 1)), T(pct(r.hike, 1))]),
-    rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
+    this.boxes.table.set(wirpHead(this.bank), wirpRows(b), rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
     const buckets = b.buckets || [];
     this.boxes.matrix.set([this.bank === 'usd' ? 'Toplantı · hedef aralık (bp)' : 'Toplantı · politika faizi %'].concat(buckets.map((x) => ({ t: x.label, k: 's', b: 1, f: 'hd' })),
       ['E[faiz] − ima (bp)']), rows.map((r) => [T(isoToTr(r.meeting), { b: 1 })].concat((r.matrix || []).map((p, i) => (p >= 0.0005
@@ -309,6 +307,19 @@ class WirpPage extends PathBase {
       this.histHost.classList.add('hidden');
     }
   }
+}
+
+/** WIRP's meeting table: its caption row and its rows (the page's and its box's; ``b``: one bank's). */
+export function wirpHead(bank) {
+  return ['Toplantı', 'İma faiz %', 'İma ' + (bank === 'try' ? 'TLREF' : 'SOFR') + ' %', 'Bugüne göre (bp)', 'Önceki toplantıya göre (bp)', 'Fiyatlanan adım',
+    'Bu toplantıda', 'İndirim', 'Sabit', 'Artırım'];
+}
+
+export function wirpRows(b) {
+  const hasRate = isNum((b.policy || {}).rate);
+  return (b.rows || []).map((r) => [T(isoToTr(r.meeting), { b: 1 }), hasRate ? N(r.rate, 3, { b: 1 }) : T('—'), N(r.level, 3),
+    N(r.cum, 1, { sign: true }), N(r.step, 1, { sign: true }), N(r.moves, 2, { sign: true }),
+    T(outcome(r.lo, r.p_lo) + '  ' + outcome(r.hi, r.p_hi)), T(pct(r.ease, 1)), T(pct(r.hold, 1)), T(pct(r.hike, 1))]);
 }
 
 /** The pages of this module by id (quant.js asks here first). */

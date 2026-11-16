@@ -7,6 +7,7 @@ import { h, clear, toast, errorToast, confirmDialog, debounce, modal } from '../
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { num, isoToTr } from '../format.js';
+import { boxTools } from '../pagebox.js';
 
 const KIND = { outright: 'Outright', mpc: 'MPC', spread: 'Spread', fly: 'Fly', fra: 'FRA', fwd: 'Forward', switch: 'Switch' };
 const EVENT = { quote: 'Kota', trade: 'İşlem', ref: 'Ref', interest: 'İlgi', level: 'Seviye', note: 'Not', text: 'Metin' };
@@ -325,6 +326,90 @@ const LOG_SORT = {
   implied: (q) => (q.implied ? (typeof q.implied.bid === 'number' ? q.implied.bid : (typeof q.implied.ask === 'number' ? q.implied.ask : q.implied.price)) : null),
 };
 
+/**
+ * The board as a table (the page's, and its box's on a launchpad, in the side drawer, in a window of its own): the
+ * brokers' best fresh bid and offer, each with its house and age - every house's own quotes under its instrument -, our
+ * own quote, the last trade, the model and the differences, what was said last, the implied rate.  ``opts``: {product:
+ * 'all' or one, keys: the instruments kept (none: all), brokers: the houses' rows, acts(r): the row's own buttons (the
+ * page's)}.  ``same``: a text that stays the same while the rows and their best prices do.
+ */
+export function boardTable(d, opts = {}) {
+  const when = (stamp) => {
+    if (!stamp) return '';
+    const [day, time] = stamp.split(' ');
+    return d.ranged ? isoToTr(day).slice(0, 5) + ' ' + (time || '') : (time || day);
+  };
+  const live = !!d.live;
+  // a quote's age on a board of today; on a day gone by the time it was said
+  const age = (s, stamp) => (live && typeof s === 'number' ? ageText(s) : when(stamp));
+  const staleOf = (r, side) => (r.brokers || []).filter((b) => typeof b[side] === 'number' && b[side + '_stale']);
+  const staleTip = (r, side) => staleOf(r, side).map((b) => b.by + ' ' + level(b[side], r.unit) + ' · ' + ageText(b[side + '_age']) + ' önce').join('\n');
+  const name = (side) => (side === 'bid' ? 'bid' : 'offer');
+  const best = (r, side) => {
+    const v = r['best_' + side];
+    if (typeof v !== 'number') {
+      const stale = staleOf(r, side);
+      return { t: '', k: '', tip: stale.length ? 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) : '' };
+    }
+    return { t: level(v, r.unit), v, k: 'n', tip: 'En iyi ' + name(side) + ': ' + (r['best_' + side + '_by'] || 'kaynaksız') + ' · '
+      + when(r['best_' + side + '_time']) + (live ? ' (' + ageText(r['best_' + side + '_age']) + ' önce)' : '') };
+  };
+  // (centred: a text of its own column, never run over the empty ask beside it as a long text of the grid would)
+  const whose = (r, side) => {
+    if (typeof r['best_' + side] === 'number') {
+      return { t: (r['best_' + side + '_by'] || 'kaynaksız') + ' · ' + age(r['best_' + side + '_age'], r['best_' + side + '_time']), k: 's', cls: 'who', al: 'c' };
+    }
+    return staleOf(r, side).length ? { t: 'bayat', k: 's', cls: 'who stale', al: 'c', tip: 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) }
+      : { t: '', k: '' };
+  };
+  const diff = (v, through, unit) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, unit === 'px' ? 3 : 1, false), v, k: 'n', cls: through ? 'thru' : '',
+    tip: (unit === 'px' ? 'DİBS: fiyat farkı (puan), bp değil – ekran fiyatına göre' : (unit === 'yld' ? 'Bono: getiri farkı (bp)' : ''))
+      + (through ? (unit === 'px' || unit === 'yld' ? '\n' : '') + 'Kota model seviyesinin öbür tarafında' : '') } : { t: '', k: '' });
+  const product = opts.product || 'all';
+  const keys = opts.keys && opts.keys.length ? new Set(opts.keys) : null;
+  const board = d.board.filter((r) => (product === 'all' || r.product === product) && (!keys || keys.has(r.key)));
+  const ours = (r) => (typeof r.our_bid === 'number' || typeof r.our_ask === 'number'
+    ? { t: (typeof r.our_bid === 'number' ? level(r.our_bid, r.unit) : '') + ' / ' + (typeof r.our_ask === 'number' ? level(r.our_ask, r.unit) : ''),
+      k: 's', cls: 'ours' + (r.our_stale ? ' stale' : ''), tip: 'Bizim son kotamız · ' + when(r.our_time)
+        + (live && typeof r.our_age === 'number' ? ' (' + ageText(r.our_age) + ' önce' + (r.our_stale ? ', bayat' : '') + ')' : '') } : { t: '', k: '' });
+  // every house's own quotes under its instrument: when there are two or more, or one is stale (what the best cells leave out)
+  const houses = (r) => (opts.brokers && ((r.brokers || []).length > 1 || (r.brokers || []).some((b) => b.bid_stale || b.ask_stale)) ? r.brokers : []);
+  const houseSide = (b, r, side) => (typeof b[side] === 'number' ? { t: level(b[side], r.unit), v: b[side], k: 'n', cls: b[side + '_stale'] ? 'stale' : '',
+    tip: b.by + ' ' + name(side) + ' · ' + when(b[side + '_time']) + (b[side + '_stale'] ? ' – bayat, en iyi sayılmaz' : '') } : { t: '', k: '' });
+  const houseAge = (b, side) => (typeof b[side] === 'number' ? { t: (b[side + '_stale'] ? 'bayat · ' : '') + age(b[side + '_age'], b[side + '_time']), k: 's',
+    cls: 'who' + (b[side + '_stale'] ? ' stale' : ''), al: 'c' } : { t: '', k: '' });
+  const header = ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Bid · kimde', 'Ask', 'Ask · kimde', 'Saat', 'Son işlem', 'Bizim kota', 'Model',
+    'Bid − model (bp)', 'Ask − model (bp)', 'Son mesaj', 'İma (TRY % / getiri / PPK adımı)'].concat(opts.acts ? ['', ''] : []);
+  const lines = [];
+  for (const r of board) {
+    lines.push([r.product === 'DIBS' ? 'DİBS' : r.product, { t: r.label, k: 's', b: 1, tip: instTip(r) || r.isin || '' }, kindText(r),
+      best(r, 'bid'), whose(r, 'bid'), best(r, 'ask'), whose(r, 'ask'),
+      when(r.time), typeof r.last === 'number' ? { t: level(r.last, r.unit) + (r.last_by === 'biz' ? ' · biz' : ''), v: r.last, k: 'n',
+        cls: r.last_side === 'ask' ? 'buy' : (r.last_side === 'bid' ? 'sell' : ''),
+        tip: when(r.last_time) + (r.last_side === 'ask' ? ' · offer alındı' : (r.last_side === 'bid' ? ' · bid\'e verildi' : ''))
+          + (r.last_by === 'biz' ? ' · bizim işlemimiz' : (r.last_src ? ' · ' + r.last_src : '')) } : { t: '', k: '' },
+      ours(r),
+      typeof r.mid === 'number' ? { t: num(r.mid, r.unit === 'px' ? 3 : (r.unit === 'pct' || r.unit === 'yld' ? 2 : 1), false), v: r.mid, k: 'n', cls: 'soft',
+        tip: r.product === 'DIBS' ? 'DİBS RV ekranındaki ' + (r.unit === 'yld' ? 'getiri' : 'temiz fiyat')
+          : (r.kind === 'mpc' ? 'OIS sayfasındaki "MPC OIS" tablosunun bootstrap seviyesi (Günlük İşlemler\'in MPC formundaki piyasa)' : '') } : { t: '', k: '' },
+      // through the model: a bid above it, an ask below it - in yield the other way round (a bid's yield below the model's)
+      diff(r.best_bid_diff, r.unit === 'yld' ? r.best_bid_diff < 0 : r.best_bid_diff > 0, r.unit),
+      diff(r.best_ask_diff, r.unit === 'yld' ? r.best_ask_diff > 0 : r.best_ask_diff < 0, r.unit),
+      { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
+      r.implied ? { t: boardImpliedText(r), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' }].concat(opts.acts ? opts.acts(r) : []));
+    for (const b of houses(r)) {
+      lines.push(['', { t: '↳ ' + (b.by || 'kaynaksız'), k: 's', cls: 'brk', tip: (b.by || 'Kaynağı belli olmayan satırlar') + ': ' + r.label + ' kotası' },
+        { t: 'broker', k: 's', cls: 'soft' }, houseSide(b, r, 'bid'), houseAge(b, 'bid'), houseSide(b, r, 'ask'), houseAge(b, 'ask'),
+        when(b.time)].concat(new Array(header.length - 8).fill('')));
+    }
+  }
+  // the same rows and the same best prices: patched in place (the ages move); anything else rebuilds the table
+  const same = JSON.stringify([d.ranged, live, board.map((r) => [r.key, r.best_bid, r.best_ask, r.best_bid_by, r.best_ask_by, r.last, r.last_side, r.last_by, r.time,
+    r.said, r.our_bid, r.our_ask, r.our_time, r.our_stale, typeof r.mid === 'number', impliedText(r),
+    houses(r).map((b) => [b.by, b.bid, b.ask, b.bid_stale, b.ask_stale])])]);
+  return { header, lines, shown: board.length, same };
+}
+
 /** "İşlem gir": the level and our side of a chat line, then Günlük İşlemler with the trade filled - the amount is left to
  * type (``ctx.openTrade``).  From the log's ⇢ and from the list of the desk's trades not entered. */
 export function chatTradeDialog(q, ctx) {
@@ -584,6 +669,8 @@ export class BrokerPage {
       + 'söylendiği. Bayat sınırından eski kota en iyi sayılmaz: broker satırında soluk ve yaşıyla durur. Geri çekilen, işlemle alınan / verilen '
       + '(o seviyede ve daha iyi olanlar) ve tahta sıfırlanınca kalkan kota tahtadan iner. Bizim kotamız ayrı sütunda. Model: dashboard\'un kendi '
       + 'TRY OIS eğrisi (sizin senaryonuzla); farklar baz puan – en iyi bid model\'in üstünde ya da en iyi ask model\'in altındaysa vurgulanır.');
+    // the board on a launchpad, in the side drawer, in a window of its own - with this page's product and its houses' rows
+    this.board.tools.append(...boxTools(() => ({ type: 'broker-board', product: this.product, brokers: this.showBrokers || undefined, w: 12 }), this.ctx));
     // ---- log: the chat in the order it was said
     this.findInp = h('input', { type: 'search', class: 'inp', id: 'broker-find', placeholder: 'Ara: 18m, spread, isim…', autocomplete: 'off' });
     this.findInp.value = this.find;
@@ -616,9 +703,10 @@ export class BrokerPage {
     const count = h('span', { class: 'muted' });
     const cp = h('button', { class: 'iconbtn', type: 'button', title: 'Tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
     cp.addEventListener('click', () => { if (this.grids[id]) copyGrid(this.grids[id]); });
-    const head = h('header', null, h('h2', { title: hint || '' }, title), count, h('span', { class: 'grow' }), extra, h('div', { class: 'tools' }, cp));
+    const tools = h('div', { class: 'tools' }, cp);
+    const head = h('header', null, h('h2', { title: hint || '' }, title), count, h('span', { class: 'grow' }), extra, tools);
     const el = h('section', { class: 'panel wide', id: 'broker-' + id + '-panel' }, head, body);
-    return { el, body, count };
+    return { el, body, count, tools };
   }
 
   /**
@@ -674,81 +762,11 @@ export class BrokerPage {
     // ---- board: the brokers' best fresh bid and offer, each with its house and age - every house's own quotes under it
     for (const b of this.productSeg.children) b.classList.toggle('on', b.dataset.v === this.product);
     if (document.activeElement !== this.staleInp) this.staleInp.value = String(d.stale_minutes || 10);
-    const when = (stamp) => {
-      if (!stamp) return '';
-      const [day, time] = stamp.split(' ');
-      return d.ranged ? isoToTr(day).slice(0, 5) + ' ' + (time || '') : (time || day);
-    };
-    const live = !!d.live;
-    // a quote's age on a board of today; on a day gone by the time it was said
-    const age = (s, stamp) => (live && typeof s === 'number' ? ageText(s) : when(stamp));
-    const staleOf = (r, side) => (r.brokers || []).filter((b) => typeof b[side] === 'number' && b[side + '_stale']);
-    const staleTip = (r, side) => staleOf(r, side).map((b) => b.by + ' ' + level(b[side], r.unit) + ' · ' + ageText(b[side + '_age']) + ' önce').join('\n');
-    const name = (side) => (side === 'bid' ? 'bid' : 'offer');
-    const best = (r, side) => {
-      const v = r['best_' + side];
-      if (typeof v !== 'number') {
-        const stale = staleOf(r, side);
-        return { t: '', k: '', tip: stale.length ? 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) : '' };
-      }
-      return { t: level(v, r.unit), v, k: 'n', tip: 'En iyi ' + name(side) + ': ' + (r['best_' + side + '_by'] || 'kaynaksız') + ' · '
-        + when(r['best_' + side + '_time']) + (live ? ' (' + ageText(r['best_' + side + '_age']) + ' önce)' : '') };
-    };
-    // (centred: a text of its own column, never run over the empty ask beside it as a long text of the grid would)
-    const whose = (r, side) => {
-      if (typeof r['best_' + side] === 'number') {
-        return { t: (r['best_' + side + '_by'] || 'kaynaksız') + ' · ' + age(r['best_' + side + '_age'], r['best_' + side + '_time']), k: 's', cls: 'who', al: 'c' };
-      }
-      return staleOf(r, side).length ? { t: 'bayat', k: 's', cls: 'who stale', al: 'c', tip: 'Taze ' + name(side) + ' yok. Bayat (en iyi sayılmaz):\n' + staleTip(r, side) }
-        : { t: '', k: '' };
-    };
-    const diff = (v, through, unit) => (typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, unit === 'px' ? 3 : 1, false), v, k: 'n', cls: through ? 'thru' : '',
-      tip: (unit === 'px' ? 'DİBS: fiyat farkı (puan), bp değil – ekran fiyatına göre' : (unit === 'yld' ? 'Bono: getiri farkı (bp)' : ''))
-        + (through ? (unit === 'px' || unit === 'yld' ? '\n' : '') + 'Kota model seviyesinin öbür tarafında' : '') } : { t: '', k: '' });
-    const board = d.board.filter((r) => this.product === 'all' || r.product === this.product);
-    const ours = (r) => (typeof r.our_bid === 'number' || typeof r.our_ask === 'number'
-      ? { t: (typeof r.our_bid === 'number' ? level(r.our_bid, r.unit) : '') + ' / ' + (typeof r.our_ask === 'number' ? level(r.our_ask, r.unit) : ''),
-        k: 's', cls: 'ours' + (r.our_stale ? ' stale' : ''), tip: 'Bizim son kotamız · ' + when(r.our_time)
-          + (live && typeof r.our_age === 'number' ? ' (' + ageText(r.our_age) + ' önce' + (r.our_stale ? ', bayat' : '') + ')' : '') } : { t: '', k: '' });
-    // every house's own quotes under its instrument: when there are two or more, or one is stale (what the best cells leave out)
-    const houses = (r) => (this.showBrokers && ((r.brokers || []).length > 1 || (r.brokers || []).some((b) => b.bid_stale || b.ask_stale)) ? r.brokers : []);
-    const houseSide = (b, r, side) => (typeof b[side] === 'number' ? { t: level(b[side], r.unit), v: b[side], k: 'n', cls: b[side + '_stale'] ? 'stale' : '',
-      tip: b.by + ' ' + name(side) + ' · ' + when(b[side + '_time']) + (b[side + '_stale'] ? ' – bayat, en iyi sayılmaz' : '') } : { t: '', k: '' });
-    const houseAge = (b, side) => (typeof b[side] === 'number' ? { t: (b[side + '_stale'] ? 'bayat · ' : '') + age(b[side + '_age'], b[side + '_time']), k: 's',
-      cls: 'who' + (b[side + '_stale'] ? ' stale' : ''), al: 'c' } : { t: '', k: '' });
-    const lines = [];
-    for (const r of board) {
-      lines.push([r.product === 'DIBS' ? 'DİBS' : r.product, { t: r.label, k: 's', b: 1, tip: instTip(r) || r.isin || '' }, kindText(r),
-        best(r, 'bid'), whose(r, 'bid'), best(r, 'ask'), whose(r, 'ask'),
-        when(r.time), typeof r.last === 'number' ? { t: level(r.last, r.unit) + (r.last_by === 'biz' ? ' · biz' : ''), v: r.last, k: 'n',
-          cls: r.last_side === 'ask' ? 'buy' : (r.last_side === 'bid' ? 'sell' : ''),
-          tip: when(r.last_time) + (r.last_side === 'ask' ? ' · offer alındı' : (r.last_side === 'bid' ? ' · bid\'e verildi' : ''))
-            + (r.last_by === 'biz' ? ' · bizim işlemimiz' : (r.last_src ? ' · ' + r.last_src : '')) } : { t: '', k: '' },
-        ours(r),
-        typeof r.mid === 'number' ? { t: num(r.mid, r.unit === 'px' ? 3 : (r.unit === 'pct' || r.unit === 'yld' ? 2 : 1), false), v: r.mid, k: 'n', cls: 'soft',
-          tip: r.product === 'DIBS' ? 'DİBS RV ekranındaki ' + (r.unit === 'yld' ? 'getiri' : 'temiz fiyat')
-            : (r.kind === 'mpc' ? 'OIS sayfasındaki "MPC OIS" tablosunun bootstrap seviyesi (Günlük İşlemler\'in MPC formundaki piyasa)' : '') } : { t: '', k: '' },
-        // through the model: a bid above it, an ask below it - in yield the other way round (a bid's yield below the model's)
-        diff(r.best_bid_diff, r.unit === 'yld' ? r.best_bid_diff < 0 : r.best_bid_diff > 0, r.unit),
-        diff(r.best_ask_diff, r.unit === 'yld' ? r.best_ask_diff > 0 : r.best_ask_diff < 0, r.unit),
-        { t: r.said || '', k: 's', cls: 'said short', tip: r.said || '' },
-        r.implied ? { t: boardImpliedText(r), k: 's', cls: 'soft', tip: impliedTip(r) } : { t: '', k: '' },
-        { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
-        { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }]);
-      for (const b of houses(r)) {
-        lines.push(['', { t: '↳ ' + (b.by || 'kaynaksız'), k: 's', cls: 'brk', tip: (b.by || 'Kaynağı belli olmayan satırlar') + ': ' + r.label + ' kotası' },
-          { t: 'broker', k: 's', cls: 'soft' }, houseSide(b, r, 'bid'), houseAge(b, 'bid'), houseSide(b, r, 'ask'), houseAge(b, 'ask'),
-          when(b.time), '', '', '', '', '', '', '', '', '']);
-      }
-    }
-    this.setGrid('board', this.board,
-      ['Ürün', 'Enstrüman', 'Tür', 'Bid', 'Bid · kimde', 'Ask', 'Ask · kimde', 'Saat', 'Son işlem', 'Bizim kota', 'Model', 'Bid − model (bp)', 'Ask − model (bp)',
-        'Son mesaj', 'İma (TRY % / getiri / PPK adımı)', '', ''],
-      lines, d.board.length ? board.length + ' enstrüman' : '', d.board.length ? 'Bu üründe kota yok' : 'Henüz kota yok – soldaki kutuya chat\'i yapıştırın',
-      // the same rows and the same best prices: patched in place (the ages move); anything else rebuilds the table
-      JSON.stringify([d.ranged, live, board.map((r) => [r.key, r.best_bid, r.best_ask, r.best_bid_by, r.best_ask_by, r.last, r.last_side, r.last_by, r.time,
-        r.said, r.our_bid, r.our_ask, r.our_time, r.our_stale, typeof r.mid === 'number', impliedText(r),
-        houses(r).map((b) => [b.by, b.bid, b.ask, b.bid_stale, b.ask_stale])])]));
+    const t = boardTable(d, { product: this.product, brokers: this.showBrokers, acts: (r) => [
+      { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
+      { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }] });
+    this.setGrid('board', this.board, t.header, t.lines, d.board.length ? t.shown + ' enstrüman' : '',
+      d.board.length ? 'Bu üründe kota yok' : 'Henüz kota yok – soldaki kutuya chat\'i yapıştırın', t.same);
     // resets of the board in what is shown, the last one can be taken back
     clear(this.resetInfo);
     const resets = d.resets || [];

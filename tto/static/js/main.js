@@ -31,6 +31,8 @@ import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
 import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing, setLanding, pinToDrawer, addMenu } from './layout.js';
+import './pageboxes.js';                          // (the boxes of the dashboard's own pages join the launchpad's kinds)
+import { boxEvent, PopBoxPage, popBoxHash, popBoxItem } from './pagebox.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
@@ -492,6 +494,7 @@ function openWindow(hash, name) {
 
 /** A table (with its part, its name) in a window of its own: "#/pop/<page>/<table>?part={rows, cols, all, title}". */
 function openPop(src) {
+  if (src.type && src.type !== 'table') return openWindow(popBoxHash(src), 'tto-pop-' + popBoxHash(src));      // a box of a page
   const part = {};
   if (src.rows && src.rows.length) part.rows = src.rows;
   if (src.cols && src.cols.length) part.cols = src.cols;
@@ -522,6 +525,9 @@ function routePop() {
   if (parts[1] === 'launchpad' && parts.length > 2) {
     state.pageId = 'launchpad';
     page = new LaunchpadPage(host, ctx, { pop: true, name: parts.slice(2).join('/') });
+  } else if (parts[1] === 'box' && parts[2]) {
+    state.pageId = 'pop';
+    page = new PopBoxPage(host, ctx, popBoxItem(parts[2], query));
   } else if (parts[1] && parts[2]) {
     let part = {};
     try { part = JSON.parse(query.get('part') || '{}') || {}; } catch (e) { part = {}; }
@@ -672,7 +678,7 @@ const events = {
     this.chan = new BroadcastChannel('tto-events');
     this.chan.onmessage = (e) => {
       const m = e.data || {};
-      if (typeof m.gen === 'number') { onGen(m.gen); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); } }
+      if (typeof m.gen === 'number') { onGen(m.gen); boxEvent(m); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); } }
       else if (m.online === false) setOnline(false);
       else if (m.online === true) { if (!POP) deskReconnected(); onBack(); }
     };
@@ -716,6 +722,7 @@ const events = {
       try { msg = JSON.parse(e.data); } catch (x) { return; }
       if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant });
       onGen(msg.gen);
+      boxEvent(msg);                       // the boxes of the quant pages: the results' version (a window of its own too)
       if (POP) return;
       deskEvent(msg.desk);                 // the chat, the reports, the agenda: their own counters (no new generation)
       quantEvent(msg.quant);               // the quant signals: a new result, a signal alert

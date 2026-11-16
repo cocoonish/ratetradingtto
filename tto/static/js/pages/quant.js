@@ -15,6 +15,7 @@ import { PATH_PAGES } from './quantpath.js';          // İma Patikası, TCMB WI
 import { LEAD_PAGES } from './quantlead.js';          // Öncü-Takipçi
 import { VIOP_PAGES } from './quantviop.js';          // VİOP
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
+import { boxTools } from '../pagebox.js';
 
 // ------------------------------------------------------------------------------------------------ Sinyaller
 const FAMILY_PREF = 'tto.quant.family', ASSET_PREF = 'tto.quant.asset';
@@ -44,6 +45,8 @@ class SignalsPage extends QuantPage {
       + '1 mn baz döviz başına kote para biriminde (USDTRY: TRY, EURUSD: USD); faiz: bp (TL karşılığı ipucunda, ana bacak DV01\'iyle). Satıra tıklayın: '
       + 'işlemin düz anlatımı, seri, bantlar ve giriş / hedef / stop aşağıda. Backtest değildir.';
     this.boxes.signals = new GridBox(list, 'quant/signals', (sid) => this.pick(sid));
+    // the list on a launchpad, in the side drawer, in a window of its own - with this page's filter
+    list.tools.append(...boxTools(() => ({ type: 'quant-signals', family: this.family || undefined, asset: this.asset || undefined, w: 12 }), this.ctx));
     const chartPanel = panel('quant-chart', 'Seçili sinyal');
     this.chart = new SignalChart(chartPanel.body);
     const gated = panel('quant-gated', 'Elenen sinyaller (eşiği geçti, bir kapı tuttu)', { cls: 'aux' });
