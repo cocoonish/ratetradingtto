@@ -218,13 +218,55 @@ def forward_dv01(direction: str, amount: float, forward: float, days: float, spo
     return {"tl": tl, "usd": usd, "usd_leg": usd_leg}
 
 
+#: currencies without a minor unit (ISO 4217): an amount worked out in one of them is a whole number
+WHOLE_UNITS = ("JPY", "KRW", "CLP", "ISK", "VND")
+
+
+def ccy_round(x: float, ccy: str) -> float:
+    """An amount worked out in ``ccy`` to the unit it settles in: cents (whole yen) - half away from zero."""
+    k = 1.0 if ccy in WHOLE_UNITS else 100.0
+    return _round_half_away(x * k) / k
+
+
+def typed_amount(payload: Dict[str, Any]) -> Optional[Tuple[str, float]]:
+    """The amount a forward was entered with: ``("base", x)`` in the pair's first currency (USD of USDTRY - the
+    blotter's amount), ``("quote", x)`` in its second (TRY of USDTRY, USD of EURUSD: a minor-currency entry); ``None``
+    when neither is there.  Both at once, or one that is not above zero: :class:`TradeError`."""
+    base, quote = payload.get("amount"), payload.get("quote_amount")
+    if type(base) is float and type(quote) is float:
+        raise TradeError("tutar ya dövizde ya karşı parada yazılır: ikisinden birini boş bırakın")
+    if type(quote) is float:
+        if not quote > 0:
+            raise TradeError("karşı tutar pozitif bir sayı olmalı")
+        return "quote", quote
+    if type(base) is float:
+        if not base > 0:
+            raise TradeError("tutar pozitif bir sayı olmalı")
+        return "base", base
+    return None
+
+
+def forward_amounts(typed: Tuple[str, float], forward: float, base_ccy: str) -> Tuple[float, float]:
+    """(amount in the pair's first currency, amount in its second) of a forward entered with ``typed``
+    (:func:`typed_amount`) at the all-in ``forward``: the side typed is kept as it is; the other follows from the rate -
+    a first-currency amount worked out is rounded to its currency's unit (:func:`ccy_round`)."""
+    side, x = typed
+    if side == "quote":
+        return ccy_round(x / forward, base_ccy), x
+    return x, x * forward
+
+
 def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate + price a forward trade as typed in the entry form; returns the record to store."""
+    """Validate + price a forward trade as typed in the entry form; returns the record to store.
+
+    The amount is typed in either currency of the pair: ``amount`` in the first (the blotter's own), ``quote_amount``
+    in the second - the record is a trade of the first currency all the same (``amount``; ``tl`` is the second
+    currency's amount), with the side typed and its amount beside it (``typed``, ``typed_amount``)."""
     direction = str(payload.get("dir", "")).upper()
     if direction not in ("B", "S"):
         raise TradeError("yön B (alış) ya da S (satış) olmalı")
-    amount = payload.get("amount")
-    if type(amount) is not float or amount <= 0:
+    typed = typed_amount(payload)
+    if typed is None:
         raise TradeError("tutar pozitif bir sayı olmalı")
     vd = payload.get("value_date")
     if type(vd) is not float:
@@ -235,18 +277,32 @@ def forward_trade(book, overlay, payload: Dict[str, Any]) -> Dict[str, Any]:
     own = payload.get("spot_date")
     p = price_forward(book, overlay, vd, basis, manual if type(manual) is float else None, payload.get("pair") or "USDTRY",
                       spot if type(spot) is float else None, own if type(own) is float else None)
+    amount, counter = forward_amounts(typed, p["forward"], p["base"])
+    if not amount > 0:
+        raise TradeError("karşı tutar %s tutarına çevrilemeyecek kadar küçük" % p["base"])
     rec = {
         "pair": p["pair"], "dir": direction, "amount": amount, "value_date": vd, "basis": basis,
         "manual": manual if type(manual) is float else None,
         "days": p["days"], "spot": p["spot"], "usd_rate": p["usd_rate"], "try_rate": p["try_rate"],
-        "forward": p["forward"], "points": p["points"], "tl": amount * p["forward"],
+        "forward": p["forward"], "points": p["points"], "tl": counter,
         "df_try": p.get("df_try"), "df_usd": p.get("df_usd"), "usdtry": p.get("usdtry"),
         "cpt": str(payload.get("cpt") or "").strip()[:40], "note": str(payload.get("note") or "").strip()[:200],
+        "typed": typed[0], "typed_amount": typed[1],
     }
     risk = forward_dv01(direction, amount, p["forward"], p["days"], p.get("usdtry"), p.get("df_try"), p.get("df_usd"),
                         p["try_rate"] if p["quote"] == "TRY" else None, p["usd_rate"])
     rec.update({"dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]})
     return rec
+
+
+def entered_as(t: Dict[str, Any]) -> Tuple[str, Optional[float], str]:
+    """How a stored forward was entered: (side, amount typed, its currency) - a trade of an earlier version was typed
+    in the pair's first currency."""
+    pair = str(t.get("pair") or "USDTRY").upper()
+    if t.get("typed") == "quote" and type(t.get("typed_amount")) is float:
+        return "quote", t["typed_amount"], pair[3:]
+    amount = t.get("amount")
+    return "base", amount if type(amount) is float else None, pair[:3]
 
 
 # ---------------------------------------------------------------------------------------------- OIS

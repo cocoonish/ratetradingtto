@@ -26,6 +26,7 @@ from . import blotter as bl
 from . import bonds as bd
 from . import borsaspread as bsp
 from . import brokerchat as bc
+from . import entry
 from . import extras as ex
 from . import layout as lay
 from . import quotes as qt
@@ -3265,6 +3266,7 @@ class Service(object):
                                "can_enter": date <= today <= date_to,
                                "cost": bl.summarise(trades), "risk": bl.risk_summary(trades),
                                "dates": self.store.trade_dates(), "gen": self.gen, "tenors": bl.OIS_TENORS}
+        out.update(self._templates(user))              # what the entry form can be filled from (Şablonlar)
         loc = numfmt.get_locale(locale or self.settings.locale)
         if ranged:
             out["sheet"] = []                          # the workbook's summary tables belong to a single day
@@ -3424,14 +3426,16 @@ class Service(object):
 
         trades = data["trades"]
         fw = [t for t in trades if t["kind"] == "fwd"]
-        # the pair comes last: the columns before it are where they were when every forward was USDTRY
+        # the pair comes last: the columns before it are where they were when every forward was USDTRY; after it, what
+        # was typed (a minor-currency entry: the TRY amount of a USDTRY forward - the trade is in USD all the same)
         table("Forward", lead + ["Saat", "Kullanıcı", "Yön", "Tutar (döviz)", "Valör", "Gün", "TRY faizi", "Forward", "TL tutarı",
-                                 "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı", "DV01 (TL)", "DV01 ($)", "Parite", "Swap puanı"],
+                                 "Fiyatlama", "Karşı taraf", "Not", "O/N karşılığı", "DV01 (TL)", "DV01 ($)", "Parite", "Swap puanı",
+                                 "Girilen tutar", "Girilen döviz"],
               [when(t) + [clock(t), who(t), "ALIŞ" if t["dir"] == "B" else "SATIŞ", t.get("amount"), t.get("value_date"), t.get("days"),
                           t.get("try_rate"), t.get("forward"), t.get("tl"), basis.get(t.get("basis"), t.get("basis") or ""),
                           t.get("cpt") or "", t.get("note") or "", t.get("on_rate"), t.get("dv01_tl"), t.get("dv01"),
-                          t.get("pair") or "USDTRY", t.get("points")] for t in fw],
-              lead_fmt + [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3, INT, INT, None, INT])
+                          t.get("pair") or "USDTRY", t.get("points")] + list(bl.entered_as(t)[1:]) for t in fw],
+              lead_fmt + [None, None, None, INT, DATE, INT, P3, FX, AMT, None, None, None, P3, INT, INT, None, INT, AMT, None])
         seen = set()
         ois_rows = []
         for t in (x for x in trades if x["kind"] == "ois"):
@@ -3613,6 +3617,16 @@ class Service(object):
             p["amount"] = n
         elif isinstance(amt, (int, float)):
             p["amount"] = float(amt)
+        # the amount in the pair's second currency (TRY of USDTRY): a minor-currency entry
+        qa = p.get("quote_amount")
+        if isinstance(qa, str):
+            p["quote_amount"] = parse_amount(qa, lang)
+            if p["quote_amount"] is None and qa.strip():
+                raise ServiceError("karşı tutar anlaşılamadı: %r (örn. 500m ya da 500.000.000)" % qa)
+        elif isinstance(qa, bool) or not isinstance(qa, (int, float)):
+            p["quote_amount"] = None
+        else:
+            p["quote_amount"] = float(qa)
         man = p.get("manual")
         basis = str(p.get("basis", "RET_MID")).upper()
         if isinstance(man, str):
@@ -3650,11 +3664,17 @@ class Service(object):
                                  p.get("spot") if type(p.get("spot")) is float else None, p["spot_date"])
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
-        amount = p.get("amount")
+        try:
+            typed = bl.typed_amount(p)
+        except bl.TradeError:
+            typed = None                          # (still being typed: the risk per 1 mn until it is an amount)
         direction = "S" if str(p.get("dir", "B")).upper() == "S" else "B"
-        if type(amount) is float and amount > 0:
+        amount = None
+        if typed is not None:
+            # the side typed stays as it is, the other follows from this forward (a rate typed again moves only that one)
+            amount, q["tl"] = bl.forward_amounts(typed, q["forward"], q["base"])
             q["amount"] = amount
-            q["tl"] = amount * q["forward"]
+            q["typed"], q["typed_amount"] = typed
         size = amount if type(amount) is float and amount > 0 else 1e6           # no amount yet: per 1 mn of the currency
         q["dv01"] = bl.forward_dv01(direction, size, q["forward"], q["days"], q.get("usdtry"), q.get("df_try"), q.get("df_usd"),
                                     q["try_rate"] if q["quote"] == "TRY" else None, q.get("usd_rate"))
@@ -3764,6 +3784,14 @@ class Service(object):
         return res
 
     def _add_ois(self, user, payload, lang=None) -> Dict[str, Any]:
+        q, recs, package = self._ois_records(user, payload, lang)
+        ids = self.store.add_trades(self.today_iso(), "ois", recs, user, package)     # every leg, or none
+        self._sync_blotter()
+        q["ids"] = ids
+        return q
+
+    def _ois_records(self, user, payload, lang=None) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[str]]:
+        """An OIS trade as the form sends it, priced and checked: (its quote, the records of its legs, their package)."""
         book = self._book("tto")
         try:
             q = bl.ois_legs(self._ois_curve(user, book), self._ois_payload(payload, lang))
@@ -3780,10 +3808,7 @@ class Service(object):
             if lg.get("mpc"):
                 rec["mpc"] = lg["mpc"]
             recs.append(rec)
-        ids = self.store.add_trades(self.today_iso(), "ois", recs, user, package)     # every leg, or none
-        self._sync_blotter()
-        q["ids"] = ids
-        return q
+        return q, recs, package
 
     def _bond_payload(self, payload: Dict[str, Any], lang: Optional[str]) -> Tuple[str, Optional[float], Optional[float]]:
         lang = lang or self.settings.locale
@@ -3823,6 +3848,15 @@ class Service(object):
 
     def add_bond(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
+        rec = self._bond_record(user, payload, lang)
+        tid = self.store.add_trade(self.today_iso(), "bond", rec, user)
+        self.et.call_at(EngineThread.WRITE, self._sync_blotter)
+        self.bump()
+        rec["id"] = tid
+        return rec
+
+    def _bond_record(self, user: str, payload: Dict[str, Any], lang: Optional[str]) -> Dict[str, Any]:
+        """A bond trade as the form sends it, checked, with its DV01: the record to keep."""
         inst, amount, price = self._bond_payload(payload, lang)
         if not inst:
             raise ServiceError("enstrüman gerekli")
@@ -3831,14 +3865,162 @@ class Service(object):
         if price is None or price <= 0:
             raise ServiceError("fiyat gerekli")
         rec = {"instrument": inst, "amount": amount, "price": price, "note": str(payload.get("note") or "").strip()[:200]}
-        risk = self.et.call(self._bond_risk, user, inst, amount)
+        risk = self.et.call(self._bond_risk, user, inst, amount)           # (in place when on the calculation thread)
         rec.update({"dv01_tl": risk["dv01_tl"], "dv01": risk["dv01"],
                     "name": (risk["info"] or {}).get("name") if risk["known"] else None})
-        tid = self.store.add_trade(self.today_iso(), "bond", rec, user)
-        self.et.call_at(EngineThread.WRITE, self._sync_blotter)
-        self.bump()
-        rec["id"] = tid
         return rec
+
+    # ------------------------------------------------------------------ the entry form's templates ("Şablonlar")
+    #: templates a user may keep, and the desk
+    TEMPLATES_MAX = 100
+
+    def trade_templates(self, user: Optional[str]) -> Dict[str, Any]:
+        """The templates the user fills the entry form from: their own first, then the desk's (an administrator's)."""
+        return self._templates(self.require_user(user))
+
+    def _templates(self, user: Optional[str]) -> Dict[str, Any]:
+        admin = self.desk.is_admin(user)
+        names = {u["name"]: u["display"] for u in self.store.users()}
+        rows = sorted(self.store.trade_templates(user), key=lambda r: (r["owner"] is None, entry.fold(r["name"]), r["id"]))
+        return {"can_publish": admin,
+                "templates": [{"id": r["id"], "name": r["name"], "kind": r["kind"], "spec": r["spec"], "shared": r["owner"] is None,
+                               "by": names.get(r["created_by"], r["created_by"]), "updated_at": r["updated_at"],
+                               "can_edit": r["owner"] is not None or admin} for r in rows]}
+
+    def _template_to_change(self, user: str, tid: Any, admin: bool) -> Dict[str, Any]:
+        """A template the user may change: their own; the desk's when they are an administrator."""
+        try:
+            row = self.store.trade_template(int(tid))
+        except (TypeError, ValueError):
+            row = None
+        if row is None or row["owner"] not in (None, user):
+            raise ServiceError("şablon bulunamadı", 404)
+        if row["owner"] is None and not admin:
+            raise ServiceError("masa şablonunu yalnızca bir yönetici değiştirebilir", 403)
+        return row
+
+    def save_trade_template(self, user: Optional[str], name: Any, kind: Any, spec: Any, shared: Any = False,
+                            tid: Any = None) -> Dict[str, Any]:
+        """A template kept (``tid`` None) or changed: its name, product and spec (:func:`entry.clean_spec`) - one's own,
+        or the desk's (``shared``: an administrator's to publish, for everyone to fill the form from).  ``None`` for
+        any of ``name`` / ``kind`` / ``spec`` / ``shared`` of a template changed keeps what it had (a rename)."""
+        user = self.require_user(user)
+        admin = self.desk.is_admin(user)
+        row = self._template_to_change(user, tid, admin) if tid is not None else None
+        if row is not None:
+            name = row["name"] if name is None else name
+            kind = row["kind"] if kind is None else kind
+            spec = row["spec"] if spec is None else spec
+            shared = (row["owner"] is None) if shared is None else shared
+        name = " ".join(str(name or "").split())
+        if not name:
+            raise ServiceError("şablon adı gerekli")
+        if len(name) > 60:
+            raise ServiceError("şablon adı en fazla 60 karakter olabilir")
+        try:
+            spec = entry.clean_spec(str(kind or ""), spec)
+        except entry.EntryError as exc:
+            raise ServiceError(str(exc))
+        owner = None if _flag(shared) else user
+        if owner is None and not admin:
+            raise ServiceError("masa şablonunu yalnızca bir yönetici yayımlayabilir", 403)
+        with self.store.transaction():                     # the name looked up and the row written in one go
+            mine = [r for r in self.store.trade_templates(user) if r["owner"] == owner and (row is None or r["id"] != row["id"])]
+            twin = [r for r in mine if entry.fold(r["name"]) == entry.fold(name)]
+            if twin:
+                raise ServiceError("bu adla bir şablon var: %s" % twin[0]["name"], 409)
+            if row is None:
+                if len(mine) >= self.TEMPLATES_MAX:
+                    raise ServiceError("en fazla %d şablon tutulur: önce birini silin" % self.TEMPLATES_MAX)
+                saved = self.store.add_trade_template(owner, name, spec["kind"], spec, user)
+            else:
+                self.store.update_trade_template(row["id"], user, name=name, kind=spec["kind"], spec=spec, owner=owner)
+                saved = row["id"]
+        if owner is None or (row is not None and row["owner"] is None):
+            self.bump()                                    # the desk's: on everyone's page at once
+        return dict(self._templates(user), saved=saved)
+
+    def delete_trade_template(self, user: Optional[str], tid: Any) -> Dict[str, Any]:
+        user = self.require_user(user)
+        row = self._template_to_change(user, tid, self.desk.is_admin(user))
+        self.store.delete_trade_template(row["id"])
+        if row["owner"] is None:
+            self.bump()
+        return dict(self._templates(user), deleted=row["id"])
+
+    # ------------------------------------------------------------------ rows pasted from Excel ("Excel'den yapıştır")
+    def bulk_preview(self, user: Optional[str], kind: Any, text: Any, mapping: Any = None, header: Any = None,
+                     lang: Optional[str] = None) -> Dict[str, Any]:
+        """Rows copied from Excel read as trades of one product (:func:`entry.read_paste`) and each priced with the
+        form's own checks: what would be kept (``ok``, ``trade``) and why not (``error``) - nothing is kept."""
+        user = self.require_user(user)
+        return self.et.call(self._bulk, user, kind, text, mapping, header, lang)
+
+    def bulk_save(self, user: Optional[str], kind: Any, text: Any, mapping: Any = None, header: Any = None,
+                  rows: Any = None, lang: Optional[str] = None) -> Dict[str, Any]:
+        """Keep the valid rows of a paste - all of them in one transaction, or none.  ``rows``: the lines the preview
+        showed as valid (what the user saw): if any of them is not valid now (a market moved, the text changed) nothing
+        is kept (409, with the preview as it is now).  A row with an error is never kept; it is listed (``errors``)."""
+        user = self.require_user(user)
+        res = self.et.call_at(EngineThread.WRITE, self._bulk, user, kind, text, mapping, header, lang, True, rows)
+        self.bump()
+        return res
+
+    def _bulk(self, user, kind, text, mapping=None, header=None, lang=None, save=False, confirmed=None) -> Dict[str, Any]:
+        try:
+            paste = entry.read_paste(text if isinstance(text, str) else "", str(kind or ""), mapping,
+                                     None if header is None else _flag(header))
+        except entry.EntryError as exc:
+            raise ServiceError(str(exc))
+        lang = lang or self.settings.locale
+        found: Dict[int, List[Tuple[str, Dict[str, Any], Optional[str]]]] = {}
+        for row in paste["rows"]:
+            try:
+                if paste["problems"]:
+                    raise entry.EntryError("sütunlar: " + "; ".join(paste["problems"]))
+                payload = entry.row_payload(paste["kind"], paste["columns"], row["cells"])
+                found[row["n"]], row["trade"] = self._bulk_row(user, paste["kind"], payload, lang)
+                row["ok"] = True
+            except (entry.EntryError, bl.TradeError, ServiceError) as exc:
+                row.update(ok=False, error=str(exc))
+        paste["valid"] = len(found)
+        paste["invalid"] = len(paste["rows"]) - len(found)
+        if not save:
+            return paste
+        if confirmed is None:
+            keep = [r["n"] for r in paste["rows"] if r["ok"]]
+        else:
+            try:
+                wanted = {int(n) for n in confirmed}
+            except (TypeError, ValueError):
+                raise ServiceError("satır listesi anlaşılamadı")
+            gone = sorted(n for n in wanted if n not in found)
+            if gone:
+                raise ServiceError("önizlemeden sonra geçerliliğini yitiren satır var (%s): hiçbir satır kaydedilmedi, yeniden bakın"
+                                   % ", ".join("%d. satır" % n for n in gone), 409, data={"preview": paste})
+            keep = [r["n"] for r in paste["rows"] if r["n"] in wanted]
+        if not keep:
+            raise ServiceError("kaydedilecek geçerli satır yok", data={"preview": paste})
+        ids = self.store.add_trade_batch(self.today_iso(), [item for n in keep for item in found[n]], user)   # all, or none
+        self._sync_blotter()
+        return {"saved": len(keep), "rows": keep, "ids": ids, "kind": paste["kind"],
+                "errors": [{"n": r["n"], "error": r["error"]} for r in paste["rows"] if not r["ok"]],
+                "left": [r["n"] for r in paste["rows"] if r["n"] not in set(keep)]}
+
+    def _bulk_row(self, user: str, kind: str, payload: Dict[str, Any], lang: str) -> Tuple[List[Tuple[str, Dict[str, Any], Optional[str]]], Dict[str, Any]]:
+        """One pasted row priced as the form prices it: (what to keep - ``(kind, record, package)`` each -, what to show)."""
+        if kind == "fwd":
+            book = self._book("tto")
+            try:
+                rec = bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload, lang))
+            except bl.TradeError as exc:
+                raise ServiceError(str(exc))
+            return [("fwd", rec, None)], rec
+        if kind == "ois":
+            q, recs, package = self._ois_records(user, payload, lang)
+            return [("ois", r, package) for r in recs], {"label": q["label"], "legs": q["legs"], "info": q["info"], "dv01": q["dv01"]}
+        rec = self._bond_record(user, payload, lang)
+        return [("bond", rec, None)], rec
 
     # ================================================================== what Bloomberg does not know
     #: what a ticker of a known shape is, when Bloomberg does not know it

@@ -688,6 +688,35 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def delete_trade(request: Request):
         return ok(await call(svc().delete_trade, _user(request), int(request.path_params["trade_id"])))
 
+    @handler
+    async def blotter_templates(request: Request):
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call_free(svc().save_trade_template, _user(request), data.get("name"), data.get("kind"),
+                                      data.get("spec"), data.get("shared")))
+        return ok(await call_free(svc().trade_templates, _user(request)))
+
+    @handler
+    async def blotter_template(request: Request):
+        tid = request.path_params["tid"]
+        if request.method == "DELETE":
+            return ok(await call_free(svc().delete_trade_template, _user(request), tid))
+        data = await _body(request)                     # what is left out stays as it was (a rename: the name alone)
+        return ok(await call_free(svc().save_trade_template, _user(request), data.get("name"), data.get("kind"),
+                                  data.get("spec"), data.get("shared"), tid))
+
+    @handler
+    async def bulk_preview(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().bulk_preview, _user(request), data.get("kind"), data.get("text"), data.get("mapping"),
+                             data.get("header"), _lang(request)))
+
+    @handler
+    async def bulk_save(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().bulk_save, _user(request), data.get("kind"), data.get("text"), data.get("mapping"),
+                             data.get("header"), data.get("rows"), _lang(request)))
+
     # ------------------------------------------------------------------ history: closes, meeting pricing, calendar
     def _int(request: Request, name: str, default: Optional[int] = None) -> Optional[int]:
         raw = request.query_params.get(name)
@@ -1089,6 +1118,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/quote/bond", quote_bond, methods=["POST"]),
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
+        Route("/api/blotter/templates", blotter_templates, methods=["GET", "POST"]),
+        Route("/api/blotter/templates/{tid:int}", blotter_template, methods=["POST", "DELETE"]),
+        Route("/api/blotter/bulk/preview", bulk_preview, methods=["POST"]),
+        Route("/api/blotter/bulk", bulk_save, methods=["POST"]),
         Route("/api/history/status", history_status),
         Route("/api/history/sync", history_sync, methods=["POST"]),
         Route("/api/history/settings", history_settings, methods=["POST"]),

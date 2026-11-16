@@ -84,6 +84,10 @@ CREATE INDEX IF NOT EXISTS agenda_rule_days_day ON agenda_rule_days (day);
 CREATE TABLE IF NOT EXISTS agenda_snoozes (
     user TEXT NOT NULL, rule INTEGER NOT NULL, day TEXT NOT NULL, until TEXT NOT NULL,
     PRIMARY KEY (user, rule, day)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS trade_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, name TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
+    created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS trade_templates_owner ON trade_templates (owner);
 """
 
 
@@ -726,6 +730,13 @@ class Store(object):
         with self.transaction():
             return [self.add_trade(trade_date, kind, p, user, package) for p in payloads]
 
+    def add_trade_batch(self, trade_date: str, items: List[Tuple[str, Dict[str, Any], Optional[str]]],
+                        user: Optional[str]) -> List[int]:
+        """Trades of any kind - ``(kind, payload, package)`` each, rows pasted at once - in one transaction: all of
+        them are kept, or - on any error - none."""
+        with self.transaction():
+            return [self.add_trade(trade_date, kind, p, user, package) for kind, p, package in items]
+
     def update_trade(self, trade_id: int, payload: Dict[str, Any], user: Optional[str]) -> bool:
         with self._lock:
             cur = self._db.execute("UPDATE trades SET payload=?, updated_by=?, updated_at=? WHERE id=? AND deleted=0",
@@ -872,6 +883,44 @@ class Store(object):
         d = json.loads(rows[0]["payload"])
         d["snapshot_at"] = rows[0]["updated_at"]
         return d
+
+    # ------------------------------------------------------------------ trade templates (Günlük İşlemler's "Şablonlar")
+    @staticmethod
+    def _template_row(r) -> Dict[str, Any]:
+        return {"id": r["id"], "owner": r["owner"], "name": r["name"], "kind": r["kind"], "spec": json.loads(r["payload"]),
+                "created_by": r["created_by"], "created_at": r["created_at"], "updated_by": r["updated_by"],
+                "updated_at": r["updated_at"]}
+
+    def trade_templates(self, user: Optional[str]) -> List[Dict[str, Any]]:
+        """The templates a user may fill the entry form from: their own (``owner``) and the desk's (``owner`` NULL)."""
+        rows = self._q("SELECT * FROM trade_templates WHERE owner IS NULL OR owner=? ORDER BY id", (user,))
+        return [self._template_row(r) for r in rows]
+
+    def trade_template(self, tid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM trade_templates WHERE id=?", (tid,))
+        return self._template_row(rows[0]) if rows else None
+
+    def add_trade_template(self, owner: Optional[str], name: str, kind: str, spec: Dict[str, Any], user: str) -> int:
+        ts = now_iso()
+        return self._x("INSERT INTO trade_templates (owner, name, kind, payload, created_by, created_at, updated_by, updated_at) "
+                       "VALUES (?,?,?,?,?,?,?,?)", (owner, name, kind, json.dumps(spec, ensure_ascii=False), user, ts, user, ts))
+
+    def update_trade_template(self, tid: int, user: str, **fields: Any) -> bool:
+        """Change a template: ``name``, ``kind``, ``spec``, ``owner`` (None: the desk's)."""
+        sets, args = [], []
+        for k, v in fields.items():
+            if k not in ("name", "kind", "spec", "owner"):
+                raise ValueError("bilinmeyen alan: %s" % k)
+            sets.append("%s=?" % ("payload" if k == "spec" else k))
+            args.append(json.dumps(v, ensure_ascii=False) if k == "spec" else v)
+        sets += ["updated_by=?", "updated_at=?"]
+        with self._lock:
+            cur = self._db.execute("UPDATE trade_templates SET %s WHERE id=?" % ", ".join(sets), tuple(args) + (user, now_iso(), tid))
+            return cur.rowcount > 0
+
+    def delete_trade_template(self, tid: int) -> bool:
+        with self._lock:
+            return self._db.execute("DELETE FROM trade_templates WHERE id=?", (tid,)).rowcount > 0
 
     # ------------------------------------------------------------------ cells that move with their meeting
     def remap_user_cells(self, book: str, mapping: Dict[str, Optional[str]]) -> Dict[str, int]:
