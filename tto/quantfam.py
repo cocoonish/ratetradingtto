@@ -342,7 +342,7 @@ class Ctx(object):
                 key = "XR:" + pair
                 self.series[key] = xr
                 g = (self.meta.get("FX:" + pair) or {}).get("group") or "FX"
-                self.meta[key] = {"label": "%s forward (carry dahil)" % pair, "kind": "xr", "group": g, "asset": "FX", "pair": pair}
+                self.meta[key] = {"label": "%s forward pozisyonu" % pair, "kind": "xr", "group": g, "asset": "FX", "pair": pair}
                 if last_c is not None:
                     self._xr_last[pair] = last_c
 
@@ -530,6 +530,17 @@ class Monitor(object):
         self.explicit: bool = bool(kw.get("explicit", False))
         self.pkg_name: Optional[str] = kw.get("pkg_name")
         self.packages: List[Dict[str, Any]] = kw.get("packages") or []
+        # an FX trade told in the prices of what is traded (:func:`fx_trade`): how the level reads as that price - None:
+        # the forward of the holding (its value date the holding's end), the level moving in per cent of it (an
+        # excess-return index, a deviation in log %); "level": the level is the price (a spot, the 3M forward); a
+        # function (level, fx info) -> price -, the instrument when it is not the holding's forward (its name, its
+        # length in calendar days), what the expected P&L's per cent is a per cent of ("inst": the instrument's price,
+        # a log return; "spot": the spot, a simple one) and what the drawn series is, when it is not that price
+        self.price: Any = kw.get("price")
+        self.inst: Optional[str] = kw.get("inst")
+        self.inst_days: Optional[float] = kw.get("inst_days")
+        self.pct_base: str = kw.get("pct_base", "inst")
+        self.series_label: Optional[str] = kw.get("series_label")
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -753,7 +764,188 @@ def fx_info(ctx: "Ctx", pair: str, live: Dict[str, float], hold: Optional[float]
     ch = ctx.fx_carry(pair, live, days=cal)
     return {"pair": pair, "spot": s, "carry_yr": c, "carry_h_yr": ch, "cal_days": cal,
             "fwd_h": s * math.exp(-ch * cal / 365.0 / 100.0) if s and ch is not None else None,
-            "try_per_quote": ctx.try_per(pair[3:], live), "tenors": [t for t, _ in ctx.fx_tenors(pair)]}
+            "try_per_quote": ctx.try_per(pair[3:], live), "try_per_usd": ctx.try_per("USD", live), "tenors": [t for t, _ in ctx.fx_tenors(pair)]}
+
+
+# ---------------------------------------------------------------------------------------------- the trade in desk words
+#: an FX signal's money is told for this much of the base currency (1 mn USD of USDTRY, 1 mn EUR of EURUSD ...)
+FX_NOTIONAL = 1e6
+#: the lengths a forward is named by (calendar days -> the desk's Turkish tenor): a 28-day holding is the "1A" forward
+TENORS_TR = ((7.0, "1H"), (14.0, "2H"), (30.4375, "1A"), (60.875, "2A"), (91.3125, "3A"), (182.625, "6A"), (273.9375, "9A"), (365.25, "1Y"))
+_TENOR_WORDS = {"H": "haftalık", "A": "aylık", "Y": "yıllık"}
+
+
+def _th(v: float, d: int = 0) -> str:
+    """A number Turkish style, with thousands: 2.325 · 44,1250 · -1.800."""
+    s = "%.*f" % (d, abs(v))
+    whole, _, frac = s.partition(".")
+    out = "{:,}".format(int(whole)).replace(",", ".") + ("," + frac if frac else "")
+    return ("-" if v < 0 and any(c in "123456789" for c in s) else "") + out
+
+
+def _money(v: Optional[float], ccy: str, sign: bool = True) -> str:
+    """Money as the desk says it: "+525 bin TRY", "4,2 bin USD", "-1.800 bin TL" (thousands; 10 mn and over in mn)."""
+    if v is None:
+        return "—"
+    a = abs(v)
+    if a >= 1e7:
+        txt = "%s mn" % _th(a / 1e6, 1)
+    elif a >= 1e3:
+        txt = "%s bin" % _th(a / 1e3, 1 if a < 1e4 else 0)
+    else:
+        txt = _th(a, 0)
+    nz = any(c in "123456789" for c in txt)
+    sg = ("+" if v > 0 and sign else "-" if v < 0 else "") if nz else ""
+    return ("%s%s %s" % (sg, txt, ccy)).strip()
+
+
+def tenor_tr(days: Optional[float]) -> Optional[str]:
+    """A forward's length in calendar days as the desk names it: "1H", "1A", "3A", "1Y" - or "45 gün"."""
+    if days is None:
+        return None
+    best = min(TENORS_TR, key=lambda t: abs(t[0] - days))
+    return best[1] if abs(best[0] - days) <= max(3.0, 0.1 * best[0]) else "%d gün" % int(round(days))
+
+
+def _tenor_en(tenor: str) -> str:
+    """A tenor of the history's keys ("1W", "3M", "1Y") the desk's Turkish way ("1H", "3A", "1Y")."""
+    t = tenor.upper()
+    return t[:-1] + {"W": "H", "M": "A"}.get(t[-1:], t[-1:])
+
+
+def _tenor_long(tenor: str) -> str:
+    """"3A" -> "3 aylık", "1H" -> "1 haftalık", "45 gün" -> "45 günlük"."""
+    if tenor.endswith(" gün"):
+        return tenor + "lük"
+    return "%s %s" % (tenor[:-1], _TENOR_WORDS.get(tenor[-1:], tenor[-1:]))
+
+
+def fx_digits(price: float) -> int:
+    """Decimals a pair's price is quoted with: USDTRY 44,1250, EURUSD 1,08430, USDJPY 155,230, USDKRW 1.390,50."""
+    a = abs(price)
+    return 5 if a < 10 else 4 if a < 100 else 3 if a < 1000 else 2
+
+
+def pct_money(pct: float, s: int, ref: float, log: bool = True, notional: float = FX_NOTIONAL) -> float:
+    """A P&L of ``pct`` per cent (in the trade's favour, side ``s``) as money in the quote currency for ``notional`` of
+    the base: a log return of the price ``ref`` (the price moves to ref × e^(s × pct / 100)) - or, ``log`` False, a
+    simple per cent of ``ref`` (the spot)."""
+    if log:
+        return notional * s * ref * (math.exp(s * pct / 100.0) - 1.0)
+    return notional * ref * pct / 100.0
+
+
+def fx_trade(m: "Monitor", s: int, target: Optional[float], stop: Optional[float], exp: Optional[float], carry_h: Optional[float],
+             fx: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """An FX signal as the desk trades it.  The instrument: the forward of the holding (its value date the holding's
+    end), else the family's own (the 3M forward, the spot).  Its price now, at the target, at the stop and where the
+    expected P&L takes it by the end of the holding, the spot now and then.  Its money for 1 mn of the base currency,
+    in the quote currency: the expected P&L (= notional × the instrument's expected price move), the forward premium's
+    part of it (the carry the holding earns or pays) and the spot's move (the rest: carry + move = total, move =
+    notional × the spot's expected move), what the target and the stop make.  ``(None, None)`` without a spot and a
+    forward of the holding: no carry is made up."""
+    pair = str(fx.get("pair") or m.fx or "")
+    spot, fwd = fx.get("spot"), fx.get("fwd_h")
+    if not spot or not fwd or m.level is None or len(pair) != 6:
+        return None, None
+    _, factor = m.pnl or (None, None)
+    level = m.level
+    cal = fx.get("cal_days")
+    days = m.inst_days if m.inst_days is not None else cal
+    at_spot = (m.inst or "").endswith(" spot") or (m.inst is None and days is not None and days < 1.0)
+    anchor = spot if at_spot else fwd                     # (an intraday holding trades the spot, a longer one its forward)
+    if m.price == "level":
+        price: Callable[[float], Optional[float]] = lambda x: x                    # noqa: E731
+    elif callable(m.price):
+        price = lambda x: m.price(x, fx)                                          # noqa: E731
+    elif factor:
+        price = lambda x: anchor * math.exp((x - level) * factor / 100.0)         # noqa: E731
+    else:
+        return None, None
+    try:
+        p0 = price(level)
+        pt = price(target) if target is not None else None
+        ps = price(stop) if stop is not None else None
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return None, None
+    if not p0 or p0 <= 0:
+        return None, None
+    n = FX_NOTIONAL
+    log = m.pct_base != "spot"
+    ref = p0 if log else spot
+    total = pct_money(exp, s, ref, log) if exp is not None else None
+    if not log and cal and m.inst_days:
+        # (a premium told as a simple per cent of the spot: the instrument's points earned over the holding, the spot
+        # where it is - so the rest is the spot's expected move alone)
+        carry: Optional[float] = n * s * (spot - p0) * cal / m.inst_days
+    else:
+        carry = pct_money(carry_h, s, ref, log) if carry_h is not None else None       # (log: the roll of the instrument, exact)
+    move = total - carry if total is not None and carry is not None else None
+    tenor = None if at_spot else tenor_tr(days)
+    inst = m.inst or ("%s spot" % pair if at_spot else "%s %s forward" % (pair, tenor))
+    note = "spot" if at_spot else "bugünkü %s forward%s" % (tenor, "" if m.inst or days is None else ", %d gün: ufkun sonu valörlü" % int(round(days)))
+    base, quote = pair[:3], pair[3:]
+    tpq, tpu = fx.get("try_per_quote"), fx.get("try_per_usd")
+    usd_per = 1.0 if quote == "USD" else (tpq / tpu if tpq and tpu else None)
+    px = {"pair": pair, "inst": inst, "label": inst.replace(" forward", " fwd"), "tenor": tenor, "days": days, "note": note,
+          "digits": fx_digits(p0), "unit": quote, "entry": p0, "target": pt, "stop": ps,
+          "exit": p0 + s * total / n if total is not None else None, "spot": spot,
+          "spot_exp": spot + s * move / n if move is not None else None, "fwd_h": fwd}
+    money = {"ccy": quote, "base": base, "notional": n, "total": total, "carry": carry, "move": move,
+             "target": n * s * (pt - p0) if pt is not None else None, "stop": n * s * (ps - p0) if ps is not None else None,
+             "try_per": tpq, "usd_per": usd_per, "pct": exp, "ref": ref, "log": log}
+    return px, money
+
+
+def rate_money(legs: List[Dict[str, Any]], cfg: Dict[str, Any], tl: Optional[float], exp: Optional[float], carry_h: Optional[float],
+               reward: Optional[float], risk: Optional[float]) -> Optional[Dict[str, Any]]:
+    """A rates package's money: bp of its main leg's DV01 at ``tl`` TL a bp - the expected P&L, its carry + roll and
+    the rest (the move), what the target makes and the stop loses; in bp and TL."""
+    if not tl:
+        return None
+    main = legs[0] if legs else {}
+    usd = main["dv01_usd"] / main["weight"] if main.get("dv01_usd") and main.get("weight") else cfg.get("dv01_usd")
+    bp = {"total": exp, "carry": carry_h, "move": exp - carry_h if exp is not None and carry_h is not None else None,
+          "target": reward, "stop": -risk if risk is not None else None}
+    out: Dict[str, Any] = {"ccy": "TL", "per_bp": tl, "dv01_usd": float(usd) if usd else None, "bp": bp}
+    out.update({k: v * tl if v is not None else None for k, v in bp.items()})
+    return out
+
+
+#: what a leg's action is in plain words, by the kind of instrument: a swap's fixed rate, a forward's points, the rest
+_LEG_WORDS = {("swap", "Receive"): "sabit faiz alınan (receive)", ("swap", "Pay"): "sabit faiz ödenen (pay)",
+              ("points", "Receive"): "swap puanı alınan (receive)", ("points", "Pay"): "swap puanı ödenen (pay)",
+              ("", "Buy"): "alınan", ("", "Sell"): "satılan", ("", "Buy protection"): "koruma alınan", ("", "Sell protection"): "koruma satılan"}
+
+
+def _leg_kind(key: str) -> str:
+    if key.startswith(("OIS:", "OFF:", "USD:", "MPC:", "FOMC:")) or key == "TLREF":
+        return "swap"
+    return "points" if key.startswith("FXP:") else ""
+
+
+def what_text(legs: List[Dict[str, Any]]) -> str:
+    """The legs of a trade in plain words, grouped by what is done: "sabit faiz alınan (receive): 2Y OIS · sabit faiz
+    ödenen (pay): 1Y OIS ×0,45, 5Y OIS ×0,30" - and the floating leg of a TRY / USD OIS."""
+    groups: Dict[str, List[str]] = {}
+    for leg in legs:
+        word = _LEG_WORDS.get((_leg_kind(leg.get("key") or ""), leg.get("action")), _LEG_WORDS.get(("", leg.get("action")), leg.get("action") or ""))
+        w = leg.get("weight", 1.0)
+        groups.setdefault(word, []).append(leg.get("name", "") + ("" if abs(abs(w) - 1.0) < 1e-9 else " ×" + fmt_w(w)))
+    text = " · ".join("%s: %s" % (word, ", ".join(names)) for word, names in groups.items())
+    keys = [leg.get("key") or "" for leg in legs]
+    floats = [name for name, pre in (("TLREF", ("OIS:", "MPC:")), ("SOFR", ("USD:", "FOMC:"))) if any(k.startswith(pre) for k in keys)]
+    return text + (" (değişken bacak %s)" % " / ".join(floats) if floats else "")
+
+
+def hold_of(m: Monitor) -> Optional[float]:
+    """A signal's expected holding: its family's own, else - a mean reversion - the time its expected |z| takes to fall
+    to 0.5 (half-lives × log₂(|z| ÷ 0.5), at least one)."""
+    if m.hold is not None:
+        return m.hold
+    if m.half_life and m.z:
+        return m.half_life * max(1.0, math.log(abs(m.z) / 0.5, 2))
+    return None
 
 
 def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[str, Any]]:
@@ -814,9 +1006,7 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         gates.append(_gate("Tolerans", ok, "|%s| %s %s %s %s" % ("fark", _g(abs(m.level), 1), "≥" if ok else "<", _g(m.min_abs, 1), m.unit)))
         if not ok:
             why_x = "fark %s %s: çözücünün toleransı içinde (en az %s)" % (_g(abs(m.level), 1), m.unit, _g(m.min_abs, 1))
-    hold = m.hold
-    if hold is None and m.half_life:
-        hold = m.half_life * max(1.0, math.log(abs(m.z) / 0.5, 2))        # expected z falls to 0.5
+    hold = hold_of(m)
     # ---- what it is expected to earn over the holding, carry + roll in it
     unit, factor = m.pnl or (None, None)
     move = None
@@ -853,46 +1043,65 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     daily = m.pnl_sd if m.pnl_sd is not None else (m.dsd * factor if m.dsd and factor else None)
     sig_h = daily * math.sqrt(hold) if daily and hold else None
     margin = float(cfg.get("carry_margin", 0.5)) * sig_h if sig_h else 0.0
+    reward = abs(target - m.level) * factor if factor and target is not None else None
+    risk = abs(stop - m.level) * factor if factor and stop is not None else None
+    # ---- the same in money: an FX trade in the prices of what is traded and per 1 mn of its base currency, a rates
+    # package in TL of its main leg's DV01 (as sized, else the setting at the fit's USDTRY)
+    px = money = None
+    pnl_try = None
+    if m.fx:
+        px, money = fx_trade(m, pkg_s, target, stop, exp, carry_h, fx)
+        if money is not None and money["total"] is not None and money.get("try_per"):
+            pnl_try = money["total"] * money["try_per"]
+    elif unit == "bp":
+        main = legs[0] if legs else {}
+        tl = main["dv01"] / main["weight"] if main.get("dv01") and main.get("weight") else None
+        if tl is None and cfg.get("dv01_usd") and cfg.get("usdtry"):
+            tl = float(cfg["dv01_usd"]) * float(cfg["usdtry"])
+        money = rate_money(legs, cfg, tl, exp, carry_h, reward, risk)
+        pnl_try = exp * tl if exp is not None and tl else None
+
+    def amount(v: Optional[float], signed: bool = True, cash: Optional[float] = None) -> str:
+        """A P&L of the holding (P&L units) as the gates say it: FX in money per 1 mn of the base (``cash`` when it is
+        known already), bp with its TL."""
+        if v is None:
+            return "—"
+        if money is not None and px is not None:
+            c = cash if cash is not None else pct_money(v, pkg_s, money["ref"], money["log"])
+            return "%s / 1 mn %s" % (_money(c, money["ccy"], signed), money["base"])
+        txt = ("%s %s" % (_sg(v, 2) if signed else _g(v, 2), unit or "")).strip()
+        return txt + (" ≈ %s" % _money(v * money["per_bp"], "TL", signed) if money is not None and money.get("per_bp") else "")
+
     cf = 1.0
     if m.fx:
+        prem = money.get("carry") if money is not None else None           # the forward premium of the holding, in money
         if carry_h is None:
             gates.append(_gate("Carry", False, "forward yok: carry bilinmiyor"))
             why_x = why_x or "forward yok: carry bilinmiyor"
         elif carry_h < 0:
             ok = exp is not None and exp >= margin
-            text = ("carry aleyhte (%s%% ufukta) · beklenen %s%% ≥ tampon %s%%" if ok else
-                    "carry'yi karşılamıyor: beklenen %s%% < tampon %s%% (carry ufukta %s%%)")
-            gates.append(_gate("Carry", ok, text % ((_sg(carry_h, 2), _sg(exp, 2), _g(margin, 2)) if ok else (_sg(exp, 2), _g(margin, 2), _sg(carry_h, 2)))))
+            text = ("forward primi aleyhte (ufukta %s) · beklenen %s ≥ tampon %s" % (amount(carry_h, cash=prem), amount(exp), amount(margin, False)) if ok
+                    else "carry'yi karşılamıyor: beklenen %s < tampon %s (forward primi ufukta %s)" % (amount(exp), amount(margin, False),
+                                                                                                       amount(carry_h, cash=prem)))
+            gates.append(_gate("Carry", ok, text))
             if not ok:
-                why_x = why_x or "carry'yi karşılamıyor (beklenen %s%%, carry ufukta %s%%)" % (_sg(exp, 2), _sg(carry_h, 2))
+                why_x = why_x or "carry'yi karşılamıyor (beklenen %s, forward primi ufukta %s)" % (amount(exp), amount(carry_h, cash=prem))
         else:
-            gates.append(_gate("Carry", True, "carry lehte (%s%% / yıl, ufukta %s%%)" % (_sg(carry_yr, 1), _sg(carry_h, 2))))
+            gates.append(_gate("Carry", True, "forward primi lehte: ufukta %s" % amount(carry_h, cash=prem)))
     elif carry_week is not None:
         cf = 0.5 if carry_week < 0 else 1.0
         gates.append(_gate("Carry", True, "carry + roll %s %s / hafta%s" % (_sg(carry_week, 2), unit or "bp", " · aleyhte: ağırlık 0,5" if cf < 1 else ""), cf))
     if exp is not None and not why_x and not (m.fx and carry_h is not None and carry_h < 0):
         ok = exp > 0
-        gates.append(_gate("Beklenen kâr", ok, "%s %s ufukta%s" % (_sg(exp, 2), unit or "", " (carry dahil)" if carry_h is not None else "")))
+        inside = "forward primi dahil" if m.fx else ("carry + roll dahil" if carry_h is not None else "")
+        gates.append(_gate("Beklenen kâr", ok, "ufukta %s%s" % (amount(exp), " (%s)" % inside if inside else "")))
         if not ok:
-            why_x = "beklenen kâr yok (%s %s, carry dahil)" % (_sg(exp, 2), unit or "")
+            why_x = "beklenen kâr yok (%s%s)" % (amount(exp), ", " + inside if inside else "")
     # |z| on the desk's scale (a family with its own threshold is brought to it), counted at most up to the stop: no
     # family's score can outrank the others by its scale alone
     base = min(abs(m.z) * float(cfg["entry_z"]) / thr, stop_z)
     composite = base * rf * hf * cf
     gated = gated or why_r or why_h or why_x
-    reward = abs(target - m.level) * factor if factor and target is not None else None
-    risk = abs(stop - m.level) * factor if factor and stop is not None else None
-    pnl_try = None
-    if exp is not None:
-        if unit == "bp":
-            # bp of the main leg's DV01 (its TRY DV01 as sized, else the setting at the fit's USDTRY)
-            main = legs[0] if legs else {}
-            tl = main["dv01"] / main["weight"] if main.get("dv01") and main.get("weight") else None
-            if tl is None and cfg.get("dv01_usd") and cfg.get("usdtry"):
-                tl = float(cfg["dv01_usd"]) * float(cfg["usdtry"])
-            pnl_try = exp * tl if tl else None
-        elif unit == "%" and m.fx and fx.get("spot") and fx.get("try_per_quote"):
-            pnl_try = exp / 100.0 * 1e6 * fx["spot"] * fx["try_per_quote"]
     # the packages that trade it: the main one, then the others (each leg told, sized; its own carry + roll and the
     # same expected move with it)
     packages = []
@@ -916,7 +1125,13 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
           "regime": REGIME_TEXT.get(tag), "regime_info": m.regime, "composite": 0.0 if gated else composite,
           "parts": {"z": base, "regime": rf, "hl": hf, "carry": cf}, "gated": gated, "live": m.live, "time": stamp,
           "note": m.note, "info": {k: v for k, v in m.info.items() if k not in ("ou", "inputs")}, "agree": 0, "conflict": 0,
-          "agree_with": [], "conflict_with": [], "packages": packages}
+          "agree_with": [], "conflict_with": [], "packages": packages, "px": px, "money": money}
+    try:
+        sg["trade_tr"] = trade_text(sg)
+        sg["plain"] = plain_text(sg)
+    except Exception:  # noqa: BLE001 - the words are told from the numbers; words that cannot be are left out, not the signal
+        sg.setdefault("trade_tr", sg["expression"])
+        sg["plain"] = ""
     try:
         sg["thesis"] = m.thesis(sg) if m.thesis is not None else default_thesis(m, sg)
     except Exception:  # noqa: BLE001 - a sentence that cannot be written is no reason to lose the signal
@@ -924,13 +1139,116 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     return sg
 
 
+def exp_text(sg: Dict[str, Any], d: int = 2) -> str:
+    """The expected P&L as the desk reads it: FX in money per 1 mn of the base currency, a rates package in bp with
+    its TL, anything else in its own unit."""
+    e, mo = sg.get("exp_pnl"), sg.get("money") or {}
+    if e is None:
+        return "—"
+    if sg.get("px") and mo.get("total") is not None:
+        return "~%s / 1 mn %s" % (_money(mo["total"], mo["ccy"]), mo["base"])
+    txt = ("%s %s" % (_sg(e, d), sg.get("pnl_unit") or "")).strip()
+    return txt + (" ≈ %s" % _money(mo["total"], "TL") if mo.get("per_bp") and mo.get("total") is not None else "")
+
+
+def _incl(sg: Dict[str, Any]) -> str:
+    """What the expected P&L has in it beside the move: the forward premium (FX), the carry + roll (a rates package)."""
+    if sg.get("carry_h") is None:
+        return ""
+    return " (forward primi dahil)" if sg.get("fx") else " (carry + roll dahil)"
+
+
 def default_thesis(m: Monitor, sg: Dict[str, Any]) -> str:
     """One sentence: what is out of line, by how much, and the trade - with what it is expected to earn."""
     where = "ortalamasının %s" % ("üstünde" if (m.z or 0) > 0 else "altında") if m.mode == "mr" else "eşiğin ötesinde"
-    tail = ""
-    if sg.get("exp_pnl") is not None:
-        tail = "; beklenen %s %s%s" % (_sg(sg["exp_pnl"], 2), sg.get("pnl_unit") or "", " (carry dahil)" if sg.get("carry_h") is not None else "")
+    tail = "; beklenen %s%s" % (exp_text(sg), _incl(sg)) if sg.get("exp_pnl") is not None else ""
     return "%s %s (%s %s) → %s%s." % (m.name, where, m.score_name, _sg(m.z, 2), sg["expression"], tail)
+
+
+def trade_text(sg: Dict[str, Any]) -> str:
+    """The trade in desk words: an FX trade as the instrument and the side ("USDTRY 1A forward sat"), any other as what
+    is received / paid, bought / sold ("sabit faiz alınan (receive): 2Y OIS · sabit faiz ödenen (pay): 1Y OIS ×0,45")."""
+    px = sg.get("px")
+    legs = sg.get("legs") or []
+    if px is not None:
+        first = "%s %s" % (px["inst"], "al" if sg["direction"] > 0 else "sat")
+        return " · ".join([first] + ["%s %s" % (l["name"], "al" if l["side"] > 0 else "sat") for l in legs[1:]])
+    if sg.get("kind") == "corr" or not legs:
+        return sg.get("expression") or ""
+    return what_text(legs)
+
+
+def _level_text(v: Optional[float], unit: str, digits: int) -> str:
+    """A level as the desk writes it: a rate "%38,50", a spread "+3,0 bp", anything else with its unit."""
+    if v is None:
+        return "—"
+    if unit == "%":
+        return "%" + _th(v, min(digits, 2))
+    if unit == "bp":
+        return "%s bp" % _sg(v, 1)
+    return ("%s %s" % (_th(v, digits), unit)).strip()
+
+
+def plain_text(sg: Dict[str, Any]) -> str:
+    """The signal in plain words, from its own numbers: what to do on which instrument and at what price, what it is
+    expected to make over the holding (FX: per 1 mn of the base currency, the forward premium's part and the spot's;
+    a rates package: bp and TL of its main leg's DV01, the carry + roll's part) and what the target and the stop make."""
+    px, mo = sg.get("px"), sg.get("money") or {}
+    s = sg["direction"]
+    hold = sg.get("hold")
+    span = "~%s %s" % (_g(hold, 0), "bar (5 dk)" if sg.get("horizon_unit") == "bar" else "iş günü") if hold else "ufuk boyunca"
+    if px is not None:
+        d = px["digits"]
+        ccy, base = mo["ccy"], mo["base"]
+        p = lambda v: _th(v, d) if v is not None else "—"                       # noqa: E731
+        verb = "alıp" if s > 0 else "satıp"
+        if px["tenor"] is None:
+            head = "Şimdi spot %s %s %s tutarsan (giriş %s)" % (px["pair"], verb, span, p(px["entry"]))
+        else:
+            head = "Bugün %s %s forward'ını %s %s tutarsan (giriş %s)" % (_tenor_long(px["tenor"]), px["pair"], verb, span, p(px["entry"]))
+        if mo.get("total") is None:
+            out = head + "."
+        else:
+            out = "%s ve kur o sürede beklenen seviyeye gelirse (%s), 1 mn %s başına ~%s %s" % (
+                head, p(px["spot_exp"]), base, _money(abs(mo["total"]), ccy, False), "kazanırsın" if mo["total"] >= 0 else "kaybedersin")
+            if px["tenor"] is not None and mo.get("carry") is not None:
+                out += ": forward priminden (carry) %s, kur hareketinden %s (spot %s → %s)" % (
+                    _money(mo["carry"], ccy), _money(mo["move"], ccy), p(px["spot"]), p(px["spot_exp"]))
+            out += "."
+        ends = []
+        for word, key in (("hedefte", "target"), ("stopta", "stop")):
+            if px.get(key) is not None and mo.get(key) is not None:
+                ends.append("%s (%s) ~%s %s" % (word, p(px[key]), _money(abs(mo[key]), ccy, False), "kâr" if mo[key] >= 0 else "zarar"))
+        if ends:
+            tail = ", ".join(ends)
+            out += " " + tail[0].upper() + tail[1:] + "."
+        others = (sg.get("legs") or [])[1:]                     # (EM carry: the basket against it - not in the money above)
+        if others:
+            out += " Karşı bacak: %s (yukarıdaki K/Z'ye dahil değil)." % ", ".join(
+                "%s %s" % (l["name"], "al" if l["side"] > 0 else "sat") for l in others)
+        return out
+    lv = lambda v: _level_text(v, sg.get("unit") or "", sg.get("digits") or 2)  # noqa: E731
+    what = sg.get("trade_tr") or sg.get("expression") or ""
+    out = "%s. %s şimdi %s" % (what[:1].upper() + what[1:], sg.get("instrument") or "", lv(sg.get("level")))
+    if mo.get("per_bp"):
+        bp = mo["bp"]
+        parts = []
+        if bp.get("target") is not None:
+            parts.append("hedef seviyesine (%s) gelirse %s bp ≈ %s kazanırsın" % (lv(sg.get("target")), _g(bp["target"], 1), _money(abs(mo["target"]), "TL", False)))
+        if bp.get("stop") is not None:
+            parts.append("stop seviyesine (%s) gelirse %s bp ≈ %s kaybedersin" % (lv(sg.get("stop")), _g(abs(bp["stop"]), 1), _money(abs(mo["stop"]), "TL", False)))
+        out += ("; " + ", ".join(parts) if parts else "") + "."
+        if bp.get("total") is not None:
+            out += " Beklenen: %s içinde %s bp ≈ %s" % (span, _sg(bp["total"], 1), _money(mo["total"], "TL"))
+            out += (" (%s bp'si carry + roll)." % _sg(bp["carry"], 1)) if bp.get("carry") is not None else "."
+        if mo.get("dv01_usd"):
+            out += " Ana bacak %s $ DV01 = %s TL / bp." % (_th(mo["dv01_usd"], 0), _th(mo["per_bp"], 0))
+        return out
+    out += "; hedef %s, stop %s." % (lv(sg.get("target")), lv(sg.get("stop")))
+    if sg.get("exp_pnl") is not None:
+        unit = {"vol": "vol puanı"}.get(sg.get("pnl_unit") or "", sg.get("pnl_unit") or "")
+        out += " Beklenen: %s içinde %s %s." % (span, _sg(sg["exp_pnl"], 2), unit)
+    return out
 
 
 def rank(signals: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -1215,9 +1533,9 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
         def pthesis(sg, key=key, zs=zs):
             other = ", ".join("%d günde z %s" % (w, _sg(z, 1)) for w, z in sorted(zs.items()) if z is not None)
             return ("%s, iki komşusuyla eğrinin seviye-PCA'sının ilk iki bileşenine nötr pakette %s bp %s (%d günlük pencere, z %s%s); "
-                    "yarı ömür %s gün → %s; beklenen %s bp (carry + roll dahil)." % (
+                    "yarı ömür %s gün → %s; beklenen %s%s." % (
                         _ois_name(ctx, key), _g(abs(sg["level"]), 1), "ucuz" if sg["level"] > 0 else "pahalı", w_main, _sg(sg["z"], 2),
-                        "; " + other if other else "", _g(sg.get("half_life"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 1)))
+                        "; " + other if other else "", _g(sg.get("half_life"), 1), sg["expression"], exp_text(sg, 1), _incl(sg)))
 
         # (the series is the hedged package itself: "hedge'li" is its name)
         mon = mr_monitor(ctx, "pca:" + key, "pca", "TRY OIS", "%s (PC1–PC2 hedge'li)" % _ois_name(ctx, key), "bp", 1, fit["days"], series,
@@ -1431,7 +1749,12 @@ MACRO_HOLD = 5                            # business days: the residual is expec
 
 
 def _macro_name(ctx: Ctx, t: str) -> str:
-    return "%s forward (carry dahil)" % t[3:] if t.startswith("XR:") else _ois_name(ctx, t)
+    return "%s (forward pozisyonu)" % t[3:] if t.startswith("XR:") else _ois_name(ctx, t)
+
+
+def xr_label(pair: str) -> str:
+    """What an FX signal's drawn series is (``XR:``): the analysis' own, not the prices the trade is told in."""
+    return "%s forward pozisyonunun birikimli getirisi (%%, kur değişimi − forward primi)" % pair
 
 
 def fam_macro(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
@@ -1500,10 +1823,9 @@ def fam_macro(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             a = attribution(ctx.derive_live(ctx.live)) or {}
             u = change_unit(tk)
             return ("%s bugün %s %s hareket etti; küresel sürücüler %s %s açıklıyor, %s %s TRY'ye özgü (z %s). Geçmişte böyle bir kalıntının %%%s'i "
-                    "ertesi hafta geri döndü → %s; beklenen %s %s%s." % (
+                    "ertesi hafta geri döndü → %s; beklenen %s%s." % (
                         _macro_name(ctx, t), _sg(a.get("dy"), 1), u, _sg(a.get("global"), 1), u, _sg(a.get("resid"), 1), u, _sg(sg["z"], 2),
-                        _g(max(0.0, -(rev_beta or 0.0)) * 100.0, 0), sg["expression"], _sg(sg.get("exp_pnl"), 2), sg.get("pnl_unit") or "",
-                        " (carry dahil)" if sg.get("carry_h") is not None else ""))
+                        _g(max(0.0, -(rev_beta or 0.0)) * 100.0, 0), sg["expression"], exp_text(sg), _incl(sg)))
 
         legs = [{"key": "FX:" + fx, "name": "%s forward" % fx, "weight": 1.0}] if fx else [{"key": t, "name": _ois_name(ctx, t), "weight": 1.0}]
         mon = Monitor("macro:" + t, "macro", "FX" if fx else "TRY OIS", "%s forward" % fx if fx else _ois_name(ctx, t), "%", 3,
@@ -1513,9 +1835,11 @@ def fam_macro(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                       carry_up=None if fx else ctx.carry_week(t), info={"inputs": list(drivers) + (["FX:" + fx] if fx else []), "rev_beta": rev_beta,
                                                                       "rev_t": rev_t},
                       fx=fx, dsd=sigma / div, pnl=pnl_scale(tk, None), fcast=mfcast, thesis=mthesis,
+                      series_label=xr_label(fx) if fx else None,
                       note="Bugünkü hareketin küresel sürücülerin (β × değişim) açıklamadığı kısmı: + ise TRY'ye özgü yükseliş (geri dönüş beklenir). "
                            "Beklenen: geçmişte kalıntının ertesi hafta geri dönen payı (sonraki 5 günün hareketinin kalıntıya regresyonu, β %s, t %s) "
-                           "× bugünkü kalıntı%s." % (_f2(rev_beta), _f2(rev_t), "; FX'te carry dahil getiri üzerinden" if fx else ""))
+                           "× bugünkü kalıntı%s." % (_f2(rev_beta), _f2(rev_t), "; FX'te forward pozisyonunun getirisi üzerinden (kur değişimi − "
+                                                                               "forward primi) - işlem fiyatları ve 1 mn baz döviz başına K/Z yukarıda" if fx else ""))
         mon.reward = None
         mon.risk = None
         mon._sigma = sigma                       # type: ignore[attr-defined]
@@ -2072,9 +2396,9 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             return v if v is not None else last
 
         def fthesis(sg, name=name):
-            return ("Eğrinin %s forward'ı, aynı günün kotalarından çözülen PPK patikasının verdiğinden %s bp %s (z %s) → %s; beklenen %s bp "
-                    "(carry dahil)." % (name, _g(abs(sg["level"]), 1), "yüksek" if sg["level"] > 0 else "düşük", _sg(sg["z"], 2),
-                                         sg["expression"], _sg(sg.get("exp_pnl"), 1)))
+            return ("Eğrinin %s forward'ı, aynı günün kotalarından çözülen PPK patikasının verdiğinden %s bp %s (z %s) → %s; beklenen %s%s." % (
+                name, _g(abs(sg["level"]), 1), "yüksek" if sg["level"] > 0 else "düşük", _sg(sg["z"], 2), sg["expression"], exp_text(sg, 1),
+                _incl(sg)))
 
         mon = mr_monitor(ctx, "frapath:" + name, "frapath", "TRY OIS", "%s FRA (PPK patikasına göre)" % name, "bp", 1, [d for d, _ in pts],
                          [v for _, v in pts], "bp", legs, calc, pkg="rate", carry_up=_pkg_carry(ctx, legs), min_abs=FRA_MIN_BP, thesis=fthesis,
@@ -2166,14 +2490,17 @@ def _mom_thesis(m: Monitor, sg: Dict[str, Any]) -> str:
     i = m.info
     if m.fx:
         c = sg.get("carry_yr")
-        return ("%s'nin carry dahil getirisi %s (1H %s · 1A %s · 3A %s, skor %s), ortalamalar %s; carry işlemin %s (%s%% / yıl) → %s: "
-                "ufukta beklenen %s%% (carry dahil)." % (
-                    m.fx, "yükseliyor" if up else "düşüyor", _sg(i.get("w1"), 2), _sg(i.get("m1"), 2), _sg(i.get("m3"), 2), _sg(m.z, 2),
-                    "aynı yönde" if i.get("ma") == sign(m.z or 0) else "ters yönde", "lehine" if (c or 0) >= 0 else "aleyhine", _sg(c, 1),
-                    sg["expression"], _sg(sg.get("exp_pnl"), 2)))
-    return ("%s 1H / 1A / 3A'da %s (skor %s), hareketli ortalamalar %s → %s; ufukta beklenen %s %s%s." % (
+        # the series is the excess return: up, the spot outruns what the forwards priced (a forward bought earns); down,
+        # it falls behind (a forward sold earns)
+        return ("%s forward'ların fiyatladığından %s (1H / 1A / 3A skorları %s / %s / %s, skor %s), hareketli ortalamalar %s; forward primi "
+                "işlemin %s (yıllık %%%s) → %s; beklenen %s%s." % (
+                    m.fx, "hızlı gidiyor: kur, forward primini aşıyor - forward'la alan kazanıyor" if up else
+                    "geride kalıyor: kur, forward priminin gerisinde - forward'la satan kazanıyor", _sg(i.get("w1"), 2), _sg(i.get("m1"), 2),
+                    _sg(i.get("m3"), 2), _sg(m.z, 2), "aynı yönde" if i.get("ma") == sign(m.z or 0) else "ters yönde",
+                    "lehine" if (c or 0) >= 0 else "aleyhine", _sg(c, 1), sg["expression"], exp_text(sg), _incl(sg)))
+    return ("%s 1H / 1A / 3A'da %s (skor %s), hareketli ortalamalar %s → %s; ufukta beklenen %s%s." % (
         m.name, "yükseliyor" if up else "düşüyor", _sg(m.z, 2), "aynı yönde" if i.get("ma") == sign(m.z or 0) else "ters yönde",
-        sg["expression"], _sg(sg.get("exp_pnl"), 1), sg.get("pnl_unit") or "", " (carry + roll dahil)" if sg.get("carry_h") is not None else ""))
+        sg["expression"], exp_text(sg, 1), _incl(sg)))
 
 
 def fam_momentum(ctx: Ctx, extra: Sequence[Tuple[str, str]] = ()) -> Tuple[List[Monitor], Dict[str, Any]]:
@@ -2224,16 +2551,19 @@ def fam_momentum(ctx: Ctx, extra: Sequence[Tuple[str, str]] = ()) -> Tuple[List[
                       risk=to_ma if 0.25 * reward <= to_ma <= 3 * reward else reward, hold=horizon, regime=reg,
                       pkg={"rate": "rate", "fx": "fx", "xr": "fx", "index": "fx", "bp": "cds", "vol": "vol"}.get(kind, "fx") if key != "CDS" else "cds",
                       carry_up=None if fx else ctx.carry_week(key), score_name="mom", fx=fx, dsd=dsd, pnl=pnl_scale(kind, level),
-                      fcast=(drift["shrunk"] * horizon) if drift else None, thesis=_mom_thesis, gate_name="Ortalamalar",
+                      fcast=(drift["shrunk"] * horizon) if drift else None, gate_name="Ortalamalar",
                       gate=lambda s, mo=mo: (0.0, "hareketli ortalamalar onaylamıyor (%d / %d gün)" % (int(cfg["ma_fast"]), int(cfg["ma_slow"])))
                       if s != mo["state"] else (1.0, "%d / %d günlük ortalamalar aynı yönde" % (int(cfg["ma_fast"]), int(cfg["ma_slow"]))),
+                      series_label=xr_label(fx) if fx else None,
                       note=("1H / 1A / 3A değişimlerin günlük vol × √gün'e bölümünün ortalaması; %d / %d günlük ortalamalar aynı yönü göstermeli. "
                             "Hedef: ufuk boyunca 1σ; stop: %d günlük ortalama. Beklenen: son 63 günün ortalama günlük değişimi (kesinliğiyle "
                             "küçültülmüş) × ufuk." % (int(cfg["ma_fast"]), int(cfg["ma_slow"]), int(cfg["ma_slow"])))
-                      + (" FX: seviye, forward'la tutmanın getirisi (spot getirisi − forward primi; carry dahil, %)." if fx else ""),
+                      + (" FX: analiz serisi forward pozisyonunun birikimli getirisi (kur değişimi − forward primi, %); işlem ufkun sonu valörlü "
+                         "forward'la, fiyatları ve 1 mn baz döviz başına K/Z yukarıda." if fx else ""),
                       info={"w1": mo["w1"], "m1": mo["m1"], "m3": mo["m3"], "ma": mo["state"], "drift_t": drift["t"] if drift else None})
         if key.startswith("UST:"):
             mon.pkg = "bond"
+        mon.thesis = lambda sg, mon=mon: _mom_thesis(mon, sg)             # (a signal's thesis is called with the signal only)
         mons.append(mon)
     # cross-sectional rank within the curve and within FX
     for group in ("Eğri", "FX", "Küresel"):
@@ -2316,8 +2646,8 @@ def fam_cycle(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
 
         def cthesis(sg, name=name, cur=cur, now_phase=now_phase):
             return ("TLREF %s fazında; bu fazda geçmişte %s sonraki %d iş gününde ortalama %s bp değişti (t %s, %s bağımsız dönem, eşik %s) → %s; "
-                    "beklenen %s bp (carry dahil)." % (now_phase, name, horizon, _sg(cur["mean"], 1), _g(cur["t"], 2), _g(cur["periods"], 1),
-                                                       _g(cur["cv"], 2), sg["expression"], _sg(sg.get("exp_pnl"), 1)))
+                    "beklenen %s%s." % (now_phase, name, horizon, _sg(cur["mean"], 1), _g(cur["t"], 2), _g(cur["periods"], 1),
+                                        _g(cur["cv"], 2), sg["expression"], exp_text(sg, 1), _incl(sg)))
 
         mon = Monitor("cycle:" + name, "cycle", "TRY OIS", name, "bp", 1, days[-ctx.window():], s[-ctx.window():], legs, calc,
                       zfn=lambda level, live, t_now=t_now: t_now, entry=entry, follows=True, mode="drift",
@@ -2515,16 +2845,19 @@ def fam_emcarry(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                     return side * ol["exp_long"] * hold * 7.0 / 5.0 / 365.0 if ol and ol.get("exp_long") is not None else None
 
                 def ethesis(sg, ol=ol):
-                    return ("TRY'nin carry / vol'ü EM sepetine göre %s (z %s; carry %s%% / yıl, beklenen kayma %s%% / yıl) → %s; ufukta beklenen %s%% "
-                            "(carry dahil)." % ("yüksek" if (sg["z"] or 0) > 0 else "düşük", _sg(sg["z"], 2), _sg((ol or {}).get("carry_long"), 1),
-                                                _sg((ol or {}).get("drift"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 2)))
+                    o = ol or {}
+                    prem = -o["carry_long"] if o.get("carry_long") is not None else None      # (a long pays it: the forward above the spot)
+                    return ("TRY'nin forward primi / vol oranı EM sepetine göre %s (z %s): USDTRY forward'ları yıllık %%%s prim fiyatlıyor, kur için "
+                            "beklenen artış yıllık %%%s → %s; beklenen %s%s." % (
+                                "yüksek" if (sg["z"] or 0) > 0 else "düşük", _sg(sg["z"], 2), _g(prem, 1), _g(o.get("drift"), 1),
+                                sg["expression"], exp_text(sg), _incl(sg)))
 
                 mon = Monitor("emcarry:TRY", "emcarry", "EM carry", "USDTRY 3M forward (EM sepetine karşı)", "", 4, [d for d, _ in fwd][-win:], fv[-win:],
                               [{"key": "FX:USDTRY", "name": "USDTRY 3M forward", "weight": 1.0}, {"key": "EMFX", "name": "USD / EM sepeti", "weight": -1.0}],
                               lambda live: ctx.cur("FWD:USDTRY:3M", live), zfn=lambda level, live: (rel_now(live) - mean) / sd if rel_now(live) is not None else None,
                               mode="drift", reward=(f_now - s_now) * horizon / 63.0, risk=to_level("fx", sd_f * math.sqrt(horizon), f_now),
                               hold=horizon, regime={"tag": None}, pkg="fx", score_name="z", fx="USDTRY", expect=eexpect, thesis=ethesis,
-                              pnl=("%", None), pnl_sd=(ol or {}).get("daily_sd"),
+                              pnl=("%", None), pnl_sd=(ol or {}).get("daily_sd"), price="level", inst="USDTRY 3A forward", inst_days=_tenor_days("3M"),
                               zvalues=None, info={"rel": rel[-1], "mean": mean, "sd": sd, "inputs": ["FXV:USDTRY", "FX:USDTRY"]},
                               note="TRY'nin carry / vol oranı (3M forward'ın ima ettiği yıllık getiri farkı ÷ ATM 3M vol) ile EM sepetinin ortalaması "
                                    "arasındaki farkın z'si: + ise TRY carry'si göreli cazip (USDTRY forward sat, EM sepetine karşı). Hedef: ufuk boyunca "
@@ -2686,17 +3019,25 @@ def fam_fwdprem(ctx: Ctx, usdtry_trend: Optional[Dict[str, Any]]) -> Tuple[List[
 
         def fthesis(sg, pair=pair, tenor=tenor):
             i = (sg.get("info") or {})
-            return ("%s %s forward'ı yıllık %%%s değer kaybı fiyatlıyor, beklenen kayma %%%s (EWMA, kesinliğiyle küçültülmüş): tampon %s puan "
-                    "(z %s) → %s; ufukta beklenen %s%% (carry dahil)." % (pair, tenor, _g(i.get("implied"), 1), _g(i.get("drift"), 1),
-                                                                          _sg(sg["level"], 1), _sg(sg["z"], 2), sg["expression"], _sg(sg.get("exp_pnl"), 2)))
+            return ("%s %s forward'ı yıllık %%%s kur artışı fiyatlıyor, beklenen artış yıllık %%%s (günlük getirilerin EWMA'sı, kesinliğiyle "
+                    "küçültülmüş): forward artışı %s fiyatlıyor, tampon %s puan (z %s) → %s; beklenen %s%s." % (
+                        pair, _tenor_en(tenor), _g(i.get("implied"), 1), _g(i.get("drift"), 1), "fazla" if (sg["level"] or 0) > 0 else "az",
+                        _sg(sg["level"], 1), _sg(sg["z"], 2), sg["expression"], exp_text(sg), _incl(sg)))
+
+        def fprice(c, fx, last_drift=last_drift, days_t=days_t):
+            # the forward the premium stands for, the spot as it is now: S × (1 + (drift + cushion) × days / 365)
+            sp = fx.get("spot")
+            return sp * (1.0 + (last_drift + c) / 100.0 * days_t / 365.0) if sp and last_drift is not None else None
 
         mon = mr_monitor(ctx, sid, "fwdprem", "FX", "%s %s forward" % (pair, tenor), "%", 2, days, cushion, "bp",
                          legs, calc, pkg="fx", gate=gate, gate_name="USDTRY trendi", info={"inputs": [fk, sk], "implied": row["implied"], "drift": last_drift},
                          fx=pair, expect=fexpect, thesis=fthesis, pnl=("%", None), pnl_sd=(ol or {}).get("daily_sd"),
+                         price=fprice, inst="%s %s forward" % (pair, _tenor_en(tenor)), inst_days=days_t, pct_base="spot",
+                         series_label="Tampon: forward'ın fiyatladığı yıllık kur artışı − beklenen artış (yüzde puan)",
                          note="Forward'ın ima ettiği yıllık değer kaybı − beklenen kayma (günlük getirilerin EWMA'sı, λ 0,97, yıllık, kesinliğiyle "
                               "küçültülmüş): + ise forward değer kaybını fazla fiyatlıyor → carry lehine (%s forward sat); − ise tersi. Beklenen: "
-                              "tamponun ufuk boyunca payı (forward'ı tutmanın getirisi). USDTRY'de carry dahil getirinin trend rejimi sinyali "
-                              "bekletir." % pair)
+                              "tamponun tutma süresine düşen payı - forward primi eksi beklenen kur hareketi. Hedef / stop fiyatları: tampon oraya "
+                              "gelince forward, spot bugünkü yerindeyken. USDTRY'nin forward pozisyonu trendde ise sinyal bekletilir." % pair)
         if mon is not None:
             mon.kind = "carry"
             mons_by[sid] = mon
@@ -2862,11 +3203,13 @@ def fam_model(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
         legs = [{"key": "FX:" + fx, "name": "%s forward" % fx, "weight": 1.0}] if fx else [{"key": key, "name": ctx.label(key), "weight": 1.0}]
 
         def mthesis(sg, p_now=p_now, wf=wf, fx=fx):
-            return ("Lojistik model gelecek haftanın %s yönlü olma olasılığını %%%s veriyor (kayan pencereli doğrulamada isabet %%%s, %d test)%s → "
-                    "%s; beklenen %s %s%s." % (
-                        ("carry dahil getirisinin yukarı" if fx else "yukarı"), _f1(p_now * 100), _f1((wf.get("hit_rate") or 0) * 100), wf["n"],
-                        "" if not fx else "; carry %s%% / yıl" % _sg(sg.get("carry_yr"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 2),
-                        sg.get("pnl_unit") or "", " (carry dahil)" if sg.get("carry_h") is not None else ""))
+            what = ("gelecek hafta %s'nin forward'ların fiyatladığından iyi gitme (forward'la alanın kazanma)" % fx if fx
+                    else "gelecek haftanın yukarı yönlü olma")
+            return ("Lojistik model %s olasılığını %%%s veriyor (kayan pencereli doğrulamada isabet %%%s, %d test)%s → %s; beklenen %s%s." % (
+                what, _f1(p_now * 100), _f1((wf.get("hit_rate") or 0) * 100), wf["n"],
+                "" if not fx else "; forward primi işlemin %s (yıllık %%%s)" % ("lehine" if (sg.get("carry_yr") or 0) >= 0 else "aleyhine",
+                                                                              _sg(sg.get("carry_yr"), 1)),
+                sg["expression"], exp_text(sg), _incl(sg)))
 
         mon = Monitor("model:" + key, "model", _asset_of("FX:" if fx else key), "%s forward" % fx if fx else ctx.label(key), level_unit(kind),
                       3 if kind in ("rate", "xr") else 4, days[-ctx.window():],
@@ -2875,14 +3218,15 @@ def fam_model(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                       reward=sd * math.sqrt(MODEL_STEP), risk=sd * math.sqrt(MODEL_STEP),
                       hold=float(MODEL_STEP), regime={"tag": None}, pkg={"rate": "rate", "bp": "cds", "fx": "fx", "xr": "fx"}.get(kind, "fx"),
                       carry_up=None if fx else ctx.carry_week(key), score_name="z(p)", fx=fx, dsd=sd, pnl=pnl_scale(kind, level),
-                      fcast=(2.0 * p_now - 1.0) * size, thesis=mthesis,
+                      fcast=(2.0 * p_now - 1.0) * size, thesis=mthesis, series_label=xr_label(fx) if fx else None,
                       info={"p": p_now, "hit_rate": wf.get("hit_rate"), "n_test": wf["n"], "log_loss": wf.get("log_loss"), "valid": valid,
                             "coef": dict(zip(MODEL_FEATURES, coef[1:]))},
                       note="Gelecek haftanın yönü için L2 lojistik regresyon (özellikler standart: %s). Yukarı olasılığı %%%s; kayan "
                            "pencereli doğrulamada isabet %%%s (%d test, log-loss %s). z = (p − 0,5) / 0,05. Beklenen: (2p − 1) × bir haftalık "
                            "hareketin ortalama büyüklüğü.%s" % (
                                explain, _f1(p_now * 100), _f1((wf.get("hit_rate") or 0) * 100), wf["n"], _f2(wf.get("log_loss")),
-                               " FX: etiket ve seviye carry dahil getiri (forward'la tutmak)." if fx else ""))
+                               " FX: etiket ve analiz serisi forward pozisyonunun getirisi (kur değişimi − forward primi); işlem 1 haftalık "
+                               "forward'la, fiyatları ve 1 mn baz döviz başına K/Z yukarıda." if fx else ""))
         if key.startswith("UST:"):
             mon.pkg = "bond"
         mon.zvalues = [None] * len(mon.values)
@@ -2982,23 +3326,39 @@ def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str,
             picked.append(t)
         if len(picked) >= k:
             break
+    # what an outcome is in money, where the level moves in P&L units: an FX trade per 1 mn of its base currency (the
+    # instrument's price the signal's), a rates package in TL of its main leg's DV01
+    mo = (sg or {}).get("money") or {}
+    conv: Optional[Callable[[float], float]] = None
+    if (m.pnl or (None, None))[1]:
+        if (sg or {}).get("px") and mo.get("ref"):
+            conv = lambda x: pct_money(x, s, mo["ref"], mo["log"])               # noqa: E731
+        elif mo.get("per_bp"):
+            conv = lambda x: x * mo["per_bp"]                                   # noqa: E731
     outcomes = []
     for t in sorted(picked, key=lambda x: -x):
         res = s * (values[t + hold] - values[t]) * factor
         outcomes.append(res)
         out["analogs"].append({"day": days[t], "features": feats[t], "distance": next(dd for dd, tt in dist if tt == t), "outcome": res,
-                               "level": values[t], "end": days[t + hold]})
+                               "level": values[t], "end": days[t + hold], "money": conv(res) if conv else None})
     srt = sorted(outcomes)
     n = len(srt)
     out["summary"] = {"n": n, "hits": sum(1 for x in srt if x > 0), "share": sum(1 for x in srt if x > 0) / n if n else None,
                       "mean": sum(srt) / n if n else None, "median": srt[n // 2] if n else None,
                       "q25": srt[max(0, n // 4)] if n else None, "q75": srt[min(n - 1, (3 * n) // 4)] if n else None,
                       "hold": hold, "unit": unit, "now": now, "carry_in": bool(m.fx)}
+    sm = out["summary"]
+    if conv and n:
+        sm["money"] = dict({k: conv(sm[k]) for k in ("mean", "median", "q25", "q75")}, ccy=mo["ccy"], base=mo.get("base"))
     # ---- what undoes it
     inv = []
-    if sg and sg.get("stop") is not None:
-        inv.append("Stop: seviye %s %s (giriş %s)%s" % (_g(sg["stop"], m.digits), m.unit, _g(sg["entry"], m.digits),
-                                                       " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
+    px = (sg or {}).get("px")
+    if sg and px and px.get("stop") is not None:
+        inv.append("Stop: %s %s (giriş %s)%s" % (px["inst"], _th(px["stop"], px["digits"]), _th(px["entry"], px["digits"]),
+                                                 " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
+    elif sg and sg.get("stop") is not None:
+        inv.append("Stop: seviye %s (giriş %s)%s" % (_level_text(sg["stop"], m.unit, m.digits), _level_text(sg["entry"], m.unit, m.digits),
+                                                     " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
     reg = m.regime or {}
     if m.kind in ("mr", "surprise"):
         inv.append("Rejim trende dönerse (varyans oranı z ≥ +%s; şimdi %s)" % (_g(Z_REGIME, 3), _sg(reg.get("vr_z"), 2)))
@@ -3008,7 +3368,8 @@ def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str,
     if m.half_life:
         inv.append("Yarı ömür ufkun %s katını aşarsa (şimdi %s gün)" % (_g(float(cfg["hl_max_mult"]), 0), _g(m.half_life, 1)))
     if m.fx and (sg or {}).get("carry_yr") is not None:
-        inv.append("Carry tersine dönerse (şimdi işlemin yönünde %s%% / yıl)" % _sg(sg["carry_yr"], 1))
+        inv.append("Forward primi tersine dönerse (şimdi işlemin %s: yıllık %%%s)" % ("lehine" if sg["carry_yr"] >= 0 else "aleyhine",
+                                                                                     _sg(sg["carry_yr"], 1)))
     if m.family in ("pairs", "kalman"):
         inv.append("Eşbütünleşme bozulursa (kalıntıya ADF %5'i geçemezse)")
     if m.family == "model":
@@ -3089,7 +3450,9 @@ def score_all(ctx: Ctx, mons: List[Monitor], raw_live: Dict[str, float]) -> None
         if m.family == "macro":
             macro_levels(m, ctx.cfg)
         if m.fx:
+            # the carry over the signal's own holding (a mean reversion's: from its half-life and z, as make_signal has it)
+            hold = hold_of(m)
             try:
-                m.fxinfo = fx_info(ctx, m.fx, live, m.hold, cal_days=(m.hold or 12.0) * 5.0 / 1440.0 if m.intraday else None)
+                m.fxinfo = fx_info(ctx, m.fx, live, hold, cal_days=(hold or 12.0) * 5.0 / 1440.0 if m.intraday else None)
             except Exception:  # noqa: BLE001 - a carry that cannot be read is told as missing
                 m.fxinfo = {"pair": m.fx}

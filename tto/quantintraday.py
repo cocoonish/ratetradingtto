@@ -264,6 +264,7 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
                                   hold=float(left), regime={"tag": None}, pkg="fx" if fx else "rate", intraday=True, horizon_unit="bar",
                                   dsd=qm.stdev([b - a for a, b in zip(closes_t, closes_t[1:])]) or (hi - lo) / 4.0,
                                   pnl=qf.pnl_scale("fx" if kind == "fx" else "rate", closes_t[-1]), fx=fx, fcast=ofcast, sample=sample,
+                                  price="level" if fx else None, inst="%s spot" % fx if fx else None,      # (the level is the spot)
                                   gate=_window_gate(now, meeting_day, False), gate_name="Seans", score_name="aralık",
                                   info={"or_high": hi, "or_low": lo, "breaks": len(breaks), "cont": cont},
                                   note="Açılış aralığı (ilk 30 dk) %s – %s; skor = (seviye − orta) ÷ yarı genişlik: ±1,5'in ötesi kırılım, yönünde "

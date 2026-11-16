@@ -450,6 +450,10 @@ def test_vol_premium_and_garch_forecast_signals():
         by[sid].score({}, {})
         s = qf.make_signal(by[sid], cfg(stop_z=50.0), "10:00")
         assert s["expression"] == "Sell USDZAR 3M ATM vol" and s["legs"][0]["key"] == "FXV:USDZAR"
+        # (no money for vol: the trade in plain words, the P&L in vol points)
+        assert s["px"] is None and s["money"] is None and s["trade_tr"] == "satılan: USDZAR 3M ATM vol"
+        assert s["plain"].startswith("Satılan: USDZAR 3M ATM vol. USDZAR 3M ATM vol şimdi")
+        assert s["plain"].endswith("vol puanı.") if s["exp_pnl"] is not None else "Beklenen" not in s["plain"]
     sigs = [qf.make_signal(by[sid], cfg(stop_z=50.0, hl_max_mult=10.0), "10:00") for sid in ("volprem:USDZAR", "volfc:USDZAR")]
     qf.rank(sigs)
     assert all(x["agree"] == 1 and x["agree_with"] for x in sigs)        # the realized and the forecast benchmark agree
@@ -464,6 +468,17 @@ def test_em_carry_ranking():
     assert abs(try_row["carry"] - quant_synth.CARRY["TRY"]) < 1.0
     assert abs(try_row["cv"] - quant_synth.CARRY["TRY"] / (quant_synth.VOL["TRY"] + 2.0)) < 0.5
     assert "rel" in try_row and len(mons) == 1 and mons[0].sid == "emcarry:TRY"
+    # told as the USDTRY 3M forward at its own price (the series is that forward), the EM basket its counter leg - the
+    # money per 1 mn USD the USDTRY leg's: notional × the forward's expected move, the premium's and the spot's parts
+    m = mons[0]
+    qf.score_all(ctx, [m], {})
+    s = qf.make_signal(m, cfg(entry_z=0.01), "10:00")
+    px, mo = s["px"], s["money"]
+    assert px["inst"] == "USDTRY 3A forward" and px["entry"] == pytest.approx(ctx.cur("FWD:USDTRY:3M")) and px["entry"] == pytest.approx(m.level)
+    assert px["target"] == pytest.approx(s["target"]) and px["stop"] == pytest.approx(s["stop"])           # (the level is that price)
+    assert mo["ccy"] == "TRY" and mo["total"] == pytest.approx(1e6 * s["direction"] * (px["exit"] - px["entry"]))
+    assert mo["carry"] + mo["move"] == pytest.approx(mo["total"]) and "USD / EM sepeti" in s["trade_tr"]
+    assert s["plain"].startswith("Bugün 3 aylık USDTRY forward'ını") and "Karşı bacak: USD / EM sepeti" in s["plain"]
 
 
 def test_viop_calendar_spread_against_cip_fair_value():
@@ -620,9 +635,38 @@ def test_fx_excess_return_takes_the_carry_out():
     s = qf.make_signal(m, cfg(), "10:00")
     assert s["expression"] == "Sell USDTRY forward" and s["direction"] == -1 and s["legs"][0]["key"] == "FX:USDTRY"
     assert s["carry_yr"] == pytest.approx(30.0, abs=1e-6) and s["carry_week"] == pytest.approx(30.0 * 7 / 365, abs=1e-6)
-    assert s["exp_pnl"] > 0 and s["pnl_unit"] == "%" and s["pnl_try"] == pytest.approx(s["exp_pnl"] / 100 * 1e6 * ctx.last("FX:USDTRY"))
+    assert s["exp_pnl"] > 0 and s["pnl_unit"] == "%"
+    # ... told as the desk trades it: the forward of the holding (20 business days, 28 calendar: "1A") sold at its price
+    # now, target and stop in that forward's price; the money per 1 mn USD in TRY = notional × the forward's price move
+    px, mo, spot = s["px"], s["money"], ctx.last("FX:USDTRY")
+    assert px["inst"] == "USDTRY 1A forward" and px["tenor"] == "1A" and px["days"] == pytest.approx(28.0) and px["digits"] == 4
+    assert px["spot"] == pytest.approx(spot) and px["entry"] == pytest.approx(s["fx"]["fwd_h"]) and px["entry"] == pytest.approx(spot * math.exp(0.30 * 28 / 365))
+    assert px["exit"] == pytest.approx(px["entry"] * math.exp(-s["exp_pnl"] / 100))       # the series' expected move, in the forward
+    assert px["target"] == pytest.approx(px["entry"] * math.exp((s["target"] - s["entry"]) / 100))
+    assert px["stop"] == pytest.approx(px["entry"] * math.exp((s["stop"] - s["entry"]) / 100)) and px["target"] < px["entry"] < px["stop"]
+    assert mo["ccy"] == "TRY" and mo["base"] == "USD" and mo["total"] == pytest.approx(1e6 * (px["entry"] - px["exit"]))      # sold: entry − exit
+    assert mo["carry"] == pytest.approx(1e6 * (px["entry"] - spot)) and mo["move"] == pytest.approx(1e6 * (spot - px["spot_exp"]))
+    assert mo["carry"] + mo["move"] == pytest.approx(mo["total"]) and mo["carry"] > 0 > mo["move"]       # the crawl eats part of the premium
+    assert px["spot_exp"] == pytest.approx(px["exit"])                                  # (the forward of the holding ends as the spot)
+    assert mo["target"] == pytest.approx(1e6 * (px["entry"] - px["target"])) and mo["stop"] == pytest.approx(1e6 * (px["entry"] - px["stop"]))
+    assert mo["target"] > 0 > mo["stop"] and s["pnl_try"] == pytest.approx(mo["total"])
+    # (the % times the spot, as it was told before, is the same money but for the forward's level: F / S)
+    assert mo["total"] / (s["exp_pnl"] / 100 * 1e6 * spot) == pytest.approx(px["entry"] / spot, rel=0.01)
+    # the card's sentence, from those numbers; no "carry dahil getiri" left in the thesis
+    assert s["plain"].startswith("Bugün 1 aylık USDTRY forward'ını satıp ~20 iş günü tutarsan (giriş %s)" % qf._th(px["entry"], 4))
+    assert "beklenen seviyeye gelirse (%s), 1 mn USD başına ~%s kazanırsın" % (qf._th(px["exit"], 4), qf._money(mo["total"], "TRY", False)) in s["plain"]
+    assert "forward priminden (carry) %s, kur hareketinden %s" % (qf._money(mo["carry"], "TRY"), qf._money(mo["move"], "TRY")) in s["plain"]
+    assert "Hedefte (%s) ~%s kâr" % (qf._th(px["target"], 4), qf._money(mo["target"], "TRY", False)) in s["plain"]
+    assert s["trade_tr"] == "USDTRY 1A forward sat" and "/ 1 mn USD" in s["thesis"] and "carry dahil" not in s["thesis"]
+    assert s["thesis"].startswith("USDTRY forward'ların fiyatladığından geride kalıyor")      # (the family's own sentence)
     carry_gate = next(g for g in s["gates"] if g["name"] == "Carry")
-    assert carry_gate["ok"] and "lehte" in carry_gate["text"] and "carry" in s["thesis"]
+    assert carry_gate["ok"] and "lehte" in carry_gate["text"] and qf._money(mo["carry"], "TRY") in carry_gate["text"] and "forward primi" in s["thesis"]
+    # the rationale: the analogs' outcomes (per cent of the forward) in TRY per 1 mn USD too, the stop in the forward's price
+    why = qf.rationale(ctx, m, s, cfg())
+    sm = why["summary"]
+    assert sm["money"]["ccy"] == "TRY" and sm["money"]["base"] == "USD" and sm["money"]["mean"] == pytest.approx(qf.pct_money(sm["mean"], -1, px["entry"]))
+    assert why["invalidation"][0] == "Stop: USDTRY 1A forward %s (giriş %s)" % (qf._th(px["stop"], 4), qf._th(px["entry"], 4))
+    assert any(x.startswith("Forward primi tersine dönerse (şimdi işlemin lehine") for x in why["invalidation"])
     row = next(r for r in table["rows"] if r["key"] == "XR:USDTRY")
     assert row["carry"] == pytest.approx(-30.0, abs=1e-6) and row["score"] < -1.5
     # a pair without forwards: its spot alone is no trade - told so, no carry made up
@@ -655,7 +699,14 @@ def test_a_trade_against_carry_needs_an_expected_move_that_beats_it():
     s = qf.make_signal(_fx_mon(2.5, 0.40), cfg(), "10:00")
     g = next(x for x in s["gates"] if x["name"] == "Carry")
     assert s["direction"] == 1 and s["carry_h"] == pytest.approx(-30.0 * 28 / 365) and g["ok"] and "aleyhte" in g["text"] and not s["gated"]
-    assert s["exp_pnl"] == pytest.approx(0.40) and s["pnl_try"] == pytest.approx(0.004 * 1e6 * 34.0)
+    # bought: 1 mn USD of the 28-day forward, 0,40 % up from it; the forward premium it pays, the spot's move that beats it
+    fwd = 34.0 * math.exp(0.30 * 28 / 365)
+    mo = s["money"]
+    assert s["exp_pnl"] == pytest.approx(0.40) and s["px"]["entry"] == pytest.approx(fwd) and s["px"]["exit"] == pytest.approx(fwd * math.exp(0.004))
+    assert mo["total"] == pytest.approx(1e6 * (s["px"]["exit"] - fwd)) and s["pnl_try"] == pytest.approx(mo["total"])         # TRY a TRY
+    assert mo["carry"] == pytest.approx(1e6 * (34.0 - fwd)) and mo["carry"] < 0
+    assert mo["move"] == pytest.approx(1e6 * (s["px"]["spot_exp"] - 34.0)) and mo["move"] > -mo["carry"]
+    assert mo["carry"] + mo["move"] == pytest.approx(mo["total"]) and s["plain"].startswith("Bugün 1 aylık USDTRY forward'ını alıp")
     # ... one below it is held back: carry'yi karşılamıyor, "elendi", no composite
     s = qf.make_signal(_fx_mon(2.5, 0.5 * margin), cfg(), "10:00")
     assert "carry'yi karşılamıyor" in s["gated"] and s["strength"] == "elendi" and s["composite"] == 0.0
@@ -667,6 +718,38 @@ def test_a_trade_against_carry_needs_an_expected_move_that_beats_it():
     m = _fx_mon(2.5, 1.0)
     m.fxinfo = {"pair": "USDTRY"}
     assert "forward yok" in qf.make_signal(m, cfg(), "10:00")["gated"]
+
+
+def test_fx_money_is_per_1mn_of_the_base_in_the_quote_currency():
+    """EURUSD's money is told per 1 mn EUR in USD (its TRY at USDTRY), USDZAR's per 1 mn USD in ZAR (its USD at the spot,
+    its TRY); the prices with the pair's own decimals; the desk's way of writing money and tenors."""
+    def mon(pair, spot, carry_yr, tpq, tpu):
+        m = qf.Monitor("momentum:XR:" + pair, "momentum", "FX", pair + " forward", "%", 3, DAYS[-200:], [0.0] * 200,
+                       [{"key": "FX:" + pair, "name": pair + " forward", "weight": 1.0}], lambda live: 0.0, follows=True, mode="drift", entry=1.5,
+                       reward=1.0, risk=1.0, hold=20.0, regime={"tag": "Trend"}, pkg="fx", fx=pair, dsd=0.1, pnl=("%", 1.0), fcast=-0.30)
+        m.zfn = lambda level, live: -2.5
+        m.score({}, {})
+        m.level = 0.0
+        m.fxinfo = {"pair": pair, "spot": spot, "carry_yr": carry_yr, "carry_h_yr": carry_yr, "cal_days": 28.0, "try_per_quote": tpq,
+                    "try_per_usd": tpu, "tenors": ["3M"], "fwd_h": spot * math.exp(-carry_yr * 28.0 / 365.0 / 100.0)}
+        return m
+
+    for pair, spot, carry, tpq, digits in (("EURUSD", 1.08, 1.5, 41.8, 5), ("USDZAR", 18.0, -7.0, 41.8 / 18.0, 4)):
+        s = qf.make_signal(mon(pair, spot, carry, tpq, 41.8), cfg(), "10:00")
+        px, mo = s["px"], s["money"]
+        fwd = spot * math.exp(-carry * 28 / 365 / 100)
+        assert s["direction"] == -1 and s["exp_pnl"] == pytest.approx(0.30) and mo["base"] == pair[:3] and mo["ccy"] == pair[3:]
+        assert px["entry"] == pytest.approx(fwd) and px["digits"] == digits and px["inst"] == pair + " 1A forward"
+        assert mo["total"] == pytest.approx(1e6 * (fwd - px["exit"])) and mo["total"] == pytest.approx(1e6 * fwd * (1 - math.exp(-0.003)))
+        assert mo["carry"] + mo["move"] == pytest.approx(mo["total"]) and mo["carry"] == pytest.approx(1e6 * (fwd - spot))
+        assert s["pnl_try"] == pytest.approx(mo["total"] * tpq) and mo["usd_per"] == pytest.approx(1.0 if pair.endswith("USD") else 1.0 / spot)
+        assert "1 mn %s başına ~%s kazanırsın" % (pair[:3], qf._money(mo["total"], pair[3:], False)) in s["plain"]
+        assert "giriş %s" % qf._th(fwd, digits) in s["plain"] and s["trade_tr"] == pair + " 1A forward sat"
+    assert [qf._money(v, "TRY") for v in (2325000.0, -1800000.0, 525400.0, 4210.0, -380.0, 0.2)] == [
+        "+2.325 bin TRY", "-1.800 bin TRY", "+525 bin TRY", "+4,2 bin TRY", "-380 TRY", "0 TRY"]
+    assert qf._money(12.5e6, "TL") == "+12,5 mn TL" and qf._money(525400.0, "TRY", False) == "525 bin TRY" and qf._th(44.125, 4) == "44,1250"
+    assert [qf.tenor_tr(d) for d in (7.0, 28.0, 91.25, 182.5, 365.0, 45.0)] == ["1H", "1A", "3A", "6A", "1Y", "45 gün"]
+    assert qf._tenor_long("3A") == "3 aylık" and qf._tenor_long("1H") == "1 haftalık" and qf._tenor_long("45 gün") == "45 günlük"
 
 
 def test_fx_pair_summary_tells_carry_drift_buffer_and_verdict():
@@ -707,6 +790,19 @@ def test_every_signal_carries_its_decision():
     assert s["sigma_h"] == pytest.approx(0.4 * math.sqrt(hold))
     assert [g["name"] for g in s["gates"]] == ["Eşik", "Stop bölgesi", "Rejim", "Yarı ömür", "Carry", "Beklenen kâr"] and all(g["ok"] for g in s["gates"])
     assert s["strength"] == "Güçlü" and "Receive 2Y OIS" in s["thesis"] and "beklenen" in s["thesis"]
+    # in TL of the package's DV01 (1.000 $ a bp at 40): the expected P&L, its carry + roll and the move, the target, the stop
+    mo = s["money"]
+    assert s["px"] is None and mo["ccy"] == "TL" and mo["per_bp"] == pytest.approx(40000.0) and mo["dv01_usd"] == pytest.approx(1000.0)
+    assert mo["total"] == pytest.approx(s["exp_pnl"] * 40000.0) and mo["total"] == pytest.approx(s["pnl_try"]) and mo["bp"]["carry"] == pytest.approx(hold / 5.0)
+    assert mo["carry"] == pytest.approx(hold / 5.0 * 40000.0) and mo["move"] == pytest.approx(back * 40000.0) and mo["carry"] + mo["move"] == pytest.approx(mo["total"])
+    assert mo["target"] == pytest.approx(3.0 * 40000.0) and mo["stop"] == pytest.approx(-0.5 * 40000.0)
+    # what is received / paid, earned at the target, lost at the stop - in bp and TL, and the thesis with its TL
+    assert s["trade_tr"] == "sabit faiz alınan (receive): 2Y OIS (değişken bacak TLREF)"
+    assert s["plain"].startswith("Sabit faiz alınan (receive): 2Y OIS (değişken bacak TLREF). 2Y OIS (PC1–PC2 hedge'li) şimdi +3,0 bp")
+    assert "hedef seviyesine (0,0 bp) gelirse 3,0 bp ≈ 120 bin TL kazanırsın, stop seviyesine (+3,5 bp) gelirse 0,5 bp ≈ 20 bin TL kaybedersin" in s["plain"]
+    assert "Beklenen: ~13 iş günü içinde +%s bp ≈ %s (+%s bp'si carry + roll)" % (qf._g(back + hold / 5.0, 1), qf._money(mo["total"], "TL"),
+                                                                                qf._g(hold / 5.0, 1)) in s["plain"]
+    assert s["plain"].endswith("Ana bacak 1.000 $ DV01 = 40.000 TL / bp.") and "≈ %s" % qf._money(mo["total"], "TL") in s["thesis"]
     # the same signal paying more carry than the reversion is worth: no expected profit, eliminated - and said so
     s = qf.make_signal(mon(1.5), cfg(), "10:00")
     assert s["exp_pnl"] < 0 and "beklenen kâr yok" in s["gated"] and s["strength"] == "elendi"
@@ -835,6 +931,19 @@ def test_forward_premium_carry_timing_and_its_regime_gate():
     assert s["expression"] == "Sell USDTRY 3M forward" and not s["gated"]
     # selling the forward earns its premium less the drift: carry with the trade, the cushion over the holding expected
     assert s["carry_yr"] > 30.0 and s["exp_pnl"] == pytest.approx(m.level * s["hold"] * 7 / 5 / 365) and "tampon" in s["thesis"]
+    # told as the 3M forward sold at its price now; the money of the cushion's share a simple per cent of the spot; its
+    # carry part the forward's points earned over the holding (the carry of the signal's own holding, not the default
+    # horizon's), the rest the expected drift: the spot expected is the drift's
+    px, mo, spot, cal = s["px"], s["money"], ctx.last("FX:USDTRY"), s["hold"] * 7 / 5
+    assert s["fx"]["cal_days"] == pytest.approx(cal) and s["carry_h"] == pytest.approx(s["fx"]["carry_h_yr"] * cal / 365 * -1)
+    assert px["inst"] == "USDTRY 3A forward" and px["entry"] == pytest.approx(ctx.last("FWD:USDTRY:3M")) and px["note"] == "bugünkü 3A forward"
+    assert mo["total"] == pytest.approx(1e6 * spot * s["exp_pnl"] / 100) and mo["total"] == pytest.approx(1e6 * (px["entry"] - px["exit"]))
+    assert mo["carry"] == pytest.approx(1e6 * (px["entry"] - spot) * cal / 91.25) and mo["carry"] + mo["move"] == pytest.approx(mo["total"])
+    assert px["spot_exp"] == pytest.approx(spot * (1 + s["info"]["drift"] / 100 * cal / 365)) and mo["move"] < 0
+    # target and stop: the 3M forward where the cushion would be, the spot where it is
+    drift = s["info"]["drift"]
+    assert px["target"] == pytest.approx(spot * (1 + (drift + s["target"]) / 100 * 91.25 / 365)) and px["target"] < px["entry"] < px["stop"]
+    assert mo["target"] == pytest.approx(1e6 * (px["entry"] - px["target"])) and "3 aylık USDTRY forward'ını satıp" in s["plain"]
     mons, _ = qf.fam_fwdprem(ctx, {"regime": "Trend", "score": 2.5})
     qf.score_all(ctx, [mons[0]], {})
     s = qf.make_signal(mons[0], cfg(stop_z=20.0), "10:00")
@@ -1425,6 +1534,11 @@ def test_quant_http_api(seeded):
         why = one["rationale"]
         assert why["summary"]["n"] == 10 and len(why["analogs"]) == 10 and why["invalidation"][0].startswith("Stop")
         assert one["signal"]["thesis"] and one["signal"]["gates"] and "exp_pnl" in one["signal"]
+        # every signal of the list in plain words: the trade in desk words and the sentence the card shows
+        assert all(s["trade_tr"] and s["plain"] for s in res.json()["signals"])
+        # the rationale's outcomes in TL too (a rates package: bp × its main leg's DV01)
+        sm = why["summary"]
+        assert sm["money"]["ccy"] == "TL" and sm["money"]["mean"] == pytest.approx(sm["mean"] * one["signal"]["money"]["per_bp"])
         assert client.post("/api/quant/settings", json={"values": {"entry_z": "9"}}).status_code == 400
         res = client.post("/api/quant/settings", json={"values": {"entry_z": "2.2"}})
         assert res.status_code == 200 and res.json()["values"]["entry_z"] == 2.2
@@ -1601,6 +1715,12 @@ def test_intraday_families_on_planted_bars():
     path = sig["ipath:USDTRY"]
     assert table["path"]["carry"] == pytest.approx(-30.0, abs=1e-6) and path and path["expression"].startswith("Sell USDTRY")
     assert path["z"] > 2 and path["carry_yr"] > 25.0 and path["fx"]["cal_days"] < 1.0           # selling it earns the carry
+    # told as the spot sold now, for the session's bars, its money per 1 mn USD the spot's move (no forward to roll)
+    px, mo = path["px"], path["money"]
+    assert px["inst"] == "USDTRY spot" and px["tenor"] is None and path["trade_tr"] == "USDTRY spot sat"
+    assert px["entry"] == pytest.approx(live["FX:USDTRY"], rel=1e-5) and mo["total"] == pytest.approx(1e6 * (px["entry"] - px["exit"])) and mo["total"] > 0
+    assert path["plain"].startswith("Şimdi spot USDTRY satıp ~%s bar (5 dk) tutarsan (giriş %s)" % (qf._g(path["hold"], 0), qf._th(px["entry"], 4)))
+    assert "forward priminden" not in path["plain"] and "bar (5 dk) içinde" in z1["plain"] and "TL kazanırsın" in z1["plain"]
     # a PPK day's announcement window holds the mean-reversion ones back; after 17:00 no new intraday trade at all
     m2, _ = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 14, 0), meeting_day=True)
     qf.score_all(ctx, m2, live)
