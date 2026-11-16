@@ -1,8 +1,10 @@
 // RET faizleri: the desk's TRY RET bid / ask curve.  Typed or pasted from Excel, stored on the server
-// (shared by everyone, kept across restarts) with a history of every upload.
+// (shared by everyone, kept across restarts) with a history of every upload.  A second tab holds the fair value RET
+// (retfair.js): the rule-based curve the desk publishes from with "Kopyala ve yayınla".
 import { api } from './api.js';
 import { h, clear, modal, toast, errorToast, copyText } from './ui.js';
 import { num, raw, parseNumber } from './format.js';
+import { fairPane } from './retfair.js';
 
 const ALIASES = { 'O/N': 'ON', 'T/N': 'TN', '12M': '1Y', '24M': '2Y', '1.5Y': '18M', '1,5Y': '18M', '1H': '1W', '2H': '2W', '3H': '3W',
   '1A': '1M', '2A': '2M', '3A': '3M', '4A': '4M', '5A': '5M', '6A': '6M', '9A': '9M', '18A': '18M' };
@@ -82,11 +84,13 @@ export function shiftedRows(rows, shifts, sides) {
   });
 }
 
-export async function openRetEditor(ctx) {
+/** The RET dialog; ``opts.tab`` 'fair' opens it on the fair value tab (else the tab used last). */
+export async function openRetEditor(ctx, opts) {
   let data;
   try { data = await api.get('/api/ret'); } catch (err) { errorToast(err); return; }
   const tenors = data.rows.map((r) => r.tenor);
-  const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 1040 });
+  let fair = null;
+  const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 1040, onClose: () => { if (fair) fair.destroy(); } });
   const inputs = {};                 // tenor -> {bid, ask, bp}
   const mids = {}, news = {}, lines = {}, spreads = {};
   const before = {};                 // tenor -> spread (bp) of the curve as it was opened (or last saved)
@@ -186,6 +190,7 @@ export async function openRetEditor(ctx) {
   table.appendChild(tbody);
 
   const onPaste = (e) => {
+    if (e.target && e.target.closest && e.target.closest('#ret-pane-fair')) return;      // (the fair value tab's own boxes)
     const text = (e.clipboardData || window.clipboardData).getData('text/plain');
     if (!text || (!text.includes('\t') && !text.includes('\n'))) return;        // a single value: normal paste
     e.preventDefault();
@@ -307,13 +312,14 @@ export async function openRetEditor(ctx) {
   };
   loadHistory();
 
-  m.body.appendChild(h('p', { class: 'muted', style: { margin: '0 0 10px' } },
+  const manual = h('div', { id: 'ret-pane-manual' });
+  manual.appendChild(h('p', { class: 'muted', style: { margin: '0 0 10px' } },
     'Excel\'de RET tablosunu (yalnızca bid–ask sütunları ya da vade etiketiyle birlikte) kopyalayın, aşağıdaki tabloda bir kutuya tıklayıp Ctrl+V ile yapıştırın. ',
     'Değerler yüzde (34,45) ya da oran (0,3445) olabilir. Kaydırma: "Tümünü kaydır"a baz puanı yazın – her vadenin yanında ne kadar kayacağı ve yeni ',
     'bid / ask görünür; sabit kalacak vadelerin "Kaydır" kutusunu silin (ya da farklı bir miktar yazın), sonra "Uygula". ',
     'Kaydedilen eğri tüm kullanıcılar için geçerlidir ve sunucu yeniden başlasa da saklanır.'));
-  m.body.appendChild(tools);
-  m.body.appendChild(h('div', { class: 'ret-layout' }, h('div', null, table, meta), hist));
+  manual.appendChild(tools);
+  manual.appendChild(h('div', { class: 'ret-layout' }, h('div', null, table, meta), hist));
   const save = h('button', { class: 'btn primary', type: 'button' }, 'Kaydet');
   save.addEventListener('click', async () => {
     if (pending().length) {
@@ -340,6 +346,41 @@ export async function openRetEditor(ctx) {
   });
   m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
   m.foot.appendChild(save);
+
+  // ---- the fair value RET: a tab of its own; what it publishes shows here too (the table, the meta, the history)
+  const refill = async () => {
+    try {
+      const d = await api.get('/api/ret');
+      fillRows(d.rows);
+      markSaved();
+      saved = JSON.stringify(current());
+      setMeta(d.meta);
+      loadHistory();
+    } catch (err) { /* the next opening shows it */ }
+  };
+  fair = fairPane(ctx, { retText, onPublished: refill, onClose: () => m.close() });
+  const tManual = h('button', { type: 'button', id: 'ret-tab-manual', title: 'RET\'i elle girin, Excel\'den yapıştırın, kaydırın, kopyalayın' }, 'Elle giriş');
+  const tFair = h('button', { type: 'button', id: 'ret-tab-fair',
+    title: 'Kural tabanlı RET: her vadede taban (OIS / VİOP / offshore mid ya da karma) + tabana spread + akış ayarı, sabit genişlik, 5 bp yuvarlama' },
+  'Adil değer (kural tabanlı)');
+  const showTab = (which) => {
+    const isFair = which === 'fair';
+    tManual.classList.toggle('on', !isFair);
+    tFair.classList.toggle('on', isFair);
+    manual.classList.toggle('hidden', isFair);
+    save.classList.toggle('hidden', isFair);                 // ("Kaydet" is the manual table's)
+    m.box.style.width = isFair ? 'min(1440px, 97vw)' : 'min(1040px, 94vw)';
+    if (isFair) fair.show(); else fair.hide();
+    try { localStorage.setItem('tto.ret.tab', which); } catch (e) { /* storage unavailable */ }
+  };
+  tManual.addEventListener('click', () => showTab('manual'));
+  tFair.addEventListener('click', () => showTab('fair'));
+  m.body.appendChild(h('div', { class: 'tabs ret-tabs' }, tManual, tFair));
+  m.body.appendChild(manual);
+  m.body.appendChild(fair.el);
+  let start = opts && opts.tab;
+  if (!start) { try { start = localStorage.getItem('tto.ret.tab'); } catch (e) { start = null; } }
+  showTab(start === 'fair' ? 'fair' : 'manual');
   const first = inputs[tenors[0]];
-  if (first) first.bid.focus();
+  if (first && start !== 'fair') first.bid.focus();
 }

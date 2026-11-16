@@ -563,6 +563,44 @@ table.plain.ret td.ret-new .chg { color: var(--accent-ink); font-weight: 650; }
 .ret-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
 .ret-hist { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
 .ret-hist .btn { text-align: left; }
+/* the RET dialog's tabs and its fair value part (retfair.js) */
+.tabs.ret-tabs { margin: -4px 0 12px; padding: 0; }
+.retfair-pane .ret-tools .sep { width: 1px; align-self: stretch; background: var(--line-2); margin: 0 4px; }
+.retfair-banner { font-weight: 650; border-color: var(--warn); }
+.retfair-scroll { overflow-x: auto; }
+table.plain.retfair td { padding: 3px 6px; }
+table.plain.retfair select.inp { padding: 3px 6px; font-size: 12px; }
+table.plain.retfair input.retfair-off { width: 70px; padding: 3px 7px; text-align: right; }
+table.plain.retfair td.retfair-formula { color: var(--ink-2); font-size: 11.5px; }
+table.plain.retfair td.retfair-now { font-weight: 650; min-width: 112px; }
+table.plain.retfair td.retfair-now.up { color: var(--pos); }
+table.plain.retfair td.retfair-now.down { color: var(--neg); }
+table.plain.retfair td.retfair-now.chg { color: var(--accent-ink); }
+table.plain.retfair tr.upd td { background: var(--note-bg); }
+table.plain.retfair .retfair-flow { font-weight: 650; color: var(--accent-ink); }
+table.plain.retfair .iconbtn { padding: 0 5px; }
+table.plain.retfair tr.retfair-wrow td { text-align: left; background: var(--sub-bg); }
+.retfair-wform { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.retfair-hint { margin: 6px 2px 4px; font-size: 11.5px; }
+.retfair-h { font-size: 12.5px; margin: 16px 0 6px; color: var(--ink-2); }
+table.plain.retfair-where td.pos, table.plain.retfair-flows td.pos { color: var(--pos); }
+table.plain.retfair-where td.neg, table.plain.retfair-flows td.neg { color: var(--neg); }
+table.plain.retfair-where td.cur { font-weight: 650; }
+.retfair-suggs { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.retfair-sugg { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border: 1px solid var(--accent); border-radius: 8px;
+  background: var(--accent-soft); }
+.retfair-sugg .txt { flex: 1; }
+.retfair-sugg.blocked { border-color: var(--line-2); background: var(--surface-2); color: var(--ink-2); }
+.retfair-admin, .retfair-log { margin-top: 14px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+.retfair-admin summary, .retfair-log summary { cursor: pointer; font-weight: 650; }
+.retfair-fields, .retfair-widths { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; }
+.retfair-field, .retfair-widths label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.retfair-admin-foot { display: flex; justify-content: flex-end; }
+.retfair-loglist { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; margin-top: 8px; font-size: 12px; }
+#btn-ret .retupd { display: inline-block; margin-left: 7px; padding: 0 7px; border-radius: 999px; background: var(--warn); color: #1a1a19;
+  font-size: 11px; font-weight: 700; line-height: 17px; vertical-align: 1px; }
+/* Günlük İşlemler: the position and its cost per RET tenor (retposition.js) */
+.panel.position .note { padding: 6px 10px; color: var(--ink-3); font-size: 11.5px; }
 .mine-list { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 .mine-list .mono { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 .btn.primary.danger-solid { background: #c64242; border-color: #c64242; color: #fff; }
