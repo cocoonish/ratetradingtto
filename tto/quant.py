@@ -957,7 +957,7 @@ class Quant(object):
             rows.append(r)
         macro["rows"] = rows
         t["macro"] = macro
-        for name in ("pairs", "vol", "rv", "frapath", "viopcal", "fwdprem"):
+        for name in ("pca", "pairs", "vol", "rv", "frapath", "viopcal", "fwdprem"):
             tab = t.get(name) or {}
             for r in tab.get("rows") or []:
                 for key in ("sid", "vrp_sid", "vf_sid", "k_sid"):

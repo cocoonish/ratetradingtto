@@ -56,7 +56,9 @@ class ViopPage extends QuantPage {
     this.intra.note.textContent = 'Ön kontratın işlemleri ve USDTRY orta kuru: yarım saatlik dilimde barın oynaklığı ve ima faizin günün ortalamasından '
       + 'ortalama uzaklığı (− = o saatlerde genellikle daha düşük: alış için iyi). Barlar canlı modda, geçmiş günler için bir kez istenir.';
     this.boxes.intra = new GridBox(this.intra, 'quant/viop/intraday');
-    this.boxes.days = new GridBox(this.intra, 'quant/viop/days');
+    // (the last days' lows and highs in a panel of their own: two tables in one panel's body would clear each other)
+    this.days = panel('quant-viop-intraday-days', 'Gün içi · son günlerin en düşük ve en yüksek ima faizi', { cls: 'aux' });
+    this.boxes.days = new GridBox(this.days, 'quant/viop/days');
     this.calib = panel('quant-viop-calibration', 'Seviyeler geçmişte nasıl tuttu', { cls: 'aux' });
     this.calib.note.textContent = 'Haftalık: geçmişin her kapanışında o haftanın kalanı için verilen seviyeler, gelen kapanışlara karşı (1 ve 3 aylık sabit '
       + 'vade). c: isabet oranlarını olasılıklara en çok yaklaştıran σ çarpanı (canlı seviyelerde kullanılır). Gün içi: barlı günlerde saat 11:00\'de verilen '
@@ -66,7 +68,8 @@ class ViopPage extends QuantPage {
     this.boxes.ranges = new GridBox(this.ranges, 'quant/viop/ranges');
     this.data_ = panel('quant-viop-data', 'Veri · kontratların Bloomberg geçmişi', { cls: 'aux' });
     this.boxes.data = new GridBox(this.data_, 'quant/viop/data');
-    page.append(sp.el, cp.el, this.table.el, this.levels.el, this.cal.el, this.expiry.el, this.intra.el, this.calib.el, this.ranges.el, this.data_.el);
+    page.append(sp.el, cp.el, this.table.el, this.levels.el, this.cal.el, this.expiry.el, this.intra.el, this.days.el, this.calib.el, this.ranges.el,
+      this.data_.el);
     this.addStatus(page);
     this.host.appendChild(page);
   }

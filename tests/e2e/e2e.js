@@ -2438,6 +2438,15 @@ async function shot(page, name) {
     await page.waitForSelector('#quant-pca-windows', { timeout: 30000 });
     check('PCA / RV shows the dynamic PCA, both fly conventions and the path\'s fit', await page.locator('#quant-pca-stability').count() === 1
       && /klasik/.test(await page.textContent('#quant-pca-rv')) && /Konvansiyon|Patika yok/.test(await page.textContent('#quant-pca-tenors')));
+    // each table's read line (quantread.js): right under its title, in the desk's words; its method note below it as "Yöntem"
+    const pcaRead = await page.evaluate(() => [...document.querySelectorAll('section.panel[id^="quant-pca-"]')].map((p) => {
+      const r = p.querySelector(':scope > .qread'), n = p.querySelector(':scope > .qnote');
+      return { id: p.id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER' && getComputedStyle(r).display !== 'none',
+        method: n && n.classList.contains('qmethod') && n.textContent ? getComputedStyle(n, '::before').content : null };
+    }));
+    check('every PCA / RV table says under its title what it tells and which number is a trade, its method below it as "Yöntem"',
+      pcaRead.length >= 12 && pcaRead.every((p) => p.read.length >= 40 && p.under)
+      && pcaRead.filter((p) => p.method !== null).length >= 6 && pcaRead.every((p) => p.method === null || p.method === '"Yöntem: "'), pcaRead);
     await open(page, 'quant-fx');
     await page.waitForSelector('#quant-fx-summary', { timeout: 30000 });
     check('the FX page starts with the per-pair carry summary', /Carry % \/ yıl|tarihçesi yok/.test(await page.textContent('#quant-fx-summary')));

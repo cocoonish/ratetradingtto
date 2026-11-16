@@ -1,0 +1,113 @@
+// The quant tables' read lines: one or two sentences in the desk's words above each table - what it tells and which
+// number means a trade, when and which way (quantbase.js panel()). The table's own note below it stays as it was,
+// labelled "Yöntem" (how it is computed), except where the note is how to read it or live information: the panels
+// whose line is one of INFO's keys.
+//
+// A key is a panel id, or a pattern for ids built at run time ("quant-*-signals": every analysis page's signal list); a
+// panel's own key wins over a pattern. "" means the panel has no read line on purpose (a form, a status). Between the
+// markers the literals are plain JSON (double quotes, no trailing commas, no comments): tests/test_quantread.py reads
+// them to check that every quant table has its line, within its length and without the method's jargon.
+
+// <READ>
+export const READ = {
+  "quant-*-signals": "Bu sayfanın analizinden şu an giriş eşiğini geçen işlemler. \"İşlem\" ne yapacağını (receive / pay, al / sat), \"z\" ne kadar saptığını, \"Beklenen K/Z\" tutma boyunca beklenen kârı yazar; gri satır (\"Güç\": elendi) bir kapıya takıldı, nedeni \"Bileşik / neden\"de.",
+  "quant-*-chart": "Tıkladığın satırın serisi: sinyal varsa üstte düz anlatımı (ne alınır / satılır, hedefte ve stopta ne olur), altta bugüne benzeyen geçmiş günlerden sonra ne olduğu. Ortalamaya dönüş serisinde ±giriş bandının dışı sinyal, ±stop bandının dışı stop bölgesidir.",
+  "quant-signals": "Şu an giriş eşiğini geçmiş ve kapılardan geçen bütün işlemler, en güçlüsü üstte (\"Bileşik\"e göre). Ne yapılacağı \"İşlem\"de, seviyeler \"Giriş\" / \"Hedef\" / \"Stop\"ta, tutma boyunca beklenen kazanç \"Beklenen K/Z\"de; \"Uyum\" kaç başka ailenin aynı yönde olduğunu söyler.",
+  "quant-chart": "Seçtiğin sinyal tek cümleyle: ne alınıp satılacağı, hangi seviyeden ve tutma süresince ne beklendiği. \"Hedefte / stopta\" iki ucun kazancını ve kaybını verir; \"Gerekçe\" bugüne en çok benzeyen geçmiş günlerin kaçında işlemin kârda bittiğini gösterir.",
+  "quant-gated": "Eşiği geçtiği halde bir kapıya takılan sinyaller: \"Neden\" hangisi olduğunu yazar (ör. trend rejimi, uzun yarı ömür, stop bölgesi, carry, beklenen kâr yok). Bunlar kayda ve alarma düşmez; kapı açılınca üstteki listeye geçer.",
+  "quant-backtest": "Aileler aynı kurallarla son bir yılda oynansaydı ne olurdu? \"İsabet\" ve \"Sharpe\" düşük, \"Ort. K/Z\" eksi olan aile geçmişte kaybettirmiş: sinyaline temkinle yaklaş; \"İşlem\" azsa sonuç tesadüf olabilir. \"Geri testi zayıf aileyi sustur\" açıksa ayardaki sınırın altındaki ailenin sinyalleri elenir.",
+  "quant-hits": "Listeye giren sinyaller canlıda nasıl bitti, aile aile? \"İsabet\" hedefe varan ya da süresi kârda dolan payı; \"Kapanan\" azken bu sayıya güvenme. İsabeti düşük, ortalama K/Z'si eksi ailenin yeni sinyaline temkinle yaklaş.",
+  "quant-log": "Eşiği geçip listeye giren her sinyalin girişi ve sonucu: \"Sonuç\" açık, hedef, stop, süre ya da veri yok; \"K/Z\" kapanıştaki kâr / zarar, seviyenin biriminde. Bir ailenin son kayıtları çoğunlukla stopla bitiyorsa yeni sinyaline temkinle yaklaş; satıra tıklayınca serisi çizilir.",
+  "quant-subscribe": "",
+  "quant-settings": "",
+  "quant-intraday-bars": "Gün içi sinyallerin dayandığı kayıt: kaç günlük bar var (bugün dahil en az 3 gün gerekir), son bar ne zaman. \"Bugün PPK günü\" evetse 13:45 – 15:30 arası geri dönüş sinyalleri elenir; 17:00'den sonra bütün gün içi sinyaller elenir.",
+  "quant-intraday-z": "Seri son bir saatin ortalamasından fazla uzaklaştı mı, açılış aralığını kırdı mı? \"z\" giriş eşiğini geçince geri dönüşe oyna (artıda faizde receive, kurda spot sat; eksi tarafta tersi), \"Aralık skoru\" ±1,5'i aşıp \"Ort. devam\" artıysa kırılım yönünde gir (yukarıda pay / spot al, aşağıda tersi).",
+  "quant-intraday-rv": "Offshore − OIS ve 1s2s / 2s5s gün içinde son 20 güne göre geniş mi dar mı? \"z\" giriş eşiğini geçince artıda daralmaya oyna: offshore'u ya da uzun vadeyi receive, karşı bacağı pay; eksi tarafta tersi.",
+  "quant-intraday-path": "USDTRY gün içinde, açılıştan beri forward priminin fiyatladığı patikanın önünde mi gerisinde mi? \"Fark %\" artıysa spot önde → spot sat, eksiyse geride → spot al; \"z\" giriş eşiğini geçmeyen fark gürültüdür, beklenti farkın yarısının en çok bir saatte kapanması.",
+  "quant-model-table": "Gelecek hafta yukarı mı aşağı mı? Yalnızca \"Geçerli\" ✓ (geçmiş testlerde yeterince isabetli) enstrümanda \"p (yukarı)\" %50'den giriş eşiğinin 5 katı puan uzaklaşınca: p yüksekse yükselişe (faizde pay, USDTRY forward al), düşükse düşüşe (receive, forward sat) oynarsın.",
+  "quant-pca-factors": "Bugün eğri nasıl oynadı: paralel kayma (PC1), eğim (PC2), eğrilik (PC3)? \"Bugünkü skor (bp)\" artıysa PC1'de faizler yükseldi, PC2'de eğri dikleşti, PC3'te gövde kanatlara göre yükseldi; \"Skor z\" hareketin olağan güne göre büyüklüğü, \"Seviye z\" bileşenin penceredeki yeri, sinyal üretmez.",
+  "quant-pca-loadings": "Her vade paralel kayma, eğim ve eğrilikte ne kadar oynuyor? \"PC1\", \"PC2\", \"PC3\" vadenin yükü: PC1 artıyken faizler yükselir, PC2 artıyken uzun uç kısa uca göre yükselir, PC3 artıyken gövde kanatlara göre yükselir; PCA ağırlıklı fly / spread ağırlıkları bu yüklerden çıkar.",
+  "quant-pca-windows": "Eğrinin günlük hareketini paralel kayma, eğim ve eğrilik 60, 120 ve 250 günlük pencerelerde ne kadar açıklıyor? \"PC1 açıklanan\" paralel kaymanın payı, \"Sinyallerin penceresi\" ● olan PCA sinyallerinin kullandığı pencere; işlem önermez.",
+  "quant-pca-resid": "Her OIS vadesi iki komşusuna göre ucuz mu pahalı mı? \"Kalıntı (bp)\" artıysa vade ucuz → receive, eksiyse pahalı → pay (komşu bacaklar \"Hedge\" ağırlıklarıyla); paket eğrinin paralel kaymasına ve eğimine karşı korunmuştur, sapmanın z'si giriş eşiğini geçince sinyal olur.",
+  "quant-pca-rv": "Masanın spread ve fly'ları (klasik ve PCA ağırlıklı) ortalamasından ne kadar uzak? \"z\" artıysa paket ortalamanın üstünde → receive (uzun vade / gövde receive, kısa vade / kanatlar pay), eksiyse pay; \"PC1 1σ (bp)\" ve \"PC2 1σ (bp)\" kalan kayma ve eğim riski, \"Carry / hf (bp)\" pay edenin haftalık carry'si.",
+  "quant-pca-fra": "Eğrinin FRA forward'ları toplantı tarihli PPK patikasından sapıyor mu? \"Fark (bp)\" ±5 bp'nin dışına çıkıp \"z\" giriş eşiğini geçince: z artıysa uzak bacak ucuz → FRA receive (uzak vade receive, yakın vade pay), eksiyse FRA pay.",
+  "quant-pca-tenors": "Kontrol: PPK patikası bugünkü OIS kotalarını yeniden üretiyor mu? \"Fark (bp)\" ±5 bp içindeyse evet, aşan vade kalın yazılır (patika o vadeyi tutturamıyor); bu tablo işlem önermez.",
+  "quant-pca-periods": "Piyasa sıradaki PPK toplantılarında ne fiyatlıyor? \"Fiyatlanan adım (bp)\" eksiyse indirim, artıysa artırım fiyatlanıyor, \"Patika %\" o toplantıdan sonraki gecelik seviye; sinyal üretmez.",
+  "quant-pca-stability": "Paralel kayma, eğim ve eğrilik bileşenlerinin şekli pencereden pencereye aynı mı? \"60↔120 |cos|\" gibi sütunlar 1'e yakınsa aynı şekil; 0,9'un altı kalın yazılır, o bileşenle kurulan PCA ağırlıkları pencereye göre değişir, işlem önermez.",
+  "quant-pca-loadw": "Yüklerin 60, 120 ve 250 günlük pencerelerdeki değerleri (PC1 paralel kayma, PC2 eğim, PC3 eğrilik). Bir vadede \"PC1 60g\" ile \"PC1 250g\" gibi sütunlar çok farklıysa o bileşenin şekli pencereye bağlıdır; işlem önermez.",
+  "quant-pairs-table": "Birlikte hareket eden iki seri (offshore–OIS, VİOP–OIS, DİBS–OIS, swap puanı–faiz farkı) arasında makas açıldı mı? \"Geçti\" ✓ olan çiftte \"z\" giriş eşiğini geçince: artıysa ilk seri yüksek → ilkini receive et (DİBS'te kâğıdı al, VİOP'ta kontratı sat), ikinciyle β oranında hedge'le; eksiyse tersi.",
+  "quant-pairs-viop": "VİOP'ta iki vade arasındaki fark faiz paritesine göre adil mi? \"Fark (bp)\" VİOP'un ima ettiği TRY forward faizi − OIS forward'ı; \"z\" giriş eşiğini geçince: artıysa uzak vade pahalı → uzak kontratı sat, yakını al; eksiyse uzak al, yakın sat.",
+  "quant-corr-heat": "Hangi seriler birlikte hareket ediyor? Hücre iki serinin günlük değişimlerinin korelasyonu (+1 aynı yönde, −1 ters yönde); \"Kırılma z\" görünümünde |z|'si büyük hücrede son günlerin korelasyonu normalinden belirgin farklıdır, işlem alttaki çift listesinde.",
+  "quant-corr-pairs": "İki serinin birlikte hareketi normalinden saptı mı? \"Kırılma z\" giriş eşiğini geçen, \"Sinyal\" izleniyor olan çiftte makasın kapanmasına oynarsın: son kısa pencerede \"A\" serisi \"B\"nin β katından fazla yükseldiyse A'nın düşüşüne (faizde receive), B'nin β kadar yükselişine (pay); tersi de.",
+  "quant-regime-momentum": "Hangi enstrüman belirgin bir yönde gidiyor? \"Skor\" momentum eşiğini geçip \"Ortalamalar\" oku aynı yönü gösteriyor ve \"Rejim\" ortalamaya dönüş değilse yönle gidersin: artıysa yükselişe (faizde pay, FX'te forward al), eksiyse düşüşe (receive, forward sat).",
+  "quant-regime-cycle": "Bugünkü PPK fazında (indirim / sabit / artırım) eğimler geçmişte ufuk boyunca nasıl değişti? Bugünkü fazın satırında \"t (NW)\" kalın yazılıysa (eşiği geçti): artıysa steepener (uzun vade pay, kısa receive), eksiyse flattener (uzun receive, kısa pay).",
+  "quant-regime-table": "Her seri şu an ortalamaya mı dönüyor, trend mi yapıyor? \"Rejim\" trend olan seride ortalamaya dönüş sinyalleri, ortalamaya dönüş olanda momentum sinyalleri elenir, nötrde ikisi de yarım ağırlıkla sayılır; kendi başına işlem önermez.",
+  "quant-curve-ois": "Hangi OIS vadesi eğriye göre ucuz, hangisi pahalı? \"Fark (bp)\" artıysa kota eğriye uydurulan düzgün eğrinin üstünde (ucuz), eksiyse altında (pahalı); \"z\" giriş eşiğini geçince sinyal: artıysa vadeyi receive, eksiyse pay edersin, paket \"Hedge\" vadeleriyle eğrinin kaymasına ve eğimine karşı korunur.",
+  "quant-curve-dibs": "Hangi DİBS eğriye göre ucuz, hangisi pahalı? \"Fark (bp)\" artıysa getiri eğriye uydurulan düzgün eğrinin üstünde (ucuz), eksiyse altında (pahalı); \"z\" giriş eşiğini geçince sinyal: artıysa kâğıdı al, eksiyse sat (iki komşusuyla hedge'li), \"C+R 1A\" kâğıdı bir ay tutmanın carry + roll'udur (bp).",
+  "quant-curve-best": "DİBS'te alınacak ve satılacak en iyi kâğıt, \"Receive (al)\" ve \"Pay (sat)\" gruplarının en üstündeki en yüksek \"Puan\"lı satırdır. Puan ucuz kâğıtta carry + roll artıysa, pahalıda eksiyse artıdır; eksi puanda carry z'ye ters çalışır, z giriş eşiğinin altındaysa satır yalnız sıralamadır.",
+  "quant-curve-quote": "Bir DİBS için adil eğriden iki yönlü fiyat: \"Alış (bid)\" getirisinden alır, \"Satış (ask)\" getirisinden satarsın; ikisi adil getirinin iki yanında masanın yarım spread'i kadar uzaktadır. \"Piyasa\" satırının getirisi adil getirinin üstündeyse kâğıt eğriye göre ucuz (al), altındaysa pahalı (sat).",
+  "quant-curve-switch": "A'yı satıp B'yi almak kazandırır mı? \"Switch (B − A)\" satırında \"Eğriye göre (bp)\" artıysa B, A'dan ucuz (switch lehte), \"z\" artıysa B, A'ya göre her zamankinden de ucuz, \"C+R 1A (bp)\" artıysa switch carry + roll da kazandırır; 1 mn A'ya karşı \"Nominal (mn)\" kadar B alırsın.",
+  "quant-path-signals": "Bu sayfanın iki sinyali: komşularına göre ucuz ya da pahalı kalan toplantı dönemi (dönemi receive / pay, komşuları yarımşar ters) ve büyük adımın sistematik yanlış fiyatlanması (sıradaki toplantının dönemi). Ne yapacağını \"İşlem\", ne kazanacağını \"Beklenen K/Z\" söyler.",
+  "quant-path-meetings": "Piyasa her toplantıda ne fiyatlıyor? \"Adım (bp)\" ızgaradaki iki kararın karışımı, \"Büyük adım\" sıfırdan uzak olanı, \"Olasılığı\" ona verilen olasılık; büyük adımı bundan daha olası görüyorsan indirimse o toplantı sonrası dönemi receive, artırımsa pay edersin, daha az olası görüyorsan tersi.",
+  "quant-path-pairs": "Ardışık iki toplantının ima adımı hangi karar çiftleriyle tutarlı? İnandığın \"Patika\"nın \"1. dönem K/Z\"si artıysa iki toplantı arası dönem ucuz → receive, eksiyse pahalı → pay; \"2. dönem K/Z\" ikinci toplantı sonrası için (sonraki çiftlerde ikisi de önceki döneme karşı), \"Okuma\" bunu cümleyle verir.",
+  "quant-path-kinks": "Patikada bir dönem komşularına göre çukur mu, tümsek mi? \"Kink (bp)\" artıysa dönem eşit adımlı patikaya göre ucuz, eksiyse pahalı; \"z\" giriş eşiğini geçince sinyal: artıysa dönemi receive, komşuları yarımşar pay, eksiyse tersi (\"Gün\" 40'tan azsa sinyal çıkmaz).",
+  "quant-path-calib": "Piyasa büyük adımı doğru fiyatlıyor mu? \"Gerçekleşen\" \"Ortalama fiyat\"ın üstündeyse büyük adım az, altındaysa fazla fiyatlanmış; en az 8 toplantıda sapmanın z'si (notta) giriş eşiğini geçince sinyal: sıradaki toplantının dönemi, az fiyatlanan karar daha düşük faizse receive, daha yüksekse pay.",
+  "quant-path-calib-meetings": "Kalibrasyonun toplantı toplantı dökümü: büyük adıma verilen \"Olasılığı (son)\" ve \"Olasılığı (ort.)\" ile \"Büyük adım oldu mu\". Yüksek olasılıkla fiyatlanıp gelmeyen ya da düşük fiyatlanıp gelen toplantılar sapmayı yaratır; işlem kararı üstteki kalibrasyon tablosundadır.",
+  "quant-path-settings": "",
+  "quant-wirp-head": "Aşağıdaki \"İma faiz %\" buradan gelir: ima TLREF (Fed'de SOFR) bugünkü \"Fark: politika − TLREF\" sabit tutularak politika faizine çevrilir; \"Politika faizi\" yoksa kovalar faiz yerine bp olarak görünür.",
+  "quant-wirp-table": "Piyasa her toplantı sonrası faizi nerede görüyor? Beklediğin faiz \"İma faiz %\"in altındaysa o toplantı sonrası dönemi receive, üstündeyse pay edersin; \"İndirim\", \"Sabit\", \"Artırım\" faizin o toplantıdan sonra bugünkünden düşük, aynı ya da yüksek olma olasılığıdır.",
+  "quant-wirp-bars": "Tabloda seçtiğin toplantıdan sonra faizin hangi kovada olacağına verilen olasılıklar (turuncu: \"bugünkü faiz\"). Piyasa senin beklediğinden yüksek kovalara ağırlık veriyorsa o toplantı sonrası dönemi receive, düşük kovalara veriyorsa pay edersin.",
+  "quant-wirp-matrix": "Her toplantıdan sonra faizin hangi kovada olacağı (satır toplantı, sütun faiz, bugünkü faiz kalın). Ağırlık senin beklediğinden yüksek kovalardaysa o toplantı sonrası dönemi receive, düşük kovalardaysa pay edersin; \"E[faiz] − ima (bp)\" 0 değilse tabloya güvenme.",
+  "quant-wirp-history": "Sıradaki üç toplantının fiyatlaması son dört haftada nasıl değişti? \"Ne zaman\" satırlarını \"4 hafta önce\"den \"bugün\"e oku: \"İma faiz %\" (yoksa \"Kümülatif (bp)\") düştüyse o toplantı sonrası dönemi receive eden kazandı, yükseldiyse pay eden; grafik ima adımı gün gün gösterir.",
+  "quant-wirp-settings": "",
+  "quant-lead-signals": "Lideri öncü hareket eşiğinden fazla oynamış, takipçisi henüz yetişmemiş çiftler; işlem takipçide, yönü \"İşlem\" yazar (yükselmesi beklenen faizde / swap puanında pay, kâğıtta sat, kurda spot al; düşmesi beklenende tersi). \"Hedef\" yetişmenin tamamı, \"Stop\" bir σ ters, \"Tutma\" gecikme kadar gün.",
+  "quant-lead-chart": "Seçili çiftte takipçinin seviyesi çizilir, lideri değil; sinyal varsa giriş / hedef / stop da. Alttaki z yalnızca liderin öncü hareket eşiğini geçtiği günlerde hesaplanır, aradaki boşluklar normaldir.",
+  "quant-lead-pairs": "Kim önce hareket ediyor (\"Lider → takipçi\"), takipçi yetişti mi? \"Lider hareketi (σ)\" öncü hareket eşiğini geçtiyse \"Beklenen yetişme\" takipçinin daha ne kadar gideceğidir: artıda faizde pay, DİBS'te sat, kurda spot al, eksi tarafta tersi; \"z\" giriş eşiğini geçer ve \"Kararlılık\" tamsa sinyal olur.",
+  "quant-lead-xcorr": "Hangi seri kaç gün önden gidiyor? Artı gecikme sütunlarındaki korelasyonlar eksilerdekinden belirgin güçlüyse soldaki \"x\" önde, tersiyse \"y\" önde; kalın hücre liderin gecikmesi, işlem için tarama tablosuna bak.",
+  "quant-lead-intraday": "Gün içinde kim önce hareket ediyor? \"Lider\" ve \"Gecikme (bar)\" hangi serinin kaç bar önden gittiğini, \"β\" takipçinin liderin hareketinin ne kadarını izlediğini (eksiyse ters yönde) söyler; buradan sinyal çıkmaz, lider oynayınca takipçiyi izlemek için kullan.",
+  "quant-fx-summary": "Forward'la tutulan pozisyon carry ve beklenen kur hareketiyle ne getirir? \"Getiri / vol\" mutlak değerce parite kararı eşiğini aşınca \"Karar\" long / short tutulacak para birimini yazar (USDTRY'de \"TRY long\" forward sat, \"TRY short\" forward al); \"Tampon (carry tarafı)\" eksiyse kur carry'yi yiyor.",
+  "quant-fx-vol": "3A ATM vol, kurun gerçekte oynadığına ve önümüzdeki 3 ay için beklenen oynaklığa göre olağandan pahalı mı ucuz mu? \"Prim z\" (ima − gerçekleşen) ya da sağdaki \"z\" (ima − vol tahmini) giriş eşiğini geçince: artıysa vol pahalı → vol sat, eksiyse ucuz → vol al.",
+  "quant-fx-carry": "TRY'nin carry'si, oynaklığına göre, EM sepetine kıyasla olağandan cazip mi? Sıralama \"Carry / vol\" ile; \"Göreli z\" giriş eşiğini geçince artıda USDTRY 3A forward sat, USD / EM sepeti al, eksi tarafta tersi (beklenen kur artışı forward primini karşılamazsa elenir).",
+  "quant-fx-fwd": "Forward'ların fiyatladığı değer kaybı, kurdan beklenen artışı ne kadar aşıyor (\"Tampon\") ve bu fark olağan mı? \"z\" giriş eşiğini geçince \"z\" ve \"Tampon\" ikisi de artıysa forward sat (carry al), ikisi de eksiyse forward al; USDTRY'de forward pozisyonu işlemin aleyhine trenddeyse bekletilir.",
+  "quant-macro-betas": "TRY vadeleri ve USDTRY forward getirisi küresel sürücülere ne kadar bağlı? \"β UST 10Y (bp)\" gibi sütunlar sürücünün bir birimlik hareketinde hedefin hareketi; \"Geri dönüş β (t)\" eksiyse TRY'ye özgü sapma geçmişte ertesi hafta geri dönmüş, sinyal buna oynar.",
+  "quant-macro-attr": "Bugünkü hareketin ne kadarı küresel sürücülerden, ne kadarı TRY'ye özgü? \"TRY'ye özgü\" kısmın \"z\"si giriş eşiğini geçince geri dönüşüne oynarsın: artıysa (açıklanmayan yükseliş) receive / USDTRY forward sat, eksiyse pay / forward al.",
+  "quant-opt-surface": "Smile'ın hangi parçası geçmişine göre pahalı, hangisi ucuz? \"25D RR\", \"25D BF\" ve \"10D BF\" yanındaki \"z\" giriş eşiğini geçince sinyal (10D BF'de yalnız 1M): artıysa o parça pahalı → RR ya da BF sat, eksiyse ucuz → al; ATM ve 10D RR'nin z'si yalnız bilgi içindir.",
+  "quant-opt-ts": "Uzun vade ATM vol kısaya göre pahalı mı? Sinyali yalnız \"Eğim\" 1Y−1M satırının \"z\"si verir: giriş eşiğini geçip artıysa eğim pahalı → 1Y vol sat / 1M vol al, eksiyse ucuz → 1Y vol al / 1M vol sat; \"Vol puanı\" eğimin bugünkü değeridir (uzun − kısa).",
+  "quant-opt-probs": "Opsiyonlar kurun forward'dan \"Hareket\" kadar sapmasına geçmişte gerçekleşenden fazla mı olasılık veriyor? \"Fark ↑ (puan)\" ya da \"Fark ↓ (puan)\" artıysa o kuyruk pahalı (o yöndeki OTM opsiyonu sat), eksiyse ucuz (al); \"Gün (bağımsız)\" parantezindeki sayı küçükse fark gürültüdür.",
+  "quant-opt-smile": "Opsiyonlar kuru vadede nerede görüyor? \"%5\" ile \"%95\" forward'a göre %90 olasılıklı bant; \"Gerçekleşen ort.\" eksiyse kur vadede ortalama forward'ın altında kaldı (forward satan kazandı), artıysa üstünde (forward alan kazandı), \"Arbitraj\" \"var\" ise yüzdeliklere güvenme.",
+  "quant-viop-signals": "Kontratın ima ettiği TL faizi, aynı vadenin OIS'ine göre normalinden ne kadar uzak? \"z\" eksiyse kontrat ucuz: kontrat al, spot sat; artıysa pahalı: kontrat sat, spot al. Kaç kontrat olduğu \"İşlem\"de; soluk satırlar bir kapıya takıldı, işlem değil, nedeni \"Bileşik / neden\"de.",
+  "quant-viop-chart": "Seçtiğin kontratın ima faiz − OIS farkı (bp), ortalaması ve giriş / stop bantlarıyla. Fark alt giriş bandının altındaysa kontrat ucuz (kontrat al, spot sat), üst bandın üstündeyse pahalı (kontrat sat, spot al); stop bandını aşan sinyal elenir.",
+  "quant-viop-contracts": "Kontratlar şimdi OIS'e göre ucuz mu, pahalı mı? \"z\" eksiyse kontrat ucuz: kontrat al, spot sat; artıysa pahalı: kontrat sat, spot al (giriş eşiğini geçen z kalın). \"Adil ima %\" normal farktaki faiz: \"Alış ima % (ask)\" ondan düşükse alış ucuza, \"Satış ima % (bid)\" yüksekse satış pahalıya gelir.",
+  "quant-viop-levels": "Bugün ve bu hafta hangi faizden alış / satış emri girersin? \"Alış emri ima %\" ve \"Satış emri ima %\" seviyelerinin görülme ihtimali satırdaki \"Olasılık\"tır, \"Fiyat\" bugünkü spotla karşılığı; ihtimal düştükçe seviye daha iyi ama dolma şansı az.",
+  "quant-viop-calendar": "Ay sonuna yaklaşırken ve haftanın günlerinde VİOP − OIS farkı nasıl kayıyor? \"Ortalama (bp)\" (çeyrek sonunda \"Çeyrek sonu (bp)\") artıysa o gün kontrat OIS'e göre genelde pahalanır, eksiyse ucuzlar; ay sonu satırlarında \"t\" +2 ve üstü ya da −2 ve altıysa etki emir seviyelerine katılır.",
+  "quant-viop-expiry": "Vadeye kalan güne göre ima faiz ve VİOP − OIS farkı günde normalde ne kadar oynar? \"Vadeye gün\" kısaldıkça birkaç kuruşluk fiyat hareketi faizi çok oynatır: vadesi yakın kontratta büyük görünen hareketi ve z'yi bu satırın günlük oynaklığıyla tart.",
+  "quant-viop-intraday": "Ön kontratta ima faiz günün hangi saatinde genelde düşük, hangisinde yüksek? \"Ortalamadan uzaklık (bp)\" eksi olan yarım saatler alış emri, artı olanlar satış emri için daha iyi saatlerdir; \"Bar σ (bp)\" o saatlerde ne kadar oynadığı.",
+  "quant-viop-intraday-days": "Son günlerde ön kontratın ima faizi en düşük ve en yüksek hangi saatte görüldü? \"En düşük %\" ve \"En yüksek %\" yanındaki \"Saat\" alış ve satış emri için iyi saatleri, \"Kapanış %\" günün nerede bittiğini gösterir.",
+  "quant-viop-calibration": "Emir seviyelerinin olasılıklarına güvenebilir misin? \"Alış isabeti\" ve \"Satış isabeti\" satırdaki \"Olasılık\"a yakınsa seviyeler tutuyor; belirgin düşükse dolma ihtimali abartılıyor, yüksekse hafife alınıyor. Canlı seviyeler \"c\" çarpanıyla verilir, düzeltilmiş isabet \"c ile\" sütunlarında.",
+  "quant-viop-ranges": "Kontrat ve spot bir günde fiyat olarak ne kadar oynuyor? \"Ort. aralık (20 gün)\" son 20 günün ortalama en yüksek − en düşük farkı, \"En büyük\" en genişi; emir fiyatının bir günde görülebilecek mesafede olup olmadığını buna göre tart. \"USDTRY ort. aralık\" spotunki.",
+  "quant-viop-data": "",
+  "*-coverage": "",
+  "*-status": ""
+};
+// </READ>
+
+// <INFO>
+export const INFO = [
+  "quant-*-signals",
+  "quant-curve-quote",
+  "quant-curve-switch",
+  "quant-path-signals"
+];
+// </INFO>
+
+const fits = (key, id) => key === id
+  || (key.includes('*') && new RegExp('^' + key.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[a-z0-9-]+') + '$').test(id));
+
+/** The key a panel id falls under: its own, else the first pattern that fits it. */
+function keyOf(keys, id) { return keys.includes(id) ? id : keys.find((k) => fits(k, id)); }
+
+/** A panel's read line ("" when it has none). */
+export function readLine(id) { const k = keyOf(Object.keys(READ), id); return k === undefined ? '' : READ[k]; }
+
+/** Whether a panel's note is how to read it or live information rather than a method (no "Yöntem" label). */
+export function isInfo(id) { return INFO.includes(keyOf(Object.keys(READ), id)); }

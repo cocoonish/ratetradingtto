@@ -1482,6 +1482,9 @@ def test_fit_runs_off_the_engine_thread_and_finds_the_planted_signals(seeded, mo
     assert only and all(s["family"] == "pca" for s in only)
     one = svc.quant.view("signal", user, {"id": "pca:OIS:2Y"})
     assert len(one["history"]["days"]) >= DEFAULTS["min_obs"] and len(one["history"]["z"]) == len(one["history"]["days"])
+    # the rich / cheap table's z is its signal's own (live) z, as in the other analysis tables
+    pca_rows = {r["key"]: r for r in svc.quant.view("pca", user, {})["pca"]["rows"]}
+    assert pca_rows["OIS:2Y"]["z"] == ids["pca:OIS:2Y"]["z"] and pca_rows["OIS:2Y"]["sid"] == "pca:OIS:2Y"
     assert one["signal"]["entry"] == one["monitor"]["level"]
     t0 = svc.quant.state["refreshes"]
     svc.quant.refresh_live()
@@ -1775,8 +1778,11 @@ def test_intraday_families_on_planted_bars():
     assert late and all(s["gated"] and any(g["name"] == "Seans" and not g["ok"] and "seans sonuna" in g["text"] for g in s["gates"]) for s in late)
 
 
-def test_intraday_needs_live_prices_and_its_log_does_not_stay_over_night():
+def test_intraday_needs_live_prices_and_its_log_does_not_stay_over_night(monkeypatch):
+    from tto import quant as qmain
     from tto import quantintraday as qi
+    # (the log's clock at the scenario's noon: run after 18:00, a new intraday entry would be over before it is read)
+    monkeypatch.setattr(qmain, "_now", lambda: dt.datetime(2026, 11, 3, 12, 0))
     svc = _Svc()
     q = Quant(svc)
     mons, table = q.intraday.monitors(qf.Ctx(cfg(), TODAY, {}, {}), dt.datetime(2026, 11, 3, 12, 0))
