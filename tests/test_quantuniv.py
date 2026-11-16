@@ -563,6 +563,7 @@ def test_a_family_s_module_is_imported_when_it_is_there_and_its_failure_is_its_o
         raise ModuleNotFoundError("no", name=name)
 
     monkeypatch.setattr(importlib, "import_module", fake)
+    monkeypatch.setattr(qu, "RUNNERS", {})                    # (none registered yet: a family module tto.quant imports is)
     errors = {}
     assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml"]
     assert list(errors) == ["ml"] and "bozuk" in errors["ml"]

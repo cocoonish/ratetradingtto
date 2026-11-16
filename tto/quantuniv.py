@@ -5,7 +5,9 @@ signal on it needs - and the groups and the order of the Sinyaller list.
 ``tto/quantsira.py``, ``tto/quantml.py`` - ``MODULES``).  A family is a function ``fn(ctx, reg, cfg) -> (monitors,
 table)`` in its own module, registered with ``@quantuniv.family("trend")``: ``tto.quant`` imports the module when it
 exists and runs it on every full fit after the other families, and in each refit of the backtest - nothing else to
-edit (its label, kind and page are in ``FAMILIES``; ``tto.quant`` puts them into ``quantfam.FAMILIES``).  ``for inst
+edit (its label, kind and page are in ``FAMILIES``; ``tto.quant`` puts them into ``quantfam.FAMILIES``).  A family that
+walks forward on its own calendar (``@quantuniv.family("sira", own_backtest=True)``: a weekly basket) is left out of
+the refits; the trades of its table's ``backtest`` stand for it (``own_backtests``).  ``for inst
 in reg`` walks the trade lines in the list's order (``reg.tradeable("TRY OIS")`` one group, ``reg.inputs()`` the
 feature-only series - UST, DXY, Brent, CDS, EM FX, TLREF, the interpolated OIS tenors -, ``reg[key]`` any of them).
 Its level: ``inst.days`` / ``inst.values`` (the closes before today), ``inst.now(live)`` (now; the fit's live values
@@ -72,15 +74,24 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
 MODULES: Dict[str, str] = {"trend": "quanttrend", "sira": "quantsira", "ml": "quantml"}
 #: id -> fn(ctx, reg, cfg) -> (monitors, table)
 RUNNERS: Dict[str, Callable[..., Tuple[List[qf.Monitor], Any]]] = {}
+#: the families that walk forward on their own calendar (Carry + momentum: a weekly basket's rebalances, not the
+#: backtest's refits): the refits leave them out, the backtest takes the trades of their table (``own_backtests``)
+OWN_BT: set = set()
 
 
-def family(fid: str) -> Callable[[Callable], Callable]:
-    """A family's function, registered (a decorator): ``@family("trend") def run(ctx, reg, cfg): ...``."""
+def family(fid: str, own_backtest: bool = False) -> Callable[[Callable], Callable]:
+    """A family's function, registered (a decorator): ``@family("trend") def run(ctx, reg, cfg): ...``.
+    ``own_backtest``: it walks forward itself - its table's ``backtest`` (``{trades, first, last}`` in the backtest's
+    format) stands for it in the backtest (``own_backtests``)."""
     if fid not in FAMILIES:
         raise ValueError("bilinmeyen aile: %s" % fid)
 
     def deco(fn: Callable) -> Callable:
         RUNNERS[fid] = fn
+        if own_backtest:
+            OWN_BT.add(fid)
+        else:
+            OWN_BT.discard(fid)
         return fn
 
     return deco
@@ -126,9 +137,9 @@ def run(ctx: qf.Ctx, reg: "Registry", mons: List[qf.Monitor], tables: Dict[str, 
 
 def monitors(ctx: qf.Ctx, pause: Optional[Callable[[], None]] = None) -> List[qf.Monitor]:
     """The families on the universe for one refit of the backtest: a registry of the context alone (no workbook part:
-    no carry engine, no DİBS fit), their monitors."""
+    no carry engine, no DİBS fit), their monitors - not of the ones that walk forward on their own (``OWN_BT``)."""
     out: List[qf.Monitor] = []
-    regs = runners()
+    regs = [(fid, fn) for fid, fn in runners() if fid not in OWN_BT]
     if not regs:
         return out
     reg = Registry(ctx)
@@ -140,6 +151,17 @@ def monitors(ctx: qf.Ctx, pause: Optional[Callable[[], None]] = None) -> List[qf
         if pause is not None:
             pause()
     return out
+
+
+def own_backtests(res: Dict[str, Any], tables: Dict[str, Any]) -> None:
+    """The backtest's result (``quantbt.backtest``) with the families that walk forward on their own: each one's trades
+    from its last fit's table, summarized over its own span (``quantbt.add_own``)."""
+    from . import quantbt as qbt
+    for fid in sorted(OWN_BT):
+        tab = tables.get(fid)
+        bt = tab.get("backtest") if isinstance(tab, dict) else None
+        if isinstance(bt, dict) and bt.get("trades"):
+            qbt.add_own(res, fid, bt["trades"], bt.get("first"), bt.get("last"))
 
 
 # ---------------------------------------------------------------------------------------------- groups and order
