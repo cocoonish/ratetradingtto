@@ -5,6 +5,7 @@ import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
+import { renderTemplates, openBulk } from './blotterentry.js';
 
 const FWD_BASES = [['RET_BID', 'RET bid'], ['RET_MID', 'RET mid'], ['RET_ASK', 'RET ask'], ['TRY', 'TRY faizi'], ['FWD', 'Forward kur'], ['SP', 'Swap puanı']];
 const BASIS_LABEL = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask', TRY: 'TRY faizi', FWD: 'Forward kur', SP: 'Swap puanı' };
@@ -20,6 +21,10 @@ const SIDES = {
   fly: [['REC GÖVDE', 'REC GÖVDE'], ['PAY GÖVDE', 'PAY GÖVDE']],
 };
 const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat 1', body: 'Gövde', wing2: 'Kanat 2', start: 'Başlangıç', end: 'Bitiş', mpc: 'MPC' };
+// a quote's "İşlem gir" (``takePrefill``) empties what the quote does not give - its own date, price and note; ``fillForm``
+// itself leaves alone what a spec leaves out (a template keeps any subset of the form)
+const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: '', note: '' }, ois: { strategy: 'outright', side: null, level: '', note: '' },
+  bond: { instrument: '', price: '', note: '' } };
 
 /** "gbp" / "GBPTRY" / "gbp/try" -> "GBPTRY" (a currency alone is against TRY); null when it is not a pair. */
 export function pairOf(text) {
@@ -95,6 +100,16 @@ function dv(v, digits) {
   return typeof v === 'number' ? { t: (v > 0 ? '+' : '') + num(v, digits || 0), v, k: 'n', cls: v > 0 ? 'buy' : (v < 0 ? 'sell' : '') } : { t: '', k: '' };
 }
 
+/** A forward's amount in the list - its first currency's (``side`` 'base', to the unit) or its second's ('quote', to the
+ * kuruş) -, the one it was typed in marked (✎) when that was the second (a minor-currency entry). */
+function typedCell(t, side) {
+  const cell = side === 'base' ? n(t.amount, 0) : n(t.tl, 2);
+  if (t.typed !== 'quote' || typeof t.amount !== 'number') return cell;
+  const pair = t.pair || 'USDTRY';
+  return Object.assign(cell, side === 'quote' ? { cls: 'typed', tip: 'Yazılan tutar (' + pair.slice(3) + '): işlem bu tutarla girildi' }
+    : { tip: num(t.amount, 2) + ' ' + pair.slice(0, 3) + ' = ' + num(t.tl, 2) + ' ' + pair.slice(3) + ' / ' + num(t.forward, 4) + ' (forward kurundan)' });
+}
+
 function signed(v, digits) {
   return typeof v === 'number' ? (v > 0 ? '+' : '') + num(v, digits || 0) : '—';
 }
@@ -118,7 +133,7 @@ export class BlotterPage {
     this.tab = 'fwd';
     this.grids = {};
     this.sheetGrids = new Map();
-    this.fwd = { dir: 'B', basis: 'RET_MID', pair: 'USDTRY' };
+    this.fwd = { dir: 'B', basis: 'RET_MID', pair: 'USDTRY', typed: 'base' };      // typed: the amount typed - 'base' (USD) or 'quote' (TRY)
     this.ois = { strategy: 'outright', side: 'PAY', sizeMode: 'dv01' };
     this.quoteFwd = debounce(() => this.doQuoteFwd(), 220);
     this.quoteOis = debounce(() => this.doQuoteOis(), 220);
@@ -246,7 +261,15 @@ export class BlotterPage {
       tabBtns[id] = b;
       tabs.appendChild(b);
     }
-    this.entry.appendChild(h('header', null, h('h2', null, 'Yeni işlem')));
+    // rows copied from Excel, checked and kept together; the templates of the form one click away
+    const bulkBtn = h('button', { class: 'btn sm', type: 'button', id: 'bulk-open',
+      title: 'Excel\'den kopyalanan işlem satırlarını yapıştırın: her satır formdaki gibi denetlenir, önizlemeden sonra geçerliler tek seferde kaydedilir' },
+    'Excel\'den yapıştır');
+    bulkBtn.addEventListener('click', () => openBulk(this));
+    this.tplBar = h('div', { class: 'tplbar', id: 'blotter-templates' });
+    this.tplKey = null;
+    this.entry.appendChild(h('header', null, h('h2', null, 'Yeni işlem'), bulkBtn));
+    this.entry.appendChild(this.tplBar);
     this.entry.appendChild(tabs);
     for (const k of Object.keys(panes)) this.entry.appendChild(panes[k]);
     this.readonlyNote = h('div', { class: 'card hidden' }, h('div', { class: 'pad muted' },
@@ -288,14 +311,39 @@ export class BlotterPage {
   }
 
   /** A trade filled from a quote (a matrix row, a chat line - ``ctx.openTrade``): its tab, side and fields, waiting for an
-   * amount and "İşlemi kaydet". */
+   * amount and "İşlemi kaydet".  The fields a quote does not give are emptied (its own date, price and note only). */
   takePrefill() {
     let spec = null;
     try {
       spec = JSON.parse(sessionStorage.getItem('tto.trade.prefill') || 'null');
       sessionStorage.removeItem('tto.trade.prefill');
     } catch (e) { spec = null; }
-    if (!spec || !this.showTab) return false;
+    if (!spec || !this.showTab || !PREFILL_CLEARS[spec.kind]) return false;
+    if (!spec.cpt) delete spec.cpt;                    // (no counterparty in the quote: the one typed stays)
+    const done = this.fillForm(Object.assign({ dir: null }, PREFILL_CLEARS[spec.kind], spec));
+    if (!done) return false;
+    toast('İşlem kotadan dolduruldu: tutarı yazıp kaydedin' + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
+    return true;
+  }
+
+  /**
+   * Fill the entry form: the one way in for whatever opens a trade to enter - a quote's "İşlem gir" (``ctx.openTrade`` →
+   * ``takePrefill``), a template (``applyTemplate``).  Opens the product's tab and prices what is there; nothing is saved.
+   * A field the spec leaves out stays as it is on the form; every field is optional but ``kind``:
+   *   kind 'fwd':  pair ('USDTRY', 'EURTRY', any other - "Diğer" with its code), dir ('B' | 'S'), amount (in the pair's first
+   *                currency, as typed: '10m') or quote_amount (in its second: the TRY of USDTRY), date (a date or a tenor:
+   *                '15.12.2026', '3M'), basis ('RET_BID' … 'SP'), value (the rate / outright / points of that basis), spot,
+   *                cpt, note
+   *   kind 'ois':  strategy, side, tenors ([tenor] | [short, long] | [wing1, body, wing2]), months ([start, end] of a FRA),
+   *                start / end (a meeting swap's two days, as serials) or mpc ([k1, k2]: places in the list of meetings -
+   *                0 the spot, k the k-th meeting), level, size with sizeMode ('dv01' | 'nominal'), cpt, note
+   *   kind 'bond': dir, instrument, amount, price, note
+   * Returns null when the spec is no trade of the form, else ``{ warn }``: what could not be filled, in words ('' when all was).
+   */
+  fillForm(spec) {
+    if (!spec || !this.showTab || !['fwd', 'ois', 'bond'].includes(spec.kind)) return null;
+    const has = (k) => Object.prototype.hasOwnProperty.call(spec, k);
+    const text = (k, el) => { if (has(k)) el.value = spec[k] === null || spec[k] === undefined ? '' : String(spec[k]); };
     const missing = [];                    // what the form has no option for (a tenor it does not list)
     let sideKnown = true;
     const pick = (sel, value, label) => {
@@ -310,30 +358,50 @@ export class BlotterPage {
     };
     if (spec.kind === 'fwd') {
       const f = this.fwd;
-      f.pair = spec.pair === 'EURTRY' ? 'EURTRY' : 'USDTRY';
-      if (spec.dir === 'B' || spec.dir === 'S') f.dir = spec.dir;
-      else sideKnown = false;
-      f.basis = BASIS_LABEL[spec.basis] ? spec.basis : 'SP';
-      f.pairSeg.set(f.pair);
-      f.dirSeg.set(f.dir);
-      f.basisSeg.set(f.basis);
-      f.date.value = spec.date || '';
-      f.manual.value = spec.value || '';
-      f.note.value = spec.note || '';
-      if (spec.cpt) f.cpt.value = spec.cpt;
+      if (has('pair')) {
+        const code = pairOf(spec.pair) || 'USDTRY';
+        f.pair = code === 'USDTRY' || code === 'EURTRY' ? code : 'OTHER';
+        if (f.pair === 'OTHER') f.code.value = code;
+        f.pairSeg.set(f.pair);
+      }
+      if (has('dir')) {
+        if (spec.dir === 'B' || spec.dir === 'S') f.dir = spec.dir;
+        else sideKnown = false;
+        f.dirSeg.set(f.dir);
+      }
+      if (has('basis')) {
+        f.basis = BASIS_LABEL[spec.basis] ? spec.basis : 'SP';
+        f.basisSeg.set(f.basis);
+      }
+      text('date', f.date);
+      text('value', f.manual);
+      text('spot', f.spot);
+      text('cpt', f.cpt);
+      text('note', f.note);
+      if (has('amount') || has('quote_amount')) {
+        // one amount, in the currency it was typed in: the other one is worked out again from today's forward
+        f.typed = spec.quote_amount && !spec.amount ? 'quote' : 'base';
+        f.amount.value = f.typed === 'base' ? String(spec.amount || '') : '';
+        f.quoteAmount.value = f.typed === 'quote' ? String(spec.quote_amount) : '';
+        this.markTyped();
+      }
       this.layoutFwd();
       this.showTab('fwd');
-      this.quoteFwd();
-      f.amount.focus();
+      (f.typed === 'quote' ? f.quoteAmount : f.amount).focus();
     } else if (spec.kind === 'ois') {
       const o = this.ois;
-      o.strategy = STRATEGIES.some((x) => x[0] === spec.strategy) ? spec.strategy : 'outright';
-      o.stratSeg.set(o.strategy);
-      if (spec.side && SIDES[o.strategy].some((x) => x[0] === spec.side)) o.side = spec.side;
-      else sideKnown = false;
-      this.layoutOis();
+      if (has('strategy')) {
+        o.strategy = STRATEGIES.some((x) => x[0] === spec.strategy) ? spec.strategy : 'outright';
+        o.stratSeg.set(o.strategy);
+      }
+      if (has('side')) {
+        if (spec.side && SIDES[o.strategy].some((x) => x[0] === spec.side)) o.side = spec.side;
+        else sideKnown = false;
+      }
+      if (has('strategy')) this.layoutOis();             // its legs and sides (the level is emptied: filled below)
+      else if (has('side')) o.sideSeg.set(o.side);
       const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy] || [];
-      legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i]));
+      if (has('tenors')) legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i]));
       if (o.strategy === 'fra' && spec.months && spec.months.length === 2) {
         const label = (m) => (m === 0 ? 'Spot' : (m % 12 === 0 ? (m / 12) + 'Y' : m + 'M'));
         spec.months.forEach((m, i) => {
@@ -341,37 +409,88 @@ export class BlotterPage {
           else missing.push(String(m));
         });
       }
-      if (o.strategy === 'mpc') {
-        // a meeting swap of the chat: its two days among the form's (OIS spot, the meetings' effective days)
+      if (o.strategy === 'mpc' && (has('start') || has('end') || has('mpc'))) {
+        // a meeting swap: its two days among the form's (OIS spot, the meetings' effective days) - a template's by their
+        // place in the list (the next meeting stays the next one as meetings pass)
+        const m = (this.market && this.market.mpc) || { dates: [] };
+        const day = (k) => (k === 0 ? m.spot : (m.dates[k - 1] || {}).date);
+        const days = has('mpc') && Array.isArray(spec.mpc) ? { start: day(spec.mpc[0]), end: day(spec.mpc[1]) } : { start: spec.start, end: spec.end };
         for (const k of ['start', 'end']) {
           const sel = o.f[k];
-          const v = String(spec[k]);
+          const v = String(days[k]);
           if (sel && [...sel.options].some((x) => x.value === v)) sel.value = v;
-          else missing.push(serialDate(spec[k]) || v);
+          else missing.push(serialDate(days[k]) || (has('mpc') ? 'MPC' + spec.mpc[k === 'start' ? 0 : 1] : v));
         }
       }
-      o.level.value = spec.level || '';
-      o.note.value = spec.note || '';
-      if (spec.cpt) o.cpt.value = spec.cpt;
+      if (has('size')) {
+        this.setSizeMode(spec.sizeMode === 'nominal' ? 'nominal' : 'dv01');
+        text('size', o.size);
+      }
+      text('level', o.level);
+      text('cpt', o.cpt);
+      text('note', o.note);
       this.showTab('ois');
-      this.quoteOis();
-      o.size.focus();
-    } else if (spec.kind === 'bond') {
+      (o.level.value ? o.size : o.level).focus();
+    } else {
       const b = this.bond;
-      if (spec.dir === 'B' || spec.dir === 'S') b.dir = spec.dir;
-      else sideKnown = false;
-      b.dirSeg.set(b.dir);
-      b.inst.value = spec.instrument || '';
-      b.price.value = spec.price || '';
-      b.note.value = spec.note || '';
+      if (has('dir')) {
+        if (spec.dir === 'B' || spec.dir === 'S') b.dir = spec.dir;
+        else sideKnown = false;
+        b.dirSeg.set(b.dir);
+      }
+      text('instrument', b.inst);
+      text('amount', b.amount);
+      text('price', b.price);
+      text('note', b.note);
+      b.amount.dispatchEvent(new Event('input'));       // (its echo)
       this.showTab('bond');
       b.amount.focus();
-    } else {
-      return false;
     }
     const warn = [missing.length ? 'listede olmayan vade: ' + missing.join(', ') + ' – elle seçin' : '', sideKnown ? '' : 'yönü kontrol edin'].filter(Boolean);
-    toast('İşlem kotadan dolduruldu: tutarı yazıp kaydedin' + (warn.length ? ' (' + warn.join('; ') + ')' : ''), warn.length ? 'warn' : 'ok', warn.length ? 7000 : 4000);
-    return true;
+    return { warn: warn.join('; ') };
+  }
+
+  /** The form of a product as a spec of ``fillForm`` - every field that has something in it (what a template keeps). */
+  formSpec(kind) {
+    const out = { kind };
+    const put = (k, v) => { if (v !== undefined && v !== null && String(v).trim() !== '') out[k] = typeof v === 'string' ? v.trim() : v; };
+    if (kind === 'fwd') {
+      const f = this.fwd;
+      put('pair', this.fwdPair());
+      put('dir', f.dir);
+      if (f.typed === 'quote') put('quote_amount', f.quoteAmount.value); else put('amount', f.amount.value);
+      put('date', f.date.value);
+      put('basis', f.basis);
+      if (MANUAL[f.basis]) put('value', f.manual.value);
+      if (f.pair === 'OTHER') put('spot', f.spot.value);
+      put('cpt', f.cpt.value);
+      put('note', f.note.value);
+    } else if (kind === 'ois') {
+      const o = this.ois;
+      put('strategy', o.strategy);
+      put('side', o.side);
+      const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy];
+      if (legs) out.tenors = legs.map((k) => o.f[k].value);
+      if (o.strategy === 'fra') out.months = [Number(o.f.start_months.value), Number(o.f.end_months.value)];
+      if (o.strategy === 'mpc') {
+        const m = (this.market && this.market.mpc) || { dates: [] };
+        const place = (v) => (Number(v) === m.spot ? 0 : 1 + m.dates.findIndex((d) => d.date === Number(v)));
+        const k = [place(o.f.start.value), place(o.f.end.value)];
+        if (k[1] > k[0]) out.mpc = k;
+      }
+      put('level', o.level.value);
+      if (o.size.value.trim()) { put('size', o.size.value); out.sizeMode = o.sizeMode; }
+      put('cpt', o.cpt.value);
+      put('note', o.note.value);
+    } else {
+      const b = this.bond;
+      put('dir', b.dir);
+      put('instrument', b.inst.value);
+      put('amount', b.amount.value);
+      put('price', b.price.value);
+      put('note', b.note.value);
+    }
+    return out;
   }
 
   // ------------------------------------------------------------------ forward form
@@ -379,6 +498,29 @@ export class BlotterPage {
     const f = this.fwd;
     const pane = h('div', { class: 'pad form' });
     f.dirSeg = seg([['B', 'Alış (USD al)'], ['S', 'Satış (USD sat)']], f.dir, (v) => { f.dir = v; this.quoteFwd(); }, { B: 'buy', S: 'sell' });
+    // the amount in either currency of the pair, side by side: the one typed is kept, the other follows from the forward
+    f.amount = input('örn. 10m ya da 10.000.000', 'num');
+    f.amount.id = 'fwd-amount';
+    f.amountEcho = h('div', { class: 'muted echo' });
+    f.quoteAmount = input('örn. 500m', 'num');
+    f.quoteAmount.id = 'fwd-quote-amount';
+    f.quoteEcho = h('div', { class: 'muted echo' });
+    const amountField = (box, echo, id, tip) => {
+      const text = h('span');
+      const label = h('label', { title: tip }, text, ' ', h('span', { class: 'typedmark', title: 'İşlem bu tutarla girilir; öbürü forward kurundan hesaplanır' }, '✎ yazılan'));
+      const el = h('div', { class: 'field amt', id }, label, h('div', null, box, echo));
+      el.text = text;
+      return el;
+    };
+    f.amountField = amountField(f.amount, f.amountEcho, 'fwd-amount-field', 'İşlemin tutarı paritenin ilk dövizinde (USDTRY\'de USD)');
+    f.quoteField = amountField(f.quoteAmount, f.quoteEcho, 'fwd-quote-field',
+      'Tutarı paritenin ikinci dövizinde yazın (USDTRY\'de TRY, EURUSD\'de USD): döviz tutarı işlemin forward kurundan hesaplanır, işlem yine dövizde kaydedilir');
+    f.amountField.style.width = '180px';
+    f.quoteField.style.width = '200px';
+    for (const [box, side] of [[f.amount, 'base'], [f.quoteAmount, 'quote']]) {
+      box.addEventListener('input', () => { f.typed = side; this.markTyped(); this.quoteFwd(); });
+      box.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveFwd(); });
+    }
     // the pair: the two the workbook prices itself, or any other (typed) whose forward is entered by hand
     f.code = input('örn. GBP ya da GBPTRY');
     f.code.id = 'fwd-code';
@@ -389,8 +531,6 @@ export class BlotterPage {
     f.spotField = field('Spot (elle)', f.spot, '130px');
     f.pairSeg = seg(PAIRS, f.pair, (v) => { f.pair = v; this.layoutFwd(); if (v === 'OTHER') f.code.focus(); this.quoteFwd(); });
     f.pairSeg.id = 'fwd-pair';
-    f.amount = input('örn. 10m ya da 10.000.000', 'num');
-    f.amountEcho = h('div', { class: 'muted echo' });
     f.date = input('gg.aa.yyyy');
     const picker = h('input', { type: 'date', class: 'datepick', tabindex: '-1', 'aria-label': 'Takvim' });
     picker.addEventListener('change', () => {
@@ -413,21 +553,49 @@ export class BlotterPage {
     f.quote = h('div', { class: 'quotebox' });
     f.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     f.save.addEventListener('click', () => this.saveFwd());
-    for (const el of [f.amount, f.date, f.manual, f.code, f.spot]) {
+    for (const el of [f.date, f.manual, f.code, f.spot]) {
       el.addEventListener('input', () => { if (el === f.code) this.layoutFwd(); this.quoteFwd(); });
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveFwd(); });
     }
-    f.amountField = field('Tutar (USD)', h('div', null, f.amount, f.amountEcho), '210px');
     pane.appendChild(h('div', { class: 'row' }, field('Parite', f.pairSeg), f.codeField, f.spotField));
-    pane.appendChild(h('div', { class: 'row' }, field('Yön', f.dirSeg)));
-    pane.appendChild(h('div', { class: 'row' }, f.amountField,
-      field('Valör', h('div', { class: 'daterow' }, f.date, cal, picker), '190px')));
+    pane.appendChild(h('div', { class: 'row' }, field('Yön', f.dirSeg), field('Valör', h('div', { class: 'daterow' }, f.date, cal, picker), '190px')));
+    pane.appendChild(h('div', { class: 'row amounts' }, f.amountField, f.quoteField));
     pane.appendChild(h('div', { class: 'row' }, field('Fiyatlama', f.basisSeg), f.manualField));
     pane.appendChild(f.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Karşı taraf', f.cpt, '150px'), field('Not', f.note, '240px')));
     pane.appendChild(h('div', { class: 'row actions' }, f.save));
     this.layoutFwd();
+    this.markTyped();
     return pane;
+  }
+
+  /** Which of the two amounts was typed (``fwd.typed``): marked on the form - the other one is worked out. */
+  markTyped() {
+    const f = this.fwd;
+    for (const [el, side] of [[f.amountField, 'base'], [f.quoteField, 'quote']]) {
+      el.classList.toggle('typed', f.typed === side);
+      el.classList.toggle('calc', f.typed !== side);
+    }
+  }
+
+  /** The amount not typed, as the forward on screen makes it: the USD of a TRY amount to the desk's usual unit (whole
+   * dollars; the cents in its tip), the TRY of a USD one to the kuruş.  ``q`` null: nothing to show. */
+  showOtherSide(q, typed) {
+    const f = this.fwd;
+    if (typed !== f.typed) return;                 // typed in the other box meanwhile: that one is the typed one now
+    const quote = typed === 'quote';
+    const box = quote ? f.amount : f.quoteAmount;
+    const echo = quote ? f.amountEcho : f.quoteEcho;
+    if (!q || typeof q.amount !== 'number') {
+      box.value = '';
+      box.title = '';
+      echo.textContent = '';
+      return;
+    }
+    box.value = quote ? num(q.amount, 0) : num(q.tl, 2);
+    box.title = quote ? num(q.amount, 2) + ' ' + q.base + ' = ' + num(q.tl, 2) + ' ' + q.quote + ' / ' + num(q.forward, 4) + ' (forward)'
+      : num(q.amount, 0) + ' ' + q.base + ' × ' + num(q.forward, 4) + ' (forward) = ' + num(q.tl, 2) + ' ' + q.quote;
+    echo.textContent = '= forward ' + num(q.forward, 4) + ' ile';
   }
 
   /** The pair being typed ("USDTRY", "EURTRY", or what stands in the box of "Diğer"; null while that is no pair). */
@@ -449,7 +617,8 @@ export class BlotterPage {
     if (other && f.basis !== 'FWD' && f.basis !== 'SP') { f.basis = 'FWD'; f.basisSeg.set('FWD'); }
     f.dirSeg.children[0].textContent = 'Alış (' + base + ' al)';
     f.dirSeg.children[1].textContent = 'Satış (' + base + ' sat)';
-    f.amountField.firstChild.textContent = 'Tutar (' + base + ')';
+    f.amountField.text.textContent = 'Tutar (' + base + ')';
+    f.quoteField.text.textContent = pair ? 'Tutar (' + pair.slice(3) + ')' : 'Karşı tutar';
     const m = MANUAL[f.basis];
     f.manualField.classList.toggle('hidden', !m);
     if (m) {
@@ -458,26 +627,34 @@ export class BlotterPage {
     }
   }
 
+  /** What the form sends: the amount of the side typed only (``amount`` in the pair's first currency, or ``quote_amount``
+   * in its second - the server works the other one out from the forward). */
   fwdPayload() {
     const f = this.fwd;
-    const amount = parseAmount(f.amount.value);
     const pair = this.fwdPair();
-    f.amountEcho.textContent = f.amount.value.trim() ? (amount === null ? 'tutar anlaşılamadı' : num(amount, 0) + ' ' + (pair ? pair.slice(0, 3) : '')) : '';
-    return { pair, dir: f.dir, amount, value_date: f.date.value.trim(), basis: f.basis,
+    const quote = f.typed === 'quote';
+    const box = quote ? f.quoteAmount : f.amount;
+    const amount = parseAmount(box.value);
+    const ccy = pair ? (quote ? pair.slice(3) : pair.slice(0, 3)) : '';
+    (quote ? f.quoteEcho : f.amountEcho).textContent = box.value.trim() ? (amount === null ? 'tutar anlaşılamadı' : num(amount, 0) + ' ' + ccy) : '';
+    const pl = { pair, dir: f.dir, value_date: f.date.value.trim(), basis: f.basis,
       manual: MANUAL[f.basis] ? f.manual.value.trim() : null, spot: f.pair === 'OTHER' ? (f.spot.value.trim() || null) : null,
       cpt: f.cpt.value.trim(), note: f.note.value.trim() };
+    if (quote) pl.quote_amount = amount; else pl.amount = amount;
+    return pl;
   }
 
   async doQuoteFwd() {
     const f = this.fwd;
     if (!f.quote || this.dead) return;
     const pl = this.fwdPayload();
+    const typed = f.typed;
     f.ticket = (f.ticket || 0) + 1;                 // whatever is still on its way belongs to what was typed before
-    if (!pl.pair) { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, 'Dövizi ya da pariteyi yazın (örn. GBP, CHFTRY, EURUSD).')); return; }
-    if (!pl.value_date) { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, 'Valör tarihini yazın; forward ve TL tutarı otomatik hesaplanır.')); return; }
+    const waiting = (text) => { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, text)); this.showOtherSide(null, typed); };
+    if (!pl.pair) { waiting('Dövizi ya da pariteyi yazın (örn. GBP, CHFTRY, EURUSD).'); return; }
+    if (!pl.value_date) { waiting('Valör tarihini yazın; forward ve TL tutarı otomatik hesaplanır.'); return; }
     if (MANUAL[pl.basis] && !pl.manual) {
-      clear(f.quote);
-      f.quote.appendChild(h('div', { class: 'muted' }, pl.basis === 'TRY' ? 'TRY faizini yazın.' : (pl.basis === 'SP' ? 'Swap puanını yazın.' : 'Forward kuru yazın.')));
+      waiting(pl.basis === 'TRY' ? 'TRY faizini yazın.' : (pl.basis === 'SP' ? 'Swap puanını yazın.' : 'Forward kuru yazın.'));
       return;
     }
     const ticket = f.ticket;
@@ -485,11 +662,16 @@ export class BlotterPage {
       const q = await api.post('/api/blotter/quote/forward', pl);
       if (ticket !== f.ticket || this.dead) return;
       clear(f.quote);
+      this.showOtherSide(q, typed);
       const base = q.base, vsTry = q.quote === 'TRY';
       const dash = (v, fn) => (typeof v === 'number' ? fn(v) : '—');
       const tiles = h('div', { class: 'quote' });
       const total = tile(vsTry ? 'TL tutarı' : 'Karşı tutar (' + q.quote + ')', typeof q.tl === 'number' ? num(q.tl, 2) : '— tutar girin —', true, typeof q.tl === 'number' ? raw(q.tl) : '');
       total.dataset.k = 'fwd-total';
+      if (q.typed === 'quote') {
+        total.classList.add('typed');               // the amount typed: the USD follows from it
+        total.title = 'Yazılan tutar: ' + num(q.tl, 2) + ' ' + q.quote + ' · ' + num(q.amount, 2) + ' ' + base + ' forward kurundan';
+      }
       tiles.appendChild(total);
       const fw = tile('Forward kur', num(q.forward, 4), false, raw(q.forward));
       fw.dataset.k = 'fwd-forward';
@@ -536,22 +718,26 @@ export class BlotterPage {
       if (ticket !== f.ticket) return;
       clear(f.quote);
       f.quote.appendChild(h('div', { class: 'errtxt' }, err.message));
+      this.showOtherSide(null, typed);
     }
   }
 
   async saveFwd() {
     const f = this.fwd;
     const pl = this.fwdPayload();
+    const quote = f.typed === 'quote';
+    const amount = quote ? pl.quote_amount : pl.amount;
     if (!pl.pair) { toast('Dövizi ya da pariteyi yazın (örn. GBP)', 'err'); f.code.focus(); return; }
-    if (pl.amount === null || !(pl.amount > 0)) { toast('Tutar girin (örn. 10m)', 'err'); f.amount.focus(); return; }
+    if (amount === null || !(amount > 0)) { toast('Tutar girin (örn. 10m)', 'err'); (quote ? f.quoteAmount : f.amount).focus(); return; }
     if (!pl.value_date) { toast('Valör tarihini girin', 'err'); f.date.focus(); return; }
     f.save.disabled = true;
     try {
       const rec = await api.post('/api/blotter/forward', pl);
       toast(rec.pair + ' ' + (rec.dir === 'B' ? 'alış ' : 'satış ') + num(rec.amount, 0) + ' ' + rec.pair.slice(0, 3) + ' · ' + serialDate(rec.value_date) + ' · '
-        + num(rec.forward, 4) + ' → ' + num(rec.tl, 2) + ' ' + rec.pair.slice(3) + ' kaydedildi', 'ok', 4200);
-      f.amount.value = '';
+        + num(rec.forward, 4) + ' → ' + num(rec.tl, 2) + ' ' + rec.pair.slice(3) + (rec.typed === 'quote' ? ' (yazılan)' : '') + ' kaydedildi', 'ok', 4200);
+      for (const el of [f.amount, f.quoteAmount]) { el.value = ''; el.title = ''; }
       f.amountEcho.textContent = '';
+      f.quoteEcho.textContent = '';
       f.note.value = '';
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { f.save.disabled = false; }
@@ -600,12 +786,11 @@ export class BlotterPage {
     o.size = input('', 'num');
     o.sizeEcho = h('div', { class: 'muted echo' });
     o.sizeSeg = seg([['dv01', 'DV01 ($/bp)'], ['nominal', 'Nominal (TL)']], o.sizeMode, (v) => {
-      o.sizeMode = v;
       o.size.value = '';
-      o.size.placeholder = v === 'dv01' ? (this.market && this.market.dv01 ? 'varsayılan ' + num(this.market.dv01, 0) : 'örn. 5000') : 'örn. 500m';
+      this.setSizeMode(v);
       this.quoteOis();
     });
-    o.size.placeholder = this.market && this.market.dv01 ? 'varsayılan ' + num(this.market.dv01, 0) : 'örn. 5000';
+    this.setSizeMode(o.sizeMode);
     o.adv = h('div', { class: 'row adv' });
     o.cpt = input('opsiyonel');
     o.note = input('opsiyonel');
@@ -627,6 +812,14 @@ export class BlotterPage {
     pane.appendChild(h('div', { class: 'row actions' }, o.save));
     this.layoutOis();
     return pane;
+  }
+
+  /** The OIS size as DV01 ($/bp) or as a TL nominal. */
+  setSizeMode(v) {
+    const o = this.ois;
+    o.sizeMode = v;
+    o.sizeSeg.set(v);
+    o.size.placeholder = v === 'dv01' ? (this.market && this.market.dv01 ? 'varsayılan ' + num(this.market.dv01, 0) : 'örn. 5000') : 'örn. 500m';
   }
 
   layoutOis() {
@@ -907,8 +1100,17 @@ export class BlotterPage {
     }
   }
 
+  /** One click on a template: the form filled with it, waiting for "İşlemi kaydet" (nothing is saved). */
+  applyTemplate(t) {
+    const done = this.fillForm(t.spec);
+    if (!done) { toast('Bu şablon formu dolduramıyor', 'err'); return; }
+    toast('Şablon: ' + t.name + ' – form dolduruldu, kontrol edip kaydedin' + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok',
+      done.warn ? 6000 : 2600);
+  }
+
   fill() {
     const d = this.data;
+    renderTemplates(this);
     // date selector
     clear(this.dateSel);
     const seen = new Set();
@@ -958,8 +1160,8 @@ export class BlotterPage {
       'DV01 (TL)', 'DV01 ($)', 'Fiyatlama', 'Karşı taraf', 'Not', '']),
       fw.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), { t: pairOfTrade(t), k: 's', b: 1 },
         { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
-        n(t.amount, 0), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.points, 0),
-        n(t.tl, 2), dv(t.dv01_tl), dv(t.dv01), BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
+        typedCell(t, 'base'), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.points, 0),
+        typedCell(t, 'quote'), dv(t.dv01_tl), dv(t.dv01), BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
         this.delCell(t, pairOfTrade(t) + ' ' + (t.dir === 'B' ? 'alış ' : 'satış ') + num(t.amount, 0) + ' ' + pairOfTrade(t).slice(0, 3) + ' · ' + serialDate(t.value_date))])),
       fw.length ? fw.length + ' işlem' : '');
 

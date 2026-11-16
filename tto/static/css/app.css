@@ -548,6 +548,43 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); b
 .quotebox .reftable { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
 .quote .q.costpos .v { color: var(--neg); }
 .quote .q.costneg .v { color: var(--pos); }
+/* a forward's two amounts: the one typed is marked (✎), the other is worked out from the forward */
+.form .field.amt .typedmark { display: none; color: var(--accent-ink); font-weight: 650; }
+.form .field.amt.typed .typedmark { display: inline; }
+.form .field.amt.calc input { font-style: italic; color: var(--ink-2); background: var(--surface); border-style: dashed; }
+.quote .q.typed .l::after, table.grid td.typed::after { content: ' ✎'; color: var(--accent-ink); font-size: 10px; }
+/* the templates of the entry form, one click away */
+.tplbar { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.tplbar .lbl { color: var(--ink-3); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; margin-right: 2px; }
+.tplbar .grow { flex: 1; }
+.tplbar .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink-2); font-size: 12px; cursor: pointer; }
+.tplbar .chip:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
+.tplbar .chip .k { color: var(--ink-3); font-size: 10px; font-weight: 650; }
+.tplbar .chip.shared { border-style: dashed; }
+.tplbar .btn.sm { padding: 3px 8px; }
+.tplparts { display: flex; flex-direction: column; gap: 2px; }
+.tplparts label.check { white-space: normal; padding-bottom: 2px; }
+.tplscope { margin-top: 10px; }
+table.plain.tpltable td.desc { white-space: normal; color: var(--ink-2); font-size: 11.5px; min-width: 260px; }
+table.plain.tpltable td.acts { white-space: nowrap; }
+table.plain.tpltable td.acts .btn + .btn { margin-left: 4px; }
+/* rows pasted from Excel: what each column is, each row checked */
+.bulkhead { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.bulkhead .grow { flex: 1; }
+.bulkhead .muted { font-size: 11.5px; }
+#bulk-problems:empty { display: none; }
+#bulk-problems { margin-top: 6px; }
+.bulkpreview { margin-top: 8px; max-height: 44vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.bulkpreview:empty { display: none; }
+table.plain.bulk td, table.plain.bulk th { padding: 4px 7px; }
+table.plain.bulk tr.map th { position: sticky; top: 0; background: var(--surface-2); z-index: 1; }
+table.plain.bulk tr.map select { padding: 3px 5px; font-size: 11.5px; min-width: 104px; }
+table.plain.bulk tr.head td { color: var(--ink-3); font-style: italic; }
+table.plain.bulk td.st { white-space: normal; min-width: 280px; max-width: 420px; }
+table.plain.bulk tr.good td.st { color: var(--pos); }
+table.plain.bulk tr.bad td.st { color: var(--neg); font-weight: 600; }
+table.plain.bulk td.cell { font-family: var(--mono); font-size: 11.5px; }
 .section-title { color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin: 18px 2px 8px; }
 table.plain.ret td { padding: 3px 6px; }
 table.plain.ret input { width: 104px; padding: 4px 8px; text-align: right; }
