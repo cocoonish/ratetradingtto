@@ -513,7 +513,8 @@ fiyatlama, strateji, vadeler, büyüklük … herhangi bir alt kümesi; not, OIS
 dışarıda). Şeritteki şablona **bir tık formu doldurur** (gerekirse sekmesini açar); işlem kaydedilmez, "İşlemi
 kaydet" yine sizdedir. Tutar yazıldığı dövizle saklanır (TRY yazılmışsa döviz tutarı her seferinde günün forward'ından); valöre vade
 (`3M`) yazılmışsa günün spotundan hesaplanır; MPC şablonu toplantıları sırasıyla tutar (MPC1→MPC2, toplantı geçince
-bir sonrakine kayar). Şablonlar kişiseldir: başkası görmez. Yönetici kaydederken **Masa (herkes görür)** seçerek masa
+bir sonrakine kayar). Şablondaki tutarlar ve swap puanı iki sayı biçiminde de aynı okunacak gibi saklanır (`17.400` puan `17400` olarak):
+Türkçe ve İngilizce biçimle çalışan kullanıcılar bir masa şablonunu aynı okur. Şablonlar kişiseldir: başkası görmez. Yönetici kaydederken **Masa (herkes görür)** seçerek masa
 şablonu yayımlar: herkes kullanır, yalnızca yöneticiler değiştirir ya da siler (şeritte kesik çerçeveyle). **Yönet…**:
 doldurma, yeniden adlandırma, **formdakiyle güncelleme** (önce formu şablonla doldurup düzenleyin) ve silme. Şablonlar
 veritabanında ayrı bir tabloda (`trade_templates`) durur; önceki sürümün veritabanı açılınca bu tablo eklenir,

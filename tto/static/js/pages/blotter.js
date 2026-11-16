@@ -50,6 +50,17 @@ export function parseAmount(text) {
   return x * mult;
 }
 
+/** A number kept in a template, read the same in Turkish and in English: a lone group of three ("17.400", "10,000" -
+ * thousands in one format, a decimal in the other) is written out ("17400"); anything else stays as typed ("10m", "2,5m",
+ * "10.000.000").  A desk template is filled by users of either format. */
+export function portable(text) {
+  const s = String(text || '').trim();
+  const m = /^([+-]?[1-9]\d{0,2}[.,]\d{3})\s*([a-zA-Z]*)$/.exec(s);
+  if (!m) return s;
+  const x = parseNumber(m[1]);
+  return x === null ? s : String(x) + m[2];
+}
+
 function seg(options, value, onChange, cls) {
   const el = h('div', { class: 'seg' });
   const set = (v) => {
@@ -450,7 +461,8 @@ export class BlotterPage {
     return { warn: warn.join('; ') };
   }
 
-  /** The form of a product as a spec of ``fillForm`` - every field that has something in it (what a template keeps). */
+  /** The form of a product as a spec of ``fillForm`` - every field that has something in it (what a template keeps; its
+   * amounts and points ``portable``: the same in either number format). */
   formSpec(kind) {
     const out = { kind };
     const put = (k, v) => { if (v !== undefined && v !== null && String(v).trim() !== '') out[k] = typeof v === 'string' ? v.trim() : v; };
@@ -458,10 +470,10 @@ export class BlotterPage {
       const f = this.fwd;
       put('pair', this.fwdPair());
       put('dir', f.dir);
-      if (f.typed === 'quote') put('quote_amount', f.quoteAmount.value); else put('amount', f.amount.value);
+      if (f.typed === 'quote') put('quote_amount', portable(f.quoteAmount.value)); else put('amount', portable(f.amount.value));
       put('date', f.date.value);
       put('basis', f.basis);
-      if (MANUAL[f.basis]) put('value', f.manual.value);
+      if (MANUAL[f.basis]) put('value', f.basis === 'SP' ? portable(f.manual.value) : f.manual.value);
       if (f.pair === 'OTHER') put('spot', f.spot.value);
       put('cpt', f.cpt.value);
       put('note', f.note.value);
@@ -479,14 +491,14 @@ export class BlotterPage {
         if (k[1] > k[0]) out.mpc = k;
       }
       put('level', o.level.value);
-      if (o.size.value.trim()) { put('size', o.size.value); out.sizeMode = o.sizeMode; }
+      if (o.size.value.trim()) { put('size', portable(o.size.value)); out.sizeMode = o.sizeMode; }
       put('cpt', o.cpt.value);
       put('note', o.note.value);
     } else {
       const b = this.bond;
       put('dir', b.dir);
       put('instrument', b.inst.value);
-      put('amount', b.amount.value);
+      put('amount', portable(b.amount.value));
       put('price', b.price.value);
       put('note', b.note.value);
     }
