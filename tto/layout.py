@@ -318,3 +318,16 @@ def imported(data: Any, name: Optional[str] = None) -> Dict[str, Any]:
         raise LayoutError("dosya bir launchpad değil")
     lp = launchpad({"name": name if name else data.get("name"), "items": data.get("items", [])})
     return lp
+
+
+# ---------------------------------------------------------------------------------------------- a personal calc sheet
+def _calc_item(x: Dict[str, Any], out: Dict[str, Any]) -> None:
+    """A calc sheet of the user's own (calc.py): ``sheet`` names it among their sheets - the cells are kept there, so
+    that one sheet may stand on a launchpad, in the drawer and in a pop-out window at once."""
+    sid = x.get("sheet")
+    if not isinstance(sid, str) or not _ID.match(sid):
+        raise LayoutError("hesap tablosu geçersiz")
+    out["sheet"] = sid
+
+
+ITEM_TYPES["calc"] = _calc_item

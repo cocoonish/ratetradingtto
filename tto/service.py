@@ -242,6 +242,9 @@ class Service(object):
         # quant signals (quant.py): statistics of the closes in a thread of their own, never on the engine thread
         from .quant import Quant
         self.quant = Quant(self)
+        # each user's own calc sheets on the launchpads (calc.py): formulas over the workbooks' cells, never Bloomberg
+        from .calc import CalcSheets
+        self.calcsheets = CalcSheets(self)
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -2656,6 +2659,7 @@ class Service(object):
         lp = next((x for x in cur["launchpads"] if lay.name_key(x["name"]) == want), None)
         if lp is None:
             raise ServiceError("böyle bir launchpad yok", 404)
+        lp = self.calcsheets.exported(user, lp)                 # (its calc sheets go with it: their cells)
         raw = json.dumps(lay.export(lp), ensure_ascii=False, indent=1).encode("utf-8")
         safe = re.sub(r"[^A-Za-z0-9_-]+", "-", lp["name"].translate(_ASCII_TR)).strip("-") or "launchpad"
         return raw, "launchpad-%s.json" % safe[:40]
@@ -2663,6 +2667,7 @@ class Service(object):
     def import_launchpad(self, user: Optional[str], data: Any, name: Any = None) -> Dict[str, Any]:
         """A launchpad from such a file, added to this user's (a name they have already gets " (2)")."""
         key = self.require_user(user)
+        data = self.calcsheets.imported(key, data)              # (its calc sheets: new ones of this user's)
         try:
             lp = lay.imported(data, name if isinstance(name, str) and name.strip() else None)
         except lay.LayoutError as exc:
