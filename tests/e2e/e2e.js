@@ -2449,9 +2449,11 @@ async function shot(page, name) {
     await page.click('#quant-group-try-ois');
     await page.waitForFunction(() => document.querySelector('#quant-group-try-ois').classList.contains('on')
       && window.tto.state.page.data && window.tto.state.page.data.group === 'TRY OIS', null, { timeout: 20000 });
-    const tryOnly = await page.evaluate(() => ({ group: window.tto.state.page.group, all: (window.tto.state.page.data.signals || []).every((s) => s.group === 'TRY OIS'),
+    const tryOnly = await page.evaluate(() => ({ group: window.tto.state.page.group, kept: localStorage.getItem('tto.quant.group'),
+      all: (window.tto.state.page.data.signals || []).every((s) => s.group === 'TRY OIS'),
       empty: (document.querySelector('#quant-signals .empty') || {}).textContent || '', rows: document.querySelectorAll('#quant-signals table.grid tr:not(.hd)').length }));
-    check('... a group button shows that group alone (asked of the server; its empty list says so)', tryOnly.group === 'TRY OIS' && tryOnly.all
+    check('... a group button shows that group alone (asked of the server; its empty list says so), remembered by its name', tryOnly.group === 'TRY OIS'
+      && tryOnly.kept === 'TRY OIS' && tryOnly.all
       && groupAsks.some((u) => /group=TRY(\+|%20)OIS/.test(u)) && (tryOnly.rows > 0 || /TRY OIS grubunda/.test(tryOnly.empty)), { tryOnly, groupAsks });
     await page.click('#quant-group-all');
     await page.waitForFunction(() => document.querySelector('#quant-group-all').classList.contains('on') && window.tto.state.page.data

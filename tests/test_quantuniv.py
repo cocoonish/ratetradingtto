@@ -65,7 +65,7 @@ def mpc_of(days):
     return out
 
 
-def uni_ctx(today=TODAY, live=None, viop=True, **kw):
+def uni_ctx(today=TODAY, live=None, viop=True, mpc=None, extra=None, **kw):
     """A context with every series the universe reads: the TRY OIS tenors (planted), the G10 spots / points / vols,
     USDTRY / EURTRY and their points, the offshore curve, the global drivers, a DİBS, two VİOP contracts, the meeting
     paths - and the workbook's part (``eng``: the DİBS RV row) the registry takes."""
@@ -114,7 +114,9 @@ def uni_ctx(today=TODAY, live=None, viop=True, **kw):
             meta["VIOPF:" + t] = {"label": "VİOP %s kapanış" % t, "kind": "px", "group": "VİOP"}
     eng = {"dibs": [{"isin": ISIN, "type": "S", "row": 5, "name": "", "maturity": "2029-03-15", "coupon": 30.0, "freq": 2.0,
                      "simple": 0.35, "compound": 0.38, "source": ""}]}
-    ctx = qf.Ctx(cfg(**kw), today, series, meta, live or {}, mpc=mpc_of(DAYS[-60:] + [today.isoformat()]))
+    for key, (values, m) in (extra or {}).items():
+        series[key], meta[key] = values, m
+    ctx = qf.Ctx(cfg(**kw), today, series, meta, live or {}, mpc=mpc if mpc is not None else mpc_of(DAYS[-60:] + [today.isoformat()]))
     return ctx, eng
 
 
@@ -309,6 +311,80 @@ def test_sizes_and_money(reg):
     qf.score_all(reg.ctx, [m], {})
     sg = qf.make_signal(m, cfg(), "10:00")
     assert sg["money"]["total"] == pytest.approx(1.4 * 6000.0) and "(14.000 $ vega)" in sg["plain"]
+
+
+# ================================================================================================ rows that move
+def test_the_ppk_periods_follow_the_meetings_by_date_through_a_calendar_edit():
+    """OIS_MAIN's meeting rows move when the calendar is edited (a meeting added, a date corrected): the history's days
+    before the edit keep the old list until it computes them again (or for good, outside its window).  Each day's k-th
+    period is its own k-th meeting by date, the day it changes is a roll - no other meeting's level runs on as a
+    market move -, the rows of a day in any order."""
+    days = DAYS[-30:] + [TODAY.isoformat()]
+    edit = DAYS[-12]
+    old = ["2026-12-10", "2027-01-21", "2027-03-04"]
+    new = ["2026-12-10", "2026-12-31", "2027-01-22", "2027-03-04"]         # 31.12 added, 21.01 corrected to 22.01
+    base = {"2026-12-10": 0.39, "2026-12-31": 0.385, "2027-01-21": 0.38, "2027-01-22": 0.38, "2027-03-04": 0.37}
+    mpc = {"days": {}, "values": []}
+    for i, d in enumerate(days):
+        spot = qf.business_on_or_after(dt.date.fromisoformat(d) + dt.timedelta(days=1), set()).isoformat()
+        mpc["days"][d] = {"spot": spot, "base": 0.42, "status": "OK"}
+        for m in reversed(old if d < edit else new):                          # (a day's rows in any order)
+            mpc["values"].append({"day": d, "meeting": m, "level": base[m] + 0.0001 * i})     # the market: +1 bp a day
+    ctx, eng = uni_ctx(mpc=mpc)
+    reg = qu.Registry(ctx, None, eng)
+    p1, p2, p3 = reg["PPK:1"], reg["PPK:2"], reg["PPK:3"]
+    for k, inst in ((1, p1), (2, p2), (3, p3)):
+        own = dict(inst.pts())
+        for i, d in enumerate(days[:-1]):
+            m = (old if d < edit else new)[k - 1]
+            assert own[d] == pytest.approx((base[m] + 0.0001 * i) * 100.0), (k, d)      # that day's k-th meeting, by date
+    assert p1.rolls() == set() and p2.rolls() == {edit} and p3.rolls() == {edit}
+    # the edit's jump (2nd: 21.01 → 31.12, +50 bp; 3rd: 04.03 → 22.01, +100 bp) is no move: every move is the market's 1 bp
+    for inst in (p1, p2, p3):
+        assert all(c == pytest.approx(1.0) for c in inst.changes()) and len(inst.changes()) == len(inst.pts()) - 1 - len(inst.rolls())
+        adj = inst.adjusted()                     # (a roll day's own move cannot be told from its jump: 0 that day)
+        assert all(b - a == pytest.approx(0.0 if d in inst.rolls() else 0.01) for (_, a), (d, b) in zip(adj, adj[1:]))
+        assert adj[-1] == inst.pts()[-1] and [d for d, _ in adj] == inst.days
+    # today: the edited calendar's periods, their legs the meeting-dated OIS of those dates
+    assert p2.meeting() == ("2026-12-31", "2027-01-22") and p2.label == "PPK 2. dönem (31.12.26–22.01.27)"
+    assert p2.legs()[0]["key"] == "MPC:2026-12-31" and p3.legs()[0]["key"] == "MPC:2027-01-22"
+    assert p2.now() == pytest.approx((base["2026-12-31"] + 0.0001 * (len(days) - 1)) * 100.0)
+
+
+def test_viop_and_dibs_lines_are_their_ticker_and_isin_whatever_the_sheets_order():
+    """A VİOP contract by its ticker, a bond by its ISIN - not by the VİOP sheet's column or the DİBS RV row: the
+    sheet's columns shifting at a roll, a bond added above the others, a bond maturing - no line takes another's
+    history, its live value or its size."""
+    new_isin = "TRT100128T10"
+    extra = {"DIBS:" + new_isin: ({d: 34.0 + 0.2 * math.cos(i / 9.0) for i, d in enumerate(DAYS)},
+                                  {"label": new_isin, "kind": "rate", "group": "dibs", "unit": "pct", "maturity": "2028-01-10", "type": "S", "name": ""}),
+             "DIBS:TRT201126T11": ({d: 33.0 for d in DAYS},                     # (matures within 30 days: no line)
+                                   {"label": "TRT201126T11", "kind": "rate", "group": "dibs", "unit": "pct", "maturity": "2026-11-20", "type": "S", "name": ""})}
+    live = {"VQM:A1Z6 Curncy": 41.0, "VQM:A1H7 Curncy": 42.5, "VQM:A1M7 Curncy": 43.0}
+    ctx1, eng1 = uni_ctx(live=live)
+    eng1["viopq"] = [{"ticker": "A1Z6 Curncy", "n": 1}, {"ticker": "A1H7 Curncy", "n": 2}]
+    ctx2, eng2 = uni_ctx(live=live, extra=extra)
+    # the VİOP sheet after a roll: its first column the March contract, a new June one beside it; the DİBS RV list with a
+    # new bond on top (every row below it one down) and a short one
+    eng2["viopq"] = [{"ticker": "A1H7 Curncy", "n": 1}, {"ticker": "A1M7 Curncy", "n": 2}]
+    eng2["dibs"] = ([{"isin": new_isin, "type": "S", "row": 5, "name": "", "maturity": "2028-01-10", "coupon": 25.0, "freq": 2.0,
+                      "simple": 0.34, "compound": 0.37, "source": ""}]
+                    + [dict(r, row=6) for r in eng1["dibs"]]
+                    + [{"isin": "TRT201126T11", "type": "S", "row": 7, "name": "", "maturity": "2026-11-20", "coupon": 20.0, "freq": 2.0,
+                        "simple": 0.33, "compound": 0.35, "source": ""}])
+    r1, r2 = qu.Registry(ctx1, None, eng1), qu.Registry(ctx2, None, eng2)
+    assert [i.key for i in r1.tradeable("VİOP")] == ["VIOP:A1Z6 Curncy", "VIOP:A1H7 Curncy"]
+    assert [i.key for i in r2.tradeable("VİOP")] == ["VIOP:A1Z6 Curncy", "VIOP:A1H7 Curncy", "VIOP:A1M7 Curncy"]
+    for key in ("VIOP:A1Z6 Curncy", "VIOP:A1H7 Curncy"):
+        a, b = r1[key], r2[key]
+        assert a.label == b.label and a.pts() == b.pts() and a.now() == b.now() == live["VQM:" + key[5:]], key
+        assert a.legs()[0]["key"] == b.legs()[0]["key"] == "VQM:" + key[5:]
+    assert r2["VIOP:A1M7 Curncy"].label == "VİOP Haz27" and r2["VIOP:A1M7 Curncy"].now() == 43.0
+    assert [i.key for i in r1.tradeable("DİBS")] == ["DIBS:" + ISIN] and [i.key for i in r2.tradeable("DİBS")] == ["DIBS:" + new_isin, "DIBS:" + ISIN]
+    a, b = r1["DIBS:" + ISIN], r2["DIBS:" + ISIN]
+    assert (a.label, a.pts(), a.now(), a.nominal(), a.size_text()) == (b.label, b.pts(), b.now(), b.nominal(), b.size_text())
+    assert r2["DIBS:" + new_isin].label == "DİBS 10.01.28" and r2["DIBS:" + new_isin].values[-1] != a.values[-1]
+    assert "DIBS:TRT201126T11" not in r2                                     # (inside 30 days of its maturity: no line)
 
 
 # ================================================================================================ the list
@@ -509,3 +585,6 @@ def test_universe_and_groups_over_http(seeded):
         assert s["group"] == "TRY OIS" and all(x["group"] == "TRY OIS" for x in s["signals"]) and [g["id"] for g in s["groups"]] == list(qu.GROUPS)
         res = client.post("/api/quant/subscription", json={"on": True, "families": ["trend", "yok"], "groups": ["VİOP", "yok"], "min": "Orta"})
         assert res.status_code == 200 and res.json()["families"] == ["trend"] and res.json()["groups"] == ["VİOP"]
+        # (what is kept is the group's name, nothing a row or a position: a group's place may change, its name not)
+        kept = svc.store.get(qq.Quant.SUBS_KEY)
+        assert any(v.get("groups") == ["VİOP"] for v in kept.values())

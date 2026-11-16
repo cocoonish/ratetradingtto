@@ -1391,7 +1391,7 @@ def test_live_viop_contracts_fill_in_a_pool_of_their_own_and_an_expired_one_is_a
         nq = sum(1 for d in snap["defs"] if d.group == "Quant" and d not in viop)
         q = History.BACKFILL_PER_SYNC
         assert [len(full(s, vt)) for s in syncs] == [15] * 9 + [3, 0, 0]
-        assert [len(full(s, quant)) for s in syncs] == [min(q, max(0, nq - i * q)) for i in range(12)] == [40, 40, 40, 1] + [0] * 8
+        assert [len(full(s, quant)) for s in syncs] == [min(q, max(0, nq - i * q)) for i in range(12)] == [40, 40, 40, 23] + [0] * 8     # (143: the G10 universe's 22 last)
         assert h.state["backfill"]["viop_per_sync"] == History.VIOP_PER_SYNC == 15 and History.BACKFILL_PER_SYNC == 40
         when = {}
         for i, s in enumerate(syncs):

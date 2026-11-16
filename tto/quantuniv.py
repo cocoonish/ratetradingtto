@@ -10,8 +10,11 @@ in reg`` walks the trade lines in the list's order (``reg.tradeable("TRY OIS")``
 feature-only series - UST, DXY, Brent, CDS, EM FX, TLREF, the interpolated OIS tenors -, ``reg[key]`` any of them).
 Its level: ``inst.days`` / ``inst.values`` (the closes before today), ``inst.now(live)`` (now; the fit's live values
 without ``live``), ``inst.changes()`` (the daily moves in change units - bp, %, vol, puan -, a rolling series' roll
-days left out), ``inst.vol()`` (their σ over the last 60), ``inst.carry_week()`` (carry + roll a week, change units)
-and ``inst.carry_days()`` (FX: the carry's own history, % a year).  Every number is the *up* side's -
+days left out; ``inst.adjusted()`` the closes without the rolls' jumps, for a move over a window), ``inst.vol()``
+(their σ over the last 60), ``inst.carry_week()`` (carry + roll a week, change units) and ``inst.carry_days()`` (FX:
+the carry's own history, % a year).  Lines are keyed by what they are - a tenor's label, a meeting's date, a
+contract's ticker, a bond's ISIN - never by a sheet's row or column: a calendar edit, a roll, a new bond moves no
+history from one line to another.  Every number is the *up* side's -
 ``inst.verbs[0]``, the position that gains when the level rises ("AL", "pay", "steepener", "vol al"; "SAT" for a
 DİBS yield).  Size and money: ``inst.size_text(k)`` is k of the desk's unit ("1,4 mn EUR", "700 $ DV01", "14.000 $
 vega"), ``inst.money(move, k)`` what a level move of ``move`` change units makes k units of the up side, in
@@ -378,6 +381,22 @@ class Instrument(object):
         self.pts()
         return self._rolls
 
+    def adjusted(self) -> List[Tuple[str, float]]:
+        """The closes with every roll's jump taken out (level units, added to the closes before it): a continuous
+        series for a move over a window - a rolling series' level jumps to the next period on its roll days (a PPK
+        period on a meeting day, or when the calendar was edited).  Without rolls: the closes."""
+        p = self.pts()
+        rolls = self.rolls()
+        if not rolls or not p:
+            return list(p)
+        out = list(p)
+        shift = 0.0
+        for i in range(len(p) - 1, 0, -1):
+            if p[i][0] in rolls:
+                shift += p[i][1] - p[i - 1][1]
+            out[i - 1] = (p[i - 1][0], p[i - 1][1] + shift)
+        return out
+
     def changes(self, n: Optional[int] = None) -> List[float]:
         """The daily moves of the level in change units (bp, %, vol, puan), the roll days left out; the last ``n``."""
         p = self.pts()
@@ -666,7 +685,10 @@ class Fra(Instrument):
 class PpkPeriod(Instrument):
     """The k-th coming PPK period: the meeting path's TLREF level after the k-th meeting still ahead (each day's path
     the history computed - the PPK Fiyatlama Geçmişi -, its meetings after the day's spot), a meeting-dated OIS: it
-    rolls to the next period on each meeting day; carry 0 (forward-starting, fixed dates)."""
+    rolls to the next period on each meeting day; carry 0 (forward-starting, fixed dates).  Each day's k-th meeting
+    is its k-th by date, as that day's path has its meetings (``quantpath.try_paths``: the store's rows by meeting
+    date, not OIS_MAIN's rows): when the calendar was edited - a meeting added, removed or its date corrected - the
+    day its k-th meeting changes is a roll too (its jump is no market move: ``changes`` / ``adjusted`` leave it out)."""
 
     def __init__(self, reg: "Registry", k: int, **kw: Any):
         super().__init__(reg, "PPK:%d" % k, "TRY OIS", "PPK %d. dönem" % k, ("pay", "receive"), tier=SHORT, **kw)
