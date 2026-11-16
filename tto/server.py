@@ -350,6 +350,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return Response(raw, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
     @handler
+    async def client_quote(request: Request):
+        # "Kotasyon kopyala": a pricing table's quote for a client as text (``language`` tr / en: ``lang`` is the
+        # number format of the page, sent with every request)
+        q = request.query_params
+        return ok(await call(svc().client_quote, _user(request), q.get("view", ""), q.get("panel", ""), q.get("row"),
+                             q.get("part"), q.get("language"), _role(request)))
+
+    @handler
     async def cell(request: Request):
         q = request.query_params
         return ok(await call(svc().cell_info, _user(request), q.get("book", "tto"), q.get("ref", ""), _lang(request)))
@@ -993,6 +1001,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/calc/{what}", calc_post, methods=["POST"]),
         Route("/api/image", image),
         Route("/api/cell", cell),
+        Route("/api/quote", client_quote),
         Route("/api/grid", grid),
         Route("/api/sheets", sheets),
         Route("/api/inputs", inputs, methods=["POST"]),

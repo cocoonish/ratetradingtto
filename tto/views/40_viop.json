@@ -416,7 +416,14 @@
    "cols": ["K", "L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"],
    "tips": {"W": "AA", "Q": "AB", "Z": "AC"},
    "hidden": false,
-   "note": "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden – Bootstrap (piyasa) ya da OIS · PPK'daki senaryolar S1 / S2 / S3 (adları SENARYOLAR tablosundan). FXswap+bp ve Faiz % satırlarında etkisiz. Hücrenin üzerine gelince OIS FRA ve Hedef faiz eğrilerini yazar."
+   "note": "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden – Bootstrap (piyasa) ya da OIS · PPK'daki senaryolar S1 / S2 / S3 (adları SENARYOLAR tablosundan). FXswap+bp ve Faiz % satırlarında etkisiz. Hücrenin üzerine gelince OIS FRA ve Hedef faiz eğrilerini yazar.",
+   "client_quote": {"pair": "VİOP USDTRY", "title": "spread", "rows": "331:338", "days": "Y",
+                    "start": {"src": "L", "label": "Yakın", "label_en": "Near"}, "end": {"src": "M", "label": "Uzak", "label_en": "Far"},
+                    "side": {"src": "N", "label": "Yön (uzak USD)", "label_en": "Side (far USD)"},
+                    "spot": {"src": "R", "label": "Yakın fiyat", "label_en": "Near price"},
+                    "points": {"src": "T", "label": "Spread fiyatı", "label_en": "Spread price"},
+                    "outright": {"src": "S", "label": "Uzak limit fiyatı", "label_en": "Far limit price"},
+                    "try": {"src": "Q", "label": "Hedef faiz % (360)", "label_en": "Target rate % (360)"}}
   },
   {
    "id": "B12",

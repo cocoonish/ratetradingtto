@@ -260,7 +260,14 @@
    "type": "table",
    "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread üstteki satırda)",
    "range": "P59:AB70",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {"pair": "USDTRY", "title": "forward-forward", "rows": "62:68", "label": "P", "head": "Eğri", "head_en": "Curve",
+                    "start": "C60", "end": "E60", "days": "G60", "spot": "Q60",
+                    "near": {"src": "S", "label": "Başlangıç forward", "label_en": "Near outright"},
+                    "outright": {"src": "T", "label": "Bitiş forward", "label_en": "Far outright"},
+                    "points": {"src": "W", "label": "Fwd-fwd puan", "label_en": "Fwd-fwd points"},
+                    "try": {"src": "X", "label": "Dönem TRY %", "label_en": "Period TRY rate %"},
+                    "ccy": {"src": "W60", "label": "USD % spot→bitiş", "label_en": "USD rate % spot→end"}}
   },
   {
    "id": "chart4",
@@ -294,7 +301,10 @@
    "wide": true,
    "borrowed": true,
    "keep_title": true,
-   "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı ve puandan spread: Forward → Kotasyon)"
+   "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı ve puandan spread: Forward → Kotasyon)",
+   "client_quote": {"pair": "USDTRY", "title": "forward", "rows": "5:14", "label": "A", "alt": "B", "alt_when": "serbest",
+                    "head": "Vade", "head_en": "Tenor", "start": "G2", "spot": ["F4", "G4"], "end": "B", "days": "C",
+                    "points": ["H", "I"], "outright": ["J", "K"], "try": ["M", "N"], "ccy": "O"}
   },
   {
    "id": "EKSE",
@@ -306,7 +316,10 @@
    "wide": true,
    "borrowed": true,
    "keep_title": true,
-   "title": "FORWARD KOTASYON  ·  EURTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; eğri ve 'Tümü' spread'leri USDTRY'ninkinden gelir, ayrıca yazılabilir; tamamı ve puandan spread: Forward → Kotasyon)"
+   "title": "FORWARD KOTASYON  ·  EURTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; eğri ve 'Tümü' spread'leri USDTRY'ninkinden gelir, ayrıca yazılabilir; tamamı ve puandan spread: Forward → Kotasyon)",
+   "client_quote": {"pair": "EURTRY", "title": "forward", "rows": "104:113", "label": "A", "alt": "B", "alt_when": "serbest",
+                    "head": "Vade", "head_en": "Tenor", "start": "G101", "spot": ["F103", "G103"], "end": "B", "days": "C",
+                    "points": ["H", "I"], "outright": ["J", "K"], "try": ["M", "N"], "ccy": "O"}
   },
   {
    "id": "B14",
@@ -357,7 +370,14 @@
    "type": "table",
    "title": "VİOP  ·  TARGET  (girdiler VIOP!L331:P338)",
    "range": "P119:AB129",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {"pair": "VİOP USDTRY", "title": "spread", "rows": "121:128", "days": "AB",
+                    "start": {"src": "P", "label": "Yakın", "label_en": "Near"}, "end": {"src": "Q", "label": "Uzak", "label_en": "Far"},
+                    "side": {"src": "R", "label": "Yön (uzak USD)", "label_en": "Side (far USD)"},
+                    "spot": {"src": "U", "label": "Yakın fiyat", "label_en": "Near price"},
+                    "points": {"src": "W", "label": "Spread fiyatı", "label_en": "Spread price"},
+                    "outright": {"src": "V", "label": "Uzak limit fiyatı", "label_en": "Far limit price"},
+                    "try": {"src": "T", "label": "Hedef faiz % (360)", "label_en": "Target rate % (360)"}}
   },
   {
    "id": "B18D",
@@ -416,7 +436,11 @@
    "type": "table",
    "title": "KIRIK VADE & KARŞILIK  ·  forward ↔ basit ↔ OIS 3M ↔ XCCY yıllık  (piyasa = eğrilerden mid; sarı = girdi)",
    "range": "B170:N185",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {"pair": "USDTRY", "title": "forward", "start": "Forward!I2", "end": "C171", "days": "E171", "spot": "N171",
+                    "outright": "G173", "points": "G174",
+                    "try": {"src": "G175", "label": "TRY basit % (ACT/360)", "label_en": "TRY simple rate % (ACT/360)"},
+                    "on": "G177"}
   },
   {
    "id": "B23D",

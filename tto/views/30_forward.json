@@ -1139,6 +1139,34 @@
     "date": "B45",
     "bid": "H",
     "ask": "J"
+   },
+   "client_quote": {
+    "pair": "USDTRY",
+    "title": "forward",
+    "rows": "47:51",
+    "label": "A",
+    "head": "Eğri",
+    "head_en": "Curve",
+    "start": "Forward!I2",
+    "end": "B45",
+    "days": "D45",
+    "spot": "F45",
+    "points": [
+     "H",
+     "J"
+    ],
+    "outright": [
+     "E",
+     "G"
+    ],
+    "try": [
+     "B",
+     "D"
+    ],
+    "ccy": [
+     "H45",
+     "L45"
+    ]
    }
   },
   {
@@ -1191,6 +1219,34 @@
     "date": "B56",
     "bid": "H",
     "ask": "J"
+   },
+   "client_quote": {
+    "pair": "EURTRY",
+    "title": "forward",
+    "rows": "58:62",
+    "label": "A",
+    "head": "Eğri",
+    "head_en": "Curve",
+    "start": "Forward!K2",
+    "end": "B56",
+    "days": "D56",
+    "spot": "F56",
+    "points": [
+     "H",
+     "J"
+    ],
+    "outright": [
+     "E",
+     "G"
+    ],
+    "try": [
+     "B",
+     "D"
+    ],
+    "ccy": [
+     "H56",
+     "L56"
+    ]
    }
   },
   {
@@ -1207,6 +1263,21 @@
     "first": 68,
     "extra": 3,
     "last": 77
+   },
+   "client_quote": {
+    "pair": {
+     "src": "A"
+    },
+    "title": "Forward",
+    "rows": "68:77",
+    "start": "B",
+    "end": "C",
+    "days": "D",
+    "spot": "E",
+    "points": "H",
+    "outright": "I",
+    "try": "G",
+    "ccy": "F"
    }
   },
   {
@@ -1270,6 +1341,36 @@
     "date_col": "B",
     "bid": "H",
     "ask": "I"
+   },
+   "client_quote": {
+    "pair": "USDTRY",
+    "title": "forward",
+    "rows": "5:14",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "head": "Vade",
+    "head_en": "Tenor",
+    "start": "G2",
+    "spot": [
+     "F4",
+     "G4"
+    ],
+    "end": "B",
+    "days": "C",
+    "points": [
+     "H",
+     "I"
+    ],
+    "outright": [
+     "J",
+     "K"
+    ],
+    "try": [
+     "M",
+     "N"
+    ],
+    "ccy": "O"
    }
   },
   {
@@ -1327,6 +1428,36 @@
     "date_col": "B",
     "bid": "H",
     "ask": "I"
+   },
+   "client_quote": {
+    "pair": "EURTRY",
+    "title": "forward",
+    "rows": "104:113",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "head": "Vade",
+    "head_en": "Tenor",
+    "start": "G101",
+    "spot": [
+     "F103",
+     "G103"
+    ],
+    "end": "B",
+    "days": "C",
+    "points": [
+     "H",
+     "I"
+    ],
+    "outright": [
+     "J",
+     "K"
+    ],
+    "try": [
+     "M",
+     "N"
+    ],
+    "ccy": "O"
    }
   },
   {
@@ -1424,7 +1555,28 @@
    "type": "table",
    "title": "Forward DV01",
    "range": "N31:P49",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {
+    "pair": "USDTRY",
+    "title": "forward",
+    "side": "O44",
+    "start": "O33",
+    "end": "O34",
+    "days": "O35",
+    "spot": "O32",
+    "outright": "O46",
+    "try": {
+     "src": "O36",
+     "label": "TRY OIS %",
+     "label_en": "TRY OIS rate %"
+    },
+    "ccy": {
+     "src": "O41",
+     "label": "USD SOFR %",
+     "label_en": "USD SOFR rate %"
+    },
+    "amount": "O45"
+   }
   },
   {
    "id": "BK1",
@@ -1571,7 +1723,34 @@
    "title": "Interest 2 SP · TRY faizi → swap puanı (USDTRY | EURTRY)",
    "range": "AG4:AK16",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH5",
+      "end": "AH6",
+      "days": "AH7",
+      "spot": "AH8",
+      "ccy": "AH9",
+      "try": "AH10",
+      "points": "AH11",
+      "outright": "AH12"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK5",
+      "end": "AK6",
+      "days": "AK7",
+      "spot": "AK8",
+      "ccy": "AK9",
+      "try": "AK10",
+      "points": "AK11",
+      "outright": "AK12"
+     }
+    ]
+   }
   },
   {
    "id": "B8",
@@ -1579,7 +1758,34 @@
    "title": "SP 2 Interest · swap puanı → ima TRY faizi (USDTRY | EURTRY)",
    "range": "AG18:AK30",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH19",
+      "end": "AH20",
+      "days": "AH21",
+      "spot": "AH22",
+      "ccy": "AH23",
+      "try": "AH24",
+      "points": "AH25",
+      "outright": "AH26"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK19",
+      "end": "AK20",
+      "days": "AK21",
+      "spot": "AK22",
+      "ccy": "AK23",
+      "try": "AK24",
+      "points": "AK25",
+      "outright": "AK26"
+     }
+    ]
+   }
   },
   {
    "id": "B9",
@@ -1587,7 +1793,34 @@
    "title": "SP 2 Interest · all-in outright → puan ve ima TRY faizi (USDTRY | EURTRY)",
    "range": "AG32:AK44",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH33",
+      "end": "AH34",
+      "days": "AH35",
+      "spot": "AH36",
+      "ccy": "AH37",
+      "try": "AH38",
+      "points": "AH39",
+      "outright": "AH40"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK33",
+      "end": "AK34",
+      "days": "AK35",
+      "spot": "AK36",
+      "ccy": "AK37",
+      "try": "AK38",
+      "points": "AK39",
+      "outright": "AK40"
+     }
+    ]
+   }
   },
   {
    "id": "B10",
@@ -1595,7 +1828,36 @@
    "title": "Interest 2 SP · O/N karşılığı → vade faizi → swap puanı (USDTRY | EURTRY)",
    "range": "AG46:AK58",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH47",
+      "end": "AH48",
+      "days": "AH49",
+      "spot": "AH50",
+      "ccy": "AH51",
+      "try": "AH52",
+      "points": "AH53",
+      "outright": "AH54",
+      "on": "AH56"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK47",
+      "end": "AK48",
+      "days": "AK49",
+      "spot": "AK50",
+      "ccy": "AK51",
+      "try": "AK52",
+      "points": "AK53",
+      "outright": "AK54",
+      "on": "AK56"
+     }
+    ]
+   }
   },
   {
    "id": "B11",
@@ -1610,7 +1872,31 @@
    "type": "table",
    "title": "XARTRY müşteri altın forward hesaplayıcı",
    "range": "B56:F73",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {
+    "pair": "XARTRY",
+    "title": "forward",
+    "start": "E67",
+    "end": "E61",
+    "days": "E68",
+    "spot": {
+     "src": "E60",
+     "label": "XARTRY spot",
+     "label_en": "XARTRY spot"
+    },
+    "points": "E69",
+    "outright": {
+     "src": "E65",
+     "label": "XARTRY forward",
+     "label_en": "XARTRY forward"
+    },
+    "try": "E64",
+    "ccy": {
+     "src": "E63",
+     "label": "USD faizi %",
+     "label_en": "USD rate %"
+    }
+   }
   },
   {
    "id": "B24",

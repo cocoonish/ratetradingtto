@@ -205,6 +205,10 @@ a { color: var(--accent-ink); }
 .secthead:first-child { margin-top: 0; }
 .secthead .n { margin-left: 8px; font-weight: 500; letter-spacing: 0; }
 .panel > header .btn.sm { white-space: nowrap; }
+/* a button with its own small menu beside it ("Kotasyon kopyala ▾") */
+.splitbtn { display: inline-flex; flex: none; }
+.splitbtn > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.splitbtn > .btn + .btn { border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 5px; padding-right: 5px; }
 .panels { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; max-width: 100%;
   display: flex; flex-direction: column; flex: 0 1 auto; }

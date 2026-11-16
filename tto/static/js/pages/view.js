@@ -7,6 +7,7 @@ import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell, reviveEditor } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
+import { quoteButton, quoteRowItems, quoteRows } from '../kotasyon.js';
 import { addButton } from '../layout.js';
 
 const ALL = '*';
@@ -467,6 +468,10 @@ export class ViewPage {
       b.addEventListener('click', () => openQuoteMessage(this.id, Object.assign({}, p, { data: this.panelData(p, it) })));
       head.appendChild(b);
     }
+    if (p.client_quote && p.data) {
+      // "Kotasyon kopyala": the table's prices as a quote for a client (Türkçe / English), one row of it on a right click
+      head.appendChild(quoteButton(this.id, p));
+    }
     if (p.trade && p.data && this.ctx.openTrade) {
       // a row of the table as a trade: Günlük İşlemler with its fields filled
       const b = h('button', { class: 'btn sm', type: 'button', title: 'Bir satırı seçin: Günlük İşlemler parite, yön, valör ve swap puanı dolu açılır' }, 'İşlem gir');
@@ -516,7 +521,8 @@ export class ViewPage {
     } else if (p.data) {
       // each user hides columns of their own: by the page and the table, a column by its letter in the sheet
       it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: this.adhoc,
-        name: p.type === 'notes' ? null : 'v/' + this.id + '/' + p.id, order: true, tools });
+        name: p.type === 'notes' ? null : 'v/' + this.id + '/' + p.id, order: true, tools,
+        rowItems: quoteRows(p.client_quote) ? (i) => quoteRowItems(this.id, p, it.grid, i) : null });
       body.appendChild(it.grid.el);
       if (p.data.hc) {
         // Excel hides some columns of this table: say so, one click shows them

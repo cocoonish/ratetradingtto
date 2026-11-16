@@ -289,7 +289,8 @@ export class Grid {
    *       name (the table's stable name: each user hides columns of it, kept with the account),
    *       order (bool: the user may put its columns in an order of their own - a table of a workbook page, whose
    *              cells are known by their letter; the dashboard's own tables find a column by its place),
-   *       tools (the panel's tools: the "Sütunlar" button goes there)
+   *       tools (the panel's tools: the "Sütunlar" button goes there),
+   *       rowItems ((i, j) -> menu items: what the right-click menu offers first for the row clicked - a row's quote)
    */
   constructor(opts) {
     this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
@@ -642,7 +643,11 @@ export class Grid {
       for (let j = cur.left; j <= right; j++) js.push(j);
       cols = [{ sep: true }].concat(this.columns.menuItems(js, e.clientX, e.clientY));
     }
+    // what the page offers for the row clicked (its quote: "Bu satırın kotasyonu")
+    const own = this.opts.rowItems ? (this.opts.rowItems(td.__i, td.__j) || []) : [];
     menu(e.clientX, e.clientY, [
+      ...own,
+      own.length ? { sep: true } : null,
       watchable && hooks.watch ? { label: 'İzlemeye ekle', action: () => hooks.watch(this.book, one.ref, label) } : null,
       watchable && hooks.alarm ? { label: 'Alarm kur…', action: () => hooks.alarm(this.book, one.ref, label, one.cell.t) } : null,
       watchable ? { sep: true } : null,

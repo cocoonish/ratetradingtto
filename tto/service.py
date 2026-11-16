@@ -28,6 +28,7 @@ from . import borsaspread as bsp
 from . import brokerchat as bc
 from . import extras as ex
 from . import layout as lay
+from . import quotes as qt
 from . import shortcuts
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
@@ -1808,6 +1809,54 @@ class Service(object):
                         "since": since, "as": kind, "keys": x.get("keys") is True})
         return out
 
+    def client_quote(self, user: Optional[str], view_id: str, panel_id: str, row: Any = None, part: Any = None,
+                     language: Optional[str] = None, role: Optional[str] = None) -> Dict[str, Any]:
+        """"Kotasyon kopyala": a pricing table's quote for a client, as text to send (tto/quotes.py) - from the cells
+        the table's ``client_quote`` names, as this user's own calculation has them (their inputs and "Elle değer"
+        values: what their page shows).  ``row``: one row of a table of quotes (its row in the sheet; without it, all
+        of its filled rows); ``part``: one of the quotes side by side (USDTRY | EURTRY); ``language``: "tr" / "en" -
+        the numbers follow it (34,25 / 34.25)."""
+        user = self.require_user(user)
+        v = self.view_index.get(str(view_id or ""))
+        if v is None:
+            raise ServiceError("sayfa bulunamadı: %s" % view_id, 404)
+        admin = (role == "admin") if role is not None else self._is_admin(user)
+        if v.get("admin") and not admin:
+            raise ServiceError("erişim yok: bu sayfa yalnızca yöneticilere açıktır", 403)
+        p = next((x for x in v["panels"] if x.get("id") == panel_id), None)
+        if p is None or not p.get("client_quote"):
+            raise ServiceError("bu tabloda kotasyon yok: %s / %s" % (view_id, panel_id), 404)
+        book = self._book(v["book"])
+        sheet = p.get("sheet", v["sheet"])
+        lang = "en" if str(language or "").lower() == "en" else "tr"
+
+        def number(x: Any) -> Optional[int]:
+            if x is None or x == "":
+                return None
+            try:
+                return int(x)
+            except (TypeError, ValueError):
+                raise ServiceError("geçersiz satır / parça: %r" % (x,))
+
+        row, part = number(row), number(part)
+
+        def run() -> str:
+            calc = self._calc(user, book)
+            fmts = book.model.numfmts
+
+            def read(ref: str) -> Tuple[Any, str]:
+                si, rc = book.cell(ref)
+                st = book.model.sheets[si].styles.get(rc, 0)
+                return calc.get(si, *divmod(rc, COLS)), (fmts[st] if st < len(fmts) else "General")
+
+            return qt.quote_text(p["client_quote"], read, sheet, lang, serial_to_date(book.engine.clock.today()), row, part)
+
+        try:
+            text = self.et.call(run)
+        except qt.QuoteError as exc:
+            raise ServiceError(str(exc))
+        return {"text": text, "language": lang, "view": v["id"], "panel": panel_id, "row": row, "part": part}
+
     def _panel(self, p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer) -> Dict[str, Any]:
         """One panel of a page as the browser draws it."""
         entry = {"id": p.get("id"), "type": p["type"], "title": p.get("title", ""), "hidden": bool(p.get("hidden")),
@@ -1830,6 +1879,13 @@ class Service(object):
             entry["quote"] = p["quote"]             # "Kota mesajı": its rows as a message to send
         if p.get("trade"):
             entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
+        if p.get("client_quote"):
+            # "Kotasyon kopyala": what the browser needs to offer it - its rows (one row's quote on a right click) and
+            # its parts (USDTRY | EURTRY side by side); the text is made by client_quote
+            cq = p["client_quote"]
+            entry["client_quote"] = {k: cq[k] for k in ("rows",) if k in cq}
+            if cq.get("parts"):
+                entry["client_quote"]["parts"] = [qt.part_name(cq, k) for k in range(len(cq["parts"]))]
         if p.get("ranked"):
             entry["ranked"] = True                  # a ranking: a launchpad keeps a choice of its rows by number
         try:
