@@ -18,7 +18,8 @@ Refused as typed, with the reason: a Bloomberg function (the daily data limit, `
 cannot be read or names what is not there, a cycle (the formula reads - through the workbook's formulas or other
 formula inputs - the cell it is typed into: the engine's masks tell that a read depends on an input, the formulas'
 references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, "Elle değer", a
-cell the meeting calendar moves - its value goes with its meeting, a formula's references would not), a shared formula
+cell of a meeting's row whose value goes with its meeting - meetings.py; a reference to it from elsewhere follows the
+meeting too), a shared formula
 reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and a formula
 reading live data (prices, NOW()) into a cell that goes into a Bloomberg request: a new request on every tick.
 
@@ -49,9 +50,9 @@ SHARED = ""                            # the scope of the desk's (shared) inputs
 
 BLOOMBERG_INPUT = BLOOMBERG.replace("hesap tablosunda", "girdi formüllerinde")
 LIST = "bu hücre listeden bir değer alır (%s): formül yazılamaz"
-MEETING = "toplantı tarihleri takvimden değişir (Ayarlar → Toplantı takvimi): formül yazılamaz"
-CALENDAR = ("toplantı takvimiyle kayan hücre: formül yazılamaz (takvim değişince değeri toplantısıyla taşınır, formülün "
-            "başvuruları taşınmaz)")
+MEETING = "toplantı tarihleri takvimden değişir (%s): formül yazılamaz"
+CALENDAR = ("toplantı takvimiyle kayan hücre: formül yazılamaz (takvim değişince değeri toplantısıyla taşınır; başka bir "
+            "hücreden ona başvurabilirsiniz - başvuru da toplantısıyla taşınır)")
 NOT_INPUT = "formül yalnızca girdi hücrelerine (sarı / yeşil) yazılır - \"Elle değer\" bir sabittir"
 CYCLE = "döngüsel başvuru: %s - formül yazıldığı hücreyi okuyor"
 LIVE = ("bu hücrenin değeri bir Bloomberg isteğine girer (%s): canlı fiyat ya da NOW() okuyan bir formül her değişimde "
@@ -60,6 +61,7 @@ STOPPED_CYCLE = "Döngüsel başvuru: %s - formül durduruldu (#CALC!); formül�
 STOPPED_LIVE = ("formül canlı veri okumaya başladı; bu hücrenin değeri bir Bloomberg isteğine girdiği için durduruldu "
                 "(günlük veri limiti) - formülü yeniden yazın")
 STOPPED_RESTLESS = "formülün değeri her hesapta değişiyor - durduruldu (#CALC!); formülü yeniden yazın"
+STOPPED_ERROR = "formülün değeri hata oldu (%s) - durduruldu; formülü düzeltin ya da yeniden yazın"
 STOPPED_SLOW = "%s - %d kez üst üste; formül durduruldu, yeniden yazınca denenir"
 RETRYING = "%s - biraz sonra yeniden denenecek"
 KEPT = " · Bloomberg isteğine giren hücre: son iyi değeri kaldı"
@@ -216,6 +218,7 @@ class InputFormulas(object):
     def _take(self, scope: str, rows: Dict[Tuple[str, str], str]) -> None:
         """A scope's formulas as the store keeps them: an entry whose text is the same is kept (with what it read).  One
         in a cell the meeting calendar moves (an earlier version took it) goes: its value stays, the log says so."""
+        from . import meetings as mt
         old = self._scopes.get(scope, {})
         new: Dict[Tuple[str, int, int], _Entry] = {}
         moved: List[Tuple[str, str, str]] = []
@@ -227,7 +230,7 @@ class InputFormulas(object):
                 si, rc = book.cell(ref)
             except (KeyError, ValueError):
                 continue
-            if self.svc._meeting_date_cell(book, si, rc) or self.svc._moved_by_calendar(book, si, rc):
+            if mt.follows(book, si, rc):
                 moved.append((bid, ref, text))
                 continue
             d = book.inputs.get((si, rc))
@@ -258,10 +261,12 @@ class InputFormulas(object):
     def accept(self, user: str, book, si: int, rc: int, d, text: str, calc, batch: List[_Entry]) -> Tuple[Any, _Entry]:
         """A formula typed into an input (calculation thread) -> (its value, its entry); :class:`FormulaError` says why
         it is refused.  ``batch``: the formulas accepted before it in the same write (a cycle among them is one)."""
+        from . import meetings as mt
         text = text.strip()
-        if self.svc._meeting_date_cell(book, si, rc):
-            raise FormulaError(MEETING)
-        if self.svc._moved_by_calendar(book, si, rc):
+        cal = mt.key_of(book, si, rc)
+        if cal is not None:
+            raise FormulaError(MEETING % cal.where)
+        if mt.follows(book, si, rc):
             raise FormulaError(CALENDAR)
         if d is None or d.group in ("adhoc", "adhoc-shared"):
             raise FormulaError(NOT_INPUT)
@@ -459,6 +464,11 @@ class InputFormulas(object):
                         ring = self._ring(e, [])
                         if ring:
                             self._freeze(e, STOPPED_CYCLE % " → ".join(ring), sets)
+                            continue
+                        if self._feeds(e):
+                            # an error where the value goes into a Bloomberg request (a reference whose meeting left the
+                            # list: #REF!) would be a request with an empty argument: stopped, its last good value kept
+                            self._freeze(e, STOPPED_ERROR % v.code, sets)
                             continue
                     e.freezes = 0
                     if not _same(v, self._current(e)):

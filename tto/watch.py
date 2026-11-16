@@ -10,6 +10,9 @@ What is watched is a *subject*, as the desk names it, not a cell that may move:
   cheap / rich, Z-spread, prices, ASW against FX swaps, carry), its value dates (DİBS Trading) - found by its ISIN
   wherever it stands in the list;
 * ``{"kind": "masa", "key": "usdtry_mid"}`` - the desk strip (USDTRY, TLREF, the implied 1Y-end TLREF ...);
+* ``{"kind": "meeting", "cal": "tcmb", "date": "2027-03-18", "col": "R"}`` - a cell of a meeting's row (TCMB: the OIS
+  page's IMPLIED RATES; Fed: the FOMC table), found by the meeting's date wherever the list has it now - a date that
+  is corrected takes its items, alarms and closes along (meetings.py);
 * ``{"kind": "cell", "book": "tto", "ref": "Forward!F2"}`` - any cell (right click on it; a cell of a table that
   names a bond, a VİOP contract or an OIS tenor is taken as that subject);
 * ``{"kind": "expr", "text": "[OIS 2Y] - [OIS 1Y]"}`` - anything built of them: names in brackets, cell
@@ -295,6 +298,8 @@ class Watch(object):
         k = subject.get("kind")
         if k == "cell":
             return "cell|%s|%s" % (subject.get("book") or "tto", subject.get("ref"))
+        if k == "meeting":
+            return "meeting|%s|%s|%s" % (subject.get("cal"), subject.get("date"), subject.get("col"))
         if k == "expr":
             return "expr|%s" % " ".join(str(subject.get("text") or "").split())
         parts = [k] + ["%s=%s" % (f, subject.get(f)) for f in sorted(subject) if f not in ("kind",)]
@@ -324,6 +329,7 @@ class Watch(object):
             self._rows: Optional[Dict[str, int]] = None
             self._viop: Optional[Dict[str, int]] = None
             self._uni: Optional[Dict[str, int]] = None
+            self._meet: Dict[str, Dict[str, int]] = {}
             self.names: Optional[Dict[str, Dict[str, Any]]] = None
 
         def calc(self, book_id: str = "tto"):
@@ -414,6 +420,21 @@ class Watch(object):
             si = book.model.sheet_index["VIOP"]
             return self.calc().get(si, row, col_index)
 
+        def meeting_row(self, cal, date: str) -> Optional[int]:
+            """The row a meeting of a calendar (meetings.py) is in now, by its date (None: not in the list)."""
+            rows = self._meet.get(cal.id)
+            if rows is None:
+                from . import meetings as mt
+                rows = {}
+                try:
+                    for k, d in enumerate(mt.slot_dates(self.w._book(cal.book), cal, self.calc(cal.book))):
+                        if d:
+                            rows.setdefault(d, cal.first + k)
+                except (KeyError, ValueError):
+                    pass
+                self._meet[cal.id] = rows
+            return rows.get(date)
+
     def resolve(self, subject: Dict[str, Any], rd: "Watch._Reader") -> Tuple[Optional[float], str, str]:
         """``(display value, shown as, the cell's own text or "")`` of a subject now (``None``: no value)."""
         k = subject.get("kind")
@@ -433,6 +454,14 @@ class Watch(object):
                 scale = ({"pct": 100.0, "bp": 10000.0}.get(show, 1.0)) if pct else 1.0      # 0,3555 in a cell in %
                 text = numfmt.format_value(v, fmt, numfmt.get_locale(self.svc.settings.locale)) if type(v) is float else ""
                 return num(v, scale), show, text if show == ("pct" if pct else "raw") else ""
+            if k == "meeting":
+                cal, row = self._meeting_cell(subject, rd)
+                if row is None:
+                    return None, subject.get("show") or "raw", ""
+                cell = {"kind": "cell", "book": cal.book, "ref": "%s!%s%d" % (cal.sheet, subject["col"], row)}
+                if subject.get("show"):
+                    cell["show"] = subject["show"]
+                return self.resolve(cell, rd)
             if k == "ois":
                 t = str(subject.get("tenor") or "").upper()
                 ref = OIS_EXTRA.get(t) or ("OIS_MAIN!B%d" % OIS_ROWS[t] if t in OIS_ROWS else None)
@@ -588,7 +617,57 @@ class Watch(object):
             return "%s %s" % (bd.short_label(b) if b else subject.get("isin"), BOND_METRICS[subject["metric"]][0])
         if k == "expr":
             return " ".join(str(subject.get("text") or "").split())[:60]
+        if k == "meeting":
+            from . import meetings as mt
+            cal = mt.BY_ID.get(subject.get("cal"))
+            if cal is None:
+                return str(subject.get("date") or "")
+            caption = ""
+            try:
+                v = self._Reader(self, None).get("%s!%s%d" % (cal.sheet, subject.get("col"), cal.header), cal.book)
+                caption = v.strip() if isinstance(v, str) else ""
+            except (KeyError, ValueError):
+                pass
+            return "%s %s · %s" % (cal.name, mt.tr_day(str(subject.get("date") or "")), caption or subject.get("col"))
         return str(subject.get("ref") or "")
+
+    def _meeting_cell(self, subject: Dict[str, Any], rd: "Watch._Reader"):
+        """(calendar, the row the meeting is in now - None when it is not in the list)."""
+        from . import meetings as mt
+        cal = mt.BY_ID.get(subject.get("cal"))
+        if cal is None:
+            return None, None
+        return cal, rd.meeting_row(cal, str(subject.get("date") or ""))
+
+    def _meeting_anchor(self, book_id: str, ref: str, rd: "Watch._Reader") -> Optional[Dict[str, Any]]:
+        """A cell of a meeting's row (the list's own table) -> that meeting's cell, by the date its row holds now."""
+        from . import meetings as mt
+        if "!" not in ref:
+            return None
+        sheet, addr = ref.rsplit("!", 1)
+        sheet = sheet.strip("'")
+        try:
+            rc = parse_a1(addr.replace("$", ""))
+        except (ValueError, IndexError):
+            return None
+        r, c = divmod(rc, COLS)
+        col = addr.rstrip("0123456789").replace("$", "").upper()
+        for cal in mt.CALENDARS:
+            if cal.book != book_id or cal.sheet != sheet:
+                continue
+            hit = cal.band_at(sheet, r, col)
+            if hit is None:
+                continue
+            day = None
+            try:
+                v = rd.get("%s!%s%d" % (cal.sheet, cal.key, r), cal.book)
+                if type(v) is float and 20000 < v < 80000:
+                    day = (_dt.date(1899, 12, 30) + _dt.timedelta(days=int(v))).isoformat()
+            except (KeyError, ValueError):
+                day = None
+            if day is not None:
+                return {"kind": "meeting", "cal": cal.id, "date": day, "col": col}
+        return None
 
     def explain(self, subject: Dict[str, Any], rd: "Watch._Reader", value: Optional[float]) -> str:
         """A word on a subject: the contract a VİOP position is now, the due date of a contract, why there is no
@@ -615,6 +694,12 @@ class Watch(object):
                     self._eval(parse_expr(subject.get("text") or ""), self._live_leaf(rd))
                 except ExprError as exc:
                     return str(exc)
+            if k == "meeting":
+                cal, row = self._meeting_cell(subject, rd)
+                if cal is not None and row is None:
+                    return "toplantı listede yok (geçti ya da listeden çıkarıldı) - tarih geri gelirse izlenir"
+                if cal is not None:
+                    return "%s · %s!%s%d" % (cal.book, cal.sheet, subject.get("col"), row)
             if k == "cell":
                 return "%s · %s" % (subject.get("book") or "tto", subject.get("ref"))
         except (KeyError, ValueError, IndexError):
@@ -633,7 +718,25 @@ class Watch(object):
             out.update(book=book.id, ref=book.ref(si, rc))
             anchored = self.anchor(book.id, out["ref"])
             if anchored is not None:
+                if anchored["kind"] == "meeting" and subject.get("show") in SHOWS:
+                    anchored["show"] = subject["show"]               # (as the cell was asked to be shown)
                 return self.check(anchored)
+        elif k == "meeting":
+            from . import meetings as mt
+            cal = mt.BY_ID.get(subject.get("cal"))
+            if cal is None:
+                raise ValueError("bilinmeyen toplantı takvimi: %s" % subject.get("cal"))
+            day = str(subject.get("date") or "")
+            try:
+                _dt.date.fromisoformat(day)
+            except ValueError:
+                raise ValueError("toplantı tarihi anlaşılamadı: %s" % day)
+            col = str(subject.get("col") or "").upper()
+            if col not in cal.columns():
+                raise ValueError("toplantı satırında böyle bir sütun yok: %s" % col)
+            out.update(cal=cal.id, date=day, col=col)
+            if subject.get("show") in SHOWS:
+                out["show"] = subject["show"]
         elif k == "ois":
             t = str(subject.get("tenor") or "").upper()
             if t not in OIS_ROWS and t not in OIS_EXTRA:
@@ -690,15 +793,21 @@ class Watch(object):
 
     def anchor(self, book_id: str, ref: str, rd: Optional["Watch._Reader"] = None) -> Optional[Dict[str, Any]]:
         """A cell of a table that names something: the thing, not the cell (a bond's row of DİBS RV follows the
-        bond when the list changes; a VİOP column the contract when they roll; an OIS row its tenor)."""
-        if book_id != "tto" or "!" not in ref:
+        bond when the list changes; a VİOP column the contract when they roll; an OIS row its tenor; a meeting's row
+        its meeting, by its date)."""
+        if "!" not in ref:
+            return None
+        rd = rd or self._Reader(self, None)
+        meeting = self._meeting_anchor(book_id, ref, rd)
+        if meeting is not None:
+            return meeting
+        if book_id != "tto":
             return None
         sheet, addr = ref.rsplit("!", 1)
         sheet = sheet.strip("'")
         rc = parse_a1(addr.replace("$", ""))
         r, c = divmod(rc, COLS)
         col = addr.rstrip("0123456789").replace("$", "")
-        rd = rd or self._Reader(self, None)
         if sheet in (RV, "EK_DIBS") and 5 <= r <= 54:
             isin = rd.get("%s!A%d" % ("'%s'" % sheet if " " in sheet else sheet, r))
             metric = next((m for m, x in BOND_METRICS.items() if x[1] == sheet and x[2] == col), None)
@@ -1117,6 +1226,138 @@ class Watch(object):
 
     def _put_alarms(self, alarms: List[Dict[str, Any]]) -> None:
         self.svc.store.put("watch.alarms", alarms[-MAX_ALARMS:])
+
+    # ------------------------------------------------------------------ the meeting calendars (meetings.py)
+    def meetings_changed(self, cal_id: str, dates: Dict[str, str], moves: Dict[Any, Optional[int]]) -> Dict[str, Any]:
+        """A meeting list changed (meetings.change, under this watch's lock): a meeting whose date was corrected keeps its
+        items, alarms, opens and closes (``dates``: old -> new); an expression naming a cell that moved with its meeting
+        follows it (``moves``).  Returns what to write in the change's transaction - ``items`` / ``alarms`` (None:
+        unchanged), ``opens`` ((key, value) or None) and ``keys`` (subject key renames for the closes)."""
+        from . import meetings as mt
+        keys: Dict[str, str] = {}
+
+        def moved(s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            k = s.get("kind")
+            if k == "meeting" and s.get("cal") == cal_id and s.get("date") in dates:
+                new = dict(s, date=dates[s["date"]])
+            elif k == "expr":
+                text = mt.rewrite_expr(str(s.get("text") or ""), moves)
+                if text is None:
+                    return None
+                new = dict(s, text=" ".join(text.split()))
+            else:
+                return None
+            keys[self.key(s)] = self.key(new)
+            return new
+
+        def renamed(x: Dict[str, Any], s: Dict[str, Any]) -> Dict[str, Any]:
+            """The item / alarm on its new subject - its name too when it is the one the dashboard gave it."""
+            label = x.get("label")
+            if s.get("kind") == "meeting" and label == self.label(x["subject"])[:60]:
+                label = self.label(s)[:60]
+            return dict(x, subject=s, label=label)
+
+        store = self.svc.store
+        raw = store.get("watch.items", {})
+        items_out = None
+        if isinstance(raw, dict):
+            out: Dict[str, List[Dict[str, Any]]] = {}
+            for u, lst in raw.items():
+                row = []
+                for i in lst or []:
+                    i = self._item(i)
+                    s = moved(i["subject"])
+                    if s is not None:
+                        i = renamed(i, s)
+                        items_out = out
+                    row.append(i)
+                out[u] = row
+        alarms_out = None
+        raw = store.get("watch.alarms", [])
+        if isinstance(raw, list):
+            out_a = []
+            for a in raw:
+                if not isinstance(a, dict):
+                    continue
+                a = self._alarm(a)
+                s = moved(a["subject"])
+                if s is not None:
+                    a = renamed(a, s)
+                    alarms_out = out_a
+                out_a.append(a)
+        cal = mt.BY_ID.get(cal_id)
+        for old, new in dates.items():                        # (closes of a column nobody watches now are kept too)
+            for col in (cal.columns() if cal is not None else ()):
+                keys.setdefault("meeting|%s|%s|%s" % (cal_id, old, col), "meeting|%s|%s|%s" % (cal_id, new, col))
+        opens_out = None
+        day_key = "watch.open:%s" % self.svc.today_iso()
+        opened = store.get(day_key, {})
+        if keys and isinstance(opened, dict):
+            renamed = {}
+            for k, v in opened.items():
+                user, _, subj = k.partition("#")
+                renamed["%s#%s" % (user, keys.get(subj, subj))] = v
+            if renamed != opened:
+                opens_out = (day_key, renamed)
+        return {"items": items_out, "alarms": alarms_out, "opens": opens_out, "keys": keys}
+
+    def keys_renamed(self, keys: Dict[str, str]) -> None:
+        """After a meeting list changed: the day's path of a subject whose key changed goes on under the new key."""
+        for user, key in list(self.days):
+            if key in keys:
+                self.days[(user, keys[key])] = self.days.pop((user, key))
+        self._hist = {}
+
+    #: items and alarms of a meeting row kept as cells before (an earlier version), anchored to their meeting - once
+    MEETINGS_ANCHORED = "migrated.watch_meetings"
+
+    def anchor_meetings_once(self) -> int:
+        """Items and alarms on a cell of a meeting's row, kept before a meeting was followed by its date: anchored to the
+        meeting the row holds now (calculation thread, once - the store keeps that it was done).  Returns how many."""
+        store = self.svc.store
+        if store.get(self.MEETINGS_ANCHORED):
+            return 0
+        rd = self._Reader(self, None)
+        n = 0
+
+        def anchored(s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if s.get("kind") != "cell":
+                return None
+            hit = self._meeting_anchor(s.get("book") or "tto", str(s.get("ref") or ""), rd)
+            if hit is not None and s.get("show") in SHOWS:
+                hit["show"] = s["show"]
+            return hit
+
+        with self._lock:
+            raw = store.get("watch.items", {})
+            if isinstance(raw, dict):
+                out, hit = {}, False
+                for u, lst in raw.items():
+                    row = []
+                    for i in lst or []:
+                        i = self._item(i)
+                        s = anchored(i["subject"])
+                        if s is not None:
+                            i, hit, n = dict(i, subject=s), True, n + 1
+                        row.append(i)
+                    out[u] = row
+                if hit:
+                    store.put("watch.items", out)
+            raw = store.get("watch.alarms", [])
+            if isinstance(raw, list):
+                out_a, hit = [], False
+                for a in raw:
+                    if not isinstance(a, dict):
+                        continue
+                    a = self._alarm(a)
+                    s = anchored(a["subject"])
+                    if s is not None:
+                        a, hit, n = dict(a, subject=s), True, n + 1
+                    out_a.append(a)
+                if hit:
+                    store.put("watch.alarms", out_a)
+        store.put(self.MEETINGS_ANCHORED, _now().replace(microsecond=0).isoformat(sep=" "))
+        return n
 
     def fired(self, day: Optional[str] = None) -> List[Dict[str, Any]]:
         v = self.svc.store.get("watch.fired:%s" % (day or self.svc.today_iso()), [])

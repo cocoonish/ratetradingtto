@@ -810,7 +810,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         dates = data.get("dates")
         if not isinstance(dates, list):
             raise ServiceError("dates listesi gerekli")
-        return ok(await call(svc().history.set_calendar, _user(request), dates, bool(data.get("roll"))))
+        # "version": the calendar the list was edited from - a save over a calendar that changed since is refused (409)
+        version = data.get("version")
+        return ok(await call(svc().history.set_calendar, _user(request), dates, bool(data.get("roll")),
+                             str(version) if version not in (None, "") else None))
 
     @handler
     async def holidays(request: Request):

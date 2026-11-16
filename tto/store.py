@@ -428,18 +428,12 @@ class Store(object):
         other cell written is a plain value (a formula it had goes)."""
         ts = now_iso()
         formulas = formulas or {}
-        with self._lock:
-            self._db.execute("BEGIN")
-            try:
-                for cell, v in values.items():
-                    self._db.execute(
-                        "INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,?) "
-                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
-                        "formula=excluded.formula", (user, book, cell, json.dumps(v, ensure_ascii=False), ts, formulas.get(cell)))
-                self._db.execute("COMMIT")
-            except Exception:
-                self._db.execute("ROLLBACK")
-                raise
+        with self.transaction() as db:
+            for cell, v in values.items():
+                db.execute(
+                    "INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,?) "
+                    "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
+                    "formula=excluded.formula", (user, book, cell, json.dumps(v, ensure_ascii=False), ts, formulas.get(cell)))
         self._told(user, bool(formulas))
 
     def clear_user_inputs(self, user: str, book: Optional[str] = None, cells: Optional[List[str]] = None) -> None:
@@ -549,19 +543,13 @@ class Store(object):
         """The desk's values of inputs; ``formulas`` as for :meth:`set_user_inputs`."""
         ts = now_iso()
         formulas = formulas or {}
-        with self._lock:
-            self._db.execute("BEGIN")
-            try:
-                for cell, v in values.items():
-                    self._db.execute(
-                        "INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at, formula) VALUES (?,?,?,?,?,?) "
-                        "ON CONFLICT(book, cell) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, "
-                        "updated_at=excluded.updated_at, formula=excluded.formula",
-                        (book, cell, json.dumps(v, ensure_ascii=False), user, ts, formulas.get(cell)))
-                self._db.execute("COMMIT")
-            except Exception:
-                self._db.execute("ROLLBACK")
-                raise
+        with self.transaction() as db:
+            for cell, v in values.items():
+                db.execute(
+                    "INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at, formula) VALUES (?,?,?,?,?,?) "
+                    "ON CONFLICT(book, cell) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, "
+                    "updated_at=excluded.updated_at, formula=excluded.formula",
+                    (book, cell, json.dumps(v, ensure_ascii=False), user, ts, formulas.get(cell)))
         self._told(None, bool(formulas))
 
     def clear_shared_inputs(self, book: str, cells: List[str]) -> None:
@@ -753,45 +741,120 @@ class Store(object):
             return {"moved": 0, "dropped": 0, "scenarios": 0}
         ts = now_iso()
         moved = dropped = touched = 0
-        with self._lock:
-            self._db.execute("BEGIN")
-            try:
-                marks = ",".join("?" for _ in mapping)
-                rows = self._db.execute("SELECT user, cell, value, formula FROM user_inputs WHERE book=? AND cell IN (%s)" % marks,
-                                        (book,) + tuple(mapping)).fetchall()
-                self._db.execute("DELETE FROM user_inputs WHERE book=? AND cell IN (%s)" % marks, (book,) + tuple(mapping))
-                for r in rows:
-                    new = mapping[r["cell"]]
-                    if new is None:
-                        dropped += 1
-                        continue
-                    moved += 1 if new != r["cell"] else 0
-                    self._db.execute(
-                        "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
-                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
-                        "formula=NULL", (r["user"], book, new, r["value"], ts))
-                for r in self._db.execute("SELECT id, payload FROM scenarios").fetchall():
-                    items = json.loads(r["payload"])
-                    out, changed = [], False
-                    for x in items:
-                        if x[0] == book and x[1] in mapping:
-                            new = mapping[x[1]]
-                            changed = changed or new != x[1] or len(x) > 3
-                            if new is None:
-                                continue
-                            out.append([x[0], new, x[2]])
-                        else:
-                            out.append(list(x))
-                    if changed:
-                        touched += 1
-                        self._db.execute("UPDATE scenarios SET payload=?, updated_at=? WHERE id=?",
-                                         (json.dumps(sorted(out, key=lambda x: (x[0], x[1])), ensure_ascii=False), ts, r["id"]))
-                self._db.execute("COMMIT")
-            except Exception:
-                self._db.execute("ROLLBACK")
-                raise
+        with self.transaction() as db:
+            marks = ",".join("?" for _ in mapping)
+            rows = db.execute("SELECT user, cell, value, formula FROM user_inputs WHERE book=? AND cell IN (%s)" % marks,
+                              (book,) + tuple(mapping)).fetchall()
+            db.execute("DELETE FROM user_inputs WHERE book=? AND cell IN (%s)" % marks, (book,) + tuple(mapping))
+            for r in rows:
+                new = mapping[r["cell"]]
+                if new is None:
+                    dropped += 1
+                    continue
+                moved += 1 if new != r["cell"] else 0
+                db.execute(
+                    "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
+                    "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
+                    "formula=NULL", (r["user"], book, new, r["value"], ts))
+            for r in db.execute("SELECT id, payload FROM scenarios").fetchall():
+                items = json.loads(r["payload"])
+                out, changed = [], False
+                for x in items:
+                    if x[0] == book and x[1] in mapping:
+                        new = mapping[x[1]]
+                        changed = changed or new != x[1] or len(x) > 3
+                        if new is None:
+                            continue
+                        out.append([x[0], new, x[2]])
+                    else:
+                        out.append(list(x))
+                if changed:
+                    touched += 1
+                    db.execute("UPDATE scenarios SET payload=?, updated_at=? WHERE id=?",
+                               (json.dumps(sorted(out, key=lambda x: (x[0], x[1])), ensure_ascii=False), ts, r["id"]))
         self._told("*", any(r["formula"] for r in rows))
         return {"moved": moved, "dropped": dropped, "scenarios": touched}
+
+    # ------------------------------------------------------------------ the meeting calendars' own (tto/meetings.py)
+    # Small steps of one calendar change: each joins the transaction the change opens (store.transaction()), so the
+    # whole change lands together or not at all.  Nothing here tells the input formulas: the change does, once, after
+    # it committed.
+    def input_rows(self, book: str, cells: List[str]) -> List[Dict[str, Any]]:
+        """Every user's inputs at these cells of a workbook: ``[{"user", "cell", "value", "formula"}]``."""
+        out: List[Dict[str, Any]] = []
+        cells = list(cells)
+        for i in range(0, len(cells), 400):
+            chunk = cells[i:i + 400]
+            marks = ",".join("?" for _ in chunk)
+            for r in self._q("SELECT user, cell, value, formula FROM user_inputs WHERE book=? AND cell IN (%s)" % marks,
+                             (book,) + tuple(chunk)):
+                out.append({"user": r["user"], "cell": r["cell"], "value": json.loads(r["value"]), "formula": r["formula"]})
+        return out
+
+    def drop_input_cells(self, book: str, cells: List[str]) -> None:
+        """Every user's inputs at these cells go (with their formulas)."""
+        with self.transaction() as db:
+            db.executemany("DELETE FROM user_inputs WHERE book=? AND cell=?", [(book, c) for c in cells])
+
+    def put_input_rows(self, book: str, rows: List[Tuple[str, str, Any]]) -> None:
+        """``[(user, cell, value)]`` as plain values (a formula the cell had goes)."""
+        ts = now_iso()
+        with self.transaction() as db:
+            db.executemany(
+                "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, formula=NULL",
+                [(u, book, c, json.dumps(v, ensure_ascii=False), ts) for u, c, v in rows])
+
+    def scenario_rows(self) -> List[Dict[str, Any]]:
+        """Every saved scenario: ``[{"id", "user", "name", "items"}]`` (items as kept: ``[book, cell, value, formula?]``)."""
+        out = []
+        for r in self._q("SELECT id, user, name, payload FROM scenarios ORDER BY id"):
+            try:
+                items = json.loads(r["payload"])
+            except (TypeError, ValueError):
+                continue
+            out.append({"id": r["id"], "user": r["user"], "name": r["name"], "items": items})
+        return out
+
+    def put_scenario_items(self, sid: int, items: List[List[Any]]) -> None:
+        with self.transaction() as db:
+            db.execute("UPDATE scenarios SET payload=?, updated_at=? WHERE id=?",
+                       (json.dumps(sorted(items, key=lambda x: (x[0], x[1])), ensure_ascii=False), now_iso(), sid))
+
+    def formula_rows(self) -> List[Tuple[Optional[str], str, str, str]]:
+        """Every input typed as a formula: ``[(user - None for the desk's -, book, cell, text)]``."""
+        out: List[Tuple[Optional[str], str, str, str]] = [
+            (r["user"], r["book"], r["cell"], r["formula"]) for r in
+            self._q("SELECT user, book, cell, formula FROM user_inputs WHERE formula IS NOT NULL")]
+        out += [(None, r["book"], r["cell"], r["formula"]) for r in
+                self._q("SELECT book, cell, formula FROM shared_inputs WHERE formula IS NOT NULL")]
+        return out
+
+    def put_formula_text(self, user: Optional[str], book: str, cell: str, text: str) -> None:
+        """Another text for an input's formula (its value stays until the formula is evaluated again)."""
+        with self.transaction() as db:
+            if user is None:
+                db.execute("UPDATE shared_inputs SET formula=? WHERE book=? AND cell=?", (text, book, cell))
+            else:
+                db.execute("UPDATE user_inputs SET formula=? WHERE user=? AND book=? AND cell=?", (text, user, book, cell))
+
+    def kv_prefixed(self, prefix: str) -> Dict[str, Any]:
+        """Every key / value whose key starts with ``prefix``."""
+        out = {}
+        for r in self._q("SELECT key, value FROM kv WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)):
+            try:
+                out[r["key"]] = json.loads(r["value"])
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def rename_closes(self, renames: Dict[str, str]) -> None:
+        """The watch's own closes kept under another subject key (a meeting whose date was corrected)."""
+        if not renames:
+            return
+        with self.transaction() as db:
+            db.executemany("UPDATE OR REPLACE watch_closes SET subject=? WHERE subject=?",
+                           [(new, old) for old, new in renames.items()])
 
     # ------------------------------------------------------------------ daily history of market series
     def hist_upsert(self, series: str, rows: List[Tuple[str, float]]) -> int:
