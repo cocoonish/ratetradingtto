@@ -116,6 +116,18 @@ async function shot(page, name) {
   if (SHOTS) await page.screenshot({ path: SHOTS + '/' + name + '.png' });
 }
 
+/** What lands on the clipboard by ``action`` (a mark is put there first; Windows line ends as \n). */
+async function clipAfter(page, action) {
+  await page.evaluate(() => navigator.clipboard.writeText('·'));
+  await action();
+  for (let k = 0; k < 150; k++) {
+    const t = await page.evaluate(() => navigator.clipboard.readText());
+    if (t !== '·') return t.replace(/\r\n/g, '\n');
+    await page.waitForTimeout(100);
+  }
+  return '';
+}
+
 (async () => {
   const browser = await chromium.launch();
   const ctxA = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
@@ -326,6 +338,21 @@ async function shot(page, name) {
       JSON.stringify(fwdFilled.slice(0, 5)) === JSON.stringify(['USDTRY', 'S', 'SP', fwdValue, offAsk]) && /^Kota: Offshore/.test(fwdFilled[5]), [fwdFilled, fwdValue, offAsk]);
     await open(page, 'forward');
     await tab(page, 'fwd');
+
+    // ------------------------------------------------------------------ an amount as the desk says it; its quote
+    // "5m" in the Forward DV01 block's amount (an amount input) is 5.000.000; "Kotasyon kopyala" puts the side, the dates,
+    // the price and the amount on the clipboard
+    await typeInto(page, 'Forward!O45', '5m');
+    await waitCell(page, 'Forward!O45', '/5\\.000\\.000/.test(t)');
+    check('"5m" typed in an amount input is 5.000.000', /^\$?\s*5\.000\.000$/.test((await cellText(page, 'Forward!O45')).trim()),
+      await cellText(page, 'Forward!O45'));
+    const dvQuote = (await clipAfter(page, () => page.click('.panel[data-panel="B18"] button[data-action="kotasyon"]'))).split('\n');
+    check('"Kotasyon kopyala" on the Forward DV01 block: the pair, the side, the dates with the days, the outright and the amount',
+      /^USDTRY forward · \d\d\.\d\d\.\d{4}$/.test(dvQuote[0]) && /^Yön\s+USD alış$/.test(dvQuote[1])
+      && dvQuote.some((l) => /^Vade tarihi\s+\d\d\.\d\d\.\d{4} \(\d+ gün\)$/.test(l)) && dvQuote.some((l) => /^Outright\s+\d+,\d{4}$/.test(l))
+      && dvQuote[dvQuote.length - 1].replace(/\s+/g, ' ') === 'Tutar 5.000.000 USD', dvQuote);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!O45'] });
+    await waitCell(page, 'Forward!O45', '/1\\.000\\.000/.test(t)');
 
     // ------------------------------------------------------------------ RET editor dialog
     console.log('RET editor');
@@ -1182,6 +1209,45 @@ async function shot(page, name) {
     check('... EURTRY\'s too, its 1M from the EURTRY spot date with an EURTRY forward above its spot', spreadsAndRates(ekseHead)
       && (await cellText(page, 'EK_FWD!A104')).trim() === '1M' && trNumber(await cellText(page, 'EK_FWD!K104')) > trNumber(await cellText(page, 'EK_FWD!G104')),
     { head: ekseHead, k: await cellText(page, 'EK_FWD!K104'), g: await cellText(page, 'EK_FWD!G104') });
+    // ------------------------------------------------------------------ a value date as the desk says it, the quote to send
+    // "1A" in the free row's value date: one month from the USDTRY spot date - the 1M row's own date - is stored, and
+    // the cell's tooltip says what was typed
+    const b5 = (await cellText(page, 'EK_FWD!B5')).trim();
+    await typeInto(page, 'EK_FWD!B11', '1A');
+    await waitCell(page, 'EK_FWD!B11', 't.trim() === ' + JSON.stringify(b5));
+    await page.waitForFunction(() => /Kısayol: 1A → /.test(window.tto.findCell('EK_FWD!B11').title || ''), null, { timeout: 10000 }).catch(() => {});
+    const tip11 = await page.evaluate(() => window.tto.findCell('EK_FWD!B11').title);
+    check('"1A" typed in a value-date input is the date a month from the spot date (the 1M row\'s own), the tooltip says what was typed',
+      tip11.includes('Kısayol: 1A → ' + b5), { b5, tip11 });
+    // "Kotasyon kopyala" on the desk's USDTRY forward table: Turkish - the pair, the date, bid / ask, the spot date and the
+    // spot, then a caption line and a line for every priced row (the free row typed just now too)
+    const b5n = await page.evaluate(() => window.tto.findCell('EK_FWD!H5').textContent.trim());
+    const kq = (await clipAfter(page, () => page.click('.panel[data-panel="EKS"] button[data-action="kotasyon"]'))).split('\n');
+    const kq1 = kq.find((l) => l.startsWith('1M ')) || '';
+    check('"Kotasyon kopyala" on a forward table: the quote in Turkish on the clipboard, a line a priced row with its points, outright and rates',
+      /^USDTRY forward · \d\d\.\d\d\.\d{4} · bid \/ ask$/.test(kq[0]) && /^Başlangıç\s+\d\d\.\d\d\.\d{4}$/.test(kq[1]) && /^Spot\s+\d+,\d{4} \/ \d+,\d{4}$/.test(kq[2])
+      && kq.some((l) => /^Vade\s+Vade tarihi\s+Gün\s+Swap puanı\s+Outright\s+TRY faizi %\s+USD faizi %$/.test(l)) && kq1.includes(b5) && kq1.includes(b5n)
+      && kq.filter((l) => /^(\d+M|\d\d\.\d\d\.\d{4})\s/.test(l)).length === 7 && kq.some((l) => l.startsWith(b5 + ' ')), { kq, b5, b5n });
+    // its menu: English (remembered), then a row on its own by a right click
+    const ke = (await clipAfter(page, async () => {
+      await page.click('.panel[data-panel="EKS"] button[data-action="kotasyon-menu"]');
+      await page.click('.menu button:has-text("English")');
+    })).split('\n');
+    check('... in English from its menu: dates as 04 Dec 2026, numbers as 51.2633, captions in English',
+      /^USDTRY forward · \d\d [A-Z][a-z]{2} \d{4} · bid \/ ask$/.test(ke[0]) && ke.some((l) => /^Tenor\s+Maturity\s+Days\s+Swap points/.test(l))
+      && /\d+\.\d{4} \/ \d+\.\d{4}/.test(ke.find((l) => l.startsWith('1M ')) || ''), ke);
+    const k2 = (await clipAfter(page, async () => {
+      await (await cellHandle(page, 'EK_FWD!H6')).click({ button: 'right' });
+      await page.click('.menu button:has-text("Bu satırın kotasyonu")');
+    })).split('\n');
+    check('... a row\'s own quote from the right-click menu (2M, the language kept): a line a field',
+      /^USDTRY forward 2M · \d\d [A-Z][a-z]{2} \d{4} · bid \/ ask$/.test(k2[0]) && k2.some((l) => /^Maturity\s+\d\d [A-Z][a-z]{2} \d{4} \(\d+ days\)$/.test(l))
+      && k2.some((l) => /^Swap points\s+[\d,]+ \/ [\d,]+$/.test(l)), k2);
+    await page.click('.panel[data-panel="EKS"] button[data-action="kotasyon-menu"]');
+    await page.click('.menu button:has-text("Türkçe")');                       // (back to Turkish: it copies too)
+    await page.waitForTimeout(300);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!B11'] });
+    await waitCell(page, 'EK_FWD!B11', 't.trim() === ""');
     // the date-to-date forward: its start / end dates and spread typed right above it, in this tab
     const days0 = (await cellText(page, 'MASA!G60')).trim();
     await typeInto(page, 'MASA!E60', '01.03.2027');
