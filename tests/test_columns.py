@@ -89,3 +89,57 @@ def test_over_http(service):
     foreign = dict(h, Origin="http://kotu-site.example")
     assert client.post("/api/columns", json={"table": "fx/board", "hidden": []}, headers=foreign).status_code == 403
     assert client.get("/api/columns", headers=h).json()["tables"] == {"fx/board": ["1M ATM ±1σ", "1M ↓1σ"]}
+
+
+# ---------------------------------------------------------------------- the order of the columns, per user
+def test_each_user_puts_the_columns_of_a_table_in_their_own_order(service):
+    a = service.login("Sıra Ayşe")["user"]
+    b = service.login("Sıra Mehmet")["user"]
+    assert "order" not in service.columns(a)                                   # nobody moved a column: the sheet's order
+    assert service.set_column_order(a, "v/dibs/B3", ["C", "A", "B", "C"]) == {"table": "v/dibs/B3", "order": ["C", "A", "B"]}
+    service.set_columns(a, "v/dibs/B3", ["K"])                                 # hidden and moved: both kept, apart
+    assert service.columns(a) == {"tables": {"v/dibs/B3": ["K"]}, "order": {"v/dibs/B3": ["C", "A", "B"]}}
+    assert "order" not in service.columns(b)
+    service.set_column_order(b, "v/dibs/B3", ["B"])
+    assert service.columns(a)["order"] == {"v/dibs/B3": ["C", "A", "B"]}
+    # back to the sheet's order: the table is forgotten, what is hidden stays
+    service.set_column_order(a, "v/dibs/B3", [])
+    assert service.columns(a) == {"tables": {"v/dibs/B3": ["K"]}}
+    assert service.store.get("colorder." + a) == {} and service.store.get("colorder." + b) == {"v/dibs/B3": ["B"]}
+
+
+@pytest.mark.parametrize("table, order", [
+    ("", ["B"]), (None, ["B"]), ("x" * 161, ["B"]), ("t", "B"), ("t", None), ("t", [""]), ("t", [3]),
+    ("t", ["c%d" % i for i in range(401)]),
+])
+def test_what_is_not_an_order_of_columns_is_refused(service, table, order):
+    u = service.login("Sıra Hatalı")["user"]
+    with pytest.raises(ServiceError) as err:
+        service.set_column_order(u, table, order)
+    assert err.value.status == 400
+    assert "order" not in service.columns(u)
+
+
+def test_how_many_orders_a_user_may_keep(service, monkeypatch):
+    monkeypatch.setattr(service, "MAX_COLUMN_TABLES", 1)
+    u = service.login("Sıra Çok")["user"]
+    service.set_column_order(u, "a", ["B", "A"])
+    with pytest.raises(ServiceError):
+        service.set_column_order(u, "b", ["B", "A"])
+    monkeypatch.setattr(service, "MAX_COLUMN_BYTES", 30)
+    with pytest.raises(ServiceError) as err:
+        service.set_column_order(u, "a", ["Uzun bir sütun başlığı", "Bir başkası"])
+    assert "çok uzun" in str(err.value)
+    assert service.columns(u)["order"] == {"a": ["B", "A"]}
+
+
+def test_the_order_over_http(service):
+    client = TestClient(create_app(service=service))
+    h = auth(service, "Sıra Zeynep")
+    r = client.post("/api/columns", json={"table": "v/forward/B19", "order": ["X", "W"]}, headers=h)
+    assert r.status_code == 200 and r.json() == {"table": "v/forward/B19", "order": ["X", "W"]}
+    r = client.post("/api/columns", json={"table": "v/forward/B19", "order": ["W", "X"], "hidden": ["U"]}, headers=h)
+    assert r.json() == {"table": "v/forward/B19", "order": ["W", "X"], "hidden": ["U"]}
+    assert client.get("/api/columns", headers=h).json() == {"tables": {"v/forward/B19": ["U"]}, "order": {"v/forward/B19": ["W", "X"]}}
+    assert client.post("/api/columns", json={"table": "v/forward/B19", "order": "X"}, headers=h).status_code == 400
+    assert client.post("/api/columns", json={"table": "v/forward/B19", "order": []}, headers=ANON).status_code == 401
