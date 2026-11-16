@@ -533,7 +533,8 @@ export function signalRows(list, opts = {}) {
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
     if (opts.group) row.push(T(groupText(s), Object.assign({ tip: s.tag ? s.tag + ': masanın offshore işlem limiti dar' : (s.group || '') },
       s.tag ? { cls: 'qtag' } : {})));
-    row.push(T(s.family_label + (s.intraday ? ' · gün içi' : '')), T(s.asset),
+    // (a line's model: its family, or a family's own name of it - "Carry + momentum · G10 spot sepeti")
+    row.push(T(((s.info || {}).model || s.family_label) + (s.intraday ? ' · gün içi' : '')), T(s.asset),
       T(s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
