@@ -341,7 +341,7 @@ export class SignalChart {
       // (the trade in desk words, its prices, the sentence and the money are above the charts: plainBlock)
       const lines = [
         ['Tez', s.thesis || ''],
-        ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + (s.gated ? LOW : s.strength)],
+        ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + (s.daily ? '' : ' (giriş ' + fmt(s.entry_z, 2) + ')') + ' · ' + (s.gated ? LOW : s.strength)],
         ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' gün' : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit || 'gün') : '—')],
         [fx ? 'Forward primi' : 'Carry + roll / hafta', fx ? (isNum(s.carry_yr) ? 'yıllık %' + sgn(s.carry_yr, 1) + ' (sürekli bileşik, en kısa forward), işlemin '
           + (s.carry_yr >= 0 ? 'lehine' : 'aleyhine')
@@ -407,7 +407,7 @@ export class SignalChart {
       + (isNum(l.notional) ? num(l.notional, 1) + ' mn TL · ' : '') + 'DV01 ' + num(l.dv01_usd, 0) + ' $' + (isNum(l.dv01) ? ' / ' + num(l.dv01, 0) + ' TL' : '') + ')' : '')).join(' · ') : '';
     const rows = [];
     const trade = h('td', { id: this.id('quant-sig-trade'), title: sizedLegs || s.expression || null }, h('b', null, s.trade_tr || s.expression || ''));
-    if (px) trade.append(' · 1 mn ' + mo.base);
+    if (px) trade.append(' · ' + ((s.info || {}).size || '1 mn ' + mo.base));      // (a universe line's own size: Trend's "1,4 mn EUR")
     else if (isNum(mo.per_bp)) trade.append(' · ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp');
     else if (isNum(mo.per_unit) && (s.info || {}).size) trade.append(' · ' + s.info.size);
     rows.push(['İşlem', trade]);
@@ -533,8 +533,9 @@ export function signalRows(list, opts = {}) {
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
     if (opts.group) row.push(T(groupText(s), Object.assign({ tip: s.tag ? s.tag + ': masanın offshore işlem limiti dar' : (s.group || '') },
       s.tag ? { cls: 'qtag' } : {})));
+    // (a systematic family's line - Trend's - in the plan's one-line format: "SAT USDTRY 1A forward · 1 mn USD · giriş … · model: Trend")
     row.push(T(s.family_label + (s.intraday ? ' · gün içi' : '')), T(s.asset),
-      T(s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
+      T(s.line || s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
       N(px ? px.entry : s.entry, px ? px.digits : s.digits, at), N(px ? px.target : s.target, px ? px.digits : s.digits),

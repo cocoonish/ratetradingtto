@@ -17,6 +17,7 @@ import { fitPage } from './quantfit.js';
 import { PATH_PAGES } from './quantpath.js';          // İma Patikası, TCMB WIRP
 import { LEAD_PAGES } from './quantlead.js';          // Öncü-Takipçi
 import { VIOP_PAGES } from './quantviop.js';          // VİOP
+import { TREND_PAGES } from './quanttrend.js';        // Trend
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, LOW, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
@@ -257,7 +258,7 @@ class SignalsPage extends QuantPage {
 // ------------------------------------------------------------------------------------------------ the factory, alerts
 export function quantPage(id, host, ctx) {
   if (id === 'quant') return new SignalsPage(host, ctx);
-  const own = PATH_PAGES[id] || LEAD_PAGES[id] || VIOP_PAGES[id];
+  const own = PATH_PAGES[id] || LEAD_PAGES[id] || VIOP_PAGES[id] || TREND_PAGES[id];
   if (own) return new own(host, ctx);
   return fitPage(id, host, ctx) || quantView(id, host, ctx);
 }
