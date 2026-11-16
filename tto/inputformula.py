@@ -17,17 +17,26 @@ nothing is done.
 Refused as typed, with the reason: a Bloomberg function (the daily data limit, ``calc.check_formula``), a formula that
 cannot be read or names what is not there, a cycle (the formula reads - through the workbook's formulas or other
 formula inputs - the cell it is typed into: the engine's masks tell that a read depends on an input, the formulas'
-references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, the meeting
-dates, "Elle değer"), and a formula reading live data (prices, NOW()) into a cell that goes into a Bloomberg request: a
-new request on every tick.  A cycle that appears later (an input it reads went back to its own default) never spins:
-the formulas still changing after as many rounds as there are formulas are stopped - their value #CALC!, the reason on
-the cell - until one is typed again or their owner writes an input again.
+references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, "Elle değer", a
+cell the meeting calendar moves - its value goes with its meeting, a formula's references would not), a shared formula
+reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and a formula
+reading live data (prices, NOW()) into a cell that goes into a Bloomberg request: a new request on every tick.
+
+What never spins or sticks: a cycle that appears later (an input it reads went back to its own default) - the formulas
+still changing after a round per formula are stopped, their value #CALC!, the reason on the cell; a formula over the
+evaluation's time limit (a cold calculation after a restart) is tried again later, with a growing pause, and stopped only
+after several times in a row.  A stopped formula is tried again when its owner writes an input (once at once, then after
+a growing pause) or types it again.  Where its value goes into a Bloomberg request it keeps its last good value instead
+of an error: an error value there would be a request with an empty argument (``marketdata.base.override_pairs``).
 """
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import calc as _calc
 from .calc import BLOOMBERG, UNREADABLE, CalcError, _Ctx, _plain, _Stop, check_formula, normalise
 from .service import EngineThread
 from .xl.engine import addin_cells
@@ -41,6 +50,8 @@ SHARED = ""                            # the scope of the desk's (shared) inputs
 BLOOMBERG_INPUT = BLOOMBERG.replace("hesap tablosunda", "girdi formüllerinde")
 LIST = "bu hücre listeden bir değer alır (%s): formül yazılamaz"
 MEETING = "toplantı tarihleri takvimden değişir (Ayarlar → Toplantı takvimi): formül yazılamaz"
+CALENDAR = ("toplantı takvimiyle kayan hücre: formül yazılamaz (takvim değişince değeri toplantısıyla taşınır, formülün "
+            "başvuruları taşınmaz)")
 NOT_INPUT = "formül yalnızca girdi hücrelerine (sarı / yeşil) yazılır - \"Elle değer\" bir sabittir"
 CYCLE = "döngüsel başvuru: %s - formül yazıldığı hücreyi okuyor"
 LIVE = ("bu hücrenin değeri bir Bloomberg isteğine girer (%s): canlı fiyat ya da NOW() okuyan bir formül her değişimde "
@@ -49,11 +60,15 @@ STOPPED_CYCLE = "Döngüsel başvuru: %s - formül durduruldu (#CALC!); formül�
 STOPPED_LIVE = ("formül canlı veri okumaya başladı; bu hücrenin değeri bir Bloomberg isteğine girdiği için durduruldu "
                 "(günlük veri limiti) - formülü yeniden yazın")
 STOPPED_RESTLESS = "formülün değeri her hesapta değişiyor - durduruldu (#CALC!); formülü yeniden yazın"
+STOPPED_SLOW = "%s - %d kez üst üste; formül durduruldu, yeniden yazınca denenir"
+RETRYING = "%s - biraz sonra yeniden denenecek"
+KEPT = " · Bloomberg isteğine giren hücre: son iyi değeri kaldı"
 DYNAMIC = ("OFFSET", "INDIRECT")      # functions whose cells are known only when computed (the engine has none)
 
 _MISS = object()
 _HERE = (0, 0)                         # where the notes of an evaluation land (calc's context keys them by own cell)
 _NOTHING = {"cells": {}, "fmt": {}, "rows": 1, "cols": 1}
+log = logging.getLogger("tto")
 
 
 class FormulaError(ValueError):
@@ -63,25 +78,32 @@ class FormulaError(ValueError):
 class _Entry(object):
     """One input typed as a formula: where it is, its text, what it read when last evaluated."""
 
-    __slots__ = ("scope", "bid", "si", "rc", "r", "c", "ref", "text", "admin", "metas", "boxes", "note", "error",
-                 "frozen", "stopped", "denied", "feeds")
+    __slots__ = ("scope", "bid", "si", "rc", "r", "c", "ref", "text", "metas", "boxes", "note", "error", "frozen",
+                 "stopped", "timed_out", "denied", "feeds", "good", "timeouts", "retry_at", "retry_round", "freezes",
+                 "thaw_after")
 
-    def __init__(self, scope: str, book, si: int, rc: int, text: str, admin: bool):
+    def __init__(self, scope: str, book, si: int, rc: int, text: str):
         self.scope = scope
         self.bid = book.id
         self.si, self.rc = si, rc
         self.r, self.c = divmod(rc, COLS)
         self.ref = book.ref(si, rc)
         self.text = text
-        self.admin = admin                 # an administrators' page's sheet may be read (Motor)
         self.metas: Optional[Dict[str, Tuple[int, int, int, int]]] = None   # book -> what was read (calc._Ctx.release)
         self.boxes: Any = _MISS            # the cells its text names, [(book, sheet, r1, c1, r2, c2)] (None: unknown)
         self.note: Optional[str] = None    # what its error value means
         self.error: Optional[str] = None   # why it was stopped
         self.frozen = False
-        self.stopped = False               # over a limit of the evaluation (time, cells read)
+        self.stopped = False               # over a hard limit of the evaluation (cells read, a range's size)
+        self.timed_out = False             # over the evaluation's time limit (tried again later)
         self.denied = False                # read a sheet that is not its owner's to read
         self.feeds: Optional[str] = None   # what Bloomberg request its value goes into ("" none; None: not looked at)
+        self.good: Any = _MISS             # its value before the round under way (kept where it feeds Bloomberg)
+        self.timeouts = 0                  # time-outs in a row
+        self.retry_at = 0.0                # (monotonic) not evaluated before this - after a time-out
+        self.retry_round = -1              # the round it timed out in: not tried again in that round
+        self.freezes = 0                   # times stopped in a row
+        self.thaw_after = 0.0              # (monotonic) an owner's write tries it again from this time on
 
     @property
     def key(self) -> Tuple[str, int, int]:
@@ -92,14 +114,26 @@ class InputFormulas(object):
     """Every input typed as a formula (``Service.formulas``).  Its state is the calculation thread's; the store tells it
     of any write of the inputs (``Store.on_inputs``) from any thread."""
 
+    #: pauses (seconds) before a formula over the time limit is tried again: after the 1st time-out, the 2nd ...
+    BACKOFF = (2.0, 10.0, 30.0)
+    #: time-outs in a row that stop a formula
+    STOP_AFTER = 4
+    #: a stopped formula is tried again at its owner's next write; stopped again, after this pause (doubling each time)
+    THAW_BASE = 30.0
+    THAW_MAX = 900.0
+
     def __init__(self, svc):
         self.svc = svc
         self._lock = threading.Lock()
         self._scopes: Dict[str, Dict[Tuple[str, int, int], _Entry]] = {}   # scope -> cell -> entry
         self._stale: set = set()               # scopes a writer changed in the store: read again
+        self._roles: set = set()               # users whose role changed: their formulas evaluated again
         self.pending: set = set()              # users whose calculation was made again: evaluated before it is read
         self._busy: set = set()                # scopes being evaluated now (no evaluation of them inside)
         self._queued = False
+        self._rounds = 0
+        self._timer: Optional[threading.Timer] = None
+        self._timer_at = 0.0
         self._down: Dict[Tuple[str, int, int], Optional[frozenset]] = {}
         self._addins: Dict[str, frozenset] = {}
         self._live: Dict[str, Tuple[int, int]] = {}
@@ -151,7 +185,25 @@ class InputFormulas(object):
             elif formulas or scope in self._scopes:
                 self._stale.add(scope)
 
+    def role_changed(self, user: str) -> None:
+        """An account's role changed (any thread): its formulas are evaluated again with the role it has now."""
+        with self._lock:
+            if user in self._scopes:
+                self._roles.add(user)
+        if user in self._scopes:
+            self.schedule()
+
     def _sync(self) -> None:
+        if self._roles:
+            with self._lock:
+                roles = set(self._roles)
+                self._roles.clear()
+            for user in roles:
+                for e in self._scopes.get(user, {}).values():
+                    e.metas = None                    # (what it may read changed: evaluated again)
+                    if e.frozen:
+                        self._thaw(e)
+                self.svc._formulas_changed(user)
         if not self._stale:
             return
         with self._lock:
@@ -162,10 +214,11 @@ class InputFormulas(object):
             self._take(scope, store.shared_formulas() if scope == SHARED else store.user_formulas(scope))
 
     def _take(self, scope: str, rows: Dict[Tuple[str, str], str]) -> None:
-        """A scope's formulas as the store keeps them: an entry whose text is the same is kept (with what it read)."""
+        """A scope's formulas as the store keeps them: an entry whose text is the same is kept (with what it read).  One
+        in a cell the meeting calendar moves (an earlier version took it) goes: its value stays, the log says so."""
         old = self._scopes.get(scope, {})
         new: Dict[Tuple[str, int, int], _Entry] = {}
-        admin = None
+        moved: List[Tuple[str, str, str]] = []
         for (bid, ref), text in rows.items():
             book = self.svc.books.get(bid)
             if book is None or not isinstance(text, str):
@@ -173,6 +226,9 @@ class InputFormulas(object):
             try:
                 si, rc = book.cell(ref)
             except (KeyError, ValueError):
+                continue
+            if self.svc._meeting_date_cell(book, si, rc) or self.svc._moved_by_calendar(book, si, rc):
+                moved.append((bid, ref, text))
                 continue
             d = book.inputs.get((si, rc))
             if d is None or (d.scope == "shared") != (scope == SHARED) or d.group in ("adhoc", "adhoc-shared"):
@@ -183,10 +239,13 @@ class InputFormulas(object):
                     check_formula(text, BLOOMBERG_INPUT)
                 except CalcError:
                     continue                           # (kept by another version and not read now: a value)
-                if admin is None:
-                    admin = scope == SHARED or self.svc._is_admin(scope)
-                e = _Entry(scope, book, si, rc, text, admin)
+                e = _Entry(scope, book, si, rc, text)
             new[(bid, si, rc)] = e
+        if moved:
+            self.svc.store.drop_formulas(scope or None, [(bid, ref) for bid, ref, _ in moved])
+            for bid, ref, text in moved:
+                log.warning("girdi formülü kaldırıldı (toplantı takvimiyle kayan hücre; değeri kaldı): %s %s!%s %s",
+                            scope or "ortak", bid, ref, text)
         with self._lock:
             if new:
                 self._scopes[scope] = new
@@ -196,13 +255,14 @@ class InputFormulas(object):
             self.svc._formulas_changed(scope)
 
     # ------------------------------------------------------------------ typed
-    def accept(self, user: str, book, si: int, rc: int, d, text: str, calc, batch: List[_Entry],
-               meeting: bool = False) -> Tuple[Any, _Entry]:
+    def accept(self, user: str, book, si: int, rc: int, d, text: str, calc, batch: List[_Entry]) -> Tuple[Any, _Entry]:
         """A formula typed into an input (calculation thread) -> (its value, its entry); :class:`FormulaError` says why
         it is refused.  ``batch``: the formulas accepted before it in the same write (a cycle among them is one)."""
         text = text.strip()
-        if meeting:
+        if self.svc._meeting_date_cell(book, si, rc):
             raise FormulaError(MEETING)
+        if self.svc._moved_by_calendar(book, si, rc):
+            raise FormulaError(CALENDAR)
         if d is None or d.group in ("adhoc", "adhoc-shared"):
             raise FormulaError(NOT_INPUT)
         opts = book.options_for(si, rc, calc)
@@ -213,7 +273,7 @@ class InputFormulas(object):
         except CalcError as exc:
             raise FormulaError(str(exc))
         scope = SHARED if d.scope == "shared" else user
-        e = _Entry(scope, book, si, rc, text, self.svc._is_admin(user))
+        e = _Entry(scope, book, si, rc, text)
         cs = self.svc.calcsheets
         cs._tables()
         fn, notes, _ = cs._compile(text, e.r, e.c)
@@ -229,7 +289,7 @@ class InputFormulas(object):
         value = self._run(e)
         if e.denied:
             raise FormulaError(e.note or "erişim yok")
-        if e.stopped:
+        if e.stopped or e.timed_out:
             raise FormulaError(e.note or "formül hesaplanamadı")
         ring = self._ring(e, [x for x in batch if x.scope == scope])
         if ring:
@@ -254,9 +314,10 @@ class InputFormulas(object):
             old = cur.get((book.id,) + k)
             cur[(book.id,) + k] = e
             changed = changed or old is None or old.text != e.text
+        now = time.monotonic()
         for e in cur.values():
-            if e.frozen:
-                e.frozen, e.error, e.metas = False, None, None
+            if e.frozen and now >= e.thaw_after:
+                self._thaw(e)
                 changed = True                     # (its cell's reason goes: drawn again)
         with self._lock:
             if cur:
@@ -274,9 +335,10 @@ class InputFormulas(object):
         keep = {k: e for k, e in cur.items()
                 if k[0] != book.id or (cells is not None and (k[1], k[2]) not in cells)}
         thawed = False
+        now = time.monotonic()
         for e in keep.values():
-            if e.frozen:
-                e.frozen, e.error, e.metas = False, None, None
+            if e.frozen and now >= e.thaw_after:
+                self._thaw(e)
                 thawed = True
         if len(keep) != len(cur) or thawed:
             with self._lock:
@@ -286,24 +348,39 @@ class InputFormulas(object):
                     self._scopes.pop(scope, None)
             self.svc._formulas_changed(scope)
 
+    @staticmethod
+    def _thaw(e: _Entry) -> None:
+        """A stopped formula tried again (its owner wrote an input, its role changed)."""
+        e.frozen, e.error, e.metas = False, None, None
+        e.timeouts, e.retry_at = 0, 0.0
+
     # ------------------------------------------------------------------ live
     def schedule(self) -> None:
         """A new generation (any thread): the formulas looked at on the calculation thread, ahead of the pages."""
-        if self._queued:
-            return
-        self._queued = True
+        with self._lock:
+            if self._queued:
+                return
+            self._queued = True
+        try:
+            self.svc.et.submit_at(EngineThread.WRITE, self._job)
+        except BaseException:
+            with self._lock:
+                self._queued = False               # (not queued after all: the next generation asks again)
+            raise
         self.jobs += 1
-        self.svc.et.submit_at(EngineThread.WRITE, self._job)
 
     def _job(self) -> None:
-        self._queued = False
+        with self._lock:
+            self._queued = False
         try:
             changed = self.settle()
         except Exception as exc:  # noqa: BLE001 - the next generation tries again (and the log says what failed)
             self.svc.ops.failure("girdi formülleri", exc)
             return
         if changed:
-            self.svc.bump()
+            # values that followed what they read - the market, the clock, an input whose own write told the desk
+            # already: a market move for the pages kept (an entry or a change of a formula is a desk change itself)
+            self.svc.bump(market=True)
 
     def settle(self) -> bool:
         """Calculation thread: every formula whose reads changed evaluated again - the desk's first (a user's own may read
@@ -321,7 +398,26 @@ class InputFormulas(object):
         self.pending.discard(user)
         self._sync()
         if self._settle_scope(user):
-            self.svc.bump()
+            self.svc.bump(market=True)
+
+    def _later(self, delay: float) -> None:
+        """A round of evaluation when a formula's pause after a time-out is over (none comes with a generation then)."""
+        at = time.monotonic() + delay
+        with self._lock:
+            if self._timer is not None and self._timer_at <= at:
+                return                                 # (one coming sooner already)
+            if self._timer is not None:
+                self._timer.cancel()
+            t = self._timer = threading.Timer(delay + 0.05, self._wake)
+            self._timer_at = at
+        t.daemon = True
+        t.start()
+
+    def _wake(self) -> None:
+        with self._lock:
+            self._timer = None
+        if not self.svc._stop.is_set():
+            self.schedule()
 
     def _settle_scope(self, scope: str, wake: bool = False) -> bool:
         if scope in self._busy:
@@ -333,28 +429,46 @@ class InputFormulas(object):
         if not ents:
             return False
         self._busy.add(scope)
+        self._rounds += 1
+        round_ = self._rounds
+        start = time.monotonic()
+        for e in ents:
+            e.good = self._current(e)                  # (what a cell Bloomberg reads keeps when the formula is stopped)
         changed = False
         try:
             for _ in range(len(ents) + 2):
-                dirty = [e for e in ents if not e.frozen and not self._fresh(e)]
+                dirty = [e for e in ents if not e.frozen and e.retry_round != round_ and e.retry_at <= start
+                         and not self._fresh(e)]
                 if not dirty:
                     return changed
                 sets: Dict[str, Dict[Tuple[int, int], Any]] = {}
                 for e in dirty:
                     v = self._run(e)
+                    if e.timed_out:
+                        self._slow(e, round_, sets)
+                        continue
+                    e.timeouts, e.retry_at = 0, 0.0
                     if e.stopped or e.denied:
                         self._freeze(e, e.note or "formül hesaplanamadı", sets)
                         continue
                     if self._reads_live(e) and self._feeds(e):
                         self._freeze(e, STOPPED_LIVE, sets)
                         continue
+                    if type(v) is XlError:
+                        # an error read back through its own cell (a cycle settled on #CALC! after a retry): the cycle
+                        ring = self._ring(e, [])
+                        if ring:
+                            self._freeze(e, STOPPED_CYCLE % " → ".join(ring), sets)
+                            continue
+                    e.freezes = 0
                     if not _same(v, self._current(e)):
                         sets.setdefault(e.bid, {})[(e.si, e.rc)] = v
                 if sets:
                     self._apply(scope, sets)
                     changed = True
             # still changing after a round per formula: what reads itself is stopped (never spins)
-            stuck = [e for e in ents if not e.frozen and not self._fresh(e)]
+            stuck = [e for e in ents if not e.frozen and e.retry_round != round_ and e.retry_at <= start
+                     and not self._fresh(e)]
             if stuck:
                 sets = {}
                 found = [(e, self._ring(e, [])) for e in stuck]
@@ -367,10 +481,37 @@ class InputFormulas(object):
         finally:
             self._busy.discard(scope)
 
+    def _slow(self, e: _Entry, round_: int, sets: Dict[str, Dict[Tuple[int, int], Any]]) -> None:
+        """Over the time limit (a calculation cold after a restart, a busy moment): tried again after a pause - its value
+        stays meanwhile -, stopped after several times in a row."""
+        e.timeouts += 1
+        e.retry_round = round_
+        why = e.note or "Hesap süresi sınırı aşıldı"
+        if e.timeouts >= self.STOP_AFTER:
+            self._freeze(e, STOPPED_SLOW % (why, e.timeouts), sets)
+            return
+        delay = self.BACKOFF[min(e.timeouts, len(self.BACKOFF)) - 1]
+        e.retry_at = time.monotonic() + delay
+        e.note = RETRYING % why
+        self._later(delay)
+
     def _freeze(self, e: _Entry, why: str, sets: Dict[str, Dict[Tuple[int, int], Any]]) -> None:
-        e.frozen, e.error = True, why
-        if not _same(E_CALC, self._current(e)):
-            sets.setdefault(e.bid, {})[(e.si, e.rc)] = E_CALC
+        """Stopped: its value #CALC! with the reason on the cell - or, where the value goes into a Bloomberg request, the
+        value it had before this round (an error there would be a new request with an empty argument)."""
+        e.frozen = True
+        e.freezes += 1
+        now = time.monotonic()
+        e.thaw_after = now if e.freezes == 1 else now + min(self.THAW_BASE * 2 ** (e.freezes - 2), self.THAW_MAX)
+        cur = self._current(e)
+        if self._feeds(e):
+            keep = e.good if e.good is not _MISS else cur
+            e.error = why + KEPT
+            if keep is not _MISS and not _same(keep, cur):
+                sets.setdefault(e.bid, {})[(e.si, e.rc)] = keep
+        else:
+            e.error = why
+            if not _same(E_CALC, cur):
+                sets.setdefault(e.bid, {})[(e.si, e.rc)] = E_CALC
         self.svc._formulas_changed(e.scope)
 
     def _current(self, e: _Entry) -> Any:
@@ -402,27 +543,38 @@ class InputFormulas(object):
         """Whether nothing the formula read was invalidated since it was evaluated."""
         return e.metas is not None and self.svc.calcsheets._still(e.scope or None, e.metas)
 
-    def _run(self, e: _Entry) -> Any:
-        """The formula evaluated over its scope's view (its user's own, or everybody's) -> its value; what it read is kept."""
+    def _run(self, e: _Entry, again: bool = True) -> Any:
+        """The formula evaluated over its scope's view (its user's own, or everybody's) -> its value; what it read is kept.
+        A shared formula reads with nobody's rights (an administrators' page is not everybody's), a user's with the role
+        they have now.  Over the time limit it is tried once more at once (what it read is computed by then)."""
         cs = self.svc.calcsheets
         cs._tables()
         fn, notes, _ = cs._compile(e.text, e.r, e.c)
         self.evaluations += 1
-        e.note, e.stopped, e.denied = None, False, False
+        e.note, e.stopped, e.timed_out, e.denied = None, False, False, False
         if fn is None:
             e.metas = {}
             e.note = BLOOMBERG_INPUT % notes["bloomberg"] if notes.get("bloomberg") else UNREADABLE
             return E_NAME
-        ctx = _Ctx(cs, e.scope or None, _NOTHING, e.admin)
+        admin = e.scope != SHARED and self.svc._is_admin(e.scope)
+        ctx = _Ctx(cs, e.scope or None, _NOTHING, admin)
         ctx.stack.append(_HERE)
         try:
             v = _plain(fn(ctx, cs._slots[(e.bid, e.si)], e.r, e.c))
         except _Stop as stop:
-            v, e.note, e.stopped = E_CALC, stop.text, True
+            v, e.note = E_CALC, stop.text
+            if stop.text == _calc.TIME_NOTE % _calc.EVAL_SECONDS:
+                e.timed_out = True
+            else:
+                e.stopped = True                       # (too many cells read, a range too big: the formula's own size)
         except Exception as exc:  # noqa: BLE001 - a function that failed: this formula's error
             v, e.note = E_VALUE, "Hesaplanamadı: %s" % (str(exc)[:120] or type(exc).__name__)
         finally:
-            e.metas = ctx.release()
+            metas = ctx.release()
+        # (cut short by the time limit: what it read so far is no evaluation - it stays to be evaluated)
+        e.metas = None if e.timed_out else metas
+        if e.timed_out and again:
+            return self._run(e, False)
         e.denied = any(calc is None for calc, _ in ctx.books.values())
         if e.note is None:
             e.note = ctx.notes.get(_HERE)

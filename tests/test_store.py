@@ -80,8 +80,9 @@ def test_shared_inputs_and_meta(store):
 def test_an_input_typed_as_a_formula_keeps_its_text_beside_its_value(tmp_path):
     """The formula (``=C60+7``) is kept with the input it was typed into, in the same row as its value; a value typed over
     it replaces it; clearing takes it; a scenario keeps it (a fourth item - a scenario of an earlier version has three); a
-    meeting's cells moved take it along; a database of an earlier version gets the column and keeps its rows.  Every write
-    of the inputs is told (the formulas of the dashboard follow what any writer did)."""
+    meeting's cells moved keep their value without it (its references would not move: the dashboard takes no formula
+    there); a formula dropped leaves its value; a database of an earlier version gets the column and keeps its rows.  Every
+    write of the inputs is told (the formulas of the dashboard follow what any writer did)."""
     import json
     path = str(tmp_path / "tto.db")
     old = sqlite3.connect(path)                        # an earlier version's tables, without the column
@@ -108,11 +109,16 @@ def test_an_input_typed_as_a_formula_keeps_its_text_beside_its_value(tmp_path):
         assert ["tto", "OIS_MAIN!U11", -50.0, "=-25*2"] in payload and ["tto", "MASA!C60", 46357.0] in payload
         moved = store.remap_user_cells("tto", {"OIS_MAIN!U11": "OIS_MAIN!U10"})
         assert moved["moved"] == 1 and told[-1] == ("*", True)
-        assert store.user_formulas("ali") == {("tto", "OIS_MAIN!U10"): "=-25*2"}
+        assert store.user_formulas("ali") == {} and store.user_inputs("ali")[("tto", "OIS_MAIN!U10")] == -50.0
         values, formulas = store.scenario("ali", "S")
-        assert formulas == {("tto", "OIS_MAIN!U10"): "=-25*2"} and values[("tto", "OIS_MAIN!U10")] == -50.0
+        assert formulas == {} and values[("tto", "OIS_MAIN!U10")] == -50.0
         assert store.load_scenario("ali", "S") == values
         assert ("tto", "OIS_MAIN!U10") in store.saved_cells()
+        store.set_user_inputs("ali", "tto", {"MASA!J171": 1.0}, {"MASA!J171": "=1"})
+        store.drop_formulas("ali", [("tto", "MASA!J171")])
+        assert store.user_formulas("ali") == {} and store.user_inputs("ali")[("tto", "MASA!J171")] == 1.0
+        store.save_scenario("ali", "S2", {("tto", "MASA!J171"): 1.0}, {("tto", "MASA!J171"): "=1"})
+        assert store.scenario("ali", "S2") == ({("tto", "MASA!J171"): 1.0}, {("tto", "MASA!J171"): "=1"})
         store.replace_user_inputs("ali", {("tto", "MASA!C171"): 1.0}, {("tto", "MASA!C171"): "=1"})
         assert store.user_formulas("ali") == {("tto", "MASA!C171"): "=1"} and told[-1] == ("ali", True)
         store.clear_user_inputs("ali", "tto", ["MASA!C171"])

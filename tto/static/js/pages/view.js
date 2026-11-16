@@ -4,7 +4,7 @@
 import { openAddIsin, bondCardLinks, bondFlags } from '../bonds.js';
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
-import { Grid, copyGrid, findCell } from '../grid.js';
+import { Grid, copyGrid, findCell, reviveEditor } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
 import { addButton } from '../layout.js';
@@ -324,6 +324,7 @@ export class ViewPage {
     this.secNote.textContent = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
     this.secNote.classList.toggle('hidden', !this.secNote.textContent);
     this.placed = placed;
+    reviveEditor();                    // (a cell typed into whose table left the page: its editor goes on in a bar of its own)
     // a tab whose panels were not brought up to date while another was open: now - shown dimmed until then, so that
     // nobody reads a number from before the change
     if (this.stale() && this.ctx.refreshPage) {

@@ -488,9 +488,10 @@ export class Grid {
         const cell = row[j], before = prev[j];
         if (editing && editing.td === td) continue;
         if (signature(cell) === signature(before)) continue;
-        const keepSel = td.classList.contains('sel'), keepCur = td.classList.contains('cur');
+        const keepSel = td.classList.contains('sel'), keepCur = td.classList.contains('cur'), keepPt = td.classList.contains('pt');
         if (cell.act || cell.chk) continue;
-        td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '');
+        td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '')
+          + (keepPt ? ' pt' : '');
         td.textContent = cell.t || '';
         if (cell.ff || before.ff) td.title = tipOf(cell);       // (a formula typed, changed or gone: its tooltip with it)
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
@@ -910,8 +911,8 @@ export function startEdit(grid, i, j, typed) {
   if (typed === null && !isFormula(input.value)) input.select();
   else input.setSelectionRange(input.value.length, input.value.length);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); commitEdit(); moveBy(e.shiftKey ? -1 : 1, 0, false); }
-    else if (e.key === 'Tab') { e.preventDefault(); commitEdit(); moveBy(0, e.shiftKey ? -1 : 1, false); }
+    if (e.key === 'Enter') { e.preventDefault(); commitEdit('key'); moveBy(e.shiftKey ? -1 : 1, 0, false); }
+    else if (e.key === 'Tab') { e.preventDefault(); commitEdit('key'); moveBy(0, e.shiftKey ? -1 : 1, false); }
     else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
     e.stopPropagation();
   });
@@ -922,8 +923,9 @@ export function startEdit(grid, i, j, typed) {
     input.classList.toggle('fxe', isFormula(input.value));
   });
   input.addEventListener('blur', () => {
-    // (a tab of the page opened while a formula is typed - its tables can be pointed at: the typing goes on)
-    if (editing && editing.input === input && !editing.switching) commitEdit();
+    // a tab of the page opened while a formula is typed - its tables can be pointed at - or the editor taken out of
+    // the page with its table (re-homed by reviveEditor): the typing goes on
+    if (editing && editing.input === input && !editing.switching && input.isConnected) commitEdit();
   });
   return true;
 }
@@ -945,17 +947,26 @@ function cancelEdit() {
   finishEdit();
 }
 
-function commitEdit() {
+/** ``how``: 'key' (Enter / Tab: the cell is still the user's), or the editor was left - a click elsewhere, the focus gone. */
+function commitEdit(how = 'away') {
   if (!editing) return;
   const value = editing.input.value;
   const ed = finishEdit();
   const cell = ed.grid.cell(ed.i, ed.j);
   if (value === editText(cell)) return;                 // nothing typed
   if (!isFormula(value)) ed.td.textContent = value;     // optimistic until the refresh arrives (a formula: its value then)
-  applyValue(ed.grid, ed.i, ed.j, value);
+  applyValue(ed.grid, ed.i, ed.j, value, how);
 }
 
-async function applyValue(grid, i, j, value) {
+// the user's clicks and keys, counted: a refused formula is typed into again only if nothing was done since it was sent
+let touches = 0;
+document.addEventListener('mousedown', () => { touches += 1; }, true);
+document.addEventListener('keydown', () => { touches += 1; }, true);
+
+const selNow = () => (sel.grid ? [sel.grid, sel.r0, sel.c0, sel.r1, sel.c1] : null);
+const sameSel = (a, b) => !!a && !!b && a.every((x, k) => x === b[k]);
+
+async function applyValue(grid, i, j, value, how = 'away') {
   const ref = grid.ref(i, j);
   if (!ref) return;
   const back = () => {
@@ -963,13 +974,23 @@ async function applyValue(grid, i, j, value) {
     const cell = grid.cell(i, j);
     if (td && cell && !(editing && editing.td === td)) td.textContent = cell.t || '';
   };
+  // where the commit itself leaves the selection (Enter moves it down): taken once its handler is done
+  const seen = touches;
+  let after = null;
+  Promise.resolve().then(() => { after = selNow(); });
   try {
     const res = await hooks.setInputs(grid.book, [{ ref, value }], grid.opts.adhoc);
     if (res && res.errors && res.errors.length) {
-      toast(res.errors.join('; '), 'err', isFormula(value) ? 9000 : 6000);
+      const formula = isFormula(value);
+      toast((formula ? value + ' kaydedilmedi – ' : '') + res.errors.join('; '), 'err', formula ? 9000 : 6000);
       back();
-      // a formula refused (a Bloomberg function, a cycle, one that cannot be read): typed into again, as it was
-      if (isFormula(value) && !editing && grid.el.isConnected && grid.tds[i] && grid.tds[i][j]) {
+      // a formula refused (a Bloomberg function, a cycle, one that cannot be read) and committed by Enter / Tab: typed
+      // into again, as it was - unless the user did anything since (a click, a key, another place to type in): never
+      // pulled back to it then
+      const act = document.activeElement;
+      const free = !act || act === document.body || grid.el.contains(act);
+      if (formula && how === 'key' && !editing && touches === seen && sameSel(selNow(), after) && free
+          && grid.el.isConnected && grid.tds[i] && grid.tds[i][j]) {
         setSelection(grid, i, j, i, j);
         startEdit(grid, i, j, value);
       }
@@ -1046,15 +1067,23 @@ function dockBar(ed) {
   bar.classList.remove('hidden');
 }
 
-/** After a tab of the page opened while the formula is typed: the editor where it can be typed into. */
-function keepEditor() {
+/** The page laid its tables out again (a tab opened, the search) while a cell's value is typed: the editor where it can
+ *  be typed into - in its cell when that is on screen, in the bar of its own when not.  view.js calls it after every
+ *  layout; a tab clicked calls it too, whatever the tab's own handler did with the click. */
+export function reviveEditor() {
   const ed = editing;
-  if (!ed || !ed.switching) return;
-  // (moved while focused, an input may lose its focus - a blur that must not end the typing: "switching" until here)
+  if (!ed) return;
+  const was = ed.switching;
+  // (moved while focused, an input may lose its focus - a blur that must not end the typing: "switching" meanwhile)
+  ed.switching = true;
   if (!ed.td.isConnected) dockBar(ed);
   else if (ed.input.parentNode !== ed.td) { ed.td.appendChild(ed.input); dockBar(null); }
-  ed.input.focus({ preventScroll: true });
+  if (was || document.activeElement !== ed.input) ed.input.focus({ preventScroll: true });
   ed.switching = false;
+}
+
+function keepEditor() {
+  if (editing && editing.switching) reviveEditor();
 }
 
 // while an input's formula is typed: a click on a cell of any table of a workbook on screen puts its reference in where a
@@ -1096,8 +1125,13 @@ document.addEventListener('mouseover', (e) => {
   pointAt(ed, ed.drag.g, ed.drag.i, ed.drag.j, td.__i, td.__j);       // (dragged over a block: A1:B5)
 }, true);
 
-document.addEventListener('mouseup', () => { if (editing) editing.drag = null; }, true);
-document.addEventListener('click', () => { if (editing && editing.switching) keepEditor(); });
+document.addEventListener('mouseup', () => {
+  if (!editing) return;
+  editing.drag = null;
+  // (pressed on a tab and let go: once the click - if any - is handled, whatever its handlers did with it)
+  if (editing.switching) setTimeout(keepEditor, 0);
+}, true);
+document.addEventListener('click', () => { if (editing && editing.switching) setTimeout(keepEditor, 0); }, true);
 
 async function clearSelectionValues() {
   const s = currentSelection();

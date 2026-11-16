@@ -1247,6 +1247,16 @@ async function shot(page, name) {
     check('... a plain click after a finished reference ends the typing; a Bloomberg function is refused with the reason (the daily data limit), '
       + 'the cell typed into again, its formula kept', ended && refusedIn === '=BDP("USDTRY Curncy";"PX_LAST")'
       && (await cellText(page, 'MASA!C171')).trim() === e60 && (await fx171()).title.startsWith('Formül: =C60+G60'), { ended, refusedIn });
+    // a refused formula left with a click on another cell: said, with the formula - the editor is not pulled back to it
+    await (await cellHandle(page, 'MASA!C171')).click();
+    await page.keyboard.type('=FOO(1)');
+    await (await cellHandle(page, 'MASA!E60')).click();
+    await page.waitForFunction(() => /=FOO\(1\) kaydedilmedi/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const away = await page.evaluate(() => ({ editing: !!document.querySelector('td.editing'), addr: document.getElementById('sb-addr').textContent,
+      focus: document.activeElement ? document.activeElement.tagName : '' }));
+    check('... a refused formula left with a click on another cell: the toast says so with the formula, the selection stays on the clicked cell',
+      !away.editing && away.addr === 'MASA!E60' && away.focus !== 'INPUT' && (await fx171()).title.startsWith('Formül: =C60+G60'), away);
     // a cell of another tab: "=", the tab "Faiz · PPK" opened - the formula goes on in a bar of its own -, a click on the
     // survey month there (MASA!S155, the desk's input), "+1", Enter
     const s155 = await cellSerial('MASA!S155');
