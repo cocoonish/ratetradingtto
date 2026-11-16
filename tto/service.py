@@ -238,6 +238,11 @@ class Service(object):
         # the watch lists and the alarms: read again whenever the market or an input moved
         from .watch import Watch
         self.watch = Watch(self)
+        try:
+            # (once: items and alarms kept as cells of a bond's row or a VİOP contract's column follow that, not the cell)
+            self.et.call(self.watch.anchor_kept)
+        except Exception as exc:  # noqa: BLE001 - tried again at the next start; the dashboard opens anyway
+            self.ops.failure("izleme listelerinin kâğıda / kontrata bağlanması", exc)
         # Spot / FX and FX vol: the option market's quotes of a pair, its smile and distribution, the vol monitor
         from .fx import Fx
         self.fx = Fx(self)
