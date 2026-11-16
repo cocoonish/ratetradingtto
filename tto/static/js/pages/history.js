@@ -841,7 +841,8 @@ export class MpcPage extends HistoryPage {
 // the holiday lists of the settings page: what each one is for (a tab's tooltip), its word in "152 TR tatili", where it
 // is written
 const HOL_ABOUT = {
-  TRY: 'TRY tatilleri: TRY kitabının bütün WORKDAY hesapları (para piyasası, tahvil, VİOP, OIS, toplantı takvimi) ve FX valörlerinin TRY tarafı',
+  TRY: 'TRY tatilleri: TRY kitabının bütün WORKDAY hesapları (para piyasası, tahvil, VİOP, OIS, toplantı takvimi), FX valörlerinin TRY tarafı '
+    + 've BIST swap\'ın T+1 valörü',
   USD: 'USD tatilleri: New York\'ta FX takası olmayan günler (Fed tatilleri; Good Friday iş günü) - USDTRY ve EURUSD valörleri',
   EUR: 'EUR tatilleri: TARGET2\'nin kapalı olduğu günler - EURTRY ve EURUSD valörleri',
 };
@@ -1032,8 +1033,9 @@ export class SettingsPage {
     this.holPanel.body.appendChild(h('div', { class: 'set-body' }, this.holInfo, this.holText,
       h('div', { class: 'set-actions' }, holCopy, h('span', { class: 'grow' }), holUndo, this.holSave), this.holOther));
     this.holPanel.setNote('Her satıra bir gün: tarih (gg.aa.yyyy) ve isterseniz adı - Excel\'den iki sütun yapıştırılabilir. Listeler herkes için '
-      + 'ortaktır; sekmeden seçilir, her biri ayrı kaydedilir. TRY: iki kitaba birden yazılır - TRY kitabının tatilleri (Motor!A361:B523; bütün '
-      + 'WORKDAY hesapları: para piyasası, tahvil, VİOP, OIS, kontrat vadeleri) ve DİBS ASW kitabınınki (ASW!LR2:LR200); arife yarım günleri iş '
+      + 'ortaktır; sekmeden seçilir, her biri ayrı kaydedilir. TRY: üç kitaba birden yazılır - TRY kitabının tatilleri (Motor!A361:B523; bütün '
+      + 'WORKDAY hesapları: para piyasası, tahvil, VİOP, OIS, kontrat vadeleri), DİBS ASW kitabınınki (ASW!LR2:LR200) ve Borsa Swap\'ınki '
+      + '(EK_TATIL!A5:A204: BIST swap\'ın T+1 valörü); arife yarım günleri iş '
       + 'günü sayılır (listeye yazılmaz). USD (New York, Fed tatilleri) ve EUR (TARGET2): FX valörleri paritenin iki para biriminin tatilini de atlar - '
       + 'USDTRY spot bugünden 1, EURTRY 2 iş günü sonrası; vadeler ikisinin de açık olduğu güne kayar (EK_TATIL sayfası). SIFMA tatilleri '
       + '(SOFR / USD OIS) ve FOMC toplantıları USD · FOMC sayfasındadır; burada bilgi için gösterilir.');
@@ -1187,7 +1189,8 @@ export class SettingsPage {
     // the list opens at its next holiday (the years before it are history; USD and EUR start in 2020)
     this.holText.scrollTop = typed === undefined && next
       ? Math.max(0, cur.items.indexOf(next) - 1) * (this.holText.scrollHeight / Math.max(1, cur.items.length)) : 0;
-    const books = (cur.books || []).map((b) => (b === 'asw' ? 'DİBS ASW' : ccy === 'TRY' ? 'TRY (Motor)' : 'EK_TATIL (TRY kitabı)'));
+    const books = (cur.books || []).map((b) => (b === 'asw' ? 'DİBS ASW' : b === 'borsa' ? 'Borsa Swap'
+      : ccy === 'TRY' ? 'TRY (Motor)' : 'EK_TATIL (TRY kitabı)'));
     clear(this.holInfo).append(h('span', null, h('b', null, String(cur.items.length)), ' ' + (HOL_WORD[ccy] || ccy) + ' tatili (en çok ' + cur.slots + ')'),
       h('span', null, 'Sıradaki: ', h('b', null, next ? isoToTr(next.date) + (next.name ? ' · ' + next.name : '') : '–')),
       h('span', null, (HOL_WHERE[ccy] || 'Yazıldığı yer: ') + books.join(' · ')));

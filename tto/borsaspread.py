@@ -5,7 +5,8 @@ The swap tables live in the Borsa workbook, the curves in the TRY workbook: the 
 the dashboard's own on their right (``"append": "borsa_spread"`` in the page definition), worked out every time the
 table is made.  The rows are the quotes of the moment (only those with an order behind them): nothing is kept of
 them.  A row runs from its start - its maturity (the "Valör" column) less its days (VKGS): today for T+0, the next
-business day for T+1 - to its maturity, and gets
+business day of the desk's TRY holiday list for T+1 (``extras.BORSA_HOL_SHEET``: the day the TRY OIS spot is) - to its
+maturity, and gets
 
 * **OIS mid zero %** - the bootstrapped TLREF OIS curve (``BOOT_GUN`` / ``BOOT_LNDF``: Motor!C88:C130 / I88:I130), built
   from the OIS par quotes of OIS_MAIN!B9:B26 - each tenor's MID from the first pricing source that has one (PX_LAST
@@ -55,7 +56,7 @@ BP = "#,##0"
 #: the columns added on the right of each table: caption and what it is (the caption's tip)
 HEADS = (("OIS mid zero %", "TLREF OIS mid eğrisinin (bootstrap: OIS par kotalarının MID'i) satırın başlangıcı → Valör arası "
                             "zero faizi, basit ACT/360 – Masa'nın 'Tarih arası faiz' Bootstrap satırıyla aynı hesap. Başlangıç: "
-                            "T+0'da bugün, T+1'de ertesi iş günü. OIS spot'undan önceki gün(ler) TLREF ile (ORANLAR'ın ON "
+                            "T+0'da bugün, T+1'de ertesi iş günü (TRY tatilleri atlanır). OIS spot'undan önceki gün(ler) TLREF ile (ORANLAR'ın ON "
                             "satırı). Eğrinin ilk düğümü 1A: daha kısa vade spot → 1A arasından okunur"),
          ("Offshore mid zero %", "Offshore TRY mid eğrisinin (≤9A FX swap ima faizlerinin bid–ask ortası, 1Y'den XCCY "
                                  "ortalarının bootstrap'ı) aynı tarihler arası zero faizi, basit ACT/360. USDTRY spot'undan "

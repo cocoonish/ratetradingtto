@@ -19,11 +19,13 @@ the Excel files (parity and reference tests read those).
                                interest at the auction's value date) and where the bids stand once it is over
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 * ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
+* ``EK_TATIL`` (Borsa workbook) a copy of the desk's TRY holiday list and the T+1 value date on it
 
-The last one changes formulas of the workbook itself.  The workbook lists a maturity when its bid or ask size
+The last two change formulas of the workbook itself.  The workbook lists a maturity when its bid or ask size
 "is a number"; over the API Bloomberg answers a size of 0 - and an old price, the same on both sides - for a
 maturity nobody is quoting, where Excel's real-time link shows "#N/A N/A".  Listed by the workbook's rule, the
-page was full of quotes that do not exist.
+page was full of quotes that do not exist.  And the workbook counts the T+1 quotes' value date over weekends only:
+on the eve of a TRY holiday their maturities were a day early (``bu`` Q9:Q54 count from the date on the copy now).
 
 Two more change formulas of the TRY workbook, each for a reason given where it is done:
 
@@ -306,6 +308,56 @@ def _borsa_filter(model: Model) -> None:
     for per, points, days in (("I", "J", "E"), ("L", "K", "E"), ("V", "W", "R"), ("Y", "X", "R")):
         for r in range(9, 55):
             bu.patch("%s%d" % (per, r), '=IF(N(%s%d)=0,"",%s%d/%s%d)' % (points, r, points, r, days, r))
+
+
+#: The quotes of the next business day (BFX1) start on the T+1 value date, which the Borsa workbook counts with
+#: WORKDAY(TODAY(),1) - weekends only: it holds no holiday list.  The dashboard gives it a copy of the desk's TRY list on
+#: a sheet of its own (the service fills it with the TRY workbook's list as it starts, the settings page writes it with
+#: the other copies) and the T+1 date on that list, as the TRY OIS spot date is on the TRY workbook's (OIS_MAIN!B2):
+#: the T+1 table's "Valör" counts from it.
+BORSA_HOL_SHEET = "EK_TATIL"
+BORSA_T1 = "B2"                          # the T+1 value date
+BORSA_HOL_FIRST = 5                      # the TRY holidays (dates), this many rows: the TRY workbook's list has 163
+BORSA_HOL_ROWS = 200
+BORSA_HOL_LAST = BORSA_HOL_FIRST + BORSA_HOL_ROWS - 1
+BORSA_LAST = 54                          # the last row of the two tables of "bu"
+_BORSA_D_LAST = 'IF(ISNUMBER(E54),TODAY(),"")'       # the T+0 table's last "Valör" in the file: today, without its days
+
+
+def _borsa_t1_check(model: Model) -> None:
+    _need_sheets(model, "bu")
+    if BORSA_HOL_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % BORSA_HOL_SHEET)
+    for r in range(9, BORSA_LAST):                     # Q9:Q53: the T+1 table's "Valör" = the next weekday + its days
+        _need_formula(model, "bu", "Q%d" % r, "WORKDAY(TODAY(),1)+R%d" % r)
+
+
+def _borsa_t1(model: Model) -> None:
+    """The T+1 table's dates on the desk's TRY holidays: the copy of the list, the T+1 date on it and every "Valör" of
+    the table counted from that date - the file's last row, which has no formula there, too.  And the T+0 table's last
+    "Valör", which the file counts as today, the maturity's days left out, counted as the rows above it."""
+    h = SheetBuilder(model, BORSA_HOL_SHEET)
+    h.title("A1", "TRY TATİLLERİ  ·  BIST swap'ın T+1 valörü (BFX1) bu listeye göre – TTO kitabının TRY tatil listesinin kopyası")
+    h.set("A2", "T+1 valör", bold=True)
+    h.set(BORSA_T1, "=WORKDAY(TODAY(),1,$A$%d:$A$%d)" % (BORSA_HOL_FIRST, BORSA_HOL_LAST), fmt=DATE, bold=True)
+    h.note("C2", "Bugünden sonraki ilk iş günü, TTO'daki OIS spot valörü (OIS_MAIN!B2) gibi. Liste dashboard açılırken TTO kitabının "
+                 "listesinden (Motor!A361:A523) gelir; Ayarlar → Tatiller listeyi üç kitaba birden yazar.")
+    h.head("A4", ["TRY tatili"])
+    for r in range(BORSA_HOL_FIRST, BORSA_HOL_LAST + 1):
+        h.set("A%d" % r, None, fmt=DATE)
+    t1 = "%s!$%s$%s" % (BORSA_HOL_SHEET, BORSA_T1[0], BORSA_T1[1:])
+    bu = SheetBuilder(model, "bu")
+    sh = model.sheet("bu")
+    for r in range(9, BORSA_LAST + 1):
+        text = '=IF(R%d="","",%s+R%d)' % (r, t1, r)
+        rc = parse_a1("Q%d" % r)
+        if rc in sh.fml:
+            if "WORKDAY(TODAY(),1)+R%d" % r in formula_of(model, "bu", "Q%d" % r):
+                bu.patch("Q%d" % r, text)
+        elif rc not in sh.consts:
+            bu.set("Q%d" % r, text, like="Q%d" % (r - 1))
+    if parse_a1("D%d" % BORSA_LAST) in sh.fml and formula_of(model, "bu", "D%d" % BORSA_LAST) == _BORSA_D_LAST:
+        bu.patch("D%d" % BORSA_LAST, '=IF(ISNUMBER(E%d),TODAY()+E%d,"")' % (BORSA_LAST, BORSA_LAST))
 
 
 # ---------------------------------------------------------------------------------------------- holiday calendars
@@ -2936,7 +2988,8 @@ def _tto_viop_roll(model: Model) -> None:
 
 
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
-    "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter)),
+    "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
+              ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
     # (the holiday sheet and the FX value dates first: the forward tables below date their tenors on its calendars)
     "tto": ((HOL_SHEET, _holidays_check, _tto_holidays), (FX_DATE_NAME, _fx_dates_check, _tto_fx_dates),

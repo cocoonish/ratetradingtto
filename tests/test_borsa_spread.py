@@ -10,6 +10,7 @@ from conftest import cell
 from tto import borsaspread as bsp
 from tto.xl import numfmt
 from tto.xl.errors import XlError
+from tto.xl.model import Model, parse_a1
 
 S = 46330.0                                               # a spot date (04.11.2026)
 HEADS = [h for h, _ in bsp.HEADS]
@@ -206,3 +207,85 @@ def test_rows_without_a_quote_stay_empty_and_other_tables_are_left_alone(service
     assert "BOOT_GUN" in head[0]["tip"] and "BOOT_GUN" in head[2]["tip"] and "BOOT_GUN" not in head[1]["tip"]
     assert row[0]["t"] == "" and "BOOT_GUN" in row[0]["tip"] and row[2] == BLANK and row[3] == BLANK
     assert isinstance(row[1]["v"], float) and isinstance(row[4]["v"], float)
+
+
+# ============================================================================== the T+1 value date
+def test_the_t1_table_counts_its_value_dates_on_the_copy_of_the_try_holidays():
+    """The Borsa workbook counts the T+1 quotes' value date over weekends only (WORKDAY(TODAY(),1)) and has no holiday
+    list: the dashboard's addition gives it a copy of the TRY list and the T+1 date on it, and every "Valör" of the T+1
+    table counts from that date - the file's last row too, which has no formula there.  The T+0 table's last "Valör"
+    (today, its days left out in the file) counts as the rows above it.  The model file stays as it was."""
+    import os
+    from tto import extras
+    from tto.books import formula_text, load_books
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    plain, books = load_books(os.path.join(root, "models"), extras=False)["borsa"], load_books(os.path.join(root, "models"))
+    borsa = books["borsa"]
+
+    def f(book, ref):
+        return formula_text(book, *book.cell(ref))
+
+    assert f(plain, "bu!Q9") == '=IF(R9="","",WORKDAY(TODAY(),1)+R9)' and f(plain, "bu!Q54") is None
+    assert f(plain, "bu!D54") == '=IF(ISNUMBER(E54),TODAY(),"")'
+    assert borsa.left_out == [] and f(borsa, "EK_TATIL!B2") == "=WORKDAY(TODAY(),1,$A$5:$A$204)"
+    assert [f(borsa, "bu!Q%d" % r) for r in (9, 30, 53, 54)] == ['=IF(R%d="","",EK_TATIL!$B$2+R%d)' % (r, r) for r in (9, 30, 53, 54)]
+    assert f(borsa, "bu!D54") == '=IF(ISNUMBER(E54),TODAY()+E54,"")' and f(borsa, "bu!D53") == f(plain, "bu!D53")
+    styles = borsa.model.sheet("bu").styles
+    assert styles.get(parse_a1("Q54")) == styles.get(parse_a1("Q53"))
+    # a file whose T+1 dates are counted otherwise is left as it is (the addition says why it does not fit)
+    model = Model.load(os.path.join(root, "models", "borsa.json.gz"))
+    model.sheet("bu").fml.pop(parse_a1("Q20"))
+    assert [x for x in extras.apply("borsa", model) if x.startswith("Borsa T+1")] == ["Borsa T+1 valörü: bu!Q20 bir formül değil"]
+    assert extras.BORSA_HOL_SHEET not in model.sheet_index
+
+
+def test_the_copy_starts_as_the_try_workbooks_list(service):
+    """Nothing stored for it: the copy is the TRY workbook's list row by row as the service starts, and the T+1 date on
+    it is the TRY OIS spot date; the settings page lists the three books the TRY holidays are written to."""
+    copy = [cell(service, "EK_TATIL!A%d" % r, book="borsa") for r in range(5, 205)]
+    motor = [cell(service, "Motor!A%d" % r) for r in range(361, 524)]
+    assert copy[:163] == motor and copy[163:] == [None] * 37 and sum(1 for x in motor if x) > 100
+    assert cell(service, "EK_TATIL!B2", book="borsa") == cell(service, "OIS_MAIN!B2") == S
+    assert [s["name"] for s in service.sheets("borsa")][-1] == "EK_TATIL"
+    hol = service.holidays()
+    assert hol["books"] == ["tto", "asw", "borsa"] and hol["slots"] == 163
+
+
+def test_a_t1_start_over_a_planted_try_holiday(tmp_path):
+    """04.11.2026 - the recorded day's T+1 - made a TRY holiday on the settings page: the TRY OIS spot date and the BIST
+    swaps' T+1 date both move to the 5th, so does every "Valör" of the T+1 table, and the T+1 quotes start on the OIS spot
+    again (no stub); a T+0 quote reaches it over two days.  A restart keeps it - from the TRY workbook's list, the
+    copy's own stored days aside."""
+    from conftest import make_service
+    svc = make_service(tmp_path)
+    try:
+        def b(ref):
+            return cell(svc, ref, book="borsa")
+
+        u = svc.login("Borsa tatil")["user"]
+        tr = svc.holidays()["tr"]
+        assert b("EK_TATIL!B2") == cell(svc, "OIS_MAIN!B2") == S and b("bu!Q9") == S + b("bu!R9")
+        res = svc.set_holidays(u, tr + [{"date": "04.11.2026", "name": "Deneme tatili"}])
+        assert res["books"] == ["tto", "asw", "borsa"] and S in [b("EK_TATIL!A%d" % r) for r in range(5, 205)]
+        assert cell(svc, "OIS_MAIN!B2") == S + 1 == b("EK_TATIL!B2")
+        assert b("bu!Q9") == S + 1 + b("bu!R9")                                      # the shown value date moved
+        t0, t1 = tables(svc)
+        rows = quoted(t1, T1)
+        assert rows and all(r["mat"] - r["days"] == S + 1 for r in rows)
+        assert all("Spot öncesi" not in r["cells"][0]["tip"] for r in rows)
+        one = next(r for r in quoted(t0, T0) if r["days"] == 1.0)
+        on = cell(svc, "Forward!AD123")
+        assert one["mat"] == S and "(2 gün)" in one["cells"][0]["tip"]               # 03.11 → 05.11: two days of O/N
+        assert one["cells"][0]["v"] == pytest.approx(((1 + on * 2 / 360) / (1 + on / 360) - 1) * 360, rel=1e-12)
+        # (as if the desk had saved the list before the copy existed: nothing stored for the copy)
+        refs = [ref for (_, ref) in svc.store.shared_inputs("borsa") if ref.startswith("EK_TATIL!")]
+        assert refs
+        svc.store.clear_shared_inputs("borsa", refs)
+    finally:
+        svc.stop()
+    again = make_service(tmp_path)
+    try:
+        assert cell(again, "EK_TATIL!B2", book="borsa") == cell(again, "OIS_MAIN!B2") == S + 1
+        assert cell(again, "bu!Q9", book="borsa") == S + 1 + cell(again, "bu!R9", book="borsa")
+    finally:
+        again.stop()
