@@ -80,7 +80,7 @@ export class Drawer {
         this.boxes.set(it.id, box);
         fresh = true;
       } else if (JSON.stringify(box.item) !== JSON.stringify(it)) {
-        box.show(it);
+        if (box.show(it)) fresh = true;
       }
       this.list.appendChild(box.el);
     }

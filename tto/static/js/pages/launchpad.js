@@ -140,7 +140,7 @@ export class LaunchpadPage {
         this.boxes.set(it.id, box);
         fresh = true;
       } else if (JSON.stringify(box.item) !== JSON.stringify(it)) {
-        box.show(it);
+        if (box.show(it)) fresh = true;
       }
       this.grid.appendChild(box.el);                // (in the launchpad's order)
     });
@@ -382,6 +382,7 @@ export class LaunchpadPage {
     if (name) { this.name = name; remember(name); }
     this.sync();
     if (this.ctx.gen) hub.markStale(this.ctx.gen());
+    loadLayout();                           // (changed on another computer meanwhile, maybe: the boxes follow)
   }
 
   findCell(ref) {

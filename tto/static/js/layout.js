@@ -46,6 +46,12 @@ export function clearLayout() {
   layout.data = null;
 }
 
+// a change made just before the page goes (a reload, the window closed): what was not answered yet goes with it
+window.addEventListener('pagehide', () => {
+  if (!pending || !unsaved || !navigator.sendBeacon) return;
+  try { navigator.sendBeacon('/api/layout', new Blob([JSON.stringify(unsaved)], { type: 'application/json' })); } catch (e) { /* gone */ }
+});
+
 if (chan) {
   chan.onmessage = (e) => {
     const m = e.data || {};
@@ -55,14 +61,17 @@ if (chan) {
 
 /** Replace parts of the layout ({launchpads?, drawer?, favs?, landing?}): on screen at once, saved one after the other. */
 let queue = Promise.resolve();
+let unsaved = null;               // the parts of the saves still on their way: sent once more if the page goes now
 export function saveLayout(parts) {
   layout.data = Object.assign({}, layout.data || EMPTY(), JSON.parse(JSON.stringify(parts)));
   emit();
   const body = JSON.parse(JSON.stringify(parts));
+  unsaved = Object.assign({}, unsaved || {}, body);
   pending += 1;
   const job = queue.then(() => api.post('/api/layout', body)).then((res) => {
     pending -= 1;
     if (!pending) {
+      unsaved = null;
       layout.data = res;
       emit();
     }

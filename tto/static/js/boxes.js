@@ -180,7 +180,8 @@ export class PanelBox {
     hub.add(this);
   }
 
-  /** The item as the layout has it now (width, height, name, part of the table, collapsed). */
+  /** The item as the layout has it now (width, height, name, part of the table, collapsed); true when its table has to
+   *  be asked for again (another table, another part of it). */
   show(item) {
     const before = this.item;
     this.item = item;
@@ -195,12 +196,14 @@ export class PanelBox {
     this.el.classList.toggle('collapsed', !!item.collapsed);
     this.colBtn.textContent = item.collapsed ? '▸' : '▾';
     const part = (x) => JSON.stringify([x.view, x.panel, x.rows || [], x.cols || [], !!x.all]);
-    if (before !== item && part(before) !== part(item)) {
+    const again = before !== item && part(before) !== part(item);
+    if (again) {
       this.gen = 0;                                  // another table, or another part of it: all of it again
       this.as = null;
       this.entry = null;
     }
     this.paintTitle();
+    return again || (before !== item && !!before.collapsed && !item.collapsed);
   }
 
   paintTitle() {
