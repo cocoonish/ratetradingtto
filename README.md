@@ -497,7 +497,8 @@ olur; adil değer yanında hesaplanmaya devam eder.
     `quantviop.read_engine`) - ikisinin ortası, vadenin bitiş tarihine, vadeleri onun iki yanında olan iki kontrat
     arasında tarihle doğrusal. İlk kontratın vadesinden kısa (çoğunlukla ON – 3W) ya da sonuncununkinden uzun vadede
     VİOP tabanı yoktur (dışarı uzatılmaz; satır nedenini söyler).
-* **Şimdiki ve Yayınlanan.** Şimdiki sürekli hesaplanır, ama bir vadenin gösterilen değeri ham bid bir 5 bp adımını
+* **Şimdiki ve Yayınlanan.** Şimdiki sürekli hesaplanır (pencere açıkken 5 sn'de, üst şeritteki etiket için 10–15
+  sn'de bir), ama bir vadenin gösterilen değeri ham bid bir 5 bp adımını
   **2 bp'den fazla** geçmedikçe değişmez (histerezis: gösterilen bid'den 2,5 + 2 bp uzaklaşınca). Taban 3 bp oynayıp
   adımı geçerse değer değişir, 1 bp oynarsa değişmez, adımın iki yanında gidip gelmesi değeri oynatmaz. Bir kişinin
   değişikliği (spread, taban, akış, genişlik) hemen yansır. Yayınlanandan farklı vadeler renklidir (yukarı yeşil,

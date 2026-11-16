@@ -202,19 +202,24 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
   el.appendChild(logBox);
 
   // ---------------------------------------------------------------- talking to the server
-  async function send(path, body, okText) {
-    if (busy) return;
-    busy = true;
-    try {
-      const res = await api.post(path, body);
-      if (okText) toast(okText, 'ok');
-      for (const t of Object.keys(rows)) if (body && body.tenors && (body.tenors === 'all' || body.tenors.includes(t))) dirty.delete(t);
-      render(res);
-      if (ctx.refreshNow) ctx.refreshNow();
-    } catch (err) {
-      errorToast(err);
-      if (err.status === 409) load();
-    } finally { busy = false; }
+  // changes go one after another (two offsets typed in quick succession both arrive); a reading waits for them
+  let queue = Promise.resolve();
+  function send(path, body, okText) {
+    queue = queue.then(async () => {
+      busy = true;
+      try {
+        const res = await api.post(path, body);
+        if (okText) toast(okText, 'ok');
+        // a tenor this change touched shows what the server has now, even where something was being typed
+        for (const t of Object.keys(rows)) if (body && body.tenors && (body.tenors === 'all' || body.tenors.includes(t))) dirty.delete(t);
+        render(res);
+        if (ctx.refreshNow) ctx.refreshNow();
+      } catch (err) {
+        errorToast(err);
+        if (err.status === 409) { busy = false; await load(); }
+      } finally { busy = false; }
+    });
+    return queue;
   }
 
   async function load() {
@@ -471,28 +476,32 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
 
   // ---------------------------------------------------------------- "Kopyala ve yayınla"
   async function publish() {
-    if (!data || busy) return;
+    if (!data || publishBtn.disabled) return;
+    // what is on the screen at the click: copied and published, the same numbers
     const curve = data.rows.map((r) => {
       const x = r.now || r.pub;
       return { tenor: r.tenor, days: r.days, bid: x.bid, ask: x.ask };
     }).filter((r) => typeof r.bid === 'number' && typeof r.ask === 'number');
     if (!curve.length) { toast('Yayınlanacak eğri yok', 'err'); return; }
     const kept = data.rows.filter((r) => !r.now).map((r) => r.tenor);
-    // the clipboard first (the click is still the browser's gesture), then the desk's RET: the same numbers
+    publishBtn.disabled = true;
+    // the clipboard first (the click is still the browser's gesture), then the desk's RET (after a change still on its way)
     const text = retText(curve.map((r) => ({ tenor: r.tenor, days: r.days, bid: num(r.bid * 100, 4, false), ask: num(r.ask * 100, 4, false) })), fmt, trDate());
     await copyText(text, 'Kopyalandı · yayınlanıyor…');
-    busy = true;
-    publishBtn.disabled = true;
-    try {
-      const res = await api.post('/api/ret/fair/publish', { rows: curve.map((r) => ({ tenor: r.tenor, bid: r.bid, ask: r.ask })) });
-      toast('RET yayınlandı ve kopyalandı (' + curve.length + ' vade' + (kept.length ? '; Şimdiki\'si olmayan ' + kept.join(', ') + ' yayınlanan değerinde' : '') + ')', 'ok', 5000);
-      render(res);
-      if (onPublished) onPublished();
-      if (ctx.refreshNow) ctx.refreshNow();
-    } catch (err) {
-      errorToast(err);
-      toast('Dikkat: eğri panoya kopyalandı ama yayınlanamadı', 'err', 7000);
-    } finally { busy = false; publishBtn.disabled = false; }
+    queue = queue.then(async () => {
+      busy = true;
+      try {
+        const res = await api.post('/api/ret/fair/publish', { rows: curve.map((r) => ({ tenor: r.tenor, bid: r.bid, ask: r.ask })) });
+        toast('RET yayınlandı ve kopyalandı (' + curve.length + ' vade' + (kept.length ? '; Şimdiki\'si olmayan ' + kept.join(', ') + ' yayınlanan değerinde' : '') + ')', 'ok', 5000);
+        render(res);
+        if (onPublished) onPublished();
+        if (ctx.refreshNow) ctx.refreshNow();
+      } catch (err) {
+        errorToast(err);
+        toast('Dikkat: eğri panoya kopyalandı ama yayınlanamadı', 'err', 7000);
+      } finally { busy = false; publishBtn.disabled = false; }
+    });
+    return queue;
   }
 
   return {
