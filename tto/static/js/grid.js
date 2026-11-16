@@ -908,6 +908,7 @@ document.addEventListener('keydown', (e) => {
   if (document.querySelector('.modal-back')) return;
   const g = sel.grid;
   if (!g) return;
+  if (e.altKey && e.key.startsWith('Arrow')) return;            // (Alt+← / Alt+→: back / forward, not the selection)
   const mod = e.ctrlKey || e.metaKey;
   switch (e.key) {
     case 'ArrowUp': moveBy(-1, 0, e.shiftKey); e.preventDefault(); return;
@@ -941,16 +942,19 @@ document.addEventListener('mousedown', (e) => {
   clearSelection();
 });
 
-/** The <td> showing a workbook cell ("Forward!D2") if it is on screen (used by tests and deep links). */
-export function findCell(ref, root = document) {
+/** The <td> showing a workbook cell ("Forward!D2") if it is on screen (used by tests and deep links) - under ``root``,
+ *  leaving out what is under ``skip`` (the same range may be on the page and in the side drawer). */
+export function findCell(ref, root = document, skip = null) {
   const k = ref.lastIndexOf('!');
   if (k < 0) return null;
   const sheet = ref.slice(0, k);
   const m = /^([A-Z]+)(\d+)$/.exec(ref.slice(k + 1).toUpperCase());
   if (!m) return null;
+  if (!root) return null;
   for (const table of root.querySelectorAll('table.grid')) {
     const g = table.__grid;
     if (!g || !g.data || g.data.sheet !== sheet || !g.data.c || !g.data.r) continue;
+    if (skip && skip.contains(table)) continue;
     const j = g.data.c.indexOf(m[1]);
     const i = g.data.r.indexOf(Number(m[2]));
     if (i >= 0 && j >= 0 && g.tds[i] && g.tds[i][j]) return g.tds[i][j];

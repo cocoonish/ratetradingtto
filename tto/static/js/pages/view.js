@@ -7,6 +7,7 @@ import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
+import { addButton } from '../layout.js';
 
 const ALL = '*';
 
@@ -63,6 +64,7 @@ export class ViewPage {
     this.filter = '';
     this.book = null;
     this.dead = false;
+    this.keepAlive = true;               // kept with the last pages opened: back in view as it was (tab, scroll)
   }
 
   async load() {
@@ -156,6 +158,33 @@ export class ViewPage {
     this.items.clear();
   }
 
+  /**
+   * Back in view (kept with the last pages opened): the tab, the search and the scroll are as they were; "Elle değer"
+   * follows what it is now, and the panels older than the latest generation are dimmed until the refresh that follows.
+   */
+  revive() {
+    const hand = handMode();
+    if (hand !== this.adhoc) this.setHand(hand, true);
+    if (!this.ctx.gen) return;
+    const gen = this.ctx.gen();
+    for (const id of this.placed || []) {
+      const it = this.items.get(id);
+      if (it && (it.gen || 0) < gen) it.el.classList.add('stale');
+    }
+  }
+
+  /** "Elle değer" on or off on this page (``quiet``: no toast - it follows another page's switch). */
+  setHand(on, quiet) {
+    this.adhoc = !!on;
+    setHandMode(this.adhoc);
+    if (this.handBtn) this.handBtn.classList.toggle('on', this.adhoc);
+    this.host.classList.toggle('hand', this.adhoc);
+    for (const it of this.items.values()) if (it.grid) it.grid.opts.adhoc = this.adhoc;
+    if (quiet) return;
+    if (this.ctx.handChanged) this.ctx.handChanged(this.adhoc);
+    toast(this.adhoc ? 'Elle değer açık: her hücreye yazabilirsiniz (yalnızca sizde değişir; silince formül geri gelir)' : 'Elle değer kapalı', '', 3600);
+  }
+
   build(data) {
     for (const it of this.items.values()) if (it.chart) it.chart.destroy();
     this.items.clear();
@@ -181,14 +210,8 @@ export class ViewPage {
     const handBtn = h('button', { class: 'btn sm' + (this.adhoc ? ' on' : ''), type: 'button', id: 'hand-mode',
       title: 'Açıkken bu sayfadaki her hücreye – formül olanlara da – kendi değerinizi yazabilirsiniz (Bloomberg\'den gelmeyen bir fiyat, '
         + 'denemek istediğiniz bir spot…). Yalnızca sizin görünümünüz değişir; hücreyi silince (Delete) formül geri gelir.' }, 'Elle değer');
-    handBtn.addEventListener('click', () => {
-      this.adhoc = !this.adhoc;
-      setHandMode(this.adhoc);
-      handBtn.classList.toggle('on', this.adhoc);
-      this.host.classList.toggle('hand', this.adhoc);
-      for (const it of this.items.values()) if (it.grid) it.grid.opts.adhoc = this.adhoc;
-      toast(this.adhoc ? 'Elle değer açık: her hücreye yazabilirsiniz (yalnızca sizde değişir; silince formül geri gelir)' : 'Elle değer kapalı', '', 3600);
-    });
+    this.handBtn = handBtn;
+    handBtn.addEventListener('click', () => this.setHand(!this.adhoc));
     const resetBtn = h('button', { class: 'btn sm', type: 'button', title: 'Bu çalışma kitabındaki kişisel girdilerimi sil' }, 'Girdilerimi sıfırla');
     resetBtn.addEventListener('click', async () => {
       const ok = await confirmDialog('Girdileri sıfırla',
@@ -504,6 +527,18 @@ export class ViewPage {
       if (p.grow) this.growable(it, p, head, tools);
       if (p.card === 'bond') bondCardLinks(this.ctx, it.grid.el);            // ▸ opens the bond's card
       if (p.flags === 'dibs') bondFlags(this.ctx, it.grid.el);                // ☆ / ★: onto / off the trading list
+    }
+    if (p.type !== 'image' && !p.error && (p.data || p.type === 'chart')) {
+      // the table on a launchpad, in the side drawer, in a window of its own (its key everywhere: page / table)
+      const src = () => ({ view: this.id, panel: p.id, all: this.showAll || undefined, w: p.wide ? 12 : undefined });
+      const acts = { pin: this.ctx.pinToDrawer, pop: this.ctx.popOut };
+      tools.appendChild(addButton(src, acts));
+      if (this.ctx.popOut) {
+        const pop = h('button', { class: 'iconbtn', type: 'button', title: 'Ayrı pencerede aç (menüsüz, canlı – ikinci ekran için)' }, '⧉');
+        pop.dataset.action = 'popout';
+        pop.addEventListener('click', () => this.ctx.popOut(src()));
+        tools.appendChild(pop);
+      }
     }
     const col = h('button', { class: 'iconbtn', type: 'button', title: 'Daralt / aç' }, collapsed ? '▸' : '▾');
     it.toggle = (now) => {
