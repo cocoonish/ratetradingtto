@@ -1789,7 +1789,7 @@ class Service(object):
                 since = None
             kind = x.get("as") if x.get("as") in ("s", "p") else None
             out.append({"key": key, "view": vid, "panel": pid, "rows": rows, "cols": cols, "all": x.get("all") is True,
-                        "since": since, "as": kind})
+                        "since": since, "as": kind, "keys": x.get("keys") is True})
         return out
 
     def _panel(self, p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer) -> Dict[str, Any]:
@@ -1814,6 +1814,8 @@ class Service(object):
             entry["quote"] = p["quote"]             # "Kota mesajı": its rows as a message to send
         if p.get("trade"):
             entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
+        if p.get("ranked"):
+            entry["ranked"] = True                  # a ranking: a launchpad keeps a choice of its rows by number
         try:
             if p.get("note_ref"):
                 # the explanation the workbook keeps in a cell next to the chart / table
@@ -6594,19 +6596,28 @@ def _panel_answer(r: Dict[str, Any], res: Dict[str, Any]) -> Dict[str, Any]:
         if r["panel"] in {x.rsplit(":", 1)[0] for x in res.get("ids") or []}:
             return dict(base, unchanged=True)             # (on the page, not changed since)
         return _missing(r, "bu tablo artık yok: sayfasında bulunamadı", 404)
-    if (r["rows"] or r["cols"]) and entry.get("type") in ("table", "notes") and isinstance(entry.get("data"), dict):
+    table = entry.get("type") in ("table", "notes") and isinstance(entry.get("data"), dict)
+    if (r["rows"] or r["cols"]) and table:
         entry = dict(entry, data=_pick_part(entry["data"], r["rows"], r["cols"]))
     tab = ""
     for sec in res.get("sections") or []:
         if r["panel"] in sec.get("panels", []):
             tab = sec.get("title") or ""
             break
-    return dict(base, entry=entry, book=res.get("book"), page=res.get("title"), tab=tab)
+    out = dict(base, entry=entry, book=res.get("book"), page=res.get("title"), tab=tab)
+    if r.get("keys") and table:
+        out["rk"] = _row_keys(entry["data"], bool(entry.get("ranked")))      # (the picker of a launchpad item's rows)
+    return out
 
 
-def _row_label(row: List[Dict[str, Any]]) -> Optional[str]:
-    """The name of a row: its first text from the left - a tenor, an ISIN, a pair (numbers and dates before it are
-    passed over: the RET table's day count stands left of its tenor).  ``None``: the row has no text."""
+#: a date written as text ("4.11.2026", "2026-11-04", a time after it): Bloomberg's settle dates, a contract's expiry
+_DATE_TEXT = re.compile(r"^(\d{1,2}[./]\d{1,2}[./]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(\s+\d{1,2}:\d{2}(:\d{2})?)?$")
+#: what follows it in a row's name is a detail that changes while the row stays what it is
+_DETAIL = " · "
+
+
+def _row_text(row: List[Dict[str, Any]]) -> Optional[str]:
+    """A row's first text from the left, as it reads (an earlier version kept a launchpad's rows by it)."""
     for c in row:
         if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s":
             continue
@@ -6614,6 +6625,60 @@ def _row_label(row: List[Dict[str, Any]]) -> Optional[str]:
         if t:
             return t
     return None
+
+
+def _row_name(row: List[Dict[str, Any]]) -> Optional[str]:
+    """The name of a row: its first text from the left - a tenor, an ISIN, a pair (numbers and dates before it are
+    passed over: the RET table's day count stands left of its tenor; so is a date written as text, a settle date that
+    moves every day).  ``None``: the row has no such text."""
+    for c in row:
+        if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s":
+            continue
+        t = " ".join(str(c.get("t") or "").split())
+        if t and not _DATE_TEXT.match(t):
+            return t
+    return None
+
+
+def _stem(name: str) -> str:
+    """A name up to its first " · ": the part that stays ("MPC1→2 · 1.2–2.6A" - the months to the meetings count down
+    every day; "MPC1 / MPC2 · REC k+1 / PAY k" - the direction follows the market)."""
+    return name.split(_DETAIL, 1)[0].strip() or name
+
+
+def _row_label(row: List[Dict[str, Any]]) -> Optional[str]:
+    """What a launchpad keeps a row by when its name is the table's only one of its kind: the name's stable part."""
+    name = _row_name(row)
+    return _stem(name) if name else None
+
+
+def _row_keys(data: Dict[str, Any], ranked: bool = False) -> List[Any]:
+    """How a launchpad's choice of rows keeps each row of a table: its name's stable part (:func:`_row_label`) when no
+    other row has it, else its whole name when no other row has that, else its number in the sheet; every row of a
+    ranking by its number (the k-th best is what the row is, whatever fills it).  ``None``: a caption row (always
+    shown)."""
+    src = data.get("rows") or []
+    nums = list(data.get("r") or [])
+    heads = _caption_rows(src, nums)
+    names = [None if i in heads else _row_name(row) for i, row in enumerate(src)]
+    stems = [_stem(n) if n else None for n in names]
+    count_n: Dict[str, int] = {}
+    count_s: Dict[str, int] = {}
+    for n, s in zip(names, stems):
+        if n:
+            count_n[n] = count_n.get(n, 0) + 1
+            count_s[s] = count_s.get(s, 0) + 1
+    out: List[Any] = []
+    for i in range(len(src)):
+        if i in heads:
+            out.append(None)
+        elif not ranked and stems[i] and count_s[stems[i]] == 1:
+            out.append(stems[i])
+        elif not ranked and names[i] and count_n[names[i]] == 1:
+            out.append(names[i])
+        else:
+            out.append(nums[i] if i < len(nums) else None)
+    return out
 
 
 def _header_row(row: List[Dict[str, Any]]) -> bool:
@@ -6651,10 +6716,13 @@ def _caption_rows(rows: List[List[Dict[str, Any]]], nums: List[Any]) -> set:
 def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -> Dict[str, Any]:
     """Part of a table - a launchpad item's own choice - as a new table (the page's kept one is not changed).
 
-    ``rows``: each a row's label (its first text from the left) or its number in the sheet; the caption rows at the
-    top always stay.  ``cols``: column letters.  Both keep the table's own order.  A merged cell keeps the part of it
-    that is still there; when its first cell went, what it shows moves to the first one left (read only then: typing
-    there would write another cell).  Nothing of either left: the whole table, marked ``part_missing``."""
+    ``rows``: each a row's key (:func:`_row_keys`: its name, or its number in the sheet) - or, as an earlier version
+    kept it, its whole first text (a name whose detail after " · " changed since is still found by its stable part);
+    the caption rows at the top always stay.  ``cols``: column letters.  Both keep the table's own order.  A merged cell
+    keeps the part of it that is still there; when its first cell went, what it shows moves to the first one left (read
+    only then: typing there would write another cell).  Nothing of either left: the whole table, marked
+    ``part_missing``.  A part says which rows / columns the whole table has (``ar`` / ``ac``): the browser tells a
+    gap the part made from one of the sheet's own (hidden in Excel, or empty) when a block is pasted or pointed at."""
     src = data.get("rows") or []
     width = len(src[0]) if src else 0
     letters = list(data.get("c") or [])
@@ -6673,10 +6741,18 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
         numbers = {x for x in rows if isinstance(x, int)}
         labels = {" ".join(x.split()) for x in rows if isinstance(x, str)}
         heads = _caption_rows(src, nums)
-        body = [i for i in range(len(src)) if i not in heads and ((i < len(nums) and nums[i] in numbers)
-                                                                  or _row_label(src[i]) in labels)]
+        body = {i for i in range(len(src)) if i not in heads and i < len(nums) and nums[i] in numbers}
+        if labels:
+            keys = _row_keys(data)
+            texts = [_row_text(row) for row in src]
+            for x in labels:
+                hit = [i for i in range(len(src)) if i not in heads and (keys[i] == x or texts[i] == x)]
+                if not hit and _DETAIL in x:
+                    hit = [i for i in range(len(src)) if keys[i] == _stem(x)]
+                    hit = hit if len(hit) == 1 else []
+                body.update(hit)
         if body:
-            keep_r = sorted(heads | set(body))
+            keep_r = sorted(heads | body)
         else:
             missing = True
     new_r = {i: k for k, i in enumerate(keep_r)}
@@ -6708,8 +6784,12 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
     out["rows"] = out_rows
     if nums:
         out["r"] = [nums[i] for i in keep_r if i < len(nums)]
+        if len(keep_r) < len(src):
+            out["ar"] = nums
     if letters:
         out["c"] = [letters[j] for j in keep_c if j < len(letters)]
+        if len(keep_c) < width:
+            out["ac"] = letters
     fz = data.get("fz") or 0
     if fz:
         n = sum(1 for j in keep_c if j < fz)

@@ -151,6 +151,7 @@
    "id": "top",
    "type": "table",
    "title": "En iyi işlemler",
+   "ranked": true,
    "range": "F2:N14"
   },
   {
@@ -218,12 +219,14 @@
    "id": "spr",
    "type": "table",
    "title": "En iyi 10 spread",
+   "ranked": true,
    "range": "F18:N29"
   },
   {
    "id": "fly",
    "type": "table",
    "title": "En iyi 10 fly",
+   "ranked": true,
    "range": "F32:N43"
   },
   {

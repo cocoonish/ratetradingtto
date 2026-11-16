@@ -73,41 +73,6 @@ export const hub = {
 };
 
 // ---------------------------------------------------------------------- the parts of a table (the picker)
-/** The name of a row: its first text from the left (as the server reads it - service._row_label). */
-export function rowLabel(row) {
-  for (const c of row || []) {
-    if (!c || c.sk || c.k !== 's') continue;
-    const t = String(c.t || '').split(/\s+/).filter(Boolean).join(' ');
-    if (t) return t;
-  }
-  return null;
-}
-
-function headerRow(row) {
-  let n = 0, strong = 0;
-  for (const c of row) {
-    if (!c || c.sk || !c.t) continue;
-    if (c.k !== 's' || c.i) return false;
-    if (c.c || (c.f && c.f !== 'hd' && c.f !== 'sub')) return false;
-    n += 1;
-    if (c.b || c.f === 'hd') strong += 1;
-  }
-  return n >= 2 && strong * 2 >= n;
-}
-
-/** The rows at the top that name the columns (and a lone title above them): a part of the table keeps them. */
-export function captionRows(rows, nums) {
-  const out = new Set();
-  (nums || []).forEach((r, i) => { if (r === 0) out.add(i); });
-  for (let i = 0; i < rows.length; i++) {
-    if (out.has(i)) continue;
-    if (rows.length > 1 && headerRow(rows[i]) && out.size < 3) out.add(i);
-    else if (i === 0 && rows[i].filter((c) => c && !c.sk && c.t).length <= 1) out.add(i);
-    else break;
-  }
-  return out;
-}
-
 /** The caption over column j (the caption rows' texts, a merged one included). */
 function columnCaption(data, heads, j) {
   const parts = [];
@@ -388,39 +353,41 @@ export class PanelBox {
     this.opts.edit({ title: v });
   }
 
-  /** Which rows and columns of the table this box shows: the whole table to pick from, ticked as it is now. */
+  /** Which rows and columns of the table this box shows: the whole table to pick from, ticked as it is now.  The server
+   *  says how each row is kept (service._row_keys): its name - up to " · ", what follows changes (the months to a
+   *  meeting) -, or its number (a name the table repeats, a row named by a date alone, a ranking's rows); the caption
+   *  rows have none (always shown). */
   async openPicker() {
     const it = this.item;
-    let full;
+    let full, keys;
     try {
-      const res = await api.post('/api/panels', { items: [{ key: 'full', view: it.view, panel: it.panel, all: !!it.all }] });
+      const res = await api.post('/api/panels', { items: [{ key: 'full', view: it.view, panel: it.panel, all: !!it.all, keys: true }] });
       const a = (res.panels || {}).full || {};
       if (a.missing) { toast(a.error || 'Tablo yok', 'err'); return; }
       full = a.entry && a.entry.data;
+      keys = a.rk || [];
     } catch (err) { toast(err.message, 'err'); return; }
     if (!full || !full.rows || !full.rows.length) { toast('Bu kutuda satır / sütun seçilecek bir tablo yok', 'err'); return; }
-    const heads = captionRows(full.rows, full.r);
-    const labels = full.rows.map(rowLabel);
-    const count = new Map();
-    labels.forEach((l) => { if (l) count.set(l, (count.get(l) || 0) + 1); });
+    const heads = full.rows.map((_, i) => i).filter((i) => keys[i] === null);
     const width = full.rows[0].length;
     const letters = full.c && full.c.length === width ? full.c : null;
     const rowsNow = it.rows || [];
     const colsNow = it.cols || [];
+    // the rows the box shows now: ticked (a choice an earlier version kept by another name too)
+    const now = this.entry && this.entry.data;
+    const shown = new Set(rowsNow.length && now && !now.part_missing && now.r ? now.r : []);
     const m = modal({ title: 'Satırlar ve sütunlar · ' + (it.title || (this.entry && this.entry.title) || it.panel), width: 760 });
     m.box.classList.add('lp-picker');
     const rowBoxes = [];
     const colBoxes = [];
     const rowList = h('div', { class: 'lp-pick-list' });
     full.rows.forEach((row, i) => {
-      if (heads.has(i)) return;
+      const key = keys[i];
+      if (key === null || key === undefined) return;                // (a caption row: always there)
       const num = full.r ? full.r[i] : null;
-      const label = labels[i];
       const preview = row.filter((c) => c && !c.sk && c.t).map((c) => String(c.t).trim()).slice(0, 5).join(' · ');
       if (!preview) return;                                         // (an empty spacer row)
-      const key = label && count.get(label) === 1 ? label : (num || null);
-      if (key === null) return;
-      const on = !rowsNow.length || rowsNow.includes(key) || (num && rowsNow.includes(num)) || (label && rowsNow.includes(label));
+      const on = !rowsNow.length || rowsNow.includes(key) || (!!num && (rowsNow.includes(num) || shown.has(num)));
       const box = h('input', { type: 'checkbox' });
       box.checked = !!on;
       box.dataset.key = JSON.stringify(key);
@@ -431,7 +398,7 @@ export class PanelBox {
     const colList = h('div', { class: 'lp-pick-list' });
     if (letters) {
       for (let j = 0; j < width; j++) {
-        const cap = columnCaption(full, [...heads], j);
+        const cap = columnCaption(full, heads, j);
         const box = h('input', { type: 'checkbox' });
         box.checked = !colsNow.length || colsNow.includes(letters[j]);
         box.dataset.key = letters[j];
@@ -446,7 +413,8 @@ export class PanelBox {
         h('button', { class: 'btn sm', type: 'button', onclick: all(boxes, false) }, 'Hiçbiri')),
       note ? h('div', { class: 'muted', style: { fontSize: '11.5px', margin: '0 0 6px' } }, note) : null, list);
     m.body.appendChild(h('div', { class: 'lp-pick-cols' },
-      side('Satırlar', rowList, rowBoxes, 'Başlık satırları her zaman görünür. Satır adıyla (ilk metni) – ad tekrar ediyorsa numarasıyla – hatırlanır.'),
+      side('Satırlar', rowList, rowBoxes, 'Başlık satırları her zaman görünür. Satır adıyla (ilk metni; " · " sonrası her gün değişen ayrıntıdır, '
+        + 'sayılmaz) hatırlanır – ad tekrar ediyorsa, satırın adı yalnız bir tarihse ya da tablo bir sıralamaysa numarasıyla.'),
       letters ? side('Sütunlar', colList, colBoxes, 'Sütun harfiyle hatırlanır; sıralamak için tablonun "Sütunlar" menüsü.') : null));
     const save = () => {
       const rowsOn = rowBoxes.filter((b) => b.checked).map((b) => JSON.parse(b.dataset.key));

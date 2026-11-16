@@ -9,7 +9,8 @@
 * ``panels``  ``{"type": "table", "range": "B29:J39", "title": "...", "hidden": false}`` |
               (``"sheet": "VIOP", "borrowed": true``: a few cells of another page's sheet, shown here as well) |
   ``{"type": "chart", "chart": <index of the chart on the sheet>}`` | ``{"type": "notes", "range": ...}`` |
-  ``{"type": "custom", "component": "..."}``
+  ``{"type": "custom", "component": "..."}``; ``"ranked": true`` a ranking (the best k trades, the cheapest bonds): a
+  launchpad keeps a choice of its rows by their number - the row is a place, whatever fills it today
 * ``sections`` (optional)  the page in tabs: ``[{"id": "calc", "title": "Hesaplayıcılar", "note": "...",
   "panels": ["B7", "B8"]}, ...]`` - the panels of a tab in the order they are listed (a panel may be listed in
   more than one tab).  Every panel that is shown belongs to a tab or to ``pinned``; the helper tables that

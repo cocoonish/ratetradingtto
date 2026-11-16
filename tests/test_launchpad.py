@@ -2,6 +2,7 @@
 (``tto/layout.py``) - and the request that brings the tables of many pages at once (``POST /api/panels``).
 (The pages themselves, the pop-out window and the drawer on screen are the browser test's.)"""
 import copy
+import datetime as dt
 import json
 
 import pytest
@@ -9,8 +10,11 @@ from starlette.testclient import TestClient
 
 from conftest import ANON, auth, make_service
 from tto import layout as lay
+from tto.config import Settings
 from tto.server import create_app
-from tto.service import ServiceError, _pick_part, _row_label
+from tto.service import EngineThread, Service, ServiceError, _pick_part, _row_keys, _row_label, _row_text
+from tto.xl.engine import Clock
+from tto.xl.values import date_to_serial
 
 
 def login(svc, name, admin=False):
@@ -95,6 +99,8 @@ def test_a_part_of_a_table_is_cut_out_on_the_server(service):
     part = got["part"]["entry"]["data"]
     assert part["c"] == ["V", "W", "X"]                                       # the table's order, not the list's
     assert part["r"] == [full["r"][0], one_m, three_m, last]                  # the caption row, then the rows picked
+    assert part["ar"] == full["r"] and part["ac"] == full["c"]                # (the whole table's: a gap the part made)
+    assert "ar" not in got["whole"]["entry"]["data"] and "ac" not in got["whole"]["entry"]["data"]
     assert [len(row) for row in part["rows"]] == [3, 3, 3, 3] and texts(part)[1][0] == "1M"
     j = full["c"].index("W")
     assert part["rows"][1][1] == full["rows"][full["r"].index(one_m)][j] and part["rows"][1][1].get("i") == "s"
@@ -120,6 +126,90 @@ def test_a_merged_cell_keeps_what_is_left_of_it():
     assert rows["r"] == [1, 3] and rows["rows"][0][0]["cs"] == 3                             # the lone title row stays
     assert rows["rows"][1] == [{"t": "y", "k": "s"}, {"t": "1", "k": "n", "v": 1}, {"t": "3", "k": "n"}]   # moved: read only
     assert data == before
+
+
+def test_a_row_is_kept_by_what_stays_of_its_name():
+    """A launchpad keeps the rows picked by their name when it is the table's only one - the name up to " · " (what
+    follows is a detail that moves: the months to a meeting, a direction), a date written as text passed over (a settle
+    date moves every day; a row named by nothing else is kept by its number) -, else by the whole name, else by number;
+    a ranking's rows by number.  A box an earlier version saved by a row's whole first text still finds it: as it reads,
+    or - its detail changed since - by the part before " · " when that names one row."""
+    rows = [[{"t": "Dönem", "k": "s", "b": 1, "f": "hd"}, {"t": "Değer", "k": "s", "b": 1, "f": "hd"}],
+            [{"t": "MPC1→2 · 1.2–2.6A", "k": "s"}, {"t": "1", "k": "n", "v": 1}],
+            [{"t": "MPC2→3 · 2.6–4.4A", "k": "s"}, {"t": "2", "k": "n", "v": 2}],
+            [{"t": "OIS ASW · en ucuz 3", "k": "s"}, {"t": "", "k": ""}],
+            [{"t": "OIS ASW · en pahalı 3", "k": "s"}, {"t": "", "k": ""}],
+            [{"t": "4.11.2026", "k": "s"}, {"t": "1W", "k": "s"}],
+            [{"t": "30.11.2026", "k": "s"}, {"t": "5", "k": "n", "v": 5}],
+            [{"t": "Spot", "k": "s"}, {"t": "", "k": ""}],
+            [{"t": "Spot", "k": "s"}, {"t": "", "k": ""}]]
+    data = {"sheet": "S", "r": [1, 2, 3, 4, 5, 6, 7, 8, 9], "c": ["A", "B"], "rows": rows}
+    assert _row_keys(data) == [None, "MPC1→2", "MPC2→3", "OIS ASW · en ucuz 3", "OIS ASW · en pahalı 3", "1W", 7, 8, 9]
+    assert _row_keys(data, ranked=True) == [None, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert [_row_label(r) for r in rows[1:]] == ["MPC1→2", "MPC2→3", "OIS ASW", "OIS ASW", "1W", None, "Spot", "Spot"]
+    part = _pick_part(data, ["MPC1→2", "MPC2→3 · 9.9–9.9A", "30.11.2026", "OIS ASW · en ucuz 3"], [])
+    assert part["r"] == [1, 2, 3, 4, 7] and part["ar"] == data["r"] and "ac" not in part and "part_missing" not in part
+    assert _pick_part(data, ["OIS ASW · en orta 3"], [])["part_missing"]          # (two rows have "OIS ASW": neither)
+
+
+def test_the_keys_of_the_rows_come_when_asked(service):
+    """The picker asks the table with its rows' keys (``keys``): MPC OIS by "MPC1→2" …, the ICAP curve by its tenors
+    (its settle dates, Bloomberg's text, passed over), EN İYİ 15 SPREAD - a ranking - by number; the caption rows none.
+    A box's own request does not carry them."""
+    u = login(service, "Lp Anahtar")
+    got = service.panels(u, [{"view": "ois", "panel": "B13", "key": "mpc", "keys": True},
+                             {"view": "forward", "panel": "B3", "key": "icap", "keys": True},
+                             {"view": "ois", "panel": "B9", "key": "best", "keys": True},
+                             {"view": "ois", "panel": "B13", "key": "box"}])["panels"]
+    mpc = got["mpc"]["entry"]["data"]
+    body = [k for k in got["mpc"]["rk"] if k is not None]
+    assert body == ["MPC%d→%d" % (k, k + 1) for k in range(1, 17)], body
+    assert all(_row_text(row).startswith(k + " · ") for k, row in zip(got["mpc"]["rk"], mpc["rows"]) if k), mpc["rows"][1]
+    icap = got["icap"]
+    tenors = [k for k in icap["rk"] if isinstance(k, str)]
+    assert {"O/N", "T/N", "1W", "1M", "12M", "2Y", "5Y"} <= set(tenors) and not any(t[0].isdigit() and "." in t for t in tenors), tenors
+    best = got["best"]
+    assert got["best"]["entry"]["ranked"] is True
+    assert [k for k in best["rk"] if k is not None] == [r for r, k in zip(best["entry"]["data"]["r"], best["rk"]) if k is not None]
+    assert all(isinstance(k, int) for k in best["rk"] if k is not None) and len([k for k in best["rk"] if k]) == 15
+    assert "rk" not in got["box"]
+
+
+def on_day(svc, day):
+    """The dashboard on ``day`` (at noon): TODAY() and everything that follows it computed again (as test_holidays.py
+    moves the clock)."""
+    svc.books["tto"].engine.clock.fixed = float(date_to_serial(day)) + 0.5
+    svc.et.call_at(EngineThread.WRITE, lambda: [b.engine.clock_tick() for b in svc.books.values()])
+    svc.bump()
+
+
+def test_a_pick_on_mpc_ois_survives_a_day_change(tmp_path):
+    """MPC OIS names its rows "MPC1→2 · 1.2–2.6A" - the months to the meetings, fewer every day.  Kept by that whole
+    text, a box's rows went within days (one gone, or the whole table back, marked); kept by "MPC1→2" they stay.  A
+    box an earlier version saved by the whole text finds its rows again by the part before " · "."""
+    svc = Service(Settings(data_dir=str(tmp_path), mode="replay", history=False),
+                  clock=Clock(float(date_to_serial(dt.date(2026, 11, 3))) + 0.5))
+    try:
+        u = login(svc, "Lp Gün Dönümü")
+        first = svc.panels(u, [{"view": "ois", "panel": "B13", "key": "k", "keys": True}])["panels"]["k"]
+        rk, rows0 = first["rk"], first["entry"]["data"]["rows"]
+        nums = first["entry"]["data"]["r"]
+        heads = [i for i, k in enumerate(rk) if k is None]
+        one, three = rk.index("MPC1→2"), rk.index("MPC3→4")
+        new_pick = [rk[one], rk[three]]
+        old_pick = [_row_text(rows0[one]), _row_text(rows0[three])]          # as an earlier version kept them
+        assert old_pick[0].startswith("MPC1→2 · ") and old_pick[1].startswith("MPC3→4 · ")
+        want = [nums[i] for i in heads] + [nums[one], nums[three]]
+        on_day(svc, dt.date(2026, 11, 13))                                   # ten days on
+        again = svc.panels(u, [{"view": "ois", "panel": "B13", "key": "new", "rows": new_pick},
+                               {"view": "ois", "panel": "B13", "key": "old", "rows": old_pick}])["panels"]
+        for key in ("new", "old"):
+            part = again[key]["entry"]["data"]
+            assert not part.get("part_missing") and part["r"] == want, (key, part["r"], want)
+            now = _row_text(part["rows"][len(heads)])
+            assert now.startswith("MPC1→2 · ") and now != old_pick[0], (now, old_pick[0])      # (the label moved)
+    finally:
+        svc.stop()
 
 
 def test_a_table_that_is_not_there_or_not_yours_says_so_and_the_others_still_come(service):
