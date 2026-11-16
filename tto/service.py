@@ -24,6 +24,7 @@ from urllib.parse import quote as _quote
 from . import auth
 from . import blotter as bl
 from . import bonds as bd
+from . import borsaspread as bsp
 from . import brokerchat as bc
 from . import extras as ex
 from . import layout as lay
@@ -1852,6 +1853,8 @@ class Service(object):
                     self._dibs_live_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "universe":
                     self._universe_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "borsa_spread":
+                    self._borsa_spread_columns(book, calc, user, entry["data"], loc, p["range"])
             elif p["type"] == "chart":
                 spec = p.get("spec")
                 if spec is None:
@@ -4454,6 +4457,15 @@ class Service(object):
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
         data["added"] = int(data.get("added") or 0) + 2
+
+    # ================================================================== BIST swaps against the TRY workbook's curves
+    def _borsa_spread_columns(self, book, calc, user: Optional[str], data: Dict[str, Any], loc, rng: str) -> None:
+        """The Borsa Swap tables' spreads to the OIS and the offshore mid curve (``tto.borsaspread``): the curves are
+        the TRY workbook's, as the same user's calculation of it has them - their own inputs there apply, as on its
+        pages."""
+        tto = self.books.get("tto")
+        if tto is not None:
+            bsp.columns(book, calc, rng, data, loc, bsp.read_curves(tto, self._calc(user, tto)))
 
     def _board_bonds(self, user: Optional[str]) -> Dict[str, Dict[str, Any]]:
         """Today's Broker Chat board bond by bond: ISIN -> its row (resets applied), with the yields its prices

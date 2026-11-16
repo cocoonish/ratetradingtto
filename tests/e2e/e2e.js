@@ -1525,6 +1525,30 @@ async function shot(page, name) {
     }));
     check('BIST swap tables hold quotes only: no error cells, and the rule is written under the table',
       bist.every((b) => b.errors.length === 0 && b.n > 60) && /miktarı \(size\) sıfırdan büyük/.test(bist[0].note), bist.map((b) => [b.errors.slice(0, 3), b.n]));
+    // each quote against the TRY workbook's OIS and offshore mid curves: six columns of the dashboard's own on the right
+    const spreadHeads = ['OIS mid zero %', 'Offshore mid zero %', 'BID − OIS mid (bp)', 'ASK − OIS mid (bp)', 'BID − Off mid (bp)', 'ASK − Off mid (bp)'];
+    const spread = await page.evaluate((want) => ['t0', 't1'].map((id) => {
+      const rows = [...document.querySelectorAll('.panel[data-panel="' + id + '"] table.grid tr')].map((tr) => [...tr.querySelectorAll('td')]);
+      const head = rows.find((r) => r.some((td) => td.textContent.trim() === want[0])) || [];
+      const texts = head.map((td) => td.textContent.trim());
+      const at = ['BID %', 'ASK %'].concat(want).map((t) => texts.indexOf(t));
+      const body = rows.filter((r) => r !== head && r.length === head.length && r.some((td) => td.textContent.trim()));
+      return { last: texts.slice(-6), rows: body.map((r) => at.map((j) => (j >= 0 ? r[j].textContent.trim() : null))),
+        tip: body.length && at[2] >= 0 ? body[0][at[2]].title : '' };
+    }), spreadHeads);
+    check('BIST swap tables end in the spreads to the OIS and the offshore mid (both tables)',
+      spread.every((s) => JSON.stringify(s.last) === JSON.stringify(spreadHeads) && s.rows.length >= 5), spread.map((s) => [s.last, s.rows.length]));
+    const bp = (t) => (t === '' || t === null ? NaN : trNumber(t));
+    check('each quote\'s spread is its BID % / ASK % less the mid zero rate, in bp (a one-sided quote: its own side only)',
+      spread.every((s) => s.rows.every(([bid, ask, ois, off, bidOis, askOis, bidOff, askOff]) => {
+        const zo = bp(ois), zf = bp(off);
+        const side = (rate, a, b) => (rate === '' ? a === '' && b === ''
+          : Math.abs(bp(a) - (bp(rate) - zo) * 100) <= 1.51 && Math.abs(bp(b) - (bp(rate) - zf) * 100) <= 1.51);
+        return zo > 10 && zo < 80 && zf > 10 && zf < 80 && side(bid, bidOis, bidOff) && side(ask, askOis, askOff);
+      })) && spread.some((s) => s.rows.some((r) => r[0] === '' || r[1] === '')), spread.map((s) => s.rows.slice(0, 3)));
+    check('a T+0 quote says how it reaches the OIS spot (TLREF), and the note says what the spreads are',
+      /Spot öncesi/.test(spread[0].tip) && /TLREF/.test(spread[0].tip) && !/Spot öncesi/.test(spread[1].tip)
+      && /OIS mid zero/.test(bist[0].note) && /TLREF/.test(bist[0].note), [spread[0].tip, spread[1].tip, bist[0].note.slice(0, 80)]);
 
     await open(page, 'asw');
     const asw = await page.evaluate(() => [...document.querySelectorAll('.panel.chart')].map((p) => {
