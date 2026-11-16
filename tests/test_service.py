@@ -651,9 +651,14 @@ def test_the_loops_say_what_they_survive_and_the_status_tells_it(tmp_path, log_t
         # the watch loop's faults as well
         svc.watch.tick = lambda: 1 / 0
         svc._watch_kick.set()
+        deadline = _time.time() + 15                          # its own time: on a loaded machine the first part may use it all
         while _time.time() < deadline and svc.ops.last_error["where"] != "izleme / alarm döngüsü":
             _time.sleep(0.05)
         assert svc.ops.last_error["text"].startswith("ZeroDivisionError")
+        # the status has the fault as soon as it is counted; its line reaches the log a moment later (the traceback is
+        # written outside the lock) - on a loaded machine after this point: wait for it
+        while _time.time() < deadline + 15 and "izleme / alarm döngüsü: ZeroDivisionError" not in open(path, encoding="utf-8").read():
+            _time.sleep(0.05)
     finally:
         svc.stop()
         svc.store.close()
