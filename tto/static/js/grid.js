@@ -15,9 +15,23 @@ const hooks = {
 };
 
 const sel = { grid: null, r0: 0, c0: 0, r1: 0, c1: 0, cells: [], cur: null, dragging: false };
-// {grid, i, j, td, input, point: the reference just put in ({start, end}), pts: its cells marked, drag, switching: a tab
-//  of the page being opened while the formula is typed}
+// {grid, i, j, td, input, point: the reference just put in ({start, end}), pts: its cells marked, ptAt: where they are
+//  ({g, box}: marked again when that table is drawn anew), drag, switching: a tab of the page being opened while the
+//  formula is typed}
 let editing = null;
+
+/** A column of a sheet, by its letters (a column the dashboard adds to a table has a name: "Broker bid", "Kart"). */
+const isLetter = (c) => typeof c === 'string' && /^[A-Z]{1,3}$/.test(c);
+
+/**
+ * The rows and columns of a table as the sheet has them - its own order, all of them: the table as it came, before this
+ * user's order of the columns (and, for a launchpad's part of a table, the whole table's: ``ar`` / ``ac``).  A gap in
+ * them is the sheet's own: rows / columns hidden in Excel, or empty and left out.
+ */
+function ownLayout(grid) {
+  const src = grid.source || grid.data || {};
+  return { r: src.ar || src.r || [], c: src.ac || src.c || [] };
+}
 
 export function configureGrid(opts) {
   Object.assign(hooks, opts);
@@ -262,9 +276,12 @@ export class Grid {
     }
   }
 
+  /** The workbook reference of a cell ("Forward!D2") - null for one that is no cell of a sheet: a caption row of the
+   *  dashboard's own (row 0), a column it adds (named, not lettered: "Broker bid"), a table it makes itself (no sheet:
+   *  the DİBS tape). */
   ref(i, j) {
     const d = this.data;
-    if (!d || !d.r || !d.c || !d.r[i] || d.c[j] === undefined) return null;      // (row 0: a caption row of the dashboard's own)
+    if (!d || !d.sheet || !d.r || !d.c || !d.r[i] || !isLetter(d.c[j])) return null;
     return d.sheet + '!' + d.c[j] + d.r[i];
   }
 
@@ -400,6 +417,11 @@ export class Grid {
       this._showColumns();
     } else {
       this._freeze();
+    }
+    // the cells of the reference just put into a formula being typed are in this table: marked again on its new cells
+    if (editing && editing.ptAt && editing.ptAt.g === this) {
+      editing.pts = [];
+      paintPoint(editing);
     }
   }
 
@@ -790,15 +812,29 @@ document.addEventListener('paste', (e) => {
 });
 
 /**
- * True when the block, laid over the screen from (top, the columns ``vis``), covers rows and columns that follow
- * each other in the sheet as well - then the screen and the sheet agree on where every pasted cell goes.
+ * How a block pasted at (top, the columns ``vis``) is laid over the table, down its rows and across its columns each:
+ * 'screen' - onto the rows / columns on screen, one after the other - or 'sheet' - Excel's own layout, counted in rows /
+ * columns of the sheet from the top-left.  Excel's only where the screen is the sheet's own layout and the block runs
+ * over a gap of it (hidden in Excel, or empty and left out: a block copied in Excel carries those); the screen's where it
+ * is laid out otherwise - a user's order of the columns, a launchpad's part of the table: the block lands where it looks
+ * like it lands - and for a block copied from the screen.
  */
-function sheetContiguous(grid, top, vis, rows, cols) {
+function pasteLayout(grid, top, vis, rows, cols, fromScreen) {
   const d = grid.data;
-  if (top + rows > d.r.length || cols > vis.length) return false;
-  for (let i = 1; i < rows; i++) if (d.r[top + i] !== d.r[top + i - 1] + 1) return false;
-  for (let j = 1; j < cols; j++) if (colIndex(d.c[vis[j]]) !== colIndex(d.c[vis[j - 1]]) + 1) return false;
-  return true;
+  const own = ownLayout(grid);
+  const same = (a, b) => a.length === b.length && a.every((x, k) => x === b[k]);
+  let down = 'screen', across = 'screen';
+  if (!fromScreen && same(d.r, own.r)) {
+    for (let i = 1; i < rows && down === 'screen'; i++) {
+      if (top + i >= d.r.length || d.r[top + i] !== d.r[top + i - 1] + 1) down = 'sheet';
+    }
+  }
+  if (!fromScreen && same(d.c, own.c)) {
+    for (let j = 1; j < cols && across === 'screen'; j++) {
+      if (j >= vis.length || colIndex(d.c[vis[j]]) !== colIndex(d.c[vis[j - 1]]) + 1) across = 'sheet';
+    }
+  }
+  return { down, across };
 }
 
 export async function pasteText(grid, s, text) {
@@ -816,23 +852,27 @@ export async function pasteText(grid, s, text) {
     let skipped = 0;
     let unseen = 0;
     let lenient = false;
+    const lay = pasteLayout(grid, s.top, vis, matrix.length, width, clean === lastCopied);
     if (single && (s.bottom > s.top || s.right > s.left)) {
       // one value onto a selection: fill every input cell of the selection (as Excel does)
       items = inputRefs(grid, s).map((x) => ({ ref: x.ref, value: clean }));
-    } else if (clean !== lastCopied && !sheetContiguous(grid, s.top, vis, matrix.length, width)) {
+    } else if (lay.down === 'sheet' || lay.across === 'sheet') {
       // a block from Excel that runs over rows / columns the table does not show (hidden in Excel, or empty
-      // and left out): it keeps Excel's layout, counted in sheet cells from the top-left of the selection.
-      // Nothing outside the table's own range is written; the server skips whatever is not an input; a column
-      // this user hid is not written to either.
+      // and left out): that way it keeps Excel's layout, counted in sheet cells from the top-left of the selection
+      // (the other way, if the screen's, onto the rows / columns on screen).  Nothing outside the table's own range is
+      // written; the server skips whatever is not an input; a column this user hid is not written to either.
       const d = grid.data;
+      const own = ownLayout(grid);
       const row0 = d.r[s.top], col0 = colIndex(d.c[vis[0]]);
-      const rowMax = d.r[d.r.length - 1], colMax = colIndex(d.c[d.c.length - 1]);
+      const rowMax = Math.max(...own.r), colMax = Math.max(...own.c.filter(isLetter).map(colIndex));
       const hiddenCols = new Set(d.c.filter((c, j) => grid.colHidden(j)));
       for (let i = 0; i < matrix.length; i++) {
         for (let j = 0; j < matrix[i].length; j++) {
-          if (row0 + i > rowMax || col0 + j > colMax) { skipped += 1; continue; }
-          if (hiddenCols.has(colName(col0 + j))) { unseen += 1; continue; }
-          items.push({ ref: d.sheet + '!' + colName(col0 + j) + (row0 + i), value: matrix[i][j] });
+          const row = lay.down === 'sheet' ? row0 + i : d.r[s.top + i];
+          const col = lay.across === 'sheet' ? (col0 + j <= colMax ? colName(col0 + j) : null) : d.c[vis[j]];
+          if (!row || row > rowMax || !isLetter(col)) { skipped += 1; continue; }
+          if (hiddenCols.has(col)) { unseen += 1; continue; }
+          items.push({ ref: d.sheet + '!' + col + row, value: matrix[i][j] });
         }
       }
       lenient = true;
@@ -919,7 +959,7 @@ export function startEdit(grid, i, j, typed) {
   input.addEventListener('input', () => {
     if (!editing || editing.input !== input) return;
     editing.point = null;                               // (typed on: the next click puts a reference in, not in place)
-    markPoint(editing, null);
+    markPoint(editing);
     input.classList.toggle('fxe', isFormula(input.value));
   });
   input.addEventListener('blur', () => {
@@ -935,7 +975,7 @@ function finishEdit() {
   editing = null;
   if (!ed) return null;
   ed.td.classList.remove('editing');
-  markPoint(ed, null);
+  markPoint(ed);
   const cell = ed.grid.cell(ed.i, ed.j);
   if (ed.input.parentNode) ed.input.parentNode.removeChild(ed.input);
   dockBar(null);
@@ -1002,45 +1042,73 @@ async function applyValue(grid, i, j, value, how = 'away') {
 }
 
 // ---------------------------------------------------------------------- pointing while a formula is typed
-/** The reference of a cell (a block: ``i2``, ``j2``) of ``g`` as the formula being typed names it: the cell's own sheet
- *  bare (C60), another sheet with its name, another workbook in brackets ([sofr]SOFR_FOMC!B9). */
-function refFor(ed, g, i1, j1, i2, j2) {
-  const a = g.ref(i1, j1), b = g.ref(i2, j2);
-  if (!a || !b) return null;
-  const k = a.lastIndexOf('!');
-  const sheet = a.slice(0, k);
-  let addr = a.slice(k + 1);
-  if (a !== b) {
-    const pa = /^([A-Z]+)(\d+)$/.exec(addr), pb = /^([A-Z]+)(\d+)$/.exec(b.slice(b.lastIndexOf('!') + 1));
-    if (pa && pb) {
-      const c1 = Math.min(colIndex(pa[1]), colIndex(pb[1])), c2 = Math.max(colIndex(pa[1]), colIndex(pb[1]));
-      const r1 = Math.min(Number(pa[2]), Number(pb[2])), r2 = Math.max(Number(pa[2]), Number(pb[2]));
-      addr = colName(c1) + r1 + ':' + colName(c2) + r2;
-    }
+/**
+ * The block of ``g`` (rows i1..i2, columns j1..j2 on screen) as a rectangle of its sheet: {r1, r2, c1, c2} (row numbers,
+ * column numbers) - null when a cell of it is no cell of a sheet.  ``gap``: the rectangle takes in a row or a column of
+ * the table that the block leaves out (this user's order put it elsewhere, a launchpad's part of the table left it out):
+ * its reference would name cells neither shown in the block nor marked.  A row / column the sheet itself leaves out of
+ * the table (hidden in Excel, or empty) is in the rectangle, as in Excel.
+ */
+function sheetBox(g, i1, j1, i2, j2) {
+  const d = g.data;
+  if (!d || !d.sheet || !d.r || !d.c) return null;
+  const rows = new Set(), cols = new Set();
+  for (let i = Math.min(i1, i2); i <= Math.max(i1, i2); i++) {
+    if (!d.r[i]) return null;
+    rows.add(d.r[i]);
   }
-  const own = ed.grid.data && ed.grid.data.sheet;
-  if (g.book === ed.grid.book && sheet === own) return addr;
-  return workbookRef(g.book, sheet + '!' + addr);
+  for (let j = Math.min(j1, j2); j <= Math.max(j1, j2); j++) {
+    if (!isLetter(d.c[j])) return null;
+    cols.add(colIndex(d.c[j]));
+  }
+  const box = { r1: Math.min(...rows), r2: Math.max(...rows), c1: Math.min(...cols), c2: Math.max(...cols) };
+  const own = ownLayout(g);
+  box.gap = own.r.some((r) => r >= box.r1 && r <= box.r2 && !rows.has(r))
+    || own.c.some((c) => isLetter(c) && colIndex(c) >= box.c1 && colIndex(c) <= box.c2 && !cols.has(colIndex(c)));
+  return box;
 }
 
-/** The cells of the reference just put in, marked on screen (null: none). */
-function markPoint(ed, cells) {
+/** The reference of a rectangle of ``g``'s sheet as the formula being typed names it: the cell's own sheet bare (C60,
+ *  P94:P99), another sheet with its name, another workbook in brackets ([sofr]SOFR_FOMC!B9). */
+function boxRef(ed, g, box) {
+  let addr = colName(box.c1) + box.r1;
+  if (box.r2 !== box.r1 || box.c2 !== box.c1) addr += ':' + colName(box.c2) + box.r2;
+  const own = ed.grid.data && ed.grid.data.sheet;
+  if (g.book === ed.grid.book && g.data.sheet === own) return addr;
+  return workbookRef(g.book, g.data.sheet + '!' + addr);
+}
+
+/** The cells of the reference just put in, marked on screen (no ``box``: none) - kept by their rectangle in the sheet:
+ *  their table drawn anew (a row more, another order of its columns) marks them again (``_build``). */
+function markPoint(ed, g = null, box = null) {
   for (const td of ed.pts || []) td.classList.remove('pt');
   ed.pts = [];
-  if (!cells) return;
-  const [g, i1, j1, i2, j2] = cells;
-  for (let i = Math.min(i1, i2); i <= Math.max(i1, i2); i++) {
-    for (let j = Math.min(j1, j2); j <= Math.max(j1, j2); j++) {
-      const td = g.tds[i] && g.tds[i][j];
-      if (td) { td.classList.add('pt'); ed.pts.push(td); }
-    }
+  ed.ptAt = g && box ? { g, box } : null;
+  paintPoint(ed);
+}
+
+function paintPoint(ed) {
+  const at = ed.ptAt;
+  const d = at && at.g.data;
+  if (!d || !d.r || !d.c) return;
+  const { g, box } = at;
+  for (let i = 0; i < g.tds.length; i++) {
+    if (!(d.r[i] >= box.r1 && d.r[i] <= box.r2)) continue;
+    g.tds[i].forEach((td, j) => {
+      const k = isLetter(d.c[j]) ? colIndex(d.c[j]) : 0;
+      if (td && k >= box.c1 && k <= box.c2) { td.classList.add('pt'); ed.pts.push(td); }
+    });
   }
 }
 
-/** A cell (a block, dragged over) goes into the formula at the caret - in place of the reference put just before. */
+/** A cell (a block, dragged over) goes into the formula at the caret - in place of the reference put just before.
+ *  -> true; null: it is no cell of a sheet; false: a block whose rectangle in the sheet is not what it shows (sheetBox:
+ *  nothing goes in). */
 function pointAt(ed, g, i1, j1, i2 = i1, j2 = j1) {
-  const text = refFor(ed, g, i1, j1, i2, j2);
-  if (!text) return false;
+  const box = sheetBox(g, i1, j1, i2, j2);
+  if (!box) return null;
+  if (box.gap) return false;
+  const text = boxRef(ed, g, box);
   const inp = ed.input;
   const start = ed.point ? ed.point.start : inp.selectionStart;
   const end = ed.point ? ed.point.end : inp.selectionEnd;
@@ -1048,7 +1116,7 @@ function pointAt(ed, g, i1, j1, i2 = i1, j2 = j1) {
   ed.point = { start, end: start + text.length };
   inp.focus({ preventScroll: true });
   inp.setSelectionRange(start + text.length, start + text.length);
-  markPoint(ed, [g, i1, j1, i2, j2]);
+  markPoint(ed, g, box);
   return true;
 }
 
@@ -1114,7 +1182,7 @@ document.addEventListener('mousedown', (e) => {
     toast('Bu tablonun hücreleri bir çalışma kitabı sayfasında değil: başvurusu eklenemez', 'err');
     return;
   }
-  ed.drag = { g, i: td.__i, j: td.__j };
+  ed.drag = { g, i: td.__i, j: td.__j, said: false };
 }, true);
 
 document.addEventListener('mouseover', (e) => {
@@ -1122,7 +1190,12 @@ document.addEventListener('mouseover', (e) => {
   if (!ed || !ed.drag || !e.target.closest) return;
   const td = e.target.closest('table.grid td');
   if (!td || td.__i === undefined || td.closest('table.grid') !== ed.drag.g.el) return;
-  pointAt(ed, ed.drag.g, ed.drag.i, ed.drag.j, td.__i, td.__j);       // (dragged over a block: A1:B5)
+  // (dragged over a block: A1:B5) - one the sheet does not have as it is shown leaves the reference as it was
+  if (pointAt(ed, ed.drag.g, ed.drag.i, ed.drag.j, td.__i, td.__j) === false && !ed.drag.said) {
+    ed.drag.said = true;
+    toast('Bu blok çalışma kitabında tek bir aralık değil (sütun sıranız ya da tablonun seçili kısmı arada başka satır / '
+      + 'sütun bırakıyor): hücreleri tek tek gösterin', 'err', 6000);
+  }
 }, true);
 
 document.addEventListener('mouseup', () => {
