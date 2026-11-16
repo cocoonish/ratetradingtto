@@ -44,6 +44,10 @@ def _pnl_try(sg: Dict[str, Any], pnl: float, cfg: Dict[str, Any]) -> Optional[fl
         usd, fx = cfg.get("dv01_usd"), cfg.get("usdtry")
         return pnl * float(usd) * float(fx) if usd and fx else None
     fx = sg.get("fx") or {}
+    mo = sg.get("money") or {}
+    if unit == "%" and mo.get("ref") and fx.get("try_per_quote"):
+        # per 1 mn of the base currency as the live signal tells it: the instrument's price move, in TRY
+        return qf.pct_money(pnl, sg.get("direction") or 1, mo["ref"], mo.get("log", True)) * fx["try_per_quote"]
     if unit == "%" and fx.get("spot") and fx.get("try_per_quote"):
         return pnl / 100.0 * 1e6 * fx["spot"] * fx["try_per_quote"]
     return None

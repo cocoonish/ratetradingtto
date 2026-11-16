@@ -17,7 +17,8 @@ class AnalysisPage extends QuantPage {
     this.tools(tools);
     const page = h('div', { class: 'volpage quantpage' });
     const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller');
-    sp.note.textContent = 'Bu analizden çıkan sinyaller (elenenler gri, nedeniyle). Satıra tıklayın: seri ve giriş / hedef / stop aşağıda.';
+    sp.note.textContent = 'Bu analizden çıkan sinyaller (elenenler gri, nedeniyle). Beklenen K/Z: FX\'te 1 mn baz döviz başına para, faizde bp (TL ipucunda). '
+      + 'Satıra tıklayın: işlemin düz anlatımı (ne alınır / satılır, hangi fiyattan, hedefte ve stopta ne olur), seri ve giriş / hedef / stop aşağıda.';
     this.boxes.sig = new GridBox(sp, 'quant/' + this.what + '/signals', (sid) => this.pick(sid));
     const cp = panel('quant-' + this.what + '-chart', 'Seçili seri');
     this.chart = new SignalChart(cp.body);
@@ -259,8 +260,9 @@ class RegimePage extends AnalysisPage {
 
   build() {
     this.mom = panel('quant-regime-momentum', 'Momentum panosu');
-    this.mom.note.textContent = '1H / 1A / 3A: değişim ÷ (günlük vol × √gün); skor üçünün ortalaması. FX: spot değil, forward\'la tutmanın getirisi (spot getirisi − '
-      + 'forward primi, carry dahil) - carry aleyhine bir işlem, beklenen getirisi carry\'yi tamponla karşılamıyorsa elenir. Sıra: eğri, FX ve küresel gruplar içinde. '
+    this.mom.note.textContent = '1H / 1A / 3A: değişim ÷ (günlük vol × √gün); skor üçünün ortalaması. FX: spot değil, forward pozisyonunun getirisi (kur değişimi − '
+      + 'forward primi: + ise kur forward\'ların fiyatladığından hızlı gidiyor) - forward primi aleyhine bir işlem, beklenen kazancı onu tamponla karşılamıyorsa '
+      + 'elenir; sinyal kartında işlem forward\'ın kuruyla ve 1 mn baz döviz başına K/Z ile. Sıra: eğri, FX ve küresel gruplar içinde. '
       + 'Ortalamalar: hızlı / yavaş hareketli ortalama (↑ hızlı üstte) ve kaç gündür. Sinyal: |skor| ≥ momentum eşiği, ortalamalar aynı yönde, rejim trend (nötrde yarım ağırlık).';
     this.boxes.mom = new GridBox(this.mom, 'quant/regime/momentum', (sid) => this.pick(sid));
     this.cycle = panel('quant-regime-cycle', 'PPK döngüsü · eğim davranışı');
@@ -281,7 +283,8 @@ class RegimePage extends AnalysisPage {
     this.boxes.mom.set(['Enstrüman', 'Grup', 'Seviye', '1H', '1A', '3A', 'Skor', 'Sıra', 'Ortalamalar', 'Rejim', 'H', 'VR z', 'Vol yüzd.', 'Carry % / yıl (long)'],
       rows.map((r) => (r.error ? [T(r.label, { b: 1 }), T(r.group), T(r.error, { cls: 'soft' }), T(''), T(''), T(''), T(''), T(''), T(''), T(''), T(''), T(''), T(''),
         N(r.carry, 1, { sign: true })]
-        : [T(r.label + (r.key.startsWith('XR:') ? ' · carry dahil' : ''), { b: 1 }), T(r.group), N(r.level, r.unit === '%' ? 3 : 4), N(r.w1, 2, { sign: true }),
+        : [T(r.label + (r.key.startsWith('XR:') ? ' · forward' : ''), { b: 1, tip: r.key.startsWith('XR:') ? 'Forward pozisyonunun birikimli getirisi (%): kur değişimi − forward primi' : '' }),
+          T(r.group), N(r.level, r.unit === '%' ? 3 : 4), N(r.w1, 2, { sign: true }),
           N(r.m1, 2, { sign: true }), N(r.m3, 2, { sign: true }), Z(r.score, st.mom_entry || 1.5), T(r.rank ? r.rank + '/' + r.of : ''),
           T(ARROW(r.state) + ' ' + (r.since || 0) + 'g'), T(REGIME[r.regime] || '—'), N(r.hurst, 2), N(r.vr_z, 2, { sign: true }), T(pct(r.vol_pct)),
           N(r.carry, 1, { sign: true })])), rows.map((r) => (r.error ? null : 'momentum:' + r.key)), 'Momentum için geçmiş yok', this.picked);
@@ -311,7 +314,8 @@ class FxPage extends AnalysisPage {
 
   build() {
     this.sum = panel('quant-fx-summary', 'Parite özeti · carry, beklenen kayma, tampon, karar');
-    this.sum.note.textContent = 'Carry: bazı forward\'la tutmanın yıllık getirisi (ln S − ln F) × 365 / gün, en kısa forward\'tan (USDTRY: 1A / 3A / 6A / 1Y de). '
+    this.sum.note.textContent = 'Carry (long): baz dövizi forward\'la alanın forward priminden yıllık kazancı (+) ya da ödediği (−): (ln S − ln F) × 365 / gün, '
+      + 'sürekli bileşik, en kısa forward\'tan (USDTRY: 1A / 3A / 6A / 1Y de); USDTRY\'de forward spotun üstünde: long TRY faizini öder. '
       + 'Beklenen kayma: günlük log getirilerin EWMA\'sı (λ 0,97) yıllık, kendi kesinliğiyle sıfıra doğru küçültülmüş (gürültü olan kayma tahmin sayılmaz; ağırlık '
       + 'sütunda). Beklenen getiri (long): kayma + carry. Tampon: carry\'yi alan tarafın beklenen getirisi (− ise kayma carry\'yi yiyor). Karar: beklenen getiri ÷ vol '
       + 'masa eşiğini geçerse ilgili para birimi long / short, yoksa nötr. Forward\'ı olmayan pariteye carry uydurulmaz.';

@@ -1313,6 +1313,7 @@ class Quant(object):
             why = {"analogs": [], "invalidation": [], "why": "%s: %s" % (type(exc).__name__, str(exc)[:160])}
         return _clean({"ready": True, "signal": sg, "rationale": why, "monitor": {"sid": m.sid, "family": m.family, "family_label": qf.FAMILIES[m.family][0],
                                                                  "name": m.name, "level": m.level, "z": m.z, "unit": m.unit, "digits": m.digits,
+                                                                 "series_label": m.series_label,
                                                                  "half_life": m.half_life, "regime": m.regime, "note": m.note, "mode": m.mode,
                                                                  "entry": m.entry or fit["cfg"]["entry_z"], "score_name": m.score_name,
                                                                  "info": {k: x for k, x in m.info.items() if k not in ("inputs",)}},

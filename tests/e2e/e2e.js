@@ -2271,6 +2271,58 @@ async function shot(page, name) {
       && await page.locator('#quant-settings select#quant-set-bt_mute').inputValue() === 'kapalı');
     const bt = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/backtest');
     check('the backtest panel and its API are there', bt.status === 200 && await page.locator('#quant-backtest').count() === 1, bt.json);
+    // a signal in plain words: the card's sentence (the server writes it from the signal's own numbers), the trade in desk
+    // words with the instrument's prices, the money - FX per 1 mn of the base currency split into the forward premium and
+    // the spot's move, a rates package in bp and TL - and the list's expected P&L with its unit. The recorded month has too
+    // few closes for a signal: the card and the rows are drawn from an FX and a rates signal as the server sends them.
+    const sigApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/signals');
+    const served = ((sigApi.json || {}).signals || []).concat((sigApi.json || {}).gated || []);
+    const FX_PLAIN = 'Bugün 3 aylık USDTRY forward\'ını satıp ~63 iş günü tutarsan (giriş 44,1250) ve kur o sürede beklenen seviyeye gelirse (43,6000), '
+      + '1 mn USD başına ~525 bin TRY kazanırsın: forward priminden (carry) +2.325 bin TRY, kur hareketinden -1.800 bin TRY (spot 41,8000 → 43,6000). '
+      + 'Hedefte (43,6000) ~525 bin TRY kâr, stopta (44,6000) ~475 bin TRY zarar.';
+    const card = await page.evaluate(async (plain) => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const base = { family: 'fwdprem', family_label: 'Forward primi', asset: 'FX', z: 2.6, entry_z: 2, strength: 'Güçlü', gates: [], legs: [], agree: 0,
+        conflict: 0, parts: { z: 2.6, regime: 1, hl: 1, carry: 1 }, composite: 2.6, hold: 63, horizon_unit: 'gün', bt: null };
+      const fx = Object.assign({}, base, { id: 'fwdprem:USDTRY:3M', expression: 'Sell USDTRY 3M forward', direction: -1, unit: '%', digits: 2, entry: 3.1,
+        target: 0.4, stop: 6.9, pnl_unit: '%', exp_pnl: 1.19, carry_yr: 22.6, plain, trade_tr: 'USDTRY 3A forward sat', pnl_try: 525000,
+        legs: [{ key: 'FX:USDTRY', name: 'USDTRY 3M forward', action: 'Sell', side: -1, weight: 1, text: 'Sell USDTRY 3M forward' }],
+        fx: { pair: 'USDTRY', spot: 41.8, fwd_h: 44.125, tenors: ['1M', '3M'] },
+        px: { pair: 'USDTRY', inst: 'USDTRY 3A forward', label: 'USDTRY 3A fwd', tenor: '3A', days: 91.25, note: 'bugünkü 3A forward', digits: 4, unit: 'TRY',
+          entry: 44.125, target: 43.6, stop: 44.6, exit: 43.6, spot: 41.8, spot_exp: 43.6, fwd_h: 44.125 },
+        money: { ccy: 'TRY', base: 'USD', notional: 1e6, total: 525000, carry: 2325000, move: -1800000, target: 525000, stop: -475000, try_per: 1, usd_per: 1 / 41.8 } });
+      const rate = Object.assign({}, base, { id: 'pca:OIS:2Y', family: 'pca', family_label: 'PCA kalıntısı', asset: 'TRY OIS', expression: 'Receive 2Y OIS (PC1–PC2 hedge\'li)',
+        instrument: '2Y OIS (PC1–PC2 hedge\'li)', direction: -1, unit: 'bp', digits: 1, entry: 3, target: 0, stop: 3.5, pnl_unit: 'bp', exp_pnl: 5.08, rr: 6,
+        reward: 3, risk: 0.5, carry_week: 1, trade_tr: 'sabit faiz alınan (receive): 2Y OIS (değişken bacak TLREF)', plain: 'Sabit faiz alınan (receive): 2Y OIS …',
+        money: { ccy: 'TL', per_bp: 40000, dv01_usd: 1000, total: 203200, carry: 103200, move: 100000, target: 120000, stop: -20000,
+          bp: { total: 5.08, carry: 2.58, move: 2.5, target: 3, stop: -0.5 } } });
+      const read = (s) => {
+        // (what a click on a row does: the card's show(); a one-day history draws no chart - the sentence and the trade
+        // are above the charts and come all the same)
+        const host = document.createElement('div');
+        const c = new q.SignalChart(host);
+        c.show({ monitor: { name: s.instrument || 'USDTRY 3M forward' }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+        const text = (sel) => (host.querySelector(sel) || {}).textContent || '';
+        const out = { plain: text('#quant-sig-plain'), trade: text('#quant-sig-trade'), prices: text('#quant-sig-prices'), pnl: text('#quant-sig-pnl'), ends: text('#quant-sig-ends') };
+        c.destroy();
+        return out;
+      };
+      const rows = q.signalRows([fx, rate]);
+      const col = (name) => q.SIGNAL_HEAD.indexOf(name);
+      return { fx: read(fx), rate: read(rate), cells: rows.map((r) => r[col('Beklenen K/Z')].t), entry: rows[0][col('Giriş')].t, unit: rows[0][col('Birim')].t };
+    }, FX_PLAIN);
+    check('a signal card says an FX trade plainly: the sentence, "USDTRY 3A forward sat" at the forward\'s price, the money per 1 mn USD split into the forward premium and the spot\'s move',
+      card.fx.plain === FX_PLAIN && card.fx.trade === 'USDTRY 3A forward sat · 1 mn USD'
+      && card.fx.prices.startsWith('44,1250 / 43,6000 / 44,6000 · USDTRY 3A forward (giriş: bugünkü 3A forward · spot 41,8000)')
+      && card.fx.pnl === '+525 bin TRY / 1 mn USD · forward primi (carry) +2.325 bin TRY · kur hareketi -1.800 bin TRY'
+      && card.fx.ends === 'hedefte +525 bin TRY · stopta -475 bin TRY (1 mn USD) · ödül / risk 1,11', card.fx);
+    check('... a rates package in bp and TL: what is received / paid, at the target and the stop; the list\'s expected P&L in money (FX) or bp',
+      card.rate.trade === 'sabit faiz alınan (receive): 2Y OIS (değişken bacak TLREF) · ana bacak 1.000 $ DV01 = 40.000 TL / bp'
+      && card.rate.pnl === '+5,08 bp ≈ +203 bin TL · carry + roll +2,58 bp · hareket +2,50 bp'
+      && card.rate.ends === 'hedefte 3,0 bp ≈ +120 bin TL · stopta 0,5 bp ≈ -20 bin TL · ödül / risk 6,00' && card.rate.prices.startsWith('+3,0 bp / 0,0 bp / +3,5 bp')
+      && card.cells[0] === '+525 bin TRY / 1 mn USD' && card.cells[1] === '+5,08 bp' && card.entry === '44,1250' && card.unit === 'USDTRY 3A fwd', card);
+    check('... and every signal the server gives carries its trade in desk words and its sentence', sigApi.status === 200
+      && served.every((s) => s.trade_tr && typeof s.plain === 'string' && s.plain.length > 0), served.length);
     await shot(page, 'quant-signals');
     await open(page, 'quant-pca');
     await page.waitForSelector('#quant-pca-windows', { timeout: 30000 });

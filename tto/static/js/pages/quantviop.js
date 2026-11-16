@@ -26,7 +26,8 @@ class ViopPage extends QuantPage {
     const page = h('div', { class: 'volpage quantpage' });
     const sp = panel('quant-viop-signals', 'VİOP · sinyaller');
     sp.note.textContent = 'Kontratın ima TRY faizinin aynı vadenin OIS\'ine farkı, sabit vadeli geçmişteki normaline göre: farkı normalin altındaysa ima '
-      + 'faiz ucuz - vadeli al, spot sat (Buy VİOP / Sell spot); üstündeyse tersi. Bacaklar ana bacağın DV01\'iyle (Ayarlar: 1.000 $), kontrat 1.000 $.';
+      + 'faiz ucuz - vadeli al, spot sat (Buy VİOP / Sell spot); üstündeyse tersi. Bacaklar ana bacağın DV01\'iyle (Ayarlar: 1.000 $), kontrat 1.000 $. '
+      + 'Beklenen K/Z bp (TL karşılığı ipucunda); satıra tıklayınca kartta ne alınıp satıldığı, hedefte kazanç ve stopta kayıp bp ve TL olarak.';
     this.boxes.sig = new GridBox(sp, 'quant/viop/signals', (sid) => this.pick(sid));
     const cp = panel('quant-viop-chart', 'Seçili seri');
     this.chart = new SignalChart(cp.body);
