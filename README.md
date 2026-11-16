@@ -1905,64 +1905,6 @@ alarm ve geri test (türü grubu) mevcut makineden gelir. Opsiyon ve swap puanı
 (sinyal üretmeden). Evren `/api/quant/universe`'te: her satırın grubu, seviyesi, σ'sı, carry'si, büyüklüğü ve bir
 birim hareketin parası.
 
-#### Makine öğrenmesi
-
-`tto/quantml.py`, Sinyaller'in **Makine öğrenmesi** sekmesi (`#/quant-ml`). Evrenin **42 satırında** önümüzdeki **5 iş
-gününün yönü**: 7 G10 spot ve 7 ATM 3A vol; TRY OIS 1M, 2M, 3M, 6M, 9M, 1Y, 18M, 2Y, 5Y, 10Y, 3M/1Y, 6M/2Y, 1Y/2Y, 2Y/5Y
-spread'leri, 3M/6M/1Y ve 6M/1Y/2Y fly'ları, FRA 3×6, 6×9 ve 12×15 (evrenin ızgarasında 12×18 yok), sıradaki PPK dönemi;
-vadesi 2, 5 ve 10 yıla en yakın sabit kuponlu DİBS'ler (ISIN'le), VİOP ön vade (vadesine en az 7 gün), offshore'da
-USDTRY 1A / 3A forward, 3A swap puanı ve offshore 1Y (**offshore limiti**). Hepsi evrenin anahtarlarıyla; evrende olmayan
-satır tabloda nedeniyle.
-
-* **Hedef**: yukarı tarafın (AL, pay, steepener, vol al; faizde receive aşağı taraftır) önümüzdeki 5 kapanıştaki K/Z'sinin
-  işareti, kendi biriminde: seviyenin hareketi (rulo günlerinin sıçraması çıkarılmış) ve FX'te (spot, offshore forward)
-  tutmanın carry'si de. Faiz paketinin carry + roll'u geçmişte yok (vade motoru yalnız bugünün): beklenen K/Z'ye her
-  ailede olduğu gibi `make_signal` ekler.
-* **34 özellik**, her biri günün kapanışında bilinenle (sonrası hiç): kendi z'si (20 / 60 / 250 kapanış), momentumu (5 / 21
-  / 63 kapanış, σ√n'e bölünmüş), carry'si (FX: forward'lardan yıllık %; faiz: TLREF'in üstü, bp; ATM vol: ima −
-  gerçekleşen), 20 günlük oynaklığı ve 20 / 60 oranı; TRY OIS eğrisinin seviyesi, eğimi ve eğriliği (2Y, 2s10s,
-  2s5s10s) ve 5 günlük değişimleri - aynı gün; UST 2Y / 10Y, DXY, EM FX, Brent ve CDS'in 1 ve 5 günlük değişimi, TLREF'in 3
-  aylık değişimi, PPK patikasının sıradaki toplantıya fiyatladığı adım, VİOP − OIS farkı (30 gün), 25D RR 3A (G10
-  satırında kendi paritesininki, diğerlerinde yedi paritenin ortalaması) ve 5 günlük değişimi - bunlar **bir gün
-  öncesinden** (kapanışları TRY'ninkinden sonra gelir); ufukta ay sonu var mı, haftanın günü. Olmayan özellik (kısa
-  seri, eksik girdi) ağaçların kendi yolu olan ayrı bir değerdir.
-* **Model**: saf Python **gradyan artırmalı ağaçlar** (lojistik kayıp; 50 ağaç, derinlik 2, öğrenme 0,1; her ağaç
-  satırların %70'i ve özelliklerin %50'siyle, yaprakta en az 30 satır, yaprak değerinde L2 30). Her özellik eğitim
-  satırlarının 10 kantiline bölünür; bölünmeler düğümün histogramından aranır (büyük çocuğunki çıkarmayla). Satır ve ay
-  başına tohumlu: aynı veri aynı model. Sentetik gürültüde derinlik 3, L2 1 ve 20'lik yaprak gürültüyü öğreniyordu
-  (örneklem dışı log-loss 0,82, olasılıklar %50'den ±17 puan); bu ayar dikili sürücüyü (%71 isabet) korur, gürültüde
-  0,72'ye (±8 puan) iner ve üçte iki sürede biter.
-* **Aylık yeniden eğitim**: her takvim ayının modeli yalnızca **o ay başlamadan etiketi bilinen** satırların hepsiyle
-  kurulur (beşinci kapanışı aydan önce) ve yalnızca o ayın günlerini tahmin eder; bugünü bu ayın modeli tahmin eder.
-  Etiketi bilinen en az 100 satırın olduğu ilk aydan bugüne: iki yıllık geçmişte ~15 ay örneklem dışı. **İsabet** ve
-  **log-loss** etiketi bilinen bütün örneklem dışı günlerden; **test** = gün ÷ 5 (5 günlük ufuklar örtüşür).
-* **Satır** yalnızca örneklem dışı isabet ≥ masanın model eşiği (%55) ve ≥ 40 test olan (Tahmin modelinin kuralı ve
-  ayarları) ve bugünkü olasılığı girişi geçen (z(p) = (p − 0,5) ÷ 0,05 ≥ giriş: %60) enstrümanda:
-  "AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)". Hedef (2p − 1) × son 250 satırın ortalama |5 günlük K/Z|'sı,
-  stop 5 günlük σ'nın 1,5 katı, tutma 5 iş günü; büyüklük masanın birimi, K/Z para olarak (evrenin `inst.monitor`'ü:
-  kart, para, liste, kayıt, alarm). Kartın düz cümlesi ne yapılacağını ve **nedenini** söyler - bugünkü tahmini en çok
-  oynatan üç özellik (ağaçların bu satırdaki yol katkıları), masanın diliyle: "… yükseliş olasılığı %65 (örneklem dışı
-  isabet %69, 64 test, log-loss 0,575). Neden: en çok Brent son 5 günde +%12,5 (lehte), CDS son 5 günde -10,8 bp
-  (aleyhte) ve Brent dün +%2,5 (lehte) etkiledi." Kapılarında *Örneklem* (kayıt, log-loss); FX'te carry aleyhine işlem
-  her ailedeki gibi tamponu geçmeli.
-* **Hesap**: ağır kısım tam hesapta, quant iş parçacığında. Her ayın modeli satırın anahtarı, ay ve eğitim satırlarının
-  özetiyle saklanır: aynı kapanışlarla ikinci tam hesap, canlı yenileme ve geri test **hiç model kurmaz**; yeni kapanış
-  yalnız ayın ilk iş gününde satır başına bir model kurar, geçmiş düzeltilince ya da dolunca yalnız satırları değişen
-  aylar. Gün içinde yalnız canlı özellikler (seviye, eğri, carry) yeniden puanlanır. Ölçüm (masa bilgisayarı, başka
-  testler çalışırken): sentetik **42 satır × 460 gün, 656 model ~40–45 sn** (yeniden başlatmadan sonraki ilk tam hesap);
-  aynı gün sonraki hesaplar ~1 sn. Kimlik hep evrenden: takvim düzeltmesi, VİOP rulosu, yeni ya da vadesi gelen kâğıt
-  hiçbir satırın modelini, özelliklerini ya da tahminini başka satıra taşımaz.
-* **Geri test**: yeniden kurmada aile bir şey eğitmez - o günün **örneklem dışı tahminini** canlı kurallarla oynar
-  (olasılık girişi geçince; %55 kapısı yok, o kapı geri testin kendisidir), seviye satırın kendi kapanışı (rulo K/Z
-  sayılmaz). Sinyaller'in geri test tablosunda aile satırı ve altında **satır başına** tür; sinyalin yanında kendi
-  satırının kaydı (yeterli işlemi varsa).
-* **Sayfa**: ailenin sinyalleri ve seçilenin grafiği (altında örneklem dışı olasılık gün gün, z(p) olarak); her satırın
-  kapanış sayısı, testi, isabeti, taban oranı, log-loss'u, basılıp basılmadığı ya da nedeni ("geçmiş kısa (… kapanış; en
-  az 126)", "örneklem dışı isabet %51,3 < %55", "olasılık %57,3 < eşik %60"; kuralı ve girişi geçip listede bir kapıya - FX carry tamponu, beklenen kâr - takılan satır "düşük güven: …"), bugünkü olasılığı ve en etkili üç verisi
-  (↑ yükselişe, ↓ düşüşe), geri testi (olasılığın girişi geçtiği günlerin 5 günlük K/Z'si: isabet, Sharpe) ve aylık model
-  sayısı; altında verilerin ağaç kazancındaki payı grup başına. Kayıtlı veri modunda geçmiş kısa: hiçbir satır basılmaz,
-  her biri nedenini söyler.
-
 **FX: hesap forward pozisyonunun getirisinde, anlatım kurla ve parayla.** Yönlü FX sinyalleri (momentum, rejim, model,
 makro kalıntı) spotun değil, **forward pozisyonunun** getirisinin üzerinde çalışır: günlük `ln(S_t / S_{t−1}) − carry`
 (carry = bazı uzun tutmanın yıllık getirisi `(ln S − ln F) × 365 / gün`, o günün en kısa forward'ından; USDTRY'de 1A /
@@ -2193,6 +2135,64 @@ FX'te: carry o günün en kısa forward'ından, ufkun carry'si vadeler arasında
 kayma EWMA λ 0,97, üç standart hata içinde sıfır; momentumun beklenen kârında iki standart hata; carry aleyhine
 tampon 0,5 σ; parite kararı 0,3. FRA toleransı 5 bp. Kapılar: beklenen kâr (carry dahil) sıfırın altındaysa her
 ailede eleme; faizde carry aleyhine ağırlık 0,5 (önceki gibi).
+
+#### Makine öğrenmesi
+
+`tto/quantml.py`, Sinyaller'in **Makine öğrenmesi** sekmesi (`#/quant-ml`). Evrenin **42 satırında** önümüzdeki **5 iş
+gününün yönü**: 7 G10 spot ve 7 ATM 3A vol; TRY OIS 1M, 2M, 3M, 6M, 9M, 1Y, 18M, 2Y, 5Y, 10Y, 3M/1Y, 6M/2Y, 1Y/2Y, 2Y/5Y
+spread'leri, 3M/6M/1Y ve 6M/1Y/2Y fly'ları, FRA 3×6, 6×9 ve 12×15 (evrenin ızgarasında 12×18 yok), sıradaki PPK dönemi;
+vadesi 2, 5 ve 10 yıla en yakın sabit kuponlu DİBS'ler (ISIN'le), VİOP ön vade (vadesine en az 7 gün), offshore'da
+USDTRY 1A / 3A forward, 3A swap puanı ve offshore 1Y (**offshore limiti**). Hepsi evrenin anahtarlarıyla; evrende olmayan
+satır tabloda nedeniyle.
+
+* **Hedef**: yukarı tarafın (AL, pay, steepener, vol al; faizde receive aşağı taraftır) önümüzdeki 5 kapanıştaki K/Z'sinin
+  işareti, kendi biriminde: seviyenin hareketi (rulo günlerinin sıçraması çıkarılmış) ve FX'te (spot, offshore forward)
+  tutmanın carry'si de. Faiz paketinin carry + roll'u geçmişte yok (vade motoru yalnız bugünün): beklenen K/Z'ye her
+  ailede olduğu gibi `make_signal` ekler.
+* **34 özellik**, her biri günün kapanışında bilinenle (sonrası hiç): kendi z'si (20 / 60 / 250 kapanış), momentumu (5 / 21
+  / 63 kapanış, σ√n'e bölünmüş), carry'si (FX: forward'lardan yıllık %; faiz: TLREF'in üstü, bp; ATM vol: ima −
+  gerçekleşen), 20 günlük oynaklığı ve 20 / 60 oranı; TRY OIS eğrisinin seviyesi, eğimi ve eğriliği (2Y, 2s10s,
+  2s5s10s) ve 5 günlük değişimleri - aynı gün; UST 2Y / 10Y, DXY, EM FX, Brent ve CDS'in 1 ve 5 günlük değişimi, TLREF'in 3
+  aylık değişimi, PPK patikasının sıradaki toplantıya fiyatladığı adım, VİOP − OIS farkı (30 gün), 25D RR 3A (G10
+  satırında kendi paritesininki, diğerlerinde yedi paritenin ortalaması) ve 5 günlük değişimi - bunlar **bir gün
+  öncesinden** (kapanışları TRY'ninkinden sonra gelir); ufukta ay sonu var mı, haftanın günü. Olmayan özellik (kısa
+  seri, eksik girdi) ağaçların kendi yolu olan ayrı bir değerdir.
+* **Model**: saf Python **gradyan artırmalı ağaçlar** (lojistik kayıp; 50 ağaç, derinlik 2, öğrenme 0,1; her ağaç
+  satırların %70'i ve özelliklerin %50'siyle, yaprakta en az 30 satır, yaprak değerinde L2 30). Her özellik eğitim
+  satırlarının 10 kantiline bölünür; bölünmeler düğümün histogramından aranır (büyük çocuğunki çıkarmayla). Satır ve ay
+  başına tohumlu: aynı veri aynı model. Sentetik gürültüde derinlik 3, L2 1 ve 20'lik yaprak gürültüyü öğreniyordu
+  (örneklem dışı log-loss 0,82, olasılıklar %50'den ±17 puan); bu ayar dikili sürücüyü (%71 isabet) korur, gürültüde
+  0,72'ye (±8 puan) iner ve üçte iki sürede biter.
+* **Aylık yeniden eğitim**: her takvim ayının modeli yalnızca **o ay başlamadan etiketi bilinen** satırların hepsiyle
+  kurulur (beşinci kapanışı aydan önce) ve yalnızca o ayın günlerini tahmin eder; bugünü bu ayın modeli tahmin eder.
+  Etiketi bilinen en az 100 satırın olduğu ilk aydan bugüne: iki yıllık geçmişte ~15 ay örneklem dışı. **İsabet** ve
+  **log-loss** etiketi bilinen bütün örneklem dışı günlerden; **test** = gün ÷ 5 (5 günlük ufuklar örtüşür).
+* **Satır** yalnızca örneklem dışı isabet ≥ masanın model eşiği (%55) ve ≥ 40 test olan (Tahmin modelinin kuralı ve
+  ayarları) ve bugünkü olasılığı girişi geçen (z(p) = (p − 0,5) ÷ 0,05 ≥ giriş: %60) enstrümanda:
+  "AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)". Hedef (2p − 1) × son 250 satırın ortalama |5 günlük K/Z|'sı,
+  stop 5 günlük σ'nın 1,5 katı, tutma 5 iş günü; büyüklük masanın birimi, K/Z para olarak (evrenin `inst.monitor`'ü:
+  kart, para, liste, kayıt, alarm). Kartın düz cümlesi ne yapılacağını ve **nedenini** söyler - bugünkü tahmini en çok
+  oynatan üç özellik (ağaçların bu satırdaki yol katkıları), masanın diliyle: "… yükseliş olasılığı %65 (örneklem dışı
+  isabet %69, 64 test, log-loss 0,575). Neden: en çok Brent son 5 günde +%12,5 (lehte), CDS son 5 günde -10,8 bp
+  (aleyhte) ve Brent dün +%2,5 (lehte) etkiledi." Kapılarında *Örneklem* (kayıt, log-loss); FX'te carry aleyhine işlem
+  her ailedeki gibi tamponu geçmeli.
+* **Hesap**: ağır kısım tam hesapta, quant iş parçacığında. Her ayın modeli satırın anahtarı, ay ve eğitim satırlarının
+  özetiyle saklanır: aynı kapanışlarla ikinci tam hesap, canlı yenileme ve geri test **hiç model kurmaz**; yeni kapanış
+  yalnız ayın ilk iş gününde satır başına bir model kurar, geçmiş düzeltilince ya da dolunca yalnız satırları değişen
+  aylar. Gün içinde yalnız canlı özellikler (seviye, eğri, carry) yeniden puanlanır. Ölçüm (masa bilgisayarı, başka
+  testler çalışırken): sentetik **42 satır × 460 gün, 656 model ~40–45 sn** (yeniden başlatmadan sonraki ilk tam hesap);
+  aynı gün sonraki hesaplar ~1 sn. Kimlik hep evrenden: takvim düzeltmesi, VİOP rulosu, yeni ya da vadesi gelen kâğıt
+  hiçbir satırın modelini, özelliklerini ya da tahminini başka satıra taşımaz.
+* **Geri test**: yeniden kurmada aile bir şey eğitmez - o günün **örneklem dışı tahminini** canlı kurallarla oynar
+  (olasılık girişi geçince; %55 kapısı yok, o kapı geri testin kendisidir), seviye satırın kendi kapanışı (rulo K/Z
+  sayılmaz). Sinyaller'in geri test tablosunda aile satırı ve altında **satır başına** tür; sinyalin yanında kendi
+  satırının kaydı (yeterli işlemi varsa).
+* **Sayfa**: ailenin sinyalleri ve seçilenin grafiği (altında örneklem dışı olasılık gün gün, z(p) olarak); her satırın
+  kapanış sayısı, testi, isabeti, taban oranı, log-loss'u, basılıp basılmadığı ya da nedeni ("geçmiş kısa (… kapanış; en
+  az 126)", "örneklem dışı isabet %51,3 < %55", "olasılık %57,3 < eşik %60"; kuralı ve girişi geçip listede bir kapıya - FX carry tamponu, beklenen kâr - takılan satır "düşük güven: …"), bugünkü olasılığı ve en etkili üç verisi
+  (↑ yükselişe, ↓ düşüşe), geri testi (olasılığın girişi geçtiği günlerin 5 günlük K/Z'si: isabet, Sharpe) ve aylık model
+  sayısı; altında verilerin ağaç kazancındaki payı grup başına. Kayıtlı veri modunda geçmiş kısa: hiçbir satır basılmaz,
+  her biri nedenini söyler.
 
 ### Eğri Adil Değeri ve Opsiyon
 
