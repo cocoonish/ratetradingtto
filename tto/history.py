@@ -1302,9 +1302,12 @@ class History(object):
         stored = self.store.mpc_days()
         todo = [p for p in plan if recompute or stored.get(_iso(p["day"]), {}).get("basis") != p["basis"]]
         window = _iso(snap["today"] - _dt.timedelta(days=int(self.settings()["lookback_days"])))
-        gone = sorted(d for d in set(stored) - {_iso(p["day"]) for p in plan} if d >= window)
+        today = _iso(snap["today"])
+        # days that can no longer be computed go; older ones are kept, and so are the days after today: a replay of
+        # an older recording (or a clock set back) does not erase what the desk priced since
+        gone = sorted(d for d in set(stored) - {_iso(p["day"]) for p in plan} if window <= d <= today)
         if gone:
-            self.store.mpc_delete(gone)                        # days that can no longer be computed (older ones are kept)
+            self.store.mpc_delete(gone)
             self.rev += 1
         if only is not None:
             todo = [p for p in todo if _iso(p["day"]) in set(only)]

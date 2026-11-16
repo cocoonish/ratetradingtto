@@ -659,6 +659,26 @@ def test_a_database_of_the_previous_version_keeps_its_days(tmp_path):
     assert sorted(Store(path).mpc_days()) == ["2026-11-03", "2026-11-04"]    # opening it again adds nothing twice
 
 
+def test_days_priced_after_today_survive_a_replay_of_an_older_day(tmp_path):
+    """A copy of the desk's data opened in replay mode runs with the recording's day (3 November) as today: the days
+    the desk priced live after it are not "days that can no longer be computed" - they stay. A day in the window
+    that cannot be computed (a Sunday) still goes; a day before the window is kept, as before."""
+    svc = make_service(tmp_path)
+    try:
+        h, st = svc.history, svc.store
+        rows = [{"meeting": "2026-12-11", "step": -100.0, "level": 0.385, "cum": -100.0, "sigma": 5.0, "front": True}]
+        meta = {"spot": "2026-11-05", "tlref": 38.9, "quotes": 18, "status": "OK", "base": 0.39}
+        for day in ("2026-11-04", "2026-11-13", "2026-11-01", "2024-01-05"):
+            st.mpc_save(day, "earlier", meta, rows)
+        h._fetch()
+        h._compute(only=[])                                   # nothing is solved: only what goes is decided
+        days = st.mpc_days()
+        assert {"2026-11-04", "2026-11-13", "2024-01-05"} <= set(days) and "2026-11-01" not in days
+        assert [r["day"] for r in st.mpc_values("2026-11-04", "2026-11-30")] == ["2026-11-04", "2026-11-13"]
+    finally:
+        svc.stop()
+
+
 def test_end_of_day_matrix(hsvc):
     m = hsvc.history.matrix()
     assert m["asof"] == TODAY and m["ref"] == {"d1": "2026-11-02", "w1": "2026-10-27", "m1": "2026-10-05"}
