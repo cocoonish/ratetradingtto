@@ -313,6 +313,50 @@ def test_sizes_and_money(reg):
     assert sg["money"]["total"] == pytest.approx(1.4 * 6000.0) and "(14.000 $ vega)" in sg["plain"]
 
 
+def test_a_fly_is_told_with_the_ois_sheet_s_quote_beside_it():
+    """A fly's level is its 50/50 package's (body − ½ each wing); the desk reads the OIS sheet's 2·body − wings ("TÜM
+    FLY'LAR"): wherever the registry writes a fly's level the sheet's quote is beside it - the line, the card's sentence
+    (its entry / target / stop: the page reads ``info["sheet"]``), the rationale's stop, the universe's table."""
+    noisy = {d: planted("1Y") + common(i) + 0.04 * math.sin(i / 3.7) + 0.02 * math.cos(i / 1.3) for i, d in enumerate(DAYS)}
+    ctx, eng = uni_ctx(extra={"OIS:1Y": (noisy, {"label": "1Y OIS", "kind": "rate", "months": 12.0})})
+    reg = qu.Registry(ctx, None, eng)
+    fl, sp, o = reg["OISF:6M/1Y/2Y"], reg["OISS:1Y/2Y"], reg["OIS:2Y"]
+    assert fl.sheet(-12.5) == -25.0 and sp.sheet(3.0) is None and o.sheet(38.5) is None
+    assert fl.level_text(-12.5) == "-12,5 bp (OIS sayfasında -25,0)" and fl.level_text(4.0) == "+4,0 bp (OIS sayfasında +8,0)"
+    assert sp.level_text(3.0) == "+3,0 bp" and o.level_text(38.5) == "%38,50" and reg["FX:EURUSD"].level_text(1.0843) == "1,08430"
+    assert fl.line(-1, 0.7, entry=-12.5, target=-8.0, stop=-15.0) == (
+        "gövde receive / kanatlar pay 6M/1Y/2Y fly · 700 $ DV01 · giriş -12,5 bp (OIS sayfasında -25,0) · hedef -8,0 bp "
+        "(OIS sayfasında -16,0) · stop -15,0 bp (OIS sayfasında -30,0)")
+    assert fl.line(1) == "gövde pay / kanatlar receive 6M/1Y/2Y fly · 1.000 $ DV01" and o.line(-1, 0.7) == "receive 2Y OIS · 700 $ DV01"
+    assert reg["FWD:USDTRY:1M"].line(-1, entry=44.35) == "SAT USDTRY 1A forward · 1 mn USD · giriş 44,3500 · offshore limiti"
+    # the card's sentence and the rationale's stop (the page's entry / target / stop: info["sheet"], the browser test)
+    m = fl.monitor("t:fly", "trend", zfn=lambda lv, live: 2.5, mode="drift", follows=True, reward=5.0, risk=4.0, fcast=3.0, hold=10.0)
+    qf.score_all(ctx, [m], {})
+    sg = qf.make_signal(m, cfg(), "10:00")
+    lvl, tgt, stp = sg["level"], sg["target"], sg["stop"]
+
+    def sheet(v):
+        return qf._sg(2.0 * v, 1)
+
+    assert sg["info"]["sheet"] == {"factor": 2.0, "where": "OIS sayfasında"}
+    assert "6M/1Y/2Y fly şimdi %s bp (OIS sayfasında %s);" % (qf._sg(lvl, 1), sheet(lvl)) in sg["plain"]
+    assert "hedef seviyesine (%s bp; OIS sayfasında %s) gelirse 5,0 bp" % (qf._sg(tgt, 1), sheet(tgt)) in sg["plain"]
+    assert "stop seviyesine (%s bp; OIS sayfasında %s) gelirse 4,0 bp" % (qf._sg(stp, 1), sheet(stp)) in sg["plain"]
+    why = qf.rationale(ctx, m, sg, cfg())
+    assert why["invalidation"][0] == "Stop: seviye %s bp; OIS sayfasında %s (giriş %s bp; OIS sayfasında %s)" % (
+        qf._sg(stp, 1), sheet(stp), qf._sg(lvl, 1), sheet(lvl))
+    # ... a spread's (no other quote of its own on the sheet) as before
+    m2 = sp.monitor("t:sp", "trend", zfn=lambda lv, live: 2.5, mode="drift", follows=True, reward=5.0, risk=4.0, fcast=3.0, hold=10.0)
+    qf.score_all(ctx, [m2], {})
+    s2 = qf.make_signal(m2, cfg(), "10:00")
+    assert "sheet" not in s2["info"] and "OIS sayfasında" not in s2["plain"]
+    # the universe's table
+    rows = {r["key"]: r for r in reg.table()["rows"]}
+    f = rows["OISF:6M/1Y/2Y"]
+    assert f["sheet_level"] == pytest.approx(2.0 * f["level"]) and f["level_text"] == fl.level_text(f["level"]) and "(OIS sayfasında " in f["level_text"]
+    assert rows["OIS:2Y"]["sheet_level"] is None and rows["OIS:2Y"]["level_text"].startswith("%")
+
+
 # ================================================================================================ rows that move
 def test_the_ppk_periods_follow_the_meetings_by_date_through_a_calendar_edit():
     """OIS_MAIN's meeting rows move when the calendar is edited (a meeting added, a date corrected): the history's days
@@ -580,6 +624,8 @@ def test_universe_and_groups_over_http(seeded):
         rows = {r["key"]: r for r in u["rows"]}
         assert rows["OIS:2Y"]["group"] == "TRY OIS" and rows["OIS:2Y"]["size"] == "1.000 $ DV01" and rows["OIS:2Y"]["n"] > 200
         assert rows["FWD:USDTRY:3M"]["tag"] == "offshore limiti" and {r["key"] for r in u["inputs"]} >= {"UST:10Y", "DXY", "CDS"}
+        fly = rows["OISF:6M/1Y/2Y"]                                         # (a fly with the OIS sheet's quote beside its level)
+        assert fly["sheet_level"] == pytest.approx(2.0 * fly["level"]) and "(OIS sayfasında " in fly["level_text"]
         assert [f["id"] for f in u["families"]] == ["trend", "sira", "ml"]
         s = client.get("/api/quant/signals", params={"group": "TRY OIS"}).json()
         assert s["group"] == "TRY OIS" and all(x["group"] == "TRY OIS" for x in s["signals"]) and [g["id"] for g in s["groups"]] == list(qu.GROUPS)

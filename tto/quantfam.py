@@ -1214,6 +1214,17 @@ def _level_text(v: Optional[float], unit: str, digits: int) -> str:
     return ("%s %s" % (_th(v, digits), unit)).strip()
 
 
+def sheet_text(sg: Dict[str, Any], v: Optional[float], inner: bool = False) -> str:
+    """A level's quote on the desk's own sheet, beside it - when the signal carries one (``info["sheet"]``: the
+    universe's flies, the OIS sheet's 2·body − wings): " (OIS sayfasında -25,0)", or "; OIS sayfasında -25,0" inside
+    a parenthesis."""
+    sh = (sg.get("info") or {}).get("sheet") or {}
+    if v is None or not sh.get("factor"):
+        return ""
+    t = "%s %s" % (sh.get("where") or "OIS sayfasında", _sg(v * float(sh["factor"]), 1))
+    return "; " + t if inner else " (%s)" % t
+
+
 def plain_text(sg: Dict[str, Any]) -> str:
     """The signal in plain words, from its own numbers: what to do on which instrument and at what price, what it is
     expected to make over the holding (FX: per 1 mn of the base currency, the forward premium's part and the spot's;
@@ -1252,16 +1263,17 @@ def plain_text(sg: Dict[str, Any]) -> str:
             out += " Karşı bacak: %s (yukarıdaki K/Z'ye dahil değil)." % ", ".join(
                 "%s %s" % (l["name"], "al" if l["side"] > 0 else "sat") for l in others)
         return out
-    lv = lambda v: _level_text(v, sg.get("unit") or "", sg.get("digits") or 2)  # noqa: E731
+    # (a level with its quote on the desk's own sheet beside it, when the signal has one: a universe fly's)
+    lv = lambda v, inner=False: _level_text(v, sg.get("unit") or "", sg.get("digits") or 2) + sheet_text(sg, v, inner)  # noqa: E731
     what = sg.get("trade_tr") or sg.get("expression") or ""
     out = "%s. %s şimdi %s" % (what[:1].upper() + what[1:], sg.get("instrument") or "", lv(sg.get("level")))
     if mo.get("per_bp"):
         bp = mo["bp"]
         parts = []
         if bp.get("target") is not None:
-            parts.append("hedef seviyesine (%s) gelirse %s bp ≈ %s kazanırsın" % (lv(sg.get("target")), _g(bp["target"], 1), _money(abs(mo["target"]), "TL", False)))
+            parts.append("hedef seviyesine (%s) gelirse %s bp ≈ %s kazanırsın" % (lv(sg.get("target"), True), _g(bp["target"], 1), _money(abs(mo["target"]), "TL", False)))
         if bp.get("stop") is not None:
-            parts.append("stop seviyesine (%s) gelirse %s bp ≈ %s kaybedersin" % (lv(sg.get("stop")), _g(abs(bp["stop"]), 1), _money(abs(mo["stop"]), "TL", False)))
+            parts.append("stop seviyesine (%s) gelirse %s bp ≈ %s kaybedersin" % (lv(sg.get("stop"), True), _g(abs(bp["stop"]), 1), _money(abs(mo["stop"]), "TL", False)))
         out += ("; " + ", ".join(parts) if parts else "") + "."
         if bp.get("total") is not None:
             out += " Beklenen: %s içinde %s bp ≈ %s" % (span, _sg(bp["total"], 1), _money(mo["total"], "TL"))
@@ -3394,7 +3406,8 @@ def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str,
         inv.append("Stop: %s %s (giriş %s)%s" % (px["inst"], _th(px["stop"], px["digits"]), _th(px["entry"], px["digits"]),
                                                  " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
     elif sg and sg.get("stop") is not None:
-        inv.append("Stop: seviye %s (giriş %s)%s" % (_level_text(sg["stop"], m.unit, m.digits), _level_text(sg["entry"], m.unit, m.digits),
+        inv.append("Stop: seviye %s (giriş %s)%s" % (_level_text(sg["stop"], m.unit, m.digits) + sheet_text(sg, sg["stop"], True),
+                                                     _level_text(sg["entry"], m.unit, m.digits) + sheet_text(sg, sg["entry"], True),
                                                      " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
     reg = m.regime or {}
     if m.kind in ("mr", "surprise"):

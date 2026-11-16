@@ -18,7 +18,9 @@ history from one line to another.  Every number is the *up* side's -
 ``inst.verbs[0]``, the position that gains when the level rises ("AL", "pay", "steepener", "vol al"; "SAT" for a
 DİBS yield).  Size and money: ``inst.size_text(k)`` is k of the desk's unit ("1,4 mn EUR", "700 $ DV01", "14.000 $
 vega"), ``inst.money(move, k)`` what a level move of ``move`` change units makes k units of the up side, in
-``inst.ccy`` (USD for G10, TL for TRY rates, TRY for the USDTRY / EURTRY forwards and swap points).
+``inst.ccy`` (USD for G10, TL for TRY rates, TRY for the USDTRY / EURTRY forwards and swap points).  Texts:
+``inst.level_text(v)`` writes a level as the desk does - a fly's with the OIS sheet's 2·body − wings quote beside it,
+"-12,5 bp (OIS sayfasında -25,0)" -, ``inst.line(side, k, entry=…, target=…, stop=…)`` the whole line with them.
 ``inst.monitor(sid, family, k=1.0, **kw)`` is the :class:`quantfam.Monitor` with the instrument's legs (DV01-weighted,
 sized as today's packages are, for ``k`` units), P&L unit, FX pair and money set: give it the family's score (``zfn``
 / ``zvalues``), ``mode``, ``follows``, ``reward`` / ``risk`` / ``fcast`` / ``hold``, and ``make_signal`` writes its
@@ -285,6 +287,7 @@ VEGA_USD = 10000.0              # an option line's size: $ vega a vol point
 FX_NOTIONAL = qf.FX_NOTIONAL    # an FX line's size: 1 mn of the base currency
 FLY_WING = 0.5                  # a fly's wings, each, in DV01 of its body (50/50)
 QUARTERS = (3, 6, 9, 12, 15, 18, 21, 24)    # the quarters of the FRA grid's curve (15M and 21M: the interpolated inputs)
+SHEET_WHERE = "OIS sayfasında"  # where the desk reads a fly's own quote (OIS_MAIN, "TÜM FLY'LAR")
 DIBS_MIN_DAYS = qc.MIN_DAYS     # a bond this close to its maturity is no line
 
 
@@ -324,6 +327,7 @@ class Instrument(object):
     fx: Optional[str] = None      # the FX pair whose price the level is (its trade told in that price)
     inst_name: Optional[str] = None
     inst_days: Optional[float] = None
+    sheet_factor: Optional[float] = None    # the desk's own sheet quotes the level × this (a fly: the OIS sheet, 2)
 
     def __init__(self, reg: "Registry", key: str, group: str, label: str, verbs: Tuple[str, str], tier: Optional[str] = None,
                  info: Optional[Dict[str, Any]] = None):
@@ -367,6 +371,19 @@ class Instrument(object):
     def last(self) -> Optional[float]:
         p = self.pts()
         return p[-1][1] if p else None
+
+    def sheet(self, v: Optional[float]) -> Optional[float]:
+        """A level as the desk's own sheet quotes it, where that differs: a fly's 2·body − wings (the OIS sheet's "TÜM
+        FLY'LAR", Piyasa bp) - twice its 50/50 package level; ``None`` for the rest."""
+        return v * self.sheet_factor if self.sheet_factor and v is not None else None
+
+    def level_text(self, v: Optional[float]) -> str:
+        """A level as the desk writes it ("%38,50", "+3,0 bp", "1,08430"), a fly's with the OIS sheet's quote beside it:
+        "-12,5 bp (OIS sayfasında -25,0)"."""
+        if v is None:
+            return "—"
+        s = self.sheet(v)
+        return qf._level_text(v, self.unit, self.digits) + (" (%s %s)" % (SHEET_WHERE, qf._sg(s, 1)) if s is not None else "")
 
     def now(self, live: Optional[Dict[str, float]] = None) -> Optional[float]:
         """The level now: from the live values (the fit's when none are given), else the last close."""
@@ -473,9 +490,14 @@ class Instrument(object):
         s = self.size()
         return "%s %s" % (qf._th(s["amount"] * k, 0), s["unit"])
 
-    def line(self, side: int, k: float = 1.0) -> str:
-        """The trade in one line: "receive 2Y OIS · 700 $ DV01", "SAT USDTRY 1A forward · 1 mn USD · offshore limiti"."""
-        return " · ".join(x for x in ("%s %s" % (self.verb(side), self.label), self.size_text(k), self.tag) if x)
+    def line(self, side: int, k: float = 1.0, entry: Optional[float] = None, target: Optional[float] = None,
+             stop: Optional[float] = None) -> str:
+        """The trade in one line: "receive 2Y OIS · 700 $ DV01", "SAT USDTRY 1A forward · 1 mn USD · offshore limiti" -
+        with ``entry`` / ``target`` / ``stop`` (levels) their texts too, a fly's with the OIS sheet's quote: "gövde
+        receive / kanatlar pay 6M/1Y/2Y fly · 1.000 $ DV01 · giriş -12,5 bp (OIS sayfasında -25,0) · hedef …"."""
+        parts = ["%s %s" % (self.verb(side), self.label), self.size_text(k)]
+        parts += ["%s %s" % (word, self.level_text(v)) for word, v in (("giriş", entry), ("hedef", target), ("stop", stop)) if v is not None]
+        return " · ".join(x for x in parts + [self.tag] if x)
 
     def cash(self) -> Optional[Tuple[str, float]]:
         """``Monitor.cash``: (currency, money a P&L unit) for a line whose card has no money of its own (vol, points)."""
@@ -499,6 +521,9 @@ class Instrument(object):
         info = {"universe": self.key, "group": self.group, "tier": self.tier, "priority": self.priority, "tag": self.tag,
                 "size": self.size_text(k), "k": k, "verbs": list(self.verbs),
                 "inputs": [l["key"] for l in legs] + list(self.info.get("inputs") or ())}
+        if self.sheet_factor:
+            # (the card tells a fly's levels with the OIS sheet's quote beside them: quantfam.plain_text, quantbase.js)
+            info["sheet"] = {"factor": self.sheet_factor, "where": SHEET_WHERE}
         info.update(kw.pop("info", None) or {})
         cw = self.carry_week()
         opts: Dict[str, Any] = {"pnl": self.pnl(), "dsd": qm.stdev(diffs) if len(diffs) >= 2 else None, "pkg": self.pkg,
@@ -514,12 +539,14 @@ class Instrument(object):
         return qf.Monitor(sid, family, self.asset, self.label, self.unit, self.digits, list(days), lv, legs, self.now, **opts)
 
     def row(self, live: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-        """What the universe's table says of it."""
+        """What the universe's table says of it (a fly's level with the OIS sheet's quote: ``level_text``, ``sheet_level``)."""
         p = self.pts()
         cw = self.carry_week(live)
+        level = self.now(live)
         return {"key": self.key, "group": self.group, "tier": self.tier, "priority": self.priority, "tag": self.tag, "label": self.label,
                 "kind": self.kind, "unit": self.unit, "digits": self.digits, "verbs": list(self.verbs), "size": self.size_text(),
-                "ccy": self.ccy, "n": len(p), "first": p[0][0] if p else None, "last": p[-1][0] if p else None, "level": self.now(live),
+                "ccy": self.ccy, "n": len(p), "first": p[0][0] if p else None, "last": p[-1][0] if p else None, "level": level,
+                "level_text": self.level_text(level), "sheet_level": self.sheet(level),
                 "vol": self.vol(), "carry_week": cw, "money_1": self.money(1.0, 1.0, live), "tradeable": self.tradeable,
                 "legs": [{"key": l["key"], "name": l["name"], "weight": l.get("weight", 1.0)} for l in self.legs(live)],
                 "rolls": len(self.rolls())}
@@ -607,7 +634,8 @@ class OisPackage(Instrument):
     """An outright, a spread or a fly of TRY OIS: the level ``Σ weight × rate`` (an outright's rate %, a spread's and a
     fly's bp), the trade its DV01 legs (1.000 $ on the main leg; a fly's body, its wings ½ each).  A fly's level is its
     50/50 package's - body − ½ each wing, as the PCA / RV page's classic flies -: half the OIS sheet's 2·body − wings
-    quote, a bp of it a bp of the package's DV01."""
+    quote, a bp of it a bp of the package's DV01; its texts carry the sheet's quote beside it (``sheet_factor``,
+    ``level_text``)."""
 
     def __init__(self, reg: "Registry", key: str, label: str, verbs: Tuple[str, str], quote: Dict[str, float],
                  dv01: Dict[str, float], kind: str, pkg: str, **kw: Any):
@@ -620,6 +648,8 @@ class OisPackage(Instrument):
         if kind == "bp":
             # (the quote's bp in the package's: a spread's 1, a fly's ½)
             self.per_cu = sum(abs(w) for w in dv01.values()) / sum(abs(w) for w in quote.values())
+        if len(quote) == 3:
+            self.sheet_factor = 2.0 / max(abs(w) for w in quote.values())       # (the OIS sheet: 2·body − wings)
 
     def _value(self, rates: Dict[str, Optional[float]]) -> Optional[float]:
         if any(rates.get(k) is None for k in self.quote):

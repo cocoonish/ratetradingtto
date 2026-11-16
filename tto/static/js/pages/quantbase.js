@@ -45,6 +45,14 @@ export function levelText(v, unit, digits = 2) {
   return fmt(v, digits) + (unit ? ' ' + unit : '');
 }
 
+/** A level's quote on the desk's own sheet, beside it - when the signal carries one (``info.sheet``: a fly of the
+ * universe, the OIS sheet's 2·body − wings, tto/quantuniv.py): " (OIS sayfasında -25,0)". */
+export function sheetText(s, v) {
+  const sh = (s && s.info && s.info.sheet) || null;
+  if (!sh || !isNum(v) || !isNum(sh.factor)) return '';
+  return ' (' + (sh.where || 'OIS sayfasında') + ' ' + sgn(v * sh.factor, 1) + ')';
+}
+
 /** A signal's expected P&L as one cell: FX in money per 1 mn of the base currency, a rates package in bp (its TL in
  * the tooltip), anything else in its own unit. */
 export function pnlCell(s) {
@@ -296,7 +304,7 @@ export class SignalChart {
       this.zHead.textContent = (m.score_name || 'z') + ' · gün gün';
       if (this.charts.z) this.charts.z.update(zspec); else this.charts.z = new Chart(this.zHost, zspec, { height: 250 });
     }
-    this.statEl.textContent = 'Şimdi ' + fmt(m.level, digits) + (unit ? ' ' + unit : '') + ' · ' + (m.score_name || 'z') + ' ' + sgn(m.z, 2)
+    this.statEl.textContent = 'Şimdi ' + fmt(m.level, digits) + (unit ? ' ' + unit : '') + sheetText(s || m, m.level) + ' · ' + (m.score_name || 'z') + ' ' + sgn(m.z, 2)
       + (isNum(m.half_life) ? ' · yarı ömür ' + fmt(m.half_life, 1) + ' gün' : '')
       + (m.regime && m.regime.tag ? ' · rejim ' + (REGIME[m.regime.tag] || m.regime.tag) : '')
       + ' · ' + isoToTr(days[0]) + ' – ' + isoToTr(days[days.length - 1]) + ' · ' + days.length + ' gün';
@@ -399,7 +407,7 @@ export class SignalChart {
     const px = s.px || null;
     const mo = s.money || {};
     const pu = s.pnl_unit || '';
-    const lv = (v) => levelText(v, s.unit, s.digits);
+    const lv = (v) => levelText(v, s.unit, s.digits) + sheetText(s, v);       // (a fly: the OIS sheet's quote beside it)
     const span = isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit === 'bar' ? 'bar (5 dk)' : 'iş günü') : 'ufuk';
     // every leg with its nominal and DV01 ($ and TL a bp) where they are known: the trade's tooltip
     const legs = s.legs || [];
@@ -537,8 +545,10 @@ export function signalRows(list, opts = {}) {
       T(s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
-      N(px ? px.entry : s.entry, px ? px.digits : s.digits, at), N(px ? px.target : s.target, px ? px.digits : s.digits),
-      N(px ? px.stop : s.stop, px ? px.digits : s.digits), T(px ? px.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : {}),
+      N(px ? px.entry : s.entry, px ? px.digits : s.digits, px ? at : { tip: sheetText(s, s.entry).trim() || undefined }),
+      N(px ? px.target : s.target, px ? px.digits : s.digits, px ? {} : { tip: sheetText(s, s.target).trim() || undefined }),
+      N(px ? px.stop : s.stop, px ? px.digits : s.digits, px ? {} : { tip: sheetText(s, s.stop).trim() || undefined }),
+      T(px ? px.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : {}),
       pnlCell(s),
       N(rr, 2, { tip: 'Ödül ÷ risk (hedefe ve stoba uzaklık)' + (isNum(s.exp_r) ? ' · beklenen ÷ risk ' + fmt(s.exp_r, 2) : '') }),
       N(s.half_life, 1), T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),

@@ -2488,6 +2488,26 @@ async function shot(page, name) {
     check('... a line says its group ("TRY OIS · ≤ 2Y"), an Offshore line "offshore limiti"; a gate\'s line "düşük güven" and its reason where the composite was, its card too',
       labels.g0 === 'TRY OIS · ≤ 2Y' && labels.g1 === 'Offshore · offshore limiti' && labels.cls1 === 'qtag' && labels.s0 === 'Güçlü' && labels.s1 === 'düşük güven'
       && labels.c0 === '2,60' && /^yarı ömür 60 gün/.test(labels.why1) && labels.card === 'Offshore · offshore limiti · düşük güven (yarı ömür 60 gün: ufkun (20 gün) 2 katından uzun)', labels);
+    // a fly of the universe: its level the 50/50 package's, the OIS sheet's 2·body − wings quote beside it on the card
+    const flyCard = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const s = { id: 'trend:OISF:6M/1Y/2Y', family: 'trend', family_label: 'Trend', asset: 'TRY OIS', expression: 'Pay 6M/1Y/2Y fly',
+        instrument: '6M/1Y/2Y fly', z: 2.5, entry_z: 2, strength: 'Güçlü', gates: [], legs: [], agree: 0, conflict: 0,
+        parts: { z: 2.5, regime: 1, hl: 1, carry: 1 }, composite: 2.5, hold: 10, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1,
+        entry: -12.5, target: -8, stop: -15, direction: 1, pnl_unit: 'bp', exp_pnl: 3, group: 'TRY OIS', tier: '≤ 2Y', tag: '', gated: '',
+        info: { sheet: { factor: 2, where: 'OIS sayfasında' } } };
+      const host = document.createElement('div');
+      const c = new q.SignalChart(host);
+      c.show({ monitor: { name: '6M/1Y/2Y fly', info: s.info }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+      const prices = (host.querySelector('#quant-sig-prices') || {}).textContent || '';
+      c.destroy();
+      const row = q.signalRows([s])[0];
+      const col = (n) => q.SIGNAL_HEAD.indexOf(n);
+      return { prices, tip: row[col('Giriş')].tip, entry: row[col('Giriş')].t };
+    });
+    check("... a fly's entry / target / stop on the card with the OIS sheet's quote beside them (2·body − wings), in the list's tooltip",
+      flyCard.prices.startsWith('-12,5 bp (OIS sayfasında -25,0) / -8,0 bp (OIS sayfasında -16,0) / -15,0 bp (OIS sayfasında -30,0) · 6M/1Y/2Y fly')
+      && flyCard.tip === '(OIS sayfasında -25,0)' && flyCard.entry === '-12,5', flyCard);
     check('... the alarm subscription chooses groups too, and knows the families on the universe (Trend, Carry + momentum, Makine öğrenmesi)',
       await page.locator('#quant-sub-groups input[type=checkbox]').count() === 7
       && /Trend/.test(await page.textContent('#quant-sub-families')) && /Carry \+ momentum/.test(await page.textContent('#quant-sub-families'))
