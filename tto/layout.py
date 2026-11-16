@@ -366,8 +366,9 @@ def _choice(x: Dict[str, Any], out: Dict[str, Any], key: str, allowed: tuple, wh
 
 
 def _signals_box(x: Dict[str, Any], out: Dict[str, Any]) -> None:
-    """Sinyaller's live signals: ``family`` / ``asset`` filter them as the page does (none: all), ``open`` is where a
-    click shows a signal's card - ``"card"`` over the box (the default), ``"page"`` on the Sinyaller page."""
+    """Sinyaller's live signals: ``family`` / ``asset`` / ``group`` filter them as the page does (none: all), ``open``
+    is where a click shows a signal's card - ``"card"`` over the box (the default), ``"page"`` on the Sinyaller page."""
+    from .quantuniv import GROUPS
     fam = x.get("family")
     if fam not in (None, ""):
         if not isinstance(fam, str) or not _FAMILY.match(fam):
@@ -375,6 +376,10 @@ def _signals_box(x: Dict[str, Any], out: Dict[str, Any]) -> None:
         out["family"] = fam
     if x.get("asset") not in (None, ""):
         out["asset"] = _text(x["asset"], 40, "varlık")
+    if x.get("group") not in (None, ""):
+        if x["group"] not in GROUPS:
+            raise LayoutError("sinyal grubu geçersiz")
+        out["group"] = x["group"]
     _choice(x, out, "open", ("card", "page"), "sinyale tıklayınca")
 
 

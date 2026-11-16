@@ -66,23 +66,28 @@ class SignalsBox extends PageBox {
   }
 
   part(it) {
-    return { path: '/api/quant/box', params: { of: 'signals', family: it.family || undefined, asset: it.asset || undefined } };
+    return { path: '/api/quant/box', params: { of: 'signals', family: it.family || undefined, asset: it.asset || undefined, group: it.group || undefined } };
   }
 
   titleText() {
     const fam = this.item.family ? ((this.data && this.data.family_label) || this.item.family) : '';
-    return 'Canlı sinyaller' + (fam ? ' · ' + fam : '') + (this.item.asset ? ' · ' + this.item.asset : '');
+    return 'Sinyaller' + (this.item.group ? ' · ' + this.item.group : '') + (fam ? ' · ' + fam : '') + (this.item.asset ? ' · ' + this.item.asset : '');
   }
 
   paint(d) {
     if (!d.ready) { this.notReady(d); return; }
     const sig = d.signals || [];
     if (!sig.length) {
-      this.empty('Şu an eşiği geçen sinyal yok (giriş |z| ≥ ' + num(d.entry_z || 2, 1) + ')' + (this.item.family || this.item.asset ? ' – süzgeçle' : '') + '.');
+      this.empty('Şu an eşiği geçen sinyal yok (giriş |z| ≥ ' + num(d.entry_z || 2, 1) + ')' + (this.item.family || this.item.asset || this.item.group ? ' – süzgeçle' : '') + '.');
       return;
     }
     this.ids = sig.map((s) => s.id);                // (read at the click: the grid's handler stays while its rows change)
-    this.showGrid(plainData(['#'].concat(SIGNAL_HEAD, ['Bileşik', 'Saat']), signalRows(sig, { rank: true })), 'quant/signals',
+    // (the page's list: by group, a gate's "düşük güven" lines grey after the confident ones, the reason last)
+    const rows = signalRows(sig, { rank: true, group: true }).map((row, i) => {
+      if (sig[i].gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
+      return row;
+    });
+    this.showGrid(plainData(['#', 'Grup'].concat(SIGNAL_HEAD, ['Bileşik / neden', 'Saat']), rows), 'quant/signals',
       (i) => this.open(this.ids[i]), JSON.stringify(this.ids));
   }
 
@@ -97,24 +102,28 @@ class SignalsBox extends PageBox {
       { label: mark(this.item.open !== 'page') + 'Kartı burada aç', action: () => this.change({ open: 'card' }) },
       { label: mark(this.item.open === 'page') + 'Sinyaller sayfasında aç', action: () => this.change({ open: 'page' }) },
       { sep: true },
-      { label: 'Aile ve varlık…' + (this.item.family || this.item.asset ? ' (süzgeç var)' : ''), action: () => this.pickFilter() }];
+      { label: 'Grup, aile ve varlık…' + (this.item.family || this.item.asset || this.item.group ? ' (süzgeç var)' : ''), action: () => this.pickFilter() }];
   }
 
-  /** The page's filters: a family, an asset (none: all). */
+  /** The page's filters: a group, a family, an asset (none: all). */
   pickFilter() {
     const d = this.data || {};
     const m = modal({ title: 'Sinyaller · süzgeç', width: 420 });
+    const group = h('select', { class: 'inp', style: { width: '100%' } }, h('option', { value: '' }, 'Tümü'),
+      (d.groups || []).map((g) => h('option', { value: g }, g)));
     const fam = h('select', { class: 'inp', style: { width: '100%' } }, h('option', { value: '' }, 'Tümü'),
       (d.families || []).map((f) => h('option', { value: f.id }, f.label)));
     const asset = h('select', { class: 'inp', style: { width: '100%' } }, h('option', { value: '' }, 'Tümü'),
       (d.assets || []).map((a) => h('option', { value: a }, a)));
+    group.value = this.item.group || '';
     fam.value = this.item.family || '';
     asset.value = this.item.asset || '';
-    m.body.append(h('div', { class: 'field' }, h('label', null, 'Aile'), fam), h('div', { class: 'field' }, h('label', null, 'Varlık'), asset));
+    m.body.append(h('div', { class: 'field' }, h('label', null, 'Grup'), group), h('div', { class: 'field' }, h('label', null, 'Aile'), fam),
+      h('div', { class: 'field' }, h('label', null, 'Varlık'), asset));
     m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
     m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', onclick: () => {
       m.close();
-      this.change({ family: fam.value || null, asset: asset.value || null });
+      this.change({ group: group.value || null, family: fam.value || null, asset: asset.value || null });
     } }, 'Kaydet'));
   }
 }

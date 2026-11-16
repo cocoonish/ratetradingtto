@@ -18,6 +18,15 @@ const serialOf = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7)
 
 export const REGIME = { MR: 'Ortalamaya dönüş', Trend: 'Trend', 'Nötr': 'Nötr' };
 
+/** What a signal a gate holds is called: it stays in the lists, after the confident ones, never logged nor alerted. */
+export const LOW = 'düşük güven';
+
+/** A signal's place in the Sinyaller list (tto/quantuniv.py): its group, TRY OIS's end ("≤ 2Y" / "uzun") and the tag
+ * of an Offshore line ("offshore limiti"). */
+export function groupText(s) {
+  return [s.group || '', s.tier || '', s.tag || ''].filter(Boolean).join(' · ');
+}
+
 /** Money as the desk says it (the server's sentences say it the same way): "+525 bin TRY", "4,2 bin USD", "-1.800 bin
  * TL" - thousands, 10 mn and over in mn. */
 export function money(v, ccy, sign = true) {
@@ -48,6 +57,11 @@ export function pnlCell(s) {
         + (isNum(s.pnl_try) && mo.ccy !== 'TRY' ? ' · ≈ ' + money(s.pnl_try, 'TRY') : '') + ' · nominalin ' + sgn(s.exp_pnl, 2) + '%\'si' };
   }
   if (!isNum(s.exp_pnl)) return { t: '', k: '' };
+  if (isNum(mo.per_unit) && isNum(mo.total)) {
+    // (a line of linear money - an option's vega, a swap's points: the money, its units in the tooltip)
+    return { t: money(mo.total, mo.ccy), v: mo.total, k: 'n', tip: 'Tutma boyunca beklenen K/Z: ' + sgn(s.exp_pnl, 2) + ' ' + (pu === 'vol' ? 'vol puanı' : pu)
+      + ' × ' + num(mo.per_unit, 0) + ' ' + mo.ccy + ((s.info || {}).size ? ' (' + s.info.size + ')' : '') + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') };
+  }
   const tip = 'Tutma boyunca beklenen K/Z' + (pu === 'bp' ? ', carry + roll dahil' : '')
     + (pu === 'bp' && isNum(mo.total) ? ' · ≈ ' + money(mo.total, 'TL') + ' (ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp)' : '')
     + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
@@ -327,7 +341,7 @@ export class SignalChart {
       // (the trade in desk words, its prices, the sentence and the money are above the charts: plainBlock)
       const lines = [
         ['Tez', s.thesis || ''],
-        ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + (s.gated ? 'elendi' : s.strength)],
+        ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + (s.gated ? LOW : s.strength)],
         ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' gün' : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit || 'gün') : '—')],
         [fx ? 'Forward primi' : 'Carry + roll / hafta', fx ? (isNum(s.carry_yr) ? 'yıllık %' + sgn(s.carry_yr, 1) + ' (sürekli bileşik, en kısa forward), işlemin '
           + (s.carry_yr >= 0 ? 'lehine' : 'aleyhine')
@@ -342,7 +356,7 @@ export class SignalChart {
         ['Uyum', s.agree + ' aile aynı yönde' + (s.agree_with && s.agree_with.length ? ' (' + s.agree_with.join(', ') + ')' : '')
           + (s.conflict ? ' · ' + s.conflict + ' ters (' + (s.conflict_with || []).join(', ') + ')' : '')],
         ['Bileşik', fmt(s.composite, 2) + ' = |z| ' + fmt(p.z, 2) + ' × rejim ' + fmt(p.regime, 2) + ' × yarı ömür ' + fmt(p.hl, 2) + ' × carry ' + fmt(p.carry, 2)
-          + (s.gated ? ' · elendi: ' + s.gated : '')],
+          + (s.gated ? ' · ' + LOW + ': ' + s.gated : '')],
       ];
       // an FX trade is told in prices; the series the analysis scores (and the chart draws) is its own
       if (s.px) {
@@ -395,7 +409,13 @@ export class SignalChart {
     const trade = h('td', { id: this.id('quant-sig-trade'), title: sizedLegs || s.expression || null }, h('b', null, s.trade_tr || s.expression || ''));
     if (px) trade.append(' · 1 mn ' + mo.base);
     else if (isNum(mo.per_bp)) trade.append(' · ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp');
+    else if (isNum(mo.per_unit) && (s.info || {}).size) trade.append(' · ' + s.info.size);
     rows.push(['İşlem', trade]);
+    // its place in the list: the group, TRY OIS's end, an Offshore line's "offshore limiti"; a gate's hold: "düşük güven"
+    if (s.group) {
+      rows.push(['Grup', h('td', { id: this.id('quant-sig-group'), class: s.tag ? 'qtag' : null }, groupText(s)
+        + (s.gated ? ' · ' + LOW + ' (' + s.gated + ')' : ''))]);
+    }
     const d = px ? px.digits : s.digits;
     rows.push(['Giriş / hedef / stop', h('td', { id: this.id('quant-sig-prices') }, px
       ? fmt(px.entry, d) + ' / ' + fmt(px.target, d) + ' / ' + fmt(px.stop, d) + ' · ' + px.inst + ' (giriş: ' + px.note
@@ -417,6 +437,9 @@ export class SignalChart {
         + (isNum(bp.carry) ? ' · carry + roll ' + sgn(bp.carry, 2) + ' bp · hareket ' + sgn(bp.move, 2) + ' bp' : '')
         + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' bp' : '');
       tip = span + ' boyunca';
+    } else if (isNum(mo.per_unit) && isNum(s.exp_pnl)) {
+      pnl = sgn(s.exp_pnl, 2) + ' ' + (pu === 'vol' ? 'vol puanı' : pu) + (isNum(mo.total) ? ' ≈ ' + money(mo.total, mo.ccy) : '');
+      tip = span + ' boyunca, ' + num(mo.per_unit, 0) + ' ' + mo.ccy + ' / ' + (pu === 'vol' ? 'vol puanı' : pu) + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
     } else if (isNum(s.exp_pnl)) {
       pnl = sgn(s.exp_pnl, 2) + ' ' + (pu === 'vol' ? 'vol puanı' : pu);
       tip = span + ' boyunca' + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
@@ -429,6 +452,8 @@ export class SignalChart {
     } else if (isNum(mo.per_bp) && mo.bp && (isNum(mo.bp.target) || isNum(mo.bp.stop))) {
       ends = 'hedefte ' + (isNum(mo.bp.target) ? fmt(mo.bp.target, 1) + ' bp ≈ ' + money(mo.target, 'TL') : '—')
         + ' · stopta ' + (isNum(mo.bp.stop) ? fmt(Math.abs(mo.bp.stop), 1) + ' bp ≈ ' + money(mo.stop, 'TL') : '—');
+    } else if (isNum(mo.per_unit) && (isNum(mo.target) || isNum(mo.stop))) {
+      ends = 'hedefte ' + (money(mo.target, mo.ccy) || '—') + ' · stopta ' + (money(mo.stop, mo.ccy) || '—');
     } else if (isNum(s.reward) || isNum(s.risk)) {
       ends = 'hedefe ' + (isNum(s.reward) ? fmt(s.reward, 2) + ' ' + pu : '—') + ' · stopa ' + (isNum(s.risk) ? fmt(s.risk, 2) + ' ' + pu : '—');
     }
@@ -493,6 +518,8 @@ export function gateText(s) {
   return (s.gates || []).map((g) => (g.ok ? '✓' : '✗') + ' ' + g.name).join(' · ');
 }
 
+/** ``opts.rank`` a first column with the line's number, ``opts.group`` one with its group (Sinyaller's list and its
+ * box); a signal a gate holds says "düşük güven" for its strength and its reason in the last column. */
 export function signalRows(list, opts = {}) {
   return list.map((s, i) => {
     const row = [];
@@ -504,10 +531,12 @@ export function signalRows(list, opts = {}) {
       : {};
     const rr = isNum(s.rr) ? s.rr : (px && isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
+    if (opts.group) row.push(T(groupText(s), Object.assign({ tip: s.tag ? s.tag + ': masanın offshore işlem limiti dar' : (s.group || '') },
+      s.tag ? { cls: 'qtag' } : {})));
     row.push(T(s.family_label + (s.intraday ? ' · gün içi' : '')), T(s.asset),
       T(s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
-      T(s.gated ? 'elendi' : s.strength, { cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }),
+      T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
       N(px ? px.entry : s.entry, px ? px.digits : s.digits, at), N(px ? px.target : s.target, px ? px.digits : s.digits),
       N(px ? px.stop : s.stop, px ? px.digits : s.digits), T(px ? px.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : {}),
       pnlCell(s),
@@ -519,7 +548,7 @@ export function signalRows(list, opts = {}) {
       T(gateText(s), { cls: 'qgate', tip: (s.gates || []).map((g) => (g.ok ? '✓ ' : '✗ ') + g.name + ': ' + (g.text || '')).join('\n') }),
       T(btShort(s.bt), { tip: s.bt ? s.bt.text + (isNum(s.bt.sharpe) ? ' · Sharpe ' + fmt(s.bt.sharpe, 2) : '')
         + (isNum(s.bt.max_dd) ? ' · en büyük düşüş ' + fmt(s.bt.max_dd, 1) + 'σ' : '') : 'geri test henüz yok' }));
-    if (opts.gated) row.push(T(s.gated, { cls: 'soft' }));
+    if (opts.gated || s.gated) row.push(T(s.gated, { cls: 'soft' }));
     else row.push(N(s.composite, 2, { b: 1, tip: '|z| ' + fmt(s.parts.z, 2) + ' × rejim ' + fmt(s.parts.regime, 2) + ' × yarı ömür ' + fmt(s.parts.hl, 2) + ' × carry ' + fmt(s.parts.carry, 2) }));
     row.push(T((s.live ? '● ' : '') + (s.time || ''), { tip: s.live ? 'canlı değerle' : 'son kapanışla' }));
     return row;
