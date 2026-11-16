@@ -51,7 +51,11 @@ export class PositionPanel {
 
   async refresh(force) {
     const now = Date.now();
-    if (!force && now - this.last < REFRESH_MS) return;
+    if (!force && now - this.last < REFRESH_MS) {
+      // asked again too soon: once more when the time is up (what changed in between is not left out)
+      if (!this.later) this.later = setTimeout(() => { this.later = null; if (this.el.isConnected) this.refresh(true); }, REFRESH_MS - (now - this.last));
+      return;
+    }
     this.last = now;
     let d;
     try {
