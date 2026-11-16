@@ -340,11 +340,13 @@
    "id": "B17D",
    "type": "table",
    "sheet": "VIOP",
-   "range": "L330:P338",
+   "range": "L330:Z338",
+   "cols": ["L", "M", "N", "O", "Z", "P"],
+   "tips": {"Z": "AC"},
    "hidden": false,
    "borrowed": true,
    "keep_title": true,
-   "title": "VİOP TARGET  ·  hedefler: yakın, uzak, yön, hedef tipi ve değeri (sarı hücreler girdi; VİOP sayfasındaki Target tablosuyla aynı girdiler)"
+   "title": "VİOP TARGET  ·  hedefler: yakın, uzak, yön, hedef tipi, FRA eğrisi ve değeri (sarı hücreler girdi; VİOP sayfasındaki Target tablosuyla aynı girdiler)"
   },
   {
    "id": "B17",

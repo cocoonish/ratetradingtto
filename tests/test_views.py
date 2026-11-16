@@ -122,6 +122,9 @@ def test_panels_and_inputs_point_at_real_cells(models, view):
         r1, c1, r2, c2 = parse_range(p["range"])
         assert 1 <= r1 <= sheet.max_row and 1 <= c1 <= sheet.max_col, (view["id"], p["id"], p["range"])
         assert p.get("title"), (view["id"], p["id"])
+        for col, src in (p.get("tips") or {}).items():    # tooltips from the workbook: a column the table shows, a text column
+            assert c1 <= col_to_index(col) <= c2 and (not p.get("cols") or col in p["cols"]), (view["id"], p["id"], col)
+            assert col_to_index(src) >= 1 and src != col, (view["id"], p["id"], src)
         for key in ("note_ref", "title_ref"):                       # explanations read from a cell: a text cell
             if p.get(key):
                 ref = p[key] if "!" in p[key] else "%s!%s" % (sheet.name, p[key])
@@ -430,7 +433,7 @@ def test_inputs_typed_beside_a_table_are_its_own(service):
     assert tabs["sig"] == ["B18D", "B18", "B19D", "B19", "B23D", "B23"]
     strips = {p["id"]: p["data"] for p in page["panels"] if p.get("id") in ("B16D", "B17D", "B19D", "B23D")}
     assert strips["B16D"]["r"] == [321] and [c.get("i") for c in strips["B16D"]["rows"][0]] == [None, "u"]
-    assert strips["B17D"]["c"] == ["L", "M", "N", "O", "P"] and strips["B17D"]["r"] == list(range(330, 339))
+    assert strips["B17D"]["c"] == ["L", "M", "N", "O", "Z", "P"] and strips["B17D"]["r"] == list(range(330, 339))   # Z: FRA eğrisi
     assert all(c.get("i") == "u" for row in strips["B17D"]["rows"][1:] for c in row)
     assert strips["B19D"]["c"] == ["I", "J", "O", "P", "W", "X", "Y", "Z"]      # horizon, threshold, price type, repo
     assert [c.get("i") for c in strips["B19D"]["rows"][0]] == [None, "u", None, "u", None, "u", None, "u"]

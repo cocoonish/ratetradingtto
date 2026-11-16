@@ -154,6 +154,13 @@
    "label": "Target 'Hedef tipi'"
   },
   {
+   "range": "Z331:Z338",
+   "scope": "user",
+   "group": "viop-target-fra",
+   "kind": "list",
+   "label": "Target 'FRA eğrisi' – FRA+bp satırının OIS FRA'sı (ve hedef faizi) hangi eğriden: Bootstrap (piyasa) ya da OIS · PPK senaryoları S1 / S2 / S3 (liste EK_VFRA!A3:A6, adları SENARYOLAR'dan); boş = Bootstrap"
+  },
+  {
    "range": "P331:P338",
    "scope": "user",
    "group": "viop-21",
@@ -399,8 +406,11 @@
    "id": "B33",
    "type": "table",
    "title": "Target",
-   "range": "K330:Y338",
-   "hidden": false
+   "range": "K330:AC338",
+   "cols": ["K", "L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"],
+   "tips": {"W": "AA", "Q": "AB", "Z": "AC"},
+   "hidden": false,
+   "note": "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden – Bootstrap (piyasa) ya da OIS · PPK'daki senaryolar S1 / S2 / S3 (adları SENARYOLAR tablosundan). FXswap+bp ve Faiz % satırlarında etkisiz. Hücrenin üzerine gelince OIS FRA ve Hedef faiz eğrilerini yazar."
   },
   {
    "id": "B12",
@@ -858,6 +868,15 @@
    "title": "Yardımcı · canlı son fiyat",
    "range": "K510:DD511",
    "hidden": true
+  },
+  {
+   "id": "VF1",
+   "type": "table",
+   "sheet": "EK_VFRA",
+   "range": "A1:U20",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · VİOP Target FRA eğrileri (açılır liste; her satırın tarihleri, S1–S3 iskonto faktörleri, Bootstrap / S1 / S2 / S3 FRA'sı ve durumu)"
   }
  ],
  "sections": [

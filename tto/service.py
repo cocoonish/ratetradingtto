@@ -40,7 +40,7 @@ from .xl import numfmt
 from .xl.engine import Calc, Clock, big_stack_thread
 from .xl.errors import XlError
 from .xl.model import COLS, a1, parse_a1, parse_range
-from .xl.tokenizer import index_to_col
+from .xl.tokenizer import col_to_index, index_to_col
 from .marketdata.base import INVALID_FIELD, INVALID_SECURITY, NOT_APPLICABLE
 from .xl.values import date_to_serial, serial_to_date
 
@@ -1834,6 +1834,8 @@ class Service(object):
                 # columns hidden in Excel stay out of the way until the helper tables are asked for
                 entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
                 self._mark_formulas(entry["data"], book, sheet, user if overlay else None)
+                if p.get("tips"):
+                    _cell_tips(entry["data"], book, calc, sheet, p["tips"])
                 if p.get("lift", True):
                     own = _lift_title(entry["data"])
                     if own and not p.get("keep_title"):
@@ -6707,6 +6709,27 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
     if missing:
         out["part_missing"] = True
     return out
+
+
+def _cell_tips(data: Optional[Dict[str, Any]], book: Book, calc: Calc, sheet: str, tips: Dict[str, str]) -> None:
+    """Tooltips a table's cells take from the workbook (``{"W": "AA"}``: the text in column AA of a cell's row is the
+    tooltip of the table's cell in column W - which curve a rate comes from, say; an empty text gives none).  The column
+    the texts are in need not be shown."""
+    letters = (data or {}).get("c")
+    if not letters:
+        return
+    si = book.model.sheet_index[sheet]
+    for col, src in tips.items():
+        if col not in letters:
+            continue
+        j, c = letters.index(col), col_to_index(src)
+        for i, r in enumerate(data.get("r") or []):
+            cell = data["rows"][i][j]
+            if not r or not isinstance(cell, dict) or cell.get("sk"):
+                continue
+            text = calc.get(si, r, c)
+            if isinstance(text, str) and text.strip():
+                cell["tip"] = cell["tip"] + "\n" + text.strip() if cell.get("tip") else text.strip()
 
 
 def _column_captions(data: Dict[str, Any], captions: Dict[str, str]) -> None:

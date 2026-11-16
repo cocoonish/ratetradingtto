@@ -92,9 +92,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
-                                                   "VİOP kontratları", "Tek OIS spread'i"]
+                                                   "VİOP kontratları", "Tek OIS spread'i", "EK_VFRA"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
-                                              "EK_IHALE", "EK_TATIL"} & set(sofr.sheet_index)
+                                              "EK_IHALE", "EK_TATIL", "EK_VFRA"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
     # the TRY workbook with one gold forward typed over by hand: the gold tables stay as they are in the file
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
@@ -104,8 +104,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     formulas = dict(viop.fml)
     assert extras.apply("tto", tto) == ["EK_XAU: VIOP!M58 bir formül değil"]
     # (rows 107-109: the matrix's DV01s, rewritten by their own addition whatever the gold tables are; rows 1 / 45 / 60:
-    # the futures tickers, which roll by themselves - the gold ones too)
-    dv01_rows = {r for r in (107, 108, 109, 1, 45, 60)}
+    # the futures tickers, which roll by themselves - the gold ones too; rows 330-338: the target table, whose FRA takes
+    # the curve chosen per row)
+    dv01_rows = {r for r in (107, 108, 109, 1, 45, 60) + tuple(range(330, 339))}
     keep = lambda fml: {rc: t for rc, t in fml.items() if rc // COLS not in dv01_rows}          # noqa: E731
     assert "EK_FWD" in tto.sheet_index and "EK_XAU" not in tto.sheet_index and keep(viop.fml) == keep(formulas)
     assert "EK_VIOP" in tto.sheet_index                                             # the history charts do not need the gold tables

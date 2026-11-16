@@ -9,7 +9,9 @@
 * ``panels``  ``{"type": "table", "range": "B29:J39", "title": "...", "hidden": false}`` |
               (``"sheet": "VIOP", "borrowed": true``: a few cells of another page's sheet, shown here as well) |
   ``{"type": "chart", "chart": <index of the chart on the sheet>}`` | ``{"type": "notes", "range": ...}`` |
-  ``{"type": "custom", "component": "..."}``
+  ``{"type": "custom", "component": "..."}``; a table may show its columns in an order of its own (``"cols": ["K", "O",
+  "Z", "P"]``: by letter, one not named is not shown) and take tooltips from the workbook (``"tips": {"W": "AA"}``: the
+  text in column AA of a row is the tooltip of the row's cell in column W)
 * ``sections`` (optional)  the page in tabs: ``[{"id": "calc", "title": "Hesaplayıcılar", "note": "...",
   "panels": ["B7", "B8"]}, ...]`` - the panels of a tab in the order they are listed (a panel may be listed in
   more than one tab).  Every panel that is shown belongs to a tab or to ``pinned``; the helper tables that
