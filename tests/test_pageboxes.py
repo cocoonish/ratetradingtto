@@ -168,6 +168,18 @@ def test_the_board_alone_is_the_pages_board(module_service):
     with pytest.raises(ServiceError) as err:
         svc.broker(u, part="log")
     assert err.value.status == 400
+    # Broker Chat's own changes are counted (the live stream carries the count: the board's box asks again on it, not on
+    # every generation of the market); the board says the count it was made at
+    n = svc.broker_changes
+    assert board["changes"] == n >= 1
+    gen = svc.gen
+    svc.bump(market=True)
+    assert svc.broker_changes == n and svc.gen > gen
+    svc.broker_settings(u, 30)
+    svc.broker_reset(u)
+    svc.broker_delete(u, next(q["id"] for q in full["rows"] if q.get("ok")))
+    assert svc.broker_changes == n + 3 and svc.broker(u, part="board")["changes"] == n + 3
+    svc.broker_settings(u, 10)
 
 
 def test_one_list_of_the_watch_page_alone(module_service):

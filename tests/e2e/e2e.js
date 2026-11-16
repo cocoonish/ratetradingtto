@@ -2733,23 +2733,29 @@ async function shot(page, name) {
       && (bx['quant-signals'].rows > 0 || /eşiği geçen sinyal yok/.test(bx['quant-signals'].text))
       && (bx['fx-summary'].rows > 0 || /tarihçesi yok/.test(bx['fx-summary'].text))
       && bx.wirp.src === 'Quant › TCMB WIRP' && bx['watch-list'].src === 'İzleme · Alarmlar', bx);
-    // each keeps up by itself: the quant ones when the results' version moves, the board and the watch list with the generation
+    // each keeps up by itself: the quant ones when the results' version moves, the board when Broker Chat changes (its own
+    // count in the live stream, not every generation), the watch list with the generation
     const boxAsks = [];
     const noteBoxAsk = (r) => { if (/\/api\/(quant\/box|broker\?|watch\?)/.test(r.url())) boxAsks.push(r.url().replace(BASE, '')); };
     page.on('request', noteBoxAsk);
     await api(page, 'ayşe yilmaz', 'POST', '/api/quant/recompute', {});
     await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '8y ois 32.10/32.40', source: 'ICAP' });
+    const chatCount = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker?part=board')).json.changes;
     const added = await api(page, 'ayşe yilmaz', 'POST', '/api/watch/add', { subject: { kind: 'expr', text: '[OIS 9Y] - [OIS 8Y]' }, label: 'Kutu 9s8s' });
-    await page.waitForFunction((before) => {
+    await page.evaluate(async () => { window.__boxStream = (await import('/static/js/pagebox.js')).stream; });
+    await page.waitForFunction(([before, n]) => {
       const v = (t) => Number((document.querySelector('#lp-grid .lp-item[data-type="' + t + '"]') || { dataset: {} }).dataset.version);
       const text = (t) => (document.querySelector('#lp-grid .lp-item[data-type="' + t + '"] .body') || {}).textContent || '';
       return ['quant-signals', 'viop-levels', 'viop-contracts', 'wirp', 'fx-summary'].every((t) => v(t) > before[t].v)
-        && /32,10/.test(text('broker-board')) && /Kutu 9s8s/.test(text('watch-list'));
-    }, bx, { timeout: 60000 }).catch(() => null);
+        && /32,10/.test(text('broker-board')) && v('broker-board') === n && window.__boxStream.chat === n && /Kutu 9s8s/.test(text('watch-list'));
+    }, [bx, chatCount], { timeout: 60000 }).catch(() => null);
     page.off('request', noteBoxAsk);
     const bx2 = await boxesNow();
-    check('... and refreshes: a new result (the version) brings the quant boxes again - VİOP\'s two in one request -, a chat line the board, an item the watch list',
+    const streamChat = await page.evaluate(() => window.__boxStream.chat);
+    check('... and refreshes: a new result (the version) brings the quant boxes again - VİOP\'s two in one request -, a chat line the board (Broker Chat\'s '
+      + 'own count in the live stream), an item the watch list',
       ['quant-signals', 'viop-levels', 'viop-contracts', 'wirp', 'fx-summary'].every((t) => bx2[t].v > bx[t].v) && /32,10/.test(bx2['broker-board'].text)
+      && typeof chatCount === 'number' && bx2['broker-board'].v === chatCount && streamChat === chatCount
       && /Kutu 9s8s/.test(bx2['watch-list'].text) && boxAsks.filter((u) => u.includes('of=viop')).length < boxAsks.filter((u) => u.includes('/api/quant/box')).length,
     { v: Object.fromEntries(Object.entries(bx2).map(([k, x]) => [k, [bx[k].v, x.v]])), asks: boxAsks.slice(0, 12) });
     if (added.json && added.json.item) await api(page, 'ayşe yilmaz', 'POST', '/api/watch/remove', { id: added.json.item.id });

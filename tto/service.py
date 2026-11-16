@@ -199,6 +199,9 @@ class Service(object):
         # after one, a page kept for a user with inputs of their own is made again at once, never held back as a
         # market move is (_fresh)
         self.desk_changes = 0
+        # Broker Chat's own changes (a line kept or removed, the board reset, its stale limit, the list of names): the live
+        # stream carries the count - a box of the board asks again then, not with every generation of the market
+        self.broker_changes = 0
         self._gen_lock = threading.Lock()
         self._notified = 0.0                             # when the pages were last told of a new generation
         self._notify_due = False                         # ... and whether they will be told once more
@@ -5929,6 +5932,13 @@ class Service(object):
             return person.get("source") or source, person.get("party") or party
         return source, party
 
+    def _broker_changed(self) -> None:
+        """Broker Chat changed: its count (the live stream's ``broker``: a box of the board asks again) and a new generation
+        (its page reads again)."""
+        with self._gen_lock:
+            self.broker_changes += 1
+        self.bump()
+
     def broker_people(self, user: Optional[str] = None) -> Dict[str, Any]:
         """Every name of the list and every sender the kept chats have, with how many lines each wrote."""
         people = self._people()
@@ -5975,7 +5985,7 @@ class Service(object):
             else:
                 people[key] = {"name": name, "source": source, "party": party}
         self.store.put("broker.people", people)
-        self.bump()
+        self._broker_changed()
         return self.broker_people(user)
 
     # ------------------------------------------------------------------ a chat: read, keep, show
@@ -6020,7 +6030,7 @@ class Service(object):
         what is new.  ``texts`` off: lines that name no instrument are left out."""
         user = self.require_user(user)
         res = self.et.call(self._broker_add, user, text, date, source, texts, party)
-        self.bump()
+        self._broker_changed()
         return res
 
     def _broker_add(self, user, text, date, source, texts, party="") -> Dict[str, Any]:
@@ -6052,11 +6062,13 @@ class Service(object):
         last = self._broker_day(date_to) if date_to else day
         if last < day:
             day, last = last, day
+        changes = self.broker_changes                    # (before the board is made: a change while it is made counts after)
         rows, table, resets = self._broker_board(user, day, last)
         if board_only:
             self._fx_implied(user, [], table)
             return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last, "board": table,
-                    "gen": self.gen, "stale_minutes": self._broker_stale_minutes(), "live": last >= today, "now": now_iso()}
+                    "gen": self.gen, "changes": changes, "stale_minutes": self._broker_stale_minutes(), "live": last >= today,
+                    "now": now_iso()}
         self._fx_implied(user, rows, table)
         return {"date": day, "to": last, "ranged": day != last, "today": today, "is_today": day == today == last,
                 "rows": rows, "board": table, "dates": self.store.broker_dates(), "resets": resets, "gen": self.gen,
@@ -6084,7 +6096,7 @@ class Service(object):
         if not 1 <= m <= 1440:
             raise ServiceError("bayat sınırı 1 ile 1440 dakika arasında olmalı")
         self.store.put("broker.settings", {"stale_minutes": m, "by": user, "at": now_iso()})
-        self.bump()
+        self._broker_changed()
         return {"stale_minutes": m}
 
     @staticmethod
@@ -6146,7 +6158,7 @@ class Service(object):
                 resets[-1]["label"] = next((r.get("label") or "" for r in self.store.broker_quotes(day, day) if r.get("key") == key), "")
             resets = resets[-500:]
         self.store.put("broker.resets", resets)
-        self.bump()
+        self._broker_changed()
         return self.broker(user, day)
 
     # ------------------------------------------------------------------ the chat against the blotter
@@ -6253,14 +6265,14 @@ class Service(object):
             except (TypeError, ValueError):
                 continue
         if n:
-            self.bump()
+            self._broker_changed()
         return {"deleted": n}
 
     def broker_delete(self, user: str, quote_id: int) -> Dict[str, Any]:
         self.require_user(user)
         if not self.store.delete_broker_quote(int(quote_id)):
             raise ServiceError("kayıt bulunamadı", 404)
-        self.bump()
+        self._broker_changed()
         return {"deleted": int(quote_id)}
 
     def broker_export(self, user: Optional[str], date: Optional[str] = None, date_to: Optional[str] = None) -> Tuple[bytes, str]:

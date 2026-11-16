@@ -1,8 +1,9 @@
 // A box of one of the dashboard's own pages - Sinyaller's live list, VİOP's order levels and contracts, Broker Chat's
 // board, an İzleme list, TCMB WIRP's meeting table, FX's pair summary - on a launchpad, in the side drawer, in a window
 // of its own.  Each reads a light part of its page with a request of its own and keeps up by itself: a quant box when
-// the quant results' version moves (the live stream's quant counters, a window of its own included), the others with
-// the generation.  This is the frame (a table box's: ⠿, the title, where it comes from, ⋯, ▾ - boxes.js); the kinds and
+// the quant results' version moves (the live stream's quant counters, a window of its own included), the board when
+// Broker Chat changes (the stream's count of its changes - not with every generation of the market), the watch list
+// with the generation.  This is the frame (a table box's: ⠿, the title, where it comes from, ⋯, ▾ - boxes.js); the kinds and
 // what each draws are in pageboxes.js.  On its own page a box's panel has a table's controls (``boxTools``).
 import { api } from './api.js';
 import { h, clear, menu, promptDialog, toast } from './ui.js';
@@ -10,17 +11,26 @@ import { Grid, copyGrid } from './grid.js';
 import { hub, changed, makeBox } from './boxes.js';
 import { WIDTHS, DEFAULT_W, addButton } from './layout.js';
 
-/** What the live stream says besides the generation: the quant results' version (a quant box asks again when it moves). */
-export const stream = { quant: null };
+/** What the live stream says besides the generation, as the boxes follow it: ``quant`` the quant results' version,
+ *  ``chat`` the count of Broker Chat's changes (a line kept or removed, the board reset ...). */
+export const stream = { quant: null, chat: null };
 
-/** The live stream's counters (main.js hands every message here, in a window of its own as well). */
+/** Which field of an answer says what a box shows of each: the version / the count it was read at. */
+const READ_AT = { quant: 'version', chat: 'changes' };
+
+/** The live stream's counters (main.js hands every message here, in a window of its own as well): the boxes that follow
+ *  one that moved ask again at once. */
 export function boxEvent(msg) {
-  const q = msg && msg.quant;
-  if (!q || typeof q.version !== 'number' || q.version === stream.quant) return;
-  stream.quant = q.version;
-  if (document.hidden) return;             // (a tab out of view catches up when it is looked at: the version differs then)
+  if (!msg) return;
+  const now = { quant: msg.quant && typeof msg.quant.version === 'number' ? msg.quant.version : null,
+    chat: typeof msg.broker === 'number' ? msg.broker : null };
+  const moved = Object.keys(now).filter((k) => now[k] !== null && now[k] !== stream[k]);
+  for (const k of moved) stream[k] = now[k];
+  if (!moved.length || document.hidden) return;        // (a tab out of view catches up when it is looked at: they differ then)
   for (const b of hub.boxes) {
-    if (b.follows === 'quant' && b.data && b.data.version !== q.version && b.wanted()) b.refreshOwn(true).catch(() => {});
+    if (moved.includes(b.follows) && b.data && b.data[READ_AT[b.follows]] !== stream[b.follows] && b.wanted()) {
+      b.refreshOwn(true).catch(() => {});
+    }
   }
 }
 
@@ -40,9 +50,10 @@ const mark = (on) => (on ? '✓ ' : '    ');
 const HEIGHTS = [240, 360, 480, 640];
 const QUANT_AGAIN_MS = 60000;            // a quant box asks again after a minute at the latest (as its page does)
 const QUANT_POLL_MS = 3000;              // ... and every few seconds until the first result is there
+const CHAT_AGAIN_MS = 20000;             // the board: its quotes' ages and the model move while nothing is said (as its page)
 
 /**
- * The frame of a box of a page.  A kind gives: ``follows`` ('quant' | 'gen'), ``page`` (and ``panel``) - where it comes
+ * The frame of a box of a page.  A kind gives: ``follows`` ('quant' | 'chat' | 'gen'), ``page`` (and ``panel``) - where it comes
  * from -, ``where`` (its page's name), ``part(item)`` → {path, params} (the part of its page it reads - not ``request``:
  * a box with that joins the tables' one request), ``titleText()``, ``paint(data)`` (into ``this.body``; ``this.grid``: a
  * grid drawn, for Kopyala) and ``optionItems()`` (its own lines of the ⋯ menu).
@@ -139,22 +150,23 @@ export class OwnBox {
     return !this.dead && !this.item.collapsed && this.el.isConnected && (!this.opts.live || this.opts.live());
   }
 
-  /** Whether what it shows is behind: a quant box when the results' version moved (or a minute went by), the others always
-   *  (the hub asks on each generation). */
+  /** Whether what it shows is behind: a quant box when the results' version moved (or a minute went by), the board when
+   *  Broker Chat changed (or its quotes aged), a generation's box always (the hub asks on each generation). */
   due() {
-    if (!this.data) return true;
-    if (this.follows !== 'quant') return true;
-    if (!this.data.ready) return true;
-    if (stream.quant !== null && this.data.version !== stream.quant) return true;
-    return Date.now() - this.at > QUANT_AGAIN_MS;
+    if (!this.data || this.follows === 'gen') return true;
+    if (this.follows === 'quant' && !this.data.ready) return true;
+    const k = this.follows;
+    if (stream[k] !== null && this.data[READ_AT[k]] !== stream[k]) return true;
+    return Date.now() - this.at > (k === 'quant' ? QUANT_AGAIN_MS : CHAT_AGAIN_MS);
   }
 
   /** Its part of the page, asked for when it is behind (``force``: now) - one request at a time; the hub calls this. */
   async refreshOwn(force) {
     if (this.dead) return;
-    // on its way already: once more after it - a generation (or a version) that came meanwhile may be newer than its answer
-    // (a quant box's answer moves only with the version: the hub's call on a generation does not ask it again)
-    if (this.busy) { if (force || this.follows !== 'quant') this.again = true; return; }
+    // on its way already: once more after it - a generation (or a version, a change) that came meanwhile may be newer than
+    // its answer (a quant box's and the board's answers move with their own counters: the hub's call on a generation does
+    // not ask them again)
+    if (this.busy) { if (force || this.follows === 'gen') this.again = true; return; }
     if (!force && !this.due()) return;
     this.busy = (async () => {
       try {
@@ -165,7 +177,7 @@ export class OwnBox {
           if (this.dead) return;
           this.data = d;
           this.at = Date.now();
-          if (this.follows !== 'quant') { this.entry = d; this.gen = d.gen || 0; }
+          if (this.follows === 'gen') { this.entry = d; this.gen = d.gen || 0; }
           this.draw();
         } while (this.again && !this.dead && this.wanted());
       } catch (err) {
@@ -178,7 +190,9 @@ export class OwnBox {
   /** The answer drawn (and, for a quant box, asked for again until the first result is there). */
   draw() {
     this.el.classList.remove('stale');
-    this.el.dataset.version = String(this.data.version !== undefined ? this.data.version : (this.data.gen || 0));
+    // (what it was read at: the version, the count of Broker Chat's changes, the generation)
+    const at = this.data[READ_AT[this.follows]];
+    this.el.dataset.version = String(at !== undefined ? at : (this.data.gen || 0));
     this.paint(this.data);
     this.copyBtn.classList.toggle('hidden', !this.grid);
     this.paintTitle();

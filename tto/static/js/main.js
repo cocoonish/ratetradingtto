@@ -693,7 +693,7 @@ const events = {
     es.onmessage = (e) => {
       let msg = null;
       try { msg = JSON.parse(e.data); } catch (x) { return; }
-      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant });
+      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant, broker: msg.broker });
       onGen(msg.gen);
       boxEvent(msg);                       // the boxes of the quant pages: the results' version (a window of its own too)
       if (POP) return;

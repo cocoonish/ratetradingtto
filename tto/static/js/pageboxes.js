@@ -81,9 +81,9 @@ class SignalsBox extends PageBox {
       this.empty('Şu an eşiği geçen sinyal yok (giriş |z| ≥ ' + num(d.entry_z || 2, 1) + ')' + (this.item.family || this.item.asset ? ' – süzgeçle' : '') + '.');
       return;
     }
-    const ids = sig.map((s) => s.id);
+    this.ids = sig.map((s) => s.id);                // (read at the click: the grid's handler stays while its rows change)
     this.showGrid(plainData(['#'].concat(SIGNAL_HEAD, ['Bileşik', 'Saat']), signalRows(sig, { rank: true })), 'quant/signals',
-      (i) => this.open(ids[i]), JSON.stringify(ids));
+      (i) => this.open(this.ids[i]), JSON.stringify(this.ids));
   }
 
   open(sid) {
@@ -201,9 +201,9 @@ class ViopContractsBox extends ViopBox {
     this.replayNote(d);
     const rows = d.rows || [];
     if (!rows.length) { this.empty(d.why || 'Canlı VİOP kotası yok'); return; }
-    const sids = rows.map((r) => r.sid || null);
+    this.sids = rows.map((r) => r.sid || null);     // (read at the click: the grid's handler stays while its rows change)
     this.showGrid(plainData(CONTRACT_HEAD, contractRows(rows, null, d.entry_z || 2)), 'quant/viop/contracts',
-      (i) => { if (sids[i]) openCard(this, sids[i]); }, JSON.stringify(rows.map((r) => r.ticker)));
+      (i) => { if (this.sids[i]) openCard(this, this.sids[i]); }, JSON.stringify(rows.map((r) => r.ticker)));
   }
 }
 
@@ -271,14 +271,14 @@ class FxSummaryBox extends PageBox {
   }
 }
 
-// ---------------------------------------------------------------------- the generation moves them
+// ---------------------------------------------------------------------- Broker Chat's changes, the generation
 const PRODUCTS = [['all', 'Tümü'], ['OIS', 'OIS'], ['XCCY', 'XCCY'], ['FX', 'FX swap'], ['DIBS', 'DİBS']];
-const BOARD_AGAIN_MS = 20000;            // the ages move while nothing is said: read again now and then (as the page does)
+const BOARD_AGAIN_MS = 20000;            // the ages (and the model) move while nothing is said: read again now and then, as the page
 
 class BrokerBoardBox extends PageBox {
   constructor(item, opts) {
     super(item, opts);
-    this.follows = 'gen';
+    this.follows = 'chat';                        // (Broker Chat's own changes - not every generation of the market)
     this.page = 'broker';
     this.where = 'Broker Chat';
     this.start();
