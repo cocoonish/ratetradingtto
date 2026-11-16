@@ -2666,6 +2666,50 @@ async function shot(page, name) {
       && /Trend/.test(await page.textContent('#quant-sub-families')) && /Carry \+ momentum/.test(await page.textContent('#quant-sub-families'))
       && /Makine öğrenmesi/.test(await page.textContent('#quant-sub-families')));
     await shot(page, 'quant-signals');
+    // ------------------------------------------------------------------ Carry + momentum (quantsira.py)
+    // a tab of Sinyaller: each set's basket card and ranking table under its read line, the backtest per set; the recorded
+    // month is too short for a basket - each set says why; a leg as the server sends it, in the list in the plan's format
+    console.log('quant carry + momentum');
+    await open(page, 'quant-sira');
+    await page.waitForSelector('#quant-sira-g10', { timeout: 30000 });
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ready, null, { timeout: 90000 });
+    const siraApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/sira');
+    const SIRA_SETS = ['quant-sira-g10', 'quant-sira-vol', 'quant-sira-ois', 'quant-sira-spread', 'quant-sira-fly', 'quant-sira-dibs'];
+    const sira = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
+      on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
+      panels: [...document.querySelectorAll('section.panel[id^="quant-sira-"]')].map((p) => {
+        const r = p.querySelector(':scope > .qread');
+        return { id: p.id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER',
+          card: !!p.querySelector('.qbasket'), why: ((p.querySelector('.qbasket .empty') || {}).textContent || ''),
+          table: !!p.querySelector('table.grid, .body > .empty') };
+      }) }));
+    const siraSets = ((siraApi.json || {}).sira || {}).sets || [];
+    check('Carry + momentum: the fourth tab of Sinyaller; each set\'s basket card and ranking table under its read line, the backtest per set',
+      sira.tabs.join(',') === 'Sinyaller,Gün içi,Model,Carry + momentum' && sira.on.join() === 'quant-sira' && siraApi.status === 200 && siraSets.length === 6
+      && SIRA_SETS.every((id) => sira.panels.some((p) => p.id === id && p.read.length >= 40 && p.under && p.card && p.table))
+      && sira.panels.some((p) => p.id === 'quant-sira-backtest' && p.read.length >= 40 && p.under)
+      && siraSets.every((s) => s.ok || (s.why && sira.panels.some((p) => p.id === 'quant-sira-' + s.id && p.why === s.why))), { sira, sets: siraSets.map((s) => [s.id, s.ok, s.why]) });
+    const siraRow = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const leg = { id: 'sira:g10:FX:USDJPY', family: 'sira', family_label: 'Carry + momentum', asset: 'FX', group: 'G10 spot', tier: null, tag: '',
+        expression: 'SAT USDJPY spot · 1,2 mn USD', z: -2, entry_z: 1, score_name: 'sıra', strength: 'Güçlü', gated: '', gates: [], legs: [], agree: 0,
+        conflict: 0, parts: { z: 3.5, regime: 1, hl: 1, carry: 1 }, composite: 3.5, hold: 5, horizon_unit: 'gün', direction: -1, unit: '', digits: 3,
+        entry: 150.25, target: 149.9, stop: 151.8, pnl_unit: '%', exp_pnl: 0.23,
+        px: { pair: 'USDJPY', inst: 'USDJPY spot', label: 'USDJPY spot', tenor: null, digits: 3, unit: 'JPY', entry: 150.25, target: 149.9, stop: 151.8 },
+        money: { ccy: 'JPY', base: 'USD', total: 350000, target: 350000, stop: -1550000 }, bt: { trades: 87, hit: 0.58, avg_sigma: 0.12, text: '' },
+        info: { model: 'Carry + momentum · G10 spot sepeti' } };
+      const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
+      const row = q.signalRows([leg], { rank: true, group: true })[0];
+      const cell = (n) => row[head.indexOf(n)].t;
+      return { fam: cell('Aile'), trade: cell('İşlem'), entry: cell('Giriş'), target: cell('Hedef'), stop: cell('Stop'), pnl: cell('Beklenen K/Z'),
+        bt: cell('Geri test'), group: cell('Grup'), strength: cell('Güç') };
+    });
+    check('... a basket leg in the Sinyaller list in the plan\'s format: "SAT USDJPY spot · 1,2 mn USD", entry / target / stop in its price, the expected P&L, isabet and weeks, model: Carry + momentum · G10 spot sepeti',
+      siraRow.fam === 'Carry + momentum · G10 spot sepeti' && siraRow.trade === 'SAT USDJPY spot · 1,2 mn USD' && siraRow.entry === '150,250'
+      && siraRow.target === '149,900' && siraRow.stop === '151,800' && siraRow.pnl === '+350 bin JPY / 1 mn USD' && siraRow.bt === '87 · 58% · +0,1σ'
+      && siraRow.group === 'G10 spot' && siraRow.strength === 'Güçlü', siraRow);
+    await shot(page, 'quant-sira');
     await open(page, 'quant-pca');
     await page.waitForSelector('#quant-pca-windows', { timeout: 30000 });
     check('PCA / RV shows the dynamic PCA, both fly conventions and the path\'s fit', await page.locator('#quant-pca-stability').count() === 1
@@ -3253,7 +3297,7 @@ async function shot(page, name) {
       const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
       return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
     });
-    check('the quant menu: four entries - Sinyaller (3 tabs), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:3","Faiz:8","FX:3","VİOP:0"]', quantMenu);
+    check('the quant menu: four entries - Sinyaller (4 tabs), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:4","Faiz:8","FX:3","VİOP:0"]', quantMenu);
     await open(page, 'quant-regime');                                       // an address of before
     const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));

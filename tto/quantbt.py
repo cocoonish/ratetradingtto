@@ -166,6 +166,24 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
             "refits": refits, "step": step, "days": len(days), "ms": round((time.perf_counter() - t0) * 1000.0, 1), "complete": not stopped}
 
 
+def add_own(res: Dict[str, Any], fam: str, trades: Sequence[Dict[str, Any]], first: Optional[str], last: Optional[str]) -> None:
+    """A family that walks forward on its own (``quantuniv.OWN_BT``: Carry + momentum's weekly baskets rebalance on their
+    own calendar, not at the refits) into a backtest's result: its trades summarized over its own span - the family,
+    each type over the type's -, its first and last day and years, among the result's trades."""
+    trades = list(trades)
+    row = summarize(trades, first, last)
+    types: Dict[str, Any] = {}
+    for ty in sorted({t["type"] for t in trades}):
+        mine = [t for t in trades if t["type"] == ty]
+        types[ty] = summarize(mine, min(t["entry_day"] for t in mine), max(t["exit_day"] for t in mine))
+    row.update({"types": types, "first": first, "last": last, "own": True,
+                "years": (_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.0 if first and last else None})
+    res.setdefault("families", {})[fam] = row
+    every = list(res.get("trades") or []) + trades
+    res["trades"] = sorted(every, key=lambda t: (t["exit_day"], t["sid"]))[-BT_KEEP:]
+    res["n_trades"] = int(res.get("n_trades") or 0) + len(trades)
+
+
 def bt_text(stats: Optional[Dict[str, Any]], years: Optional[float] = None) -> str:
     """"bu aile son 2 yılda 41 işlem, %58 isabet, ort. +0,4σ" - what a signal carries of its family's backtest."""
     if not stats or not stats.get("trades"):

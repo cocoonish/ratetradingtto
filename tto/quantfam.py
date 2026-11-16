@@ -546,6 +546,11 @@ class Monitor(object):
         # (currency, money a P&L unit makes) of a line whose money is linear in it and told by no other way: an
         # option's vega (vol points), a swap's points - the universe's lines set it (quantuniv.py)
         self.cash: Optional[Tuple[str, float]] = kw.get("cash")
+        # a systematic family's line (quantuniv.py - Carry + momentum's basket legs): the trade in the family's own words
+        # ("AL EURUSD spot · 1,4 mn EUR") where the package's verbs would say it, and its own rules alone put it in the
+        # list: the gates are told on its card, none of them holds it ("düşük güven")
+        self.expression: Optional[str] = kw.get("expression")
+        self.ungated: bool = bool(kw.get("ungated", False))
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -1002,6 +1007,8 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         expression = "Korelasyon normale döner: %s · %s" % (m.name, " / ".join(l["text"] for l in legs))
     else:
         expression = " / ".join(l["text"] for l in legs)
+    if m.expression:
+        expression = m.expression
     tag = (m.regime or {}).get("tag")
     rf, why_r = regime_factor(m.kind, tag)
     if m.kind in ("mr", "surprise", "trend"):
@@ -1120,6 +1127,8 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         gates.append(_gate("Beklenen kâr", ok, "ufukta %s%s" % (amount(exp), " (%s)" % inside if inside else "")))
         if not ok:
             why_x = "beklenen kâr yok (%s%s)" % (amount(exp), ", " + inside if inside else "")
+    if m.ungated:
+        gated = why_r = why_h = why_x = ""                   # (told above, holding nothing)
     # |z| on the desk's scale (a family with its own threshold is brought to it), counted at most up to the stop: no
     # family's score can outrank the others by its scale alone
     base = min(abs(m.z) * float(cfg["entry_z"]) / thr, stop_z)

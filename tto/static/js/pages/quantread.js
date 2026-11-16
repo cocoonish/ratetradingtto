@@ -85,6 +85,13 @@ export const READ = {
   "quant-viop-calibration": "Emir seviyelerinin olasılıklarına güvenebilir misin? \"Alış isabeti\" ve \"Satış isabeti\" satırdaki \"Olasılık\"a yakınsa seviyeler tutuyor; belirgin düşükse dolma ihtimali abartılıyor, yüksekse hafife alınıyor. Canlı seviyeler \"c\" çarpanıyla verilir, düzeltilmiş isabet \"c ile\" sütunlarında.",
   "quant-viop-ranges": "Kontrat ve spot bir günde fiyat olarak ne kadar oynuyor? \"Ort. aralık (20 gün)\" son 20 günün ortalama en yüksek − en düşük farkı, \"En büyük\" en genişi; emir fiyatının bir günde görülebilecek mesafede olup olmadığını buna göre tart. \"USDTRY ort. aralık\" spotunki.",
   "quant-viop-data": "",
+  "quant-sira-g10": "Bu haftanın G10 spot sepeti: carry'si ve son 3 ayın getirisi (carry dahil) en yüksek üç para birimi USD'ye karşı alınır, en düşük üçü satılır. \"Sepette\" AL / SAT yazan satır işlemdir (JPY alınacaksa USDJPY SAT), \"Bileşik\" sırayı verir; sepet pazartesi kapanışında yenilenir.",
+  "quant-sira-vol": "Bu haftanın G10 vol sepeti: ima vol'ü gerçekleşenin en çok üstünde olan ve son 3 ayda en çok düşen üç paritede straddle satılır (vol sat), en ucuz üçünde alınır (vol al), her biri 10.000 $ vega. \"Prim\" ima − gerçekleşen vol puanıdır; sepet pazartesi kapanışında yenilenir.",
+  "quant-sira-ois": "Bu haftanın TRY OIS sepeti (2 yıla kadar): haftalık carry + roll'u oynaklığına göre en yüksek ve faizi son 3 ayda en çok düşen iki vade receive, en kötü iki vade pay edilir, her biri 1.000 $ DV01. \"Sepette\" yazan satır işlemdir; sepet pazartesi kapanışında yenilenir.",
+  "quant-sira-spread": "Spread'ler kendi yönünde: \"Skor\" artıysa steepener (uzun vadeyi pay, kısayı receive), eksiyse flattener; mutlak değeri en büyük üç spread 1.000 $ DV01 ile işlem olur. Skor carry + roll'u oynaklığa göre ve son 3 ayın hareketini birlikte sayar.",
+  "quant-sira-fly": "Fly'lar kendi yönünde: \"Skor\" artıysa gövdeyi pay edip kanatları receive edersin, eksiyse gövde receive / kanatlar pay; mutlak değeri en büyük üç fly 1.000 $ DV01 (50/50) ile işlem olur. Skor carry + roll'u oynaklığa göre ve son 3 ayın hareketini birlikte sayar.",
+  "quant-sira-dibs": "Bu haftanın DİBS sepeti: carry + roll'u oynaklığına göre yüksek, eğriye göre her zamankinden ucuz (\"Ucuzluk z\" artı) ve getirisi son 3 ayda düşen üç kâğıt alınır, tersi üçü satılır, her biri 1.000 $ DV01. \"Sepette\" AL / SAT yazan satır işlemdir.",
+  "quant-sira-backtest": "Sepetler geçmişte her pazartesi aynı kurallarla kurulup bir hafta tutulsaydı ne olurdu? \"İsabet\" kârlı haftaların payı, \"Sharpe\" haftalık getirinin istikrarı; isabeti %50'nin, Sharpe'ı 0'ın altında kalan sepetin satırlarına temkinle yaklaş, \"Hafta\" azsa sonuç tesadüf olabilir.",
   "*-coverage": "",
   "*-status": ""
 };

@@ -45,6 +45,7 @@ from . import quantintraday as qi
 from . import quantopt as qopt
 from . import quantlead as ql
 from . import quantuniv as qu
+from . import quantsira as qs                    # Carry + momentum (on the universe; registers itself)
 from . import quantviop as qv
 from . import quantpath as qp
 from . import volcarry as vc
@@ -115,9 +116,11 @@ PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PC
 PAGES += tuple(p for _x in EXTRAS for p in _x.PAGES)
 PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))   # quantpath.py, quantlead.py
 PAGES += qv.PAGES                                                                                          # quantviop.py
+PAGES += qs.PAGES                                                                                          # quantsira.py
 #: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
 #: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
-MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"))),
+MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"),
+                                       ("quant-sira", "Carry + momentum"))),
         ("quant.faiz", "Faiz", (("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"), ("quant-corr", "Korelasyon"),
                                 ("quant-regime", "Rejim"), ("quant-curve", "Eğri Adil Değeri"), ("quant-path", "İma Patikası"),
                                 ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
@@ -524,6 +527,8 @@ class Quant(object):
                 return qf.run_all(ctx, items, None, self.pause)[0] + qu.monitors(ctx, self.pause)
 
             res = qbt.backtest(test, make_ctx, runner, series, cfg, step=step, pause=self.pause, deadline=time.perf_counter() + budget)
+            # (the families that walk forward on their own calendar - Carry + momentum's weekly baskets: their fit's trades)
+            qu.own_backtests(res, (self._fit or {}).get("tables") or {})
             first, last = res.get("first"), res.get("last")
             res.update({"at": _now().isoformat(sep=" "), "today": today_iso, "key": self._bt_key(),
                         "years": ((_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.0) if first and last else None})
@@ -953,7 +958,8 @@ class Quant(object):
                 s["bt"] = None
                 continue
             short = {k: (use or {}).get(k) for k in ("trades", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
-            s["bt"] = dict(short, text=qbt.bt_text(use, years), scope="tür" if use is ty and ty else "aile")
+            # (a family that walks forward on its own: over its own span - quantuniv.OWN_BT)
+            s["bt"] = dict(short, text=qbt.bt_text(use, (fam or {}).get("years") or years), scope="tür" if use is ty and ty else "aile")
             why = qbt.bt_gate(fam, cfg)
             s["gates"].append({"name": "Geri test", "ok": not why, "text": why or s["bt"]["text"], "part": None})
             if why and not s["gated"]:
@@ -1292,6 +1298,8 @@ class Quant(object):
             return ql.view(self, what, base, v, fit)
         if what in qv.VIEWS:                                # VİOP (quantviop.py)
             return qv.view(self, what, base, v, fit)
+        if what in qs.VIEWS:                                # Carry + momentum (quantsira.py)
+            return qs.view(self, what, base, v, fit)
         if what == "signals":
             # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones; ``group`` one group
             fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""

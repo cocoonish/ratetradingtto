@@ -104,7 +104,7 @@ def test_each_user_takes_pages_out_of_their_own_menu(service):
 def test_the_quant_pages_are_four_menu_entries_with_tabs(service):
     u = login(service, "Menü Quant")
     quant = [p for p in service.nav(u) if p["group"] == "Quant"]
-    assert len(quant) == len(qmod.PAGES) == 15 and len({p["id"] for p in quant}) == 15
+    assert len(quant) == len(qmod.PAGES) == 16 and len({p["id"] for p in quant}) == 16
     entries = []
     for p in quant:
         key = p.get("menu") or p["id"]
@@ -113,13 +113,13 @@ def test_the_quant_pages_are_four_menu_entries_with_tabs(service):
         entries[-1][2].append((p["id"], p.get("tab")))
     assert [(k, t) for k, t, _ in entries] == [("quant.sinyal", "Sinyaller"), ("quant.faiz", "Faiz"), ("quant.fx", "FX"), ("quant-viop", "VİOP")]
     tabs = {k: [x for x, _ in pages] for k, _, pages in entries}
-    assert tabs["quant.sinyal"] == ["quant", "quant-intraday", "quant-model"]
+    assert tabs["quant.sinyal"] == ["quant", "quant-intraday", "quant-model", "quant-sira"]
     assert tabs["quant.faiz"] == ["quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-path", "quant-wirp", "quant-lead"]
     assert tabs["quant.fx"] == ["quant-fx", "quant-macro", "quant-opt"] and tabs["quant-viop"] == ["quant-viop"]
     names = {pid: tab for _, _, pages in entries for pid, tab in pages}
     assert [names[x] for x in tabs["quant.faiz"]] == ["PCA / RV", "Çiftler", "Korelasyon", "Rejim", "Eğri Adil Değeri", "İma Patikası",
                                                       "TCMB WIRP", "Öncü-Takipçi"]
-    assert [names[x] for x in tabs["quant.sinyal"] + tabs["quant.fx"]] == ["Sinyaller", "Gün içi", "Model", "FX", "Makro", "Opsiyon"]
+    assert [names[x] for x in tabs["quant.sinyal"] + tabs["quant.fx"]] == ["Sinyaller", "Gün içi", "Model", "Carry + momentum", "FX", "Makro", "Opsiyon"]
     # a page keeps its own title (Ctrl+K finds it by it) and its address; VİOP is an entry of one page
     by = {p["id"]: p for p in quant}
     assert by["quant-regime"]["title"] == "Rejim & Momentum" and by["quant-fx"]["title"] == "FX Vol Primi & Carry"
@@ -130,7 +130,7 @@ def test_a_quant_page_the_menu_does_not_name_comes_as_an_entry_of_its_own(servic
     monkeypatch.setattr(qmod, "PAGES", qmod.PAGES + (("quant-yeni", "Yeni Analiz"),))
     pages = service.quant.pages()
     assert pages[-1] == {"id": "quant-yeni", "title": "Yeni Analiz", "group": "Quant", "book": "tto", "sheet": None, "custom": True}
-    assert len(pages) == 16
+    assert len(pages) == 17
 
 
 # ---------------------------------------------------------------------------------------------- what the boxes read

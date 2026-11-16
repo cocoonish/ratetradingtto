@@ -1319,7 +1319,9 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
         """Each bond's carry + roll now (bp of its yield convention) - the universe's DİBS lines (quantuniv.py)."""
         return _bond_carry(ctx, snap(live), ois, rows, live)
 
-    return mons, {"ok": True, "build": build, "quote": quote, "switch": switch, "carry": carry}
+    # ("resid": each bond's distance from the fit day by day, bp - Carry + momentum's cheapness at its past rebalances,
+    # quantsira.py; the published table is ``build``'s, without it)
+    return mons, {"ok": True, "build": build, "quote": quote, "switch": switch, "carry": carry, "resid": resid}
 
 
 def _tr(v: Optional[float], d: int) -> str:

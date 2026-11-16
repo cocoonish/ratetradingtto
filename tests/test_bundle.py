@@ -305,8 +305,8 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
         assert status["mode"] == "replay" and set(status["books"]) == {"tto", "sofr", "borsa", "asw"}
         assert not any(b["left_out"] for b in status["books"].values())
         pages = [p["id"] for p in json.loads(get("/api/nav")[1])["pages"]]
-        # (the quant package's fifteen pages - intraday, curve fair value, options, the implied path, the WIRP, lead-lag and VİOP among them - and the desk corner's two)
-        assert len(pages) == 46 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar", "watch",
+        # (the quant package's sixteen pages - intraday, curve fair value, options, the implied path, the WIRP, lead-lag, VİOP and Carry + momentum among them - and the desk corner's two)
+        assert len(pages) == 47 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar", "watch",
                                      "heat", "spreads", "quant", "quant-fx", "quant-intraday", "quant-curve", "quant-opt", "quant-path", "quant-wirp", "quant-lead",
                                      "quant-viop", "social", "agenda"} <= set(pages)
         page = json.loads(get("/api/view/ois")[1])
