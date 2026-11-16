@@ -104,7 +104,7 @@ def test_each_user_takes_pages_out_of_their_own_menu(service):
 def test_the_quant_pages_are_four_menu_entries_with_tabs(service):
     u = login(service, "Menü Quant")
     quant = [p for p in service.nav(u) if p["group"] == "Quant"]
-    assert len(quant) == len(qmod.PAGES) == 16 and len({p["id"] for p in quant}) == 16
+    assert len(quant) == len(qmod.PAGES) == 17 and len({p["id"] for p in quant}) == 17
     entries = []
     for p in quant:
         key = p.get("menu") or p["id"]
@@ -130,7 +130,7 @@ def test_a_quant_page_the_menu_does_not_name_comes_as_an_entry_of_its_own(servic
     monkeypatch.setattr(qmod, "PAGES", qmod.PAGES + (("quant-yeni", "Yeni Analiz"),))
     pages = service.quant.pages()
     assert pages[-1] == {"id": "quant-yeni", "title": "Yeni Analiz", "group": "Quant", "book": "tto", "sheet": None, "custom": True}
-    assert len(pages) == 17
+    assert len(pages) == 18
 
 
 # ---------------------------------------------------------------------------------------------- what the boxes read

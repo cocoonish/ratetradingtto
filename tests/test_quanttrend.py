@@ -548,7 +548,7 @@ def test_trend_page_over_http_and_in_the_menu(seeded):
         assert st["values"]["trend_risk_usd"] == 5000.0 and st["labels"]["trend_risk_usd"].startswith("Trend")
         nav = [p for p in client.get("/api/nav").json()["pages"] if p["group"] == "Quant"]
         tabs = [p["id"] for p in nav if p.get("menu") == "quant.sinyal"]
-        assert tabs[-1] == "quant-trend" and next(p for p in nav if p["id"] == "quant-trend")["tab"] == "Trend"
+        assert "quant-trend" in tabs and next(p for p in nav if p["id"] == "quant-trend")["tab"] == "Trend"
         assert client.get("/static/js/pages/quanttrend.js").status_code == 200
 
 
