@@ -78,8 +78,8 @@ def test_numbers_own_references_and_ranges(service):
                                          "C3": "=IF(A3>12;\"büyük\";\"küçük\")", "D1": "=ROUND(1,25;1)",
                                          "D2": "=LET(x;A1*2;x+1)", "D3": "=INDEX(A1:A3;2)", "D4": "=A9+1", "D5": "=TRUE()"})
     assert texts(ans, "A1", "A2", "A3", "B1", "B2", "B3") == ["10", "2,5", "12,5", "25", "1,25", "8,333333333"]
-    assert texts(ans, "C1", "C2", "C3", "D1", "D2", "D3", "D4", "D5") == ["Toplam", "Toplam: 12,50", "büyük", "1,3", "21", "2,5", "1",
-                                                                         "TRUE"]
+    assert texts(ans, "C1", "C2", "C3", "D1", "D2", "D3", "D4", "D5") == [
+        "Toplam", "Toplam: 12,50", "büyük", "1,3", "21", "2,5", "1", "TRUE"]
     assert ans["cells"]["A3"] == {"t": "12,5", "k": "n", "v": 12.5, "f": "=SUM(A1:A2)"}
     assert ans["cells"]["A2"]["x"] == "2,5" and ans["cells"]["C1"]["k"] == "s"
     assert ans["rev"] == 1 and (ans["rows"], ans["cols"]) == (cs.DEFAULT_ROWS, cs.DEFAULT_COLS)
@@ -312,7 +312,8 @@ def test_copy_and_fill_move_the_formulas(service):
     assert (c["B2"]["f"], c["B3"]["f"], c["C3"]["f"]) == ("=A2*10", "=A3*10", "=$A$1+A3")
     assert texts(got, "B1", "B2", "B3", "C3") == ["10,00", "20,00", "30,00", "4"]
     other = save(service, u, "dst", copy={"sheet": "src", "from": "A1:B1", "to": "D5"})
-    assert other["cells"]["E5"]["f"] == "=D5*10" and other["cells"]["E5"]["v"] == 10.0 and (other["rows"], other["cols"]) == (8, 6)
+    assert other["cells"]["E5"]["f"] == "=D5*10" and other["cells"]["E5"]["v"] == 10.0
+    assert (other["rows"], other["cols"]) == (8, 6)
 
 
 def test_number_formats(service):
@@ -330,13 +331,15 @@ def test_number_formats(service):
 def test_a_calc_item_on_a_launchpad_and_in_the_drawer(service):
     """The layout's check: a calc item names its sheet (the same sheet may stand in two places)."""
     u = login(service, "Hesap Düzen")
-    got = service.set_layout(u, {"launchpads": [{"name": "A", "items": [{"type": "calc", "sheet": "s1", "title": " Spread  hesabı ", "w": 4}]}],
+    one = {"type": "calc", "sheet": "s1", "title": " Spread  hesabı ", "w": 4}
+    got = service.set_layout(u, {"launchpads": [{"name": "A", "items": [one]}],
                                  "drawer": [{"type": "calc", "sheet": "s1", "w": 12, "h": 300}]})
     it = got["launchpads"][0]["items"][0]
     assert {k: it[k] for k in ("type", "sheet", "title", "w", "h")} == {"type": "calc", "sheet": "s1", "title": "Spread hesabı",
                                                                           "w": 4, "h": "auto"}
     assert got["drawer"][0]["sheet"] == "s1" and got["drawer"][0]["h"] == 300
-    for bad in ({"type": "calc"}, {"type": "calc", "sheet": "a b"}, {"type": "calc", "sheet": 5}, {"type": "calc", "sheet": "x" * 33}):
+    for bad in ({"type": "calc"}, {"type": "calc", "sheet": "a b"}, {"type": "calc", "sheet": 5},
+                {"type": "calc", "sheet": "x" * 33}):
         with pytest.raises(ServiceError) as err:
             service.set_layout(u, {"launchpads": [{"name": "A", "items": [bad]}]})
         assert err.value.status == 400 and "hesap tablosu geçersiz" in str(err.value)

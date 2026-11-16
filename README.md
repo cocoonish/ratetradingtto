@@ -1027,7 +1027,8 @@ yeniden başlatmada ve güncellemede kalır. Launchpad **dışa aktarılınca** 
   hesaplananlar düz renk (modellerdeki gibi); değişen sayılar tablolardaki gibi yanıp söner.
 * **Formüller** dashboard'un kendi motorunun formülleridir: işlev adları İngilizce (SUM, IF, IFERROR, ROUND, VLOOKUP, INDEX
   / MATCH, SUMIFS, WORKDAY, EDATE, YEARFRAC, TEXT …), bağımsız değişkenler virgülle - Türkçe Excel alışkanlığıyla noktalı
-  virgülle de (`=ROUND(1,25;1)`: o zaman ondalık ayırıcı virgüldür). Başvurular: tablonun kendi hücreleri (`A1`, `$B$2`,
+  virgülle de (`=ROUND(1,25;1)`: o zaman ondalık ayırıcı virgüldür; TEXT'in biçim metni yine İngilizce yazılır: `"0.00"`).
+  Motorun bilmediği işlev (XLOOKUP, OFFSET, INDIRECT …) `#NAME?` olur. Başvurular: tablonun kendi hücreleri (`A1`, `$B$2`,
   `A1:A5`); ana çalışma kitabının hücreleri sayfa adıyla (`=MASA!I60`, `='C & R'!B5`; büyük / küçük harf fark etmez) ve
   adlarıyla (`=SPOTDATE`); diğer kitaplar köşeli parantezle (`=[sofr]SOFR_FOMC!B9`, `=[asw]ASW!J3`, `='[borsa]bu'!B5`).
   Formül yazarken tablonun bir hücresine tıklamak (ya da ok tuşları) adresini ekler; bir sayfanın ya da yan panelin
