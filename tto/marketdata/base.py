@@ -213,6 +213,14 @@ class Provider(object):
         on the calculation thread."""
         return {}
 
+    def intraday_bars(self, security: str, start: str, end: str, interval: int = 5, event: str = "TRADE",
+                      timeout: float = 60.0) -> Optional[List[Tuple[str, float, float, float, float, float]]]:
+        """Intraday bars of one security from start to end (local Istanbul time "YYYY-MM-DD HH:MM", end exclusive):
+        [(bar start "YYYY-MM-DD HH:MM" local, open, high, low, close, volume)], oldest first; [] when Bloomberg has
+        none (or the security is unknown); None when this provider cannot ask (replay, a provider without bars), the
+        daily hit limit is reached, or the answer did not come in time."""
+        return None
+
     # ------------------------------------------------------------------ dispatch
     def call(self, calc, name: str, si: int, r: int, c: int, args: Sequence[Any]) -> Any:
         if name == "BDP":

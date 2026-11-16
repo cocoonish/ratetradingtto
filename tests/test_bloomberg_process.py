@@ -6,6 +6,7 @@ back), which is how the desk's first live run ended in "Slow consumer: event que
 being dropped".  The stand-in for blpapi behaves the same way (``release_gil``) and has the same limited
 event queue (``queue_limit``).
 """
+import datetime as dt
 import json
 import multiprocessing
 import os
@@ -623,3 +624,49 @@ def test_a_restart_the_same_day_gives_the_helper_the_days_answers_and_count(fake
     assert again.get_bdp(settle_dt) == "4.11.2026"                         # at once
     settle(again)
     assert again.status()["hits_today"] == used                            # not asked again
+
+
+# ====================================================================================== intraday bars
+def test_bars_cross_the_process_boundary_and_the_helper_counts_them(fake, isolated):
+    """The dashboard's provider is the helper's: the same bars as in-process, an unknown security's empty list, and
+    the hits counted - and the daily limit kept - in the helper, where the session is."""
+    fake(securities=1, invalid=1)
+    p = isolated(max_hits_per_day=3)
+    p.start()
+    span = ("2026-11-02 09:30", "2026-11-02 10:00")
+    want = []
+    for i in range(6):
+        t = dt.datetime(2026, 11, 2, 6, 30) + dt.timedelta(minutes=5 * i)          # UTC: 09:30 in Istanbul
+        o, h, lo, c, volume, _events = fake_blpapi.bar_values("A1Z6 Curncy", t, 5)
+        want.append(((t + dt.timedelta(hours=3)).strftime("%Y-%m-%d %H:%M"), o, h, lo, c, float(volume)))
+    assert p.intraday_bars("A1Z6 Curncy", *span, timeout=10) == want
+    assert p.intraday_bars("NONE0000 Curncy", *span, timeout=10) == []
+    assert wait_for(lambda: "NONE0000 Curncy" in p.status()["error"])
+    assert len(p.intraday_bars("USDTRY Curncy", "2026-11-02", "2026-11-03", event="BID", timeout=10)) == 102
+    assert wait_for(lambda: p.status()["hits_today"] == 3)
+    assert p.intraday_bars("A1Z6 Curncy", *span, timeout=10) is None             # the helper keeps the daily limit
+    time.sleep(1.2)
+    assert p.status()["hits_today"] == 3
+    with pytest.raises(ValueError):                                               # refused here, the helper not asked
+        p.intraday_bars("A1Z6 Curncy", *span, interval=0)
+    assert p.intraday_bars("A1Z6 Curncy", "2026-11-02 10:00", "2026-11-02 10:00") == []
+
+
+def test_a_bar_call_the_terminal_does_not_answer_gives_none(fake, isolated):
+    fake(securities=1, silent=True)
+    p = isolated()
+    p.start()
+    t0 = time.time()
+    assert p.intraday_bars("A1Z6 Curncy", "2026-11-02 09:30", "2026-11-02 10:00", timeout=1.0) is None
+    assert 1.0 <= time.time() - t0 < 10.0
+
+
+def test_a_bar_call_whose_helper_dies_gives_none_and_the_next_helper_answers(fake, isolated, tmp_path):
+    fake(securities=1, crash_once=str(tmp_path / "crashed"))
+    p = isolated()
+    p.start()
+    t0 = time.time()
+    assert p.intraday_bars("CRASH Curncy", "2026-11-02 09:30", "2026-11-02 10:00", timeout=60) is None
+    assert time.time() - t0 < 20                                    # at once, not after the time-out: the helper is gone
+    assert wait_for(lambda: p.status()["restarts"] == 1 and p.status()["worker"] == "running", 20)
+    assert len(p.intraday_bars("A1Z6 Curncy", "2026-11-02 09:30", "2026-11-02 10:00", timeout=10)) == 6
