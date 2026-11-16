@@ -953,14 +953,11 @@ def _size(dv01_usd: float, spot: Optional[float], usd: Optional[float], g: Optio
     return {"usd": notional, "contracts": notional / 1000.0, "try_mn": notional * spot / 1e6}
 
 
-def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str, List[Tuple[str, float, float, float]]]]] = None
-             ) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
-    """Every contract's implied rate, the constant maturities, the calendar, the listed contracts' fair value and
-    signals, and what the page computes again with the values now (``table["_build"]``: the order levels)."""
+def implied_history(ctx: qf.Ctx, eng: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Every contract's implied rate day by day and the constant maturities through them: ``{"contracts", "rates",
+    "cm"}`` (the family's, and the universe's VİOP lines - ``tto.quantuniv``)."""
     hol = set(ctx.holidays or ())
     contracts = contracts_of(ctx, eng)
-    if not contracts:
-        return [], {"ok": False, "why": "VİOP kontratı yok (VİOP sayfası ve Bloomberg geçmişi)", "rows": []}
     cur = Curves(ctx)
     rates = {c.ticker: contract_rates(c, cur, hol) for c in contracts}
     # until Bloomberg's history of a contract is in (the first live day), the VİOP history sheet's own days of it
@@ -972,7 +969,18 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
                for d in sorted(v.get("imp") or {}) if (v.get("days") or {}).get(d) and v["days"][d] > 0]
         if t and len(own) > len(rates.get(t) or []):
             rates[t] = own
-    cm = constant_maturity(rates)
+    return {"contracts": contracts, "rates": rates, "cm": constant_maturity(rates)}
+
+
+def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str, List[Tuple[str, float, float, float]]]]] = None
+             ) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
+    """Every contract's implied rate, the constant maturities, the calendar, the listed contracts' fair value and
+    signals, and what the page computes again with the values now (``table["_build"]``: the order levels)."""
+    hol = set(ctx.holidays or ())
+    hist = implied_history(ctx, eng)
+    contracts, rates, cm = hist["contracts"], hist["rates"], hist["cm"]
+    if not contracts:
+        return [], {"ok": False, "why": "VİOP kontratı yok (VİOP sayfası ve Bloomberg geçmişi)", "rows": []}
     win = int(ctx.cfg.get("viop_fair_window") or DEFAULTS["viop_fair_window"])
     listed = [c for c in contracts if not c.expired]
     live0 = ctx.derive_live(ctx.live)
@@ -1075,6 +1083,7 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
         return _build(ctx, listed, per, effects, shape, cal, live, now or _dt.datetime.now())
 
     table["_build"] = build
+    table["_history"] = lambda: hist                      # (the universe's VİOP lines read it: quantuniv.py)
     return mons, table
 
 

@@ -16,7 +16,10 @@ with the live values (each monitor keeps a function that reads its level now).  
 
 **Signals** (``quantfam.make_signal``): family, the trade with its legs and weights, direction, score z and a strength
 bucket, entry / target / stop, half-life and expected holding, carry + roll a week, regime, how many other families
-agree, time.  Ranked by |z| × regime fit × half-life fit × carry agreement.
+agree, time.  Ranked by |z| × regime fit × half-life fit × carry agreement - within their group of the Sinyaller list
+(``quantuniv``: G10 spot, G10 opsiyon, TRY OIS ≤ 2Y then the long end, DİBS, VİOP, Offshore), the ones a gate holds
+after the others as "düşük güven".  The universe the systematic families trade (``quantuniv.Registry``) is built on
+every full fit after the other families; theirs run on it.
 
 **Log.**  Each time a signal crosses its entry threshold it is written down (time, level, z) and followed: target,
 stop, or ``log_days`` business days later - live tracking (no backtest), so the desk sees which families work.
@@ -41,6 +44,7 @@ from . import quantfam as qf
 from . import quantintraday as qi
 from . import quantopt as qopt
 from . import quantlead as ql
+from . import quantuniv as qu
 from . import quantviop as qv
 from . import quantpath as qp
 from . import volcarry as vc
@@ -52,6 +56,7 @@ EXTRAS = (qcurve, qopt)
 for _x in EXTRAS:
     qf.FAMILIES.update(_x.FAMILIES)
 qf.FAMILIES.update(qv.FAMILIES)                  # VİOP (quantviop.py)
+qf.FAMILIES.update(qu.FAMILIES)                  # the families on the universe (quantuniv.py: Trend, Carry + momentum, ML)
 
 # ---------------------------------------------------------------------------------------------- settings
 DEFAULTS: Dict[str, Any] = {
@@ -165,8 +170,9 @@ def fx_pair_list(store: Any) -> List[str]:
 def series_specs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None) -> List[Dict[str, str]]:
     """The tickers the quant analyses need that the workbook does not keep: ``{key, label, ticker, kind, group}`` - per
     pair of ``pairs`` (the setting's list; its defaults) the spot, the 3M forward points (USDTRY 1M / 3M / 6M / 1Y) and,
-    but for the TRY crosses, the ATM 3M vol and the 25D risk reversal; the global drivers.  Every one of them is to be
-    checked on the terminal (README, "Quant sinyaller")."""
+    but for the TRY crosses, the ATM 3M vol and the 25D risk reversal; the global drivers; the pages' own; the fixed
+    G10 universe's (``quantuniv.series_specs``).  Every one of them is to be checked on the terminal (README, "Quant
+    sinyaller")."""
     out: List[Dict[str, str]] = []
 
     def add(key: str, label: str, ticker: str, kind: str, group: str) -> None:
@@ -194,7 +200,10 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]
     # 3M points, also a pair's forward) is kept once: the history must not ask Bloomberg for one series twice
     have = {(s["ticker"], s.get("field", "PX_LAST")) for s in out} | {s["key"] for s in out}
     usdtry = next((s["ticker"] for s in out if s["key"] == "FX:USDTRY"), "USDTRY Curncy")
-    for s in [x for mod in EXTRAS for x in mod.series_specs(source)] + qv.series_specs() + qv.spot_specs(usdtry):
+    # ... and the fixed G10 universe of the families on it (quantuniv.py: spots, 3M points, ATM / RR / BF), whatever the
+    # desk's pair list: the ones the list has are its own, the rest the universe's ("universe": the FX analyses above
+    # keep to the desk's list)
+    for s in [x for mod in EXTRAS for x in mod.series_specs(source)] + qv.series_specs() + qv.spot_specs(usdtry) + qu.series_specs(source):
         tf = (s["ticker"], s.get("field", "PX_LAST"))
         if tf not in have and s["key"] not in have:
             out.append(s)
@@ -203,11 +212,14 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]
 
 
 #: the order the first backfill takes them in (live: a few a sync): the global drivers, the spots, the forward points
-#: (with the spots: the carry of every pair), the ATM vols, the risk reversals
+#: (with the spots: the carry of every pair), the ATM vols, the risk reversals, then the pages' own (Opsiyon, VİOP) -
+#: and last the G10 universe's (its spots, points, then its vols tenor by tenor: what the analyses read comes first)
 BACKFILL_ORDER = ("Global", "FX:", "FXP:", "FXV:", "FXR:")
 
 
 def _backfill_rank(spec: Dict[str, str]) -> int:
+    if spec.get("universe"):
+        return len(BACKFILL_ORDER) + 1
     if spec["group"] == "Global":
         return 0
     return next((i for i, p in enumerate(BACKFILL_ORDER) if i and spec["key"].startswith(p)), len(BACKFILL_ORDER))
@@ -507,8 +519,11 @@ class Quant(object):
                 return qf.Ctx(cfg, nxt, series, meta, {}, viop=viop, carry={}, mpc=mp, path=self._path(mp), holidays=base["holidays"],
                               fwd_scale=base["fwd_scale"])
 
-            res = qbt.backtest(test, make_ctx, lambda ctx: qf.run_all(ctx, items, None, self.pause)[0], series, cfg, step=step,
-                               pause=self.pause, deadline=time.perf_counter() + budget)
+            def runner(ctx: qf.Ctx) -> List[qf.Monitor]:
+                # quantfam's families and the ones on the universe (quantuniv.py: their registry of the day's context)
+                return qf.run_all(ctx, items, None, self.pause)[0] + qu.monitors(ctx, self.pause)
+
+            res = qbt.backtest(test, make_ctx, runner, series, cfg, step=step, pause=self.pause, deadline=time.perf_counter() + budget)
             first, last = res.get("first"), res.get("last")
             res.update({"at": _now().isoformat(sep=" "), "today": today_iso, "key": self._bt_key(),
                         "years": ((_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.0) if first and last else None})
@@ -733,6 +748,8 @@ class Quant(object):
             if d.group == "Quant":
                 spec = qmeta.get(key) or {"label": d.label, "kind": d.info.get("kind") or "index", "group": d.info.get("group") or "Global"}
                 m = {"label": spec["label"], "kind": spec["kind"], "group": spec["group"], "ticker": d.ticker}
+                if spec.get("universe"):
+                    m["universe"] = True                    # (the G10 universe's own: not the desk's FX pair list)
             elif d.group == "ois":
                 m = {"label": "%s OIS" % label, "kind": "rate", "months": d.months, "group": "ois", "ticker": d.ticker}
             elif d.group == "ref":
@@ -837,9 +854,11 @@ class Quant(object):
                 qp.run(self, ctx, mons, tables, raw_live, timing)          # the implied path, the WIRP (quantpath.py)
                 ql.run(self, ctx, mons, tables, timing)                    # lead-lag (quantlead.py)
                 qv.run(self, ctx, eng, mons, tables, timing)               # VİOP (quantviop.py)
+                reg = qu.Registry(ctx, tables, eng)                        # the universe and the families on it (quantuniv.py)
+                qu.run(ctx, reg, mons, tables, timing, self.pause)
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
-                       "cfg": cfg, "coverage": self._coverage(ctx)}
+                       "cfg": cfg, "coverage": self._coverage(ctx), "registry": reg}
                 with self._lock:
                     self._fit = fit
                 self._publish(fit, raw_live, eng)
@@ -892,9 +911,12 @@ class Quant(object):
                 signals.append(s)
         self._bt_attach(fit, signals, cfg)
         live, gated = qf.rank(signals)
+        # the Sinyaller list: by group (G10 spot … Offshore), the confident lines by strength, then "düşük güven" -
+        # the ones a gate holds: in the list, never logged nor alerted (quantuniv.order)
+        ordered = qu.order(live, gated)
         ctx: qf.Ctx = fit["ctx"]
-        view = {"signals": live, "gated": gated, "tables": self._tables(fit, ctx), "live_keys": sorted(raw_live), "today": fit["today"],
-                "at": _now().isoformat(sep=" ")}
+        view = {"signals": live, "gated": gated, "list": ordered, "tables": self._tables(fit, ctx), "live_keys": sorted(raw_live),
+                "today": fit["today"], "at": _now().isoformat(sep=" ")}
         with self._lock:
             self._view = _clean(view)
             self.version += 1
@@ -993,7 +1015,7 @@ class Quant(object):
             state = "geçmiş doluyor" if fill == "filling" else ("geçmiş yok" if fill == "none" or not pts else "var")
             rows.append({"key": key, "label": m.get("label") or key, "group": m.get("group") or "", "ticker": m.get("ticker") or "",
                          "n": len(pts), "first": pts[0][0] if pts else None, "last": pts[-1][0] if pts else None, "live": key in ctx.live,
-                         "state": state})
+                         "state": state, "universe": bool(m.get("universe"))})
         return rows
 
     # ================================================================== the log
@@ -1028,7 +1050,7 @@ class Quant(object):
                 mins = min(mins, qi.SESSION[1])
                 expires = "%02d:%02d" % (mins // 60, mins % 60)
             e = {"seq": seq, "sid": sg["id"], "family": sg["family"], "family_label": sg["family_label"], "asset": sg["asset"],
-                 "intraday": bool(sg.get("intraday")), "expires": expires,
+                 "group": sg.get("group"), "intraday": bool(sg.get("intraday")), "expires": expires,
                  "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "entry_z": sg["entry_z"], "level": sg["level"],
                  "target": sg["target"], "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
@@ -1113,8 +1135,8 @@ class Quant(object):
         with self._lock:
             self._alert_seq += 1
             a = {"seq": self._alert_seq, "sid": e["sid"], "family": e["family"], "family_label": e["family_label"], "asset": e["asset"],
-                 "expression": e["expression"], "z": e["z"], "level": e["level"], "unit": e["unit"], "digits": e["digits"],
-                 "strength": e["strength"], "day": e["day"], "time": e["time"]}
+                 "group": e.get("group"), "expression": e["expression"], "z": e["z"], "level": e["level"], "unit": e["unit"],
+                 "digits": e["digits"], "strength": e["strength"], "day": e["day"], "time": e["time"]}
             self.store.put(self.ALERT_KEY, (self._alerts() + [a])[-ALERT_KEEP:])
         self._desk_alarm(a, e)
         for fn in list(self._hooks):
@@ -1156,8 +1178,8 @@ class Quant(object):
                 pass
 
     def add_alert_hook(self, fn: Callable[[Dict[str, Any]], None]) -> None:
-        """Called with every new signal alert ``{seq, sid, family, family_label, asset, expression, z, level, unit,
-        strength, day, time}`` - for other listeners (the desk's alarms are wired in already: :meth:`_desk_alarm`)."""
+        """Called with every new signal alert ``{seq, sid, family, family_label, asset, group, expression, z, level,
+        unit, strength, day, time}`` - for other listeners (the desk's alarms are wired in already: :meth:`_desk_alarm`)."""
         self._hooks.append(fn)
 
     def counters(self) -> Dict[str, int]:
@@ -1168,25 +1190,28 @@ class Quant(object):
         user = self.svc.require_user(user)
         subs = self.store.get(self.SUBS_KEY) or {}
         mine = subs.get(user) if isinstance(subs, dict) else None
-        out = {"on": False, "families": [], "min": "Zayıf"}
+        out = {"on": False, "families": [], "groups": [], "min": "Zayıf"}
         if isinstance(mine, dict):
             out.update({k: mine[k] for k in out if k in mine})
         out["all_families"] = [{"id": k, "label": v[0]} for k, v in qf.FAMILIES.items()]
+        out["all_groups"] = [{"id": g, "label": g, "slug": qu.SLUGS[g]} for g in qu.GROUPS]
         out["strengths"] = list(qf.STRENGTHS)
         return out
 
     def set_subscription(self, user: Optional[str], data: Dict[str, Any]) -> Dict[str, Any]:
         user = self.svc.require_user(user)
         fams = [f for f in (data.get("families") or []) if f in qf.FAMILIES]
+        groups = [g for g in (data.get("groups") or []) if g in qu.GROUPS]
         minimum = data.get("min") if data.get("min") in qf.STRENGTHS else "Zayıf"
         subs = self.store.get(self.SUBS_KEY)
         subs = subs if isinstance(subs, dict) else {}
-        subs[user] = {"on": bool(data.get("on")), "families": fams, "min": minimum}
+        subs[user] = {"on": bool(data.get("on")), "families": fams, "groups": groups, "min": minimum}
         self.store.put(self.SUBS_KEY, subs)
         return self.subscription(user)
 
     def alerts(self, user: Optional[str], since: Any = None) -> Dict[str, Any]:
-        """The alerts after ``since`` that ``user`` subscribed to (``since`` empty: none - only the last number)."""
+        """The alerts after ``since`` that ``user`` subscribed to - its families and groups (none chosen: all), at
+        least its strength (``since`` empty: none - only the last number)."""
         sub = self.subscription(user)
         try:
             since_n = int(since) if since not in (None, "") else None
@@ -1199,6 +1224,8 @@ class Quant(object):
                 if int(a.get("seq") or 0) <= since_n:
                     continue
                 if sub["families"] and a["family"] not in sub["families"]:
+                    continue
+                if sub.get("groups") and a.get("group") not in sub["groups"]:
                     continue
                 if rank.get(a.get("strength"), 0) < rank.get(sub["min"], 0):
                     continue
@@ -1266,22 +1293,23 @@ class Quant(object):
         if what in qv.VIEWS:                                # VİOP (quantviop.py)
             return qv.view(self, what, base, v, fit)
         if what == "signals":
-            fam, asset = q.get("family") or "", q.get("asset") or ""
-
-            def keep(s: Dict[str, Any]) -> bool:
-                return (not fam or s["family"] == fam) and (not asset or s["asset"] == asset)
-
+            # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones; ``group`` one group
+            fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""
+            mine = [s for s in v["list"] if self._keep(s, fam, asset)]
             counts = {}
             for s in v["signals"]:
                 counts[s["family"]] = counts.get(s["family"], 0) + 1
             families = [{"id": k, "label": lbl, "kind": kind, "page": page, "live": counts.get(k, 0),
                          "monitors": sum(1 for m in fit["mons"].values() if m.family == k)} for k, (lbl, kind, page) in qf.FAMILIES.items()]
-            base.update({"signals": [s for s in v["signals"] if keep(s)], "gated": [s for s in v["gated"] if keep(s)][:60],
+            base.update({"signals": [s for s in mine if not group or s.get("group") == group],
+                         "gated": [s for s in v["gated"] if self._keep(s, fam, asset)][:60], "groups": qu.group_counts(mine), "group": group,
                          "families": families, "assets": list(qf.ASSETS), "settings": fit["cfg"], "today": v["today"], "at": v["at"],
                          "hits": self.log_view()["families"], "coverage": fit["coverage"]})
             return _clean(base)
         if what == "signal":
             return self.signal_view(q.get("id"))
+        if what == "universe":
+            return self.universe_view()
         pages = {"corr": ("corr",), "pca": ("pca", "rv", "frapath"), "pairs": ("pairs", "viopcal"), "regime": ("momentum", "cycle", "regime"),
                  "fx": ("fxsum", "vol", "emcarry", "fwdprem"), "macro": ("macro",), "model": ("model",), "intraday": ("intraday",)}
         pages.update({x.VIEW: x.TABLES for x in EXTRAS})
@@ -1291,7 +1319,8 @@ class Quant(object):
             base[name] = t.get(name)
         base["signals"] = [s for s in v["signals"] + v["gated"] if s["page"] == "quant-" + what]
         base["settings"] = fit["cfg"]
-        base["coverage"] = [c for c in fit["coverage"] if self._covers(what, c["key"])]
+        # (a page's coverage: its own series - the G10 universe's are the families', on Sinyaller)
+        base["coverage"] = [c for c in fit["coverage"] if self._covers(what, c["key"]) and not c.get("universe")]
         base["errors"] = {k: e for k, e in (t.get("errors") or {}).items() if k in pages[what] or (what == "fx" and k == "vol")}
         return _clean(base)
 
@@ -1314,11 +1343,13 @@ class Quant(object):
             return _clean(out)
         out.update({"at": v.get("at"), "entry_z": fit["cfg"].get("entry_z")})
         if of == "signals":
-            fam, asset = q.get("family") or "", q.get("asset") or ""
-            out["signals"] = [s for s in v["signals"] if (not fam or s["family"] == fam) and (not asset or s["asset"] == asset)]
+            # (the page's list, its filters: a family, an asset, a group)
+            fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""
+            out["signals"] = [s for s in v["list"] if self._keep(s, fam, asset) and (not group or s.get("group") == group)]
             out["family_label"] = qf.FAMILIES[fam][0] if fam in qf.FAMILIES else ""
             out["families"] = [{"id": k, "label": x[0]} for k, x in qf.FAMILIES.items()]          # (the box's filter)
             out["assets"] = list(qf.ASSETS)
+            out["groups"] = list(qu.GROUPS)
         elif of == "viop":
             page = qv.view(self, "viop", {}, v, fit)
             tab = page.get("viop") or {}
@@ -1333,6 +1364,26 @@ class Quant(object):
                             for k, b in ((page.get("wirp") or {}).get("banks") or {}).items()}
         else:
             out["fxsum"] = v["tables"].get("fxsum") or {}
+        return _clean(out)
+
+    @staticmethod
+    def _keep(s: Dict[str, Any], fam: str, asset: str) -> bool:
+        return (not fam or s["family"] == fam) and (not asset or s["asset"] == asset)
+
+    def universe_view(self) -> Dict[str, Any]:
+        """The universe of the families on it (quantuniv.py): every trade line and input with its group, level, σ,
+        carry, size and the money of a unit move - what they read, as of the last fit and the values now."""
+        fit = self._fit
+        if fit is None or fit.get("registry") is None:
+            return {"ready": False}
+        reg: qu.Registry = fit["registry"]
+        ctx: qf.Ctx = fit["ctx"]
+        try:
+            out = reg.table(ctx.derive_live(ctx.live))
+        except Exception as exc:  # noqa: BLE001 - the table is not worth the page
+            out = {"rows": [], "inputs": [], "why": "%s: %s" % (type(exc).__name__, str(exc)[:160])}
+        out.update({"ready": True, "today": fit["today"], "families": [{"id": k, "label": x[0], "plugged": k in qu.RUNNERS}
+                                                                     for k, x in qu.FAMILIES.items()]})
         return _clean(out)
 
     @staticmethod

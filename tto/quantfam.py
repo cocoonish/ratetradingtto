@@ -45,7 +45,8 @@ from . import quantmath as qm
 #: id -> (label, kind, page): ``kind`` says how a signal is read - "mr" bets on the level returning to its mean (gated by
 #: a mean-reverting regime and a half-life within the horizon), "trend" on it going on (gated by a trending regime),
 #: "carry", "cycle", "model" on a premium / a conditional drift / a validated forecast, "surprise" fades today's
-#: unexplained move, "corr" on a correlation coming back
+#: unexplained move, "corr" on a correlation coming back, "sys" a systematic family's daily line (no regime or half-life
+#: gate: its own rules decide).  The families on the universe (Trend, Carry + momentum, ML) are ``quantuniv.FAMILIES``.
 FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "corr": ("Korelasyon kırılması", "corr", "quant-corr"),
     "pca": ("PCA kalıntısı", "mr", "quant-pca"),
@@ -348,8 +349,9 @@ class Ctx(object):
 
     # ---- FX carry: what holding a pair through its forwards pays or costs
     def fx_pairs(self) -> List[str]:
-        """The pairs with a spot history, in the order of their keys."""
-        return sorted(k[3:] for k in self.meta if k.startswith("FX:") and self.series.get(k))
+        """The pairs with a spot history, in the order of their keys - the desk's list (a pair only the G10 universe
+        keeps, ``meta["universe"]``, is the families' on it: quantuniv.py)."""
+        return sorted(k[3:] for k in self.meta if k.startswith("FX:") and self.series.get(k) and not self.meta[k].get("universe"))
 
     def fx_tenors(self, pair: str) -> List[Tuple[str, float]]:
         """The forward tenors kept for a pair, shortest first: (tenor, calendar days)."""
@@ -541,6 +543,9 @@ class Monitor(object):
         self.inst_days: Optional[float] = kw.get("inst_days")
         self.pct_base: str = kw.get("pct_base", "inst")
         self.series_label: Optional[str] = kw.get("series_label")
+        # (currency, money a P&L unit makes) of a line whose money is linear in it and told by no other way: an
+        # option's vega (vol points), a swap's points - the universe's lines set it (quantuniv.py)
+        self.cash: Optional[Tuple[str, float]] = kw.get("cash")
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -912,6 +917,19 @@ def rate_money(legs: List[Dict[str, Any]], cfg: Dict[str, Any], tl: Optional[flo
     return out
 
 
+def cash_money(ccy: str, per: float, unit: Optional[str], exp: Optional[float], carry_h: Optional[float], reward: Optional[float],
+               risk: Optional[float], cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """A line whose money is linear in its P&L units (``Monitor.cash``: an option's vega, a swap's points): ``per`` of
+    ``ccy`` a unit - the expected P&L, its carry and the rest, the target's and the stop's; ``try_per`` its TRY."""
+    pu = {"total": exp, "carry": carry_h, "move": exp - carry_h if exp is not None and carry_h is not None else None,
+          "target": reward, "stop": -risk if risk is not None else None}
+    fx = cfg.get("usdtry")
+    out: Dict[str, Any] = {"ccy": ccy, "per_unit": per, "unit": unit, "pu": pu,
+                           "try_per": 1.0 if ccy in ("TRY", "TL") else (float(fx) if ccy == "USD" and fx else None)}
+    out.update({k: v * per if v is not None else None for k, v in pu.items()})
+    return out
+
+
 #: what a leg's action is in plain words, by the kind of instrument: a swap's fixed rate, a forward's points, the rest
 _LEG_WORDS = {("swap", "Receive"): "sabit faiz alınan (receive)", ("swap", "Pay"): "sabit faiz ödenen (pay)",
               ("points", "Receive"): "swap puanı alınan (receive)", ("points", "Pay"): "swap puanı ödenen (pay)",
@@ -1060,15 +1078,20 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
             tl = float(cfg["dv01_usd"]) * float(cfg["usdtry"])
         money = rate_money(legs, cfg, tl, exp, carry_h, reward, risk)
         pnl_try = exp * tl if exp is not None and tl else None
+    elif m.cash is not None and m.cash[1]:
+        money = cash_money(m.cash[0], float(m.cash[1]), unit, exp, carry_h, reward, risk, cfg)
+        pnl_try = money["total"] * money["try_per"] if money["total"] is not None and money.get("try_per") else None
 
     def amount(v: Optional[float], signed: bool = True, cash: Optional[float] = None) -> str:
         """A P&L of the holding (P&L units) as the gates say it: FX in money per 1 mn of the base (``cash`` when it is
-        known already), bp with its TL."""
+        known already), bp with its TL, a line of linear money (vol, points) with its money."""
         if v is None:
             return "—"
         if money is not None and px is not None:
             c = cash if cash is not None else pct_money(v, pkg_s, money["ref"], money["log"])
             return "%s / 1 mn %s" % (_money(c, money["ccy"], signed), money["base"])
+        if money is not None and money.get("per_unit"):
+            return "%s %s ≈ %s" % (_sg(v, 2) if signed else _g(v, 2), unit or "", _money(v * money["per_unit"], money["ccy"], signed))
         txt = ("%s %s" % (_sg(v, 2) if signed else _g(v, 2), unit or "")).strip()
         return txt + (" ≈ %s" % _money(v * money["per_bp"], "TL", signed) if money is not None and money.get("per_bp") else "")
 
@@ -1147,6 +1170,8 @@ def exp_text(sg: Dict[str, Any], d: int = 2) -> str:
         return "—"
     if sg.get("px") and mo.get("total") is not None:
         return "~%s / 1 mn %s" % (_money(mo["total"], mo["ccy"]), mo["base"])
+    if mo.get("per_unit") and mo.get("total") is not None:
+        return "%s %s ≈ %s" % (_sg(e, d), sg.get("pnl_unit") or "", _money(mo["total"], mo["ccy"]))
     txt = ("%s %s" % (_sg(e, d), sg.get("pnl_unit") or "")).strip()
     return txt + (" ≈ %s" % _money(mo["total"], "TL") if mo.get("per_bp") and mo.get("total") is not None else "")
 
@@ -1245,8 +1270,20 @@ def plain_text(sg: Dict[str, Any]) -> str:
             out += " Ana bacak %s $ DV01 = %s TL / bp." % (_th(mo["dv01_usd"], 0), _th(mo["per_bp"], 0))
         return out
     out += "; hedef %s, stop %s." % (lv(sg.get("target")), lv(sg.get("stop")))
+    unit = {"vol": "vol puanı"}.get(sg.get("pnl_unit") or "", sg.get("pnl_unit") or "")
+    if mo.get("per_unit"):
+        # (a line of linear money - an option's vega, a swap's points: its P&L units and their money, for its size)
+        size = (sg.get("info") or {}).get("size")
+        if sg.get("exp_pnl") is not None and mo.get("total") is not None:
+            out += " Beklenen: %s içinde %s %s ≈ %s%s." % (span, _sg(sg["exp_pnl"], 2), unit, _money(mo["total"], mo["ccy"]),
+                                                           " (%s)" % size if size else "")
+        ends = ["%s ~%s %s" % (word, _money(abs(mo[key]), mo["ccy"], False), "kâr" if mo[key] >= 0 else "zarar")
+                for word, key in (("hedefte", "target"), ("stopta", "stop")) if mo.get(key) is not None]
+        if ends:
+            tail = ", ".join(ends)
+            out += " " + tail[0].upper() + tail[1:] + "."
+        return out
     if sg.get("exp_pnl") is not None:
-        unit = {"vol": "vol puanı"}.get(sg.get("pnl_unit") or "", sg.get("pnl_unit") or "")
         out += " Beklenen: %s içinde %s %s." % (span, _sg(sg["exp_pnl"], 2), unit)
     return out
 

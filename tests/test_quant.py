@@ -875,7 +875,9 @@ def test_more_pairs_with_their_tickers_and_a_list_the_desk_keeps():
     assert out["values"]["fx_pairs"] == "USDTRY, EURUSD, USDNOK" and fx_pair_list(q.store) == ["USDTRY", "EURUSD", "USDNOK"]
     assert q.svc.nudged >= 1                                              # the history reads its list again (bump)
     defs = history_defs("BGN", fx_pair_list(q.store))
-    assert {d.ticker for d in defs} >= {"USDNOK Curncy", "NOK3M Curncy", "USDNOKV3M BGN Curncy"} and "GBPUSD Curncy" not in {d.ticker for d in defs}
+    kept = {d.ticker for d in defs}
+    assert kept >= {"USDNOK Curncy", "NOK3M Curncy", "USDNOKV3M BGN Curncy"} and "USDZAR Curncy" not in kept and "ZAR3M Curncy" not in kept
+    assert "GBPUSD Curncy" in kept                                        # (the G10 universe is kept whatever the list: quantuniv.py)
     assert all("tail" not in d.info and d.info["backfill"] is True for d in defs)       # (new days every sync, as the desk keeps it)
     with pytest.raises(Exception):
         q.set_settings("ayse", {"fx_pairs": "EURUSD, XX"})
@@ -1311,7 +1313,7 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         per_v = [sum(1 for r in s if kind(r) == "full" for x in r["securities"] if x in vt) for s in syncs]
         nv = len(viop) + len(expired)
         kv = -(-nv // v)
-        # (the quant series are done first: their 121 at forty a sync in four syncs, VİOP's at fifteen in eleven)
+        # (the quant series are done first: their 143 at forty a sync in four syncs, VİOP's at fifteen in eleven)
         assert per_v[:kv] == [v] * (kv - 1) + [nv - v * (kv - 1)] and not any(per_v[kv:]) and k < kv
         assert all(when[(d.alts[0], d.field)] > when[(d.ticker, d.field)] for d in expired)
         listed = {(d.ticker, d.field) for d in viop if d not in expired}
@@ -1343,6 +1345,18 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         vday = cost(reqs, vkeys)
         print("VİOP: %d hits, %d data points the first day (the full ranges: %d hits, %d points; the contracts' in %d syncs), then %d hits, %d points a sync"
               % (vday + vfull + (kv,) + cost(syncs[-1], vkeys)))
+        # the fixed G10 universe's own series (quantuniv.py: what the desk's pair list and the Opsiyon page lack - 22 with the
+        # default list): two years once each, in the last sync of the quant series' fill (they come last), then their new
+        # days every sync as every other series
+        uni = {s["key"] for s in series_specs() if s.get("universe")}
+        gkeys = {(d.ticker, d.field) for d in quant if d.info["key"] in uni}
+        gfull = cost([r for r in reqs if kind(r) == "full"], gkeys)
+        gsync = cost(syncs[-1], gkeys)
+        gday = cost(reqs, gkeys)
+        assert len(gkeys) == 22 and gfull[0] == len(gkeys) and {when[g] for g in gkeys} == {k - 1} and gsync[0] == len(gkeys)
+        assert gday[0] == len(gkeys) * (len(syncs) - k + 1) and gfull[1] > 500 * len(gkeys)
+        print("G10 universe: %d series - the two-year fill %d hits, %d data points (sync %d), then %d hits, %d points a sync: the first day "
+              "%d hits, %d points; a day of 96 syncs %d hits, %d points" % ((len(gkeys),) + gfull + (k,) + gsync + gday + (96 * gsync[0], 96 * gsync[1])))
         # the next day: the series without any history once more (an expired contract a week later), every series with data
         # its new days every sync - and the history's own series their older year, forty a sync
         clock.today = lambda: today + 1
@@ -1475,8 +1489,12 @@ def test_fit_runs_off_the_engine_thread_and_finds_the_planted_signals(seeded, mo
     ids = {s["id"]: s for s in v["signals"]}
     assert "pca:OIS:2Y" in ids and ids["pca:OIS:2Y"]["expression"].startswith("Receive 2Y OIS")
     assert "pairs:off:3M" in ids and ids["pairs:off:3M"]["direction"] == -1
-    ranks = [s["composite"] for s in v["signals"]]
-    assert ranks == sorted(ranks, reverse=True)
+    # the list by group (quantuniv.order): in each, the confident lines by their composite, then the "düşük güven" ones
+    keys = [(s["priority"], bool(s["gated"])) for s in v["signals"]]
+    assert keys == sorted(keys) and any(not s["gated"] for s in v["signals"])
+    for p in {s["priority"] for s in v["signals"]}:
+        ranks = [s["composite"] for s in v["signals"] if s["priority"] == p and not s["gated"]]
+        assert ranks == sorted(ranks, reverse=True)
     assert {f["id"] for f in v["families"]} == set(qf.FAMILIES)
     only = svc.quant.view("signals", user, {"family": "pca"})["signals"]
     assert only and all(s["family"] == "pca" for s in only)
@@ -1510,7 +1528,7 @@ def test_the_service_backtests_every_family_and_shows_it_beside_each_signal(seed
     view = q.view("backtest", user, {})
     assert view["ready"] and view["rows"] and {"trades", "hit", "avg_sigma", "sharpe", "max_dd"} <= set(view["rows"][0])
     # the desk's floor: a family whose record is below it has its signals held back ("geri testte zayıf")
-    fam = sigs[0]["family"]
+    fam = next(s for s in sigs if not s["gated"])["family"]
     q.set_settings(user, {"bt_mute": "açık", "bt_min_trades": 1, "bt_min_hit": 1.0})
     q.compute()
     held = [s for s in q.view("signals", user, {})["gated"] if s["family"] == fam and (q.backtest_result()["families"].get(fam) or {}).get("trades")]
