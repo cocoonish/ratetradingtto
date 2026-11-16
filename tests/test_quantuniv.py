@@ -526,7 +526,7 @@ def test_a_plugged_family_lists_by_group_keeps_its_low_confidence_lines_and_aler
     off = mine["trend:FWD:USDTRY:3M"]
     assert off["group"] == "Offshore" and off["tag"] == "offshore limiti" and off["family_label"] == "Trend"
     low = mine["trend:OIS:2Y"]
-    assert low["gated"].startswith("beklenen kâr yok") and low["strength"] == "elendi" and low in v["gated"] or low["id"] in {s["id"] for s in v["gated"]}
+    assert low["gated"].startswith("beklenen kâr yok") and low["strength"] == "elendi" and low["id"] in {s["id"] for s in v["gated"]}
     assert {s["id"] for s in sigs} >= {s["id"] for s in v["gated"]}                   # (every gated line is in the list)
     # the group buttons: every group, its lines and its confident ones; one group alone
     groups = {g["id"]: g for g in v["groups"]}

@@ -1570,9 +1570,10 @@ async function shot(page, name) {
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
       && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak')
-      // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five - and its contracts:
-      // the six listed and 24 expired months, close / high / low, an expired one with its two-digit-year ticker beside)
-      && series.length === 118 + 121 + 3 * (6 + 24) + 3 * 24
+      // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five, the G10 universe's
+      // own 22 - and its contracts: the six listed and 24 expired months, close / high / low, an expired one with its
+      // two-digit-year ticker beside)
+      && series.length === 118 + 143 + 3 * (6 + 24) + 3 * 24
       && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), { tlref: rowOf(series, 'TLREF'), rows: series.length });
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
