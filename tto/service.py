@@ -2214,9 +2214,10 @@ class Service(object):
 
     def _copy_try_holidays(self) -> None:
         """The Borsa workbook's copy of the TRY holiday list (its file holds none) is the TRY workbook's list as it stands
-        when the service starts - the file's days and what the desk saved -, row by row: the BIST swaps' T+1 value date
-        skips the days the TRY OIS spot date does.  The settings page writes every copy after that.  Nothing is stored:
-        it is made again at every start (the copy's own days the desk saved, if any, give way to it)."""
+        - the file's days and what the desk saved -, row by row: the BIST swaps' T+1 value date skips the days the TRY OIS
+        spot date does.  Made so when the service starts and when days of the TRY list are written or put back one by
+        one (``_follow_try_holidays``); the settings page writes every copy itself.  Nothing is stored for it here (the
+        copy's own days the desk saved, if any, give way to it)."""
         lists = {book.id: (book, cells) for book, cells in self._holiday_cells("TRY")}
         if "tto" not in lists or "borsa" not in lists:
             return
@@ -2242,6 +2243,15 @@ class Service(object):
             engine.clear_inputs(clears)
         if sets:
             engine.set_inputs(sets)
+
+    def _follow_try_holidays(self, book: Book, cells: List[Tuple[int, int]]) -> None:
+        """Days of the TRY workbook's holiday list written or put back one by one (the Motor page, a reset - the settings
+        page writes every copy itself): the Borsa workbook's copy follows at once."""
+        if book.id != "tto" or not cells:
+            return
+        src = next((c for b, c in self._holiday_cells("TRY") if b.id == "tto"), None)
+        if src is not None and {dcell for dcell, _ in src} & set(cells):
+            self._copy_try_holidays()
 
     def _holiday_list(self, ccy: str) -> Dict[str, Any]:
         days: Dict[str, str] = {}
@@ -2505,6 +2515,7 @@ class Service(object):
                 self.store.add_ret_history(user, self._ret_rows(book))
         if shared_vals or shared_clear:
             self.formulas.wrote(book, "", shared_vals, shared_clear, shared_forms)
+            self._follow_try_holidays(book, list(shared_vals) + shared_clear)
         if user_vals or user_clear:
             ov = dict(self._overlay(user, book))
             ov.update(user_vals)
@@ -2612,6 +2623,7 @@ class Service(object):
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
             self.formulas.cleared("", book, keep)        # (a formula there goes with its value)
+            self._follow_try_holidays(book, keep)
             n = len(keep)
         else:
             ov = dict(self._overlay(user, book))

@@ -344,5 +344,13 @@ def test_a_t1_start_over_a_planted_try_holiday(tmp_path):
     try:
         assert cell(again, "EK_TATIL!B2", book="borsa") == cell(again, "OIS_MAIN!B2") == S + 1
         assert cell(again, "bu!Q9", book="borsa") == S + 1 + cell(again, "bu!R9", book="borsa")
+        # days of the TRY list put back or typed one by one (a reset, the Motor page): the copy follows at once
+        admin = again.login("Borsa tatil yönetici")["user"]
+        again.store.update_account(admin, role="admin")
+        again.reset_inputs(admin, "tto", ["Motor!A361:B523"], shared=True)                 # the file's list again
+        assert cell(again, "OIS_MAIN!B2") == S == cell(again, "EK_TATIL!B2", book="borsa")
+        free = next(r for r in range(361, 524) if cell(again, "Motor!A%d" % r) is None)
+        res = again.set_inputs(admin, "tto", [{"ref": "Motor!A%d" % free, "value": "04.11.2026"}])
+        assert res["errors"] == [] and cell(again, "OIS_MAIN!B2") == S + 1 == cell(again, "EK_TATIL!B2", book="borsa")
     finally:
         again.stop()
