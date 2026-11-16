@@ -425,13 +425,13 @@ class Desk(object):
         return self.agenda(user)
 
     # ------------------------------------------------------------------ recurring items (Tekrarlayan işler)
-    def _read_holidays(self) -> frozenset:
+    def _read_holidays(self, keep: frozenset = frozenset()) -> frozenset:
         """The desk's TRY holidays as the dashboard's calendar has them now (on the calculation thread: the caller waits
-        for it)."""
+        for it); ``keep`` when they cannot be read (the list read before - none at the start: the weekends only)."""
         try:
             return frozenset(d.isoformat() for d in self.svc.holiday_dates(("TRY",)))
-        except Exception:  # noqa: BLE001 - a workbook without the list: the weekends only
-            return frozenset()
+        except Exception:  # noqa: BLE001
+            return keep
 
     def holidays(self) -> frozenset:
         """The TRY holidays of the dashboard's calendar (Ayarlar → Tatiller; the list the workbook's WORKDAY reads), as
@@ -449,7 +449,7 @@ class Desk(object):
         return days
 
     def _refresh(self, today: str, version: int) -> None:
-        days = self._read_holidays()
+        days = self._read_holidays(self._shut[1])
         with self._counting:
             if self._shut[2] != version:                # the list changed meanwhile: that reading stands
                 return
@@ -461,7 +461,7 @@ class Desk(object):
     def holidays_changed(self) -> None:
         """The TRY holidays changed (Service.set_holidays - on the calculation thread, where the list is read at once):
         the recurring items' days are worked out again and the open pages told."""
-        days = self._read_holidays()
+        days = self._read_holidays(self._shut[1])
         with self._counting:
             self._shut = (_now().date().isoformat(), days, self._shut[2] + 1)
         self._changed("agenda")
