@@ -810,7 +810,7 @@ def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
         assert rv["BIST bileşik getiri"]["soft"] and rv["Sinyal"]["soft"] and rv["BIST bileşik getiri"]["tip"] == line[heads.index("Getiri %")]["tip"]
         assert not rv["Kupon"].get("soft") and not any(name.startswith("Alış−satış") for name in rv)
         # Tüm Kâğıtlar
-        d = s.view(u, "kagitlar")["panels"][0]["data"]
+        d = next(p for p in s.view(u, "kagitlar")["panels"] if p["id"] == "U1")["data"]
         row = next(r for r in d["rows"] if r[0].get("t") == "TRT150328T24")
         at = {c: d["c"].index(c) for c in "IJNOPQ"}
         assert (row[at["I"]]["t"], row[at["I"]]["cls"], row[at["J"]]["t"]) == ("–", "soft", "–") and "100,100" in row[at["I"]]["tip"]
@@ -923,7 +923,7 @@ def test_every_bond_is_in_one_place_kind_by_kind(svc):
     assert cell(svc, "EK_EVREN!D%d" % rc) == "reel %2,90" and cell(svc, "EK_EVREN!B%d" % rc) == "07.07.27 TÜFE"
     # the page: kind by kind, by maturity; ☆ / ★ to click, today's board, the card and ✕ on the right
     u = svc.login("Evren Bakan")["user"]
-    panel = svc.view(u, "kagitlar")["panels"][0]
+    panel = next(p for p in svc.view(u, "kagitlar")["panels"] if p["id"] == "U1")
     assert (panel["flags"], panel["card"], panel["add"]["name"], "grow" in panel) == ("dibs", "bond", "evren", False)
     d = panel["data"]
     captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
@@ -1023,7 +1023,7 @@ def test_the_desk_adds_bonds_and_bloomberg_says_what_they_are(tmp_path, module_s
         r = s._uni_rows[NEW_FRN]
         assert [cell(s, "EK_EVREN!%s%d" % (c, r)) for c in ("A", "B", "C", "D", ex.UNI_KIND)] == [NEW_FRN, "15.06.32 FRN", "FRN", "FRN", "frn"]
         assert cell(s, "EK_EVREN!R%d" % s._uni_rows[NEW_FIXED]) == "ISL1" and cell(s, "EK_EVREN!D%d" % s._uni_rows[NEW_FIXED]) == 0.305
-        d = s.view(u, "kagitlar")["panels"][0]["data"]
+        d = next(p for p in s.view(u, "kagitlar")["panels"] if p["id"] == "U1")["data"]
         captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
         assert captions[2:] == ["Sabit kuponlu · 27 kâğıt", "TLREF'e endeksli · 15 kâğıt", "FRN · 10 kâğıt", "TÜFE'ye endeksli · 24 kâğıt",
                                 "Türü bekleniyor (Bloomberg) · 1 kâğıt"]
@@ -1071,7 +1071,7 @@ def test_a_bond_taken_off_the_list_and_one_past_its_maturity(tmp_path, module_se
         assert (res["isin"], res["removed"], res["trading"]) == ("TRT020130T19", True, True)
         assert "TRT020130T19" not in s._list_values(other, "tto", "DİBS RV!A5:A54")
         assert "TRT020130T19" not in s._uni_rows and bd.by_isin("TRT020130T19")["kind"] == "frn"    # still known
-        d = s.view(other, "kagitlar")["panels"][0]["data"]
+        d = next(p for p in s.view(other, "kagitlar")["panels"] if p["id"] == "U1")["data"]
         assert "FRN · 8 kâğıt" in [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
         assert s.bond_list_remove(u, "TRT020130T19")["removed"] is False                            # not there any more
         assert s.store.get(s.BOND_DESK)["removed"]["TRT020130T19"]["by"] == user_key("Liste Çıkaran")

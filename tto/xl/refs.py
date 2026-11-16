@@ -7,11 +7,14 @@ nothing would be taken from it.)  So everything a cell flows into - its readers,
 array formula among them writes - can be told without computing anything.
 
 The engine uses it when a constant is typed over once values are computed: the values downstream of the cell are
-marked with the cell's new dependency bit instead of every value of every user being dropped.
+marked with the cell's new dependency bit instead of every value of every user being dropped.  The other way round,
+:meth:`RefIndex.upstream` tells which inputs a page's table reads (``tests/test_views.py``: each table's inputs are in
+its tab).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+import bisect
+from typing import Any, Dict, Hashable, Iterable, List, Optional, Set, Tuple
 
 from .model import COLS
 from .parser import parse_template
@@ -200,6 +203,101 @@ class RefIndex(object):
         return out
 
     # ------------------------------------------------------------------ queries
+    def reads(self, si: int, rc: int) -> Optional[List[Box]]:
+        """The boxes of cells the formula in (si, rc) names - ``[]`` for a constant, ``None`` for a formula whose cells
+        are known only when computed (OFFSET / INDIRECT)."""
+        tid = self.engine.fml[si].get(rc)
+        if tid is None:
+            return []
+        specs = self._template_specs(tid)
+        if specs is None:
+            return None
+        return self._resolve(specs, si, *divmod(rc, COLS))
+
+    def upstream(self, groups: Dict[Hashable, Iterable[Tuple[int, int]]],
+                 stop: Iterable[Tuple[int, int]]) -> Dict[Hashable, Set[Tuple[int, int]]]:
+        """For each group of cells, the cells of ``stop`` its values follow from: what the formulas of the group name,
+        what those name ..., a cell an array formula writes through that formula - each chain ending at a cell of
+        ``stop`` (the inputs: whatever is typed into one ends it; what an input's own default formula reads is not
+        followed).  A box a formula names is walked through the cells in it that hold something to follow.
+
+        The groups share one walk (a page's tables read much of the same).  A formula whose cells are known only when
+        computed (OFFSET / INDIRECT: an incomplete index) adds nothing; in a circular chain a cell being walked counts
+        once."""
+        eng = self.engine
+        stop = set(stop)
+        order = sorted(stop)
+        bit = {cell: 1 << i for i, cell in enumerate(order)}
+        keys: Dict[int, List[int]] = {}
+
+        def inside(si: int, r1: int, c1: int, r2: int, c2: int) -> List[int]:
+            got = keys.get(si)
+            if got is None:
+                got = keys[si] = sorted(set(eng.fml[si]) | set(eng.members[si]) | set(eng.spill_zone[si])
+                                        | {rc for s, rc in stop if s == si})
+            lo = bisect.bisect_left(got, r1 * COLS + c1)
+            hi = bisect.bisect_right(got, r2 * COLS + c2)
+            return [rc for rc in got[lo:hi] if c1 <= rc % COLS <= c2]
+
+        def follow(node):
+            """What a node reads: a cell (sheet, rc) - its formula's boxes, or the formula that writes it -, a box
+            (sheet, r1, c1, r2, c2) - its cells."""
+            if len(node) == 2:
+                si, rc = node
+                if rc in eng.fml[si]:
+                    for box in self.reads(si, rc) or ():
+                        bs, r1, c1, r2, c2 = box
+                        yield (bs, r1 * COLS + c1) if r1 == r2 and c1 == c2 else box
+                    return
+                anchor = eng.members[si].get(rc)
+                if anchor is not None:
+                    yield si, anchor
+                for anchor in eng.spill_zone[si].get(rc, ()):
+                    yield si, anchor
+                return
+            si = node[0]
+            for rc in inside(*node):
+                yield si, rc
+
+        memo: Dict[Any, int] = {}
+        out: Dict[Hashable, Set[Tuple[int, int]]] = {}
+        for key, cells in groups.items():
+            mask = 0
+            for start in cells:
+                start = tuple(start)
+                if start in bit:
+                    mask |= bit[start]
+                    continue
+                if start not in memo:
+                    # depth first without recursion (chains run thousands of cells deep): [node, what it reads, mask]
+                    stack = [[start, follow(start), 0]]
+                    walking = {start}
+                    while stack:
+                        top = stack[-1]
+                        for nxt in top[1]:
+                            b = bit.get(nxt)
+                            if b is not None:
+                                top[2] |= b
+                                continue
+                            got = memo.get(nxt)
+                            if got is not None:
+                                top[2] |= got
+                            elif nxt not in walking:
+                                walking.add(nxt)
+                                stack.append([nxt, follow(nxt), 0])
+                                break
+                        else:
+                            stack.pop()
+                            walking.discard(top[0])
+                            memo[top[0]] = top[2]
+                            if stack:
+                                stack[-1][2] |= top[2]
+                mask |= memo[start]
+            out[key] = {cell for cell in order if mask & bit[cell]}
+        self._specs = {}                                 # (as after building: the templates' references are not kept)
+        self._names = {}
+        return out
+
     def readers(self, si: int, rc: int) -> List[Tuple[int, int]]:
         """The formula cells whose references take in (si, rc)."""
         out: List[int] = []

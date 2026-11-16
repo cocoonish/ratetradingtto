@@ -277,13 +277,14 @@
    "type": "table",
    "title": "MPC İMA PATİKASI  ·  senaryolar",
    "range": "B92:N106",
-   "hidden": false
+   "hidden": false,
+   "note": "Senaryoların toplantı adımları OIS sayfasının PPK ima sekmesinde, adları ve olasılıkları Kotalar sekmesinde (SENARYOLAR) yazılır."
   },
   {
    "id": "EKS",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A3:N14",
+   "range": "A2:N14",
    "cols": ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
    "wide": true,
@@ -295,7 +296,7 @@
    "id": "EKSE",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A102:N113",
+   "range": "A101:N113",
    "cols": ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
    "wide": true,
@@ -319,11 +320,31 @@
    "hidden": false
   },
   {
+   "id": "B16D",
+   "type": "table",
+   "sheet": "VIOP",
+   "range": "V321:W321",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "VİOP DEALS  ·  vade sınırı: ilk N kontrat (1–12, boş = hepsi; VİOP sayfasındaki DEALS tablosuyla aynı girdi)"
+  },
+  {
    "id": "B16",
    "type": "table",
    "title": "VİOP  ·  DEALS  (en iyi yakın/uzak; vade sınırı VIOP!W321)",
    "range": "P108:AB117",
    "hidden": false
+  },
+  {
+   "id": "B17D",
+   "type": "table",
+   "sheet": "VIOP",
+   "range": "L330:P338",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "VİOP TARGET  ·  hedefler: yakın, uzak, yön, hedef tipi ve değeri (sarı hücreler girdi; VİOP sayfasındaki Target tablosuyla aynı girdiler)"
   },
   {
    "id": "B17",
@@ -333,6 +354,16 @@
    "hidden": false
   },
   {
+   "id": "B18D",
+   "type": "table",
+   "sheet": "OIS_MAIN",
+   "range": "A2:L4",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "OIS PARAMETRELERİ  ·  DV01/bacak, yuvarlama, vade limiti ve C+R ufku (OIS sayfasının girdileri: en iyi 5 ve aşağıdaki C+R bunlarla)"
+  },
+  {
    "id": "B18",
    "type": "table",
    "title": "SİNYALLER  ·  OIS en iyi 5  (OIS_MAIN sıralaması)",
@@ -340,11 +371,23 @@
    "hidden": false
   },
   {
+   "id": "B19D",
+   "type": "table",
+   "sheet": "DİBS RV",
+   "range": "A2:Z2",
+   "cols": ["I", "J", "O", "P", "W", "X", "Y", "Z"],
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "DİBS RV AYARLARI  ·  ufuk, sinyal eşiği, fiyat tipi ve varsayılan repo (DİBS RV sayfasının girdileri)"
+  },
+  {
    "id": "B19",
    "type": "table",
    "title": "SİNYALLER  ·  DİBS RV (OIS ve FX swap ASW eğrilerine göre)  ·  FX swap bazı",
    "range": "P131:AB152",
-   "hidden": false
+   "hidden": false,
+   "note": "Kâğıt listesi ve kâğıt bazındaki girdiler (repo, bilinen kupon, elle temiz fiyat) DİBS RV sayfasındaki tablodadır; genel ayarlar hemen üstteki satırda."
   },
   {
    "id": "B20",
@@ -366,6 +409,16 @@
    "title": "KIRIK VADE & KARŞILIK  ·  forward ↔ basit ↔ OIS 3M ↔ XCCY yıllık  (piyasa = eğrilerden mid; sarı = girdi)",
    "range": "B170:N185",
    "hidden": false
+  },
+  {
+   "id": "B23D",
+   "type": "table",
+   "sheet": "EK_CARRY",
+   "range": "A2:C2",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "C+R PATİKASI  ·  C+R sütununda TLREF'in izlediği patika (C & R sayfasının girdisi; ufuk ve PV / FV üstteki OIS parametrelerinde)"
   },
   {
    "id": "B23",
@@ -461,7 +514,9 @@
    "title": "VİOP",
    "panels": [
     "B15",
+    "B16D",
     "B16",
+    "B17D",
     "B17"
    ]
   },
@@ -469,8 +524,11 @@
    "id": "sig",
    "title": "Sinyaller",
    "panels": [
+    "B18D",
     "B18",
+    "B19D",
     "B19",
+    "B23D",
     "B23"
    ]
   },

@@ -235,7 +235,7 @@
   {
    "id": "B2",
    "type": "table",
-   "title": "Parametreler",
+   "title": "Parametreler  ·  bütün sekmelerdeki tablolar bunları okur (işaret çarpanı, pivot, ufuklar, carry)",
    "range": "B3:Y4",
    "hidden": false
   },
@@ -287,6 +287,16 @@
    "title": "Eğri şokları (bp)",
    "range": "B73:W81",
    "hidden": false
+  },
+  {
+   "id": "B14D",
+   "type": "table",
+   "sheet": "OIS_MAIN",
+   "range": "G2:H2",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "Yuvarlama TL  ·  hedge nominalleri bununla yuvarlanır (OIS sayfasının girdisi)"
   },
   {
    "id": "B14",
@@ -360,13 +370,15 @@
    "hidden": true
   }
  ],
+ "pinned": [
+  "B2"
+ ],
  "sections": [
   {
    "id": "pos",
    "title": "Pozisyon",
    "panels": [
     "B1",
-    "B2",
     "B3",
     "B4",
     "B7"
@@ -380,15 +392,18 @@
     "B10",
     "B11",
     "B13"
-   ]
+   ],
+   "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesinde yapıştırılır; hedge sonrası risk Hedge sekmesindeki enstrüman ayarlarıyla (aktif, başlangıç / bitiş ayı, öncelik, ridge) hesaplanır."
   },
   {
    "id": "hedge",
    "title": "Hedge",
    "panels": [
+    "B14D",
     "B14",
     "B16"
-   ]
+   ],
+   "note": "Hedge edilen pozisyon (kova DV01'leri) Pozisyon sekmesinde yapıştırılır."
   },
   {
    "id": "pnl",
@@ -396,7 +411,8 @@
    "panels": [
     "B17",
     "B18"
-   ]
+   ],
+   "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesinde yapıştırılır."
   }
  ]
 }

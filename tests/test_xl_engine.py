@@ -174,6 +174,33 @@ def test_a_constant_an_array_formula_writes_into_still_computes_everything_again
     assert ali.value("S!D1") == 70.0
 
 
+def test_the_inputs_a_group_of_cells_reads_are_found_through_the_formulas():
+    """RefIndex.upstream, the other way round: which inputs a group of cells (a page's table) reads - through a cell, a
+    range, a defined name, the box A1:INDEX(..) spans and the area an array formula spills into.  A chain ends at an
+    input (what its own default formula reads is not followed); a chain thousands of cells long is walked without
+    recursion; the groups share one walk."""
+    from helpers import mini_book
+    cells = {"A1": 10, "A2": 5, "A3": 7, "A4": 1, "A5": 2, "B1": "=A2*2", "B2": "=SUM(A1:A3)", "B3": "=Q+1",
+             "B4": "=SUM(A1:INDEX(A1:A9,2))", "B6": "=A4*3", "B7": "=A5+B6", "C1": "=B7*2", "C2": "=B1+B3",
+             "D1": "=FILTER(A1:A3,A1:A3>0)", "E1": "=D2*10", "F1": "=A1"}
+    for i in range(2, 3001):
+        cells["F%d" % i] = "=F%d+1" % (i - 1)
+    book = mini_book(cells, dynamic=("D1",))
+    book.model.names["Q"] = "`S!R4C1`"                          # Q = S!A4
+    eng = book.engine
+    idx = eng.ref_index()
+    ref = eng.model.cell_ref
+    a1, a2, a4, b7 = (ref("S!" + a) for a in ("A1", "A2", "A4", "B7"))   # the inputs (B7: one with a default formula)
+    assert idx.reads(*ref("S!B2")) == [(0, 1, 1, 3, 1)] and idx.reads(*ref("S!A3")) == []
+    groups = {name: [ref("S!" + a) for a in addrs] for name, addrs in {
+        "cell": ["B1"], "range": ["B2"], "name": ["B3"], "box": ["B4"], "default": ["C1"], "two": ["C2", "A3"],
+        "spill": ["E1"], "chain": ["F3000"], "constant": ["A3"], "input": ["A1"]}.items()}
+    got = idx.upstream(groups, [a1, a2, a4, b7])
+    assert got == {"cell": {a2}, "range": {a1, a2}, "name": {a4}, "box": {a1, a2, a4}, "default": {b7}, "two": {a2, a4},
+                   "spill": {a1, a2}, "chain": {a1}, "constant": set(), "input": {a1}}
+    assert eng.shared.value("S!F3000") == 3009.0                  # (nothing computed or changed by the walk)
+
+
 def test_inputs_declared_before_anything_is_computed_cost_nothing():
     """The service declares every input it knows of before the first value is computed: nothing is dropped (there
     is nothing yet) and nothing is computed to find a formula's dependents - a formula gets its own bit, which comes

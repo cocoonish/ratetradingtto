@@ -1192,6 +1192,35 @@ async function shot(page, name) {
       await page.keyboard.press('Delete');
     }
     await waitCell(page, 'MASA!G60', 't.trim() === ' + JSON.stringify(days0));
+    // every table's inputs in its own tab: on the desk page's VİOP tab DEALS' contract limit and the targets (the VİOP
+    // page's cells) sit right above their tables
+    await tab(page, 'viop');
+    check('the desk page\'s VİOP tab: DEALS\' contract limit and the targets right above their tables',
+      (await panelsOnPage(page)).join(' ') === 'B15 B16D B16 B17D B17', await panelsOnPage(page));
+    const second0 = (await cellText(page, 'MASA!Q112')).trim();
+    await typeInto(page, 'VIOP!W321', '1');
+    await waitCell(page, 'MASA!Q112', "t.trim() === ''");
+    check('a contract limit typed above DEALS (1: the first contract only) leaves one pair in each list',
+      second0 === 'Spot' && (await cellText(page, 'MASA!Q111')).trim() === 'Spot' && (await cellText(page, 'MASA!Q116')).trim() === '',
+      { second0, first: await cellText(page, 'MASA!Q111') });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!W321'] });
+    await waitCell(page, 'MASA!Q112', 't.trim() === ' + JSON.stringify(second0));
+    await shot(page, '09-masa-viop-inputs');
+    // the OIS page's parameters stay above its tabs: the DV01 per leg typed with the best trades open sizes them
+    const mn = (t) => parseFloat(String(t).replace(/\./g, '').replace(',', '.'));          // "6.265M" -> 6265
+    await open(page, 'ois');
+    await tab(page, 'best');
+    const bestTab = await panelsOnPage(page);
+    const nom0 = (await cellText(page, 'OIS_MAIN!F30')).trim();
+    await typeInto(page, 'OIS_MAIN!F2', '2000');
+    await waitCell(page, 'OIS_MAIN!F30', 't.trim() !== ' + JSON.stringify(nom0));
+    const nom1 = (await cellText(page, 'OIS_MAIN!F30')).trim();
+    check('the OIS page\'s parameters stay above every tab: the DV01 per leg typed on the best trades\' tab doubles their nominals',
+      bestTab[0] === 'B1' && bestTab.slice(1, 4).join(' ') === 'B9 B10 B11' && Math.abs(mn(nom1) - 2 * mn(nom0)) <= 0.02 * mn(nom1),
+      { bestTab, nom0, nom1 });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!F2'] });
+    await waitCell(page, 'OIS_MAIN!F30', 't.trim() === ' + JSON.stringify(nom0));
+    await shot(page, '09b-ois-parameters-pinned');
     await open(page, 'forward');
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
@@ -1241,8 +1270,8 @@ async function shot(page, name) {
 
     await open(page, 'viop');
     await tab(page, 'gold');
-    check('gold tab: the VİOP gold tables, the calculator, then spot / source, swap rate curve and forwards',
-      await order(['B9', 'B10', 'B11', 'XAU4', 'XAU1', 'XAU2', 'XAU3', 'B11b']), await panelsOnPage(page));
+    check('gold tab: the VİOP gold tables, the calculator, then spot / source, swap rate curve and forwards (the Forward page\'s date above them)',
+      await order(['B9', 'B10', 'B11', 'XAU4', 'XAU1', 'XAU2', 'XAU3D', 'XAU3', 'B11b']), await panelsOnPage(page));
     await tab(page, 'calc');
     check('the gold calculator is with the calculators as well (Interest 2 SP: Forward page)', (await panelsOnPage(page)).join(' ') === 'XAU4');
     await tab(page, 'gold');

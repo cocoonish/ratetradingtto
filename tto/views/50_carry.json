@@ -62,11 +62,11 @@
    "id": "CP2",
    "type": "table",
    "sheet": "OIS_MAIN",
-   "range": "A4:F4",
+   "range": "A2:L4",
    "hidden": false,
    "borrowed": true,
    "keep_title": true,
-   "title": "Ufuklar · Ufuk A / B (ay) ve PV / FV (OIS sayfasının girdileri)"
+   "title": "OIS parametreleri · C+R nominali ve yönü, DV01/bacak, yuvarlama, Ufuk A / B (ay) ve PV / FV (OIS sayfasının girdileri)"
   },
   {
    "id": "CP3",

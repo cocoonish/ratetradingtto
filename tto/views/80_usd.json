@@ -326,6 +326,7 @@
    "id": "fomc",
    "title": "FOMC",
    "panels": [
+    "inp",
     "fomc",
     "fomc-chart"
    ]
@@ -334,6 +335,7 @@
    "id": "curve",
    "title": "Eğri",
    "panels": [
+    "inp",
     "crv",
     "curve-chart"
    ]
@@ -342,6 +344,7 @@
    "id": "trades",
    "title": "İşlemler",
    "panels": [
+    "inp",
     "t1",
     "t2",
     "t3",
