@@ -537,6 +537,8 @@ table.plain td.sell { color: var(--neg); font-weight: 650; }
   padding: 5px; min-width: 190px; }
 .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 6px; color: var(--ink); }
 .menu button:hover { background: var(--accent-soft); }
+.menu button:disabled { color: var(--ink-3); cursor: default; }        /* (an item that says why it cannot be done) */
+.menu button:disabled:hover { background: none; }
 .menu .sep { height: 1px; background: var(--line-2); margin: 4px 2px; }
 .menu .mh { color: var(--ink-3); font-size: 11px; padding: 4px 10px 2px; }
 .banner { background: var(--note-bg); border: 1px solid rgba(250, 178, 25, .35); color: var(--ink); border-radius: 9px; padding: 8px 12px; margin-bottom: 12px; }

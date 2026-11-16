@@ -717,6 +717,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().bulk_save, _user(request), data.get("kind"), data.get("text"), data.get("mapping"),
                              data.get("header"), data.get("rows"), _lang(request)))
 
+    @handler
+    async def trade_prefill(request: Request):
+        # a price of a page right-clicked ("İşlem gir"): the trade Günlük İşlemler's form is filled with (nothing saved)
+        return ok(await call(svc().trade_prefill, _user(request), await _body(request), _lang(request)))
+
     # ------------------------------------------------------------------ history: closes, meeting pricing, calendar
     def _int(request: Request, name: str, default: Optional[int] = None) -> Optional[int]:
         raw = request.query_params.get(name)
@@ -1122,6 +1127,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/templates/{tid:int}", blotter_template, methods=["POST", "DELETE"]),
         Route("/api/blotter/bulk/preview", bulk_preview, methods=["POST"]),
         Route("/api/blotter/bulk", bulk_save, methods=["POST"]),
+        Route("/api/trade/prefill", trade_prefill, methods=["POST"]),
         Route("/api/history/status", history_status),
         Route("/api/history/sync", history_sync, methods=["POST"]),
         Route("/api/history/settings", history_settings, methods=["POST"]),

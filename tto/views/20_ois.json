@@ -339,6 +339,14 @@
       "digits": 2
      }
     ]
+   },
+   "trade": {
+    "first": 9,
+    "last": 26,
+    "tenor_col": "A",
+    "cells": {
+     "B": "ois"
+    }
    }
   },
   {
@@ -435,7 +443,17 @@
    "type": "table",
    "title": "MPC OIS",
    "range": "A82:M99",
-   "hidden": false
+   "hidden": false,
+   "trade": {
+    "first": 84,
+    "last": 99,
+    "strategy": "mpc",
+    "start_col": "B",
+    "end_col": "C",
+    "cells": {
+     "D": "ois"
+    }
+   }
   },
   {
    "id": "B14",

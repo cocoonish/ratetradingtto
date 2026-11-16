@@ -204,7 +204,8 @@
    "type": "table",
    "title": "ORANLAR  ·  kota ve 360 basit karşılaştırma",
    "range": "B4:N21",
-   "hidden": false
+   "hidden": false,
+   "trade": {"pair": "USDTRY", "first": 8, "last": 20, "tenor_col": "B", "cells": {"C": "ois", "D": "ret bid", "E": "ret ask"}}
   },
   {
    "id": "B4",
@@ -228,7 +229,8 @@
    "type": "table",
    "title": "RET BANDINA GÖRE PİYASA  ·  oranlar % (360 basit) ve bp: bant dışı 0 = RET bid–ask içinde, + ask üstü, − bid a",
    "range": "P41:AB55",
-   "hidden": false
+   "hidden": false,
+   "trade": {"pair": "USDTRY", "first": 45, "last": 53, "tenor_col": "P", "cells": {"Q": "ret bid", "R": "ret ask"}}
   },
   {
    "id": "chart2",
@@ -270,7 +272,8 @@
                     "outright": {"src": "T", "label": "Bitiş forward", "label_en": "Far outright"},
                     "points": {"src": "W", "label": "Fwd-fwd puan", "label_en": "Fwd-fwd points"},
                     "try": {"src": "X", "label": "Dönem TRY %", "label_en": "Period TRY rate %"},
-                    "ccy": {"src": "W60", "label": "USD % spot→bitiş", "label_en": "USD rate % spot→end"}}
+                    "ccy": {"src": "W60", "label": "USD % spot→bitiş", "label_en": "USD rate % spot→end"}},
+   "trade": {"pair": "USDTRY", "first": 62, "last": 68, "date": "E60", "cells": {"R": "try", "T": "fwd", "V": "sp"}}
   },
   {
    "id": "chart4",
@@ -307,7 +310,9 @@
    "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı ve puandan spread: Forward → Kotasyon)",
    "client_quote": {"pair": "USDTRY", "title": "forward", "rows": "5:14", "label": "A", "alt": "B", "alt_when": "serbest",
                     "head": "Vade", "head_en": "Tenor", "start": "G2", "spot": ["F4", "G4"], "end": "B", "days": "C",
-                    "points": ["H", "I"], "outright": ["J", "K"], "try": ["M", "N"], "ccy": "O"}
+                    "points": ["H", "I"], "outright": ["J", "K"], "try": ["M", "N"], "ccy": "O"},
+   "trade": {"pair": "USDTRY", "first": 5, "last": 14, "date_col": "B",
+             "cells": {"H": "sp bid", "I": "sp ask", "J": "fwd bid", "K": "fwd ask", "M": "try bid", "N": "try ask"}}
   },
   {
    "id": "EKSE",
@@ -322,7 +327,9 @@
    "title": "FORWARD KOTASYON  ·  EURTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; eğri ve 'Tümü' spread'leri USDTRY'ninkinden gelir, ayrıca yazılabilir; tamamı ve puandan spread: Forward → Kotasyon)",
    "client_quote": {"pair": "EURTRY", "title": "forward", "rows": "104:113", "label": "A", "alt": "B", "alt_when": "serbest",
                     "head": "Vade", "head_en": "Tenor", "start": "G101", "spot": ["F103", "G103"], "end": "B", "days": "C",
-                    "points": ["H", "I"], "outright": ["J", "K"], "try": ["M", "N"], "ccy": "O"}
+                    "points": ["H", "I"], "outright": ["J", "K"], "try": ["M", "N"], "ccy": "O"},
+   "trade": {"pair": "EURTRY", "first": 104, "last": 113, "date_col": "B",
+             "cells": {"H": "sp bid", "I": "sp ask", "J": "fwd bid", "K": "fwd ask", "M": "try bid", "N": "try ask"}}
   },
   {
    "id": "B14",
@@ -337,7 +344,8 @@
    "type": "table",
    "title": "VİOP  ·  kontratlar, ima TRY ve baz",
    "range": "B108:N122",
-   "hidden": false
+   "hidden": false,
+   "trade": {"first": 110, "last": 121, "why": "VİOP kontratı – Günlük İşlemler'de VİOP yok", "cells": {"D": "none", "E": "none"}}
   },
   {
    "id": "B16D",
@@ -446,7 +454,9 @@
    "client_quote": {"pair": "USDTRY", "title": "forward", "start": "Forward!I2", "end": "C171", "days": "E171", "spot": "N171",
                     "outright": "G173", "points": "G174",
                     "try": {"src": "G175", "label": "TRY basit % (ACT/360)", "label_en": "TRY simple rate % (ACT/360)"},
-                    "on": "G177"}
+                    "on": "G177"},
+   "trade": {"pair": "USDTRY", "date": "C171",
+             "cells": {"F173": "fwd", "G173": "fwd", "F174": "sp", "G174": "sp", "F175": "try", "G175": "try"}}
   },
   {
    "id": "B23D",

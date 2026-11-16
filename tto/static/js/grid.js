@@ -14,6 +14,7 @@ const hooks = {
   paste: null,         // async (book, anchorRef, text, adhoc) -> result
   reset: null,         // async (book, refs, shared, copy) -> result
   onSelect: null,      // (info | null)
+  trade: null,         // (price: {view, panel, row, col, text, label}) - "İşlem gir" on a price (see priceOf)
 };
 
 const sel = { grid: null, r0: 0, c0: 0, r1: 0, c1: 0, cells: [], cur: null, dragging: false };
@@ -297,7 +298,8 @@ export class Grid {
    *       tools (the panel's tools: the "Sütunlar" button goes there),
    *       copy (the id of a temporary copy of a table: what is typed goes to that copy's own inputs; never "Elle değer",
    *             never pointed at by a formula - a formula reads the table itself)
-   *       rowItems ((i, j) -> menu items: what the right-click menu offers first for the row clicked - a row's quote)
+   *       rowItems ((i, j) -> menu items: what the right-click menu offers for the row clicked - a row's quote - first,
+   *                 after a price's "İşlem gir")
    */
   constructor(opts) {
     this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
@@ -642,6 +644,9 @@ export class Grid {
     const one = cur && cur.top === cur.bottom && cur.left === cur.right ? { ref: this.ref(cur.top, cur.left), cell: this.cell(cur.top, cur.left) } : null;
     const watchable = !copy && one && one.ref && this.book && one.cell && typeof one.cell.v === 'number' && (hooks.watch || hooks.alarm);
     const label = watchable ? cellLabel(this, cur.top, cur.left) : '';
+    // one price of a table whose page names its trades: "İşlem gir" opens Günlük İşlemler with it filled (a temporary
+    // copy's: no - its prices come from its own inputs, the server reads the row of the table itself)
+    const price = !copy && one && hooks.trade ? priceOf(this, cur.top, cur.left) : null;
     // the columns under the click (a merged caption: all of its own) can be hidden from this user's view
     let cols = [];
     if (this.columns) {
@@ -651,9 +656,12 @@ export class Grid {
       for (let j = cur.left; j <= right; j++) js.push(j);
       cols = [{ sep: true }].concat(this.columns.menuItems(js, e.clientX, e.clientY));
     }
-    // what the page offers for the row clicked (its quote: "Bu satırın kotasyonu")
+    // what the page offers for the row clicked (its quote: "Bu satırın kotasyonu"), after "İşlem gir"
     const own = this.opts.rowItems ? (this.opts.rowItems(td.__i, td.__j) || []) : [];
     menu(e.clientX, e.clientY, [
+      price && !price.why ? { label: 'İşlem gir', action: () => hooks.trade(price) } : null,
+      price && price.why ? { label: 'İşlem gir · ' + price.why, disabled: true } : null,
+      price ? { sep: true } : null,
       ...own,
       own.length ? { sep: true } : null,
       watchable && hooks.watch ? { label: 'İzlemeye ekle', action: () => hooks.watch(this.book, one.ref, label) } : null,
@@ -684,6 +692,26 @@ function cellLabel(grid, i, j) {
   }
   const name = [row, col].filter(Boolean).join(' · ').slice(0, 60);
   return name || grid.ref(i, j) || '';
+}
+
+/**
+ * A price of a table whose page names its trades (the view's "trade" hint, as the server sends it with the table:
+ * ``data.trade`` = {view, panel, first, last, cells}): ``cells`` keys a price by its column - for the sheet's rows
+ * ``first`` .. ``last`` - or by one cell ("F173"), and gives "" for a trade or why there is none (a VİOP contract).
+ * {view, panel, row, col, text, label, why} - the row's number in the sheet and the column's letters (never its place
+ * on screen: a user's column order or a launchpad's part keep them), the price as it is on screen; null: no price
+ * (a caption, a date, an empty cell, a table without the hint).  The server reads the rest from the row's own cells.
+ */
+function priceOf(grid, i, j) {
+  const d = grid.data;
+  const t = d && d.trade;
+  if (!t || !t.cells || !d.r || !d.c) return null;
+  const row = d.r[i], col = d.c[j], cell = grid.cell(i, j);
+  if (typeof row !== 'number' || !isLetter(col) || !cell || cell.sk || typeof cell.v !== 'number') return null;
+  let why = t.cells[col + row];
+  if (why === undefined && !(t.first && row < t.first) && !(t.last && row > t.last)) why = t.cells[col];
+  if (typeof why !== 'string') return null;
+  return { view: t.view, panel: t.panel, row, col, text: cell.t || '', label: cellLabel(grid, i, j), why };
 }
 
 function setSelection(grid, r0, c0, r1, c1) {

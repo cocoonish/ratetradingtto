@@ -22,10 +22,11 @@ const SIDES = {
   fly: [['REC GÖVDE', 'REC GÖVDE'], ['PAY GÖVDE', 'PAY GÖVDE']],
 };
 const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat 1', body: 'Gövde', wing2: 'Kanat 2', start: 'Başlangıç', end: 'Bitiş', mpc: 'MPC' };
-// a quote's "İşlem gir" (``takePrefill``) empties what the quote does not give - its own date, price and note; ``fillForm``
-// itself leaves alone what a spec leaves out (a template keeps any subset of the form)
-const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: '', note: '' }, ois: { strategy: 'outright', side: null, level: '', note: '' },
-  bond: { instrument: '', price: '', note: '' } };
+// a quote's "İşlem gir" (``takePrefill``) empties what the quote does not give - its own date, price and note, and the
+// amount (never a quote's: its box empty, a forward's typed in the pair's first currency); ``fillForm`` itself leaves
+// alone what a spec leaves out (a template keeps any subset of the form)
+const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: '', note: '', amount: '' },
+  ois: { strategy: 'outright', side: null, level: '', note: '' }, bond: { instrument: '', price: '', note: '', amount: '' } };
 
 /** "gbp" / "GBPTRY" / "gbp/try" -> "GBPTRY" (a currency alone is against TRY); null when it is not a pair. */
 export function pairOf(text) {
@@ -331,8 +332,22 @@ export class BlotterPage {
     show(this.tab);
   }
 
-  /** A trade filled from a quote (a matrix row, a chat line - ``ctx.openTrade``): its tab, side and fields, waiting for an
-   * amount and "İşlemi kaydet".  The fields a quote does not give are emptied (its own date, price and note only). */
+  /**
+   * A trade filled from a quote - a matrix row, a chat line, a price right-clicked on a page: its tab, side and fields,
+   * waiting for an amount and "İşlemi kaydet" (nothing is saved here; every field stays the user's to change).
+   *
+   * The way in from elsewhere is ``ctx.openTrade(spec)`` (main.js: kept for this page, then opened); the form is filled by
+   * ``fillForm``, the form's one way in. ``spec``:
+   *   {kind: 'fwd', pair: 'USDTRY' | 'EURTRY', dir: 'B' | 'S' | null, date: '15.12.2026' | '3M', basis: 'SP' | 'FWD' | 'TRY'
+   *    | 'RET_BID' | 'RET_MID' | 'RET_ASK', value: the points / outright / TRY rate as text (none for RET), note, cpt}
+   *   {kind: 'ois', strategy: 'outright' | 'spread' | 'fly' | 'fra' | 'mpc', side: 'PAY' | 'RECEIVE' | … | null,
+   *    tenors: ['1Y', …] (outright / spread / fly), months: [start, end] (FRA), start, end (MPC: serials of the form's days),
+   *    level: as text, note, cpt}
+   *   {kind: 'bond', dir: 'B' | 'S' | null, instrument: ISIN, price: as text, note}
+   * The fields a quote does not give are emptied (``PREFILL_CLEARS``).  A side of null is left to the user: no side is
+   * chosen and the trade is not saved until one is.  The amount is never filled - its box empty, a forward's in the pair's
+   * first currency -, the counterparty only by a broker's chat line (``cpt``; without one, the one typed stays).
+   */
   takePrefill() {
     let spec = null;
     try {
@@ -386,8 +401,8 @@ export class BlotterPage {
         f.pairSeg.set(f.pair);
       }
       if (has('dir')) {
-        if (spec.dir === 'B' || spec.dir === 'S') f.dir = spec.dir;
-        else sideKnown = false;
+        sideKnown = spec.dir === 'B' || spec.dir === 'S';
+        f.dir = sideKnown ? spec.dir : null;               // (not known: left to the user)
         f.dirSeg.set(f.dir);
       }
       if (has('basis')) {
@@ -404,6 +419,7 @@ export class BlotterPage {
         f.typed = spec.quote_amount && !spec.amount ? 'quote' : 'base';
         f.amount.value = f.typed === 'base' ? String(spec.amount || '') : '';
         f.quoteAmount.value = f.typed === 'quote' ? String(spec.quote_amount) : '';
+        f.amount.title = f.quoteAmount.title = '';       // (the worked-out one's tip: said again by the quote)
         this.markTyped();
       }
       this.layoutFwd();
@@ -421,6 +437,7 @@ export class BlotterPage {
       }
       if (has('strategy')) this.layoutOis();             // its legs and sides (the level is emptied: filled below)
       else if (has('side')) o.sideSeg.set(o.side);
+      if (!sideKnown) { o.side = null; o.sideSeg.set(null); }      // (not known: left to the user)
       const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy] || [];
       if (has('tenors')) legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i]));
       if (o.strategy === 'fra' && spec.months && spec.months.length === 2) {
@@ -455,8 +472,8 @@ export class BlotterPage {
     } else {
       const b = this.bond;
       if (has('dir')) {
-        if (spec.dir === 'B' || spec.dir === 'S') b.dir = spec.dir;
-        else sideKnown = false;
+        sideKnown = spec.dir === 'B' || spec.dir === 'S';
+        b.dir = sideKnown ? spec.dir : null;              // (not known: left to the user)
         b.dirSeg.set(b.dir);
       }
       text('instrument', b.inst);
@@ -467,7 +484,7 @@ export class BlotterPage {
       this.showTab('bond');
       b.amount.focus();
     }
-    const warn = [missing.length ? 'listede olmayan vade: ' + missing.join(', ') + ' – elle seçin' : '', sideKnown ? '' : 'yönü kontrol edin'].filter(Boolean);
+    const warn = [missing.length ? 'listede olmayan vade: ' + missing.join(', ') + ' – elle seçin' : '', sideKnown ? '' : 'yönü seçin'].filter(Boolean);
     return { warn: warn.join('; ') };
   }
 
@@ -726,7 +743,7 @@ export class BlotterPage {
       tiles.appendChild(t2);
       tiles.appendChild(tile(base + ' faizi DV01 (' + (base === 'USD' ? '$' : base) + ')' + per, signed(d1.usd_leg, 0), false, base + ' faizi +1 bp olursa kâr / zarar'));
       f.quote.appendChild(tiles);
-      f.quote.appendChild(this.copyLine(() => q.pair + ' ' + (pl.dir === 'B' ? 'ALIŞ ' : 'SATIŞ ') + (typeof q.amount === 'number' ? num(q.amount, 0) + ' ' + base : base)
+      f.quote.appendChild(this.copyLine(() => q.pair + ' ' + (pl.dir === 'B' ? 'ALIŞ ' : (pl.dir === 'S' ? 'SATIŞ ' : '')) + (typeof q.amount === 'number' ? num(q.amount, 0) + ' ' + base : base)
         + ' · valör ' + serialDate(q.value_date) + ' (' + num(q.days, 0) + ' gün) · forward ' + num(q.forward, 4)
         + (typeof q.spot === 'number' ? ' · spot ' + num(q.spot, 4) + ' · swap puanı ' + num(q.points, 0) : '')
         + (typeof q.try_rate === 'number' ? ' · TRY faizi ' + pct(q.try_rate, 2) : '')
@@ -758,6 +775,7 @@ export class BlotterPage {
     const quote = f.typed === 'quote';
     const amount = quote ? pl.quote_amount : pl.amount;
     if (!pl.pair) { toast('Dövizi ya da pariteyi yazın (örn. GBP)', 'err'); f.code.focus(); return; }
+    if (!pl.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (amount === null || !(amount > 0)) { toast('Tutar girin (örn. 10m)', 'err'); (quote ? f.quoteAmount : f.amount).focus(); return; }
     if (!pl.value_date) { toast('Valör tarihini girin', 'err'); f.date.focus(); return; }
     f.save.disabled = true;
@@ -936,6 +954,12 @@ export class BlotterPage {
     const hasLevel = !!pl.level;
     if (!hasLevel) pl.level = '0';
     const ticket = (o.ticket = (o.ticket || 0) + 1);
+    if (!pl.side) {                       // (a price filled without its side: the user chooses it first)
+      clear(o.marketHint);                // (the last quote's market was another trade's)
+      clear(o.quote);
+      o.quote.appendChild(h('div', { class: 'muted' }, 'Yönü seçin (' + SIDES[o.strategy].map((x) => x[1]).join(' / ') + '): bacaklar ve maliyet yöne göre hesaplanır.'));
+      return;
+    }
     try {
       const q = await api.post('/api/blotter/quote/ois', pl);
       if (ticket !== o.ticket || this.dead) return;
@@ -991,6 +1015,7 @@ export class BlotterPage {
   async saveOis() {
     const o = this.ois;
     const pl = this.oisPayload();
+    if (!pl.side) { toast('Yönü seçin: ' + SIDES[o.strategy].map((x) => x[1]).join(' ya da '), 'err'); return; }
     if (!pl.level) { toast('Seviye girin', 'err'); o.level.focus(); return; }
     o.save.disabled = true;
     try {
@@ -1076,6 +1101,7 @@ export class BlotterPage {
     const b = this.bond;
     const amount = parseAmount(b.amount.value);
     if (!b.inst.value.trim()) { toast('Enstrüman girin', 'err'); b.inst.focus(); return; }
+    if (!b.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (amount === null || !(amount > 0)) { toast('Tutar girin', 'err'); b.amount.focus(); return; }
     b.save.disabled = true;
     try {

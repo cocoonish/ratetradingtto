@@ -61,7 +61,25 @@
    "wide": true,
    "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır.",
    "card": "bond",
-   "keep_title": true
+   "keep_title": true,
+   "trade": {
+    "first": 5,
+    "last": 54,
+    "isin_col": "A",
+    "cells": {
+     "F": "price bid",
+     "G": "price ask",
+     "H": "price",
+     "K": "price bid",
+     "L": "price ask",
+     "M": "price",
+     "P": "price bid",
+     "Q": "price ask",
+     "R": "price",
+     "U": "price bid",
+     "V": "price ask"
+    }
+   }
   },
   {
    "id": "L3",

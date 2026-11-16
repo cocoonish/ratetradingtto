@@ -31,6 +31,7 @@ from . import extras as ex
 from . import layout as lay
 from . import quotes as qt
 from . import shortcuts
+from . import tradehint as th
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
@@ -1923,8 +1924,8 @@ class Service(object):
             entry["flags"] = p["flags"]             # ☆ / ★: onto / off the trading list
         if p.get("quote"):
             entry["quote"] = p["quote"]             # "Kota mesajı": its rows as a message to send
-        if p.get("trade"):
-            entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
+        if p.get("trade") and p["trade"].get("bid") and p["trade"].get("ask"):
+            entry["trade"] = p["trade"]             # "İşlem gir" in the header: a row and a side as a trade to enter
         if p.get("client_quote"):
             # "Kotasyon kopyala": what the browser needs to offer it - its rows (one row's quote on a right click) and
             # its parts (USDTRY | EURTRY side by side); the text is made by client_quote
@@ -1977,6 +1978,9 @@ class Service(object):
                     self._universe_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "borsa_spread":
                     self._borsa_spread_columns(book, calc, user, entry["data"], loc, p["range"])
+                hint = th.client(p.get("trade"), v["id"], p.get("id"))
+                if hint:
+                    entry["data"]["trade"] = hint   # its prices: right click, "İşlem gir" (trade_prefill)
             elif p["type"] == "chart":
                 spec = p.get("spec")
                 if spec is None:
@@ -7110,6 +7114,43 @@ class Service(object):
         self.et.call_at(EngineThread.WRITE, self._sync_blotter)
         self.bump()
         return {"deleted": ids}
+
+    def trade_prefill(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
+        """"İşlem gir" on a price cell of a page (its table's ``"trade"`` hint, :mod:`tto.tradehint`):
+        ``{"spec": …}``, what Günlük İşlemler's form is filled with - the instrument and the dates read from the
+        clicked row's own cells as ``user`` sees them, the price as it was on screen (``text``), the side from the
+        column.  ``payload``: ``{"view", "panel", "row", "col", "text", "label"}`` (``row``: the sheet's row number,
+        ``col``: the column's letters, ``label``: the cell's name on screen, for the trade's note).  Nothing is
+        saved."""
+        return self.et.call(self._trade_prefill, user, payload, lang or self.settings.locale)
+
+    def _trade_prefill(self, user, payload, lang) -> Dict[str, Any]:
+        payload = payload if isinstance(payload, dict) else {}
+        v = self.view_index.get(payload.get("view")) if isinstance(payload.get("view"), str) else None
+        p = next((x for x in v["panels"] if x.get("id") == payload.get("panel")), None) if v else None
+        if p is None or not (p.get("trade") or {}).get("cells"):
+            raise ServiceError("bu tablonun fiyatları işlem olarak girilmez", 404)
+        if v.get("admin") and user is not None and not self._is_admin(user):
+            raise ServiceError("bu sayfa yalnızca yöneticilere açıktır", 403)
+        row, col, text = payload.get("row"), payload.get("col"), payload.get("text")
+        if isinstance(row, bool) or not isinstance(row, int) or not isinstance(col, str) or not isinstance(text, str):
+            raise ServiceError("hücre ve fiyat gerekli")
+        book = self.books[v["book"]]
+        sheet = p.get("sheet", v.get("sheet"))
+        calc = self._calc(user_key(user) if user else None, book)
+
+        def read(ref: str) -> Any:
+            si, rc = book.cell(ref if "!" in ref else "%s!%s" % (sheet, ref))
+            return calc.get(si, *divmod(rc, COLS))
+
+        label = " ".join(str(payload.get("label") or "").split())[:80]
+        where = " · ".join(x for x in (v.get("title"), str(p.get("title") or "").split("  ·  ")[0].strip()) if x)
+        try:
+            spec = th.prefill(p["trade"], row, col, text, read, self._tenor_date, lang,
+                              note="Fiyat: %s(%s)" % (label + " " if label else "", where))
+        except (th.HintError, bl.TradeError) as exc:
+            raise ServiceError(str(exc))
+        return {"spec": spec}
 
 
 def _add_dv01_columns(data: Dict[str, Any], buckets: Dict[int, Tuple[float, float]], loc) -> None:

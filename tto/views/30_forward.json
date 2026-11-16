@@ -1138,7 +1138,21 @@
     "last": 51,
     "date": "B45",
     "bid": "H",
-    "ask": "J"
+    "ask": "J",
+    "cells": {
+     "B": "try bid",
+     "C": "try",
+     "D": "try ask",
+     "E": "fwd bid",
+     "F": "fwd",
+     "G": "fwd ask",
+     "H": "sp bid",
+     "I": "sp",
+     "J": "sp ask",
+     "B50": "ret bid",
+     "C50": "ret",
+     "D50": "ret ask"
+    }
    },
    "client_quote": {
     "pair": "USDTRY",
@@ -1218,7 +1232,21 @@
     "last": 62,
     "date": "B56",
     "bid": "H",
-    "ask": "J"
+    "ask": "J",
+    "cells": {
+     "B": "try bid",
+     "C": "try",
+     "D": "try ask",
+     "E": "fwd bid",
+     "F": "fwd",
+     "G": "fwd ask",
+     "H": "sp bid",
+     "I": "sp",
+     "J": "sp ask",
+     "B61": "ret bid",
+     "C61": "ret",
+     "D61": "ret ask"
+    }
    },
    "client_quote": {
     "pair": "EURTRY",
@@ -1340,7 +1368,17 @@
     "last": 14,
     "date_col": "B",
     "bid": "H",
-    "ask": "I"
+    "ask": "I",
+    "cells": {
+     "H": "sp bid",
+     "I": "sp ask",
+     "J": "fwd bid",
+     "K": "fwd ask",
+     "M": "try bid",
+     "N": "try ask",
+     "R": "ret bid",
+     "S": "ret ask"
+    }
    },
    "client_quote": {
     "pair": "USDTRY",
@@ -1427,7 +1465,17 @@
     "last": 113,
     "date_col": "B",
     "bid": "H",
-    "ask": "I"
+    "ask": "I",
+    "cells": {
+     "H": "sp bid",
+     "I": "sp ask",
+     "J": "fwd bid",
+     "K": "fwd ask",
+     "M": "try bid",
+     "N": "try ask",
+     "R": "ret bid",
+     "S": "ret ask"
+    }
    },
    "client_quote": {
     "pair": "EURTRY",
@@ -1534,7 +1582,17 @@
    "title": "TRY RET",
    "range": "U31:Y50",
    "hidden": false,
-   "action": "ret"
+   "action": "ret",
+   "trade": {
+    "pair": "USDTRY",
+    "first": 35,
+    "last": 47,
+    "tenor_col": "V",
+    "cells": {
+     "W": "ret bid",
+     "X": "ret ask"
+    }
+   }
   },
   {
    "id": "B20",
