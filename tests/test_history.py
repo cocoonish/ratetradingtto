@@ -1011,16 +1011,22 @@ def test_a_meeting_date_typed_on_the_ois_page_goes_through_the_calendar(tmp_path
         assert res["errors"] == [] and res["calendar"]["dropped"] == 0 and p(11) == "2027-01-28"
         mine = svc.store.user_inputs(user, "tto")
         assert mine[("tto", "OIS_MAIN!U11")] == -75.0 and mine[("tto", "OIS_MAIN!U12")] == -125.0
-        # 18.03.2027 leaves the list: the meetings below move up, each with its own step - 18.03's goes with it
-        svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P12", "value": ""}])
-        assert [p(r) for r in (11, 12)] == ["2027-01-28", "2027-04-22"]
+        # a date blanked on the OIS page (Delete, an empty pasted cell) does not take a meeting out of the list: refused,
+        # with where to do it - what else the write held is written
+        res = svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P12", "value": ""}, {"ref": "OIS_MAIN!U13", "value": ""}])
+        assert res["applied"] == 1 and len(res["errors"]) == 1 and "toplantı tarihi silinmez (OIS_MAIN!P12)" in res["errors"][0]
+        assert "Toplantı takvimi" in res["errors"][0] and "calendar" not in res
+        assert [p(r) for r in (11, 12, 13)] == ["2027-01-28", "2027-03-18", "2027-04-22"]
         mine = svc.store.user_inputs(user, "tto")
-        assert mine[("tto", "OIS_MAIN!U11")] == -75.0 and ("tto", "OIS_MAIN!U12") not in mine
+        assert mine[("tto", "OIS_MAIN!U11")] == -75.0 and mine[("tto", "OIS_MAIN!U12")] == -125.0
         res = svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P13", "value": "yarın"}])
         assert res["applied"] == 0 and "anlaşılamadı" in res["errors"][0]
+        # a date the list has already (in another row) is refused: two rows, one meeting
+        res = svc.set_inputs(user, "tto", [{"ref": "OIS_MAIN!P13", "value": "18.03.2027"}])
+        assert res["applied"] == 0 and "18.03.2027 listede zaten var (P12)" in res["errors"][0] and p(13) == "2027-04-22"
         with pytest.raises(ServiceError) as exc:
             svc.reset_inputs(user, "tto", ["OIS_MAIN!P10:P12"], shared=True)
-        assert "Toplantı takvimi" in str(exc.value) and p(12) == "2027-04-22"
+        assert "Toplantı takvimi" in str(exc.value) and p(12) == "2027-03-18"
     finally:
         svc.stop()
 

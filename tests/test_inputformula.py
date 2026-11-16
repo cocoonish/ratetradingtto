@@ -278,23 +278,24 @@ def test_no_work_without_formulas_and_formulas_survive_a_restart(tmp_path):
 
 
 def test_a_cell_the_meeting_calendar_moves_takes_no_formula(tmp_path, caplog):
-    """A meeting's date and its steps (OIS_MAIN P / U:W, rows 10-89) move with the meeting when the list shifts - a
-    formula's references would not: none is taken there; formulas around them stay what they are through a shift.  One
-    an earlier version took there goes when the service starts: its value stays, the log says so."""
+    """A meeting's date, its steps and its label (OIS_MAIN P / U:W / O, rows 10-89 - meetings.py) move with the meeting
+    when the list shifts: no formula is taken there.  A formula elsewhere that names such a cell follows the meeting
+    through a shift, as Excel moves a reference when rows move.  One an earlier version took in a moving cell goes when
+    the service starts: its value stays, the log says so."""
     svc = make_service(tmp_path)
     db = svc.settings.db_path
     u = login(svc, "Formül Takvim")
     try:
-        for ref in ("OIS_MAIN!U12", "OIS_MAIN!V40", "OIS_MAIN!W89", "OIS_MAIN!P12"):
+        for ref in ("OIS_MAIN!U12", "OIS_MAIN!V40", "OIS_MAIN!W89", "OIS_MAIN!P12", "OIS_MAIN!O12"):
             err = put(svc, u, ref, "=-25")["errors"]
             assert len(err) == 1 and ("toplantı takvimiyle kayan hücre" in err[0] or "toplantı tarihleri" in err[0]), err
         assert put(svc, u, "OIS_MAIN!U12", "-25")["errors"] == []
         assert put(svc, u, "MASA!C171", "=OIS_MAIN!P12+1")["errors"] == []
         start = svc.history.meetings()
         svc.history.set_calendar(u, ["11.02.2027"] + start[:-1])          # one more meeting: the later ones a row down
-        assert svc.store.user_formulas(u) == {("tto", "MASA!C171"): "=OIS_MAIN!P12+1"} and svc.store.shared_formulas() == {}
+        assert svc.store.user_formulas(u) == {("tto", "MASA!C171"): "=OIS_MAIN!P13+1"} and svc.store.shared_formulas() == {}
         assert cell(svc, "OIS_MAIN!P12") == day(2027, 2, 11)
-        assert cell(svc, "MASA!C171", u) == day(2027, 2, 12)               # (row 12's meeting now, read as a cell is)
+        assert cell(svc, "MASA!C171", u) == day(2027, 3, 19)               # (18.03.2027's date + 1: its meeting, a row down)
         assert svc.store.user_inputs(u, "tto")[("tto", "OIS_MAIN!U13")] == -25.0      # (the typed step went with its meeting)
         assert "toplantı takvimiyle kayan hücre" in put(svc, u, "OIS_MAIN!U13", "=1")["errors"][0]
     finally:
@@ -305,7 +306,7 @@ def test_a_cell_the_meeting_calendar_moves_takes_no_formula(tmp_path, caplog):
     caplog.set_level(logging.WARNING, logger="tto")
     again = make_service(tmp_path)
     try:
-        assert again.store.user_formulas(u) == {("tto", "MASA!C171"): "=OIS_MAIN!P12+1"}
+        assert again.store.user_formulas(u) == {("tto", "MASA!C171"): "=OIS_MAIN!P13+1"}
         assert again.store.user_inputs(u, "tto")[("tto", "OIS_MAIN!V13")] == -50.0 and cell(again, "OIS_MAIN!V13", u) == -50.0
         assert [r.getMessage() for r in caplog.records if "OIS_MAIN!V13" in r.getMessage()] == [
             "girdi formülü kaldırıldı (toplantı takvimiyle kayan hücre; değeri kaldı): formül takvim tto!OIS_MAIN!V13 =-25*2"]

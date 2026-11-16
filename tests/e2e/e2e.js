@@ -1651,6 +1651,42 @@ async function shot(page, name) {
     await page.waitForFunction(() => document.querySelector('.set-actions button.primary').disabled);
     await open(page, 'ois');
     check('... and back again', (await cellText(page, 'OIS_MAIN!P11')).trim() === '21.01.2027');
+    // ---- everything typed for a meeting moves with it (tto/meetings.py): a step, an "Elle değer" and an alarm on 18.03.2027
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'OIS_MAIN!U12', value: '-40' }] });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', adhoc: true, items: [{ ref: 'OIS_MAIN!R12', value: '77' }] });
+    const mAlarm = (await api(page, 'ayşe yilmaz', 'POST', '/api/alarms/add', { book: 'tto', ref: 'OIS_MAIN!R12', op: '>=', level: '999' })).json.alarm;
+    const calNow = (await api(page, 'ayşe yilmaz', 'GET', '/api/calendar')).json;
+    const calDates = calNow.meetings.map((m) => m.date);
+    const withExtra = calDates.slice(0, -1).concat(['2027-02-11']);           // an extraordinary meeting (80 rows: the last makes room)
+    const stale = await api(page, 'ayşe yilmaz', 'POST', '/api/calendar', { dates: withExtra, version: 'eski' });
+    check('calendar: a save over a calendar that changed meanwhile is refused (409, with the reason)', stale.status === 409
+      && /değişti/.test(stale.json.error), stale);
+    const ins = await api(page, 'ayşe yilmaz', 'POST', '/api/calendar', { dates: withExtra, version: calNow.version });
+    await open(page, 'ois');
+    await waitCell(page, 'OIS_MAIN!P13', 't.trim() === "18.03.2027"');
+    const watchNow1 = (await api(page, 'ayşe yilmaz', 'GET', '/api/watch')).json.alarms.find((a) => a.id === mAlarm.id);
+    const r12 = trNumber(await cellText(page, 'OIS_MAIN!R12')), r13 = trNumber(await cellText(page, 'OIS_MAIN!R13'));
+    check('a meeting put in before 18.03.2027: its step, its "Elle değer" and its alarm show on its new row (13)',
+      ins.status === 200 && (await cellText(page, 'OIS_MAIN!P12')).trim() === '11.02.2027' && trNumber(await cellText(page, 'OIS_MAIN!U13')) === -40
+      && r13 === 77 && r12 !== 77 && (await cellText(page, 'OIS_MAIN!U12')).trim() === '' && mAlarm.subject.kind === 'meeting'
+      && watchNow1.subject.date === '2027-03-18' && watchNow1.now === 77 && /OIS_MAIN!R13/.test(watchNow1.detail),
+    { ins: ins.json && ins.json.note, r12, r13, alarm: watchNow1 });
+    // ---- Delete over the dates: refused with the reason - the steps of the selection are cleared, no meeting leaves
+    await (await cellHandle(page, 'OIS_MAIN!P13')).click();
+    await (await cellHandle(page, 'OIS_MAIN!U13')).click({ modifiers: ['Shift'] });
+    await page.keyboard.press('Delete');
+    await page.waitForFunction(() => [...document.querySelectorAll('#toasts .toast')].some((t) => /toplantı tarihi silinmez/.test(t.textContent)),
+      null, { timeout: 15000 });
+    await waitCell(page, 'OIS_MAIN!U13', 't.trim() === ""');
+    check('Delete over a selection with meeting dates: the dates are refused with where to remove a meeting, the steps cleared',
+      (await cellText(page, 'OIS_MAIN!P13')).trim() === '18.03.2027' && /Toplantı takvimi/.test(await page.textContent('#toasts'))
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/calendar')).json.meetings.length === calDates.length);
+    // back as it was: the list, her "Elle değer" and the alarm
+    const calBack = (await api(page, 'ayşe yilmaz', 'GET', '/api/calendar')).json;
+    await api(page, 'ayşe yilmaz', 'POST', '/api/calendar', { dates: calDates, version: calBack.version });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!R12', 'OIS_MAIN!U12'] });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/alarms/remove', { id: mAlarm.id });
+    await waitCell(page, 'OIS_MAIN!P12', 't.trim() === "18.03.2027"');
     await open(page, 'settings');
     const series = await rowsOf('series');
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
