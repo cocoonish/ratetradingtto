@@ -522,6 +522,11 @@ function routePop() {
   if (parts[1] === 'launchpad' && parts.length > 2) {
     state.pageId = 'launchpad';
     page = new LaunchpadPage(host, ctx, { pop: true, name: parts.slice(2).join('/') });
+  } else if (parts[1] === 'calc' && parts[2]) {          // a calc sheet of the user's (calc.js): "#/pop/calc/<sheet>?t=<name>"
+    state.pageId = 'pop';
+    const item = { type: 'calc', id: 'pop', sheet: parts[2], w: 12, h: 'auto' };
+    if (query.get('t')) item.title = query.get('t');
+    page = new PopPanelPage(host, ctx, item);
   } else if (parts[1] && parts[2]) {
     let part = {};
     try { part = JSON.parse(query.get('part') || '{}') || {}; } catch (e) { part = {}; }

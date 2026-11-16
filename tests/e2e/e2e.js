@@ -2707,6 +2707,81 @@ async function shot(page, name) {
       missing.join('|') === 'Erişim yok|Bu tablo artık yok', missing);
     await ctxE.close();
 
+    // ------------------------------------------------------------------ a personal calc sheet
+    console.log('personal calc sheet');
+    const calcCell = (a, root = '#lp-grid') => root + ' .calc-box td[data-a="' + a + '"]';
+    const calcText = (a, root = '#lp-grid') => page.textContent(calcCell(a, root));
+    const waitCalc = (a, t, root = '#lp-grid') => page.waitForFunction(([s, x]) => { const td = document.querySelector(s); return !!td && td.textContent === x; },
+      [calcCell(a, root), t], { timeout: 30000 });
+    const typeCalc = async (a, text, root = '#lp-grid') => { await page.click(calcCell(a, root)); await page.keyboard.type(text); await page.keyboard.press('Enter'); };
+    await open(page, 'launchpad');
+    await page.click('#lp-calc');
+    await page.waitForSelector(calcCell('B1'), { timeout: 30000 });
+    const calcSheet = await page.evaluate(() => document.querySelector('#lp-grid .calc-box').dataset.sheet);
+    await typeCalc('B1', '=MASA!I60+25');
+    await waitCalc('B1', '-125');
+    await page.click(calcCell('B1'));
+    const calcFx = await page.inputValue('#lp-grid .calc-box .calc-fx');
+    check('a calc sheet of one\'s own on a launchpad (+ Hesap tablosu): =MASA!I60+25 shows -125 (the desk\'s spread -150 + 25), the formula bar the formula',
+      calcFx === '=MASA!I60+25' && (await savedLayout((l) => l.launchpads[0].items.some((x) => x.type === 'calc' && x.sheet === calcSheet)))
+        .launchpads[0].items.some((x) => x.type === 'calc'), calcFx);
+    await typeCalc('A1', '10');
+    await page.keyboard.type('=A1*2');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('=SUM(A1:A2)+B1');
+    await page.keyboard.press('Enter');
+    await waitCalc('A3', '-95');
+    check('... formulas over its own cells: 10, =A1*2, =SUM(A1:A2)+B1 (Enter moves down, as in Excel)',
+      [await calcText('A1'), await calcText('A2'), await calcText('A3')].join('|') === '10|20|-95');
+    await page.evaluate(() => navigator.clipboard.writeText('1,5\t2\r\n3\t4\r\n'));
+    await page.click(calcCell('C3'));
+    await page.keyboard.press('Control+v');
+    await waitCalc('D4', '4');
+    const pasted = [await calcText('C3'), await calcText('D3'), await calcText('C4'), await calcText('D4')].join('|');
+    check('... a 2 × 2 block pasted from Excel lands cell by cell', pasted === '1,5|2|3|4', pasted);
+    await typeCalc('A5', '=BDP("USDTRY Curncy";"PX_LAST")');
+    await page.waitForFunction(() => /BDP Bloomberg'den veri ister/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    const refusedText = await page.inputValue('#lp-grid .calc-box .calc-edit');
+    await page.keyboard.press('Escape');
+    const calcNow = async () => (await api(page, 'ayşe yilmaz', 'POST', '/api/calc/eval', { items: [{ key: 'k', sheet: calcSheet }] })).json.sheets.k;
+    const calcKept = await calcNow();
+    check('... a Bloomberg function is refused with the reason (the daily data limit) and nothing is kept; the cell is typed into again',
+      refusedText === '=BDP("USDTRY Curncy";"PX_LAST")' && !calcKept.cells.A5 && (await calcText('A5')) === '', { refusedText, a5: calcKept.cells.A5 });
+    // the same sheet in the side drawer; the spread changed on Masa's own page: the sheet follows, live
+    await page.hover('#lp-grid .calc-box');
+    await page.click('#lp-grid .calc-box button[data-action="item-menu"]');
+    await page.click('.menu >> text=Yan panele sabitle');
+    await waitCalc('B1', '-125', '#drawer');
+    await open(page, 'masa');
+    await typeInto(page, 'MASA!I60', '-100');
+    await waitCalc('B1', '-75', '#drawer');
+    await waitCalc('A3', '-45', '#drawer');
+    check('... pinned to the side drawer (the same sheet): Masa\'s spread typed on its page (-100) - the sheet follows at once (-75)',
+      (await calcText('B1', '#drawer')) === '-75' && (await layoutOf('ayşe yilmaz')).drawer.some((x) => x.type === 'calc' && x.sheet === calcSheet));
+    // while a formula is typed, Ctrl+click on a cell of the page's table puts its reference in
+    await page.click(calcCell('C1', '#drawer'));
+    await page.keyboard.type('=');
+    await (await cellHandle(page, 'MASA!I60')).click({ modifiers: ['Control'] });
+    const pointed = await page.inputValue('#drawer .calc-box .calc-edit');
+    await page.keyboard.type('*2');
+    await page.keyboard.press('Enter');
+    await waitCalc('C1', '-200', '#drawer');
+    check('... Ctrl+click on the page\'s cell while typing a formula puts its reference in (=MASA!I60*2 → -200)', pointed === '=MASA!I60', pointed);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['MASA!I60'] });
+    await waitCalc('C1', '-300', '#drawer');
+    // a reload keeps everything (kept with the account, on the server)
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'masa' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await waitCalc('C1', '-300', '#drawer');
+    await open(page, 'launchpad');
+    await waitCalc('B1', '-125');
+    const afterReload = [await calcText('A1'), await calcText('A3'), await calcText('B1'), await calcText('C3'), await calcText('D4'), await calcText('C1')].join('|');
+    check('... a reload keeps the sheet - on the launchpad and in the drawer', afterReload === '10|-95|-125|1,5|4|-300', afterReload);
+    await shot(page, '43-calc');
+    await page.click('#drawer .calc-box button[data-action="unpin"]');
+    await page.waitForFunction(() => !document.querySelector('#drawer .calc-box'));
+    await page.click('#dr-close');
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));

@@ -331,6 +331,15 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call_free(svc().import_launchpad, _user(request), data.get("launchpad"), data.get("name")))
 
     @handler
+    async def calc_post(request: Request):
+        # each user's calc sheets (calc.py): "eval" brings the boxes on screen up to date, "save" changes a sheet - the
+        # sheets are read in a thread, the calculation awaited without holding one
+        data = await _body(request)
+        fut = await call_free(svc().calcsheets.post, request.path_params["what"], _user(request), data, _lang(request),
+                              _role(request))
+        return ok(await engine(fut))
+
+    @handler
     async def image(request: Request):
         q = request.query_params
         try:
@@ -946,6 +955,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/layout", layout, methods=["GET", "POST"]),
         Route("/api/layout/export", layout_export),
         Route("/api/layout/import", layout_import, methods=["POST"]),
+        Route("/api/calc/{what}", calc_post, methods=["POST"]),
         Route("/api/image", image),
         Route("/api/cell", cell),
         Route("/api/grid", grid),
