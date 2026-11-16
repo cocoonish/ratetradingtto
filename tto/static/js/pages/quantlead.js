@@ -1,17 +1,27 @@
 // Öncü-Takipçi (tto/quantlead.py): who moves first - offshore or onshore OIS, the USDTRY swap points or OIS, VİOP or
-// OIS, USDTRY / EURTRY or the OIS front end, the 1Y or the 2Y / 5Y.  The scan (leader, follower, lag, β, Granger F, R²,
+// OIS / offshore (and each VİOP contract against the OIS of its own expiry), USDTRY / EURTRY or the OIS front end, the
+// 1Y or the 2Y / 5Y, each DİBS bond or the OIS of its maturity.  The scan (leader, follower, lag, β, Granger F, R²,
 // stability, how the rule went before), the cross-correlations at lags −5 … +5, the followers that have not caught up
-// (signals), and the same scan on intraday bars when the dashboard has them.  Computed in the quant worker's thread.
+// (signals), and the same scan on intraday bars when the dashboard has them; a group filter over the three tables.
+// Computed in the quant worker's thread.
 import { h } from '../ui.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, fmt, pct, isNum } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, pct, isNum } from './quantbase.js';
 
 const pval = (p) => (isNum(p) ? (p < 0.001 ? '<0,001' : fmt(p, 3)) : '');
+const GROUP_PREF = 'tto.quant.lead.group';
+// a row's group starts with the filter's value ('VİOP' takes its three groups)
+const GROUPS = [['', 'Tümü'], ['Offshore', 'Offshore'], ['Swap', 'Swap puanı'], ['VİOP', 'VİOP'], ['Kur', 'Kur'], ['Eğri', 'Eğri'], ['DİBS', 'DİBS']];
 
 class LeadPage extends QuantPage {
-  constructor(host, ctx) { super(host, ctx, 'lead'); }
+  constructor(host, ctx) {
+    super(host, ctx, 'lead');
+    const g = pref(GROUP_PREF, '');
+    this.group = GROUPS.some(([v]) => v === g) ? g : '';
+  }
 
   build() {
-    this.tools([]);
+    this.groupSeg = seg(GROUPS, this.group, (v) => { this.group = v; keep(GROUP_PREF, v); this.fillPage(); }, 'quant-lead-group');
+    this.tools([h('span', { class: 'muted' }, 'Grup'), this.groupSeg]);
     const page = h('div', { class: 'volpage quantpage' });
     const sp = panel('quant-lead-signals', 'Öncü-Takipçi · sinyaller');
     sp.note.textContent = 'Lider son ℓ + 1 günde en az k σ oynadı, takipçi henüz yetişmedi: beklenen yetişme = β × liderin hareketi − takipçinin aynı günlerdeki '
@@ -31,7 +41,8 @@ class LeadPage extends QuantPage {
     this.xc.note.textContent = 'k > 0: x (soldaki) önde; k < 0: y önde; k = 0 aynı gün. Liderin seçilen gecikmesi kalın.';
     this.boxes.xc = new GridBox(this.xc, 'quant/lead/xcorr');
     this.bars = panel('quant-lead-intraday', 'Gün içi · 1 ve 5 dakikalık barlar');
-    this.bars.note.textContent = 'Aynı analiz canlı akışın dakikalık barlarında (gecikmeler bar cinsinden).';
+    this.bars.note.textContent = 'Aynı analiz canlı akışın dakikalık barlarında (gecikmeler bar cinsinden), 15 dakikada bir. 1 dakikalık: OIS, '
+      + 'offshore ve kurların 20 günlük barları; VİOP, DİBS ve diğer vadeler yalnız 5 dakikalık barlarla, son 5 günün barlarından.';
     this.boxes.bars = new GridBox(this.bars, 'quant/lead/intraday');
     page.append(sp.el, cp.el, this.scan.el, this.xc.el, this.bars.el);
     this.addStatus(page);
@@ -62,8 +73,11 @@ class LeadPage extends QuantPage {
   fillPage() {
     const d = this.data.lead || {};
     const entry = (this.data.settings || {}).entry_z || 2;
-    const rows = d.rows || [];
-    this.scan.setTitle('Öncü-takipçi taraması · günlük değişimler · ' + rows.length + ' çift · k ' + fmt(d.k, 1) + ' σ · en çok ' + (d.lags || 5) + ' gün');
+    const all = d.rows || [];
+    const inGroup = (r) => !this.group || String(r.group || '').startsWith(this.group);
+    const rows = all.filter(inGroup);
+    this.scan.setTitle('Öncü-takipçi taraması · günlük değişimler · ' + rows.length + (rows.length === all.length ? '' : ' / ' + all.length) + ' çift · k '
+      + fmt(d.k, 1) + ' σ · en çok ' + (d.lags || 5) + ' gün');
     this.boxes.scan.set(['Grup', 'Çift', 'Lider → takipçi', 'Gecikme (g)', 'Asimetri z', 'β', '± se', 't', 'Granger F (p)', 'R²', 'Kararlılık', 'Olay', 'İsabet',
       'Gelen / beklenen', 'Lider hareketi (σ)', 'Beklenen yetişme', 'z', 'Gün', 'Not'], rows.map((r) => {
       const lead = !!r.leader;
@@ -87,8 +101,9 @@ class LeadPage extends QuantPage {
     if (!bars.ok) {
       this.boxes.bars.set([], [], null, bars.why || 'gün içi barlar yok');
     } else {
-      this.boxes.bars.set(['Bar (dk)', 'x', 'y', 'Lider', 'Gecikme (bar)', 'β', 't', 'Granger F (p)', 'R²', 'Kararlılık', 'Bar', 'Not'], (bars.rows || []).map((r) => [
-        N(r.minutes, 0), T(r.x), T(r.y), T(r.leader || '—', { b: 1 }), N(r.lag, 0), N(r.beta, 3, { sign: true }), N(r.t, 1, { sign: true }),
+      this.boxes.bars.set(['Bar (dk)', 'Grup', 'x', 'y', 'Lider', 'Gecikme (bar)', 'β', 't', 'Granger F (p)', 'R²', 'Kararlılık', 'Bar', 'Not'], (bars.rows || []).filter(inGroup).map((r) => [
+        N(r.minutes, 0), T(r.group || ''), T(r.x_label || r.x), T(r.y_label || r.y), T(r.leader ? (r.leader_label || r.leader) : '—', { b: 1 }), N(r.lag, 0),
+        N(r.beta, 3, { sign: true }), N(r.t, 1, { sign: true }),
         T(isNum(r.F) ? fmt(r.F, 1) + ' (' + pval(r.p) + ')' : ''), N(r.r2, 2), T(r.stable || ''), N(r.n, 0), T(r.why || '', { cls: 'soft' })]),
       null, 'Barlarda aday çift yok');
     }

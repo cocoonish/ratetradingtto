@@ -149,6 +149,120 @@ def test_a_follower_that_has_not_caught_up_is_a_signal():
     assert abs(mons[0].now["catch_up"]) < 1e-9 and qf.make_signal(mons[0], done.cfg, "10:00") is None
 
 
+def _bond(typ, maturity, unit="pct"):
+    return {"label": "TURKGB %s %s" % (typ, maturity), "kind": "rate", "group": "dibs", "unit": unit, "type": typ, "maturity": maturity}
+
+
+def test_viop_and_the_bonds_join_the_candidate_pairs():
+    """VİOP: the front contract against offshore 1M / 3M besides OIS, each contract of the VİOP history against the OIS
+    of its own expiry; DİBS: each fixed-coupon bond / bill of the RV list against the OIS tenor nearest its maturity -
+    the floaters, the CPI linkers and a bond under three months out stay out.  Where each key's minute bars are."""
+    meta = {"OIS:%s" % t: {"label": "%s OIS" % t, "kind": "rate", "months": m, "group": "ois"}
+            for t, m in (("1M", 1.0), ("3M", 3.0), ("1Y", 12.0), ("2Y", 24.0), ("5Y", 60.0), ("10Y", 120.0))}
+    meta.update({"OFF:1M": {"label": "Offshore 1M", "kind": "rate", "months": 1.0, "group": "off"},
+                 "OFF:3M": {"label": "Offshore 3M", "kind": "rate", "months": 3.0, "group": "off"},
+                 "VIOPI:FRONT": {"label": "VİOP ön vade ima (Ara)", "kind": "rate", "group": "viop", "ticker": "USDTRYZ6"},
+                 "VIOPI:USDTRYZ6": {"label": "VİOP Ara ima", "kind": "rate", "group": "viop"},
+                 "VIOPO:USDTRYZ6": {"label": "VİOP Ara OIS", "kind": "rate", "group": "viop"},
+                 "VIOPI:USDTRYF7": {"label": "VİOP Oca ima", "kind": "rate", "group": "viop"}})   # (no OIS of its expiry: no pair)
+    meta.update({"DIBS:TRT051033T12": _bond("S", "2033-10-05"), "DIBS:TRB030227T10": _bond("B", "2027-02-03"),
+                 "DIBS:TRT150628T11": _bond("S", "2028-06-15"), "DIBS:TRB161226T19": _bond("B", "2026-12-16"),
+                 "DIBS:TRT130928T12": _bond("F", "2028-09-13", "px"), "DIBS:TRT140727T14": _bond("T", "2027-07-14", "px"),
+                 "DIBS:TRT200230T13": _bond("E", "2030-02-20")})
+    ctx = qf.Ctx(dict(DEFAULTS), TODAY, {}, meta, live={})
+    pairs = ql.candidate_pairs(ctx)
+
+    def group(name):
+        return [(x, y) for x, y, g in pairs if g == name]
+
+    assert group("VİOP ↔ OIS") == [("VIOPI:FRONT", "OIS:1M"), ("VIOPI:FRONT", "OIS:3M")]
+    assert group("VİOP ↔ Offshore") == [("VIOPI:FRONT", "OFF:1M"), ("VIOPI:FRONT", "OFF:3M")]
+    assert group("VİOP ↔ OIS (aynı vade)") == [("VIOPI:USDTRYZ6", "VIOPO:USDTRYZ6")]
+    # shortest first, each to the nearest tenor: 3 months -> 3M, 19 -> 2Y (not 1Y), 83 -> 5Y (not 10Y)
+    assert group("DİBS ↔ OIS") == [("DIBS:TRB030227T10", "OIS:3M"), ("DIBS:TRT150628T11", "OIS:2Y"), ("DIBS:TRT051033T12", "OIS:5Y")]
+    assert [k for k, _ in ql.dibs_bonds(ctx)] == ["DIBS:TRB030227T10", "DIBS:TRT150628T11", "DIBS:TRT051033T12"]
+    # named as the desk names them, by maturity - not Bloomberg's "TURKIYE GOVERNMENT BOND"
+    assert ql._label(ctx, "DIBS:TRT051033T12") == "05.10.33" and ql._label(ctx, "DIBS:TRB030227T10") == "03.02.27 Bono"
+    assert ql._label(ctx, "OIS:5Y") == "5Y OIS"
+    keys = ql.bar_keys(ctx, pairs)
+    assert keys["VIOPI:FRONT"] == ("VIOPI:USDTRYZ6", "VIOPI:USDTRYZ6")              # the front from its own contract's bars
+    assert keys["DIBS:TRB030227T10"] == ("DIBS:TRB030227T10", "DIBSS:TRB030227T10")   # a bill: the sheet's simple yield
+    assert keys["DIBS:TRT051033T12"] == ("DIBS:TRT051033T12", "DIBSC:TRT051033T12")   # a coupon bond: its compound one
+    assert keys["OIS:5Y"] == ("OIS:5Y", "OIS:5Y") and keys["VIOPO:USDTRYZ6"] == ("VIOPO:USDTRYZ6", "VIOPO:USDTRYZ6")
+
+
+def test_a_bond_that_has_not_followed_its_ois_is_sold_or_bought():
+    """A DİBS follower is traded as a bond (yield up: sell), its value now is the sheet's yield in its history's own
+    convention - the simple or compound one, whichever is nearer the last close - and the last close without one."""
+    days = quant_synth.business_days(TODAY, 400)
+    dx, dy = lagged(len(days), 2, 0.7, 0.5, 5)
+    lead, follow = levels(30.0, [4.0 * v for v in dx]), levels(28.0, [4.0 * v for v in dy])
+    for series in (lead, follow):
+        series[-1] = series[-2] = series[-3]
+    key = "DIBS:TRT051033T12"
+    meta = {"OIS:5Y": {"label": "5Y OIS", "kind": "rate", "months": 60.0, "group": "ois"}, key: dict(_bond("S", "2033-10-05"), label="05.10.33")}
+    series = {"OIS:5Y": dict(zip(days, lead)), key: dict(zip(days, follow))}
+    # the history is the compound yield: the sheet's simple one is 3,5 points lower
+    raw = {"OIS:5Y": lead[-1] + 0.30, "DIBSC:TRT051033T12": follow[-1], "DIBSS:TRT051033T12": follow[-1] - 3.5}
+    ctx = qf.Ctx(dict(DEFAULTS), TODAY, series, meta, live=dict(raw))
+    mons, tables = [], {}
+    ql.run(types.SimpleNamespace(svc=None), ctx, mons, tables)
+    row = next(r for r in tables["lead"]["rows"] if r["group"] == "DİBS ↔ OIS")
+    assert row["leader"] == "OIS:5Y" and row["follower"] == key and row["lag"] == 2 and abs(row["beta"] - 0.7) < 0.1
+    m = mons[0]
+    m.score(dict(raw), raw)
+    assert m.live and m.level == follow[-1] and m.now["event"] and abs(m.now["follow_move"]) < 1e-9
+    s = qf.make_signal(m, ctx.cfg, "10:00")
+    assert s["asset"] == "DİBS" and s["expression"] == "Sell 05.10.33 (5Y OIS öncülüğünde)" and s["legs"][0]["text"] == "Sell 05.10.33"
+    # the OIS 30 bp down: buy the bond
+    down = dict(raw, **{"OIS:5Y": lead[-1] - 0.30})
+    m.score(down, down)
+    assert qf.make_signal(m, ctx.cfg, "10:00")["expression"] == "Buy 05.10.33 (5Y OIS öncülüğünde)"
+    # the bond already followed on the sheet (its compound yield 21 bp up): nothing left to catch up
+    went = dict(raw, **{"DIBSC:TRT051033T12": follow[-1] + m.row["beta"] * 0.30})
+    m.score(went, went)
+    assert abs(m.now["catch_up"]) < 1e-9 and qf.make_signal(m, ctx.cfg, "10:00") is None
+    # the convention: a history of simple yields takes the simple one; a yield far from both is no live value
+    assert ql.value_now(ctx, key, {}, {"DIBSC:TRT051033T12": follow[-1] + 3.5, "DIBSS:TRT051033T12": follow[-1] + 0.1}) == follow[-1] + 0.1
+    assert ql.value_now(ctx, key, {}, {"DIBSC:TRT051033T12": follow[-1] + 3.0}) == follow[-1]
+    assert ql.value_now(ctx, key, {}, {}) == follow[-1] and ql.value_now(ctx, "OIS:5Y", {"OIS:5Y": 31.0}, {}) == 31.0
+
+
+def test_the_bars_keep_the_lead_lag_keys_five_days(tmp_path):
+    """The keys only the lead-lag analysis reads are written down with the bars' own from the live values (a bond under
+    its own key, from the sheet's yield), kept five days against the others' twenty, read back one key at a time."""
+    from tto import quantintraday as qi
+    svc = types.SimpleNamespace(mode="live", settings=types.SimpleNamespace(data_dir=str(tmp_path)))
+    quant = types.SimpleNamespace(svc=svc, use_live=True)
+    intra = qi.Intraday(quant)
+    intra.want({"DIBS:TRT051033T12": "DIBSC:TRT051033T12", "OIS:1Y": "OIS:1Y", "VIOPI:USDTRYZ6": "VIOPI:USDTRYZ6"})
+    assert set(intra._feed) == {"DIBS:TRT051033T12", "VIOPI:USDTRYZ6"}             # (the 1Y is one of the bars' own)
+    tuesday = dt.datetime(2026, 11, 3, 10, 0)
+    raw = {"OIS:1Y": 30.1, "DIBSC:TRT051033T12": 31.2, "DIBSS:TRT051033T12": 27.7, "VIOPI:USDTRYZ6": 33.3, "FX:USDJPY": 150.0}
+    assert intra.sample(raw, tuesday) == 3
+    got = intra.bars().load(["OIS:1Y", "DIBS:TRT051033T12", "VIOPI:USDTRYZ6", "FX:USDJPY", "DIBSC:TRT051033T12"], "2026-11-03")
+    assert got["DIBS:TRT051033T12"] == [("2026-11-03 10:00", 31.2)] and got["VIOPI:USDTRYZ6"] == [("2026-11-03 10:00", 33.3)]
+    assert got["FX:USDJPY"] == [] and got["DIBSC:TRT051033T12"] == [] and got["OIS:1Y"] == [("2026-11-03 10:00", 30.1)]
+    assert intra.sample(raw, dt.datetime(2026, 11, 7, 10, 0)) == 0                # a Saturday
+    # 25 days of bars (pruned as each new day starts): the bars' own keys keep the last twenty, the lead-lag's the last five
+    b = qi.Bars(str(tmp_path / "prune.sqlite3"))
+    start = dt.datetime(2026, 9, 1, 10, 0)
+    for i in range(25):
+        b.record(start + dt.timedelta(days=i), {"OIS:1Y": 30.0, "DIBS:X": 31.0}, also={"DIBS:X"})
+    assert b.prune() == 0                                                          # (nothing left: done day by day)
+    kept = b.load(["OIS:1Y", "DIBS:X"])
+    assert len(kept["OIS:1Y"]) == 20 and len(kept["DIBS:X"]) == 5 and kept["DIBS:X"][0][0].startswith("2026-09-21")
+    assert b.record(start, {"DIBS:Y": 1.0}) == 0                                   # a key nobody asked for is not written
+    b.close()
+    # the lead-lag reads a bond's bars once it asked for them (live); a key it did not ask for has none
+    now = dt.datetime.combine(dt.date.today(), dt.time(10, 0))
+    for i in range(3):
+        intra.bars().record(now + dt.timedelta(minutes=i), {"DIBS:TRT051033T12": 31.0 + 0.01 * i}, also=intra._feed)
+    times, values = intra.series("DIBS:TRT051033T12", 1)                          # (and the 3 November bar while it is recent)
+    assert [t[11:] for t in times[-3:]] == ["10:00", "10:01", "10:02"] and times[-1].startswith(now.strftime("%Y-%m-%d"))
+    assert values[-1] == pytest.approx(31.02) and intra.series("DIBS:TRB030227T10", 1) is None
+
+
 def test_intraday_runs_on_bars_at_minute_lags():
     pairs = [("OIS:1Y", "OIS:2Y", "Eğri içi")]
     assert ql.intraday(None, pairs, {}, 2.0) == {"ok": False, "why": "gün içi barlar yok", "rows": []}

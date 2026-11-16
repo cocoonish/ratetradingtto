@@ -1,5 +1,6 @@
-"""Lead-lag: who moves first - the offshore curve or onshore OIS, the USDTRY swap points or OIS, VİOP or OIS, USDTRY /
-EURTRY or the OIS front end, the 1Y or the 2Y / 5Y.  On the quant package's worker (``tto.quant`` calls :func:`run` on
+"""Lead-lag: who moves first - the offshore curve or onshore OIS, the USDTRY swap points or OIS, VİOP or OIS / offshore
+(and each VİOP contract or the OIS of its own expiry), USDTRY / EURTRY or the OIS front end, the 1Y or the 2Y / 5Y,
+each DİBS bond of the RV list or the OIS of its maturity.  On the quant package's worker (``tto.quant`` calls :func:`run` on
 a full fit and :func:`refresh` on the minute's live refresh; the page "Öncü-Takipçi" reads :func:`view`).
 
 **Daily.**  The daily changes of each candidate pair (rates in bp, FX in % log, swap points as they are) on the days
@@ -22,20 +23,27 @@ catch-up ÷ σ.  Entry is the follower's level now, the target that level plus t
 (the follower's units); carry is not counted.  The same rule run over the history (every day the leader moved that
 much, in-sample β) says how often the follower then moved the expected way and how much of it came - beside each pair.
 
-**Intraday, later.**  The analysis takes any aligned series, so it runs on bars at minute lags as it does on days.
-With a bar source at run time (minute bars of the live feed: :func:`bar_source`, feature-detected on the service as a
-callable ``(key, minutes) -> (times, values)``), the same table is made for 1- and 5-minute bars; without one the page
-says "gün içi barlar yok".
+**Intraday.**  The analysis takes any aligned series, so it runs on bars at minute lags as it does on days - on the
+quant worker's own minute bars of the live feed (``quantintraday``; :func:`bars_of`), every fifteen minutes.  The keys
+the pairs need beyond the bars' own (VİOP, DİBS, the other OIS / offshore tenors) are written down with them
+(``Intraday.want``: a bond's yield from the sheet's simple one for a bill, its compound one else; the front VİOP
+contract from its own contract's bars, so a roll is no jump) and kept five days: those pairs run on 5-minute bars, the
+first ones (20 days of bars) on 1- and 5-minute bars.  Replay keeps no bars: the page says "gün içi barlar yok".
+
+**Bloomberg.**  Nothing of its own: the daily closes are the history's (the DİBS RV list's yields, the VİOP history
+sheet's contracts) and the bars the live values the dashboard already reads.
 """
 from __future__ import annotations
 
 import copy
+import datetime as _dt
 import math
 import statistics
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import quantfam as qf
+from . import quantintraday as qi
 from . import quantmath as qm
 
 # ---------------------------------------------------------------------------------------------- settings
@@ -52,7 +60,7 @@ STABLE_T = 2.0
 MIN_OBS = 60                                    # changes a pair needs (the desk's "en az gözlem" when that is less)
 BAR_MINUTES = (1, 5)
 BAR_LAGS = 10                                   # bars: the most lags looked at intraday
-REFRESH_BARS = 300.0                            # seconds between two intraday passes
+REFRESH_BARS = 900.0                            # seconds between two intraday passes
 BarSource = Callable[[str, int], Optional[Tuple[Sequence[Any], Sequence[float]]]]
 
 
@@ -313,8 +321,9 @@ def catch_up(kind_l: str, kind_f: str, lead_levels: Sequence[float], follow_leve
 # ---------------------------------------------------------------------------------------------- the pairs
 def candidate_pairs(ctx: qf.Ctx) -> List[Tuple[str, str, str]]:
     """(x, y, group) for the series the context has: offshore (ICAP's page, not the cross-currency swaps) ↔ OIS by
-    tenor, USDTRY swap points ↔ OIS, VİOP's front implied rate ↔ OIS 1M / 3M, USDTRY / EURTRY ↔ OIS 1M / 3M, OIS 1Y ↔
-    2Y / 5Y."""
+    tenor, USDTRY swap points ↔ OIS, VİOP's front implied rate ↔ OIS 1M / 3M and offshore 1M / 3M, each contract of the
+    VİOP history ↔ the OIS of its expiry, USDTRY / EURTRY ↔ OIS 1M / 3M, OIS 1Y ↔ 2Y / 5Y, each bond of
+    :func:`dibs_bonds` ↔ the OIS tenor nearest its maturity."""
     ois = {}
     for key, m in ctx.meta.items():
         if key.startswith("OIS:") and m.get("months"):
@@ -326,9 +335,16 @@ def candidate_pairs(ctx: qf.Ctx) -> List[Tuple[str, str, str]]:
     for tenor, months in (("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12)):
         if "FXP:USDTRY:" + tenor in ctx.meta and months in ois:
             out.append(("FXP:USDTRY:" + tenor, ois[months], "Swap puanı ↔ OIS"))
+    off = {m["months"]: key for key, m in ctx.meta.items() if key.startswith("OFF:") and m.get("group") == "off" and m.get("months")}
     for months in (1, 3):
         if "VIOPI:FRONT" in ctx.meta and months in ois:
             out.append(("VIOPI:FRONT", ois[months], "VİOP ↔ OIS"))
+    for months in (1, 3):
+        if "VIOPI:FRONT" in ctx.meta and months in off:
+            out.append(("VIOPI:FRONT", off[months], "VİOP ↔ Offshore"))
+    for key in sorted(k for k in ctx.meta if k.startswith("VIOPI:") and k != "VIOPI:FRONT"):
+        if "VIOPO:" + key[6:] in ctx.meta:                        # the contract's implied rate and the OIS of its expiry
+            out.append((key, "VIOPO:" + key[6:], "VİOP ↔ OIS (aynı vade)"))
     for spot in ("FX:USDTRY", "FX:EURTRY"):
         for months in (1, 3):
             if spot in ctx.meta and months in ois:
@@ -336,10 +352,51 @@ def candidate_pairs(ctx: qf.Ctx) -> List[Tuple[str, str, str]]:
     for months in (24, 60):
         if 12 in ois and months in ois:
             out.append((ois[12], ois[months], "Eğri içi"))
+    for key, left in dibs_bonds(ctx):
+        tenor = min(ois, key=lambda m: (abs(m - left), m)) if ois else None
+        if tenor is not None:
+            out.append((key, ois[tenor], DIBS_GROUP))
     return out
 
 
+DIBS_GROUP = "DİBS ↔ OIS"
+#: the groups added beside the first ones: many pairs, so intraday only on 5-minute bars (see ``WIDE_MINUTES``)
+WIDE_GROUPS = ("VİOP ↔ Offshore", "VİOP ↔ OIS (aynı vade)", DIBS_GROUP)
+DIBS_MIN_MONTHS = 3.0                                  # a bond closer to its maturity than this is left out
+MONTH_DAYS = 365.25 / 12.0
+
+
+def dibs_bonds(ctx: qf.Ctx) -> List[Tuple[str, float]]:
+    """The bonds of the DİBS RV list the history keeps a yield of - fixed coupons and bills (not the TLREF / FRN
+    floaters, whose price is kept, nor the CPI linkers' real yields) - at least ``DIBS_MIN_MONTHS`` from maturity:
+    ``(key, months left)``, shortest first."""
+    out = []
+    for key, m in ctx.meta.items():
+        if not key.startswith("DIBS:") or m.get("group") != "dibs" or m.get("unit") != "pct" or m.get("type") in ("T", "F", "E"):
+            continue
+        try:
+            left = (_dt_date(m.get("maturity")) - ctx.today).days / MONTH_DAYS
+        except (TypeError, ValueError):
+            continue
+        if left >= DIBS_MIN_MONTHS:
+            out.append((key, left))
+    return sorted(out, key=lambda kv: (kv[1], kv[0]))
+
+
+def _dt_date(text: Any) -> _dt.date:
+    return _dt.date.fromisoformat(str(text)[:10])
+
+
 def _label(ctx: qf.Ctx, key: str) -> str:
+    """A key's name on the page; a bond's as the desk names it - its maturity ("05.10.33", "03.02.27 Bono"), not
+    Bloomberg's "TURKIYE GOVERNMENT BOND"."""
+    m = ctx.meta.get(key) or {}
+    if key.startswith("DIBS:") and m.get("maturity"):
+        from . import bonds as bd
+        try:
+            return bd.short_label({"isin": key[5:], "kind": "bill" if m.get("type") == "B" else "fixed", "maturity": str(m["maturity"])[:10]})
+        except (TypeError, ValueError):
+            pass
     return ctx.label(key)
 
 
@@ -348,6 +405,8 @@ def _asset(key: str) -> str:
         return "Offshore"
     if key.startswith("VIOP"):
         return "VİOP"
+    if key.startswith("DIBS:"):
+        return "DİBS"
     if key.startswith(("FX:", "FXP:", "FWD:")):
         return "FX"
     return "TRY OIS"
@@ -358,6 +417,8 @@ def _unit_digits(kind: str) -> Tuple[str, int]:
 
 
 def _verbs_pkg(key: str, kind: str) -> str:
+    if key.startswith("DIBS:"):
+        return "bond"                                   # a bond's yield to rise: sell it
     return "fx" if kind in ("fx", "index") and not key.startswith("FXP:") else "rate"
 
 
@@ -436,9 +497,9 @@ class LeadMonitor(qf.Monitor):
 
     def score(self, live: Dict[str, float], raw_live: Dict[str, float]) -> None:
         row, ctx = self.row, self.ctx
-        lead_now, follow_now = ctx.cur(row["leader"], live), ctx.cur(row["follower"], live)
+        lead_now, follow_now = value_now(ctx, row["leader"], live, raw_live), value_now(ctx, row["follower"], live, raw_live)
         self.level, self.z, self.now = follow_now, None, None
-        self.live = row["follower"] in raw_live or row["leader"] in raw_live
+        self.live = any(k in raw_live for k in live_keys(row["follower"]) + live_keys(row["leader"]))
         if lead_now is None or follow_now is None:
             return
         c = catch_up(row["kind_l"], row["kind_f"], row["lead_levels"], row["follow_levels"], lead_now, follow_now, row, self.k, row["sd_lead"] or 0.0)
@@ -451,6 +512,29 @@ class LeadMonitor(qf.Monitor):
         self.info["now"] = {kk: c[kk] for kk in ("lead_move", "follow_move", "catch_up", "sigma", "k_moved")}
         if c["event"]:
             self.z = c["z"]
+
+
+def live_keys(key: str) -> List[str]:
+    """The live values a key is read from: a bond's are the sheet's simple and compound yields."""
+    return ["DIBSS:" + key[5:], "DIBSC:" + key[5:]] if key.startswith("DIBS:") else [key]
+
+
+def value_now(ctx: qf.Ctx, key: str, live: Dict[str, float], raw_live: Dict[str, float]) -> Optional[float]:
+    """A key's value now: the live one, else the last close.  A bond's daily closes are Bloomberg's yield, whose
+    convention is not told: the live yield is the sheet's simple or compound one, whichever is nearer the last close
+    (they are 300 - 400 bp apart, a day's move a few dozen), as the curve page reads it."""
+    if not key.startswith("DIBS:"):
+        return ctx.cur(key, live)
+    last = ctx.last(key)
+    now = [v for v in (raw_live.get(k) for k in live_keys(key)) if v is not None]
+    if last is None or not now:
+        return last
+    best = min(now, key=lambda v: abs(v - last))
+    return best if abs(best - last) <= CONV_REACH else last
+
+
+#: how far a bond's live yield may be from its last close and still be the same convention (per cent)
+CONV_REACH = 1.5
 
 
 def _f(v: Optional[float], d: int = 1) -> str:
@@ -495,22 +579,46 @@ def bars_of(quant: Any) -> Optional[BarSource]:
     return bar_source(getattr(quant, "svc", None))
 
 
+def bar_keys(ctx: qf.Ctx, pairs: Sequence[Tuple[str, str, str]]) -> Dict[str, Tuple[str, str]]:
+    """Where each key of the pairs is in the minute bars: ``{key: (bar key, live key)}`` - the bars are written from the
+    live value, under the bar key.  The front VİOP contract is read from its own contract's bars (no jump when the
+    front rolls to the next one); a bond's live yield is the sheet's simple one for a bill, its compound one else."""
+    out: Dict[str, Tuple[str, str]] = {}
+    for key in {k for p in pairs for k in p[:2]}:
+        m = ctx.meta.get(key) or {}
+        if key == "VIOPI:FRONT":
+            if m.get("ticker"):
+                out[key] = ("VIOPI:" + m["ticker"], "VIOPI:" + m["ticker"])
+        elif key.startswith("DIBS:"):
+            out[key] = (key, ("DIBSS:" if m.get("type") == "B" else "DIBSC:") + key[5:])
+        else:
+            out[key] = (key, key)
+    return out
+
+
 def intraday(source: Optional[BarSource], pairs: Sequence[Tuple[str, str, str]], kinds: Dict[str, str], k: float,
-             minutes: Sequence[int] = BAR_MINUTES, max_lag: int = BAR_LAGS) -> Dict[str, Any]:
-    """The same analysis on minute bars (lags in bars), or why there is none."""
+             minutes: Sequence[int] = BAR_MINUTES, max_lag: int = BAR_LAGS, keys: Optional[Dict[str, Tuple[str, str]]] = None,
+             labels: Optional[Dict[str, str]] = None, one_minute: Sequence[str] = ()) -> Dict[str, Any]:
+    """The same analysis on minute bars (lags in bars), or why there is none.  ``keys`` say where a key's bars are
+    (:func:`bar_keys`); a pair runs on 1-minute bars only when both of its keys are in ``one_minute`` (the bars kept
+    for 20 days - every other pair on 5-minute bars only: there are many of them, and their bars are kept 5 days)."""
     if source is None:
         return {"ok": False, "why": "gün içi barlar yok", "rows": []}
+    keys, labels, full = keys or {}, labels or {}, set(one_minute)
     rows = []
     for m in minutes:
         for x, y, group in pairs:
+            if m == 1 and full and not (x in full and y in full):
+                continue
             try:
-                sx, sy = source(x, m), source(y, m)
+                sx, sy = source((keys.get(x) or (x,))[0], m), source((keys.get(y) or (y,))[0], m)
             except Exception:  # noqa: BLE001 - a key the bars do not keep
                 sx = sy = None
             if not sx or not sy:
                 continue
             times, vx, vy = align(sx[0], sx[1], sy[0], sy[1])
-            row = {"minutes": m, "x": x, "y": y, "group": group, "n": max(0, len(times) - 1)}
+            row = {"minutes": m, "x": x, "y": y, "group": group, "n": max(0, len(times) - 1),
+                   "x_label": labels.get(x, x), "y_label": labels.get(y, y)}
             if len(times) - 1 < MIN_OBS:
                 row["why"] = "bar az (%d)" % max(0, len(times) - 1)
                 rows.append(row)
@@ -522,6 +630,7 @@ def intraday(source: Optional[BarSource], pairs: Sequence[Tuple[str, str, str]],
             else:
                 row["leader"] = x if res["leader"] == "x" else y
                 row["follower"] = y if res["leader"] == "x" else x
+                row["leader_label"] = labels.get(row["leader"], row["leader"])
             rows.append(row)
     return {"ok": True, "rows": rows, "minutes": list(minutes)}
 
@@ -549,9 +658,15 @@ def run(quant: Any, ctx: qf.Ctx, mons: List[qf.Monitor], tables: Dict[str, Any],
             rows.append(row)
         mons.extend(own)
         kinds = {key: ctx.kind(key) for p in pairs for key in p[:2]}
-        bars = intraday(bars_of(quant), pairs, kinds, k)
+        labels = {key: _label(ctx, key) for p in pairs for key in p[:2]}
+        where = bar_keys(ctx, pairs)
+        want = getattr(getattr(quant, "intraday", None), "want", None)
+        if callable(want):
+            want(dict(where.values()))                     # the minute bars keep these keys too from now on
+        bars = intraday(bars_of(quant), pairs, kinds, k, keys=where, labels=labels, one_minute=qi.KEYS)
         tables["lead"] = {"rows": [{kk: r.get(kk) for kk in _PUBLIC if kk in r} for r in rows], "intraday": bars, "lags": int(ctx.cfg.get("lead_lag") or 5),
-                          "k": k, "pairs": len(pairs), "_kinds": kinds, "_pairs": pairs, "_bars_at": time.time()}
+                          "k": k, "pairs": len(pairs), "_kinds": kinds, "_pairs": pairs, "_keys": where, "_labels": labels,
+                          "_bars_at": time.time()}
     except Exception as exc:  # noqa: BLE001 - this module failing must not take the other families with it
         tables.setdefault("errors", {})["lead"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
         tables["lead"] = {"rows": [], "why": tables["errors"]["lead"], "intraday": {"ok": False, "why": "", "rows": []}}
@@ -560,7 +675,7 @@ def run(quant: Any, ctx: qf.Ctx, mons: List[qf.Monitor], tables: Dict[str, Any],
 
 
 def refresh(quant: Any, fit: Dict[str, Any]) -> None:
-    """The minute's refresh (``Quant.refresh_live``): the intraday table again, at most every five minutes, when the
+    """The minute's refresh (``Quant.refresh_live``): the intraday table again, at most every fifteen minutes, when the
     dashboard has bars (the monitors read the live values themselves)."""
     tab = (fit.get("tables") or {}).get("lead")
     if not tab or "_pairs" not in tab or time.time() - tab.get("_bars_at", 0.0) < REFRESH_BARS:
@@ -569,7 +684,8 @@ def refresh(quant: Any, fit: Dict[str, Any]) -> None:
     if src is None:
         return
     try:
-        tab["intraday"] = intraday(src, tab["_pairs"], tab["_kinds"], float(tab.get("k") or DEFAULTS["lead_k"]))
+        tab["intraday"] = intraday(src, tab["_pairs"], tab["_kinds"], float(tab.get("k") or DEFAULTS["lead_k"]), keys=tab.get("_keys"),
+                                   labels=tab.get("_labels"), one_minute=qi.KEYS)
     except Exception as exc:  # noqa: BLE001
         tab["intraday"] = {"ok": False, "why": "%s: %s" % (type(exc).__name__, str(exc)[:160]), "rows": []}
     tab["_bars_at"] = time.time()

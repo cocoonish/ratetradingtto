@@ -26,7 +26,7 @@ import math
 import os
 import sqlite3
 import threading
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple
 
 from . import quantfam as qf
 from . import quantmath as qm
@@ -36,6 +36,7 @@ ZKEYS = ("OIS:3M", "OIS:1Y", "OIS:2Y", "OIS:5Y", "OFF:3M", "FX:USDTRY", "FX:EURT
 SPREADS = (("OFF:3M", "OIS:3M", "Offshore 3M − OIS 3M"), ("OFF:1Y", "OIS:1Y", "Offshore 1Y − OIS 1Y"), ("OIS:2Y", "OIS:1Y", "1s2s"),
            ("OIS:5Y", "OIS:2Y", "2s5s"))
 KEEP_DAYS = 20
+LEAD_KEEP_DAYS = 5                        # the keys only the lead-lag analysis reads (5-minute bars): their last days
 BAR = 5                                   # minutes a bar
 SESSION = (9 * 60 + 30, 18 * 60)          # the minutes of the day the bars are kept for
 OR_BARS = 6                               # the opening range: the first 30 minutes
@@ -70,9 +71,10 @@ class Bars(object):
         self._db.commit()
         self._pruned = ""
 
-    def record(self, when: _dt.datetime, values: Dict[str, float]) -> int:
+    def record(self, when: _dt.datetime, values: Dict[str, float], also: Collection[str] = ()) -> int:
+        """The minute's closes of the keys above - and of ``also`` (the lead-lag analysis' own, kept fewer days)."""
         t = when.strftime("%Y-%m-%d %H:%M")
-        rows = [(k, t, float(v)) for k, v in values.items() if k in KEYS and v is not None and math.isfinite(v)]
+        rows = [(k, t, float(v)) for k, v in values.items() if (k in KEYS or k in also) and v is not None and math.isfinite(v)]
         if not rows:
             return 0
         with self._lock:
@@ -87,23 +89,28 @@ class Bars(object):
         with self._lock:
             return [r[0] for r in self._db.execute("SELECT DISTINCT substr(t, 1, 10) FROM bars ORDER BY 1")]
 
-    def prune(self, keep: int = KEEP_DAYS) -> int:
-        """Drop the minutes of all but the last ``keep`` trading days."""
+    def prune(self, keep: int = KEEP_DAYS, keep_other: int = LEAD_KEEP_DAYS) -> int:
+        """Drop the minutes of all but the last ``keep`` trading days - ``keep_other`` for the keys not above."""
         days = self.days()
-        if len(days) <= keep:
-            return 0
-        cut = days[-keep]
+        n = 0
         with self._lock:
-            n = self._db.execute("DELETE FROM bars WHERE t < ?", (cut,)).rowcount
+            if len(days) > keep:
+                n += self._db.execute("DELETE FROM bars WHERE t < ?", (days[-keep],)).rowcount
+            if len(days) > keep_other:
+                n += self._db.execute("DELETE FROM bars WHERE t < ? AND key NOT IN (%s)" % ",".join("?" * len(KEYS)),
+                                      (days[-keep_other],) + tuple(KEYS)).rowcount
             self._db.commit()
         return n
 
     def load(self, keys: Sequence[str], since: str = "") -> Dict[str, List[Tuple[str, float]]]:
+        """The keys' minutes since ``since``, each in time order (read by key: the table's own order)."""
         out: Dict[str, List[Tuple[str, float]]] = {k: [] for k in keys}
+        if not out:
+            return out
+        sql = "SELECT key, t, v FROM bars WHERE key IN (%s) AND t >= ? ORDER BY key, t" % ",".join("?" * len(out))
         with self._lock:
-            for k, t, v in self._db.execute("SELECT key, t, v FROM bars WHERE t >= ? ORDER BY t", (since,)):
-                if k in out:
-                    out[k].append((t, v))
+            for k, t, v in self._db.execute(sql, tuple(out) + (since,)):
+                out[k].append((t, v))
         return out
 
     def stats(self) -> Dict[str, Any]:
@@ -372,6 +379,13 @@ class Intraday(object):
         self.svc = quant.svc
         self._bars: Optional[Bars] = None
         self._last = ""
+        self._feed: Dict[str, str] = {}
+
+    def want(self, feed: Dict[str, str]) -> None:
+        """The keys the lead-lag analysis reads intraday beyond the ones above, ``{bar key: live key}`` (a bond's
+        yield is kept under its own key, from the sheet's simple or compound one): written down with them from the
+        next minute on, kept ``LEAD_KEEP_DAYS`` days."""
+        self._feed = {bar: live for bar, live in feed.items() if bar not in KEYS}
 
     def bars(self) -> Optional[Bars]:
         if self._bars is None:
@@ -388,7 +402,7 @@ class Intraday(object):
         """One key's bars for the lead-lag analysis (``quantlead``): its 1- or 5-minute closes over the days kept, as
         ``(times, values)`` (``"YYYY-MM-DD HH:MM"``, the bar's end); ``None`` when there are none (replay, a key the
         bars do not keep)."""
-        if key not in KEYS or minutes not in (1, BAR) or not self.live():
+        if (key not in KEYS and key not in self._feed) or minutes not in (1, BAR) or not self.live():
             return None
         b = self.bars()
         if b is None:
@@ -419,7 +433,12 @@ class Intraday(object):
         if b is None:
             return 0
         self._last = stamp
-        return b.record(now, {k: raw_live[k] for k in KEYS if k in raw_live})
+        values = {k: raw_live[k] for k in KEYS if k in raw_live}
+        feed = self._feed
+        for bar, live in feed.items():
+            if raw_live.get(live) is not None:
+                values[bar] = raw_live[live]
+        return b.record(now, values, also=feed)
 
     def monitors(self, ctx: qf.Ctx, now: _dt.datetime) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
         if not self.live():

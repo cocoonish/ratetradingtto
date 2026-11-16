@@ -724,7 +724,7 @@ class Quant(object):
         front = self._front(viop, today)
         if front is not None:
             series["VIOPI:FRONT"] = front["imp"]
-            meta["VIOPI:FRONT"] = {"label": "VİOP ön vade ima (%s)" % front["name"], "kind": "rate", "group": "viop"}
+            meta["VIOPI:FRONT"] = {"label": "VİOP ön vade ima (%s)" % front["name"], "kind": "rate", "group": "viop", "ticker": front["ticker"]}
             if front["live"].get("imp") is not None:
                 raw_live["VIOPI:FRONT"] = front["live"]["imp"]
         mpc_days = self.store.mpc_days(start, today.isoformat())

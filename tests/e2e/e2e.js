@@ -2336,6 +2336,25 @@ async function shot(page, name) {
       && await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count() === lr.length
       && /gün içi barlar yok/.test(await page.textContent('#quant-lead-intraday')), { rows: lr.length });
     await shot(page, 'quant-lead');
+    // the DİBS RV list's bonds are candidates too, named by maturity (VİOP's daily pairs need the VİOP history sheet's
+    // closes, which replay does not have: none here); the group filter narrows the tables and is remembered
+    const nDibs = lr.filter((r) => r.group === 'DİBS ↔ OIS').length;
+    const nViop = lr.filter((r) => String(r.group).startsWith('VİOP')).length;
+    await page.click('#quant-lead-group button[data-v="DİBS"]');
+    await page.waitForFunction((n) => document.querySelectorAll('#quant-lead-pairs table.grid tr:not(.hd)').length === n, nDibs, { timeout: 10000 }).catch(() => null);
+    const dibsShown = await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count();
+    const dibsText = await page.textContent('#quant-lead-pairs');
+    await page.click('#quant-lead-group button[data-v="VİOP"]');
+    await page.waitForFunction((n) => document.querySelectorAll('#quant-lead-pairs table.grid tr:not(.hd)').length === n, nViop, { timeout: 10000 }).catch(() => null);
+    const viopShown = await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count();
+    const remembered = await page.evaluate(() => { try { return localStorage.getItem('tto.quant.lead.group'); } catch (e) { return null; } });
+    await page.click('#quant-lead-group button[data-v=""]');
+    await page.waitForFunction((n) => document.querySelectorAll('#quant-lead-pairs table.grid tr:not(.hd)').length === n, lr.length, { timeout: 10000 }).catch(() => null);
+    const dibsLabels = lr.filter((r) => r.group === 'DİBS ↔ OIS').map((r) => r.x_label);
+    check('Öncü-Takipçi: the DİBS RV list\'s bonds among the pairs, each by its maturity; the group filter shows a group\'s rows (VİOP: none in replay), "Tümü" all again',
+      nDibs >= 1 && dibsShown === nDibs && /DİBS ↔ OIS/.test(dibsText) && viopShown === nViop && /VİOP/.test(remembered || '')
+      && dibsLabels.every((t) => /\d\d\.\d\d\.\d\d/.test(t)) && new Set(dibsLabels).size === dibsLabels.length
+      && await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count() === lr.length, { nDibs, nViop, dibsShown, viopShown, remembered });
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
