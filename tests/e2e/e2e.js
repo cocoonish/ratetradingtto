@@ -1920,6 +1920,42 @@ async function shot(page, name) {
     check('... an FRN picked and an ISIN typed go to the first empty rows of the list, for everyone',
       rvAfter.length === rvBefore.length + 2 && rvAfter.includes('TRT280432T14') && /2 kâğıt eklendi/.test(await page.textContent('#toasts'))
       && (await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT280432T14').lists.includes('dibs'), rvAfter.slice(-3));
+    // what a bond's row holds is the bond's: a manual clean price follows it when its ISIN goes to another row of the list
+    const rvRowOf = (code) => page.evaluate((c) => {
+      for (let r = 5; r <= 54; r++) { const td = window.tto.findCell('DİBS RV!A' + r); if (td && td.textContent.trim() === c) return r; }
+      return 0;
+    }, code);
+    const moving = 'TRT081128T15';
+    const fromRow = await rvRowOf(moving);
+    const toRow = 1 + await page.evaluate(() => {
+      let last = 0;
+      for (let r = 5; r <= 54; r++) { const td = window.tto.findCell('DİBS RV!A' + r); if (td && td.textContent.trim()) last = r; }
+      return last;
+    });
+    await typeInto(page, 'DİBS RV!N' + fromRow, '98,5');
+    await waitCell(page, 'DİBS RV!N' + fromRow, '/^98,5/.test(t)');
+    await typeInto(page, 'DİBS RV!A' + toRow, moving);
+    await waitCell(page, 'DİBS RV!A' + toRow, 't.trim() === "' + moving + '"');
+    await (await cellHandle(page, 'DİBS RV!A' + fromRow)).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'DİBS RV!N' + toRow, '/^98,5/.test(t)').catch(() => {});
+    const followed = { from: fromRow, to: toRow, priceThere: await cellText(page, 'DİBS RV!N' + toRow),
+      priceHere: await cellText(page, 'DİBS RV!N' + fromRow), said: await page.textContent('#toasts') };
+    check('DİBS RV: a manual clean price follows its bond when the ISIN moves to another row of the list - the one who moved it is told',
+      fromRow > 0 && /^98,5/.test(followed.priceThere) && followed.priceHere.trim() === ''
+      && followed.said.includes(moving + ' satır ' + fromRow + ' → ' + toRow), followed);
+    // back where it was (the price with it), then the price off
+    await typeInto(page, 'DİBS RV!A' + fromRow, moving);
+    await waitCell(page, 'DİBS RV!A' + fromRow, 't.trim() === "' + moving + '"');
+    await (await cellHandle(page, 'DİBS RV!A' + toRow)).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'DİBS RV!N' + fromRow, '/^98,5/.test(t)').catch(() => {});
+    const rvBack = { price: await cellText(page, 'DİBS RV!N' + fromRow), here: await cellText(page, 'DİBS RV!A' + fromRow),
+      there: await cellText(page, 'DİBS RV!A' + toRow) };
+    check('... and back with it to its row', /^98,5/.test(rvBack.price) && rvBack.here.trim() === moving && rvBack.there.trim() === '', rvBack);
+    await (await cellHandle(page, 'DİBS RV!N' + fromRow)).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'DİBS RV!N' + fromRow, 't.trim() === ""').catch(() => {});
     // tables that grow: the rows in use and one more, "+ Satır" for another
     await open(page, 'bulk');
     const bulkShown = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B1"] table.grid tbody > tr')].filter((tr) => !tr.classList.contains('grow-hidden')).length);

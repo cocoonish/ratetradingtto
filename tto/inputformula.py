@@ -19,10 +19,11 @@ cannot be read or names what is not there, a cycle (the formula reads - through 
 formula inputs - the cell it is typed into: the engine's masks tell that a read depends on an input, the formulas'
 references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, "Elle değer", a
 cell of a meeting's row whose value goes with its meeting - meetings.py; a reference to it from elsewhere follows the
-meeting too -, a day or a name of a holiday list - its save writes the whole list again in date order), a shared formula
-reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and, into a cell
-that goes into a Bloomberg request, a formula reading live data (prices, NOW()) - a new request on every tick - or one
-whose value is an error - a request with an empty argument.  A formula the store keeps that may not stand (an earlier
+meeting too -, a day or a name of a holiday list - its save writes the whole list again in date order -, a key of a list:
+an ISIN of a list of bonds, a VİOP contract code - what is kept by it would not follow a key a formula changes), a shared
+formula reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and, into
+a cell that goes into a Bloomberg request, a formula reading live data (prices, NOW()) - a new request on every tick - or
+one whose value is an error - a request with an empty argument.  A formula the store keeps that may not stand (an earlier
 version took it, a scenario brought it back) goes when it is read: its value stays, the log says why.
 
 What never spins or sticks: a cycle that appears later (an input it reads went back to its own default) - the formulas
@@ -77,6 +78,7 @@ KEPT = " · Bloomberg isteğine giren hücre: son iyi değeri kaldı"
 #: why a formula kept by the store goes when it is read (its value stays, as a value): the log says which and why
 GONE_MOVED = "toplantı takvimiyle kayan hücre"
 GONE_HOLIDAY = "tatil listesinin hücresi"
+GONE_KEY = "listenin anahtar hücresi: ISIN / kontrat kodu"
 GONE_CELL = "hücre artık yok"
 GONE_INPUT = "hücre artık bir girdi değil"
 GONE_SCOPE = "girdi artık %s"
@@ -240,9 +242,9 @@ class InputFormulas(object):
         """A scope's formulas as the store keeps them: an entry whose text is the same is kept (with what it read).  One
         that may not stand (an earlier version took it, a scenario brought it back) goes from the store - its value stays,
         as a value, the log says which and why: in a cell of a meeting's row (meetings.py) or one a holiday list's save
-        rewrites, a cell that is not there or no input of this scope any more, a text this version does not take.  (Kept,
-        it would be listed in "Girdilerim" and saved with every scenario while its cell holds a value that follows
-        nothing.)  A workbook not loaded now keeps its formulas."""
+        rewrites, in a key of a list (an ISIN, a VİOP contract code: rowkeys.py), a cell that is not there or no input of
+        this scope any more, a text this version does not take.  (Kept, it would be listed in "Girdilerim" and saved with
+        every scenario while its cell holds a value that follows nothing.)  A workbook not loaded now keeps its formulas."""
         from . import meetings as mt
         old = self._scopes.get(scope, {})
         new: Dict[Tuple[str, int, int], _Entry] = {}
@@ -261,6 +263,9 @@ class InputFormulas(object):
                 continue
             if self.svc._holiday_cell(book, si, rc):
                 gone.append((bid, ref, text, GONE_HOLIDAY))
+                continue
+            if self.svc.rowkeys.key_cell(book, si, rc):
+                gone.append((bid, ref, text, GONE_KEY))      # (a list's key: an ISIN, a VİOP contract code - rowkeys.py)
                 continue
             d = book.inputs.get((si, rc))
             if d is None or d.group in ("adhoc", "adhoc-shared"):
@@ -305,6 +310,9 @@ class InputFormulas(object):
             raise FormulaError(HOLIDAY)
         if d is None or d.group in ("adhoc", "adhoc-shared"):
             raise FormulaError(NOT_INPUT)
+        keyed = self.svc.rowkeys.key_cell(book, si, rc)
+        if keyed:
+            raise FormulaError(keyed)                  # (a list's key: an ISIN, a VİOP contract code - rowkeys.py)
         opts = book.options_for(si, rc, calc)
         if d.kind == "list" or opts:
             raise FormulaError(LIST % ", ".join((opts or [])[:8]))

@@ -16,6 +16,8 @@ import { boxTools } from '../pagebox.js';
 export const OP = { '>=': '≥', '<=': '≤', x: 'kesişir' };
 const UNIT_TEXT = { pct: 'faiz (%) – değişim bp', bp: 'bp', px: 'fiyat', fx: 'kur', raw: 'sayı' };
 export const KIND_TEXT = { viop: 'VİOP', bond: 'kâğıt', ois: 'OIS', off: 'offshore', masa: 'masa', expr: 'ifade', cell: 'hücre' };
+/** A subject read as a cell is - a cell, or a cell of a bond's row / a VİOP contract's column: its unit can be chosen. */
+const cellish = (s) => !!s && (s.kind === 'cell' || !!s.col || !!s.row);
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const HISTORY_AGAIN_MS = 5 * 60 * 1000;   // a drawn history is asked again this often (the value now: every refresh)
 
@@ -205,7 +207,7 @@ export class WatchPage {
       btn('⟲', 'Referansı şimdi al', () => this.takeBase(it.id));
       btn('▲', 'Yukarı', () => this.move(it, -1)).disabled = k === 0;
       btn('▼', 'Aşağı', () => this.move(it, 1)).disabled = k === d.items.length - 1;
-      btn('⋯', kind === 'cell' ? 'Ad / birim' : 'Ad', (e) => this.more(it, e));
+      btn('⋯', cellish(it.subject) ? 'Ad / birim' : 'Ad', (e) => this.more(it, e));
       btn('✕', 'Listeden çıkar', () => this.remove(it));
       const z = it.z || {};
       const ztip = isNum(z.z) ? z.n + ' kapanış (' + (z.source || '') + ', ' + (z.first || '') + ' – ' + (z.last || '') + '): ortalama ' + (z.mean_text || '')
@@ -519,7 +521,7 @@ export class WatchPage {
     const r = e.target.getBoundingClientRect();
     const items = [{ label: 'Adını değiştir…', action: () => this.rename(it) },
       { label: 'Alarm kur…', action: () => openWatchDialog(this.ctx, { subject: it.subject, label: it.label, focus: 'alarm' }) }];
-    if (it.subject && it.subject.kind === 'cell') {           // a cell does not say what it holds: how to read it
+    if (cellish(it.subject)) {                                // a cell does not say what it holds: how to read it
       items.push({ sep: true }, { header: 'Hücre ne gösteriyor' });
       for (const [u, t] of Object.entries(UNIT_TEXT)) items.push({ label: (it.show === u ? '✓ ' : '   ') + t, action: () => this.act('/api/watch/update', { id: it.id, unit: u }) });
     }

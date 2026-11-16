@@ -317,6 +317,97 @@ def test_subjects_are_followed_when_the_tables_move(svc):
     assert gone["value"] is None and "vadesi geçmiş" in gone["detail"]
 
 
+def test_every_cell_of_a_bond_row_or_a_contract_column_is_watched_as_its_bond_or_contract(svc):
+    """Any cell of a VİOP contract's column (not only the named measures: the swap points, the gold tables) is watched as
+    that contract's, any cell of a bond's row (DİBS RV's DV01, Tüm Kâğıtlar's prices, DİBS ASW's) as that bond's - read as
+    the cell is, followed when the contracts roll or the list changes; the unit can be chosen; a row with no bond and a
+    calculator's column stay cells."""
+    u = svc.login("Her Satır")["user"]
+    uk = user_key(u)
+    sp = preview(svc, u, {"kind": "cell", "book": "tto", "ref": "VIOP!N14"})
+    assert sp["subject"] == {"kind": "viop", "ticker": "A1Z6 Curncy", "row": 14, "dx": 1}
+    assert sp["label"] == "VİOP A1Z6 SP (bid)" and sp["value"] == pytest.approx(cell(svc, "VIOP!N14", user=uk))
+    assert sp["detail"] == "vade 31.12.2026"
+    gold = cell(svc, "VIOP!M45")
+    ask = preview(svc, u, {"kind": "cell", "book": "tto", "ref": "VIOP!S53"})                # (the gold-TRY ask table)
+    assert ask["subject"] == {"kind": "viop", "ticker": gold, "row": 53, "dx": 6} and ask["label"].endswith("SP (ask)")
+    assert preview(svc, u, {"kind": "cell", "book": "tto", "ref": "VIOP!M36"})["subject"]["kind"] == "cell"   # (a calculator)
+    dv = preview(svc, u, {"kind": "cell", "book": "tto", "ref": "DİBS RV!AI8"})
+    assert dv["subject"] == {"kind": "bond", "isin": "TRT150328T24", "sheet": "DİBS RV", "col": "AI"}
+    assert dv["label"].startswith("15.03.28 DV01") and dv["value"] == pytest.approx(cell(svc, "DİBS RV!AI8", user=uk))
+    row = svc._uni_rows["TRT150328T24"]
+    bid = preview(svc, u, {"kind": "cell", "book": "tto", "ref": "EK_EVREN!I%d" % row})
+    assert bid["subject"] == {"kind": "bond", "isin": "TRT150328T24", "sheet": "EK_EVREN", "col": "I"}
+    assert bid["label"] == "15.03.28 Bid · Tüm Kâğıtlar" and bid["value"] == pytest.approx(cell(svc, "EK_EVREN!I%d" % row))
+    asw = preview(svc, u, {"kind": "cell", "book": "asw", "ref": "ASW!J9"})
+    assert asw["subject"] == {"kind": "bond", "isin": "TRT150328T24", "sheet": "ASW", "col": "J", "book": "asw"}
+    assert asw["value"] == pytest.approx(cell(svc, "ASW!J9", user=uk, book="asw"))
+    assert preview(svc, u, {"kind": "cell", "book": "tto", "ref": "DİBS RV!AI45"})["subject"]["kind"] == "cell"   # (no bond)
+    for bad in ({"kind": "viop", "ticker": "A1Z6 Curncy", "row": 200, "dx": 1}, {"kind": "viop", "ticker": "", "row": 14, "dx": 1},
+                {"kind": "bond", "isin": "TRT150328T24", "sheet": "Yok", "col": "A"},
+                {"kind": "bond", "isin": "TRT150328T24", "sheet": "ASW", "col": "LR"}):
+        with pytest.raises(ServiceError):
+            preview(svc, u, bad)
+    svc.watch_add(u, "tto", "VIOP!N14")
+    svc.watch_add(u, "tto", "DİBS RV!AI8")
+    alarm = svc.alarm_add(u, "tto", "EK_EVREN!I%d" % row, ">=", "200")["alarm"]
+    assert alarm["subject"] == bid["subject"] and alarm["show"] == "raw"
+    # the contracts roll and the bond moves: each still read on its own column / row (the new row is priced live, so
+    # offline its DV01 is typed over here)
+    svc.set_inputs(u, "tto", [{"ref": "VIOP!L1", "value": "A1Z6 Curncy"}, {"ref": "VIOP!M1", "value": "A1F7 Curncy"}])
+    svc.set_inputs(u, "tto", [{"ref": "DİBS RV!A8", "value": ""}, {"ref": "DİBS RV!A40", "value": "TRT150328T24"},
+                              {"ref": "DİBS RV!AI40", "value": "321"}], allow_adhoc=True)
+    items = {i["subject"].get("row") or i["subject"].get("col"): i for i in svc.watch_view(u)["items"]}
+    assert items[14]["value"] == pytest.approx(cell(svc, "VIOP!M14", user=uk))
+    assert items["AI"]["value"] == 321.0 and items["AI"]["detail"] == "TRT150328T24 · DİBS RV!AI40"
+    # read as a cell is: its unit can be chosen
+    svc.watch_update(u, items["AI"]["id"], unit="bp")
+    assert next(i for i in svc.watch_view(u)["items"] if i["id"] == items["AI"]["id"])["show"] == "bp"
+
+
+def test_items_and_alarms_kept_as_cells_are_anchored_once(tmp_path):
+    """Items and alarms kept as a cell of a bond's row or a VİOP contract's column - an earlier version's, or one taken
+    before every row of these tables was anchored - follow their bond / contract from the next start, read as the cell
+    was (its unit, the alarm's level as typed), with the closes kept of the cell; once.  Other cells stay cells."""
+    from tto.store import Store
+    first = make_service(tmp_path)
+    try:
+        u = first.login("Eski İzleyen")["user"]
+        row = first._uni_rows["TRT150328T24"]
+        db = first.settings.db_path
+    finally:
+        first.stop()
+    store = Store(db)
+    store.put("watch.items", {u: [{"id": "e1", "book": "tto", "ref": "DİBS RV!AI8", "label": "eski DV01", "unit": "px",
+                                   "base": None, "base_at": None, "fmt": "0.0"},
+                                  {"id": "e2", "subject": {"kind": "cell", "book": "tto", "ref": "VIOP!N14"}, "label": "Z6 SP",
+                                   "base": None, "base_at": None},
+                                  {"id": "e3", "subject": {"kind": "cell", "book": "tto", "ref": "Forward!F2"}, "label": "spot",
+                                   "base": None, "base_at": None}]})
+    store.put("watch.alarms", [{"id": "a1", "user": u, "subject": {"kind": "cell", "book": "tto", "ref": "EK_EVREN!I%d" % row},
+                                "mode": "level", "op": ">=", "level": 200.0, "show": "raw", "label": "eski bid", "note": "",
+                                "active": True, "created": "2026-11-12 09:00:00", "fired_at": None, "fired_value": None, "last": None}])
+    store.close_upsert([("cell|tto|VIOP!N14", "2026-11-10", 1234.0), ("cell|tto|VIOP!N14", "2026-11-11", 1240.0)])
+    store.put("migrated.watch_anchor", None)                       # (as before this version)
+    store.close()
+    s = make_service(tmp_path)
+    try:
+        items = {i["id"]: i for i in s.watch.items(u)}
+        assert items["e1"]["subject"] == {"kind": "bond", "isin": "TRT150328T24", "sheet": "DİBS RV", "col": "AI", "show": "px"}
+        assert items["e2"]["subject"] == {"kind": "viop", "ticker": "A1Z6 Curncy", "row": 14, "dx": 1}
+        assert items["e3"]["subject"] == {"kind": "cell", "book": "tto", "ref": "Forward!F2"}
+        assert [i["label"] for i in s.watch.items(u)] == ["eski DV01", "Z6 SP", "spot"]
+        a = s.watch.alarms(u)[0]
+        assert a["subject"] == {"kind": "bond", "isin": "TRT150328T24", "sheet": "EK_EVREN", "col": "I"} and a["level"] == 200.0
+        key = s.watch.key(items["e2"]["subject"])
+        assert s.store.closes([key])[key] == {"2026-11-10": 1234.0, "2026-11-11": 1240.0}
+        view = {i["id"]: i for i in s.watch_view(u)["items"]}
+        assert view["e2"]["value"] == pytest.approx(cell(s, "VIOP!N14", user=user_key(u)))
+        assert s.store.get("migrated.watch_anchor") and s.et.call(s.watch.anchor_kept) == 0          # (once)
+    finally:
+        s.stop()
+
+
 def test_lists_of_an_earlier_version_still_read(svc):
     u = svc.login("Eski Liste")["user"]
     svc.store.put("watch.items", {u: [{"id": "old1", "book": "tto", "ref": "OIS_MAIN!B14", "label": "eski 1Y", "unit": "frac",

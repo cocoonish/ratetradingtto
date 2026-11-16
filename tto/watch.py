@@ -10,6 +10,10 @@ What is watched is a *subject*, as the desk names it, not a cell that may move:
   cheap / rich, Z-spread, prices, ASW against FX swaps, carry), its value dates (DİBS Trading) - found by its ISIN
   wherever it stands in the list;
 * ``{"kind": "masa", "key": "usdtry_mid"}`` - the desk strip (USDTRY, TLREF, the implied 1Y-end TLREF ...);
+* ``{"kind": "bond", "isin": "TRT150328T24", "sheet": "DİBS RV", "col": "AI"}`` - any other cell of a bond's row of a
+  table of bonds (DİBS RV, DİBS Trading, Tüm Kâğıtlar, DİBS ASW - ``"book": "asw"``): found by its ISIN wherever it
+  stands, read as the cell is; ``{"kind": "viop", "ticker": "A1Z6 Curncy", "row": 14, "dx": 1}`` - the same for a
+  VİOP contract's column (its code's column + ``dx``);
 * ``{"kind": "meeting", "cal": "tcmb", "date": "2027-03-18", "col": "R"}`` - a cell of a meeting's row (TCMB: the OIS
   page's IMPLIED RATES; Fed: the FOMC table), found by the meeting's date wherever the list has it now - a date that
   is corrected takes its items, alarms and closes along (meetings.py);
@@ -35,8 +39,10 @@ import unicodedata
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import extras as ex
 from .xl import numfmt
 from .xl.model import COLS, parse_a1
+from .xl.tokenizer import col_to_index, index_to_col
 
 #: how a value is shown and what a change of it is: (unit after a change, × to get the change in that unit)
 SHOWS = {"pct": ("bp", 100.0), "bp": ("bp", 1.0), "px": ("puan", 1.0), "fx": ("", 1.0), "raw": ("", 1.0)}
@@ -82,6 +88,23 @@ BOND_METRICS = {"yield": ("getiri", RV, "T", "pct", 100.0), "asw": ("ASW", RV, "
                 "t1_bid": ("T1 bid", "EK_DIBS", "K", "px", 1.0), "t1_ask": ("T1 ask", "EK_DIBS", "L", "px", 1.0),
                 "t2_bid": ("T2 bid", "EK_DIBS", "P", "px", 1.0), "t2_ask": ("T2 ask", "EK_DIBS", "Q", "px", 1.0),
                 "repo01": ("T0→T1 repo", "EK_DIBS", "W", "pct", 1.0), "repo01_tlref": ("repo − TLREF", "EK_DIBS", "Y", "bp", 1.0)}
+#: the tables whose rows are bonds: every cell of a bond's row is the bond's - watched as that, found by its ISIN wherever
+#: it stands (a list edited, Tüm Kâğıtlar laid out).  Sheet -> (book, the sheet listing the bonds, its ISIN column, first
+#: and last row, first and last column of a row, the row of the captions, the table's name after a caption)
+BOND_TABLES = {RV: ("tto", RV, "A", 5, 54, 2, 16384, 4, ""), "EK_DIBS": ("tto", RV, "A", 5, 54, 2, 16384, 4, ""),
+               ex.UNI_SHEET: ("tto", ex.UNI_SHEET, "A", ex.UNI_FIRST, ex.UNI_LAST, 2, 16384, 4, " · Tüm Kâğıtlar"),
+               "ASW": ("asw", "ASW", "B", 7, 56, col_to_index("C"), col_to_index("EF"), 6, " · ASW")}
+BOND_LIST_NAMES = {RV: "trading", "EK_DIBS": "trading", ex.UNI_SHEET: "Tüm Kâğıtlar", "ASW": "DİBS ASW"}
+#: VİOP's tables that run a column a contract: (the row of the contracts' codes, its first column, how many, the table's
+#: first and last row, how far right of its code a contract's numbers stand, the column of the rows' captions, the
+#: table's name after a caption).  USDTRY: the contracts, bid, ask, OIS, ICAP, the matrix's rows; gold-TRY bid and ask;
+#: gold-USD.  (The calculators between them are places, "1. kontrat", not contracts; the matrices pair two contracts.)
+VIOP_TABLES = ((1, "L", 12, 2, 5, 0, None, ""), (1, "L", 12, 7, 18, 1, "L", "bid"), (1, "L", 12, 19, 29, 1, "L", "ask"),
+               (1, "L", 12, 71, 82, 1, "L", "OIS"), (1, "L", 12, 84, 95, 1, "L", "ICAP"), (1, "L", 12, 97, 109, 1, "K", ""),
+               (45, "M", 3, 46, 58, 0, "L", "bid"), (45, "M", 3, 46, 58, 6, "R", "ask"), (60, "M", 3, 61, 68, 0, "L", ""))
+#: where each kind of contract's codes stand: (row, first column, how many, the row of its last trading day)
+VIOP_CODE_ROWS = ((1, "L", 12, 5), (45, "M", 3, 46), (60, "M", 3, 61))
+VIOP_ROW_NAMES = {2: "kalan gün", 3: "kalan yıl", 5: "son işlem günü"}
 #: the desk strip
 MASA = {"usdtry_bid": ("USDTRY bid", "MASA!F2", "fx", 1.0), "usdtry_ask": ("USDTRY ask", "MASA!G2", "fx", 1.0),
         "usdtry_mid": ("USDTRY mid", "MASA!H2", "fx", 1.0), "tlref": ("TLREF", "MASA!J2", "pct", 100.0),
@@ -294,7 +317,8 @@ class Watch(object):
     # ================================================================== subjects
     @staticmethod
     def key(subject: Dict[str, Any]) -> str:
-        """The same subject is the same key (a VİOP contract by its ticker or its place in the table)."""
+        """The same subject is the same key (a VİOP contract by its ticker or its place in the table; how a cell is read
+        is no part of it)."""
         k = subject.get("kind")
         if k == "cell":
             return "cell|%s|%s" % (subject.get("book") or "tto", subject.get("ref"))
@@ -302,8 +326,14 @@ class Watch(object):
             return "meeting|%s|%s|%s" % (subject.get("cal"), subject.get("date"), subject.get("col"))
         if k == "expr":
             return "expr|%s" % " ".join(str(subject.get("text") or "").split())
-        parts = [k] + ["%s=%s" % (f, subject.get(f)) for f in sorted(subject) if f not in ("kind",)]
+        parts = [k] + ["%s=%s" % (f, subject.get(f)) for f in sorted(subject) if f not in ("kind", "show")]
         return "|".join(str(p) for p in parts)
+
+    @staticmethod
+    def cellish(subject: Dict[str, Any]) -> bool:
+        """A subject read as a cell is (a cell, or a cell of a bond's / a VİOP contract's / a meeting's): its unit can be
+        chosen."""
+        return subject.get("kind") == "cell" or bool(subject.get("col") or subject.get("row"))
 
     def _book(self, book_id: str = "tto"):
         book = self.svc.books.get(book_id)
@@ -326,9 +356,9 @@ class Watch(object):
             self.calcs: Dict[str, Any] = {}
             self.uk = user_key(user) if user else None
             self._omask: Dict[str, int] = {}
-            self._rows: Optional[Dict[str, int]] = None
+            self._lists: Dict[Tuple[str, str, str, int, int], Dict[str, int]] = {}
             self._viop: Optional[Dict[str, int]] = None
-            self._uni: Optional[Dict[str, int]] = None
+            self._codes: Optional[Dict[str, Tuple[int, int]]] = None
             self._meet: Dict[str, Dict[str, int]] = {}
             self.names: Optional[Dict[str, Dict[str, Any]]] = None
 
@@ -373,32 +403,44 @@ class Watch(object):
             si, rc = book.cell(ref)
             return self.calc(book_id).get(si, *divmod(rc, COLS))
 
-        def rows(self) -> Dict[str, int]:
-            """ISIN -> its row in the trading list (DİBS RV A5:A54)."""
-            if self._rows is None:
-                self._rows = {}
-                for r in range(5, 55):
+        def listed(self, book_id: str, sheet: str, col: str, first: int, last: int) -> Dict[str, int]:
+            """ISIN -> its row in a list of bonds (the first one, when it is there twice)."""
+            key = (book_id, sheet, col, first, last)
+            got = self._lists.get(key)
+            if got is None:
+                got = self._lists[key] = {}
+                where = "'%s'" % sheet if " " in sheet else sheet
+                for r in range(first, last + 1):
                     try:
-                        v = self.get("%s!A%d" % (RV, r))
+                        v = self.get("%s!%s%d" % (where, col, r), book_id)
                     except (KeyError, ValueError):
                         break
                     if isinstance(v, str) and v.strip():
-                        self._rows.setdefault("".join(v.split()).upper(), r)
-            return self._rows
+                        got.setdefault("".join(v.split()).upper(), r)
+            return got
+
+        def rows(self) -> Dict[str, int]:
+            """ISIN -> its row in the trading list (DİBS RV A5:A54)."""
+            return self.listed("tto", RV, "A", 5, 54)
 
         def universe(self) -> Dict[str, int]:
             """ISIN -> its row on Tüm Kâğıtlar (prices of a bond that is not on the trading list)."""
-            if self._uni is None:
-                self._uni = {}
-                from . import extras as ex
-                for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1):
-                    try:
-                        v = self.get("%s!A%d" % (ex.UNI_SHEET, r))
-                    except (KeyError, ValueError):
-                        break
-                    if isinstance(v, str) and v.strip():
-                        self._uni.setdefault("".join(v.split()).upper(), r)
-            return self._uni
+            return self.listed("tto", ex.UNI_SHEET, "A", ex.UNI_FIRST, ex.UNI_LAST)
+
+        def codes(self) -> Dict[str, Tuple[int, int]]:
+            """A VİOP contract's code (upper case) -> (the row, the column) it stands in: USDTRY, gold-TRY, gold-USD."""
+            if self._codes is None:
+                self._codes = {}
+                for row, first, n, _ in VIOP_CODE_ROWS:
+                    c0 = col_to_index(first)
+                    for k in range(n):
+                        try:
+                            t = self.get("VIOP!%s%d" % (index_to_col(c0 + k), row))
+                        except (KeyError, ValueError):
+                            break
+                        if isinstance(t, str) and t.strip():
+                            self._codes.setdefault(" ".join(t.split()).upper(), (row, c0 + k))
+            return self._codes
 
         def viop(self) -> Dict[str, int]:
             """Ticker -> the column (index) of its numbers; position "1".."12" too."""
@@ -475,6 +517,14 @@ class Watch(object):
             if k == "masa":
                 _, ref, show, scale = MASA[subject["key"]]
                 return num(rd.get(ref), scale), show, ""
+            if k in ("bond", "viop") and (subject.get("col") or subject.get("row")):
+                at = self._cell_of(subject, rd)          # (a cell of a bond's / a contract's: where it is now)
+                if at is None:
+                    return None, subject.get("show") or "raw", ""
+                cell = {"kind": "cell", "book": at[0], "ref": at[1]}
+                if subject.get("show"):
+                    cell["show"] = subject["show"]
+                return self.resolve(cell, rd)
             if k == "viop":
                 ticker = " ".join(str(subject.get("ticker") or "").split()).upper()
                 cols = rd.viop()
@@ -506,6 +556,35 @@ class Watch(object):
         except (KeyError, ValueError, IndexError):
             return None, subject.get("show") or "raw", ""
         return None, "raw", ""
+
+    def _cell_of(self, subject: Dict[str, Any], rd: "Watch._Reader") -> Optional[Tuple[str, str]]:
+        """(book, cell) a cell of a bond's or a VİOP contract's is now - None: the bond is not in its table any more, or
+        the contract has gone (expired)."""
+        if subject.get("kind") == "bond":
+            sheet = subject["sheet"]
+            t = BOND_TABLES[sheet]
+            r = rd.listed(t[0], t[1], t[2], t[3], t[4]).get("".join(str(subject.get("isin") or "").split()).upper())
+            return None if r is None else (t[0], "%s!%s%d" % (sheet, subject["col"], r))
+        at = rd.codes().get(" ".join(str(subject.get("ticker") or "").split()).upper())
+        if at is None:
+            return None
+        return "tto", "VIOP!%s%d" % (index_to_col(at[1] + int(subject.get("dx") or 0)), int(subject["row"]))
+
+    def _caption(self, subject: Dict[str, Any]) -> str:
+        """The name of the column (a bond's cell) or of the row (a contract's cell) as its table writes it."""
+        try:
+            if subject.get("kind") == "bond":
+                t = BOND_TABLES[subject["sheet"]]
+                v = self._book(t[0]).model.sheet(subject["sheet"]).consts.get(parse_a1("%s%d" % (subject["col"], t[7])))
+                head = " ".join(v.split()) if isinstance(v, str) and v.strip() else "%s %s" % (subject["sheet"], subject["col"])
+                return head + t[8]
+            row, dx = int(subject["row"]), int(subject.get("dx") or 0)
+            tab = next((x for x in VIOP_TABLES if x[3] <= row <= x[4] and x[5] == dx), None)
+            v = self._book("tto").model.sheet("VIOP").consts.get(parse_a1("%s%d" % (tab[6], row))) if tab and tab[6] else None
+            head = " ".join(v.split()) if isinstance(v, str) and v.strip() else VIOP_ROW_NAMES.get(row, "satır %d" % row)
+            return head + (" (%s)" % tab[7] if tab and tab[7] else "")
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return ""
 
     def _leaf_subject(self, kind: str, text: str, rd: "Watch._Reader") -> Dict[str, Any]:
         """What a name in brackets or a cell reference of an expression stands for."""
@@ -609,12 +688,16 @@ class Watch(object):
             return "Offshore %s%s" % (subject.get("tenor"), "" if side == "mid" else " " + side)
         if k == "masa":
             return MASA[subject["key"]][0]
+        if k == "viop" and subject.get("row"):
+            who = re.sub(r"\s+(Curncy|Comdty)$", "", str(subject.get("ticker") or ""), flags=re.I)
+            return "VİOP %s %s" % (who, self._caption(subject))
         if k == "viop":
             who = str(subject.get("ticker") or "").replace(" Curncy", "").replace(" CURNCY", "") or "%s. kontrat" % subject.get("position")
             return "VİOP %s %s" % (who, VIOP_METRICS[subject["metric"]][0])
         if k == "bond":
             b = bd.by_isin(subject.get("isin") or "")
-            return "%s %s" % (bd.short_label(b) if b else subject.get("isin"), BOND_METRICS[subject["metric"]][0])
+            what = self._caption(subject) if subject.get("col") else BOND_METRICS[subject["metric"]][0]
+            return "%s %s" % (bd.short_label(b) if b else subject.get("isin"), what)
         if k == "expr":
             return " ".join(str(subject.get("text") or "").split())[:60]
         if k == "meeting":
@@ -674,6 +757,18 @@ class Watch(object):
         value (a bond off the trading list, a contract gone, an expression that no longer reads)."""
         k = subject.get("kind")
         try:
+            if k in ("bond", "viop") and (subject.get("col") or subject.get("row")):
+                at = self._cell_of(subject, rd)
+                if k == "bond":
+                    if at is None:
+                        return "%s %s listesinde değil" % (subject.get("isin"), BOND_LIST_NAMES.get(subject.get("sheet"), ""))
+                    return "%s · %s" % (subject.get("isin"), at[1])
+                if at is None:
+                    return "kontrat VİOP tablosunda yok (vadesi geçmiş olabilir)"
+                code = rd.codes().get(" ".join(str(subject.get("ticker") or "").split()).upper())
+                due_row = next((x[3] for x in VIOP_CODE_ROWS if x[0] == code[0]), None)
+                due = date_text(rd.at(code[1], due_row)) if due_row else ""
+                return "vade %s" % due if due else ""
             if k == "viop":
                 cols = rd.viop()
                 ticker = " ".join(str(subject.get("ticker") or "").split()).upper()
@@ -718,8 +813,8 @@ class Watch(object):
             out.update(book=book.id, ref=book.ref(si, rc))
             anchored = self.anchor(book.id, out["ref"])
             if anchored is not None:
-                if anchored["kind"] == "meeting" and subject.get("show") in SHOWS:
-                    anchored["show"] = subject["show"]               # (as the cell was asked to be shown)
+                if self.cellish(anchored) and subject.get("show") in SHOWS:
+                    anchored["show"] = subject["show"]        # (read as the cell is: its unit, as chosen)
                 return self.check(anchored)
         elif k == "meeting":
             from . import meetings as mt
@@ -734,9 +829,30 @@ class Watch(object):
             col = str(subject.get("col") or "").upper()
             if col not in cal.columns():
                 raise ValueError("toplantı satırında böyle bir sütun yok: %s" % col)
-            out.update(cal=cal.id, date=day, col=col)
-            if subject.get("show") in SHOWS:
-                out["show"] = subject["show"]
+            out.update(cal=cal.id, date=day, col=col)              # (read as a cell is: its unit kept below)
+        elif k == "viop" and subject.get("row") is not None:
+            try:
+                row, dx = int(subject.get("row")), int(subject.get("dx") or 0)
+            except (TypeError, ValueError):
+                raise ValueError("VİOP satırı yok: %s" % subject.get("row"))
+            if not any(t[3] <= row <= t[4] and t[5] == dx for t in VIOP_TABLES):
+                raise ValueError("VİOP satırı yok: %s" % row)
+            ticker = " ".join(str(subject.get("ticker") or "").split())
+            if not ticker:
+                raise ValueError("VİOP kontratı seçilmedi")
+            out.update(ticker=ticker, row=row, dx=dx)
+        elif k == "bond" and subject.get("col"):
+            from . import bonds as bd
+            isin = "".join(str(subject.get("isin") or "").split()).upper()
+            if not bd.isin_valid(isin):
+                raise ValueError("ISIN değil: %s" % isin)
+            t = BOND_TABLES.get(str(subject.get("sheet") or ""))
+            col = str(subject.get("col") or "").upper()
+            if t is None or not re.match(r"^[A-Z]{1,3}$", col) or not t[5] <= col_to_index(col) <= t[6]:
+                raise ValueError("kâğıt tablosunda böyle bir sütun yok: %s %s" % (subject.get("sheet"), subject.get("col")))
+            out.update(isin=isin, sheet=subject["sheet"], col=col)
+            if t[0] != "tto":
+                out["book"] = t[0]
         elif k == "ois":
             t = str(subject.get("tenor") or "").upper()
             if t not in OIS_ROWS and t not in OIS_EXTRA:
@@ -787,43 +903,66 @@ class Watch(object):
             out["text"] = text
         else:
             raise ValueError("bilinmeyen tür: %s" % k)
-        if k == "cell" and subject.get("show") in SHOWS:
+        if self.cellish(out) and subject.get("show") in SHOWS:
             out["show"] = subject["show"]
         return out
 
-    def anchor(self, book_id: str, ref: str, rd: Optional["Watch._Reader"] = None) -> Optional[Dict[str, Any]]:
-        """A cell of a table that names something: the thing, not the cell (a bond's row of DİBS RV follows the
-        bond when the list changes; a VİOP column the contract when they roll; an OIS row its tenor; a meeting's row
-        its meeting, by its date)."""
+    def anchor(self, book_id: str, ref: str, rd: Optional["Watch._Reader"] = None,
+               metrics: bool = True) -> Optional[Dict[str, Any]]:
+        """A cell of a table that names something: the thing, not the cell - a meeting's row its meeting, by its date;
+        any cell of a bond's row (DİBS RV, DİBS Trading, Tüm Kâğıtlar, DİBS ASW) follows the bond when the list changes,
+        any cell of a VİOP contract's column the contract when they roll, an OIS row its tenor.  A bond's or a contract's
+        measure the watch knows by name (ASW, OIS − VİOP ...) is taken as that; ``metrics`` False: every cell as the cell
+        is read (its own unit) - the subjects kept as cells by an earlier version, anchored (:meth:`anchor_kept`)."""
         if "!" not in ref:
             return None
         rd = rd or self._Reader(self, None)
         meeting = self._meeting_anchor(book_id, ref, rd)
         if meeting is not None:
             return meeting
-        if book_id != "tto":
-            return None
         sheet, addr = ref.rsplit("!", 1)
         sheet = sheet.strip("'")
-        rc = parse_a1(addr.replace("$", ""))
+        try:
+            rc = parse_a1(addr.replace("$", ""))
+        except (ValueError, IndexError):
+            return None
         r, c = divmod(rc, COLS)
-        col = addr.rstrip("0123456789").replace("$", "")
-        if sheet in (RV, "EK_DIBS") and 5 <= r <= 54:
-            isin = rd.get("%s!A%d" % ("'%s'" % sheet if " " in sheet else sheet, r))
-            metric = next((m for m, x in BOND_METRICS.items() if x[1] == sheet and x[2] == col), None)
-            if isinstance(isin, str) and isin.strip() and metric:
-                return {"kind": "bond", "isin": "".join(isin.split()).upper(), "metric": metric}
-        if sheet == "EK_EVREN" and r >= 6 and col in ("N", "O"):              # Tüm Kâğıtlar: DİBS RV's yield, ASW
-            isin = rd.get("EK_EVREN!A%d" % r)
-            if isinstance(isin, str) and isin.strip():
-                return {"kind": "bond", "isin": "".join(isin.split()).upper(), "metric": "yield" if col == "N" else "asw"}
+        col = addr.rstrip("0123456789").replace("$", "").upper()
+        t = BOND_TABLES.get(sheet)
+        if t is not None and t[0] == book_id and t[3] <= r <= t[4] and t[5] <= c <= t[6]:
+            isin = rd.get("%s!%s%d" % ("'%s'" % t[1] if " " in t[1] else t[1], t[2], r), t[0])
+            if not (isinstance(isin, str) and isin.strip()):
+                return None                                    # (a row with no bond: the cell is a cell)
+            isin = "".join(isin.split()).upper()
+            if metrics:
+                metric = next((m for m, x in BOND_METRICS.items() if x[1] == sheet and x[2] == col), None)
+                if sheet == ex.UNI_SHEET and col in ("N", "O"):          # Tüm Kâğıtlar: DİBS RV's yield, ASW
+                    metric = "yield" if col == "N" else "asw"
+                if metric:
+                    return {"kind": "bond", "isin": isin, "metric": metric}
+            out = {"kind": "bond", "isin": isin, "sheet": sheet, "col": col}
+            if t[0] != "tto":
+                out["book"] = t[0]
+            return out
+        if book_id != "tto":
+            return None
         if sheet == "VIOP":
             metric = next((m for m, x in VIOP_METRICS.items() if not isinstance(x[1], tuple) and x[1] == r), None)
             ticker_col = c - 1
-            if metric and 0 <= ticker_col - parse_a1("L1") % COLS < len(VIOP_TICKERS):
-                t = rd.get("VIOP!%s1" % VIOP_TICKERS[ticker_col - parse_a1("L1") % COLS])
-                if isinstance(t, str) and t.strip():
-                    return {"kind": "viop", "ticker": " ".join(t.split()), "metric": metric}
+            if metrics and metric and 0 <= ticker_col - parse_a1("L1") % COLS < len(VIOP_TICKERS):
+                t1 = rd.get("VIOP!%s1" % VIOP_TICKERS[ticker_col - parse_a1("L1") % COLS])
+                if isinstance(t1, str) and t1.strip():
+                    return {"kind": "viop", "ticker": " ".join(t1.split()), "metric": metric}
+            for row, first, n, r1, r2, dx, _, _ in VIOP_TABLES:
+                k = c - col_to_index(first) - dx
+                if r1 <= r <= r2 and 0 <= k < n:
+                    code = rd.get("VIOP!%s%d" % (index_to_col(col_to_index(first) + k), row))
+                    if isinstance(code, str) and code.strip():
+                        return {"kind": "viop", "ticker": " ".join(code.split()), "row": r, "dx": dx}
+                    return None
+            return None
+        if not metrics:
+            return None                                        # (an OIS tenor's, an offshore row's cell never moves)
         if sheet == "OIS_MAIN" and col == "B":
             tenor = next((t for t, row in OIS_ROWS.items() if row == r), None)
             if tenor:
@@ -866,7 +1005,7 @@ class Watch(object):
         s = self.check(subject)
         rd = self._Reader(self, user)
         v, show, text = self.resolve(s, rd)
-        name = "%s %s" % (s["isin"], BOND_METRICS[s["metric"]][0]) if s["kind"] == "bond" else self.label(s)
+        name = "%s %s" % (s["isin"], BOND_METRICS[s["metric"]][0]) if s["kind"] == "bond" and s.get("metric") else self.label(s)
         unit_name, k = SHOWS.get(show, SHOWS["raw"])
         zs = {}
         for n in Z_DAYS:
@@ -1359,6 +1498,76 @@ class Watch(object):
         store.put(self.MEETINGS_ANCHORED, _now().replace(microsecond=0).isoformat(sep=" "))
         return n
 
+    #: the store's mark that the items and alarms kept as cells were anchored once
+    ANCHORED = "migrated.watch_anchor"
+
+    def anchor_kept(self) -> int:
+        """Once (``migrated.watch_anchor``), as the service starts: the items and alarms kept as a cell of a table that
+        names a bond or a VİOP contract - an earlier version's, or one taken before every row of these tables was
+        anchored (a VİOP row other than the named measures, a DİBS RV column, Tüm Kâğıtlar's prices) - anchored to what
+        the cell shows now (the bond in its row, the contract of its column), read as the cell is read (its unit, the
+        alarm's level as typed); the closes kept of it and the day's opens go under the new name.  A cell of a meeting's
+        row is :meth:`anchor_meetings_once`'s (its own mark; its closes held other meetings before a roll).  Returns how
+        many."""
+        store = self.svc.store
+        if store.get(self.ANCHORED):
+            return 0
+        rd = self._Reader(self, None)
+        renamed: Dict[str, Dict[str, Any]] = {}
+
+        def anchored(subject: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if subject.get("kind") != "cell":
+                return None
+            new = self.anchor(subject.get("book") or "tto", str(subject.get("ref") or ""), rd, metrics=False)
+            if new is None or new["kind"] not in ("bond", "viop"):
+                return None
+            if subject.get("show") in SHOWS:
+                new["show"] = subject["show"]
+            renamed[self.key(subject)] = new
+            return new
+
+        n = 0
+        with self._lock:
+            items = self._items_all()
+            for user, kept in items.items():
+                seen, out = set(), []
+                for i in kept:
+                    new = anchored(i["subject"])
+                    if new is not None:
+                        i = dict(i, subject=new)
+                        n += 1
+                    if self.key(i["subject"]) not in seen:          # (two that are one now: the first stays)
+                        seen.add(self.key(i["subject"]))
+                        out.append(i)
+                items[user] = out
+            alarms = self.alarms()
+            for a in alarms:
+                new = anchored(a["subject"])
+                if new is not None:
+                    a["subject"] = new
+                    n += 1
+            if n:
+                store.put("watch.items", items)
+                self._put_alarms(alarms)
+        if renamed:
+            old = store.closes(list(renamed))
+            new_keys = {k: self.key(s) for k, s in renamed.items()}
+            have = store.closes(list(set(new_keys.values())))
+            store.close_upsert([(new_keys[k], day, v) for k, days in old.items() for day, v in days.items()
+                                if day not in have.get(new_keys[k], {})])
+            today = "watch.open:%s" % self.svc.today_iso()
+            opened = store.get(today, {})
+            if isinstance(opened, dict) and opened:
+                more = {}
+                for name, v in opened.items():
+                    user, _, key = name.partition("#")
+                    if key in new_keys and "%s#%s" % (user, new_keys[key]) not in opened:
+                        more["%s#%s" % (user, new_keys[key])] = v
+                if more:
+                    store.put(today, dict(opened, **more))
+        store.put(self.ANCHORED, _now().strftime("%Y-%m-%d %H:%M:%S"))
+        return n
+
     def fired(self, day: Optional[str] = None) -> List[Dict[str, Any]]:
         v = self.svc.store.get("watch.fired:%s" % (day or self.svc.today_iso()), [])
         return v if isinstance(v, list) else []
@@ -1406,7 +1615,7 @@ class Watch(object):
             raise KeyError(item_id)
         if label is not None and label.strip():
             items[k]["label"] = label.strip()[:60]
-        if unit is not None and unit in SHOWS and items[k]["subject"].get("kind") == "cell":
+        if unit is not None and unit in SHOWS and self.cellish(items[k]["subject"]):
             items[k]["subject"] = dict(items[k]["subject"], show=unit)        # (a cell does not say what it holds)
         if move:
             j = max(0, min(len(items) - 1, k + int(move)))

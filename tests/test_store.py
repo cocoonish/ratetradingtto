@@ -236,6 +236,47 @@ def test_a_write_that_fails_half_way_leaves_nothing_behind(store):
     assert store.trades("2026-11-14") == [] and not store._db.in_transaction
 
 
+def test_values_follow_what_their_row_is_about_in_one_transaction(store):
+    """``move_values`` (the lists of bonds, ``tto/rowkeys.py``): every user's values, the desk's and the saved scenarios'
+    of the rows that changed go to their new cell or go; a value moved onto a cell that holds one does not replace it; a
+    formula does not move; the key cells written and the list kept with them - all of it, or (a write refused half way)
+    none of it."""
+    import json
+    told = []
+    store.on_inputs = lambda user, formulas: told.append((user, formulas))
+    store.set_user_inputs("ali", "tto", {"DİBS RV!N8": 98.5, "DİBS RV!H8": 2.0, "DİBS RV!N9": 99.0, "MASA!C60": 1.0},
+                          {"DİBS RV!H8": "=1+1"})
+    store.set_user_inputs("veli", "tto", {"DİBS RV!AL8": 40.0, "DİBS RV!AL29": 41.0})
+    store.set_shared_inputs("tto", {"DİBS RV!A8": "X", "DİBS RV!B8": "ISL0"}, "masa")
+    store.save_scenario("ali", "S", {("tto", "DİBS RV!N8"): 97.0, ("tto", "DİBS RV!N9"): 96.0, ("tto", "MASA!C60"): 1.0},
+                        {("tto", "DİBS RV!N8"): "=97"})
+    moves = {"DİBS RV!N8": "DİBS RV!N29", "DİBS RV!H8": "DİBS RV!H29", "DİBS RV!AL8": "DİBS RV!AL29",
+             "DİBS RV!B8": "DİBS RV!B29", "DİBS RV!N9": None}
+    res = store.move_values("tto", lambda c: moves.get(c, False), keys={"DİBS RV!A29": "X", "DİBS RV!A8": None},
+                            by="masa", put=[("rowkeys.deneme", {"29": "X"})])
+    assert set(res["moved"]) == {("ali", "DİBS RV!H8", "DİBS RV!H29", 2.0), ("ali", "DİBS RV!N8", "DİBS RV!N29", 98.5),
+                                 (None, "DİBS RV!B8", "DİBS RV!B29", "ISL0")}
+    assert set(res["dropped"]) == {("ali", "DİBS RV!N9"), ("veli", "DİBS RV!AL8")}          # (veli's AL29 stays)
+    assert (res["scenarios"], res["scenario_moved"], res["scenario_dropped"]) == (1, 1, 1)
+    assert store.user_inputs("ali", "tto") == {("tto", "DİBS RV!N29"): 98.5, ("tto", "DİBS RV!H29"): 2.0, ("tto", "MASA!C60"): 1.0}
+    assert store.user_formulas("ali") == {}                                                  # (a value moves, not a formula)
+    assert store.user_inputs("veli", "tto") == {("tto", "DİBS RV!AL29"): 41.0}
+    assert store.shared_inputs("tto") == {("tto", "DİBS RV!A8"): None, ("tto", "DİBS RV!A29"): "X", ("tto", "DİBS RV!B29"): "ISL0"}
+    assert store.shared_meta("tto", ["DİBS RV!A29"])["updated_by"] == "masa"
+    assert store.scenario("ali", "S") == ({("tto", "DİBS RV!N29"): 97.0, ("tto", "MASA!C60"): 1.0}, {})
+    assert store.get("rowkeys.deneme") == {"29": "X"} and ("*", True) in told
+    # a write refused half way (a full disk): nothing moved, nothing written, the list not kept
+    before = (store.user_inputs("ali"), store.shared_inputs(), store._q("SELECT payload FROM scenarios")[0]["payload"])
+    _refuse(store, "user_inputs", "NEW.cell = 'DİBS RV!N8'", "INSERT")
+    with pytest.raises(sqlite3.DatabaseError):
+        store.move_values("tto", lambda c: {"DİBS RV!N29": "DİBS RV!N8", "DİBS RV!H29": "DİBS RV!H8",
+                                            "DİBS RV!B29": "DİBS RV!B8"}.get(c, False),
+                          keys={"DİBS RV!A8": "X", "DİBS RV!A29": None}, put=[("rowkeys.deneme", {"8": "X"})])
+    assert (store.user_inputs("ali"), store.shared_inputs(), store._q("SELECT payload FROM scenarios")[0]["payload"]) == before
+    assert store.get("rowkeys.deneme") == {"29": "X"} and not store._db.in_transaction
+    assert json.loads(before[2])                                                             # (a scenario's payload as kept)
+
+
 def test_every_commit_is_on_the_disk(store):
     assert store._q("PRAGMA synchronous")[0][0] == 2                 # FULL
     assert store._q("PRAGMA journal_mode")[0][0] == "wal"

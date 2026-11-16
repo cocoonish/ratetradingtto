@@ -244,6 +244,11 @@ class Service(object):
             self.et.call(self.watch.anchor_meetings_once)
         except Exception as exc:  # noqa: BLE001 - the start goes on (tried again at the next one)
             self.ops.failure("izleme: toplantı satırları", exc)
+        try:
+            # (once: items and alarms kept as cells of a bond's row or a VİOP contract's column follow that, not the cell)
+            self.et.call(self.watch.anchor_kept)
+        except Exception as exc:  # noqa: BLE001 - tried again at the next start; the dashboard opens anyway
+            self.ops.failure("izleme listelerinin kâğıda / kontrata bağlanması", exc)
         # Spot / FX and FX vol: the option market's quotes of a pair, its smile and distribution, the vol monitor
         from .fx import Fx
         self.fx = Fx(self)
@@ -359,14 +364,26 @@ class Service(object):
                 self.store.put("migrated.empty_defaults", now_iso())
         for book in self.books.values():
             self._drop_file_copies(book)
-        # Tüm Kâğıtlar: the desk's list of bonds (the bonds typed into the page's old own rows join it - once)
+        # Tüm Kâğıtlar: the desk's list of bonds (the bonds typed into the page's old own rows join it - once); each
+        # bond keeps its row, across restarts too (UNI_KEPT)
         self._desk_lock = threading.Lock()
-        self._uni_rows: Dict[str, int] = {}
+        kept = self.store.get(self.UNI_KEPT)
+        self._uni_kept = isinstance(kept, dict)
+        kept = kept if isinstance(kept, dict) else {}
+        self._uni_rows: Dict[str, int] = {str(k): int(v) for k, v in (kept.get("rows") or {}).items()
+                                          if isinstance(v, int) and not isinstance(v, bool)}
+        self._uni_freed: Dict[int, str] = {int(k): str(v) for k, v in (kept.get("freed") or {}).items() if str(k).isdigit()}
+        self._uni_note: Optional[Dict[str, Any]] = None
         self._uni_written: Dict[Tuple[int, int], Any] = {}
         self._uni_day: Optional[_dt.date] = None  # the day the rows were written for (past maturity: off the next day)
         self._uni_tried = time.time()            # the kinds Bloomberg has not told: asked again in BOND_RETRY
         self._migrate_own_bonds()
         bd.set_desk(self._desk_now(), owner=self)
+        # what the rows of the lists of bonds hold goes with their bonds (rowkeys.py): a list found changed since the
+        # values were last put right moves them now - before the engine has the desk's values
+        from .rowkeys import RowKeys
+        self.rowkeys = RowKeys(self)
+        self.rowkeys.start()
         # shared inputs saved earlier (RET curve, calendars ...)
         for (bid, ref), val in self.store.shared_inputs().items():
             book = self.books.get(bid)
@@ -382,6 +399,7 @@ class Service(object):
         self._declare_saved_cells()
         self._private_users = set(self.store.users_with_inputs())
         self._sync_universe()
+        self.rowkeys.roll()                      # (VİOP's gold contracts: changed while the dashboard was off?)
         self._sync_blotter()                     # (may compute: a meeting-dated OIS of the day is priced)
 
     def _declare_saved_cells(self) -> None:
@@ -734,6 +752,10 @@ class Service(object):
                     self.bump()                    # a new day: the bonds past their maturity leave Tüm Kâğıtlar
                 if bd.pending() and time.time() - self._uni_tried >= self.BOND_RETRY:
                     self._classify_pending()
+                if self.rowkeys.roll_due():        # a new day, a gold code typed: VİOP's gold contracts changed?
+                    rolled = self.et.submit(self.rowkeys.roll).result(timeout=60)
+                    if rolled and (rolled["dropped"] or rolled["scenarios"]):
+                        self.bump()
             except Exception:  # noqa: BLE001
                 pass
             if pending is not None and not pending.done():
@@ -2493,6 +2515,9 @@ class Service(object):
             slot_to, typed_to = calendar.pop("slot_to", {}), calendar.pop("typed_to", {})
             user_vals, user_clear, shared_vals, shared_clear = (
                 self._follow_meetings(book, cal, slot_to, typed_to, x) for x in (user_vals, user_clear, shared_vals, shared_clear))
+        # ISINs of a list of bonds written: what each row held goes with its bond first (rowkeys.py) - the values written
+        # with them land on the rows as typed
+        row_values = self.rowkeys.before_write(user, book, shared_vals, shared_clear, user_vals, user_clear)
         if shared_clear:
             book.engine.clear_inputs(shared_clear)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in shared_clear])
@@ -2527,6 +2552,8 @@ class Service(object):
             res["calendar"] = calendar
             if calendar.get("note"):
                 res["note"] = calendar["note"]         # (what the change did, as the page's toast says it)
+        if row_values:
+            res["row_values"] = row_values
         if lenient:
             res["skipped"] = skipped
         return res
@@ -2673,11 +2700,13 @@ class Service(object):
                 raise ServiceError("toplantı tarihleri dosyadaki değere döndürülmez – listeyi %s üzerinden düzeltin "
                                    "(toplantıya yazılanlar toplantısıyla taşınır)" % cal.where)
             keep = [c for c in cells if c in book.inputs and book.inputs[c].scope == "shared"]
+            rows = self.rowkeys.before_write(user, book, {}, keep, {}, [])     # (a list of bonds back to the file's)
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
             self.formulas.cleared("", book, keep)        # (a formula there goes with its value)
             n = len(keep)
         else:
+            rows = self.rowkeys.before_write(user, book, {}, [], {}, cells if refs else list(self._overlay(user, book)))
             ov = dict(self._overlay(user, book))
             targets = cells if refs else list(ov.keys())
             for k in targets:
@@ -2692,7 +2721,7 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id)
             self.formulas.cleared(user, book, targets if refs else None)
             self._note_private(user)
-        return {"reset": n}
+        return dict({"reset": n}, **({"row_values": rows} if rows else {}))
 
     def my_inputs(self, user: str) -> Dict[str, Any]:
         """The user's personal inputs: ``{"inputs": [{"book", "ref", "value", "label", "formula"?}]}`` - an input typed as
@@ -2740,6 +2769,8 @@ class Service(object):
         values, formulas = got
         self.store.replace_user_inputs(user, values, formulas)      # (its formulas evaluated again over what is there now)
         self.et.call_at(EngineThread.WRITE, self._reload_user, user)
+        # (the user's own list of bonds is the scenario's, with its rows' values: nothing moves - rowkeys.py)
+        self.et.call_at(EngineThread.WRITE, self.rowkeys.loaded, user)
         self.bump()
         return {"loaded": name, "cells": len(values), "gen": self.gen}
 
@@ -3636,58 +3667,57 @@ class Service(object):
         res = self.set_inputs(user, book_id, items) if items else {"applied": 0, "errors": []}
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        return {"added": todo, "skipped": skipped, "cells": [i["ref"] for i in items], "free": len(free) - len(todo), "gen": self.gen}
+        out = {"added": todo, "skipped": skipped, "cells": [i["ref"] for i in items], "free": len(free) - len(todo), "gen": self.gen}
+        if res.get("row_values"):
+            out["row_values"] = res["row_values"]                # (values left on a row with no bond: gone - rowkeys.py)
+        return out
 
     #: the trading list: the bonds of DİBS RV (and so of DİBS Trading)
     TRADING_LIST = ("tto", "DİBS RV!A5:A54")
-    #: what goes with a bond's row of the trading list and is cleared when the bond leaves it: its source
-    #: (the desk's) and each user's known coupon, manual clean price and repo
-    _ROW_SHARED, _ROW_PERSONAL = ("B",), ("H", "N", "AL")
-    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: ★ / ☆ there too.  What goes
-    #: with its row: the source (the desk's), each user's manual clean price and curve flag
+    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: ★ / ☆ there too
     ASW_LIST = ("asw", "ASW!B7:B56")
-    _ASW_ROW_SHARED, _ASW_ROW_PERSONAL = ("C",), ("D", "E")
 
-    def _list_off(self, user: str, book_id: str, ref: str, code: str, shared: Tuple[str, ...], personal: Tuple[str, ...]) -> int:
-        """A bond off a list of bonds: its rows empty, with what goes with them (``shared``: the desk's columns,
-        ``personal``: every user's).  Returns the rows emptied."""
+    def _list_off(self, user: str, book_id: str, ref: str, code: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+        """A bond off a list of bonds: its rows empty - what they held goes with it, for everyone (its source, everyone's
+        manual price, coupon, repo, "Elle değer", in the saved scenarios too: rowkeys.py).  Returns the rows emptied and
+        what went."""
         book = self._book(book_id)
         cells = book.cells_of(ref)
         current = self._list_values(user, book_id, ref)
-        rows = [cells[k][1] // COLS for k, v in enumerate(current) if v == code]
+        rows = [cells[k] for k, v in enumerate(current) if v == code]
         if not rows:
-            return 0
-        sheet = ref.split("!")[0]
-        col = re.match(r"[A-Z]+", ref.split("!")[1]).group(0)
-        items = [{"ref": "%s!%s%d" % (sheet, c, r), "value": None} for r in rows for c in (col,) + shared]
-        res = self.set_inputs(user, book_id, items)
+            return 0, None
+        res = self.set_inputs(user, book_id, [{"ref": book.ref(*c), "value": None} for c in rows])
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        self.et.call_at(EngineThread.WRITE, self._clear_rows_for_everyone, book, ["%s!%s%d" % (sheet, c, r) for r in rows for c in personal])
-        return len(rows)
+        return len(rows), res.get("row_values")
 
-    def _asw_follows(self, user: str, code: str, on: bool) -> Optional[bool]:
+    def _asw_follows(self, user: str, code: str, on: bool) -> Tuple[Optional[bool], Optional[Dict[str, Any]]]:
         """The ASW workbook's list with the trading list: the bond added (``on``) or taken off there too.  ``None``: no
         ASW list here; False: nothing to do (already listed / not listed, or no room left - the trading list still
-        takes it)."""
+        takes it).  With what moved / went of its rows' values."""
         book_id, ref = self.ASW_LIST
         book = self.books.get(book_id)
         try:
             if book is None or not all(c in book.inputs for c in book.cells_of(ref)):
-                return None
+                return None, None
         except (KeyError, ValueError):
-            return None
+            return None, None
         if on:
             try:
-                return bool(self.list_add(user, book_id, ref, [code])["added"])
+                res = self.list_add(user, book_id, ref, [code])
+                return bool(res["added"]), res.get("row_values")
             except ServiceError:
-                return False
-        return self._list_off(user, book_id, ref, code, self._ASW_ROW_SHARED, self._ASW_ROW_PERSONAL) > 0
+                return False, None
+        removed, rows = self._list_off(user, book_id, ref, code)
+        return removed > 0, rows
 
     def bond_flag(self, user: str, isin: str, on: bool) -> Dict[str, Any]:
         """★ a bond: onto the trading list (below its last bond) or off it - for everyone.  A bond taken off leaves
-        its row empty, with nothing of it left behind (its source, everyone's manual price, coupon, repo)."""
+        its row empty, with nothing of it left behind (its source, everyone's manual price, coupon, repo, "Elle değer" -
+        in the saved scenarios too).  ``row_values``: what of the rows' values moved / went (rowkeys.py)."""
         from . import bonds as bd
+        from .rowkeys import merge_notes
         user = self.require_user(user)
         code = "".join(str(isin or "").split()).upper()
         if not bd.isin_valid(code):
@@ -3695,30 +3725,18 @@ class Service(object):
         book_id, ref = self.TRADING_LIST
         if on:
             res = self.list_add(user, book_id, ref, [code])
-            asw = self._asw_follows(user, code, True)
-            return {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "asw": asw, "gen": self.gen}
-        removed = self._list_off(user, book_id, ref, code, self._ROW_SHARED, self._ROW_PERSONAL)
-        asw = self._asw_follows(user, code, False)
-        self.bump()
-        return {"isin": code, "on": False, "removed": removed, "asw": asw, "gen": self.gen}
-
-    def _clear_rows_for_everyone(self, book, refs: List[str]) -> None:
-        """Every user's personal values of these cells: gone (the bond they were for left its row)."""
-        keys = []
-        for ref in refs:
-            try:
-                keys.append(book.cell(ref))
-            except (KeyError, ValueError):
-                continue
-        for row in self.store.users():
-            name = row["name"]
-            self.store.clear_user_inputs(name, book.id, [book.ref(si, rc) for si, rc in keys])
-            ov = self._overlays.get((name, book.id))
-            if ov and any(k in ov for k in keys):
-                ov = {k: v for k, v in ov.items() if k not in keys}
-                self._overlays[(name, book.id)] = ov
-                book.engine.set_user_inputs(name, ov)
-        self._note_private()
+            asw, rows = self._asw_follows(user, code, True)
+            out = {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "asw": asw, "gen": self.gen}
+            told = merge_notes([x for x in (res.get("row_values"), rows) if x])
+        else:
+            removed, rows = self._list_off(user, book_id, ref, code)
+            asw, asw_rows = self._asw_follows(user, code, False)
+            self.bump()
+            out = {"isin": code, "on": False, "removed": removed, "asw": asw, "gen": self.gen}
+            told = merge_notes([x for x in (rows, asw_rows) if x])
+        if told:
+            out["row_values"] = told
+        return out
 
     def _flag_cell(self, isin: str, listed: bool) -> Dict[str, Any]:
         return {"t": "★" if listed else "☆", "k": "s", "cls": "act flag" + (" on" if listed else ""),
@@ -3786,24 +3804,46 @@ class Service(object):
         mat = date_to_serial(_dt.date.fromisoformat(b["maturity"])) if b.get("maturity") else None
         return [b["isin"], bd.short_label(b), bd.KINDS.get(kind) or "tür bekleniyor", shown, mat, kind]
 
+    #: the store's key of Tüm Kâğıtlar's rows: ``{"rows": {isin: row}, "freed": {row: the day it was left}}`` - a bond
+    #: keeps its row across restarts (an alarm, an "Elle değer", a formula on its row stays its own); a new bond takes a
+    #: row no bond had yet, else the one left longest ago
+    UNI_KEPT = "bonds.rows"
+
     def _sync_universe(self) -> bool:
-        """Tüm Kâğıtlar's rows, one a bond of the desk's list (on the calculation thread): a bond keeps its row, a new
-        one takes the first free row (the kinds in their order, by maturity), a bond gone leaves its row empty.
+        """Tüm Kâğıtlar's rows, one a bond of the desk's list (on the calculation thread): a bond keeps its row - after a
+        restart too -, a new one takes a free row (the kinds in their order, by maturity; a row no bond had first, then
+        the one left longest ago), a bond gone leaves its row empty and what was typed on it goes with it (rowkeys.py).
         True when a cell changed."""
         book = self.books.get("tto")
         if book is None or ex.UNI_SHEET not in book.model.sheet_index:
             return False
         si = book.model.sheet_index[ex.UNI_SHEET]
         self._uni_day = self._bond_day()
+        self._uni_note = None
         listed = bd.listed(self._uni_day)
         want = {b["isin"]: b for b in listed}
-        rows = {isin: r for isin, r in self._uni_rows.items() if isin in want}
+        before = dict(self._uni_rows)
+        rows = {isin: r for isin, r in before.items() if isin in want and ex.UNI_FIRST <= r <= ex.UNI_LAST}
         taken = set(rows.values())
-        free = [r for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1) if r not in taken]
+        freed = {r: d for r, d in self._uni_freed.items() if r not in taken}
+        free = sorted((r for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1) if r not in taken),
+                      key=lambda r: (r in freed, freed.get(r, ""), r))
         order = {k: i for i, (k, _, _) in enumerate(ex.UNI_KINDS)}
         for b in sorted(listed, key=lambda x: (order.get(x.get("kind"), len(order)), x.get("maturity") or "9999", x["isin"])):
             if b["isin"] not in rows and free:
                 rows[b["isin"]] = free.pop(0)
+        day = self._uni_day.isoformat()
+        for isin, r in before.items():
+            if rows.get(isin) != r and r not in rows.values() and ex.UNI_FIRST <= r <= ex.UNI_LAST:
+                freed[r] = day
+        for r in rows.values():
+            freed.pop(r, None)
+        if rows != before or freed != self._uni_freed or not self._uni_kept:
+            if self._uni_kept:
+                self._uni_note = self.rowkeys.universe(book, before, rows)
+            self.store.put(self.UNI_KEPT, {"rows": rows, "freed": {str(r): d for r, d in sorted(freed.items())}})
+            self._uni_kept = True
+        self._uni_freed = freed
         filled = {r: want[isin] for isin, r in rows.items()}
         cells: Dict[Tuple[int, int], Any] = {}
         for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1):
@@ -3941,14 +3981,19 @@ class Service(object):
             raise ServiceError("ISIN değil ya da kontrol hanesi tutmuyor: %s" % (code or "(boş)"))
         if code not in {b["isin"] for b in bd.listed(self._bond_day())}:
             return {"isin": code, "removed": False, "trading": False, "gen": self.gen}
-        trading = self.bond_flag(user, code, False)["removed"] > 0
+        off = self.bond_flag(user, code, False)
         with self._desk_lock:
             desk = self._desk_now()
             desk["removed"][code] = {"by": user, "at": now_iso()}
             self._save_desk(desk)
-        self.et.call(self._sync_universe)
+        uni = self.et.call(lambda: (self._sync_universe(), self._uni_note)[1])
         self.bump()
-        return {"isin": code, "removed": True, "trading": trading, "gen": self.gen}
+        out = {"isin": code, "removed": True, "trading": off["removed"] > 0, "gen": self.gen}
+        from .rowkeys import merge_notes
+        told = merge_notes([x for x in (off.get("row_values"), uni) if x])
+        if told:
+            out["row_values"] = told                     # (what was typed on its rows went with it)
+        return out
 
     def _universe_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """Tüm Kâğıtlar, completed: the bonds kind by kind (a caption row each, a bond whose kind Bloomberg has not told
