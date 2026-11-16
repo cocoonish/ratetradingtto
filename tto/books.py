@@ -18,11 +18,11 @@ MAX_SPILL_COLS = 12
 class InputDef(object):
     """One declared input cell."""
 
-    __slots__ = ("scope", "group", "kind", "label", "options", "view", "aliases")
+    __slots__ = ("scope", "group", "kind", "label", "options", "view", "aliases", "tenor")
 
     def __init__(self, scope: str = "user", group: Optional[str] = None, kind: str = "auto",
                  label: str = "", options: Optional[List[str]] = None, view: str = "",
-                 aliases: Optional[Dict[str, str]] = None):
+                 aliases: Optional[Dict[str, str]] = None, tenor: Optional[Dict[str, str]] = None):
         self.scope = scope            # "user" (personal / scenario) or "shared" (whole desk)
         self.group = group
         self.kind = kind              # auto | number | amount | pct | date | text | list (one of the options only)
@@ -30,6 +30,7 @@ class InputDef(object):
         self.options = options
         self.view = view
         self.aliases = aliases        # words that mean an option ({"Sat": "S"})
+        self.tenor = tenor            # a date typed as a tenor ("1A"): its pair / calendar and start (tto/shortcuts.py)
 
 
 class Book(object):

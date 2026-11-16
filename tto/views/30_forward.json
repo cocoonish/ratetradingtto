@@ -11,7 +11,10 @@
    "scope": "user",
    "group": "forward-0",
    "kind": "date",
-   "label": "'Tarih' — forward value date for all single-date tables (B15–B20, B7–B10, B16, B18)"
+   "label": "'Tarih' — forward value date for all single-date tables (B15–B20, B7–B10, B16, B18)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "W33:W47",
@@ -93,7 +96,10 @@
    "scope": "user",
    "group": "forward-10",
    "kind": "date",
-   "label": "bulk 'Valör' dates"
+   "label": "bulk 'Valör' dates",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "L144:L163",
@@ -107,14 +113,21 @@
    "scope": "user",
    "group": "forward-12",
    "kind": "date",
-   "label": "FSS 'Near valör'"
+   "label": "FSS 'Near valör'",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "C168",
    "scope": "user",
    "group": "forward-13",
    "kind": "date",
-   "label": "FSS 'Far valör'"
+   "label": "FSS 'Far valör'",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "C167"
+   }
   },
   {
    "range": "C169",
@@ -149,14 +162,20 @@
    "scope": "user",
    "group": "forward-18",
    "kind": "date",
-   "label": "ÇAPRAZ preset valörs (formulas 1M, 2M, 3M, 6M, 9M, 12M)"
+   "label": "ÇAPRAZ preset valörs (formulas 1M, 2M, 3M, 6M, 9M, 12M)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "B206:B214",
    "scope": "user",
    "group": "forward-19",
    "kind": "date",
-   "label": "ÇAPRAZ free valörs"
+   "label": "ÇAPRAZ free valörs",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "F200:F214",
@@ -303,21 +322,32 @@
    "scope": "user",
    "group": "forward-30",
    "kind": "date",
-   "label": "start / end date of the day counter (B13)"
+   "label": "start / end date of the day counter (B13)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "E22",
    "scope": "user",
    "group": "forward-30",
    "kind": "date",
-   "label": "start / end date of the day counter (B13)"
+   "label": "start / end date of the day counter (B13)",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "E20"
+   }
   },
   {
    "range": "B25:C27",
    "scope": "user",
    "group": "forward-31",
    "kind": "date",
-   "label": "ad-hoc forward list (B14): Start, End"
+   "label": "ad-hoc forward list (B14): Start, End",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "B"
+   }
   },
   {
    "range": "D25:D27",
@@ -345,7 +375,10 @@
    "scope": "user",
    "group": "forward-32",
    "kind": "date",
-   "label": "XAU leg (B21): End"
+   "label": "XAU leg (B21): End",
+   "tenor": {
+    "from": "C59"
+   }
   },
   {
    "range": "C61",
@@ -373,7 +406,11 @@
    "scope": "user",
    "group": "forward-33",
    "kind": "date",
-   "label": "XARTRY leg (B21): Customer Forward date"
+   "label": "XARTRY leg (B21): Customer Forward date",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "E67"
+   }
   },
   {
    "range": "E63",
@@ -394,7 +431,10 @@
    "scope": "user",
    "group": "forward-33",
    "kind": "date",
-   "label": "XARTRY leg (B21): Customer Start"
+   "label": "XARTRY leg (B21): Customer Start",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "V56",
@@ -429,7 +469,10 @@
    "scope": "user",
    "group": "forward-34",
    "kind": "date",
-   "label": "bond carry (B24): End Date"
+   "label": "bond carry (B24): End Date",
+   "tenor": {
+    "from": "V58"
+   }
   },
   {
    "range": "V73",
@@ -443,7 +486,10 @@
    "scope": "user",
    "group": "forward-35",
    "kind": "date",
-   "label": "forward rate (B25): End Date"
+   "label": "forward rate (B25): End Date",
+   "tenor": {
+    "from": "V73"
+   }
   },
   {
    "range": "V78",
@@ -555,21 +601,31 @@
    "scope": "user",
    "group": "forward-spot",
    "kind": "date",
-   "label": "USDTRY spot valörü (boş = bugünden 1 iş günü sonrası, TRY ve USD tatilleri atlanır; Bloomberg'inki yanında)"
+   "label": "USDTRY spot valörü (boş = bugünden 1 iş günü sonrası, TRY ve USD tatilleri atlanır; Bloomberg'inki yanında)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "K2",
    "scope": "user",
    "group": "forward-spot",
    "kind": "date",
-   "label": "EURTRY spot valörü (boş = bugünden 2 iş günü sonrası, TRY ve EUR tatilleri atlanır; Bloomberg'inki yanında)"
+   "label": "EURTRY spot valörü (boş = bugünden 2 iş günü sonrası, TRY ve EUR tatilleri atlanır; Bloomberg'inki yanında)",
+   "tenor": {
+    "pair": "EURTRY"
+   }
   },
   {
    "range": "AH5:AH6",
    "scope": "user",
    "group": "forward-calc-b7-ah",
    "kind": "date",
-   "label": "'Interest 2 SP' 1st / 2nd date (B7; boş = spot valörü / valör tarihi)"
+   "label": "'Interest 2 SP' 1st / 2nd date (B7; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "AH5"
+   }
   },
   {
    "range": "AH8",
@@ -590,7 +646,11 @@
    "scope": "user",
    "group": "forward-calc-b7-ak",
    "kind": "date",
-   "label": "'Interest 2 SP' 1st / 2nd date (B7; boş = spot valörü / valör tarihi)"
+   "label": "'Interest 2 SP' 1st / 2nd date (B7; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "EURTRY",
+    "from": "AK5"
+   }
   },
   {
    "range": "AK8",
@@ -611,7 +671,11 @@
    "scope": "user",
    "group": "forward-calc-b8-ah",
    "kind": "date",
-   "label": "'SP 2 Interest' 1st / 2nd date (B8; boş = spot valörü / valör tarihi)"
+   "label": "'SP 2 Interest' 1st / 2nd date (B8; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "AH19"
+   }
   },
   {
    "range": "AH22",
@@ -632,7 +696,11 @@
    "scope": "user",
    "group": "forward-calc-b8-ak",
    "kind": "date",
-   "label": "'SP 2 Interest' 1st / 2nd date (B8; boş = spot valörü / valör tarihi)"
+   "label": "'SP 2 Interest' 1st / 2nd date (B8; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "EURTRY",
+    "from": "AK19"
+   }
   },
   {
    "range": "AK22",
@@ -653,7 +721,11 @@
    "scope": "user",
    "group": "forward-calc-b9-ah",
    "kind": "date",
-   "label": "'SP 2 Interest (all-in)' 1st / 2nd date (B9; boş = spot valörü / valör tarihi)"
+   "label": "'SP 2 Interest (all-in)' 1st / 2nd date (B9; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "AH33"
+   }
   },
   {
    "range": "AH36",
@@ -674,7 +746,11 @@
    "scope": "user",
    "group": "forward-calc-b9-ak",
    "kind": "date",
-   "label": "'SP 2 Interest (all-in)' 1st / 2nd date (B9; boş = spot valörü / valör tarihi)"
+   "label": "'SP 2 Interest (all-in)' 1st / 2nd date (B9; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "EURTRY",
+    "from": "AK33"
+   }
   },
   {
    "range": "AK36",
@@ -695,7 +771,11 @@
    "scope": "user",
    "group": "forward-calc-b10-ah",
    "kind": "date",
-   "label": "'Interest 2 SP (O/N)' 1st / 2nd date (B10; boş = spot valörü / valör tarihi)"
+   "label": "'Interest 2 SP (O/N)' 1st / 2nd date (B10; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "AH47"
+   }
   },
   {
    "range": "AH50",
@@ -716,7 +796,11 @@
    "scope": "user",
    "group": "forward-calc-b10-ak",
    "kind": "date",
-   "label": "'Interest 2 SP (O/N)' 1st / 2nd date (B10; boş = spot valörü / valör tarihi)"
+   "label": "'Interest 2 SP (O/N)' 1st / 2nd date (B10; boş = spot valörü / valör tarihi)",
+   "tenor": {
+    "pair": "EURTRY",
+    "from": "AK47"
+   }
   },
   {
    "range": "AK50",
@@ -849,7 +933,11 @@
    "scope": "user",
    "group": "fwdfree-dates",
    "kind": "date",
-   "label": "free forward list: start (formula default: the pair's spot date) and end date"
+   "label": "free forward list: start (formula default: the pair's spot date) and end date",
+   "tenor": {
+    "pair_col": "A",
+    "from": "B"
+   }
   },
   {
    "range": "EK_FWD!E68:G77",
@@ -863,14 +951,20 @@
    "scope": "user",
    "group": "fwdtenor-dates",
    "kind": "date",
-   "label": "TRY rates by tenor: dates of one's own"
+   "label": "TRY rates by tenor: dates of one's own",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "EK_BULK!B5:B104",
    "scope": "user",
    "group": "bulk100-dates",
    "kind": "date",
-   "label": "toplu forward valör tarihleri (100 satır, boş başlar)"
+   "label": "toplu forward valör tarihleri (100 satır, boş başlar)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "EK_BULK!L5:L104",
@@ -905,7 +999,10 @@
    "scope": "user",
    "group": "ekfwd-dates",
    "kind": "date",
-   "label": "Valör — value dates of the forward quote matrix (1M…12M by formula, four free rows)"
+   "label": "Valör — value dates of the forward quote matrix (1M…12M by formula, four free rows)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "EK_FWD!D5:E14",
@@ -954,7 +1051,10 @@
    "scope": "user",
    "group": "ekfwd-eur-dates",
    "kind": "date",
-   "label": "Valör — value dates of the EURTRY quote matrix (1M…12M from the EURTRY spot date by formula, four free rows)"
+   "label": "Valör — value dates of the EURTRY quote matrix (1M…12M from the EURTRY spot date by formula, four free rows)",
+   "tenor": {
+    "pair": "EURTRY"
+   }
   },
   {
    "range": "EK_FWD!D104:E113",
@@ -1039,6 +1139,34 @@
     "date": "B45",
     "bid": "H",
     "ask": "J"
+   },
+   "client_quote": {
+    "pair": "USDTRY",
+    "title": "forward",
+    "rows": "47:51",
+    "label": "A",
+    "head": "Eğri",
+    "head_en": "Curve",
+    "start": "Forward!I2",
+    "end": "B45",
+    "days": "D45",
+    "spot": "F45",
+    "points": [
+     "H",
+     "J"
+    ],
+    "outright": [
+     "E",
+     "G"
+    ],
+    "try": [
+     "B",
+     "D"
+    ],
+    "ccy": [
+     "H45",
+     "L45"
+    ]
    }
   },
   {
@@ -1091,6 +1219,34 @@
     "date": "B56",
     "bid": "H",
     "ask": "J"
+   },
+   "client_quote": {
+    "pair": "EURTRY",
+    "title": "forward",
+    "rows": "58:62",
+    "label": "A",
+    "head": "Eğri",
+    "head_en": "Curve",
+    "start": "Forward!K2",
+    "end": "B56",
+    "days": "D56",
+    "spot": "F56",
+    "points": [
+     "H",
+     "J"
+    ],
+    "outright": [
+     "E",
+     "G"
+    ],
+    "try": [
+     "B",
+     "D"
+    ],
+    "ccy": [
+     "H56",
+     "L56"
+    ]
    }
   },
   {
@@ -1107,6 +1263,21 @@
     "first": 68,
     "extra": 3,
     "last": 77
+   },
+   "client_quote": {
+    "pair": {
+     "src": "A"
+    },
+    "title": "Forward",
+    "rows": "68:77",
+    "start": "B",
+    "end": "C",
+    "days": "D",
+    "spot": "E",
+    "points": "H",
+    "outright": "I",
+    "try": "G",
+    "ccy": "F"
    }
   },
   {
@@ -1170,6 +1341,36 @@
     "date_col": "B",
     "bid": "H",
     "ask": "I"
+   },
+   "client_quote": {
+    "pair": "USDTRY",
+    "title": "forward",
+    "rows": "5:14",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "head": "Vade",
+    "head_en": "Tenor",
+    "start": "G2",
+    "spot": [
+     "F4",
+     "G4"
+    ],
+    "end": "B",
+    "days": "C",
+    "points": [
+     "H",
+     "I"
+    ],
+    "outright": [
+     "J",
+     "K"
+    ],
+    "try": [
+     "M",
+     "N"
+    ],
+    "ccy": "O"
    }
   },
   {
@@ -1227,6 +1428,36 @@
     "date_col": "B",
     "bid": "H",
     "ask": "I"
+   },
+   "client_quote": {
+    "pair": "EURTRY",
+    "title": "forward",
+    "rows": "104:113",
+    "label": "A",
+    "alt": "B",
+    "alt_when": "serbest",
+    "head": "Vade",
+    "head_en": "Tenor",
+    "start": "G101",
+    "spot": [
+     "F103",
+     "G103"
+    ],
+    "end": "B",
+    "days": "C",
+    "points": [
+     "H",
+     "I"
+    ],
+    "outright": [
+     "J",
+     "K"
+    ],
+    "try": [
+     "M",
+     "N"
+    ],
+    "ccy": "O"
    }
   },
   {
@@ -1325,7 +1556,28 @@
    "type": "table",
    "title": "Forward DV01",
    "range": "N31:P49",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {
+    "pair": "USDTRY",
+    "title": "forward",
+    "side": "O44",
+    "start": "O33",
+    "end": "O34",
+    "days": "O35",
+    "spot": "O32",
+    "outright": "O46",
+    "try": {
+     "src": "O36",
+     "label": "TRY OIS %",
+     "label_en": "TRY OIS rate %"
+    },
+    "ccy": {
+     "src": "O41",
+     "label": "USD SOFR %",
+     "label_en": "USD SOFR rate %"
+    },
+    "amount": "O45"
+   }
   },
   {
    "id": "BK1",
@@ -1475,7 +1727,34 @@
    "title": "Interest 2 SP · TRY faizi → swap puanı (USDTRY | EURTRY)",
    "range": "AG4:AK16",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH5",
+      "end": "AH6",
+      "days": "AH7",
+      "spot": "AH8",
+      "ccy": "AH9",
+      "try": "AH10",
+      "points": "AH11",
+      "outright": "AH12"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK5",
+      "end": "AK6",
+      "days": "AK7",
+      "spot": "AK8",
+      "ccy": "AK9",
+      "try": "AK10",
+      "points": "AK11",
+      "outright": "AK12"
+     }
+    ]
+   }
   },
   {
    "id": "B8",
@@ -1484,7 +1763,34 @@
    "title": "SP 2 Interest · swap puanı → ima TRY faizi (USDTRY | EURTRY)",
    "range": "AG18:AK30",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH19",
+      "end": "AH20",
+      "days": "AH21",
+      "spot": "AH22",
+      "ccy": "AH23",
+      "try": "AH24",
+      "points": "AH25",
+      "outright": "AH26"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK19",
+      "end": "AK20",
+      "days": "AK21",
+      "spot": "AK22",
+      "ccy": "AK23",
+      "try": "AK24",
+      "points": "AK25",
+      "outright": "AK26"
+     }
+    ]
+   }
   },
   {
    "id": "B9",
@@ -1493,7 +1799,34 @@
    "title": "SP 2 Interest · all-in outright → puan ve ima TRY faizi (USDTRY | EURTRY)",
    "range": "AG32:AK44",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH33",
+      "end": "AH34",
+      "days": "AH35",
+      "spot": "AH36",
+      "ccy": "AH37",
+      "try": "AH38",
+      "points": "AH39",
+      "outright": "AH40"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK33",
+      "end": "AK34",
+      "days": "AK35",
+      "spot": "AK36",
+      "ccy": "AK37",
+      "try": "AK38",
+      "points": "AK39",
+      "outright": "AK40"
+     }
+    ]
+   }
   },
   {
    "id": "B10",
@@ -1502,7 +1835,36 @@
    "title": "Interest 2 SP · O/N karşılığı → vade faizi → swap puanı (USDTRY | EURTRY)",
    "range": "AG46:AK58",
    "hidden": false,
-   "keep_title": true
+   "keep_title": true,
+   "client_quote": {
+    "title": "forward",
+    "parts": [
+     {
+      "pair": "USDTRY",
+      "start": "AH47",
+      "end": "AH48",
+      "days": "AH49",
+      "spot": "AH50",
+      "ccy": "AH51",
+      "try": "AH52",
+      "points": "AH53",
+      "outright": "AH54",
+      "on": "AH56"
+     },
+     {
+      "pair": "EURTRY",
+      "start": "AK47",
+      "end": "AK48",
+      "days": "AK49",
+      "spot": "AK50",
+      "ccy": "AK51",
+      "try": "AK52",
+      "points": "AK53",
+      "outright": "AK54",
+      "on": "AK56"
+     }
+    ]
+   }
   },
   {
    "id": "B11",
@@ -1519,7 +1881,31 @@
    "type": "table",
    "title": "XARTRY müşteri altın forward hesaplayıcı",
    "range": "B56:F73",
-   "hidden": false
+   "hidden": false,
+   "client_quote": {
+    "pair": "XARTRY",
+    "title": "forward",
+    "start": "E67",
+    "end": "E61",
+    "days": "E68",
+    "spot": {
+     "src": "E60",
+     "label": "XARTRY spot",
+     "label_en": "XARTRY spot"
+    },
+    "points": "E69",
+    "outright": {
+     "src": "E65",
+     "label": "XARTRY forward",
+     "label_en": "XARTRY forward"
+    },
+    "try": "E64",
+    "ccy": {
+     "src": "E63",
+     "label": "USD faizi %",
+     "label_en": "USD rate %"
+    }
+   }
   },
   {
    "id": "B24",

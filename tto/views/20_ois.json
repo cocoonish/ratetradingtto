@@ -228,7 +228,10 @@
    "scope": "user",
    "group": "ois-29",
    "kind": "date",
-   "label": "'Bitiş tarihi'"
+   "label": "'Bitiş tarihi'",
+   "tenor": {
+    "from": "B122"
+   }
   },
   {
    "range": "F122",

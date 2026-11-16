@@ -11,14 +11,21 @@
    "scope": "user",
    "group": "calc-0",
    "kind": "date",
-   "label": "master 'Start Date' (top band; boş = piyasa: USDTRY spot valörü)"
+   "label": "master 'Start Date' (top band; boş = piyasa: USDTRY spot valörü)",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "AA4",
    "scope": "user",
    "group": "calc-1",
    "kind": "date",
-   "label": "master 'End Date' (top band; boş = Forward sayfasının valör tarihi, Forward!D2)"
+   "label": "master 'End Date' (top band; boş = Forward sayfasının valör tarihi, Forward!D2)",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "AA3"
+   }
   },
   {
    "range": "AA9",
@@ -242,14 +249,21 @@
    "scope": "user",
    "group": "calc-27",
    "kind": "date",
-   "label": "B10 'Start', 'End'"
+   "label": "B10 'Start', 'End'",
+   "tenor": {
+    "pair": "USDTRY"
+   }
   },
   {
    "range": "X19",
    "scope": "user",
    "group": "calc-27",
    "kind": "date",
-   "label": "B10 'Start', 'End'"
+   "label": "B10 'Start', 'End'",
+   "tenor": {
+    "pair": "USDTRY",
+    "from": "X18"
+   }
   },
   {
    "range": "X29",

@@ -18,7 +18,10 @@
    "scope": "user",
    "group": "manuel-1",
    "kind": "date",
-   "label": "'Vade' – maturity"
+   "label": "'Vade' – maturity",
+   "tenor": {
+    "from": "B3"
+   }
   },
   {
    "range": "B8",

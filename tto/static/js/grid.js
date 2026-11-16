@@ -103,6 +103,43 @@ function tipOf(cell) {
   return tip;
 }
 
+// A date typed as a shortcut ("1A", "ay sonu", "IMM", "+5"): the date it stood for is what was stored; what was typed
+// is said in the cell's tooltip from then on, while the cell holds that date (the server says both: res.shortcuts).
+// book|ref -> {typed, date, text, fresh: the new value has not come back to the table yet}
+const typedDates = new Map();
+
+function typedNote(grid, i, j, cell) {
+  if (!typedDates.size || !cell) return '';
+  const ref = grid.ref(i, j);
+  const key = ref && (grid.book || '') + '|' + ref;
+  const t = key && typedDates.get(key);
+  if (!t) return '';
+  if (cell.v === t.date || String(cell.t || '').trim() === t.text) t.fresh = false;
+  else if (!t.fresh) { typedDates.delete(key); return ''; }           // typed over since: the note goes
+  return 'Kısayol: ' + t.typed + ' → ' + t.text;
+}
+
+/** A cell's tooltip: its own (tipOf) and, for a date typed as a shortcut, what was typed. */
+function titleOf(grid, i, j, cell) {
+  const a = tipOf(cell), b = typedNote(grid, i, j, cell);
+  return a && b ? a + '\n' + b : (a || b);
+}
+
+/** The dates of a write that were typed as shortcuts (``shortcuts``: {ref: {typed, date, text}}), into the tooltips. */
+function noteTyped(grid, shortcuts) {
+  if (!shortcuts || !grid) return;
+  for (const ref of Object.keys(shortcuts)) typedDates.set((grid.book || '') + '|' + ref, Object.assign({ fresh: true }, shortcuts[ref]));
+  const d = grid.data;
+  if (!d || !d.r || !d.c) return;
+  for (let i = 0; i < grid.tds.length; i++) {
+    for (let j = 0; j < grid.tds[i].length; j++) {
+      const td = grid.tds[i][j];
+      const ref = td && grid.ref(i, j);
+      if (ref && shortcuts[ref]) td.title = titleOf(grid, i, j, grid.cell(i, j));
+    }
+  }
+}
+
 /**
  * Excel lets a long text run over the empty cells to its right; do the same with a column span so notes and
  * captions do not blow up the width of their own column.  Marks the data once (the shape check sees it).
@@ -260,6 +297,7 @@ export class Grid {
    *       tools (the panel's tools: the "Sütunlar" button goes there),
    *       copy (the id of a temporary copy of a table: what is typed goes to that copy's own inputs; never "Elle değer",
    *             never pointed at by a formula - a formula reads the table itself)
+   *       rowItems ((i, j) -> menu items: what the right-click menu offers first for the row clicked - a row's quote)
    */
   constructor(opts) {
     this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
@@ -409,7 +447,7 @@ export class Grid {
         if (cell.cs) td.colSpan = cell.cs;
         if (cell.heat) td.style.backgroundColor = heatStyle(cell.heat);
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
-        const tip = tipOf(cell);
+        const tip = titleOf(this, i, j, cell);
         if (tip) td.title = tip;
         td.__i = i;
         td.__j = j;
@@ -523,8 +561,9 @@ export class Grid {
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '')
           + (keepPt ? ' pt' : '');
         td.textContent = cell.t || '';
-        // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with it)
-        if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '')) td.title = tipOf(cell);
+        // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with
+        // it; a date typed as a shortcut: what was typed)
+        if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size) td.title = titleOf(this, i, j, cell);
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
         else td.style.removeProperty('--bar');
@@ -612,7 +651,11 @@ export class Grid {
       for (let j = cur.left; j <= right; j++) js.push(j);
       cols = [{ sep: true }].concat(this.columns.menuItems(js, e.clientX, e.clientY));
     }
+    // what the page offers for the row clicked (its quote: "Bu satırın kotasyonu")
+    const own = this.opts.rowItems ? (this.opts.rowItems(td.__i, td.__j) || []) : [];
     menu(e.clientX, e.clientY, [
+      ...own,
+      own.length ? { sep: true } : null,
       watchable && hooks.watch ? { label: 'İzlemeye ekle', action: () => hooks.watch(this.book, one.ref, label) } : null,
       watchable && hooks.alarm ? { label: 'Alarm kur…', action: () => hooks.alarm(this.book, one.ref, label, one.cell.t) } : null,
       watchable ? { sep: true } : null,
@@ -902,6 +945,7 @@ export async function pasteText(grid, s, text) {
     if (!items.length) { toast(unseen ? 'Yapıştırılan alan gizlediğiniz sütunlarda kalıyor' : 'Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
     const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc, lenient, grid.opts.copy || null);
     if (res) { res.skipped = skipped + (res.skipped || 0); res.unseen = unseen; }
+    if (res && res.shortcuts) noteTyped(grid, res.shortcuts);           // (dates pasted as shortcuts, cell by cell)
     if (res && lenient && !res.applied && !(res.errors || []).length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
     reportApply(res, 'yapıştırıldı');
   } catch (err) {
@@ -1039,6 +1083,7 @@ async function applyValue(grid, i, j, value, how = 'away') {
   Promise.resolve().then(() => { after = selNow(); });
   try {
     const res = await hooks.setInputs(grid.book, [{ ref, value }], grid.opts.adhoc, false, grid.opts.copy || null);
+    if (res && res.shortcuts) noteTyped(grid, res.shortcuts);           // ("1A" typed: the date it is, what was typed in the tip)
     if (res && res.errors && res.errors.length) {
       const formula = isFormula(value);
       toast((formula ? value + ' kaydedilmedi – ' : '') + res.errors.join('; '), 'err', formula ? 9000 : 6000);
