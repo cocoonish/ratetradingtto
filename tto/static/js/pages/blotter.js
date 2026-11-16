@@ -287,8 +287,20 @@ export class BlotterPage {
     show(this.tab);
   }
 
-  /** A trade filled from a quote (a matrix row, a chat line - ``ctx.openTrade``): its tab, side and fields, waiting for an
-   * amount and "İşlemi kaydet". */
+  /**
+   * A trade filled from a quote - a matrix row, a chat line, a price right-clicked on a page: its tab, side and fields,
+   * waiting for an amount and "İşlemi kaydet" (nothing is saved here; every field stays the user's to change).
+   *
+   * The way in from elsewhere is ``ctx.openTrade(spec)`` (main.js: kept for this page, then opened). ``spec``:
+   *   {kind: 'fwd', pair: 'USDTRY' | 'EURTRY', dir: 'B' | 'S' | null, date: '15.12.2026' | '3M', basis: 'SP' | 'FWD' | 'TRY'
+   *    | 'RET_BID' | 'RET_MID' | 'RET_ASK', value: the points / outright / TRY rate as text (none for RET), note, cpt}
+   *   {kind: 'ois', strategy: 'outright' | 'spread' | 'fly' | 'fra' | 'mpc', side: 'PAY' | 'RECEIVE' | … | null,
+   *    tenors: ['1Y', …] (outright / spread / fly), months: [start, end] (FRA), start, end (MPC: serials of the form's days),
+   *    level: as text, note, cpt}
+   *   {kind: 'bond', dir: 'B' | 'S' | null, instrument: ISIN, price: as text, note}
+   * A side of null is left to the user: no side is chosen and the trade is not saved until one is.  The amount is never
+   * filled, the counterparty only by a broker's chat line (``cpt``).
+   */
   takePrefill() {
     let spec = null;
     try {
@@ -311,8 +323,8 @@ export class BlotterPage {
     if (spec.kind === 'fwd') {
       const f = this.fwd;
       f.pair = spec.pair === 'EURTRY' ? 'EURTRY' : 'USDTRY';
-      if (spec.dir === 'B' || spec.dir === 'S') f.dir = spec.dir;
-      else sideKnown = false;
+      sideKnown = spec.dir === 'B' || spec.dir === 'S';
+      f.dir = sideKnown ? spec.dir : null;                 // (not known: left to the user)
       f.basis = BASIS_LABEL[spec.basis] ? spec.basis : 'SP';
       f.pairSeg.set(f.pair);
       f.dirSeg.set(f.dir);
@@ -332,6 +344,7 @@ export class BlotterPage {
       if (spec.side && SIDES[o.strategy].some((x) => x[0] === spec.side)) o.side = spec.side;
       else sideKnown = false;
       this.layoutOis();
+      if (!sideKnown) { o.side = null; o.sideSeg.set(null); }
       const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy] || [];
       legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i]));
       if (o.strategy === 'fra' && spec.months && spec.months.length === 2) {
@@ -358,8 +371,8 @@ export class BlotterPage {
       o.size.focus();
     } else if (spec.kind === 'bond') {
       const b = this.bond;
-      if (spec.dir === 'B' || spec.dir === 'S') b.dir = spec.dir;
-      else sideKnown = false;
+      sideKnown = spec.dir === 'B' || spec.dir === 'S';
+      b.dir = sideKnown ? spec.dir : null;
       b.dirSeg.set(b.dir);
       b.inst.value = spec.instrument || '';
       b.price.value = spec.price || '';
@@ -369,7 +382,7 @@ export class BlotterPage {
     } else {
       return false;
     }
-    const warn = [missing.length ? 'listede olmayan vade: ' + missing.join(', ') + ' – elle seçin' : '', sideKnown ? '' : 'yönü kontrol edin'].filter(Boolean);
+    const warn = [missing.length ? 'listede olmayan vade: ' + missing.join(', ') + ' – elle seçin' : '', sideKnown ? '' : 'yönü seçin'].filter(Boolean);
     toast('İşlem kotadan dolduruldu: tutarı yazıp kaydedin' + (warn.length ? ' (' + warn.join('; ') + ')' : ''), warn.length ? 'warn' : 'ok', warn.length ? 7000 : 4000);
     return true;
   }
@@ -514,7 +527,7 @@ export class BlotterPage {
       tiles.appendChild(t2);
       tiles.appendChild(tile(base + ' faizi DV01 (' + (base === 'USD' ? '$' : base) + ')' + per, signed(d1.usd_leg, 0), false, base + ' faizi +1 bp olursa kâr / zarar'));
       f.quote.appendChild(tiles);
-      f.quote.appendChild(this.copyLine(() => q.pair + ' ' + (pl.dir === 'B' ? 'ALIŞ ' : 'SATIŞ ') + (typeof q.amount === 'number' ? num(q.amount, 0) + ' ' + base : base)
+      f.quote.appendChild(this.copyLine(() => q.pair + ' ' + (pl.dir === 'B' ? 'ALIŞ ' : (pl.dir === 'S' ? 'SATIŞ ' : '')) + (typeof q.amount === 'number' ? num(q.amount, 0) + ' ' + base : base)
         + ' · valör ' + serialDate(q.value_date) + ' (' + num(q.days, 0) + ' gün) · forward ' + num(q.forward, 4)
         + (typeof q.spot === 'number' ? ' · spot ' + num(q.spot, 4) + ' · swap puanı ' + num(q.points, 0) : '')
         + (typeof q.try_rate === 'number' ? ' · TRY faizi ' + pct(q.try_rate, 2) : '')
@@ -543,6 +556,7 @@ export class BlotterPage {
     const f = this.fwd;
     const pl = this.fwdPayload();
     if (!pl.pair) { toast('Dövizi ya da pariteyi yazın (örn. GBP)', 'err'); f.code.focus(); return; }
+    if (!pl.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (pl.amount === null || !(pl.amount > 0)) { toast('Tutar girin (örn. 10m)', 'err'); f.amount.focus(); return; }
     if (!pl.value_date) { toast('Valör tarihini girin', 'err'); f.date.focus(); return; }
     f.save.disabled = true;
@@ -713,6 +727,11 @@ export class BlotterPage {
     const hasLevel = !!pl.level;
     if (!hasLevel) pl.level = '0';
     const ticket = (o.ticket = (o.ticket || 0) + 1);
+    if (!pl.side) {                       // (a price filled without its side: the user chooses it first)
+      clear(o.quote);
+      o.quote.appendChild(h('div', { class: 'muted' }, 'Yönü seçin (' + SIDES[o.strategy].map((x) => x[1]).join(' / ') + '): bacaklar ve maliyet yöne göre hesaplanır.'));
+      return;
+    }
     try {
       const q = await api.post('/api/blotter/quote/ois', pl);
       if (ticket !== o.ticket || this.dead) return;
@@ -768,6 +787,7 @@ export class BlotterPage {
   async saveOis() {
     const o = this.ois;
     const pl = this.oisPayload();
+    if (!pl.side) { toast('Yönü seçin: ' + SIDES[o.strategy].map((x) => x[1]).join(' ya da '), 'err'); return; }
     if (!pl.level) { toast('Seviye girin', 'err'); o.level.focus(); return; }
     o.save.disabled = true;
     try {
@@ -853,6 +873,7 @@ export class BlotterPage {
     const b = this.bond;
     const amount = parseAmount(b.amount.value);
     if (!b.inst.value.trim()) { toast('Enstrüman girin', 'err'); b.inst.focus(); return; }
+    if (!b.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (amount === null || !(amount > 0)) { toast('Tutar girin', 'err'); b.amount.focus(); return; }
     b.save.disabled = true;
     try {

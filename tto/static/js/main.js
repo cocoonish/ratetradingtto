@@ -60,8 +60,11 @@ const ctx = {
   setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
   displayName: (key) => state.users[key] || key || '',
   openRet: () => openRetEditor(ctx),
-  /** A trade to enter, its fields filled from a quote (a matrix row, a chat line): opens Günlük İşlemler with them. */
+  /** "Open the form with these values": a trade to enter, its fields filled from a quote (a matrix row, a chat line, a
+   *  price right-clicked) - Günlük İşlemler opens with them and saves nothing (the spec: BlotterPage.takePrefill).  In a
+   *  window of its own, the main window's form. */
   openTrade: (spec) => {
+    if (POP) { tradeInMain(spec); return; }
     try { sessionStorage.setItem('tto.trade.prefill', JSON.stringify(spec)); } catch (e) { /* ignore */ }
     if (state.pageId === 'blotter' && state.page && state.page.takePrefill) state.page.takePrefill();
     else window.location.hash = '#/blotter';
@@ -476,6 +479,17 @@ function openPop(src) {
   const q = Object.keys(part).length ? '?part=' + encodeURIComponent(JSON.stringify(part)) : '';
   return openWindow('#/pop/' + encodeURIComponent(src.view) + '/' + encodeURIComponent(src.panel) + q,
     'tto-pop-' + src.view + '-' + src.panel + (q ? '-' + Date.now().toString(36) : ''));
+}
+
+/** From a window of its own: a trade filled in the main window's Günlük İşlemler (the one that opened it, while it is
+ *  there), else in a new tab (it starts with a copy of this window's session storage). */
+function tradeInMain(spec) {
+  const main = window.opener && !window.opener.closed ? window.opener : null;
+  try {
+    if (main && main.tto && main.tto.openTrade) { main.tto.openTrade(spec); main.focus(); return; }
+  } catch (e) { /* not reachable: a new tab */ }
+  try { sessionStorage.setItem('tto.trade.prefill', JSON.stringify(spec)); } catch (e) { /* ignore */ }
+  window.open('/#/blotter', '_blank');
 }
 
 /** From a window of its own: a page in the main window (the one that opened it, while it is there). */
@@ -928,6 +942,8 @@ function boot() {
     // right click on a cell: watch it, or set an alarm on it
     watch: (book, ref, label) => addToWatch(ctx, { book, ref, label }),
     alarm: (book, ref, label, text) => openAlarmDialog(ctx, { book, ref, label, text }),
+    // ... on a price: the server reads the row's instrument and dates, Günlük İşlemler opens with the trade filled
+    trade: (price) => api.post('/api/trade/prefill', price).then((res) => ctx.openTrade(res.spec), errorToast),
     onSelect,
   });
 
@@ -1031,6 +1047,6 @@ function findCellAnywhere(ref) {
 }
 
 window.tto = { findCell: findCellAnywhere, selectionText, state, events, refresh: () => runRefresh(), hub, pop: POP,
-  kept: () => [...kept.keys()], drawer: () => drawer };
+  kept: () => [...kept.keys()], drawer: () => drawer, openTrade: (spec) => ctx.openTrade(spec) };
 
 boot();

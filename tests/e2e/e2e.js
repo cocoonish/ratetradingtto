@@ -324,6 +324,62 @@ async function shot(page, name) {
     await page.waitForFunction(() => /\d/.test((document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="fwd-forward"] .v') || {}).textContent || ''), null, { timeout: 20000 });
     check('... Günlük İşlemler opens on the forward: USDTRY sold at the ask points of the offshore row, the table\'s value date',
       JSON.stringify(fwdFilled.slice(0, 5)) === JSON.stringify(['USDTRY', 'S', 'SP', fwdValue, offAsk]) && /^Kota: Offshore/.test(fwdFilled[5]), [fwdFilled, fwdValue, offAsk]);
+    // "İşlem gir" on a price (right click): Masa's forward quote at its ask - the row's own value date, the points clicked, sold
+    await open(page, 'masa');
+    const quoteDate = (await cellText(page, 'EK_FWD!B7')).trim();
+    const quoteAsk = (await cellText(page, 'EK_FWD!I7')).trim();
+    await (await cellHandle(page, 'EK_FWD!I7')).click({ button: 'right' });
+    await page.waitForSelector('.menu');
+    const priceMenu = await page.$$eval('.menu button', (bs) => bs.map((b) => [b.textContent, b.disabled]));
+    check('a price\'s right-click menu (Masa\'s forward quote, 3M ask points): "İşlem gir" first, watch / alarm / copy after it',
+      priceMenu[0][0] === 'İşlem gir' && !priceMenu[0][1] && priceMenu.some((x) => x[0] === 'İzlemeye ekle') && priceMenu.some((x) => /^Kopyala/.test(x[0])), priceMenu);
+    await page.click('.menu button:text-is("İşlem gir")');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.fwd
+      && window.tto.state.page.fwd.date && window.tto.state.page.fwd.date.value !== '', null, { timeout: 30000 });
+    const priceFwd = await page.evaluate(() => { const f = window.tto.state.page.fwd; return [f.pair, f.dir, f.basis, f.date.value, f.manual.value, f.note.value, f.amount.value, f.cpt.value]; });
+    await page.waitForFunction(() => /\d/.test((document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="fwd-points"] .v') || {}).textContent || ''), null, { timeout: 20000 });
+    check('... Günlük İşlemler opens filled: USDTRY, sold (ask), the row\'s value date, the ask points - no amount, no counterparty',
+      JSON.stringify(priceFwd.slice(0, 5)) === JSON.stringify(['USDTRY', 'S', 'SP', quoteDate, quoteAsk]) && priceFwd[5] === 'Fiyat: 3M · Puan ask (Masa · FORWARD KOTASYON)'
+      && priceFwd[6] === '' && priceFwd[7] === '' && (await page.textContent('.entry .pad:not(.hidden) .quotebox [data-k="fwd-points"] .v')).trim() === quoteAsk,
+      [priceFwd, quoteDate, quoteAsk]);
+    // an OIS quote (a par: a mid) fills an OIS outright - the tenor and the level; the side is the user's, nothing saved without it
+    await open(page, 'ois');
+    const quotePar = (await cellText(page, 'OIS_MAIN!B14')).trim();
+    await (await cellHandle(page, 'OIS_MAIN!B14')).click({ button: 'right' });
+    await page.click('.menu button:text-is("İşlem gir")');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ois
+      && window.tto.state.page.ois.level && window.tto.state.page.ois.level.value !== '', null, { timeout: 30000 });
+    const priceOis = await page.evaluate(() => { const o = window.tto.state.page.ois; return [o.strategy, o.side, o.f.tenor && o.f.tenor.value, o.level.value,
+      [...o.sideSeg.children].filter((b) => b.classList.contains('on')).length]; });
+    check('an OIS quote (1Y par) fills an OIS outright: 1Y at the par, no side chosen', JSON.stringify(priceOis) === JSON.stringify(['outright', null, '1Y', quotePar, 0]),
+      [priceOis, quotePar]);
+    await page.waitForFunction(() => /Yönü seçin/.test((document.querySelector('.entry .pad:not(.hidden) .quotebox') || {}).textContent || ''), null, { timeout: 20000 });
+    const tradesBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction(() => /Yönü seçin/.test(document.getElementById('toasts').textContent), null, { timeout: 10000 });
+    check('... and is not saved until a side is chosen', (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length === tradesBefore);
+    // a MPC OIS row: the form's MPC strategy with the row's own two days (the rows move with the calendar)
+    await open(page, 'ois');
+    const mpcStart = (await cellText(page, 'OIS_MAIN!B85')).trim();
+    const mpcEnd = (await cellText(page, 'OIS_MAIN!C85')).trim();
+    await (await cellHandle(page, 'OIS_MAIN!D85')).click({ button: 'right' });
+    await page.click('.menu button:text-is("İşlem gir")');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ois
+      && window.tto.state.page.ois.strategy === 'mpc' && window.tto.state.page.ois.level.value !== '', null, { timeout: 30000 });
+    const priceMpc = await page.evaluate(() => { const o = window.tto.state.page.ois; const t = (s) => s.options[s.selectedIndex].textContent; return [t(o.f.start), t(o.f.end)]; });
+    check('... a MPC OIS row: the MPC form with the row\'s own two days', priceMpc[0].endsWith(mpcStart) && priceMpc[1].endsWith(mpcEnd), [priceMpc, mpcStart, mpcEnd]);
+    // no price, no "İşlem gir"; a price with no form (a VİOP contract) says why, greyed
+    await open(page, 'masa');
+    await (await cellHandle(page, 'EK_FWD!C7')).click({ button: 'right' });
+    await page.waitForSelector('.menu');
+    const noPrice = await page.$$eval('.menu button', (bs) => bs.map((b) => b.textContent));
+    await page.keyboard.press('Escape');
+    await (await cellHandle(page, 'MASA!D110')).click({ button: 'right' });
+    await page.waitForSelector('.menu');
+    const viopMenu = await page.$$eval('.menu button', (bs) => bs.map((b) => [b.textContent, b.disabled]));
+    await page.keyboard.press('Escape');
+    check('a cell that is no price (the days of a tenor) offers no "İşlem gir"; a VİOP contract\'s price greys it, saying why',
+      !noPrice.some((x) => /İşlem gir/.test(x)) && noPrice.some((x) => /^Kopyala/.test(x)) && viopMenu.some((x) => /^İşlem gir · VİOP/.test(x[0]) && x[1]), [noPrice, viopMenu]);
     await open(page, 'forward');
     await tab(page, 'fwd');
 
