@@ -135,6 +135,16 @@
    "keep_title": true
   },
   {
+   "id": "B3D",
+   "type": "table",
+   "sheet": "OIS_MAIN",
+   "range": "E2:H2",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "DV01/bacak $ ve yuvarlama  ·  tablodaki OIS hedge nominali bunlarla (OIS sayfasının girdileri)"
+  },
+  {
    "id": "B3",
    "type": "table",
    "title": "DİBS göreli değer tablosu",

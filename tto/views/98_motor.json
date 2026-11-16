@@ -267,7 +267,8 @@
     "B2",
     "B4",
     "B5"
-   ]
+   ],
+   "note": "Ufuk A / B, PV / FV ve carry patikası C & R sayfasının üstündeki satırlarda yazılır (ufuklar ve PV / FV OIS sayfasının girdileridir)."
   },
   {
    "id": "tenor",
@@ -277,7 +278,8 @@
     "B7",
     "B10",
     "B11"
-   ]
+   ],
+   "note": "Ufuk A / B, PV / FV ve carry patikası C & R sayfasının üstündeki satırlarda yazılır (ufuklar ve PV / FV OIS sayfasının girdileridir)."
   },
   {
    "id": "solver",

@@ -23,6 +23,17 @@
  ],
  "panels": [
   {
+   "id": "U1D",
+   "type": "table",
+   "sheet": "DİBS RV",
+   "range": "A2:Z2",
+   "cols": ["O", "P", "W", "X"],
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "DİBS RV ayarları  ·  RV sütunlarının (getiri, ASW, sinyal) sinyal eşiği ve fiyat tipi (DİBS RV sayfasının girdileri)"
+  },
+  {
    "id": "U1",
    "type": "table",
    "title": "Tüm kâğıtlar",
@@ -37,7 +48,7 @@
     "catalog": false,
     "title": "Tüm Kâğıtlar'a kâğıt ekle (ISIN)"
    },
-   "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar, ✕ kâğıdı listeden çıkarır. + ISIN ekle: kâğıdın türü Bloomberg'den bulunur, kendi grubuna girer. Sağdaki sütunlar bugünün Broker Chat tahtasıdır."
+   "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar, ✕ kâğıdı listeden çıkarır. + ISIN ekle: kâğıdın türü Bloomberg'den bulunur, kendi grubuna girer. Sağdaki sütunlar bugünün Broker Chat tahtasıdır. RV sütunları DİBS RV sayfasından gelir: sinyal eşiği ve fiyat tipi üstteki satırda, kâğıt bazındaki girdiler (bilinen kupon, elle temiz fiyat) DİBS RV sayfasındaki tabloda."
   },
   {
    "id": "U2",

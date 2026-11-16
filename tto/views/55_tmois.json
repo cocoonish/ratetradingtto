@@ -72,11 +72,22 @@
    "hidden": false
   },
   {
+   "id": "B3D",
+   "type": "table",
+   "sheet": "OIS_MAIN",
+   "range": "E2:F2",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "DV01/bacak $  ·  $DV01 ölçeği bununla (OIS sayfasının girdisi)"
+  },
+  {
    "id": "B3",
    "type": "table",
    "title": "Sonuç özeti",
    "range": "A4:J6",
-   "hidden": false
+   "hidden": false,
+   "note": "Baz / Hawkish / Dovish OIS sayfasının senaryolarıdır; beklenen par ve PV onların olasılıklarıyla (OIS → Kotalar → SENARYOLAR)."
   },
   {
    "id": "B4",

@@ -731,7 +731,8 @@ def test_xautry_calculator_takes_everything_by_hand(svc, gold):
 def test_gold_panels_are_on_the_viop_page(svc, gold):
     page = svc.view(None, "viop")
     ids = [p["id"] for p in page["panels"]]
-    assert ids[ids.index("B11") + 1:ids.index("B11") + 6] == ["B11b", "XAU1", "XAU2", "XAU3", "XAU4"]      # after the gold tables
+    # after the gold tables (XAU3D: the Forward page's value date, above the forwards' "Forward tarihi" row)
+    assert ids[ids.index("B11") + 1:ids.index("B11") + 7] == ["B11b", "XAU1", "XAU2", "XAU3D", "XAU3", "XAU4"]
     panels = {p["id"]: p for p in page["panels"]}
     assert panels["XAU2"]["note"].startswith("Swap % = Manuel doluysa") and "USD faizi hesaba girmez" in panels["XAU2"]["note"]
     assert panels["XAU1"]["note"].startswith("Canlıda spot ve altın swap faizi (XAUSR…) Bloomberg'den gelir")

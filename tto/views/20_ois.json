@@ -305,7 +305,7 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Parametreler",
+   "title": "Parametreler  ·  bütün sekmelerdeki tablolar bunları okur (DV01/bacak, yuvarlama, senaryo tabanı, C+R, ufuklar, vade limiti)",
    "range": "A2:L5",
    "hidden": false
   },
@@ -522,12 +522,14 @@
    "keep_title": true
   }
  ],
+ "pinned": [
+  "B1"
+ ],
  "sections": [
   {
    "id": "quotes",
    "title": "Kotalar",
    "panels": [
-    "B1",
     "B2",
     "B3",
     "chart3",

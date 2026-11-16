@@ -772,6 +772,16 @@
    "title": "ALTIN  ·  swap faizi eğrisi  (XAUSR, % ACT/360; Bloomberg ticker'ı ya da manuel — sarı hücreler girdi)"
   },
   {
+   "id": "XAU3D",
+   "type": "table",
+   "sheet": "Forward",
+   "range": "C2:D2",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "Forward tarihi  ·  aşağıdaki 'Forward tarihi' satırının tarihi: Forward sayfasının valör tarihi (aynı girdi)"
+  },
+  {
    "id": "XAU3",
    "type": "table",
    "sheet": "EK_XAU",
@@ -883,6 +893,7 @@
     "XAU4",
     "XAU1",
     "XAU2",
+    "XAU3D",
     "XAU3",
     "B11b"
    ],

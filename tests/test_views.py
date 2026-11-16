@@ -5,6 +5,7 @@ from tto.books import BOOKS, load_books
 from tto.service import ServiceError
 from tto.views import load_views
 from tto.xl.model import COLS, parse_range
+from tto.xl.tokenizer import col_to_index
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -339,12 +340,13 @@ def test_each_calculator_has_one_home():
     assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF6"]
     assert not any(p.get("sheet") == "EK_FWD" and not p.get("borrowed") for p in by["masa"]["panels"])
     eks = panel("masa", "EKS")
-    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A3:N14"
+    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A2:N14"       # (row 2: the matrix's curve)
     # each spread with the TRY rate it makes beside it (M / N: OIS + spread), the rest as the sheet has them
     assert eks["cols"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
-    # EURTRY's summary below it: the same columns of the EURTRY matrix (header row 102, "Tümü" 103, dates 104-113)
+    # EURTRY's summary below it: the same columns of the EURTRY matrix (curve row 101, header 102, "Tümü" 103, dates
+    # 104-113)
     ekse = panel("masa", "EKSE")
-    assert ekse["borrowed"] and ekse["sheet"] == "EK_FWD" and ekse["range"] == "A102:N113" and ekse["cols"] == eks["cols"]
+    assert ekse["borrowed"] and ekse["sheet"] == "EK_FWD" and ekse["range"] == "A101:N113" and ekse["cols"] == eks["cols"]
     assert "EURTRY" in ekse["title"] and "EURTRY" not in eks["title"]
     # the date-to-date forward's dates and spread right above it: the row of the desk sheet's date-to-date inputs
     assert panel("masa", "B10D")["range"] == "B60:N60" and not panel("masa", "B10D").get("hidden")
@@ -364,9 +366,12 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     eks = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKS")
     d = eks["data"]
     assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
-    assert [c.get("t") for c in d["rows"][0]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    assert [c.get("t") for c in d["rows"][d["r"].index(3)]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
     one = d["rows"][d["r"].index(5)]                                     # 1M
     assert [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "E"]
+    # the curve the TRY rates are read from (MPC ima, a scenario, bootstrap ...): the matrix's own input, above it
+    curve = d["rows"][0]
+    assert d["r"][0] == 2 and curve[0]["t"] == "Eğri" and curve[1]["i"] == "u" and curve[1]["t"] == "MPC ima"
     service.set_inputs(user, "tto", [{"ref": "EK_FWD!D5", "value": "25"}])     # 1M bid spread: +25 bp over OIS
     try:
         eks = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKS")
@@ -381,7 +386,8 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     ekse = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKSE")
     d = ekse["data"]
     assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
-    assert [c.get("t") for c in d["rows"][0]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    assert [c.get("t") for c in d["rows"][d["r"].index(102)]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    assert d["r"][0] == 101 and d["rows"][0][0]["t"] == "Eğri" and d["rows"][0][1]["i"] == "u"        # its own curve
     one = d["rows"][d["r"].index(104)]                                   # 1M
     assert one[0]["t"] == "1M" and [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "E"]
     service.set_inputs(user, "tto", [{"ref": "EK_FWD!E104", "value": "-40"}])    # 1M ask spread: 40 bp under OIS
@@ -408,3 +414,226 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     data = {"c": ["A", "B", "C"], "r": [1], "rows": [[{"t": "a", "cs": 2}, {"t": "b"}, {"t": "c"}]], "fz": 1}
     _pick_columns(data, ["C", "Z", "A"])
     assert data["c"] == ["C", "A"] and [x["t"] for x in data["rows"][0]] == ["c", "a"] and "cs" not in data["rows"][0][1] and "fz" not in data
+
+
+def test_inputs_typed_beside_a_table_are_its_own(service):
+    """The strips of input cells put right before the tables are the tables' own inputs (another page's cells: the same
+    inputs, typed in either place).  On the desk page's VİOP tab DEALS' contract limit and a VİOP target; on the OIS
+    page its parameters pinned above the tabs - the DV01 per leg typed with the best trades open sizes them; DV01's
+    parameters pinned as well, the C & R page's OIS row with the C+R nominal and direction, the USD page's inputs in
+    each tab that reads them."""
+    from conftest import cell
+    user = service.login("girdi yanında")["user"]
+    page = service.view(user, "masa")
+    tabs = {s["id"]: s["panels"] for s in page["sections"]}
+    assert tabs["viop"] == ["B15", "B16D", "B16", "B17D", "B17"]
+    assert tabs["sig"] == ["B18D", "B18", "B19D", "B19", "B23D", "B23"]
+    strips = {p["id"]: p["data"] for p in page["panels"] if p.get("id") in ("B16D", "B17D", "B19D", "B23D")}
+    assert strips["B16D"]["r"] == [321] and [c.get("i") for c in strips["B16D"]["rows"][0]] == [None, "u"]
+    assert strips["B17D"]["c"] == ["L", "M", "N", "O", "P"] and strips["B17D"]["r"] == list(range(330, 339))
+    assert all(c.get("i") == "u" for row in strips["B17D"]["rows"][1:] for c in row)
+    assert strips["B19D"]["c"] == ["I", "J", "O", "P", "W", "X", "Y", "Z"]      # horizon, threshold, price type, repo
+    assert [c.get("i") for c in strips["B19D"]["rows"][0]] == [None, "u", None, "u", None, "u", None, "u"]
+    assert strips["B23D"]["rows"][0][1]["t"] == "Bootstrap" and strips["B23D"]["rows"][0][1]["i"] == "u"
+    service.set_inputs(user, "tto", [{"ref": "VIOP!W321", "value": "1"},              # DEALS: the first contract only
+                                     {"ref": "VIOP!L331", "value": "Spot"}, {"ref": "VIOP!M331", "value": "31.12.2026"},
+                                     {"ref": "VIOP!N331", "value": "LONG"}, {"ref": "VIOP!O331", "value": "Faiz %"},
+                                     {"ref": "VIOP!P331", "value": "34"}])
+    try:
+        got = {p["id"]: p["data"] for p in service.view(user, "masa")["panels"] if p.get("id") in ("B16", "B17")}
+        deals, target = got["B16"], got["B17"]
+        assert [c.get("t") for c in deals["rows"][deals["r"].index(111)]][1:3] == ["Spot", "30.11.2026"]
+        assert not any(c.get("t") for c in deals["rows"][deals["r"].index(112)][1:])               # no second one
+        first = [c.get("t") for c in target["rows"][target["r"].index(121)]]
+        assert first[:5] == ["Spot", "31.12.2026", "LONG", "Faiz % 34", "34,00%"]
+        assert cell(service, "MASA!AB121", user) == 57.0                                 # days to the far leg
+    finally:
+        service.reset_inputs(user, "tto", ["VIOP!W321"] + ["VIOP!%s331" % c for c in "LMNOP"])
+    # the OIS page: its parameters above every tab; the DV01 per leg typed there sizes the best trades of their tab
+    ois = service.view(user, "ois")
+    assert ois["pinned"] == ["B1"] and not any("B1" in s["panels"] for s in ois["sections"])
+    nominal = cell(service, "OIS_MAIN!F30", user)                                # the best spread's long nominal
+    service.set_inputs(user, "tto", [{"ref": "OIS_MAIN!F2", "value": "2000"}])
+    try:
+        assert nominal > 0 and cell(service, "OIS_MAIN!F30", user) == pytest.approx(2 * nominal, rel=0.02)
+    finally:
+        service.reset_inputs(user, "tto", ["OIS_MAIN!F2"])
+    assert cell(service, "OIS_MAIN!F2", user) == 1000.0
+    assert service.view(user, "dv01")["pinned"] == ["B2"]
+    carry = next(p for p in service.view(user, "carry")["panels"] if p["id"] == "CP2")["data"]
+    on = {(r, col) for r, row in zip(carry["r"], carry["rows"]) for col, c in zip(carry["c"], row) if c.get("i")}
+    assert {(2, "F"), (2, "H"), (3, "H"), (3, "J"), (4, "B"), (4, "D"), (4, "F")} <= on   # DV01, lot, C+R, horizons
+    usd = {s["id"]: s["panels"] for s in service.view(user, "usd")["sections"]}
+    assert "inp" in usd["top"] and all(usd[t][0] == "inp" for t in ("fomc", "curve", "trades"))
+
+
+# ------------------------------------------------------------------------------- inputs beside their tables
+#: inputs a table may read without showing them in its tab: the desk's reference and set-up data, each typed in a home
+#: of its own (book -> sheet ranges)
+REFERENCE = {
+    "tto": [
+        # holiday lists: TR (Motor → Tatiller), USD and EUR (Ayarlar · Toplantı takvimi)
+        "Motor!A361:B523", "EK_TATIL!A5:E264",
+        # Bloomberg: the order of the pricing sources, tickers, fields and suffixes, the bonds' sources
+        "EK_KAYNAK!B4:E6", "OIS_MAIN!J9:J26", "Forward!AO6:AR26", "VIOP!L1:W1", "VIOP!C16:C35", "VIOP!C43:C52",
+        "VIOP!C58:C69", "VIOP!M45:O45", "VIOP!S340", "MASA!C156:C163", "MASA!U155", "MASA!S171", "Motor!O89",
+        "Motor!O130", "EK_XAU!B3", "EK_XAU!B10", "EK_XAU!B12", "EK_XAU!D16:D22", "DİBS RV!B2", "DİBS RV!N2",
+        "DİBS RV!B5:B54",
+        # the window of VİOP's basis history (how much history Bloomberg is asked for: VİOP → Geçmiş · baz)
+        "VIOP!M340",
+        # the trading list of bonds (★ on Tüm Kâğıtlar) and the floaters' fixing lag
+        "DİBS RV!A5:A54", "DİBS RV!V2",
+        # the MPC meetings: dates and labels (OIS → PPK ima)
+        "OIS_MAIN!O10:P89",
+        # the engine's set-up (Motor): tenors of the bootstrap, the quotes and the tenor universe, quoted flags, the
+        # solver's codes
+        "Motor!E88:E130", "Motor!A306:A321", "Motor!A325:C342", "Motor!F4305:F4390", "Motor!H4305:H4390",
+        "Motor!D4306:D4390", "Motor!B4395:B4396", "Motor!B4445:E4462", "Motor!A4476:A4560",
+        # the OIS curve: the solver's settings, the scenarios (base, shift, names, probabilities, steps per meeting)
+        # and the list of FRAs - typed on the OIS page
+        "OIS_MAIN!F3", "OIS_MAIN!J4", "OIS_MAIN!AU6:AU15", "OIS_MAIN!V444:V457", "OIS_MAIN!B3", "OIS_MAIN!D3",
+        "OIS_MAIN!P3:Q5", "OIS_MAIN!U10:W89", "OIS_MAIN!M336:N438",
+        # the desk's shared RET curve (Forward → RET) and day-count conventions
+        "Forward!W33:X47", "Forward!U37", "Forward!U6", "VIOP!B44", "VIOP!R353", "DV01_RISK!H6:I25",
+        # spot value dates (formula defaults: T+1 / T+2 past the holidays)
+        "Forward!I2", "Forward!K2", "VIOP!K3",
+        # market data typed by hand: today's TLREF, the manual spot, gold's spot, value date, swap rates and source
+        "OIS_MAIN!J2", "VIOP!AA9:AA10", "EK_XAU!B5:C5", "EK_XAU!B8", "EK_XAU!B11", "EK_XAU!F16:F22",
+    ],
+    "sofr": [
+        # SIFMA holidays, the FOMC meetings and their decision flags, the scenario view (FOMC tab), the quotes typed by
+        # hand and those the curve includes (Eğri tab), WIRP typed by hand
+        "SOFR_FOMC!BO4:BO70", "SOFR_FOMC!B74:C83", "SOFR_FOMC!R72:T83", "SOFR_FOMC!D49:D68", "SOFR_FOMC!F49:F68",
+        "SOFR_FOMC!P74:P83",
+    ],
+    "asw": ["ASW!LR2:LR200"],                                   # holidays
+    # the first tenor of the BIST swap quote lists (the tickers asked of Bloomberg are built from it), USD OIS tickers
+    "borsa": ["Sheet1!B4", "Sheet1!N4", "Sheet1!AD6:AD15"],
+}
+
+#: inputs a table reads that cannot sit beside it - a big table of inputs of their own (the pasted position, the bonds'
+#: table) or what an engine page computes with: the note of the table or of its tab names where they are typed.
+#: (page, panel) -> [(what the note names, sheet ranges)]
+_POSITION = ("Pozisyon", ["DV01_RISK!C6:C25", "DV01_RISK!K6:K25", "DV01_RISK!Q6:Q25"])    # bucket DV01s, pivots, rates
+_HEDGE = ("Hedge", ["DV01_RISK!C85:G85", "DV01_RISK!C88:E102"])                           # the hedge instruments
+NAMED = {
+    ("masa", "B19"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54", "DİBS RV!AL5:AL54"])],
+    ("kagitlar", "U1"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54"])],
+    ("dv01", "B9"): [_POSITION, _HEDGE],
+    ("dv01", "B10"): [_POSITION, _HEDGE],
+    **{("dv01", pid): [_POSITION] for pid in ("B2", "B11", "B13", "B14", "B16", "B17", "B18")},
+    **{("motor", pid): [("C & R", ["OIS_MAIN!B4:F4", "EK_CARRY!B2"])] for pid in ("B4", "B5", "B6", "B7")},
+}
+
+#: inputs a table reads only in passing: (page, panel) -> sheet ranges
+INCIDENTAL = {
+    # Masa's "Yön (model)" copies the OIS outright's direction, whose threshold scales with the nominal sized by the
+    # DV01 per leg (which cancels out - the rounding stays)
+    ("masa", "B3"): ["OIS_MAIN!F2:H2"],
+    # DİBS live: a bond's name comes from its DİBS RV row, filled while DİBS RV prices the bond (price type, manual
+    # clean price, known coupon)
+    ("dibslive", "L1"): ["DİBS RV!X2", "DİBS RV!H5:H54", "DİBS RV!N5:N54"],
+}
+
+#: the desk's status row: it checks every page's data
+STATUS = {("masa", "B2")}
+
+
+def _tabs(view):
+    """A page's tabs as (id, note, the panels shown in it - each pinned one too); a page without tabs is one tab."""
+    if not view["sections"]:
+        return [("", "", [p["id"] for p in view["panels"] if not p.get("hidden")])]
+    return [(s["id"], s.get("note") or "", list(view["pinned"]) + list(s["panels"])) for s in view["sections"]]
+
+
+def _shown_cells(book, view, p):
+    """The cells a table shows on its page: its range (its first ``max_rows`` rows) without the columns Excel hides
+    (unless it hides them all) - only the ``cols`` named, when they are."""
+    sheet = book.model.sheet(p.get("sheet", view["sheet"]))
+    r1, c1, r2, c2 = parse_range(p["range"])
+    if p.get("max_rows"):
+        r2 = min(r2, r1 + int(p["max_rows"]) - 1)
+    cols = [c for c in range(c1, c2 + 1) if not sheet.col_hidden(c)] or list(range(c1, c2 + 1))
+    if p.get("cols"):
+        named = {col_to_index(x) for x in p["cols"]}
+        cols = [c for c in cols if c in named]
+    return [(sheet.index, r * COLS + c) for r in range(r1, r2 + 1) for c in cols]
+
+
+def _inputs_away_from_their_tables(service, views=None, reference=None):
+    """``{(page, tab, panel): [cells]}``: the inputs each visible table reads - its formulas followed through the
+    workbook down to the inputs (``RefIndex.upstream``) - that its tab does not show and none of the lists above
+    (``reference``: instead of REFERENCE) lets it read elsewhere."""
+    views = views or service.views
+    reference_of = REFERENCE if reference is None else reference
+    tables = {v["id"]: {p["id"]: p for p in v["panels"] if p["type"] in ("table", "notes") and not p.get("hidden")}
+              for v in views}
+    shown, reads = {}, {}
+    for bid in sorted({v["book"] for v in views}):
+        book = service.books[bid]
+        groups = {(v["id"], pid): _shown_cells(book, v, p) for v in views if v["book"] == bid
+                  for pid, p in tables[v["id"]].items()}
+        shown.update(groups)
+        # the inputs the pages (and the service) declare - not a cell somebody typed a value over ("elle değer")
+        inputs = [c for c, d in book.inputs.items() if d.group not in ("adhoc", "adhoc-shared")]
+
+        def walk(book=book, groups=groups, inputs=inputs):
+            return book.engine.ref_index().upstream(groups, inputs)
+
+        reads.update(service.et.call(walk))
+    out = {}
+    for v in views:
+        book = service.books[v["book"]]
+
+        def within(refs, model=book.model):
+            boxes = [model.range_ref(ref) for ref in refs]
+            return lambda c: any(si == c[0] and r1 <= c[1] // COLS <= r2 and c1 <= c[1] % COLS <= c2
+                                 for si, r1, c1, r2, c2 in boxes)
+
+        is_reference = within(reference_of.get(v["book"], []))
+        for tab, note, ids in _tabs(v):
+            here = {c for pid in ids if (v["id"], pid) in shown for c in shown[(v["id"], pid)]}
+            for pid in ids:
+                p = tables[v["id"]].get(pid)
+                if p is None or (v["id"], pid) in STATUS:
+                    continue
+                said = " ".join((p.get("title") or "", p.get("note") or "", note))
+                allowed = [within(refs) for what, refs in NAMED.get((v["id"], pid), []) if what in said]
+                allowed.append(within(INCIDENTAL.get((v["id"], pid), [])))
+                away = [c for c in reads[(v["id"], pid)] - here
+                        if not is_reference(c) and not any(ok(c) for ok in allowed)]
+                if away:
+                    out[(v["id"], tab, pid)] = sorted(book.ref(*c) for c in away)
+    return out
+
+
+def test_every_table_has_the_inputs_it_reads_in_its_tab(service):
+    """What the desk found on the desk page - the date-to-date forward had nowhere to type its dates and spread: they
+    were in another tab's table - checked for every visible table of every page.  The inputs a table's formulas read
+    (followed through the workbook down to the inputs) are shown in its tab: in the table itself, in a strip of input
+    cells right before it (another page's cells borrowed when they live there), in a panel pinned above the tabs.  Only
+    the desk's reference and set-up data is read from its own home (REFERENCE); a big table of inputs on another tab or
+    page is named in a note (NAMED); a few inputs are read only in passing (INCIDENTAL)."""
+    assert _inputs_away_from_their_tables(service) == {}
+
+
+def test_a_table_away_from_its_inputs_is_found(service):
+    """The check above finds today's problem should a page change bring it back: without the strip of its dates and
+    spread the desk page's date-to-date forward reads them in another tab; the forward quote summary without the row of
+    its curve; a tab whose note no longer names where the pasted position is; the RET curve once it is no reference."""
+    import copy
+    masa = copy.deepcopy(service.view_index["masa"])
+    next(s for s in masa["sections"] if s["id"] == "fwd")["panels"].remove("B10D")
+    next(p for p in masa["panels"] if p["id"] == "EKS")["range"] = "A3:N14"
+    assert _inputs_away_from_their_tables(service, [masa]) == {
+        ("masa", "fwd", "B10"): ["MASA!C60", "MASA!E60", "MASA!I60"], ("masa", "fwd", "EKS"): ["EK_FWD!B2"]}
+    dv01 = copy.deepcopy(service.view_index["dv01"])
+    next(s for s in dv01["sections"] if s["id"] == "risk").pop("note")
+    away = _inputs_away_from_their_tables(service, [dv01])
+    # (the parameters pinned above the tabs as well: their pivot check reads the position's pivots)
+    assert set(away) == {("dv01", "risk", pid) for pid in ("B2", "B9", "B10", "B11", "B13")}
+    assert "DV01_RISK!C6" in away[("dv01", "risk", "B9")] and "DV01_RISK!C85" in away[("dv01", "risk", "B9")]
+    assert away[("dv01", "risk", "B2")] == ["DV01_RISK!K%d" % r for r in sorted(range(6, 26), key=str)]
+    no_ret = dict(REFERENCE, tto=[ref for ref in REFERENCE["tto"] if ref != "Forward!W33:X47"])
+    away = _inputs_away_from_their_tables(service, [service.view_index["masa"]], no_ret)
+    assert "Forward!W33" in away[("masa", "over", "B8")] and ("masa", "fwd", "B10") in away
