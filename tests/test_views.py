@@ -342,7 +342,13 @@ def test_each_calculator_has_one_home():
     assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A3:N14"
     # each spread with the TRY rate it makes beside it (M / N: OIS + spread), the rest as the sheet has them
     assert eks["cols"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
-    assert next(s for s in by["masa"]["sections"] if s["id"] == "fwd")["panels"] == ["EKS", "B10", "B22"]
+    # EURTRY's summary below it: the same columns of the EURTRY matrix (header row 102, "Tümü" 103, dates 104-113)
+    ekse = panel("masa", "EKSE")
+    assert ekse["borrowed"] and ekse["sheet"] == "EK_FWD" and ekse["range"] == "A102:N113" and ekse["cols"] == eks["cols"]
+    assert "EURTRY" in ekse["title"] and "EURTRY" not in eks["title"]
+    # the date-to-date forward's dates and spread right above it: the row of the desk sheet's date-to-date inputs
+    assert panel("masa", "B10D")["range"] == "B60:N60" and not panel("masa", "B10D").get("hidden")
+    assert next(s for s in by["masa"]["sections"] if s["id"] == "fwd")["panels"] == ["EKS", "EKSE", "B10D", "B10", "B22"]
     assert not any(i["range"].startswith("EK_FWD!") for i in by["masa"]["inputs"])
     assert {"EK_FWD!B2", "EK_FWD!D4:E4", "EK_FWD!D20:E29", "EK_FWD!D119:E128"} <= {i["range"] for i in by["forward"]["inputs"]}
     # the hidden limit table of the Calculators sheet takes no input any more
@@ -371,6 +377,33 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
         assert float(cells["M"]["t"].replace(",", ".")) == pytest.approx(cell(service, "EK_FWD!M5", user), abs=0.006)
     finally:
         service.set_inputs(user, "tto", [{"ref": "EK_FWD!D5", "value": ""}])
+    # EURTRY: the same columns from its own matrix; a spread typed on Masa goes into the EURTRY matrix's cell
+    ekse = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKSE")
+    d = ekse["data"]
+    assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
+    assert [c.get("t") for c in d["rows"][0]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    one = d["rows"][d["r"].index(104)]                                   # 1M
+    assert one[0]["t"] == "1M" and [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "E"]
+    service.set_inputs(user, "tto", [{"ref": "EK_FWD!E104", "value": "-40"}])    # 1M ask spread: 40 bp under OIS
+    try:
+        ekse = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKSE")
+        cells = dict(zip(ekse["data"]["c"], ekse["data"]["rows"][ekse["data"]["r"].index(104)]))
+        assert cells["E"]["t"] == "-40" and cell(service, "EK_FWD!N104", user) == pytest.approx(cell(service, "EK_FWD!L104", user) - 0.40, abs=1e-9)
+        assert float(cells["N"]["t"].replace(",", ".")) == pytest.approx(cell(service, "EK_FWD!N104", user), abs=0.006)
+        assert cell(service, "EK_FWD!K104", user) > cell(service, "EK_FWD!G104", user) > 0      # an EURTRY forward above its spot
+    finally:
+        service.set_inputs(user, "tto", [{"ref": "EK_FWD!E104", "value": ""}])
+    # the date-to-date forward's inputs: start, end and spread are the desk sheet's (C60, E60, I60), typed above it
+    strip = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "B10D")
+    d = strip["data"]
+    assert d["r"] == [60] and [col for col, c in zip(d["c"], d["rows"][0]) if c.get("i")] == ["C", "E", "I"]
+    before = cell(service, "MASA!T62", user)                            # B10: the forward at the end date (MPC ima)
+    service.set_inputs(user, "tto", [{"ref": "MASA!C60", "value": "01.12.2026"}, {"ref": "MASA!E60", "value": "01.03.2027"}])
+    try:
+        assert cell(service, "MASA!G60", user) == 90.0                  # the days between them
+        assert cell(service, "MASA!T62", user) > before                 # a later end date than spot + 3 months: a higher forward
+    finally:
+        service.set_inputs(user, "tto", [{"ref": "MASA!C60", "value": ""}, {"ref": "MASA!E60", "value": ""}])
     # the helper: a column the table does not have is skipped, the order otherwise kept, spans across columns dropped
     data = {"c": ["A", "B", "C"], "r": [1], "rows": [[{"t": "a", "cs": 2}, {"t": "b"}, {"t": "c"}]], "fz": 1}
     _pick_columns(data, ["C", "Z", "A"])

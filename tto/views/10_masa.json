@@ -244,9 +244,17 @@
    "hidden": false
   },
   {
+   "id": "B10D",
+   "type": "table",
+   "title": "TARİH ARASI  ·  başlangıç, bitiş ve spread (sarı hücreler girdi; Faiz · PPK sekmesindeki tarih arası faizle aynı tarihler)",
+   "range": "B60:N60",
+   "hidden": false,
+   "keep_title": true
+  },
+  {
    "id": "B10",
    "type": "table",
-   "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread soldan)",
+   "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread üstteki satırda)",
    "range": "P59:AB70",
    "hidden": false
   },
@@ -281,7 +289,19 @@
    "wide": true,
    "borrowed": true,
    "keep_title": true,
-   "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı, EURTRY ve puandan spread: Forward → Kotasyon)"
+   "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı ve puandan spread: Forward → Kotasyon)"
+  },
+  {
+   "id": "EKSE",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A102:N113",
+   "cols": ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"],
+   "hidden": false,
+   "wide": true,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "FORWARD KOTASYON  ·  EURTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; eğri ve 'Tümü' spread'leri USDTRY'ninkinden gelir, ayrıca yazılabilir; tamamı ve puandan spread: Forward → Kotasyon)"
   },
   {
    "id": "B14",
@@ -418,10 +438,12 @@
    "title": "Forward fiyatlama",
    "panels": [
     "EKS",
+    "EKSE",
+    "B10D",
     "B10",
     "B22"
    ],
-   "note": "Forward kotasyon matrislerinin tamamı (USDTRY ve EURTRY, puandan OIS spread'i) Forward sayfasının Kotasyon sekmesindedir; burada USDTRY matrisinin özeti durur (sarı hücreler aynı girdilerdir)."
+   "note": "Forward kotasyon matrislerinin tamamı (USDTRY ve EURTRY, puandan OIS spread'i) Forward sayfasının Kotasyon sekmesindedir; burada iki matrisin özeti durur (sarı hücreler aynı girdilerdir). Tarih arası forward'ın başlangıç, bitiş ve spread'i hemen üstündeki satırdan yazılır; Faiz · PPK sekmesindeki tarih arası faiz de aynı tarihleri kullanır."
   },
   {
    "id": "rates",

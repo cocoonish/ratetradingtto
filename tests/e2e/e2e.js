@@ -1162,17 +1162,36 @@ async function shot(page, name) {
     };
     await open(page, 'masa');
     await tab(page, 'fwd');
-    check('the desk page keeps a summary of the USDTRY quote matrix (the matrices live on the Forward page)',
-      (await panelsOnPage(page)).join(' ') === 'EKS B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
+    check('the desk page keeps a summary of the USDTRY and the EURTRY quote matrix (the matrices live on the Forward page), the date-to-date forward\'s inputs above it',
+      (await panelsOnPage(page)).join(' ') === 'EKS EKSE B10D B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
     // each spread with the TRY rate it makes beside it: Spread bid | TRY bid % | Spread ask | TRY ask % (OIS + spread)
-    const eksHead = await page.$$eval('#content .panel[data-panel="EKS"] tr', (trs) => {
+    const headOf = (id) => page.$$eval('#content .panel[data-panel="' + id + '"] tr', (trs) => {
       const head = trs.find((tr) => /Spread bid/.test(tr.textContent || ''));
       return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
     }).catch(() => []);
-    const at = eksHead.indexOf('Spread bid');
+    const spreadsAndRates = (head) => head.indexOf('Spread bid') >= 0
+      && head.slice(head.indexOf('Spread bid'), head.indexOf('Spread bid') + 4).join(' | ') === 'Spread bid | TRY bid % | Spread ask | TRY ask %';
+    const eksHead = await headOf('EKS');
+    const ekseHead = await headOf('EKSE');
     const tryBidDesk = trNumber(await cellText(page, 'EK_FWD!M5'));
+    const tryBidDeskEur = trNumber(await cellText(page, 'EK_FWD!M104'));
     check('the desk\'s forward summary shows each spread\'s TRY rate beside it: Spread bid | TRY bid % | Spread ask | TRY ask %',
-      at >= 0 && eksHead.slice(at, at + 4).join(' | ') === 'Spread bid | TRY bid % | Spread ask | TRY ask %', { head: eksHead });
+      spreadsAndRates(eksHead), { head: eksHead });
+    check('... EURTRY\'s too, its 1M from the EURTRY spot date with an EURTRY forward above its spot', spreadsAndRates(ekseHead)
+      && (await cellText(page, 'EK_FWD!A104')).trim() === '1M' && trNumber(await cellText(page, 'EK_FWD!K104')) > trNumber(await cellText(page, 'EK_FWD!G104')),
+    { head: ekseHead, k: await cellText(page, 'EK_FWD!K104'), g: await cellText(page, 'EK_FWD!G104') });
+    // the date-to-date forward: its start / end dates and spread typed right above it, in this tab
+    const days0 = (await cellText(page, 'MASA!G60')).trim();
+    await typeInto(page, 'MASA!E60', '01.03.2027');
+    await typeInto(page, 'MASA!C60', '01.12.2026');
+    await waitCell(page, 'MASA!G60', "t.trim() === '90'");
+    check('the date-to-date forward takes its dates in the forward tab (01.12.2026 → 01.03.2027: 90 days), the tab left as it was',
+      (await panelsOnPage(page)).join(' ') === 'EKS EKSE B10D B10 B22', { days0, panels: await panelsOnPage(page) });
+    for (const ref of ['MASA!C60', 'MASA!E60']) {
+      await (await cellHandle(page, ref)).click();
+      await page.keyboard.press('Delete');
+    }
+    await waitCell(page, 'MASA!G60', 't.trim() === ' + JSON.stringify(days0));
     await open(page, 'forward');
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
@@ -1180,6 +1199,8 @@ async function shot(page, name) {
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('... and the desk\'s TRY rate is the matrix\'s OIS + the spread (1M bid: OIS − 150 bp)', Math.abs(tryBidDesk - (ois1m - 1.5)) < 0.011,
       { tryBidDesk, ois1m });
+    const ois1mEur = trNumber(await cellText(page, 'EK_FWD!L104'));
+    check('... EURTRY\'s as well (its 1M bid: OIS − 150 bp)', Math.abs(tryBidDeskEur - (ois1mEur - 1.5)) < 0.011, { tryBidDeskEur, ois1mEur });
     check('matrix starts from the desk spread (−150 bp on both sides)',
       (await cellText(page, 'EK_FWD!D4')).trim() === '-150' && Math.abs(trNumber(await cellText(page, 'EK_FWD!M5')) - (ois1m - 1.5)) < 0.011);
     await typeInto(page, 'EK_FWD!D4', '-300');
