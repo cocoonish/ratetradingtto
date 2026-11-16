@@ -28,8 +28,8 @@ def test_status_and_navigation(service):
     custom = [p["id"] for p in pages if p.get("custom")]
     assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol", "quant", "quant-corr",
                       "quant-pca", "quant-pairs", "quant-regime", "quant-fx", "quant-macro", "quant-model", "quant-intraday", "quant-curve", "quant-opt",
-                      "quant-path", "quant-wirp", "quant-lead", "social", "agenda"]
-    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 27
+                      "quant-path", "quant-wirp", "quant-lead", "quant-viop", "social", "agenda"]
+    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 28
 
 
 @pytest.mark.parametrize("view_id", VIEW_IDS)

@@ -34,7 +34,9 @@ kayıtlı son veriyle çalışır.
 * **Quant sinyaller:** korelasyon kırılması, OIS eğrisinin PCA'sı (zengin / ucuz, PCA-nötr fly ve spread'ler),
   eşbütünleşik çiftler (Kalman hedge oranıyla), VİOP takvim ve FRA / PPK patikası tutarsızlıkları, ima PPK / FOMC
   patikasının ayrık kararların karışımı olarak okunması (**İma Patikası**: tutarlı patikalar, kinkler, kalibrasyon),
-  **TCMB WIRP** (Bloomberg WIRP / CME FedWatch gibi, Fed'i yanında), **Öncü-Takipçi** (kim önce hareket ediyor), makro
+  **TCMB WIRP** (Bloomberg WIRP / CME FedWatch gibi, Fed'i yanında), **Öncü-Takipçi** (kim önce hareket ediyor),
+  **VİOP** (vadelinin spota göre ima TRY faizi: adil değeri, al / sat sinyali, bugün ve bu hafta hangi faizden alınıp
+  satılabileceği olasılıklarıyla, ay sonu etkileri), makro
   betalar, rejim, momentum, PPK döngüsü, FX vol primi ve GARCH, EM carry, forward primi, doğrulanmış bir tahmin modeli,
   **eğri adil değeri** (OIS ve DİBS'e Nelson-Siegel-Svensson: zengin / ucuz, carry + roll, receive / pay için en iyi
   kâğıt, adil eğriden kâğıt kotası ve switch) ve **FX opsiyon smile'ı** (USDTRY / EURUSD skew, kanatlar, vade yapısı;
@@ -1572,7 +1574,8 @@ düzeltilir (gg.aa.yyyy), yeni toplantı eklenir, silinir ya da Excel'den bir ta
 sinyal üretir, **Sinyaller** sayfası hepsini tek listede açıklanabilir bir puanla sıralar, bir sinyal giriş eşiğini
 geçtiği an kaydedilir, izlenir ve abone olan kullanıcıya bildirilir. Analiz sayfaları: **Korelasyon**, **PCA / RV**,
 **Çiftler**, **Rejim & Momentum**, **FX Vol Primi & Carry**, **Makro Beta**, **Tahmin Modeli**, **Gün İçi**,
-**Eğri Adil Değeri**, **Opsiyon** ([aşağıda](#eğri-adil-değeri-ve-opsiyon)), **İma Patikası**, **Öncü-Takipçi**; her
+**Eğri Adil Değeri**, **Opsiyon** ([aşağıda](#eğri-adil-değeri-ve-opsiyon)), **İma Patikası**, **Öncü-Takipçi**,
+**VİOP** ([aşağıda](#viop)); her
 biri kendi sinyallerini üstte listeler, satıra tıklayınca serisi çizilir. **TCMB WIRP** sinyal üretmez: piyasanın
 toplantı başına fiyatladığı karar olasılıkları (aşağıda: *İma Patikası ve TCMB WIRP*).
 
@@ -2058,6 +2061,60 @@ veriden), iyimserdir; kayıtlı veri modunda tarihçe bir aydır (çiftler "geç
 eğrilerde 12 tohum × 14 çiftte 4 yanlış öncü çıktı (hepsi tek tohumda, kur ↔ OIS, kararlılık 2/3: sinyal olmazdı).
 Sorulmadan seçilenler: %5 düzeyi ve Bonferroni, kararlılık için |z| ≥ 2 ve her pencerede tutma şartı, en az 120
 gözlem (masanın "en az gözlem"i), yetişme σ'sı.
+
+#### VİOP
+
+Masanın sorusu: *VİOP'tan USDTRY vadeli almak (ya da satmak) için doğru zaman mı, bugün ve bu hafta hangi faizden
+alınır, kaça gelirse satılır?* Hesap `tto/quantviop.py`'de, quant iş parçacığında; sayfa **VİOP**.
+
+**İma faiz.** VİOP sayfasının formülü: ima TRY % = ((fiyat / spot) · (1 + USD · g/360) − 1) · 360/g, g valörden (T+1,
+TRY tatilleri) kontrat vadesine takvim günü; USD geçmişte EK_VIOP'un USSOA / USSOC / USSOF / USSO1 çizgisi, canlıda
+VİOP sayfasının kendi BID / ASK satırları (13 ve 25: **alış = ask fiyatının**, **satış = bid fiyatının** ima faizi). Karşısında
+aynı vadenin TRY OIS'i (gün cinsinden doğrusal, 365'ten 360'a: VİOP sayfasının satır 77'si gibi) ve offshore (ICAP, olduğu
+gibi). **Al** = vadeli almak: ima faiz ne kadar düşükse o kadar iyi (ucuz forward / ucuz TL borçlanma); **Sat** tersi.
+Sinyalin paketi vadeli ile spot (yalnız faiz): *Buy VİOP Kas26 (… kontrat) · Sell USDTRY spot*, ana bacak 1.000 $ DV01
+(ima faizin 1 bp'si 1.000 $; kontrat 1.000 $).
+
+**Veri (Bloomberg, tarihçenin normal turu).** İşlemdeki ilk 6 kontrat (VİOP sayfasının L1:W1'i) ve onlardan önceki 24
+aylık kontrat: kapanış, gün içi en yüksek, en düşük (PX_LAST / PX_HIGH / PX_LOW). **Vadesi geçmiş kontrat bir kez
+istenir** (geçmişi tamdır), yeni günleri hiç sorulmaz; önce VİOP sayfasının ticker biçimiyle ("A1X5 Curncy"), o boş
+dönerse iki haneli yılla ("A1X25 Curncy"); ikisi de boşsa en erken bir hafta sonra yeniden. VİOP serilerinin ilk
+doldurması kendi sırasında, turda 15 seri. USDTRY'nin en yüksek / en düşüğü, USD OIS 1M / 6M / 1Y (3M quant paketinin).
+Canlıda ön iki kontratın (işlem) ve USDTRY'nin (bid, ask) son 20 iş gününün **5 dakikalık barları**: her gün bir kez,
+gün bittikten sonra (dakikada en çok 4 istek). Bloomberg geçmişi gelene kadar (ilk canlı gün) VİOP geçmiş sayfasının
+(EK_VIOP) kendi günleri kullanılır.
+
+**Hesaplananlar.**
+* **Kontrat tablosu:** her kontratın alış / satış / orta ima faizi, aynı vadenin OIS'i, VİOP − OIS ve VİOP − offshore
+  farkı (bp), normal fark, adil ima faiz (OIS + farkın penceredeki ortalaması), z, yarı ömür, 1.000 $ DV01 için kontrat
+  sayısı.
+* **Sabit vadeli seriler** (30 / 61 / 91 / 182 gün): her gün bütün kontratlardan (vadesi geçmişler dahil) doğrusal -
+  hangi kontrat önde olursa olsun iki yıllık geçmiş. Bir kontratın farkı o vadedeki seriyle izlenir (sabit vadeli seri o
+  vadede kısaysa kontratın kendi günleriyle).
+* **Sinyal** (aile "VİOP adil değer"): farkın penceredeki ortalamasına uzaklığı (z, OU yarı ömrü, rejim - paketin bütün
+  ortalamaya dönüş aileleri gibi): − ise ima faiz ucuz (Buy VİOP / Sell spot), + ise pahalı.
+* **Emir seviyeleri, bugün (kalan seans 09:30–18:15) ve bu hafta (Cuma kapanışına):** alış emrinin (ask ima faizin en
+  düşüğü) ve satış emrinin (bid ima faizin en yükseği) %90 / 70 / 50 / 30 / 10 olasılıkla görüleceği seviyeler, ima faiz
+  ve şimdiki spot ile vadeli fiyatı olarak. Model: sürüklenmeli Brown hareketi, yansıma ilkesiyle (simülasyonla
+  doğrulandı); sürüklenme = adil değere çekilme (OU) + vadeye doğru kayma (canlı kontratların ima eğrisinin eğimi) +
+  geçmişte belirgin (|t| ≥ 2) ay sonu etkisi; varyans gün içi barların yarım saatlik profili (geçmişin günlük
+  oynaklığına ölçekli; bar yoksa seansa eşit dağıtılır).
+* **Kalibrasyon:** geçmişin her kapanışında sonraki 5 kapanış için verilen seviyeler, gelenlere karşı (1 ve 3 aylık
+  sabit vade; kapanışların en düşüğü için Broadie-Glasserman düzeltmesi): isabet oranları ve onları olasılıklara en çok
+  yaklaştıran σ çarpanı c - canlı seviyeler c ile verilir. Gün içi: barlı günlerde 11:00'de verilen seviyeler, günün
+  kalanına karşı.
+* **Takvim:** 1 aylık sabit vadenin VİOP − OIS farkının günlük değişimi ay sonuna kalan iş gününe göre (−5 … +3, bütün
+  aylar ve çeyrek sonları) ve haftanın gününe göre (ortalama, t, n); vadeye kalan güne göre ima faizin günlük oynaklığı.
+* **Gün içi profil** (barlar): yarım saatlik dilimde barın oynaklığı ve ima faizin günün ortalamasından uzaklığı (−: o
+  saatlerde genelde düşük - alış için), son günlerin en düşük / en yüksek ima faizi ve saati.
+* **Günlük aralık:** kontratların ve USDTRY'nin en yüksek − en düşük fiyatı (20 gün).
+
+**Ayarlar:** adil spread ve oynaklık penceresi 120 gün (*Masa ayarları*). **Sınırlar:** model Brown hareketidir; şişman
+kuyruklar kalibrasyonla (c) kısmen karşılanır. Gün içi profil 5 dakikalık işlem barlarındandır: kontrat seyrek işlem
+görürse bar boş kalır. Vadeye birkaç gün kala küçük bir fiyat hareketi ima faizi çok oynatır (tabloda); seviyeler o
+günlerde geniştir. Kayıtlı veri modunda VİOP geçmişi ve bar yoktur: kontratlar canlı kotalarıyla görünür, seviyeler
+canlıda gelir. Vadesi geçmiş kontratların Bloomberg ticker'ı terminalde doğrulanmalı (ilk canlı günde sayfanın *Veri*
+tablosu hangi kontratın geldiğini gösterir).
 
 ### Excel'deki diğer özelliklerin karşılığı
 
@@ -2614,6 +2671,8 @@ tto/quantpath.py   ima PPK / FOMC patikası ayrık kararların karışımı olar
                    ızgara, tutarlı patikalar (doğrusal kısıtlar), kinkler, kalibrasyon, evrişim matrisi, USD görüntüleri
 tto/quantlead.py   öncü-takipçi: çapraz korelasyon ve asimetrisi, Granger F, dağıtılmış gecikme β'sı, kararlılık, yetişme
                    sinyali; hizalı her seride (gün ya da dakika barı), gün içi bar kaynağı için adaptör
+tto/quantviop.py   VİOP: kontratlar (ticker, vade), ima TRY faiz, sabit vadeli seriler, adil değer ve sinyal, bugün / bu hafta
+                   emir seviyeleri (yansıma ilkesi, gün içi profil, kalibrasyon), takvim etkileri, 5 dakikalık barlar
 tto/quant.py       quant servisi: ayrı iş parçacığı, tarihçeye eklenen seriler, ayarlar, sinyal kaydı, alarmlar, API
 tto/xlsx.py        gün sonu arşivi için küçük .xlsx yazıcı (yalnızca değerler ve biçimler)
 tto/server.py      HTTP API + canlı güncelleme (server-sent events); oturum kapısı: girişsiz /api isteği 401
