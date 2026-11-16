@@ -4,9 +4,10 @@
 // the source page's value too (the same cells of the same book, as this user or for the desk as the cell says).
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, confirmDialog, promptDialog } from '../ui.js';
-import { hub, PanelBox, makeBox, changed } from '../boxes.js';
+import { hub, makeBox, changed } from '../boxes.js';
 import { onLayout, loadLayout, launchpads, findLaunchpad, changeLaunchpad, createLaunchpad, saveLayout, landing,
   pinToDrawer } from '../layout.js';
+import { addCalcSheet } from '../calc.js';
 
 const nameKey = (s) => String(s || '').replace(/I/g, 'ı').replace(/İ/g, 'i').toLocaleLowerCase('tr');
 
@@ -78,8 +79,15 @@ export class LaunchpadPage {
     pop.addEventListener('click', () => { const lp = this.current(); if (lp && this.ctx.popLaunchpad) this.ctx.popLaunchpad(lp.name); });
     this.landBtn = h('button', { class: 'btn sm', type: 'button', id: 'lp-landing', title: 'Dashboard\'u adres yazmadan açtığınızda bu launchpad açılsın' }, 'Açılış sayfası yap');
     this.landBtn.addEventListener('click', () => this.toggleLanding());
+    // a calc sheet of one's own (calc.js): numbers and formulas over the dashboard's live cells
+    const calcBtn = h('button', { class: 'btn sm', type: 'button', id: 'lp-calc', title: 'Bu launchpad\'e kendi hesap tablonuzu ekleyin: sayılar ve =MASA!I60+25 gibi canlı formüller' }, '+ Hesap tablosu');
+    calcBtn.addEventListener('click', async () => {
+      const lp = this.current();
+      const name = await addCalcSheet(lp ? lp.name : null);
+      if (name && (!lp || name !== lp.name)) this.open(name);
+    });
     if (this.pop) tools.append(this.handBtn);
-    else tools.append(newBtn, this.handBtn, exp, imp, file, pop, this.landBtn);
+    else tools.append(newBtn, calcBtn, this.handBtn, exp, imp, file, pop, this.landBtn);
     tools.appendChild(h('span', { class: 'grow' }));
     tools.appendChild(h('span', { class: 'muted lp-hint' }, this.pop ? '' : 'Tablo eklemek için: sayfasındaki tablonun başlığında "+ Launchpad", ya da Ctrl+K'));
     this.tabs = h('div', { class: 'viewtabs lp-tabs', role: 'tablist', id: 'lp-tabs' });
@@ -419,7 +427,7 @@ export class PopPanelPage {
     clear(this.host);
     this.host.classList.add('lp-page', 'pop-one');
     this.host.classList.toggle('hand', handMode());
-    this.box = new PanelBox(this.item, { ctx: this.ctx, place: 'pop', adhoc: () => handMode(),
+    this.box = makeBox(this.item, { ctx: this.ctx, place: 'pop', adhoc: () => handMode(),
       edit: (change) => {                        // (a window of its own: its choice lives in its address)
         this.item = changed(this.item, change);
         this.box.show(this.item);

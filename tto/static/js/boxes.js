@@ -8,6 +8,7 @@ import { Grid, copyGrid, findCell } from './grid.js';
 import { Chart } from './chart.js';
 import { bondCardLinks, bondFlags } from './bonds.js';
 import { WIDTHS } from './layout.js';
+import { CalcBox } from './calc.js';
 
 let seq = 0;
 
@@ -517,3 +518,7 @@ export function changed(item, change) {
   }
   return out;
 }
+
+// a personal calc sheet (calc.js): its own kind of box, brought up to date with the others
+BOX_TYPES.calc = CalcBox;
+CalcBox.hub = hub;
