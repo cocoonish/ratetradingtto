@@ -7,6 +7,7 @@ import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { Chart } from '../chart.js';
 import { num, isoToTr } from '../format.js';
+import { readLine, isInfo } from './quantread.js';
 
 export const BLUE = '4F81BD', GREY = '7F7F7F', PURPLE = '8064A2', GREEN = '9BBB59', RED = 'C0504D', ORANGE = 'F79646';
 export const isNum = (v) => typeof v === 'number' && isFinite(v);
@@ -101,15 +102,22 @@ export function keep(key, value) {
   try { localStorage.setItem(key, String(value)); } catch (e) { /* not kept */ }
 }
 
-/** A panel with a title, its tools (copy) and a body: ``{el, body, note, setTitle}``. */
+/**
+ * A panel with a title, its tools (copy), a body and its two explanations: ``{el, body, note, read, setTitle}``. ``read``,
+ * above the body, says in the desk's words what the table tells and which number means a trade (``quantread.js``);
+ * ``note``, below it, how it is computed - labelled "Yöntem" when the panel has a read line, unless its note is live
+ * information rather than a method (``isInfo``).
+ */
 export function panel(id, title, opts = {}) {
   const body = h('div', { class: 'body' });
-  const note = h('div', { class: 'muted qnote' });
+  const said = readLine(id);
+  const read = h('div', { class: 'qread', id: id + '-read' }, said || null);
+  const note = h('div', { class: 'muted qnote' + (said && !isInfo(id) ? ' qmethod' : '') });
   const head = h('h2', null, title);
   const tools = h('div', { class: 'tools' });
   const el = h('section', { class: 'panel wide' + (opts.cls ? ' ' + opts.cls : ''), id },
-    h('header', null, head, h('span', { class: 'grow' }), ...(opts.right || []), tools), opts.top || null, body, note);
-  return { el, body, note, tools, setTitle: (t) => { head.textContent = t; } };
+    h('header', null, head, h('span', { class: 'grow' }), ...(opts.right || []), tools), read, opts.top || null, body, note);
+  return { el, body, note, read, tools, setTitle: (t) => { head.textContent = t; } };
 }
 
 /**
