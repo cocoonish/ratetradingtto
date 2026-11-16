@@ -5,6 +5,7 @@ import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
+import { PositionPanel } from '../retposition.js';
 
 const FWD_BASES = [['RET_BID', 'RET bid'], ['RET_MID', 'RET mid'], ['RET_ASK', 'RET ask'], ['TRY', 'TRY faizi'], ['FWD', 'Forward kur'], ['SP', 'Swap puanı']];
 const BASIS_LABEL = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask', TRY: 'TRY faizi', FWD: 'Forward kur', SP: 'Swap puanı' };
@@ -171,6 +172,11 @@ export class BlotterPage {
     this.quoteBond.cancel();
   }
 
+  /** ``#/blotter?p=position``: the position and its cost per RET tenor. */
+  focusPanel(id) {
+    if (id === 'position' && this.position) this.position.focus();
+  }
+
   /** Show one day (``to`` empty) or every day of a period. */
   show(from, to) {
     if (!from) return;
@@ -266,6 +272,9 @@ export class BlotterPage {
       this.sections[id] = { el: sec, body, count };
       lists.appendChild(sec);
     }
+    // the desk's net TRY position and its cost per RET tenor, today and the last days (retposition.js)
+    this.position = new PositionPanel(this.ctx);
+    lists.appendChild(this.position.el);
     this.host.appendChild(h('div', { class: 'blotter' }, h('div', { class: 'left' }, this.entry, this.readonlyNote),
       h('div', { class: 'right' }, this.riskBar, lists)));
     this.sheetTitle = h('div', { class: 'section-title' }, 'Excel sayfasının kendi özet tabloları (Günlük İşlemler)');
@@ -1029,6 +1038,7 @@ export class BlotterPage {
     this.sheetNote.classList.toggle('hidden', !parts.length || !sheet.length);
     this.sheetTitle.classList.toggle('hidden', !sheet.length);
     this.sheetLink.classList.toggle('hidden', !sheet.length);
+    if (this.position) this.position.refresh();
   }
 }
 

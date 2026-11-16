@@ -60,7 +60,7 @@ const ctx = {
   refreshPage: () => { runRefresh(); },
   setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
   displayName: (key) => state.users[key] || key || '',
-  openRet: () => openRetEditor(ctx),
+  openRet: (opts) => openRetEditor(ctx, opts),
   /** A trade to enter, its fields filled from a quote (a matrix row, a chat line): opens Günlük İşlemler with them. */
   openTrade: (spec) => {
     try { sessionStorage.setItem('tto.trade.prefill', JSON.stringify(spec)); } catch (e) { /* ignore */ }
@@ -805,6 +805,12 @@ function applyStatus(status) {
     ? 'RET faizleri · son yükleme ' + ret.updated_at + (ret.updated_by ? ' (' + ctx.displayName(ret.updated_by) + ')' : '')
       + (fresh ? '' : ' – bugün güncellenmedi')
     : 'RET faizleri bugün yüklenmedi – dosyadaki eski değerler kullanılıyor. Tıklayıp Excel\'den yapıştırın.';
+  // the fair value RET differs from the published one: "RET güncellemesi var: 1M, 2M" - a pill on the RET button, its
+  // tenors (a click opens the fair value tab)
+  const ups = (status.ret_fair && status.ret_fair.updates) || [];
+  $('ret-upd').classList.toggle('hidden', !ups.length);
+  $('ret-upd').textContent = ups.length ? '↻ ' + (ups.length > 3 ? ups.slice(0, 3).join(', ') + ' +' + (ups.length - 3) : ups.join(', ')) : '';
+  $('ret-upd').title = ups.length ? 'RET güncellemesi var: ' + ups.join(', ') + ' – adil değer yayınlanandan farklı. Bakmak ve "Kopyala ve yayınla" için tıklayın.' : '';
   $('foot-ver').textContent = 'port ' + status.port;
   if (status.note && !state.noteShown) {
     state.noteShown = true;
@@ -981,6 +987,9 @@ function boot() {
     store('tto.nav', on ? '1' : '0');
   });
   $('btn-ret').addEventListener('click', () => openRetEditor(ctx));
+  const openFair = (e) => { e.stopPropagation(); e.preventDefault(); openRetEditor(ctx, { tab: 'fair' }); };
+  $('ret-upd').addEventListener('click', openFair);
+  $('ret-upd').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') openFair(e); });
   setupFind($('findbox'), () => state.pages || [], (page, panel) => ctx.goto(page, panel), {
     recent: () => recent.filter((id) => id !== state.pageId).map((id) => ({ id, title: pageTitle(id) })),
     add: (src, x, y) => addMenu(x, y, src, { pin: ctx.pinToDrawer, pop: ctx.popOut }),

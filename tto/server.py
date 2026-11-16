@@ -440,6 +440,37 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def ret_history(request: Request):
         return ok({"history": await call_free(svc().ret_history)})
 
+    # ------------------------------------------------------------------ the fair value RET (retfair.py)
+    @handler
+    async def ret_fair(request: Request):
+        return ok(await call(svc().retfair.state, _user(request)))
+
+    @handler
+    async def ret_fair_tenors(request: Request):
+        # the desk's per-tenor settings: {"tenors": [...] | "all", "offset" | "shift" | "from_published" | "base"}
+        return ok(await call(svc().retfair.change, _user(request), await _body(request)))
+
+    @handler
+    async def ret_fair_settings(request: Request):
+        # "Ekstra ayarlar": administrators only
+        return ok(await call(svc().retfair.set_settings, _user(request), await _body(request)))
+
+    @handler
+    async def ret_fair_flow(request: Request):
+        # {"accept": <suggestion id>} / {"remove": <tenor>}
+        return ok(await call(svc().retfair.flow, _user(request), await _body(request)))
+
+    @handler
+    async def ret_fair_publish(request: Request):
+        # "Kopyala ve yayınla": the curve the page copied becomes the desk's RET
+        data = await _body(request)
+        return ok(await call(svc().retfair.publish, _user(request), data.get("rows")))
+
+    @handler
+    async def ret_position(request: Request):
+        # Günlük İşlemler's "Pozisyon ve maliyet": the desk's forwards per RET tenor, today and the last days
+        return ok(await call(svc().retfair.position, _user(request)))
+
     # ------------------------------------------------------------------ blotter
     @handler
     async def blotter(request: Request):
@@ -1004,6 +1035,12 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/columns", columns, methods=["GET", "POST"]),
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
+        Route("/api/ret/fair", ret_fair),
+        Route("/api/ret/fair/tenors", ret_fair_tenors, methods=["POST"]),
+        Route("/api/ret/fair/settings", ret_fair_settings, methods=["POST"]),
+        Route("/api/ret/fair/flow", ret_fair_flow, methods=["POST"]),
+        Route("/api/ret/fair/publish", ret_fair_publish, methods=["POST"]),
+        Route("/api/ret/position", ret_position),
         Route("/api/market/unknown", market_unknown),
         Route("/api/market/unknown/export", market_unknown_export),
         Route("/api/vol", vol, methods=["POST"]),

@@ -3705,6 +3705,106 @@ async function shot(page, name) {
     await page.waitForFunction(() => window.tto.state.pageId === 'quant-opt' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 30000 }).catch(() => null);
     check('Ctrl+K finds a page by its own title and opens it on its tab (Opsiyon: FX lit)', (await onTab()).on.join() === 'quant-opt' && (await onTab()).lit.join() === 'quant.fx');
 
+    // ------------------------------------------------------------------ fair value RET (retfair.js) and the position panel
+    console.log('fair value RET');
+    await open(page, 'forward');
+    await page.click('#btn-ret');
+    await page.waitForSelector('.modal table.ret');
+    await page.click('#ret-tab-fair');
+    await page.waitForSelector('#retfair-table tbody tr[data-tenor="2Y"]');
+    const fairRow = (t) => page.evaluate((x) => {
+      const q = (s) => document.querySelector(s + '[data-tenor="' + x + '"]');
+      return { now: q('td.retfair-now').textContent, pub: q('td.retfair-pub').textContent, formula: q('td.retfair-formula').textContent,
+        off: q('input.retfair-off').value };
+    }, t);
+    const sideOf = (text, k) => trNumber(text.split(' / ')[k]);
+    check('the RET dialog has its fair value part: a row per tenor, no value before an offset is set',
+      (await page.locator('#retfair-table tbody tr[data-tenor]').count()) === 15 && (await fairRow('1M')).now === '—', await fairRow('1M'));
+    await page.click('#retfair-from-pub');                             // nothing selected: every tenor
+    await page.waitForFunction(() => { const td = document.querySelector('td.retfair-now[data-tenor="1M"]'); return td && td.textContent !== '—'; });
+    const fair1 = await fairRow('1M');
+    check('"Yayınlanandan al": each tenor\'s offset gives the published RET back (Şimdiki = Yayınlanan), no banner',
+      fair1.now === fair1.pub && await page.isHidden('#retfair-banner') && /^OIS mid [−+] \d+$/.test(fair1.formula), fair1);
+    // a base and an offset changed: Şimdiki moves, the banner (and the RET button) names the tenors
+    await page.selectOption('select.retfair-base[data-tenor="1M"]', 'viop');
+    await page.waitForFunction(() => /^VİOP mid/.test(document.querySelector('td.retfair-formula[data-tenor="1M"]').textContent));
+    const off2M = await page.inputValue('input.retfair-off[data-tenor="2M"]');
+    await page.fill('input.retfair-off[data-tenor="2M"]', String(trNumber(off2M) + 25));
+    await page.press('input.retfair-off[data-tenor="2M"]', 'Enter');
+    await page.waitForFunction(() => /1M, 2M/.test(document.getElementById('retfair-banner').textContent), null, { timeout: 20000 });
+    const fair1b = await fairRow('1M'), fair2 = await fairRow('2M');
+    check('a base (1M → VİOP mid) and an offset (2M +25 bp): Şimdiki changes, "RET güncellemesi var: 1M, 2M"',
+      fair1b.now !== fair1b.pub && Math.abs(sideOf(fair2.now, 0) - sideOf(fair2.pub, 0) - 0.25) < 1e-9
+      && (await page.textContent('#retfair-banner')) === 'RET güncellemesi var: 1M, 2M', [fair1b, fair2]);
+    await page.waitForFunction(() => /1M, 2M/.test(document.getElementById('ret-upd').textContent)
+      && !document.getElementById('ret-upd').classList.contains('hidden'), null, { timeout: 30000 });
+    check('... the RET button says it too', true);
+    // "Kopyala ve yayınla": the clipboard and the desk's RET, the same numbers; every table of the RET follows
+    await page.click('#retfair-fmt-table');
+    await page.click('#retfair-publish');
+    await page.waitForFunction(() => /RET yayınlandı/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    const pubTsv = (await page.evaluate(() => navigator.clipboard.readText())).split('\r\n');
+    const new1M = fair1b.now.split(' / ');
+    check('"Kopyala ve yayınla": the new curve on the clipboard in the dialog\'s table format',
+      pubTsv[0] === 'Vade\tGün\tBid\tAsk' && pubTsv.includes('1M\t30\t' + new1M[0] + '\t' + new1M[1]) && pubTsv.length === 16, pubTsv.slice(0, 8));
+    const retAfterPub = await api(page, 'ayşe yilmaz', 'GET', '/api/ret');
+    const histAfterPub = await api(page, 'ayşe yilmaz', 'GET', '/api/ret/history');
+    check('... written as the desk\'s RET, in its history (who, when, what); the banner is gone',
+      Math.abs(retAfterPub.json.rows.find((r) => r.tenor === '1M').bid * 100 - trNumber(new1M[0])) < 1e-9
+      && histAfterPub.json.history[0].user === 'ayşe yilmaz' && await page.isHidden('#retfair-banner'), retAfterPub.json.rows[5]);
+    await page.click('.modal .mfoot .btn:not(.primary)');
+    await tab(page, 'ret');
+    await waitCell(page, 'Forward!W38', "t.trim() === '" + new1M[0] + "%'");
+    const w38 = (await cellText(page, 'Forward!W38')).trim();
+    await open(page, 'masa');
+    await page.waitForFunction((v) => { const td = window.tto.findCell('MASA!D10'); return td && Math.abs(Number(td.textContent.replace('%', '').replace(',', '.')) - v) < 1e-6; },
+      trNumber(new1M[0]), { timeout: 20000 }).catch(() => null);
+    const d10 = await cellText(page, 'MASA!D10');
+    check('the RET tables follow: the Forward sheet\'s RET and Masa\'s ORANLAR "RET bid"',
+      w38 === new1M[0] + '%' && d10 !== null && Math.abs(trNumber(d10) - trNumber(new1M[0])) < 1e-6, [w38, d10, new1M]);
+    // a large forward of the desk: a flow suggestion, accepted as a flow adjustment, removed with one click
+    const bigFwd = await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/forward', { dir: 'B', amount: '400m', value_date: '1M', basis: 'RET_BID' });
+    check('a large forward is entered (400 mn USD, 1M, TRY sold)', bigFwd.status === 200, bigFwd.json);
+    await page.click('#btn-ret');
+    await page.waitForSelector('#retfair-table tbody tr[data-tenor="2Y"]');            // (the dialog opens on the tab used last)
+    await page.waitForSelector('#retfair-suggestions .retfair-sugg[data-id="1M:+"] button.retfair-accept:not([disabled])', { timeout: 30000 });
+    const suggText = await page.textContent('#retfair-suggestions .retfair-sugg[data-id="1M:+"] .txt');
+    check('a flow suggestion in desk words, the tenor with its neighbour: "1M\'de bugün net … TRY sattık … → öneri 1M … 2M ask +…"',
+      /^1M'de bugün net [\d,]+ mn USD TRY sattık \(.*\), ortalama \d+,\d\d ile; RET bid \d+,\d\d .* → öneri (1M \/ 2M ask \+\d+ bp|1M ask \+\d+ bp, 2M ask \+\d+ bp)$/.test(suggText), suggText);
+    const before1M = await fairRow('1M');
+    await page.click('#retfair-suggestions .retfair-sugg[data-id="1M:+"] button.retfair-accept');
+    await page.waitForFunction(() => /\(akış\)/.test(document.querySelector('td.retfair-formula[data-tenor="1M"]').textContent), null, { timeout: 20000 });
+    const after1M = await fairRow('1M');
+    check('accepted: a flow adjustment shown apart ("+ N (akış)"), Şimdiki up, the offset untouched',
+      / \+ \d+ \(akış\)$/.test(after1M.formula) && after1M.off === before1M.off && sideOf(after1M.now, 0) > sideOf(before1M.now, 0)
+      && /\(akış\)/.test((await fairRow('2M')).formula) && await page.locator('#retfair-suggestions .retfair-sugg[data-id="1M:+"]').count() === 0, [before1M, after1M]);
+    await page.click('button.retfair-flow-x[data-tenor="1M"]');
+    await page.waitForFunction(() => !/\(akış\)/.test(document.querySelector('td.retfair-formula[data-tenor="1M"]').textContent), null, { timeout: 20000 });
+    check('... removed with one click (2M keeps its own until it is removed too)', /\(akış\)/.test((await fairRow('2M')).formula)
+      && (await fairRow('1M')).now === before1M.now, await fairRow('1M'));
+    await page.click('button.retfair-flow-x[data-tenor="2M"]');
+    await page.waitForFunction(() => !/\(akış\)/.test(document.querySelector('td.retfair-formula[data-tenor="2M"]').textContent), null, { timeout: 20000 });
+    await page.click('.modal .mfoot .btn:not(.primary)');
+    // a user who is no administrator: "Ekstra ayarlar" read-only, refused by the server too
+    const ctxF = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const pageF = await ctxF.newPage();
+    pageF.on('pageerror', (e) => errors.push('pageerror(F): ' + e.message));
+    await login(pageF, 'Mehmet');
+    await pageF.click('#btn-ret');
+    await pageF.waitForSelector('#ret-tab-fair');
+    await pageF.click('#ret-tab-fair');
+    await pageF.waitForFunction(() => { const b = document.getElementById('retfair-admin-save'); return b && b.disabled && document.querySelector('.retfair-width'); }, null, { timeout: 20000 });
+    const denied = await api(pageF, 'mehmet', 'POST', '/api/ret/fair/settings', { hysteresis: 3 });
+    check('a user who is no administrator sees "Ekstra ayarlar" read-only and cannot change them',
+      await pageF.isDisabled('#retfair-hyst') && await pageF.isDisabled('.retfair-width') && denied.status === 403, denied);
+    await ctxF.close();
+    // Günlük İşlemler: "Pozisyon ve maliyet" per RET tenor, the same aggregation as the suggestions
+    await open(page, 'blotter');
+    await page.waitForFunction(() => /1M/.test((document.querySelector('#blotter-position .body') || {}).textContent || ''), null, { timeout: 30000 });
+    const posText = await page.textContent('#blotter-position');
+    check('Günlük İşlemler shows "Pozisyon ve maliyet": the 1M tenor with its net TRY sold, cost and P&L against RET / OIS mid',
+      /Pozisyon ve maliyet/.test(posText) && /K\/Z RET mid/.test(posText) && /Toplam/.test(posText) && /Broker Chat/.test(posText), posText.slice(0, 300));
+
     // ------------------------------------------------------------------ each user's own menu
     console.log('own menu');
     await page.click('#btn-user');
