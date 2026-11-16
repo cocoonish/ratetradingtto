@@ -1,8 +1,9 @@
 """VİOP (tto/quantviop.py): the contracts' tickers and expiries (the VİOP sheet's rules) and the history's series of
 them, the implied rate (the sheet's formula) and its inverse, the USD line, the constant maturities, the calendar,
 the level model (the reflection principle against a simulation, its inverse, the ladder, the calibration on a
-known process), the intraday profile and the 5-minute bars (store, plan, fetch, rates), the family on a synthetic
-history with its signal, then the service, the HTTP API and the page."""
+known process), the intraday profile and the 5-minute bars (store, plan, fetch, rates; through the Bloomberg layer on
+the fake terminal, with what they cost), the family on a synthetic history with its signal and the calendar's drift
+of today and of the week, then the service (the VİOP sheet's twelve contracts in replay), the HTTP API and the page."""
 from __future__ import annotations
 
 import datetime as dt
@@ -189,6 +190,54 @@ def test_the_bar_store_the_plan_and_the_fetch(tmp_path):
     svc.mode = "replay"
     assert qv.fetch_bars(quant, ["A1Z6 Curncy"], TODAY, HOL)["why"] == "kayıtlı veri modu" and len(calls) == 3
     quant._viop_bars.close()
+
+
+def test_the_bars_on_the_fake_terminal_and_what_they_cost(tmp_path):
+    """The 5-minute bars through the Bloomberg layer (``provider.intraday_bars``, the fake terminal's 09:30 - 18:00
+    bars): the two front contracts' trades and USDTRY's bid and ask for the last 20 business days - 80 requests, one
+    hit each, four a minute's refresh, every day once; the next day four (the day that ended), the oldest day dropped;
+    the bars give a day's implied rates, a profile and its calibration."""
+    import fake_blpapi
+    from tto.marketdata.bloomberg import BloombergProvider
+    server = fake_blpapi.Server()
+    provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    provider.start()
+    try:
+        svc = types.SimpleNamespace(mode="live", provider=provider, settings=types.SimpleNamespace(data_dir=str(tmp_path)))
+        quant = types.SimpleNamespace(svc=svc)
+        fronts = ["A1X6 Curncy", "A1Z6 Curncy"]
+        rounds = []
+        for _ in range(30):                                                # a minute's refresh each
+            out = qv.fetch_bars(quant, fronts, TODAY, HOL)
+            if not out["asked"]:
+                break
+            rounds.append(out)
+        asked = [r for r in server.requests if r["op"] == "IntradayBarRequest"]
+        days = qv.bar_days(TODAY, HOL)
+        hits = provider.status()["hits_today"]
+        assert [r["asked"] for r in rounds] == [qv.BAR_PER_REFRESH] * 20 and len(asked) == 80 == 4 * len(days)
+        assert hits == server.hits() == 80                                                             # one hit a request
+        assert sorted({(r["securities"][0], r["options"]["eventType"]) for r in asked}) == [
+            ("A1X6 Curncy", "TRADE"), ("A1Z6 Curncy", "TRADE"), ("USDTRY Curncy", "ASK"), ("USDTRY Curncy", "BID")]
+        store = quant._viop_bars
+        per_day = 102                                                      # 09:30 - 18:00: the fake terminal's session
+        assert sum(r["bars"] for r in rounds) == 80 * per_day and {n for k in store.asked().values() for n in k.values()} == {per_day}
+        g = qv.days_to(qv.expiry_of(2026, 11, HOL), days[-1], HOL)
+        rates = {d: qv.bar_rates(store, "A1X6 Curncy", d, 4.0, g) for d in days}
+        assert all(len(r) == per_day for r in rates.values())
+        prof = qv.intraday_profile(rates)
+        assert prof["days"] == 20 and [r["from"] for r in prof["shape"]] == list(range(9 * 60 + 30, 18 * 60, 30))      # the half hours 09:30 … 17:30
+        assert qv.intraday_calibration(rates, qv.Profile(0.01, prof["buckets"], prof["overnight"]))["n"] == 20
+        # the next day: only the day that ended, four requests; the oldest day leaves the store
+        nxt = qv.fetch_bars(quant, fronts, TODAY + dt.timedelta(days=1), HOL)
+        hits1 = provider.status()["hits_today"] - hits
+        assert (nxt["asked"], nxt["bars"], hits1) == (4, 4 * per_day, 4) and qv.fetch_bars(quant, fronts, TODAY + dt.timedelta(days=1), HOL)["asked"] == 0
+        assert min(min(k) for k in store.asked().values()) == qv.bar_days(TODAY + dt.timedelta(days=1), HOL)[0] > days[0]
+        print("bars: %d requests, %d hits, %d bars the first time (%d refreshes of four), then %d requests (%d hits) a day"
+              % (len(asked), hits, sum(r["bars"] for r in rounds), len(rounds), nxt["asked"], hits1))
+        store.close()
+    finally:
+        provider.stop()
 
 
 def test_bar_rates_the_intraday_profile_and_its_calibration(tmp_path):

@@ -145,8 +145,8 @@ class ViopPage extends QuantPage {
     const host = this.levelsBody;
     host.replaceChildren();
     if (!r) { host.appendChild(h('div', { class: 'empty' }, 'Kontrat seçin')); return; }
-    this.levels.setTitle('Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, 2) + ' / satış ' + fmt(r.bid, 2) + ' · adil ' + fmt(r.fair, 2)
-      + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : ''));
+    this.levels.setTitle('Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, 2) + ' / satış ' + fmt(r.bid, 2)
+      + (isNum(r.fair) ? ' · adil ' + fmt(r.fair, 2) : '') + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : ''));
     for (const [which, title] of [['today', 'Bugün (kalan seans)'], ['week', 'Bu hafta (Cuma kapanışına)']]) {
       const part = r[which] || {};
       const box = h('div', { class: 'qlevels' });
