@@ -171,8 +171,11 @@ class Ctx(object):
     def __init__(self, cfg: Dict[str, Any], today: _dt.date, series: Dict[str, Dict[str, float]], meta: Dict[str, Dict[str, Any]],
                  live: Optional[Dict[str, float]] = None, viop: Optional[List[Dict[str, Any]]] = None,
                  carry: Optional[Dict[float, float]] = None, mpc: Optional[Dict[str, Any]] = None, path: Optional[Dict[str, Any]] = None,
-                 holidays: Optional[set] = None, fwd_scale: Optional[Dict[str, int]] = None):
+                 holidays: Optional[set] = None, fwd_scale: Optional[Dict[str, int]] = None, desk: Optional[Dict[str, Any]] = None):
         self.cfg = cfg
+        #: what the workbook says a trade's size is made of (``quant.Quant._read_engine``): USDTRY (OIS_MAIN!D2) and each
+        #: OIS tenor's annuity (Motor!I) - as the blotter sizes a trade; empty: the quant's own (FX:USDTRY, the par rates)
+        self.desk: Dict[str, Any] = desk or {}
         self.today = today
         self.today_iso = today.isoformat()
         self.series = {k: {d: v for d, v in pts.items() if d < self.today_iso and _num(v) is not None} for k, pts in series.items()}
@@ -246,6 +249,29 @@ class Ctx(object):
             if abs(months - m) < 1e-6 and cr is not None:
                 return -cr
         return None
+
+    # ---- a package's size: its main leg's DV01, as the desk sizes a trade (OIS_MAIN!F2 "DV01/bacak $")
+    def usdtry(self, live: Optional[Dict[str, float]] = None) -> Optional[float]:
+        """USDTRY of the packages' TRY sizes: the workbook's (OIS_MAIN!D2 - what the blotter and DİBS RV!AK use), else
+        the quant's own FX:USDTRY."""
+        v = self.desk.get("usdtry")
+        return v if v else self.try_per("USD", live)
+
+    def dv01_size(self, live: Optional[Dict[str, float]] = None) -> Tuple[float, Optional[float]]:
+        """The main leg's DV01 of every package: USD a bp (the setting ``dv01_usd``, 1.000 - the desk's OIS_MAIN!F2) and
+        TRY a bp at USDTRY now (``None`` without a USDTRY)."""
+        usd = float(self.cfg.get("dv01_usd") or 0.0)
+        fx = self.usdtry(live)
+        return usd, (usd * fx if usd and fx else None)
+
+    def ois_annuity(self, key: str, live: Optional[Dict[str, float]] = None) -> Optional[float]:
+        """A TRY OIS tenor's annuity (years; a unit nominal's DV01 is annuity × 1e-4): the workbook's (Motor!I - what the
+        blotter sizes a trade with), else from its own par rate by the workbook's schedule (:func:`_annuity`)."""
+        a = (self.desk.get("ois_annuity") or {}).get(key.split(":", 1)[-1].upper())
+        if a:
+            return a
+        m, par = self.months(key), self.cur(key, live)
+        return _annuity(par, m) if m and par is not None else None
 
     # ---- series built from others: the EM FX index and the FX forwards
     def _construct(self) -> None:
@@ -499,6 +525,11 @@ class Monitor(object):
         self.pnl_sd: Optional[float] = kw.get("pnl_sd")                       # a day's (a bar's) σ of the P&L, when not dsd × factor
         self.horizon_unit: str = kw.get("horizon_unit", "gün")
         self.intraday: bool = bool(kw.get("intraday", False))
+        # the trade told leg by leg (a hedged package: the expression names every leg); its title, and other packages
+        # that trade the same signal ([{name, legs, carry_up (P&L units a week, the package going up), note}])
+        self.explicit: bool = bool(kw.get("explicit", False))
+        self.pkg_name: Optional[str] = kw.get("pkg_name")
+        self.packages: List[Dict[str, Any]] = kw.get("packages") or []
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -614,13 +645,50 @@ PKG_VERBS = {"rate": ("Pay", "Receive"), "bond": ("Sell", "Buy"), "fx": ("Buy", 
              "cds": ("Buy protection", "Sell protection"), "slope": ("Steepener", "Flattener"), "spread": ("Buy", "Sell")}
 
 
-def leg_text(leg: Dict[str, Any], side: int) -> str:
-    up, down = _verbs(leg["key"])
-    return "%s %s" % (up if side > 0 else down, leg["name"])
-
-
 def fmt_w(w: float) -> str:
     return ("%.2f" % abs(w)).replace(".", ",")
+
+
+def signal_leg(leg: Dict[str, Any], pkg_s: int) -> Dict[str, Any]:
+    """A package's leg as a signal shows it: what to do (``action``: Pay / Receive, Buy / Sell …) on what, its DV01
+    weight, and its size for the package's main-leg DV01 - TRY and USD a bp, nominal in mn TRY (unsigned: the action
+    says the side)."""
+    w = leg.get("weight", 1.0)
+    side = sign(pkg_s * w)
+    up, down = _verbs(leg["key"])
+    action = up if side > 0 else down
+    out = {"key": leg["key"], "name": leg["name"], "weight": abs(w), "side": side, "action": action,
+           "text": "%s %s" % (action, leg["name"]) + ("" if abs(abs(w) - 1.0) < 1e-9 else " ×" + fmt_w(w))}
+    for k in ("dv01", "dv01_usd", "notional"):
+        v = leg.get(k)
+        out[k] = abs(v) if v is not None else None
+    return out
+
+
+def size_legs(ctx: "Ctx", legs: List[Dict[str, Any]], live: Optional[Dict[str, float]] = None) -> None:
+    """Each TRY OIS leg's size for its package's main-leg DV01 (:meth:`Ctx.dv01_size`; weights are DV01 weights): its
+    DV01 in TRY and USD a bp (signed as the weight) and its nominal (mn TRY) - DV01 ÷ (annuity × 1e-4), the annuity
+    the workbook's.  A leg its family sized already (a bond: its DV01 a 1 mn nominal) is left as it is."""
+    usd, tl = ctx.dv01_size(live)
+    if not usd:
+        return
+    for leg in legs:
+        key = leg.get("key") or ""
+        if "dv01_usd" in leg or not key.startswith("OIS:"):
+            continue
+        w = float(leg.get("weight", 1.0))
+        ann = ctx.ois_annuity(key, live)
+        leg["dv01_usd"] = w * usd
+        leg["dv01"] = w * tl if tl else None
+        leg["notional"] = abs(w) * tl / (ann * 1e-4) / 1e6 if tl and ann else None
+
+
+def size_monitors(ctx: "Ctx", mons: List["Monitor"]) -> None:
+    """Every monitor's packages sized (once: a sized leg is left)."""
+    for m in mons:
+        size_legs(ctx, m.legs)
+        for p in m.packages:
+            size_legs(ctx, p["legs"])
 
 
 # ---------------------------------------------------------------------------------------------- signals
@@ -714,13 +782,10 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         target = m.level + s * (m.reward or 0.0)
         stop = m.level - s * (m.risk or 0.0)
         scale = m.risk or None
-    legs = []
-    for leg in m.legs:
-        side = sign(pkg_s * leg.get("weight", 1.0))
-        legs.append({"key": leg["key"], "name": leg["name"], "weight": abs(leg.get("weight", 1.0)), "side": side,
-                     "text": leg_text(leg, side) + ("" if abs(abs(leg.get("weight", 1.0)) - 1.0) < 1e-9 else " ×" + fmt_w(leg.get("weight", 1.0))),
-                     "dv01": leg.get("dv01"), "notional": leg.get("notional")})
-    if m.pkg in PKG_VERBS:
+    legs = [signal_leg(leg, pkg_s) for leg in m.legs]
+    if m.explicit and len(legs) > 1:
+        expression = " · ".join("%s %s" % (l["action"], l["name"]) for l in legs)      # a hedged package: every leg told
+    elif m.pkg in PKG_VERBS:
         up, down = PKG_VERBS[m.pkg]
         expression = "%s %s" % (up if pkg_s > 0 else down, m.name)
     elif m.pkg == "corr":
@@ -820,9 +885,26 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     pnl_try = None
     if exp is not None:
         if unit == "bp":
-            pnl_try = exp * float(cfg.get("dv01_base") or 0.0)
+            # bp of the main leg's DV01 (its TRY DV01 as sized, else the setting at the fit's USDTRY)
+            main = legs[0] if legs else {}
+            tl = main["dv01"] / main["weight"] if main.get("dv01") and main.get("weight") else None
+            if tl is None and cfg.get("dv01_usd") and cfg.get("usdtry"):
+                tl = float(cfg["dv01_usd"]) * float(cfg["usdtry"])
+            pnl_try = exp * tl if tl else None
         elif unit == "%" and m.fx and fx.get("spot") and fx.get("try_per_quote"):
             pnl_try = exp / 100.0 * 1e6 * fx["spot"] * fx["try_per_quote"]
+    # the packages that trade it: the main one, then the others (each leg told, sized; its own carry + roll and the
+    # same expected move with it)
+    packages = []
+    if m.pkg_name or m.packages:
+        packages.append({"name": m.pkg_name or "Paket", "legs": legs, "carry_week": carry_week, "exp_pnl": exp, "note": "",
+                         "trade": " · ".join("%s %s" % (l["action"], l["name"]) for l in legs)})
+        for p in m.packages:
+            pl = [signal_leg(leg, pkg_s) for leg in p["legs"]]
+            cw = pkg_s * p["carry_up"] if p.get("carry_up") is not None else None
+            e2 = s * move * factor + cw * (hold or 0.0) / 5.0 if move is not None and factor and cw is not None else None
+            packages.append({"name": p["name"], "legs": pl, "carry_week": cw, "exp_pnl": e2, "note": p.get("note") or "",
+                             "trade": " · ".join("%s %s" % (l["action"], l["name"]) for l in pl)})
     sg = {"id": m.sid, "family": m.family, "family_label": FAMILIES[m.family][0], "page": FAMILIES[m.family][2], "kind": m.kind,
           "asset": m.asset, "instrument": m.name, "expression": expression, "legs": legs, "direction": s, "z": m.z,
           "score_name": m.score_name, "entry_z": thr, "strength": "elendi" if gated else strength(abs(m.z) / thr), "level": m.level,
@@ -834,7 +916,7 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
           "regime": REGIME_TEXT.get(tag), "regime_info": m.regime, "composite": 0.0 if gated else composite,
           "parts": {"z": base, "regime": rf, "hl": hf, "carry": cf}, "gated": gated, "live": m.live, "time": stamp,
           "note": m.note, "info": {k: v for k, v in m.info.items() if k not in ("ou", "inputs")}, "agree": 0, "conflict": 0,
-          "agree_with": [], "conflict_with": []}
+          "agree_with": [], "conflict_with": [], "packages": packages}
     try:
         sg["thesis"] = m.thesis(sg) if m.thesis is not None else default_thesis(m, sg)
     except Exception:  # noqa: BLE001 - a sentence that cannot be written is no reason to lose the signal
@@ -1137,8 +1219,10 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
                         _ois_name(ctx, key), _g(abs(sg["level"]), 1), "ucuz" if sg["level"] > 0 else "pahalı", w_main, _sg(sg["z"], 2),
                         "; " + other if other else "", _g(sg.get("half_life"), 1), sg["expression"], _sg(sg.get("exp_pnl"), 1)))
 
+        # (the series is the hedged package itself: "hedge'li" is its name)
         mon = mr_monitor(ctx, "pca:" + key, "pca", "TRY OIS", "%s (PC1–PC2 hedge'li)" % _ois_name(ctx, key), "bp", 1, fit["days"], series,
                          "bp", legs, calc, carry_up=carry, pkg="rate", thesis=pthesis, info={"window": w_main, "z_windows": zs},
+                         explicit=True, pkg_name="Paket · iki komşu vadeyle hedge'li (PC1 ve PC2'ye nötr, DV01 ağırlıklı)",
                          note="%d günlük pencere: seviyelerin PCA'sı (bileşenler, eğrinin pencerede gerçekten kaydığı yönler) ile tenor ve iki "
                               "komşusundan PC1 ve PC2'ye nötr paket; seviyesi pencerenin ortalamasına göre (bp): + ise tenor ucuz (yüksek faiz → "
                               "receive), − ise pahalı (pay). Döngünün trendi bileşenlerde kaldığı için kalıntı onunla trend yapmaz." % w_main)
@@ -1279,10 +1363,9 @@ def fam_rv(ctx: Ctx, fit: Optional[Dict[str, Any]], items: List[Dict[str, Any]])
     keys, rows, vec, values = fit["keys"], fit["rows"], fit["vectors"], fit["values"]
     win_ = fit.get("window") or ctx.window()
     index = {key: j for j, key in enumerate(keys)}
-    base = float(ctx.cfg["dv01_base"])
+    base = ctx.dv01_size()[1] or 0.0                     # the main leg's DV01, TRY a bp
     mons: List[Monitor] = []
     table = []
-    today = [ctx.cur(k_) for k_ in keys]
     for it in items:
         if it.get("product") != "OIS" or it.get("kind") not in ("spread", "fly"):
             continue
@@ -1299,13 +1382,9 @@ def fam_rv(ctx: Ctx, fit: Optional[Dict[str, Any]], items: List[Dict[str, Any]])
                 row["versions"][version] = {"error": "PC1/PC2 sistemi çözülemedi"}
                 continue
             series = [sum(w * r[j] for j, w in weights.items()) * 100.0 for r in rows]
-            legs = []
-            for j, w in sorted(weights.items(), key=lambda x: fit["months"][x[0]]):
-                par = today[j]
-                ann = _annuity(par, fit["months"][j]) if par is not None else None
-                dv01 = w * base
-                legs.append({"key": keys[j], "name": _ois_name(ctx, keys[j]), "weight": w, "dv01": dv01,
-                             "notional": abs(dv01) / (ann * 1e-4) / 1e6 if ann else None})
+            legs = [{"key": keys[j], "name": _ois_name(ctx, keys[j]), "weight": w}
+                    for j, w in sorted(weights.items(), key=lambda x: fit["months"][x[0]])]
+            size_legs(ctx, legs)                         # DV01 (TRY / USD) and nominal of each leg
             expo = pkg_exposures(weights, vec, values)
             net = sum(weights.values()) * base
 
@@ -3004,6 +3083,7 @@ def run_all(ctx: Ctx, rv_items: List[Dict[str, Any]], timing: Optional[Dict[str,
 
 def score_all(ctx: Ctx, mons: List[Monitor], raw_live: Dict[str, float]) -> None:
     live = ctx.derive_live(raw_live)
+    size_monitors(ctx, mons)
     for m in mons:
         m.score(live, raw_live)
         if m.family == "macro":

@@ -40,8 +40,9 @@ def bt_type(m: qf.Monitor) -> str:
 
 def _pnl_try(sg: Dict[str, Any], pnl: float, cfg: Dict[str, Any]) -> Optional[float]:
     unit = sg.get("pnl_unit")
-    if unit == "bp":
-        return pnl * float(cfg.get("dv01_base") or 0.0)
+    if unit == "bp":                                      # bp of the package's main-leg DV01: USD a bp × USDTRY of the fit
+        usd, fx = cfg.get("dv01_usd"), cfg.get("usdtry")
+        return pnl * float(usd) * float(fx) if usd and fx else None
     fx = sg.get("fx") or {}
     if unit == "%" and fx.get("spot") and fx.get("try_per_quote"):
         return pnl / 100.0 * 1e6 * fx["spot"] * fx["try_per_quote"]

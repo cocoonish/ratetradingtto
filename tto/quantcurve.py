@@ -972,12 +972,16 @@ def fam_curve(ctx: qf.Ctx) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
             s = snap(live)
             return s["resid"].get(key) if s else None
 
-        mon = qf.mr_monitor(ctx, "curve:" + key, "curve", "TRY OIS", "%s OIS (NSS'e göre, hedge'li)" % key.split(":", 1)[1], "bp", 1,
+        # the series is the tenor's own distance from the fit ("NSS farkı"); the trade is the tenor against its two
+        # neighbours - the hedge is the package's, not the series'
+        mon = qf.mr_monitor(ctx, "curve:" + key, "curve", "TRY OIS", "%s OIS · NSS farkı" % key.split(":", 1)[1], "bp", 1,
                             [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=qf._pkg_carry(ctx, legs), pkg="rate",
-                            info={"hedge": [{"key": order[h], "weight": w} for h, w in hedge]},
-                            note="Kotanın NSS (Nelson-Siegel-Svensson) uyumundan farkı (bp, Excel'in OIS kuralıyla: 3A'ya kadar tek ödeme, "
-                                 "ötesi üç ayda bir kupon): + ise vade eğriye göre ucuz (receive), − ise pahalı (pay). Hedge bacakları paketi "
-                                 "uyumun seviye (β0) ve eğim (β1) faktörlerine nötr yapar.")
+                            info={"hedge": [{"key": order[h], "weight": w} for h, w in hedge]}, explicit=True,
+                            pkg_name="Paket · iki komşu vadeyle hedge'li (NSS seviye β0 ve eğim β1'e nötr, DV01 ağırlıklı)",
+                            note="Seri: kotanın NSS (Nelson-Siegel-Svensson) uyumundan farkı (bp, Excel'in OIS kuralıyla: 3A'ya kadar tek ödeme, "
+                                 "ötesi üç ayda bir kupon): + ise vade eğriye göre ucuz (receive), − ise pahalı (pay). İşlem paketi: vade ve "
+                                 "iki komşusu, uyumun seviye (β0) ve eğim (β1) faktörlerine nötr DV01 ağırlıklarıyla - eğri kayar ya da "
+                                 "dikleşirse paket yerinde kalır, kazancı vadenin eğriye dönmesinden gelir.")
         if mon is not None:
             mons.append(mon)
             by_key[key] = mon
@@ -1130,34 +1134,50 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
     mons: List[qf.Monitor] = []
     by_isin: Dict[str, qf.Monitor] = {}
     carry_now = _bond_carry(ctx, ref, ois, rows, ctx.live) if ref is not None else {}
+    usd, tl = ctx.dv01_size()
     if ref is not None:
         fit_in = ref["in"]
         keys = [b.isin for b in fit_in.bonds]
         vec = _exposures(ref["jac"], -1.0)
+        # each bond's DV01 a 1 mn nominal (TL a bp): in its own yield convention (the fit's - the hedge weights are in
+        # it) and as the desk has it (DİBS RV!AI: of the simple yield)
+        own = list(fit_in.d)
+        desk = [desk_dv01(b, fit_in.value[i], fit_in.p[i], fit_in.y[i]) or own[i] for i, b in enumerate(fit_in.bonds)]
         for j, isin in enumerate(keys):
             pts = resid.get(isin) or []
             b = bonds[isin]
             hedge = qf._hedges(keys, vec, j)
+            idx = [j] + [h for h, _ in hedge]
             legs = [{"key": "DIBS:" + isin, "name": _bond_label(b), "weight": 1.0}] + [
                 {"key": "DIBS:" + keys[h], "name": _bond_label(bonds[keys[h]]), "weight": w} for h, w in hedge]
+            size_bond_legs(legs, [own[i] for i in idx], [desk[i] for i in idx], usd, tl)
+            scale = own[j] / desk[j]                     # a bp of the residual (own convention) in bp of the desk's DV01
             cr = []
             for leg in legs:
                 c = carry_now.get(leg["key"][5:]) or {}
                 v = c.get("total_1w")
                 cr.append(None if v is None else -leg["weight"] * v)
-            carry_up = sum(cr) if cr and all(v is not None for v in cr) else None
+            carry_up = sum(cr) * scale if cr and all(v is not None for v in cr) else None
+            p2 = ois_package(ctx, legs[0], fit_in.flows[j][-1][0], carry_now.get(isin), scale,
+                             (rows.get(isin) or {}).get("asw")) if "dv01_usd" in legs[0] else None
 
             def calc(live: Dict[str, float], isin: str = isin) -> Optional[float]:
                 s = snap(live)
                 return s["resid"].get(isin) if s else None
 
-            mon = qf.mr_monitor(ctx, "dibsfv:" + isin, "dibsfv", "DİBS", "%s (NSS'e göre, hedge'li)" % _bond_label(b), "bp", 1,
+            # the series is the bond's own distance from the fit ("NSS farkı"); the hedges are its packages'
+            mon = qf.mr_monitor(ctx, "dibsfv:" + isin, "dibsfv", "DİBS", "%s · NSS farkı" % _bond_label(b), "bp", 1,
                                 [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=carry_up, pkg="bond",
+                                pnl=("bp", scale), explicit=True, packages=[p2] if p2 else [],
+                                pkg_name="Paket 1 · DİBS komşularıyla hedge'li (NSS seviye β0 ve eğim β1'e nötr)",
                                 info={"inputs": ["DIBSS:" + isin, "DIBSC:" + isin], "conv": conv[isin],
                                       "hedge": [{"key": "DIBS:" + keys[h], "weight": w} for h, w in hedge]},
-                                note="Getirinin DİBS NSS uyumundaki model getirisinden farkı (bp, kâğıdın kendi getiri kuralıyla): + ise kâğıt "
-                                     "eğriye göre ucuz (al), − ise pahalı (sat). Hedge bacakları paketi uyumun seviye ve eğim faktörlerine nötr "
-                                     "yapar (DV01 ağırlıklı). Carry + roll: kupon tahakkuku − fonlama, artı eğride yuvarlanma.")
+                                note="Seri: getirinin DİBS NSS uyumundaki model getirisinden farkı (bp, kâğıdın kendi getiri kuralıyla): + ise "
+                                     "kâğıt eğriye göre ucuz (al), − ise pahalı (sat). Paket 1: kâğıt ve iki komşusu, DİBS uyumunun seviye ve "
+                                     "eğim faktörlerine nötr DV01 ağırlıklarıyla - eğri kayar ya da dikleşirse paket yerinde kalır, kazancı "
+                                     "kâğıdın eğriye dönmesinden gelir. Nominaller paket DV01'i için (ana bacak; DV01 DİBS RV!AI gibi: mod. "
+                                     "süre × kirli fiyat), yuvarlanmadan - masa 5 mn TL'ye yuvarlar. Carry + roll: kupon tahakkuku − "
+                                     "fonlama, artı eğride yuvarlanma.")
             if mon is not None:
                 mons.append(mon)
                 by_isin[isin] = mon
@@ -1392,6 +1412,86 @@ def _ois_yields(fit_in: BondFit, ois_nss: Optional[Nss]) -> List[Optional[float]
     if ois_nss is None:
         return [None] * len(fit_in)
     return [b.yield_of(p, v, c, y) for b, p, v, c, y in zip(fit_in.bonds, fit_in.model_prices(ois_nss), fit_in.value, fit_in.conv, fit_in.y)]
+
+
+# ---------------------------------------------------------------------------------------------- the packages' sizes
+def desk_dv01(bond: Bond, value: _dt.date, price: float, guess: Optional[float] = None) -> Optional[float]:
+    """A bond's DV01 as the desk has it - DİBS RV!AI (ED): modified duration × dirty price, of the simple yield -, TL a
+    bp for 1 mn nominal: −dP/dy (per 100) of the simple yield of its dirty price."""
+    ys = bond.yield_of(price, value, "simple", guess)
+    if ys is None:
+        return None
+    _, dp = bond.price(ys, value, "simple")
+    return -dp if dp < 0 else None
+
+
+def size_bond_legs(legs: List[Dict[str, Any]], own: Sequence[float], desk: Sequence[Optional[float]], usd: float,
+                   tl: Optional[float]) -> None:
+    """Bond legs sized for the package's main-leg DV01 (``usd`` / ``tl`` a bp).  ``weight``: each leg's DV01 weight in
+    the bonds' own yield convention (the fit's); ``own`` / ``desk``: each bond's DV01 a 1 mn nominal in that convention
+    and in the desk's (DİBS RV!AI).  The first leg is the main one - its desk DV01 the package's; each leg gets its
+    desk DV01 (USD and TRY a bp, signed as the weight), the nominal (mn TRY) and ``dv01_mn``."""
+    if not usd or not desk[0]:
+        return
+    for leg, o, d in zip(legs, own, desk):
+        if not d or not o:
+            continue
+        w = leg["weight"] * (d / o) / (desk[0] / own[0])            # own-convention DV01 → the desk's, the main leg's 1
+        leg["dv01_mn"] = d
+        leg["dv01_usd"] = w * usd
+        leg["dv01"] = w * tl if tl else None
+        leg["notional"] = abs(w) * tl / d if tl else None             # mn: TL a bp ÷ TL a bp a 1 mn
+
+
+def ois_hedge(years: float, tenors: Sequence[Tuple[str, float]]) -> Optional[Dict[str, Any]]:
+    """The OIS side of a bond's asset swap, for a unit of its desk DV01 going up (its yield rising: the bond sold) - as
+    DİBS RV hedges a bond (AJ, "OIS hedge oranı": an OIS to the bond's maturity with its DV01) - in the quoted tenors
+    (``tenors``: ``(key, years)``, shortest first): the two around the bond's maturity share the OIS DV01, linearly by
+    where the maturity falls between them (a broken date between two quotes); the total the bond's (the desk's 1:1).
+    Beyond the ends of the curve, the end tenor alone.  ``{"legs": [(key, weight)], "years"}``."""
+    if not tenors:
+        return None
+    keys = [k for k, _ in tenors]
+    mats = [t for _, t in tenors]
+    if years <= mats[0]:
+        return {"legs": [(keys[0], -1.0)], "years": years}
+    if years >= mats[-1]:
+        return {"legs": [(keys[-1], -1.0)], "years": years}
+    for i in range(len(keys) - 1):
+        a, c = mats[i], mats[i + 1]
+        if a <= years <= c and c > a:
+            u_c = (years - a) / (c - a)
+            legs = [(k, -u) for k, u in ((keys[i], 1.0 - u_c), (keys[i + 1], u_c)) if u > 1e-9]
+            return {"legs": legs, "years": years}
+    return None
+
+
+def ois_package(ctx: qf.Ctx, main: Dict[str, Any], years: float, carry: Optional[Dict[str, Any]], scale: float,
+                asw: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """Package 2 of a bond's signal: the bond (its leg as in package 1) against TRY OIS around its maturity
+    (:func:`ois_hedge`, the quoted tenors with a quote now), its carry + roll a week in P&L units (bp of the bond's
+    desk DV01; the package going up - the bond sold) when every leg's is known: the bond's own (``carry``, its
+    convention's bp, × ``scale``) and each tenor's of the carry engine."""
+    tenors = [(k, ctx.meta[k]["months"] / 12.0) for k in _ois_keys(ctx) if ctx.cur(k) is not None]
+    h = ois_hedge(years, tenors)
+    if h is None:
+        return None
+    legs = [dict(main)] + [{"key": k, "name": qf._ois_name(ctx, k), "weight": u} for k, u in h["legs"]]
+    carry_up = None
+    v = (carry or {}).get("total_1w")
+    cw = [ctx.carry_week(k) for k, _ in h["legs"]]
+    if v is not None and all(c is not None for c in cw):
+        carry_up = -v * scale + sum(u * c for (_, u), c in zip(h["legs"], cw))
+    where = (" ve ".join("%s %%%d" % (qf._ois_name(ctx, k), round(abs(u) * 100)) for k, u in h["legs"]) if len(h["legs"]) > 1
+             else "%s tek başına (vade eğrinin ucunun ötesinde)" % qf._ois_name(ctx, h["legs"][0][0]))
+    note = ("Paket 2: kâğıt TRY OIS'le - DİBS RV'nin kendi OIS hedge'i gibi (AJ: kâğıdın vadesine kadar bir OIS, aynı DV01), kote "
+            "vadelerle: vadesi %s yıl, OIS DV01'i %s (vadeye göre doğrusal); toplam OIS DV01'i kâğıdınkine eşit. Kâğıdı satana OIS "
+            "receive, alana pay. Bu paketin K/Z'si kâğıdın OIS'e göre farkıyla (asset swap%s) gider: NSS farkının yanında bütün "
+            "eğrinin DİBS − OIS farkını da taşır, Paket 1 taşımaz. Sinyalin z'si ve beklenen hareketi NSS farkınındır. OIS "
+            "nominalleri DV01 ÷ (annuity × 1e-4), annuity Motor'unki (Günlük İşlemler'in OIS girişi gibi)."
+            % (("%.1f" % years).replace(".", ","), where, ", DİBS RV ASW %s bp" % ("%.0f" % asw) if asw is not None else ""))
+    return {"name": "Paket 2 · kâğıt + OIS, OIS'le hedge'li (asset swap: vadesine eş OIS, DV01 1:1)", "legs": legs, "carry_up": carry_up,
+            "note": note}
 
 
 # ---------------------------------------------------------------------------------------------- quotes from the fair curve

@@ -235,17 +235,40 @@ export class SignalChart {
     const s = d.signal;
     const box = this.details;
     if (s) {
-      const legs = h('table', { class: 'plain qlegs' }, h('tr', null, h('th', null, 'Bacak'), h('th', null, 'Ağırlık'), h('th', null, 'DV01'), h('th', null, 'Nominal (mn)')));
-      for (const l of s.legs || []) {
-        legs.appendChild(h('tr', null, h('td', null, l.text), h('td', { class: 'n' }, fmt(l.weight, 2)), h('td', { class: 'n' }, isNum(l.dv01) ? sgn(l.dv01, 0) : ''),
-          h('td', { class: 'n' }, isNum(l.notional) ? fmt(l.notional, 1) : '')));
+      const pu = s.pnl_unit || '';
+      // every package that trades the signal, leg by leg: what to do, on what, how much (the main leg's DV01 the
+      // setting's, 1.000 $ by default) - a signal without packages of its own: its legs
+      const legTable = (legs) => {
+        const t = h('table', { class: 'plain qlegs' }, h('tr', null, h('th', null, 'İşlem'), h('th', null, 'Enstrüman'), h('th', null, 'Nominal (mn TL)'),
+          h('th', null, 'DV01 ($/bp)'), h('th', null, 'DV01 (TL/bp)'), h('th', null, 'Ağırlık')));
+        for (const l of legs || []) {
+          t.appendChild(h('tr', null, h('td', null, h('b', null, l.action || '')), h('td', null, l.name || l.text || ''),
+            h('td', { class: 'n' }, num(l.notional, 1)), h('td', { class: 'n' }, num(l.dv01_usd, 0)),
+            h('td', { class: 'n' }, num(l.dv01, 0)), h('td', { class: 'n' }, fmt(l.weight, 2))));
+        }
+        return t;
+      };
+      // a package's trade in a line, every leg with its nominal and DV01 ($ and TL a bp) where they are known
+      const sized = (legs) => ((legs || []).some((l) => isNum(l.dv01_usd))
+        ? legs.map((l) => l.action + ' ' + l.name + (isNum(l.dv01_usd) ? ' (' + (isNum(l.notional) ? num(l.notional, 1) + ' mn TL · ' : '')
+          + 'DV01 ' + num(l.dv01_usd, 0) + ' $' + (isNum(l.dv01) ? ' / ' + num(l.dv01, 0) + ' TL' : '') + ')' : '')).join(' · ') : '');
+      const packs = h('div', { class: 'qpacks' });
+      const plist = (s.packages && s.packages.length) ? s.packages : [{ name: '', legs: s.legs }];
+      for (const pk of plist) {
+        const bits = [];
+        if (isNum(pk.carry_week)) bits.push('carry + roll ' + sgn(pk.carry_week, 2) + ' ' + (pu || 'bp') + ' / hafta');
+        if (isNum(pk.exp_pnl)) bits.push('beklenen ' + sgn(pk.exp_pnl, 2) + ' ' + pu + ' (tutma boyunca, carry dahil)');
+        const box1 = h('div', { class: 'qpack' });
+        if (pk.name) box1.appendChild(h('div', { class: 'qpack-head' }, h('b', null, pk.name), bits.length ? ' · ' + bits.join(' · ') : ''));
+        box1.appendChild(legTable(pk.legs));
+        if (pk.note) box1.appendChild(h('div', { class: 'qpack-note muted' }, pk.note));
+        packs.appendChild(box1);
       }
       const p = s.parts || {};
-      const pu = s.pnl_unit || '';
       const fx = s.fx || null;
       const lines = [
         ['Tez', s.thesis || ''],
-        ['Yön', s.expression],
+        ['Yön', sized(s.legs) || s.expression],
         ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + (s.gated ? 'elendi' : s.strength)],
         ['Giriş / hedef / stop', fmt(s.entry, s.digits) + ' / ' + fmt(s.target, s.digits) + ' / ' + fmt(s.stop, s.digits) + (s.unit ? ' ' + s.unit : '')
           + (fx ? ' (forward\'la tutmanın getirisi, carry dahil)' : '')],
@@ -274,7 +297,7 @@ export class SignalChart {
       for (const g of s.gates || []) {
         gates.appendChild(h('tr', { class: g.ok ? 'ok' : 'fail' }, h('td', null, g.name), h('td', { class: g.ok ? 'thru' : 'soft' }, g.ok ? '✓' : '✗'), h('td', null, g.text || '')));
       }
-      box.append(h('div', { class: 'qcols' }, kv, h('div', null, legs, gates)));
+      box.append(h('div', { class: 'qcols' }, kv, h('div', null, packs, gates)));
     }
     const info = m.info || {};
     const extra = [];
