@@ -49,12 +49,12 @@ week's P&L in risk units, mean ÷ σ × √52) and the largest drawdown - the Si
 **The lines.**  A basket's leg is a line of the Sinyaller list, in its group ("model: Carry + momentum · G10 spot
 sepeti"): the trade in the desk's words with its size ("SAT USDJPY spot · 1,2 mn USD"), entry, target and stop in its
 price, the expected P&L in money, the backtest's hit rate and weeks.  A basket's expected week: the backtest's mean
-weekly P&L in risk units × the basket's risk now (a leg's share by its own risk); the target is that gain, the stop
-2σ of the week's P&L against (a leg: its own σ).  Every instrument of a set has a monitor - its score "sıra" 2 for the
-strongest of a side down to 1 for the weakest, under 1 out of the basket (entry 1) -, so an instrument entering a
-basket at a rebalance is a new line: logged and alerted.  No gates: a basket's legs are its lines whatever their carry
-or expected profit (the card shows those checks).  Lines are keyed by what they are (a pair, a tenor, a package, an
-ISIN): a calendar edit, a roll or a new bond moves no state from one line to another.
+weekly P&L in risk units × the basket's risk when it was made (a leg's share by its own risk); the target is that
+gain, the stop 2σ of the week's P&L against (a leg: its own σ).  Every instrument of a set has a monitor - its score
+"sıra" 2 for the strongest of a side down to 1 for the weakest, under 1 out of the basket (entry 1) -, so an
+instrument entering a basket at a rebalance is a new line: logged and alerted.  No gates: a basket's legs are its
+lines whatever their carry or expected profit (the card shows those checks).  Lines are keyed by what they are (a
+pair, a tenor, a package, an ISIN): a calendar edit, a roll or a new bond moves no state from one line to another.
 """
 from __future__ import annotations
 

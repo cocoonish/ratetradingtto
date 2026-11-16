@@ -107,7 +107,7 @@ class SiraPage extends QuantPage {
     const head = h('div', { class: 'qsentence' }, h('b', null, s.name), ' · ' + b.formed_text + ' kapanışında kuruldu · sonraki dengeleme ' + s.next_text + ' kapanışı');
     const kv = h('table', { class: 'plain qkv' });
     const line = (k, v, id) => kv.appendChild(h('tr', null, h('th', null, k), h('td', id ? { id } : null, v)));
-    line('Beklenen K/Z (hafta)', isNum(b.exp) ? money(b.exp, ccy) + ' (geri testin haftalık ortalaması × sepetin bugünkü riski)'
+    line('Beklenen K/Z (hafta)', isNum(b.exp) ? money(b.exp, ccy) + ' (geri testin haftalık ortalaması × sepetin kuruluştaki riski)'
       : 'geri test kısa (' + (bt.trades || 0) + ' hafta): beklenti yok', card.id + '-exp');
     line('Hedef / stop', (isNum(b.target) ? money(b.target, ccy) : '—') + ' / ' + money(b.stop, ccy) + ' (2σ, haftalık σ ' + money(b.risk, ccy, false) + ')');
     line('Şimdiye kadar', money(isNum(b.so_far_now) ? b.so_far_now : b.so_far, ccy) || '0 ' + ccy, card.id + '-sofar');
