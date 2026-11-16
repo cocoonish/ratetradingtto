@@ -2209,6 +2209,7 @@ async function shot(page, name) {
     await page.fill('#agenda-time', rep.time);
     await page.fill('#agenda-text', REP);
     await page.check('#agenda-deadline');
+    await page.click('#agenda-scope button[data-v="shared"]');              // (the item before was one's own)
     await page.selectOption('#agenda-repeat', businessDay ? 'workdays' : 'weekdays');
     if (!businessDay) await page.check('#agenda-weekdays input[data-d="' + rep.dow + '"]');
     check('Tekrar: the days of the week only for "Seçili günler", an end day for any repeat',
@@ -2219,7 +2220,7 @@ async function shot(page, name) {
     const repRule = (await api(page, 'ayşe yilmaz', 'GET', '/api/agenda')).json.rules.find((r) => r.text === REP);
     const repRow = '#agenda-rules tr[data-rule="' + (repRule && repRule.id) + '"]';
     check('a recurring item: under "Tekrarlayan işler" with how it repeats and when it comes next, the form back to "Bir kez"',
-      !!repRule && repRule.repeat === (businessDay ? 'workdays' : 'weekdays') && repRule.time === rep.time && repRule.deadline
+      !!repRule && repRule.repeat === (businessDay ? 'workdays' : 'weekdays') && repRule.time === rep.time && repRule.deadline && repRule.shared
       && /Bugün|Yarın/.test(await page.textContent(repRow + ' td.next')) && (await page.inputValue('#agenda-repeat')) === 'once', repRule);
     check('... and its day on the agenda among the day\'s items, marked as recurring',
       /↻/.test(await page.textContent('#agenda-list tr[data-rule="' + repRule.id + '"]')));
