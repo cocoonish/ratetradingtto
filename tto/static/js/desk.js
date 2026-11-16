@@ -1,10 +1,12 @@
 // The desk's own corner in the shell: the "Hata / Öneri" button of the top bar (a report for the administrators; for
 // them a "!" on it while reports are open, and the list to deal with them), the menu's badges of Sosyal (messages not
-// read yet) and Ajanda (today's items, deadlines not met) and the agenda's reminders.  The live stream carries the
-// corner's counters (no new generation): what changed is asked for, nothing else is read again.
+// read yet) and Ajanda (today's items, deadlines not met) and the agenda's reminders (the recurring items' alarms:
+// agendaalarms.js).  The live stream carries the corner's counters (no new generation): what changed is asked for,
+// nothing else is read again.
 // Everything a user typed goes on the page as text only.
 import { api, session } from './api.js';
 import { h, clear, toast, errorToast, modal } from './ui.js';
+import { playRepeats, stopRepeats } from './agendaalarms.js';
 
 const DAYS = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
 const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
@@ -46,9 +48,12 @@ export function stampText(stamp) {
   return day + '.' + m + '.' + y + (t ? ' ' + t.slice(0, 5) : '');
 }
 
-/** A deadline not met: its day passed, or its time today. */
+/** A deadline not met: its day passed, or its time today; a recurring item's day (``rule``) not done once its time
+ * passed - a deadline's until it is done, any other's that day. */
 export function isLate(it, today, now) {
-  return it.deadline && !it.done && (it.day < today || (it.day === today && !!it.time && it.time <= now));
+  if (it.done || !(it.deadline || it.rule)) return false;
+  if (it.day < today) return !!it.deadline;
+  return it.day === today && !!it.time && it.time <= now;
 }
 
 // ---------------------------------------------------------------------- the chat read so far (this browser)
@@ -113,7 +118,7 @@ export function paintNav() {
   const late = items.filter((it) => isLate(it, today, time)).length;
   const todays = items.filter((it) => it.day === today && !isLate(it, today, time)).length;
   navBadge('agenda', late + todays, (todays ? 'Bugün ' + todays + ' iş' : '') + (todays && late ? ' · ' : '')
-    + (late ? late + ' gecikmiş deadline' : ''), late > 0);
+    + (late ? late + ' gecikmiş' : ''), late > 0);
 }
 
 function paintAlert() {
@@ -155,6 +160,7 @@ function remind() {
   let told;
   try { told = new Set(JSON.parse(local(toldKey()) || '[]')); } catch (e) { told = new Set(); }
   for (const it of st.agenda) {
+    if (it.rule) continue;                          // a recurring item's day: its alarms are the server's (below)
     for (const [stage, text, kind] of reminders(it, now)) {
       const key = it.id + ':' + stage;
       if (told.has(key)) continue;
@@ -166,6 +172,7 @@ function remind() {
   }
   const due = new Set(st.agenda.map((it) => String(it.id)));
   local(toldKey(), JSON.stringify([...told].filter((k) => due.has(k.split(':')[0]))));
+  playRepeats(st, loadState);
 }
 
 function tick() {
@@ -292,6 +299,7 @@ export function stopDesk() {
   desk.state = null;
   desk.counters = null;
   if (desk.reports) desk.reports.close();
+  stopRepeats();
   paintNav();
   paintAlert();
 }

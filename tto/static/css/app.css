@@ -963,6 +963,28 @@ table.plain.agenda td.what { width: 100%; white-space: normal; overflow-wrap: an
 table.plain.agenda td.who { width: 1%; font-size: 11.5px; }
 table.plain.agenda td.act { width: 1%; }
 table.plain.agenda tr.done td.what .txt, table.plain.agenda tr.done td.when { text-decoration: line-through; color: var(--ink-3); }
+/* Ajanda: recurring items (Tekrar, Tekrarlayan işler) and their alarms (agendaalarms.js) */
+.agenda-repeat { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 12px 10px; }
+.agenda-weekdays { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; }
+.agenda-weekdays label.check, .rule-form label.check { padding-bottom: 0; }
+.agenda-repeat .agenda-end { display: inline-flex; align-items: center; gap: 6px; }
+.agenda-repeat-hint { font-size: 11.5px; }
+.desk-tag.repeat { color: var(--accent-ink); border-color: var(--accent); }
+.desk-tag.paused { color: var(--ink-3); }
+table.plain.agenda.rules td.when { width: 1%; color: var(--ink); }
+table.plain.agenda.rules td.when .span { font-size: 11px; }
+table.plain.agenda.rules td.next { width: 1%; }
+table.plain.agenda.rules td.act { white-space: nowrap; }
+table.plain.agenda.rules td.act .btn.sm { margin-left: 4px; }
+table.plain.agenda tr.paused td.what .txt, table.plain.agenda tr.paused td.when, table.plain.agenda tr.paused td.next { color: var(--ink-3); }
+.rule-form { display: flex; flex-direction: column; gap: 12px; }
+.rule-form .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.toast.agenda-alarm { border-left: 4px solid var(--accent); max-width: 460px; }
+.toast.agenda-alarm.warn { border-left-color: var(--warn); }
+.toast.agenda-alarm.err { border-left-color: var(--neg); }
+.toast.agenda-alarm .ag-text { display: block; font-weight: 650; overflow-wrap: anywhere; }
+.toast.agenda-alarm .ag-meta { display: block; margin-top: 2px; color: var(--ink-3); font-size: 11px; }
+.toast.agenda-alarm .ag-act { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 /* Quant sinyaller */
 .quantpage .qnote:empty { display: none; }
 .quantpage .qnote { padding: 6px 12px 8px; font-size: 11.5px; border-top: 1px solid var(--line); }
