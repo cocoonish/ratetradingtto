@@ -11,11 +11,11 @@ from starlette.testclient import TestClient
 
 from conftest import auth, cell, make_service
 from tto import calc as calc_mod
-from tto.inputformula import KEPT
+from tto.inputformula import BLOOMBERG_INPUT, KEPT
 from tto.marketdata.base import bdp_key
 from tto.server import create_app
-from tto.store import Store
-from tto.xl.errors import E_CALC
+from tto.store import Store, user_key
+from tto.xl.errors import E_CALC, E_DIV0
 from tto.xl.values import date_to_serial
 
 
@@ -133,6 +133,10 @@ def test_a_shared_formula_is_everybodys_a_personal_one_only_its_users(module_ser
     ("OIS_MAIN!W89", "=V89", "toplantı takvimiyle kayan hücre: formül yazılamaz"),
     ("MASA!R161", "=Motor!C5", "Motor sayfası yalnızca yöneticilere açık"),
     ("Forward!D2", "=NOW()+30", "Bloomberg isteğine girer (EK_XAU!"),          # (a live value into BFXFORWARD's date)
+    ("Forward!D2", "=1/0", "formülün değeri hata (#DIV/0! - Sıfıra bölme)"),   # (an error there: an empty argument)
+    ("EK_TATIL!B10", "=DATE(2026;12;31)", "tatil listesinin hücresi: formül yazılamaz"),       # (a day of the USD list)
+    ("EK_TATIL!E10", '="Noel"', "tatil listesinin hücresi: formül yazılamaz"),                 # (a name of the EUR list)
+    ("Motor!A400", "=DATE(2027;1;1)", "tatil listesinin hücresi: formül yazılamaz"),           # (the TRY list)
 ])
 def test_refused_with_the_reason(module_service, ref, text, why):
     svc = module_service
@@ -313,6 +317,55 @@ def test_a_cell_the_meeting_calendar_moves_takes_no_formula(tmp_path, caplog):
         again.stop()
 
 
+def test_a_formula_that_may_not_stand_goes_its_value_stays_and_girdilerim_says_no_more(tmp_path, caplog):
+    """Formulas kept where none may stand now - a cell that is no input any more (an "Elle değer" cell), a personal one
+    in what is the desk's input now, a text this version refuses (a Bloomberg function), a day of a holiday list - were
+    listed in "Girdilerim" and saved with every scenario while their cell held a value that followed nothing.  They go
+    when the service starts: each cell keeps its value, "Girdilerim" lists no formula there, a scenario saved then keeps
+    none, the log says which and why.  A scenario an earlier version saved with one: the same as soon as it is loaded."""
+    db = str(tmp_path / "tto.db")
+    u = user_key("Formül Eski")
+    st = Store(db)
+    st.set_user_inputs(u, "tto", {"EK_FWD!F50": 2.0, "MASA!R161": 25.0, "MASA!C171": 46400.0, "MASA!J171": 2.0},
+                       {"EK_FWD!F50": "=1+1", "MASA!R161": "=R160-10", "MASA!C171": '=BDP("USDTRY Curncy";"PX_LAST")',
+                        "MASA!J171": "=1+1"})
+    st.set_shared_inputs("tto", {"EK_TATIL!B10": 46387.0}, u, {"EK_TATIL!B10": "=DATE(2026;12;31)"})
+    st.save_scenario(u, "eski", {("tto", "EK_FWD!F50"): 3.0, ("tto", "MASA!J171"): 2.0},
+                     {("tto", "EK_FWD!F50"): "=1+2", ("tto", "MASA!J171"): "=1+1"})
+    st.close()
+    caplog.set_level(logging.WARNING, logger="tto")
+    svc = make_service(tmp_path)
+    try:
+        assert svc.settings.db_path == db
+        login(svc, "Formül Eski")
+        assert svc.store.user_formulas(u) == {("tto", "MASA!J171"): "=1+1"} and svc.store.shared_formulas() == {}
+        kept = svc.store.user_inputs(u)
+        assert kept[("tto", "EK_FWD!F50")] == 2.0 and kept[("tto", "MASA!C171")] == 46400.0
+        assert svc.store.shared_inputs("tto")[("tto", "EK_TATIL!B10")] == 46387.0 and cell(svc, "EK_TATIL!B10") == 46387.0
+        said = sorted(r.getMessage() for r in caplog.records if r.getMessage().startswith("girdi formülü kaldırıldı"))
+        assert said == sorted([
+            "girdi formülü kaldırıldı (bu sürümde kabul edilmiyor: %s; değeri kaldı): formül eski tto!MASA!C171 %s"
+            % (BLOOMBERG_INPUT % "BDP", '=BDP("USDTRY Curncy";"PX_LAST")'),
+            "girdi formülü kaldırıldı (girdi artık ortak; değeri kaldı): formül eski tto!MASA!R161 =R160-10",
+            "girdi formülü kaldırıldı (hücre artık bir girdi değil; değeri kaldı): formül eski tto!EK_FWD!F50 =1+1",
+            "girdi formülü kaldırıldı (tatil listesinin hücresi; değeri kaldı): ortak tto!EK_TATIL!B10 =DATE(2026;12;31)"]), said
+        assert [(x["ref"], x.get("formula")) for x in svc.my_inputs(u)["inputs"] if x.get("formula")] == [("MASA!J171", "=1+1")]
+        svc.save_scenario(u, "yeni")
+        assert svc.store.scenario(u, "yeni")[1] == {("tto", "MASA!J171"): "=1+1"}
+        caplog.clear()
+        assert svc.load_scenario(u, "eski")["cells"] == 2
+        assert svc.store.user_formulas(u) == {("tto", "MASA!J171"): "=1+1"}
+        assert [x for x in svc.my_inputs(u)["inputs"] if x["ref"] == "EK_FWD!F50"] == [
+            {"book": "tto", "ref": "EK_FWD!F50", "value": 3.0, "label": ""}]
+        assert [r.getMessage() for r in caplog.records if "EK_FWD!F50" in r.getMessage()] == [
+            "girdi formülü kaldırıldı (hücre artık bir girdi değil; değeri kaldı): formül eski tto!EK_FWD!F50 =1+2"]
+        # the TRY list's copy in DİBS ASW takes none either (the list's save writes it too)
+        err = put(svc, u, "ASW!LR10", "=DATE(2026;12;31)", book="asw")["errors"]
+        assert len(err) == 1 and "tatil listesinin hücresi: formül yazılamaz" in err[0], err
+    finally:
+        svc.stop()
+
+
 def test_a_formula_following_the_market_is_a_market_move_not_a_desk_change(module_service):
     """A formula reading a live price follows each tick - as a market move: the desk's change counter, which makes the
     pages of users with inputs of their own at once, stays where it was (an entry or a change of a formula moves it)."""
@@ -393,6 +446,36 @@ def test_where_the_value_goes_into_a_bloomberg_request_a_stopped_formula_keeps_i
         assert e.frozen and e.error.endswith(KEPT) and got == good
     finally:
         monkeypatch.setattr(calc_mod, "EVAL_SECONDS", 2.0)
+        svc.reset_inputs(u, "tto")
+
+
+def test_where_the_value_goes_into_a_bloomberg_request_an_error_value_is_not_written(module_service):
+    """Forward!D2 goes into BFXFORWARD (EK_XAU!G33): an error value there would be a request with an empty argument.  A
+    formula that comes out an error there - what it reads went wrong, it is not stopped - keeps the cell's last good
+    value, the error said on the cell; once it has a value again, the value is written again and the reason goes.  (Typed
+    as an error it is refused: the parameters above.)  Elsewhere the error is the cell's value, as in Excel."""
+    svc = module_service
+    fx = svc.formulas
+    u = login(svc, "Formül Hata Bloomberg")
+    try:
+        put(svc, u, "MASA!C60", "01.12.2026")
+        assert put(svc, u, "Forward!D2", "=MASA!C60+30+0/(MASA!I60+100)")["errors"] == []     # (I60: the desk's -150)
+        good = cell(svc, "Forward!D2", u)
+        assert good == day(2026, 12, 31)
+        e = fx.entry(u, "tto", *svc.books["tto"].cell("Forward!D2"))
+        put(svc, u, "MASA!I60", "-100")                                    # (0 / 0: its value an error now)
+        assert cell(svc, "Forward!D2", u) == good
+        assert not e.frozen and e.error == "Formülün değeri hata (#DIV/0! - Sıfıra bölme)" + KEPT
+        assert mark(svc, u, "forward", "Forward!D2")["fe"] == e.error
+        assert svc.cell_info(u, "tto", "Forward!D2")["input"]["error"] == e.error
+        put(svc, u, "MASA!C60", "05.12.2026")                              # (still an error: still the last good value)
+        assert cell(svc, "Forward!D2", u) == good and not e.frozen
+        put(svc, u, "MASA!I60", "-140")                                    # (a value again: written, the reason gone)
+        assert cell(svc, "Forward!D2", u) == day(2027, 1, 4) and e.error is None
+        assert "fe" not in mark(svc, u, "forward", "Forward!D2")
+        assert put(svc, u, "MASA!C171", "=1/0")["errors"] == []            # (MASA!C171 goes into no Bloomberg request)
+        assert cell(svc, "MASA!C171", u) is E_DIV0
+    finally:
         svc.reset_inputs(u, "tto")
 
 

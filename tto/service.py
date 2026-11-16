@@ -2515,6 +2515,15 @@ class Service(object):
         r, c = divmod(rc, COLS)
         return MEETING_ROWS[0] <= r <= MEETING_ROWS[1] and c in {parse_a1(x + "1") % COLS for x in ("P",) + STEP_COLS}
 
+    def _holiday_cell(self, book: Book, si: int, rc: int) -> bool:
+        """A day or its name in a holiday list (``HOLIDAY_LISTS``): a save of the list (Ayarlar → Tatiller) writes all of
+        it again in date order - what a cell holds goes to whichever row its day sorts to."""
+        sheet = book.model.sheets[si].name
+        r, c = divmod(rc, COLS)
+        col = index_to_col(c)
+        return any(bid == book.id and name == sheet and r1 <= r <= r2 and col in (dcol, ncol)
+                   for lists in self.HOLIDAY_LISTS.values() for bid, name, r1, r2, dcol, ncol in lists)
+
     def paste(self, user: str, book_id: str, anchor: str, text: str, allow_adhoc: bool = False,
               lang: Optional[str] = None) -> Dict[str, Any]:
         """Paste tab-separated text (copied from Excel) with its top-left corner at ``anchor``.
@@ -2649,6 +2658,8 @@ class Service(object):
         return {"deleted": name}
 
     def _reload_user(self, user: str) -> None:
+        if self.formulas is not None:
+            self.formulas.reread()                      # (a scenario's formula that may not stand goes before it is listed)
         for book in self.books.values():
             self._overlays.pop((user, book.id), None)
             ov = self._overlay(user, book)
