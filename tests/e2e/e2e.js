@@ -1194,6 +1194,83 @@ async function shot(page, name) {
       await page.keyboard.press('Delete');
     }
     await waitCell(page, 'MASA!G60', 't.trim() === ' + JSON.stringify(days0));
+    // ------------------------------------------------------------------ a formula in an input cell, as in Excel
+    // "=" in the broken-date converter's value date (KIRIK VADE & KARŞILIK: MASA!C171), a plain click on the start date of
+    // the table above (MASA!C60): its address goes in; "+7", Enter - the value date is the start date + 7, live, with a ƒ
+    const cellSerial = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
+    const dayText = (serial) => {                              // an Excel day number as the dashboard writes it (dd.mm.yyyy)
+      const t = new Date(Math.round((serial - 25569) * 86400000));
+      return String(t.getUTCDate()).padStart(2, '0') + '.' + String(t.getUTCMonth() + 1).padStart(2, '0') + '.' + t.getUTCFullYear();
+    };
+    const c171 = (await cellText(page, 'MASA!C171')).trim();
+    const c60 = await cellSerial('MASA!C60');
+    await (await cellHandle(page, 'MASA!C171')).click();
+    await page.keyboard.type('=');
+    await (await cellHandle(page, 'MASA!C60')).click();
+    const pointedIn = await page.inputValue('td.editing input');
+    await page.keyboard.type('+7');
+    await page.keyboard.press('Enter');
+    await waitCell(page, 'MASA!C171', 't.trim() === ' + JSON.stringify(dayText(c60 + 7)));
+    const fx171 = () => page.evaluate(() => { const td = window.tto.findCell('MASA!C171'); return { ff: td.classList.contains('ff'), title: td.title }; });
+    const mark1 = await fx171();
+    check('an input takes a formula as in Excel: "=" in the value date, a plain click on the start date of another table (its address goes in: =C60), '
+      + '"+7", Enter - the start date + 7 shows with a small ƒ, the formula on hover', pointedIn === '=C60' && mark1.ff
+      && mark1.title.startsWith('Formül: =C60+7'), { pointedIn, mark1, c60, c171 });
+    await typeInto(page, 'MASA!C60', '01.12.2026');
+    await waitCell(page, 'MASA!C171', "t.trim() === '08.12.2026'");
+    check('... live: the start date typed again (01.12.2026), the value date follows by itself (08.12.2026)', true);
+    await (await cellHandle(page, 'MASA!C171')).click();
+    await page.keyboard.press('F2');
+    await page.waitForSelector('td.editing input');
+    const f2 = await page.inputValue('td.editing input');
+    // Ctrl+click puts a reference in wherever the caret is: here over the "7" picked by Shift+←
+    await page.keyboard.press('Shift+ArrowLeft');
+    await (await cellHandle(page, 'MASA!G60')).click({ modifiers: ['Control'] });
+    const ctrlIn = await page.inputValue('td.editing input');
+    await page.keyboard.press('Enter');
+    const e60 = (await cellText(page, 'MASA!E60')).trim();
+    await waitCell(page, 'MASA!C171', 't.trim() === ' + JSON.stringify(e60));
+    check('... F2 shows the formula (=C60+7); Ctrl+click on the days (MASA!G60) in the middle of it puts the reference in (=C60+G60 → the end date)',
+      f2 === '=C60+7' && ctrlIn === '=C60+G60' && (await fx171()).title.startsWith('Formül: =C60+G60'), { f2, ctrlIn, e60 });
+    // after a finished reference a plain click ends the typing, as before; a Bloomberg function is refused with the reason
+    await (await cellHandle(page, 'MASA!C171')).click();
+    await page.keyboard.press('F2');
+    await (await cellHandle(page, 'MASA!E60')).click();
+    const ended = await page.locator('td.editing').count() === 0;
+    await (await cellHandle(page, 'MASA!C171')).click();
+    await page.keyboard.type('=BDP("USDTRY Curncy";"PX_LAST")');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => /BDP Bloomberg'den veri ister: girdi formüllerinde/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    await page.waitForSelector('td.editing input');
+    const refusedIn = await page.inputValue('td.editing input');
+    await page.keyboard.press('Escape');
+    check('... a plain click after a finished reference ends the typing; a Bloomberg function is refused with the reason (the daily data limit), '
+      + 'the cell typed into again, its formula kept', ended && refusedIn === '=BDP("USDTRY Curncy";"PX_LAST")'
+      && (await cellText(page, 'MASA!C171')).trim() === e60 && (await fx171()).title.startsWith('Formül: =C60+G60'), { ended, refusedIn });
+    // a cell of another tab: "=", the tab "Faiz · PPK" opened - the formula goes on in a bar of its own -, a click on the
+    // survey month there (MASA!S155, the desk's input), "+1", Enter
+    const s155 = await cellSerial('MASA!S155');
+    await (await cellHandle(page, 'MASA!C171')).click();
+    await page.keyboard.type('=');
+    await page.click('.viewtabs button[data-tab="rates"]');
+    await page.waitForSelector('#grid-fx:not(.hidden) input');
+    const docked = await page.inputValue('#grid-fx input');
+    await (await cellHandle(page, 'MASA!S155')).click();
+    const pointedTab = await page.inputValue('#grid-fx input');
+    await page.keyboard.type('+1');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#grid-fx', { state: 'hidden' });
+    await waitCell(page, 'MASA!C171', 't.trim() === ' + JSON.stringify(dayText(s155 + 1)));
+    check('... a cell of another tab: the formula goes on in a bar of its own while the tab is open (=S155), "+1", Enter - the survey month + 1 day',
+      docked === '=' && pointedTab === '=S155' && (await fx171()).title.startsWith('Formül: =S155+1'), { docked, pointedTab, s155 });
+    await shot(page, '09a-masa-input-formula');
+    for (const ref of ['MASA!C171', 'MASA!C60']) {
+      await (await cellHandle(page, ref)).click();
+      await page.keyboard.press('Delete');
+    }
+    await waitCell(page, 'MASA!C171', 't.trim() === ' + JSON.stringify(c171));
+    check('... Delete takes the formula with the value: the value date is the workbook\'s again, without ƒ',
+      !(await fx171()).ff && !(await api(page, 'ayşe yilmaz', 'GET', '/api/my-inputs')).json.inputs.some((x) => x.formula));
     // every table's inputs in its own tab: on the desk page's VİOP tab DEALS' contract limit and the targets (the VİOP
     // page's cells) sit right above their tables
     await tab(page, 'viop');
