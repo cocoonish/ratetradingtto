@@ -32,8 +32,10 @@ def test_the_new_tickers_and_their_history():
         assert t in tickers, t
     assert "USDTRYV3M BGN Curncy" not in tickers and qo.key("USDTRY", "ATM", "3M") == "FXV:USDTRY" and qo.key("USDTRY", "RR25", "3M") == "FXR:USDTRY"
     every = series_specs()
-    # the package's own and these, none twice: EURUSD's 3M points are also a pair's forward of the package (kept once)
-    assert len({s["ticker"] for s in every}) == len(every) and set(tickers) <= {s["ticker"] for s in every}
+    # the package's own and these, none twice: EURUSD's 3M points are also a pair's forward of the package (kept once); a
+    # ticker may come back with another field (USDTRY's day high and low for the VİOP page: one series a field)
+    pairs = {(s["ticker"], s.get("field", "PX_LAST")) for s in every}
+    assert len(pairs) == len(every) and set(tickers) <= {s["ticker"] for s in every}
     assert sum(1 for s in every if s["ticker"] == "EUR3M Curncy") == 1
     assert [s["ticker"] for s in qo.series_specs("CMPN")][0] == "USDTRYV1W CMPN Curncy"   # the desk's pricing source
     defs = {d.ticker: d for d in history_defs()}
