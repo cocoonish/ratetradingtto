@@ -16,8 +16,9 @@ meeting when the list of meetings is rolled, and the series of meetings that hav
 
 **The meeting calendar.**  Meetings that are still in the workbook's list (``OIS_MAIN!P10:P89``) and the ones
 that were taken out of it after they passed (the archive).  When the list is edited or rolled, everything
-typed per meeting - the scenario steps ``U:W`` of every user, their saved scenarios and the workbook's own
-steps - moves with its meeting (:func:`align_meetings`).
+typed per meeting - every cell meetings.py registers for a meeting's row, for every user, their saved scenarios and
+the formulas that name those cells - moves with its meeting (:func:`align_meetings` pairs them, meetings.change moves
+them); a meeting that leaves the list is set aside under its date and comes back with it.
 """
 from __future__ import annotations
 
@@ -44,8 +45,8 @@ OIS_SHEET = "OIS_MAIN"
 MEETING_ROWS = (10, 89)                 # OIS_MAIN!P10:P89 - the 80 meeting slots of the workbook
 OIS_ROWS = (9, 26)                      # OIS_MAIN!A9:J26 - tenor label (A) and ticker root (J)
 HOLIDAY_ROWS = (361, 523)               # Motor!A361:A523
-STEP_COLS = ("U", "V", "W")             # scenario step per meeting (S1, S2, S3)
-MAX_STALE = 5                           # week days a close may be carried forward (a bayram is shorter)
+# (what belongs to a meeting's row - its steps U:W and the rest - is meetings.TCMB's)
+MAX_STALE = 5                          # week days a close may be carried forward (a bayram is shorter)
 MIN_QUOTES = 3                          # OIS quotes a day needs before the solver is run for it
 PRICE_FIELDS = ("MID", "PX_LAST", "PX_MID", "BID", "ASK", "PX_BID", "PX_ASK", "LAST_PRICE")
 #: meetings held before the workbook's list starts (CBRT calendar); the archive starts with these
@@ -759,11 +760,24 @@ class History(object):
         past = [{"date": d, "row": None, "label": "", "passed": True, "where": "archive"} for d in self.archive() if d not in in_rows]
         items = sorted(past + rows, key=lambda x: x["date"])
         upcoming = [x for x in items if not x["passed"]]
+        from . import meetings as mt
+        waiting = mt.parked(self.store).get(mt.TCMB.id) or {}
         return {"today": _iso(snap["today"]), "spot": _iso(spot), "meetings": items, "slots": MEETING_ROWS[1] - MEETING_ROWS[0] + 1,
                 "passed_in_list": sum(1 for x in rows if x["passed"]),
                 "next": upcoming[0]["date"] if upcoming else None, "gen": self.svc.gen,
+                # the list as this answer has it: a save made over another list is refused (set_calendar)
+                "version": self.version(snap["rows"], self.archive()),
+                # meetings ahead that left the list with values typed for them: set aside, back if the date comes back (a
+                # meeting rolled into the archive waits too, some weeks - not worth a line on the page)
+                "parked": sorted(d for d in waiting if d >= _iso(spot)),
                 "history_days": len(self.store.mpc_days()),       # what a new calendar makes the meeting history compute again
                 "autoroll": self.store.get("mpc.autoroll"), "autoroll_error": self.state.get("autoroll_error") or ""}
+
+    @staticmethod
+    def version(rows: Sequence[Optional[str]], archive: Sequence[str]) -> str:
+        """The calendar's version: the workbook's list and the archive, hashed - what a save is checked against."""
+        text = "|".join(d or "" for d in rows) + "#" + "|".join(archive)
+        return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
     #: what a pasted column of dates may do to the list being edited
     PASTE_MODES = ("correct", "merge", "future")
@@ -859,27 +873,30 @@ class History(object):
             out.add(_iso(d))
         return sorted(out)
 
-    def set_calendar(self, user: str, dates: Sequence[Any], roll: bool = False) -> Dict[str, Any]:
+    def set_calendar(self, user: str, dates: Sequence[Any], roll: bool = False, version: Optional[str] = None) -> Dict[str, Any]:
         """Replace the list of meetings.  Dates before the first meeting of the workbook's list go to the
         archive; with ``roll`` every meeting that has passed does, and the list starts at the next one.
-        Whatever was typed per meeting moves with its meeting."""
+        Whatever was typed per meeting moves with its meeting.  ``version``: the calendar's version the list was
+        edited from (``calendar()``) - refused when the calendar changed since (somebody else saved, the roll)."""
         user = self.svc.require_user(user)
         try:
             wanted = self.parse_dates(dates)
         except ValueError as exc:
             from .service import ServiceError
             raise ServiceError(str(exc))
-        res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, user, wanted, bool(roll))
+        res = self.svc.et.call_at(self.svc.et.WRITE, self._set_calendar, user, wanted, bool(roll), version)
         self._snap = None
         self.svc.bump()
         self.svc.warm()                                # every page reads the meetings: made again ahead
         self.kick()
+        res.pop("slot_to", None)
         res["gen"] = self.svc.gen
         return res
 
     def _typed_rows(self, user: str, typed: Dict[int, Any]) -> Dict[str, Any]:
-        """Meeting dates typed or pasted on the OIS page (``{row: value}``; a blank one leaves the list) change the
-        list the way the calendar does: whatever was typed per meeting moves with its meeting.  Engine thread."""
+        """Meeting dates typed or pasted on the OIS page (``{row: value}``) change the list the way the calendar does:
+        whatever was typed per meeting moves with its meeting.  Engine thread.  ``typed_to`` of the answer: the row
+        each typed date is in now (None: it went to the archive) - steps typed with it in one write go there."""
         rows = list(self._read_workbook()["rows"])
         for r, value in typed.items():
             rows[r - MEETING_ROWS[0]] = value
@@ -887,6 +904,9 @@ class History(object):
         res = self._set_calendar(user, wanted, False)
         self._snap = None
         self.kick()
+        now = self._read_workbook()["rows"]
+        where = {d: k for k, d in enumerate(now) if d}
+        res["typed_to"] = {r - MEETING_ROWS[0]: where.get((self.parse_dates([v]) or [None])[0]) for r, v in typed.items()}
         return res
 
     def roll_calendar(self, user: str) -> Dict[str, Any]:
@@ -917,13 +937,21 @@ class History(object):
         self.kick()
         return res
 
-    def _set_calendar(self, user: str, wanted: List[str], roll: bool) -> Dict[str, Any]:
-        from .service import ServiceError, _to_json
+    def _set_calendar(self, user: str, wanted: List[str], roll: bool, version: Optional[str] = None) -> Dict[str, Any]:
+        from . import meetings as mt
+        from .service import ServiceError
         svc = self.svc
         book = svc.books.get(BOOK)
         if book is None:
             raise ServiceError("TRY çalışma kitabı yüklü değil", 500)
         snap = self._read_workbook()
+        if version is not None and version != self.version(snap["rows"], self.archive()):
+            # the list was edited from another calendar than this one (somebody saved meanwhile, a meeting rolled): saved
+            # over it, their change would be undone - and what was typed for a meeting only they added set aside
+            last = self.store.shared_meta(BOOK, ["%s!P%d" % (OIS_SHEET, r) for r in range(MEETING_ROWS[0], MEETING_ROWS[1] + 1)])
+            who = (" (en son %s, %s)" % (last["updated_by"], str(last["updated_at"])[:16])) if last and last.get("updated_by") else ""
+            raise ServiceError("takvim siz düzenlerken değişti%s - kaydedilmedi; sayfa takvimin şimdiki halini gösteriyor, "
+                               "değişikliğinizi onun üzerinde yeniden yapın" % who, 409)
         spot = snap["spot"] or next_business_day(snap["today"], set())
         old = [d for d in snap["rows"] if d]
         if any(d is None for d in snap["rows"][:len(old)]):
@@ -936,69 +964,12 @@ class History(object):
         if not new:
             raise ServiceError("en az bir gelecek toplantı gerekli")
         archive = [d for d in wanted if _day(d) < cutoff]
-        moves = align_meetings(old, new)
-        si = book.model.sheet_index[OIS_SHEET]
-        sheet = book.model.sheets[si]
-        r0 = MEETING_ROWS[0]
-        engine = book.engine
-
-        # ---- what was typed per meeting: the workbook's own steps (as everybody sees them) ...
-        source = {j: i for i, j in moves.items() if j is not None}          # new index -> old index
-        shared_set: Dict[Tuple[int, int], Any] = {}
-        shared_clear: List[Tuple[int, int]] = []
-        span = max(len(old), len(new))                  # rows below both lists are left as they are
-        for name in STEP_COLS:
-            c = parse_a1(name + "1") % COLS
-            current = {}
-            for k in range(slots):
-                rc = (r0 + k) * COLS + c
-                current[k] = engine.input_value[si][rc] if rc in engine.input_value[si] else sheet.consts.get(rc)
-            for k in range(span):
-                rc = (r0 + k) * COLS + c
-                value = current[source[k]] if k in source else None
-                base = sheet.consts.get(rc)
-                if value == base and type(value) is type(base):
-                    if rc in engine.input_value[si]:
-                        shared_clear.append((si, rc))
-                elif current[k] != value or type(current[k]) is not type(value):
-                    shared_set[(si, rc)] = value
-        # ---- ... and every user's own steps and saved scenarios
-        cells: Dict[str, Optional[str]] = {}
-        for i in range(span):
-            j = moves.get(i) if i < len(old) else None
-            if j == i:
-                continue
-            for name in STEP_COLS:
-                cells["%s!%s%d" % (OIS_SHEET, name, r0 + i)] = None if j is None else "%s!%s%d" % (OIS_SHEET, name, r0 + j)
-        # ---- the dates
-        pc = parse_a1("P1") % COLS
-        dates: Dict[Tuple[int, int], Any] = {}
-        for k in range(slots):
-            dates[(si, (r0 + k) * COLS + pc)] = _serial(_day(new[k])) if k < len(new) else None
-
-        for key in list(shared_set) + shared_clear + list(dates):
-            if key not in book.inputs:
-                book.declare(book.ref(*key), scope="shared", group="adhoc-shared")
-        if shared_clear:
-            engine.clear_inputs(shared_clear)
-            self.store.clear_shared_inputs(BOOK, [book.ref(*k) for k in shared_clear])
-        changes = dict(shared_set)
-        changes.update(dates)
-        engine.set_inputs(changes)
-        self.store.set_shared_inputs(BOOK, {book.ref(*k): _to_json(v) for k, v in changes.items()}, user)
-        moved = self.store.remap_user_cells(BOOK, cells) if cells else {"moved": 0, "dropped": 0, "scenarios": 0}
-        if cells:
-            for name in list(engine.users):                       # overlays are rebuilt from what is stored now
-                svc._overlays.pop((name, BOOK), None)
-                engine.set_user_inputs(name, svc._overlay(name, book))
-            for key in [k for k in svc._overlays if k[1] == BOOK]:
-                svc._overlays.pop(key, None)
-            svc._note_private()
-        self.store.put("mpc.archive", sorted(set(archive)))
+        # every cell of a meeting's row (meetings.TCMB) with its meeting, for everybody, with the archive - one transaction
+        res = mt.change(svc, mt.TCMB, snap["rows"], new, user,
+                        extra=lambda store: store.put("mpc.archive", sorted(set(archive))))
         rolled = [d for d in old if d not in new and _day(d) < cutoff]
-        return {"meetings": len(new), "archive": len(archive), "rolled": rolled, "first": new[0],
-                "moved": moved["moved"], "dropped": moved["dropped"], "scenarios": moved["scenarios"],
-                "changed": sum(1 for i, j in moves.items() if j != i)}
+        res.update(meetings=len(new), archive=len(archive), rolled=rolled, first=new[0])
+        return res
 
     # ================================================================== fetching closes
     def kick(self) -> None:

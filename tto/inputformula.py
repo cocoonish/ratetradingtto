@@ -18,12 +18,12 @@ Refused as typed, with the reason: a Bloomberg function (the daily data limit, `
 cannot be read or names what is not there, a cycle (the formula reads - through the workbook's formulas or other
 formula inputs - the cell it is typed into: the engine's masks tell that a read depends on an input, the formulas'
 references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, "Elle değer", a
-cell the meeting calendar moves - its value goes with its meeting, a formula's references would not -, a day or a name
-of a holiday list - its save writes the whole list again in date order), a shared formula reading an administrators'
-page (Motor: a shared formula is everybody's, it reads with nobody's rights), and, into a cell that goes into a
-Bloomberg request, a formula reading live data (prices, NOW()) - a new request on every tick - or one whose value is
-an error - a request with an empty argument.  A formula the store keeps that may not stand (an earlier version took
-it, a scenario brought it back) goes when it is read: its value stays, the log says why.
+cell of a meeting's row whose value goes with its meeting - meetings.py; a reference to it from elsewhere follows the
+meeting too -, a day or a name of a holiday list - its save writes the whole list again in date order), a shared formula
+reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and, into a cell
+that goes into a Bloomberg request, a formula reading live data (prices, NOW()) - a new request on every tick - or one
+whose value is an error - a request with an empty argument.  A formula the store keeps that may not stand (an earlier
+version took it, a scenario brought it back) goes when it is read: its value stays, the log says why.
 
 What never spins or sticks: a cycle that appears later (an input it reads went back to its own default) - the formulas
 still changing after a round per formula are stopped, their value #CALC!, the reason on the cell; a formula over the
@@ -54,9 +54,9 @@ SHARED = ""                            # the scope of the desk's (shared) inputs
 
 BLOOMBERG_INPUT = BLOOMBERG.replace("hesap tablosunda", "girdi formüllerinde")
 LIST = "bu hücre listeden bir değer alır (%s): formül yazılamaz"
-MEETING = "toplantı tarihleri takvimden değişir (Ayarlar → Toplantı takvimi): formül yazılamaz"
-CALENDAR = ("toplantı takvimiyle kayan hücre: formül yazılamaz (takvim değişince değeri toplantısıyla taşınır, formülün "
-            "başvuruları taşınmaz)")
+MEETING = "toplantı tarihleri takvimden değişir (%s): formül yazılamaz"
+CALENDAR = ("toplantı takvimiyle kayan hücre: formül yazılamaz (takvim değişince değeri toplantısıyla taşınır; başka bir "
+            "hücreden ona başvurabilirsiniz - başvuru da toplantısıyla taşınır)")
 HOLIDAY = ("tatil listesinin hücresi: formül yazılamaz (liste Ayarlar → Tatiller'den kaydedilince tarih sırasıyla "
            "yeniden yazılır, formül kalmazdı)")
 NOT_INPUT = "formül yalnızca girdi hücrelerine (sarı / yeşil) yazılır - \"Elle değer\" bir sabittir"
@@ -70,6 +70,7 @@ STOPPED_CYCLE = "Döngüsel başvuru: %s - formül durduruldu (#CALC!); formül�
 STOPPED_LIVE = ("formül canlı veri okumaya başladı; bu hücrenin değeri bir Bloomberg isteğine girdiği için durduruldu "
                 "(günlük veri limiti) - formülü yeniden yazın")
 STOPPED_RESTLESS = "formülün değeri her hesapta değişiyor - durduruldu (#CALC!); formülü yeniden yazın"
+STOPPED_ERROR = "formülün değeri hata oldu (%s) - durduruldu; formülü düzeltin ya da yeniden yazın"
 STOPPED_SLOW = "%s - %d kez üst üste; formül durduruldu, yeniden yazınca denenir"
 RETRYING = "%s - biraz sonra yeniden denenecek"
 KEPT = " · Bloomberg isteğine giren hücre: son iyi değeri kaldı"
@@ -238,10 +239,11 @@ class InputFormulas(object):
     def _take(self, scope: str, rows: Dict[Tuple[str, str], str]) -> None:
         """A scope's formulas as the store keeps them: an entry whose text is the same is kept (with what it read).  One
         that may not stand (an earlier version took it, a scenario brought it back) goes from the store - its value stays,
-        as a value, the log says which and why: in a cell the meeting calendar moves or a holiday list's save rewrites, a
-        cell that is not there or no input of this scope any more, a text this version does not take.  (Kept, it would
-        be listed in "Girdilerim" and saved with every scenario while its cell holds a value that follows nothing.)  A
-        workbook not loaded now keeps its formulas."""
+        as a value, the log says which and why: in a cell of a meeting's row (meetings.py) or one a holiday list's save
+        rewrites, a cell that is not there or no input of this scope any more, a text this version does not take.  (Kept,
+        it would be listed in "Girdilerim" and saved with every scenario while its cell holds a value that follows
+        nothing.)  A workbook not loaded now keeps its formulas."""
+        from . import meetings as mt
         old = self._scopes.get(scope, {})
         new: Dict[Tuple[str, int, int], _Entry] = {}
         gone: List[Tuple[str, str, str, str]] = []
@@ -254,7 +256,7 @@ class InputFormulas(object):
             except (KeyError, ValueError):
                 gone.append((bid, ref, text, GONE_CELL))
                 continue
-            if self.svc._meeting_date_cell(book, si, rc) or self.svc._moved_by_calendar(book, si, rc):
+            if self.svc._meeting_date_cell(book, si, rc) or self.svc._moved_by_calendar(book, si, rc) or mt.follows(book, si, rc):
                 gone.append((bid, ref, text, GONE_MOVED))
                 continue
             if self.svc._holiday_cell(book, si, rc):
@@ -292,10 +294,12 @@ class InputFormulas(object):
     def accept(self, user: str, book, si: int, rc: int, d, text: str, calc, batch: List[_Entry]) -> Tuple[Any, _Entry]:
         """A formula typed into an input (calculation thread) -> (its value, its entry); :class:`FormulaError` says why
         it is refused.  ``batch``: the formulas accepted before it in the same write (a cycle among them is one)."""
+        from . import meetings as mt
         text = text.strip()
-        if self.svc._meeting_date_cell(book, si, rc):
-            raise FormulaError(MEETING)
-        if self.svc._moved_by_calendar(book, si, rc):
+        cal = mt.key_of(book, si, rc)
+        if cal is not None:
+            raise FormulaError(MEETING % cal.where)
+        if mt.follows(book, si, rc):
             raise FormulaError(CALENDAR)
         if self.svc._holiday_cell(book, si, rc):
             raise FormulaError(HOLIDAY)
@@ -501,8 +505,9 @@ class InputFormulas(object):
                             self._freeze(e, STOPPED_CYCLE % " → ".join(ring), sets)
                             continue
                         if self._feeds(e):
-                            # an error value there would be a request with an empty argument: the last good value
-                            # stays, the error is the reason on the cell - not stopped, a value again is written again
+                            # an error value there (a reference whose meeting left the list reads #REF! too) would be a
+                            # request with an empty argument: the last good value stays, the error is the reason on the
+                            # cell - not stopped, a value again is written again
                             self._kept(e, ERRORED % _what(v, e.note) + KEPT)
                             continue
                     e.freezes = 0

@@ -906,8 +906,10 @@ function reportApply(res, verb) {
   let msg = (res.applied || 0) + ' hücre ' + verb;
   if (res.skipped) msg += ' · ' + res.skipped + ' hücre girdi olmadığı için atlandı';
   if (res.unseen) msg += ' · ' + res.unseen + ' hücre gizlediğiniz sütunda olduğu için yazılmadı';
+  // a meeting list changed with the write: what moved, what was set aside (the server says it)
+  if (res.note) msg += ' · ' + res.note;
   if (errs.length) msg += ' · ' + errs.length + ' hata: ' + errs.slice(0, 3).join('; ');
-  toast(msg, errs.length ? 'err' : 'ok', errs.length ? 7000 : 2600);
+  toast(msg, errs.length ? 'err' : 'ok', errs.length ? 9000 : (res.note ? 9000 : 2600));
 }
 
 async function resetRefs(grid, refs, shared) {
@@ -1036,6 +1038,8 @@ async function applyValue(grid, i, j, value, how = 'away') {
         setSelection(grid, i, j, i, j);
         startEdit(grid, i, j, value);
       }
+    } else if (res && res.note) {
+      toast(res.note, 'ok', 9000);           // (a meeting date typed: what moved with it, what was set aside)
     }
   } catch (err) {
     toast(err.message || String(err), 'err', 6000);

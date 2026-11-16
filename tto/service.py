@@ -239,6 +239,11 @@ class Service(object):
         # the watch lists and the alarms: read again whenever the market or an input moved
         from .watch import Watch
         self.watch = Watch(self)
+        try:
+            # items and alarms an earlier version kept on a cell of a meeting's row: anchored to that meeting, once
+            self.et.call(self.watch.anchor_meetings_once)
+        except Exception as exc:  # noqa: BLE001 - the start goes on (tried again at the next one)
+            self.ops.failure("izleme: toplantı satırları", exc)
         # Spot / FX and FX vol: the option market's quotes of a pair, its smile and distribution, the vol monitor
         from .fx import Fx
         self.fx = Fx(self)
@@ -2372,6 +2377,7 @@ class Service(object):
         return res
 
     def _set_inputs(self, user, book_id, items, allow_adhoc, lang="tr", lenient=False) -> Dict[str, Any]:
+        from . import meetings as mt
         from .inputformula import FormulaError
         book = self._book(book_id)
         if len(items) > 20000:
@@ -2380,7 +2386,7 @@ class Service(object):
         user_clear: List[Tuple[int, int]] = []
         shared_vals: Dict[Tuple[int, int], Any] = {}
         shared_clear: List[Tuple[int, int]] = []
-        meetings: Dict[int, Any] = {}
+        keyed: Dict[str, Dict[int, Optional[str]]] = {}    # a meeting calendar -> {slot: the date typed there (None: blank)}
         errors: List[str] = []
         skipped = 0
         user_forms: Dict[Tuple[int, int], Any] = {}      # cells typed as a formula: (sheet, rc) -> its entry
@@ -2420,13 +2426,15 @@ class Service(object):
                 continue
             user_forms.pop((si, rc), None)                # (a value typed after a formula in one write: the value)
             shared_forms.pop((si, rc), None)
-            if self._meeting_date_cell(book, si, rc):
+            cal = mt.key_of(book, si, rc)
+            if cal is not None:
+                # a meeting's date: the list changes through the calendar only, which moves what belongs to a meeting
                 try:
-                    self.history.parse_dates([it.get("value")])
+                    got = self.history.parse_dates([it.get("value")])
                 except ValueError as exc:
                     errors.append("%s: %s" % (ref, exc))
                     continue
-                meetings[rc // COLS] = it.get("value")
+                keyed.setdefault(cal.id, {})[rc // COLS - cal.first] = got[0] if got else None
                 continue
             d = book.inputs.get((si, rc))
             if d is None:
@@ -2458,12 +2466,33 @@ class Service(object):
             else:
                 user_vals[(si, rc)] = val
         calendar = None
-        if meetings:
-            # first, so that steps typed with the dates land on the meetings as the new list has them
+        typed_n = 0
+        for cid, typed in keyed.items():
+            # first, so that what was typed with the dates lands on the meetings as the new list has them
+            cal = mt.BY_ID[cid]
+            rows = mt.slot_dates(book, cal)
+            typed = self._typed_dates(cal, rows, typed, errors)
+            if not typed:
+                continue
             try:
-                calendar = self.history._typed_rows(user, meetings)
+                if cal is mt.TCMB:
+                    calendar = self.history._typed_rows(user, {cal.first + k: d for k, d in typed.items()})
+                else:
+                    after = list(rows)
+                    for k, d in typed.items():
+                        after[k] = d
+                    new = sorted({d for d in after if d})
+                    calendar = mt.change(self, cal, rows, new, user)
+                    calendar["typed_to"] = {k: (new.index(d) if d else None) for k, d in typed.items()}
             except ServiceError as exc:
                 errors.append("toplantı takvimi: %s" % exc)
+                continue
+            typed_n = len(typed)
+            # values typed in the same write as a date go with that date's meeting; the other rows' with the meeting
+            # their row showed (it may have moved) - the dates were written first
+            slot_to, typed_to = calendar.pop("slot_to", {}), calendar.pop("typed_to", {})
+            user_vals, user_clear, shared_vals, shared_clear = (
+                self._follow_meetings(book, cal, slot_to, typed_to, x) for x in (user_vals, user_clear, shared_vals, shared_clear))
         if shared_clear:
             book.engine.clear_inputs(shared_clear)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in shared_clear])
@@ -2492,35 +2521,89 @@ class Service(object):
         if calendar:
             self._note_private()                        # (what was typed per meeting moved, for everybody)
             self.warm()
-        res: Dict[str, Any] = {"applied": len(shared_vals) + len(shared_clear) + len(user_vals) + len(user_clear)
-                               + (len(meetings) if calendar else 0),
+        res: Dict[str, Any] = {"applied": len(shared_vals) + len(shared_clear) + len(user_vals) + len(user_clear) + typed_n,
                                "errors": errors}
         if calendar:
             res["calendar"] = calendar
+            if calendar.get("note"):
+                res["note"] = calendar["note"]         # (what the change did, as the page's toast says it)
         if lenient:
             res["skipped"] = skipped
         return res
 
     @staticmethod
+    def _typed_dates(cal, rows: List[Optional[str]], typed: Dict[int, Optional[str]], errors: List[str]) -> Dict[int, Optional[str]]:
+        """The dates typed into a meeting list (``{slot: ISO date or None}``) that may change it - the others refused
+        with the reason, in ``errors``.  A date twice in the list is refused (two rows, one meeting: the second would
+        take the first's place).  A TCMB date blanked over a meeting is refused (Delete over a selection that holds
+        dates, a pasted block with empty dates): a meeting leaves the list on Ayarlar → Toplantı takvimi.  An FOMC
+        date may be blanked - the USD · FOMC page is where that list is edited; what was typed for the meeting is set
+        aside, as for any meeting that leaves a list."""
+        from . import meetings as mt
+        out = {k: d for k, d in typed.items() if d is not None or rows[k]}       # (blank over an empty row: nothing)
+        if cal is mt.TCMB:
+            blank = sorted(k for k, d in out.items() if d is None)
+            if blank:
+                errors.append("toplantı tarihi silinmez (%s): bir toplantıyı listeden çıkarmak için %s'nde ✕ kullanın - "
+                              "toplantıya yazılmış değerler kenara alınır, tarih geri eklenirse geri gelir"
+                              % (", ".join("%s!%s%d" % (cal.sheet, cal.key, cal.first + k) for k in blank), cal.where))
+                for k in blank:
+                    del out[k]
+        after = list(rows)
+        for k, d in out.items():
+            after[k] = d
+        for k in sorted(out):
+            d = out[k]
+            if d is None:
+                continue
+            other = [m for m, x in enumerate(after) if x == d and m != k]
+            if other:
+                errors.append("%s!%s%d: %s listede zaten var (%s%d) - aynı günde iki toplantı olmaz"
+                              % (cal.sheet, cal.key, cal.first + k, mt.tr_day(d), cal.key, cal.first + other[0]))
+                after[k] = rows[k]
+                del out[k]
+        return {k: d for k, d in out.items() if d != rows[k]}
+
+    @staticmethod
+    def _follow_meetings(book: Book, cal, slot_to: Dict[int, Optional[int]], typed_to: Dict[int, Optional[int]], cells):
+        """Cells of a write that are in a meeting's row, where they are after the dates of the same write moved the list
+        (a dict's keys or a list): a row whose date was typed - that date's row; any other row - its meeting's row now.
+        A cell whose meeting left the list (or a row without a meeting that one came to) is left out."""
+        from . import meetings as mt
+        from .xl.tokenizer import col_to_index
+
+        def where(key: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+            hit = mt.place(book, key[0], key[1])
+            if hit is None or hit[0] is not cal or hit[1].kind == mt.KEY:
+                return key
+            b, k, col = hit[1], hit[2], hit[3]
+            to = typed_to[k] if k in typed_to else slot_to.get(k, k)
+            if to is None:
+                return None
+            return key[0], (b.first + to) * COLS + col_to_index(col)
+
+        if isinstance(cells, dict):
+            out: Dict[Tuple[int, int], Any] = {}
+            for key, v in cells.items():
+                to = where(key)
+                if to is not None:
+                    out[to] = v
+            return out
+        return [to for to in (where(key) for key in cells) if to is not None]
+
+    @staticmethod
     def _meeting_date_cell(book: Book, si: int, rc: int) -> bool:
-        """A meeting date of the workbook's list (OIS_MAIN!P10:P89): it changes through the calendar only, which moves
-        what was typed per meeting along with it."""
-        from .history import BOOK, MEETING_ROWS, OIS_SHEET
-        if book.id != BOOK or book.model.sheets[si].name != OIS_SHEET:
-            return False
-        r, c = divmod(rc, COLS)
-        return c == parse_a1("P1") % COLS and MEETING_ROWS[0] <= r <= MEETING_ROWS[1]
+        """A meeting date of a meeting list (TCMB: OIS_MAIN!P10:P89, Fed: SOFR_FOMC!B74:B83 - meetings.py): it changes
+        through the calendar only, which moves what was typed per meeting along with it."""
+        from . import meetings as mt
+        return mt.key_of(book, si, rc) is not None
 
     @staticmethod
     def _moved_by_calendar(book: Book, si: int, rc: int) -> bool:
-        """A cell the meeting calendar moves when the list of meetings shifts (history.py ``_set_calendar``): a meeting
-        date (OIS_MAIN!P10:P89) or a step typed per meeting (``STEP_COLS`` of the same rows) - what it holds goes with its
-        meeting, for the desk and for every user."""
-        from .history import BOOK, MEETING_ROWS, OIS_SHEET, STEP_COLS
-        if book.id != BOOK or book.model.sheets[si].name != OIS_SHEET:
-            return False
-        r, c = divmod(rc, COLS)
-        return MEETING_ROWS[0] <= r <= MEETING_ROWS[1] and c in {parse_a1(x + "1") % COLS for x in ("P",) + STEP_COLS}
+        """A cell whose value goes with its meeting when a meeting list changes (meetings.py: the date, what is typed per
+        meeting, the desk's label) - for the desk and for every user; a reference to it follows it too."""
+        from . import meetings as mt
+        return mt.follows(book, si, rc)
 
     def _holiday_cell(self, book: Book, si: int, rc: int) -> bool:
         """A day or its name in a holiday list (``HOLIDAY_LISTS``): a save of the list (Ayarlar → Tatiller) writes all of
@@ -2582,11 +2665,13 @@ class Service(object):
                     continue
         n = 0
         if shared:
-            if any(self._meeting_date_cell(book, si, rc) for si, rc in cells):
+            from . import meetings as mt
+            cal = next((c for c in (mt.key_of(book, si, rc) for si, rc in cells) if c is not None), None)
+            if cal is not None:
                 # the file's dates are those of the day it was saved: put back over the list, the steps would no longer
                 # be those of their meetings
-                raise ServiceError("toplantı tarihleri dosyadaki değere döndürülmez – listeyi Ayarlar → Toplantı takvimi'nden "
-                                   "düzeltin (adımlar toplantısıyla taşınır)")
+                raise ServiceError("toplantı tarihleri dosyadaki değere döndürülmez – listeyi %s üzerinden düzeltin "
+                                   "(toplantıya yazılanlar toplantısıyla taşınır)" % cal.where)
             keep = [c for c in cells if c in book.inputs and book.inputs[c].scope == "shared"]
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
