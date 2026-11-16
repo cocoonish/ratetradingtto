@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS shared_inputs (
     PRIMARY KEY (book, cell));
 CREATE TABLE IF NOT EXISTS ret_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, user TEXT, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ret_fair_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, user TEXT, kind TEXT NOT NULL, text TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT, trade_date TEXT NOT NULL, kind TEXT NOT NULL, package TEXT,
     payload TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL,
@@ -565,6 +567,15 @@ class Store(object):
     def ret_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         rows = self._q("SELECT id, ts, user, payload FROM ret_history ORDER BY id DESC LIMIT ?", (limit,))
         return [{"id": r["id"], "ts": r["ts"], "user": r["user"], "rows": json.loads(r["payload"])} for r in rows]
+
+    # ------------------------------------------------------------------ the fair value RET's changes (retfair.py)
+    def add_ret_fair_log(self, user: Optional[str], kind: str, text: str) -> int:
+        """Who changed what of the fair value RET (an offset, a base, a flow adjustment, a setting, a publish) and when."""
+        return self._x("INSERT INTO ret_fair_log (ts, user, kind, text) VALUES (?,?,?,?)", (now_iso(), user, kind, text))
+
+    def ret_fair_log(self, limit: int = 40) -> List[Dict[str, Any]]:
+        rows = self._q("SELECT id, ts, user, kind, text FROM ret_fair_log ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------ blotter
     def add_trade(self, trade_date: str, kind: str, payload: Dict[str, Any], user: Optional[str],

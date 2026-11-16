@@ -256,6 +256,9 @@ class Service(object):
         # each user's own calc sheets on the launchpads (calc.py): formulas over the workbooks' cells, never Bloomberg
         from .calc import CalcSheets
         self.calcsheets = CalcSheets(self)
+        # the fair value RET (retfair.py): the desk's rule-based RET beside the published one, its flow suggestions
+        from .retfair import RetFair
+        self.retfair = RetFair(self)
         # inputs typed as formulas (=C60+7): evaluated by the calc sheets' machinery, again whenever what they read moved
         from .inputformula import InputFormulas
         formulas = InputFormulas(self)
@@ -1343,8 +1346,10 @@ class Service(object):
         if tto is not None:
             today = serial_to_date(tto.engine.clock.today()).isoformat()
         ret = self.ret_meta() if tto is not None else None
+        # the fair value RET's tenors whose value now differs from the published RET (the header's "RET güncellemesi var")
+        fair = self.retfair.summary() if tto is not None and getattr(self, "retfair", None) is not None else None
         return {"mode": self.mode, "note": self.mode_note, "provider": prov, "gen": self.gen, "today": today,
-                "ret": ret, "server_date": _dt.date.today().isoformat(),
+                "ret": ret, "ret_fair": fair, "server_date": _dt.date.today().isoformat(),
                 # today's trades of the desk said in the broker chat and not entered in Günlük İşlemler (the menu's badge)
                 "chat_missing": self.chat_unbooked(),
                 "books": {bid: {"title": b.title, "formulas": b.model.formula_count(),
@@ -2910,12 +2915,33 @@ class Service(object):
         return {"name": lp["name"], "layout": new}
 
     # ================================================================== RET curve
+    #: where the RET table's tenor labels are looked for (Forward!V): a tenor is found by its label, not by its row
+    RET_LABEL_ROWS = (30, 60)
+
+    def _ret_layout(self, book: Book) -> List[Tuple[str, int]]:
+        """The RET tenors in order and the row of each (``[("ON", 33), ...]``): the row whose label in Forward!V is the
+        tenor's - wherever the table's rows are; a label the column does not hold keeps its row of the shipped
+        workbook.  The workbook's own constants only (no calculation: any thread)."""
+        si = book.model.sheet_index["Forward"]
+        consts = book.model.sheets[si].consts
+        col = col_to_index("V")
+        found: Dict[str, int] = {}
+        for r in range(self.RET_LABEL_ROWS[0], self.RET_LABEL_ROWS[1] + 1):
+            v = consts.get(r * COLS + col)
+            if isinstance(v, str):
+                lab = v.strip().upper()
+                if lab in RET_TENORS and lab not in found:
+                    found[lab] = r
+        return [(t, found.get(t, RET_FIRST_ROW + i)) for i, t in enumerate(RET_TENORS)]
+
+    def _ret_cells(self, book: Book) -> List[str]:
+        return ["Forward!%s%d" % (col, r) for _, r in self._ret_layout(book) for col in ("W", "X")]
+
     def _ret_rows(self, book: Book) -> List[Dict[str, Any]]:
         calc = book.engine.shared
         si = book.model.sheet_index["Forward"]
         rows = []
-        for i, tenor in enumerate(RET_TENORS):
-            r = RET_FIRST_ROW + i
+        for tenor, r in self._ret_layout(book):
             rows.append({"tenor": tenor, "days": _to_json(calc.get(si, r, 21)), "bid": _to_json(calc.get(si, r, 23)),
                          "ask": _to_json(calc.get(si, r, 24))})
         return rows
@@ -2925,19 +2951,18 @@ class Service(object):
 
     def _ret(self) -> Dict[str, Any]:
         book = self._book("tto")
-        cells = ["Forward!%s%d" % (col, RET_FIRST_ROW + i) for i in range(len(RET_TENORS)) for col in ("W", "X")]
-        return {"rows": self._ret_rows(book), "meta": self.store.shared_meta("tto", cells), "gen": self.gen}
+        return {"rows": self._ret_rows(book), "meta": self.store.shared_meta("tto", self._ret_cells(book)), "gen": self.gen}
 
     def set_ret(self, user: str, rows: List[Dict[str, Any]], lang: Optional[str] = None) -> Dict[str, Any]:
         """rows: [{"tenor": "1M", "bid": "34,45", "ask": "34,65"}, ...] - percent or fraction, any separator."""
         user = self.require_user(user)
         items = []
-        index = {t: i for i, t in enumerate(RET_TENORS)}
+        index = dict(self._ret_layout(self._book("tto")))
         for row in rows:
             t = str(row.get("tenor", "")).upper().strip().replace("O/N", "ON").replace("T/N", "TN").replace("12M", "1Y")
             if t not in index:
                 raise ServiceError("bilinmeyen RET vadesi: %r" % row.get("tenor"))
-            r = RET_FIRST_ROW + index[t]
+            r = index[t]
             for col, key in (("W", "bid"), ("X", "ask")):
                 if key in row and row[key] not in (None, ""):
                     items.append({"ref": "Forward!%s%d" % (col, r), "value": row[key]})
@@ -2952,8 +2977,10 @@ class Service(object):
 
     def ret_meta(self) -> Optional[Dict[str, Any]]:
         """Who loaded the RET curve last, and when (``None``: never - the file's curve is in use)."""
-        cells = ["Forward!%s%d" % (col, RET_FIRST_ROW + i) for i in range(len(RET_TENORS)) for col in ("W", "X")]
-        return self.store.shared_meta("tto", cells)
+        book = self.books.get("tto")
+        if book is None:
+            return None
+        return self.store.shared_meta("tto", self._ret_cells(book))
 
     # ================================================================== blotter
     def today_iso(self) -> str:
