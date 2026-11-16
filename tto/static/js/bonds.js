@@ -6,6 +6,10 @@ import { isoToTr, num } from './format.js';
 const KIND_ORDER = ['all', 'fixed', 'float', 'frn', 'cpi', 'bill', 'zero'];
 const KIND_TEXT = { all: 'Tümü', fixed: 'Sabit', float: 'TLREF', frn: 'FRN', cpi: 'TÜFE', bill: 'Bono', zero: 'Kuponsuz' };
 
+/** What the rows of a list held and where it went (the server's ``rows``): said after the toast of the change. */
+const rowsSaid = (res) => (res && res.rows && res.rows.text ? ' · ' + res.rows.text : '');
+const rowsKind = (res, kind) => (res && res.rows && (res.rows.cleared || []).length ? 'warn' : kind);
+
 /**
  * ``opts``: {book, list (e.g. "DİBS RV!A5:A54"), name (the list's name in the catalog: dibs / asw / bulk; "evren":
  * Tüm Kâğıtlar, the desk's list itself), catalog (offer the TRY government bonds to pick from), title}.
@@ -77,7 +81,7 @@ export async function openAddIsin(ctx, opts) {
     try {
       const res = await api.post('/api/list/add', { book: opts.book, list: opts.list, values });
       toast((res.added.length ? res.added.length + ' kâğıt eklendi' : 'Yeni kâğıt yok') + (res.skipped.length ? ' · ' + res.skipped.length + ' zaten listede' : '')
-        + ' · ' + res.free + ' boş satır kaldı', 'ok', 4000);
+        + ' · ' + res.free + ' boş satır kaldı' + rowsSaid(res), rowsKind(res, 'ok'), res.rows ? 9000 : 4000);
       m.close();
       ctx.refreshNow();
     } catch (err) { errorToast(err); add.disabled = false; }
@@ -135,7 +139,8 @@ async function unlist(ctx, td) {
   td.classList.add('busy');
   try {
     const res = await api.post('/api/bonds/list/remove', { isin: code });
-    toast(res.removed ? code + ' listeden çıkarıldı' + (res.trading ? ' (trading listesinden de)' : '') : code + ' listede değil', 'ok');
+    toast((res.removed ? code + ' listeden çıkarıldı' + (res.trading ? ' (trading listesinden de)' : '') : code + ' listede değil') + rowsSaid(res),
+      rowsKind(res, 'ok'), res.rows ? 9000 : 3800);
     ctx.refreshNow();
   } catch (err) { errorToast(err); } finally { td.classList.remove('busy'); }
 }
@@ -259,7 +264,8 @@ export function bondFlags(ctx, el) {
     td.classList.add('busy');
     try {
       const res = await api.post('/api/bonds/flag', { isin: code, on });
-      toast(on ? (res.added ? code + ' trading listesine eklendi' : code + ' zaten listede') : code + ' trading listesinden çıkarıldı', 'ok');
+      toast((on ? (res.added ? code + ' trading listesine eklendi' : code + ' zaten listede') : code + ' trading listesinden çıkarıldı') + rowsSaid(res),
+        rowsKind(res, 'ok'), res.rows ? 9000 : 3800);
       ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { td.classList.remove('busy'); }
   });

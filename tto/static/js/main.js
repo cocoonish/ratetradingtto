@@ -920,7 +920,12 @@ function boot() {
   if (store('tto.nav') === '1') $('app').classList.add('nav-collapsed');
 
   session.onUnauthorized = () => { showLogin('Oturumunuz sona erdi – tekrar giriş yapın.'); };
-  const after = (res) => { runRefresh(); return res; };
+  const after = (res) => {
+    runRefresh();
+    // ISINs of a list of bonds changed: what the rows held went with their bonds (moved / gone) - said once
+    if (res && res.rows && res.rows.text) toast(res.rows.text, (res.rows.cleared || []).length ? 'warn' : 'ok', 9000);
+    return res;
+  };
   configureGrid({
     setInputs: (book, items, adhoc, lenient) => api.post('/api/inputs', { book, items, adhoc: !!adhoc, lenient: !!lenient }).then(after),
     paste: (book, anchor, text, adhoc) => api.post('/api/paste', { book, anchor, text, adhoc: !!adhoc }).then(after),
