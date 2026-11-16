@@ -548,7 +548,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def broker(request: Request):
         q = request.query_params
-        return ok(await call(svc().broker, _user(request), q.get("date"), q.get("to")))
+        return ok(await call(svc().broker, _user(request), q.get("date"), q.get("to"), q.get("part")))
 
     @handler
     async def broker_parse(request: Request):
@@ -682,7 +682,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def watch(request: Request):
-        return ok(await call(svc().watch_view, _user(request), request.query_params.get("lang"), request.query_params.get("days") or 60))
+        return ok(await call(svc().watch_view, _user(request), request.query_params.get("lang"), request.query_params.get("days") or 60,
+                             request.query_params.get("part")))
 
     @handler
     async def heat(request: Request):
@@ -910,8 +911,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         admin = await call_free(service.desk.is_admin, who)
 
         def message(gen: int) -> str:
-            # (the quant signals' counters: the last alert's number, the version of the results - see quant.Quant.counters)
-            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters(admin), "quant": service.quant.counters()})
+            # (the quant signals' counters: the last alert's number, the version of the results - see quant.Quant.counters;
+            # Broker Chat's changes: a box of its board asks again on those, not on every generation)
+            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters(admin), "quant": service.quant.counters(),
+                                                "broker": service.broker_changes})
 
         async def stream():
             service.add_listener(push)

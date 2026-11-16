@@ -8,6 +8,7 @@ import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum, REGIME,
   BLUE, ORANGE, GREEN, PURPLE, RED, GREY } from './quantbase.js';
+import { boxTools } from '../pagebox.js';
 
 const ARROW = (s) => (s > 0 ? '↑' : s < 0 ? '↓' : '');
 
@@ -320,6 +321,7 @@ class FxPage extends AnalysisPage {
       + 'sütunda). Beklenen getiri (long): kayma + carry. Tampon: carry\'yi alan tarafın beklenen getirisi (− ise kayma carry\'yi yiyor). Karar: beklenen getiri ÷ vol '
       + 'masa eşiğini geçerse ilgili para birimi long / short, yoksa nötr. Forward\'ı olmayan pariteye carry uydurulmaz.';
     this.boxes.sum = new GridBox(this.sum, 'quant/fx/summary');
+    this.sum.tools.append(...boxTools(() => ({ type: 'fx-summary', w: 12 }), this.ctx));
     this.vol = panel('quant-fx-vol', 'İma − gerçekleşen vol ve GARCH tahmini (3M ATM)');
     this.vol.note.textContent = 'Gerçekleşen: günlük log getirilerin σ\'sı × √252, 21 / 63 / 126 gün. Vol primi = ima − 63 günlük; GARCH(1,1) (ızgara üzerinde en çok olabilirlik, '
       + 'uzun dönem varyans hedefli) önümüzdeki 63 iş gününün ortalama vol\'ü; EWMA λ 0,94. + z: vol pahalı (sat), − z: ucuz (al). Skew β: 25D RR\'nin spotun %1\'lik '
@@ -339,13 +341,7 @@ class FxPage extends AnalysisPage {
   fillPage() {
     const entry = (this.data.settings || {}).entry_z || 2;
     const fs = this.data.fxsum || {};
-    const term = (r) => Object.entries(r.term || {}).map(([t, v]) => t + ' ' + sgn(v, 1)).join(' · ');
-    this.boxes.sum.set(['Parite', 'Grup', 'Spot', 'Carry % / yıl (long)', 'Forward\'lar', 'Beklenen kayma % / yıl', 'Kayma ağırlığı', 'Beklenen getiri (long) % / yıl',
-      'Tampon (carry tarafı)', 'Vol', 'Getiri / vol', 'Karar'], (fs.rows || []).map((r) => [T(r.pair, { b: 1 }), T(r.group), N(r.spot, 4), N(r.carry_long, 1, { sign: true }),
-      T(term(r)), N(r.drift, 1, { sign: true, tip: isNum(r.drift_raw) ? 'küçültülmeden: ' + sgn(r.drift_raw, 1) : '' }), T(pct(r.drift_w)), N(r.exp_long, 1, { sign: true }),
-      N(r.buffer, 1, { sign: true, cls: isNum(r.buffer) && r.buffer < 0 ? 'soft' : '' }), T(isNum(r.vol) ? fmt(r.vol, 1) + ' (' + r.vol_src + ')' : ''),
-      N(r.sharpe, 2, { sign: true }), T(r.verdict || '', { b: 1, cls: r.verdict && r.verdict.endsWith('long') ? 'thru' : (r.verdict === 'nötr' ? 'soft' : '') })]), null,
-    fs.why || 'Spot / forward tarihçesi yok');
+    this.boxes.sum.set(FX_SUMMARY_HEAD, fxSummaryRows(fs), null, fs.why || 'Spot / forward tarihçesi yok');
     const rows = (this.data.vol || {}).rows || [];
     this.boxes.vol.set(['Parite', 'İma', 'Gerç. 21g', 'Gerç. 63g', 'Gerç. 126g', 'Prim', 'Prim z', 'EWMA', 'GARCH', 'α', 'β', 'İma − GARCH', 'z', 'Skew β (t)'],
       rows.map((r) => [T(r.pair, { b: 1 }), N(r.iv, 2), N(r.rv21, 2), N(r.rv63, 2), N(r.rv126, 2), N(r.vrp, 2, { sign: true }), Z(r.vrp_z, entry), N(r.ewma, 2), N(r.garch, 2),
@@ -361,6 +357,18 @@ class FxPage extends AnalysisPage {
       N(r.implied, 2), N(r.realized, 2, { sign: true }), N(r.forecast, 2, { sign: true }), N(r.cushion, 2, { sign: true }), Z(r.z, entry), N(r.half_life, 1), N(r.n, 0)]),
     fw.map((r) => r.sid || null), 'Forward puanı tarihçesi yok', this.picked);
   }
+}
+
+/** The pair summary's caption row and rows (the page's and its box's). */
+export const FX_SUMMARY_HEAD = ['Parite', 'Grup', 'Spot', 'Carry % / yıl (long)', 'Forward\'lar', 'Beklenen kayma % / yıl', 'Kayma ağırlığı',
+  'Beklenen getiri (long) % / yıl', 'Tampon (carry tarafı)', 'Vol', 'Getiri / vol', 'Karar'];
+
+export function fxSummaryRows(fs) {
+  const term = (r) => Object.entries(r.term || {}).map(([t, v]) => t + ' ' + sgn(v, 1)).join(' · ');
+  return ((fs || {}).rows || []).map((r) => [T(r.pair, { b: 1 }), T(r.group), N(r.spot, 4), N(r.carry_long, 1, { sign: true }),
+    T(term(r)), N(r.drift, 1, { sign: true, tip: isNum(r.drift_raw) ? 'küçültülmeden: ' + sgn(r.drift_raw, 1) : '' }), T(pct(r.drift_w)), N(r.exp_long, 1, { sign: true }),
+    N(r.buffer, 1, { sign: true, cls: isNum(r.buffer) && r.buffer < 0 ? 'soft' : '' }), T(isNum(r.vol) ? fmt(r.vol, 1) + ' (' + r.vol_src + ')' : ''),
+    N(r.sharpe, 2, { sign: true }), T(r.verdict || '', { b: 1, cls: r.verdict && r.verdict.endsWith('long') ? 'thru' : (r.verdict === 'nötr' ? 'soft' : '') })]);
 }
 
 // ------------------------------------------------------------------------------------------------ Makro beta

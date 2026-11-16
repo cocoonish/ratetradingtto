@@ -31,6 +31,9 @@ import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
 import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing, setLanding, pinToDrawer, addMenu } from './layout.js';
+import './pageboxes.js';                          // (the boxes of the dashboard's own pages join the launchpad's kinds)
+import { boxEvent, PopBoxPage, popBoxHash, popBoxItem } from './pagebox.js';
+import { paintMenu, menuChanged, openedPage, pageTabs, editMenu } from './menu.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
@@ -294,38 +297,8 @@ async function enter(me) {
 
 // ---------------------------------------------------------------------- navigation
 function buildNav() {
-  const nav = clear($('nav'));
-  const groups = new Map();
-  for (const p of state.pages) {
-    const g = p.group || 'Diğer';
-    if (!groups.has(g)) groups.set(g, []);
-    groups.get(g).push(p);
-  }
-  if (!groups.has('Araçlar')) groups.set('Araçlar', []);
-  if (session.role === 'admin') {                    // the sheet explorer, the accounts, the backup: administrators only
-    groups.get('Araçlar').push({ id: 'explorer', title: 'Sayfa gezgini' });
-    groups.get('Araçlar').push({ id: 'users', title: 'Kullanıcılar' });
-    groups.get('Araçlar').push({ id: 'backup', title: 'Yedekleme' });
-  }
-  if (!groups.get('Araçlar').length) groups.delete('Araçlar');
-  // the blotter belongs right under the desk overview
-  const masa = groups.get('Masa');
-  if (masa) masa.sort((a, b) => (a.id === 'masa' ? -1 : b.id === 'masa' ? 1 : 0));
-  // the user's own launchpads come first
-  const own = h('div', { class: 'nav-group nav-own' });
-  const lp = h('a', { class: 'nav-item', href: '#/launchpad', title: 'Launchpad: kendi tablo sayfalarınız' }, h('span', { class: 'dot' }), h('span', { class: 'lbl' }, 'Launchpad'));
-  lp.dataset.page = 'launchpad';
-  own.appendChild(lp);
-  nav.appendChild(own);
-  for (const [g, items] of groups) {
-    const box = h('div', { class: 'nav-group' }, h('div', { class: 'gt' }, g));
-    for (const p of items) {
-      const a = h('a', { class: 'nav-item', href: '#/' + p.id, title: p.title }, h('span', { class: 'dot' }), h('span', { class: 'lbl' }, p.title));
-      a.dataset.page = p.id;
-      box.appendChild(a);
-    }
-    nav.appendChild(box);
-  }
+  // (menu.js: the launchpads first, the groups, quant's pages as four entries with tabs, the user's own menu)
+  paintMenu($('nav'), state.pages, session.role === 'admin', state.pageId);
   ctx.setPending(state.pending);
   paintDeskNav();
   setChatMissing(state.chatMissing);
@@ -413,7 +386,7 @@ async function openPage(id, panel, sub) {
   state.pageId = id;
   store('tto.page', id);
   noteRecent(id);
-  for (const a of document.querySelectorAll('#nav .nav-item')) a.classList.toggle('active', a.dataset.page === id);
+  openedPage($('nav'), id, state.pages);
   paintDeskNav();
   paintFavs();
   $('page-title').textContent = pageTitle(id);
@@ -437,7 +410,9 @@ async function openPage(id, panel, sub) {
   // a page that is kept gets a host of its own (out of the document while another is on screen); the others draw
   // into #content itself, as before
   const keepable = id === 'launchpad' || !(state.pages.find((p) => p.id === id) || { custom: true }).custom;
-  const host = keepable ? content.appendChild(h('div', { class: 'pagehost' })) : content;
+  const tabs = pageTabs(id, state.pages);          // a page of a menu entry with tabs (quant's Faiz …): the tabs over it
+  if (tabs) content.appendChild(tabs);
+  const host = keepable || tabs ? content.appendChild(h('div', { class: 'pagehost' })) : content;
   let page;
   if (id === 'launchpad') page = new LaunchpadPage(host, ctx, { name: sub });
   else if (id === 'blotter') page = new BlotterPage(host, ctx);
@@ -492,6 +467,7 @@ function openWindow(hash, name) {
 
 /** A table (with its part, its name) in a window of its own: "#/pop/<page>/<table>?part={rows, cols, all, title}". */
 function openPop(src) {
+  if (src.type && src.type !== 'table') return openWindow(popBoxHash(src), 'tto-pop-' + popBoxHash(src));      // a box of a page
   const part = {};
   if (src.rows && src.rows.length) part.rows = src.rows;
   if (src.cols && src.cols.length) part.cols = src.cols;
@@ -527,6 +503,9 @@ function routePop() {
     const item = { type: 'calc', id: 'pop', sheet: parts[2], w: 12, h: 'auto' };
     if (query.get('t')) item.title = query.get('t');
     page = new PopPanelPage(host, ctx, item);
+  } else if (parts[1] === 'box' && parts[2]) {
+    state.pageId = 'pop';
+    page = new PopBoxPage(host, ctx, popBoxItem(parts[2], query));
   } else if (parts[1] && parts[2]) {
     let part = {};
     try { part = JSON.parse(query.get('part') || '{}') || {}; } catch (e) { part = {}; }
@@ -677,7 +656,7 @@ const events = {
     this.chan = new BroadcastChannel('tto-events');
     this.chan.onmessage = (e) => {
       const m = e.data || {};
-      if (typeof m.gen === 'number') { onGen(m.gen); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); } }
+      if (typeof m.gen === 'number') { onGen(m.gen); boxEvent(m); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); } }
       else if (m.online === false) setOnline(false);
       else if (m.online === true) { if (!POP) deskReconnected(); onBack(); }
     };
@@ -719,8 +698,9 @@ const events = {
     es.onmessage = (e) => {
       let msg = null;
       try { msg = JSON.parse(e.data); } catch (x) { return; }
-      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant });
+      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant, broker: msg.broker });
       onGen(msg.gen);
+      boxEvent(msg);                       // the boxes of the quant pages: the results' version (a window of its own too)
       if (POP) return;
       deskEvent(msg.desk);                 // the chat, the reports, the agenda: their own counters (no new generation)
       quantEvent(msg.quant);               // the quant signals: a new result, a signal alert
@@ -1001,6 +981,7 @@ function boot() {
       { header: session.display + (session.role === 'admin' ? ' · yönetici' : '') },
       { label: 'Launchpad\'lerim', action: () => { window.location.hash = '#/launchpad'; } },
       { label: 'Açılış sayfası…', action: () => openLandingDialog() },
+      { label: 'Menüyü düzenle…', action: () => editMenu(state.pages, session.role === 'admin') },
       { label: 'Senaryolarım', action: () => openScenarios(ctx) },
       { label: 'Şifremi değiştir', action: () => openPasswordDialog() },
     ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } }] : [],
@@ -1012,7 +993,11 @@ function boot() {
     const on = !favs().includes(id);
     toggleFav(id).then(() => toast(on ? '"' + pageTitle(id) + '" üst şeritteki favorilerinizde' : '"' + pageTitle(id) + '" favorilerden çıktı', 'ok', 2200), () => {});
   });
-  onLayout(() => { if (!POP) paintFavs(); });
+  onLayout(() => {
+    if (POP) return;
+    paintFavs();
+    if (menuChanged()) buildNav();                  // (the user's own menu changed: here, in another window, on another computer)
+  });
   // Alt+← / Alt+→: the page before / after (the last ones opened come back at once, as they were left); Alt+Y: the drawer
   document.addEventListener('keydown', (e) => {
     if (!session.user || POP || !e.altKey || e.ctrlKey || e.metaKey || inFormControl(e.target)) return;      // (in a box of text: the browser's)

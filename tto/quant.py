@@ -110,6 +110,14 @@ PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PC
 PAGES += tuple(p for _x in EXTRAS for p in _x.PAGES)
 PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))   # quantpath.py, quantlead.py
 PAGES += qv.PAGES                                                                                          # quantviop.py
+#: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
+#: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
+MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"))),
+        ("quant.faiz", "Faiz", (("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"), ("quant-corr", "Korelasyon"),
+                                ("quant-regime", "Rejim"), ("quant-curve", "Eğri Adil Değeri"), ("quant-path", "İma Patikası"),
+                                ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
+        ("quant.fx", "FX", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))),
+        ("quant-viop", "VİOP", (("quant-viop", "VİOP"),)))
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -1199,7 +1207,21 @@ class Quant(object):
 
     # ================================================================== what the pages read
     def pages(self) -> List[Dict[str, Any]]:
-        return [{"id": pid, "title": title, "group": "Quant", "book": "tto", "sheet": None, "custom": True} for pid, title in PAGES]
+        """The pages for the menu, in ``MENU``'s order: a page of an entry with tabs names its entry (``menu``,
+        ``menu_title``) and its tab (``tab``); a page the menu does not name comes last, an entry of its own."""
+        def page(pid: str, title: str) -> Dict[str, Any]:
+            return {"id": pid, "title": title, "group": "Quant", "book": "tto", "sheet": None, "custom": True}
+
+        titles = dict(PAGES)
+        out = []
+        for mid, name, tabs in MENU:
+            for pid, tab in tabs:
+                if pid in titles:
+                    p = page(pid, titles.pop(pid))
+                    if len(tabs) > 1:
+                        p.update({"menu": mid, "menu_title": name, "tab": tab})
+                    out.append(p)
+        return out + [page(pid, title) for pid, title in PAGES if pid in titles]
 
     def status(self) -> Dict[str, Any]:
         st = {k: v for k, v in self.state.items() if k != "live_t"}
@@ -1229,6 +1251,8 @@ class Quant(object):
             return self.log_view()
         if what == "backtest":
             return self.backtest_view()
+        if what == "box":
+            return self.box_view(q)
         v = self._view
         fit = self._fit
         base = {"ready": v is not None, "status": self.status(), "version": self.version}
@@ -1270,6 +1294,46 @@ class Quant(object):
         base["coverage"] = [c for c in fit["coverage"] if self._covers(what, c["key"])]
         base["errors"] = {k: e for k, e in (t.get("errors") or {}).items() if k in pages[what] or (what == "fx" and k == "vol")}
         return _clean(base)
+
+    #: the boxes of the quant pages (``/api/quant/box?of=``)
+    BOXES = ("signals", "viop", "wirp", "fxsum")
+
+    def box_view(self, q: Dict[str, Any]) -> Dict[str, Any]:
+        """What a box of a quant page reads - on a launchpad, in the side drawer, in a window of its own: a light part
+        of its page.  ``of``: ``signals`` the live list (``family`` / ``asset`` filter it as the page does), ``viop``
+        the contracts now with their order levels, ``wirp`` each bank's meeting table (without the matrices and the
+        history), ``fxsum`` the pair summary.  ``version`` is the result's: a box asks again when the live stream says
+        it moved (VİOP's live part is made again on each read, from the minute's live values - a version of its own)."""
+        of = q.get("of") or ""
+        if of not in self.BOXES:
+            raise QuantError("bilinmeyen kutu: %s" % str(of)[:40])
+        v, fit = self._view, self._fit
+        out: Dict[str, Any] = {"of": of, "ready": v is not None and fit is not None, "version": self.version}
+        if not out["ready"]:
+            out["error"] = self.state.get("error") or ""
+            return _clean(out)
+        out.update({"at": v.get("at"), "entry_z": fit["cfg"].get("entry_z")})
+        if of == "signals":
+            fam, asset = q.get("family") or "", q.get("asset") or ""
+            out["signals"] = [s for s in v["signals"] if (not fam or s["family"] == fam) and (not asset or s["asset"] == asset)]
+            out["family_label"] = qf.FAMILIES[fam][0] if fam in qf.FAMILIES else ""
+            out["families"] = [{"id": k, "label": x[0]} for k, x in qf.FAMILIES.items()]          # (the box's filter)
+            out["assets"] = list(qf.ASSETS)
+        elif of == "viop":
+            page = qv.view(self, "viop", {}, v, fit)
+            tab = page.get("viop") or {}
+            live = tab.get("live") or {}
+            out.update({"rows": live.get("rows") or [], "why": live.get("why") or tab.get("why") or "", "live_at": live.get("at"),
+                        "mode": page.get("mode") or ""})
+        elif of == "wirp":
+            page = qp.view(self, "wirp", {}, v, fit)
+            light = ("bank", "label", "ok", "why", "grid", "day", "policy", "base", "live", "check")
+            out["banks"] = {k: dict({x: b.get(x) for x in light},
+                                    rows=[{f: y for f, y in r.items() if f not in ("matrix", "dist")} for r in b.get("rows") or ()])
+                            for k, b in ((page.get("wirp") or {}).get("banks") or {}).items()}
+        else:
+            out["fxsum"] = v["tables"].get("fxsum") or {}
+        return _clean(out)
 
     @staticmethod
     def _covers(what: str, key: str) -> bool:

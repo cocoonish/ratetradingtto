@@ -11,15 +11,16 @@ import { num } from '../format.js';
 import { openWatchDialog, askPermission, ackDesk, muteMenu } from '../alarms.js';
 import { SeriesView, watchSpec } from '../serieschart.js';
 import { TableColumns, toolsOf } from '../columns.js';
+import { boxTools } from '../pagebox.js';
 
-const OP = { '>=': '≥', '<=': '≤', x: 'kesişir' };
+export const OP = { '>=': '≥', '<=': '≤', x: 'kesişir' };
 const UNIT_TEXT = { pct: 'faiz (%) – değişim bp', bp: 'bp', px: 'fiyat', fx: 'kur', raw: 'sayı' };
-const KIND_TEXT = { viop: 'VİOP', bond: 'kâğıt', ois: 'OIS', off: 'offshore', masa: 'masa', expr: 'ifade', cell: 'hücre' };
+export const KIND_TEXT = { viop: 'VİOP', bond: 'kâğıt', ois: 'OIS', off: 'offshore', masa: 'masa', expr: 'ifade', cell: 'hücre' };
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const HISTORY_AGAIN_MS = 5 * 60 * 1000;   // a drawn history is asked again this often (the value now: every refresh)
 
 /** A change: "+3,2 bp", "−0,0150" (a price or FX level: in the item's own decimals). */
-function changeText(v, it) {
+export function changeText(v, it) {
   if (!isNum(v)) return '';
   const bp = it.unit_name === 'bp';
   const d = bp ? 1 : (it.show === 'px' ? 3 : 4);
@@ -27,7 +28,7 @@ function changeText(v, it) {
 }
 
 /** The day's path as a small line (the open dashed). */
-function spark(points, open) {
+export function spark(points, open) {
   const w = 120, hgt = 26;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', w);
@@ -52,7 +53,7 @@ function spark(points, open) {
 }
 
 /** Where the level stands in the past window: the low - high line, the mean (tick) and now (dot). */
-function band(z, now) {
+export function band(z, now) {
   const w = 96, hgt = 16;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', w);
@@ -69,7 +70,7 @@ function band(z, now) {
 }
 
 const ZDAYS_KEY = 'tto.watch.zdays';
-function savedDays() {
+export function savedDays() {
   try { const v = Number(localStorage.getItem(ZDAYS_KEY)); return [20, 60, 250].includes(v) ? v : 60; } catch (e) { return 60; }
 }
 
@@ -150,6 +151,10 @@ export class WatchPage {
     save.addEventListener('click', () => this.saveNotes());
     notesBody.appendChild(this.notes);
     notesBody.appendChild(h('div', { class: 'chatrow actions' }, save, this.notesInfo));
+    // each list on a launchpad, in the side drawer, in a window of its own
+    for (const [body, list] of [[this.list, 'items'], [this.alarmBox, 'alarms'], [this.firedBox, 'fired']]) {
+      toolsOf(body, true).append(...boxTools(() => ({ type: 'watch-list', list, w: 12 }), this.ctx));
+    }
     this.permState();
   }
 

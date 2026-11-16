@@ -155,7 +155,7 @@ def test_what_is_not_a_request_for_tables_is_refused(service, items):
 def test_each_user_keeps_their_own_layout(service):
     u = login(service, "Lp Ayşe")
     v = login(service, "Lp Mehmet")
-    assert service.layout(u) == {"launchpads": [], "drawer": [], "favs": [], "landing": "", "rev": 0}
+    assert service.layout(u) == {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "rev": 0}
     first = {"type": "table", "id": "a1", "view": "forward", "panel": "B1", "w": 6, "h": "auto"}
     second = {"view": "dibs", "panel": "B3", "w": 12, "h": 320, "rows": ["TRT150328T24", 9, 9], "cols": ["A", "C"],
               "title": "  Benim\tRV ", "collapsed": True, "all": True, "extra": "x"}
@@ -208,7 +208,8 @@ def test_a_layout_written_by_another_version_is_read_item_by_item(service):
                                                      {"name": ""}, {"name": "a", "items": []}, "bozuk"],
                                       "drawer": [good, {"type": "gelecek"}], "favs": ["forward", "a b", 3], "landing": 5, "rev": 7})
     got = service.layout(u)
-    assert got == {"launchpads": [{"name": "A", "items": [good]}], "drawer": [good], "favs": ["forward"], "landing": "", "rev": 7}
+    assert got == {"launchpads": [{"name": "A", "items": [good]}], "drawer": [good], "favs": ["forward"], "landing": "", "hidden_pages": [],
+                   "rev": 7}
     kept = service.set_layout(u, {"favs": []})
     assert kept["launchpads"] == [{"name": "A", "items": [good]}] and kept["drawer"] == [good] and kept["rev"] == 8
 

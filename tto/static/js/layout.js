@@ -13,7 +13,7 @@ const listeners = new Set();
 const chan = typeof window.BroadcastChannel === 'function' ? new BroadcastChannel('tto-layout') : null;
 let pending = 0;                  // saves on their way: an answer is put in place only when it is the last one
 
-const EMPTY = () => ({ launchpads: [], drawer: [], favs: [], landing: '', rev: 0 });
+const EMPTY = () => ({ launchpads: [], drawer: [], favs: [], landing: '', hidden_pages: [], rev: 0 });
 
 function emit() {
   for (const fn of listeners) {
@@ -128,8 +128,30 @@ export async function createLaunchpad(items = [], suggested = '') {
   return name;
 }
 
-/** The item of a table of a page: {type: 'table', id, view, panel, w, h, all?}. */
+// an item of another kind than a table (a box of one of the dashboard's own pages): its type and its options name it
+const typed = (x) => !!x && !!x.type && x.type !== 'table';
+const COMMON = ['id', 'type', 'title', 'w', 'h', 'collapsed'];
+
+/** What makes a box of another kind the one it is: its type and its options ("viop-levels" of "front"). */
+export function itemKey(it) {
+  const own = Object.keys(it).filter((k) => !COMMON.includes(k) && it[k] !== undefined && it[k] !== null).sort();
+  return it.type + ':' + JSON.stringify(own.map((k) => [k, it[k]]));
+}
+
+/** Whether ``it`` (of a launchpad, of the drawer) is the table - or the box - ``src`` names. */
+function sameBox(it, src) {
+  return typed(src) ? typed(it) && itemKey(it) === itemKey(src) : !typed(it) && it.view === src.view && it.panel === src.panel;
+}
+
+/** The item of a table of a page: {type: 'table', id, view, panel, w, h, all?} - or of a box of another kind (``src.type``):
+ *  its options as they are. */
 export function tableItem(src) {
+  if (typed(src)) {
+    const it = Object.assign({}, src, { id: newId(), w: src.w || DEFAULT_W, h: src.h || 'auto' });
+    for (const k of Object.keys(it)) if (it[k] === undefined || it[k] === null) delete it[k];
+    delete it.collapsed;
+    return it;
+  }
   const it = { type: 'table', id: newId(), view: src.view, panel: src.panel, w: src.w || DEFAULT_W, h: 'auto' };
   if (src.all) it.all = true;
   if (src.rows && src.rows.length) it.rows = src.rows.slice();
@@ -143,14 +165,14 @@ export async function addToLaunchpad(src, name) {
   let target = name;
   if (!target) {
     target = await createLaunchpad([tableItem(src)]);
-    if (target) toast('"' + target + '" launchpad\'i oluşturuldu, tablo eklendi', 'ok', 3200);
+    if (target) toast('"' + target + '" launchpad\'i oluşturuldu, ' + (typed(src) ? 'kutu' : 'tablo') + ' eklendi', 'ok', 3200);
     return target;
   }
   const lp = findLaunchpad(target);
   if (!lp) return null;
   if (lp.items.length >= 60) { toast('Bir launchpad en fazla 60 tablo alır', 'err'); return null; }
   try { await changeLaunchpad(target, (x) => { x.items.push(tableItem(src)); }); } catch (e) { return null; }
-  toast('Tablo "' + lp.name + '" launchpad\'ine eklendi', 'ok', 2600);
+  toast((typed(src) ? 'Kutu' : 'Tablo') + ' "' + lp.name + '" launchpad\'ine eklendi', 'ok', 2600);
   return lp.name;
 }
 
@@ -159,8 +181,9 @@ export function drawerItems() {
   return (layout.data && layout.data.drawer) || [];
 }
 
-export function inDrawer(view, panel) {
-  return drawerItems().some((it) => it.view === view && it.panel === panel && !it.rows && !it.cols);
+/** Whether the drawer holds the whole table (or the box) ``src`` names. */
+export function inDrawer(src) {
+  return drawerItems().some((it) => sameBox(it, src) && !it.rows && !it.cols);
 }
 
 export function pinToDrawer(src) {
@@ -170,8 +193,8 @@ export function pinToDrawer(src) {
   return saveLayout({ drawer: drawerItems().concat([it]) });
 }
 
-export function unpinFromDrawer(view, panel) {
-  return saveLayout({ drawer: drawerItems().filter((it) => !(it.view === view && it.panel === panel && !it.rows && !it.cols)) });
+export function unpinFromDrawer(src) {
+  return saveLayout({ drawer: drawerItems().filter((it) => !(sameBox(it, src) && !it.rows && !it.cols)) });
 }
 
 // ---------------------------------------------------------------------- favourite pages, the landing page
@@ -192,6 +215,15 @@ export function setLanding(where) {
   return saveLayout({ landing: where || '' });
 }
 
+/** The menu entries this user took out of their menu (a page's id, or a menu entry's whose pages are its tabs). */
+export function hiddenPages() {
+  return (layout.data && layout.data.hidden_pages) || [];
+}
+
+export function setHiddenPages(ids) {
+  return saveLayout({ hidden_pages: ids });
+}
+
 // ---------------------------------------------------------------------- "+ Launchpad": where a table goes
 /**
  * The menu of a table's "+ Launchpad" (and of a Ctrl+K result): the launchpads to put it on, a new one, the side
@@ -200,14 +232,14 @@ export function setLanding(where) {
 export function addMenu(x, y, src, acts) {
   const items = [{ header: 'Launchpad\'e ekle' }];
   for (const lp of launchpads()) {
-    const has = lp.items.some((it) => it.view === src.view && it.panel === src.panel);
+    const has = lp.items.some((it) => sameBox(it, src));
     items.push({ label: lp.name + (has ? '  ✓ zaten var' : ''), action: () => addToLaunchpad(src, lp.name) });
   }
   items.push({ label: '+ Yeni launchpad…', action: () => addToLaunchpad(src, null) });
   items.push({ sep: true });
-  const pinned = inDrawer(src.view, src.panel);
+  const pinned = inDrawer(src);
   items.push({ label: pinned ? 'Yan panelden kaldır' : 'Yan panele sabitle', action: () => (pinned
-    ? unpinFromDrawer(src.view, src.panel) : acts && acts.pin ? acts.pin(src) : pinToDrawer(src)) });
+    ? unpinFromDrawer(src) : acts && acts.pin ? acts.pin(src) : pinToDrawer(src)) });
   if (acts && acts.pop) items.push({ label: 'Ayrı pencerede aç', action: () => acts.pop(src) });
   return menu(x, y, items);
 }

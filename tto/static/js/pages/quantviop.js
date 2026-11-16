@@ -6,6 +6,7 @@
 // held on the history.  Computed in the quant worker's thread; the levels with the values now when the page reads.
 import { h } from '../ui.js';
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum } from './quantbase.js';
+import { boxTools } from '../pagebox.js';
 
 const PICK_PREF = 'tto.quant.viop.contract';
 const DAYS_TR = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum'];
@@ -36,7 +37,9 @@ class ViopPage extends QuantPage {
       + 'fiyatının, satış = bid fiyatının ima faizi. OIS 360 günlük (VİOP sayfasının satır 77\'si gibi), offshore olduğu gibi (ICAP). Adil = OIS + farkın '
       + 'penceredeki ortalaması (sabit vadeli seriden, kontratın gününde). 1.000 $ DV01: ima faizin 1 bp\'si 1.000 $ olan pozisyon.';
     this.boxes.table = new GridBox(this.table, 'quant/viop/contracts', (sid) => this.pick(sid));
+    this.table.tools.append(...boxTools(() => ({ type: 'viop-contracts', w: 12 }), this.ctx));
     this.levels = panel('quant-viop-levels', 'Emir seviyeleri');
+    this.levels.tools.append(...boxTools(() => ({ type: 'viop-levels', contract: this.levelsChoice() }), this.ctx));
     this.levels.note.textContent = 'Bugün (kalan seans) ve bu hafta (Cuma kapanışına kadar): alış emri ask ima faizinin en düşük noktasına, satış emri bid ima '
       + 'faizinin en yüksek noktasına göre - o seviyenin görülme olasılığı. Model: sürüklenmeli Brown hareketi (yansıma ilkesi); sürüklenme adil değere çekilme '
       + '(yarı ömürle), vadeye doğru kayma ve geçmişte belirgin ay sonu etkisi; varyans gün içi barların saat profili (geçmişin günlük oynaklığına ölçekli), '
@@ -101,12 +104,8 @@ class ViopPage extends QuantPage {
     this.contractHost.replaceChildren(rows.length ? seg(rows.map((r) => [r.ticker, r.name]), this.contract,
       (t) => { this.contract = t; keep(PICK_PREF, t); this.fillPage(); }, 'quant-viop-contract') : h('span', { class: 'muted' }, '—'));
     const entry = (this.data.settings || {}).entry_z || 2;
-    this.boxes.table.set(['Kontrat', 'Vade', 'Gün', 'Alış ima % (ask)', 'Satış ima % (bid)', 'Orta %', 'OIS % (360)', 'VİOP − OIS (bp)', 'Normal fark (bp)',
-      'Adil ima %', 'z', 'Yarı ömür (g)', 'Offshore %', 'VİOP − offshore (bp)', '1.000 $ DV01: kontrat', 'Not'], rows.map((r) => [
-      T(r.name, { b: r.ticker === this.contract ? 1 : 0 }), T(r.expiry || ''), N(r.g, 0), N(r.ask, 2), N(r.bid, 2), N(r.mid, 2), N(r.ois, 2),
-      N(r.basis, 1, { sign: true }), N(r.mean_basis, 1, { sign: true }), N(r.fair, 2), Z(r.z, entry), N(r.half_life, 1), N(r.off, 2),
-      N(r.vs_off, 1, { sign: true }), N((r.size || {}).contracts, 0), T(r.n_cm ? (r.source || '') : 'geçmiş yok', { cls: 'soft' })]),
-    rows.map((r) => r.sid || null), live.why || v.why || 'Canlı VİOP kotası yok', this.picked);
+    this.boxes.table.set(CONTRACT_HEAD, contractRows(rows, this.contract, entry), rows.map((r) => r.sid || null),
+      live.why || v.why || 'Canlı VİOP kotası yok', this.picked);
     this.fillLevels(rows.find((r) => r.ticker === this.contract));
     const cal = v.calendar || {};
     const me = cal.month_end || [];
@@ -142,44 +141,73 @@ class ViopPage extends QuantPage {
     null, 'Kontrat yok');
   }
 
+  /** The levels' contract for a box of them: the front one ("ön vade", rolling with it) when that is the one shown. */
+  levelsChoice() {
+    const rows = ((((this.data || {}).viop || {}).live || {}).rows) || [];
+    return !rows.length || rows[0].ticker === this.contract ? 'front' : this.contract;
+  }
+
   fillLevels(r) {
     const host = this.levelsBody;
     host.replaceChildren();
     if (!r) { host.appendChild(h('div', { class: 'empty' }, 'Kontrat seçin')); return; }
-    this.levels.setTitle('Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, 2) + ' / satış ' + fmt(r.bid, 2)
-      + (isNum(r.fair) ? ' · adil ' + fmt(r.fair, 2) : '') + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : ''));
-    // where the levels start and whose σ they use, when not the contract's own quotes and history
-    const from = [];
-    if (r.levels_from && r.levels_from !== 'kota') from.push('Başlangıç: ' + r.levels_from + (isNum(r.ref) ? ' (' + fmt(r.ref, 2) + ')' : ''));
-    if (r.sd_from) from.push('Oynaklık: ' + r.sd_from + ' kontratından (bu kontratın kendi geçmişi az)');
-    for (const [which, title] of [['today', 'Bugün (kalan seans)'], ['week', 'Bu hafta (Cuma kapanışına)']]) {
-      const part = r[which] || {};
-      const box = h('div', { class: 'qlevels' });
-      box.appendChild(h('div', { class: 'qsub' }, title + (isNum(part.days) ? ' · ' + fmt(part.days, 1) + ' gün' : '')
-        + (isNum(part.sigma_bp) ? ' · σ ' + fmt(part.sigma_bp, 1) + ' bp' : '') + (isNum(part.drift_bp) ? ' · beklenen kayma ' + sgn(part.drift_bp, 1) + ' bp' : '')));
-      if (!part.buy && !part.sell) {
-        // the reason, as the server gives it: no history for the σ, no quote and no trade, the session over
-        const why = part.why || r.levels_why || (which === 'today' ? 'seans kapalı ya da oynaklık için geçmiş yok' : 'oynaklık için geçmiş yok');
-        box.appendChild(h('div', { class: 'empty' }, 'Seviye yok: ' + why));
-      } else {
-        const tbl = h('table', { class: 'plain qlegs' }, h('tr', null, h('th', null, 'Olasılık'), h('th', null, 'Alış emri ima %'), h('th', null, 'Fiyat'),
-          h('th', null, 'bp'), h('th', null, 'Satış emri ima %'), h('th', null, 'Fiyat'), h('th', null, 'bp')));
-        const buy = part.buy || [];
-        const sell = part.sell || [];
-        for (let i = 0; i < Math.max(buy.length, sell.length); i++) {
-          const b = buy[i] || {};
-          const s = sell[i] || {};
-          tbl.appendChild(h('tr', null, h('td', null, pct(b.p || s.p)), h('td', { class: 'n' }, fmt(b.level, 2)), h('td', { class: 'n' }, fmt(b.price, 4)),
-            h('td', { class: 'n' }, sgn(b.move_bp, 1)), h('td', { class: 'n' }, fmt(s.level, 2)), h('td', { class: 'n' }, fmt(s.price, 4)),
-            h('td', { class: 'n' }, sgn(s.move_bp, 1))));
-        }
-        box.appendChild(tbl);
-        box.appendChild(h('div', { class: 'muted' }, 'Sürüklenme: adil değere çekilme ' + sgn(part.pull_bp, 1) + ' bp, vade kayması '
-          + sgn((r.roll_bp_day || 0) * (part.days || 0), 1) + ' bp, takvim ' + sgn(part.season_bp, 1) + ' bp.'));
-        if (from.length) box.appendChild(h('div', { class: 'muted qfrom' }, from.join(' · ') + '.'));
+    this.levels.setTitle(levelsTitle(r));
+    drawLevels(host, r);
+  }
+}
+
+/** The contracts table's caption row (the page's and its box's). */
+export const CONTRACT_HEAD = ['Kontrat', 'Vade', 'Gün', 'Alış ima % (ask)', 'Satış ima % (bid)', 'Orta %', 'OIS % (360)', 'VİOP − OIS (bp)',
+  'Normal fark (bp)', 'Adil ima %', 'z', 'Yarı ömür (g)', 'Offshore %', 'VİOP − offshore (bp)', '1.000 $ DV01: kontrat', 'Not'];
+
+/** The contracts' rows now (``bold``: the ticker of the contract whose levels are shown). */
+export function contractRows(rows, bold, entry) {
+  return rows.map((r) => [
+    T(r.name, { b: r.ticker === bold ? 1 : 0 }), T(r.expiry || ''), N(r.g, 0), N(r.ask, 2), N(r.bid, 2), N(r.mid, 2), N(r.ois, 2),
+    N(r.basis, 1, { sign: true }), N(r.mean_basis, 1, { sign: true }), N(r.fair, 2), Z(r.z, entry), N(r.half_life, 1), N(r.off, 2),
+    N(r.vs_off, 1, { sign: true }), N((r.size || {}).contracts, 0), T(r.n_cm ? (r.source || '') : 'geçmiş yok', { cls: 'soft' })]);
+}
+
+/** The order levels' title of a contract: its quotes' implied rates, its fair rate, the calibration's c. */
+export function levelsTitle(r) {
+  return 'Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, 2) + ' / satış ' + fmt(r.bid, 2)
+    + (isNum(r.fair) ? ' · adil ' + fmt(r.fair, 2) : '') + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : '');
+}
+
+/** A contract's order levels into ``host``: today's and the week's, each the buy and sell orders with the probability that
+ * they fill and the futures price they stand for - or why there are none. */
+export function drawLevels(host, r) {
+  // where the levels start and whose σ they use, when not the contract's own quotes and history
+  const from = [];
+  if (r.levels_from && r.levels_from !== 'kota') from.push('Başlangıç: ' + r.levels_from + (isNum(r.ref) ? ' (' + fmt(r.ref, 2) + ')' : ''));
+  if (r.sd_from) from.push('Oynaklık: ' + r.sd_from + ' kontratından (bu kontratın kendi geçmişi az)');
+  for (const [which, title] of [['today', 'Bugün (kalan seans)'], ['week', 'Bu hafta (Cuma kapanışına)']]) {
+    const part = r[which] || {};
+    const box = h('div', { class: 'qlevels' });
+    box.appendChild(h('div', { class: 'qsub' }, title + (isNum(part.days) ? ' · ' + fmt(part.days, 1) + ' gün' : '')
+      + (isNum(part.sigma_bp) ? ' · σ ' + fmt(part.sigma_bp, 1) + ' bp' : '') + (isNum(part.drift_bp) ? ' · beklenen kayma ' + sgn(part.drift_bp, 1) + ' bp' : '')));
+    if (!part.buy && !part.sell) {
+      // the reason, as the server gives it: no history for the σ, no quote and no trade, the session over
+      const why = part.why || r.levels_why || (which === 'today' ? 'seans kapalı ya da oynaklık için geçmiş yok' : 'oynaklık için geçmiş yok');
+      box.appendChild(h('div', { class: 'empty' }, 'Seviye yok: ' + why));
+    } else {
+      const tbl = h('table', { class: 'plain qlegs' }, h('tr', null, h('th', null, 'Olasılık'), h('th', null, 'Alış emri ima %'), h('th', null, 'Fiyat'),
+        h('th', null, 'bp'), h('th', null, 'Satış emri ima %'), h('th', null, 'Fiyat'), h('th', null, 'bp')));
+      const buy = part.buy || [];
+      const sell = part.sell || [];
+      for (let i = 0; i < Math.max(buy.length, sell.length); i++) {
+        const b = buy[i] || {};
+        const s = sell[i] || {};
+        tbl.appendChild(h('tr', null, h('td', null, pct(b.p || s.p)), h('td', { class: 'n' }, fmt(b.level, 2)), h('td', { class: 'n' }, fmt(b.price, 4)),
+          h('td', { class: 'n' }, sgn(b.move_bp, 1)), h('td', { class: 'n' }, fmt(s.level, 2)), h('td', { class: 'n' }, fmt(s.price, 4)),
+          h('td', { class: 'n' }, sgn(s.move_bp, 1))));
       }
-      host.appendChild(box);
+      box.appendChild(tbl);
+      box.appendChild(h('div', { class: 'muted' }, 'Sürüklenme: adil değere çekilme ' + sgn(part.pull_bp, 1) + ' bp, vade kayması '
+        + sgn((r.roll_bp_day || 0) * (part.days || 0), 1) + ' bp, takvim ' + sgn(part.season_bp, 1) + ' bp.'));
+      if (from.length) box.appendChild(h('div', { class: 'muted qfrom' }, from.join(' · ') + '.'));
     }
+    host.appendChild(box);
   }
 }
 

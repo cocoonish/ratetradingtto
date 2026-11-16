@@ -163,8 +163,10 @@ export class GridBox {
 /** The series of a signal (or of any monitor): the level with its window mean, ±entry and ±stop bands (in z), the
  * entry / target / stop lines; below it the score day by day against ±entry and ±stop. */
 export class SignalChart {
-  constructor(host) {
+  /** opts.ids: false - the card without the page's element ids (a box's card beside the page's own) */
+  constructor(host, opts = {}) {
     this.host = host;
+    this.ids = opts.ids !== false;
     this.charts = {};
     this.el = h('div', { class: 'seriesview qchart' });
     this.titleEl = h('div', { class: 'ct svtitle' });
@@ -187,6 +189,11 @@ export class SignalChart {
     for (const c of Object.values(this.charts)) if (c) c.destroy();
     this.charts = {};
     this.el.remove();
+  }
+
+  /** An element's id on the page's card; none on a box's (the page may be on screen beside it). */
+  id(name) {
+    return this.ids ? name : null;
   }
 
   loading(title) {
@@ -377,12 +384,12 @@ export class SignalChart {
     const sizedLegs = legs.some((l) => isNum(l.dv01_usd)) ? legs.map((l) => l.action + ' ' + l.name + (isNum(l.dv01_usd) ? ' ('
       + (isNum(l.notional) ? num(l.notional, 1) + ' mn TL · ' : '') + 'DV01 ' + num(l.dv01_usd, 0) + ' $' + (isNum(l.dv01) ? ' / ' + num(l.dv01, 0) + ' TL' : '') + ')' : '')).join(' · ') : '';
     const rows = [];
-    const trade = h('td', { id: 'quant-sig-trade', title: sizedLegs || s.expression || null }, h('b', null, s.trade_tr || s.expression || ''));
+    const trade = h('td', { id: this.id('quant-sig-trade'), title: sizedLegs || s.expression || null }, h('b', null, s.trade_tr || s.expression || ''));
     if (px) trade.append(' · 1 mn ' + mo.base);
     else if (isNum(mo.per_bp)) trade.append(' · ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp');
     rows.push(['İşlem', trade]);
     const d = px ? px.digits : s.digits;
-    rows.push(['Giriş / hedef / stop', h('td', { id: 'quant-sig-prices' }, px
+    rows.push(['Giriş / hedef / stop', h('td', { id: this.id('quant-sig-prices') }, px
       ? fmt(px.entry, d) + ' / ' + fmt(px.target, d) + ' / ' + fmt(px.stop, d) + ' · ' + px.inst + ' (giriş: ' + px.note
         + (px.tenor ? ' · spot ' + fmt(px.spot, d) : '') + ')' + (isNum(px.spot_exp) ? ' · ' + span + ' sonra beklenen kur ' + fmt(px.spot_exp, d) : '')
       : lv(s.entry) + ' / ' + lv(s.target) + ' / ' + lv(s.stop) + (s.instrument ? ' · ' + s.instrument : ''))]);
@@ -406,7 +413,7 @@ export class SignalChart {
       pnl = sgn(s.exp_pnl, 2) + ' ' + (pu === 'vol' ? 'vol puanı' : pu);
       tip = span + ' boyunca' + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
     }
-    rows.push(['Beklenen K/Z', h('td', { id: 'quant-sig-pnl', title: tip }, pnl)]);
+    rows.push(['Beklenen K/Z', h('td', { id: this.id('quant-sig-pnl'), title: tip }, pnl)]);
     const rr = isNum(s.rr) ? s.rr : (isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     let ends = '';
     if (px && (isNum(mo.target) || isNum(mo.stop))) {
@@ -419,10 +426,10 @@ export class SignalChart {
     }
     if (ends && isNum(rr)) ends += ' · ödül / risk ' + fmt(rr, 2);
     if (ends && isNum(s.exp_r)) ends += ' · beklenen / risk ' + fmt(s.exp_r, 2);
-    rows.push(['Hedefte / stopta', h('td', { id: 'quant-sig-ends' }, ends || '—')]);
+    rows.push(['Hedefte / stopta', h('td', { id: this.id('quant-sig-ends') }, ends || '—')]);
     const t = h('table', { class: 'plain qkv qtradekv' });
     for (const [k, td] of rows) t.appendChild(h('tr', null, h('th', null, k), td));
-    return h('div', { class: 'qplain' }, s.plain ? h('div', { class: 'qsentence', id: 'quant-sig-plain' }, s.plain) : null, t);
+    return h('div', { class: 'qplain' }, s.plain ? h('div', { class: 'qsentence', id: this.id('quant-sig-plain') }, s.plain) : null, t);
   }
 
   /** "Gerekçe": the past days most like today and what followed them, and what would undo the signal. */
