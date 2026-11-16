@@ -2516,7 +2516,7 @@ class Service(object):
         if calendar:
             res["calendar"] = calendar
         if rows:
-            res["rows"] = rows
+            res["row_values"] = rows
         if lenient:
             res["skipped"] = skipped
         return res
@@ -2620,7 +2620,7 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id)
             self.formulas.cleared(user, book, targets if refs else None)
             self._note_private(user)
-        return dict({"reset": n}, **({"rows": rows} if rows else {}))
+        return dict({"reset": n}, **({"row_values": rows} if rows else {}))
 
     def my_inputs(self, user: str) -> Dict[str, Any]:
         """The user's personal inputs: ``{"inputs": [{"book", "ref", "value", "label", "formula"?}]}`` - an input typed as
@@ -3565,8 +3565,8 @@ class Service(object):
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
         out = {"added": todo, "skipped": skipped, "cells": [i["ref"] for i in items], "free": len(free) - len(todo), "gen": self.gen}
-        if res.get("rows"):
-            out["rows"] = res["rows"]                # (values left on a row with no bond: gone - rowkeys.py)
+        if res.get("row_values"):
+            out["row_values"] = res["row_values"]                # (values left on a row with no bond: gone - rowkeys.py)
         return out
 
     #: the trading list: the bonds of DİBS RV (and so of DİBS Trading)
@@ -3587,7 +3587,7 @@ class Service(object):
         res = self.set_inputs(user, book_id, [{"ref": book.ref(*c), "value": None} for c in rows])
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        return len(rows), res.get("rows")
+        return len(rows), res.get("row_values")
 
     def _asw_follows(self, user: str, code: str, on: bool) -> Tuple[Optional[bool], Optional[Dict[str, Any]]]:
         """The ASW workbook's list with the trading list: the bond added (``on``) or taken off there too.  ``None``: no
@@ -3603,7 +3603,7 @@ class Service(object):
         if on:
             try:
                 res = self.list_add(user, book_id, ref, [code])
-                return bool(res["added"]), res.get("rows")
+                return bool(res["added"]), res.get("row_values")
             except ServiceError:
                 return False, None
         removed, rows = self._list_off(user, book_id, ref, code)
@@ -3612,7 +3612,7 @@ class Service(object):
     def bond_flag(self, user: str, isin: str, on: bool) -> Dict[str, Any]:
         """★ a bond: onto the trading list (below its last bond) or off it - for everyone.  A bond taken off leaves
         its row empty, with nothing of it left behind (its source, everyone's manual price, coupon, repo, "Elle değer" -
-        in the saved scenarios too).  ``rows``: what of the rows' values moved / went (rowkeys.py)."""
+        in the saved scenarios too).  ``row_values``: what of the rows' values moved / went (rowkeys.py)."""
         from . import bonds as bd
         from .rowkeys import merge_notes
         user = self.require_user(user)
@@ -3624,7 +3624,7 @@ class Service(object):
             res = self.list_add(user, book_id, ref, [code])
             asw, rows = self._asw_follows(user, code, True)
             out = {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "asw": asw, "gen": self.gen}
-            told = merge_notes([x for x in (res.get("rows"), rows) if x])
+            told = merge_notes([x for x in (res.get("row_values"), rows) if x])
         else:
             removed, rows = self._list_off(user, book_id, ref, code)
             asw, asw_rows = self._asw_follows(user, code, False)
@@ -3632,7 +3632,7 @@ class Service(object):
             out = {"isin": code, "on": False, "removed": removed, "asw": asw, "gen": self.gen}
             told = merge_notes([x for x in (rows, asw_rows) if x])
         if told:
-            out["rows"] = told
+            out["row_values"] = told
         return out
 
     def _flag_cell(self, isin: str, listed: bool) -> Dict[str, Any]:
@@ -3887,9 +3887,9 @@ class Service(object):
         self.bump()
         out = {"isin": code, "removed": True, "trading": off["removed"] > 0, "gen": self.gen}
         from .rowkeys import merge_notes
-        told = merge_notes([x for x in (off.get("rows"), uni) if x])
+        told = merge_notes([x for x in (off.get("row_values"), uni) if x])
         if told:
-            out["rows"] = told                           # (what was typed on its rows went with it)
+            out["row_values"] = told                     # (what was typed on its rows went with it)
         return out
 
     def _universe_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:

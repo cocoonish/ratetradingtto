@@ -923,7 +923,7 @@ function boot() {
   const after = (res) => {
     runRefresh();
     // ISINs of a list of bonds changed: what the rows held went with their bonds (moved / gone) - said once
-    if (res && res.rows && res.rows.text) toast(res.rows.text, (res.rows.cleared || []).length ? 'warn' : 'ok', 9000);
+    if (res && res.row_values && res.row_values.text) toast(res.row_values.text, (res.row_values.cleared || []).length ? 'warn' : 'ok', 9000);
     return res;
   };
   configureGrid({

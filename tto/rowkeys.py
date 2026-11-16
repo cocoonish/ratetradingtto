@@ -220,6 +220,8 @@ class RowKeys(object):
                                 key_clears=[book.ref(*c) for c in clears], by=user)
             if note:
                 notes.append(note)
+                if lst.scope == "shared":               # (everybody's values: the log says who changed the list)
+                    log.info("kâğıt listesi değişti (%s): %s", user, note["text"])
         return merge_notes(notes)
 
     def start(self) -> None:
@@ -264,7 +266,10 @@ class RowKeys(object):
             for isin, r in rows.items():
                 if lst.first <= r <= lst.last:
                     side[r - lst.first] = isin_of(isin)
-        return self._follow(lst, book, old, new)
+        note = self._follow(lst, book, old, new)
+        if note:
+            log.info("Tüm Kâğıtlar'ın satırları değişti: %s", note["text"])
+        return note
 
     def _follow(self, lst: RowList, book, old: List[str], new: List[str], who: Optional[str] = None,
                 missing: bool = False, keys: Optional[Dict[str, Any]] = None, key_clears: Sequence[str] = (),

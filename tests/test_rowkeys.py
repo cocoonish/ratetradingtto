@@ -58,9 +58,9 @@ def test_a_bond_moved_takes_what_its_row_held_for_everyone(svc):
                                   {"ref": "DİBS RV!A%d" % empty, "value": "TRT150328T24"},
                                   {"ref": "DİBS RV!B%d" % empty, "value": "ISL1"}])
     assert res["errors"] == []
-    moved = {m["isin"]: (m["from"], m["to"]) for m in res["rows"]["moved"]}
-    assert moved == {"TRT150328T24": (8, empty), "TRT130928T38": (9, 8)} and res["rows"]["cleared"] == []
-    assert "TRT150328T24 satır 8 → %d" % empty in res["rows"]["text"] and "1 senaryo" in res["rows"]["text"]
+    moved = {m["isin"]: (m["from"], m["to"]) for m in res["row_values"]["moved"]}
+    assert moved == {"TRT150328T24": (8, empty), "TRT130928T38": (9, 8)} and res["row_values"]["cleared"] == []
+    assert "TRT150328T24 satır 8 → %d" % empty in res["row_values"]["text"] and "1 senaryo" in res["row_values"]["text"]
     # 15.03.28: everyone's values on its new row - the source as pasted
     assert cell(s, "DİBS RV!N%d" % empty, ua) == 98.5 and cell(s, "DİBS RV!AI%d" % empty, ua) == 123.0
     assert cell(s, "DİBS RV!AL%d" % empty, ub) == 40.0 and cell(s, "DİBS RV!B%d" % empty) == "ISL1"
@@ -97,8 +97,8 @@ def test_a_bond_typed_over_another_takes_nothing_of_it(svc):
     s.set_inputs(b, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": "41"}, {"ref": "DİBS RV!B%d" % r, "value": "ISL0"}])
     s.save_scenario(b, "eski")
     res = s.set_inputs(b, "tto", [{"ref": "DİBS RV!A%d" % r, "value": "trt130127t11"}])
-    assert res["rows"]["cleared"] == [{"isin": "TRT081128T15", "row": r, "values": 5}] and res["rows"]["moved"] == []
-    assert "TRT081128T15 listeden çıktı" in res["rows"]["text"]
+    assert res["row_values"]["cleared"] == [{"isin": "TRT081128T15", "row": r, "values": 5}] and res["row_values"]["moved"] == []
+    assert "TRT081128T15 listeden çıktı" in res["row_values"]["text"]
     # the new bond's own source is blank (the general one), not the old one's - nor the workbook's for the old one
     assert s._list_values(a, "tto", LIST)[r - 5] == "TRT130127T11" and cell(s, "DİBS RV!B%d" % r) is None
     assert cell(s, "DİBS RV!N%d" % r, ua) is None and cell(s, "DİBS RV!AL%d" % r, ub) is None
@@ -109,7 +109,7 @@ def test_a_bond_typed_over_another_takes_nothing_of_it(svc):
     s.set_inputs(a, "tto", [{"ref": "DİBS RV!N%d" % empty, "value": "50"}])
     got = s.bond_flag(a, "TRT131027T36" if "TRT131027T36" not in s._list_values(a, "tto", LIST) else "TRT060127T10", True)
     assert got["cells"] == ["DİBS RV!A%d" % empty] and cell(s, "DİBS RV!N%d" % empty, ua) is None
-    assert got["rows"]["cleared"][0]["isin"] == "" and "kâğıtsızken yazılmış 1 değer" in got["rows"]["text"]
+    assert got["row_values"]["cleared"][0]["isin"] == "" and "kâğıtsızken yazılmış 1 değer" in got["row_values"]["text"]
 
 
 def test_a_bond_taken_off_takes_its_values_from_both_lists(svc):
@@ -128,8 +128,8 @@ def test_a_bond_taken_off_takes_its_values_from_both_lists(svc):
     s.save_scenario(a, "çıkmadan")
     res = s.bond_flag(a, code, False)
     assert (res["removed"], res["asw"]) == (1, True)
-    assert {x["isin"] for x in res["rows"]["cleared"]} == {code} and res["rows"]["lists"] == ["dibs", "asw"]
-    assert "DİBS RV" in res["rows"]["text"] and "DİBS ASW" in res["rows"]["text"]
+    assert {x["isin"] for x in res["row_values"]["cleared"]} == {code} and res["row_values"]["lists"] == ["dibs", "asw"]
+    assert "DİBS RV" in res["row_values"]["text"] and "DİBS ASW" in res["row_values"]["text"]
     assert [cell(s, "DİBS RV!%s%d" % (c, r), ua) for c in "ABN"] == [None, None, None]
     assert [cell(s, "ASW!%s%d" % (c, ra), ua, book="asw") for c in "BCD"] == [None, None, None]
     assert cell(s, "ASW!J%d" % ra, ua, book="asw") == cell(s, "ASW!J%d" % ra, book="asw")
@@ -140,7 +140,7 @@ def test_a_bond_taken_off_takes_its_values_from_both_lists(svc):
     s.set_inputs(a, "tto", [{"ref": "DİBS RV!A%d" % empty, "value": "TRT020130T19"}, {"ref": "DİBS RV!N%d" % empty, "value": "97"}])
     assert cell(s, "DİBS RV!N%d" % empty, ua) == 97.0
     res = s.reset_inputs(a, "tto", ["DİBS RV!A%d" % empty], shared=True)
-    assert res["reset"] == 1 and res["rows"]["cleared"][0]["isin"] == "TRT020130T19"
+    assert res["reset"] == 1 and res["row_values"]["cleared"][0]["isin"] == "TRT020130T19"
     assert cell(s, "DİBS RV!N%d" % empty, ua) is None and s._list_values(a, "tto", LIST) == before
 
 
@@ -154,10 +154,11 @@ def test_a_scenario_loaded_after_the_list_changed_puts_nothing_on_another_bond(s
     s.set_inputs(a, "tto", [{"ref": "DİBS RV!N%d" % r, "value": "94,1"}])
     s.save_scenario(a, "16.04.31 fiyatım")
     s.reset_inputs(a, "tto")
-    # the desk swaps 16.04.31 with the bond below it
+    # the desk swaps 16.04.31 with the bond below it - two ISINs pasted from Excel
     other = s._list_values(a, "tto", LIST)[r - 5 + 1]
     assert other
-    s.set_inputs(desk, "tto", [{"ref": "DİBS RV!A%d" % r, "value": other}, {"ref": "DİBS RV!A%d" % (r + 1), "value": "TRT160431T35"}])
+    res = s.paste(desk, "tto", "DİBS RV!A%d" % r, "%s\nTRT160431T35" % other)
+    assert res["rows"] == 2 and {"TRT160431T35", other} == {m["isin"] for m in res["row_values"]["moved"]}   # (its source too)
     s.load_scenario(a, "16.04.31 fiyatım")
     assert cell(s, "DİBS RV!N%d" % (r + 1), ua) == 94.1 and cell(s, "DİBS RV!N%d" % r, ua) is None
     assert cell(s, "DİBS RV!A%d" % (r + 1)) == "TRT160431T35"
@@ -177,14 +178,14 @@ def test_ones_own_eurobond_list_keeps_its_values_by_isin_and_its_own_quotes_by_r
     s.set_inputs(b, "tto", [{"ref": "Bulk Bond!F3", "value": "55"}], allow_adhoc=True)
     s.save_scenario(a, "eurobond")
     res = s.set_inputs(a, "tto", [{"ref": "Bulk Bond!A3", "value": second}, {"ref": "Bulk Bond!A4", "value": first}])
-    assert {m["isin"]: (m["from"], m["to"]) for m in res["rows"]["moved"]} == {first: (3, 4)}
-    assert "Eurobond Kotaları" in res["rows"]["text"]
+    assert {m["isin"]: (m["from"], m["to"]) for m in res["row_values"]["moved"]} == {first: (3, 4)}
+    assert "Eurobond Kotaları" in res["row_values"]["text"]
     assert cell(s, "Bulk Bond!F4", ua) == 101.0 and cell(s, "Bulk Bond!C3", ua) == 99.5         # (the own bid: its row's)
     assert cell(s, "Bulk Bond!F3", ub) == 55.0 and s._list_values(b, "tto", "Bulk Bond!A3:A52")[:2] == [first, second]
     assert s.store.get("rowkeys.bulk:%s" % ua)["4"] == first and s.store.get("rowkeys.bulk:%s" % ub) is None
     # the third leaves the list: its "Elle değer" goes; the scenario keeps its own list and values
     res = s.set_inputs(a, "tto", [{"ref": "Bulk Bond!A5", "value": ""}])
-    assert res["rows"]["cleared"] == [{"isin": third, "row": 5, "values": 1}]
+    assert res["row_values"]["cleared"] == [{"isin": third, "row": 5, "values": 1}]
     assert cell(s, "Bulk Bond!F5", ua) == cell(s, "Bulk Bond!F5")
     s.load_scenario(a, "eurobond")
     assert s._list_values(a, "tto", "Bulk Bond!A3:A52")[:3] == [first, second, third]
