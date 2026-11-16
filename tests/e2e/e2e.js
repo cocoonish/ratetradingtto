@@ -3330,6 +3330,80 @@ async function shot(page, name) {
     { afterTape, afterBroker, noSheet, broker: !!brokerTd });
     await ctxR.close();
 
+    // ------------------------------------------------------------------ temporary copies of a calculator
+    console.log('temporary copies');
+    await open(page, 'masa');
+    await tab(page, 'fwd');
+    const kvOrig = '#content .panel[data-panel="B22"]';
+    const kvCopy = '#content .panel.copy[data-copy-of="B22"]';
+    await page.waitForSelector(kvOrig + ' table.grid', { timeout: 30000 });
+    await page.hover(kvOrig);
+    await page.click(kvOrig + ' .tools button[data-action="launchpad"]');
+    const kvMenu = await page.evaluate(() => [...document.querySelectorAll('.menu button')].map((b) => b.textContent));
+    await page.click('.menu >> text=Geçici kopya aç');
+    await page.waitForSelector(kvCopy + ' table.grid', { timeout: 30000 });
+    const kvPlace = await page.evaluate(([o, c]) => {
+      const a = document.querySelector(o);
+      const b = document.querySelector(c);
+      return { next: a.nextElementSibling === b, title: b.querySelector('header h2').textContent, id: b.dataset.panel };
+    }, [kvOrig, kvCopy]);
+    check('"Geçici kopya aç" in the "+ Launchpad" menu of Masa\'s KIRIK VADE & KARŞILIK: the copy is right under the table, "… · kopya 2"',
+      kvMenu.includes('Geçici kopya aç') && kvPlace.next && / · kopya 2$/.test(kvPlace.title) && /^B22\.k[0-9a-f]{8}$/.test(kvPlace.id),
+      { kvMenu, kvPlace });
+    // another value date typed into the copy: its results change, the table's do not
+    const copyText = (ref) => page.evaluate(([s, r]) => { const td = window.tto.copyCell(s, r); return td ? td.textContent : null; }, [kvCopy, ref]);
+    const kvDays = await cellText(page, 'MASA!E171');
+    const kvFwd = await cellText(page, 'MASA!F173');
+    const kvDays0 = await copyText('MASA!E171');
+    const kvDate = (await page.evaluateHandle((s) => window.tto.copyCell(s, 'MASA!C171'), kvCopy)).asElement();
+    await kvDate.scrollIntoViewIfNeeded();
+    await kvDate.click();
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('td.editing input');
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('15.06.2027');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(([s, d]) => { const td = window.tto.copyCell(s, 'MASA!E171'); return !!td && td.textContent !== d; },
+      [kvCopy, kvDays0], { timeout: 30000 });
+    const copyDays = await copyText('MASA!E171');
+    const copyFwd = await copyText('MASA!F173');
+    check('another value date typed into the copy changes the copy\'s results (days, forward) ...',
+      (await copyText('MASA!C171')).trim() === '15.06.2027' && copyDays !== kvDays && copyFwd !== kvFwd && kvDays0 === kvDays,
+      { copyDays, kvDays, copyFwd, kvFwd, kvDays0 });
+    check('... and not the table\'s', (await cellText(page, 'MASA!E171')) === kvDays && (await cellText(page, 'MASA!F173')) === kvFwd
+      && (await cellText(page, 'MASA!C171')).trim() !== '15.06.2027');
+    await shot(page, '45-copy');
+    // a reload: the copy is still there, with its value date
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'masa' && window.tto.state.page && window.tto.state.page.ready,
+      null, { timeout: 90000 });
+    await tab(page, 'fwd');
+    await page.waitForSelector(kvCopy + ' table.grid', { timeout: 30000 });
+    await fresh(page);
+    check('after a reload the copy is still there, with its own value date and results',
+      (await copyText('MASA!C171')).trim() === '15.06.2027' && (await copyText('MASA!E171')) === copyDays
+      && (await cellText(page, 'MASA!E171')) === kvDays);
+    // like any table, the copy goes to the side drawer from its own "+ Launchpad" menu
+    const kvBox = '#drawer .lp-item[data-key="masa/' + kvPlace.id + '"]';
+    await page.hover(kvCopy);
+    await page.click(kvCopy + ' .tools button[data-action="launchpad"]');
+    await page.click('.menu >> text=Yan panele sabitle');
+    await page.waitForSelector(kvBox + ' table.grid', { timeout: 30000 });
+    const boxDate = await page.evaluate((s) => { const td = window.tto.copyCell(s, 'MASA!C171'); return td ? td.textContent.trim() : null; }, kvBox);
+    check('the copy in the side drawer: its own value date, a box of the copy (not of the table)',
+      boxDate === '15.06.2027' && await page.evaluate((s) => document.querySelector(s).classList.contains('copy'), kvBox), boxDate);
+    // × closes it (what was typed into it goes: asked first) - and takes it off the drawer
+    await page.hover(kvCopy);
+    await page.click(kvCopy + ' .tools button[data-action="copy-close"]');
+    await page.click('.modal .btn.primary');
+    await page.waitForFunction(() => !document.querySelector('#content .panel.copy'), null, { timeout: 30000 });
+    await page.waitForFunction((s) => !document.querySelector(s), kvBox, { timeout: 30000 });
+    const kvLeft = await api(page, 'ayşe yilmaz', 'GET', '/api/copies');
+    check('× closes the copy: gone from the page, the side drawer and the account; the table stays',
+      kvLeft.json && kvLeft.json.copies.length === 0 && await page.locator(kvOrig + ' table.grid').count() === 1
+      && !(await layoutOf('ayşe yilmaz')).drawer.some((x) => x.panel === kvPlace.id), kvLeft.json);
+    if (await page.evaluate(() => document.getElementById('app').classList.contains('drawer-open'))) await page.click('#dr-close');
+
     // ------------------------------------------------------------------ a personal calc sheet
     console.log('personal calc sheet');
     const calcCell = (a, root = '#lp-grid') => root + ' .calc-box td[data-a="' + a + '"]';

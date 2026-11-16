@@ -1,13 +1,14 @@
 // Generic workbook page: a set of panels (tables and charts) defined by a view on the server.
 // A page with many tables comes in tabs ("sections" of the view): one group of tables at a time, the
-// calculators first; the search box and "Tümü" look across all of them.
+// calculators first; the search box and "Tümü" look across all of them.  A calculator may be opened again as temporary
+// copies ("Geçici kopya aç" in its "+ Launchpad" menu): "… · kopya 2" right under it, with inputs of its own.
 import { openAddIsin, bondCardLinks, bondFlags } from '../bonds.js';
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell, reviveEditor } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
-import { addButton } from '../layout.js';
+import { addButton, loadLayout } from '../layout.js';
 
 const ALL = '*';
 
@@ -146,6 +147,8 @@ export class ViewPage {
       } else if (it.grid && p.data) {
         if (it.grid.update(p.data, true) === false) { held.add(p.id); continue; }
         it.data = p.data;
+        // (a temporary copy's strip of inputs above it)
+        (p.lead || []).forEach((l, k) => { const g = (it.leads || [])[k]; if (g && l.data && g.update(l.data, true) === false) held.add(p.id); });
         if (it.grow) it.grow();
       }
     }
@@ -179,7 +182,7 @@ export class ViewPage {
     setHandMode(this.adhoc);
     if (this.handBtn) this.handBtn.classList.toggle('on', this.adhoc);
     this.host.classList.toggle('hand', this.adhoc);
-    for (const it of this.items.values()) if (it.grid) it.grid.opts.adhoc = this.adhoc;
+    for (const it of this.items.values()) if (it.grid && !it.copy) it.grid.opts.adhoc = this.adhoc;       // (never in a copy)
     if (quiet) return;
     if (this.ctx.handChanged) this.ctx.handChanged(this.adhoc);
     toast(this.adhoc ? 'Elle değer açık: her hücreye yazabilirsiniz (yalnızca sizde değişir; silince formül geri gelir)' : 'Elle değer kapalı', '', 3600);
@@ -364,10 +367,11 @@ export class ViewPage {
     return true;
   }
 
-  /** The <td> of a workbook cell wherever it is on this page; the tab that holds it is opened. */
+  /** The <td> of a workbook cell wherever it is on this page; the tab that holds it is opened.  (A temporary copy shows
+   *  the same cells: never its own.) */
   findCell(ref) {
     for (const [id, it] of this.items) {
-      if (!it.grid) continue;
+      if (!it.grid || it.copy) continue;
       const td = findCell(ref, it.el);
       if (td) { this.showPanel(id); return td; }
     }
@@ -379,8 +383,8 @@ export class ViewPage {
   }
 
   showOverrides() {
-    // (every panel's data as it is now: the ones refreshed and the ones of other tabs)
-    this.overRefs = overridden([...this.items.values()].map((it) => ({ data: (it.grid && it.grid.data) || it.data })));
+    // (every panel's data as it is now: the ones refreshed and the ones of other tabs - a copy's own values are its own)
+    this.overRefs = overridden([...this.items.values()].filter((it) => !it.copy).map((it) => ({ data: (it.grid && it.grid.data) || it.data })));
     const n = this.overRefs.length;
     this.overChip.classList.toggle('hidden', !n);
     this.overChip.textContent = n ? n + ' formül yerine elle değer · formüle dön' : '';
@@ -443,9 +447,10 @@ export class ViewPage {
     const key = 'tto.col.' + this.id + '.' + p.id;
     const collapsed = pref(key, p.collapsed ? '1' : '0') === '1';
     const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
-      + (p.hidden ? ' aux' : '') + (collapsed ? ' collapsed' : '') });
+      + (p.hidden ? ' aux' : '') + (collapsed ? ' collapsed' : '') + (p.copy ? ' copy' : '') });
     el.dataset.panel = p.id;
-    const it = { el, title: p.title || '', data: p.data, gen: this.gen || 0 };
+    if (p.copy) { el.dataset.copy = p.copy.id; el.dataset.copyOf = p.copy.of; }       // a temporary copy of the table p.copy.of
+    const it = { el, title: p.title || '', data: p.data, gen: this.gen || 0, copy: p.copy || null };
     const body = h('div', { class: 'body' });
     const tools = h('div', { class: 'tools' });
     const title = h('h2', { title: p.title || '' }, p.title || '');
@@ -514,9 +519,20 @@ export class ViewPage {
         body.appendChild(h('div', { class: 'chart-empty' }, 'Grafik bulunamadı'));
       }
     } else if (p.data) {
-      // each user hides columns of their own: by the page and the table, a column by its letter in the sheet
-      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: this.adhoc,
-        name: p.type === 'notes' ? null : 'v/' + this.id + '/' + p.id, order: true, tools });
+      const copy = p.copy ? p.copy.id : null;
+      if (p.lead && p.lead.length) {
+        // a temporary copy's strip of inputs it is computed from (the dates of TARİH ARASI FORWARD): the copy's own too
+        it.leads = p.lead.map((l) => {
+          const g = l.data ? new Grid({ book: this.book, data: l.data, editable: true, adhoc: false, copy }) : null;
+          body.appendChild(h('div', { class: 'copy-lead' }, l.title ? h('div', { class: 'lead-title' }, l.title) : null,
+            g ? g.el : h('div', { class: 'err' }, l.error || 'Tablo okunamadı')));
+          return g;
+        });
+      }
+      // each user hides columns of their own: by the page and the table, a column by its letter in the sheet (a copy: as
+      // its table); a copy takes what is typed into its own inputs, never "Elle değer"
+      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: copy ? false : this.adhoc, copy,
+        name: p.type === 'notes' ? null : 'v/' + this.id + '/' + (p.copy ? p.copy.of : p.id), order: true, tools });
       body.appendChild(it.grid.el);
       if (p.data.hc) {
         // Excel hides some columns of this table: say so, one click shows them
@@ -534,9 +550,10 @@ export class ViewPage {
       if (p.flags === 'dibs') bondFlags(this.ctx, it.grid.el);                // ☆ / ★: onto / off the trading list
     }
     if (p.type !== 'image' && !p.error && (p.data || p.type === 'chart')) {
-      // the table on a launchpad, in the side drawer, in a window of its own (its key everywhere: page / table)
+      // the table on a launchpad, in the side drawer, in a window of its own (its key everywhere: page / table - a
+      // temporary copy's own id); a calculator whose inputs are the user's own: "Geçici kopya aç" in the same menu
       const src = () => ({ view: this.id, panel: p.id, all: this.showAll || undefined, w: p.wide ? 12 : undefined });
-      const acts = { pin: this.ctx.pinToDrawer, pop: this.ctx.popOut };
+      const acts = { pin: this.ctx.pinToDrawer, pop: this.ctx.popOut, copy: p.copyable ? () => this.openCopy(p) : null };
       tools.appendChild(addButton(src, acts));
       if (this.ctx.popOut) {
         const pop = h('button', { class: 'iconbtn', type: 'button', title: 'Ayrı pencerede aç (menüsüz, canlı – ikinci ekran için)' }, '⧉');
@@ -544,6 +561,13 @@ export class ViewPage {
         pop.addEventListener('click', () => this.ctx.popOut(src()));
         tools.appendChild(pop);
       }
+    }
+    if (p.copy) {
+      const rs = h('button', { class: 'iconbtn', type: 'button',
+        title: 'Kopyanın kendi girdilerini sil: kopya tablonun değerlerini gösterir (tablonun kendisi değişmez)' }, 'Sıfırla');
+      rs.dataset.action = 'copy-reset';
+      rs.addEventListener('click', () => this.resetCopy(p));
+      tools.appendChild(rs);
     }
     const col = h('button', { class: 'iconbtn', type: 'button', title: 'Daralt / aç' }, collapsed ? '▸' : '▾');
     it.toggle = (now) => {
@@ -553,8 +577,56 @@ export class ViewPage {
     };
     col.addEventListener('click', () => it.toggle(!el.classList.contains('collapsed')));
     tools.appendChild(col);
+    if (p.copy) {
+      const x = h('button', { class: 'iconbtn copy-x', type: 'button', title: 'Geçici kopyayı kapat (kopyaya yazılan değerler silinir)' }, '×');
+      x.dataset.action = 'copy-close';
+      x.addEventListener('click', () => this.closeCopy(p));
+      tools.appendChild(x);
+    }
     if (p.note) el.appendChild(h('div', { class: 'note' }, p.note));
     this.items.set(p.id, it);
     return el;
+  }
+
+  // ------------------------------------------------------------------ temporary copies of a calculator
+  /** "Geçici kopya aç": the table once more, right under it, with inputs of its own (kept until it is closed: ×). */
+  async openCopy(p) {
+    try {
+      const res = await api.post('/api/copies/open', { view: this.id, panel: p.id });
+      toast('"' + (p.title || p.id) + ' · kopya ' + res.copy.n + '" açıldı: kendi girdileriyle, yalnızca sizde', 'ok', 4200);
+      await this.rebuild(res.copy.pid);
+    } catch (err) { errorToast(err); }
+  }
+
+  /** ×: the copy goes, with what was typed into it (asked first when anything was). */
+  async closeCopy(p) {
+    const it = this.items.get(p.id);
+    const grids = it ? [it.grid].concat(it.leads || []).filter(Boolean) : [];
+    const typed = grids.some((g) => g.data && g.data.rows.some((row) => row.some((c) => c && c.m === 1)));
+    if (typed && !(await confirmDialog('Geçici kopyayı kapat', '"' + (it.title || p.title) + '" kapatılır; kopyaya yazdığınız değerler '
+      + 'silinir. Tablonun kendisi değişmez.', 'Kapat'))) return;
+    try {
+      const res = await api.post('/api/copies/close', { copy: p.copy.id });
+      toast('Kopya ' + p.copy.n + ' kapatıldı' + (res.layout ? ' (launchpad / yan paneldeki kutusu da)' : ''), 'ok', 2600);
+      if (res.layout) loadLayout();
+      await this.rebuild();
+    } catch (err) { errorToast(err); }
+  }
+
+  /** "Sıfırla" of a copy: its own values go - it shows the table's again. */
+  async resetCopy(p) {
+    try {
+      const res = await api.post('/api/copies/reset', { copy: p.copy.id });
+      toast((res.reset || 0) + ' değer silindi: kopya ' + p.copy.n + ' tablonun değerlerini gösteriyor', 'ok', 2600);
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); }
+  }
+
+  /** The page as the server has it now (a copy opened or closed), on the tab it was; ``focus``: a panel to bring into view. */
+  async rebuild(focus) {
+    const data = await this.fetch();
+    if (this.dead) return;
+    this.build(data);
+    if (focus) this.focusPanel(focus);
   }
 }

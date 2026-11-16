@@ -8,9 +8,11 @@ import { Columns, captionKey, columnOrder, markGaps, uniqueKeys } from './column
 import { workbookRef, canPoint, isFormula } from './pointing.js';
 
 const hooks = {
-  setInputs: null,     // async (book, items, adhoc, lenient) -> result   (lenient: cells that are not inputs are skipped)
+  // async (book, items, adhoc, lenient, copy) -> result   (lenient: cells that are not inputs are skipped; copy: the id of
+  // the temporary copy the table is - its own inputs, not the user's)
+  setInputs: null,
   paste: null,         // async (book, anchorRef, text, adhoc) -> result
-  reset: null,         // async (book, refs, shared) -> result
+  reset: null,         // async (book, refs, shared, copy) -> result
   onSelect: null,      // (info | null)
 };
 
@@ -69,6 +71,7 @@ function cellClass(cell) {
   if (cell.ov) cls += ' ov';
   if (cell.n) cls += ' nt';
   if (typeof cell.bar === 'number') cls += ' bar bar-' + (cell.bc || 'info');
+  if (cell.ro) cls += ' ro';                            // an input a temporary copy keeps read-only (the reason: its tip)
   if (cell.i) {
     cls += ' in';
     if (cell.i === 's') cls += ' sh';
@@ -85,16 +88,18 @@ function cellClass(cell) {
 function signature(cell) {
   return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1)
     + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '') + '\u0001' + (cell.ff || '') + '\u0001' + (cell.fe || '')
-    + '\u0001' + (cell.tip || '');
+    + '\u0001' + (cell.tip || '') + '\u0001' + (cell.ro || '');
 }
 
-/** What a cell says when the mouse rests on it: an input's formula, the workbook's comment, a long text in full. */
+/** What a cell says when the mouse rests on it: an input's formula, the workbook's comment, a long text in full - in a
+ *  temporary copy, why an input stays read-only there. */
 function tipOf(cell) {
   let tip = '';
   if (cell.n) tip = cell.n + (cell.tip ? '\n' + cell.tip : '');          // the cell's comment in Excel
   else if (cell.tip) tip = cell.tip;
   else if (cell.k === 's' && cell.t && cell.t.length > 28 && !cell.ff) tip = cell.t;
   if (cell.ff) tip = 'Formül: ' + cell.ff + (cell.fe ? '\n' + cell.fe : '') + (tip ? '\n' + tip : '');
+  if (cell.ro) tip = 'Kopyada salt okunur: ' + cell.ro + (tip ? '\n' + tip : '');
   return tip;
 }
 
@@ -252,7 +257,9 @@ export class Grid {
    *       name (the table's stable name: each user hides columns of it, kept with the account),
    *       order (bool: the user may put its columns in an order of their own - a table of a workbook page, whose
    *              cells are known by their letter; the dashboard's own tables find a column by its place),
-   *       tools (the panel's tools: the "Sütunlar" button goes there)
+   *       tools (the panel's tools: the "Sütunlar" button goes there),
+   *       copy (the id of a temporary copy of a table: what is typed goes to that copy's own inputs; never "Elle değer",
+   *             never pointed at by a formula - a formula reads the table itself)
    */
   constructor(opts) {
     this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
@@ -576,7 +583,7 @@ export class Grid {
 
   _dblClick(e) {
     const td = this._tdOf(e);
-    if (td) startEdit(this, td.__i, td.__j, null);
+    if (td && !startEdit(this, td.__i, td.__j, null)) readOnlySaid(this, td.__i, td.__j);
   }
 
   _context(e) {
@@ -589,11 +596,12 @@ export class Grid {
     }
     const cur = currentSelection();
     const inputs = inputRefs(this, cur);
-    const mine = inputs.filter((x) => x.cell.i === 'u').map((x) => x.ref);
-    const shared = inputs.filter((x) => x.cell.i === 's' && x.cell.m).map((x) => x.ref);
-    // one cell of a sheet: watch it, or an alarm on it
+    const copy = this.opts.copy;
+    const mine = inputs.filter((x) => x.cell.i === 'u' && (!copy || x.cell.m)).map((x) => x.ref);
+    const shared = copy ? [] : inputs.filter((x) => x.cell.i === 's' && x.cell.m).map((x) => x.ref);
+    // one cell of a sheet: watch it, or an alarm on it (a temporary copy's: no - the watch reads the table itself)
     const one = cur && cur.top === cur.bottom && cur.left === cur.right ? { ref: this.ref(cur.top, cur.left), cell: this.cell(cur.top, cur.left) } : null;
-    const watchable = one && one.ref && this.book && one.cell && typeof one.cell.v === 'number' && (hooks.watch || hooks.alarm);
+    const watchable = !copy && one && one.ref && this.book && one.cell && typeof one.cell.v === 'number' && (hooks.watch || hooks.alarm);
     const label = watchable ? cellLabel(this, cur.top, cur.left) : '';
     // the columns under the click (a merged caption: all of its own) can be hidden from this user's view
     let cols = [];
@@ -613,7 +621,8 @@ export class Grid {
       { label: 'Tüm tabloyu seç  (Ctrl+A)', action: () => selectAll(this) },
       inputs.length ? { sep: true } : null,
       inputs.length ? { header: 'Yapıştırmak için Ctrl+V' } : null,
-      mine.length ? { label: 'Kendi girdimi sil → varsayılana dön', action: () => resetRefs(this, mine, false) } : null,
+      mine.length ? { label: copy ? 'Kopyadaki değeri sil → tablonun değerine dön' : 'Kendi girdimi sil → varsayılana dön',
+        action: () => resetRefs(this, mine, false) } : null,
       shared.length ? { label: 'Ortak girdiyi dosyadaki değere döndür', action: () => resetRefs(this, shared, true) } : null,
       ...cols,
     ]);
@@ -690,7 +699,7 @@ function notifySelection() {
   const a = g.ref(s.top, s.left), b = g.ref(s.bottom, s.right);
   const single = s.top === s.bottom && s.left === s.right;
   hooks.onSelect({
-    grid: g, book: g.book, ref: a, single,
+    grid: g, book: g.book, ref: a, single, copy: g.opts.copy || null,
     label: !a ? '' : (single || !b ? a : a + ':' + b.split('!')[1]),     // (!b: the block runs into a column the dashboard adds)
     cell: g.cell(sel.r1, sel.c1), focusRef: g.ref(sel.r1, sel.c1),
     count, n, sum, avg: n ? sum / n : null, min: n ? min : null, max: n ? max : null,
@@ -891,7 +900,7 @@ export async function pasteText(grid, s, text) {
       }
     }
     if (!items.length) { toast(unseen ? 'Yapıştırılan alan gizlediğiniz sütunlarda kalıyor' : 'Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
-    const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc, lenient);
+    const res = await hooks.setInputs(grid.book, items, grid.opts.adhoc, lenient, grid.opts.copy || null);
     if (res) { res.skipped = skipped + (res.skipped || 0); res.unseen = unseen; }
     if (res && lenient && !res.applied && !(res.errors || []).length) { toast('Yapıştırılan alanda girdi hücresi yok', 'err'); return; }
     reportApply(res, 'yapıştırıldı');
@@ -914,8 +923,8 @@ function reportApply(res, verb) {
 
 async function resetRefs(grid, refs, shared) {
   try {
-    const res = await hooks.reset(grid.book, refs, shared);
-    toast((res.reset || 0) + ' hücre varsayılana döndü', 'ok', 2200);
+    const res = await hooks.reset(grid.book, refs, shared, grid.opts.copy || null);
+    toast((res.reset || 0) + (grid.opts.copy ? ' hücre tablonun değerine döndü' : ' hücre varsayılana döndü'), 'ok', 2200);
   } catch (err) {
     toast(err.message || String(err), 'err', 6000);
   }
@@ -930,6 +939,12 @@ function editText(cell) {
     return raw(cell.v);
   }
   return cell.t || '';
+}
+
+/** An input a temporary copy keeps read-only, typed into: why it is (said once per try). */
+function readOnlySaid(grid, i, j) {
+  const cell = grid.cell(i, j);
+  if (cell && cell.ro) toast('Kopyada salt okunur: ' + cell.ro, 'err', 6000);
 }
 
 export function startEdit(grid, i, j, typed) {
@@ -1023,7 +1038,7 @@ async function applyValue(grid, i, j, value, how = 'away') {
   let after = null;
   Promise.resolve().then(() => { after = selNow(); });
   try {
-    const res = await hooks.setInputs(grid.book, [{ ref, value }], grid.opts.adhoc);
+    const res = await hooks.setInputs(grid.book, [{ ref, value }], grid.opts.adhoc, false, grid.opts.copy || null);
     if (res && res.errors && res.errors.length) {
       const formula = isFormula(value);
       toast((formula ? value + ' kaydedilmedi – ' : '') + res.errors.join('; '), 'err', formula ? 9000 : 6000);
@@ -1184,6 +1199,11 @@ document.addEventListener('mousedown', (e) => {
   if (!(e.ctrlKey || e.metaKey || ed.point || canPoint(ed.input))) return;
   e.preventDefault();
   e.stopPropagation();
+  if (g.opts.copy) {
+    // a formula reads the workbook as the user has it - the table itself: a temporary copy's own values are no cell of it
+    toast('Geçici kopyanın hücresine başvurulamaz: formül tablonun kendisini okur – tablodaki hücreye tıklayın', 'err', 5000);
+    return;
+  }
   if (!pointAt(ed, g, td.__i, td.__j)) {
     toast('Bu tablonun hücreleri bir çalışma kitabı sayfasında değil: başvurusu eklenemez', 'err');
     return;
@@ -1218,7 +1238,7 @@ async function clearSelectionValues() {
   const items = inputRefs(s.grid, s).filter((x) => x.cell.i).map((x) => ({ ref: x.ref, value: '' }));
   if (!items.length) return;
   try {
-    const res = await hooks.setInputs(s.grid.book, items, false);
+    const res = await hooks.setInputs(s.grid.book, items, false, false, s.grid.opts.copy || null);
     reportApply(res, 'temizlendi');
   } catch (err) {
     toast(err.message || String(err), 'err', 6000);
@@ -1272,6 +1292,7 @@ document.addEventListener('keydown', (e) => {
   if (mod && (e.key === 'a' || e.key === 'A')) { selectAll(g); e.preventDefault(); return; }
   if (!mod && !e.altKey && e.key.length === 1) {
     if (startEdit(g, sel.r1, sel.c1, e.key)) e.preventDefault();
+    else readOnlySaid(g, sel.r1, sel.c1);
   }
 });
 
@@ -1287,7 +1308,9 @@ document.addEventListener('mousedown', (e) => {
 });
 
 /** The <td> showing a workbook cell ("Forward!D2") if it is on screen (used by tests and deep links) - under ``root``,
- *  leaving out what is under ``skip`` (the same range may be on the page and in the side drawer). */
+ *  leaving out what is under ``skip`` (the same range may be on the page and in the side drawer).  A temporary copy of
+ *  a table shows the same cells: it is looked at only when ``root`` is (or holds) the copy itself, never from the whole
+ *  document - the cell of a sheet is the table's own. */
 export function findCell(ref, root = document, skip = null) {
   const k = ref.lastIndexOf('!');
   if (k < 0) return null;
@@ -1299,6 +1322,7 @@ export function findCell(ref, root = document, skip = null) {
     const g = table.__grid;
     if (!g || !g.data || g.data.sheet !== sheet || !g.data.c || !g.data.r) continue;
     if (skip && skip.contains(table)) continue;
+    if (g.opts.copy && root === document) continue;
     const j = g.data.c.indexOf(m[1]);
     const i = g.data.r.indexOf(Number(m[2]));
     if (i >= 0 && j >= 0 && g.tds[i] && g.tds[i][j]) return g.tds[i][j];

@@ -856,15 +856,20 @@ async function loadHeader() {
 
 // ---------------------------------------------------------------------- status bar
 let cellTicket = 0;
-const fetchCell = debounce(async (book, ref, ticket) => {
+const fetchCell = debounce(async (book, ref, ticket, copy) => {
   try {
-    const info = await api.get('/api/cell', { book, ref });
+    const info = await api.get('/api/cell', copy ? { book, ref, copy } : { book, ref });
     if (ticket !== cellTicket) return;
     // (an input typed as a formula: its formula, as Excel's formula bar shows it)
     let text = (info.input && info.input.formula) || info.formula || '';
     if (!text && info.cell) text = info.cell.t || '';
-    if (info.input) text += (text ? '   ·   ' : '') + (info.input.scope === 'shared' ? 'ortak girdi' : 'kişisel girdi')
-      + (info.input.label ? ' – ' + info.input.label : '') + (info.input.error ? '   ·   ' + info.input.error : '');
+    const inp = info.input;
+    if (inp && inp.copy) {
+      // a cell of a temporary copy: its own value, the table's, or read-only there (why)
+      text += (text ? '   ·   ' : '') + 'kopya ' + inp.copy + ' · ' + (inp.readonly ? 'salt okunur – ' + inp.readonly
+        : inp.own ? 'kopyanın kendi girdisi' : 'tablonun değerini izliyor') + (inp.label ? ' – ' + inp.label : '');
+    } else if (inp) text += (text ? '   ·   ' : '') + (inp.scope === 'shared' ? 'ortak girdi' : 'kişisel girdi')
+      + (inp.label ? ' – ' + inp.label : '') + (inp.error ? '   ·   ' + inp.error : '');
     $('sb-fx').textContent = text;
     $('sb-fx').title = text;
   } catch (e) { /* the formula bar is informative only */ }
@@ -886,7 +891,7 @@ function onSelect(info) {
   }
   if (info.single && info.book && info.focusRef) {
     $('sb-fx').textContent = info.cell ? (info.cell.ff || info.cell.t || '') : '';
-    fetchCell(info.book, info.focusRef, cellTicket);
+    fetchCell(info.book, info.focusRef, cellTicket, info.copy);
   } else {
     fetchCell.cancel();
     $('sb-fx').textContent = info.rows + ' satır × ' + info.cols + ' sütun seçili';
@@ -922,9 +927,14 @@ function boot() {
   session.onUnauthorized = () => { showLogin('Oturumunuz sona erdi – tekrar giriş yapın.'); };
   const after = (res) => { runRefresh(); return res; };
   configureGrid({
-    setInputs: (book, items, adhoc, lenient) => api.post('/api/inputs', { book, items, adhoc: !!adhoc, lenient: !!lenient }).then(after),
+    // a temporary copy of a table (copy: its id) takes what is typed into its own inputs
+    setInputs: (book, items, adhoc, lenient, copy) => (copy
+      ? api.post('/api/copies/inputs', { copy, items, lenient: !!lenient })
+      : api.post('/api/inputs', { book, items, adhoc: !!adhoc, lenient: !!lenient })).then(after),
     paste: (book, anchor, text, adhoc) => api.post('/api/paste', { book, anchor, text, adhoc: !!adhoc }).then(after),
-    reset: (book, refs, shared) => api.post('/api/reset', { book, refs, shared: !!shared }).then(after),
+    reset: (book, refs, shared, copy) => (copy
+      ? api.post('/api/copies/reset', { copy, refs })
+      : api.post('/api/reset', { book, refs, shared: !!shared })).then(after),
     // right click on a cell: watch it, or set an alarm on it
     watch: (book, ref, label) => addToWatch(ctx, { book, ref, label }),
     alarm: (book, ref, label, text) => openAlarmDialog(ctx, { book, ref, label, text }),
@@ -1030,7 +1040,13 @@ function findCellAnywhere(ref) {
     || findCell(ref, $('drawer'));
 }
 
-window.tto = { findCell: findCellAnywhere, selectionText, state, events, refresh: () => runRefresh(), hub, pop: POP,
+// (a cell of a temporary copy: under the copy's own element - a selector, or the element - never found from the document)
+const copyCell = (where, ref) => {
+  const root = typeof where === 'string' ? document.querySelector(where) : where;
+  return root ? findCell(ref, root) : null;
+};
+
+window.tto = { findCell: findCellAnywhere, copyCell, selectionText, state, events, refresh: () => runRefresh(), hub, pop: POP,
   kept: () => [...kept.keys()], drawer: () => drawer };
 
 boot();

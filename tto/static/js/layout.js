@@ -227,7 +227,8 @@ export function setHiddenPages(ids) {
 // ---------------------------------------------------------------------- "+ Launchpad": where a table goes
 /**
  * The menu of a table's "+ Launchpad" (and of a Ctrl+K result): the launchpads to put it on, a new one, the side
- * drawer, a window of its own.  ``src``: {view, panel, all?, title?}; ``acts``: {pin(src), pop(src)} of the shell.
+ * drawer, a window of its own - and, for a calculator whose inputs are the user's own, a temporary copy of it.
+ * ``src``: {view, panel, all?, title?}; ``acts``: {pin(src), pop(src), copy(src)?} of the shell / the page.
  */
 export function addMenu(x, y, src, acts) {
   const items = [{ header: 'Launchpad\'e ekle' }];
@@ -241,6 +242,11 @@ export function addMenu(x, y, src, acts) {
   items.push({ label: pinned ? 'Yan panelden kaldır' : 'Yan panele sabitle', action: () => (pinned
     ? unpinFromDrawer(src) : acts && acts.pin ? acts.pin(src) : pinToDrawer(src)) });
   if (acts && acts.pop) items.push({ label: 'Ayrı pencerede aç', action: () => acts.pop(src) });
+  if (acts && acts.copy) {
+    // the calculator once more, right under it, with inputs of its own (kept until it is closed)
+    items.push({ sep: true });
+    items.push({ label: 'Geçici kopya aç', action: () => acts.copy(src) });
+  }
   return menu(x, y, items);
 }
 

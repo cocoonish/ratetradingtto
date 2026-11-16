@@ -61,10 +61,10 @@ export const hub = {
     for (const b of this.boxes) b.setAdhoc(on);
   },
 
-  /** The <td> of a workbook cell in a box under ``root`` (a launchpad, the drawer). */
+  /** The <td> of a workbook cell in a box under ``root`` (a launchpad, the drawer) - never a temporary copy's. */
   findCell(ref, root) {
     for (const b of this.boxes) {
-      if (!b.grid || (root && !root.contains(b.el))) continue;
+      if (!b.grid || b.grid.opts.copy || (root && !root.contains(b.el))) continue;
       const td = findCell(ref, b.el);
       if (td) return td;
     }
@@ -237,13 +237,23 @@ export class PanelBox {
       clear(this.body);
       this.body.appendChild(h('img', { class: 'sheet-image', src: e.src, alt: e.title || 'Resim' }));
     } else if (e.data) {
-      if (this.grid && this.grid.book === this.book) {
+      // a temporary copy of a table: what is typed goes to its own inputs (never "Elle değer"), its strip of inputs above
+      const copy = e.copy ? e.copy.id : null;
+      this.el.classList.toggle('copy', !!copy);
+      if (this.grid && this.grid.book === this.book && (this.grid.opts.copy || null) === copy) {
         if (this.grid.update(e.data, true) === false) { this.entry = e; this.paintTitle(); return; }      // (being typed into: later)
+        (e.lead || []).forEach((l, k) => { const g = (this.leads || [])[k]; if (g && l.data) g.update(l.data, true); });
       } else {
         this.dropContent();
         clear(this.body);
-        this.grid = new Grid({ book: this.book, data: e.data, editable: true, adhoc: this.opts.adhoc ? this.opts.adhoc() : false,
-          name: e.type === 'notes' ? null : 'v/' + this.item.view + '/' + this.item.panel, order: true, tools: this.tools });
+        this.leads = (e.lead || []).map((l) => {
+          const g = l.data ? new Grid({ book: this.book, data: l.data, editable: true, adhoc: false, copy }) : null;
+          this.body.appendChild(h('div', { class: 'copy-lead' }, l.title ? h('div', { class: 'lead-title' }, l.title) : null,
+            g ? g.el : h('div', { class: 'err' }, l.error || 'Tablo okunamadı')));
+          return g;
+        });
+        this.grid = new Grid({ book: this.book, data: e.data, editable: true, adhoc: copy ? false : (this.opts.adhoc ? this.opts.adhoc() : false),
+          copy, name: e.type === 'notes' ? null : 'v/' + this.item.view + '/' + (e.copy ? e.copy.of : this.item.panel), order: true, tools: this.tools });
         this.body.appendChild(this.grid.el);
         if (e.card === 'bond') bondCardLinks(this.ctx, this.grid.el);
         if (e.flags === 'dibs') bondFlags(this.ctx, this.grid.el);
@@ -265,6 +275,7 @@ export class PanelBox {
   dropContent() {
     if (this.chart) { this.chart.destroy(); this.chart = null; }
     this.grid = null;
+    this.leads = null;
   }
 
   /** The table is not there any more, or not this user's to see: said in the box; the rest of the page goes on. */
@@ -291,7 +302,7 @@ export class PanelBox {
   }
 
   setAdhoc(on) {
-    if (this.grid) this.grid.opts.adhoc = !!on;
+    if (this.grid && !this.grid.opts.copy) this.grid.opts.adhoc = !!on;          // (never in a temporary copy)
   }
 
   setCollapsed(on) {
