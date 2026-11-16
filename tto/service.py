@@ -2852,18 +2852,20 @@ class Service(object):
         return {"table": table, "hidden": cols}
 
     # ================================================================== each user's own arrangement
-    #: launchpads, the side drawer, the favourite pages and the page the dashboard opens on - kept with the account
-    #: (``layout.<user>``; see layout.py): any computer they sign in from shows the same, an update keeps it
+    #: launchpads, the side drawer, the favourite pages, the page the dashboard opens on, their own menu and the
+    #: compact look - kept with the account (``layout.<user>``; see layout.py): any computer they sign in from shows the
+    #: same, an update keeps it
     MAX_LAYOUT_BYTES = 256 * 1024
     _layout_lock = threading.Lock()
 
     def layout(self, user: Optional[str]) -> Dict[str, Any]:
-        """``{"launchpads": [{"name", "items": [...]}, ...], "drawer": [...], "favs": [...], "landing": "", "rev": n}``."""
+        """``{"launchpads": [{"name", "items": [...]}, ...], "drawer": [...], "favs": [...], "landing": "",
+        "hidden_pages": [...], "compact": false, "rev": n}``."""
         return lay.stored(self.store.get("layout." + self.require_user(user)))
 
     def set_layout(self, user: Optional[str], data: Any) -> Dict[str, Any]:
         """Replace the parts of this user's layout that ``data`` sends (``launchpads``, ``drawer``, ``favs``,
-        ``landing``); the others stay.  Returns the whole layout as kept."""
+        ``landing``, ``hidden_pages``, ``compact``); the others stay.  Returns the whole layout as kept."""
         key = self.require_user(user)
         with self._layout_lock:
             cur = lay.stored(self.store.get("layout." + key))
