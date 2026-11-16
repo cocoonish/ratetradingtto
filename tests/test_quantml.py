@@ -66,6 +66,8 @@ def test_the_trees_learn_a_rule_route_missing_values_and_explain_each_prediction
         assert t.logit(x) == pytest.approx(t.base + roots + sum(t.contributions(x)), abs=1e-12)
     # the same rows and seed: the same trees; another seed: other ones
     assert ml.Trees.fit(X, y, seed=3).trees == t.trees and ml.Trees.fit(X, y, seed=4).trees != t.trees
+    # no model anywhere (the recorded month): no features' table
+    assert ml.importance_by_group({}) == {"groups": [], "rows": [], "models": {}}
 
 
 # ================================================================================================ the universe

@@ -1121,10 +1121,10 @@ def importance_by_group(lines: Dict[str, Line]) -> Dict[str, Any]:
             per.setdefault(line.inst.group, []).append(line.model.importance())
     groups = [g for g in qu.GROUPS if g in per]
     rows = []
-    for j, (name, label, _) in enumerate(FEATURES):
+    for j, (name, label, _) in enumerate(FEATURES if groups else ()):           # (no model anywhere: no table)
         shares = {g: sum(v[j] for v in per[g]) / len(per[g]) for g in groups}
         rows.append({"name": name, "label": label, "shares": shares})
-    rows.sort(key=lambda r: -max(r["shares"].values() or [0.0]))
+    rows.sort(key=lambda r: -max(r["shares"].values()))
     return {"groups": groups, "rows": rows, "models": {g: len(per[g]) for g in groups}}
 
 
