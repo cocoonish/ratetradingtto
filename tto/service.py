@@ -26,6 +26,7 @@ from . import blotter as bl
 from . import bonds as bd
 from . import brokerchat as bc
 from . import extras as ex
+from . import layout as lay
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
@@ -1662,6 +1663,101 @@ class Service(object):
         key = self._render_key(user, view_id, show_hidden, locale)
         return self._answer(self._render(None, key, user, view_id, show_hidden, locale, None, self.gen), None, None)
 
+    # ================================================================== tables of many pages at once
+    #: the tables one request may ask for (a launchpad, the side drawer, a pop-out window)
+    MAX_PANEL_ITEMS = 200
+
+    def panels(self, user: Optional[str], items: Any, locale: Optional[str] = None,
+               role: Optional[str] = None) -> Dict[str, Any]:
+        return self.panels_future(user, items, locale, role).result()
+
+    def panels_future(self, user: Optional[str], items: Any, locale: Optional[str] = None,
+                      role: Optional[str] = None) -> "concurrent.futures.Future":
+        """Tables of any pages in one answer - what a launchpad, the side drawer or a pop-out window shows (a browser has
+        six connections to the dashboard: one request, however many pages the tables come from).
+
+        ``items``: ``[{"view", "panel", "key"?, "rows"?, "cols"?, "all"?, "since"?, "as"?}, ...]``.  Each page is asked
+        for once, the way its own page asks (``view_future`` with the panels wanted, ``since`` the oldest generation
+        the browser has of them, ``as`` the page it has them of), so a page's kept panels serve both.  ``rows`` /
+        ``cols``: a part of the table (the item's own choice), cut out of a copy here.
+
+        The answer is keyed by ``key`` (default ``"view/panel"``: panel ids repeat across pages): ``{"gen", "as",
+        "entry": the panel as its page draws it, "book", "page", "tab"}``; ``{"gen", "as", "unchanged": true}`` when it did
+        not change since; ``{"missing": true, "status", "error"}`` for a table that is not there (any more) or not this
+        user's to see - one such item never fails the others."""
+        reqs = self._panel_requests(items)
+        admin = (role == "admin") if role is not None else self._is_admin(user)
+        out: Dict[str, Dict[str, Any]] = {}
+        groups: Dict[Tuple[str, bool], List[Dict[str, Any]]] = {}
+        for r in reqs:
+            groups.setdefault((r["view"], r["all"]), []).append(r)
+        waits: List[Tuple[List[Dict[str, Any]], "concurrent.futures.Future"]] = []
+        for (vid, show), rs in groups.items():
+            v = self.view_index.get(vid)
+            if v is None or (v.get("admin") and not admin):
+                why = ("bu tablo artık yok: sayfası kaldırılmış", 404) if v is None else ("erişim yok: bu sayfa yalnızca yöneticilere açıktır", 403)
+                for r in rs:
+                    out[r["key"]] = _missing(r, *why)
+                continue
+            gens = [r["since"] for r in rs]
+            kinds = {r["as"] for r in rs}
+            as_ = kinds.pop() if len(kinds) == 1 else None
+            since = min(gens) if as_ is not None and all(g is not None for g in gens) else None
+            pids = list(dict.fromkeys(r["panel"] for r in rs))
+            waits.append((rs, self.view_future(user, vid, show, locale, since, pids, role, as_)))
+
+        def assemble(_):
+            for rs, fut in waits:
+                try:
+                    res = fut.result()
+                except ServiceError as exc:
+                    for r in rs:
+                        out[r["key"]] = _missing(r, str(exc), exc.status)
+                    continue
+                except Exception as exc:  # noqa: BLE001 - one page that fails must not take the others with it
+                    self.ops.failure("panels %s" % rs[0]["view"], exc)
+                    for r in rs:
+                        out[r["key"]] = _missing(r, "sunucu hatası: %s" % (str(exc)[:200] or type(exc).__name__), 500)
+                    continue
+                for r in rs:
+                    out[r["key"]] = _panel_answer(r, res)
+            return {"gen": self.gen, "panels": out}
+
+        return _then(_all_done([f for _, f in waits]), assemble)
+
+    def _panel_requests(self, items: Any) -> List[Dict[str, Any]]:
+        if not isinstance(items, list) or not items:
+            raise ServiceError("items listesi gerekli")
+        if len(items) > self.MAX_PANEL_ITEMS:
+            raise ServiceError("bir istekte en fazla %d tablo istenebilir" % self.MAX_PANEL_ITEMS)
+        out: List[Dict[str, Any]] = []
+        keys = set()
+        for x in items:
+            if not isinstance(x, dict):
+                raise ServiceError("tablo isteği geçersiz")
+            vid, pid = x.get("view"), x.get("panel")
+            if not isinstance(vid, str) or not lay.PAGE_ID.match(vid) or not isinstance(pid, str) or not lay.PANEL_ID.match(pid):
+                raise ServiceError("tablo isteği geçersiz: sayfa ve tablo adı gerekli")
+            key = x.get("key")
+            if key is None:
+                key = "%s/%s" % (vid, pid)
+            if not isinstance(key, str) or not 0 < len(key) <= 120:
+                raise ServiceError("tablo isteğinin anahtarı geçersiz")
+            if key in keys:
+                raise ServiceError("aynı anahtarla iki tablo istendi: %s" % key)
+            keys.add(key)
+            try:
+                rows, cols = lay.rows_choice(x.get("rows")), lay.cols_choice(x.get("cols"))
+            except lay.LayoutError as exc:
+                raise ServiceError(str(exc))
+            since = x.get("since")
+            if isinstance(since, bool) or not isinstance(since, int):
+                since = None
+            kind = x.get("as") if x.get("as") in ("s", "p") else None
+            out.append({"key": key, "view": vid, "panel": pid, "rows": rows, "cols": cols, "all": x.get("all") is True,
+                        "since": since, "as": kind})
+        return out
+
     def _panel(self, p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer) -> Dict[str, Any]:
         """One panel of a page as the browser draws it."""
         entry = {"id": p.get("id"), "type": p["type"], "title": p.get("title", ""), "hidden": bool(p.get("hidden")),
@@ -2463,8 +2559,43 @@ class Service(object):
     _columns_lock = threading.Lock()
 
     def columns(self, user: Optional[str]) -> Dict[str, Any]:
-        """The columns this user hid, table by table: ``{"tables": {"v/dibs/B5": ["B", "K"], ...}}``."""
-        return {"tables": self.store.get("cols." + self.require_user(user)) or {}}
+        """The columns this user hid, table by table: ``{"tables": {"v/dibs/B5": ["B", "K"], ...}}`` - and, when they
+        put the columns of a table in an order of their own, ``"order": {"v/dibs/B5": ["C", "A", "B", ...]}``."""
+        key = self.require_user(user)
+        out: Dict[str, Any] = {"tables": self.store.get("cols." + key) or {}}
+        order = self.store.get("colorder." + key) or {}
+        if order:
+            out["order"] = order
+        return out
+
+    #: the columns of one table a user may name in an order of their own
+    MAX_ORDER_COLUMNS = 400
+
+    def set_column_order(self, user: Optional[str], table: Any, order: Any) -> Dict[str, Any]:
+        """The order this user puts the columns of one table in (by the same keys as hiding them; an empty list: the
+        sheet's own order again).  A column not named keeps its place after the named ones - one the table gains later
+        comes last.  Kept with the account beside the hidden columns (``colorder.<user>``): on any computer the same."""
+        key = self.require_user(user)
+        if not isinstance(table, str) or not table.strip() or len(table) > 160:
+            raise ServiceError("tablo adı geçersiz")
+        if not isinstance(order, list) or any(not isinstance(c, str) or not c or len(c) > 160 for c in order):
+            raise ServiceError("sütun sırası bir ad listesi olmalı")
+        cols = list(dict.fromkeys(order))
+        if len(cols) > self.MAX_ORDER_COLUMNS:
+            raise ServiceError("bir tabloda en fazla %d sütun sıralanabilir" % self.MAX_ORDER_COLUMNS)
+        with self._columns_lock:
+            saved = self.store.get("colorder." + key) or {}
+            if cols:
+                saved[table] = cols
+            else:
+                saved.pop(table, None)
+            if len(saved) > self.MAX_COLUMN_TABLES:
+                raise ServiceError("en fazla %d tablonun sütun sırası değiştirilebilir – birkaçını Excel sırasına döndürün"
+                                   % self.MAX_COLUMN_TABLES)
+            if len(json.dumps(saved, ensure_ascii=False)) > self.MAX_COLUMN_BYTES:
+                raise ServiceError("sütun sıralarının listesi çok uzun – birkaç tabloyu Excel sırasına döndürün")
+            self.store.put("colorder." + key, saved)
+        return {"table": table, "order": cols}
 
     def set_columns(self, user: Optional[str], table: Any, hidden: Any) -> Dict[str, Any]:
         """Hide these columns of one table from this user (an empty list shows every column again)."""
@@ -2489,6 +2620,62 @@ class Service(object):
                 raise ServiceError("gizlenen sütunların listesi çok uzun – birkaç tablonun sütunlarını yeniden gösterin")
             self.store.put("cols." + key, saved)
         return {"table": table, "hidden": cols}
+
+    # ================================================================== each user's own arrangement
+    #: launchpads, the side drawer, the favourite pages and the page the dashboard opens on - kept with the account
+    #: (``layout.<user>``; see layout.py): any computer they sign in from shows the same, an update keeps it
+    MAX_LAYOUT_BYTES = 256 * 1024
+    _layout_lock = threading.Lock()
+
+    def layout(self, user: Optional[str]) -> Dict[str, Any]:
+        """``{"launchpads": [{"name", "items": [...]}, ...], "drawer": [...], "favs": [...], "landing": "", "rev": n}``."""
+        return lay.stored(self.store.get("layout." + self.require_user(user)))
+
+    def set_layout(self, user: Optional[str], data: Any) -> Dict[str, Any]:
+        """Replace the parts of this user's layout that ``data`` sends (``launchpads``, ``drawer``, ``favs``,
+        ``landing``); the others stay.  Returns the whole layout as kept."""
+        key = self.require_user(user)
+        with self._layout_lock:
+            cur = lay.stored(self.store.get("layout." + key))
+            try:
+                new = lay.change(cur, data)
+            except lay.LayoutError as exc:
+                raise ServiceError(str(exc))
+            self._put_layout(key, new)
+        return new
+
+    def _put_layout(self, key: str, value: Dict[str, Any]) -> None:
+        if len(json.dumps(value, ensure_ascii=False)) > self.MAX_LAYOUT_BYTES:
+            raise ServiceError("düzeniniz çok büyüdü – birkaç launchpad'i ya da tabloyu kaldırın")
+        self.store.put("layout." + key, value)
+
+    def export_launchpad(self, user: Optional[str], name: Any) -> Tuple[bytes, str]:
+        """One of this user's launchpads as a JSON file (to keep, or for a colleague to import): (bytes, file name)."""
+        cur = self.layout(user)
+        want = lay.name_key(name) if isinstance(name, str) else None
+        lp = next((x for x in cur["launchpads"] if lay.name_key(x["name"]) == want), None)
+        if lp is None:
+            raise ServiceError("böyle bir launchpad yok", 404)
+        raw = json.dumps(lay.export(lp), ensure_ascii=False, indent=1).encode("utf-8")
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "-", lp["name"].translate(_ASCII_TR)).strip("-") or "launchpad"
+        return raw, "launchpad-%s.json" % safe[:40]
+
+    def import_launchpad(self, user: Optional[str], data: Any, name: Any = None) -> Dict[str, Any]:
+        """A launchpad from such a file, added to this user's (a name they have already gets " (2)")."""
+        key = self.require_user(user)
+        try:
+            lp = lay.imported(data, name if isinstance(name, str) and name.strip() else None)
+        except lay.LayoutError as exc:
+            raise ServiceError(str(exc))
+        with self._layout_lock:
+            cur = lay.stored(self.store.get("layout." + key))
+            try:
+                lp["name"] = lay.unique_name(lp["name"], [x["name"] for x in cur["launchpads"]])
+                new = lay.change(cur, {"launchpads": cur["launchpads"] + [lp]})
+            except lay.LayoutError as exc:
+                raise ServiceError(str(exc))
+            self._put_layout(key, new)
+        return {"name": lp["name"], "layout": new}
 
     # ================================================================== RET curve
     def _ret_rows(self, book: Book) -> List[Dict[str, Any]]:
@@ -6201,6 +6388,171 @@ def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:
                 cell.pop("cs", None)
     data["c"] = [have[j] for j in order]
     data.pop("fz", None)                         # (frozen columns counted the sheet's order)
+
+
+_ASCII_TR = str.maketrans("çğıöşüÇĞİÖŞÜâîû", "cgiosuCGIOSUaiu")
+
+
+def _all_done(futs: List["concurrent.futures.Future"]) -> "concurrent.futures.Future":
+    """A future that is done when all of ``futs`` are (each one's result or error is read from it)."""
+    out: "concurrent.futures.Future" = concurrent.futures.Future()
+    if not futs:
+        out.set_result(None)
+        return out
+    left = [len(futs)]
+    lock = threading.Lock()
+
+    def one(_f) -> None:
+        with lock:
+            left[0] -= 1
+            last = left[0] == 0
+        if last:
+            out.set_result(None)
+
+    for f in futs:
+        f.add_done_callback(one)
+    return out
+
+
+def _missing(r: Dict[str, Any], error: str, status: int) -> Dict[str, Any]:
+    """A table asked for that is not there (any more), or not this user's to see."""
+    return {"view": r["view"], "panel": r["panel"], "missing": True, "status": status, "error": error}
+
+
+def _panel_answer(r: Dict[str, Any], res: Dict[str, Any]) -> Dict[str, Any]:
+    """One table of a page's answer (see ``Service.panels_future``)."""
+    base = {"view": r["view"], "panel": r["panel"], "gen": res.get("gen"), "as": res.get("as")}
+    if res.get("unchanged"):
+        return dict(base, unchanged=True)
+    entry = next((p for p in res.get("panels") or [] if p.get("id") == r["panel"]), None)
+    if entry is None:
+        if r["panel"] in {x.rsplit(":", 1)[0] for x in res.get("ids") or []}:
+            return dict(base, unchanged=True)             # (on the page, not changed since)
+        return _missing(r, "bu tablo artık yok: sayfasında bulunamadı", 404)
+    if (r["rows"] or r["cols"]) and entry.get("type") in ("table", "notes") and isinstance(entry.get("data"), dict):
+        entry = dict(entry, data=_pick_part(entry["data"], r["rows"], r["cols"]))
+    tab = ""
+    for sec in res.get("sections") or []:
+        if r["panel"] in sec.get("panels", []):
+            tab = sec.get("title") or ""
+            break
+    return dict(base, entry=entry, book=res.get("book"), page=res.get("title"), tab=tab)
+
+
+def _row_label(row: List[Dict[str, Any]]) -> Optional[str]:
+    """The name of a row: its first text from the left - a tenor, an ISIN, a pair (numbers and dates before it are
+    passed over: the RET table's day count stands left of its tenor).  ``None``: the row has no text."""
+    for c in row:
+        if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s":
+            continue
+        t = " ".join(str(c.get("t") or "").split())
+        if t:
+            return t
+    return None
+
+
+def _header_row(row: List[Dict[str, Any]]) -> bool:
+    """A caption row (as the browser takes one: two or more texts, most of them bold or captions, none an input)."""
+    n = strong = 0
+    for c in row:
+        if not isinstance(c, dict) or c.get("sk") or not c.get("t"):
+            continue
+        if c.get("k") != "s" or c.get("i"):
+            return False
+        if c.get("c") or (c.get("f") and c.get("f") not in ("hd", "sub")):
+            return False
+        n += 1
+        if c.get("b") or c.get("f") == "hd":
+            strong += 1
+    return n >= 2 and strong * 2 >= n
+
+
+def _caption_rows(rows: List[List[Dict[str, Any]]], nums: List[Any]) -> set:
+    """The rows at the top of a table that name its columns (a lone title row above them too): a part of the table
+    keeps them."""
+    out = set(i for i, r in enumerate(nums) if r == 0)
+    for i, row in enumerate(rows):
+        if i in out:
+            continue
+        if len(rows) > 1 and _header_row(row) and len(out) < 3:
+            out.add(i)
+        elif i == 0 and sum(1 for c in row if isinstance(c, dict) and not c.get("sk") and c.get("t")) <= 1:
+            out.add(i)
+        else:
+            break
+    return out
+
+
+def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -> Dict[str, Any]:
+    """Part of a table - a launchpad item's own choice - as a new table (the page's kept one is not changed).
+
+    ``rows``: each a row's label (its first text from the left) or its number in the sheet; the caption rows at the
+    top always stay.  ``cols``: column letters.  Both keep the table's own order.  A merged cell keeps the part of it
+    that is still there; when its first cell went, what it shows moves to the first one left (read only then: typing
+    there would write another cell).  Nothing of either left: the whole table, marked ``part_missing``."""
+    src = data.get("rows") or []
+    width = len(src[0]) if src else 0
+    letters = list(data.get("c") or [])
+    nums = list(data.get("r") or [])
+    keep_c = list(range(width))
+    missing = False
+    if cols and len(letters) == width:
+        want = set(cols)
+        picked = [j for j in range(width) if letters[j] in want]
+        if picked:
+            keep_c = picked
+        else:
+            missing = True
+    keep_r = list(range(len(src)))
+    if rows:
+        numbers = {x for x in rows if isinstance(x, int)}
+        labels = {" ".join(x.split()) for x in rows if isinstance(x, str)}
+        heads = _caption_rows(src, nums)
+        body = [i for i in range(len(src)) if i not in heads and ((i < len(nums) and nums[i] in numbers)
+                                                                  or _row_label(src[i]) in labels)]
+        if body:
+            keep_r = sorted(heads | set(body))
+        else:
+            missing = True
+    new_r = {i: k for k, i in enumerate(keep_r)}
+    new_c = {j: k for k, j in enumerate(keep_c)}
+    out_rows: List[List[Dict[str, Any]]] = [[{"t": "", "k": ""} for _ in keep_c] for _ in keep_r]
+    for i, row in enumerate(src):
+        for j, cell in enumerate(row):
+            if not isinstance(cell, dict) or cell.get("sk"):
+                continue
+            rs, cs = int(cell.get("rs") or 1), int(cell.get("cs") or 1)
+            rr = [new_r[x] for x in range(i, i + rs) if x in new_r]
+            cc = [new_c[y] for y in range(j, j + cs) if y in new_c]
+            if not rr or not cc:
+                continue
+            copy = {k: v for k, v in cell.items() if k not in ("rs", "cs")}
+            if i not in new_r or j not in new_c:
+                for k in ("i", "o", "m", "ik"):
+                    copy.pop(k, None)
+            if len(rr) > 1:
+                copy["rs"] = len(rr)
+            if len(cc) > 1:
+                copy["cs"] = len(cc)
+            out_rows[rr[0]][cc[0]] = copy
+            for a in rr:
+                for b in cc:
+                    if (a, b) != (rr[0], cc[0]):
+                        out_rows[a][b] = {"sk": 1}
+    out = {k: v for k, v in data.items() if k not in ("rows", "r", "c", "fz", "hc")}
+    out["rows"] = out_rows
+    if nums:
+        out["r"] = [nums[i] for i in keep_r if i < len(nums)]
+    if letters:
+        out["c"] = [letters[j] for j in keep_c if j < len(letters)]
+    fz = data.get("fz") or 0
+    if fz:
+        n = sum(1 for j in keep_c if j < fz)
+        if 0 < n < len(keep_c):
+            out["fz"] = n
+    if missing:
+        out["part_missing"] = True
+    return out
 
 
 def _column_captions(data: Dict[str, Any], captions: Dict[str, str]) -> None:

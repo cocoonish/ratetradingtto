@@ -43,7 +43,9 @@ async function login(page, name) {
 
 async function open(page, id) {
   await page.evaluate((x) => { window.location.hash = '#/' + x; }, id);
-  await page.waitForFunction((x) => window.tto.state.pageId === x && window.tto.state.page && window.tto.state.page.ready, id, { timeout: 90000 });
+  // (one of the last pages opened comes back at once, as it was left, and is brought up to date: wait for that too)
+  await page.waitForFunction((x) => window.tto.state.pageId === x && window.tto.state.page && window.tto.state.page.ready
+    && !window.tto.state.refreshing, id.split('/')[0], { timeout: 90000 });
   await page.waitForTimeout(150);
 }
 
@@ -2505,6 +2507,205 @@ async function shot(page, name) {
     { firstTitle, secondTitle, keptContract });
     await shot(page, 'quant-viop');
     await page.click('#quant-viop-contract button[data-v="A1X6 Curncy"]');          // (the choice is kept in the browser: the front again)
+
+    // ------------------------------------------------------------------ launchpad, side drawer, pop-out, fast switching
+    console.log('launchpad and navigation');
+    const boxKeys = () => page.evaluate(() => [...document.querySelectorAll('#lp-grid .lp-item')].map((x) => x.dataset.key + ':' + x.dataset.w));
+    const layoutOf = async (user) => (await api(page, user, 'GET', '/api/layout')).json;
+    // (a change is on screen at once and saved right after: the server's copy is waited for)
+    const savedLayout = async (pred) => {
+      for (let i = 0; i < 60; i++) {
+        const l = await layoutOf('ayşe yilmaz');
+        if (pred(l)) return l;
+        await page.waitForTimeout(250);
+      }
+      return layoutOf('ayşe yilmaz');
+    };
+    // a table from its page onto a new launchpad: "+ Launchpad" in its header
+    await open(page, 'forward');
+    await tab(page, 'calc');
+    await page.hover('#content .panel[data-panel="B1"]');
+    await page.click('#content .panel[data-panel="B1"] .tools button[data-action="launchpad"]');
+    await page.click('.menu >> text=+ Yeni launchpad…');
+    await page.fill('.modal input', 'Sabah');
+    await page.click('.modal .btn.primary');
+    await page.waitForFunction(() => /"Sabah" launchpad/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
+    await open(page, 'launchpad');
+    await page.waitForSelector('#lp-grid .lp-item[data-key="forward/B1"] table.grid', { timeout: 30000 });
+    const lpTabs = await page.evaluate(() => [...document.querySelectorAll('#lp-tabs .lp-tab')].map((b) => b.dataset.name + (b.classList.contains('on') ? '!' : '')));
+    check('Launchpad: first in the menu; a table added from its page ("+ Launchpad" → a new one) is on it, live',
+      lpTabs.join(',') === 'Sabah!' && await page.evaluate(() => document.querySelector('#nav .nav-item').dataset.page) === 'launchpad'
+      && /^Launchpad · Sabah/.test(await page.textContent('#page-title')), lpTabs);
+    // another one from a Ctrl+K result
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('interest');
+    await page.waitForSelector('.findlist .hit .act[data-act="launchpad"]');
+    await page.hover('.findlist .hit >> nth=0');
+    await page.click('.findlist .hit >> nth=0 >> .act[data-act="launchpad"]');
+    await page.click('.menu >> text=Sabah');
+    await page.waitForFunction(() => document.querySelectorAll('#lp-grid .lp-item table.grid').length === 2, null, { timeout: 30000 });
+    const twoKeys = await boxKeys();
+    check('... and one from a Ctrl+K result ("Launchpad\'e ekle" beside the hit)', twoKeys.length === 2 && /^forward\/B\d+:6$/.test(twoKeys[1]), twoKeys);
+    // its width (the item's menu) and its place (dragged by its handle before the first): kept after a reload
+    await page.click('#lp-grid .lp-item >> nth=0 >> button[data-action="item-menu"]');
+    await page.click('.menu >> text=Tam');
+    await page.waitForFunction(() => document.querySelector('#lp-grid .lp-item').dataset.w === '12');
+    await page.locator('#lp-grid .lp-item >> nth=1 >> .lp-drag').dragTo(page.locator('#lp-grid .lp-item >> nth=0'), { targetPosition: { x: 14, y: 14 } });
+    await page.waitForFunction(() => document.querySelectorAll('#lp-grid .lp-item')[1].dataset.key === 'forward/B1', null, { timeout: 10000 });
+    await savedLayout((l) => l.launchpads[0].items[1].panel === 'B1' && l.launchpads[0].items[1].w === 12);
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'launchpad' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await page.waitForFunction(() => document.querySelectorAll('#lp-grid .lp-item table.grid').length === 2, null, { timeout: 30000 });
+    const kept = await boxKeys();
+    const lay1 = await layoutOf('ayşe yilmaz');
+    check('the order (drag and drop) and the width (¼ ⅓ ½ ⅔ tam) are kept after a reload - with the account, on the server',
+      kept[0] === twoKeys[1] && kept[1] === 'forward/B1:12' && lay1.launchpads[0].items.map((x) => x.panel).join(',') === twoKeys[1].split(/[/:]/)[1] + ',B1', { kept, lay1 });
+    await shot(page, '40-launchpad');
+    // a value typed on the launchpad is the source page's value (the same cell of the same book)
+    await typeInto(page, 'Forward!D2', '16.12.2026');
+    await waitCell(page, 'Forward!D2', "t.trim() === '16.12.2026'");
+    await open(page, 'forward');
+    await waitCell(page, 'Forward!D2', "t.trim() === '16.12.2026'");
+    check('a value typed on the launchpad shows on its page', (await cellText(page, 'Forward!D2')).trim() === '16.12.2026');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!D2'] });
+    // a part of a table: the columns picked (the server cuts them out)
+    await open(page, 'launchpad');
+    await page.click('#lp-grid .lp-item[data-key="forward/B1"] button[data-action="item-menu"]');
+    await page.click('.menu >> text=Satırlar ve sütunlar…');
+    await page.waitForSelector('.lp-picker .lp-pick input');
+    await page.locator('.lp-picker .lp-pick-side >> nth=1 >> .lp-pick input >> nth=6').uncheck();
+    await page.locator('.lp-picker .lp-pick-side >> nth=1 >> .lp-pick input >> nth=7').uncheck();
+    await page.click('#lp-pick-save');
+    await page.waitForFunction(() => { const b = document.querySelector('#lp-grid .lp-item[data-key="forward/B1"] table.grid'); return b && b.__grid.data.c.length === 6; }, null, { timeout: 20000 });
+    const partOf = (l) => (l.launchpads[0].items.find((x) => x.panel === 'B1') || {}).cols || [];
+    const part = partOf(await savedLayout((l) => partOf(l).length === 6));
+    check('a part of a table: the columns picked, kept with the item and cut out on the server', part.join(',') === 'C,D,F,G,I,J', part);
+    // the column order (per user, per table): on DİBS RV's table, then the same order wherever the table is drawn
+    await open(page, 'dibs');
+    await tab(page, '*');
+    const rvSel = '#content .panel[data-panel="B3"]';
+    const rvCols = () => page.evaluate((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 4).join(','), rvSel);
+    await page.hover(rvSel);
+    await page.click(rvSel + ' .tools .colsbtn');
+    await page.click('.menu >> text=Sütun sırası…');
+    await page.click('#colorder-list .co >> nth=0 >> button[data-act="down"]');
+    await page.click('#colorder-list .co >> nth=1 >> button[data-act="down"]');
+    await page.click('#colorder-save');
+    await page.waitForFunction((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 3).join(',') === 'B,C,A', rvSel, { timeout: 10000 });
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await page.waitForSelector(rvSel + ' table.grid');
+    const colOrder = ((await api(page, 'ayşe yilmaz', 'GET', '/api/columns')).json.order || {})['v/dibs/B3'] || [];
+    check('a column order of one\'s own ("Sütun sırası…"): kept after a reload, with the account; a cell keeps its reference',
+      await rvCols() === 'B,C,A,D' && colOrder.slice(0, 3).join(',') === 'B,C,A'
+      && await page.evaluate(() => { const td = window.tto.findCell('DİBS RV!A6'); return !!td && td.__j === 2; }), { cols: await rvCols(), colOrder });
+    // the same table on the launchpad (a part of it): the user's order over its columns
+    await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { launchpads: (await layoutOf('ayşe yilmaz')).launchpads.map((lp) => Object.assign({}, lp,
+      { items: lp.items.concat([{ view: 'dibs', panel: 'B3', w: 12, h: 360, cols: ['A', 'C', 'D', 'E'] }]) })) });
+    await open(page, 'launchpad');
+    await page.waitForSelector('#lp-grid .lp-item[data-key="dibs/B3"] table.grid', { timeout: 30000 });
+    const boxCols = await page.evaluate(() => document.querySelector('#lp-grid .lp-item[data-key="dibs/B3"] table.grid').__grid.data.c.join(','));
+    check('... and on the launchpad (its part A C D E as C A D E), a fixed height scrolling inside', boxCols === 'C,A,D,E'
+      && await page.evaluate(() => document.querySelector('#lp-grid .lp-item[data-key="dibs/B3"] .body').getBoundingClientRect().height <= 362), boxCols);
+    await open(page, 'dibs');
+    await page.hover(rvSel);
+    await page.click(rvSel + ' .tools .colsbtn');
+    await page.click('.menu >> text=Excel sırasına dön');
+    await page.waitForFunction((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 3).join(',') === 'A,B,C', rvSel, { timeout: 10000 });
+    // a favourite page in the top bar
+    await open(page, 'forward');
+    await page.click('#btn-fav');
+    await page.waitForSelector('#favs a.fav[data-page="forward"]');
+    await open(page, 'dibs');
+    await page.click('#favs a.fav[data-page="forward"]');
+    await page.waitForFunction(() => window.tto.state.pageId === 'forward');
+    check('★ a favourite page in the top bar (kept with the account), one click away',
+      JSON.stringify((await layoutOf('ayşe yilmaz')).favs) === '["forward"]' && await page.textContent('#btn-fav') === '★');
+    await page.click('#btn-fav');
+    await page.waitForFunction(() => !document.querySelector('#favs a.fav'));
+    // the landing page ("Açılış sayfası…" in the user menu): the dashboard opened without an address goes there
+    await page.click('#btn-user');
+    await page.click('.menu >> text=Açılış sayfası…');
+    await page.selectOption('#landing-select', 'launchpad/Sabah');
+    await page.click('#landing-save');
+    await page.waitForFunction(() => /Açılış sayfanız/.test(document.getElementById('toasts').textContent), null, { timeout: 10000 });
+    await page.goto(BASE + '/');
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'launchpad' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    check('the landing page opens when the dashboard is opened without an address (one of the user\'s launchpads)',
+      decodeURIComponent(await page.evaluate(() => window.location.hash)) === '#/launchpad/Sabah' && (await layoutOf('ayşe yilmaz')).landing === 'launchpad/Sabah');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { landing: '' });
+    // the side drawer: a table pinned stays on every page (Alt+Y closes / opens it)
+    await open(page, 'forward');
+    await tab(page, 'calc');
+    await page.hover('#content .panel[data-panel="B7"]');
+    await page.click('#content .panel[data-panel="B7"] .tools button[data-action="launchpad"]');
+    await page.click('.menu >> text=Yan panele sabitle');
+    await page.waitForSelector('#drawer:not(.hidden) .lp-item[data-key="forward/B7"] table.grid', { timeout: 30000 });
+    await open(page, 'dibs');
+    const inDrawer = await page.locator('#drawer .lp-item[data-key="forward/B7"] table.grid').count();
+    await page.keyboard.press('Alt+y');
+    await page.waitForSelector('#drawer.hidden', { state: 'attached' });
+    await page.keyboard.press('Alt+y');
+    await page.waitForSelector('#drawer:not(.hidden) .lp-item[data-key="forward/B7"]');
+    check('the side drawer: a table pinned from its page stays beside every page; Alt+Y closes and opens it',
+      inDrawer === 1 && (await layoutOf('ayşe yilmaz')).drawer.length === 1 && await page.evaluate(() => document.getElementById('app').classList.contains('drawer-open')));
+    await shot(page, '41-drawer');
+    await page.click('#drawer .lp-item[data-key="forward/B7"] button[data-action="unpin"]');
+    await page.waitForFunction(() => !document.querySelector('#drawer .lp-item'));
+    await page.click('#dr-close');
+    // back / forward: the page comes back with its tab and its scroll
+    await open(page, 'forward');
+    await tab(page, '*');
+    await page.evaluate(() => { document.getElementById('content').scrollTop = 400; window.__keptPage = window.tto.state.page; });
+    const top0 = await page.evaluate(() => document.getElementById('content').scrollTop);
+    await open(page, 'dibs');
+    await page.click('#page-title');
+    await page.keyboard.press('Alt+ArrowLeft');
+    await page.waitForFunction(() => window.tto.state.pageId === 'forward' && !window.tto.state.refreshing, null, { timeout: 30000 });
+    const back = await page.evaluate(() => ({ same: window.tto.state.page === window.__keptPage, tab: document.querySelector('.viewtabs button.on').dataset.tab,
+      top: document.getElementById('content').scrollTop }));
+    await page.keyboard.press('Alt+ArrowRight');
+    await page.waitForFunction(() => window.tto.state.pageId === 'dibs', null, { timeout: 30000 });
+    check('Alt+← / Alt+→: back to the page kept as it was left - its tab, its scroll - and forward again',
+      back.same && back.tab === '*' && top0 > 0 && Math.abs(back.top - top0) < 2 && (await page.evaluate(() => window.tto.kept().length)) <= 4, { back, top0 });
+    // a window of its own: a table (⧉) and a launchpad, live, without the menu or alarms
+    await open(page, 'forward');
+    await tab(page, 'calc');
+    await page.hover('#content .panel[data-panel="B1"]');
+    const [pop] = await Promise.all([ctxA.waitForEvent('page'), page.click('#content .panel[data-panel="B1"] .tools button[data-action="popout"]')]);
+    pop.on('pageerror', (e) => errors.push('pageerror(pop): ' + e.message));
+    const popAsked = [];
+    pop.on('request', (r) => { if (r.url().includes('/api/')) popAsked.push(r.url().replace(BASE, '')); });
+    await pop.waitForSelector('.lp-item[data-key="forward/B1"] table.grid', { timeout: 60000 });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'Forward!D2', value: '18.12.2026' }] });
+    await pop.waitForFunction(() => { const t = window.tto.findCell('Forward!D2'); return t && t.textContent.trim() === '18.12.2026'; }, null, { timeout: 30000 });
+    check('a pop-out window (⧉) shows the table without the menu and keeps up live - one request per refresh, no alarm checks',
+      await pop.evaluate(() => window.tto.pop && getComputedStyle(document.getElementById('side')).display === 'none' && !document.querySelector('#kpis .kpi'))
+      && popAsked.some((u) => u.startsWith('/api/panels')) && !popAsked.some((u) => /\/api\/(alarms|view|header)/.test(u)), popAsked.slice(0, 10));
+    await shot(pop, '42-popout');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!D2'] });
+    await pop.close();
+    await open(page, 'launchpad');
+    const [popLp] = await Promise.all([ctxA.waitForEvent('page'), page.click('#lp-pop')]);
+    popLp.on('pageerror', (e) => errors.push('pageerror(pop lp): ' + e.message));
+    await popLp.waitForFunction(() => document.querySelectorAll('#lp-grid .lp-item table.grid').length === 3, null, { timeout: 60000 });
+    check('... and a whole launchpad in a window of its own', decodeURIComponent(await popLp.evaluate(() => window.location.hash)) === '#/pop/launchpad/Sabah'
+      && await popLp.locator('#lp-tabs').count() === 0);
+    await popLp.close();
+    // a table the user may not see (an administrators' page), or one that is gone: said in its box, the page goes on
+    const ctxE = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const pageE = await ctxE.newPage();
+    pageE.on('pageerror', (e) => errors.push('pageerror(E): ' + e.message));
+    await login(pageE, 'Zeynep');
+    await pageE.request.fetch(BASE + '/api/layout', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      data: JSON.stringify({ launchpads: [{ name: 'Benim', items: [{ view: 'motor', panel: 'B1' }, { view: 'forward', panel: 'YOK' }, { view: 'forward', panel: 'B1' }] }] }) });
+    await pageE.evaluate(() => { window.location.hash = '#/launchpad'; });
+    await pageE.waitForSelector('#lp-grid .lp-item[data-key="forward/B1"] table.grid', { timeout: 60000 });
+    await pageE.waitForFunction(() => document.querySelectorAll('#lp-grid .lp-item.missing .lp-missing b').length === 2, null, { timeout: 30000 });
+    const missing = await pageE.evaluate(() => [...document.querySelectorAll('#lp-grid .lp-item.missing .lp-missing b')].map((b) => b.textContent));
+    check('a table that is not there any more, or not the user\'s to see, says so in its box ("erişim yok" / "artık yok"); the rest works',
+      missing.join('|') === 'Erişim yok|Bu tablo artık yok', missing);
+    await ctxE.close();
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

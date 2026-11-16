@@ -305,6 +305,32 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                                                  _since(request), panels, _role(request), request.query_params.get("as"))))
 
     @handler
+    async def panels(request: Request):
+        # tables of any pages in one request: a launchpad, the side drawer, a pop-out window (see Service.panels_future)
+        data = await _body(request)
+        return ok(await engine(svc().panels_future(_user(request), data.get("items"), _lang(request), _role(request))))
+
+    # ------------------------------------------------------------------ each user's own arrangement
+    @handler
+    async def layout(request: Request):
+        # launchpads, the side drawer, the favourite pages, the page the dashboard opens on: GET reads, POST replaces
+        # the parts it sends
+        if request.method == "GET":
+            return ok(await call_free(svc().layout, _user(request)))
+        return ok(await call_free(svc().set_layout, _user(request), await _body(request)))
+
+    @handler
+    async def layout_export(request: Request):
+        raw, name = await call_free(svc().export_launchpad, _user(request), request.query_params.get("name"))
+        return Response(raw, media_type="application/json",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
+    @handler
+    async def layout_import(request: Request):
+        data = await _body(request)
+        return ok(await call_free(svc().import_launchpad, _user(request), data.get("launchpad"), data.get("name")))
+
+    @handler
     async def image(request: Request):
         q = request.query_params
         try:
@@ -382,7 +408,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         if request.method == "GET":
             return ok(await call_free(svc().columns, _user(request)))
         data = await _body(request)
-        return ok(await call_free(svc().set_columns, _user(request), data.get("table"), data.get("hidden")))
+        # {table, hidden}: the columns hidden; {table, order}: the order of the columns ([] - the sheet's own); both at once
+        out: Dict[str, Any] = {}
+        if "order" in data:
+            out.update(await call_free(svc().set_column_order, _user(request), data.get("table"), data.get("order")))
+        if "order" not in data or "hidden" in data:
+            out.update(await call_free(svc().set_columns, _user(request), data.get("table"), data.get("hidden")))
+        return ok(out)
 
     # ------------------------------------------------------------------ RET curve
     @handler
@@ -910,6 +942,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/header", header),
         Route("/api/spot", spot),
         Route("/api/view/{view_id}", view),
+        Route("/api/panels", panels, methods=["POST"]),
+        Route("/api/layout", layout, methods=["GET", "POST"]),
+        Route("/api/layout/export", layout_export),
+        Route("/api/layout/import", layout_import, methods=["POST"]),
         Route("/api/image", image),
         Route("/api/cell", cell),
         Route("/api/grid", grid),

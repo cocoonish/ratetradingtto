@@ -44,6 +44,8 @@
   <section id="main">
     <header id="top">
       <h1 id="page-title">&nbsp;</h1>
+      <button class="favstar" id="btn-fav" type="button" title="Bu sayfayı üst şeritteki favorilerinize ekleyin / çıkarın">☆</button>
+      <nav class="favs" id="favs" aria-label="Favori sayfalar"></nav>
       <button class="badge" id="mode-badge" type="button"><span class="led"></span><span id="mode-text">…</span></button>
       <span class="muted" id="asof"></span>
       <button class="btn desk-alarm hidden" id="desk-alarm" type="button"></button>
@@ -52,6 +54,7 @@
         placeholder="Tablo / hesaplayıcı bul  (Ctrl+K)" title="Bütün sayfalardaki tabloları adıyla arayın: “interest”, “ret”, “xautry”, “dv01” … Enter ile gidin"></span>
       <button class="btn" id="btn-ret" title="RET faizlerini gir, değiştir (tek tek ya da baz puanla kaydır), Excel'den yapıştır, göndermek için kopyala">RET faizleri</button>
       <button class="btn" id="btn-scen" title="Senaryolarım">Senaryolar</button>
+      <button class="btn" id="btn-drawer" type="button" aria-pressed="false" aria-label="Yan panel" title="Yan panel: sabitlediğiniz tablolar her sayfada sağda (Alt+Y)">◨<span class="n" id="dr-count"></span></button>
       <button class="btn ghost" id="btn-lang" title="Sayı biçimi (kopyalama da bu biçimde yapılır)">1.234,56</button>
       <button class="btn ghost" id="btn-flash" title="Değişen hücrelerin yanıp sönmesi: açık / kapalı">⚡</button>
       <button class="btn ghost" id="btn-theme" title="Açık / koyu tema">◐</button>
@@ -67,6 +70,17 @@
       <span class="hint" id="sb-hint">Ctrl+C kopyala · Ctrl+V yapıştır · Enter düzenle</span>
     </footer>
   </section>
+  <aside id="drawer" class="hidden" aria-label="Yan panel">
+    <header class="dr-head">
+      <b>Yan panel</b>
+      <span class="muted">sabitlediğiniz tablolar · her sayfada</span>
+      <span class="spacer"></span>
+      <button class="iconbtn" id="dr-wide" type="button" title="Yan paneli genişlet / daralt">⇔</button>
+      <button class="iconbtn" id="dr-close" type="button" title="Kapat (Alt+Y)">✕</button>
+    </header>
+    <div class="dr-empty muted" id="dr-empty"></div>
+    <div class="dr-list" id="dr-list"></div>
+  </aside>
 </div>
 <div id="toasts"></div>
 <script type="module" src="/static/js/main.js"></script>

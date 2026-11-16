@@ -1,30 +1,47 @@
-// The columns a user hides in a table.  Everybody looks at the tables their own way: what is hidden is kept with the
-// account on the server, so any computer shows the same.  A table is named by its page ("v/dibs/B5": a table of a
-// sheet, "eod/curve": one of the dashboard's own); a column by its letter in the sheet, or by its caption.
+// The columns a user hides in a table, and the order they put them in.  Everybody looks at the tables their own way:
+// what is hidden and how the columns are ordered is kept with the account on the server, so any computer shows the
+// same.  A table is named by its page ("v/dibs/B5": a table of a sheet, "eod/curve": one of the dashboard's own); a
+// column by its letter in the sheet, or by its caption.
 import { api } from './api.js';
-import { h, menu, toast } from './ui.js';
+import { h, menu, modal, toast } from './ui.js';
 
 export const NO_COLUMNS = new Set();
 
 const kept = new Map();           // table -> Set of the keys of the columns this user hid
+const orders = new Map();         // table -> the keys of its columns in the order this user put them
 const saving = new Map();         // table -> its last save: the saves of one table go one after the other
 
-/** The columns this user hid (on signing in, before the first table is drawn). */
+/** The columns this user hid and the orders they chose (on signing in, before the first table is drawn). */
 export async function loadHiddenColumns() {
   kept.clear();
+  orders.clear();
   try {
     const res = await api.get('/api/columns');
     for (const name of Object.keys(res.tables || {})) kept.set(name, new Set(res.tables[name]));
+    for (const name of Object.keys(res.order || {})) orders.set(name, res.order[name].slice());
   } catch (e) { /* every column on screen; a change says what is wrong */ }
 }
 
-function save(name, keys) {
-  if (keys.size) kept.set(name, keys); else kept.delete(name);
-  const body = { table: name, hidden: [...keys] };
+/** The keys of a table's columns in this user's order (null: the sheet's own). */
+export function columnOrder(name) {
+  return orders.get(name) || null;
+}
+
+function post(name, body) {
   const next = (saving.get(name) || Promise.resolve()).then(() => api.post('/api/columns', body)).catch((err) => {
     if (err.status !== 401) toast('Sütun seçiminiz kaydedilemedi: ' + err.message, 'err', 6000);
   });
   saving.set(name, next);
+}
+
+function save(name, keys) {
+  if (keys.size) kept.set(name, keys); else kept.delete(name);
+  post(name, { table: name, hidden: [...keys] });
+}
+
+function saveOrder(name, keys) {
+  if (keys.length) orders.set(name, keys.slice()); else orders.delete(name);
+  post(name, { table: name, order: keys.slice() });
 }
 
 /** A caption as a column's key: without the marks that come and go (a sort arrow, the tick of "all picked"). */
@@ -79,10 +96,13 @@ export function markGaps(lines, hid, n) {
  * the panel's tools and the label in its header (shown while columns are hidden) go with it.
  */
 export class Columns {
-  constructor(name, draw) {
+  /** ``reorder``: the table puts its columns in the user's order again (a table that can be ordered gives one). */
+  constructor(name, draw, reorder) {
     this.name = name;
     this.onDraw = draw || null;
-    this.cols = [];                // [{j, key, name, sub}] left to right
+    this.onReorder = reorder || null;
+    this.orderable = !!reorder;
+    this.cols = [];                // [{j, key, name, sub}] left to right (as on screen)
     this.hid = NO_COLUMNS;         // the indexes (j) of the hidden ones
     this.ui = null;
   }
@@ -119,6 +139,73 @@ export class Columns {
     this.update();
   }
 
+  /** The columns in this order (keys; [] - the sheet's own order again): kept, and the table drawn in it. */
+  setOrder(keys) {
+    saveOrder(this.name, keys);
+    if (this.onReorder) this.onReorder();
+  }
+
+  /** Move a column one place to the left (-1) or right (+1) among those on screen. */
+  moveCol(j, step) {
+    const keys = this.cols.map((c) => c.key);
+    const i = this.cols.findIndex((c) => c.j === j);
+    if (i < 0) return;
+    let k = i + step;
+    while (k >= 0 && k < this.cols.length && this.hid.has(this.cols[k].j)) k += step;
+    if (k < 0 || k >= this.cols.length) return;
+    const [key] = keys.splice(i, 1);
+    keys.splice(k, 0, key);
+    this.setOrder(keys);
+  }
+
+  /** The columns as a list to put in order: drag a line, or its ↑ ↓; "Excel sırası" the sheet's own again. */
+  openOrder() {
+    const byKey = new Map(this.cols.map((c) => [c.key, c]));
+    const keys = this.cols.map((c) => c.key);
+    const m = modal({ title: 'Sütun sırası · yalnız sizin görünümünüz', width: 520 });
+    m.box.classList.add('colorder-dlg');
+    m.body.appendChild(h('p', { class: 'muted', style: { margin: '0 0 8px', fontSize: '12px' } },
+      'Sütunları sürükleyip bırakın ya da ↑ ↓ ile taşıyın. Sıra hesabınızla saklanır: bu tablo sayfasında, launchpad\'de, yan panelde '
+      + 've ayrı pencerede bu sırayla görünür.'));
+    const list = h('div', { class: 'colorder', id: 'colorder-list' });
+    let from = null;
+    const move = (i, j) => {
+      if (j < 0 || j >= keys.length || i === j) return;
+      const [k] = keys.splice(i, 1);
+      keys.splice(j, 0, k);
+      paint();
+    };
+    const paint = () => {
+      while (list.firstChild) list.removeChild(list.firstChild);
+      keys.forEach((key, i) => {
+        const c = byKey.get(key);
+        const up = h('button', { type: 'button', title: 'Yukarı (sola)' }, '↑');
+        const down = h('button', { type: 'button', title: 'Aşağı (sağa)' }, '↓');
+        up.dataset.act = 'up';
+        down.dataset.act = 'down';
+        up.addEventListener('click', () => move(i, i - 1));
+        down.addEventListener('click', () => move(i, i + 1));
+        const row = h('div', { class: 'co', draggable: 'true' }, h('span', { class: 'k' }, c.sub || ''), h('span', { class: 't', title: c.name }, c.name),
+          this.hid.has(c.j) ? h('span', { class: 'hid' }, 'gizli') : null, up, down);
+        row.dataset.key = key;
+        row.addEventListener('dragstart', (e) => { from = i; row.classList.add('dragging'); try { e.dataTransfer.setData('text/plain', key); } catch (x) { /* ignore */ } });
+        row.addEventListener('dragend', () => { from = null; row.classList.remove('dragging'); });
+        row.addEventListener('dragover', (e) => { if (from !== null) { e.preventDefault(); row.classList.add('over'); } });
+        row.addEventListener('dragleave', () => row.classList.remove('over'));
+        row.addEventListener('drop', (e) => { e.preventDefault(); row.classList.remove('over'); if (from !== null) move(from, i); });
+        list.appendChild(row);
+      });
+    };
+    paint();
+    m.body.appendChild(list);
+    const reset = h('button', { class: 'btn', type: 'button', id: 'colorder-reset', disabled: !orders.has(this.name),
+      onclick: () => { m.close(); this.setOrder([]); toast('Sütunlar Excel\'deki sırasında', 'ok', 2200); } }, 'Excel sırası');
+    m.foot.appendChild(reset);
+    m.foot.appendChild(h('span', { style: { flex: '1' } }));
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+    m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', id: 'colorder-save', onclick: () => { m.close(); this.setOrder(keys); } }, 'Kaydet'));
+  }
+
   update() {
     this.set(this.cols);
     this.draw();
@@ -135,6 +222,10 @@ export class Columns {
     if (!this.cols.length) items.push({ header: 'Tabloda şu an sütun yok' });
     items.push({ sep: true });
     items.push({ label: 'Tümünü göster', disabled: !kept.has(this.name), action: () => this.showAll() });
+    if (this.orderable && this.cols.length > 1) {
+      items.push({ label: 'Sütun sırası…', action: () => this.openOrder() });
+      items.push({ label: 'Excel sırasına dön', disabled: !orders.has(this.name), action: () => this.setOrder([]) });
+    }
     menu(x, y, items);
   }
 
@@ -142,10 +233,14 @@ export class Columns {
   menuItems(js, x, y) {
     const cols = this.cols.filter((c) => js.indexOf(c.j) >= 0 && !this.hid.has(c.j));
     const left = this.cols.length - this.hid.size;
+    const one = this.orderable && cols.length === 1 ? cols[0] : null;
     return [
       cols.length ? { label: cols.length === 1 ? 'Sütunu gizle: ' + short(cols[0].name) : 'Bu ' + cols.length + ' sütunu gizle',
         disabled: cols.length >= left, action: () => this.change(cols.map((c) => c.key), false) } : null,
       this.hid.size ? { label: 'Gizlediğiniz sütunları göster (' + this.hid.size + ')', action: () => this.showAll() } : null,
+      one ? { label: '← Sütunu sola taşı', action: () => this.moveCol(one.j, -1) } : null,
+      one ? { label: 'Sütunu sağa taşı →', action: () => this.moveCol(one.j, 1) } : null,
+      this.orderable && orders.has(this.name) ? { label: 'Excel sırasına dön', action: () => this.setOrder([]) } : null,
       { label: 'Sütunlar…', action: () => this.openMenu(x, y) },
     ];
   }

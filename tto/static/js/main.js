@@ -1,7 +1,7 @@
 // Application shell: sign-in (name and password), navigation, live refresh (server-sent events), status bar.
 import { api, session } from './api.js';
 import { settings, setLang, num, isoToTr } from './format.js';
-import { h, clear, toast, errorToast, debounce, menu, modal } from './ui.js';
+import { h, clear, toast, errorToast, debounce, menu, modal, inFormControl } from './ui.js';
 import { configureGrid, clearSelection, findCell, selectionText } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
@@ -27,10 +27,18 @@ import { AgendaPage } from './pages/agenda.js';
 import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
 import { openRecon, checkBeforeArchive } from './recon.js';
 import { quantPage, quantEvent } from './pages/quant.js';
+import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
+import { hub } from './boxes.js';
+import { Drawer } from './drawer.js';
+import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing, setLanding, pinToDrawer, addMenu } from './layout.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
-  online: true, booted: false, pending: 0, chatMissing: 0, behind: false, headerGen: 0, headerAs: null };
+  online: true, booted: false, pending: 0, chatMissing: 0, behind: false, headerGen: 0, headerAs: null, popKey: null };
+
+// A window of its own (``#/pop/<page>/<table>``, ``#/pop/launchpad/<name>``): a light shell - no menu, no header strip,
+// no alarms or desktop notifications (those are the main window's), the live stream shared with the other tabs.
+const POP = /^#\/?pop\//.test(window.location.hash || '');
 
 function store(key, value) {
   try {
@@ -65,6 +73,31 @@ const ctx = {
   openRecon: (date, to) => openRecon(ctx, date, to),
   /** Before the day's archive: the desk's chat trades not in the blotter, if any - true when it is to be downloaded. */
   checkArchive: (date, to) => checkBeforeArchive(ctx, date, to),
+  /** The title of the page (a launchpad names the one on screen). */
+  setTitle: (text) => {
+    $('page-title').textContent = text;
+    document.title = text + ' · TTO Masa';
+  },
+  /** A table pinned to the side drawer (which opens to show it). */
+  pinToDrawer: (src) => pinToDrawer(src).then(() => { if (drawer) drawer.setOpen(true); }, () => {}),
+  /** "+ Launchpad"'s menu for a table shown elsewhere (the drawer). */
+  addToLaunchpadMenu: (box) => {
+    const r = box.el.getBoundingClientRect();
+    addMenu(r.left + 20, r.top + 30, Object.assign({}, box.item, { id: undefined }), { pop: (src) => openPop(src) });
+  },
+  /** A table, or a launchpad, in a window of its own. */
+  popOut: (src) => openPop(src),
+  popLaunchpad: (name) => openWindow('#/pop/launchpad/' + encodeURIComponent(name), 'tto-pop-lp-' + name),
+  /** Another launchpad: its own address (back / forward, a bookmark). */
+  openLaunchpad: (name) => { window.location.hash = '#/launchpad/' + encodeURIComponent(name); },
+  /** "Elle değer" (on every page while the tab is open): what is on screen elsewhere follows. */
+  handMode: () => { try { return sessionStorage.getItem('tto.adhoc') === '1'; } catch (e) { return false; } },
+  handChanged: (on) => {
+    hub.setAdhoc(on);
+    if (drawer) drawer.hand(on);
+  },
+  /** In a window of its own, a table's page opens in the main window. */
+  gotoSource: POP ? (view, panel) => openInMain('#/' + view + (panel ? '?p=' + encodeURIComponent(panel) : '')) : null,
   /** How many account requests wait (the badge on "Kullanıcılar" in the menu). */
   setPending: (n) => {
     state.pending = n || 0;
@@ -125,7 +158,10 @@ async function showLogin(message) {
   session.role = null;
   events.stop();
   stopDesk();
+  dropKept();
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
+  if (drawer) drawer.stop();
+  clearLayout();
   $('app').classList.add('hidden');
   // the card is ready at once; what is typed into it while the server answers stays (a busy server answers late)
   setLoginMode('login');
@@ -227,17 +263,29 @@ async function enter(me) {
   $('user-name').textContent = me.display;
   $('user-av').textContent = (me.display.trim()[0] || '?').toLocaleUpperCase('tr');
   const hiddenColumns = loadHiddenColumns();          // the columns this user hid: in hand before a table is drawn
+  const own = loadLayout();                            // launchpads, the drawer, favourites, the landing page
   const [nav, status, users] = await Promise.all([api.get('/api/nav'), api.get('/api/status'), api.get('/api/users')]);
   await hiddenColumns;
+  await own;
   state.pages = nav.pages;
   for (const u of users.users) state.users[u.name] = u.display;
   applyStatus(status);
   state.gen = status.gen || 0;                         // (a generation heard later than this one: a change)
-  checkAlarms();                                     // (what fired before: not again)
+  if (!POP) checkAlarms();                           // (what fired before: not again)
   buildNav();
   events.start();
-  startDesk();
-  loadHeader().catch(() => {});
+  if (!POP) {
+    startDesk();
+    loadHeader().catch(() => {});
+    drawer.start();
+    paintFavs();
+    // opened without an address: the user's own landing page (a page, or one of their launchpads)
+    const land = landing();
+    if (land && !/^#\/?[^/?]/.test(window.location.hash || '')) {
+      const path = land.startsWith('launchpad/') ? 'launchpad/' + encodeURIComponent(land.slice(10)) : land;
+      history.replaceState(null, '', '#/' + path);
+    }
+  }
   route();
   if (me.role === 'admin' && state.pending) {
     toast(state.pending + ' hesap isteği onay bekliyor (Araçlar → Kullanıcılar)', '', 6000);
@@ -263,6 +311,12 @@ function buildNav() {
   // the blotter belongs right under the desk overview
   const masa = groups.get('Masa');
   if (masa) masa.sort((a, b) => (a.id === 'masa' ? -1 : b.id === 'masa' ? 1 : 0));
+  // the user's own launchpads come first
+  const own = h('div', { class: 'nav-group nav-own' });
+  const lp = h('a', { class: 'nav-item', href: '#/launchpad', title: 'Launchpad: kendi tablo sayfalarınız' }, h('span', { class: 'dot' }), h('span', { class: 'lbl' }, 'Launchpad'));
+  lp.dataset.page = 'launchpad';
+  own.appendChild(lp);
+  nav.appendChild(own);
   for (const [g, items] of groups) {
     const box = h('div', { class: 'nav-group' }, h('div', { class: 'gt' }, g));
     for (const p of items) {
@@ -278,6 +332,7 @@ function buildNav() {
 }
 
 function pageTitle(id) {
+  if (id === 'launchpad') return 'Launchpad';
   if (id === 'explorer') return 'Sayfa gezgini';
   if (id === 'users') return 'Kullanıcılar';
   if (id === 'backup') return 'Yedekleme';
@@ -285,32 +340,107 @@ function pageTitle(id) {
   return p ? p.title : id;
 }
 
-function route() {
-  // "#/ois" opens a page, "#/ois?p=B4" also brings that panel into view
+/** The address: "#/ois?p=B4" -> {parts: ['ois'], query}; "#/launchpad/Sabah" -> ['launchpad', 'Sabah'] (each part decoded:
+ *  a launchpad's name may hold a slash). */
+function parseHash() {
   const raw = (window.location.hash || '').replace(/^#\/?/, '');
   const cut = raw.indexOf('?');
-  let id = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
-  const panel = cut < 0 ? null : new URLSearchParams(raw.slice(cut + 1)).get('p');
+  const path = cut < 0 ? raw : raw.slice(0, cut);
+  const parts = path.split('/').map((x) => { try { return decodeURIComponent(x); } catch (e) { return x; } });
+  return { parts, query: new URLSearchParams(cut < 0 ? '' : raw.slice(cut + 1)) };
+}
+
+function route() {
+  if (POP) { routePop(); return; }
+  // "#/ois" opens a page, "#/ois?p=B4" also brings that panel into view; "#/launchpad/<name>" one of the user's launchpads
+  const { parts, query } = parseHash();
+  let id = parts[0] || '';
+  let sub = id === 'launchpad' ? parts.slice(1).join('/') || null : null;
+  const panel = query.get('p');
   const admin = session.role === 'admin';
-  const known = ((id === 'explorer' || id === 'users' || id === 'backup') && admin) || state.pages.some((p) => p.id === id);
-  if (!known) id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : (admin ? 'explorer' : 'masa'));
-  if (id !== state.pageId) openPage(id, panel);
+  const known = id === 'launchpad' || ((id === 'explorer' || id === 'users' || id === 'backup') && admin) || state.pages.some((p) => p.id === id);
+  if (!known) {
+    id = state.pages.some((p) => p.id === 'masa') ? 'masa' : (state.pages[0] ? state.pages[0].id : (admin ? 'explorer' : 'masa'));
+    sub = null;
+  }
+  if (id !== state.pageId) openPage(id, panel, sub);
+  else if (id === 'launchpad' && sub && state.page && state.page.select) state.page.select(sub);
   else if (panel && state.page && state.page.ready && state.page.focusPanel) state.page.focusPanel(panel);
 }
 
-async function openPage(id, panel) {
-  if (state.page) state.page.destroy();
+// ---------------------------------------------------------------------- the last pages opened, kept
+// A page of tables (a workbook page, the launchpad) is not destroyed when another is opened: the last KEEP stay as they
+// are - their tab, their search, their scroll - out of the document, and come back at once (brought up to date then).
+// The dashboard's own pages (blotter, broker chat, quant ...) are made again each time, as before.
+const KEEP = 4;
+const kept = new Map();                  // page id -> {page, host, scroll}; the oldest first
+
+function dropKept() {
+  for (const k of kept.values()) if (k.page !== state.page) k.page.destroy();
+  kept.clear();
+}
+
+/** The page on screen goes out of view: kept (out of the document, its scroll noted) or destroyed. */
+function leavePage() {
+  const page = state.page;
+  if (!page) return;
+  const k = kept.get(state.pageId);
+  if (k && k.page === page && page.ready) {
+    k.scroll = $('content').scrollTop;
+    k.host.remove();
+  } else {
+    if (k && k.page === page) kept.delete(state.pageId);
+    page.destroy();
+  }
+  state.page = null;
+}
+
+/** The pages opened lately, the latest first (Ctrl+K lists them; a reload of the tab keeps them). */
+const recent = (() => {
+  try { const v = JSON.parse(sessionStorage.getItem('tto.recent') || '[]'); return Array.isArray(v) ? v.slice(0, 8) : []; } catch (e) { return []; }
+})();
+function noteRecent(id) {
+  const i = recent.indexOf(id);
+  if (i >= 0) recent.splice(i, 1);
+  recent.unshift(id);
+  if (recent.length > 8) recent.length = 8;
+  try { sessionStorage.setItem('tto.recent', JSON.stringify(recent)); } catch (e) { /* storage unavailable */ }
+}
+
+async function openPage(id, panel, sub) {
+  leavePage();
   clearSelection();
   state.pageId = id;
   store('tto.page', id);
+  noteRecent(id);
   for (const a of document.querySelectorAll('#nav .nav-item')) a.classList.toggle('active', a.dataset.page === id);
   paintDeskNav();
+  paintFavs();
   $('page-title').textContent = pageTitle(id);
   document.title = pageTitle(id) + ' · TTO Masa';
-  const host = clear($('content'));
-  host.scrollTop = 0;
+  const content = clear($('content'));
+  const back = kept.get(id);
+  if (back && back.page.ready) {
+    // back in view as it was left: the tab, the search, the scroll; what changed meanwhile comes now
+    kept.delete(id);
+    kept.set(id, back);
+    content.appendChild(back.host);
+    content.scrollTop = back.scroll || 0;
+    state.page = back.page;
+    if (back.page.revive) back.page.revive(sub);
+    runRefresh();
+    if (panel && back.page.focusPanel) back.page.focusPanel(panel);
+    return;
+  }
+  if (back) { kept.delete(id); back.page.destroy(); }
+  content.scrollTop = 0;
+  // a page that is kept gets a host of its own (out of the document while another is on screen); the others draw
+  // into #content itself, as before
+  const keepable = id === 'launchpad' || !(state.pages.find((p) => p.id === id) || { custom: true }).custom;
+  const host = keepable ? content.appendChild(h('div', { class: 'pagehost' })) : content;
   let page;
-  if (id === 'blotter') page = new BlotterPage(host, ctx);
+  if (id === 'launchpad') page = new LaunchpadPage(host, ctx, { name: sub });
+  else if (id === 'blotter') page = new BlotterPage(host, ctx);
   else if (id === 'broker') page = new BrokerPage(host, ctx);
   else if (id === 'vol') page = new VolPage(host, ctx);
   else if (id === 'watch') page = new WatchPage(host, ctx);
@@ -329,17 +459,140 @@ async function openPage(id, panel) {
   else if (id === 'quant' || id.startsWith('quant-')) page = quantPage(id, host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
+  if (page.keepAlive && host !== content) {
+    kept.set(id, { page, host, scroll: 0 });
+    while (kept.size > KEEP) {
+      const [oldest, k] = kept.entries().next().value;
+      kept.delete(oldest);
+      if (k.page !== state.page) k.page.destroy();
+    }
+  }
   try {
     await page.load();
     page.ready = true;
     if (panel && state.page === page && page.focusPanel) page.focusPanel(panel);
   } catch (err) {
-    if (state.page !== page) return;
+    const k = kept.get(id);
+    if (k && k.page === page) kept.delete(id);
+    if (state.page !== page) { page.destroy(); return; }
     clear(host);
     const retry = h('button', { class: 'btn', type: 'button' }, 'Tekrar dene');
-    retry.addEventListener('click', () => { state.pageId = null; openPage(id); });
+    retry.addEventListener('click', () => { state.pageId = null; openPage(id, null, sub); });
     host.appendChild(h('div', { class: 'banner' }, 'Sayfa yüklenemedi: ' + err.message + ' ', retry));
   }
+}
+
+// ---------------------------------------------------------------------- a window of its own
+function openWindow(hash, name) {
+  const w = window.open('/' + hash, String(name).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80), 'popup=yes,width=980,height=680');
+  if (!w) toast('Tarayıcı ayrı pencereyi engelledi: bu adres için açılır pencerelere izin verin', 'err', 7000);
+  else w.focus();
+  return w;
+}
+
+/** A table (with its part, its name) in a window of its own: "#/pop/<page>/<table>?part={rows, cols, all, title}". */
+function openPop(src) {
+  const part = {};
+  if (src.rows && src.rows.length) part.rows = src.rows;
+  if (src.cols && src.cols.length) part.cols = src.cols;
+  if (src.all) part.all = true;
+  if (src.title) part.title = src.title;
+  const q = Object.keys(part).length ? '?part=' + encodeURIComponent(JSON.stringify(part)) : '';
+  return openWindow('#/pop/' + encodeURIComponent(src.view) + '/' + encodeURIComponent(src.panel) + q,
+    'tto-pop-' + src.view + '-' + src.panel + (q ? '-' + Date.now().toString(36) : ''));
+}
+
+/** From a window of its own: a page in the main window (the one that opened it, while it is there). */
+function openInMain(hash) {
+  const main = window.opener && !window.opener.closed ? window.opener : null;
+  if (main) {
+    try { main.location.hash = hash; main.focus(); return; } catch (e) { /* not reachable: a new tab */ }
+  }
+  window.open('/' + hash, '_blank');
+}
+
+function routePop() {
+  const key = window.location.hash;
+  if (state.page && state.popKey === key) return;
+  state.popKey = key;
+  if (state.page) { state.page.destroy(); state.page = null; }
+  const { parts, query } = parseHash();
+  const host = clear($('content'));
+  let page = null;
+  if (parts[1] === 'launchpad' && parts.length > 2) {
+    state.pageId = 'launchpad';
+    page = new LaunchpadPage(host, ctx, { pop: true, name: parts.slice(2).join('/') });
+  } else if (parts[1] && parts[2]) {
+    let part = {};
+    try { part = JSON.parse(query.get('part') || '{}') || {}; } catch (e) { part = {}; }
+    const item = { type: 'table', id: 'pop', view: parts[1], panel: parts[2], w: 12, h: 'auto' };
+    if (Array.isArray(part.rows) && part.rows.length) item.rows = part.rows;
+    if (Array.isArray(part.cols) && part.cols.length) item.cols = part.cols;
+    if (part.all) item.all = true;
+    if (typeof part.title === 'string' && part.title) item.title = part.title;
+    state.pageId = 'pop';
+    page = new PopPanelPage(host, ctx, item);
+  }
+  ctx.setTitle('TTO');
+  if (!page) {
+    host.appendChild(h('div', { class: 'banner' }, 'Bu pencerede gösterilecek bir tablo yok.'));
+    return;
+  }
+  state.page = page;
+  page.load().then(() => { page.ready = true; }).catch((err) => {
+    if (state.page !== page) return;
+    clear(host);
+    host.appendChild(h('div', { class: 'banner' }, 'Yüklenemedi: ' + err.message));
+  });
+}
+
+// ---------------------------------------------------------------------- favourite pages (★), the landing page
+function paintFavs() {
+  const box = $('favs');
+  if (!box) return;
+  clear(box);
+  const mine = favs().filter((id) => id === 'launchpad' || state.pages.some((p) => p.id === id)
+    || (session.role === 'admin' && (id === 'explorer' || id === 'users' || id === 'backup')));
+  for (const id of mine) {
+    const a = h('a', { class: 'fav' + (id === state.pageId ? ' on' : ''), href: '#/' + id, title: pageTitle(id) }, pageTitle(id));
+    a.dataset.page = id;
+    box.appendChild(a);
+  }
+  box.classList.toggle('hidden', !mine.length);
+  const star = $('btn-fav');
+  const on = !!state.pageId && favs().includes(state.pageId);
+  star.textContent = on ? '★' : '☆';
+  star.classList.toggle('on', on);
+  star.title = on ? 'Favorilerinizden çıkarın (üst şerit)' : 'Bu sayfayı üst şeritteki favorilerinize ekleyin';
+}
+
+/** "Açılış sayfası": the page (or launchpad) the dashboard opens on when no address is given. */
+function openLandingDialog() {
+  const m = modal({ title: 'Açılış sayfası', width: 440 });
+  const sel = h('select', { class: 'inp', id: 'landing-select', style: { width: '100%' } });
+  sel.appendChild(h('option', { value: '' }, 'Varsayılan (Masa)'));
+  const lps = launchpads();
+  if (lps.length) {
+    const g = h('optgroup', { label: 'Launchpad\'leriniz' });
+    for (const lp of lps) g.appendChild(h('option', { value: 'launchpad/' + lp.name }, lp.name));
+    sel.appendChild(g);
+  }
+  const g = h('optgroup', { label: 'Sayfalar' });
+  for (const p of state.pages) g.appendChild(h('option', { value: p.id }, p.title + (p.group ? ' · ' + p.group : '')));
+  sel.appendChild(g);
+  sel.value = landing();
+  if (sel.value !== landing()) sel.value = '';
+  m.body.appendChild(h('p', { class: 'muted', style: { margin: '0 0 10px' } }, 'Dashboard\'u adres yazmadan (yalnızca sunucunun adresiyle) açtığınızda '
+    + 'gelen sayfa. Hesabınızla saklanır: girdiğiniz her bilgisayarda aynı.'));
+  m.body.appendChild(sel);
+  m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+  m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', id: 'landing-save', onclick: () => {
+    const v = sel.value;
+    const label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+    m.close();
+    setLanding(v).then(() => toast(v ? 'Açılış sayfanız: ' + label : 'Açılış sayfası: Masa', 'ok'), () => {});
+  } }, 'Kaydet'));
+  sel.focus();
 }
 
 // ---------------------------------------------------------------------- live refresh
@@ -352,8 +605,11 @@ async function runRefresh() {
     do {
       state.dirty = false;
       const page = state.page;
-      const jobs = [loadHeader()];
+      const jobs = POP ? [] : [loadHeader()];
       if (page && page.ready) jobs.push(page.refresh());
+      // the boxes of the side drawer (and of a launchpad being opened): one request for all of them - a launchpad's
+      // or a pop-out's own refresh is that request (asked for once, not twice)
+      if (!(page && page.ready && page.usesHub)) jobs.push(hub.refresh());
       await Promise.all(jobs);
     } while (state.dirty);
   } catch (err) {
@@ -387,7 +643,7 @@ function onGen(gen) {
   if (typeof gen !== 'number' || gen === state.gen) return;
   state.gen = gen;
   runRefresh();
-  checkAlarms();
+  if (!POP) checkAlarms();                 // (a window of its own leaves alarms and notifications to the main one)
 }
 
 /** The stream is back (after the server or the network was gone): what changed meanwhile, once. */
@@ -416,9 +672,9 @@ const events = {
     this.chan = new BroadcastChannel('tto-events');
     this.chan.onmessage = (e) => {
       const m = e.data || {};
-      if (typeof m.gen === 'number') { onGen(m.gen); deskEvent(m.desk); quantEvent(m.quant); }
+      if (typeof m.gen === 'number') { onGen(m.gen); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); } }
       else if (m.online === false) setOnline(false);
-      else if (m.online === true) { deskReconnected(); onBack(); }
+      else if (m.online === true) { if (!POP) deskReconnected(); onBack(); }
     };
     this.timer = setInterval(() => this.tick(), 1000);
     window.addEventListener('pagehide', this.bye);
@@ -460,6 +716,7 @@ const events = {
       try { msg = JSON.parse(e.data); } catch (x) { return; }
       if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant });
       onGen(msg.gen);
+      if (POP) return;
       deskEvent(msg.desk);                 // the chat, the reports, the agenda: their own counters (no new generation)
       quantEvent(msg.quant);               // the quant signals: a new result, a signal alert
     };
@@ -469,7 +726,7 @@ const events = {
     };
     es.onopen = () => {
       if (this.chan) this.chan.postMessage({ online: true });
-      deskReconnected();                   // (its first counters: news of everything)
+      if (!POP) deskReconnected();         // (its first counters: news of everything)
       onBack();
     };
   },
@@ -664,9 +921,13 @@ function applyFlash(on) {
   b.title = on ? 'Değişen hücreler yanıp sönüyor – kapatmak için tıklayın' : 'Yanıp sönme kapalı – açmak için tıklayın';
 }
 
+let drawer = null;
+
 function boot() {
   if (state.booted) return;
   state.booted = true;
+  if (POP) $('app').classList.add('pop');
+  else drawer = new Drawer(ctx);
   setLang(store('tto.lang') || 'tr');
   applyLangButton();
   applyFlash(store('tto.flash') !== '0');
@@ -709,27 +970,54 @@ function boot() {
     applyLangButton();
     toast(settings.lang === 'en' ? 'Sayı biçimi: 1,234.56 (İngilizce Excel)' : 'Sayı biçimi: 1.234,56 (Türkçe Excel)', '', 2600);
     const id = state.pageId;
+    const sub = id === 'launchpad' && state.page && state.page.name ? state.page.name : null;
+    dropKept();                                     // (the pages kept were drawn in the other format)
+    if (POP) { state.popKey = null; route(); return; }
     state.pageId = null;
     state.headerGen = 0;                            // (another number format: the whole strip again)
     loadHeader().catch(() => {});
-    if (id) openPage(id);
+    if (id) openPage(id, null, sub);
   });
   $('btn-collapse').addEventListener('click', () => {
     const on = $('app').classList.toggle('nav-collapsed');
     store('tto.nav', on ? '1' : '0');
   });
   $('btn-ret').addEventListener('click', () => openRetEditor(ctx));
-  setupFind($('findbox'), () => state.pages || [], (page, panel) => ctx.goto(page, panel));
+  setupFind($('findbox'), () => state.pages || [], (page, panel) => ctx.goto(page, panel), {
+    recent: () => recent.filter((id) => id !== state.pageId).map((id) => ({ id, title: pageTitle(id) })),
+    add: (src, x, y) => addMenu(x, y, src, { pin: ctx.pinToDrawer, pop: ctx.popOut }),
+    pin: (src) => ctx.pinToDrawer(src),
+  });
   $('btn-scen').addEventListener('click', () => openScenarios(ctx));
   setupDesk({ page: () => state.page, pageId: () => state.pageId, where: () => ({ id: state.pageId, title: pageTitle(state.pageId) }) });
   $('btn-user').addEventListener('click', (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     menu(r.left, r.bottom + 4, [
       { header: session.display + (session.role === 'admin' ? ' · yönetici' : '') },
+      { label: 'Launchpad\'lerim', action: () => { window.location.hash = '#/launchpad'; } },
+      { label: 'Açılış sayfası…', action: () => openLandingDialog() },
       { label: 'Senaryolarım', action: () => openScenarios(ctx) },
       { label: 'Şifremi değiştir', action: () => openPasswordDialog() },
     ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } }] : [],
       [{ sep: true }, { label: 'Çıkış', action: () => signOut() }]));
+  });
+  $('btn-fav').addEventListener('click', () => {
+    if (!state.pageId || POP) return;
+    const id = state.pageId;
+    const on = !favs().includes(id);
+    toggleFav(id).then(() => toast(on ? '"' + pageTitle(id) + '" üst şeritteki favorilerinizde' : '"' + pageTitle(id) + '" favorilerden çıktı', 'ok', 2200), () => {});
+  });
+  onLayout(() => { if (!POP) paintFavs(); });
+  // Alt+← / Alt+→: the page before / after (the last ones opened come back at once, as they were left); Alt+Y: the drawer
+  document.addEventListener('keydown', (e) => {
+    if (!session.user || POP || !e.altKey || e.ctrlKey || e.metaKey || inFormControl(e.target)) return;      // (in a box of text: the browser's)
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (e.key === 'ArrowLeft') history.back(); else history.forward();
+    } else if ((e.key === 'y' || e.key === 'Y') && !e.shiftKey && drawer) {
+      e.preventDefault();
+      drawer.toggle();
+    }
   });
   window.addEventListener('hashchange', () => { if (session.user) route(); });
   // back in view: what changed meanwhile is asked for once
@@ -744,11 +1032,14 @@ function boot() {
 }
 
 // small debugging / testing surface
-// (a cell of a tab that is not open is found as well: the page opens its tab)
+// (a cell of a tab that is not open is found as well: the page opens its tab; the side drawer is looked at last - the
+// same cell may be on the page and in the drawer)
 function findCellAnywhere(ref) {
-  return findCell(ref) || (state.page && state.page.findCell ? state.page.findCell(ref) : null);
+  return findCell(ref, document, $('drawer')) || (state.page && state.page.findCell ? state.page.findCell(ref) : null)
+    || findCell(ref, $('drawer'));
 }
 
-window.tto = { findCell: findCellAnywhere, selectionText, state, events, refresh: () => runRefresh() };
+window.tto = { findCell: findCellAnywhere, selectionText, state, events, refresh: () => runRefresh(), hub, pop: POP,
+  kept: () => [...kept.keys()], drawer: () => drawer };
 
 boot();
