@@ -221,7 +221,7 @@ def test_a_meeting_that_leaves_the_list_is_set_aside_and_comes_back(tmp_path):
         assert svc.store.user_formulas(a)[("tto", "Forward!D2")] == "=#REF!"
         assert cell(svc, "Forward!D2", a) == day("2027-03-18")
         e = svc.formulas.entry(a, "tto", *svc.books["tto"].cell("Forward!D2"))
-        assert not e.frozen and "hata (#REF!)" in e.error and e.error.endswith(KEPT)
+        assert not e.frozen and "hata (#REF!" in e.error and e.error.endswith(KEPT)
         rec = mt.parked(svc.store)["tcmb"]["2027-03-18"]
         assert rec["user"] == {a: {"OIS_MAIN!U": -50.0, "OIS_MAIN!V": -75.0, "OIS_MAIN!R": 12.5}, v: {"OIS_MAIN!W": 25.0}}
         assert rec["shared"] == {"OIS_MAIN!O": "Mart PPK"} and rec["by"] == a

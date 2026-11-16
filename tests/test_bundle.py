@@ -306,9 +306,9 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
         assert not any(b["left_out"] for b in status["books"].values())
         pages = [p["id"] for p in json.loads(get("/api/nav")[1])["pages"]]
         # (the quant package's seventeen pages - intraday, curve fair value, options, the implied path, the WIRP, lead-lag, VİOP, Trend and Carry + momentum among them - and the desk corner's two)
-        assert len(pages) == 48 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar", "watch",
+        assert len(pages) == 49 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "broker", "vol", "dibslive", "kagitlar", "watch",
                                      "heat", "spreads", "quant", "quant-fx", "quant-intraday", "quant-curve", "quant-opt", "quant-path", "quant-wirp", "quant-lead",
-                                     "quant-viop", "quant-trend", "quant-sira", "social", "agenda"} <= set(pages)
+                                     "quant-viop", "quant-trend", "quant-sira", "quant-ml", "social", "agenda"} <= set(pages)
         page = json.loads(get("/api/view/ois")[1])
         assert len(page["panels"]) > 20 and not any(p.get("error") for p in page["panels"])
         assert len(json.loads(get("/api/calendar")[1])["meetings"]) == 95

@@ -2758,7 +2758,7 @@ async function shot(page, name) {
       }) }));
     const siraSets = ((siraApi.json || {}).sira || {}).sets || [];
     check('Carry + momentum: the fourth tab of Sinyaller; each set\'s basket card and ranking table under its read line, the backtest per set',
-      sira.tabs.join(',') === 'Sinyaller,Gün içi,Model,Carry + momentum' && sira.on.join() === 'quant-sira' && siraApi.status === 200 && siraSets.length === 6
+      sira.tabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi' && sira.on.join() === 'quant-sira' && siraApi.status === 200 && siraSets.length === 6
       && SIRA_SETS.every((id) => sira.panels.some((p) => p.id === id && p.read.length >= 40 && p.under && p.card && p.table))
       && sira.panels.some((p) => p.id === 'quant-sira-backtest' && p.read.length >= 40 && p.under)
       && siraSets.every((s) => s.ok || (s.why && sira.panels.some((p) => p.id === 'quant-sira-' + s.id && p.why === s.why))), { sira, sets: siraSets.map((s) => [s.id, s.ok, s.why]) });
@@ -2801,6 +2801,49 @@ async function shot(page, name) {
     await open(page, 'quant-intraday');
     await page.waitForSelector('#quant-intraday-bars', { timeout: 30000 });
     check('Gün İçi says replay mode has no bars', /Kayıtlı veri modunda gün içi bar yok/.test(await page.textContent('#quant-intraday-bars')));
+    // ------------------------------------------------------------------ Makine öğrenmesi (quantml.py): a tab of Sinyaller
+    console.log('quant ml');
+    await open(page, 'quant-ml');
+    await page.waitForSelector('#quant-ml-table table.grid', { timeout: 60000 });
+    const mlApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/ml');
+    const mlTab = (mlApi.json || {}).ml || {};
+    const mlRows = mlTab.rows || [];
+    const mlPage = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent), on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
+      lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page), rows: document.querySelectorAll('#quant-ml-table table.grid tr:not(.hd)').length,
+      feats: document.querySelectorAll('#quant-ml-features table.grid tr:not(.hd)').length,
+      read: ['quant-ml-signals', 'quant-ml-table', 'quant-ml-features'].map((id) => {
+        const p = document.getElementById(id);
+        const r = p && p.querySelector(':scope > .qread'), n = p && p.querySelector(':scope > .qnote');
+        return { id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER',
+          method: n && n.classList.contains('qmethod') && n.textContent ? getComputedStyle(n, '::before').content : null };
+      }) }));
+    check('Makine öğrenmesi is a tab of Sinyaller: every line of the family in its table, each table read in the desk\'s words under its title',
+      mlApi.status === 200 && mlApi.json.ready && mlPage.tabs[0] === 'Sinyaller' && mlPage.tabs.includes('Makine öğrenmesi') && mlPage.on.join() === 'quant-ml'
+      && mlPage.lit.join() === 'quant.sinyal' && mlRows.length >= 30 && mlPage.rows === mlRows.length
+      && mlPage.read.every((r) => r.read.length >= 40 && r.under) && mlPage.read.find((r) => r.id === 'quant-ml-table').method === '"Yöntem: "',
+      { tabs: mlPage.tabs, rows: mlRows.length, shown: mlPage.rows, read: mlPage.read });
+    // the recorded month is far too short for a monthly walk-forward: no line prints and each instrument says why
+    const mlSigs = ((await api(page, 'ayşe yilmaz', 'GET', '/api/quant/signals?family=ml')).json || {}).signals || [];
+    const mlText = await page.textContent('#quant-ml-table');
+    check('... on the recorded month no ML line prints: every instrument says why ("geçmiş kısa": its closes and the least it needs), the list says so',
+      mlSigs.length === 0 && mlRows.every((r) => !r.prints && r.why) && mlRows.some((r) => /^geçmiş kısa \(\d+ kapanış; en az \d+\)$/.test(r.why))
+      && /geçmiş kısa/.test(mlText) && /Şu an basılan satır yok/.test(await page.textContent('#quant-ml-signals')) && mlPage.feats === 0,
+      mlRows.slice(0, 6).map((r) => r.key + ': ' + r.why));
+    // a line as the server writes it (tests/test_quantml.py makes it from synthetic data): the list's İşlem is the plan's line
+    const mlLine = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const s = { id: 'ml:FX:AUDUSD', family: 'ml', family_label: 'Makine öğrenmesi', asset: 'FX', expression: 'AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)',
+        z: 2.98, entry_z: 2, score_name: 'z(p)', strength: 'Orta', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2.98, regime: 1, hl: 1, carry: 1 }, composite: 2.98,
+        hold: 5, horizon_unit: 'gün', bt: null, unit: '', digits: 5, entry: 0.63345, target: 0.63549, stop: 0.62282, direction: 1, pnl_unit: '%', exp_pnl: 0.32,
+        group: 'G10 spot', tier: null, tag: '', gated: '' };
+      const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
+      const row = q.signalRows([s], { rank: true, group: true })[0];
+      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t, z: row[head.indexOf('z')].t };
+    });
+    check('... and an ML line in the list: family "Makine öğrenmesi", the trade "AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)", its group',
+      mlLine.family === 'Makine öğrenmesi' && mlLine.trade === 'AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)' && mlLine.group === 'G10 spot' && mlLine.z === '+2,98', mlLine);
+    await shot(page, 'quant-ml');
     // curve fair value: the NSS fits of the OIS quotes and of the DİBS RV list's fixed-coupon bonds and bills (today's
     // quotes of the workbook; the recorded data has no DİBS history, so no z yet)
     await open(page, 'quant-curve');
@@ -2959,7 +3002,7 @@ async function shot(page, name) {
     }));
     const trendTabs = await page.evaluate(() => [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent));
     check('Trend: a tab of Sinyaller; its table lists every instrument of the universe (the recorded month is too short for a line: each says why), each table\'s read line under its title',
-      trendApi.status === 200 && trRows.length > 0 && trendShown === trRows.length && trendTabs.join(',') === 'Sinyaller,Gün içi,Model,Trend'
+      trendApi.status === 200 && trRows.length > 0 && trendShown === trRows.length && trendTabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi'
       && trRows.every((r) => r.sid || /^geçmiş kısa: \d+ gün \(en az 63\)$|^seviye oynamıyor/.test(r.why))
       && ['quant-trend-table', 'quant-trend-chart', 'quant-trend-buckets', 'quant-trend-groups'].every((id) => trendRead.some((p) => p.id === id && p.read.length >= 40 && p.under)),
     { rows: trRows.length, shown: trendShown, tabs: trendTabs, read: trendRead.map((p) => p.id + ':' + p.read.length), first: trRows[0] });
@@ -3631,7 +3674,7 @@ async function shot(page, name) {
       const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
       return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
     });
-    check('the quant menu: four entries - Sinyaller (5 tabs: Trend and Carry + momentum among them), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:5","Faiz:8","FX:3","VİOP:0"]', quantMenu);
+    check('the quant menu: four entries - Sinyaller (6 tabs: Trend, Carry + momentum and Makine öğrenmesi among them), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:6","Faiz:8","FX:3","VİOP:0"]', quantMenu);
     await open(page, 'quant-regime');                                       // an address of before
     const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));

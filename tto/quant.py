@@ -44,6 +44,7 @@ from . import quantfam as qf
 from . import quantintraday as qi
 from . import quantopt as qopt
 from . import quantlead as ql
+from . import quantml as qml                      # Makine öğrenmesi: the family on the universe (quantuniv) and its page
 from . import quantuniv as qu
 from . import quantsira as qs                    # Carry + momentum (on the universe; registers itself)
 from . import quantviop as qv
@@ -119,6 +120,7 @@ PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant
 PAGES += qv.PAGES                                                                                          # quantviop.py
 PAGES += qtr.PAGES                                                                                         # quanttrend.py
 PAGES += qs.PAGES                                                                                          # quantsira.py
+PAGES += qml.PAGES                                                                                         # quantml.py
 #: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
 #: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
 MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"),
@@ -128,6 +130,8 @@ MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday"
                                 ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
         ("quant.fx", "FX", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))),
         ("quant-viop", "VİOP", (("quant-viop", "VİOP"),)))
+# Makine öğrenmesi (quantml.py): a tab of Sinyaller
+MENU = tuple((mid, name, tabs + ((qml.TAB,) if mid == "quant.sinyal" else ())) for mid, name, tabs in MENU)
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -1327,6 +1331,8 @@ class Quant(object):
             return qtr.view(self, what, base, v, fit)
         if what in qs.VIEWS:                                # Carry + momentum (quantsira.py)
             return qs.view(self, what, base, v, fit)
+        if what in qml.VIEWS:                               # Makine öğrenmesi (quantml.py)
+            return qml.view(self, what, base, v, fit)
         if what == "signals":
             # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones; ``group`` one group
             fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""
