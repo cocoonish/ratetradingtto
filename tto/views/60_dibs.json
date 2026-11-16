@@ -183,6 +183,23 @@
       "ask": "AE"
      }
     ]
+   },
+   "trade": {
+    "first": 5,
+    "last": 54,
+    "isin_col": "A",
+    "yield_price": {
+     "bid": "K",
+     "ask": "L"
+    },
+    "cells": {
+     "K": "price bid",
+     "L": "price ask",
+     "M": "price",
+     "O": "price",
+     "U": "yield bid",
+     "V": "yield ask"
+    }
    }
   },
   {

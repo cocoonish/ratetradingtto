@@ -639,6 +639,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def delete_trade(request: Request):
         return ok(await call(svc().delete_trade, _user(request), int(request.path_params["trade_id"])))
 
+    @handler
+    async def trade_prefill(request: Request):
+        # a price of a page right-clicked ("İşlem gir"): the trade Günlük İşlemler's form is filled with (nothing saved)
+        return ok(await call(svc().trade_prefill, _user(request), await _body(request), _lang(request)))
+
     # ------------------------------------------------------------------ history: closes, meeting pricing, calendar
     def _int(request: Request, name: str, default: Optional[int] = None) -> Optional[int]:
         raw = request.query_params.get(name)
@@ -1031,6 +1036,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/quote/bond", quote_bond, methods=["POST"]),
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
+        Route("/api/trade/prefill", trade_prefill, methods=["POST"]),
         Route("/api/history/status", history_status),
         Route("/api/history/sync", history_sync, methods=["POST"]),
         Route("/api/history/settings", history_settings, methods=["POST"]),

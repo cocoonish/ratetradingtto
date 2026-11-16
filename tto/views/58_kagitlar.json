@@ -48,6 +48,7 @@
     "catalog": false,
     "title": "Tüm Kâğıtlar'a kâğıt ekle (ISIN)"
    },
+   "trade": {"first": 6, "last": 165, "isin_col": "A", "cells": {"I": "price bid", "J": "price ask", "K": "price"}},
    "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar, ✕ kâğıdı listeden çıkarır. + ISIN ekle: kâğıdın türü Bloomberg'den bulunur, kendi grubuna girer. Sağdaki sütunlar bugünün Broker Chat tahtasıdır. RV sütunları DİBS RV sayfasından gelir: sinyal eşiği ve fiyat tipi üstteki satırda, kâğıt bazındaki girdiler (bilinen kupon, elle temiz fiyat) DİBS RV sayfasındaki tabloda."
   },
   {

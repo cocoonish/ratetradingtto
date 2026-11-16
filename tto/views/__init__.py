@@ -21,6 +21,25 @@
   the Forward page)
 * ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
   anyone else's menu, search or shortcuts, and refused to them
+
+A table's prices as trades (``"trade"`` on a table panel; :mod:`tto.tradehint`): a right click on a price offers
+"İşlem gir", which opens Günlük İşlemler's form filled - the instrument, the dates, the price clicked and the side - and
+saves nothing.  The amount and the counterparty are the user's to type.
+
+* ``"cells"``  the price cells: ``{"H": "sp bid", "F173": "fwd"}`` - a column (its prices in the rows ``"first"`` to
+  ``"last"``, the sheet's row numbers) or one cell, and what it holds: ``"<what>[ bid|ask]"``.  ``what``:
+  ``sp`` / ``fwd`` / ``try`` (an FX forward priced by swap points / the outright / the TRY rate), ``ret`` (a forward on
+  the RET curve: RET bid / mid / ask by the side), ``ois`` (an OIS level), ``price`` / ``yield`` (a bond; a yield is
+  dealt at the same side's price of its row, ``"yield_price": {"bid": "K", "ask": "L"}``), ``none`` (a price with no form
+  in Günlük İşlemler: "İşlem gir" greyed, saying ``"why"``).  The side is the desk's as it quotes: at its bid it buys
+  (the currency forward, the bond; an OIS rate: PAY), at its ask it sells; no side (a mid): the user chooses.
+* the instrument is read from the clicked row's own cells, never from its place (rows move: the PPK calendar, the
+  VİOP roll, the bond lists).  A forward: ``"pair"`` and its value date - ``"date": "B45"`` (one cell for the table,
+  ``"MASA!E60"`` on another sheet), ``"date_col": "B"`` (each row's date) or ``"tenor_col": "V"`` (each row's tenor,
+  dated from the pair's spot).  An OIS level: ``"strategy"`` ``"outright"`` with ``"tenor_col"``, or ``"mpc"`` with
+  ``"start_col"`` / ``"end_col"`` (a meeting swap's two days).  A bond: ``"isin_col"``.
+* ``"label"`` / ``"alt"`` / ``"alt_when"`` / ``"bid"`` / ``"ask"`` (a forward table): the "İşlem gir" button in the table's
+  header as well - a row and a side picked in a dialog, its swap points filled.
 """
 from __future__ import annotations
 

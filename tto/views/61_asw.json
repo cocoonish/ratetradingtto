@@ -132,6 +132,14 @@
     "list": "B7:B56",
     "catalog": true,
     "title": "DİBS ASW listesine kâğıt ekle"
+   },
+   "trade": {
+    "first": 7,
+    "last": 56,
+    "isin_col": "B",
+    "cells": {
+     "L": "price"
+    }
    }
   },
   {
