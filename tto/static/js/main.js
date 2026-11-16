@@ -395,13 +395,16 @@ function leavePage() {
   state.page = null;
 }
 
-/** The pages opened lately, the latest first (Ctrl+K lists them). */
-const recent = [];
+/** The pages opened lately, the latest first (Ctrl+K lists them; a reload of the tab keeps them). */
+const recent = (() => {
+  try { const v = JSON.parse(sessionStorage.getItem('tto.recent') || '[]'); return Array.isArray(v) ? v.slice(0, 8) : []; } catch (e) { return []; }
+})();
 function noteRecent(id) {
   const i = recent.indexOf(id);
   if (i >= 0) recent.splice(i, 1);
   recent.unshift(id);
   if (recent.length > 8) recent.length = 8;
+  try { sessionStorage.setItem('tto.recent', JSON.stringify(recent)); } catch (e) { /* storage unavailable */ }
 }
 
 async function openPage(id, panel, sub) {

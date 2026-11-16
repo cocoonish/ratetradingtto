@@ -295,6 +295,8 @@ def test_the_layout_and_the_column_order_survive_a_restart(tmp_path):
 # ---------------------------------------------------------------------------------------------- over HTTP
 def test_over_http(service):
     client = TestClient(create_app(service=service))                          # (no "with": the shared service stays up)
+    for path in ("/static/js/layout.js", "/static/js/boxes.js", "/static/js/drawer.js", "/static/js/pages/launchpad.js"):
+        assert client.get(path).status_code == 200, path
     h = auth(service, "Lp Zeynep")
     r = client.post("/api/panels", json={"items": [{"view": "forward", "panel": "B1"}, {"view": "motor", "panel": "B1"}]}, headers=h)
     assert r.status_code == 200
