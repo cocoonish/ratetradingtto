@@ -728,6 +728,7 @@ export class BlotterPage {
     if (!hasLevel) pl.level = '0';
     const ticket = (o.ticket = (o.ticket || 0) + 1);
     if (!pl.side) {                       // (a price filled without its side: the user chooses it first)
+      clear(o.marketHint);                // (the last quote's market was another trade's)
       clear(o.quote);
       o.quote.appendChild(h('div', { class: 'muted' }, 'Yönü seçin (' + SIDES[o.strategy].map((x) => x[1]).join(' / ') + '): bacaklar ve maliyet yöne göre hesaplanır.'));
       return;
