@@ -309,8 +309,10 @@ export class LaunchpadPage {
     lp.name = v;
     const parts = { launchpads: all };
     if (nameKey(landing()) === nameKey('launchpad/' + name)) parts.landing = 'launchpad/' + v;
+    const shown = nameKey(this.name) === nameKey(name);
+    if (shown) this.name = v;                     // (the one on screen keeps its place under its new name)
     try { await saveLayout(parts); } catch (e) { return; }
-    if (this.name === name) this.open(v);
+    if (shown) this.open(v);                      // (and its address follows)
   }
 
   async remove(name) {
@@ -321,11 +323,13 @@ export class LaunchpadPage {
     if (!ok) return;
     const parts = { launchpads: launchpads().filter((x) => x.name !== name) };
     if (nameKey(landing()) === nameKey('launchpad/' + name)) parts.landing = '';
+    const shown = nameKey(this.name) === nameKey(name);
     try { await saveLayout(parts); } catch (e) { return; }
-    if (this.name === name) {
+    if (shown) {
       const next = launchpads()[0];
       this.name = next ? next.name : null;
-      if (next) this.open(next.name); else this.sync();
+      if (next) this.open(next.name);
+      else { this.sync(); if (this.ctx.openLaunchpad) history.replaceState(null, '', '#/launchpad'); }
     }
     toast('"' + name + '" silindi', 'ok');
   }
