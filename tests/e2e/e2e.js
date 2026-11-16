@@ -2707,9 +2707,213 @@ async function shot(page, name) {
       missing.join('|') === 'Erişim yok|Bu tablo artık yok', missing);
     await ctxE.close();
 
+    // ------------------------------------------------------------------ the boxes of the dashboard's own pages
+    console.log('page boxes');
+    const KINDS = ['quant-signals', 'viop-levels', 'viop-contracts', 'broker-board', 'watch-list', 'wirp', 'fx-summary'];
+    await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { launchpads: (await layoutOf('ayşe yilmaz')).launchpads.concat([{ name: 'Kutular',
+      items: KINDS.map((type) => ({ type, w: type === 'quant-signals' || type === 'broker-board' ? 12 : 6 })) }]) });
+    await page.evaluate(() => { window.location.hash = '#/launchpad/Kutular'; });
+    await page.waitForFunction(() => window.tto.state.pageId === 'launchpad' && window.tto.state.page && window.tto.state.page.ready
+      && window.tto.state.page.name === 'Kutular', null, { timeout: 60000 });
+    await page.waitForFunction((n) => { const b = [...document.querySelectorAll('#lp-grid .lp-item')]; return b.length === n && b.every((x) => x.dataset.version); },
+      KINDS.length, { timeout: 90000 });
+    const boxesNow = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#lp-grid .lp-item')].map((el) => [el.dataset.type, {
+      v: Number(el.dataset.version), title: el.querySelector('h2').textContent, src: el.querySelector('.lp-src').textContent, text: el.querySelector('.body').textContent,
+      rows: el.querySelectorAll('.body table.grid tr:not(.hd)').length, plain: el.querySelectorAll('.body table.plain tr').length }])));
+    const bx = await boxesNow();
+    const boardNow = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker?part=board')).json;
+    const itemsNow = (await api(page, 'ayşe yilmaz', 'GET', '/api/watch?part=items')).json;
+    const wirpNow = (await api(page, 'ayşe yilmaz', 'GET', '/api/quant/box?of=wirp')).json;
+    check('page boxes: the seven kinds on a launchpad, each drawn from a light part of its page - VİOP\'s twelve contracts and the front one\'s levels, '
+      + 'the board\'s instruments, the watch list, TCMB\'s meetings, the live signals, the pair summary',
+      bx['viop-contracts'].rows === 12 && /^Emir seviyeleri · Kas26 · alış 33,83 \/ satış 33,58.* · ön vade$/.test(bx['viop-levels'].title)
+      && /Seviye yok: oynaklık için geçmiş yok/.test(bx['viop-levels'].text) && bx['broker-board'].rows === boardNow.board.length && boardNow.board.length >= 5
+      && !('rows' in boardNow) && bx['watch-list'].plain === itemsNow.items.length + 1 && itemsNow.items.length >= 1
+      && bx.wirp.rows === wirpNow.banks.try.rows.length && wirpNow.banks.try.rows.length >= 3 && !('matrix' in wirpNow.banks.try.rows[0])
+      && (bx['quant-signals'].rows > 0 || /eşiği geçen sinyal yok/.test(bx['quant-signals'].text))
+      && (bx['fx-summary'].rows > 0 || /tarihçesi yok/.test(bx['fx-summary'].text))
+      && bx.wirp.src === 'Quant › TCMB WIRP' && bx['watch-list'].src === 'İzleme · Alarmlar', bx);
+    // each keeps up by itself: the quant ones when the results' version moves, the board and the watch list with the generation
+    const boxAsks = [];
+    const noteBoxAsk = (r) => { if (/\/api\/(quant\/box|broker\?|watch\?)/.test(r.url())) boxAsks.push(r.url().replace(BASE, '')); };
+    page.on('request', noteBoxAsk);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/quant/recompute', {});
+    await api(page, 'ayşe yilmaz', 'POST', '/api/broker', { text: '8y ois 32.10/32.40', source: 'ICAP' });
+    const added = await api(page, 'ayşe yilmaz', 'POST', '/api/watch/add', { subject: { kind: 'expr', text: '[OIS 9Y] - [OIS 8Y]' }, label: 'Kutu 9s8s' });
+    await page.waitForFunction((before) => {
+      const v = (t) => Number((document.querySelector('#lp-grid .lp-item[data-type="' + t + '"]') || { dataset: {} }).dataset.version);
+      const text = (t) => (document.querySelector('#lp-grid .lp-item[data-type="' + t + '"] .body') || {}).textContent || '';
+      return ['quant-signals', 'viop-levels', 'viop-contracts', 'wirp', 'fx-summary'].every((t) => v(t) > before[t].v)
+        && /32,10/.test(text('broker-board')) && /Kutu 9s8s/.test(text('watch-list'));
+    }, bx, { timeout: 60000 }).catch(() => null);
+    page.off('request', noteBoxAsk);
+    const bx2 = await boxesNow();
+    check('... and refreshes: a new result (the version) brings the quant boxes again - VİOP\'s two in one request -, a chat line the board, an item the watch list',
+      ['quant-signals', 'viop-levels', 'viop-contracts', 'wirp', 'fx-summary'].every((t) => bx2[t].v > bx[t].v) && /32,10/.test(bx2['broker-board'].text)
+      && /Kutu 9s8s/.test(bx2['watch-list'].text) && boxAsks.filter((u) => u.includes('of=viop')).length < boxAsks.filter((u) => u.includes('/api/quant/box')).length,
+    { v: Object.fromEntries(Object.entries(bx2).map(([k, x]) => [k, [bx[k].v, x.v]])), asks: boxAsks.slice(0, 12) });
+    if (added.json && added.json.item) await api(page, 'ayşe yilmaz', 'POST', '/api/watch/remove', { id: added.json.item.id });
+    await shot(page, '43-page-boxes');
+    // a click on a signal opens its card over the box - the Sinyaller page's card, without the page's element ids - and
+    // "Sinyaller sayfasında aç" there (the recorded month has no signal: one is served to the box and to the card here)
+    const FAKE = { id: 'pca:OIS:2Y', family: 'pca', family_label: 'PCA kalıntısı', asset: 'TRY OIS', expression: 'Receive 2Y OIS (kutu)', instrument: '2Y OIS',
+      direction: -1, unit: 'bp', digits: 1, entry: 3, target: 0, stop: 3.5, pnl_unit: 'bp', exp_pnl: 5.08, rr: 6, reward: 3, risk: 0.5, carry_week: 1, z: 2.6,
+      entry_z: 2, strength: 'Güçlü', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2.6, regime: 1, hl: 1, carry: 1 }, composite: 2.6, hold: 13,
+      horizon_unit: 'gün', bt: null, trade_tr: 'sabit faiz alınan (receive): 2Y OIS', plain: 'Kutudaki sinyalin düz anlatımı.',
+      money: { ccy: 'TL', per_bp: 40000, dv01_usd: 1000, total: 203200, carry: 103200, move: 100000, target: 120000, stop: -20000,
+        bp: { total: 5.08, carry: 2.58, move: 2.5, target: 3, stop: -0.5 } } };
+    const serve = (body) => (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    const signalsBox = (u) => u.pathname === '/api/quant/box' && u.searchParams.get('of') === 'signals';
+    const signalCard = (u) => u.pathname === '/api/quant/signal';
+    await page.route(signalsBox, serve({ of: 'signals', ready: true, version: 9999, entry_z: 2, signals: [FAKE], families: [], assets: [] }));
+    await page.route(signalCard, serve({ monitor: { name: '2Y OIS' }, signal: FAKE, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null }));
+    await page.evaluate(() => document.querySelector('#lp-grid .lp-item[data-type="quant-signals"]').__box.refreshOwn(true));
+    await page.waitForSelector('#lp-grid .lp-item[data-type="quant-signals"] table.grid', { timeout: 15000 });
+    await page.locator('#lp-grid .lp-item[data-type="quant-signals"] table.grid tr:not(.hd) td').nth(3).click();
+    await page.waitForSelector('.modal.qcard .qsentence', { timeout: 15000 });
+    const cardOver = await page.evaluate(() => ({ title: document.querySelector('.modal.qcard header h2').textContent, plain: document.querySelector('.modal.qcard .qsentence').textContent,
+      ids: document.querySelectorAll('[id^="quant-sig-"]').length }));
+    await page.click('.modal.qcard .mfoot button:not(.primary)');
+    await page.waitForFunction(() => window.tto.state.pageId === 'quant' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 30000 });
+    await page.waitForFunction(() => /Kutudaki sinyalin/.test((document.getElementById('quant-sig-plain') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => null);
+    const cardOnPage = await page.evaluate(() => (document.getElementById('quant-sig-plain') || {}).textContent || '');
+    await page.unroute(signalsBox);
+    await page.unroute(signalCard);
+    check('a signal clicked in the box: its card over the box (the sentence; no element id of the page\'s card), "Sinyaller sayfasında aç" on the page',
+      cardOver.title === 'Receive 2Y OIS (kutu)' && cardOver.plain === FAKE.plain && cardOver.ids === 0 && cardOnPage === FAKE.plain, { cardOver, cardOnPage });
+    await page.evaluate(() => { window.location.hash = '#/launchpad/Kutular'; });
+    await page.waitForFunction(() => window.tto.state.pageId === 'launchpad' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 });
+    // an option of a box (the levels' contract): kept with the item, the same answer drawn again
+    await page.click('#lp-grid .lp-item[data-type="viop-levels"] button[data-action="item-menu"]');
+    await page.click('.menu >> text=Ara26 · A1Z6 Curncy');
+    await page.waitForFunction(() => /^Emir seviyeleri · Ara26/.test(document.querySelector('#lp-grid .lp-item[data-type="viop-levels"] h2').textContent), null, { timeout: 10000 });
+    const levelsItem = (l) => (l.launchpads.find((x) => x.name === 'Kutular') || { items: [] }).items.find((x) => x.type === 'viop-levels') || {};
+    check('a box\'s own option (VİOP levels: Ara26 instead of the front one) is kept with the item',
+      levelsItem(await savedLayout((l) => levelsItem(l).contract === 'A1Z6 Curncy')).contract === 'A1Z6 Curncy');
+    // on its own page a box's panel has a table's controls: "+ Launchpad" → the side drawer
+    await open(page, 'quant-viop');
+    await page.waitForSelector('#quant-viop-contracts table.grid', { timeout: 30000 });
+    await page.hover('#quant-viop-contracts');
+    await page.click('#quant-viop-contracts .tools button[data-action="launchpad"]');
+    await page.click('.menu >> text=Yan panele sabitle');
+    await page.waitForSelector('#drawer:not(.hidden) .lp-item[data-type="viop-contracts"] table.grid', { timeout: 30000 });
+    const pinnedV = await page.evaluate(() => Number(document.querySelector('#drawer .lp-item[data-type="viop-contracts"]').dataset.version));
+    const viopIds = await page.evaluate(() => [...document.querySelectorAll('[id^="quant-viop"]')].map((el) => el.id).filter((id, i, all) => all.indexOf(id) !== i));
+    await api(page, 'ayşe yilmaz', 'POST', '/api/quant/recompute', {});
+    await page.waitForFunction((v) => Number((document.querySelector('#drawer .lp-item[data-type="viop-contracts"]') || { dataset: {} }).dataset.version) > v,
+      pinnedV, { timeout: 30000 }).catch(() => null);
+    const drawerBox = (await layoutOf('ayşe yilmaz')).drawer.find((x) => x.type === 'viop-contracts');
+    check('"+ Launchpad" on the page\'s own panel → "Yan panele sabitle": the box beside the page, live, and no element id twice',
+      !!drawerBox && drawerBox.w === 12 && viopIds.length === 0
+      && await page.evaluate((v) => Number(document.querySelector('#drawer .lp-item[data-type="viop-contracts"]').dataset.version) > v, pinnedV), { drawerBox, viopIds });
+    await page.click('#drawer .lp-item[data-type="viop-contracts"] button[data-action="unpin"]');
+    await page.waitForFunction(() => !document.querySelector('#drawer .lp-item'));
+    await page.click('#dr-close');
+    // ... and ⧉: the Sinyaller page's list in a window of its own, keeping up with the results
+    await open(page, 'quant');
+    await page.waitForSelector('#quant-signals', { timeout: 30000 });
+    await page.hover('#quant-signals');
+    const [popBox] = await Promise.all([ctxA.waitForEvent('page'), page.click('#quant-signals .tools button[data-action="popout"]')]);
+    popBox.on('pageerror', (e) => errors.push('pageerror(pop box): ' + e.message));
+    const popBoxAsked = [];
+    popBox.on('request', (r) => { if (r.url().includes('/api/')) popBoxAsked.push(r.url().replace(BASE, '')); });
+    await popBox.waitForSelector('.lp-item[data-type="quant-signals"][data-version]', { timeout: 60000 });
+    const popV = await popBox.evaluate(() => Number(document.querySelector('.lp-item[data-type="quant-signals"]').dataset.version));
+    await api(page, 'ayşe yilmaz', 'POST', '/api/quant/recompute', {});
+    await popBox.waitForFunction((v) => Number(document.querySelector('.lp-item[data-type="quant-signals"]').dataset.version) > v, popV, { timeout: 30000 }).catch(() => null);
+    check('⧉ on the page\'s panel: the box in a window of its own (#/pop/box/…), without the menu, brought again when the version moves - its own part only',
+      /^#\/pop\/box\/quant-signals/.test(await popBox.evaluate(() => window.location.hash))
+      && await popBox.evaluate(() => getComputedStyle(document.getElementById('side')).display === 'none')
+      && await popBox.evaluate((v) => Number(document.querySelector('.lp-item[data-type="quant-signals"]').dataset.version) > v, popV)
+      && popBoxAsked.some((u) => u.startsWith('/api/quant/box?')) && !popBoxAsked.some((u) => /\/api\/(alarms|view|header|quant\/signals)/.test(u)), popBoxAsked.slice(0, 10));
+    await shot(popBox, '44-pop-box');
+    await popBox.close();
+
+    // ------------------------------------------------------------------ the quant menu: four entries with tabs
+    console.log('quant menu');
+    const quantMenu = await page.evaluate(() => {
+      const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
+      return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
+    });
+    check('the quant menu: four entries - Sinyaller (3 tabs), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:3","Faiz:8","FX:3","VİOP:0"]', quantMenu);
+    await open(page, 'quant-regime');                                       // an address of before
+    const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
+      on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));
+    const regime = await onTab();
+    check('an old address (#/quant-regime) opens Faiz on its tab: eight tabs, "Rejim" on, Faiz lit in the menu',
+      regime.tabs.join(',') === 'PCA / RV,Çiftler,Korelasyon,Rejim,Eğri Adil Değeri,İma Patikası,TCMB WIRP,Öncü-Takipçi'
+      && regime.on.join() === 'quant-regime' && regime.lit.join() === 'quant.faiz' && await page.locator('#quant-regime-signals').count() === 1, regime);
+    await page.click('#page-tabs button[data-page="quant-corr"]');
+    await page.waitForFunction(() => window.tto.state.pageId === 'quant-corr' && window.tto.state.page.ready, null, { timeout: 30000 });
+    await open(page, 'forward');
+    await page.click('#nav .nav-item[data-page="quant.faiz"]');
+    await page.waitForFunction(() => window.tto.state.pageId === 'quant-corr' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 30000 }).catch(() => null);
+    const back2 = await onTab();
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    const hrefAfter = await page.evaluate(() => document.querySelector('#nav .nav-item[data-page="quant.faiz"]').getAttribute('href'));
+    check('a tab clicked opens its page (its own address); the entry leads back to the tab opened last, after a reload too',
+      back2.on.join() === 'quant-corr' && back2.lit.join() === 'quant.faiz' && hrefAfter === '#/quant-corr', { back2, hrefAfter });
+    // a signal's own page link and Ctrl+K still lead to a page of the menu's tabs
+    await open(page, 'forward');
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('Opsiyon');
+    await page.waitForSelector('.findlist .hit');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.tto.state.pageId === 'quant-opt' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 30000 }).catch(() => null);
+    check('Ctrl+K finds a page by its own title and opens it on its tab (Opsiyon: FX lit)', (await onTab()).on.join() === 'quant-opt' && (await onTab()).lit.join() === 'quant.fx');
+
+    // ------------------------------------------------------------------ each user's own menu
+    console.log('own menu');
+    await page.click('#btn-user');
+    await page.click('.menu >> text=Menüyü düzenle…');
+    await page.waitForSelector('#menu-edit');
+    const editable = await page.evaluate(() => [...document.querySelectorAll('#menu-edit input')].map((b) => b.dataset.page));
+    await page.locator('#menu-edit input[data-page="heat"]').uncheck();
+    await page.locator('#menu-edit input[data-page="quant.fx"]').uncheck();
+    await page.click('#menu-edit-save');
+    await page.waitForFunction(() => !document.querySelector('#nav .nav-item[data-page="heat"]') && !document.querySelector('#nav .nav-item[data-page="quant.fx"]'),
+      null, { timeout: 10000 });
+    const hiddenSaved = await savedLayout((l) => (l.hidden_pages || []).length === 2);
+    check('"Menüyü düzenle…": a page and a quant entry out of the menu (an administrator\'s pages listed for her), kept with the account',
+      JSON.stringify(hiddenSaved.hidden_pages) === '["heat","quant.fx"]' && editable.includes('users') && editable.includes('quant.faiz')
+      && editable.includes('launchpad') && !editable.includes('quant-pca'), { hidden: hiddenSaved.hidden_pages, editable: editable.length });
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('Eğri Hareketi');
+    await page.waitForSelector('.findlist .hit');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.tto.state.pageId === 'heat' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 30000 }).catch(() => null);
+    const heatOpen = await page.evaluate(() => window.tto.state.pageId);
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    check('... a hidden page still opens from Ctrl+K (and its own address); after a reload the menu is still the user\'s',
+      heatOpen === 'heat' && await page.evaluate(() => window.tto.state.pageId) === 'heat' && await page.locator('#nav .nav-item[data-page="heat"]').count() === 0
+      && await page.locator('#nav .nav-item[data-page="quant.fx"]').count() === 0, heatOpen);
+    // another user's menu is their own: Zeynep sees every page; an administrator's pages are not in hers to list
+    const ctxM = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const pageM = await ctxM.newPage();
+    pageM.on('pageerror', (e) => errors.push('pageerror(M): ' + e.message));
+    await login(pageM, 'Zeynep');
+    await pageM.click('#btn-user');
+    await pageM.click('.menu >> text=Menüyü düzenle…');
+    await pageM.waitForSelector('#menu-edit');
+    const hers = await pageM.evaluate(() => ({ nav: !!document.querySelector('#nav .nav-item[data-page="heat"]'),
+      users: !!document.querySelector('#menu-edit input[data-page="users"]') }));
+    check('... another user\'s menu is their own; the administrators\' pages stay theirs', hers.nav && !hers.users, hers);
+    await ctxM.close();
+    await page.click('#btn-user');
+    await page.click('.menu >> text=Menüyü düzenle…');
+    await page.waitForSelector('#menu-edit');
+    await page.click('#menu-edit-all');
+    await page.click('#menu-edit-save');
+    await page.waitForFunction(() => !!document.querySelector('#nav .nav-item[data-page="heat"]') && !!document.querySelector('#nav .nav-item[data-page="quant.fx"]'),
+      null, { timeout: 10000 });
+    check('"Hepsini göster": the pages back in the menu', (await savedLayout((l) => !(l.hidden_pages || []).length)).hidden_pages.length === 0);
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
-    const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page));
+    // (an entry with tabs: each of its pages)
+    const ids = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-item')].flatMap((a) => (a.dataset.tabs ? a.dataset.tabs.split(' ') : [a.dataset.page])));
     for (const id of ids) {
       await open(page, id);
       const n = await page.locator('#content table.grid, #content table.plain, #content table.heat, #content .chatlog').count();
