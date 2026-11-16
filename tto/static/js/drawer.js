@@ -36,6 +36,7 @@ export class Drawer {
     this.stop();
     this.off = onLayout(() => this.sync());
     document.getElementById('app').classList.toggle('drawer-wide', pref('tto.drawer.wide') === '1');
+    this.el.classList.toggle('hand', !!(this.ctx.handMode && this.ctx.handMode()));
     this.sync();
     this.setOpen(pref('tto.drawer') === '1', true);
   }
