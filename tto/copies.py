@@ -22,7 +22,8 @@ one; the engine never asks Bloomberg for a layer either), a cell of a meeting's 
 cell of a holiday list (its save writes the list again in date order).
 
 A copy starts with the values typed in its table (the user's own; a cell holding an input formula keeps following it):
-from then on the two are apart.  A cell typed in neither follows the table - its formula, the market.  A value cleared in
+from then on the two are apart.  A cell typed in neither follows the table - its formula, the market (a value the user
+typed over a formula, "Elle değer", is theirs everywhere: in a copy too).  A value cleared in
 a copy (``Delete``) goes back to the table's where the cell has a formula default, and is an empty value of the copy's
 where it has none - as in the table; "Sıfırla" (and the cell's own "→ tablonun değerine dön") takes the copy's values
 away: it shows the table's again.  A formula is refused in a copy (its inputs are values; a formula stays in the table,

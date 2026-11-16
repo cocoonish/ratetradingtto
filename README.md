@@ -1210,7 +1210,8 @@ sonuçlarını değiştirir - tablonun kendisini, diğer kopyalarınızı, başk
   geldiği gibi gelir; kopyanın hesabı tablonuza, başka kullanıcıya ya da herkesin hesabına sızmaz.
 * **Başlangıç ve sonrası.** Kopya açılırken tablonuzda yazılı kişisel değerler kopyaya da yazılır; sonra ikisi ayrıdır.
   İkisinde de yazılmamış hücre (formülle ya da piyasadan dolan) tablonun değerini izler; tablonun bir girdisine yazdığınız
-  formül (`=C60+7`) de kopya o hücreye kendi değerini yazmadıkça kopyada izlenir (hücrede ƒ görünür). Kopyada, formülü olan
+  formül (`=C60+7`) de kopya o hücreye kendi değerini yazmadıkça kopyada izlenir (hücrede ƒ görünür), formülün yerine elle
+  yazdığınız değer ("Elle değer") kopyada da geçerlidir. Kopyada, formülü olan
   hücreye `Delete` tablonun değerine döndürür, olmayana boş değer yazar. Başlıktaki **Sıfırla** kopyanın kendi değerlerini
   siler (kopya yine tablonun değerlerini gösterir); sağ tık → "Kopyadaki değeri sil → tablonun değerine dön" tek hücreyi.
 * **Kopyada olmayanlar.** Kopyaya **formül yazılamaz**: kopyanın girdileri değerdir, formül tablonun kendisinde kalır
