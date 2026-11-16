@@ -3,8 +3,9 @@
 // server keeps the sheet with the account and evaluates it as the user's pages are (calc.py) - again on each generation,
 // all the sheets on screen in one request.  Excel's habits: click to select, Enter / F2 / typing to edit, the formula
 // bar, arrows and Tab, Esc, a block copied to / pasted from Excel, Delete, a number format per cell, column widths;
-// while a formula is typed a click on one of its cells (Ctrl+click on a table of a page or of the drawer) puts the
-// reference in.  Bloomberg functions are refused by the server, with the reason.
+// while a formula is typed a click on a cell - one of its own, or of a table on a page or in the drawer - puts the
+// reference in where a reference may go (Ctrl+click anywhere).  Bloomberg functions are refused by the server, with
+// the reason.
 import { api, session } from './api.js';
 import { h, clear, menu, toast, promptDialog } from './ui.js';
 import { num, raw, settings } from './format.js';
@@ -20,7 +21,8 @@ const DATE_FMT = 'dd\\.mm\\.yyyy';
 const HELP = 'Hücreye sayı, metin ya da formül yazın: =MASA!I60+25 · kendi hücreleri: A1, $A$1, A1:A5 · '
   + 'dashboard\'un hücreleri sayfa adıyla: MASA!I60, \'C & R\'!B5 · diğer kitaplar köşeli parantezle: [sofr]SOFR_FOMC!B9, '
   + '[asw]ASW!C5, [borsa]bu!A1 · işlev adları İngilizce (SUM, IF, ROUND, WORKDAY …), ayırıcı virgül ya da noktalı virgül · '
-  + 'formül yazarken bir hücreye tıklayın (bir sayfanın ya da yan panelin tablosunda Ctrl+tık): adresi eklenir · '
+  + 'formül yazarken (=, bir işlem ya da parantezden sonra) bir hücreye tıklayın - bu tablonun ya da bir sayfanın, yan '
+  + 'panelin tablosunun: adresi eklenir (Ctrl+tık formülün her yerinde) · '
   + 'Bloomberg işlevleri (BDP, BDH, BDS …) kullanılamaz.';
 
 let seq = 0;
@@ -113,10 +115,13 @@ function changedHere(sheet, ans) {
 }
 
 // ---------------------------------------------------------------------- the page around the boxes
-// while a formula is typed, Ctrl+click on a cell of a table (a page's, the drawer's) puts its reference in
+// while a formula is typed, a click on a cell of a table (a page's, the drawer's) puts its reference in, as in Excel:
+// where a reference may go (after =, an operator, a bracket or a separator; again in place of the one just put) or,
+// with Ctrl, anywhere - a click elsewhere ends the typing
 document.addEventListener('mousedown', (e) => {
   const box = editingBox;
-  if (!box || !box.edit || e.button !== 0 || !(e.ctrlKey || e.metaKey) || !isFormula(box.edit.input.value)) return;
+  if (!box || !box.edit || e.button !== 0 || !isFormula(box.edit.input.value)) return;
+  if (!(e.ctrlKey || e.metaKey || box.edit.point || box.canPoint())) return;
   const td = e.target.closest && e.target.closest('table.grid td');
   const table = td && td.closest('table.grid');
   const g = table && table.__grid;
@@ -218,7 +223,8 @@ export class CalcBox {
     this.msg = h('div', { class: 'calc-msg hidden' });
     this.wrap = h('div', { class: 'calc-wrap', tabindex: '0' }, h('div', { class: 'loading' }, 'Yükleniyor…'));
     this.hint = h('div', { class: 'calc-empty muted hidden' }, 'Boş bir hesap tablosu: bir hücreye tıklayıp yazın - sayı, metin ya da '
-      + '=MASA!I60+25 gibi bir formül. Formül yazarken bir sayfanın tablosundaki hücreye Ctrl+tık: adresi eklenir.');
+      + '=MASA!I60+25 gibi bir formül. Formül yazarken = ya da bir işlemden sonra bir sayfanın tablosundaki hücreye tıklayın: '
+      + 'adresi eklenir.');
     this.body = h('div', { class: 'body calc-body' }, this.toolbar(),
       h('div', { class: 'calc-bar' }, this.addr, h('span', { class: 'calc-fxl', title: HELP }, 'fx'), this.fx), this.msg, this.wrap, this.hint);
     this.el.append(head, this.body);
@@ -741,7 +747,7 @@ export class CalcBox {
     this.splice(ref, { at: [r2, c2], cells: [r1, c1, r2, c2] });
   }
 
-  /** A workbook cell's reference (Ctrl+click on a table) goes into the formula at the caret. */
+  /** A workbook cell's reference (a click on a table's cell while pointing, or Ctrl+click) goes into the formula at the caret. */
   insertRef(text) {
     if (!this.edit) return;
     this.splice(text, { at: null, cells: null });

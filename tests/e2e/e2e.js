@@ -2855,6 +2855,22 @@ async function shot(page, name) {
     await page.keyboard.press('Enter');
     await waitCalc('C1', '-200', '#drawer');
     check('... Ctrl+click on the page\'s cell while typing a formula puts its reference in (=MASA!I60*2 → -200)', pointed === '=MASA!I60', pointed);
+    // ... a plain click too where a reference may go (after = or an operator: Excel's pointing); in a finished formula a
+    // plain click ends the typing instead
+    await page.click(calcCell('E1', '#drawer'));
+    await page.keyboard.type('=');
+    await (await cellHandle(page, 'MASA!I60')).click();
+    await page.keyboard.type('+');
+    await (await cellHandle(page, 'MASA!I60')).click();
+    const pointedPlain = await page.inputValue('#drawer .calc-box .calc-edit');
+    await page.keyboard.press('Enter');
+    await waitCalc('E1', '-200', '#drawer');
+    await page.click(calcCell('F1', '#drawer'));
+    await page.keyboard.type('=A1');
+    await (await cellHandle(page, 'MASA!I60')).click();
+    await waitCalc('F1', '10', '#drawer');
+    check('... a plain click on the page\'s cell after = or an operator puts it in as well (=MASA!I60+MASA!I60 → -200); after a finished '
+      + 'formula it ends the typing (=A1 → 10)', pointedPlain === '=MASA!I60+MASA!I60' && !(await page.$('#drawer .calc-box .calc-edit')), pointedPlain);
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['MASA!I60'] });
     await waitCalc('C1', '-300', '#drawer');
     // a reload keeps everything (kept with the account, on the server)
