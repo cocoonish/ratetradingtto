@@ -232,6 +232,10 @@ export class ViewPage {
         h('span', { title: 'Piyasadan ya da başka bir hücreden dolan girdi: üzerine yazabilirsiniz, silince otomatik değer geri gelir' },
           h('i', { class: 'sw-auto' }), 'otomatik (üzerine yazılabilir)'),
         h('span', null, h('i', { class: 'sw-sh' }), 'ortak girdi (herkes görür)'),
+        h('span', { title: 'Sarı ya da yeşil bir hücreye = yazıp başka bir hücreye tıklayın - bu tablonun, sayfanın başka bir '
+          + 'tablosunun ya da sekmesinin, yan panelin: adresi formüle eklenir (=C60+7). Değer canlıdır: okuduğu hücre değişince '
+          + 'kendiliğinden güncellenir. F2 ya da üzerine gelmek formülü gösterir; silmek formülü de kaldırır. Bloomberg işlevleri '
+          + 'kullanılamaz.' }, h('i', { class: 'sw-ff' }, 'ƒ'), 'formüllü girdi'),
         h('span', null, h('i', { class: 'sw-hand' }), 'formül yerine elle değer'),
         h('span', { class: 'muted' }, data.ms + ' ms'))));
 

@@ -10,6 +10,9 @@ import { api, session } from './api.js';
 import { h, clear, menu, toast, promptDialog } from './ui.js';
 import { num, raw, settings } from './format.js';
 import { WIDTHS, saveLayout, drawerItems, launchpads, findLaunchpad, changeLaunchpad, createLaunchpad, newId } from './layout.js';
+import { workbookRef, canPoint as pointable } from './pointing.js';
+
+export { workbookRef };
 
 export const MAX_ROWS = 50;
 export const MAX_COLS = 12;
@@ -47,15 +50,6 @@ export const cellName = (r, c) => colName(c) + r;
 const isFormula = (s) => typeof s === 'string' && s.startsWith('=');
 const normalise = (text) => text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n$/, '');
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
-
-/** A workbook cell ("C & R!B5" of the book "tto") as a calc formula names it: 'C & R'!B5, [sofr]SOFR_FOMC!B9. */
-export function workbookRef(book, ref) {
-  const k = ref.lastIndexOf('!');
-  const sheet = ref.slice(0, k);
-  const name = book && book !== 'tto' ? '[' + book + ']' + sheet : sheet;
-  const plain = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(sheet) && !/^[A-Za-z]{1,3}\d+$/.test(sheet);
-  return (plain ? name : "'" + name.replace(/'/g, "''") + "'") + '!' + ref.slice(k + 1);
-}
 
 // ---------------------------------------------------------------------- number formats (the toolbar)
 function decimalsShown(text) {
@@ -735,9 +729,7 @@ export class CalcBox {
 
   /** Whether the caret stands where a reference may go (after =, an operator, a bracket or a separator). */
   canPoint() {
-    const inp = this.edit.input;
-    const before = inp.value.slice(0, inp.selectionStart).replace(/\s+$/, '');
-    return before.startsWith('=') && /[=(,;+\-*/^&<>:]$/.test(before);
+    return pointable(this.edit.input);
   }
 
   /** A cell (a block, dragged over) of this sheet goes into the formula at the caret - in place of the one put just before. */

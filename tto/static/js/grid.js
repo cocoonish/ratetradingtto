@@ -1,8 +1,11 @@
 // Spreadsheet-like table: range selection, Excel-compatible copy / paste, in-cell editing of input cells,
-// in-place refresh with change flashes, the columns each user hides.
+// in-place refresh with change flashes, the columns each user hides.  An input cell takes a formula as Excel does: "="
+// and a click on a cell - of this table, another one on the page, another tab's, the side drawer's, a launchpad's -
+// puts its reference in where a reference may go (Ctrl+click anywhere); the server evaluates it, live (inputformula.py).
 import { h, clear, menu, closeMenu, inFormControl, toast } from './ui.js';
 import { raw } from './format.js';
 import { Columns, captionKey, columnOrder, markGaps, uniqueKeys } from './columns.js';
+import { workbookRef, canPoint, isFormula } from './pointing.js';
 
 const hooks = {
   setInputs: null,     // async (book, items, adhoc, lenient) -> result   (lenient: cells that are not inputs are skipped)
@@ -12,7 +15,9 @@ const hooks = {
 };
 
 const sel = { grid: null, r0: 0, c0: 0, r1: 0, c1: 0, cells: [], cur: null, dragging: false };
-let editing = null;      // {grid, i, j, td, input}
+// {grid, i, j, td, input, point: the reference just put in ({start, end}), pts: its cells marked, drag, switching: a tab
+//  of the page being opened while the formula is typed}
+let editing = null;
 
 export function configureGrid(opts) {
   Object.assign(hooks, opts);
@@ -58,13 +63,24 @@ function cellClass(cell) {
     // filled by the workbook (market, another cell) until typed over; one that came out empty or as an error
     // (the market did not deliver) stays a plain input: that is where a value has to be typed
     else if (cell.fx && !cell.m && cell.t && cell.k !== 'e') cls += ' auto';
+    if (cell.ff) cls += cell.fe ? ' ff ffe' : ' ff';  // typed as a formula (=C60+7): a small ƒ in the corner
   }
   return cls;
 }
 
 function signature(cell) {
   return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1)
-    + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '');
+    + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '') + '\u0001' + (cell.ff || '') + '\u0001' + (cell.fe || '');
+}
+
+/** What a cell says when the mouse rests on it: an input's formula, the workbook's comment, a long text in full. */
+function tipOf(cell) {
+  let tip = '';
+  if (cell.n) tip = cell.n + (cell.tip ? '\n' + cell.tip : '');          // the cell's comment in Excel
+  else if (cell.tip) tip = cell.tip;
+  else if (cell.k === 's' && cell.t && cell.t.length > 28 && !cell.ff) tip = cell.t;
+  if (cell.ff) tip = 'Formül: ' + cell.ff + (cell.fe ? '\n' + cell.fe : '') + (tip ? '\n' + tip : '');
+  return tip;
 }
 
 /**
@@ -368,9 +384,8 @@ export class Grid {
         if (cell.cs) td.colSpan = cell.cs;
         if (cell.heat) td.style.backgroundColor = heatStyle(cell.heat);
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
-        if (cell.n) td.title = cell.n + (cell.tip ? '\n' + cell.tip : '');          // the cell's comment in Excel
-        else if (cell.tip) td.title = cell.tip;
-        else if (cell.k === 's' && cell.t && cell.t.length > 28) td.title = cell.t;
+        const tip = tipOf(cell);
+        if (tip) td.title = tip;
         td.__i = i;
         td.__j = j;
         tr.appendChild(td);
@@ -477,6 +492,7 @@ export class Grid {
         if (cell.act || cell.chk) continue;
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '');
         td.textContent = cell.t || '';
+        if (cell.ff || before.ff) td.title = tipOf(cell);       // (a formula typed, changed or gone: its tooltip with it)
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
         else td.style.removeProperty('--bar');
@@ -863,6 +879,7 @@ async function resetRefs(grid, refs, shared) {
 // ---------------------------------------------------------------------- editing
 function editText(cell) {
   if (!cell) return '';
+  if (cell.ff) return cell.ff;                          // an input typed as a formula: its text (F2, a double click)
   if (cell.k === 'n' && typeof cell.v === 'number') {
     if (cell.ik === 'pct') return raw(cell.v * 100) + '%';
     return raw(cell.v);
@@ -886,16 +903,28 @@ export function startEdit(grid, i, j, typed) {
   td.classList.add('editing');
   td.textContent = '';
   td.appendChild(input);
-  editing = { grid, i, j, td, input, done: false };
+  editing = { grid, i, j, td, input, done: false, point: null, pts: [], drag: null, switching: false };
+  input.classList.toggle('fxe', isFormula(input.value));
   input.focus();
-  if (typed === null) input.select();
+  // a formula opens with the caret at its end, as Excel's F2 (a reference clicked goes in there); a value is selected
+  if (typed === null && !isFormula(input.value)) input.select();
+  else input.setSelectionRange(input.value.length, input.value.length);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commitEdit(); moveBy(e.shiftKey ? -1 : 1, 0, false); }
     else if (e.key === 'Tab') { e.preventDefault(); commitEdit(); moveBy(0, e.shiftKey ? -1 : 1, false); }
     else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
     e.stopPropagation();
   });
-  input.addEventListener('blur', () => { if (editing && editing.input === input) commitEdit(); });
+  input.addEventListener('input', () => {
+    if (!editing || editing.input !== input) return;
+    editing.point = null;                               // (typed on: the next click puts a reference in, not in place)
+    markPoint(editing, null);
+    input.classList.toggle('fxe', isFormula(input.value));
+  });
+  input.addEventListener('blur', () => {
+    // (a tab of the page opened while a formula is typed - its tables can be pointed at: the typing goes on)
+    if (editing && editing.input === input && !editing.switching) commitEdit();
+  });
   return true;
 }
 
@@ -904,8 +933,10 @@ function finishEdit() {
   editing = null;
   if (!ed) return null;
   ed.td.classList.remove('editing');
+  markPoint(ed, null);
   const cell = ed.grid.cell(ed.i, ed.j);
-  if (ed.input.parentNode === ed.td) ed.td.removeChild(ed.input);
+  if (ed.input.parentNode) ed.input.parentNode.removeChild(ed.input);
+  dockBar(null);
   ed.td.textContent = cell ? (cell.t || '') : '';
   return ed;
 }
@@ -920,28 +951,153 @@ function commitEdit() {
   const ed = finishEdit();
   const cell = ed.grid.cell(ed.i, ed.j);
   if (value === editText(cell)) return;                 // nothing typed
-  ed.td.textContent = value;                            // optimistic until the refresh arrives
+  if (!isFormula(value)) ed.td.textContent = value;     // optimistic until the refresh arrives (a formula: its value then)
   applyValue(ed.grid, ed.i, ed.j, value);
 }
 
 async function applyValue(grid, i, j, value) {
   const ref = grid.ref(i, j);
   if (!ref) return;
+  const back = () => {
+    const td = grid.tds[i] && grid.tds[i][j];
+    const cell = grid.cell(i, j);
+    if (td && cell && !(editing && editing.td === td)) td.textContent = cell.t || '';
+  };
   try {
     const res = await hooks.setInputs(grid.book, [{ ref, value }], grid.opts.adhoc);
     if (res && res.errors && res.errors.length) {
-      toast(res.errors.join('; '), 'err', 6000);
-      const td = grid.tds[i] && grid.tds[i][j];
-      const cell = grid.cell(i, j);
-      if (td && cell) td.textContent = cell.t || '';
+      toast(res.errors.join('; '), 'err', isFormula(value) ? 9000 : 6000);
+      back();
+      // a formula refused (a Bloomberg function, a cycle, one that cannot be read): typed into again, as it was
+      if (isFormula(value) && !editing && grid.el.isConnected && grid.tds[i] && grid.tds[i][j]) {
+        setSelection(grid, i, j, i, j);
+        startEdit(grid, i, j, value);
+      }
     }
   } catch (err) {
     toast(err.message || String(err), 'err', 6000);
-    const td = grid.tds[i] && grid.tds[i][j];
-    const cell = grid.cell(i, j);
-    if (td && cell) td.textContent = cell.t || '';
+    back();
   }
 }
+
+// ---------------------------------------------------------------------- pointing while a formula is typed
+/** The reference of a cell (a block: ``i2``, ``j2``) of ``g`` as the formula being typed names it: the cell's own sheet
+ *  bare (C60), another sheet with its name, another workbook in brackets ([sofr]SOFR_FOMC!B9). */
+function refFor(ed, g, i1, j1, i2, j2) {
+  const a = g.ref(i1, j1), b = g.ref(i2, j2);
+  if (!a || !b) return null;
+  const k = a.lastIndexOf('!');
+  const sheet = a.slice(0, k);
+  let addr = a.slice(k + 1);
+  if (a !== b) {
+    const pa = /^([A-Z]+)(\d+)$/.exec(addr), pb = /^([A-Z]+)(\d+)$/.exec(b.slice(b.lastIndexOf('!') + 1));
+    if (pa && pb) {
+      const c1 = Math.min(colIndex(pa[1]), colIndex(pb[1])), c2 = Math.max(colIndex(pa[1]), colIndex(pb[1]));
+      const r1 = Math.min(Number(pa[2]), Number(pb[2])), r2 = Math.max(Number(pa[2]), Number(pb[2]));
+      addr = colName(c1) + r1 + ':' + colName(c2) + r2;
+    }
+  }
+  const own = ed.grid.data && ed.grid.data.sheet;
+  if (g.book === ed.grid.book && sheet === own) return addr;
+  return workbookRef(g.book, sheet + '!' + addr);
+}
+
+/** The cells of the reference just put in, marked on screen (null: none). */
+function markPoint(ed, cells) {
+  for (const td of ed.pts || []) td.classList.remove('pt');
+  ed.pts = [];
+  if (!cells) return;
+  const [g, i1, j1, i2, j2] = cells;
+  for (let i = Math.min(i1, i2); i <= Math.max(i1, i2); i++) {
+    for (let j = Math.min(j1, j2); j <= Math.max(j1, j2); j++) {
+      const td = g.tds[i] && g.tds[i][j];
+      if (td) { td.classList.add('pt'); ed.pts.push(td); }
+    }
+  }
+}
+
+/** A cell (a block, dragged over) goes into the formula at the caret - in place of the reference put just before. */
+function pointAt(ed, g, i1, j1, i2 = i1, j2 = j1) {
+  const text = refFor(ed, g, i1, j1, i2, j2);
+  if (!text) return false;
+  const inp = ed.input;
+  const start = ed.point ? ed.point.start : inp.selectionStart;
+  const end = ed.point ? ed.point.end : inp.selectionEnd;
+  inp.value = inp.value.slice(0, start) + text + inp.value.slice(end);
+  ed.point = { start, end: start + text.length };
+  inp.focus({ preventScroll: true });
+  inp.setSelectionRange(start + text.length, start + text.length);
+  markPoint(ed, [g, i1, j1, i2, j2]);
+  return true;
+}
+
+/** The formula's editor out of its cell while that cell is out of view (another tab of the page is open): it goes on in
+ *  a bar of its own at the top of the window, back into the cell when the cell is on screen again. */
+function dockBar(ed) {
+  let bar = document.getElementById('grid-fx');
+  if (!ed) { if (bar) bar.classList.add('hidden'); return; }
+  if (!bar) {
+    bar = h('div', { id: 'grid-fx', class: 'grid-fx hidden' }, h('span', { class: 'lbl' }), h('span', { class: 'eq' }, 'ƒ'));
+    document.body.appendChild(bar);
+  }
+  bar.querySelector('.lbl').textContent = ed.grid.ref(ed.i, ed.j) || '';
+  bar.title = 'Formül yazılıyor: bir tablonun hücresine tıklayın (Ctrl+tık formülün her yerinde) · Enter kaydeder, Esc vazgeçer';
+  bar.appendChild(ed.input);
+  bar.classList.remove('hidden');
+}
+
+/** After a tab of the page opened while the formula is typed: the editor where it can be typed into. */
+function keepEditor() {
+  const ed = editing;
+  if (!ed || !ed.switching) return;
+  // (moved while focused, an input may lose its focus - a blur that must not end the typing: "switching" until here)
+  if (!ed.td.isConnected) dockBar(ed);
+  else if (ed.input.parentNode !== ed.td) { ed.td.appendChild(ed.input); dockBar(null); }
+  ed.input.focus({ preventScroll: true });
+  ed.switching = false;
+}
+
+// while an input's formula is typed: a click on a cell of any table of a workbook on screen puts its reference in where a
+// reference may go (after =, an operator, a bracket or a separator; again in place of the one just put) or, with Ctrl,
+// anywhere; a click elsewhere ends the typing, as before.  (A calc sheet's own pointing acts only while one of its cells
+// is typed into: the two never meet.)
+document.addEventListener('mousedown', (e) => {
+  const ed = editing;
+  if (!ed || e.button !== 0 || !isFormula(ed.input.value)) return;
+  const t = e.target;
+  if (!t || !t.closest || t === ed.input) return;
+  if (t.closest('.viewtabs button')) {                  // another tab: its tables can be pointed at as well
+    e.preventDefault();
+    ed.switching = true;
+    return;
+  }
+  ed.switching = false;
+  if (t.closest('#grid-fx')) { e.preventDefault(); ed.input.focus(); return; }
+  const td = t.closest('table.grid td');
+  if (!td || td === ed.td) return;
+  const table = td.closest('table.grid');
+  const g = table && table.__grid;
+  if (!g || td.__i === undefined) return;
+  if (!(e.ctrlKey || e.metaKey || ed.point || canPoint(ed.input))) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!pointAt(ed, g, td.__i, td.__j)) {
+    toast('Bu tablonun hücreleri bir çalışma kitabı sayfasında değil: başvurusu eklenemez', 'err');
+    return;
+  }
+  ed.drag = { g, i: td.__i, j: td.__j };
+}, true);
+
+document.addEventListener('mouseover', (e) => {
+  const ed = editing;
+  if (!ed || !ed.drag || !e.target.closest) return;
+  const td = e.target.closest('table.grid td');
+  if (!td || td.__i === undefined || td.closest('table.grid') !== ed.drag.g.el) return;
+  pointAt(ed, ed.drag.g, ed.drag.i, ed.drag.j, td.__i, td.__j);       // (dragged over a block: A1:B5)
+}, true);
+
+document.addEventListener('mouseup', () => { if (editing) editing.drag = null; }, true);
+document.addEventListener('click', () => { if (editing && editing.switching) keepEditor(); });
 
 async function clearSelectionValues() {
   const s = currentSelection();
@@ -1011,7 +1167,8 @@ document.addEventListener('mousedown', (e) => {
   // a click outside any grid (and outside menus / editors) drops the selection
   if (!sel.grid) return;
   const t = e.target;
-  if (t.closest && (t.closest('table.grid') || t.closest('.menu') || t.closest('#statusbar'))) return;
+  if (t.closest && (t.closest('table.grid') || t.closest('.menu') || t.closest('#statusbar') || t.closest('#grid-fx'))) return;
+  if (editing && editing.switching) return;             // (a tab opened while a formula is typed: the typing goes on)
   if (editing) commitEdit();
   clearSelection();
 });
