@@ -20,14 +20,24 @@ Two things the real library does that matter for keeping up with a busy market c
 Like the real API - and unlike Excel's add-in - the pretend terminal does not know a security that is written
 with its identifier type at the end ("TRT150328T24 ISIN", "TRT150328T24 @ISL1 ISIN"): it wants
 "/isin/TRT150328T24@ISL1".  Test data may be stored under either spelling.
+
+Intraday bars (``IntradayBarRequest``) are made up for every security it knows: a session from 09:30 to 18:00
+Istanbul time (UTC+3) on week days, the bars laid out from the request's start on, their prices and volumes a fixed
+function of the security and the time (:func:`bar_values`: two requests that overlap agree).  The request is checked
+the way blpapi checks it (one ``security``, the elements and event types its schema has; times are UTC), an answer
+of more than ``server.bar_chunk`` bars comes in parts (``PARTIAL_RESPONSE`` events before the ``RESPONSE``), an
+unknown security is a ``responseError``.  A bar that starts exactly at ``endDateTime`` is sent too: the provider
+must keep the end out itself.
 """
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import queue
 import threading
 import time
 import types
+import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 #: identifier types Excel's add-in accepts after an identifier, and the API's prefix for them
@@ -57,6 +67,37 @@ def spellings(sec: str) -> List[str]:
                 out += ["%s @%s %s" % (base, source, suffix), "%s@%s %s" % (base, source, suffix)] if at \
                     else ["%s %s" % (base, suffix)]
     return out
+
+
+#: the elements of an ``IntradayBarRequest`` (blpapi refuses any other name), those it cannot do without, and the
+#: values its ``eventType`` takes
+BAR_ELEMENTS = frozenset(("security", "eventType", "interval", "startDateTime", "endDateTime", "gapFillInitialBar",
+                          "adjustmentNormal", "adjustmentAbnormal", "adjustmentSplit", "adjustmentFollowDPDF",
+                          "returnEids"))
+BAR_REQUIRED = ("security", "eventType", "interval", "startDateTime", "endDateTime")
+BAR_EVENTS = ("TRADE", "BID", "ASK", "BID_BEST", "ASK_BEST", "BEST_BID", "BEST_ASK")
+#: the pretend terminal's intraday session, in Istanbul time (UTC+3), on week days
+BAR_SESSION = (_dt.time(9, 30), _dt.time(18, 0))
+ISTANBUL = _dt.timedelta(hours=3)
+_BAR_EPOCH = _dt.datetime(2026, 1, 1)
+
+
+def bar_values(security: str, start: _dt.datetime, interval: int) -> Tuple[float, float, float, float, int, int]:
+    """open, high, low, close, volume and number of events of the pretend terminal's bar of ``security`` that starts
+    at ``start`` (UTC) - a fixed function of the security and the time: two requests that overlap get the same bars,
+    and a bar closes where the next one opens.  Made-up numbers, nothing of them a real quote."""
+    seed = zlib.crc32(str(security).encode("utf-8"))
+    level = 20.0 + seed % 4000 / 100.0
+
+    def at(t: _dt.datetime) -> float:
+        m = (t - _BAR_EPOCH).total_seconds() / 60.0
+        return round(level * (1.0 + 0.01 * math.sin(m / 390.0 + seed % 7) + 0.002 * math.sin(m / 17.0 + seed % 5)), 4)
+
+    o, c = at(start), at(start + _dt.timedelta(minutes=interval))
+    m = int((start - _BAR_EPOCH).total_seconds() // 60)
+    reach = round(level * 0.0003 * (1 + (seed + m) % 4), 4)
+    events = 1 + (seed // 7 + m * 31) % 60
+    return o, round(max(o, c) + reach, 4), round(min(o, c) - reach, 4), c, 25 * events, events
 
 
 #: set by :class:`Server` (``release_gil``): accessors behave like calls into a C library
@@ -274,12 +315,25 @@ class Event(object):
 class Request(object):
     def __init__(self, operation: str):
         self.operation = operation
-        self.data: Dict[str, Any] = {"securities": [], "fields": [], "overrides": []}
+        self.bars = operation == "IntradayBarRequest"      # names one security, takes no lists
+        self.data: Dict[str, Any] = {} if self.bars else {"securities": [], "fields": [], "overrides": []}
 
     def append(self, name, value):
+        if self.bars:                                      # blpapi: NotFoundException / not an array
+            raise KeyError("IntradayBarRequest has no list %r" % str(name))
         self.data.setdefault(str(name), []).append(value)
 
     def set(self, name, value):
+        if self.bars:                                      # what blpapi's schema refuses at once
+            name = str(name)
+            if name not in BAR_ELEMENTS:
+                raise KeyError("IntradayBarRequest has no element %r" % name)
+            if name == "eventType" and value not in BAR_EVENTS:
+                raise ValueError("eventType %r" % (value,))
+            if name == "interval" and (type(value) is not int or not 1 <= value <= 1440):
+                raise ValueError("interval %r" % (value,))
+            if name in ("startDateTime", "endDateTime") and not isinstance(value, _dt.datetime):
+                raise TypeError("%s %r" % (name, value))
         self.data[str(name)] = value
 
     def getElement(self, name):
@@ -325,7 +379,11 @@ class Server(object):
         self.sessions: List["Session"] = []
         self.lock = threading.Lock()
         self.split_responses = False                              # answer with PARTIAL_RESPONSE + RESPONSE
-        self.silent = False                                       # swallow requests (timeouts)
+        self.silent = False                                       # swallow requests (timeouts) ...
+        self.held: List[Tuple] = []                               # ... their answers, for release() (late answers)
+        self.bar_chunk = 1000                                     # bars per message: a longer answer comes in parts
+        self.bar_errors: Dict[str, Dict[str, Any]] = {}           # security -> responseError of its bar requests
+        self.partials = 0                                         # PARTIAL_RESPONSE events sent
         self.strict_ids = True                                    # refuse spellings only Excel understands
         self.subscription_options: List[Tuple[str, List[str]]] = []   # (topic, options) of every subscribe
         self.refuse_options = False                               # subscriptions that carry options fail
@@ -376,8 +434,16 @@ class Server(object):
     def hits(self) -> int:
         return sum(len(r["securities"]) * max(1, len(r["fields"])) for r in self.requests)
 
+    def release(self) -> None:
+        """The terminal answers, late, what it held back while ``silent``."""
+        held, self.held = self.held, []
+        for session, cid, operation, messages in held:
+            session.respond(cid, operation, messages)
+
     # ---- request handling
     def answer(self, request: Request) -> List[Message]:
+        if request.operation == "IntradayBarRequest":
+            return self.intraday_bars(request)
         d = request.data
         ov = tuple(sorted((str(o["fieldId"]), str(o["value"])) for o in d.get("overrides", [])))
         self.requests.append({"op": request.operation, "securities": list(d["securities"]), "fields": list(d["fields"]),
@@ -441,6 +507,40 @@ class Server(object):
                 msgs.append(Message("HistoricalDataResponse", [], {"securityData": {"security": sec, "fieldData": rows}}))
             return msgs
         return [Message("ErrorResponse", [], {"responseError": {"message": "unknown operation"}})]
+
+    def intraday_bars(self, request: Request) -> List[Message]:
+        """The bars of an ``IntradayBarRequest`` (see the module text), logged as a request for one security."""
+        d = request.data
+        sec = d.get("security")
+        self.requests.append({"op": request.operation, "securities": [sec], "fields": [], "overrides": (),
+                              "options": {k: v for k, v in d.items() if k != "security"}})
+
+        def error(category, subcategory, message, code):
+            return [Message("IntradayBarResponse", [], {"responseError": {
+                "source": "fake", "code": code, "category": category, "message": message, "subcategory": subcategory}})]
+
+        missing = [name for name in BAR_REQUIRED if name not in d]
+        if missing:
+            return error("BAD_ARGS", "", "Missing %s" % ", ".join(missing), 2)
+        if self.unknown(sec):
+            return error("BAD_SEC", "INVALID_SECURITY", "Unknown/Invalid security [nid:fake]", 3)
+        canned = next((self.bar_errors[name] for name in spellings(sec) if name in self.bar_errors), None)
+        if canned is not None:
+            return [Message("IntradayBarResponse", [], {"responseError": dict(canned)})]
+        step = _dt.timedelta(minutes=d["interval"])
+        bars = []
+        t = d["startDateTime"]
+        while t <= d["endDateTime"]:                     # (a bar that starts at the end too: see the module text)
+            local = t + ISTANBUL
+            if local.weekday() < 5 and BAR_SESSION[0] <= local.time() < BAR_SESSION[1]:
+                o, h, lo, c, volume, events = bar_values(sec, t, d["interval"])
+                bars.append({"time": t, "open": o, "high": h, "low": lo, "close": c, "volume": volume,
+                             "numEvents": events, "value": round(c * volume, 2)})
+            t += step
+        size = max(1, int(self.bar_chunk))
+        parts = [bars[i:i + size] for i in range(0, len(bars), size)] or [[]]
+        return [Message("IntradayBarResponse", [], {"barData": {"eidData": [], "delayedSecurity": False,
+                                                                 "barTickData": part}}) for part in parts]
 
 
 class Session(object):
@@ -508,21 +608,25 @@ class Session(object):
         with self.server.lock:
             messages = self.server.answer(request)
         if self.server.silent:
+            self.server.held.append((self, cid, request.operation, messages))
             return correlationId
+        self.respond(cid, request.operation, messages)
+        return correlationId
+
+    def respond(self, cid, operation: str, messages: List[Message]) -> None:
+        """The answer of a request: every message but the last in a ``PARTIAL_RESPONSE`` event."""
         for m in messages:
             m._cids = [CorrelationId(cid)]
-        if self.server.split_responses and len(messages) == 1 and request.operation == "ReferenceDataRequest":
+        if self.server.split_responses and len(messages) == 1 and operation == "ReferenceDataRequest":
             data = messages[0]._data["securityData"]
             half = max(1, len(data) // 2)
             first = Message("ReferenceDataResponse", [cid], {"securityData": data[:half]})
             second = Message("ReferenceDataResponse", [cid], {"securityData": data[half:]})
-            self._put(Event(Event.PARTIAL_RESPONSE, [first]))
-            self._put(Event(Event.RESPONSE, [second]))
-        else:
-            for m in messages[:-1]:
-                self._put(Event(Event.PARTIAL_RESPONSE, [m]))
-            self._put(Event(Event.RESPONSE, [messages[-1]]))
-        return correlationId
+            messages = [first, second]
+        for m in messages[:-1]:
+            self.server.partials += 1
+            self._put(Event(Event.PARTIAL_RESPONSE, [m]))
+        self._put(Event(Event.RESPONSE, [messages[-1]]))
 
     def subscribe(self, sublist: SubscriptionList):
         for topic, fields, options, cid in sublist.entries:

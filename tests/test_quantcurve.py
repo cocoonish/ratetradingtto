@@ -529,7 +529,7 @@ def test_both_pages_over_http(seeded):
         assert client.get("/api/quant/opt").json()["opt"]["pairs"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p["id"] for p in nav if p["group"] == "Quant"]
-        assert quant[9:11] == ["quant-curve", "quant-opt"] and len(quant) == 14             # (intraday before them, the path / WIRP / lead after)
+        assert quant[9:11] == ["quant-curve", "quant-opt"] and len(quant) == 15             # (intraday before them, the path / WIRP / lead / VİOP after)
         assert client.get("/static/js/pages/quantfit.js").status_code == 200
         # the quote and the switch from the fair curve, the desk's half spreads
         fixed = [r["isin"] for r in body["dibsfv"]["rows"] if r["kind"] == "fixed"]

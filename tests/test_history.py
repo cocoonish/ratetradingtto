@@ -10,6 +10,7 @@ import fake_blpapi
 from conftest import ANON, auth, make_service
 from helpers import close
 from tto import history
+from tto import quantviop as qv
 from tto.config import Settings
 from tto.history import (DEFAULT_PAST_MEETINGS, DayProvider, History, add_months, align_meetings, curve_quotes, filled,
                          next_business_day, tenor_months, weekdays_ending)
@@ -351,13 +352,15 @@ def test_the_series_come_from_the_workbook(hsvc):
 
 def test_offline_the_history_is_what_the_file_recorded(hsvc):
     st = hsvc.history.status()
-    assert (st["series"], st["last_day"], st["mode"], st["phase"], st["error"]) == (14, TODAY, "replay", "idle", "")
+    assert (st["series"], st["last_day"], st["mode"], st["phase"], st["error"]) == (17, TODAY, "replay", "idle", "")
     bounds = hsvc.store.hist_bounds()
-    # (USDTRY, its swap points and USD OIS 3M are series of the quant package too - the VİOP sheet's BDH blocks have them)
+    # (USDTRY, its swap points and USD OIS 3M are series of the quant package too, USD OIS 1M / 6M / 1Y of its VİOP page -
+    # the VİOP sheet's BDH blocks have them)
     assert sorted(bounds) == ["BISTTREF Index|PX_LAST", "TRY12M Curncy|PX_LAST", "TRY1M Curncy|PX_LAST", "TRY3M Curncy|PX_LAST",
                               "TRY6M Curncy|PX_LAST", "TRYSAQ1 BGN Curncy|PX_LAST", "TYSO1 Curncy|PX_LAST", "TYSOA Curncy|PX_LAST",
                               "TYSOB Curncy|PX_LAST", "TYSOC Curncy|PX_LAST", "TYSOF Curncy|PX_LAST", "TYSOI Curncy|PX_LAST",
-                              "USDTRY Curncy|PX_LAST", "USSOC Curncy|PX_LAST"]
+                              "USDTRY Curncy|PX_LAST", "USSO1 Curncy|PX_LAST", "USSOA Curncy|PX_LAST", "USSOC Curncy|PX_LAST",
+                              "USSOF Curncy|PX_LAST"]
     one_month = dict(hsvc.store.hist_series("TYSOA Curncy|PX_LAST"))
     assert len(one_month) == 22 and one_month["2026-10-05"] == 37.15 and one_month[TODAY] == 36.35      # the BDH block of the file
     assert one_month[TODAY] == hsvc.provider.snapshot[bdp_key("TYSOA Curncy", "PX_LAST")]                 # its last row is today's quote
@@ -1202,17 +1205,27 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         h = svc.history
         snap = h.snapshot()
         quant = len(series_specs())                                          # the quant package's own series (two years back)
-        assert svc.mode == "live" and snap["today"] == D(TODAY) and len(snap["defs"]) == 59 + quant
+        # ... and its VİOP page's contracts (quantviop.py): the first six the VİOP sheet lists (L1:W1) and the 24 expired
+        # months before them, close / high / low each - in a backfill pool of their own (none has history here)
+        viop = [d for d in snap["defs"] if d.info.get("backfill") == "viop"]
+        vt = {t for d in viop for t in [d.ticker] + d.alts}
+        assert svc.mode == "live" and snap["today"] == D(TODAY) and len(snap["defs"]) == 59 + quant + len(viop) and len(viop) == 90
         hist, days = _fake_history(svc, snap)
         server.history.update(hist)
 
         def asked():
             return [r for r in server.requests if r["op"] == "HistoricalDataRequest"]
 
-        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, five a pass)
+        def n_viop(requests):
+            return sum(1 for r in requests for s in r["securities"] if s in vt)
+
+        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, five a pass; VİOP's
+        #      fifteen a pass beside them - the first five listed contracts' close, high and low, two years back too)
         res = h.sync(only=[TODAY])
+        two = [r for r in asked() if r["options"]["startDate"] == "20241024"]
         first = [r for r in asked() if r["options"]["startDate"] != "20241024"]
-        assert len(asked()) - len(first) == 1 and len(asked()[-1]["securities"]) == History.BACKFILL_PER_SYNC
+        assert sorted((r["fields"][0], len(r["securities"])) for r in two) == [("PX_HIGH", 5), ("PX_LAST", 10), ("PX_LOW", 5)]
+        assert n_viop(asked()) == n_viop(two) == History.VIOP_PER_SYNC and sum(len(r["securities"]) for r in two) == History.BACKFILL_PER_SYNC + History.VIOP_PER_SYNC
         tickers = {s for r in first for s in r["securities"]}
         # (the bonds go out the way the API names them: the sheet's "TRT150328T24 @ISL1 ISIN" is Excel's spelling)
         assert {"TYSOA Curncy", "TYSOA GFOF Curncy", "BISTTREF Index", "TRYI1M BGN Curncy", "TRYSAQ5 BGN Curncy",
@@ -1266,11 +1279,14 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert plan["2026-10-21"]["meetings"][0] == D("2026-10-22") and len(plan) == len(in_window)
 
         # ---- the next pass asks for the new days only - from each series' last close on, that close again (and the
-        #      next five quant series); series without any history are left alone for the rest of the day
+        #      next five quant series and fifteen of VİOP's: the sixth listed contract and the first four expired ones,
+        #      an expired one its whole life); series without any history are left alone for the rest of the day
         n = len(asked())
         res = h.sync(only=[TODAY])
-        later = [r for r in asked()[n:] if r["options"]["startDate"] != "20241024"]
-        assert res == {"fetched": 0, "computed": 0, "rev": h.rev} and len(asked()[n:]) - len(later) == 1
+        life = (D(TODAY) - dt.timedelta(days=qv.EXPIRED_LOOKBACK)).strftime("%Y%m%d")
+        later = [r for r in asked()[n:] if r["options"]["startDate"] not in ("20241024", life)]
+        assert res == {"fetched": 0, "computed": 0, "rev": h.rev} and n_viop(asked()[n:]) == History.VIOP_PER_SYNC
+        assert sum(len(r["securities"]) for r in asked()[n:]) - sum(len(r["securities"]) for r in later) == History.BACKFILL_PER_SYNC + History.VIOP_PER_SYNC
         assert {r["options"]["startDate"] for r in later} == {"20261031", "20261030"} and len(later) <= 3      # (TLREF: 2 Nov)
         assert not ({"TYSOA GFOF Curncy", "TRT150328T24 @ISL1 ISIN"} & {s for r in later for s in r["securities"]})
 
@@ -1297,11 +1313,111 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         refs = [(s, f, r["overrides"]) for r in server.requests if r["op"] != "HistoricalDataRequest" for s in r["securities"] for f in r["fields"]]
         print("hits: %d = %d reference + %d history" % (provider.status()["hits_today"], len(refs), hist_hits))
         assert provider.status()["hits_today"] == server.hits() == len(refs) + hist_hits and len(refs) == len(set(refs))
-        q, with_data, without = History.BACKFILL_PER_SYNC, len(svc.store.hist_bounds()), 117 - 58
-        # first pass: every series of the workbook in full and five quant ones; then the last days of the 58 with
-        # history and five more quant series, twice; by hand: the last days again, the 59 workbook series without
-        # history again and five more quant series (those never asked go first)
-        assert with_data == 58 and hist_hits == (117 + q) + 2 * (with_data + q) + (with_data + without + q)
+        q, v, with_data, without = History.BACKFILL_PER_SYNC, History.VIOP_PER_SYNC, len(svc.store.hist_bounds()), 117 - 58
+        # first pass: every series of the workbook in full, five quant ones and fifteen of VİOP's; then the last days of
+        # the 58 with history, five more quant series and fifteen more of VİOP's, twice; by hand: the last days again, the
+        # 59 workbook series without history again, five more quant series (those never asked go first) and fifteen more
+        # of VİOP's (an expired contract's two-digit-year ticker among them once the sheet's form came back empty)
+        assert with_data == 58 and n_viop(asked()) == 4 * v
+        assert hist_hits == (117 + q + v) + 2 * (with_data + q + v) + (with_data + without + q + v)
+    finally:
+        svc.stop()
+
+
+def test_live_viop_contracts_fill_in_a_pool_of_their_own_and_an_expired_one_is_asked_once(tmp_path):
+    """VİOP's contracts in the live history (quantviop.py: the first six the VİOP sheet lists and the 24 expired months
+    before them, close / high / low each): their first full range fifteen a sync (``VIOP_PER_SYNC``) beside the quant
+    series' five (``BACKFILL_PER_SYNC``), then a listed one's new days every sync.  An expired one (``tail: "none"``) is
+    asked once in full and never for its new days; its two-digit-year ticker only after the sheet's one-digit form came
+    back empty; one that had nothing in either form again only ``FINAL_RETRY_DAYS`` later - not the next days, not on
+    "update now" - and once it has something, never again."""
+    server = fake_blpapi.Server()
+    provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    provider.start()
+    today = float(date_to_serial(D(TODAY)))
+    clock = Clock(today + 0.5)
+    clock.today = lambda: today
+    svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=provider, clock=clock)
+    try:
+        h = svc.history
+        snap = h.snapshot()
+        viop = [d for d in snap["defs"] if d.info.get("backfill") == "viop"]
+        expired = [d for d in viop if d.info.get("tail") == "none"]
+        listed = [d for d in viop if d not in expired]
+        quant = {d.ticker for d in snap["defs"] if d.group == "Quant" and d not in viop}
+        assert [d.ticker for d in listed[::3]] == ["A1X6 Curncy", "A1Z6 Curncy", "A1F7 Curncy", "A1G7 Curncy", "A1H7 Curncy", "A1J7 Curncy"]
+        assert [d.field for d in listed[:3]] == ["PX_LAST", "PX_HIGH", "PX_LOW"] and len(expired) == 3 * 24
+        assert (expired[0].ticker, expired[0].alts, expired[-1].ticker, expired[-1].alts) == ("A1V6 Curncy", ["A1V26 Curncy"], "A1X4 Curncy", ["A1X24 Curncy"])
+        # Bloomberg (made up): the listed contracts a year each; of the expired ones the last eight months by the sheet's
+        # one-digit-year ticker, the twelve before them by the two-digit year only, the oldest four by neither
+        one, two, neither = expired[:3 * 8], expired[3 * 8:3 * 20], expired[3 * 20:]
+        hist, _ = _fake_history(svc, snap)
+        for d in listed:
+            hist[(d.ticker, d.field)] = [(x, 45.0) for x in _weekdays(D("2025-11-03"), D(TODAY))]
+        for i, d in enumerate(one + two):
+            end = D(TODAY) - dt.timedelta(days=31 * (i // 3 + 1))
+            hist[(d.ticker if i < len(one) else d.alts[0], d.field)] = [(x, 44.0) for x in _weekdays(end - dt.timedelta(days=300), end)]
+        server.history.update(hist)
+        vt = {t for d in viop for t in [d.ticker] + d.alts}
+
+        def asked():
+            return [r for r in server.requests if r["op"] == "HistoricalDataRequest"]
+
+        def run(n):
+            out = []
+            for _ in range(n):
+                m = len(asked())
+                h._fetch()
+                out.append(asked()[m:])
+            return out
+
+        def full(requests, which):
+            """(security, field) of the full ranges among the requests (from far back), of the securities in ``which``."""
+            return [(s, r["fields"][0]) for r in requests for s in r["securities"] if s in which and r["options"]["startDate"] < "20261001"]
+
+        def on(day):
+            clock.today = lambda: today + day
+            svc.bump()
+
+        # ---- the first day: fifteen of VİOP's a sync beside five quant series, every series once
+        syncs = run(12)
+        assert [len(full(s, vt)) for s in syncs] == [15] * 9 + [3, 0, 0] and [len(full(s, quant)) for s in syncs] == [5] * 12
+        assert h.state["backfill"]["viop_per_sync"] == History.VIOP_PER_SYNC == 15 and History.BACKFILL_PER_SYNC == 5
+        when = {}
+        for i, s in enumerate(syncs):
+            for x in full(s, vt):
+                assert x not in when                                         # once
+                when[x] = i
+        # the sheet's one-digit form first; the two-digit year only after that came back empty, in a later sync
+        assert set(when) == {(d.ticker, d.field) for d in viop} | {(d.alts[0], d.field) for d in two + neither}
+        assert all(when[(d.alts[0], d.field)] > when[(d.ticker, d.field)] for d in two + neither)
+        # afterwards the listed contracts' new days every sync; an expired one's never
+        new = [{(x, r["fields"][0]) for r in s for x in r["securities"] if x in vt and r["options"]["startDate"] >= "20261001"} for s in syncs]
+        assert all(t == {(d.ticker, d.field) for d in listed} for t in new[10:]) and not {x for t in new for x, _ in t} - {d.ticker for d in listed}
+        fill = h.fill_states()
+        assert {fill[d.id] for d in listed + one + two} == {"ok"} and {fill[d.id] for d in neither} == {"none"}
+        assert not [w for w in h.state["backfill"]["waiting"] if w.split("|")[0] in vt]
+        # ---- the next days: nothing of an expired contract - not on "update now" either (what it clears is the once-a-day
+        #      rule of the series without history; an expired one waits a week)
+        nothing = {(t, d.field) for d in neither for t in [d.ticker] + d.alts}
+        on(1)
+        assert not full([r for s in run(3) for r in s], vt)
+        h._empty.clear()
+        h._tailed.clear()
+        assert not full(run(1)[0], vt)
+        on(History.FINAL_RETRY_DAYS - 1)
+        assert not full([r for s in run(2) for r in s], vt)
+        # ---- a week on: the four that had nothing, both forms again - fifteen a sync; one of them has come meanwhile
+        found = neither[0]
+        server.history[(found.alts[0], found.field)] = [(x, 43.0) for x in _weekdays(D("2023-11-01"), D("2024-11-29"))]
+        on(History.FINAL_RETRY_DAYS)
+        week = [full(s, vt) for s in run(3)]
+        assert [len(x) for x in week] == [15, 9, 0] and {x for s in week for x in s} == nothing
+        assert h.fill_states()[found.id] == "ok"
+        # ---- and a week after that: the three still empty, the one that came never again
+        on(2 * History.FINAL_RETRY_DAYS)
+        again = [x for s in run(2) for x in full(s, vt)]
+        assert sorted(again) == sorted(nothing - {(found.ticker, found.field), (found.alts[0], found.field)})
     finally:
         svc.stop()
 
@@ -1359,8 +1475,12 @@ def test_history_api(client, hsvc, monkeypatch):
     page = client.get("/api/history/mpc", params={"n": 3}).json()
     assert page["days"] == DAYS and len(page["meetings"]) == 4
     assert client.get("/api/history/mpc", params={"days": "çok"}).status_code == 400
-    # 59 series of the workbook, 58 of them with a backup ticker; and the quant package's own (no backups)
-    assert len(client.get("/api/history/series").json()["series"]) == 117 + len(series_specs())
+    # 59 series of the workbook, 58 of them with a backup ticker; the quant package's own (no backups); and its VİOP
+    # page's contracts - the first six the VİOP sheet lists and the 24 expired months before them, close / high / low,
+    # an expired one with its two-digit-year ticker beside
+    viop = [d for d in hsvc.history.snapshot()["defs"] if d.info.get("backfill") == "viop"]
+    assert len(viop) == 3 * (6 + 24) and sum(len(d.alts) for d in viop) == 3 * 24
+    assert len(client.get("/api/history/series").json()["series"]) == 117 + len(series_specs()) + len(viop) + 3 * 24
     cal = client.get("/api/calendar").json()
     assert cal["next"] == "2026-12-10" and len(cal["meetings"]) == 95
     dates = [x["date"] for x in cal["meetings"]]

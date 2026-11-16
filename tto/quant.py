@@ -41,6 +41,7 @@ from . import quantfam as qf
 from . import quantintraday as qi
 from . import quantopt as qopt
 from . import quantlead as ql
+from . import quantviop as qv
 from . import quantpath as qp
 from . import volcarry as vc
 from .service import ServiceError
@@ -50,6 +51,7 @@ from .service import ServiceError
 EXTRAS = (qcurve, qopt)
 for _x in EXTRAS:
     qf.FAMILIES.update(_x.FAMILIES)
+qf.FAMILIES.update(qv.FAMILIES)                  # VİOP (quantviop.py)
 
 # ---------------------------------------------------------------------------------------------- settings
 DEFAULTS: Dict[str, Any] = {
@@ -90,7 +92,7 @@ LABELS = {
     "bt_mute": "Geri testi zayıf aileyi sustur", "bt_min_hit": "Geri test: en az isabet", "bt_min_sharpe": "Geri test: en az Sharpe",
     "bt_min_trades": "Geri test: karar için en az işlem",
 }
-for _mod in (qp, ql):                           # the implied path's grids and policy rate, lead-lag's k and lag
+for _mod in (qp, ql, qv):                       # the implied path's grids and policy rate, lead-lag's k and lag, VİOP's window
     DEFAULTS.update(_mod.DEFAULTS)
     LIMITS.update(_mod.LIMITS)
     LABELS.update(_mod.LABELS)
@@ -107,6 +109,7 @@ PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PC
          ("quant-model", "Tahmin Modeli"), ("quant-intraday", "Gün İçi"))
 PAGES += tuple(p for _x in EXTRAS for p in _x.PAGES)
 PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))   # quantpath.py, quantlead.py
+PAGES += qv.PAGES                                                                                          # quantviop.py
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -179,14 +182,15 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]
     add("BRENT", "Brent", "CO1 Comdty", "index", "Global")
     add("CDS", "Türkiye 5Y CDS", "TURKEY CDS USD SR 5Y D14 Corp", "bp", "Global")
     add("USD:3M", "USD OIS 3M", "USSOC Curncy", "rate", "Global")
-    # the analyses of their own (curve fair value, options) add theirs - a series the list has already (EURUSD's 3M
-    # points, also a pair's forward) is kept once: the history must not ask Bloomberg for one series twice
-    have = {s["ticker"] for s in out} | {s["key"] for s in out}
-    for x in EXTRAS:
-        for s in x.series_specs(source):
-            if s["ticker"] not in have and s["key"] not in have:
-                out.append(s)
-                have.update((s["ticker"], s["key"]))
+    # the analyses of their own (curve fair value, options, VİOP) add theirs - a series the list has already (EURUSD's
+    # 3M points, also a pair's forward) is kept once: the history must not ask Bloomberg for one series twice
+    have = {(s["ticker"], s.get("field", "PX_LAST")) for s in out} | {s["key"] for s in out}
+    usdtry = next((s["ticker"] for s in out if s["key"] == "FX:USDTRY"), "USDTRY Curncy")
+    for s in [x for mod in EXTRAS for x in mod.series_specs(source)] + qv.series_specs() + qv.spot_specs(usdtry):
+        tf = (s["ticker"], s.get("field", "PX_LAST"))
+        if tf not in have and s["key"] not in have:
+            out.append(s)
+            have.update((tf, s["key"]))
     return out
 
 
@@ -201,7 +205,8 @@ def _backfill_rank(spec: Dict[str, str]) -> int:
     return next((i for i, p in enumerate(BACKFILL_ORDER) if i and spec["key"].startswith(p)), len(BACKFILL_ORDER))
 
 
-def history_defs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None) -> List[Any]:
+def history_defs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]] = None,
+                 viop: Optional[Dict[str, Any]] = None) -> List[Any]:
     """The series above as definitions of the history (``tto.history.SeriesDef``): fetched with its normal sync, two
     years back (``info["lookback"]``) - the first time a few per sync in live mode (``info["backfill"]``), in the order
     of ``BACKFILL_ORDER`` -, then their new days with every sync like the history's own series (the desk keeps the
@@ -209,9 +214,18 @@ def history_defs(source: str = fxm.DEFAULT_SOURCE, pairs: Optional[Sequence[str]
     but none of these is marked so), shown on the settings page's coverage table under "Quant"."""
     from .history import SeriesDef
     specs = sorted(series_specs(source, pairs), key=_backfill_rank)
-    return [SeriesDef("Quant", s["label"], s["ticker"], "PX_LAST", unit="pct" if s["kind"] == "rate" else "px",
-                      info={"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": HISTORY_DAYS, "backfill": True})
-            for s in specs]
+    if viop and viop.get("active"):
+        # VİOP's contracts (quantviop.py): the listed ones and two years of expired ones, each close / high / low
+        specs += qv.contract_specs(viop["active"], viop["today"])
+    out = []
+    for s in specs:
+        info = {"key": s["key"], "kind": s["kind"], "group": s["group"], "lookback": s.get("lookback", HISTORY_DAYS),
+                "backfill": s.get("backfill", True)}
+        if s.get("tail"):
+            info["tail"] = s["tail"]
+        out.append(SeriesDef("Quant", s["label"], s["ticker"], s.get("field", "PX_LAST"), s.get("alts", ()),
+                             unit="pct" if s["kind"] == "rate" else "px", info=info))
+    return out
 
 
 #: the history's own series the analyses read (the OIS curve, offshore, the XCCY, TLREF, DİBS): kept two years back as
@@ -620,6 +634,7 @@ class Quant(object):
                 out["carry"] = {}
         for x in EXTRAS:
             x.read_engine(out, index, reader, num)
+        qv.read_engine(out, index, reader, num)
         return out
 
     def _quant_meta(self) -> Dict[str, Dict[str, str]]:
@@ -668,6 +683,8 @@ class Quant(object):
             if live.get("ois360") is not None:
                 out["VIOPO:" + c["ticker"]] = live["ois360"]
         for key, spec in self._quant_meta().items():
+            if spec.get("field", "PX_LAST") != "PX_LAST":
+                continue                                    # a day's high / low (VİOP's USDTRY): no live value - not the spot's
             try:
                 v, _ = self.svc.fx.value(spec["ticker"])
             except Exception:  # noqa: BLE001
@@ -676,6 +693,7 @@ class Quant(object):
                 out[key] = v
         for x in EXTRAS:
             out.update(x.live_values(eng))
+        out.update(qv.live_values(eng))
         return out
 
     def snapshot(self) -> Tuple[qf.Ctx, Dict[str, Any], Dict[str, float]]:
@@ -810,6 +828,7 @@ class Quant(object):
                     x.run(ctx, eng, mons, tables, timing, self.pause)
                 qp.run(self, ctx, mons, tables, raw_live, timing)          # the implied path, the WIRP (quantpath.py)
                 ql.run(self, ctx, mons, tables, timing)                    # lead-lag (quantlead.py)
+                qv.run(self, ctx, eng, mons, tables, timing)               # VİOP (quantviop.py)
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx)}
@@ -842,6 +861,7 @@ class Quant(object):
                 raw_live["VIOPI:FRONT"] = front["live"]["imp"]
             qp.refresh(self, fit, raw_live)                                # the USD path now (quantpath.py)
             ql.refresh(self, fit)                                          # intraday bars, when there are some (quantlead.py)
+            qv.refresh(self, fit)                                          # VİOP's 5-minute bars from Bloomberg, live (quantviop.py)
             ctx.live = dict(raw_live)
             imons, fit["tables"]["intraday"] = self._intraday_step(ctx, raw_live)
             for sid in [s for s, m in fit["mons"].items() if m.intraday]:
@@ -1219,6 +1239,8 @@ class Quant(object):
             return qp.view(self, what, base, v, fit)
         if what in ql.VIEWS:                                # Öncü-Takipçi (quantlead.py)
             return ql.view(self, what, base, v, fit)
+        if what in qv.VIEWS:                                # VİOP (quantviop.py)
+            return qv.view(self, what, base, v, fit)
         if what == "signals":
             fam, asset = q.get("family") or "", q.get("asset") or ""
 
@@ -1254,6 +1276,8 @@ class Quant(object):
         for x in EXTRAS:
             if what == x.VIEW:
                 return x.covers(key)
+        if what == "viop":
+            return qv.covers(key)
         if what == "corr":
             return key in qf.CORR_UNIVERSE
         if what == "pca":

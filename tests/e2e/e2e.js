@@ -1375,8 +1375,9 @@ async function shot(page, name) {
       if (hist.phase === 'idle' && hist.mpc_days >= 21) break;
       await page.waitForTimeout(2000);
     }
-    // (8 series of the workbook, and 6 of the quant package's that the file recorded too: USDTRY, its swap points, USD OIS 3M)
-    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 + 6 && !hist.error, hist);
+    // (8 series of the workbook, and 9 of the quant package's that the file recorded too: USDTRY, its swap points, USD OIS
+    // 3M - and USD OIS 1M / 6M / 1Y of the VİOP page)
+    check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 + 9 && !hist.error, hist);
     const rowsOf = (panel) => page.evaluate((p) => [...document.querySelectorAll('.panel[data-panel="' + p + '"] table.grid tr')]
       .map((tr) => [...tr.children].map((td) => td.textContent.trim())), panel);
     const rowOf = (rows, label) => rows.find((r) => r[0] === label || r[0].startsWith(label)) || [];
@@ -1516,8 +1517,11 @@ async function shot(page, name) {
     check('settings: which series have history (TLREF, the recorded OIS tenors) and which have none',
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
-      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak') && series.length === 118 + 116       // (+ the quant package's: 22 pairs, the global drivers, the option surfaces)
-      && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), rowOf(series, 'TLREF'));
+      && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak')
+      // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five - and its contracts:
+      // the six listed and 24 expired months, close / high / low, an expired one with its two-digit-year ticker beside)
+      && series.length === 118 + 121 + 3 * (6 + 24) + 3 * 24
+      && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), { tlref: rowOf(series, 'TLREF'), rows: series.length });
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
     check('settings: the pricing sources - OIS GFOF, offshore and XCCY ICPL, the workbook\'s BGN ticker last',
@@ -2366,6 +2370,39 @@ async function shot(page, name) {
       nDibs >= 1 && dibsShown === nDibs && /DİBS ↔ OIS/.test(dibsText) && viopShown === nViop && /VİOP/.test(remembered || '')
       && dibsLabels.every((t) => /\d\d\.\d\d\.\d\d/.test(t)) && new Set(dibsLabels).size === dibsLabels.length
       && await page.locator('#quant-lead-pairs table.grid tr:not(.hd)').count() === lr.length, { nDibs, nViop, dibsShown, viopShown, remembered });
+
+    // ------------------------------------------------------------------ VİOP (quantviop.py)
+    console.log('VİOP');
+    await open(page, 'quant-viop');
+    await page.waitForSelector('#quant-viop-contracts table.grid', { timeout: 30000 });
+    const viopApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/viop');
+    const vq = (viopApi.json || {}).viop || {};
+    const vrows = (vq.live || {}).rows || [];
+    const vShown = await page.locator('#quant-viop-contracts table.grid tr:not(.hd)').count();
+    const vText = await page.textContent('#quant-viop-contracts');
+    const vLevels = await page.textContent('#quant-viop-levels');
+    // the VİOP sheet's twelve contracts (L1:W1) with the TRY rates their live bid and ask imply (the sheet's rows 13 and
+    // 25); the recorded data has no Bloomberg history of them: no fair value, no order levels - the page says why
+    check('VİOP: the VİOP sheet\'s twelve contracts with the implied rates of their live ask / bid; replay has no history - no fair value, no levels, and the page says so',
+      viopApi.status === 200 && vrows.length === 12 && vShown === vrows.length && vrows[0].ticker === 'A1X6 Curncy' && vrows[11].ticker === 'A1V7 Curncy'
+      && vrows.every((r) => typeof r.bid === 'number' && typeof r.ask === 'number' && r.bid < r.ask && r.fair == null && !r.today && !r.week)
+      && /Kas26/.test(vText) && /Eki27/.test(vText) && /33,83/.test(vText) && /33,58/.test(vText) && /geçmiş yok/.test(vText)
+      && /Oynaklık için geçmiş yok/.test(vLevels) && await page.locator('#quant-viop-mode:not(.hidden)').count() === 1,
+    { rows: vrows.length, shown: vShown, why: vq.why || (vq.live || {}).why, first: vrows[0] });
+    // the contract selector: the levels panel is the chosen contract's (its ask / bid implied rates in the title), the
+    // choice kept in the browser
+    const levelsTitle = () => page.evaluate(() => (document.querySelector('#quant-viop-levels h2') || {}).textContent || '');
+    const firstTitle = await levelsTitle();
+    await page.click('#quant-viop-contract button[data-v="A1Z6 Curncy"]');
+    await page.waitForFunction(() => /Ara26/.test((document.querySelector('#quant-viop-levels h2') || {}).textContent || ''), null, { timeout: 10000 }).catch(() => null);
+    const secondTitle = await levelsTitle();
+    const keptContract = await page.evaluate(() => { try { return localStorage.getItem('tto.quant.viop.contract'); } catch (e) { return null; } });
+    check('... the contract selector switches the levels panel to the contract chosen and is remembered',
+      /^Emir seviyeleri · Kas26 · alış 33,83 \/ satış 33,58/.test(firstTitle) && /^Emir seviyeleri · Ara26 · alış 34,09 \/ satış 33,98/.test(secondTitle)
+      && keptContract === 'A1Z6 Curncy' && await page.locator('#quant-viop-contract button.on[data-v="A1Z6 Curncy"]').count() === 1,
+    { firstTitle, secondTitle, keptContract });
+    await shot(page, 'quant-viop');
+    await page.click('#quant-viop-contract button[data-v="A1X6 Curncy"]');          // (the choice is kept in the browser: the front again)
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

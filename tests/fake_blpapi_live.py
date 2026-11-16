@@ -18,6 +18,7 @@ variable ``TTO_FAKE_BBG`` (JSON), which a spawned process inherits:
      "tick_rate": 2000,            # ticks per second pushed by a background thread (0: none)
      "fail_start": true,           # the terminal is not there
      "hang_start": 30,             # ... or does not answer for so many seconds
+     "silent": true,               # requests are never answered (time-outs)
      "crash_once": "/path/marker", # the process dies on the request for CRASH Curncy, once (the marker file)
      "crash_always": true,         # ... or every time
      "hang_once": "/path/marker",  # the helper stops talking on the request for HANG Curncy - alive, but its loop
@@ -59,6 +60,7 @@ def _server() -> "fake_blpapi.Server":
         srv.history[("USDTRY Curncy", "PX_LAST")] = [(_dt.date(2026, 10, 29), 49.90), (_dt.date(2026, 10, 30), 49.93),
                                                       (_dt.date(2026, 11, 2), 49.95), (_dt.date(2026, 11, 3), 49.99)]
     srv.fail_start = bool(CONFIG.get("fail_start"))
+    srv.silent = bool(CONFIG.get("silent"))
     srv.queue_limit = int(CONFIG.get("queue_limit", 0))
     srv.release_gil = bool(CONFIG.get("release_gil"))
     return srv
@@ -175,7 +177,8 @@ class Session(fake_blpapi.Session):
 
     def sendRequest(self, request, correlationId=None, **kwargs):
         marker = CONFIG.get("crash_once")
-        if "CRASH Curncy" in request.data.get("securities", []):
+        asked = list(request.data.get("securities", [])) + [request.data.get("security")]   # (a bar request names one)
+        if "CRASH Curncy" in asked:
             if CONFIG.get("crash_always"):
                 os._exit(3)                      # the helper process dies without a word
             if marker and not os.path.exists(marker):
@@ -183,7 +186,7 @@ class Session(fake_blpapi.Session):
                     fh.write("crashed")
                 os._exit(3)
         hang = CONFIG.get("hang_once")
-        if "HANG Curncy" in request.data.get("securities", []) and (CONFIG.get("hang_always") or (hang and not os.path.exists(hang))):
+        if "HANG Curncy" in asked and (CONFIG.get("hang_always") or (hang and not os.path.exists(hang))):
             if hang:
                 with open(hang, "w") as fh:
                     fh.write("hung")

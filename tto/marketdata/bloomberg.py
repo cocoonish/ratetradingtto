@@ -2,7 +2,7 @@
 ``localhost:8194``).  Server-side products (B-PIPE / SAPI) need an authorisation step that is not
 implemented here.
 
-What the workbook asks for                       how it is served
+What is asked for                                how it is served
 -----------------------------------------------  ------------------------------------------------------------
 ``BDP`` real-time fields (BID, ASK, MID,          one ``ReferenceDataRequest`` for the first value, then a
 PX_LAST, LAST_PRICE, PX_BID/ASK/MID, HIGH, LOW,   ``//blp/mktdata`` subscription keeps it up to date (streaming
@@ -12,6 +12,10 @@ other ``BDP`` fields / ``BDP`` with overrides     ``ReferenceDataRequest``, refr
 ``BDS``                                           ``ReferenceDataRequest`` on the bulk field
 ``BFXFORWARD``                                    no API equivalent: ``#N/A`` (or an optional approximation)
 ``RTGET`` (Refinitiv)                             not a Bloomberg function: ``#N/A``
+daily closes outside of any formula               ``HistoricalDataRequest``, 50 securities per request, asked
+(:meth:`BloombergProvider.history`)               afresh on every call
+intraday bars outside of any formula              ``IntradayBarRequest``: one security per request (Bloomberg
+(:meth:`BloombergProvider.intraday_bars`)         takes one), one hit each, times sent in UTC
 
 Nothing here blocks the calculation engine: a value that is not known yet is returned as
 ``#N/A Requesting Data...`` (exactly what Excel shows) and the cells that used it are recalculated as soon
@@ -103,6 +107,13 @@ RESYNC_BUDGET = 20000
 ID_TYPES = {"ISIN": "isin", "CUSIP": "cusip", "CINS": "cins", "SEDOL": "sedol1", "SEDOL1": "sedol1",
             "SEDOL2": "sedol2", "BUID": "buid", "WPK": "wpk", "COMMON": "common", "FIGI": "bbgid", "BBGID": "bbgid"}
 
+#: Istanbul time - in which the dashboard writes the times of intraday bars - is UTC+3, and Bloomberg takes and gives
+#: them in UTC.  Türkiye has kept UTC+3 all year since September 2016 (no daylight saving), so a fixed offset is exact
+#: for every day Bloomberg keeps bars of; and Windows' Python 3.9 has no time-zone database to ask (no tzdata).
+ISTANBUL = _dt.timedelta(hours=3)
+#: the event types an ``IntradayBarRequest`` takes
+BAR_EVENTS = ("TRADE", "BID", "ASK", "BID_BEST", "ASK_BEST", "BEST_BID", "BEST_ASK")
+
 
 def api_security(sec: str) -> str:
     """The security as the Bloomberg API takes it (the workbook writes it the way Excel's add-in does)."""
@@ -114,6 +125,28 @@ def api_security(sec: str) -> str:
         if kind is not None:
             return "/%s/%s" % (kind, "".join(parts[:-1]))
     return sec
+
+
+def bar_span(start: str, end: str, interval: int, event: str) -> Tuple[_dt.datetime, _dt.datetime, int, str]:
+    """An intraday bar request as Bloomberg takes it: the span's Istanbul times ("YYYY-MM-DD HH:MM") in UTC, the bar
+    length in whole minutes (1 - 1440) and the event type.  ``ValueError`` for what it would refuse."""
+    span = []
+    for text in (start, end):
+        try:
+            t = _dt.datetime.fromisoformat(str(text).strip())
+        except ValueError:
+            raise ValueError("gün içi bar: zaman 'YYYY-MM-DD SS:DD' biçiminde olmalı, %r değil" % (text,)) from None
+        span.append(t.astimezone(_dt.timezone.utc).replace(tzinfo=None) if t.tzinfo is not None else t - ISTANBUL)
+    try:
+        minutes = int(interval)
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes != interval or not 1 <= minutes <= 1440:
+        raise ValueError("gün içi bar: bar uzunluğu 1 – 1440 dakika olmalı, %r değil" % (interval,))
+    kind = str(event).strip().upper()
+    if kind not in BAR_EVENTS:
+        raise ValueError("gün içi bar: olay türü %s olmalı, %r değil" % (" / ".join(BAR_EVENTS), event))
+    return span[0], span[1], minutes, kind
 
 
 _PERIODICITY = {"D": "DAILY", "W": "WEEKLY", "M": "MONTHLY", "Q": "QUARTERLY", "S": "SEMI_ANNUALLY", "Y": "YEARLY"}
@@ -141,13 +174,14 @@ class _Item(object):
 
 
 class _Request(object):
-    __slots__ = ("kind", "keys", "sent", "wanted")
+    __slots__ = ("kind", "keys", "sent", "wanted", "parts")
 
     def __init__(self, kind: str, keys: List[Tuple], wanted: Dict[str, List[Tuple]]):
         self.kind = kind
         self.keys = keys
         self.sent = time.time()
         self.wanted = wanted         # security -> keys expected for it
+        self.parts: Optional[List[Any]] = []     # an answer in several messages (intraday bars) so far; None: unusable
 
 
 class _Sub(object):
@@ -460,6 +494,43 @@ class BloombergProvider(Provider):
                     out[item] = rows
         return out
 
+    def intraday_bars(self, security: str, start: str, end: str, interval: int = 5, event: str = "TRADE",
+                      timeout: float = 60.0) -> Optional[List[Tuple[str, float, float, float, float, float]]]:
+        """Intraday bars by ``IntradayBarRequest`` (what the call returns: :meth:`Provider.intraday_bars`).  One
+        request per call - Bloomberg takes one security per request - and one hit; none once the day's hits have
+        reached ``max_hits_per_day``.  The times go to Bloomberg in UTC; give a start on the bar length's grid (a
+        midnight, 09:30 for 5-minute bars) to get bars on it.  A long span comes in several parts, put together
+        here.  Asked afresh on every call, nothing is kept.  Blocks until the answer is in or ``timeout`` has passed
+        - never call it on the calculation thread.  ``ValueError`` for what Bloomberg would refuse (a time not
+        written "YYYY-MM-DD HH:MM", a bar length outside 1 - 1440 minutes, an event type it does not know)."""
+        t0, t1, interval, event = bar_span(start, end, interval, event)
+        if t1 <= t0:
+            return []                                    # an empty span: nothing to ask
+        with self._lock:
+            if self.limit_reached or (self.max_hits_per_day and self.hits >= self.max_hits_per_day):
+                return None                              # the daily data limit: not one request more
+            self._cid += 1                               # a key of its own: two calls never share an answer
+            key = ("BAR", security, t0, t1, interval, event, self._cid)
+        self._lookup(key, 0.0)
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self._stop.is_set():
+            with self._lock:
+                it = self._items.get(key)
+                if it is None or it.state == "ok":
+                    break
+            time.sleep(0.05)
+        with self._lock:
+            # forgotten either way, with a request still on its way: an answer that comes after the call gave up is
+            # dropped, and nothing is sent again for it
+            it = self._items.pop(key, None)
+            value = self._values.pop(key, None)
+            self._changed.discard(key)
+            for cid in [c for c, r in self._requests.items() if r.kind == "BAR" and r.keys[0] == key]:
+                del self._requests[cid]
+        if it is None or it.state != "ok" or type(value) is not list:
+            return None                                  # not in time, or Bloomberg could not answer it now
+        return value
+
     def status(self) -> Dict[str, Any]:
         with self._lock:
             return {"mode": "live", "connected": self.connected, "host": "%s:%d" % (self.host, self.port),
@@ -684,6 +755,7 @@ class BloombergProvider(Provider):
         bdp: Dict[Tuple, Dict[str, Set[str]]] = {}
         bds: Dict[Tuple, List[Tuple]] = {}
         bdh: Dict[Tuple, List[Tuple]] = {}
+        bars: List[Tuple] = []
         index: Dict[Tuple, Tuple] = {}
         for k in keys:
             kind = k[0]
@@ -696,6 +768,8 @@ class BloombergProvider(Provider):
                 # Dates / Sort / Dir only shape the result: calls that differ in nothing else share a request
                 asked = tuple(o for o in k[5] if o[0] not in ("DATES", "SORT", "DIR"))
                 bdh.setdefault((k[2], k[3], k[4], asked), []).append(k)
+            elif kind == "BAR":
+                bars.append(k)
         for overrides, by_sec in bdp.items():
             groups: Dict[frozenset, List[str]] = {}
             for sec, fields in by_sec.items():
@@ -712,6 +786,8 @@ class BloombergProvider(Provider):
         for (field, start, end, options), ks in bdh.items():
             for i in range(0, len(ks), 50):
                 self._history(ks[i:i + 50], field, start, end, options)
+        for k in bars:
+            self._bars(k)
 
     def _count(self, n: int) -> bool:
         self.hits += n
@@ -786,6 +862,23 @@ class BloombergProvider(Provider):
             request.set(self._name("currency"), opts["FX"])
         self._count(len(wanted))
         self._dispatch(request, _Request("BDH", keys, wanted))
+
+    def _bars(self, key: Tuple) -> None:
+        """The ``IntradayBarRequest`` of a bar call (:meth:`intraday_bars`): one security - the request takes no
+        more -, one hit."""
+        sec = api_security(key[1])
+        try:
+            request = self._refdata.createRequest("IntradayBarRequest")
+            for name, value in (("security", sec), ("eventType", key[5]), ("interval", key[4]),
+                                ("startDateTime", key[2]), ("endDateTime", key[3])):     # the times in UTC
+                request.set(self._name(name), value)
+        except Exception as exc:  # noqa: BLE001 - refused by the library: the call gets "nothing came"
+            self.last_error = "gün içi bar isteği hazırlanamadı (%s): %s" % (key[1], str(exc)[:160])
+            with self._lock:
+                self._answer_bars(key, NA_NA)
+            return
+        self._count(1)
+        self._dispatch(request, _Request("BAR", [key], {sec: [key]}))
 
     def _expire_requests(self) -> None:
         now = time.time()
@@ -974,7 +1067,8 @@ class BloombergProvider(Provider):
                     continue
                 self.last_error = "istek reddedildi: %s" % (str(msg)[:200].replace("\n", " "),)
                 for k in req.keys:
-                    self._set(k, NA_NA)
+                    if k in self._items:                 # (a bar call that gave up has forgotten its key)
+                        self._set(k, NA_NA)
 
     def _on_sub_status(self, msg) -> None:
         kind = str(msg.messageType())
@@ -1044,6 +1138,8 @@ class BloombergProvider(Provider):
             try:
                 if req.kind == "BDH":
                     self._parse_history(msg, req)
+                elif req.kind == "BAR":
+                    self._parse_bars(msg, req, final)
                 else:
                     self._parse_reference(msg, req)
             finally:
@@ -1177,6 +1273,74 @@ class BloombergProvider(Provider):
         if opts.get("DIR") == "H":
             rows = [list(col) for col in zip(*rows)]
         return XlArray(rows)
+
+    def _parse_bars(self, msg, req: _Request, final: bool) -> None:
+        """One message of an ``IntradayBarResponse``.  A long span comes in several - ``PARTIAL_RESPONSE`` events
+        before the final ``RESPONSE`` -: the bars are collected on the request and handed to the waiting call with
+        the last one, oldest first."""
+        key = req.keys[0]
+        n = self._name
+        try:
+            root = msg.asElement()
+            if root.hasElement(n("responseError")):
+                self._bar_error(key[1], root.getElement(n("responseError")), req)
+            elif req.parts is not None and root.hasElement(n("barData")):
+                data = root.getElement(n("barData"))
+                if data.hasElement(n("barTickData")):
+                    ticks = data.getElement(n("barTickData"))
+                    for i in range(ticks.numValues()):
+                        bar = self._bar(ticks.getValueAsElement(i), key[2], key[3])
+                        if bar is not None:
+                            req.parts.append(bar)
+        except Exception as exc:  # noqa: BLE001 - an answer that cannot be read whole is no answer
+            req.parts = None
+            self.last_error = "gün içi bar yanıtı okunamadı (%s): %s" % (key[1], str(exc)[:160])
+        with self._lock:
+            if final:
+                self._answer_bars(key, NA_NA if req.parts is None else sorted(req.parts))
+            else:
+                req.sent = time.time()       # parts keep coming: alive (not expired, not asked again meanwhile)
+
+    def _bar(self, el, t0: _dt.datetime, t1: _dt.datetime) -> Optional[Tuple[str, float, float, float, float, float]]:
+        """One ``barTickData`` entry -> (its start in Istanbul time, open, high, low, close, volume); None for a bar
+        outside the span asked for (start included, end not - whatever the terminal does at the edges) or one
+        without its prices."""
+        n = self._name
+        try:
+            t = el.getElement(n("time")).getValue()
+            if t.tzinfo is not None:                     # (Bloomberg's bar times are UTC; one with an offset is made so)
+                t = t.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+            if not t0 <= t < t1:
+                return None
+            o, h, lo, c = (float(el.getElement(n(f)).getValue()) for f in ("open", "high", "low", "close"))
+            v = float(el.getElement(n("volume")).getValue()) if el.hasElement(n("volume"), True) else 0.0
+        except Exception:  # noqa: BLE001 - not a bar that can be used
+            return None
+        return ((t + ISTANBUL).strftime("%Y-%m-%d %H:%M"), o, h, lo, c, v)
+
+    def _bar_error(self, security: str, info, req: _Request) -> None:
+        """The ``responseError`` of a bar request: how Bloomberg answers one for an unknown security (the request
+        names one).  Said in the status; the call gets ``[]`` (nothing there) - but ``None`` (ask again later) when
+        it says a limit or a time-out: "no bars" then would pass for days without any."""
+        said = {}
+        for name in ("category", "subcategory", "message"):
+            try:
+                said[name] = str(info.getElementAsString(self._name(name))) if info.hasElement(self._name(name)) else ""
+            except Exception:  # noqa: BLE001
+                said[name] = ""
+        self.last_error = "gün içi bar isteği reddedildi (%s): %s" % (
+            security, said["message"] or said["subcategory"] or said["category"] or "Bloomberg hatası")
+        kind = (said["category"] + " " + said["subcategory"]).upper()
+        req.parts = None if ("LIMIT" in kind or "TIMEOUT" in kind) else []
+
+    def _answer_bars(self, key: Tuple, value: Any) -> None:
+        """Hand a bar call its answer (lock held by the caller) - unless the call has given up and forgotten its key:
+        a late answer is dropped.  No formula reads bars, so there is nothing for the engine to recalculate."""
+        it = self._items.get(key)
+        if it is not None and it.state == "sent":
+            it.state = "ok"
+            it.fetched = time.time()
+            self._values[key] = value
 
     # ================================================================== BFXFORWARD approximation (optional)
     def _bfx_approx(self, key: Tuple) -> Any:

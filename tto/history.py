@@ -706,7 +706,11 @@ class History(object):
         from .quant import extend_for_quant, fx_pair_list, history_defs
         extend_for_quant(defs)
         fx = getattr(self.svc, "fx", None)
-        defs.extend(history_defs(fx.source() if fx is not None else "BGN", fx_pair_list(self.store)))
+        # VİOP's listed contracts, as the VİOP sheet names them (L1:W1): the quant package keeps their history and
+        # two years of the expired ones before them
+        active = [v.strip() for v in (val("VIOP!%s1" % c) for c in "LMNOPQRSTUVW") if isinstance(v, str) and v.strip()]
+        defs.extend(history_defs(fx.source() if fx is not None else "BGN", fx_pair_list(self.store),
+                                 viop={"active": active, "today": today} if active else None))
         holidays: List[float] = []
         mi = model.sheet_index.get("Motor")
         if mi is not None:
@@ -1080,6 +1084,12 @@ class History(object):
     #: live: series that are new to the history and ask for it (``info["backfill"]``: the quant package's) get their
     #: first full range a few per sync, in the order they are listed - not all of them in one sync
     BACKFILL_PER_SYNC = 5
+    #: ... VİOP's contracts (``info["backfill"] == "viop"``: many short series, two years of expired ones) in their own
+    #: turn beside them, this many a sync
+    VIOP_PER_SYNC = 15
+    #: a series whose history is complete (``info["tail"] == "none"``: an expired contract) that came back empty is
+    #: asked again only this many days later (its other ticker form meanwhile)
+    FINAL_RETRY_DAYS = 7
     #: the store's record of the full-range requests: series id -> {"day" of the last one, "from" the day it asked
     #: from, "first" the earliest day Bloomberg gave (None: nothing)}
     FETCH_KEY = "hist.fetch"
@@ -1102,7 +1112,12 @@ class History(object):
           only the part they miss, a week into what they have (an answer with nothing in it is no answer);
         * a series marked ``tail: "daily"`` asks its new days once a day - after 07:00, when yesterday's close is final
           (and once at a start before it).  None is marked so today: the desk keeps the 15-minute sync for every series,
-          the quant package's too."""
+          the quant package's too;
+        * a series marked ``tail: "none"`` (an expired VİOP contract: its history is complete) is asked once in full and
+          never for new days; its other tickers (the two-digit year) only after the first came back empty, and an
+          empty one again only ``FINAL_RETRY_DAYS`` later;
+        * VİOP's series (``backfill: "viop"``) take their first full range ``VIOP_PER_SYNC`` a sync, beside the
+          others' ``BACKFILL_PER_SYNC``."""
         snap = self.snapshot()
         today = snap["today"]
         today_iso = _iso(today)
@@ -1117,6 +1132,7 @@ class History(object):
         rationed = self.svc.mode == "live"
         hour = self._hour()
         backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], bool]] = []
+        viop: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], bool]] = []
         full: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
         tail: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
 
@@ -1138,11 +1154,29 @@ class History(object):
         for d in snap["defs"]:
             ext = d.info.get("backfill") == "extend"
             daily = d.info.get("tail") == "daily"
+            final = d.info.get("tail") == "none"
             lookback = int(d.info.get("lookback") or 0)
+            if final:
+                main = "%s|%s" % (d.ticker, d.field)
+                found = any("%s|%s" % (t, d.field) in bounds for t in [d.ticker] + d.alts)
+                main_empty = main not in bounds and bool((records.get(main) or {}).get("day"))
             for t in [d.ticker] + d.alts:
                 sid = "%s|%s" % (t, d.field)
                 b = bounds.get(sid)
                 rec = records.get(sid) or {}
+                if final:
+                    if b is not None:
+                        continue                               # complete: never its new days
+                    if found or (t != d.ticker and not main_empty):
+                        continue                               # another form has it / the first form has not answered yet
+                    last = rec.get("day")
+                    if last and (today - _day(last)).days < self.FINAL_RETRY_DAYS:
+                        continue                               # asked lately, nothing came: a week later
+                    if rationed:
+                        viop.append((1 if sid in records else 0, len(viop), d.field, t, today - _dt.timedelta(days=lookback or look), None, False))
+                    else:
+                        ask(d.field, t, today - _dt.timedelta(days=lookback or look), None)
+                    continue
                 # a series may ask for a longer past than the setting (the quant package's: two years; the history's own
                 # it reads: two years too, once their own window is in)
                 since = min(first, today - _dt.timedelta(days=lookback)) if lookback and (not ext or b is not None) else first
@@ -1154,7 +1188,9 @@ class History(object):
                 else:
                     # the window reaches further back than anything asked so far (and not asked today)
                     wanted = b[0] > reach and str(rec.get("from") or "9999") > reach and rec.get("day") != today_iso
-                if wanted and rationed and (d.info.get("backfill") is True or (ext and b is not None)):
+                if wanted and rationed and d.info.get("backfill") == "viop":
+                    viop.append((1 if sid in records else 0, len(viop), d.field, t, since, b, daily))
+                elif wanted and rationed and (d.info.get("backfill") is True or (ext and b is not None)):
                     # (in turn: a series never asked before goes ahead of one asked again by hand)
                     backfill.append((1 if sid in records else 0, len(backfill), d.field, t, since, b, daily))
                 elif wanted:
@@ -1162,13 +1198,16 @@ class History(object):
                 elif b is not None and not (daily and rec.get("day") == today_iso and rec.get("from")):
                     recent(d.field, t, b, daily)               # (a once-a-day series asked in full today has its last close)
         backfill.sort()
-        for _, _, field, t, since, b, _ in backfill[:self.BACKFILL_PER_SYNC]:
-            ask(field, t, since, b)
-        for _, _, field, t, since, b, daily in backfill[self.BACKFILL_PER_SYNC:]:
-            if b is not None:
-                recent(field, t, b, daily)                     # what it has stays up to date meanwhile
-        self.state["backfill"] = {"waiting": ["%s|%s" % (t, f) for _, _, f, t, _, _, _ in backfill[self.BACKFILL_PER_SYNC:]],
-                                  "per_sync": self.BACKFILL_PER_SYNC if rationed else None}
+        viop.sort()
+        for pool, per in ((backfill, self.BACKFILL_PER_SYNC), (viop, self.VIOP_PER_SYNC)):
+            for _, _, field, t, since, b, _ in pool[:per]:
+                ask(field, t, since, b)
+            for _, _, field, t, since, b, daily in pool[per:]:
+                if b is not None:
+                    recent(field, t, b, daily)                 # what it has stays up to date meanwhile
+        self.state["backfill"] = {"waiting": ["%s|%s" % (t, f) for _, _, f, t, _, _, _ in backfill[self.BACKFILL_PER_SYNC:] + viop[self.VIOP_PER_SYNC:]],
+                                  "per_sync": self.BACKFILL_PER_SYNC if rationed else None,
+                                  "viop_per_sync": self.VIOP_PER_SYNC if rationed else None}
         prov = self.svc.provider
         changed = 0
         for group in (full, tail):

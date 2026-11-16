@@ -13,9 +13,11 @@ dashboard talks to it over two pipes:
 
     dashboard  -- ("lookup", [(key, refresh, real-time field), ...]) ------>  helper
                -- ("history", id, items, start, end, timeout) ------------->
+               -- ("bars", id, security, start, end, interval, event, timeout) ->
                -- ("stop",) ------------------------------------------------>
                <-- ("values", [(key, value), ...], lookups seen, status) ---   every 0.1 s when something changed
                <-- ("history", id, result) ----------------------------------
+               <-- ("bars", id, result) -------------------------------------
 
 :class:`IsolatedBloombergProvider` is the dashboard's side.  It answers the engine from its own copy of the
 values (never blocking), so a burst of ticks reaches the engine as "the latest value of each item", however
@@ -44,7 +46,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..xl.values import XlArray
 from .base import REQUESTING
-from .bloomberg import NA_NA, QUEUE_SIZE, BloombergProvider
+from .bloomberg import NA_NA, QUEUE_SIZE, BloombergProvider, bar_span
 
 log = logging.getLogger("tto.bloomberg")
 
@@ -77,6 +79,18 @@ def _history(prov: BloombergProvider, send, rid: int, items, start: str, end: st
         res = {}
     try:
         send(("history", rid, res))
+    except Exception:  # noqa: BLE001 - the dashboard is gone
+        pass
+
+
+def _bars(prov: BloombergProvider, send, rid: int, security: str, start: str, end: str, interval: int, event: str,
+          timeout: float) -> None:
+    try:
+        res = prov.intraday_bars(security, start, end, interval=interval, event=event, timeout=timeout)
+    except Exception:  # noqa: BLE001 - the caller gets "nothing came" and asks again later
+        res = None
+    try:
+        send(("bars", rid, res))
     except Exception:  # noqa: BLE001 - the dashboard is gone
         pass
 
@@ -151,6 +165,9 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
                         elif kind == "history":
                             threading.Thread(target=_history, args=(prov, send) + tuple(msg[1:]),
                                              name="tto-bbg-history", daemon=True).start()
+                        elif kind == "bars":
+                            threading.Thread(target=_bars, args=(prov, send) + tuple(msg[1:]),
+                                             name="tto-bbg-bars", daemon=True).start()
                         if not inbox.poll(0):
                             break
                 status = prov.status()                     # before the values: "nothing pending" then means
@@ -409,6 +426,28 @@ class IsolatedBloombergProvider(BloombergProvider):
             with self._lock:
                 self._waiters.pop(rid, None)
 
+    def intraday_bars(self, security: str, start: str, end: str, interval: int = 5, event: str = "TRADE",
+                      timeout: float = 60.0) -> Optional[List[Tuple[str, float, float, float, float, float]]]:
+        """As :meth:`BloombergProvider.intraday_bars`, asked of the helper (which counts the hit and keeps the daily
+        limit); ``None`` too when there is no helper or it ends meanwhile.  What Bloomberg would refuse is refused
+        here (``ValueError``), and an empty span asks nothing."""
+        t0, t1, interval, event = bar_span(start, end, interval, event)
+        if t1 <= t0:
+            return []
+        waiter: List[Any] = [threading.Event(), None]
+        with self._lock:
+            self._rid += 1
+            rid = self._rid
+            self._waiters[rid] = waiter
+        try:
+            if not self._post(("bars", rid, security, start, end, interval, event, float(timeout))):
+                return None
+            waiter[0].wait(float(timeout) + 15.0)
+            return waiter[1]
+        finally:
+            with self._lock:
+                self._waiters.pop(rid, None)
+
     def revalidate(self) -> int:
         return 0                             # the helper does this on its own when the day changes
 
@@ -492,7 +531,7 @@ class IsolatedBloombergProvider(BloombergProvider):
                 kind = msg[0]
                 if kind == "values":
                     self._apply(msg[1], msg[2], msg[3])
-                elif kind == "history":
+                elif kind in ("history", "bars"):
                     with self._lock:
                         waiter = self._waiters.get(msg[1])
                     if waiter is not None:
