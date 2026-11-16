@@ -529,7 +529,9 @@ def test_both_pages_over_http(seeded):
         assert client.get("/api/quant/opt").json()["opt"]["pairs"]
         nav = client.get("/api/nav").json()["pages"]
         quant = [p["id"] for p in nav if p["group"] == "Quant"]
-        assert quant[9:11] == ["quant-curve", "quant-opt"] and len(quant) == 15             # (intraday before them, the path / WIRP / lead / VİOP after)
+        # (in the menu's order: Eğri Adil Değeri on Faiz's tabs after Rejim, Opsiyon on FX's after Makro)
+        assert quant.index("quant-curve") == quant.index("quant-regime") + 1 and quant.index("quant-opt") == quant.index("quant-macro") + 1
+        assert len(quant) == 15
         assert client.get("/static/js/pages/quantfit.js").status_code == 200
         # the quote and the switch from the fair curve, the desk's half spreads
         fixed = [r["isin"] for r in body["dibsfv"]["rows"] if r["kind"] == "fixed"]
