@@ -13,11 +13,12 @@ import json
 import os
 import pathlib
 import pickle
+import re
 import shutil
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -111,6 +112,17 @@ def user_key(name: str) -> str:
     create new users ("AYŞE YILMAZ", "Ayşe Yılmaz" and "ayşe yilmaz" are one person)."""
     key = " ".join(name.strip().split()).casefold()
     return key.replace("\u0307", "").replace("\u0131", "i")
+
+
+_CELL = re.compile(r"^(.*)!\$?([A-Za-z]{1,3})\$?(\d+)$")
+
+
+def _cell_order(ref: str) -> Tuple[str, int, int, str]:
+    """A cell's place for sorting ("Sheet!B12" after "Sheet!B9"): sheet, row, column."""
+    m = _CELL.match(ref or "")
+    if not m:
+        return (ref or "", 0, 0, "")
+    return (m.group(1), int(m.group(3)), len(m.group(2)), m.group(2).upper())
 
 
 def restore(backup: str, db_path: str) -> Dict[str, Any]:
@@ -518,6 +530,129 @@ class Store(object):
         with self._lock:
             cur = self._db.execute("DELETE FROM scenarios WHERE user=? AND name=?", (user, name))
             return cur.rowcount > 0
+
+    # ------------------------------------------------------------------ values that follow what their row is about
+    def move_values(self, book: str, where: Callable[[str], Any], users: Optional[List[str]] = None, shared: bool = True,
+                    scenarios: bool = True, keys: Optional[Dict[str, Any]] = None, key_clears: Sequence[str] = (),
+                    key_user: Optional[str] = None, by: Optional[str] = None, put: Sequence[Tuple[str, Any]] = (),
+                    seed: Optional[Dict[str, Any]] = None, blank: Any = ()) -> Dict[str, Any]:
+        """The values of a list's rows follow what each row is about (a bond, by its ISIN): one transaction, for every
+        user.  ``where(cell)`` says where a stored value of ``book`` goes - its new cell, ``None`` (it goes) or False (it
+        stays) - for each user's values (``users``: theirs alone; None: everybody's), the desk's (``shared``) and the saved
+        scenarios' (``scenarios``).  A value moved onto a cell that holds one does not replace it (a bond listed twice: what
+        it has on its other row stands; of two moved onto one cell the upper row's), and keeps no formula (its references
+        would not move with it).  The desk's: ``seed`` - the workbook's own values of cells that go with their row, taken
+        as the desk's first (a pricing source the file has for the bond on that row); ``blank`` - cells whose value, once
+        it went, is a blank, not the workbook's own (the file's value was the bond's that left).  With them, in the same
+        transaction: the key cells written (``keys``: cell -> value as stored, ``key_clears``: cells whose stored value
+        goes - ``key_user``'s, None: the desk's) and ``put`` (key / value pairs).  Returns what moved and what went, value
+        by value: ``{"moved": [(user, cell, new cell, value)], "dropped": [(user, cell)], "blanked": [cell], "scenarios":
+        scenarios changed, "scenario_moved": n, "scenario_dropped": n, "scenario_cells_moved" / "scenario_cells_dropped":
+        [cell, ...]}`` (user None: the desk's)."""
+        ts = now_iso()
+        moved: List[Tuple[Optional[str], str, str, Any]] = []
+        dropped: List[Tuple[Optional[str], str]] = []
+        blanked: List[str] = []
+        sc_cells_moved: List[str] = []
+        sc_cells_dropped: List[str] = []
+        sc_moved = sc_dropped = touched = 0
+        formulas = False
+        with self.transaction() as db:
+            if users is None:
+                mine = db.execute("SELECT user, cell, value, formula FROM user_inputs WHERE book=?", (book,)).fetchall()
+            else:
+                mine = [r for u in users for r in db.execute(
+                    "SELECT user, cell, value, formula FROM user_inputs WHERE book=? AND user=?", (book, u)).fetchall()]
+            if shared:
+                for cell, v in (seed or {}).items():
+                    db.execute("INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at) VALUES (?,?,?,NULL,?) "
+                               "ON CONFLICT(book, cell) DO NOTHING", (book, cell, json.dumps(v, ensure_ascii=False), ts))
+            desk = db.execute("SELECT cell, value, formula, updated_by FROM shared_inputs WHERE book=?", (book,)).fetchall() \
+                if shared else []
+            go = sorted(((r, where(r["cell"])) for r in mine), key=lambda x: (x[0]["user"], _cell_order(x[0]["cell"])))
+            go = [(r, w) for r, w in go if w is not False]
+            for r, _ in go:
+                db.execute("DELETE FROM user_inputs WHERE user=? AND book=? AND cell=?", (r["user"], book, r["cell"]))
+                formulas = formulas or r["formula"] is not None
+            for r, w in go:
+                if w is not None and db.execute(
+                        "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
+                        "ON CONFLICT(user, book, cell) DO NOTHING", (r["user"], book, w, r["value"], ts)).rowcount:
+                    moved.append((r["user"], r["cell"], w, json.loads(r["value"])))
+                else:
+                    dropped.append((r["user"], r["cell"]))
+            go = sorted(((r, where(r["cell"])) for r in desk), key=lambda x: _cell_order(x[0]["cell"]))
+            go = [(r, w) for r, w in go if w is not False]
+            for r, _ in go:
+                db.execute("DELETE FROM shared_inputs WHERE book=? AND cell=?", (book, r["cell"]))
+                formulas = formulas or r["formula"] is not None
+            for r, w in go:
+                if w is not None and db.execute(
+                        "INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at) VALUES (?,?,?,?,?) "
+                        "ON CONFLICT(book, cell) DO NOTHING", (book, w, r["value"], r["updated_by"], ts)).rowcount:
+                    moved.append((None, r["cell"], w, json.loads(r["value"])))
+                else:
+                    dropped.append((None, r["cell"]))
+            for r, _ in go:
+                if r["cell"] in blank and db.execute(
+                        "INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at) VALUES (?,?,'null',NULL,?) "
+                        "ON CONFLICT(book, cell) DO NOTHING", (book, r["cell"], ts)).rowcount:
+                    blanked.append(r["cell"])
+            if scenarios:
+                rows = db.execute("SELECT id, user, payload FROM scenarios").fetchall()
+                for r in rows:
+                    if users is not None and r["user"] not in users:
+                        continue
+                    keep, go_sc, changed = [], [], False
+                    for x in json.loads(r["payload"]):
+                        w = where(x[1]) if x[0] == book else False
+                        if w is False:
+                            keep.append(list(x))
+                            continue
+                        changed = True
+                        if w is None:
+                            sc_dropped += 1
+                            sc_cells_dropped.append(x[1])
+                        else:
+                            go_sc.append((_cell_order(x[1]), x[1], [x[0], w, x[2]]))
+                    if not changed:
+                        continue
+                    have = {(x[0], x[1]) for x in keep}
+                    for _, source, x in sorted(go_sc, key=lambda y: y[0]):
+                        if (x[0], x[1]) in have:
+                            sc_dropped += 1
+                            sc_cells_dropped.append(source)
+                            continue
+                        have.add((x[0], x[1]))
+                        keep.append(x)
+                        sc_moved += 1
+                        sc_cells_moved.append(source)
+                    touched += 1
+                    db.execute("UPDATE scenarios SET payload=?, updated_at=? WHERE id=?",
+                               (json.dumps(sorted(keep, key=lambda x: (x[0], x[1])), ensure_ascii=False), ts, r["id"]))
+            for cell, v in (keys or {}).items():
+                if key_user is None:
+                    db.execute("INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at, formula) VALUES (?,?,?,?,?,NULL) "
+                               "ON CONFLICT(book, cell) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, "
+                               "updated_at=excluded.updated_at, formula=NULL", (book, cell, json.dumps(v, ensure_ascii=False), by, ts))
+                else:
+                    db.execute("INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,NULL) "
+                               "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
+                               "formula=NULL", (key_user, book, cell, json.dumps(v, ensure_ascii=False), ts))
+            for cell in key_clears:
+                if key_user is None:
+                    db.execute("DELETE FROM shared_inputs WHERE book=? AND cell=?", (book, cell))
+                else:
+                    db.execute("DELETE FROM user_inputs WHERE user=? AND book=? AND cell=?", (key_user, book, cell))
+            for key, value in put:
+                db.execute("INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                           (key, json.dumps(value, ensure_ascii=False)))
+        if moved or dropped or keys or key_clears:
+            self._told("*", formulas)
+            self._told(None, formulas)
+        return {"moved": moved, "dropped": dropped, "blanked": blanked, "scenarios": touched, "scenario_moved": sc_moved,
+                "scenario_dropped": sc_dropped, "scenario_cells_moved": sc_cells_moved,
+                "scenario_cells_dropped": sc_cells_dropped}
 
     # ------------------------------------------------------------------ shared inputs
     def shared_inputs(self, book: Optional[str] = None) -> Dict[Tuple[str, str], Any]:
