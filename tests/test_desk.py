@@ -5,6 +5,7 @@ too), the limits, the recurring items' days and alarms; then the same over HTTP.
 Most tests use the corner on a database of their own (``_desk``): no workbook is loaded for them - the desk's TRY
 holidays are the test's (``svc.holidays``) and its clock too where it matters (``clock``)."""
 import datetime as dt
+import sqlite3
 
 import pytest
 from starlette.testclient import TestClient
@@ -540,6 +541,40 @@ def test_a_recurring_item_is_checked_limited_and_kept(tmp_path, clock, monkeypat
         d.add(ali, "2026-11-19", None, "iş %d" % i)
     _refused(429, d.add_rule, ali, "daily", "12:00", "bir fazla")
     _refused(429, d.edit_rule, ali, rid, "daily", "12:00", "bir fazla")
+    store.close()
+
+
+def test_an_earlier_database_gets_the_recurring_items_tables_and_keeps_its_rows(tmp_path, clock):
+    """A database of the version before the recurring items (an update): opened, it gets their tables - every row of
+    every table it had stays."""
+    path = tmp_path / "tto.db"
+    d, store = _desk(path)
+    ali = _user(d, "Ali Veli")
+    d.add(ali, "2026-11-16", "10:00", "eski iş", deadline=True)
+    d.say(ali, "eski mesaj")
+    d.report(ali, "idea", "eski öneri")
+    store.close()
+    new = ("agenda_rules", "agenda_rule_days", "agenda_snoozes")
+    con = sqlite3.connect(str(path))
+    for table in new:
+        con.execute("DROP TABLE %s" % table)
+    con.commit()
+
+    def rows():
+        names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        return {t: con.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0] for t in names}
+
+    before = rows()
+    assert not set(new) & set(before) and before["agenda"] == before["chat"] == before["feedback"] == 1
+    con.close()
+    d, store = _desk(path)
+    con = sqlite3.connect(str(path))
+    try:
+        assert rows() == dict(before, **{t: 0 for t in new})
+    finally:
+        con.close()
+    assert d.agenda(ali)["items"][0]["text"] == "eski iş"
+    assert d.add_rule(ali, "daily", "12:00", "yeni")["added_rule"]
     store.close()
 
 

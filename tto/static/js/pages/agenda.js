@@ -60,8 +60,9 @@ export class AgendaPage {
     clear(this.host);
     // ---- a new item
     this.day = h('input', { class: 'inp', type: 'date', id: 'agenda-day', value: localDay(new Date()), title: 'Gün' });
+    this.day.addEventListener('change', () => this.repeatChanged());
     const today = h('button', { class: 'btn sm', type: 'button', id: 'agenda-today', title: 'Bugünü seç' }, 'Bugün');
-    today.addEventListener('click', () => { this.day.value = localDay(new Date()); this.text.focus(); });
+    today.addEventListener('click', () => { this.day.value = localDay(new Date()); this.repeatChanged(); this.text.focus(); });
     this.time = h('input', { class: 'inp', type: 'time', id: 'agenda-time', title: 'Saat (isteğe bağlı)' });
     this.text = h('input', { class: 'inp', type: 'text', id: 'agenda-text', maxlength: '300', placeholder: 'Unutulmaması gereken iş…' });
     this.text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.submit(); } });
@@ -136,13 +137,16 @@ export class AgendaPage {
     this.renderRules();
   }
 
-  /** A recurring item: the day field is its first day, the time is needed, its days of the week when chosen. */
+  /** A recurring item: the day field is its first day (said beside it), the time is needed, its days of the week when
+   * chosen. */
   repeatChanged() {
     const v = this.repeat.value;
     const on = v !== 'once';
+    const start = this.day.value > localDay(new Date()) ? this.day.value : null;
     this.weekdays.classList.toggle('hidden', v !== 'weekdays');
     this.endBox.classList.toggle('hidden', !on);
-    this.repeatHint.textContent = on ? 'saat gerekli · gün alanı başlangıç günüdür · her günü ayrı tamamlanır' : '';
+    this.repeatHint.textContent = on ? (start ? 'başlangıç ' + TR_DATE(start) + ' (gün alanı)' : 'bugünden başlar')
+      + ' · saat gerekli · her günü ayrı tamamlanır' : '';
     this.day.title = on ? 'Başlangıç günü (bugün ya da önceyse bugünden başlar)' : 'Gün';
     this.time.title = on ? 'Saat (gerekli: her gününde o saatte uyarır)' : 'Saat (isteğe bağlı)';
   }
@@ -360,7 +364,8 @@ export class AgendaPage {
       if ((this.end.value || null) === body.end) this.end.value = '';
       this.repeatChanged();
       this.text.focus();
-      toast('Tekrarlayan iş eklendi: ' + REPEATS.find(([v]) => v === body.repeat)[1] + ' ' + body.time, 'ok', 2600);
+      toast('Tekrarlayan iş eklendi: ' + REPEATS.find(([v]) => v === body.repeat)[1] + ' ' + body.time
+        + (body.start ? ' · başlangıç ' + TR_DATE(body.start) : ''), 'ok', 3000);
     } catch (err) {
       errorToast(err);
     } finally {

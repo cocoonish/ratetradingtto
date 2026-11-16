@@ -2200,6 +2200,12 @@ async function shot(page, name) {
     });
     const businessDay = rep.dow <= 5 && !shut.has(rep.day);
     const REP = 'Swap limitlerini kontrol et (tekrar)';
+    await page.fill('#agenda-day', soon.tomorrow);
+    await page.selectOption('#agenda-repeat', 'daily');
+    const fromDay = await page.textContent('#agenda-repeat-row');
+    await page.click('#agenda-today');
+    check('repeating, the day field is the first day - said beside it', /başlangıç \d\d\.\d\d\.\d{4}/.test(fromDay)
+      && /bugünden başlar/.test(await page.textContent('#agenda-repeat-row')), fromDay);
     await page.fill('#agenda-time', rep.time);
     await page.fill('#agenda-text', REP);
     await page.check('#agenda-deadline');
