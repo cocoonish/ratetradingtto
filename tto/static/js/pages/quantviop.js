@@ -147,13 +147,19 @@ class ViopPage extends QuantPage {
     if (!r) { host.appendChild(h('div', { class: 'empty' }, 'Kontrat seçin')); return; }
     this.levels.setTitle('Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, 2) + ' / satış ' + fmt(r.bid, 2)
       + (isNum(r.fair) ? ' · adil ' + fmt(r.fair, 2) : '') + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : ''));
+    // where the levels start and whose σ they use, when not the contract's own quotes and history
+    const from = [];
+    if (r.levels_from && r.levels_from !== 'kota') from.push('Başlangıç: ' + r.levels_from + (isNum(r.ref) ? ' (' + fmt(r.ref, 2) + ')' : ''));
+    if (r.sd_from) from.push('Oynaklık: ' + r.sd_from + ' kontratından (bu kontratın kendi geçmişi az)');
     for (const [which, title] of [['today', 'Bugün (kalan seans)'], ['week', 'Bu hafta (Cuma kapanışına)']]) {
       const part = r[which] || {};
       const box = h('div', { class: 'qlevels' });
       box.appendChild(h('div', { class: 'qsub' }, title + (isNum(part.days) ? ' · ' + fmt(part.days, 1) + ' gün' : '')
         + (isNum(part.sigma_bp) ? ' · σ ' + fmt(part.sigma_bp, 1) + ' bp' : '') + (isNum(part.drift_bp) ? ' · beklenen kayma ' + sgn(part.drift_bp, 1) + ' bp' : '')));
       if (!part.buy && !part.sell) {
-        box.appendChild(h('div', { class: 'empty' }, which === 'today' ? 'Seans kapalı ya da oynaklık için geçmiş yok' : 'Oynaklık için geçmiş yok'));
+        // the reason, as the server gives it: no history for the σ, no quote and no trade, the session over
+        const why = part.why || r.levels_why || (which === 'today' ? 'seans kapalı ya da oynaklık için geçmiş yok' : 'oynaklık için geçmiş yok');
+        box.appendChild(h('div', { class: 'empty' }, 'Seviye yok: ' + why));
       } else {
         const tbl = h('table', { class: 'plain qlegs' }, h('tr', null, h('th', null, 'Olasılık'), h('th', null, 'Alış emri ima %'), h('th', null, 'Fiyat'),
           h('th', null, 'bp'), h('th', null, 'Satış emri ima %'), h('th', null, 'Fiyat'), h('th', null, 'bp')));
@@ -169,6 +175,7 @@ class ViopPage extends QuantPage {
         box.appendChild(tbl);
         box.appendChild(h('div', { class: 'muted' }, 'Sürüklenme: adil değere çekilme ' + sgn(part.pull_bp, 1) + ' bp, vade kayması '
           + sgn((r.roll_bp_day || 0) * (part.days || 0), 1) + ' bp, takvim ' + sgn(part.season_bp, 1) + ' bp.'));
+        if (from.length) box.appendChild(h('div', { class: 'muted qfrom' }, from.join(' · ') + '.'));
       }
       host.appendChild(box);
     }

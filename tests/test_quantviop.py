@@ -421,3 +421,68 @@ def test_before_bloombergs_history_the_viop_sheets_own_days_serve():
     assert any(m.sid == "viop:A1X6 Curncy" for m in mons)
     row = next(x for x in tab["_build"](live, dt.datetime(2026, 11, 3, 11, 0))["rows"] if x["ticker"] == "A1X6 Curncy")
     assert row["fair"] is not None and row["week"]["buy"] and row["today"]["sell"]
+
+
+def test_levels_with_a_thin_book_and_a_far_month_without_days_of_its_own():
+    """The order levels when the book is thin - a far month's often is, one side of it now and then: one side quoted
+    (both ladders start from it), no quote but a trade (from its price), neither (the reason, no levels); a far month
+    on the sheet without days of its own takes the daily σ of the contract nearest to it by days to expiry (named);
+    the session over: today's reason, the week's levels still there."""
+    days, series, meta, spot, ois, basis = _history()
+    live, eng = _live(series, ois[days[-1]], 150.0 - 60.0, spot[days[-1]])
+    full = qf.Ctx(dict(DEFAULTS), TODAY, series, meta, live=live, holidays=HOL)
+    cur = qv.Curves(full)
+    sheet = []
+    for c in qv.contracts_of(full, eng):
+        rows = qv.contract_rates(c, cur, HOL)
+        if c.expired or not rows:
+            continue
+        sheet.append({"ticker": c.ticker, "name": c.name, "expiry": c.expiry.isoformat(), "imp": {r["day"]: r["implied"] for r in rows},
+                      "days": {r["day"]: r["g"] for r in rows}, "baz": {r["day"]: r["basis"] for r in rows},
+                      "ois360": {r["day"]: r["ois"] for r in rows}})
+    # a far month the VİOP sheet shows, quoted, with no history at all (Haz27: ~220 days, beyond what the others give)
+    spot_now, ois_now = spot[days[-1]], ois[days[-1]]
+    t = qv.contract_ticker("A1", 2027, 6)
+    exp = qv.expiry_of(2027, 6, HOL)
+    g = qv.days_to(exp, TODAY.isoformat(), HOL)
+    mid = _ois_at(ois_now, g) * 360.0 / 365.0 + 0.9
+    far = {"ticker": t, "expiry": exp.isoformat(), "g_bid": float(g), "spot": spot_now, "usd": 4.0, "i_bid": mid - 0.05, "i_ask": mid + 0.05,
+           "bid": qv.price_of(mid - 0.05, spot_now, 4.0, g), "ask": qv.price_of(mid + 0.05, spot_now, 4.0, g)}
+    eng["viopq"].append(far)
+    live.update(qv.live_values({"viopq": [far]}))
+    # the front quoted on the bid only; Ara26 not quoted, traded at its earlier bid
+    for k in ("VQA", "VQM", "VQPA"):
+        live.pop(k + ":A1X6 Curncy", None)
+    px_dec = live["VQPB:A1Z6 Curncy"]
+    for k in ("VQB", "VQA", "VQM", "VQPB", "VQPA"):
+        live.pop(k + ":A1Z6 Curncy", None)
+    live["VQPL:A1Z6 Curncy"] = px_dec
+    bare = {k: v for k, v in series.items() if not k.startswith(("VIOPF:", "VIOPH:", "VIOPL:"))}
+    ctx = qf.Ctx(dict(DEFAULTS), TODAY, bare, {k: v for k, v in meta.items() if not k.startswith("VIOPF:")}, live=live, holidays=HOL, viop=sheet)
+    _, tab = qv.fam_viop(ctx, eng)
+    rows = {r["ticker"]: r for r in tab["_build"](live, dt.datetime(2026, 11, 3, 11, 0))["rows"]}
+    # one side: both ladders from the bid, said so
+    front = rows["A1X6 Curncy"]
+    assert front["ask"] is None and front["levels_from"] == "yalnız satış kotası (bid)" and front["ref"] == front["bid"]
+    assert front["week"]["buy"][0]["level"] <= front["bid"] + 1e-9 and front["week"]["sell"][0]["level"] >= front["bid"] - 1e-9
+    # no quote: from the last trade's implied rate (the same price the bid had: the same rate)
+    dec = rows["A1Z6 Curncy"]
+    assert dec["bid"] is None and dec["ask"] is None and dec["levels_from"] == "son işlem fiyatı"
+    assert dec["last_implied"] == pytest.approx(qv.implied(px_dec, spot_now, 4.0, dec["g"]), abs=1e-9) and dec["today"]["buy"] and dec["week"]["sell"]
+    # a history shorter than the window (Oca27: 81 days, the window 120): its σ is its own daily changes' - not zero
+    # (the two slices of a too short history were the same days: every change 0, no σ, no levels)
+    jan = next(s for s in sheet if s["ticker"] == "A1F7 Curncy")
+    jd = sorted(jan["imp"])
+    assert len(jd) < DEFAULTS["viop_fair_window"] and rows["A1F7 Curncy"]["sd_daily"] > 0
+    assert rows["A1F7 Curncy"]["sd_daily"] == pytest.approx(qv.qm.stdev([jan["imp"][b] - jan["imp"][a] for a, b in zip(jd, jd[1:])]))
+    # the far month: its own days none, the σ of Oca27 (the contract nearest it by days), its levels from its quotes
+    f = rows[t]
+    assert f["sd_from"] == "Oca27" and f["levels_from"] == "kota" and f["week"]["buy"] and f["week"]["sell"]
+    assert f["sd_daily"] == pytest.approx(rows["A1F7 Curncy"]["sd_daily"]) and not rows["A1F7 Curncy"].get("sd_from")
+    # neither a quote nor a trade: no levels, the reason
+    live.pop("VQPL:A1Z6 Curncy")
+    dec = next(r for r in tab["_build"](live, dt.datetime(2026, 11, 3, 11, 0))["rows"] if r["ticker"] == "A1Z6 Curncy")
+    assert dec["levels_why"] == "canlı kota ve son işlem fiyatı yok" and "today" not in dec and "week" not in dec
+    # the session over (19:00, a Tuesday): today has none and says why, the week's three days ahead still give levels
+    late = next(r for r in tab["_build"](live, dt.datetime(2026, 11, 3, 19, 0))["rows"] if r["ticker"] == "A1F7 Curncy")
+    assert late["today"]["why"] == "seans kapalı" and not late["today"].get("buy") and late["week"]["buy"] and late["week"]["days"] == 3.0

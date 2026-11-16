@@ -2408,7 +2408,7 @@ async function shot(page, name) {
       viopApi.status === 200 && vrows.length === 12 && vShown === vrows.length && vrows[0].ticker === 'A1X6 Curncy' && vrows[11].ticker === 'A1V7 Curncy'
       && vrows.every((r) => typeof r.bid === 'number' && typeof r.ask === 'number' && r.bid < r.ask && r.fair == null && !r.today && !r.week)
       && /Kas26/.test(vText) && /Eki27/.test(vText) && /33,83/.test(vText) && /33,58/.test(vText) && /geçmiş yok/.test(vText)
-      && /Oynaklık için geçmiş yok/.test(vLevels) && await page.locator('#quant-viop-mode:not(.hidden)').count() === 1,
+      && /Seviye yok: oynaklık için geçmiş yok/.test(vLevels) && await page.locator('#quant-viop-mode:not(.hidden)').count() === 1,
     { rows: vrows.length, shown: vShown, why: vq.why || (vq.live || {}).why, first: vrows[0] });
     // the contract selector: the levels panel is the chosen contract's (its ask / bid implied rates in the title), the
     // choice kept in the browser
