@@ -1006,7 +1006,9 @@ export class SettingsPage {
       h('div', { class: 'set-actions' }, add, paste, copy, this.rollBtn, h('span', { class: 'grow' }), this.undoBtn, this.saveBtn),
       h('div', { class: 'set-scroll' }, this.calTable)));
     this.calPanel.setNote('Toplantı tarihleri herkes için ortaktır ve OIS · PPK sayfasındaki listeyle (OIS_MAIN!P10:P89) aynıdır. Bir tarih değiştiğinde ya da '
-      + 'liste kaydırıldığında her kullanıcının senaryo adımları (U:W) ve kayıtlı senaryoları toplantısıyla birlikte taşınır; '
+      + 'liste kaydırıldığında bir toplantıya yazılmış her şey toplantısıyla birlikte taşınır: herkesin senaryo adımları (U:W), kayıtlı '
+      + 'senaryoları, etiketi (O), elle değerleri, Motor\'un toplantı başına girdileri, o hücrelere başvuran formüller ve alarmlar. '
+      + 'Listeden çıkan toplantının değerleri silinmez, kenara alınır; tarih geri eklenirse geri gelir. '
       + 'PPK fiyatlama geçmişi yeni takvimle arka planda yeniden hesaplanır. Bir toplantı geçince (tarihi OIS spot valöründen önce '
       + 'kalınca) liste açılışta ve gün dönünce kendiliğinden kayar: MPC1 her zaman sıradaki toplantıdır. Açıklanan yeni tarihler '
       + '"Toplu yapıştır… → Açıklanan tarihlerle düzelt" ile tek seferde girilir.');
@@ -1235,6 +1237,10 @@ export class SettingsPage {
         + ' arşive alındı, MPC1 ' + isoToTr(auto.first) + ' (' + isoToTr(auto.at.slice(0, 10)) + ' ' + auto.at.slice(11, 16) + ')'));
     }
     if (cal.autoroll_error) this.calInfo.appendChild(h('span', { class: 'warn-text' }, 'Otomatik kaydırma yapılamadı: ' + cal.autoroll_error));
+    if (cal.parked && cal.parked.length) {
+      this.calInfo.appendChild(h('span', { class: 'muted', id: 'calendar-parked' }, 'Kenarda: ' + cal.parked.length + ' toplantının değerleri ('
+        + cal.parked.slice(0, 4).map(isoToTr).join(', ') + (cal.parked.length > 4 ? ' …' : '') + ') - tarih geri eklenirse geri gelir'));
+    }
     if (this.dirty) {
       // a new calendar makes every day of the meeting pricing history compute again: one save, one recalculation
       this.calInfo.appendChild(h('span', { class: 'warn-text' }, 'Kaydedince PPK fiyatlama geçmişi yeni takvimle arka planda yeniden hesaplanır'
@@ -1306,18 +1312,38 @@ export class SettingsPage {
       if (seen.has(d)) { toast('Aynı tarih iki kez girilmiş: ' + isoToTr(d), 'err'); return; }
       seen.add(d);
     }
+    // meetings of the OIS list taken out (✕, "yerine koy"): asked first - what was typed for them is set aside
+    const kept = new Set(this.rows.map((r) => r.was).filter(Boolean));
+    const out = this.cal.meetings.filter((m) => m.where === 'list' && !m.passed && !kept.has(m.date)).map((m) => m.date);
+    if (!roll && out.length) {
+      const list = out.slice(0, 6).map(isoToTr).join(', ') + (out.length > 6 ? ' …' : '');
+      const ok = await confirmDialog('Toplantı listeden çıkıyor',
+        out.length + ' toplantı OIS listesinden çıkacak (' + list + '). Onlara yazılmış her şey - herkesin senaryo adımları, kayıtlı '
+        + 'senaryolardaki değerleri, etiketleri, elle değerleri - kenara alınır; tarih yeniden eklenirse geri gelir. '
+        + 'Bu tarihe başvuran formüller #REF! olur.', 'Çıkar ve kaydet', true);
+      if (!ok) return;
+    }
     try {
-      const res = await api.post('/api/calendar', { dates: this.dates(), roll: !!roll });
+      const res = await api.post('/api/calendar', { dates: this.dates(), roll: !!roll, version: this.cal.version });
       const bits = [res.meetings + ' toplantı listede', res.archive + ' arşivde'];
       if (res.rolled && res.rolled.length) bits.push(res.rolled.length + ' geçen toplantı arşive alındı');
-      if (res.moved || res.scenarios) bits.push('senaryo adımları taşındı (' + res.moved + ' hücre, ' + res.scenarios + ' kayıtlı senaryo)');
-      toast('Takvim kaydedildi: ' + bits.join(' · '), 'ok', 6000);
+      if (res.note) bits.push(res.note);
+      toast('Takvim kaydedildi: ' + bits.join(' · '), 'ok', res.note ? 12000 : 6000);
       this.dirty = false;
       this.cal = await api.get('/api/calendar');
       this.rows = this.cal.meetings.map((m) => ({ date: m.date, was: m.date }));
       this.renderCalendar();
       this.ctx.refreshNow();
-    } catch (err) { errorToast(err); }
+    } catch (err) {
+      errorToast(err);
+      if (err && err.status === 409) {
+        // saved over a calendar that changed meanwhile: refused - the page shows the calendar as it is now
+        this.cal = await api.get('/api/calendar');
+        this.rows = this.cal.meetings.map((m) => ({ date: m.date, was: m.date }));
+        this.dirty = false;
+        this.renderCalendar();
+      }
+    }
   }
 
   async roll() {
@@ -1344,8 +1370,8 @@ export class SettingsPage {
         + 'olabildiğince az kayar); yakınında toplantı olmayan tarih yeni toplantı olarak eklenir. Açıklanmamış toplantılar (ör. sonraki '
         + 'yıllar) ve geçmiş olduğu gibi kalır; senaryo adımları toplantısıyla taşınır.',
       merge: 'Listede olmayan tarihler eklenir; eski tarihler de kalır (yanlış olanları ✕ ile silin).',
-      future: 'Bugünden sonraki bütün toplantılar silinir, yerine yapıştırılanlar gelir: yapıştırılmayan toplantılar ve onlara yazılmış '
-        + 'senaryo adımları gider.',
+      future: 'Bugünden sonraki bütün toplantılar silinir, yerine yapıştırılanlar gelir: yapıştırılmayan toplantılar listeden çıkar, '
+        + 'onlara yazılmış senaryo adımları ve değerler kenara alınır (tarih geri eklenirse geri gelir).',
     };
     const hint = h('p', { class: 'muted', style: { margin: '6px 0 0', fontSize: '12.5px' } });
     const showHint = () => { hint.textContent = hints[mode.value]; };
@@ -1373,8 +1399,8 @@ export class SettingsPage {
           const list = res.removed.slice(0, 6).map(isoToTr).join(', ') + (res.removed.length > 6 ? ' …' : '');
           const ok = await confirmDialog('Gelecek toplantıların yerine koy',
             'Gelecekteki ' + (res.removed.length + res.unchanged) + ' toplantı silinip yerine ' + (res.added.length + res.unchanged)
-            + ' tarih konacak: ' + res.removed.length + ' toplantı (' + list + ') ve onlara yazılmış senaryo adımları gidecek. '
-            + 'Kaydetmeden önce tabloda görebilirsiniz.', 'Yerine koy', true);
+            + ' tarih konacak: ' + res.removed.length + ' toplantı (' + list + ') listeden çıkacak, onlara yazılmış senaryo adımları '
+            + 'kenara alınacak. Kaydetmeden önce tabloda görebilirsiniz.', 'Yerine koy', true);
           if (!ok) return;
         }
         m.close();
