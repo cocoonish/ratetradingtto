@@ -30,7 +30,8 @@ import { quantPage, quantEvent } from './pages/quant.js';
 import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
-import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing, setLanding, pinToDrawer, addMenu } from './layout.js';
+import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing, setLanding, pinToDrawer, addMenu, compact,
+  setCompact } from './layout.js';
 import './pageboxes.js';                          // (the boxes of the dashboard's own pages join the launchpad's kinds)
 import { boxEvent, PopBoxPage, popBoxHash, popBoxItem } from './pagebox.js';
 import { paintMenu, menuChanged, openedPage, pageTabs, editMenu } from './menu.js';
@@ -907,6 +908,12 @@ function applyFlash(on) {
   b.title = on ? 'Değişen hücreler yanıp sönüyor – kapatmak için tıklayın' : 'Yanıp sönme kapalı – açmak için tıklayın';
 }
 
+/** "Sıkışık görünüm" (the user menu): rows shorter and text a step smaller in every table - app.css does it all from one
+ *  class on <html>.  Kept with the layout, so another computer, and every window of this browser, follows at once. */
+function applyCompact() {
+  document.documentElement.classList.toggle('compact', compact());
+}
+
 let drawer = null;
 
 function boot() {
@@ -983,6 +990,14 @@ function boot() {
       { label: 'Launchpad\'lerim', action: () => { window.location.hash = '#/launchpad'; } },
       { label: 'Açılış sayfası…', action: () => openLandingDialog() },
       { label: 'Menüyü düzenle…', action: () => editMenu(state.pages, session.role === 'admin') },
+      { check: true, id: 'menu-compact', on: compact(), label: 'Sıkışık görünüm',
+        title: 'Satırlar daha alçak, yazılar bir boy küçük: bir ekrana daha çok tablo sığar. Hesabınızla saklanır.',
+        action: (on) => {
+          setCompact(on).catch(() => {                // (not saved: back as it is kept - the page and the tick box)
+            const box = document.getElementById('menu-compact');
+            if (box) box.checked = compact();
+          });
+        } },
       { label: 'Senaryolarım', action: () => openScenarios(ctx) },
       { label: 'Şifremi değiştir', action: () => openPasswordDialog() },
     ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } }] : [],
@@ -995,6 +1010,7 @@ function boot() {
     toggleFav(id).then(() => toast(on ? '"' + pageTitle(id) + '" üst şeritteki favorilerinizde' : '"' + pageTitle(id) + '" favorilerden çıktı', 'ok', 2200), () => {});
   });
   onLayout(() => {
+    applyCompact();                                 // (a window of its own too: the same tables)
     if (POP) return;
     paintFavs();
     if (menuChanged()) buildNav();                  // (the user's own menu changed: here, in another window, on another computer)

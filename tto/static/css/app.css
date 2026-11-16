@@ -74,6 +74,23 @@
   --shadow: 0 10px 30px rgba(11, 11, 11, 0.14);
   --c-blue: #1481f5; --c-red: #e44e58; --c-green: #218c3a; --c-purple: #6948cb; --c-orange: #ef8d25; --c-cyan: #0d9eab;
 }
+/* density: "Sıkışık görünüm" (the user menu; kept with the account) puts .compact on <html> - rows shorter, cells and
+   panel headers tighter, a table's text one step smaller.  No colours here: both themes alike.  Only how a table is drawn:
+   nothing is left out of it, and its columns are as wide as their text. */
+:root {
+  --row-h: 24px;                     /* a row of a grid / calc sheet; a second caption row sticks this far down */
+  --cell-py: 3px;                    /* a grid cell's padding, top and bottom */
+  --plain-py: 5px;                   /* ... a plain table's (its captions: 1px more) */
+  --fs-step: 0px;                    /* how much smaller a table's text is than the size its rule names */
+  --panel-head-pad: 8px 10px 7px 12px;
+}
+:root.compact {
+  --row-h: 20px;
+  --cell-py: 1px;
+  --plain-py: 2px;
+  --fs-step: .75px;
+  --panel-head-pad: 4px 10px 3px 12px;
+}
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -211,8 +228,9 @@ a { color: var(--accent-ink); }
 .panel.wide { flex: 1 1 100%; }
 .panel.chart { flex: 1 1 420px; max-width: 760px; }
 .panel.chart.wide { flex: 1 1 620px; max-width: 1040px; }      /* a chart with many labelled points wants room */
-.panel > header { display: flex; align-items: center; gap: 8px; padding: 8px 10px 7px 12px; border-bottom: 1px solid var(--line); }
-.panel > header h2 { font-size: 12.5px; font-weight: 650; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel > header { display: flex; align-items: center; gap: 8px; padding: var(--panel-head-pad); border-bottom: 1px solid var(--line); }
+.panel > header h2 { font-size: calc(12.5px - var(--fs-step)); font-weight: 650; margin: 0; flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
 .panel > header .rng { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
 .panel > header .tools { display: flex; gap: 2px; opacity: .0; transition: opacity .12s; }
 .panel:hover > header .tools, .panel:focus-within > header .tools { opacity: 1; }
@@ -233,29 +251,32 @@ a { color: var(--accent-ink); }
 .panel.aux { border-style: dashed; }
 /* a panel of a tab that was not in view while something changed: its numbers are being brought up to date */
 .panel.stale .body { opacity: .45; transition: opacity .12s; }
-.panel.notes table.grid td { white-space: normal; max-width: min(900px, 80vw); height: auto; line-height: 1.45; padding: 6px 12px; }
+.panel.notes table.grid td { white-space: normal; max-width: min(900px, 80vw); height: auto; line-height: 1.45;
+  padding: calc(var(--cell-py) + 3px) 12px; }
 .panel .note { color: var(--ink-3); padding: 6px 12px 8px; font-size: 11.5px; border-top: 1px solid var(--line);
   width: 0; min-width: 100%; box-sizing: border-box; }      /* a long note wraps to the table instead of widening the panel */
 .iconbtn { border: 0; background: none; color: var(--ink-3); border-radius: 6px; padding: 3px 6px; font-size: 12px; line-height: 1; }
 .iconbtn:hover { background: var(--surface-3); color: var(--ink); }
 
 /* ---------------------------------------------------------------- grid (spreadsheet-like tables) */
-table.grid { border-collapse: separate; border-spacing: 0; font-size: 12.25px; font-variant-numeric: tabular-nums; width: max-content; min-width: 100%; }
-table.grid td { padding: 3px 8px; border-bottom: 1px solid var(--line); border-right: 1px solid transparent; white-space: nowrap; height: 24px;
-  max-width: 420px; overflow: hidden; text-overflow: ellipsis; position: relative; cursor: cell; }
+table.grid { border-collapse: separate; border-spacing: 0; font-size: calc(12.25px - var(--fs-step)); font-variant-numeric: tabular-nums;
+  width: max-content; min-width: 100%; }
+table.grid td { padding: var(--cell-py) 8px; border-bottom: 1px solid var(--line); border-right: 1px solid transparent; white-space: nowrap;
+  height: var(--row-h); max-width: 420px; overflow: hidden; text-overflow: ellipsis; position: relative; cursor: cell; }
 table.grid tr:last-child td { border-bottom: 0; }
 table.grid td.n, table.grid td.d { text-align: right; }
 table.grid td.s { text-align: left; color: var(--ink-2); }
 table.grid td.al-c { text-align: center; }
 table.grid td.al-r { text-align: right; }
 table.grid td.al-l { text-align: left; }
-table.grid td.e { color: var(--ink-3); text-align: center; font-size: 11px; }
+table.grid td.e { color: var(--ink-3); text-align: center; font-size: calc(11px - var(--fs-step)); }
 table.grid td.b { font-weight: 650; color: var(--ink); }
 table.grid td.it { font-style: italic; }
-table.grid tr.hd td { background: var(--hd-bg); color: var(--ink-2); font-weight: 600; font-size: 11.5px; position: sticky; top: 0; z-index: 2;
-  border-bottom: 1px solid var(--line-2); }
-table.grid tr.hd2 td { top: 24px; }
-table.grid tr.ttl td { background: transparent; color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .03em; padding-top: 8px; }
+table.grid tr.hd td { background: var(--hd-bg); color: var(--ink-2); font-weight: 600; font-size: calc(11.5px - var(--fs-step)); position: sticky;
+  top: 0; z-index: 2; border-bottom: 1px solid var(--line-2); }
+table.grid tr.hd2 td { top: var(--row-h); }                 /* (right under the first caption row) */
+table.grid tr.ttl td { background: transparent; color: var(--ink-3); font-size: calc(11px - var(--fs-step)); font-weight: 600; letter-spacing: .03em;
+  padding-top: calc(var(--cell-py) + 5px); }
 table.grid td.lab { color: var(--ink); font-weight: 550; }
 table.grid tbody tr:hover td { background-image: linear-gradient(var(--sub-bg), var(--sub-bg)); }
 table.grid td.c-neg { color: var(--neg); }
@@ -349,10 +370,11 @@ table.grid td { -webkit-user-select: none; user-select: none; }
 table.grid td[colspan] { max-width: none; }
 table.grid td.ov { color: var(--ink-2); }
 table.grid td.editing { padding: 0; overflow: visible; background: var(--surface) !important; box-shadow: none; }
-table.grid td.editing input { width: 100%; min-width: 86px; height: 23px; border: 2px solid var(--accent); background: var(--surface); color: var(--ink);
-  padding: 0 6px; outline: none; font: inherit; font-variant-numeric: tabular-nums; border-radius: 0; text-align: inherit; }
+table.grid td.editing input { width: 100%; min-width: 86px; height: calc(var(--row-h) - 1px); border: 2px solid var(--accent); background: var(--surface);
+  color: var(--ink); padding: 0 6px; outline: none; font: inherit; font-variant-numeric: tabular-nums; border-radius: 0; text-align: inherit; }
 /* a formula being typed: room for its references, over the cells beside it */
-table.grid td.editing input.fxe { min-width: 260px; position: relative; z-index: 5; text-align: left; font-family: var(--mono); font-size: 12px; }
+table.grid td.editing input.fxe { min-width: 260px; position: relative; z-index: 5; text-align: left; font-family: var(--mono);
+  font-size: calc(12px - var(--fs-step)); }
 /* ... and while its cell is in another tab: in a bar of its own at the top of the window, as Excel's formula bar */
 .grid-fx { position: fixed; left: 50%; top: 6px; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px; box-shadow: var(--shadow); }
@@ -370,8 +392,8 @@ table.grid .pill { display: inline-block; padding: 0 7px; border-radius: 999px; 
 .pill.neu { background: var(--sub-bg); color: var(--ink-2); }
 .pill.ok { background: rgba(12, 163, 12, .16); color: var(--pos); }
 .pill.warn { background: rgba(250, 178, 25, .16); color: var(--warn); }
-table.grid.addr td.axis { background: var(--surface-2); color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; text-align: center;
-  position: sticky; z-index: 3; cursor: default; }
+table.grid.addr td.axis { background: var(--surface-2); color: var(--ink-3); font-family: var(--mono); font-size: calc(10.5px - var(--fs-step));
+  text-align: center; position: sticky; z-index: 3; cursor: default; }
 table.grid.addr tr.axisrow td { top: 0; }
 table.grid.addr td.axis.rowh { left: 0; }
 .cell-editor { position: absolute; z-index: 30; border: 2px solid var(--accent); background: var(--surface); color: var(--ink); padding: 2px 6px;
@@ -432,11 +454,11 @@ svg.chart text.pt { fill: var(--ink-2); font-size: 9.5px; paint-order: stroke; s
 .quote .q.big .v { font-size: 19px; }
 .muted { color: var(--ink-3); }
 .errtxt { color: var(--neg); font-size: 12px; }
-table.plain { border-collapse: collapse; width: 100%; font-size: 12.25px; font-variant-numeric: tabular-nums; }
-table.plain th { text-align: right; color: var(--ink-3); font-weight: 600; font-size: 11px; padding: 6px 9px; border-bottom: 1px solid var(--line-2);
-  position: sticky; top: 0; background: var(--surface); white-space: nowrap; }
+table.plain { border-collapse: collapse; width: 100%; font-size: calc(12.25px - var(--fs-step)); font-variant-numeric: tabular-nums; }
+table.plain th { text-align: right; color: var(--ink-3); font-weight: 600; font-size: calc(11px - var(--fs-step)); padding: calc(var(--plain-py) + 1px) 9px;
+  border-bottom: 1px solid var(--line-2); position: sticky; top: 0; background: var(--surface); white-space: nowrap; }
 table.plain th.l, table.plain td.l { text-align: left; }
-table.plain td { padding: 5px 9px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.plain td { padding: var(--plain-py) 9px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
 table.plain tr:last-child td { border-bottom: 0; }
 table.plain tr.pkg td { background: var(--sub-bg); color: var(--ink-2); text-align: left; font-weight: 600; }
 table.plain td.buy { color: var(--pos); font-weight: 650; }
@@ -586,7 +608,7 @@ label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--
 .chatpreview { margin-top: 10px; max-height: 42vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 .chatpreview:empty { display: none; }
 .chatpreview .errtxt { padding: 8px 10px; }
-table.plain.chat td, table.plain.chat th { padding: 4px 7px; }
+table.plain.chat td, table.plain.chat th { padding: calc(var(--plain-py) - 1px) 7px; }
 table.plain.chat th:last-child, table.plain.chat td.what { width: 99%; }
 table.plain.chat td .kind { margin-left: 6px; color: var(--ink-3); font-size: 11px; }
 table.plain.chat td.what { white-space: normal; min-width: 190px; }      /* long bond names beside it do not squeeze it to a word a line */
@@ -596,7 +618,8 @@ table.plain.chat tr.dup td { opacity: .5; }
 table.plain.chat .pill { display: inline-block; padding: 0 7px; margin-left: 3px; border-radius: 999px; font-size: 10.5px; font-weight: 650; line-height: 16px; }
 table.plain td.soft, table.grid td.soft { color: var(--ink-3); }
 table.grid td.thru { color: var(--accent-ink); font-weight: 650; }
-table.grid td.said { color: var(--ink-2); font-family: var(--mono); font-size: 11.5px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+table.grid td.said { color: var(--ink-2); font-family: var(--mono); font-size: calc(11.5px - var(--fs-step)); max-width: 420px; overflow: hidden;
+  text-overflow: ellipsis; }
 table.grid td.said.short { max-width: 250px; }
 /* the row's button stays in reach when the table is wider than its panel */
 .broker table.grid td:last-child { position: sticky; right: 0; }
@@ -622,7 +645,7 @@ table.plain.people tr.fresh td.b { color: var(--warn); }
 .chathelp td.mono { white-space: nowrap; }
 .chathelp .pad0 { margin-top: 8px; font-size: 11.5px; line-height: 1.5; }
 /* the best-price board: whose each best price is and how old; a broker's own row under its instrument; a stale quote greyed */
-table.grid td.who { color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
+table.grid td.who { color: var(--ink-2); font-size: calc(11.5px - var(--fs-step)); white-space: nowrap; }
 table.grid td.brk { color: var(--ink-2); padding-left: 14px; }
 table.grid td.stale { color: var(--ink-3); opacity: .75; }
 table.grid td.who.stale { font-style: italic; }
@@ -768,11 +791,12 @@ table.grid td.flag { cursor: pointer; text-align: center; color: var(--ink-3); f
 table.grid td.flag.on { color: #e3b341; }
 table.grid td.flag:hover { background: var(--accent-soft, rgba(80, 140, 255, .14)); }
 table.grid td.flag.busy { opacity: .4; }
-table.grid td.grouphead { color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; font-size: 11.5px; padding-top: 8px; }
+table.grid td.grouphead { color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; font-size: calc(11.5px - var(--fs-step));
+  padding-top: calc(var(--cell-py) + 5px); }
 
 /* İzleme · Alarmlar */
 table.plain.watch { width: 100%; }
-table.plain.watch td, table.plain.watch th { padding: 4px 8px; white-space: nowrap; }
+table.plain.watch td, table.plain.watch th { padding: calc(var(--plain-py) - 1px) 8px; white-space: nowrap; }
 table.plain.watch td:not(.l), table.plain.watch th:not(.l) { text-align: right; font-variant-numeric: tabular-nums; }
 table.plain.watch td.name { font-weight: 650; cursor: text; }
 table.plain.watch td.now { font-weight: 700; }
@@ -1026,7 +1050,7 @@ table.grid td.qs-elendi { color: var(--ink-3); font-style: italic; }
 .quantpage .seg.qgroups { display: flex; flex-wrap: wrap; width: fit-content; max-width: calc(100% - 24px); margin: 4px 12px 8px; }
 .quantpage .seg.qgroups button { padding: 4px 10px; font-size: 12px; }
 table.grid td.qtag, .quantpage table.plain td.qtag { color: var(--warn); }
-table.grid td.qgate { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+table.grid td.qgate { font-size: calc(11px - var(--fs-step)); color: var(--ink-3); white-space: nowrap; }
 .quantpage .qpack + .qpack { margin-top: 10px; }
 .quantpage .qpack-head { font-size: 12px; padding: 2px 0 3px; }
 .quantpage .qpack-note { font-size: 11px; max-width: 640px; padding-top: 3px; }
@@ -1148,21 +1172,22 @@ table.grid td.qgate { font-size: 11px; color: var(--ink-3); white-space: nowrap;
 .calc-empty { font-size: 11.5px; padding: 6px 10px 8px; line-height: 1.45; }
 .calc-wrap { position: relative; overflow: auto; outline: none; flex: 1 1 auto; min-height: 0; }
 .calc-wrap:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-soft); }
-table.calc-grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12.25px; font-variant-numeric: tabular-nums;
-  user-select: none; }
-table.calc-grid th { background: var(--hd-bg); color: var(--ink-3); font-weight: 500; font-size: 10.5px; height: 20px; padding: 0 4px;
-  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; text-align: center; cursor: default; }
+table.calc-grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: calc(12.25px - var(--fs-step));
+  font-variant-numeric: tabular-nums; user-select: none; }
+table.calc-grid th { background: var(--hd-bg); color: var(--ink-3); font-weight: 500; font-size: calc(10.5px - var(--fs-step));
+  height: calc(var(--row-h) - 4px); padding: 0 4px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); position: sticky; top: 0;
+  z-index: 2; text-align: center; cursor: default; }
 table.calc-grid th.ch { position: sticky; }
 table.calc-grid th.rh { left: 0; z-index: 1; position: sticky; }
 table.calc-grid thead th.corner { left: 0; z-index: 3; }
 table.calc-grid th .grip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 4; }
 table.calc-grid th .grip:hover { background: var(--accent-soft); }
-table.calc-grid td { height: 24px; padding: 2px 6px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; color: var(--ink); cursor: cell; position: relative; }
+table.calc-grid td { height: var(--row-h); padding: calc(var(--cell-py) - 1px) 6px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); cursor: cell; position: relative; }
 table.calc-grid td.k-n, table.calc-grid td.k-d { text-align: right; }
 table.calc-grid td.k-s { text-align: left; color: var(--ink-2); }
 table.calc-grid td.k-b { text-align: center; }
-table.calc-grid td.k-e { text-align: center; color: var(--warn); font-size: 11px; }
+table.calc-grid td.k-e { text-align: center; color: var(--warn); font-size: calc(11px - var(--fs-step)); }
 /* (as in a model: what was typed is blue, what is computed has the ink's colour) */
 table.calc-grid td.cst.k-n, table.calc-grid td.cst.k-d { color: var(--accent-ink); }
 table.calc-grid td.c-neg { color: var(--neg); }
@@ -1174,7 +1199,7 @@ table.calc-grid td.up { animation: flash-up .9s ease-out; }
 table.calc-grid td.down { animation: flash-down .9s ease-out; }
 body.noflash table.calc-grid td.up, body.noflash table.calc-grid td.down { animation: none; }
 .calc-wrap .calc-edit { position: absolute; z-index: 5; border: 2px solid var(--accent); background: var(--surface); color: var(--ink);
-  font: inherit; font-size: 12.25px; padding: 0 4px; outline: none; box-shadow: var(--shadow); }
+  font: inherit; font-size: calc(12.25px - var(--fs-step)); padding: 0 4px; outline: none; box-shadow: var(--shadow); }
 #drawer .calc-box .calc-dims { max-width: 38%; }
 
 /* ---------------------------------------------------------------- the boxes of the dashboard's own pages, the menu */
