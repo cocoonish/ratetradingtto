@@ -4,7 +4,7 @@
 // the source page's value too (the same cells of the same book, as this user or for the desk as the cell says).
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, menu, confirmDialog, promptDialog } from '../ui.js';
-import { hub, PanelBox, changed } from '../boxes.js';
+import { hub, PanelBox, makeBox, changed } from '../boxes.js';
 import { onLayout, loadLayout, launchpads, findLaunchpad, changeLaunchpad, createLaunchpad, saveLayout, landing,
   pinToDrawer } from '../layout.js';
 
@@ -136,7 +136,7 @@ export class LaunchpadPage {
     items.forEach((it) => {
       let box = this.boxes.get(it.id);
       if (!box) {
-        box = new PanelBox(it, this.boxOpts(it.id));
+        box = makeBox(it, this.boxOpts(it.id));
         this.boxes.set(it.id, box);
         fresh = true;
       } else if (JSON.stringify(box.item) !== JSON.stringify(it)) {

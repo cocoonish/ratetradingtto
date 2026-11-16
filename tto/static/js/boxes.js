@@ -33,7 +33,14 @@ export const hub = {
 
   async once() {
     const live = [...this.boxes].filter((b) => b.wanted());
-    if (!live.length) return;
+    // a box of tables joins the one request; another kind of box (a later one) may bring itself up to date
+    const batch = live.filter((b) => b.request);
+    const jobs = live.filter((b) => !b.request && b.refreshOwn).map((b) => b.refreshOwn().catch(() => {}));
+    if (batch.length) jobs.push(this.ask(batch));
+    await Promise.all(jobs);
+  },
+
+  async ask(live) {
     let res;
     try {
       res = await api.post('/api/panels', { items: live.map((b) => b.request()) });
@@ -464,6 +471,40 @@ export class PanelBox {
     this.dropContent();
     hub.remove(this);
   }
+}
+
+/** An item of a kind this version cannot show (another version saved it): its box says so, the others go on. */
+class UnknownBox {
+  constructor(item, opts) {
+    this.item = item;
+    this.opts = opts;
+    this.el = h('section', { class: 'panel lp-item missing' + (opts.place === 'launchpad' ? '' : ' full') },
+      h('header', null, h('h2', null, item.title || 'Öğe')),
+      h('div', { class: 'body' }, h('div', { class: 'lp-missing' }, h('b', null, 'Bu öğe gösterilemiyor'),
+        ' – türü ("' + String(item.type) + '") bu sürümde yok.')));
+    this.show(item);
+  }
+
+  show(item) {
+    this.item = item;
+    this.el.dataset.id = item.id;
+    if (this.opts.place === 'launchpad') this.el.style.gridColumn = 'span ' + (item.w || 6);
+    return false;
+  }
+
+  wanted() { return false; }
+  setAdhoc() {}
+  findCell() { return null; }
+  destroy() {}
+}
+
+/** The kinds of items and the box that shows each: a later kind (a box of one of the dashboard's own pages, a calc
+ *  sheet) adds its own here - with ``show``, ``wanted``, ``request`` / ``apply`` (or ``refreshOwn``), ``destroy``. */
+export const BOX_TYPES = { table: PanelBox };
+
+export function makeBox(item, opts) {
+  const Box = BOX_TYPES[item.type || 'table'];
+  return Box ? new Box(item, opts) : new UnknownBox(item, opts);
 }
 
 /** The item with ``change`` applied (a null drops a field: the title back to the table's own, the whole table again). */

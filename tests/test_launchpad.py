@@ -199,6 +199,20 @@ def test_another_kind_of_item_comes_in_by_its_own_check(service, monkeypatch):
     assert items[1]["type"] == "table" and items[1]["w"] == lay.DEFAULT_WIDTH
 
 
+def test_a_layout_written_by_another_version_is_read_item_by_item(service):
+    """What does not pass today's checks (a kind of item this version does not know, a broken launchpad) is left out by
+    itself - the rest of the layout comes as it is, and the next change keeps it."""
+    u = login(service, "Lp Eski Sürüm")
+    good = {"type": "table", "id": "g1", "view": "forward", "panel": "B1", "w": 6, "h": "auto"}
+    service.store.put("layout." + u, {"launchpads": [{"name": "A", "items": [good, {"type": "gelecek", "id": "x"}, {"view": "forward"}]},
+                                                     {"name": ""}, {"name": "a", "items": []}, "bozuk"],
+                                      "drawer": [good, {"type": "gelecek"}], "favs": ["forward", "a b", 3], "landing": 5, "rev": 7})
+    got = service.layout(u)
+    assert got == {"launchpads": [{"name": "A", "items": [good]}], "drawer": [good], "favs": ["forward"], "landing": "", "rev": 7}
+    kept = service.set_layout(u, {"favs": []})
+    assert kept["launchpads"] == [{"name": "A", "items": [good]}] and kept["drawer"] == [good] and kept["rev"] == 8
+
+
 @pytest.mark.parametrize("data", [
     None, [], {}, {"x": 1}, {"launchpads": "A"}, {"launchpads": [{"name": ""}]}, {"launchpads": [{"name": "x" * 61}]},
     {"launchpads": [{"name": "Sabah"}, {"name": "SABAH"}]}, {"launchpads": [{"name": "A", "items": "B1"}]},

@@ -2464,7 +2464,7 @@ async function shot(page, name) {
     await page.click('.menu >> text=Sabah');
     await page.waitForFunction(() => document.querySelectorAll('#lp-grid .lp-item table.grid').length === 2, null, { timeout: 30000 });
     const twoKeys = await boxKeys();
-    check('... and one from a Ctrl+K result ("+ Launchpad" beside the hit)', twoKeys.length === 2 && /^forward\/B\d+:6$/.test(twoKeys[1]), twoKeys);
+    check('... and one from a Ctrl+K result ("Launchpad\'e ekle" beside the hit)', twoKeys.length === 2 && /^forward\/B\d+:6$/.test(twoKeys[1]), twoKeys);
     // its width (the item's menu) and its place (dragged by its handle before the first): kept after a reload
     await page.click('#lp-grid .lp-item >> nth=0 >> button[data-action="item-menu"]');
     await page.click('.menu >> text=Tam');

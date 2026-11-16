@@ -230,18 +230,46 @@ def empty() -> Dict[str, Any]:
     return {"launchpads": [], "drawer": [], "favs": [], "landing": "", "rev": 0}
 
 
+def _kept_items(v: Any, limit: int) -> List[Dict[str, Any]]:
+    """The items of a list as kept, each checked on its own: one that does not pass today's checks (a kind of item this
+    version does not know) is left out, the others stay."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for x in v if isinstance(v, list) else []:
+        try:
+            it = item(x)
+        except LayoutError:
+            continue
+        if it["id"] in seen or len(out) >= limit:
+            continue
+        seen.add(it["id"])
+        out.append(it)
+    return out
+
+
 def stored(v: Any) -> Dict[str, Any]:
-    """What is kept, as the browser gets it (a part that does not pass today's checks - written by an older version -
-    is left out rather than failing the page)."""
+    """What is kept, as the browser gets it.  Read leniently - a launchpad or an item that does not pass today's checks
+    (written by another version) is left out by itself, never the whole part with it."""
     out = empty()
     if not isinstance(v, dict):
         return out
-    for k, check in SECTIONS.items():
-        if k in v:
-            try:
-                out[k] = check(v[k])
-            except LayoutError:
-                pass
+    names = set()
+    for x in v.get("launchpads") if isinstance(v.get("launchpads"), list) else []:
+        try:
+            name = _text(x.get("name"), MAX_NAME, "launchpad adı") if isinstance(x, dict) else None
+        except LayoutError:
+            name = None
+        if not name or name_key(name) in names or len(out["launchpads"]) >= MAX_LAUNCHPADS:
+            continue
+        names.add(name_key(name))
+        out["launchpads"].append({"name": name, "items": _kept_items(x.get("items"), MAX_ITEMS)})
+    out["drawer"] = _kept_items(v.get("drawer"), MAX_DRAWER)
+    out["favs"] = [x for x in (v.get("favs") if isinstance(v.get("favs"), list) else [])
+                   if isinstance(x, str) and PAGE_ID.match(x)][:MAX_FAVS]
+    try:
+        out["landing"] = landing(v.get("landing"))
+    except LayoutError:
+        out["landing"] = ""
     rev = v.get("rev")
     out["rev"] = rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
     return out

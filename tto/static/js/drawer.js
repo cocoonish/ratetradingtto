@@ -2,7 +2,7 @@
 // and closed from the top bar or with Alt+Y.  What is pinned is kept with the account (any computer shows the same);
 // whether the drawer is open and how wide, in this browser.
 import { h, clear } from './ui.js';
-import { hub, PanelBox, changed } from './boxes.js';
+import { hub, makeBox, changed } from './boxes.js';
 import { onLayout, drawerItems, saveLayout } from './layout.js';
 
 function pref(key) {
@@ -76,7 +76,7 @@ export class Drawer {
     for (const it of items) {
       let box = this.boxes.get(it.id);
       if (!box) {
-        box = new PanelBox(it, this.boxOpts(it.id));
+        box = makeBox(it, this.boxOpts(it.id));
         this.boxes.set(it.id, box);
         fresh = true;
       } else if (JSON.stringify(box.item) !== JSON.stringify(it)) {

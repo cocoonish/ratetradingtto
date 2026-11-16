@@ -65,14 +65,14 @@ export function setupFind(box, getPages, goto, opts = {}) {
       if (x.panel && (opts.add || opts.pin)) {
         const acts = h('span', { class: 'acts' });
         if (opts.add) {
-          const b = h('button', { class: 'act', type: 'button', title: 'Launchpad\'e ekle (Ctrl+Enter)' }, '+ Launchpad');
+          const b = h('button', { class: 'act', type: 'button', title: 'Bir launchpad\'e ekleyin (Ctrl+Enter)' }, 'Launchpad\'e ekle');
           b.dataset.act = 'launchpad';
           b.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
           b.addEventListener('click', (e) => { e.stopPropagation(); addAt(x, row); close(); });
           acts.appendChild(b);
         }
         if (opts.pin) {
-          const b = h('button', { class: 'act', type: 'button', title: 'Yan panele sabitle (Shift+Enter)' }, 'Yan panel');
+          const b = h('button', { class: 'act', type: 'button', title: 'Her sayfada sağda dursun (Shift+Enter)' }, 'Yan panele sabitle');
           b.dataset.act = 'pin';
           b.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
           b.addEventListener('click', (e) => { e.stopPropagation(); done(); opts.pin(src(x)); });

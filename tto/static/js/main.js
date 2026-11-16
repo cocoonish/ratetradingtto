@@ -1,7 +1,7 @@
 // Application shell: sign-in (name and password), navigation, live refresh (server-sent events), status bar.
 import { api, session } from './api.js';
 import { settings, setLang, num, isoToTr } from './format.js';
-import { h, clear, toast, errorToast, debounce, menu, modal } from './ui.js';
+import { h, clear, toast, errorToast, debounce, menu, modal, inFormControl } from './ui.js';
 import { configureGrid, clearSelection, findCell, selectionText } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
@@ -1010,7 +1010,7 @@ function boot() {
   onLayout(() => { if (!POP) paintFavs(); });
   // Alt+← / Alt+→: the page before / after (the last ones opened come back at once, as they were left); Alt+Y: the drawer
   document.addEventListener('keydown', (e) => {
-    if (!session.user || POP || !e.altKey || e.ctrlKey || e.metaKey) return;
+    if (!session.user || POP || !e.altKey || e.ctrlKey || e.metaKey || inFormControl(e.target)) return;      // (in a box of text: the browser's)
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
       if (e.key === 'ArrowLeft') history.back(); else history.forward();

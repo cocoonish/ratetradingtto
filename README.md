@@ -936,7 +936,7 @@ girdiğiniz her bilgisayarda aynıdır, güncellemede korunur.
 
 * **Launchpad** (menünün ilk satırı, `#/launchpad`): istediğiniz kadar adlı launchpad, her biri bir sekme. Bir sayfadaki
   tablonun başlığında (fareyle üstüne gelince) **+ Launchpad** → hangi launchpad'e ya da *+ Yeni launchpad…*; **Ctrl+K**
-  sonucunda da "+ Launchpad" vardır (Ctrl+Enter). Sekmeler sürükleyerek ya da sağ tık / ⋯ menüsünden sıralanır, yeniden
+  sonucunda da "Launchpad'e ekle" vardır (Ctrl+Enter). Sekmeler sürükleyerek ya da sağ tık / ⋯ menüsünden sıralanır, yeniden
   adlandırılır, silinir. **Dışa aktar** launchpad'i bir JSON dosyası olarak indirir; **İçe aktar…** böyle bir dosyayı (bir
   arkadaşınızınkini de) ekler - aynı adda bir launchpad'iniz varsa adına "(2)" eklenir. Launchpad'in kendi adresi vardır
   (`#/launchpad/<ad>`): geri / ileri ve yer imi onu bulur.
@@ -963,8 +963,8 @@ girdiğiniz her bilgisayarda aynıdır, güncellemede korunur.
 * **Hızlı geçiş.** Son açılan **4 sayfa** (çalışma kitabı sayfaları ve launchpad) kapatılmaz, bekletilir: geri döndüğünüzde
   **sekmesi, araması ve kaydırması yerindedir**, sayılar o an güncellenir (güncellenene kadar soluk görünür). **Alt+←** /
   **Alt+→** önceki / sonraki sayfa. Sayfa başlığının yanındaki **☆** sayfayı üst şeritteki **favorilerinize** ekler (★ ile
-  çıkar). **Ctrl+K** kutusu boşken son açılan sayfaları listeler; bir tablo sonucunda "+ Launchpad" (Ctrl+Enter) ve "Yan
-  panel" (Shift+Enter) vardır. Dashboard'un kendi sayfaları (Günlük İşlemler, Broker Chat, Quant …) eskisi gibi her
+  çıkar). **Ctrl+K** kutusu boşken son açılan sayfaları listeler; bir tablo sonucunda "Launchpad'e ekle" (Ctrl+Enter) ve "Yan
+  panele sabitle" (Shift+Enter) vardır. Dashboard'un kendi sayfaları (Günlük İşlemler, Broker Chat, Quant …) eskisi gibi her
   açılışta yeniden kurulur.
 * **Açılış sayfası** (sağ üstteki adınız → *Açılış sayfası…*, ya da launchpad'de *Açılış sayfası yap*): dashboard'u adres
   yazmadan açtığınızda gelen sayfa - bir sayfa ya da launchpad'lerinizden biri; boşsa Masa.
