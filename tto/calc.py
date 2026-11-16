@@ -315,8 +315,9 @@ def _bloomberg(ast) -> Optional[str]:
     return None
 
 
-def check_formula(text: str):
-    """A formula as typed -> its tree.  Refused: too long or too deep, unreadable, or one that would ask Bloomberg."""
+def check_formula(text: str, bloomberg: str = BLOOMBERG):
+    """A formula as typed -> its tree.  Refused: too long or too deep, unreadable, or one that would ask Bloomberg
+    (``bloomberg``: what is said then - the input cells' formulas say it their way, inputformula.py)."""
     if len(text) > MAX_RAW:
         raise CalcError("formül en fazla %d karakter olabilir" % MAX_RAW)
     norm = normalise(text)
@@ -331,7 +332,7 @@ def check_formula(text: str):
         raise CalcError(UNREADABLE)
     bbg = _bloomberg(ast)
     if bbg:
-        raise CalcError(BLOOMBERG % bbg)
+        raise CalcError(bloomberg % bbg)
     return ast
 
 
