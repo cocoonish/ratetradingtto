@@ -398,6 +398,16 @@ class Store(object):
         """The users who keep an input typed as a formula."""
         return [r["user"] for r in self._q("SELECT DISTINCT user FROM user_inputs WHERE formula IS NOT NULL")]
 
+    def drop_formulas(self, user: Optional[str], cells: List[Tuple[str, str]]) -> None:
+        """Formulas of inputs that may not hold one any more (``user``: theirs; None: the desk's): each cell keeps its
+        value, as a value."""
+        with self._lock:
+            if user is None:
+                self._db.executemany("UPDATE shared_inputs SET formula=NULL WHERE book=? AND cell=?", list(cells))
+            else:
+                self._db.executemany("UPDATE user_inputs SET formula=NULL WHERE user=? AND book=? AND cell=?",
+                                     [(user, b, c) for b, c in cells])
+
     def users_with_inputs(self) -> List[str]:
         """The users who keep personal inputs (their pages are their own)."""
         return [r["user"] for r in self._q("SELECT DISTINCT user FROM user_inputs")]
@@ -735,8 +745,9 @@ class Store(object):
 
         ``mapping``: old cell -> new cell (``None``: the value is dropped).  All of it happens in one
         transaction, for every user: what was typed for a meeting stays with that meeting when the list of
-        meetings is shifted (a formula typed there goes along with its value).  Returns how many values moved /
-        were dropped.
+        meetings is shifted.  A formula never moves: its references would not move with it - a moved cell keeps its
+        value, as a value (the dashboard takes no formula in these cells).  Returns how many values moved / were
+        dropped.
         """
         if not mapping:
             return {"moved": 0, "dropped": 0, "scenarios": 0}
@@ -756,19 +767,19 @@ class Store(object):
                         continue
                     moved += 1 if new != r["cell"] else 0
                     self._db.execute(
-                        "INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,?) "
+                        "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
                         "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
-                        "formula=excluded.formula", (r["user"], book, new, r["value"], ts, r["formula"]))
+                        "formula=NULL", (r["user"], book, new, r["value"], ts))
                 for r in self._db.execute("SELECT id, payload FROM scenarios").fetchall():
                     items = json.loads(r["payload"])
                     out, changed = [], False
                     for x in items:
                         if x[0] == book and x[1] in mapping:
                             new = mapping[x[1]]
-                            changed = changed or new != x[1]
+                            changed = changed or new != x[1] or len(x) > 3
                             if new is None:
                                 continue
-                            out.append([x[0], new] + list(x[2:]))
+                            out.append([x[0], new, x[2]])
                         else:
                             out.append(list(x))
                     if changed:

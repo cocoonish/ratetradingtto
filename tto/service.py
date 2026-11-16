@@ -1141,6 +1141,8 @@ class Service(object):
         if not admin and acc.get("role") == "admin" and self._last_admin(acc):
             raise ServiceError("son yöneticinin yetkisi alınamaz – önce başka birini yönetici yapın")
         self.store.update_account(acc["name"], role="admin" if admin else "user")
+        if self.formulas is not None:
+            self.formulas.role_changed(acc["name"])   # (their inputs' formulas read with the role they have now)
 
     def _admin_password(self, me: str, data: Dict[str, Any], token: Optional[str] = None) -> None:
         acc = self._target(data)
@@ -2394,8 +2396,7 @@ class Service(object):
                     continue
                 try:
                     val, ent = self.formulas.accept(user, book, si, rc, d, raw, calc,
-                                                    list(user_forms.values()) + list(shared_forms.values()),
-                                                    self._meeting_date_cell(book, si, rc))
+                                                    list(user_forms.values()) + list(shared_forms.values()))
                 except FormulaError as exc:
                     errors.append("%s: %s" % (ref, exc))
                     continue
@@ -2502,6 +2503,17 @@ class Service(object):
             return False
         r, c = divmod(rc, COLS)
         return c == parse_a1("P1") % COLS and MEETING_ROWS[0] <= r <= MEETING_ROWS[1]
+
+    @staticmethod
+    def _moved_by_calendar(book: Book, si: int, rc: int) -> bool:
+        """A cell the meeting calendar moves when the list of meetings shifts (history.py ``_set_calendar``): a meeting
+        date (OIS_MAIN!P10:P89) or a step typed per meeting (``STEP_COLS`` of the same rows) - what it holds goes with its
+        meeting, for the desk and for every user."""
+        from .history import BOOK, MEETING_ROWS, OIS_SHEET, STEP_COLS
+        if book.id != BOOK or book.model.sheets[si].name != OIS_SHEET:
+            return False
+        r, c = divmod(rc, COLS)
+        return MEETING_ROWS[0] <= r <= MEETING_ROWS[1] and c in {parse_a1(x + "1") % COLS for x in ("P",) + STEP_COLS}
 
     def paste(self, user: str, book_id: str, anchor: str, text: str, allow_adhoc: bool = False,
               lang: Optional[str] = None) -> Dict[str, Any]:
