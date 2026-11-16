@@ -350,7 +350,7 @@ export class SignalChart {
       const lines = [
         ['Tez', s.thesis || ''],
         ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + (s.daily ? '' : ' (giriş ' + fmt(s.entry_z, 2) + ')') + ' · ' + (s.gated ? LOW : s.strength)],
-        ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' gün' : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit || 'gün') : '—')],
+        ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' ' + (s.horizon_unit || 'gün') : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit || 'gün') : '—')],
         [fx ? 'Forward primi' : 'Carry + roll / hafta', fx ? (isNum(s.carry_yr) ? 'yıllık %' + sgn(s.carry_yr, 1) + ' (sürekli bileşik, en kısa forward), işlemin '
           + (s.carry_yr >= 0 ? 'lehine' : 'aleyhine')
           + (isNum((s.money || {}).carry) && s.px && s.px.tenor ? ' · ufukta ' + money(s.money.carry, s.money.ccy) + ' / 1 mn ' + s.money.base : '')

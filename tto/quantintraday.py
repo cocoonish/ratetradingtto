@@ -14,10 +14,12 @@ Five-minute bars are built from them.  Replay mode reads no live prices: no bars
              middle)
     irv      offshore − OIS (3M, 1Y) and the curve's 1s2s / 2s5s on 5-minute bars against their 20-day distribution: fade
     ipath    USDTRY against the path its carry implies from the day's open (the forward premium a minute at a time): a
-             spot ahead of it by more than the bars' noise is sold back to it, one behind bought
+             spot ahead of it by more than the bars' noise is sold back to it, one behind bought (the gap's
+             Ornstein-Uhlenbeck half-life on the past days' bars, read inside each day)
 
 Mean-reversion entries are held back in the PPK announcement window of a meeting day (13:45 – 15:30) and no new
-intraday entry is taken after 17:00.
+intraday entry is taken after 17:00.  Their half-life is in bars and is held to a horizon in bars (``Monitor.horizon``):
+the family's own holding when it has one (ipath: an hour), else the bars left in the session.
 """
 from __future__ import annotations
 
@@ -45,6 +47,8 @@ NO_NEW_AFTER = 17 * 60
 PPK_WINDOW = (13 * 60 + 45, 15 * 60 + 30)
 ORB_ENTRY = 1.5                           # a break out of the range by a quarter of its width
 MIN_BREAKS = 5
+PATH_BARS = 12                            # ipath: half the gap to the path closes within an hour - its holding, and its
+                                          # half-life when the bars cannot measure one
 
 
 def _kind(key: str) -> str:
@@ -222,11 +226,13 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
                          "%s · 60 dk ortalamasına uzaklık" % name, unit, 2, hist_lbl[-400:], hist_d[-400:],
                          [{"key": key, "name": name, "weight": 1.0}], calc, mean=mean, sd=sd, half_life=ou["half_life"] if ou else None,
                          regime=qf.regime_of(hist_d[-1000:], "bp", cfg), pkg="fx" if fx else "rate", intraday=True, horizon_unit="bar",
+                         horizon=float(left),
                          dsd=qm.stdev([b - a for a, b in zip(hist_d, hist_d[1:])]), pnl=(unit, 1.0), fx=fx,
                          gate=_window_gate(now, meeting_day, True), gate_name="Seans",
                          info={"window": "%d gün, 5 dk bar" % len([d for d in days if d < today]), "bars_left": left},
                          note="Seviyenin günün son 60 dakikasının ortalamasına uzaklığı (%s), son %d günün 5 dakikalık bar dağılımına göre z: + ise "
-                              "ortalamanın üstünde (geri dönüş beklenir). Yarı ömür ve tutma bar (5 dk) cinsinden; seansın sonunda kapanır." % (
+                              "ortalamanın üstünde (geri dönüş beklenir). Yarı ömür ve tutma bar (5 dk) cinsinden, yarı ömür seansın kalan "
+                              "barlarıyla karşılaştırılır; seansın sonunda kapanır." % (
                                   unit, len([d for d in days if d < today])))
         mons.append(mon)
         row = {"key": key, "label": name, "last": closes_t[-1], "dev": dv_today[-1] if dv_today else None, "mean": mean, "sd": sd,
@@ -307,7 +313,7 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
         mon = qf.Monitor("irv:%s|%s" % (a, b), "irv", "Offshore" if a.startswith("OFF:") else "TRY OIS", name + " (gün içi)", "bp", 1,
                          lbls[-400:], hist[-400:], [{"key": a, "name": ctx.label(a), "weight": 1.0}, {"key": b, "name": ctx.label(b), "weight": -1.0}],
                          scalc, mean=mean, sd=sd, half_life=ou["half_life"] if ou else None, regime=qf.regime_of(hist[-1000:], "bp", cfg),
-                         pkg="rate", intraday=True, horizon_unit="bar", dsd=qm.stdev([y - x for x, y in zip(hist, hist[1:])]), pnl=("bp", 1.0),
+                         pkg="rate", intraday=True, horizon_unit="bar", horizon=float(left), dsd=qm.stdev([y - x for x, y in zip(hist, hist[1:])]), pnl=("bp", 1.0),
                          gate=_window_gate(now, meeting_day, True), gate_name="Seans",
                          note="%s (bp) 5 dakikalık barlarda, son 20 günün dağılımına göre z: + ise spread geniş (ilk bacak receive / ikinci pay ile "
                               "daralma), − dar." % name)
@@ -330,13 +336,25 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
         rows_t = days[today]
         if sig and rows_t:
             m0, open_ = rows_t[0]
+            gx: List[float] = []                             # the past days' gap at a bar, and a bar later
+            gy: List[float] = []
             for d, rows in days.items():                     # the past days' z by the same rule (the distribution shown)
                 if d >= today or not rows:
                     continue
                 mo, o = rows[0]
+                gap = [0.0]                                  # (at its open a day is on its path)
                 for k, (m_, v) in enumerate(rows[1:], 1):
                     dev = math.log(v / (o * math.exp(rate * (m_ - mo)))) * 100.0
                     zs_hist.append(dev / (sig * math.sqrt(k)))
+                    gap.append(dev)
+                gx.extend(gap[:-1])
+                gy.extend(gap[1:])
+            # the gap's half-life in bars, an Ornstein-Uhlenbeck fit on the bars as the other families have theirs - on
+            # the steps inside each day: every day's gap starts again at 0 at its open, and a step across two days would
+            # read that restart as a return to the path.  Measured as not returning: None (the half-life gate keeps the
+            # signal out); not measurable: the family's own hour
+            ou = qm.ou_fit(gx[-2000:], gy[-2000:])
+            hl = ou["half_life"] if ou else float(PATH_BARS)
 
             def dev_now(live, m0=m0, open_=open_):
                 x = live.get("FX:USDTRY")
@@ -353,15 +371,18 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
                 return d_ / (sig * math.sqrt(k_))
 
             k_now = max(1.0, (mins_now - m0) / float(BAR))
+            hold = float(min(left, PATH_BARS))               # (the half-life is held to it: half the gap within the hour)
             mon = qf.Monitor("ipath:USDTRY", "ipath", "FX", "USDTRY · carry patikasına göre", "%", 3, [], [], [{"key": "FX:USDTRY", "name": "USDTRY", "weight": 1.0}],
-                             pcalc, zfn=pzfn, mean=0.0, sd=sig * math.sqrt(k_now), half_life=None, regime={"tag": None}, pkg="fx", intraday=True,
-                             horizon_unit="bar", hold=float(min(left, 12)), dsd=sig, pnl=("%", 1.0), fx="USDTRY",
+                             pcalc, zfn=pzfn, mean=0.0, sd=sig * math.sqrt(k_now), half_life=hl, regime={"tag": None}, pkg="fx", intraday=True,
+                             horizon_unit="bar", horizon=hold, hold=hold, dsd=sig, pnl=("%", 1.0), fx="USDTRY",
                              fcast=lambda level, z: -level * 0.5 if level is not None else None,
                              gate=_window_gate(now, meeting_day, True), gate_name="Seans",
                              info={"open": open_, "carry": carry, "sigma_bar": sig},
                              note="Günün açılışından carry'nin ima ettiği patika (forward primi dakika dakika: yıllık %s) ile spot arasındaki fark "
                                   "(%%, log), bar gürültüsü × √bar ile z: + ise USDTRY patikanın önünde (sat, patikaya dönüş beklenir), − ise "
-                                  "gerisinde (al). Beklenen: farkın yarısı bir saatte." % qf._g(-carry, 1))
+                                  "gerisinde (al). Beklenen: farkın yarısı bir saatte. Yarı ömür bar (5 dk) cinsinden: geçmiş günlerin barlarında "
+                                  "farkın gün içi adımlarından (OU; ölçülemezse bir saat, %d bar), bir saatlik tutmayla karşılaştırılır." % (
+                                      qf._g(-carry, 1), PATH_BARS))
             mon.zvalues = None
             mons.append(mon)
             d_now, _ = dev_now(ctx.live)
