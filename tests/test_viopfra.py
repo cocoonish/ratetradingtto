@@ -328,7 +328,9 @@ class _Live(object):
         today = svc_replay.books["tto"].engine.clock.today()
         snapshot = {k: v for k, v in svc_replay.provider.snapshot.items() if k[0] != "BFX"}
         snapshot.update({bdp_key("A1X7 Curncy", "LAST_TRADEABLE_DT"): "30.11.2027", bdp_key("A1X7 Curncy", "BID"): 66.0,
-                         bdp_key("A1X7 Curncy", "ASK"): 66.1})                     # the contract the roll lists next
+                         bdp_key("A1X7 Curncy", "ASK"): 66.1,                      # the contract the roll lists next
+                         # the USDTRY spot (inside a larger formula: VIOP!L99 / L100 - not in the snapshot of single calls)
+                         bdp_key("USDTRY Curncy", "BID"): 49.997, bdp_key("USDTRY Curncy", "ASK"): 49.9975})
         self.clock = Clock(today + 0.5)
         self.clock.today = lambda: float(today)
         self.provider = _Direct(snapshot)
@@ -347,24 +349,39 @@ def test_a_contract_that_rolls_off_leaves_its_rows_marked_and_the_others_on_thei
     """The VİOP contracts roll by themselves (the front trades until its expiry day; the list L97:X97 shifts the day after).
     A target row keeps its contracts by their dates: one still listed is the same contract after the roll - same dates, its
     curve, the desk sheet's rate of that curve.  A row whose contract expired is left without numbers and says why (its
-    tooltips, the desk strip); on the expiry day a period that does not end after the OIS spot date says it too (the
-    sheet's own FRA is 0 there)."""
+    tooltips, the desk strip).  On the expiry day a period that does not end after the OIS spot date is left without them
+    too, whatever the row's type - OIS FRA, the target rate, the limits, the spread price, target − market (the sheet's own
+    FRA was 0 there, the target −1,5 %) - on the VİOP page, the desk page's strip and summary and a launchpad alike."""
     live = _Live(svc, tmp_path)
     s = live.svc
     try:
         u = s.login("FRA eğrisi rol")["user"]
-        put(s, u, dict(STEPS, **target(331, "31.12.2026", "26.02.2027", curve=S2), **target(332, "Spot", "30.11.2026", side="LONG", curve=S2)))
+        put(s, u, dict(STEPS, **target(331, "31.12.2026", "26.02.2027", curve=S2), **target(332, "Spot", "30.11.2026", side="LONG", curve=S2),
+                       **target(333, "Spot", "30.11.2026", kind="Faiz %", value="34")))
         listed = lambda: [x for x in (cell(s, "VIOP!%s97" % c, u) for c in "LMNOPQRSTUVWX")]     # noqa: E731
         assert listed()[:3] == ["Spot", "30.11.2026", "31.12.2026"]
         dates = [cell(s, "EK_VFRA!%s%d" % (c, helper_row(331)), u) for c in "FG"]
         assert cell(s, "EK_VFRA!U10", u) == cell(s, "EK_VFRA!U11", u) == "" and isinstance(cell(s, "VIOP!W332", u), float)
-        # the expiry day of the front: still listed, but its period ends before the OIS spot date
+        assert all(isinstance(cell(s, "VIOP!%s%d" % (c, r), u), float) for r in (332, 333) for c in "QRSTVW")
+        # the expiry day of the front: still listed, but its period ends before the OIS spot date - no numbers, and why
         live.on(dt.date(2026, 11, 30), "1.12.2026")
         assert listed()[1] == "30.11.2026" and cell(s, "VIOP!Y332", u) == -1.0
-        why = "Geçersiz: dönem OIS spot valöründen (01.12.2026) sonra bitmiyor (uzak kontratın vade günü ya da geçmiş): OIS FRA ve hedef faiz anlamsız"
-        assert cell(s, "EK_VFRA!U11", u) == why and cell(s, "MASA!S122", u) == "FRA+bp -150 · geçersiz"
-        cells = page_cells(s, u, "viop", "B33", 332)
-        assert cells["W"]["tip"] == cells["Q"]["tip"] == cells["Z"]["tip"] == why
+        why = "Geçersiz: dönem OIS spot valöründen (01.12.2026) sonra bitmiyor (uzak kontratın vade günü ya da geçmiş): satır hesaplanmıyor"
+        assert cell(s, "EK_VFRA!U11", u) == cell(s, "EK_VFRA!U12", u) == why
+        assert cell(s, "EK_VFRA!R11", u) == 0.0                              # (what the curves would give: nothing to price)
+        for r, label in ((332, "FRA+bp -150 · geçersiz"), (333, "Faiz % 34 · geçersiz")):
+            assert [cell(s, "VIOP!%s%d" % (c, r), u) for c in "QRSTVW"] == [""] * 6, r       # target, limits, spread, − market, FRA
+            assert cell(s, "VIOP!Y%d" % r, u) == -1.0                                       # (the days stay, as the sheet counts them)
+            m = r - 210
+            assert cell(s, "MASA!S%d" % m, u) == label and [cell(s, "MASA!%s%d" % (c, m), u) for c in ("T", "U", "V", "W", "Y", "Z", "AA")] == [""] * 7
+            cells = page_cells(s, u, "viop", "B33", r)
+            assert [cells[c]["t"] for c in "QRSTVW"] == [""] * 6 and cells["W"]["tip"] == cells["Z"]["tip"] == why
+            assert page_cells(s, u, "masa", "B17", m)["T"]["t"] == ""
+        assert page_cells(s, u, "viop", "B33", 332)["Q"]["tip"] == why
+        box = s.panels(u, [{"view": "viop", "panel": "B33", "key": "lp", "cols": ["L", "M", "Q", "S", "W"]}])["panels"]["lp"]["entry"]["data"]
+        row = dict(zip(box["c"], box["rows"][box["r"].index(332)]))
+        assert [row[c]["t"] for c in "QSW"] == [""] * 3 and row["W"]["tip"] == why                # a launchpad box: the same
+        assert cell(s, "VIOP!W330", u) == "OIS FRA · " + S2                                 # (only the row still priced)
         # the day after: the contracts roll, the list shifts by one
         live.on(dt.date(2026, 12, 1), "2.12.2026")
         assert cell(s, "VIOP!L1") == "A1Z6 Curncy" and listed()[:3] == ["Spot", "31.12.2026", "29.01.2027"] and listed()[-1] == "30.11.2027"

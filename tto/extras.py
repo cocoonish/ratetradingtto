@@ -2953,9 +2953,10 @@ def _tto_viop_roll(model: Model) -> None:
 #: as FRA+bp unless its type is FXswap+bp or Faiz % (a blank type too); a row of those two keeps the bootstrapped curve
 #: whatever is chosen.  The OIS FRA column names its curve (its caption: one curve for every row or "per row"), and its
 #: cells, the target rate and the choice say theirs in their tooltips (``"tips"`` of the page: columns AA:AC beside it).
-#: A row that cannot be priced says so there and on the desk strip ("Geçersiz"): a contract kept by its date that rolled
-#: off the list (the row is left empty, as the workbook leaves it), or a period that does not end after the OIS spot date
-#: (the far contract's expiry day, where the sheet's own FRA is 0).
+#: A row that cannot be priced shows no numbers and says why in its tooltips and on the desk strip ("Geçersiz"): a contract
+#: kept by its date that rolled off the list (the workbook leaves that row empty already), or a period that does not end
+#: after the OIS spot date (the far contract's expiry day, where the sheet's own FRA was 0 and the target −1,5 %): OIS FRA,
+#: the target rate, the limits, the spread price and target − market are empty then.
 VFRA_SHEET = "EK_VFRA"
 VFRA_ROWS = (331, 338)                    # the target rows of the VİOP sheet ...
 VFRA_FIRST = 10                           # ... and their helper rows on EK_VFRA (10 … 17)
@@ -3057,13 +3058,13 @@ def _tto_viop_fra(model: Model) -> None:
         for col, (near, far) in zip("QRS", (("J", "K"), ("L", "M"), ("N", "O"))):
             b.set("%s%d" % (col, h), '=IFERROR(($%s%d/$%s%d-1)*360/($G%d-$F%d),"")' % (near, h, far, h, h, h), fmt="0.0000%")
         b.set("T%d" % h, '=IF(ISNUMBER(VIOP!$W%(r)d),$D%(h)d,"")' % f, fmt="0", align="center")
-        # what the row's numbers cannot be, said in so many words: a contract kept by its date that is no longer listed (it
-        # expired - the contracts roll by themselves) leaves the row empty; a period that does not end after the OIS spot
-        # date (the far contract's expiry day) leaves the curves nothing to price - the sheet's own FRA shows 0 there
+        # why a row cannot be priced, said in so many words (the row's numbers are left empty then): a contract kept by its
+        # date that is no longer listed (it expired - the contracts roll by themselves), or a period that does not end after
+        # the OIS spot date (the far contract's expiry day) - the curves have nothing to price
         listed = "ISNUMBER(MATCH(VIOP!$%s%d,VIOP!$L$97:$X$97,0))"
         b.set("U%d" % h, ('=IF(OR(VIOP!$L%(r)d="",VIOP!$M%(r)d=""),"",IF(AND(%(near)s,%(far)s),IF(N($G%(h)d)<=OIS_MAIN!$B$2,'
                           '"Geçersiz: dönem OIS spot valöründen ("&TEXT(OIS_MAIN!$B$2,"dd.mm.yyyy")&") sonra bitmiyor (uzak kontratın vade '
-                          'günü ya da geçmiş): OIS FRA ve hedef faiz anlamsız",""),"Geçersiz: "&IF(%(near)s,"","yakın kontrat "&VIOP!$L%(r)d'
+                          'günü ya da geçmiş): satır hesaplanmıyor",""),"Geçersiz: "&IF(%(near)s,"","yakın kontrat "&VIOP!$L%(r)d'
                           '&" ")&IF(%(far)s,"","uzak kontrat "&VIOP!$M%(r)d&" ")&"VİOP kontrat listesinde yok (vadesi geçmiş olabilir): '
                           'satır hesaplanmıyor, kontratı listeden yeniden seçin"))') % dict(f, near=listed % ("L", r), far=listed % ("M", r)))
     last = h0 + VFRA_ROWS[1] - VFRA_ROWS[0]
@@ -3071,7 +3072,8 @@ def _tto_viop_fra(model: Model) -> None:
                                "yakın ve uzak kontrat tarihine; FRA = (DF yakın / DF uzak − 1) · 360 / gün (ACT/360 basit). FRA Bootstrap "
                                "VİOP sayfasının kendi OIS FRA formülüdür (satır 104: BOOT_LNDF).")
     b.note("A%d" % (last + 3), "Etkin no: 1 = Bootstrap, 2–4 = S1–S3; FXswap+bp ve Faiz % satırında 1. OIS FRA (VIOP!W) etkin eğrinin FRA'sı, "
-                               "FRA+bp hedef faizi (VIOP!Q) OIS FRA + hedef değer (bp).")
+                               "FRA+bp hedef faizi (VIOP!Q) OIS FRA + hedef değer (bp). Durum dolu (geçersiz) satırda OIS FRA ve hedef faiz "
+                               "boştur; limitler, spread fiyatı ve hedef − piyasa da onlarla boş kalır.")
 
     # ---- the VİOP sheet: the choice beside the table, OIS FRA and the target rate from the chosen curve
     v = SheetBuilder(model, "VIOP")
@@ -3096,8 +3098,13 @@ def _tto_viop_fra(model: Model) -> None:
         # the default: the bootstrapped curve, shown once the row has its two contracts and is priced as an FRA
         v.set("%s%d" % (c, r), '=IF(AND($L%(r)d<>"",$M%(r)d<>"",$O%(r)d<>"%(o1)s",$O%(r)d<>"%(o2)s"),%(list)s,"")' % f,
               like="O%d" % r)
-        v.patch("W%d" % r, "=" + formula_of(model, "VIOP", "W%d" % r).replace(fra, "INDEX(%(e)s!$P%(h)d:$S%(h)d,%(e)s!$D%(h)d)" % f))
-        v.patch("Q%d" % r, "=" + formula_of(model, "VIOP", "Q%d" % r).replace(fra, "$W%d" % r))
+        # a row that cannot be priced shows no OIS FRA and no target rate - nor the limits, the spread price and target −
+        # market built on it (the sheet's own FRA was 0 and the target −1,5 % on the far contract's expiry day); why it
+        # cannot be priced is in its tooltips and on the desk strip
+        unpriced = 'IF(%(e)s!$U$%(h)d<>"","",' % f
+        v.patch("W%d" % r, "=" + unpriced + formula_of(model, "VIOP", "W%d" % r).replace(
+            fra, "INDEX(%(e)s!$P%(h)d:$S%(h)d,%(e)s!$D%(h)d)" % f) + ")")
+        v.patch("Q%d" % r, "=" + unpriced + formula_of(model, "VIOP", "Q%d" % r).replace(fra, "$W%d" % r) + ")")
         # the tooltips: a row that cannot be priced says why first (in all three); a scenario's FRA beside the market's
         bad = 'IF(%(e)s!$U$%(h)d<>"",%(e)s!$U$%(h)d,' % f
         v.set("%s%d" % (tip_w, r), ('=' + bad + 'IF(ISNUMBER($W%(r)d),"OIS FRA, "&%(e)s!$E$%(h)d&" eğrisinden"&IF(AND(%(e)s!$D$%(h)d>1,'
