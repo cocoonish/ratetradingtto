@@ -689,7 +689,7 @@ function notifySelection() {
   const single = s.top === s.bottom && s.left === s.right;
   hooks.onSelect({
     grid: g, book: g.book, ref: a, single,
-    label: !a ? '' : (single ? a : a + ':' + b.split('!')[1]),
+    label: !a ? '' : (single || !b ? a : a + ':' + b.split('!')[1]),     // (!b: the block runs into a column the dashboard adds)
     cell: g.cell(sel.r1, sel.c1), focusRef: g.ref(sel.r1, sel.c1),
     count, n, sum, avg: n ? sum / n : null, min: n ? min : null, max: n ? max : null,
     rows: s.bottom - s.top + 1, cols,
