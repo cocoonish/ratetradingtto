@@ -1099,6 +1099,53 @@ def test_a_bond_taken_off_the_list_and_one_past_its_maturity(tmp_path, module_se
         s.stop()
 
 
+def test_tum_kagitlar_keeps_each_bonds_row_across_a_restart(tmp_path, module_service):
+    """Each bond keeps its row on Tüm Kâğıtlar - after a restart too (the rows are kept in the store): an alarm on its
+    price, an "Elle değer", a formula on its row stay its own.  A bond added takes a row no bond has had, the others stay
+    where they are; one past its maturity leaves its row - what was typed on it goes with it - and that row is taken
+    again only when no unused row is left."""
+    from tto.xl.values import date_to_serial
+    s, _ = _desk_service(tmp_path, module_service, FACTS)
+    try:
+        u = s.login("Satır Tutan")["user"]
+        first = dict(s._uni_rows)
+        assert s.store.get(s.UNI_KEPT) == {"rows": first, "freed": {}}
+        used = max(first.values())
+        assert sorted(first.values()) == list(range(ex.UNI_FIRST, used + 1))          # (the first start: laid out in order)
+        res = s.bond_list_add(u, [NEW_FIXED])
+        assert [b["isin"] for b in res["added"]] == [NEW_FIXED]
+        assert s._uni_rows[NEW_FIXED] == used + 1 and {k: v for k, v in s._uni_rows.items() if k != NEW_FIXED} == first
+        bill = s._uni_rows["TRT060127T10"]
+        alarm = s.alarm_add(u, "tto", "EK_EVREN!I%d" % bill, ">=", "200")["alarm"]
+        assert alarm["subject"] == {"kind": "bond", "isin": "TRT060127T10", "sheet": "EK_EVREN", "col": "I"}
+        kept = dict(s._uni_rows)
+    finally:
+        s.stop()
+    again, _ = _desk_service(tmp_path, module_service, FACTS)
+    try:
+        assert again._uni_rows == kept                                       # (a restart lays nothing out again)
+        assert cell(again, "EK_EVREN!A%d" % kept[NEW_FIXED]) == NEW_FIXED
+        u = again.login("Satır Tutan")["user"]
+        again.set_inputs(u, "tto", [{"ref": "EK_EVREN!I%d" % bill, "value": "99,5"}], allow_adhoc=True)
+        assert cell(again, "EK_EVREN!I%d" % bill, user_key(u)) == 99.5
+        # the day after its maturity the bill leaves its row: the "Elle değer" on it goes, the row is left free
+        again.books["tto"].engine.clock.today = lambda: float(date_to_serial(dt.date(2027, 1, 7)))
+        assert again.et.call(again._sync_universe) is True and "TRT060127T10" not in again._uni_rows
+        assert ("tto", "EK_EVREN!I%d" % bill) not in again.store.user_inputs(user_key(u), "tto")
+        assert again.store.get(again.UNI_KEPT)["freed"] == {str(bill): "2027-01-07"}
+        assert again._uni_note["cleared"][0]["isin"] == "TRT060127T10"
+        # a bond added now takes a row no bond had, not the bill's
+        res = again.bond_list_add(u, [NEW_TLREF])
+        assert [b["isin"] for b in res["added"]] == [NEW_TLREF] and again._uni_rows[NEW_TLREF] == max(kept.values()) + 1
+        assert cell(again, "EK_EVREN!A%d" % bill) is None
+        # the alarm on the bill's price follows the bill, not its row
+        a = next(x for x in again.watch.alarms(user_key(u)) if x["id"] == alarm["id"])
+        assert again.watch.explain(a["subject"], again.watch._Reader(again.watch, None), None) == \
+            "TRT060127T10 Tüm Kâğıtlar listesinde değil"
+    finally:
+        again.stop()
+
+
 def test_dibs_rv_prices_an_frn_only(tmp_path, module_service):
     """DİBS RV tells an FRN from a TLREF floater - by Tüm Kâğıtlar's kind for it, or, for a bond the list does not
     have, by Bloomberg (no TLREF in the floater formula, a reset index that is not TLREF's): "F" in the kind column,
