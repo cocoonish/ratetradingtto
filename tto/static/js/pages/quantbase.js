@@ -17,6 +17,42 @@ const serialOf = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7)
 
 export const REGIME = { MR: 'Ortalamaya dönüş', Trend: 'Trend', 'Nötr': 'Nötr' };
 
+/** Money as the desk says it (the server's sentences say it the same way): "+525 bin TRY", "4,2 bin USD", "-1.800 bin
+ * TL" - thousands, 10 mn and over in mn. */
+export function money(v, ccy, sign = true) {
+  if (!isNum(v)) return '';
+  const a = Math.abs(v);
+  const t = a >= 1e7 ? num(a / 1e6, 1) + ' mn' : (a >= 1e3 ? num(a / 1e3, a < 1e4 ? 1 : 0) + ' bin' : num(a, 0));
+  const s = /[1-9]/.test(t) ? (v > 0 && sign ? '+' : (v < 0 ? '-' : '')) : '';
+  return s + t + (ccy ? ' ' + ccy : '');
+}
+
+/** A level as the desk writes it: a rate "%38,50", a spread "+3,0 bp", anything else with its unit. */
+export function levelText(v, unit, digits = 2) {
+  if (!isNum(v)) return '—';
+  if (unit === '%') return '%' + num(v, Math.min(digits, 2));
+  if (unit === 'bp') return sgn(v, 1) + ' bp';
+  return fmt(v, digits) + (unit ? ' ' + unit : '');
+}
+
+/** A signal's expected P&L as one cell: FX in money per 1 mn of the base currency, a rates package in bp (its TL in
+ * the tooltip), anything else in its own unit. */
+export function pnlCell(s) {
+  const mo = s.money || {};
+  const pu = s.pnl_unit || '';
+  if (s.px && isNum(mo.total)) {
+    return { t: money(mo.total, mo.ccy) + ' / 1 mn ' + mo.base, v: mo.total, k: 'n',
+      tip: 'Tutma boyunca beklenen K/Z, 1 mn ' + mo.base + ' başına (' + s.px.inst + ', notional × fiyat hareketi)'
+        + (s.px.tenor ? ': forward primi (carry) ' + money(mo.carry, mo.ccy) + ', kur hareketi ' + money(mo.move, mo.ccy) : '')
+        + (isNum(s.pnl_try) && mo.ccy !== 'TRY' ? ' · ≈ ' + money(s.pnl_try, 'TRY') : '') + ' · nominalin ' + sgn(s.exp_pnl, 2) + '%\'si' };
+  }
+  if (!isNum(s.exp_pnl)) return { t: '', k: '' };
+  const tip = 'Tutma boyunca beklenen K/Z' + (pu === 'bp' ? ', carry + roll dahil' : '')
+    + (pu === 'bp' && isNum(mo.total) ? ' · ≈ ' + money(mo.total, 'TL') + ' (ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp)' : '')
+    + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
+  return { t: sgn(s.exp_pnl, 2) + (pu ? ' ' + pu : ''), v: s.exp_pnl, k: 'n', tip };
+}
+
 /** A number cell: text, value, an optional class and tooltip. */
 export function N(v, d = 2, opts = {}) {
   if (!isNum(v)) return { t: opts.empty || '', k: '' };
@@ -140,8 +176,9 @@ export class SignalChart {
     this.zBox = h('div', null, this.zHead, this.zHost);
     this.plots = h('div', { class: 'volcharts svcharts' }, h('div', null, this.levelHead, this.levelHost), this.zBox);
     this.details = h('div', { class: 'qdetails' });
+    this.lead = h('div', { class: 'qlead' });                   // the signal in plain words: first, above the charts
     this.empty = h('div', { class: 'empty' }, 'Bir sinyale ya da satıra tıklayın: serisi, ±z bantları ve giriş / hedef / stop burada çizilir.');
-    this.el.append(this.titleEl, this.statEl, this.plots, this.details, this.empty);
+    this.el.append(this.titleEl, this.statEl, this.lead, this.plots, this.details, this.empty);
     this.plots.classList.add('hidden');
     host.appendChild(this.el);
   }
@@ -154,6 +191,8 @@ export class SignalChart {
 
   loading(title) {
     this.titleEl.textContent = title || '';
+    clear(this.lead);
+    clear(this.details);
     this.empty.textContent = 'Yükleniyor…';
     this.empty.classList.remove('hidden');
     this.plots.classList.add('hidden');
@@ -168,6 +207,8 @@ export class SignalChart {
     const vals = hist.values || [];
     this.titleEl.textContent = (m.family_label ? m.family_label + ' · ' : '') + (s ? s.expression : m.name || '');
     clear(this.details);
+    clear(this.lead);
+    if (s) this.lead.appendChild(this.plainBlock(s));
     if (days.length < 2) {
       this.plots.classList.add('hidden');
       this.empty.classList.remove('hidden');
@@ -186,7 +227,8 @@ export class SignalChart {
     const allVals = vals.slice();
     if (isNum(m.level) && d.today && d.today > days[days.length - 1]) { allDays.push(d.today); allVals.push(m.level); }
     const flat = (v) => allDays.map(() => (isNum(v) ? v : null));
-    const series = [{ name: m.name || 'seri', kind: 'line', color: BLUE, data: allVals, marker: false }];
+    // (an FX signal's series is not the price it trades at: its legend says so)
+    const series = [{ name: m.series_label ? 'analiz serisi' : (m.name || 'seri'), kind: 'line', color: BLUE, data: allVals, marker: false }];
     const mr = isNum(hist.mean) && isNum(hist.sd) && m.mode !== 'drift';
     if (mr) {
       const mu = fw(hist.mean);
@@ -204,7 +246,9 @@ export class SignalChart {
     const x = { type: 'date', values: allDays.map(serialOf), format: 'mmm yy' };
     const unit = m.unit || '';
     const level = { title: m.name, cats: allDays.map(isoToTr), x, auto: 'fit', decimals: digits, y_title: unit, aspect: 0.42, series };
-    this.levelHead.textContent = 'Seviye' + (unit ? ' (' + unit + ')' : '') + (mr ? ' · ortalama, ±giriş ve ±stop bantları penceresinin σ\'sıyla' : '');
+    // (an FX signal's series is the analysis' own - its trade is told in prices below)
+    this.levelHead.textContent = (m.series_label ? 'Analiz serisi: ' + m.series_label : 'Seviye' + (unit ? ' (' + unit + ')' : ''))
+      + (mr ? ' · ortalama, ±giriş ve ±stop bantları penceresinin σ\'sıyla' : '');
     if (this.charts.level) this.charts.level.update(level); else this.charts.level = new Chart(this.levelHost, level, { height: 250 });
     const zs = (hist.z || []).slice();
     const hasZ = zs.some(isNum);
@@ -248,16 +292,15 @@ export class SignalChart {
         }
         return t;
       };
-      // a package's trade in a line, every leg with its nominal and DV01 ($ and TL a bp) where they are known
-      const sized = (legs) => ((legs || []).some((l) => isNum(l.dv01_usd))
-        ? legs.map((l) => l.action + ' ' + l.name + (isNum(l.dv01_usd) ? ' (' + (isNum(l.notional) ? num(l.notional, 1) + ' mn TL · ' : '')
-          + 'DV01 ' + num(l.dv01_usd, 0) + ' $' + (isNum(l.dv01) ? ' / ' + num(l.dv01, 0) + ' TL' : '') + ')' : '')).join(' · ') : '');
       const packs = h('div', { class: 'qpacks' });
       const plist = (s.packages && s.packages.length) ? s.packages : [{ name: '', legs: s.legs }];
       for (const pk of plist) {
         const bits = [];
         if (isNum(pk.carry_week)) bits.push('carry + roll ' + sgn(pk.carry_week, 2) + ' ' + (pu || 'bp') + ' / hafta');
-        if (isNum(pk.exp_pnl)) bits.push('beklenen ' + sgn(pk.exp_pnl, 2) + ' ' + pu + ' (tutma boyunca, carry dahil)');
+        if (isNum(pk.exp_pnl)) {
+          bits.push('beklenen ' + sgn(pk.exp_pnl, 2) + ' ' + pu + (pu === 'bp' && isNum((s.money || {}).per_bp) ? ' ≈ ' + money(pk.exp_pnl * s.money.per_bp, 'TL') : '')
+            + ' (tutma boyunca, carry + roll dahil)');
+        }
         const box1 = h('div', { class: 'qpack' });
         if (pk.name) box1.appendChild(h('div', { class: 'qpack-head' }, h('b', null, pk.name), bits.length ? ' · ' + bits.join(' · ') : ''));
         box1.appendChild(legTable(pk.legs));
@@ -266,31 +309,33 @@ export class SignalChart {
       }
       const p = s.parts || {};
       const fx = s.fx || null;
+      // (the trade in desk words, its prices, the sentence and the money are above the charts: plainBlock)
       const lines = [
         ['Tez', s.thesis || ''],
-        ['Yön', sized(s.legs) || s.expression],
         ['Skor', (s.score_name || 'z') + ' ' + sgn(s.z, 2) + ' (giriş ' + fmt(s.entry_z, 2) + ') · ' + (s.gated ? 'elendi' : s.strength)],
-        ['Giriş / hedef / stop', fmt(s.entry, s.digits) + ' / ' + fmt(s.target, s.digits) + ' / ' + fmt(s.stop, s.digits) + (s.unit ? ' ' + s.unit : '')
-          + (fx ? ' (forward\'la tutmanın getirisi, carry dahil)' : '')],
-        ['Beklenen K/Z (tutma boyunca)', isNum(s.exp_pnl) ? sgn(s.exp_pnl, 2) + ' ' + pu + (isNum(s.carry_h) ? ' · içinde carry ' + sgn(s.carry_h, 2) + ' ' + pu : '')
-          + (isNum(s.pnl_try) ? ' · ' + sgn(s.pnl_try / 1000, 0) + ' bin TRY' + (fx ? ' (1 mn ' + (fx.pair || '').slice(0, 3) + ' başına)' : ' (paket DV01\'iyle)') : '')
-          + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') : '—'],
-        ['Risk / ödül', (isNum(s.reward) ? 'ödül ' + fmt(s.reward, 2) + ' ' + pu : '') + (isNum(s.risk) ? ' · risk ' + fmt(s.risk, 2) + ' ' + pu : '')
-          + (isNum(s.rr) ? ' · ödül / risk ' + fmt(s.rr, 2) : '') + (isNum(s.exp_r) ? ' · beklenen / risk ' + fmt(s.exp_r, 2) : '') || '—'],
         ['Yarı ömür · tutma', (isNum(s.half_life) ? fmt(s.half_life, 1) + ' gün' : '—') + ' · ' + (isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit || 'gün') : '—')],
-        [fx ? 'Carry' : 'Carry + roll / hafta', fx ? (isNum(s.carry_yr) ? sgn(s.carry_yr, 1) + '% / yıl işlemin yönünde' + (isNum(s.carry_h) ? ' · ufukta ' + sgn(s.carry_h, 2) + '%' : '')
-          + (fx.tenors && fx.tenors.length ? ' · forward\'lar ' + fx.tenors.join(' / ') : '') + (isNum(fx.spot) ? ' · spot ' + fmt(fx.spot, 4) : '')
-          + (isNum(fx.fwd_h) ? ' · ufkun forward\'ı ' + fmt(fx.fwd_h, 4) : '') : 'forward yok: carry bilinmiyor')
+        [fx ? 'Forward primi' : 'Carry + roll / hafta', fx ? (isNum(s.carry_yr) ? 'yıllık %' + sgn(s.carry_yr, 1) + ' (sürekli bileşik, en kısa forward), işlemin '
+          + (s.carry_yr >= 0 ? 'lehine' : 'aleyhine')
+          + (isNum((s.money || {}).carry) && s.px && s.px.tenor ? ' · ufukta ' + money(s.money.carry, s.money.ccy) + ' / 1 mn ' + s.money.base : '')
+          + (fx.tenors && fx.tenors.length ? ' · forward\'lar ' + fx.tenors.join(' / ') : '') + (isNum(fx.spot) ? ' · spot ' + fmt(fx.spot, s.px ? s.px.digits : 4) : '')
+          + (isNum(fx.fwd_h) ? ' · ufkun forward\'ı ' + fmt(fx.fwd_h, s.px ? s.px.digits : 4) : '') : 'forward yok: carry bilinmiyor')
           : (isNum(s.carry_week) ? sgn(s.carry_week, 2) + ' ' + (pu || 'bp') : '—')],
         ['Rejim', (s.regime || '—') + (s.regime_info && isNum(s.regime_info.vr_z) ? ' (VR ' + fmt(s.regime_info.vr, 2) + ', z ' + sgn(s.regime_info.vr_z, 2)
           + (isNum(s.regime_info.hurst) ? ', H ' + fmt(s.regime_info.hurst, 2) : '') + (isNum(s.regime_info.vol_pct) ? ', vol yüzdelik ' + pct(s.regime_info.vol_pct) : '') + ')' : '')],
         ['Geri test', s.bt ? s.bt.text + (isNum(s.bt.sharpe) ? ' · Sharpe ' + fmt(s.bt.sharpe, 2) : '')
           + (isNum(s.bt.max_dd) ? ' · en büyük düşüş ' + fmt(s.bt.max_dd, 1) + 'σ' : '') + (s.bt.scope === 'tür' ? ' (bu tür)' : '') : 'henüz yok'],
         ['Uyum', s.agree + ' aile aynı yönde' + (s.agree_with && s.agree_with.length ? ' (' + s.agree_with.join(', ') + ')' : '')
-          + (s.conflict ? ' · ' + s.conflict + ' ters (' + s.conflict_with.join(', ') + ')' : '')],
+          + (s.conflict ? ' · ' + s.conflict + ' ters (' + (s.conflict_with || []).join(', ') + ')' : '')],
         ['Bileşik', fmt(s.composite, 2) + ' = |z| ' + fmt(p.z, 2) + ' × rejim ' + fmt(p.regime, 2) + ' × yarı ömür ' + fmt(p.hl, 2) + ' × carry ' + fmt(p.carry, 2)
           + (s.gated ? ' · elendi: ' + s.gated : '')],
       ];
+      // an FX trade is told in prices; the series the analysis scores (and the chart draws) is its own
+      if (s.px) {
+        lines.push(['Analiz serisi', fmt(s.entry, s.digits) + ' / ' + fmt(s.target, s.digits) + ' / ' + fmt(s.stop, s.digits) + (s.unit ? ' ' + s.unit : '')
+          + ' (giriş / hedef / stop) · ' + (m.series_label || m.name || '') + (isNum(s.exp_pnl) ? ' · beklenen ' + sgn(s.exp_pnl, 2) + ' ' + pu : '')
+          + (isNum(s.carry_h) ? ' (içinde forward primi ' + sgn(s.carry_h, 2) + ' ' + pu + ')' : '')
+          + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '')]);
+      }
       const kv = h('table', { class: 'plain qkv' });
       for (const [k, v] of lines) kv.appendChild(h('tr', null, h('th', null, k), h('td', null, v)));
       const gates = h('table', { class: 'plain qgates' }, h('tr', null, h('th', null, 'Kapı'), h('th', null, ''), h('th', null, 'Neden')));
@@ -317,6 +362,69 @@ export class SignalChart {
     this.fillRationale(d);
   }
 
+  /** The signal as the desk reads it: the trade in desk words, entry / target / stop in the instrument's own price (FX:
+   * the forward of the holding, with the spot), the plain sentence (the server's, from the signal's own numbers) and
+   * the money - FX per 1 mn of the base currency (its forward premium's part and the spot's), a rates package in bp and
+   * TL of its main leg's DV01 - at the horizon, at the target and at the stop. */
+  plainBlock(s) {
+    const px = s.px || null;
+    const mo = s.money || {};
+    const pu = s.pnl_unit || '';
+    const lv = (v) => levelText(v, s.unit, s.digits);
+    const span = isNum(s.hold) ? fmt(s.hold, 0) + ' ' + (s.horizon_unit === 'bar' ? 'bar (5 dk)' : 'iş günü') : 'ufuk';
+    // every leg with its nominal and DV01 ($ and TL a bp) where they are known: the trade's tooltip
+    const legs = s.legs || [];
+    const sizedLegs = legs.some((l) => isNum(l.dv01_usd)) ? legs.map((l) => l.action + ' ' + l.name + (isNum(l.dv01_usd) ? ' ('
+      + (isNum(l.notional) ? num(l.notional, 1) + ' mn TL · ' : '') + 'DV01 ' + num(l.dv01_usd, 0) + ' $' + (isNum(l.dv01) ? ' / ' + num(l.dv01, 0) + ' TL' : '') + ')' : '')).join(' · ') : '';
+    const rows = [];
+    const trade = h('td', { id: 'quant-sig-trade', title: sizedLegs || s.expression || null }, h('b', null, s.trade_tr || s.expression || ''));
+    if (px) trade.append(' · 1 mn ' + mo.base);
+    else if (isNum(mo.per_bp)) trade.append(' · ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp');
+    rows.push(['İşlem', trade]);
+    const d = px ? px.digits : s.digits;
+    rows.push(['Giriş / hedef / stop', h('td', { id: 'quant-sig-prices' }, px
+      ? fmt(px.entry, d) + ' / ' + fmt(px.target, d) + ' / ' + fmt(px.stop, d) + ' · ' + px.inst + ' (giriş: ' + px.note
+        + (px.tenor ? ' · spot ' + fmt(px.spot, d) : '') + ')' + (isNum(px.spot_exp) ? ' · ' + span + ' sonra beklenen kur ' + fmt(px.spot_exp, d) : '')
+      : lv(s.entry) + ' / ' + lv(s.target) + ' / ' + lv(s.stop) + (s.instrument ? ' · ' + s.instrument : ''))]);
+    let pnl = '—';
+    let tip = null;
+    if (px && isNum(mo.total)) {
+      const eq = [];
+      if (mo.ccy !== 'TRY' && isNum(mo.try_per)) eq.push(money(mo.total * mo.try_per, 'TRY'));
+      if (mo.ccy !== 'USD' && mo.ccy !== 'TRY' && isNum(mo.usd_per)) eq.push(money(mo.total * mo.usd_per, 'USD'));
+      pnl = money(mo.total, mo.ccy) + ' / 1 mn ' + mo.base + (eq.length ? ' (≈ ' + eq.join(' · ') + ')' : '')
+        + (px.tenor ? ' · forward primi (carry) ' + money(mo.carry, mo.ccy) + ' · kur hareketi ' + money(mo.move, mo.ccy) : '');
+      tip = span + ' boyunca: 1 mn ' + mo.base + ' × fiyat hareketi (' + fmt(px.entry, d) + ' → ' + fmt(px.exit, d) + '); nominalin ' + sgn(s.exp_pnl, 2) + '%\'si'
+        + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + '%' : '');
+    } else if (pu === 'bp' && isNum(s.exp_pnl)) {
+      const bp = mo.bp || {};
+      pnl = sgn(s.exp_pnl, 2) + ' bp' + (isNum(mo.total) ? ' ≈ ' + money(mo.total, 'TL') : '')
+        + (isNum(bp.carry) ? ' · carry + roll ' + sgn(bp.carry, 2) + ' bp · hareket ' + sgn(bp.move, 2) + ' bp' : '')
+        + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' bp' : '');
+      tip = span + ' boyunca';
+    } else if (isNum(s.exp_pnl)) {
+      pnl = sgn(s.exp_pnl, 2) + ' ' + (pu === 'vol' ? 'vol puanı' : pu);
+      tip = span + ' boyunca' + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
+    }
+    rows.push(['Beklenen K/Z', h('td', { id: 'quant-sig-pnl', title: tip }, pnl)]);
+    const rr = isNum(s.rr) ? s.rr : (isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
+    let ends = '';
+    if (px && (isNum(mo.target) || isNum(mo.stop))) {
+      ends = 'hedefte ' + (money(mo.target, mo.ccy) || '—') + ' · stopta ' + (money(mo.stop, mo.ccy) || '—') + ' (1 mn ' + mo.base + ')';
+    } else if (isNum(mo.per_bp) && mo.bp && (isNum(mo.bp.target) || isNum(mo.bp.stop))) {
+      ends = 'hedefte ' + (isNum(mo.bp.target) ? fmt(mo.bp.target, 1) + ' bp ≈ ' + money(mo.target, 'TL') : '—')
+        + ' · stopta ' + (isNum(mo.bp.stop) ? fmt(Math.abs(mo.bp.stop), 1) + ' bp ≈ ' + money(mo.stop, 'TL') : '—');
+    } else if (isNum(s.reward) || isNum(s.risk)) {
+      ends = 'hedefe ' + (isNum(s.reward) ? fmt(s.reward, 2) + ' ' + pu : '—') + ' · stopa ' + (isNum(s.risk) ? fmt(s.risk, 2) + ' ' + pu : '—');
+    }
+    if (ends && isNum(rr)) ends += ' · ödül / risk ' + fmt(rr, 2);
+    if (ends && isNum(s.exp_r)) ends += ' · beklenen / risk ' + fmt(s.exp_r, 2);
+    rows.push(['Hedefte / stopta', h('td', { id: 'quant-sig-ends' }, ends || '—')]);
+    const t = h('table', { class: 'plain qkv qtradekv' });
+    for (const [k, td] of rows) t.appendChild(h('tr', null, h('th', null, k), td));
+    return h('div', { class: 'qplain' }, s.plain ? h('div', { class: 'qsentence', id: 'quant-sig-plain' }, s.plain) : null, t);
+  }
+
   /** "Gerekçe": the past days most like today and what followed them, and what would undo the signal. */
   fillRationale(d) {
     const r = d.rationale;
@@ -326,16 +434,22 @@ export class SignalChart {
     const s = d.signal || {};
     const unit = (sm && sm.unit) || s.pnl_unit || '';
     if (sm) {
+      // the outcomes in money too, where the signal tells its P&L in money: FX per 1 mn of the base, a package in TL
+      const mm = sm.money || null;
+      const per = mm ? (mm.base ? ' / 1 mn ' + mm.base : '') : '';
+      const inMoney = (k) => (mm && isNum(mm[k]) ? ' (≈ ' + money(mm[k], mm.ccy) + per + ')' : '');
       box.appendChild(h('div', { class: 'qline' }, 'Bugüne en çok benzeyen ' + sm.n + ' gün (z, eğim, rejim, vol' + ((r.features || []).includes('carry') ? ', carry' : '')
         + '; en az bir hafta arayla): ' + sm.hits + '\'inde ' + fmt(sm.hold, 0) + ' iş günü sonra işlemin yönünde kâr (' + pct(sm.share) + '); ortalama ' + sgn(sm.mean, 2) + ' '
-        + unit + ', medyan ' + sgn(sm.median, 2) + ', çeyrekler ' + sgn(sm.q25, 2) + ' / ' + sgn(sm.q75, 2) + (sm.carry_in ? ' (carry dahil getiri)' : ' (fiyat hareketi; carry ayrıca)') + '.'));
+        + unit + inMoney('mean') + ', medyan ' + sgn(sm.median, 2) + inMoney('median') + ', çeyrekler ' + sgn(sm.q25, 2) + ' / ' + sgn(sm.q75, 2)
+        + (sm.carry_in ? ' (forward pozisyonunun getirisi: kur hareketi + forward primi)' : ' (fiyat hareketi; carry ayrıca)') + '.'));
       const t = h('table', { class: 'plain qanalogs' }, h('tr', null, ...['Gün', 'z', 'Eğim', 'Rejim (ρ)', 'Vol', (r.features || []).includes('carry') ? 'Carry' : null, 'Uzaklık',
-        'Sonra (' + unit + ')'].filter((x) => x !== null).map((x) => h('th', null, x))));
+        'Sonra (' + unit + ')', mm ? 'Sonra (' + mm.ccy + per + ')' : null].filter((x) => x !== null).map((x) => h('th', null, x))));
       for (const a of r.analogs || []) {
         const f = a.features || [];
         const cells = [isoToTr(a.day), sgn(f[0], 2), sgn(f[1], 2), sgn(f[2], 2), sgn(f[3], 2)];
         if ((r.features || []).includes('carry')) cells.push(sgn(f[4], 1));
         cells.push(fmt(a.distance, 2), sgn(a.outcome, 2));
+        if (mm) cells.push(money(a.money, ''));
         t.appendChild(h('tr', { class: isNum(a.outcome) && a.outcome > 0 ? 'ok' : 'fail' }, ...cells.map((c, i) => h('td', { class: i ? 'n' : '' }, c))));
       }
       box.appendChild(t);
@@ -368,18 +482,24 @@ export function signalRows(list, opts = {}) {
   return list.map((s, i) => {
     const row = [];
     const pu = s.pnl_unit || '';
+    const px = s.px || null;
+    const mo = s.money || {};
+    // an FX trade's entry / target / stop in the instrument's own price (the forward of the holding), the series' in its tooltip
+    const at = px ? { tip: px.inst + ' · giriş: ' + px.note + (px.tenor ? ' · spot ' + fmt(px.spot, px.digits) : '') + ' · analiz serisi ' + fmt(s.entry, s.digits) + ' ' + (s.unit || '') }
+      : {};
+    const rr = isNum(s.rr) ? s.rr : (px && isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
     row.push(T(s.family_label + (s.intraday ? ' · gün içi' : '')), T(s.asset),
-      T(s.expression, { b: 1, tip: (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
+      T(s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? 'elendi' : s.strength, { cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }),
-      N(s.entry, s.digits), N(s.target, s.digits), N(s.stop, s.digits), T(s.unit),
-      N(s.exp_pnl, 2, { sign: true, unit: pu, tip: 'Tutma boyunca beklenen kâr / zarar, carry + roll dahil' + (isNum(s.pnl_try) ? ' · ' + sgn(s.pnl_try / 1000, 0) + ' bin TRY' : '')
-        + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') }),
-      N(s.rr, 2, { tip: 'Ödül ÷ risk (hedefe ve stoba uzaklık)' + (isNum(s.exp_r) ? ' · beklenen ÷ risk ' + fmt(s.exp_r, 2) : '') }),
+      N(px ? px.entry : s.entry, px ? px.digits : s.digits, at), N(px ? px.target : s.target, px ? px.digits : s.digits),
+      N(px ? px.stop : s.stop, px ? px.digits : s.digits), T(px ? px.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : {}),
+      pnlCell(s),
+      N(rr, 2, { tip: 'Ödül ÷ risk (hedefe ve stoba uzaklık)' + (isNum(s.exp_r) ? ' · beklenen ÷ risk ' + fmt(s.exp_r, 2) : '') }),
       N(s.half_life, 1), T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),
-      N(s.carry_week, 2, { sign: true, tip: 'Carry + roll, işlemin yönünde, haftalık (' + (s.fx ? '%' : (pu || 'bp')) + ')' }),
-      N(s.carry_yr, 1, { sign: true, tip: 'FX: carry, işlemin yönünde, yıllık % (forward\'ların ima ettiği)' }),
+      N(s.carry_week, 2, { sign: true, tip: s.fx ? 'Forward primi, işlemin yönünde, haftalık (%)' : 'Carry + roll, işlemin yönünde, haftalık (' + (pu || 'bp') + ')' }),
+      N(s.carry_yr, 1, { sign: true, tip: 'FX: forward primi, işlemin yönünde, yıllık % (forward\'ların ima ettiği)' }),
       T(s.regime || '—'), T(s.agree + (s.conflict ? ' / −' + s.conflict : ''), { tip: (s.agree_with || []).join(', ') + (s.conflict ? '\nters: ' + s.conflict_with.join(', ') : '') }),
       T(gateText(s), { cls: 'qgate', tip: (s.gates || []).map((g) => (g.ok ? '✓ ' : '✗ ') + g.name + ': ' + (g.text || '')).join('\n') }),
       T(btShort(s.bt), { tip: s.bt ? s.bt.text + (isNum(s.bt.sharpe) ? ' · Sharpe ' + fmt(s.bt.sharpe, 2) : '')

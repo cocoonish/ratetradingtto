@@ -20,7 +20,8 @@ class FitPage extends QuantPage {
     this.tools([]);
     const page = h('div', { class: 'volpage quantpage' });
     const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller');
-    sp.note.textContent = 'Bu analizden çıkan sinyaller (elenenler gri, nedeniyle). Satıra tıklayın: seri ve giriş / hedef / stop aşağıda.';
+    sp.note.textContent = 'Bu analizden çıkan sinyaller (elenenler gri, nedeniyle). Beklenen K/Z: FX\'te 1 mn baz döviz başına para, faizde bp (TL ipucunda). '
+      + 'Satıra tıklayın: işlemin düz anlatımı (ne alınır / satılır, hangi fiyattan, hedefte ve stopta ne olur), seri ve giriş / hedef / stop aşağıda.';
     this.boxes.sig = new GridBox(sp, 'quant/' + this.what + '/signals', (sid) => this.pick(sid));
     const cp = panel('quant-' + this.what + '-chart', 'Seçili seri');
     this.chart = new SignalChart(cp.body);

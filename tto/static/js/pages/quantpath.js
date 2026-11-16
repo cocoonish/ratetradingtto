@@ -38,7 +38,7 @@ class PathBase extends QuantPage {
     if (withSignals) {
       const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller');
       sp.note.textContent = 'Kinkler (İma patikası ayrıklığı) ve büyük adımın sistematik yanlış fiyatlanması (İma kalibrasyonu); elenenler gri. '
-        + 'Satıra tıklayın: seri ve giriş / hedef / stop aşağıda; senaryo K/Z ve tez sinyalin notunda.';
+        + 'Satıra tıklayın: işlemin düz anlatımı, seri ve giriş / hedef / stop aşağıda; senaryo K/Z ve tez sinyalin notunda.';
       this.boxes.sig = new GridBox(sp, 'quant/' + this.what + '/signals', (sid) => this.pick(sid));
       const cp = panel('quant-' + this.what + '-chart', 'Seçili seri');
       this.chart = new SignalChart(cp.body);

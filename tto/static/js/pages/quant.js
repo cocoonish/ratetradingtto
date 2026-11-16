@@ -40,7 +40,9 @@ class SignalsPage extends QuantPage {
     const list = panel('quant-signals', 'Canlı sinyaller');
     list.note.textContent = 'Sıra: bileşik = |z| (masanın ölçeğinde, en çok stop eşiği) × rejim uyumu (1 / 0,5 / 0) × yarı ömür uyumu (ufkun içindeyse 1, '
       + 'iki katına kadar ufuk ÷ yarı ömür, ötesi elenir) × carry yönü (işlemin aleyhineyse 0,5). Uyum: aynı bacağı aynı yönde isteyen diğer aile sayısı '
-      + '(− ile ters yönde olanlar). Satıra tıklayın: seri, bantlar ve giriş / hedef / stop aşağıda çizilir. Backtest değildir.';
+      + '(− ile ters yönde olanlar). FX: giriş / hedef / stop işlem yapılan forward\'ın kuru (ufkun sonu valörlü; Birim sütununda hangisi), beklenen K/Z '
+      + '1 mn baz döviz başına kote para biriminde (USDTRY: TRY, EURUSD: USD); faiz: bp (TL karşılığı ipucunda, ana bacak DV01\'iyle). Satıra tıklayın: '
+      + 'işlemin düz anlatımı, seri, bantlar ve giriş / hedef / stop aşağıda. Backtest değildir.';
     this.boxes.signals = new GridBox(list, 'quant/signals', (sid) => this.pick(sid));
     const chartPanel = panel('quant-chart', 'Seçili sinyal');
     this.chart = new SignalChart(chartPanel.body);
@@ -49,8 +51,9 @@ class SignalsPage extends QuantPage {
     this.btPanel = panel('quant-backtest', 'Geri test · aynı kurallarla yürüyen pencere (son yıl)');
     this.btPanel.note.textContent = 'Her ' + 10 + ' iş gününde bütün aileler yalnızca o güne kadarki kapanışlarla yeniden kurulur, aradaki günler o günün kapanışıyla '
       + 'canlıdaki kurallarla (eşik, kapılar) puanlanır; sinyal olan gün kapanıştan girilir, hedef / stop / tutma süresiyle sonraki kapanışlarda çıkılır - '
-      + 'ileriye bakış yok. K/Z σ: sinyalin kendi σ\'sıyla; birim: bp, % ya da vol (FX\'te carry dahil; faiz paketinin tarihçesinde carry motoru yok: '
-      + 'fiyat hareketi); TL: paket DV01\'iyle ya da 1 mn baz döviz başına. Sharpe: işlem K/Z σ\'larının ortalaması ÷ σ × √(yılda işlem). Düşüş: birikimli K/Z σ\'nın '
+      + 'ileriye bakış yok. K/Z σ: sinyalin kendi σ\'sıyla; birim: bp, % ya da vol (FX\'te forward pozisyonunun getirisi, forward primi dahil; faiz paketinin '
+      + 'tarihçesinde carry motoru yok: fiyat hareketi); TL: paket DV01\'iyle ya da 1 mn baz döviz başına (forward\'ın fiyat hareketi). Sharpe: işlem K/Z '
+      + 'σ\'larının ortalaması ÷ σ × √(yılda işlem). Düşüş: birikimli K/Z σ\'nın '
       + 'en büyük gerilemesi. Günde bir kez, ayrı iş parçacığında hesaplanır.';
     this.boxes.bt = new GridBox(this.btPanel, 'quant/backtest');
     const hits = panel('quant-hits', 'Sinyal kaydı · aile başına isabet');
