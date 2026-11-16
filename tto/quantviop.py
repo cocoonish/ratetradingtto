@@ -1002,7 +1002,9 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
                                 "n_cm": len(days), "source": source}
         recent = [basis_hist[d] for d in days[-win:]]
         mean_basis = qm.mean(recent) if len(recent) >= 20 else None
-        ch = [implied_hist[b] - implied_hist[a] for a, b in zip(sorted(implied_hist)[-win - 1:], sorted(implied_hist)[-win:])]
+        # the last ``win`` daily changes (a shorter history: all of its changes - not its days against themselves)
+        imp_days = sorted(implied_hist)[-win - 1:]
+        ch = [implied_hist[b] - implied_hist[a] for a, b in zip(imp_days, imp_days[1:])]
         info["sd_daily"] = qm.stdev(ch) if len(ch) >= 20 else None
         info["mean_basis"] = mean_basis
 
@@ -1029,6 +1031,13 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
             ou = (mon.info or {}).get("ou") or {}
             info["kappa"], info["half_life"] = ou.get("kappa"), mon.half_life
         per[t] = info
+    # a contract with too few days of its own (a far month before its history is in): the daily σ of the contract
+    # nearest to it by days to expiry - the page says whose
+    have = [i for i in per.values() if i.get("sd_daily")]
+    for info in per.values():
+        if not info.get("sd_daily") and have:
+            near = min(have, key=lambda i: abs(i["g"] - info["g"]))
+            info["sd_daily"], info["sd_from"] = near["sd_daily"], near["name"]
     # the calibration of the week's levels: on the constant maturities' closes (30 and 91 days)
     cal: Dict[int, Dict[str, Any]] = {}
     for G in (30, 91):
@@ -1100,8 +1109,21 @@ def _build(ctx: qf.Ctx, listed: List[Contract], per: Dict[str, Dict[str, Any]], 
                                "sd_daily": info.get("sd_daily"), "size": info.get("size"), "n_cm": info.get("n_cm"), "source": info.get("source")}
         fair = o360 + info["mean_basis"] / 100.0 if o360 is not None and info.get("mean_basis") is not None else None
         row["fair"] = fair
+        # where the levels start: the quotes; a side without a quote from the other side, neither from the last trade
+        # (a far month's book is often empty, one side of it now and then)
+        last_i = implied(row["last"], row["spot"], row["usd"], g) if row["last"] and row["spot"] and row["usd"] is not None else None
+        ref = mid if mid is not None else next((x for x in (bid, ask, last_i) if x is not None), None)
+        x_buy, x_sell = (ask if ask is not None else ref), (bid if bid is not None else ref)
+        row["ref"], row["last_implied"] = ref, last_i
+        row["levels_from"] = ("kota" if bid is not None and ask is not None else "yalnız satış kotası (bid)" if bid is not None
+                              else "yalnız alış kotası (ask)" if ask is not None else "son işlem fiyatı" if last_i is not None else None)
         sd = info.get("sd_daily")
-        if sd and mid is not None:
+        row["sd_from"] = info.get("sd_from")
+        if not sd:
+            row["levels_why"] = "oynaklık için geçmiş yok (%d gün)" % (info.get("n_cm") or 0)
+        elif ref is None:
+            row["levels_why"] = "canlı kota ve son işlem fiyatı yok"
+        if sd and ref is not None:
             prof = Profile(sd * sd, shape.get("buckets") or None, shape.get("overnight") or 0.0)
             slope = _slope(mids, g)
             roll = -(slope or 0.0) * 7.0 / 5.0                      # a business day takes ~1,4 calendar days off g
@@ -1115,18 +1137,20 @@ def _build(ctx: qf.Ctx, listed: List[Contract], per: Dict[str, Dict[str, Any]], 
                 # then the whole days ahead
                 left = n - len(ahead)
                 season = (left * seasonal_drift(effects, [now.date()], hol) + seasonal_drift(effects, ahead, hol)) / 100.0
-                pull = (fair - mid) * (1.0 - math.exp(-kappa * n)) if fair is not None and kappa else 0.0
+                pull = (fair - ref) * (1.0 - math.exp(-kappa * n)) if fair is not None and kappa else 0.0
                 m = pull + roll * n + season
                 part: Dict[str, Any] = {"var": v, "days": n, "drift_bp": m * 100.0, "pull_bp": pull * 100.0, "season_bp": season * 100.0,
                                         "sigma_bp": math.sqrt(v) * c_cal * 100.0 if v > 0 else 0.0}
                 if v > 0:
-                    for side, x0 in (("buy", ask), ("sell", bid)):
+                    for side, x0 in (("buy", x_buy), ("sell", x_sell)):
                         if x0 is None:
                             continue
                         lad = ladder(x0, m, v, side, c_cal)
                         for step in lad:
                             step["price"] = price_of(step["level"], row["spot"], row["usd"], g) if step["level"] is not None and row["spot"] else None
                         part[side] = lad
+                else:
+                    part["why"] = "seans kapalı" if which == "today" else "bu haftanın seansı kalmadı"
                 row[which] = part
         rows.append(row)
     return {"rows": rows, "at": now.strftime("%Y-%m-%d %H:%M"), "session": "%02d:%02d–%02d:%02d" % (SESSION[0] // 60, SESSION[0] % 60,
