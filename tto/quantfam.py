@@ -1548,7 +1548,7 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
                "z_windows": zs, "window": w_main}
         if mon is not None:
             mons.append(mon)
-            row.update({"z_hist": mon.zof(series[-1]), "half_life": mon.half_life, "regime": (mon.regime or {}).get("tag"),
+            row.update({"sid": mon.sid, "z_hist": mon.zof(series[-1]), "half_life": mon.half_life, "regime": (mon.regime or {}).get("tag"),
                         "hedge": [{"key": keys[h], "weight": w} for h, w in hedge]})
         table_rows.append(row)
     # today's move in factor terms and where the factors stand (the change-PCA: the risk factors)
