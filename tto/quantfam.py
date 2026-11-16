@@ -526,6 +526,7 @@ class Monitor(object):
         self.expect: Optional[Callable[[int, float], Optional[float]]] = kw.get("expect")    # (side, hold) -> P&L, carry in
         self.pnl_sd: Optional[float] = kw.get("pnl_sd")                       # a day's (a bar's) σ of the P&L, when not dsd × factor
         self.horizon_unit: str = kw.get("horizon_unit", "gün")
+        self.horizon: Optional[float] = kw.get("horizon")                     # what its half-life is held to, in horizon_unit (None: the desk's)
         self.intraday: bool = bool(kw.get("intraday", False))
         # the trade told leg by leg (a hedged package: the expression names every leg); its title, and other packages
         # that trade the same signal ([{name, legs, carry_up (P&L units a week, the package going up), note}])
@@ -731,17 +732,20 @@ def regime_factor(kind: str, tag: Optional[str]) -> Tuple[float, str]:
     return 1.0, ""
 
 
-def hl_factor(kind: str, hl: Optional[float], cfg: Dict[str, Any]) -> Tuple[float, str]:
+def hl_factor(kind: str, hl: Optional[float], cfg: Dict[str, Any], horizon: Optional[float] = None, unit: str = "gün") -> Tuple[float, str]:
+    """A mean reversion's weight by its half-life against the horizon: 1 within it, horizon ÷ half-life up to
+    ``hl_max_mult`` horizons, 0 beyond - and with no half-life.  ``horizon`` in the half-life's own ``unit`` (an
+    intraday monitor's in bars); not given: the desk's, ``cfg["horizon"]`` business days."""
     if kind not in ("mr", "corr"):
         return 1.0, ""
-    horizon = float(cfg["horizon"])
+    horizon = float(cfg["horizon"] if horizon is None else horizon)
     if hl is None:
         return 0.0, "ortalamaya dönmüyor (AR(1) katsayısı 0 – 1 dışında)"
     if hl <= horizon:
         return 1.0, ""
     if hl <= float(cfg["hl_max_mult"]) * horizon:
         return horizon / hl, ""
-    return 0.0, "yarı ömür %.0f gün: ufkun (%d gün) %g katından uzun" % (hl, int(horizon), float(cfg["hl_max_mult"]))
+    return 0.0, "yarı ömür %.0f %s: ufkun (%d %s) %g katından uzun" % (hl, unit, int(horizon), unit, float(cfg["hl_max_mult"]))
 
 
 def _gate(name: str, ok: bool, text: str, part: Optional[float] = None) -> Dict[str, Any]:
@@ -1006,9 +1010,10 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     rf, why_r = regime_factor(m.kind, tag)
     if m.kind in ("mr", "surprise", "trend"):
         gates.append(_gate("Rejim", rf > 0, why_r or "%s%s" % (REGIME_TEXT.get(tag), " · yarım ağırlık" if rf == 0.5 else ""), rf))
-    hf, why_h = hl_factor(m.kind, m.half_life, cfg)
+    hf, why_h = hl_factor(m.kind, m.half_life, cfg, m.horizon, m.horizon_unit)
     if m.kind in ("mr", "corr"):
-        gates.append(_gate("Yarı ömür", hf > 0, why_h or ("%s gün%s" % (_g(m.half_life, 1), "" if hf >= 1.0 else " · ağırlık %s" % _g(hf, 2))), hf))
+        gates.append(_gate("Yarı ömür", hf > 0, why_h or ("%s %s%s" % (_g(m.half_life, 1), m.horizon_unit,
+                                                                       "" if hf >= 1.0 else " · ağırlık %s" % _g(hf, 2))), hf))
     if m.gate is not None:
         g, why_g = m.gate(pkg_s)
         gates.append(_gate(m.gate_name, g > 0.0, why_g or "geçti"))

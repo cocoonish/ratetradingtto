@@ -338,14 +338,17 @@ def engle_granger(y: Sequence[float], x: Sequence[float], max_lag: int = 4) -> O
 
 
 # ---------------------------------------------------------------------------------------------- Ornstein-Uhlenbeck
-def ou_fit(x: Sequence[float]) -> Optional[Dict[str, Any]]:
+def ou_fit(x: Sequence[float], nxt: Optional[Sequence[float]] = None) -> Optional[Dict[str, Any]]:
     """The Ornstein-Uhlenbeck reading of a series by its AR(1) regression x_{t+1} = a + b·x_t + e:
     b = e^{−κ}, half-life = ln 2 / κ (in steps, here business days), μ = a / (1 − b), σ_eq = σ_e / √(1 − b²).
     ``half_life`` (and ``mu``, ``sigma_eq``) are ``None`` when b ≥ 1 - the series does not return to a mean; with
-    b ≤ 0 it is back (or overshoots) within a step: a half-life of 0."""
-    if len(x) < 10:
+    b ≤ 0 it is back (or overshoots) within a step: a half-life of 0.  ``nxt``: the value a step after each of ``x``,
+    when the steps are not the series' own - a series in pieces (each day's bars from that day's own start) is read on
+    the steps inside the pieces, none across two."""
+    pre, post = (list(x[:-1]), list(x[1:])) if nxt is None else (list(x), list(nxt))
+    if len(pre) < 9 or len(post) != len(pre):
         return None
-    r = ols(list(x[1:]), [list(x[:-1])])
+    r = ols(post, [pre])
     if r is None:
         return None
     a, b = r["coef"]
