@@ -26,9 +26,12 @@ def test_status_and_navigation(service):
     assert "blotter" in ids and "masa" in ids and "forward" in ids and "usd" in ids
     # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, spreads, settings)
     custom = [p["id"] for p in pages if p.get("custom")]
-    assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol", "quant", "quant-corr",
-                      "quant-pca", "quant-pairs", "quant-regime", "quant-fx", "quant-macro", "quant-model", "quant-intraday", "quant-curve", "quant-opt",
-                      "quant-path", "quant-wirp", "quant-lead", "quant-viop", "social", "agenda"]
+    # (the quant pages in the order of their four menu entries: Sinyaller, Faiz, FX, VİOP - see menu.js)
+    assert custom == ["watch", "heat", "blotter", "broker", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
+                      "quant", "quant-intraday", "quant-model",
+                      "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-path", "quant-wirp", "quant-lead",
+                      "quant-fx", "quant-macro", "quant-opt",
+                      "quant-viop", "social", "agenda"]
     assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 28
 
 
