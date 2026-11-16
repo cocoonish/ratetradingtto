@@ -70,7 +70,8 @@ function cellClass(cell) {
 
 function signature(cell) {
   return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1)
-    + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '') + '\u0001' + (cell.ff || '') + '\u0001' + (cell.fe || '');
+    + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '') + '\u0001' + (cell.ff || '') + '\u0001' + (cell.fe || '')
+    + '\u0001' + (cell.tip || '');
 }
 
 /** What a cell says when the mouse rests on it: an input's formula, the workbook's comment, a long text in full. */
@@ -492,7 +493,8 @@ export class Grid {
         if (cell.act || cell.chk) continue;
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '');
         td.textContent = cell.t || '';
-        if (cell.ff || before.ff) td.title = tipOf(cell);       // (a formula typed, changed or gone: its tooltip with it)
+        // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with it)
+        if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '')) td.title = tipOf(cell);
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
         else td.style.removeProperty('--bar');
