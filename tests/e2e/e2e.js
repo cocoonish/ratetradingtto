@@ -858,6 +858,101 @@ async function shot(page, name) {
     await page.click('#fwd-pair button[data-v="USDTRY"]');
     await shot(page, '04c-blotter-pairs');
 
+    // ------------------------------------------------------------------ blotter: an amount in TRY, templates, rows pasted from Excel
+    console.log('blotter: an amount in the second currency, templates, Excel paste');
+    const trInt = (x) => Math.abs(x).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    const trAmt = (x) => { const [i, d] = Math.abs(x).toFixed(2).split('.'); return i.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + d; };
+    const typedSide = () => page.evaluate(() => ['fwd-amount-field', 'fwd-quote-field'].map((id) => document.getElementById(id).className).join('|'));
+    await page.click('.entry .tabs button:nth-child(1)');
+    await page.click('#fwd-pair button[data-v="USDTRY"]');
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="S"]');
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="RET_MID"]');
+    await page.fill('.form input[placeholder="gg.aa.yyyy"]', '15.12.2026');
+    await page.fill('#fwd-quote-amount', '520m');
+    const tryQ = (await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/forward', { value_date: '15.12.2026', basis: 'RET_MID', quote_amount: 520000000 })).json;
+    await page.waitForFunction((want) => document.getElementById('fwd-amount').value === want, trInt(tryQ.amount), { timeout: 20000 });
+    const tryTotal = await page.evaluate(() => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="fwd-total"]'); return q ? [q.className, q.querySelector('.v').textContent] : null; });
+    check('a USDTRY forward typed in TRY: the USD from the deal\'s forward to the dollar, the TRY marked as the one typed',
+      tryQ.typed === 'quote' && tryQ.tl === 520e6 && Math.abs(tryQ.amount - 520e6 / tryQ.forward) < 0.006
+      && /typed/.test((await typedSide()).split('|')[1]) && /calc/.test((await typedSide()).split('|')[0])
+      && tryTotal && /typed/.test(tryTotal[0]) && tryTotal[1] === '520.000.000,00', [tryQ, await typedSide(), tryTotal]);
+    const fxCount = (await fxRows()).length;
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === Math.max(n, 1) + 1, fxCount, { timeout: 15000 });
+    const tryList = await fxRows();
+    const tryRow = tryList[tryList.length - 1];
+    const tryKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.filter((t) => t.kind === 'fwd').pop();
+    const typedMarked = await page.evaluate(() => { const rows = document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr'); return [...rows[rows.length - 1].children].map((td) => td.className).join('|'); });
+    check('... kept as a USD trade, the TRY typed beside it and marked in the list',
+      tryKept.typed === 'quote' && tryKept.typed_amount === 520e6 && tryKept.amount === tryQ.amount && tryRow[tryList[0].indexOf('Tutar (döviz)')] === trInt(tryQ.amount)
+      && tryRow[tryList[0].indexOf('Karşı tutar')] === '520.000.000,00' && /typed/.test(typedMarked.split('|')[tryList[0].indexOf('Karşı tutar')]), [tryKept, tryRow, typedMarked]);
+    // typed in USD again: the TRY is the one worked out
+    await page.fill('#fwd-amount', '10m');
+    const usdQ = (await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/forward', { value_date: '15.12.2026', basis: 'RET_MID', amount: 10000000 })).json;
+    await page.waitForFunction((want) => document.getElementById('fwd-quote-amount').value === want, trAmt(usdQ.tl), { timeout: 20000 });
+    check('... typed in USD the TRY follows, and the mark moves', /typed/.test((await typedSide()).split('|')[0]) && /calc/.test((await typedSide()).split('|')[1]), await typedSide());
+
+    // a template: what is on the form, any of its fields; one click fills the form again (nothing is saved)
+    await page.click('#fwd-pair button[data-v="EURTRY"]');
+    await page.fill('#fwd-quote-amount', '300m');
+    await page.fill('.form input[placeholder="gg.aa.yyyy"]', '3M');
+    await page.fill('.entry .pad:not(.hidden) input[placeholder="opsiyonel"]', 'GARANTI');
+    await page.click('#tpl-save');
+    await page.waitForSelector('#tpl-dialog');
+    const tplParts = await page.evaluate(() => [...document.querySelectorAll('#tpl-parts input')].map((x) => x.dataset.part + (x.checked ? '+' : '-') + (x.disabled ? 'x' : '')).join(','));
+    await page.fill('#tpl-name', 'E2E Garanti EUR 3A');
+    await page.click('#tpl-ok');
+    await page.waitForSelector('#blotter-templates .chip');
+    const tplMine = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter/templates')).json.templates.find((t) => t.name === 'E2E Garanti EUR 3A') || {};
+    check('"Şablon olarak kaydet": the fields on the form ticked (the note left out), kept as one\'s own',
+      /^pair\+,dir\+,amount\+,date\+,basis\+,spot-x,cpt\+,note-/.test(tplParts) && !tplMine.shared
+      && JSON.stringify(Object.entries(tplMine.spec || {}).sort()) === JSON.stringify(Object.entries({ kind: 'fwd', pair: 'EURTRY', dir: 'S', quote_amount: '300m', date: '3M',
+        basis: 'RET_MID', cpt: 'GARANTI' }).sort()),
+      [tplParts, tplMine]);
+    await page.click('#fwd-pair button[data-v="USDTRY"]');
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="B"]');
+    await page.fill('#fwd-amount', '1m');
+    await page.fill('.form input[placeholder="gg.aa.yyyy"]', '15.12.2026');
+    await page.fill('.entry .pad:not(.hidden) input[placeholder="opsiyonel"]', '');
+    const listBefore = (await fxRows()).length;
+    await page.click('#blotter-templates .chip:has-text("E2E Garanti EUR 3A")');
+    const tplFilled = await page.evaluate(() => { const f = window.tto.state.page.fwd; return [f.pair, f.dir, f.typed, f.quoteAmount.value, f.date.value, f.cpt.value, f.basis]; });
+    await page.waitForFunction(() => /\d/.test(document.getElementById('fwd-amount').value), null, { timeout: 20000 });
+    check('... a click on it fills the form - EURTRY, sold, 300m TRY typed, 3M, GARANTI - and saves nothing',
+      JSON.stringify(tplFilled) === JSON.stringify(['EURTRY', 'S', 'quote', '300m', '3M', 'GARANTI', 'RET_MID']) && (await fxRows()).length === listBefore
+      && /Tutar \(EUR\)/.test(await page.textContent('#fwd-amount-field')), tplFilled);
+    // the desk's templates are an administrator's to publish; one's own is nobody else's
+    await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/templates', { name: 'E2E masa 1Y', kind: 'ois', spec: { strategy: 'outright', side: 'PAY', tenors: ['1Y'] }, shared: true });
+    const theirs = (await api(page, 'mehmet', 'GET', '/api/blotter/templates')).json;
+    const refused = await api(page, 'mehmet', 'POST', '/api/blotter/templates', { name: 'x', kind: 'fwd', spec: { dir: 'B' }, shared: true });
+    check('... a user sees the desk\'s templates and not another\'s own, and cannot publish to the desk',
+      theirs.templates.map((t) => t.name).join('|') === 'E2E masa 1Y' && !theirs.can_publish && refused.status === 403, [theirs, refused.status]);
+
+    // rows copied from Excel: each checked as the form checks it, the valid ones kept together, the bad one left to fix
+    const fxBefore2 = (await fxRows()).length;
+    await page.click('#bulk-open');
+    await page.waitForSelector('#bulk-dialog');
+    await page.click('#bulk-kind button[data-v="fwd"]');
+    await page.fill('#bulk-text', 'Yön\tTutar\tFaiz\tValör\nB\t3.000.000\t36,50%\t15.12.2026\nS\t2.000.000\t36,00%\t32.13.2026\nB\t1m\t36,25\t15.01.2027');
+    await page.waitForFunction(() => document.querySelectorAll('#bulk-preview tr.line').length === 3, null, { timeout: 20000 });
+    const bulkRows = await page.evaluate(() => [...document.querySelectorAll('#bulk-preview tr.line')].map((tr) => [tr.dataset.n, tr.className, tr.querySelector('td.st').textContent]));
+    const bulkMap = await page.evaluate(() => [...document.querySelectorAll('#bulk-preview tr.map select')].map((s) => s.value).join(','));
+    await shot(page, '04d-blotter-bulk');
+    check('Excel paste: the header read, each row checked - the bad one says why - and "2 satırı kaydet"',
+      bulkMap === 'dir,amount,try_rate,value_date' && await page.isChecked('#bulk-header') && bulkRows.map((r) => r[0]).join() === '2,3,4'
+      && /good/.test(bulkRows[0][1]) && /bad/.test(bulkRows[1][1]) && /good/.test(bulkRows[2][1]) && /valör tarihi anlaşılamadı/.test(bulkRows[1][2])
+      && /^✓ USDTRY alış 3\.000\.000 USD/.test(bulkRows[0][2]) && (await page.textContent('#bulk-save')) === '2 satırı kaydet', [bulkMap, bulkRows]);
+    await page.click('#bulk-save');
+    await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === n + 2, fxBefore2, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelectorAll('#bulk-preview tr.line').length === 1, null, { timeout: 20000 });
+    const leftText = await page.inputValue('#bulk-text');
+    const bulkAdded = (await fxRows()).slice(-2);
+    const amountCol = (await fxRows())[0].indexOf('Tutar (döviz)');
+    check('... the two good rows saved in one go, the bad one left in the box under its header',
+      leftText === 'Yön\tTutar\tFaiz\tValör\nS\t2.000.000\t36,00%\t32.13.2026' && bulkAdded.map((r) => r[amountCol]).join('|') === '3.000.000|1.000.000', [leftText, bulkAdded]);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#bulk-dialog', { state: 'detached' });
+
     // ------------------------------------------------------------------ realized vol · carry
     console.log('realized vol, carry / vol');
     await open(page, 'vol');
