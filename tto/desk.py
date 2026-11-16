@@ -198,8 +198,11 @@ class Desk(object):
         self._writing = threading.Lock()          # the pace check and the row it lets in, one request at a time
         self._counters = {"chat": 0, "feedback": 0, "agenda": 0}
         self._written: Dict[Tuple[str, str], Deque[float]] = {}     # (part, user) -> when they wrote lately
-        # (the day read, the desk's TRY holidays as ISO days, how many times the list changed)
-        self._shut: Tuple[str, frozenset, int] = ("", frozenset(), 0)
+        # the desk's TRY holidays as ISO days: (the day read, the days, how many times the list changed) - read as the
+        # corner starts (the calculation thread is free then), again when the list changes and in the background on a
+        # new day (``holidays``): the agenda never waits for the calculation thread
+        self._shut: Tuple[str, frozenset, int] = (_now().date().isoformat(), self._read_holidays(), 0)
+        self._refreshing: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------ live
     def counters(self, admin: bool = True) -> Dict[str, int]:
@@ -422,28 +425,45 @@ class Desk(object):
         return self.agenda(user)
 
     # ------------------------------------------------------------------ recurring items (Tekrarlayan işler)
+    def _read_holidays(self) -> frozenset:
+        """The desk's TRY holidays as the dashboard's calendar has them now (on the calculation thread: the caller waits
+        for it)."""
+        try:
+            return frozenset(d.isoformat() for d in self.svc.holiday_dates(("TRY",)))
+        except Exception:  # noqa: BLE001 - a workbook without the list: the weekends only
+            return frozenset()
+
     def holidays(self) -> frozenset:
         """The TRY holidays of the dashboard's calendar (Ayarlar → Tatiller; the list the workbook's WORKDAY reads), as
-        ISO days: the days "Her iş günü" and "Ayın son iş günü" skip besides the weekend.  Read once a day (on the
-        calculation thread) and again after the list changed (:meth:`holidays_changed`)."""
+        ISO days: the days "Her iş günü" and "Ayın son iş günü" skip besides the weekend.  Kept: read as the corner
+        starts and again whenever the list changes (:meth:`holidays_changed`); on a new day read once more in the
+        background - the agenda (and the shell's state) does not wait for a busy calculation thread."""
         today = _now().date().isoformat()
-        day, days, version = self._shut
-        if day == today:
-            return days
-        try:
-            days = frozenset(d.isoformat() for d in self.svc.holiday_dates(("TRY",)))
-        except Exception:  # noqa: BLE001 - a workbook without the list: the weekends only
-            days = frozenset()
         with self._counting:
-            if self._shut[2] == version:              # (not when the list changed while it was read: read again)
-                self._shut = (today, days, version)
+            day, days, version = self._shut
+            if day == today or (self._refreshing is not None and self._refreshing.is_alive()):
+                return days
+            self._refreshing = threading.Thread(target=self._refresh, args=(today, version), name="tto-desk-holidays",
+                                                daemon=True)
+            self._refreshing.start()
         return days
 
-    def holidays_changed(self) -> None:
-        """The TRY holidays changed (Service.set_holidays): the recurring items' days are worked out again - the open
-        pages are told."""
+    def _refresh(self, today: str, version: int) -> None:
+        days = self._read_holidays()
         with self._counting:
-            self._shut = ("", frozenset(), self._shut[2] + 1)
+            if self._shut[2] != version:                # the list changed meanwhile: that reading stands
+                return
+            changed = days != self._shut[1]
+            self._shut = (today, days, version)
+        if changed:
+            self._changed("agenda")
+
+    def holidays_changed(self) -> None:
+        """The TRY holidays changed (Service.set_holidays - on the calculation thread, where the list is read at once):
+        the recurring items' days are worked out again and the open pages told."""
+        days = self._read_holidays()
+        with self._counting:
+            self._shut = (_now().date().isoformat(), days, self._shut[2] + 1)
         self._changed("agenda")
 
     def _occurring(self, rules: List[Dict[str, Any]], now: _dt.datetime) -> List[Dict[str, Any]]:

@@ -6,6 +6,8 @@ Most tests use the corner on a database of their own (``_desk``): no workbook is
 holidays are the test's (``svc.holidays``) and its clock too where it matters (``clock``)."""
 import datetime as dt
 import sqlite3
+import threading
+import time
 
 import pytest
 from starlette.testclient import TestClient
@@ -315,6 +317,7 @@ def test_each_kind_of_recurring_item_falls_on_its_days():
 
 def test_recurring_items_on_the_agenda(desk, clock):
     desk.svc.holidays = {dt.date(2026, 10, 29)}
+    desk.holidays_changed()                                                  # (as Service.set_holidays tells it)
     ali, can = _user(desk, "Ali Veli"), _user(desk, "Can Kaya")
     clock.set("2026-10-26 09:00")                                            # a Monday
     one = desk.add(ali, "2026-10-26", "11:00", "Tek seferlik")["added"]
@@ -356,14 +359,22 @@ def test_recurring_items_on_the_agenda(desk, clock):
     # a first day far ahead: it comes then
     far = desk.add_rule(ali, "workdays", "10:00", "Uzak bir başlangıç", start="2028-01-03")["added_rule"]
     assert {r["id"]: r for r in desk.agenda(ali)["rules"]}[far]["next"] == {"day": "2028-01-03", "time": "10:00"}
-    # the holidays are read once a day
+    # the holidays are kept, not read for every request - and read again on a new day in the background: the agenda (the
+    # shell's state) does not wait for a busy calculation thread
+    if desk._refreshing is not None:
+        desk._refreshing.join(10)
     reads = desk.svc.holiday_reads
     desk.agenda(ali)
     desk.state(can)
     assert desk.svc.holiday_reads == reads
+    gate, read = threading.Event(), desk.svc.holiday_dates
+    desk.svc.holiday_dates = lambda ccys: gate.wait(10) and read(ccys)
     clock.set("2026-10-31 09:00")
-    desk.state(can)
-    assert desk.svc.holiday_reads == reads + 1
+    began = time.monotonic()
+    assert desk.state(can)["agenda"] and time.monotonic() - began < 2
+    gate.set()
+    desk._refreshing.join(10)
+    assert desk.svc.holiday_reads == reads + 1 and desk.holidays() == {"2026-10-29"}
 
 
 def _told(desk, clock, user, at):
@@ -429,6 +440,7 @@ def test_the_alarms_of_a_recurring_item(desk, clock):
 
 def test_each_day_of_a_recurring_item_is_its_own(desk, clock):
     desk.svc.holidays = {dt.date(2026, 11, 20)}
+    desk.holidays_changed()
     ali, can, boss = _user(desk, "Ali Veli"), _user(desk, "Can Kaya"), _user(desk, "Yönetici", admin=True)
     clock.set("2026-11-16 09:00")
     rid = desk.add_rule(ali, "daily", "10:00", "Kapanış kontrolü", deadline=True)["added_rule"]
