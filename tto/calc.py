@@ -55,6 +55,7 @@ MAX_SHEET_BYTES = 96 * 1024
 MAX_USER_BYTES = 768 * 1024
 MIN_WIDTH, MAX_WIDTH = 40, 600    # a column's width (px)
 EVAL_SECONDS = 2.0                # one sheet's evaluation on the calculation thread (it is shared by everybody)
+JOB_SECONDS = 4.0                 # one request's sheets: those not begun by then are answered on the next request
 MAX_READS = 200000                # workbook cells one evaluation reads
 MAX_RANGE = 100000                # cells of one workbook range
 MAX_EVAL_ITEMS = 40               # sheets one request brings up to date
@@ -1099,8 +1100,15 @@ class CalcSheets(object):
                 self._results.popitem(last=False)
 
     def _eval_job(self, key: str, todo, loc: str, gen: int, admin: bool) -> Dict[str, Any]:
-        """Calculation thread: the sheets asked for, each as of ``gen``."""
-        return {r["key"]: _answer(self._entry(key, r["sheet"], sheet, loc, gen, admin), r) for r, sheet in todo}
+        """Calculation thread: the sheets asked for, each as of ``gen`` - as many as JOB_SECONDS allow (at least one):
+        the thread is everybody's, a sheet left out is answered when the browser asks again."""
+        t0 = time.monotonic()
+        out: Dict[str, Any] = {}
+        for r, sheet in todo:
+            if out and time.monotonic() - t0 > JOB_SECONDS:
+                break
+            out[r["key"]] = _answer(self._entry(key, r["sheet"], sheet, loc, gen, admin), r)
+        return out
 
     def _entry(self, key: str, sid: str, sheet: Dict[str, Any], loc: str, gen: int, admin: bool) -> Dict[str, Any]:
         """The sheet evaluated as of ``gen``: the one kept when this revision of it was evaluated and nothing it read

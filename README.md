@@ -1038,8 +1038,9 @@ yeniden başlatmada ve güncellemede kalır. Launchpad **dışa aktarılınca** 
   sayfalarınızın gösterdiği değerler (başka kullanıcının girdisi sizinkini değiştirmez). Ekrandaki bütün hesap tabloları
   (launchpad, yan panel, ayrı pencere) her yenilemede **tek istekle** güncellenir; okuduğu hücrelerden hiçbiri değişmediyse
   yeniden hesaplanmaz (motorun bağımlılık maskeleri). Sınırlar: bir hesap en fazla 2 sn sürer ve 200.000 çalışma kitabı
-  hücresi okur (bir aralık en fazla 100.000 hücre); formül en fazla 1.000 karakter ve 64 iç içe parantez; kullanıcı başına
-  30 hesap tablosu - hiçbir launchpad / yan panel öğesinin göstermediği tablo son değişikliğinden 7 gün sonra silinir.
+  hücresi okur (bir aralık en fazla 100.000 hücre); bir isteğin tabloları en fazla 4 sn (hesap iş parçacığı herkesin:
+  kalanlar bir sonraki istekte); formül en fazla 1.000 karakter ve 64 iç içe parantez; kullanıcı başına 30 hesap tablosu -
+  hiçbir launchpad / yan panel öğesinin göstermediği tablo son değişikliğinden 7 gün sonra silinir.
 * **Hatalar** hücre hücre, dashboard'un başka yerde gösterdiği Excel kodlarıyla: `#DIV/0!`, `#VALUE!`, `#N/A`, `#NAME?`
   (bilinmeyen işlev ya da ad - "Bilinmeyen işlev: XLOOKUP"), `#REF!` (böyle bir sayfa / kitap yok), `#CALC!` (döngüsel
   başvuru, süre ya da hücre sınırı) …; ne demek olduğu hücrenin ipucunda ve formül çubuğunun altında yazar. Okunamayan

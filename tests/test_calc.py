@@ -267,6 +267,20 @@ def test_the_limits(service, monkeypatch):
     assert "en fazla 40" in str(err.value)
 
 
+def test_one_request_does_not_hold_the_calculation_thread(service, monkeypatch):
+    """The calculation thread is everybody's: the sheets of one request not begun within its time are answered when the
+    browser asks again (at least one each time)."""
+    u = login(service, "Hesap İş Parçacığı")
+    save(service, u, "j1", cells={"A1": "1"})
+    save(service, u, "j2", cells={"A1": "2"})
+    monkeypatch.setattr(cs, "JOB_SECONDS", -1.0)
+    service.bump()                                        # (a new generation: checked again on the calculation thread)
+    first = ev(service, u, {"key": "a", "sheet": "j1"}, {"key": "b", "sheet": "j2"})["sheets"]
+    assert list(first) == ["a"]
+    second = ev(service, u, {"key": "a", "sheet": "j1"}, {"key": "b", "sheet": "j2"})["sheets"]
+    assert sorted(second) == ["a", "b"] and second["b"]["cells"]["A1"]["v"] == 2.0
+
+
 def test_sheets_no_item_names_go_and_there_is_a_cap(service, monkeypatch):
     """A sheet no launchpad or drawer item names any more goes some days after its last change; over the cap the oldest
     of them first - those the items name stay, and when they alone are too many a new one is refused."""
