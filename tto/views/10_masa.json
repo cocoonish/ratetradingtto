@@ -275,12 +275,13 @@
    "id": "EKS",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A3:K14",
+   "range": "A3:N14",
+   "cols": ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
    "wide": true,
    "borrowed": true,
    "keep_title": true,
-   "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread; tamamı, EURTRY ve puandan spread: Forward → Kotasyon)"
+   "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı, EURTRY ve puandan spread: Forward → Kotasyon)"
   },
   {
    "id": "B14",

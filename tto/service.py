@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote as _quote
 
 from . import auth
@@ -1707,6 +1707,8 @@ class Service(object):
                     own = _lift_title(entry["data"])
                     if own and not p.get("keep_title"):
                         entry["title"] = own
+                if p.get("cols"):
+                    _pick_columns(entry["data"], p["cols"])
                 if p.get("header"):
                     _column_captions(entry["data"], p["header"])
                 if p.get("append") == "asw_fx":
@@ -6182,6 +6184,23 @@ def _lift_title(data: Dict[str, Any]) -> Optional[str]:
     del rows[0]
     del data["r"][0]
     return title or None
+
+
+def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:
+    """A table's columns in the order a page wants them (``["A", "B", "D", "M", ...]`` by column letter; one the
+    table does not have - left out as empty, hidden - is skipped, one not named is not shown).  Every cell keeps its
+    column letter, so an input is still typed into its own cell; a span across columns is not kept."""
+    have = data.get("c") or []
+    order = [have.index(c) for c in cols if c in have]
+    if not order or order == list(range(len(have))):
+        return
+    data["rows"] = [[row[j] for j in order] for row in data["rows"]]
+    for row in data["rows"]:
+        for cell in row:
+            if isinstance(cell, dict):
+                cell.pop("cs", None)
+    data["c"] = [have[j] for j in order]
+    data.pop("fz", None)                         # (frozen columns counted the sheet's order)
 
 
 def _column_captions(data: Dict[str, Any], captions: Dict[str, str]) -> None:

@@ -339,9 +339,39 @@ def test_each_calculator_has_one_home():
     assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF6"]
     assert not any(p.get("sheet") == "EK_FWD" and not p.get("borrowed") for p in by["masa"]["panels"])
     eks = panel("masa", "EKS")
-    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A3:K14"
+    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A3:N14"
+    # each spread with the TRY rate it makes beside it (M / N: OIS + spread), the rest as the sheet has them
+    assert eks["cols"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
     assert next(s for s in by["masa"]["sections"] if s["id"] == "fwd")["panels"] == ["EKS", "B10", "B22"]
     assert not any(i["range"].startswith("EK_FWD!") for i in by["masa"]["inputs"])
     assert {"EK_FWD!B2", "EK_FWD!D4:E4", "EK_FWD!D20:E29", "EK_FWD!D119:E128"} <= {i["range"] for i in by["forward"]["inputs"]}
     # the hidden limit table of the Calculators sheet takes no input any more
     assert not {"X63", "X64", "X65", "X66"} & {i["range"] for i in by["calc"]["inputs"]}
+
+
+def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service):
+    """Masa's forward quote summary: Spread bid, TRY bid %, Spread ask, TRY ask % side by side - the spreads still
+    the sheet's own inputs (a spread typed on Masa moves the TRY rate beside it: OIS + spread)."""
+    from conftest import cell
+    from tto.service import _pick_columns
+    user = service.login("forward özeti")["user"]
+    eks = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKS")
+    d = eks["data"]
+    assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
+    assert [c.get("t") for c in d["rows"][0]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    one = d["rows"][d["r"].index(5)]                                     # 1M
+    assert [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "E"]
+    service.set_inputs(user, "tto", [{"ref": "EK_FWD!D5", "value": "25"}])     # 1M bid spread: +25 bp over OIS
+    try:
+        eks = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKS")
+        d = eks["data"]
+        row = d["rows"][d["r"].index(5)]
+        cells = dict(zip(d["c"], row))
+        assert cells["D"]["t"] == "25" and cell(service, "EK_FWD!M5", user) == pytest.approx(cell(service, "EK_FWD!L5", user) + 0.25, abs=1e-9)
+        assert float(cells["M"]["t"].replace(",", ".")) == pytest.approx(cell(service, "EK_FWD!M5", user), abs=0.006)
+    finally:
+        service.set_inputs(user, "tto", [{"ref": "EK_FWD!D5", "value": ""}])
+    # the helper: a column the table does not have is skipped, the order otherwise kept, spans across columns dropped
+    data = {"c": ["A", "B", "C"], "r": [1], "rows": [[{"t": "a", "cs": 2}, {"t": "b"}, {"t": "c"}]], "fz": 1}
+    _pick_columns(data, ["C", "Z", "A"])
+    assert data["c"] == ["C", "A"] and [x["t"] for x in data["rows"][0]] == ["c", "a"] and "cs" not in data["rows"][0][1] and "fz" not in data

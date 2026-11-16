@@ -1164,11 +1164,22 @@ async function shot(page, name) {
     await tab(page, 'fwd');
     check('the desk page keeps a summary of the USDTRY quote matrix (the matrices live on the Forward page)',
       (await panelsOnPage(page)).join(' ') === 'EKS B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
+    // each spread with the TRY rate it makes beside it: Spread bid | TRY bid % | Spread ask | TRY ask % (OIS + spread)
+    const eksHead = await page.$$eval('#content .panel[data-panel="EKS"] tr', (trs) => {
+      const head = trs.find((tr) => /Spread bid/.test(tr.textContent || ''));
+      return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
+    }).catch(() => []);
+    const at = eksHead.indexOf('Spread bid');
+    const tryBidDesk = trNumber(await cellText(page, 'EK_FWD!M5'));
+    check('the desk\'s forward summary shows each spread\'s TRY rate beside it: Spread bid | TRY bid % | Spread ask | TRY ask %',
+      at >= 0 && eksHead.slice(at, at + 4).join(' | ') === 'Spread bid | TRY bid % | Spread ask | TRY ask %', { head: eksHead });
     await open(page, 'forward');
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
       await order(['EKF1', 'EKF5', 'EKF2', 'EKF6']));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
+    check('... and the desk\'s TRY rate is the matrix\'s OIS + the spread (1M bid: OIS − 150 bp)', Math.abs(tryBidDesk - (ois1m - 1.5)) < 0.011,
+      { tryBidDesk, ois1m });
     check('matrix starts from the desk spread (−150 bp on both sides)',
       (await cellText(page, 'EK_FWD!D4')).trim() === '-150' && Math.abs(trNumber(await cellText(page, 'EK_FWD!M5')) - (ois1m - 1.5)) < 0.011);
     await typeInto(page, 'EK_FWD!D4', '-300');
