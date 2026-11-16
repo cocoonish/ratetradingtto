@@ -955,6 +955,11 @@ def _monitor(line: Line, cfg: Dict[str, Any], replay: bool = False) -> qf.Monito
             return _words(line, m, sg, entry)
 
         m.thesis = words
+        m.note = ("Gradyan artırmalı ağaçlar (%d ağaç, derinlik %d, öğrenme %s, %d özellik): önümüzdeki %d iş gününün yönü. Aylık yeniden "
+                  "eğitim: her ayın modeli yalnız o ay başlamadan bilinenle kurulur, yalnız o ayda test edilir. Örneklem dışı isabet %%%s (%d test, "
+                  "log-loss %s). z(p) = (p − 0,5) ÷ 0,05; hedef (2p − 1) × ortalama %d günlük K/Z, stop %s σ (%d gün)." % (
+                      TREES, DEPTH, qf._g(RATE, 1), len(NAMES), HORIZON, _cut(rec["hit"] or 0.0), rec["tests"], _v(rec["log_loss"], 3), HORIZON,
+                      qf._g(STOP_SIGMA, 1), HORIZON))
     return m
 
 
@@ -1142,6 +1147,11 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
                 continue
             rows.append(_row(line, entry, line.prob_now(line.inst.now(live), live)))
         tab["rows"] = rows
+    # (a line past the rule and the entry that a gate of the list holds - the FX carry buffer, no expected profit -
+    # is in the list as "düşük güven": the page says so and why)
+    held = {s["id"]: s["gated"] for s in v["gated"] if s["family"] == FAMILY}
+    tab["rows"] = [dict(r, prints=False, why="düşük güven: " + held[r["sid"]]) if r.get("prints") and held.get(r.get("sid")) else r
+                   for r in tab.get("rows") or []]
     base["ml"] = tab
     base["signals"] = [s for s in v["signals"] + v["gated"] if s["family"] == FAMILY]
     base["settings"] = fit["cfg"]

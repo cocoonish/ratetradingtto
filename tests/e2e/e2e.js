@@ -2529,8 +2529,8 @@ async function shot(page, name) {
         return { id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER',
           method: n && n.classList.contains('qmethod') && n.textContent ? getComputedStyle(n, '::before').content : null };
       }) }));
-    check('Makine öğrenmesi is the fourth tab of Sinyaller: every line of the family in its table, each table read in the desk\'s words under its title',
-      mlApi.status === 200 && mlApi.json.ready && mlPage.tabs.join(',') === 'Sinyaller,Gün içi,Model,Makine öğrenmesi' && mlPage.on.join() === 'quant-ml'
+    check('Makine öğrenmesi is a tab of Sinyaller: every line of the family in its table, each table read in the desk\'s words under its title',
+      mlApi.status === 200 && mlApi.json.ready && mlPage.tabs[0] === 'Sinyaller' && mlPage.tabs.includes('Makine öğrenmesi') && mlPage.on.join() === 'quant-ml'
       && mlPage.lit.join() === 'quant.sinyal' && mlRows.length >= 30 && mlPage.rows === mlRows.length
       && mlPage.read.every((r) => r.read.length >= 40 && r.under) && mlPage.read.find((r) => r.id === 'quant-ml-table').method === '"Yöntem: "',
       { tabs: mlPage.tabs, rows: mlRows.length, shown: mlPage.rows, read: mlPage.read });

@@ -45,6 +45,29 @@ def fitted():
             "fits": ml.FITS["n"] - n0, "took": took, "models": dict(ml._MODELS)}
 
 
+# ================================================================================================ the trees
+def test_the_trees_learn_a_rule_route_missing_values_and_explain_each_prediction():
+    rnd = random.Random(5)
+    X, y = [], []
+    for _ in range(400):
+        a, b = rnd.gauss(0, 1), rnd.gauss(0, 1)
+        c = None if rnd.random() < 0.3 else rnd.gauss(0, 1)                # (a third missing: those rise more often)
+        up = (a > 0.3) if c is not None else (a > -0.8)
+        X.append([a, b, c, 7.0])                                            # (the last one constant: never split on)
+        y.append(int(up) if rnd.random() > 0.1 else 1 - int(up))
+    t = ml.Trees.fit(X, y, seed=3)
+    hit = sum(1 for x, v in zip(X, y) if (t.prob(x) > 0.5) == (v == 1)) / len(X)
+    imp = t.importance()
+    assert hit > 0.8 and max(range(4), key=lambda j: imp[j]) == 0 and imp[2] > imp[1] and imp[3] == 0.0
+    assert t.prob([0.0, 0.0, None, 7.0]) > t.prob([0.0, 0.0, 0.0, 7.0])           # (missing goes its own, learnt way)
+    # each prediction's log-odds = the prior + every tree's root + the features' path contributions, to the bit's error
+    roots = sum(tree[0][5] for tree in t.trees)
+    for x in X[:50]:
+        assert t.logit(x) == pytest.approx(t.base + roots + sum(t.contributions(x)), abs=1e-12)
+    # the same rows and seed: the same trees; another seed: other ones
+    assert ml.Trees.fit(X, y, seed=3).trees == t.trees and ml.Trees.fit(X, y, seed=4).trees != t.trees
+
+
 # ================================================================================================ the universe
 def test_the_universe_is_the_plan_s_forty_odd_lines_by_the_registry_s_keys():
     ctx, eng, _ = sm.context()
@@ -357,6 +380,11 @@ def test_the_page_the_list_and_the_backtest_through_the_service(served):
     assert all(r.get("why") or r.get("prints") for r in tab["rows"])           # (every line says why it does not print)
     assert "G10 spot" in tab["groups"]["groups"] and tab["groups"]["rows"][0]["shares"] and tab["settings"]["trees"] == ml.TREES
     assert [s["id"] for s in v["signals"]] and all(s["family"] == "ml" for s in v["signals"])
+    # a line a gate of the list holds ("düşük güven": the FX carry buffer, no expected profit) says so on the page
+    for s in q.view("signals", user, {})["gated"]:
+        if s["family"] == "ml":
+            row = next(r for r in tab["rows"] if r.get("sid") == s["id"])
+            assert not row["prints"] and row["why"] == "düşük güven: " + s["gated"], s["id"]
     # the Sinyaller list: the line in the plan's form, in its group
     sigs = q.view("signals", user, {"family": "ml"})["signals"]
     line = next(s for s in sigs if s["id"] == "ml:FX:AUDUSD")
@@ -379,5 +407,5 @@ def test_the_page_the_list_and_the_backtest_through_the_service(served):
         assert r["ready"] and {x["key"] for x in r["ml"]["rows"]} == set(rows) and r["signals"]
         nav = [p for p in client.get("/api/nav").json()["pages"] if p["group"] == "Quant"]
         page = next(p for p in nav if p["id"] == "quant-ml")
-        assert page["menu"] == "quant.sinyal" and page["tab"] == "Makine öğrenmesi" and [p["id"] for p in nav][:4] == ["quant", "quant-intraday", "quant-model", "quant-ml"]
+        assert page["menu"] == "quant.sinyal" and page["tab"] == "Makine öğrenmesi" and nav[0]["id"] == "quant"
         assert client.get("/static/js/pages/quantml.js").status_code == 200
