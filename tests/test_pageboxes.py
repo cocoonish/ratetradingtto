@@ -194,7 +194,7 @@ def test_one_list_of_the_watch_page_alone(module_service):
 def test_over_http(module_service):
     svc = module_service
     client = TestClient(create_app(service=svc))                      # (no "with": the module's service stays up)
-    for path in ("/static/js/pagebox.js", "/static/js/pageboxes.js"):
+    for path in ("/static/js/pagebox.js", "/static/js/pageboxes.js", "/static/js/menu.js"):
         assert client.get(path).status_code == 200, path
     h = auth(svc, "Kutu HTTP")
     r = client.get("/api/broker", params={"part": "board"}, headers=h)
