@@ -86,15 +86,32 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
              closes: Dict[str, Dict[str, float]], cfg: Dict[str, Any], step: int = BT_STEP,
              pause: Optional[Callable[[], None]] = None, deadline: Optional[float] = None) -> Dict[str, Any]:
     """The walk-forward run over ``days`` (business days, oldest first): ``make_ctx(T)`` gives the context fitted on the
-    closes up to T, ``runner(ctx)`` its monitors, ``closes`` every key's closes (the "live" values of each day)."""
+    closes up to T, ``runner(ctx)`` its monitors, ``closes`` every key's closes (the "live" values of each day).
+
+    A daily line (``sg["daily"]``: quanttrend's - a line every day) is a daily position: opened on the first day of its
+    direction (the window's first day, or the day it turns), held with no target and no time limit until its direction
+    turns ("dönüş": closed at that day's close, the new direction opened there) or its stop.  An FX line of the universe
+    (its level a price, not an excess return) has its carry in its P&L as a rate package has."""
     t0 = time.perf_counter()
     days = list(days)
     positions: Dict[str, Dict[str, Any]] = {}
     trades: List[Dict[str, Any]] = []
-    prev_live: set = set()
+    prev_live: Dict[str, int] = {}                 # sid -> the direction of yesterday's live signal
     refits = 0
     log_days = int(cfg.get("log_days") or 20)
     stopped = False
+
+    def close(sid: str, pos: Dict[str, Any], lvl: float, outcome: str, t: str) -> None:
+        s = pos["s"]
+        move = s * (lvl - pos["entry"])
+        pnl = move * pos["factor"] + (pos["carry_day"] * pos["held"] if pos["carry_day"] is not None else 0.0)
+        tr = {"sid": sid, "family": pos["family"], "type": pos["type"], "entry_day": pos["day"], "exit_day": t, "dir": s,
+              "entry": pos["entry"], "exit": lvl, "outcome": outcome, "held": pos["held"], "pnl": pnl, "unit": pos["unit"],
+              "pnl_sigma": move / pos["scale"] if pos["scale"] else None, "expression": pos["expression"]}
+        tr["pnl_try"] = _pnl_try(pos["sg"], pnl, cfg)
+        trades.append(tr)
+        del positions[sid]
+
     for i in range(0, len(days), max(1, step)):
         if deadline is not None and time.perf_counter() > deadline:
             stopped = True
@@ -116,6 +133,7 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
                 if lvl is None:
                     continue
                 pos["held"] += 1
+                pos["now"] = (t, lvl)                      # (a daily position's turn closes at today's level)
                 s = pos["s"]
                 outcome = None
                 if pos["target"] is not None and s * (lvl - pos["target"]) >= 0:
@@ -125,33 +143,31 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
                 elif pos["held"] >= pos["hold"]:
                     outcome = "süre"
                 if outcome:
-                    move = s * (lvl - pos["entry"])
-                    pnl = move * pos["factor"] + (pos["carry_day"] * pos["held"] if pos["carry_day"] is not None else 0.0)
-                    tr = {"sid": sid, "family": pos["family"], "type": pos["type"], "entry_day": pos["day"], "exit_day": t, "dir": s,
-                          "entry": pos["entry"], "exit": lvl, "outcome": outcome, "held": pos["held"], "pnl": pnl, "unit": pos["unit"],
-                          "pnl_sigma": move / pos["scale"] if pos["scale"] else None, "expression": pos["expression"]}
-                    tr["pnl_try"] = _pnl_try(pos["sg"], pnl, cfg)
-                    trades.append(tr)
-                    del positions[sid]
+                    close(sid, pos, lvl, outcome, t)
             ctx.today, ctx.today_iso = today, t
             qf.score_all(ctx, mons, live)
-            live_now = set()
+            live_now: Dict[str, int] = {}
             for m in mons:
                 sg = qf.make_signal(m, cfg, "bt")
                 if sg is None or sg["gated"]:
                     continue
-                live_now.add(m.sid)
-                if m.sid in prev_live or m.sid in positions:
+                live_now[m.sid] = sg["direction"]
+                daily = bool(sg.get("daily"))
+                pos = positions.get(m.sid)
+                if daily and pos is not None and pos["s"] != sg["direction"] and (pos.get("now") or ("",))[0] == t:
+                    close(m.sid, pos, pos["now"][1], "dönüş", t)
+                    pos = None
+                if pos is not None or (prev_live.get(m.sid) == sg["direction"] if daily else m.sid in prev_live):
                     continue
                 unit, factor = m.pnl or (None, None)
                 hold = int(round(sg.get("hold") or float(cfg.get("horizon") or 20)))
                 carry_day = None
-                if not m.fx and sg.get("carry_week") is not None:
+                if sg.get("carry_week") is not None and (not m.fx or m.info.get("universe")):
                     carry_day = sg["carry_week"] / 5.0
-                positions[m.sid] = {"m": m, "ctx": ctx, "s": sg["direction"], "entry": m.level, "target": sg["target"], "stop": sg["stop"],
-                                    "scale": sg["scale"], "hold": max(1, min(hold, log_days)), "held": 0, "day": t, "factor": factor or 1.0,
-                                    "unit": unit, "carry_day": carry_day, "family": m.family, "type": bt_type(m), "sg": sg,
-                                    "expression": sg["expression"]}
+                positions[m.sid] = {"m": m, "ctx": ctx, "s": sg["direction"], "entry": m.level, "target": None if daily else sg["target"],
+                                    "stop": sg["stop"], "scale": sg["scale"], "hold": math.inf if daily else max(1, min(hold, log_days)),
+                                    "held": 0, "day": t, "factor": factor or 1.0, "unit": unit, "carry_day": carry_day, "family": m.family,
+                                    "type": bt_type(m), "sg": sg, "expression": sg["expression"]}
             prev_live = live_now
         if pause is not None:
             pause()

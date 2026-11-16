@@ -546,6 +546,9 @@ class Monitor(object):
         # (currency, money a P&L unit makes) of a line whose money is linear in it and told by no other way: an
         # option's vega (vol points), a swap's points - the universe's lines set it (quantuniv.py)
         self.cash: Optional[Tuple[str, float]] = kw.get("cash")
+        # the family's own last word on its signal (a function of it, called at the end of make_signal: a systematic
+        # family's strength, rank, line and sentence - quanttrend.py)
+        self.finish: Optional[Callable[[Dict[str, Any]], None]] = kw.get("finish")
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -1159,6 +1162,11 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         sg["thesis"] = m.thesis(sg) if m.thesis is not None else default_thesis(m, sg)
     except Exception:  # noqa: BLE001 - a sentence that cannot be written is no reason to lose the signal
         sg["thesis"] = default_thesis(m, sg)
+    if m.finish is not None:
+        try:
+            m.finish(sg)
+        except Exception:  # noqa: BLE001 - the family's extras are not worth the signal
+            pass
     return sg
 
 
