@@ -1798,6 +1798,9 @@ async function shot(page, name) {
       /^01\.01\.2026$/m.test(holText) && /^29\.10\.2026\tCumhuriyet$/m.test(holText) && holText.split('\n').length === 152
       && /FOMC toplantıları: 09\.12\.2026/.test(await page.textContent('#holidays-other')), holText.split('\n').slice(0, 3));
     check('... one tab per currency, TRY first', (await holTabs()).join(' ') === 'TRY! USD EUR', await holTabs());
+    const holWhere = await page.textContent('#holidays-info');
+    check('... the TRY list is written to three books: TRY (Motor), DİBS ASW and the Borsa Swap\'s copy (its T+1 value date)',
+      /TRY \(Motor\) · DİBS ASW · Borsa Swap/.test(holWhere), holWhere);
     await page.fill('#holidays-text', holText + '\n31.12.2026\tDeneme tatili');
     await page.click('#holidays-ccy button[data-ccy="USD"]');
     const usdText = await page.inputValue('#holidays-text');

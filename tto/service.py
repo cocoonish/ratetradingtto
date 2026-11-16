@@ -396,6 +396,7 @@ class Service(object):
             if key not in book.inputs:
                 book.declare(ref, scope="shared", group="adhoc-shared")
             book.engine.set_inputs({key: _from_json(val)})
+        self._copy_try_holidays()                # (the Borsa workbook's copy of the TRY holidays: as the TRY workbook has them)
         self._declare_saved_cells()
         self._private_users = set(self.store.users_with_inputs())
         self._sync_universe()
@@ -2210,12 +2211,14 @@ class Service(object):
     # ================================================================== inputs
     # ================================================================== holidays
     #: the desk's holiday lists, per currency: (book, sheet, first row, last row, date column, name column or None).
-    #: TRY is kept twice - the TRY workbook's list (date and name; every WORKDAY of the workbook reads it) and the ASW
-    #: workbook's (dates) - and edited as one list.  USD and EUR are the dashboard's own (``extras.HOL_SHEET``): the FX
-    #: value dates skip the holidays of both currencies of a pair.  The first list of each is the one the TRY workbook's
-    #: formulas read.  The USD workbook's US holidays (SIFMA: its SOFR / USD OIS sheets) and FOMC meetings are shown beside
-    #: them, read only.
-    HOLIDAY_LISTS = {"TRY": (("tto", "Motor", 361, 523, "A", "B"), ("asw", "ASW", 2, 200, "LR", None)),
+    #: TRY is kept three times - the TRY workbook's list (date and name; every WORKDAY of the workbook reads it), the ASW
+    #: workbook's (dates) and the Borsa workbook's (dates: ``extras.BORSA_HOL_SHEET``, the BIST swaps' T+1 value date;
+    #: its file has none, it starts as the TRY workbook's list - ``_copy_try_holidays``) - and edited as one list.  USD
+    #: and EUR are the dashboard's own (``extras.HOL_SHEET``): the FX value dates skip the holidays of both currencies of a
+    #: pair.  The first list of each is the one the TRY workbook's formulas read.  The USD workbook's US holidays (SIFMA:
+    #: its SOFR / USD OIS sheets) and FOMC meetings are shown beside them, read only.
+    HOLIDAY_LISTS = {"TRY": (("tto", "Motor", 361, 523, "A", "B"), ("asw", "ASW", 2, 200, "LR", None),
+                             ("borsa", ex.BORSA_HOL_SHEET, ex.BORSA_HOL_FIRST, ex.BORSA_HOL_LAST, "A", None)),
                      "USD": (("tto", ex.HOL_SHEET, ex.HOL_FIRST, ex.HOL_LAST) + ex.HOL_COLS["USD"],),
                      "EUR": (("tto", ex.HOL_SHEET, ex.HOL_FIRST, ex.HOL_LAST) + ex.HOL_COLS["EUR"],)}
     HOLIDAYS_US = ("sofr", "SOFR_FOMC!BO4:BO70")
@@ -2239,6 +2242,47 @@ class Service(object):
             nc = parse_a1(ncol + "1") % COLS if ncol else None
             out.append((book, [((si, r * COLS + dc), (si, r * COLS + nc) if nc is not None else None) for r in range(r1, r2 + 1)]))
         return out
+
+    def _copy_try_holidays(self) -> None:
+        """The Borsa workbook's copy of the TRY holiday list (its file holds none) is the TRY workbook's list as it stands
+        - the file's days and what the desk saved -, row by row: the BIST swaps' T+1 value date skips the days the TRY OIS
+        spot date does.  Made so when the service starts and when days of the TRY list are written or put back one by
+        one (``_follow_try_holidays``); the settings page writes every copy itself.  Nothing is stored for it here (the
+        copy's own days the desk saved, if any, give way to it)."""
+        lists = {book.id: (book, cells) for book, cells in self._holiday_cells("TRY")}
+        if "tto" not in lists or "borsa" not in lists:
+            return
+        (tto, src), (borsa, dst) = lists["tto"], lists["borsa"]
+        calc = tto.engine.shared
+        days = [calc.get(si, *divmod(rc, COLS)) for (si, rc), _ in src]
+        days = [v if type(v) is float and 20000 < v < 80000 else None for v in days]
+        engine = borsa.engine
+        sets: Dict[Tuple[int, int], Any] = {}
+        clears: List[Tuple[int, int]] = []
+        for k, ((si, rc), _) in enumerate(dst):
+            want = days[k] if k < len(days) else None
+            held = engine.input_value[si]
+            if want is None or _same_value(want, engine.base_value(si, rc)):
+                if rc in held:
+                    clears.append((si, rc))
+            elif rc not in held or not _same_value(held[rc], want):
+                sets[(si, rc)] = want
+        for key in list(sets) + clears:
+            if key not in borsa.inputs:
+                borsa.declare(borsa.ref(*key), scope="shared", group="adhoc-shared")
+        if clears:
+            engine.clear_inputs(clears)
+        if sets:
+            engine.set_inputs(sets)
+
+    def _follow_try_holidays(self, book: Book, cells: List[Tuple[int, int]]) -> None:
+        """Days of the TRY workbook's holiday list written or put back one by one (the Motor page, a reset - the settings
+        page writes every copy itself): the Borsa workbook's copy follows at once."""
+        if book.id != "tto" or not cells:
+            return
+        src = next((c for b, c in self._holiday_cells("TRY") if b.id == "tto"), None)
+        if src is not None and {dcell for dcell, _ in src} & set(cells):
+            self._copy_try_holidays()
 
     def _holiday_list(self, ccy: str) -> Dict[str, Any]:
         days: Dict[str, str] = {}
@@ -2529,6 +2573,7 @@ class Service(object):
                 self.store.add_ret_history(user, self._ret_rows(book))
         if shared_vals or shared_clear:
             self.formulas.wrote(book, "", shared_vals, shared_clear, shared_forms)
+            self._follow_try_holidays(book, list(shared_vals) + shared_clear)
         if user_vals or user_clear:
             ov = dict(self._overlay(user, book))
             ov.update(user_vals)
@@ -2704,6 +2749,7 @@ class Service(object):
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
             self.formulas.cleared("", book, keep)        # (a formula there goes with its value)
+            self._follow_try_holidays(book, keep)
             n = len(keep)
         else:
             rows = self.rowkeys.before_write(user, book, {}, [], {}, cells if refs else list(self._overlay(user, book)))

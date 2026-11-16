@@ -510,8 +510,9 @@ REFERENCE = {
         "SOFR_FOMC!P74:P83",
     ],
     "asw": ["ASW!LR2:LR200"],                                   # holidays
-    # the first tenor of the BIST swap quote lists (the tickers asked of Bloomberg are built from it), USD OIS tickers
-    "borsa": ["Sheet1!B4", "Sheet1!N4", "Sheet1!AD6:AD15"],
+    # the first tenor of the BIST swap quote lists (the tickers asked of Bloomberg are built from it), USD OIS tickers,
+    # the copy of the TRY holidays (the T+1 value date; Ayarlar → Tatiller)
+    "borsa": ["Sheet1!B4", "Sheet1!N4", "Sheet1!AD6:AD15", "EK_TATIL!A5:A204"],
 }
 
 #: inputs a table reads that cannot sit beside it - a big table of inputs of their own (the pasted position, the bonds'

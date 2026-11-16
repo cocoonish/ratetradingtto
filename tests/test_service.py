@@ -344,7 +344,7 @@ def test_cell_info_and_grid(service):
     assert [s["name"] for s in service.sheets("tto")][-11:] == ["EK_TATIL", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS",
                                                                  "EK_EVREN", "EK_CARRY", "EK_IHALE", "EK_VFRA"]
     assert len(service.sheets("tto")) == 17 - 4 + 11
-    assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2"] and [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX"]
+    assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2", "EK_TATIL"] and [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX"]
 
 
 def test_adhoc_what_if_on_any_cell(module_service):
@@ -751,9 +751,10 @@ def test_a_package_of_ois_legs_is_kept_whole(module_service, monkeypatch):
 
 
 def test_holidays_are_edited_in_one_place_for_both_workbooks(tmp_path):
-    """The TR holidays live twice: the TRY workbook's Motor!A361:B523 (date and name, read by every WORKDAY) and the ASW
-    workbook's ASW!LR2:LR200 (dates).  The settings page edits them as one list and writes both; the US holidays and the
-    FOMC meetings of the USD workbook come with it.  Kept by the store: a restart has the same list."""
+    """The TR holidays live three times: the TRY workbook's Motor!A361:B523 (date and name, read by every WORKDAY), the ASW
+    workbook's ASW!LR2:LR200 (dates) and the Borsa workbook's copy, EK_TATIL!A5:A204 (dates: the BIST swaps' T+1 value
+    date).  The settings page edits them as one list and writes all three; the US holidays and the FOMC meetings of the
+    USD workbook come with it.  Kept by the store: a restart has the same list."""
     from starlette.testclient import TestClient
     from conftest import auth
     from tto.server import create_app
@@ -761,7 +762,7 @@ def test_holidays_are_edited_in_one_place_for_both_workbooks(tmp_path):
     try:
         u = login(svc, "Tatil Yazan")
         hol = svc.holidays()
-        assert hol["available"] and hol["books"] == ["tto", "asw"] and hol["slots"] == 163
+        assert hol["available"] and hol["books"] == ["tto", "asw", "borsa"] and hol["slots"] == 163
         days = {x["date"]: x["name"] for x in hol["tr"]}
         # the ASW list has 2026's earlier holidays as well: both lists together, the names from the TRY one
         assert len(days) == 152 and days["2026-01-01"] == "" and days["2026-10-29"] == "Cumhuriyet" and days["2027-01-01"] == "Yılbaşı"
@@ -776,9 +777,11 @@ def test_holidays_are_edited_in_one_place_for_both_workbooks(tmp_path):
         motor = [cell(svc, "Motor!A%d" % r) for r in range(361, 524)]
         names = [cell(svc, "Motor!B%d" % r) for r in range(361, 524)]
         asw = [cell(svc, "ASW!LR%d" % r, book="asw") for r in range(2, 201)]
+        borsa = [cell(svc, "EK_TATIL!A%d" % r, book="borsa") for r in range(5, 205)]
         serial = parse_date("04.11.2026")
-        assert serial in motor and serial in asw and names[motor.index(serial)] == "Deneme tatili"
-        assert parse_date("01.01.2027") not in motor and parse_date("01.01.2027") not in asw
+        assert serial in motor and serial in asw and serial in borsa and names[motor.index(serial)] == "Deneme tatili"
+        assert parse_date("01.01.2027") not in motor and parse_date("01.01.2027") not in asw and parse_date("01.01.2027") not in borsa
+        assert cell(svc, "EK_TATIL!B2", book="borsa") == parse_date("05.11.2026")      # the BIST swaps' T+1 moved as well
         assert motor == sorted(x for x in motor if x is not None) + [None] * motor.count(None)          # in date order
         assert motor.count(None) == 163 - 152 and asw.count(None) == 199 - 152
         # refused: a day that is no date, more days than the list has rows
