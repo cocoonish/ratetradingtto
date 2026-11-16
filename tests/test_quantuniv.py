@@ -546,9 +546,10 @@ def test_a_plugged_family_lists_by_group_keeps_its_low_confidence_lines_and_aler
     assert {a["sid"] for a in got} == {"trend:FX:EURUSD", "trend:FWD:USDTRY:3M"} and all(a["group"] in ("Offshore", "G10 spot") for a in got)
     q.set_subscription(user, {"on": True, "families": [], "groups": [], "min": "Zayıf"})
     assert {"trend:OISS:2Y/5Y"} <= {a["sid"] for a in q.alerts(user, 0)["alerts"]}
-    # the backtest runs the families on the universe too (a registry of each refit's context) - by group
+    # the backtest runs the families on the universe too (a registry of each refit's context) - by group (the plugged
+    # family's; the registered ones run beside it)
     ctx = q._fit["ctx"]
-    mons = qu.monitors(ctx)
+    mons = [m for m in qu.monitors(ctx) if m.family == "trend"]
     assert {m.sid for m in mons} == {"trend:" + k for k in PICKS} and {qbt.bt_type(m) for m in mons} == {"G10 spot", "TRY OIS", "Offshore"}
 
 
@@ -563,6 +564,7 @@ def test_a_family_s_module_is_imported_when_it_is_there_and_its_failure_is_its_o
         raise ModuleNotFoundError("no", name=name)
 
     monkeypatch.setattr(importlib, "import_module", fake)
+    monkeypatch.setattr(qu, "RUNNERS", {})                    # (a family registered already - ML's - aside: its import is tested)
     errors = {}
     assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml"]
     assert list(errors) == ["ml"] and "bozuk" in errors["ml"]

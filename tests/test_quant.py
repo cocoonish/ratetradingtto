@@ -1612,8 +1612,8 @@ def test_quant_http_api(seeded):
         nav = client.get("/api/nav").json()["pages"]
         quant = [p for p in nav if p["group"] == "Quant"]
         # (in the menu's order: Sinyaller, Faiz, FX - each an entry with tabs - and VİOP)
-        assert [p["id"] for p in quant][:4] == ["quant", "quant-intraday", "quant-model", "quant-pca"] and len(quant) == 15
-        assert quant[3]["menu"] == "quant.faiz" and quant[-1]["id"] == "quant-viop" and "menu" not in quant[-1]
+        assert [p["id"] for p in quant][:5] == ["quant", "quant-intraday", "quant-model", "quant-ml", "quant-pca"] and len(quant) == 16
+        assert quant[4]["menu"] == "quant.faiz" and quant[-1]["id"] == "quant-viop" and "menu" not in quant[-1]
         for path in ("/static/js/pages/quant.js", "/static/js/pages/quantbase.js", "/static/js/pages/quantviews.js"):
             assert client.get(path).status_code == 200
         assert client.get("/api/quant/signals", headers={"Authorization": ""}).status_code == 401
