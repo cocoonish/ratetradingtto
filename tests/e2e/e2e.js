@@ -2712,6 +2712,8 @@ async function shot(page, name) {
     const KINDS = ['quant-signals', 'viop-levels', 'viop-contracts', 'broker-board', 'watch-list', 'wirp', 'fx-summary'];
     await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { launchpads: (await layoutOf('ayşe yilmaz')).launchpads.concat([{ name: 'Kutular',
       items: KINDS.map((type) => ({ type, w: type === 'quant-signals' || type === 'broker-board' ? 12 : 6 })) }]) });
+    // (made through the API: the page reads its layout again - as it does when another window changes it)
+    await page.evaluate(async () => { await (await import('/static/js/layout.js')).loadLayout(); });
     await page.evaluate(() => { window.location.hash = '#/launchpad/Kutular'; });
     await page.waitForFunction(() => window.tto.state.pageId === 'launchpad' && window.tto.state.page && window.tto.state.page.ready
       && window.tto.state.page.name === 'Kutular', null, { timeout: 60000 });
