@@ -13,12 +13,14 @@ maturity, and gets
   where a source gives no MID; no bid or ask enters it).  ln DF at its nodes, days from the OIS spot date ``SPOTDATE``,
   linear in days between them and past the last one along the last segment: the "Bootstrap" row of Masa's 'TARİH
   ARASI FAİZ' and of OIS_MAIN's 'İKİ TARİH ARASI SIMPLE RATE' (MASA!H67:I67, OIS_MAIN!D129:E129).  At a node its rate
-  is ORANLAR's "OIS zero" (Motor!M89 …).  The curve's first node after the spot is 1M: a shorter row reads the
-  spot → 1M segment (ORANLAR's 1W / 2W "OIS zero" are the 1W / 2W quotes themselves, which the curve does not hold);
+  is ORANLAR's "OIS zero" (Motor!M89 …).  Its first node after the spot is 1M: here - for these spreads only, the
+  curve itself and Masa's rows stay as they are - the 1W and 2W points ORANLAR reads its 1W / 2W "OIS zero" from come
+  before it (the 1W / 2W OIS quotes - MID, else PX_LAST - as the Forward sheet's "TRY OIS Simple Zero Rates" holds them:
+  Forward!N6:P7, days and simple ACT/360 %), so a row of up to a month runs between spot, 1W, 2W and 1M;
 * **Offshore mid zero %** - the offshore TRY discount curve (``OFF_GUN`` / ``OFF_LNDF``: Forward!AK124:AK143 /
-  AM124:AM143, Forward!AJ122): the mids (bid–ask average) of the FX swap implied TRY rates up to 9M, then the XCCY
-  bootstrap of the XCCY mids from 1Y; days from the USDTRY spot date (Forward!I2); the same interpolation (MASA!BL179,
-  DİBS RV's FX swap ASW).
+  AM124:AM143, Forward!AJ122): the mids (bid–ask average) of the FX swap implied TRY rates up to 9M - its short points
+  1W, 2W and 1M (TRYI1W, TRYI2W, TRYI1M) among them -, then the XCCY bootstrap of the XCCY mids from 1Y; days from the
+  USDTRY spot date (Forward!I2); the same interpolation (MASA!BL179, DİBS RV's FX swap ASW).
 
 Both simple ACT/360 - the basis of BID % / ASK % -: (DF(start) / DF(end) − 1) · 360 / days.  A start before a curve's
 spot date (T+0: a day, over a weekend three, before it) is carried to the spot with the curve's own O/N, simple: ORANLAR's
@@ -29,7 +31,7 @@ BID % − mid zero and ASK % − mid zero, in bp; a side without a quote has non
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .inputs import parse_date
 from .xl import numfmt
@@ -49,6 +51,9 @@ CURVES = (("ois", "BOOT_GUN", "BOOT_LNDF", "SPOTDATE", "Forward!AD123", "TLREF, 
           ("off", "OFF_GUN", "OFF_LNDF", "Forward!I2", "Forward!AC123", "offshore O/N mid"))
 #: the captions the O/N cells stand under: the ON row of the comparison table, its OIS and ICAP columns
 ON_CAPTIONS = (("Forward!AA123", "ON"), ("Forward!AD122", "OIS"), ("Forward!AC122", "ICAP"))
+#: the OIS curve's short points before its first node (1M), for these spreads: ORANLAR's 1W and 2W "OIS zero" - the Forward
+#: sheet's "TRY OIS Simple Zero Rates" (days, simple ACT/360 %) - and the caption of the tenor each stands beside
+OIS_SHORT = (("Forward!N6", "Forward!P6", "Forward!O6", "1W"), ("Forward!N7", "Forward!P7", "Forward!O7", "2W"))
 
 PCT = "0.00%"                            # BID % / ASK %'s own format
 BP = "#,##0"
@@ -56,8 +61,9 @@ BP = "#,##0"
 #: the columns added on the right of each table: caption and what it is (the caption's tip)
 HEADS = (("OIS mid zero %", "TLREF OIS mid eğrisinin (bootstrap: OIS par kotalarının MID'i) satırın başlangıcı → Valör arası "
                             "zero faizi, basit ACT/360 – Masa'nın 'Tarih arası faiz' Bootstrap satırıyla aynı hesap. Başlangıç: "
-                            "T+0'da bugün, T+1'de ertesi iş günü (TRY tatilleri atlanır). OIS spot'undan önceki gün(ler) TLREF ile (ORANLAR'ın ON "
-                            "satırı). Eğrinin ilk düğümü 1A: daha kısa vade spot → 1A arasından okunur"),
+                            "T+0'da bugün, T+1'de ertesi iş günü (TRY tatilleri atlanır). 1A'dan kısa vadede eğrinin 1A "
+                            "düğümünden önce 1W ve 2W OIS kotaları (ORANLAR'ın 1W / 2W OIS zero'su) düğüm olarak girer. OIS "
+                            "spot'undan önceki gün(ler) TLREF ile (ORANLAR'ın ON satırı)"),
          ("Offshore mid zero %", "Offshore TRY mid eğrisinin (≤9A FX swap ima faizlerinin bid–ask ortası, 1Y'den XCCY "
                                  "ortalarının bootstrap'ı) aynı tarihler arası zero faizi, basit ACT/360. USDTRY spot'undan "
                                  "önceki gün(ler) offshore O/N mid ile (ORANLAR'ın ON satırı)"),
@@ -163,6 +169,37 @@ def _date(v: Any) -> Any:
     return v
 
 
+def with_short_points(days: Sequence[Any], lndf: Sequence[Any], points: Sequence[Tuple[Any, Any]]) -> Tuple[List[Any], List[Any]]:
+    """A curve's nodes (``days`` from its spot - the first one the spot itself -, ``lndf``) with short points put in before
+    its first node after the spot: ``points`` are (days, simple ACT/360 zero rate), each a node of ln DF −ln(1 + r·days/360).
+    A point without a number, not between the spot and that node, or of a day another point has, is left out."""
+    days, lndf = list(days), list(lndf)
+    if len(days) < 2 or days[0] != 0.0 or type(days[1]) is not float:
+        return days, lndf
+    extra: Dict[float, float] = {}
+    for d, r in points:
+        if type(d) is float and type(r) is float and 0.0 < d < days[1] and d not in extra and 1.0 + r * d / 360.0 > 0:
+            extra[d] = -math.log(1.0 + r * d / 360.0)
+    put = sorted(extra.items())
+    return [days[0]] + [d for d, _ in put] + days[1:], [lndf[0]] + [x for _, x in put] + lndf[1:]
+
+
+def _short_points(book, calc) -> List[Tuple[Any, Any]]:
+    """The OIS curve's short points the spreads read (``OIS_SHORT``): (days, rate) each - none where a tenor's caption is
+    not the one expected (the sheet's layout changed)."""
+    out: List[Tuple[Any, Any]] = []
+    for days_ref, rate_ref, caption_ref, tenor in OIS_SHORT:
+        try:
+            si, rc = book.cell(caption_ref)
+        except (KeyError, ValueError):
+            continue
+        if str(book.model.sheets[si].consts.get(rc) or "").strip() != tenor:
+            continue
+        rate = _cell(book, calc, rate_ref)
+        out.append((_cell(book, calc, days_ref), rate / 100.0 if type(rate) is float else None))
+    return out
+
+
 def read_curves(book, calc) -> Dict[str, Curve]:
     """The OIS and the offshore mid curve of the TRY workbook ``book`` as ``calc`` has them (a user's own inputs there
     apply): ``{"ois": Curve, "off": Curve}`` - one that cannot be read says why (``Curve.why``)."""
@@ -184,6 +221,8 @@ def read_curves(book, calc) -> Dict[str, Curve]:
             spot = _cell(book, calc, spot_ref) if "!" in spot_ref else (_named(book, calc, spot_ref) or [None])[0]
         except (KeyError, ValueError):
             spot = None
+        if key == "ois":
+            days, lndf = with_short_points(days, lndf, _short_points(book, calc))
         on = _cell(book, calc, on_ref) if on_ok else None
         out[key] = Curve(_date(spot), days, lndf, on, on_name=on_name)
     return out

@@ -80,6 +80,29 @@ def test_a_start_before_the_spot_is_carried_with_the_curves_overnight():
     assert bare.zero(S - 1, S + 30) is None and bare.zero(S, S + 30) == pytest.approx(0.36, rel=1e-13)
 
 
+def test_short_points_come_before_the_curves_first_node():
+    """The OIS curve's first node is 1M: for the spreads the 1W and 2W points (ORANLAR's 1W / 2W "OIS zero", simple
+    ACT/360) come before it - exact at their own days, ln DF linear between them, nothing changed from the 1M node on."""
+    curve, l30, l91 = planted(on=0.40)
+    days, lndf = bsp.with_short_points(curve.days, curve.lndf, [(7.0, 0.35), (14.0, 0.355)])
+    assert days == [0.0, 7.0, 14.0, 30.0, 91.0] and lndf[3:] == [l30, l91]
+    short = bsp.Curve(S, days, lndf, 0.40)
+    assert short.zero(S, S + 7) == pytest.approx(0.35, rel=1e-13)
+    assert short.zero(S, S + 14) == pytest.approx(0.355, rel=1e-13)
+    for a, b in ((S, S + 30), (S + 30, S + 91), (S + 40, S + 120)):            # from the 1M node on: the curve's own
+        assert short.zero(a, b) == pytest.approx(curve.zero(a, b), rel=1e-13)
+    l7, l14 = -math.log(1 + 0.35 * 7 / 360), -math.log(1 + 0.355 * 14 / 360)
+    l10, l20 = l7 + (l14 - l7) * 3 / 7, l14 + (l30 - l14) * 6 / 16
+    assert short.zero(S + 10, S + 20) == pytest.approx((math.exp(l10 - l20) - 1) * 360 / 10, rel=1e-13)
+    # under 1W: spot → 1W, a T+0 start carried to the spot with the O/N as before
+    assert short.zero(S, S + 3) == pytest.approx((math.exp(-l7 * 3 / 7) - 1) * 360 / 3, rel=1e-13)
+    assert short.zero(S - 1, S + 3) == pytest.approx(((1 + 0.40 / 360) / math.exp(l7 * 3 / 7) - 1) * 360 / 4, rel=1e-13)
+    # a point without a number, past the first node, at the spot or of a day given twice is left out
+    assert bsp.with_short_points(curve.days, curve.lndf, [(7.0, None), (45.0, 0.35), (0.0, 0.3), (14.0, 0.355), (14.0, 0.5)])[0] == \
+        [0.0, 14.0, 30.0, 91.0]
+    assert bsp.with_short_points([5.0, 30.0], [0.0, l30], [(7.0, 0.35)]) == ([5.0, 30.0], [0.0, l30])      # no spot node
+
+
 # ============================================================================== the page
 def test_each_quote_gets_its_spread_to_the_ois_and_the_offshore_mid(service):
     loc = numfmt.get_locale("tr")
@@ -139,18 +162,52 @@ def test_the_mids_agree_with_oranlar_at_its_tenors(service):
     assert "Spot öncesi" not in next(r for r in t1 if r["days"] == 30.0)["cells"][0]["tip"]
 
 
-def test_between_any_two_dates_the_mids_are_those_of_masas_blocks(service):
-    """Off the nodes: the OIS mid is Masa's 'TARİH ARASI FAİZ' Bootstrap row (ACT/360) between the row's two dates, the
-    offshore mid the market simple rate of its 'KIRIK VADE' block (offshore curve, ACT/360) at the row's maturity."""
-    u = service.login("Borsa spread tarih")["user"]
+def test_short_rows_meet_oranlars_1w_and_2w(service):
+    """Under a month the OIS mid reads the 1W and 2W points before the curve's 1M node: a T+1 quote of 7 / 14 days is
+    ORANLAR's 1W / 2W "OIS zero" (the 1W / 2W OIS quotes, 365 → 360).  The bootstrapped curve and Masa's Bootstrap row
+    stay as they were: their spot → 7 days is still the spot → 1M segment.  The offshore curve has its own 1W, 2W and
+    1M points (TRYI1W, TRYI2W, TRYI1M): a quote on one of their days is ORANLAR's "ICAP" there."""
+    def tto(ref, user=None):
+        return cell(service, ref, user)
+
+    t1 = quoted(tables(service)[1], T1)
+    spot = tto("OIS_MAIN!B2")
+    assert (tto("Forward!O6"), tto("Forward!N6"), tto("Forward!O7"), tto("Forward!N7")) == ("1W", 7.0, "2W", 14.0)
+    for days, oranlar in ((7.0, "MASA!G8"), (14.0, "MASA!G9")):
+        row = next(r for r in t1 if r["days"] == days)
+        assert row["mat"] - days == spot
+        assert row["cells"][0]["v"] == pytest.approx(tto(oranlar), rel=1e-12)
+    assert tto("MASA!G8") == pytest.approx(tto("Forward!P6") / 100, rel=1e-12) and tto("MASA!G10") == tto("Motor!M89")
+    assert tto("Motor!C88") == 0.0 and tto("Motor!C89") == 30.0                    # the curve: no node before 1M
+    u = service.login("Borsa spread kısa")["user"]
     try:
+        res = service.set_inputs(u, "tto", [{"ref": "MASA!C60", "value": spot}, {"ref": "MASA!E60", "value": spot + 7}])
+        assert res["errors"] == []
+        boot = tto("MASA!D67", u)                                                  # Masa's Bootstrap row, spot → 7 days
+        assert boot == pytest.approx((math.exp(-tto("Motor!I89") * 7 / 30) - 1) * 360 / 7, rel=1e-12)
+        assert abs(boot - tto("MASA!G8")) > 1e-4                                   # (not the 1W quote: it is not on the curve)
+    finally:
+        service.reset_inputs(u, "tto")
+    row = next(r for r in t1 if r["days"] == 14.0)                                 # offshore 2W node: 14 days
+    assert tto("Forward!AK126") == 14.0 and row["cells"][1]["v"] == pytest.approx(tto("MASA!F9"), rel=1e-12)
+
+
+def test_between_any_two_dates_the_mids_are_those_of_masas_blocks(service):
+    """Between any two dates from 1M on the OIS mid is Masa's 'TARİH ARASI FAİZ' Bootstrap row (ACT/360); the offshore
+    mid of a quote is the market simple rate of Masa's 'KIRIK VADE' block (offshore curve, ACT/360) at its maturity."""
+    u = service.login("Borsa spread tarih")["user"]
+    tto = service.books["tto"]
+    try:
+        spot = cell(service, "OIS_MAIN!B2")
+        for a, b in ((30, 100), (45, 200), (0, 300), (61, 92)):
+            res = service.set_inputs(u, "tto", [{"ref": "MASA!C60", "value": spot + a}, {"ref": "MASA!E60", "value": spot + b}])
+            assert res["errors"] == [] and cell(service, "MASA!G60", u) == b - a
+            ois = service.et.call(lambda: bsp.read_curves(tto, service._calc(u, tto))["ois"])
+            assert ois.zero(spot + a, spot + b) == pytest.approx(cell(service, "MASA!D67", u), rel=1e-12)
         for days in (7.0, 14.0):
             row = next(r for r in quoted(tables(service, u)[1], T1) if r["days"] == days)
-            start, end = row["mat"] - days, row["mat"]
-            res = service.set_inputs(u, "tto", [{"ref": "MASA!C60", "value": start}, {"ref": "MASA!E60", "value": end},
-                                                {"ref": "MASA!C171", "value": end}])
-            assert res["errors"] == [] and cell(service, "MASA!G60", u) == days and cell(service, "MASA!BL173", u) == days
-            assert row["cells"][0]["v"] == pytest.approx(cell(service, "MASA!D67", u), rel=1e-12)
+            res = service.set_inputs(u, "tto", [{"ref": "MASA!C171", "value": row["mat"]}])
+            assert res["errors"] == [] and cell(service, "MASA!BL173", u) == days
             assert row["cells"][1]["v"] == pytest.approx(cell(service, "MASA!F175", u), rel=1e-12)
     finally:
         service.reset_inputs(u, "tto")
