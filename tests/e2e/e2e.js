@@ -2182,6 +2182,78 @@ async function shot(page, name) {
     await pageD.check('#agenda-list .agenda-day.late tr[data-id] input[type=checkbox]');
     await page.waitForFunction(() => !document.querySelector('#agenda-list .agenda-day.late'), null, { timeout: 15000 });
     check('ticked off by another trader: no longer late, on every screen', true);
+    // Ajanda, recurring: a deadline "Her iş günü" a few minutes ahead ("Seçili günler" with that day when it is not a
+    // business day of the desk's calendar) - its alarm on another page, once per browser however many windows, "Ertele"
+    // for oneself, "Bugün tamam" for that day only; the rule under "Tekrarlayan işler", paused, deleted
+    console.log('agenda: recurring items');
+    await open(pageD, 'social');
+    const page2 = await ctxA.newPage();                       // a second window of Ayşe's browser, on another page
+    await page2.goto(BASE + '/#/social');
+    await page2.waitForFunction(() => window.tto && window.tto.state.pageId === 'social' && window.tto.state.page
+      && window.tto.state.page.ready, null, { timeout: 90000 });
+    const shut = new Set((await api(page, 'ayşe yilmaz', 'GET', '/api/holidays')).json.tr.map((x) => x.date));
+    const rep = await page.evaluate(() => {
+      const p = (n) => String(n).padStart(2, '0');
+      const at = new Date(Date.now() + 4 * 60000);
+      return { day: at.getFullYear() + '-' + p(at.getMonth() + 1) + '-' + p(at.getDate()), time: p(at.getHours()) + ':' + p(at.getMinutes()),
+        dow: ((at.getDay() + 6) % 7) + 1 };
+    });
+    const businessDay = rep.dow <= 5 && !shut.has(rep.day);
+    const REP = 'Swap limitlerini kontrol et (tekrar)';
+    await page.fill('#agenda-time', rep.time);
+    await page.fill('#agenda-text', REP);
+    await page.check('#agenda-deadline');
+    await page.selectOption('#agenda-repeat', businessDay ? 'workdays' : 'weekdays');
+    if (!businessDay) await page.check('#agenda-weekdays input[data-d="' + rep.dow + '"]');
+    check('Tekrar: the days of the week only for "Seçili günler", an end day for any repeat',
+      await page.isVisible('#agenda-weekdays') === !businessDay && await page.isVisible('#agenda-end'));
+    await page.click('#agenda-add');
+    await page.waitForFunction(() => !document.getElementById('agenda-text').value && document.querySelector('#agenda-rules tr[data-rule]'),
+      null, { timeout: 15000 });
+    const repRule = (await api(page, 'ayşe yilmaz', 'GET', '/api/agenda')).json.rules.find((r) => r.text === REP);
+    const repRow = '#agenda-rules tr[data-rule="' + (repRule && repRule.id) + '"]';
+    check('a recurring item: under "Tekrarlayan işler" with how it repeats and when it comes next, the form back to "Bir kez"',
+      !!repRule && repRule.repeat === (businessDay ? 'workdays' : 'weekdays') && repRule.time === rep.time && repRule.deadline
+      && /Bugün|Yarın/.test(await page.textContent(repRow + ' td.next')) && (await page.inputValue('#agenda-repeat')) === 'once', repRule);
+    check('... and its day on the agenda among the day\'s items, marked as recurring',
+      /↻/.test(await page.textContent('#agenda-list tr[data-rule="' + repRule.id + '"]')));
+    const alarmOn = (p) => p.locator('#toasts .toast.agenda-alarm', { hasText: REP });
+    await pageD.waitForFunction((t) => [...document.querySelectorAll('#toasts .toast.agenda-alarm')].some((x) => x.textContent.includes(t)
+      && x.querySelector('.ag-snooze') && x.querySelector('.ag-done')), REP, { timeout: 20000 });
+    check('its alarm comes on another page (another trader\'s), with "Ertele 10 dk" and "Bugün tamam"',
+      /Deadline yaklaşıyor \(\d+ dk\)/.test(await alarmOn(pageD).first().textContent()));
+    for (let i = 0; i < 40 && (await alarmOn(page).count()) + (await alarmOn(page2).count()) === 0; i++) await page.waitForTimeout(500);
+    await page2.waitForTimeout(2500);                          // (the other window had its chance too)
+    const onA = await alarmOn(page).count();
+    const onA2 = await alarmOn(page2).count();
+    check('two windows of one browser: the alarm in one of them only', onA + onA2 === 1, { onA, onA2 });
+    await alarmOn(onA ? page : page2).locator('.ag-snooze').click();
+    await (onA ? page : page2).waitForFunction((t) => ![...document.querySelectorAll('#toasts .toast.agenda-alarm')].some((x) => x.textContent.includes(t)),
+      REP, { timeout: 15000 });
+    await pageD.waitForTimeout(1500);
+    const deskA = (await api(page, 'ayşe yilmaz', 'GET', '/api/desk')).json;
+    check('"Ertele 10 dk": gone for the one who put it off - told again in 10 minutes - and still there for the other trader',
+      !deskA.alarms.some((x) => x.rule === repRule.id) && deskA.next > 0 && deskA.next <= 600 && await alarmOn(pageD).count() === 1, deskA);
+    await alarmOn(pageD).locator('.ag-done').click();
+    await pageD.waitForFunction((t) => ![...document.querySelectorAll('#toasts .toast.agenda-alarm')].some((x) => x.textContent.includes(t)),
+      REP, { timeout: 15000 });
+    await page.waitForSelector('#agenda-list tr[data-rule="' + repRule.id + '"].done', { timeout: 15000 });
+    const after = (await api(page, 'mehmet', 'GET', '/api/agenda')).json;
+    const repDay = after.items.find((x) => x.rule === repRule.id && x.day === rep.day);
+    const repNext = after.rules.find((r) => r.id === repRule.id).next;
+    check('"Bugün tamam": that day done (by whom) on every screen - the next day still to come',
+      !!repDay && repDay.done && repDay.done_by === 'Mehmet' && /Mehmet/.test(await page.textContent('#agenda-list tr[data-rule="' + repRule.id + '"]'))
+      && !!repNext && repNext.day > rep.day, { repDay, repNext });
+    await page.click(repRow + ' .rule-pause');
+    await page.waitForSelector(repRow + '.paused', { timeout: 15000 });
+    check('paused under "Tekrarlayan işler": said so, nothing comes next',
+      /Duraklatıldı/.test(await page.textContent(repRow)) && (await api(page, 'ayşe yilmaz', 'GET', '/api/agenda')).json.rules
+        .find((r) => r.id === repRule.id).paused);
+    await page.click(repRow + ' .rule-del');
+    await page.click('.modal .mfoot .btn.primary');
+    await page.waitForSelector(repRow, { state: 'detached', timeout: 15000 });
+    check('... and deleted', !(await api(page, 'ayşe yilmaz', 'GET', '/api/agenda')).json.rules.some((r) => r.id === repRule.id));
+    await page2.close();
     await ctxD.close();
 
     // ------------------------------------------------------------------ the daily backup: the administrators' page

@@ -600,7 +600,7 @@ def test_every_call_needs_a_session(client):
                          ("POST", "/api/agenda/rules/1/pause")):
         res = client.request(method, path, headers=ANON, json={} if method == "POST" else None)
         assert res.status_code == 401, (method, path)
-    for path in ("/static/js/desk.js", "/static/js/pages/social.js", "/static/js/pages/agenda.js"):
+    for path in ("/static/js/desk.js", "/static/js/pages/social.js", "/static/js/pages/agenda.js", "/static/js/agendaalarms.js"):
         assert client.get(path).status_code == 200, path
     assert 'id="btn-feedback"' in client.get("/").text
 

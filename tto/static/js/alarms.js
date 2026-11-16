@@ -350,7 +350,8 @@ export function askPermission() {
 }
 
 let audio = null;
-function tone() {
+/** A short two-note tone (the alarms', the agenda's recurring items'). */
+export function tone() {
   try {
     audio = audio || new (window.AudioContext || window.webkitAudioContext)();
     const t0 = audio.currentTime;
@@ -373,7 +374,7 @@ const deskToasts = new Map();             // the firing's number in the day's lo
 
 /** A desktop notification; ``tag`` names the firing, so that the same one shown by two windows of the dashboard (two
  *  tabs both hear the alarm) is one notification, not two. */
-function notify(title, body, tag) {
+export function notify(title, body, tag) {
   try {
     if (window.Notification && Notification.permission === 'granted') new Notification(title, tag ? { body, tag } : { body });
   } catch (x) { /* no notification */ }
