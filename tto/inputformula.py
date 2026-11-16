@@ -18,16 +18,21 @@ Refused as typed, with the reason: a Bloomberg function (the daily data limit, `
 cannot be read or names what is not there, a cycle (the formula reads - through the workbook's formulas or other
 formula inputs - the cell it is typed into: the engine's masks tell that a read depends on an input, the formulas'
 references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, "Elle değer", a
-cell the meeting calendar moves - its value goes with its meeting, a formula's references would not), a shared formula
-reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and a formula
-reading live data (prices, NOW()) into a cell that goes into a Bloomberg request: a new request on every tick.
+cell the meeting calendar moves - its value goes with its meeting, a formula's references would not -, a day or a name
+of a holiday list - its save writes the whole list again in date order), a shared formula reading an administrators'
+page (Motor: a shared formula is everybody's, it reads with nobody's rights), and, into a cell that goes into a
+Bloomberg request, a formula reading live data (prices, NOW()) - a new request on every tick - or one whose value is
+an error - a request with an empty argument.  A formula the store keeps that may not stand (an earlier version took
+it, a scenario brought it back) goes when it is read: its value stays, the log says why.
 
 What never spins or sticks: a cycle that appears later (an input it reads went back to its own default) - the formulas
 still changing after a round per formula are stopped, their value #CALC!, the reason on the cell; a formula over the
 evaluation's time limit (a cold calculation after a restart) is tried again later, with a growing pause, and stopped only
 after several times in a row.  A stopped formula is tried again when its owner writes an input (once at once, then after
 a growing pause) or types it again.  Where its value goes into a Bloomberg request it keeps its last good value instead
-of an error: an error value there would be a request with an empty argument (``marketdata.base.override_pairs``).
+of an error: an error value there would be a request with an empty argument (``marketdata.base.override_pairs``) - a
+stopped formula, and one that is not stopped but comes out an error (what it reads went wrong): that one goes on, the
+error said on the cell, and writes its value again once it has one.
 """
 from __future__ import annotations
 
@@ -52,10 +57,15 @@ LIST = "bu hücre listeden bir değer alır (%s): formül yazılamaz"
 MEETING = "toplantı tarihleri takvimden değişir (Ayarlar → Toplantı takvimi): formül yazılamaz"
 CALENDAR = ("toplantı takvimiyle kayan hücre: formül yazılamaz (takvim değişince değeri toplantısıyla taşınır, formülün "
             "başvuruları taşınmaz)")
+HOLIDAY = ("tatil listesinin hücresi: formül yazılamaz (liste Ayarlar → Tatiller'den kaydedilince tarih sırasıyla "
+           "yeniden yazılır, formül kalmazdı)")
 NOT_INPUT = "formül yalnızca girdi hücrelerine (sarı / yeşil) yazılır - \"Elle değer\" bir sabittir"
 CYCLE = "döngüsel başvuru: %s - formül yazıldığı hücreyi okuyor"
 LIVE = ("bu hücrenin değeri bir Bloomberg isteğine girer (%s): canlı fiyat ya da NOW() okuyan bir formül her değişimde "
         "yeni bir istek doğurur (günlük veri limiti) - canlı olmayan hücreleri kullanın ya da değeri elle yazın")
+ERROR_FEEDS = ("bu hücrenin değeri bir Bloomberg isteğine girer (%s): formülün değeri hata (%s) - istek boş bir değerle "
+               "giderdi; formülü düzeltin ya da değeri elle yazın")
+ERRORED = "Formülün değeri hata (%s)"
 STOPPED_CYCLE = "Döngüsel başvuru: %s - formül durduruldu (#CALC!); formülü düzeltin ya da yeniden yazın"
 STOPPED_LIVE = ("formül canlı veri okumaya başladı; bu hücrenin değeri bir Bloomberg isteğine girdiği için durduruldu "
                 "(günlük veri limiti) - formülü yeniden yazın")
@@ -63,6 +73,13 @@ STOPPED_RESTLESS = "formülün değeri her hesapta değişiyor - durduruldu (#CA
 STOPPED_SLOW = "%s - %d kez üst üste; formül durduruldu, yeniden yazınca denenir"
 RETRYING = "%s - biraz sonra yeniden denenecek"
 KEPT = " · Bloomberg isteğine giren hücre: son iyi değeri kaldı"
+#: why a formula kept by the store goes when it is read (its value stays, as a value): the log says which and why
+GONE_MOVED = "toplantı takvimiyle kayan hücre"
+GONE_HOLIDAY = "tatil listesinin hücresi"
+GONE_CELL = "hücre artık yok"
+GONE_INPUT = "hücre artık bir girdi değil"
+GONE_SCOPE = "girdi artık %s"
+GONE_TEXT = "bu sürümde kabul edilmiyor: %s"
 DYNAMIC = ("OFFSET", "INDIRECT")      # functions whose cells are known only when computed (the engine has none)
 
 _MISS = object()
@@ -193,6 +210,11 @@ class InputFormulas(object):
         if user in self._scopes:
             self.schedule()
 
+    def reread(self) -> None:
+        """Calculation thread: what the store keeps taken in now, not at the next round (a scenario was loaded: a formula
+        of it that may not stand goes before "Girdilerim" lists it or a scenario saves it again)."""
+        self._sync()
+
     def _sync(self) -> None:
         if self._roles:
             with self._lock:
@@ -215,10 +237,14 @@ class InputFormulas(object):
 
     def _take(self, scope: str, rows: Dict[Tuple[str, str], str]) -> None:
         """A scope's formulas as the store keeps them: an entry whose text is the same is kept (with what it read).  One
-        in a cell the meeting calendar moves (an earlier version took it) goes: its value stays, the log says so."""
+        that may not stand (an earlier version took it, a scenario brought it back) goes from the store - its value stays,
+        as a value, the log says which and why: in a cell the meeting calendar moves or a holiday list's save rewrites, a
+        cell that is not there or no input of this scope any more, a text this version does not take.  (Kept, it would
+        be listed in "Girdilerim" and saved with every scenario while its cell holds a value that follows nothing.)  A
+        workbook not loaded now keeps its formulas."""
         old = self._scopes.get(scope, {})
         new: Dict[Tuple[str, int, int], _Entry] = {}
-        moved: List[Tuple[str, str, str]] = []
+        gone: List[Tuple[str, str, str, str]] = []
         for (bid, ref), text in rows.items():
             book = self.svc.books.get(bid)
             if book is None or not isinstance(text, str):
@@ -226,26 +252,34 @@ class InputFormulas(object):
             try:
                 si, rc = book.cell(ref)
             except (KeyError, ValueError):
+                gone.append((bid, ref, text, GONE_CELL))
                 continue
             if self.svc._meeting_date_cell(book, si, rc) or self.svc._moved_by_calendar(book, si, rc):
-                moved.append((bid, ref, text))
+                gone.append((bid, ref, text, GONE_MOVED))
+                continue
+            if self.svc._holiday_cell(book, si, rc):
+                gone.append((bid, ref, text, GONE_HOLIDAY))
                 continue
             d = book.inputs.get((si, rc))
-            if d is None or (d.scope == "shared") != (scope == SHARED) or d.group in ("adhoc", "adhoc-shared"):
-                continue                               # (no longer an input of this scope: its value stays a value)
+            if d is None or d.group in ("adhoc", "adhoc-shared"):
+                gone.append((bid, ref, text, GONE_INPUT))
+                continue
+            if (d.scope == "shared") != (scope == SHARED):
+                gone.append((bid, ref, text, GONE_SCOPE % ("ortak" if d.scope == "shared" else "kişisel")))
+                continue
             e = old.get((bid, si, rc))
             if e is None or e.text != text:
                 try:
                     check_formula(text, BLOOMBERG_INPUT)
-                except CalcError:
-                    continue                           # (kept by another version and not read now: a value)
+                except CalcError as exc:
+                    gone.append((bid, ref, text, GONE_TEXT % exc))
+                    continue
                 e = _Entry(scope, book, si, rc, text)
             new[(bid, si, rc)] = e
-        if moved:
-            self.svc.store.drop_formulas(scope or None, [(bid, ref) for bid, ref, _ in moved])
-            for bid, ref, text in moved:
-                log.warning("girdi formülü kaldırıldı (toplantı takvimiyle kayan hücre; değeri kaldı): %s %s!%s %s",
-                            scope or "ortak", bid, ref, text)
+        if gone:
+            self.svc.store.drop_formulas(scope or None, [(bid, ref) for bid, ref, _, _ in gone])
+            for bid, ref, text, why in gone:
+                log.warning("girdi formülü kaldırıldı (%s; değeri kaldı): %s %s!%s %s", why, scope or "ortak", bid, ref, text)
         with self._lock:
             if new:
                 self._scopes[scope] = new
@@ -263,6 +297,8 @@ class InputFormulas(object):
             raise FormulaError(MEETING)
         if self.svc._moved_by_calendar(book, si, rc):
             raise FormulaError(CALENDAR)
+        if self.svc._holiday_cell(book, si, rc):
+            raise FormulaError(HOLIDAY)
         if d is None or d.group in ("adhoc", "adhoc-shared"):
             raise FormulaError(NOT_INPUT)
         opts = book.options_for(si, rc, calc)
@@ -298,6 +334,10 @@ class InputFormulas(object):
             feeds = self._feeds(e)
             if feeds:
                 raise FormulaError(LIVE % feeds)
+        if type(value) is XlError:
+            feeds = self._feeds(e)
+            if feeds:
+                raise FormulaError(ERROR_FEEDS % (feeds, _what(value, e.note)))
         return value, e
 
     def wrote(self, book, scope: str, values: Dict[Tuple[int, int], Any], cleared: List[Tuple[int, int]],
@@ -460,7 +500,13 @@ class InputFormulas(object):
                         if ring:
                             self._freeze(e, STOPPED_CYCLE % " → ".join(ring), sets)
                             continue
+                        if self._feeds(e):
+                            # an error value there would be a request with an empty argument: the last good value
+                            # stays, the error is the reason on the cell - not stopped, a value again is written again
+                            self._kept(e, ERRORED % _what(v, e.note) + KEPT)
+                            continue
                     e.freezes = 0
+                    self._kept(e, None)
                     if not _same(v, self._current(e)):
                         sets.setdefault(e.bid, {})[(e.si, e.rc)] = v
                 if sets:
@@ -513,6 +559,13 @@ class InputFormulas(object):
             if not _same(E_CALC, cur):
                 sets.setdefault(e.bid, {})[(e.si, e.rc)] = E_CALC
         self.svc._formulas_changed(e.scope)
+
+    def _kept(self, e: _Entry, why: Optional[str]) -> None:
+        """A formula going on (not stopped) whose error was kept out of a Bloomberg request (``why``), or no longer
+        (None): the reason on its cell, drawn again when it changes."""
+        if e.error != why:
+            e.error = why
+            self.svc._formulas_changed(e.scope)
 
     def _current(self, e: _Entry) -> Any:
         if e.scope == SHARED:
@@ -762,6 +815,11 @@ class InputFormulas(object):
                 hit = sorted(c for c in down if c in adds)
                 e.feeds = book.ref(*hit[0]) if hit else ""
         return e.feeds
+
+
+def _what(v: XlError, note: Optional[str]) -> str:
+    """An error value as the reason says it: its code and, if known, what it means (``#DIV/0! - Sıfıra bölme``)."""
+    return v.code + (" - " + note if note and note != v.code else "")
 
 
 def _same(a: Any, b: Any) -> bool:

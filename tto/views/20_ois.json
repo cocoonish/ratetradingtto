@@ -397,6 +397,7 @@
    "id": "B9",
    "type": "table",
    "title": "EN İYİ 15 SPREAD",
+   "ranked": true,
    "range": "A28:L44",
    "hidden": false
   },
@@ -404,6 +405,7 @@
    "id": "B10",
    "type": "table",
    "title": "EN İYİ 15 FLY",
+   "ranked": true,
    "range": "A46:L62",
    "hidden": false
   },
@@ -411,6 +413,7 @@
    "id": "B11",
    "type": "table",
    "title": "EN İYİ 15 FRA",
+   "ranked": true,
    "range": "A64:L80",
    "hidden": false
   },

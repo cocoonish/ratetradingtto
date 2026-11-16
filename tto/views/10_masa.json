@@ -369,6 +369,7 @@
    "id": "B18",
    "type": "table",
    "title": "SİNYALLER  ·  OIS en iyi 5  (OIS_MAIN sıralaması)",
+   "ranked": true,
    "range": "B131:N147",
    "hidden": false
   },
@@ -387,6 +388,7 @@
    "id": "B19",
    "type": "table",
    "title": "SİNYALLER  ·  DİBS RV (OIS ve FX swap ASW eğrilerine göre)  ·  FX swap bazı",
+   "ranked": true,
    "range": "P131:AB152",
    "hidden": false,
    "note": "Kâğıt listesi ve kâğıt bazındaki girdiler (repo, bilinen kupon, elle temiz fiyat) DİBS RV sayfasındaki tablodadır; genel ayarlar hemen üstteki satırda."

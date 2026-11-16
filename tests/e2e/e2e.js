@@ -3071,6 +3071,166 @@ async function shot(page, name) {
       missing.join('|') === 'Erişim yok|Bu tablo artık yok', missing);
     await ctxE.close();
 
+    // ------------------------------------------------------------------ rows and columns that are not the sheet's
+    // a launchpad's rows kept across a day change; pointing and pasting on a part of a table and on one's own column
+    // order; tables and columns of the dashboard's own when pointed at; the pointed cells marked when their table is
+    // drawn anew.  (Mehmet, on a launchpad of his own: nothing of Ayşe's changes.)
+    console.log('launchpad parts: rows kept, pointing, paste');
+    const ctxR = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const pageR = await ctxR.newPage();
+    pageR.on('pageerror', (e) => errors.push('pageerror(R): ' + e.message));
+    await login(pageR, 'Mehmet');
+    const asM = (method, path, body) => api(pageR, 'mehmet', method, path, body);
+    const valueOf = async (ref) => ((await asM('GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell || {}).v;
+    const gridOf = (key) => '#lp-grid .lp-item[data-key="' + key + '"] table.grid';
+    // his own order of IMPLIED RATES' columns (V before U), and a launchpad: the value date (Forward), MPC OIS, IMPLIED
+    // RATES' meetings MPC1, MPC3, MPC5, the DİBS tape, two bonds of DİBS RV with the broker columns
+    const impCols = (await asM('POST', '/api/panels', { items: [{ key: 'imp', view: 'ois', panel: 'B4' }] })).json.panels.imp.entry.data.c;
+    const impOrder = impCols.filter((c) => c !== 'V');
+    impOrder.splice(impOrder.indexOf('U'), 0, 'V');
+    await asM('POST', '/api/columns', { table: 'v/ois/B4', order: impOrder });
+    await asM('POST', '/api/layout', { launchpads: [{ name: 'Satır', items: [
+      { id: 'r-fwd', view: 'forward', panel: 'B1', w: 6 }, { id: 'r-mpc', view: 'ois', panel: 'B13', w: 6 },
+      { id: 'r-imp', view: 'ois', panel: 'B4', w: 12, rows: ['MPC1', 'MPC3', 'MPC5'] },
+      { id: 'r-tape', view: 'dibslive', panel: 'L3', w: 6 }, { id: 'r-rv', view: 'dibs', panel: 'B3', w: 12, rows: [5, 6] }] }] });
+    await pageR.evaluate(() => { window.location.hash = '#/launchpad/Satır'; });
+    await pageR.reload();                                           // (his column order: read as the dashboard opens)
+    await pageR.waitForFunction(() => window.tto && window.tto.state.pageId === 'launchpad'
+      && document.querySelectorAll('#lp-grid .lp-item table.grid').length === 5, null, { timeout: 120000 });
+    // MPC OIS by "MPC1→2" … (its rows read "MPC1→2 · 1.2–2.6A": the months to the meetings, fewer every day)
+    await pageR.click('#lp-grid .lp-item[data-key="ois/B13"] button[data-action="item-menu"]');
+    await pageR.click('.menu >> text=Satırlar ve sütunlar…');
+    await pageR.waitForSelector('.lp-picker .lp-pick input');
+    const pickKeys = await pageR.evaluate(() => [...document.querySelectorAll('.lp-picker .lp-pick-side')[0].querySelectorAll('.lp-pick input')]
+      .map((b) => JSON.parse(b.dataset.key)));
+    await pageR.evaluate((want) => {
+      for (const b of document.querySelectorAll('.lp-picker .lp-pick-side')[0].querySelectorAll('.lp-pick input')) b.checked = want.includes(JSON.parse(b.dataset.key));
+    }, ['MPC1→2', 'MPC3→4']);
+    await pageR.click('#lp-pick-save');
+    const lpRowsSaved = async () => {
+      for (let i = 0; i < 60; i++) {
+        const l = (await asM('GET', '/api/layout')).json;
+        const it = ((l.launchpads.find((x) => x.name === 'Satır') || { items: [] }).items.find((x) => x.id === 'r-mpc')) || {};
+        if ((it.rows || []).length === 2) return it.rows;
+        await pageR.waitForTimeout(250);
+      }
+      return null;
+    };
+    const lpRows = await lpRowsSaved();
+    const mpcBox = () => pageR.evaluate((s) => {
+      const g = document.querySelector(s).__grid;
+      const name = (r) => { const i = g.data.r.indexOf(r); return i < 0 ? '' : ((g.data.rows[i].find((c) => c && c.k === 's' && c.t) || {}).t || ''); };
+      return { r: g.data.r.join(','), one: name(84), three: name(86), missing: !!g.data.part_missing };
+    }, gridOf('ois/B13'));
+    await pageR.waitForFunction((s) => { const r = document.querySelector(s).__grid.data.r; return r.includes(84) && r.includes(86) && !r.includes(85); },
+      gridOf('ois/B13'), { timeout: 30000 });
+    const mpc0 = await mpcBox();
+    // a day on: his own "Elle değer" over the OIS spot date (OIS_MAIN!B2 = TODAY's next business day) a week later -
+    // the months to each meeting count down as on a later day (the server's clock stays where it is)
+    const spot = await valueOf('OIS_MAIN!B2');
+    const later = await asM('POST', '/api/inputs', { book: 'tto', items: [{ ref: 'OIS_MAIN!B2', value: dayText(spot + 7) }], adhoc: true });
+    await pageR.waitForFunction(([s, was]) => {
+      const g = document.querySelector(s).__grid;
+      const i = g.data.r.indexOf(84);
+      const t = i < 0 ? '' : ((g.data.rows[i].find((c) => c && c.k === 's' && c.t) || {}).t || '');
+      return !!t && t !== was;
+    }, [gridOf('ois/B13'), mpc0.one], { timeout: 60000 }).catch(() => null);
+    const mpc1 = await mpcBox();
+    check('a launchpad keeps MPC OIS\' rows by "MPC1→2" (not "MPC1→2 · 1.2–2.6A": the months count down every day) - a week later '
+      + '(his own spot date) the same two rows, no "artık yok" note', JSON.stringify(lpRows) === '["MPC1→2","MPC3→4"]'
+      && pickKeys.slice(0, 3).join(',') === 'MPC1→2,MPC2→3,MPC3→4' && (later.json.errors || []).length === 0
+      && mpc1.r === mpc0.r && !mpc1.missing && mpc1.one !== mpc0.one && mpc1.one.startsWith('MPC1→2 · ') && mpc1.three.startsWith('MPC3→4 · '),
+    { lpRows, keys: pickKeys.slice(0, 4), later: later.json, mpc0, mpc1 });
+    await asM('POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!B2'] });
+    // a paste from Excel onto the part (MPC1, MPC3, MPC5) and onto his order of the columns (V, U, W): where it looks like
+    // it lands - not the sheet's next rows (MPC2) nor its next column (W after V)
+    const impBox = gridOf('ois/B4');
+    const pasteAt = (r, c, text) => pageR.evaluate(async ([s, r, c, text]) => {
+      const g = document.querySelector(s).__grid;
+      const mod = await import('/static/js/grid.js');
+      const i = g.data.r.indexOf(r), j = g.data.c.indexOf(c);
+      await mod.pasteText(g, { grid: g, top: i, left: j, bottom: i, right: j }, text);
+    }, [impBox, r, c, text]);
+    const impShown = await pageR.evaluate((s) => { const d = document.querySelector(s).__grid.data; return d.r.filter((r) => r >= 10).join(',') + '|' + d.c.join(''); }, impBox);
+    await pasteAt(10, 'U', '-25\r\n-50\r\n-75');
+    const rowsPasted = [await valueOf('OIS_MAIN!U10'), await valueOf('OIS_MAIN!U11'), await valueOf('OIS_MAIN!U12'), await valueOf('OIS_MAIN!U14')];
+    await pasteAt(10, 'V', '-10\t-20\t-30');
+    const colsPasted = [await valueOf('OIS_MAIN!V10'), await valueOf('OIS_MAIN!U10'), await valueOf('OIS_MAIN!W10')];
+    check('a block from Excel pasted onto a part of a table lands on the rows on screen (MPC1, MPC3, MPC5 - not MPC2), and onto one\'s own '
+      + 'column order on the columns on screen (V, U, W)', impShown.startsWith('10,12,14|') && impShown.includes('VUW')
+      && rowsPasted[0] === -25 && rowsPasted[1] == null && rowsPasted[2] === -50 && rowsPasted[3] === -75 && colsPasted.join(',') === '-10,-20,-30',
+    { impShown, rowsPasted, colsPasted });
+    await asM('POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!U10', 'OIS_MAIN!U12', 'OIS_MAIN!U14', 'OIS_MAIN!V10', 'OIS_MAIN!W10'] });
+    // pointing: "=" in the value date, then blocks dragged over IMPLIED RATES - one the sheet has as it shows (V, U: U10:V10)
+    // goes in; one that would take in a row or column the block leaves out (MPC1 → MPC3: MPC2's row; U → W: V) does not
+    const centre = (ref) => pageR.evaluate((r) => { const b = window.tto.findCell(r).getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; }, ref);
+    const drag = async (from, to) => {
+      let [x, y] = await centre(from);
+      await pageR.mouse.move(x, y);
+      await pageR.mouse.down();
+      for (const ref of to) {
+        [x, y] = await centre(ref);
+        await pageR.mouse.move(x, y, { steps: 5 });
+      }
+      const text = await pageR.inputValue('td.editing input');
+      await pageR.mouse.up();
+      return text;
+    };
+    const saidR = (t) => pageR.evaluate((x) => [...document.querySelectorAll('#toasts .toast')].filter((el) => el.textContent.includes(x)).length, t);
+    const marks = () => pageR.evaluate(() => [...document.querySelectorAll('td.pt')].map((td) => td.closest('table.grid').__grid.ref(td.__i, td.__j)).sort().join(','));
+    await (await cellHandle(pageR, 'Forward!D2')).click();
+    await pageR.keyboard.type('=');
+    await pageR.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center' }), impBox);
+    const rowGap = await drag('OIS_MAIN!U10', ['OIS_MAIN!U12']);
+    const gapSaid = await saidR('tek bir aralık değil');
+    const colGap = await drag('OIS_MAIN!U10', ['OIS_MAIN!W10']);
+    const colBlock = await drag('OIS_MAIN!U10', ['OIS_MAIN!W10', 'OIS_MAIN!V10']);
+    const marked = await marks();
+    check('pointing at a block of a part / of one\'s own column order: V..U goes in as the sheet has it (U10:V10, both marked); MPC1 → MPC3 '
+      + '(MPC2 between) and U → W (V between) are refused with the reason, the reference before them stays',
+      rowGap === '=OIS_MAIN!U10' && gapSaid >= 1 && colGap === '=OIS_MAIN!U10' && colBlock === '=OIS_MAIN!U10:V10'
+      && marked === 'OIS_MAIN!U10,OIS_MAIN!V10', { rowGap, gapSaid, colGap, colBlock, marked });
+    // the pointed table drawn anew (a row more: its shape changed) while the formula is typed: its cells are marked again
+    const rebuilt = await pageR.evaluate((s) => {
+      const g = document.querySelector(s).__grid;
+      const d = JSON.parse(JSON.stringify(g.source));
+      d.rows.push(d.rows[d.rows.length - 1].map((c) => Object.assign({}, c)));
+      d.r.push(d.r[d.r.length - 1] + 1);
+      const before = g.tds.length;
+      g.update(d);
+      return g.tds.length - before;
+    }, impBox);
+    const remarked = await marks();
+    check('... the pointed cells stay marked when their table is drawn anew while the formula is typed', rebuilt === 1 && remarked === marked,
+      { rebuilt, remarked });
+    // a table of the dashboard's own (the DİBS tape: no sheet) and a column it adds to DİBS RV (Broker bid): no reference,
+    // the reason said (each time: counted as the toasts come), the formula as it was
+    await pageR.evaluate(() => {
+      window.__noSheet = 0;
+      new MutationObserver((ms) => {
+        for (const m of ms) for (const n of m.addedNodes) if ((n.textContent || '').includes('çalışma kitabı sayfasında değil')) window.__noSheet += 1;
+      }).observe(document.getElementById('toasts'), { childList: true });
+    });
+    const tapeTd = (await pageR.evaluateHandle((s) => document.querySelector(s).__grid.tds[1].find(Boolean), gridOf('dibslive/L3'))).asElement();
+    await tapeTd.click();
+    await pageR.waitForFunction(() => window.__noSheet >= 1, null, { timeout: 10000 }).catch(() => null);
+    const afterTape = await pageR.inputValue('td.editing input');
+    const brokerTd = (await pageR.evaluateHandle((s) => {
+      const g = document.querySelector(s).__grid;
+      const j = g.data.c.indexOf('Broker bid');
+      const i = g.data.r.indexOf(5);
+      return j >= 0 && i >= 0 ? g.tds[i][j] : null;
+    }, gridOf('dibs/B3'))).asElement();
+    if (brokerTd) await brokerTd.click();
+    await pageR.waitForFunction(() => window.__noSheet >= 2, null, { timeout: 10000 }).catch(() => null);
+    const afterBroker = await pageR.inputValue('td.editing input');
+    const noSheet = await pageR.evaluate(() => window.__noSheet);
+    await pageR.keyboard.press('Escape');
+    check('pointing at the DİBS tape (no sheet) or at a column the dashboard adds (Broker bid) puts no reference in: "çalışma kitabı '
+      + 'sayfasında değil"', !!brokerTd && afterTape === '=OIS_MAIN!U10:V10' && afterBroker === '=OIS_MAIN!U10:V10' && noSheet === 2,
+    { afterTape, afterBroker, noSheet, broker: !!brokerTd });
+    await ctxR.close();
+
     // ------------------------------------------------------------------ a personal calc sheet
     console.log('personal calc sheet');
     const calcCell = (a, root = '#lp-grid') => root + ' .calc-box td[data-a="' + a + '"]';
