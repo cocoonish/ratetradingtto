@@ -1082,8 +1082,9 @@ class History(object):
     #: further behind (the dashboard was off) the same way, from its last close: never the whole range again for that
     OVERLAP_DAYS = 3
     #: live: series that are new to the history and ask for it (``info["backfill"]``: the quant package's) get their
-    #: first full range a few per sync, in the order they are listed - not all of them in one sync
-    BACKFILL_PER_SYNC = 5
+    #: first full range forty a sync, in the order they are listed - the 121 quant series in four syncs (~45 minutes from
+    #: the start), not all of them in one; each is still asked in full once (the total is the same as at five a sync)
+    BACKFILL_PER_SYNC = 40
     #: ... VİOP's contracts (``info["backfill"] == "viop"``: many short series, two years of expired ones) in their own
     #: turn beside them, this many a sync
     VIOP_PER_SYNC = 15

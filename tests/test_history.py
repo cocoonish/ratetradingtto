@@ -1219,12 +1219,18 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         def n_viop(requests):
             return sum(1 for r in requests for s in r["securities"] if s in vt)
 
-        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, five a pass; VİOP's
+        # ---- the first pass: a year of everything, a handful of requests (the quant series: two years, forty a pass; VİOP's
         #      fifteen a pass beside them - the first five listed contracts' close, high and low, two years back too)
         res = h.sync(only=[TODAY])
         two = [r for r in asked() if r["options"]["startDate"] == "20241024"]
         first = [r for r in asked() if r["options"]["startDate"] != "20241024"]
-        assert sorted((r["fields"][0], len(r["securities"])) for r in two) == [("PX_HIGH", 5), ("PX_LAST", 10), ("PX_LOW", 5)]
+        got = {}
+        for r in two:
+            got[r["fields"][0]] = got.get(r["fields"][0], 0) + len(r["securities"])
+        want = {"PX_LAST": 5, "PX_HIGH": 5, "PX_LOW": 5}                    # VİOP's first five contracts
+        for d in [d for d in snap["defs"] if d.info.get("backfill") is True][:History.BACKFILL_PER_SYNC]:
+            want[d.field] = want.get(d.field, 0) + 1                        # ... and the first quant series, in their order
+        assert got == want
         assert n_viop(asked()) == n_viop(two) == History.VIOP_PER_SYNC and sum(len(r["securities"]) for r in two) == History.BACKFILL_PER_SYNC + History.VIOP_PER_SYNC
         tickers = {s for r in first for s in r["securities"]}
         # (the bonds go out the way the API names them: the sheet's "TRT150328T24 @ISL1 ISIN" is Excel's spelling)
@@ -1279,7 +1285,7 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         assert plan["2026-10-21"]["meetings"][0] == D("2026-10-22") and len(plan) == len(in_window)
 
         # ---- the next pass asks for the new days only - from each series' last close on, that close again (and the
-        #      next five quant series and fifteen of VİOP's: the sixth listed contract and the first four expired ones,
+        #      next forty quant series and fifteen of VİOP's: the sixth listed contract and the first four expired ones,
         #      an expired one its whole life); series without any history are left alone for the rest of the day
         n = len(asked())
         res = h.sync(only=[TODAY])
@@ -1314,9 +1320,10 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         print("hits: %d = %d reference + %d history" % (provider.status()["hits_today"], len(refs), hist_hits))
         assert provider.status()["hits_today"] == server.hits() == len(refs) + hist_hits and len(refs) == len(set(refs))
         q, v, with_data, without = History.BACKFILL_PER_SYNC, History.VIOP_PER_SYNC, len(svc.store.hist_bounds()), 117 - 58
-        # first pass: every series of the workbook in full, five quant ones and fifteen of VİOP's; then the last days of
-        # the 58 with history, five more quant series and fifteen more of VİOP's, twice; by hand: the last days again, the
-        # 59 workbook series without history again, five more quant series (those never asked go first) and fifteen more
+        # first pass: every series of the workbook in full, forty quant ones and fifteen of VİOP's; then the last days of
+        # the 58 with history, forty more quant series and fifteen more of VİOP's, twice; by hand: the last days again, the
+        # 59 workbook series without history again, forty quant series more (the one never asked first, then those asked
+        # today with nothing - a request by hand tries them again) and fifteen more
         # of VİOP's (an expired contract's two-digit-year ticker among them once the sheet's form came back empty)
         assert with_data == 58 and n_viop(asked()) == 4 * v
         assert hist_hits == (117 + q + v) + 2 * (with_data + q + v) + (with_data + without + q + v)
@@ -1327,7 +1334,7 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
 def test_live_viop_contracts_fill_in_a_pool_of_their_own_and_an_expired_one_is_asked_once(tmp_path):
     """VİOP's contracts in the live history (quantviop.py: the first six the VİOP sheet lists and the 24 expired months
     before them, close / high / low each): their first full range fifteen a sync (``VIOP_PER_SYNC``) beside the quant
-    series' five (``BACKFILL_PER_SYNC``), then a listed one's new days every sync.  An expired one (``tail: "none"``) is
+    series' forty (``BACKFILL_PER_SYNC``), then a listed one's new days every sync.  An expired one (``tail: "none"``) is
     asked once in full and never for its new days; its two-digit-year ticker only after the sheet's one-digit form came
     back empty; one that had nothing in either form again only ``FINAL_RETRY_DAYS`` later - not the next days, not on
     "update now" - and once it has something, never again."""
@@ -1379,10 +1386,13 @@ def test_live_viop_contracts_fill_in_a_pool_of_their_own_and_an_expired_one_is_a
             clock.today = lambda: today + day
             svc.bump()
 
-        # ---- the first day: fifteen of VİOP's a sync beside five quant series, every series once
+        # ---- the first day: fifteen of VİOP's a sync beside forty quant series (all of them in four syncs), every series once
         syncs = run(12)
-        assert [len(full(s, vt)) for s in syncs] == [15] * 9 + [3, 0, 0] and [len(full(s, quant)) for s in syncs] == [5] * 12
-        assert h.state["backfill"]["viop_per_sync"] == History.VIOP_PER_SYNC == 15 and History.BACKFILL_PER_SYNC == 5
+        nq = sum(1 for d in snap["defs"] if d.group == "Quant" and d not in viop)
+        q = History.BACKFILL_PER_SYNC
+        assert [len(full(s, vt)) for s in syncs] == [15] * 9 + [3, 0, 0]
+        assert [len(full(s, quant)) for s in syncs] == [min(q, max(0, nq - i * q)) for i in range(12)] == [40, 40, 40, 1] + [0] * 8
+        assert h.state["backfill"]["viop_per_sync"] == History.VIOP_PER_SYNC == 15 and History.BACKFILL_PER_SYNC == 40
         when = {}
         for i, s in enumerate(syncs):
             for x in full(s, vt):

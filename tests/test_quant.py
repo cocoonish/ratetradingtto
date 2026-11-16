@@ -1081,12 +1081,12 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
     """The fake terminal through a first sync and a whole day of 15-minute syncs, then the next days:
 
     * no series' full range twice in a day; Bloomberg's own start of the short ones is kept and never asked again;
-    * the quant series (every pair of the desk's list) get their first two years five a sync, those never asked first;
+    * the quant series (every pair of the desk's list) get their first two years forty a sync, those never asked first;
     * VİOP's contracts (quantviop.py) theirs fifteen a sync beside them: the listed ones two years back, an expired one its
       whole life once - the sheet's one-digit-year ticker first, the two-digit year only after that came back empty - and
       never its new days;
     * the history's own series the analyses read (OIS, offshore, TLREF, DİBS) get their own window at once, and the year
-      before it from the next day on - only the part they miss, a week into what they have - five a sync too;
+      before it from the next day on - only the part they miss, a week into what they have - forty a sync too;
     * afterwards only the new days: the history's own every sync from their last close, the quant series and the listed
       contracts too - the day's hits and data points stay bounded (printed: the whole day's, VİOP's part of it);
     * the next day: the series without any history once more (an expired contract not: only a week later), the quant
@@ -1186,11 +1186,11 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
                         when.setdefault((x, r["fields"][0]), i)
         assert max(full.values()) == 1 and not any(kind(r) == "gap" for r in reqs)     # no range twice; no older year today
         stored = svc.store.hist_bounds()
-        # the first sync: the history's own series in full (their own window), the first five quant series and fifteen of
+        # the first sync: the history's own series in full (their own window), the first forty quant series and fifteen of
         # VİOP's (the first five listed contracts' close, high and low)
         first = {s for r in syncs[0] if kind(r) == "full" for s in r["securities"]}
         assert len(first - qt - vt) == 117 and len(first & qt) == q
-        # the quant series: five a sync until every one of them was asked; afterwards only new days - of every series with
+        # the quant series: forty a sync until every one of them was asked; afterwards only new days - of every series with
         # data, the quant ones too, each sync (the desk keeps its 15-minute sync for every series)
         per_q = [sum(1 for r in s if kind(r) == "full" for x in r["securities"] if x in qt) for s in syncs]
         nq = len(quant)
@@ -1202,13 +1202,15 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         per_v = [sum(1 for r in s if kind(r) == "full" for x in r["securities"] if x in vt) for s in syncs]
         nv = len(viop) + len(expired)
         kv = -(-nv // v)
-        assert per_v[:kv] == [v] * (kv - 1) + [nv - v * (kv - 1)] and not any(per_v[kv:]) and kv < k
+        # (the quant series are done first: their 121 at forty a sync in four syncs, VİOP's at fifteen in eleven)
+        assert per_v[:kv] == [v] * (kv - 1) + [nv - v * (kv - 1)] and not any(per_v[kv:]) and k < kv
         assert all(when[(d.alts[0], d.field)] > when[(d.ticker, d.field)] for d in expired)
         listed = {(d.ticker, d.field) for d in viop if d not in expired}
         assert all({(x, r["fields"][0]) for r in s if kind(r) == "tail" for x in r["securities"] if x in vt} == listed for s in syncs[kv:])
         assert not [x for r in reqs if kind(r) == "tail" for x in r["securities"] if x in gone]
         news = {(D(b[1]) - dt.timedelta(days=History.OVERLAP_DAYS)).strftime("%Y%m%d") for s, b in stored.items() if s.split("|")[0] not in qt | gone}
-        assert {r["options"]["startDate"] for s in syncs[k:] for r in s if set(r["securities"]) - qt} == news == {"20261030", "20261031"}
+        # (once both first fills are done - VİOP's is the longer now - the history's own series ask only their new days)
+        assert {r["options"]["startDate"] for s in syncs[max(k, kv):] for r in s if set(r["securities"]) - qt} == news == {"20261030", "20261031"}
         with_data = {s.split("|")[0] for s in stored} & qt
         assert all({x for r in s if kind(r) == "tail" for x in r["securities"] if x in qt} == with_data for s in syncs[k:])
         records = h.fetch_records()
@@ -1233,7 +1235,7 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         print("VİOP: %d hits, %d data points the first day (the full ranges: %d hits, %d points; the contracts' in %d syncs), then %d hits, %d points a sync"
               % (vday + vfull + (kv,) + cost(syncs[-1], vkeys)))
         # the next day: the series without any history once more (an expired contract a week later), every series with data
-        # its new days every sync - and the history's own series their older year, five a sync
+        # its new days every sync - and the history's own series their older year, forty a sync
         clock.today = lambda: today + 1
         svc.bump()
         day1 = D(TODAY) + dt.timedelta(days=1)
@@ -1257,7 +1259,7 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         print("next day: %d hits in %d syncs (the older year of %d series in them), then %d a sync - VİOP's %d hits, %d points a sync"
               % ((hits1, len(nxt), ng, sum(len(r["securities"]) for r in nxt[-1])) + cost(nxt[-1], vkeys)))
         # the window grows past two years (Ayarlar → Geriye bakış) and the answers do not come in time: each series' older
-        # part is asked once that day (five a sync) and does not count as had; the day after once more, then never again
+        # part is asked once that day (forty a sync) and does not count as had; the day after once more, then never again
         silent = []
 
         class Silent(object):

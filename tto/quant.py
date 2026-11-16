@@ -88,7 +88,7 @@ LABELS = {
     "cycle_t": "PPK sinyali için |t| en az", "dv01_usd": "Paket DV01'i (USD / bp, ana bacak; masa: OIS_MAIN!F2)", "rv_items": "PCA-nötr spread ve fly'lar",
     "desk_alarm": "Masa alarmına düşen en az güç",
     "carry_margin": "Carry aleyhine işlemde tampon (ufuk σ'sı)", "fx_verdict": "Parite kararı için en az beklenen getiri / vol",
-    "fx_pairs": "FX pariteleri (Bloomberg geçmişi: ilk doldurma turda 5 seri)",
+    "fx_pairs": "FX pariteleri (Bloomberg geçmişi: ilk doldurma turda 40 seri)",
     "bt_mute": "Geri testi zayıf aileyi sustur", "bt_min_hit": "Geri test: en az isabet", "bt_min_sharpe": "Geri test: en az Sharpe",
     "bt_min_trades": "Geri test: karar için en az işlem",
 }
