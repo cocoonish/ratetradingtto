@@ -1456,6 +1456,48 @@ async function shot(page, name) {
     check('"Bloomberg\'e dön" empties the two cells: the source is Bloomberg again', (await cellText(page, 'VIOP!AA9')).trim() === ''
       && (await cellText(page, 'VIOP!AA10')).trim() === '', [await cellText(page, 'VIOP!AA9'), await cellText(page, 'VIOP!AA10')]);
 
+    // ---- VİOP Target: the curve of an FRA+bp row's FRA - the bootstrapped curve or a PPK scenario of the OIS page, by name
+    console.log('VİOP target: the FRA\'s curve');
+    const targetRow = ['VIOP!L331', 'VIOP!M331', 'VIOP!N331', 'VIOP!O331', 'VIOP!P331', 'VIOP!Z331', 'OIS_MAIN!V10'];
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'VIOP!L331', value: 'Spot' },
+      { ref: 'VIOP!M331', value: '31.12.2026' }, { ref: 'VIOP!N331', value: 'SHORT' }, { ref: 'VIOP!O331', value: 'FRA+bp' },
+      { ref: 'VIOP!P331', value: '-150' }, { ref: 'OIS_MAIN!V10', value: '100' }] });           // S2: +100 bp at the first meeting
+    await open(page, 'viop');
+    await tab(page, 'main');
+    await waitCell(page, 'VIOP!Z331', 't.trim() === "Bootstrap (piyasa)"');
+    const titleOf = (ref) => page.evaluate((r) => { const td = window.tto.findCell(r); return td ? td.title : null; }, ref);
+    const targetHead = () => page.$$eval('.panel[data-panel="B33"] table.grid tr', (trs) => {
+      const head = trs.find((tr) => /Hedef tipi/.test(tr.textContent || ''));
+      return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
+    });
+    const fra0 = (await cellText(page, 'VIOP!W331')).trim(), rate0 = (await cellText(page, 'VIOP!Q331')).trim();
+    const head0 = await targetHead(), tip0 = await titleOf('VIOP!W331');
+    check('VİOP Target: "FRA eğrisi" right after "Hedef tipi", Bootstrap (piyasa) by default, and OIS FRA says it is that curve',
+      head0.slice(head0.indexOf('Hedef tipi'), head0.indexOf('Hedef tipi') + 3).join(' | ') === 'Hedef tipi | FRA eğrisi | Hedef değer'
+      && head0.includes('OIS FRA · Bootstrap (piyasa)') && tip0 === 'OIS FRA, Bootstrap (piyasa) eğrisinden', { head0, tip0, fra0 });
+    await pick('VIOP!Z331', 'S2 · Hawkish');
+    await waitCell(page, 'VIOP!W331', 't.trim() !== ' + JSON.stringify(fra0));
+    const s2 = (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent('EK_VFRA!R10'))).json.cell.v;
+    const picked = { fra: trNumber(await cellText(page, 'VIOP!W331')), rate: trNumber(await cellText(page, 'VIOP!Q331')),
+      head: (await cellText(page, 'VIOP!W330')).trim(), fraTip: await titleOf('VIOP!W331'), rateTip: await titleOf('VIOP!Q331'), s2 };
+    check('... S2 picked: OIS FRA and Hedef faiz are S2\'s (Hedef faiz = FRA − 150 bp) and say "S2 · Hawkish"',
+      Math.abs(picked.fra - s2 * 100) < 0.006 && Math.abs(picked.rate - (s2 * 100 - 1.5)) < 0.006 && Math.abs(picked.fra - trNumber(fra0)) > 0.05
+      && picked.head === 'OIS FRA · S2 · Hawkish' && picked.fraTip.startsWith('OIS FRA, S2 · Hawkish eğrisinden (Bootstrap (piyasa): ' + fra0)
+      && picked.rateTip === 'Hedef faiz = OIS FRA (S2 · Hawkish) − 150 bp', picked);
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    await tab(page, 'main');
+    await waitCell(page, 'VIOP!Z331', 't.trim() === "S2 · Hawkish"');
+    check('... the choice survives a reload', trNumber(await cellText(page, 'VIOP!W331')) === picked.fra
+      && (await titleOf('VIOP!W331')) === picked.fraTip, [await cellText(page, 'VIOP!W331'), await titleOf('VIOP!W331')]);
+    await pick('VIOP!Z331', 'Bootstrap (piyasa)');
+    await waitCell(page, 'VIOP!W331', 't.trim() === ' + JSON.stringify(fra0));
+    check('... back to Bootstrap (piyasa): the old OIS FRA and Hedef faiz', (await cellText(page, 'VIOP!Q331')).trim() === rate0
+      && (await cellText(page, 'VIOP!W330')).trim() === 'OIS FRA · Bootstrap (piyasa)' && await titleOf('VIOP!W331') === tip0,
+      [await cellText(page, 'VIOP!Q331'), rate0]);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: targetRow });
+    await waitCell(page, 'VIOP!Z331', 't.trim() === ""');
+
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
       const num = (ref) => { const td = window.tto.findCell(ref); return td ? Number(td.textContent.replace('%', '').replace(/\./g, '').replace(',', '.')) : NaN; };
