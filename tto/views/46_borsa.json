@@ -33,17 +33,19 @@
   {
    "id": "t0",
    "type": "table",
-   "title": "BIST swap · T+0 valör (BFX0) — kota, ima TRY faizi ve O/N karşılığı",
+   "title": "BIST swap · T+0 valör (BFX0) — kota, ima TRY faizi, O/N karşılığı ve OIS / offshore mid spread'i",
    "range": "D8:P54",
    "keep_title": true,
-   "note": "BID % / ASK %: swap puanından ima edilen TRY basit faizi (ACT/360, USD OIS ile). O/N = 360·((1 + r·gün/360)^(1/gün) − 1). SP / gün = swap puanı ÷ vade günü. Yalnızca arkasında emir olan kota gösterilir: miktarı (size) sıfırdan büyük olan taraf. Bloomberg'in kotasız vadeler için döndürdüğü eski fiyatlar (miktar 0) listelenmez; tek taraflı kotada diğer taraf boş kalır."
+   "append": "borsa_spread",
+   "note": "BID % / ASK %: swap puanından ima edilen TRY basit faizi (ACT/360, USD OIS ile). O/N = 360·((1 + r·gün/360)^(1/gün) − 1). SP / gün = swap puanı ÷ vade günü. OIS mid zero % / Offshore mid zero %: aynı tarihler arasında – satırın başlangıcından (T+0'da bugün, T+1'de ertesi iş günü) Valör'e – eğrinin iskonto faktörlerinden zero faiz, basit ACT/360. OIS = bootstrap TLREF OIS mid eğrisi (OIS par kotalarının MID'i; Masa'nın 'Tarih arası faiz' Bootstrap satırı, düğümlerde ORANLAR'ın OIS zero'su; ilk düğümü 1A), offshore = offshore TRY mid eğrisi (9A'ya kadar FX swap ima faizlerinin bid–ask ortası, 1Y'den XCCY ortalarının bootstrap'ı). Eğrinin spot'undan önceki gün(ler) kendi O/N'uyla basit taşınır (ORANLAR'ın ON satırı): OIS'te TLREF, offshore'da offshore O/N mid. Spread'ler swap'ın kendi tarafıyla: BID / ASK − OIS mid ve BID / ASK − Off mid (bp; + ise swap mid'in üstünde). Yalnızca arkasında emir olan kota gösterilir: miktarı (size) sıfırdan büyük olan taraf. Bloomberg'in kotasız vadeler için döndürdüğü eski fiyatlar (miktar 0) listelenmez; tek taraflı kotada diğer taraf – ve onun spread'leri – boş kalır."
   },
   {
    "id": "t1",
    "type": "table",
-   "title": "BIST swap · T+1 valör (BFX1) — kota, ima TRY faizi ve O/N karşılığı",
+   "title": "BIST swap · T+1 valör (BFX1) — kota, ima TRY faizi, O/N karşılığı ve OIS / offshore mid spread'i",
    "range": "Q8:AC54",
-   "keep_title": true
+   "keep_title": true,
+   "append": "borsa_spread"
   },
   {
    "id": "mkt",
