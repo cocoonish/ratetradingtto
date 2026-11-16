@@ -2276,6 +2276,9 @@ class Service(object):
                 if watch is not None:
                     watch._shut = ("", frozenset())
                 self.ops._days.clear()
+                desk = getattr(self, "desk", None)       # ... and the agenda's ("Her iş günü", "Ayın son iş günü")
+                if desk is not None:
+                    desk.holidays_changed()
         out = self._holidays()
         out["saved"] = len(dates)
         out["ccy"] = ccy

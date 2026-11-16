@@ -866,6 +866,35 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         data = await _body(request)
         return ok(await call(svc().desk.mark, _user(request), request.path_params["aid"], data.get("done", True)))
 
+    @handler
+    async def agenda_rules(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().desk.add_rule, _user(request), data.get("repeat"), data.get("time"), data.get("text"),
+                             data.get("deadline"), data.get("shared", True), data.get("weekdays"), data.get("start"),
+                             data.get("end")))
+
+    @handler
+    async def agenda_rule(request: Request):
+        rid = request.path_params["rid"]
+        if request.method == "DELETE":
+            return ok(await call(svc().desk.remove_rule, _user(request), rid))
+        data = await _body(request)
+        return ok(await call(svc().desk.edit_rule, _user(request), rid, data.get("repeat"), data.get("time"), data.get("text"),
+                             data.get("deadline"), data.get("weekdays"), data.get("start"), data.get("end")))
+
+    @handler
+    async def agenda_rule_action(request: Request):
+        rid, what = request.path_params["rid"], request.path_params["what"]
+        data = await _body(request)
+        desk = svc().desk
+        if what == "done":                    # "Bugün tamam" (a day of it; done false: not done after all)
+            return ok(await call(desk.rule_done, _user(request), rid, data.get("day"), data.get("done", True)))
+        if what == "snooze":                  # "Ertele 10 dk" (for oneself)
+            return ok(await call(desk.snooze, _user(request), rid, data.get("day")))
+        if what == "pause":                   # paused / going on again
+            return ok(await call(desk.pause_rule, _user(request), rid, data.get("paused", True)))
+        raise ServiceError("bilinmeyen işlem: %s" % what, 404)
+
     # ------------------------------------------------------------------ quant signals (quant.py)
     @handler
     async def quant_get(request: Request):
@@ -1027,6 +1056,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/social", social, methods=["GET", "POST"]),
         Route("/api/social/{mid:int}", social_delete, methods=["DELETE"]),
         Route("/api/agenda", agenda, methods=["GET", "POST"]),
+        Route("/api/agenda/rules", agenda_rules, methods=["POST"]),
+        Route("/api/agenda/rules/{rid:int}", agenda_rule, methods=["POST", "DELETE"]),
+        Route("/api/agenda/rules/{rid:int}/{what}", agenda_rule_action, methods=["POST"]),
         Route("/api/agenda/{aid:int}", agenda_item, methods=["POST", "DELETE"]),
         Route("/api/quant/{what}", quant_get),
         Route("/api/quant/{what}", quant_post, methods=["POST"]),

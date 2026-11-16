@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS agenda (
     id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, day TEXT NOT NULL, time TEXT, text TEXT NOT NULL,
     deadline INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL, done_by TEXT, done_at TEXT);
 CREATE INDEX IF NOT EXISTS agenda_day ON agenda (day);
+CREATE TABLE IF NOT EXISTS agenda_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, kind TEXT NOT NULL, weekdays TEXT, time TEXT NOT NULL,
+    text TEXT NOT NULL, deadline INTEGER NOT NULL DEFAULT 0, start_day TEXT, end_day TEXT, since TEXT NOT NULL,
+    paused_by TEXT, paused_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS agenda_rule_days (
+    rule INTEGER NOT NULL, day TEXT NOT NULL, done_by TEXT NOT NULL, done_at TEXT NOT NULL,
+    PRIMARY KEY (rule, day)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS agenda_rule_days_day ON agenda_rule_days (day);
+CREATE TABLE IF NOT EXISTS agenda_snoozes (
+    user TEXT NOT NULL, rule INTEGER NOT NULL, day TEXT NOT NULL, until TEXT NOT NULL,
+    PRIMARY KEY (user, rule, day)) WITHOUT ROWID;
 """
 
 
@@ -976,3 +987,69 @@ class Store(object):
 
     def delete_agenda(self, aid: int) -> None:
         self._x("DELETE FROM agenda WHERE id=?", (aid,))
+
+    # ------------------------------------------------------------------ the agenda's recurring items
+    #: what of a recurring item's rule may change after it was added (who it is for does not)
+    _RULE_FIELDS = ("kind", "weekdays", "time", "text", "deadline", "start_day", "end_day", "since", "paused_by", "paused_at")
+
+    def add_agenda_rule(self, owner: Optional[str], rule: Dict[str, Any], user: str) -> int:
+        """A recurring item of the agenda: the desk's (``owner`` None) or one user's own; ``rule``: its kind, days of the
+        week, time, text, deadline, first and last day and ``since`` (the moment its days count from)."""
+        cols = [k for k in self._RULE_FIELDS if k in rule]
+        return self._x("INSERT INTO agenda_rules (owner, %s, created_by, created_at) VALUES (?, %s, ?, ?)"
+                       % (", ".join(cols), ", ".join("?" for _ in cols)),
+                       (owner,) + tuple(rule[k] for k in cols) + (user, now_iso()))
+
+    def agenda_rules(self, user: str) -> List[Dict[str, Any]]:
+        """The desk's recurring items and the user's own, by time."""
+        return [dict(r) for r in self._q("SELECT * FROM agenda_rules WHERE owner IS NULL OR owner=? ORDER BY time, id", (user,))]
+
+    def agenda_rule(self, rid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM agenda_rules WHERE id=?", (rid,))
+        return dict(rows[0]) if rows else None
+
+    def agenda_rules_added(self, user: str) -> int:
+        """How many recurring items ``user`` added (the desk's and their own)."""
+        return int(self._q("SELECT COUNT(*) AS n FROM agenda_rules WHERE created_by=?", (user,))[0]["n"])
+
+    def update_agenda_rule(self, rid: int, fields: Dict[str, Any], user: str) -> None:
+        """A recurring item changed (``fields`` of its rule; paused: ``paused_by`` / ``paused_at``), by ``user`` now."""
+        bad = [k for k in fields if k not in self._RULE_FIELDS]
+        if bad:
+            raise ValueError("not a field of a recurring item: %s" % ", ".join(bad))
+        self._x("UPDATE agenda_rules SET %s, updated_by=?, updated_at=? WHERE id=?" % ", ".join("%s=?" % k for k in fields),
+                tuple(fields.values()) + (user, now_iso(), rid))
+
+    def delete_agenda_rule(self, rid: int) -> None:
+        """A recurring item goes with the days it was done and its snoozes - all of it or nothing."""
+        with self.transaction() as db:
+            db.execute("DELETE FROM agenda_snoozes WHERE rule=?", (rid,))
+            db.execute("DELETE FROM agenda_rule_days WHERE rule=?", (rid,))
+            db.execute("DELETE FROM agenda_rules WHERE id=?", (rid,))
+
+    def agenda_rule_days(self, first: str, last: str) -> Dict[Tuple[int, str], Dict[str, Any]]:
+        """The recurring items' days done from ``first`` to ``last``: (rule, day) -> who, when."""
+        return {(r["rule"], r["day"]): dict(r) for r in self._q(
+            "SELECT * FROM agenda_rule_days WHERE day>=? AND day<=?", (first, last))}
+
+    def set_agenda_rule_day(self, rid: int, day: str, user: Optional[str]) -> bool:
+        """A recurring item done on a day by ``user`` - or not done after all (``None``).  False: it already was (not)
+        - two at once: the first one's stands."""
+        with self._lock:
+            if user:
+                return self._db.execute("INSERT OR IGNORE INTO agenda_rule_days (rule, day, done_by, done_at) VALUES (?,?,?,?)",
+                                        (rid, day, user, now_iso())).rowcount > 0
+            return self._db.execute("DELETE FROM agenda_rule_days WHERE rule=? AND day=?", (rid, day)).rowcount > 0
+
+    def agenda_snoozes(self, user: str, first: str) -> Dict[Tuple[int, str], str]:
+        """Until when ``user`` put off the alarms of the recurring items' days from ``first`` on: (rule, day) -> until."""
+        return {(r["rule"], r["day"]): r["until"] for r in self._q(
+            "SELECT rule, day, until FROM agenda_snoozes WHERE user=? AND day>=?", (user, first))}
+
+    def snooze_agenda_rule(self, rid: int, day: str, user: str, until: str, keep_from: str) -> None:
+        """``user`` puts off the alarm of a recurring item's day until ``until`` (for themselves); the snoozes of the
+        days before ``keep_from`` are of no use any more and go."""
+        with self.transaction() as db:
+            db.execute("DELETE FROM agenda_snoozes WHERE day<?", (keep_from,))
+            db.execute("INSERT INTO agenda_snoozes (user, rule, day, until) VALUES (?,?,?,?) "
+                       "ON CONFLICT(user, rule, day) DO UPDATE SET until=excluded.until", (user, rid, day, until))
