@@ -44,6 +44,7 @@ from . import quantfam as qf
 from . import quantintraday as qi
 from . import quantopt as qopt
 from . import quantlead as ql
+from . import quantml as qml                      # Makine öğrenmesi: the family on the universe (quantuniv) and its page
 from . import quantuniv as qu
 from . import quantviop as qv
 from . import quantpath as qp
@@ -115,6 +116,7 @@ PAGES = (("quant", "Sinyaller"), ("quant-corr", "Korelasyon"), ("quant-pca", "PC
 PAGES += tuple(p for _x in EXTRAS for p in _x.PAGES)
 PAGES += (("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))   # quantpath.py, quantlead.py
 PAGES += qv.PAGES                                                                                          # quantviop.py
+PAGES += qml.PAGES                                                                                         # quantml.py
 #: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
 #: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
 MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"))),
@@ -123,6 +125,8 @@ MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday"
                                 ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
         ("quant.fx", "FX", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))),
         ("quant-viop", "VİOP", (("quant-viop", "VİOP"),)))
+# Makine öğrenmesi (quantml.py): a tab of Sinyaller
+MENU = tuple((mid, name, tabs + ((qml.TAB,) if mid == "quant.sinyal" else ())) for mid, name, tabs in MENU)
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -1292,6 +1296,8 @@ class Quant(object):
             return ql.view(self, what, base, v, fit)
         if what in qv.VIEWS:                                # VİOP (quantviop.py)
             return qv.view(self, what, base, v, fit)
+        if what in qml.VIEWS:                               # Makine öğrenmesi (quantml.py)
+            return qml.view(self, what, base, v, fit)
         if what == "signals":
             # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones; ``group`` one group
             fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""
