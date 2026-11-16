@@ -34,14 +34,15 @@ function payerPlus(leg) {
   return typeof leg.dv01 === 'number' ? (leg.dir === 'S' ? -leg.dv01 : leg.dv01) : null;
 }
 
-/** "10m", "2,5 mio", "500k", "1.000.000" -> number (null when not understood). */
+/** "10m", "2,5 mio", "500k", "2mr", "1.000.000" -> number (null when not understood) - as the server reads it
+ *  (tto/inputs.py parse_amount). */
 export function parseAmount(text) {
-  const m = /^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mio|milyon|b|bn|milyar)?\s*$/i.exec(text || '');
+  const m = /^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mln|mio|milyon|b|bn|mr|mlr|milyar)?\s*$/i.exec(text || '');
   if (!m) return null;
   const x = parseNumber(m[1]);
   if (x === null) return null;
   const u = (m[2] || '').toLowerCase();
-  const mult = !u ? 1 : (u === 'k' || u === 'bin') ? 1e3 : (u === 'b' || u === 'bn' || u === 'milyar') ? 1e9 : 1e6;
+  const mult = !u ? 1 : (u === 'k' || u === 'bin') ? 1e3 : (['b', 'bn', 'mr', 'mlr', 'milyar'].includes(u)) ? 1e9 : 1e6;
   return x * mult;
 }
 
@@ -392,6 +393,10 @@ export class BlotterPage {
     f.amount = input('örn. 10m ya da 10.000.000', 'num');
     f.amountEcho = h('div', { class: 'muted echo' });
     f.date = input('gg.aa.yyyy');
+    f.date.id = 'fwd-date';
+    f.date.title = 'Valör: tarih (15.12.2026) ya da kısayol - 1A / 3M ay, 1Y yıl, 2H / 2W hafta, ON, TN, SN, ay sonu, IMM, +5 iş günü '
+      + '(paritenin spot valöründen, iki para biriminin tatilleriyle)';
+    f.dateEcho = h('div', { class: 'muted echo', id: 'fwd-date-echo' });
     const picker = h('input', { type: 'date', class: 'datepick', tabindex: '-1', 'aria-label': 'Takvim' });
     picker.addEventListener('change', () => {
       if (picker.value) { f.date.value = isoToTr(picker.value); this.quoteFwd(); }
@@ -421,7 +426,7 @@ export class BlotterPage {
     pane.appendChild(h('div', { class: 'row' }, field('Parite', f.pairSeg), f.codeField, f.spotField));
     pane.appendChild(h('div', { class: 'row' }, field('Yön', f.dirSeg)));
     pane.appendChild(h('div', { class: 'row' }, f.amountField,
-      field('Valör', h('div', { class: 'daterow' }, f.date, cal, picker), '190px')));
+      field('Valör', h('div', null, h('div', { class: 'daterow' }, f.date, cal, picker), f.dateEcho), '190px')));
     pane.appendChild(h('div', { class: 'row' }, field('Fiyatlama', f.basisSeg), f.manualField));
     pane.appendChild(f.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Karşı taraf', f.cpt, '150px'), field('Not', f.note, '240px')));
@@ -473,6 +478,7 @@ export class BlotterPage {
     if (!f.quote || this.dead) return;
     const pl = this.fwdPayload();
     f.ticket = (f.ticket || 0) + 1;                 // whatever is still on its way belongs to what was typed before
+    f.dateEcho.textContent = '';                    // (what a shortcut became: said again by the answer)
     if (!pl.pair) { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, 'Dövizi ya da pariteyi yazın (örn. GBP, CHFTRY, EURUSD).')); return; }
     if (!pl.value_date) { clear(f.quote); f.quote.appendChild(h('div', { class: 'muted' }, 'Valör tarihini yazın; forward ve TL tutarı otomatik hesaplanır.')); return; }
     if (MANUAL[pl.basis] && !pl.manual) {
@@ -484,6 +490,8 @@ export class BlotterPage {
     try {
       const q = await api.post('/api/blotter/quote/forward', pl);
       if (ticket !== f.ticket || this.dead) return;
+      // a value date typed as a shortcut ("3A", "ay sonu", "IMM", "+5"): the date it is, under the box
+      f.dateEcho.textContent = q.value_date_typed ? q.value_date_typed + ' → ' + serialDate(q.value_date) : '';
       clear(f.quote);
       const base = q.base, vsTry = q.quote === 'TRY';
       const dash = (v, fn) => (typeof v === 'number' ? fn(v) : '—');

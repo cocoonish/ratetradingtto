@@ -28,6 +28,7 @@ from . import borsaspread as bsp
 from . import brokerchat as bc
 from . import extras as ex
 from . import layout as lay
+from . import shortcuts
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
@@ -163,6 +164,13 @@ def _flag(v: Any) -> bool:
     if isinstance(v, str):
         return v.strip().lower() in ("1", "true", "evet", "yes", "on")
     return bool(v)
+
+
+def _names_an_option(text: str, options: Optional[Sequence[Any]], aliases: Optional[Dict[str, str]]) -> bool:
+    """Whether a typed text is one of a list's items or a word for one (VİOP's "Spot"): that it is, never a shortcut."""
+    from .inputs import _fold
+    t = _fold(text.strip())
+    return any(_fold(str(o)) == t for o in options or ()) or any(_fold(str(w)) == t for w in aliases or {})
 
 
 def _dummy_hash() -> str:
@@ -310,7 +318,8 @@ class Service(object):
                 try:
                     book.declare(inp["range"], v.get("sheet"), scope=inp.get("scope", "user"),
                                  group=inp.get("group"), kind=inp.get("kind", "auto"), label=inp.get("label", ""),
-                                 options=inp.get("options"), view=v["id"], aliases=inp.get("aliases"))
+                                 options=inp.get("options"), view=v["id"], aliases=inp.get("aliases"),
+                                 tenor=inp.get("tenor"))
                 except (KeyError, ValueError):
                     continue
         tto = self.books.get("tto")
@@ -318,7 +327,8 @@ class Service(object):
             for ref in bl.input_ranges():
                 tto.declare(ref, scope="shared", group="blotter", view="blotter")
             for ref in ("Forward!D2", "Forward!B163", "Forward!L163"):
-                tto.declare(ref, scope="user", group="fwd-pricer", view="forward")
+                if tto.input_def(*tto.cell(ref)) is None:       # (declared by the page: as it says - a date's tenor)
+                    tto.declare(ref, scope="user", group="fwd-pricer", view="forward")
         asw = self.books.get("asw")
         if asw is not None and ex.FXC_SHEET in asw.model.sheet_index and "ASW" in asw.model.sheet_index:
             # the OIS quotes the ASW curve is built from are swapped for the FX swap curve in a calculation of its
@@ -2391,6 +2401,7 @@ class Service(object):
         skipped = 0
         user_forms: Dict[Tuple[int, int], Any] = {}      # cells typed as a formula: (sheet, rc) -> its entry
         shared_forms: Dict[Tuple[int, int], Any] = {}
+        typed_dates: Dict[str, Dict[str, Any]] = {}      # dates typed as a shortcut: ref -> {typed, date, text}
         # a drop-down list Excel reads from a range (VİOP target's contracts, L97:X97) holds what those cells hold now
         calc = self._calc(user, book)
         for it in items:
@@ -2401,6 +2412,7 @@ class Service(object):
                 errors.append("%s: hücre bulunamadı" % ref)
                 continue
             raw = it.get("value")
+            typed_dates.pop(str(ref), None)               # (typed again in the same write: the last one counts)
             if isinstance(raw, str) and raw.strip().startswith("="):
                 # a formula: checked (Bloomberg, a cycle, a cell that takes no formula ...) and evaluated over its scope
                 d = book.inputs.get((si, rc))
@@ -2448,9 +2460,25 @@ class Service(object):
                 d = book.inputs[(si, rc)]
             sheet = book.model.sheets[si]
             fmt = book.model.numfmts[sheet.styles.get(rc, 0)] if sheet.styles.get(rc, 0) < len(book.model.numfmts) else "General"
+            options = book.options_for(si, rc, calc)
+            if (isinstance(raw, str) and d.kind not in ("amount", "list") and (d.kind == "date" or numfmt.is_date_format(fmt))
+                    and shortcuts.date_shortcut(raw) is not None and not _names_an_option(raw, options, d.aliases)):
+                # a date typed as the desk says it ("1A", "ay sonu", "IMM", "+5"): the date it stands for is stored -
+                # from the cell's natural start, on its pair's calendar; what was typed goes back for the tooltip
+                pending = dict(shared_vals)
+                pending.update(user_vals)                         # (a start typed in the same block counts)
+                try:
+                    day = self._shortcut_date(user, book, si, rc, d, raw, calc, pending)
+                except (KeyError, ValueError, TypeError, OverflowError) as exc:
+                    errors.append("%s: kısayol anlaşılamadı: %r (%s)" % (ref, raw, exc))
+                    continue
+                if day is not None:
+                    text = serial_to_date(day).strftime("%d.%m.%Y")
+                    typed_dates[str(ref)] = {"typed": " ".join(raw.split()), "date": day, "text": text}
+                    raw = text                                    # (a list of days kept as text takes it as its item)
             try:
-                val = parse_input(it.get("value"), numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
-                                  d.kind, book.options_for(si, rc, calc), lang, d.aliases)
+                val = parse_input(raw, numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
+                                  d.kind, options, lang, d.aliases)
             except InputError as exc:
                 errors.append("%s: %s" % (ref, exc))
                 continue
@@ -2523,6 +2551,8 @@ class Service(object):
             self.warm()
         res: Dict[str, Any] = {"applied": len(shared_vals) + len(shared_clear) + len(user_vals) + len(user_clear) + typed_n,
                                "errors": errors}
+        if typed_dates:
+            res["shortcuts"] = typed_dates               # what was typed as a shortcut, for the cell's tooltip
         if calendar:
             res["calendar"] = calendar
             if calendar.get("note"):
@@ -3213,11 +3243,12 @@ class Service(object):
         keeps holiday lists of that is neither USDTRY nor EURTRY (EURUSD)."""
         return bool(ex.pair_calendar(code)) and code not in ("USDTRY", "EURTRY")
 
-    def _pair_spot(self, code: str) -> Optional[float]:
+    def _pair_spot(self, code: str, calc=None) -> Optional[float]:
         """The spot date (serial) a value date of the pair counts from.  USDTRY's and EURTRY's are the Forward sheet's
-        (I2, K2: from the desk's lists, or the date typed there); EURUSD's is its own - two days after today that are
-        business days of both USD and EUR, as K2 counts EURTRY's, a TRY holiday not among them; any other pair counts
-        from USDTRY's (one starting with EUR from EURTRY's), as before.  On the calculation thread."""
+        (I2, K2: from the desk's lists, or the date typed there - by the user whose ``calc`` it is; everybody's
+        without one); EURUSD's is its own - two days after today that are business days of both USD and EUR, as K2
+        counts EURTRY's, a TRY holiday not among them; any other pair counts from USDTRY's (one starting with EUR from
+        EURTRY's), as before.  On the calculation thread."""
         from .fx import SPOT_LAG, add_week_days
         book = self.books.get("tto")
         if book is None:
@@ -3227,19 +3258,19 @@ class Service(object):
             day = add_week_days(serial_to_date(book.engine.clock.today()), SPOT_LAG.get(code, 2), holidays)
             return float(date_to_serial(day))
         si, rc = book.cell("Forward!K2" if code.startswith("EUR") else "Forward!I2")
-        spot = book.engine.shared.get(si, *divmod(rc, COLS))
+        spot = (calc if calc is not None else book.engine.shared).get(si, *divmod(rc, COLS))
         if isinstance(spot, str):
             spot = parse_date(spot)
         return spot if type(spot) is float else None
 
     def _tenor_date(self, text: str, pair: str = "USDTRY") -> Optional[float]:
-        """The value date of a tenor ("2W", "3M", "1Y") from the pair's spot date (:meth:`_pair_spot`): n weeks, or n
-        months and then the next business day of the pair's calendar - the holidays of both its currencies (USDTRY: TRY
-        and USD, EURTRY: TRY and EUR, EURUSD: USD and EUR; any other pair the TRY list, as before) - as the Forward sheet
-        dates its tenors."""
-        m = re.match(r"^\s*(\d{1,3})\s*([WMYwmy])\s*$", str(text or ""))
+        """The value date of a date shortcut (tto/shortcuts.py: "2W", "3M", "1A", "ay sonu", "IMM", "+5" …) from the
+        pair's spot date (:meth:`_pair_spot`): n weeks, or n months and then the next business day of the pair's
+        calendar - the holidays of both its currencies (USDTRY: TRY and USD, EURTRY: TRY and EUR, EURUSD: USD and EUR;
+        any other pair the TRY list, as before) - as the Forward sheet dates its tenors; ON / TN from today."""
+        sc = shortcuts.date_shortcut(text)
         book = self.books.get("tto")
-        if m is None or book is None:
+        if sc is None or book is None:
             return None
         try:
             code = bl.pair_of(pair)
@@ -3248,20 +3279,78 @@ class Service(object):
         spot = self._pair_spot(code)
         if type(spot) is not float:
             return None
-        holidays = self._calendar_serials(ex.pair_calendar(code) or ("TRY",))
-        n, unit = int(m.group(1)), m.group(2).upper()
-        start = serial_to_date(spot)
-        if unit == "W":
-            day = start + _dt.timedelta(days=7 * n)
-        else:
-            months = n * (12 if unit == "Y" else 1)
-            y, mo = divmod(start.month - 1 + months, 12)
-            y, mo = start.year + y, mo + 1
-            last = (_dt.date(y + (mo == 12), mo % 12 + 1, 1) - _dt.timedelta(days=1)).day
-            day = _dt.date(y, mo, min(start.day, last))
-        while day.weekday() >= 5 or date_to_serial(day) in holidays:
-            day += _dt.timedelta(days=1)
+        holidays = {serial_to_date(s) for s in self._calendar_serials(ex.pair_calendar(code) or ("TRY",))}
+        day = shortcuts.resolve(sc, serial_to_date(spot), serial_to_date(book.engine.clock.today()), holidays)
         return float(date_to_serial(day))
+
+    #: the spot date a date typed into an input as a tenor counts from, when the page names no start of its own: the
+    #: pair's (``_pair_spot``) - for the TRY money market (no pair, or "TRY") the workbook's SPOTDATE, T+1 on the TRY list
+    TRY_SPOT = "OIS_MAIN!B2"
+
+    def _shortcut_date(self, user: Optional[str], book: Book, si: int, rc: int, d, text: Any, calc,
+                       pending: Dict[Tuple[int, int], Any]) -> Optional[float]:
+        """The date (serial) a shortcut typed into a date input stands for (tto/shortcuts.py) - ``None`` when the text
+        is no shortcut.  How it counts is the input's ``tenor`` in its page definition (tto/views/__init__.py):
+        ``pair`` (the calendar and the spot convention: USDTRY T+1 on TRY + USD, EURTRY T+2 on TRY + EUR, EURUSD T+2 on
+        USD + EUR, "TRY" - the default - T+1 on the TRY list), ``pair_col`` (the row's pair, in that column) and
+        ``from`` (the cell's natural start: a cell, a column of the row, a row of the column) - else today's spot,
+        as the user's own calculation has it (a spot date typed over is theirs).  A start typed in the same write
+        (a pasted block) counts as typed (``pending``).  On the calculation thread."""
+        sc = shortcuts.date_shortcut(text)
+        tto = self.books.get("tto")
+        if sc is None or tto is None:
+            return None
+        decl = d.tenor or {}
+        r, c = divmod(rc, COLS)
+
+        def place(spec: Any) -> Optional[Tuple[int, int]]:
+            spec = str(spec or "").strip()
+            if re.match(r"^[A-Z]{1,3}$", spec):                   # a column: the cell of this row
+                return si, r * COLS + col_to_index(spec)
+            if re.match(r"^\d+$", spec):                          # a row: the cell of this column
+                return si, int(spec) * COLS + c
+            try:
+                return book.cell(spec if "!" in spec else "%s!%s" % (book.model.sheets[si].name, spec))
+            except (KeyError, ValueError):
+                return None
+
+        def value(at: Tuple[int, int]) -> Any:
+            if at in pending:
+                return pending[at]
+            return calc.get(at[0], *divmod(at[1], COLS))
+
+        code = str(decl.get("pair") or "TRY").upper()
+        if decl.get("pair_col"):
+            at = place(decl["pair_col"])
+            typed = value(at) if at is not None else None
+            try:
+                code = bl.pair_of(typed) if isinstance(typed, str) and typed.strip() else code
+            except bl.TradeError:
+                pass
+        tcalc = self._calc(user, tto) if user else tto.engine.shared
+        if code == "TRY":
+            holidays = {serial_to_date(s) for s in self._calendar_serials(("TRY",))}
+            si2, rc2 = tto.cell(self.TRY_SPOT)
+            spot = tcalc.get(si2, *divmod(rc2, COLS))
+        else:
+            holidays = {serial_to_date(s) for s in self._calendar_serials(ex.pair_calendar(code) or ("TRY",))}
+            spot = self._pair_spot(code, tcalc)
+        today = serial_to_date(tto.engine.clock.today())
+        start = None
+        at = place(decl["from"]) if decl.get("from") else None
+        if at is not None and at != (si, rc):
+            got = value(at)
+            if isinstance(got, str):
+                got = parse_date(got)
+            if type(got) is float and 20000 < got < 80000:
+                start = serial_to_date(got)
+        if start is None:
+            if type(spot) is float and 20000 < spot < 80000:
+                start = serial_to_date(spot)
+            else:                                                 # (no spot date to read: one business day on)
+                from .fx import add_week_days
+                start = add_week_days(today, 1, holidays)
+        return float(date_to_serial(shortcuts.resolve(sc, start, today, holidays)))
 
     def quote_forward(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         return self.et.call(self._quote_forward, user, payload, lang)
@@ -3273,9 +3362,12 @@ class Service(object):
         if isinstance(vd, str):
             d = parse_date(vd)
             if d is None:
-                d = self._tenor_date(vd, str(p.get("pair") or "USDTRY"))          # "3M", "2W", "1Y": from the pair's spot
+                # "3M", "1A", "2H", "ay sonu", "IMM", "+5": from the pair's spot, on its calendar
+                d = self._tenor_date(vd, str(p.get("pair") or "USDTRY"))
+                if d is not None:
+                    p["value_date_typed"] = " ".join(vd.split())
             if d is None:
-                raise ServiceError("valör tarihi anlaşılamadı: %r (örn. 15.12.2026 ya da 3M)" % vd)
+                raise ServiceError("valör tarihi anlaşılamadı: %r (örn. 15.12.2026, 3M, 1A, ay sonu, IMM ya da +5)" % vd)
             p["value_date"] = d
         elif isinstance(vd, (int, float)):
             p["value_date"] = float(vd)
@@ -3333,6 +3425,8 @@ class Service(object):
         q["dv01"]["amount"] = size
         q["dv01"]["dir"] = direction
         q["value_date_iso"] = serial_to_date(q["value_date"]).isoformat()
+        if p.get("value_date_typed"):
+            q["value_date_typed"] = p["value_date_typed"]          # (typed as a shortcut: the form says what it became)
         return q
 
     def add_forward(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:

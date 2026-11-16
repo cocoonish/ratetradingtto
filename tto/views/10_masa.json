@@ -11,14 +11,16 @@
    "scope": "user",
    "group": "masa-0",
    "kind": "date",
-   "label": "Başlangıç — start date of the date-to-date calculators (B9, B10)"
+   "label": "Başlangıç — start date of the date-to-date calculators (B9, B10)",
+   "tenor": {"pair": "USDTRY"}
   },
   {
    "range": "E60",
    "scope": "user",
    "group": "masa-1",
    "kind": "date",
-   "label": "Bitiş — end date"
+   "label": "Bitiş — end date",
+   "tenor": {"pair": "USDTRY", "from": "C60"}
   },
   {
    "range": "I60",
@@ -32,7 +34,8 @@
    "scope": "user",
    "group": "masa-3",
    "kind": "date",
-   "label": "Valör — six value dates of the forward pricing table (B14)"
+   "label": "Valör — six value dates of the forward pricing table (B14)",
+   "tenor": {"pair": "USDTRY"}
   },
   {
    "range": "W94:W99",
@@ -130,7 +133,8 @@
    "scope": "user",
    "group": "masa-17",
    "kind": "date",
-   "label": "Valör — value date of the broken-date converter (B22)"
+   "label": "Valör — value date of the broken-date converter (B22)",
+   "tenor": {"pair": "USDTRY"}
   },
   {
    "range": "G171",

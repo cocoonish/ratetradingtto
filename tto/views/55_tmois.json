@@ -32,7 +32,10 @@
    "scope": "user",
    "group": "tmois-3",
    "kind": "date",
-   "label": "'Dönem sonu (ödeme)'"
+   "label": "'Dönem sonu (ödeme)'",
+   "tenor": {
+    "from": "A"
+   }
   },
   {
    "range": "C10:C34",

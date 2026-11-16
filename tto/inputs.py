@@ -86,12 +86,14 @@ def parse_number(text: str, lang: str = "tr", prefer_decimal: bool = False) -> O
     return x
 
 
-_AMOUNT = re.compile(r"^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mio|milyon|b|bn|milyar)?\s*$", re.IGNORECASE)
-_UNITS = {"k": 1e3, "bin": 1e3, "m": 1e6, "mn": 1e6, "mio": 1e6, "milyon": 1e6, "b": 1e9, "bn": 1e9, "milyar": 1e9}
+_AMOUNT = re.compile(r"^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mln|mio|milyon|b|bn|mr|mlr|milyar)?\s*$", re.IGNORECASE)
+_UNITS = {"k": 1e3, "bin": 1e3, "m": 1e6, "mn": 1e6, "mln": 1e6, "mio": 1e6, "milyon": 1e6,
+          "b": 1e9, "bn": 1e9, "mr": 1e9, "mlr": 1e9, "milyar": 1e9}
 
 
 def parse_amount(text: str, lang: str = "tr") -> Optional[float]:
-    """A trade size as a trader types it: ``10m``, ``2,5 mio``, ``500k``, ``1.000.000``."""
+    """A trade size as a trader types it: ``10m``, ``2,5 mio``, ``500k``, ``2mr``, ``1.000.000`` - the number in either
+    decimal convention, as :func:`parse_number` reads it in ``lang`` (``1,5mn`` and ``1.5mn`` are both 1.500.000)."""
     m = _AMOUNT.match(text or "")
     if not m:
         return None
@@ -138,8 +140,11 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
     * date cells accept dates (or serial numbers)
     * percent cells store a fraction: ``35,5`` / ``35,5%`` / ``0,355`` all give 0.355 (Excel's automatic
       percent entry: a typed number of 1 or more is a percentage, a smaller one is the fraction itself)
-    * amount cells (a nominal, a trade size) take the desk's shorthand as well: ``100m``, ``2,5 mn``, ``500k`` -
-      and nothing else, so that a size that was not understood cannot quietly empty the totals
+    * amount cells (a nominal, a trade size: declared ``"kind": "amount"`` in the page definition - a number format
+      cannot tell them, swap points are ``#,##0`` too) take the desk's shorthand as well: ``100m``, ``2,5 mn``, ``500k``,
+      ``2mr`` - and nothing else, so that a size that was not understood cannot quietly empty the totals
+    * a date typed as a tenor ("1A", "ay sonu", "IMM", "+5") is the service's to resolve before this (it needs the
+      cell's start and calendar: tto/shortcuts.py); here it is not a date
     * list cells (``kind="list"``) take one of their ``options`` (or a word ``aliases`` maps to one: "Sat" is "S") and
       nothing else - a cell whose formulas test for one item would otherwise take any other text for the other
     * anything that is not a number stays text
