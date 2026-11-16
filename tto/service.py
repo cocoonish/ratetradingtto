@@ -154,6 +154,7 @@ def _then(fut: "concurrent.futures.Future", fn: Callable[[Any], Any]) -> "concur
 
 
 _DUMMY: List[str] = []
+_NOT_SET = object()
 
 
 def _flag(v: Any) -> bool:
@@ -230,6 +231,7 @@ class Service(object):
         self._stop = threading.Event()
         self._market_thread: Optional[threading.Thread] = None
         self.started_at = time.time()
+        self.formulas = None                             # the inputs typed as formulas (inputformula.py), below
         self.et.call(self._setup, provider)
         from .history import History
         self.history = History(self)
@@ -248,6 +250,11 @@ class Service(object):
         # each user's own calc sheets on the launchpads (calc.py): formulas over the workbooks' cells, never Bloomberg
         from .calc import CalcSheets
         self.calcsheets = CalcSheets(self)
+        # inputs typed as formulas (=C60+7): evaluated by the calc sheets' machinery, again whenever what they read moved
+        from .inputformula import InputFormulas
+        formulas = InputFormulas(self)
+        self.et.call(formulas.start)
+        self.formulas = formulas
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -750,6 +757,9 @@ class Service(object):
         kick = getattr(self, "_watch_kick", None)
         if kick is not None:
             kick.set()
+        fx = self.formulas
+        if fx is not None and fx.active:
+            fx.schedule()                         # (the inputs typed as formulas follow what they read: ahead of the pages)
         with self._gen_lock:
             self.gen += 1
             if not market:
@@ -1220,6 +1230,9 @@ class Service(object):
             self._overlays[key] = ov
             if ov:
                 book.engine.set_user_inputs(user, ov)
+            fx = self.formulas
+            if fx is not None and fx.has(user):
+                fx.pending.add(user)              # (their inputs' formulas: worked out again before anything is read)
         return ov
 
     def _retired_cells(self, book: Book) -> set:
@@ -1239,6 +1252,10 @@ class Service(object):
         if not user:
             return book.engine.shared
         ov = self._overlay(user, book)
+        fx = self.formulas
+        if fx is not None and fx.pending and user in fx.pending:
+            fx.catch_up(user)                    # (back: their inputs' formulas evaluated over what is there now)
+            ov = self._overlays.get((user, book.id), ov)
         if not ov:
             return book.engine.shared
         if user not in book.engine.users:
@@ -1513,6 +1530,15 @@ class Service(object):
         with self._render_lock:
             for key in [k for k in self._renders if k[0] == user]:
                 self._renders.pop(key, None)
+
+    def _formulas_changed(self, scope: str) -> None:
+        """An input got or lost a formula (or one was stopped) in a scope - a user's own, or ``""`` the desk's: the pages
+        kept are made again (a cell's ƒ, its formula, whatever its value did)."""
+        if scope:
+            self._forget_renders(scope)
+        else:
+            with self._render_lock:
+                self._renders.clear()
 
     @staticmethod
     def _still(meta, calc: Calc) -> bool:
@@ -1805,6 +1831,7 @@ class Service(object):
                                          + (" Tamamı: Sayfa gezgini → %s!%s" % (sheet, p["range"]) if explorer else ""))
                 # columns hidden in Excel stay out of the way until the helper tables are asked for
                 entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
+                self._mark_formulas(entry["data"], book, sheet, user if overlay else None)
                 if p.get("lift", True):
                     own = _lift_title(entry["data"])
                     if own and not p.get("keep_title"):
@@ -1849,6 +1876,30 @@ class Service(object):
         except Exception as exc:  # noqa: BLE001 - one broken panel must not take the page down
             entry["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
         return entry
+
+    def _mark_formulas(self, data: Optional[Dict[str, Any]], book: Book, sheet: str, user: Optional[str]) -> None:
+        """The inputs of a table typed as a formula, as ``user`` sees them (theirs and the desk's): ``ff`` the formula's
+        text (the cell shows its value with a small ƒ; F2 edits the text), ``fe`` why it stopped or what its error means."""
+        fx = self.formulas
+        if fx is None or not fx.active or not data or not data.get("r") or not data.get("c"):
+            return
+        si = book.model.sheet_index.get(sheet)
+        marks = fx.marks(user, book.id, si) if si is not None else None
+        if not marks:
+            return
+        rows = {r: i for i, r in enumerate(data["r"])}
+        cols = {c: j for j, c in enumerate(data["c"])}
+        for (r, c), e in marks.items():
+            i, j = rows.get(r), cols.get(index_to_col(c))
+            if i is None or j is None:
+                continue
+            cell = data["rows"][i][j]
+            if not cell or cell.get("sk") or "i" not in cell:
+                continue
+            cell["ff"] = e.text
+            why = e.error or (e.note if cell.get("k") == "e" else None)
+            if why:
+                cell["fe"] = why
 
     def _leftover_cells(self, v: Dict[str, Any]) -> List[Tuple[str, List[Tuple[int, int]]]]:
         """Cells of the page's sheets that hold a formula or a value but lie in none of the page's tables:
@@ -2077,8 +2128,13 @@ class Service(object):
         d = book.inputs.get((si, rc))
         sheet = book.model.sheets[si]
         base = sheet.consts.get(rc)
-        return {"ref": book.ref(si, rc), "formula": formula_text(book, si, rc), "cell": cell,
-                "input": None if d is None else {"scope": d.scope, "label": d.label, "kind": d.kind},
+        inp = None if d is None else {"scope": d.scope, "label": d.label, "kind": d.kind}
+        e = self.formulas.entry(user, book.id, si, rc) if (self.formulas is not None and inp is not None) else None
+        if e is not None:
+            inp["formula"] = cell["ff"] = e.text           # (an input typed as a formula: its text, its value in "cell")
+            if e.error:
+                inp["error"] = cell["fe"] = e.error
+        return {"ref": book.ref(si, rc), "formula": formula_text(book, si, rc), "cell": cell, "input": inp,
                 "base": None if base is None or type(base) is XlError else base,
                 "excel_cached": _to_json(sheet.cached.get(rc)) if rc in sheet.cached else None}
 
@@ -2100,6 +2156,7 @@ class Service(object):
         calc = self._calc(user, book)
         data = self.renderers[book.id].table(calc, sheet, rng, loc, self._overlay(user, book) if user else None,
                                              trim=False)
+        self._mark_formulas(data, book, sheet, user)
         s = book.model.sheets[book.model.sheet_index[sheet]]
         return {"book": book.id, "sheet": sheet, "range": rng, "data": data, "gen": self.gen,
                 "dims": [s.max_row, s.max_col]}
@@ -2296,6 +2353,8 @@ class Service(object):
 
         ``lang`` is the number format the texts were typed / copied in ("tr": 1.234,56 – "en": 1,234.56).
         ``lenient`` (a block pasted from Excel): cells that are not inputs are skipped and counted, not errors.
+        A text that starts with ``=`` is a formula (inputformula.py): its result is the value, it is evaluated again
+        whenever what it reads changes; refused - with the reason among the errors - as that module says.
         """
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
@@ -2304,6 +2363,7 @@ class Service(object):
         return res
 
     def _set_inputs(self, user, book_id, items, allow_adhoc, lang="tr", lenient=False) -> Dict[str, Any]:
+        from .inputformula import FormulaError
         book = self._book(book_id)
         if len(items) > 20000:
             raise ServiceError("çok fazla hücre")
@@ -2314,6 +2374,8 @@ class Service(object):
         meetings: Dict[int, Any] = {}
         errors: List[str] = []
         skipped = 0
+        user_forms: Dict[Tuple[int, int], Any] = {}      # cells typed as a formula: (sheet, rc) -> its entry
+        shared_forms: Dict[Tuple[int, int], Any] = {}
         # a drop-down list Excel reads from a range (VİOP target's contracts, L97:X97) holds what those cells hold now
         calc = self._calc(user, book)
         for it in items:
@@ -2323,6 +2385,33 @@ class Service(object):
             except (KeyError, ValueError, AttributeError):
                 errors.append("%s: hücre bulunamadı" % ref)
                 continue
+            raw = it.get("value")
+            if isinstance(raw, str) and raw.strip().startswith("="):
+                # a formula: checked (Bloomberg, a cycle, a cell that takes no formula ...) and evaluated over its scope
+                d = book.inputs.get((si, rc))
+                if d is None and lenient and not allow_adhoc:
+                    skipped += 1
+                    continue
+                try:
+                    val, ent = self.formulas.accept(user, book, si, rc, d, raw, calc,
+                                                    list(user_forms.values()) + list(shared_forms.values()),
+                                                    self._meeting_date_cell(book, si, rc))
+                except FormulaError as exc:
+                    errors.append("%s: %s" % (ref, exc))
+                    continue
+                if ent.scope:
+                    user_vals[(si, rc)] = val
+                    user_forms[(si, rc)] = ent
+                    if (si, rc) in user_clear:
+                        user_clear.remove((si, rc))
+                else:
+                    shared_vals[(si, rc)] = val
+                    shared_forms[(si, rc)] = ent
+                    if (si, rc) in shared_clear:
+                        shared_clear.remove((si, rc))
+                continue
+            user_forms.pop((si, rc), None)                # (a value typed after a formula in one write: the value)
+            shared_forms.pop((si, rc), None)
             if self._meeting_date_cell(book, si, rc):
                 try:
                     self.history.parse_dates([it.get("value")])
@@ -2372,9 +2461,12 @@ class Service(object):
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in shared_clear])
         if shared_vals:
             book.engine.set_inputs(shared_vals)
-            self.store.set_shared_inputs(book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in shared_vals.items()}, user)
+            self.store.set_shared_inputs(book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in shared_vals.items()}, user,
+                                         {book.ref(si, rc): e.text for (si, rc), e in shared_forms.items()})
             if any(book.inputs[k].group == "ret" for k in shared_vals):
                 self.store.add_ret_history(user, self._ret_rows(book))
+        if shared_vals or shared_clear:
+            self.formulas.wrote(book, "", shared_vals, shared_clear, shared_forms)
         if user_vals or user_clear:
             ov = dict(self._overlay(user, book))
             ov.update(user_vals)
@@ -2383,9 +2475,11 @@ class Service(object):
             self._overlays[(user, book.id)] = ov
             book.engine.set_user_inputs(user, ov)
             if user_vals:
-                self.store.set_user_inputs(user, book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in user_vals.items()})
+                self.store.set_user_inputs(user, book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in user_vals.items()},
+                                           {book.ref(si, rc): e.text for (si, rc), e in user_forms.items()})
             if user_clear:
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in user_clear])
+            self.formulas.wrote(book, user, user_vals, user_clear, user_forms)
             self._note_private(user)
         if calendar:
             self._note_private()                        # (what was typed per meeting moved, for everybody)
@@ -2468,6 +2562,7 @@ class Service(object):
             keep = [c for c in cells if c in book.inputs and book.inputs[c].scope == "shared"]
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
+            self.formulas.cleared("", book, keep)        # (a formula there goes with its value)
             n = len(keep)
         else:
             ov = dict(self._overlay(user, book))
@@ -2482,25 +2577,35 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id, [book.ref(si, rc) for si, rc in targets])
             else:
                 self.store.clear_user_inputs(user, book.id)
+            self.formulas.cleared(user, book, targets if refs else None)
             self._note_private(user)
         return {"reset": n}
 
     def my_inputs(self, user: str) -> Dict[str, Any]:
+        """The user's personal inputs: ``{"inputs": [{"book", "ref", "value", "label", "formula"?}]}`` - an input typed as
+        a formula with its text and the value it has now."""
         user = self.require_user(user)
         out = []
+        formulas = self.store.user_formulas(user)
         for (bid, ref), val in sorted(self.store.user_inputs(user).items()):
             book = self.books.get(bid)
             label = ""
+            item: Dict[str, Any] = {"book": bid, "ref": ref, "value": val, "label": label}
             if book is not None:
                 try:
                     cell = book.cell(ref)
                     if cell in self._retired_cells(book):
                         continue                       # an input that moved: dropped when the values are loaded
                     d = book.inputs.get(cell)
-                    label = d.label if d else ""
+                    item["label"] = d.label if d else ""
+                    if (bid, ref) in formulas:
+                        item["formula"] = formulas[(bid, ref)]
+                        now = self._overlays.get((user, bid), {}).get(cell, _NOT_SET)
+                        if now is not _NOT_SET:
+                            item["value"] = _to_json(now)
                 except (KeyError, ValueError):
                     pass
-            out.append({"book": bid, "ref": ref, "value": val, "label": label})
+            out.append(item)
         return {"inputs": out}
 
     # ================================================================== scenarios
@@ -2510,16 +2615,17 @@ class Service(object):
     def save_scenario(self, user: str, name: str) -> Dict[str, Any]:
         user = self.require_user(user)
         try:
-            return self.store.save_scenario(user, name, self.store.user_inputs(user))
+            return self.store.save_scenario(user, name, self.store.user_inputs(user), self.store.user_formulas(user))
         except ValueError as exc:
             raise ServiceError(str(exc))
 
     def load_scenario(self, user: str, name: str) -> Dict[str, Any]:
         user = self.require_user(user)
-        values = self.store.load_scenario(user, name)
-        if values is None:
+        got = self.store.scenario(user, name)
+        if got is None:
             raise ServiceError("senaryo bulunamadı: %s" % name, 404)
-        self.store.replace_user_inputs(user, values)
+        values, formulas = got
+        self.store.replace_user_inputs(user, values, formulas)      # (its formulas evaluated again over what is there now)
         self.et.call_at(EngineThread.WRITE, self._reload_user, user)
         self.bump()
         return {"loaded": name, "cells": len(values), "gen": self.gen}

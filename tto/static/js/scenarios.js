@@ -50,7 +50,10 @@ export async function openScenarios(ctx) {
       const table = h('table', { class: 'plain' });
       const body = h('tbody');
       for (const x of inp.inputs.slice(0, 400)) {
-        body.appendChild(h('tr', null, h('td', { class: 'l' }, x.ref), h('td', null, x.value === null ? '(boş)' : String(x.value)),
+        // (an input typed as a formula: the formula, then the value it gives now)
+        const value = x.value === null ? '(boş)' : String(x.value);
+        body.appendChild(h('tr', null, h('td', { class: 'l' }, x.ref),
+          h('td', x.formula ? { title: 'Formül: ' + x.formula } : null, x.formula ? h('span', { class: 'mono' }, x.formula + '  →  ') : null, value),
           h('td', { class: 'l muted' }, x.label || '')));
       }
       table.appendChild(body);

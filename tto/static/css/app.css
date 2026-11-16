@@ -281,6 +281,15 @@ table.grid td.fz.in.auto { --fzt: transparent; }
 /* the user's own value where the workbook has a formula ("elle değer"): deleting it brings the formula back */
 table.grid td.in.hand { background: var(--hand-bg); box-shadow: inset 0 -2px 0 var(--hand-line); }
 table.grid td.in.hand.mod::after { background: var(--hand-line); }
+/* an input typed as a formula (=C60+7): a small ƒ in the top left corner - hover or F2 shows the formula */
+table.grid td.in.ff:not(.nt)::before { content: "ƒ"; position: absolute; top: 1px; left: 2px; font: italic 600 9.5px/1 var(--font);
+  color: var(--input-line); opacity: .85; pointer-events: none; }
+table.grid td.in.sh.ff:not(.nt)::before { color: var(--shared-line); }
+table.grid td.in.hand.ff:not(.nt)::before { color: var(--hand-line); }
+table.grid td.in.ff.ffe:not(.nt)::before { color: var(--neg); opacity: 1; }      /* (stopped, or its value an error) */
+.sw-ff { font: italic 650 11px/12px var(--font); color: var(--input-line); text-align: center; }
+/* while a formula is typed: the cells of the reference just put in */
+table.grid td.pt { outline: 2px dashed var(--accent); outline-offset: -3px; }
 .hand table.grid td { cursor: text; }
 /* a cell comment of the workbook: corner mark, the text is the tooltip */
 table.grid td.nt::before { content: ""; position: absolute; top: 0; right: 0; border-style: solid; border-width: 0 6px 6px 0;
@@ -342,6 +351,15 @@ table.grid td.ov { color: var(--ink-2); }
 table.grid td.editing { padding: 0; overflow: visible; background: var(--surface) !important; box-shadow: none; }
 table.grid td.editing input { width: 100%; min-width: 86px; height: 23px; border: 2px solid var(--accent); background: var(--surface); color: var(--ink);
   padding: 0 6px; outline: none; font: inherit; font-variant-numeric: tabular-nums; border-radius: 0; text-align: inherit; }
+/* a formula being typed: room for its references, over the cells beside it */
+table.grid td.editing input.fxe { min-width: 260px; position: relative; z-index: 5; text-align: left; font-family: var(--mono); font-size: 12px; }
+/* ... and while its cell is in another tab: in a bar of its own at the top of the window, as Excel's formula bar */
+.grid-fx { position: fixed; left: 50%; top: 6px; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px; box-shadow: var(--shadow); }
+.grid-fx .lbl { font-family: var(--mono); color: var(--ink); background: var(--surface-3); padding: 1px 7px; border-radius: 5px; }
+.grid-fx .eq { font: italic 650 12px var(--font); color: var(--input-line); }
+.grid-fx input { width: min(560px, 70vw); height: 26px; border: 2px solid var(--accent); background: var(--surface); color: var(--ink);
+  padding: 0 6px; outline: none; font-family: var(--mono); font-size: 12px; }
 table.grid td.act { padding: 0 2px; text-align: center; cursor: default; }
 table.grid td.buy { color: var(--pos); font-weight: 650; }
 table.grid td.sell { color: var(--neg); font-weight: 650; }
@@ -546,6 +564,7 @@ table.plain.ret td.ret-new .chg { color: var(--accent-ink); font-weight: 650; }
 .ret-hist { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
 .ret-hist .btn { text-align: left; }
 .mine-list { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.mine-list .mono { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 .btn.primary.danger-solid { background: #c64242; border-color: #c64242; color: #fff; }
 
 /* ---------------------------------------------------------------- broker chat */

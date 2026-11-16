@@ -860,10 +860,11 @@ const fetchCell = debounce(async (book, ref, ticket) => {
   try {
     const info = await api.get('/api/cell', { book, ref });
     if (ticket !== cellTicket) return;
-    let text = info.formula || '';
+    // (an input typed as a formula: its formula, as Excel's formula bar shows it)
+    let text = (info.input && info.input.formula) || info.formula || '';
     if (!text && info.cell) text = info.cell.t || '';
     if (info.input) text += (text ? '   ·   ' : '') + (info.input.scope === 'shared' ? 'ortak girdi' : 'kişisel girdi')
-      + (info.input.label ? ' – ' + info.input.label : '');
+      + (info.input.label ? ' – ' + info.input.label : '') + (info.input.error ? '   ·   ' + info.input.error : '');
     $('sb-fx').textContent = text;
     $('sb-fx').title = text;
   } catch (e) { /* the formula bar is informative only */ }
@@ -884,7 +885,7 @@ function onSelect(info) {
       '  ·  Adet ', h('b', null, String(info.n))));
   }
   if (info.single && info.book && info.focusRef) {
-    $('sb-fx').textContent = info.cell ? (info.cell.t || '') : '';
+    $('sb-fx').textContent = info.cell ? (info.cell.ff || info.cell.t || '') : '';
     fetchCell(info.book, info.focusRef, cellTicket);
   } else {
     fetchCell.cancel();

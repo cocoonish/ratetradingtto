@@ -89,12 +89,15 @@ CREATE TABLE IF NOT EXISTS agenda_snoozes (
 #: which closes were not used (the roots of their tickers); a user's sign-in: the password hash, administrator
 #: or not, active / waiting for approval / closed, the note sent with a request and who decided on it, the wrong
 #: passwords in a row and until when the name is locked.  A user of an earlier version is an active user without
-#: a password: they ask for an account under the same name to set one.
+#: a password: they ask for an account under the same name to set one.  An input typed as a formula (``=C60+7``):
+#: its text beside its value - the value is the formula's result as it was set (an earlier version reads the value).
 _ADDED_COLUMNS = {"mpc_days": (("control", "REAL"), ("tolerance", "REAL"), ("carried", "INTEGER"), ("cleaned", "TEXT")),
                   "users": (("pw_hash", "TEXT"), ("role", "TEXT NOT NULL DEFAULT 'user'"),
                             ("status", "TEXT NOT NULL DEFAULT 'active'"), ("note", "TEXT"), ("requested_at", "TEXT"),
                             ("decided_by", "TEXT"), ("decided_at", "TEXT"), ("failed", "INTEGER NOT NULL DEFAULT 0"),
-                            ("locked_until", "TEXT"), ("requested_new", "INTEGER NOT NULL DEFAULT 0"))}
+                            ("locked_until", "TEXT"), ("requested_new", "INTEGER NOT NULL DEFAULT 0")),
+                  "user_inputs": (("formula", "TEXT"),),
+                  "shared_inputs": (("formula", "TEXT"),)}
 _ACCOUNT_FIELDS = ("display", "last_seen", "pw_hash", "role", "status", "note", "requested_at", "decided_by", "decided_at",
                    "failed", "locked_until", "requested_new")
 
@@ -161,6 +164,9 @@ class Store(object):
         # every close each time made the status poll a full scan)
         self._bounds: Optional[Dict[str, Tuple[str, str, int]]] = None
         self._mpc_all: Optional[Dict[str, Dict[str, Any]]] = None
+        # told after every write of the inputs: (the user - None for the shared inputs, "*" for every user -, whether
+        # formulas were written); the inputs' formulas (inputformula.py) follow what any writer did to their cells
+        self.on_inputs: Optional[Any] = None
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         with self._lock:
@@ -367,12 +373,30 @@ class Store(object):
         self._x("DELETE FROM sessions WHERE expires_at<=?", (now,))
 
     # ------------------------------------------------------------------ personal inputs
+    def _told(self, user: Optional[str], formulas: bool) -> None:
+        hook = self.on_inputs
+        if hook is not None:
+            hook(user, formulas)
+
     def user_inputs(self, user: str, book: Optional[str] = None) -> Dict[Tuple[str, str], Any]:
         if book is None:
             rows = self._q("SELECT book, cell, value FROM user_inputs WHERE user=?", (user,))
         else:
             rows = self._q("SELECT book, cell, value FROM user_inputs WHERE user=? AND book=?", (user, book))
         return {(r["book"], r["cell"]): json.loads(r["value"]) for r in rows}
+
+    def user_formulas(self, user: str, book: Optional[str] = None) -> Dict[Tuple[str, str], str]:
+        """The user's inputs typed as a formula: (book, cell) -> its text (``=C60+7``)."""
+        if book is None:
+            rows = self._q("SELECT book, cell, formula FROM user_inputs WHERE user=? AND formula IS NOT NULL", (user,))
+        else:
+            rows = self._q("SELECT book, cell, formula FROM user_inputs WHERE user=? AND book=? AND formula IS NOT NULL",
+                           (user, book))
+        return {(r["book"], r["cell"]): r["formula"] for r in rows}
+
+    def formula_users(self) -> List[str]:
+        """The users who keep an input typed as a formula."""
+        return [r["user"] for r in self._q("SELECT DISTINCT user FROM user_inputs WHERE formula IS NOT NULL")]
 
     def users_with_inputs(self) -> List[str]:
         """The users who keep personal inputs (their pages are their own)."""
@@ -383,25 +407,30 @@ class Store(object):
         out = {(r["book"], r["cell"]) for r in self._q("SELECT DISTINCT book, cell FROM user_inputs")}
         for r in self._q("SELECT payload FROM scenarios"):
             try:
-                out.update((b, c) for b, c, _ in json.loads(r["payload"]))
-            except (TypeError, ValueError):
+                out.update((x[0], x[1]) for x in json.loads(r["payload"]))
+            except (TypeError, ValueError, IndexError):
                 continue
         return sorted(out)
 
-    def set_user_inputs(self, user: str, book: str, values: Dict[str, Any]) -> None:
+    def set_user_inputs(self, user: str, book: str, values: Dict[str, Any],
+                        formulas: Optional[Dict[str, str]] = None) -> None:
+        """Values of the user's inputs; ``formulas``: the cells among them typed as a formula (cell -> its text) - every
+        other cell written is a plain value (a formula it had goes)."""
         ts = now_iso()
+        formulas = formulas or {}
         with self._lock:
             self._db.execute("BEGIN")
             try:
                 for cell, v in values.items():
                     self._db.execute(
-                        "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
-                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                        (user, book, cell, json.dumps(v, ensure_ascii=False), ts))
+                        "INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,?) "
+                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
+                        "formula=excluded.formula", (user, book, cell, json.dumps(v, ensure_ascii=False), ts, formulas.get(cell)))
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+        self._told(user, bool(formulas))
 
     def clear_user_inputs(self, user: str, book: Optional[str] = None, cells: Optional[List[str]] = None) -> None:
         with self._lock:
@@ -412,20 +441,24 @@ class Store(object):
                 self._db.execute("DELETE FROM user_inputs WHERE user=? AND book=?", (user, book))
             else:
                 self._db.execute("DELETE FROM user_inputs WHERE user=?", (user,))
+        self._told(user, False)
 
-    def replace_user_inputs(self, user: str, values: Dict[Tuple[str, str], Any]) -> None:
+    def replace_user_inputs(self, user: str, values: Dict[Tuple[str, str], Any],
+                            formulas: Optional[Dict[Tuple[str, str], str]] = None) -> None:
         ts = now_iso()
+        formulas = formulas or {}
         with self._lock:
             self._db.execute("BEGIN")
             try:
                 self._db.execute("DELETE FROM user_inputs WHERE user=?", (user,))
                 self._db.executemany(
-                    "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?)",
-                    [(user, b, c, json.dumps(v, ensure_ascii=False), ts) for (b, c), v in values.items()])
+                    "INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,?)",
+                    [(user, b, c, json.dumps(v, ensure_ascii=False), ts, formulas.get((b, c))) for (b, c), v in values.items()])
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+        self._told(user, True)
 
     # ------------------------------------------------------------------ named scenarios
     def scenarios(self, user: str) -> List[Dict[str, Any]]:
@@ -436,13 +469,18 @@ class Store(object):
                         "cells": len(json.loads(r["payload"]))})
         return out
 
-    def save_scenario(self, user: str, name: str, values: Dict[Tuple[str, str], Any]) -> Dict[str, Any]:
+    def save_scenario(self, user: str, name: str, values: Dict[Tuple[str, str], Any],
+                      formulas: Optional[Dict[Tuple[str, str], str]] = None) -> Dict[str, Any]:
+        """``values``: (book, cell) -> value; ``formulas``: the cells typed as a formula (kept as a fourth item beside the
+        value - a scenario of an earlier version has three)."""
         name = " ".join(name.strip().split())
         if not name:
             raise ValueError("senaryo adı boş olamaz")
         if len(name) > 60:
             raise ValueError("senaryo adı en fazla 60 karakter olabilir")
-        payload = json.dumps([[b, c, v] for (b, c), v in sorted(values.items())], ensure_ascii=False)
+        formulas = formulas or {}
+        payload = json.dumps([[b, c, v, formulas[(b, c)]] if (b, c) in formulas else [b, c, v]
+                              for (b, c), v in sorted(values.items())], ensure_ascii=False)
         ts = now_iso()
         self._x("INSERT INTO scenarios (user, name, payload, created_at, updated_at) VALUES (?,?,?,?,?) "
                 "ON CONFLICT(user, name) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at",
@@ -450,10 +488,21 @@ class Store(object):
         return {"name": name, "cells": len(values), "updated_at": ts}
 
     def load_scenario(self, user: str, name: str) -> Optional[Dict[Tuple[str, str], Any]]:
+        got = self.scenario(user, name)
+        return None if got is None else got[0]
+
+    def scenario(self, user: str, name: str) -> Optional[Tuple[Dict[Tuple[str, str], Any], Dict[Tuple[str, str], str]]]:
+        """A saved scenario: (its values, the formulas among them)."""
         rows = self._q("SELECT payload FROM scenarios WHERE user=? AND name=?", (user, name))
         if not rows:
             return None
-        return {(b, c): v for b, c, v in json.loads(rows[0]["payload"])}
+        values: Dict[Tuple[str, str], Any] = {}
+        formulas: Dict[Tuple[str, str], str] = {}
+        for x in json.loads(rows[0]["payload"]):
+            values[(x[0], x[1])] = x[2]
+            if len(x) > 3 and isinstance(x[3], str):
+                formulas[(x[0], x[1])] = x[3]
+        return values, formulas
 
     def delete_scenario(self, user: str, name: str) -> bool:
         with self._lock:
@@ -468,6 +517,14 @@ class Store(object):
             rows = self._q("SELECT book, cell, value FROM shared_inputs WHERE book=?", (book,))
         return {(r["book"], r["cell"]): json.loads(r["value"]) for r in rows}
 
+    def shared_formulas(self, book: Optional[str] = None) -> Dict[Tuple[str, str], str]:
+        """The desk's inputs typed as a formula: (book, cell) -> its text."""
+        if book is None:
+            rows = self._q("SELECT book, cell, formula FROM shared_inputs WHERE formula IS NOT NULL")
+        else:
+            rows = self._q("SELECT book, cell, formula FROM shared_inputs WHERE book=? AND formula IS NOT NULL", (book,))
+        return {(r["book"], r["cell"]): r["formula"] for r in rows}
+
     def shared_meta(self, book: str, cells: List[str]) -> Optional[Dict[str, Any]]:
         """Who changed any of the cells last, and when."""
         if not cells:
@@ -477,24 +534,30 @@ class Store(object):
                        "ORDER BY updated_at DESC LIMIT 1" % marks, (book,) + tuple(cells))
         return dict(rows[0]) if rows else None
 
-    def set_shared_inputs(self, book: str, values: Dict[str, Any], user: Optional[str]) -> None:
+    def set_shared_inputs(self, book: str, values: Dict[str, Any], user: Optional[str],
+                          formulas: Optional[Dict[str, str]] = None) -> None:
+        """The desk's values of inputs; ``formulas`` as for :meth:`set_user_inputs`."""
         ts = now_iso()
+        formulas = formulas or {}
         with self._lock:
             self._db.execute("BEGIN")
             try:
                 for cell, v in values.items():
                     self._db.execute(
-                        "INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at) VALUES (?,?,?,?,?) "
+                        "INSERT INTO shared_inputs (book, cell, value, updated_by, updated_at, formula) VALUES (?,?,?,?,?,?) "
                         "ON CONFLICT(book, cell) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, "
-                        "updated_at=excluded.updated_at", (book, cell, json.dumps(v, ensure_ascii=False), user, ts))
+                        "updated_at=excluded.updated_at, formula=excluded.formula",
+                        (book, cell, json.dumps(v, ensure_ascii=False), user, ts, formulas.get(cell)))
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+        self._told(None, bool(formulas))
 
     def clear_shared_inputs(self, book: str, cells: List[str]) -> None:
         with self._lock:
             self._db.executemany("DELETE FROM shared_inputs WHERE book=? AND cell=?", [(book, c) for c in cells])
+        self._told(None, False)
 
     # ------------------------------------------------------------------ RET curve history
     def add_ret_history(self, user: Optional[str], rows: List[Dict[str, Any]]) -> int:
@@ -672,7 +735,8 @@ class Store(object):
 
         ``mapping``: old cell -> new cell (``None``: the value is dropped).  All of it happens in one
         transaction, for every user: what was typed for a meeting stays with that meeting when the list of
-        meetings is shifted.  Returns how many values moved / were dropped.
+        meetings is shifted (a formula typed there goes along with its value).  Returns how many values moved /
+        were dropped.
         """
         if not mapping:
             return {"moved": 0, "dropped": 0, "scenarios": 0}
@@ -682,7 +746,7 @@ class Store(object):
             self._db.execute("BEGIN")
             try:
                 marks = ",".join("?" for _ in mapping)
-                rows = self._db.execute("SELECT user, cell, value FROM user_inputs WHERE book=? AND cell IN (%s)" % marks,
+                rows = self._db.execute("SELECT user, cell, value, formula FROM user_inputs WHERE book=? AND cell IN (%s)" % marks,
                                         (book,) + tuple(mapping)).fetchall()
                 self._db.execute("DELETE FROM user_inputs WHERE book=? AND cell IN (%s)" % marks, (book,) + tuple(mapping))
                 for r in rows:
@@ -692,21 +756,21 @@ class Store(object):
                         continue
                     moved += 1 if new != r["cell"] else 0
                     self._db.execute(
-                        "INSERT INTO user_inputs (user, book, cell, value, updated_at) VALUES (?,?,?,?,?) "
-                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                        (r["user"], book, new, r["value"], ts))
+                        "INSERT INTO user_inputs (user, book, cell, value, updated_at, formula) VALUES (?,?,?,?,?,?) "
+                        "ON CONFLICT(user, book, cell) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, "
+                        "formula=excluded.formula", (r["user"], book, new, r["value"], ts, r["formula"]))
                 for r in self._db.execute("SELECT id, payload FROM scenarios").fetchall():
                     items = json.loads(r["payload"])
                     out, changed = [], False
-                    for b, c, v in items:
-                        if b == book and c in mapping:
-                            new = mapping[c]
-                            changed = changed or new != c
+                    for x in items:
+                        if x[0] == book and x[1] in mapping:
+                            new = mapping[x[1]]
+                            changed = changed or new != x[1]
                             if new is None:
                                 continue
-                            out.append([b, new, v])
+                            out.append([x[0], new] + list(x[2:]))
                         else:
-                            out.append([b, c, v])
+                            out.append(list(x))
                     if changed:
                         touched += 1
                         self._db.execute("UPDATE scenarios SET payload=?, updated_at=? WHERE id=?",
@@ -715,6 +779,7 @@ class Store(object):
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+        self._told("*", any(r["formula"] for r in rows))
         return {"moved": moved, "dropped": dropped, "scenarios": touched}
 
     # ------------------------------------------------------------------ daily history of market series
