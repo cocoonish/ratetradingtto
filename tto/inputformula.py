@@ -18,7 +18,8 @@ Refused as typed, with the reason: a Bloomberg function (the daily data limit, `
 cannot be read or names what is not there, a cycle (the formula reads - through the workbook's formulas or other
 formula inputs - the cell it is typed into: the engine's masks tell that a read depends on an input, the formulas'
 references tell it exactly when inputs share a bit), a cell whose typed values are restricted (a list, "Elle değer", a
-cell the meeting calendar moves - its value goes with its meeting, a formula's references would not), a shared formula
+cell the meeting calendar moves - its value goes with its meeting, a formula's references would not -, a key of a list:
+an ISIN of a list of bonds, a VİOP contract code - what is kept by it would not follow a key a formula changes), a shared formula
 reading an administrators' page (Motor: a shared formula is everybody's, it reads with nobody's rights), and a formula
 reading live data (prices, NOW()) into a cell that goes into a Bloomberg request: a new request on every tick.
 
@@ -219,6 +220,7 @@ class InputFormulas(object):
         old = self._scopes.get(scope, {})
         new: Dict[Tuple[str, int, int], _Entry] = {}
         moved: List[Tuple[str, str, str]] = []
+        keys: List[Tuple[str, str, str]] = []
         for (bid, ref), text in rows.items():
             book = self.svc.books.get(bid)
             if book is None or not isinstance(text, str):
@@ -229,6 +231,9 @@ class InputFormulas(object):
                 continue
             if self.svc._meeting_date_cell(book, si, rc) or self.svc._moved_by_calendar(book, si, rc):
                 moved.append((bid, ref, text))
+                continue
+            if self.svc.rowkeys.key_cell(book, si, rc):
+                keys.append((bid, ref, text))          # (a list's key: an ISIN, a VİOP contract code - rowkeys.py)
                 continue
             d = book.inputs.get((si, rc))
             if d is None or (d.scope == "shared") != (scope == SHARED) or d.group in ("adhoc", "adhoc-shared"):
@@ -245,6 +250,11 @@ class InputFormulas(object):
             self.svc.store.drop_formulas(scope or None, [(bid, ref) for bid, ref, _ in moved])
             for bid, ref, text in moved:
                 log.warning("girdi formülü kaldırıldı (toplantı takvimiyle kayan hücre; değeri kaldı): %s %s!%s %s",
+                            scope or "ortak", bid, ref, text)
+        if keys:
+            self.svc.store.drop_formulas(scope or None, [(bid, ref) for bid, ref, _ in keys])
+            for bid, ref, text in keys:
+                log.warning("girdi formülü kaldırıldı (listenin anahtar hücresi: ISIN / kontrat kodu; değeri kaldı): %s %s!%s %s",
                             scope or "ortak", bid, ref, text)
         with self._lock:
             if new:
@@ -265,6 +275,9 @@ class InputFormulas(object):
             raise FormulaError(CALENDAR)
         if d is None or d.group in ("adhoc", "adhoc-shared"):
             raise FormulaError(NOT_INPUT)
+        keyed = self.svc.rowkeys.key_cell(book, si, rc)
+        if keyed:
+            raise FormulaError(keyed)                  # (a list's key: an ISIN, a VİOP contract code - rowkeys.py)
         opts = book.options_for(si, rc, calc)
         if d.kind == "list" or opts:
             raise FormulaError(LIST % ", ".join((opts or [])[:8]))

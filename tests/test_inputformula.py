@@ -313,6 +313,43 @@ def test_a_cell_the_meeting_calendar_moves_takes_no_formula(tmp_path, caplog):
         again.stop()
 
 
+def test_the_keys_of_the_lists_take_no_formula(tmp_path, caplog):
+    """An ISIN of a list of bonds (DİBS RV, DİBS ASW, one's own Eurobond list) and a VİOP contract code take no formula:
+    what is kept by them (a bond's row values, a contract's alarms) would not follow a key a formula changes by itself -
+    a value typed is taken.  One an earlier version took there goes when the service starts: its value stays, the log
+    says so."""
+    svc = make_service(tmp_path)
+    db = svc.settings.db_path
+    u = login(svc, "Formül Anahtar")
+    try:
+        for book, ref, why in (("tto", "DİBS RV!A30", "DİBS RV listesinin ISIN hücresi"), ("asw", "ASW!B30", "DİBS ASW listesinin"),
+                               ("tto", "Bulk Bond!A9", "Eurobond Kotaları listesinin"), ("tto", "VIOP!L1", "VİOP kontrat kodu"),
+                               ("tto", "VIOP!N45", "VİOP kontrat kodu"), ("tto", "VIOP!O60", "VİOP kontrat kodu")):
+            err = put(svc, u, ref, "=EK_EVREN!A12", book=book)["errors"]
+            assert len(err) == 1 and why in err[0] and "formül yazılamaz" in err[0], err
+        assert put(svc, u, "DİBS RV!A30", "TRT130127T11")["errors"] == []
+        assert put(svc, u, "DİBS RV!A64", "=A8")["errors"] == []                   # (a switch's pick is no key of a list)
+        assert svc.store.shared_formulas() == {}
+    finally:
+        svc.stop()
+    st = Store(db)                                                                # (as an earlier version could)
+    st.set_shared_inputs("tto", {"DİBS RV!A31": "TRT060127T10"}, "masa", {"DİBS RV!A31": "=EK_EVREN!A12"})
+    st.set_user_inputs(u, "tto", {"Bulk Bond!A9": "XS2010030836"}, {"Bulk Bond!A9": '="XS2010030836"'})
+    st.close()
+    caplog.set_level(logging.WARNING, logger="tto")
+    again = make_service(tmp_path)
+    try:
+        assert again.store.shared_formulas() == {} and again.store.user_formulas(u) == {("tto", "DİBS RV!A64"): "=A8"}
+        assert cell(again, "DİBS RV!A31") == "TRT060127T10" and cell(again, "Bulk Bond!A9", u) == "XS2010030836"
+        said = [r.getMessage() for r in caplog.records if "anahtar hücresi" in r.getMessage()]
+        assert sorted(said) == [
+            "girdi formülü kaldırıldı (listenin anahtar hücresi: ISIN / kontrat kodu; değeri kaldı): formül anahtar tto!Bulk Bond!A9 "
+            '="XS2010030836"',
+            "girdi formülü kaldırıldı (listenin anahtar hücresi: ISIN / kontrat kodu; değeri kaldı): ortak tto!DİBS RV!A31 =EK_EVREN!A12"]
+    finally:
+        again.stop()
+
+
 def test_a_formula_following_the_market_is_a_market_move_not_a_desk_change(module_service):
     """A formula reading a live price follows each tick - as a market move: the desk's change counter, which makes the
     pages of users with inputs of their own at once, stays where it was (an entry or a change of a formula moves it)."""
