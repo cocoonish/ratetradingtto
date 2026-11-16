@@ -2479,11 +2479,12 @@ satırın cümlesinde bacağın kendi büyüklüğüyle); tutma bir hafta. Geri 
 
 **Carry + roll geçmiş kapanışlarda.** Carry & Roll motorunun ve DİBS uyumunun carry'si yalnız bugünündür; sepet ise
 geçmiş bir kapanışta kurulur (geri testte ve hafta boyunca: çarşamba hesabı pazartesinin sepetini yeniden kurar). Bu
-yüzden sıralama her kapanışın kendi eğrisini okur: TRY OIS vadesinde (faiz − TLREF) × 7/365 ÷ annuity (çalışma
-kitabının takvimi) + eğride bir hafta yuvarlanma (aylara göre doğrusal, TLREF 0'da) - alıcının, vadenin DV01'i
-cinsinden bp; DİBS'te (getiri − TLREF) × 7/365 ÷ değiştirilmiş süre + o kapanışın uydurulmuş eğrisinde yuvarlanma
-(kâğıtların getirisi − kalıntısı, vadeye göre doğrusal). Satır kartının "carry + roll"u motorunkidir (DİBS'te
-uyumunki), yoksa bu.
+yüzden sıralama her kapanışın kendi eğrisini okur: TRY OIS vadesinde (faiz − haftanın TLREF'i) × 7/365 ÷ annuity
+(çalışma kitabının takvimi) + eğride bir hafta yuvarlanma (aylara göre doğrusal, TLREF 0'da) - alıcının, vadenin DV01'i
+cinsinden bp; DİBS'te (getiri − haftanın TLREF'i) × 7/365 ÷ değiştirilmiş süre + o kapanışın uydurulmuş eğrisinde
+yuvarlanma (kâğıtların getirisi − kalıntısı, vadeye göre doğrusal). Haftanın TLREF'i o kapanışın toplantı patikasından
+(PPK Fiyatlama Geçmişi): hafta içinde bir karar varsa ertesi günden fiyatlanan adım kadar kayar - motorun değişken
+bacağı da patikayla bileşiklenir. Satır kartının "carry + roll"u motorunkidir (DİBS'te uyumunki), yoksa bu.
 
 **Geri test** (yürüyen pencere, ileriye bakış yok). Tarihçenin her dengelemesinde sepet yalnız o kapanışa kadarki
 verilerle kurulur ve bir sonraki dengelemeye kadar tutulur: iki yıllık tarihçe, momentumun gerektirdiği ilk üç ay

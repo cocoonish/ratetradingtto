@@ -205,6 +205,13 @@ def test_carry_and_roll_of_a_tenor_from_its_close_s_curve():
     assert curve.receive("OIS:2M", days[-1]) == pytest.approx(100 * 7 / 365 / a2)                       # (flat from 1M: no roll)
     assert curve.receive("OIS:1M", days[-1]) == pytest.approx(100 * 7 / 365 / a1 + (41 - (40 + (1 - h))) * 100)
     assert curve.receive("OIS:1M", "2020-01-01") is None                                                   # (no close: none)
+    # a decision within the week: TLREF of the week is the close's meeting path's (its step from the day after it)
+    day = days[-1]
+    meeting = (dt.date.fromisoformat(day) + dt.timedelta(days=3)).isoformat()
+    curve = qs._Curve(ctx, {day: {"base": 40.0, "meetings": [(meeting, 38.0)]}})
+    f = (3 * 40.0 + 4 * 38.0) / 7.0
+    assert curve.floating(day) == pytest.approx(f) and curve.floating(days[-2]) == pytest.approx(40.0)
+    assert curve.receive("OIS:2M", day) == pytest.approx((41 - f) * 100 * 7 / 365 / a2)
 
 
 def test_the_dibs_basket_buys_the_cheapest_against_the_curve_fit(planted):

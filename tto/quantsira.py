@@ -31,10 +31,12 @@ card says the next rebalance's date.
 **Carry + roll on past closes.**  The Carry & Roll engine's numbers and the DİBS fit's carry are today's alone; a
 basket made at a past close (the walk-forward, and the week's own basket all week long - a fit on Wednesday must make
 Monday's basket again) needs them as of that close.  So the ranking reads each close's own curve: a TRY OIS tenor's
-week is (its rate − TLREF) × 7/365 ÷ its annuity (the workbook's schedule) plus its roll a week down that close's curve
-(linear in months, TLREF at 0) - bp of its DV01, for a receiver; a bond's is (its yield − TLREF) × 7/365 ÷ its
-modified duration plus its roll down that close's fitted curve (each bond's yield less its residual, linear in
-maturity).  The lines' "carry + roll" on the card is the engine's (the fit's for DİBS) where there is one.
+week is (its rate − TLREF of the week) × 7/365 ÷ its annuity (the workbook's schedule) plus its roll a week down that
+close's curve (linear in months, TLREF at 0) - bp of its DV01, for a receiver; a bond's is (its yield − TLREF of the
+week) × 7/365 ÷ its modified duration plus its roll down that close's fitted curve (each bond's yield less its
+residual, linear in maturity).  TLREF of the week is the close's meeting path's (PPK Fiyatlama Geçmişi): a decision
+within the week moves it by the priced step from the next day - the floating leg the engine compounds along its path
+too.  The lines' "carry + roll" on the card is the engine's (the fit's for DİBS) where there is one.
 
 **Volatility** is the σ of the last 60 daily moves (P&L units), × √5 a week.
 
@@ -252,23 +254,42 @@ def _day_tr(d: _dt.date) -> str:
 # ---------------------------------------------------------------------------------------------- carry + roll of a close
 class _Curve(object):
     """Each close's TRY OIS curve as the history keeps it (every tenor, 1W … 10Y, 15M / 21M among them; TLREF at 0
-    months): a tenor's carry + roll of a week for a receiver, bp of its DV01 - from that close only."""
+    months) and its meeting path (``quantpath.try_paths``: the PPK Fiyatlama Geçmişi of that day): a tenor's carry +
+    roll of a week for a receiver, bp of its DV01 - from that close only."""
 
-    def __init__(self, ctx: qf.Ctx):
+    def __init__(self, ctx: qf.Ctx, paths: Optional[Dict[str, Dict[str, Any]]] = None):
         self.ctx = ctx
+        self.paths = paths or {}
         self.tenors = sorted((float(m["months"]), k) for k, m in ctx.meta.items() if k.startswith("OIS:") and m.get("months"))
         self.arr = {k: ([d for d, _ in ctx.pts(k)], [v for _, v in ctx.pts(k)]) for _, k in self.tenors}
         ref = ctx.pts("TLREF")
         self.ref = ([d for d, _ in ref], [v for _, v in ref])
         self._memo: Dict[str, Tuple[Optional[float], List[Tuple[float, float]]]] = {}
+        self._float: Dict[str, Optional[float]] = {}
 
     def rate(self, key: str, day: str) -> Optional[float]:
         a = self.arr.get(key)
         return _asof(a[0], a[1], day) if a else None
 
     def floating(self, day: str) -> Optional[float]:
-        """TLREF at the close (the shortest tenor's rate without it)."""
-        return self.points(day)[0]
+        """TLREF over the week after the close, as that close's meeting path expects it: TLREF at the close (the
+        shortest tenor's rate without it), a decision within the week moving it from its next day by the step the path
+        prices (its level after the meeting − the path's base).  Without a path that day: TLREF at the close."""
+        if day in self._float:
+            return self._float[day]
+        f0 = self.points(day)[0]
+        p = self.paths.get(day)
+        out = f0
+        if f0 is not None and p:
+            d0 = _d(day)
+            steps = sorted((_d(m), lv - p["base"]) for m, lv in p["meetings"])
+            tot = 0.0
+            for j in range(1, 8):
+                t = d0 + _dt.timedelta(days=j)
+                tot += f0 + next((s for m, s in reversed(steps) if m < t), 0.0)
+            out = tot / 7.0
+        self._float[day] = out
+        return out
 
     def points(self, day: str) -> Tuple[Optional[float], List[Tuple[float, float]]]:
         hit = self._memo.get(day)
@@ -281,11 +302,12 @@ class _Curve(object):
         return hit
 
     def receive(self, key: str, day: str) -> Optional[float]:
-        """A week of receiving the tenor from ``day``'s close, bp of its DV01: (rate − TLREF) × 7/365 ÷ its annuity (the
-        workbook's schedule) plus its roll a week down the curve."""
+        """A week of receiving the tenor from ``day``'s close, bp of its DV01: (rate − TLREF of the week, ``floating``) ×
+        7/365 ÷ its annuity (the workbook's schedule) plus its roll a week down the curve."""
         months = self.ctx.months(key)
         r = self.rate(key, day)
-        f, curve = self.points(day)
+        curve = self.points(day)[1]
+        f = self.floating(day)
         if not months or r is None or f is None:
             return None
         ann = qf._annuity(r, months)
@@ -650,7 +672,11 @@ def books(ctx: qf.Ctx, reg: qu.Registry) -> List[_Book]:
     """The six sets on a registry, in ``SETS``' order."""
     usd, tl = reg.dv01()
     money, ccy = (tl, "TL") if tl else (usd, "USD")
-    curve = _Curve(ctx)
+    try:
+        paths = reg.paths()
+    except Exception:  # noqa: BLE001 - no meeting path: TLREF at the close
+        paths = {}
+    curve = _Curve(ctx, paths)
     out: List[_Book] = []
     for sid, name, group, mode, k in SETS:
         if sid == "g10":
