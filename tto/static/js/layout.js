@@ -1,7 +1,7 @@
 // Each user's own arrangement of the dashboard: launchpads (named pages of tables picked from any page), the side drawer,
-// the favourite pages of the top bar and the page the dashboard opens on.  Kept with the account on the server
-// (/api/layout), so any computer shows the same and an update keeps it; the other windows of this browser (a pop-out,
-// another tab) hear of a change at once.
+// the favourite pages of the top bar, the page the dashboard opens on, their own menu and the compact look of the
+// tables.  Kept with the account on the server (/api/layout), so any computer shows the same and an update keeps it; the
+// other windows of this browser (a pop-out, another tab) hear of a change at once.
 import { api, session } from './api.js';
 import { h, toast, menu, promptDialog } from './ui.js';
 
@@ -13,7 +13,7 @@ const listeners = new Set();
 const chan = typeof window.BroadcastChannel === 'function' ? new BroadcastChannel('tto-layout') : null;
 let pending = 0;                  // saves on their way: an answer is put in place only when it is the last one
 
-const EMPTY = () => ({ launchpads: [], drawer: [], favs: [], landing: '', hidden_pages: [], rev: 0 });
+const EMPTY = () => ({ launchpads: [], drawer: [], favs: [], landing: '', hidden_pages: [], compact: false, rev: 0 });
 
 function emit() {
   for (const fn of listeners) {
@@ -222,6 +222,15 @@ export function hiddenPages() {
 
 export function setHiddenPages(ids) {
   return saveLayout({ hidden_pages: ids });
+}
+
+/** "Sıkışık görünüm": rows shorter and text a step smaller in every table (the shell puts ``compact`` on <html>). */
+export function compact() {
+  return !!(layout.data && layout.data.compact);
+}
+
+export function setCompact(on) {
+  return saveLayout({ compact: !!on });
 }
 
 // ---------------------------------------------------------------------- "+ Launchpad": where a table goes

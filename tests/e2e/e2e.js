@@ -3133,6 +3133,45 @@ async function shot(page, name) {
     check('the landing page opens when the dashboard is opened without an address (one of the user\'s launchpads)',
       decodeURIComponent(await page.evaluate(() => window.location.hash)) === '#/launchpad/Sabah' && (await layoutOf('ayşe yilmaz')).landing === 'launchpad/Sabah');
     await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { landing: '' });
+    // "Sıkışık görünüm" (the user menu): rows shorter, the text a step smaller - kept with the account; a window of its own
+    // open in the same browser follows at once, a reload keeps it
+    await open(page, 'forward');
+    const b1Row = (p) => p.evaluate(() => {
+      const t = document.querySelector('#content .panel[data-panel="B1"] table.grid, .lp-item[data-key="forward/B1"] table.grid');
+      const tr = t && [...t.rows].find((r) => !r.classList.contains('hd') && !r.classList.contains('ttl') && r.cells.length > 1);
+      return tr ? { h: tr.getBoundingClientRect().height, fs: parseFloat(getComputedStyle(tr.cells[tr.cells.length - 1]).fontSize),
+        on: document.documentElement.classList.contains('compact') } : null;
+    });
+    const roomy = await b1Row(page);
+    const popC = await ctxA.newPage();
+    popC.on('pageerror', (e) => errors.push('pageerror(pop compact): ' + e.message));
+    await popC.goto(BASE + '/#/pop/forward/B1');
+    await popC.waitForSelector('.lp-item[data-key="forward/B1"] table.grid', { timeout: 60000 });
+    const popRoomy = await b1Row(popC);
+    await page.click('#btn-user');
+    await page.check('#menu-compact');
+    await page.keyboard.press('Escape');
+    await popC.waitForFunction(() => document.documentElement.classList.contains('compact'), null, { timeout: 15000 }).catch(() => null);
+    const tight = await b1Row(page);
+    const popTight = await b1Row(popC);
+    check('"Sıkışık görünüm" (the user menu): a grid row shorter, its text a step smaller (one class on the page), kept with the account; '
+      + 'a window of its own open in the same browser follows at once',
+      !roomy.on && tight.on && tight.h < roomy.h && tight.fs < roomy.fs && (await savedLayout((l) => l.compact === true)).compact === true
+      && popTight.on && popTight.h < popRoomy.h, { roomy, tight, popRoomy, popTight });
+    await popC.close();
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'forward' && window.tto.state.page && window.tto.state.page.ready,
+      null, { timeout: 90000 });
+    const tightAgain = await b1Row(page);
+    await page.click('#btn-user');
+    const ticked = await page.isChecked('#menu-compact');
+    await page.uncheck('#menu-compact');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.documentElement.classList.contains('compact'), null, { timeout: 10000 }).catch(() => null);
+    const roomyAgain = await b1Row(page);
+    check('... a reload keeps it (ticked in the menu); turned off, the rows are as tall as before - on the server too',
+      tightAgain.on && Math.abs(tightAgain.h - tight.h) < 0.5 && ticked && !roomyAgain.on && Math.abs(roomyAgain.h - roomy.h) < 0.5
+      && (await savedLayout((l) => l.compact === false)).compact === false, { tightAgain, roomyAgain, ticked });
     // the side drawer: a table pinned stays on every page (Alt+Y closes / opens it)
     await open(page, 'forward');
     await tab(page, 'calc');

@@ -1,5 +1,6 @@
 """Each user's own arrangement of the dashboard: launchpads (named pages of tables picked from any page), the side
-drawer, the favourite pages of the top bar, the page the dashboard opens on and the pages taken out of their menu.
+drawer, the favourite pages of the top bar, the page the dashboard opens on, the pages taken out of their menu and
+whether the tables are drawn compact ("Sıkışık görünüm").
 
 It is kept with the account in the store's key / value table (``layout.<user>``), so it follows the sign-in to any
 computer and survives an update of the dashboard.  Everything sent is checked and normalised here (the service holds
@@ -227,6 +228,14 @@ def hidden_pages(v: Any) -> List[str]:
     return list(dict.fromkeys(page_id(x, "menüden çıkarılan sayfa") for x in v))
 
 
+def compact(v: Any) -> bool:
+    """"Sıkışık görünüm" (the user menu): rows shorter and text a step smaller in every table, so that more of them fit
+    on a screen.  Only how the tables are drawn - nothing is left out of them."""
+    if not isinstance(v, bool):
+        raise LayoutError("sıkışık görünüm açık (true) ya da kapalı (false) olmalı")
+    return v
+
+
 #: the parts of a layout and their checks; a change sends any of them and replaces those (the others stay)
 SECTIONS: Dict[str, Callable[[Any], Any]] = {
     "launchpads": launchpads,
@@ -234,11 +243,12 @@ SECTIONS: Dict[str, Callable[[Any], Any]] = {
     "favs": favs,
     "landing": landing,
     "hidden_pages": hidden_pages,
+    "compact": compact,
 }
 
 
 def empty() -> Dict[str, Any]:
-    return {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "rev": 0}
+    return {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "compact": False, "rev": 0}
 
 
 def _kept_items(v: Any, limit: int) -> List[Dict[str, Any]]:
@@ -283,6 +293,7 @@ def stored(v: Any) -> Dict[str, Any]:
         out["landing"] = landing(v.get("landing"))
     except LayoutError:
         out["landing"] = ""
+    out["compact"] = v.get("compact") is True
     rev = v.get("rev")
     out["rev"] = rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
     return out
@@ -294,7 +305,7 @@ def change(cur: Dict[str, Any], data: Any) -> Dict[str, Any]:
         raise LayoutError("düzen geçersiz")
     parts = [k for k in data if k in SECTIONS]
     if not parts:
-        raise LayoutError("değişecek bir şey yok (launchpads, drawer, favs, landing ya da hidden_pages)")
+        raise LayoutError("değişecek bir şey yok (launchpads, drawer, favs, landing, hidden_pages ya da compact)")
     out = dict(cur)
     for k in parts:
         out[k] = SECTIONS[k](data[k])

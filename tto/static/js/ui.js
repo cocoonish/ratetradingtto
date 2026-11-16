@@ -61,8 +61,9 @@ export function closeMenu() {
 }
 
 /**
- * items: [{label, action, header, sep, disabled}]; {check: true, on, label, sub, action(on)} is a line with a tick box
- * that leaves the menu open (several in a row can be changed); its action returns false to refuse the change.
+ * items: [{label, action, header, sep, disabled}]; {check: true, on, label, sub, id, action(on)} is a line with a tick
+ * box (``id``: the box's) that leaves the menu open (several in a row can be changed); its action returns false to refuse
+ * the change.
  */
 export function menu(x, y, items) {
   closeMenu();
@@ -72,7 +73,7 @@ export function menu(x, y, items) {
     if (it.sep) { el.appendChild(h('div', { class: 'sep' })); continue; }
     if (it.header) { el.appendChild(h('div', { class: 'mh' }, it.header)); continue; }
     if (it.check) {
-      const box = h('input', { type: 'checkbox', disabled: !!it.disabled });
+      const box = h('input', { type: 'checkbox', disabled: !!it.disabled, id: it.id || null });
       box.checked = !!it.on;
       box.addEventListener('change', () => { if (it.action(box.checked) === false) box.checked = !box.checked; });
       el.appendChild(h('label', { class: 'mcheck', title: it.title || null }, box, h('span', { class: 't' }, it.label),

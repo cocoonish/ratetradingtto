@@ -245,7 +245,8 @@ def test_what_is_not_a_request_for_tables_is_refused(service, items):
 def test_each_user_keeps_their_own_layout(service):
     u = login(service, "Lp Ayşe")
     v = login(service, "Lp Mehmet")
-    assert service.layout(u) == {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "rev": 0}
+    assert service.layout(u) == {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "compact": False,
+                                 "rev": 0}
     first = {"type": "table", "id": "a1", "view": "forward", "panel": "B1", "w": 6, "h": "auto"}
     second = {"view": "dibs", "panel": "B3", "w": 12, "h": 320, "rows": ["TRT150328T24", 9, 9], "cols": ["A", "C"],
               "title": "  Benim\tRV ", "collapsed": True, "all": True, "extra": "x"}
@@ -299,7 +300,7 @@ def test_a_layout_written_by_another_version_is_read_item_by_item(service):
                                       "drawer": [good, {"type": "gelecek"}], "favs": ["forward", "a b", 3], "landing": 5, "rev": 7})
     got = service.layout(u)
     assert got == {"launchpads": [{"name": "A", "items": [good]}], "drawer": [good], "favs": ["forward"], "landing": "", "hidden_pages": [],
-                   "rev": 7}
+                   "compact": False, "rev": 7}
     kept = service.set_layout(u, {"favs": []})
     assert kept["launchpads"] == [{"name": "A", "items": [good]}] and kept["drawer"] == [good] and kept["rev"] == 8
 
@@ -316,7 +317,7 @@ def test_a_layout_written_by_another_version_is_read_item_by_item(service):
     {"launchpads": [{"name": "A", "items": [{"view": "forward", "panel": "B1", "rows": [0]}]}]},
     {"launchpads": [{"name": "A", "items": [{"view": "forward", "panel": "B1", "cols": [""]}]}]},
     {"drawer": {"view": "forward"}}, {"favs": "forward"}, {"favs": ["a b"]}, {"landing": 3}, {"landing": "launchpad/"},
-    {"landing": "a/b"},
+    {"landing": "a/b"}, {"compact": 1}, {"compact": "true"}, {"compact": None},
 ])
 def test_what_is_not_a_layout_is_refused_and_nothing_changes(service, data):
     u = login(service, "Lp Hatalı")
@@ -324,6 +325,30 @@ def test_what_is_not_a_layout_is_refused_and_nothing_changes(service, data):
         service.set_layout(u, data)
     assert err.value.status == 400
     assert service.layout(u)["rev"] == 0
+
+
+def test_each_user_chooses_the_compact_view(service):
+    """"Sıkışık görünüm" (the user menu) is kept with the account like the rest of the layout: one user's own choice, a
+    change of another part keeps it; what another version wrote that is not ``true`` reads as off."""
+    u = login(service, "Lp Sıkışık")
+    v = login(service, "Lp Geniş")
+    assert service.layout(u)["compact"] is False
+    got = service.set_layout(u, {"compact": True})
+    assert got["compact"] is True and got["rev"] == 1
+    assert service.set_layout(u, {"favs": ["forward"]})["compact"] is True
+    assert service.layout(u)["compact"] is True and service.layout(v)["compact"] is False
+    assert service.store.get("layout." + u)["compact"] is True
+    with pytest.raises(ServiceError) as err:
+        service.set_layout(u, {"compact": "evet"})
+    assert err.value.status == 400 and "sıkışık görünüm" in str(err.value)
+    assert service.layout(u)["compact"] is True and service.layout(u)["rev"] == 2
+    off = service.set_layout(u, {"compact": False})
+    assert off["compact"] is False and off["favs"] == ["forward"] and off["rev"] == 3
+    for written in (1, "true", "evet", None, [True]):
+        service.store.put("layout." + v, {"compact": written, "rev": 4})
+        assert service.layout(v)["compact"] is False, written
+    service.store.put("layout." + v, {"compact": True, "rev": 5})
+    assert service.layout(v)["compact"] is True
 
 
 def test_how_much_a_user_may_keep(service, monkeypatch):
@@ -385,7 +410,9 @@ def test_the_layout_and_the_column_order_survive_a_restart(tmp_path):
     try:
         u = login(svc, "Lp Kalıcı")
         kept = svc.set_layout(u, {"launchpads": [{"name": "Sabah", "items": [{"view": "forward", "panel": "B1", "w": 12}]}],
-                                  "favs": ["forward"], "landing": "launchpad/Sabah", "drawer": [{"view": "dibs", "panel": "B3"}]})
+                                  "favs": ["forward"], "landing": "launchpad/Sabah", "drawer": [{"view": "dibs", "panel": "B3"}],
+                                  "compact": True})
+        assert kept["compact"] is True
         svc.set_column_order(u, "v/dibs/B3", ["C", "A", "B"])
     finally:
         svc.stop()
@@ -414,6 +441,9 @@ def test_over_http(service):
     r = client.post("/api/layout", json={"launchpads": [{"name": "Sabah", "items": [{"view": "forward", "panel": "B1"}]}]}, headers=h)
     assert r.status_code == 200 and r.json()["launchpads"][0]["name"] == "Sabah"
     assert client.post("/api/layout", json={"favs": "x"}, headers=h).status_code == 400
+    r = client.post("/api/layout", json={"compact": True}, headers=h)
+    assert r.status_code == 200 and r.json()["compact"] is True and r.json()["launchpads"][0]["name"] == "Sabah"
+    assert client.post("/api/layout", json={"compact": "evet"}, headers=h).status_code == 400
     f = client.get("/api/layout/export", params={"name": "Sabah"}, headers=h)
     assert f.status_code == 200 and 'filename="launchpad-Sabah.json"' in f.headers["content-disposition"]
     r = client.post("/api/layout/import", json={"launchpad": f.json()}, headers=h)
