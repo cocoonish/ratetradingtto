@@ -14,6 +14,16 @@ evaluated the bits of everything it reads are OR-ed together and stored next to 
 * sharing between users - a user :class:`Calc` (with private input overrides) re-uses every value of the
   shared pool whose mask does not touch one of that user's overridden inputs, and publishes the user
   independent values it computes back into the pool.
+
+Layers
+------
+A :class:`LayerCalc` is a calculation on top of a user's one (or of the shared pool): inputs of its own over its
+user's - a temporary copy of a table, priced with other inputs.  It holds only the values that depend on its own
+inputs; any other value is its user's (or everybody's) and is read from there, and what it computes that does not
+depend on its own inputs goes back there - as a user's values go back to the pool.  Asked for one table, it evaluates
+that table and the cells it reads that follow its own inputs, nothing else.  A cell that asks Bloomberg (``BDP``,
+``BDH`` ... - not ``BINTERPOL``, a calculation of its own) is never evaluated in a layer: its value is the user's, so a
+layer never makes a request.
 """
 from __future__ import annotations
 
@@ -31,6 +41,8 @@ from .values import XlArray, XlRange, date_to_serial
 
 _MISS = object()
 _SERIALS = itertools.count(1)          # every calculation's own number (a dropped user's new one is another)
+#: add-in functions that are a calculation of their own, not a Bloomberg request
+LOCAL_ADDINS = ("BINTERPOL",)
 DEPTH_LIMIT = 90         # nested cell evaluations before the engine unwinds and restarts bottom-up
 DEEP_LIMIT = 1000         # ... on a thread started with a big stack (the calculation threads)
 # Windows takes a thread stack *below* 256 MiB only (256 MiB itself is refused - for years the calculation thread ran
@@ -145,6 +157,9 @@ class Engine(object):
         self.input_changes = 0                            # shared input values changed (not the market, not the clock)
         self.shared = Calc(self, None, None)
         self.users: Dict[str, "Calc"] = {}
+        # calculations on top of a user's (or of the shared pool): a temporary copy of a table with inputs of its own
+        self.layers: Dict[Any, "LayerCalc"] = {}
+        self._requests: Optional[frozenset] = None       # the cells whose value is a Bloomberg answer (request_cells)
         self.lock = threading.RLock()
 
     # ------------------------------------------------------------------ addressing helpers
@@ -165,6 +180,10 @@ class Engine(object):
 
     def intern_mask(self, k: int) -> int:
         return self._mask_pool.setdefault(k, k)
+
+    def _others(self) -> List["Calc"]:
+        """Every calculation but the shared pool: the users' and the layers on top of them."""
+        return list(self.users.values()) + list(self.layers.values())
 
     # ------------------------------------------------------------------ compiled code
     def code(self, si: int, rc: int, tid: int):
@@ -227,7 +246,7 @@ class Engine(object):
                 if rc not in shared.memo[si]:
                     shared.memo[si][rc] = None
                 shared._mark(si, rc, self.input_mask[si][rc])
-            for calc in self.users.values():
+            for calc in self._others():
                 calc._seed_overlay()
 
     def ref_index(self):
@@ -253,7 +272,7 @@ class Engine(object):
         for si, rc, b in late:
             by_bit.setdefault(b, []).append((si, rc))
         intern = self.intern_mask
-        calcs = [self.shared] + list(self.users.values())
+        calcs = [self.shared] + self._others()
         for b, cells in by_bit.items():
             down = idx.downstream(cells)
             down.update(c for c in cells if c[1] in self.fml[c[0]])        # a formula's own value (it read no input)
@@ -271,7 +290,7 @@ class Engine(object):
             if rc not in shared.memo[si]:
                 shared.memo[si][rc] = None
             shared._mark(si, rc, b)
-        for calc in self.users.values():
+        for calc in self._others():
             calc._seed_overlay()
         self.marked += 1
         return True
@@ -282,7 +301,7 @@ class Engine(object):
         shared = getattr(self, "shared", None)
         if shared is None or shared.evals != shared._evals0:
             return False
-        return all(c.evals == c._evals0 for c in self.users.values())
+        return all(c.evals == c._evals0 for c in self._others())
 
     def _set_input(self, si: int, rc: int, b: int) -> None:
         self.input_mask[si][rc] = b
@@ -305,13 +324,17 @@ class Engine(object):
         """Add bit ``b`` to every computed value - of every calculation - that read the formula cell (si, rc): what
         carries all of the mask the cell was computed with.  That is the shared value's ``mask``, and in a user's
         calculation also the mask of the user's own value of the cell - a user who typed over something upstream
-        computed it (and what read it) with other bits: those values do not carry all of the shared mask."""
+        computed it (and what read it) with other bits: those values do not carry all of the shared mask.  A layer's
+        values may have read the cell from its own level or from any level below it (its user's): each one's mask."""
         intern = self.intern_mask
-        for calc in [self.shared] + list(self.users.values()):
+        for calc in [self.shared] + self._others():
             masks = [mask]
-            own = calc.maskd[si].get(rc) if calc.parent is not None else None
-            if own and own != mask:
-                masks.append(own)
+            level = calc
+            while level.parent is not None:
+                own = level.maskd[si].get(rc)
+                if own and own not in masks:
+                    masks.append(own)
+                level = level.parent
             groups = calc.groups
             for m in masks:
                 for k in [k for k in groups if k & m == m]:
@@ -377,7 +400,7 @@ class Engine(object):
         """Drop every computed value."""
         self.layout += 1
         self.shared._reset()
-        for calc in self.users.values():
+        for calc in self._others():
             calc._reset()
 
     def invalidate(self, changed: int) -> None:
@@ -385,7 +408,7 @@ class Engine(object):
         if not changed:
             return
         self.shared._invalidate(changed)
-        for calc in self.users.values():
+        for calc in self._others():
             calc._invalidate(changed)
 
     def market_changed(self, keys: Iterable[Any]) -> int:
@@ -420,13 +443,64 @@ class Engine(object):
         return calc
 
     def drop_user(self, name: str) -> None:
-        self.users.pop(name, None)
+        calc = self.users.pop(name, None)
+        if calc is not None:
+            for key in [k for k, layer in self.layers.items() if layer.parent is calc]:
+                self.drop_layer(key)              # (they read a calculation nobody brings up to date any more)
+
+    # ------------------------------------------------------------------ layers (temporary copies of a table)
+    def layer(self, key: Any, parent: "Calc", overlay: Dict[Tuple[int, int], Any]) -> "LayerCalc":
+        """The calculation ``key`` on top of ``parent`` (a user's, or the shared pool) with ``overlay`` as its own inputs -
+        made when new or when its parent is another calculation now, else its inputs replaced (what they change only)."""
+        self.declare_inputs(overlay.keys())
+        calc = self.layers.get(key)
+        if calc is not None and calc.parent is parent:
+            calc.set_overlay(overlay)
+            return calc
+        if calc is not None:
+            self.drop_layer(key)
+        calc = LayerCalc(self, parent, overlay)
+        parent.children.append(calc)
+        self.layers[key] = calc
+        return calc
+
+    def drop_layer(self, key: Any) -> None:
+        calc = self.layers.pop(key, None)
+        if calc is not None and calc.parent is not None and calc in calc.parent.children:
+            calc.parent.children.remove(calc)
+
+    def request_cells(self) -> frozenset:
+        """The cells whose value is a Bloomberg answer: a formula calling ``BDP``, ``BDH``, ``BDS``, ``BFXFORWARD``,
+        ``RTGET`` ... (directly or through a defined name; ``BINTERPOL`` is a calculation of its own) and the cells its
+        array writes into.  A layer never evaluates them (:class:`LayerCalc`)."""
+        got = self._requests
+        if got is None:
+            model = self.model
+            flags: Dict[int, bool] = {}
+            out = set()
+            for s in model.sheets:
+                for rc, tid in s.fml.items():
+                    f = flags.get(tid)
+                    if f is None:
+                        f = flags[tid] = formula_requests(model, tid)
+                    if f:
+                        out.add((s.index, rc))
+            for si in range(self.nsheets):
+                for m, anchor in self.members[si].items():
+                    if (si, anchor) in out:
+                        out.add((si, m))
+                for z, anchors in self.spill_zone[si].items():
+                    if any((si, a) in out for a in anchors):
+                        out.add((si, z))
+            got = self._requests = frozenset(out)
+        return got
 
     # ------------------------------------------------------------------ spill anchors
     def register_spill(self, si: int, anchor_rc: int, max_rows: int, max_cols: int, reset: bool = True) -> None:
         """Declare that the formula at ``anchor_rc`` may write an array over the cells below / right (``reset``:
         False when the caller resets once after registering many)."""
         self.spill_anchors[si][anchor_rc] = (max_rows, max_cols)
+        self._requests = None                           # (a Bloomberg array's cells may be more now)
         r0, c0 = divmod(anchor_rc, COLS)
         zone = self.spill_zone[si]
         fml = self.fml[si]
@@ -459,6 +533,7 @@ class Calc(object):
         self.rcache: Dict[Tuple[int, int, int, int, int], Tuple[Any, Any, int]] = {}
         self.overlay: Dict[Tuple[int, int], Any] = dict(overlay or {})
         self.omask = 0
+        self.children: List["Calc"] = []      # layers on top of this one: what changes its inputs reaches them
         self.cm = 0
         self.depth = 0
         self.busy: List[set] = [set() for _ in range(n)]
@@ -613,6 +688,9 @@ class Calc(object):
                 if self.maskd[si].pop(rc, None) is not None:
                     self._stale += 1
         self._seed_overlay()
+        if changed:
+            for child in self.children:
+                child._invalidate(changed)          # (a layer's values may have read what changed here)
 
     def _invalidate(self, changed: int) -> None:
         eng = self.engine
@@ -721,19 +799,24 @@ class Calc(object):
         parent = self.parent
         eng = self.engine
         if parent is not None:
-            pv = parent.memo[si].get(rc, _MISS)
-            if pv is not _MISS:
-                k = parent.maskd[si].get(rc)
-                if not k:
-                    return pv
-                if not (k & self.omask):
-                    self.cm |= k
-                    return pv
-                if rc in eng.input_mask[si] and (rc not in eng.fml[si] or rc in eng.input_value[si] or rc in eng.pins[si]):
-                    # An input this user did not type into, although it shares its dependency bit with cells
-                    # the user did type into (a group of inputs, e.g. one column of scenario steps): the value
-                    # everybody sees stands - and whatever is computed from it depends on that group.
-                    self.cm |= k
+            if parent.parent is None:
+                pv = parent.memo[si].get(rc, _MISS)
+                if pv is not _MISS:
+                    k = parent.maskd[si].get(rc)
+                    if not k:
+                        return pv
+                    if not (k & self.omask):
+                        self.cm |= k
+                        return pv
+                    if rc in eng.input_mask[si] and (rc not in eng.fml[si] or rc in eng.input_value[si] or rc in eng.pins[si]):
+                        # An input this user did not type into, although it shares its dependency bit with cells
+                        # the user did type into (a group of inputs, e.g. one column of scenario steps): the value
+                        # everybody sees stands - and whatever is computed from it depends on that group.
+                        self.cm |= k
+                        return pv
+            else:
+                pv = self._above(si, rc)
+                if pv is not _MISS:
                     return pv
         tid = eng.fml[si].get(rc)
         if tid is not None:
@@ -762,25 +845,67 @@ class Calc(object):
             return v
         return None
 
+    def _above(self, si: int, rc: int) -> Any:
+        """The value of a cell as a calculation below this one holds it, when it stands here too (a layer on top of a
+        user's calculation): the nearest one whose mask meets none of the inputs typed above it - at this level and at
+        the levels between.  A value typed at a level below stands too, unless a level above typed the cell itself
+        (then this level's own memo holds it); so does the value everybody sees of an input nobody above typed (a group
+        of inputs sharing one bit, see :meth:`_load`).  ``_MISS``: it has to be computed here."""
+        eng = self.engine
+        acc = self.omask
+        p = self.parent
+        while p is not None:
+            pv = p.memo[si].get(rc, _MISS)
+            if pv is not _MISS:
+                k = p.maskd[si].get(rc)
+                if not k:
+                    return pv
+                if not (k & acc):
+                    self.cm |= k
+                    return pv
+                if p.parent is not None:
+                    if (si, rc) in p.overlay:
+                        self.cm |= k
+                        return pv
+                elif rc in eng.input_mask[si] and (rc not in eng.fml[si] or rc in eng.input_value[si] or rc in eng.pins[si]):
+                    self.cm |= k
+                    return pv
+            acc |= p.omask
+            p = p.parent
+        return _MISS
+
     def _peek(self, si: int, rc: int) -> Any:
-        """Memo lookup (own, then shared pool) that also accumulates the dependency mask."""
+        """Memo lookup (own, then the calculations below: the shared pool, a layer's user) that also accumulates the
+        dependency mask."""
         v = self.memo[si].get(rc, _MISS)
         if v is not _MISS:
             k = self.maskd[si].get(rc)
             if k:
                 self.cm |= k
             return v
-        parent = self.parent
-        if parent is not None:
-            pv = parent.memo[si].get(rc, _MISS)
+        acc = self.omask
+        p = self.parent
+        while p is not None:
+            pv = p.memo[si].get(rc, _MISS)
             if pv is not _MISS:
-                k = parent.maskd[si].get(rc)
+                k = p.maskd[si].get(rc)
                 if not k:
                     return pv
-                if not (k & self.omask):
+                if not (k & acc):
                     self.cm |= k
                     return pv
+            acc |= p.omask
+            p = p.parent
         return _MISS
+
+    def _target(self, k: int) -> "Calc":
+        """Where a value computed here with the mask ``k`` is kept: the lowest calculation it stands for - here when it
+        depends on this one's own inputs, else in the one below (a user's values go to the shared pool, a layer's to its
+        user, or to the pool when they depend on no input of the user either)."""
+        t = self
+        while t.parent is not None and not (k & t.omask):
+            t = t.parent
+        return t
 
     def _store(self, si: int, rc: int, v: Any, k: int) -> Any:
         if type(v) is float and v - v != 0.0:
@@ -788,7 +913,12 @@ class Calc(object):
             # infinity, a page holding one could not be sent at all
             v = E_NUM
         parent = self.parent
-        target = self if (parent is None or (k & self.omask)) else parent
+        if parent is None or (k & self.omask):
+            target = self
+        elif parent.parent is None:
+            target = parent
+        else:
+            target = parent._target(k)
         target.memo[si][rc] = v
         if k:
             k = self.engine.intern_mask(k)
@@ -942,10 +1072,15 @@ class Calc(object):
         ent = self.rcache.get(key)
         if ent is None:
             parent = self.parent
-            if parent is not None:
-                ent = parent.rcache.get(key)
-                if ent is not None and (ent[2] & self.omask):
-                    ent = None
+            acc = self.omask
+            p = parent
+            while p is not None:
+                ent = p.rcache.get(key)
+                if ent is not None and not (ent[2] & acc):
+                    break
+                ent = None
+                acc |= p.omask
+                p = p.parent
             if ent is None:
                 si, r1, c1, r2, c2 = key
                 saved = self.cm
@@ -961,8 +1096,7 @@ class Calc(object):
                 else:
                     flat = [x for row in rows for x in row]
                 ent = (rows, flat, self.engine.intern_mask(k) if k else 0)
-                target = self if (parent is None or (k & self.omask)) else parent
-                target.rcache[key] = ent
+                self._target(k).rcache[key] = ent
         if ent[2]:
             self.cm |= ent[2]
         return ent
@@ -996,7 +1130,60 @@ class Calc(object):
         self.cm |= self.engine.bit(("md", key))
 
 
+class LayerCalc(Calc):
+    """A calculation on top of another one - a user's, or the shared pool: a temporary copy of a table with inputs of its
+    own (the module's "Layers").  It evaluates only what depends on its own inputs.  A cell that asks Bloomberg
+    (:meth:`Engine.request_cells`) is never evaluated here: asked for, the calculation below evaluates it (once, for
+    both) and its value is read from there - the layer's own inputs never become a request's argument (a copy keeps the
+    inputs that feed a request read-only, so its numbers stay its own).  An add-in call that reaches it anyway (a
+    Bloomberg function hidden where the cells were not told) is refused: ``#N/A``, no request."""
+
+    def __init__(self, engine: Engine, parent: Calc, overlay: Optional[Dict[Tuple[int, int], Any]]):
+        self.inherited = 0                    # Bloomberg cells read from the calculation below
+        self.refused = 0                      # add-in calls refused here
+        Calc.__init__(self, engine, parent, overlay)
+
+    def _load(self, si: int, rc: int, r: int, c: int) -> Any:
+        if (si, rc) in self.engine.request_cells():
+            parent = self.parent
+            v = parent.get(si, r, c)
+            self.cm |= parent.cm                  # (the mask of the cell asked for: get leaves it there)
+            self.inherited += 1
+            return v
+        return Calc._load(self, si, rc, r, c)
+
+    def addin(self, name: str, si: int, r: int, c: int, args: Sequence[Any]) -> Any:
+        if name in LOCAL_ADDINS:
+            return Calc.addin(self, name, si, r, c, args)
+        self.refused += 1
+        return E_NA
+
+
 # ---------------------------------------------------------------------------------------------- helpers
+def formula_requests(model: Model, tid: int) -> bool:
+    """True when the template asks Bloomberg (or Refinitiv): an add-in function other than ``BINTERPOL`` - directly or
+    through a defined name it uses."""
+    try:
+        return _asks(model, parse_template(model.templates[tid]), frozenset())
+    except Exception:  # noqa: BLE001 - a template that cannot be read is never evaluated either
+        return False
+
+
+def _asks(model: Model, tree, seen: frozenset) -> bool:
+    for nd in walk(tree):
+        if nd[0] == "func" and (nd[3] or nd[1] in ADDINS) and nd[1] not in LOCAL_ADDINS:
+            return True
+        if nd[0] == "name" and nd[1] not in seen:
+            tpl = model.names.get(nd[1])
+            if tpl is None:
+                continue
+            try:
+                sub = parse_template(tpl)
+            except Exception:  # noqa: BLE001 - a name that cannot be read: taken as one that may ask
+                return True
+            if _asks(model, sub, seen | {nd[1]}):
+                return True
+    return False
 def formula_has_addin(model: Model, tid: int, _cache: Dict[int, bool] = {}) -> bool:
     """True when the template calls a Bloomberg / Refinitiv add-in function."""
     key = (id(model), tid)

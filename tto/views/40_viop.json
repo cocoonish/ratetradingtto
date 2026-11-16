@@ -404,6 +404,7 @@
   },
   {
    "id": "B33",
+   "copyable": true,
    "type": "table",
    "title": "Target",
    "range": "K330:AC338",
@@ -803,6 +804,7 @@
   },
   {
    "id": "XAU4",
+   "copyable": true,
    "type": "table",
    "sheet": "EK_XAU",
    "range": "A38:E63",
