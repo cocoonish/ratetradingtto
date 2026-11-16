@@ -1716,6 +1716,31 @@ def _ibars(today, n_days=12, seed=71, plant=None):
     return out
 
 
+_PATH_MIN = 0.30 / 365.0 / 1440.0                # fx_series' USDTRY (forwards 30 % a year above the spot): its path's rise a minute
+
+
+def _ictx(today):
+    """The context of the intraday bars: USDTRY's forwards at a carry of −30 % a year, the rates' labels."""
+    series, meta = fx_series(n=300)
+    for k, lab in (("OIS:1Y", "1Y OIS"), ("OIS:2Y", "2Y OIS"), ("OFF:1Y", "Offshore 1Y")):
+        meta[k] = {"label": lab, "kind": "rate", "months": 12.0}
+    return ctx_of(series, meta, today=today)
+
+
+def _path_spot(table, now, z):
+    """USDTRY ``z`` times the bars' noise × √bars off its carry path at ``now`` (+ ahead, − behind; ``_ibars`` opens 09:35)."""
+    p = table["path"]
+    k = max(1.0, (now.hour * 60 + now.minute - (9 * 60 + 35)) / 5.0)
+    return p["path"] * math.exp(z * p["sigma_bar"] * math.sqrt(k) / 100.0)
+
+
+def _ipath(ctx, mons, live, table, now, z):
+    """The carry-path signal with USDTRY ``z`` off its path now (its monitor scored alone, the other values ``live``)."""
+    m = next(x for x in mons if x.sid == "ipath:USDTRY")
+    qf.score_all(ctx, [m], dict(live, **{"FX:USDTRY": _path_spot(table, now, z)}))
+    return m, qf.make_signal(m, cfg(), now.strftime("%H:%M"))
+
+
 def test_intraday_bars_are_kept_small_and_made_five_minutes(tmp_path):
     from tto import quantintraday as qi
     b = qi.Bars(str(tmp_path / "bars.sqlite3"))
@@ -1755,13 +1780,12 @@ def test_intraday_families_on_planted_bars():
                 return v - 0.006                             # offshore − OIS 1Y ~1,6 bp narrower than usual
             if key == "FX:USDTRY":
                 return 42.0 * 1.0006                         # 0,06 % ahead of the path its carry implies
+        if key == "FX:USDTRY":                               # USDTRY goes back to the path its carry implies from the open
+            return v * math.exp(_PATH_MIN * (mins[i] - mins[0]))
         return v
 
     raw = _ibars(today, plant=plant)
-    series, meta = fx_series(n=300)                          # USDTRY's forwards: a carry of −30 % a year
-    for k, lab in (("OIS:1Y", "1Y OIS"), ("OIS:2Y", "2Y OIS"), ("OFF:1Y", "Offshore 1Y")):
-        meta[k] = {"label": lab, "kind": "rate", "months": 12.0}
-    ctx = ctx_of(series, meta, today=today)
+    ctx = _ictx(today)                                       # USDTRY's forwards: a carry of −30 % a year
     mons, table = qi.intraday_monitors(ctx, raw, now)
     live = {k: rows[today.isoformat()][-1][1] for k, rows in raw.items()}
     qf.score_all(ctx, mons, live)
@@ -1784,16 +1808,68 @@ def test_intraday_families_on_planted_bars():
     assert px["entry"] == pytest.approx(live["FX:USDTRY"], rel=1e-5) and mo["total"] == pytest.approx(1e6 * (px["entry"] - px["exit"])) and mo["total"] > 0
     assert path["plain"].startswith("Şimdi spot USDTRY satıp ~%s bar (5 dk) tutarsan (giriş %s)" % (qf._g(path["hold"], 0), qf._th(px["entry"], 4)))
     assert "forward priminden" not in path["plain"] and "bar (5 dk) içinde" in z1["plain"] and "TL kazanırsın" in z1["plain"]
+    # the gap goes back to the path: it fires, its half-life the gap's own in bars (the steps inside each day), held to
+    # its hour in bars - not to the desk's 20 days
+    hlg = next(g for g in path["gates"] if g["name"] == "Yarı ömür")
+    assert not path["gated"] and path["strength"] != "elendi" and path["composite"] > 0
+    assert 0 < path["half_life"] < qi.PATH_BARS and hlg["ok"] and hlg["part"] == 1.0 and hlg["text"] == "%s bar" % qf._g(path["half_life"], 1)
+    assert next(m for m in mons if m.sid == "ipath:USDTRY").horizon == qi.PATH_BARS == path["hold"]
+    assert next(g for g in z1["gates"] if g["name"] == "Yarı ömür")["text"].endswith(" bar")          # (the others' in bars too)
+    # ... and behind the path the spot is bought back to it
+    _, behind = _ipath(ctx, mons, live, table, now, -2.8)
+    assert behind["z"] == pytest.approx(-2.8) and behind["expression"].startswith("Buy USDTRY") and behind["trade_tr"] == "USDTRY spot al"
+    assert not behind["gated"] and behind["direction"] == 1 and behind["exp_pnl"] > 0
+    # the stop zone still holds it back
+    _, far = _ipath(ctx, mons, live, table, now, 4.0)
+    assert far["gated"] == "stop bölgesinde (|z| ≥ 3,5)" and next(g for g in far["gates"] if g["name"] == "Yarı ömür")["ok"]
     # a PPK day's announcement window holds the mean-reversion ones back; after 17:00 no new intraday trade at all
-    m2, _ = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 14, 0), meeting_day=True)
+    m2, t2 = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 14, 0), meeting_day=True)
     qf.score_all(ctx, m2, live)
     held = {m.sid: qf.make_signal(m, cfg(), "14:00") for m in m2}
     assert "PPK açıklama penceresi" in held["izscore:OIS:1Y"]["gated"] and held["izscore:OIS:1Y"]["strength"] == "elendi"
     assert not held["iorb:OIS:2Y"]["gated"]                 # a breakout may follow the decision
-    m3, _ = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 17, 30))
+    _, ppk = _ipath(ctx, m2, live, t2, dt.datetime(2026, 11, 3, 14, 0), 2.8)
+    assert ppk["z"] == pytest.approx(2.8) and ppk["strength"] == "elendi" and "PPK açıklama penceresi" in ppk["gated"]
+    m3, t3 = qi.intraday_monitors(ctx, raw, dt.datetime(2026, 11, 3, 17, 30))
     qf.score_all(ctx, m3, live)
     late = [s for s in (qf.make_signal(m, cfg(), "17:30") for m in m3) if s]
     assert late and all(s["gated"] and any(g["name"] == "Seans" and not g["ok"] and "seans sonuna" in g["text"] for g in s["gates"]) for s in late)
+    _, after = _ipath(ctx, m3, live, t3, dt.datetime(2026, 11, 3, 17, 30), -2.8)
+    assert after["z"] == pytest.approx(-2.8) and after["strength"] == "elendi" and after["gated"].startswith("seans sonuna az kaldı")
+
+
+def test_intraday_carry_path_needs_its_gap_to_return(monkeypatch):
+    """The carry-path signal's half-life is its gap's own, in bars: a gap that wanders off the path (a random walk
+    around it - nothing pulls it back) is kept out by the half-life gate; one the bars cannot measure is the family's
+    hour."""
+    from tto import quantintraday as qi
+    today = dt.date(2026, 11, 3)
+    now = dt.datetime(2026, 11, 3, 12, 0)
+    rnd, walk = random.Random(1), {}
+
+    def plant(key, day, i, v, mins):
+        if key == "FX:USDTRY" and day != today:
+            walk[day] = (walk.get(day, 0.0) if i else 0.0) + rnd.gauss(0, 0.003)
+            return 42.0 * math.exp(_PATH_MIN * (mins[i] - mins[0]) + walk[day] / 100.0)
+        return v
+
+    raw = _ibars(today, plant=plant)
+    ctx = _ictx(today)
+    mons, table = qi.intraday_monitors(ctx, raw, now)
+    live = {k: rows[today.isoformat()][-1][1] for k, rows in raw.items()}
+    m, s = _ipath(ctx, mons, live, table, now, 2.8)
+    hlg = next(g for g in s["gates"] if g["name"] == "Yarı ömür")
+    assert s["z"] == pytest.approx(2.8) and s["strength"] == "elendi" and not hlg["ok"] and s["gated"] == hlg["text"]
+    # either it does not come back at all (AR(1) at or above 1) or not within twice the hour (bars against bars)
+    assert m.half_life is None or m.half_life > 2 * qi.PATH_BARS
+    assert hlg["text"] == ("ortalamaya dönmüyor (AR(1) katsayısı 0 – 1 dışında)" if m.half_life is None
+                           else "yarı ömür %.0f bar: ufkun (12 bar) 2 katından uzun" % m.half_life)
+    # a gap the bars cannot measure is held to the family's own expectation: half of it within the hour
+    monkeypatch.setattr(qi.qm, "ou_fit", lambda *a, **k: None)
+    mons2, table2 = qi.intraday_monitors(ctx, raw, now)
+    m2, s2 = _ipath(ctx, mons2, live, table2, now, 2.8)
+    assert m2.half_life == qi.PATH_BARS and not s2["gated"] and s2["expression"].startswith("Sell USDTRY")
+    assert next(g for g in s2["gates"] if g["name"] == "Yarı ömür")["text"] == "12,0 bar"
 
 
 def test_intraday_needs_live_prices_and_its_log_does_not_stay_over_night(monkeypatch):
