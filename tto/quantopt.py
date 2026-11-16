@@ -105,8 +105,8 @@ def series_specs(source: str = fxm.DEFAULT_SOURCE) -> List[Dict[str, str]]:
 
 
 def covers(k: str) -> bool:
-    """The series the page's data-coverage table lists."""
-    if k.startswith("OPT:") or k == "USD:3M":
+    """The series the page's data-coverage table lists (its own pairs': the G10 universe's quotes are the families')."""
+    if k == "USD:3M" or (k.startswith("OPT:") and k.split(":")[1] in PAIRS):
         return True
     for pair in PAIRS:
         if k in ("FX:" + pair, "FXV:" + pair, "FXR:" + pair) or k in ("FXP:%s:%s" % (pair, t) for t in SMILE_TENORS):

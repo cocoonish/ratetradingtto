@@ -1723,9 +1723,10 @@ async function shot(page, name) {
       JSON.stringify(rowOf(series, 'TLREF').slice(0, 8)) === JSON.stringify(['TLREF', 'TLREF', 'BISTTREF Index', 'PX_LAST', '30.10.2025', '02.11.2026', '253', 'var'])
       && series.some((r) => r[2] === 'TYSO10 GFOF Curncy' && r[7] === 'geçmiş yok') && series.some((r) => r[2] === 'TYSOA GFOF Curncy' && /yedek kullanılır/.test(r[7]))
       && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak')
-      // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five - and its contracts:
-      // the six listed and 24 expired months, close / high / low, an expired one with its two-digit-year ticker beside)
-      && series.length === 118 + 121 + 3 * (6 + 24) + 3 * 24
+      // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five, the G10 universe's
+      // own 22 - and its contracts: the six listed and 24 expired months, close / high / low, an expired one with its
+      // two-digit-year ticker beside)
+      && series.length === 118 + 143 + 3 * (6 + 24) + 3 * 24
       && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), { tlref: rowOf(series, 'TLREF'), rows: series.length });
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
@@ -2586,6 +2587,84 @@ async function shot(page, name) {
       && card.cells[0] === '+525 bin TRY / 1 mn USD' && card.cells[1] === '+5,08 bp' && card.entry === '44,1250' && card.unit === 'USDTRY 3A fwd', card);
     check('... and every signal the server gives carries its trade in desk words and its sentence', sigApi.status === 200
       && served.every((s) => s.trade_tr && typeof s.plain === 'string' && s.plain.length > 0), served.length);
+    // the list by group (tto/quantuniv.py): the buttons above it in the list's order, one group alone, the lines a gate holds
+    // ("düşük güven") after the confident ones of their group with their reason, an Offshore line's "offshore limiti"; the
+    // separate panel of the gated signals is gone (they are in the list)
+    const GROUPS = ['G10 spot', 'G10 opsiyon', 'TRY OIS', 'DİBS', 'VİOP', 'Offshore', 'Diğer'];
+    const GROUP_IDS = ['all', 'g10-spot', 'g10-opsiyon', 'try-ois', 'dibs', 'viop', 'offshore', 'diger'].map((x) => 'quant-group-' + x);
+    const groupBtns = await page.evaluate(() => [...document.querySelectorAll('#quant-groups button')].map((b) => ({ id: b.id, text: b.textContent, on: b.classList.contains('on') })));
+    check('Sinyaller: the group buttons above the list in its order (Tümü, G10 spot, G10 opsiyon, TRY OIS, DİBS, VİOP, Offshore, Diğer), Tümü on; no separate gated panel',
+      groupBtns.map((b) => b.id).join() === GROUP_IDS.join() && /^Tümü \(\d+\)$/.test(groupBtns[0].text) && /^G10 spot \(\d+\)$/.test(groupBtns[1].text)
+      && /^Offshore \(\d+\)$/.test(groupBtns[6].text) && groupBtns[0].on && groupBtns.filter((b) => b.on).length === 1
+      && await page.locator('#quant-gated').count() === 0 && await page.locator('#quant-signals > .seg.qgroups').count() === 1, groupBtns);
+    const groupAsks = [];
+    const onGroupAsk = (r) => { if (r.url().includes('/api/quant/signals')) groupAsks.push(r.url()); };
+    page.on('request', onGroupAsk);
+    await page.click('#quant-group-try-ois');
+    await page.waitForFunction(() => document.querySelector('#quant-group-try-ois').classList.contains('on')
+      && window.tto.state.page.data && window.tto.state.page.data.group === 'TRY OIS', null, { timeout: 20000 });
+    const tryOnly = await page.evaluate(() => ({ group: window.tto.state.page.group, kept: localStorage.getItem('tto.quant.group'),
+      all: (window.tto.state.page.data.signals || []).every((s) => s.group === 'TRY OIS'),
+      empty: (document.querySelector('#quant-signals .empty') || {}).textContent || '', rows: document.querySelectorAll('#quant-signals table.grid tr:not(.hd)').length }));
+    check('... a group button shows that group alone (asked of the server; its empty list says so), remembered by its name', tryOnly.group === 'TRY OIS'
+      && tryOnly.kept === 'TRY OIS' && tryOnly.all
+      && groupAsks.some((u) => /group=TRY(\+|%20)OIS/.test(u)) && (tryOnly.rows > 0 || /TRY OIS grubunda/.test(tryOnly.empty)), { tryOnly, groupAsks });
+    await page.click('#quant-group-all');
+    await page.waitForFunction(() => document.querySelector('#quant-group-all').classList.contains('on') && window.tto.state.page.data
+      && window.tto.state.page.data.group === '', null, { timeout: 20000 });
+    page.off('request', onGroupAsk);
+    const listed = (await api(page, 'ayşe yilmaz', 'GET', '/api/quant/signals')).json || {};
+    const ordered = (listed.signals || []).every((s, i, a) => i === 0 || s.priority > a[i - 1].priority
+      || (s.priority === a[i - 1].priority && (!!s.gated >= !!a[i - 1].gated)));
+    check('... the server\'s list: the groups in order (TRY OIS ≤ 2Y before its long end), the confident lines before the "düşük güven" ones of a group',
+      ordered && (listed.signals || []).every((s) => GROUPS.includes(s.group)) && (listed.groups || []).map((g) => g.id).join() === GROUPS.join()
+      && (listed.groups || []).find((g) => g.id === 'Offshore').tag === 'offshore limiti', (listed.signals || []).map((s) => [s.priority, !!s.gated]));
+    const labels = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const base = { family: 'pca', family_label: 'PCA kalıntısı', z: 2.6, entry_z: 2, strength: 'Güçlü', gates: [], legs: [], agree: 0, conflict: 0,
+        parts: { z: 2.6, regime: 1, hl: 1, carry: 1 }, composite: 2.6, hold: 10, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1, entry: 3, target: 0, stop: 4,
+        direction: -1, pnl_unit: 'bp', exp_pnl: 1.2 };
+      const ois = Object.assign({}, base, { id: 'x:ois', asset: 'TRY OIS', expression: 'Receive 2Y OIS', group: 'TRY OIS', tier: '≤ 2Y', tag: '', gated: '' });
+      const off = Object.assign({}, base, { id: 'x:off', asset: 'Offshore', expression: 'Pay Offshore 3M', group: 'Offshore', tier: null, tag: 'offshore limiti',
+        gated: 'yarı ömür 60 gün: ufkun (20 gün) 2 katından uzun', strength: 'elendi', composite: 0 });
+      const rows = q.signalRows([ois, off], { rank: true, group: true });
+      const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
+      const col = (n) => head.indexOf(n);
+      const host = document.createElement('div');
+      const c = new q.SignalChart(host);
+      c.show({ monitor: { name: 'Offshore 3M' }, signal: off, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+      const card = (host.querySelector('#quant-sig-group') || {}).textContent || '';
+      c.destroy();
+      return { g0: rows[0][1].t, g1: rows[1][1].t, cls1: rows[1][1].cls, s0: rows[0][col('Güç')].t, s1: rows[1][col('Güç')].t,
+        c0: rows[0][col('Bileşik / neden')].t, why1: rows[1][col('Bileşik / neden')].t, card };
+    });
+    check('... a line says its group ("TRY OIS · ≤ 2Y"), an Offshore line "offshore limiti"; a gate\'s line "düşük güven" and its reason where the composite was, its card too',
+      labels.g0 === 'TRY OIS · ≤ 2Y' && labels.g1 === 'Offshore · offshore limiti' && labels.cls1 === 'qtag' && labels.s0 === 'Güçlü' && labels.s1 === 'düşük güven'
+      && labels.c0 === '2,60' && /^yarı ömür 60 gün/.test(labels.why1) && labels.card === 'Offshore · offshore limiti · düşük güven (yarı ömür 60 gün: ufkun (20 gün) 2 katından uzun)', labels);
+    // a fly of the universe: its level the 50/50 package's, the OIS sheet's 2·body − wings quote beside it on the card
+    const flyCard = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const s = { id: 'trend:OISF:6M/1Y/2Y', family: 'trend', family_label: 'Trend', asset: 'TRY OIS', expression: 'Pay 6M/1Y/2Y fly',
+        instrument: '6M/1Y/2Y fly', z: 2.5, entry_z: 2, strength: 'Güçlü', gates: [], legs: [], agree: 0, conflict: 0,
+        parts: { z: 2.5, regime: 1, hl: 1, carry: 1 }, composite: 2.5, hold: 10, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1,
+        entry: -12.5, target: -8, stop: -15, direction: 1, pnl_unit: 'bp', exp_pnl: 3, group: 'TRY OIS', tier: '≤ 2Y', tag: '', gated: '',
+        info: { sheet: { factor: 2, where: 'OIS sayfasında' } } };
+      const host = document.createElement('div');
+      const c = new q.SignalChart(host);
+      c.show({ monitor: { name: '6M/1Y/2Y fly', info: s.info }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+      const prices = (host.querySelector('#quant-sig-prices') || {}).textContent || '';
+      c.destroy();
+      const row = q.signalRows([s])[0];
+      const col = (n) => q.SIGNAL_HEAD.indexOf(n);
+      return { prices, tip: row[col('Giriş')].tip, entry: row[col('Giriş')].t };
+    });
+    check("... a fly's entry / target / stop on the card with the OIS sheet's quote beside them (2·body − wings), in the list's tooltip",
+      flyCard.prices.startsWith('-12,5 bp (OIS sayfasında -25,0) / -8,0 bp (OIS sayfasında -16,0) / -15,0 bp (OIS sayfasında -30,0) · 6M/1Y/2Y fly')
+      && flyCard.tip === '(OIS sayfasında -25,0)' && flyCard.entry === '-12,5', flyCard);
+    check('... the alarm subscription chooses groups too, and knows the families on the universe (Trend, Carry + momentum, Makine öğrenmesi)',
+      await page.locator('#quant-sub-groups input[type=checkbox]').count() === 7
+      && /Trend/.test(await page.textContent('#quant-sub-families')) && /Carry \+ momentum/.test(await page.textContent('#quant-sub-families'))
+      && /Makine öğrenmesi/.test(await page.textContent('#quant-sub-families')));
     await shot(page, 'quant-signals');
     await open(page, 'quant-pca');
     await page.waitForSelector('#quant-pca-windows', { timeout: 30000 });

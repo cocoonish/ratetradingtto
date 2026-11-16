@@ -1315,7 +1315,11 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
         out["line"] = _switch_text(out)
         return out
 
-    return mons, {"ok": True, "build": build, "quote": quote, "switch": switch}
+    def carry(live: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
+        """Each bond's carry + roll now (bp of its yield convention) - the universe's DİBS lines (quantuniv.py)."""
+        return _bond_carry(ctx, snap(live), ois, rows, live)
+
+    return mons, {"ok": True, "build": build, "quote": quote, "switch": switch, "carry": carry}
 
 
 def _tr(v: Optional[float], d: int) -> str:

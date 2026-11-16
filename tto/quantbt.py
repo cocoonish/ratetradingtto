@@ -29,8 +29,9 @@ BT_KEEP = 300                  # trades kept for the page
 
 
 def bt_type(m: qf.Monitor) -> str:
-    """The signal type within a family a backtest reports apart: the version of a fly / spread, FX against the rest."""
-    v = m.info.get("version")
+    """The signal type within a family a backtest reports apart: the version of a fly / spread, a universe line's group
+    (quantuniv.py: G10 spot … Offshore), FX against the rest."""
+    v = m.info.get("version") or m.info.get("group")
     if v:
         return v
     if m.fx:
@@ -50,6 +51,8 @@ def _pnl_try(sg: Dict[str, Any], pnl: float, cfg: Dict[str, Any]) -> Optional[fl
         return qf.pct_money(pnl, sg.get("direction") or 1, mo["ref"], mo.get("log", True)) * fx["try_per_quote"]
     if unit == "%" and fx.get("spot") and fx.get("try_per_quote"):
         return pnl / 100.0 * 1e6 * fx["spot"] * fx["try_per_quote"]
+    if mo.get("per_unit") and mo.get("try_per"):                # (a line whose money is linear: vol, swap points)
+        return pnl * mo["per_unit"] * mo["try_per"]
     return None
 
 
