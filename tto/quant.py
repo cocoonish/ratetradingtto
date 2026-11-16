@@ -56,7 +56,7 @@ DEFAULTS: Dict[str, Any] = {
     "entry_z": 2.0, "target_z": 0.0, "stop_z": 3.5, "horizon": 20, "hl_max_mult": 2.0, "min_obs": 120, "lookback": 250,
     "corr_windows": [20, 60, 120], "corr_min": 0.3, "mom_entry": 1.5, "ma_fast": 20, "ma_slow": 60, "vr_q": 10, "regime_window": 250,
     "log_days": 20, "kalman_q": 0.01, "model_hit": 0.55, "model_min_tests": 40, "model_l2": 5.0, "cycle_bp": 100.0, "cycle_t": 2.0,
-    "dv01_base": 10000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
+    "dv01_usd": 1000.0, "rv_items": "1y2y, 2y5y, 5y10y, 2y10y, 1y5y, 6m1y2y, 1y2y3y, 1y2y5y, 2y3y5y, 2y5y10y, 3y5y10y",
     "desk_alarm": "Güçlü", "carry_margin": 0.5, "fx_verdict": 0.3,
     "bt_mute": "kapalı", "bt_min_hit": 0.5, "bt_min_sharpe": 0.0, "bt_min_trades": 10,
     "fx_pairs": "USDTRY, EURTRY, GBPTRY, EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD, USDCNH, USDZAR, USDMXN, USDBRL, USDINR, USDIDR, "
@@ -72,7 +72,7 @@ LIMITS: Dict[str, Tuple[float, float, type]] = {
     "hl_max_mult": (1.0, 10.0, float), "min_obs": (30, 750, int), "lookback": (60, 750, int), "corr_min": (0.0, 0.95, float),
     "mom_entry": (0.25, 5.0, float), "ma_fast": (2, 120, int), "ma_slow": (5, 250, int), "vr_q": (2, 30, int), "regime_window": (60, 750, int),
     "log_days": (1, 120, int), "kalman_q": (1e-6, 1.0, float), "model_hit": (0.5, 0.9, float), "model_min_tests": (10, 200, int),
-    "model_l2": (0.0, 100.0, float), "cycle_bp": (10.0, 1000.0, float), "cycle_t": (0.5, 10.0, float), "dv01_base": (1.0, 1e9, float),
+    "model_l2": (0.0, 100.0, float), "cycle_bp": (10.0, 1000.0, float), "cycle_t": (0.5, 10.0, float), "dv01_usd": (1.0, 1e7, float),
     "carry_margin": (0.0, 3.0, float), "fx_verdict": (0.0, 3.0, float),
     "bt_min_hit": (0.0, 1.0, float), "bt_min_sharpe": (-5.0, 5.0, float), "bt_min_trades": (1, 1000, int),
 }
@@ -83,7 +83,7 @@ LABELS = {
     "ma_fast": "Hızlı ortalama (gün)", "ma_slow": "Yavaş ortalama (gün)", "vr_q": "Varyans oranı q (gün)", "regime_window": "Rejim penceresi (gün)",
     "log_days": "Sinyal kaydı süresi (iş günü)", "kalman_q": "Kalman β değişkenliği (q)", "model_hit": "Model isabet eşiği",
     "model_min_tests": "Model en az test noktası", "model_l2": "Model L2 cezası", "cycle_bp": "PPK fazı eşiği (TLREF 3A değişimi, bp)",
-    "cycle_t": "PPK sinyali için |t| en az", "dv01_base": "Paket DV01'i (TRY / bp, ana bacak)", "rv_items": "PCA-nötr spread ve fly'lar",
+    "cycle_t": "PPK sinyali için |t| en az", "dv01_usd": "Paket DV01'i (USD / bp, ana bacak; masa: OIS_MAIN!F2)", "rv_items": "PCA-nötr spread ve fly'lar",
     "desk_alarm": "Masa alarmına düşen en az güç",
     "carry_margin": "Carry aleyhine işlemde tampon (ufuk σ'sı)", "fx_verdict": "Parite kararı için en az beklenen getiri / vol",
     "fx_pairs": "FX pariteleri (Bloomberg geçmişi: ilk doldurma turda 5 seri)",
@@ -569,6 +569,17 @@ class Quant(object):
             tl = num(reader("OIS_MAIN")("J2"))
             if tl is not None:
                 out["tlref"] = tl if tl > 1.0 else tl * 100.0
+            # a package's size as the desk's trades are sized (blotter.OisMarket): USDTRY of OIS_MAIN!D2 and, with
+            # ``full``, every OIS tenor's annuity on Motor (I316+ the tenor's OIS_MAIN row)
+            fx = num(reader("OIS_MAIN")("D2"))
+            out["desk"] = {"usdtry": fx if fx and fx > 0 else None, "ois_annuity": {}}
+            if full and "Motor" in index:
+                from .blotter import OIS_ROW
+                motor = reader("Motor")
+                for tenor, row in OIS_ROW.items():
+                    a = num(motor("I%d" % (316 + row)))
+                    if a and a > 0:
+                        out["desk"]["ois_annuity"][tenor] = a
         if ex.VH_SHEET in index:
             get = reader(ex.VH_SHEET)
             C = ex.VH_COLS
@@ -731,7 +742,8 @@ class Quant(object):
         mpc = {"days": {d: dict(x, flag=day_flag(x)) for d, x in mpc_days.items()}, "values": self.store.mpc_values(start, today.isoformat())}
         holidays = {serial_to_date(x) for x in snap.get("holidays") or [] if 20000 < x < 80000}
         ctx = qf.Ctx(cfg, today, series, meta, raw_live, viop=viop, carry=eng.get("carry") or {}, mpc=mpc, path=self._path(mpc),
-                     holidays=holidays, fwd_scale=self._fwd_scales(self.svc.mode == "live"))
+                     holidays=holidays, fwd_scale=self._fwd_scales(self.svc.mode == "live"), desk=eng.get("desk"))
+        cfg["usdtry"] = ctx.usdtry()                    # the packages' TRY sizes (and a backtest's TRY P&L) at this USDTRY
         # (what the fit was made of: the backtest fits on it again, day by day)
         ctx.base = {"series": series, "meta": {k: dict(v) for k, v in meta.items()}, "viop": viop, "mpc": mpc, "holidays": holidays,
                     "fwd_scale": ctx.fwd_scale, "cfg": cfg, "today": today}

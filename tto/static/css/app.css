@@ -978,6 +978,10 @@ table.plain.agenda tr.done td.what .txt, table.plain.agenda tr.done td.when { te
 table.grid td.qs-güçlü { color: var(--accent-ink); font-weight: 650; }
 table.grid td.qs-elendi { color: var(--ink-3); font-style: italic; }
 table.grid td.qgate { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.quantpage .qpack + .qpack { margin-top: 10px; }
+.quantpage .qpack-head { font-size: 12px; padding: 2px 0 3px; }
+.quantpage .qpack-note { font-size: 11px; max-width: 640px; padding-top: 3px; }
+.quantpage table.plain.qlegs td.n { font-variant-numeric: tabular-nums; }
 .quantpage table.plain.qgates { margin-top: 8px; }
 .quantpage table.plain.qgates tr.fail td { color: var(--ink-3); }
 .quantpage table.plain.qkv td { max-width: 640px; }

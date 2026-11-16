@@ -314,7 +314,11 @@ def test_pca_neutral_flies_and_spreads():
     spread = rows["2s5s PCA ağırlıklı spread"]
     assert abs(sum(l["weight"] * e[0][idx[l["key"]]] for l in spread["legs"])) < 1e-9
     assert spread["versions"]["klasik"]["name"] == "2s5s 1:1 spread" and spread["versions"]["klasik"]["net_dv01"] == 0.0
-    assert all(l["notional"] > 0 and abs(l["dv01"] - l["weight"] * DEFAULTS["dv01_base"]) < 1e-6 for l in fly["legs"])
+    # each leg sized for the main one's 1.000 $ a bp (TRY at USDTRY): its DV01 and the nominal its annuity gives
+    tl = DEFAULTS["dv01_usd"] * ctx.usdtry()
+    for l in fly["legs"]:
+        assert abs(l["dv01"] - l["weight"] * tl) < 1e-6 and abs(l["dv01_usd"] - l["weight"] * DEFAULTS["dv01_usd"]) < 1e-9
+        assert l["notional"] == pytest.approx(abs(l["dv01"]) / (qf._annuity(ctx.cur(l["key"]), ctx.months(l["key"])) * 1e-4) / 1e6, rel=1e-12)
     m = next(x for x in mons if x.sid == "rv:fly:1Y/2Y/3Y")
     m.score({}, {})
     assert m.z > 2.0
@@ -695,9 +699,9 @@ def test_every_signal_carries_its_decision():
 
     hold = 5.0 * math.log(6, 2)
     back = 3.0 * (1.0 - 0.5 ** (hold / 5.0))                             # OU: the share of the gap closed in the holding
-    s = qf.make_signal(mon(-1.0), cfg(), "10:00")                         # receive 2Y, which also earns 1 bp a week
+    s = qf.make_signal(mon(-1.0), cfg(usdtry=40.0), "10:00")              # receive 2Y, which also earns 1 bp a week
     assert s["direction"] == -1 and s["hold"] == pytest.approx(hold) and s["carry_week"] == pytest.approx(1.0)
-    assert s["exp_pnl"] == pytest.approx(back + hold / 5.0) and s["pnl_unit"] == "bp" and s["pnl_try"] == pytest.approx(s["exp_pnl"] * 10000.0)
+    assert s["exp_pnl"] == pytest.approx(back + hold / 5.0) and s["pnl_unit"] == "bp" and s["pnl_try"] == pytest.approx(s["exp_pnl"] * 1000.0 * 40.0)   # 1.000 $ a bp at 40
     assert s["reward"] == pytest.approx(3.0) and s["risk"] == pytest.approx(0.5) and s["rr"] == pytest.approx(6.0)
     assert s["sigma_h"] == pytest.approx(0.4 * math.sqrt(hold))
     assert [g["name"] for g in s["gates"]] == ["Eşik", "Stop bölgesi", "Rejim", "Yarı ömür", "Carry", "Beklenen kâr"] and all(g["ok"] for g in s["gates"])
@@ -1033,6 +1037,42 @@ def test_settings_are_validated_and_shared():
         with pytest.raises(Exception):
             q.set_settings("ayse", bad)
     assert q.settings()["entry_z"] == 2.5
+
+
+def test_a_package_is_sized_in_dollars_and_an_old_try_size_is_not_read_as_dollars():
+    """Every package's main leg is the setting's DV01 in USD - 1.000 $ a bp, the desk's OIS_MAIN!F2 ("DV01/bacak $") -,
+    in TRY at USDTRY (the workbook's OIS_MAIN!D2, else the quant's own); an OIS leg's nominal its DV01 over its annuity
+    (Motor's, as the blotter sizes a trade, else from its own par).  A database the TRY-sized version saved
+    (``dv01_base``: 10.000 TRY) is not read as dollars."""
+    q = Quant(_Svc())
+    q.store.put(Quant.SET_KEY, {"dv01_base": 10000.0, "entry_z": 2.5})
+    s = q.settings()
+    assert s["dv01_usd"] == 1000.0 == DEFAULTS["dv01_usd"] and "dv01_base" not in s and s["entry_z"] == 2.5
+    from tto.quant import LABELS
+    assert "USD" in LABELS["dv01_usd"]
+    assert q.set_settings("ayse", {"dv01_usd": "2500"})["values"]["dv01_usd"] == 2500.0
+    assert "dv01_base" not in q.store.get(Quant.SET_KEY)
+    with pytest.raises(Exception):
+        q.set_settings("ayse", {"dv01_usd": 0})
+    meta = {"OIS:2Y": {"label": "2Y OIS", "kind": "rate", "months": 24.0}}
+    own = qf.Ctx(cfg(dv01_usd=2500.0), TODAY, {"FX:USDTRY": {"2026-11-02": 42.0}}, meta, live={"OIS:2Y": 36.0})
+    assert own.dv01_size() == (2500.0, 2500.0 * 42.0) and own.ois_annuity("OIS:2Y") == qf._annuity(36.0, 24.0)
+    desk = qf.Ctx(cfg(), TODAY, {"FX:USDTRY": {"2026-11-02": 42.0}}, meta, live={"OIS:2Y": 36.0},
+                  desk={"usdtry": 50.0, "ois_annuity": {"2Y": 1.4}})
+    assert desk.usdtry() == 50.0 and desk.dv01_size() == (1000.0, 50000.0) and desk.ois_annuity("OIS:2Y") == 1.4
+    legs = [{"key": "OIS:2Y", "name": "2Y OIS", "weight": -0.5}, {"key": "VIOPI:FRONT", "name": "VİOP", "weight": 1.0}]
+    qf.size_legs(desk, legs)
+    assert legs[0]["dv01_usd"] == -500.0 and legs[0]["dv01"] == -25000.0
+    assert legs[0]["notional"] == pytest.approx(25000.0 / (1.4 * 1e-4) / 1e6) and "dv01_usd" not in legs[1]
+    # a signal's legs: what to do and how much, unsigned (the action says the side); its P&L in TRY by the main leg
+    m = qf.Monitor("x:2Y", "pca", "TRY OIS", "2Y OIS", "bp", 1, ["2026-11-02"], [0.0], [dict(legs[0], weight=1.0, dv01_usd=1000.0,
+                   dv01=50000.0, notional=357.1)], lambda live: 3.0, mean=0.0, sd=1.0, half_life=5.0, regime={"tag": "MR"},
+                   pnl=("bp", 1.0), dsd=1.0)
+    m.level, m.z = 3.0, 3.0
+    sg = qf.make_signal(m, cfg(), "10:00")
+    leg = sg["legs"][0]
+    assert (leg["action"], leg["dv01_usd"], leg["dv01"], leg["notional"]) == ("Receive", 1000.0, 50000.0, 357.1)
+    assert sg["exp_pnl"] > 0 and sg["pnl_try"] == pytest.approx(sg["exp_pnl"] * 50000.0) and sg["packages"] == []
 
 
 # ================================================================================================ Bloomberg's daily budget
@@ -1379,7 +1419,7 @@ def _bt_inputs(n=520, seed=61):
 def test_backtest_walks_forward_with_the_live_rules():
     from tto import quantbt as qbt
     days, series, make_ctx, runner = _bt_inputs()
-    res = qbt.backtest(days[-250:], make_ctx, runner, series, cfg(), step=10)
+    res = qbt.backtest(days[-250:], make_ctx, runner, series, cfg(usdtry=40.0), step=10)
     ou = [t for t in res["trades"] if t["sid"] == "pca:OU"]
     rw = [t for t in res["trades"] if t["sid"] == "pca:RW"]
     assert res["refits"] == 25 and res["complete"] and res["first"] == days[-250]
@@ -1389,7 +1429,7 @@ def test_backtest_walks_forward_with_the_live_rules():
     assert all(t["outcome"] in ("hedef", "stop", "süre") and 1 <= t["held"] <= 20 and t["unit"] == "bp" for t in res["trades"])
     assert all(t["entry_day"] < t["exit_day"] for t in res["trades"])
     fam = res["families"]["pca"]
-    assert fam["trades"] == len(ou) + len(rw) and set(fam["types"]) == {"TRY OIS"} and fam["avg_try"] == pytest.approx(fam["avg"] * 10000.0)
+    assert fam["trades"] == len(ou) + len(rw) and set(fam["types"]) == {"TRY OIS"} and fam["avg_try"] == pytest.approx(fam["avg"] * 1000.0 * 40.0)
     # no look-ahead: the future rewritten after a day changes nothing decided by that day
     cut = days[-100]
     later = {k: {d: (v + 50.0 if d > cut else v) for d, v in pts.items()} for k, pts in series.items()}

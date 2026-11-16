@@ -220,6 +220,9 @@ def test_curve_family_finds_the_planted_tenor(fitted):
     sig = {s["id"]: s for s in (qf.make_signal(m, ctx.cfg, "10:00") for m in mons) if s}
     s = sig["curve:OIS:2Y"]
     assert s["expression"].startswith("Receive 2Y OIS") and s["z"] > 2 and s["family_label"] == "Eğri adil değeri"
+    # the series is the tenor's own distance from the fit; the hedge is the package's, every leg told
+    assert s["instrument"] == "2Y OIS · NSS farkı" and s["expression"] == " · ".join("%s %s" % (l["action"], l["name"]) for l in s["legs"])
+    assert [p["name"] for p in s["packages"]] == ["Paket · iki komşu vadeyle hedge'li (NSS seviye β0 ve eğim β1'e nötr, DV01 ağırlıklı)"]
     # the package: the tenor and two neighbours, neutral to the fit's level and slope
     m = next(x for x in mons if x.sid == "curve:OIS:2Y")
     day = t["curve"]
@@ -261,6 +264,66 @@ def test_dibs_family_finds_the_planted_bond_with_carry_and_ranking(fitted):
         for r in lst:
             assert abs(r["score"] - r["z"] * r["total_1m"] / r["sigma_1m"]) < 1e-9
     assert qx.PLANTED in [r["isin"] for r in d["receive"]] + [r["isin"] for r in d["rows"] if r["score"] is not None and r["score"] < 0]
+
+
+def test_the_bonds_trade_is_told_leg_by_leg_with_its_size(fitted):
+    """The planted (cheap) bond's signal: the series its own NSS distance ("NSS farkı"), the trade every leg, sized for
+    the main leg's 1.000 $ a bp - package 1 the bond and its two neighbours, neutral to the DİBS fit's level and slope;
+    package 2 the bond against the two TRY OIS tenors around its maturity, linearly, DV01 1:1 (its asset swap, as
+    DİBS RV!AJ hedges it)."""
+    ctx, eng, data, mons, tables, t, timing = fitted
+    m = next(x for x in mons if x.sid == "dibsfv:" + qx.PLANTED)
+    s = qf.make_signal(m, ctx.cfg, "10:00")
+    assert m.name.endswith(" · NSS farkı") and "hedge" not in m.name and "hedge" not in s["expression"]
+    p1, p2 = s["packages"]
+    assert p1["legs"] is s["legs"] and p1["name"].startswith("Paket 1 · DİBS komşularıyla") and p2["name"].startswith("Paket 2 · kâğıt + OIS")
+    assert s["expression"] == p1["trade"] == " · ".join("%s %s" % (l["action"], l["name"]) for l in s["legs"])
+    main = s["legs"][0]
+    assert [l["action"] for l in s["legs"]] == ["Buy", "Sell", "Sell"]                  # cheap: bought, its neighbours sold
+    usd, tl = ctx.dv01_size()
+    assert usd == 1000.0 and tl == pytest.approx(1000.0 * ctx.last("FX:USDTRY"))
+    # the main leg: 1.000 $ a bp, its nominal by the desk's DV01 (DİBS RV!AI: −dP/dy of the simple yield, TL a bp a 1 mn)
+    b = next(x for x in qx.bond_list(TODAY) if x.isin == qx.PLANTED)
+    v = qc.next_weekday(TODAY)
+    _, dp = b.price(ctx.last("DIBS:" + qx.PLANTED) / 100.0, v)
+    assert main["dv01_usd"] == pytest.approx(usd) and main["dv01"] == pytest.approx(tl) and main["notional"] == pytest.approx(tl / -dp, rel=1e-9)
+    # package 1 neutral to the DİBS fit's level and slope: Σ side × nominal × ∂(model price)/∂β ≈ 0
+    pr = t["dibsfv"]["params"]
+    curve = qc.Nss([pr["b0"] / 100, pr["b1"] / 100, pr["b2"] / 100, pr["b3"] / 100], pr["tau1"], pr["tau2"])
+    bonds = {x.isin: x for x in qx.bond_list(TODAY)}
+
+    def price(isin, c):
+        flows, _ = bonds[isin].flows(v)
+        return sum(cf * c.df((d - v).days / 365.0) for d, cf in flows)
+
+    for j in (0, 1):
+        up, dn = list(curve.beta), list(curve.beta)
+        up[j] += 1e-6
+        dn[j] -= 1e-6
+        cu, cd = qc.Nss(up, curve.tau1, curve.tau2), qc.Nss(dn, curve.tau1, curve.tau2)
+        moves = [l["side"] * l["notional"] * (price(l["key"][5:], cu) - price(l["key"][5:], cd)) for l in p1["legs"]]
+        assert abs(sum(moves)) < 1e-6 * abs(moves[0]), (j, moves)
+    # package 2: the bond and the two OIS tenors around its maturity, paid (the bond bought), linearly by it
+    years = (b.maturity - v).days / 365.0
+    ois = p2["legs"][1:]
+    assert p2["legs"][0] == main and [l["action"] for l in ois] == ["Pay", "Pay"] and len(ois) == 2
+    m1, m2 = (OIS_MONTHS[l["key"]] / 12.0 for l in ois)
+    assert m1 <= years <= m2 and sum(l["dv01_usd"] for l in ois) == pytest.approx(usd)
+    assert ois[1]["dv01_usd"] == pytest.approx(usd * (years - m1) / (m2 - m1)) and ois[1]["dv01"] == pytest.approx(ois[1]["dv01_usd"] * tl / usd)
+    for l in ois:
+        ann = qf._annuity(ctx.cur(l["key"]), OIS_MONTHS[l["key"]])
+        assert l["notional"] == pytest.approx(l["dv01"] / (ann * 1e-4) / 1e6, rel=1e-12)
+    assert "asset swap" in p2["name"] and "DİBS − OIS" in p2["note"] and p2["trade"] == " · ".join("%s %s" % (l["action"], l["name"]) for l in p2["legs"])
+    # (no carry engine here: package 2's carry and expected P&L are not made up)
+    assert p2["carry_week"] is None and p2["exp_pnl"] is None and p1["carry_week"] is not None
+
+
+def test_the_ois_side_of_a_bond_is_the_two_tenors_around_its_maturity():
+    tenors = [("OIS:1Y", 1.0), ("OIS:2Y", 2.0), ("OIS:5Y", 5.0)]
+    assert qc.ois_hedge(2.75, tenors)["legs"] == [("OIS:2Y", pytest.approx(-0.75)), ("OIS:5Y", pytest.approx(-0.25))]
+    assert qc.ois_hedge(2.0, tenors)["legs"] == [("OIS:2Y", -1.0)]
+    assert qc.ois_hedge(0.4, tenors)["legs"] == [("OIS:1Y", -1.0)] and qc.ois_hedge(7.5, tenors)["legs"] == [("OIS:5Y", -1.0)]
+    assert qc.ois_hedge(3.0, []) is None
 
 
 def test_a_live_yield_moves_the_bonds_residual_and_its_z():
@@ -396,6 +459,17 @@ def test_the_dibs_rv_sheet_is_read_for_the_fixed_coupon_bonds_and_bills(seeded):
     assert not any(r["isin"] == "TRT090130T12" for r in rows)              # a TLREF floater stays out
     live = qc.live_values(eng)
     assert abs(live["DIBSS:TRT150328T24"] - 36.39184043698062) < 1e-7
+    # the desk's DV01 of every row is the sheet's own (DİBS RV!AI: modified duration × dirty price, of the simple yield)
+    for r in rows:
+        b = qc._bond_of(r["isin"], {}, r)
+        if b is not None and r["dirty"] is not None and r["dv01"] is not None:
+            assert qc.desk_dv01(b, dt.date.fromisoformat(r["value_date"]), r["dirty"], r["simple"]) == pytest.approx(r["dv01"], rel=1e-9), r["isin"]
+    # what a package's size is made of, as the blotter sizes a trade: USDTRY of OIS_MAIN!D2, Motor's annuities
+    full = seeded.quant._engine_read(True)["desk"]
+    market = seeded.ois_market(None)
+    assert full["usdtry"] == pytest.approx(market["usdtry"]) and full["usdtry"] > 10
+    ann = {r["tenor"]: r["annuity"] for r in market["tenors"] if r["annuity"]}
+    assert set(full["ois_annuity"]) == set(ann) - {"ON", "1W", "2W"} and all(full["ois_annuity"][k] == ann[k] for k in full["ois_annuity"])
 
 
 def test_both_pages_from_the_service(seeded):
@@ -410,6 +484,17 @@ def test_both_pages_from_the_service(seeded):
     ids = {s["id"]: s for s in v["signals"] + v["gated"]}
     assert ids["opt:USDTRY:RR25:1M"]["expression"] == "Sell USDTRY 1M 25D RR"
     assert ids["dibsfv:" + svc.quant._planted_bond]["expression"].startswith("Buy ")
+    # the planted bond's two packages sized as the desk's trades are: 1.000 $ a bp at OIS_MAIN!D2, the OIS legs by
+    # Motor's annuities (the blotter's), the OIS DV01 the bond's
+    sg = ids["dibsfv:" + svc.quant._planted_bond]
+    p1, p2 = sg["packages"]
+    market = svc.ois_market(None)
+    ann = {r["tenor"]: r["annuity"] for r in market["tenors"] if r["annuity"]}
+    assert sg["legs"][0]["dv01_usd"] == pytest.approx(1000.0) and sg["legs"][0]["dv01"] == pytest.approx(1000.0 * market["usdtry"])
+    assert all(l["notional"] > 0 for l in p1["legs"] + p2["legs"]) and [l["action"] for l in p2["legs"][1:]] == ["Pay"] * (len(p2["legs"]) - 1)
+    assert sum(l["dv01_usd"] for l in p2["legs"][1:]) == pytest.approx(1000.0)
+    for l in p2["legs"][1:]:
+        assert l["notional"] == pytest.approx(l["dv01"] / (ann[l["key"][4:]] * 1e-4) / 1e6, rel=1e-12)
     curve = svc.quant.view("curve", user, {})
     assert curve["curve"]["ok"] and curve["dibsfv"]["ok"] and curve["curve"]["n"] >= 12 and curve["dibsfv"]["n"] >= 8
     assert all(s["page"] == "quant-curve" for s in curve["signals"]) and curve["coverage"]
