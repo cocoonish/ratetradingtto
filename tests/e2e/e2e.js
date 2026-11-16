@@ -2704,7 +2704,9 @@ async function shot(page, name) {
       const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
       const host = document.createElement('div');
       const c = new q.SignalChart(host);
-      c.show({ monitor: { name: 'USDTRY 1A forward', family_label: 'Trend' }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+      const data = { monitor: { name: 'USDTRY 1A forward', family_label: 'Trend' }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null };
+      c.show(data);
+      c.fillDetails(data);                       // (a one-day history draws no chart and no details: the score's row asked for here)
       const text = (sel) => (host.querySelector(sel) || {}).textContent || '';
       const out = { cell: rows[0][head.indexOf('İşlem')].t, group: rows[0][1].t, plain: text('#quant-sig-plain'), trade: text('#quant-sig-trade'),
         score: ([...host.querySelectorAll('.qkv tr')].find((tr) => tr.firstChild && tr.firstChild.textContent === 'Skor') || {}).textContent || '' };
