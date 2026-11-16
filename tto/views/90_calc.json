@@ -1034,6 +1034,7 @@
   },
   {
    "id": "B5",
+   "copyable": true,
    "type": "table",
    "title": "Exponential",
    "range": "N2:R9",
@@ -1041,6 +1042,7 @@
   },
   {
    "id": "B6",
+   "copyable": true,
    "type": "table",
    "title": "Simple",
    "range": "T2:X9",
@@ -1048,6 +1050,7 @@
   },
   {
    "id": "B8",
+   "copyable": true,
    "type": "table",
    "title": "Basit → Bileşik",
    "range": "N12:O15",
@@ -1055,6 +1058,7 @@
   },
   {
    "id": "B9",
+   "copyable": true,
    "type": "table",
    "title": "Bileşik → Basit",
    "range": "Q12:R15",
@@ -1062,6 +1066,7 @@
   },
   {
    "id": "B26",
+   "copyable": true,
    "type": "table",
    "title": "Ağırlıklı ortalama · Net / Maliyet / Gerçekleşen K/Z",
    "range": "Z37:AD58",
@@ -1165,6 +1170,7 @@
   },
   {
    "id": "B23",
+   "copyable": true,
    "type": "table",
    "title": "Implied Move",
    "range": "N35:O43",
@@ -1172,6 +1178,7 @@
   },
   {
    "id": "B24",
+   "copyable": true,
    "type": "table",
    "title": "DF to Rate",
    "range": "Q35:R41",
@@ -1179,6 +1186,7 @@
   },
   {
    "id": "B27",
+   "copyable": true,
    "type": "table",
    "title": "TLREF Spread",
    "range": "B51:C56",
@@ -1186,6 +1194,7 @@
   },
   {
    "id": "B28",
+   "copyable": true,
    "type": "table",
    "title": "Forward Volatility",
    "range": "E51:F56",
@@ -1209,6 +1218,7 @@
   },
   {
    "id": "B31",
+   "copyable": true,
    "type": "table",
    "title": "Yıllık getiriden forward fiyat",
    "range": "N51:O57",
@@ -1216,6 +1226,7 @@
   },
   {
    "id": "B32",
+   "copyable": true,
    "type": "table",
    "title": "İki fiyat arası yıllık getiri",
    "range": "N60:O66",
@@ -1223,6 +1234,7 @@
   },
   {
    "id": "B33",
+   "copyable": true,
    "type": "table",
    "title": "TÜFE'ye endeksli · aylık tahakkuk",
    "range": "B62:C71",

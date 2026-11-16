@@ -261,6 +261,11 @@ class Service(object):
         formulas = InputFormulas(self)
         self.et.call(formulas.start)
         self.formulas = formulas
+        # temporary copies of the calculator tables (copies.py): inputs of their own, in a layer over the user's calculation
+        from .copies import Copies
+        self.copies = Copies(self)
+        with self._render_lock:
+            self._private_users |= self.copies.users()          # (their pages hold their copies: their own)
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -559,6 +564,9 @@ class Service(object):
                 book.engine.ref_index()
             except Exception:  # noqa: BLE001 - built when first needed instead
                 continue
+        if not self._stop.is_set():
+            # (the inputs of the copyable tables that feed Bloomberg: read-only in a copy - told by those references)
+            self.et.submit_at(EngineThread.BACKGROUND, self.copies.prepare)
 
     def _warmup_safe(self) -> None:
         try:
@@ -1309,12 +1317,14 @@ class Service(object):
         now = time.monotonic()
         gone = []
         names = {name for book in self.books.values() for name in book.engine.users}
+        names |= {key[0] for book in self.books.values() for key in book.engine.layers}      # (a copy's: its user)
         for name in names:
             if self._streams.get(name) or now - self._seen.get(name, -1e9) < limit:
                 continue
             for book in self.books.values():
                 book.engine.drop_user(name)
                 self._overlays.pop((name, book.id), None)
+            self.copies.drop(name)                    # (their temporary copies: made again from what is kept)
             self._forget_renders(name)
             gone.append(name)
         return gone
@@ -1612,8 +1622,9 @@ class Service(object):
             raise ServiceError("bu sayfa yalnızca yöneticilere açıktır", 403)
         book = self.books[v["book"]]
         calc = self._calc(user, book)
-        if not key[0] and calc is not book.engine.shared:
-            # a user with inputs of their own the key did not know of (it never shares their page): theirs
+        copies = self.copies.of_view(user, view_id) if user else {}      # (the user's temporary copies of its tables)
+        if not key[0] and (calc is not book.engine.shared or copies):
+            # a user with inputs (or copies) of their own the key did not know of (it never shares their page): theirs
             with self._render_lock:
                 self._private_users.add(user)
             key = (user,) + tuple(key[1:])
@@ -1631,7 +1642,7 @@ class Service(object):
         order: List[str] = []
         types: List[str] = []
 
-        def part(pid: str, ptype: str, reusable: bool, make: Callable[[], Dict[str, Any]]) -> None:
+        def part(pid: str, ptype: str, reusable: bool, make: Callable[[], Dict[str, Any]], on: Optional[Calc] = None) -> None:
             order.append(pid)
             types.append(ptype)
             o = old.get(pid)
@@ -1639,7 +1650,7 @@ class Service(object):
                 # not asked for (another tab): kept as it is, checked when it is asked for
                 panels[pid] = o if o is not None else {"entry": None, "meta": None, "content": 0, "checked": -1, "at": 0.0}
                 return
-            panels[pid] = self._made(o, calc, gen, reusable, make)
+            panels[pid] = self._made(o, calc if on is None else on, gen, reusable, make)
 
         sheet_default = v.get("sheet")
         charts = list(book.model.sheets[book.model.sheet_index[sheet_default]].charts) if sheet_default else []
@@ -1655,6 +1666,12 @@ class Service(object):
             ptype = "table" if p["type"] == "generated" else p["type"]
             part(p.get("id"), ptype, reusable,
                  lambda p=p, sheet=sheet: self._panel(p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer))
+            for cp in copies.get(p.get("id"), ()):
+                # the user's temporary copies of the table, right under it: each out of a layer of its own over ``calc``
+                layer = self.copies.calc(user, cp, calc)
+                part(cp.pid, "table", True,
+                     lambda p=p, sheet=sheet, cp=cp, layer=layer: self.copies.entry(
+                         p, v, cp, book, layer, R, loc, user, sheet, charts, show_hidden, explorer), layer)
         if not any(p["type"] == "chart" for p in v["panels"]):
             for i, ch in enumerate(charts):
                 part("chart%d" % i, "chart", True, lambda ch=ch, i=i: self._sheet_chart(R, calc, ch, loc, "chart%d" % i))
@@ -1681,7 +1698,7 @@ class Service(object):
         if v.get("replay_note") and self.mode != "live" and not getattr(book, "recorded", True):
             note = v["replay_note"]                    # the workbook was saved without market data
         top = {"id": v["id"], "title": v["title"], "book": book.id, "sheet": sheet_default, "note": note}
-        top.update(view_layout(v, [pid for pid, _ in shown]))
+        top.update(view_layout(v, [pid for pid, _ in shown], {pid: [cp.pid for cp in lst] for pid, lst in copies.items()}))
         hidden = self._hidden_pages(user if key[0] else "")
         links = [link for link in self._shortcuts(v) if link["page"] not in hidden]      # (an administrators' page: theirs)
         if links:
@@ -1822,6 +1839,9 @@ class Service(object):
             entry["trade"] = p["trade"]             # "İşlem gir": a row as a trade to enter
         if p.get("ranked"):
             entry["ranked"] = True                  # a ranking: a launchpad keeps a choice of its rows by number
+        copies = getattr(self, "copies", None)
+        if copies is not None and copies.offered(v["id"], p.get("id")):
+            entry["copyable"] = True                # "Geçici kopya aç": a calculator whose inputs are the user's own
         try:
             if p.get("note_ref"):
                 # the explanation the workbook keeps in a cell next to the chart / table
@@ -2126,10 +2146,13 @@ class Service(object):
         out["available"] = True
         return out
 
-    def cell_info(self, user: Optional[str], book_id: str, ref: str, locale: Optional[str] = None) -> Dict[str, Any]:
-        return self.et.call(self._cell_info, user, book_id, ref, locale)
+    def cell_info(self, user: Optional[str], book_id: str, ref: str, locale: Optional[str] = None,
+                  copy: Optional[str] = None) -> Dict[str, Any]:
+        """A cell as the status bar tells it: its formula, value, input; ``copy``: as a temporary copy of the user's
+        has it (its value out of the copy, its own value or the table's, why it is read-only there)."""
+        return self.et.call(self._cell_info, user, book_id, ref, locale, copy)
 
-    def _cell_info(self, user, book_id, ref, locale) -> Dict[str, Any]:
+    def _cell_info(self, user, book_id, ref, locale, copy=None) -> Dict[str, Any]:
         book = self._book(book_id)
         try:
             si, rc = book.cell(ref)
@@ -2137,14 +2160,28 @@ class Service(object):
             raise ServiceError("hücre bulunamadı: %s" % ref, 404)
         r, c = divmod(rc, COLS)
         calc = self._calc(user, book)
+        overlay = self._overlay(user, book) if user else None
+        cp = layer = None
+        if copy and user:
+            cp = self.copies.find(user, copy)
+            layer = self.copies.calc(user, cp, calc)
+            calc, overlay = layer, layer.overlay
         loc = numfmt.get_locale(locale or self.settings.locale)
-        cell = self.renderers[book.id].cell(calc, si, r, c, loc, self._overlay(user, book) if user else None)
+        cell = self.renderers[book.id].cell(calc, si, r, c, loc, overlay)
         d = book.inputs.get((si, rc))
         sheet = book.model.sheets[si]
         base = sheet.consts.get(rc)
         inp = None if d is None else {"scope": d.scope, "label": d.label, "kind": d.kind}
+        if inp is not None and cp is not None:
+            t = self.copies.tables.get((cp.view, cp.panel))
+            why = None if t is None else (self.copies.readonly(t).get((si, rc)) if (si, rc) in t.cells else "kopyanın girdisi değil")
+            inp["copy"] = cp.n
+            if why:
+                inp["readonly"] = why
+            elif (si, rc) in layer.overlay:
+                inp["own"] = True                          # (the copy's own value; else the table's)
         e = self.formulas.entry(user, book.id, si, rc) if (self.formulas is not None and inp is not None) else None
-        if e is not None:
+        if e is not None and not inp.get("own"):
             inp["formula"] = cell["ff"] = e.text           # (an input typed as a formula: its text, its value in "cell")
             if e.error:
                 inp["error"] = cell["fe"] = e.error
@@ -2694,6 +2731,36 @@ class Service(object):
             self._note_private(user)
         return {"reset": n}
 
+    # ================================================================== temporary copies of a table (copies.py)
+    def copies_of(self, user: Optional[str]) -> Dict[str, Any]:
+        """The user's temporary copies: ``{"copies": [{"id", "view", "panel", "pid", "n", "at", "values"}], "max_per_table",
+        "max_per_user"}``."""
+        from .copies import MAX_PER_TABLE, MAX_PER_USER
+        return {"copies": [cp.info() for cp in self.copies.items(self.require_user(user))],
+                "max_per_table": MAX_PER_TABLE, "max_per_user": MAX_PER_USER}
+
+    def copy_action(self, user: Optional[str], what: str, data: Any, lang: Optional[str] = None) -> Dict[str, Any]:
+        """A temporary copy opened (``open`` {view, panel}), closed (``close`` {copy}), typed into (``inputs`` {copy,
+        items, lenient?} - as ``set_inputs``), or its own values taken away (``reset`` {copy, refs?})."""
+        user = self.require_user(user)
+        if not isinstance(data, dict):
+            raise ServiceError("geçersiz istek")
+        cp = self.copies
+        if what == "open":
+            res = self.et.call_at(EngineThread.WRITE, cp.open, user, data.get("view"), data.get("panel"))
+        elif what == "close":
+            res = self.et.call_at(EngineThread.WRITE, cp.close, user, data.get("copy"))
+        elif what == "inputs":
+            res = self.et.call_at(EngineThread.WRITE, cp.set_inputs, user, data.get("copy"), data.get("items"),
+                                  lang or self.settings.locale, _flag(data.get("lenient")))
+        elif what == "reset":
+            res = self.et.call_at(EngineThread.WRITE, cp.reset, user, data.get("copy"), data.get("refs"))
+        else:
+            raise ServiceError("bilinmeyen işlem: %s" % str(what)[:40], 404)
+        self.bump()
+        res["gen"] = self.gen
+        return res
+
     def my_inputs(self, user: str) -> Dict[str, Any]:
         """The user's personal inputs: ``{"inputs": [{"book", "ref", "value", "label", "formula"?}]}`` - an input typed as
         a formula with its text and the value it has now."""
@@ -2761,13 +2828,16 @@ class Service(object):
     def _note_private(self, user: Optional[str] = None) -> None:
         """Whether a user has inputs of their own (``None``: every user, read again) - the pages they share follow it.
         Their kept pages and header are made again: what they typed shows at once."""
+        copies = getattr(self, "copies", None)
         if user is None:
             users = set(self.store.users_with_inputs())
+            if copies is not None:
+                users |= copies.users()                # (a page that holds a user's copies is theirs)
             with self._render_lock:
                 self._private_users = users
                 self._renders.clear()
             return
-        mine = bool(self.store.user_inputs(user))
+        mine = bool(self.store.user_inputs(user)) or (copies is not None and copies.has(user))
         with self._render_lock:
             if mine:
                 self._private_users.add(user)
@@ -2887,6 +2957,10 @@ class Service(object):
         if lp is None:
             raise ServiceError("böyle bir launchpad yok", 404)
         lp = self.calcsheets.exported(user, lp)                 # (its calc sheets go with it: their cells)
+        from .copies import copy_pid
+        # a temporary copy is its owner's: whoever imports the file gets the table itself in its place
+        lp = dict(lp, items=[dict(it, panel=copy_pid(it["panel"])[0]) if it.get("type", "table") == "table"
+                             and isinstance(it.get("panel"), str) and copy_pid(it["panel"]) else it for it in lp["items"]])
         raw = json.dumps(lay.export(lp), ensure_ascii=False, indent=1).encode("utf-8")
         safe = re.sub(r"[^A-Za-z0-9_-]+", "-", lp["name"].translate(_ASCII_TR)).strip("-") or "launchpad"
         return raw, "launchpad-%s.json" % safe[:40]

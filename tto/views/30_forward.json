@@ -1321,6 +1321,7 @@
   },
   {
    "id": "B18",
+   "copyable": true,
    "type": "table",
    "title": "Forward DV01",
    "range": "N31:P49",
@@ -1351,6 +1352,7 @@
   },
   {
    "id": "B34",
+   "copyable": true,
    "type": "table",
    "title": "FORWARD STARTING SWAP",
    "range": "B166:O180",
@@ -1373,6 +1375,7 @@
   },
   {
    "id": "B13",
+   "copyable": true,
    "type": "table",
    "title": "Tarih yardımcısı (spot + gün)",
    "range": "B20:E22",
@@ -1467,6 +1470,7 @@
   },
   {
    "id": "B7",
+   "copyable": true,
    "type": "table",
    "title": "Interest 2 SP · TRY faizi → swap puanı (USDTRY | EURTRY)",
    "range": "AG4:AK16",
@@ -1475,6 +1479,7 @@
   },
   {
    "id": "B8",
+   "copyable": true,
    "type": "table",
    "title": "SP 2 Interest · swap puanı → ima TRY faizi (USDTRY | EURTRY)",
    "range": "AG18:AK30",
@@ -1483,6 +1488,7 @@
   },
   {
    "id": "B9",
+   "copyable": true,
    "type": "table",
    "title": "SP 2 Interest · all-in outright → puan ve ima TRY faizi (USDTRY | EURTRY)",
    "range": "AG32:AK44",
@@ -1491,6 +1497,7 @@
   },
   {
    "id": "B10",
+   "copyable": true,
    "type": "table",
    "title": "Interest 2 SP · O/N karşılığı → vade faizi → swap puanı (USDTRY | EURTRY)",
    "range": "AG46:AK58",
@@ -1499,6 +1506,7 @@
   },
   {
    "id": "B11",
+   "copyable": true,
    "type": "table",
    "title": "Basit ↔ bileşik çevirici · Repo",
    "range": "AG60:AK68",
@@ -1507,6 +1515,7 @@
   },
   {
    "id": "B21",
+   "copyable": true,
    "type": "table",
    "title": "XARTRY müşteri altın forward hesaplayıcı",
    "range": "B56:F73",

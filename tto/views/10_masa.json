@@ -238,6 +238,7 @@
   },
   {
    "id": "B9",
+   "copyable": true,
    "type": "table",
    "title": "TARİH ARASI FAİZ  ·  OIS: MPC ima / senaryolar / bootstrap ve spread'li  (sarı hücreler girdi)",
    "range": "B59:N70",
@@ -253,6 +254,8 @@
   },
   {
    "id": "B10",
+   "copyable": true,
+   "copy_with": ["B10D"],
    "type": "table",
    "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread üstteki satırda)",
    "range": "P59:AB70",
@@ -350,6 +353,8 @@
   },
   {
    "id": "B17",
+   "copyable": true,
+   "copy_with": ["B17D"],
    "type": "table",
    "title": "VİOP  ·  TARGET  (girdiler VIOP!L331:P338)",
    "range": "P119:AB129",
@@ -409,6 +414,7 @@
   },
   {
    "id": "B22",
+   "copyable": true,
    "type": "table",
    "title": "KIRIK VADE & KARŞILIK  ·  forward ↔ basit ↔ OIS 3M ↔ XCCY yıllık  (piyasa = eğrilerden mid; sarı = girdi)",
    "range": "B170:N185",

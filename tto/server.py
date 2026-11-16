@@ -352,7 +352,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def cell(request: Request):
         q = request.query_params
-        return ok(await call(svc().cell_info, _user(request), q.get("book", "tto"), q.get("ref", ""), _lang(request)))
+        return ok(await call(svc().cell_info, _user(request), q.get("book", "tto"), q.get("ref", ""), _lang(request),
+                             q.get("copy") or None))
 
     @handler
     async def grid(request: Request):
@@ -394,6 +395,15 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def my_inputs(request: Request):
         return ok(await call_free(svc().my_inputs, _user(request)))
+
+    # ------------------------------------------------------------------ temporary copies of a table
+    @handler
+    async def copies(request: Request):
+        # GET: the user's copies; POST /api/copies/{open|close|inputs|reset} (see Service.copy_action)
+        if request.method == "GET":
+            return ok(await call_free(svc().copies_of, _user(request)))
+        data = await _body(request)
+        return ok(await call(svc().copy_action, _user(request), request.path_params.get("what", ""), data, _lang(request)))
 
     # ------------------------------------------------------------------ scenarios
     @handler
@@ -999,6 +1009,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/paste", paste, methods=["POST"]),
         Route("/api/reset", reset, methods=["POST"]),
         Route("/api/my-inputs", my_inputs),
+        Route("/api/copies", copies),
+        Route("/api/copies/{what}", copies, methods=["POST"]),
         Route("/api/scenarios", scenarios, methods=["GET", "POST", "DELETE"]),
         Route("/api/scenarios/load", scenario_load, methods=["POST"]),
         Route("/api/columns", columns, methods=["GET", "POST"]),
