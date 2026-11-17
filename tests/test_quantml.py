@@ -650,6 +650,8 @@ def test_the_page_the_list_and_the_backtest_through_the_service(served):
     assert aud["valid"] and aud["prints"] and aud["tests"] >= 40 and aud["hit"] >= 0.6 and aud["top"][0]["name"] == "brent_5" and aud["sid"] == "ml:FX:AUDUSD"
     assert all(r.get("why") or r.get("prints") for r in tab["rows"])           # (every line says why it does not print)
     assert "G10 spot" in tab["groups"]["groups"] and tab["groups"]["rows"][0]["shares"] and tab["settings"]["trees"] == ml.TREES
+    # the series the page lists: the lines' and the inputs' - USDTRY's options among them
+    assert {k for _, k in ml.TRY_OPTIONS} <= {c["key"] for c in v["coverage"]}
     assert [s["id"] for s in v["signals"]] and all(s["family"] == "ml" for s in v["signals"])
     # a line a gate of the list holds ("düşük güven": the FX carry buffer, no expected profit) says so on the page
     for s in q.view("signals", user, {})["gated"]:

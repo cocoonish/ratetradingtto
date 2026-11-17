@@ -1425,7 +1425,7 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
     base["ml"] = tab
     base["signals"] = [s for s in v["signals"] + v["gated"] if s["family"] == FAMILY]
     base["settings"] = fit["cfg"]
-    keys = {r.get("key") for r in tab.get("rows") or ()} | {k for _, k in DRIVERS} | set(CURVE) | {"TLREF"}
+    keys = {r.get("key") for r in tab.get("rows") or ()} | {k for _, k in DRIVERS + TRY_OPTIONS} | set(CURVE) | {"TLREF"}
     base["coverage"] = [c for c in fit.get("coverage") or () if c.get("key") in keys]
     base["errors"] = {k: e for k, e in ((v.get("tables") or {}).get("errors") or {}).items() if k == FAMILY}
     return _clean(base)
