@@ -6,14 +6,24 @@ Every RET tenor has its own row, keyed by its label ("1M") - never by a row of t
 * **Tabana spread** (offset, bp): the trader's, per tenor or for many at once;
 * **Akış ayarı** (flow adjustment, bp): a flow suggestion someone accepted - shown apart from the offset, kept until it
   is removed (``retflow.suggest``);
-* **Genişlik** (bid–ask width, bp, a multiple of 5): changed in "Ekstra ayarlar" only (administrators).
+* **Genişlik** (bid–ask width, bp, a multiple of 5): changed in "Ekstra ayarlar" only (administrators);
+* **Tabana göre** (anchor): which quote base + offset + flow sets - the **Mid** (the default), the **Bid** or the **Ask**.
 
-RET mid = base + offset + flow.  The bid is put on the 5 bp grid, ask = bid + width.  The value shown ("Şimdiki")
-follows the raw one with a hysteresis: it moves only when the raw bid has crossed a rounding step (2.5 bp off the shown
-bid) by more than ``hysteresis`` bp (2) - a base moving 3 bp across a step moves it, 1 bp does not, back and forth does
-not make it flap.  A person's change (an offset, a base, a width, a flow adjustment) moves it at once.  "Yayınlanan" is
-the desk's RET as it is (the shared RET cells, Forward!W:X, however they were written); "Kopyala ve yayınla" writes the
+Mid: RET mid = base + offset + flow, the bid put on the 5 bp grid from mid − width / 2, ask = bid + width.  Bid: the bid
+= base + offset + flow on the grid, ask = bid + width.  Ask: the ask = base + offset + flow on the grid, bid = ask −
+width.  The value shown ("Şimdiki") follows the raw one with a hysteresis on the anchored side (the bid for Mid, as
+before): it moves only when that raw value has crossed a rounding step (2.5 bp off the shown one) by more than
+``hysteresis`` bp (2) - a base moving 3 bp across a step moves it, 1 bp does not, back and forth does not make it flap.
+A person's change (an offset, a base, an anchor, a width, a flow adjustment) moves it at once.  "Yayınlanan" is the
+desk's RET as it is (the shared RET cells, Forward!W:X, however they were written); "Kopyala ve yayınla" writes the
 shown curve there - with the RET's history and its "loaded today" mark - so everything that reads the RET follows.
+
+**Senaryo** (each user's own view, remembered): "Piyasa" - the market bases above, the desk's Şimdiki - or one of the
+OIS sheet's three PPK scenarios, evaluated in the user's own calculation (their steps and names; ``extras.RETS_SHEET``):
+the OIS base is the scenario curve's rate between the tenor's two dates (Masa's "Tarih arası faiz" with those dates),
+the VİOP and offshore bases move by (scenario − reference) - the reference being a scenario without steps on the
+implied path - and a blend takes each part's scenario value.  A scenario view has no hysteresis: its raw values are put
+on the grid as they are (the same inputs give the same numbers); the desk's settings stay the desk's.
 
 **Day count** is the RET's own: simple ACT/360 from the USDTRY spot date (Forward!I2) over the RET table's days
 (Forward!U33:U47) - how the Forward sheet prices from it (Forward!D33: spot·(1 + RET·g/360)/(1 + USD·g/360), the RET
@@ -41,14 +51,22 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import borsaspread as bsp
+from . import extras as ex
 from . import retflow as rf
 from .xl.model import COLS, parse_a1
+from .xl.tokenizer import col_to_index
 from .xl.values import date_to_serial, serial_to_date
 
 BASES = ("ois", "viop", "off")
 BASE_NAMES = {"ois": "OIS mid", "viop": "VİOP mid", "off": "offshore mid", "blend": "karma"}
 SHORT = {"ois": "OIS", "viop": "VİOP", "off": "Offshore"}
 CHOICES = BASES + ("blend",)
+#: which quote base + offset + flow sets ("Tabana göre"): the mid (the default), the bid or the ask
+ANCHORS = ("mid", "bid", "ask")
+ANCHOR_NAMES = {"mid": "Mid", "bid": "Bid", "ask": "Ask"}
+#: the views of the fair value ("Senaryo"): the market, or a PPK scenario of the OIS sheet by its code
+MARKET = "piyasa"
+SCENARIOS = tuple(code for code, _, _, _, _, _ in ex.RETS_SCENARIOS)
 GRID = 5.0                                   # bp: the RET's step
 #: the administrators' settings and their defaults: hysteresis (bp), flow sensitivity (bp per 100 mn USD of today's net
 #: above its normal), lookback (business days), minimum margin over cost (bp), the blend's default weights (%)
@@ -77,6 +95,33 @@ def next_shown(raw_bp: float, prev_bp: Optional[float], hysteresis: float) -> fl
     if prev_bp is None or abs(raw_bp - prev_bp) > GRID / 2.0 + max(0.0, hysteresis) + 1e-9:
         return plain
     return float(prev_bp)
+
+
+def raw_bid_of(anchor: str, raw_bp: float, width: float) -> float:
+    """The raw bid (bp) of a tenor whose rule gives ``raw_bp`` for its anchored side: the mid less half the width, the
+    bid itself, or the ask less the width."""
+    if anchor == "bid":
+        return raw_bp
+    if anchor == "ask":
+        return raw_bp - width
+    return raw_bp - width / 2.0
+
+
+def quote(anchor: str, raw_bp: float, width: float, prev_bid: Optional[float], hysteresis: float) -> float:
+    """The bid shown (bp, on the grid) of a tenor whose rule gives ``raw_bp`` for its anchored side, after ``prev_bid``
+    was shown: the hysteresis works on the anchored side - the bid for Mid (as it always did) and Bid, the ask for Ask
+    (the bid = the ask shown − the width)."""
+    if anchor == "ask":
+        prev = prev_bid + width if prev_bid is not None else None
+        return next_shown(raw_bp, prev, hysteresis) - width
+    return next_shown(raw_bid_of(anchor, raw_bp, width), prev_bid, hysteresis)
+
+
+def grid_bid(anchor: str, raw_bp: float, width: float) -> float:
+    """The bid (bp) of a raw anchored value on the grid, without a hysteresis."""
+    if anchor == "ask":
+        return grid_round(raw_bp) - width
+    return grid_round(raw_bid_of(anchor, raw_bp, width))
 
 
 def interp_dates(points: Sequence[Tuple[float, float]], day: float) -> Optional[float]:
@@ -122,10 +167,14 @@ def _bp(x: float) -> str:
     return ("%g" % round(x, 1)).replace(".", ",")
 
 
-def formula_text(base: str, weights: Optional[Dict[str, Any]], offset: Optional[float], flow: float) -> str:
-    """How the RET mid is made, as the desk reads it: "OIS mid − 60 + 5 (akış)"."""
+def formula_text(base: str, weights: Optional[Dict[str, Any]], offset: Optional[float], flow: float,
+                 anchor: str = "mid") -> str:
+    """How the RET is made, as the desk reads it: "OIS mid − 60 + 5 (akış)" (the mid), "Bid = OIS mid − 60 + 5 (akış)"
+    (the bid set from the base), "Ask = …"."""
     name = BASE_NAMES.get(base, base) if base != "blend" else "karma (%s)" % weights_text(weights or {})
     text = name[0].upper() + name[1:]
+    if anchor in ("bid", "ask"):
+        text = "%s = %s" % (ANCHOR_NAMES[anchor], text)
     if offset is None:
         return text + " + ? (tabana spread yok)"
     if offset:
@@ -228,11 +277,32 @@ def tenor_cfg(desk: Dict[str, Any], label: str) -> Dict[str, Any]:
         cfg["base"] = "ois"
     cfg.setdefault("offset", None)
     cfg["flow"] = float(cfg.get("flow") or 0.0)
+    if cfg.get("anchor") not in ANCHORS:
+        cfg["anchor"] = "mid"
     return cfg
 
 
-def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Every tenor's fair value: ``(rows, shown)`` - the rows for the page, the shown bids (bp) after this reading."""
+def scenario_bases(mids: Dict[str, Optional[float]], why: Dict[str, str], s: Optional[Dict[str, Any]]) -> None:
+    """A tenor's bases under a scenario (in place): the OIS base is the scenario curve's rate, VİOP and offshore move by
+    the scenario's rate less the reference's (``s``: ``{"ois", "delta", "why"}``)."""
+    s = s or {}
+    mids["ois"] = s.get("ois")
+    if mids["ois"] is None:
+        why["ois"] = s.get("why") or "senaryo eğrisinin bu vadede değeri yok"
+    for b in ("viop", "off"):
+        if mids[b] is None:
+            continue
+        if s.get("delta") is None:
+            mids[b] = None
+            why[b] = s.get("why") or "senaryonun bu vadede farkı yok"
+        else:
+            mids[b] = mids[b] + s["delta"]
+
+
+def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: Dict[str, Any],
+            scen: Optional[Dict[str, Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Every tenor's fair value: ``(rows, shown)`` - the rows for the page, the shown bids (bp) after this reading.
+    ``scen``: the bases of a scenario per tenor (:func:`scenario_bases`; ``None``: the market's)."""
     h = float(admin.get("hysteresis", DEFAULTS["hysteresis"]))
     widths = admin.get("widths") or {}
     blend_default = admin.get("blend") or DEFAULTS["blend"]
@@ -241,7 +311,12 @@ def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: 
     for t in market.tenors:
         label = t["label"]
         cfg = tenor_cfg(desk, label)
+        anchor = cfg["anchor"]
         mids, why, dates = base_mids(market, t)
+        market_mids = None
+        if scen is not None:
+            market_mids = dict(mids)
+            scenario_bases(mids, why, scen.get(label))
         weights = cfg.get("weights") or blend_default
         if cfg["base"] == "blend":
             base_mid, base_why = blend_mid(mids, weights)
@@ -253,10 +328,12 @@ def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: 
                                "weights": dict(weights) if cfg["base"] == "blend" else None, "mids": mids, "why": why,
                                "base_mid": base_mid, "base_why": base_why, "offset": offset, "flow": flow,
                                "flow_log": list(cfg.get("flow_log") or []), "width": w,
-                               "formula": formula_text(cfg["base"], weights, offset, flow),
+                               "formula": formula_text(cfg["base"], weights, offset, flow, anchor), "anchor": anchor,
                                "pub": {"bid": t["bid"], "ask": t["ask"]}, "now": None, "now_why": "", "update": False,
                                "start": serial_to_date(dates[0]).isoformat() if dates else None,
                                "end": serial_to_date(dates[1]).isoformat() if dates else None}
+        if market_mids is not None:
+            row["market_mids"] = market_mids
         if offset is None:
             row["now_why"] = "tabana spread yazılmadı"
         elif base_mid is None:
@@ -264,12 +341,14 @@ def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: 
         elif w is None:
             row["now_why"] = "genişlik yok"
         else:
-            raw_mid = base_mid * 10000.0 + offset + flow
-            raw_bid = raw_mid - w / 2.0
+            raw = base_mid * 10000.0 + offset + flow               # the anchored side, raw
+            raw_bid = raw_bid_of(anchor, raw, w)
             prev = (shown.get(label) or {}).get("bid")
-            bid = next_shown(raw_bid, prev if type(prev) in (int, float) else None, h)
+            bid = quote(anchor, raw, w, prev if type(prev) in (int, float) else None, h)
             new_shown[label] = {"bid": bid, "raw": round(raw_bid, 4)}
-            row["raw_mid"] = raw_mid / 10000.0
+            if anchor == "mid":
+                row["raw_mid"] = raw / 10000.0
+            row["raw"] = raw / 10000.0
             row["raw_bid"] = raw_bid / 10000.0
             row["now"] = {"bid": round(bid / 10000.0, 8), "ask": round((bid + w) / 10000.0, 8)}
             pb, pa = t["bid"], t["ask"]
@@ -280,9 +359,12 @@ def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: 
             else:
                 row["diff"] = None
                 row["update"] = True
-        # "Neredeyim": the published bid against every base; the RET each base would give with this offset
-        pb = t["bid"]
+        # "Neredeyim": the published side the rule sets (the bid for Mid, as always) against every base; the RET each
+        # base would give with this offset
+        side = "ask" if anchor == "ask" else "bid"
+        pb = t[side]
         row["where"] = {b: (round((pb - mids[b]) * 10000.0, 2) if type(pb) is float and mids[b] is not None else None) for b in BASES}
+        row["where_side"] = side
         whatif: Dict[str, Any] = {}
         if offset is not None and w is not None:
             for b in BASES + ("blend",):
@@ -290,7 +372,8 @@ def compute(market: Market, desk: Dict[str, Any], admin: Dict[str, Any], shown: 
                 if m is None:
                     whatif[b] = None
                     continue
-                bid = grid_round(m * 10000.0 + offset + flow - w / 2.0)
+                bid = grid_round(m * 10000.0 + offset + flow - w / 2.0) if anchor == "mid" else \
+                    grid_bid(anchor, m * 10000.0 + offset + flow, w)
                 whatif[b] = {"bid": round(bid / 10000.0, 8), "ask": round((bid + w) / 10000.0, 8)}
         row["whatif"] = whatif
         rows.append(row)
@@ -317,6 +400,7 @@ class RetFair(object):
     state for the page, the changes, "Kopyala ve yayınla" and the "Pozisyon ve maliyet" panel."""
 
     KEY_DESK, KEY_ADMIN, KEY_SHOWN, KEY_ACCEPTED = "retfair.desk", "retfair.admin", "retfair.shown", "retfair.accepted"
+    KEY_VIEW = "retfair.view."                   # + the user: their own "Senaryo" ({"scenario": "S2"})
 
     def __init__(self, svc):
         self.svc = svc
@@ -501,6 +585,89 @@ class RetFair(object):
         ref_ois = (lambda d: ois.zero(spot, spot + d)) if ois is not None and spot is not None and not ois.why else None
         return ref_ret, ref_ois
 
+    # ------------------------------------------------------------------ the scenarios (each user's own view)
+    def choice(self, user: Optional[str]) -> str:
+        """The user's "Senaryo": a scenario's code, or ``MARKET``."""
+        got = (self.store.get(self.KEY_VIEW + user) or {}).get("scenario") if user else None
+        return got if got in SCENARIOS else MARKET
+
+    def set_view(self, user: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
+        """``{"scenario": "S2" | "piyasa"}``: the user's own view of the fair value (kept by the scenario's code - a
+        renamed scenario is the same one)."""
+        key = self.svc.require_user(user)
+        raw = str((body or {}).get("scenario") or MARKET).strip()
+        code = raw.upper() if raw.upper() in SCENARIOS else raw.lower()
+        if code not in SCENARIOS and code != MARKET:
+            raise self._error("senaryo Piyasa, %s olmalı" % ", ".join(SCENARIOS))
+        self.store.put(self.KEY_VIEW + key, {"scenario": code})
+        return self.svc.et.call(self._state, key)
+
+    def _scenario_rates(self, user: Optional[str]) -> Dict[str, Any]:
+        """The RET tenors' rates on each scenario curve and on the reference, and the scenarios' names - from the
+        workbook's own formulas (``extras.RETS_SHEET``) in the user's calculation: their steps, their names."""
+        book = self._book()
+        si = book.model.sheet_index.get(ex.RETS_SHEET)
+        out: Dict[str, Any] = {"names": {code: code for code in SCENARIOS}, "rates": {code: {} for code in SCENARIOS},
+                               "ref": {}, "why": ""}
+        if si is None:
+            out["why"] = "senaryo tablosu (%s) bu çalışma kitabında yok" % ex.RETS_SHEET
+            return out
+        calc = self.svc._calc(user, book)
+
+        def num(v: Any) -> Optional[float]:
+            return v if type(v) is float and math.isfinite(v) else None
+
+        for code, row, _, _, _, _ in ex.RETS_SCENARIOS:
+            v = calc.get(si, row + 1, 1)
+            out["names"][code] = v if isinstance(v, str) and v.strip() else code
+        cols = [(code, col_to_index(rate)) for code, _, _, _, _, rate in ex.RETS_SCENARIOS]
+        ref_col = col_to_index(ex.RETS_REF[2])
+        for r in range(ex.RETS_FIRST, ex.RETS_PATH - 1):
+            label = calc.get(si, r, 1)
+            if not isinstance(label, str) or not label.strip():
+                break
+            for code, c in cols:
+                out["rates"][code][label] = num(calc.get(si, r, c))
+            out["ref"][label] = num(calc.get(si, r, ref_col))
+        return out
+
+    @staticmethod
+    def _scenario_map(rates: Dict[str, Any], code: str, labels: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+        """A scenario's bases per tenor for :func:`compute`: its OIS rate and its difference to the reference."""
+        out: Dict[str, Dict[str, Any]] = {}
+        mine = rates["rates"].get(code) or {}
+        for label in labels:
+            rate, ref = mine.get(label), rates["ref"].get(label)
+            ok = rate is not None and ref is not None
+            out[label] = {"ois": rate, "delta": (rate - ref) if ok else None,
+                          "why": "" if ok else (rates.get("why") or "senaryo eğrisinin bu vadede değeri yok")}
+        return out
+
+    def _views(self, user: Optional[str], market: Market, desk: Dict[str, Any], admin: Dict[str, Any],
+               rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The user's view: the rows of their scenario (the market's: the desk's own rows), the scenarios with their names,
+        and every tenor under the market and each scenario side by side (no hysteresis in a scenario: plain grid)."""
+        code = self.choice(user)
+        rates = self._scenario_rates(user)
+        labels = [t["label"] for t in market.tenors]
+        per: Dict[str, List[Dict[str, Any]]] = {}
+        for c in SCENARIOS:
+            per[c] = compute(market, desk, admin, {}, self._scenario_map(rates, c, labels))[0]
+        names = rates["names"]
+        compare = []
+        for k, r in enumerate(rows):
+            entry: Dict[str, Any] = {"tenor": r["tenor"], "pub": r["pub"], MARKET: r["now"]}
+            for c in SCENARIOS:
+                sr = per[c][k]
+                entry[c] = sr["now"]
+                if not sr["now"]:
+                    entry.setdefault("why", {})[c] = sr["now_why"]
+            compare.append(entry)
+        return {"code": code, "name": ex.RETS_MARKET if code == MARKET else names[code],
+                "rows": rows if code == MARKET else per[code],
+                "scenarios": [{"code": MARKET, "name": ex.RETS_MARKET}] + [{"code": c, "name": names[c]} for c in SCENARIOS],
+                "compare": compare, "why": rates["why"]}
+
     # ------------------------------------------------------------------ the state of the page
     def state(self, user: Optional[str]) -> Dict[str, Any]:
         self.svc.require_user(user)
@@ -510,13 +677,19 @@ class RetFair(object):
         market, desk, admin, rows = self._evaluate()
         flows = self._flows(market, admin, rows)
         meta = self.svc.ret_meta()
-        return {"rows": rows, "updates": [r["tenor"] for r in rows if r["update"] and r["now"]],
+        view = self._views(user, market, desk, admin, rows)
+        shown = view["rows"]
+        return {"rows": shown, "updates": [r["tenor"] for r in shown if r["update"] and r["now"]],
                 "settings": {k: admin.get(k) for k in ("hysteresis", "sensitivity", "lookback", "margin", "blend", "widths")},
                 "width_notes": admin.get("width_notes") or [],
                 "spot": serial_to_date(market.spot).isoformat() if market.spot is not None else None,
                 "viop": [{"expiry": serial_to_date(d).isoformat(), "mid": r, "ticker": n} for d, r, n in market.viop],
                 "flows": flows, "log": self.log(), "meta": meta, "admin": self.svc._is_admin(user),
-                "defaults": {k: DEFAULTS[k] for k in DEFAULTS}, "gen": self.svc.gen}
+                "defaults": {k: DEFAULTS[k] for k in DEFAULTS}, "gen": self.svc.gen,
+                # the user's own view: their scenario (its name now), the scenarios to choose from, the comparison
+                "scenario": {"code": view["code"], "name": view["name"], "why": view["why"]},
+                "scenarios": view["scenarios"], "compare": view["compare"],
+                "market_updates": [r["tenor"] for r in rows if r["update"] and r["now"]]}
 
     # ------------------------------------------------------------------ the trader's changes
     def _labels(self, market: Market, tenors: Any) -> List[str]:
@@ -550,7 +723,8 @@ class RetFair(object):
     def change(self, user: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
         """A change of the desk's per-tenor settings: ``{"tenors": [...] | "all"}`` with one of ``"offset"`` (a number;
         ``null`` clears it), ``"shift"`` (bp added to the offsets that are set), ``"from_published": true`` (the offset
-        that gives the published RET now), ``"base"`` (+ ``"weights"`` for "blend")."""
+        that gives the published RET's anchored side now), ``"base"`` (+ ``"weights"`` for "blend"), ``"anchor"``
+        ("bid" / "mid" / "ask": which quote base + offset + flow sets)."""
         key = self.svc.require_user(user)
         out = self.svc.et.call_at(self.svc.et.WRITE, self._change, key, body)
         self.svc.bump()
@@ -588,6 +762,7 @@ class RetFair(object):
                 if skipped and not changed:
                     raise self._error("seçilen vadelerin tabana spread'i yok: önce yazın ya da 'Yayınlanandan al'")
             elif body.get("from_published"):
+                # the offset that gives the published RET's anchored side now (the market's base: the offset is the desk's)
                 parts, skipped = [], []
                 for lab in labels:
                     r = by[lab]
@@ -595,7 +770,11 @@ class RetFair(object):
                     if r["base_mid"] is None or type(pb) is not float or type(pa) is not float:
                         skipped.append(lab)
                         continue
-                    val = float(round((pb + pa) / 2.0 * 10000.0 - r["base_mid"] * 10000.0 - r["flow"]))
+                    anchor = r.get("anchor") or "mid"
+                    if anchor == "mid":
+                        val = float(round((pb + pa) / 2.0 * 10000.0 - r["base_mid"] * 10000.0 - r["flow"]))
+                    else:
+                        val = float(round((pb if anchor == "bid" else pa) * 10000.0 - r["base_mid"] * 10000.0 - r["flow"]))
                     cfg = tenors.setdefault(lab, {})
                     cfg["offset"] = val
                     changed.append(lab)
@@ -620,6 +799,19 @@ class RetFair(object):
                             cfg["weights"] = weights
                         changed.append(lab)
                 text = "%s: taban %s" % (", ".join(changed), BASE_NAMES[base] + (" (%s)" % weights_text(weights) if weights else ""))
+            elif "anchor" in body:
+                anchor = str(body.get("anchor") or "").strip().lower()
+                if anchor not in ANCHORS:
+                    raise self._error("tabana göre Bid, Mid ya da Ask olmalı")
+                for lab in labels:
+                    if tenor_cfg(desk, lab)["anchor"] != anchor:
+                        cfg = tenors.setdefault(lab, {})
+                        if anchor == "mid":
+                            cfg.pop("anchor", None)             # (the default: nothing kept)
+                        else:
+                            cfg["anchor"] = anchor
+                        changed.append(lab)
+                text = "%s: tabana göre %s (%s = taban + spread + akış)" % (", ".join(changed), ANCHOR_NAMES[anchor], ANCHOR_NAMES[anchor])
             else:
                 raise self._error("değişiklik anlaşılamadı")
             if changed:
@@ -743,13 +935,17 @@ class RetFair(object):
             return self._state(user)
 
     # ------------------------------------------------------------------ "Kopyala ve yayınla"
-    def publish(self, user: Optional[str], rows: Any) -> Dict[str, Any]:
+    def publish(self, user: Optional[str], rows: Any, scenario: Any = None) -> Dict[str, Any]:
         """The curve the page copied, written as the desk's RET: the shared RET cells (every table that reads the RET
-        follows), the RET's history (who, when, what) and its "loaded today" mark.  What is written is exactly what was
-        copied - the page sends what it put on the clipboard."""
+        follows), the RET's history (who, when, what, from which scenario) and its "loaded today" mark.  What is written
+        is exactly what was copied - the page sends what it put on the clipboard (``scenario``: the user's view it was
+        copied from, a scenario's code; the market otherwise).  Says which tenors moved and by how much (bp)."""
         key = self.svc.require_user(user)
         if not isinstance(rows, list) or not rows:
             raise self._error("yayınlanacak eğri yok")
+        code = str(scenario or "").strip().upper()
+        if code and code not in SCENARIOS:
+            code = ""
         clean = []
         for r in rows:
             if not isinstance(r, dict):
@@ -763,19 +959,30 @@ class RetFair(object):
             if type(bid) is not float or type(ask) is not float or not (0.0 < bid < 5.0 and 0.0 < ask < 5.0) or ask < bid:
                 raise self._error("%s: bid / ask anlaşılamadı" % (lab or "?"))
             clean.append({"tenor": lab, "bid": round(bid, 8), "ask": round(ask, 8)})
+        name = self.svc.et.call(lambda: self._scenario_rates(key)["names"][code]) if code else ""
         before = {r["tenor"]: r for r in self.svc.ret()["rows"]}
         res = self.svc.set_ret(key, clean)
         if res.get("errors"):
             raise self._error("; ".join(res["errors"]))
+        # what moved against the RET published before (as the RET's history counts it: a hundredth of a bp is no move)
+        from .service import ret_changes
+        deltas = ret_changes(list(before.values()), clean)
         moved = []
-        for r in clean:
-            b = before.get(r["tenor"]) or {}
-            if b.get("bid") != r["bid"] or b.get("ask") != r["ask"]:
-                was = ("%s / %s" % (rf.pct_text(b["bid"]), rf.pct_text(b["ask"]))) if type(b.get("bid")) is float and type(b.get("ask")) is float else "—"
-                moved.append("%s %s / %s (önce %s)" % (r["tenor"], rf.pct_text(r["bid"]), rf.pct_text(r["ask"]), was))
-        self._log(key, "yayin", "Kopyala ve yayınla: " + ("; ".join(moved) if moved else "eğri değişmeden yeniden yayınlandı"))
+        new = {r["tenor"]: r for r in clean}
+        for d in deltas:
+            b, r = before.get(d["tenor"]) or {}, new[d["tenor"]]
+            both = type(b.get("bid")) is float and type(b.get("ask")) is float
+            was = ("%s / %s" % (rf.pct_text(b["bid"]), rf.pct_text(b["ask"]))) if both else "—"
+            moved.append("%s %s / %s (önce %s)" % (r["tenor"], rf.pct_text(r["bid"]), rf.pct_text(r["ask"]), was))
+        source = ("%s senaryosundan" % name) if code else ""
+        self._log(key, "yayin", "Kopyala ve yayınla" + (" (%s)" % source if source else "") + ": "
+                  + ("; ".join(moved) if moved else "eğri değişmeden yeniden yayınlandı"))
+        if res.get("ret_history"):
+            self.store.note_ret_history(res["ret_history"], {"source": "Adil değer · Kopyala ve yayınla" + (" · " + source if source else "")})
         out = self.state(key)
         out["published"] = len(clean)
+        out["moved"] = deltas
+        out["source"] = source
         return out
 
     # ------------------------------------------------------------------ "Pozisyon ve maliyet" (Günlük İşlemler)

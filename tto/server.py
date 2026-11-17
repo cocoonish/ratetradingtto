@@ -480,9 +480,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def ret_fair_publish(request: Request):
-        # "Kopyala ve yayınla": the curve the page copied becomes the desk's RET
+        # "Kopyala ve yayınla": the curve the page copied becomes the desk's RET (``scenario``: the view it came from)
         data = await _body(request)
-        return ok(await call(svc().retfair.publish, _user(request), data.get("rows")))
+        return ok(await call(svc().retfair.publish, _user(request), data.get("rows"), data.get("scenario")))
+
+    @handler
+    async def ret_fair_view(request: Request):
+        # the user's own "Senaryo" of the fair value: {"scenario": "piyasa" | "S1" | "S2" | "S3"}
+        return ok(await call(svc().retfair.set_view, _user(request), await _body(request)))
 
     @handler
     async def ret_position(request: Request):
@@ -1169,6 +1174,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/ret/fair/settings", ret_fair_settings, methods=["POST"]),
         Route("/api/ret/fair/flow", ret_fair_flow, methods=["POST"]),
         Route("/api/ret/fair/publish", ret_fair_publish, methods=["POST"]),
+        Route("/api/ret/fair/view", ret_fair_view, methods=["POST"]),
         Route("/api/ret/position", ret_position),
         Route("/api/market/unknown", market_unknown),
         Route("/api/market/unknown/export", market_unknown_export),

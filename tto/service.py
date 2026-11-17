@@ -53,6 +53,29 @@ RET_TENORS = ["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", 
 RET_FIRST_ROW = 33
 
 
+def ret_changes(before: List[Dict[str, Any]], after: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """What an upload of the RET curve changed, tenor by tenor: ``[{"tenor", "bid", "ask"}]`` - the moves in bp (a side
+    without a number before or after: ``None``); tenors that did not move are left out."""
+    was = {r["tenor"]: r for r in before}
+    out = []
+    for r in after:
+        b = was.get(r["tenor"]) or {}
+        move: Dict[str, Any] = {"tenor": r["tenor"]}
+        moved = False
+        for side in ("bid", "ask"):
+            x, y = b.get(side), r.get(side)
+            if type(x) is float and type(y) is float:
+                d = round((y - x) * 10000.0, 2) + 0.0          # (no −0)
+                move[side] = d
+                moved = moved or abs(d) >= 0.005
+            else:
+                move[side] = None
+                moved = moved or x != y
+        if moved:
+            out.append(move)
+    return out
+
+
 def _payer_plus(leg: Dict[str, Any]) -> Optional[float]:
     """The DV01 of an OIS leg with the desk's sign: paying fixed is plus, receiving is minus."""
     d = leg.get("dv01")
@@ -2703,12 +2726,16 @@ class Service(object):
         if shared_clear:
             book.engine.clear_inputs(shared_clear)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in shared_clear])
+        ret_hid = None
         if shared_vals:
+            # the RET curve as it was: the history says what an upload changed, tenor by tenor
+            ret_before = self._ret_rows(book) if any(book.inputs[k].group == "ret" for k in shared_vals) else None
             book.engine.set_inputs(shared_vals)
             self.store.set_shared_inputs(book.id, {book.ref(si, rc): _to_json(v) for (si, rc), v in shared_vals.items()}, user,
                                          {book.ref(si, rc): e.text for (si, rc), e in shared_forms.items()})
-            if any(book.inputs[k].group == "ret" for k in shared_vals):
-                self.store.add_ret_history(user, self._ret_rows(book))
+            if ret_before is not None:
+                after = self._ret_rows(book)
+                ret_hid = self.store.add_ret_history(user, after, {"changes": ret_changes(ret_before, after)})
         if shared_vals or shared_clear:
             self.formulas.wrote(book, "", shared_vals, shared_clear, shared_forms)
             self._follow_try_holidays(book, list(shared_vals) + shared_clear)
@@ -2741,6 +2768,8 @@ class Service(object):
             res["row_values"] = row_values
         if lenient:
             res["skipped"] = skipped
+        if ret_hid is not None:
+            res["ret_history"] = ret_hid                 # (the RET's history entry this write made)
         return res
 
     @staticmethod

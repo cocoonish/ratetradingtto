@@ -120,7 +120,9 @@ _ADDED_COLUMNS = {"mpc_days": (("control", "REAL"), ("tolerance", "REAL"), ("car
                             ("decided_by", "TEXT"), ("decided_at", "TEXT"), ("failed", "INTEGER NOT NULL DEFAULT 0"),
                             ("locked_until", "TEXT"), ("requested_new", "INTEGER NOT NULL DEFAULT 0")),
                   "user_inputs": (("formula", "TEXT"),),
-                  "shared_inputs": (("formula", "TEXT"),)}
+                  "shared_inputs": (("formula", "TEXT"),),
+                  # what an upload changed per tenor and where it came from (JSON: {"changes": [...], "source": ...})
+                  "ret_history": (("meta", "TEXT"),)}
 _ACCOUNT_FIELDS = ("display", "last_seen", "pw_hash", "role", "status", "note", "requested_at", "decided_by", "decided_at",
                    "failed", "locked_until", "requested_new")
 
@@ -715,13 +717,31 @@ class Store(object):
         self._told(None, False)
 
     # ------------------------------------------------------------------ RET curve history
-    def add_ret_history(self, user: Optional[str], rows: List[Dict[str, Any]]) -> int:
-        return self._x("INSERT INTO ret_history (ts, user, payload) VALUES (?,?,?)",
-                       (now_iso(), user, json.dumps(rows, ensure_ascii=False)))
+    def add_ret_history(self, user: Optional[str], rows: List[Dict[str, Any]], meta: Optional[Dict[str, Any]] = None) -> int:
+        """An upload of the RET curve: its rows and (``meta``) what it changed per tenor against the curve before it."""
+        return self._x("INSERT INTO ret_history (ts, user, payload, meta) VALUES (?,?,?,?)",
+                       (now_iso(), user, json.dumps(rows, ensure_ascii=False),
+                        json.dumps(meta, ensure_ascii=False) if meta else None))
+
+    def note_ret_history(self, hid: int, fields: Dict[str, Any]) -> None:
+        """More about an upload already written (where it came from: "Kopyala ve yayınla", a scenario)."""
+        with self._lock:
+            got = self._q("SELECT meta FROM ret_history WHERE id=?", (hid,))
+            if not got:
+                return
+            meta = json.loads(got[0]["meta"]) if got[0]["meta"] else {}
+            meta.update(fields)
+            self._x("UPDATE ret_history SET meta=? WHERE id=?", (json.dumps(meta, ensure_ascii=False), hid))
 
     def ret_history(self, limit: int = 20) -> List[Dict[str, Any]]:
-        rows = self._q("SELECT id, ts, user, payload FROM ret_history ORDER BY id DESC LIMIT ?", (limit,))
-        return [{"id": r["id"], "ts": r["ts"], "user": r["user"], "rows": json.loads(r["payload"])} for r in rows]
+        rows = self._q("SELECT id, ts, user, payload, meta FROM ret_history ORDER BY id DESC LIMIT ?", (limit,))
+        out = []
+        for r in rows:
+            entry = {"id": r["id"], "ts": r["ts"], "user": r["user"], "rows": json.loads(r["payload"])}
+            if r["meta"]:
+                entry.update(json.loads(r["meta"]))          # "changes" (per tenor, bp), "source"
+            out.append(entry)
+        return out
 
     # ------------------------------------------------------------------ the fair value RET's changes (retfair.py)
     def add_ret_fair_log(self, user: Optional[str], kind: str, text: str) -> int:

@@ -2,25 +2,32 @@
 tenor against its machinery, blends, the offset and the width, the 5 bp grid, the 2 bp hysteresis, "Kopyala ve
 yayınla", "Neredeyim", flow suggestions from planted trades (volume, normal, cost, neighbours, never below cost +
 margin, nothing from Broker Chat), the flow adjustment that stays until removed, the administrators' settings, an old
-database, the tenors kept by their label - and Günlük İşlemler's "Pozisyon ve maliyet" on the same aggregation."""
+database, the tenors kept by their label - and Günlük İşlemler's "Pozisyon ve maliyet" on the same aggregation.
+
+"Tabana göre" (the base sets the bid, the mid or the ask), the RET history's per-tenor changes, and the fair value under
+the OIS sheet's PPK scenarios (each user's own view, evaluated in their own calculation: ``extras.RETS_SHEET``)."""
 from __future__ import annotations
 
 import datetime as _dt
+import random
 import sqlite3
 
 import pytest
 
 from conftest import ANON, auth, cell, make_service
 from tto import borsaspread as bsp
+from tto import extras as ex
 from tto import quantviop as qv
 from tto import retfair as rfv
 from tto import retflow as rf
-from tto.service import Service, ServiceError
+from tto.service import Service, ServiceError, ret_changes
 from tto.xl.model import COLS, parse_a1
 from tto.xl.values import date_to_serial
 
 TODAY = "2026-11-17"                       # a Tuesday: the ten business days before it are 03.11 – 16.11
 SPOT = 46330.0                             # the replay's USDTRY spot date (04.11.2026)
+#: a user's scenario steps (bp) at the first meeting (10.12.2026), so that the three scenarios differ (as test_viopfra.py)
+STEPS = {"OIS_MAIN!U10": "-50", "OIS_MAIN!V10": "100", "OIS_MAIN!W10": "-250"}
 
 
 # ---------------------------------------------------------------------------------------------- helpers
@@ -78,6 +85,29 @@ def cells_of(svc, refs):
         return out
 
     return svc.et.call(run)
+
+
+def put(svc, user, cells):
+    res = svc.set_inputs(user, "tto", [{"ref": ref, "value": value} for ref, value in cells.items()])
+    assert res["errors"] == [], res["errors"]
+
+
+def view(svc, user, code=None):
+    """The user's fair value state, in scenario ``code`` when given (their own choice, kept)."""
+    if code is not None:
+        svc.retfair.set_view(user, {"scenario": code})
+    return svc.retfair.state(user)
+
+
+def serial(iso):
+    return float(date_to_serial(_dt.date.fromisoformat(iso)))
+
+
+def desk_rate(svc, user, start, end, row):
+    """The desk sheet's own rate of a curve between two dates: Masa's "Tarih arası faiz" block set to them (row 62 MPC
+    ima, 63–65 S1–S3, 67 Bootstrap)."""
+    put(svc, user, {"MASA!C60": "%d" % start, "MASA!E60": "%d" % end})
+    return cell(svc, "MASA!D%d" % row, user)
 
 
 # ---------------------------------------------------------------------------------------------- the numbers
@@ -212,6 +242,187 @@ def test_tenors_are_kept_by_their_label():
     tenors = [("3M", 92.0, 0.35, 0.355), ("1M", 30.0, 0.3445, 0.3465), ("ON", 1.0, 0.3555, 0.3575)]
     rows, _ = rfv.compute(market(ois=0.3587, tenors=tenors), {"tenors": {"1M": {"offset": -132.0}}}, {"widths": {"1M": 20}}, {})
     assert by_tenor(rows)["1M"]["now"] == {"bid": 0.3445, "ask": 0.3465} and by_tenor(rows)["3M"]["now"] is None
+
+
+# ---------------------------------------------------------------------------------------------- "Tabana göre"
+def test_the_base_sets_the_bid_the_mid_or_the_ask():
+    """Bid: bid = base + spread + flow on the grid, ask = bid + width.  Ask: ask = base + spread + flow on the grid, bid =
+    ask − width.  Mid (the default): as it always was.  The formula says which; "Neredeyim" measures the published side
+    the rule sets; what each base would give follows the rule."""
+    m = market(ois=0.3587, off=0.3301)
+    admin = {"hysteresis": 2.0, "widths": {"1M": 20, "2M": 50, "3M": 50}}
+    desk = {"tenors": {"1M": {"offset": -60.0, "anchor": "bid"}, "2M": {"offset": -60.0, "anchor": "ask"}, "3M": {"offset": -60.0}}}
+    rows, shown = rfv.compute(m, desk, admin, {})
+    r = by_tenor(rows)
+    # Bid: 35,87 − 60 bp = 35,27 → 35,25; ask = 35,25 + 20 bp
+    assert r["1M"]["now"] == {"bid": 0.3525, "ask": 0.3545} and r["1M"]["formula"] == "Bid = OIS mid − 60" and r["1M"]["anchor"] == "bid"
+    assert r["1M"]["raw"] == pytest.approx(0.3527) and r["1M"]["raw_bid"] == pytest.approx(0.3527) and "raw_mid" not in r["1M"]
+    assert r["1M"]["diff"] == {"bid": 80.0, "ask": 80.0} and r["1M"]["update"] is True                # published 34,45 / 34,65
+    # Ask: the ask 35,27 → 35,25; bid = 35,25 − 50 bp
+    assert r["2M"]["now"] == {"bid": 0.3475, "ask": 0.3525} and r["2M"]["formula"] == "Ask = OIS mid − 60"
+    assert r["2M"]["raw"] == pytest.approx(0.3527) and r["2M"]["raw_bid"] == pytest.approx(0.3477) and shown["2M"]["bid"] == 3475.0
+    # Mid: mid 35,27, the bid 35,27 − 25 = 35,02 → 35,00, ask 35,50
+    assert r["3M"]["now"] == {"bid": 0.35, "ask": 0.355} and r["3M"]["formula"] == "OIS mid − 60" and r["3M"]["anchor"] == "mid"
+    assert r["3M"]["raw_mid"] == pytest.approx(0.3527) and r["3M"]["raw_bid"] == pytest.approx(0.3502)
+    # a half step up on the anchored side: 34,275 → 34,30
+    rows, _ = rfv.compute(m, {"tenors": {"1M": {"offset": -159.5, "anchor": "bid"}, "2M": {"offset": -159.5, "anchor": "ask"}}}, admin, {})
+    assert by_tenor(rows)["1M"]["now"] == {"bid": 0.343, "ask": 0.345} and by_tenor(rows)["2M"]["now"] == {"bid": 0.338, "ask": 0.343}
+    # a width whose half is no step: only Mid splits it (bid 35,145 → 35,15); Bid and Ask take it whole
+    for anchor, now in (("mid", {"bid": 0.3515, "ask": 0.354}), ("bid", {"bid": 0.3525, "ask": 0.355}), ("ask", {"bid": 0.35, "ask": 0.3525})):
+        rows, _ = rfv.compute(m, {"tenors": {"1M": {"offset": -60.0, "anchor": anchor}}}, {"widths": {"1M": 25}}, {})
+        assert by_tenor(rows)["1M"]["now"] == now, anchor
+    # "Neredeyim": the published bid for Bid and Mid, the published ask for Ask
+    assert (r["1M"]["where_side"], r["2M"]["where_side"], r["3M"]["where_side"]) == ("bid", "ask", "bid")
+    assert r["1M"]["where"]["ois"] == pytest.approx(-142.0) and r["2M"]["where"]["ois"] == pytest.approx(-92.0)      # 34,45 / 34,95
+    assert r["3M"]["where"]["ois"] == pytest.approx(-87.0) and r["2M"]["where"]["off"] == pytest.approx(194.0)
+    # each base with this spread, by the tenor's rule: offshore 33,01 − 60 = 32,41 → 32,40 (the bid; the ask for Ask)
+    assert r["1M"]["whatif"]["ois"] == r["1M"]["now"] and r["1M"]["whatif"]["off"] == {"bid": 0.324, "ask": 0.326}
+    assert r["2M"]["whatif"]["ois"] == r["2M"]["now"] and r["2M"]["whatif"]["off"] == {"bid": 0.319, "ask": 0.324}
+    # no offset: the formula says which side it would set
+    rows, _ = rfv.compute(m, {"tenors": {"1M": {"anchor": "ask"}}}, admin, {})
+    assert by_tenor(rows)["1M"]["formula"] == "Ask = OIS mid + ? (tabana spread yok)" and by_tenor(rows)["1M"]["now"] is None
+    # an anchor the desk does not know is the mid
+    assert rfv.tenor_cfg({"tenors": {"1M": {"anchor": "orta"}}}, "1M")["anchor"] == "mid"
+
+
+@pytest.mark.parametrize("anchor", ["bid", "ask"])
+def test_the_hysteresis_works_on_the_anchored_side(anchor):
+    """The side the base sets moves when its raw value crosses a step by more than 2 bp - and not otherwise."""
+    m = market(ois=0.3437)
+    desk = {"tenors": {"1M": {"offset": 0.0, "anchor": anchor}}}
+    admin = {"hysteresis": 2.0, "widths": {"1M": 20}}
+    state = {}
+
+    def side_at(rate):
+        m.curves["ois"] = FlatCurve(rate)
+        rows, new = rfv.compute(m, desk, admin, state)
+        state.update(new)
+        now = by_tenor(rows)["1M"]["now"]
+        assert round((now["ask"] - now["bid"]) * 1e4, 6) == 20.0
+        return now[anchor]
+
+    assert side_at(0.3437) == 0.3435                                    # raw 34,37
+    assert side_at(0.3440) == 0.344                                     # 3 bp up across the step (34,375): moves
+    assert side_at(0.3439) == 0.344 and side_at(0.3438) == 0.344        # back by 1, by 2: stays
+    assert side_at(0.3439) == 0.344 and side_at(0.3437) == 0.344        # back and forth: no flapping
+    assert side_at(0.34355) == 0.344                                    # 2 bp below the step: not more than 2
+    assert side_at(0.34354) == 0.3435                                   # 2,1 bp below it: down again
+    assert rfv.quote(anchor, 3428.0, 20.0, None, 2.0) == (3430.0 if anchor == "bid" else 3410.0)
+
+
+def _old_rule(market, desk, admin, shown):
+    """What the fair value computed before "Tabana göre" (every tenor priced off its mid), frozen here: the default must
+    give it number for number."""
+    h = float(admin.get("hysteresis", rfv.DEFAULTS["hysteresis"]))
+    widths = admin.get("widths") or {}
+    blend_default = admin.get("blend") or rfv.DEFAULTS["blend"]
+    out = {}
+    for t in market.tenors:
+        cfg = dict((desk.get("tenors") or {}).get(t["label"]) or {})
+        base = cfg.get("base") if cfg.get("base") in rfv.CHOICES else "ois"
+        offset, flow = cfg.get("offset"), float(cfg.get("flow") or 0.0)
+        mids, why, _ = rfv.base_mids(market, t)
+        weights = cfg.get("weights") or blend_default
+        base_mid = rfv.blend_mid(mids, weights)[0] if base == "blend" else mids.get(base)
+        w = widths.get(t["label"])
+        name = rfv.BASE_NAMES[base] if base != "blend" else "karma (%s)" % rfv.weights_text(weights)
+        formula = name[0].upper() + name[1:]
+        if offset is None:
+            formula += " + ? (tabana spread yok)"
+        else:
+            if offset:
+                formula += " %s %s" % ("+" if offset > 0 else "−", ("%g" % round(abs(offset), 1)).replace(".", ","))
+            if flow:
+                formula += " %s %s (akış)" % ("+" if flow > 0 else "−", ("%g" % round(abs(flow), 1)).replace(".", ","))
+        row = {"formula": formula, "now": None, "base_mid": base_mid}
+        if offset is not None and base_mid is not None and w is not None:
+            raw_mid = base_mid * 10000.0 + offset + flow
+            raw_bid = raw_mid - w / 2.0
+            prev = (shown.get(t["label"]) or {}).get("bid")
+            bid = rfv.next_shown(raw_bid, prev, h)
+            row.update(raw_mid=raw_mid / 10000.0, raw_bid=raw_bid / 10000.0,
+                       now={"bid": round(bid / 10000.0, 8), "ask": round((bid + w) / 10000.0, 8)})
+        pb = t["bid"]
+        row["where"] = {b: (round((pb - mids[b]) * 10000.0, 2) if type(pb) is float and mids[b] is not None else None) for b in rfv.BASES}
+        whatif = {}
+        if offset is not None and w is not None:
+            for b in rfv.BASES + ("blend",):
+                mm = mids[b] if b != "blend" else rfv.blend_mid(mids, weights)[0]
+                whatif[b] = None if mm is None else {
+                    "bid": round(rfv.grid_round(mm * 10000.0 + offset + flow - w / 2.0) / 10000.0, 8),
+                    "ask": round((rfv.grid_round(mm * 10000.0 + offset + flow - w / 2.0) + w) / 10000.0, 8)}
+        row["whatif"] = whatif
+        out[t["label"]] = row
+    return out
+
+
+def test_the_default_mid_is_the_old_rule_number_for_number():
+    """Every tenor left on Mid (no anchor kept, or "mid" written) gives what the fair value gave before the anchors:
+    Şimdiki, the raw values, the formula, "Neredeyim" and what each base would give - over many random curves, spreads,
+    flows, widths, hystereses and shown values."""
+    rnd = random.Random(20261117)
+    for _ in range(300):
+        viop = sorted((SPOT + rnd.randint(5, 400), rnd.uniform(0.30, 0.40), "K") for _ in range(rnd.randint(0, 4)))
+        m = market(ois=round(rnd.uniform(0.30, 0.40), 6), off=round(rnd.uniform(0.30, 0.40), 6), viop=viop)
+        desk, admin, shown = {"tenors": {}}, {"hysteresis": rnd.choice([0.0, 2.0, 3.5]), "widths": {}}, {}
+        for t in m.tenors:
+            cfg = {"base": rnd.choice(rfv.CHOICES), "offset": rnd.choice([None, round(rnd.uniform(-300, 300), 1)]),
+                   "flow": rnd.choice([0.0, 5.0, -10.0])}
+            if cfg["base"] == "blend" and rnd.random() < 0.5:
+                cfg["weights"] = {"ois": rnd.choice([0, 50]), "viop": rnd.choice([0, 25]), "off": 25}
+            if rnd.random() < 0.3:
+                cfg["anchor"] = "mid"
+            desk["tenors"][t["label"]] = cfg
+            if rnd.random() < 0.9:
+                admin["widths"][t["label"]] = 5 * rnd.randint(0, 30)
+            if rnd.random() < 0.5:
+                shown[t["label"]] = {"bid": 5.0 * rnd.randint(600, 800)}
+        rows, _ = rfv.compute(m, desk, admin, shown)
+        old = _old_rule(m, desk, admin, shown)
+        for r in rows:
+            o = old[r["tenor"]]
+            assert (r["formula"], r["now"], r["base_mid"], r["where"], r["whatif"]) == (o["formula"], o["now"], o["base_mid"], o["where"], o["whatif"])
+            assert (r.get("raw_mid"), r.get("raw_bid")) == (o.get("raw_mid"), o.get("raw_bid"))
+
+
+# ---------------------------------------------------------------------------------------------- the scenarios (unit)
+def test_a_scenario_moves_the_bases_and_a_viop_roll_leaves_its_ois_part_alone():
+    """Under a scenario the OIS base is the scenario's rate; VİOP and offshore keep their basis to OIS (they move by the
+    scenario less the reference); a blend takes each part's scenario value.  A VİOP roll changes the VİOP market base only:
+    the scenario's OIS part (its rate and its difference to the reference) is the same."""
+    tenors = [("1M", 30.0, 0.3445, 0.3465), ("2M", 61.0, 0.3445, 0.3495)]
+    scen = {"1M": {"ois": 0.37, "delta": 0.005, "why": ""}, "2M": {"ois": None, "delta": None, "why": "senaryo yok"}}
+    admin = {"widths": {"1M": 20, "2M": 50}}
+    desk = {"tenors": {"1M": {"offset": 0.0}, "2M": {"offset": 0.0, "base": "off"}}}
+    before = market(ois=0.36, off=0.33, viop=[(SPOT + 20, 0.34, "A1X6"), (SPOT + 40, 0.345, "A1Z6")], tenors=tenors)
+    rolled = market(ois=0.36, off=0.33, viop=[(SPOT + 25, 0.343, "A1Z6"), (SPOT + 55, 0.35, "A1F7")], tenors=tenors)
+    seen = {}
+    for name, m in (("before", before), ("rolled", rolled)):
+        rows, _ = rfv.compute(m, desk, admin, {}, scen)
+        r = by_tenor(rows)["1M"]
+        mkt = by_tenor(rfv.compute(m, desk, admin, {})[0])["1M"]["mids"]
+        assert r["market_mids"] == mkt and r["mids"]["ois"] == 0.37
+        assert r["mids"]["viop"] == pytest.approx(mkt["viop"] + 0.005, abs=1e-15) and r["mids"]["off"] == pytest.approx(0.335, abs=1e-15)
+        assert r["now"] == {"bid": 0.369, "ask": 0.371}                 # 37,00 − 10 bp, no hysteresis
+        seen[name] = (r["mids"]["ois"], r["mids"]["viop"] - mkt["viop"], mkt["viop"])
+        # no rate of the scenario: no base, and why - for the offshore too (its difference is unknown)
+        r2 = by_tenor(rows)["2M"]
+        assert r2["now"] is None and r2["now_why"] == "senaryo yok" and r2["mids"]["off"] is None
+    assert seen["before"][:2] == pytest.approx(seen["rolled"][:2], abs=1e-15) and seen["before"][2] != seen["rolled"][2]
+    # a blend: each part's scenario value
+    rows, _ = rfv.compute(before, {"tenors": {"1M": {"offset": 0.0, "base": "blend", "weights": {"ois": 50, "viop": 25, "off": 25}}}}, admin, {}, scen)
+    r = by_tenor(rows)["1M"]
+    assert r["base_mid"] == pytest.approx(0.5 * 0.37 + 0.25 * (r["market_mids"]["viop"] + 0.005) + 0.25 * 0.335, abs=1e-15)
+
+
+def test_ret_changes_per_tenor():
+    before = [{"tenor": "ON", "bid": 0.3555, "ask": 0.3575}, {"tenor": "1M", "bid": 0.3445, "ask": 0.3465},
+              {"tenor": "3M", "bid": 0.35, "ask": 0.355}, {"tenor": "2Y", "bid": None, "ask": None}]
+    after = [{"tenor": "ON", "bid": 0.3555, "ask": 0.3575}, {"tenor": "1M", "bid": 0.347, "ask": 0.34900000000000003},
+             {"tenor": "3M", "bid": 0.349, "ask": 0.355}, {"tenor": "2Y", "bid": 0.39, "ask": None}]
+    assert ret_changes(before, after) == [{"tenor": "1M", "bid": 25.0, "ask": 25.0}, {"tenor": "3M", "bid": -10.0, "ask": 0.0},
+                                          {"tenor": "2Y", "bid": None, "ask": None}]
+    assert ret_changes(before, before) == []
 
 
 # ---------------------------------------------------------------------------------------------- the flows
@@ -576,6 +787,266 @@ def test_old_database_publish_and_the_yellow_dot(tmp_path):
         again.stop()
 
 
+# ---------------------------------------------------------------------------------------------- "Tabana göre" on the workbook
+def test_anchor_per_tenor_and_for_many_and_from_published(module_service):
+    svc = module_service
+    reset(svc)
+    u = svc.login("RET Tabana Göre")["user"]
+    ret_before = svc.ret()
+    st = svc.retfair.state(u)
+    assert {r["anchor"] for r in st["rows"]} == {"mid"} and {r["where_side"] for r in st["rows"]} == {"bid"}
+    # one tenor, then many at once (the selected); every change is the desk's, logged with who and what
+    st = svc.retfair.change(u, {"tenors": ["1M"], "anchor": "bid"})
+    assert by_tenor(st["rows"])["1M"]["anchor"] == "bid" and st["log"][0]["text"] == "1M: tabana göre Bid (Bid = taban + spread + akış)"
+    st = svc.retfair.change(u, {"tenors": ["2M", "3M"], "anchor": "ASK"})
+    assert st["log"][0]["text"] == "2M, 3M: tabana göre Ask (Ask = taban + spread + akış)" and st["log"][0]["user"] == u
+    assert svc.store.get("retfair.desk")["tenors"]["2M"]["anchor"] == "ask"
+    n = len(st["log"])
+    st = svc.retfair.change(u, {"tenors": ["2M"], "anchor": "ask"})                  # already so: nothing to log
+    assert len(st["log"]) == n
+    with pytest.raises(ServiceError):
+        svc.retfair.change(u, {"tenors": ["1M"], "anchor": "orta"})
+    # "Yayınlanandan al": the spread that gives the published side the rule sets - Şimdiki = Yayınlanan for every rule
+    st = svc.retfair.change(u, {"tenors": "all", "from_published": True})
+    rows = by_tenor(st["rows"])
+    assert all(r["now"] == r["pub"] for r in rows.values()) and st["updates"] == []
+    pub = {t: r["pub"] for t, r in rows.items()}
+    assert rows["1M"]["offset"] == round((pub["1M"]["bid"] - rows["1M"]["base_mid"]) * 1e4)
+    assert rows["2M"]["offset"] == round((pub["2M"]["ask"] - rows["2M"]["base_mid"]) * 1e4)
+    assert rows["4M"]["offset"] == round(((pub["4M"]["bid"] + pub["4M"]["ask"]) / 2 - rows["4M"]["base_mid"]) * 1e4)
+    assert rows["1M"]["formula"] == "Bid = OIS mid %s %d" % ("+" if rows["1M"]["offset"] > 0 else "−", abs(rows["1M"]["offset"]))
+    assert rows["2M"]["formula"].startswith("Ask = OIS mid ") and not rows["4M"]["formula"].startswith(("Bid", "Ask"))
+    # "Neredeyim": the published ask of an Ask tenor
+    assert rows["2M"]["where_side"] == "ask" and rows["2M"]["where"]["ois"] == pytest.approx((pub["2M"]["ask"] - rows["2M"]["mids"]["ois"]) * 1e4, abs=0.01)
+    # a shift moves the side the base sets by as much (and the other with it: the width is fixed)
+    st = svc.retfair.change(u, {"tenors": ["1M", "2M", "4M"], "shift": 10})
+    assert [by_tenor(st["rows"])[t]["diff"] for t in ("1M", "2M", "4M")] == [{"bid": 10.0, "ask": 10.0}] * 3
+    # Mid again: nothing kept for it (the default); the published RET never moved
+    svc.retfair.change(u, {"tenors": ["1M", "2M", "3M"], "anchor": "mid"})
+    assert not {"anchor"} & set(svc.store.get("retfair.desk")["tenors"]["1M"])
+    assert svc.ret() == dict(ret_before, gen=svc.ret()["gen"])
+
+
+# ---------------------------------------------------------------------------------------------- the scenarios on the workbook
+def test_a_scenarios_ois_base_is_the_desk_sheets_rate_between_the_tenors_dates(module_service):
+    """With a user's steps the three scenarios differ; under each the OIS base of a tenor is the desk sheet's "Tarih arası
+    faiz" rate of that scenario between the tenor's own two dates, and the comparison table holds each scenario's fair
+    value.  The choice and its name are the user's."""
+    svc = module_service
+    reset(svc)
+    u = svc.login("RET Senaryo Masa")["user"]
+    try:
+        svc.retfair.change(u, {"tenors": "all", "from_published": True})
+        put(svc, u, STEPS)
+        seen = {}
+        for code, row in (("S1", 63), ("S2", 64), ("S3", 65)):
+            st = view(svc, u, code)
+            assert st["scenario"] == {"code": code, "name": {"S1": "S1 · Baz", "S2": "S2 · Hawkish", "S3": "S3 · Dovish"}[code], "why": ""}
+            rows = by_tenor(st["rows"])
+            seen[code] = rows
+            for label in ("3M", "6M", "1Y"):
+                r = rows[label]
+                assert r["mids"]["ois"] == pytest.approx(desk_rate(svc, u, serial(r["start"]), serial(r["end"]), row), rel=1e-12), (code, label)
+            # the comparison: every scenario's fair value per tenor, and the market's (the desk's Şimdiki)
+            cmp = by_tenor(st["compare"])
+            assert all(cmp[t][code] == r["now"] for t, r in rows.items())
+            assert cmp["3M"]["piyasa"] == cmp["3M"]["pub"]                                  # (offsets from the published RET)
+        assert seen["S2"]["3M"]["mids"]["ois"] > seen["S1"]["3M"]["mids"]["ois"] > seen["S3"]["3M"]["mids"]["ois"]
+        # before the first meeting (10.12.2026) the steps change nothing: 1M ends 04.12.2026
+        assert seen["S1"]["1M"]["mids"]["ois"] == seen["S2"]["1M"]["mids"]["ois"] == seen["S3"]["1M"]["mids"]["ois"]
+        # no hysteresis: the anchored raw value on the grid
+        r = seen["S2"]["3M"]
+        assert r["now"]["bid"] == pytest.approx(rfv.grid_round(r["raw_bid"] * 1e4) / 1e4, abs=1e-12)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_without_steps_a_scenario_is_the_reference(module_service):
+    """A scenario without a single step is the page's own rule (ima yol, no shift): the reference.  Its VİOP and offshore
+    bases are the market's exactly; its OIS base is the implied path's - not the bootstrapped market curve (the
+    reference cannot be the bootstrap: the first stub is TLREF's and the path compounds on the meeting days) - and the
+    ON tenor, before the OIS spot date, is carried with the O/N as the market's is."""
+    svc = module_service
+    reset(svc)
+    u = svc.login("RET Senaryo Boş")["user"]
+    svc.retfair.change(u, {"tenors": "all", "from_published": True})
+    market_rows = by_tenor(view(svc, u, "piyasa")["rows"])
+    first = ex.RETS_FIRST
+    ref = {cell(svc, "EK_RET!A%d" % r, u): cell(svc, "EK_RET!R%d" % r, u) for r in range(first, first + 15)}
+    for code in ("S1", "S2", "S3"):
+        rows = by_tenor(view(svc, u, code)["rows"])
+        for label, r in rows.items():
+            m = market_rows[label]
+            assert r["mids"]["viop"] == m["mids"]["viop"] and r["mids"]["off"] == m["mids"]["off"], (code, label)
+            assert r["mids"]["ois"] == ref[label] and r["market_mids"] == m["mids"], (code, label)
+        assert rows["ON"]["mids"]["ois"] == pytest.approx(market_rows["ON"]["mids"]["ois"], abs=1e-12)
+    gaps = [abs(rows[t]["mids"]["ois"] - market_rows[t]["mids"]["ois"]) * 1e4 for t in rows if t not in ("ON",)]
+    assert max(gaps) > 0.5                                              # the implied path is not the bootstrap
+    # the reference is the scenario curve with nothing typed: S1 = S2 = S3 = the reference, number for number
+    for r in range(first, first + 15):
+        assert cell(svc, "EK_RET!O%d" % r, u) == cell(svc, "EK_RET!P%d" % r, u) == cell(svc, "EK_RET!Q%d" % r, u) == cell(svc, "EK_RET!R%d" % r, u)
+    # ... and a step at a meeting is where they part: the reference stays
+    put(svc, u, {"OIS_MAIN!V12": "75"})
+    try:
+        assert cell(svc, "EK_RET!P22", u) != cell(svc, "EK_RET!R22", u) and cell(svc, "EK_RET!O22", u) == cell(svc, "EK_RET!R22", u)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_a_users_steps_change_only_their_own_scenario_view(module_service):
+    svc = module_service
+    reset(svc)
+    a, b, c = (svc.login(n)["user"] for n in ("RET Senaryo Ayşe", "RET Senaryo Mehmet", "RET Senaryo Masa Bakışı"))
+    try:
+        svc.retfair.change(a, {"tenors": "all", "from_published": True})
+        desk_before = view(svc, c)
+        put(svc, a, STEPS)
+        sa, sb = view(svc, a, "S2"), view(svc, b, "S2")
+        ra, rb = by_tenor(sa["rows"]), by_tenor(sb["rows"])
+        assert ra["6M"]["mids"]["ois"] > rb["6M"]["mids"]["ois"] and ra["6M"]["now"] != rb["6M"]["now"]
+        assert ra["1M"]["now"] == rb["1M"]["now"]                                       # (before the meeting: the same)
+        # b has no steps: their three scenarios are one curve
+        assert all(e["S1"] == e["S2"] == e["S3"] for e in sb["compare"])
+        assert not all(e["S1"] == e["S2"] == e["S3"] for e in sa["compare"])
+        # the desk's market view, everybody's Piyasa and the header are as they were
+        desk_after = view(svc, c)
+        assert desk_after["rows"] == desk_before["rows"] and desk_after["updates"] == desk_before["updates"] == []
+        assert view(svc, a, "piyasa")["rows"] == desk_before["rows"] and sa["market_updates"] == []
+        assert svc.retfair.summary()["updates"] == []
+    finally:
+        svc.reset_inputs(a, "tto")
+
+
+def test_the_choice_is_personal_kept_by_its_code_and_follows_a_rename(module_service):
+    svc = module_service
+    reset(svc)
+    a, b = svc.login("RET Senaryo Seçen")["user"], svc.login("RET Senaryo Bakan")["user"]
+    try:
+        svc.retfair.change(a, {"tenors": "all", "from_published": True})
+        put(svc, a, STEPS)
+        st = view(svc, a, "s2")                                                        # (any case)
+        assert st["scenario"]["code"] == "S2" and view(svc, b)["scenario"] == {"code": "piyasa", "name": "Piyasa (bootstrap)", "why": ""}
+        assert svc.retfair.state(a)["scenario"]["code"] == "S2"                         # kept
+        before = st["rows"]
+        put(svc, a, {"OIS_MAIN!P4": "Şahin"})
+        st = svc.retfair.state(a)
+        assert st["scenario"]["name"] == "S2 · Şahin" and [s["name"] for s in st["scenarios"]] == [
+            "Piyasa (bootstrap)", "S1 · Baz", "S2 · Şahin", "S3 · Dovish"]
+        assert st["rows"] == before
+        assert view(svc, b)["scenarios"][2] == {"code": "S2", "name": "S2 · Hawkish"}   # b's own names
+        with pytest.raises(ServiceError):
+            svc.retfair.set_view(a, {"scenario": "S4"})
+        assert svc.retfair.state(a)["scenario"]["code"] == "S2"
+        # Piyasa again: the desk's rows
+        assert view(svc, a, "piyasa")["rows"] == view(svc, b)["rows"]
+    finally:
+        svc.reset_inputs(a, "tto")
+
+
+def test_a_saved_senaryo_brings_its_steps_back(module_service):
+    svc = module_service
+    reset(svc)
+    u = svc.login("RET Senaryo Kayıt")["user"]
+    try:
+        svc.retfair.change(u, {"tenors": "all", "from_published": True})
+        put(svc, u, STEPS)
+        first = view(svc, u, "S3")["rows"]
+        svc.save_scenario(u, "ret s3")
+        svc.reset_inputs(u, "tto")
+        empty = view(svc, u)
+        assert empty["scenario"]["code"] == "S3" and empty["rows"] != first
+        assert all(e["S1"] == e["S2"] == e["S3"] for e in empty["compare"])
+        assert svc.load_scenario(u, "ret s3")["cells"] >= 3
+        assert view(svc, u)["rows"] == first
+    finally:
+        svc.reset_inputs(u, "tto")
+        svc.delete_scenario(u, "ret s3")
+
+
+def test_the_history_says_what_each_upload_changed_and_where_it_came_from(module_service):
+    """Every upload of the RET (the dialog's "Kaydet", a block pasted into the sheet, "Kopyala ve yayınla") keeps, tenor by
+    tenor, how far it moved against the curve before it; a publish says where it came from (a scenario by its name) and
+    answers which tenors moved and by how much."""
+    svc = module_service
+    reset(svc)
+    u = svc.login("RET Geçmiş")["user"]
+    old = svc.ret()["rows"]
+    try:
+        was = by_tenor(old)
+        res = svc.set_ret(u, [{"tenor": "1M", "bid": was["1M"]["bid"] + 0.0025, "ask": was["1M"]["ask"] + 0.0025},
+                              {"tenor": "3M", "bid": was["3M"]["bid"] - 0.001, "ask": was["3M"]["ask"]}])
+        h = svc.ret_history()[0]
+        assert h["changes"] == [{"tenor": "1M", "bid": 25.0, "ask": 25.0}, {"tenor": "3M", "bid": -10.0, "ask": 0.0}]
+        assert res["ret_history"] == h["id"] and "source" not in h
+        now = by_tenor(svc.ret()["rows"])
+        svc.set_ret(u, [{"tenor": "1M", "bid": now["1M"]["bid"], "ask": now["1M"]["ask"]}])        # the same again
+        assert svc.ret_history()[0]["changes"] == []
+        svc.paste(u, "tto", "Forward!W33", "35,10%\t35,30%\r\n")                                  # ON, in the sheet
+        assert svc.ret_history()[0]["changes"] == [{"tenor": "ON", "bid": round((0.351 - was["ON"]["bid"]) * 1e4, 2) + 0.0,
+                                                    "ask": round((0.353 - was["ON"]["ask"]) * 1e4, 2) + 0.0}]
+        # "Kopyala ve yayınla" from a scenario: what the user sees, its name in the log and the history
+        put(svc, u, STEPS)
+        svc.retfair.change(u, {"tenors": "all", "from_published": True})
+        st = view(svc, u, "S2")
+        curve = [{"tenor": r["tenor"], "bid": (r["now"] or r["pub"])["bid"], "ask": (r["now"] or r["pub"])["ask"]} for r in st["rows"]]
+        pub = by_tenor(svc.ret()["rows"])
+        out = svc.retfair.publish(u, curve, "S2")
+        assert {r["tenor"]: (r["bid"], r["ask"]) for r in svc.ret()["rows"]} == {r["tenor"]: (r["bid"], r["ask"]) for r in curve}
+        moved = []
+        for c in curve:
+            d = {"tenor": c["tenor"], "bid": round((c["bid"] - pub[c["tenor"]]["bid"]) * 1e4, 2) + 0.0,
+                 "ask": round((c["ask"] - pub[c["tenor"]]["ask"]) * 1e4, 2) + 0.0}
+            if abs(d["bid"]) >= 0.005 or abs(d["ask"]) >= 0.005:                     # (a float's last digit is no move)
+                moved.append(d)
+        assert moved and out["moved"] == moved and out["source"] == "S2 · Hawkish senaryosundan"
+        assert out["log"][0]["text"].startswith("Kopyala ve yayınla (S2 · Hawkish senaryosundan): ")
+        h = svc.ret_history()[0]
+        assert h["source"] == "Adil değer · Kopyala ve yayınla · S2 · Hawkish senaryosundan" and h["user"] == u
+        assert [c["tenor"] for c in h["changes"]] == [m["tenor"] for m in moved]
+        assert all(c["bid"] == pytest.approx(m["bid"], abs=0.011) and c["ask"] == pytest.approx(m["ask"], abs=0.011) for c, m in zip(h["changes"], moved))
+        # from the market view: no scenario said; the same curve again moves nothing
+        out = svc.retfair.publish(u, curve, None)
+        assert out["moved"] == [] and out["source"] == "" and svc.ret_history()[0]["source"] == "Adil değer · Kopyala ve yayınla"
+        assert out["log"][0]["text"] == "Kopyala ve yayınla: eğri değişmeden yeniden yayınlandı"
+    finally:
+        svc.reset_inputs(u, "tto")
+        svc.set_ret(u, [{"tenor": r["tenor"], "bid": r["bid"], "ask": r["ask"]} for r in old])
+
+
+def test_the_scenario_follows_a_change_of_the_meeting_calendar(tmp_path):
+    """The steps sit on the meeting rows of the OIS sheet and move with their meeting when the calendar changes: the
+    scenario's fair value follows - the desk sheet's own S2 rate between each tenor's dates as it stands after the
+    change - and the same numbers come back with the calendar."""
+    svc = make_service(tmp_path)
+    try:
+        u = svc.login("RET Senaryo takvim")["user"]
+        svc.retfair.change(u, {"tenors": "all", "from_published": True})
+        put(svc, u, {"OIS_MAIN!U11": "0", "OIS_MAIN!V11": "200", "OIS_MAIN!W11": "-200"})        # the 21.01.2027 meeting
+        h = svc.history
+        start = h.meetings()
+        assert "2027-01-21" in start and cell(svc, "OIS_MAIN!P11") == serial("2027-01-21")
+        first = view(svc, u, "S2")
+        rows = by_tenor(first["rows"])
+        assert rows["6M"]["mids"]["ois"] > by_tenor(view(svc, u, "S1")["rows"])["6M"]["mids"]["ois"]
+        res = h.set_calendar(u, sorted(start[:-1] + ["2027-01-07"]))                  # a meeting put in before it
+        assert res["moved"] == 3 and cell(svc, "OIS_MAIN!P12") == serial("2027-01-21")
+        assert [cell(svc, "OIS_MAIN!%s12" % c, u) for c in "UVW"] == [0.0, 200.0, -200.0]  # the steps went with it
+        assert [cell(svc, "OIS_MAIN!%s11" % c, u) for c in "UVW"] == [None, None, None]
+        moved = view(svc, u, "S2")
+        assert moved["scenario"]["code"] == "S2"
+        for label in ("3M", "6M", "1Y"):
+            r = by_tenor(moved["rows"])[label]
+            assert r["mids"]["ois"] == pytest.approx(desk_rate(svc, u, serial(r["start"]), serial(r["end"]), 64), rel=1e-12), label
+        # the +200 bp of 21.01 is still S2's: above S1 (no step) by more than the new meeting's own implied step could do
+        s1 = by_tenor(view(svc, u, "S1")["rows"])
+        assert by_tenor(view(svc, u, "S2")["rows"])["6M"]["mids"]["ois"] - s1["6M"]["mids"]["ois"] > 0.005
+        h.set_calendar(u, start)
+        back = view(svc, u, "S2")
+        assert back["rows"] == first["rows"] and back["compare"] == first["compare"]
+    finally:
+        svc.stop()
+
+
 def test_http(module_service, monkeypatch):
     """The routes (last in the module: the client stops the service when it closes)."""
     from starlette.testclient import TestClient
@@ -597,3 +1068,13 @@ def test_http(module_service, monkeypatch):
         assert c.post("/api/ret/fair/publish", json={"rows": "x"}, headers=user).status_code == 400
         assert c.get("/api/ret/position", headers=user).json()["rows"] == []
         assert "ret_fair" in c.get("/api/status", headers=user).json()
+        # "Tabana göre" and the user's own "Senaryo"
+        res = c.post("/api/ret/fair/tenors", json={"tenors": ["1M"], "anchor": "bid"}, headers=user)
+        assert res.status_code == 200 and by_tenor(res.json()["rows"])["1M"]["formula"] == "Bid = OIS mid − 50"
+        assert c.post("/api/ret/fair/tenors", json={"tenors": ["1M"], "anchor": "orta"}, headers=user).status_code == 400
+        res = c.post("/api/ret/fair/view", json={"scenario": "S3"}, headers=user)
+        assert res.status_code == 200 and res.json()["scenario"]["name"] == "S3 · Dovish" and len(res.json()["compare"]) == 15
+        assert c.get("/api/ret/fair", headers=user).json()["scenario"]["code"] == "S3"
+        assert c.get("/api/ret/fair", headers=admin).json()["scenario"]["code"] == "piyasa"
+        assert c.post("/api/ret/fair/view", json={"scenario": "S9"}, headers=user).status_code == 400
+        assert c.post("/api/ret/fair/view", json={"scenario": "S1"}, headers=ANON).status_code == 401

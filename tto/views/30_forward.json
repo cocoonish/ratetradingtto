@@ -2054,6 +2054,15 @@
    "type": "table",
    "hidden": true,
    "keep_title": true
+  },
+  {
+   "id": "RS1",
+   "type": "table",
+   "sheet": "EK_RET",
+   "range": "A1:R110",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · RET adil değer senaryoları (RET vadelerinin tarihleri, S1–S3 ve referansın iskonto faktörleri ve faizi; referansın adımsız patikası)"
   }
  ],
  "pinned": [

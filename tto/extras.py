@@ -17,6 +17,8 @@ the Excel files (parity and reference tests read those).
                                formulas and a window of its own
 * ``EK_IHALE`` (TRY workbook) the Treasury auction: the dirty price to bid for three bonds (Bloomberg's accrued
                                interest at the auction's value date) and where the bids stand once it is over
+* ``EK_RET``  (TRY workbook)  the RET tenors' rates on the OIS sheet's PPK scenario curves (the fair value RET's
+                               "Senaryo") and on a scenario without steps (the reference its VİOP / offshore bases move by)
 * ``bu``      (Borsa workbook) O/N equivalents of the implied TRY rates of the BIST swap quotes
 * ``Sheet2``  (Borsa workbook) the list of quoted maturities keeps only quotes with an order behind them
 * ``EK_TATIL`` (Borsa workbook) a copy of the desk's TRY holiday list and the T+1 value date on it
@@ -3176,6 +3178,132 @@ def _tto_viop_fra(model: Model) -> None:
             mf, '%s&IF(%s!$U$%d<>""," · geçersiz",IF(%s!$D$%d>1," · "&%s!$E$%d,""))' % (mf, e, h, e, h, e, h)))
 
 
+# ---------------------------------------------------------------------------------------------- the fair RET's scenarios
+#: The fair value RET (``tto/retfair.py``) can be read under one of the OIS sheet's three PPK scenarios instead of the
+#: market ("Senaryo" of its tab, each user's own).  Its OIS base at a RET tenor is then the scenario curve's simple ACT/360
+#: rate between the tenor's two dates - the desk sheet's own discount factors of that scenario (MASA!I63:I65, the "Tarih
+#: arası faiz" block, Motor's meeting paths) at the two dates, so the same two dates give the block's own rate.  The
+#: VİOP and offshore bases keep their basis to OIS: they move by the scenario's rate less the **reference**'s - the curve
+#: of a scenario without a single step on the page's own rule (senaryo tabanı "ima yol", kaydırma 0): TLREF to the first
+#: meeting, then the market's implied path.  That is no copy of the bootstrapped market curve (the OIS base of
+#: "Piyasa"), so a scenario without steps gives the market's VİOP and offshore bases and the implied path's OIS.  A day
+#: before the OIS spot date (the ON tenor) is carried with the OIS O/N (TLREF, 365 → 360: Forward!AD123), as the
+#: market's OIS base carries it: no meeting falls there.  Every number is a formula of the user's own calculation: their
+#: steps and names, the desk's calendar.
+RETS_SHEET = "EK_RET"
+RETS_FIRST = 10                            # the RET tenors' helper rows (10 … 24)
+RETS_PATH = 30                             # the reference path's rows: Motor rows 4 … 84 on rows 30 … 110
+RETS_MARKET = "Piyasa (bootstrap)"
+#: the scenarios: code, their row in the SENARYOLAR table, the desk sheet's discount factor of their curve, the columns
+#: of their discount factors (start, end) and of their rate on EK_RET
+RETS_SCENARIOS = (("S1", 3, "I63", "G", "H", "O"), ("S2", 4, "I64", "I", "J", "P"), ("S3", 5, "I65", "K", "L", "Q"))
+RETS_REF = ("M", "N", "R")                 # the reference's discount factors and rate
+RETS_ON = "Forward!$AD$123"                # the OIS O/N (TLREF 365 → 360) a day before the OIS spot date is carried with
+
+
+def _rets_layout(model: Model) -> List[Tuple[str, int]]:
+    """The RET tenors and their rows, found by their labels as the service finds them (``Service._ret_layout``)."""
+    from .service import RET_FIRST_ROW, RET_TENORS, Service
+    consts = model.sheet("Forward").consts
+    found: Dict[str, int] = {}
+    for r in range(Service.RET_LABEL_ROWS[0], Service.RET_LABEL_ROWS[1] + 1):
+        v = consts.get(parse_a1("V%d" % r))
+        if isinstance(v, str) and v.strip().upper() in RET_TENORS and v.strip().upper() not in found:
+            found[v.strip().upper()] = r
+    return [(t, found.get(t, RET_FIRST_ROW + i)) for i, t in enumerate(RET_TENORS)]
+
+
+def _rets_check(model: Model) -> None:
+    _need_sheets(model, "Forward", "OIS_MAIN", "MASA", "Motor")
+    _need_captions(model, (("OIS_MAIN", "O1", "SENARYOLAR"), ("OIS_MAIN", "P2", "Ad"), ("OIS_MAIN", "O3", "S1"),
+                           ("OIS_MAIN", "O4", "S2"), ("OIS_MAIN", "O5", "S3"), ("Forward", "AA123", "ON"),
+                           ("Forward", "AD122", "OIS"), ("Motor", "H3", "S1 TLREF"), ("Motor", "I3", "S1 ln G")))
+    for _, _, src, _, _, _ in RETS_SCENARIOS:          # a scenario's discount factor depends on the days in $M$60 only
+        transplant(_need_formula(model, "MASA", src, "$M$60"), {"$M$60": "$E%d" % RETS_FIRST})
+    for rng in ("Motor!$I$4:$I$84", "Motor!$H$4:$H$84"):
+        _need_formula(model, "MASA", "I63", rng)
+    # the rule of an empty step that the reference repeats (OIS_MAIN!X10: the implied step on "ima yol") and the paths'
+    # compounding (Motor!I5)
+    _need_formula(model, "OIS_MAIN", "X10", "IF($B$3=1,N(R10),0)+$D$3")
+    _need_formula(model, "Motor", "I5", "I4+(((C5-C4))*LN(1+(H4)/365)-((J5-J4))*((H4)/365)^2)")
+    _need_formula(model, "Motor", "H4", "OIS_MAIN!$J$2")
+    _need_formula(model, "Forward", "AD123", "OIS_MAIN!J2")
+    labels = [lab for lab, _ in _rets_layout(model)]
+    consts = model.sheet("Forward").consts
+    missing = [lab for lab, r in _rets_layout(model) if str(consts.get(parse_a1("V%d" % r)) or "").strip().upper() != lab]
+    if len(missing) == len(labels):
+        raise ValueError("Forward sayfasında RET vadeleri bulunamadı")
+
+
+def _tto_rets(model: Model) -> None:
+    """The RET tenors' rates on the three scenario curves and on the reference (sheet ``EK_RET``)."""
+    e = RETS_SHEET
+    b = SheetBuilder(model, e)
+    b.title("A1", "RET ADİL DEĞER · SENARYOLAR  ·  RET vadelerinin OIS · PPK senaryo eğrilerinden faizi (Adil değer sekmesinin 'Senaryo' seçimi)")
+    b.head("A2", ["Eğri", "Nedir"])
+    b.set("A3", RETS_MARKET, bold=True)
+    b.note("B3", "masanın piyasa OIS mid'i (bootstrap: Borsa Swap spread'lerinin makinesi) - varsayılan, kural tabanlı RET'in bugünkü sayıları")
+    for code, row, _, _, _, _ in RETS_SCENARIOS:
+        b.set("A%d" % (row + 1), '="%s · "&OIS_MAIN!$P$%d' % (code, row), bold=True)
+        b.note("B%d" % (row + 1), "OIS · PPK senaryosu %s: toplantı başına adımları PPK ima sekmesinde, adı SENARYOLAR tablosunda "
+                                  "(MASA 'Tarih arası faiz' bloğunun iskonto faktörleri)" % code)
+    b.set("A7", "Referans · ima yol", bold=True)
+    b.note("B7", "hiç adımı olmayan senaryo (senaryo tabanı ima yol, kaydırma 0): TLREF ilk toplantıya kadar, sonra piyasanın ima "
+                 "patikası. VİOP ve offshore tabanı senaryoda piyasa + (senaryo − referans) olur")
+    # ---- the reference path: Motor's S1 columns (TLREF, ln G) for a scenario without steps (rows 30 … 110 = Motor 4 … 84)
+    p0 = RETS_PATH
+    b.head("A%d" % (p0 - 1), ["Motor satırı", "Toplantı", "Etkin gün", "Referans TLREF", "Referans ln G"])
+    for k in range(81):
+        r, m = p0 + k, 4 + k                                 # this row, Motor's row
+        b.set("A%d" % r, float(m), fmt="0", align="center")
+        b.set("B%d" % r, '=IF(Motor!$B%d="","",Motor!$B%d)' % (m, m), fmt=DATE)
+        b.set("C%d" % r, "=Motor!$C%d" % m, fmt=INT0)
+        if k == 0:
+            b.set("D%d" % r, "=OIS_MAIN!$J$2", fmt="0.0000%")
+            b.set("E%d" % r, 0.0, fmt="0.000000")
+            continue
+        o = m + 5                                            # OIS_MAIN's meeting row of Motor's row
+        # OIS_MAIN!X10 on an empty step with "ima yol" and no shift: the implied step of the meeting (a meeting gone: none)
+        b.set("D%d" % r, '=D%d+IF(AND(OIS_MAIN!$P%d<>"",OIS_MAIN!$P%d<OIS_MAIN!$B$2),0,N(OIS_MAIN!$R%d))/10000' % (r - 1, o, o, o),
+              fmt="0.0000%")
+        # Motor!I5's compounding on that path
+        b.set("E%d" % r, "=E%d+(((Motor!$C%d-Motor!$C%d))*LN(1+(D%d)/365)-((Motor!$J%d-Motor!$J%d))*((D%d)/365)^2)"
+              % (r - 1, m, m - 1, r - 1, m, m - 1, r - 1), fmt="0.000000")
+    path = {"Motor!$I$4:$I$84": "%s!$E$%d:$E$%d" % (e, p0, p0 + 80), "Motor!$H$4:$H$84": "%s!$D$%d:$D$%d" % (e, p0, p0 + 80)}
+    # ---- one row per RET tenor: its dates (the RET's own: from the USDTRY spot date, ON before it), the days from the OIS
+    #      spot date, each curve's discount factors and its rate
+    h0 = RETS_FIRST
+    b.head("A%d" % (h0 - 1), ["Vade", "Başlangıç", "Bitiş", "Gün", "OIS spot → başl.", "OIS spot → bitiş"]
+                             + ["DF %s %s" % (code, end) for code, _, _, _, _, _ in RETS_SCENARIOS for end in ("başl.", "bitiş")]
+                             + ["DF ref başl.", "DF ref bitiş", "S1 %", "S2 %", "S3 %", "Referans %"])
+    dfs = {code: formula_of(model, "MASA", src) for code, _, src, _, _, _ in RETS_SCENARIOS}
+    curves = [(dfs[code], {}, c0, c1, rate) for code, _, _, c0, c1, rate in RETS_SCENARIOS] + \
+             [(dfs["S1"], path) + RETS_REF]
+    for k, (label, row) in enumerate(_rets_layout(model)):
+        h = h0 + k
+        b.set("A%d" % h, label, bold=True, align="center")
+        if label == "ON":
+            b.set("B%d" % h, '=IFERROR(Forward!$I$2-Forward!$U$%d,"")' % row, fmt=DATE)
+            b.set("C%d" % h, "=Forward!$I$2", fmt=DATE)
+        else:
+            b.set("B%d" % h, "=Forward!$I$2", fmt=DATE)
+            b.set("C%d" % h, '=IFERROR(Forward!$I$2+Forward!$U$%d,"")' % row, fmt=DATE)
+        b.set("D%d" % h, '=IFERROR($C%d-$B%d,"")' % (h, h), fmt=INT0)
+        b.set("E%d" % h, '=IFERROR($B%d-OIS_MAIN!$B$2,"")' % h, fmt=INT0)
+        b.set("F%d" % h, '=IFERROR($C%d-OIS_MAIN!$B$2,"")' % h, fmt=INT0)
+        for src, extra, c0, c1, rate in curves:
+            for col, t in ((c0, "$E%d" % h), (c1, "$F%d" % h)):
+                df = transplant(src, dict({"$M$60": t}, **extra))
+                b.set("%s%d" % (col, h), "=IF(N(%s)<0,1+%s*(-%s)/360,%s)" % (t, RETS_ON, t, df), fmt="0.000000")
+            b.set("%s%d" % (rate, h), '=IFERROR(($%s%d/$%s%d-1)*360/$D%d,"")' % (c0, h, c1, h, h), fmt="0.0000%")
+    last = h0 + len(_rets_layout(model)) - 1
+    b.note("A%d" % (last + 2), "DF = MASA 'Tarih arası faiz' bloğunun S1 / S2 / S3 iskonto faktörü (Motor'un PPK patikası) OIS spot'tan "
+                               "tarihe; faiz = (DF başl. / DF bitiş − 1) · 360 / gün (ACT/360 basit): aynı iki tarihle Masa bloğunun "
+                               "faizi. OIS spot'undan önceki gün(ler) OIS O/N'u (TLREF 365 → 360) ile.")
+    b.note("A%d" % (last + 3), "Referans: aynı hesap, adımsız senaryonun patikasıyla (aşağıda). Adil değer sekmesinde senaryo seçilince "
+                               "OIS tabanı senaryonun faizi; VİOP ve offshore tabanı piyasa + (senaryo − referans).")
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
@@ -3196,7 +3324,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
-            (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread), (VFRA_SHEET, _viop_fra_check, _tto_viop_fra)),
+            (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread), (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
+            (RETS_SHEET, _rets_check, _tto_rets)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
 }
 
