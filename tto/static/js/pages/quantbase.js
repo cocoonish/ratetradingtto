@@ -58,22 +58,39 @@ export function sheetText(s, v) {
 export function pnlCell(s) {
   const mo = s.money || {};
   const pu = s.pnl_unit || '';
+  // (a line at its calibrated levels: its expectancy is the record's - its trades at those levels - × σ now)
+  const lv = s.levels || {};
+  const rec = lv.ok && isNum(lv.exp) ? ' · seviyelerle işlem başına ' + sgn(lv.exp, 2) + 'σ (' + (lv.n || 0) + ' işlem, ' + (lv.oos ? 'örneklem dışı' : 'örneklem içi') + ')' : '';
   if (s.px && isNum(mo.total)) {
     return { t: money(mo.total, mo.ccy) + ' / 1 mn ' + mo.base, v: mo.total, k: 'n',
       tip: 'Tutma boyunca beklenen K/Z, 1 mn ' + mo.base + ' başına (' + s.px.inst + ', notional × fiyat hareketi)'
         + (s.px.tenor ? ': forward primi (carry) ' + money(mo.carry, mo.ccy) + ', kur hareketi ' + money(mo.move, mo.ccy) : '')
-        + (isNum(s.pnl_try) && mo.ccy !== 'TRY' ? ' · ≈ ' + money(s.pnl_try, 'TRY') : '') + ' · nominalin ' + sgn(s.exp_pnl, 2) + '%\'si' };
+        + (isNum(s.pnl_try) && mo.ccy !== 'TRY' ? ' · ≈ ' + money(s.pnl_try, 'TRY') : '') + ' · nominalin ' + sgn(s.exp_pnl, 2) + '%\'si' + rec };
   }
   if (!isNum(s.exp_pnl)) return { t: '', k: '' };
   if (isNum(mo.per_unit) && isNum(mo.total)) {
     // (a line of linear money - an option's vega, a swap's points: the money, its units in the tooltip)
     return { t: money(mo.total, mo.ccy), v: mo.total, k: 'n', tip: 'Tutma boyunca beklenen K/Z: ' + sgn(s.exp_pnl, 2) + ' ' + (pu === 'vol' ? 'vol puanı' : pu)
-      + ' × ' + num(mo.per_unit, 0) + ' ' + mo.ccy + ((s.info || {}).size ? ' (' + s.info.size + ')' : '') + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') };
+      + ' × ' + num(mo.per_unit, 0) + ' ' + mo.ccy + ((s.info || {}).size ? ' (' + s.info.size + ')' : '') + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') + rec };
   }
   const tip = 'Tutma boyunca beklenen K/Z' + (pu === 'bp' ? ', carry + roll dahil' : '')
     + (pu === 'bp' && isNum(mo.total) ? ' · ≈ ' + money(mo.total, 'TL') + ' (ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp)' : '')
-    + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '');
+    + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '') + rec;
   return { t: sgn(s.exp_pnl, 2) + (pu ? ' ' + pu : ''), v: s.exp_pnl, k: 'n', tip };
+}
+
+/** A line's calibrated levels in its cells (tto/quantlevels.py): Ödül / risk and İsabet with the levels in the tooltip
+ * - "stop 1,20σ · hedef 1,80σ · ödül / risk 1,50 · isabet %57 (46 işlem, örneklem dışı) · işlem başına +0,21σ" -, or
+ * why the line has none (its family's own levels: VİOP's order levels, an intraday family's …). */
+export function levelCells(s, rr) {
+  const lv = s.levels || null;
+  const ok = !!(lv && lv.ok);
+  const why = lv ? (ok ? lv.text || '' : lv.why || '') : '';
+  const rrCell = N(rr, 2, { tip: (ok ? 'Ödül ÷ risk (geçmiş işlemlerden ayarlı seviyeler): ' + why : 'Ödül ÷ risk (hedefe ve stoba uzaklık)' + (why ? ' · ' + why : ''))
+    + (isNum(s.exp_r) ? ' · beklenen ÷ risk ' + fmt(s.exp_r, 2) : '') });
+  const hit = ok && isNum(lv.hit) ? T(pct(lv.hit) + ' (' + (lv.n || 0) + ')', { tip: why + (lv.oos ? '' : ' · örneklem dışı işlem az: bugünkü seviyelerin örneklem içi kaydı') })
+    : T('—', { tip: why || 'seviye kalibrasyonu yok', cls: 'soft' });
+  return [rrCell, hit];
 }
 
 /** A number cell: text, value, an optional class and tooltip. */
@@ -467,7 +484,15 @@ export class SignalChart {
     }
     if (ends && isNum(rr)) ends += ' · ödül / risk ' + fmt(rr, 2);
     if (ends && isNum(s.exp_r)) ends += ' · beklenen / risk ' + fmt(s.exp_r, 2);
+    if (ends && s.trail) ends += ' · iz süren stop (en iyi seviyeden geri gelirse)';
     rows.push(['Hedefte / stopta', h('td', { id: this.id('quant-sig-ends') }, ends || '—')]);
+    // the levels: calibrated on the family's past trades (their multiples of the holding's σ and the record they had), or why not
+    const lvs = s.levels || null;
+    if (lvs) {
+      rows.push(['Seviyeler', h('td', { id: this.id('quant-sig-levels'), class: lvs.ok ? null : 'soft' }, lvs.ok
+        ? (lvs.text || '') + (isNum(lvs.money) ? ' · işlem başına ≈ ' + money(lvs.money, lvs.ccy || '') : '')
+        : (lvs.why || 'kendi seviyeleri'))]);
+    }
     const t = h('table', { class: 'plain qkv qtradekv' });
     for (const [k, td] of rows) t.appendChild(h('tr', null, h('th', null, k), td));
     return h('div', { class: 'qplain' }, s.plain ? h('div', { class: 'qsentence', id: this.id('quant-sig-plain') }, s.plain) : null, t);
@@ -548,11 +573,12 @@ export function signalRows(list, opts = {}) {
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
       N(px ? px.entry : s.entry, px ? px.digits : s.digits, px ? at : { tip: sheetText(s, s.entry).trim() || undefined }),
-      N(px ? px.target : s.target, px ? px.digits : s.digits, px ? {} : { tip: sheetText(s, s.target).trim() || undefined }),
+      N(px ? px.target : s.target, px ? px.digits : s.digits, Object.assign(px ? {} : { tip: sheetText(s, s.target).trim() || undefined },
+        s.trail ? { empty: 'iz süren stop' } : {})),
       N(px ? px.stop : s.stop, px ? px.digits : s.digits, px ? {} : { tip: sheetText(s, s.stop).trim() || undefined }),
       T(px ? px.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : {}),
       pnlCell(s),
-      N(rr, 2, { tip: 'Ödül ÷ risk (hedefe ve stoba uzaklık)' + (isNum(s.exp_r) ? ' · beklenen ÷ risk ' + fmt(s.exp_r, 2) : '') }),
+      ...levelCells(s, rr),
       N(s.half_life, 1), T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),
       N(s.carry_week, 2, { sign: true, tip: s.fx ? 'Forward primi, işlemin yönünde, haftalık (%)' : 'Carry + roll, işlemin yönünde, haftalık (' + (pu || 'bp') + ')' }),
       N(s.carry_yr, 1, { sign: true, tip: 'FX: forward primi, işlemin yönünde, yıllık % (forward\'ların ima ettiği)' }),
@@ -567,7 +593,7 @@ export function signalRows(list, opts = {}) {
   });
 }
 
-export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'Yarı ömür (g)', 'Tutma',
+export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'İsabet', 'Yarı ömür (g)', 'Tutma',
   'Carry / hf', 'Carry % / yıl', 'Rejim', 'Uyum', 'Kapılar', 'Geri test'];
 
 /** A status table of the quant worker: what every page shows at the bottom (and the first thing before a result). */

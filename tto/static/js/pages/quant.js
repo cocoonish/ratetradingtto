@@ -1,8 +1,10 @@
 // Quant: the desk's statistical signals.  "Sinyaller" lists every signal by group - G10 spot, G10 opsiyon, TRY OIS
 // (≤ 2Y first), DİBS, VİOP, Offshore ("offshore limiti") and Diğer, the buttons above the list -, within a group the
-// confident ones by strength (|z| × regime fit × half-life fit × carry agreement), then the ones a gate holds ("düşük
-// güven", with the reason; never logged nor alerted); a click draws the signal's series with its ±z bands and entry /
-// target / stop; below it the backtest, the signal log with each family's hit rate, the alert subscription (families,
+// confident ones by their expectancy (the Beklenen K/Z at their calibrated levels, tto/quantlevels.py), then the ones a
+// gate holds ("düşük güven", with the reason - a line whose levels lost money in the past among them; never logged nor
+// alerted); every line's Ödül / risk and İsabet (its levels' record, the trade count); a click draws the signal's
+// series with its ±z bands and entry / target / stop; below it the backtest at the calibrated levels (k / m per group),
+// the signal log with each family's hit rate, the alert subscription (families,
 // groups) and the desk's settings.  The analysis pages (Korelasyon, PCA / RV, Çiftler, Rejim & Momentum, FX, Makro,
 // Model) are in quantviews.js.
 //
@@ -49,7 +51,9 @@ class SignalsPage extends QuantPage {
     this.groupBar = h('div', { class: 'seg qgroups', id: 'quant-groups', role: 'tablist' });
     const list = panel('quant-signals', 'Sinyaller', { top: this.groupBar });
     list.note.textContent = 'Sıra: gruplar (G10 spot, G10 opsiyon, TRY OIS - önce ≤ 2Y, sonra uzun uç -, DİBS, VİOP, Offshore, Diğer); grubun içinde önce '
-      + 'kapılardan geçenler bileşiğe göre, sonra "düşük güven" olanlar (bir kapıya takıldı; neden son sütunda, kayda ve alarma düşmez). Bileşik = |z| '
+      + 'kapılardan geçenler beklenen K/Z\'ye göre (TL, satırın kendi büyüklüğüyle), sonra "düşük güven" olanlar (bir kapıya takıldı ya da seviyeleri geçmişte '
+      + 'zarar ettirdi; neden son sütunda, kayda ve alarma düşmez). Hedef / stop: ailenin geçmiş işlemlerinden ayarlı seviyeler - tutmanın σ\'sının katları, '
+      + 'ödül / risk ≥ 1; İsabet: o seviyelerle geçmiş işlemlerin (örneklem dışı) hedefe ya da süre sonunda kârda kapanan payı, parantezde işlem sayısı. Bileşik = |z| '
       + '(masanın ölçeğinde, en çok stop eşiği) × rejim uyumu (1 / 0,5 / 0) × yarı ömür uyumu (ufkun içindeyse 1, iki katına kadar ufuk ÷ yarı ömür, ötesi '
       + 'elenir) × carry yönü (işlemin aleyhineyse 0,5). Uyum: aynı bacağı aynı yönde isteyen diğer aile sayısı (− ile ters yönde olanlar). Offshore satırları '
       + '"offshore limiti" taşır: masanın offshore işlem limiti dar. FX: giriş / hedef / stop işlem yapılan forward\'ın kuru (ufkun sonu valörlü; Birim '
@@ -61,13 +65,16 @@ class SignalsPage extends QuantPage {
       group: this.group || undefined, w: 12 }), this.ctx));
     const chartPanel = panel('quant-chart', 'Seçili sinyal');
     this.chart = new SignalChart(chartPanel.body);
-    this.btPanel = panel('quant-backtest', 'Geri test · aynı kurallarla yürüyen pencere (son yıl)');
+    this.btPanel = panel('quant-backtest', 'Geri test · aynı kurallarla yürüyen pencere (son yıl), ayarlı seviyelerle');
     this.btPanel.note.textContent = 'Her ' + 10 + ' iş gününde bütün aileler yalnızca o güne kadarki kapanışlarla yeniden kurulur, aradaki günler o günün kapanışıyla '
-      + 'canlıdaki kurallarla (eşik, kapılar) puanlanır; sinyal olan gün kapanıştan girilir, hedef / stop / tutma süresiyle sonraki kapanışlarda çıkılır - '
-      + 'ileriye bakış yok. K/Z σ: sinyalin kendi σ\'sıyla; birim: bp, % ya da vol (FX\'te forward pozisyonunun getirisi, forward primi dahil; faiz paketinin '
-      + 'tarihçesinde carry motoru yok: fiyat hareketi); TL: paket DV01\'iyle ya da 1 mn baz döviz başına (forward\'ın fiyat hareketi). Sharpe: işlem K/Z '
-      + 'σ\'larının ortalaması ÷ σ × √(yılda işlem). Düşüş: birikimli K/Z σ\'nın '
-      + 'en büyük gerilemesi. Günde bir kez, ayrı iş parçacığında hesaplanır.';
+      + 'canlıdaki kurallarla (eşik, kapılar) puanlanır; sinyal olan gün kapanıştan girilir - ileriye bakış yok. Her işlemin tutma süresi boyunca yolu '
+      + 'kaydedilir (tutmanın σ\'sı cinsinden: girişte bilinen günlük σ × √tutma). Seviyeler: her ay, o ay başlamadan biten işlemlerle seçilir - stop '
+      + 'kazanan işlemlerin %70 / %80 / %90\'ının hiç gitmediği yer (MAE), hedef işlemlerin en iyi noktalarının (MFE) dağılımından ya da stopun 1 / 1,5 / 2 '
+      + 'katı (ortalamaya dönüş ailelerinde adil değer de), işlem başına beklenen K/Z en yüksek olan, ödül / risk ≥ 1 ve en az 30 işlemle (grupta az ise '
+      + 'ailenin tüm grupları). Trend: hedef yok, iz süren stop. Carry + momentum: sepetin kendi haftalık σ\'sıyla. Satırlar: her ayın işlemleri o ayın '
+      + 'seviyeleriyle (örneklem dışı) - isabet: hedefe ya da süre sonunda kârda kapananların payı; K/Z σ: tutmanın σ\'sı cinsinden; TL: paket DV01\'iyle ya '
+      + 'da 1 mn baz döviz başına. "Seviyeler" sütunu bugünkü stop / hedef katlarıdır. Kendi seviyesiyle kalan aile (VİOP, gün içi …) kendi kurallarıyla. '
+      + 'Günde bir kez, ayrı iş parçacığında hesaplanır.';
     this.boxes.bt = new GridBox(this.btPanel, 'quant/backtest');
     const hits = panel('quant-hits', 'Sinyal kaydı · aile başına isabet');
     hits.note.textContent = 'Her sinyal giriş eşiğini geçtiği an kaydedilir ve izlenir: hedef, stop ya da kayıt süresi (iş günü) dolunca kapanır. '
@@ -165,9 +172,11 @@ class SignalsPage extends QuantPage {
       this.boxes.bt.set([], [], null, d.running ? 'Geri test çalışıyor (ayrı iş parçacığında)…' : 'Geri test henüz yok: günün ilk tam hesabından sonra çalışır.');
       return;
     }
-    const rows = (d.rows || []).map((r) => [T(r.type ? '   ' + r.type : r.label, { b: r.type ? 0 : 1 }), N(r.trades, 0), T(pct(r.hit)), N(r.avg_sigma, 2, { sign: true }),
+    // (a family at its calibrated levels: its out-of-sample record and today's k / m; one that keeps its own: its own trades and why)
+    const rows = (d.rows || []).map((r) => [T(r.type ? '   ' + r.type : r.label, { b: r.type ? 0 : 1 }),
+      T(r.levels || '', { cls: r.calibrated ? '' : 'soft', tip: r.levels || '' }), N(r.trades, 0), T(pct(r.hit)), N(r.avg_sigma, 2, { sign: true }),
       T(isNum(r.avg) ? sgn(r.avg, 2) + ' ' + (r.unit || '') : ''), N(isNum(r.avg_try) ? r.avg_try / 1000 : null, 1, { sign: true }), N(r.sharpe, 2, { sign: true }), N(r.max_dd, 1)]);
-    this.boxes.bt.set(['Aile / tür', 'İşlem', 'İsabet', 'Ort. K/Z σ', 'Ort. K/Z', 'Ort. bin TL', 'Sharpe', 'En büyük düşüş σ'], rows, null, 'Geri testte işlem yok');
+    this.boxes.bt.set(['Aile / grup', 'Seviyeler (bugün)', 'İşlem', 'İsabet', 'Ort. K/Z σ', 'Ort. K/Z', 'Ort. bin TL', 'Sharpe', 'En büyük düşüş σ'], rows, null, 'Geri testte işlem yok');
     this.btPanel.setTitle('Geri test · ' + isoToTr(d.first) + ' – ' + isoToTr(d.last) + ' · ' + d.n_trades + ' işlem · ' + d.refits + ' yeniden kurma'
       + (d.at ? ' · ' + d.at.slice(0, 16) : '') + (d.complete ? '' : ' (süre doldu, eksik)') + (d.running ? ' · yeniden çalışıyor' : ''));
   }

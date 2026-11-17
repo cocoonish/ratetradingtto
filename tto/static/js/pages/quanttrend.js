@@ -97,8 +97,9 @@ class TrendPage extends QuantPage {
           N(r.score, 2, { sign: true, b: isNum(r.score) && Math.abs(r.score) >= 1 ? 1 : 0, tip: r.strength || '' }),
           ...[0, 1, 2].map((i) => N(terms[i], 2, { sign: true, heat: tone(terms[i]), tip: labels[i] + ' ufkunun skora katkısı' })),
           T(r.verb ? r.verb + (r.new ? ' · YENİ' : '') : '', { b: r.new ? 1 : 0, cls: r.new ? 'thru' : '' }),
-          N(r.days_in, 0), T(r.size || ''), T(isNum(r.exp) ? money(r.exp, r.ccy) : '', { tip: r.bucket ? '|skor| ' + r.bucket + ' diliminin ortalaması' : '' }),
-          N(r.hold, 0), T(hit), N(r.sharpe, 2, { sign: true }), T(note, { cls: r.why ? 'soft' : '' })];
+          N(r.days_in, 0), T(r.size || ''), T(isNum(r.exp) ? money(r.exp, r.ccy) : '', { tip: r.levels || (r.bucket ? '|skor| ' + r.bucket + ' diliminin ortalaması' : '') }),
+          // (the record of the instrument's own positions; the list's line says its group's trailing stop's - the tooltip)
+          N(r.hold, 0), T(hit, { tip: r.levels ? 'İz süren stop (grubun): ' + r.levels : '' }), N(r.sharpe, 2, { sign: true }), T(note, { cls: r.why ? 'soft' : '' })];
       }), rows.map((r) => r.sid || null), this.group ? this.group + ' grubunda satır yok' : 'Evrende enstrüman yok', this.picked);
     const bk = tr.buckets || [];
     this.boxes.buckets.set(['Grup', '|Skor|', 'Satır', 'Ort. kazanç (σ)', 'Ort. tutma (g)', 'İsabet'], bk.filter((r) => r.n).map((r) => [

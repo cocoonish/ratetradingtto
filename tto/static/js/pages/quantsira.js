@@ -107,20 +107,26 @@ class SiraPage extends QuantPage {
     const head = h('div', { class: 'qsentence' }, h('b', null, s.name), ' · ' + b.formed_text + ' kapanışında kuruldu · sonraki dengeleme ' + s.next_text + ' kapanışı');
     const kv = h('table', { class: 'plain qkv' });
     const line = (k, v, id) => kv.appendChild(h('tr', null, h('th', null, k), h('td', id ? { id } : null, v)));
-    line('Beklenen K/Z (hafta)', isNum(b.exp) ? money(b.exp, ccy) + ' (geri testin haftalık ortalaması × sepetin kuruluştaki riski)'
-      : 'geri test kısa (' + (bt.trades || 0) + ' hafta): beklenti yok', card.id + '-exp');
-    line('Hedef / stop', (isNum(b.target) ? money(b.target, ccy) : '—') + ' / ' + money(b.stop, ccy) + ' (2σ, haftalık σ ' + money(b.risk, ccy, false) + ')');
+    // the basket's levels (tto/quantlevels.py): calibrated on its weeks, in its own weekly σ - each leg the same multiples of its own σ
+    const lvs = s.levels || {};
+    line('Beklenen K/Z (hafta)', isNum(b.exp) ? money(b.exp, ccy) + (lvs.ok ? ' (ayarlı seviyelerle haftalık ortalama × sepetin kuruluştaki riski)'
+      : ' (geri testin haftalık ortalaması × sepetin kuruluştaki riski)') : 'geri test kısa (' + (bt.trades || 0) + ' hafta): beklenti yok', card.id + '-exp');
+    line('Hedef / stop', (isNum(b.target) ? money(b.target, ccy) : '—') + ' / ' + money(b.stop, ccy) + (lvs.ok
+      ? ' (hedef ' + fmt(lvs.m, 2) + 'σ, stop ' + fmt(lvs.k, 2) + 'σ; haftalık σ ' + money(b.risk, ccy, false) + ')'
+      : ' (2σ, haftalık σ ' + money(b.risk, ccy, false) + ')'), card.id + '-levels');
+    line('Ödül / risk · isabet', lvs.ok ? fmt(b.rr, 2) + ' · ' + pct(lvs.hit) + ' (' + (lvs.n || 0) + ' hafta, ' + (lvs.oos ? 'örneklem dışı' : 'örneklem içi') + ')'
+      + (isNum(lvs.exp) && lvs.exp < 0 ? ' · bu seviyelerle bile zarar ettirdi: düşük güven' : '') : (lvs.why || 'seviye kalibrasyonu yok'));
     line('Şimdiye kadar', money(isNum(b.so_far_now) ? b.so_far_now : b.so_far, ccy) || '0 ' + ccy, card.id + '-sofar');
     line('Geri test', bt.trades ? bt.trades + ' hafta · isabet ' + pct(bt.hit) + ' · Sharpe ' + sgn(bt.sharpe, 2) + (isNum(bt.max_dd) ? ' · en büyük düşüş ' + fmt(bt.max_dd, 1) + 'σ' : '')
       + ' · ' + isoToTr(bt.first) + ' – ' + isoToTr(bt.last) : 'henüz hafta yok');
     if (s.mode === 'ls') line('Net', fmt(b.net, 0) + ' ' + b.net_unit + (s.id === 'g10' ? ' (dolar-nötr)' : s.id === 'vol' ? ' (vega-nötr)' : ' (DV01-nötr)'));
     const legs = h('table', { class: 'plain qlegs', id: card.id.replace(/-card$/, '-legs') }, h('tr', null, ...['İşlem', 'Büyüklük', 'Giriş (kuruluş)', 'Şimdi',
-      'K/Z şimdiye kadar', 'Beklenen (hafta)', 'Stop (2σ)'].map((x, i) => h('th', { class: i ? '' : 'l' }, x))));
+      'K/Z şimdiye kadar', 'Beklenen (hafta)', 'Hedef', 'Stop'].map((x, i) => h('th', { class: i ? '' : 'l' }, x))));
     for (const l of s.legs || []) {
       const lv = (v) => levelText(v, l.unit, l.digits);
       legs.appendChild(h('tr', null, h('td', { class: 'l ' + (l.side > 0 ? 'buy' : 'sell') }, l.line.split(' · ')[0]), h('td', null, l.size),
         h('td', null, lv(l.entry)), h('td', null, lv(l.now)), h('td', null, money(isNum(l.so_far_now) ? l.so_far_now : l.so_far, ccy) || '0'),
-        h('td', null, isNum(l.exp) ? money(l.exp, ccy) : '—'), h('td', null, money(l.stop, ccy))));
+        h('td', null, isNum(l.exp) ? money(l.exp, ccy) : '—'), h('td', null, isNum(l.target) ? money(l.target, ccy) : '—'), h('td', null, money(l.stop, ccy))));
     }
     card.append(h('div', { class: 'qplain' }, head, h('div', { class: 'qcols' }, kv, legs)));
   }
