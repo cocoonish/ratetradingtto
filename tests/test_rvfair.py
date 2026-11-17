@@ -249,7 +249,7 @@ def test_each_page_names_its_fx_swap_curve(service):
     names its own - in the titles, the captions and the tips; the cells and their values are as they were."""
     s = service
     u = s.login("Eğri Adı")["user"]
-    ima = "FX swap ima eğrisi (TRYI 1–9A, TRYSAQ 2–5Y; fiyatı yoksa OIS)"
+    ima = "FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS)"
     rv_page = {p["id"]: p for p in s.view(u, "dibs")["panels"]}
     d = rv_page["B3"]["data"]
     caps = d["rows"][d["r"].index(4)]

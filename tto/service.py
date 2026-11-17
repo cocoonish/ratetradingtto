@@ -5621,7 +5621,7 @@ class Service(object):
 
     #: the two FX swap curves, as the pages name them: DİBS RV's (its BF:BJ) and the ASW page's (EK_FX, its "ASW FX")
     RV_FX_CURVE = "FX swap (offshore ICAP eğrisi)"
-    ASW_FX_CURVE = "FX swap ima eğrisi (TRYI 1–9A, TRYSAQ 2–5Y; fiyatı yoksa OIS)"
+    ASW_FX_CURVE = "FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS)"
 
     @classmethod
     def _rv_fx_tips(cls) -> Dict[str, str]:

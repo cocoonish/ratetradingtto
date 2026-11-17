@@ -2348,7 +2348,7 @@ TRY faizinin O/N karşılığı (sayfanın kendi F sütunu) ve gün sonu arşivi
   **İki FX swap eğrisi, iki ad.** İki sayfa iki ayrı FX swap eğrisi kullanır ve aynı kâğıda farklı FX ASW'si verir
   (kayıtlı veride 13.09.28: −172 ve −532): DİBS RV'ninki **FX swap (offshore ICAP eğrisi)** - Forward'daki offshore TRY
   iskonto eğrisi; `BF:BJ` sütunları ondandır, başlıklarının ipucu ve "ASW eğrisi · FX swap (offshore ICAP eğrisi)"
-  tablosu bunu söyler -, bu sayfanınki **FX swap ima eğrisi (TRYI 1–9A, TRYSAQ 2–5Y; fiyatı yoksa OIS)** - OIS
+  tablosu bunu söyler -, bu sayfanınki **FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS)** - OIS
   kotalarının yerine FX swap ima faizleri; ASW FX ima sütunları, tablonun, grafiğin ve EK_FX tablosunun başlığı bunu
   söyler. Hücreler ve değerleri aynıdır, yalnız başlıklar ve ipuçları.
   **FX swap ima eğrisine göre ASW grafiği**: OIS grafiğinin hemen altında aynı XY grafiği, aynı hesap FX swap ima eğrisiyle -
