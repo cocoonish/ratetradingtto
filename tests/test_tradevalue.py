@@ -187,7 +187,7 @@ def test_fly_level_in_both_conventions():
     assert abs(r["inputs"]["traded_bp"] - (34.5 - 0.5 * (36.0 + 33.0)) * 100) < 1e-9
     assert abs(r["mtm"] - sum(lg["mtm"] for lg in r["legs"])) < 1e-6
     checked = tv.check(ois(structure="fly", legs=legs), m)
-    assert checked["side"] == "pay" and abs(checked["price"] - (34.5 - 34.5) * 100) < 1e-9
+    assert checked["side"] == "B" and abs(checked["price"] - (34.5 - 34.5) * 100) < 1e-9
 
 
 def test_fra_alone_equals_its_replicating_legs():
@@ -256,6 +256,33 @@ def test_a_swap_closed_inside_a_period():
             pay = N * 0.02 * (b - a).days / 365.0
         hand += pay * d_b
     assert abs(r["mtm"] - hand) < 1e-6 and r["carry_1d"] == 0.0 and r["accrued"] == 0.0
+
+
+def test_sides_in_words_or_in_the_blotters_codes():
+    """The form sends "receive" / "pay", the blotter's codes are "S" (receives the fixed rate) / "B" (pays it): check()
+    takes either and writes the code, the same trade values the same, and every leg says its side in words."""
+    m = hand_market()
+    m.curves["ois"] = bootstrap(m.spot_date("ois"), QUOTES)
+    for words, code in (("receive", "S"), ("pay", "B")):
+        assert tv.check(ois(side=words, price=35.0, tenor="2Y"), m)["side"] == code
+        a, b = tv.value(ois(side=words, price=35.0, tenor="2Y"), m), tv.value(ois(side=code, price=35.0, tenor="2Y"), m)
+        assert a == b and a["side"] == code and a["side_text"] == words
+    legs_w = [{"tenor": "1Y", "side": "receive", "notional": N / 2, "price": 36.0}, {"tenor": "2Y", "side": "pay", "notional": N, "price": 34.5},
+              {"tenor": "5Y", "side": "receive", "notional": N / 2, "price": 33.0}]
+    legs_c = [dict(lg, side={"receive": "S", "pay": "B"}[lg["side"]]) for lg in legs_w]
+    a, b = tv.value(ois(structure="fly", legs=legs_w), m), tv.value(ois(structure="fly", legs=legs_c), m)
+    assert a == b and [(lg["side"], lg["side_text"]) for lg in a["legs"]] == [("S", "receive"), ("B", "pay"), ("S", "receive")]
+    assert a["legs"][1]["label"] == "Pay 2Y OIS" and a["side"] == "B"
+    fra = tv.value(ois(structure="fra", fra="3x6", side="receive", price=38.0), m)
+    assert [(lg["side"], lg["side_text"]) for lg in fra["legs"]] == [("S", "receive"), ("B", "pay")]
+    # what a form is offered: the codes with their words, a package's legs for each side of it
+    d = tv.defaults("ois", mkt_or_svc=m)
+    assert d["sides"] == [{"side": "S", "side_text": "receive"}, {"side": "B", "side_text": "pay"}]
+    assert [lg["side_text"] for lg in d["weights"]["spread"]["legs"]["B"]] == ["receive", "pay"]       # (pay the spread: the long leg)
+    assert [lg["side"] for lg in d["weights"]["fly"]["legs"]["S"]] == ["B", "S", "B"]                   # (receive the body)
+    assert tv.defaults("fxspot", "USDTRY", mkt_or_svc=m)["sides"][0] == {"side": "B", "side_text": "buy"}
+    with pytest.raises(ValueError):
+        tv.check(ois(side="buy", price=35.0, tenor="2Y"), m)
 
 
 def test_mpc_trade_is_keyed_by_its_meeting_date():
@@ -639,7 +666,7 @@ def test_check_says_what_is_wrong():
     # what check() normalises: a tenor to its end, Turkish numbers and amounts, sides, the desk's settlement
     t = tv.check({"product": "ois", "side": "Rec", "notional": "100m", "price": "38,45", "tenor": "2y", "trade_date": "3.11.2026"}, m)
     assert (t["side"], t["notional"], t["price"], t["trade_date"], t["settle_date"], t["end_date"], t["tenor_months"]) == \
-        ("receive", 100e6, 38.45, "2026-11-03", "2026-11-04", "2028-11-06", 24)
+        ("S", 100e6, 38.45, "2026-11-03", "2026-11-04", "2028-11-06", 24)
     t = tv.check({"product": "fxopt", "pair": "usd/try", "side": "al", "notional": "1mn", "price": 250000, "trade_date": td,
                   "call_put": "C", "strike": "44,5", "tenor": "3M"}, m)
     assert (t["pair"], t["side"], t["call_put"], t["strike"], t["premium_ccy"], t["premium_date"]) == \

@@ -96,11 +96,14 @@ RATES = ("ois", "sofr")
 LOT = 5000000.0
 #: a package's DV01 weights, as the desk sizes them: a spread 1:1, a fly 50/50 (wings ½ each)
 WEIGHTS = {"spread": (1.0, 1.0), "fly": (0.5, 1.0, 0.5)}
-_SIDES = {"ois": ("receive", "pay"), "sofr": ("receive", "pay"), "dibs": ("B", "S"), "fxspot": ("B", "S"), "fxopt": ("B", "S")}
-#: the words of a side, as the blotter reads them (``entry.OIS_SIDES_WORDS`` / ``FWD_DIRS``): an OIS "B" pays the fixed
-#: rate and "S" receives it, as the workbook's own list writes it
-_RATE_SIDES = {"receive": "receive", "rec": "receive", "r": "receive", "receiver": "receive", "received": "receive", "s": "receive",
-               "pay": "pay", "p": "pay", "payer": "pay", "paid": "pay", "ode": "pay", "öde": "pay", "b": "pay"}
+#: a trade's side as :func:`check` writes it: the blotter's codes - an OIS / SOFR "B" pays the fixed rate and "S" receives
+#: it, as the workbook's own list and the desk's stored trades have it (``entry.OIS_SIDES_WORDS``); a bond or FX "B" buys,
+#: "S" sells.  Either the code or the word is taken (the interface's "receive" / "pay" included).
+_SIDES = {"ois": ("S", "B"), "sofr": ("S", "B"), "dibs": ("B", "S"), "fxspot": ("B", "S"), "fxopt": ("B", "S")}
+#: what a side code means, in words (``side_text``: what a page shows beside the code)
+SIDE_TEXT = {"rates": {"S": "receive", "B": "pay"}, "other": {"B": "buy", "S": "sell"}}
+_RATE_SIDES = {"receive": "S", "rec": "S", "r": "S", "receiver": "S", "received": "S", "s": "S",
+               "pay": "B", "p": "B", "payer": "B", "paid": "B", "ode": "B", "öde": "B", "b": "B"}
 _BS_SIDES = {"b": "B", "buy": "B", "al": "B", "alis": "B", "alış": "B", "alim": "B", "alım": "B", "bought": "B", "long": "B",
              "s": "S", "sell": "S", "sat": "S", "satis": "S", "satış": "S", "sold": "S", "short": "S"}
 #: currencies the dashboard keeps a rate or a USD pair of (FX it can price, crosses included)
@@ -1162,7 +1165,7 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         return None, None
 
     start = _day(t.get("value_date") or t.get("settle_date"))
-    sign = 1.0 if t.get("side") == "receive" else -1.0
+    sign = 1.0 if t.get("side") == "S" else -1.0                 # (S receives the fixed rate, B pays it)
     if structure in ("outright", "mpc", "fra"):
         end = _day(t.get("end_date"))
         months = int(t["tenor_months"]) if t.get("tenor_months") else (tenor_months(t.get("tenor")) if t.get("tenor") else None)
@@ -1193,11 +1196,12 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
                 a = _Leg(settle, end, K, float(t["notional"]), sign)
                 b = _Leg(settle, start, K, float(t["notional"]), -sign)
                 parts = []
-                for lg, verb in ((a, t["side"]), (b, "pay" if t["side"] == "receive" else "receive")):
-                    parts.append((lg, run(lg), verb))
-                for lg, r, verb in parts:
-                    out_legs.append(_leg_out(mkt, ccy, "%s %s %s" % (verb.capitalize(), conv.label, _short(lg.end)), r,
-                                             "%s %s %s%%" % (conv.label, _short(lg.end), _tr(r["price_now"], 2)) if r["price_now"] is not None else ""))
+                for lg, code in ((a, t["side"]), (b, "B" if t["side"] == "S" else "S")):
+                    parts.append((lg, run(lg), code))
+                for lg, r, code in parts:
+                    out_legs.append(_leg_out(mkt, ccy, "%s %s %s" % (side_text(prod, code).capitalize(), conv.label, _short(lg.end)), r,
+                                             "%s %s %s%%" % (conv.label, _short(lg.end), _tr(r["price_now"], 2)) if r["price_now"] is not None else "",
+                                             prod, code))
                 inputs["residual"] = {"mtm": res["mtm"] - sum(r["mtm"] for _, r, _ in parts),
                                       "carry": res["carry"] - sum(r["carry"] for _, r, _ in parts),
                                       "accrued": res["accrued"] - sum(r["accrued"] for _, r, _ in parts)}
@@ -1210,7 +1214,7 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         lend = _day(lg.get("end_date"))
         months = _leg_months(lg, lstart, lend)
         K = float(lg["price"]) / 100.0
-        lsign = 1.0 if lg.get("side") == "receive" else -1.0
+        lsign = 1.0 if lg.get("side") == "S" else -1.0
         cd, cr = closing(lg)                               # (a package closes leg by leg: each leg's close price)
         L = _Leg(lstart, lend, K, float(lg["notional"]), lsign, months, "", cd, cr)
         r = run(L)
@@ -1239,9 +1243,9 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
     else:
         text = "%s %s bp" % (pkg, _tr(level, 1))
     for lg, L, r, name, _ in results:
-        verb = str(lg.get("side") or "").capitalize()
+        verb = side_text(prod, lg.get("side")).capitalize()
         out_legs.append(_leg_out(mkt, ccy, "%s %s" % (verb, name), r,
-                                 "%s %s%%" % (name, _tr(r["price_now"], 2)) if r["price_now"] is not None else name))
+                                 "%s %s%%" % (name, _tr(r["price_now"], 2)) if r["price_now"] is not None else name, prod, lg.get("side")))
     total = {"mtm": sum(r["mtm"] for _, _, r, _, _ in results), "accrued": sum(r["accrued"] for _, _, r, _, _ in results),
              "carry": sum(r["carry"] for _, _, r, _, _ in results), "price_now": level, "price_text": text}
     tally: Dict[str, int] = {}
@@ -1284,11 +1288,16 @@ def _money(mkt: Market, ccy: str, v: Optional[float]) -> Tuple[Optional[float], 
     return (v * tp if tp else None), (v * up if up else None)
 
 
-def _leg_out(mkt: Market, ccy: str, label: str, r: Dict[str, Any], text: str) -> Dict[str, Any]:
+def side_text(prod: str, side: Any) -> str:
+    """A side code in words: an OIS / SOFR "S" "receive", "B" "pay"; a bond's / FX "B" "buy", "S" "sell"."""
+    return SIDE_TEXT["rates" if prod in RATES else "other"].get(str(side or ""), "")
+
+
+def _leg_out(mkt: Market, ccy: str, label: str, r: Dict[str, Any], text: str, prod: str = "", side: Any = None) -> Dict[str, Any]:
     m_try, m_usd = _money(mkt, ccy, r["mtm"])
     c_try, c_usd = _money(mkt, ccy, r["carry"])
-    return {"label": label, "mtm": r["mtm"], "mtm_try": m_try, "mtm_usd": m_usd, "carry_1d": r["carry"],
-            "carry_1d_try": c_try, "carry_1d_usd": c_usd, "price_now": r.get("price_now"), "price_text": text}
+    return {"label": label, "side": side, "side_text": side_text(prod, side), "mtm": r["mtm"], "mtm_try": m_try, "mtm_usd": m_usd,
+            "carry_1d": r["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "price_now": r.get("price_now"), "price_text": text}
 
 
 def _finish(mkt: Market, t: Dict[str, Any], ccy: str, total: Dict[str, Any], inputs: Dict[str, Any],
@@ -1297,7 +1306,8 @@ def _finish(mkt: Market, t: Dict[str, Any], ccy: str, total: Dict[str, Any], inp
     c_try, c_usd = _money(mkt, ccy, total["carry"])
     out = {"ok": True, "why": None, "ccy": ccy, "mtm": total["mtm"], "mtm_try": m_try, "mtm_usd": m_usd,
            "carry_1d": total["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "accrued": total.get("accrued"),
-           "price_now": total.get("price_now"), "price_text": total.get("price_text") or "", "greeks": greeks, "inputs": inputs}
+           "price_now": total.get("price_now"), "price_text": total.get("price_text") or "", "greeks": greeks, "inputs": inputs,
+           "side": t.get("side"), "side_text": side_text(t.get("product", ""), t.get("side"))}
     if legs:
         out["legs"] = legs
     return out
@@ -1845,14 +1855,17 @@ def defaults(product: str, pair: Optional[str] = None, trade_date: Any = None, m
     OIS_MAIN!B2 = WORKDAY(TODAY(),1,TRY); SOFR T+2 on the SIFMA list - SOFR_FOMC!B5; a bond DİBS RV's value date - T+0
     for an ISL0 bill, else the next TRY business day; FX the pair's spot), ``notional_ccy``; for a rate product the
     meeting periods (by date), an FRA's dates (``fra="3x6"``), a tenor's end (``tenor="2Y"``) and the packages'
-    weights; for an option ``delivery`` (``expiry`` + the pair's spot lag), ``premium_ccy`` (the quote currency) and
-    ``premium_date``.  ``given``: what the form knows already (``isin``, ``expiry``, ``tenor``, ``fra``, ``structure``)."""
+    weights (with the legs' sides for a package side); for an option ``delivery`` (``expiry`` + the pair's spot lag),
+    ``premium_ccy`` (the quote currency) and ``premium_date``.  ``sides``: the side codes :func:`check` writes and what
+    each means in words (``side_text``).  ``given``: what the form knows already (``isin``, ``expiry``, ``tenor``,
+    ``fra``, ``structure``)."""
     prod = str(product or "").strip().lower()
     if prod not in PRODUCTS:
         raise TradeError("ürün bilinmiyor: %s" % product)
     mkt = _market_of(mkt_or_svc)
     td = _day(trade_date) or mkt.today
-    out: Dict[str, Any] = {"product": prod, "trade_date": td.isoformat()}
+    out: Dict[str, Any] = {"product": prod, "trade_date": td.isoformat(),
+                           "sides": [{"side": c, "side_text": side_text(prod, c)} for c in _SIDES[prod]]}
     if prod in RATES:
         conv = CONVS[prod]
         hol = mkt.hol(*conv.cal)
@@ -1860,9 +1873,9 @@ def defaults(product: str, pair: Optional[str] = None, trade_date: Any = None, m
         out.update({"settle_date": settle.isoformat(), "value_date": settle.isoformat(), "notional_ccy": conv.ccy,
                     "structure": given.get("structure") or "outright", "structures": list(STRUCTURES),
                     "weights": {"spread": {"weights": list(WEIGHTS["spread"]), "sides": "kısa ve uzun bacak ters yönde",
-                                           "note": "DV01 1:1"},
+                                           "note": "DV01 1:1", "legs": _package_sides(prod, 2)},
                                 "fly": {"weights": list(WEIGHTS["fly"]), "sides": "gövde kanatların tersi",
-                                        "note": "50/50 DV01: gövde 1, kanatlar ½"}},
+                                        "note": "50/50 DV01: gövde 1, kanatlar ½", "legs": _package_sides(prod, 3)}},
                     "mpc_periods": meeting_periods(mkt, prod), "lot": mkt.lot if prod == "ois" else LOT})
         if given.get("tenor"):
             e = tenor_end(settle, given["tenor"], conv, hol)
@@ -1896,6 +1909,17 @@ def defaults(product: str, pair: Optional[str] = None, trade_date: Any = None, m
             dates = fx_tenor_dates(mkt, code, td, str(given["tenor"]))
             if dates is not None:
                 out["expiry"], out["delivery"] = dates[0].isoformat(), dates[1].isoformat()
+    return out
+
+
+def _package_sides(prod: str, n: int) -> Dict[str, List[Dict[str, str]]]:
+    """A package's legs (shortest first) for each side of the package: "B" (pay) pays the long leg / the body - it gains
+    when the level (long − short, body − ½ wings) rises -, "S" (receive) the other way."""
+    out = {}
+    for pkg in ("B", "S"):
+        other = "S" if pkg == "B" else "B"
+        codes = [other, pkg] if n == 2 else [other, pkg, other]
+        out[pkg] = [{"side": c, "side_text": side_text(prod, c)} for c in codes]
     return out
 
 
@@ -2134,7 +2158,7 @@ def _check_rates(t: Dict[str, Any], m: Market, td: _dt.date) -> Dict[str, Any]:
         level = (rates[1] - rates[0]) * 100.0 if structure == "spread" else (rates[1] - 0.5 * (rates[0] + rates[2])) * 100.0
         if t.get("price") in (None, ""):
             t["price"] = level
-        # the package's own side: "pay" gains when its level goes up (pays the long leg / the body)
+        # the package's own side: "B" (pay) gains when its level goes up (pays the long leg / the body)
         t["side"] = out_legs[1]["side"]
         t["end_date"] = out_legs[-1]["end_date"]
         return t
