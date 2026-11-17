@@ -3135,6 +3135,54 @@ async function clipAfter(page, action) {
       && op.pairs.every((p) => p.smiles.length === 2 && p.smiles.every((s) => s.probs.length === 3 && (s.model || s.why))),
     { rows: surfRows, smiles: op.pairs && op.pairs.map((p) => p.smiles.map((s) => s.model || s.why)) });
     await shot(page, 'quant-opt');
+    // ------------------------------------------------------------------ Opsiyon → spot (quantoptspot.py): a tab of FX
+    // (the recorded data keeps no vol history: every pair says why it has no line, the record table that it has none)
+    console.log('quant optspot');
+    await open(page, 'quant-optspot');
+    await page.waitForSelector('#quant-optspot-pairs table.grid', { timeout: 60000 });
+    const osApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/optspot');
+    const osRows = ((osApi.json || {}).optspot || {}).rows || [];
+    const osPage = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent), on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
+      lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page),
+      rows: document.querySelectorAll('#quant-optspot-pairs table.grid tr:not(.hd)').length,
+      leads: document.querySelectorAll('#quant-optspot-leads table.grid tr:not(.hd)').length,
+      leadsText: (document.getElementById('quant-optspot-leads') || {}).textContent || '',
+      read: ['quant-optspot-signals', 'quant-optspot-pairs', 'quant-optspot-leads'].map((id) => {
+        const p = document.getElementById(id);
+        const r = p && p.querySelector(':scope > .qread'), n = p && p.querySelector(':scope > .qnote');
+        return { id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER',
+          method: n && n.classList.contains('qmethod') && n.textContent ? getComputedStyle(n, '::before').content : null };
+      }) }));
+    check('Opsiyon → spot is the fourth tab of FX: every pair in its table (USDTRY and EURTRY in Offshore), each table read in the desk\'s words under its title',
+      osApi.status === 200 && osApi.json.ready && osPage.tabs.join(',') === 'FX,Makro,Opsiyon,Opsiyon → spot' && osPage.on.join() === 'quant-optspot'
+      && osPage.lit.join() === 'quant.fx' && osRows.length === 9 && osPage.rows === 9
+      && osRows.filter((r) => r.group === 'Offshore').map((r) => r.pair).join() === 'USDTRY,EURTRY'
+      && osPage.read.every((r) => r.read.length >= 40 && r.under) && osPage.read.find((r) => r.id === 'quant-optspot-pairs').method === '"Yöntem: "',
+      { tabs: osPage.tabs, rows: osRows.length, shown: osPage.rows, read: osPage.read });
+    const osSigs = ((await api(page, 'ayşe yilmaz', 'GET', '/api/quant/signals?family=optspot')).json || {}).signals || [];
+    check('... in the recorded data (no vol history) no line prints: every pair says why, the record table says it has none',
+      osSigs.length === 0 && osRows.every((r) => !r.prints && r.why) && osRows.find((r) => r.pair === 'EURTRY').why.startsWith('opsiyon serisi yok')
+      && osPage.leads === 0 && /Örneklem dışı kayıt yok/.test(osPage.leadsText) && /Şu an basılan satır yok/.test(await page.textContent('#quant-optspot-signals')),
+      osRows.map((r) => r.pair + ': ' + r.why));
+    // a line as the server writes it (tests/test_quantoptspot.py makes it from synthetic data): the option signal, then the trade
+    const osLine = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const text = '25D RR 1A 1 haftada +1,2 vol (z +2,1; USD call\'ları pahalandı), spot henüz gelmedi → AL USDJPY spot · 1,1 mn USD · giriş 150,250 '
+        + '· hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)';
+      const s = { id: 'optspot:FX:USDJPY', family: 'optspot', family_label: 'Opsiyon → spot', asset: 'FX', expression: text, line: text,
+        z: 2.6, entry_z: 2, score_name: 'z(p)', strength: 'Orta', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2.6, regime: 1, hl: 1, carry: 1 },
+        composite: 2.6, hold: 5, horizon_unit: 'gün', bt: null, unit: '', digits: 3, entry: 150.25, target: 152.1, stop: 148.77, direction: 1,
+        pnl_unit: '%', exp_pnl: 0.31, group: 'G10 spot', tier: null, tag: '', gated: '' };
+      const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
+      const row = q.signalRows([s], { rank: true, group: true })[0];
+      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t };
+    });
+    check('... and an Opsiyon → spot line in the list: its family, the option signal behind the trade first, then the plan\'s line, its group',
+      osLine.family === 'Opsiyon → spot' && osLine.trade.startsWith('25D RR 1A 1 haftada +1,2 vol')
+      && osLine.trade.endsWith('→ AL USDJPY spot · 1,1 mn USD · giriş 150,250 · hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)')
+      && osLine.group === 'G10 spot', osLine);
+    await shot(page, 'quant-optspot');
 
     // ------------------------------------------------------------------ the implied path on its grid, the WIRP (quantpath.py)
     console.log('implied path, WIRP');
@@ -4019,7 +4067,7 @@ async function clipAfter(page, action) {
       const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
       return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
     });
-    check('the quant menu: four entries - Sinyaller (6 tabs: Trend, Carry + momentum and Makine öğrenmesi among them), Faiz (8), FX (3), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:6","Faiz:8","FX:3","VİOP:0"]', quantMenu);
+    check('the quant menu: four entries - Sinyaller (6 tabs: Trend, Carry + momentum and Makine öğrenmesi among them), Faiz (8), FX (4: Opsiyon → spot among them), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:6","Faiz:8","FX:4","VİOP:0"]', quantMenu);
     await open(page, 'quant-regime');                                       // an address of before
     const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));

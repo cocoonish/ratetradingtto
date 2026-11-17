@@ -22,6 +22,7 @@ import { VIOP_PAGES } from './quantviop.js';          // VİOP
 import { TREND_PAGES } from './quanttrend.js';        // Trend
 import { SIRA_PAGES } from './quantsira.js';          // Carry + momentum
 import { ML_PAGES } from './quantml.js';              // Makine öğrenmesi
+import { OPTSPOT_PAGES } from './quantoptspot.js';    // Opsiyon → spot
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, LOW, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
@@ -270,7 +271,7 @@ class SignalsPage extends QuantPage {
 export function quantPage(id, host, ctx) {
   if (id === 'quant') return new SignalsPage(host, ctx);
   if (ML_PAGES[id]) return new ML_PAGES[id](host, ctx);          // Makine öğrenmesi (quantml.js)
-  const own = PATH_PAGES[id] || LEAD_PAGES[id] || VIOP_PAGES[id] || TREND_PAGES[id] || SIRA_PAGES[id];
+  const own = PATH_PAGES[id] || LEAD_PAGES[id] || VIOP_PAGES[id] || TREND_PAGES[id] || SIRA_PAGES[id] || OPTSPOT_PAGES[id];
   if (own) return new own(host, ctx);
   return fitPage(id, host, ctx) || quantView(id, host, ctx);
 }

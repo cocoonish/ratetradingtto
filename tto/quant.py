@@ -52,6 +52,7 @@ from . import quantopt as qopt
 from . import quantlead as ql
 from . import quantlevels as qlv                 # every line's target and stop, calibrated on its family's past trades
 from . import quantml as qml                      # Makine öğrenmesi: the family on the universe (quantuniv) and its page
+from . import quantoptspot as qos                 # Opsiyon → spot: the option signals' spot lines (on the universe) and their page
 from . import quantuniv as qu
 from . import quantsira as qs                    # Carry + momentum (on the universe; registers itself)
 from . import quantviop as qv
@@ -107,8 +108,8 @@ LABELS = {
     "bt_mute": "Geri testi zayıf aileyi sustur", "bt_min_hit": "Geri test: en az isabet", "bt_min_sharpe": "Geri test: en az Sharpe",
     "bt_min_trades": "Geri test: karar için en az işlem",
 }
-for _mod in (qp, ql, qv, qtr):                  # the implied path's grids and policy rate, lead-lag's k and lag, VİOP's window,
-    DEFAULTS.update(_mod.DEFAULTS)              # Trend's daily risk
+for _mod in (qp, ql, qv, qtr, qos):             # the implied path's grids and policy rate, lead-lag's k and lag, VİOP's window,
+    DEFAULTS.update(_mod.DEFAULTS)              # Trend's daily risk, Opsiyon → spot's weekly risk
     LIMITS.update(_mod.LIMITS)
     LABELS.update(_mod.LABELS)
 
@@ -128,6 +129,7 @@ PAGES += qv.PAGES                                                               
 PAGES += qtr.PAGES                                                                                         # quanttrend.py
 PAGES += qs.PAGES                                                                                          # quantsira.py
 PAGES += qml.PAGES                                                                                         # quantml.py
+PAGES += qos.PAGES                                                                                         # quantoptspot.py
 #: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
 #: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
 MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"),
@@ -137,8 +139,9 @@ MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday"
                                 ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
         ("quant.fx", "FX", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))),
         ("quant-viop", "VİOP", (("quant-viop", "VİOP"),)))
-# Makine öğrenmesi (quantml.py): a tab of Sinyaller
-MENU = tuple((mid, name, tabs + ((qml.TAB,) if mid == "quant.sinyal" else ())) for mid, name, tabs in MENU)
+# Makine öğrenmesi (quantml.py): a tab of Sinyaller; Opsiyon → spot (quantoptspot.py): a tab of FX, after Opsiyon
+MENU = tuple((mid, name, tabs + ((qml.TAB,) if mid == "quant.sinyal" else ()) + ((qos.TAB,) if mid == "quant.fx" else ()))
+             for mid, name, tabs in MENU)
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -1450,6 +1453,8 @@ class Quant(object):
             return qs.view(self, what, base, v, fit)
         if what in qml.VIEWS:                               # Makine öğrenmesi (quantml.py)
             return qml.view(self, what, base, v, fit)
+        if what in qos.VIEWS:                               # Opsiyon → spot (quantoptspot.py)
+            return qos.view(self, what, base, v, fit)
         if what == "signals":
             # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones; ``group`` one group
             fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""

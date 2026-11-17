@@ -614,7 +614,7 @@ def test_a_family_s_module_is_imported_when_it_is_there_and_its_failure_is_its_o
     monkeypatch.setattr(importlib, "import_module", fake)
     monkeypatch.setattr(qu, "RUNNERS", {})                    # (none plugged yet: tto.quant imports the families' modules itself)
     errors = {}
-    assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml"]
+    assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml", "tto.quantoptspot"]
     assert list(errors) == ["ml"] and "bozuk" in errors["ml"]
     with pytest.raises(ValueError):
         qu.family("yok")
@@ -632,7 +632,7 @@ def test_universe_and_groups_over_http(seeded):
         assert rows["FWD:USDTRY:3M"]["tag"] == "offshore limiti" and {r["key"] for r in u["inputs"]} >= {"UST:10Y", "DXY", "CDS"}
         fly = rows["OISF:6M/1Y/2Y"]                                         # (a fly with the OIS sheet's quote beside its level)
         assert fly["sheet_level"] == pytest.approx(2.0 * fly["level"]) and "(OIS sayfasında " in fly["level_text"]
-        assert [f["id"] for f in u["families"]] == ["trend", "sira", "ml"]
+        assert [f["id"] for f in u["families"]] == ["trend", "sira", "ml", "optspot"]
         s = client.get("/api/quant/signals", params={"group": "TRY OIS"}).json()
         assert s["group"] == "TRY OIS" and all(x["group"] == "TRY OIS" for x in s["signals"]) and [g["id"] for g in s["groups"]] == list(qu.GROUPS)
         res = client.post("/api/quant/subscription", json={"on": True, "families": ["trend", "yok"], "groups": ["VİOP", "yok"], "min": "Orta"})
