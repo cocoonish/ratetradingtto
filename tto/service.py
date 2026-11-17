@@ -7732,7 +7732,7 @@ def _row_keys(data: Dict[str, Any], ranked: bool = False) -> List[Any]:
     shown)."""
     src = data.get("rows") or []
     nums = list(data.get("r") or [])
-    heads = _caption_rows(src, nums)
+    heads = _caption_rows(src, nums) | _group_heads(src)
     names = [None if i in heads else _row_name(row) for i, row in enumerate(src)]
     stems = [_stem(n) if n else None for n in names]
     count_n: Dict[str, int] = {}
@@ -7770,12 +7770,20 @@ def _header_row(row: List[Dict[str, Any]]) -> bool:
     return n >= 2 and strong * 2 >= n
 
 
+def _group_heads(rows: List[List[Dict[str, Any]]]) -> set:
+    """The captions of the groups of a list of bonds shown as the trading list has them ("Bono · 2 kâğıt": ``grp``,
+    :meth:`Service._bond_rows`): rows of the page only - no row a launchpad box picks, keeps or shows."""
+    return {i for i, row in enumerate(rows) if row and isinstance(row[0], dict) and row[0].get("grp")}
+
+
 def _caption_rows(rows: List[List[Dict[str, Any]]], nums: List[Any]) -> set:
     """The rows at the top of a table that name its columns (a lone title row above them too): a part of the table
-    keeps them."""
-    out = set(i for i, r in enumerate(nums) if r == 0)
+    keeps them.  A group's caption of a list of bonds (:func:`_group_heads`) is none of them and does not count: the
+    table's own header is found as it was before the groups."""
+    grp = _group_heads(rows)
+    out = set(i for i, r in enumerate(nums) if r == 0 and i not in grp)
     for i, row in enumerate(rows):
-        if i in out:
+        if i in out or i in grp:
             continue
         if len(rows) > 1 and _header_row(row) and len(out) < 3:
             out.add(i)
@@ -7814,25 +7822,19 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
         numbers = {x for x in rows if isinstance(x, int)}
         labels = {" ".join(x.split()) for x in rows if isinstance(x, str)}
         heads = _caption_rows(src, nums)
-        body = {i for i in range(len(src)) if i not in heads and i < len(nums) and nums[i] in numbers}
+        grp = _group_heads(src)
+        body = {i for i in range(len(src)) if i not in heads and i not in grp and i < len(nums) and nums[i] in numbers}
         if labels:
             keys = _row_keys(data)
             texts = [_row_text(row) for row in src]
             for x in labels:
-                hit = [i for i in range(len(src)) if i not in heads and (keys[i] == x or texts[i] == x)]
+                hit = [i for i in range(len(src)) if i not in heads and i not in grp and (keys[i] == x or texts[i] == x)]
                 if not hit and _DETAIL in x:
                     hit = [i for i in range(len(src)) if keys[i] == _stem(x)]
                     hit = hit if len(hit) == 1 else []
                 body.update(hit)
         if body:
-            keep = heads | body
-            # the caption of a group of a list of bonds (_bond_rows: "Bono · 2 kâğıt") stays over the rows picked in it only
-            grp = [i for i in sorted(heads) if src[i] and isinstance(src[i][0], dict) and src[i][0].get("grp")]
-            for k, i in enumerate(grp):
-                end = grp[k + 1] if k + 1 < len(grp) else len(src)
-                if not any(i < j < end for j in body):
-                    keep.discard(i)
-            keep_r = sorted(keep)
+            keep_r = sorted(heads | body)
         else:
             missing = True
     new_r = {i: k for k, i in enumerate(keep_r)}
