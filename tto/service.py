@@ -3047,10 +3047,17 @@ class Service(object):
         if got is None:
             raise ServiceError("senaryo bulunamadı: %s" % name, 404)
         values, formulas = got
-        self.store.replace_user_inputs(user, values, formulas)      # (its formulas evaluated again over what is there now)
-        self.et.call_at(EngineThread.WRITE, self._reload_user, user)
-        # (the user's own list of bonds is the scenario's, with its rows' values: nothing moves - rowkeys.py)
-        self.et.call_at(EngineThread.WRITE, self.rowkeys.loaded, user)
+
+        def load() -> None:
+            # in the engine's queue of writes, as an input written is: a write sent before the load is applied before
+            # it (the load wins), one sent after it after - never a write still waiting in the queue landing over the
+            # loaded inputs
+            self.store.replace_user_inputs(user, values, formulas)  # (its formulas evaluated again over what is there now)
+            self._reload_user(user)
+            # (the user's own list of bonds is the scenario's, with its rows' values: nothing moves - rowkeys.py)
+            self.rowkeys.loaded(user)
+
+        self.et.call_at(EngineThread.WRITE, load)
         self.bump()
         return {"loaded": name, "cells": len(values), "gen": self.gen}
 
