@@ -21,6 +21,10 @@ What is watched is a *subject*, as the desk names it, not a cell that may move:
   names a bond, a VİOP contract or an OIS tenor is taken as that subject);
 * ``{"kind": "expr", "text": "[OIS 2Y] - [OIS 1Y]"}`` - anything built of them: names in brackets, cell
   references, numbers, + − × ÷ and brackets.  A spread of rates is told in bp.
+* ``{"kind": "trade", "id": 12}`` - a trade of Trades: the level its target and stop are read against (the value MTM
+  reads for it, tto/tradebook.py) - only the alarms Trades sets itself for a trade's target and stop ("hedefe geldi" /
+  "stopa geldi") watch it; nobody adds one (``check`` refuses the kind): a personal trade's are its owner's, a desk
+  trade's the desk's.
 
 Every subject has a *display value* - as the desk reads it: a rate in per cent (35,55), a spread in bp, a price,
 a level - and an alarm's level is typed that way.  Kept in the store's key / value table: the watch lists
@@ -45,7 +49,7 @@ from .xl.model import COLS, parse_a1
 from .xl.tokenizer import col_to_index, index_to_col
 
 #: how a value is shown and what a change of it is: (unit after a change, × to get the change in that unit)
-SHOWS = {"pct": ("bp", 100.0), "bp": ("bp", 1.0), "px": ("puan", 1.0), "fx": ("", 1.0), "raw": ("", 1.0)}
+SHOWS = {"pct": ("bp", 100.0), "bp": ("bp", 1.0), "px": ("puan", 1.0), "fx": ("", 1.0), "raw": ("", 1.0), "amt": ("", 1.0)}
 OPS = {">=": "≥", "<=": "≤", "x": "kesişir"}
 MAX_ITEMS = 80          # per user
 MAX_ALARMS = 300        # for the desk
@@ -137,7 +141,7 @@ def value_text(v: Optional[float], show: str, loc=None) -> str:
     if type(v) is not float:
         return ""
     loc = loc or numfmt.get_locale("tr")
-    fmt = {"pct": "0.00", "bp": "0.0", "px": "0.000", "fx": "0.0000"}.get(show, "0.0000")
+    fmt = {"pct": "0.00", "bp": "0.0", "px": "0.000", "fx": "0.0000", "amt": "#,##0"}.get(show, "0.0000")
     t = numfmt.format_value(v, fmt, loc)
     return t + ("%" if show == "pct" else (" bp" if show == "bp" else ""))
 
@@ -163,7 +167,7 @@ def move_text(v: Optional[float], show: str, loc=None) -> str:
         return ""
     loc = loc or numfmt.get_locale("tr")
     bp = SHOWS.get(show, SHOWS["raw"])[0] == "bp"
-    t = numfmt.format_value(abs(v), "0.0" if bp else ("0.000" if show == "px" else "0.0000"), loc)
+    t = numfmt.format_value(abs(v), "0.0" if bp else ("0.000" if show == "px" else ("#,##0" if show == "amt" else "0.0000")), loc)
     return ("+" if v > 0 else ("−" if v < 0 else "")) + t + (" bp" if bp else "")
 
 
@@ -553,6 +557,12 @@ class Watch(object):
             if k == "expr":
                 v, show = self._eval(parse_expr(subject.get("text") or ""), self._live_leaf(rd))
                 return v, show, ""
+            if k == "trade":
+                tb = getattr(self.svc, "tradebook", None)
+                if tb is None:
+                    return None, "raw", ""
+                v, show = tb.level_value(subject.get("id"))
+                return v, show, ""
         except (KeyError, ValueError, IndexError):
             return None, subject.get("show") or "raw", ""
         return None, "raw", ""
@@ -700,6 +710,9 @@ class Watch(object):
             return "%s %s" % (bd.short_label(b) if b else subject.get("isin"), what)
         if k == "expr":
             return " ".join(str(subject.get("text") or "").split())[:60]
+        if k == "trade":
+            tb = getattr(self.svc, "tradebook", None)
+            return tb.level_label(subject.get("id")) if tb is not None else "Trades #%s" % subject.get("id")
         if k == "meeting":
             from . import meetings as mt
             cal = mt.BY_ID.get(subject.get("cal"))
@@ -797,6 +810,9 @@ class Watch(object):
                     return "%s · %s!%s%d" % (cal.book, cal.sheet, subject.get("col"), row)
             if k == "cell":
                 return "%s · %s" % (subject.get("book") or "tto", subject.get("ref"))
+            if k == "trade":
+                return "Trades'teki işlemin hedefi / stopu: MTM'in okuduğu değerle" + ("" if value is not None else
+                                                                                     " (henüz değerlenmedi)")
         except (KeyError, ValueError, IndexError):
             return ""
         return ""
@@ -1166,7 +1182,8 @@ class Watch(object):
             for i in items or []:
                 subjects[self.key(i["subject"])] = i["subject"]
         for a in self.alarms():
-            subjects[self.key(a["subject"])] = a["subject"]
+            if a["subject"].get("kind") != "trade":              # (a trade's level: its own closes are Trades')
+                subjects[self.key(a["subject"])] = a["subject"]
         rd = self._Reader(self, None)
         try:
             for subj in (self.heat_subjects(rd) if self._heat_day == self.svc.today_iso() else ()):
@@ -1842,6 +1859,12 @@ class Watch(object):
         readers: Dict[str, Watch._Reader] = {}
         values: Dict[Tuple[str, str], Optional[float]] = {}
         svc = self.svc
+        tb = getattr(svc, "tradebook", None)
+        if tb is not None:
+            try:
+                tb.refresh_levels()             # (the trades' targets and stops: their level now, every few seconds)
+            except Exception:  # noqa: BLE001 - their alarms wait for the next round
+                pass
         private = svc._private_users
         mono = time.monotonic()
         # a user with inputs of their own has a calculation of their own: made again for their list at most every

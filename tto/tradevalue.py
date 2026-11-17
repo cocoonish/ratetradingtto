@@ -1442,6 +1442,15 @@ def _value_dibs(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, Any
     dv01_mn = row.get("dv01_mn") if where == "DİBS RV" else None
     if dv01_mn is None and not matured and not floater:
         dv01_mn = qc.desk_dv01(bond, v1, dirty1)
+    # the yield of the price now in the trade's own convention (what a trade entered by its yield reads its target and
+    # stop against - Trades' levels): the same math as the yield typed was turned into its price with
+    y_trade = None
+    if not matured and not closed and not floater:
+        try:
+            yt = bond.yield_of(dirty1, v1, conv, guess=float(t["yield"]) / 100.0 if _num(t.get("yield")) is not None else None)
+            y_trade = yt * 100.0 if yt is not None else None
+        except (ValueError, ZeroDivisionError, OverflowError):
+            y_trade = None
     total = {"mtm": mtm, "accrued": accrued, "carry": carry, "price_now": None if matured else clean1,
              "price_text": "%s %s" % (isin, _tr(clean1, 3)) if not matured else "%s itfa" % isin}
     inputs = {"source": where, "clean_now": clean1, "accrued_now": ai1, "dirty_now": dirty1, "value_date": _iso(v1),
@@ -1449,7 +1458,8 @@ def _value_dibs(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, Any
               "kind": kind, "coupon": bond.coupon, "freq": bond.freq, "maturity": _iso(bond.maturity), "yield_now": y_simple * 100.0 if y_simple is not None else None,
               "yield_compound_now": row.get("compound") * 100.0 if where == "DİBS RV" and row.get("compound") is not None else None,
               "dv01_mn": dv01_mn, "dv01": N / 1e6 * dv01_mn if dv01_mn else None, "carry_days": d,
-              "funding": tl * 100.0 if tl is not None else None, "notes": notes}
+              "funding": tl * 100.0 if tl is not None else None, "yield_trade_now": y_trade,
+              "yield_conv": "basit" if conv == "simple" else "bileşik", "notes": notes}
     return _finish(mkt, t, "TRY", total, inputs)
 
 
@@ -1697,6 +1707,8 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
     inputs = {"spot": S, "forward": F, "forward_how": f_how, "df_quote": df_q, "df_base": df_b, "discount_how": q_how,
               "vol": vol_pts, "vol_how": vinfo, "T": T, "expiry": _iso(expiry), "delivery": _iso(delivery), "base_amount": N,
               "value": value_q, "premium": prem, "premium_ccy": pccy, "premium_quote": prem_q, "unit_price": g["price"],
+              # (what the option is worth now in the premium's currency - the premium it would fetch: Trades' levels)
+              "premium_now": abs(value_q) * prem / prem_q if prem_q else None,
               "carry_days": cdays, "notes": notes}
     return _finish(mkt, t, quote, total, inputs, greeks=greeks)
 
