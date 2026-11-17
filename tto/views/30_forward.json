@@ -92,6 +92,13 @@
    "label": "Forward DV01 'Tutar'"
   },
   {
+   "range": "O33:O34",
+   "scope": "user",
+   "group": "forward-dv01-dates",
+   "kind": "date",
+   "label": "Forward DV01 'Start' / 'End' (formula defaults: the USDTRY spot date I2 / the value date D2; a tenor typed counts as the formulas say: Start from USDTRY's spot, End from the Start)"
+  },
+  {
    "range": "B144:B163",
    "scope": "user",
    "group": "forward-10",

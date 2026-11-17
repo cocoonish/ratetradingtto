@@ -42,6 +42,7 @@ class Book(object):
         self.replay = replay
         self.recorded = True                      # the workbook file holds recorded Bloomberg values
         self.left_out: List[str] = []             # additions of the dashboard that do not fit this file
+        self.dates: Any = None                    # which cells hold a date, where one counts from (tto/datecells.py)
         self.engine = Engine(model, provider=provider, clock=clock)
         self.inputs: Dict[Tuple[int, int], InputDef] = {}
         self._validation: Dict[Tuple[int, int], List[str]] = {}
@@ -95,6 +96,11 @@ class Book(object):
             if src is not None:
                 items = self._range_items(calc, src)
         return items
+
+    def has_list(self, si: int, rc: int) -> bool:
+        """Whether the cell has a drop-down list (of the page definition, or Excel's - literal or read from a range)."""
+        d = self.inputs.get((si, rc))
+        return bool(d is not None and d.options) or (si, rc) in self._validation or (si, rc) in self._validation_ranges
 
     @staticmethod
     def _range_items(calc, src: Tuple[int, int, int, int, int]) -> Optional[List[str]]:
@@ -319,9 +325,15 @@ def load_books(models_dir: str, provider=None, clock: Optional[Clock] = None, re
         if extras:
             from . import extras as _extras
             left_out = _extras.apply(book_id, model)
+        # the cells that hold a date but are not formatted as one: shown as dates (their values untouched)
+        from . import datecells
+        dates, moved = datecells.apply(book_id, model) if extras else (datecells.DateCells(model), [])
         books[book_id] = Book(book_id, title, model, provider=provider, clock=clock, replay=replay and recorded)
         books[book_id].recorded = recorded
         books[book_id].left_out = left_out
+        books[book_id].dates = dates
+        for text in moved:
+            logging.getLogger("tto").warning("%s: %s", fname, text)
         for text in left_out:
             logging.getLogger("tto").warning("%s: dashboard eki dosyaya uymadığı için dışarıda bırakıldı - %s", fname, text)
     return books

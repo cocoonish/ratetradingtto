@@ -27,6 +27,7 @@ from . import blotter as bl
 from . import bonds as bd
 from . import borsaspread as bsp
 from . import brokerchat as bc
+from . import datecells
 from . import entry
 from . import extras as ex
 from . import layout as lay
@@ -397,6 +398,8 @@ class Service(object):
                                                     (ncol, "text", ccy.lower() + "-names", "%s tatil adları" % ccy)):
                         tto.declare("%s!%s%d:%s%d" % (ex.HOL_SHEET, col, ex.HOL_FIRST, col, ex.HOL_LAST), scope="shared",
                                     group="holidays-" + group, kind=kind, label=label, view="settings")
+        for book in self.books.values():
+            datecells.show_inputs(book)          # (a date input not formatted as one - a holiday list's empty rows)
         if replay:
             if isinstance(provider, ReplayProvider):
                 if tto is not None:
@@ -3609,6 +3612,29 @@ class Service(object):
     #: pair's (``_pair_spot``) - for the TRY money market (no pair, or "TRY") the workbook's SPOTDATE, T+1 on the TRY list
     TRY_SPOT = "OIS_MAIN!B2"
 
+    def _date_context(self, book: Book, si: int, rc: int) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
+        """How a date typed as a tenor counts in a cell, as its formulas say (tto/datecells.py): (the pair of the dates
+        the cell is made of - a spot date: Forward!I2 USDTRY, K2 EURTRY, OIS_MAIN!B2 the TRY money market; an input the
+        page definition gives a pair -, ``None`` when there is none or they do not agree; the date the workbook counts
+        the cell's days from: ``O35 = O34-O33`` - the End counts from the Start; ``None``: from the spot)."""
+        spots: Dict[Tuple[int, int], str] = {}
+        if book.id == "tto":
+            for ref, pair in [("Forward!" + s[0], s[1]) for s in ex.FX_SPOTS] + [(self.TRY_SPOT, "TRY")]:
+                try:
+                    spots[book.cell(ref)] = pair
+                except (KeyError, ValueError):
+                    continue
+
+        def known(key: Tuple[int, int]) -> Optional[str]:
+            if key in spots:
+                return spots[key]
+            d = book.inputs.get(key)
+            return (str((d.tenor or {}).get("pair") or "").upper() or None) if d is not None else None
+
+        if book.dates is None:
+            book.dates = datecells.DateCells(book.model)
+        return book.dates.context(si, rc, known, spots)
+
     def _shortcut_date(self, user: Optional[str], book: Book, si: int, rc: int, d, text: Any, calc,
                        pending: Dict[Tuple[int, int], Any]) -> Optional[float]:
         """The date (serial) a shortcut typed into a date input stands for (tto/shortcuts.py) - ``None`` when the text
@@ -3616,16 +3642,26 @@ class Service(object):
         ``pair`` (the calendar and the spot convention: USDTRY T+1 on TRY + USD, EURTRY T+2 on TRY + EUR, EURUSD T+2 on
         USD + EUR, "TRY" - the default - T+1 on the TRY list), ``pair_col`` (the row's pair, in that column) and
         ``from`` (the cell's natural start: a cell, a column of the row, a row of the column) - else today's spot,
-        as the user's own calculation has it (a spot date typed over is theirs).  A start typed in the same write
-        (a pasted block) counts as typed (``pending``).  On the calculation thread."""
+        as the user's own calculation has it (a spot date typed over is theirs).  What the page definition does not
+        say the formulas do (:meth:`_date_context`): the pair of a cell without one, the start of a cell the page says
+        nothing of.  A start typed in the same write (a pasted block) counts as typed (``pending``).  On the
+        calculation thread."""
         sc = shortcuts.date_shortcut(text)
         tto = self.books.get("tto")
         if sc is None or tto is None:
             return None
-        decl = d.tenor or {}
+        decl = dict(d.tenor or {})
+        if not (decl.get("pair") or decl.get("pair_col")) or d.tenor is None:
+            pair, start_at = self._date_context(book, si, rc)
+            if pair and not (decl.get("pair") or decl.get("pair_col")):
+                decl["pair"] = pair
+            if start_at is not None and d.tenor is None:     # (a page definition without "from": from the spot)
+                decl["from"] = start_at
         r, c = divmod(rc, COLS)
 
         def place(spec: Any) -> Optional[Tuple[int, int]]:
+            if isinstance(spec, tuple):                           # a cell the formulas name (_date_context)
+                return spec
             spec = str(spec or "").strip()
             if re.match(r"^[A-Z]{1,3}$", spec):                   # a column: the cell of this row
                 return si, r * COLS + col_to_index(spec)
