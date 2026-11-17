@@ -187,10 +187,11 @@ def test_the_bond_lists_show_only_their_bonds_the_asw_table_in_the_trading_lists
 
 
 def test_a_launchpad_box_keeps_its_bonds(service):
-    """A launchpad box keeps rows of a table by their name (an ISIN, a bond's label) or by their number - in the sheet,
-    or for the trading summary its place as it was.  With the bond lists tidied (rows that hold no bond left out, the ASW
-    table in the trading list's order, the summary's groups of columns above its captions) a box saved before finds
-    the same bonds - by name and by number; a group's caption comes with the bonds picked in it only."""
+    """A launchpad box keeps rows of a table by their first text (an ISIN, a caption) or by their number - in the
+    sheet, or for the trading summary its place as it was - and a part always shows the table's header.  A box saved
+    by the version before the bond lists were tidied (rows that hold no bond left out, the ASW table in the trading
+    list's order with a caption per kind, the summary's groups of columns) gets the same rows with the same texts: the
+    header row stays the header, a group's caption never comes into a part, only the empty rows picked are gone."""
     s = service
     u = s.login("Kutu Kâğıtları")["user"]
 
@@ -199,25 +200,68 @@ def test_a_launchpad_box_keeps_its_bonds(service):
         assert not got.get("part_missing"), (view, panel, rows)
         return got
 
-    def isins(d, col=0):
-        return [row[col].get("t") for row, r in zip(d["rows"], d["r"]) if r and row and str(row[col].get("t") or "").startswith("TR")]
+    def firsts(d, n=1):
+        return [[str(c.get("t") or "") for c in row if not c.get("sk")][:n] for row in d["rows"]]
 
-    fixed, bill = row_of(s, FIXED), row_of(s, BILL)                                   # DİBS RV rows 8 and 5
-    # DİBS Trading's value dates (rows of DİBS RV, row for row): by ISIN, by number, with an empty row picked before
-    for rows in ([FIXED, BILL], [fixed, bill], [fixed, bill, 7]):
-        d = part("dibslive", "L1", rows)
-        assert isins(d) == [BILL, FIXED] and [r for r in d["r"] if r >= 5] == [bill, fixed], rows
-    # the DİBS ASW table: its own rows; the captions of the picked bonds' groups only
-    ra, rb = (7 + s._list_values(u, "asw", "ASW!B7:B56").index(x) for x in (FIXED, BILL))
-    for rows in ([FIXED, BILL], [ra, rb]):
+    def page_row(view, panel, r):
+        d = next(p for p in s.view(u, view)["panels"] if p["id"] == panel)["data"]
+        return d["rows"][d["r"].index(r)]
+
+    # the DİBS ASW table, as the version before answered its boxes: the header row (6) and the bonds picked - by number
+    # with the header among them, by the first text with an empty row's number (31 holds no bond: not shown any more)
+    head = ["ISIN", "Kaynak (boş=genel)", "Manuel temiz", "Eğri / grafik (1 / 0 / x)", "Etiket", "Ad"]
+    for rows in ([6, 8, 25, 31], ["TRB170327T15", "TRT110930T36", 31], [8, 25]):
         d = part("asw", "tbl", rows)
-        assert isins(d) == [BILL, FIXED] and sorted(r for r in d["r"] if r >= 7) == sorted([ra, rb]), rows
-        assert [row[0]["t"] for row, r in zip(d["rows"], d["r"]) if r == 0] == ["Bono · 2 kâğıt", "Sabit kuponlu · 14 kâğıt"]
-    # the trading summary: a box kept its bonds by their place - numbered as before the groups (captions 1, then a row
-    # each: bills 3-4 under their caption, the fixed coupon bonds from 6, by maturity - 15.03.28 the fifth)
-    d = part("dibslive", "L0", [10, 3])
-    assert isins(d, 2) == [BILL, FIXED]
+        assert d["r"] == [6, 8, 25] and 0 not in d["r"], (rows, d["r"])
+        assert firsts(d, 6)[0] == head and d["rows"][0] == page_row("asw", "tbl", 6)
+        assert [x[0] for x in firsts(d)[1:]] == ["TRB170327T15", "TRT110930T36"]
+    keys = s.panels(u, [{"view": "asw", "panel": "tbl", "key": "k", "keys": True}])["panels"]["k"]["rk"]
+    whole = next(p for p in s.view(u, "asw")["panels"] if p["id"] == "tbl")["data"]
+    assert [k for k, r in zip(keys, whole["r"]) if r in (0, 6)] == [None] * 4                # (no caption is a row to pick)
+    assert part("asw", "tbl", [FIXED])["r"] == [6, 7 + s._list_values(u, "asw", "ASW!B7:B56").index(FIXED)]
+    # DİBS Trading's value dates: its header rows are rows like the others (as before), the empty ones are not shown
+    for rows in ([4, 5, 26], ["ISIN", BILL, TLREF]):
+        d = part("dibslive", "L1", rows)
+        assert d["r"] == [4, 5, 26] and [x[0] for x in firsts(d)] == ["ISIN", BILL, TLREF], rows
+    assert part("dibslive", "L1", [2, 3, 4, 8, 16])["r"] == [2, 3, 4, 8]                  # (7 and 16 hold no bond)
+    d = part("dibslive", "L1", ["T0", FIXED, 7])
+    assert d["r"] == [3, 8] and firsts(d, 6)[0][-1] == "T0 · aynı gün"
+    # the trading summary: its rows numbered as before the groups (captions 1, then a row each: bills 3-4 under their
+    # caption, the fixed coupon bonds from 6 by maturity - 15.03.28 the fifth, the last TLREF 23), its header row as it was,
+    # the groups of columns above it (they tell its two "Adil getiri %" apart)
+    for rows in ([3, 10, 23], [1, 3, 10, 23]):
+        d = part("dibslive", "L0", rows)
+        assert d["r"] == [0, 1, 3, 10, 23], (rows, d["r"])
+        assert firsts(d, 6)[1] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör"]
+        assert [row[2]["t"] for row in d["rows"][2:]] == [BILL, FIXED, "TRT110930T36"]
+        assert "OIS'e göre" in [c.get("t") for c in d["rows"][0]]
+    d = part("dibslive", "L0", ["Bono", 3])
+    assert d["r"] == [0, 1, 2, 3] and firsts(d)[2] == ["Bono · kuponsuz · 2"]
     keys = s.panels(u, [{"view": "dibslive", "panel": "L0", "key": "k", "keys": True}])["panels"]["k"]["rk"]
     full = summary(s, u)
     assert keys[full["rows"].index(line_of(full, FIXED))] == FIXED                      # a box picked now: by the bond's ISIN
-    assert isins(part("dibslive", "L0", [FIXED]), 2) == [FIXED]
+    assert [row[2]["t"] for row in part("dibslive", "L0", [FIXED])["rows"][2:]] == [FIXED]
+
+
+def test_each_page_names_its_fx_swap_curve(service):
+    """Two FX swap curves stand side by side: DİBS RV's (the offshore discount curve, its BF:BJ) and the DİBS ASW page's
+    (the FX swap implied rates in the place of the OIS quotes: its ASW FX column, its chart, the EK_FX table).  Each page
+    names its own - in the titles, the captions and the tips; the cells and their values are as they were."""
+    s = service
+    u = s.login("Eğri Adı")["user"]
+    ima = "FX swap ima eğrisi (TRYI 1–9A, TRYSAQ 2–5Y; fiyatı yoksa OIS)"
+    rv_page = {p["id"]: p for p in s.view(u, "dibs")["panels"]}
+    d = rv_page["B3"]["data"]
+    caps = d["rows"][d["r"].index(4)]
+    for col in ("BF", "BG", "BH", "BI", "BJ"):
+        tip = caps[d["c"].index(col)]["tip"]
+        assert "FX swap (offshore ICAP eğrisi)" in tip and ima in tip, col
+    assert [caps[d["c"].index(c)]["t"] for c in ("BF", "BI")] == ["ASW FX swap (bp)", "Sinyal FX"]           # (the workbook's own)
+    assert rv_page["B2b"]["title"] == "ASW eğrisi · FX swap (offshore ICAP eğrisi)"
+    asw = {p["id"]: p for p in s.view(u, "asw")["panels"]}
+    assert ima in asw["tbl"]["title"] and asw["fxc"]["title"].startswith(ima) and ima in asw["fxline"]["note"]
+    head = asw["tbl"]["data"]["rows"][asw["tbl"]["data"]["r"].index(6)]
+    assert [c["t"] for c in head[-2:]] == ["ASW FX ima (bp)", "FX ima − OIS (bp)"]
+    assert ima in head[-2]["tip"] and "offshore ICAP" in head[-2]["tip"]
+    assert asw["chartfx"]["title"] == "FX swap ima eğrisine göre ASW — kalan vade" and asw["chartfx"]["data"]["y_title"] == "ASW FX ima (bp)"
+    assert ima in asw["chartfx"]["note"] and "offshore ICAP" in asw["chartfx"]["note"]

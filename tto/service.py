@@ -5447,9 +5447,11 @@ class Service(object):
 
         for i, r in enumerate(rnums):
             if r == 6:
-                rows[i].extend([{"t": "ASW FX (bp)", "k": "s", "b": 1, "f": "hd",
-                                 "tip": "FX swap ima TRY eğrisine göre ASW (EK_FX: %d / %d vade fiyatlı)" % (swapped, len(ex.FXC_ROOTS))},
-                                {"t": "FX − OIS (bp)", "k": "s", "b": 1, "f": "hd", "tip": "ASW FX − ASW OIS"}])
+                rows[i].extend([{"t": "ASW FX ima (bp)", "k": "s", "b": 1, "f": "hd",
+                                 "tip": "%s'ne göre ASW (EK_FX: %d / %d vade fiyatlı). DİBS RV'nin ASW FX'i başka bir eğri: %s"
+                                        % (self.ASW_FX_CURVE, swapped, len(ex.FXC_ROOTS), self.RV_FX_CURVE)},
+                                {"t": "FX ima − OIS (bp)", "k": "s", "b": 1, "f": "hd",
+                                 "tip": "ASW FX ima − ASW OIS (%s; OIS)" % self.ASW_FX_CURVE}])
             elif 7 <= r <= 56 and calc is not None:
                 ois, fx = base.get(si, r, r_col), calc.get(si, r, r_col)
                 rows[i].extend([bp(fx), bp(fx - ois if type(fx) is float and type(ois) is float else None, True)])
@@ -5617,6 +5619,19 @@ class Service(object):
                     ("Kimde · yaş", "Bid ve offer'ın hangi broker'da olduğu ve kaç dakika önce söylendiği (bayat sınırı masanın, Broker "
                                     "Chat tahtasında); bayatsa soluk. Duran kota yoksa kâğıt için chat'te söylenen son şeyin saati")]
 
+    #: the two FX swap curves, as the pages name them: DİBS RV's (its BF:BJ) and the ASW page's (EK_FX, its "ASW FX")
+    RV_FX_CURVE = "FX swap (offshore ICAP eğrisi)"
+    ASW_FX_CURVE = "FX swap ima eğrisi (TRYI 1–9A, TRYSAQ 2–5Y; fiyatı yoksa OIS)"
+
+    @classmethod
+    def _rv_fx_tips(cls) -> Dict[str, str]:
+        """DİBS RV's FX swap columns (BF:BJ), each with the curve it is of named - the ASW page's FX swap ASW is another."""
+        curve = ("%s: Forward'daki offshore TRY iskonto eğrisi (9A'ya kadar FX swap ima, sonra XCCY; OFF_GUN / OFF_LNDF). DİBS ASW "
+                 "sayfasının ASW FX'i başka bir eğri: %s" % (cls.RV_FX_CURVE, cls.ASW_FX_CURVE))
+        return {"BF": "ASW, %s" % curve, "BG": "Uydurulmuş ASW (a + b·t + c·t², sabit kuponlular), %s" % curve,
+                "BH": "ASW FX − uydurulmuş (bp; + ucuz), %s" % curve, "BI": "Pahalı / ucuz eşiği aşınca, %s" % curve,
+                "BJ": "ASW FX − ASW OIS (bp), %s" % curve}
+
     def _dibs_broker_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """The day's broker chat next to the DİBS RV table, by the Broker Chat board's rules (:meth:`_bond_cells`):
         per bond the brokers' best fresh bid and ask, the last trade, whose the quotes are and how old, the yield
@@ -5637,8 +5652,13 @@ class Service(object):
                                 "(ekran fiyatı · mod. süre); bonoda kotanın kendisi. Yalnız taze kotadan (taze kota yoksa taze son işlemden)"),
             ("Broker − ekran (bp)", "Broker orta getirisi − ekran getirisi (DİBS RV): + ise brokerlar kâğıdı ekrandan ucuz görüyor. "
                                     "Yalnız taze kotadan")]
+        fx_tips = self._rv_fx_tips()
         for i, r in enumerate(rnums):
             if r == 4:
+                for col, tip in fx_tips.items():                 # (the FX swap columns: which curve they are of)
+                    j = data["c"].index(col) if col in (data.get("c") or []) else None
+                    if j is not None and j < len(rows[i]) and isinstance(rows[i][j], dict) and not rows[i][j].get("sk"):
+                        rows[i][j] = dict(rows[i][j], tip=tip)
                 rows[i].extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in heads])
                 continue
             q = None
@@ -7768,7 +7788,7 @@ def _row_keys(data: Dict[str, Any], ranked: bool = False) -> List[Any]:
     shown)."""
     src = data.get("rows") or []
     nums = list(data.get("r") or [])
-    heads = _caption_rows(src, nums)
+    heads = _caption_rows(src, nums) | _group_heads(src)
     names = [None if i in heads else _row_name(row) for i, row in enumerate(src)]
     stems = [_stem(n) if n else None for n in names]
     count_n: Dict[str, int] = {}
@@ -7806,12 +7826,20 @@ def _header_row(row: List[Dict[str, Any]]) -> bool:
     return n >= 2 and strong * 2 >= n
 
 
+def _group_heads(rows: List[List[Dict[str, Any]]]) -> set:
+    """The captions of the groups of a list of bonds shown as the trading list has them ("Bono · 2 kâğıt": ``grp``,
+    :meth:`Service._bond_rows`): rows of the page only - no row a launchpad box picks, keeps or shows."""
+    return {i for i, row in enumerate(rows) if row and isinstance(row[0], dict) and row[0].get("grp")}
+
+
 def _caption_rows(rows: List[List[Dict[str, Any]]], nums: List[Any]) -> set:
     """The rows at the top of a table that name its columns (a lone title row above them too): a part of the table
-    keeps them."""
-    out = set(i for i, r in enumerate(nums) if r == 0)
+    keeps them.  A group's caption of a list of bonds (:func:`_group_heads`) is none of them and does not count: the
+    table's own header is found as it was before the groups."""
+    grp = _group_heads(rows)
+    out = set(i for i, r in enumerate(nums) if r == 0 and i not in grp)
     for i, row in enumerate(rows):
-        if i in out:
+        if i in out or i in grp:
             continue
         if len(rows) > 1 and _header_row(row) and len(out) < 3:
             out.add(i)
@@ -7850,25 +7878,19 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
         numbers = {x for x in rows if isinstance(x, int)}
         labels = {" ".join(x.split()) for x in rows if isinstance(x, str)}
         heads = _caption_rows(src, nums)
-        body = {i for i in range(len(src)) if i not in heads and i < len(nums) and nums[i] in numbers}
+        grp = _group_heads(src)
+        body = {i for i in range(len(src)) if i not in heads and i not in grp and i < len(nums) and nums[i] in numbers}
         if labels:
             keys = _row_keys(data)
             texts = [_row_text(row) for row in src]
             for x in labels:
-                hit = [i for i in range(len(src)) if i not in heads and (keys[i] == x or texts[i] == x)]
+                hit = [i for i in range(len(src)) if i not in heads and i not in grp and (keys[i] == x or texts[i] == x)]
                 if not hit and _DETAIL in x:
                     hit = [i for i in range(len(src)) if keys[i] == _stem(x)]
                     hit = hit if len(hit) == 1 else []
                 body.update(hit)
         if body:
-            keep = heads | body
-            # the caption of a group of a list of bonds (_bond_rows: "Bono · 2 kâğıt") stays over the rows picked in it only
-            grp = [i for i in sorted(heads) if src[i] and isinstance(src[i][0], dict) and src[i][0].get("grp")]
-            for k, i in enumerate(grp):
-                end = grp[k + 1] if k + 1 < len(grp) else len(src)
-                if not any(i < j < end for j in body):
-                    keep.discard(i)
-            keep_r = sorted(keep)
+            keep_r = sorted(heads | body)
         else:
             missing = True
     new_r = {i: k for k, i in enumerate(keep_r)}

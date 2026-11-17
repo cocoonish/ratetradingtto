@@ -131,7 +131,7 @@ def test_asw_against_the_fx_swap_curve(svc):
     tbl = p["tbl"]["data"]
     assert tbl["c"][-2:] == ["ASW FX", "FX−OIS"]
     head = tbl["rows"][tbl["r"].index(6)]
-    assert [c["t"] for c in head[-2:]] == ["ASW FX (bp)", "FX − OIS (bp)"]
+    assert [c["t"] for c in head[-2:]] == ["ASW FX ima (bp)", "FX ima − OIS (bp)"]
     ok = [(tbl["rows"][i][-3]["t"], tbl["rows"][i][-2], tbl["rows"][i][-1]) for i, r in enumerate(tbl["r"]) if 7 <= r <= 56]
     priced = [(fx, diff) for status, fx, diff in ok if status == "OK"]
     assert priced and all(isinstance(fx.get("v"), float) for fx, _ in priced)
@@ -145,8 +145,8 @@ def test_asw_against_the_fx_swap_curve(svc):
     # a + b·t + c·t² fitted to the FX ASWs by the sheet's own rule
     fx, ois = p["chartfx"]["data"], p["chart0"]["data"]
     bonds, curve = fx["series"]
-    assert p["chartfx"]["title"] == fx["title"] == "FX swap eğrisine göre ASW — kalan vade" and fx["y_title"] == "ASW FX (bp)"
-    assert (bonds["name"], curve["name"]) == ("Kâğıtlar", "FX eğrisi (a+bt+ct²)") and curve["dash"] and bonds["noline"]
+    assert p["chartfx"]["title"] == fx["title"] == "FX swap ima eğrisine göre ASW — kalan vade" and fx["y_title"] == "ASW FX ima (bp)"
+    assert (bonds["name"], curve["name"]) == ("Kâğıtlar", "FX ima eğrisi (a+bt+ct²)") and curve["dash"] and bonds["noline"]
     assert bonds["x"] == ois["series"][0]["x"] and bonds["labels"] == ois["series"][0]["labels"] and len(bonds["x"]) >= 15
     by_row = {r: tbl["rows"][i][-2].get("v") for i, r in enumerate(tbl["r"]) if 7 <= r <= 56}
     charted = [r for r in range(7, 57) if type(cell(svc, "ASW!BG%d" % r, book="asw")) is float]

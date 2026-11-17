@@ -1830,8 +1830,8 @@ async function clipAfter(page, action) {
     const fxSeries = aswView.panels.find((p) => p.id === 'chartfx').data.series;
     const fxc = asw.find((c) => c.id === 'chartfx');
     check('ASW page: the chart once more on the FX swap curve - every bond at its years with its FX ASW, labelled, the FX curve dashed',
-      fxc && fxc.title === 'FX swap eğrisine göre ASW — kalan vade' && fxc.markers === fxSeries[0].x.length && fxc.markers === asw[0].markers
-      && JSON.stringify(fxc.labels) === JSON.stringify(asw[0].labels) && fxc.titles.includes('ASW FX (bp)') && fxc.wide && fxc.table
+      fxc && fxc.title === 'FX swap ima eğrisine göre ASW — kalan vade' && fxc.markers === fxSeries[0].x.length && fxc.markers === asw[0].markers
+      && JSON.stringify(fxc.labels) === JSON.stringify(asw[0].labels) && fxc.titles.includes('ASW FX ima (bp)') && fxc.wide && fxc.table
       && fxSeries[1].dash === 1, { fxc, points: fxSeries[0].x.length });
     const fxSvg = page.locator('.panel[data-panel="chartfx"] svg.chart');
     await fxSvg.scrollIntoViewIfNeeded();
