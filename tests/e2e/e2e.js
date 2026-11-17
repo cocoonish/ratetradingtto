@@ -1792,8 +1792,8 @@ async function clipAfter(page, action) {
     const fxSeries = aswView.panels.find((p) => p.id === 'chartfx').data.series;
     const fxc = asw.find((c) => c.id === 'chartfx');
     check('ASW page: the chart once more on the FX swap curve - every bond at its years with its FX ASW, labelled, the FX curve dashed',
-      fxc && fxc.title === 'FX swap eğrisine göre ASW — kalan vade' && fxc.markers === fxSeries[0].x.length && fxc.markers === asw[0].markers
-      && JSON.stringify(fxc.labels) === JSON.stringify(asw[0].labels) && fxc.titles.includes('ASW FX (bp)') && fxc.wide && fxc.table
+      fxc && fxc.title === 'FX swap ima eğrisine göre ASW — kalan vade' && fxc.markers === fxSeries[0].x.length && fxc.markers === asw[0].markers
+      && JSON.stringify(fxc.labels) === JSON.stringify(asw[0].labels) && fxc.titles.includes('ASW FX ima (bp)') && fxc.wide && fxc.table
       && fxSeries[1].dash === 1, { fxc, points: fxSeries[0].x.length });
     const fxSvg = page.locator('.panel[data-panel="chartfx"] svg.chart');
     await fxSvg.scrollIntoViewIfNeeded();
@@ -2284,7 +2284,7 @@ async function clipAfter(page, action) {
     const mar28 = sumRows.find((r) => r[2] === 'TRT150328T24') || [];
     const fairAt = capRow.indexOf('Adil getiri %');
     check('DİBS Trading: the summary in groups (Fiyat · OIS\'e göre · FX swap\'a göre · Risk · Carry · Broker), each bond\'s fair yield and price',
-      ['Fiyat', "OIS'e göre", "FX swap'a göre", 'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0
+      ['Fiyat', "OIS'e göre", "FX swap'a göre (offshore ICAP eğrisi)", 'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0
       && capRow.lastIndexOf('Adil getiri %') > fairAt && /^\d+,\d\d%$/.test(mar28[fairAt]) && /^\d+,\d{3}$/.test(mar28[fairAt + 1])
       && capRow[2] === 'ISIN' && capRow[1] === 'Kâğıt', { groupRow, capRow, mar28 });
     const fairTip = await page.evaluate((i) => { const tr = [...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]

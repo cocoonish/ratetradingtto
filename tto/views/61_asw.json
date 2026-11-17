@@ -123,7 +123,7 @@
   {
    "id": "tbl",
    "type": "table",
-   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap eğrisine göre ASW",
+   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap ima (TRYI 1A–18A, TRYSAQ 2–10Y; fiyatı yoksa OIS) eğrisine göre ASW",
    "range": "B6:U56",
    "keep_title": true,
    "append": "asw_fx",
@@ -164,16 +164,16 @@
    "chart": 0,
    "curve": "fx",
    "wide": true,
-   "title": "FX swap eğrisine göre ASW — kalan vade",
+   "title": "FX swap ima eğrisine göre ASW — kalan vade",
    "as": {
-    "title": "FX swap eğrisine göre ASW — kalan vade",
-    "y_title": "ASW FX (bp)",
+    "title": "FX swap ima eğrisine göre ASW — kalan vade",
+    "y_title": "ASW FX ima (bp)",
     "names": [
      "Kâğıtlar",
-     "FX eğrisi (a+bt+ct²)"
+     "FX ima eğrisi (a+bt+ct²)"
     ]
    },
-   "note": "Yukarıdaki grafiğin aynısı, FX swap ima TRY eğrisiyle (EK_FX; fiyatı olmayan vadede OIS kotası): her kâğıt kalan vadesinde tablonun ASW FX sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi."
+   "note": "Yukarıdaki grafiğin aynısı, FX swap ima (TRYI 1A–18A, TRYSAQ 2–10Y; fiyatı yoksa OIS) eğrisiyle (EK_FX; OIS kotalarının yerine FX swap ima faizleri): her kâğıt kalan vadesinde tablonun ASW FX ima sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi. DİBS RV'nin ASW FX'i başka bir eğridir: FX swap (offshore ICAP eğrisi)."
   },
   {
    "id": "fxc",
@@ -216,7 +216,8 @@
       "marker": true
      }
     ]
-   }
+   },
+   "note": "EK_FX'in eğrisi: FX swap ima (TRYI 1A–18A, TRYSAQ 2–10Y; fiyatı yoksa OIS) - her vadenin FX ima faizi (önce ICPL, yoksa BGN) ve aynı vadenin OIS kotası; fiyatı olmayan vade atlanır (çizgi üzerinden geçer), ASW hesabında orada OIS kotası kalır."
   },
   {
    "id": "fxh",

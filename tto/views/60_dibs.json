@@ -130,7 +130,7 @@
   {
    "id": "B2b",
    "type": "table",
-   "title": "ASW eğrisi (FX swap)",
+   "title": "ASW eğrisi · FX swap (offshore ICAP eğrisi)",
    "range": "BF3:BJ3",
    "keep_title": true
   },

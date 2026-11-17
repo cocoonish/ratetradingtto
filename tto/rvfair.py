@@ -28,8 +28,13 @@ FIRST, LAST = 5, 54                      # the rows of the trading list (DİBS R
 #: the present value and the annuity on the curve
 CURVES: Dict[str, Dict[str, Any]] = {
     "ois": {"name": "OIS", "coef": ("CA", "CB", "CC"), "n": "BR", "flag": "FR", "t": "FS", "pv": "EG", "ann": "EE"},
-    "fx": {"name": "FX swap", "coef": ("XO", "XP", "XQ"), "n": "XF", "flag": "XA", "t": "XB", "pv": "WX", "ann": "WY"},
+    "fx": {"name": "FX swap (offshore ICAP eğrisi)", "coef": ("XO", "XP", "XQ"), "n": "XF", "flag": "XA", "t": "XB", "pv": "WX",
+           "ann": "WY"},
 }
+#: the FX swap curve of DİBS RV as every page names it (the ASW page's FX swap ASW is another curve: FX swap implied par
+#: rates in the place of the OIS quotes - tto/extras.py ``FXC_*``)
+RV_FX_CURVE = CURVES["fx"]["name"]
+ASW_FX_CURVE = "FX swap ima (TRYI 1A–18A, TRYSAQ 2–10Y; fiyatı yoksa OIS)"
 FLOWS = ("ID", "LV", 24)                 # a bond's cash flows, their times in coupon periods, how many at most
 STRETCH = 0.25                           # years outside the bonds fitted that the curve is read as it is drawn
 #: why a kind of bond has no fair value (DİBS RV's type: T, F, E)
@@ -118,7 +123,7 @@ def _side(v: Callable[[str], Any], kind: Any, c: Dict[str, Any], fit: Dict[str, 
         return {"why": "%s ASW eğrisi uydurulamadı (DİBS RV: en az 2 sabit kuponlu kâğıt gerekir; eğride %d kâğıt)" % (c["name"], fit["n"])}
     t, pv, ann, dd, acc = v("FW"), v(c["pv"]), v(c["ann"]), v("DD"), v("CW")
     if type(pv) is not float or type(ann) is not float or ann <= 0:
-        return {"why": "%s eğrisi bu vadeye uzanmıyor: kâğıdın bu eğrideki bugünkü değeri yok" % c["name"]
+        return {"why": "%s bu vadeye uzanmıyor: kâğıdın bu eğrideki bugünkü değeri yok" % c["name"]
                 if c["name"] != "OIS" else "OIS eğrisinde kâğıdın bugünkü değeri yok"}
     if not all(type(x) is float for x in (t, dd, acc)) or dd <= 0:
         return {"why": "DİBS RV'de vade / fonlama çarpanı / işlemiş faiz yok"}

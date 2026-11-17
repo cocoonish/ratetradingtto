@@ -111,7 +111,7 @@ def test_every_trading_bond_has_its_fair_values_or_why_not(service, tmp_path):
     u = s.login("Adil Değer Yok")["user"]
     d = summary(s, u)
     tops = [c.get("t") for c in d["rows"][0] if not c.get("sk")]
-    assert tops == ["", "Fiyat", "OIS'e göre", "FX swap'a göre", "Risk", "Carry", "Broker", ""]
+    assert tops == ["", "Fiyat", "OIS'e göre", "FX swap'a göre (offshore ICAP eğrisi)", "Risk", "Carry", "Broker", ""]
     heads = [c["t"] for c in d["rows"][1]]
     assert heads[:12] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %", "ASW / DM"]
     assert heads[12:21] == ["Adil getiri %", "Adil fiyat", "Pahalı / ucuz", "Sinyal", "ASW FX", "Adil getiri %", "Adil fiyat",
@@ -133,7 +133,10 @@ def test_every_trading_bond_has_its_fair_values_or_why_not(service, tmp_path):
     assert (at(d, line, FX_ASW)["v"], at(d, line, FX_RICH)["v"], at(d, line, FX_SIGNAL)["t"]) == (rv(s, "BF", r), rv(s, "BH", r), rv(s, "BI", r))
     # the card: the same numbers
     card = {x["name"]: x for x in s.bond_card(u, FIXED)["rv"]}
-    assert card["Adil getiri (OIS eğrisi)"]["t"] == at(d, line, OIS_YIELD)["t"] and card["Adil fiyat (FX swap eğrisi)"]["t"] == at(d, line, FX_PRICE)["t"]
+    assert card["Adil getiri (OIS eğrisi)"]["t"] == at(d, line, OIS_YIELD)["t"]
+    assert card["Adil fiyat (FX swap (offshore ICAP eğrisi))"]["t"] == at(d, line, FX_PRICE)["t"]
+    # the FX swap figures name their curve (DİBS RV's; the ASW page's is another): the summary's, the card's
+    assert "offshore ICAP" in at(d, line, FX_YIELD)["tip"] and "offshore ICAP" in card["ASW FX swap (bp)"]["tip"]
     assert card["Adil fiyat (OIS eğrisi)"]["tip"] == at(d, line, OIS_PRICE)["tip"]
     assert {x["name"]: x for x in s.bond_card(u, TLREF)["rv"]}["Adil fiyat (OIS eğrisi)"]["t"] == "–"
     # no fitted curve (here: its coefficient typed over by hand), no fair value - and the reason
@@ -241,3 +244,37 @@ def test_a_launchpad_box_keeps_its_bonds(service):
     full = summary(s, u)
     assert keys[full["rows"].index(line_of(full, FIXED))] == FIXED                      # a box picked now: by the bond's ISIN
     assert [row[2]["t"] for row in part("dibslive", "L0", [FIXED])["rows"][2:]] == [FIXED]
+
+
+
+def test_every_fx_swap_figure_names_its_curve(service):
+    """Two FX swap curves stand side by side until the desk chooses one: DİBS RV's (the offshore discount curve - DİBS
+    Trading's FX figures are of it) and the DİBS ASW page's (the FX swap implied rates in the place of the OIS quotes).
+    Every FX swap ASW, fair value and cheap / rich says which: in the titles, the captions and the tips (the cells and
+    their values are as they were)."""
+    s = service
+    u = s.login("Eğri Adı")["user"]
+    rv_page = {p["id"]: p for p in s.view(u, "dibs")["panels"]}
+    caps = rv_page["B3"]["data"]["rows"][rv_page["B3"]["data"]["r"].index(4)]
+    for col in ("BF", "BG", "BH", "BI", "BJ"):
+        tip = caps[rv_page["B3"]["data"]["c"].index(col)]["tip"]
+        assert "FX swap (offshore ICAP eğrisi)" in tip and "FX swap ima (TRYI 1A–18A, TRYSAQ 2–10Y; fiyatı yoksa OIS)" in tip, col
+    assert rv_page["B2b"]["title"] == "ASW eğrisi · FX swap (offshore ICAP eğrisi)"
+    asw = {p["id"]: p for p in s.view(u, "asw")["panels"]}
+    tbl = asw["tbl"]
+    assert tbl["title"].endswith("sağda FX swap ima (TRYI 1A–18A, TRYSAQ 2–10Y; fiyatı yoksa OIS) eğrisine göre ASW")
+    head = tbl["data"]["rows"][tbl["data"]["r"].index(6)]
+    assert [c["t"] for c in head[-2:]] == ["ASW FX ima (bp)", "FX ima − OIS (bp)"]
+    assert "TRYSAQ" in head[-2]["tip"] and "offshore ICAP" in head[-2]["tip"]
+    assert asw["chartfx"]["title"] == "FX swap ima eğrisine göre ASW — kalan vade" and "offshore ICAP" in asw["chartfx"]["note"]
+    assert "TRYI 1A–18A" in asw["fxline"]["note"]
+    # DİBS Trading: the FX group, its columns' tips, the fair values' tips and the card
+    d = summary(s, u)
+    assert "FX swap'a göre (offshore ICAP eğrisi)" in [c.get("t") for c in d["rows"][0]]
+    fx_heads = [c for c, key in zip(d["rows"][1], d["c"]) if key in (FX_ASW, FX_YIELD, FX_PRICE, FX_RICH, FX_SIGNAL)]
+    assert all("offshore ICAP" in c["tip"] for c in fx_heads) and len(fx_heads) == 5
+    line = line_of(d, FIXED)
+    assert at(d, line, FX_YIELD)["tip"].startswith("FX swap (offshore ICAP eğrisi) ASW eğrisi")
+    assert at(d, line_of(d, LONG), FX_YIELD)["tip"].startswith("FX swap'a göre (offshore ICAP eğrisi) adil değer yok")
+    card = {x["name"]: x for x in s.bond_card(u, FIXED)["rv"]}
+    assert "offshore ICAP" in card["Pahalı/ucuz FX (bp, + ucuz)"]["tip"] and "Adil getiri (FX swap (offshore ICAP eğrisi))" in card
