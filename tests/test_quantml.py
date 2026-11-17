@@ -4,8 +4,11 @@ driver first, the driver tops the trees' gain; pure noise neither passes the 55 
 (the future changed, every earlier prediction the same to the bit); each month's model fitted only on what was known
 before it and predicting only that month; the daily training's time; the models kept through a live refresh and a
 second fit; a calendar edit, a VİOP roll and a new bond moving no line's state; the backtest replaying the walk-forward's
-own predictions; the page, the list and the backtest through the service.  (The HTTP part last: leaving its client stops
-the module's service.)"""
+own predictions; the page, the list and the backtest through the service.  USDTRY's options as the TRY lines' features
+(a G10 line its pair's own; a missing series a missing value); the TRY OIS outrights' pool - one model a month, each
+line predicted with its tenor, no line's later close in another's earlier month, a planted USDTRY driver of the curve
+found and named on the card, one fit a pool on a month's first day and none on another close.  (The HTTP part last:
+leaving its client stops the module's service.)"""
 from __future__ import annotations
 
 import datetime as dt
@@ -137,8 +140,8 @@ def test_a_planted_driver_is_found_out_of_sample_its_line_prints_and_it_ranks_to
     # the page's row says the same
     row = next(r for r in fitted["tab"]["rows"] if r["key"] == "FX:AUDUSD")
     assert row["prints"] and row["valid"] and row["top"][0]["name"] == "brent_5" and row["verb"] == "AL"
-    # the measured time of the real size: within a few minutes
-    assert fitted["took"] < 300.0 and fitted["fits"] == fitted["tab"]["timing"]["fitted"] > 500
+    # the measured time of the real size: within a few minutes (the OIS outrights' pool: one model a month for ten lines)
+    assert fitted["took"] < 300.0 and fitted["fits"] == fitted["tab"]["timing"]["fitted"] > 400
 
 
 def test_the_levels_are_calibrated_on_the_family_s_out_of_sample_trades(fitted):
@@ -217,7 +220,8 @@ def _future_changed(days, series, cut, seed=99):
 
 
 def test_no_look_ahead_the_future_changed_every_earlier_prediction_is_the_same():
-    keys = ("FX:AUDUSD", "OIS:2Y", "OISS:1Y/2Y", "FXV:EURUSD", "DIBS:TRT150531T17", "FWD:USDTRY:1M")
+    keys = ("FX:AUDUSD", "OISS:1Y/2Y", "FXV:EURUSD", "DIBS:TRT150531T17", "FWD:USDTRY:1M")
+    pool = ("OIS:1Y", "OIS:2Y", "OIS:10Y")                             # (three of the OIS pool's lines: their pool's walk-forward)
     days, series, meta = sm.build(plant=sm.PLANT)
     cut = days[-90]
     preds = []
@@ -231,9 +235,11 @@ def test_no_look_ahead_the_future_changed_every_earlier_prediction_is_the_same()
         for k in keys:
             rows = ml.rows_of(reg[k], inputs)[0]
             out[k] = ml.walk(k, rows, ctx.today_iso)["preds"]
+        res = ml.walk_pool("ois", [(k, ml.rows_of(reg[k], inputs)[0]) for k in pool], ctx.today_iso)
+        out.update({k: res["lines"][k]["preds"] for k in pool})
         preds.append(out)
     a, b = preds
-    for k in keys:
+    for k in keys + pool:
         early = sorted(d for d in a[k] if d <= cut)
         assert len(early) > 150 and [a[k][d] for d in early] == [b[k][d] for d in early], k
         assert any(a[k][d] != b[k].get(d) for d in a[k] if d > cut), k     # (the future did change)
@@ -277,6 +283,220 @@ def test_each_month_s_model_learns_only_what_was_known_before_it_and_predicts_on
         if key.startswith("FX:"):
             move += line.carry[r.day] * (dt.date.fromisoformat(r.end) - dt.date.fromisoformat(r.day)).days / 365.0
         assert r.end == pts[r.i + 5][0] and r.pnl == pytest.approx(move) and r.y == (1 if move > 0 else 0)
+
+
+# ================================================================================================ USDTRY's options
+J = {n: j for j, n in enumerate(ml.NAMES)}
+TRY_OPT = ("trr", "trr5", "tatm", "tatm5")
+
+
+def _ctx(series, meta, days, today=sm.TODAY):
+    """A context of these series (copies) on ``today``, the meeting path to it."""
+    t = today.isoformat() if isinstance(today, dt.date) else today
+    return qf.Ctx(qf_cfg(), dt.date.fromisoformat(t), {k: dict(v) for k, v in series.items()}, {k: dict(v) for k, v in meta.items()}, {},
+                  mpc=sm.mpc_of([d for d in days[-120:] if d < t] + [t]))
+
+
+def test_the_try_lines_read_usdtry_s_options_a_g10_line_its_pair_s_and_a_missing_series_is_a_missing_value():
+    """Every line but G10's reads USDTRY's 25D RR 3M and ATM 1M vol (the Opsiyon page's quotes the history keeps) and
+    their 5-day changes, and the seven G10 pairs' mean risk reversal (global risk) - all as of the close before the day;
+    a G10 line its own pair's risk reversal only; a pooled line its tenor.  Without USDTRY's quotes those features are
+    missing - a value the trees route - and the family fits on."""
+    days, series, meta = sm.build()
+    reg = qu.Registry(_ctx(series, meta, days), None, sm.eng_rows())
+    inputs = ml.Inputs(reg)
+    day, prev, back = days[-10], days[-11], days[-16]
+    rr, atm = series["FXR:USDTRY"], series["OPT:USDTRY:ATM:1M"]
+    g10 = sum(series["FXR:" + p][prev] for p in qu.G10_PAIRS) / len(qu.G10_PAIRS)
+    g10b = sum(series["FXR:" + p][back] for p in qu.G10_PAIRS) / len(qu.G10_PAIRS)
+    insts, _ = ml.universe(reg)
+    others = [i for i in insts if i.group not in ("G10 spot", "G10 opsiyon")]
+    assert {i.group for i in others} == {"TRY OIS", "DİBS", "VİOP", "Offshore"}
+    for inst in others:
+        rows = ml.rows_of(inst, inputs)[0]
+        x = next((r.x for r in rows if r.day == day), None)
+        if x is None:                                                  # (the PPK line's history is the meeting path's few months)
+            assert inst.key == "PPK:1"
+            continue
+        assert x[J["trr"]] == rr[prev] and x[J["trr5"]] == pytest.approx(rr[prev] - rr[back]), inst.key
+        assert x[J["tatm"]] == atm[prev] and x[J["tatm5"]] == pytest.approx(atm[prev] - atm[back]), inst.key
+        assert x[J["grr"]] == pytest.approx(g10) and x[J["grr5"]] == pytest.approx(g10 - g10b), inst.key
+        assert x[J["rr"]] is None and x[J["rr5"]] is None, inst.key
+        assert x[J["tenor"]] == (ml.tenor_of(inst) if ml.pool_of(inst.key) else None), inst.key
+    assert [ml.tenor_of(reg[k]) for k in ml.POOLS[0][2]] == [1 / 12.0, 2 / 12.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 5.0, 10.0]
+    for key in ("FX:EURUSD", "FXV:USDJPY"):                           # (a G10 line: its pair's own, nothing of USDTRY's)
+        pair = key.split(":")[1]
+        x = next(r.x for r in ml.rows_of(reg[key], inputs)[0] if r.day == day)
+        assert x[J["rr"]] == series["FXR:" + pair][prev] and x[J["rr5"]] == pytest.approx(series["FXR:" + pair][prev] - series["FXR:" + pair][back])
+        assert all(x[J[n]] is None for n in TRY_OPT + ("grr", "grr5", "tenor"))
+    # the card names them plainly
+    ois2 = reg["OIS:2Y"]
+    assert ml.phrase("trr5", 1.5, ois2) == "USDTRY 25D RR 5 günde +1,50" and ml.phrase("tatm", 11.24, ois2) == "USDTRY 1A ATM vol 11,2"
+    assert ml.phrase("trr", 3.0, ois2) == "USDTRY 25D RR 3A +3,00" and ml.phrase("tatm5", -0.8, ois2) == "USDTRY 1A ATM vol 5 günde -0,8"
+    assert ml.phrase("grr", 0.4, ois2) == "G10 25D RR ortalaması +0,40 (küresel risk)"
+    assert ml.phrase("rr5", 0.25, reg["FX:EURUSD"]) == "EURUSD 25D RR 5 günde +0,25"
+    assert ml.phrase("tenor", 2.0, ois2) == "vade 2Y (OIS ortak modeli 1A–10Y)"
+    # no USDTRY quotes: missing values, the G10 mean still there; the family fits and its trees never split on them
+    ml.reset()
+    keep = {"OIS:1Y", "OIS:2Y", "OIS:5Y", "OIS:10Y", "OISS:1Y/2Y"}
+    s2 = {k: v for k, v in series.items() if k not in sm.USDTRY_OPTION_KEYS and (k in keep or k in sm.DRIVERS or k.startswith("FXR:")
+                                                                                  or k in {"FX:" + p for p in sm.EM} | {"FX:USDTRY"})}
+    ctx2 = _ctx(s2, {k: v for k, v in meta.items() if k in s2}, days)
+    reg2 = qu.Registry(ctx2, None, {})
+    x = ml.Inputs(reg2).row(day, ml.TRY)
+    assert all(x[J[n] - ml.N_OWN] is None for n in TRY_OPT) and x[J["grr"] - ml.N_OWN] == pytest.approx(g10)
+    _, tab = ml.run(ctx2, reg2, ctx2.cfg)
+    st = ml.state()
+    line = st.lines["OIS:2Y"]
+    assert line.model is not None and line.rec["tests"] >= 40 and all(r.x[J[n]] is None for r in line.rows for n in TRY_OPT)
+    assert all(m.gain[J[n]] == 0.0 for m in line.models.values() for n in TRY_OPT)
+
+
+# ================================================================================================ the OIS pool
+def test_the_ois_outrights_share_one_model_a_month_each_line_predicted_by_it_with_its_tenor(fitted):
+    """The TRY OIS outrights (1M … 2Y, 5Y, 10Y) are one model a month: every line's rows whose label was known before
+    the month began (each row's own fifth close) - all of them, none after -, its first month the first with 100 days
+    known (a line's own start); each line's prediction of a day is that month's pooled model's of its own row; spreads,
+    flies, FRAs and every other line keep models of their own."""
+    st, ctx = fitted["st"], fitted["ctx"]
+    pid, label, keys = ml.POOLS[0]
+    lines = [st.lines[k] for k in keys]
+    assert label == "OIS ortak modeli (1A–10Y)" and all(l.pool == label and l.pool_n == 10 for l in lines)
+    months = [m["month"] for m in lines[0].months]
+    assert months[-1] == ctx.today_iso[:8] + "01" and len(months) >= 13
+    for l in lines:
+        assert [m["month"] for m in l.months] == months and all(l.models[M] is lines[0].models[M] for M in months) and l.model is lines[0].model
+        assert all(r.x[J["tenor"]] == l.tenor for r in l.rows)
+    known = [r for l in lines for r in l.rows if r.y is not None]
+    for m in lines[0].months:
+        assert m["train"] == sum(1 for r in known if r.end < m["month"]) and m["last_end"] < m["month"] and m["pool"] == "ois"
+    first = dt.date.fromisoformat(months[0])
+    assert len({r.day for r in known if r.end < months[0]}) >= ml.MIN_TRAIN
+    assert len({r.day for r in known if r.end < (first - dt.timedelta(days=1)).replace(day=1).isoformat()}) < ml.MIN_TRAIN
+    assert months[0] == st.lines["OISS:1Y/2Y"].months[0]["month"]       # (the same start as a line of its own)
+    for l in lines:
+        for r in l.rows:
+            M = r.day[:8] + "01"
+            if M in l.models:
+                assert l.preds[r.day] == l.models[M].prob(r.x)
+            else:
+                assert r.day not in l.preds
+        assert l.rec["tests"] >= 40
+    pooled = {id(m) for l in lines for m in l.models.values()}
+    assert len(pooled) == len(months)                                   # (one model a month for the ten)
+    others = [l for k, l in st.lines.items() if k not in keys]
+    assert all(l.pool is None for l in others) and not pooled & {id(m) for l in others for m in l.models.values()}
+    assert {"OISS:1Y/2Y", "OISF:3M/6M/1Y", "FRA:3x6", "OIS:2Y"} <= set(st.lines)
+    # the page: its own column of the trees' gain (one model), each pooled line says so
+    groups = fitted["tab"]["groups"]
+    assert groups["groups"].index(label) == groups["groups"].index("TRY OIS") - 1 and groups["models"][label] == 1
+    row = next(r for r in fitted["tab"]["rows"] if r["key"] == "OIS:2Y")
+    assert row["pool"] == label and next(r for r in fitted["tab"]["rows"] if r["key"] == "OISS:1Y/2Y")["pool"] is None
+    assert fitted["tab"]["settings"]["pools"] == [{"id": "ois", "label": label, "lines": list(keys)}]
+    assert "OIS ortak modeli (1A–10Y): 10 vade tek modelde" in ml._pool_note(lines[7]) and ml._pool_note(st.lines["OISS:1Y/2Y"]) == ""
+
+
+def test_no_line_s_later_close_reaches_another_line_s_earlier_month_through_the_pool():
+    """One line of the pool (the 9M, read by no other line's features) jumps 500 bp from a month's first day on: every
+    other line's prediction to that month's end is the same to the bit - that month's pooled model learnt no row whose
+    label was known only in it, the 9M's last week before it among them -, the 9M's own of that month differs (its
+    features), and the month after it the pooled model has learnt the jump: the others' predictions move."""
+    days, series, meta = sm.build(n=360)
+    keys = ml.POOLS[0][2]
+    keep = set(keys) | set(sm.DRIVERS) | {"FX:" + p for p in sm.EM} | {"FX:USDTRY"} | set(sm.USDTRY_OPTION_KEYS) | {k for k in series if k.startswith("FXR:")}
+    series = {k: v for k, v in series.items() if k in keep}
+    meta = {k: v for k, v in meta.items() if k in series}
+    M0 = sorted({d[:8] + "01" for d in days})[-3]                        # (the month two before today's)
+    M1 = sorted({d[:8] + "01" for d in days})[-2]
+    planted = dict(series, **{"OIS:9M": {d: v + (5.0 if d >= M0 else 0.0) for d, v in series["OIS:9M"].items()}})
+    preds = []
+    for ser in (series, planted):
+        ml.reset()
+        reg = qu.Registry(_ctx(ser, meta, days), None, {})
+        inputs = ml.Inputs(reg)
+        res = ml.walk_pool("ois", [(k, ml.rows_of(reg[k], inputs)[0]) for k in keys], sm.TODAY.isoformat())
+        preds.append({k: res["lines"][k]["preds"] for k in keys})
+    a, b = preds
+    nxt = (dt.date.fromisoformat(M1) + dt.timedelta(days=40)).replace(day=1).isoformat()
+    for k in keys:
+        early = [d for d in a[k] if d < M1]
+        assert len(early) > 100 and any(d >= M0 for d in early), k
+        if k == "OIS:9M":
+            assert any(a[k][d] != b[k][d] for d in early if d >= M0)       # (its own features changed)
+            continue
+        assert [a[k][d] for d in early] == [b[k][d] for d in early], k
+    assert any(a[k][d] != b[k][d] for k in keys if k != "OIS:9M" for d in a[k] if M1 <= d < nxt)
+
+
+def test_a_planted_usdtry_driver_of_the_curve_is_found_by_the_pool_and_named_on_the_card():
+    """The TRY curve's level follows USDTRY's 25D RR 3M's moves of the week before (``quant_synth_ml.CURVE_PLANT``): the
+    pooled outrights find it out of sample, its 5-day change tops the pool's gain, and today - the RR up five days in a
+    row - the lines print pay, the card naming USDTRY's risk reversal and the pool.  (The pool's probabilities are
+    sober - its leaves hold as many days as a line's own -: today's are ~%59–61, so the desk's entry here is 1,5:
+    %57,5.)"""
+    ml.reset()
+    keys = ml.POOLS[0][2]
+    ctx, eng, days = sm.context(keep=set(keys), curve_plant=sm.CURVE_PLANT, cfg={"entry_z": 1.5})
+    mons, tab = ml.run(ctx, qu.Registry(ctx, None, eng), ctx.cfg)
+    st = ml.state()
+    lines = [st.lines[k] for k in keys]
+    recs = [l.rec for l in lines]
+    hit = sum(r["hit"] * r["days"] for r in recs) / sum(r["days"] for r in recs)
+    print("\nOIS havuzu, USDTRY RR'ına bağlı eğri: isabet %.3f, log-loss %s, geçerli %d / 10" % (
+        hit, [round(r["log_loss"], 3) for r in recs], sum(1 for l in lines if l.valid)))
+    assert hit >= 0.62 and sum(1 for l in lines if l.valid) >= 8
+    imp = dict(zip(ml.NAMES, lines[0].model.importance()))
+    assert max(imp, key=imp.get) == "trr5"
+    by = {m.sid: m for m in mons}
+    printed = []
+    for l in lines:
+        m = by.get("ml:" + l.key)
+        if m is None:
+            continue
+        qf.score_all(ctx, [m], {})
+        sg = qf.make_signal(m, ctx.cfg, "10:00")
+        if sg is None or sg["gated"]:
+            continue
+        printed.append(l.key)
+        assert sg["direction"] == 1 and sg["expression"].startswith("pay %s OIS · " % l.key[4:])
+        why = sg["info"]["why"]
+        assert why[0]["name"] == "trr5" and why[0]["effect"] > 0 and sg["info"]["pool"] == "OIS ortak modeli (1A–10Y)"
+        assert "Neden: en çok USDTRY 25D RR 5 günde +1,50 (lehte)" in sg["plain"] and "log-loss" in sg["plain"]
+        assert "OIS ortak modeli 1A–10Y)." in sg["plain"].split(" Neden:")[0] and "OIS ortak modeli 1A–10Y, aylık" in sg["thesis"]
+        assert "OIS ortak modeli (1A–10Y): 10 vade tek modelde" in m.note
+    assert len(printed) >= 5
+
+
+def _until(series, i, days):
+    """The series with their closes before ``days[i]``: the context of that day's morning."""
+    return {k: {d: v for d, v in s.items() if d < days[i]} for k, s in series.items()}
+
+
+def test_a_new_close_fits_nothing_a_new_month_one_model_a_pool_and_a_line():
+    """The cache: the same closes fit nothing; the first close of a month (today in a new month) one model for the pool
+    and one for each line of its own; the next close none - the month's training is the rows known before it."""
+    keep = {"OIS:1M", "OIS:3M", "OIS:1Y", "OIS:2Y", "OIS:5Y", "OIS:10Y", "FX:EURUSD", "FXP:EURUSD:3M"}
+    days, series, meta = sm.build(n=300)
+    inputs = set(sm.DRIVERS) | set(sm.USDTRY_OPTION_KEYS) | {"FX:USDTRY"} | {"FX:" + p for p in sm.EM}
+    series = {k: v for k, v in series.items() if k in keep or k in inputs}
+    meta = {k: v for k, v in meta.items() if k in series}
+    i = [j for j in range(1, len(days)) if days[j][:7] != days[j - 1][:7]][-2]  # (a month's first business day, a close after it)
+    ml.reset()
+    got = []
+    for j in (i - 1, i, i, i + 1):
+        ctx = _ctx(_until(series, j, days), meta, days, days[j])
+        n0 = ml.FITS["n"]
+        _, tab = ml.run(ctx, qu.Registry(ctx, None, {}), ctx.cfg)
+        got.append((ml.FITS["n"] - n0, tab["timing"]["fitted"], ml.state()))
+    first, new, same, nxt = got
+    st = new[2]
+    pooled = [l for l in st.lines.values() if l.pool]
+    own = [l for l in st.lines.values() if not l.pool and days[i][:8] + "01" in l.models]
+    assert len(pooled) == 6 and len(own) >= 2 and first[0] > 20
+    assert new[0] == new[1] == 1 + len(own)                               # (the new month: the pool's model and each line's)
+    assert same[0] == same[1] == 0 and nxt[0] == nxt[1] == 0              # (the same closes; another close of the month)
+    assert all(pooled[0].models[M] is l.models[M] for l in pooled for M in l.models)
+    assert nxt[2].lines["OIS:2Y"].model is st.lines["OIS:2Y"].model
 
 
 def test_the_daily_training_keeps_to_its_budget():
@@ -430,6 +650,8 @@ def test_the_page_the_list_and_the_backtest_through_the_service(served):
     assert aud["valid"] and aud["prints"] and aud["tests"] >= 40 and aud["hit"] >= 0.6 and aud["top"][0]["name"] == "brent_5" and aud["sid"] == "ml:FX:AUDUSD"
     assert all(r.get("why") or r.get("prints") for r in tab["rows"])           # (every line says why it does not print)
     assert "G10 spot" in tab["groups"]["groups"] and tab["groups"]["rows"][0]["shares"] and tab["settings"]["trees"] == ml.TREES
+    # the series the page lists: the lines' and the inputs' - USDTRY's options among them
+    assert {k for _, k in ml.TRY_OPTIONS} <= {c["key"] for c in v["coverage"]}
     assert [s["id"] for s in v["signals"]] and all(s["family"] == "ml" for s in v["signals"])
     # a line a gate of the list holds ("düşük güven": the FX carry buffer, no expected profit) says so on the page
     for s in q.view("signals", user, {})["gated"]:

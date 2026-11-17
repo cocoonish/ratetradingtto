@@ -8,15 +8,25 @@ for an FX line - a spot, an offshore forward - the carry of the holding too (the
 A rates line's carry + roll is not in its history (the carry engine is today's only): ``make_signal`` adds it to the
 expected P&L, as for every family.
 
-**Features** (``FEATURES``, 34 per line), each known at the line's close of the day - nothing after it:
+**Features** (``FEATURES``, 41 per line), each known at the line's close of the day - nothing after it:
 own z over 20 / 60 / 250 closes, momentum over 5 / 21 / 63 closes (÷ σ √n), carry (FX: % a year from the forwards; a
 rate: the level over TLREF; ATM vol: implied − realised), realised σ (20 closes) and its change (σ20 / σ60); the TRY OIS
 curve's level / slope / curvature (2Y, 2s10s, 2s5s10s) and their 5-day changes (the same day: the curve closes with
 TRY); the 1- and 5-day changes of UST 2Y / 10Y, DXY, EM FX, Brent and the CDS, TLREF's 3-month change, the next PPK
-step the meeting path priced, the VİOP − OIS basis at 30 days, the 25D RR 3M (the pair's own for a G10 line, the
-seven pairs' mean else) and its 5-day change - these from the day before (their close comes after TRY's: no
-look-ahead); whether the holding has a month end in it, and the weekday.  A feature that is not there (a series too
-short, an input missing) is a value of its own the trees route.
+step the meeting path priced, the VİOP − OIS basis at 30 days, the options - a G10 line its pair's own 25D RR 3M, every
+other line (TRY OIS, FRA, PPK, DİBS, VİOP, offshore) USDTRY's 25D RR 3M and ATM 1M vol (the Opsiyon page's quotes the
+history keeps: ``TRY_OPTIONS``) and the seven G10 pairs' mean 25D RR 3M (global risk), each with its 5-day change -
+these from the day before (their close comes after TRY's: no look-ahead); whether the holding has a month end in it,
+the weekday; a pooled line's tenor (years).  A feature that is not there (a series too short, an input missing, a
+G10 line's USDTRY options) is a value of its own the trees route.
+
+**The pool** (``POOLS``): the TRY OIS outrights (1M … 2Y, 5Y, 10Y) are one model a month - "OIS ortak modeli
+(1A–10Y)" -, trained on every one of them's rows (each row its line's own close, the tenor a feature) and predicting
+each.  A month's pooled model learns only rows whose label was known before the month began - each row's own fifth
+close, alike for every line: no line's later close reaches another line's earlier month -, from the first month with
+``MIN_TRAIN`` days known (a line's own start); its leaves and L2 × its lines (``POOL_SCALE``: a day's rows of ten lines
+move together).  Spreads, flies and FRAs - other kinds of moves - keep models of their own: on the synthetic universe
+the FRAs did worse in the pool and the spreads' gain in a pool of their own was the flies' loss.
 
 **Model** (``Trees``): ``TREES`` trees of depth ``DEPTH`` on the logistic loss, learning rate ``RATE``, each on
 ``SUBSAMPLE`` of the rows and ``COLSAMPLE`` of the features, leaves of at least ``MIN_LEAF`` rows, Newton leaf values
@@ -29,9 +39,10 @@ month began (its fifth close before the month's first day) and predicts only tha
 model is the one that trades today.  From the first month with ``MIN_TRAIN`` known rows on - with two years of closes a
 year and more of out-of-sample predictions.  Hit rate and log-loss over every out-of-sample day whose label is known;
 the test count is the independent 5-day periods in them (days ÷ 5: the labels overlap).  A model is kept by the
-line's key, its month and a digest of its training rows (``_MODELS``): the next fit of the same data - a refresh,
-another fit of the day, the backtest - fits nothing; a new close adds no model but on a month's first day; a new
-month, a revised close, a backfilled series fit again exactly the months whose rows changed.  Nothing is kept by a
+line's key (a pool's id), its month and a digest of its training rows (``_MODELS``; the settings, the features and the
+pools in it: ``MODEL_SIG``): the next fit of the same data - a refresh, another fit of the day, the backtest - fits
+nothing; a new close adds no model but on a month's first day (one a line of its own, one a pool); a new month, a
+revised close, a backfilled series fit again exactly the months whose rows changed.  Nothing is kept by a
 sheet's row or column: a PPK calendar edit, a VİOP roll, a new or matured bond moves no line's state to another line.
 
 **The line** (only where the out-of-sample hit rate ≥ the desk's ``model_hit`` (55 %) with ≥ ``model_min_tests`` (40)
@@ -39,7 +50,8 @@ tests - the Tahmin modeli's rule - and its score past the entry: z(p) = (p − 0
 "AL EURUSD spot · 1 mn EUR · olasılık %63 · isabet %58 (52)"; target (2p − 1) × the line's mean |5-day P&L| (the
 last 250 rows), stop 1,5 σ of five days, held five days; size in the desk's unit and the P&L in money through the
 registry (``inst.monitor``).  Its card says what to do and why: the three features that moved this prediction most
-(the trees' path contributions of today's row), in the desk's words; the log-loss beside the hit rate.  During the day
+(the trees' path contributions of today's row), in the desk's words - USDTRY's options by name ("USDTRY 25D RR 5 günde
++1,50"), a pooled line's pool too ("OIS ortak modeli 1A–10Y"); the log-loss beside the hit rate.  During the day
 only the live features are scored again (the level, the curve): the trees are the fit's.
 
 **Backtest** (``tto.quantbt``: every family refitted every ten days on the closes up to that day).  The refit's
@@ -48,7 +60,8 @@ live rules (the probability past the entry; no 55 % gate: that gate is this reco
 line (the backtest's type).
 
 **Page** ``quant-ml`` (a tab of Sinyaller, ``VIEWS``): every line with its out-of-sample record, whether it prints,
-today's probability and the three features behind it; the features' share of the trees' gain per group.
+today's probability and the three features behind it (a pooled line's model "· ortak"); the features' share of the
+trees' gain per group, a pool's model a column of its own.
 """
 from __future__ import annotations
 
@@ -149,8 +162,12 @@ FEATURES: Tuple[Tuple[str, str, str], ...] = (
     ("dxy_1", "DXY 1 gün", "%"), ("dxy_5", "DXY 5 gün", "%"), ("emfx_1", "EM FX 1 gün", "%"), ("emfx_5", "EM FX 5 gün", "%"),
     ("brent_1", "Brent 1 gün", "%"), ("brent_5", "Brent 5 gün", "%"), ("cds_1", "CDS 1 gün", "bp"), ("cds_5", "CDS 5 gün", "bp"),
     ("tlref", "TLREF 3 ayda", "bp"), ("ppk", "sıradaki PPK adımı", "bp"), ("viop", "VİOP − OIS (1A)", "bp"),
-    ("rr", "25D RR 3A", "vol"), ("rr5", "25D RR 5 günde", "vol"),
+    ("rr", "paritenin 25D RR 3A", "vol"), ("rr5", "paritenin 25D RR 5 günde", "vol"),
+    ("trr", "USDTRY 25D RR 3A", "vol"), ("trr5", "USDTRY 25D RR 5 günde", "vol"),
+    ("tatm", "USDTRY ATM vol 1A", "vol"), ("tatm5", "USDTRY ATM vol 1A 5 günde", "vol"),
+    ("grr", "G10 25D RR ortalaması", "vol"), ("grr5", "G10 25D RR ortalaması 5 günde", "vol"),
     ("month_end", "ufukta ay sonu", ""), ("weekday", "haftanın günü", ""),
+    ("tenor", "vade (ortak model)", "yıl"),
 )
 NAMES = tuple(f[0] for f in FEATURES)
 LABELS = {f[0]: f[1] for f in FEATURES}
@@ -158,7 +175,28 @@ MODEL_SIG += NAMES
 N_OWN = 9
 #: the drivers read from the day before: (name, the registry's key)
 DRIVERS = (("ust2", "UST:2Y"), ("ust10", "UST:10Y"), ("dxy", "DXY"), ("emfx", "EMFX"), ("brent", "BRENT"), ("cds", "CDS"))
+#: USDTRY's options - the Opsiyon page's quotes the history keeps (``quantopt.key``) - read by every line but G10's:
+#: (name, the history's key)
+TRY_OPTIONS = (("trr", qopt.key("USDTRY", "RR25", "3M")), ("tatm", qopt.key("USDTRY", "ATM", "1M")))
 CURVE = ("OIS:2Y", "OIS:5Y", "OIS:10Y")
+#: what a G10 line reads of the options (its pair's own risk reversal), and every other line (USDTRY's and the G10 mean)
+TRY = "TRY"
+
+# ---------------------------------------------------------------------------------------------- the pools
+#: lines whose rows train one model a month together - every row still its line's own close, its tenor (years) a
+#: feature of its own: (id, the desk's name, its lines by the registry's keys).  The TRY OIS outrights move together
+#: (one curve) and their label is the same kind of move (the rate's, bp); a spread's, a fly's or an FRA's is another
+#: (tests/test_quantml.py: the record of each choice)
+POOLS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+    ("ois", "OIS ortak modeli (1A–10Y)", ("OIS:1M", "OIS:2M", "OIS:3M", "OIS:6M", "OIS:9M", "OIS:1Y", "OIS:18M", "OIS:2Y", "OIS:5Y", "OIS:10Y")),
+)
+#: a pool's leaves and L2 grow with its lines (× lines ** POOL_SCALE): its rows of a day move together - ten lines' rows
+#: are not ten times the evidence of one.  On the synthetic universe's noise (tests/quant_synth_ml.py) the pool of ten's
+#: log-loss is 0,747 unscaled, 0,735 at √, 0,708 at × 10 (its lines alone 0,714): a leaf of the pool holds as many days
+#: as a line's own
+POOL_SCALE = 1.0
+MODEL_SIG += (("pools", POOLS, POOL_SCALE),)
+SETTINGS["pools"] = [{"id": p, "label": lab, "lines": list(keys)} for p, lab, keys in POOLS]
 WEEKDAYS = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
 
 
@@ -217,6 +255,11 @@ class Inputs(object):
             cm = {}
         basis = sorted((d, x["basis"]) for d, x in cm.items() if _num(x.get("basis")) is not None)
         self.lagged["viop"] = ([d for d, _ in basis], [v for _, v in basis])
+        # USDTRY's options (the history's; not a line of the registry): the level and its change over five closes
+        for name, key in TRY_OPTIONS:
+            pts = [(d, v) for d, v in ctx.pts(key) if _num(v) is not None]
+            self.lagged[name] = ([d for d, _ in pts], [v for _, v in pts])
+            self.lagged[name + "5"] = _moves(pts, "vol", 5)
         # the risk reversals: each pair's own, and the seven pairs' mean
         self.rr: Dict[str, Tuple[Tuple[List[str], List[float]], Tuple[List[str], List[Optional[float]]]]] = {}
         by_day: Dict[str, List[float]] = {}
@@ -288,9 +331,11 @@ class Inputs(object):
             self._me[day] = hit
         return hit
 
-    def row(self, day: str, rr: str, live: Optional[Dict[str, float]] = None) -> List[Optional[float]]:
-        """Every shared feature of a line's row on ``day`` (its risk reversal ``rr``: a pair, or "avg")."""
-        memo = (day, rr) if live is None else None
+    def row(self, day: str, who: str, live: Optional[Dict[str, float]] = None) -> List[Optional[float]]:
+        """Every shared feature of a line's row on ``day``: ``who`` the options it reads - a G10 pair its own risk
+        reversal (USDTRY's and the G10 mean missing), ``TRY`` (every other line) USDTRY's risk reversal and ATM vol and
+        the seven G10 pairs' mean risk reversal (a pair's own missing)."""
+        memo = (day, who) if live is None else None
         if memo is not None and memo in self._memo:
             return self._memo[memo]
         out = self.curve_at(day, live)
@@ -301,9 +346,17 @@ class Inputs(object):
         for name in ("tlref", "ppk", "viop"):
             days, vals = self.lagged[name]
             out.append(self._asof(days, vals, day, True))
-        lv, ch = self.rr.get(rr) or self.rr["avg"]
-        out.append(self._asof(lv[0], lv[1], day, True))
-        out.append(self._asof(ch[0], ch[1], day, True))
+        if who == TRY:
+            out += [None, None]
+            for name in ("trr", "trr5", "tatm", "tatm5"):
+                days, vals = self.lagged[name]
+                out.append(self._asof(days, vals, day, True))
+            lv, ch = self.rr["avg"]
+            out += [self._asof(lv[0], lv[1], day, True), self._asof(ch[0], ch[1], day, True)]
+        else:
+            own = self.rr.get(who)
+            out += [self._asof(own[0][0], own[0][1], day, True), self._asof(own[1][0], own[1][1], day, True)] if own else [None, None]
+            out += [None] * 6
         out.append(self.month_end(day))
         out.append(float(_dt.date.fromisoformat(day).weekday()))
         if memo is not None:
@@ -338,10 +391,33 @@ def _fx(inst: qu.Instrument) -> bool:
     return isinstance(inst, qu.FxSpot)
 
 
-def _rr_of(inst: qu.Instrument, inputs: Inputs) -> str:
-    """The risk reversal a line reads: a G10 line its pair's, every other line (and a pair without one) the mean."""
+def _who(inst: qu.Instrument) -> str:
+    """The options a line reads: a G10 line its pair's own, every other line USDTRY's (``TRY``)."""
     pair = getattr(inst, "pair", None) if inst.group in ("G10 spot", "G10 opsiyon") else None
-    return pair if pair in inputs.rr else "avg"
+    return pair or TRY
+
+
+def pool_of(key: str) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
+    """The pool a line is of (``POOLS``), or None: a line of its own."""
+    return next((p for p in POOLS if key in p[2]), None)
+
+
+def _flat(name: str) -> str:
+    """A pool's name inside parentheses: "OIS ortak modeli 1A–10Y"."""
+    return name.replace(" (", " ").replace(")", "")
+
+
+def tenor_of(inst: qu.Instrument) -> Optional[float]:
+    """A pooled line's tenor feature: its tenor in years ("OIS:18M" 1,5; a package's the mean of its legs', an FRA's
+    its middle); None for a line of its own."""
+    key = inst.key
+    if pool_of(key) is None:
+        return None
+    if key.startswith("FRA:"):
+        a, b = key[4:].split("x")
+        return (float(a) + float(b)) / 24.0
+    mos = [qf._TENOR_MONTHS.get(t) for t in key.split(":", 1)[1].split("/")]
+    return sum(mos) / len(mos) / 12.0 if mos and all(mos) else None
 
 
 def carry_days(inst: qu.Instrument, inputs: Inputs) -> Dict[str, float]:
@@ -423,11 +499,12 @@ def rows_of(inst: qu.Instrument, inputs: Inputs) -> Tuple[List[Row], List[Tuple[
     ch: List[Optional[float]] = [None] + [qf.change(kind, a, b) for a, b in zip(L, L[1:])]
     carry = carry_days(inst, inputs)
     fx = _fx(inst)
-    rr = _rr_of(inst, inputs)
+    who = _who(inst)
+    tenor = [tenor_of(inst)]
     out: List[Row] = []
     for i in range(WARMUP, len(L)):
         d = days[i]
-        x = _own(L, ch, i, kind, carry.get(d)) + inputs.row(d, rr)
+        x = _own(L, ch, i, kind, carry.get(d)) + inputs.row(d, who) + tenor
         y = end = pnl = None
         if i + HORIZON < len(L):
             end = days[i + HORIZON]
@@ -503,7 +580,10 @@ class Trees(object):
         F = [base] * n
         rnd = random.Random(seed)
         every = list(range(n))
-        ncol = max(1, int(round(nf * colsample)))
+        # the features a tree may draw: those that can split (two values, or a value and a missing one) - a feature
+        # missing on every row of the line (a G10 line's USDTRY options, a line's own tenor) takes no tree's place
+        live = [j for j in range(nf) if edges[j] or 0 < B[j].count(miss) < n] or list(range(nf))
+        ncol = max(1, int(round(len(live) * colsample)))
         gain = [0.0] * nf
         out: List[List[Tuple]] = []
         for _ in range(trees):
@@ -515,7 +595,7 @@ class Trees(object):
             rows = [i for i in every if rnd.random() < subsample] if subsample < 1.0 else every
             if len(rows) < 2 * min_leaf:
                 rows = every
-            feats = sorted(rnd.sample(range(nf), ncol))
+            feats = sorted(rnd.sample(live, ncol))
             nodes: List[List[Any]] = []
             leaves: List[Tuple[List[int], float]] = []
 
@@ -696,6 +776,65 @@ def walk(key: str, rows: List[Row], today: str, used: Optional[Dict[Tuple, Trees
     return {"preds": preds, "months": out_months, "models": models, "model": model_now, "fitted": fitted, "cached": cached}
 
 
+def walk_pool(pid: str, members: Sequence[Tuple[str, List[Row]]], today: str, used: Optional[Dict[Tuple, Trees]] = None) -> Dict[str, Any]:
+    """The monthly walk-forward of a pool (``POOLS``): one model a month on the rows of every line of it whose label
+    was known before the month began - each row's own fifth close after its day, before the month's first day, alike
+    for every line (no line's later close reaches another line's earlier month through the pool) - predicting that
+    month's rows of every line.  Its first month is the first with ``MIN_TRAIN`` days of known label (a line's own
+    start: not ten lines' rows of ten days); its leaves and L2 grow with its lines (``POOL_SCALE``).  Returns ``{"lines":
+    {key: walk()'s result for that line}, "fitted": n, "cached": n, "train": {month: rows}}``."""
+    keys = [k for k, _ in members]
+    pos = {k: j for j, k in enumerate(keys)}
+    known = sorted(((r.end, r.day, pos[k], k, r) for k, rows in members for r in rows if r.y is not None), key=itemgetter(0, 1, 2))
+    months = sorted({_month(r.day) for _, rows in members for r in rows} | {_month(today)})
+    by_month: Dict[str, Dict[str, List[Row]]] = {}
+    for k, rows in members:
+        for r in rows:
+            by_month.setdefault(_month(r.day), {}).setdefault(k, []).append(r)
+    scale = max(1.0, len(keys)) ** POOL_SCALE
+    out = {k: {"preds": {}, "months": [], "models": {}, "model": None, "fitted": 0, "cached": 0, "pool": pid, "pool_lines": len(keys)} for k in keys}
+    own = {k: {_month(r.day) for r in rows} | {_month(today)} for k, rows in members}
+    train: Dict[str, int] = {}
+    fitted = cached = 0
+    digest = hashlib.sha1(repr((MODEL_SIG, pid, keys)).encode())
+    seen: set = set()
+    k = 0
+    for M in months:
+        while k < len(known) and known[k][0] < M:
+            _, day, _, key, r = known[k]
+            digest.update(repr((key, day, r.x, r.y)).encode())
+            seen.add(day)
+            k += 1
+        if len(seen) < MIN_TRAIN:
+            continue
+        ck = ("pool:" + pid, M, k, digest.hexdigest())
+        model = _MODELS.get(ck)
+        if model is None:
+            rows = [t[4] for t in known[:k]]
+            model = Trees.fit([r.x for r in rows], [r.y for r in rows], seed=_seed("pool:" + pid, M), min_leaf=int(round(MIN_LEAF * scale)),
+                              l2=L2 * scale)
+            fitted += 1
+            FITS["n"] += 1
+        else:
+            cached += 1
+        if used is not None:
+            used[ck] = model
+        train[M] = k
+        last = known[k - 1]
+        for key in keys:
+            if M not in own[key]:
+                continue
+            o = out[key]
+            test = (by_month.get(M) or {}).get(key) or []
+            for r in test:
+                o["preds"][r.day] = model.prob(r.x)
+            o["models"][M] = model
+            o["months"].append({"month": M, "train": k, "test": len(test), "last_train": last[1], "last_end": last[0], "pool": pid})
+            if M == _month(today):
+                o["model"] = model
+    return {"lines": out, "fitted": fitted, "cached": cached, "train": train}
+
+
 def record(rows: List[Row], preds: Dict[str, float], until: Optional[str] = None) -> Dict[str, Any]:
     """The out-of-sample record: hit rate, log-loss, the share of rises, days and independent tests (days ÷ the
     horizon) of the predicted rows whose label is known (``until``: by that day)."""
@@ -730,7 +869,11 @@ class Line(object):
         self.mean5 = sum(pnl) / len(pnl) if pnl else None                 # change units (FX: carry in it)
         self.sd1 = inst.vol()                                             # a day's σ, change units
         self.levels = dict(pts)
-        self.rr = _rr_of(inst, inputs)
+        self.who = _who(inst)                                             # the options it reads (a G10 pair's, USDTRY's)
+        self.tenor = tenor_of(inst)                                       # (a pooled line's tenor feature)
+        pool = pool_of(inst.key) if wf.get("pool") else None
+        self.pool: Optional[str] = pool[1] if pool else None              # the pool's name: "OIS ortak modeli (1A–10Y)"
+        self.pool_n = int(wf.get("pool_lines") or 0)                       # (the pool's lines in this fit)
         self.now: Optional[Tuple[float, List[Optional[float]]]] = None    # (p, today's row) of the last score
         self.scale: Dict[str, Tuple[Optional[float], Optional[float]]] = self._scales()
         self.book: Optional[qlv.Book] = None                              # the family's calibrated levels (the fit sets them)
@@ -758,7 +901,7 @@ class Line(object):
         L = self.L + [level]
         ch = self.ch + [qf.change(self.inst.kind, self.L[-1], level) if self.L else None]
         carry = carry_now(self.inst, self.inputs, level, live, self.carry, self.levels)
-        return _own(L, ch, len(L) - 1, self.inst.kind, carry) + self.inputs.row(self.today, self.rr, live)
+        return _own(L, ch, len(L) - 1, self.inst.kind, carry) + self.inputs.row(self.today, self.who, live) + [self.tenor]
 
     def prob_now(self, level: Optional[float], live: Dict[str, float]) -> Optional[float]:
         if self.model is None or level is None or len(self.L) < WARMUP:
@@ -920,10 +1063,19 @@ def phrase(name: str, v: Optional[float], inst: qu.Instrument) -> str:
         return "sıradaki PPK için fiyatlanan adım %s bp" % _s(v, 0)
     if name == "viop":
         return "VİOP − OIS farkı %s bp" % _s(v)
-    if name == "rr":
-        return "25D RR 3A %s" % _s(v, 2)
-    if name == "rr5":
-        return "25D RR 5 günde %s" % _s(v, 2)
+    if name in ("rr", "rr5"):
+        return "%s 25D RR %s %s" % (getattr(inst, "pair", "") or "paritenin", "3A" if name == "rr" else "5 günde", _s(v, 2))
+    if name in ("trr", "trr5"):
+        return "USDTRY 25D RR %s %s" % ("3A" if name == "trr" else "5 günde", _s(v, 2))
+    if name == "tatm":
+        return "USDTRY 1A ATM vol %s" % _v(v, 1)
+    if name == "tatm5":
+        return "USDTRY 1A ATM vol 5 günde %s" % _s(v, 1)
+    if name in ("grr", "grr5"):
+        return "G10 25D RR ortalaması%s %s (küresel risk)" % ("" if name == "grr" else " 5 günde", _s(v, 2))
+    if name == "tenor":
+        pool = pool_of(inst.key)
+        return "vade %s (%s)" % (inst.key.split(":", 1)[-1], _flat(pool[1]) if pool else "ortak model")
     if name == "month_end":
         return "ufukta ay sonu var" if v else "ufukta ay sonu yok"
     if name == "weekday":
@@ -1012,11 +1164,11 @@ def _monitor(line: Line, cfg: Dict[str, Any], replay: bool = False) -> qf.Monito
             return _words(line, m, sg, entry)
 
         m.thesis = words
-        m.note = ("Gradyan artırmalı ağaçlar (%d ağaç, derinlik %d, öğrenme %s, %d özellik): önümüzdeki %d iş gününün yönü. Aylık yeniden "
+        m.note = ("Gradyan artırmalı ağaçlar (%d ağaç, derinlik %d, öğrenme %s, %d özellik): önümüzdeki %d iş gününün yönü.%s Aylık yeniden "
                   "eğitim: her ayın modeli yalnız o ay başlamadan bilinenle kurulur, yalnız o ayda test edilir. Örneklem dışı isabet %%%s (%d test, "
                   "log-loss %s). z(p) = (p − 0,5) ÷ 0,05; hedef (2p − 1) × ortalama %d günlük K/Z, stop %s σ (%d gün)." % (
-                      TREES, DEPTH, qf._g(RATE, 1), len(NAMES), HORIZON, _cut(rec["hit"] or 0.0), rec["tests"], _v(rec["log_loss"], 3), HORIZON,
-                      qf._g(STOP_SIGMA, 1), HORIZON))
+                      TREES, DEPTH, qf._g(RATE, 1), len(NAMES), HORIZON, _pool_note(line), _cut(rec["hit"] or 0.0), rec["tests"], _v(rec["log_loss"], 3),
+                      HORIZON, qf._g(STOP_SIGMA, 1), HORIZON))
     return m
 
 
@@ -1036,14 +1188,24 @@ def _words(line: Line, m: qf.Monitor, sg: Dict[str, Any], entry: float) -> str:
     reason = ""
     if told:
         reason = " Neden: en çok %s etkiledi." % (", ".join(told[:-1]) + " ve " + told[-1] if len(told) > 1 else told[0])
-    sg["plain"] = ("%s %s için önümüzdeki %d iş gününde %s olasılığı %%%s (örneklem dışı isabet %%%s, %d test, log-loss %s)."
-                   % (sg.get("plain") or "", inst.label, HORIZON, up, _pct(prob), _pct(rec["hit"]), rec["tests"], _v(rec["log_loss"], 3))
-                   ).strip() + reason
+    pool = _flat(line.pool) if line.pool else ""
+    sg["plain"] = ("%s %s için önümüzdeki %d iş gününde %s olasılığı %%%s (örneklem dışı isabet %%%s, %d test, log-loss %s%s)."
+                   % (sg.get("plain") or "", inst.label, HORIZON, up, _pct(prob), _pct(rec["hit"]), rec["tests"], _v(rec["log_loss"], 3),
+                      "; " + pool if pool else "")).strip() + reason
     sg.setdefault("info", {})["why"] = why
-    return ("Gradyan artırmalı ağaçlar (aylık yeniden eğitim, yalnız sonraki ayda test) %s için %d iş gününde %s olasılığını %%%s veriyor "
+    sg["info"]["pool"] = line.pool
+    return ("Gradyan artırmalı ağaçlar (%saylık yeniden eğitim, yalnız sonraki ayda test) %s için %d iş gününde %s olasılığını %%%s veriyor "
             "(isabet %%%s, %d test, log-loss %s) → %s; beklenen %s%s." % (
-                inst.label, HORIZON, up, _pct(prob), _pct(rec["hit"]), rec["tests"], _v(rec["log_loss"], 3), sg["expression"],
+                pool + ", " if pool else "", inst.label, HORIZON, up, _pct(prob), _pct(rec["hit"]), rec["tests"], _v(rec["log_loss"], 3), sg["expression"],
                 qf.exp_text(sg), qf._incl(sg)))
+
+
+def _pool_note(line: Line) -> str:
+    """The card's note of a pooled line: " OIS ortak modeli (1A–10Y): 10 vade tek modelde …"; "" for a line of its own."""
+    if not line.pool:
+        return ""
+    return (" %s: %d vade tek modelde - her ayın modeli bütün vadelerin satırlarıyla kurulur (her satır kendi vadesinin günü, vade bir "
+            "veri), her vadenin kaydı kendi günlerinden." % (line.pool, line.pool_n))
 
 
 # ---------------------------------------------------------------------------------------------- the family
@@ -1105,20 +1267,48 @@ def _fit(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mo
     fitted = cached = 0
     t_rows = t_walk = 0.0
     errors: Dict[str, str] = {}
+    made: Dict[str, Tuple] = {}
     for inst in insts:
         try:
             a = time.perf_counter()
-            rows, pts, ch, carry = rows_of(inst, inputs)
-            b = time.perf_counter()
-            wf = walk(inst.key, rows, ctx.today_iso, used)
-            t_rows += b - a
-            t_walk += time.perf_counter() - b
-            fitted += wf["fitted"]
-            cached += wf["cached"]
-            lines[inst.key] = Line(inst, inputs, rows, pts, ch, carry, wf, cfg)
+            made[inst.key] = rows_of(inst, inputs)
+            t_rows += time.perf_counter() - a
         except Exception as exc:  # noqa: BLE001 - one line failing is its row's reason, not the family's
             errors[inst.key] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
         time.sleep(0)                                     # (the engine thread gets the interpreter between lines)
+    # the pools: one walk-forward for their lines together (the lines of the universe the registry has)
+    pooled: Dict[str, Dict[str, Any]] = {}
+    for pid, label, keys in POOLS:
+        members = [(i.key, made[i.key][0]) for i in insts if i.key in keys and i.key in made]
+        if not members:
+            continue
+        try:
+            b = time.perf_counter()
+            res = walk_pool(pid, members, ctx.today_iso, used)
+            t_walk += time.perf_counter() - b
+            fitted += res["fitted"]
+            cached += res["cached"]
+            pooled.update(res["lines"])
+        except Exception as exc:  # noqa: BLE001 - the pool failing is its lines' reason
+            for k, _ in members:
+                errors[k] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+        time.sleep(0)
+    for inst in insts:
+        if inst.key not in made or inst.key in errors:
+            continue
+        rows, pts, ch, carry = made[inst.key]
+        try:
+            wf = pooled.get(inst.key)
+            if wf is None:
+                b = time.perf_counter()
+                wf = walk(inst.key, rows, ctx.today_iso, used)
+                t_walk += time.perf_counter() - b
+                fitted += wf["fitted"]
+                cached += wf["cached"]
+            lines[inst.key] = Line(inst, inputs, rows, pts, ch, carry, wf, cfg)
+        except Exception as exc:  # noqa: BLE001 - one line failing is its row's reason, not the family's
+            errors[inst.key] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+        time.sleep(0)
     with _MODELS_LOCK:                                    # (keep what this fit used: the next fit of the same data fits nothing)
         _MODELS.clear()
         _MODELS.update(used)
@@ -1163,7 +1353,7 @@ def _row(line: Line, entry: float, p: Optional[float]) -> Dict[str, Any]:
             "verb": inst.verb(side) if side else "", "prob": max(p, 1.0 - p) if p is not None else None,
             "z": (p - 0.5) / Z_SCALE if p is not None else None, "prints": prints, "why": why, "sid": "ml:" + inst.key if line.valid else None,
             "top": [{k: w[k] for k in ("name", "label", "value", "effect", "text")} for w in line.why(line.now[1])] if line.now is not None else [],
-            "trades": tr.get("n", 0), "trade_hit": tr.get("hit"), "sharpe": tr.get("sharpe"), "unit": inst.pnl()[0]}
+            "trades": tr.get("n", 0), "trade_hit": tr.get("hit"), "sharpe": tr.get("sharpe"), "unit": inst.pnl()[0], "pool": line.pool}
 
 
 def _table(ctx: qf.Ctx, cfg: Dict[str, Any], insts: List[qu.Instrument], lines: Dict[str, Line], missing: Dict[str, str],
@@ -1188,16 +1378,21 @@ def _table(ctx: qf.Ctx, cfg: Dict[str, Any], insts: List[qu.Instrument], lines: 
 
 
 def importance_by_group(lines: Dict[str, Line]) -> Dict[str, Any]:
-    """Each feature's share of the split gain of today's models, per group (each line's shares averaged over its
-    group): ``{"groups": [...], "rows": [{name, label, shares: {group: share}}]}``."""
-    per: Dict[str, List[List[float]]] = {}
+    """Each feature's share of the split gain of today's models, per group - a pool's model a column of its own (its
+    name, before its lines' group), each model once, its shares averaged over the column's models: ``{"groups": [...],
+    "rows": [{name, label, shares: {group: share}}], "models": {group: n}}``."""
+    per: Dict[str, Dict[int, List[float]]] = {}
+    home: Dict[str, str] = {}
     for line in lines.values():
-        if line.model is not None and sum(line.model.gain) > 0:
-            per.setdefault(line.inst.group, []).append(line.model.importance())
-    groups = [g for g in qu.GROUPS if g in per]
+        m = line.model
+        if m is not None and sum(m.gain) > 0:
+            col = line.pool or line.inst.group
+            per.setdefault(col, {})[id(m)] = m.importance()
+            home[col] = line.inst.group
+    groups = [c for g in qu.GROUPS for c in sorted(c for c in per if c != g and home[c] == g) + ([g] if g in per else [])]
     rows = []
     for j, (name, label, _) in enumerate(FEATURES if groups else ()):           # (no model anywhere: no table)
-        shares = {g: sum(v[j] for v in per[g]) / len(per[g]) for g in groups}
+        shares = {g: sum(v[j] for v in per[g].values()) / len(per[g]) for g in groups}
         rows.append({"name": name, "label": label, "shares": shares})
     rows.sort(key=lambda r: -max(r["shares"].values()))
     return {"groups": groups, "rows": rows, "models": {g: len(per[g]) for g in groups}}
@@ -1230,7 +1425,7 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
     base["ml"] = tab
     base["signals"] = [s for s in v["signals"] + v["gated"] if s["family"] == FAMILY]
     base["settings"] = fit["cfg"]
-    keys = {r.get("key") for r in tab.get("rows") or ()} | {k for _, k in DRIVERS} | set(CURVE) | {"TLREF"}
+    keys = {r.get("key") for r in tab.get("rows") or ()} | {k for _, k in DRIVERS + TRY_OPTIONS} | set(CURVE) | {"TLREF"}
     base["coverage"] = [c for c in fit.get("coverage") or () if c.get("key") in keys]
     base["errors"] = {k: e for k, e in ((v.get("tables") or {}).get("errors") or {}).items() if k == FAMILY}
     return _clean(base)
