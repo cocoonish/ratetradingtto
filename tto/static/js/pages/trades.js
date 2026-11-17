@@ -22,9 +22,43 @@ const FIELD_TEXT = { trade_date: 'İşlem tarihi', settle_date: 'Valör', value_
   tenor_months: 'Vade (ay)', yield_conv: 'Getiri kuralı', fra: 'FRA', legs: 'Bacaklar', isin: 'ISIN',
   pair: 'Parite', quote_amount: 'Tutar (2. döviz)', amount_typed: 'Yazılan tutar', call_put: 'Call / put', strike: 'Strike',
   expiry: 'Vade (expiry)', delivery: 'Teslim', premium_ccy: 'Prim dövizi', premium_date: 'Prim valörü',
-  manual_price: 'Elle fiyat', note: 'Not', book: 'Karşı taraf / defter', weights: 'Ağırlıklar', notional_ccy: 'Döviz' };
+  manual_price: 'Elle fiyat', note: 'Not', book: 'Karşı taraf / defter', weights: 'Ağırlıklar', notional_ccy: 'Döviz',
+  target: 'Hedef', stop: 'Stop' };
 const SHOW = [['ccy', 'İşlem dövizi'], ['try', 'TL'], ['usd', 'USD']];
 const UNIT = { try: 'TL', usd: '$' };
+// a level's distance as the desk reads it (tto/tradebook.py levels_of: positive = still to go)
+const DIST = { bp: [1, ' bp'], pip: [0, ' pip'], '%': [1, '%'], puan: [3, ' puan'] };
+
+/** A trade's level (target, stop) in its own quote: a rate %38,50, a spread's -20,0 bp, a price, a premium. */
+function levelText(v, lu) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—';
+  const u = (lu && lu.short) || '';
+  if (u === '%' || u === 'getiri %') return '%' + num(v, Math.abs(v * 100 - Math.round(v * 100)) > 1e-6 ? 4 : 2);
+  if (u === 'bp') return (v > 0 ? '+' : '') + num(v, 1) + ' bp';
+  return num(v, lu && typeof lu.digits === 'number' ? lu.digits : 4);
+}
+
+/** What is left to a level ("80,0 bp", "1.500 pip", "+150,0%"), or that it was reached. */
+function distText(d, unit) {
+  if (typeof d !== 'number' || !isFinite(d)) return '—';
+  if (d <= 0) return 'geldi';
+  const [digits, suffix] = DIST[unit] || [2, ''];
+  return num(d, digits) + suffix;
+}
+
+/** The unit a trade's target / stop is typed in, as its price box shows it (tto/tradebook.py level_spec). */
+function levelUnitOf(product, structure, priceKind) {
+  if (product === 'ois' || product === 'sofr') return structure === 'spread' || structure === 'fly' ? 'bp' : '%';
+  if (product === 'dibs') return priceKind === 'yield' ? 'getiri %' : 'temiz fiyat';
+  return product === 'fxspot' ? 'kur' : 'prim tutarı';
+}
+
+let bondsCache = null;
+/** The bonds of the form's ISIN list (the catalog), once a page. */
+function bondCatalog() {
+  if (!bondsCache) bondsCache = api.get('/api/bonds/catalog').then((d) => d.bonds || [], () => { bondsCache = null; return []; });
+  return bondsCache;
+}
 
 function pref(key, fallback) {
   try { return localStorage.getItem('tto.trades.' + key) || fallback; } catch (e) { return fallback; }
@@ -142,9 +176,12 @@ export class TradesPage {
     this.scope = pref('scope', 'desk') === 'personal' ? 'personal' : 'desk';
     this.show = ['ccy', 'try', 'usd'].includes(pref('show', 'ccy')) ? pref('show', 'ccy') : 'ccy';
     this.legRows = pref('legrows', '') === '1';
+    this.quantOnly = pref('quant', '') === '1';
     this.data = null;
+    this.quant = null;
     this.expanded = new Set();
     this.bonds = null;
+    this.loadedAt = 0;
     this.reloadSoon = debounce(() => { this.reload().catch(() => {}); }, 150);
   }
 
@@ -157,11 +194,21 @@ export class TradesPage {
     const data = await api.get('/api/trades', { scope: this.scope });
     if (this.dead || data.scope !== this.scope) return;
     this.data = data;
+    this.loadedAt = Date.now();
+    if (this.quantOnly) this.loadQuant().catch(() => {});
     this.paint();
   }
 
-  /** Nothing of this page follows the market: the lists come again when they change (``onDesk``). */
-  refresh() { return Promise.resolve(); }
+  /** The values come with "MTM yenile"; only the distances to the targets and stops follow the market - the server values
+   * those trades every few seconds (the alarms' round): the list again at most every 10 s while one is open. */
+  refresh() {
+    const open = (this.data && this.data.open) || [];
+    if (!this.dead && open.some((it) => it.levels) && Date.now() - this.loadedAt > 10000) {
+      this.loadedAt = Date.now();
+      return this.reload().catch(() => {});
+    }
+    return Promise.resolve();
+  }
 
   /** The live stream's counters: the desk's trades or one's own changed somewhere (another trader, another window). */
   onDesk(changed) {
@@ -199,12 +246,23 @@ export class TradesPage {
     legs.addEventListener('change', () => { this.legRows = legs.checked; setPref('legrows', legs.checked ? '1' : ''); this.paint(); });
     const log = h('button', { class: 'btn sm', type: 'button', id: 'trades-log', title: 'Bu sekmedeki işlemlerde kim, ne zaman, ne yaptı' }, 'Değişiklik kaydı');
     log.addEventListener('click', () => this.showRecent());
+    // "Quant'tan": only the trades taken from a quant line ("İşleme al"), and per family what they made
+    this.quantBtn = h('button', { class: 'btn sm' + (this.quantOnly ? ' on' : ''), type: 'button', id: 'trades-quant', 'aria-pressed': String(this.quantOnly),
+      title: 'Yalnızca quant sinyallerinden ("İşleme al") alınan işlemler ve aile aile ne kazandırdıkları (masanın ve sizin kişisel işlemleriniz)' }, 'Quant\'tan');
+    this.quantBtn.addEventListener('click', () => {
+      this.quantOnly = !this.quantOnly;
+      setPref('quant', this.quantOnly ? '1' : '');
+      this.quantBtn.classList.toggle('on', this.quantOnly);
+      this.quantBtn.setAttribute('aria-pressed', String(this.quantOnly));
+      if (this.quantOnly) this.loadQuant().catch(errorToast);
+      this.paint();
+    });
     this.closeInfo = h('span', { class: 'muted', id: 'trades-close-info' });
     this.host.appendChild(this.tabs);
     this.host.appendChild(h('div', { class: 'page-tools' }, add, this.mtmBtn, this.mtmAt,
       h('span', { class: 'muted' }, 'Gösterim'), show,
       h('label', { class: 'check', title: 'Spread, fly ve FRA\'ların bacakları kendi satırlarında: vadelere göre outright pozisyon' }, legs, ' Bacaklar ayrı satır'),
-      log, h('span', { class: 'grow' }), this.closeInfo));
+      this.quantBtn, log, h('span', { class: 'grow' }), this.closeInfo));
     this.stale = h('div', { class: 'banner hidden', id: 'trades-stale' });
     this.host.appendChild(this.stale);
     const section = (id, title) => {
@@ -214,6 +272,7 @@ export class TradesPage {
       this.host.appendChild(el);
       return { el, body, count, id };
     };
+    this.quantSec = section('trades-quant-sec', 'Quant\'tan · aile aile');
     this.openSec = section('trades-open', 'Açık işlemler');
     this.totalSec = section('trades-totals', 'Toplamlar (TL · USD)');
     this.closedSec = section('trades-closed', 'Kapanan işlemler');
@@ -246,17 +305,59 @@ export class TradesPage {
       const last = d.close.last;
       this.closeInfo.textContent = 'Kapanış kaydı her iş günü ' + d.close.time + (last ? ' · son: ' + isoToTr(last.day) + (last.late ? ' (geç alındı)' : '') : ' · henüz yok');
     }
+    this.paintQuant();
     this.paintOpen();
     this.paintTotals();
     this.paintClosed();
+  }
+
+  /** The trades of the tab - with "Quant'tan" on, only those taken from a quant line. */
+  shown(list) {
+    const items = list || [];
+    return this.quantOnly ? items.filter((it) => it.source && it.source.kind === 'quant') : items;
+  }
+
+  // ------------------------------------------------------------------ "Quant'tan": per family, what its lines' trades made
+  async loadQuant() {
+    const d = await api.get('/api/trades/quant');
+    if (this.dead) return;
+    this.quant = d;
+    this.paintQuant();
+  }
+
+  paintQuant() {
+    const sec = this.quantSec;
+    sec.el.classList.toggle('hidden', !this.quantOnly);
+    if (!this.quantOnly) return;
+    clear(sec.body);
+    const d = this.quant;
+    sec.count.textContent = d ? 'masanın ve sizin kişisel işlemleriniz · ' + d.at.slice(11, 16) : 'yükleniyor…';
+    const t = h('table', { class: 'plain trades', id: 'trades-quant-table' });
+    const head = ['Aile', 'İşlem (masa / kişisel)', 'Açık', 'Kapanan', 'Toplam K/Z (TL)', 'Ortalama K/Z (TL)', 'Hedefte', 'Stopta', 'Diğer', 'İsabet'];
+    t.appendChild(h('tr', null, ...head.map((x, i) => h('th', { class: i < 2 ? 'l' : null }, x))));
+    const pnl = (v) => td(typeof v === 'number' ? signed(v) : '—', typeof v === 'number' ? (v > 0 ? 'pos' : (v < 0 ? 'neg' : '')) : 'muted');
+    const line = (f, cls) => h('tr', { class: cls || null, 'data-family': f.family || null }, td(f.label, 'l'), td(f.count + ' (' + f.desk + ' / ' + f.personal + ')', 'l'),
+      td(String(f.open)), td(String(f.closed)), pnl(f.pnl_try), pnl(f.avg_try), td(String(f.target)), td(String(f.stop)), td(String(f.other)),
+      td(typeof f.hit_rate === 'number' ? num(f.hit_rate * 100, 0) + '%' : '—', null, 'Kapananların hedefte kapanan payı'));
+    if (!d || !d.families.length) {
+      t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: String(head.length) }, d ? 'Henüz quant sinyalinden alınmış işlem yok: '
+        + 'Sinyaller listesinde bir satırın "İşleme al" düğmesiyle girin.' : 'Yükleniyor…')));
+    } else {
+      for (const f of d.families) t.appendChild(line(f));
+      t.appendChild(line(d.all, 'sum'));
+    }
+    sec.body.appendChild(t);
+    sec.body.appendChild(h('div', { class: 'note muted trades-note' }, 'Açık işlemin K/Z\'ı şimdiki değerle (işlem tarihinden bu yana), kapananınki '
+      + 'gerçekleşen. Hedefte / stopta: kapanış fiyatı o seviyede, ötesinde ya da hedef–stop aralığının %5\'i kadar yakınında; diğer: başka bir fiyattan '
+      + 'kapandı. İki sekme birlikte sayılır (masanın işlemleri ve sizin kişisel işlemleriniz).'));
   }
 
   // ------------------------------------------------------------------ the open trades
   paintOpen() {
     const sec = this.openSec;
     clear(sec.body);
-    const items = this.data ? this.data.open : [];
-    sec.count.textContent = this.data ? items.length + ' işlem' : 'yükleniyor…';
+    const items = this.shown(this.data ? this.data.open : []);
+    sec.count.textContent = this.data ? items.length + ' işlem' + (this.quantOnly ? ' (quant\'tan)' : '') : 'yükleniyor…';
     const mtm = this.values();
     const vals = (mtm && mtm.values) || {};
     const key = this.show;
@@ -265,12 +366,14 @@ export class TradesPage {
     const t = h('table', { class: 'plain trades', id: 'trades-open' });
     t.appendChild(h('tr', null, h('th', null, ''), h('th', { class: 'l' }, 'Ürün'), h('th', { class: 'l' }, 'İşlem'),
       h('th', null, 'İşlem tarihi'), h('th', null, 'İşlem fiyatı'), h('th', null, 'Güncel'),
+      h('th', { class: 'l', title: 'Hedefe ve stopa kalan (faiz bp, FX pip, opsiyon primin %\'si, kâğıt fiyatı puan); işaretli: aralığın dörtte biri kadar yakın ya da geldi' }, 'Hedef / stop'),
       h('th', null, 'MTM' + (key === 'ccy' ? '' : ' (' + UNIT[key] + ')')), h('th', null, 'Günlük K/Z'), h('th', null, 'Haftalık K/Z'),
       h('th', null, 'Toplam K/Z'), options ? h('th', { class: 'l' }, 'Greekler') : null, desk ? h('th', { class: 'l' }, 'Giren') : null,
       h('th', null, '')));
     if (!items.length) {
-      t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '13' },
-        this.data ? (desk ? 'Masanın açık işlemi yok.' : 'Açık kişisel işleminiz yok.') + ' "+ Yeni işlem" ile girin.' : 'Yükleniyor…')));
+      t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '14' },
+        this.data ? (this.quantOnly ? 'Bu sekmede quant sinyalinden alınmış açık işlem yok.' : (desk ? 'Masanın açık işlemi yok.' : 'Açık kişisel işleminiz yok.')
+          + ' "+ Yeni işlem" ile girin.') : 'Yükleniyor…')));
     }
     for (const it of items) {
       const v = vals[String(it.id)];
@@ -305,14 +408,11 @@ export class TradesPage {
     }
     tr.appendChild(exp);
     tr.appendChild(td(it.product_text + (it.structure && it.structure !== 'outright' ? ' · ' + (STRUCTURES.find((s) => s[0] === it.structure) || [0, it.structure])[1] : ''), 'l'));
-    const what = h('td', { class: 'l what' }, it.text);
-    if (it.fields && (it.fields.note || it.fields.book)) {
-      what.appendChild(h('div', { class: 'muted small' }, [it.fields.book, it.fields.note].filter(Boolean).join(' · ')));
-    }
-    tr.appendChild(what);
+    tr.appendChild(this.whatCell(it));
     tr.appendChild(td(isoToTr(it.trade_date), null, 'Valör ' + isoToTr(it.settle_date)));
     tr.appendChild(td(it.price_text));
     tr.appendChild(td(v && v.ok ? (v.price_text || num(v.price_now, 4)) : '', null, v && v.ok && it.fields && it.fields.manual_price != null ? 'elle fiyat' : null));
+    tr.appendChild(this.levelsCell(it));
     if (v && !v.ok) tr.appendChild(td(v.why || 'değerlenemedi', 'muted why', v.why || ''));
     else {
       const m = this.money(v, key);
@@ -326,11 +426,49 @@ export class TradesPage {
     return tr;
   }
 
+  /** The trade in the desk's words - its book and note, and the quant line it was taken from. */
+  whatCell(it) {
+    const what = h('td', { class: 'l what' }, it.text);
+    if (it.fields && (it.fields.note || it.fields.book)) {
+      what.appendChild(h('div', { class: 'muted small' }, [it.fields.book, it.fields.note].filter(Boolean).join(' · ')));
+    }
+    const src = it.source;
+    if (src && src.kind === 'quant') {
+      const lu = it.level_unit;
+      what.appendChild(h('div', { class: 'muted small tsrc', title: 'Sinyal ' + (src.line_id || '') + (src.at ? ' · ' + src.at : '')
+        + ' · sinyalin girişi ' + levelText(src.entry, lu) + ', hedefi ' + levelText(src.target, lu) + ', stopu ' + levelText(src.stop, lu) },
+      'Quant · ' + (src.family_label || src.family) + (src.instrument ? ' · ' + src.instrument : '')));
+    }
+    return what;
+  }
+
+  /** "Hedef / stop": each level and what is left to it (bp for rates, pips for FX, % of an option's premium), marked
+   * when the level now is within a quarter of the target–stop range or has reached it. */
+  levelsCell(it) {
+    const lv = it.levels;
+    if (!lv) return td('', 'l lv');
+    const lu = it.level_unit;
+    const bits = [];
+    const tip = [];
+    for (const [which, word] of [['target', 'H'], ['stop', 'S']]) {
+      const level = lv[which];
+      if (typeof level !== 'number') continue;
+      const d = lv['to_' + which];
+      bits.push(h('div', { class: 'lvl' + (lv.near === which ? ' near ' + which : ''), 'data-which': which },
+        word + ' ' + levelText(level, lu) + (typeof d === 'number' ? ' · ' + distText(d, lv.unit) : '')));
+      tip.push((which === 'target' ? 'Hedef ' : 'Stop ') + levelText(level, lu) + (typeof d === 'number' ? (d <= 0 ? ': geldi' : ': ' + distText(d, lv.unit) + ' kaldı') : ''));
+    }
+    if (typeof lv.now === 'number') tip.push('şimdi ' + levelText(lv.now, lu) + (lv.at ? ' (' + lv.at + ')' : ''));
+    else tip.push('henüz değerlenmedi');
+    tip.push('İzleme\'de alarmı kurulu: hedefe geldi / stopa geldi');
+    return h('td', { class: 'l lv' + (lv.near ? ' near-' + lv.near : ''), title: tip.join('\n') }, ...bits);
+  }
+
   /** A package's legs under it: each leg's MTM and P&L (and what the legs leave over of the whole). */
   legsOf(t, it, v, key, options, desk) {
     const per = v && v.periods;
     const legs = per && per.legs ? per.legs : null;
-    const span = 13 - (options ? 0 : 1) - (desk ? 0 : 1);
+    const span = 14 - (options ? 0 : 1) - (desk ? 0 : 1);
     if (!legs) {
       for (const lg of it.legs) t.appendChild(h('tr', { class: 'leg' }, td(''), td('', 'l'), td('↳ ' + lg.text, 'l'), h('td', { colspan: String(span - 3) })));
       if (!it.legs.length) t.appendChild(h('tr', { class: 'leg' }, td(''), h('td', { class: 'l muted', colspan: String(span - 1) }, 'Bacak değerleri "MTM yenile"den sonra görünür.')));
@@ -344,6 +482,7 @@ export class TradesPage {
       tr.appendChild(td(''));
       tr.appendChild(td(''));
       tr.appendChild(td(lg.price_text || (typeof lg.price_now === 'number' ? num(lg.price_now, 4) : '')));
+      tr.appendChild(td(''));
       const m = this.money(lg, key);
       tr.appendChild(td(m === null ? '' : num(m, 0)));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(lg[name], key));
@@ -359,7 +498,7 @@ export class TradesPage {
       tr.appendChild(td(''));
       tr.appendChild(td('', 'l'));
       tr.appendChild(td('↳ kalan', 'l muted'));
-      tr.appendChild(h('td', { colspan: '4' }));
+      tr.appendChild(h('td', { colspan: '5' }));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(r[name], key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(''));
@@ -383,6 +522,7 @@ export class TradesPage {
       tr.appendChild(td(isoToTr(it.trade_date)));
       tr.appendChild(td(''));
       tr.appendChild(td(lg ? (lg.price_text || (typeof lg.price_now === 'number' ? num(lg.price_now, 4) : '')) : ''));
+      tr.appendChild(i === 0 ? this.levelsCell(it) : td(''));
       const m = lg ? this.money(lg, key) : null;
       tr.appendChild(td(m === null ? (v && !v.ok ? '—' : '') : num(m, 0), m === null ? 'muted' : null, v && !v.ok ? v.why : null));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(lg ? lg[name] : null, key));
@@ -452,7 +592,7 @@ export class TradesPage {
   paintClosed() {
     const sec = this.closedSec;
     clear(sec.body);
-    const items = this.data ? this.data.closed : [];
+    const items = this.shown(this.data ? this.data.closed : []);
     sec.count.textContent = items.length ? items.length + ' işlem' : '';
     const key = this.show;
     const desk = this.scope === 'desk';
@@ -465,9 +605,11 @@ export class TradesPage {
       const r = it.realized;
       const tr = h('tr', { 'data-id': String(it.id), class: 'trade closed' });
       tr.appendChild(td(it.product_text, 'l'));
-      tr.appendChild(td(it.text, 'l what'));
+      tr.appendChild(this.whatCell(it));
       tr.appendChild(td(isoToTr(it.trade_date) + ' · ' + it.price_text));
-      tr.appendChild(td(isoToTr(it.close_date) + ' · ' + (it.close_price_text || '')));
+      const hit = it.levels && it.levels.hit;
+      tr.appendChild(td(isoToTr(it.close_date) + ' · ' + (it.close_price_text || '') + (hit ? ' · ' + { target: 'hedefte', stop: 'stopta', other: 'diğer' }[hit] : ''),
+        hit ? 'hit-' + hit : null, it.levels ? 'Hedef ' + levelText(it.levels.target, it.level_unit) + ' · stop ' + levelText(it.levels.stop, it.level_unit) : null));
       if (r && !r.ok) tr.appendChild(td(r.why || 'değerlenemedi', 'muted why', r.why));
       else tr.appendChild(pnlCell(r && r.periods ? r.periods.total : null, key));
       if (desk) tr.appendChild(td(it.created_by_name || '', 'l muted'));
@@ -589,12 +731,24 @@ export class TradesPage {
     } catch (err) { errorToast(err); }
   }
 
-  async bondList() {
-    if (!this.bonds) {
-      try { this.bonds = (await api.get('/api/bonds/catalog')).bonds || []; } catch (e) { this.bonds = []; }
-    }
-    return this.bonds;
+  bondList() {
+    return bondCatalog();
   }
+}
+
+/** "İşleme al" on a quant line (Sinyaller, a family's page, the line's card): the Trades form filled from the line as the
+ * server has it now (tto/tradequant.py: product, legs, side, the DV01 as a nominal on the desk's lot, the entry now,
+ * target and stop) - personal unless the form's "Liste" says otherwise; nothing is saved until "İşlemi kaydet". */
+export async function bookLine(line) {
+  try {
+    openTradeForm(await api.get('/api/trades/from-quant', { id: line.id, scope: 'personal' }));
+  } catch (err) { errorToast(err); }
+}
+
+/** The Trades form, filled (``prefill``: /api/trades/from-quant's answer), on whatever page is open. */
+export function openTradeForm(prefill) {
+  const page = { scope: prefill.scope || 'personal', data: null, reload: async () => {}, setScope: () => {}, bondList: bondCatalog };
+  return new TradeForm(page, null, prefill);
 }
 
 // ---------------------------------------------------------------------- the form: a new trade, or one changed
@@ -602,11 +756,13 @@ export class TradesPage {
 // when the product, the pair, the trade date or the expiry changes - unless the user typed into it.  A DV01 typed gives
 // the nominal (rounded to 5 mn) and the DV01 it actually gives; a nominal typed wins and its DV01 is shown as information.
 class TradeForm {
-  constructor(page, item) {
+  constructor(page, item, prefill) {
     this.page = page;
     this.item = item;
-    const f = item ? item.fields : null;
-    this.scope = item ? item.scope : page.scope;
+    this.prefill = prefill || null;
+    const f = item ? item.fields : (prefill ? prefill.trade : null);
+    this.scope = item ? item.scope : (prefill ? prefill.scope || 'personal' : page.scope);
+    this.source = prefill ? prefill.source || null : null;          // (the quant line it is taken from: kept with it)
     this.product = f ? f.product : (pref('product', 'ois'));
     if (!PRODUCTS.some((p) => p[0] === this.product)) this.product = 'ois';
     this.structure = (f && f.structure) || 'outright';
@@ -621,8 +777,13 @@ class TradeForm {
     if (f) this.fromTrade(f);
     this.askPreview = debounce(() => this.preview(), 250);
     this.askSize = debounce(() => this.size(), 300);
-    this.m = modal({ title: item ? 'İşlemi düzenle' : 'Yeni işlem', width: 980, onClose: () => { this.closed = true; this.askPreview.cancel(); this.askSize.cancel(); } });
+    const from = prefill && prefill.line ? ' · ' + (prefill.line.family_label || prefill.line.family || 'quant') + ' sinyalinden' : '';
+    this.m = modal({ title: item ? 'İşlemi düzenle' : 'Yeni işlem' + from, width: 980, onClose: () => { this.closed = true; this.askPreview.cancel(); this.askSize.cancel(); } });
     this.m.box.id = 'trade-form';
+    if (prefill && prefill.line) {
+      this.m.body.parentNode.insertBefore(h('div', { class: 'banner tf-from', id: 'tf-from' }, 'Sinyal: ' + (prefill.line.text || prefill.line.id)
+        + ' - alanlar sinyalin şimdiki seviyeleriyle dolu; değiştirip "İşlemi kaydet" deyin (Masa ya da Kişisel: "Liste").'), this.m.body);
+    }
     this.build();
     this.defaults();
     this.preview();
@@ -640,13 +801,14 @@ class TradeForm {
     };
     for (const k of ['trade_date', 'settle_date', 'value_date', 'end_date', 'fra', 'isin', 'pair', 'strike', 'expiry',
       'delivery', 'notional', 'quote_amount', 'note', 'book', 'manual_price', 'premium_ccy']) put(k, f[k]);
+    for (const k of ['target', 'stop']) put(k, f.product === 'fxopt' ? amountText(f[k]) : f[k]);
     if (f.tenor && (f.structure || 'outright') === 'outright') put('end_date', f.tenor);
     const meeting = f.mpc_date || f.meeting;
     if (meeting) { this.values.mpc_date = meeting; this.values.mpc_end = f.mpc_end || null; this.typed.add('mpc_date'); }
     this.values.price = f.price_kind === 'yield' ? plain(f.yield) : plain(f.price);
     if (f.product === 'fxopt') this.values.price = amountText(f.price);
     this.typed.add('price');
-    for (const k of ['side', 'call_put', 'price_kind', 'amount_typed', 'dv01_ccy']) if (f[k]) this.values[k] = f[k];
+    for (const k of ['side', 'call_put', 'price_kind', 'amount_typed', 'dv01_ccy', 'yield_conv']) if (f[k]) this.values[k] = f[k];
     const rates = f.product === 'ois' || f.product === 'sofr';
     if (rates) this.values.side = rateSide(f.side);
     if ((f.legs || []).length) {
@@ -771,6 +933,15 @@ class TradeForm {
     else if (p === 'dibs') this.layoutDibs();
     else if (p === 'fxspot') this.layoutFxSpot();
     else this.layoutFxOpt();
+    // target and stop (optional) in the trade's own quote: İzleme's "hedefe geldi" / "stopa geldi" alarms follow them
+    const lu = levelUnitOf(p, st, this.values.price_kind);
+    const hint = rates ? (st === 'spread' || st === 'fly' ? 'örn. -20,0' : 'örn. 37,50') : (p === 'fxopt' ? 'örn. 300k' : 'opsiyonel');
+    this.levelsRow = h('div', { class: 'row tf-levels' },
+      field('Hedef (' + lu + ')', this.box('target', hint, 'num'), { name: 'target', width: '150px' }),
+      field('Stop (' + lu + ')', this.box('stop', hint, 'num'), { name: 'stop', width: '150px' }),
+      h('div', { class: 'muted small tf-levels-note' }, 'İsteğe bağlı. Kaydedince İzleme\'de alarm kurulur ("hedefe geldi" / "stopa geldi"; masanın işleminde herkese); '
+        + 'satırda hedefe ve stopa kalan görünür. Boş bırakılan kaldırılır.'));
+    this.specific.appendChild(this.levelsRow);
     this.extra.appendChild(field('Elle fiyat (piyasa fiyatlayamazsa)', this.box('manual_price', 'opsiyonel', 'num'), { name: 'manual_price', width: '190px' }));
     this.extra.appendChild(field('Karşı taraf / defter', this.box('book', 'opsiyonel'), { name: 'book', width: '170px' }));
     this.extra.appendChild(field('Not', this.box('note', 'opsiyonel'), { name: 'note', width: '300px' }));
@@ -888,6 +1059,10 @@ class TradeForm {
     row.appendChild(this.pick('side', [['B', 'ALIŞ'], ['S', 'SATIŞ']], 'Yön'));
     if (!this.values.price_kind) this.values.price_kind = 'price';
     row.appendChild(this.pick('price_kind', [['price', 'Temiz fiyat'], ['yield', 'Getiri']], 'Fiyat', () => this.layout()));
+    if (this.values.price_kind === 'yield') {
+      if (!this.values.yield_conv) this.values.yield_conv = 'bileşik';
+      row.appendChild(this.pick('yield_conv', [['bileşik', 'Bileşik'], ['basit', 'Basit']], 'Getiri kuralı'));
+    }
     row.appendChild(field('DV01 dövizi', this.dv01Ccy()));
     for (const el of this.sizing('', 'TL')) row.appendChild(el);
     this.specific.appendChild(row);
@@ -1073,7 +1248,8 @@ class TradeForm {
   payload() {
     const v = this.values;
     const p = { scope: this.scope, product: this.product, trade_date: v.trade_date || '', settle_date: v.settle_date || '',
-      price: v.price || '', manual_price: v.manual_price || '', book: v.book || '', note: v.note || '' };
+      price: v.price || '', manual_price: v.manual_price || '', book: v.book || '', note: v.note || '', target: v.target || '', stop: v.stop || '' };
+    if (this.source && !this.item) p.source = this.source;
     const sizing = (prefix, out) => {
       out.notional = v[prefix + 'notional'] || '';
       out.sized_by = this.sized[prefix] || 'notional';
@@ -1102,6 +1278,7 @@ class TradeForm {
       } else sizing('', p);
     } else if (this.product === 'dibs') {
       Object.assign(p, { isin: v.isin || '', side: v.side || '', price_kind: v.price_kind || 'price' });
+      if (p.price_kind === 'yield') p.yield_conv = v.yield_conv || 'bileşik';
       sizing('', p);
     } else if (this.product === 'fxspot') {
       Object.assign(p, { pair: v.pair || '', side: v.side || '', amount_typed: v.amount_typed || 'base' });
@@ -1158,7 +1335,10 @@ class TradeForm {
       const body = this.payload();
       const res = this.item ? await api.post('/api/trades/' + this.item.id, body) : await api.post('/api/trades', body);
       this.m.close();
-      toast(this.item ? (res.changed ? 'İşlem değişti: ' + res.text : 'Değişiklik yok') : 'Kaydedildi: ' + res.text, 'ok', 4200);
+      const al = res.alarms || {};
+      const said = al.full ? ' · alarm listesi dolu: ' + al.full + ' alarm kurulamadı' : (al.set ? ' · İzleme\'de ' + al.set + ' alarm kuruldu' : '');
+      toast(this.item ? (res.changed ? 'İşlem değişti: ' + res.text + said : 'Değişiklik yok')
+        : 'Kaydedildi: ' + res.text + (this.prefill ? ' (Trades → ' + (res.scope === 'desk' ? 'Masa' : 'Kişisel') + ')' : '') + said, al.full ? 'warn' : 'ok', 5200);
       if (!this.item && res.scope && res.scope !== this.page.scope) this.page.setScope(res.scope);
       else await this.page.reload();
     } catch (err) {

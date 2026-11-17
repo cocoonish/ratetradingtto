@@ -8,6 +8,7 @@ import { toolsOf } from '../columns.js';
 import { Chart } from '../chart.js';
 import { num, isoToTr } from '../format.js';
 import { readLine, isInfo } from './quantread.js';
+import { bookLine } from './trades.js';
 
 export const BLUE = '4F81BD', GREY = '7F7F7F', PURPLE = '8064A2', GREEN = '9BBB59', RED = 'C0504D', ORANGE = 'F79646';
 export const isNum = (v) => typeof v === 'number' && isFinite(v);
@@ -435,6 +436,7 @@ export class SignalChart {
     if (px) trade.append(' · ' + ((s.info || {}).size || '1 mn ' + mo.base));      // (a universe line's own size: Trend's "1,4 mn EUR")
     else if (isNum(mo.per_bp)) trade.append(' · ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp');
     else if (isNum(mo.per_unit) && (s.info || {}).size) trade.append(' · ' + s.info.size);
+    trade.append(' ', bookButton(s, this.id('quant-sig-book')));
     rows.push(['İşlem', trade]);
     // its place in the list: the group, TRY OIS's end, an Offshore line's "offshore limiti"; a gate's hold: "düşük güven"
     if (s.group) {
@@ -539,6 +541,27 @@ export class SignalChart {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ "İşleme al"
+// Every AL / SAT line Trades can book - TRY OIS outright / 1:1 spread / 50/50 fly / FRA / PPK period, a DİBS bond, an FX
+// spot - opens the Trades form filled from it (tto/tradequant.py; the server says which: ``s.book``); the others say why not.
+const BOOK_TIP = 'Trades formunu bu satırla doldur: ürün, bacaklar, yön, DV01\'den nominal, giriş (şimdiki seviye), hedef ve stop - kaydedene kadar hiçbir şey kaydolmaz';
+
+/** The list's cell: the button, or a dash with the reason in its tooltip. */
+export function bookCell(s) {
+  const b = s.book || {};
+  if (b.ok) return { t: '', k: '', cls: 'act', act: { id: 'book', label: 'İşleme al', title: BOOK_TIP, fn: () => bookLine(s) } };
+  return T('—', { cls: 'soft', tip: 'Trades\'e alınamaz: ' + (b.why || 'bilinmiyor') });
+}
+
+/** The card's button (disabled, with the reason, for a line Trades cannot book). */
+export function bookButton(s, id) {
+  const b = s.book || {};
+  const el = h('button', { class: 'btn sm', type: 'button', id: id || null, disabled: !b.ok, title: b.ok ? BOOK_TIP : 'Trades\'e alınamaz: ' + (b.why || 'bilinmiyor') },
+    'İşleme al');
+  if (b.ok) el.addEventListener('click', () => bookLine(s));
+  return el;
+}
+
 /** The rows of a signal table (the ranked list, and each analysis page's own signals). */
 /** The gates of a signal in one line: ✓ passed, ✗ failed (the tooltip says why). */
 /** A signal's family backtest in a cell: trades · hit rate · average P&L in σ. */
@@ -570,6 +593,7 @@ export function signalRows(list, opts = {}) {
     // family's line - Trend's - in the plan's one-line format: "SAT USDTRY 1A forward · 1 mn USD · giriş … · model: Trend")
     row.push(T(((s.info || {}).model || s.family_label) + (s.intraday ? ' · gün içi' : '')), T(s.asset),
       T(s.line || s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
+      bookCell(s),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
       N(px ? px.entry : s.entry, px ? px.digits : s.digits, px ? at : { tip: sheetText(s, s.entry).trim() || undefined }),
@@ -593,7 +617,7 @@ export function signalRows(list, opts = {}) {
   });
 }
 
-export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'İsabet', 'Yarı ömür (g)', 'Tutma',
+export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'Trades', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'İsabet', 'Yarı ömür (g)', 'Tutma',
   'Carry / hf', 'Carry % / yıl', 'Rejim', 'Uyum', 'Kapılar', 'Geri test'];
 
 /** A status table of the quant worker: what every page shows at the bottom (and the first thing before a result). */
