@@ -824,8 +824,7 @@ class TradeBook(object):
             if not self.store.tb_put_close(day, at, late, values):
                 return None
         with self._lock:
-            for k in list(self._seq):
-                self._seq[k] += 1                            # (the pages show the last close)
+            self._seq["desk"] = self._seq.get("desk", 0) + 1    # (every page shows the last close: everybody's counter)
         nudge = getattr(self.svc, "nudge", None)
         if nudge is not None:
             nudge()
@@ -1281,7 +1280,7 @@ class TradeBook(object):
     def _close_days(self) -> Tuple[Dict[str, _dt.datetime], Optional[str], Optional[str]]:
         """The closes taken: day -> its close moment; the last one; the last one of the week before."""
         today = self._today()
-        days = self.store.tb_close_days(400)
+        days = self.store.tb_close_days(100000)              # (all of them: ~250 a year - a total's carry goes back to its first)
         at = {}
         for d in days:
             try:
