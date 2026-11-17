@@ -5,6 +5,7 @@ import { h, clear, toast, errorToast, debounce, menu, modal, inFormControl } fro
 import { configureGrid, clearSelection, findCell, selectionText } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
+import { TradesPage } from './pages/trades.js';
 import { BrokerPage } from './pages/broker.js';
 import { openStatus } from './status.js';
 import { VolPage } from './pages/vol.js';
@@ -420,6 +421,7 @@ async function openPage(id, panel, sub) {
   let page;
   if (id === 'launchpad') page = new LaunchpadPage(host, ctx, { name: sub });
   else if (id === 'blotter') page = new BlotterPage(host, ctx);
+  else if (id === 'trades') page = new TradesPage(host, ctx);
   else if (id === 'broker') page = new BrokerPage(host, ctx);
   else if (id === 'vol') page = new VolPage(host, ctx);
   else if (id === 'watch') page = new WatchPage(host, ctx);

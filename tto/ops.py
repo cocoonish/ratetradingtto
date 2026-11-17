@@ -96,13 +96,16 @@ DEFAULTS: Dict[str, Any] = {
     "tlref_alarm": True, "tlref_due": "14:00",   # today's TLREF fixing is not in by then (published after 12:45 by
                                                  # Borsa İstanbul's rules of 2019; the history fetches it every 15 min)
     "db_alarm": True,                            # the database's check at the start, or its nightly backup, failed
+    # the Trades page's close (tradebook.py): every open trade's value kept each business day at this time - a day
+    # missed while the dashboard was off at its next start (the daily backup's time by default)
+    "trades_close": "17:30",
 }
 #: the bounds of the numbers among them
 RANGES = {"tick_stale": (10, 3600), "feed_minutes": (1, 240)}
 #: their names in the desk's log of changes
 NAMES = {"market_open": "piyasa açılışı", "market_close": "piyasa kapanışı", "tick_stale": "bayat sayılma (sn)",
          "feed_alarm": "veri akışı alarmı", "feed_minutes": "veri akışı alarmı (dk)", "tlref_alarm": "TLREF alarmı",
-         "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı"}
+         "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı", "trades_close": "Trades kapanış saati"}
 #: the system alarms, in the order the page lists them
 SYSTEM_KINDS = tuple(SYSTEM)
 _HHMM = re.compile(r"^([01]?\d|2[0-3])[:.]([0-5]\d)$")
@@ -1085,7 +1088,7 @@ class Ops(object):
 
     def look(self, now: _dt.datetime) -> None:
         """One look of the loop (every 15 s): market hours, the day's backup when due, the days that wait to reach the
-        chosen folder (every BACKUP_RETRY), the system alarms."""
+        chosen folder (every BACKUP_RETRY), the Trades page's close when due, the system alarms."""
         try:
             self.market_hours(now)
         except Exception as exc:  # noqa: BLE001 - the loop must survive anything
@@ -1099,6 +1102,13 @@ class Ops(object):
             self.catch_up()
         except Exception as exc:  # noqa: BLE001
             self.failure("yedeğin seçilen klasöre kopyası", exc)
+        try:
+            # the Trades page's close: every open trade's value, once a business day (a day missed: at the start)
+            book = getattr(self.svc, "tradebook", None)
+            if book is not None:
+                book.look(now)
+        except Exception as exc:  # noqa: BLE001 - tried again after tradebook.RETRY
+            self.failure("Trades kapanış kaydı", exc)
         try:
             self.system_checks(now)
         except Exception as exc:  # noqa: BLE001

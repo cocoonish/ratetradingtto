@@ -424,7 +424,8 @@ export class WatchPage {
     } else {
       box.appendChild(h('div', { class: 'note' }, 'Piyasa saatleri ' + (cfg.market_open || '') + '–' + (cfg.market_close || '') + ' (masanın iş günleri) · '
         + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı')
-        + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + ' · ayarları yöneticiler değiştirir.'));
+        + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + (cfg.trades_close ? ' · Trades kapanış kaydı ' + cfg.trades_close : '')
+        + ' · ayarları yöneticiler değiştirir.'));
     }
     // ---- the day's log
     box.appendChild(h('div', { class: 'desk-sub' }, 'Bugünün kaydı'));
@@ -445,7 +446,8 @@ export class WatchPage {
     const on = (key) => h('input', { type: 'checkbox', id: 'desk-set-' + key, checked: cfg[key] ? true : null });
     const f = (label, el) => h('div', { class: 'field' }, h('label', null, label), el);
     const form = h('div', { class: 'desk-settings', id: 'desk-settings' },
-      f('Piyasa açılış', time('market_open')), f('Kapanış', time('market_close')), f('Tick gelmezse bayat', n('tick_stale', 'sn')),
+      f('Piyasa açılış', time('market_open')), f('Kapanış', time('market_close')),
+      f('Trades kapanış kaydı', time('trades_close')), f('Tick gelmezse bayat', n('tick_stale', 'sn')),
       h('label', { class: 'check' }, on('feed_alarm'), 'Veri akışı alarmı'), f('akmazsa', n('feed_minutes', 'dk')),
       h('label', { class: 'check' }, on('tlref_alarm'), 'TLREF alarmı'), f('fixing gelmediyse', time('tlref_due')),
       h('label', { class: 'check' }, on('db_alarm'), 'Veritabanı alarmı'));

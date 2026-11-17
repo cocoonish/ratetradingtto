@@ -266,6 +266,10 @@ class Service(object):
         # the desk's own corner: reports to the administrators, the chat (Sosyal), the agenda (Ajanda)
         from .desk import Desk
         self.desk = Desk(self)
+        # Trades: the desk's and each trader's own trades with their MTM and P&L, apart from the desk's position
+        # (tradebook.py; their own tables - nothing of the desk's reads them)
+        from .tradebook import TradeBook
+        self.tradebook = TradeBook(self)
         # quant signals (quant.py): statistics of the closes in a thread of their own, never on the engine thread
         from .quant import Quant
         self.quant = Quant(self)
@@ -1462,6 +1466,8 @@ class Service(object):
             pages.append({"id": "heat", "title": "Eğri Hareketi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "blotter", "title": "Günlük İşlemler", "group": "Masa", "book": "tto",
                           "sheet": bl.SHEET, "custom": True})
+            # the trades followed on their own (tradebook.py): the desk's and each trader's, never the blotter's
+            pages.append({"id": "trades", "title": "Trades", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "broker", "title": "Broker Chat", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             # pages of the dashboard's own: what happened over time, and the settings behind it
             pages.append({"id": "eod", "title": "Gün Sonu Matrisi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
