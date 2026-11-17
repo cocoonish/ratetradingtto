@@ -105,3 +105,23 @@ export function axisNum(v, span) {
   if (a < 0.05) digits = 4; else if (a < 0.5) digits = 3; else if (a < 5) digits = 2; else if (a < 50) digits = 1;
   return num(v, digits, Math.abs(v) >= 10000);
 }
+
+/** "gbp" / "GBPTRY" / "gbp/try" -> "GBPTRY" (a currency alone is against TRY); null when it is not a pair. */
+export function pairOf(text) {
+  const s = String(text || '').replace(/[^A-Za-z]/g, '').toUpperCase();
+  if (s.length === 3 && s !== 'TRY') return s + 'TRY';
+  if (s.length === 6 && s.slice(0, 3) !== s.slice(3)) return s;
+  return null;
+}
+
+/** "10m", "2,5 mio", "500k", "2mr", "1.000.000" -> number (null when not understood) - as the server reads it
+ *  (tto/inputs.py parse_amount). */
+export function parseAmount(text) {
+  const m = /^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mln|mio|milyon|b|bn|mr|mlr|milyar)?\s*$/i.exec(text || '');
+  if (!m) return null;
+  const x = parseNumber(m[1]);
+  if (x === null) return null;
+  const u = (m[2] || '').toLowerCase();
+  const mult = !u ? 1 : (u === 'k' || u === 'bin') ? 1e3 : (['b', 'bn', 'mr', 'mlr', 'milyar'].includes(u)) ? 1e9 : 1e6;
+  return x * mult;
+}

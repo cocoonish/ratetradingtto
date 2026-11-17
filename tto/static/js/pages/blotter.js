@@ -4,7 +4,7 @@ import { api, session } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
-import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings } from '../format.js';
+import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings, pairOf, parseAmount } from '../format.js';
 import { PositionPanel } from '../retposition.js';
 import { renderTemplates, openBulk } from './blotterentry.js';
 
@@ -28,29 +28,9 @@ const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat
 const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: '', note: '', amount: '' },
   ois: { strategy: 'outright', side: null, level: '', note: '' }, bond: { instrument: '', price: '', note: '', amount: '' } };
 
-/** "gbp" / "GBPTRY" / "gbp/try" -> "GBPTRY" (a currency alone is against TRY); null when it is not a pair. */
-export function pairOf(text) {
-  const s = String(text || '').replace(/[^A-Za-z]/g, '').toUpperCase();
-  if (s.length === 3 && s !== 'TRY') return s + 'TRY';
-  if (s.length === 6 && s.slice(0, 3) !== s.slice(3)) return s;
-  return null;
-}
-
 /** The DV01 of an OIS leg with the desk's sign: payer is plus, receiver is minus. */
 function payerPlus(leg) {
   return typeof leg.dv01 === 'number' ? (leg.dir === 'S' ? -leg.dv01 : leg.dv01) : null;
-}
-
-/** "10m", "2,5 mio", "500k", "2mr", "1.000.000" -> number (null when not understood) - as the server reads it
- *  (tto/inputs.py parse_amount). */
-export function parseAmount(text) {
-  const m = /^\s*([+-]?[\d.,\s]+?)\s*(k|bin|m|mn|mln|mio|milyon|b|bn|mr|mlr|milyar)?\s*$/i.exec(text || '');
-  if (!m) return null;
-  const x = parseNumber(m[1]);
-  if (x === null) return null;
-  const u = (m[2] || '').toLowerCase();
-  const mult = !u ? 1 : (u === 'k' || u === 'bin') ? 1e3 : (['b', 'bn', 'mr', 'mlr', 'milyar'].includes(u)) ? 1e9 : 1e6;
-  return x * mult;
 }
 
 /** A number kept in a template, read the same in Turkish and in English: a lone group of three ("17.400", "10,000" -
@@ -356,9 +336,11 @@ export class BlotterPage {
     } catch (e) { spec = null; }
     if (!spec || !this.showTab || !PREFILL_CLEARS[spec.kind]) return false;
     if (!spec.cpt) delete spec.cpt;                    // (no counterparty in the quote: the one typed stays)
+    const said = spec.said || 'İşlem kotadan dolduruldu: tutarı yazıp kaydedin';      // (a Ctrl+K command says its own)
+    delete spec.said;
     const done = this.fillForm(Object.assign({ dir: null }, PREFILL_CLEARS[spec.kind], spec));
     if (!done) return false;
-    toast('İşlem kotadan dolduruldu: tutarı yazıp kaydedin' + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
+    toast(said + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
     return true;
   }
 
@@ -1292,3 +1274,5 @@ export class BlotterPage {
 }
 
 export { settings };
+// (what is typed - a pair, an amount - is read in format.js: the Ctrl+K commands read it the same way)
+export { pairOf, parseAmount };

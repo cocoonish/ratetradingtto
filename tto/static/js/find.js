@@ -1,7 +1,7 @@
 // "Tablo bul": every table of every page by its name, from wherever you are (Ctrl+K).
 // The workbook keeps a hundred-odd tables on a dozen sheets; here you type "interest" or "ret" and go - or put the table
 // on a launchpad, or pin it to the side drawer, without going there.  Empty, the box lists the pages opened lately.
-import { h, clear } from './ui.js';
+import { h, clear, toast } from './ui.js';
 
 const MAX = 14;
 const low = (s) => String(s || '').toLocaleLowerCase('tr').replace(/ı/g, 'i');      // "interest" finds "Interest"
@@ -29,7 +29,9 @@ export function findTables(pages, query) {
 
 /**
  * opts: {recent(): [{id, title}] - the pages opened lately; add(src, x, y) - "+ Launchpad"'s menu for a table;
- *        pin(src) - the table to the side drawer}.  On a table: Ctrl+Enter puts it on a launchpad, Shift+Enter pins it.
+ *        pin(src) - the table to the side drawer; commands(text) - the text read as a command (commands.js: null, or
+ *        its suggestions, shown first); run(c) - a command's suggestion done}.  On a table: Ctrl+Enter puts it on a
+ *        launchpad, Shift+Enter pins it.  Returns {refresh()}: the list read again (what a command offers came in).
  */
 export function setupFind(box, getPages, goto, opts = {}) {
   const input = box.querySelector('input');
@@ -42,6 +44,15 @@ export function setupFind(box, getPages, goto, opts = {}) {
   const pick = (k) => {
     const x = hits[k];
     if (!x) return;
+    if (x.cmd) {
+      // a command: its template written into the box; what it expected said again; else done
+      const c = x.cmd;
+      if (c.complete !== undefined) { input.value = c.complete; search(); input.focus(); return; }
+      if (c.error) { toast(c.error, 'err', 5000); return; }
+      done();
+      if (opts.run) opts.run(c);
+      return;
+    }
     done();
     goto(x.page, x.panel);
   };
@@ -60,8 +71,10 @@ export function setupFind(box, getPages, goto, opts = {}) {
     if (empty) list.appendChild(h('div', { class: 'fh' }, 'Son açılan sayfalar'));
     else if (!hits.length) list.appendChild(h('div', { class: 'none' }, 'Eşleşen tablo yok'));
     hits.forEach((x, k) => {
-      const row = h('div', { class: 'hit' + (k === cur ? ' on' : '') + (x.recent ? ' recent' : ''), role: 'option' },
-        h('span', { class: 't' }, x.text), h('span', { class: 'w' }, x.where));
+      const row = h('div', { class: 'hit' + (k === cur ? ' on' : '') + (x.recent ? ' recent' : '')
+        + (x.cmd ? ' cmd' + (x.cmd.error ? ' err' : '') + (x.cmd.complete !== undefined ? ' tpl' : '') : ''), role: 'option',
+      title: x.cmd && x.cmd.error ? x.cmd.error : null },
+      h('span', { class: 't' }, x.text), h('span', { class: 'w' }, x.where));
       if (x.panel && (opts.add || opts.pin)) {
         const acts = h('span', { class: 'acts' });
         if (opts.add) {
@@ -85,11 +98,15 @@ export function setupFind(box, getPages, goto, opts = {}) {
     });
     list.classList.remove('hidden');
   };
-  const search = () => {
-    hits = input.value.trim() ? findTables(getPages(), input.value) : recentHits();
+  function search() {
+    const q = input.value;
+    // a command first (its suggestions, what it expected, its template), then the tables as before
+    const cmds = q.trim() && opts.commands ? (opts.commands(q) || []) : [];
+    hits = cmds.map((c) => ({ cmd: c, text: c.label, where: c.error && c.label !== c.error ? c.error : (c.note || '') }))
+      .concat(q.trim() ? findTables(getPages(), q) : recentHits());
     cur = 0;
     paint();
-  };
+  }
   input.addEventListener('input', search);
   input.addEventListener('focus', search);
   input.addEventListener('blur', () => setTimeout(close, 120));
@@ -114,4 +131,5 @@ export function setupFind(box, getPages, goto, opts = {}) {
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); input.focus(); input.select(); }
   });
+  return { refresh: () => { if (document.activeElement === input) search(); } };
 }
