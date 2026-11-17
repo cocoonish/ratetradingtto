@@ -19,9 +19,10 @@ the dates - of input cells formatted as dates (or declared ``"kind": "date"``) a
 ``+5``             five business days after the start
 =================  ======================================================================================================
 
-Case, the Turkish dotted / dotless i and spaces do not matter.  "The start" is the cell's natural start, the caller's to
-say: the row's spot / value date where the page definition names one (``"tenor"`` of an input, tto/views/__init__.py),
-else today's spot.  The business days are those of the calendar the caller gives (the desk's holiday lists of both
+Case, the Turkish dotted / dotless i and spaces do not matter ("3m" is "3M").  "The start" is the cell's natural start,
+the caller's to say: the row's spot / value date where the page definition names one (``"tenor"`` of an input,
+tto/views/__init__.py) or the cell's formulas do (tto/datecells.py: the date the workbook counts its days from), else
+today's spot.  The business days are those of the calendar the caller gives (the desk's holiday lists of both
 currencies of the pair: :func:`tto.extras.pair_calendar`).  Text that starts with "=" is a formula, never a shortcut;
 anything that is no shortcut here (a date, a number) is parsed as it always was.
 """

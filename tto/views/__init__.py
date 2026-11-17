@@ -15,7 +15,11 @@
   SPOTDATE, T+1 on the TRY list) -, ``"pair_col": "A"`` - the pair is the one written in that column of the row - and
   ``"from"`` - the cell's natural start: a cell (``"C167"``, ``"Forward!I2"``), a column of the same row (``"B"``: the
   end date of a row counts from its start date) or a row of the same column (``"40"``); the cell itself, an empty start
-  or one that is no date: today's spot of the pair (as the user's own calculation has it).
+  or one that is no date: today's spot of the pair (as the user's own calculation has it).  What ``"tenor"`` does not
+  say the cell's formulas do (tto/datecells.py): the pair of the dates it is made of (``=+I2``: USDTRY), and - for a
+  date input without a ``"tenor"`` (or a cell typed over: "Elle değer") - the start the workbook counts its days from
+  (``O35 = O34-O33``: the End counts from the Start).  A date input whose cell is not formatted as a date is shown as
+  one (``dd.mm.yyyy``).
 * ``panels``  ``{"type": "table", "range": "B29:J39", "title": "...", "hidden": false}`` |
               (``"sheet": "VIOP", "borrowed": true``: a few cells of another page's sheet, shown here as well) |
   ``{"type": "chart", "chart": <index of the chart on the sheet>}`` | ``{"type": "notes", "range": ...}`` |

@@ -226,3 +226,151 @@ def test_a_date_input_of_the_page_definitions_is_shown_as_one(desk):
     b = svc.books["tto"]
     si, rc = b.cell("VIOP!M331")
     assert not numfmt.is_date_format(b.model.xfs[b.model.sheets[si].styles.get(rc, 0)][0])
+
+
+# ---------------------------------------------------------------------------------------------- where a typed date counts
+def test_the_formulas_say_where_a_date_counts_from(desk):
+    """The pair of the dates a cell is made of, its start from the workbook's own day count - a spot date is no start
+    (MASA!E60 counts its days from C60 and from the OIS spot date: C60)."""
+    svc = desk
+    b = svc.books["tto"]
+
+    def ctx(ref):
+        pair, start = svc.et.call(svc._date_context, b, *b.cell(ref))
+        return pair, (None if start is None else "%s!%s" % (b.model.sheets[start[0]].name, a1(start[1])))
+
+    assert ctx("Forward!O33") == ("USDTRY", None)                  # =+I2
+    assert ctx("Forward!O34") == ("USDTRY", "Forward!O33")         # =+D2 (USDTRY's value date); O35 = O34-O33
+    assert ctx("EK_FWD!G101") == ("EURTRY", None)                  # =DATE(YEAR(Forward!$K$2) …)
+    assert ctx("Forward!AK6") == ("EURTRY", "Forward!AK5")          # (as its page definition says too)
+    assert ctx("MASA!E60") == ("USDTRY", "MASA!C60")
+    assert ctx("DV01_RISK!C112") == ("TRY", None)                   # =WORKDAY(SPOTDATE,-2,…)
+    assert ctx("EK_FWD!O68")[0] is None                             # USDTRY's or EURTRY's spot, as the row says
+
+
+def test_the_start_is_shown_as_a_date_and_takes_tenors_from_usdtrys_spot(desk):
+    """The trader's table: Start shown 04.11.2026 (it was 46.330,0000); "3m" there is USDTRY's spot + 3 months on
+    USDTRY's calendar - 04.02.2027, planted a US holiday: the next business day, 05.02.2027 (the TRY money market would
+    stay on the 4th) -, "18m" in the End counts from that Start: 05.08.2028 is a Saturday, 07.08.2028; N follows."""
+    svc = desk
+    on(svc, RECORDED)
+    u = svc.login("Tarih Start")["user"]
+    usd = holidays(svc, u, "USD", [D(2027, 2, 4)])
+    try:
+        before = shown(svc, "Forward!O33", u)
+        assert before["t"] == "04.11.2026" and before["k"] == "d" and before["ik"] == "date" and before["i"] == "u"
+        assert shown(svc, "Forward!O35", u)["k"] == "n"                     # N: a number of days, as before
+        got, note, errors = typed(svc, u, "Forward!O33", "3m")
+        assert errors == [] and got == D(2027, 2, 5)
+        assert note == {"typed": "3m", "date": serial(D(2027, 2, 5)), "text": "05.02.2027"}
+        assert shown(svc, "Forward!O33", u)["t"] == "05.02.2027"
+        got, note, errors = typed(svc, u, "Forward!O34", "18m")
+        assert errors == [] and got == D(2028, 8, 7) and note["text"] == "07.08.2028"
+        assert cell(svc, "Forward!O35", u) == (D(2028, 8, 7) - D(2027, 2, 5)).days == 549
+        # the TRY money market's own cell does not see the US holiday
+        assert typed(svc, u, "OIS_MAIN!B123", "3m")[0] == D(2027, 2, 4)
+        # blanked: back to the formulas (the spot date, the value date)
+        svc.set_inputs(u, "tto", [{"ref": "Forward!O33", "value": ""}, {"ref": "Forward!O34", "value": ""}])
+        assert day(svc, "Forward!O33", u) == D(2026, 11, 4) and day(svc, "Forward!O34", u) == day(svc, "Forward!D2", u)
+    finally:
+        svc.set_holidays(u, usd, "USD")
+        svc.reset_inputs(u, "tto")
+
+
+def test_a_us_holiday_in_the_way_of_the_start(desk):
+    """Friday 23.10.2026, USDTRY spot Monday 26.10: one month on is Thanksgiving - the Start takes Friday 27.11 (a TRY
+    money market date stays on Thursday the 26th)."""
+    svc = desk
+    u = svc.login("Tarih Thanksgiving")["user"]
+    try:
+        on(svc, D(2026, 10, 23))
+        assert day(svc, "Forward!O33", u) == D(2026, 10, 26)
+        assert typed(svc, u, "Forward!O33", "1m")[0] == D(2026, 11, 27)
+        assert typed(svc, u, "OIS_MAIN!B123", "1m")[0] == D(2026, 11, 26)
+    finally:
+        svc.reset_inputs(u, "tto")
+        on(svc, RECORDED)
+
+
+def test_a_cell_made_of_eurtrys_spot_counts_from_it(desk):
+    """EK_FWD!G101 (the EURTRY matrix's spot date, typed over: "Elle değer") is made of Forward!K2: "6m" is EURTRY's
+    spot 05.11.2026 + 6 months, 05.05.2027 - planted a TARGET2 holiday, 06.05.2027; the matrix's dated row (declared
+    EURTRY) the same."""
+    svc = desk
+    on(svc, RECORDED)
+    u = svc.login("Tarih EURTRY")["user"]
+    eur = holidays(svc, u, "EUR", [D(2027, 5, 5)])
+    try:
+        got, note, errors = typed(svc, u, "EK_FWD!G101", "6m", adhoc=True)
+        assert errors == [] and got == D(2027, 5, 6) and note["typed"] == "6m"
+        assert typed(svc, u, "EK_FWD!B104", "6M")[0] == D(2027, 5, 6)
+        assert typed(svc, u, "Forward!O33", "6m")[0] == D(2027, 5, 4)      # USDTRY: its own spot, the EUR day no holiday
+    finally:
+        svc.set_holidays(u, eur, "EUR")
+        svc.reset_inputs(u, "tto")
+
+
+@pytest.mark.parametrize("lower, upper", [
+    ("3m", "3M"), ("3a", "3A"), ("18m", "18M"), ("1y", "1Y"), ("2w", "2W"), ("2h", "2H"), ("on", "ON"), ("tn", "TN"),
+    ("sn", "SN"), ("ay sonu", "AY SONU"), ("imm", "IMM"), ("+5", "+5"),
+])
+def test_lower_and_upper_case_are_the_same(desk, lower, upper):
+    svc = desk
+    on(svc, RECORDED)
+    u = svc.login("Tarih Harf")["user"]
+    try:
+        a, b = typed(svc, u, "Forward!O33", lower), typed(svc, u, "Forward!O33", upper)
+        assert a[2] == b[2] == [] and a[0] == b[0] and type(a[0]) is D, (lower, a, b)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_3m_in_an_amount_is_three_million_and_a_number_never_a_date(desk):
+    """The DV01 table's Tutar takes "3m" as 3.000.000, as ever; its N (a number of days) typed over with "3m" keeps the
+    text - it is no date -, and so does a rate."""
+    svc = desk
+    on(svc, RECORDED)
+    u = svc.login("Tarih Tutar")["user"]
+    try:
+        assert typed(svc, u, "Forward!O45", "3m") == (3e6, None, [])
+        assert typed(svc, u, "Forward!O45", "3M") == (3e6, None, [])
+        assert typed(svc, u, "Forward!O35", "3m", adhoc=True) == ("3m", None, [])
+        assert typed(svc, u, "Forward!AH9", "3m") == ("3m", None, [])
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_meeting_dates_keep_their_own_rule(desk):
+    """A PPK meeting's date is the calendar's: "3m" there is refused as before - no meeting moves; no newly dated cell
+    is a cell that moves with its meeting."""
+    from tto import meetings as mt
+    svc = desk
+    on(svc, RECORDED)
+    u = svc.login("Tarih PPK")["user"]
+    try:
+        before = cell(svc, "OIS_MAIN!P10", u)
+        res = svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!P10", "value": "3m"}])
+        assert res["errors"] and "shortcuts" not in res and cell(svc, "OIS_MAIN!P10", u) == before
+    finally:
+        svc.reset_inputs(u, "tto")
+    for book_id, boxes in dcl.SHOWN.items():
+        b = svc.books[book_id]
+        for si, rc in dcl.cells_of(b.model, boxes):
+            assert mt.place(b, si, rc) is None, (book_id, a1(rc))
+
+
+def test_a_scenario_keeps_the_date_and_a_pasted_block_counts_cell_by_cell(desk):
+    svc = desk
+    on(svc, RECORDED)
+    u = svc.login("Tarih Senaryo")["user"]
+    try:
+        res = svc.paste(u, "tto", "Forward!O33", "3m\r\n18m\r\n")
+        assert res["errors"] == [] and set(res["shortcuts"]) == {"Forward!O33", "Forward!O34"}
+        assert day(svc, "Forward!O33", u) == D(2027, 2, 4) and day(svc, "Forward!O34", u) == D(2028, 8, 4)
+        svc.save_scenario(u, "tarih")
+        svc.reset_inputs(u, "tto")
+        assert day(svc, "Forward!O33", u) == D(2026, 11, 4)
+        svc.load_scenario(u, "tarih")
+        assert cell(svc, "Forward!O33", u) == serial(D(2027, 2, 4)) and day(svc, "Forward!O34", u) == D(2028, 8, 4)
+    finally:
+        svc.reset_inputs(u, "tto")
