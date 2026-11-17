@@ -1037,7 +1037,7 @@ def _swap_pv(mkt: Market, prod: str, leg: _Leg, asof: _dt.date, curve: Optional[
                 raise TradeError("%s fixing'i yok (%s)" % (conv.float_name, _short(a)))
             pv_flt += N * (f - d_b)
     s = leg.sign
-    return {"mtm": s * (pv_fix - pv_flt), "accrued": s * acc, "annuity": ann, "float": pv_flt,
+    return {"mtm": s * (pv_fix - pv_flt) + 0.0, "accrued": s * acc + 0.0, "annuity": ann, "float": pv_flt,
             "par": pv_flt / (N * ann) if ann > 0 and N else None}
 
 
@@ -1093,8 +1093,10 @@ def _par_rate(mkt: Market, prod: str, start: _dt.date, end: _dt.date, months: Op
 
 # ---------------------------------------------------------------------------------------------- rates: the trade
 def _rate_label(prod: str, start: _dt.date, end: _dt.date, months: Optional[int], spot: _dt.date) -> str:
+    """A swap as the desk names it: by its tenor while it starts at today's spot ("2Y OIS"), else by its end date (a
+    started or forward-starting one: its rate is the curve's to that date, "OIS 06.11.28")."""
     conv = CONVS[prod]
-    if months and start <= spot:
+    if months and start == spot:
         return "%s %s" % (tenor_label(months), conv.label)
     return "%s %s" % (conv.label, _short(end))
 
@@ -1387,7 +1389,7 @@ def _value_dibs(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, Any
     dirty1 = 0.0 if matured else clean1 + ai1
     paid = _coupons(bond, s0, v1) if v1 > s0 else 0.0
     mtm = sign * N / 100.0 * (dirty1 - dirty0)
-    accrued = sign * N / 100.0 * paid
+    accrued = sign * N / 100.0 * paid + 0.0
     # ---- carry: the yield unchanged one value date on, less the dirty price funded at TLREF
     hol = mkt.hol("TRY")
     v2 = _add_bd(v1, 1, hol)
@@ -1574,6 +1576,19 @@ def smile_vol(mkt: Market, pair: str, K: float, days: float, F: float, df_b: flo
                "premium_adjusted": p.premium, "fit": {k: (x * 100.0 if x is not None else None) for k, x in (info.get("fit") or {}).items()}}
 
 
+def _in_quote(mkt: Market, amount: float, ccy: str, pair: str, S: float) -> float:
+    """An amount of ``ccy`` in the pair's quote currency at today's rates (the base at the pair's spot)."""
+    base, quote = pair[:3], pair[3:]
+    if ccy == quote:
+        return amount
+    if ccy == base:
+        return amount * S
+    a, b = mkt.try_per(ccy), mkt.try_per(quote)
+    if not a or not b:
+        raise TradeError("prim dövizi çevrilemedi: %s" % ccy)
+    return amount * a / b
+
+
 def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, Any]:
     pair = t["pair"]
     base, quote = pair[:3], pair[3:]
@@ -1585,6 +1600,14 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
     S = mkt.spot(pair)
     if not S:
         raise TradeError("%s spot'u yok" % pair)
+    if t.get("status") == "closed" and _num(t.get("close_price")) is not None:
+        # unwound: the premium of the close (received for a bought option, paid for a sold one) against the opening
+        # one, both in the premium's currency at today's spot; nothing left to carry
+        pccy = (t.get("premium_ccy") or quote).upper()
+        opened, shut = _in_quote(mkt, float(t["price"]), pccy, pair, S), _in_quote(mkt, float(t["close_price"]), pccy, pair, S)
+        total = {"mtm": sign * (shut - opened), "accrued": None, "carry": 0.0, "price_now": None,
+                 "price_text": "%s %s %s kapandı" % (pair, _plain(K), "call" if call else "put")}
+        return _finish(mkt, t, quote, total, {"premium": t["price"], "close_premium": t["close_price"], "premium_ccy": pccy})
     notes: List[str] = []
     expired = expiry <= asof
     days = float((expiry - asof).days)
@@ -1614,15 +1637,7 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
     # ---- the premium, in its currency at today's spot
     prem = float(t["price"])
     pccy = (t.get("premium_ccy") or quote).upper()
-    if pccy == quote:
-        prem_q = prem
-    elif pccy == base:
-        prem_q = prem * S
-    else:
-        a, b = mkt.try_per(pccy), mkt.try_per(quote)
-        if not a or not b:
-            raise TradeError("prim dövizi çevrilemedi: %s" % pccy)
-        prem_q = prem * a / b
+    prem_q = _in_quote(mkt, prem, pccy, pair, S)
     mtm = value_q - sign * prem_q
     # ---- theta: the same spot, vol and rates, a day (and the days to the next business day) later
     nxt = _add_bd(asof, 1, mkt.pair_hol(pair))
@@ -2189,6 +2204,8 @@ def _check_dibs(t: Dict[str, Any], m: Market, td: _dt.date) -> Dict[str, Any]:
     if not known and not bd.isin_valid(isin):
         raise TradeError("ISIN geçersiz: %s" % isin)
     t["side"] = _side(t.get("side"), "dibs")
+    if t.get("notional") in (None, "") and t.get("dv01") not in (None, "") and isinstance(m, Market) and known:
+        t["notional"] = notional_for_dv01(t, t["dv01"], t.get("dv01_ccy") or "USD", m)["notional"]
     t["notional"] = _positive(t.get("notional"), "nominal")
     t["notional_ccy"] = "TRY"
     hol = m.hol("TRY")

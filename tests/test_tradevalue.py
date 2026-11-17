@@ -512,6 +512,28 @@ def test_results_are_plain_json():
     assert tv.value({"product": "ois"}, m)["ok"] is False and tv.value(None, m)["ok"] is False
 
 
+def test_closed_trades_keep_what_the_close_locked_in():
+    m = hand_market()
+    td = TODAY.isoformat()
+    # a swap unwound at 38 %: the fixed difference on the periods left, no carry
+    t = ois(price=40.0, tenor="2Y")
+    a = tv.value(t, m)["inputs"]["annuity"]
+    r = tv.value(dict(t, status="closed", close_price=38.0, close_date=td), m)
+    assert abs(r["mtm"] - N * 0.02 * a) < 1e-6 and r["carry_1d"] == 0.0
+    # FX spot and a bond at their close price, whatever the market does since
+    r = tv.value({"product": "fxspot", "pair": "EURUSD", "side": "B", "notional": 1e6, "price": 1.10, "trade_date": td,
+                  "status": "closed", "close_price": 1.12, "close_date": td}, m)
+    assert abs(r["mtm"] - 20000.0) < 1e-6 and r["carry_1d"] == 0.0
+    r = tv.value({"product": "dibs", "isin": "TRT150328T24", "side": "B", "notional": 10e6, "price": 99.0, "trade_date": td,
+                  "status": "closed", "close_price": 100.0, "close_date": td}, m)
+    assert abs(r["mtm"] - 10e6 / 100 * 1.0) < 1e-6 and r["carry_1d"] == 0.0 and r["inputs"]["source"] == "kapanış fiyatı"
+    # an option sold back: the close premium against the opening one
+    r = tv.value({"product": "fxopt", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 100000.0, "trade_date": td,
+                  "call_put": "call", "strike": 45.0, "expiry": "2027-02-03", "status": "closed", "close_price": 150000.0,
+                  "close_date": td}, m)
+    assert abs(r["mtm"] - 50000.0) < 1e-9 and r["carry_1d"] == 0.0 and r["greeks"] is None
+
+
 def test_manual_price_fallbacks():
     m = hand_market()
     td = TODAY.isoformat()
@@ -631,6 +653,10 @@ def test_notional_for_a_dv01():
     assert s["ccy"] == "USD" and abs(s["dv01_check"] - 42000) < 5e6 * 2 * 1e-4 * 42 / 2
     b = tv.notional_for_dv01({"product": "dibs", "isin": "TRT150328T24"}, 1000, "USD", m)
     assert abs(b["raw"] - 1000 * 42.0 / (101.766 / 1e6)) < 1e-6 and b["notional"] % 5e6 == 0
+    # entered as a DV01: check() sizes it the same way (a swap, a bond)
+    assert tv.check(ois(price=34.5, tenor="2Y", notional=None, dv01=1000), m)["notional"] == res["notional"]
+    assert tv.check({"product": "dibs", "isin": "TRT150328T24", "side": "B", "price": 100.0, "dv01": 1000, "trade_date": TODAY.isoformat()},
+                    m)["notional"] == b["notional"]
     pkg = tv.notional_for_dv01(ois(structure="fly", legs=[{"tenor": "1Y"}, {"tenor": "2Y"}, {"tenor": "5Y"}]), 1000, "USD", m)
     assert [round(lg["dv01_check"], 0) > 0 for lg in pkg["legs"]] == [True] * 3
     assert abs(pkg["legs"][0]["raw"] * 2 - tv.notional_for_dv01(ois(tenor="1Y"), 1000, "USD", m)["raw"]) < 1e-6
