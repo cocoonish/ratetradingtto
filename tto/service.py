@@ -4878,13 +4878,19 @@ class Service(object):
     def _trading_columns(self) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
         """The trading summary's columns in their groups: ``[(group, [(caption, key, tip), ...]), ...]``.  A column's key
         is its letter in the table as it was before the groups (what a user hid, or a launchpad box shows, stays that
-        column); the columns that came with the groups follow the old ones."""
+        column); the columns that came with the groups follow the old ones.  The FX swap group is on the FX swap implied TRY
+        curve (DİBS ASW's "ASW FX", ``rvfair.FX``)."""
+        from . import rvfair
         board = len(self._BOARD_HEADS)
         old = {k: index_to_col(k + 1) for k in range(19 + board + 1)}          # A .. S, the board, Kart
         new = [index_to_col(20 + board + 1 + k) for k in range(7)]
         fair = ("Kâğıdın ASW'si DİBS RV'nin %s ASW eğrisinde (a + b·t + c·t², sabit kuponlulara uydurulan) dursaydı %s: kirli "
                 "@spot = PV@%s − eğri ASW × annuity / 100, valöre fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi "
                 "BIST bileşik. Bono eğriye girmez: eğrinin kâğıdın vadesindeki değeri. TLREF / FRN / TÜFE: yok (nedeni üzerinde)")
+        fx_fair = ("Kâğıdın ASW FX'i DİBS ASW'nin ASW eğrisinde (a + b·t + c·t², sayfanın Eğri / grafik kuralıyla uydurulan; "
+                   + rvfair.FX_CURVE_TEXT + ") dursaydı %s: kirli @spot = PV − eğri ASW × annuity / 100 (DİBS ASW), valöre fonlama "
+                   "çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi BIST bileşik (DİBS RV'nin nakit akışlarıyla). TLREF / "
+                   "FRN / TÜFE: yok (nedeni üzerinde)")
         return [
             ("", [("★", old[0], "Trading listesinden çıkar (herkes için; DİBS ASW listesinden de)"),
                   ("Kâğıt", old[1], ""), ("ISIN", old[2], ""), ("Vade", old[3], ""),
@@ -4900,11 +4906,11 @@ class Service(object):
                             ("Adil fiyat", new[1], fair % ("OIS", "valördeki temiz fiyatı", "OIS")),
                             ("Pahalı / ucuz", old[12], "DİBS RV: ASW − eğrinin ASW'si (bp; + ucuz) · sabit kuponlu"),
                             ("Sinyal", old[13], "DİBS RV: pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
-            ("FX swap'a göre", [("ASW FX", new[2], "DİBS RV: FX swap ima TRY eğrisine (offshore) göre ASW (bp)"),
-                                ("Adil getiri %", new[3], fair % ("FX swap", "getirisi", "FX")),
-                                ("Adil fiyat", new[4], fair % ("FX swap", "valördeki temiz fiyatı", "FX")),
-                                ("Pahalı / ucuz", new[5], "DİBS RV: ASW FX − FX eğrisinin ASW'si (bp; + ucuz) · sabit kuponlu"),
-                                ("Sinyal", new[6], "DİBS RV: FX'e göre pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
+            ("FX swap'a göre", [("ASW FX", new[2], "DİBS ASW: ASW (bp), " + rvfair.FX_CURVE_TEXT),
+                                ("Adil getiri %", new[3], fx_fair % "getirisi"),
+                                ("Adil fiyat", new[4], fx_fair % "valördeki temiz fiyatı"),
+                                ("Pahalı / ucuz", new[5], "DİBS ASW: ASW FX − FX eğrisinin ASW'si (bp; + ucuz)"),
+                                ("Sinyal", new[6], "Pahalı / ucuz DİBS RV'nin eşiğini (Eşik bp) aşınca UCUZ / PAHALI")]),
             ("Risk", [("Mod. süre", old[14], "DİBS RV: modifiye süre"),
                       ("DV01 / 1mn", old[15], "DİBS RV: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
                       (self.USD_DV01_HEAD, old[16], "DV01'i 1.000 USD olan TL nominal: 1.000 × USDTRY ÷ DV01 / 1mn, 5 mn'a yuvarlı")]),
@@ -4915,11 +4921,13 @@ class Service(object):
         ]
 
     def _fair_cells(self, f: Dict[str, Any], side: str, fits: Dict[str, Any], valor: Any, own: Any, loc) -> List[Dict[str, Any]]:
-        """A bond's fair yield and fair clean price on one of DİBS RV's ASW curves (rvfair.py), with how each is made in
-        the tip; a dash that says why where there is none.  ``own``: the bond's own yield, said beside the fair one."""
-        name = "OIS" if side == "ois" else "FX swap"
+        """A bond's fair yield and fair clean price on one of the fitted ASW curves (rvfair.py: DİBS RV's OIS curve, DİBS
+        ASW's FX swap implied one), with how each is made in the tip; a dash that says why where there is none.  ``own``:
+        the bond's own yield, said beside the fair one."""
+        from . import rvfair
         if "yield" not in f:
-            dash = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": "%s eğrisine göre adil değer yok: %s" % (name, f.get("why") or "")}
+            why = ("OIS eğrisine göre adil değer yok: %s" if side == "ois" else rvfair.FX_CURVE_TEXT + ": adil değer yok – %s") % (f.get("why") or "")
+            dash = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": why}
             return [dict(dash), dict(dash)]
 
         def n(v: float, fmt: str) -> str:
@@ -4934,8 +4942,8 @@ class Service(object):
         span = fits[side]["span"]
         if f["stretched"]:
             parts.append("eğrinin kâğıtları %s yıl: bu vade dışında, eğri uzatıldı" % ("–".join(n(x, "0.00") for x in span) if span else "yok"))
-        parts.append("%s ASW eğrisi (%d kâğıt): %s; t = %s yıl → eğri ASW %s bp" % (name, fits[side]["n"], poly, n(f["t"], "0.00"),
-                                                                                   n(f["asw"], "0.0")))
+        curve = "OIS ASW eğrisi (%d kâğıt)" % fits[side]["n"] if side == "ois" else             "DİBS ASW'nin ASW eğrisi (%d kâğıt; %s)" % (fits[side]["n"], rvfair.FX_CURVE_TEXT)
+        parts.append("%s: %s; t = %s yıl → eğri ASW %s bp" % (curve, poly, n(f["t"], "0.00"), n(f["asw"], "0.0")))
         parts.append("kirli @spot = PV@%s %s − eğri ASW × annuity %s / 100 = %s" % ("OIS" if side == "ois" else "FX", n(f["pv"], "0.000"),
                                                                                    n(f["ann"], "0.0000"), n(f["dirty_spot"], "0.000")))
         when = " (%s)" % n(valor, "dd.mm.yyyy") if type(valor) is float else ""
@@ -4951,6 +4959,39 @@ class Service(object):
                 x["cls"] = cls
         return out
 
+    def _fx_curve(self, user: Optional[str]):
+        """DİBS ASW's sheet on the FX swap implied TRY curve as ``rvfair`` reads it (the calculation behind DİBS ASW's "ASW
+        FX" column and its FX swap chart, over the user's own inputs) - None without the ASW book or any FX swap price."""
+        from . import rvfair
+        book = self.books.get("asw")
+        if book is None or rvfair.FX_SHEET not in book.model.sheet_index or ex.FXC_SHEET not in book.model.sheet_index:
+            return None
+        calc, swapped = self._asw_fx_calc(book, user)
+        if calc is None:
+            return None
+        si = book.model.sheet_index[rvfair.FX_SHEET]
+        return rvfair.FxCurve(calc, si, rvfair.fx_rows(calc, si), swapped)
+
+    @staticmethod
+    def _fx_cells(f: Dict[str, Any], threshold: Any, loc) -> List[Dict[str, Any]]:
+        """A bond's own figures on the FX swap implied curve as DİBS ASW has them (rvfair's FX side): its ASW, the fitted
+        curve's ASW at its years, cheap / rich (+ cheap) and the signal at DİBS RV's threshold - empty cells (the reason
+        in the tip of the first) where there are none."""
+        from . import rvfair
+        src = "DİBS ASW · " + rvfair.FX_CURVE_TEXT
+
+        def bp(key: str) -> Dict[str, Any]:
+            v = f.get(key)
+            return {"t": numfmt.format_value(v, "0.0", loc), "v": v, "k": "n", "tip": src} if type(v) is float else {"t": "", "k": ""}
+
+        own = bp("own")
+        if own["t"] == "" and f.get("why"):
+            own = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": "FX swap ASW'si yok: %s" % f["why"]}
+        sig = rvfair.signal(f.get("rich"), threshold)
+        sig_cell = {"t": sig, "k": "s", "b": 1, "tip": "Pahalı / ucuz %s bp eşiğini aşınca (DİBS RV: Eşik bp)"
+                    % numfmt.format_value(threshold if type(threshold) is float else 0.0, "0.##", loc)} if sig else {"t": "", "k": ""}
+        return [own, bp("curve"), bp("rich"), sig_cell]
+
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
         """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity, in groups of
         columns - the price on the value date the bond is priced on (bid, ask, the last trade and when); against OIS and
@@ -4963,9 +5004,10 @@ class Service(object):
         cols = [x for _, items in groups for x in items]
         width = len(cols)
         top: List[Dict[str, Any]] = []
+        group_tips = {"FX swap'a göre": "DİBS ASW'nin ASW FX hesabı: " + rvfair.FX_CURVE_TEXT}
         for name, items in groups:
             top.append(dict({"t": name, "k": "s", "b": 1, "f": "hd", "al": "c"} if name else {"t": "", "k": ""},
-                            **({"cs": len(items)} if len(items) > 1 else {})))
+                            **({"cs": len(items)} if len(items) > 1 else {}), **({"tip": group_tips[name]} if name in group_tips else {})))
             top.extend({"sk": 1} for _ in items[1:])
         head = [dict({"t": cap, "k": "s", "b": 1, "f": "hd"}, **({"tip": tip} if tip else {})) for cap, _, tip in cols]
         rows: List[List[Dict[str, Any]]] = [top, head]
@@ -4980,7 +5022,9 @@ class Service(object):
         said = self._board_bonds(user)
         today = _dt.date.fromisoformat(self.today_iso())
         spot = self._usdtry_mid(book, calc)
-        fits = rvfair.read_fits(calc, si)
+        fx = self._fx_curve(user)
+        fits = rvfair.read_fits(calc, si, fx)
+        threshold = calc.get(si, 2, parse_a1("P1") % COLS)
 
         def cell(c: str, r: int, s: int = si) -> Dict[str, Any]:
             got = R.cell(calc, s, r, parse_a1("%s1" % c) % COLS, loc)
@@ -5018,14 +5062,15 @@ class Service(object):
             if not str(due.get("t") or "").strip() and type(mat) is float:
                 due = {"t": numfmt.format_value(mat, "dd.mm.yyyy", loc), "v": mat, "k": "n"}
             q = self._rv_quote(calc, si, r)
-            # what DİBS RV works out of the price in use: soft while no live quote stands behind it
-            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"), ("fx", "BF"), ("fx_rich", "BH"),
-                                                 ("fx_signal", "BI"))}
-            for k in ("N", "fx_signal"):
-                priced[k] = dict(priced[k], b=1)
+            # what DİBS RV works out of the price in use - and DİBS ASW on the FX swap implied curve: soft while no live
+            # quote stands behind it
+            f = rvfair.fair(calc, si, r, fits, fx)
+            fx_own, _, fx_rich, fx_signal = self._fx_cells(f["fx"], threshold, loc)
+            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"))}
+            priced.update({"fx": fx_own, "fx_rich": fx_rich, "fx_signal": fx_signal})
+            priced["N"] = dict(priced["N"], b=1)
             if q["stale"]:
                 priced = {k: self._soft(c, q["tip"]) for k, c in priced.items()}
-            f = rvfair.fair(calc, si, r, fits)
             valor, own = calc.get(si, r, parse_a1("P1") % COLS), calc.get(si, r, parse_a1("T1") % COLS)
             ois_y, ois_p = self._fair_cells(f["ois"], "ois", fits, valor, own, loc)
             fx_y, fx_p = self._fair_cells(f["fx"], "fx", fits, valor, own, loc)
@@ -5910,31 +5955,40 @@ class Service(object):
                 si = book.model.sheet_index["DİBS RV"]
                 sh = book.model.sheets[si]
                 want = ("Tip", "Kupon", "Fiyat durumu", "Kullanılan temiz", "Valör", "Kirli", "BIST bileşik getiri", "Alış−satış",
-                        "Getiri − OIS", "ASW (S/B)", "Uydurulmuş ASW (bp)", "Pahalı/ucuz (bp", "Sinyal", "ASW FX swap", "Pahalı/ucuz FX",
+                        "Getiri − OIS", "ASW (S/B)", "Uydurulmuş ASW (bp)", "Pahalı/ucuz (bp", "Sinyal",
                         "Mod. süre", "DV01 TL", "C+R (bp)", "Son işlem tarihi", "Son işlem fiyatı", "Bugün düşük", "Bugün yüksek")
+                # (DİBS RV's own FX columns are on the offshore ICAP curve: the card's FX swap figures are DİBS ASW's, below)
+                rv_fx = ("ASW FX", "Uydurulmuş ASW FX", "Pahalı/ucuz FX", "Sinyal FX")
                 q = self._rv_quote(calc, si, info["row"])
                 for c in range(1, sh.max_col + 1):
                     cap = sh.consts.get(4 * COLS + c)
-                    if isinstance(cap, str) and any(cap.strip().startswith(w) for w in want):
+                    if isinstance(cap, str) and any(cap.strip().startswith(w) for w in want) and not cap.strip().startswith(rv_fx):
                         cell = R.cell(calc, si, info["row"], c, loc)
                         if str(cell.get("t") or "").strip():
                             item = {"name": cap.strip(), "t": cell.get("t"), "c": cell.get("c")}
                             if q["stale"] and cap.strip().startswith(self._RV_PRICED):      # worked out of no live quote
                                 item.update(soft=True, tip=q["tip"])
                             out["rv"].append(item)
-                # the fair yield and price on each of DİBS RV's fitted ASW curves (as the trading summary has them), after
-                # the curves' own figures
+                # the fair yield and price on each fitted ASW curve and the bond's FX swap figures (DİBS ASW, on the FX swap
+                # implied curve) - as the trading summary has them - after the OIS curve's own figures
                 from . import rvfair
-                fits = rvfair.read_fits(calc, si)
-                f = rvfair.fair(calc, si, info["row"], fits)
+                fx = self._fx_curve(user_key(user) if user else None)
+                fits = rvfair.read_fits(calc, si, fx)
+                f = rvfair.fair(calc, si, info["row"], fits, fx)
                 valor, own = calc.get(si, info["row"], parse_a1("P1") % COLS), calc.get(si, info["row"], parse_a1("T1") % COLS)
-                fair = []
-                for side, name in (("ois", "OIS"), ("fx", "FX swap")):
-                    for what, c in zip(("Adil getiri", "Adil fiyat"), self._fair_cells(f[side], side, fits, valor, own, loc)):
-                        fair.append({"name": "%s (%s eğrisi)" % (what, name), "t": c["t"], "tip": c.get("tip"),
-                                     "soft": "soft" in (c.get("cls") or "")})
-                at = max([k + 1 for k, x in enumerate(out["rv"]) if x["name"].startswith(("ASW FX", "Pahalı/ucuz FX", "Sinyal FX"))]
-                         or [len(out["rv"])])
+
+                def item(name: str, c: Dict[str, Any]) -> Dict[str, Any]:
+                    return {"name": name, "t": c["t"], "tip": c.get("tip"), "soft": "soft" in (c.get("cls") or "")}
+
+                fair = [item("%s (OIS eğrisi)" % what, c) for what, c in zip(("Adil getiri", "Adil fiyat"),
+                                                                              self._fair_cells(f["ois"], "ois", fits, valor, own, loc))]
+                fx_own, _, fx_rich, fx_signal = self._fx_cells(f["fx"], calc.get(si, 2, parse_a1("P1") % COLS), loc)
+                for name, c in (("ASW FX ima (bp)", fx_own), ("Pahalı/ucuz FX ima (bp, + ucuz)", fx_rich), ("Sinyal FX ima", fx_signal)):
+                    if str(c.get("t") or "").strip():
+                        fair.append(item(name, self._soft(c, q["tip"]) if q["stale"] and c["t"] != "–" else c))
+                fair += [item("%s (FX swap ima eğrisi)" % what, c) for what, c in zip(("Adil getiri", "Adil fiyat"),
+                                                                                   self._fair_cells(f["fx"], "fx", fits, valor, own, loc))]
+                at = max([k + 1 for k, x in enumerate(out["rv"]) if x["name"].startswith("Sinyal")] or [len(out["rv"])])
                 out["rv"][at:at] = fair
                 out["row"] = info["row"]
             if ex.LIVE_SHEET in book.model.sheet_index:
