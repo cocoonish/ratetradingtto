@@ -1,6 +1,7 @@
 // RET faizleri: the desk's TRY RET bid / ask curve.  Typed or pasted from Excel, stored on the server
-// (shared by everyone, kept across restarts) with a history of every upload.  A second tab holds the fair value RET
-// (retfair.js): the rule-based curve the desk publishes from with "Kopyala ve yayınla".
+// (shared by everyone, kept across restarts) with a history of every upload and what it changed per tenor.  What the
+// boxes change against the saved curve shows as it is typed or pasted (Δ bid / Δ ask, a line above the table).  A second
+// tab holds the fair value RET (retfair.js): the rule-based curve the desk publishes from with "Kopyala ve yayınla".
 import { api } from './api.js';
 import { h, clear, modal, toast, errorToast, copyText } from './ui.js';
 import { num, raw, parseNumber } from './format.js';
@@ -84,16 +85,34 @@ export function shiftedRows(rows, shifts, sides) {
   });
 }
 
+/** A move in bp as the desk writes it: +25, −2,5, 0; '—' for none. */
+export function signedBp(x) {
+  if (typeof x !== 'number' || !isFinite(x)) return '—';
+  const r = Math.round(x * 10) / 10;
+  if (Math.abs(r) < 0.05) return '0';
+  return (r > 0 ? '+' : '−') + num(Math.abs(r), Math.abs(r - Math.round(r)) > 1e-9 ? 1 : 0, false);
+}
+
+/** What an upload changed, as the history keeps it ([{tenor, bid, ask}] in bp): "1M +25 / +25 · 2M +25 / +30". */
+export function changesText(changes) {
+  if (!Array.isArray(changes)) return '';
+  if (!changes.length) return 'değişen vade yok';
+  return changes.map((c) => c.tenor + ' ' + signedBp(c.bid) + ' / ' + signedBp(c.ask)).join(' · ');
+}
+
 /** The RET dialog; ``opts.tab`` 'fair' opens it on the fair value tab (else the tab used last). */
 export async function openRetEditor(ctx, opts) {
   let data;
   try { data = await api.get('/api/ret'); } catch (err) { errorToast(err); return; }
   const tenors = data.rows.map((r) => r.tenor);
   let fair = null;
-  const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 1040, onClose: () => { if (fair) fair.destroy(); } });
+  const m = modal({ title: 'RET faizleri (TRY RET bid / ask)', width: 1160, onClose: () => { if (fair) fair.destroy(); } });
   const inputs = {};                 // tenor -> {bid, ask, bp}
   const mids = {}, news = {}, lines = {}, spreads = {};
   const before = {};                 // tenor -> spread (bp) of the curve as it was opened (or last saved)
+  const savedCurve = {};             // tenor -> {bid, ask} (%) of the curve as it was opened (or last saved)
+  const dBid = {}, dAsk = {};        // tenor -> its Δ bid / Δ ask cell (bp, against the saved curve)
+  const diffLine = h('div', { class: 'ret-diff muted', id: 'ret-diff' });
   const meta = h('div', { class: 'muted' });
   const setMeta = (mt) => {
     meta.textContent = mt && mt.updated_at ? 'Son güncelleme: ' + mt.updated_at + (mt.updated_by ? ' · ' + (ctx.displayName(mt.updated_by)) : '')
@@ -104,7 +123,9 @@ export async function openRetEditor(ctx, opts) {
   table.appendChild(h('thead', null, h('tr', null, h('th', { class: 'l' }, 'Vade'), h('th', null, 'Gün'), h('th', null, 'Bid (%)'), h('th', null, 'Ask (%)'),
     h('th', null, 'Mid (%)'), h('th', { title: 'Ask − bid, baz puan: önce kayıtlı eğrinin, ok işaretinden sonra kutulardakinin (değiştirdiyseniz)' }, 'Spread (bp)'),
     h('th', { title: 'Bu vade kaç baz puan kayacak. "Tümünü kaydır" hepsini doldurur; bir vadeyi sabit tutmak için kutusunu silin ya da 0 yazın.' }, 'Kaydır (bp)'),
-    h('th', { class: 'l' }, 'Yeni bid / ask'))));
+    h('th', { class: 'l' }, 'Yeni bid / ask'),
+    h('th', { title: 'Kutulardaki bid − kayıtlı eğrinin bid\'i (açıldığı ya da son kaydedildiği hali), baz puan: yukarı yeşil, aşağı kırmızı' }, 'Δ bid (bp)'),
+    h('th', { title: 'Kutulardaki ask − kayıtlı eğrinin ask\'ı, baz puan' }, 'Δ ask (bp)'))));
   const tbody = h('tbody');
   const spreadOf = (bidText, askText) => {
     const b = percent(bidText), a = percent(askText);
@@ -125,10 +146,44 @@ export async function openRetEditor(ctx, opts) {
     el.appendChild(document.createTextNode(' → '));
     el.appendChild(h('b', null, bpText(now)));
   };
+  // ---- what the boxes change against the saved curve: Δ bid / Δ ask per tenor, the changed rows lit, a line above
+  const deltaOf = (t) => {
+    const s = savedCurve[t];
+    if (!s) return null;
+    const one = (now, was) => (now !== null && was !== null ? Math.round((now - was) * 10000) / 100 : null);
+    return { bid: one(percent(inputs[t].bid.value), s.bid), ask: one(percent(inputs[t].ask.value), s.ask) };
+  };
+  const moved = (d) => !!d && ((d.bid !== null && Math.abs(d.bid) >= 0.05) || (d.ask !== null && Math.abs(d.ask) >= 0.05));
+  const paintDelta = (el, x) => {
+    el.className = 'ret-delta' + (x === null || Math.abs(x) < 0.05 ? ' muted' : x > 0 ? ' up' : ' down');
+    el.textContent = x === null ? '—' : signedBp(x);
+  };
+  const updateSummary = () => {
+    const changed = tenors.filter((t) => moved(deltaOf(t)));
+    clear(diffLine);
+    diffLine.className = 'ret-diff' + (changed.length ? ' chg' : ' muted');
+    if (!changed.length) { diffLine.textContent = 'Kayıtlı eğriyle aynı: değişen vade yok'; return; }
+    diffLine.appendChild(h('b', null, 'Değişen ' + changed.length + ' vade: '));
+    changed.forEach((t, i) => {
+      const d = deltaOf(t);
+      if (i) diffLine.appendChild(document.createTextNode(' · '));
+      const side = (x) => h('span', { class: x === null || Math.abs(x) < 0.05 ? '' : x > 0 ? 'up' : 'down' }, signedBp(x));
+      diffLine.appendChild(h('span', { class: 'ret-diff-t' }, t + ' ', side(d.bid), ' / ', side(d.ask)));
+    });
+    const same = tenors.length - changed.length;
+    if (same) diffLine.appendChild(document.createTextNode(' · ' + same + ' vade aynı'));
+  };
+  const updateDelta = (t) => {
+    const d = deltaOf(t);
+    paintDelta(dBid[t], d ? d.bid : null);
+    paintDelta(dAsk[t], d ? d.ask : null);
+    lines[t].classList.toggle('ret-chg', moved(d));
+  };
   const updateMid = (t) => {
     const b = percent(inputs[t].bid.value), a = percent(inputs[t].ask.value);
     mids[t].textContent = b !== null && a !== null ? num((b + a) / 2, 3, false) : '';
     updateSpread(t);
+    if (lines[t]) { updateDelta(t); updateSummary(); }
   };
 
   // ---- shifting: every maturity shows by how much it will move; a maturity typed (or blanked) by hand is left alone
@@ -180,11 +235,15 @@ export async function openRetEditor(ctx, opts) {
     spreads[t].dataset.tenor = t;
     news[t] = h('td', { class: 'l ret-new muted' });
     news[t].dataset.tenor = t;
+    dBid[t] = h('td', { class: 'ret-delta muted' });
+    dAsk[t] = h('td', { class: 'ret-delta muted' });
+    for (const [el, side] of [[dBid[t], 'bid'], [dAsk[t], 'ask']]) { el.dataset.tenor = t; el.dataset.side = side; }
     bid.addEventListener('input', () => { updateMid(t); preview(t); });
     ask.addEventListener('input', () => { updateMid(t); preview(t); });
     bp.addEventListener('input', () => { own.add(t); preview(t); showPending(); });
     lines[t] = h('tr', null, h('td', { class: 'l' }, h('b', null, t)), h('td', { class: 'muted' }, typeof r.days === 'number' ? num(r.days, 0) : ''),
-      h('td', null, bid), h('td', null, ask), mids[t], spreads[t], h('td', null, bp), news[t]);
+      h('td', null, bid), h('td', null, ask), mids[t], spreads[t], h('td', null, bp), news[t], dBid[t], dAsk[t]);
+    lines[t].dataset.tenor = t;
     tbody.appendChild(lines[t]);
   }
   table.appendChild(tbody);
@@ -211,7 +270,10 @@ export async function openRetEditor(ctx, opts) {
       preview(t);
       n += 1;
     }
-    toast(n + ' vade yapıştırıldı – kontrol edip "Kaydet"e basın', 'ok', 3200);
+    // how much changed and where: the Δ columns and the line above the table; the toast says how many
+    const changed = tenors.filter((t) => moved(deltaOf(t))).length;
+    toast(n + ' vade yapıştırıldı – ' + (changed ? changed + ' vade kayıtlı eğriden farklı (Δ sütunları), kontrol edip "Kaydet"e basın'
+      : 'kayıtlı eğriyle aynı, değişen vade yok'), 'ok', 4200);
   };
   m.box.addEventListener('paste', onPaste);
 
@@ -288,8 +350,16 @@ export async function openRetEditor(ctx, opts) {
     copyBtn('Kopyala (tablo)', 'table', 'ret-copy', 'Vade · gün · bid · ask: Excel\'e ya da e-postaya yapıştırılabilir tablo'),
     copyBtn('Kopyala (mesaj)', 'message', 'ret-copy-msg', 'Sohbet penceresine atılacak hizalı metin: "1M   34,45 / 34,65"'));
 
-  // the spreads of the curve as it stands: what a change is shown against ("önceki → şimdi")
-  const markSaved = () => { for (const t of tenors) { before[t] = spreadOf(inputs[t].bid.value, inputs[t].ask.value); updateSpread(t); } };
+  // the curve as it stands: what a change is shown against (the spread's "önceki → şimdi", Δ bid / Δ ask)
+  const markSaved = () => {
+    for (const t of tenors) {
+      before[t] = spreadOf(inputs[t].bid.value, inputs[t].ask.value);
+      savedCurve[t] = { bid: percent(inputs[t].bid.value), ask: percent(inputs[t].ask.value) };
+      updateSpread(t);
+      updateDelta(t);
+    }
+    updateSummary();
+  };
   fillRows(data.rows);
   markSaved();
   saved = JSON.stringify(current());
@@ -306,7 +376,15 @@ export async function openRetEditor(ctx, opts) {
         const b = h('button', { class: 'btn sm', type: 'button', title: 'Bu kaydın değerlerini tabloya getir' },
           x.ts + (x.user ? ' · ' + ctx.displayName(x.user) : ''));
         b.addEventListener('click', () => { fillRows(x.rows); toast('Değerler tabloya getirildi – uygulamak için "Kaydet"e basın', '', 3200); });
-        hist.appendChild(b);
+        // what this upload changed against the curve before it, tenor by tenor (and where it came from)
+        const what = changesText(x.changes);
+        const item = h('div', { class: 'ret-hist-item' }, b);
+        item.dataset.id = x.id;
+        if (x.source || what) {
+          item.appendChild(h('div', { class: 'ret-hist-chg muted', title: (x.source ? x.source + '\n' : '') + (what ? 'Önceki eğriye göre (bp): ' + what : '') },
+            (x.source ? x.source + (what ? ': ' : '') : '') + what));
+        }
+        hist.appendChild(item);
       }
     } catch (err) { /* history is optional */ }
   };
@@ -319,7 +397,7 @@ export async function openRetEditor(ctx, opts) {
     'bid / ask görünür; sabit kalacak vadelerin "Kaydır" kutusunu silin (ya da farklı bir miktar yazın), sonra "Uygula". ',
     'Kaydedilen eğri tüm kullanıcılar için geçerlidir ve sunucu yeniden başlasa da saklanır.'));
   manual.appendChild(tools);
-  manual.appendChild(h('div', { class: 'ret-layout' }, h('div', null, table, meta), hist));
+  manual.appendChild(h('div', { class: 'ret-layout' }, h('div', null, diffLine, table, meta), hist));
   const save = h('button', { class: 'btn primary', type: 'button' }, 'Kaydet');
   save.addEventListener('click', async () => {
     if (pending().length) {
@@ -332,10 +410,11 @@ export async function openRetEditor(ctx, opts) {
       if (bid || ask) rows.push({ tenor: t, bid, ask });
     }
     save.disabled = true;
+    const changed = tenors.filter((t) => moved(deltaOf(t))).length;
     try {
       const res = await api.post('/api/ret', { rows });
       if (res.errors && res.errors.length) toast(res.errors.join('; '), 'err', 7000);
-      else toast('RET faizleri kaydedildi (' + res.applied + ' hücre)', 'ok');
+      else toast('RET faizleri kaydedildi (' + res.applied + ' hücre · ' + (changed ? changed + ' vade değişti' : 'değişen vade yok') + ')', 'ok');
       fillRows(res.ret.rows);
       markSaved();
       saved = JSON.stringify(current());
@@ -358,7 +437,7 @@ export async function openRetEditor(ctx, opts) {
       loadHistory();
     } catch (err) { /* the next opening shows it */ }
   };
-  fair = fairPane(ctx, { retText, onPublished: refill, onClose: () => m.close() });
+  fair = fairPane(ctx, { retText, signedBp, onPublished: refill, onClose: () => m.close() });
   const tManual = h('button', { type: 'button', id: 'ret-tab-manual', title: 'RET\'i elle girin, Excel\'den yapıştırın, kaydırın, kopyalayın' }, 'Elle giriş');
   const tFair = h('button', { type: 'button', id: 'ret-tab-fair',
     title: 'Kural tabanlı RET: her vadede taban (OIS / VİOP / offshore mid ya da karma) + tabana spread + akış ayarı, sabit genişlik, 5 bp yuvarlama' },
@@ -369,7 +448,7 @@ export async function openRetEditor(ctx, opts) {
     tFair.classList.toggle('on', isFair);
     manual.classList.toggle('hidden', isFair);
     save.classList.toggle('hidden', isFair);                 // ("Kaydet" is the manual table's)
-    m.box.style.width = isFair ? 'min(1440px, 97vw)' : 'min(1040px, 94vw)';
+    m.box.style.width = isFair ? 'min(1440px, 97vw)' : 'min(1160px, 95vw)';
     if (isFair) fair.show(); else fair.hide();
     try { localStorage.setItem('tto.ret.tab', which); } catch (e) { /* storage unavailable */ }
   };

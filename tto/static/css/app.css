@@ -634,6 +634,26 @@ table.plain.ret td.ret-new .chg { color: var(--accent-ink); font-weight: 650; }
 .ret-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
 .ret-hist { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
 .ret-hist .btn { text-align: left; }
+/* what the boxes change against the saved curve (Δ bid / Δ ask) and what each upload changed (the history) */
+table.plain.ret td.ret-delta { min-width: 52px; font-variant-numeric: tabular-nums; }
+table.plain.ret td.ret-delta.up, .ret-diff .up { color: var(--pos); font-weight: 650; }
+table.plain.ret td.ret-delta.down, .ret-diff .down { color: var(--neg); font-weight: 650; }
+table.plain.ret tr.ret-chg td { background: var(--note-bg); }
+.ret-diff { margin: 0 2px 8px; font-size: 12px; line-height: 1.5; }
+.ret-diff.chg { color: var(--ink); }
+.ret-diff .ret-diff-t { white-space: nowrap; }
+.ret-hist-item { display: flex; flex-direction: column; gap: 2px; }
+.ret-hist-chg { font-size: 11px; line-height: 1.35; padding: 0 2px; }
+/* the fair value's anchor ("Tabana göre"), the scenario and its comparison table */
+.seg.retfair-anchors button { padding: 2px 7px; font-size: 11.5px; }
+.retfair-scen-label { font-size: 12px; color: var(--ink-2); }
+.retfair-scen-label.on { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-weight: 650; }
+.retfair-scen-note { margin: -6px 2px 10px; font-size: 11.5px; }
+table.plain.retfair-scen td { padding: 3px 8px; font-variant-numeric: tabular-nums; }
+table.plain.retfair-scen td.cur, table.plain.retfair-scen th.cur { font-weight: 650; background: var(--accent-soft); }
+table.plain.retfair-scen .retfair-scen-d { font-size: 11px; font-weight: 500; }
+table.plain.retfair-scen .retfair-scen-d.pos { color: var(--pos); }
+table.plain.retfair-scen .retfair-scen-d.neg { color: var(--neg); }
 /* the RET dialog's tabs and its fair value part (retfair.js) */
 .tabs.ret-tabs { margin: -4px 0 12px; padding: 0; }
 .retfair-pane .ret-tools .sep { width: 1px; align-self: stretch; background: var(--line-2); margin: 0 4px; }

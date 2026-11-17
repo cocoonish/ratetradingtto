@@ -1,13 +1,19 @@
 // RET faizleri · Adil değer: the desk's rule-based RET (tto/retfair.py) beside the published one.  Per tenor a base
 // (OIS / VİOP / offshore mid, or a blend), the trader's offset, the flow adjustments accepted from suggestions and a
-// fixed width give "Şimdiki"; "Kopyala ve yayınla" copies it and writes it as the desk's RET.  Everything here is the
-// desk's (shared): every change goes to the server and into the log with who and when.
+// fixed width give "Şimdiki" - the base setting the mid, the bid or the ask ("Tabana göre"); "Kopyala ve yayınla" copies
+// it and writes it as the desk's RET.  The settings are the desk's (shared): every change goes to the server and into the
+// log with who and when.  "Senaryo" is the user's own: the market, or a PPK scenario of the OIS page in their own
+// calculation; a table puts every tenor under the market and each scenario side by side.
 import { api } from './api.js';
 import { h, clear, toast, errorToast, copyText } from './ui.js';
 import { num, parseNumber, isoToTr } from './format.js';
 
 const BASES = [['ois', 'OIS mid'], ['viop', 'VİOP mid'], ['off', 'Offshore mid'], ['blend', 'Karma']];
 const BASE_NAME = { ois: 'OIS mid', viop: 'VİOP mid', off: 'offshore mid', blend: 'karma' };
+const ANCHORS = [['bid', 'Bid', 'Taban + spread + akış bid\'i belirler (5 bp ızgarası), ask = bid + genişlik'],
+  ['mid', 'Mid', 'Taban + spread + akış mid\'i belirler: bid = mid − genişlik / 2 (5 bp ızgarası), ask = bid + genişlik'],
+  ['ask', 'Ask', 'Taban + spread + akış ask\'ı belirler (5 bp ızgarası), bid = ask − genişlik']];
+const MARKET = 'piyasa';
 const POLL_MS = 5000;
 
 function pct(v, digits) {
@@ -48,7 +54,7 @@ function store(key, value) {
  * The "Adil değer" part of the RET dialog.  ``retText(rows, kind, date)`` makes the clipboard text (the dialog's own
  * table / message formats); ``onPublished()`` is told after a publish (the manual part shows the new curve).
  */
-export function fairPane(ctx, { retText, onPublished, onClose }) {
+export function fairPane(ctx, { retText, signedBp, onPublished, onClose }) {
   const el = h('div', { id: 'ret-pane-fair', class: 'retfair-pane hidden' });
   let data = null;
   let timer = null;
@@ -86,8 +92,23 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
     if (onClose) onClose();
     window.location.hash = '#/blotter?p=position';
   });
+  // the user's own "Senaryo": the market, or a PPK scenario of the OIS page (its name from the SENARYOLAR table)
+  const scenSel = h('select', { class: 'inp', id: 'retfair-scenario',
+    title: 'Adil değeri hangi eğriyle görüyorsunuz: piyasa (masanın Şimdiki\'si) ya da OIS · PPK senaryolarından biri - sizin adımlarınız ve adlarınızla. '
+      + 'Seçim sizin (kişisel), hatırlanır; spread, taban, genişlik ve akış masanın kalır.' });
+  scenSel.addEventListener('change', () => {
+    const code = scenSel.value;
+    queue = queue.then(async () => {
+      busy = true;
+      try { render(await api.post('/api/ret/fair/view', { scenario: code })); } catch (err) { errorToast(err); } finally { busy = false; }
+    });
+  });
+  const scenLabel = h('span', { class: 'retfair-scen-label', id: 'retfair-scen-label' });
+  const scenNote = h('div', { class: 'muted retfair-scen-note hidden', id: 'retfair-scen-note' });
   el.appendChild(banner);
-  el.appendChild(h('div', { class: 'ret-tools retfair-top' }, fmtSeg, publishBtn, meta, h('span', { class: 'grow' }), posLink));
+  el.appendChild(h('div', { class: 'ret-tools retfair-top' }, fmtSeg, publishBtn, meta, h('span', { class: 'sep' }),
+    h('span', { class: 'muted' }, 'Senaryo'), scenSel, scenLabel, h('span', { class: 'grow' }), posLink));
+  el.appendChild(scenNote);
 
   // ---------------------------------------------------------------- many tenors at once
   const selCount = h('span', { class: 'muted', id: 'retfair-selcount' });
@@ -95,7 +116,8 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
   const bulkSet = h('button', { class: 'btn sm', type: 'button', id: 'retfair-bulk-set', title: 'Seçili vadelerin tabana spread\'ini bu baz puan yap' }, 'Spread yaz');
   const bulkShift = h('button', { class: 'btn sm', type: 'button', id: 'retfair-bulk-shift', title: 'Seçili vadelerin tabana spread\'ine bu kadar baz puan ekle (− ile azalt)' }, 'Kaydır');
   const fromPub = h('button', { class: 'btn sm', type: 'button', id: 'retfair-from-pub',
-    title: 'Seçili vadelerin tabana spread\'ini, Şimdiki yayınlanan RET\'e eşit olacak şekilde ayarla (yayınlanan mid − taban − akış)' }, 'Yayınlanandan al');
+    title: 'Seçili vadelerin tabana spread\'ini, Şimdiki yayınlanan RET\'e eşit olacak şekilde ayarla: yayınlanan mid (Mid vadesi), bid (Bid) '
+      + 'ya da ask (Ask) − taban − akış. Spread masanın: her zaman piyasa tabanıyla (senaryo görünümünde de).' }, 'Yayınlanandan al');
   const bulkBase = h('select', { class: 'inp', id: 'retfair-bulk-base' });
   for (const [v, label] of BASES) bulkBase.appendChild(h('option', { value: v }, label));
   const bulkBaseGo = h('button', { class: 'btn sm', type: 'button', id: 'retfair-bulk-base-apply', title: 'Seçili vadelerin tabanını değiştir (tabana spread aynı kalır)' }, 'Tabanı uygula');
@@ -109,8 +131,23 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
   bulkShift.addEventListener('click', () => { const x = bulkNumber(); if (x !== null) send('/api/ret/fair/tenors', { tenors: target(), shift: x }); });
   fromPub.addEventListener('click', () => send('/api/ret/fair/tenors', { tenors: target(), from_published: true }));
   bulkBaseGo.addEventListener('click', () => send('/api/ret/fair/tenors', { tenors: target(), base: bulkBase.value }));
+  // which quote the base sets, for the selected tenors (none selected: all) - one click
+  const bulkAnchor = h('div', { class: 'seg retfair-anchors', id: 'retfair-bulk-anchor' });
+  for (const [a, label, title] of ANCHORS) {
+    const b = h('button', { type: 'button', title: 'Seçili vadeler (seçim yoksa hepsi): ' + title }, label);
+    b.dataset.anchor = a;
+    b.addEventListener('click', () => send('/api/ret/fair/tenors', { tenors: target(), anchor: a }));
+    bulkAnchor.appendChild(b);
+  }
+  const paintBulkAnchor = () => {
+    // lit when every tenor it would change is set so already
+    const rowsOf = data ? data.rows.filter((r) => !selected.size || selected.has(r.tenor)) : [];
+    const one = rowsOf.length && rowsOf.every((r) => r.anchor === rowsOf[0].anchor) ? rowsOf[0].anchor : null;
+    for (const b of bulkAnchor.children) b.classList.toggle('on', b.dataset.anchor === one);
+  };
   el.appendChild(h('div', { class: 'ret-tools retfair-bulk' }, selCount, bulkBp, bulkSet, bulkShift, fromPub,
-    h('span', { class: 'sep' }), h('span', { class: 'muted' }, 'Taban'), bulkBase, bulkBaseGo));
+    h('span', { class: 'sep' }), h('span', { class: 'muted' }, 'Taban'), bulkBase, bulkBaseGo,
+    h('span', { class: 'sep' }), h('span', { class: 'muted', title: 'Taban + spread + akış hangi kotayı belirler' }, 'Tabana göre'), bulkAnchor));
 
   // ---------------------------------------------------------------- the main table
   const allBox = h('input', { type: 'checkbox', id: 'retfair-sel-all', title: 'Hepsini seç / bırak' });
@@ -122,7 +159,9 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
   });
   const table = h('table', { class: 'plain retfair', id: 'retfair-table' });
   table.appendChild(h('thead', null, h('tr', null, h('th', null, allBox), h('th', { class: 'l' }, 'Vade'), h('th', null, 'Gün'),
-    h('th', { class: 'l' }, 'Taban'), h('th', { title: 'Tabana spread: tabanın üstüne / altına baz puan (masanın, herkes için). Enter ile kaydedilir.' }, 'Tabana spread (bp)'),
+    h('th', { class: 'l' }, 'Taban'),
+    h('th', { title: 'Taban + spread + akış hangi kotayı belirler: Bid (ask = bid + genişlik), Mid (bid = mid − genişlik / 2) ya da Ask (bid = ask − genişlik). Masanın, herkes için.' }, 'Tabana göre'),
+    h('th', { title: 'Tabana spread: tabanın üstüne / altına baz puan (masanın, herkes için). Enter ile kaydedilir.' }, 'Tabana spread (bp)'),
     h('th', { title: 'Kabul edilen akış önerileri: spread\'den ayrı durur, genişliğe dokunmaz, kaldırılana kadar kalır (× ile)' }, 'Akış (bp)'),
     h('th', { class: 'l' }, 'Formül'), h('th', { title: 'Seçili tabanın mid\'i (basit ACT/360, RET\'in kendi tarihleri arası)' }, 'Taban mid %'),
     h('th', { title: 'Sabit bid–ask genişliği (bp): yalnızca Ekstra ayarlar\'da değişir' }, 'Genişlik'),
@@ -134,10 +173,18 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
   el.appendChild(h('div', { class: 'retfair-scroll' }, table));
   el.appendChild(hint);
 
+  // ---------------------------------------------------------------- every tenor under the market and each scenario
+  const scenHead = h('thead');
+  const scenBody = h('tbody');
+  const scenTable = h('table', { class: 'plain retfair-scen', id: 'retfair-scen-table' }, scenHead, scenBody);
+  el.appendChild(h('h3', { class: 'retfair-h' }, 'Senaryolara göre adil değer · bid / ask (Piyasa: masanın Şimdiki\'si; senaryolar sizin adımlarınızla, histerezissiz)'));
+  el.appendChild(h('div', { class: 'retfair-scroll' }, scenTable));
+
   // ---------------------------------------------------------------- "Neredeyim"
   const whereBody = h('tbody');
+  const wherePub = h('th', { title: 'Kuralın belirlediği yayınlanan taraf: Bid ve Mid vadelerinde bid, Ask vadelerinde ask' }, 'Yayınlanan bid');
   const whereTable = h('table', { class: 'plain retfair-where', id: 'retfair-where' },
-    h('thead', null, h('tr', null, h('th', { class: 'l' }, 'Vade'), h('th', null, 'Yayınlanan bid'),
+    h('thead', null, h('tr', null, h('th', { class: 'l' }, 'Vade'), wherePub,
       h('th', { title: 'Yayınlanan bid − OIS mid (bp)' }, 'OIS mid\'e'), h('th', { title: 'Yayınlanan bid − VİOP mid (bp)' }, 'VİOP mid\'e'),
       h('th', { title: 'Yayınlanan bid − offshore mid (bp)' }, 'Offshore mid\'e'),
       h('th', { title: 'Taban OIS mid olsa, bugünkü spread ve akışla RET (bid / ask)' }, 'OIS ile'), h('th', null, 'VİOP ile'),
@@ -272,13 +319,23 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
     const flowX = h('button', { class: 'iconbtn retfair-flow-x hidden', type: 'button', title: 'Bu vadenin akış ayarını kaldır' }, '×');
     flowX.dataset.tenor = t;
     flowX.addEventListener('click', () => send('/api/ret/fair/flow', { remove: t }, t + ': akış ayarı kaldırıldı'));
+    // "Tabana göre": Bid / Mid / Ask - which quote base + spread + flow sets (one click; the desk's)
+    const anchor = h('div', { class: 'seg retfair-anchors retfair-anchor' });
+    anchor.dataset.tenor = t;
+    for (const [a, label, title] of ANCHORS) {
+      const b = h('button', { type: 'button', title: t + ': ' + title }, label);
+      b.dataset.anchor = a;
+      b.dataset.tenor = t;
+      b.addEventListener('click', () => { if (!b.classList.contains('on')) send('/api/ret/fair/tenors', { tenors: [t], anchor: a }); });
+      anchor.appendChild(b);
+    }
     const cells = {
-      sel, base, wBtn, off, flow, flowX,
+      sel, base, wBtn, off, flow, flowX, anchor,
       days: h('td', { class: 'muted' }), formula: h('td', { class: 'l retfair-formula' }), mid: h('td'), width: h('td', { class: 'muted' }),
       now: h('td', { class: 'retfair-now' }), pub: h('td', { class: 'retfair-pub' }), diff: h('td', { class: 'retfair-diff' }),
     };
     cells.tr = h('tr', null, h('td', null, sel), h('td', { class: 'l' }, h('b', null, t)), cells.days, h('td', { class: 'l' }, base, wBtn),
-      h('td', null, off), h('td', null, flow, flowX), cells.formula, cells.mid, cells.width, cells.now, cells.pub, cells.diff);
+      h('td', null, anchor), h('td', null, off), h('td', null, flow, flowX), cells.formula, cells.mid, cells.width, cells.now, cells.pub, cells.diff);
     cells.tr.dataset.tenor = t;
     for (const k of ['now', 'pub', 'diff', 'formula']) cells[k].dataset.tenor = t;
     rows[t] = cells;
@@ -295,9 +352,13 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
     c.flow.textContent = r.flow ? sbp(r.flow) : '';
     c.flow.title = (r.flow_log || []).map((x) => x.at + ' · ' + ctx.displayName(x.by) + ' · ' + sbp(x.bp) + ' bp · ' + x.why).join('\n');
     c.flowX.classList.toggle('hidden', !r.flow);
+    for (const b of c.anchor.children) b.classList.toggle('on', b.dataset.anchor === (r.anchor || 'mid'));
     c.formula.textContent = r.formula;
     c.mid.textContent = typeof r.base_mid === 'number' ? pct(r.base_mid, 3) : '—';
-    c.mid.title = BASES.slice(0, 3).map(([b, label]) => label + ': ' + (typeof r.mids[b] === 'number' ? pct(r.mids[b], 3) + '%' : (r.why[b] || 'yok'))).join('\n')
+    const scen = data.scenario && data.scenario.code !== MARKET ? data.scenario : null;
+    c.mid.title = (scen ? 'Senaryo ' + scen.name + ' (OIS: senaryonun eğrisi; VİOP ve offshore: piyasa + senaryo − ima yol)\n' : '')
+      + BASES.slice(0, 3).map(([b, label]) => label + ': ' + (typeof r.mids[b] === 'number' ? pct(r.mids[b], 3) + '%' : (r.why[b] || 'yok'))
+        + (scen && r.market_mids && typeof r.market_mids[b] === 'number' ? ' (piyasa ' + pct(r.market_mids[b], 3) + '%)' : '')).join('\n')
       + (r.start ? '\n' + isoToTr(r.start) + ' → ' + isoToTr(r.end) : '');
     c.mid.classList.toggle('muted', typeof r.base_mid !== 'number');
     c.width.textContent = typeof r.width === 'number' ? num(r.width, 0) : '';
@@ -308,7 +369,10 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
       c.now.textContent = pair(r.now);
       const d = r.diff ? (r.diff.bid || r.diff.ask) : 0;
       if (r.update) c.now.classList.add(d > 0 ? 'up' : d < 0 ? 'down' : 'chg');
-      c.now.title = 'Ham mid ' + pct(r.raw_mid, 4) + '% · ham bid ' + pct(r.raw_bid, 4) + '% → 5 bp ızgarası (histerezis ' + num(data.settings.hysteresis, 1) + ' bp)';
+      const grid = scen ? ' → 5 bp ızgarası (senaryo görünümü: histerezis yok)' : ' → 5 bp ızgarası (histerezis ' + num(data.settings.hysteresis, 1) + ' bp)';
+      c.now.title = r.anchor === 'bid' ? 'Ham bid ' + pct(r.raw, 4) + '% (taban + spread + akış)' + grid + '; ask = bid + genişlik'
+        : r.anchor === 'ask' ? 'Ham ask ' + pct(r.raw, 4) + '% (taban + spread + akış)' + grid + '; bid = ask − genişlik'
+          : 'Ham mid ' + pct(r.raw_mid, 4) + '% · ham bid ' + pct(r.raw_bid, 4) + '%' + grid;
       c.diff.textContent = r.diff ? (r.diff.bid === r.diff.ask ? sbp(r.diff.bid) : sbp(r.diff.bid) + ' / ' + sbp(r.diff.ask)) : '';
     } else {
       c.now.textContent = '—';
@@ -350,7 +414,7 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
     no.addEventListener('click', () => { closeWeights(); paintRow(data.rows.find((x) => x.tenor === t)); });
     box.appendChild(ok);
     box.appendChild(no);
-    rows[t].tr.after(h('tr', { class: 'retfair-wrow' }, h('td', { colspan: '12' }, box)));
+    rows[t].tr.after(h('tr', { class: 'retfair-wrow' }, h('td', { colspan: '13' }, box)));
     inp.ois.focus();
   }
 
@@ -366,34 +430,85 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
       paintRow(r);
     }
     paintSel();
+    paintBulkAnchor();
+    const scen = res.scenario && res.scenario.code !== MARKET ? res.scenario : null;
     const ups = res.updates || [];
-    banner.textContent = ups.length ? 'RET güncellemesi var: ' + ups.join(', ') : '';
+    banner.textContent = ups.length ? (scen ? scen.name + ' senaryosunda RET güncellemesi: ' : 'RET güncellemesi var: ') + ups.join(', ') : '';
     banner.classList.toggle('hidden', !ups.length);
     const m = res.meta;
     meta.textContent = m && m.updated_at ? 'Yayınlanan: ' + m.updated_at + (m.updated_by ? ' · ' + ctx.displayName(m.updated_by) : '') : 'Yayınlanan: dosyadaki RET';
+    paintScenario(res, scen);
     const noOffset = res.rows.filter((r) => typeof r.offset !== 'number').length;
     hint.textContent = (noOffset ? noOffset + ' vadenin tabana spread\'i yok (Şimdiki "—"): yazın ya da "Yayınlanandan al". ' : '')
       + 'Taban mid: RET\'in kendi tarihleri arası basit ACT/360 (spot ' + (res.spot ? isoToTr(res.spot) : '—') + '; ON spot\'tan önceki gün). '
-      + 'VİOP mid: kontratların ima faizinin bid–ask ortası, vadeye tarihle doğrusal (kontratların arasında; dışında yok).';
+      + 'VİOP mid: kontratların ima faizinin bid–ask ortası, vadeye tarihle doğrusal (kontratların arasında; dışında yok). '
+      + 'Tabana göre: Bid ya da Ask seçilen vadede taban + spread + akış o kotayı belirler, diğeri genişlik kadar ötede.';
     paintWhere(res);
     paintFlows(res);
     paintAdmin(res);
     paintLog(res);
   }
 
+  // ---------------------------------------------------------------- the user's scenario and the comparison
+  function paintScenario(res, scen) {
+    const list = res.scenarios || [{ code: MARKET, name: 'Piyasa (bootstrap)' }];
+    if (scenSel.options.length !== list.length || [...scenSel.options].some((o, i) => o.value !== list[i].code || o.textContent !== list[i].name)) {
+      clear(scenSel);
+      for (const s of list) scenSel.appendChild(h('option', { value: s.code }, s.name));
+    }
+    if (document.activeElement !== scenSel) scenSel.value = res.scenario ? res.scenario.code : MARKET;
+    scenLabel.textContent = 'Senaryo: ' + (res.scenario ? res.scenario.name : 'Piyasa (bootstrap)');
+    scenLabel.classList.toggle('on', !!scen);
+    scenNote.classList.toggle('hidden', !scen);
+    scenNote.textContent = scen ? 'Senaryo ' + scen.name + ': OIS tabanı senaryonun eğrisinden (Masa\'nın "Tarih arası faiz"i RET\'in tarihleriyle), '
+      + 'VİOP ve offshore tabanı piyasa + (senaryo − ima yol); spread, taban seçimi, genişlik ve akış masanın. Histerezis yok (5 bp ızgarası). '
+      + 'Bu görünüm sizin: "Kopyala ve yayınla" gördüğünüzü yazar ve geçmişe hangi senaryodan olduğunu not eder.'
+      + (res.scenario.why ? ' · ' + res.scenario.why : '') : '';
+    // every tenor under the market and each scenario: bid / ask, and how far the bid is from the market's
+    clear(scenHead);
+    clear(scenBody);
+    scenHead.appendChild(h('tr', null, h('th', { class: 'l' }, 'Vade'), h('th', null, 'Yayınlanan'),
+      ...list.map((s) => { const th = h('th', { class: res.scenario && res.scenario.code === s.code ? 'cur' : '' }, s.name); th.dataset.scen = s.code; return th; })));
+    for (const e of res.compare || []) {
+      const base = e[MARKET];
+      const tr = h('tr', null, h('td', { class: 'l' }, h('b', null, e.tenor)), h('td', { class: 'muted' }, pair(e.pub)));
+      for (const s of list) {
+        const x = e[s.code];
+        const td = h('td', { class: (res.scenario && res.scenario.code === s.code ? 'cur' : '') + (x ? '' : ' muted') });
+        td.dataset.tenor = e.tenor;
+        td.dataset.scen = s.code;
+        td.textContent = x ? pair(x) : '—';
+        if (x && s.code !== MARKET && base && typeof base.bid === 'number') {
+          const d = (x.bid - base.bid) * 10000;
+          if (Math.abs(d) >= 0.05) td.appendChild(h('span', { class: 'retfair-scen-d ' + (d > 0 ? 'pos' : 'neg') }, ' ' + sbp(d)));
+          td.title = s.name + ' − Piyasa: bid ' + sbp(d) + ' bp';
+        } else if (!x) td.title = (e.why && e.why[s.code]) || '';
+        tr.appendChild(td);
+      }
+      tr.dataset.tenor = e.tenor;
+      scenBody.appendChild(tr);
+    }
+  }
+
   function paintWhere(res) {
     clear(whereBody);
+    // the published side the rule sets: the bid (Bid, Mid) or the ask (Ask)
+    const anyAsk = res.rows.some((r) => r.where_side === 'ask');
+    wherePub.textContent = anyAsk ? 'Yayınlanan (bid / ask)' : 'Yayınlanan bid';
     for (const r of res.rows) {
+      const side = r.where_side === 'ask' ? 'ask' : 'bid';
+      const pv = r.pub[side];
       const cell = (b) => {
         const v = r.where[b];
         return h('td', { class: typeof v === 'number' ? (v > 0 ? 'pos' : v < 0 ? 'neg' : '') : 'muted', title: r.why[b] || '' },
           typeof v === 'number' ? ibp(v) + ' bp' : '—');
       };
       const wi = (b) => h('td', { class: r.base === b ? 'cur' : '' }, r.whatif && r.whatif[b] ? pair(r.whatif[b]) : '—');
-      const tr = h('tr', null, h('td', { class: 'l' }, h('b', null, r.tenor)), h('td', null, typeof r.pub.bid === 'number' ? pct(r.pub.bid) : '—'),
+      const tr = h('tr', null, h('td', { class: 'l' }, h('b', null, r.tenor)),
+        h('td', null, (anyAsk ? side + ' ' : '') + (typeof pv === 'number' ? pct(pv) : '—')),
         cell('ois'), cell('viop'), cell('off'), wi('ois'), wi('viop'), wi('off'), wi('blend'));
       tr.dataset.tenor = r.tenor;
-      tr.title = r.tenor + ' bid ' + (typeof r.pub.bid === 'number' ? pct(r.pub.bid) : '—') + ': '
+      tr.title = r.tenor + ' ' + side + ' ' + (typeof pv === 'number' ? pct(pv) : '—') + ': '
         + ['ois', 'viop', 'off'].map((b) => BASE_NAME[b] + '\'e ' + (typeof r.where[b] === 'number' ? ibp(r.where[b]) + ' bp' : '—')).join(' · ');
       whereBody.appendChild(tr);
     }
@@ -488,11 +603,15 @@ export function fairPane(ctx, { retText, onPublished, onClose }) {
     // the clipboard first (the click is still the browser's gesture), then the desk's RET (after a change still on its way)
     const text = retText(curve.map((r) => ({ tenor: r.tenor, days: r.days, bid: num(r.bid * 100, 4, false), ask: num(r.ask * 100, 4, false) })), fmt, trDate());
     await copyText(text, 'Kopyalandı · yayınlanıyor…');
+    const scen = data.scenario && data.scenario.code !== MARKET ? data.scenario.code : null;
     queue = queue.then(async () => {
       busy = true;
       try {
-        const res = await api.post('/api/ret/fair/publish', { rows: curve.map((r) => ({ tenor: r.tenor, bid: r.bid, ask: r.ask })) });
-        toast('RET yayınlandı ve kopyalandı (' + curve.length + ' vade' + (kept.length ? '; Şimdiki\'si olmayan ' + kept.join(', ') + ' yayınlanan değerinde' : '') + ')', 'ok', 5000);
+        const res = await api.post('/api/ret/fair/publish', { rows: curve.map((r) => ({ tenor: r.tenor, bid: r.bid, ask: r.ask })), scenario: scen });
+        // which tenors moved against the RET published before, and by how much (bp)
+        const moves = (res.moved || []).map((x) => x.tenor + ' ' + signedBp(x.bid) + ' / ' + signedBp(x.ask)).join(' · ');
+        toast('RET yayınlandı ve kopyalandı' + (res.source ? ' (' + res.source + ')' : '') + ': ' + (moves || 'değişen vade yok')
+          + ' (' + curve.length + ' vade' + (kept.length ? '; Şimdiki\'si olmayan ' + kept.join(', ') + ' yayınlanan değerinde' : '') + ')', 'ok', 7000);
         render(res);
         if (onPublished) onPublished();
         if (ctx.refreshNow) ctx.refreshNow();
