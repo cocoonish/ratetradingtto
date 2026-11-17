@@ -1,9 +1,10 @@
 """Synthetic market history for the ML family (``tto/quantml.py``): every line of its universe as random walks of
 realistic size - the G10 spots, their 3M points, ATM / RR / BF vols, the TRY OIS curve (a level that walks, a slope and a
 curvature that revert), offshore, USDTRY / EURTRY and their points, three DİBS around 2, 5 and 10 years, two VİOP
-contracts, the global drivers, TLREF and the meeting path - and, when asked, a **planted** line whose daily move follows
-a driver's moves of the week before with a lag (``plant``): what it does over the next five days is partly known at
-the close (the driver's last five moves, the day before), nothing else in the data is."""
+contracts, USDTRY's option quotes, the global drivers, TLREF and the meeting path - and, when asked, a **planted** line
+whose daily move follows a driver's moves of the week before with a lag (``plant``): what it does over the next five
+days is partly known at the close (the driver's last five moves, the day before), nothing else in the data is; or a
+planted TRY curve (``curve_plant``): its level following USDTRY's 25D RR 3M the same way."""
 from __future__ import annotations
 
 import datetime as dt
@@ -33,6 +34,14 @@ DRIVERS = ("UST:2Y", "UST:10Y", "DXY", "BRENT", "CDS", "TLREF", "USD:1M", "USD:3
 MEETINGS = ("2026-12-10", "2027-01-21", "2027-03-04")
 #: the planted line, its driver and how much of the driver's % move the line makes (per cent a day)
 PLANT = {"key": "FX:AUDUSD", "driver": "BRENT", "beta": 0.06, "noise": 0.30, "shock": 2.5}
+#: USDTRY's option quotes the history keeps (the Opsiyon page's): (kind, tenor) -> (mean, AR coefficient, daily σ)
+USDTRY_OPTIONS = {("ATM", "3M"): (12.0, 0.97, 0.4), ("ATM", "1M"): (11.0, 0.95, 0.5), ("RR25", "3M"): (3.0, 0.97, 0.15),
+                  ("RR25", "1M"): (2.5, 0.95, 0.2), ("BF25", "3M"): (0.5, 0.97, 0.05)}
+USDTRY_OPTION_KEYS = tuple(qopt.key("USDTRY", vk, tenor) for vk, tenor in USDTRY_OPTIONS)
+#: a planted driver of the TRY curve (``curve_plant``): the curve's level - every OIS tenor and the series made of it
+#: (offshore, DİBS) - moves ``beta`` × USDTRY's 25D RR 3M's moves of two to six days before (bp a vol point ÷ 100);
+#: ``shock``: its last five moves (vol a day)
+CURVE_PLANT = {"driver": qopt.key("USDTRY", "RR25", "3M"), "beta": 0.15, "shock": 0.3}
 
 
 def _walk(rnd: random.Random, n: int, start: float, sd: float, log: bool = False) -> List[float]:
@@ -51,7 +60,8 @@ def _ar(rnd: random.Random, n: int, mean: float, b: float, sd: float) -> List[fl
     return out
 
 
-def build(today: dt.date = TODAY, n: int = 460, seed: int = 7, plant: Optional[Dict[str, Any]] = None) -> Tuple[List[str], Dict[str, Dict[str, float]], Dict[str, Dict[str, Any]]]:
+def build(today: dt.date = TODAY, n: int = 460, seed: int = 7, plant: Optional[Dict[str, Any]] = None,
+          curve_plant: Optional[Dict[str, Any]] = None) -> Tuple[List[str], Dict[str, Dict[str, float]], Dict[str, Dict[str, Any]]]:
     """``(days, series, meta)``: every key the ML family's universe and inputs read, over the ``n`` business days before
     ``today``.  ``plant``: ``{"key", "driver", "beta", "noise", "shock"}`` - the line's daily move (% for FX, bp for a
     rate) is ``beta`` × the driver's moves of two to six days before (each move pushes the line for a week, a day late)
@@ -111,6 +121,11 @@ def build(today: dt.date = TODAY, n: int = 460, seed: int = 7, plant: Optional[D
     eurtry = [usdtry[i] * series["FX:EURUSD"][d] for i, d in enumerate(days)]
     put("FX:EURTRY", eurtry, label="EURTRY", kind="fx", group="TRY")
     put("FXP:EURTRY:3M", [s * 0.28 * 91.25 / 365.0 * 1e4 for s in eurtry], label="EURTRY 3M swap puanı", kind="pts", group="TRY")
+    # ---- USDTRY's options (the Opsiyon page's quotes, ``USDTRY_OPTIONS``) on a random state of their own: every
+    # series above and below is what it was before they came
+    ornd = random.Random(1000 + seed)
+    for (vk, tenor), (mean, b, sd) in USDTRY_OPTIONS.items():
+        put(qopt.key("USDTRY", vk, tenor), _ar(ornd, n, mean, b, sd), label=qopt.label("USDTRY", vk, tenor), kind="vol", group="TRY")
     # ---- DİBS: the curve's level + a spread of each
     for isin, years, _ in BONDS:
         spread = 1.0 - 0.2 * years
@@ -148,6 +163,21 @@ def build(today: dt.date = TODAY, n: int = 460, seed: int = 7, plant: Optional[D
             x = x * math.exp(step / 100.0) if kind == "fx" else x + step / 100.0
             out.append(x)
         series[plant["key"]] = dict(zip(days, out))
+    # ---- the planted curve: no random draw (every other series as it was)
+    if curve_plant:
+        drv = [series[curve_plant["driver"]][d] for d in days]
+        if curve_plant.get("shock"):
+            for i in range(n - 5, n):
+                drv[i] = drv[i - 1] + curve_plant["shock"]
+            series[curve_plant["driver"]] = dict(zip(days, drv))
+        moves = [0.0] + [b - a for a, b in zip(drv, drv[1:])]
+        push, acc = [], 0.0
+        for s in range(n):
+            acc += curve_plant["beta"] * sum(moves[s - j] for j in range(2, 7) if s - j >= 1)
+            push.append(acc)
+        for key in series:
+            if key.startswith(("OIS:", "OFF:", "DIBS:")):
+                series[key] = {d: series[key][d] + push[i] for i, d in enumerate(days)}
     return days, series, meta
 
 
@@ -175,12 +205,13 @@ def eng_rows(today: dt.date = TODAY) -> Dict[str, Any]:
 
 
 def context(today: dt.date = TODAY, n: int = 460, seed: int = 7, plant: Optional[Dict[str, Any]] = None, live: Optional[Dict[str, float]] = None,
-            mpc: Optional[Dict[str, Any]] = None, cfg: Optional[Dict[str, Any]] = None, keep: Optional[set] = None):
+            mpc: Optional[Dict[str, Any]] = None, cfg: Optional[Dict[str, Any]] = None, keep: Optional[set] = None,
+            curve_plant: Optional[Dict[str, Any]] = None):
     """A context of the synthetic history (``keep``: only these keys and the drivers) and the workbook's part."""
     from tto import quant as qq
-    days, series, meta = build(today, n, seed, plant)
+    days, series, meta = build(today, n, seed, plant, curve_plant)
     if keep is not None:
-        always = set(DRIVERS) | {"FX:" + p for p in EM} | {"FX:USDTRY"}
+        always = set(DRIVERS) | {"FX:" + p for p in EM} | {"FX:USDTRY"} | set(USDTRY_OPTION_KEYS)
         drop = [k for k in series if k not in keep and k not in always]
         for k in drop:
             series.pop(k, None)
