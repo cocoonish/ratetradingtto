@@ -30,6 +30,7 @@ import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as
 import { openRecon, checkBeforeArchive } from './recon.js';
 import { quantPage, quantEvent } from './pages/quant.js';
 import { DibsGenelPage } from './pages/dibsgenel.js';
+import { BugunPage } from './pages/bugun.js';
 import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
@@ -444,6 +445,7 @@ async function openPage(id, panel, sub) {
   else if (id === 'agenda') page = new AgendaPage(host, ctx);
   else if (id === 'quant' || id.startsWith('quant-')) page = quantPage(id, host, ctx);
   else if (id === 'dibs-genel') page = new DibsGenelPage(host, ctx);
+  else if (id === 'bugun') page = new BugunPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   if (page.keepAlive && host !== content) {
@@ -578,6 +580,8 @@ function openLandingDialog() {
   const m = modal({ title: 'Açılış sayfası', width: 440 });
   const sel = h('select', { class: 'inp', id: 'landing-select', style: { width: '100%' } });
   sel.appendChild(h('option', { value: '' }, 'Varsayılan (Masa)'));
+  // the morning screen offered first (bugun.js): what wants attention, on one page
+  if (state.pages.some((p) => p.id === 'bugun')) sel.appendChild(h('option', { value: 'bugun' }, 'Bugün · sabah ekranı'));
   const lps = launchpads();
   if (lps.length) {
     const g = h('optgroup', { label: 'Launchpad\'leriniz' });
@@ -585,7 +589,7 @@ function openLandingDialog() {
     sel.appendChild(g);
   }
   const g = h('optgroup', { label: 'Sayfalar' });
-  for (const p of state.pages) g.appendChild(h('option', { value: p.id }, p.title + (p.group ? ' · ' + p.group : '')));
+  for (const p of state.pages) if (p.id !== 'bugun') g.appendChild(h('option', { value: p.id }, p.title + (p.group ? ' · ' + p.group : '')));
   sel.appendChild(g);
   sel.value = landing();
   if (sel.value !== landing()) sel.value = '';
