@@ -25,8 +25,10 @@ class MlPage extends QuantPage {
     this.boxes.table = new GridBox(this.table, 'quant/ml/table', (sid) => this.pick(sid));
     this.feats = panel('quant-ml-features', 'Verilerin payı · grup başına');
     this.feats.note.textContent = 'Bugün işleyen modellerin (her enstrümanın bu ayki modeli) ağaçlarındaki bölünmelerin kazancı, veri başına: '
-      + 'her enstrümanınki %100\'e ölçeklenir, grubun enstrümanlarının ortalaması. Sürücüler (UST, DXY, EM FX, Brent, CDS, RR, TLREF, PPK '
-      + 'adımı, VİOP farkı) bir gün öncesinden: kapanışları TRY kapanışından sonra gelir.';
+      + 'her modelinki %100\'e ölçeklenir, sütun grubun modellerinin ortalaması; ortak model (TRY OIS düz vadeleri) kendi sütununda, bir model. '
+      + 'Sürücüler (UST, DXY, EM FX, Brent, CDS, opsiyonlar, TLREF, PPK adımı, VİOP farkı) bir gün öncesinden: kapanışları TRY kapanışından '
+      + 'sonra gelir. Opsiyonlar: G10 enstrümanı kendi paritesinin 25D RR 3A\'sını, diğerleri USDTRY\'nin 25D RR 3A\'sını ve ATM vol 1A\'sını '
+      + 've G10 paritelerinin RR ortalamasını (küresel risk) okur.';
     this.boxes.feats = new GridBox(this.feats, 'quant/ml/features');
     page.append(sp.el, cp.el, this.table.el, this.feats.el);
     this.addStatus(page);
@@ -67,7 +69,9 @@ class MlPage extends QuantPage {
       + 'yaprakta en az ' + (st.min_leaf || '') + ' satır, L2 ' + fmt(st.l2, 0) + ', her veri eğitim satırlarının ' + (st.bins || '') + ' kantiline bölünür. '
       + 'Hedef: önümüzdeki ' + (st.horizon || 5) + ' kapanışta yukarı tarafın K/Z\'sinin işareti (FX\'te forward primi dahil). Yeniden eğitim aylık: her '
       + 'takvim ayının modeli yalnızca o ay başlamadan etiketi bilinen satırlarla kurulur ve yalnızca o ayın günlerini tahmin eder (ileriye bakış yok; '
-      + 'en az ' + (st.min_train || '') + ' satır). İsabet ve log-loss etiketi bilinen bütün örneklem dışı günlerden; Test = gün ÷ ' + (st.horizon || 5)
+      + 'en az ' + (st.min_train || '') + ' gün). ' + (st.pools || []).map((p) => p.label + ': ' + p.lines.length + ' vade tek modelde, her ayın '
+      + 'modeli bütün vadelerin o ay başlamadan etiketi bilinen satırlarıyla kurulur (her satır kendi vadesinin günü, vade bir veri); her vadenin '
+      + 'kaydı kendi günlerinden. ').join('') + 'İsabet ve log-loss etiketi bilinen bütün örneklem dışı günlerden; Test = gün ÷ ' + (st.horizon || 5)
       + ' (ufuklar örtüşür). Basılır: isabet ≥ %' + fmt((st.model_hit || 0.55) * 100, 0) + ', en az ' + (st.model_min_tests || 40) + ' test ve olasılık ≥ %'
       + fmt((st.p_entry || 0.6) * 100, 0) + ' (z(p) = (p − 0,5) ÷ 0,05 ≥ giriş). Hedef (2p − 1) × ortalama |' + (st.horizon || 5) + ' günlük K/Z|, stop 1,5σ ('
       + (st.horizon || 5) + ' gün). Geri test sütunu: olasılığı girişi geçen her örneklem dışı günün ' + (st.horizon || 5)
@@ -84,7 +88,8 @@ class MlPage extends QuantPage {
         T(r.prints ? '✓' : (r.why || '—'), { cls: r.prints ? 'thru' : 'soft' }),
         T(isNum(r.prob) ? (r.verb ? r.verb + ' ' : '') + '%' + fmt(r.prob * 100, 0) : '', { tip: isNum(r.p) ? 'yukarı olasılığı %' + fmt(r.p * 100, 1) : '' }),
         Z(r.z, entry), T(top, { tip: EFFECT_TIP }), T(bt, { tip: 'Örneklem dışı tahminlerin olasılığı girişi geçtiği günler, ' + (st.horizon || 5) + ' günlük K/Z (' + (r.unit || '') + ')' }),
-        N(r.months, 0, { tip: r.first ? 'ilk test ayı ' + r.first.slice(0, 7) : '' })];
+        r.pool ? { t: (r.months || 0) + ' · ortak', v: r.months, k: 'n', tip: r.pool + (r.first ? '; ilk test ayı ' + r.first.slice(0, 7) : '') }
+          : N(r.months, 0, { tip: r.first ? 'ilk test ayı ' + r.first.slice(0, 7) : '' })];
     }), rows.map((r) => r.sid || null), d.why || 'Hesap bekleniyor', this.picked);
     const g = d.groups || {};
     const groups = g.groups || [];
