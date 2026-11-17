@@ -29,6 +29,7 @@ import { AgendaPage } from './pages/agenda.js';
 import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
 import { openRecon, checkBeforeArchive } from './recon.js';
 import { quantPage, quantEvent } from './pages/quant.js';
+import { DibsGenelPage } from './pages/dibsgenel.js';
 import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
@@ -439,6 +440,7 @@ async function openPage(id, panel, sub) {
   else if (id === 'social') page = new SocialPage(host, ctx);
   else if (id === 'agenda') page = new AgendaPage(host, ctx);
   else if (id === 'quant' || id.startsWith('quant-')) page = quantPage(id, host, ctx);
+  else if (id === 'dibs-genel') page = new DibsGenelPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   if (page.keepAlive && host !== content) {

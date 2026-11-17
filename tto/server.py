@@ -782,6 +782,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().heat_ref, _user(request)))
 
     @handler
+    async def dibs_genel(request: Request):
+        # DİBS RV · Genel (dibsgenel.py): the trading list on DİBS RV, DİBS ASW and the zero-coupon curve fitted live
+        return ok(await call(svc().dibsgenel.view, _user(request), _lang(request)))
+
+    @handler
     async def watch_catalog(request: Request):
         return ok(await call(svc().watch_catalog, _user(request)))
 
@@ -1221,6 +1226,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/watch/catalog", watch_catalog),
         Route("/api/heat", heat),
         Route("/api/heat/ref", heat_ref, methods=["POST"]),
+        Route("/api/dibs/genel", dibs_genel),
         Route("/api/watch/{what}", watch_action, methods=["POST"]),
         Route("/api/alarms/fired", alarms_fired),
         Route("/api/alarms/{what}", alarm_action, methods=["POST"]),

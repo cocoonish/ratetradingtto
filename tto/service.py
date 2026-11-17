@@ -305,6 +305,9 @@ class Service(object):
         # the fair value RET (retfair.py): the desk's rule-based RET beside the published one, its flow suggestions
         from .retfair import RetFair
         self.retfair = RetFair(self)
+        # DİBS RV · Genel (dibsgenel.py): the trading list's bonds on DİBS RV, DİBS ASW and a zero-coupon curve fitted live
+        from .dibsgenel import DibsGenel
+        self.dibsgenel = DibsGenel(self)
         # inputs typed as formulas (=C60+7): evaluated by the calc sheets' machinery, again whenever what they read moved
         from .inputformula import InputFormulas
         formulas = InputFormulas(self)
@@ -1519,7 +1522,9 @@ class Service(object):
         # the desk's own corner (desk.py): the traders' chat and the agenda - pages of the desk, apart from any workbook
         pages.append({"id": "social", "title": "Sosyal", "group": "Masa", "book": None, "sheet": None, "custom": True})
         pages.append({"id": "agenda", "title": "Ajanda", "group": "Masa", "book": None, "sheet": None, "custom": True})
-        return pages
+        # DİBS RV: one entry of the menu - Genel (dibsgenel.py) and the two sheets, DİBS RV and DİBS ASW, as its tabs
+        from . import dibsgenel
+        return dibsgenel.menu(pages)
 
     # ================================================================== rendering
     #: pages / headers kept (per calculation: everybody without inputs of their own shares one)
