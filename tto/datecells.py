@@ -192,27 +192,26 @@ class DateCells(object):
         got = self.kinds.get(key)
         if got is not None:
             return got
-        # depth first without recursion (a chain of thousands of cells): a cell is worked out once what it reads is
-        busy = {key}
+        # depth first without recursion (a chain of thousands of cells): a cell is worked out once what it reads is.
+        # ``waiting``: the cells whose readings are on the stack above them - one of them read again is a cycle
+        waiting = set()
         stack: List[Tuple[Key, Optional[List[Key]]]] = [(key, None)]
         while stack:
             k, deps = stack[-1]
             if k in self.kinds:
                 stack.pop()
-                busy.discard(k)
                 continue
             if deps is None:
                 deps = self._deps(k)
                 stack[-1] = (k, deps)
-                more = [d for d in deps if d not in self.kinds and d not in busy]
+                more = [d for d in deps if d not in self.kinds and d not in waiting]
                 if more:
-                    for d in more:
-                        busy.add(d)
-                        stack.append((d, None))
+                    waiting.add(k)
+                    stack.extend((d, None) for d in reversed(more))
                     continue
-            self.kinds[k] = self._own(k)         # (a cell still being worked out - a cycle - reads as not known)
+            self.kinds[k] = self._own(k)         # (a cell of a cycle read by it reads as not known)
             stack.pop()
-            busy.discard(k)
+            waiting.discard(k)
         return self.kinds[key]
 
     def _get(self, key: Key) -> str:

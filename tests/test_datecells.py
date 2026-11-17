@@ -120,6 +120,15 @@ def test_what_the_rule_calls_a_date(formula, kind):
     assert dcl.DateCells(m).kind(0, m.cell_ref("S!E1")[1]) == kind, formula
 
 
+def test_a_formula_reading_two_cells_one_of_which_reads_the_other():
+    """B1 reads A3 and A2, A2 reads A3: no cycle - both dates (A3 is worked out before A2 needs it, wherever it is
+    reached first)."""
+    m = _model({"A1": (46330.0, DATE), "A2": ("=A3+1", GEN), "A3": ("=A1+1", GEN), "B1": ("=IF(C1,A3,A2)", GEN),
+                "C1": (1.0, GEN)})
+    dc = dcl.DateCells(m)
+    assert [dc.kind(0, m.cell_ref("S!" + a)[1]) for a in ("B1", "A2", "A3")] == [dcl.D] * 3
+
+
 def test_a_cycle_a_long_chain_and_a_wide_array_are_not_guessed():
     m = _model({"A1": ("=A2+1", GEN), "A2": ("=A1+1", GEN), "B1": (46330.0, DATE)})
     sb = SheetBuilder(m, "S")
