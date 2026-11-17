@@ -3104,15 +3104,15 @@ async function clipAfter(page, action) {
       served.every((s) => s.levels && ((s.levels.ok && s.rr >= 1 && typeof s.levels.hit === 'number' && typeof s.levels.exp === 'number')
         || (!s.levels.ok && typeof s.levels.why === 'string' && s.levels.why.length > 10))),
       served.map((s) => [s.id, s.levels && s.levels.ok, s.rr, s.levels && s.levels.why]));
-    // the list by group (tto/quantuniv.py): the buttons above it in the list's order, one group alone, the lines a gate holds
-    // ("düşük güven") after the confident ones of their group with their reason, an Offshore line's "offshore limiti"; the
-    // separate panel of the gated signals is gone (they are in the list)
-    const GROUPS = ['G10 spot', 'G10 opsiyon', 'TRY OIS', 'DİBS', 'VİOP', 'Offshore', 'Diğer'];
-    const GROUP_IDS = ['all', 'g10-spot', 'g10-opsiyon', 'try-ois', 'dibs', 'viop', 'offshore', 'diger'].map((x) => 'quant-group-' + x);
+    // the list by group (tto/quantuniv.py): the buttons above it in the list's order - Konsensüs first (tto/quantcons.py) -, one
+    // group alone, the lines a gate holds ("düşük güven") after the confident ones of their group with their reason, an Offshore
+    // line's "offshore limiti"; the separate panel of the gated signals is gone (they are in the list)
+    const GROUPS = ['Konsensüs', 'G10 spot', 'G10 opsiyon', 'TRY OIS', 'DİBS', 'VİOP', 'Offshore', 'Diğer'];
+    const GROUP_IDS = ['all', 'konsensus', 'g10-spot', 'g10-opsiyon', 'try-ois', 'dibs', 'viop', 'offshore', 'diger'].map((x) => 'quant-group-' + x);
     const groupBtns = await page.evaluate(() => [...document.querySelectorAll('#quant-groups button')].map((b) => ({ id: b.id, text: b.textContent, on: b.classList.contains('on') })));
-    check('Sinyaller: the group buttons above the list in its order (Tümü, G10 spot, G10 opsiyon, TRY OIS, DİBS, VİOP, Offshore, Diğer), Tümü on; no separate gated panel',
-      groupBtns.map((b) => b.id).join() === GROUP_IDS.join() && /^Tümü \(\d+\)$/.test(groupBtns[0].text) && /^G10 spot \(\d+\)$/.test(groupBtns[1].text)
-      && /^Offshore \(\d+\)$/.test(groupBtns[6].text) && groupBtns[0].on && groupBtns.filter((b) => b.on).length === 1
+    check('Sinyaller: the group buttons above the list in its order (Tümü, Konsensüs, G10 spot, G10 opsiyon, TRY OIS, DİBS, VİOP, Offshore, Diğer), Tümü on; no separate gated panel',
+      groupBtns.map((b) => b.id).join() === GROUP_IDS.join() && /^Tümü \(\d+\)$/.test(groupBtns[0].text) && /^Konsensüs \(\d+\)$/.test(groupBtns[1].text)
+      && /^G10 spot \(\d+\)$/.test(groupBtns[2].text) && /^Offshore \(\d+\)$/.test(groupBtns[7].text) && groupBtns[0].on && groupBtns.filter((b) => b.on).length === 1
       && await page.locator('#quant-gated').count() === 0 && await page.locator('#quant-signals > .seg.qgroups').count() === 1, groupBtns);
     const groupAsks = [];
     const onGroupAsk = (r) => { if (r.url().includes('/api/quant/signals')) groupAsks.push(r.url()); };
@@ -3372,6 +3372,47 @@ async function clipAfter(page, action) {
       && osLine.trade.endsWith('→ AL USDJPY spot · 1,1 mn USD · giriş 150,250 · hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)')
       && osLine.group === 'G10 spot', osLine);
     await shot(page, 'quant-optspot');
+    // ------------------------------------------------------------------ DİBS switch (quantdibssw.py): a tab of Faiz
+    // (the recorded month is too short for a ranking: the page says why; the bonds left out - the TLREF floaters - each with
+    // its reason; a line as the server writes it, in the plan's format)
+    console.log('quant dibs switch');
+    await open(page, 'quant-dibssw');
+    await page.waitForSelector('#quant-dibssw-switches', { timeout: 60000 });
+    const swApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/dibssw');
+    const swTab = (swApi.json || {}).dibssw || {};
+    await page.waitForFunction(() => document.querySelectorAll('#quant-dibssw-out table.grid tr:not(.hd)').length > 0
+      || /evrende/.test((document.getElementById('quant-dibssw-out') || {}).textContent || ''), null, { timeout: 30000 });
+    const swPage = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent), on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
+      lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page),
+      head: (document.getElementById('quant-dibssw-head') || {}).textContent || '',
+      out: document.querySelectorAll('#quant-dibssw-out table.grid tr:not(.hd)').length,
+      read: ['quant-dibssw-signals', 'quant-dibssw-switches', 'quant-dibssw-bonds', 'quant-dibssw-out', 'quant-dibssw-backtest'].map((id) => {
+        const p = document.getElementById(id);
+        const r = p && p.querySelector(':scope > .qread');
+        return { id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER' };
+      }) }));
+    check('DİBS switch is a tab of Faiz after Eğri Adil Değeri: its tables read in the desk\'s words under their titles; the recorded month says why there is no ranking',
+      swApi.status === 200 && swApi.json.ready && swPage.tabs.join(',') === 'PCA / RV,Çiftler,Korelasyon,Rejim,Eğri Adil Değeri,DİBS switch,İma Patikası,TCMB WIRP,Öncü-Takipçi'
+      && swPage.on.join() === 'quant-dibssw' && swPage.lit.join() === 'quant.faiz' && swPage.read.every((r) => r.read.length >= 40 && r.under)
+      && (swTab.ok || (!!swTab.why && swPage.head.includes(swTab.why))) && swPage.out === (swTab.out || []).length && (swTab.out || []).every((o) => o.why),
+      { tabs: swPage.tabs, why: swTab.why, head: swPage.head, out: swTab.out, read: swPage.read });
+    const swLine = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const text = 'AL TRT150328T24 / SAT TRT130928T38 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A momentum lehte · hedef +12,0 bp · stop -8,0 bp '
+        + '· beklenen +504 bin TL · isabet %56 (142)';
+      const s = { id: 'dibssw:TRT150328T24/TRT130928T38', family: 'dibssw', family_label: 'DİBS switch', asset: 'DİBS', expression: text, line: text,
+        z: -2, entry_z: 1, score_name: 'sıra', strength: 'Güçlü', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2, regime: 1, hl: 1, carry: 1 },
+        composite: 2, hold: 5, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1, entry: 35.2, target: 23.2, stop: 43.2, direction: -1,
+        pnl_unit: 'bp', exp_pnl: 12, group: 'DİBS', tier: null, tag: '', gated: '', info: { model: 'DİBS switch' } };
+      const head = ['#', 'Grup'].concat(q.SIGNAL_HEAD, ['Bileşik / neden', 'Saat']);
+      const row = q.signalRows([s], { rank: true, group: true })[0];
+      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t };
+    });
+    check('... and a DİBS switch line in the list: its family, the plan\'s line (both bonds, sizes, C+R, momentum, target / stop in bp, money, hit rate), group DİBS',
+      swLine.family === 'DİBS switch' && swLine.trade.startsWith('AL TRT150328T24 / SAT TRT130928T38 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay')
+      && swLine.trade.endsWith('isabet %56 (142)') && swLine.group === 'DİBS', swLine);
+    await shot(page, 'quant-dibssw');
 
     // ------------------------------------------------------------------ the implied path on its grid, the WIRP (quantpath.py)
     console.log('implied path, WIRP');
@@ -4256,13 +4297,13 @@ async function clipAfter(page, action) {
       const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
       return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
     });
-    check('the quant menu: four entries - Sinyaller (6 tabs: Trend, Carry + momentum and Makine öğrenmesi among them), Faiz (8), FX (4: Opsiyon → spot among them), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:6","Faiz:8","FX:4","VİOP:0"]', quantMenu);
+    check('the quant menu: four entries - Sinyaller (6 tabs: Trend, Carry + momentum and Makine öğrenmesi among them), Faiz (9: DİBS switch among them), FX (4: Opsiyon → spot among them), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:6","Faiz:9","FX:4","VİOP:0"]', quantMenu);
     await open(page, 'quant-regime');                                       // an address of before
     const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));
     const regime = await onTab();
-    check('an old address (#/quant-regime) opens Faiz on its tab: eight tabs, "Rejim" on, Faiz lit in the menu',
-      regime.tabs.join(',') === 'PCA / RV,Çiftler,Korelasyon,Rejim,Eğri Adil Değeri,İma Patikası,TCMB WIRP,Öncü-Takipçi'
+    check('an old address (#/quant-regime) opens Faiz on its tab: nine tabs, "Rejim" on, Faiz lit in the menu',
+      regime.tabs.join(',') === 'PCA / RV,Çiftler,Korelasyon,Rejim,Eğri Adil Değeri,DİBS switch,İma Patikası,TCMB WIRP,Öncü-Takipçi'
       && regime.on.join() === 'quant-regime' && regime.lit.join() === 'quant.faiz' && await page.locator('#quant-regime-signals').count() === 1, regime);
     await page.click('#page-tabs button[data-page="quant-corr"]');
     await page.waitForFunction(() => window.tto.state.pageId === 'quant-corr' && window.tto.state.page.ready, null, { timeout: 30000 });

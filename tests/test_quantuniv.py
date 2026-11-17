@@ -562,7 +562,7 @@ def test_a_plugged_family_lists_by_group_keeps_its_low_confidence_lines_and_aler
     v = q.view("signals", user, {})
     sigs = v["signals"]
     pri = [s["priority"] for s in sigs]
-    assert pri == sorted(pri) and all(s["group"] in qu.GROUPS for s in sigs)
+    assert pri == sorted(pri) and all(s["group"] in qu.GROUPS + ("Konsensüs",) for s in sigs)        # (the consensus first: quantcons.py)
     for p in set(pri):                                                   # in each group (TRY OIS: each end) the confident lines by
         flags = [bool(s["gated"]) for s in sigs if s["priority"] == p]   # their expectancy (quantlevels), then the "düşük güven" ones
         assert flags == sorted(flags), p
@@ -576,14 +576,14 @@ def test_a_plugged_family_lists_by_group_keeps_its_low_confidence_lines_and_aler
     low = mine["trend:OIS:2Y"]
     assert low["gated"].startswith("beklenen kâr yok") and low["strength"] == "elendi" and low["id"] in {s["id"] for s in v["gated"]}
     assert {s["id"] for s in sigs} >= {s["id"] for s in v["gated"]}                   # (every gated line is in the list)
-    # the group buttons: every group, its lines and its confident ones; one group alone
+    # the group buttons: every group, its lines and its confident ones (Konsensüs first); one group alone
     groups = {g["id"]: g for g in v["groups"]}
-    assert list(groups) == list(qu.GROUPS) and sum(g["n"] for g in v["groups"]) == len(sigs)
+    assert list(groups) == ["Konsensüs"] + list(qu.GROUPS) and sum(g["n"] for g in v["groups"]) == len(sigs)
     assert groups["Offshore"]["tag"] == "offshore limiti" and groups["TRY OIS"]["n"] > groups["TRY OIS"]["live"]
     only = q.view("signals", user, {"group": "TRY OIS"})["signals"]
     assert only and all(s["group"] == "TRY OIS" for s in only) and "trend:OIS:2Y" in {s["id"] for s in only}
     box = q.view("box", user, {"of": "signals", "group": "Offshore"})
-    assert box["signals"] == q.view("signals", user, {"group": "Offshore"})["signals"] and box["groups"] == list(qu.GROUPS)
+    assert box["signals"] == q.view("signals", user, {"group": "Offshore"})["signals"] and box["groups"] == ["Konsensüs"] + list(qu.GROUPS)
     # the subscriptions know the three families; the log and the alerts only the confident lines - of the chosen groups
     sub = q.subscription(user)
     assert [f["label"] for f in sub["all_families"] if f["id"] in ("trend", "sira", "ml")] == ["Trend", "Carry + momentum", "Makine öğrenmesi"]
@@ -614,7 +614,7 @@ def test_a_family_s_module_is_imported_when_it_is_there_and_its_failure_is_its_o
     monkeypatch.setattr(importlib, "import_module", fake)
     monkeypatch.setattr(qu, "RUNNERS", {})                    # (none plugged yet: tto.quant imports the families' modules itself)
     errors = {}
-    assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml", "tto.quantoptspot"]
+    assert qu.runners(errors) == [] and seen == ["tto.quanttrend", "tto.quantsira", "tto.quantml", "tto.quantoptspot", "tto.quantdibssw"]
     assert list(errors) == ["ml"] and "bozuk" in errors["ml"]
     with pytest.raises(ValueError):
         qu.family("yok")
@@ -632,9 +632,9 @@ def test_universe_and_groups_over_http(seeded):
         assert rows["FWD:USDTRY:3M"]["tag"] == "offshore limiti" and {r["key"] for r in u["inputs"]} >= {"UST:10Y", "DXY", "CDS"}
         fly = rows["OISF:6M/1Y/2Y"]                                         # (a fly with the OIS sheet's quote beside its level)
         assert fly["sheet_level"] == pytest.approx(2.0 * fly["level"]) and "(OIS sayfasında " in fly["level_text"]
-        assert [f["id"] for f in u["families"]] == ["trend", "sira", "ml", "optspot"]
+        assert [f["id"] for f in u["families"]] == ["trend", "sira", "ml", "optspot", "dibssw"]
         s = client.get("/api/quant/signals", params={"group": "TRY OIS"}).json()
-        assert s["group"] == "TRY OIS" and all(x["group"] == "TRY OIS" for x in s["signals"]) and [g["id"] for g in s["groups"]] == list(qu.GROUPS)
+        assert s["group"] == "TRY OIS" and all(x["group"] == "TRY OIS" for x in s["signals"]) and [g["id"] for g in s["groups"]] == ["Konsensüs"] + list(qu.GROUPS)
         res = client.post("/api/quant/subscription", json={"on": True, "families": ["trend", "yok"], "groups": ["VİOP", "yok"], "min": "Orta"})
         assert res.status_code == 200 and res.json()["families"] == ["trend"] and res.json()["groups"] == ["VİOP"]
         # (what is kept is the group's name, nothing a row or a position: a group's place may change, its name not)

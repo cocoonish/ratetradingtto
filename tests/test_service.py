@@ -30,10 +30,10 @@ def test_status_and_navigation(service):
     # (DİBS RV · Genel first: the Tahvil menu entry with tabs puts it before its workbook tabs - dibsgenel.py)
     assert custom == ["dibs-genel", "watch", "heat", "blotter", "broker", "trades", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
                       "quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira", "quant-ml",
-                      "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-path", "quant-wirp", "quant-lead",
+                      "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-dibssw", "quant-path", "quant-wirp", "quant-lead",
                       "quant-fx", "quant-macro", "quant-opt", "quant-optspot",
                       "quant-viop", "social", "agenda"]
-    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 34
+    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 35
 
 
 @pytest.mark.parametrize("view_id", VIEW_IDS)
