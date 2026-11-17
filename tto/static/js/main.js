@@ -12,6 +12,7 @@ import { VolPage } from './pages/vol.js';
 import { WatchPage } from './pages/watch.js';
 import { HeatPage } from './pages/heat.js';
 import { openAlarmDialog, addToWatch, checkAlarms } from './alarms.js';
+import { followWarns } from './bonds.js';
 import { ExplorerPage } from './pages/explorer.js';
 import { EodPage, MpcPage, SpreadsPage, SettingsPage } from './pages/history.js';
 import { FxPage } from './pages/fx.js';
@@ -956,8 +957,10 @@ function boot() {
   session.onUnauthorized = () => { showLogin('Oturumunuz sona erdi – tekrar giriş yapın.'); };
   const after = (res) => {
     runRefresh();
-    // ISINs of a list of bonds changed: what the rows held went with their bonds (moved / gone) - said once
-    if (res && res.row_values && res.row_values.text) toast(res.row_values.text, (res.row_values.cleared || []).length ? 'warn' : 'ok', 9000);
+    // ISINs of a list of bonds changed: what the rows held went with their bonds (moved / gone) and - the trading list -
+    // what the DİBS ASW list and Tüm Kâğıtlar did with it, said once
+    const said = [res && res.follow && res.follow.text, res && res.row_values && res.row_values.text].filter(Boolean);
+    if (said.length) toast(said.join(' · '), followWarns(res) ? 'warn' : 'ok', 9000);
     return res;
   };
   configureGrid({

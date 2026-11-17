@@ -10,6 +10,7 @@ import concurrent.futures
 import datetime as _dt
 import itertools
 import json
+import logging
 import math
 import os
 import queue
@@ -49,7 +50,9 @@ from .xl.tokenizer import col_to_index, index_to_col
 from .marketdata.base import INVALID_FIELD, INVALID_SECURITY, NOT_APPLICABLE
 from .xl.values import date_to_serial, serial_to_date
 
-RET_TENORS = ["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
+log = logging.getLogger("tto")
+
+RET_TENORS =["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
 RET_FIRST_ROW = 33
 
 
@@ -307,6 +310,11 @@ class Service(object):
         formulas = InputFormulas(self)
         self.et.call(formulas.start)
         self.formulas = formulas
+        try:
+            # once: the trading list's bonds the ASW list does not have go onto it (it follows the trading list from now on)
+            self.et.call(self._asw_follows_once)
+        except Exception as exc:  # noqa: BLE001 - tried again at the next start; the dashboard opens anyway
+            self.ops.failure("DİBS ASW listesinin trading listesiyle eşlenmesi", exc)
         # temporary copies of the calculator tables (copies.py): inputs of their own, in a layer over the user's calculation
         from .copies import Copies
         self.copies = Copies(self)
@@ -1733,7 +1741,8 @@ class Service(object):
                 continue                               # a table of the dashboard's own that does not fit this file
             # what reads the workbook only is made again when what it read changed; a panel completed with what the
             # Broker Chat, the trades or another workbook say is made every time
-            reusable = p["type"] in ("table", "notes", "chart", "custom") and not p.get("append") and not p.get("source")
+            reusable = p["type"] in ("table", "notes", "chart", "custom") and not p.get("append") and not p.get("source") \
+                and not p.get("curve") and not p.get("bonds")
             ptype = "table" if p["type"] == "generated" else p["type"]
             part(p.get("id"), ptype, reusable,
                  lambda p=p, sheet=sheet: self._panel(p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer))
@@ -2008,6 +2017,9 @@ class Service(object):
                     self._universe_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "borsa_spread":
                     self._borsa_spread_columns(book, calc, user, entry["data"], loc, p["range"])
+                if p.get("bonds"):
+                    # a list of bonds: its rows without a bond left out, the bonds in the trading list's order (display only)
+                    self._bond_rows(book, calc, sheet, p["bonds"], entry["data"])
                 hint = th.client(p.get("trade"), v["id"], p.get("id"))
                 if hint:
                     entry["data"]["trade"] = hint   # its prices: right click, "İşlem gir" (trade_prefill)
@@ -2017,8 +2029,17 @@ class Service(object):
                     idx = p.get("chart", 0)
                     if idx < len(charts):
                         spec = charts[idx]
-                if spec is not None:
-                    entry["data"] = R.chart(calc, spec, loc)
+                on = calc
+                if spec is not None and p.get("curve") == "fx":
+                    # the workbook's chart once more, on the FX swap curve: its points and its fitted curve are the
+                    # sheet's own, with the OIS quotes its curve is built from swapped for the FX swap implied rates
+                    on, _ = self._asw_fx_calc(book, user)
+                    spec = self._chart_as(spec, p.get("as") or {})
+                if spec is not None and on is None:
+                    entry["data"] = R.chart(calc, dict(spec, series=[]), loc)
+                    entry["note"] = "FX swap ima faizi yok (EK_FX): grafik çizilemedi"
+                elif spec is not None:
+                    entry["data"] = R.chart(on, spec, loc)
                     entry["title"] = p.get("title") or entry["data"]["title"]
             elif p["type"] == "custom":
                 entry["component"] = p.get("component")
@@ -2578,9 +2599,12 @@ class Service(object):
         ``lenient`` (a block pasted from Excel): cells that are not inputs are skipped and counted, not errors.
         A text that starts with ``=`` is a formula (inputformula.py): its result is the value, it is evaluated again
         whenever what it reads changes; refused - with the reason among the errors - as that module says.
+        A change of the trading list (DİBS RV's ISINs) takes the ASW list and Tüm Kâğıtlar along (``follow``:
+        :meth:`_follow_trading`).
         """
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
+        self._follow_trading(user, res)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -2722,6 +2746,7 @@ class Service(object):
                 self._follow_meetings(book, cal, slot_to, typed_to, x) for x in (user_vals, user_clear, shared_vals, shared_clear))
         # ISINs of a list of bonds written: what each row held goes with its bond first (rowkeys.py) - the values written
         # with them land on the rows as typed
+        trading = self._trading_before(book, list(shared_vals) + list(shared_clear))
         row_values = self.rowkeys.before_write(user, book, shared_vals, shared_clear, user_vals, user_clear)
         if shared_clear:
             book.engine.clear_inputs(shared_clear)
@@ -2766,6 +2791,8 @@ class Service(object):
                 res["note"] = calendar["note"]         # (what the change did, as the page's toast says it)
         if row_values:
             res["row_values"] = row_values
+        if trading is not None:
+            self._trading_after(trading, res)
         if lenient:
             res["skipped"] = skipped
         if ret_hid is not None:
@@ -2891,6 +2918,7 @@ class Service(object):
         """Back to the workbook's own values (personal inputs; ``shared`` for desk inputs)."""
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._reset_inputs, user, book_id, refs, shared)
+        self._follow_trading(user, res)            # (the trading list back to the file's: the ASW list follows)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -2905,6 +2933,7 @@ class Service(object):
                 except (KeyError, ValueError):
                     continue
         n = 0
+        res: Dict[str, Any] = {}
         if shared:
             from . import meetings as mt
             cal = next((c for c in (mt.key_of(book, si, rc) for si, rc in cells) if c is not None), None)
@@ -2914,12 +2943,15 @@ class Service(object):
                 raise ServiceError("toplantı tarihleri dosyadaki değere döndürülmez – listeyi %s üzerinden düzeltin "
                                    "(toplantıya yazılanlar toplantısıyla taşınır)" % cal.where)
             keep = [c for c in cells if c in book.inputs and book.inputs[c].scope == "shared"]
+            trading = self._trading_before(book, keep)
             rows = self.rowkeys.before_write(user, book, {}, keep, {}, [])     # (a list of bonds back to the file's)
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
             self.formulas.cleared("", book, keep)        # (a formula there goes with its value)
             self._follow_try_holidays(book, keep)
             n = len(keep)
+            if trading is not None:
+                self._trading_after(trading, res)        # (the trading list back to the file's: what entered, what left)
         else:
             rows = self.rowkeys.before_write(user, book, {}, [], {}, cells if refs else list(self._overlay(user, book)))
             ov = dict(self._overlay(user, book))
@@ -2936,7 +2968,10 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id)
             self.formulas.cleared(user, book, targets if refs else None)
             self._note_private(user)
-        return dict({"reset": n}, **({"row_values": rows} if rows else {}))
+        res["reset"] = n
+        if rows:
+            res["row_values"] = rows
+        return res
 
     # ================================================================== temporary copies of a table (copies.py)
     def copies_of(self, user: Optional[str]) -> Dict[str, Any]:
@@ -4178,10 +4213,7 @@ class Service(object):
         wanted = self._isins(values)
         skipped = [c for c in wanted if c in current]
         todo = [c for c in wanted if c not in current]
-        # below the last bond of the list first: the empty rows the desk keeps between its groups stay empty
-        # until there is no room left at the end
-        last = max([k for k, v in enumerate(current) if v] or [-1])
-        free = [k for k, v in enumerate(current) if not v and k > last] + [k for k, v in enumerate(current) if not v and k < last]
+        free = self._free_rows(current)
         if len(todo) > len(free):
             raise ServiceError("listede %d boş satır var, %d kâğıt eklenmek istendi" % (len(free), len(todo)))
         items = [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, todo)]
@@ -4191,70 +4223,229 @@ class Service(object):
         out = {"added": todo, "skipped": skipped, "cells": [i["ref"] for i in items], "free": len(free) - len(todo), "gen": self.gen}
         if res.get("row_values"):
             out["row_values"] = res["row_values"]                # (values left on a row with no bond: gone - rowkeys.py)
+        if res.get("follow"):
+            out["follow"] = res["follow"]                        # (the trading list's: the ASW list and Tüm Kâğıtlar too)
         return out
+
+    @staticmethod
+    def _free_rows(current: List[str]) -> List[int]:
+        """The empty places of a list in the order bonds go into them: below its last bond first - the empty rows the
+        desk keeps between its groups stay empty until there is no room left at the end."""
+        last = max([k for k, v in enumerate(current) if v] or [-1])
+        return [k for k, v in enumerate(current) if not v and k > last] + [k for k, v in enumerate(current) if not v and k < last]
 
     #: the trading list: the bonds of DİBS RV (and so of DİBS Trading)
     TRADING_LIST = ("tto", "DİBS RV!A5:A54")
-    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: ★ / ☆ there too
+    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: a bond that comes onto the trading
+    #: list - ★, "+ ISIN ekle", typed or pasted - goes onto it too, one that leaves it (☆, ✕, its ISIN blanked or typed
+    #: over) leaves it too; a bond the ASW page added itself stays until it is taken off there
     ASW_LIST = ("asw", "ASW!B7:B56")
+    #: the store's key: the trading list's bonds were put on the ASW list once, at the first start of this version
+    ASW_SYNCED = "migrated.asw_follows_trading"
 
-    def _list_off(self, user: str, book_id: str, ref: str, code: str) -> Tuple[int, Optional[Dict[str, Any]]]:
-        """A bond off a list of bonds: its rows empty - what they held goes with it, for everyone (its source, everyone's
-        manual price, coupon, repo, "Elle değer", in the saved scenarios too: rowkeys.py).  Returns the rows emptied and
-        what went."""
+    def _list_off(self, user: str, book_id: str, ref: str, codes: Sequence[str]) -> Tuple[int, Dict[str, Any]]:
+        """Bonds off a list of bonds: their rows empty - what they held goes with them, for everyone (the source,
+        everyone's manual price, coupon, repo, "Elle değer", in the saved scenarios too: rowkeys.py).  Returns the rows
+        emptied and the write's result (``row_values``: what went; the trading list's ``follow``)."""
         book = self._book(book_id)
         cells = book.cells_of(ref)
         current = self._list_values(user, book_id, ref)
-        rows = [cells[k] for k, v in enumerate(current) if v == code]
+        rows = [cells[k] for k, v in enumerate(current) if v and v in codes]
         if not rows:
-            return 0, None
+            return 0, {}
         res = self.set_inputs(user, book_id, [{"ref": book.ref(*c), "value": None} for c in rows])
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        return len(rows), res.get("row_values")
+        return len(rows), res
 
-    def _asw_follows(self, user: str, code: str, on: bool) -> Tuple[Optional[bool], Optional[Dict[str, Any]]]:
-        """The ASW workbook's list with the trading list: the bond added (``on``) or taken off there too.  ``None``: no
-        ASW list here; False: nothing to do (already listed / not listed, or no room left - the trading list still
-        takes it).  With what moved / went of its rows' values."""
+    def _asw_here(self) -> bool:
+        """The ASW workbook's list of bonds is here (its book and its ISIN cells, inputs of the page)."""
         book_id, ref = self.ASW_LIST
         book = self.books.get(book_id)
         try:
-            if book is None or not all(c in book.inputs for c in book.cells_of(ref)):
-                return None, None
+            return book is not None and all(c in book.inputs for c in book.cells_of(ref))
         except (KeyError, ValueError):
-            return None, None
-        if on:
-            try:
-                res = self.list_add(user, book_id, ref, [code])
-                return bool(res["added"]), res.get("row_values")
-            except ServiceError:
-                return False, None
-        removed, rows = self._list_off(user, book_id, ref, code)
-        return removed > 0, rows
+            return False
+
+    def _trading_before(self, book: Book, cells: Sequence[Tuple[int, int]]) -> Optional[List[str]]:
+        """The trading list's ISINs before a write of the desk's values that touches its cells (None: it does not) -
+        on the calculation thread, with the write."""
+        if book.id != self.TRADING_LIST[0] or not cells:
+            return None
+        try:
+            mine = set(book.cells_of(self.TRADING_LIST[1]))
+        except (KeyError, ValueError):
+            return None
+        if not any(c in mine for c in cells):
+            return None
+        return self.rowkeys.keys("dibs")
+
+    def _trading_after(self, before: List[str], res: Dict[str, Any]) -> None:
+        """What a write did to the trading list: the bonds that came onto it and the ones that left it (``trading`` of
+        the result; :meth:`_follow_trading` takes the other lists along, off the calculation thread).  A bond moved
+        within the list in one write (a paste re-sorting it) is neither."""
+        after = self.rowkeys.keys("dibs")
+        entered = [c for c in dict.fromkeys(after) if c and c not in before]
+        left = [c for c in dict.fromkeys(before) if c and c not in after]
+        if entered or left:
+            res["trading"] = {"entered": entered, "left": left}
+
+    def _follow_trading(self, user: str, res: Dict[str, Any]) -> None:
+        """After a write that changed the trading list: the ASW list and Tüm Kâğıtlar follow it (``follow`` of the
+        result says what they did; what the ASW list's rows held and where it went joins ``row_values``)."""
+        change = res.pop("trading", None)
+        if not change:
+            return
+        from .rowkeys import merge_notes
+        try:
+            follow, notes = self._trading_follows(user, change["entered"], change["left"])
+        except Exception as exc:  # noqa: BLE001 - the trading list is written: what could not follow is said, not raised
+            self.ops.failure("trading listesini izleyen listeler (DİBS ASW, Tüm Kâğıtlar)", exc)
+            why = str(exc)[:200] or type(exc).__name__
+            res["follow"] = {"errors": [why], "text": "DİBS ASW / Tüm Kâğıtlar trading listesini izleyemedi: " + why}
+            return
+        told = merge_notes([x for x in (res.get("row_values"), notes) if x])
+        if told:
+            res["row_values"] = told
+        if follow:
+            res["follow"] = follow
+
+    def _trading_follows(self, user: str, entered: Sequence[str], left: Sequence[str]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """The ASW list and Tüm Kâğıtlar with the trading list: the bonds that ``left`` it off the ASW list (with their
+        rows' values, for everyone), the ones that ``entered`` it onto the ASW list (below its last bond; the ones it
+        has no room for stay on the trading list only) and onto Tüm Kâğıtlar when that does not have them (Bloomberg
+        tells their kind, as its "+ ISIN ekle" does).  Text that is no ISIN goes nowhere.  Returns what was done
+        (``asw_added``, ``asw_removed``, ``asw_full``, ``desk_added``, ``desk_waiting``, ``desk_refused``, ``invalid``,
+        ``text``) and what the ASW list's rows held and where it went."""
+        valid = [c for c in entered if bd.isin_valid(c)]
+        out: Dict[str, Any] = {"invalid": [c for c in entered if not bd.isin_valid(c)]}
+        notes = None
+        if self._asw_here():
+            got = self._asw_follow(user, valid, left)
+            out.update(asw_added=got["added"], asw_removed=got["removed"], asw_full=got["full"])
+            notes = got["row_values"]
+            if got["errors"]:
+                out["asw_errors"] = got["errors"]
+        listed = {b["isin"] for b in bd.listed(self._bond_day())}
+        new = [c for c in valid if c not in listed]
+        if new:
+            desk = self.bond_list_add(user, new)
+            out.update(desk_added=[x["isin"] for x in desk["added"]], desk_waiting=list(desk["waiting"]),
+                       desk_refused=[{"isin": x["isin"], "text": x["text"]} for x in desk["refused"]])
+        out = {k: v for k, v in out.items() if v}
+        if out:
+            out["text"] = self._follow_text(out)
+        return out, notes
+
+    def _asw_follow(self, user: str, entered: Sequence[str], left: Sequence[str]) -> Dict[str, Any]:
+        """The ASW list in one write: the rows of the bonds that ``left`` the trading list emptied, the ones that
+        ``entered`` it below the list's last bond (into the rows between when the end is full) - each once, the ones
+        listed already skipped, the ones there is no room for left out (``full``)."""
+        book_id, ref = self.ASW_LIST
+        book = self.books[book_id]
+        cells = book.cells_of(ref)
+        current = self._list_values(user, book_id, ref)
+        now = list(current)
+        items: List[Dict[str, Any]] = []
+        removed: List[str] = []
+        for k, v in enumerate(current):
+            if v and v in left:
+                now[k] = ""
+                items.append({"ref": book.ref(*cells[k]), "value": None})
+                if v not in removed:
+                    removed.append(v)
+        todo = [c for c in dict.fromkeys(entered) if c not in now]
+        free = self._free_rows(now)
+        fit, full = todo[:len(free)], todo[len(free):]
+        items += [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, fit)]
+        res = self.set_inputs(user, book_id, items) if items else {"errors": []}
+        return {"added": fit, "removed": removed, "full": full, "row_values": res.get("row_values"),
+                "errors": list(res.get("errors") or [])}
+
+    @staticmethod
+    def _bond_name(code: str) -> str:
+        """A bond as a toast names it: as the desk does ("15.03.28", "19.01.28 TLREF"), else its ISIN."""
+        b = bd.by_isin(code)
+        return bd.short_label(b) if b and b.get("maturity") else code
+
+    def _follow_text(self, f: Dict[str, Any]) -> str:
+        """What the ASW list and Tüm Kâğıtlar did with a change of the trading list, as the toast says it."""
+        def names(codes: Sequence[str]) -> str:
+            return ", ".join(self._bond_name(c) for c in codes)
+        parts = []
+        if f.get("asw_added"):
+            parts.append("DİBS ASW'ye de eklendi: " + names(f["asw_added"]))
+        if f.get("asw_removed"):
+            parts.append("DİBS ASW'den de çıkarıldı: " + names(f["asw_removed"]))
+        if f.get("asw_full"):
+            parts.append("DİBS ASW listesinde yer yok: %s yalnız trading listesine girdi" % names(f["asw_full"]))
+        if f.get("asw_errors"):
+            parts.append("DİBS ASW listesine yazılamadı: " + "; ".join(f["asw_errors"]))
+        if f.get("desk_added"):
+            waiting = [c for c in f["desk_added"] if c in (f.get("desk_waiting") or ())]
+            parts.append("Tüm Kâğıtlar'a eklendi: " + names(f["desk_added"])
+                         + (" (türü Bloomberg'den bekleniyor: %s)" % names(waiting) if waiting else ""))
+        if f.get("desk_refused"):
+            parts.append("Tüm Kâğıtlar'a alınmadı: " + ", ".join("%s (%s)" % (x["isin"], x["text"]) for x in f["desk_refused"]))
+        if f.get("invalid"):
+            parts.append("ISIN değil, DİBS ASW'ye ve Tüm Kâğıtlar'a gitmedi: " + ", ".join(f["invalid"]))
+        return " · ".join(parts)
+
+    def _asw_follows_once(self) -> None:
+        """Once, at the first start of this version: a bond of the trading list that the ASW list does not have goes
+        onto it (below its last bond, as ★ puts it); from then on the ASW list follows every change of the trading list.
+        Said in the log (on the desk's data both lists held the same bonds: nothing moves)."""
+        if self.store.get(self.ASW_SYNCED) or not self._asw_here():
+            return
+        book_id, ref = self.ASW_LIST
+        book = self.books[book_id]
+        trading = [c for c in dict.fromkeys(self.rowkeys.keys("dibs")) if c and bd.isin_valid(c)]
+        current = self.rowkeys.keys("asw")
+        missing = [c for c in trading if c not in current]
+        free = self._free_rows(current)
+        cells = book.cells_of(ref)
+        items = [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, missing)]
+        if items:
+            res = self._set_inputs(None, book_id, items, False)
+            log.info("DİBS ASW listesi trading listesini izliyor (bir kereye mahsus): trading listesinin ASW'de olmayan %d kâğıdı "
+                     "eklendi - %s%s", len(items), ", ".join("%s → %s" % (i["value"], i["ref"]) for i in items),
+                     " · hata: " + "; ".join(res["errors"]) if res.get("errors") else "")
+        else:
+            log.info("DİBS ASW listesi trading listesini izliyor: trading listesinin %d kâğıdı ASW listesinde zaten var", len(trading))
+        if len(missing) > len(free):
+            log.warning("DİBS ASW listesinde yer yok: %s ASW listesine eklenemedi", ", ".join(missing[len(free):]))
+        self.store.put(self.ASW_SYNCED, now_iso())
 
     def bond_flag(self, user: str, isin: str, on: bool) -> Dict[str, Any]:
-        """★ a bond: onto the trading list (below its last bond) or off it - for everyone.  A bond taken off leaves
-        its row empty, with nothing of it left behind (its source, everyone's manual price, coupon, repo, "Elle değer" -
-        in the saved scenarios too).  ``row_values``: what of the rows' values moved / went (rowkeys.py)."""
-        from . import bonds as bd
+        """★ a bond: onto the trading list (below its last bond) or off it - for everyone, the ASW list with it (and Tüm
+        Kâğıtlar, for a bond it does not have).  A bond taken off leaves its rows empty, with nothing of it left behind
+        (its source, everyone's manual price, coupon, repo, "Elle değer" - in the saved scenarios too).  ``asw``: the ASW
+        list took it / let it go (None: no ASW list here); ``follow``: what the other lists did; ``row_values``: what of
+        the rows' values moved / went (rowkeys.py)."""
         from .rowkeys import merge_notes
         user = self.require_user(user)
         code = "".join(str(isin or "").split()).upper()
         if not bd.isin_valid(code):
             raise ServiceError("ISIN değil ya da kontrol hanesi tutmuyor: %s" % (code or "(boş)"))
         book_id, ref = self.TRADING_LIST
+        asw_here = self._asw_here()
         if on:
             res = self.list_add(user, book_id, ref, [code])
-            asw, rows = self._asw_follows(user, code, True)
-            out = {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "asw": asw, "gen": self.gen}
-            told = merge_notes([x for x in (res.get("row_values"), rows) if x])
+            follow, told = res.get("follow") or {}, res.get("row_values")
+            if not res["added"]:
+                # on the trading list already: the ASW list and Tüm Kâğıtlar have it still, as ★ always made sure
+                follow, notes = self._trading_follows(user, [code], [])
+                told = merge_notes([x for x in (told, notes) if x])
+            out = {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"],
+                   "asw": code in (follow.get("asw_added") or ()) if asw_here else None, "gen": self.gen}
         else:
-            removed, rows = self._list_off(user, book_id, ref, code)
-            asw, asw_rows = self._asw_follows(user, code, False)
+            removed, res = self._list_off(user, book_id, ref, [code])
+            follow, told = res.get("follow") or {}, res.get("row_values")
             self.bump()
-            out = {"isin": code, "on": False, "removed": removed, "asw": asw, "gen": self.gen}
-            told = merge_notes([x for x in (rows, asw_rows) if x])
+            out = {"isin": code, "on": False, "removed": removed,
+                   "asw": code in (follow.get("asw_removed") or ()) if asw_here else None, "gen": self.gen}
+        if follow:
+            out["follow"] = follow
         if told:
             out["row_values"] = told
         return out
@@ -4514,6 +4705,8 @@ class Service(object):
         told = merge_notes([x for x in (off.get("row_values"), uni) if x])
         if told:
             out["row_values"] = told                     # (what was typed on its rows went with it)
+        if off.get("follow"):
+            out["follow"] = off["follow"]                # (off the trading list: off the ASW list too)
         return out
 
     def _universe_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
@@ -4675,17 +4868,103 @@ class Service(object):
                   numfmt.format_value(exact, "#,##0", loc)))
         return {"t": numfmt.format_value(nominal / 1e6, "#,##0", loc) + "m", "v": nominal, "k": "n", "tip": tip}
 
+    def _trading_columns(self) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
+        """The trading summary's columns in their groups: ``[(group, [(caption, key, tip), ...]), ...]``.  A column's key
+        is its letter in the table as it was before the groups (what a user hid, or a launchpad box shows, stays that
+        column); the columns that came with the groups follow the old ones."""
+        board = len(self._BOARD_HEADS)
+        old = {k: index_to_col(k + 1) for k in range(19 + board + 1)}          # A .. S, the board, Kart
+        new = [index_to_col(20 + board + 1 + k) for k in range(7)]
+        fair = ("Kâğıdın ASW'si DİBS RV'nin %s ASW eğrisinde (a + b·t + c·t², sabit kuponlulara uydurulan) dursaydı %s: kirli "
+                "@spot = PV@%s − eğri ASW × annuity / 100, valöre fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi "
+                "BIST bileşik. Bono eğriye girmez: eğrinin kâğıdın vadesindeki değeri. TLREF / FRN / TÜFE: yok (nedeni üzerinde)")
+        return [
+            ("", [("★", old[0], "Trading listesinden çıkar (herkes için; DİBS ASW listesinden de)"),
+                  ("Kâğıt", old[1], ""), ("ISIN", old[2], ""), ("Vade", old[3], ""),
+                  ("Kalan yıl", old[4], "Bugünden vadeye yıl (365,25 gün)")]),
+            ("Fiyat", [("Valör", old[5], "Kâğıdın DİBS RV'de fiyatlandığı Bloomberg kaynağı (ISL0: aynı gün valör, ISL1: ertesi iş günü)"),
+                       ("Bid", old[6], "DİBS RV: Bloomberg alış ('–': o tarafta emir yok)"),
+                       ("Ask", old[7], "DİBS RV: Bloomberg satış ('–': o tarafta emir yok)"),
+                       ("Son işlem", old[8], "Son işlem fiyatı (DİBS RV)"),
+                       ("Ne zaman", old[9], "Son işlemin günü; canlıda dashboard'un işlemi gördüğü saat")]),
+            ("OIS'e göre", [("Getiri %", old[10], "DİBS RV: BIST bileşik getiri (kullanılan temiz fiyattan)"),
+                            ("ASW / DM", old[11], "DİBS RV: TLREF OIS eğrisine göre ASW (bp; sabit kuponlu, bono) · TLREF'e endeksli kâğıtta DM"),
+                            ("Adil getiri %", new[0], fair % ("OIS", "getirisi", "OIS")),
+                            ("Adil fiyat", new[1], fair % ("OIS", "valördeki temiz fiyatı", "OIS")),
+                            ("Pahalı / ucuz", old[12], "DİBS RV: ASW − eğrinin ASW'si (bp; + ucuz) · sabit kuponlu"),
+                            ("Sinyal", old[13], "DİBS RV: pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
+            ("FX swap'a göre", [("ASW FX", new[2], "DİBS RV: FX swap ima TRY eğrisine (offshore) göre ASW (bp)"),
+                                ("Adil getiri %", new[3], fair % ("FX swap", "getirisi", "FX")),
+                                ("Adil fiyat", new[4], fair % ("FX swap", "valördeki temiz fiyatı", "FX")),
+                                ("Pahalı / ucuz", new[5], "DİBS RV: ASW FX − FX eğrisinin ASW'si (bp; + ucuz) · sabit kuponlu"),
+                                ("Sinyal", new[6], "DİBS RV: FX'e göre pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
+            ("Risk", [("Mod. süre", old[14], "DİBS RV: modifiye süre"),
+                      ("DV01 / 1mn", old[15], "DİBS RV: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
+                      (self.USD_DV01_HEAD, old[16], "DV01'i 1.000 USD olan TL nominal: 1.000 × USDTRY ÷ DV01 / 1mn, 5 mn'a yuvarlı")]),
+            ("Carry", [("C+R (bp)", old[17], "DİBS RV: carry + roll-down (DİBS RV'nin Ufuk (ay) ayarıyla)"),
+                       ("T0→T1 repo %", old[18], "T0 ve T1 kirli fiyatlarının ima ettiği O/N repo (aynı güne ait fiyatlardan)")]),
+            ("Broker", [(h, old[19 + k], tip) for k, (h, tip) in enumerate(self._BOARD_HEADS)]),
+            ("", [("Kart", old[19 + board], "Kâğıdın bütün bilgisi tek pencerede")]),
+        ]
+
+    def _fair_cells(self, f: Dict[str, Any], side: str, fits: Dict[str, Any], valor: Any, own: Any, loc) -> List[Dict[str, Any]]:
+        """A bond's fair yield and fair clean price on one of DİBS RV's ASW curves (rvfair.py), with how each is made in
+        the tip; a dash that says why where there is none.  ``own``: the bond's own yield, said beside the fair one."""
+        name = "OIS" if side == "ois" else "FX swap"
+        if "yield" not in f:
+            dash = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": "%s eğrisine göre adil değer yok: %s" % (name, f.get("why") or "")}
+            return [dict(dash), dict(dash)]
+
+        def n(v: float, fmt: str) -> str:
+            return numfmt.format_value(v, fmt, loc)
+
+        a, b, c = fits[side]["coef"]
+        poly = n(a, "0.0") + "".join((" − " if x < 0 else " + ") + n(abs(x), fmt) + t
+                                     for x, fmt, t in ((b, "0.00", "·t"), (c, "0.000", "·t²")))
+        parts = []
+        if f["bill"]:
+            parts.append("Bono eğriye girmez: eğrinin vadesindeki değeri")
+        span = fits[side]["span"]
+        if f["stretched"]:
+            parts.append("eğrinin kâğıtları %s yıl: bu vade dışında, eğri uzatıldı" % ("–".join(n(x, "0.00") for x in span) if span else "yok"))
+        parts.append("%s ASW eğrisi (%d kâğıt): %s; t = %s yıl → eğri ASW %s bp" % (name, fits[side]["n"], poly, n(f["t"], "0.00"),
+                                                                                   n(f["asw"], "0.0")))
+        parts.append("kirli @spot = PV@%s %s − eğri ASW × annuity %s / 100 = %s" % ("OIS" if side == "ois" else "FX", n(f["pv"], "0.000"),
+                                                                                   n(f["ann"], "0.0000"), n(f["dirty_spot"], "0.000")))
+        when = " (%s)" % n(valor, "dd.mm.yyyy") if type(valor) is float else ""
+        parts.append("valörde%s ÷ fonlama %s: kirli %s, temiz %s (işlemiş %s)" % (when, n(f["dd"], "0.00000"), n(f["dirty"], "0.000"),
+                                                                                    n(f["price"], "0.000"), n(f["acc"], "0.000")))
+        parts.append("getiri %s (BIST bileşik%s)" % (n(f["yield"], "0.00%"), "; ekranda %s" % n(own, "0.00%") if type(own) is float else ""))
+        tip = " · ".join(parts)
+        cls = "soft" if f["stretched"] else ""
+        out = [{"t": n(f["yield"], "0.00%"), "v": f["yield"], "k": "n", "tip": tip},
+               {"t": n(f["price"], "0.000"), "v": f["price"], "k": "n", "tip": tip}]
+        if cls:
+            for x in out:
+                x["cls"] = cls
+        return out
+
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
-        """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity - the price on
-        the value date the bond is priced on (bid, ask, the last trade and when), what DİBS RV makes of it (yield,
-        ASW, cheap / rich, signal, duration, DV01, carry), the repo T0 -> T1 implies and today's chat board."""
+        """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity, in groups of
+        columns - the price on the value date the bond is priced on (bid, ask, the last trade and when); against OIS and
+        against the FX swap curve what DİBS RV makes of it (yield, ASW, cheap / rich, signal) and its fair yield and price
+        on each fitted ASW curve (rvfair.py); its risk (duration, DV01, the nominal of USD 1,000 DV01); carry and the repo
+        T0 -> T1 implies; today's chat board."""
+        from . import rvfair
         book = self.books.get("tto")
-        heads = ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %",
-                 "ASW / DM", "Pahalı / ucuz", "Sinyal", "Mod. süre", "DV01 / 1mn", self.USD_DV01_HEAD, "C+R (bp)",
-                 "T0→T1 repo %"] + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
-        rows: List[List[Dict[str, Any]]] = [[{"t": x, "k": "s", "b": 1, "f": "hd"} for x in heads]]
-        out = {"rows": rows, "r": [], "c": [index_to_col(k + 1) for k in range(len(heads))], "added": len(heads)}
+        groups = self._trading_columns()
+        cols = [x for _, items in groups for x in items]
+        width = len(cols)
+        top: List[Dict[str, Any]] = []
+        for name, items in groups:
+            top.append(dict({"t": name, "k": "s", "b": 1, "f": "hd", "al": "c"} if name else {"t": "", "k": ""},
+                            **({"cs": len(items)} if len(items) > 1 else {})))
+            top.extend({"sk": 1} for _ in items[1:])
+        head = [dict({"t": cap, "k": "s", "b": 1, "f": "hd"}, **({"tip": tip} if tip else {})) for cap, _, tip in cols]
+        rows: List[List[Dict[str, Any]]] = [top, head]
+        out = {"rows": rows, "r": [], "c": [key for _, key, _ in cols], "added": width}
         if book is None or "DİBS RV" not in book.model.sheet_index:
+            out["r"] = [0, 1]
             return out
         si = book.model.sheet_index["DİBS RV"]
         calc = self._calc(user, book)
@@ -4694,6 +4973,7 @@ class Service(object):
         said = self._board_bonds(user)
         today = _dt.date.fromisoformat(self.today_iso())
         spot = self._usdtry_mid(book, calc)
+        fits = rvfair.read_fits(calc, si)
 
         def cell(c: str, r: int, s: int = si) -> Dict[str, Any]:
             got = R.cell(calc, s, r, parse_a1("%s1" % c) % COLS, loc)
@@ -4702,7 +4982,6 @@ class Service(object):
             keep.setdefault("k", "")
             return keep
 
-        from . import bonds as bd
         bonds: Dict[str, List[Tuple[Any, List[Dict[str, Any]]]]] = {g: [] for g, _ in self._TYPE_GROUPS}
         for r in range(5, 55):
             isin = calc.get(si, r, 1)
@@ -4732,29 +5011,49 @@ class Service(object):
             if not str(due.get("t") or "").strip() and type(mat) is float:
                 due = {"t": numfmt.format_value(mat, "dd.mm.yyyy", loc), "v": mat, "k": "n"}
             q = self._rv_quote(calc, si, r)
-            priced = [cell("T", r), cell("Z", r), cell("AB", r), dict(cell("AC", r), b=1)]
+            # what DİBS RV works out of the price in use: soft while no live quote stands behind it
+            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"), ("fx", "BF"), ("fx_rich", "BH"),
+                                                 ("fx_signal", "BI"))}
+            for k in ("N", "fx_signal"):
+                priced[k] = dict(priced[k], b=1)
             if q["stale"]:
-                priced = [self._soft(c, q["tip"]) for c in priced]
-            line = [self._flag_cell(code, True), label, {"t": code, "k": "s", "cls": "soft"}, due,
-                    {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
-                    {"t": str(src or ""), "k": "s", "cls": "soft"},
-                    self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
-                    self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), dict(cell("AS", r), b=1), when] + priced + \
-                [cell("AG", r), cell("AI", r), self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
-                 cell("AO", r), self._repo_cell(cell, live, r)]
-            line += self._bond_cells(said.get(code), loc) + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}]
+                priced = {k: self._soft(c, q["tip"]) for k, c in priced.items()}
+            f = rvfair.fair(calc, si, r, fits)
+            valor, own = calc.get(si, r, parse_a1("P1") % COLS), calc.get(si, r, parse_a1("T1") % COLS)
+            ois_y, ois_p = self._fair_cells(f["ois"], "ois", fits, valor, own, loc)
+            fx_y, fx_p = self._fair_cells(f["fx"], "fx", fits, valor, own, loc)
+            by = {"A": self._flag_cell(code, True), "B": label, "C": {"t": code, "k": "s", "cls": "soft"}, "D": due,
+                  "E": {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
+                  "F": {"t": str(src or ""), "k": "s", "cls": "soft"},
+                  "G": self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
+                  "H": self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), "I": dict(cell("AS", r), b=1), "J": when,
+                  "K": priced["K"], "L": priced["L"], "M": priced["M"], "N": priced["N"],
+                  "O": cell("AG", r), "P": cell("AI", r),
+                  "Q": self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
+                  "R": cell("AO", r), "S": self._repo_cell(cell, live, r)}
+            ois_keys = [key for _, key, _ in groups[2][1]]
+            fx_keys = [key for _, key, _ in groups[3][1]]
+            by.update({ois_keys[2]: ois_y, ois_keys[3]: ois_p, fx_keys[0]: priced["fx"], fx_keys[1]: fx_y, fx_keys[2]: fx_p,
+                       fx_keys[3]: priced["fx_rich"], fx_keys[4]: priced["fx_signal"]})
+            board = self._bond_cells(said.get(code), loc)
+            for (_, key, _), c in zip(groups[6][1], board):
+                by[key] = c
+            by[groups[7][1][0][1]] = {"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}
+            line =[by[key] for _, key, _ in cols]
             group = kind if kind in bonds else "S"
             bonds[group].append((mat if type(mat) is float else 1e9, line))
         for g, caption in self._TYPE_GROUPS:
             if not bonds[g]:
                 continue
-            rows.append([{"t": "%s · %d" % (caption, len(bonds[g])), "k": "s", "b": 1, "cls": "grouphead", "cs": len(heads)}]
-                        + [{"t": "", "k": ""} for _ in heads[1:]])
+            rows.append([{"t": "%s · %d" % (caption, len(bonds[g])), "k": "s", "b": 1, "cls": "grouphead", "cs": width}]
+                        + [{"t": "", "k": ""} for _ in range(width - 1)])
             rows.extend(line for _, line in sorted(bonds[g], key=lambda x: x[0]))
-        if len(rows) == 1:
-            rows.append([{"t": "Trading listesi boş: Tüm Kâğıtlar sayfasında ☆ ile ekleyin", "k": "s", "cls": "soft", "cs": len(heads)}]
-                        + [{"t": "", "k": ""} for _ in heads[1:]])
-        out["r"] = list(range(1, len(rows) + 1))
+        if len(rows) == 2:
+            rows.append([{"t": "Trading listesi boş: Tüm Kâğıtlar sayfasında ☆ ile ekleyin", "k": "s", "cls": "soft", "cs": width}]
+                        + [{"t": "", "k": ""} for _ in range(width - 1)])
+        # the rows are numbered as before the groups of columns (the captions 1, then a row each): a launchpad box that
+        # keeps rows of it by their number shows the same ones; the groups' row above is a caption of the dashboard's (0)
+        out["r"] = [0] + list(range(1, len(rows)))
         return out
 
     # ================================================================== watching the market
@@ -5078,6 +5377,43 @@ class Service(object):
         return note
 
     # ================================================================== ASW against FX swaps
+    def _asw_fx_calc(self, book, user: Optional[str]) -> Tuple[Optional[Calc], int]:
+        """The ASW sheet's calculation on the FX swap curve: the OIS quotes its curve is built from (ASW!C65:R65)
+        swapped for the FX swap implied rates of EK_FX - a tenor without one keeps its OIS quote - over the user's own
+        inputs.  ``None`` when no tenor has an FX rate; with the number swapped.  Made once for what a page shows at a
+        time (the table's ASW FX column and the chart of it read the same one; anything changed since: made again)."""
+        si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
+        base = self._calc(user, book)
+        shared = book.engine.shared
+        key = (user, book.id, id(base), base.epoch, shared.epoch, book.engine.input_changes)
+        hit = getattr(self, "_fx_calc_kept", None)
+        if hit is not None and hit[0] == key:
+            return hit[1], hit[2]
+        ov = dict(self._overlay(user, book)) if user else {}
+        swapped = 0
+        for k in range(len(ex.FXC_ROOTS)):
+            v = base.get(fi, ex.FXC_FIRST + k, parse_a1("D1") % COLS)
+            if type(v) is float:
+                ov[(si, parse_a1("%s65" % index_to_col(3 + k)))] = v
+                swapped += 1
+        calc = Calc(book.engine, shared, ov) if swapped else None
+        self._fx_calc_kept = (key, calc, swapped)
+        return calc, swapped
+
+    @staticmethod
+    def _chart_as(spec: Dict[str, Any], how: Dict[str, Any]) -> Dict[str, Any]:
+        """A chart of the workbook under another title, value axis title and series names (a panel's ``as``)."""
+        out = dict(spec)
+        if how.get("title"):
+            out["title"] = how["title"]
+        if how.get("y_title"):
+            out["axis_titles"] = [how["y_title"] if t == spec.get("y_title") else t for t in spec.get("axis_titles") or []]
+            out["y_title"] = how["y_title"]
+        names = how.get("names") or []
+        out["series"] = [dict(s, name=names[i], name_ref=None) if i < len(names) and names[i] else s
+                         for i, s in enumerate(spec.get("series") or [])]
+        return out
+
     def _asw_fx_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """ASW against the FX swap curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
         it builds its curve from (ASW!C65:R65) swapped for the FX swap implied rates of EK_FX - a tenor without
@@ -5087,16 +5423,9 @@ class Service(object):
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows:
             return
-        si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
+        si = book.model.sheet_index["ASW"]
         base = self._calc(user, book)
-        ov = dict(self._overlay(user, book)) if user else {}
-        swapped = 0
-        for k in range(len(ex.FXC_ROOTS)):
-            v = base.get(fi, ex.FXC_FIRST + k, parse_a1("D1") % COLS)
-            if type(v) is float:
-                ov[(si, parse_a1("%s65" % index_to_col(3 + k)))] = v
-                swapped += 1
-        calc = Calc(book.engine, book.engine.shared, ov) if swapped else None
+        calc, swapped = self._asw_fx_calc(book, user)
         r_col = parse_a1("R1") % COLS
 
         def bp(v: Any, signed: bool = False) -> Dict[str, Any]:
@@ -5121,6 +5450,63 @@ class Service(object):
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
         data["added"] = int(data.get("added") or 0) + 2
+
+    #: a bond's kind (the desk's list's) from a type letter of a sheet (B / S / T / E: DİBS RV's, the ASW sheet's)
+    _KIND_OF_TYPE = {"B": "bill", "S": "fixed", "T": "float", "F": "frn", "E": "cpi"}
+
+    def _bond_rows(self, book, calc, sheet: str, spec: Dict[str, Any], data: Dict[str, Any]) -> None:
+        """A list of bonds as its page shows it - display only, every cell stays where it is: the rows that hold no bond
+        are left out (the empty rows the desk keeps between its groups and the unused ones below; "+ ISIN ekle" and a
+        paste still find them), and with ``order`` the bonds kind by kind (bono, kuponsuz, sabit kuponlu, TLREF, FRN,
+        TÜFE - a caption each, as on Tüm Kâğıtlar), by maturity.  ``spec``: the list's ISIN column (``key``), its rows
+        (``first``, ``last``); ``order``: the sheet's columns of a bond's type and maturity, when the desk's list does not
+        know the bond."""
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows or sheet not in book.model.sheet_index:
+            return
+        from .rowkeys import isin_of
+        si = book.model.sheet_index[sheet]
+        key, first, last = col_to_index(spec["key"]), int(spec["first"]), int(spec["last"])
+        order = spec.get("order")
+        top: List[Tuple[List[Dict[str, Any]], int]] = []
+        foot: List[Tuple[List[Dict[str, Any]], int]] = []
+        bonds: List[Tuple[str, Any, List[Dict[str, Any]], int]] = []
+        for row, r in zip(rows, rnums):
+            if not isinstance(r, int) or r < first:
+                top.append((row, r))
+                continue
+            if r > last:
+                foot.append((row, r))
+                continue
+            code = isin_of(calc.get(si, r, key))
+            if not code:
+                continue
+            kind, mat = None, None
+            if order:
+                b = bd.by_isin(code)
+                kind = (b or {}).get("kind") or self._KIND_OF_TYPE.get(calc.get(si, r, col_to_index(order["kind"])))
+                mat = date_to_serial(_dt.date.fromisoformat(b["maturity"])) if (b or {}).get("maturity") \
+                    else calc.get(si, r, col_to_index(order["maturity"]))
+            bonds.append((kind, mat if type(mat) is float else 1e9, row, r))
+        out = top
+        if not order:
+            out += [(row, r) for _, _, row, r in bonds]
+        else:
+            width = len(rows[0]) if rows else 0
+
+            def caption(text: str) -> List[Dict[str, Any]]:
+                # (``grp``: a launchpad box of some of the bonds shows only the captions of their groups)
+                return [{"t": text, "k": "s", "b": 1, "cls": "grouphead", "cs": width, "grp": 1}] + [{"sk": 1} for _ in range(width - 1)]
+
+            kinds = [k for k, _, _ in ex.UNI_KINDS]
+            for kind, cap, _ in list(ex.UNI_KINDS) + [(None, "Türü bilinmiyor", None)]:
+                mine = sorted((x for x in bonds if (x[0] if x[0] in kinds else None) == kind), key=lambda x: (x[1], x[3]))
+                if mine:
+                    out.append((caption("%s · %d kâğıt" % (cap, len(mine))), 0))
+                    out += [(row, r) for _, _, row, r in mine]
+        out += foot
+        data["rows"] = [row for row, _ in out]
+        data["r"] = [r for _, r in out]
 
     # ================================================================== BIST swaps against the TRY workbook's curves
     def _borsa_spread_columns(self, book, calc, user: Optional[str], data: Dict[str, Any], loc, rng: str) -> None:
@@ -5529,6 +5915,20 @@ class Service(object):
                             if q["stale"] and cap.strip().startswith(self._RV_PRICED):      # worked out of no live quote
                                 item.update(soft=True, tip=q["tip"])
                             out["rv"].append(item)
+                # the fair yield and price on each of DİBS RV's fitted ASW curves (as the trading summary has them), after
+                # the curves' own figures
+                from . import rvfair
+                fits = rvfair.read_fits(calc, si)
+                f = rvfair.fair(calc, si, info["row"], fits)
+                valor, own = calc.get(si, info["row"], parse_a1("P1") % COLS), calc.get(si, info["row"], parse_a1("T1") % COLS)
+                fair = []
+                for side, name in (("ois", "OIS"), ("fx", "FX swap")):
+                    for what, c in zip(("Adil getiri", "Adil fiyat"), self._fair_cells(f[side], side, fits, valor, own, loc)):
+                        fair.append({"name": "%s (%s eğrisi)" % (what, name), "t": c["t"], "tip": c.get("tip"),
+                                     "soft": "soft" in (c.get("cls") or "")})
+                at = max([k + 1 for k, x in enumerate(out["rv"]) if x["name"].startswith(("ASW FX", "Pahalı/ucuz FX", "Sinyal FX"))]
+                         or [len(out["rv"])])
+                out["rv"][at:at] = fair
                 out["row"] = info["row"]
             if ex.LIVE_SHEET in book.model.sheet_index:
                 si = book.model.sheet_index[ex.LIVE_SHEET]
@@ -7332,9 +7732,9 @@ def _row_text(row: List[Dict[str, Any]]) -> Optional[str]:
 def _row_name(row: List[Dict[str, Any]]) -> Optional[str]:
     """The name of a row: its first text from the left - a tenor, an ISIN, a pair (numbers and dates before it are
     passed over: the RET table's day count stands left of its tenor; so is a date written as text, a settle date that
-    moves every day).  ``None``: the row has no such text."""
+    moves every day; so is a button - the trading summary's ★ left of its bond).  ``None``: the row has no such text."""
     for c in row:
-        if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s":
+        if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s" or "act" in str(c.get("cls") or "").split():
             continue
         t = " ".join(str(c.get("t") or "").split())
         if t and not _DATE_TEXT.match(t):
@@ -7454,7 +7854,14 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
                     hit = hit if len(hit) == 1 else []
                 body.update(hit)
         if body:
-            keep_r = sorted(heads | body)
+            keep = heads | body
+            # the caption of a group of a list of bonds (_bond_rows: "Bono · 2 kâğıt") stays over the rows picked in it only
+            grp = [i for i in sorted(heads) if src[i] and isinstance(src[i][0], dict) and src[i][0].get("grp")]
+            for k, i in enumerate(grp):
+                end = grp[k + 1] if k + 1 < len(grp) else len(src)
+                if not any(i < j < end for j in body):
+                    keep.discard(i)
+            keep_r = sorted(keep)
         else:
             missing = True
     new_r = {i: k for k, i in enumerate(keep_r)}

@@ -127,11 +127,21 @@
    "range": "B6:U56",
    "keep_title": true,
    "append": "asw_fx",
+   "bonds": {
+    "key": "B",
+    "first": 7,
+    "last": 56,
+    "order": {
+     "kind": "H",
+     "maturity": "I"
+    }
+   },
+   "note": "Kâğıtlar trading listesindeki gibi türüne (bono, kuponsuz, sabit kuponlu, TLREF, FRN, TÜFE) ve vadesine göre sıralı; kâğıtsız satırlar gösterilmez (hücreler yerinde: + ISIN ekle boş satırları bulur). Trading listesine eklenen kâğıt buraya da eklenir, çıkan buradan da çıkar; bu tablonun kendi + ISIN ekle'si yalnız bu listeye ekler.",
    "action": "add-isin",
    "add": {
     "list": "B7:B56",
     "catalog": true,
-    "title": "DİBS ASW listesine kâğıt ekle"
+    "title": "DİBS ASW listesine kâğıt ekle (yalnız bu liste; trading listesi değişmez)"
    },
    "trade": {
     "first": 7,
@@ -149,12 +159,64 @@
    "wide": true
   },
   {
+   "id": "chartfx",
+   "type": "chart",
+   "chart": 0,
+   "curve": "fx",
+   "wide": true,
+   "title": "FX swap eğrisine göre ASW — kalan vade",
+   "as": {
+    "title": "FX swap eğrisine göre ASW — kalan vade",
+    "y_title": "ASW FX (bp)",
+    "names": [
+     "Kâğıtlar",
+     "FX eğrisi (a+bt+ct²)"
+    ]
+   },
+   "note": "Yukarıdaki grafiğin aynısı, FX swap ima TRY eğrisiyle (EK_FX; fiyatı olmayan vadede OIS kotası): her kâğıt kalan vadesinde tablonun ASW FX sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi."
+  },
+  {
    "id": "fxc",
    "type": "table",
    "sheet": "EK_FX",
    "range": "A1:F23",
    "hidden": false,
    "title": "FX swap ima TRY eğrisi · ASW'nin ikinci eğrisi (ICPL, sonra BGN)"
+  },
+  {
+   "id": "fxline",
+   "type": "chart",
+   "sheet": "EK_FX",
+   "wide": true,
+   "title": "FX swap ima TRY eğrisi ve OIS  ·  vade vade (%)",
+   "spec": {
+    "title": "FX swap ima TRY eğrisi ve OIS  ·  vade vade (%)",
+    "kind": "line",
+    "value_format": "0.00",
+    "axis_titles": [
+     "%"
+    ],
+    "y_title": "%",
+    "aspect": 0.4,
+    "series": [
+     {
+      "name": "FX swap ima",
+      "cat": "EK_FX!$A$6:$A$21",
+      "val": "EK_FX!$D$6:$D$21",
+      "kind": "line",
+      "color": "C55A11",
+      "marker": true
+     },
+     {
+      "name": "OIS",
+      "cat": "EK_FX!$A$6:$A$21",
+      "val": "EK_FX!$E$6:$E$21",
+      "kind": "line",
+      "color": "1F3864",
+      "marker": true
+     }
+    ]
+   }
   },
   {
    "id": "fxh",

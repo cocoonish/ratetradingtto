@@ -153,6 +153,14 @@ class RowKeys(object):
         c = col_to_index(lst.key)
         return [(si, r * COLS + c) for r in range(lst.first, lst.last + 1)]
 
+    def keys(self, list_id: str) -> List[str]:
+        """A list's ISINs now as the desk has them, row by row ("" where no bond is); [] for a list that is not here."""
+        lst = next((x for x in LISTS if x.id == list_id), None)
+        book = self.svc.books.get(lst.book) if lst is not None else None
+        if book is None or lst.sheet not in book.model.sheet_index:
+            return []
+        return self._now(lst, book)
+
     def _now(self, lst: RowList, book, user: Optional[str] = None) -> List[str]:
         """The list's ISINs now: a user's own over the desk's over the workbook's own."""
         eng = book.engine
@@ -496,11 +504,11 @@ class RowKeys(object):
 
 
 def merge_notes(notes: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """What several lists' changes moved / took, told as one (the trading list and the ASW list a ☆ changes both)."""
+    """What several lists' changes moved / took, told as one (the trading list and the ASW list that follows it)."""
     if not notes:
         return None
     if len(notes) == 1:
         return notes[0]
-    return {"lists": [x for n in notes for x in n["lists"]], "moved": [x for n in notes for x in n["moved"]],
+    return {"lists": list(dict.fromkeys(x for n in notes for x in n["lists"])), "moved": [x for n in notes for x in n["moved"]],
             "cleared": [x for n in notes for x in n["cleared"]], "scenarios": sum(n["scenarios"] for n in notes),
             "text": " · ".join(n["text"] for n in notes)}

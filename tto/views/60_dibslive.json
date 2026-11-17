@@ -43,7 +43,7 @@
    "title": "Trading listesi · özet",
    "card": "bond",
    "flags": "dibs",
-   "note": "Trading listesindeki (★) kâğıtlar türüne ve vadesine göre: kâğıdın fiyatlandığı valörde bid / ask / son işlem ve zamanı, DİBS RV'den getiri, ASW, pahalı / ucuz, sinyal, süre, DV01, carry, T0→T1 ima repo ve bugünün Broker Chat tahtası. ★ listeden çıkarır; kâğıt eklemek için Tüm Kâğıtlar sayfası ya da \"+ ISIN ekle\"."
+   "note": "Trading listesindeki (★) kâğıtlar türüne ve vadesine göre, sütunlar gruplu: Fiyat (kâğıdın fiyatlandığı valörde bid / ask / son işlem ve zamanı) · OIS'e göre (DİBS RV'den getiri, ASW / DM, adil getiri ve adil fiyat, pahalı / ucuz, sinyal) · FX swap'a göre (ASW FX, adil getiri ve adil fiyat, pahalı / ucuz, sinyal) · Risk (süre, DV01, 1.000$ DV01 nominal) · Carry (C+R, T0→T1 ima repo) · Broker (bugünün Broker Chat tahtası). Adil getiri / fiyat: kâğıdın ASW'si DİBS RV'nin uydurulan ASW eğrisinde dursaydı getirisi ve temiz fiyatı (üzerine gelince hesabı). ★ listeden çıkarır (DİBS ASW'den de); kâğıt eklemek için Tüm Kâğıtlar sayfası ya da \"+ ISIN ekle\" (DİBS ASW'ye de eklenir)."
   },
   {
    "id": "L1",
@@ -55,11 +55,16 @@
     "list": "DİBS RV!A5:A54",
     "name": "dibs",
     "catalog": true,
-    "title": "DİBS listesine kâğıt ekle (DİBS RV ile ortak)"
+    "title": "DİBS listesine kâğıt ekle (DİBS RV ile ortak; DİBS ASW listesine de eklenir)"
    },
    "append": "dibs_live",
+   "bonds": {
+    "key": "A",
+    "first": 5,
+    "last": 54
+   },
    "wide": true,
-   "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır.",
+   "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır. Kâğıtsız satırlar (DİBS RV'deki grup araları, kullanılmayan satırlar) gösterilmez.",
    "card": "bond",
    "keep_title": true,
    "trade": {

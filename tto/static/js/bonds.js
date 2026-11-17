@@ -6,9 +6,15 @@ import { isoToTr, num } from './format.js';
 const KIND_ORDER = ['all', 'fixed', 'float', 'frn', 'cpi', 'bill', 'zero'];
 const KIND_TEXT = { all: 'Tümü', fixed: 'Sabit', float: 'TLREF', frn: 'FRN', cpi: 'TÜFE', bill: 'Bono', zero: 'Kuponsuz' };
 
-/** What the rows of a list held and where it went (the server's ``row_values``): said after the toast of the change. */
-const rowsSaid = (res) => (res && res.row_values && res.row_values.text ? ' · ' + res.row_values.text : '');
-const rowsKind = (res, kind) => (res && res.row_values && (res.row_values.cleared || []).length ? 'warn' : kind);
+/** What the other lists did with a change of the trading list (the server's ``follow``: the DİBS ASW list, Tüm Kâğıtlar)
+ * and what the rows of a list held and where it went (``row_values``): said after the toast of the change. */
+const followSaid = (res) => (res && res.follow && res.follow.text ? ' · ' + res.follow.text : '');
+const rowsSaid = (res) => followSaid(res) + (res && res.row_values && res.row_values.text ? ' · ' + res.row_values.text : '');
+/** A warning when something went (a row's values) or could not follow (no room on the ASW list, refused by Tüm Kâğıtlar). */
+export const followWarns = (res) => !!(res && ((res.row_values && (res.row_values.cleared || []).length)
+  || (res.follow && (res.follow.asw_full || res.follow.desk_refused || res.follow.invalid || res.follow.asw_errors || res.follow.errors))));
+const rowsKind = (res, kind) => (followWarns(res) ? 'warn' : kind);
+const saidLong = (res) => !!(res && (res.row_values || res.follow));
 
 /**
  * ``opts``: {book, list (e.g. "DİBS RV!A5:A54"), name (the list's name in the catalog: dibs / asw / bulk; "evren":
@@ -81,7 +87,7 @@ export async function openAddIsin(ctx, opts) {
     try {
       const res = await api.post('/api/list/add', { book: opts.book, list: opts.list, values });
       toast((res.added.length ? res.added.length + ' kâğıt eklendi' : 'Yeni kâğıt yok') + (res.skipped.length ? ' · ' + res.skipped.length + ' zaten listede' : '')
-        + ' · ' + res.free + ' boş satır kaldı' + rowsSaid(res), rowsKind(res, 'ok'), res.row_values ? 9000 : 4000);
+        + ' · ' + res.free + ' boş satır kaldı' + rowsSaid(res), rowsKind(res, 'ok'), saidLong(res) ? 9000 : 4000);
       m.close();
       ctx.refreshNow();
     } catch (err) { errorToast(err); add.disabled = false; }
@@ -140,7 +146,7 @@ async function unlist(ctx, td) {
   try {
     const res = await api.post('/api/bonds/list/remove', { isin: code });
     toast((res.removed ? code + ' listeden çıkarıldı' + (res.trading ? ' (trading listesinden de)' : '') : code + ' listede değil') + rowsSaid(res),
-      rowsKind(res, 'ok'), res.row_values ? 9000 : 3800);
+      rowsKind(res, 'ok'), saidLong(res) ? 9000 : 3800);
     ctx.refreshNow();
   } catch (err) { errorToast(err); } finally { td.classList.remove('busy'); }
 }
@@ -227,7 +233,7 @@ export async function openBondCard(ctx, isin) {
     add.addEventListener('click', async () => {
       try {
         const res = await api.post('/api/list/add', { book: 'tto', list: 'DİBS RV!A5:A54', values: [d.isin] });
-        toast(res.added.length ? 'Listeye eklendi' : 'Zaten listede', 'ok');
+        toast((res.added.length ? 'Listeye eklendi' : 'Zaten listede') + rowsSaid(res), rowsKind(res, 'ok'), saidLong(res) ? 9000 : 3800);
         m.close();
         ctx.refreshNow();
       } catch (err) { errorToast(err); }
@@ -265,7 +271,7 @@ export function bondFlags(ctx, el) {
     try {
       const res = await api.post('/api/bonds/flag', { isin: code, on });
       toast((on ? (res.added ? code + ' trading listesine eklendi' : code + ' zaten listede') : code + ' trading listesinden çıkarıldı') + rowsSaid(res),
-        rowsKind(res, 'ok'), res.row_values ? 9000 : 3800);
+        rowsKind(res, 'ok'), saidLong(res) ? 9000 : 3800);
       ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { td.classList.remove('busy'); }
   });

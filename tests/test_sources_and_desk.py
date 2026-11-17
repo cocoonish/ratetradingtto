@@ -140,6 +140,30 @@ def test_asw_against_the_fx_swap_curve(svc):
     r7 = cell(svc, "ASW!R7", book="asw")
     i7 = tbl["r"].index(7)
     assert tbl["rows"][i7][-1]["v"] == pytest.approx(tbl["rows"][i7][-2]["v"] - r7)
+    # its chart: the workbook's ASW chart once more on the FX swap curve - each bond at its years with the table's ASW FX,
+    # labelled as the OIS chart labels them (the curve flag leaves out the same bonds), the dashed line the curve
+    # a + b·t + c·t² fitted to the FX ASWs by the sheet's own rule
+    fx, ois = p["chartfx"]["data"], p["chart0"]["data"]
+    bonds, curve = fx["series"]
+    assert p["chartfx"]["title"] == fx["title"] == "FX swap eğrisine göre ASW — kalan vade" and fx["y_title"] == "ASW FX (bp)"
+    assert (bonds["name"], curve["name"]) == ("Kâğıtlar", "FX eğrisi (a+bt+ct²)") and curve["dash"] and bonds["noline"]
+    assert bonds["x"] == ois["series"][0]["x"] and bonds["labels"] == ois["series"][0]["labels"] and len(bonds["x"]) >= 15
+    by_row = {r: tbl["rows"][i][-2].get("v") for i, r in enumerate(tbl["r"]) if 7 <= r <= 56}
+    charted = [r for r in range(7, 57) if type(cell(svc, "ASW!BG%d" % r, book="asw")) is float]
+    assert bonds["data"] == pytest.approx([by_row[r] for r in charted]) and bonds["data"] != ois["series"][0]["data"]
+    book = svc.books["asw"]
+    calc, swapped = svc.et.call(svc._asw_fx_calc, book, None)
+    si = book.model.sheet_index["ASW"]
+    a, b, c = (svc.et.call(calc.get, si, 3, col) for col in (49, 50, 51))              # AW3:AY3 of the FX calculation
+    k = curve["x"].index(2.0)
+    assert swapped > 0 and curve["data"][k] == pytest.approx(a + b * 2 + c * 4) and curve["data"] != ois["series"][1]["data"]
+    # the FX swap implied curve itself, tenor by tenor beside OIS (a tenor without an FX price is passed over)
+    line = p["fxline"]["data"]
+    assert line["cats"][:3] == ["1M", "2M", "3M"] and len(line["cats"]) == len(ex.FXC_ROOTS)
+    fx_line, ois_line = line["series"]
+    assert (fx_line["name"], ois_line["name"]) == ("FX swap ima", "OIS")
+    assert fx_line["data"][0] == pytest.approx(cell(svc, "EK_FX!D6", book="asw")) and "c" in fx_line["data"]
+    assert ois_line["data"] == pytest.approx([cell(svc, "EK_FX!E%d" % r, book="asw") for r in range(6, 22)])
 
 
 # ---------------------------------------------------------------------------------------------- the Forward page's rates
