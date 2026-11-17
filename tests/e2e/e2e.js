@@ -4121,9 +4121,10 @@ async function clipAfter(page, action) {
     await page.click('#trades-new');
     await page.waitForSelector('#trade-form #tf-trade_date');
     await page.waitForFunction(() => document.getElementById('tf-trade_date').value !== '', null, { timeout: 15000 });
-    check('Trades: "+ Yeni işlem" opens with the trade date filled (today: the valuation\'s default) and every product to pick',
-      await page.inputValue('#tf-trade_date') === tradesToday && await page.locator('#tf-product button').count() === 5,
-      await page.inputValue('#tf-trade_date'));
+    // (the valuation's default: today - the day of the workbook's data in replay mode once the real valuation is in)
+    const formDate = await page.inputValue('#tf-trade_date');
+    check('Trades: "+ Yeni işlem" opens with the trade date filled (the valuation\'s default) and every product to pick',
+      /^\d{2}\.\d{2}\.\d{4}$/.test(formDate) && await page.locator('#tf-product button').count() === 5, formDate);
     // a desk OIS: a DV01 typed gives the nominal rounded to 5 mn and the DV01 it actually gives; a nominal typed afterwards wins
     await page.click('#tf-product button[data-v="ois"]');
     await page.click('#tf-structure button[data-v="outright"]');
@@ -4132,16 +4133,18 @@ async function clipAfter(page, action) {
     await page.fill('#tf-end_date', '2Y');
     await page.fill('#tf-price', '38,50');
     await page.fill('#tf-dv01', '1.012');
-    await page.waitForFunction(() => document.getElementById('tf-notional').value === '10m', null, { timeout: 15000 });
+    await page.waitForFunction(() => /^\d+m$/.test(document.getElementById('tf-notional').value), null, { timeout: 15000 });
+    const dvNominal = await page.inputValue('#tf-notional');
+    await page.waitForFunction(() => /DV01 ≈/.test(document.getElementById('tf-dv01-echo').textContent), null, { timeout: 15000 });
     const dvEcho = await page.textContent('#tf-dv01-echo');
-    check('... a DV01 of 1.012 $ gives a 10m nominal (to the nearest 5 mn) and says the DV01 that nominal gives',
-      /DV01 ≈ 1\.000 \$/.test(dvEcho), dvEcho);
+    check('... a DV01 of 1.012 $ gives a nominal on the desk\'s 5 mn lot and says the DV01 that nominal gives',
+      Number(dvNominal.slice(0, -1)) % 5 === 0 && /DV01 ≈ [\d.]+ \$/.test(dvEcho), { dvNominal, dvEcho });
     await page.fill('#tf-notional', '100m');
-    await page.waitForFunction(() => document.getElementById('tf-dv01').value === '10.000' && document.getElementById('tf-dv01').classList.contains('info'),
+    await page.waitForFunction(() => { const d = document.getElementById('tf-dv01'); return d.classList.contains('info') && /^[\d.]+$/.test(d.value) && d.value !== '1.012'; },
       null, { timeout: 15000 });
     await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 100m @ %38,50/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
     check('... a nominal typed after it stays; the DV01 box shows its DV01 as information only; the server says the trade in the desk\'s words',
-      await page.inputValue('#tf-notional') === '100m' && await page.inputValue('#tf-dv01') === '10.000');
+      await page.inputValue('#tf-notional') === '100m' && /^[\d.]+$/.test(await page.inputValue('#tf-dv01')));
     // the structures: a spread shows its two legs, a fly three, an MPC trade the meetings of the calendar by date
     await page.click('#tf-structure button[data-v="spread"]');
     await page.waitForSelector('#tf-legs tr[data-leg="1"]');
@@ -4153,7 +4156,7 @@ async function clipAfter(page, action) {
     await page.waitForFunction(() => document.querySelectorAll('#tf-meeting option').length > 2, null, { timeout: 15000 });
     const meetingOpts = await page.evaluate(() => [...document.querySelectorAll('#tf-meeting option')].slice(1, 3).map((o) => o.value + '|' + o.textContent));
     check('... spread: two legs, fly: three, PPK: the meetings ahead by their dates ("PPK dd.mm.yyyy")',
-      spreadLegs === 2 && flyLegs === 3 && meetingOpts.every((x) => /^\d{4}-\d{2}-\d{2}\|PPK \d{2}\.\d{2}\.\d{4}$/.test(x)), { spreadLegs, flyLegs, meetingOpts });
+      spreadLegs === 2 && flyLegs === 3 && meetingOpts.every((x) => /^\d{4}-\d{2}-\d{2}\|PPK \d{2}\.\d{2}\.\d{4}/.test(x)), { spreadLegs, flyLegs, meetingOpts });
     await page.click('#tf-structure button[data-v="outright"]');
     await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 100m @ %38,50/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
     await page.click('#tf-save');
@@ -4163,7 +4166,7 @@ async function clipAfter(page, action) {
       return { id: tr.dataset.id, text: tr.textContent, edit: !!tr.querySelector('.act-edit') };
     });
     check('... saved: the desk\'s list shows it in the desk\'s words, its trade date and price; its creator may change it',
-      /RECEIVE 2Y TRY OIS 100m @ %38,50/.test(deskTrade.text) && deskTrade.text.includes(tradesToday) && deskTrade.edit, deskTrade);
+      /RECEIVE 2Y TRY OIS 100m @ %38,50/.test(deskTrade.text) && deskTrade.text.includes(formDate) && deskTrade.edit, deskTrade);
     // a personal FX spot: what is typed survives a change of the pair; a box emptied gets its default again
     await page.click('#trades-scope button[data-scope="personal"]');
     await page.waitForSelector('#trades-scope button.on[data-scope="personal"]');
@@ -4171,6 +4174,8 @@ async function clipAfter(page, action) {
     await page.waitForSelector('#trade-form #tf-trade_date');
     await page.click('#tf-product button[data-v="fxspot"]');
     await page.waitForSelector('#tf-pair');
+    await page.waitForFunction(() => document.getElementById('tf-trade_date').value !== '', null, { timeout: 15000 });
+    const fxDefault = await page.inputValue('#tf-trade_date');
     const yesterday = tradeDay(new Date(Date.now() - 86400000));
     await page.fill('#tf-trade_date', yesterday);
     await page.fill('#tf-pair', 'EURTRY');
@@ -4180,9 +4185,9 @@ async function clipAfter(page, action) {
     await page.waitForTimeout(1200);                          // (the defaults asked again for the new pair)
     const keptDate = await page.inputValue('#tf-trade_date');
     await page.fill('#tf-trade_date', '');
-    await page.waitForFunction((d) => document.getElementById('tf-trade_date').value === d, tradesToday, { timeout: 15000 });
+    await page.waitForFunction((d) => document.getElementById('tf-trade_date').value === d, fxDefault, { timeout: 15000 });
     check('... the pair changed twice: the trade date typed stays; emptied, it is filled again with the default',
-      keptDate === yesterday, { keptDate, yesterday });
+      keptDate === yesterday && /^\d{2}\.\d{2}\.\d{4}$/.test(fxDefault), { keptDate, yesterday, fxDefault });
     await page.click('#tf-side button[data-v="B"]');
     await page.fill('#tf-settle_date', '+1');
     await page.fill('#tf-notional', '10m');

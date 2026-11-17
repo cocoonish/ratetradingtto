@@ -1013,7 +1013,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     async def trades_defaults(request: Request):
         q = request.query_params
         return ok(await call(svc().tradebook.defaults, _user(request), q.get("product"), q.get("pair"), q.get("trade_date"),
-                             q.get("expiry")))
+                             q.get("expiry"), q.get("fra"), q.get("isin"), q.get("structure")))
 
     @handler
     async def trades_dv01(request: Request):

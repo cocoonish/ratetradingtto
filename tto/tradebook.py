@@ -16,13 +16,15 @@ P&L periods, each split into carry and price effect (:func:`pnl_periods`):
 
 * **Günlük** - now against the last close (a trade dealt since: against its inception);
 * **Haftalık** - against the last close of the week before;
-* **Toplam** - against the inception: 0 for a linear trade (dealt at its price), the premium for an option.
+* **Toplam** - against the inception: 0 - the valuation's MTM is what a trade is worth against what it cost (a
+  linear trade dealt at its price; an option net of the premium paid or received).
 
 The value at a moment is ``mtm + accrued`` (the cash the trade has paid / received since it started); a trade closed
-in the period counts with its realised value.  The **carry** of a period: each close's carry per calendar day
-(``carry_1d``) times the days to the next close, and the last close's pro rata to now (before its first close a trade
-earns at its first known carry); the **price effect** is the rest.  Spreads, flies and FRAs are worked out leg by leg
-too (a FRA's legs are the attribution of its single value: what they leave over is shown).
+in the period counts with its realised value.  The **carry** of a period: each close's carry (``carry_1d``: one day
+passing, to the next business day - ``carry_days`` calendar days, 3 over a weekend) spread over its calendar days and
+counted to the next close, and the last close's pro rata to now (before its first close a trade earns at its first
+known carry); the **price effect** is the rest.  Spreads, flies and FRAs are worked out leg by leg too (a FRA's legs
+are the attribution of its single value: what they leave over is shown).
 """
 from __future__ import annotations
 
@@ -54,6 +56,9 @@ PACKAGE_SIDE_TEXT = {"steepener": "steepener", "flattener": "flattener", "rec_bo
 #: the legs' DV01 per unit of the package's when the valuation does not say (tradevalue.defaults ``weights``)
 WEIGHTS = {"spread": [1.0, 1.0], "fly": [0.5, 1.0, 0.5]}
 SIDE_TEXT = {"receive": "RECEIVE", "pay": "PAY", "B": "ALIŞ", "S": "SATIŞ"}
+#: an OIS / SOFR side, as the form says it or as the valuation keeps it (tradevalue.check: the blotter's codes - "S"
+#: receives the fixed rate, "B" pays it)
+_RATE_SIDES = {"receive": "receive", "rec": "receive", "s": "receive", "pay": "pay", "b": "pay"}
 #: the currency of an OIS / SOFR / DİBS trade (FX: the pair's first currency)
 FIXED_CCY = {"ois": "TRY", "sofr": "USD", "dibs": "TRY"}
 #: the holiday lists of a product's dates (FX: the pair's, extras.pair_calendar)
@@ -142,9 +147,22 @@ def package_label(t: Dict[str, Any]) -> str:
     return "/".join(x or _day_text(lg.get("end_date"))[:-4] + _day_text(lg.get("end_date"))[-2:] for x, lg in zip(tenors, legs))
 
 
+def rate_side(v: Any) -> Optional[str]:
+    """An OIS / SOFR side as the form says it ("receive" / "pay") or as the valuation keeps it - the blotter's codes:
+    "S" receives the fixed rate, "B" pays it."""
+    return _RATE_SIDES.get(str(v or "").strip().lower())
+
+
+def side_word(product: Any, side: Any) -> str:
+    """A side in the desk's words: RECEIVE / PAY for a swap, ALIŞ / SATIŞ for a bond and FX."""
+    if product in ("ois", "sofr"):
+        return {"receive": "RECEIVE", "pay": "PAY"}.get(rate_side(side) or "", "?")
+    return SIDE_TEXT.get(str(side or "").upper(), "?")
+
+
 def package_side(t: Dict[str, Any]) -> Optional[str]:
     """A package's side by its legs (short → long): steepener / flattener, REC gövde / PAY gövde."""
-    sides = tuple(lg.get("side") for lg in t.get("legs") or [])
+    sides = tuple(rate_side(lg.get("side")) for lg in t.get("legs") or [])
     for side, legs in PACKAGE_SIDES.get(t.get("structure") or "", {}).items():
         if legs == sides:
             return side
@@ -152,14 +170,15 @@ def package_side(t: Dict[str, Any]) -> Optional[str]:
 
 
 def package_level(legs: Sequence[Dict[str, Any]]) -> Optional[float]:
-    """A spread's / fly's level in bp from its legs' rates (short → long): long − short; 2 × body − wings."""
+    """A spread's / fly's level in bp from its legs' rates (short → long), as the valuation reads it: long − short; the
+    fly's 50/50 body − ½ each wing."""
     r = [lg.get("price") for lg in legs]
     if any(not isinstance(x, (int, float)) for x in r):
         return None
     if len(r) == 2:
         return round((r[1] - r[0]) * 100.0, 6)
     if len(r) == 3:
-        return round((2 * r[1] - r[0] - r[2]) * 100.0, 6)
+        return round((r[1] - 0.5 * (r[0] + r[2])) * 100.0, 6)
     return None
 
 
@@ -185,7 +204,8 @@ def price_text(t: Dict[str, Any], price: Optional[float] = None) -> str:
 def leg_text(lg: Dict[str, Any], t: Dict[str, Any]) -> str:
     """A leg as the desk says it: RECEIVE 2Y 100m @ %38,50."""
     when = lg.get("tenor") or "→ " + _day_text(lg.get("end_date"))
-    return "%s %s %s @ %%%s" % (SIDE_TEXT.get(lg.get("side"), "?"), when, _short(lg.get("notional")), _rate(lg.get("price")))
+    return "%s %s %s @ %%%s" % (side_word(t.get("product"), lg.get("side")), when, _short(lg.get("notional")),
+                                _rate(lg.get("price")))
 
 
 def describe(t: Dict[str, Any], meeting_word: Optional[str] = None) -> str:
@@ -198,13 +218,13 @@ def describe(t: Dict[str, Any], meeting_word: Optional[str] = None) -> str:
             side = package_side(t)
             return "%s %s%s %s" % (package_label(t), PACKAGE_SIDE_TEXT[side] + " " if side else "", cur, price_text(t))
         if st == "mpc":
-            what = "%s %s" % (meeting_word or ("PPK" if product == "ois" else "FOMC"), _day_text(t.get("meeting")))
+            what = "%s %s" % (meeting_word or ("PPK" if product == "ois" else "FOMC"), _day_text(t.get("mpc_date") or t.get("meeting")))
         elif st == "fra":
             what = "%s FRA" % (t.get("fra") or "%s→%s" % (_day_text(t.get("value_date")), _day_text(t.get("end_date"))))
         else:
             what = t.get("tenor") or "→ " + _day_text(t.get("end_date"))
-        return "%s %s %s %s @ %%%s" % (SIDE_TEXT.get(t.get("side"), "?"), what, cur, _short(t.get("notional")), _rate(t.get("price")))
-    side = SIDE_TEXT.get(t.get("side"), "?")
+        return "%s %s %s %s @ %%%s" % (side_word(product, t.get("side")), what, cur, _short(t.get("notional")), _rate(t.get("price")))
+    side = side_word(product, t.get("side"))
     if product == "dibs":
         from . import bonds as bd
         bond = bd.by_isin(t.get("isin") or "")
@@ -248,9 +268,19 @@ def rates(v: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
     return fx_try, fx_usd
 
 
-def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False) -> Optional[Dict[str, Any]]:
+def carry_days(v: Optional[Dict[str, Any]]) -> float:
+    """How many calendar days a valuation's ``carry_1d`` covers: to the next business day of the trade's calendar (3
+    over a weekend - TLREF accrues Friday's fixing over it); the valuation says it (``inputs["carry_days"]``), else 1."""
+    d = _f((v or {}).get("carry_days"))
+    if d is None:
+        d = _f(((v or {}).get("inputs") or {}).get("carry_days"))
+    return d if d is not None and d > 0 else 1.0
+
+
+def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False, days: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """A valuation (or a leg of one) as a point of the P&L: its time, its value (``mtm`` + ``accrued``) and its carry per
-    calendar day in its currency, TL and USD - ``None`` when it has no value."""
+    calendar day (``carry_1d`` over the days it covers: ``days``, else its own) in its currency, TL and USD - ``None``
+    when it has no value."""
     if not v or (not leg and not v.get("ok")):
         return None
     mtm = _f(v.get("mtm"))
@@ -258,6 +288,7 @@ def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False) ->
         return None
     acc = 0.0 if leg else (_f(v.get("accrued")) or 0.0)
     fx_try, fx_usd = rates(v) if acc else (None, None)
+    per = days if days else carry_days(v)
 
     def plus(x: Optional[float], fx: Optional[float]) -> Optional[float]:
         if x is None:
@@ -266,30 +297,17 @@ def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False) ->
             return x
         return x + acc * fx if fx is not None else None
 
+    def daily(x: Optional[float]) -> Optional[float]:
+        return x / per if x is not None else None
+
     return {"t": t, "V": {"ccy": mtm + acc, "try": plus(_f(v.get("mtm_try")), fx_try), "usd": plus(_f(v.get("mtm_usd")), fx_usd)},
-            "c": {"ccy": _f(v.get("carry_1d")), "try": _f(v.get("carry_1d_try")), "usd": _f(v.get("carry_1d_usd"))}}
+            "c": {"ccy": daily(_f(v.get("carry_1d"))), "try": daily(_f(v.get("carry_1d_try"))), "usd": daily(_f(v.get("carry_1d_usd")))}}
 
 
-def inception_point(trade: Dict[str, Any], ref: Optional[Dict[str, Any]], t: _dt.datetime) -> Dict[str, Any]:
-    """The value a trade starts with: 0 for a linear trade (dealt at its price); an option's premium, plus when it was
-    bought and minus when sold - in the valuation's currency, TL and USD at the rates of ``ref`` (a valuation of it)."""
-    zero = {"t": t, "V": {"ccy": 0.0, "try": 0.0, "usd": 0.0}, "c": None}
-    if trade.get("product") != "fxopt":
-        return zero
-    prem = _f(trade.get("price"))
-    if prem is None:
-        return {"t": t, "V": {k: None for k in KEYS}, "c": None}
-    prem *= 1.0 if trade.get("side") == "B" else -1.0
-    out = {"ccy": None, "try": None, "usd": None}
-    if ref:
-        ccy = str(ref.get("ccy") or "").upper()
-        fx_try, fx_usd = rates(ref)
-        pc = str(trade.get("premium_ccy") or "").upper()
-        in_ccy = prem if pc == ccy else (prem / fx_try if pc == "TRY" and fx_try else (prem / fx_usd if pc == "USD" and fx_usd else None))
-        if in_ccy is not None:
-            out = {"ccy": in_ccy, "try": in_ccy * fx_try if fx_try is not None else None,
-                   "usd": in_ccy * fx_usd if fx_usd is not None else None}
-    return {"t": t, "V": out, "c": None}
+def inception_point(t: _dt.datetime) -> Dict[str, Any]:
+    """The value a trade starts with: 0 - the valuation's MTM is what the trade is worth against what it cost (a
+    linear trade dealt at its price; an option net of the premium paid or received)."""
+    return {"t": t, "V": {"ccy": 0.0, "try": 0.0, "usd": 0.0}, "c": None}
 
 
 def carry_between(points: Sequence[Dict[str, Any]], a: _dt.datetime, b: _dt.datetime, key: str) -> Optional[float]:
@@ -365,8 +383,6 @@ def _one(trade: Dict[str, Any], name: str, base_day: Optional[str], first: _dt.d
         start, base = inc, "inception"                            # dealt that day, after its close was taken
     else:
         return _empty("%s kapanışında kaydı yok" % _day_text(base_day), "close", base_day)
-    if base == "inception" and all(start["V"][k] is None for k in KEYS):
-        return _empty("işlemin ilk değeri bilinmiyor (prim değerlemenin dövizine çevrilemedi)", base, td)
     return _span(start, end, timeline, base, base_day if base == "close" else td)
 
 
@@ -398,9 +414,8 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
         if p:
             ok[day], vals[day] = p, v
     timeline = [ok[d] for d in sorted(ok)] + ([end] if end else [])
-    ref = end_val if end else (vals[max(vals)] if vals else None)
-    inc = inception_point(trade, ref, inception_t)
-    plan =(("day", last_close, today), ("week", week_close, monday_of(today)), ("total", None, today))
+    inc = inception_point(inception_t)
+    plan = (("day", last_close, today), ("week", week_close, monday_of(today)), ("total", None, today))
     out: Dict[str, Any] = {name: _one(trade, name, b, first, end, end_why, ok, state, inc, timeline) for name, b, first in plan}
     # the legs: each a series of its own (the same number of legs at both ends), its inception 0
     legs_now = (end_val or {}).get("legs") if end else None
@@ -408,12 +423,13 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
         n = len(legs_now)
         legs_out = []
         for i in range(n):
-            lend = point_of(legs_now[i], end_t, leg=True)
+            # (a leg's carry covers the days its trade's does)
+            lend = point_of(legs_now[i], end_t, leg=True, days=carry_days(end_val))
             lsnaps: Dict[str, Dict[str, Any]] = {}
             lstate = dict(state)
             for day, v in vals.items():
                 lv = v.get("legs")
-                p = point_of(lv[i], ok[day]["t"], leg=True) if isinstance(lv, list) and len(lv) == n else None
+                p = point_of(lv[i], ok[day]["t"], leg=True, days=carry_days(v)) if isinstance(lv, list) and len(lv) == n else None
                 if p:
                     lsnaps[day] = p
                 else:
@@ -510,6 +526,20 @@ class _Form(object):
         self.errors: Dict[str, str] = {}
         self.echo: Dict[str, str] = {}
         self.leg_order: Optional[List[int]] = None          # a package's legs as typed, in the order they are kept
+        # what a tenor typed stands for by the dashboard's shortcuts - kept only when the valuation does not work it out
+        # by its own convention (tradevalue.check: a swap's roll, an option's FX tenor): (path in the trade, value)
+        self.later: List[Tuple[Tuple[Any, ...], Any]] = []
+
+    def fill_later(self, t: Dict[str, Any]) -> None:
+        for path, value in self.later:
+            obj: Any = t
+            try:
+                for k in path[:-1]:
+                    obj = obj[k]
+            except (KeyError, IndexError, TypeError):
+                continue
+            if isinstance(obj, dict) and obj.get(path[-1]) in (None, ""):
+                obj[path[-1]] = value
 
     def fail(self, key: str, why: str) -> None:
         self.errors.setdefault(key, why)
@@ -717,6 +747,7 @@ class TradeBook(object):
             out[k] = _f(v.get(k))
         out["ccy"] = str(v.get("ccy") or "") or None
         out["price_text"] = str(v.get("price_text") or "")
+        out["carry_days"] = carry_days(v)                    # (the calendar days ``carry_1d`` covers)
         if greeks and isinstance(v.get("greeks"), dict):
             out["greeks"] = {str(k): _f(x) for k, x in v["greeks"].items() if _f(x) is not None}
         legs = v.get("legs")
@@ -909,7 +940,20 @@ class TradeBook(object):
                 t = dict(tv.check(t))
             except ValueError as exc:
                 f.fail("_", str(exc))
+        f.fill_later(t)
         return t, f
+
+    @staticmethod
+    def _rate_side(f: _Form, src: Dict[str, Any], err: str, what: str) -> Optional[str]:
+        """A swap's side: "receive" / "pay" - or the code the valuation keeps it as ("S" / "B")."""
+        v = src.get("side")
+        if f._blank(v):
+            f.fail(err, "%s seçin" % what)
+            return None
+        s = rate_side(v)
+        if s is None:
+            f.fail(err, "%s anlaşılamadı: %s" % (what, v))
+        return s
 
     def _read_ois(self, f: _Form, t: Dict[str, Any], td: Optional[_dt.date], sd: Optional[_dt.date], cal: Tuple[str, ...],
                   product: str) -> None:
@@ -944,7 +988,7 @@ class TradeBook(object):
         t["settle_date"] = _iso(sd)
         t["value_date"] = _iso(start)
         if st in ("outright", "mpc", "fra"):
-            t["side"] = f.choice("side", ("receive", "pay"), "Yön")
+            t["side"] = self._rate_side(f, f.raw, "side", "Yön")
             t.update(self._sized(f, f.raw, "", ccy))
             t["price"] = f.number("price", "Oran (%)", required=True, rate=True)
         if st == "outright":
@@ -953,14 +997,21 @@ class TradeBook(object):
                 f.fail("end_date", "vade başlangıçtan sonra olmalı")
             t["end_date"] = _iso(end)
             if tenor:
+                # a tenor's end date is the valuation's to say by its product's convention (a swap's roll)
                 t["tenor"] = tenor
+                t["end_date"] = None
+                f.later.append((("end_date",), _iso(end)))
         elif st == "mpc":
-            mt = f.raw.get("meeting")
-            if f._blank(mt):
-                f.fail("meeting", "toplantı seçin")
+            # the meeting by its date (``mpc_date``; "meeting" as well): never by a row of the calendar
+            key = "mpc_date" if not f._blank(f.raw.get("mpc_date")) else "meeting"
+            if f._blank(f.raw.get(key)):
+                f.fail("mpc_date", "toplantı seçin")
             else:
-                day, _ = f.date("meeting", "Toplantı", None, cal)
-                t["meeting"] = _iso(day)
+                day, _ = f.date(key, "Toplantı", None, cal, err="mpc_date")
+                t["mpc_date"] = _iso(day)
+            if not f._blank(f.raw.get("mpc_end")):
+                nxt, _ = f.date("mpc_end", "Bitiş toplantısı", None, cal)
+                t["mpc_end"] = _iso(nxt)
             end, _ = f.date("end_date", "Bitiş", start, cal)
             if end is not None:
                 t["end_date"] = _iso(end)
@@ -984,13 +1035,12 @@ class TradeBook(object):
                 f.fail("legs", "%s %d bacaklıdır" % (STRUCTURE_TEXT[st], want))
                 legs = (legs if isinstance(legs, list) else [])[:want]
                 legs += [{}] * (want - len(legs))
-            # the package's side as the form had it (steepener …): what its legs say is what counts
-            side = _fold(str(f.raw.get("side") or "").strip())
+            # (the package's side the form had - steepener … - set its legs: what the legs say is what counts)
             out = []
             for i, raw_leg in enumerate(legs):
                 src = raw_leg if isinstance(raw_leg, dict) else {}
                 p = "legs.%d." % i
-                lg: Dict[str, Any] = {"side": f.choice("side", ("receive", "pay"), "Bacağın yönü", src, p + "side")}
+                lg: Dict[str, Any] = {"side": self._rate_side(f, src, p + "side", "Bacağın yönü")}
                 end, tenor = f.date("end_date", "Bacağın vadesi", start, cal, src, p + "end_date", required=True)
                 if end is not None and start is not None and end <= start:
                     f.fail(p + "end_date", "vade başlangıçtan sonra olmalı")
@@ -1004,9 +1054,13 @@ class TradeBook(object):
             order = sorted(range(len(out)), key=lambda i: out[i].get("end_date") or "9999")
             f.leg_order = order
             out = [out[i] for i in order]
+            for i, lg in enumerate(out):
+                if lg.get("tenor"):                               # (a tenor's end date: the valuation's convention)
+                    f.later.append((("legs", i, "end_date"), lg["end_date"]))
+                    lg["end_date"] = None
             t["legs"] = out
-            if side in PACKAGE_SIDES[st]:
-                t["side"] = side
+            # the package's side, as the valuation keeps it: its long leg's / body's (pay: it gains when the level rises)
+            t["side"] = out[1]["side"] if len(out) > 1 else None
             dv = f.number("dv01", "Paket DV01", amount=True, positive=True)
             if dv is not None:
                 t["dv01"] = dv
@@ -1024,8 +1078,9 @@ class TradeBook(object):
             f.fail("isin", "ISIN gerekli")
         elif not bd.isin_valid(code):
             f.fail("isin", "ISIN değil ya da kontrol hanesi tutmuyor: %s" % code)
-        elif bd.by_isin(code) is None:
-            f.fail("isin", "%s masanın kâğıt listesinde yok (Tüm Kâğıtlar)" % code)
+        elif bd.by_isin(code) is None and f._blank(f.raw.get("manual_price")):
+            # (a bond the desk does not list cannot be priced by the dashboard: with a price typed by hand only)
+            f.fail("isin", "%s masanın kâğıt listesinde yok (Tüm Kâğıtlar) - elle fiyat yazın" % code)
         t["isin"] = code
         t["side"] = f.choice("side", ("B", "S"), "Yön")
         t.update(self._sized(f, f.raw, "", "TRY", "Nominal"))
@@ -1057,11 +1112,17 @@ class TradeBook(object):
         t["call_put"] = f.choice("call_put", ("call", "put"), "Call / put")
         t["side"] = f.choice("side", ("B", "S"), "Yön")
         t["strike"] = f.number("strike", "Strike", required=True, positive=True)
-        exp, _ = f.date("expiry", "Vade (expiry)", td, cal, required=True)
+        exp, tenor = f.date("expiry", "Vade (expiry)", td, cal, required=True)
         if exp is not None and td is not None and exp < td:
             f.fail("expiry", "vade işlem tarihinden önce olamaz")
         t["expiry"] = _iso(exp)
-        dl, _ = f.date("delivery", "Teslim", exp, cal, required=True)
+        if tenor:
+            # a tenor ("1A"): the expiry and delivery are the valuation's by the FX pages' rule (the spot plus the tenor)
+            t["tenor"] = tenor
+            t["expiry"] = None
+            f.later.append((("expiry",), _iso(exp)))
+        # the delivery: typed, or the expiry's spot by the pair's lag (the valuation's - the form fills it beforehand)
+        dl, _ = f.date("delivery", "Teslim", exp, cal)
         if dl is not None and exp is not None and dl < exp:
             f.fail("delivery", "teslim vadeden önce olamaz")
         t["delivery"] = _iso(dl)
@@ -1081,15 +1142,24 @@ class TradeBook(object):
         """To the nearest 5 mn - a half up (12,5 mn is 15 mn) -, never below 5 mn."""
         return max(ROUND_TO, math.floor(x / ROUND_TO + 0.5) * ROUND_TO)
 
-    @staticmethod
-    def _notional_for(inst: Dict[str, Any], dv01: float, ccy: str, mkt: Any) -> float:
+    @classmethod
+    def _sizing(cls, inst: Dict[str, Any], dv01: float, ccy: str, mkt: Any) -> Tuple[float, Optional[float], Optional[float]]:
+        """tradevalue.notional_for_dv01: ``(the nominal - on the desk's lot, as the valuation rounds it -, the DV01 that
+        nominal gives, the nominal before rounding)``; a bare number is rounded here (5 mn, half up, never below)."""
         got = tv.notional_for_dv01(inst, dv01, ccy, mkt)
         if isinstance(got, dict):
-            got = got.get("notional")
-        x = _f(got)
-        if x is None or x <= 0:
+            n, check, raw = _f(got.get("notional")), _f(got.get("dv01_check")), _f(got.get("raw"))
+        else:
+            n, check, raw = _f(got), None, _f(got)
+            n = cls._rounded(n) if n is not None and n > 0 else n
+        if n is None or n <= 0:
             raise ValueError("DV01'den nominal bulunamadı")
-        return x
+        return n, check, raw
+
+    def _per_unit(self, inst: Dict[str, Any], ccy: str, mkt: Any) -> float:
+        """The DV01 of one unit of nominal (linear): from a large DV01's unrounded nominal."""
+        n, _, raw = self._sizing(inst, PROBE_DV01, ccy, mkt)
+        return PROBE_DV01 / (raw or n)
 
     def _units(self, t: Dict[str, Any]) -> List[Tuple[Optional[int], Dict[str, Any], Dict[str, Any]]]:
         """What of a trade is sized by a nominal: ``(leg or None, the instrument as tradevalue takes it, its sizing)``."""
@@ -1128,14 +1198,14 @@ class TradeBook(object):
             return
         for i, inst, s in need:
             try:
-                s["notional"] = self._rounded(self._notional_for(inst, s["dv01"], s.get("dv01_ccy") or "USD", mkt))
+                s["notional"] = self._sizing(inst, s["dv01"], s.get("dv01_ccy") or "USD", mkt)[0]
             except Exception as exc:  # noqa: BLE001
                 f.fail(("legs.%d." % i if i is not None else "") + "notional",
                        "DV01'den nominal bulunamadı: %s" % (str(exc)[:200] or type(exc).__name__))
 
     def size(self, user: Optional[str], raw: Dict[str, Any], lang: str = "tr") -> Dict[str, Any]:
         """The form's DV01 boxes: per unit (the trade, or each leg) its nominal from the DV01 typed - by the valuation,
-        rounded to the nearest 5 mn, never below - and the DV01 that nominal gives; or, a nominal typed, its DV01 (to
+        on the desk's lot (5 mn; never below one) - and the DV01 that nominal gives; or, a nominal typed, its DV01 (to
         be read only).  ``raw``: the form; ``raw["size"]`` the units asked for, ``[{"leg": i | null, "dv01" | "notional",
         "dv01_ccy"}]``."""
         self._user(user)
@@ -1164,12 +1234,11 @@ class TradeBook(object):
             dv01 = g.number("dv01", "DV01", positive=True, amount=True)
             notional = g.number("notional", "Nominal", positive=True, amount=True)
             try:
-                per = PROBE_DV01 / self._notional_for(inst, PROBE_DV01, ccy, mkt)
                 if dv01 is not None:
-                    n = self._rounded(self._notional_for(inst, dv01, ccy, mkt))
-                    row.update(notional=n, dv01=n * per, sized_by="dv01")
+                    n, check, _ = self._sizing(inst, dv01, ccy, mkt)
+                    row.update(notional=n, dv01=check if check is not None else n * self._per_unit(inst, ccy, mkt), sized_by="dv01")
                 elif notional is not None:
-                    row.update(notional=notional, dv01=notional * per, sized_by="notional")
+                    row.update(notional=notional, dv01=notional * self._per_unit(inst, ccy, mkt), sized_by="notional")
                 else:
                     row["why"] = "DV01 ya da nominal girin"
             except Exception as exc:  # noqa: BLE001
@@ -1195,24 +1264,39 @@ class TradeBook(object):
         return sorted({d for d in dates if d and d >= today})
 
     def defaults(self, user: Optional[str], product: Any, pair: Any = None, trade_date: Any = None,
-                 expiry: Any = None) -> Dict[str, Any]:
+                 expiry: Any = None, fra: Any = None, isin: Any = None, structure: Any = None) -> Dict[str, Any]:
         """The fields of a new trade that have a default, from the valuation (tradevalue.defaults: the desk's
-        conventions in one place): the trade date, the settle and start dates, the currencies, an option's delivery
-        (its expiry's spot: the pair's spot lag from the expiry), the meetings of an MPC trade and the legs' weights."""
+        conventions in one place) given what the form knows (``expiry``, ``fra`` "3x6", ``isin``, ``structure``): the
+        trade date, the settle and start dates, the currencies, an option's delivery (its expiry's spot), an FRA's dates
+        - and, as the form takes them, the meeting periods of an MPC trade by the meeting's date (``meetings``) and the
+        legs' DV01 weights (``weights``: lists)."""
         self._user(user)
         product = str(product or "").strip().lower()
         if product not in tv.PRODUCTS:
             raise ServiceError("ürün bilinmiyor: %s" % product)
         code = pair_of(pair) if pair else None
-        td = str(trade_date).strip() if trade_date and _ISO.match(str(trade_date).strip()) else None
+        iso = lambda v: str(v).strip() if v and _ISO.match(str(v).strip()) else None    # noqa: E731
+        td, exp = iso(trade_date), iso(expiry)
+        given: Dict[str, Any] = {}
+        if product == "fxopt" and exp:
+            given["expiry"] = exp
+        if product in ("ois", "sofr"):
+            m = _FRA.match(str(fra or ""))
+            if m:
+                given["fra"] = "%sx%s" % (m.group(1), m.group(2))
+            if structure:
+                given["structure"] = str(structure).strip().lower()
+        if product == "dibs" and isin:
+            given["isin"] = "".join(str(isin).split()).upper()
         try:
-            got = self._engine(tv.defaults, product, code, td, self.svc)
+            got = self._engine(lambda: tv.defaults(product, code, td, self.svc, **given))
         except Exception:  # noqa: BLE001 - the form opens without them
             got = {}
         out: Dict[str, Any] = dict(got) if isinstance(got, dict) else {}
-        if product == "fxopt" and code and expiry and _ISO.match(str(expiry).strip()):
+        if product == "fxopt" and code and exp and not out.get("delivery"):
+            # (a valuation that does not take the expiry: the delivery is the expiry's spot - its own spot from that day)
             try:
-                spot = self._engine(tv.defaults, "fxspot", code, str(expiry).strip(), self.svc)
+                spot = self._engine(tv.defaults, "fxspot", code, exp, self.svc)
                 day = (spot or {}).get("settle_date") or (spot or {}).get("value_date")
                 if day:
                     out["delivery"] = day
@@ -1223,10 +1307,39 @@ class TradeBook(object):
         if code:
             out.setdefault("notional_ccy", code[:3])
         if product in ("ois", "sofr"):
-            out.setdefault("weights", {k: list(v) for k, v in WEIGHTS.items()})
-            if not out.get("meetings"):
-                word = "PPK" if product == "ois" else "FOMC"
-                out["meetings"] = [{"meeting": d, "label": "%s %s" % (word, _day_text(d))} for d in self.meetings(product)]
+            out["weights"] = self._weights(out.get("weights"))
+            out["meetings"] = self._meetings_of(product, out.pop("mpc_periods", None) or out.get("meetings"))
+        return out
+
+    @staticmethod
+    def _weights(got: Any) -> Dict[str, List[float]]:
+        """The legs' DV01 weights as lists: the valuation's (``{"spread": [1, 1]}`` or ``{"spread": {"weights": [1, 1],
+        …}}``), else 1:1 and 50/50."""
+        out = {}
+        for k, fallback in WEIGHTS.items():
+            w = got.get(k) if isinstance(got, dict) else None
+            if isinstance(w, dict):
+                w = w.get("weights")
+            ok = isinstance(w, (list, tuple)) and len(w) == len(fallback) and all(_f(x) is not None for x in w)
+            out[k] = [float(x) for x in w] if ok else list(fallback)
+        return out
+
+    def _meetings_of(self, product: str, periods: Any) -> List[Dict[str, Any]]:
+        """The MPC periods to pick, by the meeting's date: the valuation's (``mpc_periods``: ``mpc_date``, ``mpc_end``,
+        the period's ``value_date`` / ``end_date``), else the calendar's meetings ahead."""
+        word = "PPK" if product == "ois" else "FOMC"
+        out = []
+        for p in periods if isinstance(periods, list) else []:
+            if not isinstance(p, dict):
+                continue
+            day = p.get("mpc_date") or p.get("meeting")
+            if not day:
+                continue
+            start, end = p.get("value_date") or p.get("start"), p.get("end_date") or p.get("end")
+            out.append({"meeting": day, "mpc_end": p.get("mpc_end"), "start": start, "end": end,
+                        "label": "%s %s" % (word, _day_text(day)) + (" (%s – %s)" % (_day_text(start), _day_text(end)) if start and end else "")})
+        if not out:
+            out = [{"meeting": d, "label": "%s %s" % (word, _day_text(d))} for d in self.meetings(product)]
         return out
 
     # ------------------------------------------------------------------ the lists

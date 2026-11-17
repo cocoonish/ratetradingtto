@@ -1,10 +1,12 @@
 """Trades (tto/tradebook.py): the desk's and each trader's own trades with their MTM and P&L, apart from the desk's position.
 
 Most tests use the book on a database of its own (``_book``): no workbook is loaded, the clock is the test's and the
-valuation is a fake that returns planted numbers (tto/tradevalue.py is a stub until the trades-deger branch replaces it).
+valuation is a fake (``stub_valuation``: tto/tradevalue.py's stub, whichever module the branch carries - the
+trades-deger branch's real one replaces the stub) or returns planted numbers (``planted``).
 Then the same over HTTP on the replay service: who reaches what through every route, the form's defaults and DV01, and an
 MPC trade kept by its meeting's date while the calendar moves."""
 import datetime as dt
+import math
 import sqlite3
 import threading
 import time
@@ -124,8 +126,8 @@ class _Planted(object):
         self.values = {}
         self.calls = []
 
-    def set(self, tid, asof, mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0):
-        self.values[(tid, asof)] = _val(mtm, carry, ccy, accrued, legs, fx)
+    def set(self, tid, asof, mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None):
+        self.values[(tid, asof)] = _val(mtm, carry, ccy, accrued, legs, fx, days)
 
     def __call__(self, trade, mkt, asof=None):
         self.calls.append((trade.get("id"), asof, dict(trade)))
@@ -133,17 +135,44 @@ class _Planted(object):
         return dict(hit) if hit else {"ok": False, "why": "planlanmadı"}
 
 
-def _val(mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0):
-    """A valuation in TL (or USD) at USDTRY ``fx``."""
+def _val(mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None):
+    """A valuation in TL (or USD) at USDTRY ``fx``; ``days``: the calendar days its ``carry_1d`` covers (inputs)."""
     to_try, to_usd = (1.0, 1.0 / fx) if ccy == "TRY" else (fx, 1.0)
     v = {"ok": True, "why": None, "ccy": ccy, "mtm": mtm, "mtm_try": mtm * to_try, "mtm_usd": mtm * to_usd,
          "carry_1d": carry, "carry_1d_try": carry * to_try, "carry_1d_usd": carry * to_usd, "accrued": accrued,
-         "price_now": 38.0, "price_text": "%38,00", "greeks": None, "inputs": {}}
+         "price_now": 38.0, "price_text": "%38,00", "greeks": None, "inputs": {"carry_days": days} if days else {}}
     if legs is not None:
         v["legs"] = [{"label": label, "mtm": m, "mtm_try": m * to_try, "mtm_usd": m * to_usd, "carry_1d": c,
                       "carry_1d_try": c * to_try, "carry_1d_usd": c * to_usd, "price_now": None, "price_text": ""}
                      for label, m, c in legs]
     return v
+
+
+# the valuation as tto/tradevalue.py's stub has it - installed for every test here, so that these tests read the core the
+# same way whichever tradevalue the branch carries (the stub, or the trades-deger branch's real one after the merge)
+def _stub_check(trade, mkt=None, strict=True):
+    return dict(trade)
+
+
+def _stub_value(trade, mkt, asof=None):
+    return {"ok": False, "why": "değerleme henüz yok"}
+
+
+def _stub_defaults(product, pair=None, trade_date=None, mkt_or_svc=None, **given):
+    return {"trade_date": dt.date.today().isoformat()}
+
+
+def _stub_dv01(trade_or_leg, dv01, dv01_ccy="USD", mkt=None):
+    raw = float(dv01) * 1e4
+    n = max(5e6, math.floor(raw / 5e6 + 0.5) * 5e6)
+    return {"notional": n, "raw": raw, "dv01_check": n / 1e4, "ccy": "TRY", "lot": 5e6}
+
+
+@pytest.fixture(autouse=True)
+def stub_valuation(monkeypatch):
+    for name, fn in (("check", _stub_check), ("value", _stub_value), ("defaults", _stub_defaults),
+                     ("notional_for_dv01", _stub_dv01), ("market", lambda svc: None)):
+        monkeypatch.setattr(tv, name, fn)
 
 
 @pytest.fixture()
@@ -165,7 +194,8 @@ def test_each_product_and_structure_is_entered_kept_and_said_in_the_desk_s_words
     ids = {}
     ids["ois"] = book.add(ali, _ois())["id"]
     ids["sofr"] = book.add(ali, _ois(product="sofr", side="pay", end_date="5Y", notional="25m", price="3,85"))["id"]
-    ids["mpc"] = book.add(ali, _ois(structure="mpc", meeting="2026-12-11", end_date="", notional="50m", price="37,25"))["id"]
+    ids["mpc"] = book.add(ali, _ois(structure="mpc", mpc_date="2026-12-11", end_date="", notional="50m", price="37,25"))["id"]
+    alias = book.add(ali, _ois(structure="mpc", meeting="2026-12-11", end_date="", notional="50m", price="37,25"))["id"]
     ids["fra"] = book.add(ali, _ois(structure="fra", fra="3x6", side="pay", end_date="", price="%37,10"))["id"]
     ids["spread"] = book.add(ali, _ois(structure="spread", side="steepener", end_date="", notional="", price="", legs=[
         {"side": "pay", "end_date": "5Y", "notional": "45m", "price": "38,15"},
@@ -190,14 +220,15 @@ def test_each_product_and_structure_is_entered_kept_and_said_in_the_desk_s_words
     assert (o["notional"], o["notional_ccy"], o["price"], o["side"], o["sized_by"], o["status"]) == (
         1e8, "TRY", 38.5, "receive", "notional", "open")
     assert by["sofr"]["notional_ccy"] == "USD" and by["sofr"]["end_date"] == "2031-11-18"
-    assert by["mpc"]["meeting"] == "2026-12-11" and "end_date" not in by["mpc"]
+    assert by["mpc"]["mpc_date"] == "2026-12-11" and "end_date" not in by["mpc"] and rows[alias]["mpc_date"] == "2026-12-11"
     # a FRA as the desk says it: 3x6 from the settle date (the trade's spot), the rate typed with its "%"
     assert (by["fra"]["value_date"], by["fra"]["end_date"], by["fra"]["fra"], by["fra"]["price"]) == ("2027-02-18", "2027-05-18", "3x6", 37.1)
     # a spread's legs short → long whatever order they were typed in; its level in bp from their rates
     sp = by["spread"]
     assert [lg["tenor"] for lg in sp["legs"]] == ["2Y", "5Y"] and [lg["notional"] for lg in sp["legs"]] == [1e8, 4.5e7]
-    assert _near(sp["price"], -35.0) and sp["side"] == "steepener" and sp["notional_ccy"] == "TRY"
-    assert _near(by["fly"]["price"], -10.0) and len(by["fly"]["legs"]) == 3
+    # (the package's own side is its long leg's - pay: it gains when the level rises -, as the valuation keeps it)
+    assert _near(sp["price"], -35.0) and sp["side"] == "pay" and sp["notional_ccy"] == "TRY"
+    assert _near(by["fly"]["price"], -5.0) and len(by["fly"]["legs"]) == 3 and by["fly"]["side"] == "receive"   # body − ½ wings
     assert (by["dibs"]["isin"], by["dibs"]["settle_date"], by["dibs"]["value_date"], by["dibs"]["price"]) == (isin, "2026-11-18", "2026-11-18", 98.75)
     assert (by["dibs_y"]["price_kind"], by["dibs_y"]["yield"], by["dibs_y"].get("price")) == ("yield", 38.1, None)
     # the amount in either currency of the pair: the other one follows from the rate
@@ -214,7 +245,7 @@ def test_each_product_and_structure_is_entered_kept_and_said_in_the_desk_s_words
     assert texts[ids["mpc"]] == "RECEIVE PPK 11.12.2026 TRY OIS 50m @ %37,25"
     assert texts[ids["fra"]] == "PAY 3x6 FRA TRY OIS 100m @ %37,10"
     assert texts[ids["spread"]] == "2s5s steepener TRY OIS -35,0 bp"
-    assert texts[ids["fly"]] == "2s5s10s REC gövde TRY OIS -10,0 bp"
+    assert texts[ids["fly"]] == "2s5s10s REC gövde TRY OIS -5,0 bp"
     assert texts[ids["dibs"]] == "ALIŞ %s (%s) 50m @ 98,750" % (bd.short_label(bd.by_isin(isin)), isin)
     assert texts[ids["dibs_y"]].endswith("20m @ %38,10 getiri")
     assert texts[ids["fxspot"]] == "ALIŞ USDTRY 10m USD @ 42,1500"
@@ -265,7 +296,7 @@ def test_what_a_trade_needs_and_what_it_refuses():
     assert fields(_ois(structure="spread", legs=[{"side": "pay", "end_date": "2Y", "notional": "5m"},
                                                  {"side": "receive", "end_date": "5Y", "notional": "5m", "price": "38"}])) == {"legs.0.price"}
     assert fields(_ois(structure="fra", fra="6x3", end_date="")) == {"fra"}
-    assert fields(_ois(structure="mpc", meeting="", end_date="")) == {"meeting"}
+    assert fields(_ois(structure="mpc", mpc_date="", end_date="")) == {"mpc_date"}
     assert fields(_fxopt(delivery="2026-12-16")) == {"delivery"}
     assert fields(_fxopt(pair="")) >= {"pair"} and fields(_fxspot(pair="dolar")) >= {"pair"}
     assert fields({"scope": "desk", "product": "dibs", "isin": "TRT000000000", "trade_date": TODAY, "settle_date": "2026-11-18",
@@ -574,21 +605,70 @@ def test_spread_and_fra_legs_each_with_their_p_and_l_and_what_they_leave_over(pl
     store.close()
 
 
-def test_an_option_starts_at_its_premium(planted):
+def test_an_option_starts_at_zero_its_mtm_net_of_the_premium(planted):
+    """The valuation's MTM of an option is its value against what it cost (the premium paid or received): its total P&L
+    is its MTM - the premium is not taken off again."""
     book, store, clock = _book()
     ali = _user(store, "Ali Veli")
     bought = book.add(ali, _fxopt())["id"]
     sold = book.add(ali, _fxopt(side="S"))["id"]
-    in_usd = book.add(ali, _fxopt(price="3.750", premium_ccy="USD"))["id"]
     clock.set("2026-11-17 11:30")
-    planted.set(bought, None, 180000.0, -1000.0)
-    planted.set(sold, None, -180000.0, 1000.0)
-    planted.set(in_usd, None, 180000.0, -1000.0)
+    planted.set(bought, None, 30000.0, -1000.0)                     # worth 180.000, bought for 150.000
+    planted.set(sold, None, -30000.0, 1000.0)
     res = book.mtm(ali, "desk")["values"]
     t = res[str(bought)]["periods"]["total"]
     assert _near(t["pnl"]["ccy"], 30000.0) and t["carry"]["ccy"] == 0.0 and _near(t["pnl"]["usd"], 750.0)
     assert _near(res[str(sold)]["periods"]["total"]["pnl"]["ccy"], -30000.0)
-    assert _near(res[str(in_usd)]["periods"]["total"]["pnl"]["try"], 30000.0, 1e-6)       # 3.750 USD × 40
+    store.close()
+
+
+def test_a_close_s_carry_covers_the_days_to_the_next_business_day(planted):
+    """``carry_1d`` is one day passing to the next business day (``inputs["carry_days"]``: 3 from a Friday): over a
+    weekend the week earns Friday's carry once, not three times; the pro rata part since Monday's close is Monday's."""
+    book, store, clock = _book()
+    ali = _user(store, "Ali Veli")
+    clock.set("2026-11-13 10:00")
+    a = book.add(ali, _ois(trade_date="2026-11-13", settle_date="2026-11-16"))["id"]
+    planted.set(a, "2026-11-13", 50.0, 30.0, days=3)                # Friday: three days' carry
+    planted.set(a, "2026-11-16", 90.0, 10.0, days=1)
+    assert book.take_close("2026-11-13") and book.take_close("2026-11-16")
+    clock.set("2026-11-17 11:30")
+    planted.set(a, None, 100.0, 10.0, days=1)
+    p = book.mtm(ali, "desk")["values"][str(a)]["periods"]
+    assert p["week"]["from"] == "2026-11-13" and _near(p["week"]["carry"]["ccy"], 30.0 + 10.0 * 0.75)
+    assert _near(p["week"]["pnl"]["ccy"], 50.0) and _near(p["day"]["carry"]["ccy"], 7.5)
+    assert store.tb_closes([a])[a]["2026-11-13"]["carry_days"] == 3
+    store.close()
+
+
+def test_a_swap_s_side_as_the_valuation_keeps_it(monkeypatch):
+    """tradevalue.check keeps an OIS / SOFR side as the blotter's code ("S" receives, "B" pays): the desk's words, a
+    package's side and the form read either."""
+    def coded(trade, mkt=None, strict=True):
+        t = dict(trade)
+        code = {"receive": "S", "pay": "B"}
+        if t.get("product") in ("ois", "sofr"):
+            if t.get("side"):
+                t["side"] = code.get(t["side"], t["side"])
+            t["legs"] = [dict(lg, side=code.get(lg.get("side"), lg.get("side"))) for lg in t.get("legs") or []] or t.get("legs")
+            if t["legs"] is None:
+                del t["legs"]
+        return t
+
+    monkeypatch.setattr(tv, "check", coded)
+    book, store, clock = _book()
+    ali = _user(store, "Ali Veli")
+    one = book.add(ali, _ois())
+    legs = [{"side": "receive", "end_date": "2Y", "notional": "100m", "price": "38,5"},
+            {"side": "pay", "end_date": "5Y", "notional": "45m", "price": "38,15"}]
+    two = book.add(ali, _ois(structure="spread", legs=legs, end_date="", notional="", price=""))
+    assert one["text"] == "RECEIVE 2Y TRY OIS 100m @ %38,50" and two["text"] == "2s5s steepener TRY OIS -35,0 bp"
+    assert store.tb_get(one["id"])["side"] == "S" and [lg["side"] for lg in store.tb_get(two["id"])["legs"]] == ["S", "B"]
+    assert [lg["text"] for lg in next(it for it in book.listing(ali, "desk")["open"] if it["id"] == two["id"])["legs"]] == [
+        "RECEIVE 2Y 100m @ %38,50", "PAY 5Y 45m @ %38,15"]
+    # a stored code is read back by the form (an edit sends "S" / "B" as easily as "receive" / "pay")
+    assert book.edit(ali, one["id"], _ois(side="B"))["text"] == "PAY 2Y TRY OIS 100m @ %38,50"
+    assert tbm.side_word("ois", "S") == "RECEIVE" and tbm.side_word("dibs", "S") == "SATIŞ" and tbm.rate_side("pay") == "pay"
     store.close()
 
 
@@ -629,16 +709,30 @@ def test_nothing_is_valued_until_mtm_yenile(monkeypatch):
     store.close()
 
 
-def test_the_stub_values_nothing_and_says_why():
+def test_a_trade_the_valuation_cannot_take_says_why(monkeypatch):
+    """What the valuation refuses (tradevalue.check's Turkish reason) is said on the form, nothing saved; a valuation
+    that raises is a reason too; a nominal from a DV01 is taken on the lot the valuation rounds to."""
+    def refuse(trade, mkt=None, strict=True):
+        raise ValueError("fly'da kanatlar aynı, gövde ters yönde olmalı")
+
     book, store, clock = _book()
     ali = _user(store, "Ali Veli")
+    monkeypatch.setattr(tv, "check", refuse)
+    err = _refused(400, book.add, ali, _ois())
+    assert err.data["fields"] == {"_": "fly'da kanatlar aynı, gövde ters yönde olmalı"} and store.tb_list("desk") == []
+    monkeypatch.setattr(tv, "check", _stub_check)
+
+    def boom(trade, mkt, asof=None):
+        raise RuntimeError("eğri yok")
+
+    monkeypatch.setattr(tv, "value", boom)
     tid = book.add(ali, _ois())["id"]
-    v = book.mtm(ali, "desk")["values"][str(tid)]
-    assert (v["ok"], v["why"]) == (False, "değerleme henüz yok")
-    assert tv.value({}, None) == {"ok": False, "why": "değerleme henüz yok"}
-    assert tv.defaults("ois") == {"trade_date": dt.date.today().isoformat()}
-    assert tv.notional_for_dv01({}, 1012) == 1e7 and tv.notional_for_dv01({}, 1) == 5e6 and tv.check({"a": 1}) == {"a": 1}
-    assert tv.PRODUCTS == ("ois", "sofr", "dibs", "fxspot", "fxopt") and tv.market(None) is None
+    assert book.mtm(ali, "desk")["values"][str(tid)]["why"] == "değerleme hatası: eğri yok"
+    # a valuation rounding to a lot of its own (10 mn here): its nominal and the DV01 it gives are taken as they are
+    monkeypatch.setattr(tv, "notional_for_dv01", lambda t, dv01, ccy="USD", mkt=None: {
+        "notional": 3e7, "raw": float(dv01) * 1e4, "dv01_check": 3e7 / 1e4 * 1.01, "ccy": "TRY", "lot": 1e7})
+    u = book.size(ali, dict(_ois(), size=[{"leg": None, "dv01": "2.600"}]))["units"][0]
+    assert (u["notional"], round(u["dv01"], 6)) == (3e7, 3030.0)
     store.close()
 
 
@@ -662,23 +756,41 @@ def test_the_form_s_defaults_come_from_the_valuation(monkeypatch):
     assert got["weights"] == {"spread": [1.0, 1.0], "fly": [0.5, 1.0, 0.5]} and got["meetings"] == []
     seen = []
 
-    def defaults(product, pair=None, trade_date=None, mkt_or_svc=None):
-        seen.append((product, pair, trade_date))
+    def defaults(product, pair=None, trade_date=None, mkt_or_svc=None, **given):
+        # (as the trades-deger branch's: the meeting periods as ``mpc_periods``, the weights with their notes)
+        seen.append((product, pair, trade_date, given))
         if product == "fxspot":
             return {"trade_date": trade_date, "settle_date": "2026-12-21" if trade_date == "2026-12-17" else "2026-11-18"}
         if product == "fxopt":
-            return {"trade_date": TODAY, "settle_date": "2026-11-18", "premium_ccy": pair[3:], "delivery": "2026-12-01"}
-        return {"trade_date": TODAY, "settle_date": "2026-11-18", "value_date": "2026-11-18",
-                "meetings": [{"meeting": "2026-12-11", "start": "2026-12-12", "end": "2027-01-23", "label": "PPK 11.12.2026"}]}
+            out = {"trade_date": TODAY, "settle_date": "2026-11-18", "premium_ccy": pair[3:]}
+            if given.get("expiry") == "2026-12-18":
+                out["delivery"] = "2026-12-22"
+            return out
+        out = {"trade_date": TODAY, "settle_date": "2026-11-18", "value_date": "2026-11-18",
+               "weights": {"spread": {"weights": [1.0, 1.0], "note": "DV01 1:1"}, "fly": {"weights": [0.5, 1.0, 0.5]}},
+               "mpc_periods": [{"mpc_date": "2026-12-11", "mpc_end": "2027-01-22", "value_date": "2026-12-12",
+                                "end_date": "2027-01-23", "label": "MPC 12.12.26–23.01.27"}]}
+        if given.get("fra") == "3x6":
+            out.update(value_date="2027-02-18", end_date="2027-05-18")
+        return out
 
     monkeypatch.setattr(tv, "defaults", defaults)
-    opt = book.defaults(ali, "fxopt", "usd/try", TODAY, "2026-12-17")
-    # an option's delivery: its expiry's spot by the pair's conventions (the valuation's spot from the expiry)
-    assert (opt["delivery"], opt["premium_ccy"], opt["notional_ccy"]) == ("2026-12-21", "TRY", "USD")
-    assert seen == [("fxopt", "USDTRY", TODAY), ("fxspot", "USDTRY", "2026-12-17")]
-    assert book.defaults(ali, "fxopt", "USDTRY", TODAY)["delivery"] == "2026-12-01"        # no expiry yet: the valuation's
-    ois = book.defaults(ali, "ois", trade_date=TODAY)
-    assert ois["meetings"][0]["meeting"] == "2026-12-11" and ois["settle_date"] == "2026-11-18"
+    # an option's delivery: the valuation's own from the expiry the form has ...
+    opt = book.defaults(ali, "fxopt", "usd/try", TODAY, "2026-12-18")
+    assert (opt["delivery"], opt["premium_ccy"], opt["notional_ccy"]) == ("2026-12-22", "TRY", "USD")
+    assert seen[-1] == ("fxopt", "USDTRY", TODAY, {"expiry": "2026-12-18"})
+    # ... or, a valuation that does not give one, the expiry's spot (its spot counted from the expiry)
+    seen.clear()
+    assert book.defaults(ali, "fxopt", "USDTRY", TODAY, "2026-12-17")["delivery"] == "2026-12-21"
+    assert [x[:3] for x in seen] == [("fxopt", "USDTRY", TODAY), ("fxspot", "USDTRY", "2026-12-17")]
+    assert "delivery" not in book.defaults(ali, "fxopt", "USDTRY", TODAY)                   # no expiry yet: none
+    ois = book.defaults(ali, "ois", trade_date=TODAY, fra="3x6", structure="fra")
+    assert seen[-1][3] == {"fra": "3x6", "structure": "fra"} and (ois["value_date"], ois["end_date"]) == ("2027-02-18", "2027-05-18")
+    # the meeting periods by the meeting's date, the weights as lists - as the form takes them
+    assert ois["meetings"] == [{"meeting": "2026-12-11", "mpc_end": "2027-01-22", "start": "2026-12-12", "end": "2027-01-23",
+                                "label": "PPK 11.12.2026 (12.12.2026 – 23.01.2027)"}] and "mpc_periods" not in ois
+    assert ois["weights"] == {"spread": [1.0, 1.0], "fly": [0.5, 1.0, 0.5]} and ois["settle_date"] == "2026-11-18"
+    assert book.defaults(ali, "dibs", isin=" trt060127t10 ") and seen[-1][3] == {"isin": "TRT060127T10"}
     _refused(400, book.defaults, ali, "swap")
     _refused(401, book.defaults, None, "ois")
 
@@ -848,10 +960,10 @@ def test_an_mpc_trade_is_kept_by_its_meeting_s_date_while_the_calendar_moves(mod
     user = svc.login("Takvim Trader")["user"]
     ahead = svc.tradebook.meetings("ois")
     meeting = ahead[2]
-    tid = svc.tradebook.add(user, _http_ois(structure="mpc", meeting=meeting, end_date=""))["id"]
+    tid = svc.tradebook.add(user, _http_ois(structure="mpc", mpc_date=meeting, end_date=""))["id"]
     start = h.meetings()
     seen = []
-    monkeypatch.setattr(tv, "value", lambda t, m, asof=None: seen.append(t.get("meeting")) or {"ok": False, "why": "-"})
+    monkeypatch.setattr(tv, "value", lambda t, m, asof=None: seen.append(t.get("mpc_date")) or {"ok": False, "why": "-"})
     try:
         # an extraordinary meeting before it: every meeting after moves a row down - the trade keeps its date
         extra = (dt.date.fromisoformat(ahead[0]) + dt.timedelta(days=7)).isoformat()
@@ -859,11 +971,11 @@ def test_an_mpc_trade_is_kept_by_its_meeting_s_date_while_the_calendar_moves(mod
         h.set_calendar(user, [extra] + start[:-1])
         assert svc.tradebook.meetings("ois")[:4] == [ahead[0], extra, ahead[1], ahead[2]]
         row = svc.store.tb_get(tid)
-        assert row["meeting"] == meeting
+        assert row["mpc_date"] == meeting
         text = next(t["text"] for t in svc.tradebook.listing(user, "desk")["open"] if t["id"] == tid)
         assert "PPK %s" % ".".join(reversed(meeting.split("-"))) in text
         svc.tradebook.mtm(user, "desk")
         assert meeting in seen
     finally:
         h.set_calendar(user, start)
-    assert svc.tradebook.meetings("ois")[:3] == ahead[:3] and svc.store.tb_get(tid)["meeting"] == meeting
+    assert svc.tradebook.meetings("ois")[:3] == ahead[:3] and svc.store.tb_get(tid)["mpc_date"] == meeting

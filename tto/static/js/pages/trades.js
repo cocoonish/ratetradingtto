@@ -18,7 +18,8 @@ const PAIRS = ['USDTRY', 'EURTRY', 'GBPTRY', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDC
 // a field's name in the log of changes
 const FIELD_TEXT = { trade_date: 'İşlem tarihi', settle_date: 'Valör', value_date: 'Başlangıç', end_date: 'Vade', tenor: 'Vade',
   notional: 'Nominal', dv01: 'DV01', dv01_ccy: 'DV01 dövizi', sized_by: 'Büyüklük', price: 'Fiyat', yield: 'Getiri',
-  price_kind: 'Fiyat tipi', side: 'Yön', structure: 'Yapı', meeting: 'Toplantı', fra: 'FRA', legs: 'Bacaklar', isin: 'ISIN',
+  price_kind: 'Fiyat tipi', side: 'Yön', structure: 'Yapı', meeting: 'Toplantı', mpc_date: 'Toplantı', mpc_end: 'Bitiş toplantısı',
+  tenor_months: 'Vade (ay)', yield_conv: 'Getiri kuralı', fra: 'FRA', legs: 'Bacaklar', isin: 'ISIN',
   pair: 'Parite', quote_amount: 'Tutar (2. döviz)', amount_typed: 'Yazılan tutar', call_put: 'Call / put', strike: 'Strike',
   expiry: 'Vade (expiry)', delivery: 'Teslim', premium_ccy: 'Prim dövizi', premium_date: 'Prim valörü',
   manual_price: 'Elle fiyat', note: 'Not', book: 'Karşı taraf / defter', weights: 'Ağırlıklar', notional_ccy: 'Döviz' };
@@ -54,6 +55,19 @@ function plain(v) {
   if (typeof v !== 'number' || !isFinite(v)) return '';
   const s = String(Number(v.toPrecision(12)));
   return settings.lang === 'en' ? s : s.replace('.', ',');
+}
+
+/** A swap's side as the form says it: the valuation keeps it as the blotter's code ("S" receives, "B" pays). */
+function rateSide(s) {
+  const k = String(s || '').toLowerCase();
+  return k === 's' || k === 'receive' ? 'receive' : (k === 'b' || k === 'pay' ? 'pay' : null);
+}
+
+/** A package's legs' DV01 weights (the valuation's ``{weights: [...]}`` or a list), else 1:1 / 50/50. */
+function weightsOf(w, st) {
+  const x = w && w[st];
+  const list = Array.isArray(x) ? x : (x && Array.isArray(x.weights) ? x.weights : null);
+  return list || (st === 'fly' ? [0.5, 1, 0.5] : [1, 1]);
 }
 
 /** dd.mm.yyyy -> yyyy-mm-dd (null when it is not such a date: a shortcut, nothing). */
@@ -624,22 +638,30 @@ class TradeForm {
       this.values[k] = text;
       this.typed.add(k);
     };
-    for (const k of ['trade_date', 'settle_date', 'value_date', 'end_date', 'meeting', 'fra', 'isin', 'pair', 'strike', 'expiry',
+    for (const k of ['trade_date', 'settle_date', 'value_date', 'end_date', 'fra', 'isin', 'pair', 'strike', 'expiry',
       'delivery', 'notional', 'quote_amount', 'note', 'book', 'manual_price', 'premium_ccy']) put(k, f[k]);
     if (f.tenor && (f.structure || 'outright') === 'outright') put('end_date', f.tenor);
-    if (f.meeting) this.values.meeting = f.meeting;
+    const meeting = f.mpc_date || f.meeting;
+    if (meeting) { this.values.mpc_date = meeting; this.values.mpc_end = f.mpc_end || null; this.typed.add('mpc_date'); }
     this.values.price = f.price_kind === 'yield' ? plain(f.yield) : plain(f.price);
     if (f.product === 'fxopt') this.values.price = amountText(f.price);
     this.typed.add('price');
     for (const k of ['side', 'call_put', 'price_kind', 'amount_typed', 'dv01_ccy']) if (f[k]) this.values[k] = f[k];
-    if ((f.legs || []).length) { this.values.pkg_side = f.side || null; delete this.values.side; }
+    const rates = f.product === 'ois' || f.product === 'sofr';
+    if (rates) this.values.side = rateSide(f.side);
+    if ((f.legs || []).length) {
+      // a package's side by its legs (short → long), as the form offers it
+      const sides = f.legs.map((lg) => rateSide(lg.side)).join(',');
+      this.values.pkg_side = Object.keys(PACKAGE_LEGS).find((k) => PACKAGE_LEGS[k].join(',') === sides) || null;
+      delete this.values.side;
+    }
     if (f.sized_by === 'dv01' && typeof f.dv01 === 'number') { put('dv01', f.dv01); this.sized[''] = 'dv01'; } else this.sized[''] = 'notional';
     (f.legs || []).forEach((lg, i) => {
       const p = 'legs.' + i + '.';
       put(p + 'end_date', lg.tenor || lg.end_date);
       put(p + 'notional', lg.notional);
       put(p + 'price', lg.price);
-      this.values[p + 'side'] = lg.side;
+      this.values[p + 'side'] = rateSide(lg.side);
       if (lg.sized_by === 'dv01' && typeof lg.dv01 === 'number') { put(p + 'dv01', lg.dv01); this.sized[p] = 'dv01'; } else this.sized[p] = 'notional';
     });
     if ((f.legs || []).length && typeof f.dv01 === 'number') put('dv01', f.dv01);
@@ -782,18 +804,20 @@ class TradeForm {
         row.appendChild(field('Başlangıç', this.box('value_date', 'valör ya da 1A'), { name: 'value_date', width: '130px' }));
         row.appendChild(field('Vade / bitiş', this.box('end_date', 'örn. 2Y ya da tarih'), { name: 'end_date', width: '150px' }));
       } else if (st === 'mpc') {
+        // the meeting by its date (the period from its effective day to the next meeting's): never a row of the calendar
         const sel = h('select', { class: 'inp', id: 'tf-meeting' });
-        this.els.meeting = sel;
+        this.els.mpc_date = sel;
         this.fillMeetings();
         sel.addEventListener('change', () => {
-          this.values.meeting = sel.value;
-          this.typed.add('meeting');
+          this.values.mpc_date = sel.value;
+          this.typed.add('mpc_date');
           const m = this.meetings.find((x) => x.meeting === sel.value);
+          this.values.mpc_end = m && m.mpc_end ? m.mpc_end : null;
           this.values.value_date = m && m.start ? isoToTr(m.start) : '';
           this.values.end_date = m && m.end ? isoToTr(m.end) : '';
-          this.changed('meeting');
+          this.changed('mpc_date');
         });
-        row.appendChild(field(this.product === 'ois' ? 'PPK toplantısı' : 'FOMC toplantısı', sel, { name: 'meeting', width: '200px' }));
+        row.appendChild(field(this.product === 'ois' ? 'PPK toplantısı' : 'FOMC toplantısı', sel, { name: 'mpc_date', width: '260px' }));
       } else {
         row.appendChild(field('FRA', this.box('fra', 'örn. 3x6'), { name: 'fra', width: '100px' }));
         row.appendChild(field('Başlangıç', this.box('value_date', 'ya da tarih'), { name: 'value_date', width: '130px' }));
@@ -841,15 +865,15 @@ class TradeForm {
   }
 
   fillMeetings() {
-    const sel = this.els.meeting;
+    const sel = this.els.mpc_date;
     if (!sel) return;
     clear(sel);
     sel.appendChild(h('option', { value: '' }, this.meetings.length ? 'Toplantı seçin' : 'takvimde toplantı yok'));
     for (const m of this.meetings) sel.appendChild(h('option', { value: m.meeting }, m.label || isoToTr(m.meeting)));
-    if (this.values.meeting && !this.meetings.some((m) => m.meeting === this.values.meeting)) {
-      sel.appendChild(h('option', { value: this.values.meeting }, isoToTr(this.values.meeting) + ' (takvimde yok)'));
+    if (this.values.mpc_date && !this.meetings.some((m) => m.meeting === this.values.mpc_date)) {
+      sel.appendChild(h('option', { value: this.values.mpc_date }, isoToTr(this.values.mpc_date) + ' (takvimde yok)'));
     }
-    sel.value = this.values.meeting || '';
+    sel.value = this.values.mpc_date || '';
   }
 
   layoutDibs() {
@@ -953,7 +977,7 @@ class TradeForm {
   spreadPackage() {
     const st = this.structure;
     const total = parseAmountLoose(this.values.dv01);
-    const w = (this.weights && this.weights[st]) || (st === 'fly' ? [0.5, 1, 0.5] : [1, 1]);
+    const w = weightsOf(this.weights, st);
     w.forEach((x, i) => {
       const p = 'legs.' + i + '.';
       if (this.sized[p] === 'notional' && this.typed.has(p + 'notional')) return;
@@ -1020,6 +1044,11 @@ class TradeForm {
     if (pair) q.pair = pair;
     if (td) q.trade_date = td;
     if (this.product === 'fxopt' && exp) q.expiry = exp;
+    // what else the conventions need: an FRA's "3x6" (its dates), a bond's ISIN (a bill settles the same day), the shape
+    const rates = this.product === 'ois' || this.product === 'sofr';
+    if (rates) q.structure = this.structure;
+    if (rates && this.structure === 'fra' && (t.fra || this.values.fra)) q.fra = String(t.fra || this.values.fra).trim();
+    if (this.product === 'dibs' && t.isin) q.isin = t.isin;
     const key = JSON.stringify(q);
     if (!force && key === this.seen.key) return;
     this.seen.key = key;
@@ -1057,13 +1086,13 @@ class TradeForm {
       p.side = (st === 'spread' || st === 'fly' ? v.pkg_side : v.side) || '';
       p.value_date = v.value_date || '';
       if (st === 'outright') p.end_date = v.end_date || '';
-      if (st === 'mpc') { p.meeting = v.meeting || ''; p.end_date = v.end_date || ''; }
+      if (st === 'mpc') { p.mpc_date = v.mpc_date || ''; p.mpc_end = v.mpc_end || ''; p.end_date = v.end_date || ''; }
       if (st === 'fra') { p.fra = v.fra || ''; p.end_date = v.end_date || ''; }
       if (st === 'spread' || st === 'fly') {
         delete p.price;
         p.dv01 = v.dv01 || '';
         p.dv01_ccy = v.dv01_ccy || 'USD';
-        if (this.weights && this.weights[st]) p.weights = this.weights[st];
+        p.weights = weightsOf(this.weights, st);
         p.legs = LEG_NAMES[st].map((_, i) => {
           const q = 'legs.' + i + '.';
           const leg = { side: v[q + 'side'] || '', end_date: v[q + 'end_date'] || '', price: v[q + 'price'] || '' };
