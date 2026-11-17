@@ -303,7 +303,7 @@ export class BugunPage {
     for (const r of rows) {
       table.appendChild(h('tr', { 'data-isin': r.isin, class: r.turned.length ? 'turned' : null },
         td(r.label, 'l', r.isin), td(sigText(r.ois), 'l ' + sigClass(r.ois)), td(sigText(r.fx), 'l ' + sigClass(r.fx)),
-        td(sigText(r.z), 'l ' + sigClass(r.z)), td(r.turned.length ? 'döndü' : 'dünle kıyas yok', 'l muted')));
+        td(sigText(r.z), 'l ' + sigClass(r.z)), td(r.turned.length ? 'döndü' : '', 'l muted')));
     }
     b.appendChild(table);
     this.setCount(c, (x.turned || []).length, true);

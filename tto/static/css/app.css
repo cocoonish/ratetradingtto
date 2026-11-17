@@ -1398,9 +1398,10 @@ table.plain.bugun tr.sum td { font-weight: 650; border-top: 1px solid var(--line
 table.plain.bugun tr.near-stop td:first-child { box-shadow: inset 3px 0 0 var(--neg); }
 table.plain.bugun tr.near-target td:first-child { box-shadow: inset 3px 0 0 var(--pos); }
 /* Ctrl+K: a command first (find.js / commands.js) - its template, what it will do, or what it expected */
-.findlist .hit.cmd .t { font-weight: 600; }
+.findlist .hit.cmd { flex-wrap: wrap; row-gap: 1px; }
+.findlist .hit.cmd .t { font-weight: 600; white-space: normal; flex: 1 1 100%; }
 .findlist .hit.cmd .t::before { content: "› "; color: var(--accent); }
-.findlist .hit.cmd .w { white-space: normal; text-align: right; max-width: 52%; }
+.findlist .hit.cmd .w { white-space: normal; flex: 1 1 100%; padding-left: 12px; }
 .findlist .hit.cmd.err .t { color: var(--neg); font-weight: 500; }
 .findlist .hit.cmd.err .t::before { content: "! "; color: var(--neg); }
 .findlist .hit.cmd.tpl .t { color: var(--ink-2); font-family: var(--mono); font-size: 12px; font-weight: 500; }

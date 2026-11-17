@@ -167,7 +167,8 @@ function parseScenario(args, env) {
   }
   if (!f) {
     for (const c of PPK) out.push({ cmd: 'retview', code: c, label: 'RET adil değer: PPK senaryosu ' + c, note: 'sizin görünümünüz' });
-    if (!saved.length && env.scenarios) out.unshift({ error: 'kayıtlı senaryonuz yok', label: 'Kayıtlı senaryonuz yok (Senaryolar\'dan kaydedin)' });
+    // (said after what can be done: Enter runs the first)
+    if (!saved.length && env.scenarios) out.push({ error: 'Kayıtlı senaryonuz yok: Senaryolar\'dan kaydedin', label: 'Kayıtlı senaryonuz yok: Senaryolar\'dan kaydedin' });
     return out;
   }
   if (!out.length) {

@@ -40,8 +40,9 @@ export async function runCommand(c, ctx) {
 }
 
 /**
- * The Trades page's "Yeni işlem" form (just opened) filled as the user would type it: the product chosen, then each box
- * written (its own input event - the form's defaults, sizing and preview follow), the sides clicked.  Nothing is saved.
+ * The Trades page's "Yeni işlem" form (just opened) filled as the user would type it: the product chosen, the form's own
+ * defaults waited for (the trade and start dates a tenor counts from), then each box written (its own input event - the
+ * form's sizing and preview follow), the sides clicked.  Nothing is saved.
  * ``spec``: {product, side, call_put, tenor (an OIS / SOFR's end, an option's expiry), notional, dv01, isin, pair}.
  */
 export async function fillTradesForm(spec) {
@@ -55,6 +56,8 @@ export async function fillTradesForm(spec) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
   if (spec.product) click('#tf-product button[data-v="' + spec.product + '"]');
+  // (the product's defaults come from the server: a tenor typed before them has no start to count from)
+  await waitFor(() => { const d = form.querySelector('#tf-trade_date'); return d && d.value ? d : null; }, 4000);
   if (spec.pair) type('pair', spec.pair);
   if (spec.isin) type('isin', spec.isin);
   if (spec.side) click('#tf-side button[data-v="' + spec.side + '"]');

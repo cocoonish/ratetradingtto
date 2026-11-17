@@ -141,6 +141,9 @@ def test_senaryo_loads_a_saved_one_or_sets_the_ret_fair_values_ppk_view(node_run
     assert bad["error"].startswith('"yok" adlı senaryonuz yok (senaryolarınız: PPK -250, Şahin)')
     listed = parse(node_run, "senaryo")[0]
     assert [x.get("name") or x.get("code") for x in listed] == ["PPK -250", "Şahin", "S1", "S2", "S3"]
+    # none saved: the PPK views first (Enter runs the first), said after them that there is none
+    bare = parse(node_run, "senaryo", env=dict(ENV, scenarios=[]))[0]
+    assert [x.get("code") for x in bare[:3]] == ["S1", "S2", "S3"] and bare[3]["error"] == "Kayıtlı senaryonuz yok: Senaryolar'dan kaydedin"
     # before the user's scenarios are read: said so (the box reads the text again when they come)
     assert one(node_run, "senaryo foo", env=dict(ENV, scenarios=None))["error"].startswith("senaryolarınız okunuyor")
     assert one(node_run, "senaryo S3", env=dict(ENV, scenarios=None))["code"] == "S3"
