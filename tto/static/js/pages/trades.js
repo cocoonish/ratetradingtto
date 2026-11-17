@@ -676,6 +676,10 @@ class TradeForm {
   }
 
   pick(name, options, label, onPick) {
+    if (this.values[name] && !options.some((o) => o[0] === this.values[name])) {
+      this.values[name] = null;                 // (another product's choice: RECEIVE is no side of an FX trade)
+      this.typed.delete(name);
+    }
     const s = seg(options, this.values[name] || null, (v) => {
       this.values[name] = v;
       this.typed.add(name);
@@ -858,8 +862,8 @@ class TradeForm {
     });
     row.appendChild(field('ISIN (DİBS RV / Tüm Kâğıtlar)', h('div', null, isin, list), { name: 'isin', width: '190px' }));
     row.appendChild(this.pick('side', [['B', 'ALIŞ'], ['S', 'SATIŞ']], 'Yön'));
-    row.appendChild(this.pick('price_kind', [['price', 'Temiz fiyat'], ['yield', 'Getiri']], 'Fiyat', () => this.layout()));
     if (!this.values.price_kind) this.values.price_kind = 'price';
+    row.appendChild(this.pick('price_kind', [['price', 'Temiz fiyat'], ['yield', 'Getiri']], 'Fiyat', () => this.layout()));
     row.appendChild(field('DV01 dövizi', this.dv01Ccy()));
     for (const el of this.sizing('', 'TL')) row.appendChild(el);
     this.specific.appendChild(row);
