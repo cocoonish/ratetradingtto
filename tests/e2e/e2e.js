@@ -4621,12 +4621,13 @@ async function clipAfter(page, action) {
     const bgChat = await page.locator('#bugun-chat-table tr[data-line]').count();
     check('... "Girilmemiş işlemler": the "Girilmedi" lines of the chat ↔ Günlük İşlemler list', bgChat === Math.min(bgRecon.missing, 40),
       { rows: bgChat, missing: bgRecon.missing });
-    const bgData = (await api(page, 'ayşe yilmaz', 'GET', '/api/bugun')).json;
+    // (the tab the page's own reading asked for: the fair value's summary is made again in the background meanwhile)
+    const bgTab = await page.evaluate(() => window.tto.state.page.data.ret.tab);
     await page.click('#bugun-ret-go');
-    await page.waitForSelector('.modal table.ret');
+    await page.waitForSelector('.modal #ret-tab-fair');                // (its tabs: the manual table is hidden on the fair one)
     const bgFair = await page.evaluate(() => document.getElementById('ret-tab-fair').classList.contains('on'));
     check('... its RET button opens the RET dialog on the right tab (fair value when the fair value differs)',
-      !bgData.ret.tab || bgFair === (bgData.ret.tab === 'fair'), { fair: bgFair, tab: bgData.ret.tab });
+      !bgTab || bgFair === (bgTab === 'fair'), { fair: bgFair, tab: bgTab });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.modal table.ret'));
     await shot(page, '90-bugun');
@@ -4703,10 +4704,13 @@ async function clipAfter(page, action) {
     const cmdErr = await page.textContent('.findlist .hit.cmd.err .w');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
-    const errStays = await page.evaluate(() => !document.querySelector('.findlist').classList.contains('hidden'));
+    // (run, a command empties the box: the text is still there, no dialog, the same page - whatever took the focus meanwhile)
+    const errKept = await page.evaluate(() => ({ text: document.getElementById('find').value, modal: !!document.querySelector('.modal'),
+      page: window.tto.state.pageId }));
+    await page.keyboard.press('Control+k');
     await page.keyboard.press('Escape');
-    check('Ctrl+K: a command it cannot read says what it expected; Enter runs nothing', /"1x" vade olarak okunamadı/.test(cmdErr) && errStays
-      && await page.evaluate(() => window.tto.state.pageId) === pageWas, { cmdErr, errStays });
+    check('Ctrl+K: a command it cannot read says what it expected; Enter runs nothing', /"1x" vade olarak okunamadı/.test(cmdErr)
+      && errKept.text === 'işlem gir usdtry 1x 10mn' && !errKept.modal && errKept.page === pageWas, { cmdErr, errKept, pageWas });
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
