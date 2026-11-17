@@ -1577,6 +1577,101 @@ akış önerilerine ya da masanın başka hiçbir hesabına girmez - kendi tablo
   `GET /api/trades/log?scope=`, `POST /api/trades/mtm` (`{scope}`), `POST /api/trades/check`,
   `GET /api/trades/defaults?product=&pair=&trade_date=&expiry=`, `GET` / `POST /api/trades/dv01`.
 
+#### Trades · değerleme ve carry
+
+`tto/tradevalue.py`: Trades sayfasındaki her işlemin **şimdiki değeri** (MTM), **bir günde ne kazandırdığı** (carry),
+başladığından beri **ödediği / aldığı nakit** (accrued), **fiyatı masanın okuduğu gibi** ve opsiyonun greek'leri.
+Yalnız istenince hesaplanır: "MTM yenile" ve gün sonu kapanışı. Sayfa yalnız şunları çağırır: `PRODUCTS` (`ois`,
+`sofr`, `dibs`, `fxspot`, `fxopt`), `check()`, `defaults()`, `market()`, `value()`, `notional_for_dv01()`.
+
+* **Piyasa** (`market(svc)`): her yenilemede bir kez, motor iş parçacığında, **masanın ortak hesabından** (kimsenin
+  kişisel girdisi değil) ve tarihçeden okunur; **hiçbir Bloomberg isteği yapmaz** (hücreler kitapların zaten istediği,
+  gerisi tarihçenin ve quant paketinin son değerleri - sahte terminalle test edilir). İçinde: TRY OIS eğrisi
+  (`BOOT_GUN` / `BOOT_LNDF`, Motor'un bootstrap'ı; spot `OIS_MAIN!B2`, TLREF `J2`), OIS kotaları (`OIS_MAIN!A9:B26`),
+  SOFR eğrisi (`SOFR_FOMC!K48:M68`, kitabın "Zero lineer" ara değeri, T+2 spot `B5`, SOFR `B6`, SIFMA tatilleri
+  `BO4:BO70`), TLREF fixing'leri (tarihçenin `BISTTREF Index` serisi; kayıtlı veri modunda dosyayla gelen kapanışlar)
+  ve varsa SOFR fixing'leri, TRY / USD / EUR tatil listeleri, PPK ve FOMC takvimleri, Forward sayfasının USDTRY /
+  EURTRY spot'u (`F2` / `G2`), USD ve EUR OIS'i (`U:X`, `AA:AD`), offshore TRY eğrisi (`OFF_GUN` / `OFF_LNDF`) ve O/N
+  faizleri (ICAP O/N, SOFR, €STR), quant paketinin G10 spot'ları, forward puanları ve vol kotaları (canlı, yoksa son
+  kapanış), DİBS RV ve Tüm Kâğıtlar fiyatları.
+* **Enstrüman adıyla tanınır**, satırıyla değil: swap tarihleriyle, PPK dönemi toplantının tarihiyle, tahvil ISIN'iyle,
+  FX paritesiyle - takvim düzenlemesi, satır kayması, listeye yeni kâğıt bir şeyi kaydırmaz.
+* **Yön** blotter'ın kodlarıyla yazılır: OIS / SOFR'da "S" sabit faizi alır (receive), "B" öder (pay); tahvilde ve FX'te
+  "B" alış, "S" satış. `check()` sözü de ("receive" / "pay", "al" / "sat" …) alıp koda çevirir; `defaults()` kodları
+  sözleriyle verir, `value()`'nun sonucu ve bacakları yönü sözle de yazar (`side_text`).
+* **MTM + accrued = toplam değer değişimi.** MTM, kalan nakit akışlarının bugünkü değeri ile maliyetin farkı (tahvilde
+  ve FX'te fiyat farkı); accrued, işlemin başından beri ödenmiş / alınmış ve MTM'de artık olmayan nakit (swap'ın
+  ödenmiş dönemleri, tahvilin kuponları). Bir dönemin K/Z'si ikisinin birlikte değişimidir.
+* **Carry** (`carry_1d`): piyasa yerinde kalırken bir günün kazandırdığı - ertesi iş gününe kadar (`inputs.carry_days`
+  takvim günü: cuma → pazartesi 3, TLREF'in cuma fixing'i gibi). Her sonuç işlemin parasında, TL'de ve USD'de
+  (bugünkü kurlarla); `inputs` hesaba giren her şeyi yazar.
+
+Ürün ürün:
+
+* **OIS / SOFR** - `structure`: *outright*, *mpc* (toplantı tarihli dönem), *spread*, *fly*, *fra*. **Kural
+  çalışma kitaplarınınki** (kitabın kotasındaki swap her vadede ~1e-8 TL ile sıfır değer alır, test edilir): TRY
+  ACT/365, 3A'ya kadar tek ödeme, sonra başlangıçtan üç ayda bir kupon (`WORKDAY(EDATE(başlangıç, n) − 1, 1, TRY)`,
+  Motor!B88); USD ACT/360, 1Y'ye kadar tek ödeme, sonra yıllık kupon, ilk dönem kısa (vadeyle girilende kitabın
+  `EDATE(spot, m − 12k)`'si, `SOFR_FOMC!AV64`; tarihle girilende bitişten geriye), SIFMA listesiyle modified
+  following. *MTM* = sabit bacak − değişken bacak (receive; pay eksi),
+  kalan akışlar eğriden bugüne iskontolu; değişken bacağın fixlenmiş günleri tarihçenin fixing'leriyle (eksik gün bir
+  önceki fixing'le; SOFR tarihçede yoksa bugünkü SOFR ile ve `inputs.notes` bunu söyler), kalanı eğriden. *Accrued* =
+  ödenmiş dönemlerin net ödemesi. *Carry* = **günün net tahakkuku** (sabit faiz − bugünkü O/N, dönemin bileşik
+  nominali üzerinde: işaret × N × (K − I × r_ON) × gün / baz; başlamamış işlemde yok) **+ bir günlük roll-down**:
+  işlem yarın, aynı şekli koruyan (spot'undan aynı gün için aynı zero faiz) eğride, bugünün forward'larının
+  gerçekleştiği hâline göre - düz eğride sıfır; iki parça `inputs.carry_accrual` ve `inputs.roll_1d`.
+  * *Spread* (iki bacak, DV01 1:1) ve *fly* (üç bacak, 50/50 DV01): toplam bacakların toplamı; seviye uzun − kısa (bp),
+    fly'da gövde − ½ her kanat ve yanında OIS sayfasının 2·gövde − kanatlar kotası ("1s2s5s −12,5 bp (OIS sayfasında
+    −25,0)"); `legs` her bacağın MTM'i, carry'si ve fiyatı.
+  * *FRA* (`fra: "3x6"` ya da tarihleri) **tek enstrüman** olarak, ileri başlangıçlı swap; `legs` onu yeniden üreten iki
+    swap (işlemin kendi valöründen, aynı nominal ve faizle: sonuna kadar FRA'nın yönünde, başlangıcına kadar ters):
+    MTM'in ve carry'nin hangi bacaktan ne kadar geldiği; üretemedikleri `inputs.residual` (ızgaradaki FRA'da ~0).
+  * *MPC* dönemi: toplantının etkin gününden (kararın ertesi iş günü, Motor!C5) bir sonrakinin etkin gününe; tarihler
+    işlem girilirken toplantının tarihiyle sabitlenir, takvim sonradan değişse de işlem yerinde kalır.
+  * Kapanmış işlem (`status` "closed", `close_price`): kapanışa kadar swap'ın kendi tahakkuku, kapanıştan sonra yalnız
+    sabit faiz farkı (değişkenler birbirini götürür), carry yok. (Her üründe kapanış fiyatı kilitlenen K/Z'dir: FX
+    spot ve tahvil kapanış fiyatıyla, opsiyon kapanış primiyle.)
+* **DİBS** - *MTM* = (şimdiki kirli fiyat − ödenen kirli fiyat) × nominal / 100: şimdiki temiz fiyat DİBS RV'nin
+  "Kullanılan temiz"i (listede olmayan kâğıtta Tüm Kâğıtlar'ın bid / ask ortası ya da son işlemi; ikisi de yoksa
+  `manual_price`, o da yoksa `ok` false ve nedeni) ve valöründeki işlemiş faiz; işlemin temiz fiyatı (ya da getirisi:
+  varsayılan BIST bileşik, `yield_conv: "basit"` basit) ve valöründeki işlemiş faiz karşısında. Hesap DİBS RV'nin BIST
+  kuralı (`quantcurve.Bond`: kupon c/f, vadeden geriye round(364/f) günde bir; getiri yılda f kez bileşik, ilk dönem
+  kesirli, bonoda basit; işlemiş faiz c/f × geçen gün / dönem günü) - sayfanın işlemiş faizini ve kirli fiyatını
+  birebir verir. *Accrued* = valörden beri ödenen kuponlar (ve itfa). *Carry* = getiri sabitken bir sonraki valörün
+  kirli fiyatı + aradaki kupon − bugünkü kirli fiyatın TLREF ile fonlanması. TLREF'e endeksli ve FRN fiyatla izlenir
+  (işlemiş faiz bugünkü kuponla, yaklaşık); TÜFE'ye endeksli kâğıt değerlenmez (endeks oranı panoda yok).
+* **FX spot** - *MTM* = (spot − işlem kuru) × baz tutar, kote parada; spot USDTRY / EURTRY için Forward sayfasınınki,
+  G10 için quant evreninin (yoksa çaprazı); *carry* = pozisyonu bir sonraki spot valörüne taşımanın puanı, iki paranın
+  O/N faiziyle (TRY offshore O/N, SOFR, €STR; yoksa paritenin forward eğrisi). Spot yoksa `manual_price`.
+* **FX opsiyon** - Garman-Kohlhagen: teslim gününün forward'ı (USDTRY offshore eğri + USD OIS, puanı olan parite
+  puanlarından, çapraz USD bacaklarından), kote paranın iskontosu (TRY offshore eğri, USD / EUR OIS, diğerleri
+  USD paritesinden); vol zamanı vadeye kalan gün / 365. **Strike'taki vol** panonun smile'ından: USDTRY / EURUSD
+  Opsiyon sayfasının SVI uyumu (paritenin delta kuralıyla), G10 quant evreninin ATM / 25D RR / 25D BF'si
+  **Vanna-Volga** ile (`fxvol`); kotalar vadeye ara değerle (ATM toplam varyansta, RR / BF vol puanında doğrusal,
+  kotalı vadelerin dışında sabit). `manual_price` elle vol'dür (vol puanı). *MTM* = opsiyon değeri − prim (alış +,
+  satış −; prim kendi parasında, bugünkü kurla). *Carry* = theta. Greek'ler: delta (baz para tutarı, spot delta),
+  gamma (spot %1 artınca deltanın değişimi), vega (vol puanı başına, kote para), theta (bir takvim günü: spot, vol ve
+  faizler sabit).
+* **Fiyat** (`price_text`): "2Y OIS 35,85%", "MPC 11.12.26–22.01.27 37,25%", "2s5s −35,0 bp", "3x6 FRA 37,10%",
+  "TRT150328T24 98,450", "USDTRY 41,8020", "USDTRY 3A 42 call vol 18,5".
+
+**`defaults(product, pair, trade_date, mkt_or_svc, …)`** yeni işlemin masa varsayılanları: işlem tarihi bugün; valör
+TRY OIS'te OIS spot'u (`OIS_MAIN!B2` = `WORKDAY(TODAY(),1,TRY)`), SOFR'da SIFMA listesiyle T+2, DİBS'te DİBS RV'nin
+valör kuralı (ISL0 kâğıt aynı gün, diğerleri ertesi TRY iş günü), FX'te paritenin spot'u (USDTRY T+1, EURTRY / EURUSD
+T+2, iki paranın tatilleriyle); opsiyonda teslim = vade + paritenin spot gecikmesi, prim parası kote para, prim valörü
+valör; nominal parası; PPK / FOMC dönemleri (toplantı tarihiyle), FRA'nın tarihleri (`fra="3x6"`), paketlerin
+ağırlıkları. **`check()`** alanları düzenler (tarih ISO, vade → bitiş tarihi, Türkçe sayı ve tutar, yön) ve denetler:
+zorunlu alanlar, tarih sırası, ürünün takviminde iş günü (kayıtlı işlem değerlenirken değil), bilinen ISIN / fiyatlanan
+parite (ya da `manual_price`), pozitif tutarlar; nedeni Türkçe `ValueError`. **`notional_for_dv01()`** yazılan DV01'in
+(USD - masanın "1.000 $ DV01"i - ya da TL, bugünkü kurla) nominali: tam değeri, masanın 5 mn'lik lotuna yuvarlanmışı
+(`OIS_MAIN!H2`; SOFR'da 5 mn USD; en az bir lot) ve yuvarlanmış nominalin verdiği DV01; spread / fly'da önce ağırlıklar,
+sonra her bacak ayrı yuvarlanır.
+
+**Açık kararlar:** carry'nin roll-down'u forward'ların gerçekleşmesine göre (düz eğride sıfır) ve TLREF'in bileşik
+nominali üzerinde; tahvil getirisinin varsayılanı BIST bileşik; DİBS carry'sinde fonlama TLREF (repo değil); MTM
+bugüne iskontolu (TRY swap), FX opsiyonu spot valörüne; opsiyonun primi bugünkü kurla; G10 forward'ı 3A puanından sabit
+carry ile; floater'ın işlemiş faizi bugünkü kuponla; SOFR fixing'i tarihçede yok (bugünkü fixing'le, söylenerek).
+
 ### Masanın kendi köşesi: Hata / Öneri, Sosyal, Ajanda
 
 Piyasadan bağımsız üç parça (`tto/desk.py`). Kayıtları veritabanındadır (`data/tto.db`): sunucu yeniden başlasa da kalır.
@@ -3270,101 +3365,6 @@ hafta): tam hesap ~6,3 sn'den ~6,6 sn'ye; ailenin kendi süresi ~0,4 sn (*Hesap 
 β'ları o günün getirileriyle (kalıntının geçmişe dönük şekli bu kadar bugüne bağlı); DİBS evreni bugünün listesidir
 (geri testte vadesi dolmuş kâğıt yok). Sinyal kaydı her ailede olduğu gibi satırı hedef / stop / 20 iş gününe kadar
 izler; sepetin kendi sonucu haftalık geri testidir.
-
-#### Trades · değerleme ve carry
-
-`tto/tradevalue.py`: Trades sayfasındaki her işlemin **şimdiki değeri** (MTM), **bir günde ne kazandırdığı** (carry),
-başladığından beri **ödediği / aldığı nakit** (accrued), **fiyatı masanın okuduğu gibi** ve opsiyonun greek'leri.
-Yalnız istenince hesaplanır: "MTM yenile" ve gün sonu kapanışı. Sayfa yalnız şunları çağırır: `PRODUCTS` (`ois`,
-`sofr`, `dibs`, `fxspot`, `fxopt`), `check()`, `defaults()`, `market()`, `value()`, `notional_for_dv01()`.
-
-* **Piyasa** (`market(svc)`): her yenilemede bir kez, motor iş parçacığında, **masanın ortak hesabından** (kimsenin
-  kişisel girdisi değil) ve tarihçeden okunur; **hiçbir Bloomberg isteği yapmaz** (hücreler kitapların zaten istediği,
-  gerisi tarihçenin ve quant paketinin son değerleri - sahte terminalle test edilir). İçinde: TRY OIS eğrisi
-  (`BOOT_GUN` / `BOOT_LNDF`, Motor'un bootstrap'ı; spot `OIS_MAIN!B2`, TLREF `J2`), OIS kotaları (`OIS_MAIN!A9:B26`),
-  SOFR eğrisi (`SOFR_FOMC!K48:M68`, kitabın "Zero lineer" ara değeri, T+2 spot `B5`, SOFR `B6`, SIFMA tatilleri
-  `BO4:BO70`), TLREF fixing'leri (tarihçenin `BISTTREF Index` serisi; kayıtlı veri modunda dosyayla gelen kapanışlar)
-  ve varsa SOFR fixing'leri, TRY / USD / EUR tatil listeleri, PPK ve FOMC takvimleri, Forward sayfasının USDTRY /
-  EURTRY spot'u (`F2` / `G2`), USD ve EUR OIS'i (`U:X`, `AA:AD`), offshore TRY eğrisi (`OFF_GUN` / `OFF_LNDF`) ve O/N
-  faizleri (ICAP O/N, SOFR, €STR), quant paketinin G10 spot'ları, forward puanları ve vol kotaları (canlı, yoksa son
-  kapanış), DİBS RV ve Tüm Kâğıtlar fiyatları.
-* **Enstrüman adıyla tanınır**, satırıyla değil: swap tarihleriyle, PPK dönemi toplantının tarihiyle, tahvil ISIN'iyle,
-  FX paritesiyle - takvim düzenlemesi, satır kayması, listeye yeni kâğıt bir şeyi kaydırmaz.
-* **Yön** blotter'ın kodlarıyla yazılır: OIS / SOFR'da "S" sabit faizi alır (receive), "B" öder (pay); tahvilde ve FX'te
-  "B" alış, "S" satış. `check()` sözü de ("receive" / "pay", "al" / "sat" …) alıp koda çevirir; `defaults()` kodları
-  sözleriyle verir, `value()`'nun sonucu ve bacakları yönü sözle de yazar (`side_text`).
-* **MTM + accrued = toplam değer değişimi.** MTM, kalan nakit akışlarının bugünkü değeri ile maliyetin farkı (tahvilde
-  ve FX'te fiyat farkı); accrued, işlemin başından beri ödenmiş / alınmış ve MTM'de artık olmayan nakit (swap'ın
-  ödenmiş dönemleri, tahvilin kuponları). Bir dönemin K/Z'si ikisinin birlikte değişimidir.
-* **Carry** (`carry_1d`): piyasa yerinde kalırken bir günün kazandırdığı - ertesi iş gününe kadar (`inputs.carry_days`
-  takvim günü: cuma → pazartesi 3, TLREF'in cuma fixing'i gibi). Her sonuç işlemin parasında, TL'de ve USD'de
-  (bugünkü kurlarla); `inputs` hesaba giren her şeyi yazar.
-
-Ürün ürün:
-
-* **OIS / SOFR** - `structure`: *outright*, *mpc* (toplantı tarihli dönem), *spread*, *fly*, *fra*. **Kural
-  çalışma kitaplarınınki** (kitabın kotasındaki swap her vadede ~1e-8 TL ile sıfır değer alır, test edilir): TRY
-  ACT/365, 3A'ya kadar tek ödeme, sonra başlangıçtan üç ayda bir kupon (`WORKDAY(EDATE(başlangıç, n) − 1, 1, TRY)`,
-  Motor!B88); USD ACT/360, 1Y'ye kadar tek ödeme, sonra yıllık kupon, ilk dönem kısa (vadeyle girilende kitabın
-  `EDATE(spot, m − 12k)`'si, `SOFR_FOMC!AV64`; tarihle girilende bitişten geriye), SIFMA listesiyle modified
-  following. *MTM* = sabit bacak − değişken bacak (receive; pay eksi),
-  kalan akışlar eğriden bugüne iskontolu; değişken bacağın fixlenmiş günleri tarihçenin fixing'leriyle (eksik gün bir
-  önceki fixing'le; SOFR tarihçede yoksa bugünkü SOFR ile ve `inputs.notes` bunu söyler), kalanı eğriden. *Accrued* =
-  ödenmiş dönemlerin net ödemesi. *Carry* = **günün net tahakkuku** (sabit faiz − bugünkü O/N, dönemin bileşik
-  nominali üzerinde: işaret × N × (K − I × r_ON) × gün / baz; başlamamış işlemde yok) **+ bir günlük roll-down**:
-  işlem yarın, aynı şekli koruyan (spot'undan aynı gün için aynı zero faiz) eğride, bugünün forward'larının
-  gerçekleştiği hâline göre - düz eğride sıfır; iki parça `inputs.carry_accrual` ve `inputs.roll_1d`.
-  * *Spread* (iki bacak, DV01 1:1) ve *fly* (üç bacak, 50/50 DV01): toplam bacakların toplamı; seviye uzun − kısa (bp),
-    fly'da gövde − ½ her kanat ve yanında OIS sayfasının 2·gövde − kanatlar kotası ("1s2s5s −12,5 bp (OIS sayfasında
-    −25,0)"); `legs` her bacağın MTM'i, carry'si ve fiyatı.
-  * *FRA* (`fra: "3x6"` ya da tarihleri) **tek enstrüman** olarak, ileri başlangıçlı swap; `legs` onu yeniden üreten iki
-    swap (işlemin kendi valöründen, aynı nominal ve faizle: sonuna kadar FRA'nın yönünde, başlangıcına kadar ters):
-    MTM'in ve carry'nin hangi bacaktan ne kadar geldiği; üretemedikleri `inputs.residual` (ızgaradaki FRA'da ~0).
-  * *MPC* dönemi: toplantının etkin gününden (kararın ertesi iş günü, Motor!C5) bir sonrakinin etkin gününe; tarihler
-    işlem girilirken toplantının tarihiyle sabitlenir, takvim sonradan değişse de işlem yerinde kalır.
-  * Kapanmış işlem (`status` "closed", `close_price`): kapanışa kadar swap'ın kendi tahakkuku, kapanıştan sonra yalnız
-    sabit faiz farkı (değişkenler birbirini götürür), carry yok. (Her üründe kapanış fiyatı kilitlenen K/Z'dir: FX
-    spot ve tahvil kapanış fiyatıyla, opsiyon kapanış primiyle.)
-* **DİBS** - *MTM* = (şimdiki kirli fiyat − ödenen kirli fiyat) × nominal / 100: şimdiki temiz fiyat DİBS RV'nin
-  "Kullanılan temiz"i (listede olmayan kâğıtta Tüm Kâğıtlar'ın bid / ask ortası ya da son işlemi; ikisi de yoksa
-  `manual_price`, o da yoksa `ok` false ve nedeni) ve valöründeki işlemiş faiz; işlemin temiz fiyatı (ya da getirisi:
-  varsayılan BIST bileşik, `yield_conv: "basit"` basit) ve valöründeki işlemiş faiz karşısında. Hesap DİBS RV'nin BIST
-  kuralı (`quantcurve.Bond`: kupon c/f, vadeden geriye round(364/f) günde bir; getiri yılda f kez bileşik, ilk dönem
-  kesirli, bonoda basit; işlemiş faiz c/f × geçen gün / dönem günü) - sayfanın işlemiş faizini ve kirli fiyatını
-  birebir verir. *Accrued* = valörden beri ödenen kuponlar (ve itfa). *Carry* = getiri sabitken bir sonraki valörün
-  kirli fiyatı + aradaki kupon − bugünkü kirli fiyatın TLREF ile fonlanması. TLREF'e endeksli ve FRN fiyatla izlenir
-  (işlemiş faiz bugünkü kuponla, yaklaşık); TÜFE'ye endeksli kâğıt değerlenmez (endeks oranı panoda yok).
-* **FX spot** - *MTM* = (spot − işlem kuru) × baz tutar, kote parada; spot USDTRY / EURTRY için Forward sayfasınınki,
-  G10 için quant evreninin (yoksa çaprazı); *carry* = pozisyonu bir sonraki spot valörüne taşımanın puanı, iki paranın
-  O/N faiziyle (TRY offshore O/N, SOFR, €STR; yoksa paritenin forward eğrisi). Spot yoksa `manual_price`.
-* **FX opsiyon** - Garman-Kohlhagen: teslim gününün forward'ı (USDTRY offshore eğri + USD OIS, puanı olan parite
-  puanlarından, çapraz USD bacaklarından), kote paranın iskontosu (TRY offshore eğri, USD / EUR OIS, diğerleri
-  USD paritesinden); vol zamanı vadeye kalan gün / 365. **Strike'taki vol** panonun smile'ından: USDTRY / EURUSD
-  Opsiyon sayfasının SVI uyumu (paritenin delta kuralıyla), G10 quant evreninin ATM / 25D RR / 25D BF'si
-  **Vanna-Volga** ile (`fxvol`); kotalar vadeye ara değerle (ATM toplam varyansta, RR / BF vol puanında doğrusal,
-  kotalı vadelerin dışında sabit). `manual_price` elle vol'dür (vol puanı). *MTM* = opsiyon değeri − prim (alış +,
-  satış −; prim kendi parasında, bugünkü kurla). *Carry* = theta. Greek'ler: delta (baz para tutarı, spot delta),
-  gamma (spot %1 artınca deltanın değişimi), vega (vol puanı başına, kote para), theta (bir takvim günü: spot, vol ve
-  faizler sabit).
-* **Fiyat** (`price_text`): "2Y OIS 35,85%", "MPC 11.12.26–22.01.27 37,25%", "2s5s −35,0 bp", "3x6 FRA 37,10%",
-  "TRT150328T24 98,450", "USDTRY 41,8020", "USDTRY 3A 42 call vol 18,5".
-
-**`defaults(product, pair, trade_date, mkt_or_svc, …)`** yeni işlemin masa varsayılanları: işlem tarihi bugün; valör
-TRY OIS'te OIS spot'u (`OIS_MAIN!B2` = `WORKDAY(TODAY(),1,TRY)`), SOFR'da SIFMA listesiyle T+2, DİBS'te DİBS RV'nin
-valör kuralı (ISL0 kâğıt aynı gün, diğerleri ertesi TRY iş günü), FX'te paritenin spot'u (USDTRY T+1, EURTRY / EURUSD
-T+2, iki paranın tatilleriyle); opsiyonda teslim = vade + paritenin spot gecikmesi, prim parası kote para, prim valörü
-valör; nominal parası; PPK / FOMC dönemleri (toplantı tarihiyle), FRA'nın tarihleri (`fra="3x6"`), paketlerin
-ağırlıkları. **`check()`** alanları düzenler (tarih ISO, vade → bitiş tarihi, Türkçe sayı ve tutar, yön) ve denetler:
-zorunlu alanlar, tarih sırası, ürünün takviminde iş günü (kayıtlı işlem değerlenirken değil), bilinen ISIN / fiyatlanan
-parite (ya da `manual_price`), pozitif tutarlar; nedeni Türkçe `ValueError`. **`notional_for_dv01()`** yazılan DV01'in
-(USD - masanın "1.000 $ DV01"i - ya da TL, bugünkü kurla) nominali: tam değeri, masanın 5 mn'lik lotuna yuvarlanmışı
-(`OIS_MAIN!H2`; SOFR'da 5 mn USD; en az bir lot) ve yuvarlanmış nominalin verdiği DV01; spread / fly'da önce ağırlıklar,
-sonra her bacak ayrı yuvarlanır.
-
-**Açık kararlar:** carry'nin roll-down'u forward'ların gerçekleşmesine göre (düz eğride sıfır) ve TLREF'in bileşik
-nominali üzerinde; tahvil getirisinin varsayılanı BIST bileşik; DİBS carry'sinde fonlama TLREF (repo değil); MTM
-bugüne iskontolu (TRY swap), FX opsiyonu spot valörüne; opsiyonun primi bugünkü kurla; G10 forward'ı 3A puanından sabit
-carry ile; floater'ın işlemiş faizi bugünkü kuponla; SOFR fixing'i tarihçede yok (bugünkü fixing'le, söylenerek).
 
 ### Excel'deki diğer özelliklerin karşılığı
 
