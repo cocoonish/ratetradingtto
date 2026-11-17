@@ -436,8 +436,9 @@ export class SignalChart {
     if (px) trade.append(' · ' + ((s.info || {}).size || '1 mn ' + mo.base));      // (a universe line's own size: Trend's "1,4 mn EUR")
     else if (isNum(mo.per_bp)) trade.append(' · ana bacak ' + num(mo.dv01_usd, 0) + ' $ DV01 = ' + num(mo.per_bp, 0) + ' TL / bp');
     else if (isNum(mo.per_unit) && (s.info || {}).size) trade.append(' · ' + s.info.size);
-    trade.append(' ', bookButton(s, this.id('quant-sig-book')));
     rows.push(['İşlem', trade]);
+    // "İşleme al": the Trades form filled from this line (or, disabled, why Trades cannot book it)
+    rows.push(['Trades', h('td', { class: 'qbook' }, bookButton(s, this.id('quant-sig-book')))]);
     // its place in the list: the group, TRY OIS's end, an Offshore line's "offshore limiti"; a gate's hold: "düşük güven"
     if (s.group) {
       rows.push(['Grup', h('td', { id: this.id('quant-sig-group'), class: s.tag ? 'qtag' : null }, groupText(s)
