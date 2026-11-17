@@ -21,6 +21,7 @@ import quant_synth_ml as sm
 from conftest import auth
 from tto import quantbt as qbt
 from tto import quantfam as qf
+from tto import quantlevels as qlv
 from tto import quantml as ml
 from tto import quantuniv as qu
 from tto.server import create_app
@@ -116,8 +117,11 @@ def test_a_planted_driver_is_found_out_of_sample_its_line_prints_and_it_ranks_to
     assert got and got.group(1) == "AL" and int(got.group(2)) == round(p * 100) and int(got.group(3)) == round(rec["hit"] * 100)
     assert int(got.group(4)) == rec["tests"]
     level = m.level
-    assert sg["target"] == pytest.approx(level * (1.0 + (2.0 * p - 1.0) * line.mean5 / 100.0))
-    assert sg["stop"] == pytest.approx(level * (1.0 - 1.5 * line.sd1 * math.sqrt(5) / 100.0)) and sg["hold"] == 5.0
+    # (its target and stop: the levels calibrated on the family's out-of-sample trades - their own test below)
+    lv = sg["levels"]
+    assert lv["ok"] and sg["rr"] >= 1.0 and sg["hold"] == 5.0
+    sigma = level * line.sd1 * math.sqrt(5) / 100.0
+    assert sg["target"] == pytest.approx(level + lv["m"] * sigma) and sg["stop"] == pytest.approx(level - lv["k"] * sigma)
     # its size and money through the registry: 1 mn AUD, P&L in USD, the spot's price
     assert sg["px"]["inst"] == "AUDUSD spot" and sg["money"]["ccy"] == "USD" and sg["money"]["base"] == "AUD" and sg["money"]["total"] > 0
     # the card: what to do and why - the three features that moved it most, in the desk's words; the record with log-loss
@@ -135,6 +139,51 @@ def test_a_planted_driver_is_found_out_of_sample_its_line_prints_and_it_ranks_to
     assert row["prints"] and row["valid"] and row["top"][0]["name"] == "brent_5" and row["verb"] == "AL"
     # the measured time of the real size: within a few minutes
     assert fitted["took"] < 300.0 and fitted["fits"] == fitted["tab"]["timing"]["fitted"] > 500
+
+
+def test_the_levels_are_calibrated_on_the_family_s_out_of_sample_trades(fitted):
+    """Every line's out-of-sample predictions past the entry are trades (one at a time a line, five closes, in σ of the
+    five days as known that day); their group's levels (quantlevels: a month at a time) set the line's target and stop
+    - the planted AUDUSD's group G10 spot -, Ödül / risk ≥ 1, the record's hit rate and expectancy on the card; a backtest
+    refit's line takes the levels of its day's month."""
+    st, ctx = fitted["st"], fitted["ctx"]
+    line = st.lines["FX:AUDUSD"]
+    entry = float(ctx.cfg["entry_z"])
+    trades = line.level_trades(entry)
+    days = [r.day for r in line.rows]
+    assert len(trades) >= 30 and all(t["family"] == "ml" and t["group"] == "G10 spot" and 1 <= len(t["path_sigma"]) <= ml.HORIZON for t in trades)
+    for a, b in zip(trades, trades[1:]):                                 # (one at a time: the next after the five closes)
+        assert days.index(b["entry_day"]) - days.index(a["entry_day"]) >= ml.HORIZON
+    for t in trades:
+        p = line.preds[t["entry_day"]]
+        assert abs(p - 0.5) / ml.Z_SCALE >= entry
+        i = next(r.i for r in line.rows if r.day == t["entry_day"])
+        s = 1 if p > 0.5 else -1
+        unit = line.scale[t["entry_day"]][1] * math.sqrt(ml.HORIZON)
+        assert t["path_sigma"][0] == pytest.approx(s * qf.change("fx", line.L[i], line.L[i + 1]) / unit)
+    # the planted line's trades earn: its group's levels have a positive record (out of sample)
+    book = line.book
+    lv = book.line("G10 spot")
+    assert lv["ok"] and lv["rr"] >= 1.0 and lv["exp"] > 0 and lv["n"] >= qlv.MIN_OOS and fitted["tab"]["levels"]["family"] == "ml"
+    m = fitted["mons"]["ml:FX:AUDUSD"]
+    qf.score_all(ctx, [m], {})
+    sg = qf.make_signal(m, ctx.cfg, "10:00")
+    assert sg["levels"]["n"] == lv["n"] and sg["levels"]["hit"] == lv["hit"] and sg["rr"] == pytest.approx(lv["m"] / lv["k"])
+    assert "Seviyeler geçmiş işlemlerden" in sg["plain"] and not sg["gated"]
+    # a refit's line (the backtest): its day's month's levels, its σ that day's
+    ml._STATE = st
+    T = fitted["days"][-60]
+    cT = qf.Ctx(dict(ctx.cfg), dt.date.fromisoformat(T) + dt.timedelta(days=1), ctx.series, {k: dict(v) for k, v in ctx.meta.items()}, {},
+                mpc=ctx.mpc)
+    rm = next(x for x in ml.run(cT, qu.Registry(cT), ctx.cfg)[0] if x.sid == "ml:FX:AUDUSD")
+    t = fitted["days"][-55]
+    cT.today, cT.today_iso = dt.date.fromisoformat(t), t
+    qf.score_all(cT, [rm], {k: v[t] for k, v in ctx.series.items() if t in v})
+    want = book.line("G10 spot", qlv.month_of(t))
+    assert rm.levels["ok"] == want["ok"]
+    if want["ok"]:
+        assert (rm.levels["k"], rm.levels["m"]) == (want["k"], want["m"])
+        assert rm.levels["sigma"] == pytest.approx(rm.level * line.scale[t][1] * math.sqrt(ml.HORIZON) / 100.0)
 
 
 def test_pure_noise_does_not_pass_the_rule_and_does_not_print(fitted):

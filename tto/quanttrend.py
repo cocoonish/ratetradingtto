@@ -646,7 +646,7 @@ class _Line(object):
         loss = trail and (lv.get("exp") or 0.0) < 0.0
         # (``daily``: a line every day, held until its direction turns or its stop - the log, the alerts and the backtest
         # follow it so: tto.quant._track, quantbt.backtest; the gates of make_signal are none of its, but its levels')
-        sg.update({"strength": strength(score), "gated": qf.LEVELS_LOSS if loss else "",
+        sg.update({"strength": "elendi" if loss else strength(score), "gated": qf.LEVELS_LOSS if loss else "",
                    "gates": [g for g in sg.get("gates") or () if g.get("name") == "Seviyeler"], "composite": 0.0 if loss else base,
                    "parts": {"z": base, "regime": 1.0, "hl": 1.0, "carry": 1.0}, "entry_z": STRONG,
                    "expression": "%s %s" % (inst.verb(s), inst.label), "new": new, "days_in": days_in, "daily": True})

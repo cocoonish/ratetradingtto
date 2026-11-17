@@ -15,6 +15,7 @@ import quant_synth
 from conftest import auth
 from tto import quantfam as qf
 from tto import quantmath as qm
+from tto import quantuniv as qu
 from tto import quantviop as qv
 from tto.quant import DEFAULTS, HISTORY_DAYS, Quant, series_specs
 from tto.server import create_app
@@ -1489,13 +1490,15 @@ def test_fit_runs_off_the_engine_thread_and_finds_the_planted_signals(seeded, mo
     ids = {s["id"]: s for s in v["signals"]}
     assert "pca:OIS:2Y" in ids and ids["pca:OIS:2Y"]["expression"].startswith("Receive 2Y OIS")
     assert "pairs:off:3M" in ids and ids["pairs:off:3M"]["direction"] == -1
-    # the list by group (quantuniv.order): in each, the confident lines by their composite, then the "düşük güven" ones
+    # the list by group (quantuniv.order): in each, the confident lines by their expectancy at their calibrated levels
+    # (quantlevels; the composite on a tie), then the "düşük güven" ones
     keys = [(s["priority"], bool(s["gated"])) for s in v["signals"]]
     assert keys == sorted(keys) and any(not s["gated"] for s in v["signals"])
     for p in {s["priority"] for s in v["signals"]}:
-        # (a Trend line whose direction turned since the last close - "YENİ" - first in its group)
-        ranks = [(0 if s.get("new") else 1, -s["composite"]) for s in v["signals"] if s["priority"] == p and not s["gated"]]
+        ranks = [qu.exp_key(s) for s in v["signals"] if s["priority"] == p and not s["gated"]]
         assert ranks == sorted(ranks)
+    # every line carries its levels: calibrated (Ödül / risk ≥ 1, the record) or why not (no backtest yet: its own rule)
+    assert all(s.get("levels") and (s["levels"]["ok"] and s["rr"] >= 1.0 or s["levels"].get("why")) for s in v["signals"])
     assert {f["id"] for f in v["families"]} == set(qf.FAMILIES)
     only = svc.quant.view("signals", user, {"family": "pca"})["signals"]
     assert only and all(s["family"] == "pca" for s in only)
@@ -1528,6 +1531,10 @@ def test_the_service_backtests_every_family_and_shows_it_beside_each_signal(seed
     assert all(any(g["name"] == "Geri test" for g in s["gates"]) for s in sigs)
     view = q.view("backtest", user, {})
     assert view["ready"] and view["rows"] and {"trades", "hit", "avg_sigma", "sharpe", "max_dd"} <= set(view["rows"][0])
+    # the levels (quantlevels): the families of the refits calibrated on their trades' paths (the paths themselves are not
+    # kept), every row of the panel with its levels - today's k / m, or its own and why
+    assert res["levels"]["families"] and set(res["levels"]["families"]) <= set(qf.FAMILIES) and "paths" not in res
+    assert all(isinstance(r.get("levels"), str) for r in view["rows"] if not r["type"]) and view["min_trades"] == 30
     # the desk's floor: a family whose record is below it has its signals held back ("geri testte zayıf")
     fam = next(s for s in sigs if not s["gated"])["family"]
     q.set_settings(user, {"bt_mute": "açık", "bt_min_trades": 1, "bt_min_hit": 1.0})
