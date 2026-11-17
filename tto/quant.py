@@ -45,7 +45,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import fx as fxm
 from . import quantbt as qbt
+from . import quantcons as qcons                 # Konsensüs: the instruments three or more families agree on (the list's top)
 from . import quantcurve as qcurve
+from . import quantdibssw as qsw                 # DİBS switch: Carry + momentum's DİBS switches (on the universe) and their page
 from . import quantfam as qf
 from . import quantintraday as qi
 from . import quantopt as qopt
@@ -130,6 +132,7 @@ PAGES += qtr.PAGES                                                              
 PAGES += qs.PAGES                                                                                          # quantsira.py
 PAGES += qml.PAGES                                                                                         # quantml.py
 PAGES += qos.PAGES                                                                                         # quantoptspot.py
+PAGES += qsw.PAGES                                                                                         # quantdibssw.py
 #: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
 #: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
 MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"),
@@ -139,9 +142,11 @@ MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday"
                                 ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
         ("quant.fx", "FX", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))),
         ("quant-viop", "VİOP", (("quant-viop", "VİOP"),)))
-# Makine öğrenmesi (quantml.py): a tab of Sinyaller; Opsiyon → spot (quantoptspot.py): a tab of FX, after Opsiyon
+# Makine öğrenmesi (quantml.py): a tab of Sinyaller; Opsiyon → spot (quantoptspot.py): a tab of FX, after Opsiyon; DİBS
+# switch (quantdibssw.py): a tab of Faiz, after Eğri Adil Değeri (where DİBS adil değeri's lines live)
 MENU = tuple((mid, name, tabs + ((qml.TAB,) if mid == "quant.sinyal" else ()) + ((qos.TAB,) if mid == "quant.fx" else ()))
              for mid, name, tabs in MENU)
+MENU = tuple((mid, name, tuple(t for tab in tabs for t in ((tab, qsw.TAB) if tab[0] == qsw.AFTER else (tab,)))) for mid, name, tabs in MENU)
 
 
 # ---------------------------------------------------------------------------------------------- the series this package adds
@@ -709,7 +714,9 @@ class Quant(object):
             # a package's size as the desk's trades are sized (blotter.OisMarket): USDTRY of OIS_MAIN!D2 and, with
             # ``full``, every OIS tenor's annuity on Motor (I316+ the tenor's OIS_MAIN row)
             fx = num(reader("OIS_MAIN")("D2"))
-            out["desk"] = {"usdtry": fx if fx and fx > 0 else None, "ois_annuity": {}}
+            # (and how the desk rounds a bond's nominal - OIS_MAIN!H2 "Yuvarlama TL", as DİBS RV!AK: the DİBS switches)
+            rnd = num(reader("OIS_MAIN")("H2"))
+            out["desk"] = {"usdtry": fx if fx and fx > 0 else None, "ois_annuity": {}, "round_tl": rnd if rnd and rnd > 0 else None}
             if full and "Motor" in index:
                 from .blotter import OIS_ROW
                 motor = reader("Motor")
@@ -1026,9 +1033,16 @@ class Quant(object):
         # the Sinyaller list: by group (G10 spot … Offshore), the confident lines by strength, then "düşük güven" -
         # the ones a gate holds: in the list, never logged nor alerted (quantuniv.order)
         ordered = qu.order(live, gated)
+        # ... and before them the consensus (quantcons.py): an instrument three or more families' confident lines agree on,
+        # a view of them - no log, no alarm of its own
+        try:
+            cons = qcons.lines(live, fit.get("registry"))
+        except Exception as exc:  # noqa: BLE001 - the consensus is not worth the list
+            cons = []
+            self.state["error"] = "konsensüs: %s: %s" % (type(exc).__name__, str(exc)[:160])
         ctx: qf.Ctx = fit["ctx"]
-        view = {"signals": live, "gated": gated, "list": ordered, "tables": self._tables(fit, ctx), "live_keys": sorted(raw_live),
-                "today": fit["today"], "at": _now().isoformat(sep=" ")}
+        view = {"signals": live, "gated": gated, "list": cons + ordered, "consensus": cons, "tables": self._tables(fit, ctx),
+                "live_keys": sorted(raw_live), "today": fit["today"], "at": _now().isoformat(sep=" ")}
         with self._lock:
             self._view = _clean(view)
             self.version += 1
@@ -1455,8 +1469,11 @@ class Quant(object):
             return qml.view(self, what, base, v, fit)
         if what in qos.VIEWS:                               # Opsiyon → spot (quantoptspot.py)
             return qos.view(self, what, base, v, fit)
+        if what in qsw.VIEWS:                               # DİBS switch (quantdibssw.py)
+            return qsw.view(self, what, base, v, fit)
         if what == "signals":
-            # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones; ``group`` one group
+            # the list (quantuniv.order): every group's confident lines, then its "düşük güven" ones - the consensus first
+            # (quantcons.py); ``group`` one group
             fam, asset, group = q.get("family") or "", q.get("asset") or "", q.get("group") or ""
             mine = [s for s in v["list"] if self._keep(s, fam, asset)]
             counts = {}
@@ -1465,7 +1482,8 @@ class Quant(object):
             families = [{"id": k, "label": lbl, "kind": kind, "page": page, "live": counts.get(k, 0),
                          "monitors": sum(1 for m in fit["mons"].values() if m.family == k)} for k, (lbl, kind, page) in qf.FAMILIES.items()]
             base.update({"signals": [s for s in mine if not group or s.get("group") == group],
-                         "gated": [s for s in v["gated"] if self._keep(s, fam, asset)][:60], "groups": qu.group_counts(mine), "group": group,
+                         "gated": [s for s in v["gated"] if self._keep(s, fam, asset)][:60],
+                         "groups": [qcons.group_count(mine)] + qu.group_counts(mine), "group": group,
                          "families": families, "assets": list(qf.ASSETS), "settings": fit["cfg"], "today": v["today"], "at": v["at"],
                          "hits": self.log_view()["families"], "coverage": fit["coverage"]})
             return _clean(base)
@@ -1512,7 +1530,7 @@ class Quant(object):
             out["family_label"] = qf.FAMILIES[fam][0] if fam in qf.FAMILIES else ""
             out["families"] = [{"id": k, "label": x[0]} for k, x in qf.FAMILIES.items()]          # (the box's filter)
             out["assets"] = list(qf.ASSETS)
-            out["groups"] = list(qu.GROUPS)
+            out["groups"] = [qcons.GROUP] + list(qu.GROUPS)
         elif of == "viop":
             page = qv.view(self, "viop", {}, v, fit)
             tab = page.get("viop") or {}
@@ -1531,7 +1549,8 @@ class Quant(object):
 
     @staticmethod
     def _keep(s: Dict[str, Any], fam: str, asset: str) -> bool:
-        return (not fam or s["family"] == fam) and (not asset or s["asset"] == asset)
+        # (a consensus line is of every family it names: quantcons.py)
+        return (not fam or s["family"] == fam or fam in (s.get("families") or ())) and (not asset or s["asset"] == asset)
 
     def universe_view(self) -> Dict[str, Any]:
         """The universe of the families on it (quantuniv.py): every trade line and input with its group, level, σ,
@@ -1580,10 +1599,12 @@ class Quant(object):
         v = self._view
         if fit is None or v is None:
             return {"ready": False}
-        m = fit["mons"].get(str(sid or ""))
+        # (a consensus line: its card is the line whose levels it tells - quantcons.py - with the consensus as its signal)
+        cons = next((s for s in v.get("consensus") or () if s["id"] == str(sid or "")), None) if str(sid or "").startswith(qcons.PREFIX) else None
+        m = fit["mons"].get(cons["consensus"]["ref"] if cons is not None else str(sid or ""))
         if m is None:
             raise QuantError("böyle bir sinyal yok: %s" % sid)
-        sg = next((s for s in v["signals"] + v["gated"] if s["id"] == m.sid), None)
+        sg = cons if cons is not None else next((s for s in v["signals"] + v["gated"] if s["id"] == m.sid), None)
         hist = m.history()
         try:
             why = qf.rationale(fit["ctx"], m, sg, fit["cfg"])

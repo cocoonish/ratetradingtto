@@ -1,4 +1,5 @@
-// Quant: the desk's statistical signals.  "Sinyaller" lists every signal by group - G10 spot, G10 opsiyon, TRY OIS
+// Quant: the desk's statistical signals.  "Sinyaller" lists every signal by group - Konsensüs first (tto/quantcons.py: an
+// instrument three or more families agree on, a view of their lines), G10 spot, G10 opsiyon, TRY OIS
 // (≤ 2Y first), DİBS, VİOP, Offshore ("offshore limiti") and Diğer, the buttons above the list -, within a group the
 // confident ones by their expectancy (the Beklenen K/Z at their calibrated levels, tto/quantlevels.py), then the ones a
 // gate holds ("düşük güven", with the reason - a line whose levels lost money in the past among them; never logged nor
@@ -23,6 +24,7 @@ import { TREND_PAGES } from './quanttrend.js';        // Trend
 import { SIRA_PAGES } from './quantsira.js';          // Carry + momentum
 import { ML_PAGES } from './quantml.js';              // Makine öğrenmesi
 import { OPTSPOT_PAGES } from './quantoptspot.js';    // Opsiyon → spot
+import { DIBSSW_PAGES } from './quantdibssw.js';      // DİBS switch
 import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, LOW, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
@@ -51,7 +53,9 @@ class SignalsPage extends QuantPage {
     // the groups above the list, in its order: a button each (its lines), "Tümü" all of them
     this.groupBar = h('div', { class: 'seg qgroups', id: 'quant-groups', role: 'tablist' });
     const list = panel('quant-signals', 'Sinyaller', { top: this.groupBar });
-    list.note.textContent = 'Sıra: gruplar (G10 spot, G10 opsiyon, TRY OIS - önce ≤ 2Y, sonra uzun uç -, DİBS, VİOP, Offshore, Diğer); grubun içinde önce '
+    list.note.textContent = 'En üstte Konsensüs: aynı enstrümanda üç ya da daha fazla ailenin güvenli satırı aynı yöndeyse tek satır (seviyeler en iyi örneklem '
+      + 'dışı kayıtlı ailenin, büyüklük ailelerinkinin medyanı; kendi kaydı ve alarmı yok, aileler kendi satırlarıyla durur). '
+      + 'Sıra: gruplar (G10 spot, G10 opsiyon, TRY OIS - önce ≤ 2Y, sonra uzun uç -, DİBS, VİOP, Offshore, Diğer); grubun içinde önce '
       + 'kapılardan geçenler beklenen K/Z\'ye göre (TL, satırın kendi büyüklüğüyle), sonra "düşük güven" olanlar (bir kapıya takıldı ya da seviyeleri geçmişte '
       + 'zarar ettirdi; neden son sütunda, kayda ve alarma düşmez). Hedef / stop: ailenin geçmiş işlemlerinden ayarlı seviyeler - tutmanın σ\'sının katları, '
       + 'ödül / risk ≥ 1; İsabet: o seviyelerle geçmiş işlemlerin (örneklem dışı) hedefe ya da süre sonunda kârda kapanan payı, parantezde işlem sayısı. Bileşik = |z| '
@@ -271,7 +275,7 @@ class SignalsPage extends QuantPage {
 export function quantPage(id, host, ctx) {
   if (id === 'quant') return new SignalsPage(host, ctx);
   if (ML_PAGES[id]) return new ML_PAGES[id](host, ctx);          // Makine öğrenmesi (quantml.js)
-  const own = PATH_PAGES[id] || LEAD_PAGES[id] || VIOP_PAGES[id] || TREND_PAGES[id] || SIRA_PAGES[id] || OPTSPOT_PAGES[id];
+  const own = PATH_PAGES[id] || LEAD_PAGES[id] || VIOP_PAGES[id] || TREND_PAGES[id] || SIRA_PAGES[id] || OPTSPOT_PAGES[id] || DIBSSW_PAGES[id];
   if (own) return new own(host, ctx);
   return fitPage(id, host, ctx) || quantView(id, host, ctx);
 }
