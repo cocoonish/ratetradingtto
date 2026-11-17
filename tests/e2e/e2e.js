@@ -4235,6 +4235,24 @@ async function clipAfter(page, action) {
     check('... "MTM yenile": "son yenileme: hh:mm", and each trade shows its value or why it has none; the totals in TL and USD',
       /henüz değerlenmedi/.test(mtmBefore) && valued.length === 2 && valued.every((v) => v.number || v.why.length > 3) && /Toplam/.test(totals)
       && /MTM TL/.test(totals) && /Gerçekleşen USD/.test(totals), { mtmBefore, valued });
+    // a spread is one line with its package level; ▸ shows each leg; "Bacaklar ayrı satır" lists the legs as rows of their own
+    const tradeSpread = await api(page, 'ayşe yilmaz', 'POST', '/api/trades', { scope: 'desk', product: 'ois', structure: 'spread', trade_date: tradesToday,
+      settle_date: '+1', side: 'steepener', legs: [{ side: 'receive', end_date: '2Y', notional: '100m', price: '38,50' },
+        { side: 'pay', end_date: '5Y', notional: '45m', price: '38,15' }] });
+    const spreadSel = '#trades-open tr.trade[data-id="' + (tradeSpread.json && tradeSpread.json.id) + '"]';
+    await page.waitForSelector(spreadSel, { timeout: 20000 });
+    const spreadLine = await page.textContent(spreadSel);
+    await page.click(spreadSel + ' td.exp button');
+    await page.waitForFunction(() => document.querySelectorAll('#trades-open tr.leg').length === 2, null, { timeout: 10000 });
+    const legLines = await page.evaluate(() => [...document.querySelectorAll('#trades-open tr.leg')].map((tr) => tr.textContent.trim()));
+    await page.check('#trades-legrows');
+    await page.waitForFunction((id) => document.querySelectorAll('#trades-open tr.legrow[data-id="' + id + '"]').length === 2, String(tradeSpread.json.id), { timeout: 10000 });
+    const spreadLegRows = await page.evaluate((id) => [...document.querySelectorAll('#trades-open tr.legrow[data-id="' + id + '"]')].map((tr) => tr.cells[2].textContent), String(tradeSpread.json.id));
+    await page.uncheck('#trades-legrows');
+    check('... a spread: one line "2s5s steepener TRY OIS -35,0 bp"; ▸ shows its two legs; "Bacaklar ayrı satır" lists them as rows of their own',
+      /2s5s steepener TRY OIS -35,0 bp/.test(spreadLine) && legLines.length === 2 && /RECEIVE 2Y 100m @ %38,50/.test(legLines[0])
+      && /PAY 5Y 45m @ %38,15/.test(legLines[1]) && spreadLegRows.length === 2 && /^RECEIVE 2Y 100m/.test(spreadLegRows[0]) && /^PAY 5Y 45m/.test(spreadLegRows[1]),
+      { spreadLine, legLines, spreadLegRows });
     // close the OIS: it goes to the closed list with its close date and price; its log says who did what
     await page.click('#trades-open tr[data-id="' + deskTrade.id + '"] .act-close');
     await page.waitForSelector('#tc-price');

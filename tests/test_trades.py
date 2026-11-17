@@ -507,7 +507,9 @@ def test_daily_weekly_and_total_p_and_l_split_into_carry_and_price_effect(plante
     assert _near(every["realized.pnl.try"], 300.0) and _near(every["mtm.try"], 205.0) and _near(every["mtm.usd"], 205.0 / 40)
     assert [x["product"] for x in tot["products"]] == ["ois", "fxspot"]
     assert _near(tot["products"][1]["week.carry.try"], 5.0 * 2.9375) and "day.pnl.try" not in tot["products"][1]
-    # the list shows the closed trade's realised P&L without valuing anything
+    # the list shows the closed trade's realised P&L without valuing anything: kept with its close value once worked out
+    assert _near(store.tb_get(b)["closing"]["realized"]["pnl"]["ccy"], 300.0)
+    assert _near(store.tb_get(b)["closing"]["realized"]["carry"]["ccy"], 5.0 + 5.0 * 2.9375)
     planted.calls.clear()
     listed = book.listing(ali, "desk")
     assert planted.calls == [] and _near(listed["closed"][0]["realized"]["periods"]["total"]["pnl"]["try"], 300.0)

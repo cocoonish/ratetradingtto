@@ -1258,8 +1258,14 @@ class TradeBook(object):
         names = self._names()
         admin = self._admin(user)
         items = [self._item(r, user, admin, names) for r in rows]
+        # a closed trade's realised P&L is kept with its close value once worked out (it never changes after)
         closed_rows = [r for r in rows if r["status"] == "closed"]
-        realized = self._results(closed_rows, {}, self.now(), only_closed=True) if closed_rows else {}
+        todo = [r for r in closed_rows if "realized" not in (r.get("closing") or {})]
+        realized = self._results(todo, {}, self.now(), only_closed=True) if todo else {}
+        for r in closed_rows:
+            c = r.get("closing") or {}
+            if "realized" in c:
+                realized[r["id"]] = {"ok": bool(c.get("ok")), "why": c.get("why"), "periods": {"total": c["realized"]}}
         for it in items:
             if it["status"] == "closed":
                 it["realized"] = realized.get(it["id"])
@@ -1348,9 +1354,9 @@ class TradeBook(object):
 
         now_vals, closings = self._engine(run) if (open_rows or todo) else ({}, {})
         for r in todo:
-            c = dict(self._keep(closings[r["id"]]), closed_at=(r.get("closing") or {}).get("closed_at"),
-                     valued_at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
-            r["closing"] = c
+            r["closing"] = dict(self._keep(closings[r["id"]]), closed_at=(r.get("closing") or {}).get("closed_at"),
+                                valued_at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
+            self._keep_realized([r])
             payload = {k: v for k, v in r.items() if k not in self.store.TB_COLS}
             self.store.tb_set_payload(r["id"], payload)
         now = self.now()
@@ -1456,9 +1462,21 @@ class TradeBook(object):
             v = {"ok": False, "why": "değerleme hatası: %s" % str(exc)[:200]}
         payload["closing"] = dict(self._keep(v), closed_at=payload["closing"]["closed_at"],
                                   valued_at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self._keep_realized([dict(closed, closing=payload["closing"])], payload["closing"])
         self.store.tb_set_payload(row["id"], payload)
         self._changed(row["scope"], row["owner"])
         return {"id": row["id"], "closing": payload["closing"]}
+
+    def _keep_realized(self, rows: List[Dict[str, Any]], into: Optional[Dict[str, Any]] = None) -> None:
+        """A closed trade's realised P&L (inception to its close: it never changes after) kept with its close value -
+        the lists do not work it out again from every close it had.  ``into``: the close value to keep it in (else
+        each row's own)."""
+        valued = [r for r in rows if (r.get("closing") or {}).get("ok")]
+        if not valued:
+            return
+        res = self._results(valued, {}, self.now(), only_closed=True)
+        for r in valued:
+            (into if into is not None else r["closing"])["realized"] = res[r["id"]]["periods"]["total"]
 
     def reopen(self, user: Optional[str], tid: Any) -> Dict[str, Any]:
         """A closed trade back among the open ones (its close taken back)."""
