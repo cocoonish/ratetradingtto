@@ -25,9 +25,15 @@ from tto import quantoptspot as osp
 from tto import quantuniv as qu
 from tto.server import create_app
 
-#: the line in the desk's words: the option signal behind it, then the trade, its size and record
-LINE = re.compile(r"^(?P<driver>.+) → (?P<verb>AL|SAT) (?P<pair>[A-Z]{6}) spot · (?P<size>[\d.,]+ (?:mn|bin) [A-Z]{3}) · isabet %(?P<hit>\d+) "
+#: the line in the desk's words: the option signal behind it, then the plan's line - the trade, its size, entry / target /
+#: stop in the pair's price, the expected P&L (USD), the hit rate and its count
+LINE = re.compile(r"^(?P<driver>.+) → (?P<verb>AL|SAT) (?P<pair>[A-Z]{6}) spot · (?P<size>[\d.,]+ (?:mn|bin) [A-Z]{3}) · giriş (?P<entry>[\d.,]+) "
+                  r"· hedef (?P<target>[\d.,]+) · stop (?P<stop>[\d.,]+) · beklenen (?P<exp>[+-]?[\d.,]+(?: mn| bin)? USD) · isabet %(?P<hit>\d+) "
                   r"\((?P<tests>\d+)\)(?P<tag> · offshore limiti)?$")
+#: levels as the calibration layer gives a line (``tto.quantlevels``' ``Book.line``, merged from quant-seviye): fixed
+#: multiples of the holding's σ and their out-of-sample record
+LEVELS = {"ok": True, "rule": "fixed", "k": 1.2, "m": 1.8, "rr": 1.5, "hit": 0.62, "exp": 0.21, "n": 46, "oos": True, "scope": "grup",
+          "held": 4.0, "carry_in": True, "family": "optspot", "group": "G10 spot"}
 FIELDS = {"sid", "family", "type", "entry_day", "exit_day", "dir", "entry", "exit", "outcome", "held", "pnl", "unit", "pnl_sigma", "pnl_try",
           "expression"}
 
@@ -106,6 +112,9 @@ def test_a_planted_lead_is_found_out_of_sample_and_prints_in_its_direction(plant
     assert sg["optspot"]["driver"] in ("drr1", "drr3", "div") and got["driver"].startswith("25D RR ")
     assert ("USD call'ları pahalandı" in got["driver"] or "oynadı, spot ise" in got["driver"]) and got["driver"].endswith(", spot henüz gelmedi")
     assert int(got["hit"]) == round(row["hit"] * 100) and int(got["tests"]) == row["tests"] and got["size"] == line.inst.size_text(line.k)
+    px = sg["px"]
+    assert [got[w] for w in ("entry", "target", "stop")] == [qf._th(px[w], px["digits"]) for w in ("entry", "target", "stop")]
+    assert got["exp"] == qf._money(sg["money"]["total"] * line.k * sg["money"]["usd_per"], "USD")       # (JPY per 1 mn USD → the line's USD)
     # levels from the option-implied week: σ = ATM 1M × √(5/252) × the BF factor; target 1,25σ, stop 1σ, five days
     d = line.now
     sig, level = d["sigma"], sg["level"]
@@ -249,6 +258,53 @@ def test_today_is_scored_again_with_the_live_quotes(planted):
     assert m.z == pytest.approx(z0)
 
 
+def _with_levels(m, sg, lv):
+    """What make_signal does with a line's calibrated levels (``tto.quantlevels``, once merged): target and stop at their
+    multiples × the σ of the holding now - the monitor's daily σ × √ its holding -, the expected P&L at their expectancy,
+    the prices, money and plain words at them, ``sg["levels"]`` - then the family's own last word (``finish``)."""
+    s, level = sg["direction"], sg["level"]
+    sig = m.pnl_sd * math.sqrt(sg["hold"])                    # (% of the price: the option-implied week, the BF factor in)
+    sig_lv = sig * level / 100.0
+    out = dict(sg, target=level + s * lv["m"] * sig_lv, stop=level - s * lv["k"] * sig_lv, exp_pnl=lv["exp"] * sig, rr=lv["m"] / lv["k"])
+    out["px"], out["money"] = qf.fx_trade(m, s, out["target"], out["stop"], out["exp_pnl"], out["carry_h"], m.fxinfo)
+    out["levels"] = dict(lv, sigma=sig, sigma_lv=sig_lv, unit="%")
+    out["plain"] = qf.plain_text(out)
+    m.finish(out)
+    return out
+
+
+def test_the_card_and_the_line_tell_the_calibrated_levels_when_the_signal_carries_them(planted):
+    ctx, st = planted["ctx"], planted["st"]
+    m = planted["mons"]["optspot:FX:USDJPY"]
+    line = st.lines["FX:USDJPY"]
+    own = _signals(ctx, [m])[m.sid]
+    d = line.now
+    # without calibrated levels (this branch; a family the layer has too few trades of): its own 1,25σ / 1σ, its record
+    got = LINE.match(own["expression"])
+    assert own["target"] == pytest.approx(own["level"] * (1 + 1.25 * d["sigma"] / 100.0)) and own["stop"] == pytest.approx(own["level"] * (1 - d["sigma"] / 100.0))
+    assert got["target"] == qf._th(own["px"]["target"], own["px"]["digits"]) and got["stop"] == qf._th(own["px"]["stop"], own["px"]["digits"])
+    assert "hedef 1,25σ, stop 1σ" in own["plain"] and int(got["hit"]) == round(line.rec["hit"] * 100) and int(got["tests"]) == line.rec["tests"]
+    assert own["optspot"]["levels"]["source"] == "kendi"
+    # the layer's levels on it: the line's target and stop at their multiples, its hit rate and trade count; the card
+    # tells their multiples, record and expectancy - never this family's own
+    sg = _with_levels(m, own, LEVELS)
+    got2 = LINE.match(sg["expression"])
+    assert got2 and got2["driver"] == got["driver"] and got2["verb"] == "AL" and got2["entry"] == got["entry"]
+    assert sg["target"] == pytest.approx(sg["level"] * (1 + 1.8 * d["sigma"] / 100.0)) and sg["stop"] == pytest.approx(sg["level"] * (1 - 1.2 * d["sigma"] / 100.0))
+    assert got2["target"] == qf._th(sg["px"]["target"], sg["px"]["digits"]) != got["target"]
+    assert got2["stop"] == qf._th(sg["px"]["stop"], sg["px"]["digits"]) != got["stop"]
+    assert got2["hit"] == "62" and got2["tests"] == "46" and got2["exp"] == qf._money(sg["money"]["total"] * line.k * sg["money"]["usd_per"], "USD") != got["exp"]
+    assert "hedef 1,80σ, stop 1,20σ (isabet %62, 46 işlem, örneklem dışı; işlem başına +0,21σ)" in sg["plain"] and "hedef 1,25σ" not in sg["plain"]
+    assert sg["optspot"]["levels"] == {"source": "kalibrasyon", "target_sigma": 1.8, "stop_sigma": 1.2, "hit": 0.62, "n": 46, "exp": 0.21}
+    assert sg["thesis"].endswith("beklenen %s." % qf.exp_text(sg)) and qf.exp_text(sg) != qf.exp_text(own)
+    # levels the layer could not give (too few trades, a trailing rule): the family's own stand, its own record
+    for lv in ({"ok": False, "why": "seviye kalibrasyonu yok: geri testte 4 işlem (grubunda 4; en az 30)"}, dict(LEVELS, rule="trail", m=None)):
+        mine = dict(own, levels=lv)
+        mine["plain"] = qf.plain_text(mine)
+        m.finish(mine)
+        assert "hedef 1,25σ, stop 1σ" in mine["plain"] and LINE.match(mine["expression"])["hit"] == got["hit"]
+
+
 # ================================================================================================ the backtest
 def test_the_backtest_s_trades_with_their_paths(planted):
     trades = planted["tab"]["backtest"]["trades"]
@@ -276,6 +332,7 @@ def test_the_backtest_s_trades_with_their_paths(planted):
             assert b["entry_day"] >= a["exit_day"]
         for t in line.trades:
             i = days.index(t["entry_day"])
+            assert t["end_day"] == days[i + osp.HORIZON] >= t["exit_day"] == days[i + t["held"]]        # (the path's last close)
             assert abs(line.preds[t["entry_day"]][1] - 0.5) / osp.Z_SCALE >= entry
             prev = line.preds.get(days[i - 1])
             assert prev is None or abs(prev[1] - 0.5) / osp.Z_SCALE < entry

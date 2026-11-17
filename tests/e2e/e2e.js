@@ -3132,7 +3132,8 @@ async function clipAfter(page, action) {
     // a line as the server writes it (tests/test_quantoptspot.py makes it from synthetic data): the option signal, then the trade
     const osLine = await page.evaluate(async () => {
       const q = await import('/static/js/pages/quantbase.js');
-      const text = '25D RR 1A 1 haftada +1,2 vol (z +2,1; USD call\'ları pahalandı), spot henüz gelmedi → AL USDJPY spot · 1,1 mn USD · isabet %57 (64)';
+      const text = '25D RR 1A 1 haftada +1,2 vol (z +2,1; USD call\'ları pahalandı), spot henüz gelmedi → AL USDJPY spot · 1,1 mn USD · giriş 150,250 '
+        + '· hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)';
       const s = { id: 'optspot:FX:USDJPY', family: 'optspot', family_label: 'Opsiyon → spot', asset: 'FX', expression: text, line: text,
         z: 2.6, entry_z: 2, score_name: 'z(p)', strength: 'Orta', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2.6, regime: 1, hl: 1, carry: 1 },
         composite: 2.6, hold: 5, horizon_unit: 'gün', bt: null, unit: '', digits: 3, entry: 150.25, target: 152.1, stop: 148.77, direction: 1,
@@ -3141,9 +3142,10 @@ async function clipAfter(page, action) {
       const row = q.signalRows([s], { rank: true, group: true })[0];
       return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t };
     });
-    check('... and an Opsiyon → spot line in the list: its family, the option signal behind the trade first, its group',
+    check('... and an Opsiyon → spot line in the list: its family, the option signal behind the trade first, then the plan\'s line, its group',
       osLine.family === 'Opsiyon → spot' && osLine.trade.startsWith('25D RR 1A 1 haftada +1,2 vol')
-      && osLine.trade.endsWith('→ AL USDJPY spot · 1,1 mn USD · isabet %57 (64)') && osLine.group === 'G10 spot', osLine);
+      && osLine.trade.endsWith('→ AL USDJPY spot · 1,1 mn USD · giriş 150,250 · hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)')
+      && osLine.group === 'G10 spot', osLine);
     await shot(page, 'quant-optspot');
 
     // ------------------------------------------------------------------ the implied path on its grid, the WIRP (quantpath.py)

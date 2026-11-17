@@ -46,20 +46,24 @@ lead the spot, and which way.
 
 **The line** - only where the pair's out-of-sample hit rate ≥ the desk's ``model_hit`` (55 %) with ≥ ``model_min_tests``
 (40) tests, the existing model families' rule, and P past the entry (z(p) = (p − 0,5) ÷ 0,05): "25D RR 1A 1 haftada
-+1,2 vol (z +2,1; USD call'ları pahalandı), spot henüz gelmedi → AL USDJPY spot · 1,1 mn USD · isabet %57 (64)" - the
-signal that moved today's forecast most in the trade's direction, in the desk's words.  Levels from the option-implied
-week σ = ATM 1M × √(5/252) × the BF factor (% of spot): entry the spot now, target 1,25 σ, stop 1 σ (R/R 1,25), held
-five days, expected c·μ × σ.  The BF factor is evidence too: how much bigger the weeks were when the wings were rich - the
-training rows' y² on the BF z, its slope kept past two standard errors (the overlap counted) - √(1 + b·z) within 0,85 –
-1,5 (1 without such evidence); a factor above 1 also lowers the line's rank (composite ÷ factor).  Size: the desk's
-weekly 1σ risk (``optspot_risk_usd``) over a unit's (1 mn of the base) 1σ week in USD, two significant figures,
-0,1 – 10.
++1,2 vol (z +2,1; USD call'ları pahalandı), spot henüz gelmedi → AL USDJPY spot · 1,1 mn USD · giriş 150,250 · hedef
+152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)" - the signal that moved today's forecast most in the
+trade's direction, in the desk's words, then the plan's line.  Levels from the option-implied week σ = ATM 1M × √(5/252)
+× the BF factor (% of spot): entry the spot now, target 1,25 σ, stop 1 σ (R/R 1,25), held five days, expected c·μ × σ
+- until the levels calibrated on the family's past trades (``tto.quantlevels``) come with the signal (``sg["levels"]``:
+make_signal sets the target and stop at its multiples of the same σ, the expected P&L at its expectancy): the line and
+the card then tell its multiples, hit rate and expectancy, never these.  The BF factor is evidence too: how much bigger
+the weeks were when the wings were rich - the training rows' y² on the BF z, its slope kept past two standard errors
+(the overlap counted) - √(1 + b·z) within 0,85 – 1,5 (1 without such evidence); a factor above 1 also lowers the line's
+rank (composite ÷ factor).  Size: the desk's weekly 1σ risk (``optspot_risk_usd``) over a unit's (1 mn of the base) 1σ
+week in USD, two significant figures, 0,1 – 10.
 
 **Backtest** (``own_backtest``: the walk-forward is the backtest): every out-of-sample day the probability crossed the
 entry (it had not the day before, no position open) opens a trade at that close, closed at its target or stop (on the
 closes) or the fifth close, P&L with the carry - quantbt's trade format plus its path: the spot's move in the trade's
-favour at each of the five closes after the entry in σ of its week (``path_sigma``, the whole horizon whatever the exit)
-and MAE / MFE over it (``mae_sigma``, ``mfe_sigma``).
+favour at each of the five closes after the entry in σ of its week (``path_sigma``, the whole horizon whatever the exit),
+the path's last close (``end_day``) and MAE / MFE over it (``mae_sigma``, ``mfe_sigma``) - the levels' calibration
+(``tto.quantlevels``) reads them as they are.
 
 **Page** ``quant-optspot``, a tab of FX: every pair with today's RR / BF / ATM moves and z's, the forecast, whether it
 prints and its record; every signal's out-of-sample record, pooled and per pair.  Everything is keyed by the pair's code
@@ -621,8 +625,9 @@ def trades_of(h: Hist, preds: Dict[str, Tuple[float, float, float]], entry: floa
     and was not the day before (no position open) opens one at that close in μ's direction - target 1,25 σ, stop 1 σ of
     its week (the BF factor in), on the closes, else the fifth close; P&L the spot's move with the carry of the days
     held (%).  Each with its path: the spot's move in its favour at each of the five closes after the entry, σ of its
-    week (``path_sigma`` - the whole horizon, whatever the exit), MAE and MFE over it, and the signal behind it (its
-    month's model's); a trade whose horizon goes past the last close is still open: none."""
+    week (``path_sigma`` - the whole horizon, whatever the exit), the path's last close (``end_day``), MAE and MFE over
+    it, and the signal behind it (its month's model's) - what the levels' calibration (``tto.quantlevels``) reads; a
+    trade whose horizon goes past the last close is still open: none."""
     models = models or {}
     inst = h.inst
     usdtry = _asof(h.days, h.dates, h.ctx.pts("FX:USDTRY")) if h.pair != "USDTRY" else h.S
@@ -653,6 +658,7 @@ def trades_of(h: Hist, preds: Dict[str, Tuple[float, float, float]], entry: floa
             move = path[u - i - 1] * sig
             pnl = move + carry
             out.append({"sid": "%s:%s" % (FAMILY, inst.key), "family": FAMILY, "type": inst.label, "entry_day": d, "exit_day": h.days[u],
+                        "end_day": h.days[i + H],                 # (the path's last close: the levels' month cut uses it)
                         "dir": s, "entry": h.S[i], "exit": h.S[u], "outcome": why, "held": u - i, "pnl": pnl, "unit": "%",
                         "pnl_sigma": move / sig, "pnl_try": _try_of(h, i, pnl, usdtry[i]),
                         "expression": "%s %s" % (inst.verb(s), inst.label), "p": p, "mu": mu, "sigma": sig, "f_bf": f,
@@ -892,17 +898,55 @@ def _monitor(line: Line, cfg: Dict[str, Any]) -> qf.Monitor:
     return m
 
 
+def levels_of(sg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The levels calibrated on the family's past trades that the signal carries (``tto.quantlevels``: make_signal
+    sets ``sg["levels"]``, its target and stop already those multiples × the σ of the holding) - ``None`` where it has
+    none (this family's own 1,25σ / 1σ stand)."""
+    lv = sg.get("levels")
+    if isinstance(lv, dict) and lv.get("ok") and lv.get("k") is not None and lv.get("m") is not None:
+        return lv
+    return None
+
+
+def _price(sg: Dict[str, Any], which: str) -> str:
+    """The line's entry / target / stop in the pair's own price (its ``px``), else the level's."""
+    px = sg.get("px")
+    v = px.get(which) if px is not None else sg.get(which)
+    if v is None:
+        return "—"
+    return qf._th(v, px.get("digits") or 4) if px is not None else qf._level_text(v, sg.get("unit") or "", sg.get("digits") or 2)
+
+
+def _money_line(sg: Dict[str, Any], k: float) -> str:
+    """The expected P&L at the line's size in USD: the card's money is per 1 mn of the base in the quote currency."""
+    mo = sg.get("money") or {}
+    v = mo.get("total")
+    if v is None:
+        return "—"
+    v *= k
+    if mo.get("ccy") != "USD" and mo.get("usd_per"):
+        return qf._money(v * mo["usd_per"], "USD")
+    return qf._money(v, mo.get("ccy") or "")
+
+
 def _finish(line: Line, sg: Dict[str, Any]) -> None:
     """make_signal's line made this family's: the option signal behind it first - "… → AL USDJPY spot · 1,1 mn USD ·
-    isabet %57 (64)" -, the card's sentence with why, the rank lowered by a rich BF."""
+    giriş … · hedef … · stop … · beklenen … · isabet %57 (64)" -, the card's sentence with why, the rank lowered by a rich
+    BF.  The levels the signal carries are told as they are: the calibrated ones (``sg["levels"]``) with their
+    multiples, hit rate and expectancy - this family's own 1,25σ / 1σ and its record only where there are none."""
     d = line.now
     if d is None:
         return
     inst, rec = line.inst, line.rec
     s = int(sg["direction"])
     drv = line.driver(d, s)
+    lv = levels_of(sg)
+    t_mult, s_mult = (float(lv["m"]), float(lv["k"])) if lv is not None else (T_MULT, S_MULT)
+    hit, n = (lv.get("hit"), int(lv.get("n") or 0)) if lv is not None else (rec["hit"], rec["tests"])
     head = "%s %s · %s" % (inst.verb(s), inst.label, inst.size_text(line.k))
-    text = "%s%s → %s" % (drv["text"], drv["tail"], " · ".join([head, "isabet %%%s (%d)" % (_pct(rec["hit"]), rec["tests"])] + ([inst.tag] if inst.tag else [])))
+    parts = [head, "giriş " + _price(sg, "entry"), "hedef " + _price(sg, "target"), "stop " + _price(sg, "stop"),
+             "beklenen " + _money_line(sg, line.k), "isabet %%%s (%d)" % (_pct(hit), n)]
+    text = "%s%s → %s" % (drv["text"], drv["tail"], " · ".join(parts + ([inst.tag] if inst.tag else [])))
     sg["expression"] = sg["line"] = text
     conf = min(1.0, 1.0 / d["f"]) if d["f"] else 1.0
     if conf < 1.0 and not sg.get("gated"):
@@ -915,13 +959,23 @@ def _finish(line: Line, sg: Dict[str, Any]) -> None:
     reason = (" Tahmini en çok %s etkiledi." % (", ".join(told[:-1]) + " ve " + told[-1] if len(told) > 1 else told[0])) if told else ""
     atm = "ATM %s %s vol × √(5/252)" % (TENOR.get(d["atm_front"] or "", ""), qf._g(d["atm"], 2)) if d.get("atm") else "gerçekleşen σ × √5"
     bf = ("; kanatlar (25D BF 3A z %s) ×%s" % (qf._sg(d["bfz"], 1), qf._g(d["f"], 2))) if abs(d["f"] - 1.0) > 0.005 else ""
-    sg["plain"] = ("Opsiyon piyasası: %s%s. Model önümüzdeki %d iş gününde %s olasılığını %%%s veriyor (örneklem dışı isabet %%%s, %d test; "
-                   "geçmişte tahminin ×%s'i gerçekleşti).%s %s Seviyeler opsiyonların ima ettiği 1 haftalık hareketten: σ %%%s (%s%s); hedef %sσ, stop %sσ." % (
+    if lv is not None:
+        levels = ("Seviyeler geçmiş işlemlerden, opsiyonların ima ettiği 1 haftalık σ'nın katları: σ %%%s (%s%s); hedef %sσ, stop %sσ "
+                  "(isabet %%%s, %d işlem, %s; işlem başına %sσ)." % (
+                      qf._g(d["sigma"], 2), atm, bf, qf._g(t_mult, 2), qf._g(s_mult, 2), _pct(hit), n,
+                      "örneklem dışı" if lv.get("oos") else "örneklem içi", qf._sg(lv.get("exp"), 2)))
+    else:
+        levels = "Seviyeler opsiyonların ima ettiği 1 haftalık hareketten: σ %%%s (%s%s); hedef %sσ, stop %sσ." % (
+            qf._g(d["sigma"], 2), atm, bf, qf._g(t_mult, 2), qf._g(s_mult, 0))
+    sg["plain"] = ("Opsiyon piyasası: %s%s. Model önümüzdeki %d iş gününde %s olasılığını %%%s veriyor (yönde örneklem dışı isabet %%%s, %d test; "
+                   "geçmişte tahminin ×%s'i gerçekleşti).%s %s %s" % (
                        drv["text"], drv["tail"], HORIZON, "yükseliş" if s > 0 else "düşüş", _pct(prob), _pct(rec["hit"]), rec["tests"], qf._g(d["cal"], 2), reason,
-                       sg.get("plain") or "", qf._g(d["sigma"], 2), atm, bf, qf._g(T_MULT, 2), qf._g(S_MULT, 0)))
+                       sg.get("plain") or "", levels))
     sg["thesis"] = "Opsiyon → spot: %s%s → %s; beklenen %s." % (drv["text"], drv["tail"], head, qf.exp_text(sg))
     sg["optspot"] = {"driver": drv["name"], "mu": d["mu"], "cal": d["cal"], "p": d["p"], "sigma": d["sigma"], "f_bf": d["f"], "bfz": d["bfz"],
-                     "x": dict(zip(NAMES, d["x"])), "coef": dict(zip(NAMES, d["coef"])), "k": line.k}
+                     "x": dict(zip(NAMES, d["x"])), "coef": dict(zip(NAMES, d["coef"])), "k": line.k,
+                     "levels": {"source": "kalibrasyon" if lv is not None else "kendi", "target_sigma": t_mult, "stop_sigma": s_mult, "hit": hit, "n": n,
+                                "exp": lv.get("exp") if lv is not None else None}}
 
 
 # ---------------------------------------------------------------------------------------------- the family
