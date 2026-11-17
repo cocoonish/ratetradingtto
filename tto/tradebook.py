@@ -1302,6 +1302,8 @@ class TradeBook(object):
                     out["delivery"] = day
             except Exception:  # noqa: BLE001
                 pass
+        # the trade date is today even when the valuation gives nothing yet (an FX trade before its pair is typed)
+        out.setdefault("trade_date", self._today().isoformat())
         if product in FIXED_CCY:
             out.setdefault("notional_ccy", FIXED_CCY[product])
         if code:

@@ -798,7 +798,8 @@ def test_the_form_s_defaults_come_from_the_valuation(monkeypatch):
         raise RuntimeError("piyasa yok")
 
     monkeypatch.setattr(tv, "defaults", broken)
-    assert book.defaults(ali, "sofr")["notional_ccy"] == "USD"                              # the form opens without them
+    # the form opens without them - today's trade date still (an FX trade before its pair, a valuation that fails)
+    assert book.defaults(ali, "sofr")["notional_ccy"] == "USD" and book.defaults(ali, "fxspot")["trade_date"] == TODAY
     store.close()
 
 
