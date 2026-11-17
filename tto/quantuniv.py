@@ -1,8 +1,8 @@
 """The universe of the systematic families: every instrument the desk trades, in its priority order, with what a
 signal on it needs - and the groups and the order of the Sinyaller list.
 
-**For the writers of the families on the universe** (Trend, Carry + momentum, Makine öğrenmesi: ``tto/quanttrend.py``,
-``tto/quantsira.py``, ``tto/quantml.py`` - ``MODULES``).  A family is a function ``fn(ctx, reg, cfg) -> (monitors,
+**For the writers of the families on the universe** (Trend, Carry + momentum, Makine öğrenmesi, Opsiyon → spot:
+``tto/quanttrend.py``, ``tto/quantsira.py``, ``tto/quantml.py``, ``tto/quantoptspot.py`` - ``MODULES``).  A family is a function ``fn(ctx, reg, cfg) -> (monitors,
 table)`` in its own module, registered with ``@quantuniv.family("trend")``: ``tto.quant`` imports the module when it
 exists and runs it on every full fit after the other families, and in each refit of the backtest - nothing else to
 edit (its label, kind and page are in ``FAMILIES``; ``tto.quant`` puts them into ``quantfam.FAMILIES``).  A family that
@@ -71,9 +71,10 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "trend": ("Trend", "sys", "quant-trend"),                   # (its page: a tab of Sinyaller - quanttrend.py)
     "sira": ("Carry + momentum", "carry", "quant"),
     "ml": ("Makine öğrenmesi", "model", "quant"),
+    "optspot": ("Opsiyon → spot", "model", "quant-optspot"),    # (the option signals' spot lines: a tab of FX - quantoptspot.py)
 }
 #: the module of each family (``tto/<name>.py``), imported when it exists: it registers its function with ``family``
-MODULES: Dict[str, str] = {"trend": "quanttrend", "sira": "quantsira", "ml": "quantml"}
+MODULES: Dict[str, str] = {"trend": "quanttrend", "sira": "quantsira", "ml": "quantml", "optspot": "quantoptspot"}
 #: id -> fn(ctx, reg, cfg) -> (monitors, table)
 RUNNERS: Dict[str, Callable[..., Tuple[List[qf.Monitor], Any]]] = {}
 #: the families that walk forward on their own calendar (Carry + momentum: a weekly basket's rebalances, not the
