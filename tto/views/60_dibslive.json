@@ -43,7 +43,7 @@
    "title": "Trading listesi · özet",
    "card": "bond",
    "flags": "dibs",
-   "note": "Trading listesindeki (★) kâğıtlar türüne ve vadesine göre: kâğıdın fiyatlandığı valörde bid / ask / son işlem ve zamanı, DİBS RV'den getiri, ASW, pahalı / ucuz, sinyal, süre, DV01, carry, T0→T1 ima repo ve bugünün Broker Chat tahtası. ★ listeden çıkarır; kâğıt eklemek için Tüm Kâğıtlar sayfası ya da \"+ ISIN ekle\"."
+   "note": "Trading listesindeki (★) kâğıtlar türüne ve vadesine göre, sütunlar gruplu: Fiyat (kâğıdın fiyatlandığı valörde bid / ask / son işlem ve zamanı) · OIS'e göre (DİBS RV'den getiri, ASW / DM, adil getiri ve adil fiyat, pahalı / ucuz, sinyal) · FX swap'a göre (ASW FX, adil getiri ve adil fiyat, pahalı / ucuz, sinyal) · Risk (süre, DV01, 1.000$ DV01 nominal) · Carry (C+R, T0→T1 ima repo) · Broker (bugünün Broker Chat tahtası). Adil getiri / fiyat: kâğıdın ASW'si DİBS RV'nin uydurulan ASW eğrisinde dursaydı getirisi ve temiz fiyatı (üzerine gelince hesabı). ★ listeden çıkarır (DİBS ASW'den de); kâğıt eklemek için Tüm Kâğıtlar sayfası ya da \"+ ISIN ekle\" (DİBS ASW'ye de eklenir)."
   },
   {
    "id": "L1",

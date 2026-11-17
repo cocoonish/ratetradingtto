@@ -4836,17 +4836,103 @@ class Service(object):
                   numfmt.format_value(exact, "#,##0", loc)))
         return {"t": numfmt.format_value(nominal / 1e6, "#,##0", loc) + "m", "v": nominal, "k": "n", "tip": tip}
 
+    def _trading_columns(self) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
+        """The trading summary's columns in their groups: ``[(group, [(caption, key, tip), ...]), ...]``.  A column's key
+        is its letter in the table as it was before the groups (what a user hid, or a launchpad box shows, stays that
+        column); the columns that came with the groups follow the old ones."""
+        board = len(self._BOARD_HEADS)
+        old = {k: index_to_col(k + 1) for k in range(19 + board + 1)}          # A .. S, the board, Kart
+        new = [index_to_col(20 + board + 1 + k) for k in range(7)]
+        fair = ("Kâğıdın ASW'si DİBS RV'nin %s ASW eğrisinde (a + b·t + c·t², sabit kuponlulara uydurulan) dursaydı %s: kirli "
+                "@spot = PV@%s − eğri ASW × annuity / 100, valöre fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi "
+                "BIST bileşik. Bono eğriye girmez: eğrinin kâğıdın vadesindeki değeri. TLREF / FRN / TÜFE: yok (nedeni üzerinde)")
+        return [
+            ("", [("★", old[0], "Trading listesinden çıkar (herkes için; DİBS ASW listesinden de)"),
+                  ("Kâğıt", old[1], ""), ("ISIN", old[2], ""), ("Vade", old[3], ""),
+                  ("Kalan yıl", old[4], "Bugünden vadeye yıl (365,25 gün)")]),
+            ("Fiyat", [("Valör", old[5], "Kâğıdın DİBS RV'de fiyatlandığı Bloomberg kaynağı (ISL0: aynı gün valör, ISL1: ertesi iş günü)"),
+                       ("Bid", old[6], "DİBS RV: Bloomberg alış ('–': o tarafta emir yok)"),
+                       ("Ask", old[7], "DİBS RV: Bloomberg satış ('–': o tarafta emir yok)"),
+                       ("Son işlem", old[8], "Son işlem fiyatı (DİBS RV)"),
+                       ("Ne zaman", old[9], "Son işlemin günü; canlıda dashboard'un işlemi gördüğü saat")]),
+            ("OIS'e göre", [("Getiri %", old[10], "DİBS RV: BIST bileşik getiri (kullanılan temiz fiyattan)"),
+                            ("ASW / DM", old[11], "DİBS RV: TLREF OIS eğrisine göre ASW (bp; sabit kuponlu, bono) · TLREF'e endeksli kâğıtta DM"),
+                            ("Adil getiri %", new[0], fair % ("OIS", "getirisi", "OIS")),
+                            ("Adil fiyat", new[1], fair % ("OIS", "valördeki temiz fiyatı", "OIS")),
+                            ("Pahalı / ucuz", old[12], "DİBS RV: ASW − eğrinin ASW'si (bp; + ucuz) · sabit kuponlu"),
+                            ("Sinyal", old[13], "DİBS RV: pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
+            ("FX swap'a göre", [("ASW FX", new[2], "DİBS RV: FX swap ima TRY eğrisine (offshore) göre ASW (bp)"),
+                                ("Adil getiri %", new[3], fair % ("FX swap", "getirisi", "FX")),
+                                ("Adil fiyat", new[4], fair % ("FX swap", "valördeki temiz fiyatı", "FX")),
+                                ("Pahalı / ucuz", new[5], "DİBS RV: ASW FX − FX eğrisinin ASW'si (bp; + ucuz) · sabit kuponlu"),
+                                ("Sinyal", new[6], "DİBS RV: FX'e göre pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
+            ("Risk", [("Mod. süre", old[14], "DİBS RV: modifiye süre"),
+                      ("DV01 / 1mn", old[15], "DİBS RV: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
+                      (self.USD_DV01_HEAD, old[16], "DV01'i 1.000 USD olan TL nominal: 1.000 × USDTRY ÷ DV01 / 1mn, 5 mn'a yuvarlı")]),
+            ("Carry", [("C+R (bp)", old[17], "DİBS RV: carry + roll-down (DİBS RV'nin Ufuk (ay) ayarıyla)"),
+                       ("T0→T1 repo %", old[18], "T0 ve T1 kirli fiyatlarının ima ettiği O/N repo (aynı güne ait fiyatlardan)")]),
+            ("Broker", [(h, old[19 + k], tip) for k, (h, tip) in enumerate(self._BOARD_HEADS)]),
+            ("", [("Kart", old[19 + board], "Kâğıdın bütün bilgisi tek pencerede")]),
+        ]
+
+    def _fair_cells(self, f: Dict[str, Any], side: str, fits: Dict[str, Any], valor: Any, own: Any, loc) -> List[Dict[str, Any]]:
+        """A bond's fair yield and fair clean price on one of DİBS RV's ASW curves (rvfair.py), with how each is made in
+        the tip; a dash that says why where there is none.  ``own``: the bond's own yield, said beside the fair one."""
+        name = "OIS" if side == "ois" else "FX swap"
+        if "yield" not in f:
+            dash = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": "%s eğrisine göre adil değer yok: %s" % (name, f.get("why") or "")}
+            return [dict(dash), dict(dash)]
+
+        def n(v: float, fmt: str) -> str:
+            return numfmt.format_value(v, fmt, loc)
+
+        a, b, c = fits[side]["coef"]
+        poly = n(a, "0.0") + "".join((" − " if x < 0 else " + ") + n(abs(x), fmt) + t
+                                     for x, fmt, t in ((b, "0.00", "·t"), (c, "0.000", "·t²")))
+        parts = []
+        if f["bill"]:
+            parts.append("Bono eğriye girmez: eğrinin vadesindeki değeri")
+        span = fits[side]["span"]
+        if f["stretched"]:
+            parts.append("eğrinin kâğıtları %s yıl: bu vade dışında, eğri uzatıldı" % ("–".join(n(x, "0.00") for x in span) if span else "yok"))
+        parts.append("%s ASW eğrisi (%d kâğıt): %s; t = %s yıl → eğri ASW %s bp" % (name, fits[side]["n"], poly, n(f["t"], "0.00"),
+                                                                                   n(f["asw"], "0.0")))
+        parts.append("kirli @spot = PV@%s %s − eğri ASW × annuity %s / 100 = %s" % ("OIS" if side == "ois" else "FX", n(f["pv"], "0.000"),
+                                                                                   n(f["ann"], "0.0000"), n(f["dirty_spot"], "0.000")))
+        when = " (%s)" % n(valor, "dd.mm.yyyy") if type(valor) is float else ""
+        parts.append("valörde%s ÷ fonlama %s: kirli %s, temiz %s (işlemiş %s)" % (when, n(f["dd"], "0.00000"), n(f["dirty"], "0.000"),
+                                                                                    n(f["price"], "0.000"), n(f["acc"], "0.000")))
+        parts.append("getiri %s (BIST bileşik%s)" % (n(f["yield"], "0.00%"), "; ekranda %s" % n(own, "0.00%") if type(own) is float else ""))
+        tip = " · ".join(parts)
+        cls = "soft" if f["stretched"] else ""
+        out = [{"t": n(f["yield"], "0.00%"), "v": f["yield"], "k": "n", "tip": tip},
+               {"t": n(f["price"], "0.000"), "v": f["price"], "k": "n", "tip": tip}]
+        if cls:
+            for x in out:
+                x["cls"] = cls
+        return out
+
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
-        """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity - the price on
-        the value date the bond is priced on (bid, ask, the last trade and when), what DİBS RV makes of it (yield,
-        ASW, cheap / rich, signal, duration, DV01, carry), the repo T0 -> T1 implies and today's chat board."""
+        """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity, in groups of
+        columns - the price on the value date the bond is priced on (bid, ask, the last trade and when); against OIS and
+        against the FX swap curve what DİBS RV makes of it (yield, ASW, cheap / rich, signal) and its fair yield and price
+        on each fitted ASW curve (rvfair.py); its risk (duration, DV01, the nominal of USD 1,000 DV01); carry and the repo
+        T0 -> T1 implies; today's chat board."""
+        from . import rvfair
         book = self.books.get("tto")
-        heads = ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %",
-                 "ASW / DM", "Pahalı / ucuz", "Sinyal", "Mod. süre", "DV01 / 1mn", self.USD_DV01_HEAD, "C+R (bp)",
-                 "T0→T1 repo %"] + [h for h, _ in self._BOARD_HEADS] + ["Kart"]
-        rows: List[List[Dict[str, Any]]] = [[{"t": x, "k": "s", "b": 1, "f": "hd"} for x in heads]]
-        out = {"rows": rows, "r": [], "c": [index_to_col(k + 1) for k in range(len(heads))], "added": len(heads)}
+        groups = self._trading_columns()
+        cols = [x for _, items in groups for x in items]
+        width = len(cols)
+        top: List[Dict[str, Any]] = []
+        for name, items in groups:
+            top.append(dict({"t": name, "k": "s", "b": 1, "f": "hd", "al": "c"} if name else {"t": "", "k": ""},
+                            **({"cs": len(items)} if len(items) > 1 else {})))
+            top.extend({"sk": 1} for _ in items[1:])
+        head = [dict({"t": cap, "k": "s", "b": 1, "f": "hd"}, **({"tip": tip} if tip else {})) for cap, _, tip in cols]
+        rows: List[List[Dict[str, Any]]] = [top, head]
+        out = {"rows": rows, "r": [], "c": [key for _, key, _ in cols], "added": width}
         if book is None or "DİBS RV" not in book.model.sheet_index:
+            out["r"] = [0, 1]
             return out
         si = book.model.sheet_index["DİBS RV"]
         calc = self._calc(user, book)
@@ -4855,6 +4941,7 @@ class Service(object):
         said = self._board_bonds(user)
         today = _dt.date.fromisoformat(self.today_iso())
         spot = self._usdtry_mid(book, calc)
+        fits = rvfair.read_fits(calc, si)
 
         def cell(c: str, r: int, s: int = si) -> Dict[str, Any]:
             got = R.cell(calc, s, r, parse_a1("%s1" % c) % COLS, loc)
@@ -4863,7 +4950,6 @@ class Service(object):
             keep.setdefault("k", "")
             return keep
 
-        from . import bonds as bd
         bonds: Dict[str, List[Tuple[Any, List[Dict[str, Any]]]]] = {g: [] for g, _ in self._TYPE_GROUPS}
         for r in range(5, 55):
             isin = calc.get(si, r, 1)
@@ -4893,29 +4979,49 @@ class Service(object):
             if not str(due.get("t") or "").strip() and type(mat) is float:
                 due = {"t": numfmt.format_value(mat, "dd.mm.yyyy", loc), "v": mat, "k": "n"}
             q = self._rv_quote(calc, si, r)
-            priced = [cell("T", r), cell("Z", r), cell("AB", r), dict(cell("AC", r), b=1)]
+            # what DİBS RV works out of the price in use: soft while no live quote stands behind it
+            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"), ("fx", "BF"), ("fx_rich", "BH"),
+                                                 ("fx_signal", "BI"))}
+            for k in ("N", "fx_signal"):
+                priced[k] = dict(priced[k], b=1)
             if q["stale"]:
-                priced = [self._soft(c, q["tip"]) for c in priced]
-            line = [self._flag_cell(code, True), label, {"t": code, "k": "s", "cls": "soft"}, due,
-                    {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
-                    {"t": str(src or ""), "k": "s", "cls": "soft"},
-                    self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
-                    self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), dict(cell("AS", r), b=1), when] + priced + \
-                [cell("AG", r), cell("AI", r), self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
-                 cell("AO", r), self._repo_cell(cell, live, r)]
-            line += self._bond_cells(said.get(code), loc) + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}]
+                priced = {k: self._soft(c, q["tip"]) for k, c in priced.items()}
+            f = rvfair.fair(calc, si, r, fits)
+            valor, own = calc.get(si, r, parse_a1("P1") % COLS), calc.get(si, r, parse_a1("T1") % COLS)
+            ois_y, ois_p = self._fair_cells(f["ois"], "ois", fits, valor, own, loc)
+            fx_y, fx_p = self._fair_cells(f["fx"], "fx", fits, valor, own, loc)
+            by = {"A": self._flag_cell(code, True), "B": label, "C": {"t": code, "k": "s", "cls": "soft"}, "D": due,
+                  "E": {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
+                  "F": {"t": str(src or ""), "k": "s", "cls": "soft"},
+                  "G": self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
+                  "H": self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), "I": dict(cell("AS", r), b=1), "J": when,
+                  "K": priced["K"], "L": priced["L"], "M": priced["M"], "N": priced["N"],
+                  "O": cell("AG", r), "P": cell("AI", r),
+                  "Q": self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
+                  "R": cell("AO", r), "S": self._repo_cell(cell, live, r)}
+            ois_keys = [key for _, key, _ in groups[2][1]]
+            fx_keys = [key for _, key, _ in groups[3][1]]
+            by.update({ois_keys[2]: ois_y, ois_keys[3]: ois_p, fx_keys[0]: priced["fx"], fx_keys[1]: fx_y, fx_keys[2]: fx_p,
+                       fx_keys[3]: priced["fx_rich"], fx_keys[4]: priced["fx_signal"]})
+            board = self._bond_cells(said.get(code), loc)
+            for (_, key, _), c in zip(groups[6][1], board):
+                by[key] = c
+            by[groups[7][1][0][1]] = {"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}
+            line =[by[key] for _, key, _ in cols]
             group = kind if kind in bonds else "S"
             bonds[group].append((mat if type(mat) is float else 1e9, line))
         for g, caption in self._TYPE_GROUPS:
             if not bonds[g]:
                 continue
-            rows.append([{"t": "%s · %d" % (caption, len(bonds[g])), "k": "s", "b": 1, "cls": "grouphead", "cs": len(heads)}]
-                        + [{"t": "", "k": ""} for _ in heads[1:]])
+            rows.append([{"t": "%s · %d" % (caption, len(bonds[g])), "k": "s", "b": 1, "cls": "grouphead", "cs": width}]
+                        + [{"t": "", "k": ""} for _ in range(width - 1)])
             rows.extend(line for _, line in sorted(bonds[g], key=lambda x: x[0]))
-        if len(rows) == 1:
-            rows.append([{"t": "Trading listesi boş: Tüm Kâğıtlar sayfasında ☆ ile ekleyin", "k": "s", "cls": "soft", "cs": len(heads)}]
-                        + [{"t": "", "k": ""} for _ in heads[1:]])
-        out["r"] = list(range(1, len(rows) + 1))
+        if len(rows) == 2:
+            rows.append([{"t": "Trading listesi boş: Tüm Kâğıtlar sayfasında ☆ ile ekleyin", "k": "s", "cls": "soft", "cs": width}]
+                        + [{"t": "", "k": ""} for _ in range(width - 1)])
+        # the rows are numbered as before the groups of columns (the captions 1, then a row each): a launchpad box that
+        # keeps rows of it by their number shows the same ones; the groups' row above is a caption of the dashboard's (0)
+        out["r"] = [0] + list(range(1, len(rows)))
         return out
 
     # ================================================================== watching the market
@@ -5720,6 +5826,20 @@ class Service(object):
                             if q["stale"] and cap.strip().startswith(self._RV_PRICED):      # worked out of no live quote
                                 item.update(soft=True, tip=q["tip"])
                             out["rv"].append(item)
+                # the fair yield and price on each of DİBS RV's fitted ASW curves (as the trading summary has them), after
+                # the curves' own figures
+                from . import rvfair
+                fits = rvfair.read_fits(calc, si)
+                f = rvfair.fair(calc, si, info["row"], fits)
+                valor, own = calc.get(si, info["row"], parse_a1("P1") % COLS), calc.get(si, info["row"], parse_a1("T1") % COLS)
+                fair = []
+                for side, name in (("ois", "OIS"), ("fx", "FX swap")):
+                    for what, c in zip(("Adil getiri", "Adil fiyat"), self._fair_cells(f[side], side, fits, valor, own, loc)):
+                        fair.append({"name": "%s (%s eğrisi)" % (what, name), "t": c["t"], "tip": c.get("tip"),
+                                     "soft": "soft" in (c.get("cls") or "")})
+                at = max([k + 1 for k, x in enumerate(out["rv"]) if x["name"].startswith(("ASW FX", "Pahalı/ucuz FX", "Sinyal FX"))]
+                         or [len(out["rv"])])
+                out["rv"][at:at] = fair
                 out["row"] = info["row"]
             if ex.LIVE_SHEET in book.model.sheet_index:
                 si = book.model.sheet_index[ex.LIVE_SHEET]
@@ -7523,9 +7643,9 @@ def _row_text(row: List[Dict[str, Any]]) -> Optional[str]:
 def _row_name(row: List[Dict[str, Any]]) -> Optional[str]:
     """The name of a row: its first text from the left - a tenor, an ISIN, a pair (numbers and dates before it are
     passed over: the RET table's day count stands left of its tenor; so is a date written as text, a settle date that
-    moves every day).  ``None``: the row has no such text."""
+    moves every day; so is a button - the trading summary's ★ left of its bond).  ``None``: the row has no such text."""
     for c in row:
-        if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s":
+        if not isinstance(c, dict) or c.get("sk") or c.get("k") != "s" or "act" in str(c.get("cls") or "").split():
             continue
         t = " ".join(str(c.get("t") or "").split())
         if t and not _DATE_TEXT.match(t):

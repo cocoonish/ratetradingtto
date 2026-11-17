@@ -446,12 +446,12 @@ def test_the_trading_list_gives_the_nominal_of_a_thousand_dollar_dv01(svc):
     DV01 per 1 mn, to the nearest 5 mn - beside the DV01 it comes from."""
     u = svc.login("DV01 Nominal")["user"]
     rows = next(p for p in svc.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
-    heads = [c["t"] for c in rows[0]]
+    heads = [c["t"] for c in rows[1]]                       # (above the captions: the groups of columns)
     i_dv, i_nom = heads.index("DV01 / 1mn"), heads.index(svc.USD_DV01_HEAD)
     assert i_nom == i_dv + 1
     spot = (cell(svc, "VIOP!L99") + cell(svc, "VIOP!L100")) / 2
     seen = 0
-    for row in rows[1:]:
+    for row in rows[2:]:
         dv = row[i_dv].get("v")
         if type(dv) is not float or dv <= 0:
             continue
@@ -529,7 +529,7 @@ def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
         assert card["repo_note"] == ("T0 ve T1 fiyatları aynı güne ait değil (T0 son işlem: 20.10.2026 · T1 son işlem: 03.11.2026): "
                                      "repo hesaplanmadı") and not card["repo"][0]["t"]
         summary = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
-        heads = [c["t"] for c in summary[0]]
+        heads = [c["t"] for c in summary[1]]
         line = next(row for row in summary if any(c.get("t") == "TRT150328T24" for c in row))
         repo_cell = line[heads.index("T0→T1 repo %")]
         assert repo_cell["t"] == "–" and repo_cell["tip"] == card["repo_note"]
@@ -742,7 +742,7 @@ def _answers(s, values):
 def _summary(s, u, isin):
     """The trading summary's header and the line of a bond."""
     rows = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
-    return [c["t"] for c in rows[0]], next(row for row in rows if any(c.get("t") == isin for c in row))
+    return [c["t"] for c in rows[1]], next(row for row in rows if any(c.get("t") == isin for c in row))
 
 
 def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
@@ -1236,13 +1236,13 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         summary = s.view(u, "dibslive")["panels"][0]
         assert (summary["id"], summary["flags"], summary["card"]) == ("L0", "dibs", "bond")
         lines = [[c.get("t") for c in row] for row in summary["data"]["rows"]]
-        assert lines[0][:4] == ["★", "Kâğıt", "ISIN", "Vade"] and lines[0][-1] == "Kart"
-        groups = [x[0] for x in lines if x[0] != "★" and x[0] != lines[0][0]]
+        assert lines[1][:4] == ["★", "Kâğıt", "ISIN", "Vade"] and lines[1][-1] == "Kart"       # (the groups above)
+        groups = [x[0] for x in lines[2:] if x[0] != "★"]
         assert groups == ["Bono · kuponsuz · 2", "Sabit kuponlu · 14", "TLREF'e endeksli · 4"]
         floaters = [x for x in lines if x[2] in ("TRT190128T14", "TRT090130T12", "TRT030730T12", "TRT110930T36")]
         assert [x[1] for x in floaters] == ["19.01.28 TLREF", "09.01.30 TLREF", "03.07.30 TLREF", "11.09.30 TLREF"]   # by maturity
         t8 = next(x for x in lines if x[2] == "TRT150328T24")
-        assert t8[5:10] == ["ISL1", "100,100", "100,125", "100,200", "03.11.2026"] and t8[13] in ("UCUZ", "PAHALI", "–")
+        assert t8[5:10] == ["ISL1", "100,100", "100,125", "100,200", "03.11.2026"] and t8[15] in ("UCUZ", "PAHALI", "–")
         # what goes with a row: the desk's source and everyone's own values for it
         s.set_inputs(u, "tto", [{"ref": "DİBS RV!B%d" % r, "value": "ISL0"}, {"ref": "DİBS RV!N%d" % r, "value": 100.5}])
         s.set_inputs(other, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": 40.0}])
