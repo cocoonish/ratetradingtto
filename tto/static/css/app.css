@@ -1354,6 +1354,21 @@ table.plain.trades tr.sum td { font-weight: 650; border-top: 1px solid var(--lin
 #trade-form .tf-legs input { width: 110px; }
 #trade-form .tf-preview { border-top: 1px solid var(--line); padding-top: 10px; }
 #trade-form .tf-text { font-weight: 650; font-size: 13.5px; }
+/* target and stop: the form's boxes, the rows' distances (marked within a quarter of the range or reached), the quant
+   line a trade was taken from, a closed one's hit, the "Quant'tan" table */
+#trade-form .tf-levels { align-items: flex-end; }
+#trade-form .tf-levels-note { max-width: 420px; padding-bottom: 6px; white-space: normal; }
+.banner.tf-from { margin: 0 0 8px; }
+table.plain.trades td.lv { white-space: nowrap; font-size: 11.5px; }
+table.plain.trades td.lv .lvl { color: var(--ink-2); }
+table.plain.trades td.lv .lvl.near { font-weight: 650; }
+table.plain.trades td.lv .lvl.near.target { color: var(--pos); }
+table.plain.trades td.lv .lvl.near.stop { color: var(--neg); }
+table.plain.trades td.lv.near-target { box-shadow: inset 3px 0 0 var(--pos); }
+table.plain.trades td.lv.near-stop { box-shadow: inset 3px 0 0 var(--neg); }
+table.plain.trades .tsrc { color: var(--accent-ink); }
+table.plain.trades td.hit-target { color: var(--pos); }
+table.plain.trades td.hit-stop { color: var(--neg); }
 /* DİBS RV · Genel: the fit's line over the page, the settings it reads (typed in the RV hesap tablosu tab), the tables of
    the hesap tablosu tabs shown read-only */
 .dg-tools .dg-fit { font-size: 12px; color: var(--ink-2); }

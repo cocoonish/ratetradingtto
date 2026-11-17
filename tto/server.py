@@ -1048,10 +1048,24 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call_free(svc().tradebook.recent, _user(request), request.query_params.get("scope")))
 
     @handler
+    async def trades_quant(request: Request):
+        # "Quant'tan": per family, the trades taken from its lines that the user sees (the desk's and their own)
+        from . import tradequant
+        return ok(await call(tradequant.table, svc().tradebook, _user(request)))
+
+    @handler
+    async def trades_from_quant(request: Request):
+        # "İşleme al": a quant line (?id=) as the Trades form, filled - nothing saved
+        from . import tradequant
+        q = request.query_params
+        return ok(await call(tradequant.prefill, svc(), _user(request), q.get("id"), q.get("scope") or "personal",
+                             _trade_lang(request)))
+
+    @handler
     async def trade_one(request: Request):
         tid = request.path_params["tid"]
-        if request.method == "DELETE":
-            return ok(await call_free(svc().tradebook.remove, _user(request), tid))
+        if request.method == "DELETE":               # (its alarms follow on the calculation thread)
+            return ok(await call(svc().tradebook.remove, _user(request), tid))
         return ok(await call(svc().tradebook.edit, _user(request), tid, await _body(request), _trade_lang(request)))
 
     @handler
@@ -1066,14 +1080,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         if what == "close":                   # a close date and price: to the closed list, with its realised P&L
             return ok(await call(book.close, _user(request), tid, data.get("close_date"), data.get("close_price"),
                                  _trade_lang(request)))
-        if what == "reopen":                  # the close taken back
-            return ok(await call_free(book.reopen, _user(request), tid))
+        if what == "reopen":                  # the close taken back (its alarms again)
+            return ok(await call(book.reopen, _user(request), tid))
         raise ServiceError("bilinmeyen işlem: %s" % what, 404)
 
     # ------------------------------------------------------------------ quant signals (quant.py)
     @handler
     async def quant_get(request: Request):
-        return ok(await call(svc().quant.view, request.path_params["what"], _user(request), dict(request.query_params)))
+        # (every line says whether Trades can book it: "İşleme al" - tradequant.mark)
+        from . import tradequant
+        return ok(tradequant.mark(await call(svc().quant.view, request.path_params["what"], _user(request), dict(request.query_params))))
 
     @handler
     async def quant_post(request: Request):
@@ -1265,6 +1281,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/trades/dv01", trades_dv01, methods=["GET", "POST"]),
         Route("/api/trades/mtm", trades_mtm, methods=["POST"]),
         Route("/api/trades/log", trades_log),
+        Route("/api/trades/quant", trades_quant),
+        Route("/api/trades/from-quant", trades_from_quant),
         Route("/api/trades/{tid:int}", trade_one, methods=["POST", "DELETE"]),
         Route("/api/trades/{tid:int}/log", trade_log),
         Route("/api/trades/{tid:int}/{what}", trade_action, methods=["POST"]),

@@ -75,8 +75,21 @@ CATCH_UP = 180.0
 RETRY = 600.0
 #: a form's market (defaults, DV01 sizing) is taken again after this many seconds
 FORM_MARKET_SECONDS = 30.0
-#: what of a trade does not change its value: a change of these keeps its close values
-META_KEYS = ("note", "book", "manual_price", "closing", "close_date", "close_price")
+#: what of a trade does not change its value: a change of these keeps its close values (its target and stop, the quant line
+#: it was taken from among them)
+META_KEYS = ("note", "book", "manual_price", "closing", "close_date", "close_price", "target", "stop", "source")
+#: a row is "near" its target / stop within this share of the target–stop range (with one level only: of the distance
+#: from the trade's price to it) - and when it has reached it
+NEAR_SHARE = 0.25
+#: a closed trade counts "at its target" / "at its stop" when its close price is that level, beyond it or within this
+#: share of the range short of it (the "Quant'tan" table's hits)
+HIT_SHARE = 0.05
+#: the open trades with a target or a stop are valued again at most this often (seconds) for their alarms and distances -
+#: on the watch's round (tto/watch.py), on the market's snapshot then: live where the dashboard's values are live
+LEVELS_EVERY = 10.0
+#: what an alarm of a trade's level says when it fires
+ALARM_NOTE = {"target": "hedefe geldi", "stop": "stopa geldi"}
+SOURCE_MAX = 120
 KEYS = ("ccy", "try", "usd")
 _FRA = re.compile(r"^\s*(\d{1,3})\s*[xX×*]\s*(\d{1,3})\s*$")
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -237,6 +250,134 @@ def describe(t: Dict[str, Any], meeting_word: Optional[str] = None) -> str:
             side, t.get("pair"), _tr(t.get("strike") or 0.0, 4).rstrip("0").rstrip(","), str(t.get("call_put") or "").upper(),
             _short(t.get("notional")), t.get("notional_ccy") or "", _day_text(t.get("expiry")), price_text(t))
     return str(product)
+
+
+# ---------------------------------------------------------------------------------------------- target and stop
+def pip_of(pair: Any) -> float:
+    """An FX pair's pip: 0,01 of a yen or a gold price, else 0,0001 (USDTRY 42,1500: a pip is its last digit)."""
+    p = str(pair or "").upper()
+    return 0.01 if p[3:] == "JPY" or p[:3] in ("XAU", "XAG") else 0.0001
+
+
+def level_spec(t: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """How a trade's target and stop are typed and read - in its own quote, as the form shows its price: a swap's rate
+    (%), a spread's / fly's level (bp), a bond's yield (%) when it was entered by its yield and its clean price when by its
+    price, an FX spot's rate, an option's premium (the amount in its currency, what it would fetch now).  ``show``: how the
+    watch shows the value (watch.SHOWS); ``unit``: the unit of the distance to a level - bp for rates, pips for FX spot, %
+    of the premium for an option, price points for a bond's price; ``per``: × a level difference gives it (``None``: a
+    share of the value now); ``rate``: typed as a rate (a "%" is taken)."""
+    p, st = t.get("product"), t.get("structure") or "outright"
+    if p in ("ois", "sofr"):
+        if st in ("spread", "fly"):
+            return {"what": "seviye (bp)", "short": "bp", "show": "bp", "unit": "bp", "per": 1.0, "rate": False, "digits": 1}
+        return {"what": "oran (%)", "short": "%", "show": "pct", "unit": "bp", "per": 100.0, "rate": True, "digits": 2}
+    if p == "dibs":
+        if t.get("price_kind") == "yield":
+            return {"what": "getiri (%)", "short": "getiri %", "show": "pct", "unit": "bp", "per": 100.0, "rate": True, "digits": 2}
+        return {"what": "temiz fiyat", "short": "fiyat", "show": "px", "unit": "puan", "per": 1.0, "rate": False, "digits": 3}
+    if p == "fxspot":
+        return {"what": "kur", "short": "kur", "show": "fx", "unit": "pip", "per": float(round(1.0 / pip_of(t.get("pair")))), "rate": False,
+                "digits": 4}
+    if p == "fxopt":
+        ccy = str(t.get("premium_ccy") or "")
+        return {"what": "prim tutarı (%s)" % ccy if ccy else "prim tutarı", "short": "prim", "show": "amt", "unit": "%", "per": None,
+                "rate": False, "digits": 0}
+    return None
+
+
+def gains_up(t: Dict[str, Any]) -> Optional[bool]:
+    """Whether a trade gains when its level rises: a swap paid (a spread / fly whose long leg / body is paid - the
+    package's side), a bond bought by its price (sold by its yield), FX and an option bought."""
+    p = t.get("product")
+    if p in ("ois", "sofr"):
+        s = rate_side(t.get("side"))
+        return None if s is None else s == "pay"
+    side = str(t.get("side") or "").upper()
+    if side not in ("B", "S"):
+        return None
+    buy = side == "B"
+    return (not buy) if p == "dibs" and t.get("price_kind") == "yield" else buy
+
+
+def entry_level(t: Dict[str, Any]) -> Optional[float]:
+    """The trade's own price in its levels' unit (a bond entered by its yield: that yield)."""
+    if t.get("product") == "dibs" and t.get("price_kind") == "yield":
+        return _f(t.get("yield"))
+    return _f(t.get("price"))
+
+
+def level_now(t: Dict[str, Any], v: Optional[Dict[str, Any]]) -> Optional[float]:
+    """A valuation's number a trade's levels are read against (tradevalue.value with its ``inputs``): ``price_now`` - a
+    bond entered by its yield: the yield of its price now in its convention; an option: its premium now."""
+    if not v or not v.get("ok"):
+        return None
+    inputs = v.get("inputs") or {}
+    if t.get("product") == "dibs" and t.get("price_kind") == "yield":
+        return _f(inputs.get("yield_trade_now"))
+    if t.get("product") == "fxopt":
+        return _f(inputs.get("premium_now"))
+    return _f(v.get("price_now"))
+
+
+def levels_of(t: Dict[str, Any], now: Optional[float], at: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """A trade's target and stop against its level now: ``{target, stop, unit, to_target, to_stop, near}`` (and the
+    level ``now``, ``at`` when it was read) - ``to_*`` in the distance's unit (bp, pip, % of the premium, price
+    points), signed so that a positive one is still to go (≤ 0: reached); ``near`` "target" / "stop" within a quarter
+    (``NEAR_SHARE``) of the target–stop range - of the distance from the trade's price to its one level when it has
+    only one -, or reached; ``None`` without a level."""
+    target, stop = _f(t.get("target")), _f(t.get("stop"))
+    if target is None and stop is None:
+        return None
+    spec = level_spec(t) or {}
+    out: Dict[str, Any] = {"target": target, "stop": stop, "unit": spec.get("unit"), "to_target": None, "to_stop": None,
+                           "near": None, "now": now, "at": at}
+    up = gains_up(t)
+    if now is None or up is None or not spec:
+        return out
+    sg = 1.0 if up else -1.0
+    raw_t = (target - now) * sg if target is not None else None            # (level units: positive = still to go)
+    raw_s = (now - stop) * sg if stop is not None else None
+
+    def unit(d: Optional[float]) -> Optional[float]:
+        if d is None:
+            return None
+        if spec.get("per") is None:
+            return d / now * 100.0 if now else None                       # (a share of the value now: an option's premium)
+        return d * spec["per"]
+
+    out["to_target"], out["to_stop"] = unit(raw_t), unit(raw_s)
+    entry = entry_level(t)
+    if target is not None and stop is not None:
+        span = abs(target - stop)
+    else:
+        one = target if target is not None else stop
+        span = abs(one - entry) if entry is not None else 0.0
+    edge = NEAR_SHARE * span
+    close = [(d, name) for d, name in ((raw_t, "target"), (raw_s, "stop")) if d is not None and (d <= 0 or d <= edge)]
+    if close:
+        out["near"] = min(close)[1]
+    return out
+
+
+def hit_of(t: Dict[str, Any]) -> Optional[str]:
+    """A closed trade against its levels: "target" - closed at its target or beyond it (within ``HIT_SHARE`` of the
+    target–stop range) -, "stop" the same at its stop, "other"; ``None`` for a trade still open or without a level."""
+    if t.get("status") != "closed":
+        return None
+    target, stop, up = _f(t.get("target")), _f(t.get("stop")), gains_up(t)
+    price = _f(t.get("close_price"))
+    if (target is None and stop is None) or up is None or price is None:
+        return None
+    sg = 1.0 if up else -1.0
+    entry = entry_level(t)
+    span = abs(target - stop) if target is not None and stop is not None else \
+        abs((target if target is not None else stop) - entry) if entry is not None else 0.0
+    eps = HIT_SHARE * span + 1e-9
+    if target is not None and (target - price) * sg <= eps:
+        return "target"
+    if stop is not None and (price - stop) * sg <= eps:
+        return "stop"
+    return "other"
 
 
 def fingerprint(t: Dict[str, Any]) -> str:
@@ -652,6 +793,11 @@ class TradeBook(object):
         self._seq: Dict[str, int] = {}                       # "desk" / a user: how many times their lists changed
         self._mtm: Dict[Tuple[str, str], Dict[str, Any]] = {}     # (scope, owner or "") -> the last "MTM yenile"
         self._form_mkt: Optional[Tuple[float, Any]] = None
+        # the open trades with a target or a stop (read again after any change) and each one's level now: trade id ->
+        # (the level, when, how: "canlı" - the watch's round - or "MTM")
+        self._lv_rows: Optional[Dict[int, Dict[str, Any]]] = None
+        self._levels: Dict[int, Tuple[Optional[float], str, str]] = {}
+        self._levels_at = -1e9
 
     # ------------------------------------------------------------------ who
     def _user(self, user: Optional[str]) -> str:
@@ -708,6 +854,7 @@ class TradeBook(object):
         key = "desk" if scope == "desk" else "u:" + owner
         with self._lock:
             self._seq[key] = self._seq.get(key, 0) + 1
+            self._lv_rows = None
             hit = self._mtm.get((scope, "" if scope == "desk" else owner))
             if hit is not None:
                 hit["stale"] = True
@@ -740,9 +887,12 @@ class TradeBook(object):
         return v if isinstance(v, dict) else {"ok": False, "why": "değerleme sonucu okunamadı"}
 
     @staticmethod
-    def _keep(v: Dict[str, Any], greeks: bool = True) -> Dict[str, Any]:
-        """What of a valuation is kept / sent: its numbers, texts and legs (not its inputs)."""
+    def _keep(v: Dict[str, Any], greeks: bool = True, trade: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """What of a valuation is kept / sent: its numbers, texts and legs (not its inputs) - with ``trade``, the number
+        its target and stop are read against (``level_now``)."""
         out: Dict[str, Any] = {"ok": bool(v.get("ok")), "why": v.get("why")}
+        if trade is not None:
+            out["level_now"] = level_now(trade, v)
         for k in ("mtm", "mtm_try", "mtm_usd", "carry_1d", "carry_1d_try", "carry_1d_usd", "accrued", "price_now"):
             out[k] = _f(v.get(k))
         out["ccy"] = str(v.get("ccy") or "") or None
@@ -867,6 +1017,202 @@ class TradeBook(object):
         return {"time": self.close_time().strftime("%H:%M"),
                 "last": {"day": last["day"], "at": last["at"], "taken_at": last["taken_at"], "late": bool(last["late"])} if last else None}
 
+    # ------------------------------------------------------------------ target and stop: the level now, the alarms
+    def _level_rows(self) -> Dict[int, Dict[str, Any]]:
+        """The open trades with a target or a stop (the desk's and every trader's own): read again after a change."""
+        with self._lock:
+            rows = self._lv_rows
+        if rows is None:
+            rows = {r["id"]: r for r in self.store.tb_dealt_by("9999-12-31")
+                    if r["status"] != "closed" and (_f(r.get("target")) is not None or _f(r.get("stop")) is not None)}
+            with self._lock:
+                self._lv_rows = rows
+        return rows
+
+    def refresh_levels(self, force: bool = False, only: Optional[Sequence[int]] = None) -> int:
+        """The level now of every open trade with a target or a stop - valued as "MTM yenile" values it, on the
+        market's snapshot now (live where the dashboard's values are) -, at most every ``LEVELS_EVERY`` seconds
+        (``force``: now; ``only``: those trades).  The watch's round calls it (calculation thread); its alarms read it
+        (:meth:`level_value`).  Returns how many were valued."""
+        if only is None and not force and time.monotonic() - self._levels_at < LEVELS_EVERY:
+            return 0
+        rows = self._level_rows()
+        if only is None:
+            self._levels_at = time.monotonic()
+        todo = [r for tid, r in rows.items() if only is None or tid in only]
+        if not todo:
+            if only is None:
+                with self._lock:
+                    self._levels = {k: x for k, x in self._levels.items() if k in rows}
+            return 0
+        mkt = self._engine(tv.market, self.svc)
+        at = self.now().strftime("%H:%M:%S")
+        got = {r["id"]: level_now(r, self._value(self.for_value(r), mkt)) for r in todo}
+        with self._lock:
+            if only is None:
+                self._levels = {k: x for k, x in self._levels.items() if k in rows}
+            for tid, v in got.items():
+                self._levels[tid] = (v, at, "canlı")
+        return len(got)
+
+    def level_value(self, tid: Any) -> Tuple[Optional[float], str]:
+        """A trade's level now and how the watch shows it (watch.SHOWS) - what its alarms read (``None``: not valued
+        yet, closed, gone, or no level)."""
+        try:
+            n = int(tid)
+        except (TypeError, ValueError):
+            return None, "raw"
+        r = self._level_rows().get(n)
+        spec = level_spec(r) if r is not None else None
+        with self._lock:
+            hit = self._levels.get(n)
+        return (hit[0] if hit and r is not None else None), (spec["show"] if spec else "raw")
+
+    def level_label(self, tid: Any) -> str:
+        """A trade's name in the watch: "Trades #12 · RECEIVE 2Y TRY OIS 100m @ %38,50" (nothing of a trade gone)."""
+        try:
+            r = self._level_rows().get(int(tid))
+        except (TypeError, ValueError):
+            r = None
+        return "Trades #%s%s" % (tid, " · " + describe(r) if r is not None else "")
+
+    @staticmethod
+    def alarm_id(tid: int, which: str) -> str:
+        return "tb%d-%s" % (tid, which)
+
+    def _alarm_specs(self, r: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """What an open trade's target and stop are as İzleme alarms: one each, on the level MTM reads for it
+        (``{"kind": "trade", "id"}``), "hedefe geldi" / "stopa geldi" - a personal trade's its owner's, a desk trade's the
+        desk's (for everyone, set by its creator)."""
+        if r.get("status") == "closed":
+            return []
+        spec, up = level_spec(r), gains_up(r)
+        if spec is None or up is None:
+            return []
+        out = []
+        for which, word in (("target", "hedef"), ("stop", "stop")):
+            lv = _f(r.get(which))
+            if lv is None:
+                continue
+            rises = up if which == "target" else not up              # (the level is reached from below)
+            desk = r["scope"] == "desk"
+            out.append({"id": self.alarm_id(r["id"], which), "user": "" if desk else r["owner"], "desk": desk, "by": r["created_by"],
+                        "op": ">=" if rises else "<=", "level": lv, "show": spec["show"], "note": ALARM_NOTE[which],
+                        "label": ("Trades #%d %s · %s" % (r["id"], word, describe(r)))[:60], "trade": {"id": r["id"], "which": which}})
+        return out
+
+    def sync_alarms(self, tids: Optional[Sequence[int]] = None, by: Optional[str] = None) -> Dict[str, int]:
+        """The İzleme alarms of the trades' targets and stops made to match the trades (calculation thread, as the
+        watch's rounds): one per level of an open trade - set, changed (a level or a side changed: armed again at it),
+        removed (a level emptied, the trade closed or deleted); a duplicate never stays.  ``tids``: those trades (each
+        change), else every trade (the start: what a restart, a restored database or a deleted trade left)."""
+        watch = getattr(self.svc, "watch", None)
+        if watch is None:
+            return {}
+        from . import watch as wt
+        if tids is None:
+            rows = {r["id"]: r for r in self.store.tb_dealt_by("9999-12-31")}
+            mine = None
+        else:
+            mine = {int(t) for t in tids}
+            rows = {}
+            for t in mine:
+                r = self.store.tb_get(t)
+                if r is not None:
+                    rows[t] = r
+        want: Dict[str, Dict[str, Any]] = {}
+        for r in rows.values():
+            for spec in self._alarm_specs(r):
+                want[spec["id"]] = spec
+        alarms = watch.alarms()
+        keep: List[Dict[str, Any]] = []
+        out = {"set": 0, "changed": 0, "removed": 0, "full": 0}
+        notes: List[Tuple[str, Dict[str, Any]]] = []
+        seen = set()
+        for a in alarms:
+            tr = a.get("trade") if isinstance(a.get("trade"), dict) else None
+            if tr is None or (mine is not None and tr.get("id") not in mine):
+                keep.append(a)
+                continue
+            spec = want.get(a["id"]) if a["id"] not in seen else None
+            if spec is None:                                # (gone, emptied, closed - or a duplicate)
+                out["removed"] += 1
+                if a.get("desk"):
+                    notes.append(("removed", a))
+                continue
+            seen.add(a["id"])
+            moved = a.get("level") != spec["level"] or a.get("op") != spec["op"]
+            fields = {k: spec[k] for k in ("user", "op", "level", "show", "label", "note", "trade")}
+            if spec["desk"]:
+                fields.update(desk=True, by=a.get("by") or spec["by"])
+            if moved or any(a.get(k) != v for k, v in fields.items()) or bool(a.get("desk")) != spec["desk"]:
+                a = dict(a, **fields)
+                if not spec["desk"]:
+                    a.pop("desk", None)
+                    a.pop("by", None)
+                if moved:
+                    a.update(active=True, fired_at=None, fired_value=None)
+                    if a.get("desk"):
+                        notes.append(("set", a))
+                out["changed"] += 1
+            keep.append(a)
+        for aid, spec in want.items():
+            if aid in seen:
+                continue
+            if len(keep) >= wt.MAX_ALARMS:
+                out["full"] += 1
+                continue
+            v = self.level_value(spec["trade"]["id"])[0]
+            a = {"id": aid, "user": spec["user"], "subject": {"kind": "trade", "id": spec["trade"]["id"]}, "mode": "level",
+                 "op": spec["op"], "level": spec["level"], "show": spec["show"], "label": spec["label"], "note": spec["note"],
+                 "active": True, "created": self.now().strftime("%Y-%m-%d %H:%M:%S"), "fired_at": None, "fired_value": None,
+                 "last": v, "trade": spec["trade"]}
+            if spec["desk"]:
+                a.update(desk=True, by=spec["by"])
+                notes.append(("set", a))
+            keep.append(a)
+            out["set"] += 1
+        if out["set"] or out["changed"] or out["removed"]:
+            watch._put_alarms(keep)
+        desk = getattr(self.svc, "desk_alarms", None)
+        if desk is not None and tids is not None:              # (the desk's log: who set / removed a desk trade's level)
+            for kind, a in notes:
+                try:
+                    if kind == "removed":
+                        desk.close(a["id"], "işlemin seviyesi kalktı")
+                    desk.note(kind, a["id"], a.get("label") or "", watch.cond_text(a), by=by or a.get("by"))
+                except Exception:  # noqa: BLE001 - the log is not worth the alarm
+                    pass
+        return out
+
+    def _follow(self, tid: int, user: Optional[str]) -> Dict[str, Any]:
+        """After a trade changed: its level now and its alarms (calculation thread)."""
+        with self._lock:
+            self._lv_rows = None
+        try:
+            self.refresh_levels(only=[tid])
+        except Exception:  # noqa: BLE001 - the alarm reads it at the watch's next round
+            pass
+        return self.sync_alarms([tid], user)
+
+    def _alarms_follow(self, tid: int, user: Optional[str]) -> Optional[Dict[str, Any]]:
+        """A trade's alarms after it was entered, changed, closed, opened again or deleted - never failing the change."""
+        try:
+            res = self._engine(self._follow, tid, user)
+        except Exception as exc:  # noqa: BLE001 - the trade is saved; the start's sync puts its alarms right
+            ops = getattr(self.svc, "ops", None)
+            if ops is not None:
+                try:
+                    ops.failure("Trades: hedef / stop alarmı", exc)
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+        if res and (res.get("set") or res.get("changed") or res.get("removed")):
+            bump = getattr(self.svc, "bump", None)
+            if bump is not None:
+                bump()                                           # (İzleme's alarms read again)
+        return res
+
     # ------------------------------------------------------------------ reading a trade
     def _calendar(self, product: str, pair: Optional[str]) -> Tuple[str, ...]:
         if product in CALENDARS:
@@ -926,6 +1272,10 @@ class TradeBook(object):
                 self._read_fxspot(f, t, pair)
             else:
                 self._read_fxopt(f, t, pair, td, cal)
+        self._read_levels(f, t)
+        src = self._read_source(f)
+        if src:
+            t["source"] = src
         mp = f.number("manual_price", "Elle fiyat")
         if mp is not None:
             t["manual_price"] = mp
@@ -942,6 +1292,46 @@ class TradeBook(object):
                 f.fail("_", str(exc))
         f.fill_later(t)
         return t, f
+
+    @staticmethod
+    def _read_levels(f: _Form, t: Dict[str, Any]) -> None:
+        """The trade's target and stop (optional), in its own quote (``level_spec``): the target on the side the trade
+        gains, the stop on the other."""
+        spec = level_spec(t)
+        if spec is None:
+            return
+        price = spec["short"] in ("fiyat", "kur", "prim")
+        got = {}
+        for key, what in (("target", "Hedef"), ("stop", "Stop")):
+            x = f.number(key, "%s (%s)" % (what, spec["what"]), rate=spec["rate"], positive=price,
+                         amount=t.get("product") == "fxopt")
+            if x is not None:
+                t[key] = got[key] = x
+        up = gains_up(t)
+        if len(got) == 2 and up is not None and (got["target"] - got["stop"]) * (1.0 if up else -1.0) <= 0:
+            f.fail("target", "hedef stopun kâr tarafında olmalı (%s: %s)" % (
+                "değer yükselince kazanır" if up else "değer düşünce kazanır", "hedef > stop" if up else "hedef < stop"))
+
+    @staticmethod
+    def _read_source(f: _Form) -> Optional[Dict[str, Any]]:
+        """Where a trade was taken from: a line of the quant list ("İşleme al") - ``{kind: "quant", family, line_id, at,
+        entry, target, stop}`` (its family's label, instrument and unit beside them); nothing else is kept."""
+        src = f.raw.get("source")
+        if not isinstance(src, dict) or str(src.get("kind") or "") != "quant":
+            return None
+        fam = str(src.get("family") or "").strip()
+        line = str(src.get("line_id") or "").strip()
+        if not re.match(r"^[A-Za-z0-9_.\-]{1,40}$", fam) or not line or len(line) > SOURCE_MAX:
+            f.fail("source", "sinyal kaynağı okunamadı")
+            return None
+        out: Dict[str, Any] = {"kind": "quant", "family": fam, "line_id": line}
+        for k in ("at", "family_label", "instrument", "unit"):
+            v = src.get(k)
+            if isinstance(v, str) and v.strip():
+                out[k] = " ".join(v.split())[:SOURCE_MAX]
+        for k in ("entry", "target", "stop"):
+            out[k] = _f(src.get(k))
+        return out
 
     @staticmethod
     def _rate_side(f: _Form, src: Dict[str, Any], err: str, what: str) -> Optional[str]:
@@ -1088,6 +1478,9 @@ class TradeBook(object):
         t["price_kind"] = kind
         if kind == "yield":
             t["yield"] = f.number("price", "Getiri (%)", required=True, rate=True)
+            conv = f.choice("yield_conv", ("bileşik", "basit"), "Getiri kuralı", required=False)
+            if conv:
+                t["yield_conv"] = conv                      # (BIST compound unless said: a quant line's simple yield)
         else:
             t["price"] = f.number("price", "Temiz fiyat", required=True, positive=True)
 
@@ -1361,6 +1754,19 @@ class TradeBook(object):
                "can_edit": r["scope"] == "personal" or r["created_by"] == user or admin, "fields": fields}
         if r.get("product") == "fxopt":
             out["greeks_wanted"] = True
+        if r.get("source"):
+            out["source"] = r["source"]
+        spec = level_spec(r)
+        if spec is not None:
+            out["level_unit"] = {"what": spec["what"], "short": spec["short"], "unit": spec["unit"], "digits": spec["digits"]}
+        if r["status"] != "closed":
+            hit = self._levels.get(r["id"])
+            lv = levels_of(r, hit[0] if hit else None, "%s (%s)" % (hit[1], hit[2]) if hit else None)
+            if lv is not None:
+                out["levels"] = lv
+        elif _f(r.get("target")) is not None or _f(r.get("stop")) is not None:
+            out["levels"] = {"target": _f(r.get("target")), "stop": _f(r.get("stop")), "unit": spec["unit"] if spec else None,
+                             "hit": hit_of(r)}
         return out
 
     def listing(self, user: Optional[str], scope: Any = "desk") -> Dict[str, Any]:
@@ -1444,7 +1850,7 @@ class TradeBook(object):
             if closed:
                 mine = [x for x in mine if x[0] < r["close_date"]]
             inc_t = _dt.datetime.combine(_dt.date.fromisoformat(r["trade_date"]), ctime)
-            res = dict(self._keep(v))
+            res = dict(self._keep(v, trade=None if closed else r))
             res["periods"] = pnl_periods(r, v, end_t, mine, inc_t, today, last, week)
             out[r["id"]] = res
         return out
@@ -1476,6 +1882,15 @@ class TradeBook(object):
         now = self.now()
         open_res = self._results(open_rows, now_vals, now)
         closed_res = self._results(closed_rows, {}, now, only_closed=True)
+        # each open trade's target and stop against this valuation (and the distances the rows show until the next one)
+        at = now.strftime("%H:%M:%S")
+        for r in open_rows:
+            res = open_res.get(r["id"])
+            lv = levels_of(r, res.get("level_now"), "%s (MTM)" % at) if res is not None else None
+            if lv is not None:
+                res["levels"] = lv
+                with self._lock:
+                    self._levels[r["id"]] = (res.get("level_now"), at, "MTM")
         at, last, week = self._close_days()
         out = {"scope": scope, "at": now.strftime("%Y-%m-%d %H:%M:%S"), "by": user, "stale": False,
                "last_close": last, "week_close": week,
@@ -1517,7 +1932,15 @@ class TradeBook(object):
         tid = self.store.tb_add(scope, user, t["product"], t["trade_date"], payload, user,
                                 {"text": describe(t, word), "trade": payload})
         self._changed(scope, user)
-        return {"id": tid, "text": describe(t, word), "scope": scope}
+        out = {"id": tid, "text": describe(t, word), "scope": scope}
+        self._said_alarms(out, self._alarms_follow(tid, user))
+        return out
+
+    @staticmethod
+    def _said_alarms(out: Dict[str, Any], res: Optional[Dict[str, Any]]) -> None:
+        """What a change did to the trade's alarms, for the page to say (a full alarm list keeps one from being set)."""
+        if res:
+            out["alarms"] = res
 
     def edit(self, user: Optional[str], tid: Any, raw: Any, lang: str = "tr") -> Dict[str, Any]:
         """An open trade changed (by whoever may change it; its list stays its own)."""
@@ -1530,7 +1953,14 @@ class TradeBook(object):
             raise ServiceError("işlemin listesi (Masa / Kişisel) sonradan değişmez: silip yeniden girin")
         if raw.get("product") not in (None, "", row["product"]):
             raise ServiceError("işlemin ürünü sonradan değişmez: silip yeniden girin")
-        t = self._read(dict(raw, product=row["product"]), lang)
+        raw = dict(raw, product=row["product"])
+        for k in ("target", "stop"):                       # (not sent: kept - an empty box clears it)
+            if k not in raw and row.get(k) is not None:
+                raw[k] = row[k]
+        raw.pop("source", None)
+        t = self._read(raw, lang)
+        if row.get("source"):
+            t["source"] = row["source"]                    # (where it was taken from stays)
         skip = ("id", "scope", "owner", "status", "created_by", "created_at", "updated_by", "updated_at", "closing")
         before = {k: v for k, v in row.items() if k not in skip}
         changes = [[k, before.get(k), t.get(k)] for k in sorted(set(before) | set(t))
@@ -1542,7 +1972,9 @@ class TradeBook(object):
         self.store.tb_update(row["id"], after, "open", t["trade_date"], user, "edit",
                              {"text": describe(t, word), "changes": changes})
         self._changed(row["scope"], row["owner"])
-        return {"id": row["id"], "changed": True, "text": describe(t, word)}
+        out = {"id": row["id"], "changed": True, "text": describe(t, word)}
+        self._said_alarms(out, self._alarms_follow(row["id"], user))
+        return out
 
     def close(self, user: Optional[str], tid: Any, close_date: Any, close_price: Any, lang: str = "tr") -> Dict[str, Any]:
         """Close a trade at a price on a day: it goes to the closed list, valued at that price (its realised P&L)."""
@@ -1579,6 +2011,7 @@ class TradeBook(object):
         self._keep_realized([dict(closed, closing=payload["closing"])], payload["closing"])
         self.store.tb_set_payload(row["id"], payload)
         self._changed(row["scope"], row["owner"])
+        self._alarms_follow(row["id"], user)
         return {"id": row["id"], "closing": payload["closing"]}
 
     def _keep_realized(self, rows: List[Dict[str, Any]], into: Optional[Dict[str, Any]] = None) -> None:
@@ -1602,6 +2035,7 @@ class TradeBook(object):
         self.store.tb_update(row["id"], payload, "open", row["trade_date"], user, "reopen",
                              {"text": describe(row), "close_date": row.get("close_date"), "close_price": row.get("close_price")})
         self._changed(row["scope"], row["owner"])
+        self._alarms_follow(row["id"], user)
         return {"id": row["id"]}
 
     def remove(self, user: Optional[str], tid: Any) -> Dict[str, Any]:
@@ -1610,6 +2044,7 @@ class TradeBook(object):
         row = self._mine(user, tid)
         self.store.tb_delete(row["id"], user, {"text": describe(row), "status": row["status"]})
         self._changed(row["scope"], row["owner"])
+        self._alarms_follow(row["id"], user)
         return {"deleted": row["id"]}
 
     # ------------------------------------------------------------------ the log

@@ -3039,6 +3039,35 @@ async function clipAfter(page, action) {
       && card.cells[0] === '+525 bin TRY / 1 mn USD' && card.cells[1] === '+5,08 bp' && card.entry === '44,1250' && card.unit === 'USDTRY 3A fwd', card);
     check('... and every signal the server gives carries its trade in desk words and its sentence', sigApi.status === 200
       && served.every((s) => s.trade_tr && typeof s.plain === 'string' && s.plain.length > 0), served.length);
+    // "İşleme al" (tto/tradequant.py): a line Trades can book has the button in the list's "Trades" column and on its card;
+    // one it cannot (a vol trade) a dash with the reason, the card's button disabled with it; the server says which for every line
+    const booking = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const base = { family: 'trend', family_label: 'Trend', asset: 'TRY OIS', z: 2.4, entry_z: 2, strength: 'Güçlü', gates: [], agree: 0, conflict: 0,
+        parts: { z: 2.4, regime: 1, hl: 1, carry: 1 }, composite: 2.4, hold: 10, horizon_unit: 'gün', bt: null, unit: '%', digits: 2, direction: -1,
+        entry: 37.6, target: 37.2, stop: 37.9, pnl_unit: 'bp', expression: 'receive 2Y OIS', instrument: '2Y OIS', trade_tr: 'receive 2Y OIS', plain: '…',
+        legs: [{ key: 'OIS:2Y', name: '2Y OIS', action: 'Receive', side: -1, weight: 1, dv01_usd: 1000, text: 'Receive 2Y OIS' }] };
+      const yes = Object.assign({}, base, { id: 'trend:OIS:2Y', book: { ok: true, why: '', kind: 'outright' } });
+      const no = Object.assign({}, base, { id: 'ml:FXV:EURUSD', asset: 'FX vol', unit: 'vol', legs: [],
+        book: { ok: false, why: 'vol işlemi (opsiyon stratejisi): Trades\'e tek işlem olarak girilmez', kind: null } });
+      const rows = q.signalRows([yes, no]);
+      const col = q.SIGNAL_HEAD.indexOf('Trades');
+      const card = (sg) => {
+        const host = document.createElement('div');
+        const c = new q.SignalChart(host);
+        c.show({ monitor: { name: sg.instrument }, signal: sg, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+        const b = host.querySelector('#quant-sig-book');
+        const out = b ? { text: b.textContent, disabled: b.disabled, title: b.title } : null;
+        c.destroy();
+        return out;
+      };
+      return { at: col, head: q.SIGNAL_HEAD[col - 1], yes: rows[0][col].act ? rows[0][col].act.label : null, no: rows[1][col].t, noTip: rows[1][col].tip || '',
+        cardYes: card(yes), cardNo: card(no) };
+    });
+    check('"İşleme al": a line Trades can book has the button in the list\'s "Trades" column and on its card; a vol line a dash and the reason (its card\'s button disabled with it)',
+      booking.head === 'İşlem' && booking.yes === 'İşleme al' && booking.no === '—' && /vol işlemi/.test(booking.noTip) && booking.cardYes
+      && booking.cardYes.text === 'İşleme al' && !booking.cardYes.disabled && booking.cardNo && booking.cardNo.disabled && /vol işlemi/.test(booking.cardNo.title), booking);
+    check('... every line the server gives says whether Trades can book it', served.every((sg) => sg.book && typeof sg.book.ok === 'boolean'), served.length);
     // levels calibrated on what past trades did (tto/quantlevels.py): a line's Ödül / risk (≥ 1 by construction) and İsabet
     // with its trade count, the card's levels row - or, a line without them (no backtest yet in the recorded month, a family
     // that keeps its own: VİOP's order levels), its reason; every line the server gives carries the one or the other
@@ -4436,6 +4465,16 @@ async function clipAfter(page, action) {
       spreadLegs === 2 && flyLegs === 3 && meetingOpts.every((x) => /^\d{4}-\d{2}-\d{2}\|PPK \d{2}\.\d{2}\.\d{4}/.test(x)), { spreadLegs, flyLegs, meetingOpts });
     await page.click('#tf-structure button[data-v="outright"]');
     await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 100m @ %38,50/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
+    // its target and stop, in its own quote (a rate: %): a receive's target below its stop
+    const levelLabels = await page.evaluate(() => ['tf-target', 'tf-stop'].map((id) => document.getElementById(id).closest('.field').querySelector('label').textContent));
+    await page.fill('#tf-target', '30');
+    await page.fill('#tf-stop', '20');
+    await page.waitForFunction(() => /kâr tarafında/.test((document.querySelector('[data-for="target"]') || {}).textContent || ''), null, { timeout: 15000 });
+    const wrongSide = await page.textContent('[data-for="target"]');
+    await page.fill('#tf-stop', '45');
+    await page.waitForFunction(() => !((document.querySelector('[data-for="target"]') || {}).textContent || ''), null, { timeout: 15000 });
+    check('... its target and stop in its own quote ("Hedef (%)" / "Stop (%)"); a target on the losing side is refused under the box',
+      levelLabels[0] === 'Hedef (%)' && levelLabels[1] === 'Stop (%)' && /hedef stopun kâr tarafında olmalı/.test(wrongSide), { levelLabels, wrongSide });
     await page.click('#tf-save');
     await page.waitForSelector('#trades-open tr.trade', { timeout: 15000 });
     const deskTrade = await page.evaluate(() => {
@@ -4444,6 +4483,18 @@ async function clipAfter(page, action) {
     });
     check('... saved: the desk\'s list shows it in the desk\'s words, its trade date and price; its creator may change it',
       /RECEIVE 2Y TRY OIS 100m @ %38,50/.test(deskTrade.text) && deskTrade.text.includes(formDate) && deskTrade.edit, deskTrade);
+    // the row: what is left to its target and its stop (bp), valued as it was saved; İzleme: the desk's two alarms, for everyone
+    await page.waitForFunction((id) => /H %30,00 · [\d.,]+ bp/.test((document.querySelector('#trades-open tr[data-id="' + id + '"] td.lv') || {}).textContent || ''),
+      deskTrade.id, { timeout: 20000 }).catch(() => null);
+    const lvCell = await page.textContent('#trades-open tr[data-id="' + deskTrade.id + '"] td.lv');
+    const listedLv = ((await api(page, 'ayşe yilmaz', 'GET', '/api/trades?scope=desk')).json.open.find((t) => String(t.id) === deskTrade.id) || {}).levels || {};
+    const deskAlarms = (((await api(page, 'ayşe yilmaz', 'GET', '/api/watch')).json || {}).desk || {}).alarms || [];
+    const mine = deskAlarms.filter((a) => a.trade && String(a.trade.id) === deskTrade.id);
+    check('... its row shows the distance to the target and the stop in bp; the listing carries levels {target, stop, unit, to_target, to_stop, near}; '
+      + 'İzleme has the desk\'s "hedefe geldi" / "stopa geldi" alarms on it',
+      /H %30,00 · [\d.,]+ bp/.test(lvCell) && /S %45,00 · [\d.,]+ bp/.test(lvCell) && listedLv.target === 30 && listedLv.stop === 45 && listedLv.unit === 'bp'
+      && typeof listedLv.to_target === 'number' && 'near' in listedLv && mine.length === 2 && mine.some((a) => a.note === 'hedefe geldi' && a.condition.startsWith('≤'))
+      && mine.some((a) => a.note === 'stopa geldi' && a.condition.startsWith('≥')), { lvCell, listedLv, mine: mine.map((a) => [a.label, a.condition, a.note]) });
     // a personal FX spot: what is typed survives a change of the pair; a box emptied gets its default again
     await page.click('#trades-scope button[data-scope="personal"]');
     await page.waitForSelector('#trades-scope button.on[data-scope="personal"]');
@@ -4548,6 +4599,47 @@ async function clipAfter(page, action) {
     check('... closed at 38,20: it leaves the open list for the closed one with its close date and price; its log: entered, closed - by whom',
       closedRow.includes(tradesToday + ' · %38,20') && /girdi/.test(logText) && /kapattı/.test(logText) && /Ayşe Yılmaz/.test(logText),
       { closedRow, logText });
+    const goneAlarms = ((((await api(page, 'ayşe yilmaz', 'GET', '/api/watch')).json || {}).desk || {}).alarms || []).filter((a) => a.trade && String(a.trade.id) === deskTrade.id);
+    check('... closed: its alarms are gone from İzleme', goneAlarms.length === 0, goneAlarms);
+    // "İşleme al": the form a quant line opens (the server's answer: a receive 2Y at the line's entry, its DV01 as a nominal on
+    // the desk's 5 mn lot, the line's target and stop) - personal by default, nothing saved until "İşlemi kaydet"
+    const fromDefaults = (await api(page, 'ayşe yilmaz', 'GET', '/api/trades/defaults?product=ois&structure=outright')).json;
+    await page.evaluate(async (d) => {
+      const tr = await import('/static/js/pages/trades.js');
+      tr.openTradeForm({ ok: true, scope: 'personal', kind: 'outright', text: '', line: { id: 'trend:OIS:2Y', family: 'trend', family_label: 'Trend', text: 'receive 2Y OIS · 1.000 $ DV01' },
+        source: { kind: 'quant', family: 'trend', family_label: 'Trend', line_id: 'trend:OIS:2Y', at: d.trade_date + ' 10:00', instrument: '2Y OIS', entry: 37.65, target: 37.25, stop: 37.85, unit: '%' },
+        trade: { product: 'ois', structure: 'outright', trade_date: d.trade_date, settle_date: d.settle_date, value_date: d.value_date || d.settle_date, side: 'S', tenor: '2Y',
+          notional: 360e6, notional_ccy: 'TRY', sized_by: 'dv01', dv01: 1000, dv01_ccy: 'USD', price: 37.65, target: 37.25, stop: 37.85 } });
+    }, fromDefaults);
+    await page.waitForSelector('#trade-form #tf-from');
+    await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 360m @ %37,65/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
+    const filled = await page.evaluate(() => ({ title: document.querySelector('#trade-form header h2').textContent, scope: document.querySelector('#tf-scope button.on').dataset.v,
+      side: document.querySelector('#tf-side button.on').dataset.v, end: document.getElementById('tf-end_date').value, notional: document.getElementById('tf-notional').value,
+      dv01: document.getElementById('tf-dv01').value, price: document.getElementById('tf-price').value, target: document.getElementById('tf-target').value,
+      stop: document.getElementById('tf-stop').value }));
+    check('"İşleme al" opens the Trades form filled from the line: personal, RECEIVE 2Y, the DV01 and its nominal, the entry, the target and the stop',
+      / sinyalinden$/.test(filled.title) && filled.scope === 'personal' && filled.side === 'receive' && filled.end === '2Y' && filled.notional === '360m'
+      && filled.dv01 === '1k' && filled.price === '37,65' && filled.target === '37,25' && filled.stop === '37,85', filled);
+    await page.click('#tf-save');
+    await page.click('#trades-scope button[data-scope="personal"]');
+    await page.waitForSelector('#trades-scope button.on[data-scope="personal"]');
+    await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 360m/.test(document.getElementById('trades-open').textContent), null, { timeout: 15000 });
+    const quantRow = await page.evaluate(() => {
+      const tr = [...document.querySelectorAll('#trades-open tr.trade')].find((x) => /RECEIVE 2Y TRY OIS 360m/.test(x.textContent));
+      return { id: tr.dataset.id, src: (tr.querySelector('.tsrc') || {}).textContent || '', lv: (tr.querySelector('td.lv') || {}).textContent || '' };
+    });
+    const quantApi = (await api(page, 'ayşe yilmaz', 'GET', '/api/trades?scope=personal')).json.open.find((t) => String(t.id) === quantRow.id) || {};
+    check('... saved: the trade remembers its line (Quant · Trend) and has its levels', /Quant · Trend · 2Y OIS/.test(quantRow.src) && /H %37,25/.test(quantRow.lv)
+      && quantApi.source && quantApi.source.line_id === 'trend:OIS:2Y' && quantApi.source.family === 'trend', { quantRow, source: quantApi.source });
+    // "Quant'tan": only the trades taken from a line, and per family what they made (the desk's and one's own)
+    await page.click('#trades-quant');
+    await page.waitForFunction(() => /Trend/.test((document.getElementById('trades-quant-table') || {}).textContent || ''), null, { timeout: 15000 });
+    const quantView = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#trades-open tr.trade')].length,
+      fam: (document.querySelector('#trades-quant-table tr[data-family="trend"]') || {}).textContent || '' }));
+    await page.click('#trades-quant');
+    await page.waitForFunction(() => document.querySelectorAll('#trades-open tr.trade').length > 1, null, { timeout: 15000 });
+    check('... "Quant\'tan": the list keeps only the trades taken from a line; its table per family: count (desk / own), open, closed, P&L, hits',
+      quantView.rows === 1 && /^Trend1 \(0 \/ 1\)10/.test(quantView.fam), quantView);
     await shot(page, 'trades');
 
     // ------------------------------------------------------------------ each user's own menu

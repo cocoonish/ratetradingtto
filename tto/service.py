@@ -298,6 +298,12 @@ class Service(object):
         # (tradebook.py; their own tables - nothing of the desk's reads them)
         from .tradebook import TradeBook
         self.tradebook = TradeBook(self)
+        try:
+            # the İzleme alarms of the trades' targets and stops as the trades are now - once at the start (a restart, a
+            # restored database, a trade deleted elsewhere): never one twice
+            self.et.call(self.tradebook.sync_alarms)
+        except Exception as exc:  # noqa: BLE001 - each change of a trade puts its own right; the dashboard opens anyway
+            self.ops.failure("Trades: hedef / stop alarmları", exc)
         # quant signals (quant.py): statistics of the closes in a thread of their own, never on the engine thread
         from .quant import Quant
         self.quant = Quant(self)
@@ -5271,8 +5277,17 @@ class Service(object):
         self.bump()
         return res
 
+    #: a trade's target / stop alarm is the trade's: changed or cleared in Trades
+    TRADE_ALARM = "bu alarm Trades'teki #%s işleminin %s alarmı: Trades'te işlemin hedef / stop kutusunu boşaltın ya da değiştirin"
+
+    def _trade_alarm(self, a: Optional[Dict[str, Any]]) -> None:
+        tr = (a or {}).get("trade")
+        if isinstance(tr, dict):
+            raise ServiceError(self.TRADE_ALARM % (tr.get("id"), "hedef" if tr.get("which") == "target" else "stop"))
+
     def alarm_remove(self, user: str, alarm_id: str) -> Dict[str, Any]:
         user = self.require_user(user)
+        self._trade_alarm(next((x for x in self.watch.alarms(user) if x["id"] == str(alarm_id or "")), None))
         n = self.watch.remove_alarm(user, str(alarm_id or ""))
         self.bump()
         return {"removed": n}
@@ -5357,6 +5372,7 @@ class Service(object):
     def desk_alarm_remove(self, user: str, alarm_id: str) -> Dict[str, Any]:
         me = self.require_admin(user)
         a = self._desk_alarm(str(alarm_id or ""))
+        self._trade_alarm(a)
 
         def run() -> int:
             n = self.watch.remove_alarm("", a["id"])

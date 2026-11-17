@@ -313,9 +313,12 @@ export class WatchPage {
         re.addEventListener('click', () => this.rearm(a));
         acts.appendChild(re);
       }
-      const del = h('button', { class: 'iconbtn', type: 'button', title: 'Alarmı sil' }, '✕');
-      del.addEventListener('click', () => this.removeAlarm(a));
-      acts.appendChild(del);
+      if (a.trade) acts.appendChild(this.tradeButton(a));         // (a trade's target / stop: changed or emptied in Trades)
+      else {
+        const del = h('button', { class: 'iconbtn', type: 'button', title: 'Alarmı sil' }, '✕');
+        del.addEventListener('click', () => this.removeAlarm(a));
+        acts.appendChild(del);
+      }
       const picked = this.picked && this.picked.key === 'a:' + a.id;
       const tr = h('tr', { 'data-id': a.id, class: ((a.active ? '' : 'fired') + (picked ? ' pick' : '')).trim() },
         h('td', { class: 'l', title: a.what + (a.detail ? ' · ' + a.detail : '') + '\nTıklayın: geçmişi' }, a.label,
@@ -324,13 +327,21 @@ export class WatchPage {
         h('td', null, a.mode && a.mode !== 'level' ? (a.measure_text || '–') : ''), h('td', { title: 'Koşulun sağlanmasına kalan' }, dist),
         h('td', { class: 'l' }, state), h('td', { class: 'l muted' }, a.note || ''), acts);
       tr.addEventListener('click', (e) => {
-        if (e.target.closest('button')) return;
+        if (e.target.closest('button') || a.trade) return;            // (a trade's level has no past of its own here)
         this.showHistory({ key: 'a:' + a.id, subject: a.subject, label: a.label });
       });
       t.appendChild(tr);
     }
     box.appendChild(t);
     this.columns('alarms', t, box);
+  }
+
+  /** A trade's target / stop alarm (tto/tradebook.py): it is the trade's - its button opens Trades. */
+  tradeButton(a) {
+    const b = h('button', { class: 'iconbtn', type: 'button', title: 'Trades\'teki #' + a.trade.id + ' işleminin ' + (a.trade.which === 'target' ? 'hedefi' : 'stopu')
+      + ': seviyesi Trades\'te değişir ya da boşaltılınca kalkar; işlem kapanınca / silinince alarm da kalkar' }, 'Trades');
+    b.addEventListener('click', () => this.ctx.goto('trades'));
+    return b;
   }
 
   // ------------------------------------------------------------------ the desk's alarms (everyone's)
@@ -379,7 +390,8 @@ export class WatchPage {
       t.appendChild(h('tr', null, ...['Ad', 'Koşul', 'Şimdi', 'Hareket / z', 'Uzaklık', 'Durum', 'Kuran', 'Not', ''].map((x, i) => h('th', { class: [0, 1, 5, 6, 7, 8].includes(i) ? 'l' : '' }, x))));
       for (const a of desk.alarms) {
         const td = acts(a.id, a.entry && a.entry.kind === 'fired' ? a.entry : null, a.mute, a.label);
-        if (admin) {
+        if (a.trade) td.appendChild(this.tradeButton(a));
+        else if (admin) {
           if (!a.active) {
             const re = h('button', { class: 'iconbtn', type: 'button', title: 'Aynı koşulla herkese yeniden kur' }, 'Yeniden kur');
             re.addEventListener('click', () => this.act('/api/alarms/rearm', { id: a.id, desk: true }, 'Masa alarmı yeniden kuruldu'));
