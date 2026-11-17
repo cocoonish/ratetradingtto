@@ -18,7 +18,8 @@ with the live values (each monitor keeps a function that reads its level now).  
 bucket, entry / target / stop, half-life and expected holding, carry + roll a week, regime, how many other families
 agree, time.  Ranked by |z| × regime fit × half-life fit × carry agreement - within their group of the Sinyaller list
 (``quantuniv``: G10 spot, G10 opsiyon, TRY OIS ≤ 2Y then the long end, DİBS, VİOP, Offshore), the ones a gate holds
-after the others as "düşük güven".  The universe the systematic families trade (``quantuniv.Registry``) is built on
+after the others as "düşük güven"; above them all the consensus (``quantcons``: an instrument three or more families'
+confident lines agree on - a view of them, no log or alarm of its own).  The universe the systematic families trade (``quantuniv.Registry``) is built on
 every full fit after the other families; theirs run on it.
 
 **Levels** (``quantlevels``): every line's target and stop are multiples of its σ of the holding, calibrated month by
