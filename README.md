@@ -1486,7 +1486,7 @@ hücreyi kopyadaki hâliyle söyler. Kopyanın sayfadaki ve launchpad öğesinde
 
 ### Trades: masanın ve kişinin kendi işlemleri
 
-Menünün Masa grubunda, Günlük İşlemler'in hemen altında (`tto/tradebook.py`, sayfa `pages/trades.js`). Masanın ya da
+Menünün Masa grubunda, Günlük İşlemler ve Broker Chat'in altında (`tto/tradebook.py`, sayfa `pages/trades.js`). Masanın ya da
 bir trader'ın **ayrıca izlemek istediği** işlemler: MTM'leri ve günlük / haftalık / toplam K/Z'ları burada hesaplanır.
 Bu işlemler **masanın genel pozisyonuna karışmaz**: Günlük İşlemler'e, blotter'ın pozisyonlarına, DV01 riskine, RET
 akış önerilerine ya da masanın başka hiçbir hesabına girmez - kendi tablolarındadırlar ve o hesaplar onları okumaz.

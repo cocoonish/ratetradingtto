@@ -27,7 +27,7 @@ def test_status_and_navigation(service):
     # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, spreads, settings)
     custom = [p["id"] for p in pages if p.get("custom")]
     # (the quant pages in the order of their four menu entries: Sinyaller, Faiz, FX, VİOP - see menu.js)
-    assert custom == ["watch", "heat", "blotter", "trades", "broker", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
+    assert custom == ["watch", "heat", "blotter", "broker", "trades", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
                       "quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira", "quant-ml",
                       "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-path", "quant-wirp", "quant-lead",
                       "quant-fx", "quant-macro", "quant-opt",

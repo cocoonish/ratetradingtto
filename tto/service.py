@@ -1466,9 +1466,10 @@ class Service(object):
             pages.append({"id": "heat", "title": "Eğri Hareketi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "blotter", "title": "Günlük İşlemler", "group": "Masa", "book": "tto",
                           "sheet": bl.SHEET, "custom": True})
-            # the trades followed on their own (tradebook.py): the desk's and each trader's, never the blotter's
-            pages.append({"id": "trades", "title": "Trades", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "broker", "title": "Broker Chat", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
+            # the trades followed on their own (tradebook.py): the desk's and each trader's, never the blotter's (Broker
+            # Chat stays right under the blotter: its trades are the blotter's)
+            pages.append({"id": "trades", "title": "Trades", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             # pages of the dashboard's own: what happened over time, and the settings behind it
             pages.append({"id": "eod", "title": "Gün Sonu Matrisi", "group": "Masa", "book": "tto", "sheet": None, "custom": True})
             pages.append({"id": "mpc", "title": "PPK Fiyatlama Geçmişi", "group": "TRY Faiz", "book": "tto", "sheet": None,

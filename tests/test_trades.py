@@ -746,7 +746,8 @@ def client(module_service):
 def test_the_page_is_in_the_desk_s_menu_and_the_trades_stay_out_of_the_desk_s_own(module_service):
     svc = module_service
     pages = [p["id"] for p in svc.nav()]
-    assert pages[pages.index("blotter") + 1] == "trades"
+    # beside Günlük İşlemler: after Broker Chat, which stays right under the blotter (its trades are the blotter's)
+    assert pages[pages.index("blotter") + 1:pages.index("blotter") + 3] == ["broker", "trades"]
     page = next(p for p in svc.nav() if p["id"] == "trades")
     assert (page["title"], page["group"], page["custom"]) == ("Trades", "Masa", True)
     assert svc.ops.settings()["trades_close"] == "17:30" and svc.tradebook.close_info()["time"] == "17:30"
