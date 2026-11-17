@@ -4,6 +4,7 @@ shown next to it, and the tables that grow (Bulk Bond, the 100-row bulk forward)
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 
 import pytest
@@ -1155,12 +1156,16 @@ def test_dibs_rv_prices_an_frn_only(tmp_path, module_service):
     facts = {"TRT020130T19": dict(floater, MATURITY="2.01.2030"),
              NEW_FRN: dict(floater, MATURITY="15.06.2032", RESET_IDX="N/A"),
              NEW_TLREF: dict(floater, MATURITY="8.09.2031", RESET_IDX="BISTREFI", FLOATER_FORMULA="91 D TLREF FLAT")}
+    from tto.store import Store
+    store = Store(str(tmp_path / "tto.db"))
+    # not on Tüm Kâğıtlar (a bond put on the trading list now joins it: kept so by an earlier version) - Bloomberg says
+    store.set_shared_inputs("tto", {"DİBS RV!A45": NEW_FRN, "DİBS RV!A46": NEW_TLREF}, "eski kullanıcı")
+    store.close()
     s, _ = _desk_service(tmp_path, module_service, facts)
     try:
         u = s.login("FRN Bakan")["user"]
         me = user_key(u)
         assert s.bond_flag(u, "TRT020130T19", True)["added"] is True
-        s.list_add(u, "tto", "DİBS RV!A5:A54", [NEW_FRN, NEW_TLREF])                  # not on Tüm Kâğıtlar: Bloomberg says
         rows = s._list_values(u, "tto", "DİBS RV!A5:A54")
         r, t = rows.index("TRT020130T19") + 5, rows.index("TRT090130T12") + 5
         rn, rt = rows.index(NEW_FRN) + 5, rows.index(NEW_TLREF) + 5
@@ -1217,7 +1222,7 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         asw_last = max(k for k, v in enumerate(asw_before) if v)
         res = s.bond_flag(u, "trt190128t14", True)
         assert res == {"isin": "TRT190128T14", "on": True, "added": True, "cells": ["DİBS RV!A%d" % (5 + last + 1)], "asw": True,
-                       "gen": res["gen"]}
+                       "follow": {"asw_added": ["TRT190128T14"], "text": "DİBS ASW'ye de eklendi: 19.01.28 TLREF"}, "gen": res["gen"]}
         r = 5 + last + 1
         # the ASW workbook's list follows the trading list: below its last bond, for everyone
         ra = 7 + asw_last + 1
@@ -1264,3 +1269,129 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
             assert client.post("/api/bonds/flag", json={"isin": "X", "on": True}, headers=hdr).status_code == 400
     finally:
         s.stop()
+
+
+def test_the_asw_list_and_tum_kagitlar_follow_the_trading_list_by_every_route(tmp_path, module_service):
+    """A bond that comes onto the trading list - "+ ISIN ekle" (DİBS Trading's and DİBS RV's: one list), typed, pasted
+    with others, ★ - goes onto the DİBS ASW list too (below its last bond) and onto Tüm Kâğıtlar when that does not have
+    it (Bloomberg says what it is; a USD bond is not taken there); one that leaves it - its ISIN blanked or typed over, ☆,
+    ✕, the desk's list reset to the file's - leaves the ASW list with what its row held there, for everyone.  A bond
+    moved within the list is neither; a bond the ASW page added itself stays; a full ASW list leaves the bond on the
+    trading list only, and the toast says so."""
+    s, _ = _desk_service(tmp_path, module_service, FACTS)
+    trading, asw_list = "DİBS RV!A5:A54", "ASW!B7:B56"
+    try:
+        u, other = s.login("Liste İzleyen")["user"], s.login("Öteki Masa")["user"]
+        mine, theirs = user_key(u), user_key(other)
+
+        def lst(book="tto"):
+            return s._list_values(u, book, trading if book == "tto" else asw_list)
+
+        def at(code, book="tto"):
+            return lst(book).index(code) + (5 if book == "tto" else 7)
+
+        assert [c for c in lst() if c] == [c for c in lst("asw") if c]           # (the desk's data: the same 19 bonds)
+        end = 7 + max(k for k, v in enumerate(lst("asw")) if v) + 1              # the ASW list's first row below its last bond
+        free = 5 + max(k for k, v in enumerate(lst()) if v) + 1
+        # "+ ISIN ekle" (DİBS Trading / DİBS RV): onto the ASW list too, below its last bond
+        res = s.list_add(u, "tto", trading, ["TRT130127T11"])
+        assert res["follow"] == {"asw_added": ["TRT130127T11"], "text": "DİBS ASW'ye de eklendi: 13.01.27 TLREF"}
+        assert cell(s, "ASW!B%d" % end, book="asw") == "TRT130127T11"
+        # typed: a new issue goes onto Tüm Kâğıtlar too - Bloomberg says what it is
+        res = s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % (free + 2), "value": NEW_FIXED.lower()}])
+        assert res["follow"]["asw_added"] == [NEW_FIXED] and res["follow"]["desk_added"] == [NEW_FIXED]
+        assert "Tüm Kâğıtlar'a eklendi: 12.05.33" in res["follow"]["text"] and at(NEW_FIXED, "asw") == end + 1
+        assert bd.by_isin(NEW_FIXED)["kind"] == "fixed" and NEW_FIXED in s._uni_rows
+        # pasted, several at once: a USD bond goes on the ASW list but not on Tüm Kâğıtlar; text that is no ISIN goes nowhere
+        res = s.paste(u, "tto", "DİBS RV!A%d" % (free + 4), "TRT061027F15\n%s\nabc" % NEW_TLREF)
+        f = res["follow"]
+        assert f["asw_added"] == ["TRT061027F15", NEW_TLREF] and f["desk_added"] == [NEW_TLREF] and f["invalid"] == ["ABC"]
+        assert [x["isin"] for x in f["desk_refused"]] == ["TRT061027F15"] and "USD cinsi" in f["text"] and "ISIN değil" in f["text"]
+        assert "TRT061027F15" not in s._uni_rows and NEW_TLREF in s._uni_rows
+        # what a bond's ASW row holds - the desk's source, anyone's manual price and curve flag - goes with it when it leaves
+        ra = at("TRT130127T11", "asw")
+        s.set_inputs(u, "asw", [{"ref": "ASW!C%d" % ra, "value": "ISL0"}, {"ref": "ASW!E%d" % ra, "value": "x"}])
+        s.set_inputs(other, "asw", [{"ref": "ASW!D%d" % ra, "value": 98.5}])
+        res = s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % at("TRT130127T11"), "value": ""}])          # its ISIN blanked
+        assert res["follow"] == {"asw_removed": ["TRT130127T11"], "text": "DİBS ASW'den de çıkarıldı: 13.01.27 TLREF"}
+        assert res["row_values"]["cleared"] == [{"isin": "TRT130127T11", "row": ra, "values": 3}] and "DİBS ASW" in res["row_values"]["text"]
+        assert [cell(s, "ASW!%s%d" % (c, ra), user=who, book="asw") for c, who in (("B", None), ("C", None), ("D", theirs), ("E", mine))] \
+            == [None, None, None, None]
+        # typed over: the bond that leaves takes its ASW row along, the new one goes below the ASW list's last bond
+        res = s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % at(NEW_FIXED), "value": "TRT190128T14"}])
+        assert (res["follow"]["asw_removed"], res["follow"]["asw_added"]) == ([NEW_FIXED], ["TRT190128T14"])
+        assert NEW_FIXED not in lst("asw") and "TRT190128T14" in lst("asw") and NEW_FIXED in s._uni_rows   # (Tüm Kâğıtlar keeps it)
+        # moved within the list in one write (a paste re-sorting it): the ASW list does not change
+        before = lst("asw")
+        res = s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % at("TRT190128T14"), "value": ""},
+                                      {"ref": "DİBS RV!A%d" % (free + 12), "value": "TRT190128T14"}])
+        assert res["errors"] == [] and "follow" not in res and lst("asw") == before
+        # ☆ and ✕ (Tüm Kâğıtlar): off the ASW list too
+        res = s.bond_flag(u, "TRT061027F15", False)
+        assert res["asw"] is True and res["follow"]["asw_removed"] == ["TRT061027F15"] and "TRT061027F15" not in lst("asw")
+        res = s.bond_list_remove(u, NEW_TLREF)
+        assert res["trading"] is True and res["follow"]["asw_removed"] == [NEW_TLREF] and NEW_TLREF not in lst("asw")
+        # a bond the ASW page added itself is no trading bond: ✕ on Tüm Kâğıtlar leaves it on the ASW list
+        s.list_add(u, "asw", asw_list, ["TRT020130T19"])
+        res = s.bond_list_remove(u, "TRT020130T19")
+        assert res["removed"] is True and res["trading"] is False and "follow" not in res and "TRT020130T19" in lst("asw")
+        # taken off the ASW page itself, a trading bond comes back with ★ (as ★ always made sure)
+        s.set_inputs(u, "asw", [{"ref": "ASW!B%d" % at("TRT150328T24", "asw"), "value": ""}])
+        assert "TRT150328T24" not in lst("asw") and "TRT150328T24" in lst()
+        res = s.bond_flag(u, "TRT150328T24", True)
+        assert res["added"] is False and res["asw"] is True and "TRT150328T24" in lst("asw")
+        # a full ASW list: the trading list still takes the bond, the toast says the ASW list had no room
+        room = [k for k, v in enumerate(lst("asw")) if not v]
+        spare = [b["isin"] for b in bd.listed(s._bond_day()) if b["isin"] not in lst() and b["isin"] not in lst("asw")]
+        fill = [{"ref": "ASW!B%d" % (7 + k), "value": code} for k, code in zip(room, spare[1:])]
+        assert len(fill) == len(room) and s.set_inputs(u, "asw", fill)["errors"] == [] and "" not in lst("asw")
+        res = s.bond_flag(u, spare[0], True)
+        assert res["added"] is True and res["asw"] is False and res["follow"]["asw_full"] == [spare[0]] and spare[0] in lst()
+        assert "DİBS ASW listesinde yer yok: %s yalnız trading listesine girdi" % bd.short_label(bd.by_isin(spare[0])) in res["follow"]["text"]
+        s.set_inputs(u, "asw", [{"ref": x["ref"], "value": ""} for x in fill])
+        # the desk's list reset to the file's: the bonds that leave it leave the ASW list too
+        res = s.reset_inputs(u, "tto", [trading], shared=True)
+        assert res["follow"]["asw_removed"] == ["TRT190128T14"] and "TRT190128T14" not in lst("asw")
+        assert sorted(c for c in lst() if c) == sorted(c for c in lst("asw") if c and c != "TRT020130T19")
+        # the same over HTTP (last: leaving the client stops the service)
+        hdr = auth(s, u)
+        with TestClient(create_app(s)) as client:
+            got = client.post("/api/list/add", json={"book": "tto", "list": trading, "values": ["TRT130127T11"]}, headers=hdr).json()
+            assert got["follow"]["asw_added"] == ["TRT130127T11"]
+            got = client.post("/api/inputs", json={"book": "tto", "items": [{"ref": "DİBS RV!A%d" % at("TRT130127T11"), "value": ""}]},
+                              headers=hdr).json()
+            assert got["follow"]["asw_removed"] == ["TRT130127T11"]
+            got = client.post("/api/bonds/flag", json={"isin": "TRT130127T11", "on": True}, headers=hdr).json()
+            assert got["asw"] is True and got["follow"]["text"] == "DİBS ASW'ye de eklendi: 13.01.27 TLREF"
+    finally:
+        s.stop()
+
+
+def test_once_the_trading_lists_bonds_the_asw_list_lacks_go_onto_it(tmp_path, caplog):
+    """The first start of this version, once: a bond of the trading list that the ASW list does not have goes onto it,
+    below its last bond (a value typed on that empty row goes, as when ★ puts a bond there) - the log says so.  Taken
+    off the ASW page afterwards, it stays off."""
+    s = make_service(tmp_path)
+    try:
+        u = s.login("Eşleyen Masa")["user"]
+        assert s.store.get(s.ASW_SYNCED)                                         # (the desk's lists: nothing was missing)
+        asw = s._list_values(u, "asw", "ASW!B7:B56")
+        s.set_inputs(u, "asw", [{"ref": "ASW!B%d" % (7 + asw.index("TRT150328T24")), "value": ""}])   # as an earlier version left it
+        end = 7 + max(k for k, v in enumerate(s._list_values(u, "asw", "ASW!B7:B56")) if v) + 1
+        s.set_inputs(u, "asw", [{"ref": "ASW!D%d" % end, "value": 97.0}])
+        s.store.put(s.ASW_SYNCED, None)
+    finally:
+        s.stop()
+    caplog.set_level(logging.INFO, logger="tto")
+    again = make_service(tmp_path)
+    try:
+        assert cell(again, "ASW!B%d" % end, book="asw") == "TRT150328T24"
+        assert cell(again, "ASW!D%d" % end, user_key(u), book="asw") is None
+        said = [r.getMessage() for r in caplog.records if "bir kereye mahsus" in r.getMessage()]
+        assert len(said) == 1 and "TRT150328T24 → ASW!B%d" % end in said[0]
+        assert again.store.get(again.ASW_SYNCED)                                 # once
+        again.set_inputs(u, "asw", [{"ref": "ASW!B%d" % end, "value": ""}])
+        again.et.call(again._asw_follows_once)
+        assert "TRT150328T24" not in again._list_values(u, "asw", "ASW!B7:B56")
+    finally:
+        again.stop()

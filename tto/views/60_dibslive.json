@@ -55,7 +55,7 @@
     "list": "DİBS RV!A5:A54",
     "name": "dibs",
     "catalog": true,
-    "title": "DİBS listesine kâğıt ekle (DİBS RV ile ortak)"
+    "title": "DİBS listesine kâğıt ekle (DİBS RV ile ortak; DİBS ASW listesine de eklenir)"
    },
    "append": "dibs_live",
    "wide": true,

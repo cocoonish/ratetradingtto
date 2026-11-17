@@ -131,7 +131,7 @@
    "add": {
     "list": "B7:B56",
     "catalog": true,
-    "title": "DİBS ASW listesine kâğıt ekle"
+    "title": "DİBS ASW listesine kâğıt ekle (yalnız bu liste; trading listesi değişmez)"
    },
    "trade": {
     "first": 7,

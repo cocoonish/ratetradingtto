@@ -154,7 +154,7 @@
    "add": {
     "list": "A5:A54",
     "catalog": true,
-    "title": "DİBS RV listesine kâğıt ekle"
+    "title": "DİBS RV listesine kâğıt ekle (trading listesi: DİBS ASW listesine de eklenir)"
    },
    "append": "broker_bonds",
    "card": "bond",

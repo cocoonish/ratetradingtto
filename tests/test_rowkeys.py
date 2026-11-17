@@ -96,9 +96,13 @@ def test_a_bond_typed_over_another_takes_nothing_of_it(svc):
     s.set_inputs(a, "tto", [{"ref": "DİBS RV!Z%d" % r, "value": "-80"}], allow_adhoc=True)
     s.set_inputs(b, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": "41"}, {"ref": "DİBS RV!B%d" % r, "value": "ISL0"}])
     s.save_scenario(b, "eski")
+    ra = row_of(s, a, "TRT081128T15", ASW, "asw")
     res = s.set_inputs(b, "tto", [{"ref": "DİBS RV!A%d" % r, "value": "trt130127t11"}])
-    assert res["row_values"]["cleared"] == [{"isin": "TRT081128T15", "row": r, "values": 5}] and res["row_values"]["moved"] == []
-    assert "TRT081128T15 listeden çıktı" in res["row_values"]["text"]
+    # ... off the ASW list too, which follows the trading list - with the workbook's own source for it there
+    assert res["row_values"]["cleared"] == [{"isin": "TRT081128T15", "row": r, "values": 5},
+                                            {"isin": "TRT081128T15", "row": ra, "values": 1}] and res["row_values"]["moved"] == []
+    assert res["follow"]["asw_removed"] == ["TRT081128T15"] and res["follow"]["asw_added"] == ["TRT130127T11"]
+    assert "TRT081128T15 listeden çıktı" in res["row_values"]["text"] and res["row_values"]["lists"] == ["dibs", "asw"]
     # the new bond's own source is blank (the general one), not the old one's - nor the workbook's for the old one
     assert s._list_values(a, "tto", LIST)[r - 5] == "TRT130127T11" and cell(s, "DİBS RV!B%d" % r) is None
     assert cell(s, "DİBS RV!N%d" % r, ua) is None and cell(s, "DİBS RV!AL%d" % r, ub) is None

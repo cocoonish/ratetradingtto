@@ -10,6 +10,7 @@ import concurrent.futures
 import datetime as _dt
 import itertools
 import json
+import logging
 import math
 import os
 import queue
@@ -49,7 +50,9 @@ from .xl.tokenizer import col_to_index, index_to_col
 from .marketdata.base import INVALID_FIELD, INVALID_SECURITY, NOT_APPLICABLE
 from .xl.values import date_to_serial, serial_to_date
 
-RET_TENORS = ["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
+log = logging.getLogger("tto")
+
+RET_TENORS =["ON", "TN", "1W", "2W", "3W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y", "18M", "2Y"]
 RET_FIRST_ROW = 33
 
 
@@ -284,6 +287,11 @@ class Service(object):
         formulas = InputFormulas(self)
         self.et.call(formulas.start)
         self.formulas = formulas
+        try:
+            # once: the trading list's bonds the ASW list does not have go onto it (it follows the trading list from now on)
+            self.et.call(self._asw_follows_once)
+        except Exception as exc:  # noqa: BLE001 - tried again at the next start; the dashboard opens anyway
+            self.ops.failure("DİBS ASW listesinin trading listesiyle eşlenmesi", exc)
         # temporary copies of the calculator tables (copies.py): inputs of their own, in a layer over the user's calculation
         from .copies import Copies
         self.copies = Copies(self)
@@ -2555,9 +2563,12 @@ class Service(object):
         ``lenient`` (a block pasted from Excel): cells that are not inputs are skipped and counted, not errors.
         A text that starts with ``=`` is a formula (inputformula.py): its result is the value, it is evaluated again
         whenever what it reads changes; refused - with the reason among the errors - as that module says.
+        A change of the trading list (DİBS RV's ISINs) takes the ASW list and Tüm Kâğıtlar along (``follow``:
+        :meth:`_follow_trading`).
         """
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
+        self._follow_trading(user, res)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -2699,6 +2710,7 @@ class Service(object):
                 self._follow_meetings(book, cal, slot_to, typed_to, x) for x in (user_vals, user_clear, shared_vals, shared_clear))
         # ISINs of a list of bonds written: what each row held goes with its bond first (rowkeys.py) - the values written
         # with them land on the rows as typed
+        trading = self._trading_before(book, list(shared_vals) + list(shared_clear))
         row_values = self.rowkeys.before_write(user, book, shared_vals, shared_clear, user_vals, user_clear)
         if shared_clear:
             book.engine.clear_inputs(shared_clear)
@@ -2739,6 +2751,8 @@ class Service(object):
                 res["note"] = calendar["note"]         # (what the change did, as the page's toast says it)
         if row_values:
             res["row_values"] = row_values
+        if trading is not None:
+            self._trading_after(trading, res)
         if lenient:
             res["skipped"] = skipped
         return res
@@ -2862,6 +2876,7 @@ class Service(object):
         """Back to the workbook's own values (personal inputs; ``shared`` for desk inputs)."""
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._reset_inputs, user, book_id, refs, shared)
+        self._follow_trading(user, res)            # (the trading list back to the file's: the ASW list follows)
         self.bump()
         res["gen"] = self.gen
         return res
@@ -2876,6 +2891,7 @@ class Service(object):
                 except (KeyError, ValueError):
                     continue
         n = 0
+        res: Dict[str, Any] = {}
         if shared:
             from . import meetings as mt
             cal = next((c for c in (mt.key_of(book, si, rc) for si, rc in cells) if c is not None), None)
@@ -2885,12 +2901,15 @@ class Service(object):
                 raise ServiceError("toplantı tarihleri dosyadaki değere döndürülmez – listeyi %s üzerinden düzeltin "
                                    "(toplantıya yazılanlar toplantısıyla taşınır)" % cal.where)
             keep = [c for c in cells if c in book.inputs and book.inputs[c].scope == "shared"]
+            trading = self._trading_before(book, keep)
             rows = self.rowkeys.before_write(user, book, {}, keep, {}, [])     # (a list of bonds back to the file's)
             book.engine.clear_inputs(keep)
             self.store.clear_shared_inputs(book.id, [book.ref(si, rc) for si, rc in keep])
             self.formulas.cleared("", book, keep)        # (a formula there goes with its value)
             self._follow_try_holidays(book, keep)
             n = len(keep)
+            if trading is not None:
+                self._trading_after(trading, res)        # (the trading list back to the file's: what entered, what left)
         else:
             rows = self.rowkeys.before_write(user, book, {}, [], {}, cells if refs else list(self._overlay(user, book)))
             ov = dict(self._overlay(user, book))
@@ -2907,7 +2926,10 @@ class Service(object):
                 self.store.clear_user_inputs(user, book.id)
             self.formulas.cleared(user, book, targets if refs else None)
             self._note_private(user)
-        return dict({"reset": n}, **({"row_values": rows} if rows else {}))
+        res["reset"] = n
+        if rows:
+            res["row_values"] = rows
+        return res
 
     # ================================================================== temporary copies of a table (copies.py)
     def copies_of(self, user: Optional[str]) -> Dict[str, Any]:
@@ -4149,10 +4171,7 @@ class Service(object):
         wanted = self._isins(values)
         skipped = [c for c in wanted if c in current]
         todo = [c for c in wanted if c not in current]
-        # below the last bond of the list first: the empty rows the desk keeps between its groups stay empty
-        # until there is no room left at the end
-        last = max([k for k, v in enumerate(current) if v] or [-1])
-        free = [k for k, v in enumerate(current) if not v and k > last] + [k for k, v in enumerate(current) if not v and k < last]
+        free = self._free_rows(current)
         if len(todo) > len(free):
             raise ServiceError("listede %d boş satır var, %d kâğıt eklenmek istendi" % (len(free), len(todo)))
         items = [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, todo)]
@@ -4162,70 +4181,229 @@ class Service(object):
         out = {"added": todo, "skipped": skipped, "cells": [i["ref"] for i in items], "free": len(free) - len(todo), "gen": self.gen}
         if res.get("row_values"):
             out["row_values"] = res["row_values"]                # (values left on a row with no bond: gone - rowkeys.py)
+        if res.get("follow"):
+            out["follow"] = res["follow"]                        # (the trading list's: the ASW list and Tüm Kâğıtlar too)
         return out
+
+    @staticmethod
+    def _free_rows(current: List[str]) -> List[int]:
+        """The empty places of a list in the order bonds go into them: below its last bond first - the empty rows the
+        desk keeps between its groups stay empty until there is no room left at the end."""
+        last = max([k for k, v in enumerate(current) if v] or [-1])
+        return [k for k, v in enumerate(current) if not v and k > last] + [k for k, v in enumerate(current) if not v and k < last]
 
     #: the trading list: the bonds of DİBS RV (and so of DİBS Trading)
     TRADING_LIST = ("tto", "DİBS RV!A5:A54")
-    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: ★ / ☆ there too
+    #: the ASW workbook's list of bonds (its curve and charts) follows the trading list: a bond that comes onto the trading
+    #: list - ★, "+ ISIN ekle", typed or pasted - goes onto it too, one that leaves it (☆, ✕, its ISIN blanked or typed
+    #: over) leaves it too; a bond the ASW page added itself stays until it is taken off there
     ASW_LIST = ("asw", "ASW!B7:B56")
+    #: the store's key: the trading list's bonds were put on the ASW list once, at the first start of this version
+    ASW_SYNCED = "migrated.asw_follows_trading"
 
-    def _list_off(self, user: str, book_id: str, ref: str, code: str) -> Tuple[int, Optional[Dict[str, Any]]]:
-        """A bond off a list of bonds: its rows empty - what they held goes with it, for everyone (its source, everyone's
-        manual price, coupon, repo, "Elle değer", in the saved scenarios too: rowkeys.py).  Returns the rows emptied and
-        what went."""
+    def _list_off(self, user: str, book_id: str, ref: str, codes: Sequence[str]) -> Tuple[int, Dict[str, Any]]:
+        """Bonds off a list of bonds: their rows empty - what they held goes with them, for everyone (the source,
+        everyone's manual price, coupon, repo, "Elle değer", in the saved scenarios too: rowkeys.py).  Returns the rows
+        emptied and the write's result (``row_values``: what went; the trading list's ``follow``)."""
         book = self._book(book_id)
         cells = book.cells_of(ref)
         current = self._list_values(user, book_id, ref)
-        rows = [cells[k] for k, v in enumerate(current) if v == code]
+        rows = [cells[k] for k, v in enumerate(current) if v and v in codes]
         if not rows:
-            return 0, None
+            return 0, {}
         res = self.set_inputs(user, book_id, [{"ref": book.ref(*c), "value": None} for c in rows])
         if res["errors"]:
             raise ServiceError("; ".join(res["errors"]))
-        return len(rows), res.get("row_values")
+        return len(rows), res
 
-    def _asw_follows(self, user: str, code: str, on: bool) -> Tuple[Optional[bool], Optional[Dict[str, Any]]]:
-        """The ASW workbook's list with the trading list: the bond added (``on``) or taken off there too.  ``None``: no
-        ASW list here; False: nothing to do (already listed / not listed, or no room left - the trading list still
-        takes it).  With what moved / went of its rows' values."""
+    def _asw_here(self) -> bool:
+        """The ASW workbook's list of bonds is here (its book and its ISIN cells, inputs of the page)."""
         book_id, ref = self.ASW_LIST
         book = self.books.get(book_id)
         try:
-            if book is None or not all(c in book.inputs for c in book.cells_of(ref)):
-                return None, None
+            return book is not None and all(c in book.inputs for c in book.cells_of(ref))
         except (KeyError, ValueError):
-            return None, None
-        if on:
-            try:
-                res = self.list_add(user, book_id, ref, [code])
-                return bool(res["added"]), res.get("row_values")
-            except ServiceError:
-                return False, None
-        removed, rows = self._list_off(user, book_id, ref, code)
-        return removed > 0, rows
+            return False
+
+    def _trading_before(self, book: Book, cells: Sequence[Tuple[int, int]]) -> Optional[List[str]]:
+        """The trading list's ISINs before a write of the desk's values that touches its cells (None: it does not) -
+        on the calculation thread, with the write."""
+        if book.id != self.TRADING_LIST[0] or not cells:
+            return None
+        try:
+            mine = set(book.cells_of(self.TRADING_LIST[1]))
+        except (KeyError, ValueError):
+            return None
+        if not any(c in mine for c in cells):
+            return None
+        return self.rowkeys.keys("dibs")
+
+    def _trading_after(self, before: List[str], res: Dict[str, Any]) -> None:
+        """What a write did to the trading list: the bonds that came onto it and the ones that left it (``trading`` of
+        the result; :meth:`_follow_trading` takes the other lists along, off the calculation thread).  A bond moved
+        within the list in one write (a paste re-sorting it) is neither."""
+        after = self.rowkeys.keys("dibs")
+        entered = [c for c in dict.fromkeys(after) if c and c not in before]
+        left = [c for c in dict.fromkeys(before) if c and c not in after]
+        if entered or left:
+            res["trading"] = {"entered": entered, "left": left}
+
+    def _follow_trading(self, user: str, res: Dict[str, Any]) -> None:
+        """After a write that changed the trading list: the ASW list and Tüm Kâğıtlar follow it (``follow`` of the
+        result says what they did; what the ASW list's rows held and where it went joins ``row_values``)."""
+        change = res.pop("trading", None)
+        if not change:
+            return
+        from .rowkeys import merge_notes
+        try:
+            follow, notes = self._trading_follows(user, change["entered"], change["left"])
+        except Exception as exc:  # noqa: BLE001 - the trading list is written: what could not follow is said, not raised
+            self.ops.failure("trading listesini izleyen listeler (DİBS ASW, Tüm Kâğıtlar)", exc)
+            why = str(exc)[:200] or type(exc).__name__
+            res["follow"] = {"errors": [why], "text": "DİBS ASW / Tüm Kâğıtlar trading listesini izleyemedi: " + why}
+            return
+        told = merge_notes([x for x in (res.get("row_values"), notes) if x])
+        if told:
+            res["row_values"] = told
+        if follow:
+            res["follow"] = follow
+
+    def _trading_follows(self, user: str, entered: Sequence[str], left: Sequence[str]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """The ASW list and Tüm Kâğıtlar with the trading list: the bonds that ``left`` it off the ASW list (with their
+        rows' values, for everyone), the ones that ``entered`` it onto the ASW list (below its last bond; the ones it
+        has no room for stay on the trading list only) and onto Tüm Kâğıtlar when that does not have them (Bloomberg
+        tells their kind, as its "+ ISIN ekle" does).  Text that is no ISIN goes nowhere.  Returns what was done
+        (``asw_added``, ``asw_removed``, ``asw_full``, ``desk_added``, ``desk_waiting``, ``desk_refused``, ``invalid``,
+        ``text``) and what the ASW list's rows held and where it went."""
+        valid = [c for c in entered if bd.isin_valid(c)]
+        out: Dict[str, Any] = {"invalid": [c for c in entered if not bd.isin_valid(c)]}
+        notes = None
+        if self._asw_here():
+            got = self._asw_follow(user, valid, left)
+            out.update(asw_added=got["added"], asw_removed=got["removed"], asw_full=got["full"])
+            notes = got["row_values"]
+            if got["errors"]:
+                out["asw_errors"] = got["errors"]
+        listed = {b["isin"] for b in bd.listed(self._bond_day())}
+        new = [c for c in valid if c not in listed]
+        if new:
+            desk = self.bond_list_add(user, new)
+            out.update(desk_added=[x["isin"] for x in desk["added"]], desk_waiting=list(desk["waiting"]),
+                       desk_refused=[{"isin": x["isin"], "text": x["text"]} for x in desk["refused"]])
+        out = {k: v for k, v in out.items() if v}
+        if out:
+            out["text"] = self._follow_text(out)
+        return out, notes
+
+    def _asw_follow(self, user: str, entered: Sequence[str], left: Sequence[str]) -> Dict[str, Any]:
+        """The ASW list in one write: the rows of the bonds that ``left`` the trading list emptied, the ones that
+        ``entered`` it below the list's last bond (into the rows between when the end is full) - each once, the ones
+        listed already skipped, the ones there is no room for left out (``full``)."""
+        book_id, ref = self.ASW_LIST
+        book = self.books[book_id]
+        cells = book.cells_of(ref)
+        current = self._list_values(user, book_id, ref)
+        now = list(current)
+        items: List[Dict[str, Any]] = []
+        removed: List[str] = []
+        for k, v in enumerate(current):
+            if v and v in left:
+                now[k] = ""
+                items.append({"ref": book.ref(*cells[k]), "value": None})
+                if v not in removed:
+                    removed.append(v)
+        todo = [c for c in dict.fromkeys(entered) if c not in now]
+        free = self._free_rows(now)
+        fit, full = todo[:len(free)], todo[len(free):]
+        items += [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, fit)]
+        res = self.set_inputs(user, book_id, items) if items else {"errors": []}
+        return {"added": fit, "removed": removed, "full": full, "row_values": res.get("row_values"),
+                "errors": list(res.get("errors") or [])}
+
+    @staticmethod
+    def _bond_name(code: str) -> str:
+        """A bond as a toast names it: as the desk does ("15.03.28", "19.01.28 TLREF"), else its ISIN."""
+        b = bd.by_isin(code)
+        return bd.short_label(b) if b and b.get("maturity") else code
+
+    def _follow_text(self, f: Dict[str, Any]) -> str:
+        """What the ASW list and Tüm Kâğıtlar did with a change of the trading list, as the toast says it."""
+        def names(codes: Sequence[str]) -> str:
+            return ", ".join(self._bond_name(c) for c in codes)
+        parts = []
+        if f.get("asw_added"):
+            parts.append("DİBS ASW'ye de eklendi: " + names(f["asw_added"]))
+        if f.get("asw_removed"):
+            parts.append("DİBS ASW'den de çıkarıldı: " + names(f["asw_removed"]))
+        if f.get("asw_full"):
+            parts.append("DİBS ASW listesinde yer yok: %s yalnız trading listesine girdi" % names(f["asw_full"]))
+        if f.get("asw_errors"):
+            parts.append("DİBS ASW listesine yazılamadı: " + "; ".join(f["asw_errors"]))
+        if f.get("desk_added"):
+            waiting = [c for c in f["desk_added"] if c in (f.get("desk_waiting") or ())]
+            parts.append("Tüm Kâğıtlar'a eklendi: " + names(f["desk_added"])
+                         + (" (türü Bloomberg'den bekleniyor: %s)" % names(waiting) if waiting else ""))
+        if f.get("desk_refused"):
+            parts.append("Tüm Kâğıtlar'a alınmadı: " + ", ".join("%s (%s)" % (x["isin"], x["text"]) for x in f["desk_refused"]))
+        if f.get("invalid"):
+            parts.append("ISIN değil, DİBS ASW'ye ve Tüm Kâğıtlar'a gitmedi: " + ", ".join(f["invalid"]))
+        return " · ".join(parts)
+
+    def _asw_follows_once(self) -> None:
+        """Once, at the first start of this version: a bond of the trading list that the ASW list does not have goes
+        onto it (below its last bond, as ★ puts it); from then on the ASW list follows every change of the trading list.
+        Said in the log (on the desk's data both lists held the same bonds: nothing moves)."""
+        if self.store.get(self.ASW_SYNCED) or not self._asw_here():
+            return
+        book_id, ref = self.ASW_LIST
+        book = self.books[book_id]
+        trading = [c for c in dict.fromkeys(self.rowkeys.keys("dibs")) if c and bd.isin_valid(c)]
+        current = self.rowkeys.keys("asw")
+        missing = [c for c in trading if c not in current]
+        free = self._free_rows(current)
+        cells = book.cells_of(ref)
+        items = [{"ref": book.ref(*cells[k]), "value": code} for k, code in zip(free, missing)]
+        if items:
+            res = self._set_inputs(None, book_id, items, False)
+            log.info("DİBS ASW listesi trading listesini izliyor (bir kereye mahsus): trading listesinin ASW'de olmayan %d kâğıdı "
+                     "eklendi - %s%s", len(items), ", ".join("%s → %s" % (i["value"], i["ref"]) for i in items),
+                     " · hata: " + "; ".join(res["errors"]) if res.get("errors") else "")
+        else:
+            log.info("DİBS ASW listesi trading listesini izliyor: trading listesinin %d kâğıdı ASW listesinde zaten var", len(trading))
+        if len(missing) > len(free):
+            log.warning("DİBS ASW listesinde yer yok: %s ASW listesine eklenemedi", ", ".join(missing[len(free):]))
+        self.store.put(self.ASW_SYNCED, now_iso())
 
     def bond_flag(self, user: str, isin: str, on: bool) -> Dict[str, Any]:
-        """★ a bond: onto the trading list (below its last bond) or off it - for everyone.  A bond taken off leaves
-        its row empty, with nothing of it left behind (its source, everyone's manual price, coupon, repo, "Elle değer" -
-        in the saved scenarios too).  ``row_values``: what of the rows' values moved / went (rowkeys.py)."""
-        from . import bonds as bd
+        """★ a bond: onto the trading list (below its last bond) or off it - for everyone, the ASW list with it (and Tüm
+        Kâğıtlar, for a bond it does not have).  A bond taken off leaves its rows empty, with nothing of it left behind
+        (its source, everyone's manual price, coupon, repo, "Elle değer" - in the saved scenarios too).  ``asw``: the ASW
+        list took it / let it go (None: no ASW list here); ``follow``: what the other lists did; ``row_values``: what of
+        the rows' values moved / went (rowkeys.py)."""
         from .rowkeys import merge_notes
         user = self.require_user(user)
         code = "".join(str(isin or "").split()).upper()
         if not bd.isin_valid(code):
             raise ServiceError("ISIN değil ya da kontrol hanesi tutmuyor: %s" % (code or "(boş)"))
         book_id, ref = self.TRADING_LIST
+        asw_here = self._asw_here()
         if on:
             res = self.list_add(user, book_id, ref, [code])
-            asw, rows = self._asw_follows(user, code, True)
-            out = {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"], "asw": asw, "gen": self.gen}
-            told = merge_notes([x for x in (res.get("row_values"), rows) if x])
+            follow, told = res.get("follow") or {}, res.get("row_values")
+            if not res["added"]:
+                # on the trading list already: the ASW list and Tüm Kâğıtlar have it still, as ★ always made sure
+                follow, notes = self._trading_follows(user, [code], [])
+                told = merge_notes([x for x in (told, notes) if x])
+            out = {"isin": code, "on": True, "added": bool(res["added"]), "cells": res["cells"],
+                   "asw": code in (follow.get("asw_added") or ()) if asw_here else None, "gen": self.gen}
         else:
-            removed, rows = self._list_off(user, book_id, ref, code)
-            asw, asw_rows = self._asw_follows(user, code, False)
+            removed, res = self._list_off(user, book_id, ref, [code])
+            follow, told = res.get("follow") or {}, res.get("row_values")
             self.bump()
-            out = {"isin": code, "on": False, "removed": removed, "asw": asw, "gen": self.gen}
-            told = merge_notes([x for x in (rows, asw_rows) if x])
+            out = {"isin": code, "on": False, "removed": removed,
+                   "asw": code in (follow.get("asw_removed") or ()) if asw_here else None, "gen": self.gen}
+        if follow:
+            out["follow"] = follow
         if told:
             out["row_values"] = told
         return out
@@ -4485,6 +4663,8 @@ class Service(object):
         told = merge_notes([x for x in (off.get("row_values"), uni) if x])
         if told:
             out["row_values"] = told                     # (what was typed on its rows went with it)
+        if off.get("follow"):
+            out["follow"] = off["follow"]                # (off the trading list: off the ASW list too)
         return out
 
     def _universe_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
