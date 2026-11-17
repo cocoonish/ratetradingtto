@@ -4597,6 +4597,117 @@ async function clipAfter(page, action) {
       null, { timeout: 10000 });
     check('"Hepsini göster": the pages back in the menu', (await savedLayout((l) => !(l.hidden_pages || []).length)).hidden_pages.length === 0);
 
+    // ------------------------------------------------------------------ Bugün (the morning screen) and Ctrl+K's commands
+    console.log('Bugün and Ctrl+K commands');
+    await open(page, 'bugun');
+    await page.waitForSelector('#bugun-ret-state', { timeout: 30000 });
+    const bgSeen = await page.evaluate(() => {
+      const masa = [...document.querySelectorAll('#nav .nav-group')].find((g) => (g.querySelector('.gt') || {}).textContent === 'Masa');
+      const has = (id) => !!document.getElementById(id);
+      return { cards: [...document.querySelectorAll('#bugun .bugun-card')].map((c) => c.id),
+        menu: masa ? [...masa.querySelectorAll('.nav-item')].slice(0, 2).map((a) => a.dataset.page) : [],
+        ret: document.getElementById('bugun-ret-state').textContent,
+        each: ['trades', 'quant', 'dibs', 'chat'].map((k) => has('bugun-' + k + '-table') || has('bugun-' + k + '-none')),
+        agenda: has('bugun-agenda-items') || has('bugun-agenda-none'), errs: document.querySelectorAll('#bugun .err').length };
+    });
+    const bgStatus = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json;
+    const retToday = !!(bgStatus.ret && bgStatus.ret.updated_at && bgStatus.ret.updated_at.slice(0, 10) === bgStatus.server_date);
+    check('Bugün: in the Masa group right under Masa; six blocks, each with its content or a plain "nothing"',
+      bgSeen.menu.join() === 'masa,bugun' && bgSeen.cards.join() === 'bugun-ret,bugun-trades,bugun-quant,bugun-dibs,bugun-chat,bugun-agenda'
+      && bgSeen.each.every(Boolean) && bgSeen.agenda && bgSeen.errs === 0, bgSeen);
+    check('... the RET block says what the header\'s dot says (loaded today or not)', /^Bugün yüklendi/.test(bgSeen.ret) === retToday,
+      { ret: bgSeen.ret, retToday });
+    const bgRecon = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json;
+    const bgChat = await page.locator('#bugun-chat-table tr[data-line]').count();
+    check('... "Girilmemiş işlemler": the "Girilmedi" lines of the chat ↔ Günlük İşlemler list', bgChat === Math.min(bgRecon.missing, 40),
+      { rows: bgChat, missing: bgRecon.missing });
+    const bgData = (await api(page, 'ayşe yilmaz', 'GET', '/api/bugun')).json;
+    await page.click('#bugun-ret-go');
+    await page.waitForSelector('.modal table.ret');
+    const bgFair = await page.evaluate(() => document.getElementById('ret-tab-fair').classList.contains('on'));
+    check('... its RET button opens the RET dialog on the right tab (fair value when the fair value differs)',
+      !bgData.ret.tab || bgFair === (bgData.ret.tab === 'fair'), { fair: bgFair, tab: bgData.ret.tab });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.modal table.ret'));
+    await shot(page, '90-bugun');
+    // "Açılış sayfası yap": the dashboard opens on Bugün when no address is given
+    await page.click('#bugun-make-landing');
+    await savedLayout((l) => l.landing === 'bugun');
+    await page.goto(BASE + '/');
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'bugun' && window.tto.state.page && window.tto.state.page.ready,
+      null, { timeout: 60000 }).catch(() => null);
+    check('... "Açılış sayfası yap": the dashboard opens on Bugün without an address', await page.evaluate(() => window.location.hash) === '#/bugun'
+      && /Açılış sayfanız/.test(await page.textContent('#bugun-landing')));
+    await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { landing: '' });
+    // Ctrl+K "işlem gir usdtry 1m 10mn": first a command; Günlük İşlemler's form filled - the value date from the pair's
+    // own spot, as the form reads a tenor -, nothing saved
+    const blotterBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('işlem gir usdtry 1m 10mn');
+    await page.waitForSelector('.findlist .hit.cmd');
+    const cmdFirst = await page.textContent('.findlist .hit >> nth=0');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 });
+    await page.waitForFunction(() => /→/.test((document.getElementById('fwd-date-echo') || {}).textContent || ''), null, { timeout: 30000 }).catch(() => null);
+    const cmdFwd = await page.evaluate(() => ({ date: document.getElementById('fwd-date').value, amount: document.getElementById('fwd-amount').value,
+      echo: document.getElementById('fwd-date-echo').textContent, pair: (document.querySelector('#fwd-pair button.on') || { dataset: {} }).dataset.v }));
+    await page.waitForTimeout(400);
+    const blotterAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    check('Ctrl+K "işlem gir usdtry 1m 10mn": the command first; Günlük İşlemler filled (USDTRY, 1M from its spot, 10mn) - not saved',
+      /Günlük İşlemler: USDTRY · valör 1M · 10mn USD/.test(cmdFirst) && cmdFwd.pair === 'USDTRY' && cmdFwd.date === '1M'
+      && cmdFwd.amount === '10mn' && /^1M → \d\d\.\d\d\.\d{4}$/.test(cmdFwd.echo) && blotterAfter === blotterBefore,
+      { cmdFirst, cmdFwd, blotterBefore, blotterAfter });
+    // Ctrl+K "ret yayınla": the RET dialog on the fair value tab - nothing published (that is the user's button)
+    const retMetaBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/ret')).json.meta;
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('ret yayınla');
+    await page.waitForSelector('.findlist .hit.cmd');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#ret-pane-fair:not(.hidden)', { timeout: 30000 });
+    const retFairTab = await page.evaluate(() => document.getElementById('ret-tab-fair').classList.contains('on'));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.modal table.ret'));
+    const retMetaAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/ret')).json.meta;
+    check('Ctrl+K "ret yayınla": the RET dialog on the fair value tab - nothing published', retFairTab
+      && JSON.stringify(retMetaBefore) === JSON.stringify(retMetaAfter), { retFairTab, retMetaBefore, retMetaAfter });
+    // Ctrl+K "trade ois 1y 5mn": the Trades form filled as the user would type it - not saved
+    const tbBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/trades?scope=desk')).json.open.length;
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('trade ois 1y 5mn');
+    await page.waitForSelector('.findlist .hit.cmd');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => { const n = document.getElementById('tf-notional'); return n && n.value === '5mn'; }, null, { timeout: 60000 }).catch(() => null);
+    const tfFilled = await page.evaluate(() => ({ product: (document.querySelector('#tf-product button.on') || {}).textContent,
+      end: (document.getElementById('tf-end_date') || {}).value, notional: (document.getElementById('tf-notional') || {}).value }));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trade-form'), null, { timeout: 10000 }).catch(() => null);
+    const tbAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/trades?scope=desk')).json.open.length;
+    check('Ctrl+K "trade ois 1y 5mn": the Trades form filled (TRY OIS, 1Y, 5mn) - not saved', tfFilled.product === 'TRY OIS'
+      && tfFilled.end === '1Y' && tfFilled.notional === '5mn' && tbAfter === tbBefore, { tfFilled, tbBefore, tbAfter });
+    // Ctrl+K "kâğıt ekle …": the trading list's "+ ISIN ekle" with the ISINs written in - "Ekle" is the user's
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('kâğıt ekle TRT150328T24 TRT130928T38');
+    await page.waitForSelector('.findlist .hit.cmd');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#isin-text', { timeout: 30000 });
+    const isinFilled = await page.evaluate(() => ({ text: document.getElementById('isin-text').value, count: document.getElementById('isin-count').textContent,
+      ready: !document.getElementById('isin-add').disabled }));
+    await page.keyboard.press('Escape');
+    check('Ctrl+K "kâğıt ekle TRT… TRT…": "+ ISIN ekle" opens with both ISINs, waiting for "Ekle"', isinFilled.text === 'TRT150328T24 TRT130928T38'
+      && isinFilled.count === '2 kâğıt eklenecek' && isinFilled.ready, isinFilled);
+    // a command it cannot read says what it expected; Enter runs nothing
+    const pageWas = await page.evaluate(() => window.tto.state.pageId);
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('işlem gir usdtry 1x 10mn');
+    await page.waitForSelector('.findlist .hit.cmd.err');
+    const cmdErr = await page.textContent('.findlist .hit.cmd.err .w');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    const errStays = await page.evaluate(() => !document.querySelector('.findlist').classList.contains('hidden'));
+    await page.keyboard.press('Escape');
+    check('Ctrl+K: a command it cannot read says what it expected; Enter runs nothing', /"1x" vade olarak okunamadı/.test(cmdErr) && errStays
+      && await page.evaluate(() => window.tto.state.pageId) === pageWas, { cmdErr, errStays });
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     // (an entry with tabs: each of its pages)
