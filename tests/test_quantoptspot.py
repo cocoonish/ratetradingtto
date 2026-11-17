@@ -297,6 +297,15 @@ def test_the_card_and_the_line_tell_the_calibrated_levels_when_the_signal_carrie
     assert "hedef 1,80σ, stop 1,20σ (isabet %62, 46 işlem, örneklem dışı; işlem başına +0,21σ)" in sg["plain"] and "hedef 1,25σ" not in sg["plain"]
     assert sg["optspot"]["levels"] == {"source": "kalibrasyon", "target_sigma": 1.8, "stop_sigma": 1.2, "hit": 0.62, "n": 46, "exp": 0.21}
     assert sg["thesis"].endswith("beklenen %s." % qf.exp_text(sg)) and qf.exp_text(sg) != qf.exp_text(own)
+    # the layer's own sentence of them in the card already (``levels["text"]``): told once - the card says what σ is
+    told = "stop 1,20σ · hedef 1,80σ · ödül / risk 1,50 · isabet %62 (46 işlem, örneklem dışı) · işlem başına +0,21σ"
+    lt = dict(LEVELS, text=told)
+    sg2 = dict(own, target=sg["target"], stop=sg["stop"], exp_pnl=sg["exp_pnl"], rr=sg["rr"], px=sg["px"], money=sg["money"],
+               levels=dict(lt, sigma=sg["levels"]["sigma"], sigma_lv=sg["levels"]["sigma_lv"], unit="%"))
+    sg2["plain"] = qf.plain_text(sg2) + " Seviyeler geçmiş işlemlerden: %s." % told
+    m.finish(sg2)
+    assert sg2["plain"].count("hedef 1,80σ") == 1 and "σ, opsiyonların ima ettiği 1 haftalık hareket: %" in sg2["plain"] and "hedef 1,25σ" not in sg2["plain"]
+    assert sg2["expression"] == sg["expression"]
     # levels the layer could not give (too few trades, a trailing rule): the family's own stand, its own record
     for lv in ({"ok": False, "why": "seviye kalibrasyonu yok: geri testte 4 işlem (grubunda 4; en az 30)"}, dict(LEVELS, rule="trail", m=None)):
         mine = dict(own, levels=lv)
@@ -397,11 +406,13 @@ def test_the_page_the_list_and_the_backtest_through_the_service(served, monkeypa
     fam = res["families"]["optspot"]
     assert fam["own"] and fam["trades"] > 0 and "USDJPY spot" in fam["types"]
     bt = q.view("backtest", user, {})
-    assert any(r["family"] == "optspot" and not r["type"] for r in bt["rows"]) and any(r["family"] == "optspot" and r["type"] == "USDJPY spot" for r in bt["rows"])
+    # (the panel's row of the pair - or, with levels calibrated on these trades, of its group: tto.quantlevels)
+    assert any(r["family"] == "optspot" and not r["type"] for r in bt["rows"])
+    assert any(r["family"] == "optspot" and r["type"] in ("USDJPY spot", "G10 spot") for r in bt["rows"])
     assert any(t.get("path_sigma") for t in bt["trades"] if t["family"] == "optspot")
     q.refresh_live()
     sg = next(s for s in q.view("signals", user, {"family": "optspot"})["signals"] if s["id"] == "optspot:FX:USDJPY")
-    assert sg["bt"]["trades"] and sg["bt"]["scope"] in ("tür", "aile")
+    assert sg["bt"]["trades"] and sg["bt"]["scope"] in ("tür", "aile", "grup")          # (grup: the calibrated levels' record)
     # (the HTTP part last)
     with TestClient(create_app(svc), headers=auth(svc, "Opsiyon HTTP")) as client:
         r = client.get("/api/quant/optspot").json()

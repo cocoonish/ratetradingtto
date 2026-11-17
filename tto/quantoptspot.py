@@ -959,7 +959,10 @@ def _finish(line: Line, sg: Dict[str, Any]) -> None:
     reason = (" Tahmini en çok %s etkiledi." % (", ".join(told[:-1]) + " ve " + told[-1] if len(told) > 1 else told[0])) if told else ""
     atm = "ATM %s %s vol × √(5/252)" % (TENOR.get(d["atm_front"] or "", ""), qf._g(d["atm"], 2)) if d.get("atm") else "gerçekleşen σ × √5"
     bf = ("; kanatlar (25D BF 3A z %s) ×%s" % (qf._sg(d["bfz"], 1), qf._g(d["f"], 2))) if abs(d["f"] - 1.0) > 0.005 else ""
-    if lv is not None:
+    if lv is not None and lv.get("text"):
+        # (make_signal has told the levels in the card already - their own sentence, their text: what σ is, once)
+        levels = "σ, opsiyonların ima ettiği 1 haftalık hareket: %%%s (%s%s)." % (qf._g(d["sigma"], 2), atm, bf)
+    elif lv is not None:
         levels = ("Seviyeler geçmiş işlemlerden, opsiyonların ima ettiği 1 haftalık σ'nın katları: σ %%%s (%s%s); hedef %sσ, stop %sσ "
                   "(isabet %%%s, %d işlem, %s; işlem başına %sσ)." % (
                       qf._g(d["sigma"], 2), atm, bf, qf._g(t_mult, 2), qf._g(s_mult, 2), _pct(hit), n,
