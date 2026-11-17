@@ -991,6 +991,75 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             return ok(await call(desk.pause_rule, _user(request), rid, data.get("paused", True)))
         raise ServiceError("bilinmeyen işlem: %s" % what, 404)
 
+    # ------------------------------------------------------------------ Trades (tradebook.py): the desk's and one's own
+    # Every call needs a session; a trader's own trades answer only their owner (any other user, an administrator too,
+    # gets the 404 of a trade that does not exist).  Nothing here values a trade but "MTM yenile" and a close.
+    def _trade_lang(request: Request) -> str:
+        return _lang(request) or svc().settings.locale
+
+    @handler
+    async def trades(request: Request):
+        book = svc().tradebook
+        if request.method == "GET":                # a tab: ?scope=desk | personal
+            return ok(await call_free(book.listing, _user(request), request.query_params.get("scope")))
+        return ok(await call(book.add, _user(request), await _body(request), _trade_lang(request)))
+
+    @handler
+    async def trades_check(request: Request):
+        # the form read as saving reads it (dates of the shortcuts, the trade in the desk's words) - nothing saved
+        return ok(await call(svc().tradebook.check, _user(request), await _body(request), _trade_lang(request)))
+
+    @handler
+    async def trades_defaults(request: Request):
+        q = request.query_params
+        return ok(await call(svc().tradebook.defaults, _user(request), q.get("product"), q.get("pair"), q.get("trade_date"),
+                             q.get("expiry"), q.get("fra"), q.get("isin"), q.get("structure")))
+
+    @handler
+    async def trades_dv01(request: Request):
+        # the nominal of a DV01 typed (rounded to 5 mn) or the DV01 of a nominal: POST the form with ``size``, or GET one
+        # instrument's fields with ``dv01`` / ``notional`` in the query
+        if request.method == "GET":
+            raw: Dict[str, Any] = dict(request.query_params)
+            raw.pop("lang", None)
+            raw["size"] = [{"leg": None, "dv01": raw.pop("dv01", None), "notional": raw.pop("notional", None),
+                            "dv01_ccy": raw.get("dv01_ccy")}]
+        else:
+            raw = await _body(request)
+        return ok(await call(svc().tradebook.size, _user(request), raw, _trade_lang(request)))
+
+    @handler
+    async def trades_mtm(request: Request):
+        data = await _body(request)
+        return ok(await call(svc().tradebook.mtm, _user(request), data.get("scope")))
+
+    @handler
+    async def trades_log(request: Request):
+        return ok(await call_free(svc().tradebook.recent, _user(request), request.query_params.get("scope")))
+
+    @handler
+    async def trade_one(request: Request):
+        tid = request.path_params["tid"]
+        if request.method == "DELETE":
+            return ok(await call_free(svc().tradebook.remove, _user(request), tid))
+        return ok(await call(svc().tradebook.edit, _user(request), tid, await _body(request), _trade_lang(request)))
+
+    @handler
+    async def trade_log(request: Request):
+        return ok(await call_free(svc().tradebook.log, _user(request), request.path_params["tid"]))
+
+    @handler
+    async def trade_action(request: Request):
+        tid, what = request.path_params["tid"], request.path_params["what"]
+        data = await _body(request)
+        book = svc().tradebook
+        if what == "close":                   # a close date and price: to the closed list, with its realised P&L
+            return ok(await call(book.close, _user(request), tid, data.get("close_date"), data.get("close_price"),
+                                 _trade_lang(request)))
+        if what == "reopen":                  # the close taken back
+            return ok(await call_free(book.reopen, _user(request), tid))
+        raise ServiceError("bilinmeyen işlem: %s" % what, 404)
+
     # ------------------------------------------------------------------ quant signals (quant.py)
     @handler
     async def quant_get(request: Request):
@@ -1027,8 +1096,13 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
         def message(gen: int) -> str:
             # (the quant signals' counters: the last alert's number, the version of the results - see quant.Quant.counters;
-            # Broker Chat's changes: a box of its board asks again on those, not on every generation)
-            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": service.desk.counters(admin), "quant": service.quant.counters(),
+            # Broker Chat's changes: a box of its board asks again on those, not on every generation; the Trades page's
+            # lists - the desk's and this user's own, nobody else's - ride with the desk corner's counters)
+            desk = service.desk.counters(admin)
+            book = getattr(service, "tradebook", None)
+            if book is not None:
+                desk["trades"] = book.counter(who)
+            return "data: %s\n\n" % json.dumps({"gen": gen, "desk": desk, "quant": service.quant.counters(),
                                                 "broker": service.broker_changes})
 
         async def stream():
@@ -1173,6 +1247,15 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/agenda/rules/{rid:int}", agenda_rule, methods=["POST", "DELETE"]),
         Route("/api/agenda/rules/{rid:int}/{what}", agenda_rule_action, methods=["POST"]),
         Route("/api/agenda/{aid:int}", agenda_item, methods=["POST", "DELETE"]),
+        Route("/api/trades", trades, methods=["GET", "POST"]),
+        Route("/api/trades/check", trades_check, methods=["POST"]),
+        Route("/api/trades/defaults", trades_defaults),
+        Route("/api/trades/dv01", trades_dv01, methods=["GET", "POST"]),
+        Route("/api/trades/mtm", trades_mtm, methods=["POST"]),
+        Route("/api/trades/log", trades_log),
+        Route("/api/trades/{tid:int}", trade_one, methods=["POST", "DELETE"]),
+        Route("/api/trades/{tid:int}/log", trade_log),
+        Route("/api/trades/{tid:int}/{what}", trade_action, methods=["POST"]),
         Route("/api/quant/{what}", quant_get),
         Route("/api/quant/{what}", quant_post, methods=["POST"]),
         Mount("/static", app=_Static(directory=STATIC), name="static"),

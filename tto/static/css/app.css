@@ -1304,3 +1304,33 @@ body.noflash table.calc-grid td.up, body.noflash table.calc-grid td.down { anima
 .menu-edit-group { break-inside: avoid; margin: 0 0 12px; }
 .menu-edit-group .mh { color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .03em; margin: 0 0 3px; }
 .menu-edit-group label.check { display: flex; padding: 2px 0; white-space: normal; font-size: 12.5px; color: var(--ink); }
+
+/* ---------------------------------------------------------------- Trades (pages/trades.js) */
+.panel.trades { margin-bottom: 12px; }
+.panel.trades > header .muted { font-size: 11.5px; }
+table.plain.trades td { vertical-align: top; }
+table.plain.trades td.what { white-space: normal; min-width: 240px; max-width: 520px; }
+table.plain.trades td.wrap { white-space: normal; }
+table.plain.trades td.small, table.plain.trades .small { font-size: 11px; }
+table.plain.trades td.why { color: var(--ink-3); font-size: 11.5px; white-space: normal; max-width: 220px; }
+table.plain.trades td.pos, table.plain.trades td.pnl.pos .v { color: var(--pos); }
+table.plain.trades td.neg, table.plain.trades td.pnl.neg .v { color: var(--neg); }
+table.plain.trades td.pnl .v { font-weight: 600; }
+table.plain.trades td.pnl .cs { color: var(--ink-3); font-size: 10.5px; margin-top: 1px; }
+table.plain.trades td.exp { width: 22px; padding-left: 4px; padding-right: 0; }
+table.plain.trades td.acts { white-space: nowrap; }
+table.plain.trades td.acts .btn { padding: 2px 6px; }
+table.plain.trades tr.leg td { background: var(--sub-bg); color: var(--ink-2); font-size: calc(11.5px - var(--fs-step)); }
+table.plain.trades tr.leg.resid td { font-style: italic; }
+table.plain.trades tr.legrow td.what { color: var(--ink-2); }
+table.plain.trades tr.sum td { font-weight: 650; border-top: 1px solid var(--line-2); }
+.trades-note { font-size: 11.5px; margin: 4px 2px 12px; }
+#trade-form .row { margin-bottom: 10px; }
+#trade-form .field .ferr, #trade-form td .ferr { color: var(--neg); font-size: 11px; min-height: 0; }
+#trade-form .field .echo, #trade-form td .echo { font-size: 11px; }
+#trade-form input.info { color: var(--ink-3); font-style: italic; }
+#trade-form .tf-legs { margin: 4px 0 12px; }
+#trade-form .tf-legs td { padding: 4px 6px; vertical-align: top; }
+#trade-form .tf-legs input { width: 110px; }
+#trade-form .tf-preview { border-top: 1px solid var(--line); padding-top: 10px; }
+#trade-form .tf-text { font-weight: 650; font-size: 13.5px; }

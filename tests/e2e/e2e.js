@@ -4111,6 +4111,168 @@ async function clipAfter(page, action) {
     check('Günlük İşlemler shows "Pozisyon ve maliyet": the 1M tenor with its net TRY sold, cost and P&L against RET / OIS mid',
       /Pozisyon ve maliyet/.test(posText) && /K\/Z RET mid/.test(posText) && /Toplam/.test(posText) && /Broker Chat/.test(posText), posText.slice(0, 300));
 
+    // ------------------------------------------------------------------ Trades: the desk's and each trader's own
+    console.log('trades');
+    const tradeDay = (d) => String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+    const tradesToday = tradeDay(new Date());
+    await open(page, 'trades');
+    await page.click('#trades-scope button[data-scope="desk"]');
+    await page.waitForSelector('#trades-scope button.on[data-scope="desk"]');
+    await page.click('#trades-new');
+    await page.waitForSelector('#trade-form #tf-trade_date');
+    await page.waitForFunction(() => document.getElementById('tf-trade_date').value !== '', null, { timeout: 15000 });
+    // (the valuation's default: today - the day of the workbook's data in replay mode once the real valuation is in)
+    const formDate = await page.inputValue('#tf-trade_date');
+    check('Trades: "+ Yeni işlem" opens with the trade date filled (the valuation\'s default) and every product to pick',
+      /^\d{2}\.\d{2}\.\d{4}$/.test(formDate) && await page.locator('#tf-product button').count() === 5, formDate);
+    // a desk OIS: a DV01 typed gives the nominal rounded to 5 mn and the DV01 it actually gives; a nominal typed afterwards wins
+    await page.click('#tf-product button[data-v="ois"]');
+    await page.click('#tf-structure button[data-v="outright"]');
+    await page.click('#tf-side button[data-v="receive"]');
+    await page.fill('#tf-settle_date', '+1');
+    await page.fill('#tf-end_date', '2Y');
+    await page.fill('#tf-price', '38,50');
+    await page.fill('#tf-dv01', '1.012');
+    await page.waitForFunction(() => /^\d+m$/.test(document.getElementById('tf-notional').value), null, { timeout: 15000 });
+    const dvNominal = await page.inputValue('#tf-notional');
+    await page.waitForFunction(() => /DV01 ≈/.test(document.getElementById('tf-dv01-echo').textContent), null, { timeout: 15000 });
+    const dvEcho = await page.textContent('#tf-dv01-echo');
+    check('... a DV01 of 1.012 $ gives a nominal on the desk\'s 5 mn lot and says the DV01 that nominal gives',
+      Number(dvNominal.slice(0, -1)) % 5 === 0 && /DV01 ≈ [\d.]+ \$/.test(dvEcho), { dvNominal, dvEcho });
+    await page.fill('#tf-notional', '100m');
+    await page.waitForFunction(() => { const d = document.getElementById('tf-dv01'); return d.classList.contains('info') && /^[\d.]+$/.test(d.value) && d.value !== '1.012'; },
+      null, { timeout: 15000 });
+    await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 100m @ %38,50/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
+    check('... a nominal typed after it stays; the DV01 box shows its DV01 as information only; the server says the trade in the desk\'s words',
+      await page.inputValue('#tf-notional') === '100m' && /^[\d.]+$/.test(await page.inputValue('#tf-dv01')));
+    // the structures: a spread shows its two legs, a fly three, an MPC trade the meetings of the calendar by date
+    await page.click('#tf-structure button[data-v="spread"]');
+    await page.waitForSelector('#tf-legs tr[data-leg="1"]');
+    const spreadLegs = await page.locator('#tf-legs tr[data-leg]').count();
+    await page.click('#tf-structure button[data-v="fly"]');
+    await page.waitForSelector('#tf-legs tr[data-leg="2"]');
+    const flyLegs = await page.locator('#tf-legs tr[data-leg]').count();
+    await page.click('#tf-structure button[data-v="mpc"]');
+    await page.waitForFunction(() => document.querySelectorAll('#tf-meeting option').length > 2, null, { timeout: 15000 });
+    const meetingOpts = await page.evaluate(() => [...document.querySelectorAll('#tf-meeting option')].slice(1, 3).map((o) => o.value + '|' + o.textContent));
+    check('... spread: two legs, fly: three, PPK: the meetings ahead by their dates ("PPK dd.mm.yyyy")',
+      spreadLegs === 2 && flyLegs === 3 && meetingOpts.every((x) => /^\d{4}-\d{2}-\d{2}\|PPK \d{2}\.\d{2}\.\d{4}/.test(x)), { spreadLegs, flyLegs, meetingOpts });
+    await page.click('#tf-structure button[data-v="outright"]');
+    await page.waitForFunction(() => /RECEIVE 2Y TRY OIS 100m @ %38,50/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
+    await page.click('#tf-save');
+    await page.waitForSelector('#trades-open tr.trade', { timeout: 15000 });
+    const deskTrade = await page.evaluate(() => {
+      const tr = document.querySelector('#trades-open tr.trade');
+      return { id: tr.dataset.id, text: tr.textContent, edit: !!tr.querySelector('.act-edit') };
+    });
+    check('... saved: the desk\'s list shows it in the desk\'s words, its trade date and price; its creator may change it',
+      /RECEIVE 2Y TRY OIS 100m @ %38,50/.test(deskTrade.text) && deskTrade.text.includes(formDate) && deskTrade.edit, deskTrade);
+    // a personal FX spot: what is typed survives a change of the pair; a box emptied gets its default again
+    await page.click('#trades-scope button[data-scope="personal"]');
+    await page.waitForSelector('#trades-scope button.on[data-scope="personal"]');
+    await page.click('#trades-new');
+    await page.waitForSelector('#trade-form #tf-trade_date');
+    await page.click('#tf-product button[data-v="fxspot"]');
+    await page.waitForSelector('#tf-pair');
+    const yesterday = tradeDay(new Date(Date.now() - 86400000));
+    await page.fill('#tf-trade_date', yesterday);
+    await page.fill('#tf-pair', 'EURTRY');
+    await page.waitForFunction(() => document.getElementById('tf-notional').closest('.field').textContent.includes('EUR'), null, { timeout: 15000 });
+    await page.fill('#tf-pair', 'USDTRY');
+    await page.waitForFunction(() => document.getElementById('tf-notional').closest('.field').textContent.includes('USD'), null, { timeout: 15000 });
+    await page.waitForTimeout(1200);                          // (the defaults asked again for the new pair)
+    const keptDate = await page.inputValue('#tf-trade_date');
+    await page.fill('#tf-trade_date', '');
+    await page.waitForFunction(() => /^\d{2}\.\d{2}\.\d{4}$/.test(document.getElementById('tf-trade_date').value), null, { timeout: 15000 });
+    check('... the pair changed twice: the trade date typed stays; emptied, it is filled again with the default',
+      keptDate === yesterday, { keptDate, yesterday });
+    await page.click('#tf-side button[data-v="B"]');
+    await page.fill('#tf-settle_date', '+1');
+    await page.fill('#tf-notional', '10m');
+    await page.fill('#tf-price', '42,15');
+    await page.waitForFunction(() => /ALIŞ USDTRY 10m USD @ 42,1500/.test((document.getElementById('tf-text') || {}).textContent || ''), null, { timeout: 15000 });
+    await page.click('#tf-save');
+    await page.waitForFunction(() => /ALIŞ USDTRY 10m USD/.test(document.getElementById('trades-open').textContent), null, { timeout: 15000 });
+    const ownId = await page.evaluate(() => document.querySelector('#trades-open tr.trade').dataset.id);
+    // a second user: the desk's trade, not Ayşe's own - on the page, through the API, in the log
+    const ctxT = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const pageT = await ctxT.newPage();
+    pageT.on('pageerror', (e) => errors.push('pageerror(T): ' + e.message));
+    await login(pageT, 'Mehmet');
+    await open(pageT, 'trades');
+    await pageT.click('#trades-scope button[data-scope="desk"]');
+    await pageT.waitForFunction((id) => !!document.querySelector('#trades-open tr[data-id="' + id + '"]'), deskTrade.id, { timeout: 15000 });
+    const seenByMehmet = await pageT.evaluate((id) => {
+      const tr = document.querySelector('#trades-open tr[data-id="' + id + '"]');
+      return { text: tr.textContent, edit: !!tr.querySelector('.act-edit'), del: !!tr.querySelector('.act-del') };
+    }, deskTrade.id);
+    await pageT.click('#trades-scope button[data-scope="personal"]');
+    await pageT.waitForSelector('#trades-scope button.on[data-scope="personal"]');
+    await pageT.waitForTimeout(500);
+    const mehmetOwn = await pageT.textContent('#trades-open');
+    const viaApi = await api(pageT, 'mehmet', 'GET', '/api/trades?scope=personal');
+    const logApi = await api(pageT, 'mehmet', 'GET', '/api/trades/' + ownId + '/log');
+    const recentApi = await api(pageT, 'mehmet', 'GET', '/api/trades/log?scope=personal');
+    check('... another user sees the desk\'s trade (not to change: neither Düzenle nor Sil), never Ayşe\'s own - not on the page, not through the API, not in the log',
+      /RECEIVE 2Y TRY OIS 100m/.test(seenByMehmet.text) && !seenByMehmet.edit && !seenByMehmet.del && !/USDTRY/.test(mehmetOwn)
+      && viaApi.status === 200 && !viaApi.json.open.some((t) => String(t.id) === ownId) && logApi.status === 404
+      && !recentApi.json.entries.some((e) => String(e.trade) === ownId), { seenByMehmet, mehmetOwn, log: logApi.status });
+    // a desk trade entered by Mehmet comes to Ayşe's open page by itself (the live stream's counter, no new generation)
+    await page.click('#trades-scope button[data-scope="desk"]');
+    await page.waitForSelector('#trades-scope button.on[data-scope="desk"]');
+    const mehmetAdd = await api(pageT, 'mehmet', 'POST', '/api/trades', { scope: 'desk', product: 'sofr', structure: 'outright', trade_date: tradesToday,
+      settle_date: '+2', side: 'pay', end_date: '5Y', notional: '25m', price: '3,85' });
+    await page.waitForFunction(() => /PAY 5Y SOFR 25m @ %3,85/.test(document.getElementById('trades-open').textContent), null, { timeout: 20000 });
+    check('... a desk trade entered by another user shows on the open page at once', mehmetAdd.status === 200, mehmetAdd);
+    await ctxT.close();
+    // "MTM yenile": nothing is valued before it; then the time, and per trade its value or the reason it has none
+    const mtmBefore = await page.textContent('#trades-mtm-at');
+    await page.click('#trades-mtm');
+    await page.waitForFunction(() => /son yenileme: \d\d:\d\d/.test(document.getElementById('trades-mtm-at').textContent), null, { timeout: 30000 });
+    const valued = await page.evaluate(() => [...document.querySelectorAll('#trades-open tr.trade')].map((tr) => {
+      const cells = [...tr.cells];
+      return { number: cells.some((c) => /^[+-]?\d{1,3}(\.\d{3})*( [A-Z]{3})?$/.test(c.textContent.trim()) && !c.classList.contains('acts')),
+        why: (tr.querySelector('td.why') || { textContent: '' }).textContent };
+    }));
+    const totals = await page.textContent('#trades-totals');
+    check('... "MTM yenile": "son yenileme: hh:mm", and each trade shows its value or why it has none; the totals in TL and USD',
+      /henüz değerlenmedi/.test(mtmBefore) && valued.length === 2 && valued.every((v) => v.number || v.why.length > 3) && /Toplam/.test(totals)
+      && /MTM TL/.test(totals) && /Gerçekleşen USD/.test(totals), { mtmBefore, valued });
+    // a spread is one line with its package level; ▸ shows each leg; "Bacaklar ayrı satır" lists the legs as rows of their own
+    const tradeSpread = await api(page, 'ayşe yilmaz', 'POST', '/api/trades', { scope: 'desk', product: 'ois', structure: 'spread', trade_date: tradesToday,
+      settle_date: '+1', side: 'steepener', legs: [{ side: 'receive', end_date: '2Y', notional: '100m', price: '38,50' },
+        { side: 'pay', end_date: '5Y', notional: '45m', price: '38,15' }] });
+    const spreadSel = '#trades-open tr.trade[data-id="' + (tradeSpread.json && tradeSpread.json.id) + '"]';
+    await page.waitForSelector(spreadSel, { timeout: 20000 });
+    const spreadLine = await page.textContent(spreadSel);
+    await page.click(spreadSel + ' td.exp button');
+    await page.waitForFunction(() => document.querySelectorAll('#trades-open tr.leg').length === 2, null, { timeout: 10000 });
+    const legLines = await page.evaluate(() => [...document.querySelectorAll('#trades-open tr.leg')].map((tr) => tr.textContent.trim()));
+    await page.check('#trades-legrows');
+    await page.waitForFunction((id) => document.querySelectorAll('#trades-open tr.legrow[data-id="' + id + '"]').length === 2, String(tradeSpread.json.id), { timeout: 10000 });
+    const spreadLegRows = await page.evaluate((id) => [...document.querySelectorAll('#trades-open tr.legrow[data-id="' + id + '"]')].map((tr) => tr.cells[2].textContent), String(tradeSpread.json.id));
+    await page.uncheck('#trades-legrows');
+    check('... a spread: one line "2s5s steepener TRY OIS -35,0 bp"; ▸ shows its two legs; "Bacaklar ayrı satır" lists them as rows of their own',
+      /2s5s steepener TRY OIS -35,0 bp/.test(spreadLine) && legLines.length === 2 && /RECEIVE 2Y 100m @ %38,50/.test(legLines[0])
+      && /PAY 5Y 45m @ %38,15/.test(legLines[1]) && spreadLegRows.length === 2 && /^RECEIVE 2Y 100m/.test(spreadLegRows[0]) && /^PAY 5Y 45m/.test(spreadLegRows[1]),
+      { spreadLine, legLines, spreadLegRows });
+    // close the OIS: it goes to the closed list with its close date and price; its log says who did what
+    await page.click('#trades-open tr[data-id="' + deskTrade.id + '"] .act-close');
+    await page.waitForSelector('#tc-price');
+    await page.fill('#tc-price', '38,20');
+    await page.click('#tc-save');
+    await page.waitForFunction((id) => !document.querySelector('#trades-open tr[data-id="' + id + '"]')
+      && !!document.querySelector('#trades-closed tr[data-id="' + id + '"]'), deskTrade.id, { timeout: 15000 });
+    const closedRow = await page.textContent('#trades-closed tr[data-id="' + deskTrade.id + '"]');
+    await page.click('#trades-closed tr[data-id="' + deskTrade.id + '"] .act-log');
+    await page.waitForSelector('#trades-log-table');
+    const logText = await page.textContent('#trades-log-table');
+    await page.keyboard.press('Escape');
+    check('... closed at 38,20: it leaves the open list for the closed one with its close date and price; its log: entered, closed - by whom',
+      closedRow.includes(tradesToday + ' · %38,20') && /girdi/.test(logText) && /kapattı/.test(logText) && /Ayşe Yılmaz/.test(logText),
+      { closedRow, logText });
+    await shot(page, 'trades');
+
     // ------------------------------------------------------------------ each user's own menu
     console.log('own menu');
     await page.click('#btn-user');
