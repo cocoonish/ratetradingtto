@@ -10,12 +10,18 @@ number is the level's up side's, as the universe has it ("AL", "pay", "vol al", 
 a score above 0 plays the rise, below 0 the fall.
 
 **The line.**  One a day for every instrument, no gate: a weak score is a weak line (Zayıf below 0,5, Orta below 1,
-Güçlü from 1) ranked by its strength in its group; a line whose direction turned since the previous close is "YENİ" and
-comes first.  Its size: the desk's unit scaled to the same daily risk - the desk setting ``trend_risk_usd`` over the
-line's daily σ in money (USD), two significant figures, 0,1 – 10 units: "EURUSD 1,4 mn", "2Y OIS 370 $ DV01".  Its
-target: the mean gain of the past daily lines of the same strength (|score| in [0, 0,5), [0,5, 1), [1, 1,5),
-[1,5, 2]) over their holding - in σ of the day each was drawn, its group's (the family's where the group has too few)
--, its holding that mean holding, its stop 2σ of the holding against.  Held until the direction turns or the stop.
+Güçlü from 1); its group sorts it by its expectancy (``quantuniv.order``), a line whose direction turned since the
+previous close says "YENİ".  Its size: the desk's unit scaled to the same daily risk - the desk setting
+``trend_risk_usd`` over the line's daily σ in money (USD), two significant figures, 0,1 – 10 units: "EURUSD 1,4 mn",
+"2Y OIS 370 $ DV01".  **No target; a trailing stop** k σ behind the best level since the entry (σ: a month's, the
+daily σ × √21), k calibrated on the family's own past trades (``tto.quantlevels``, "trail": every position from a
+turn to the next turn, its path in that σ, month by month on what had happened before - its group's, the family's where
+the group has too few): the k with the best expectancy whose average winner is at least k (Ödül / risk = the average
+winning trade ÷ k ≥ 1).  The line: "iz süren stop", its record at that k (isabet: the share of trades closed in profit,
+out of sample) and the expectancy × σ now in money; its holding the record's mean.  Held until the direction turns or
+the trailing stop.  A line whose stop lost money all the same is "düşük güven" (it stays in the list).  Without enough
+trades for a calibration the old rule stands: the mean gain of the past daily lines of the same strength (|score| in
+[0, 0,5), [0,5, 1), [1, 1,5), [1,5, 2]) over their holding as the target, 2σ of the holding against as the stop.
 
 **The walk-forward.**  Every past day's line as it was drawn that day - its score from the closes up to it, its stop
 from the holdings closed by then - followed to its turn or its stop: the strength buckets' gains and holdings, each
@@ -33,10 +39,12 @@ import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import quantfam as qf
+from . import quantlevels as qlv
 from . import quantuniv as qu
 
 # ---------------------------------------------------------------------------------------------- the model's constants
 HORIZONS = (21, 63, 252)        # business days: 1, 3 and 12 months
+HREF = 21.0                     # a trade's σ: a month's (the daily σ × √21) - the trailing stop's and the record's unit
 H_LABELS = ("1A", "3A", "1Y")
 MIN_DAYS = 63                   # closes a line needs (the 3-month horizon)
 VOL_DAYS = qu.VOL_DAYS          # the daily σ: over the last 60 P&L moves
@@ -375,6 +383,30 @@ def trades_of(tr: Dict[str, Any], lines: List[Optional[tuple]]) -> Dict[str, Any
     return {"trades": out, "closed": len(closed), "hits": sum(1 for x in closed if x["gain"] > 0), "pnl": pnl}
 
 
+def level_trades(insts: Sequence[qu.Instrument], tracks: Sequence[Dict[str, Any]], money: Optional[Dict[str, float]] = None
+                 ) -> List[Dict[str, Any]]:
+    """Every position of the walk (a turn, or the first scored day, to the next turn) as ``quantlevels``' trade - its
+    path to the turn, in σ of a month as known at its entry (the daily σ of its P&L index × √21), its carry in it;
+    one still running is open (marked at the last close).  ``money``: TRY a change unit at the line's size, by key."""
+    out: List[Dict[str, Any]] = []
+    root = math.sqrt(HREF)
+    for inst, tr in zip(insts, tracks):
+        d, x, sig, days, n, turn = tr["d"], tr["x"], tr["sig"], tr["days"], tr["n"], tr["turn"]
+        try_per = (money or {}).get(inst.key)
+        for t in range(n):
+            s = d[t]
+            if not s or (t > 0 and d[t - 1] == s) or not sig[t]:
+                continue
+            unit = sig[t] * root
+            f = turn[t]
+            end = f if f < n else n - 1
+            x0 = x[t]
+            out.append({"family": "trend", "group": inst.group, "sid": "trend:" + inst.key, "entry_day": days[t], "days": days[t + 1:end + 1],
+                        "path_sigma": [s * (x[u] - x0) / unit for u in range(t + 1, end + 1)], "open": f >= n, "carry_sigma": 0.0,
+                        "carry_in": bool(tr["carry"]), "sigma": unit, "unit": qf.change_unit(inst.kind), "try": try_per})
+    return out
+
+
 def sharpe(values: Sequence[float]) -> Optional[float]:
     """Annualised Sharpe of daily P&L (mean ÷ σ × √252)."""
     xs = [v for v in values if v is not None]
@@ -464,6 +496,31 @@ def _hit_text(stats: Dict[str, Any]) -> str:
     return "isabet %%%s (%d%s)" % (qf._g((stats.get("hit") or 0.0) * 100.0, 0), stats["trades"], ", grup" if stats.get("scope") == "grup" else "")
 
 
+def _levels_hit(lv: Dict[str, Any]) -> str:
+    """ "isabet %61 (148)": the calibrated trailing stop's record (out of sample)."""
+    if not lv.get("n"):
+        return "isabet — (0)"
+    return "isabet %%%s (%d)" % (qf._g((lv.get("hit") or 0.0) * 100.0, 0), lv["n"])
+
+
+def _sigma_text(sg: Dict[str, Any]) -> str:
+    """The trailing stop's σ in the line's own price: "0,0123" / "12,5 bp"."""
+    lv = sg.get("levels") or {}
+    v = lv.get("sigma_lv")
+    if v is None:
+        return "—"
+    v = abs(v)
+    px = sg.get("px")
+    if px is not None and sg.get("entry") and px.get("entry"):
+        return qf._th(v * px["entry"] / sg["entry"], px.get("digits") or 4)
+    unit = sg.get("unit") or ""
+    if unit == "%":
+        return "%s bp" % qf._g(v * 100.0, 1)                          # (a rate's σ in bp)
+    if unit == "bp":
+        return "%s bp" % qf._g(v, 1)
+    return ("%s %s" % (qf._g(v, 2), unit)).strip()
+
+
 def _record_text(stats: Dict[str, Any]) -> str:
     """The card's: "Geri test: isabet %58 (41 işlem), Sharpe 0,62." - the group's trades when the instrument has few."""
     if not stats.get("trades"):
@@ -479,13 +536,14 @@ class _Line(object):
     """What a Trend monitor keeps: the instrument, its walk, its size and statistics - and, scored, the line now."""
 
     def __init__(self, inst: qu.Instrument, tr: Dict[str, Any], k: float, stats: Dict[str, Any], buckets: List[Dict[str, Any]],
-                 cfg: Dict[str, Any]):
+                 cfg: Dict[str, Any], lv: Optional[Dict[str, Any]] = None):
         self.inst = inst
         self.tr = tr
         self.k = k
         self.stats = stats
         self.buckets = buckets
         self.cfg = cfg
+        self.lv = lv or {"ok": False, "why": "seviye kalibrasyonu yok"}     # (its group's trailing stop: quantlevels)
         n = tr["n"]
         self.sigma = tr["sig"][-1]
         self.d_prev = tr["d"][-1] if n else 0
@@ -513,11 +571,12 @@ class _Line(object):
         return score
 
     def decide(self, score: float, level: float, live: Optional[Dict[str, float]] = None) -> None:
-        """Holding, target, stop and the expected move for the strength of ``score`` (make_signal reads them).  The
-        expected P&L is the bucket's mean gain (σ of each line's day × σ now) - an FX line's and a swap point's with its
-        carry in it, as the walk had them; a rate's the move alone (make_signal adds the carry engine's carry + roll).
-        The target: the level's own move that, with the holding's carry, makes that gain - none when the gain is no gain;
-        the entry when the carry alone makes it."""
+        """The levels make_signal reads.  Calibrated (``self.lv``): no target, the trailing stop k σ of a month behind
+        the best level (here: from the entry now), the record's holding and expectancy (× σ now).  Without: the
+        strength's bucket - its mean gain (σ of each line's day × σ now) the expected P&L (an FX line's and a swap
+        point's with its carry in it, as the walk had them; a rate's the move alone: make_signal adds the carry engine's
+        carry + roll), the target the level's own move that, with the holding's carry, makes it (none when the gain is
+        no gain; the entry when the carry alone makes it), the stop 2σ of the holding against."""
         m = self.mon
         if m is None or not self.sigma:
             return
@@ -526,6 +585,16 @@ class _Line(object):
         inst = self.inst
         kind = inst.kind
         s = sign(score)
+        lv = self.lv
+        if lv.get("ok"):
+            unit = self.sigma * math.sqrt(HREF)                         # change units: a month's σ
+            m.hold = max(1.0, float(lv.get("held") or HOLD0))
+            m.levels = dict(lv, sigma=qf.to_level(kind, unit, level))
+            m.reward, m.risk = 0.0, qf.to_level(kind, float(lv["k"]) * unit, level)
+            m.fcast = s * qf.to_level(kind, float(lv.get("exp") or 0.0) * unit, level)
+            self.now = dict(self.now or {}, bucket=b, b=st, gain=None, move=None, carry=None)
+            return
+        m.levels = lv                                                   # (the card says why there are none)
         hold = st["hold"]
         gain = st["gain"] * self.sigma                                  # change units, in the line's favour
         carry = 0.0                                                     # the part of it the position's carry makes
@@ -571,14 +640,23 @@ class _Line(object):
         has_target = (sg.get("reward") or 0.0) > 0.0
         by_carry = not has_target and (sg.get("exp_pnl") or 0.0) > 0.0
         stats = self.stats
+        # the calibrated trailing stop (quantlevels): no target; a stop that lost money all the same is "düşük güven"
+        lv = sg.get("levels") or {}
+        trail = bool(lv.get("ok")) and lv.get("rule") == "trail"
+        loss = trail and (lv.get("exp") or 0.0) < 0.0
         # (``daily``: a line every day, held until its direction turns or its stop - the log, the alerts and the backtest
-        # follow it so: tto.quant._track, quantbt.backtest)
-        sg.update({"strength": strength(score), "gated": "", "gates": [], "composite": base,
+        # follow it so: tto.quant._track, quantbt.backtest; the gates of make_signal are none of its, but its levels')
+        sg.update({"strength": strength(score), "gated": qf.LEVELS_LOSS if loss else "",
+                   "gates": [g for g in sg.get("gates") or () if g.get("name") == "Seviyeler"], "composite": 0.0 if loss else base,
                    "parts": {"z": base, "regime": 1.0, "hl": 1.0, "carry": 1.0}, "entry_z": STRONG,
                    "expression": "%s %s" % (inst.verb(s), inst.label), "new": new, "days_in": days_in, "daily": True})
-        parts = (["YENİ"] if new else []) + [inst.line(s, k), "giriş " + _price(sg, "entry"),
-                                              "hedef " + (_price(sg, "target") if has_target or by_carry else "—"), "stop " + _price(sg, "stop"),
-                                              "beklenen " + qf._money(exp_m, ccy), _hit_text(stats), "model: Trend"]
+        if trail:
+            parts = (["YENİ"] if new else []) + [inst.line(s, k), "giriş " + _price(sg, "entry"), "iz süren stop " + _price(sg, "stop"),
+                                                  "beklenen " + qf._money(exp_m, ccy), _levels_hit(lv), "model: Trend"]
+        else:
+            parts = (["YENİ"] if new else []) + [inst.line(s, k), "giriş " + _price(sg, "entry"),
+                                                  "hedef " + (_price(sg, "target") if has_target or by_carry else "—"), "stop " + _price(sg, "stop"),
+                                                  "beklenen " + qf._money(exp_m, ccy), _hit_text(stats), "model: Trend"]
         sg["line"] = " · ".join(parts)
         incl = " (forward primi dahil)" if sg.get("px") is not None and sg.get("carry_h") is not None else (
             " (carry + roll dahil)" if sg.get("carry_h") is not None else "")
@@ -587,26 +665,40 @@ class _Line(object):
         head = ("YENİ - yön bugün döndü. " if new else "") + "%s." % inst.line(s, k)
         why = "Neden: %s (skor %s, %s; %s)." % (_horizon_words(terms, s, self.labels), qf._sg(score, 2), strength(score).lower(),
                                                 "yön bugün döndü" if new else "%d gündür bu yönde" % days_in)
-        exp = ("Beklenen: %s tutarsan %s%s - bu güçteki (|skor| %s) geçmiş günlük satırların ortalaması (%s, %d satır)." % (
-            span, qf._money(exp_m, ccy), incl, BUCKETS[bucket(abs(score))], b.get("scope") or "—", b.get("n") or 0)
-            if exp_m is not None else "Beklenen: —.")
-        if has_target:
-            ends = "Hedef %s (%s), stop %s (%s); yön dönene ya da stopa kadar tut." % (
-                _price(sg, "target"), qf._money(tgt_m, ccy), _price(sg, "stop"), qf._money(stp_m, ccy))
-        elif by_carry:
-            ends = "Hedef giriş seviyesi (%s): beklenen kazancın tamamı carry'den. Stop %s (%s); yön dönene ya da stopa kadar tut." % (
-                _price(sg, "entry"), _price(sg, "stop"), qf._money(stp_m, ccy))
+        if trail:
+            exp = ("Beklenen: %s tutarsan %s%s - iz süren stopla geçmiş işlemlerin ortalaması (%s, %d işlem)." % (
+                span, qf._money(exp_m, ccy), incl, "örneklem dışı" if lv.get("oos") else "örneklem içi", lv.get("n") or 0)
+                if exp_m is not None else "Beklenen: —.")
+            ends = ("Hedef yok - iz süren stop: en iyi seviyeden %s σ geri gelirse (σ: aylık, %s) ya da yön dönerse çık; stop şimdi %s (%s). "
+                    "Ödül / risk %s: kazanan işlemlerin ortalaması %s σ ÷ stop %s σ." % (
+                        qf._g(lv["k"], 2), _sigma_text(sg), _price(sg, "stop"), qf._money(stp_m, ccy), qf._g(lv.get("rr"), 2),
+                        qf._g(lv.get("avg_win"), 2), qf._g(lv["k"], 2)))
+            record = "Geri test (iz süren stopla): isabet %%%s (%d işlem, %s), işlem başına %s σ%s." % (
+                qf._g((lv.get("hit") or 0.0) * 100.0, 0), lv.get("n") or 0, "örneklem dışı" if lv.get("oos") else "örneklem içi",
+                qf._sg(lv.get("exp"), 2), "; bu stopla bile zarar ettirdi: düşük güven" if loss else "")
         else:
-            ends = ("Hedef yok: bu güçteki geçmiş satırlar ortalamada kazandırmadı. Stop %s (%s); yön dönene ya da stopa kadar." % (
-                _price(sg, "stop"), qf._money(stp_m, ccy)))
-        sg["plain"] = " ".join([head, why, exp, ends, _record_text(stats)])
+            exp = ("Beklenen: %s tutarsan %s%s - bu güçteki (|skor| %s) geçmiş günlük satırların ortalaması (%s, %d satır)." % (
+                span, qf._money(exp_m, ccy), incl, BUCKETS[bucket(abs(score))], b.get("scope") or "—", b.get("n") or 0)
+                if exp_m is not None else "Beklenen: —.")
+            if has_target:
+                ends = "Hedef %s (%s), stop %s (%s); yön dönene ya da stopa kadar tut." % (
+                    _price(sg, "target"), qf._money(tgt_m, ccy), _price(sg, "stop"), qf._money(stp_m, ccy))
+            elif by_carry:
+                ends = "Hedef giriş seviyesi (%s): beklenen kazancın tamamı carry'den. Stop %s (%s); yön dönene ya da stopa kadar tut." % (
+                    _price(sg, "entry"), _price(sg, "stop"), qf._money(stp_m, ccy))
+            else:
+                ends = ("Hedef yok: bu güçteki geçmiş satırlar ortalamada kazandırmadı. Stop %s (%s); yön dönene ya da stopa kadar." % (
+                    _price(sg, "stop"), qf._money(stp_m, ccy)))
+            record = _record_text(stats) + ((" Seviyeler: %s." % lv["why"]) if lv.get("why") else "")
+        sg["plain"] = " ".join([head, why, exp, ends, record])
         sg["thesis"] = "Trend %s (skor %s; %s katkıları %s) → %s; beklenen %s." % (
             "yukarı" if s > 0 else "aşağı", qf._sg(score, 2), " / ".join(self.labels), " / ".join(qf._sg(t / 3.0, 2) for t in terms),
             inst.line(s, k), qf._money(exp_m, ccy))
         sg["trend"] = {"terms": [t / 3.0 for t in terms], "labels": list(self.labels), "bucket": BUCKETS[bucket(abs(score))],
                        "bucket_stats": {kk: b.get(kk) for kk in ("gain", "hold", "hit", "n", "scope")}, "stats": dict(stats),
                        "k": k, "size": inst.size_text(k), "new": new, "days_in": days_in, "money": {"total": exp_m, "target": tgt_m,
-                                                                                                      "stop": stp_m, "ccy": ccy}}
+                                                                                                      "stop": stp_m, "ccy": ccy},
+                       "trail": trail}
 
 
 def _risk_of(inst: qu.Instrument, sigma: Optional[float], usdtry: Optional[float]) -> Optional[float]:
@@ -650,6 +742,24 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
         summary[g] = {"trades": n_tr, "hits": hits, "hit": hits / n_tr if n_tr else None,
                       "sharpe": sharpe([pnl[d] for d in sorted(pnl)]), "lines": len(mine)}
     usdtry = ctx.usdtry()
+    # every line's size (the same daily risk) and the trailing stop calibrated on the walk's positions (quantlevels: month
+    # by month, on what had happened before; kept - a refresh, the day's next fit, a backtest refit choose nothing)
+    t_cal = time.perf_counter()
+    sizes: Dict[str, Tuple[Optional[float], float]] = {}
+    money: Dict[str, float] = {}
+    for inst, tr in zip(insts, tracks):
+        sg_ = tr["sig"][-1] if tr["n"] else None
+        r1 = _risk_of(inst, sg_, usdtry) if sg_ else None
+        kk = round2(min(max(target / r1, K_RANGE[0]), K_RANGE[1])) if r1 else 1.0
+        sizes[inst.key] = (r1, kk)
+        try:
+            m1 = inst.money(1.0, kk)
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            m1 = None
+        if m1 is not None and math.isfinite(m1):
+            money[inst.key] = abs(m1) * (1.0 if inst.ccy in ("TL", "TRY") else (usdtry or 0.0))
+    book = qlv.calibrate(level_trades(insts, tracks, money), "trend", ctx.today_iso)
+    t_lv = time.perf_counter()
     mons: List[qf.Monitor] = []
     rows: List[Dict[str, Any]] = []
     for i, inst in enumerate(insts):
@@ -676,10 +786,11 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
             row["why"] = "seviye oynamıyor (σ 0)"
             rows.append(row)
             continue
-        risk1 = _risk_of(inst, sigma, usdtry)
-        k = round2(min(max(target / risk1, K_RANGE[0]), K_RANGE[1])) if risk1 else 1.0
+        risk1, k = sizes.get(inst.key) or (None, 1.0)
         buckets = [bucket_stats(pooled, i, inst.group, b) for b in range(len(BUCKETS))]
-        line = _Line(inst, tr, k, stats, buckets, cfg)
+        lv = book.line(inst.group)
+        line = _Line(inst, tr, k, stats, buckets, cfg, lv)
+        row["levels"] = qf.levels_text(lv)
         sid = "trend:" + inst.key
         try:
             mon = inst.monitor(sid, "trend", k=k, zfn=line.zfn, mode="drift", follows=True, entry=ENTRY_ANY, hold=HOLD0, reward=0.0,
@@ -723,8 +834,9 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
              "groups": [dict(v, group="Tümü" if g == "*" else g) for g, v in summary.items()],
              "risk_usd": target, "horizons": list(HORIZONS), "labels": list(H_LABELS), "min_days": MIN_DAYS, "stop_sigma": STOP_SIGMA,
              "edges": list(EDGES), "k_range": list(K_RANGE), "lines": len(mons), "instruments": len(insts),
+             "levels": book.to_json(), "href": HREF,
              "ms": {"track": round((t_track - t0) * 1000.0, 1), "walk": round((t_walk - t_track) * 1000.0, 1),
-                    "total": round((t1 - t0) * 1000.0, 1)}}
+                    "levels": round((t_lv - t_cal) * 1000.0, 1), "total": round((t1 - t0) * 1000.0, 1)}}
     return mons, table
 
 

@@ -65,6 +65,7 @@ from operator import itemgetter, mul
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import quantfam as qf
+from . import quantlevels as qlv
 from . import quantmath as qm
 from . import quantopt as qopt
 from . import quantuniv as qu
@@ -732,6 +733,7 @@ class Line(object):
         self.rr = _rr_of(inst, inputs)
         self.now: Optional[Tuple[float, List[Optional[float]]]] = None    # (p, today's row) of the last score
         self.scale: Dict[str, Tuple[Optional[float], Optional[float]]] = self._scales()
+        self.book: Optional[qlv.Book] = None                              # the family's calibrated levels (the fit sets them)
 
     def _scales(self) -> Dict[str, Tuple[Optional[float], Optional[float]]]:
         """Each close's (mean |5-day P&L| of the rows known by then, a day's σ of the 60 moves before): the backtest's
@@ -797,6 +799,49 @@ class Line(object):
         if abs(p - 0.5) / Z_SCALE < entry:
             return False, "olasılık %%%s < eşik %%%s" % (_cut(max(p, 1.0 - p)), qf._g((0.5 + Z_SCALE * entry) * 100.0, 0))
         return True, ""
+
+    def level_trades(self, entry: float, try_per: Optional[float] = None) -> List[Dict[str, Any]]:
+        """The out-of-sample predictions past the entry as ``quantlevels``' trades - one a line at a time, held
+        ``HORIZON`` closes as the backtest holds them: the path of the up side's P&L in its direction at each close, in
+        σ of the five days (the daily σ of the 60 moves before the entry × √5), an FX line's carry a close beside it;
+        one whose five closes are not all in yet is open.  ``try_per``: TRY a change unit (the panel's money)."""
+        out: List[Dict[str, Any]] = []
+        inst = self.inst
+        kind = inst.kind
+        fx = _fx(inst)
+        L, pts = self.L, self.pts
+        root = math.sqrt(HORIZON)
+        free = -1
+        for r in self.rows:
+            p = self.preds.get(r.day)
+            if p is None or r.i < free or abs(p - 0.5) / Z_SCALE < entry:
+                continue
+            sd = self.scale.get(r.day, (None, None))[1]
+            n = min(HORIZON, len(L) - 1 - r.i)
+            if not sd or n <= 0:
+                continue
+            s = 1 if p > 0.5 else -1
+            unit = sd * root
+            path = []
+            for j in range(1, n + 1):
+                c = qf.change(kind, L[r.i], L[r.i + j])
+                if c is None:
+                    break
+                path.append(s * c / unit)
+            if len(path) < n:
+                continue
+            carry = 0.0
+            c_yr = self.carry.get(r.day) if fx else None
+            if c_yr is not None and n:
+                d_end = pts[r.i + HORIZON][0] if r.i + HORIZON < len(pts) else pts[-1][0]
+                span = (_dt.date.fromisoformat(d_end) - _dt.date.fromisoformat(r.day)).days
+                carry = s * c_yr * span / 365.0 / HORIZON / unit       # (the holding's carry, a close's share)
+            days = [pts[r.i + j][0] for j in range(1, n + 1)]
+            out.append({"family": FAMILY, "group": inst.group, "sid": "ml:" + inst.key, "entry_day": r.day, "days": days, "end_day": days[-1],
+                        "path_sigma": path, "carry_sigma": carry, "carry_in": fx, "open": n < HORIZON, "sigma": unit, "unit": qf.change_unit(kind),
+                        "try": try_per})
+            free = r.i + HORIZON
+        return out
 
     def trades(self, entry: float) -> Dict[str, Any]:
         """The out-of-sample predictions as trades: every day the probability is past the entry, the five days after in
@@ -943,6 +988,16 @@ def _monitor(line: Line, cfg: Dict[str, Any], replay: bool = False) -> qf.Monito
         m.reward = abs(2.0 * p - 1.0) * mv if mv is not None else None
         m.fcast = (2.0 * p - 1.0) * mv if mv is not None else None
         m.risk = risk
+        # the levels calibrated on the family's out-of-sample trades (quantlevels): its group's of the day's month, in σ
+        # of the five days (the σ the trades were scaled with: the 60 moves before the day)
+        if line.book is not None:
+            lv = line.book.line(inst.group, qlv.month_of(ctx.today_iso) if replay else None)
+            sd = line.scale.get(ctx.today_iso, (None, None))[1] if replay else line.sd1
+            if lv.get("ok") and sd:
+                lv = dict(lv, sigma=abs(qf.to_level(kind, sd * math.sqrt(HORIZON), level)))
+            elif lv.get("ok"):
+                lv = {"ok": False, "why": "seviye kalibrasyonu uygulanamadı: σ yok (kendi seviyeleri)"}
+            m.levels = lv
         return (p - 0.5) / Z_SCALE
 
     m.zfn = zfn
@@ -1067,13 +1122,31 @@ def _fit(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mo
     with _MODELS_LOCK:                                    # (keep what this fit used: the next fit of the same data fits nothing)
         _MODELS.clear()
         _MODELS.update(used)
+    # the levels (quantlevels): every line's out-of-sample trades past the entry, calibrated per group month by month
+    t_lv = time.perf_counter()
+    entry = float(cfg["entry_z"])
+    usdtry = ctx.usdtry()
+    paths: List[Dict[str, Any]] = []
+    for line in lines.values():
+        try:
+            m1 = line.inst.money(1.0, 1.0)
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            m1 = None
+        tp = abs(m1) * (1.0 if line.inst.ccy in ("TL", "TRY") else (usdtry or 0.0)) if m1 is not None and math.isfinite(m1) else None
+        paths += line.level_trades(entry, tp or None)
+    book = qlv.calibrate(paths, FAMILY, ctx.today_iso)
+    for line in lines.values():
+        line.book = book
+    t_lv = time.perf_counter() - t_lv
     mons = []
     for line in lines.values():
         if line.valid and line.model is not None:
             mons.append(_monitor(line, cfg))
     table = _table(ctx, cfg, insts, lines, missing, errors)
+    table["levels"] = book.to_json()
     table["timing"] = {"inputs_ms": round((t_in - t0) * 1000.0, 1), "rows_ms": round(t_rows * 1000.0, 1), "train_ms": round(t_walk * 1000.0, 1),
-                       "total_ms": round((time.perf_counter() - t0) * 1000.0, 1), "fitted": fitted, "cached": cached, "lines": len(lines)}
+                       "levels_ms": round(t_lv * 1000.0, 1), "total_ms": round((time.perf_counter() - t0) * 1000.0, 1), "fitted": fitted,
+                       "cached": cached, "lines": len(lines)}
     _STATE = State(ctx, lines, table)
     return mons, table
 
