@@ -923,8 +923,10 @@ def _monitor(line: Line, cfg: Dict[str, Any], replay: bool = False) -> qf.Monito
                      regime={"tag": None}, reward=None, risk=None, fcast=None, pnl_sd=None,
                      sample=None if replay else {"ok": True, "text": "örneklem dışı isabet %%%s (%d test, log-loss %s) ≥ %%%s, en az %d test" % (
                          _pct(rec["hit"]), rec["tests"], _v(rec["log_loss"], 3), _pct(line.hit_min), line.tests_min)},
-                     info={"version": inst.label, "p": None, "hit_rate": rec["hit"], "n_test": rec["tests"], "log_loss": rec["log_loss"],
-                           "valid": line.valid})
+                     # (the backtest's row is the line's name without what changes as it rolls: "PPK 1. dönem (17.12–22.01)"
+                     # is one row through every period, not a row each)
+                     info={"version": inst.label.split(" (")[0], "p": None, "hit_rate": rec["hit"], "n_test": rec["tests"],
+                           "log_loss": rec["log_loss"], "valid": line.valid})
 
     def zfn(level: float, live: Dict[str, float]) -> Optional[float]:
         if level is None:
