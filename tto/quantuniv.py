@@ -72,9 +72,10 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "sira": ("Carry + momentum", "carry", "quant"),
     "ml": ("Makine öğrenmesi", "model", "quant"),
     "optspot": ("Opsiyon → spot", "model", "quant-optspot"),    # (the option signals' spot lines: a tab of FX - quantoptspot.py)
+    "dibssw": ("DİBS switch", "carry", "quant-dibssw"),         # (Carry + momentum's DİBS switches: a tab of Faiz - quantdibssw.py)
 }
 #: the module of each family (``tto/<name>.py``), imported when it exists: it registers its function with ``family``
-MODULES: Dict[str, str] = {"trend": "quanttrend", "sira": "quantsira", "ml": "quantml", "optspot": "quantoptspot"}
+MODULES: Dict[str, str] = {"trend": "quanttrend", "sira": "quantsira", "ml": "quantml", "optspot": "quantoptspot", "dibssw": "quantdibssw"}
 #: id -> fn(ctx, reg, cfg) -> (monitors, table)
 RUNNERS: Dict[str, Callable[..., Tuple[List[qf.Monitor], Any]]] = {}
 #: the families that walk forward on their own calendar (Carry + momentum: a weekly basket's rebalances, not the

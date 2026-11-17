@@ -110,7 +110,12 @@ RV_ROWS = (5, 54)
 #: what is read of a row of DİBS RV (engine thread): field -> column
 RV_COLS = (("name", "C"), ("maturity", "E"), ("coupon", "CS"), ("freq", "CU"), ("value_date", "P"), ("dirty", "R"),
            ("simple", "S"), ("compound", "T"), ("mod_dur", "AG"), ("dv01", "AI"), ("repo", "AL"), ("asw", "Z"),
-           ("wb_rc", "AB"), ("source", "BS"))
+           ("wb_rc", "AB"), ("source", "BS"),
+           # (the sheet's carry + roll over its horizon - DİBS RV!J2 months -: carry, roll and C+R in bp, C+R in TL a 1 mn:
+           # the DİBS switch family's line tells it, quantdibssw.py)
+           ("carry_bp", "AM"), ("roll_bp", "AN"), ("cr_bp", "AO"), ("cr_tl", "AP"))
+#: DİBS RV's C+R horizon (months: "Ufuk (ay)")
+RV_HORIZON = "J2"
 
 
 # ---------------------------------------------------------------------------------------------- the curve
@@ -812,13 +817,15 @@ def read_engine(out: Dict[str, Any], index: Dict[str, int], reader: Callable[[st
                 num: Callable[[Any], Optional[float]]) -> None:
     """``quant.Quant._read_engine`` (engine thread, short): the fixed-coupon bonds and bills of the DİBS RV list as
     the sheet has them now - static data, value date, dirty price, its simple and compound yields, duration, DV01, the
-    row's repo, the sheet's own ASW and rich / cheap - into ``out["dibs"]``."""
+    row's repo, the sheet's own ASW and rich / cheap, its carry + roll (AM:AP) - into ``out["dibs"]``; the C+R's horizon
+    (J2, months) into ``out["dibs_cr_months"]``."""
     from .xl.values import serial_to_date
     rows: List[Dict[str, Any]] = []
     out["dibs"] = rows
     if RV_SHEET not in index:
         return
     get = reader(RV_SHEET)
+    out["dibs_cr_months"] = num(get(RV_HORIZON))
 
     def day(v: Any) -> Optional[str]:
         return serial_to_date(v).isoformat() if type(v) is float and 20000 < v < 80000 else None
