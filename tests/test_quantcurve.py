@@ -531,7 +531,7 @@ def test_both_pages_over_http(seeded):
         quant = [p["id"] for p in nav if p["group"] == "Quant"]
         # (in the menu's order: Eğri Adil Değeri on Faiz's tabs after Rejim, Opsiyon on FX's after Makro)
         assert quant.index("quant-curve") == quant.index("quant-regime") + 1 and quant.index("quant-opt") == quant.index("quant-macro") + 1
-        assert len(quant) == 18                                         # (Trend, Carry + momentum, Makine öğrenmesi: tabs of Sinyaller)
+        assert len(quant) == 19                                         # (Trend, Carry + momentum, Makine öğrenmesi: tabs of Sinyaller; Opsiyon → spot: of FX)
         assert client.get("/static/js/pages/quantfit.js").status_code == 200
         # the quote and the switch from the fair curve, the desk's half spreads
         fixed = [r["isin"] for r in body["dibsfv"]["rows"] if r["kind"] == "fixed"]
