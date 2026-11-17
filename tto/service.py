@@ -1718,7 +1718,8 @@ class Service(object):
                 continue                               # a table of the dashboard's own that does not fit this file
             # what reads the workbook only is made again when what it read changed; a panel completed with what the
             # Broker Chat, the trades or another workbook say is made every time
-            reusable = p["type"] in ("table", "notes", "chart", "custom") and not p.get("append") and not p.get("source")
+            reusable = p["type"] in ("table", "notes", "chart", "custom") and not p.get("append") and not p.get("source") \
+                and not p.get("curve") and not p.get("bonds")
             ptype = "table" if p["type"] == "generated" else p["type"]
             part(p.get("id"), ptype, reusable,
                  lambda p=p, sheet=sheet: self._panel(p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer))
@@ -2002,8 +2003,17 @@ class Service(object):
                     idx = p.get("chart", 0)
                     if idx < len(charts):
                         spec = charts[idx]
-                if spec is not None:
-                    entry["data"] = R.chart(calc, spec, loc)
+                on = calc
+                if spec is not None and p.get("curve") == "fx":
+                    # the workbook's chart once more, on the FX swap curve: its points and its fitted curve are the
+                    # sheet's own, with the OIS quotes its curve is built from swapped for the FX swap implied rates
+                    on, _ = self._asw_fx_calc(book, user)
+                    spec = self._chart_as(spec, p.get("as") or {})
+                if spec is not None and on is None:
+                    entry["data"] = R.chart(calc, dict(spec, series=[]), loc)
+                    entry["note"] = "FX swap ima faizi yok (EK_FX): grafik çizilemedi"
+                elif spec is not None:
+                    entry["data"] = R.chart(on, spec, loc)
                     entry["title"] = p.get("title") or entry["data"]["title"]
             elif p["type"] == "custom":
                 entry["component"] = p.get("component")
@@ -5229,6 +5239,43 @@ class Service(object):
         return note
 
     # ================================================================== ASW against FX swaps
+    def _asw_fx_calc(self, book, user: Optional[str]) -> Tuple[Optional[Calc], int]:
+        """The ASW sheet's calculation on the FX swap curve: the OIS quotes its curve is built from (ASW!C65:R65)
+        swapped for the FX swap implied rates of EK_FX - a tenor without one keeps its OIS quote - over the user's own
+        inputs.  ``None`` when no tenor has an FX rate; with the number swapped.  Made once for what a page shows at a
+        time (the table's ASW FX column and the chart of it read the same one; anything changed since: made again)."""
+        si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
+        base = self._calc(user, book)
+        shared = book.engine.shared
+        key = (user, book.id, id(base), base.epoch, shared.epoch, book.engine.input_changes)
+        hit = getattr(self, "_fx_calc_kept", None)
+        if hit is not None and hit[0] == key:
+            return hit[1], hit[2]
+        ov = dict(self._overlay(user, book)) if user else {}
+        swapped = 0
+        for k in range(len(ex.FXC_ROOTS)):
+            v = base.get(fi, ex.FXC_FIRST + k, parse_a1("D1") % COLS)
+            if type(v) is float:
+                ov[(si, parse_a1("%s65" % index_to_col(3 + k)))] = v
+                swapped += 1
+        calc = Calc(book.engine, shared, ov) if swapped else None
+        self._fx_calc_kept = (key, calc, swapped)
+        return calc, swapped
+
+    @staticmethod
+    def _chart_as(spec: Dict[str, Any], how: Dict[str, Any]) -> Dict[str, Any]:
+        """A chart of the workbook under another title, value axis title and series names (a panel's ``as``)."""
+        out = dict(spec)
+        if how.get("title"):
+            out["title"] = how["title"]
+        if how.get("y_title"):
+            out["axis_titles"] = [how["y_title"] if t == spec.get("y_title") else t for t in spec.get("axis_titles") or []]
+            out["y_title"] = how["y_title"]
+        names = how.get("names") or []
+        out["series"] = [dict(s, name=names[i], name_ref=None) if i < len(names) and names[i] else s
+                         for i, s in enumerate(spec.get("series") or [])]
+        return out
+
     def _asw_fx_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
         """ASW against the FX swap curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
         it builds its curve from (ASW!C65:R65) swapped for the FX swap implied rates of EK_FX - a tenor without
@@ -5238,16 +5285,9 @@ class Service(object):
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows:
             return
-        si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
+        si = book.model.sheet_index["ASW"]
         base = self._calc(user, book)
-        ov = dict(self._overlay(user, book)) if user else {}
-        swapped = 0
-        for k in range(len(ex.FXC_ROOTS)):
-            v = base.get(fi, ex.FXC_FIRST + k, parse_a1("D1") % COLS)
-            if type(v) is float:
-                ov[(si, parse_a1("%s65" % index_to_col(3 + k)))] = v
-                swapped += 1
-        calc = Calc(book.engine, book.engine.shared, ov) if swapped else None
+        calc, swapped = self._asw_fx_calc(book, user)
         r_col = parse_a1("R1") % COLS
 
         def bp(v: Any, signed: bool = False) -> Dict[str, Any]:

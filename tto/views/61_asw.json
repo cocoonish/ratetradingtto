@@ -149,12 +149,64 @@
    "wide": true
   },
   {
+   "id": "chartfx",
+   "type": "chart",
+   "chart": 0,
+   "curve": "fx",
+   "wide": true,
+   "title": "FX swap eğrisine göre ASW — kalan vade",
+   "as": {
+    "title": "FX swap eğrisine göre ASW — kalan vade",
+    "y_title": "ASW FX (bp)",
+    "names": [
+     "Kâğıtlar",
+     "FX eğrisi (a+bt+ct²)"
+    ]
+   },
+   "note": "Yukarıdaki grafiğin aynısı, FX swap ima TRY eğrisiyle (EK_FX; fiyatı olmayan vadede OIS kotası): her kâğıt kalan vadesinde tablonun ASW FX sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi."
+  },
+  {
    "id": "fxc",
    "type": "table",
    "sheet": "EK_FX",
    "range": "A1:F23",
    "hidden": false,
    "title": "FX swap ima TRY eğrisi · ASW'nin ikinci eğrisi (ICPL, sonra BGN)"
+  },
+  {
+   "id": "fxline",
+   "type": "chart",
+   "sheet": "EK_FX",
+   "wide": true,
+   "title": "FX swap ima TRY eğrisi ve OIS  ·  vade vade (%)",
+   "spec": {
+    "title": "FX swap ima TRY eğrisi ve OIS  ·  vade vade (%)",
+    "kind": "line",
+    "value_format": "0.00",
+    "axis_titles": [
+     "%"
+    ],
+    "y_title": "%",
+    "aspect": 0.4,
+    "series": [
+     {
+      "name": "FX swap ima",
+      "cat": "EK_FX!$A$6:$A$21",
+      "val": "EK_FX!$D$6:$D$21",
+      "kind": "line",
+      "color": "C55A11",
+      "marker": true
+     },
+     {
+      "name": "OIS",
+      "cat": "EK_FX!$A$6:$A$21",
+      "val": "EK_FX!$E$6:$E$21",
+      "kind": "line",
+      "color": "1F3864",
+      "marker": true
+     }
+    ]
+   }
   },
   {
    "id": "fxh",
