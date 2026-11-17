@@ -2284,7 +2284,7 @@ async function clipAfter(page, action) {
     const mar28 = sumRows.find((r) => r[2] === 'TRT150328T24') || [];
     const fairAt = capRow.indexOf('Adil getiri %');
     check('DİBS Trading: the summary in groups (Fiyat · OIS\'e göre · FX swap\'a göre · Risk · Carry · Broker), each bond\'s fair yield and price',
-      ['Fiyat', "OIS'e göre", "FX swap'a göre (offshore ICAP eğrisi)", 'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0
+      ['Fiyat', "OIS'e göre", "FX swap'a göre", 'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0
       && capRow.lastIndexOf('Adil getiri %') > fairAt && /^\d+,\d\d%$/.test(mar28[fairAt]) && /^\d+,\d{3}$/.test(mar28[fairAt + 1])
       && capRow[2] === 'ISIN' && capRow[1] === 'Kâğıt', { groupRow, capRow, mar28 });
     const fairTip = await page.evaluate((i) => { const tr = [...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
