@@ -27,6 +27,7 @@ from . import blotter as bl
 from . import bonds as bd
 from . import borsaspread as bsp
 from . import brokerchat as bc
+from . import datecells
 from . import entry
 from . import extras as ex
 from . import layout as lay
@@ -397,6 +398,8 @@ class Service(object):
                                                     (ncol, "text", ccy.lower() + "-names", "%s tatil adları" % ccy)):
                         tto.declare("%s!%s%d:%s%d" % (ex.HOL_SHEET, col, ex.HOL_FIRST, col, ex.HOL_LAST), scope="shared",
                                     group="holidays-" + group, kind=kind, label=label, view="settings")
+        for book in self.books.values():
+            datecells.show_inputs(book)          # (a date input not formatted as one - a holiday list's empty rows)
         if replay:
             if isinstance(provider, ReplayProvider):
                 if tto is not None:
