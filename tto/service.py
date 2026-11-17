@@ -1994,6 +1994,9 @@ class Service(object):
                     self._universe_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "borsa_spread":
                     self._borsa_spread_columns(book, calc, user, entry["data"], loc, p["range"])
+                if p.get("bonds"):
+                    # a list of bonds: its rows without a bond left out, the bonds in the trading list's order (display only)
+                    self._bond_rows(book, calc, sheet, p["bonds"], entry["data"])
                 hint = th.client(p.get("trade"), v["id"], p.get("id"))
                 if hint:
                     entry["data"]["trade"] = hint   # its prices: right click, "İşlem gir" (trade_prefill)
@@ -5419,6 +5422,63 @@ class Service(object):
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
         data["added"] = int(data.get("added") or 0) + 2
 
+    #: a bond's kind (the desk's list's) from a type letter of a sheet (B / S / T / E: DİBS RV's, the ASW sheet's)
+    _KIND_OF_TYPE = {"B": "bill", "S": "fixed", "T": "float", "F": "frn", "E": "cpi"}
+
+    def _bond_rows(self, book, calc, sheet: str, spec: Dict[str, Any], data: Dict[str, Any]) -> None:
+        """A list of bonds as its page shows it - display only, every cell stays where it is: the rows that hold no bond
+        are left out (the empty rows the desk keeps between its groups and the unused ones below; "+ ISIN ekle" and a
+        paste still find them), and with ``order`` the bonds kind by kind (bono, kuponsuz, sabit kuponlu, TLREF, FRN,
+        TÜFE - a caption each, as on Tüm Kâğıtlar), by maturity.  ``spec``: the list's ISIN column (``key``), its rows
+        (``first``, ``last``); ``order``: the sheet's columns of a bond's type and maturity, when the desk's list does not
+        know the bond."""
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows or sheet not in book.model.sheet_index:
+            return
+        from .rowkeys import isin_of
+        si = book.model.sheet_index[sheet]
+        key, first, last = col_to_index(spec["key"]), int(spec["first"]), int(spec["last"])
+        order = spec.get("order")
+        top: List[Tuple[List[Dict[str, Any]], int]] = []
+        foot: List[Tuple[List[Dict[str, Any]], int]] = []
+        bonds: List[Tuple[str, Any, List[Dict[str, Any]], int]] = []
+        for row, r in zip(rows, rnums):
+            if not isinstance(r, int) or r < first:
+                top.append((row, r))
+                continue
+            if r > last:
+                foot.append((row, r))
+                continue
+            code = isin_of(calc.get(si, r, key))
+            if not code:
+                continue
+            kind, mat = None, None
+            if order:
+                b = bd.by_isin(code)
+                kind = (b or {}).get("kind") or self._KIND_OF_TYPE.get(calc.get(si, r, col_to_index(order["kind"])))
+                mat = date_to_serial(_dt.date.fromisoformat(b["maturity"])) if (b or {}).get("maturity") \
+                    else calc.get(si, r, col_to_index(order["maturity"]))
+            bonds.append((kind, mat if type(mat) is float else 1e9, row, r))
+        out = top
+        if not order:
+            out += [(row, r) for _, _, row, r in bonds]
+        else:
+            width = len(rows[0]) if rows else 0
+
+            def caption(text: str) -> List[Dict[str, Any]]:
+                # (``grp``: a launchpad box of some of the bonds shows only the captions of their groups)
+                return [{"t": text, "k": "s", "b": 1, "cls": "grouphead", "cs": width, "grp": 1}] + [{"sk": 1} for _ in range(width - 1)]
+
+            kinds = [k for k, _, _ in ex.UNI_KINDS]
+            for kind, cap, _ in list(ex.UNI_KINDS) + [(None, "Türü bilinmiyor", None)]:
+                mine = sorted((x for x in bonds if (x[0] if x[0] in kinds else None) == kind), key=lambda x: (x[1], x[3]))
+                if mine:
+                    out.append((caption("%s · %d kâğıt" % (cap, len(mine))), 0))
+                    out += [(row, r) for _, _, row, r in mine]
+        out += foot
+        data["rows"] = [row for row, _ in out]
+        data["r"] = [r for _, r in out]
+
     # ================================================================== BIST swaps against the TRY workbook's curves
     def _borsa_spread_columns(self, book, calc, user: Optional[str], data: Dict[str, Any], loc, rng: str) -> None:
         """The Borsa Swap tables' spreads to the OIS and the offshore mid curve (``tto.borsaspread``): the curves are
@@ -7765,7 +7825,14 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
                     hit = hit if len(hit) == 1 else []
                 body.update(hit)
         if body:
-            keep_r = sorted(heads | body)
+            keep = heads | body
+            # the caption of a group of a list of bonds (_bond_rows: "Bono · 2 kâğıt") stays over the rows picked in it only
+            grp = [i for i in sorted(heads) if src[i] and isinstance(src[i][0], dict) and src[i][0].get("grp")]
+            for k, i in enumerate(grp):
+                end = grp[k + 1] if k + 1 < len(grp) else len(src)
+                if not any(i < j < end for j in body):
+                    keep.discard(i)
+            keep_r = sorted(keep)
         else:
             missing = True
     new_r = {i: k for k, i in enumerate(keep_r)}

@@ -58,8 +58,13 @@
     "title": "DİBS listesine kâğıt ekle (DİBS RV ile ortak; DİBS ASW listesine de eklenir)"
    },
    "append": "dibs_live",
+   "bonds": {
+    "key": "A",
+    "first": 5,
+    "last": 54
+   },
    "wide": true,
-   "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır.",
+   "note": "Her valör (T0 / T1 / T2) bir Bloomberg fiyat kaynağıdır; sarı hücreye başka kod yazılabilir. Canlıda son işlemin saati, dashboard'un o kâğıtta son fiyat ya da hacim değişimini gördüğü andır; yoksa Bloomberg'in son işlem günü. Sağdaki sütunlar bugünün Broker Chat tahtasıdır. Kâğıtsız satırlar (DİBS RV'deki grup araları, kullanılmayan satırlar) gösterilmez.",
    "card": "bond",
    "keep_title": true,
    "trade": {

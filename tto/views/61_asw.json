@@ -127,6 +127,16 @@
    "range": "B6:U56",
    "keep_title": true,
    "append": "asw_fx",
+   "bonds": {
+    "key": "B",
+    "first": 7,
+    "last": 56,
+    "order": {
+     "kind": "H",
+     "maturity": "I"
+    }
+   },
+   "note": "Kâğıtlar trading listesindeki gibi türüne (bono, kuponsuz, sabit kuponlu, TLREF, FRN, TÜFE) ve vadesine göre sıralı; kâğıtsız satırlar gösterilmez (hücreler yerinde: + ISIN ekle boş satırları bulur). Trading listesine eklenen kâğıt buraya da eklenir, çıkan buradan da çıkar; bu tablonun kendi + ISIN ekle'si yalnız bu listeye ekler.",
    "action": "add-isin",
    "add": {
     "list": "B7:B56",
