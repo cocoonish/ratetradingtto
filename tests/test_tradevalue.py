@@ -215,6 +215,47 @@ def test_fra_alone_equals_its_replicating_legs():
     # an FRA that does not sit on the grid of its settlement: a residual, reported
     off = tv.value(ois(structure="fra", value_date="2027-01-15", end_date="2027-07-15", price=38.0), m)
     assert off["ok"] and abs(off["mtm"] - sum(lg["mtm"] for lg in off["legs"]) - off["inputs"]["residual"]["mtm"]) < 1e-6
+    # "3x6" typed over a form that still holds the default value date (the spot): the FRA's dates win
+    form = tv.check(ois(structure="fra", fra="3x6", value_date="2026-11-04", end_date="", price=38.0), m)
+    assert (form["value_date"], form["end_date"]) == ("2027-02-04", "2027-05-04")
+    assert tv.value(dict(t, product=" OIS "), m)["mtm"] == r["mtm"]
+
+
+def test_schedules_of_a_tenor_and_of_a_broken_date():
+    usd, try_ = tv.CONVS["sofr"], tv.CONVS["ois"]
+    # USD: a tenor's coupons as the SOFR book dates them - EDATE(start, m − 12k), modified following (15M: at 3M) ...
+    assert tv.schedule(D(2026, 11, 5), D(2028, 2, 7), usd, (), months=15) == [(D(2026, 11, 5), D(2027, 2, 5)),
+                                                                             (D(2027, 2, 5), D(2028, 2, 7))]
+    # ... a broken end date's back from the end, the first period short
+    assert tv.schedule(D(2026, 6, 17), D(2028, 6, 30), usd, ()) == [(D(2026, 6, 17), D(2026, 6, 30)),
+                                                                     (D(2026, 6, 30), D(2027, 6, 30)), (D(2027, 6, 30), D(2028, 6, 30))]
+    # TRY: one payment up to 3M, then every 3 months from the start, the last period to the end date
+    assert tv.schedule(D(2026, 11, 4), D(2027, 2, 4), try_, ()) == [(D(2026, 11, 4), D(2027, 2, 4))]
+    assert tv.schedule(D(2026, 11, 4), D(2027, 4, 20), try_, ()) == [(D(2026, 11, 4), D(2027, 2, 4)), (D(2027, 2, 4), D(2027, 4, 20))]
+
+
+def test_a_swap_closed_inside_a_period():
+    """Unwound six weeks into a quarter: the swap's own accrual up to the close, the fixed difference after it."""
+    start, close = D(2026, 8, 4), D(2026, 9, 15)
+    days = business_days(start, TODAY)
+    fix = tv.Fixings({d.isoformat(): 40.0 for d in days}, 0.40, (), 365.0, "TLREF")
+    m = hand_market(fix_try=fix)
+    t = ois(price=41.0, trade_date="2026-08-03", settle_date=start.isoformat(), tenor="1Y", status="closed", close_price=39.0,
+            close_date=close.isoformat())
+    r = tv.value(t, m)
+    c = m.curves["ois"]
+    periods = tv.schedule(start, D(2027, 8, 4), tv.CONVS["ois"], (), months=12)
+    assert periods[0] == (start, D(2026, 11, 4))
+    hand = 0.0
+    for a, b in periods:
+        d_b = c.df(b) / c.df(TODAY)
+        if a < close < b:
+            i_ac = compounded({d: 0.40 for d in business_days(a, close)}, a, close, 365.0)
+            pay = N * (0.41 * (close - a).days / 365.0 - (i_ac - 1.0)) + N * 0.02 * (b - close).days / 365.0
+        else:
+            pay = N * 0.02 * (b - a).days / 365.0
+        hand += pay * d_b
+    assert abs(r["mtm"] - hand) < 1e-6 and r["carry_1d"] == 0.0 and r["accrued"] == 0.0
 
 
 def test_mpc_trade_is_keyed_by_its_meeting_date():

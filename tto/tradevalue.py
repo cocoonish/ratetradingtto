@@ -290,10 +290,14 @@ def schedule(start: _dt.date, end: _dt.date, conv: Conv, hol: Any, months: Optio
                 dates.append(d)
             k += 1
     else:
-        m = months if months is not None else int(round((end - start).days * 12.0 / 365.25))
+        # a tenor's coupons as the SOFR book dates them (SOFR_FOMC!AV64: EDATE(spot, m − 12k), modified following);
+        # a broken end date's back from the end itself (the first period short)
         k = 1
-        while m - conv.coupon * k > 0:
-            d = _roll(conv, add_months(start, m - conv.coupon * k), hol)
+        while k < 200:
+            raw = add_months(start, months - conv.coupon * k) if months is not None else add_months(end, -conv.coupon * k)
+            if raw <= start:
+                break
+            d = _roll(conv, raw, hol)
             if start < d < end:
                 dates.append(d)
             k += 1
@@ -1012,21 +1016,37 @@ def _swap_pv(mkt: Market, prod: str, leg: _Leg, asof: _dt.date, curve: Optional[
     closed, Kc = leg.close_date, leg.close_rate
     dfa = curve.df(asof)
     pv_fix = pv_flt = ann = acc = 0.0
+
+    def grown(x: _dt.date, y: _dt.date) -> float:
+        """The overnight compounded from x to y: the fixings up to today, the curve after it."""
+        if y <= asof:
+            f = fix.compound(x, y, asof, tally) if fix is not None else None
+        elif x >= asof:
+            f = curve.df(x) / curve.df(y)
+        else:
+            f0 = fix.compound(x, asof, asof, tally) if fix is not None else None
+            f = f0 * curve.df(asof) / curve.df(y) if f0 is not None else None
+        if f is None:
+            raise TradeError("%s fixing'i yok (%s)" % (conv.float_name, _short(x)))
+        return f
+
+    def unwound(a: _dt.date, b: _dt.date) -> float:
+        """A period's payment once the swap is unwound at ``closed``: the swap's own up to the close, the fixed
+        difference after it (the floats cancel)."""
+        if a >= closed:
+            return N * (K - Kc) * (b - a).days / conv.basis
+        return N * (K * (closed - a).days / conv.basis - (grown(a, closed) - 1.0)) + N * (K - Kc) * (b - closed).days / conv.basis
+
     for a, b in schedule(leg.start, leg.end, conv, hol, leg.months):
         tau = (b - a).days / conv.basis
+        after = closed is not None and b > closed
         if b <= asof:
-            if closed is not None and b > closed:
-                acc += N * (K - Kc) * tau
-                continue
-            f = fix.compound(a, b, asof, tally) if fix is not None else None
-            if f is None:
-                raise TradeError("%s fixing'i yok (%s)" % (conv.float_name, _short(a)))
-            acc += N * (K * tau - (f - 1.0))
+            acc += unwound(a, b) if after else N * (K * tau - (grown(a, b) - 1.0))
             continue
         d_b = curve.df(b) / dfa
         ann += tau * d_b
-        if closed is not None:
-            pv_fix += N * (K - Kc) * tau * d_b
+        if after:
+            pv_fix += unwound(a, b) * d_b
             continue
         pv_fix += N * K * tau * d_b
         if a >= asof:
@@ -1677,11 +1697,12 @@ def value(trade: Dict[str, Any], mkt: Market, asof: Any = None) -> Dict[str, Any
     carry_1d_usd, accrued, price_now, price_text, greeks, inputs}`` and ``legs`` for a package.  Never raises: a trade
     that cannot be valued is ``ok`` False with the reason in ``why``."""
     day = _day(asof) or (mkt.today if mkt is not None else None) or _dt.date.today()
-    prod = str((trade or {}).get("product") or "").lower()
+    prod = str((trade or {}).get("product") or "").strip().lower() if isinstance(trade, dict) else ""
     try:
         if mkt is None:
             raise TradeError("piyasa yok")
         t = check(trade, mkt, strict=False)
+        prod = t["product"]
         if prod in RATES:
             return _value_rates(t, mkt, day)
         if prod == "dibs":
@@ -2152,8 +2173,11 @@ def _check_rates(t: Dict[str, Any], m: Market, td: _dt.date) -> Dict[str, Any]:
             if not b > a:
                 raise TradeError("FRA'nın bitişi başlangıcından sonra olmalı (örn. 3x6)")
             t["fra"] = spec
-            t.setdefault("value_date", _roll(conv, add_months(settle, a), hol).isoformat())
-            t.setdefault("end_date", _roll(conv, add_months(settle, b), hol).isoformat())
+            # a new trade takes its dates from "3x6" (a form's value date may still be the spot of a default); a stored
+            # one keeps the dates it was entered with
+            if strict or t.get("value_date") in (None, "") or t.get("end_date") in (None, ""):
+                t["value_date"] = _roll(conv, add_months(settle, a), hol).isoformat()
+                t["end_date"] = _roll(conv, add_months(settle, b), hol).isoformat()
         start = _date_field(t, "value_date", "FRA başlangıcı")
         if strict and not start > settle:
             raise TradeError("FRA başlangıcı valörden sonra olmalı")
