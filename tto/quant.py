@@ -21,6 +21,12 @@ agree, time.  Ranked by |z| × regime fit × half-life fit × carry agreement - 
 after the others as "düşük güven".  The universe the systematic families trade (``quantuniv.Registry``) is built on
 every full fit after the other families; theirs run on it.
 
+**Levels** (``quantlevels``): every line's target and stop are multiples of its σ of the holding, calibrated month by
+month on its family's past trades - the backtest's recorded paths (``quantbt``), the own walk-forwards of Trend (a
+trailing stop), Carry + momentum (the basket's), ML and of any family whose table gives its trades with their paths -,
+with Ödül / risk ≥ 1, the hit rate and the expectancy they had; a line whose levels lost money is "düşük güven"; the
+list sorts a group by the expectancy.  The backtest's panel reports each family at them.
+
 **Log.**  Each time a signal crosses its entry threshold it is written down (time, level, z) and followed: target,
 stop, or ``log_days`` business days later - live tracking (no backtest), so the desk sees which families work.
 
@@ -44,6 +50,7 @@ from . import quantfam as qf
 from . import quantintraday as qi
 from . import quantopt as qopt
 from . import quantlead as ql
+from . import quantlevels as qlv                 # every line's target and stop, calibrated on its family's past trades
 from . import quantml as qml                      # Makine öğrenmesi: the family on the universe (quantuniv) and its page
 from . import quantuniv as qu
 from . import quantsira as qs                    # Carry + momentum (on the universe; registers itself)
@@ -328,6 +335,7 @@ class Quant(object):
         self.use_live = True                        # False: the last close stands for today (tests on synthetic history)
         self._last_base: Optional[Dict[str, Any]] = None   # the last fit's inputs (the backtest refits on them)
         self._bt: Optional[Dict[str, Any]] = None
+        self._books: Optional[Tuple[Any, Any]] = None       # (the backtest's levels, their books: quantlevels)
         self._bt_thread: Optional[threading.Thread] = None
         self.intraday = qi.Intraday(self)
         self.version = 0
@@ -478,7 +486,8 @@ class Quant(object):
         if base is None:
             return None
         cfg = {k: v for k, v in base["cfg"].items() if k not in ("by", "at", "desk_alarm", "bt_mute", "bt_min_hit", "bt_min_sharpe", "bt_min_trades")}
-        return hashlib.sha1(repr((base["today"].isoformat(), sorted(cfg.items()))).encode()).hexdigest()
+        # (the levels' version: a stored result of an older calibration is run again)
+        return hashlib.sha1(repr((base["today"].isoformat(), sorted(cfg.items()), qlv.VERSION)).encode()).hexdigest()
 
     def backtest_result(self) -> Optional[Dict[str, Any]]:
         if self._bt is None:
@@ -529,35 +538,112 @@ class Quant(object):
                               fwd_scale=base["fwd_scale"])
 
             def runner(ctx: qf.Ctx) -> List[qf.Monitor]:
-                # quantfam's families and the ones on the universe (quantuniv.py: their registry of the day's context)
-                return qf.run_all(ctx, items, None, self.pause)[0] + qu.monitors(ctx, self.pause)
+                # quantfam's families and the ones on the universe (quantuniv.py: their registry of the day's context),
+                # and the families beside them that need nothing but the closes (Eğri Adil Değeri, Opsiyon, Öncü-Takipçi):
+                # every one with a path of its trades, its levels calibrated on them (quantlevels)
+                return qf.run_all(ctx, items, None, self.pause)[0] + qu.monitors(ctx, self.pause) + self._bt_more(ctx)
 
-            res = qbt.backtest(test, make_ctx, runner, series, cfg, step=step, pause=self.pause, deadline=time.perf_counter() + budget)
+            res = qbt.backtest(test, make_ctx, runner, series, cfg, step=step, pause=self.pause, deadline=time.perf_counter() + budget,
+                               as_of=today_iso)
             # (the families that walk forward on their own calendar - Carry + momentum's weekly baskets: their fit's trades)
             qu.own_backtests(res, (self._fit or {}).get("tables") or {})
             first, last = res.get("first"), res.get("last")
             res.update({"at": _now().isoformat(sep=" "), "today": today_iso, "key": self._bt_key(),
                         "years": ((_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.0) if first and last else None})
-            self.store.put(self.BT_KEY, _clean(res))
+            res.pop("paths", None)                          # (the paths are the levels' input: the levels are kept)
             self._bt = _clean(res)
+            self._books = None
+            self.store.put(self.BT_KEY, self._bt)
             self.state.update({"bt_at": res["at"], "bt_ms": res["ms"], "bt_error": ""})
             return self._bt
         finally:
             self.state["bt_phase"] = ""
 
+    @staticmethod
+    def _bt_more(ctx: qf.Ctx) -> List[qf.Monitor]:
+        """The backtest refit's families beside quantfam's that need the closes alone: Eğri Adil Değeri (the OIS
+        curve's NSS residuals), Opsiyon (the smile), Öncü-Takipçi (the daily pairs) - each failing on its own."""
+        out: List[qf.Monitor] = []
+        for fn in (lambda: qcurve.fam_curve(ctx)[0], lambda: qopt.fam_opt(ctx)[0], lambda: ql.monitors(ctx)):
+            try:
+                out.extend(fn())
+            except Exception:  # noqa: BLE001 - a family that cannot run on a day has no trades that day
+                pass
+        return out
+
+    def bt_books(self) -> Optional[Dict[str, qlv.Book]]:
+        """The families calibrated on the backtest's paths (``quantlevels.Book``) - ``None`` before the first backtest
+        of this version (an older stored result has no levels)."""
+        bt = self.backtest_result()
+        doc = bt.get("levels") if bt and isinstance(bt.get("levels"), dict) else None
+        hit = self._books
+        if hit is None or hit[0] is not doc:
+            hit = self._books = (doc, qlv.books_of(doc) if isinstance(doc, dict) else None)
+        return hit[1]
+
+    @staticmethod
+    def fit_books(fit: Optional[Dict[str, Any]]) -> Dict[str, qlv.Book]:
+        """The families calibrated in the fit on their own walk-forward (their table's ``"levels"``: Trend, Carry +
+        momentum, Makine öğrenmesi, and any family whose table gives its trades with their paths)."""
+        out: Dict[str, qlv.Book] = {}
+        for fid, tab in ((fit or {}).get("tables") or {}).items():
+            lv = tab.get("levels") if isinstance(tab, dict) else None
+            if isinstance(lv, dict) and fid in qf.FAMILIES:
+                out[fid] = qlv.Book.from_json(lv)
+        return out
+
+    def books(self) -> Dict[str, qlv.Book]:
+        """Every family's calibrated levels: the backtest's and the ones that walk forward on their own."""
+        out = dict(self.bt_books() or {})
+        out.update(self.fit_books(self._fit))
+        return out
+
     def backtest_view(self) -> Dict[str, Any]:
+        """The panel: each family at its calibrated levels - the out-of-sample record (each month's trades at the levels
+        chosen before it), the k and m chosen today (``levels``), a row a group -, a family without them at its own."""
         bt = self.backtest_result()
         if not bt:
             return {"ready": False, "running": self._bt_thread is not None and self._bt_thread.is_alive()}
+        books = self.books()
         rows = []
-        for fam, st in sorted((bt.get("families") or {}).items(), key=lambda kv: qf.FAMILIES.get(kv[0], (kv[0],))[0]):
-            rows.append(dict({k: v for k, v in st.items() if k != "types"}, family=fam, label=qf.FAMILIES.get(fam, (fam,))[0], type=""))
+        fams = dict(bt.get("families") or {})
+        for fid in books:
+            fams.setdefault(fid, {})
+        for fam, st in sorted(fams.items(), key=lambda kv: qf.FAMILIES.get(kv[0], (kv[0],))[0]):
+            label = qf.FAMILIES.get(fam, (fam,))[0]
+            b = books.get(fam)
+            if b is not None and b.record.get("trades"):
+                rec = {k: v for k, v in b.record.items() if k in ("trades", "hits", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
+                rows.append(dict(rec, family=fam, label=label, type="", levels=self._levels_row(b, None), calibrated=True))
+                for g, gd in sorted(b.groups.items(), key=lambda kv: qu.priority(kv[0])):
+                    o = {k: v for k, v in (gd.get("oos") or {}).items() if k in ("trades", "hits", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
+                    rows.append(dict(o, family=fam, label=label, type=g, levels=self._levels_row(b, g), calibrated=True))
+                continue
+            why = (qlv.KEEP.get(fam) or (b.why if b is not None else "") or
+                   "kendi seviyeleri: kalibrasyon için işlem az (en az %d, aylık yürüyen pencerede)" % qlv.MIN_TRADES)
+            rows.append(dict({k: v for k, v in st.items() if k != "types"}, family=fam, label=label, type="", levels=why, calibrated=False))
             for ty, s in (st.get("types") or {}).items():
-                rows.append(dict(s, family=fam, label=qf.FAMILIES.get(fam, (fam,))[0], type=ty))
+                rows.append(dict(s, family=fam, label=label, type=ty, levels="", calibrated=False))
         return _clean({"ready": True, "rows": rows, "trades": list(reversed(bt.get("trades") or []))[:150], "first": bt.get("first"),
                        "last": bt.get("last"), "years": bt.get("years"), "at": bt.get("at"), "ms": bt.get("ms"), "refits": bt.get("refits"),
                        "step": bt.get("step"), "days": bt.get("days"), "n_trades": bt.get("n_trades"), "complete": bt.get("complete"),
-                       "running": self._bt_thread is not None and self._bt_thread.is_alive()})
+                       "running": self._bt_thread is not None and self._bt_thread.is_alive(), "min_trades": qlv.MIN_TRADES,
+                       "window": qlv.WINDOW_MONTHS})
+
+    @staticmethod
+    def _levels_row(b: qlv.Book, group: Optional[str]) -> str:
+        """A panel row's levels: today's k and m (a group's; the family's row: each group's in short)."""
+        if group is not None:
+            lv = b.line(group)
+            return qf.levels_text(dict(lv, hit=None, exp=None)) if lv.get("ok") else (lv.get("why") or "")
+        parts = []
+        for g in sorted(b.groups, key=qu.priority):
+            lv = b.line(g)
+            if lv.get("ok"):
+                k = qf._g(lv["k"], 2)
+                parts.append("%s: %s" % (g, ("iz süren %sσ" % k) if lv["rule"] == "trail" else
+                                         ("adil değer / %sσ" % k) if lv["rule"] == "fair" else "%sσ / %sσ" % (k, qf._g(lv.get("m"), 2))))
+        return " · ".join(parts) or "kalibrasyon yok"
 
     def pause(self) -> None:
         """Between two families: the engine thread gets the interpreter (a calculation waiting for it goes first)."""
@@ -867,6 +953,9 @@ class Quant(object):
                 qv.run(self, ctx, eng, mons, tables, timing)               # VİOP (quantviop.py)
                 reg = qu.Registry(ctx, tables, eng)                        # the universe and the families on it (quantuniv.py)
                 qu.run(ctx, reg, mons, tables, timing, self.pause)
+                t_lv = time.perf_counter()                                 # (a family's own walk-forward's trades with their
+                qlv.calibrate_tables(tables, ctx.today_iso)                # paths: its levels - quantlevels' contract)
+                timing["levels"] = time.perf_counter() - t_lv
                 qf.score_all(ctx, mons, raw_live)
                 fit = {"ctx": ctx, "mons": {m.sid: m for m in mons}, "tables": tables, "today": ctx.today_iso, "mark": self._data_mark(),
                        "cfg": cfg, "coverage": self._coverage(ctx), "registry": reg}
@@ -915,6 +1004,15 @@ class Quant(object):
         cfg = fit["cfg"]
         stamp = _now().strftime("%H:%M")
         signals = []
+        # every line's target and stop from its family's calibrated levels (quantlevels: the backtest's paths; the
+        # families that walk forward on their own set theirs in their fit)
+        books = self.bt_books()
+        own = self.fit_books(fit)
+        for m in fit["mons"].values():
+            if m.family in qlv.OWN:
+                continue                                    # (Trend, Carry + momentum, ML: set by the family, with their σ)
+            b = own.get(m.family)
+            m.levels = b.line(qlv.group_of(m)) if b is not None else qlv.line_for(m, books)
         for m in fit["mons"].values():
             s = qf.make_signal(m, cfg, stamp)
             if s is not None:
@@ -955,17 +1053,29 @@ class Quant(object):
         bt = self.backtest_result()
         fams = (bt or {}).get("families") or {}
         years = (bt or {}).get("years")
+        books = self.books()
         for s in signals:
             fam = fams.get(s["family"])
             m = fit["mons"].get(s["id"])
             ty = ((fam or {}).get("types") or {}).get(qbt.bt_type(m)) if m is not None else None
             use = ty if ty and (ty.get("trades") or 0) >= 5 else fam
-            if bt is None:
+            lv = s.get("levels") or {}
+            b = books.get(s["family"])
+            if lv.get("ok") and b is not None and b.record.get("trades"):
+                # a line at its calibrated levels: its family's record at them (out of sample - its group's with enough)
+                g = (b.groups.get(lv.get("group") or "") or {}).get("oos") or {}
+                use = g if (g.get("trades") or 0) >= 5 else b.record
+                short = {k: use.get(k) for k in ("trades", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
+                s["bt"] = dict(short, text=qbt.bt_text(use, qlv.WINDOW_MONTHS / 12.0).replace("bu aile ", "bu aile seviyeleriyle ", 1),
+                               scope="grup" if use is g else "aile", calibrated=True)
+                fam = b.record
+            elif bt is None:
                 s["bt"] = None
                 continue
-            short = {k: (use or {}).get(k) for k in ("trades", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
-            # (a family that walks forward on its own: over its own span - quantuniv.OWN_BT)
-            s["bt"] = dict(short, text=qbt.bt_text(use, (fam or {}).get("years") or years), scope="tür" if use is ty and ty else "aile")
+            else:
+                short = {k: (use or {}).get(k) for k in ("trades", "hit", "avg_sigma", "avg", "unit", "avg_try", "sharpe", "max_dd")}
+                # (a family that walks forward on its own: over its own span - quantuniv.OWN_BT)
+                s["bt"] = dict(short, text=qbt.bt_text(use, (fam or {}).get("years") or years), scope="tür" if use is ty and ty else "aile")
             why = qbt.bt_gate(fam, cfg)
             s["gates"].append({"name": "Geri test", "ok": not why, "text": why or s["bt"]["text"], "part": None})
             if why and not s["gated"]:
@@ -1087,6 +1197,8 @@ class Quant(object):
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
             if daily:
                 e["daily"] = True                            # (followed to its stop or its direction's turn: no target, no time)
+            if sg.get("trail"):
+                e.update(trail=sg["trail"], best=sg["level"])   # (a trailing stop: that far behind the best level since)
             log.append(e)
             open_sids.add(sg["id"])
             new_alerts.append(e)
@@ -1110,6 +1222,11 @@ class Quant(object):
             s = e["dir"]
             outcome = None
             daily = bool(e.get("daily"))
+            if e.get("trail") and e.get("best") is not None:
+                if s * (level - e["best"]) > 0:
+                    e["best"] = level
+                    changed = True
+                e["stop"] = e["best"] - s * float(e["trail"])
             if not daily and e.get("target") is not None and s * (level - e["target"]) >= 0:
                 outcome = "hedef"
             elif e.get("stop") is not None and s * (level - e["stop"]) <= 0:

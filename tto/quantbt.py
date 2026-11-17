@@ -13,6 +13,12 @@ unit (bp, %, vol; carry + roll in it where the history has it: an FX trade's exc
 package's history has no carry engine - its move only), TRY (a rate package with the desk's package DV01, an FX trade
 per 1 mn of the base currency), Sharpe (mean / σ of the trades' P&L in σ, × √ trades a year) and the largest drawdown
 of the cumulative P&L in σ.
+
+**Paths** (``tto.quantlevels``): beside each trade its path is recorded - the level at every close of its full holding,
+whatever its own target or stop did, as P&L in σ of the holding (the daily σ known at the entry × √ the holding) - and
+the result's ``levels`` are every family's levels calibrated on them, month by month (``quantlevels.calibrate``): what
+the live lines' targets and stops are.  The families that walk forward on their own (``quantlevels.OWN``) and the ones
+that keep their own levels (``quantlevels.KEEP``) record none.
 """
 from __future__ import annotations
 
@@ -22,6 +28,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import quantfam as qf
+from . import quantlevels as qlv
 
 BT_STEP = 10                   # business days between two refits (every family fitted again)
 BT_DAYS = 250                  # the days tested: the last year (the year before it is the first fits' window)
@@ -82,20 +89,49 @@ def summarize(trades: Sequence[Dict[str, Any]], first: Optional[str], last: Opti
             "sharpe": sharpe, "max_dd": dd}
 
 
+def _recorder(m: qf.Monitor, sg: Dict[str, Any], ctx: qf.Ctx, cfg: Dict[str, Any], hold: int, day: str, carry_day: Optional[float],
+              factor: float, pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A trade's path recorder (``quantlevels``): its σ of the holding (P&L units) as known at the entry, the fair
+    value's distance (a mean reversion), the carry a close - ``None`` for a line with no σ (no level of its can be
+    calibrated) or of a family that records none."""
+    if m.family in qlv.OWN or m.family in qlv.KEEP or m.level is None:
+        return None
+    sh = qlv.sigma_of(m, sg.get("hold") or hold, cfg)
+    if sh is None:
+        return None
+    sig, fac, h = sh
+    return {"m": m, "ctx": ctx, "s": sg["direction"], "entry": m.level, "factor": fac, "sig": sig, "hold": h, "day": day, "pos": pos,
+            "path": [], "end": day, "group": qlv.group_of(m), "fair": qlv.fair_of(m, sg.get("target"), sig, fac),
+            "carry": (carry_day / sig) if carry_day is not None else 0.0, "carry_in": bool(m.fx) or carry_day is not None,
+            "unit": (m.pnl or (None, None))[0], "try": _pnl_try(sg, 1.0, cfg)}
+
+
+def _path_of(rec: Dict[str, Any], done: bool) -> Dict[str, Any]:
+    """A recorder as ``quantlevels``' trade (its contract's names)."""
+    path = [round(x, 5) for x in rec["path"]]
+    return {"family": rec["m"].family, "group": rec["group"], "sid": rec["m"].sid, "entry_day": rec["day"], "end_day": rec["end"],
+            "path_sigma": path, "mae_sigma": max([0.0] + [-x for x in path]), "mfe_sigma": max([0.0] + path), "carry_sigma": rec["carry"],
+            "carry_in": rec["carry_in"], "fair_sigma": rec["fair"], "open": not done, "sigma": rec["sig"], "unit": rec["unit"], "try": rec["try"]}
+
+
 def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Callable[[qf.Ctx], List[qf.Monitor]],
              closes: Dict[str, Dict[str, float]], cfg: Dict[str, Any], step: int = BT_STEP,
-             pause: Optional[Callable[[], None]] = None, deadline: Optional[float] = None) -> Dict[str, Any]:
+             pause: Optional[Callable[[], None]] = None, deadline: Optional[float] = None, as_of: Optional[str] = None) -> Dict[str, Any]:
     """The walk-forward run over ``days`` (business days, oldest first): ``make_ctx(T)`` gives the context fitted on the
     closes up to T, ``runner(ctx)`` its monitors, ``closes`` every key's closes (the "live" values of each day).
 
     A daily line (``sg["daily"]``: quanttrend's - a line every day) is a daily position: opened on the first day of its
     direction (the window's first day, or the day it turns), held with no target and no time limit until its direction
-    turns ("dönüş": closed at that day's close, the new direction opened there) or its stop.  An FX line of the universe
-    (its level a price, not an excess return) has its carry in its P&L as a rate package has."""
+    turns ("dönüş": closed at that day's close, the new direction opened there) or its stop - a trailing one
+    (``sg["trail"]``: that far behind its best close).  An FX line of the universe (its level a price, not an excess
+    return) has its carry in its P&L as a rate package has.  Every other trade's path over its whole holding is kept
+    beside it (``paths``) and calibrated (``levels``, as of ``as_of`` - the day after the last one by default)."""
     t0 = time.perf_counter()
     days = list(days)
     positions: Dict[str, Dict[str, Any]] = {}
     trades: List[Dict[str, Any]] = []
+    recs: List[Dict[str, Any]] = []                # the paths being recorded (a trade's whole holding)
+    paths: List[Dict[str, Any]] = []
     prev_live: Dict[str, int] = {}                 # sid -> the direction of yesterday's live signal
     refits = 0
     log_days = int(cfg.get("log_days") or 20)
@@ -122,19 +158,30 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
         for t in days[i:i + max(1, step)]:
             today = _dt.date.fromisoformat(t)
             live = {k: v[t] for k, v in closes.items() if t in v}
+            derived: Dict[int, Dict[str, float]] = {}      # (a fit's derived live values of the day: once per fit)
+
+            def level(m: qf.Monitor, pc: qf.Ctx) -> Optional[float]:
+                pc.today, pc.today_iso = today, t
+                dl = derived.get(id(pc))
+                if dl is None:
+                    dl = derived[id(pc)] = pc.derive_live(live)
+                try:
+                    return m.calc(dl)
+                except Exception:  # noqa: BLE001 - a level that cannot be read today: tomorrow
+                    return None
+
             # what is open first, each with the monitor (and the fit) it was opened with
             for sid, pos in list(positions.items()):
-                pc = pos["ctx"]
-                pc.today, pc.today_iso = today, t
-                try:
-                    lvl = pos["m"].calc(pc.derive_live(live))
-                except Exception:  # noqa: BLE001 - a level that cannot be read today: tomorrow
-                    lvl = None
+                lvl = level(pos["m"], pos["ctx"])
                 if lvl is None:
                     continue
                 pos["held"] += 1
                 pos["now"] = (t, lvl)                      # (a daily position's turn closes at today's level)
                 s = pos["s"]
+                if pos.get("trail"):                       # (a trailing stop: that far behind the best close so far)
+                    if s * (lvl - pos["best"]) > 0:
+                        pos["best"] = lvl
+                    pos["stop"] = pos["best"] - s * pos["trail"]
                 outcome = None
                 if pos["target"] is not None and s * (lvl - pos["target"]) >= 0:
                     outcome = "hedef"
@@ -144,6 +191,17 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
                     outcome = "süre"
                 if outcome:
                     close(sid, pos, lvl, outcome, t)
+            # every trade's path over its whole holding (its own exit or not)
+            for rec in list(recs):
+                now = rec["pos"].get("now")
+                lvl = now[1] if now and now[0] == t else level(rec["m"], rec["ctx"])
+                if lvl is None:
+                    continue
+                rec["path"].append(rec["s"] * (lvl - rec["entry"]) * rec["factor"] / rec["sig"])
+                rec["end"] = t
+                if len(rec["path"]) >= rec["hold"]:
+                    paths.append(_path_of(rec, True))
+                    recs.remove(rec)
             ctx.today, ctx.today_iso = today, t
             qf.score_all(ctx, mons, live)
             live_now: Dict[str, int] = {}
@@ -164,13 +222,20 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
                 carry_day = None
                 if sg.get("carry_week") is not None and (not m.fx or m.info.get("universe")):
                     carry_day = sg["carry_week"] / 5.0
-                positions[m.sid] = {"m": m, "ctx": ctx, "s": sg["direction"], "entry": m.level, "target": None if daily else sg["target"],
-                                    "stop": sg["stop"], "scale": sg["scale"], "hold": math.inf if daily else max(1, min(hold, log_days)),
-                                    "held": 0, "day": t, "factor": factor or 1.0, "unit": unit, "carry_day": carry_day, "family": m.family,
-                                    "type": bt_type(m), "sg": sg, "expression": sg["expression"]}
+                pos = positions[m.sid] = {"m": m, "ctx": ctx, "s": sg["direction"], "entry": m.level, "target": None if daily else sg["target"],
+                                          "stop": sg["stop"], "scale": sg["scale"], "hold": math.inf if daily else max(1, min(hold, log_days)),
+                                          "held": 0, "day": t, "factor": factor or 1.0, "unit": unit, "carry_day": carry_day, "family": m.family,
+                                          "type": bt_type(m), "sg": sg, "expression": sg["expression"]}
+                if sg.get("trail"):
+                    pos.update(trail=float(sg["trail"]), best=m.level)
+                if not daily:
+                    rec = _recorder(m, sg, ctx, cfg, pos["hold"], t, carry_day, factor or 1.0, pos)
+                    if rec is not None:
+                        recs.append(rec)
             prev_live = live_now
         if pause is not None:
             pause()
+    paths += [_path_of(rec, False) for rec in recs]          # (still running at the last day: no fixed rule reads them)
     first, last = (days[0], days[-1]) if days else (None, None)
     fams: Dict[str, Dict[str, Any]] = {}
     for fam in sorted({t["family"] for t in trades}):
@@ -178,8 +243,16 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
         row = summarize(mine, first, last)
         row["types"] = {ty: summarize([t for t in mine if t["type"] == ty], first, last) for ty in sorted({t["type"] for t in mine})}
         fams[fam] = row
+    t_lv = time.perf_counter()
+    if as_of is None and last:
+        as_of = (_dt.date.fromisoformat(last) + _dt.timedelta(days=1)).isoformat()
+    levels: Dict[str, Any] = {"families": {}, "month": qlv.month_of(as_of) if as_of else None}
+    for fam in sorted({p["family"] for p in paths}):
+        levels["families"][fam] = qlv.calibrate([p for p in paths if p["family"] == fam], fam, as_of).to_json()
+    levels["ms"] = round((time.perf_counter() - t_lv) * 1000.0, 1)
     return {"families": fams, "trades": trades[-BT_KEEP:], "n_trades": len(trades), "open": len(positions), "first": first, "last": last,
-            "refits": refits, "step": step, "days": len(days), "ms": round((time.perf_counter() - t0) * 1000.0, 1), "complete": not stopped}
+            "refits": refits, "step": step, "days": len(days), "ms": round((time.perf_counter() - t0) * 1000.0, 1), "complete": not stopped,
+            "paths": paths, "levels": levels}
 
 
 def add_own(res: Dict[str, Any], fam: str, trades: Sequence[Dict[str, Any]], first: Optional[str], last: Optional[str]) -> None:

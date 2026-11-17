@@ -472,10 +472,17 @@ class LeadMonitor(qf.Monitor):
         name = "%s (%s öncülüğünde)" % (row["follower_label"], row["leader_label"])
         legs = [{"key": row["follower"], "name": row["follower_label"], "weight": 1.0}]
         history = self._history(row, k)
+        follow = list(row["follow_levels"][-ctx.window():])
+        moves = [b - a for a, b in zip(follow, follow[1:])]
+        f_key = row["follower"]
+        # (the follower's level from the day's values - the backtest's calc; the live score reads it itself; its daily σ
+        # and P&L scale: what its levels are calibrated in - tto.quantlevels)
         qf.Monitor.__init__(self, "%s:%s|%s" % (FAMILY, row["leader"], row["follower"]), FAMILY, _asset(row["follower"]), name, unit,
-                            digits, row["days"][-ctx.window():], list(row["follow_levels"][-ctx.window():]), legs, lambda live: None,
+                            digits, row["days"][-ctx.window():], follow, legs,
+                            lambda live: live[f_key] if live.get(f_key) is not None else value_now(ctx, f_key, live, live),
                             follows=True, mode="drift", hold=float(lag), regime={"tag": None}, pkg=_verbs_pkg(row["follower"], row["kind_f"]),
-                            score_name="z", gate=_stable_gate(row),
+                            score_name="z", gate=_stable_gate(row), dsd=qm.stdev(moves) if len(moves) >= 10 else None,
+                            pnl=qf.pnl_scale(row["kind_f"], follow[-1] if follow else None),
                             info={"inputs": [row["leader"]], "leader": row["leader"], "lag": lag, "beta": row["beta"],
                                   "events": row["events"], "stable": row["stable"]})
         self.zvalues = history[-len(self.values):]
@@ -525,6 +532,8 @@ def value_now(ctx: qf.Ctx, key: str, live: Dict[str, float], raw_live: Dict[str,
     (they are 300 - 400 bp apart, a day's move a few dozen), as the curve page reads it."""
     if not key.startswith("DIBS:"):
         return ctx.cur(key, live)
+    if raw_live.get(key) is not None:
+        return raw_live[key]                               # (a day's close as the backtest gives it)
     last = ctx.last(key)
     now = [v for v in (raw_live.get(k) for k in live_keys(key)) if v is not None]
     if last is None or not now:
@@ -672,6 +681,18 @@ def run(quant: Any, ctx: qf.Ctx, mons: List[qf.Monitor], tables: Dict[str, Any],
         tables["lead"] = {"rows": [], "why": tables["errors"]["lead"], "intraday": {"ok": False, "why": "", "rows": []}}
     if timing is not None:
         timing["lead"] = time.perf_counter() - t0
+
+
+def monitors(ctx: qf.Ctx) -> List[qf.Monitor]:
+    """The daily pairs' monitors alone - a backtest's refit (``tto.quant.Quant.run_backtest``: their trades' paths
+    calibrate the family's levels, ``tto.quantlevels``): no bars, no table."""
+    k = float(ctx.cfg.get("lead_k") or DEFAULTS["lead_k"])
+    out: List[qf.Monitor] = []
+    for x, y, group in candidate_pairs(ctx):
+        row = analyse(ctx, x, y, group)
+        if row.get("leader"):
+            out.append(LeadMonitor(ctx, row, k))
+    return out
 
 
 def refresh(quant: Any, fit: Dict[str, Any]) -> None:
