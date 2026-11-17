@@ -305,8 +305,8 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
         assert status["mode"] == "replay" and set(status["books"]) == {"tto", "sofr", "borsa", "asw"}
         assert not any(b["left_out"] for b in status["books"].values())
         pages = [p["id"] for p in json.loads(get("/api/nav")[1])["pages"]]
-        # (the quant package's pages - intraday, curve fair value, options, the implied path, the WIRP, lead-lag, VİOP, Trend, Carry + momentum, Opsiyon → spot and DİBS switch among them - the desk corner's two, Trades and DİBS RV · Genel)
-        assert len(pages) == 53 and {"masa", "ois", "eod", "mpc", "settings", "blotter", "trades", "broker", "vol", "dibslive", "kagitlar", "watch", "dibs-genel",
+        # (the quant package's pages - intraday, curve fair value, options, the implied path, the WIRP, lead-lag, VİOP, Trend, Carry + momentum, Opsiyon → spot and DİBS switch among them - the desk corner's two, Trades, DİBS RV · Genel and Bugün)
+        assert len(pages) == 54 and {"masa", "bugun", "ois", "eod", "mpc", "settings", "blotter", "trades", "broker", "vol", "dibslive", "kagitlar", "watch", "dibs-genel",
                                      "heat", "spreads", "quant", "quant-fx", "quant-intraday", "quant-curve", "quant-opt", "quant-path", "quant-wirp", "quant-lead",
                                      "quant-viop", "quant-trend", "quant-sira", "quant-ml", "quant-optspot", "quant-dibssw", "social", "agenda"} <= set(pages)
         page = json.loads(get("/api/view/ois")[1])

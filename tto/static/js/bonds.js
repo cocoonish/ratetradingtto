@@ -95,6 +95,10 @@ export async function openAddIsin(ctx, opts) {
   m.foot.appendChild(count);
   m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
   m.foot.appendChild(add);
+  if (opts.values && opts.values.length) {           // (Ctrl+K "kâğıt ekle …": the ISINs written in; "Ekle" is the user's)
+    text.value = opts.values.join(' ');
+    update();
+  }
   text.focus();
 }
 

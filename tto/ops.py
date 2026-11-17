@@ -1110,6 +1110,13 @@ class Ops(object):
         except Exception as exc:  # noqa: BLE001 - tried again after tradebook.RETRY
             self.failure("Trades kapanış kaydı", exc)
         try:
+            # Bugün's close record of DİBS RV's signals (the sheet keeps no history of them): once a business day
+            today = getattr(self.svc, "bugun", None)
+            if today is not None:
+                today.look(now)
+        except Exception as exc:  # noqa: BLE001 - tried again at the next look
+            self.failure("Bugün · DİBS sinyal kaydı", exc)
+        try:
             self.system_checks(now)
         except Exception as exc:  # noqa: BLE001
             self.failure("sistem alarmları", exc)

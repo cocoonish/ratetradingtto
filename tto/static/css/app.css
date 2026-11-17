@@ -1377,3 +1377,46 @@ table.plain.trades td.hit-stop { color: var(--neg); }
 .dg-hint { font-size: 11px; padding: 4px 10px 6px; }
 table.grid.dg-mirror td.in { cursor: pointer; }
 #dg-grid td.dg-wrap { white-space: normal; min-width: 0; }
+/* Bugün (pages/bugun.js): the morning screen - its blocks two or three to a row, each saying plainly when it has nothing;
+   a block that wants a look has its count lit */
+.bugun-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr)); gap: 12px; align-items: start; }
+.bugun-card > header .btn.sm { white-space: nowrap; }
+.bugun-card .bugun-count { font-size: 11px; font-weight: 650; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--ink-2); }
+.bugun-card.bugun-attn .bugun-count { background: var(--note-bg); color: var(--warn); }
+.bugun-card .bugun-body { padding: 8px 12px 10px; overflow: auto; max-height: 60vh; }
+.bugun-line { margin: 2px 0 6px; }
+.bugun-line.ok b { color: var(--pos); }
+.bugun-line.warn b { color: var(--warn); }
+.bugun-link { cursor: pointer; }
+.bugun-link:hover { text-decoration: underline; }
+.bugun-none { color: var(--ink-3); padding: 4px 0; }
+.bugun-note { font-size: 11.5px; margin: 0 0 6px; }
+.bugun-sub { font-weight: 650; font-size: 11.5px; color: var(--ink-2); margin: 8px 0 3px; }
+.bugun-sub.neg { color: var(--neg); }
+.bugun-near, .bugun-items { margin: 0 0 6px; padding-left: 18px; }
+.bugun-near li, .bugun-items li { margin: 2px 0; }
+.bugun-near li.pos b { color: var(--pos); }
+.bugun-near li.neg b { color: var(--neg); }
+.bugun-items li.done { color: var(--ink-3); text-decoration: line-through; }
+.bugun-items li.late { color: var(--neg); }
+.bugun-items .bugun-dl { color: var(--warn); font-size: 11px; text-transform: uppercase; }
+table.plain.bugun td.wrap { white-space: normal; min-width: 160px; }
+table.plain.bugun td.pos { color: var(--pos); }
+table.plain.bugun td.neg { color: var(--neg); }
+table.plain.bugun td.muted { color: var(--ink-3); }
+table.plain.bugun tr.go { cursor: pointer; }
+table.plain.bugun tr.go:hover td { background: var(--accent-soft); }
+table.plain.bugun tr.soft td { opacity: .65; }
+table.plain.bugun tr.turned td:first-child { font-weight: 650; }
+table.plain.bugun td.turned { font-weight: 650; }
+table.plain.bugun tr.sum td { font-weight: 650; border-top: 1px solid var(--line-2); }
+table.plain.bugun tr.near-stop td:first-child { box-shadow: inset 3px 0 0 var(--neg); }
+table.plain.bugun tr.near-target td:first-child { box-shadow: inset 3px 0 0 var(--pos); }
+/* Ctrl+K: a command first (find.js / commands.js) - its template, what it will do, or what it expected */
+.findlist .hit.cmd { flex-wrap: wrap; row-gap: 1px; }
+.findlist .hit.cmd .t { font-weight: 600; white-space: normal; flex: 1 1 100%; }
+.findlist .hit.cmd .t::before { content: "› "; color: var(--accent); }
+.findlist .hit.cmd .w { white-space: normal; flex: 1 1 100%; padding-left: 12px; }
+.findlist .hit.cmd.err .t { color: var(--neg); font-weight: 500; }
+.findlist .hit.cmd.err .t::before { content: "! "; color: var(--neg); }
+.findlist .hit.cmd.tpl .t { color: var(--ink-2); font-family: var(--mono); font-size: 12px; font-weight: 500; }

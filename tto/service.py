@@ -316,6 +316,9 @@ class Service(object):
         # DİBS RV · Genel (dibsgenel.py): the trading list's bonds on DİBS RV, DİBS ASW and a zero-coupon curve fitted live
         from .dibsgenel import DibsGenel
         self.dibsgenel = DibsGenel(self)
+        # Bugün (bugun.py): the morning screen - what wants attention, read from what the service holds
+        from .bugun import Bugun
+        self.bugun = Bugun(self)
         # inputs typed as formulas (=C60+7): evaluated by the calc sheets' machinery, again whenever what they read moved
         from .inputformula import InputFormulas
         formulas = InputFormulas(self)
@@ -1504,6 +1507,9 @@ class Service(object):
                       for p in v["panels"] if not p.get("hidden") and p.get("title")]
             pages.append({"id": v["id"], "title": v["title"], "group": v.get("group", ""), "book": v["book"],
                           "sheet": v.get("sheet"), "tables": tables})
+        # the morning screen (bugun.py): what wants attention on one page - first of the desk's own pages, right under
+        # Masa in the menu
+        pages.append({"id": "bugun", "title": "Bugün", "group": "Masa", "book": None, "sheet": None, "custom": True})
         if "tto" in self.books:
             pages.append({"id": "watch", "title": "İzleme · Alarmlar", "group": "Masa", "book": "tto", "sheet": None,
                           "custom": True})
