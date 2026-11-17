@@ -1,4 +1,4 @@
-"""SQLite persistence: users, personal inputs, named scenarios, shared inputs (RET curve ...), blotter.
+"""SQLite persistence: users, personal inputs, named scenarios, shared inputs (RET curve ...), blotter, the Trades page.
 
 A write of several steps (a package of trades deleted, a broker chat pasted, an account removed) is one
 transaction: it lands whole or not at all.  Every commit is on the disk before it returns (``synchronous=FULL``):
@@ -88,6 +88,22 @@ CREATE TABLE IF NOT EXISTS trade_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, name TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
     created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS trade_templates_owner ON trade_templates (owner);
+CREATE TABLE IF NOT EXISTS tradebook (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, owner TEXT NOT NULL, product TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open', trade_date TEXT NOT NULL, payload TEXT NOT NULL, created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS tradebook_who ON tradebook (scope, owner, status, deleted);
+CREATE TABLE IF NOT EXISTS tradebook_close_days (
+    day TEXT PRIMARY KEY, at TEXT NOT NULL, taken_at TEXT NOT NULL, late INTEGER NOT NULL DEFAULT 0,
+    trades INTEGER NOT NULL DEFAULT 0, valued INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tradebook_closes (
+    day TEXT NOT NULL, trade INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (day, trade)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS tradebook_closes_trade ON tradebook_closes (trade, day);
+CREATE TABLE IF NOT EXISTS tradebook_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, user TEXT NOT NULL, trade INTEGER NOT NULL,
+    scope TEXT NOT NULL, owner TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tradebook_log_trade ON tradebook_log (trade, id);
+CREATE INDEX IF NOT EXISTS tradebook_log_who ON tradebook_log (scope, owner, id);
 """
 
 
@@ -921,6 +937,131 @@ class Store(object):
     def delete_trade_template(self, tid: int) -> bool:
         with self._lock:
             return self._db.execute("DELETE FROM trade_templates WHERE id=?", (tid,)).rowcount > 0
+
+    # ------------------------------------------------------------------ Trades (tradebook.py): the desk's and each trader's own
+    # Apart from the blotter's ``trades``: nothing of the desk's reads these tables.  A trade is one row (its product's
+    # fields as JSON); every change is written with its line of the log in one transaction; the close values of a day
+    # are written with the day's row, once.
+    TB_COLS = ("id", "scope", "owner", "product", "status", "trade_date", "created_by", "created_at", "updated_by",
+                "updated_at")
+
+    @classmethod
+    def _tb_row(cls, r) -> Dict[str, Any]:
+        d = json.loads(r["payload"])
+        d.update({k: r[k] for k in cls.TB_COLS})
+        return d
+
+    @staticmethod
+    def _tb_logged(db: sqlite3.Connection, ts: str, user: str, tid: int, scope: str, owner: str, action: str,
+                   detail: Dict[str, Any]) -> None:
+        db.execute("INSERT INTO tradebook_log (ts, user, trade, scope, owner, action, detail) VALUES (?,?,?,?,?,?,?)",
+                   (ts, user, tid, scope, owner, action, json.dumps(detail, ensure_ascii=False)))
+
+    def tb_add(self, scope: str, owner: str, product: str, trade_date: str, payload: Dict[str, Any], user: str,
+               detail: Dict[str, Any]) -> int:
+        """A new trade (open) and its "create" line of the log."""
+        ts = now_iso()
+        with self.transaction() as db:
+            cur = db.execute("INSERT INTO tradebook (scope, owner, product, status, trade_date, payload, created_by, created_at, "
+                             "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                             (scope, owner, product, "open", trade_date, json.dumps(payload, ensure_ascii=False), user, ts,
+                              user, ts))
+            tid = cur.lastrowid
+            self._tb_logged(db, ts, user, tid, scope, owner, "create", detail)
+            return tid
+
+    def tb_get(self, tid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM tradebook WHERE id=? AND deleted=0", (tid,))
+        return self._tb_row(rows[0]) if rows else None
+
+    def tb_list(self, scope: str, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The desk's trades (``owner`` None) or one trader's own, oldest first."""
+        if owner is None:
+            rows = self._q("SELECT * FROM tradebook WHERE scope=? AND deleted=0 ORDER BY id", (scope,))
+        else:
+            rows = self._q("SELECT * FROM tradebook WHERE scope=? AND owner=? AND deleted=0 ORDER BY id", (scope, owner))
+        return [self._tb_row(r) for r in rows]
+
+    def tb_dealt_by(self, day: str) -> List[Dict[str, Any]]:
+        """Every trade (the desk's and every trader's own) dealt on ``day`` or before - a day's close values."""
+        return [self._tb_row(r) for r in self._q("SELECT * FROM tradebook WHERE trade_date<=? AND deleted=0 ORDER BY id", (day,))]
+
+    def tb_update(self, tid: int, payload: Dict[str, Any], status: str, trade_date: str, user: str, action: str,
+                  detail: Dict[str, Any]) -> bool:
+        """A trade changed (edited, closed, opened again) and its line of the log, together."""
+        ts = now_iso()
+        with self.transaction() as db:
+            row = db.execute("SELECT scope, owner FROM tradebook WHERE id=? AND deleted=0", (tid,)).fetchone()
+            if row is None:
+                return False
+            db.execute("UPDATE tradebook SET payload=?, status=?, trade_date=?, updated_by=?, updated_at=? WHERE id=?",
+                       (json.dumps(payload, ensure_ascii=False), status, trade_date, user, ts, tid))
+            self._tb_logged(db, ts, user, tid, row["scope"], row["owner"], action, detail)
+            return True
+
+    def tb_set_payload(self, tid: int, payload: Dict[str, Any]) -> None:
+        """What the dashboard itself keeps with a trade (a closed trade's realised value): no change of the trade's own."""
+        with self._lock:
+            self._db.execute("UPDATE tradebook SET payload=? WHERE id=? AND deleted=0", (json.dumps(payload, ensure_ascii=False), tid))
+
+    def tb_delete(self, tid: int, user: str, detail: Dict[str, Any]) -> bool:
+        """Delete a trade (kept, marked deleted: its log stays readable) and log it."""
+        ts = now_iso()
+        with self.transaction() as db:
+            row = db.execute("SELECT scope, owner FROM tradebook WHERE id=? AND deleted=0", (tid,)).fetchone()
+            if row is None:
+                return False
+            db.execute("UPDATE tradebook SET deleted=1, updated_by=?, updated_at=? WHERE id=?", (user, ts, tid))
+            self._tb_logged(db, ts, user, tid, row["scope"], row["owner"], "delete", detail)
+            return True
+
+    def tb_log(self, trade: Optional[int] = None, scope: Optional[str] = None, owner: Optional[str] = None,
+               limit: int = 200) -> List[Dict[str, Any]]:
+        """The log of one trade (oldest first), or of the desk's / one trader's trades (``scope``, ``owner``; newest
+        first)."""
+        if trade is not None:
+            rows = self._q("SELECT * FROM tradebook_log WHERE trade=? ORDER BY id", (trade,))
+        elif owner is None:
+            rows = self._q("SELECT * FROM tradebook_log WHERE scope=? ORDER BY id DESC LIMIT ?", (scope, limit))
+        else:
+            rows = self._q("SELECT * FROM tradebook_log WHERE scope=? AND owner=? ORDER BY id DESC LIMIT ?", (scope, owner, limit))
+        return [{"id": r["id"], "ts": r["ts"], "user": r["user"], "trade": r["trade"], "scope": r["scope"], "owner": r["owner"],
+                 "action": r["action"], "detail": json.loads(r["detail"])} for r in rows]
+
+    def tb_close_days(self, limit: int = 60) -> List[Dict[str, Any]]:
+        """The days whose close values were taken, the latest first."""
+        return [dict(r) for r in self._q("SELECT * FROM tradebook_close_days ORDER BY day DESC LIMIT ?", (limit,))]
+
+    def tb_close_day(self, day: str) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM tradebook_close_days WHERE day=?", (day,))
+        return dict(rows[0]) if rows else None
+
+    def tb_put_close(self, day: str, at: str, late: bool, values: List[Tuple[int, Dict[str, Any]]]) -> bool:
+        """A day's close: its row and every trade's values, in one transaction - ``False`` (nothing written) when the
+        day was taken already: a day is never taken twice."""
+        with self.transaction() as db:
+            if db.execute("SELECT 1 FROM tradebook_close_days WHERE day=?", (day,)).fetchone():
+                return False
+            db.execute("INSERT INTO tradebook_close_days (day, at, taken_at, late, trades, valued) VALUES (?,?,?,?,?,?)",
+                       (day, at, now_iso(), 1 if late else 0, len(values), sum(1 for _, v in values if v.get("ok"))))
+            db.executemany("INSERT INTO tradebook_closes (day, trade, payload) VALUES (?,?,?)",
+                           [(day, tid, json.dumps(v, ensure_ascii=False)) for tid, v in values])
+            return True
+
+    def tb_closes(self, trades: Sequence[int], since: Optional[str] = None) -> Dict[int, Dict[str, Dict[str, Any]]]:
+        """trade -> day -> its close values (from ``since`` on)."""
+        out: Dict[int, Dict[str, Dict[str, Any]]] = {}
+        ids = [int(t) for t in trades]
+        for k in range(0, len(ids), 500):
+            part = ids[k:k + 500]
+            sql = "SELECT day, trade, payload FROM tradebook_closes WHERE trade IN (%s)" % ",".join("?" * len(part))
+            args: Tuple[Any, ...] = tuple(part)
+            if since:
+                sql += " AND day>=?"
+                args += (since,)
+            for r in self._q(sql, args):
+                out.setdefault(r["trade"], {})[r["day"]] = json.loads(r["payload"])
+        return out
 
     # ------------------------------------------------------------------ cells that move with their meeting
     def remap_user_cells(self, book: str, mapping: Dict[str, Optional[str]]) -> Dict[str, int]:
