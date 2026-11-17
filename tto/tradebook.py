@@ -276,7 +276,8 @@ def level_spec(t: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return {"what": "getiri (%)", "short": "getiri %", "show": "pct", "unit": "bp", "per": 100.0, "rate": True, "digits": 2}
         return {"what": "temiz fiyat", "short": "fiyat", "show": "px", "unit": "puan", "per": 1.0, "rate": False, "digits": 3}
     if p == "fxspot":
-        return {"what": "kur", "short": "kur", "show": "fx", "unit": "pip", "per": 1.0 / pip_of(t.get("pair")), "rate": False, "digits": 4}
+        return {"what": "kur", "short": "kur", "show": "fx", "unit": "pip", "per": float(round(1.0 / pip_of(t.get("pair")))), "rate": False,
+                "digits": 4}
     if p == "fxopt":
         ccy = str(t.get("premium_ccy") or "")
         return {"what": "prim tutarı (%s)" % ccy if ccy else "prim tutarı", "short": "prim", "show": "amt", "unit": "%", "per": None,
