@@ -239,14 +239,21 @@ def classify(sg: Dict[str, Any]) -> Dict[str, Any]:
     return sg
 
 
+def exp_key(s: Dict[str, Any]) -> Tuple[int, float]:
+    """A line's place by its expectancy (``exp_try``: the Beklenen K/Z at its levels, TRY at its own size): the highest
+    first, a line without one after them."""
+    e = s.get("exp_try")
+    return (0, -e) if isinstance(e, (int, float)) and math.isfinite(e) else (1, 0.0)
+
+
 def order(live: List[Dict[str, Any]], gated: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The Sinyaller list: the groups in their order (TRY OIS's short end first), within a group the confident lines
-    by strength (the composite, as ``quantfam.rank`` has them) - a systematic line whose direction turned since the
-    previous close ("YENİ", ``new``: Trend's) before the others -, then the ones a gate holds ("düşük güven") by |z|."""
+    by their expectancy (the Beklenen K/Z at their calibrated levels, TRY - ``tto.quantlevels``; the strength breaks a
+    tie), then the ones a gate holds ("düşük güven") the same way."""
     for s in live + gated:
         classify(s)
-    conf = sorted(live, key=lambda s: (s["priority"], 0 if s.get("new") else 1, -s["composite"], -s["agree"], -abs(s["z"])))
-    low = sorted(gated, key=lambda s: (s["priority"], -abs(s["z"])))
+    conf = sorted(live, key=lambda s: (s["priority"],) + exp_key(s) + (-s["composite"], -s["agree"], -abs(s["z"])))
+    low = sorted(gated, key=lambda s: (s["priority"],) + exp_key(s) + (-abs(s["z"]),))
     return sorted(conf + low, key=lambda s: (s["priority"], 1 if s["gated"] else 0))         # (stable: each part's order kept)
 
 

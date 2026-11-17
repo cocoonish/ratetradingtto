@@ -2879,6 +2879,42 @@ async function clipAfter(page, action) {
       && card.cells[0] === '+525 bin TRY / 1 mn USD' && card.cells[1] === '+5,08 bp' && card.entry === '44,1250' && card.unit === 'USDTRY 3A fwd', card);
     check('... and every signal the server gives carries its trade in desk words and its sentence', sigApi.status === 200
       && served.every((s) => s.trade_tr && typeof s.plain === 'string' && s.plain.length > 0), served.length);
+    // levels calibrated on what past trades did (tto/quantlevels.py): a line's Ödül / risk (≥ 1 by construction) and İsabet
+    // with its trade count, the card's levels row - or, a line without them (no backtest yet in the recorded month, a family
+    // that keeps its own: VİOP's order levels), its reason; every line the server gives carries the one or the other
+    const LV_TEXT = 'stop 1,00σ · hedef 1,50σ · ödül / risk 1,50 · isabet %57 (46 işlem, örneklem dışı) · işlem başına +0,21σ';
+    const VIOP_WHY = 'seviyeler ailenin kendi tasarımı: VİOP sayfasındaki emir seviyeleri (doluş olasılıklarıyla)';
+    const lvl = await page.evaluate(async ({ lvText, viopWhy }) => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const base = { family: 'pca', family_label: 'PCA kalıntısı', asset: 'TRY OIS', z: 2.6, entry_z: 2, strength: 'Güçlü', gates: [], legs: [], agree: 0,
+        conflict: 0, parts: { z: 2.6, regime: 1, hl: 1, carry: 1 }, composite: 2.6, hold: 12, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1,
+        direction: -1, pnl_unit: 'bp', expression: 'Receive 2Y OIS', instrument: '2Y OIS', trade_tr: 'sabit faiz alınan (receive): 2Y OIS', plain: '…' };
+      const cal = Object.assign({}, base, { id: 'pca:OIS:2Y', entry: 3, target: 1.5, stop: 4, rr: 1.5, reward: 1.5, risk: 1, exp_pnl: 0.21,
+        money: { ccy: 'TL', per_bp: 42000, dv01_usd: 1000, total: 8820, target: 63000, stop: -42000, bp: { total: 0.21, target: 1.5, stop: -1 } },
+        levels: { ok: true, rule: 'fixed', k: 1, m: 1.5, rr: 1.5, hit: 0.57, n: 46, oos: true, exp: 0.21, money: 8820, ccy: 'TL', text: lvText } });
+      const own = Object.assign({}, base, { id: 'viop:A1Z6', family: 'viop', family_label: 'VİOP adil değer', asset: 'VİOP', entry: 3, target: 0, stop: 3.5,
+        rr: 6, reward: 3, risk: 0.5, exp_pnl: 1.2, money: {}, levels: { ok: false, own: true, why: viopWhy } });
+      const rows = q.signalRows([cal, own]);
+      const col = (n) => q.SIGNAL_HEAD.indexOf(n);
+      const card = (s) => {
+        const host = document.createElement('div');
+        const c = new q.SignalChart(host);
+        c.show({ monitor: { name: s.instrument }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+        const t = (host.querySelector('#quant-sig-levels') || {}).textContent || '';
+        c.destroy();
+        return t;
+      };
+      return { rr: rows[0][col('Ödül / risk')].t, hit: rows[0][col('İsabet')].t, hitTip: rows[0][col('İsabet')].tip || '', rrTip: rows[0][col('Ödül / risk')].tip || '',
+        ownHit: rows[1][col('İsabet')].t, ownTip: rows[1][col('İsabet')].tip || '', cardCal: card(cal), cardOwn: card(own),
+        head: q.SIGNAL_HEAD.slice(q.SIGNAL_HEAD.indexOf('Beklenen K/Z'), q.SIGNAL_HEAD.indexOf('Beklenen K/Z') + 3).join(' | ') };
+    }, { lvText: LV_TEXT, viopWhy: VIOP_WHY });
+    check('a line at its calibrated levels shows Ödül / risk ≥ 1 and İsabet with its trades (the levels in the tooltip, the card\'s levels row); one without them its reason',
+      lvl.head === 'Beklenen K/Z | Ödül / risk | İsabet' && lvl.rr === '1,50' && lvl.hit === '57% (46)' && lvl.hitTip === LV_TEXT && lvl.rrTip.includes(LV_TEXT)
+      && lvl.cardCal.startsWith(LV_TEXT + ' · işlem başına ≈ ') && lvl.ownHit === '—' && lvl.ownTip === VIOP_WHY && lvl.cardOwn === VIOP_WHY, lvl);
+    check('... and every line the server gives carries its levels: Ödül / risk ≥ 1 with the hit rate and expectancy, or the stated reason',
+      served.every((s) => s.levels && ((s.levels.ok && s.rr >= 1 && typeof s.levels.hit === 'number' && typeof s.levels.exp === 'number')
+        || (!s.levels.ok && typeof s.levels.why === 'string' && s.levels.why.length > 10))),
+      served.map((s) => [s.id, s.levels && s.levels.ok, s.rr, s.levels && s.levels.why]));
     // the list by group (tto/quantuniv.py): the buttons above it in the list's order, one group alone, the lines a gate holds
     // ("düşük güven") after the confident ones of their group with their reason, an Offshore line's "offshore limiti"; the
     // separate panel of the gated signals is gone (they are in the list)

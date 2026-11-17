@@ -20,6 +20,7 @@ from conftest import auth
 from tto import quant as qq
 from tto import quantbt as qbt
 from tto import quantfam as qf
+from tto import quantlevels as qlv
 from tto import quanttrend as qt
 from tto import quantuniv as qu
 from tto import quantopt as qopt
@@ -161,17 +162,20 @@ def test_a_planted_trend_gives_a_long_its_reverse_a_short_and_noise_a_weak_line(
     for sg in (up, dn, pay, rec):                                        # (the contributions add up to the score, ±2 at most)
         assert sg["z"] == pytest.approx(max(-qt.CLIP, min(qt.CLIP, sum(sg["trend"]["terms"]))))
     assert abs(up["z"]) == qt.CLIP and sum(up["trend"]["terms"]) > qt.CLIP
-    # white noise around a constant: a weak line - still a line (no gate), at the bottom of its strength
+    # white noise around a constant: a weak line - still a line (no gate but its levels' record: a group whose trailing
+    # stop lost money is "düşük güven", in the list all the same), at the bottom of its strength
     for key in ("trend:FX:GBPUSD", "trend:OIS:1Y"):
         sg = signal(mons[key])
-        assert sg is not None and abs(sg["z"]) < 0.5 and sg["strength"] == "Zayıf" and not sg["gated"] and sg["line"], key
+        assert sg is not None and abs(sg["z"]) < 0.5 and qt.strength(sg["z"]) == "Zayıf" and sg["line"], key
+        assert sg["strength"] == ("elendi" if sg["gated"] else "Zayıf") and sg["gated"] in ("", qlv.LOSS), key
     # one line per instrument (no gate), whatever its score; those without 63 closes or without a move: a row and why
     assert table["lines"] == len(mons) == len([r for r in table["rows"] if r["sid"]]) and len(table["rows"]) == len(list(reg))
     lines = [signal(m) for m in mons.values()]
-    assert all(s is not None and not s["gated"] and s["family"] == "trend" and s["kind"] == "sys" for s in lines)
+    assert all(s is not None and s["gated"] in ("", qlv.LOSS) and s["family"] == "trend" and s["kind"] == "sys" for s in lines)
     strength = {s["id"]: s["strength"] for s in lines}
-    assert {"Zayıf", "Orta", "Güçlü"} >= set(strength.values()) and all(
-        strength[s["id"]] == ("Güçlü" if abs(s["z"]) >= 1 else ("Orta" if abs(s["z"]) >= 0.5 else "Zayıf")) for s in lines)
+    assert {"Zayıf", "Orta", "Güçlü", "elendi"} >= set(strength.values()) and all(
+        strength[s["id"]] == ("elendi" if s["gated"] else ("Güçlü" if abs(s["z"]) >= 1 else ("Orta" if abs(s["z"]) >= 0.5 else "Zayıf")))
+        for s in lines)
 
 
 def test_the_score_is_the_mean_of_three_horizons_over_their_volatility():
@@ -269,35 +273,37 @@ def test_every_line_is_sized_to_the_same_daily_risk(planted):
 
 
 # ================================================================================================ target, stop, hold
-def test_target_stop_and_holding_come_from_the_walk_s_buckets(planted):
+def test_no_target_and_a_trailing_stop_calibrated_on_the_walk_s_positions(planted):
+    """The levels (quantlevels, "trail"): every position of the walk (a turn to the next) with its path in σ of a month;
+    per group, month by month, the trailing stop k with the best expectancy whose average winner is at least k.  A line:
+    no target, its stop k σ of a month behind the best level (from the entry now), its holding the record's, Ödül / risk
+    the average winner ÷ k, its expected P&L the record's × σ now - "düşük güven" when that is a loss."""
     ctx, eng, reg, mons, table = planted
+    book = qlv.Book.from_json(table["levels"])
+    assert book.family == "trend" and book.rule == "trail" and book.groups
     for key in ("trend:FX:EURUSD", "trend:OIS:2Y", "trend:OPT:EURUSD:ATM:1M", "trend:OISS:1Y/2Y"):
         m = mons[key]
         sg = signal(m)
         line = m.trend
-        b = qt.bucket(abs(sg["z"]))
-        st = line.buckets[b]
-        sd = line.sigma
-        assert sg["hold"] == pytest.approx(st["hold"]) and sg["trend"]["bucket"] == qt.BUCKETS[b]
-        # the stop: 2σ of the holding against; the expected P&L: the bucket's mean gain (σ of each line's day × σ now);
-        # the target: the level's own move that, with the holding's carry, makes it (an FX line: its forwards' carry)
-        inst = m.trend.inst
-        risk_cu = qt.STOP_SIGMA * sd * math.sqrt(st["hold"])
-        assert abs(sg["stop"] - sg["entry"]) == pytest.approx(qf.to_level(inst.kind, risk_cu, sg["entry"]), rel=1e-9), key
-        gain_cu = st["gain"] * sd
-        carry = 0.0
-        if inst.fx:
-            cal = st["hold"] * 7.0 / 5.0
-            carry = sg["direction"] * ctx.fx_carry(inst.fx, ctx.derive_live(ctx.live), days=cal) * cal / 365.0
-            assert sg["exp_pnl"] == pytest.approx(gain_cu, rel=1e-6)                      # (its carry in the walk's gain)
-        else:
-            assert sg["exp_pnl"] == pytest.approx(gain_cu * inst.per_cu + (sg["carry_h"] or 0.0), rel=1e-6)      # (+ carry + roll)
-        if gain_cu - carry > 0:
-            assert (sg["target"] - sg["entry"]) * sg["direction"] == pytest.approx(qf.to_level(inst.kind, gain_cu - carry, sg["entry"]), rel=1e-6)
-            assert "hedef " + qt._price(sg, "target") in sg["line"]
-        else:
-            assert sg["target"] == sg["entry"] and ("hedef —" in sg["line"]) == (sg["exp_pnl"] <= 0)
-        assert st["n"] >= qt.MIN_SIGNALS and st["scope"] in ("enstrüman", inst.group, "aile", "aile, tüm güçler")
+        inst = line.inst
+        lv = book.line(inst.group)
+        assert lv["ok"] and lv["rule"] == "trail" and lv["k"] in qlv.TRAIL_K and lv["rr"] >= 1.0, key
+        unit = line.sigma * math.sqrt(qt.HREF)                           # (change units: a month's σ)
+        assert sg["target"] is None and sg["rr"] == pytest.approx(lv["rr"]) and sg["hold"] == pytest.approx(lv["held"])
+        assert abs(sg["stop"] - sg["entry"]) == pytest.approx(qf.to_level(inst.kind, lv["k"] * unit, sg["entry"]), rel=1e-9), key
+        assert sg["trail"] == pytest.approx(abs(sg["stop"] - sg["entry"])) and sg["direction"] * (sg["entry"] - sg["stop"]) > 0
+        extra = 0.0 if inst.fx or lv["carry_in"] else (sg["carry_h"] or 0.0)  # (a rate: + its carry + roll over the holding)
+        assert sg["exp_pnl"] == pytest.approx(lv["exp"] * unit * inst.per_cu + extra, rel=1e-6), key
+        assert "iz süren stop " + qt._price(sg, "stop") in sg["line"] and " hedef " not in sg["line"]
+        assert sg["gated"] == (qlv.LOSS if lv["exp"] < 0 else "") and sg["levels"]["n"] == lv["n"]
+    # the planted up-trend's positions: its trades end in profit far more often than the noise's
+    insts = list(reg)
+    tracks = [qt.track(i) for i in insts]
+    trades = qt.level_trades(insts, tracks)
+    eur = [t for t in trades if t["sid"] == "trend:FX:EURUSD" and not t["open"]]
+    gbp = [t for t in trades if t["sid"] == "trend:FX:GBPUSD" and not t["open"]]
+    assert eur and gbp and all(t["group"] == "G10 spot" and t["days"] and len(t["days"]) == len(t["path_sigma"]) for t in eur)
+    assert max(len(t["path_sigma"]) for t in eur) > max(len(t["path_sigma"]) for t in gbp)   # (the trend's run is the long one)
     # the buckets the page shows: every group's four, then the family's
     groups = [r["group"] for r in table["buckets"]]
     assert groups[-4:] == ["Tümü"] * 4 and [r["bucket"] for r in table["buckets"][:4]] == list(qt.BUCKETS)
@@ -368,33 +374,40 @@ def test_no_look_ahead_in_the_backtest_and_its_daily_positions():
     assert set(res["families"]["trend"]["types"]) <= {"G10 spot", "TRY OIS"}
     # every line opened on the window's first day; a turn closes one and opens the other side the same day
     first = {t["sid"] for t in trades if t["entry_day"] == test[0]}
-    assert len(first) >= 10
+    assert len(first) >= 5                                               # (a "düşük güven" group - its trailing stop lost money - opens none)
     by = {}
     for t in sorted(trades, key=lambda t: t["entry_day"]):
         by.setdefault(t["sid"], []).append(t)
     for sid, ts in by.items():
+        # (the same day: only the other side - a turn closes one, or its trailing stop went the day it turned; after a
+        # stop no position on the same side until the next turn)
         for a, b in zip(ts, ts[1:]):
-            assert b["entry_day"] >= a["exit_day"] and (b["entry_day"] > a["exit_day"] or (a["outcome"] == "dönüş" and b["dir"] == -a["dir"])), sid
+            assert b["entry_day"] >= a["exit_day"] and (b["entry_day"] > a["exit_day"] or (a["outcome"] in ("dönüş", "stop") and b["dir"] == -a["dir"])), sid
+            assert b["dir"] == -a["dir"] or a["outcome"] == "stop", sid
     before = lambda r: sorted((t["sid"], t["entry_day"], t["exit_day"], round(t["pnl"], 9)) for t in r["trades"] if t["exit_day"] <= cut)
     assert before(res) and before(res) == before(res2)
 
 
 # ================================================================================================ YENİ, order, offshore
-def test_a_turned_direction_is_yeni_and_first_in_its_group(planted):
+def test_a_turned_direction_is_yeni_and_its_group_is_sorted_by_expectancy(planted):
     ctx, eng, reg, mons, table = planted
     m = mons["trend:FX:EURUSD"]
     assert m.trend.d_prev == 1 and not signal(m)["new"]
-    # the spot falls far below today: the score turns down - "YENİ", its days in position 0, first in G10 spot
+    # the spot falls far below today: the score turns down - "YENİ", its days in position 0
     last = reg["FX:EURUSD"].last()
     live = {"FX:EURUSD": last * math.exp(-0.25)}
     qf.score_all(ctx, list(mons.values()), live)
     sg = signal(m)
     assert sg["direction"] == -1 and sg["new"] and sg["days_in"] == 0 and sg["line"].startswith("YENİ · SAT EURUSD spot · ")
     assert sg["plain"].startswith("YENİ - yön bugün döndü. SAT EURUSD spot")
+    # its group (G10 spot): by the expectancy at the levels (TRY at each line's size) - "YENİ" no longer jumps the queue
     others = [signal(x) for x in mons.values() if x.sid != m.sid]
-    ordered = qu.order([sg] + [s for s in others if s is not None], [])
+    live_, gated = qf.rank([sg] + [s for s in others if s is not None])
+    ordered = qu.order(live_, gated)
     g10 = [s for s in ordered if s["group"] == "G10 spot"]
-    assert g10[0]["id"] == m.sid and [s["composite"] for s in g10[1:]] == sorted((s["composite"] for s in g10[1:]), reverse=True)
+    assert any(s["id"] == m.sid for s in g10)
+    for part in ([s for s in g10 if not s["gated"]], [s for s in g10 if s["gated"]]):
+        assert [qu.exp_key(s) for s in part] == sorted(qu.exp_key(s) for s in part)
     # the other lines: their own days in the direction (the walk's run at the last close)
     o = signal(mons["trend:OIS:2Y"])
     assert not o["new"] and o["days_in"] == mons["trend:OIS:2Y"].trend.run >= 1
@@ -409,9 +422,9 @@ def test_the_groups_keep_their_order_and_offshore_lines_say_their_limit(planted)
     pri = [s["priority"] for s in ordered]
     assert pri == sorted(pri) and [g for g in qu.GROUPS if any(s["group"] == g for s in ordered)][:4] == ["G10 spot", "G10 opsiyon", "TRY OIS", "DİBS"]
     assert ordered[-1]["group"] == "Offshore"
-    for p in set(pri):                                                   # each group: "YENİ" first, then by strength
+    for p in set(pri):                                                   # each group: by expectancy, "düşük güven" after
         mine = [s for s in ordered if s["priority"] == p]
-        keys = [(0 if s.get("new") else 1, -s["composite"]) for s in mine]
+        keys = [(1 if s["gated"] else 0,) + qu.exp_key(s) for s in mine]
         assert keys == sorted(keys), p
     # the table: the registry's order
     assert [r["key"] for r in table["rows"]] == [i.key for i in reg]
@@ -432,36 +445,40 @@ def test_the_line_in_the_plan_s_format_and_the_card_s_sentence(planted):
     px = sg["px"]
     d = px["digits"]
     exp = sg["money"]["total"] * line.k
-    st = line.stats
+    lv = sg["levels"]
+    assert lv["ok"] and lv["rule"] == "trail"
     want = ["YENİ"] if sg["new"] else []
     want += ["%s USDTRY 1A forward" % verb, reg["FWD:USDTRY:1M"].size_text(line.k), "offshore limiti", "giriş " + qf._th(px["entry"], d)]
-    # (the target: the forward's move to it - its entry when the carry alone makes the expected gain, none without one)
-    target = qf._th(px["target"], d) if sg["reward"] > 0 or sg["exp_pnl"] > 0 else "—"
-    want += ["hedef " + target, "stop " + qf._th(px["stop"], d), "beklenen " + qf._money(exp, "TRY")]
-    want += ["isabet %%%s (%d%s)" % (qf._g(st["hit"] * 100.0, 0), st["trades"], ", grup" if st["scope"] == "grup" else ""), "model: Trend"]
+    # (no target: the trailing stop - its level now; the record of the calibrated stop: its hit rate and trades)
+    want += ["iz süren stop " + qf._th(px["stop"], d), "beklenen " + qf._money(exp, "TRY")]
+    want += ["isabet %%%s (%d)" % (qf._g(lv["hit"] * 100.0, 0), lv["n"]), "model: Trend"]
     assert sg["line"] == " · ".join(want)
     # a rates line: its level as the desk writes it, its money in TL at its size (the card's legs sized at k)
     o = signal(mons["trend:OIS:2Y"])
     lo = mons["trend:OIS:2Y"].trend
     assert " · giriş %" in o["line"] and o["line"].endswith(" · model: Trend") and " $ DV01 · giriş " in o["line"]
     assert "beklenen %s" % qf._money(o["money"]["total"], "TL") in o["line"] and o["money"]["per_bp"] == pytest.approx(lo.k * reg.dv01()[1])
-    # the card's sentence: what, why (the horizons), what is expected, target and stop in money, the record
+    # the card's sentence: what, why (the horizons), what is expected, no target - the trailing stop and its ratio -, the record
     p = o["plain"]
     assert p.startswith("pay 2Y OIS · %s $ DV01." % qf._th(1000.0 * lo.k, 0))
     assert "Neden: 1A ↑, 3A ↑, 1Y ↑ - üç ufuk da yükselişte (skor +" in p and "Beklenen: ~" in p and "carry" not in p.split("Beklenen")[0]
-    assert ("Hedef %" in p or "Hedef yok" in p) and "stop" in p.lower() and "Geri test: " in p and "yön dönene ya da stopa kadar" in p
-    assert o["thesis"].startswith("Trend yukarı (skor +") and o["trend"]["labels"] == ["1A", "3A", "1Y"]
+    assert "Hedef yok - iz süren stop: en iyi seviyeden " in p and "ya da yön dönerse çık" in p and "Ödül / risk " in p
+    assert "Geri test (iz süren stopla): isabet %" in p and ("örneklem dışı" in p or "örneklem içi" in p)
+    assert o["thesis"].startswith("Trend yukarı (skor +") and o["trend"]["labels"] == ["1A", "3A", "1Y"] and o["trend"]["trail"]
     e = signal(mons["trend:FX:USDJPY"])
     assert e["line"].startswith("SAT USDJPY spot · ") and " USD · isabet " in e["line"]             # (the yen's money in USD)
-    # every line: the plan's parts in the plan's order
+    # every line: the plan's parts in the plan's order - its stop a trailing one
     for m in mons.values():
         x = signal(m)
         parts = x["line"].split(" · ")
         assert parts[-1] == "model: Trend" and parts[-2].startswith("isabet ") and parts[-3].startswith("beklenen ")
-        assert any(q.startswith("giriş ") for q in parts) and any(q.startswith("hedef ") for q in parts) and any(q.startswith("stop ") for q in parts)
+        assert any(q.startswith("giriş ") for q in parts) and any(q.startswith("iz süren stop ") for q in parts)
+        assert not any(q.startswith("hedef ") for q in parts) and x["target"] is None and x["rr"] >= 1.0
 
 
 def test_hit_rate_is_the_instrument_s_or_its_group_s_when_it_has_few(planted):
+    """The page's record of a line: its own trades, its group's with fewer than ten; the list's line says its levels'
+    record (the calibrated trailing stop's, its group's)."""
     ctx, eng, reg, mons, table = planted
     for r in (r for r in table["rows"] if r["sid"]):
         st = mons[r["sid"]].trend.stats
@@ -469,7 +486,9 @@ def test_hit_rate_is_the_instrument_s_or_its_group_s_when_it_has_few(planted):
             assert st["scope"] == "enstrüman" and st["trades"] == r["own_trades"]
         else:
             g = next(x for x in table["groups"] if x["group"] == r["group"])
-            assert st["scope"] == "grup" and st["trades"] == g["trades"] and ", grup)" in signal(mons[r["sid"]])["line"]
+            assert st["scope"] == "grup" and st["trades"] == g["trades"]
+        lv = signal(mons[r["sid"]])["levels"]
+        assert qt._levels_hit(lv) in signal(mons[r["sid"]])["line"] and r["levels"] == qf.levels_text(qlv.Book.from_json(table["levels"]).line(r["group"]))
     fam = table["groups"][-1]
     assert fam["group"] == "Tümü" and fam["trades"] == sum(g["trades"] for g in table["groups"][:-1]) > 100
     assert fam["sharpe"] is not None and 0 <= fam["hit"] <= 1
@@ -492,9 +511,10 @@ def test_the_fit_lists_trend_lines_logs_a_turn_and_alerts_it(seeded):
     user = svc.login("trend okuyucu")["user"]
     v = q.view("signals", user, {})
     mine = [s for s in v["signals"] if s["family"] == "trend"]
-    assert mine and all(s["line"].endswith("model: Trend") and not s["gated"] and s["page"] == "quant-trend" for s in mine)
+    # (every line in the list - a group whose trailing stop lost money: "düşük güven", never logged nor alerted)
+    assert mine and all(s["line"].endswith("model: Trend") and s["gated"] in ("", qlv.LOSS) and s["page"] == "quant-trend" for s in mine)
     fam = next(f for f in v["families"] if f["id"] == "trend")
-    assert fam["label"] == "Trend" and fam["live"] == len(mine) and fam["monitors"] == len(mine)
+    assert fam["label"] == "Trend" and fam["live"] == len([s for s in mine if not s["gated"]]) and fam["monitors"] == len(mine)
     # the page: every instrument, its line now, the buckets, the groups' record
     page = q.view("trend", user, {})
     rows = page["trend"]["rows"]
@@ -504,25 +524,30 @@ def test_the_fit_lists_trend_lines_logs_a_turn_and_alerts_it(seeded):
     assert page["signals"] and all(s["family"] == "trend" for s in page["signals"]) and page["coverage"]
     assert "_keys" not in page["trend"]
     # a turn: the line "YENİ" (its direction other than at the last close) is written down and alerted - once a day -,
-    # the entry of its old direction closing on it ("dönüş")
-    sid = mine[0]["id"]
+    # the entry of its old direction closing on it ("dönüş").  A line its levels hold is never written down: on the
+    # synthetic history every group's trailing stop may have lost money - one line's record made a winning one here
+    first = next((s for s in mine if not s["gated"]), mine[0])
+    sid = first["id"]
     mon = q._fit["mons"][sid]
+    lv0 = mon.trend.lv
+    if first["gated"]:
+        mon.trend.lv = dict(lv0, exp=0.2)
     q.set_subscription(user, {"on": True, "families": ["trend"], "groups": [], "min": "Zayıf"})
     seq0 = q.counters()["alerts"]
-    old = {"seq": 1, "sid": sid, "family": "trend", "family_label": "Trend", "asset": mine[0]["asset"], "group": mine[0]["group"],
-           "expression": "eski", "dir": -mine[0]["direction"], "z": -mine[0]["z"], "entry_z": 1.0, "level": mine[0]["level"],
+    old = {"seq": 1, "sid": sid, "family": "trend", "family_label": "Trend", "asset": first["asset"], "group": first["group"],
+           "expression": "eski", "dir": -first["direction"], "z": -first["z"], "entry_z": 1.0, "level": first["level"],
            "target": None, "stop": None, "scale": 1.0, "unit": "", "digits": 2, "strength": "Zayıf", "composite": 0.0,
            "day": "2026-01-02", "time": "10:00", "status": "open", "daily": True}
     svc.store.put(q.LOG_KEY, [old])
-    mon.trend.d_prev = -mine[0]["direction"]                             # (as if the last close had the other direction)
+    mon.trend.d_prev = -first["direction"]                               # (as if the last close had the other direction)
     q.refresh_live()
     log = q.log_view()["entries"]
     closed = next(e for e in log if e["sid"] == sid and e.get("expression") == "eski")
     new = [e for e in log if e["sid"] == sid and e["status"] == "open"]
     assert closed["status"] == "dönüş" and closed["closed_level"] is not None and len(new) == 1 and new[0]["daily"]
-    assert new[0]["dir"] == mine[0]["direction"] and new[0]["expression"] == mine[0]["expression"]
+    assert new[0]["dir"] == first["direction"] and new[0]["expression"] == first["expression"]
     # every line written down is "YENİ" now (a turn of its own since the last close), each once, each alerted
-    yeni = {s["id"] for s in q.view("signals", user, {})["signals"] if s["family"] == "trend" and s.get("new")}
+    yeni = {s["id"] for s in q.view("signals", user, {})["signals"] if s["family"] == "trend" and s.get("new") and not s["gated"]}
     opened = [e for e in log if e["family"] == "trend" and e["status"] == "open"]
     assert sid in yeni and {e["sid"] for e in opened} == yeni and len(opened) == len(yeni)
     got = q.alerts(user, seq0)["alerts"]
@@ -533,7 +558,8 @@ def test_the_fit_lists_trend_lines_logs_a_turn_and_alerts_it(seeded):
     assert len([a for a in q.alerts(user, seq0)["alerts"] if a["family"] == "trend"]) == len(yeni)
     hits = {f["family"]: f for f in q.log_view()["families"]}
     assert hits["trend"]["closed"] == 1 and hits["trend"]["open"] == len(yeni)
-    mon.trend.d_prev = mine[0]["direction"]
+    mon.trend.d_prev = first["direction"]
+    mon.trend.lv = lv0
 
 
 def test_trend_page_over_http_and_in_the_menu(seeded):

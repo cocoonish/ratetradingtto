@@ -564,10 +564,10 @@ def test_a_plugged_family_lists_by_group_keeps_its_low_confidence_lines_and_aler
     pri = [s["priority"] for s in sigs]
     assert pri == sorted(pri) and all(s["group"] in qu.GROUPS for s in sigs)
     for p in set(pri):                                                   # in each group (TRY OIS: each end) the confident lines by
-        flags = [bool(s["gated"]) for s in sigs if s["priority"] == p]   # their strength, then the "düşük güven" ones
+        flags = [bool(s["gated"]) for s in sigs if s["priority"] == p]   # their expectancy (quantlevels), then the "düşük güven" ones
         assert flags == sorted(flags), p
-        conf = [s["composite"] for s in sigs if s["priority"] == p and not s["gated"]]
-        assert conf == sorted(conf, reverse=True), p
+        conf = [qu.exp_key(s) for s in sigs if s["priority"] == p and not s["gated"]]
+        assert conf == sorted(conf), p
     mine = {s["id"]: s for s in sigs if s["family"] == "trend"}
     assert set(mine) == {"trend:" + k for k in PICKS}
     assert mine["trend:FX:EURUSD"]["group"] == "G10 spot" and mine["trend:OIS:2Y"]["tier"] == "≤ 2Y" and mine["trend:OISS:2Y/5Y"]["tier"] == "uzun"

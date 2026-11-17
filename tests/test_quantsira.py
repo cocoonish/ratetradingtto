@@ -20,6 +20,7 @@ from conftest import auth
 from tto import quant as qq
 from tto import quantbt as qbt
 from tto import quantfam as qf
+from tto import quantlevels as qlv
 from tto import quantsira as qs
 from tto import quantuniv as qu
 from tto.server import create_app
@@ -292,16 +293,19 @@ def test_the_lines_are_in_the_plan_s_format_with_their_target_stop_and_no_gate(p
     pat = (r"^AL AUDUSD spot · [\d.,]+ (mn|bin) AUD · giriş [\d.,]+ · hedef [\d.,]+ · stop [\d.,]+ · beklenen [+-][\d.,]+( bin)? USD · "
            r"isabet %\d+ \(\d+\) · model: Carry \+ momentum · G10 spot sepeti\. ")
     assert re.match(pat, sg["thesis"]), sg["thesis"]
-    st = g10["backtest"]
-    assert ("isabet %%%d (%d)" % (round(st["hit"] * 100), st["trades"])) in sg["thesis"] and st["trades"] >= qs.MIN_WEEKS
-    # the expected week: the backtest's mean in risk units × the basket's risk now; target that gain, stop 2σ against
+    lv = g10["levels"]
+    assert lv["ok"] and ("isabet %%%d (%d)" % (round(lv["hit"] * 100), lv["n"])) in sg["thesis"] and lv["n"] >= qlv.MIN_OOS
+    # the basket's levels (quantlevels, on its weeks): the expected week the record's mean (risk units) × the basket's risk
+    # now, its target m × the risk, its stop k × the risk - a leg the same multiples of its own weekly σ
     b = g10["basket"]
-    assert b["exp"] == pytest.approx(st["mean_r"] * b["risk"]) and b["stop"] == pytest.approx(-2.0 * b["risk"])
-    assert sum(x["exp"] for x in g10["legs"]) == pytest.approx(b["exp"]) and leg["stop"] == pytest.approx(-2.0 * leg["sigma_w"])
+    assert b["exp"] == pytest.approx(lv["exp"] * b["risk"]) and b["stop"] == pytest.approx(-lv["k"] * b["risk"])
+    assert b["target"] == pytest.approx(lv["m"] * b["risk"]) and b["rr"] == pytest.approx(lv["m"] / lv["k"]) and b["rr"] >= 1.0
+    assert sum(x["exp"] for x in g10["legs"]) == pytest.approx(b["exp"]) and leg["stop"] == pytest.approx(-lv["k"] * leg["sigma_w"])
+    assert leg["target"] == pytest.approx(lv["m"] * leg["sigma_w"]) and sg["rr"] == pytest.approx(b["rr"])
     k = leg["k"]
     mo = sg["money"]                                                     # (an FX card's money: per 1 mn of its base)
     assert mo["total"] * k == pytest.approx(leg["exp"], rel=0.02) and mo["stop"] * k == pytest.approx(leg["stop"], rel=0.02)
-    assert mo["target"] * k == pytest.approx(max(leg["exp"], 0.0), rel=0.02, abs=1e-6)
+    assert mo["target"] * k == pytest.approx(leg["target"], rel=0.02)
     assert sg["hold"] == 5 and sg["entry"] == pytest.approx(reg["FX:AUDUSD"].now())
     # a rates line: its money in TL at its own DV01 (the basket's share and 2σ of its week)
     rl = sets["ois"]["legs"][0]
@@ -316,6 +320,37 @@ def test_the_lines_are_in_the_plan_s_format_with_their_target_stop_and_no_gate(p
             assert (1.0 <= abs(m.z) <= 2.0) if r["side"] else abs(m.z) < 1.0, r
             assert (r["sid"] in sigs) == bool(r["side"])
     assert all(1.0 <= abs(s["z"]) <= 2.0 and s["score_name"] == "sıra" and s["entry_z"] == 1.0 for s in sigs.values())
+
+
+def test_the_basket_is_the_trade_its_levels_are_its_weeks_and_each_leg_gets_them_scaled(planted):
+    """Every week of the walk is a trade of its group: the basket's daily P&L over the week in its own ex-ante weekly σ
+    (its last close the week's P&L in risk units); the levels (quantlevels, month by month, TRY OIS's three sets pooled)
+    are the basket's - each leg the same multiples of its own σ, Ödül / risk the basket's (m ÷ k ≥ 1) on every leg."""
+    ctx, reg, mons, tab, sets, sigs = planted
+    book = qlv.Book.from_json(tab["levels"])
+    assert book.family == "sira" and set(book.groups) == {s["group"] for s in sets.values() if s["weeks"]}
+    # the weeks as paths: one way to the week's P&L
+    walks = {b.sid: (b, b.walk(ctx.holidays)) for b in qs.books(ctx, reg)}
+    for sid, (b, w) in walks.items():
+        for wk in w["weeks"]:
+            assert wk["path"] and wk["path"][-1] == pytest.approx(wk["r"]) and len(wk["path"]) == wk["held"], sid
+    ois_weeks = sum(len(w["weeks"]) for sid, (b, w) in walks.items() if b.group == "TRY OIS")
+    assert book.n == sum(len(w["weeks"]) for _, w in walks.values()) and ois_weeks > len(walks["ois"][1]["weeks"])
+    for s in sets.values():
+        if not s["ok"] or not s["legs"]:
+            continue
+        lv = book.line(s["group"])
+        assert s["levels"]["ok"] == lv["ok"] and s["levels"]["k"] == lv.get("k"), s["id"]
+        if not lv["ok"]:
+            continue
+        b = s["basket"]
+        assert b["rr"] == pytest.approx(lv["m"] / lv["k"]) and b["rr"] >= 1.0 and b["stop"] == pytest.approx(-lv["k"] * b["risk"])
+        for leg in s["legs"]:
+            sg = sigs[leg["sid"]]
+            assert leg["stop"] == pytest.approx(-lv["k"] * leg["sigma_w"]) and leg["target"] == pytest.approx(lv["m"] * leg["sigma_w"])
+            assert sg["rr"] == pytest.approx(b["rr"]) and sg["levels"]["rule"] == "given" and sg["levels"]["n"] == lv["n"]
+            assert sg["gated"] == (qlv.LOSS if lv["exp"] < 0 else ""), leg["sid"]
+            assert "sepetin seviyeleri: stop" in sg["levels"]["text"]
 
 
 def test_no_gate_holds_a_basket_line():
@@ -420,7 +455,11 @@ def test_the_family_runs_in_the_fit_its_page_and_the_backtest_panel(seeded):
     mine = [s for s in q.view("signals", user, {})["signals"] if s["family"] == "sira"]
     assert mine and all(s["bt"]["text"].startswith("bu aile") and s["bt"]["trades"] for s in mine)
     rows = q.view("backtest", user, {})["rows"]
-    assert any(r["family"] == "sira" and r["type"] == "TRY OIS sepeti" for r in rows)
+    # (the panel: the family at its calibrated levels - its record out of sample, a row a group, today's k / m)
+    fam_row = next(r for r in rows if r["family"] == "sira" and not r["type"])
+    grp = next(r for r in rows if r["family"] == "sira" and r["type"] == "TRY OIS")
+    assert fam_row["calibrated"] and grp["calibrated"] and grp["levels"].startswith("stop ") and grp["trades"]
+    assert "TRY OIS: " in fam_row["levels"]
     with TestClient(create_app(svc), headers=auth(svc, "Sıra HTTP")) as client:
         body = client.get("/api/quant/sira").json()
         assert body["ready"] and [s["id"] for s in body["sira"]["sets"]] == [s[0] for s in qs.SETS]

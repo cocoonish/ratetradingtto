@@ -50,12 +50,18 @@ week's P&L in risk units, mean ÷ σ × √52) and the largest drawdown - the Si
 
 **The lines.**  A basket's leg is a line of the Sinyaller list, in its group ("model: Carry + momentum · G10 spot
 sepeti"): the trade in the desk's words with its size ("SAT USDJPY spot · 1,2 mn USD"), entry, target and stop in its
-price, the expected P&L in money, the backtest's hit rate and weeks.  A basket's expected week: the backtest's mean
-weekly P&L in risk units × the basket's risk when it was made (a leg's share by its own risk); the target is that
-gain, the stop 2σ of the week's P&L against (a leg: its own σ).  Every instrument of a set has a monitor - its score
+price, the expected P&L in money, the hit rate and the trade count of its levels.  **Levels** (``tto.quantlevels``): the
+basket is the trade - every week of the walk its daily P&L in its own ex-ante weekly σ (diversified), calibrated per
+list group (TRY OIS's three sets pooled) month by month on the weeks that had ended before: a stop k and a target m
+in that σ, the best expectancy with m / k ≥ 1.  Each leg gets the basket's multiples of its own weekly σ (its target m
+× σ_leg, its stop k × σ_leg), its expectancy the basket's (the record's mean × the basket's risk) shared by its σ; the
+card shows the basket's Ödül / risk.  Weeks that lost money even at the best levels make every leg "düşük güven".
+Without enough weeks the old rule stands: the backtest's mean week as the target, 2σ against as the stop.  Every
+instrument of a set has a monitor - its score
 "sıra" 2 for the strongest of a side down to 1 for the weakest, under 1 out of the basket (entry 1) -, so an
 instrument entering a basket at a rebalance is a new line: logged and alerted.  No gates: a basket's legs are its
-lines whatever their carry or expected profit (the card shows those checks).  Lines are keyed by what they are (a
+lines whatever their carry or expected profit (the card shows those checks) - only their levels' record can make them
+"düşük güven".  Lines are keyed by what they are (a
 pair, a tenor, a package, an ISIN): a calendar edit, a roll or a new bond moves no state from one line to another.
 """
 from __future__ import annotations
@@ -69,6 +75,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from . import quantbt as qbt
 from . import quantcurve as qc
 from . import quantfam as qf
+from . import quantlevels as qlv
 from . import quantmath as qm
 from . import quantuniv as qu
 
@@ -409,6 +416,23 @@ class _Book(object):
             tot += leg["side"] * leg["size"] * c.money1 * units
         return tot, nb
 
+    def path(self, legs: List[Dict[str, Any]], day: str, end: str) -> List[float]:
+        """The basket's P&L at every close after ``day``'s up to ``end``'s (money, as :meth:`week` - its carry + roll
+        pro rata): the path its levels are calibrated on (``quantlevels``); its last the week's P&L."""
+        i0, i1 = bisect.bisect_right(self.calendar, day), bisect.bisect_right(self.calendar, end)
+        out = []
+        for j in range(i0, i1):
+            d = self.calendar[j]
+            tot = 0.0
+            for leg in legs:
+                c = leg["cand"]
+                a, b = c.pay.at(day), c.pay.at(d)
+                units = c.pay.total(a, b) if a is not None and b is not None else 0.0
+                units += (leg.get("cu") or 0.0) * (j - i0 + 1) / WEEK
+                tot += leg["side"] * leg["size"] * c.money1 * units
+            out.append(tot)
+        return out
+
     # ---- the walk forward
     def walk(self, holidays: Optional[set]) -> Dict[str, Any]:
         """Every rebalance of the history: the basket of its close, held to the next one's (the weeks), the score of each
@@ -424,6 +448,7 @@ class _Book(object):
             pnl, nb = self.week(b["legs"], day, end)
             weeks.append({"day": day, "end": end, "pnl": pnl, "risk": b["risk"], "r": pnl / b["risk"], "held": nb,
                           "legs": [(leg["cand"].key, leg["side"]) for leg in b["legs"]],
+                          "path": [x / b["risk"] for x in self.path(b["legs"], day, end)],
                           "text": " · ".join("%s %s" % (leg["cand"].inst.verb(leg["side"]), leg["cand"].label) for leg in b["legs"])})
         cur = self.basket(rebal[-1]) if rebal else None
         if cur is not None:
@@ -742,23 +767,43 @@ def plan_line(sg: Dict[str, Any], head: str, exp_money: Optional[float], ccy: st
     return " · ".join([head, "giriş " + ent, "hedef " + tgt, "stop " + stp, "beklenen " + qf._money(exp_money, ccy), hit, "model: " + model])
 
 
-def _lines(book: _Book, walk: Dict[str, Any], stats: Dict[str, Any], ctx: qf.Ctx, nxt: _dt.date) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
+def _lines(book: _Book, walk: Dict[str, Any], stats: Dict[str, Any], ctx: qf.Ctx, nxt: _dt.date,
+           lv: Optional[Dict[str, Any]] = None) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
     """The monitors of a set's instruments - the basket's legs are its lines - and the set's table: its basket's card
-    (legs, sizes, the week's expected P&L, target, stop, the backtest, the next rebalance) and its ranking."""
+    (legs, sizes, the week's expected P&L, target, stop, the backtest, the next rebalance) and its ranking.  ``lv``: the
+    basket's calibrated levels (``quantlevels``: k and m in its weekly σ, the record at them) - each leg's target and
+    stop the basket's multiples of its own weekly σ, its expectancy the basket's share by its σ; without them the old
+    rule (the backtest's mean week, 2σ against)."""
     cur = walk["current"]
     model = "%s · %s" % (qu.FAMILIES[FAMILY][0], book.name)
+    lv = lv or {"ok": False, "why": "seviye kalibrasyonu yok"}
     out: Dict[str, Any] = {"id": book.sid, "name": book.name, "group": book.group, "mode": book.mode, "k": book.k, "ccy": book.ccy,
                            "cols": book.cols, "note": NOTES[book.sid], "ok": cur is not None, "next": nxt.isoformat(), "next_text": _day_tr(nxt),
                            "backtest": {k: stats.get(k) for k in ("trades", "hits", "hit", "sharpe", "max_dd", "avg", "avg_sigma", "first", "last",
                                                                    "mean_r", "sd_r")},
-                           "rows": [], "legs": [], "basket": None, "model": model}
+                           "rows": [], "legs": [], "basket": None, "model": model,
+                           "levels": dict({k: lv.get(k) for k in ("ok", "k", "m", "rr", "hit", "exp", "n", "oos", "scope", "held", "why")},
+                                          text=qf.levels_text(dict(lv, rule="given") if lv.get("ok") else lv))}
     if cur is None:
         n = len(book.cands)
         out["why"] = book.why or ("geçmiş yetersiz: en az %d enstrümanın %d kapanışı gerekli (%d enstrüman var)" % (book.min_n, MOM_DAYS + 1, n))
         return [], out
     day = cur["day"]
-    m_r = stats.get("mean_r") if (stats.get("trades") or 0) >= MIN_WEEKS else None
-    exp_b = m_r * cur["risk"] if m_r is not None else None
+    cal = bool(lv.get("ok"))
+    if cal:
+        k_b, m_b = float(lv["k"]), float(lv["m"])
+        exp_b = float(lv["exp"]) * cur["risk"] if lv.get("exp") is not None else None
+        stats_line = {"hit": lv.get("hit"), "trades": lv.get("n") or 0}
+        # (every leg's levels: the basket's multiples, its record - make_signal's "given": the leg's own target and stop)
+        leg_lv = {"ok": True, "rule": "given", "k": k_b, "m": m_b, "rr": m_b / k_b, "hit": lv.get("hit"), "exp": lv.get("exp"),
+                  "n": lv.get("n"), "oos": lv.get("oos"), "oos_n": lv.get("oos_n"), "scope": lv.get("scope"), "held": lv.get("held"),
+                  "family": FAMILY, "group": book.group, "month": lv.get("month")}
+    else:
+        k_b, m_b = STOP_SIGMA, None
+        m_r = stats.get("mean_r") if (stats.get("trades") or 0) >= MIN_WEEKS else None
+        exp_b = m_r * cur["risk"] if m_r is not None else None
+        stats_line = dict(stats)
+        leg_lv = lv
     tot_w = sum(leg["sigma_w"] for leg in cur["legs"]) or 1.0
     last = book.calendar[-1] if book.calendar else day
     held = bisect.bisect_right(book.calendar, last) - bisect.bisect_right(book.calendar, day)
@@ -788,7 +833,8 @@ def _lines(book: _Book, walk: Dict[str, Any], stats: Dict[str, Any], ctx: qf.Ctx
         so_far = side * pu_money * ((c.pay.total(i0, i1) if i0 is not None and i1 is not None else 0.0) + (row.get("cu") or 0.0) * held / WEEK)
         so_far_b += so_far
         exp_i = exp_b * row["sigma_w"] / tot_w if exp_b is not None else None
-        stop_i = STOP_SIGMA * row["sigma_w"]
+        stop_i = k_b * row["sigma_w"]                            # (the basket's stop multiple of the leg's own weekly σ)
+        tgt_i = m_b * row["sigma_w"] if cal else None            # (... and its target multiple)
         factor = inst.pnl()[1] or 1.0
         lvl = inst.now()
         line = inst.line(side, k)
@@ -804,16 +850,17 @@ def _lines(book: _Book, walk: Dict[str, Any], stats: Dict[str, Any], ctx: qf.Ctx
                 if f_last:
                     iv, rv = f_last["iv"], f_last["rv"]
                     cu_live = WEEK * (rv * rv - iv * iv) / (126.0 * iv) if iv else None       # (theta + gamma of a week, long vol)
-        kw: Dict[str, Any] = {}
+        kw: Dict[str, Any] = {"levels": leg_lv}
         if exp_i is not None:
             e_pu = exp_i / pu_money
             carry_h = side * (cu_live or 0.0) * WEEK / 5.0 if not inst.fx else 0.0
-            kw.update(fcast=side * (e_pu - carry_h) / factor, reward=max(e_pu, 0.0) / factor)
+            kw.update(fcast=side * (e_pu - carry_h) / factor, reward=(tgt_i / pu_money if cal else max(e_pu, 0.0)) / factor)
+        elif cal:
+            kw["reward"] = tgt_i / pu_money / factor
         kw["risk"] = stop_i / pu_money / factor
         if cu_live is not None:
             kw["carry_up"] = cu_live
         entry = _asof(c.lvl.days, c.lvl.vals, day)
-        stats_line = dict(stats)
 
         def thesis(sg: Dict[str, Any], line: str = line, exp_i: Optional[float] = exp_i, row: Dict[str, Any] = row, entry: Optional[float] = entry,
                    inst: Any = inst, stats_line: Dict[str, Any] = stats_line, label: str = c.label) -> str:
@@ -825,13 +872,15 @@ def _lines(book: _Book, walk: Dict[str, Any], stats: Dict[str, Any], ctx: qf.Ctx
         mons.append(inst.monitor(sid, FAMILY, k=k, hold=WEEK, expression=line, thesis=thesis, **dict(common, **kw)))
         leg = dict(disp, line=line, k=k, usd=row.get("usd"), entry=entry, last=_asof(c.lvl.days, c.lvl.vals, last), level=lvl, kind=inst.kind,
                    per_cu=inst.per_cu, fx=bool(inst.fx), unit=inst.unit, digits=inst.digits, pu_money=pu_money, sigma_w=row["sigma_w"],
-                   exp=exp_i, stop=-stop_i, so_far=so_far, carry_week=(cu_live * side * pu_money) if cu_live is not None else None,
-                   ccy=book.ccy)
+                   exp=exp_i, stop=-stop_i, target=tgt_i, so_far=so_far,
+                   carry_week=(cu_live * side * pu_money) if cu_live is not None else None, ccy=book.ccy)
         out["legs"].append(leg)
     signed = sum(leg["side"] * (leg["usd"] if book.sid == "g10" else leg["k"]) * (leg["cand"].orient if book.sid == "g10" else 1)
                  for leg in cur["legs"])
+    # the basket's card: its levels in its own (diversified) weekly σ - Ödül / risk the basket's
     out["basket"] = {"formed": day, "formed_text": _day_tr(_d(day)), "last": last, "held": held, "risk": cur["risk"], "exp": exp_b,
-                     "target": max(exp_b, 0.0) if exp_b is not None else None, "stop": -STOP_SIGMA * cur["risk"], "so_far": so_far_b,
+                     "target": (m_b * cur["risk"]) if cal else (max(exp_b, 0.0) if exp_b is not None else None),
+                     "stop": -k_b * cur["risk"], "rr": (m_b / k_b) if cal else None, "so_far": so_far_b,
                      "net": signed, "net_unit": {"g10": "USD", "vol": "$ vega"}.get(book.sid, "$ DV01"), "legs": len(cur["legs"])}
     return mons, out
 
@@ -846,21 +895,33 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
     sets: List[Dict[str, Any]] = []
     trades: List[Dict[str, Any]] = []
     timing: Dict[str, float] = {}
+    walks = []
     for book in books(ctx, reg):
         t1 = time.perf_counter()
         walk = book.walk(ctx.holidays)
         tr, st = _stats(walk["weeks"], book, try_per)
+        walks.append((book, walk, tr, st))
+        timing[book.sid] = round((time.perf_counter() - t1) * 1000.0, 1)
+    # the baskets' levels (quantlevels): every week a trade - its daily P&L in its own ex-ante weekly σ -, calibrated per
+    # group (TRY OIS's three sets pooled), month by month on the weeks that had ended before
+    t1 = time.perf_counter()
+    paths = [{"family": FAMILY, "group": book.group, "sid": "%s:%s" % (FAMILY, book.sid), "entry_day": w["day"], "end_day": w["end"],
+              "path_sigma": w["path"], "carry_sigma": 0.0, "carry_in": True, "sigma": w["risk"], "sigma_closes": WEEK, "unit": book.ccy,
+              "try": try_per.get(book.ccy)}
+             for book, walk, _, _ in walks for w in walk["weeks"] if w.get("path")]
+    levels = qlv.calibrate(paths, FAMILY, ctx.today_iso)
+    timing["levels"] = round((time.perf_counter() - t1) * 1000.0, 1)
+    for book, walk, tr, st in walks:
         nxt = next_rebalance(ctx.today, book.calendar, ctx.holidays)
-        m, tab = _lines(book, walk, st, ctx, nxt)
+        m, tab = _lines(book, walk, st, ctx, nxt, levels.line(book.group))
         tab["weeks"] = [{k: w[k] for k in ("day", "end", "pnl", "risk", "r", "held", "text")} for w in walk["weeks"]]
         mons.extend(m)
         sets.append(tab)
         trades.extend(tr)
-        timing[book.sid] = round((time.perf_counter() - t1) * 1000.0, 1)
     first = min((t["entry_day"] for t in trades), default=None)
     last = max((t["exit_day"] for t in trades), default=None)
     table = {"ok": True, "today": ctx.today_iso, "sets": sets, "ms": round((time.perf_counter() - t0) * 1000.0, 1), "timing": timing,
-             "backtest": {"trades": trades, "first": first, "last": last}}
+             "backtest": {"trades": trades, "first": first, "last": last}, "levels": levels.to_json()}
     return mons, table
 
 

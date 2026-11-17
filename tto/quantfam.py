@@ -555,6 +555,9 @@ class Monitor(object):
         # the family's own last word on its signal (a function of it, called at the end of make_signal: a systematic
         # family's strength, rank, line and sentence - quanttrend.py)
         self.finish: Optional[Callable[[Dict[str, Any]], None]] = kw.get("finish")
+        # the levels calibrated on the family's past trades (tto.quantlevels: ``Book.line`` - its multiples and record,
+        # "sigma" the family's own σ of the holding in level units when it gives one); None: the family's own rule
+        self.levels: Optional[Dict[str, Any]] = kw.get("levels")
         self.fxinfo: Dict[str, Any] = {}
         self.level: Optional[float] = None
         self.z: Optional[float] = None
@@ -978,6 +981,140 @@ def hold_of(m: Monitor) -> Optional[float]:
     return None
 
 
+#: a line whose calibrated levels lost money in the past all the same: its "düşük güven" reason (tto.quantlevels)
+LEVELS_LOSS = "bu kurulum bu seviyelerle geçmişte zarar ettirdi"
+
+
+def holding_sigma(m: "Monitor", hold: Optional[float], cfg: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
+    """A monitor's σ of its holding: (σ in P&L units, P&L units a level unit, the holding in closes - at most the desk's
+    log days, as the backtest and the log hold it), from its daily σ (``pnl_sd``, else ``dsd`` × its P&L factor; a
+    price told in per cent of itself: 100 ÷ the level)."""
+    unit, factor = m.pnl or (None, None)
+    if not factor and unit == "%" and m.level:
+        factor = 100.0 / abs(m.level)
+    if not factor or not hold:
+        return None
+    daily = m.pnl_sd if m.pnl_sd is not None else (m.dsd * factor if m.dsd else None)
+    if not daily or not math.isfinite(daily) or daily <= 0:
+        return None
+    h = max(1, min(int(round(hold)), int(cfg.get("log_days") or 20)))
+    return daily * math.sqrt(h), factor, h
+
+
+def _apply_levels(m: "Monitor", lv: Dict[str, Any], s: int, target: Optional[float], stop: Optional[float], scale: Optional[float],
+                  exp: Optional[float], hold: Optional[float], carry_week: Optional[float], carry_h: Optional[float],
+                  cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """The calibrated levels ``lv`` (``Monitor.levels``: ``quantlevels.Book.line``) on a signal now: (what the card
+    says of them, target, stop, the scale of its σ, the expected P&L, the carry in it).  Target and stop: the multiples ×
+    the σ of the holding now (the family's own ``lv["sigma"]`` in level units, else the daily σ × √ the holding); "fair"
+    the window's mean as the target and the stop at most as far; "trail" no target and a stop that trails the best
+    level; "given" the family's own (a basket's scaled to its leg).  The expected P&L: the record's expectancy × σ - a
+    rates line whose record had no carry + roll (the history's) with the carry engine's over the record's holding."""
+    out = {k: lv.get(k) for k in ("ok", "rule", "k", "m", "rr", "hit", "exp", "n", "oos", "oos_n", "scope", "held", "month", "why", "own",
+                                  "avg_win", "carry_in", "family", "group")}
+    if not lv.get("ok"):
+        return out, target, stop, scale, exp, carry_h
+    unit, factor = m.pnl or (None, None)
+    if not factor and unit == "%" and m.level:
+        factor = 100.0 / abs(m.level)
+    rule, k, level = lv.get("rule"), float(lv.get("k") or 0.0), m.level
+    rr = lv.get("rr")
+    if rule == "given":                                      # (a basket's leg: its levels are the family's already)
+        out.update(rr=rr, unit=unit)
+        return out, target, stop, scale, exp, carry_h
+    if lv.get("sigma") is not None and factor:
+        sig_lv = float(lv["sigma"])
+        sig = sig_lv * factor
+    else:
+        sh = holding_sigma(m, hold, cfg)
+        if sh is None:
+            out.update(ok=False, why="seviye kalibrasyonu uygulanamadı: σ ölçeği yok (kendi seviyeleri)")
+            return out, target, stop, scale, exp, carry_h
+        sig, factor, _ = sh
+        sig_lv = sig / factor
+    if not sig_lv or not math.isfinite(sig_lv):
+        out.update(ok=False, why="seviye kalibrasyonu uygulanamadı: σ ölçeği yok (kendi seviyeleri)")
+        return out, target, stop, scale, exp, carry_h
+    if rule == "fixed":
+        target, stop = level + s * float(lv["m"]) * sig_lv, level - s * k * sig_lv
+        rr = float(lv["m"]) / k
+    elif rule == "fair":
+        if m.mode != "mr" or target is None or s * (target - level) <= 0:
+            out.update(ok=False, why="seviye kalibrasyonu uygulanamadı: adil değer işlemin yönünde değil (kendi seviyeleri)")
+            return out, target, stop, scale, exp, carry_h
+        f = abs(target - level)
+        d = min(k * sig_lv, f)
+        stop = level - s * d
+        rr = f / d
+    elif rule == "trail":
+        target, stop = None, level - s * k * sig_lv
+        out["trail"] = k * sig_lv
+    out.update(rr=rr, sigma=sig, sigma_lv=sig_lv, unit=unit)
+    if rule != "given" and lv.get("exp") is not None:
+        held = float(lv.get("held") or hold or 0.0)
+        exp = float(lv["exp"]) * sig
+        if not m.fx and carry_week is not None and not lv.get("carry_in"):
+            carry_h = carry_week * held / 5.0                # (the history's P&L had no carry: the engine's over the holding)
+            exp += carry_h
+    return out, target, stop, sig_lv, exp, carry_h
+
+
+def _in_sigma(v: Optional[float]) -> str:
+    return _g(v, 2) + "σ"
+
+
+def levels_text(lv: Optional[Dict[str, Any]]) -> str:
+    """The calibrated levels in a few words: "stop 1,20σ · hedef 1,80σ · ödül / risk 1,50 · isabet %57 (46 işlem,
+    örneklem dışı) · işlem başına +0,21σ" (σ: of the holding), or why there are none."""
+    if not lv:
+        return ""
+    if not lv.get("ok"):
+        return lv.get("why") or ""
+    rule = lv.get("rule")
+    if rule == "trail":
+        head = "iz süren stop %s (en iyi seviyeden geri), hedef yok" % _in_sigma(lv.get("k"))
+    elif rule == "fair":
+        head = "hedef adil değer (ortalama), stop %s (en çok hedef kadar)" % _in_sigma(lv.get("k"))
+    elif rule == "given":
+        head = "sepetin seviyeleri: stop %s · hedef %s (sepetin haftalık σ'sı, bacağa oranlı)" % (_in_sigma(lv.get("k")), _in_sigma(lv.get("m")))
+    else:
+        head = "stop %s · hedef %s" % (_in_sigma(lv.get("k")), _in_sigma(lv.get("m")))
+    bits = [head]
+    if lv.get("rr") is not None:
+        bits.append("ödül / risk %s%s" % (_g(lv["rr"], 2), " (ortalama kazanç ÷ stop)" if rule == "trail" else ""))
+    if lv.get("hit") is not None:
+        bits.append("isabet %%%s (%d işlem, %s)" % (_g(lv["hit"] * 100.0, 0), lv.get("n") or 0, "örneklem dışı" if lv.get("oos") else "örneklem içi"))
+    if lv.get("exp") is not None:
+        bits.append("işlem başına %s" % (_sg(lv["exp"], 2) + "σ"))
+    if lv.get("scope") == "aile":
+        bits.append("ailenin tüm grupları")
+    return " · ".join(bits)
+
+
+def _stop_why(sg: Dict[str, Any], m: "Monitor", cfg: Dict[str, Any]) -> str:
+    """What a stop is, beside its price in the rationale: a calibrated one's multiple of the holding's σ (a trailing one
+    behind the best level), a mean reversion's own the stop |z|."""
+    lv = sg.get("levels") or {}
+    if lv.get("ok") and lv.get("k") is not None:
+        return " - %s%s σ%s" % ("iz süren, en iyi seviyeden " if lv.get("rule") == "trail" else "", _g(lv["k"], 2),
+                                " (sepetin katı)" if lv.get("rule") == "given" else "")
+    return " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""
+
+
+def levels_sentence(sg: Dict[str, Any]) -> str:
+    """The card's sentence of its levels: where they come from, the record they had."""
+    lv = sg.get("levels") or {}
+    if not lv.get("ok"):
+        return ("Seviyeler: %s." % lv["why"]) if lv.get("why") else ""
+    sigma = lv.get("sigma")
+    unit = {"vol": "vol puanı"}.get(lv.get("unit") or "", lv.get("unit") or "")
+    scale = (" (σ: tutmanın σ'sı, %s %s)" % (_g(sigma, 2), unit)).replace(" )", ")") if sigma is not None and lv.get("rule") != "given" else ""
+    out = "Seviyeler geçmiş işlemlerden%s: %s." % (scale, levels_text(lv))
+    if (lv.get("exp") or 0.0) < 0.0:
+        out += " Bu seviyelerle bile geçmişte zarar ettirdi: düşük güven."
+    return out
+
+
 def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[str, Any]]:
     """A monitor past its entry threshold as a signal of the common format (``None`` below it), with its decision:
     every gate it passed or failed, the expected profit over the holding with carry + roll in it (bp, % or vol points,
@@ -1076,6 +1213,13 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     daily = m.pnl_sd if m.pnl_sd is not None else (m.dsd * factor if m.dsd and factor else None)
     sig_h = daily * math.sqrt(hold) if daily and hold else None
     margin = float(cfg.get("carry_margin", 0.5)) * sig_h if sig_h else 0.0
+    # ---- the levels calibrated on the family's past trades (tto.quantlevels): target and stop in σ of the holding now,
+    # the record they had and their expectancy - in place of the family's own rule (a line without them says why)
+    lvs = None
+    if isinstance(m.levels, dict):
+        lvs, target, stop, scale, exp, carry_h = _apply_levels(m, m.levels, s, target, stop, scale, exp, hold, carry_week, carry_h, cfg)
+    if factor is None and lvs and lvs.get("ok") and unit == "%" and m.level:
+        factor = 100.0 / abs(m.level)                       # (a price told in % of itself: its targets' P&L)
     reward = abs(target - m.level) * factor if factor and target is not None else None
     risk = abs(stop - m.level) * factor if factor and stop is not None else None
     # ---- the same in money: an FX trade in the prices of what is traded and per 1 mn of its base currency, a rates
@@ -1135,13 +1279,22 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
         gates.append(_gate("Beklenen kâr", ok, "ufukta %s%s" % (amount(exp), " (%s)" % inside if inside else "")))
         if not ok:
             why_x = "beklenen kâr yok (%s%s)" % (amount(exp), ", " + inside if inside else "")
+    # the levels' own record: a line whose levels lost money in the past all the same is "düşük güven" - whatever else
+    # holds it or not (a family with no gate of its own too: the list keeps it, with this reason)
+    why_lv = ""
+    if lvs is not None:
+        if lvs.get("ok"):
+            why_lv = LEVELS_LOSS if (lvs.get("exp") or 0.0) < 0.0 else ""
+            gates.append(_gate("Seviyeler", not why_lv, levels_text(lvs)))
+        else:
+            gates.append(_gate("Seviyeler", True, lvs.get("why") or "kendi seviyeleri"))
     if m.ungated:
         gated = why_r = why_h = why_x = ""                   # (told above, holding nothing)
     # |z| on the desk's scale (a family with its own threshold is brought to it), counted at most up to the stop: no
     # family's score can outrank the others by its scale alone
     base = min(abs(m.z) * float(cfg["entry_z"]) / thr, stop_z)
     composite = base * rf * hf * cf
-    gated = gated or why_r or why_h or why_x
+    gated = gated or why_lv or why_r or why_h or why_x
     # the packages that trade it: the main one, then the others (each leg told, sized; its own carry + roll and the
     # same expected move with it)
     packages = []
@@ -1166,9 +1319,24 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
           "parts": {"z": base, "regime": rf, "hl": hf, "carry": cf}, "gated": gated, "live": m.live, "time": stamp,
           "note": m.note, "info": {k: v for k, v in m.info.items() if k not in ("ou", "inputs")}, "agree": 0, "conflict": 0,
           "agree_with": [], "conflict_with": [], "packages": packages, "px": px, "money": money}
+    # the expectancy in TRY at the line's own size (the list's order within a group): an FX card's money is per 1 mn of
+    # the base - a universe line of another size (Trend's, a basket leg's) is k of it
+    size_k = (m.info or {}).get("k") if px is not None else None
+    sg["exp_try"] = pnl_try * float(size_k) if pnl_try is not None and size_k else pnl_try
+    if lvs is not None:
+        if lvs.get("ok"):
+            sg["rr"] = lvs.get("rr")
+            lvs["money"] = (money or {}).get("total")
+            lvs["ccy"] = (money or {}).get("ccy")
+            if lvs.get("trail"):
+                sg["trail"] = lvs["trail"]                  # (the log and the backtest trail the stop behind the best level)
+        lvs["text"] = levels_text(lvs)
+        sg["levels"] = lvs
     try:
         sg["trade_tr"] = trade_text(sg)
         sg["plain"] = plain_text(sg)
+        if lvs is not None:
+            sg["plain"] = (sg["plain"] + " " + levels_sentence(sg)).strip()
     except Exception:  # noqa: BLE001 - the words are told from the numbers; words that cannot be are left out, not the signal
         sg.setdefault("trade_tr", sg["expression"])
         sg["plain"] = ""
@@ -3426,11 +3594,11 @@ def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str,
     px = (sg or {}).get("px")
     if sg and px and px.get("stop") is not None:
         inv.append("Stop: %s %s (giriş %s)%s" % (px["inst"], _th(px["stop"], px["digits"]), _th(px["entry"], px["digits"]),
-                                                 " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
+                                                 _stop_why(sg, m, cfg)))
     elif sg and sg.get("stop") is not None:
         inv.append("Stop: seviye %s (giriş %s)%s" % (_level_text(sg["stop"], m.unit, m.digits) + sheet_text(sg, sg["stop"], True),
                                                      _level_text(sg["entry"], m.unit, m.digits) + sheet_text(sg, sg["entry"], True),
-                                                     " - |z| %s" % _g(float(cfg["stop_z"]), 1) if m.mode == "mr" else ""))
+                                                     _stop_why(sg, m, cfg)))
     reg = m.regime or {}
     if m.kind in ("mr", "surprise"):
         inv.append("Rejim trende dönerse (varyans oranı z ≥ +%s; şimdi %s)" % (_g(Z_REGIME, 3), _sg(reg.get("vr_z"), 2)))
