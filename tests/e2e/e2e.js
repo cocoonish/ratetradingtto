@@ -416,13 +416,51 @@ async function clipAfter(page, action) {
     await page.waitForSelector('.modal table.ret');
     const firstBid = await page.inputValue('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
     check('editor shows the stored curve in percent', firstBid === '35,1', firstBid);
+    check('the curve as opened changes nothing: the line above the table says so, every Δ is 0',
+      (await page.textContent('#ret-diff')) === 'Kayıtlı eğriyle aynı: değişen vade yok'
+      && (await page.$$eval('.modal table.ret td.ret-delta', (tds) => tds.length === 30 && tds.every((td) => td.textContent === '0'))));
+    const savedRet = Object.fromEntries((await api(page, 'ayşe yilmaz', 'GET', '/api/ret')).json.rows.map((r) => [r.tenor, r]));
     await page.evaluate(() => navigator.clipboard.writeText('Vade\tBid\tAsk\r\n1M\t34,00\t34,20\r\n3M\t35,1\t35,6\r\n1Y\t0,381\t0,392\r\n'));
     await page.click('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
     await page.keyboard.press('Control+v');
     await page.waitForFunction(() => document.querySelector('.modal table.ret tbody tr:nth-child(6) td:nth-child(3) input').value === '34,00');
     await shot(page, '03-ret-editor');
+    // how much the paste changed, and where: Δ bid / Δ ask per tenor against the saved curve, coloured, the rows lit, a line
+    const bpSigned = (x) => {
+      const r = Math.round(x * 10) / 10;
+      if (Math.abs(r) < 0.05) return '0';
+      const a = Math.abs(r);
+      return (r > 0 ? '+' : '−') + (Math.abs(a - Math.round(a)) > 1e-9 ? a.toFixed(1).replace('.', ',') : String(Math.round(a)));
+    };
+    const pastedRet = { '1M': [0.34, 0.342], '3M': [0.351, 0.356], '1Y': [0.381, 0.392] };
+    const wantDelta = {};
+    const wantMoved = [];
+    for (const [t, [b, a]] of Object.entries(pastedRet)) {
+      const d = [Math.round((b - savedRet[t].bid) * 1e6) / 100, Math.round((a - savedRet[t].ask) * 1e6) / 100];
+      wantDelta[t] = d;
+      if (d.some((x) => Math.abs(x) >= 0.05)) wantMoved.push(t + ' ' + bpSigned(d[0]) + ' / ' + bpSigned(d[1]));
+    }
+    const deltaCells = await page.$$eval('.modal table.ret td.ret-delta', (tds) => Object.fromEntries(tds.map((td) => [td.dataset.tenor + ':' + td.dataset.side,
+      { t: td.textContent, up: td.classList.contains('up'), down: td.classList.contains('down'), lit: td.closest('tr').classList.contains('ret-chg') }])));
+    const colourOk = (x, c) => (Math.abs(x) < 0.05 ? !c.up && !c.down : x > 0 ? c.up : c.down);
+    check('pasting a RET: every tenor shows Δ bid / Δ ask in bp against the saved curve (up green, down red), changed rows lit, the others 0',
+      wantMoved.length >= 2 && Object.entries(wantDelta).every(([t, d]) => deltaCells[t + ':bid'].t === bpSigned(d[0]) && deltaCells[t + ':ask'].t === bpSigned(d[1])
+        && colourOk(d[0], deltaCells[t + ':bid']) && colourOk(d[1], deltaCells[t + ':ask']) && deltaCells[t + ':bid'].lit === d.some((x) => Math.abs(x) >= 0.05))
+      && deltaCells['ON:bid'].t === '0' && !deltaCells['ON:bid'].lit && deltaCells['2M:ask'].t === '0', [wantDelta, deltaCells['1M:bid'], deltaCells['3M:ask']]);
+    const diffText = await page.textContent('#ret-diff');
+    const wantDiff = 'Değişen ' + wantMoved.length + ' vade: ' + wantMoved.join(' · ') + ' · ' + (15 - wantMoved.length) + ' vade aynı';
+    check('... and the line above the table: "Değişen N vade: 1M … / … · … · M vade aynı"', diffText === wantDiff, [diffText, wantDiff]);
     await page.click('.modal .mfoot .btn.primary');
     await page.waitForFunction(() => /RET faizleri kaydedildi/.test(document.getElementById('toasts').textContent));
+    await page.waitForFunction(() => /1M/.test((document.querySelector('.ret-hist .ret-hist-item .ret-hist-chg') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => null);
+    const histChg = await page.$eval('.ret-hist .ret-hist-item .ret-hist-chg', (e) => e.textContent).catch(() => null);
+    check('the RET history keeps what the upload changed, tenor by tenor ("1M −45 / −45 · …")', histChg === wantMoved.join(' · '), [histChg, wantMoved]);
+    // the same curve pasted over the saved one: nothing changes, and it says so
+    await page.click('.modal table.ret tbody tr:nth-child(1) td:nth-child(3) input');
+    await page.keyboard.press('Control+v');
+    await page.waitForFunction(() => /kayıtlı eğriyle aynı, değişen vade yok/.test(document.getElementById('toasts').textContent), null, { timeout: 10000 }).catch(() => null);
+    check('a pasted curve that changes nothing says so (the line and the toast)', (await page.textContent('#ret-diff')) === 'Kayıtlı eğriyle aynı: değişen vade yok'
+      && /kayıtlı eğriyle aynı, değişen vade yok/.test(await page.textContent('#toasts')));
     const ret2 = await api(page, 'ayşe yilmaz', 'GET', '/api/ret');
     const byTenor = Object.fromEntries(ret2.json.rows.map((r) => [r.tenor, r]));
     check('pasted 1M row saved (34,00 / 34,20)', Math.abs(byTenor['1M'].bid - 0.34) < 1e-12 && Math.abs(byTenor['1M'].ask - 0.342) < 1e-12, byTenor['1M']);
@@ -4115,6 +4153,36 @@ async function clipAfter(page, action) {
     const fair1 = await fairRow('1M');
     check('"Yayınlanandan al": each tenor\'s offset gives the published RET back (Şimdiki = Yayınlanan), no banner',
       fair1.now === fair1.pub && await page.isHidden('#retfair-banner') && /^OIS mid [−+] \d+$/.test(fair1.formula), fair1);
+    // "Tabana göre": Mid by default; one click and the base sets the bid (the same spread now puts the bid where the mid was
+    // less half the width: 20 bp wide, 10 bp up); for many at once from the bar above (nothing selected: all)
+    const anchorOn = (t) => page.$eval('.retfair-anchor[data-tenor="' + t + '"] button.on', (b) => b.dataset.anchor).catch(() => null);
+    check('"Tabana göre" shows Bid / Mid / Ask on every row, Mid by default', (await page.locator('.retfair-anchor').count()) === 15
+      && await anchorOn('1M') === 'mid' && await anchorOn('2Y') === 'mid');
+    await page.click('.retfair-anchor[data-tenor="1M"] button[data-anchor="bid"]');
+    await page.waitForFunction(() => /^Bid = OIS mid/.test(document.querySelector('td.retfair-formula[data-tenor="1M"]').textContent), null, { timeout: 20000 });
+    const fairBid = await fairRow('1M');
+    check('"Tabana göre: Bid": "Bid = OIS mid − N", Şimdiki 10 bp up (bid = base + spread), the width kept',
+      /^Bid = OIS mid [−+] \d+$/.test(fairBid.formula) && Math.abs(sideOf(fairBid.now, 0) - sideOf(fair1.now, 0) - 0.10) < 1e-9
+      && Math.abs(sideOf(fairBid.now, 1) - sideOf(fairBid.now, 0) - (sideOf(fair1.now, 1) - sideOf(fair1.now, 0))) < 1e-9 && await anchorOn('1M') === 'bid', [fair1, fairBid]);
+    await page.click('#retfair-bulk-anchor button[data-anchor="mid"]');
+    await page.waitForFunction(() => /^OIS mid/.test(document.querySelector('td.retfair-formula[data-tenor="1M"]').textContent), null, { timeout: 20000 });
+    check('... and back to Mid for every tenor from the bar (nothing selected): the published RET again', (await fairRow('1M')).now === fair1.now
+      && await anchorOn('1M') === 'mid' && await page.isHidden('#retfair-banner'));
+    // "Senaryo": the user's own view - a PPK scenario of the OIS page by its name, every tenor under each side by side
+    check('the scenario is the market by default, with the scenarios to choose by their names',
+      (await page.textContent('#retfair-scen-label')) === 'Senaryo: Piyasa (bootstrap)'
+      && JSON.stringify(await page.$$eval('#retfair-scenario option', (os) => os.map((o) => o.textContent))) === JSON.stringify(['Piyasa (bootstrap)', 'S1 · Baz', 'S2 · Hawkish', 'S3 · Dovish'])
+      && (await page.locator('#retfair-scen-table tbody tr').count()) === 15 && await page.isHidden('#retfair-scen-note'));
+    await page.selectOption('#retfair-scenario', 'S2');
+    await page.waitForFunction(() => document.getElementById('retfair-scen-label').textContent === 'Senaryo: S2 · Hawkish', null, { timeout: 20000 });
+    const scenCells = await page.$$eval('#retfair-scen-table td[data-tenor="3M"]', (tds) => Object.fromEntries(tds.map((td) => [td.dataset.scen, td.textContent])));
+    const fair3s = await fairRow('3M');
+    check('a scenario chosen: the tab says which ("Senaryo: S2 · Hawkish"), its rows are the scenario\'s, the table shows it beside the market',
+      await page.isVisible('#retfair-scen-note') && /^\d+,\d\d \/ \d+,\d\d/.test(fair3s.now) && scenCells.S2.startsWith(fair3s.now)
+      && Object.keys(scenCells).join() === 'piyasa,S1,S2,S3' && (await page.$eval('#retfair-scen-table th.cur', (th) => th.textContent)) === 'S2 · Hawkish', [fair3s, scenCells]);
+    await page.selectOption('#retfair-scenario', 'piyasa');
+    await page.waitForFunction(() => document.getElementById('retfair-scen-label').textContent === 'Senaryo: Piyasa (bootstrap)', null, { timeout: 20000 });
+    check('... and back to the market: the published RET again', (await fairRow('1M')).now === fair1.now && await page.isHidden('#retfair-scen-note'));
     // a base and an offset changed: Şimdiki moves, the banner (and the RET button) names the tenors
     await page.selectOption('select.retfair-base[data-tenor="1M"]', 'viop');
     await page.waitForFunction(() => /^VİOP mid/.test(document.querySelector('td.retfair-formula[data-tenor="1M"]').textContent));
@@ -4133,6 +4201,9 @@ async function clipAfter(page, action) {
     await page.click('#retfair-fmt-table');
     await page.click('#retfair-publish');
     await page.waitForFunction(() => /RET yayınlandı/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    const pubToast = await page.textContent('#toasts');
+    check('... the toast says which tenors moved and by how much ("1M … · 2M +25 / +25")',
+      /RET yayınlandı ve kopyalandı: 1M [+−]\d+(,\d)? \/ [+−]\d+(,\d)? · 2M \+25 \/ \+25 \(15 vade\)/.test(pubToast), pubToast);
     const pubTsv = (await page.evaluate(() => navigator.clipboard.readText())).split('\r\n');
     const new1M = fair1b.now.split(' / ');
     check('"Kopyala ve yayınla": the new curve on the clipboard in the dialog\'s table format',

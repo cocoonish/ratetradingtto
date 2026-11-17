@@ -281,6 +281,7 @@ export function fairPane(ctx, { retText, signedBp, onPublished, onClose }) {
     const n = selected.size;
     selCount.textContent = n ? n + ' vade seçili' : 'Seçim yok: tüm vadeler';
     allBox.checked = !!data && n === data.rows.length;
+    paintBulkAnchor();
   }
 
   // ---------------------------------------------------------------- one tenor's row
@@ -430,7 +431,6 @@ export function fairPane(ctx, { retText, signedBp, onPublished, onClose }) {
       paintRow(r);
     }
     paintSel();
-    paintBulkAnchor();
     const scen = res.scenario && res.scenario.code !== MARKET ? res.scenario : null;
     const ups = res.updates || [];
     banner.textContent = ups.length ? (scen ? scen.name + ' senaryosunda RET güncellemesi: ' : 'RET güncellemesi var: ') + ups.join(', ') : '';
