@@ -1,6 +1,7 @@
-"""DİBS Trading in groups of columns, with each bond's fair yield and price on DİBS RV's fitted ASW curves - OIS and the FX
-swap curve (``tto/rvfair.py``) - and the bond lists shown as the trading list has them: DİBS Trading's value dates and the
-DİBS ASW table without the rows that hold no bond, the ASW table kind by kind, by maturity (display only)."""
+"""DİBS Trading in groups of columns, with each bond's fair yield and price on the fitted ASW curves - DİBS RV's OIS curve
+and DİBS ASW's FX swap implied TRY curve (``tto/rvfair.py``) - and the bond lists shown as the trading list has them: DİBS
+Trading's value dates and the DİBS ASW table without the rows that hold no bond, the ASW table kind by kind, by maturity
+(display only)."""
 from __future__ import annotations
 
 import pytest
@@ -23,6 +24,19 @@ def rv(s, col, r, user=None):
 
 def row_of(s, isin):
     return next(r for r in range(5, 55) if rv(s, "A", r) == isin)
+
+
+def fx_sheet(s, user=None):
+    """DİBS ASW's sheet on the FX swap implied curve: (a cell's value by column and row, the row of an ISIN)."""
+    book = s.books["asw"]
+    si = book.model.sheet_index["ASW"]
+
+    def run():
+        calc, _ = s._asw_fx_calc(book, user)
+        return {(c, r): calc.get(si, r, col_to_index(c)) for r in range(3, 57) for c in ("B", "J", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+                                                                                      "AN", "AW", "AX", "AY", "AZ", "BA")}
+    got = s.et.call(run)
+    return (lambda c, r: got[(c, r)]), (lambda isin: next(r for r in range(7, 57) if got[("B", r)] == isin))
 
 
 def summary(s, user):
@@ -56,13 +70,27 @@ def test_the_fair_yield_and_price_of_a_fixed_coupon_bond_and_a_bill(service):
     """At the fitted curve's ASW (a + b·t + c·t² at the bond's years): the dirty price at the OIS spot is PV − ASW ×
     annuity / 100, at the value date that ÷ the funding factor, the clean one that − the accrued interest; the yield is
     the screen's BIST compound yield of that price.  By hand, from the sheet's own columns: a fixed coupon bond (on the
-    curve: its fitted ASW is the sheet's) and a bill (not on it: read off the curve), on OIS and on the FX swap curve."""
+    curve: its fitted ASW is the sheet's) and a bill (not on it: read off the curve), on OIS (DİBS RV) and on the FX swap
+    implied curve (DİBS ASW on it - its own PV, annuity, fitted curve, funding and accrued; the yield DİBS RV's)."""
     s = service
     u = s.login("Adil Değer")["user"]
     d = summary(s, u)
+    fx, fx_row = fx_sheet(s, u)
+    for isin in (FIXED, BILL):
+        r, ar = row_of(s, isin), fx_row(isin)
+        coef = [fx(x, 3) for x in ("AW", "AX", "AY")]
+        t = fx("J", ar)
+        asw = coef[0] + coef[1] * t + coef[2] * t ** 2
+        assert asw == pytest.approx(fx("S", ar), abs=1e-9)                              # the sheet's own fitted curve
+        dirty = (fx("P", ar) - asw * fx("Q", ar) / 100) / (fx("O", ar) / (fx("L", ar) + fx("N", ar)))
+        line = line_of(d, isin)
+        assert at(d, line, FX_PRICE)["v"] == pytest.approx(dirty - fx("N", ar), abs=1e-9), isin
+        want = by_hand_yield(s, r, dirty) if isin == FIXED else (100 / dirty) ** (365 / rv(s, "DR", r)) - 1
+        assert at(d, line, FX_YIELD)["v"] == pytest.approx(want, abs=1e-9), isin
+        assert "DİBS ASW'nin ASW eğrisi (13 kâğıt; " + rvfair.FX_CURVE_TEXT in at(d, line, FX_YIELD)["tip"]
+        assert (fx("M", ar), fx("N", ar), fx("L", ar)) == (rv(s, "P", r), pytest.approx(rv(s, "CW", r), abs=1e-9), rv(s, "O", r))
     for side, (a, b, c), pv, ann, fitted, ycol, pcol in (
-            ("OIS", ("CA", "CB", "CC"), "EG", "EE", "FU", OIS_YIELD, OIS_PRICE),
-            ("FX", ("XO", "XP", "XQ"), "WX", "WY", "XD", FX_YIELD, FX_PRICE)):
+            ("OIS", ("CA", "CB", "CC"), "EG", "EE", "FU", OIS_YIELD, OIS_PRICE),):
         coef = [rv(s, x, 3) for x in (a, b, c)]
         r = row_of(s, FIXED)
         t = rv(s, "FW", r)
@@ -105,8 +133,8 @@ def test_at_its_own_asw_a_bond_is_worth_its_price(service):
 
 def test_every_trading_bond_has_its_fair_values_or_why_not(service, tmp_path):
     """The fair-value columns are there for every bond of the trading list: a value, or a dash whose tip says why - a TLREF
-    floater (no curve for its DM), a bond DİBS RV does not price, a bond the FX swap curve does not reach; with no fitted
-    curve, none (the reason given).  The card says the same."""
+    floater (no curve for its DM), a bond DİBS RV does not price (DİBS ASW neither); with no fitted curve, none (the
+    reason given).  The card says the same."""
     s = service
     u = s.login("Adil Değer Yok")["user"]
     d = summary(s, u)
@@ -126,14 +154,20 @@ def test_every_trading_bond_has_its_fair_values_or_why_not(service, tmp_path):
             assert type(got.get("v")) is float or (got["t"] == "–" and "adil değer yok" in got["tip"]), (line[2]["t"], col, got)
     why = {isin: at(d, line_of(d, isin), OIS_YIELD).get("tip") for isin in (TLREF, NO_PRICE)}
     assert "TLREF'e endeksli" in why[TLREF] and "Fiyat yok" in why[NO_PRICE]
-    assert "bu vadeye uzanmıyor" in at(d, line_of(d, LONG), FX_YIELD)["tip"] and type(at(d, line_of(d, LONG), OIS_YIELD)["v"]) is float
-    # the FX side's own columns are DİBS RV's
-    r = row_of(s, FIXED)
+    assert "DİBS ASW kâğıdı hesaplamıyor" in at(d, line_of(d, NO_PRICE), FX_ASW)["tip"] and at(d, line_of(d, NO_PRICE), FX_ASW)["t"] == "–"
+    # the FX swap implied curve reaches every bond (beyond its last FX swap price the sheet's OIS quotes): DİBS RV's offshore
+    # ICAP curve did not reach this one
+    assert type(rv(s, "WX", row_of(s, LONG))) is not float and type(at(d, line_of(d, LONG), FX_YIELD)["v"]) is float
+    # the FX side's own columns are DİBS ASW's on the FX swap implied curve (not DİBS RV's BF / BH / BI: the offshore ICAP curve)
+    fx, fx_row = fx_sheet(s, u)
     line = line_of(d, FIXED)
-    assert (at(d, line, FX_ASW)["v"], at(d, line, FX_RICH)["v"], at(d, line, FX_SIGNAL)["t"]) == (rv(s, "BF", r), rv(s, "BH", r), rv(s, "BI", r))
+    ar = fx_row(FIXED)
+    assert (at(d, line, FX_ASW)["v"], at(d, line, FX_RICH)["v"]) == (fx("R", ar), fx("T", ar)) and fx("R", ar) != rv(s, "BF", row_of(s, FIXED))
+    th = rv(s, "P", 2)
+    assert at(d, line, FX_SIGNAL)["t"] == ("UCUZ" if fx("T", ar) > th else "PAHALI" if fx("T", ar) < -th else "–")
     # the card: the same numbers
     card = {x["name"]: x for x in s.bond_card(u, FIXED)["rv"]}
-    assert card["Adil getiri (OIS eğrisi)"]["t"] == at(d, line, OIS_YIELD)["t"] and card["Adil fiyat (FX swap eğrisi)"]["t"] == at(d, line, FX_PRICE)["t"]
+    assert card["Adil getiri (OIS eğrisi)"]["t"] == at(d, line, OIS_YIELD)["t"] and card["Adil fiyat (FX swap ima eğrisi)"]["t"] == at(d, line, FX_PRICE)["t"]
     assert card["Adil fiyat (OIS eğrisi)"]["tip"] == at(d, line, OIS_PRICE)["tip"]
     assert {x["name"]: x for x in s.bond_card(u, TLREF)["rv"]}["Adil fiyat (OIS eğrisi)"]["t"] == "–"
     # no fitted curve (here: its coefficient typed over by hand), no fair value - and the reason

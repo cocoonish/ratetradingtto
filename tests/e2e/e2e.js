@@ -2351,6 +2351,65 @@ async function clipAfter(page, action) {
     const firstBond = liveIsins.findIndex((t) => /^TR[A-Z0-9]{9}\d$/.test(t));
     check('DİBS Trading · valörler: only the rows that hold a bond', firstBond > 0
       && liveIsins.slice(firstBond, firstBond + 19).every((t) => /^TR[A-Z0-9]{9}\d$/.test(t)), liveIsins);
+    // DİBS RV: one menu entry (Tahvil) with three tabs - Genel, the RV and the ASW hesap tablosu; the old addresses as before
+    const dibsMenu = await page.evaluate(() => {
+      const a = document.querySelector('#nav .nav-item[data-page="tahvil.dibsrv"]');
+      return { tabs: a ? a.dataset.tabs : null, label: a ? a.textContent : '',
+        alone: ['dibs', 'asw', 'dibs-genel'].filter((x) => document.querySelector('#nav .nav-item[data-page="' + x + '"]')) };
+    });
+    check('Tahvil → DİBS RV: one menu entry with three tabs (Genel, RV hesap tablosu, ASW hesap tablosu), no separate entries',
+      dibsMenu.tabs === 'dibs-genel dibs asw' && /DİBS RV/.test(dibsMenu.label) && dibsMenu.alone.length === 0, dibsMenu);
+    await open(page, 'dibs-genel');
+    await page.waitForFunction(() => document.querySelector('#dg-grid') && document.querySelectorAll('#dg-asw-fx svg.chart circle.mk').length > 0
+      && document.querySelector('#dg-switch table.grid') && document.querySelectorAll('#dg-yield svg.chart circle.mk').length > 0, null, { timeout: 60000 });
+    const gData = (await api(page, 'ayşe yilmaz', 'GET', '/api/dibs/genel')).json;
+    const mirrors = (await api(page, 'ayşe yilmaz', 'POST', '/api/panels', { items: gData.mirrors.map((m) => ({ view: m.view, panel: m.panel, key: m.key })) })).json;
+    const dgMarks = (data) => data.series.filter((x) => x.marker || x.noline).reduce((n, x) => n + x.x.length, 0);
+    const genelSeen = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('#dg-grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
+      const n = (sel) => document.querySelectorAll(sel).length;
+      return { tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent), on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
+        lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page), groups: rows[0] || [],
+        bonds: rows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[1] || '')).map((r) => r[1]),
+        yieldMk: n('#dg-yield svg.chart circle.mk'), yieldPt: n('#dg-yield svg.chart text.pt'), oisMk: n('#dg-asw-ois svg.chart circle.mk'),
+        fxMk: n('#dg-asw-fx svg.chart circle.mk'), histLines: n('#dg-hist svg.chart path'), fit: (document.querySelector('#dg-fit') || {}).textContent || '',
+        sets: n('#dg-settings .dg-set') };
+    });
+    const gBonds = gData.table.isin.filter(Boolean);
+    await shot(page, '12b-dibs-genel');
+    check('DİBS RV · Genel: its three tabs, the entry lit, the table in its groups (OIS ASW · FX swap ASW on the FX swap ima eğrisi · sıfır kupon) with every bond of the trading list',
+      genelSeen.tabs.join('|') === 'Genel|RV hesap tablosu|ASW hesap tablosu' && genelSeen.on.join() === 'dibs-genel' && genelSeen.lit.join() === 'tahvil.dibsrv'
+      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NSS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–18A/.test(g))
+      && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
+    { genelSeen, gBonds: gBonds.length });
+    check('... its three charts with their points: the yield curve (bonds and OIS), ASW · OIS and ASW · FX swap as DİBS ASW draws them',
+      genelSeen.yieldMk === dgMarks(gData.chart) && gData.chart.series[0].x.length >= 15 && genelSeen.yieldPt >= 8
+      && genelSeen.yieldPt <= gData.chart.series[0].x.length
+      && genelSeen.oisMk === dgMarks(mirrors.panels.asw_ois.entry.data) && genelSeen.fxMk === dgMarks(mirrors.panels.asw_fx.entry.data) && genelSeen.fxMk > 10,
+    { genelSeen, want: [dgMarks(gData.chart), dgMarks(mirrors.panels.asw_ois.entry.data), dgMarks(mirrors.panels.asw_fx.entry.data)] });
+    // a setting shown on Genel opens in the RV hesap tablosu, its cell selected; a tab of the entry opens the sheet's page
+    const selectedRef = () => page.evaluate(() => { const td = document.querySelector('#content table.grid td.cur'); const g = td && td.closest('table').__grid;
+      return g ? g.ref(td.__i, td.__j) : null; });
+    await page.click('#dg-settings .dg-set[data-ref="DİBS RV!P2"]');
+    await page.waitForFunction(() => window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 });
+    await page.waitForFunction(() => !!document.querySelector('#content table.grid td.cur'), null, { timeout: 20000 }).catch(() => {});
+    const setRef = await selectedRef();
+    const rvTabs = await page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.dataset.page),
+      on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));
+    check('... a setting on Genel (Sinyal eşiği) opens in the RV hesap tablosu tab, its cell selected; #/dibs is that tab of the entry',
+      setRef === 'DİBS RV!P2' && rvTabs.tabs.join() === 'dibs-genel,dibs,asw' && rvTabs.on.join() === 'dibs' && rvTabs.lit.join() === 'tahvil.dibsrv', { setRef, rvTabs });
+    await open(page, 'dibs-genel');
+    await page.waitForSelector('#dg-switch table.grid td.in');
+    const swRef = await page.evaluate(() => { const td = document.querySelector('#dg-switch table.grid td.in'); const g = td.closest('table').__grid; return g.ref(td.__i, td.__j); });
+    await page.click('#dg-switch table.grid td.in');
+    await page.waitForFunction(() => window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 });
+    await page.waitForFunction((r) => { const td = document.querySelector('#content table.grid td.cur'); const g = td && td.closest('table').__grid;
+      return g && g.ref(td.__i, td.__j) === r; }, swRef, { timeout: 20000 }).catch(() => {});
+    check('... a cell of the switch / pair table shown on Genel is read-only there: a click opens it in the RV hesap tablosu, selected',
+      /^DİBS RV!/.test(swRef || '') && await selectedRef() === swRef, { swRef, now: await selectedRef() });
+    await open(page, 'asw');
+    const aswTabs = await page.evaluate(() => [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page).join());
+    check('... #/asw opens the ASW hesap tablosu tab as before', aswTabs === 'asw', aswTabs);
     // "+ ISIN ekle" on Tüm Kâğıtlar: onto the desk's list, its kind from Bloomberg (offline it waits for it); ✕ takes it off
     await open(page, 'kagitlar');
     await page.waitForSelector('.panel[data-panel="U1"] table.grid');

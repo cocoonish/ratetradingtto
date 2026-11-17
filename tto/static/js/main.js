@@ -29,6 +29,7 @@ import { AgendaPage } from './pages/agenda.js';
 import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
 import { openRecon, checkBeforeArchive } from './recon.js';
 import { quantPage, quantEvent } from './pages/quant.js';
+import { DibsGenelPage } from './pages/dibsgenel.js';
 import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
@@ -400,9 +401,12 @@ async function openPage(id, panel, sub) {
   const content = clear($('content'));
   const back = kept.get(id);
   if (back && back.page.ready) {
-    // back in view as it was left: the tab, the search, the scroll; what changed meanwhile comes now
+    // back in view as it was left: the tab, the search, the scroll; what changed meanwhile comes now - under the tabs of
+    // its menu entry, when it is one of them (DİBS RV's sheets: a page kept, the strip drawn again over it)
     kept.delete(id);
     kept.set(id, back);
+    const backTabs = pageTabs(id, state.pages);
+    if (backTabs) content.appendChild(backTabs);
     content.appendChild(back.host);
     content.scrollTop = back.scroll || 0;
     state.page = back.page;
@@ -439,6 +443,7 @@ async function openPage(id, panel, sub) {
   else if (id === 'social') page = new SocialPage(host, ctx);
   else if (id === 'agenda') page = new AgendaPage(host, ctx);
   else if (id === 'quant' || id.startsWith('quant-')) page = quantPage(id, host, ctx);
+  else if (id === 'dibs-genel') page = new DibsGenelPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;
   if (page.keepAlive && host !== content) {
