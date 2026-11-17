@@ -403,7 +403,8 @@ def level_trades(insts: Sequence[qu.Instrument], tracks: Sequence[Dict[str, Any]
             x0 = x[t]
             out.append({"family": "trend", "group": inst.group, "sid": "trend:" + inst.key, "entry_day": days[t], "days": days[t + 1:end + 1],
                         "path_sigma": [s * (x[u] - x0) / unit for u in range(t + 1, end + 1)], "open": f >= n, "carry_sigma": 0.0,
-                        "carry_in": bool(tr["carry"]), "sigma": unit, "unit": qf.change_unit(inst.kind), "try": try_per})
+                        "carry_in": bool(tr["carry"]), "sigma": unit, "sigma_closes": HREF, "unit": qf.change_unit(inst.kind),
+                        "try": try_per})
     return out
 
 

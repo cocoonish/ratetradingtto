@@ -524,12 +524,14 @@ def test_the_fit_lists_trend_lines_logs_a_turn_and_alerts_it(seeded):
     assert page["signals"] and all(s["family"] == "trend" for s in page["signals"]) and page["coverage"]
     assert "_keys" not in page["trend"]
     # a turn: the line "YENİ" (its direction other than at the last close) is written down and alerted - once a day -,
-    # the entry of its old direction closing on it ("dönüş")
-    live = [s for s in mine if not s["gated"]]                         # (a line its levels hold is never written down)
-    assert live
-    first = live[0]
+    # the entry of its old direction closing on it ("dönüş").  A line its levels hold is never written down: on the
+    # synthetic history every group's trailing stop may have lost money - one line's record made a winning one here
+    first = next((s for s in mine if not s["gated"]), mine[0])
     sid = first["id"]
     mon = q._fit["mons"][sid]
+    lv0 = mon.trend.lv
+    if first["gated"]:
+        mon.trend.lv = dict(lv0, exp=0.2)
     q.set_subscription(user, {"on": True, "families": ["trend"], "groups": [], "min": "Zayıf"})
     seq0 = q.counters()["alerts"]
     old = {"seq": 1, "sid": sid, "family": "trend", "family_label": "Trend", "asset": first["asset"], "group": first["group"],
@@ -557,6 +559,7 @@ def test_the_fit_lists_trend_lines_logs_a_turn_and_alerts_it(seeded):
     hits = {f["family"]: f for f in q.log_view()["families"]}
     assert hits["trend"]["closed"] == 1 and hits["trend"]["open"] == len(yeni)
     mon.trend.d_prev = first["direction"]
+    mon.trend.lv = lv0
 
 
 def test_trend_page_over_http_and_in_the_menu(seeded):

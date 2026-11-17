@@ -906,7 +906,8 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
     # group (TRY OIS's three sets pooled), month by month on the weeks that had ended before
     t1 = time.perf_counter()
     paths = [{"family": FAMILY, "group": book.group, "sid": "%s:%s" % (FAMILY, book.sid), "entry_day": w["day"], "end_day": w["end"],
-              "path_sigma": w["path"], "carry_sigma": 0.0, "carry_in": True, "sigma": w["risk"], "unit": book.ccy, "try": try_per.get(book.ccy)}
+              "path_sigma": w["path"], "carry_sigma": 0.0, "carry_in": True, "sigma": w["risk"], "sigma_closes": WEEK, "unit": book.ccy,
+              "try": try_per.get(book.ccy)}
              for book, walk, _, _ in walks for w in walk["weeks"] if w.get("path")]
     levels = qlv.calibrate(paths, FAMILY, ctx.today_iso)
     timing["levels"] = round((time.perf_counter() - t1) * 1000.0, 1)

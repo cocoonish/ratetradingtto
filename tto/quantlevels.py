@@ -19,12 +19,20 @@ for a mean-reversion family also the target at its fair value (the window's mean
 The objective: the expected P&L per trade (carry in it where the trades had it), subject to Ödül / risk = m / k ≥ 1 and
 at least ``MIN_TRADES`` trades - a group with fewer takes the family's (all its groups pooled), a family with fewer has
 no calibrated levels (its own rule stands and its line says why).  A trade reaches its target at the target (a limit
-order), its stop at the close that went through it (a gap is the trade's), else it expires at its last close.  (The
-history has closes only: a stop order resting all day is also hit by intraday lows the closes do not show - a tight
-stop looks better here than it would trade.)
+order), its stop at the stop - or at the close that went through it (a gap is the trade's) -, else it expires at its
+last close.
+
+**Closes only** (``BETA``).  The history has closes; a level resting all day is met between them too.  The paths are
+played with Broadie, Glasserman and Kou's continuity correction: β ≈ 0,5826 × the path's σ a close (σ_step: σ_h ÷ √ the
+closes σ_h is of - 0,26 σ_h for a five-day holding).  A stop k counts as hit once a close is k − β·σ_step against the
+entry (sooner than on the closes: filled at the stop, or at that close when it went through); a target m as reached
+only once a close is m + β·σ_step in the trade's favour (later: a touch is not a fill - the conservative side).  The
+choice of k and m and the record shown (İsabet, Beklenen K/Z) are played so; the levels shown and placed are k·σ_h and
+m·σ_h themselves.
 
 * **Trend** (``RULES``: "trail"): no target - a trailing stop k·σ below the best level since the entry, else the
-  direction's turn; its Ödül / risk is the average winning trade ÷ k (≥ 1 as well), σ a month's (``trend``'s horizon).
+  direction's turn (hit once a close is k − β·σ_step below the best close); its Ödül / risk is the average winning
+  trade ÷ k (≥ 1 as well), σ a month's (``trend``'s horizon).
 * **Carry + momentum**: the basket is the trade - its daily P&L in its own (diversified) weekly σ; each leg gets the
   basket's k and m scaled to its own σ, the card shows the basket's ratio.
 
@@ -70,8 +78,9 @@ paths reach this layer:
    never sees a path that was still running), ``"carry_sigma"`` (carry a close in σ, instead of ``carry`` / ``held``),
    ``"carry_in"`` (its P&L has its carry), ``"fair_sigma"`` (a mean reversion: the distance to its fair value at the
    entry, σ - the "fair value" candidate), ``"open"`` (still running: left out of a fixed rule; a trailing stop's marked
-   at the cut), ``"try"`` (TRY a unit of P&L).  ``RULES[family] = "trail"`` for a trailing stop (Trend's; "fixed" the
-   default).
+   at the cut), ``"try"`` (TRY a unit of P&L), ``"sigma_closes"`` (the closes ``sigma`` is of when they are not the
+   path's own - Trend's month, 21 -: the path's σ a close, for the correction; else ``horizon``, else the path's
+   length).  ``RULES[family] = "trail"`` for a trailing stop (Trend's; "fixed" the default).
 
 **Cost.**  A calibration is kept by (family, scope, month, a digest of the trades it saw): a month's levels are chosen
 once - a refresh, the day's next fit, the backtest's refits of the same data find them; a revised close chooses again.
@@ -99,8 +108,12 @@ K_RANGE = (0.5, 3.0)            # a stop outside this is no level (σ_h: nearer 
 M_MAX = 4.0                     # a target farther than this (σ_h) is no level either: the most a target is set at
 MIN_WINNERS = 5                 # winners a percentile of their MAE needs (else every trade's)
 LOSS = qf.LEVELS_LOSS            # "bu kurulum bu seviyelerle geçmişte zarar ettirdi"
+#: the continuity correction of a close-only path (Broadie, Glasserman & Kou 1997): a stop counts as hit β σ_step
+#: sooner, a target as reached β σ_step later (σ_step: the path's σ a close, in σ_h)
+BETA = 0.5826
+_EPS = 1e-9                     # (a corrected stop never at or past the entry: a close at the entry is not "through" it)
 #: what the stored backtest's levels were made with (a result of another version is run again)
-VERSION = 1
+VERSION = 2
 
 #: a family's exit style: "trail" a trailing stop and no target (Trend), "fixed" target and stop (the default)
 RULES: Dict[str, str] = {"trend": "trail"}
@@ -152,6 +165,16 @@ def _clip(k: float) -> float:
     return min(max(k, K_RANGE[0]), K_RANGE[1])
 
 
+def _up2(x: float) -> float:
+    """``x`` to the hundredth above (a stop placed beyond where the trades went, never inside it)."""
+    return math.ceil(x * 100.0 - 1e-6) / 100.0
+
+
+def _down2(x: float) -> float:
+    """``x`` to the hundredth below (a target within what the trades reached)."""
+    return math.floor(x * 100.0 + 1e-6) / 100.0
+
+
 def _finite(v: Any) -> Optional[float]:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
@@ -177,10 +200,11 @@ def group_of_key(key: str) -> str:
 # ---------------------------------------------------------------------------------------------- a trade
 class Trade(object):
     """One past trade, ready to be played at any levels: its path's running best and worst (a first passage is a
-    bisection), its drawdowns from the running peak (a trailing stop's), the P&L it ended with."""
+    bisection), its drawdowns from the running peak (a trailing stop's), the P&L it ended with, the correction's shift
+    of its closes (``bs``: β × its σ a close, σ_h)."""
 
     __slots__ = ("family", "group", "entry", "end", "days", "path", "c", "fair", "open", "n", "up", "dn", "mdd", "fin", "mae",
-                 "mfe", "sid", "sig", "unit", "try_", "carry_in", "cum", "key", "tex")
+                 "mfe", "sid", "sig", "unit", "try_", "carry_in", "cum", "key", "tex", "bs")
 
     def __init__(self, r: Dict[str, Any]):
         self.family = str(r.get("family") or "")
@@ -191,6 +215,9 @@ class Trade(object):
         path = [float(x) for x in r.get("path_sigma") or ()]
         self.path = path
         self.n = len(path)
+        # (the path's σ a close: σ_h is of ``sigma_closes`` closes - Trend's month -, else of its horizon, its own length)
+        sc = _finite(r.get("sigma_closes")) or _finite(r.get("horizon")) or float(self.n)
+        self.bs = BETA / math.sqrt(sc) if sc and sc > 0 else 0.0
         self.sig = _finite(r.get("sigma"))
         held = r.get("held")
         self.c = _finite(r.get("carry_sigma"))
@@ -226,7 +253,7 @@ class Trade(object):
         self.mae = max(0.0, dn[-1]) if path else 0.0
         self.mfe = max(0.0, up[-1]) if path else 0.0
         self.key = hash((self.family, self.sid, self.entry, self.n, round(acc, 9), round(path[-1], 9) if path else 0.0, round(self.c, 12),
-                         round(self.fair, 9) if self.fair else None, self.open))
+                         round(self.fair, 9) if self.fair else None, self.open, round(self.bs, 9)))
         self.tex: Optional[List[int]] = None              # (a trailing stop's exit at each of TRAIL_K: found once)
 
     def cut(self, month: str) -> int:
@@ -238,21 +265,34 @@ class Trade(object):
     def cut_key(self, n: int) -> int:
         if n >= self.n:
             return self.key
-        return hash((self.family, self.sid, self.entry, n, round(self.cum[n - 1], 9) if n else 0.0))
+        return hash((self.family, self.sid, self.entry, n, round(self.cum[n - 1], 9) if n else 0.0, round(self.bs, 9)))
+
+    def trail_exits(self) -> List[int]:
+        """Its exit at each trailing stop of ``TRAIL_K`` (the first close that far below its best, corrected): once."""
+        if self.tex is None:
+            self.tex = [bisect.bisect_left(self.mdd, max(k - self.bs, _EPS)) for k in TRAIL_K]
+        return self.tex
+
+    def trail_fill(self, j: int, k: float) -> float:
+        """A trailing stop ``k`` hit at close ``j``: at the stop (its best so far − k), or at that close when it went
+        through it; with its carry."""
+        return min(self.path[j], max(0.0, self.up[j]) - k) + self.c * (j + 1)
 
 
 def play_fixed(t: Trade, k: float, m: float, n: Optional[int] = None) -> Tuple[float, bool, int, str]:
     """The trade at a stop ``k`` and a target ``m`` (σ_h): (P&L σ_h with its carry, a hit, closes held, how it ended) -
-    the target reached at the target, the stop at the close that went through it, else the last close."""
+    on its closes, corrected for what they miss (``BETA``): the target reached once a close is β σ_step past it, at the
+    target (a limit); the stop hit once a close comes within β σ_step of it, at the stop - or at that close when it went
+    through (a gap is the trade's); else the last close."""
     L = t.n if n is None else min(n, t.n)
     if not L:
         return 0.0, False, 0, "süre"
-    i_m = bisect.bisect_left(t.up, m, 0, L)
-    i_k = bisect.bisect_left(t.dn, k, 0, L)
+    i_m = bisect.bisect_left(t.up, m + t.bs, 0, L)
+    i_k = bisect.bisect_left(t.dn, max(k - t.bs, _EPS), 0, L)
     if i_m < L and i_m <= i_k:
         return m + t.c * (i_m + 1), True, i_m + 1, "hedef"
     if i_k < L:
-        x = t.path[i_k] + t.c * (i_k + 1)
+        x = min(t.path[i_k], -k) + t.c * (i_k + 1)
         return x, x > 0.0, i_k + 1, "stop"
     x = t.path[L - 1] + t.c * L
     return x, x > 0.0, L, "süre"
@@ -267,14 +307,15 @@ def play_fair(t: Trade, k: float, n: Optional[int] = None) -> Tuple[float, bool,
 
 
 def play_trail(t: Trade, k: float, n: Optional[int] = None) -> Tuple[float, bool, int, str]:
-    """The trade with a trailing stop ``k`` below its best close, else its own end (a direction's turn: "dönüş"); a
-    trade still running (``n`` closes known of it) marked at its last close ("açık")."""
+    """The trade with a trailing stop ``k`` below its best close (hit once a close is k − β σ_step below it: at the
+    stop, or at that close when it went through), else its own end (a direction's turn: "dönüş"); a trade still running
+    (``n`` closes known of it) marked at its last close ("açık")."""
     L = t.n if n is None else min(n, t.n)
     if not L:
         return 0.0, False, 0, "açık"
-    i = bisect.bisect_left(t.mdd, k, 0, L)
+    i = bisect.bisect_left(t.mdd, max(k - t.bs, _EPS), 0, L)
     if i < L:
-        x = t.path[i] + t.c * (i + 1)
+        x = t.trail_fill(i, k)
         return x, x > 0.0, i + 1, "stop"
     x = t.path[L - 1] + t.c * L
     return x, x > 0.0, L, ("dönüş" if L == t.n and not t.open else "açık")
@@ -296,20 +337,21 @@ def candidates(trades: Sequence[Trade], rule: str, cuts: Optional[Sequence[int]]
     has one; a trailing stop's from its winners' drawdowns from the peak and ``TRAIL_K``."""
     if rule == "trail":
         return [{"rule": "trail", "k": k, "m": None, "ki": i} for i, k in enumerate(TRAIL_K)]
-    win = sorted(t.mae for t in trades if t.fin > 0)
+    # (corrected for the closes: the stop a winner needed is beyond its MAE by β σ_step, the target a trade reached is
+    # short of its MFE by as much)
+    win = sorted(t.mae + t.bs for t in trades if t.fin > 0)
     if len(win) < MIN_WINNERS:
-        win = sorted(t.mae for t in trades)
-    ks = sorted({round(_clip(x), 2) for x in (_q(win, p) for p in WIN_Q) if x is not None})
+        win = sorted(t.mae + t.bs for t in trades)
+    ks = sorted({_up2(_clip(x)) for x in (_q(win, p) for p in WIN_Q) if x is not None})
     if not ks:
         ks = [1.0]
-    mfe = sorted(t.mfe for t in trades)
-    from_mfe = [x for x in (_q(mfe, p) for p in MFE_Q) if x is not None and x > 0]
+    mfe = sorted(t.mfe - t.bs for t in trades)
+    from_mfe = [_down2(min(x, M_MAX)) for x in (_q(mfe, p) for p in MFE_Q) if x is not None and x > 0]
     out: List[Dict[str, Any]] = []
     seen = set()
     for k in ks:
-        for m in from_mfe + [k * r for r in RR_MULTS]:
-            m = round(min(m, M_MAX), 2)
-            if m + 1e-9 < k or (k, m) in seen:
+        for m in from_mfe + [round(min(k * r, M_MAX), 2) for r in RR_MULTS]:
+            if m <= 0 or m + 1e-9 < k or (k, m) in seen:
                 continue
             seen.add((k, m))
             out.append({"rule": "fixed", "k": k, "m": m})
@@ -329,13 +371,10 @@ def evaluate(trades: Sequence[Trade], ch: Dict[str, Any], cuts: Optional[Sequenc
     ki = ch.get("ki")
     for i, t in enumerate(trades):
         if rule == "trail" and ki is not None:               # (play_trail, its exit at the grid's k found once a trade)
-            tex = t.tex
-            if tex is None:
-                tex = t.tex = [bl(t.mdd, x) for x in TRAIL_K]
             L = t.n if cuts is None or cuts[i] > t.n else cuts[i]
-            j = tex[ki]
+            j = t.trail_exits()[ki]
             if j < L:
-                x = t.path[j] + t.c * (j + 1)
+                x = t.trail_fill(j, k)
                 hit, h, how = x > 0.0, j + 1, "stop"
             elif L:
                 x = t.path[L - 1] + t.c * L
@@ -344,12 +383,12 @@ def evaluate(trades: Sequence[Trade], ch: Dict[str, Any], cuts: Optional[Sequenc
                 x, hit, h, how = 0.0, False, 0, "açık"
         elif rule == "fixed":                                # (play_fixed, inline: the calibration's inner loop)
             L = t.n
-            i_m = bl(t.up, m)
-            i_k = bl(t.dn, k)
+            i_m = bl(t.up, m + t.bs)
+            i_k = bl(t.dn, max(k - t.bs, _EPS))
             if i_m < L and i_m <= i_k:
                 x, hit, h, how = m + t.c * (i_m + 1), True, i_m + 1, "hedef"
             elif i_k < L:
-                x = t.path[i_k] + t.c * (i_k + 1)
+                x = min(t.path[i_k], -k) + t.c * (i_k + 1)
                 hit, h, how = x > 0.0, i_k + 1, "stop"
             else:
                 x = t.fin
@@ -382,12 +421,10 @@ def evaluate(trades: Sequence[Trade], ch: Dict[str, Any], cuts: Optional[Sequenc
 
 def _trail_all(trades: Sequence[Trade], cuts: Optional[Sequence[int]]) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
     """Every trailing stop of the grid on these trades at once (``evaluate``'s numbers): each trade's exit at each k
-    found once (its first drawdown from the peak that deep), its mark at the cut once."""
-    bl = bisect.bisect_left
-    Ls, marks, ends = [], [], []
+    found once (its first drawdown from the peak that deep, corrected), its mark at the cut once."""
+    Ls, marks = [], []
     for i, t in enumerate(trades):
-        if t.tex is None:
-            t.tex = [bl(t.mdd, x) for x in TRAIL_K]
+        t.trail_exits()
         L = t.n if cuts is None or cuts[i] > t.n else cuts[i]
         Ls.append(L)
         marks.append(t.path[L - 1] + t.c * L if L else 0.0)
@@ -399,7 +436,7 @@ def _trail_all(trades: Sequence[Trade], cuts: Optional[Sequence[int]]) -> List[T
         for t, L, mk in zip(trades, Ls, marks):
             j = t.tex[ki]
             if j < L:
-                x = t.path[j] + t.c * (j + 1)
+                x = t.trail_fill(j, k)
                 held += j + 1
                 stp += 1
             else:

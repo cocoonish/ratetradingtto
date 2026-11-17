@@ -838,8 +838,8 @@ class Line(object):
                 carry = s * c_yr * span / 365.0 / HORIZON / unit       # (the holding's carry, a close's share)
             days = [pts[r.i + j][0] for j in range(1, n + 1)]
             out.append({"family": FAMILY, "group": inst.group, "sid": "ml:" + inst.key, "entry_day": r.day, "days": days, "end_day": days[-1],
-                        "path_sigma": path, "carry_sigma": carry, "carry_in": fx, "open": n < HORIZON, "sigma": unit, "unit": qf.change_unit(kind),
-                        "try": try_per})
+                        "path_sigma": path, "carry_sigma": carry, "carry_in": fx, "open": n < HORIZON, "sigma": unit, "sigma_closes": HORIZON,
+                        "unit": qf.change_unit(kind), "try": try_per})
             free = r.i + HORIZON
         return out
 

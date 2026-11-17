@@ -111,7 +111,8 @@ def _path_of(rec: Dict[str, Any], done: bool) -> Dict[str, Any]:
     path = [round(x, 5) for x in rec["path"]]
     return {"family": rec["m"].family, "group": rec["group"], "sid": rec["m"].sid, "entry_day": rec["day"], "end_day": rec["end"],
             "path_sigma": path, "mae_sigma": max([0.0] + [-x for x in path]), "mfe_sigma": max([0.0] + path), "carry_sigma": rec["carry"],
-            "carry_in": rec["carry_in"], "fair_sigma": rec["fair"], "open": not done, "sigma": rec["sig"], "unit": rec["unit"], "try": rec["try"]}
+            "carry_in": rec["carry_in"], "fair_sigma": rec["fair"], "open": not done, "sigma": rec["sig"], "sigma_closes": rec["hold"],
+            "unit": rec["unit"], "try": rec["try"]}
 
 
 def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Callable[[qf.Ctx], List[qf.Monitor]],

@@ -1,10 +1,12 @@
 """Levels calibrated on what past trades actually did (``tto/quantlevels.py``): planted paths whose best stop and
-target are known, Ödül / risk at least 1 whatever the paths, no look-ahead (a month's levels from the trades that had
-ended before it - in the layer and through the backtest's recorded paths), a line whose levels lost money "düşük
-güven" with its reason and still in the list, a group with few trades taking its family's levels, the walk-forward kept
-(a second calibration of the same trades chooses nothing), make_signal's target / stop / Ödül / risk / İsabet /
-Beklenen K/Z from them, the families that keep their own levels.  (Trend's trailing stop, Carry + momentum's basket
-levels and ML's are in their own test files.)"""
+target are known, the closes corrected for what they miss (a stop resting all day is hit between them - paths drawn
+in fine steps, checked on their closes -, and the stop leaves the floor where that matters), Ödül / risk at least 1
+whatever the paths, no look-ahead (a month's levels from the trades that had ended before it - in the layer and
+through the backtest's recorded paths), a line whose levels lost money "düşük güven" with its reason and still in the
+list, a group with few trades taking its family's levels, the walk-forward kept (a second calibration of the same
+trades chooses nothing), make_signal's target / stop / Ödül / risk / İsabet / Beklenen K/Z from them, the families
+that keep their own levels.  (Trend's trailing stop, Carry + momentum's basket levels and ML's are in their own test
+files.)"""
 from __future__ import annotations
 
 import datetime as dt
@@ -59,36 +61,54 @@ def planted(n_win=60, n_lose=40, start="2025-01-06"):
 
 
 # ================================================================================================ known answers
-def test_planted_paths_give_the_stop_where_the_winners_never_went_and_the_target_they_reached():
+BS5 = qlv.BETA / math.sqrt(5)                                            # (the correction's shift of a five-close path: 0,26σ)
+
+
+def test_planted_paths_give_the_stop_where_the_winners_never_went_and_the_target_they_reached(monkeypatch):
     ts = [qlv.Trade(r) for r in planted()]
     ch = qlv.choose(ts, "fixed")
-    # the stop: the winners' MAE's 90th percentile (0,3 … 1,1 evenly: 1,02) - nearer ones stop winners, the losers go
-    # through any of them on their second close (−1,3); the target: +2σ, where the winners went
+    # the stop: the winners' MAE's 90th percentile (0,3 … 1,1 evenly: 1,02) beyond what the closes miss (+ β σ a close:
+    # 0,26σ) - nearer ones stop winners, the losers go through any of them on their second close (−1,3)
     dips = sorted(0.3 + 0.8 * i / 59 for i in range(60))
     p90 = qlv._q(dips, 0.9)
-    assert ch["rule"] == "fixed" and ch["k"] == pytest.approx(round(p90, 2)) and ch["m"] == pytest.approx(2.0)
-    stopped = [d for d in dips if d >= ch["k"]]                              # (a close at the stop is stopped: the level was reached)
-    want = ((60 - len(stopped)) * 2.0 - sum(stopped) - 40 * 1.3) / 100.0
+    k = math.ceil((p90 + BS5) * 100.0 - 1e-6) / 100.0
+    assert ch["rule"] == "fixed" and ch["k"] == pytest.approx(k) == 1.29
+    # the target: the winners close at +2σ, which reaches no target past 2 − 0,26 (a touch is not a fill): the best
+    # is to hold them to their last close - a target they never reach
+    assert ch["m"] + BS5 > 2.0
+    stopped = [d for d in dips if d >= k - BS5]                              # (stopped at the stop: their closes stay above it)
+    want = ((60 - len(stopped)) * 2.0 - len(stopped) * k - 40 * 1.3) / 100.0
     assert ch["exp"] == pytest.approx(want) and ch["hit"] == pytest.approx((60 - len(stopped)) / 100.0) and ch["n"] == 100
     assert ch["rr"] == pytest.approx(ch["m"] / ch["k"]) and ch["rr"] >= 1.0
-    # one trade played at those levels: the target at the target (a limit), the stop at the close through it
+    # one trade played at those levels: held to its last close; a loser's stop at the close through it; none at 3σ
     w, l = qlv.Trade(planted()[0]), qlv.Trade(planted()[-1])
-    assert qlv.play_fixed(w, ch["k"], ch["m"]) == (2.0, True, 5, "hedef")
+    assert qlv.play_fixed(w, ch["k"], ch["m"]) == (2.0, True, 5, "süre")
     assert qlv.play_fixed(l, ch["k"], ch["m"]) == (-1.3, False, 2, "stop")
     assert qlv.play_fixed(l, 3.0, 4.0) == (-2.5, False, 5, "süre")
+    # the correction on one path: a close 0,8σ down is within 0,26σ of a 1σ stop - stopped, at the stop; a close at the
+    # target is no fill - one 0,26σ past it is (at the target)
+    near = qlv.Trade(trade([-0.8, 0.5, 1.2, 1.5, 1.7], "2026-03-02"))
+    assert qlv.play_fixed(near, 1.0, 1.5) == (-1.0, False, 1, "stop")
+    assert qlv.play_fixed(w, 1.0, 2.0) == (2.0, True, 5, "süre") and qlv.play_fixed(w, 1.0, 1.7) == (1.7, True, 5, "hedef")
+    assert qlv.play_fixed(w, 0.5, 2.0) == (-0.5, False, 1, "stop")      # (its first close, 0,3σ down: within 0,26σ of a 0,5σ stop)
+    # without it (the closes taken as they are): the old answer - the stop at the 90th percentile, the target at +2σ
+    monkeypatch.setattr(qlv, "BETA", 0.0)
+    raw = qlv.choose([qlv.Trade(r) for r in planted()], "fixed")
+    assert (raw["k"], raw["m"]) == (pytest.approx(round(p90, 2)), pytest.approx(2.0)) and raw["k"] < ch["k"]
+    assert qlv.play_fixed(qlv.Trade(trade([-0.8, 0.5, 1.2, 1.5, 1.7], "2026-03-02")), 1.0, 1.5) == (1.5, True, 4, "hedef")
 
 
 def test_a_mean_reversion_s_fair_value_target_and_its_stop_at_most_as_far():
     """Every trade knows its distance to the window's mean: the target there, the stop k σ but never farther than it -
-    Ödül / risk ≥ 1 on every trade; the planted reversion (to the mean on the third close after a 0,4σ dip, then back
-    where it came from) takes it over any fixed target."""
+    Ödül / risk ≥ 1 on every trade; the planted reversion (through the mean on the third close after a 0,4σ dip, then
+    back where it came from) takes it over any fixed target."""
     out = []
     entries = days_from("2025-02-03", 80)
     rnd = random.Random(5)
     for i, e in enumerate(entries):
         f = 1.0 + rnd.random()                                          # the mean 1 … 2σ away
         if i % 5:
-            out.append(trade([-0.4, f * 0.6, f, f * 0.3, 0.0], e, fair=f, sid="r%d" % i))
+            out.append(trade([-0.4, f * 0.6, f + 0.4, f * 0.3, 0.0], e, fair=f, sid="r%d" % i))
         else:
             out.append(trade([-0.6, -1.5, -2.0, -2.2, -2.2], e, fair=f, sid="r%d" % i))
     ts = [qlv.Trade(r) for r in out]
@@ -97,6 +117,90 @@ def test_a_mean_reversion_s_fair_value_target_and_its_stop_at_most_as_far():
     for t in ts:
         x, hit, h, how = qlv.play_fair(t, ch["k"])
         assert how in ("hedef", "stop") and (x == pytest.approx(t.fair) if how == "hedef" else x <= -min(ch["k"], t.fair))
+    # a reversion that only closes at the mean does not reach it (a touch is not a fill): held to its last close
+    t = qlv.Trade(trade([-0.4, 0.9, 1.5, 0.45, 0.0], "2026-03-02", fair=1.5))
+    assert qlv.play_fair(t, 1.0) == (0.0, False, 5, "süre")
+
+
+# ================================================================================================ closes only
+def _fine(n_paths, closes, steps, seed, mus=(0.0,)):
+    """Paths in σ of the holding drawn in ``steps`` fine steps a close: (the closes, every fine step) - the day between
+    two closes is in the fine steps only."""
+    rnd = random.Random(seed)
+    sd = 1.0 / math.sqrt(closes * steps)
+    out = []
+    for i in range(n_paths):
+        mu = mus[i % len(mus)] / (closes * steps)
+        x, fine, at = 0.0, [], []
+        for _ in range(closes):
+            for _ in range(steps):
+                x += mu + rnd.gauss(0.0, sd)
+                fine.append(x)
+            at.append(x)
+        out.append((at, fine))
+    return out
+
+
+def test_a_stop_resting_all_day_is_hit_between_the_closes_more_often_than_they_show(monkeypatch):
+    """Driftless paths of five closes drawn in fifty steps each: a stop 0,8σ away is touched by the fine steps far more
+    often than the closes go through it; with the correction the closes count about as many - and a target as many or
+    fewer (a touch is not a fill)."""
+    paths = _fine(3000, 5, 50, 7)
+    k = 0.8
+    touched = sum(1 for _, fine in paths if min(fine) <= -k) / len(paths)
+
+    def rates(beta):
+        monkeypatch.setattr(qlv, "BETA", beta)
+        stops = targets = 0
+        for at, _ in paths:
+            t = qlv.Trade(trade(at, "2026-03-02"))
+            stops += qlv.play_fixed(t, k, qlv.M_MAX)[3] == "stop"
+            targets += qlv.play_fixed(t, 3.0, k)[3] == "hedef"
+        return stops / len(paths), targets / len(paths)
+
+    raw_stop, raw_target = rates(0.0)
+    stop, target = rates(0.5826)
+    assert raw_stop < touched - 0.05                                     # (the closes alone: a fourth of the touches missed)
+    assert stop > raw_stop and abs(stop - touched) < 0.05 and abs(stop - touched) < abs(raw_stop - touched)
+    assert target < raw_target
+
+
+def test_the_stop_leaves_the_floor_where_the_closes_hide_the_dips_and_trades_better_intraday(monkeypatch):
+    """Winners whose closes come within 0,1 – 0,2σ of a 0,5σ stop: on the closes as they are, the floor (0,5σ) is the
+    best stop; corrected, a stop beyond what the closes miss.  On paths drawn in fine steps (a mix of trends up and
+    down, five closes a trade), the levels chosen with the correction do better when a stop and a target rest all day."""
+    planted_ = []
+    entries = days_from("2025-01-06", 100)
+    for i in range(60):
+        d = 0.3 + 0.1 * i / 59
+        planted_.append(trade([-d, 0.2, 0.7, 1.2, 1.5], entries[i], sid="w%d" % i))
+    for j in range(40):
+        planted_.append(trade([-0.7, -1.0, -1.3, -1.5, -1.6], entries[60 + j], sid="l%d" % j))
+    sims = _fine(600, 5, 50, 11, mus=(1.2, 1.2, -0.6))
+    entries = days_from("2025-01-06", len(sims))
+
+    def chosen(beta):
+        monkeypatch.setattr(qlv, "BETA", beta)
+        return (qlv.choose([qlv.Trade(r) for r in planted_], "fixed"),
+                qlv.choose([qlv.Trade(trade(at, entries[i], sid="s%d" % i)) for i, (at, _) in enumerate(sims)], "fixed"))
+
+    def intraday(ch):                                                    # (the first fine step at the target or the stop: filled there)
+        tot = 0.0
+        for _, fine in sims:
+            x = fine[-1]
+            for v in fine:
+                if v >= ch["m"] or v <= -ch["k"]:
+                    x = ch["m"] if v >= ch["m"] else -ch["k"]
+                    break
+            tot += x
+        return tot / len(sims)
+
+    raw_p, raw_s = chosen(0.0)
+    cor_p, cor_s = chosen(0.5826)
+    assert raw_p["k"] == qlv.K_RANGE[0] and cor_p["k"] > qlv.K_RANGE[0] + 0.1 and cor_p["m"] < raw_p["m"]
+    assert raw_s["k"] == qlv.K_RANGE[0] and cor_s["k"] > qlv.K_RANGE[0] + 0.1
+    assert intraday(cor_s) > intraday(raw_s)
+    assert cor_s["exp"] < intraday(cor_s)                                  # (the record shown: on the safe side of the intraday one)
 
 
 # ================================================================================================ the ratio, the pool, the cache
