@@ -288,6 +288,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok({"pages": await call_free(svc().nav, _user(request))})
 
     @handler
+    async def bugun(request: Request):
+        # the morning screen (bugun.py): read from what the service holds - nothing valued, no Bloomberg request
+        return ok(await call(svc().bugun.view, _user(request)))
+
+    @handler
     async def header(request: Request):
         return ok(await engine(svc().header_future(_user(request), _lang(request), _since(request), _role(request),
                                                    request.query_params.get("as"))))
@@ -1150,6 +1155,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/users", users),
         Route("/api/status", status),
         Route("/api/nav", nav),
+        Route("/api/bugun", bugun),
         Route("/api/header", header),
         Route("/api/spot", spot),
         Route("/api/view/{view_id}", view),
