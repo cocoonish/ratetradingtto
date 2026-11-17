@@ -1770,12 +1770,13 @@ async function clipAfter(page, action) {
     await open(page, 'asw');
     const asw = await page.evaluate(() => [...document.querySelectorAll('.panel.chart')].map((p) => {
       const svg = p.querySelector('svg.chart');
-      return { title: p.querySelector('header h2').textContent, markers: svg ? svg.querySelectorAll('circle.mk').length : 0,
+      return { id: p.dataset.panel, title: p.querySelector('header h2').textContent, markers: svg ? svg.querySelectorAll('circle.mk').length : 0,
         labels: svg ? [...svg.querySelectorAll('text.pt')].map((t) => t.textContent) : [], paths: svg ? svg.querySelectorAll('path').length : 0,
-        titles: svg ? [...svg.querySelectorAll('text.ttl')].map((t) => t.textContent) : [], wide: p.classList.contains('wide') };
+        titles: svg ? [...svg.querySelectorAll('text.ttl')].map((t) => t.textContent) : [], wide: p.classList.contains('wide'),
+        table: [...p.querySelectorAll('header .tools button')].some((b) => b.textContent === 'Tablo') };
     }));
     check('ASW page draws the workbook\'s XY chart: one marker per bond, labelled, and the fitted curve',
-      asw.length === 2 && asw[0].title === 'DİBS ASW — kalan vade' && asw[0].markers >= 15 && asw[0].labels.length >= 10
+      asw.length === 4 && asw[0].title === 'DİBS ASW — kalan vade' && asw[0].markers >= 15 && asw[0].labels.length >= 10
       && asw[0].labels.every((t) => /^[A-ZŞÇÖÜİa-zşçöüığ]{3}\d\d/.test(t)) && asw[0].titles.includes('ASW (bp)') && asw[0].titles.includes('Kalan vade (yıl)'), asw[0]);
     const aswSvg = page.locator('.panel.chart', { hasText: 'DİBS ASW — kalan vade' }).locator('svg.chart');
     await aswSvg.scrollIntoViewIfNeeded();
@@ -1785,7 +1786,31 @@ async function clipAfter(page, action) {
     const atip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent, rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
     check('hovering the XY chart names the nearest bond and its spread', atip.head.length > 0 && atip.rows.length >= 1 && atip.rows.some((r) => /\d/.test(r)), atip);
     await page.mouse.move(5, 5);
+    // the same chart on the FX swap curve: a marker per bond (as many as the server's chart has), labelled as the OIS
+    // chart, its own fitted curve dashed, the same tooltip and "Tablo"; and the FX swap implied curve beside OIS
+    const aswView = (await api(page, 'ayşe yilmaz', 'GET', '/api/view/asw')).json;
+    const fxSeries = aswView.panels.find((p) => p.id === 'chartfx').data.series;
+    const fxc = asw.find((c) => c.id === 'chartfx');
+    check('ASW page: the chart once more on the FX swap curve - every bond at its years with its FX ASW, labelled, the FX curve dashed',
+      fxc && fxc.title === 'FX swap eğrisine göre ASW — kalan vade' && fxc.markers === fxSeries[0].x.length && fxc.markers === asw[0].markers
+      && JSON.stringify(fxc.labels) === JSON.stringify(asw[0].labels) && fxc.titles.includes('ASW FX (bp)') && fxc.wide && fxc.table
+      && fxSeries[1].dash === 1, { fxc, points: fxSeries[0].x.length });
+    const fxSvg = page.locator('.panel[data-panel="chartfx"] svg.chart');
+    await fxSvg.scrollIntoViewIfNeeded();
+    const fb = await fxSvg.boundingBox();
+    await page.mouse.move(fb.x + fb.width * 0.3, fb.y + fb.height * 0.5);
+    await page.waitForSelector('.chart-tip');
+    const ftip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent, rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    check('... hovering it names the nearest bond and its FX spread', ftip.head.length > 0 && ftip.rows.some((r) => /\d/.test(r)), ftip);
+    await page.mouse.move(5, 5);
+    const fxl = asw.find((c) => c.id === 'fxline');
+    check('... and the FX swap implied TRY curve itself, tenor by tenor beside OIS', fxl && /FX swap ima TRY eğrisi/.test(fxl.title) && fxl.paths >= 2 && fxl.table, fxl);
     check('ASW table has the bonds of the recorded day', (await cellText(page, 'ASW!B7')).trim() === 'TRB100227T13' && /^-?\d+/.test((await cellText(page, 'ASW!R9')).trim()));
+    const aswRows = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="tbl"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim())));
+    const aswCaps = aswRows.filter((r) => /· \d+ kâğıt$/.test(r[0])).map((r) => r[0]);
+    check('DİBS ASW table: its bonds only (no empty rows), kind by kind as the trading list has them',
+      aswCaps.length === 3 && aswCaps[0] === 'Bono · 2 kâğıt' && aswRows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[0])).length === 19
+      && !aswRows.some((r) => r[0] === ''), aswCaps);
     await shot(page, '12-asw');
 
     // ------------------------------------------------------------------ history: matrix, meeting pricing, calendar
@@ -2249,7 +2274,45 @@ async function clipAfter(page, action) {
     await page.click(flagOf('L0', 'TRT130127T11'));
     const unstarred = await page.waitForFunction(() => ![...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
       .some((tr) => tr.children[2] && tr.children[2].textContent === 'TRT130127T11'), null, { timeout: 20000 }).then(() => true, () => false);
-    check('... and ★ takes it off', unstarred && !(await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === 'TRT130127T11').lists.includes('dibs'));
+    const listsOf = async (isin) => (await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === isin).lists;
+    const offBoth = await listsOf('TRT130127T11');
+    check('... and ★ takes it off - off the DİBS ASW list too', unstarred && !offBoth.includes('dibs') && !offBoth.includes('asw'), offBoth);
+    // the summary's columns in groups, each bond's fair yield and price on DİBS RV's fitted ASW curves (OIS, FX swap)
+    const sumRows = await summaryRows();
+    const groupRow = sumRows[0];
+    const capRow = sumRows[1];
+    const mar28 = sumRows.find((r) => r[2] === 'TRT150328T24') || [];
+    const fairAt = capRow.indexOf('Adil getiri %');
+    check('DİBS Trading: the summary in groups (Fiyat · OIS\'e göre · FX swap\'a göre · Risk · Carry · Broker), each bond\'s fair yield and price',
+      ['Fiyat', "OIS'e göre", "FX swap'a göre", 'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0
+      && capRow.lastIndexOf('Adil getiri %') > fairAt && /^\d+,\d\d%$/.test(mar28[fairAt]) && /^\d+,\d{3}$/.test(mar28[fairAt + 1])
+      && capRow[2] === 'ISIN' && capRow[1] === 'Kâğıt', { groupRow, capRow, mar28 });
+    const fairTip = await page.evaluate((i) => { const tr = [...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
+      .find((x) => x.children[2] && x.children[2].textContent === 'TRT150328T24'); return tr ? tr.children[i].title : ''; }, fairAt);
+    check('... a fair value says how it is made', /OIS ASW eğrisi/.test(fairTip) && /annuity/.test(fairTip), fairTip);
+    // "+ ISIN ekle" on DİBS Trading: the bond goes onto the DİBS ASW list too (the toast says so); ★ takes it off both
+    await page.click('.panel[data-panel="L1"] button[data-action="add-isin"]');
+    await page.fill('#isin-text', 'TRT190128T14');
+    await page.click('#isin-add');
+    const toldAsw = await page.waitForFunction(() => /DİBS ASW'ye de eklendi/.test(document.querySelector('#toasts').textContent), null,
+      { timeout: 20000 }).then(() => true, () => false);
+    await open(page, 'asw');
+    await page.waitForSelector('.panel[data-panel="tbl"] table.grid');
+    const onAsw = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="tbl"] table.grid tr')]
+      .some((tr) => tr.children[0] && tr.children[0].textContent.trim() === 'TRT190128T14'));
+    check('a bond added on DİBS Trading ("+ ISIN ekle") is on the DİBS ASW list too, the toast says so', toldAsw && onAsw, { toldAsw, onAsw });
+    await open(page, 'dibslive');
+    await page.waitForSelector(flagOf('L0', 'TRT190128T14'));
+    await page.click(flagOf('L0', 'TRT190128T14'));
+    await page.waitForFunction(() => ![...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
+      .some((tr) => tr.children[2] && tr.children[2].textContent === 'TRT190128T14'), null, { timeout: 20000 }).catch(() => {});
+    const tradingGone = await listsOf('TRT190128T14');
+    check('... and ★ off takes it off both lists', !tradingGone.includes('dibs') && !tradingGone.includes('asw'), tradingGone);
+    // the value dates: the rows that hold no bond (DİBS RV's group separators, the unused rows) are not shown
+    const liveIsins = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="L1"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent || ''));
+    const firstBond = liveIsins.findIndex((t) => /^TR[A-Z0-9]{9}\d$/.test(t));
+    check('DİBS Trading · valörler: only the rows that hold a bond', firstBond > 0
+      && liveIsins.slice(firstBond, firstBond + 19).every((t) => /^TR[A-Z0-9]{9}\d$/.test(t)), liveIsins);
     // "+ ISIN ekle" on Tüm Kâğıtlar: onto the desk's list, its kind from Bloomberg (offline it waits for it); ✕ takes it off
     await open(page, 'kagitlar');
     await page.waitForSelector('.panel[data-panel="U1"] table.grid');
