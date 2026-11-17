@@ -23,12 +23,13 @@ what moved; ``python -m tto.datecells`` prints the new list) - and as the model 
 date once the rule, asked for that cell alone, says it is one (:func:`apply`).  An input the page definition declares a
 date is shown as one too (:func:`show_inputs`: the empty rows at the end of a holiday list).
 
-The same reading says how a date typed as a tenor ("3m", "18M": tto/shortcuts.py) counts in a cell the page definition
-says nothing about (:meth:`DateCells.context`): its **pair** is that of the first date along what its formula is made of
-(:meth:`DateCells.leads`) that has one - the spot dates (``Forward!I2`` USDTRY, ``K2`` EURTRY, ``OIS_MAIN!B2`` the TRY
-money market) and the inputs the page definition gives a pair (the Forward page's value date ``D2``: USDTRY); its
-**start** is the date the workbook counts its days from (``O35 = O34-O33``: the End counts from the Start), else the
-pair's spot date.
+The same reading says how a date typed as a tenor ("3m", "18M": tto/shortcuts.py) counts where the page definition does
+not say (:meth:`DateCells.context`): the **pair** is that of the dates the cell's formula is made of
+(:meth:`DateCells.leads`, followed until one has a pair) - the spot dates (``Forward!I2`` USDTRY, ``K2`` EURTRY,
+``OIS_MAIN!B2`` the TRY money market) and the inputs the page definition gives a pair (the Forward page's value date
+``D2``: USDTRY) -, when they agree (a row's spot date that is USDTRY's or EURTRY's as the row says has none); the
+**start** is the date the workbook counts the cell's days from (``O35 = O34-O33``: the End counts from the Start), else
+the pair's spot date.
 """
 from __future__ import annotations
 

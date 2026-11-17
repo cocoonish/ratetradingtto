@@ -3613,9 +3613,9 @@ class Service(object):
     TRY_SPOT = "OIS_MAIN!B2"
 
     def _date_context(self, book: Book, si: int, rc: int) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
-        """How a date typed as a tenor counts in a cell, as its formulas say (tto/datecells.py): (the pair - of the first
-        date along what the cell is made of that has one: a spot date - Forward!I2 USDTRY, K2 EURTRY, OIS_MAIN!B2 the TRY
-        money market - or an input the page definition gives a pair; ``None``: none -, the date the workbook counts
+        """How a date typed as a tenor counts in a cell, as its formulas say (tto/datecells.py): (the pair of the dates
+        the cell is made of - a spot date: Forward!I2 USDTRY, K2 EURTRY, OIS_MAIN!B2 the TRY money market; an input the
+        page definition gives a pair -, ``None`` when there is none or they do not agree; the date the workbook counts
         the cell's days from: ``O35 = O34-O33`` - the End counts from the Start; ``None``: from the spot)."""
         spots: Dict[Tuple[int, int], str] = {}
         if book.id == "tto":

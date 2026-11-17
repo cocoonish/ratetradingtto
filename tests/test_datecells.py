@@ -350,18 +350,20 @@ def test_3m_in_an_amount_is_three_million_and_a_number_never_a_date(desk):
 
 
 def test_meeting_dates_keep_their_own_rule(desk):
-    """A PPK meeting's date is the calendar's: "3m" there is refused as before - no meeting moves; no newly dated cell
-    is a cell that moves with its meeting."""
+    """A PPK / FOMC meeting's date is the calendar's: "3m" there is refused as before - no meeting moves; no newly
+    dated cell is a cell that moves with its meeting."""
     from tto import meetings as mt
     svc = desk
     on(svc, RECORDED)
     u = svc.login("Tarih PPK")["user"]
     try:
-        before = cell(svc, "OIS_MAIN!P10", u)
-        res = svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!P10", "value": "3m"}])
-        assert res["errors"] and "shortcuts" not in res and cell(svc, "OIS_MAIN!P10", u) == before
+        for book, ref in (("tto", "OIS_MAIN!P10"), ("sofr", "SOFR_FOMC!B74")):        # PPK, FOMC
+            before = cell(svc, ref, u, book)
+            res = svc.set_inputs(u, book, [{"ref": ref, "value": "3m"}])
+            assert res["errors"] and "shortcuts" not in res and cell(svc, ref, u, book) == before, (ref, res)
     finally:
         svc.reset_inputs(u, "tto")
+        svc.reset_inputs(u, "sofr")
     for book_id, boxes in dcl.SHOWN.items():
         b = svc.books[book_id]
         for si, rc in dcl.cells_of(b.model, boxes):
