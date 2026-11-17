@@ -4993,15 +4993,17 @@ class Service(object):
         if own["t"] == "" and f.get("why"):
             own = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": "FX swap ASW'si yok: %s" % f["why"]}
         sig = rvfair.signal(f.get("rich"), threshold)
+        th = threshold if type(threshold) is float else 0.0
         sig_cell = {"t": sig, "k": "s", "b": 1, "tip": "Pahalı / ucuz %s bp eşiğini aşınca (DİBS RV: Eşik bp)"
-                    % numfmt.format_value(threshold if type(threshold) is float else 0.0, "0.##", loc)} if sig else {"t": "", "k": ""}
+                    % numfmt.format_value(th, "0" if th == int(th) else "0.0", loc)} if sig else {"t": "", "k": ""}
         return [own, bp("curve"), bp("rich"), sig_cell]
 
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
         """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity, in groups of
-        columns - the price on the value date the bond is priced on (bid, ask, the last trade and when); against OIS and
-        against the FX swap curve what DİBS RV makes of it (yield, ASW, cheap / rich, signal) and its fair yield and price
-        on each fitted ASW curve (rvfair.py); its risk (duration, DV01, the nominal of USD 1,000 DV01); carry and the repo
+        columns - the price on the value date the bond is priced on (bid, ask, the last trade and when); against OIS what
+        DİBS RV makes of it (yield, ASW, cheap / rich, signal), against the FX swap implied curve what DİBS ASW makes of it
+        (ASW, cheap / rich; DİBS RV's threshold for the signal) and its fair yield and price on each fitted ASW curve
+        (rvfair.py); its risk (duration, DV01, the nominal of USD 1,000 DV01); carry and the repo
         T0 -> T1 implies; today's chat board."""
         from . import rvfair
         book = self.books.get("tto")

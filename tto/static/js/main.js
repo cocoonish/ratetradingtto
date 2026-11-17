@@ -401,9 +401,12 @@ async function openPage(id, panel, sub) {
   const content = clear($('content'));
   const back = kept.get(id);
   if (back && back.page.ready) {
-    // back in view as it was left: the tab, the search, the scroll; what changed meanwhile comes now
+    // back in view as it was left: the tab, the search, the scroll; what changed meanwhile comes now - under the tabs of
+    // its menu entry, when it is one of them (DİBS RV's sheets: a page kept, the strip drawn again over it)
     kept.delete(id);
     kept.set(id, back);
+    const backTabs = pageTabs(id, state.pages);
+    if (backTabs) content.appendChild(backTabs);
     content.appendChild(back.host);
     content.scrollTop = back.scroll || 0;
     state.page = back.page;
