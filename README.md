@@ -2590,6 +2590,9 @@ göre seçilir:
   m ÷ k ≥ 1** ve **en az 30 işlem** (grubun azsa ailenin bütün grupları birlikte; aile de azsa ayarlı seviye yok, kendi
   kuralı ve nedeni). Stop 0,5 – 3 σ, hedef en çok 4 σ (daha yakını bir iki günün gürültüsü, ötesi seviye değil). Hedef
   kendi seviyesinde (limit emri), stop onu geçen kapanışta (boşluk işlemindir), yoksa süre sonundaki kapanış.
+  Tarihçede yalnız kapanışlar var (gün içi en yüksek / en düşük yok): gün boyu duran bir stop emri, kapanışların
+  göstermediği gün içi hareketle daha sık çalışır - dar bir stop (0,5σ) kayıtta, gerçek işlemde olacağından daha iyi
+  görünebilir.
 * **Trend**: hedef yok, **iz süren stop** - en iyi seviyeden k × aylık σ (günlük σ × √21) geri; ödül / risk kazanan
   işlemlerin ortalaması ÷ k (≥ 1); satır "iz süren stop" der; kayıt ve geri test stopu en iyi seviyenin arkasından taşır.
 * **Carry + momentum**: kalibrasyon **sepet** üstünde (sepetin kendi, çeşitlendirilmiş haftalık σ'sı: hafta içindeki her
@@ -2615,8 +2618,8 @@ göre seçilir:
 * **Maliyet.** Bir ayın seçimi (aile, grup, ay, işlemlerin özeti) anahtarıyla saklanır: aynı veriyle ikinci tam hesap,
   canlı yenileme ve geri testin yeniden kurmaları hiçbir şeyi yeniden seçmez; düzeltilen bir kapanış yalnız onu gören ayları.
   Masa bilgisayarında sentetik iki yıllık tarihçede tam hesaba eklenen: soğuk başlangıçta ~0,5 sn (Trend ~0,3 sn, ML
-  ~0,18 sn, Carry + momentum ~0,02 sn), sonraki tam hesaplarda ~0,2 sn; geri test (ayrı iş parçacığı) yolları kaydedip
-  üç aileyi daha yeniden kurduğu için ~50 sn'den ~90 sn'ye, kalibrasyonu ~0,1 sn. Bloomberg'e yeni istek yok.
+  ~0,15 sn, Carry + momentum ~0,02 sn), sonraki tam hesaplarda ~0,2 sn; geri test (ayrı iş parçacığı) yolları kaydedip
+  üç aileyi daha yeniden kurduğu için ~50 sn'den ~80 sn'ye, kalibrasyonu ~0,05 sn. Bloomberg'e yeni istek yok.
 * **Yeni bir aile** hiçbir ek kod istemez: yürüyen geri testin yeniden kurmalarında koşuyorsa yollarını geri test
   kaydeder; kendi yürüyen testi olan aile (ör. **Opsiyon → spot**) işlemlerini tablosunun `backtest`'inde geri testin
   işlem biçiminde ve yollarıyla verir (`path_sigma`: her kapanışta işlemin lehine hareket, tutmanın σ'sı cinsinden, çıkışı
@@ -2733,7 +2736,8 @@ evrenin her satırında.
   (stoptan sonra yeni dönüşe kadar pozisyon yok); Sharpe aynı riskle tutulan pozisyonların günlük K/Z'sinden, yıllık.
   Hiçbir gün kendinden sonraki veriyle karar vermez.
 * **Geri test paneli, kayıt, alarm.** Sinyaller'in geri test paneli Trend'i kendi yürüyen testinin iz süren stoplu
-  örneklem dışı kaydıyla gösterir (k grup başına). Yeniden kurmalarda Trend yine günlük pozisyonla koşar: satır yönünün
+  örneklem dışı kaydıyla gösterir (k grup başına). Yeniden kurmalarda Trend yine günlük pozisyonla koşar (düşük
+  güvendeki satır - grubunun o güne kadarki iz süren stopu zarar ettirmişse - kayıttaki gibi açılmaz): satır yönünün
   ilk günü açılır, hedef ve süre sınırı olmadan yön dönünce ("dönüş", yeni yön aynı gün açılır) ya da iz süren stopta
   kapanır; evrenin FX satırlarının K/Z'sine carry eklenir. Sinyal kaydı ve abonelik alarmı bir Trend satırı YENİ olunca,
   günde bir kez: eski yönün kaydı "dönüş"le kapanır, yeni kaydın hedefi ve süresi yoktur (stop en iyi seviyenin

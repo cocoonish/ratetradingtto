@@ -19,7 +19,9 @@ for a mean-reversion family also the target at its fair value (the window's mean
 The objective: the expected P&L per trade (carry in it where the trades had it), subject to Ödül / risk = m / k ≥ 1 and
 at least ``MIN_TRADES`` trades - a group with fewer takes the family's (all its groups pooled), a family with fewer has
 no calibrated levels (its own rule stands and its line says why).  A trade reaches its target at the target (a limit
-order), its stop at the close that went through it (a gap is the trade's), else it expires at its last close.
+order), its stop at the close that went through it (a gap is the trade's), else it expires at its last close.  (The
+history has closes only: a stop order resting all day is also hit by intraday lows the closes do not show - a tight
+stop looks better here than it would trade.)
 
 * **Trend** (``RULES``: "trail"): no target - a trailing stop k·σ below the best level since the entry, else the
   direction's turn; its Ödül / risk is the average winning trade ÷ k (≥ 1 as well), σ a month's (``trend``'s horizon).
