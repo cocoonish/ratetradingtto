@@ -1820,7 +1820,7 @@ async function clipAfter(page, action) {
     const b21 = (await api(page, 'ayşe yilmaz', 'GET', '/api/view/ois')).json.panels.find((x) => x.id === 'B21').data;
     const listFark = (label) => { const r = b21.rows.find((row) => row[0] && row[0].t === label); return r ? r[b21.c.indexOf('PPK fark')].t : null; };
     check('OIS · PPK: the interpolation chart right after the 15 best FRAs, the page\'s whole width - the overnight forward and the 3M FRA strip both ways as step lines (Bootstrap blue, PPK basamak orange, the strips dashed), 3Y OIS first',
-      bestTab.join(' ') === 'B1 B9 B10 B11 interp chart2 chart5' && i0.full && i0.on.join() === '3Y,OIS'
+      bestTab.join(' ') === 'B1 B9 B10 B11 interp chart2 chart5' && i0.full && i0.on.join() === '3Y,OIS,Faiz'
       && JSON.stringify(i0.keys) === JSON.stringify(['O/N · Bootstrap (Murex)', 'O/N · PPK basamak', '3A FRA · Bootstrap (Murex)', '3A FRA · PPK basamak'])
       && i0.steps === 4 && i0.dashed === 2 && i0.strokes.includes('var(--c-blue)') && i0.strokes.includes('var(--c-orange)'), { bestTab, i0 });
     check('... the quoted tenors as light lines with their names (1M … 3Y: 15M and 21M are no quotes), the meetings as ticks on the axis',
@@ -1842,10 +1842,10 @@ async function clipAfter(page, action) {
     const i3 = await interp();
     const keptPick = await page.evaluate(() => localStorage.getItem('tto.pick.ois.interp'));
     check('... 1Y / 3Y / 10Y and OIS / Offshore redraw it at once: 1Y four FRAs, all the same both ways (3M, 6M, 9M, 1Y are quotes); Offshore the offshore curve both ways (FX swap + XCCY, 3M forwards on ACT/360); 10Y forty quarters; the choice kept in the browser',
-      i1.on.join() === '1Y,OIS' && i1.rows[0].length === 5 && i1.rows[3].slice(1).every((t) => t === '0,0') && /her çeyrekte aynı/.test(i1.line)
-      && i2.on.join() === '1Y,Offshore' && i2.rows[0][0] === '3A forward (ACT/360)' && i2.quotes.includes('1W') && i2.steps === 4
+      i1.on.join() === '1Y,OIS,Faiz' && i1.rows[0].length === 5 && i1.rows[3].slice(1).every((t) => t === '0,0') && /her çeyrekte aynı/.test(i1.line)
+      && i2.on.join() === '1Y,Offshore,Faiz' && i2.rows[0][0] === '3A forward (ACT/360)' && i2.quotes.includes('1W') && i2.steps === 4
       && JSON.stringify(i2.keys) === JSON.stringify(['O/N · Bootstrap (offshore)', 'O/N · PPK basamak (offshore)', '3A forward · Bootstrap (offshore)', '3A forward · PPK basamak (offshore)'])
-      && i3.on.join() === '10Y,Offshore' && i3.rows[0].length === 41 && i3.steps === 4 && keptPick === '10Y|Offshore',
+      && i3.on.join() === '10Y,Offshore,Faiz' && i3.rows[0].length === 41 && i3.steps === 4 && keptPick === '10Y|Offshore|Faiz',
     { i1: [i1.on, i1.rows[3], i1.line], i2: [i2.on, i2.keys, i2.rows[0] && i2.rows[0][0], i2.quotes], i3: [i3.on, i3.rows[0] && i3.rows[0].length], keptPick });
     await page.click('#chart-choice-interp button[data-pick="3Y"]');
     await page.click('#chart-choice-interp button[data-pick="OIS"]');
@@ -1862,6 +1862,30 @@ async function clipAfter(page, action) {
       /^\d\d\.\d\d\.\d{4}$/.test(itip.head) && itip.rows.filter((r) => /%$/.test(r)).length === 4 && itip.rows.filter((r) => / bp$/.test(r)).length === 2
       && itip.rows.some((r) => /^3A FRA · PPK basamak · \d+x\d+/.test(r)), itip);
     await shot(page, '09c-ois-interp');
+    // the discount factors, the chart's third choice ("Bu enterpolasyondaki DF farkları da bir grafikte bana gösterilmeli"):
+    // PPK basamak's DF against Bootstrap's day by day (bp), Bootstrap's own line at 0, the table of both at the quoted tenors
+    await page.click('#chart-choice-interp button[data-pick="DF"]');
+    await page.waitForFunction(() => /^DF · /.test((document.querySelector('.panel[data-panel="interp"] .chart-legend .key') || {}).textContent || ''),
+      null, { timeout: 15000 });
+    await stripCols(10);
+    const i4 = await interp();
+    const dfPick = await page.evaluate(() => localStorage.getItem('tto.pick.ois.interp'));
+    const db = await isvg.boundingBox();
+    await page.mouse.move(db.x + db.width * 0.45, db.y + db.height * 0.5);
+    await page.waitForSelector('.chart-tip');
+    const dtip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent,
+      rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    await page.mouse.move(5, 5);
+    check('... "DF" draws the discount factors instead: PPK basamak\'s against Bootstrap\'s (bp) day by day, Bootstrap\'s line at 0, the quoted tenors marked; the table both DFs and the difference at each quoted tenor - the same up to 1Y, apart at 18M, 2Y, 3Y; hovering reads that day\'s difference; the choice kept',
+      i4.on.join() === '3Y,OIS,DF' && JSON.stringify(i4.keys) === JSON.stringify(['DF · Bootstrap (Murex)', 'DF · PPK basamak'])
+      && i4.rows.length === 4 && i4.rows[0][0] === 'DF · kotalı vade' && i4.rows[0].slice(1).join() === '1M,2M,3M,6M,9M,1Y,18M,2Y,3Y'
+      && i4.rows[3].slice(1, 7).every((t) => t === '0,00') && i4.rows[3].slice(7).every((t) => /\d/.test(t) && t !== '0,00')
+      && /^3Y · OIS · DF farkı \(PPK basamak \/ Bootstrap − 1\): en yüksek /.test(i4.line) && i4.lines === 9 && dfPick === '3Y|OIS|DF'
+      && /^\d\d\.\d\d\.\d{4}$/.test(dtip.head) && dtip.rows.some((r) => /^PPK \/ Bootstrap − 1.*\d bp$/.test(r)),
+    { i4: [i4.on, i4.keys, i4.rows, i4.line, i4.lines], dfPick, dtip });
+    await shot(page, '09d-ois-interp-df');
+    await page.click('#chart-choice-interp button[data-pick="Faiz"]');
+    await stripCols(13);
     await open(page, 'forward');
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
@@ -2757,7 +2781,7 @@ async function clipAfter(page, action) {
     await shot(page, '12b-dibs-genel');
     check('DİBS RV · Genel: its three tabs, the entry lit, the table in its groups (OIS ASW · FX swap ASW on the FX swap ima eğrisi · sıfır kupon) with every bond of the trading list',
       genelSeen.tabs.join('|') === 'Genel|RV hesap tablosu|ASW hesap tablosu' && genelSeen.on.join() === 'dibs-genel' && genelSeen.lit.join() === 'tahvil.dibsrv'
-      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–18A/.test(g))
+      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–12A FX swap ima, 18A XCCY eğrisinden/.test(g))
       && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp · LOO RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
     { genelSeen, gBonds: gBonds.length });
     check('... its three charts with their points: the yield curve (bonds and OIS), ASW · OIS and ASW · FX swap as DİBS ASW draws them',

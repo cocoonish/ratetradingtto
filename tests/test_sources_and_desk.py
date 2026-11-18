@@ -182,7 +182,9 @@ def test_asw_against_the_fx_swap_curve(svc):
                 [base.get(fi, ex.FXC_FIRST + k, 4) for k in range(n)],                                   # EK_FX!D6:D21
                 [calc.get(si, aswfx.ROW, aswfx.QUOTE_COL + k) for k in range(n)])
     days, ln_ois, ln_fx, ois_q, fx_q, given = svc.et.call(run)
-    tenors = aswfx.to_sheet(ois_q, fx_q, days)
+    point = svc.et.call(svc._asw_fx_point, book, None)["point"]                        # (18M: computed off the XCCY curve)
+    assert point is not None and type(fx_q[aswfx.TENORS.index(18)]) is not float                # (no quote in the sheet)
+    tenors = aswfx.to_sheet(ois_q, fx_q, days, {18: point})
     for k, t in enumerate(tenors):
         i = aswfx.node_of(t.months)
         assert ois_zero["data"][k] == pytest.approx(aswfx.zero_rate(math.exp(ln_ois[i]), days[i]), abs=1e-9), t.months
@@ -203,8 +205,9 @@ def test_asw_against_the_fx_swap_curve(svc):
 
 
 def test_without_an_fx_rate_the_fx_curve_has_no_values(svc):
-    """No tenor priced in EK_FX: no calculation on the FX swap curve - the chart's FX zero-coupon line and the table's FX
-    columns have no values (the OIS lines stand)."""
+    """No tenor priced in EK_FX: no calculation on the FX swap curve - the chart's FX lines (the zero-coupon rates, and the
+    quotes: read off the FX calculation, where 18M's computed XCCY par is) and the table's FX columns have no values (the
+    OIS lines stand)."""
     book = svc.books["asw"]
     spec = next(x for x in svc.view_index["asw"]["panels"] if x["id"] == "fxline")["spec"]
 
@@ -218,7 +221,9 @@ def test_without_an_fx_rate_the_fx_curve_has_no_values(svc):
         svc._fx_curve_columns(book, None, table, loc)
         return data, ois, table
     data, ois, table = svc.et.call(run)
-    assert data["series"][0]["data"] == [None] * len(aswfx.TENORS) and [x["data"] for x in data["series"][1:]] == ois
+    n = len(aswfx.TENORS)
+    assert data["series"][0]["data"] == data["series"][2]["data"] == [None] * n
+    assert [data["series"][k]["data"] for k in (1, 3)] == [ois[0], ois[2]]
     assert [x["t"] for x in table["rows"][0][1:]] == ["FX sıfır kupon (%)", "ASW'ye giden par (%)"]
     assert [x["t"] for x in table["rows"][1][1:]] == ["", ""]
 

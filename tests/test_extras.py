@@ -6,7 +6,7 @@ them with an independent calculation or with what the workbook itself computes e
 import pytest
 
 from conftest import cell
-from tto import extras
+from tto import aswfx, extras
 from tto.books import formula_text
 from tto.config import Settings
 from tto.marketdata.base import bdp_key
@@ -80,9 +80,17 @@ def test_the_extra_sheets_are_ordinary_workbook_sheets(svc):
     assert svc.cell_info(None, "asw", "EK_FX!J6")["formula"] == "=ASW!AC$65"
     assert svc.cell_info(None, "asw", "EK_FX!K6")["formula"] == "=IFERROR((EXP(-ASW!BT$65*365/$J6)-1)*100,NA())"
     assert svc.cell_info(None, "asw", "EK_FX!K13")["formula"] == "=IFERROR((EXP(-ASW!CC$65*365/$J13)-1)*100,NA())"
-    assert svc.cell_info(None, "asw", "EK_FX!I12")["formula"] == ('=IF(ISNUMBER($D12),"FX swap ima: tek dönem, basit ACT/360",'
+    assert svc.cell_info(None, "asw", "EK_FX!I11")["formula"] == ('=IF(ISNUMBER($D11),"FX swap ima: tek dönem, basit ACT/360",'
                                                                   '"fiyat yok: OIS kotası, sayfanın kuralıyla")')
     assert svc.cell_info(None, "asw", "EK_FX!I13")["formula"].startswith('=IF(ISNUMBER($D13),"XCCY: yıllık par, ACT/360",')
+    # 18M is no quote (the desk, 18.11.2026): no ticker root to type, no Bloomberg call - computed off the offshore XCCY
+    # curve by the dashboard, its XCCY par given to D12 in the calculation on the FX swap curve (#N/A in the sheet itself)
+    b12 = svc.cell_info(None, "asw", "EK_FX!B12")
+    assert (b12["base"], b12["input"]) == ("hesaplanan", None) and svc.cell_info(None, "asw", "EK_FX!B13")["input"] is not None
+    assert [svc.cell_info(None, "asw", "EK_FX!%s12" % c)["formula"] for c in "DGH"] == ["=NA()"] * 3
+    assert svc.cell_info(None, "asw", "EK_FX!C12")["formula"] == '=IF(ISNUMBER($D12),"hesaplanan (XCCY 1Y–2Y, Bootstrap / PPK basamak)","yok")'
+    assert svc.cell_info(None, "asw", "EK_FX!I12")["formula"] == ('=IF(ISNUMBER($D12),"%s","fiyat yok: OIS kotası, sayfanın kuralıyla")'
+                                                                  % aswfx.RULES[aswfx.CURVE])
 
 
 def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():

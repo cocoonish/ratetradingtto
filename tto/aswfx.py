@@ -18,15 +18,21 @@ A bond's discount factor is log-linear in ln DF between the node days.
 **The FX rates' own conventions** - the desk's workbook reads the very same tickers so (its offshore TRY discount curve
 behind DİBS RV's FX swap ASW, Forward!AJ123:AN142 and C123:K134):
 
-* up to 18 months ``TRYI…``, FX swap implied: one period, simple ACT/360 - an FX swap has no coupons:
+* up to 12 months ``TRYI…``, FX swap implied: one period, simple ACT/360 - an FX swap has no coupons:
   ``DF = 1 / (1 + r/100 · d/360)``;
 * from 2 years ``TRYSAQ…``, cross currency swaps: an annual ACT/360 par rate,
-  ``DF_n = (1 − r/100 · Σ τ_k DF_k) / (1 + r/100 · τ_n)`` over its yearly coupon dates (12, 24, … months: their discount
-  factors the curve's as built so far - the sheet's own nodes, at or before the tenor quoted before), ``τ`` a year's
-  days / 360.
+  ``DF_n = (1 − r/100 · Σ τ_k DF_k) / (1 + r/100 · τ_n)`` over its coupon dates - yearly, counted back from the maturity,
+  the short period first (:func:`xccy_months`; 12, 24, … months for a whole number of years): their discount factors the
+  curve's as built so far (the sheet's own nodes, at or before the tenor quoted before), ``τ`` the days between / 360;
+* **18M is no quote** (the desk, 18.11.2026: "TRYI18M gerçek bir kotasyon değil. Orada annual payment olduğu için 1Y'den
+  sonra XCCY trade ediyor. Zero'yu oradan bulmamız gerekli ... 18M hesaplanacak, gerçek kotasyon girilmeyecek"): it is
+  computed off the offshore curve (:func:`point_18m`) - its discount factor at the sheet's 18M node day between its 1Y
+  and 2Y XCCY nodes (TRYSAQ1, TRYSAQ2), on the user's own curve setting (``Service._asw_fx_18m``: Bootstrap, the Forward
+  sheet's curve, ln DF linear between its nodes; PPK basamak, ppkcurve's offshore PPK curve).  Its rate is the 18M XCCY
+  par on that curve - annual ACT/360, coupons 6M and then 12M on, counted back from the maturity.
 
-The kind goes by the tenor (≤ 18M FX swap implied, ≥ 2Y XCCY), ``d`` is the sheet's node days of the tenor.  A tenor
-without an FX price keeps its OIS quote as it is.
+The kind goes by the tenor (≤ 12M FX swap implied, 18M computed, ≥ 2Y XCCY), ``d`` is the sheet's node days of the tenor.
+A tenor without an FX price (18M: without the curve's 1Y and 2Y XCCY quotes) keeps its OIS quote as it is.
 
 **To the sheet**, tenor by tenor in order: the discount factor the rate gives by its own convention is the target; up to
 3M the sheet's quote with it is closed form (``p = (1/DF − 1) · 365/d``), from 6M on it is solved for - bisection on the
@@ -40,15 +46,17 @@ dashboard's own daily closes (``tto/history.py``, nothing asked of Bloomberg for
 at 1M–9M, its cross currency swaps (``xccy``) at 1Y (TRYSAQ1: the history keeps no TRYI12M - the desk's Forward sheet
 takes this very swap as its offshore 12M; at one year an annual ACT/360 par rate is one period simple ACT/360, the FX
 swap's reading) and at 2Y–10Y (TRYSAQ2 … TRYSAQ10, as EK_FX); each the first source with a close (ICPL, then the
-workbook's BGN ticker; ``SeriesDef.merged``).  18M has no series (no TRYI18M is kept), and a day without a close of a
-tenor has none either: there the day's OIS quote stays, as a tenor without an FX price does today.  A day without any
-offshore close has no offshore ASW (the page leaves its point and its cells empty), as today's ASW FX has none without an
-FX rate."""
+workbook's BGN ticker; ``SeriesDef.merged``).  18M is computed the same way from that day's TRYSAQ1 and TRYSAQ2 closes
+(:func:`history_pair`; the offshore XCCY curve of the two, bootstrapped as the Forward sheet does and ln DF linear between
+them - Bootstrap: a past day has no PPK curve), when both are there.  A day without a close of a tenor has none: there the
+day's OIS quote stays, as a tenor without an FX price does today.  A day without any offshore close has no offshore ASW
+(the page leaves its point and its cells empty), as today's ASW FX has none without an FX rate."""
 from __future__ import annotations
 
 import math
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
+from .ppkcurve import LogLinear
 from .xl.model import COLS
 
 #: the tenors of the sheet's curve in months (ASW!C64:R64: 1M 2M 3M 6M 9M 1Y 18M 2Y … 10Y)
@@ -58,13 +66,22 @@ NODES: Tuple[int, ...] = (0, 1, 2, 3) + tuple(range(6, 121, 3))
 #: today's row of the curve, the columns of the first quote (C), the first node's days (AB, "D0") and ln DF (BS, "L0")
 ROW, QUOTE_COL, DAY_COL = 65, 3, 28
 LN_COL = DAY_COL + len(NODES)
-#: the longest tenor quoted as an FX swap implied yield (TRYI…); the longer ones are cross currency swaps (TRYSAQ…)
-FX_SWAP_MAX = 18
-#: a tenor's kind: FX swap implied, cross currency swap, no FX price (the OIS quote as it is)
-FX_SWAP, XCCY, OIS = "fx", "xccy", "ois"
+#: the longest tenor quoted as an FX swap implied yield (TRYI…); the longer ones are cross currency swaps (TRYSAQ…) - 18M
+#: aside: no quote at all, computed off the offshore curve between its 1Y and 2Y XCCY nodes (:func:`point_18m`)
+FX_SWAP_MAX = 12
+#: the tenor computed off the offshore curve and the XCCY nodes it lies between (TRYSAQ1, TRYSAQ2)
+CURVE_TENOR, CURVE_NODES = 18, (12, 24)
+#: a tenor's kind: FX swap implied, cross currency swap, computed off the offshore XCCY curve, no FX price (the OIS quote
+#: as it is)
+FX_SWAP, XCCY, CURVE, OIS = "fx", "xccy", "curve", "ois"
 #: how a kind of rate is read (the EK_FX table's words)
 RULES = {FX_SWAP: "FX swap ima: tek dönem, basit ACT/360", XCCY: "XCCY: yıllık par, ACT/360",
+         CURVE: "hesaplanan: XCCY 1Y–2Y eğrisinin 18A iskonto faktörü; par yıllık ACT/360, 6A + 12A (vadeden geriye)",
          OIS: "fiyat yok: OIS kotası, sayfanın kuralıyla"}
+#: what the computed tenor's source is called (EK_FX; ``%s``: the curve - the user's setting)
+CURVE_LABEL = "hesaplanan (XCCY 1Y–2Y, %s)"
+#: an XCCY's day basis and its coupon period in months (the coupons counted back from the maturity, the short one first)
+XCCY_BASIS, XCCY_PERIOD = 360.0, 12
 #: the quotes a solve looks between (%) and how close its discount factor must come to the target
 LOW, HIGH, TOLERANCE = -100.0, 1000.0, 1e-12
 #: the history's rows (day by day, oldest first: ``B66:Z325``) and the column of their days
@@ -81,10 +98,11 @@ _BRACKET = {m: (max(t for t in TENORS if t < m), min(t for t in TENORS if t > m)
 
 
 class Tenor(NamedTuple):
-    """A tenor of the FX swap implied curve: ``kind`` (``FX_SWAP``, ``XCCY``, ``OIS``), the rate ``quote``d (the FX rate,
-    or the OIS quote without one), the discount factor ``df`` the FX rate gives at the tenor by its own convention (None
-    for ``OIS``) and the ``par`` quote the sheet is given - the rate of its own convention with that discount factor
-    (the OIS quote for ``OIS``; None when there is none: a missing day or quote, a discount factor no quote reaches)."""
+    """A tenor of the FX swap implied curve: ``kind`` (``FX_SWAP``, ``XCCY``, ``CURVE``, ``OIS``), the rate ``quote``d (the
+    FX rate; the computed 18M XCCY par; the OIS quote without either), the discount factor ``df`` the FX rate gives at the
+    tenor by its own convention (the curve's at 18M; None for ``OIS``) and the ``par`` quote the sheet is given - the rate
+    of its own convention with that discount factor (the OIS quote for ``OIS``; None when there is none: a missing day or
+    quote, a discount factor no quote reaches)."""
     months: int
     kind: str
     quote: Optional[float]
@@ -92,8 +110,20 @@ class Tenor(NamedTuple):
     par: Optional[float]
 
 
+class Point(NamedTuple):
+    """A tenor read off the offshore curve (:func:`point_18m`): the discount factor there, the XCCY par (%: annual
+    ACT/360, the coupons counted back from the maturity) and the zero-coupon rate (%: compounded once a year, ACT/365 -
+    EK_FX's column K)."""
+    df: float
+    par: float
+    zero: float
+
+
 def kind_of(months: int) -> str:
-    """The kind of the FX rate of a tenor: an FX swap implied yield up to 18 months, a cross currency swap after."""
+    """The kind of the FX rate of a tenor: an FX swap implied yield up to 12 months, 18M computed off the offshore XCCY
+    curve, a cross currency swap after."""
+    if months == CURVE_TENOR:
+        return CURVE
     return FX_SWAP if months <= FX_SWAP_MAX else XCCY
 
 
@@ -112,6 +142,11 @@ def zero_rate(df: Any, days: Any) -> Optional[float]:
 
 def _num(v: Any) -> bool:
     return type(v) is float and math.isfinite(v)
+
+
+def _real(v: Any) -> bool:
+    """A finite number (an int too - not a bool)."""
+    return type(v) in (float, int) and math.isfinite(v)
 
 
 def _quote_at(m: int, pars: Dict[int, Optional[float]]) -> Optional[float]:
@@ -174,10 +209,13 @@ def _at(values: Sequence[Any], k: int) -> Optional[float]:
     return values[k] if k < len(values) and _num(values[k]) else None
 
 
-def to_sheet(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any]) -> List[Tenor]:
+def to_sheet(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any],
+             given: Optional[Dict[int, Optional[Point]]] = None) -> List[Tenor]:
     """The FX swap implied curve's tenors (``TENORS``) as the sheet is to be given them: ``ois`` the sheet's quotes
     (``C65:R65``), ``fx`` EK_FX's rates of the same tenors (``D6:D21``; anything but a number: no FX price), ``days``
-    the days to the sheet's nodes (``AB65:BR65``).  See the module's text for the conventions."""
+    the days to the sheet's nodes (``AB65:BR65``), ``given`` the tenors computed off the offshore curve - 18M: its
+    :class:`Point` (:func:`point_18m`; none: no price there, whatever ``fx`` says).  See the module's text for the
+    conventions."""
     day = [_at(days, i) for i in range(len(NODES))]
     pars: Dict[int, Optional[float]] = {}
     ln: List[Optional[float]] = [0.0] + [None] * (len(NODES) - 1)
@@ -186,7 +224,9 @@ def to_sheet(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any]) -> List
     done = 0                                                    # the last node worked out (with the tenors so far)
     for k, m in enumerate(TENORS):
         i = node_of(m)
-        rate = _at(fx, k)
+        kind = kind_of(m)
+        point = (given or {}).get(m) if kind == CURVE else None
+        rate = point.par if point is not None else (_at(fx, k) if kind != CURVE else None)
         if rate is None:
             q = _at(ois, k)
             pars[m] = q
@@ -194,8 +234,7 @@ def to_sheet(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any]) -> List
             done = i
             out.append(Tenor(m, OIS, q, None, q))
             continue
-        kind = kind_of(m)
-        target = _target(kind, rate, m, day, ln)
+        target = point.df if point is not None else _target(kind, rate, m, day, ln)
         par = _solve(target, m, pars, day, ln, h, done) if target is not None else None
         pars[m] = par
         _walk(pars, day, ln, h, done + 1, i)
@@ -213,15 +252,14 @@ def _target(kind: str, rate: float, m: int, day: Sequence[Optional[float]], ln: 
     if kind == FX_SWAP:
         x = 1 + r * d / 360
         return 1 / x if x > 0 else None
-    ann, last = 0.0, 0.0                                        # the yearly coupons before the last one
-    for y in range(12, m, 12):
+    pays = xccy_months(m)                                       # the coupons, counted back from the maturity
+    dfs = []
+    for y in pays[:-1]:
         j = node_of(y)
         if day[j] is None or ln[j] is None:
             return None
-        ann += (day[j] - last) / 360 * math.exp(ln[j])
-        last = day[j]
-    df = (1 - r * ann) / (1 + r * (d - last) / 360)
-    return df if df > 0 else None
+        dfs.append(math.exp(ln[j]))
+    return xccy_df(r, [day[node_of(y)] for y in pays[:-1]] + [d], dfs)
 
 
 def _solve(target: float, m: int, pars: Dict[int, Optional[float]], day: Sequence[Optional[float]],
@@ -254,17 +292,111 @@ def _solve(target: float, m: int, pars: Dict[int, Optional[float]], day: Sequenc
     return best if abs(miss(best)) <= TOLERANCE else None
 
 
+# ---------------------------------------------------------------------------------------------- XCCY and the 18M point
+def xccy_months(months: int) -> List[int]:
+    """The coupon months of an XCCY to ``months``: annual, counted back from the maturity - the short period first (the
+    desk, 18.11.2026: "18 ayda 6 ay + 12 ay olarak kupon ödemesi yapılıyor, sondan başlayıp"): 18M → 6, 18; 2Y → 12, 24;
+    27M → 3, 15, 27."""
+    return sorted(range(months, 0, -XCCY_PERIOD))
+
+
+def xccy_df(rate: float, days: Sequence[float], dfs: Sequence[float]) -> Optional[float]:
+    """The discount factor at the maturity of an XCCY at ``rate`` (a decimal: annual par, ACT/360) paying on ``days``
+    (from the spot, the maturity last: :func:`xccy_months`), ``dfs`` the discount factors of the coupons before the
+    maturity - ``(1 − r·Σ τ_k·DF_k) / (1 + r·τ_n)``, ``τ`` the days between / 360: the bootstrap's step, as the desk's
+    Forward sheet takes it (Forward!G126).  None where it gives none (≤ 0)."""
+    ann, last = 0.0, 0.0
+    for d, df in zip(days[:-1], dfs):
+        ann += (d - last) / XCCY_BASIS * df
+        last = d
+    x = 1 + rate * (days[-1] - last) / XCCY_BASIS
+    if x == 0:
+        return None
+    df = (1 - rate * ann) / x
+    return df if df > 0 else None
+
+
+def xccy_par(days: Sequence[float], dfs: Sequence[float]) -> Optional[float]:
+    """The par rate (a decimal) of an XCCY paying on ``days`` (from the spot, the maturity last) with the discount factors
+    ``dfs`` there: ``(1 − DF_n) / Σ τ_k·DF_k``, ACT/360 - the rate :func:`xccy_df` gives the same ``DF_n`` back of."""
+    ann, last = 0.0, 0.0
+    for d, df in zip(days, dfs):
+        ann += (d - last) / XCCY_BASIS * df
+        last = d
+    return (1 - dfs[-1]) / ann if ann > 0 else None
+
+
+def point_18m(curve: Any, d6: Any, d18: Any, shift: Any = 0.0) -> Optional[Point]:
+    """**The 18M point of the offshore curve** - computed, never a quote (the desk, 18.11.2026: "TRYI18M gerçek bir
+    kotasyon değil ... Zero'yu oradan bulmamız gerekli"; "18M hesaplanacak, gerçek kotasyon girilmeyecek").  The one
+    function behind every 18M a page shows: EK_FX's 18M row and the ASW FX curve (``Service._asw_fx_18m``, on the
+    user's curve setting), the ASW history's past days (:func:`history_row`).
+
+    ``curve``: the offshore TRY curve - anything with ``df(t)``, ``t`` days from its spot: the Forward sheet's
+    (OFF_GUN / OFF_LNDF, ln DF linear between its nodes: :class:`tto.ppkcurve.LogLinear` - Bootstrap) or ppkcurve's
+    offshore PPK curve (:class:`tto.ppkcurve.StepCurve` - PPK basamak); at 18M it lies between its 1Y and 2Y XCCY nodes
+    (TRYSAQ1, TRYSAQ2), and an 18M node of its own would be read as it is.  ``d6``, ``d18``: the days from the spot to the
+    point's coupon dates, counted back from the maturity (6M, then 12M on to 18M: :func:`xccy_months`); ``shift``: that
+    spot's day on the curve (the ASW sheet's spot − the FX spot).  The discount factor from that spot to 18M, the 18M
+    XCCY par on the curve with that schedule (ACT/360: :func:`xccy_par` - :func:`xccy_df` of it gives the discount factor
+    back) and the zero rate (:func:`zero_rate`); None where the curve or the days give none."""
+    if curve is None or not all(_real(x) for x in (d6, d18, shift)) or not 0 < d6 < d18:
+        return None
+    d6, d18, shift = float(d6), float(d18), float(shift)
+    try:
+        base = curve.df(shift)
+        df6, df18 = curve.df(shift + d6) / base, curve.df(shift + d18) / base
+    except (ArithmeticError, ValueError):
+        return None
+    if not (_real(df6) and _real(df18)) or df6 <= 0 or df18 <= 0:
+        return None
+    par = xccy_par([d6, d18], [float(df6), float(df18)])
+    zero = zero_rate(float(df18), d18)
+    if par is None or zero is None:
+        return None
+    return Point(df18, par * 100, zero)
+
+
+def xccy_curve(quotes: Sequence[Tuple[Any, Any]]) -> Optional[LogLinear]:
+    """The offshore XCCY curve made of ``quotes`` - ``(days from the spot, annual ACT/360 par %)`` of 1Y, 2Y … in order -
+    as the desk's Forward sheet bootstraps it (each node's discount factor from its rate and the yearly coupons before
+    it: :func:`xccy_df`), ln DF linear in days between the spot and its nodes (Bootstrap).  None without them all."""
+    days: List[float] = [0.0]
+    lns: List[float] = [0.0]
+    dfs: List[float] = []
+    for d, rate in quotes:
+        if not (_real(d) and _real(rate)) or d <= days[-1]:
+            return None
+        d = float(d)
+        df = xccy_df(rate / 100, days[1:] + [d], dfs)
+        if df is None:
+            return None
+        days.append(d)
+        dfs.append(df)
+        lns.append(math.log(df))
+    return LogLinear(days, lns) if len(days) > 1 else None
+
+
 # ---------------------------------------------------------------------------------------------- the history
 def history_series(defs: Sequence[Any]) -> List[Optional[Any]]:
     """The series of the dashboard's history that stands for each tenor (``TENORS``) on a past day: its FX swap implied
     yield (group ``off``: TRYI1M … TRYI9M), else its cross currency swap (``xccy``: TRYSAQ1 at 1Y, TRYSAQ2 … TRYSAQ10),
-    matched by months; None where the history keeps neither (18M) - there the day's OIS quote stays.  ``defs``: the
-    history's series (``History.snapshot()["defs"]``, ``SeriesDef``: ``group``, ``months``)."""
+    matched by months; None where the history keeps neither, and at 18M - computed, from the two series of
+    :func:`history_pair` (:func:`history_row`).  ``defs``: the history's series (``History.snapshot()["defs"]``,
+    ``SeriesDef``: ``group``, ``months``)."""
     out: List[Optional[Any]] = []
     for m in TENORS:
-        out.append(next((d for g in HIST_GROUPS for d in defs
-                         if d.group == g and type(d.months) is float and abs(d.months - m) < 1e-9), None))
+        out.append(None if kind_of(m) == CURVE else next(
+            (d for g in HIST_GROUPS for d in defs if d.group == g and type(d.months) is float and abs(d.months - m) < 1e-9), None))
     return out
+
+
+def history_pair(defs: Sequence[Any]) -> Optional[Tuple[Any, Any]]:
+    """The series of the XCCY nodes the 18M point lies between - TRYSAQ1 and TRYSAQ2 (group ``xccy``, 12 and 24 months),
+    whatever stands for 1Y in :func:`history_series`; None without both."""
+    got = [next((d for d in defs if d.group == "xccy" and type(d.months) is float and abs(d.months - m) < 1e-9), None)
+           for m in CURVE_NODES]
+    return (got[0], got[1]) if got[0] is not None and got[1] is not None else None
 
 
 def history_anchors(sheet: Any) -> List[Optional[int]]:
@@ -278,9 +410,25 @@ def history_anchors(sheet: Any) -> List[Optional[int]]:
     return out
 
 
-def history_row(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any]) -> Tuple[List[Optional[float]], List[str]]:
+def history_point(xccy: Optional[Sequence[Any]], days: Sequence[Any]) -> Optional[Point]:
+    """A past day's 18M point: :func:`point_18m` on the offshore XCCY curve of that day's TRYSAQ1 and TRYSAQ2 closes
+    (``xccy``, %) at the sheet's node days of that row (``days``; :func:`xccy_curve`, ln DF linear - Bootstrap: a past day
+    has no PPK curve).  None without both closes."""
+    if xccy is None or len(xccy) != 2:
+        return None
+    d = [_at(days, node_of(m)) for m in (6, 18) + CURVE_NODES]
+    if any(x is None for x in d):
+        return None
+    curve = xccy_curve([(d[2], xccy[0]), (d[3], xccy[1])])
+    return point_18m(curve, d[0], d[1]) if curve is not None else None
+
+
+def history_row(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any],
+                xccy: Optional[Sequence[Any]] = None) -> Tuple[List[Optional[float]], List[str]]:
     """A past day of the history on the offshore curve, tenor by tenor: the par quote of the sheet's convention the row is
     given for that day's rate (None: no quote reaches its discount factor; ``to_sheet``) and the kind of the quote
-    (``FX_SWAP``, ``XCCY``: a rate of that day; ``OIS``: none - the row keeps its OIS quote as it is)."""
-    got = to_sheet(ois, fx, days)
+    (``FX_SWAP``, ``XCCY``: a rate of that day; ``CURVE``: 18M computed from that day's TRYSAQ1 and TRYSAQ2 closes,
+    ``xccy`` - :func:`history_point`; ``OIS``: none - the row keeps its OIS quote as it is)."""
+    point = history_point(xccy, days)
+    got = to_sheet(ois, fx, days, {CURVE_TENOR: point} if point is not None else None)
     return [t.par for t in got], [t.kind for t in got]
