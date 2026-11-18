@@ -1736,6 +1736,43 @@ def _asw_fx(model: Model) -> None:
            "(DF^(−365/gün) − 1).")
 
 
+# ---------------------------------------------------------------------------------------------- the ASW history offshore
+#: what the ASW history's chart (the sheet's second chart) is drawn against - OIS (the workbook's chart), the offshore
+#: curve or both (``Service._asw_hist_fx``): each user's choice, typed beside the history's other parameters (J3, L3) -
+#: its caption and its cell
+ASW_HIST_LABEL, ASW_HIST_PICK = "M3", "N3"
+ASW_HIST_CHOICES = ("OIS", "Offshore", "İkisi")
+ASW_HIST_NAME = "ASW geçmişi offshore"
+
+
+def _asw_hist_check(model: Model) -> None:
+    """The ASW sheet's history as ``aswfx`` / the service read it: its days and 1M quotes one BDH block (B66, its dates),
+    each other tenor's quotes one (D66 … R66), the bonds' ASW in X:Z; the two cells of the choice still empty."""
+    _need_sheets(model, "ASW")
+    _need_captions(model, (("ASW", "I3", "Geçmiş (gün)"), ("ASW", "K3", "Fiyat alanı"), ("ASW", "B64", "Tarih"),
+                           ("ASW", "X64", "ASW 1"), ("ASW", "Z64", "ASW 3")))
+    _need_formula(model, "ASW", "B66", '_xll.BDH($C$63&" Curncy"')
+    for k in range(1, len(aswfx.TENORS)):
+        col = index_to_col(aswfx.QUOTE_COL + k)                     # D .. R
+        _need_formula(model, "ASW", "%s66" % col, '_xll.BDH(%s$63&" Curncy"' % col)
+    _need_formula(model, "ASW", "X66", "(FF66-FC66)/FG66")
+    sh = model.sheet("ASW")
+    if None in aswfx.history_anchors(sh):
+        raise ValueError("ASW!C66:R66 BDH dizilerinin hücreleri değil")
+    for addr in (ASW_HIST_LABEL, ASW_HIST_PICK):
+        rc = parse_a1(addr)
+        if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+            raise ValueError("ASW!%s boş değil" % addr)
+
+
+def _asw_hist(model: Model) -> None:
+    """The choice of the ASW history's chart: "Geçmiş grafiği" OIS (the workbook's chart, as before) / Offshore / İkisi."""
+    b = SheetBuilder(model, "ASW")
+    b.set(ASW_HIST_LABEL, "Geçmiş grafiği", like="K3")
+    b.set(ASW_HIST_PICK, ASW_HIST_CHOICES[0], like="L3")
+    b.dropdown(ASW_HIST_PICK, ASW_HIST_CHOICES)
+
+
 # ---------------------------------------------------------------------------------------------- more rows
 BULK_BOND_LAST = 52               # Bulk Bond: the workbook's four rows (3..6) and these more, to row 52
 BULK_SHEET = "EK_BULK"
@@ -3332,7 +3369,7 @@ def _tto_rets(model: Model) -> None:
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
-    "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx),),
+    "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx), (ASW_HIST_NAME, _asw_hist_check, _asw_hist)),
     # (the holiday sheet and the FX value dates first: the forward tables below date their tenors on its calendars)
     "tto": ((HOL_SHEET, _holidays_check, _tto_holidays), (FX_DATE_NAME, _fx_dates_check, _tto_fx_dates),
             (OIS_SPOT_NAME, _ois_spot_check, _tto_ois_spot),

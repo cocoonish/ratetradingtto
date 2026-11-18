@@ -222,6 +222,9 @@ a { color: var(--accent-ink); }
 .secthead:first-child { margin-top: 0; }
 .secthead .n { margin-left: 8px; font-weight: 500; letter-spacing: 0; }
 .panel > header .btn.sm { white-space: nowrap; }
+/* what a chart is drawn against (the ASW history: OIS / Offshore / İkisi) */
+.panel > header .chart-pick { flex: none; }
+.panel > header .chart-pick button { white-space: nowrap; }
 /* a button with its own small menu beside it ("Kotasyon kopyala ▾") */
 .splitbtn { display: inline-flex; flex: none; }
 .splitbtn > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }

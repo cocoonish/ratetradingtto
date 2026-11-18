@@ -30,11 +30,24 @@ without an FX price keeps its OIS quote as it is.
 
 **To the sheet**, tenor by tenor in order: the discount factor the rate gives by its own convention is the target; up to
 3M the sheet's quote with it is closed form (``p = (1/DF − 1) · 365/d``), from 6M on it is solved for - bisection on the
-replica of the sheet's formulas (:func:`sheet_curve`), whose discount factor at the tenor falls as its quote rises."""
+replica of the sheet's formulas (:func:`sheet_curve`), whose discount factor at the tenor falls as its quote rises.
+
+**The history** ("ASW geçmişi", ``ASW!B66:Z325``: day by day, oldest first, each row the sheet's curve and the chosen
+bonds' ASW on that day's OIS closes - ``C66:R325``, Bloomberg history blocks) on the offshore curve as well
+(``Service._asw_hist_fx``): each past row's quotes swapped the same way for that day's offshore rates.  Those are the
+dashboard's own daily closes (``tto/history.py``, nothing asked of Bloomberg for this), the series of each tenor by
+:func:`history_series`: the FX swap implied yields of the Forward sheet's offshore rows (group ``off``: TRYI1M … TRYI9M)
+at 1M–9M, its cross currency swaps (``xccy``) at 1Y (TRYSAQ1: the history keeps no TRYI12M - the desk's Forward sheet
+takes this very swap as its offshore 12M; at one year an annual ACT/360 par rate is one period simple ACT/360, the FX
+swap's reading) and at 2Y–10Y (TRYSAQ2 … TRYSAQ10, as EK_FX); each the first source with a close (ICPL, then the
+workbook's BGN ticker; ``SeriesDef.merged``).  18M has no series (no TRYI18M is kept), and a day without a close of a
+tenor has none either: there the day's OIS quote stays, as a tenor without an FX price does today."""
 from __future__ import annotations
 
 import math
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
+
+from .xl.model import COLS
 
 #: the tenors of the sheet's curve in months (ASW!C64:R64: 1M 2M 3M 6M 9M 1Y 18M 2Y … 10Y)
 TENORS: Tuple[int, ...] = (1, 2, 3, 6, 9, 12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120)
@@ -52,9 +65,17 @@ RULES = {FX_SWAP: "FX swap ima: tek dönem, basit ACT/360", XCCY: "XCCY: yıllı
          OIS: "fiyat yok: OIS kotası, sayfanın kuralıyla"}
 #: the quotes a solve looks between (%) and how close its discount factor must come to the target
 LOW, HIGH, TOLERANCE = -100.0, 1000.0, 1e-12
+#: the history's rows (day by day, oldest first: ``B66:Z325``) and the column of their days
+HIST_FIRST, HIST_LAST, HIST_DATE_COL = 66, 325, 2
+#: the groups of the dashboard's history a tenor's series is looked for in, in this order (tto/history.py): the Forward
+#: sheet's FX swap implied yields (TRYI…), then its cross currency swaps (TRYSAQ…)
+HIST_GROUPS = ("off", "xccy")
 
 _INDEX = {m: i for i, m in enumerate(NODES)}
 _TENOR_SET = frozenset(TENORS)
+#: a node between two tenors: the two (the quotes it is interpolated between)
+_BRACKET = {m: (max(t for t in TENORS if t < m), min(t for t in TENORS if t > m)) for m in NODES
+            if m not in _TENOR_SET and TENORS[0] < m < TENORS[-1]}
 
 
 class Tenor(NamedTuple):
@@ -96,8 +117,7 @@ def _quote_at(m: int, pars: Dict[int, Optional[float]]) -> Optional[float]:
     months (as the sheet writes it: ``a + (b − a) * 3 / 12``)."""
     if m in _TENOR_SET:
         return pars.get(m)
-    lo = max(t for t in TENORS if t < m)
-    hi = min(t for t in TENORS if t > m)
+    lo, hi = _BRACKET[m]
     a, b = pars.get(lo), pars.get(hi)
     if a is None or b is None:
         return None
@@ -230,3 +250,35 @@ def _solve(target: float, m: int, pars: Dict[int, Optional[float]], day: Sequenc
             hi = mid
     best = min((lo, hi), key=lambda p: abs(miss(p)))
     return best if abs(miss(best)) <= TOLERANCE else None
+
+
+# ---------------------------------------------------------------------------------------------- the history
+def history_series(defs: Sequence[Any]) -> List[Optional[Any]]:
+    """The series of the dashboard's history that stands for each tenor (``TENORS``) on a past day: its FX swap implied
+    yield (group ``off``: TRYI1M … TRYI9M), else its cross currency swap (``xccy``: TRYSAQ1 at 1Y, TRYSAQ2 … TRYSAQ10),
+    matched by months; None where the history keeps neither (18M) - there the day's OIS quote stays.  ``defs``: the
+    history's series (``History.snapshot()["defs"]``, ``SeriesDef``: ``group``, ``months``)."""
+    out: List[Optional[Any]] = []
+    for m in TENORS:
+        out.append(next((d for g in HIST_GROUPS for d in defs
+                         if d.group == g and type(d.months) is float and abs(d.months - m) < 1e-9), None))
+    return out
+
+
+def history_anchors(sheet: Any) -> List[Optional[int]]:
+    """The array formula whose result holds each tenor's history quotes (``C66:R325``), by its anchor (``rc``): ``B66``
+    for 1M (one BDH call with its days: ``B:C``), ``D66`` … ``R66`` one BDH each; None where the cell is neither (a
+    workbook of another layout).  ``sheet``: the ASW sheet of the model (``fml``, ``members``)."""
+    out: List[Optional[int]] = []
+    for k in range(len(TENORS)):
+        rc = HIST_FIRST * COLS + QUOTE_COL + k
+        out.append(rc if rc in sheet.fml else sheet.members.get(rc))
+    return out
+
+
+def history_row(ois: Sequence[Any], fx: Sequence[Any], days: Sequence[Any]) -> Tuple[List[Optional[float]], List[str]]:
+    """A past day of the history on the offshore curve, tenor by tenor: the par quote of the sheet's convention the row is
+    given for that day's rate (None: no quote reaches its discount factor; ``to_sheet``) and the kind of the quote
+    (``FX_SWAP``, ``XCCY``: a rate of that day; ``OIS``: none - the row keeps its OIS quote as it is)."""
+    got = to_sheet(ois, fx, days)
+    return [t.par for t in got], [t.kind for t in got]

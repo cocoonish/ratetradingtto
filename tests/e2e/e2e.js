@@ -1908,6 +1908,26 @@ async function clipAfter(page, action) {
     check('DİBS ASW table: its bonds only (no empty rows), kind by kind as the trading list has them',
       aswCaps.length === 3 && aswCaps[0] === 'Bono · 2 kâğıt' && aswRows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[0])).length === 19
       && !aswRows.some((r) => r[0] === ''), aswCaps);
+    // the history chart against OIS (as before), the offshore curve or both: a small selector on the chart writes the
+    // user's own "Geçmiş grafiği" (ASW!N3, Parametreler) - Offshore draws the same chart on the offshore calculation
+    const pickState = () => page.evaluate(() => {
+      const p = document.querySelector('.panel[data-panel="chart1"]');
+      return { title: p.querySelector('header h2').textContent, on: [...p.querySelectorAll('#chart-pick-chart1 button.on')].map((b) => b.textContent),
+        options: [...p.querySelectorAll('#chart-pick-chart1 button')].map((b) => b.textContent) };
+    });
+    const pick0 = await pickState();
+    await page.click('#chart-pick-chart1 button[data-pick="Offshore"]');
+    await page.waitForFunction(() => / offshore /.test(document.querySelector('.panel[data-panel="chart1"] header h2').textContent), null, { timeout: 30000 });
+    const pick1 = await pickState();
+    const n3 = (await cellText(page, 'ASW!N3')).trim();
+    await page.click('#chart-pick-chart1 button[data-pick="OIS"]');
+    await page.waitForFunction(() => !/offshore/.test(document.querySelector('.panel[data-panel="chart1"] header h2').textContent), null, { timeout: 30000 });
+    const pick2 = await pickState();
+    check('ASW history chart: OIS / Offshore / İkisi - the selector draws it on the offshore curve and back, the choice the user\'s own (ASW!N3)',
+      JSON.stringify(pick0.options) === JSON.stringify(['OIS', 'Offshore', 'İkisi']) && pick0.on.join() === 'OIS'
+      && pick0.title === 'ASW geçmişi (son nokta canlı)' && pick1.on.join() === 'Offshore'
+      && pick1.title === 'ASW geçmişi · offshore eğrisine göre (son nokta canlı)' && n3 === 'Offshore'
+      && pick2.on.join() === 'OIS' && pick2.title === pick0.title, { pick0, pick1, pick2, n3 });
     await shot(page, '12-asw');
 
     // ------------------------------------------------------------------ history: matrix, meeting pricing, calendar
