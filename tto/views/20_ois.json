@@ -426,6 +426,7 @@
    "title": "EN İYİ 15 FRA",
    "ranked": true,
    "range": "A64:L80",
+   "append": "fra_buckets",
    "hidden": false
   },
   {
@@ -512,6 +513,7 @@
    "type": "table",
    "title": "TÜM FORWARD / FRA",
    "range": "A334:T438",
+   "append": "fra_buckets",
    "hidden": false,
    "collapsed": true
   },

@@ -2037,6 +2037,8 @@ class Service(object):
                     _column_captions(entry["data"], p["header"])
                 if p.get("append") == "asw_fx":
                     self._asw_fx_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "fra_buckets":
+                    self._fra_bucket_columns(book, calc, entry["data"], loc)
                 elif p.get("append") == "fx_curve":
                     self._fx_curve_columns(book, self._asw_fx_calc(book, user)[0], entry["data"], loc)
                 elif p.get("append") == "broker_bonds":
@@ -5648,6 +5650,76 @@ class Service(object):
             else:
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
+        data["added"] = int(data.get("added") or 0) + 2
+
+    #: OIS · PPK's FRA lists (OIS_MAIN): the whole list - its header row, its rows - and the 15 best (by their label in it)
+    FRA_ALL, FRA_ALL_HEAD, FRA_TOP, FRA_TOP_HEAD = (336, 438), 335, (66, 80), 65
+
+    def _fra_bucket_columns(self, book, calc, data: Dict[str, Any], loc) -> None:
+        """Where each FRA of OIS · PPK's lists goes in the desk's buckets, done in its YÖN at its Nominal as Günlük
+        İşlemler books it: two columns, the start leg's and the end leg's - the bucket (a leg between buckets in the next
+        one up, its own tenor beside: "18M ← 15M"; :func:`blotter.bucket`), the DV01 ($, + pay: the blotter's sign) and
+        the leg's rate.  The whole list's own columns: the legs' rates (I, J), DV01s (K, L), months (M, N), YÖN (D); the
+        15 best find their FRA there by its label."""
+        if "OIS_MAIN" not in book.model.sheet_index:
+            return
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows:
+            return
+        si = book.model.sheet_index["OIS_MAIN"]
+        get = lambda r, col: calc.get(si, r, col_to_index(col))                       # noqa: E731
+        legs: Dict[str, Tuple[int, ...]] = {}
+        for r in range(self.FRA_ALL[0], self.FRA_ALL[1] + 1):
+            label = get(r, "A")
+            if isinstance(label, str) and label.strip() and label.strip() not in legs:
+                legs[label.strip()] = (r,)
+        dv_fmt, rate_fmt = "#,##0", "0.00"
+
+        def leg_cell(months: Any, rate: Any, dv01: Any, sign: int, which: str, side: str) -> Dict[str, Any]:
+            if type(months) is not float or months <= 0 or type(dv01) is not float or type(rate) is not float:
+                return {"t": "", "k": ""}
+            m = int(round(months))
+            b = bl.bucket_months(m)
+            name = bl.month_label(b) + ("" if b == m else " ← " + bl.month_label(m))
+            dv = numfmt.format_value(abs(dv01), dv_fmt, loc) + " $"
+            text = "%s %s%s · %%%s" % (name, {1: "+", -1: "−"}.get(sign, ""), dv, numfmt.format_value(rate * 100.0, rate_fmt, loc))
+            cell = {"t": text, "k": "s", "al": "r",
+                    "tip": "%s bacağı (%s): %s kovasına %s · DV01 %s%s · oran %%%s%s" % (
+                        which, bl.month_label(m), bl.month_label(b), side or "yön yok", {1: "+", -1: "−"}.get(sign, ""), dv,
+                        numfmt.format_value(rate * 100.0, rate_fmt, loc),
+                        "" if b == m else " - %s'de işlem olmaz: bir sonraki kova" % bl.month_label(m))}
+            if sign:
+                cell["c"] = "pos" if sign > 0 else "neg"
+            return cell
+
+        head = [{"t": "Başlangıç bacağı → kova", "k": "s", "b": 1, "f": "hd",
+                 "tip": "Bu FRA YÖN'deki yönde, Nominal'le yapılınca başlangıç bacağının masanın kovasına yazılan DV01'i ($; + pay, − "
+                        "receive - Günlük İşlemler'in işareti) ve oranı. Kovalar arasındaki vade (15M, 21M, 27M …) bir sonraki "
+                        "kovaya yazılır (15M → 18M, 21M → 2Y, 27M → 3Y), Günlük İşlemler'deki gibi."},
+                {"t": "Bitiş bacağı → kova", "k": "s", "b": 1, "f": "hd",
+                 "tip": "Bitiş bacağının kovası, DV01'i ($; + pay, − receive) ve oranı - aynı kural. RECEIVE FRA: başlangıç pay, "
+                        "bitiş receive; PAY FRA tersi; YÖN \"–\" ise işaret yok."}]
+        for i, r in enumerate(rnums):
+            if r in (self.FRA_ALL_HEAD, self.FRA_TOP_HEAD):
+                rows[i].extend([dict(c) for c in head])
+                continue
+            src = None
+            if self.FRA_ALL[0] <= r <= self.FRA_ALL[1]:
+                src, yon = r, get(r, "D")
+            elif self.FRA_TOP[0] <= r <= self.FRA_TOP[1]:
+                label = get(r, "B")
+                src = legs.get(label.strip())[0] if isinstance(label, str) and label.strip() in legs else None
+                yon = get(r, "E")
+            if src is None:
+                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
+                continue
+            rec = yon == "RECEIVE"
+            sign = (1 if rec else -1) if yon in ("RECEIVE", "PAY") else 0          # the start leg: a RECEIVE FRA pays it
+            start_side = ("PAY" if rec else "RECEIVE") if sign else ""
+            end_side = ("RECEIVE" if rec else "PAY") if sign else ""
+            rows[i].extend([leg_cell(get(src, "M"), get(src, "I"), get(src, "K"), sign, "Başlangıç", start_side),
+                            leg_cell(get(src, "N"), get(src, "J"), get(src, "L"), -sign, "Bitiş", end_side)])
+        data["c"] = list(data.get("c") or []) + ["Başl. kova", "Bitiş kova"]
         data["added"] = int(data.get("added") or 0) + 2
 
     #: a bond's kind (the desk's list's) from a type letter of a sheet (B / S / T / E: DİBS RV's, the ASW sheet's)
