@@ -380,6 +380,23 @@ export class WatchPage {
       td.appendChild(m);
       return td;
     };
+    // ---- the firings nobody answered yet whose alarm has no row of its own below - a quant signal's alarm (the
+    //      Sinyaller list's desk alarm), anything else that rings for the desk: answered here with "Gördüm"
+    //      (the top bar counts them and leads here; a toast that went unseen - in the night - is no longer the only place)
+    const rowed = new Set([...(desk.alarms || []).map((a) => String(a.id)), ...(desk.system || []).map((s) => 'sys:' + s.kind)]);
+    const waiting = (desk.open || []).filter((e) => !rowed.has(String(e.alarm)));
+    if (waiting.length) {
+      box.appendChild(h('div', { class: 'desk-sub' }, 'Cevap bekleyenler'));
+      const wt = h('table', { class: 'plain watch', id: 'desk-open' });
+      wt.appendChild(h('tr', null, ...['Saat', 'Alarm', 'Ayrıntı', ''].map((x) => h('th', { class: 'l' }, x))));
+      for (const e of waiting) {
+        wt.appendChild(h('tr', { 'data-seq': String(e.seq), class: 'open' }, h('td', { class: 'l' }, e.at || ''),
+          h('td', { class: 'l' }, e.label || String(e.alarm || '')),
+          h('td', { class: 'l', style: { whiteSpace: 'normal' } }, e.text || ''),
+          acts(String(e.alarm), e, e.muted ? { until: '' } : null, e.label || String(e.alarm || ''))));
+      }
+      box.appendChild(wt);
+    }
     // ---- the alarms an administrator set
     box.appendChild(h('div', { class: 'desk-sub' }, 'Masanın alarmları'));
     if (!desk.alarms.length) {
