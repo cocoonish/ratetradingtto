@@ -133,7 +133,7 @@ class _SessionGate(object):
             if hit is None:
                 hit = await run_in_threadpool(svc.resolve_session, token)
             user, role = hit
-            svc.saw(user)                              # (who has the dashboard open: their calculations are kept)
+            svc.saw(user, token)                       # (who has the dashboard open: their calculations are kept; presence)
         scope["tto_user"] = user
         scope["tto_role"] = role
         scope["tto_token"] = token
@@ -278,6 +278,17 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def users(request: Request):
         return ok({"users": await call_free(svc().store.users)})
+
+    @handler
+    async def presence(request: Request):
+        # who is at the desk (presence.py): GET - the list, the same for everybody (no address); POST {"idle": seconds} -
+        # the page's word that somebody typed, clicked, scrolled or moved the mouse in it (at most once a minute; memory
+        # only, no thread)
+        if request.method == "GET":
+            return ok(await call_free(svc().presence_view, _user(request)))
+        data = await _body(request)
+        svc().presence.active(_user(request), request.scope.get("tto_token"), data.get("idle"))
+        return ok({"ok": True})
 
     @handler
     async def status(request: Request):
@@ -1145,6 +1156,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
         service = svc()
         who = _user(request)
+        token = request.scope.get("tto_token")              # (presence: this browser holds its stream)
         # the counters of the desk's own corner go along (a chat message makes no new generation) - the reports' one
         # to an administrator only
         admin = await call_free(service.desk.is_admin, who)
@@ -1152,17 +1164,18 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         def message(gen: int) -> str:
             # (the quant signals' counters: the last alert's number, the version of the results - see quant.Quant.counters;
             # Broker Chat's changes: a box of its board asks again on those, not on every generation; the Trades page's
-            # lists - the desk's and this user's own, nobody else's - ride with the desk corner's counters)
+            # lists - the desk's and this user's own, nobody else's - ride with the desk corner's counters; who is
+            # online: the counts of the top bar's chip and the version its list follows)
             desk = service.desk.counters(admin)
             book = getattr(service, "tradebook", None)
             if book is not None:
                 desk["trades"] = book.counter(who)
             return "data: %s\n\n" % json.dumps({"gen": gen, "desk": desk, "quant": service.quant.counters(),
-                                                "broker": service.broker_changes})
+                                                "broker": service.broker_changes, "presence": service.presence.counters()})
 
         async def stream():
             service.add_listener(push)
-            service.stream(who, 1)
+            service.stream(who, 1, token)
             try:
                 yield message(service.gen)
                 while True:
@@ -1175,7 +1188,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                         break
             finally:
                 service.remove_listener(push)
-                service.stream(who, -1)
+                service.stream(who, -1, token)
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1193,6 +1206,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/admin/backup", admin_backup, methods=["GET", "POST"]),
         Route("/api/admin/backup/now", admin_backup_now, methods=["POST"]),
         Route("/api/users", users),
+        Route("/api/presence", presence, methods=["GET", "POST"]),
         Route("/api/status", status),
         Route("/api/progress", progress),
         Route("/api/nav", nav),

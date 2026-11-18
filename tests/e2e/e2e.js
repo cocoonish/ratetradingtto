@@ -825,6 +825,39 @@ async function clipAfter(page, action) {
     await page.click('.modal .mfoot .btn.primary');
     await pageB.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 2, null, { timeout: 15000 });
     check('deleting a trade updates the other user\'s screen live', true);
+
+    // who is online (tto/presence.py): the top bar's chip opens the desk's users - both signed in, each sees the other
+    // online; Mehmet signs out and Ayşe's open list shows him offline at once, with when he was last seen
+    await page.waitForSelector('#presence-chip:not(.hidden)', { timeout: 15000 });
+    await pageB.waitForSelector('#presence-chip:not(.hidden)', { timeout: 15000 });
+    await page.click('#presence-chip');
+    await pageB.click('#presence-chip');
+    const onlineRow = (p, user) => p.waitForSelector('#presence-list tr[data-user="' + user + '"][data-state="online"]', { timeout: 20000 })
+      .then(() => true, () => false);
+    const seesMehmet = await onlineRow(page, 'mehmet');
+    const seesAyse = await onlineRow(pageB, 'ayşe yilmaz');
+    const presenceRows = (p) => p.evaluate(() => ({ n: document.getElementById('presence-n').textContent,
+      rows: [...document.querySelectorAll('#presence-list tr[data-user]')].map((r) => [r.dataset.user, r.dataset.state,
+        r.querySelector('.pr-seen').textContent, r.querySelector('.pr-login').textContent, r.classList.contains('me')]) }));
+    const prA = await presenceRows(page);
+    const prB = await presenceRows(pageB);
+    const prNames = prA.rows.map((r) => r[0]);
+    check('who is online: two users signed in see each other online in the top bar chip\'s list (last seen "şimdi", a last login)',
+      seesMehmet && seesAyse && +prA.n >= 2 && +prB.n >= 2 && ['ayşe yilmaz', 'mehmet', 'zeynep'].every((u) => prNames.includes(u))
+      && prA.rows.some((r) => r[0] === 'ayşe yilmaz' && r[4]) && prB.rows.some((r) => r[0] === 'mehmet' && r[4])
+      && prA.rows.filter((r) => r[1] === 'online').every((r) => r[2] === 'şimdi' && r[3] !== '—'), { prA, prB });
+    await shot(page, '05-presence');
+    await pageB.click('#btn-user');
+    await pageB.click('.menu >> text=Çıkış');
+    await pageB.waitForSelector('#login:not(.hidden)');
+    const signedOut = await page.waitForSelector('#presence-list tr[data-user="mehmet"][data-state="offline"]', { timeout: 20000 })
+      .then(() => page.evaluate(() => {
+        const r = document.querySelector('#presence-list tr[data-user="mehmet"]');
+        return { state: r.querySelector('.pr-state').textContent, seen: r.querySelector('.pr-seen').textContent };
+      }), () => null);
+    check('... Mehmet signs out: offline in Ayşe\'s open list at once, with a "son görülme"', !!signedOut
+      && signedOut.state === 'çevrimdışı' && /^(şimdi|\d+ dk önce)$/.test(signedOut.seen), signedOut);
+    await page.click('#presence-chip');                               // (the list closes)
     await ctxB.close();
 
     // ------------------------------------------------------------------ broker chat

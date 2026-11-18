@@ -266,6 +266,11 @@ class Service(object):
         self._bbg_kept_at = 0.0                           # Bloomberg answers kept up to this time (_keep_bloomberg)
         self._seen: Dict[str, float] = {}                 # user -> when they last asked for anything (monotonic)
         self._streams: Dict[str, int] = {}               # user -> live-update streams open
+        # who is at the desk - online, away, offline -, when each was last seen and last signed in (presence.py: the top
+        # bar's "● 3 çevrimiçi"); a change of somebody's state tells the open pages as a desk change does (no generation)
+        from .presence import Presence
+        self.presence = Presence(self.store, on_change=self.nudge,
+                                 on_error=lambda exc: self.ops.failure("çevrimiçi durumu", exc))
         self._overlays: Dict[Tuple[str, str], Dict[Tuple[int, int], Any]] = {}
         self._retired: Dict[str, set] = {}
         # pages and headers kept per calculation (see view_future): key -> what was made, panel by panel
@@ -619,6 +624,7 @@ class Service(object):
                 threading.Thread(target=self._warmup_safe, name="tto-warmup", daemon=True).start()
             self.history.start()
             self.ops.start()
+            self.presence.start()
             self.quant.start()
             self.warm()
             threading.Thread(target=self._build_ref_indexes, name="tto-refs", daemon=True).start()
@@ -728,6 +734,7 @@ class Service(object):
         self.history._stop.set()                   # no new work while the provider goes down
         self.history._kick.set()
         self.ops.stop()
+        self.presence.stop()                       # (every "last seen" not written yet: kept for the next start)
         self.quant.stop()
         self.fx.stop()
         if self.mode == "live":
@@ -1086,12 +1093,15 @@ class Service(object):
 
     def open_session(self, user: str, ip: Optional[str] = None) -> str:
         """A new session of an active user - after a correct password or the first administrator's set-up.  The token
-        goes to the browser; the database keeps only its hash."""
+        goes to the browser; the database keeps only its hash.  A sign-in: its time and address are the account's
+        "last login" (the address for the administrators' account list only), and the user is online."""
         now = self._now()
         token = auth.new_token()
+        key = user_key(user)
         self.store.purge_sessions(auth.stamp(now))
-        self.store.add_session(auth.token_hash(token), user_key(user),
-                               auth.stamp(now + _dt.timedelta(days=auth.SESSION_DAYS)), ip)
+        self.store.add_session(auth.token_hash(token), key, auth.stamp(now + _dt.timedelta(days=auth.SESSION_DAYS)), ip)
+        self.store.update_account(key, last_login=auth.stamp(now), last_login_ip=ip)
+        self.presence.signed_in(key, token)
         return token
 
     def authenticate(self, name: Any, password: Any, ip: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
@@ -1123,6 +1133,7 @@ class Service(object):
         if token:
             self.store.drop_session(auth.token_hash(token))
             self.forget_sessions(token)
+            self.presence.signed_out(token)         # (offline for the others at once, unless another browser is open)
         return {"ok": True}
 
     def request_account(self, name: Any, password: Any, note: Any = "") -> Dict[str, Any]:
@@ -1184,14 +1195,19 @@ class Service(object):
         if not self._verify(key, acc, old):
             raise ServiceError("mevcut şifre hatalı", 403)
         self.store.update_account(key, pw_hash=self._new_password(new), failed=0, locked_until=None)
-        self.store.drop_sessions(key, keep=auth.token_hash(token) if token else None)
+        keep = auth.token_hash(token) if token else None
+        self.store.drop_sessions(key, keep=keep)
+        self.presence.ended(key, keep)
         self.forget_sessions()
         return {"ok": True}
 
     # ------------------------------------------------------------------ the administrators' page
     def accounts(self, user: Optional[str]) -> Dict[str, Any]:
+        """Every account for the administrators' page - with who is online now, when each was last seen (presence.py)
+        and their last sign-in with its address (``last_login_ip``: this list only)."""
         self.require_admin(user)
-        return {"accounts": self.store.accounts(), "pending": self.store.pending_count(), "admins": len(self.store.admins())}
+        return {"accounts": self.presence.mark(self.store.accounts()), "pending": self.store.pending_count(),
+                "admins": len(self.store.admins())}
 
     def admin_action(self, user: Optional[str], action: str, data: Dict[str, Any],
                      token: Optional[str] = None) -> Dict[str, Any]:
@@ -1276,6 +1292,7 @@ class Service(object):
         # signed in elsewhere with the old password: out - one's own page that asked stays
         keep = auth.token_hash(token) if (token and acc["name"] == me) else None
         self.store.drop_sessions(acc["name"], keep=keep)
+        self.presence.ended(acc["name"], keep)
 
     def _admin_status(self, me: str, data: Dict[str, Any]) -> None:
         acc = self._target(data)
@@ -1290,6 +1307,7 @@ class Service(object):
             raise ServiceError("son yöneticinin hesabı kapatılamaz")
         self.store.update_account(acc["name"], status="disabled", decided_by=me, decided_at=now_iso())
         self.store.drop_sessions(acc["name"])
+        self.presence.ended(acc["name"])
 
     # ------------------------------------------------------------------ the daily backup (the administrators' page)
     def backup_settings(self, user: Optional[str]) -> Dict[str, Any]:
@@ -1394,13 +1412,15 @@ class Service(object):
     #: a user seen this recently (seconds) - or with a live-update stream open - is connected
     CONNECTED_WINDOW = 120.0
 
-    def saw(self, user: Optional[str]) -> None:
-        """A request of the user (the session gate tells every one)."""
+    def saw(self, user: Optional[str], token: Optional[str] = None) -> None:
+        """A request of the user (the session gate tells every one, with its session ``token``: who is at the desk)."""
         if user:
             self._seen[user] = time.monotonic()
+            if token:
+                self.presence.request(user, token)
 
-    def stream(self, user: Optional[str], delta: int) -> None:
-        """A live-update stream of the user opened (+1) or closed (-1)."""
+    def stream(self, user: Optional[str], delta: int, token: Optional[str] = None) -> None:
+        """A live-update stream of the user (of the session ``token``) opened (+1) or closed (-1)."""
         if not user:
             return
         with self._gen_lock:
@@ -1410,6 +1430,12 @@ class Service(object):
             else:
                 self._streams.pop(user, None)
         self.saw(user)
+        if token:
+            self.presence.stream(user, token, delta)
+
+    def presence_view(self, user: Optional[str]) -> Dict[str, Any]:
+        """Who is at the desk - the top bar's list (presence.py): the same for everybody, no address."""
+        return self.presence.listing(self.require_user(user))
 
     def connected(self, user: Optional[str]) -> bool:
         """Whether the user has the dashboard open: a stream, or a request lately."""

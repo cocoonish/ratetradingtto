@@ -111,20 +111,23 @@ CREATE INDEX IF NOT EXISTS tradebook_log_who ON tradebook_log (scope, owner, id)
 #: model and quote in bp, and what the workbook tolerates), how many quotes were not that day's own close and
 #: which closes were not used (the roots of their tickers); a user's sign-in: the password hash, administrator
 #: or not, active / waiting for approval / closed, the note sent with a request and who decided on it, the wrong
-#: passwords in a row and until when the name is locked.  A user of an earlier version is an active user without
-#: a password: they ask for an account under the same name to set one.  An input typed as a formula (``=C60+7``):
-#: its text beside its value - the value is the formula's result as it was set (an earlier version reads the value).
+#: passwords in a row and until when the name is locked, the last sign-in and the address it came from (presence.py:
+#: ``last_seen`` is the last moment the user was connected from then on).  A user of an earlier version is an active
+#: user without a password: they ask for an account under the same name to set one.  An input typed as a formula
+#: (``=C60+7``): its text beside its value - the value is the formula's result as it was set (an earlier version reads
+#: the value).
 _ADDED_COLUMNS = {"mpc_days": (("control", "REAL"), ("tolerance", "REAL"), ("carried", "INTEGER"), ("cleaned", "TEXT")),
                   "users": (("pw_hash", "TEXT"), ("role", "TEXT NOT NULL DEFAULT 'user'"),
                             ("status", "TEXT NOT NULL DEFAULT 'active'"), ("note", "TEXT"), ("requested_at", "TEXT"),
                             ("decided_by", "TEXT"), ("decided_at", "TEXT"), ("failed", "INTEGER NOT NULL DEFAULT 0"),
-                            ("locked_until", "TEXT"), ("requested_new", "INTEGER NOT NULL DEFAULT 0")),
+                            ("locked_until", "TEXT"), ("requested_new", "INTEGER NOT NULL DEFAULT 0"),
+                            ("last_login", "TEXT"), ("last_login_ip", "TEXT")),
                   "user_inputs": (("formula", "TEXT"),),
                   "shared_inputs": (("formula", "TEXT"),),
                   # what an upload changed per tenor and where it came from (JSON: {"changes": [...], "source": ...})
                   "ret_history": (("meta", "TEXT"),)}
 _ACCOUNT_FIELDS = ("display", "last_seen", "pw_hash", "role", "status", "note", "requested_at", "decided_by", "decided_at",
-                   "failed", "locked_until", "requested_new")
+                   "failed", "locked_until", "requested_new", "last_login", "last_login_ip")
 
 
 def now_iso() -> str:
@@ -214,14 +217,22 @@ class Store(object):
             self._db.execute("PRAGMA synchronous=FULL")
             self._db.executescript(_SCHEMA)
             for table, columns in _ADDED_COLUMNS.items():
-                self._add_columns(table, columns)
+                added = self._add_columns(table, columns)
+                if table == "users" and "last_login" in added:
+                    # until then "last seen" was written at a sign-in only: it is the last sign-in of every account that
+                    # signed in after it was made (one made and never signed in keeps its creation time there)
+                    self._db.execute("UPDATE users SET last_login = last_seen WHERE last_seen > created_at")
 
-    def _add_columns(self, table: str, columns) -> None:
-        """Columns that came after a table was first created (a database of an earlier version keeps its rows)."""
+    def _add_columns(self, table: str, columns) -> List[str]:
+        """Columns that came after a table was first created (a database of an earlier version keeps its rows): the
+        ones added now."""
         have = {r["name"] for r in self._db.execute("PRAGMA table_info(%s)" % table).fetchall()}
+        added = []
         for name, kind in columns:
             if name not in have:
                 self._db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, kind))
+                added.append(name)
+        return added
 
     def close(self) -> None:
         with self._lock:
@@ -331,8 +342,9 @@ class Store(object):
     def accounts(self) -> List[Dict[str, Any]]:
         """Every account as the administrators see it - never a password hash - with how much each user has kept
         (personal inputs and scenarios: what a request for an existing name would take over)."""
-        rows = self._q("SELECT u.name, u.display, u.created_at, u.last_seen, u.role, u.status, u.note, u.requested_at, "
-                       "u.decided_by, u.decided_at, u.locked_until, u.requested_new, u.pw_hash IS NOT NULL AS has_password, "
+        rows = self._q("SELECT u.name, u.display, u.created_at, u.last_seen, u.last_login, u.last_login_ip, u.role, u.status, "
+                       "u.note, u.requested_at, u.decided_by, u.decided_at, u.locked_until, u.requested_new, "
+                       "u.pw_hash IS NOT NULL AS has_password, "
                        "(SELECT COUNT(*) FROM user_inputs i WHERE i.user = u.name) AS inputs, "
                        "(SELECT COUNT(*) FROM scenarios s WHERE s.user = u.name) AS scenarios "
                        "FROM users u ORDER BY u.display")
@@ -407,6 +419,18 @@ class Store(object):
 
     def purge_sessions(self, now: str) -> None:
         self._x("DELETE FROM sessions WHERE expires_at<=?", (now,))
+
+    # ------------------------------------------------------------------ who is at the desk (presence.py)
+    def desk_users(self) -> List[Dict[str, Any]]:
+        """The desk's users as the list of who is online shows them: the active accounts that can sign in (a request
+        waiting for approval, a closed account and one of the earlier version without a password are none)."""
+        return [dict(r) for r in self._q("SELECT name, display, created_at, last_seen, last_login FROM users "
+                                         "WHERE status='active' AND pw_hash IS NOT NULL ORDER BY display")]
+
+    def set_last_seen(self, items: Sequence[Tuple[str, str]]) -> None:
+        """Users' "last seen" (``(user, stamp)`` pairs), in one transaction - never moved back."""
+        with self.transaction() as db:
+            db.executemany("UPDATE users SET last_seen=? WHERE name=? AND last_seen<?", [(s, u, s) for u, s in items])
 
     # ------------------------------------------------------------------ personal inputs
     def _told(self, user: Optional[str], formulas: bool) -> None:
