@@ -2637,7 +2637,8 @@ neyin Bootstrap'ta kaldığı; tıklayınca Ayarlar) - meslektaşların farklı 
   aralıklarıdır.
 * **DİBS ASW kitabının bugünkü eğrisi** (`ASW!BT65:DI65`): kullanıcının seçimi o kitaba da yansır (`EK_INTERP!B2`, dashboard
   yazar); PPK'da ln DF düğümleri TRY kitabının MPC ima patikasının ASW kitabının kendi kotalarına (`C65:R65`) ve düğüm
-  günlerine kalibrasyonudur. Geçmiş satırları ve FX swap ASW sütunu (kendi eğrisi) Bootstrap'ta kalır.
+  günlerine kalibrasyonudur. Geçmiş satırları ve FX swap ASW sütunu (kendi eğrisi) Bootstrap'ta kalır - FX swap ASW'de yalnız 18A noktası
+  (EK_FX) kullanıcının ayarını izler.
 * **Trades** (masanın kararı, "Trades MTM de anahtara bağlansın"): MTM, carry, "Kupon", **Kuponlar** penceresi ve günlük /
   haftalık / toplam K/Z bakan kullanıcının eğrisiyle (araç çubuğunda "Eğri: …"). Masanın paylaşılan kayıtları iki eğride de
   alınır: **MTM yenile** ve günlük **kapanış kaydı** her işlemi Bootstrap ve PPK basamak ile değerler, herkes kendi ayarınınkini
@@ -2910,9 +2911,9 @@ TRY faizinin O/N karşılığı (sayfanın kendi F sütunu) ve gün sonu arşivi
   önce ICPL, yoksa BGN; MID yoksa bid–ask ortası; ticker kökleri ve kaynaklar ortak girdi) ile kurulan eğriyle de
   fiyatlanır. Fiyatı olmayan vadede OIS kotası kalır.
   **Her FX faizi kendi kuralıyla okunur** (`tto/aswfx.py`) - masanın kendi dosyası bu ticker'ları böyle okur (Forward'daki
-  offshore TRY iskonto eğrisi, DİBS RV'nin FX swap ASW'sinin arkasındaki: `Forward!AJ123:AN142`, `C123:K134`): 12 aya
-  kadar `TRYI…` FX swap ima, **tek dönem, basit ACT/360** (FX swap'ın kuponu yok: `DF = 1 / (1 + r·gün/360)`); 2 yıldan
-  `TRYSAQ…` XCCY, **yıllık ACT/360 par** (`DF_n = (1 − r·Σ τ·DF) / (1 + r·τ_n)`, önceki yılların iskonto faktörleri
+  offshore TRY iskonto eğrisi, DİBS RV'nin FX swap ASW'sinin arkasındaki: `Forward!AJ123:AN143`, `C123:K134`): 9 aya
+  kadar `TRYI…` FX swap ima, **tek dönem, basit ACT/360** (FX swap'ın kuponu yok: `DF = 1 / (1 + r·gün/360)`); 1 yıldan
+  `TRYSAQ…` XCCY (1Y `TRYSAQ1`, tek kupon), **yıllık ACT/360 par** (`DF_n = (1 − r·Σ τ·DF) / (1 + r·τ_n)`, önceki yılların iskonto faktörleri
   eğrinin o vadeye kadar kurulan düğümlerinden). Tür vadeye göredir; gün, sayfanın eğrisinde spot'tan vadeye gündür.
   Sayfanın formülleri değişmez: her FX faizi, sayfanın kendi kuralında (3 aya kadar tek dönem basit ACT/365, sonra
   çeyreklik ACT/365 par; iki vade arasındaki çeyrekte kotaların aylara göre doğrusal ortası) vadesinde **aynı iskonto

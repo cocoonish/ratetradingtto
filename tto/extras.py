@@ -1747,7 +1747,7 @@ def _asw_fx(model: Model) -> None:
            "eğriyle fiyatlanır. Her FX faizi kendi kuralıyla okunur - tür vadeye göredir: 9 aya kadar (TRYI…) FX swap ima, tek dönem basit "
            "ACT/360 (FX swap'ın kuponu yok); 1 yıldan (TRYSAQ…; 1Y TRYSAQ1, tek kupon) XCCY (TRY sabit / USD değişken), "
            "yıllık ACT/360 par (önceki yılların iskonto "
-           "faktörleri eğrinin o vadeye kadar kurulan düğümlerinden). Masanın kendi dosyası da bu ticker'ları böyle okur (Forward!AJ123:AN142, "
+           "faktörleri eğrinin o vadeye kadar kurulan düğümlerinden). Masanın kendi dosyası da bu ticker'ları böyle okur (Forward!AJ123:AN143, "
            "C123:K134). 18A kota değildir, hesaplanır: offshore eğrinin XCCY 1Y (TRYSAQ1) ile 2Y (TRYSAQ2) arasında 18A'daki iskonto faktörü - "
            "Ayarlar'daki eğri interpolasyonunuzla (Bootstrap: Forward'daki offshore eğri, ln DF günlere göre doğrusal; PPK basamak: offshore "
            "PPK eğrisi); faizi aynı eğride 18A XCCY par (yıllık ACT/360, kuponlar vadeden geriye: 6A, sonra 12A). Çalışma kitabının "

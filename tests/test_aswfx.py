@@ -1,6 +1,6 @@
 """DİBS ASW's FX swap implied TRY curve (``tto/aswfx.py``): EK_FX's rates read each by its own convention - up to 9M
 FX swap implied (TRYI), one period simple ACT/360; from 1Y cross currency swaps (TRYSAQ; 1Y TRYSAQ1, the desk,
-18.11.2026), annual ACT/360 par, as the desk's workbook reads them (Forward!AJ123:AN142, C123:K134); 18M no quote but
+18.11.2026), annual ACT/360 par, as the desk's workbook reads them (Forward!AJ123:AN143, C123:K134); 18M no quote but
 computed off the offshore XCCY curve, on
 each user's curve setting (the desk, 18.11.2026) - and given to the ASW sheet as the par quotes of the sheet's
 own convention with the same discount factor at the tenor.  The sheet's formulas are its own (a replica of them that

@@ -53,7 +53,8 @@ GRID_ROWS, GRID_DAY, GRID_ACCRUAL = (139, 178), 6, 4
 #: the offshore curve's quotes on Forward: TRYI 1W … 9M (H label, G days, J mid %), TRYSAQ1 … 10 (C, K, E)
 TRYI_ROWS, TRYI_LABEL, TRYI_DAY, TRYI_RATE = (8, 16), 8, 7, 10
 XCCY_ROWS, XCCY_LABEL, XCCY_DAY, XCCY_RATE = (125, 134), 3, 11, 5
-#: the OIS spot (OIS_MAIN!B2) and the FX spot the offshore curve counts from (Forward!I2: Bloomberg's SETTLE_DT text)
+#: the OIS spot (OIS_MAIN!B2: a TRY business day after today) and the FX spot the offshore curve counts from (Forward!I2:
+#: the USDTRY spot, a TRY + USD business day after today - extras.FX_SPOTS; Bloomberg's SETTLE_DT stands beside it in J2)
 OIS_SPOT, FX_SPOT = ("OIS_MAIN", 2, 2), ("Forward", 2, 9)
 #: MASA's broken-date block (KIRIK VADE & KARŞILIK, B170:N185): its rows whose market (column F) comes from a curve -
 #: the forward outright and points, the simple ACT/360 and ACT/365 rates and the O/N equivalent off the offshore

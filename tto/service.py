@@ -5691,11 +5691,14 @@ class Service(object):
         """The ASW sheet's calculation on the FX swap implied curve, over the user's own inputs: every tenor with an FX
         rate in EK_FX (D6:D21) gets, in the place of the OIS quote its curve is built from (ASW!C65:R65), the par quote
         of the sheet's own convention that gives the discount factor the rate gives by its own convention there
-        (``aswfx.to_sheet``: up to 12M FX swap implied, one period simple ACT/360; from 2Y XCCY, annual ACT/360 par - as
-        the desk's workbook reads them; 18M the discount factor of the offshore XCCY curve there, on the user's own curve
-        setting - :meth:`_asw_fx_18m` -, its XCCY par given to EK_FX!D12); a tenor without one keeps its OIS quote, one
-        whose rate gives no such quote is #N/A (the curve stops there, as the sheet's does at a missing quote).  The
-        sheet's formulas are its own.  ``None`` when no tenor has an FX rate; with the number that have one.  Made once
+        (``aswfx.to_sheet``: up to 9M FX swap implied, one period simple ACT/360; from 1Y XCCY - 1Y TRYSAQ1 -, annual
+        ACT/360 par - as the desk's workbook reads them; 18M the discount factor of the offshore XCCY curve there, on the
+        user's own curve setting - :meth:`_asw_fx_18m` -, its XCCY par given to EK_FX!D12); a tenor without one keeps its
+        OIS quote, one whose rate gives no such quote is #N/A (the curve stops there, as the sheet's does at a missing
+        quote).  The sheet's formulas are its own - for every user: this calculation takes the user's typed inputs only,
+        not the values worked out for them (``engine.derived``: the PPK basamak mirror of EK_INTERP), so its curve between
+        the nodes is the sheet's own whatever the user's interpolation setting; only the 18M point follows that setting
+        (docs/curves.md).  ``None`` when no tenor has an FX rate; with the number that have one.  Made once
         for what a page shows at a time (the table's ASW FX column, its chart and EK_FX's FX zero rates read the same one;
         anything changed since - the 18M point too: made again)."""
         si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]

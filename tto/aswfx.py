@@ -16,7 +16,7 @@ days from the spot to 43 nodes - the spot, 1, 2, 3 months, then every quarter to
 A bond's discount factor is log-linear in ln DF between the node days.
 
 **The FX rates' own conventions** - the desk's workbook reads the very same tickers so (its offshore TRY discount curve
-behind DİBS RV's FX swap ASW, Forward!AJ123:AN142 and C123:K134):
+behind DİBS RV's FX swap ASW, Forward!AJ123:AN143 and C123:K134):
 
 * up to 9 months ``TRYI…``, FX swap implied: one period, simple ACT/360 - an FX swap has no coupons:
   ``DF = 1 / (1 + r/100 · d/360)``;
