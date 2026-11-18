@@ -401,7 +401,10 @@ def panel(cv: Optional[Dict[str, Any]], get: Callable[[str, int, int], Any], loc
     if cv is None:                                         # (a workbook without the TRY curves' sheets: nothing to read)
         cv, off_boot, meets, spot = {"errors": ["TRY eğrileri bu çalışma kitabında yok"]}, None, [], None
     else:
-        off_boot, meets, spot = offshore_curve(get), meetings(get), _num(to_num(get(*pk.OIS_SPOT)))
+        # the offshore Bootstrap the curves were read with (Service._try_curves: the names - the desk's list of points'
+        # curve when its list differs from the default), else the Forward sheet's own
+        off_boot = cv["off_boot"] if cv.get("off_boot") is not None else offshore_curve(get)
+        meets, spot = meetings(get), _num(to_num(get(*pk.OIS_SPOT)))
     memo: Dict[str, List[float]] = {}
     items: Dict[str, Dict[str, Any]] = {}
     for h, _ in sorted(HORIZONS, key=lambda x: -x[1]):     # (the longest first: the shorter DF views take its first days)

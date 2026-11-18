@@ -3429,6 +3429,31 @@ INTERP_NAME = "Eğri interpolasyonu"
 #: the ASW book: its own EK_INTERP - the user's choice mirrored by the service (B2), and the PPK ln DF at each node of
 #: today's curve (C11:C52; aswfx.NODES)
 INTERP_ASW_NAME = "ASW eğri interpolasyonu"
+#: "Eğri noktaları" (18.11.2026: "Bu enterpolasyon noktalarına Ayarlar'dan ekle / çıkar yapabilmeliyim ... PPK'lar her
+#: zaman olmalı"): the desk's list of the points each TRY curve is built from (tto/curvepoints.py).  On the default list
+#: (today's quotes) every reader reads the workbook's own formulas, as before; a curve whose list differs takes its
+#: Bootstrap from the list (the PPK cells above are made from the list too):
+#:
+#: * ``LIST_OIS_ON`` / ``LIST_OFF_ON`` (N3 / N4) - 1 when the desk's OIS / offshore list differs from the default (the
+#:   service writes them: shared); ``LIST_OIS_USE`` / ``LIST_OFF_USE`` (N5 / N6) - 1 when it does and its cells are all
+#:   there (nested IFs: on the default list nothing reads the list's cells);
+#: * N11:N52 - the list's par rate at each of Motor's nodes (Motor's own method on the list's points: linear in months,
+#:   then its own bootstrap) - Motor's F reads it after the PPK branch: ``IF(PPK, …, IF(LIST_OIS_USE, N, own))``;
+#: * Q:S rows 10 … 137 - the offshore curve's node table on the list (a node at every point, ln DF linear in days): the
+#:   names read it after the PPK table;
+#: * U10:U29 - the Bloomberg tickers of the list's ticker points (written once the desk confirmed the cost of the new
+#:   subscription: an empty slot asks Bloomberg nothing), V:X their MID / BID / ASK, Y the rate (%: MID, else the middle).
+LIST_OIS_ON, LIST_OFF_ON, LIST_OIS_USE, LIST_OFF_USE = "N3", "N4", "N5", "N6"
+LIST_PAR_COL = "N"
+LIST_OFF_COLS = {"OFF_GUN": "Q", "OFF_LNDF": "R", "OFF_SL": "S"}
+LIST_TICKER_FIRST, LIST_TICKERS = 10, 20
+LIST_TICKER_COL, LIST_VALUE_COL = "U", "Y"
+
+
+def _fixed(addr: str) -> str:
+    """``N3`` -> ``$N$3``."""
+    m = re.match(r"^([A-Z]+)(\d+)$", addr)
+    return "$%s$%s" % (m.group(1), m.group(2))
 
 
 def interp_flag(count_range: str, count: int) -> str:
@@ -3482,7 +3507,8 @@ def _tto_interp(model: Model) -> None:
     b.set(INTERP_STATUS, '=IF($B$3=1,"PPK basamak: TLREF toplantılar arasında sabit, kotalara aynen oturur"&IF($B$4=1,"",'
                          '" (offshore eğri kurulamadı: offshore Bootstrap)"),IF($B$2="%s","PPK basamak seçili ama PPK eğrisi '
                          'kurulamadı (kota ya da MPC ima yok): Bootstrap kullanılıyor","%s: bugünkü eğri, Murex\'in MTM\'i"))'
-                         % (INTERP_PPK, INTERP_BOOT), bold=True, color=NOTE_COLOR)
+                         '&IF(OR(%s=1,%s=1)," · eğri noktaları masanın listesinden (Ayarlar → Eğri noktaları)","")'
+                         % (INTERP_PPK, INTERP_BOOT, _fixed(LIST_OIS_ON), _fixed(LIST_OFF_ON)), bold=True, color=NOTE_COLOR)
     b.set("A3", "OIS düğümleri PPK'da (1/0)", bold=True)
     b.set("A4", "Offshore düğümleri PPK'da (1/0)", bold=True)
     b.note("A5", "Bootstrap: her okuyucu bugünkü gibi - düğümlerde Motor'un bootstrap'ı, aralarında ln DF günlere göre doğrusal. "
@@ -3518,13 +3544,56 @@ def _tto_interp(model: Model) -> None:
         b.set("I%d" % r, None, fmt=INT0)
         b.set("J%d" % r, None, fmt="0.000000000")
         b.set("K%d" % r, None, fmt="0.0000000000")
-    # ---- Motor's par rates follow the choice ...
+    # ---- the desk's list of points (Ayarlar → Eğri noktaları): its flags, Motor's node pars and the offshore node table
+    #      on the list, the Bloomberg tickers of its ticker points
+    pc = LIST_PAR_COL
+    gun, ln, sl = (LIST_OFF_COLS[k] for k in ("OFF_GUN", "OFF_LNDF", "OFF_SL"))
+    b.title("M2", "EĞRİ NOKTALARI  ·  masanın listesi (Ayarlar → Eğri noktaları; dashboard yazar): varsayılandayken bu "
+                  "hücreleri hiçbir formül okumaz")
+    b.set("M3", "OIS listesi varsayılandan farklı (1/0)", bold=True)
+    b.set("M4", "Offshore listesi varsayılandan farklı (1/0)", bold=True)
+    b.set("M5", "OIS düğümleri listeden (1/0)", bold=True)
+    b.set("M6", "Offshore düğümleri listeden (1/0)", bold=True)
+    b.set(LIST_OIS_ON, 0.0, fmt="0", align="center")              # (the service's)
+    b.set(LIST_OFF_ON, 0.0, fmt="0", align="center")
+    b.set(LIST_OIS_USE, '=IF(%s=1,IF(COUNT($%s$%d:$%s$%d)=%d,1,0),0)' % (_fixed(LIST_OIS_ON), pc, k0, pc, k1, nodes),
+          fmt="0", align="center")
+    b.set(LIST_OFF_USE, '=IF(%s=1,IF(COUNT($%s$%d:$%s$%d)=%d,1,0),0)' % (_fixed(LIST_OFF_ON), gun, INTERP_OFF_FIRST, gun,
+                                                                        INTERP_OFF_LAST, INTERP_OFF_ROWS),
+          fmt="0", align="center")
+    b.note("M7", "Liste farklıyken Bootstrap listeden kurulur: OIS'te Motor'un yöntemiyle (noktaların par faizi aylara göre doğrusal, "
+                 "Motor'un düğümlerinde bootstrap - N sütunu Motor'un F'sine girer), offshore'da her nokta bir düğüm (Q:S, ln DF "
+                 "günlere göre doğrusal). PPK basamak (C, I:K) listedeki noktalara kalibre edilir.")
+    b.head("M%d" % (INTERP_FIRST - 1), ["Düğüm", "Par liste"])
+    for r in range(first, last + 1):
+        k = r - INTERP_SHIFT
+        b.set("M%d" % k, "=$A$%d" % k, bold=True, align="center")
+        b.set("%s%d" % (pc, k), None, fmt="0.0000%")               # (the service's; none at the spot)
+    b.head("P%d" % (INTERP_OFF_FIRST - 1), [None, "Offshore gün (liste)", "ln DF liste", "Eğim liste"])
+    for r in range(INTERP_OFF_FIRST, INTERP_OFF_LAST + 1):
+        b.set("%s%d" % (gun, r), None, fmt=INT0)
+        b.set("%s%d" % (ln, r), None, fmt="0.000000000")
+        b.set("%s%d" % (sl, r), None, fmt="0.0000000000")
+    tc = LIST_TICKER_COL
+    b.head("%s%d" % (tc, LIST_TICKER_FIRST - 1), ["Ticker (liste)", "MID", "BID", "ASK", "Oran %"])
+    for r in range(LIST_TICKER_FIRST, LIST_TICKER_FIRST + LIST_TICKERS):
+        b.set("%s%d" % (tc, r), None)                               # (the service's: a confirmed ticker point's)
+        for col, field in (("V", "MID"), ("W", "BID"), ("X", "ASK")):
+            b.set("%s%d" % (col, r), '=IF(LEN(TRIM($%s%d&""))<2,"",_xll.BDP(TRIM($%s%d),"%s"))' % (tc, r, tc, r, field), fmt="0.0000")
+        b.set("%s%d" % (LIST_VALUE_COL, r), '=IF(ISNUMBER($V%d),$V%d,IF(AND(ISNUMBER($W%d),ISNUMBER($X%d)),($W%d+$X%d)/2,""))'
+              % (r, r, r, r, r, r), fmt="0.0000", bold=True)
+    # ---- Motor's par rates follow the choice - and the list ...
     m = SheetBuilder(model, "Motor")
     for r in range(first + 1, last + 1):
-        m.patch("F%d" % r, "=IF(%s!$B$3=1,%s!$F$%d,%s)" % (e, e, r - INTERP_SHIFT, formula_of(model, "Motor", "F%d" % r)))
-    # ---- ... and so do the offshore curve's names (the PPK node table, or their own ranges as before)
+        k = r - INTERP_SHIFT
+        m.patch("F%d" % r, "=IF(%s!$B$3=1,%s!$F$%d,IF(%s!%s=1,%s!$%s$%d,%s))" % (
+            e, e, k, e, _fixed(LIST_OIS_USE), e, pc, k, formula_of(model, "Motor", "F%d" % r)))
+    # ---- ... and so do the offshore curve's names (the PPK node table, the list's, or their own ranges as before)
     for name, col in INTERP_OFF_COLS.items():
-        text = "IF(%s!$B$4=1,%s!$%s$%d:$%s$%d,%s)" % (e, e, col, INTERP_OFF_FIRST, col, INTERP_OFF_LAST, INTERP_OFF_RANGES[name])
+        own = LIST_OFF_COLS[name]
+        text = "IF(%s!$B$4=1,%s!$%s$%d:$%s$%d,IF(%s!%s=1,%s!$%s$%d:$%s$%d,%s))" % (
+            e, e, col, INTERP_OFF_FIRST, col, INTERP_OFF_LAST, e, _fixed(LIST_OFF_USE), e, own, INTERP_OFF_FIRST, own,
+            INTERP_OFF_LAST, INTERP_OFF_RANGES[name])
         model.names[name] = to_template(text, 1, 1)
 
 

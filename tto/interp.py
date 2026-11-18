@@ -19,6 +19,12 @@ cells and keeps them current:
 * :meth:`Interp.boot_view` - a user's calculation with the curve on Bootstrap (Günlük İşlemler's quotes and records: the
   desk's records stay on Bootstrap); :meth:`Interp.desk_view` - the desk's (shared) calculation on either curve (Trades:
   each viewer's curve; the snapshots kept for both).
+* **the desk's list of points** (Ayarlar → Eğri noktaları, tto/curvepoints.py) - on the default list nothing of this
+  is written (the workbook's own formulas, as before).  A curve whose list differs takes its Bootstrap from the list
+  (:meth:`Interp.apply_list`: the list's flags and its tickers, counted: a change of the desk's; :meth:`Interp.refresh_list`:
+  Motor's node pars and the offshore node table on the list, made from the desk's calculation - nothing of it reads them
+  - whenever what they are made of changed: the market loop, any calculation asked for), and the PPK cells are made from
+  the list's points.  A user whose own inputs touch the list's quotes gets list cells of their own, as above.
 """
 from __future__ import annotations
 
@@ -42,6 +48,8 @@ ABOUT = {BOOT: "Bugünkü eğri, Murex'in MTM'i: OIS par kotaları aylara göre 
               "O/N kaydırmayla bütün kotalara aynen oturur; offshore'da aynı patika + kotalar arasında sabit baz."}
 #: the engine-level groups of the PPK cells (one dependency bit each: the OIS nodes, the offshore table, the ASW nodes)
 GROUP_OIS, GROUP_OFF, GROUP_ASW, GROUP_MIRROR = "interp-ppk-ois", "interp-ppk-off", "interp-ppk-asw", "interp-mode-asw"
+#: ... and of the desk's list (Motor's node pars on the list, the offshore table on it, each curve's flag)
+GROUP_LIST_OIS, GROUP_LIST_OFF, GROUP_LIST_FLAG = "interp-list-ois", "interp-list-off", "interp-list-on"
 #: the offshore table's rows past the curve's last node lie on its last segment, this many days apart
 FAR = 36500.0
 #: the layers kept: a user's calculation with the curve on Bootstrap, the desk's on PPK
@@ -54,14 +62,17 @@ def _num(v: Any) -> Optional[float]:
 
 def off_nodes(curve: Any, quotes: Sequence[Any], rows: int) -> Optional[List[Tuple[float, float, float]]]:
     """The offshore curve's node table on PPK: ``(day, ln DF, slope)`` at the spot, every step of the PPK-shaped curve
-    (a meeting, the end of a basis stretch) up to its last quote and that quote's day - the readers interpolate ln DF
-    linearly between them, which is the step curve's own shape up to the weekend term - then the last segment's slope on,
-    the rest of the ``rows`` on that segment far beyond (as the sheet's own curve goes on past its last node).  ``None``
-    without a curve or a quote."""
+    (a meeting, the end of a basis stretch) and every quote's coupon day up to its last quote and that quote's day - the
+    readers interpolate ln DF linearly between them, which is the step curve's own shape up to the weekend term - then
+    the last segment's slope on, the rest of the ``rows`` on that segment far beyond (as the sheet's own curve goes on
+    past its last node).  ``None`` without a curve or a quote."""
     if curve is None or not quotes:
         return None
     last = max(q.end for q in quotes)
-    days = sorted({0.0, last} | {d for d, _ in curve.steps() if 0.0 < d < last})
+    # (a quote's coupon days too: on the default list each is an earlier quote's maturity already - a point of the desk's
+    # list counted back from its maturity has its own, and the table prices it back exactly with them)
+    coupons = {p for q in quotes for p in q.pays if 0.0 < p < last}
+    days = sorted({0.0, last} | {d for d, _ in curve.steps() if 0.0 < d < last} | coupons)
     if len(days) > rows:                            # (never with ~80 meetings and 19 quotes: the quotes kept first)
         ends = {q.end for q in quotes}
         keep = sorted(ends | {0.0})
@@ -70,6 +81,13 @@ def off_nodes(curve: Any, quotes: Sequence[Any], rows: int) -> Optional[List[Tup
     ln = [-curve.lng(d) for d in days]
     if len(days) < 2:
         return None
+    return _table(days, ln, rows)
+
+
+def _table(days: Sequence[float], ln: Sequence[float], rows: int) -> List[Tuple[float, float, float]]:
+    """``(day, ln DF, slope)`` rows of a node table as the offshore names read it (``LOOKUP``: the node at or before a day,
+    on along its slope): each node's slope to the next, the last one's the slope before it, then rows far beyond on that
+    last segment up to ``rows``."""
     slopes = [(ln[i + 1] - ln[i]) / (days[i + 1] - days[i]) for i in range(len(days) - 1)]
     slopes.append(slopes[-1])
     out = list(zip(days, ln, slopes))
@@ -79,6 +97,15 @@ def off_nodes(curve: Any, quotes: Sequence[Any], rows: int) -> Optional[List[Tup
         out.append((d0 + FAR * k, l0 + s0 * FAR * k, s0))
         k += 1
     return out
+
+
+def boot_nodes(curve: Any, rows: int) -> Optional[List[Tuple[float, float, float]]]:
+    """The offshore curve's node table on the desk's list (Bootstrap): a node at every point (:func:`ppkcurve.list_curves`'s
+    curve: the spot, then each point's maturity), as the Forward sheet's own table (AK:AN) holds its quotes'.  ``None``
+    without a curve (or with more nodes than rows)."""
+    if curve is None or len(curve.days) < 2 or len(curve.days) > rows:
+        return None
+    return _table(list(curve.days), list(curve.lndf), rows)
 
 
 class Interp(object):
@@ -104,6 +131,16 @@ class Interp(object):
                               for r in range(ex.INTERP_OFF_FIRST, ex.INTERP_OFF_LAST + 1)]
             self.status_cells = {k: (si, parse_a1(a)) for k, a in (("on", ex.INTERP_ON), ("off", ex.INTERP_OFF_ON),
                                                                        ("text", ex.INTERP_STATUS))}
+            # the desk's list of points: each curve's flag, Motor's node pars and the offshore table on the list, the
+            # tickers of its ticker points
+            pc = parse_a1(ex.LIST_PAR_COL + "1") % COLS
+            self.list_flags = {"ois": (si, parse_a1(ex.LIST_OIS_ON)), "off": (si, parse_a1(ex.LIST_OFF_ON))}
+            self.list_ois_cells = {r: (si, (r - ex.INTERP_SHIFT) * COLS + pc) for r in range(f + 1, l + 1)}
+            self.list_off_cells = [tuple((si, r * COLS + parse_a1(ex.LIST_OFF_COLS[n] + "1") % COLS)
+                                         for n in ("OFF_GUN", "OFF_LNDF", "OFF_SL"))
+                                   for r in range(ex.INTERP_OFF_FIRST, ex.INTERP_OFF_LAST + 1)]
+            tc = parse_a1(ex.LIST_TICKER_COL + "1") % COLS
+            self.ticker_cells = [(si, (ex.LIST_TICKER_FIRST + k) * COLS + tc) for k in range(ex.LIST_TICKERS)]
         if self.asw is not None:
             si = self.asw.model.sheet_index[ex.INTERP_SHEET]
             self.asw_mode_cell = (si, parse_a1(ex.INTERP_MODE))
@@ -134,6 +171,11 @@ class Interp(object):
         eng = self.tto.engine
         eng.declare_inputs(list(self.ois_cells.values()), group=GROUP_OIS)
         eng.declare_inputs([c for row in self.off_cells for c in row], group=GROUP_OFF)
+        eng.declare_inputs(list(self.list_ois_cells.values()), group=GROUP_LIST_OIS)
+        eng.declare_inputs([c for row in self.list_off_cells for c in row], group=GROUP_LIST_OFF)
+        for curve, cell in self.list_flags.items():
+            eng.declare_inputs([cell], group="%s-%s" % (GROUP_LIST_FLAG, curve))
+        eng.declare_inputs(self.ticker_cells)            # (each its own bit: a new ticker computes its own slot only)
         if self.asw is not None:
             self.asw.engine.declare_inputs([self.asw_mode_cell], group=GROUP_MIRROR)
             self.asw.engine.declare_inputs(self.asw_cells, group=GROUP_ASW)
@@ -191,10 +233,11 @@ class Interp(object):
         Motor's node days, the offshore node table - ``None`` where a curve cannot be made (the sheet then stays on
         Bootstrap).  With the curves read (:func:`ppkcurve.read`) and the masks of what was read."""
         idx = self.tto.model.sheet_index
+        points = self._points()
 
         def make():
             get = lambda sheet, r, c: calc.get(idx[sheet], r, c)          # noqa: E731
-            curves = pk.read(get)
+            curves = pk.read(get, points)
             days = {r: _num(get("Motor", r, pk.BOOT_DAY)) for r in self.ois_cells}
             return curves, days
 
@@ -271,7 +314,7 @@ class Interp(object):
     def _refresh_tto(self) -> Dict[str, Any]:
         eng = self.tto.engine
         calc = eng.shared
-        key = (eng.layout, calc.serial)
+        key = (eng.layout, calc.serial, self._rev())
         st = self._shared.get("tto")
         if st is not None and self._fresh(st, key, [(calc, st["epoch"], st["mask"])]):
             return st
@@ -301,6 +344,116 @@ class Interp(object):
         self._shared["asw"] = st
         return st
 
+    # ------------------------------------------------------------------ the desk's list of points (tto/curvepoints.py)
+    def _list(self) -> Any:
+        return getattr(self.svc, "curvepoints", None)
+
+    def _points(self) -> Optional[Dict[str, Any]]:
+        """The points of the curves whose list differs from the default (:func:`ppkcurve.read`'s ``points``)."""
+        cp = self._list()
+        return cp.specs() if cp is not None else None
+
+    def _rev(self) -> int:
+        cp = self._list()
+        return cp.rev if cp is not None else 0
+
+    def listed(self) -> bool:
+        """Whether any curve's list differs from the default (its Bootstrap then the list's)."""
+        cp = self._list()
+        return self.tto is not None and cp is not None and cp.custom()
+
+    def apply_list(self) -> None:
+        """The desk's list into the workbook - after a change and at the start: each curve's flag (1: its list differs
+        from the default) and the tickers of the ticker points (an empty slot asks Bloomberg nothing), a change of the
+        desk's inputs; then the list's own cells made again.  On the default list nothing changes.  Calculation thread."""
+        cp = self._list()
+        if self.tto is None or cp is None:
+            return
+        vals: Dict[Tuple[int, int], Any] = {cell: (1.0 if cp.custom(curve) else 0.0) for curve, cell in self.list_flags.items()}
+        tickers = cp.tickers()
+        for k, cell in enumerate(self.ticker_cells):
+            vals[cell] = tickers.get(k)
+        with self._lock:
+            self.tto.engine.set_inputs(vals)
+            self.refresh_list()
+
+    def refresh_list(self) -> Optional[Dict[str, Any]]:
+        """The desk's list cells - Motor's node pars and the offshore node table on the list - brought up to date: made
+        from the desk's calculation (which reads them; making them reads only the points' quotes, Motor's node days, the
+        spots and the calendars) when anything they were made of changed; emptied once no curve's list differs from the
+        default.  Calculation thread."""
+        if self.tto is None:
+            return None
+        with self._lock:
+            eng = self.tto.engine
+            st = self._shared.get("list")
+            if not self.listed():
+                if st is not None:
+                    eng.set_inputs({c: None for c in st["values"]}, counted=False)
+                    self._shared.pop("list", None)
+                return None
+            calc = eng.shared
+            key = (eng.layout, calc.serial, self._rev())
+            if st is not None and self._fresh(st, key, [(calc, st["epoch"], st["mask"])]):
+                return st
+            t0 = time.perf_counter()
+            vals, curves, mask = self._list_values(calc)
+            epoch = calc.epoch
+            eng.set_inputs(vals, counted=False)
+            st = {"key": key, "epoch": epoch, "mask": mask, "values": vals, "curves": curves}
+            self._shared["list"] = st
+            self.stats.update(list_made=self.stats.get("list_made", 0) + 1,
+                              list_ms=round((time.perf_counter() - t0) * 1000.0, 1))
+            return st
+
+    def list_errors(self) -> List[str]:
+        """Why the desk's list's curves could not be built as last made (the workbook's own curve stands meanwhile)."""
+        st = self._shared.get("list") or {}
+        return list((st.get("curves") or {}).get("errors") or [])
+
+    def _list_values(self, calc: Any) -> Tuple[Dict[Tuple[int, int], Any], Dict[str, Any], int]:
+        """The list cells out of ``calc``: Motor's node pars of the OIS list's Bootstrap, the offshore list's node table -
+        ``None`` for a curve on the default list (or one that cannot be built: the workbook's own then).  With the curves
+        (:func:`ppkcurve.list_curves`) and the masks of what was read."""
+        idx = self.tto.model.sheet_index
+        points = self._points() or {}
+
+        def make():
+            return pk.list_curves(lambda sheet, r, c: calc.get(idx[sheet], r, c), points)
+
+        curves, mask = self._tracked(calc, make)
+        vals: Dict[Tuple[int, int], Any] = {}
+        ois = curves.get("ois")
+        for r, cell in self.list_ois_cells.items():
+            vals[cell] = ois["pars"].get(r) if ois is not None else None
+        off = curves.get("off")
+        table = boot_nodes(off["boot"], len(self.list_off_cells)) if off is not None else None
+        for i, cells in enumerate(self.list_off_cells):
+            for j, cell in enumerate(cells):
+                vals[cell] = table[i][j] if table is not None else None
+        return vals, curves, mask
+
+    def _own_list(self, user: str, lst: Optional[Dict[str, Any]]) -> Optional[Dict[Tuple[int, int], Any]]:
+        """The user's own list cells when their own inputs touch what the desk's were made of (a point's quote typed over -
+        "Elle değer"): made from their calculation, kept while nothing they were made of changes.  ``None``: the desk's
+        stand for them."""
+        if lst is None:
+            self._own.pop((user, "list"), None)
+            return None
+        book = self.tto
+        if not (self._typed_bits(user, book, (self.mode_cell,)) & lst["mask"]):
+            self._own.pop((user, "list"), None)
+            return None
+        eng = book.engine
+        base = eng.users.get(user) or eng.set_user_inputs(user, self.svc._overlay(user, book))
+        key = (eng.layout, base.serial, self._rev())
+        st = self._own.get((user, "list"))
+        if st is not None and self._fresh(st, key, [(base, st["epoch"], st["mask"])]):
+            return st["values"]
+        vals, curves, mask = self._list_values(base)
+        self._own[(user, "list")] = {"key": key, "epoch": base.epoch, "mask": mask, "values": vals, "curves": curves}
+        return vals
+
     # ------------------------------------------------------------------ a user's calculation
     def sync(self, user: Optional[str], book: Any) -> None:
         """Before a user's calculation of ``book`` is used (``Service._calc``): on PPK, the desk's PPK cells current and
@@ -310,16 +463,26 @@ class Interp(object):
                 (book.id == "asw" and self.asw is None):
             return
         eng = book.engine
+        listed = book.id == "tto" and self.listed()
         if self.mode(user) != PPK:
-            if eng.derived.get(user):
+            if listed:
+                with self._lock:
+                    own = self._own_list(user, self.refresh_list())
+                eng.set_derived(user, own or {}, self.svc._overlay(user, book))
+            elif eng.derived.get(user):
                 eng.set_derived(user, {}, self.svc._overlay(user, book))
             self._own.pop((user, book.id), None)
+            if book.id == "tto" and not listed:
+                self._own.pop((user, "list"), None)
             return
         with self._lock:
+            lst = self.refresh_list() if listed else None
             tto_st = self.refresh()
             own_tto = self._own_tto(user, tto_st)
             if book.id == "tto":
-                eng.set_derived(user, own_tto[0] if own_tto is not None else {}, self.svc._overlay(user, book))
+                vals = dict(own_tto[0]) if own_tto is not None else {}
+                vals.update(self._own_list(user, lst) or {})
+                eng.set_derived(user, vals, self.svc._overlay(user, book))
                 return
             vals: Dict[Tuple[int, int], Any] = {self.asw_mode_cell: ex.INTERP_PPK}
             asw_st = self._shared.get("asw")
@@ -343,7 +506,7 @@ class Interp(object):
         eng = book.engine
         base = eng.users.get(user) or eng.set_user_inputs(user, self.svc._overlay(user, book))
         view = eng.layer((user, BOOT_LAYER), base, self.boot_cells(book))
-        key = (eng.layout, view.serial, base.serial)
+        key = (eng.layout, view.serial, base.serial, self._rev())
         st = self._own.get((user, "tto"))
         if st is not None and self._fresh(st, key, [(view, st["epoch"], st["mask"])]):
             return st["values"], st["curves"], st["tag"]
@@ -425,6 +588,8 @@ class Interp(object):
         if book is None:
             b = self.svc.books.get("tto")
             return (b.engine.shared if b is not None else None), BOOT
+        if self.listed():
+            self.refresh_list()                         # (the desk's calculation reads the list's cells)
         if curve != PPK:
             return book.engine.shared, BOOT
         with self._lock:
@@ -483,3 +648,4 @@ class Interp(object):
         for bid in ("tto", "asw"):
             self._own.pop((user, bid), None)
             self._typed.pop((user, bid), None)
+        self._own.pop((user, "list"), None)

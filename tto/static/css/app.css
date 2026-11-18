@@ -898,6 +898,30 @@ table.grid td.chartlink:hover { color: var(--accent-ink); text-decoration: under
 .set-table input.date.bad { border-color: var(--neg); }
 .warn-text { color: var(--warn); }
 
+/* the desk's list of curve points (settings): a table per curve, the PPK meetings greyed, an off point faded */
+.cp-tables { display: flex; flex-direction: column; gap: 12px; }
+.cp-head { font-size: 12.5px; margin-bottom: 4px; display: flex; gap: 8px; align-items: baseline; }
+.cp-tag { font-size: 11px; color: var(--accent); border: 1px solid var(--accent-soft); background: var(--accent-soft); border-radius: 6px;
+  padding: 0 6px; }
+.cp-scroll { max-height: 42vh; }
+.cp-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.cp-table th { position: sticky; top: 0; background: var(--hd-bg); color: var(--ink-2); font-weight: 600; font-size: 11.5px; text-align: left;
+  padding: 6px 10px; z-index: 1; }
+.cp-table td { padding: 3px 10px; border-top: 1px solid var(--line); white-space: nowrap; }
+.cp-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.cp-table td .iconbtn { margin-left: 6px; padding: 0 4px; font-size: 11.5px; }
+.cp-table td.cp-note-cell { white-space: normal; min-width: 160px; }
+.cp-table tr.cp-ppk td { color: var(--ink-3); background: var(--surface-2); }
+.cp-table tr.cp-off td { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
+.cp-table tr.cp-off td:last-child, .cp-table tr.cp-off td.cp-note-cell { text-decoration: none; }
+.cp-table tr.cp-calc td { font-style: italic; }
+.cp-differs { color: var(--warn); font-weight: 600; }
+.cp-check { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.cp-form { display: flex; flex-direction: column; gap: 4px; }
+.cp-rule { font-size: 11.5px; }
+.cp-log { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--ink-2); }
+.cp-log-head { font-weight: 600; color: var(--ink); margin-top: 4px; }
+
 /* the order of the pricing sources (settings) */
 .src-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .src-table th { background: var(--hd-bg); color: var(--ink-2); font-weight: 600; font-size: 11.5px; text-align: left; padding: 5px 8px; }

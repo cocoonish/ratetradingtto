@@ -2472,6 +2472,40 @@ async function clipAfter(page, action) {
     await page.waitForFunction(() => document.getElementById('interp-badge').classList.contains('hidden'), null, { timeout: 30000 });
     check('... back on Bootstrap: the mark goes and the number is as it was', (await curveV('MASA!F173')) === brokenBoot
       && (await api(page, 'ayşe yilmaz', 'GET', '/api/interp')).json.mode === 'boot', await curveV('MASA!F173'));
+    // the desk's list of curve points: a table per curve (the PPK meetings greyed, the computed 18M XCCY), an
+    // administrator adds a typed point with a note - the offshore curve is built on the list - and switches it off
+    const cpRows = (curve) => page.evaluate((c) => [...document.querySelectorAll('#cp-table-' + c + ' tbody tr')].map((tr) => ({
+      id: tr.dataset.id, cls: tr.className, cells: [...tr.children].map((td) => td.textContent.trim()) })), curve);
+    await page.waitForSelector('#cp-table-ois tbody tr', { timeout: 20000 });
+    const cpOis0 = await cpRows('ois'), cpOff0 = await cpRows('off');
+    check('settings: Eğri noktaları - OIS 1M … 10Y and the offshore TRYI / XCCY points from the workbook, the computed 18M XCCY, the PPK meetings greyed among them; the list is the default',
+      cpOis0.filter((r) => !/cp-ppk/.test(r.cls)).map((r) => r.cells[0]).join(' ') === '1M 2M 3M 6M 9M 1Y 18M 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y'
+      && cpOis0.some((r) => /cp-ppk/.test(r.cls) && r.cells[3] === 'takvimden') && cpOff0.some((r) => /cp-calc/.test(r.cls) && r.cells[0] === '18M')
+      && cpOff0.filter((r) => !/cp-ppk/.test(r.cls)).length === 20 && /Liste varsayılan/.test(await page.textContent('#cp-status')),
+    { ois: cpOis0.slice(0, 3), status: await page.textContent('#cp-status') });
+    await page.selectOption('#cp-add-curve', 'off');
+    await page.selectOption('#cp-add-kind', 'xccy');
+    await page.fill('#cp-add-when', '2Y3M');
+    await page.selectOption('#cp-add-source', 'typed');
+    await page.fill('#cp-add-rate', '42,10');
+    await page.fill('#cp-add-note', 'e2e aracı kotası');
+    await page.click('#cp-add');
+    await page.waitForFunction(() => [...document.querySelectorAll('#cp-table-off tbody tr')].some((tr) => /e2e aracı kotası/.test(tr.textContent)),
+      null, { timeout: 30000 });
+    const cpAdded = (await cpRows('off')).find((r) => /e2e aracı kotası/.test(r.cells.join(' ')));
+    const cpApi = (await api(page, 'ayşe yilmaz', 'GET', '/api/curve-points')).json;
+    check('... an administrator adds a 2Y3M XCCY typed at 42,10 % with its note: in the table (who added it), the offshore list differs, the curve is built on it',
+      cpAdded && cpAdded.cells[0] === '2Y3M' && /^42,1000%/.test(cpAdded.cells[4]) && /Ayşe Yılmaz/.test(cpAdded.cells[6])
+      && cpApi.custom.off === true && cpApi.custom.ois === false && /Liste varsayılandan farklı/.test(await page.textContent('#cp-status'))
+      && (await curveV('EK_INTERP!N6')) === 1, { cpAdded, custom: cpApi.custom });
+    await shot(page, '15b-settings-curve-points');
+    await page.click('#cp-table-off tr[data-id="' + cpAdded.id + '"] input.cp-on');
+    await page.waitForFunction(() => /Liste varsayılan:/.test((document.getElementById('cp-status') || {}).textContent || ''), null, { timeout: 30000 });
+    const cpOffRow = (await cpRows('off')).find((r) => r.id === cpAdded.id);
+    check('... switched off: the row stays with its note, the list is the default again, the curve the workbook\'s own',
+      cpOffRow && /cp-off/.test(cpOffRow.cls) && /e2e aracı kotası/.test(cpOffRow.cells[5])
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/curve-points')).json.custom.off === false && (await curveV('EK_INTERP!N6')) === 0
+      && (await curveV('MASA!F173')) === brokenBoot, cpOffRow);
     // the holidays: a list per currency - TRY of both TRY workbooks, USD and EUR of the FX value dates -, one tab each;
     // the SIFMA holidays and the FOMC meetings beside them
     const holText = await page.inputValue('#holidays-text');

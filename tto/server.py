@@ -579,6 +579,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().interp_settings, _user(request)))
 
     @handler
+    async def curve_points(request: Request):
+        # Ayarlar → Eğri noktaları: the desk's list of the points the TRY curves are built from - everyone reads it, an
+        # administrator changes it (a ticker point only with its cost confirmed)
+        if request.method == "POST":
+            return ok(await call(svc().set_curve_points, _user(request), await _body(request)))
+        return ok(await call(svc().curve_points, _user(request)))
+
+    @handler
     async def spreads(request: Request):
         return ok(await call(svc().spreads, _user(request)))
 
@@ -1264,6 +1272,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/vol/carry", carry_vol, methods=["GET", "POST"]),
         Route("/api/carry", carry_settings, methods=["GET", "POST"]),
         Route("/api/interp", interp_settings, methods=["GET", "POST"]),
+        Route("/api/curve-points", curve_points, methods=["GET", "POST"]),
         Route("/api/pricing", pricing, methods=["GET", "POST"]),
         Route("/api/spreads", spreads),
         Route("/api/broker", broker),

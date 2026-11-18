@@ -4,7 +4,7 @@ import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, modal, copyText } from '../ui.js';
 import { Grid, copyGrid } from '../grid.js';
 import { Chart } from '../chart.js';
-import { num, isoToTr } from '../format.js';
+import { num, pct, isoToTr } from '../format.js';
 import { SeriesView } from '../serieschart.js';
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
@@ -863,9 +863,9 @@ export class SettingsPage {
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
-    const [cal, cov, src, carry, hol, interp] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
+    const [cal, cov, src, carry, hol, interp, points] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
       api.get('/api/carry').catch(() => ({ available: false })), api.get('/api/holidays').catch(() => ({ available: false })),
-      api.get('/api/interp').catch(() => ({ available: false }))]);
+      api.get('/api/interp').catch(() => ({ available: false })), api.get('/api/curve-points').catch(() => ({ available: false }))]);
     if (this.dead) return;
     this.cal = cal;
     this.cov = cov;
@@ -873,6 +873,7 @@ export class SettingsPage {
     this.carry = carry;
     this.hol = hol;
     this.interp = interp;
+    this.points = points;
     this.holCcy = 'TRY';
     this.holEdits = {};                    // currency -> the list as typed and not saved yet (kept while another is shown)
     this.rows = cal.meetings.map((m) => ({ date: m.date, was: m.date }));
@@ -880,6 +881,7 @@ export class SettingsPage {
     clear(this.host);
     this.build();
     this.renderInterp();
+    this.renderPoints();
     this.renderCarry();
     this.renderSources(true);
     this.renderCalendar();
@@ -896,6 +898,14 @@ export class SettingsPage {
       if (this.dead) return;
       this.src = src;
       this.renderSources(false);
+    }
+    if (this.cpPanel && this.points && this.points.available && !this.cpBusy && !this.cpForm.contains(document.activeElement)) {
+      const points = await api.get('/api/curve-points').catch(() => null);      // (the points' values now)
+      if (this.dead) return;
+      if (points && !this.cpBusy && !this.cpForm.contains(document.activeElement)) {
+        this.points = points;
+        this.renderPoints();
+      }
     }
     if (!this.dirty) {
       const cal = await api.get('/api/calendar');
@@ -940,6 +950,33 @@ export class SettingsPage {
       + 'Bootstrap\'ta kalanlar: Günlük İşlemler ve masanın kayıtları, MTM yenile / kapanış kayıtlarının Bootstrap\'ı (ikisi de alınır), '
       + 'hedef / stop alarmları, quant, tarihçe, başkalarının ekranları. Ayar yalnız sizin için geçerlidir; "Girdilerimi sıfırla" '
       + 'Bootstrap\'a döndürür.');
+
+    // ---- the desk's list of curve points: what each TRY curve is built from (everyone sees it, administrators change it)
+    this.cpPanel = panel('Eğri noktaları · OIS ve offshore (masanın listesi)', { wide: true, id: 'curvepoints' });
+    this.cpInfo = h('div', { class: 'set-info', id: 'cp-info' });
+    this.cpReset = h('button', { class: 'btn', type: 'button', id: 'cp-reset',
+      title: 'Varsayılan noktalar açılır, eklenenler kapanır (listede notlarıyla kalır): herkesin eğrisi bugünkü gibi olur' }, 'Varsayılana dön');
+    this.cpReset.addEventListener('click', () => this.resetPoints());
+    this.cpShowPpk = h('input', { type: 'checkbox', id: 'cp-show-ppk' });
+    this.cpShowPpk.checked = true;
+    this.cpShowPpk.addEventListener('change', () => this.renderPoints());
+    this.cpTables = h('div', { class: 'cp-tables', id: 'cp-tables' });
+    this.cpForm = h('div', { class: 'cp-form', id: 'cp-form' });
+    this.cpLog = h('div', { class: 'cp-log', id: 'cp-log' });
+    this.cpPanel.body.appendChild(h('div', { class: 'set-body' }, this.cpInfo,
+      h('div', { class: 'set-actions' }, h('label', { class: 'cp-check' }, this.cpShowPpk, ' PPK toplantılarını göster'),
+        h('span', { class: 'grow' }), this.cpReset),
+      this.cpTables, this.cpForm, this.cpLog));
+    this.cpPanel.setNote('Eğrilerin kurulduğu noktalar masanın ortak listesidir: herkes görür, yalnız yöneticiler değiştirir (herkesin eğrisi '
+      + 'değişir), her değişiklik kayda geçer. Liste varsayılandayken (bugünkü kotalar: OIS_MAIN\'in kotalı vadeleri; Forward\'ın TRYI 1W … 9M '
+      + 've TRYSAQ 1 … 10 satırları) her sayfa çalışma kitabının kendi formülleriyle hesaplanır. Liste farklıyken iki yöntem de listedeki '
+      + 'noktalardan kurulur: Bootstrap - OIS\'te Motor\'un yöntemiyle (noktaların par faizi aylara göre doğrusal, Motor\'un çeyreklik '
+      + 'düğümlerinde bootstrap), offshore\'da her nokta bir düğüm (ln DF günlere göre doğrusal); PPK basamak - MPC ima patikası, bütün '
+      + 'noktalara aynen oturur. PPK toplantıları her zaman listededir (takvimden; PPK basamak orada basamaklanır, takvim değişince '
+      + 'kendiliğinden). Kapatılan nokta notuyla listede kalır, eğri onun üzerinden interpolasyon yapar. Hesaplanan nokta eğriye bilgi '
+      + 'eklemez: eğrinin o vadedeki par ve sıfır kupon faizidir (sizin interpolasyon ayarınızla; 18M XCCY 6A + 12A kuponla - EK_FX\'in '
+      + '18M\'i bunu kullanır). Bloomberg ticker\'lı nokta yeni bir canlı aboneliktir: eklemeden önce maliyeti söylenir ve onay istenir. '
+      + 'DİBS ASW listeyi izlemez (kendi kotaları ve günlük geçmişi var).');
 
     // ---- the carry: which TLREF path, over which horizons
     this.carryPanel = panel('Carry · TLREF patikası ve ufuklar', { wide: true, id: 'carry' });
@@ -1088,8 +1125,204 @@ export class SettingsPage {
         h('div', { class: 'field' }, h('label', null, 'Geriye bakış (gün)'), this.daysInp),
         saveSet, h('span', { class: 'grow' }), sync, redo)));
     this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.interpPanel.el, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el, this.calPanel.el,
-      this.holPanel.el, this.histPanel.el, this.seriesPanel.el));
+    this.host.appendChild(h('div', { class: 'panels' }, this.interpPanel.el, this.cpPanel.el, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el,
+      this.calPanel.el, this.holPanel.el, this.histPanel.el, this.seriesPanel.el));
+  }
+
+  // ------------------------------------------------------------------ the desk's list of curve points
+  renderPoints() {
+    const d = this.points;
+    if (!d || !d.available) {
+      this.cpPanel.el.classList.add('hidden');
+      return;
+    }
+    const edit = !!d.can_edit;
+    const custom = d.curves.filter((c) => c.custom);
+    clear(this.cpInfo).append(
+      custom.length
+        ? h('span', { id: 'cp-status', class: 'cp-differs' }, 'Liste varsayılandan farklı: '
+          + custom.map((c) => c.title + ' – ' + c.differs.join(', ')).join(' · '))
+        : h('span', { id: 'cp-status' }, 'Liste varsayılan: eğriler çalışma kitabının kendi kotalarıyla (bugünkü gibi).'),
+      h('span', { class: 'muted' }, 'Hesaplanan noktalar sizin ayarınızla: ', h('b', null, d.mode_text)),
+      edit ? null : h('span', { class: 'muted' }, 'Listeyi yalnız yöneticiler değiştirir (herkesin eğrisi değişir).'),
+      d.errors && d.errors.length ? h('span', { class: 'warn-text', id: 'cp-errors' }, 'Listenin eğrisi kurulamadı - çalışma kitabının kendi '
+        + 'eğrisi kullanılıyor: ' + d.errors.join('; ')) : null);
+    this.cpReset.classList.toggle('hidden', !edit);
+    this.cpReset.disabled = !custom.length;
+    const showPpk = this.cpShowPpk.checked;
+    clear(this.cpTables);
+    for (const c of d.curves) {
+      const table = h('table', { class: 'cp-table', id: 'cp-table-' + c.id });      // (not .set-table: the calendar's own)
+      table.appendChild(h('thead', null, h('tr', null, ...['Vade / tarih', 'Gün', 'Tür', 'Kaynak', 'Son değer', 'Not', 'Ekleyen · tarih', 'Açık']
+        .map((t) => h('th', null, t)))));
+      const body = h('tbody');
+      for (const r of c.rows) {
+        if (r.ppk && !showPpk) continue;
+        body.appendChild(this.pointRow(r, edit));
+      }
+      table.appendChild(body);
+      this.cpTables.appendChild(h('div', { class: 'cp-curve' },
+        h('div', { class: 'cp-head' }, h('b', null, c.title), h('span', { class: 'muted' }, ' · spot ' + (c.spot || '') + ' · gün spot\'tan'),
+          c.custom ? h('span', { class: 'cp-tag' }, 'listeden') : null),
+        h('div', { class: 'set-scroll cp-scroll' }, table)));
+    }
+    this.renderPointForm(d, edit);
+    clear(this.cpLog);
+    if (d.log && d.log.length) {
+      this.cpLog.appendChild(h('div', { class: 'cp-log-head' }, 'Değişiklik kaydı'));
+      for (const e of d.log.slice(0, 12)) {
+        this.cpLog.appendChild(h('div', { class: 'cp-log-line' }, h('span', { class: 'muted' }, (e.at || '').slice(0, 16) + ' · ' + (e.who || e.by || '') + ' · '),
+          e.text || ''));
+      }
+    }
+  }
+
+  pointRow(r, edit) {
+    const value = () => {
+      if (r.ppk) return '';
+      if (r.computed) {
+        return r.value === null || r.value === undefined ? (r.on ? 'eğri okunamadı' : '')
+          : 'par ' + pct(r.value, 4) + ' · sıfır ' + pct(r.zero, 4);
+      }
+      if (r.error && r.on) return r.error;
+      return pct(r.value, 4);
+    };
+    const valueTip = r.computed && typeof r.df === 'number'
+      ? 'DF ' + num(r.df, 9) + (r.schedule ? ' · kuponlar ' + r.schedule : '') + ' (' + (this.points.mode_text || '') + ')'
+      : (r.schedule ? 'kuponlar ' + r.schedule : '');
+    const cls = (r.ppk ? 'cp-ppk' : '') + (r.on ? '' : ' cp-off') + (r.computed ? ' cp-calc' : '');
+    const valueCell = h('td', { class: 'num', title: valueTip }, value());
+    if (edit && r.source === 'typed' && !r.ppk) {
+      const b = h('button', { class: 'iconbtn cp-rate', type: 'button', 'data-id': r.id, title: 'Oranı değiştir' }, '✎');
+      b.addEventListener('click', () => this.editPoint(r, 'rate'));
+      valueCell.appendChild(b);
+    }
+    const noteCell = h('td', { class: 'cp-note-cell', title: r.note_tip || '' }, r.note || '');
+    if (edit && !r.ppk) {
+      const b = h('button', { class: 'iconbtn cp-note', type: 'button', 'data-id': r.id, title: 'Notu değiştir' }, '✎');
+      b.addEventListener('click', () => this.editPoint(r, 'note'));
+      noteCell.appendChild(b);
+    }
+    let onCell;
+    if (r.ppk) {
+      onCell = h('td', { class: 'muted', title: 'PPK toplantıları listeden çıkmaz: takvimden gelir' }, 'her zaman');
+    } else if (edit) {
+      const box = h('input', { type: 'checkbox', class: 'cp-on', 'data-id': r.id });
+      box.checked = !!r.on;
+      box.addEventListener('change', () => this.pointAction({ action: box.checked ? 'on' : 'off', id: r.id }, box));
+      onCell = h('td', null, box);
+    } else {
+      onCell = h('td', null, r.on ? '✓' : '–');
+    }
+    const who = r.ppk ? 'takvimden' : (r.default ? 'varsayılan' : [r.added_by, (r.added_at || '').slice(0, 16)].filter(Boolean).join(' · '));
+    const whoTip = r.changed_at && !r.ppk ? 'Son değişiklik: ' + [r.changed_by, r.changed_at].filter(Boolean).join(' · ') : '';
+    return h('tr', { class: cls.trim(), 'data-id': r.id },
+      h('td', { title: r.date ? 'Vade: ' + r.date : '' }, r.when || r.name || ''),
+      h('td', { class: 'num' }, typeof r.day === 'number' ? String(Math.round(r.day)) : ''),
+      h('td', { title: r.rule || '' }, r.kind_text || ''),
+      h('td', { title: r.source_tip || '' }, r.source === 'ticker' && r.ticker ? 'Bloomberg · ' + r.ticker : (r.source_text || '')),
+      valueCell, noteCell, h('td', { class: 'muted', title: whoTip }, who), onCell);
+  }
+
+  /** The administrator's form to add a point: made once (a market tick redraws the tables, never what is being typed). */
+  renderPointForm(d, edit) {
+    if (this.cpFormFor === edit) return;
+    this.cpFormFor = edit;
+    clear(this.cpForm);
+    if (!edit) return;
+    const curve = h('select', { class: 'inp', id: 'cp-add-curve' }, ...d.curves.map((c) => h('option', { value: c.id }, c.title)));
+    const kind = h('select', { class: 'inp', id: 'cp-add-kind' });
+    const when = h('input', { class: 'inp', type: 'text', id: 'cp-add-when', placeholder: '18M, 2Y3M ya da gg.aa.yyyy', style: { width: '150px' } });
+    const source = h('select', { class: 'inp', id: 'cp-add-source' }, ...d.sources.map((s) => h('option', { value: s.id }, s.label)));
+    const rate = h('input', { class: 'inp num', type: 'text', id: 'cp-add-rate', placeholder: '%, ör. 41,25', style: { width: '90px' } });
+    const ticker = h('input', { class: 'inp', type: 'text', id: 'cp-add-ticker', placeholder: 'ör. TRYSAQ1H ICPL Curncy', style: { width: '190px' } });
+    const note = h('input', { class: 'inp', type: 'text', id: 'cp-add-note', placeholder: 'ne olduğu', maxlength: '300', style: { width: '240px' } });
+    const add = h('button', { class: 'btn primary', type: 'button', id: 'cp-add' }, 'Nokta ekle');
+    const rateField = h('div', { class: 'field' }, h('label', null, 'Oran %'), rate);
+    const tickerField = h('div', { class: 'field' }, h('label', null, 'Bloomberg ticker'), ticker);
+    const rule = h('div', { class: 'muted cp-rule', id: 'cp-add-rule' });
+    const kinds = () => {
+      const keep = kind.value;
+      clear(kind);
+      for (const k of d.kinds) if (k.curves.includes(curve.value)) kind.appendChild(h('option', { value: k.id }, k.label));
+      if ([...kind.options].some((o) => o.value === keep)) kind.value = keep;
+      const k = d.kinds.find((x) => x.id === kind.value);
+      rule.textContent = k ? k.label + ': ' + k.rule : '';
+    };
+    const sources = () => {
+      rateField.classList.toggle('hidden', source.value !== 'typed');
+      tickerField.classList.toggle('hidden', source.value !== 'ticker');
+    };
+    curve.addEventListener('change', kinds);
+    kind.addEventListener('change', kinds);
+    source.addEventListener('change', sources);
+    kinds();
+    sources();
+    add.addEventListener('click', () => this.pointAction({ action: 'add', curve: curve.value, kind: kind.value, when: when.value, source: source.value,
+      rate: rate.value, ticker: ticker.value, note: note.value }, add).then((ok) => {
+      if (ok) { when.value = ''; rate.value = ''; ticker.value = ''; note.value = ''; }
+    }));
+    this.cpForm.append(h('div', { class: 'carry-actions' },
+      h('div', { class: 'field' }, h('label', null, 'Eğri'), curve),
+      h('div', { class: 'field' }, h('label', null, 'Vade / tarih'), when),
+      h('div', { class: 'field' }, h('label', null, 'Tür'), kind),
+      h('div', { class: 'field' }, h('label', null, 'Kaynak'), source),
+      rateField, tickerField,
+      h('div', { class: 'field' }, h('label', null, 'Not'), note), add), rule);
+  }
+
+  /** A change of the list (an administrator's): a ticker point asks for its cost to be confirmed first. */
+  async pointAction(body, ctl) {
+    if (this.cpBusy) return false;
+    this.cpBusy = true;
+    if (ctl) ctl.disabled = true;
+    try {
+      let res = await api.post('/api/curve-points', body);
+      if (res.needs_confirm) {
+        const ok = await confirmDialog('Bloomberg: yeni canlı ticker', (res.ticker ? res.ticker + ' · ' : '') + res.cost + ' Onaylıyor musunuz?',
+          'Onayla');
+        if (!ok) {
+          this.renderPoints();
+          return false;
+        }
+        res = await api.post('/api/curve-points', Object.assign({}, body, { confirm: true }));
+      }
+      this.points = res;
+      this.renderPoints();
+      if (res.done) toast(res.done, 'ok', 4200);
+      if (this.ctx.refreshNow) this.ctx.refreshNow();
+      return true;
+    } catch (err) {
+      errorToast(err);
+      this.renderPoints();
+      return false;
+    } finally {
+      this.cpBusy = false;
+      if (ctl) ctl.disabled = false;
+    }
+  }
+
+  editPoint(r, what) {
+    const m = modal({ title: (what === 'rate' ? 'Oran · ' : 'Not · ') + (r.name || r.when), width: 440 });
+    const input = h('input', { class: 'inp', id: 'cp-edit-input', style: { width: '100%' }, maxlength: '300',
+      value: what === 'rate' ? (typeof r.rate === 'number' ? num(r.rate * 100, 4, false) : '') : (r.note || '') });
+    const save = () => {
+      m.close();
+      this.pointAction(what === 'rate' ? { action: 'rate', id: r.id, rate: input.value } : { action: 'note', id: r.id, note: input.value });
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    m.body.appendChild(h('div', { class: 'field' }, h('label', null, what === 'rate' ? 'Oran (%)' : 'Not (ne olduğu)'), input));
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+    m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', id: 'cp-edit-save', onclick: save }, 'Kaydet'));
+    input.focus();
+    input.select();
+  }
+
+  async resetPoints() {
+    const ok = await confirmDialog('Eğri noktaları · varsayılana dön',
+      'Varsayılan noktalar açılır, eklenen noktalar kapanır (listede notlarıyla kalır). Herkesin eğrisi bugünkü kotalarla kurulur. Devam edilsin mi?',
+      'Varsayılana dön');
+    if (ok) await this.pointAction({ action: 'reset' }, this.cpReset);
   }
 
   renderInterp() {
