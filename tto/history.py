@@ -57,8 +57,10 @@ DEFAULT_PAST_MEETINGS = ("2025-01-23", "2025-03-06", "2025-04-17", "2025-06-19",
 DEFAULTS = {"dibs_field": "YLD_YTM_MID", "lookback_days": 370}
 #: the SOFR fixings Trades' SOFR swaps compound (tto/tradevalue.py): the New York Fed publishes a day's fixing the next
 #: business day at 08:00 New York (16:00 Istanbul in winter, 15:00 in summer).  One value a day, two years back once
-#: (its first fill in turn with the quant package's new series, ``BACKFILL_PER_SYNC`` a sync), then its new days once a
-#: day after ``SOFR_AFTER`` (Istanbul) - when yesterday's fixing is out - and once at a start before that hour.
+#: (its first fill in turn with the quant package's new series, ``BACKFILL_PER_SYNC`` a sync), then its new days in one
+#: request a day, after ``SOFR_AFTER`` (Istanbul) - when yesterday's fixing is out: none at a start before that hour, and
+#: a restart the same evening does not ask again (the day is kept with the series' record).  A day the dashboard is not
+#: running after that hour is caught up by the next day's request (it asks from its last fixing on).
 SOFR_TICKER = "SOFRRATE Index"
 SOFR_LOOKBACK = 740
 SOFR_AFTER = 16.5
@@ -564,7 +566,8 @@ class History(object):
         self._snap: Optional[Tuple[int, Dict[str, Any]]] = None
         self._empty: Dict[str, str] = {}               # series without any history -> the day it was asked (once a day)
         self._empty_day = ""                           # the day _empty was read for (from the store's records)
-        self._tailed: Dict[str, Tuple[str, bool]] = {}  # a once-a-day series -> the day its new days were asked, after 07:00
+        self._tailed: Dict[str, str] = {}              # a once-a-day series -> the day its new days were asked (after its hour)
+        self._tails_read = False                       # ... read once from the store's records (a restart the same day)
         self._force = False                            # the next pass recomputes every day
         self.state: Dict[str, Any] = {"phase": "idle", "done": 0, "total": 0, "error": "", "last_sync": None,
                                       "fetched": 0, "computed": 0}
@@ -1000,7 +1003,8 @@ class History(object):
         if recompute:
             self._force = True
         self._empty.clear()                            # series that had no history are asked again
-        self._tailed.clear()                           # ... and the once-a-day ones their new days
+        self._tailed.clear()                           # ... and the once-a-day ones their new days (after their hour)
+        self._tails_read = True
         self.kick()
         self.start(force=True)
         return self.status()
@@ -1112,10 +1116,11 @@ class History(object):
           wait for the next syncs: ``state["backfill"]``); the ones marked ``"extend"`` (the history's own the quant
           analyses read two years back) fill their own window first, in full, and the older part afterwards that way -
           only the part they miss, a week into what they have (an answer with nothing in it is no answer);
-        * a series marked ``tail: "daily"`` asks its new days once a day - after 07:00 (or its own hour, ``info["after"]``),
-          when yesterday's close is final (and once at a start before it).  Only the SOFR fixings are marked so
-          (``SOFR_TICKER``: one value a day, out at 08:00 New York - ``SOFR_AFTER``); the desk keeps the 15-minute sync for
-          every other series, the quant package's too;
+        * a series marked ``tail: "daily"`` asks its new days in one request a day - after 07:00 (or its own hour,
+          ``info["after"]``), when yesterday's close is final; not at a start before it, and not again after a restart
+          the same day (the day is kept with its record, ``"tail"``; "update now" asks again).  Only the SOFR fixings
+          are marked so (``SOFR_TICKER``: one value a day, out at 08:00 New York - ``SOFR_AFTER``); the desk keeps the
+          15-minute sync for every other series, the quant package's too;
         * a series marked ``tail: "none"`` (an expired VİOP contract: its history is complete) is asked once in full and
           never for new days; its other tickers (the two-digit year) only after the first came back empty, and an
           empty one again only ``FINAL_RETRY_DAYS`` later;
@@ -1139,14 +1144,20 @@ class History(object):
         full: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
         tail: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
 
+        if not self._tails_read:
+            # a start: what a once-a-day series asked today before it (kept with its record) is not asked again
+            self._tails_read = True
+            self._tailed.update({sid: str(r["tail"]) for sid, r in records.items() if r.get("tail")})
+        tailed: set = set()
+
         def recent(field: str, t: str, b: Tuple[str, str, int], daily: Optional[float]) -> None:
             # ``daily``: a once-a-day series' hour (its close of yesterday final after it), None for the others
             if daily is not None:
                 sid = "%s|%s" % (t, field)
-                last = self._tailed.get(sid)
-                if last is not None and last[0] == today_iso and (last[1] or hour < daily):
-                    return                                     # asked today already (after its hour, or it is not that hour yet)
-                self._tailed[sid] = (today_iso, hour >= daily)
+                if hour < daily or self._tailed.get(sid) == today_iso:
+                    return                                     # not its hour yet, or asked today already: once a day
+                self._tailed[sid] = today_iso
+                tailed.add(sid)
             start = min(today, _day(b[1])) - _dt.timedelta(days=self.OVERLAP_DAYS)
             tail.setdefault((field, start, today), []).append(t)
 
@@ -1228,14 +1239,16 @@ class History(object):
                         # the day counts even when nothing came back; the range itself only once it did (an answer
                         # that did not come in time leaves the range to be asked again on another day)
                         old = records.get(sid) or {}
-                        records[sid] = {"day": today_iso, "from": _iso(start) if rows else old.get("from"),
-                                        "first": min(d for d, _ in rows) if rows else old.get("first")}
+                        records[sid] = dict(old, day=today_iso, **{"from": _iso(start) if rows else old.get("from"),
+                                                                   "first": min(d for d, _ in rows) if rows else old.get("first")})
+                    elif sid in tailed:
+                        records[sid] = dict(records.get(sid) or {}, tail=today_iso)   # (a restart the same day: not again)
                     if rows:
                         self._empty.pop(sid, None)
                         changed += self.store.hist_upsert(sid, [(d, v) for d, v in rows if d <= _iso(today)])
                     elif sid not in bounds:
                         self._empty[sid] = today_iso
-                if group is full:
+                if group is full or tailed.intersection("%s|%s" % (t, field) for t in tickers):
                     self.store.put(self.FETCH_KEY, records)     # at once: a sync cut short still counts what it asked
                 if job is not None:
                     job.tick(len(tickers))

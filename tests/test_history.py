@@ -1442,9 +1442,10 @@ def test_live_viop_contracts_fill_in_a_pool_of_their_own_and_an_expired_one_is_a
 
 def test_live_the_sofr_fixings_fill_two_years_once_then_one_day_a_day(tmp_path):
     """The SOFR fixings of Trades' SOFR swaps (``SOFRRATE Index``, the one series they need): their two years asked once,
-    in the backfill's turn (``BACKFILL_PER_SYNC`` a sync, after the quant package's series), then their new days once a
-    day - once at a start and once after ``SOFR_AFTER`` (16:30), when New York has published yesterday's fixing - never
-    on every sync.  A day's fixing comes out the next business day: before 16:30 the last one is two business days old."""
+    in the backfill's turn (``BACKFILL_PER_SYNC`` a sync, after the quant package's series), then their new days in one
+    request a day, after ``SOFR_AFTER`` (16:30), when New York has published yesterday's fixing - not at a start before
+    it, not on every sync, not again after a restart the same evening.  A day's fixing comes out the next business day:
+    before 16:30 the last one is two business days old."""
     server = fake_blpapi.Server()
     provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
     provider.start()
@@ -1492,31 +1493,42 @@ def test_live_the_sofr_fixings_fill_two_years_once_then_one_day_a_day(tmp_path):
         assert "2025-11-27" not in stored and max(stored) == "2026-10-30"
         # ... the rest of the day: nothing - not after 16:30 either (asked in full today: its last fixing is today's answer)
         assert sync(14.0) == [] and sync(16.75) == [] and sync(23.0) == []
-        # ---- Wednesday: at the start once (Monday's fixing is out: Tuesday 16:00), not again before 16:30 ...
+        # ---- Wednesday: nothing at the start nor before 16:30 (Monday's fixing is out since Tuesday 16:00: it waits) ...
         server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-02")]
-        got = sync(9.0, 1)
-        assert len(got) == 1 and (got[0]["options"]["startDate"], got[0]["options"]["endDate"]) == ("20261027", "20261104")
-        assert max(dict(svc.store.hist_series(sid))) == "2026-11-02"
-        assert sync(11.0) == [] and sync(16.0) == []
-        # ... once after it (Tuesday's, out at 16:00), and that is the day
+        assert sync(9.0, 1) == [] and sync(11.0) == [] and sync(16.0) == []
+        assert max(dict(svc.store.hist_series(sid))) == "2026-10-30"
+        # ... one request after it (Tuesday's is out too, at 16:00): both days in it, and that is the day
         server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-03")]
         got = sync(16.5)
-        assert len(got) == 1 and got[0]["options"]["startDate"] == "20261030" and max(dict(svc.store.hist_series(sid))) == "2026-11-03"
+        assert len(got) == 1 and (got[0]["options"]["startDate"], got[0]["options"]["endDate"]) == ("20261027", "20261104")
+        assert max(dict(svc.store.hist_series(sid))) == "2026-11-03"
         assert sync(17.5) == [] and sync(22.0) == []
-        # ---- a start after 16:30: once, the day's whole answer
-        h._tailed.clear()                                                 # (a restart: what was asked today is not known)
+        # ... not again after a restart the same evening: the day is kept with the series' record
+        assert h.fetch_records()[sid]["tail"] == "2026-11-04" and h.fetch_records()[sid]["day"] == "2026-11-03"
+        h._tailed.clear()
+        h._tails_read = False                                             # (a restart: read from the store again)
+        assert sync(22.5) == []
+        # ---- Thursday: a start after 16:30 - once, the day's whole answer
+        h._tailed.clear()
+        h._tails_read = False
         server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-04")]
         got = sync(18.0, 2)
         assert len(got) == 1 and max(dict(svc.store.hist_series(sid))) == "2026-11-04"
         assert sync(19.0) == [] and sync(21.0) == []
-        # Bloomberg's cost: two years once (~510 values, in a request of the backfill's turn), then a request of its own
-        # for a handful of days - at most twice a day
+        # ---- Friday morning only (the dashboard off after 16:30): nothing; the next day's request asks from its last
+        #      fixing on (catching the missed day up)
+        server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-05")]
+        assert sync(9.0, 3) == [] and sync(15.0) == []
+        got = sync(17.0, 6)                                               # (Monday)
+        assert len(got) == 1 and got[0]["options"]["startDate"] == "20261101" and max(dict(svc.store.hist_series(sid))) == "2026-11-05"
+        # Bloomberg's cost: two years once (~510 values, in a request of the backfill's turn), then one request a day of
+        # its own for a handful of days
         reqs = asked()
         assert len(reqs) == 4 and [r["options"]["startDate"] for r in reqs].count("20241024") == 1
         assert all(r["securities"] == ["SOFRRATE Index"] and r["fields"] == ["PX_LAST"] for r in reqs[1:])
         assert len(stored) > 500
         rows = {r["group"]: r for r in h.coverage()["series"] if r["ticker"] == "SOFRRATE Index"}
-        assert rows["sofr"]["first"] == "2024-10-24" and rows["sofr"]["last"] == "2026-11-04"
+        assert rows["sofr"]["first"] == "2024-10-24" and rows["sofr"]["last"] == "2026-11-05"
     finally:
         svc.stop()
 
