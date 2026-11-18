@@ -3366,10 +3366,197 @@ def _tto_rets(model: Model) -> None:
                                "OIS tabanı senaryonun faizi; VİOP ve offshore tabanı piyasa + (senaryo − referans).")
 
 
+# ---------------------------------------------------------------------------------------------- the curve between quotes
+#: "Eğri interpolasyonu" (18.11.2026: "Ayarlardan da PPK basamak kısmını, tüm interpolasyonları değiştirebiliyor olmam
+#: lazım"): each user chooses how the TRY curves are read between their quoted tenors - **Bootstrap (Murex)**, today's
+#: curve and the default, or **PPK basamak** (tto/ppkcurve.py: TLREF flat between PPK meetings, the PPK solver's implied
+#: path shifted flat between successive quoted maturities so that every quote comes back exactly).  The choice is the
+#: user's own input (``INTERP_SHEET!B2``) - everybody else's numbers and the desk's (the shared calculation) stay on
+#: Bootstrap.  The PPK curves come into the workbook at the source, as input cells the service fills from ppkcurve with
+#: the curves read off the calculation on Bootstrap (so PPK never reads itself):
+#:
+#: * **Motor** - the par rate of each of the bootstrap's 42 nodes (Motor!F89:F130, the quotes linear in months) becomes
+#:   ``IF(PPK, the PPK curve's par rate at that node, its own formula)``: the PPK discount factors at the nodes' days
+#:   (``EK_INTERP!C11:C52``), turned into the par rates of Motor's own grid and day count, so that Motor's bootstrap gives
+#:   back exactly those discount factors - its annuities, ln DFs, the quarterly copy every page reads, the per-quote
+#:   bucket bumps (now around the PPK curve) and ``BOOT_PAR`` all follow, and a quoted tenor's par stays its quote.
+#:   Between the nodes every reader interpolates as it does (ln DF linear in days): a broken date inside a quarter sees
+#:   the PPK curve at the quarter's two nodes, not every meeting step - the exact daily PPK numbers stay in the PPK
+#:   columns of OIS · PPK's FRA lists, MASA's broken-date block and Günlük İşlemler's FRA quote.
+#: * **the offshore curve** (``OFF_GUN`` / ``OFF_LNDF`` / ``OFF_SL``): every one of its nodes is a quote whose discount
+#:   factor PPK reprices exactly (its XCCY coupons fall on its nodes), so PPK can only show between them - on PPK the
+#:   names read a node table of the PPK-shaped offshore curve (MPC ima + a flat basis between the offshore quotes) with a
+#:   node at every meeting step and every quote (``EK_INTERP!I:K``), log-linear between them as before.
+#: * the ASW book's curve of today (``ASW!BT65:DI65``) the same way, from its own sheet (``_asw_interp``).
+#:
+#: A user on PPK whose PPK curve cannot be made (no quotes, no MPC ima) is on Bootstrap and the sheet says so (C2).
+INTERP_SHEET = "EK_INTERP"
+INTERP_BOOT, INTERP_PPK = "Bootstrap (Murex)", "PPK basamak"
+INTERP_CHOICES = (INTERP_BOOT, INTERP_PPK)
+INTERP_MODE, INTERP_STATUS, INTERP_ON, INTERP_OFF_ON = "B2", "C2", "B3", "B4"
+#: Motor's bootstrap nodes (0, 1, 2, 3, 6 … 120 months) and their rows on EK_INTERP (10 … 52: the node of Motor row r on
+#: row r − 78); C the PPK discount factor (the service's), D Motor's accrual, E the PPK annuity, F the PPK par rate
+INTERP_NODES = (88, 130)
+INTERP_FIRST = 10
+INTERP_SHIFT = INTERP_NODES[0] - INTERP_FIRST
+#: the offshore node table: days, ln DF and slope (I, J, K) on rows OFF_FIRST … OFF_LAST - every row filled by the service
+#: (the curve's nodes, then rows on its last segment far beyond the curve); the names' own ranges on Bootstrap
+INTERP_OFF_FIRST, INTERP_OFF_ROWS = 10, 128
+INTERP_OFF_LAST = INTERP_OFF_FIRST + INTERP_OFF_ROWS - 1
+INTERP_OFF_COLS = {"OFF_GUN": "I", "OFF_LNDF": "J", "OFF_SL": "K"}
+INTERP_OFF_RANGES = {"OFF_GUN": "Forward!$AK$124:$AK$143", "OFF_LNDF": "Forward!$AM$124:$AM$143",
+                     "OFF_SL": "Forward!$AN$124:$AN$143"}
+INTERP_NAME = "Eğri interpolasyonu"
+#: the ASW book: its own EK_INTERP - the user's choice mirrored by the service (B2), and the PPK ln DF at each node of
+#: today's curve (C11:C52; aswfx.NODES)
+INTERP_ASW_NAME = "ASW eğri interpolasyonu"
+
+
+def interp_flag(count_range: str, count: int) -> str:
+    """1 when the user is on PPK and the PPK cells counted are all there, else 0 - nested IFs, never AND: on Bootstrap the
+    PPK cells are not even read, so whatever the service writes into them recomputes nothing of a Bootstrap user's."""
+    return '=IF($B$2="%s",IF(COUNT(%s)=%d,1,0),0)' % (INTERP_PPK, count_range, count)
+
+
+def _interp_check(model: Model) -> None:
+    """Motor's nodes bootstrap the par rates of column F as this addition gives them back (G from F, H the annuity, D the
+    accrual: 1M-3M one period, then quarterly from the 3M node on); the offshore names are the curve's own ranges."""
+    _need_sheets(model, "Motor", "Forward", "OIS_MAIN")
+    first, last = INTERP_NODES
+    if model.sheet("Motor").consts.get(parse_a1("G%d" % first)) != 1.0:
+        raise ValueError("Motor!G%d 1 değil" % first)
+    for r in range(first + 1, last + 1):
+        _need_formula(model, "Motor", "F%d" % r, "$B$306:$B$321")
+        g, h, d = (formula_of(model, "Motor", "%s%d" % (c, r)).replace(" ", "") for c in "GHD")
+        if r <= first + 3:
+            ok = (g == "1/(1+F%d*D%d)" % (r, r) and h == "D%d*G%d" % (r, r) and d == "C%d/365" % r)
+        else:
+            ok = (g == "(1-F%d*H%d)/(1+F%d*D%d)" % (r, r - 1, r, r) and h == "H%d+D%d*G%d" % (r - 1, r, r)
+                  and d == "(B%d-B%d)/365" % (r, r - 1))
+        if not ok:
+            raise ValueError("Motor!G%d / H%d / D%d beklenen bootstrap formülü değil" % (r, r, r))
+        _need_formula(model, "Motor", "I%d" % r, "LN(G%d)" % r)
+    from .xl.unparse import to_a1
+    for name, rng in INTERP_OFF_RANGES.items():
+        tpl = model.names.get(name)
+        if tpl is None:
+            raise ValueError("%s adı yok" % name)
+        if to_a1(tpl, 1, 1).replace("'", "") != rng:
+            raise ValueError("%s beklenen aralık değil (%s)" % (name, rng))
+
+
+def _tto_interp(model: Model) -> None:
+    """The curve switch of the TRY workbook (``INTERP_SHEET``): the user's choice, the PPK cells the service fills, the
+    PPK par rates of Motor's nodes, Motor's par rates and the offshore names that follow the choice."""
+    e = INTERP_SHEET
+    b = SheetBuilder(model, e)
+    first, last = INTERP_NODES
+    nodes = last - first                                       # (the nodes after the spot: 42)
+    k0, k1 = first + 1 - INTERP_SHIFT, last - INTERP_SHIFT     # their rows here (11 … 52)
+    b.title("A1", "EĞRİ İNTERPOLASYONU  ·  kotalı vadeler arasında TRY eğrileri: Bootstrap (Murex) ya da PPK basamak "
+                  "(Ayarlar → Eğri interpolasyonu; kişisel)")
+    b.set("A2", INTERP_NAME, bold=True)
+    b.input(INTERP_MODE, INTERP_BOOT, align="center")
+    b.dropdown(INTERP_MODE, list(INTERP_CHOICES))
+    b.set(INTERP_ON, interp_flag("$C$%d:$C$%d" % (k0, k1), nodes), fmt="0", align="center")
+    b.set(INTERP_OFF_ON, interp_flag("$I$%d:$I$%d" % (INTERP_OFF_FIRST, INTERP_OFF_LAST), INTERP_OFF_ROWS), fmt="0", align="center")
+    b.set(INTERP_STATUS, '=IF($B$3=1,"PPK basamak: TLREF toplantılar arasında sabit, kotalara aynen oturur"&IF($B$4=1,"",'
+                         '" (offshore eğri kurulamadı: offshore Bootstrap)"),IF($B$2="%s","PPK basamak seçili ama PPK eğrisi '
+                         'kurulamadı (kota ya da MPC ima yok): Bootstrap kullanılıyor","%s: bugünkü eğri, Murex\'in MTM\'i"))'
+                         % (INTERP_PPK, INTERP_BOOT), bold=True, color=NOTE_COLOR)
+    b.set("A3", "OIS düğümleri PPK'da (1/0)", bold=True)
+    b.set("A4", "Offshore düğümleri PPK'da (1/0)", bold=True)
+    b.note("A5", "Bootstrap: her okuyucu bugünkü gibi - düğümlerde Motor'un bootstrap'ı, aralarında ln DF günlere göre doğrusal. "
+                 "PPK basamak: Motor'un 42 düğümünün par faizi PPK eğrisinin o düğümdeki par faizi olur (C sütunundaki iskonto "
+                 "faktörlerinden, Motor'un kendi takvimi ve gün sayımıyla): Motor'un bootstrap'ı bu iskonto faktörlerini aynen "
+                 "verir, kotalı vadelerin par'ı kotasıdır. Düğümler arası yine ln DF doğrusal: çeyrek içindeki kırık bir tarih "
+                 "PPK eğrisini çeyreğin iki düğümünde görür, her toplantı basamağını değil - günlük PPK değerleri PPK sütunlarında.")
+    b.note("A6", "Offshore eğri (OFF_GUN / OFF_LNDF / OFF_SL): düğümlerinin hepsi kota, PPK onlarda Bootstrap'la aynı - PPK'da adlar "
+                 "I:K tablosunu okur: her toplantı basamağında ve her kotada düğüm (MPC ima + offshore kotalar arasında sabit baz). "
+                 "C ve I:K sütunlarını dashboard doldurur (ortak, eğrinin girdileri değişince yeniden); MTM / kapanış kayıtları "
+                 "ve kullanıcısız hesaplar (alarmlar, quant, tarihçe) Bootstrap'ta.")
+    b.head("A%d" % (INTERP_FIRST - 1), ["Düğüm", "Gün", "DF PPK", "τ (Motor)", "Annuity PPK", "Par PPK"])
+    for r in range(first, last + 1):
+        k = r - INTERP_SHIFT
+        b.set("A%d" % k, "=Motor!$A$%d" % r, bold=True, align="center")
+        b.set("B%d" % k, "=Motor!$C$%d" % r, fmt=INT0)
+        if r == first:
+            b.set("C%d" % k, 1.0, fmt="0.000000000")              # (the spot: 1 both ways)
+            b.set("E%d" % k, 0.0, fmt="0.000000")
+            continue
+        b.set("C%d" % k, None, fmt="0.000000000")                  # (the service's)
+        b.set("D%d" % k, "=Motor!$D$%d" % r, fmt="0.000000")
+        if r <= first + 3:
+            # 1M - 3M: one period, simple ACT/365 (Motor: G = 1/(1 + F·D), H = D·G)
+            b.set("E%d" % k, "=$D%d*$C%d" % (k, k), fmt="0.000000")
+            b.set("F%d" % k, '=IF(ISNUMBER($C%d),(1/$C%d-1)/$D%d,"")' % (k, k, k), fmt="0.0000%")
+        else:
+            # quarterly par on Motor's grid (G = (1 − F·H_prev)/(1 + F·D), H = H_prev + D·G): F = (1 − DF)/(H_prev + D·DF)
+            b.set("E%d" % k, "=$E%d+$D%d*$C%d" % (k - 1, k, k), fmt="0.000000")
+            b.set("F%d" % k, '=IF(ISNUMBER($C%d),(1-$C%d)/$E%d,"")' % (k, k, k), fmt="0.0000%")
+    b.head("H%d" % (INTERP_OFF_FIRST - 1), [None, "Offshore gün", "ln DF PPK", "Eğim"])
+    for r in range(INTERP_OFF_FIRST, INTERP_OFF_LAST + 1):
+        b.set("I%d" % r, None, fmt=INT0)
+        b.set("J%d" % r, None, fmt="0.000000000")
+        b.set("K%d" % r, None, fmt="0.0000000000")
+    # ---- Motor's par rates follow the choice ...
+    m = SheetBuilder(model, "Motor")
+    for r in range(first + 1, last + 1):
+        m.patch("F%d" % r, "=IF(%s!$B$3=1,%s!$F$%d,%s)" % (e, e, r - INTERP_SHIFT, formula_of(model, "Motor", "F%d" % r)))
+    # ---- ... and so do the offshore curve's names (the PPK node table, or their own ranges as before)
+    for name, col in INTERP_OFF_COLS.items():
+        text = "IF(%s!$B$4=1,%s!$%s$%d:$%s$%d,%s)" % (e, e, col, INTERP_OFF_FIRST, col, INTERP_OFF_LAST, INTERP_OFF_RANGES[name])
+        model.names[name] = to_template(text, 1, 1)
+
+
+def _asw_interp_check(model: Model) -> None:
+    """The ASW book's curve of today (row ``aswfx.ROW``): ln DF 0 at the spot, then one period up to 3M and the quarterly
+    bootstrap from 6M - as aswfx reads it."""
+    _need_sheets(model, "ASW")
+    row, d0, l0 = aswfx.ROW, aswfx.DAY_COL, aswfx.LN_COL
+    if model.sheet("ASW").consts.get(row * COLS + l0) != 0.0:
+        raise ValueError("ASW!%s%d 0 değil" % (index_to_col(l0), row))
+    for i, mo in enumerate(aswfx.NODES[1:], 1):
+        addr = "%s%d" % (index_to_col(l0 + i), row)
+        text = _need_formula(model, "ASW", addr, "LN(").replace(" ", "")
+        day = "%s%d" % (index_to_col(d0 + i), row)
+        if day not in text:
+            raise ValueError("ASW!%s düğüm gününü (%s) okumuyor" % (addr, day))
+        _need_formula(model, "ASW", day, "EDATE($T%d,%d)" % (row, mo))
+
+
+def _asw_interp(model: Model) -> None:
+    """The ASW book's side of the curve switch: its own ``INTERP_SHEET`` (the user's choice as the service mirrors it, the
+    PPK ln DF of today's nodes the service fills) and today's ln DF nodes that follow it."""
+    e = INTERP_SHEET
+    b = SheetBuilder(model, e)
+    row, d0, l0 = aswfx.ROW, aswfx.DAY_COL, aswfx.LN_COL
+    n = len(aswfx.NODES)
+    b.title("A1", "EĞRİ İNTERPOLASYONU  ·  bugünkü OIS eğrisi (ASW satır %d): Bootstrap ya da PPK basamak - TRY kitabındaki "
+                  "kişisel ayarın aynısı (Ayarlar → Eğri interpolasyonu)" % row)
+    b.set("A2", INTERP_NAME, bold=True)
+    b.input(INTERP_MODE, INTERP_BOOT, align="center")
+    b.set(INTERP_ON, interp_flag("$C$%d:$C$%d" % (INTERP_FIRST + 1, INTERP_FIRST + n - 1), n - 1), fmt="0", align="center")
+    b.note("A4", "B2 kullanıcının TRY kitabındaki seçimidir (dashboard yazar). PPK'da ASW!%s%d:%s%d (ln DF) C sütununu okur: TRY "
+                 "kitabının MPC ima patikası bu kitabın kotalarına (C%d:R%d) ve düğüm günlerine kalibre edilir. Geçmiş satırları "
+                 "Bootstrap'ta kalır." % (index_to_col(l0 + 1), row, index_to_col(l0 + n - 1), row, row, row))
+    b.head("A%d" % (INTERP_FIRST - 1), ["Ay", "Gün", "ln DF PPK"])
+    for i, mo in enumerate(aswfx.NODES):
+        k = INTERP_FIRST + i
+        b.set("A%d" % k, float(mo), fmt="0", align="center")
+        b.set("B%d" % k, "=ASW!$%s$%d" % (index_to_col(d0 + i), row), fmt=INT0)
+        b.set("C%d" % k, 0.0 if i == 0 else None, fmt="0.000000000")
+    a = SheetBuilder(model, "ASW")
+    for i in range(1, n):
+        addr = "%s%d" % (index_to_col(l0 + i), row)
+        a.patch(addr, "=IF(%s!$B$3=1,%s!$C$%d,%s)" % (e, e, INTERP_FIRST + i, formula_of(model, "ASW", addr)))
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
-    "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx), (ASW_HIST_NAME, _asw_hist_check, _asw_hist)),
+    "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx), (ASW_HIST_NAME, _asw_hist_check, _asw_hist),
+            (INTERP_ASW_NAME, _asw_interp_check, _asw_interp)),
     # (the holiday sheet and the FX value dates first: the forward tables below date their tenors on its calendars)
     "tto": ((HOL_SHEET, _holidays_check, _tto_holidays), (FX_DATE_NAME, _fx_dates_check, _tto_fx_dates),
             (OIS_SPOT_NAME, _ois_spot_check, _tto_ois_spot),
@@ -3387,7 +3574,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
             (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread), (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
-            (RETS_SHEET, _rets_check, _tto_rets)),
+            (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
 }
 

@@ -157,6 +157,9 @@ class Engine(object):
         self.input_changes = 0                            # shared input values changed (not the market, not the clock)
         self.shared = Calc(self, None, None)
         self.users: Dict[str, "Calc"] = {}
+        # per user: input values the service works out for them instead of their typing them (a setting of theirs mirrored
+        # from another workbook, a curve made of their own inputs) - on top of their own inputs whenever those are set
+        self.derived: Dict[str, Dict[Tuple[int, int], Any]] = {}
         # calculations on top of a user's (or of the shared pool): a temporary copy of a table with inputs of its own
         self.layers: Dict[Any, "LayerCalc"] = {}
         self._requests: Optional[frozenset] = None       # the cells whose value is a Bloomberg answer (request_cells)
@@ -355,8 +358,10 @@ class Engine(object):
     def is_input(self, si: int, rc: int) -> bool:
         return rc in self.input_mask[si]
 
-    def set_inputs(self, values: Dict[Tuple[int, int], Any]) -> None:
-        """Set shared (all users) values of input cells and invalidate what depends on them."""
+    def set_inputs(self, values: Dict[Tuple[int, int], Any], counted: bool = True) -> int:
+        """Set shared (all users) values of input cells and invalidate what depends on them.  ``counted``: False for values
+        the service works out of the market (a curve made of the quotes) - no change of the desk's inputs then
+        (``input_changes``).  Returns the bits invalidated (0: nothing changed)."""
         self.declare_inputs(values.keys())
         changed = 0
         for (si, rc), v in values.items():
@@ -367,8 +372,10 @@ class Engine(object):
                 changed |= self.input_mask[si][rc]
             self.input_value[si][rc] = v
         if changed:
-            self.input_changes += 1
+            if counted:
+                self.input_changes += 1
             self.invalidate(changed)
+        return changed
 
     def clear_inputs(self, cells: Iterable[Tuple[int, int]]) -> None:
         """Remove shared overrides: the cells fall back to what the workbook itself holds."""
@@ -437,10 +444,31 @@ class Engine(object):
         return calc
 
     def set_user_inputs(self, name: str, overlay: Dict[Tuple[int, int], Any]) -> "Calc":
+        extra = self.derived.get(name)
+        if extra:
+            overlay = dict(overlay)
+            overlay.update(extra)                 # (worked out for the user: over whatever they typed there)
         self.declare_inputs(overlay.keys())
         calc = self.user(name)
         calc.set_overlay(overlay)
         return calc
+
+    def set_derived(self, name: str, values: Dict[Tuple[int, int], Any], typed: Dict[Tuple[int, int], Any]) -> Optional["Calc"]:
+        """Replace the input values worked out for user ``name`` (:attr:`derived`) - ``typed``: their own inputs, which
+        these go on top of.  Only what changed is computed again.  Returns their calculation (``None``: they have none, and
+        need none: nothing typed, nothing worked out)."""
+        new = dict(values or {})
+        old = self.derived.get(name) or {}
+        same = len(new) == len(old) and all(k in old and old[k] == v and type(old[k]) is type(v) for k, v in new.items())
+        if same:
+            return self.users.get(name)
+        if new:
+            self.derived[name] = new
+        else:
+            self.derived.pop(name, None)
+        if not new and not typed and name not in self.users:
+            return None
+        return self.set_user_inputs(name, typed)
 
     def drop_user(self, name: str) -> None:
         calc = self.users.pop(name, None)

@@ -139,14 +139,36 @@ def _cell(book, calc, ref: str) -> Any:
     return calc.get(si, *divmod(rc, COLS))
 
 
+#: the conditions of names defined as IF(condition, reference, reference), compiled: (book, name, branch path) -> function
+_CONDITIONS: Dict[Tuple[str, str, str], Any] = {}
+
+
+def _branch(book, calc, name: str, node) -> Any:
+    """A name defined as ``IF(condition, reference, reference)`` (the offshore curve's names follow the user's curve
+    setting: ``extras.INTERP_OFF_COLS``): the reference its condition picks in ``calc`` - evaluated there, so what it read
+    counts as read; any other name as it is."""
+    from .render import calc_value
+    path = ""
+    while node[0] == "func" and node[1] == "IF" and len(node[2]) == 3:
+        key = (book.id, name, path)
+        fn = _CONDITIONS.get(key)
+        if fn is None:
+            fn = _CONDITIONS[key] = book.engine.compiler.compile_node(node[2][0])
+        took = calc_value(calc, fn, 0, 1, 1)
+        first = took is True or (type(took) is float and took != 0.0)
+        node = node[2][1] if first else node[2][2]
+        path += "1" if first else "2"
+    return node
+
+
 def _named(book, calc, name: str) -> Optional[List[Any]]:
-    """The values of a defined name of the workbook - a cell or a block, row by row; ``None`` when the workbook has no
-    such name (or it is no plain reference)."""
+    """The values of a defined name of the workbook - a cell or a block, row by row (one defined as an IF between two:
+    the one its condition picks in ``calc``); ``None`` when the workbook has no such name (or it is no plain reference)."""
     text = book.model.names.get(name)
     if not text:
         return None
     try:
-        node = parse_template(text)
+        node = _branch(book, calc, name, parse_template(text))
     except Exception:  # noqa: BLE001 - a name that cannot be read names no curve
         return None
     if node[0] == "cell" and node[2] and node[4]:

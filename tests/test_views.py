@@ -27,8 +27,9 @@ def sheets_of(view):
 
 
 #: sheets without a page of their own (the sheet explorer shows them): the order of the pricing sources and the USD /
-#: EUR holiday lists, which are on the settings page
-NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL")}
+#: EUR holiday lists, which are on the settings page - and the curve between quoted tenors (Ayarlar → Eğri
+#: interpolasyonu: the choice and the PPK cells the service fills, in the TRY and the ASW workbook)
+NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL"), ("tto", "EK_INTERP"), ("asw", "EK_INTERP")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):
