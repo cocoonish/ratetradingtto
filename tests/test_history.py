@@ -1181,8 +1181,8 @@ def _fake_history(svc, snap):
         return [(d, round(level - 0.25 * math.log(1.0 + months) + drift(d) + 0.02 * math.sin((d - start).days / 7.0 + seed), 4)) for d in days]
 
     for k, d in enumerate(snap["defs"]):
-        if d.group == "Quant":
-            continue                                                        # the quant package's own series: none here
+        if d.group in ("Quant", "sofr"):
+            continue                                                        # the quant package's own series, SOFR's: none here
         if d.group == "ref":
             # the fixing of the workbook's day; one point higher until the meeting of 22 October; today's is not out yet
             hist[(d.ticker, d.field)] = [(x, 36.8159 if x <= D("2026-10-22") else 35.8159) for x in days if x < today]
@@ -1215,7 +1215,9 @@ def test_live_the_history_comes_from_bloomberg(tmp_path):
         # months before them, close / high / low each - in a backfill pool of their own (none has history here)
         viop = [d for d in snap["defs"] if d.info.get("backfill") == "viop"]
         vt = {t for d in viop for t in [d.ticker] + d.alts}
-        assert svc.mode == "live" and snap["today"] == D(TODAY) and len(snap["defs"]) == 59 + quant + len(viop) and len(viop) == 90
+        # (59 of the workbooks' and SOFR's fixings for Trades - last, after the quant package's)
+        assert svc.mode == "live" and snap["today"] == D(TODAY) and len(snap["defs"]) == 60 + quant + len(viop) and len(viop) == 90
+        assert snap["defs"][-1].id == "SOFRRATE Index|PX_LAST"
         hist, days = _fake_history(svc, snap)
         server.history.update(hist)
 
@@ -1434,6 +1436,87 @@ def test_live_viop_contracts_fill_in_a_pool_of_their_own_and_an_expired_one_is_a
         on(2 * History.FINAL_RETRY_DAYS)
         again = [x for s in run(2) for x in full(s, vt)]
         assert sorted(again) == sorted(nothing - {(found.ticker, found.field), (found.alts[0], found.field)})
+    finally:
+        svc.stop()
+
+
+def test_live_the_sofr_fixings_fill_two_years_once_then_one_day_a_day(tmp_path):
+    """The SOFR fixings of Trades' SOFR swaps (``SOFRRATE Index``, the one series they need): their two years asked once,
+    in the backfill's turn (``BACKFILL_PER_SYNC`` a sync, after the quant package's series), then their new days once a
+    day - once at a start and once after ``SOFR_AFTER`` (16:30), when New York has published yesterday's fixing - never
+    on every sync.  A day's fixing comes out the next business day: before 16:30 the last one is two business days old."""
+    server = fake_blpapi.Server()
+    provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    provider.start()
+    today = float(date_to_serial(D(TODAY)))
+    clock = Clock(today + 10 / 24.0)                                     # Tuesday 10:00
+    clock.today = lambda: today
+    svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=provider, clock=clock)
+    sid = "SOFRRATE Index|PX_LAST"
+    try:
+        h = svc.history
+        snap = h.snapshot()
+        d = next(x for x in snap["defs"] if x.id == sid)
+        assert (d.group, d.label, d.info) == ("sofr", "SOFR", {"lookback": 740, "backfill": True, "tail": "daily", "after": 16.5})
+        assert history.SOFR_TICKER == "SOFRRATE Index" and history.SOFR_AFTER == 16.5
+        # New York's fixings (made up): US business days - Veterans Day, Thanksgiving and Columbus Day have none - up to
+        # Friday 30.10: Monday's comes out on Tuesday at 08:00 New York (16:00 here)
+        us_off = {D("2025-11-11"), D("2025-11-27"), D("2025-12-25"), D("2026-01-01"), D("2026-10-12")}
+        fixings = {x: round(4.3 - 0.0005 * (x - D("2024-01-02")).days, 4) for x in _weekdays(D("2024-01-02"), D("2026-11-06")) if x not in us_off}
+        server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-10-30")]
+
+        def asked():
+            return [r for r in server.requests if r["op"] == "HistoricalDataRequest" and "SOFRRATE Index" in r["securities"]]
+
+        def sync(hour, day=None):
+            if day is not None:
+                clock.today = lambda: today + day
+            clock.fixed = clock.today() + hour / 24.0
+            svc.bump()
+            n = len(asked())
+            h._fetch()
+            return asked()[n:]
+
+        # ---- the first day: in the backfill's turn, after the quant package's 143 new series (forty a sync) - once
+        quant = sum(1 for x in snap["defs"] if x.info.get("backfill") is True and x.group == "Quant")
+        turns = [sync(10.0)]
+        assert h.fill_states()[sid] == "filling" and sid in h.state["backfill"]["waiting"]
+        turns += [sync(10.0) for _ in range(5)]
+        first = (quant // History.BACKFILL_PER_SYNC)                      # (its sync: the fourth)
+        assert [len(t) for t in turns] == [0] * first + [1] + [0] * (5 - first)
+        req = turns[first][0]
+        assert (req["options"]["startDate"], req["options"]["endDate"]) == ("20241024", "20261103")       # two years (740 days)
+        assert h.fill_states()[sid] == "ok"
+        stored = dict(svc.store.hist_series(sid))
+        assert stored == {x.isoformat(): v for x, v in fixings.items() if D("2024-10-24") <= x <= D("2026-10-30")}
+        assert "2025-11-27" not in stored and max(stored) == "2026-10-30"
+        # ... the rest of the day: nothing - not after 16:30 either (asked in full today: its last fixing is today's answer)
+        assert sync(14.0) == [] and sync(16.75) == [] and sync(23.0) == []
+        # ---- Wednesday: at the start once (Monday's fixing is out: Tuesday 16:00), not again before 16:30 ...
+        server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-02")]
+        got = sync(9.0, 1)
+        assert len(got) == 1 and (got[0]["options"]["startDate"], got[0]["options"]["endDate"]) == ("20261027", "20261104")
+        assert max(dict(svc.store.hist_series(sid))) == "2026-11-02"
+        assert sync(11.0) == [] and sync(16.0) == []
+        # ... once after it (Tuesday's, out at 16:00), and that is the day
+        server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-03")]
+        got = sync(16.5)
+        assert len(got) == 1 and got[0]["options"]["startDate"] == "20261030" and max(dict(svc.store.hist_series(sid))) == "2026-11-03"
+        assert sync(17.5) == [] and sync(22.0) == []
+        # ---- a start after 16:30: once, the day's whole answer
+        h._tailed.clear()                                                 # (a restart: what was asked today is not known)
+        server.history[("SOFRRATE Index", "PX_LAST")] = [(x, v) for x, v in sorted(fixings.items()) if x <= D("2026-11-04")]
+        got = sync(18.0, 2)
+        assert len(got) == 1 and max(dict(svc.store.hist_series(sid))) == "2026-11-04"
+        assert sync(19.0) == [] and sync(21.0) == []
+        # Bloomberg's cost: two years once (~520 values, in a request of the backfill's turn), then a request of its own
+        # for a handful of days - at most twice a day
+        reqs = asked()
+        assert len(reqs) == 4 and [r["options"]["startDate"] for r in reqs].count("20241024") == 1
+        assert all(r["securities"] == ["SOFRRATE Index"] and r["fields"] == ["PX_LAST"] for r in reqs[1:])
+        assert len(stored) > 500
+        rows = {r["group"]: r for r in h.coverage()["series"] if r["ticker"] == "SOFRRATE Index"}
+        assert rows["sofr"]["first"] == "2024-10-24" and rows["sofr"]["last"] == "2026-11-04"
     finally:
         svc.stop()
 
