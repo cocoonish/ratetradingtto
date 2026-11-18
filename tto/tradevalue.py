@@ -545,6 +545,8 @@ class Market(object):
         self.lot = lot if _num(lot) and lot > 0 else LOT
         self.notes = list(notes or [])
         self.sources = dict(sources or {})
+        #: how the TRY curves are read between their quoted tenors: "boot" (Bootstrap, Murex's) or "ppk" (PPK basamak)
+        self.curve = "boot"
 
     # ---- calendars
     def hol(self, *keys: str) -> frozenset:
@@ -773,13 +775,18 @@ def _outright(pair: str, spot: float, quote: float, scales: Dict[str, int]) -> O
     return f if f > 0 else None
 
 
-def market(svc) -> Market:
+def market(svc, curve: str = "boot") -> Market:
     """One snapshot of what valuation needs, read from the shared (desk) calculation of the workbooks on the engine
     thread (run there; already there, at once) and from the history: the TRY OIS curve and its quotes, the SOFR curve,
     the fixings, the holiday lists and meeting calendars, the FX spots / curves / forward points / vol quotes, the bond
     prices.  Nothing here asks Bloomberg: the cells are the workbooks' own (asked for already), the rest the history's
-    and the quant package's last values."""
-    raw = svc.et.call(_read_engine, svc)
+    and the quant package's last values.
+
+    ``curve``: how the TRY curves are read between their quoted tenors (interp.py) - "boot" (Bootstrap, Murex's: the
+    desk's calculation as it is) or "ppk" (PPK basamak: the desk's calculation with the curve on PPK - the same nodes a
+    page on PPK reads).  The market says which it is on (``Market.curve``); a PPK curve that cannot be made gives
+    Bootstrap, and says so in its notes."""
+    raw = svc.et.call(_read_engine, svc, curve)
     today = raw["today"]
     notes: List[str] = list(raw["notes"])
     tl_pts, tl_src = _history(svc, raw["tlref_ticker"])
@@ -800,6 +807,7 @@ def market(svc) -> Market:
                  spots=spots, rates=raw["rates"], off=raw.get("off"), bonds=raw["bonds"], usdtry=raw.get("usdtry"),
                  lot=raw.get("lot"), notes=notes, sources={"quant": qsrc, "tlref": tl_src, "sofr": sofr_src},
                  on_rates=raw.get("on_rates"))
+    mkt.curve = raw.get("curve") or "boot"
     # forward points (G10 3M, EURUSD 1M / 3M): outright forwards at their delivery days from the pair's spot date
     pts: Dict[str, List[Tuple[float, float]]] = {}
     for k, v in qv.items():
@@ -830,19 +838,24 @@ def market(svc) -> Market:
     return mkt
 
 
-def _read_engine(svc) -> Dict[str, Any]:
-    """The workbooks' part of :func:`market` (engine thread): cells of the shared calculation only."""
+def _read_engine(svc, curve: str = "boot") -> Dict[str, Any]:
+    """The workbooks' part of :func:`market` (engine thread): cells of the shared calculation only - on ``curve``."""
     from . import borsaspread as bsp
     from . import meetings as mt
     from .xl.model import COLS
     from .xl.values import serial_to_date
     out: Dict[str, Any] = {"curves": {}, "quotes": {}, "meetings": {}, "spots": {}, "rates": {}, "bonds": {}, "notes": [],
-                           "cal": {}, "tlref": None, "tlref_ticker": "BISTTREF Index", "today": _dt.date.today()}
+                           "cal": {}, "tlref": None, "tlref_ticker": "BISTTREF Index", "today": _dt.date.today(), "curve": "boot"}
     book = svc.books.get("tto")
     if book is None:
         out["notes"].append("TRY çalışma kitabı yok")
         return out
     calc = book.engine.shared
+    interp = getattr(svc, "interp", None)
+    if curve == "ppk" and interp is not None:
+        calc, out["curve"] = interp.desk_view("ppk")
+        if out["curve"] != "ppk":
+            out["notes"].append("PPK basamak eğrisi kurulamadı: değerler Bootstrap (Murex) eğrisiyle")
     today = serial_to_date(book.engine.clock.today())
     out["today"] = today
     idx = book.model.sheet_index

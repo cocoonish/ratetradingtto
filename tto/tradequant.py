@@ -291,22 +291,23 @@ def table(book: Any, user: Optional[str]) -> Dict[str, Any]:
     """The trades taken from the quant lines that the user sees - the desk's and their own -, per family: how many (the
     desk's / their own), open and closed, the P&L in TL (an open one's since its inception, valued now; a closed one's
     realised) - total and average -, and how the closed ones ended: at the target, at the stop, otherwise."""
-    from .tradebook import hit_of, _f as num
+    from .tradebook import hit_of, on_curve, _f as num
     user = book._user(user)
     rows = [r for r in book.store.tb_list("desk") + book.store.tb_list("personal", user)
             if (r.get("source") or {}).get("kind") == "quant"]
     open_rows = [r for r in rows if r["status"] != "closed"]
     closed_rows = [r for r in rows if r["status"] == "closed"]
     now = book.now()
+    curve = book.curve_of(user)                   # (the trades as the viewer sees them: their curve setting)
 
     def run() -> Dict[int, Dict[str, Any]]:
-        mkt = tv.market(book.svc)
+        mkt = tv.market(book.svc, curve) if curve != "boot" else tv.market(book.svc)
         return {r["id"]: book._value(book.for_value(r), mkt) for r in open_rows}
 
     vals = book._engine(run) if open_rows else {}
-    res = book._results(open_rows, vals, now) if open_rows else {}
-    todo = [r for r in closed_rows if "realized" not in (r.get("closing") or {})]
-    closed_res = book._results(todo, {}, now, only_closed=True) if todo else {}
+    res = book._results(open_rows, vals, now, curve=curve) if open_rows else {}
+    todo = [r for r in closed_rows if "realized" not in (on_curve(r.get("closing") or {}, curve)[0] or {})]
+    closed_res = book._results(todo, {}, now, only_closed=True, curve=curve) if todo else {}
     try:
         from . import quantfam as qf
         labels = {k: v[0] for k, v in qf.FAMILIES.items()}
@@ -324,7 +325,7 @@ def table(book: Any, user: Optional[str]) -> Dict[str, Any]:
         fam = str(src.get("family") or "?")
         row = by.setdefault(fam, blank(fam, labels.get(fam) or src.get("family_label") or fam))
         if r["status"] == "closed":
-            c = r.get("closing") or {}
+            c = on_curve(r.get("closing") or {}, curve)[0] or {}
             per = c.get("realized") if "realized" in c else ((closed_res.get(r["id"]) or {}).get("periods") or {}).get("total")
             hit = hit_of(r) or "other"
         else:
@@ -347,4 +348,4 @@ def table(book: Any, user: Optional[str]) -> Dict[str, Any]:
         acc["hit_rate"] = acc["target"] / acc["closed"] if acc["closed"] else None
         out.append(acc)
     return {"families": out[:-1], "all": out[-1], "at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "ids": [r["id"] for r in rows]}
+            "ids": [r["id"] for r in rows], "curve": curve}
