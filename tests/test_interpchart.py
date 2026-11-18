@@ -254,3 +254,25 @@ def test_on_the_replay_day_and_the_users_own_curves(tmp_path, monkeypatch):
         assert chart_of(svc, w)[0]["choice"] == p["choice"]                                   # another user: as it was
     finally:
         svc.stop()
+
+
+def test_a_user_on_ppk_basamak_sees_the_true_bootstrap_beside_their_ppk(tmp_path):
+    """(where the chart meets Ayarlar's "Eğri interpolasyonu", 18.11.2026) For a user whose own setting is PPK basamak -
+    Motor's nodes are PPK for them - the chart still draws the true Bootstrap (Murex) next to PPK basamak: every series,
+    every horizon, OIS and offshore, as a user on Bootstrap sees it."""
+    svc = make_service(tmp_path)
+    try:
+        on_ppk, on_boot = svc.login("Grafik PPK")["user"], svc.login("Grafik Bootstrap")["user"]
+        svc.set_interp(on_ppk, "ppk")
+        assert cell(svc, "EK_INTERP!B3", on_ppk) == 1.0 and cell(svc, "EK_INTERP!B3", on_boot) == 0.0
+        # (the user's own curve is PPK: the FRA list's market for 12x15 is their PPK column, not the bootstrap's)
+        assert cell(svc, "OIS_MAIN!B340", on_ppk) != cell(svc, "OIS_MAIN!B340", on_boot)
+        a, b = chart_of(svc, on_ppk)[0]["choice"]["items"], chart_of(svc, on_boot)[0]["choice"]["items"]
+        assert set(a) == set(b) and len(a) == 6
+        for key in a:
+            sa, sb = a[key]["data"]["series"], b[key]["data"]["series"]
+            assert [s["name"] for s in sa] == [s["name"] for s in sb]
+            for x, y in zip(sa, sb):
+                assert x["x"] == y["x"] and x["data"] == pytest.approx(y["data"], abs=1e-12), (key, x["name"])
+    finally:
+        svc.stop()
