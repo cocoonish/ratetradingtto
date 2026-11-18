@@ -2943,8 +2943,8 @@ TRY faizinin O/N karşılığı (sayfanın kendi F sütunu) ve gün sonu arşivi
   duruyordu; şimdi Bootstrap'ta iskonto faktörü 0,592809, 18M XCCY par %39,588 (sıfır kupon %41,752), PPK basamak'ta
   0,594371, %39,375 (%41,503). Bir ile üç yıl arası kâğıtların ASW FX'i değişti (Bootstrap; PPK basamak'ta parantez içinde):
   `TRT150328T24` −63,7 → −115,7 bp (−103,2), `TRT130928T38` −140,1 → −163,9 (−158,2), `TRT120929T12` −148,0 → −154,0
-  (−152,5); bir yıldan kısalar aynı. **1Y `TRYSAQ1`** (masa, 18.11.2026): EK_FX'in 1Y satırı `TRYI12M` yerine 1 yıllık
-  XCCY `TRYSAQ1`'i okur - masanın Forward sayfası offshore eğrisinin 1Y noktası olarak bunu kullanır, ASW geçmişi de;
+  (−152,5); bir yıldan kısalar aynı. **1Y `TRYSAQ1`** (masa, 18.11.2026: "Offshore için hep TRYSAQ1 kullanılacak 1Y'de, OIS ile
+  ayrı bunlar, OIS farklı"): EK_FX'in 1Y satırı `TRYI12M` yerine 1 yıllık XCCY `TRYSAQ1`'i okur - masanın Forward sayfası offshore eğrisinin 1Y noktası olarak bunu kullanır, ASW geçmişi de;
   `TRYI12M`'in iki kaynakta da fiyatı yoktu, 1Y OIS kotasıyla (%35,55) duruyordu. Türü XCCY'dir (yıllık ACT/360 par); tek
   kuponla iskonto faktörü FX swap'ın okunuşuyla aynıdır (`1 / (1 + r · gün/360)`), 2Y XCCY'nin zinciri de Forward'daki
   gibi bu 1Y'nin iskonto faktörüyle kurulur. Kayıtlı günde 1Y %39,400 (`TRYSAQ1 BGN`). FX eğrisinin sıfır kupon faizi
@@ -2952,8 +2952,11 @@ TRY faizinin O/N karşılığı (sayfanın kendi F sütunu) ve gün sonu arşivi
   forward'ı (basit ACT/360, Bootstrap) %37,5 → %35,2, 1Y–18A %39,3 → %40,6 - Forward'daki offshore eğrinin `TRYI9M` → `TRYSAQ1`
   adımı. ASW FX (Bootstrap; PPK basamak'ta parantez içinde): `TRT131027T36` (0,94 yıl) −142,5 → −96,8 bp (aynı),
   `TRT150328T24` −115,7 → −99,1 (−103,2 → −86,5), iki ile dört buçuk yıl arası 3–4,5 bp aşağı (`TRT120929T12` −154,0 →
-  −158,5), yedi–dokuz yıllıklar en çok 0,4 bp; dokuz aydan kısalar ve OIS tarafı aynı. Bloomberg: `TRYI12M`'in boş dönen
-  iki ticker'ı yerine `TRYSAQ1 ICPL` / `TRYSAQ1 BGN Curncy` (MID, yoksa bid–ask ortası); geçmiş için yeni istek yok
+  −158,5), yedi–dokuz yıllıklar en çok 0,4 bp; dokuz aydan kısaların ASW FX'i ve OIS tarafı aynı.
+  FX tarafının adil değerleri (DİBS Trading'in "FX swap'a göre" sütunları, DİBS RV · Genel, kart: ASW FX'lere
+  uydurulan a + b·t + c·t²) eğri yeniden uydurulduğu için bütün kâğıtlarda oynar - kayıtlı günde DİBS Trading'de dokuz
+  aydan kısaların adil getirisi +11…+16 bp, pahalı / ucuz −9,5…−11,7 bp; `TRT131027T36` −44,8 bp / +37,4;
+  `TRT150328T24` −12,5 / +10,3; yedi yıldan uzunlar 4 bp'den az. Bloomberg: `TRYI12M`'in boş dönen iki ticker'ı yerine `TRYSAQ1 ICPL` / `TRYSAQ1 BGN Curncy` (MID, yoksa bid–ask ortası); geçmiş için yeni istek yok
   (`TRYSAQ1`'in günlük kapanışı zaten alınıyor).
   **İki FX swap eğrisi, iki ad.** İki sayfa iki ayrı FX swap eğrisi kullanır ve aynı kâğıda farklı FX ASW'si verir
   (kayıtlı veride 13.09.28: −172 ve −164): DİBS RV'ninki **FX swap (offshore ICAP eğrisi)** - Forward'daki offshore TRY
