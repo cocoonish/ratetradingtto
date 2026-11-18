@@ -2379,8 +2379,8 @@ async function clipAfter(page, action) {
     await shot(page, '12b-dibs-genel');
     check('DİBS RV · Genel: its three tabs, the entry lit, the table in its groups (OIS ASW · FX swap ASW on the FX swap ima eğrisi · sıfır kupon) with every bond of the trading list',
       genelSeen.tabs.join('|') === 'Genel|RV hesap tablosu|ASW hesap tablosu' && genelSeen.on.join() === 'dibs-genel' && genelSeen.lit.join() === 'tahvil.dibsrv'
-      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NSS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–18A/.test(g))
-      && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
+      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–18A/.test(g))
+      && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp · LOO RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
     { genelSeen, gBonds: gBonds.length });
     check('... its three charts with their points: the yield curve (bonds and OIS), ASW · OIS and ASW · FX swap as DİBS ASW draws them',
       genelSeen.yieldMk === dgMarks(gData.chart) && gData.chart.series[0].x.length >= 15 && genelSeen.yieldPt >= 8
@@ -2633,13 +2633,20 @@ async function clipAfter(page, action) {
     const hiddenOf = async (user, table) => ((await api(page, user, 'GET', '/api/columns')).json.tables || {})[table];
     await open(page, 'dibs');
     await tab(page, '*');
+    // (DİBS RV's own FX swap columns, BF:BJ on the offshore ICAP curve, are hidden until a user shows them: the desk reads
+    // the FX swap side on DİBS ASW's FX swap implied curve - Genel's; the table's note says so)
+    const fxCols = await page.evaluate((s) => { const g = document.querySelector(s + ' table.grid').__grid;
+      return g.columns.cols.filter((c) => g.columns.hid.has(c.j)).map((c) => c.key); }, rv);
+    check('DİBS RV: its own FX swap columns (BF:BJ) hidden by default, the note pointing to Genel\'s FX swap ASW',
+      fxCols.join() === 'BF,BG,BH,BI,BJ' && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 5 sütun'
+      && /^BF–BJ .*varsayılan olarak gizli.*Genel/.test(await page.textContent(rv + ' > .note')), fxCols);
     await page.locator(rv + ' tr.hd td', { hasText: 'Kaynak (boş = genel)' }).click({ button: 'right' });
     await page.click('.menu >> text=Sütunu gizle: Kaynak (boş = genel)');
-    await page.waitForFunction((s) => !document.querySelector(s + ' .colschip').classList.contains('hidden'), rv);
+    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 6 sütun', rv);
     check('DİBS RV: a right click on a caption hides its column, the header says so',
-      await colHidden(rv, 1) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 1 sütun');
+      await colHidden(rv, 1) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 6 sütun');
     check('... kept with this user\'s account (by the table and the sheet\'s column), nobody else\'s view changes',
-      JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["B"]' && (await hiddenOf('mehmet', 'v/dibs/B3')) === undefined);
+      JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["BF","BG","BH","BI","BJ","B"]' && (await hiddenOf('mehmet', 'v/dibs/B3')) === undefined);
     await (await cellHandle(page, 'DİBS RV!A4')).click();
     await (await cellHandle(page, 'DİBS RV!D6')).click({ modifiers: ['Shift'] });
     const visibleCopy = (await page.evaluate(() => window.tto.selectionText(false))).split('\r\n');
@@ -2653,14 +2660,14 @@ async function clipAfter(page, action) {
     check('... and stays hidden when the page is opened again', await colHidden(rv, 1));
     await page.click(rv + ' .colschip');
     await page.locator('.menu label.mcheck').filter({ has: page.locator('.t', { hasText: /^Ad$/ }) }).locator('input').click();
-    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 2 sütun', rv);
+    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 7 sütun', rv);
     check('"Sütunlar": every column with a tick - untick one and it goes (the list stays open)',
       await colHidden(rv, 2) && await page.locator('.menu label.mcheck').count() >= 60
-      && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["B","C"]');
+      && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["BF","BG","BH","BI","BJ","B","C"]');
     await page.click('.menu >> text=Tümünü göster');
     await page.waitForFunction((s) => document.querySelector(s + ' .colschip').classList.contains('hidden'), rv);
-    check('... "Tümünü göster" brings every column back', !(await colHidden(rv, 1)) && !(await colHidden(rv, 2))
-      && (await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === undefined);
+    check('... "Tümünü göster" brings every column back - the FX swap ones too, and that is kept (the default does not return)',
+      !(await colHidden(rv, 1)) && !(await colHidden(rv, 2)) && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '[]');
     // a table of the dashboard's own: a column by its caption, across pages
     await open(page, 'eod');
     const eodCurve = '.panel[data-panel="curve"]';
@@ -3308,7 +3315,7 @@ async function clipAfter(page, action) {
     const quoteRows = await page.evaluate(() => [...document.querySelectorAll('#quant-curve-quote table.grid tbody tr:not(.hd)')].map((tr) => tr.children[0].textContent));
     const swq = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/switch?a=TRT150328T24&b=TRT160431T35');
     check('Eğri Adil Değeri: a bond quoted from the fair curve (bid / fair / ask, the market) and a DV01-neutral switch',
-      quoteRows.join('|').startsWith('Alış (bid)|Adil (NSS)|Satış (ask)|Piyasa') && swq.status === 200 && swq.json.ok
+      quoteRows.join('|').startsWith('Alış (bid)|Adil (NS)|Satış (ask)|Piyasa') && swq.status === 200 && swq.json.ok
       && Math.abs(swq.json.ratio * swq.json.b.market.dv01 - swq.json.a.market.dv01) < 1e-6
       && /^Switch: 15\.03\.28 sat \/ 16\.04\.31 al/.test(swq.json.line), { quoteRows, sw: swq.json && (swq.json.line || swq.json.why) });
     await shot(page, 'quant-curve');

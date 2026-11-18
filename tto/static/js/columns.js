@@ -11,13 +11,15 @@ const kept = new Map();           // table -> Set of the keys of the columns thi
 const orders = new Map();         // table -> the keys of its columns in the order this user put them
 const saving = new Map();         // table -> its last save: the saves of one table go one after the other
 
-/** The columns this user hid and the orders they chose (on signing in, before the first table is drawn). */
+/** The columns this user hid and the orders they chose (on signing in, before the first table is drawn); a table they
+ *  never chose for hides what it hides by default (the server's ``defaults``: DİBS RV's own FX swap columns). */
 export async function loadHiddenColumns() {
   kept.clear();
   orders.clear();
   try {
     const res = await api.get('/api/columns');
     for (const name of Object.keys(res.tables || {})) kept.set(name, new Set(res.tables[name]));
+    for (const name of Object.keys(res.defaults || {})) if (!kept.has(name)) kept.set(name, new Set(res.defaults[name]));
     for (const name of Object.keys(res.order || {})) orders.set(name, res.order[name].slice());
   } catch (e) { /* every column on screen; a change says what is wrong */ }
 }

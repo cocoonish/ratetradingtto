@@ -1,8 +1,9 @@
 """DİBS RV · Genel (``tto/dibsgenel.py``): one menu entry with three tabs (Genel, the RV and the ASW hesap tablosu - the old
 pages' addresses and boxes keep working), the bond table whose every figure is its source's (DİBS RV's cell, rvfair's fair
 value - the same as DİBS Trading's and the card's -, DİBS ASW on the FX swap implied curve, the live fit), the zero-coupon
-fit that is quantcurve's on the same inputs, a bond added in the middle of the trading list followed by its ISIN, the
-charts' points, the tables of the hesap tablosu tabs shown as their pages draw them, and the HTTP endpoint."""
+fit that is quantcurve's on the same inputs (Nelson-Siegel, the bills in) and steady on the trading list's bonds, a bond
+added in the middle of the trading list followed by its ISIN, the charts' points, the tables of the hesap tablosu tabs
+shown as their pages draw them, and the HTTP endpoint."""
 from __future__ import annotations
 
 import datetime as dt
@@ -82,7 +83,8 @@ def test_every_figure_of_the_table_is_its_sources(service):
     d = genel(s, u)
     t = d["table"]
     assert [c.get("t") for c in t["rows"][0] if not c.get("sk")] == ["Kâğıt", "Fiyat", "Getiri", "OIS ASW", dg.FX_GROUP,
-                                                                     "Sıfır kupon eğrisi (NSS)", "Risk", "Carry", "Broker", ""]
+                                                                     "Sıfır kupon eğrisi (NS)", "Risk", "Carry", "Broker", ""]
+    assert dg.ZERO_GROUP == "Sıfır kupon eğrisi (NS)"
     assert t["c"][:4] == ["bond", "isin", "due", "left"] and t["c"][-2:] == ["card", "flag"]
     assert [c["t"] for c in t["rows"][1]][23:26] == ["Model getiri %", "Pahalı / ucuz", "Adil fiyat"]
     # the trading list's bonds, kind by kind (bills first), by maturity: each row its bond's
@@ -172,8 +174,9 @@ def test_par_yield_and_zero_rate_on_a_flat_curve():
 
 def test_the_zero_coupon_fit_is_quantcurves_on_the_same_inputs(service):
     """The live fit is quant's "DİBS adil değeri" fit of today's quotes: quantcurve.fam_dibs run on the same bonds (no
-    history: the τ searched on them, the β with them held) gives the same RMSE, parameters, residuals and model yields;
-    the fair price is quantcurve.quote_bond's."""
+    history: the model's τ searched on them, the β with them held) gives the same model (Nelson-Siegel), RMSE,
+    leave-one-out RMSE, parameters, residuals and model yields - the bills in the fit; the fair price is
+    quantcurve.quote_bond's."""
     s = service
     u = s.login("Genel NSS")["user"]
     loc = numfmt.get_locale("tr")
@@ -185,14 +188,17 @@ def test_the_zero_coupon_fit_is_quantcurves_on_the_same_inputs(service):
     built = table["build"](got["live"])
     assert built["ok"]
     summ = dg.fit_summary(mine)
-    assert summ["rmse"] == pytest.approx(built["rmse"], abs=1e-9) and summ["n_fit"] == built["n_fit"] == 13 and summ["n"] == built["n"] == 15
+    assert summ["rmse"] == pytest.approx(built["rmse"], abs=1e-9) and summ["n_fit"] == built["n_fit"] == 15 and summ["n"] == built["n"] == 15
+    assert summ["n_bills"] == built["n_bills"] == 2 and summ["model"] == built["model"] == "NS"
+    assert summ["loo"] == pytest.approx(built["loo"], abs=1e-9) and summ["loo"] > summ["rmse"]
     p = built["params"]
-    assert summ["beta"] == pytest.approx([p["b0"], p["b1"], p["b2"], p["b3"]], abs=1e-9) and summ["tau"] == pytest.approx([p["tau1"], p["tau2"]], abs=1e-12)
+    assert summ["beta"] == pytest.approx([p["b0"], p["b1"], p["b2"]], abs=1e-9) and summ["tau"] == pytest.approx([p["tau1"]], abs=1e-12)
+    assert p["b3"] is None and p["tau2"] is None
     rows = dg.fit_rows(mine)
     for b in built["rows"]:
         x = rows[b["isin"]]
         assert x["resid"] == pytest.approx(b["resid"], abs=1e-9) and x["model"] == pytest.approx(b["model"], abs=1e-12), b["isin"]
-        assert x["fitted"] == b["fitted"]
+        assert x["fitted"] == b["fitted"] is True
     # the page's cells are those numbers
     d = genel(s, u)
     assert d["fit"]["rmse"] == pytest.approx(built["rmse"], abs=1e-9)
@@ -204,7 +210,8 @@ def test_the_zero_coupon_fit_is_quantcurves_on_the_same_inputs(service):
         assert x["z_fp"]["v"] == pytest.approx(qc.quote_bond(b, value, mine["nss"], 0.0)["fair"]["clean"], abs=1e-12)
         # a bond's model yield is its yield less its cheap / rich (the simple yield of DİBS RV!S)
         assert x["z_model"]["v"] == pytest.approx(rv(s, "S", row_of(s, isin)) - x["z_rc"]["v"] / 1e4, abs=1e-12)
-    assert "bono" in line(d, BILL)["z_rc"]["tip"] and "uydurmada" in line(d, FIXED)["z_rc"]["tip"]
+    assert "uydurmada" in line(d, BILL)["z_rc"]["tip"] and "uydurmada" in line(d, FIXED)["z_rc"]["tip"]
+    assert "NS sıfır kupon eğrisi (15 kâğıda uyduruldu: 13 sabit kuponlu, 2 bono)" in line(d, BILL)["z_rc"]["tip"]
     # kept: the same inputs answer the same fit; new yields refit the β with the τ held
     again = s.dibsgenel.fit(got["quant"], got["live"], got["today"])
     assert again["fit"] is s.dibsgenel.fit(got["quant"], got["live"], got["today"])["fit"]
@@ -214,10 +221,37 @@ def test_the_zero_coupon_fit_is_quantcurves_on_the_same_inputs(service):
     assert dg.fit_rows(held)[FIXED]["resid"] > dg.fit_rows(again)[FIXED]["resid"] + 15
 
 
+def test_the_curve_of_the_trading_list_is_steady_and_holds_its_short_end(service):
+    """The trading list's curve now (DİBS RV's bonds and bills - the sheet as it stands, no figure pinned): Nelson-Siegel
+    with the bills in, its β tens of per cent (Svensson's on the coupon bonds alone ran to hundreds, opposite signs), τ1
+    within the bonds' years; the bills nearer the curve than that old fit put them (it read the short end off the coupon
+    bonds); a day's noise of a few bp on every yield, refitted as the quant family refits a day (the τ held), moves the
+    β by a point or so, not tens."""
+    import random
+    s = service
+    u = s.login("Genel Eğri")["user"]
+    got = s.et.call(lambda: s.dibsgenel._read(u, numfmt.get_locale("tr")))
+    res = dg.DibsGenel(s).fit(got["quant"], got["live"], got["today"])
+    summ = dg.fit_summary(res)
+    assert summ["model"] == "NS" and summ["n_bills"] >= 1 and all(abs(b) < 100.0 for b in summ["beta"])
+    assert 0.5 * summ["shortest"] <= summ["tau"][0] <= summ["longest"] and summ["rmse"] <= summ["loo"]
+    rows = dg.fit_rows(res)
+    items, _ = dg.bond_inputs(got["quant"], got["live"], got["today"])
+    old_in = qc.BondFit(items, ("fixed",))
+    old = qc.search(old_in.make, tau_min=old_in.shortest, tau_max=old_in.longest)          # (the old fit: NSS, coupon bonds)
+    old_r = {b.isin: e * 1e4 for b, e in zip(old_in.bonds, old_in.evaluate(old["nss"])[0])}
+    bills = [i for i, x in rows.items() if x["kind"] == "bill"]
+    assert bills and all(rows[i]["fitted"] for i in bills) and sum(abs(rows[i]["resid"]) for i in bills) < sum(abs(old_r[i]) for i in bills)
+    rnd = random.Random(3)
+    moved = qc.BondFit([(b, v, y + rnd.gauss(0, 0.0003), c) for b, v, y, c in items])
+    nxt = qc.refit(moved.make, res["nss"], res["nss"].beta, iters=5)["nss"]
+    assert nxt.k == qc.NS and max(abs(a - b) for a, b in zip(nxt.beta, res["nss"].beta)) * 100 < 2.0
+
+
 def test_too_few_bonds_no_fit_and_why(service):
     items = [(qc.Bond("TRT1", "", "fixed", dt.date(2028, 3, 15), 36.8, 2), dt.date(2026, 11, 4), 0.36, "simple")]
     res = dg.zero_fit(items)
-    assert not res["ok"] and "en az 6 sabit kuponlu" in res["why"]
+    assert not res["ok"] and "en az 6 kâğıdın (sabit kuponlu ya da bono)" in res["why"]
     assert dg.fit_summary(res) == {"ok": False, "why": res["why"]}
 
 
@@ -277,7 +311,7 @@ def test_the_charts_points_and_the_mirrored_tables(service):
     assert len(par["x"]) == len(zero["x"]) == math.floor((max(pts["x"]) + 0.25) / dg.GRID_STEP + 1e-9) and all(type(v) is float for v in par["data"])
     # the fitted bonds sit around the par line, within a few RMSEs
     fit = d["fit"]
-    assert fit["ok"] and fit["n_fit"] == 13 and 0 < fit["rmse"] < 100 and len(fit["beta"]) == 4 and len(fit["tau"]) == 2
+    assert fit["ok"] and fit["n_fit"] == 15 and 0 < fit["rmse"] < 100 and len(fit["beta"]) == 3 and len(fit["tau"]) == 1
     # the tables and charts of the hesap tablosu tabs, as their pages draw them
     assert [(m["view"], m["panel"]) for m in d["mirrors"]] == [("asw", "chart0"), ("asw", "chartfx"), ("dibs", "B4"), ("asw", "sel"), ("asw", "chart1")]
     got = s.panels(u, [{"view": m["view"], "panel": m["panel"], "key": m["key"]} for m in d["mirrors"]])["panels"]

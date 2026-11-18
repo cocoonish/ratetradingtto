@@ -1,6 +1,7 @@
-"""Curve fair value: Nelson-Siegel-Svensson fits of the TRY OIS curve and of the DİBS curve, each point's rich / cheap
-against its fit, the bonds' carry + roll and the best bond to receive / pay with.  ``tto.quant`` runs it next to the
-families of ``tto.quantfam`` (page "Eğri Adil Değeri"; families "Eğri adil değeri" and "DİBS adil değeri").
+"""Curve fair value: a Nelson-Siegel-Svensson fit of the TRY OIS curve and a Nelson-Siegel one of the DİBS curve, each
+point's rich / cheap against its fit, the bonds' carry + roll and the best bond to receive / pay with.  ``tto.quant``
+runs it next to the families of ``tto.quantfam`` (page "Eğri Adil Değeri"; families "Eğri adil değeri" and "DİBS adil
+değeri").
 
 **The model.**  Svensson's extension of Nelson-Siegel writes the continuously compounded zero rate (ACT/365) of a
 maturity of t years as
@@ -35,11 +36,16 @@ level (β0) and slope (β1), DV01-weighted, as the PCA family hedges to PC1 / PC
 linkers stay out), priced as that sheet prices them (BIST): coupons of c/f every round(364/f) days back from the
 maturity, the yield compounded f times a year over the periods left (the first one a fraction of a period), a bill's
 simple yield (100/P − 1)·365/days; the dirty price of the value date (the next week day; a bill priced "ISL0" on its own
-day).  The curve is fitted to the yields: each bond's model price Σ CF·DF(t) against its market price, the difference
-divided by the price's sensitivity to its yield (the sum is one of yield errors), and a bond's rich / cheap is its
-yield − the yield of its model price (bp, in the bond's own yield convention): + cheap (buy), − rich (sell).  Beside it
-the same cash flows on the OIS fit: the bond's yield over the OIS curve (bp, the sheet's "Getiri − OIS" read cash flow
-by cash flow - an asset-swap-like spread) next to the sheet's own ASW.
+day).  The curve is fitted to the yields of both kinds - the bills hold the short end with prices of their own: each
+bond's model price Σ CF·DF(t) against its market price, the difference divided by the price's sensitivity to its yield
+(the sum is one of yield errors), and a bond's rich / cheap is its yield − the yield of its model price (bp, in the
+bond's own yield convention): + cheap (buy), − rich (sell).  The DİBS curve is Nelson-Siegel's (``DIBS_MODEL``: β3 held
+at 0, one hump - with a dozen or two bonds Svensson's second hump fits the bonds' own noise, its β run to hundreds of per
+cent and swing day to day; the evidence is at ``DIBS_MODEL``), its τ1 searched on the grid of both τ.  Each fitted
+bond's leave-one-out residual - its distance from the curve fitted again without it, the τ held - says how far the
+curve misses a bond it was not given (``BondFit.loo``; the table's "LOO RMSE").  Beside it the same cash flows on the
+OIS fit: the bond's yield over the OIS curve (bp, the sheet's "Getiri − OIS" read cash flow by cash flow - an
+asset-swap-like spread) next to the sheet's own ASW.
 
 Live yields come from the DİBS RV sheet (its simple and compound BIST yields); past days from the history's daily
 closes (Bloomberg's ``YLD_YTM_MID``, whose convention is not documented for these bonds): each bond's history is read
@@ -94,13 +100,24 @@ TAU_RATIO = 2.0
 TAU_BOUNDS = (0.05, 30.0)
 #: τ1 at least this share of the shortest maturity of a fit
 TAU_FLOOR = 0.5
+#: the models by the β free in them: Nelson-Siegel (β0 … β2, τ1) and Svensson's (β0 … β3, τ1, τ2)
+NS, NSS = 3, 4
+MODEL_NAMES = {NS: "NS", NSS: "NSS"}
+MODEL_TEXT = {NS: "Nelson-Siegel", NSS: "Nelson-Siegel-Svensson"}
 MIN_OIS = 6                     # tenors a day's OIS fit needs
 MIN_BONDS = 6                   # bonds a day's DİBS fit needs
 MIN_DAYS = 30                   # a bond this close to its maturity (days) is left out of the fit
-#: the kinds the DİBS curve is fitted to - the fixed-coupon bonds, as the sheet's own ASW curve (DİBS RV!FR: "S" rows):
-#: bills trade far from them (150 - 300 bp rich at the same maturity) and would bend the front end; they are measured
-#: against the curve all the same
-FIT_KINDS = ("fixed",)
+#: the kinds the DİBS curve is fitted to: the fixed-coupon bonds and the bills (BIST's simple yield, as the sheet prices
+#: them) - the short end is held by prices of its own, not read off the coupon bonds' curve
+FIT_KINDS = ("fixed", "bill")
+#: the DİBS curve's model: Nelson-Siegel, whatever the number of bonds.  On the evidence (18.11.2026, the recorded day
+#: and histories fitted as the family fits them): with the list's 13 - 15 bonds Svensson's two more parameters were
+#: not better out of sample (leave-one-out RMSE 101 bp against NS's 96, bills in; 85 / 73 the coupon bonds alone), its
+#: β ran to ±900 % and moved 9 - 40 points a day against NS's 0,2 - 0,5, its short end 2 - 3 times as unsteady; on
+#: synthetic lists of 8 - 40 bonds priced off a Svensson curve or an NS one (σ 5 / 25 / 50 bp) NS's LOO was the lower or
+#: equal one in 34 cases of 36 (the two others one draw, 24 bonds at 50 bp, under both curves: noise) - no number of
+#: bonds the list can hold is one where Svensson pays.  (The OIS curve stays Svensson's: 16 tenors, 1 - 3 bp.)
+DIBS_MODEL = NS
 HORIZONS = (("1w", 7), ("1m", 30))
 YEAR = 365.0
 DIBS_KINDS = {"S": "fixed", "B": "bill"}
@@ -133,13 +150,22 @@ def loadings(t: float, tau1: float, tau2: float) -> Tuple[float, float, float, f
 
 
 class Nss(object):
-    """A fitted curve: ``beta`` (decimal rates), ``tau1``, ``tau2`` (years)."""
+    """A fitted curve: ``beta`` (decimal rates), ``tau1``, ``tau2`` (years); ``k`` the β free in it - 4 Svensson's
+    (NSS), 3 Nelson-Siegel's (NS: β3 held at 0, τ2 says nothing).  ``beta`` is always four long."""
 
-    __slots__ = ("beta", "tau1", "tau2")
+    __slots__ = ("beta", "tau1", "tau2", "k")
 
-    def __init__(self, beta: Sequence[float], tau1: float, tau2: float):
-        self.beta = [float(b) for b in beta]
+    def __init__(self, beta: Sequence[float], tau1: float, tau2: float, k: int = 4):
+        self.beta = [float(b) for b in beta][:4]
+        self.beta += [0.0] * (4 - len(self.beta))
+        self.k = NS if k == NS else NSS
+        if self.k == NS:
+            self.beta[3] = 0.0
         self.tau1, self.tau2 = float(tau1), float(tau2)
+
+    @property
+    def model(self) -> str:
+        return MODEL_NAMES[self.k]
 
     def zero(self, t: float) -> float:
         return sum(b * x for b, x in zip(self.beta, loadings(max(t, 0.0), self.tau1, self.tau2)))
@@ -156,9 +182,12 @@ class Nss(object):
     def info(self, longest: float = 10.0) -> Dict[str, Any]:
         """The parameters (per cent) and the curve's own zero rates at round maturities up to ``longest`` years - with
         few, noisy points the β can run large with opposite signs (the loadings nearly alike over the maturities
-        fitted) while the curve inside them stays put: its rates say what the β do not."""
+        fitted) while the curve inside them stays put: its rates say what the β do not.  ``model`` "NS" / "NSS" (an NS
+        curve has no β3 nor τ2: ``None``)."""
         b = self.beta
-        return {"b0": b[0] * 100.0, "b1": b[1] * 100.0, "b2": b[2] * 100.0, "b3": b[3] * 100.0, "tau1": self.tau1, "tau2": self.tau2,
+        ns = self.k == NS
+        return {"model": self.model, "b0": b[0] * 100.0, "b1": b[1] * 100.0, "b2": b[2] * 100.0, "b3": None if ns else b[3] * 100.0,
+                "tau1": self.tau1, "tau2": None if ns else self.tau2,
                 "zero": {"%gY" % t: self.zero(t) * 100.0 for t in (1.0, 2.0, 5.0, 10.0) if t <= longest + 1e-9}}
 
 
@@ -227,21 +256,34 @@ def gauss_newton(fn: Fn, beta: Sequence[float], iters: int = 12, tol: float = 1e
     return beta, sse, r, J
 
 
-def _ols_start(ts: Sequence[float], zs: Sequence[float], tau1: float, tau2: float) -> List[float]:
-    """β of a linear fit of rough zero rates ``zs`` at maturities ``ts`` (a start for Gauss-Newton; a whisker of
-    ridge keeps it defined when two loadings are alike)."""
-    rows = [loadings(t, tau1, tau2) for t in ts]
-    A, g = _normal(rows, zs, 4)
-    for i in range(4):
+def _ols_start(ts: Sequence[float], zs: Sequence[float], tau1: float, tau2: float, k: int = NSS) -> List[float]:
+    """The first ``k`` β of a linear fit of rough zero rates ``zs`` at maturities ``ts`` (a start for Gauss-Newton; a
+    whisker of ridge keeps it defined when two loadings are alike)."""
+    rows = [loadings(t, tau1, tau2)[:k] for t in ts]
+    A, g = _normal(rows, zs, k)
+    for i in range(k):
         A[i][i] += 1e-10 * (A[0][0] or 1.0)
-    beta = qm.solve(A, g) if len(zs) >= 4 else None
+    beta = qm.solve(A, g) if len(zs) >= k else None
     if beta is None or not all(math.isfinite(b) for b in beta):
-        return [sum(zs) / len(zs) if zs else 0.3, 0.0, 0.0, 0.0]
+        return [sum(zs) / len(zs) if zs else 0.3] + [0.0] * (k - 1)
     return beta
 
 
-#: a problem for the search: (τ1, τ2) -> (its residual function, a function giving a start for the β)
-Make = Callable[[float, float], Tuple[Fn, Callable[[], List[float]]]]
+def _free(fn: Fn, k: int) -> Fn:
+    """``fn`` of the first ``k`` β alone, the others held at 0 (Nelson-Siegel's problem out of Svensson's)."""
+    if k >= NSS:
+        return fn
+    pad = [0.0] * (NSS - k)
+
+    def fk(beta: List[float]) -> Tuple[List[float], List[List[float]]]:
+        r, J = fn(list(beta) + pad)
+        return r, [row[:k] for row in J]
+
+    return fk
+
+
+#: a problem for the search: (τ1, τ2) -> (its residual function, a function giving a start for the first k β)
+Make = Callable[[float, float], Tuple[Fn, Callable[..., List[float]]]]
 
 
 def _project(u1: float, u2: float, tau_min: float = TAU_BOUNDS[0], tau_max: float = TAU_BOUNDS[1]) -> Tuple[float, float]:
@@ -285,7 +327,7 @@ def _weighted(fn: Fn, w: Sequence[float]) -> Fn:
 
 
 def _weighted_make(make: Make, w: Sequence[float]) -> Make:
-    def mk(t1: float, t2: float) -> Tuple[Fn, Callable[[], List[float]]]:
+    def mk(t1: float, t2: float) -> Tuple[Fn, Callable[..., List[float]]]:
         fn, start = make(t1, t2)
         return _weighted(fn, w), start
 
@@ -293,11 +335,26 @@ def _weighted_make(make: Make, w: Sequence[float]) -> Make:
 
 
 def _joint(make: Make, beta: List[float], t1: float, t2: float, iters: int = 40, tau_min: float = TAU_BOUNDS[0],
-           tau_max: float = TAU_BOUNDS[1]) -> Tuple[float, List[float], List[float], List[List[float]], float, float, int]:
-    """Levenberg-Marquardt on all six parameters - the β and (log τ1, log τ2), the τ columns of the Jacobian by
-    forward differences - from a grid point.  Returns ``(sse, beta, resid, jac_beta, tau1, tau2, evaluations)``."""
-    u1, u2 = _project(math.log(t1), math.log(t2), tau_min, tau_max)
-    fn, _ = make(math.exp(u1), math.exp(u2))
+           tau_max: float = TAU_BOUNDS[1], k: int = NSS) -> Tuple[float, List[float], List[float], List[List[float]], float, float, int]:
+    """Levenberg-Marquardt on all the parameters - the ``k`` β and the log τ (log τ1, log τ2 for NSS; log τ1 for NS,
+    its τ2 kept equal to it: β3 is 0) -, the τ columns of the Jacobian by forward differences - from a grid point.
+    Returns ``(sse, beta, resid, jac_beta, tau1, tau2, evaluations)``, ``beta`` four long."""
+    nt = 2 if k == NSS else 1
+    lo, hi = math.log(max(TAU_BOUNDS[0], tau_min)), math.log(min(TAU_BOUNDS[1], tau_max))
+
+    def place(a: float, b: float) -> Tuple[float, float]:
+        if nt == 2:
+            return _project(a, b, tau_min, tau_max)
+        a = min(max(a, lo), hi)
+        return a, a
+
+    def problem(a: float, b: float) -> Fn:
+        fn, _ = make(math.exp(a), math.exp(b))
+        return _free(fn, k)
+
+    u1, u2 = place(math.log(t1), math.log(t2))
+    beta = list(beta[:k])
+    fn = problem(u1, u2)
     r, J = fn(beta)
     sse = sum(e * e for e in r)
     mu = 1e-3
@@ -305,14 +362,13 @@ def _joint(make: Make, beta: List[float], t1: float, t2: float, iters: int = 40,
     h = 1e-6
     for _ in range(iters):
         cols = []
-        for k in (0, 1):
-            a, b = (u1 + h, u2) if k == 0 else (u1, u2 + h)
-            fh, _ = make(math.exp(a), math.exp(b))
-            rh, _ = fh(beta)
+        for j in range(nt):
+            a, b = ((u1 + h, u2) if nt == 2 else (u1 + h, u1 + h)) if j == 0 else (u1, u2 + h)
+            rh, _ = problem(a, b)(beta)
             evals += 1
             cols.append([(x - y) / h for x, y in zip(rh, r)])
-        JJ = [list(row) + [cols[0][i], cols[1][i]] for i, row in enumerate(J)]
-        A, g = _normal(JJ, r, 6)
+        JJ = [list(row) + [c[i] for c in cols] for i, row in enumerate(J)]
+        A, g = _normal(JJ, r, k + nt)
         moved = False
         for _try in range(10):
             d = _damped(A, g, mu)
@@ -321,10 +377,9 @@ def _joint(make: Make, beta: List[float], t1: float, t2: float, iters: int = 40,
                 continue
             if max(abs(x) for x in d) < 1e-12:
                 break
-            nu1, nu2 = _project(u1 + d[4], u2 + d[5], tau_min, tau_max)
-            nb = [b + x for b, x in zip(beta, d[:4])]
-            fn2, _ = make(math.exp(nu1), math.exp(nu2))
-            r2, J2 = fn2(nb)
+            nu1, nu2 = place(u1 + d[k], u2 + d[k + 1] if nt == 2 else u1 + d[k])
+            nb = [b + x for b, x in zip(beta, d[:k])]
+            r2, J2 = problem(nu1, nu2)(nb)
             evals += 1
             s2 = sum(e * e for e in r2)
             if math.isfinite(s2) and s2 < sse:
@@ -336,44 +391,46 @@ def _joint(make: Make, beta: List[float], t1: float, t2: float, iters: int = 40,
             mu *= 4.0
         if not moved:
             break
-    return sse, beta, r, J, math.exp(u1), math.exp(u2), evals
+    return sse, beta + [0.0] * (NSS - k), r, J, math.exp(u1), math.exp(u2), evals
 
 
 def search(make: Make, starts: int = 5, robust: bool = True, tau_min: float = TAU_BOUNDS[0],
-           tau_max: float = TAU_BOUNDS[1]) -> Optional[Dict[str, Any]]:
-    """The NSS of a problem: ``make(tau1, tau2) -> (fn, start)`` gives the residual function and (a function giving)
-    a start of the β with those τ.  Every grid point a few Gauss-Newton steps in the β; Levenberg-Marquardt on all six
-    parameters for a while from the ``starts`` best of them (the NSS surface has several shallow valleys, and the
-    grid's order is not theirs), the best of those to the end; then, ``robust``, reweighted (Huber).  ``tau_min`` /
-    ``tau_max``: the shortest / longest maturity of the problem - a hump far outside the data cannot be told from it,
-    and there the β run off: a τ1 well below the shortest lets β1 and β2 run far apart into a front end like 1/t that
-    an extrapolation (a roll-down) would read, two τ beyond the longest make the four loadings nearly polynomials in t
-    (huge β of opposite sign, the same curve inside the data).  τ1 may go down to TAU_FLOOR × the shortest (its
-    e^(−t/τ1) still says something there), τ2 up to the longest.
-    ``{"nss", "sse", "resid", "jac", "evals", "weights"}`` - the residuals and the sum unweighted."""
+           tau_max: float = TAU_BOUNDS[1], k: int = NSS) -> Optional[Dict[str, Any]]:
+    """The NSS (``k`` 4) or NS (``k`` 3) of a problem: ``make(tau1, tau2) -> (fn, start)`` gives the residual function
+    and (a function giving) a start of the β with those τ.  Every grid point a few Gauss-Newton steps in the β;
+    Levenberg-Marquardt on all the parameters for a while from the ``starts`` best of them (the NSS surface has several
+    shallow valleys, and the grid's order is not theirs), the best of those to the end; then, ``robust``, reweighted
+    (Huber).  ``tau_min`` / ``tau_max``: the shortest / longest maturity of the problem - a hump far outside the data
+    cannot be told from it, and there the β run off: a τ1 well below the shortest lets β1 and β2 run far apart into a
+    front end like 1/t that an extrapolation (a roll-down) would read, two τ beyond the longest make the four loadings
+    nearly polynomials in t (huge β of opposite sign, the same curve inside the data).  τ1 may go down to TAU_FLOOR ×
+    the shortest (its e^(−t/τ1) still says something there), τ2 - NS's τ1 - up to the longest; NS's grid is both
+    grids'.  ``{"nss", "sse", "resid", "jac", "evals", "weights"}`` - the residuals and the sum unweighted."""
     grid = []
     evals = 0
     floor = max(TAU_BOUNDS[0], TAU_FLOOR * tau_min)
     ceil = max(min(TAU_BOUNDS[1], tau_max), TAU_RATIO * floor)
-    for t1 in sorted({max(t, floor) for t in TAU1_GRID}):
-        for t2 in sorted({min(t, ceil) for t in TAU2_GRID}):
-            if t2 < TAU_RATIO * t1 * (1.0 - 1e-12):
-                continue
-            fn, start = make(t1, t2)
-            beta, sse, _, _ = gauss_newton(fn, start(), iters=4, tol=1e-9)
-            evals += 5
-            if all(math.isfinite(b) for b in beta) and math.isfinite(sse):
-                grid.append((sse, beta, t1, t2))
+    if k == NSS:
+        pairs = [(t1, t2) for t1 in sorted({max(t, floor) for t in TAU1_GRID}) for t2 in sorted({min(t, ceil) for t in TAU2_GRID})
+                 if not t2 < TAU_RATIO * t1 * (1.0 - 1e-12)]
+    else:
+        pairs = [(t, t) for t in sorted({min(max(t, floor), ceil) for t in TAU1_GRID + TAU2_GRID})]
+    for t1, t2 in pairs:
+        fn, start = make(t1, t2)
+        beta, sse, _, _ = gauss_newton(_free(fn, k), start(k), iters=4, tol=1e-9)
+        evals += 5
+        if all(math.isfinite(b) for b in beta) and math.isfinite(sse):
+            grid.append((sse, beta, t1, t2))
     if not grid:
         return None
     grid.sort(key=lambda g: g[0])
     best = None
     for sse0, beta, t1, t2 in grid[:starts]:
-        res = _joint(make, beta, t1, t2, iters=25, tau_min=floor, tau_max=ceil)
+        res = _joint(make, beta, t1, t2, iters=25, tau_min=floor, tau_max=ceil, k=k)
         evals += res[6]
         if best is None or res[0] < best[0]:
             best = res
-    res = _joint(make, best[1], best[4], best[5], iters=80, tau_min=floor, tau_max=ceil)
+    res = _joint(make, best[1], best[4], best[5], iters=80, tau_min=floor, tau_max=ceil, k=k)
     evals += res[6]
     if res[0] <= best[0]:
         best = res
@@ -384,12 +441,12 @@ def search(make: Make, starts: int = 5, robust: bool = True, tau_min: float = TA
         if w2 is None or (w is not None and max(abs(a - b) for a, b in zip(w, w2)) < 0.02):
             break
         w = w2
-        res = _joint(_weighted_make(make, w), beta, t1, t2, iters=40, tau_min=floor, tau_max=ceil)
+        res = _joint(_weighted_make(make, w), beta, t1, t2, iters=40, tau_min=floor, tau_max=ceil, k=k)
         evals += res[6]
         beta, t1, t2 = res[1], res[4], res[5]
         r, J = _unweighted(res[2], res[3], w)
         sse = sum(e * e for e in r)
-    return {"nss": Nss(beta, t1, t2), "sse": sse, "resid": r, "jac": J, "evals": evals, "weights": w}
+    return {"nss": Nss(beta, t1, t2, k), "sse": sse, "resid": r, "jac": J, "evals": evals, "weights": w}
 
 
 def _unweighted(r: Sequence[float], J: Sequence[Sequence[float]], w: Sequence[float]) -> Tuple[List[float], List[List[float]]]:
@@ -399,10 +456,12 @@ def _unweighted(r: Sequence[float], J: Sequence[Sequence[float]], w: Sequence[fl
 
 def refit(make: Make, nss: Nss, start: Optional[Sequence[float]] = None, iters: int = 8, robust: bool = True,
           tol: float = 1e-9) -> Dict[str, Any]:
-    """The β of a problem with the τ of ``nss`` held (from ``start``, else the problem's own start); ``robust``: then
-    reweighted (Huber) as the search does.  The residuals and the sum unweighted."""
+    """The β of a problem with the model and the τ of ``nss`` held (from ``start``, else the problem's own start);
+    ``robust``: then reweighted (Huber) as the search does.  The residuals and the sum unweighted."""
+    k = nss.k
     fn, own = make(nss.tau1, nss.tau2)
-    beta, sse, r, J = gauss_newton(fn, start if start is not None else own(), iters, tol)
+    fn = _free(fn, k)
+    beta, sse, r, J = gauss_newton(fn, list(start)[:k] if start is not None else own(k), iters, tol)
     w = None
     for _ in range(ROBUST_PASSES if robust else 0):
         w2 = huber_weights(r)
@@ -414,7 +473,7 @@ def refit(make: Make, nss: Nss, start: Optional[Sequence[float]] = None, iters: 
         beta, _, rw, Jw = gauss_newton(_weighted(fn, w), beta, iters, tol, first)
         r, J = _unweighted(rw, Jw, w)
         sse = sum(e * e for e in r)
-    return {"nss": Nss(beta, nss.tau1, nss.tau2), "sse": sse, "resid": r, "jac": J, "weights": w}
+    return {"nss": Nss(beta, nss.tau1, nss.tau2, k), "sse": sse, "resid": r, "jac": J, "weights": w}
 
 
 # ---------------------------------------------------------------------------------------------- dates
@@ -566,14 +625,14 @@ class OisDay(object):
                 J.append([(-de[j] * a - (1.0 - df) * da[j]) / a2 for j in range(4)])
             return r, J
 
-        def start() -> List[float]:
+        def start(k: int = NSS) -> List[float]:
             # rough zeros: the single payment's own, a coupon tenor's rate as continuous compounding of its frequency
             zs = []
             f = 12.0 / COUPON_MONTHS
             for (ie, kind, data), p in zip(legs, par):
                 t = ts[ie]
                 zs.append((math.log(1.0 + p * data) / t if t > 0 else p) if kind == "single" else f * math.log(1.0 + p / f))
-            return _ols_start([ts[ie] for ie, _, _ in legs], zs, tau1, tau2)
+            return _ols_start([ts[ie] for ie, _, _ in legs], zs, tau1, tau2, k)
 
         return fn, start
 
@@ -739,10 +798,10 @@ class BondFit(object):
         """Every bond against the curve: its residual (yield, + cheap) and its β-derivatives."""
         return self._fn(range(len(self.bonds)), nss.tau1, nss.tau2)(nss.beta)
 
-    def make(self, tau1: float, tau2: float) -> Tuple[Fn, Callable[[], List[float]]]:
+    def make(self, tau1: float, tau2: float) -> Tuple[Fn, Callable[..., List[float]]]:
         fn = self._fn(self.fitted, tau1, tau2)
 
-        def start() -> List[float]:
+        def start(k: int = NSS) -> List[float]:
             # rough zeros: each bond's yield as a continuous rate at its maturity
             ts, zs = [], []
             for i in self.fitted:
@@ -754,7 +813,7 @@ class BondFit(object):
                     z = math.log(1.0 + y) if c == "compound" else b.freq * math.log(1.0 + y / b.freq)
                 ts.append(t)
                 zs.append(z)
-            return _ols_start(ts, zs, tau1, tau2)
+            return _ols_start(ts, zs, tau1, tau2, k)
 
         return fn, start
 
@@ -777,6 +836,35 @@ class BondFit(object):
                     break
             out.append(s if math.isfinite(s) else None)
         return out
+
+    def loo(self, nss: Nss) -> List[Optional[float]]:
+        """Leave one out: each fitted bond's residual (yield, + cheap) against the curve fitted again without it - the
+        model and the τ of ``nss`` held, the β refitted as the fit does (robust) -, in the order of ``fitted``: how far
+        the curve misses a bond it was not given.  ``None`` where too few bonds are left."""
+        out: List[Optional[float]] = []
+        for j in self.fitted:
+            idx = [i for i in self.fitted if i != j]
+            if len(idx) < MIN_BONDS:
+                out.append(None)
+                continue
+
+            def make(t1: float, t2: float, idx: List[int] = idx) -> Tuple[Fn, Callable[..., List[float]]]:
+                return self._fn(idx, t1, t2), lambda k=NSS: list(nss.beta[:k])
+
+            fit = refit(make, nss, nss.beta, iters=8)
+            out.append(self._fn([j], nss.tau1, nss.tau2)(fit["nss"].beta)[0][0])
+        return out
+
+
+def dibs_search(fit_in: BondFit) -> Optional[Dict[str, Any]]:
+    """The DİBS curve searched on the bonds of ``fit_in``: ``DIBS_MODEL`` (the quant family and DİBS RV · Genel alike)."""
+    return search(fit_in.make, tau_min=fit_in.shortest, tau_max=fit_in.longest, k=DIBS_MODEL)
+
+
+def loo_rmse(fit_in: BondFit, nss: Nss) -> Optional[float]:
+    """The leave-one-out residuals' root mean square (bp): ``BondFit.loo``."""
+    r = [e for e in fit_in.loo(nss) if e is not None]
+    return math.sqrt(sum(e * e for e in r) / len(r)) * 1e4 if r else None
 
 
 def carry_roll(bond: Bond, value: _dt.date, y: float, conv: str, nss: Nss, spread: float, days: int,
@@ -1055,8 +1143,8 @@ def _value_date(day: _dt.date, row: Optional[Dict[str, Any]]) -> _dt.date:
 
 
 def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
-    """NSS of the DİBS curve: today's fit, every bond's rich / cheap (monitored), its spread to the OIS fit, carry +
-    roll, and the best bond to receive / pay with."""
+    """The DİBS curve (``DIBS_MODEL``, fitted to the bonds and bills): today's fit, every bond's rich / cheap (monitored),
+    its spread to the OIS fit, carry + roll, and the best bond to receive / pay with."""
     rows = {r["isin"]: r for r in (eng.get("dibs") or [])}
     win = ctx.window()
     bonds: Dict[str, Bond] = {}
@@ -1098,11 +1186,12 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
     if base is None or base.n_fit < MIN_BONDS:
         base = day_fit(ctx.today, {i: v for i in bonds for v in [_yield_now(ctx, i, conv[i], ctx.live)] if v is not None})
     if base.n_fit < MIN_BONDS:
-        return [], {"ok": False, "why": "en az %d sabit kuponlu kâğıdın getirisi gerekli" % MIN_BONDS, "rows": []}
-    found = search(base.make, tau_min=base.shortest, tau_max=base.longest)
+        return [], {"ok": False, "why": "en az %d kâğıdın (sabit kuponlu ya da bono) getirisi gerekli" % MIN_BONDS, "rows": []}
+    found = dibs_search(base)
     if found is None:
-        return [], {"ok": False, "why": "NSS uyumu kurulamadı", "rows": []}
+        return [], {"ok": False, "why": "%s uyumu kurulamadı" % MODEL_NAMES[DIBS_MODEL], "rows": []}
     nss0: Nss = found["nss"]
+    model = nss0.model
     search_ms = (time.perf_counter() - t0) * 1000.0
     # a bond's rich / cheap: the fit's residual, (model price − market price) / (−dP/dy) - its yield − the yield of its
     # model price to first order (the second-order term is a hundredth of a bp at these sizes)
@@ -1172,14 +1261,15 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
                 s = snap(live)
                 return s["resid"].get(isin) if s else None
 
-            # the series is the bond's own distance from the fit ("NSS farkı"); the hedges are its packages'
-            mon = qf.mr_monitor(ctx, "dibsfv:" + isin, "dibsfv", "DİBS", "%s · NSS farkı" % _bond_label(b), "bp", 1,
+            # the series is the bond's own distance from the fit ("NS farkı"); the hedges are its packages'
+            mon = qf.mr_monitor(ctx, "dibsfv:" + isin, "dibsfv", "DİBS", "%s · %s farkı" % (_bond_label(b), model), "bp", 1,
                                 [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=carry_up, pkg="bond",
                                 pnl=("bp", scale), explicit=True, packages=[p2] if p2 else [],
-                                pkg_name="Paket 1 · DİBS komşularıyla hedge'li (NSS seviye β0 ve eğim β1'e nötr)",
+                                pkg_name="Paket 1 · DİBS komşularıyla hedge'li (%s seviye β0 ve eğim β1'e nötr)" % model,
                                 info={"inputs": ["DIBSS:" + isin, "DIBSC:" + isin], "conv": conv[isin],
                                       "hedge": [{"key": "DIBS:" + keys[h], "weight": w} for h, w in hedge]},
-                                note="Seri: getirinin DİBS NSS uyumundaki model getirisinden farkı (bp, kâğıdın kendi getiri kuralıyla): + ise "
+                                note="Seri: getirinin DİBS " + model + " uyumundaki (" + MODEL_TEXT[nss0.k] + ": sabit kuponlular ve bonolar) "
+                                     "model getirisinden farkı (bp, kâğıdın kendi getiri kuralıyla): + ise "
                                      "kâğıt eğriye göre ucuz (al), − ise pahalı (sat). Paket 1: kâğıt ve iki komşusu, DİBS uyumunun seviye ve "
                                      "eğim faktörlerine nötr DV01 ağırlıklarıyla - eğri kayar ya da dikleşirse paket yerinde kalır, kazancı "
                                      "kâğıdın eğriye dönmesinden gelir. Nominaller paket DV01'i için (ana bacak; DV01 DİBS RV!AI gibi: mod. "
@@ -1238,7 +1328,8 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
         longest = max(fl[-1][0] for fl in fit_in.flows)
         grid = [0.1 * i for i in range(1, int(longest * 10) + 2)]
         return {"ok": True, "params": nss.info(fit_in.longest), "rmse": math.sqrt(fit["sse"] / fit_in.n_fit) * 1e4, "n": len(fit_in), "n_fit": fit_in.n_fit,
-                "rows": out_rows,
+                "n_bills": sum(1 for i in fit_in.fitted if fit_in.bonds[i].kind == "bill"), "loo": loo_rmse(fit_in, nss),
+                "model": nss.model, "rows": out_rows,
                 "receive": [{k: r[k] for k in pick} for r in receive[:6]], "pay": [{k: r[k] for k in pick} for r in pay[:6]],
                 "days": len(good), "first": good[0] if good else None, "last": good[-1] if good else None, "search_ms": search_ms,
                 "evals": found["evals"], "curve": {"t": grid, "zero": [nss.zero(t) * 100.0 for t in grid]},
@@ -1257,7 +1348,7 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
         years = (b.maturity - ctx.today).days / YEAR
         bucket, half = spread_for(years, spreads)
         out = dict(quote_bond(b, value, nss, half), ok=True, isin=isin, label=_bond_label(b), name=b.name, maturity=b.maturity.isoformat(),
-                   coupon=b.coupon, years=years, bucket=bucket, listed=isin in bonds)
+                   coupon=b.coupon, years=years, bucket=bucket, listed=isin in bonds, model=nss.model)
         y_now = _yield_now(ctx, isin, conv.get(isin, "simple"), live) if isin in bonds else None
         if y_now is not None:
             y = to_simple(b, y_now / 100.0, conv.get(isin, "simple"))
@@ -1499,10 +1590,11 @@ def ois_package(ctx: qf.Ctx, main: Dict[str, Any], years: float, carry: Optional
              else "%s tek başına (vade eğrinin ucunun ötesinde)" % qf._ois_name(ctx, h["legs"][0][0]))
     note = ("Paket 2: kâğıt TRY OIS'le - DİBS RV'nin kendi OIS hedge'i gibi (AJ: kâğıdın vadesine kadar bir OIS, aynı DV01), kote "
             "vadelerle: vadesi %s yıl, OIS DV01'i %s (vadeye göre doğrusal); toplam OIS DV01'i kâğıdınkine eşit. Kâğıdı satana OIS "
-            "receive, alana pay. Bu paketin K/Z'si kâğıdın OIS'e göre farkıyla (asset swap%s) gider: NSS farkının yanında bütün "
-            "eğrinin DİBS − OIS farkını da taşır, Paket 1 taşımaz. Sinyalin z'si ve beklenen hareketi NSS farkınındır. OIS "
+            "receive, alana pay. Bu paketin K/Z'si kâğıdın OIS'e göre farkıyla (asset swap%s) gider: %s farkının yanında bütün "
+            "eğrinin DİBS − OIS farkını da taşır, Paket 1 taşımaz. Sinyalin z'si ve beklenen hareketi %s farkınındır. OIS "
             "nominalleri DV01 ÷ (annuity × 1e-4), annuity Motor'unki (Günlük İşlemler'in OIS girişi gibi)."
-            % (("%.1f" % years).replace(".", ","), where, ", DİBS RV ASW %s bp" % ("%.0f" % asw) if asw is not None else ""))
+            % (("%.1f" % years).replace(".", ","), where, ", DİBS RV ASW %s bp" % ("%.0f" % asw) if asw is not None else "",
+               MODEL_NAMES[DIBS_MODEL], MODEL_NAMES[DIBS_MODEL]))
     return {"name": "Paket 2 · kâğıt + OIS, OIS'le hedge'li (asset swap: vadesine eş OIS, DV01 1:1)", "legs": legs, "carry_up": carry_up,
             "note": note}
 
