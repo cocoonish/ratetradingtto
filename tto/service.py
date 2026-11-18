@@ -3968,11 +3968,7 @@ class Service(object):
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         package = uuid.uuid4().hex[:12] if len(q["legs"]) > 1 else None
-        # the size as typed, read as ois_legs reads it - DV01 ($/bp), else a nominal (TL), else none (the sheet's DV01):
-        # what an edit of a spread / fly sized by DV01 starts from (its legs' nominals differ)
-        dv01, nominal = p.get("dv01"), p.get("nominal")
-        sized = ("dv01", dv01) if type(dv01) is float and dv01 > 0 else \
-            ("nominal", nominal) if type(nominal) is float and nominal > 0 else ("dv01", None)
+        sized = self._ois_sized(p)              # (kept: what an edit of a spread / fly sized by DV01 starts from)
         recs = []
         for lg in q["legs"]:
             rec = {"dir": lg["dir"], "tenor": lg["tenor"], "rate": lg["rate"], "dv01": lg["dv01"],
@@ -3985,6 +3981,14 @@ class Service(object):
             rec["size_mode"], rec["size_typed"] = sized
             recs.append(rec)
         return q, recs, package
+
+    @staticmethod
+    def _ois_sized(p: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+        """The size of an OIS trade as typed, read as ois_legs reads it: ("dv01", $/bp), else ("nominal", TL), else
+        ("dv01", None) - the sheet's DV01."""
+        dv01, nominal = p.get("dv01"), p.get("nominal")
+        return ("dv01", dv01) if type(dv01) is float and dv01 > 0 else \
+            ("nominal", nominal) if type(nominal) is float and nominal > 0 else ("dv01", None)
 
     def _bond_payload(self, payload: Dict[str, Any], lang: Optional[str]) -> Tuple[str, Optional[float], Optional[float]]:
         lang = lang or self.settings.locale
@@ -4031,8 +4035,8 @@ class Service(object):
         rec["id"] = tid
         return rec
 
-    def _bond_record(self, user: str, payload: Dict[str, Any], lang: Optional[str]) -> Dict[str, Any]:
-        """A bond trade as the form sends it, checked, with its DV01: the record to keep."""
+    def _bond_checked(self, payload: Dict[str, Any], lang: Optional[str]) -> Tuple[str, float, float]:
+        """A bond trade as the form sends it, checked: (instrument, amount - + bought, − sold -, price)."""
         inst, amount, price = self._bond_payload(payload, lang)
         if not inst:
             raise ServiceError("enstrüman gerekli")
@@ -4040,6 +4044,11 @@ class Service(object):
             raise ServiceError("tutar gerekli (+ alış / − satış)")
         if price is None or price <= 0:
             raise ServiceError("fiyat gerekli")
+        return inst, amount, price
+
+    def _bond_record(self, user: str, payload: Dict[str, Any], lang: Optional[str]) -> Dict[str, Any]:
+        """A bond trade as the form sends it, checked, with its DV01: the record to keep."""
+        inst, amount, price = self._bond_checked(payload, lang)
         rec = {"instrument": inst, "amount": amount, "price": price, "note": str(payload.get("note") or "").strip()[:200]}
         risk = self.et.call(self._bond_risk, user, inst, amount)           # (in place when on the calculation thread)
         rec.update({"dv01_tl": risk["dv01_tl"], "dv01": risk["dv01"],
@@ -7868,76 +7877,268 @@ class Service(object):
         return {"deleted": ids}
 
     def edit_trade(self, user: str, trade_id: Any, payload: Any, lang: Optional[str] = None) -> Dict[str, Any]:
-        """"Düzenle": a trade of today's blotter changed after it was entered - anyone's, by anyone, as a trade is
-        deleted.  ``payload``: what the entry form sends for a new trade of its kind (with ``kind``: the trade's own -
-        another is refused); it is priced exactly as a new trade is, and the trade's rows are changed in place: the same
-        ids (whatever links to them stays linked - the chat's pairs), its day, who entered it and when.  Every leg keeps
-        what the edit changed (``edits``: when, by whom, the values before; the last ``bl.EDITS_KEPT``).  An OIS keeps
-        its strategy and its number of legs - a change of either is refused: delete it and enter it again.  Afterwards
-        the workbook's sheet, the cost tables and whatever reads the blotter follow, as after a trade added.  Returns the
-        trade as priced (an OIS's quote) with its ``ids`` and ``edited`` (false: nothing changed, nothing written)."""
+        """"Düzenle": a trade changed after it was entered - anyone's, by anyone, as a trade is deleted.  What the edit
+        does not change does not move:
+
+        * the counterparty and the note alone: those two and nothing else, on a trade of any day (``payload``
+          ``{"fields": {"cpt", "note"}}``, or the form's that differs in them alone; ``priced``: "none");
+        * an amount, a forward's side, a level, a size, a leg's own rate: struck again at the trade's own prices - a
+          forward's forward, TRY rate and spot; an OIS's curve and its mid at the trade, the cost against that mid
+          (:func:`blotter.restrike`); a bond's DV01 per nominal (``priced``: "trade");
+        * another instrument - an OIS's side, tenors, months or days, a forward's pair, value date, pricing or the price
+          typed, a bond's ISIN: priced on today's market as a new trade is (``priced``: "today", ``why``: what changed).
+
+        A priced edit is a trade of today's only.  ``payload``: what the entry form sends for a new trade of the kind, with
+        ``kind`` (the trade's own: another product is refused, so are an OIS's other strategy and number of legs - delete
+        it and enter it again).  The rows change in place - the same ids (whatever links to them stays linked: the chat's
+        pairs), day, who entered it and when; every leg keeps the edit (``edits``: when, by whom, ``priced`` and ``why``,
+        the values before - the last ``bl.EDITS_KEPT``).  Returns the trade as the entry form's quote shows it, with
+        ``ids``, ``priced``, ``why`` and ``edited`` (false: nothing changed, nothing written)."""
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._edit_trade, user, trade_id, payload, lang)
-        self.bump()
+        if res["edited"]:
+            self.bump()
         return res
 
-    def _edit_trade(self, user, trade_id, payload, lang=None) -> Dict[str, Any]:
+    def edit_preview(self, user: str, trade_id: Any, payload: Any, lang: Optional[str] = None) -> Dict[str, Any]:
+        """What "Değişikliği kaydet" would make of the edit form (:meth:`edit_trade`), nothing saved: ``priced``, ``why`` and
+        ``quote`` - the trade as the form's quote shows it (an OIS against the mid its cost is counted on)."""
+        user = self.require_user(user)
+        return self.et.call(self._edit_trade, user, trade_id, payload, lang, True)
+
+    #: the names of the products and the OIS strategies, in what an edit says
+    _KIND_NAMES = {"fwd": "FX Forward", "ois": "OIS", "bond": "Tahvil"}
+    _STRATEGY_NAMES = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "mpc": "MPC"}
+
+    def _edit_trade(self, user, trade_id, payload, lang=None, dry=False) -> Dict[str, Any]:
         try:
             legs = self.store.trade_legs(int(trade_id))
         except (TypeError, ValueError):
             legs = []
         if not legs:
             raise ServiceError("işlem bulunamadı", 404)
-        first = legs[0]
-        kind = first["kind"]
-        if first["trade_date"] != self.today_iso():       # (priced with today's market: a trade of today only)
-            raise ServiceError("yalnızca bugünün işlemleri düzenlenebilir: bu işlem %s günü girildi"
-                               % _dt.date.fromisoformat(first["trade_date"]).strftime("%d.%m.%Y"))
+        first, kind = legs[0], legs[0]["kind"]
         payload = dict(payload) if isinstance(payload, dict) else {}
         asked = str(payload.pop("kind", None) or kind)
         if asked != kind:
-            names = {"fwd": "FX Forward", "ois": "OIS", "bond": "Tahvil"}
             raise ServiceError("düzenlemede ürün değişmez (%s → %s): strateji değişiyorsa silip yeniden girin"
-                               % (names.get(kind, kind), names.get(asked, asked)))
-        if kind == "fwd":
+                               % (self._KIND_NAMES.get(kind, kind), self._KIND_NAMES.get(asked, asked)))
+
+        def priced_today() -> None:
+            # a price, an amount or an instrument changes on a trade of today only; a day gone by: its counterparty and note
+            if first["trade_date"] != self.today_iso():
+                raise ServiceError("geçmiş günün işleminde yalnızca karşı taraf ve not değişir: bu işlem %s günü girildi"
+                                   % _dt.date.fromisoformat(first["trade_date"]).strftime("%d.%m.%Y"))
+
+        if isinstance(payload.get("fields"), dict):
+            plan = self._edit_fields(kind, legs, payload["fields"])
+        else:
+            plan = {"fwd": self._edit_fwd, "ois": self._edit_ois, "bond": self._edit_bond}[kind](user, legs, payload, lang, priced_today)
+        ids = [lg["id"] for lg in legs]
+        head = {"id": ids[0], "ids": ids, "priced": plan["priced"], "why": plan["why"], "edited": False}
+        if dry:
+            return dict(head, quote=plan["quote"])
+        out = dict(plan["quote"] or {}, **head)
+        changes = [bl.edited(lg, rec) for lg, rec in zip(legs, plan["recs"])] if plan["priced"] else []
+        if not any(before for _, before in changes):
+            return out                                      # the same trade: nothing is written
+        entry = {"at": now_iso(), "by": user, "priced": plan["priced"]}
+        if plan["why"]:
+            entry["why"] = plan["why"]
+        items = [(lg["id"], dict(new, edits=(list(lg.get("edits") or []) + [dict(entry, was=before)])[-bl.EDITS_KEPT:]))
+                 for lg, (new, before) in zip(legs, changes)]           # (a package's legs: one edit, each its own values)
+        if not self.store.update_trades(items, user):
+            raise ServiceError("işlem bulunamadı", 404)    # (deleted meanwhile)
+        self._sync_blotter()
+        out["edited"] = True
+        return out
+
+    @staticmethod
+    def _edit_fields(kind: str, legs: List[Dict[str, Any]], fields: Dict[str, Any]) -> Dict[str, Any]:
+        """The counterparty and the note of a trade alone - those sent (a bond has no counterparty); nothing is priced."""
+        own = {k: str(fields.get(k) or "").strip()[:n] for k, n in (("cpt", 40), ("note", 200))
+               if k in fields and (k != "cpt" or kind != "bond")}
+        changed = any(v != (legs[0].get(k) or "") for k, v in own.items())
+        return {"priced": "none" if changed else None, "why": [], "recs": [own] * len(legs), "quote": None}
+
+    def _edit_fwd(self, user, legs, payload, lang, priced_today) -> Dict[str, Any]:
+        """A forward edited from its form: another pair, value date, pricing or price typed (a pair without a curve: its
+        spot) - priced on today's market; another side or amount - struck at its own rates (``bl.forward_restruck``);
+        else its counterparty and note."""
+        t = legs[0]
+        p = self._fwd_payload(payload, lang)
+        pair = str(t.get("pair") or "USDTRY").upper()
+        basis = str(p.get("basis") or "RET_MID").upper()
+        why = []
+        if p["pair"] != pair:
+            why.append("parite")
+        if p.get("value_date") != t.get("value_date"):
+            why.append("valör")
+        if basis != str(t.get("basis") or "RET_MID").upper():
+            why.append("fiyatlama")
+        elif basis in ("TRY", "FWD", "SP") and not bl.same(p.get("manual"), t.get("manual")):
+            why.append("fiyat")
+        if p["pair"] == pair and pair not in ("USDTRY", "EURTRY") and type(p.get("spot")) is float \
+                and not bl.same(p["spot"], t.get("spot")):
+            why.append("spot")
+        if why:
+            priced_today()
             book = self._book("tto")
             try:
-                recs = [bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload, lang))]
+                rec = bl.forward_trade(book, self._overlay(user, book), p)
             except bl.TradeError as exc:
                 raise ServiceError(str(exc))
-            out = dict(recs[0])
-        elif kind == "ois":
+            return {"priced": "today", "why": why, "recs": [rec], "quote": dict(self._quote_forward(user, payload, lang), dir=rec["dir"])}
+        own = {"cpt": str(p.get("cpt") or "").strip()[:40], "note": str(p.get("note") or "").strip()[:200]}
+        direction = str(p.get("dir") or "").upper()
+        if direction not in ("B", "S"):
+            raise ServiceError("yön B (alış) ya da S (satış) olmalı")
+        try:
+            typed = bl.typed_amount(p)
+        except bl.TradeError as exc:
+            raise ServiceError(str(exc))
+        if typed is None:
+            raise ServiceError("tutar pozitif bir sayı olmalı")
+        kept = ("quote", t.get("typed_amount")) if t.get("typed") == "quote" else ("base", t.get("amount"))
+        if direction != t.get("dir") or typed[0] != kept[0] or not bl.same(typed[1], kept[1]):
+            priced_today()
+            try:
+                rec = dict(bl.forward_restruck(t, direction, typed), **own)
+            except bl.TradeError as exc:
+                raise ServiceError(str(exc))
+            return {"priced": "trade", "why": [], "recs": [rec], "quote": self._fwd_quote(dict(t, **rec))}
+        changed = any(v != (t.get(k) or "") for k, v in own.items())
+        return {"priced": "none" if changed else None, "why": [], "recs": [own], "quote": self._fwd_quote(dict(t, **own))}
+
+    @staticmethod
+    def _fwd_quote(t: Dict[str, Any]) -> Dict[str, Any]:
+        """The entry form's quote of a forward as it is kept - its own rates, no market of today (no curves beside it)."""
+        pair = str(t.get("pair") or "USDTRY").upper()
+        vd = t.get("value_date")
+        quote_typed = t.get("typed") == "quote"
+        return {"pair": pair, "base": pair[:3], "quote": pair[3:], "basis": t.get("basis"), "value_date": vd,
+                "value_date_iso": serial_to_date(vd).isoformat() if type(vd) is float else None, "dir": t.get("dir"),
+                "forward": t.get("forward"), "try_rate": t.get("try_rate"), "usd_rate": t.get("usd_rate"), "days": t.get("days"),
+                "spot": t.get("spot"), "points": t.get("points"), "amount": t.get("amount"), "tl": t.get("tl"),
+                "typed": "quote" if quote_typed else "base", "typed_amount": t.get("typed_amount") if quote_typed else t.get("amount"),
+                "usdtry": t.get("usdtry"), "table": {}, "ret_bid": None, "ret_mid": None, "ret_ask": None,
+                "dv01": {"tl": t.get("dv01_tl"), "usd": t.get("dv01"), "usd_leg": t.get("usd_dv01"), "amount": t.get("amount"),
+                         "dir": t.get("dir")}}
+
+    def _edit_ois(self, user, legs, payload, lang, priced_today) -> Dict[str, Any]:
+        """An OIS edited from its form: another side, tenors, months or days - priced on today's market (its strategy and
+        number of legs stay); another level, size or leg's own rate - struck on its own curve, its cost against its mid at
+        the trade (``bl.restrike``); else its counterparty and note."""
+        first = legs[0]
+        p = self._ois_payload(payload, lang)
+        strategy = str(p.get("strategy") or "outright").lower()
+        was = str(first.get("strategy") or "outright")
+        if strategy != was:
+            raise ServiceError("düzenlemede strateji değişmez (%s → %s): strateji değişiyorsa silip yeniden girin"
+                               % (self._STRATEGY_NAMES.get(was, was), self._STRATEGY_NAMES.get(strategy, strategy)))
+        side = lambda s: str(s or "").upper().replace("GOVDE", "GÖVDE")           # noqa: E731
+        why = []
+        if side(p.get("side")) != side(first.get("side")):
+            why.append("yön")
+        if bl.typed_instrument(strategy, p) != bl.ois_instrument(strategy, legs):
+            why.append({"fra": "FRA ayları", "mpc": "tarihler"}.get(strategy, "vade"))
+        if why:
+            priced_today()
             q, recs, _ = self._ois_records(user, payload, lang)
-            names = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "mpc": "MPC"}
-            strategy = str(first.get("strategy") or "outright")
-            if q["strategy"] != strategy:
-                raise ServiceError("düzenlemede strateji değişmez (%s → %s): strateji değişiyorsa silip yeniden girin"
-                                   % (names.get(strategy, strategy), names.get(q["strategy"], q["strategy"])))
             if len(recs) != len(legs):
                 raise ServiceError("düzenlemede bacak sayısı değişmez (%d → %d%s): strateji değişiyorsa silip yeniden girin"
                                    % (len(legs), len(recs), "; spot başlangıçlı FRA tek bacaktır" if strategy == "fra" else ""))
             place = {lg.get("role"): i for i, lg in enumerate(legs)}
             if len(place) == len(legs) and all(r["role"] in place for r in recs):
                 recs.sort(key=lambda r: place[r["role"]])            # each leg into its own row
-            out = q
-        else:
-            recs = [self._bond_record(user, payload, lang)]
-            out = dict(recs[0])
-        ids = [lg["id"] for lg in legs]
-        out.update({"id": ids[0], "ids": ids, "edited": False})
-        changes = [bl.edited(lg, rec) for lg, rec in zip(legs, recs)]
-        if not any(before for _, before in changes):
-            return out                                      # the same trade: nothing is written
-        at = now_iso()
-        items = []
-        for lg, (new, before) in zip(legs, changes):       # (every leg of a package: one edit, each with its own values)
-            new["edits"] = (list(lg.get("edits") or []) + [{"at": at, "by": user, "was": before}])[-bl.EDITS_KEPT:]
-            items.append((lg["id"], new))
-        if not self.store.update_trades(items, user):
-            raise ServiceError("işlem bulunamadı", 404)    # (deleted meanwhile)
-        self._sync_blotter()
-        out["edited"] = True
-        return out
+            return {"priced": "today", "why": why, "recs": recs, "quote": q}
+        own = {"cpt": str(p.get("cpt") or "").strip()[:40], "note": str(p.get("note") or "").strip()[:200]}
+        level = p.get("level")
+        rates = {k: p[k + "_rate"] for k in ("short", "wing1", "wing2", "start") if type(p.get(k + "_rate")) is float}
+        by_role = {lg.get("role"): lg for lg in legs}
+        size = self._ois_sized(p)
+        # the size the form gives back untouched (``keep_size``: a spread / fly sized by DV01 cannot say its legs' nominals)
+        same_size = p.get("keep_size") is True or self._ois_same_size(strategy, legs, size)
+        if not bl.same(level, first.get("level")) or not same_size \
+                or any(k in by_role and not bl.same(v, by_role[k].get("rate")) for k, v in rates.items()):
+            priced_today()
+            mkt = self._ois_curve(user, self._book("tto"))
+            try:
+                q = bl.ois_legs(mkt, p)                               # (checked as a new trade is; its label)
+                nominal = size[1] if not same_size and size[0] == "nominal" else None
+                dv01 = None if same_size or size[0] == "nominal" else (size[1] if size[1] is not None else mkt.default_dv01)
+                struck = bl.restrike(strategy, legs, level, rates, nominal, dv01, mkt.lot)
+            except bl.TradeError as exc:
+                raise ServiceError(str(exc))
+            cost = bl.cost_vs_mid(strategy, first.get("side"), level, first.get("market"))
+            common = dict(own, level=level, label=q["label"], cost_bp=cost,
+                          cost_usd=None if cost is None else cost * bl.risk_dv01(strategy, struck))
+            if not same_size:
+                common["size_mode"], common["size_typed"] = size
+            by_id = {lg["id"]: dict(common, rate=lg["rate"], nominal=lg["nominal"], dv01=lg["dv01"]) for lg in struck}
+            recs = [by_id[lg["id"]] for lg in legs]
+            return {"priced": "trade", "why": [], "recs": recs, "quote": self._ois_quote(user, legs, recs)}
+        changed = any(v != (first.get(k) or "") for k, v in own.items())
+        recs = [own] * len(legs)
+        return {"priced": "none" if changed else None, "why": [], "recs": recs, "quote": self._ois_quote(user, legs, recs)}
+
+    @staticmethod
+    def _ois_same_size(strategy: str, legs: List[Dict[str, Any]], size: Tuple[str, Optional[float]]) -> bool:
+        """Whether the size the edit form sends is the trade's: the nominal of its legs (a fly's wings half of it), or the
+        DV01 it was entered with (none: the sheet's DV01, as then)."""
+        mode, x = size
+        if mode == "nominal":
+            try:
+                ordered = bl.legs_in_order(strategy, legs)
+            except bl.TradeError:
+                return False
+            return all(bl.same(x * bl.leg_weight(strategy, lg.get("role")), lg.get("nominal")) for lg in ordered)
+        return legs[0].get("size_mode") == "dv01" and bl.same(x, legs[0].get("size_typed"))
+
+    def _ois_quote(self, user, legs: List[Dict[str, Any]], recs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The entry form's quote of an OIS as an edit leaves it (``recs`` over its ``legs``): legs, level, label, its cost
+        against the mid it is counted on - the TL at today's USDTRY."""
+        rows = [dict(lg, **rec) for lg, rec in zip(legs, recs)]
+        first = rows[0]
+        try:
+            usdtry: Optional[float] = self._ois_curve(user, self._book("tto")).usdtry
+        except bl.TradeError:
+            usdtry = None
+        cost_usd = first.get("cost_usd")
+        dv01 = [(lg["dv01"], lg.get("dir")) for lg in rows if type(lg.get("dv01")) is float]
+        return {"strategy": first.get("strategy"), "side": first.get("side"), "level": first.get("level"), "label": first.get("label"),
+                "legs": [{k: lg.get(k) for k in ("tenor", "dir", "rate", "nominal", "dv01", "role", "cpt")} for lg in rows],
+                "info": {"market": first.get("market"), "cost_bp": first.get("cost_bp"), "cost_usd": cost_usd,
+                         "cost_tl": cost_usd * usdtry if type(cost_usd) is float and type(usdtry) is float else None},
+                "usdtry": usdtry, "dv01": {"net": sum(d if s == "B" else -d for d, s in dv01), "gross": sum(d for d, _ in dv01)}}
+
+    def _edit_bond(self, user, legs, payload, lang, priced_today) -> Dict[str, Any]:
+        """A bond edited from its form: another ISIN - priced again (its DV01 from today's DİBS RV table); another side,
+        amount or price - its DV01 per nominal as it was; else its note."""
+        t = legs[0]
+        inst, amount, price = self._bond_checked(payload, lang)
+        note = str(payload.get("note") or "").strip()[:200]
+        isin = lambda s: "".join(str(s or "").split()).upper()                # noqa: E731
+        if isin(inst) != isin(t.get("instrument")):
+            priced_today()
+            rec = self._bond_record(user, payload, lang)
+            return {"priced": "today", "why": ["enstrüman"], "recs": [rec], "quote": self._bond_quote(user, dict(t, **rec))}
+        if not bl.same(amount, t.get("amount")) or not bl.same(price, t.get("price")):
+            priced_today()
+            k = amount / t["amount"]                                  # (a bond's DV01: linear in its nominal)
+            rec = {"amount": amount, "price": price, "note": note,
+                   "dv01_tl": t["dv01_tl"] * k if type(t.get("dv01_tl")) is float else None,
+                   "dv01": t["dv01"] * k if type(t.get("dv01")) is float else None}
+            return {"priced": "trade", "why": [], "recs": [rec], "quote": self._bond_quote(user, dict(t, **rec))}
+        changed = note != (t.get("note") or "")
+        return {"priced": "none" if changed else None, "why": [], "recs": [{"note": note}], "quote": self._bond_quote(user, dict(t, note=note))}
+
+    def _bond_quote(self, user, t: Dict[str, Any]) -> Dict[str, Any]:
+        """The entry form's quote of a bond as an edit leaves it: what the DİBS RV table says of the paper, its own DV01."""
+        q = self._bond_risk(user, t.get("instrument") or "", t.get("amount"))
+        q.update({"instrument": t.get("instrument"), "amount": t.get("amount"), "per": t.get("amount"), "price": t.get("price"),
+                  "dv01_tl": t.get("dv01_tl"), "dv01": t.get("dv01")})
+        return q
 
     def trade_prefill(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         """"İşlem gir" on a price cell of a page (its table's ``"trade"`` hint, :mod:`tto.tradehint`):

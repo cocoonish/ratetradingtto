@@ -1,7 +1,10 @@
-"""Günlük İşlemler: a trade changed after it was entered ("Düzenle") - priced again exactly as a new trade is, its rows
-changed in place (the same ids, its day, who entered it and when), what it was kept with it (``edits``), a change of
-product, strategy or number of legs refused; the workbook's sheet, the cost tables and the chat's pairs after an edit; and
-the cost against mid as the desk reads it ("Mid'e göre": + better than mid) in the day's file."""
+"""Günlük İşlemler: a trade changed after it was entered ("Düzenle").  What the edit does not change does not move: the
+counterparty / note alone change nothing else (on any day); an amount, a level or a size is struck at the trade's own
+prices (a forward's rates, an OIS's curve and its mid at the trade); another instrument (an OIS's side, tenors, months,
+days; a forward's value date, pricing, price typed) is priced on today's market - said before saving and kept in the
+audit.  The rows change in place (the same ids, day, who entered it and when), every leg keeps its edits; a change of
+product, strategy or number of legs is refused; the sheet, the cost tables and the chat's pairs follow.  And the cost
+against mid as the desk reads it ("Mid'e göre": + better than mid) in the day's file."""
 from __future__ import annotations
 
 import datetime as dt
@@ -16,9 +19,10 @@ from tto import brokerchat as bc
 from tto.server import create_app
 from tto.service import ServiceError
 from tto.store import Store
-from tto.xl.values import date_to_serial
+from tto.xl.values import date_to_serial, serial_to_date
 
 VALUE = "15.12.2026"
+ROW = ("id", "kind", "package", "trade_date", "created_by", "created_at", "updated_by", "updated_at", "edits")
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +30,19 @@ def desk(module_service):
     """A blotter of its own (the tests change its trades): A enters, B edits - anyone may, as anyone may delete."""
     svc = module_service
     return svc, svc.login("Düzenle A")["user"], svc.login("Düzenle B")["user"]
+
+
+@pytest.fixture()
+def ret_moved(desk):
+    """The RET curve 50 bp up after a trade is entered (a forward priced again would move) - put back afterwards."""
+    svc, a, _ = desk
+    rows = [r for r in svc.ret()["rows"] if type(r["bid"]) is float and type(r["ask"]) is float]
+
+    def move():
+        svc.set_ret(a, [{"tenor": r["tenor"], "bid": r["bid"] + 0.005, "ask": r["ask"] + 0.005} for r in rows])
+
+    yield move
+    svc.set_ret(a, [{"tenor": r["tenor"], "bid": r["bid"], "ask": r["ask"]} for r in rows])
 
 
 def market(svc, tenor):
@@ -51,7 +68,19 @@ def listed(svc, user, tid):
     return next(t for t in svc.blotter(user)["trades"] if t["id"] == tid)
 
 
-# ---------------------------------------------------------------------------------------------- the store
+def numbers(t):
+    """What a trade's record holds but its counterparty, note and edits: what a counterparty edit must leave alone."""
+    return {k: v for k, v in t.items() if k not in ROW + ("cpt", "note")}
+
+
+def fwd_form(t, **kw):
+    """What the entry form sends for a stored forward, as "Düzenle" fills it - ``kw`` what the user changed."""
+    return dict({"kind": "fwd", "pair": t.get("pair") or "USDTRY", "dir": t["dir"], "amount": ("%.2f" % t["amount"]).replace(".", ","),
+                 "value_date": serial_to_date(t["value_date"]).strftime("%d.%m.%Y"), "basis": t["basis"], "manual": None,
+                 "cpt": t.get("cpt") or "", "note": t.get("note") or ""}, **kw)
+
+
+# ---------------------------------------------------------------------------------------------- the store, the rules
 def test_a_package_is_changed_whole_or_not_at_all(tmp_path):
     store = Store(str(tmp_path / "tto.db"))
     try:
@@ -83,7 +112,207 @@ def test_what_an_edit_changed_rounding_aside():
     assert bl.edited(old, {"rate": 0.3689999999999999})[1] == {} and bl.edited(old, {"rate": 0.37})[1] == {"rate": 0.3689999999999999}
 
 
+@pytest.mark.parametrize("payload", [
+    {"strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "35,60", "dv01": 5000},
+    {"strategy": "outright", "side": "RECEIVE", "tenor": "2Y", "level": "36,10", "nominal": "500m"},
+    {"strategy": "spread", "side": "FLATTENER", "short": "1Y", "long": "2Y", "level": "25", "dv01": 1000},
+    {"strategy": "spread", "side": "STEEPENER", "short": "1Y", "long": "3Y", "level": "-10"},
+    {"strategy": "fly", "side": "REC GÖVDE", "wing1": "1Y", "body": "2Y", "wing2": "3Y", "level": "20", "dv01": 1000},
+    {"strategy": "fly", "side": "PAY GOVDE", "wing1": "1Y", "body": "2Y", "wing2": "3Y", "level": "-5", "nominal": "200m"},
+    {"strategy": "fra", "side": "RECEIVE", "start_months": 3, "end_months": 6, "level": "35,10", "dv01": 2000},
+    {"strategy": "fra", "side": "PAY", "start_months": 0, "end_months": 12, "level": "35,70", "nominal": "1000m"},
+])
+def test_the_rules_an_edit_strikes_with_are_ois_legs_own(desk, payload):
+    """The cost against mid, the DV01 it is counted on and the legs struck on the trade's own curve are what a new trade
+    gets (the rules are repeated beside ois_legs, which is not changed): a trade struck again as it was is itself."""
+    svc = desk[0]
+    q = svc.quote_ois(None, payload)
+    st = q["strategy"]
+    assert bl.cost_vs_mid(st, q["side"], q["level"], q["info"]["market"]) == pytest.approx(q["info"]["cost_bp"], abs=1e-9)
+    assert q["info"]["cost_bp"] * bl.risk_dv01(st, q["legs"]) == pytest.approx(q["info"]["cost_usd"], rel=1e-12)
+    sheet_market = svc.ois_market(None)
+    lot = sheet_market["lot"]
+    legs = [dict(lg, id=i) for i, lg in enumerate(q["legs"])]
+    typed = {"nominal": legs[-1]["nominal"] / bl.leg_weight(st, legs[-1]["role"])} if "nominal" in payload else \
+        {"dv01": float(payload.get("dv01") or sheet_market["dv01"])}            # (no size: the sheet's DV01)
+    for size in ({}, typed):
+        again = bl.restrike(st, legs, q["level"], {}, lot=lot, **size)
+        assert [lg["nominal"] for lg in again] == [lg["nominal"] for lg in legs]
+        assert [lg["dv01"] for lg in again] == pytest.approx([lg["dv01"] for lg in legs], rel=1e-12)
+        assert [lg["rate"] for lg in again] == pytest.approx([lg["rate"] for lg in legs], rel=1e-12, abs=1e-15)
+    if st == "fra" and len(legs) == 2:                                   # the end's rate for another level: the annuities then
+        a1, a2 = legs[0]["annuity"], legs[1]["annuity"]
+        end = bl.restrike(st, legs, 0.36, {}, lot=lot)[1]["rate"]
+        assert end == pytest.approx((0.36 * (a2 - a1) + legs[0]["rate"] * a1) / a2, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------------------------- counterparty / note alone
+def test_a_counterparty_alone_moves_nothing_else(desk, ret_moved):
+    """Fixing a counterparty never moves a forward's rate: the RET curve moved since the trade, the edit changes the
+    counterparty and nothing else - no pricing."""
+    svc, a, b = desk
+    f = svc.add_forward(a, {"dir": "B", "amount": "10m", "value_date": "16.03.2027", "basis": "RET_MID", "cpt": "ABC", "note": "n"})
+    before = svc.store.trade(f["id"])
+    ret_moved()
+    assert svc.quote_forward(b, {"dir": "B", "amount": "10m", "value_date": "16.03.2027", "basis": "RET_MID"})["forward"] != f["forward"]
+    form = fwd_form(before, cpt="XYZ")
+    pv = svc.edit_preview(b, f["id"], form)
+    assert (pv["priced"], pv["why"], pv["edited"]) == ("none", [], False) and pv["quote"]["forward"] == f["forward"]
+    assert svc.store.trade(f["id"]) == before                                        # (a preview saves nothing)
+    res = svc.edit_trade(b, f["id"], form)
+    assert (res["priced"], res["edited"]) == ("none", True)
+    t = svc.store.trade(f["id"])
+    assert numbers(t) == numbers(before) and (t["cpt"], t["note"]) == ("XYZ", "n")
+    (e,) = t["edits"]
+    assert (e["priced"], e["was"], e["by"]) == ("none", {"cpt": "ABC"}, b) and "why" not in e
+    # the counterparty alone, without the form (the dialog of a day gone by): the same
+    res = svc.edit_trade(b, f["id"], {"kind": "fwd", "fields": {"cpt": "KLM", "note": "yeni not"}})
+    t = svc.store.trade(f["id"])
+    assert res["priced"] == "none" and numbers(t) == numbers(before) and (t["cpt"], t["note"]) == ("KLM", "yeni not")
+
+
+def test_a_day_gone_by_changes_its_counterparty_and_note_alone(desk):
+    svc, a, b = desk
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    o = svc.add_ois(a, {"strategy": "outright", "side": "PAY", "tenor": "6Y", "level": "35,60", "nominal": "300m", "cpt": "ESKİ"})
+    rec = {k: v for k, v in svc.store.trade(o["ids"][0]).items() if k not in ROW}
+    old = svc.store.add_trade(yesterday, "ois", rec, a)
+    old_fwd = svc.store.add_trade(yesterday, "fwd", {"pair": "USDTRY", "dir": "S", "amount": 1e6, "value_date": 46000.0, "basis": "RET_MID",
+                                                     "manual": None, "days": 30.0, "spot": 43.0, "usd_rate": 0.04, "try_rate": 0.4,
+                                                     "forward": 44.3, "points": 13000.0, "tl": 44.3e6, "cpt": "", "note": ""}, a)
+    form = {"kind": "ois", "strategy": "outright", "side": "PAY", "tenor": "6Y", "level": "35,60", "nominal": "300m", "cpt": "DÜN", "note": ""}
+    before = svc.store.trade(old)
+    res = svc.edit_trade(b, old, form)                                     # the form's, the counterparty alone: allowed
+    assert (res["priced"], res["edited"]) == ("none", True)
+    t = svc.store.trade(old)
+    assert numbers(t) == numbers(before) and t["cpt"] == "DÜN" and t["trade_date"] == yesterday
+    for change in ({"level": "35,90"}, {"nominal": "400m"}, {"side": "RECEIVE"}, {"tenor": "7Y"}):
+        with pytest.raises(ServiceError) as err:
+            svc.edit_trade(b, old, dict(form, **change))
+        assert str(err.value) == "geçmiş günün işleminde yalnızca karşı taraf ve not değişir: bu işlem %s günü girildi" \
+            % dt.date.fromisoformat(yesterday).strftime("%d.%m.%Y"), change
+    with pytest.raises(ServiceError):
+        svc.edit_preview(b, old, dict(form, level="35,90"))                 # (the form says so before saving)
+    assert svc.store.trade(old)["cpt"] == "DÜN" and len(svc.store.trade(old)["edits"]) == 1
+    # a forward of a day gone by - its value date past, nothing to price it with: its note through the dialog
+    res = svc.edit_trade(b, old_fwd, {"kind": "fwd", "fields": {"note": "geç girildi"}})
+    t = svc.store.trade(old_fwd)
+    assert res["priced"] == "none" and t["note"] == "geç girildi" and t["cpt"] == "" and t["value_date"] == 46000.0
+
+
+# ---------------------------------------------------------------------------------------------- FX forward
+def test_a_forward_amount_keeps_the_deals_rates(desk, ret_moved):
+    """An amount (or a side) changed: the deal's forward, TRY rate and spot stay - the amounts and the DV01 follow."""
+    svc, a, b = desk
+    f = svc.add_forward(a, {"dir": "B", "amount": "10m", "value_date": "15.04.2027", "basis": "RET_MID", "cpt": "TUT"})
+    before = svc.store.trade(f["id"])
+    ret_moved()
+    res = svc.edit_trade(b, f["id"], fwd_form(before, amount="12m"))
+    assert (res["priced"], res["why"], res["edited"]) == ("trade", [], True)
+    t = svc.store.trade(f["id"])
+    for k in ("forward", "try_rate", "spot", "points", "days", "usd_rate", "df_try", "df_usd", "usdtry", "value_date", "basis"):
+        assert t[k] == before[k], k
+    assert (t["amount"], t["tl"], t["typed_amount"]) == (12e6, pytest.approx(12e6 * f["forward"]), 12e6)
+    for k in ("dv01", "dv01_tl", "usd_dv01"):
+        assert t[k] == pytest.approx(before[k] * 1.2, rel=1e-12), k
+    assert t["edits"][0]["priced"] == "trade" and set(t["edits"][0]["was"]) == {"amount", "tl", "typed_amount", "dv01", "dv01_tl", "usd_dv01"}
+    # the side: the rates stay, the risk turns round
+    svc.edit_trade(b, f["id"], fwd_form(t, dir="S"))
+    s = svc.store.trade(f["id"])
+    assert (s["dir"], s["forward"], s["try_rate"]) == ("S", f["forward"], f["try_rate"]) and s["dv01"] == pytest.approx(-t["dv01"], rel=1e-12)
+    fwd = {x["key"]: x for x in svc.blotter(a)["cost"]["fwd"]}[t["value_date"]]
+    assert (fwd["sell"], fwd["sell_avg"]) == (12e6, f["forward"])
+    assert sheet(svc, "ABCD", sheet_row(svc, f["id"])) == ["S", 12e6, f["try_rate"], t["value_date"]]
+
+
+def test_a_new_value_date_is_priced_on_todays_market_and_said(desk, ret_moved):
+    svc, a, b = desk
+    f = svc.add_forward(a, {"dir": "B", "amount": "5m", "value_date": "17.05.2027", "basis": "RET_MID"})
+    before = svc.store.trade(f["id"])
+    ret_moved()
+    form = fwd_form(before, value_date="18.05.2027")
+    pv = svc.edit_preview(b, f["id"], form)                               # the form says it before saving
+    assert (pv["priced"], pv["why"]) == ("today", ["valör"])
+    q = svc.quote_forward(b, dict(form, kind=None))
+    assert pv["quote"]["forward"] == q["forward"] != f["forward"]
+    res = svc.edit_trade(b, f["id"], form)
+    t = svc.store.trade(f["id"])
+    assert (res["priced"], res["why"]) == ("today", ["valör"]) and (t["forward"], t["days"]) == (q["forward"], q["days"])
+    assert t["value_date"] == float(date_to_serial(dt.date(2027, 5, 18)))
+    assert (t["edits"][0]["priced"], t["edits"][0]["why"]) == ("today", ["valör"]) and t["edits"][0]["was"]["forward"] == f["forward"]
+    # the pricing (basis) or the price typed changed: today's market too, each said
+    pv = svc.edit_preview(b, f["id"], fwd_form(t, basis="TRY", manual="36,5"))
+    assert (pv["priced"], pv["why"]) == ("today", ["fiyatlama"])
+    svc.edit_trade(b, f["id"], fwd_form(t, basis="TRY", manual="36,5"))
+    assert svc.edit_preview(b, f["id"], fwd_form(svc.store.trade(f["id"]), basis="TRY", manual="37"))["why"] == ["fiyat"]
+
+
+def test_a_forward_is_priced_again_as_a_new_one(desk):
+    svc, a, b = desk
+    f = svc.add_forward(a, {"dir": "B", "amount": "10m", "value_date": VALUE, "basis": "RET_MID", "cpt": "ABC", "note": "fwd"})
+    before = listed(svc, a, f["id"])
+    new = {"pair": "USDTRY", "dir": "S", "amount": "12m", "value_date": "07.06.2027", "basis": "TRY", "manual": "36,5", "cpt": "DEF", "note": "fwd"}
+    q = svc.quote_forward(b, dict(new))                       # what a new trade of it would be
+    res = svc.edit_trade(b, f["id"], dict(new, kind="fwd"))
+    assert res["edited"] and res["ids"] == [f["id"]] and (res["priced"], res["why"]) == ("today", ["valör", "fiyatlama"])
+    t = listed(svc, a, f["id"])
+    assert (t["dir"], t["amount"], t["basis"], t["try_rate"], t["cpt"]) == ("S", 12e6, "TRY", 0.365, "DEF")
+    assert t["value_date"] == float(date_to_serial(dt.date(2027, 6, 7)))
+    assert (t["forward"], t["days"], t["tl"]) == (q["forward"], q["days"], pytest.approx(12e6 * q["forward"]))
+    assert t["dv01"] == pytest.approx(q["dv01"]["usd"]) and t["dv01"] < 0 < f["dv01"]                       # sold: receiver −
+    assert (t["created_by"], t["created_at"], t["updated_by"]) == (a, before["created_at"], b)
+    was = t["edits"][0]["was"]
+    assert (was["dir"], was["amount"], was["basis"], was["cpt"], was["value_date"], was["forward"]) == \
+        ("B", 10e6, "RET_MID", "ABC", f["value_date"], f["forward"]) and was["manual"] is None
+    assert sheet(svc, "ABCD", sheet_row(svc, f["id"])) == ["S", 12e6, 0.365, t["value_date"]]
+    fwd = {x["key"]: x for x in svc.blotter(a)["cost"]["fwd"]}
+    assert fwd[t["value_date"]]["sell"] == 12e6 and f["value_date"] not in fwd                        # the old value date is empty
+    # typed in TRY, its price typed again: the TRY amount stays what is typed, the USD follows from the new forward
+    g = svc.add_forward(a, {"dir": "B", "quote_amount": "520m", "value_date": "21.06.2027", "basis": "FWD", "manual": "52"})
+    svc.edit_trade(a, g["id"], {"kind": "fwd", "dir": "B", "quote_amount": "520m", "value_date": "21.06.2027", "basis": "FWD", "manual": "52,5"})
+    t = listed(svc, a, g["id"])
+    assert (t["typed"], t["typed_amount"], t["tl"], t["forward"]) == ("quote", 520e6, 520e6, 52.5)
+    assert t["amount"] == bl.ccy_round(520e6 / 52.5, "USD") and t["edits"][0]["was"]["amount"] == g["amount"]
+    assert t["edits"][0]["why"] == ["fiyat"]
+
+
 # ---------------------------------------------------------------------------------------------- OIS
+def test_an_ois_level_counts_against_its_mid_at_the_trade(desk, monkeypatch):
+    """The curve moved since the trade (1Y 20 bp up): a level edit keeps the trade's mid - the cost, "Mid'e göre", is
+    against the mid at the trade - and its nominal; only another instrument (a side) is priced on today's market."""
+    svc, a, b = desk
+    o = svc.add_ois(a, {"strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "35,60", "dv01": 5000, "cpt": "MID"})
+    (tid,) = o["ids"]
+    before = svc.store.trade(tid)
+    mid_then = before["market"]
+    par = bl.OisMarket.par
+    monkeypatch.setattr(bl.OisMarket, "par", lambda self, tenor: (par(self, tenor) + 0.002) if tenor == "1Y" else par(self, tenor))
+    assert market(svc, "1Y")[0] == pytest.approx(mid_then + 0.002)
+    form = {"kind": "ois", "strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "35,70", "nominal": "%.0f" % before["nominal"], "cpt": "MID"}
+    pv = svc.edit_preview(b, tid, form)
+    assert pv["priced"] == "trade" and pv["quote"]["info"]["market"] == mid_then
+    assert pv["quote"]["info"]["cost_bp"] == pytest.approx((0.357 - mid_then) * 1e4)
+    res = svc.edit_trade(b, tid, form)
+    t = svc.store.trade(tid)
+    assert res["priced"] == "trade" and t["market"] == mid_then and t["cost_bp"] == pytest.approx((0.357 - mid_then) * 1e4)
+    assert (t["nominal"], t["dv01"], t["rate"], t["label"]) == (before["nominal"], before["dv01"], pytest.approx(0.357), "PAY 1Y @ 35,7000%")
+    assert t["cost_usd"] == pytest.approx(t["cost_bp"] * t["dv01"])
+    assert set(t["edits"][0]["was"]) == {"level", "rate", "label", "cost_bp", "cost_usd"} and t["edits"][0]["priced"] == "trade"
+    # a size typed as DV01: the nominal from the trade's own curve - what a new trade had then for it
+    usdtry, lot = svc.ois_market(None)["usdtry"], svc.ois_market(None)["lot"]
+    svc.edit_trade(b, tid, dict(form, nominal=None, dv01="7.500"))
+    t = svc.store.trade(tid)
+    per = before["dv01"] / before["nominal"]                                # annuity · 0,0001 / USDTRY at the trade
+    assert t["nominal"] == bl._round_half_away(7500 / per / lot) * lot and t["dv01"] == pytest.approx(t["nominal"] * per)
+    assert (t["size_mode"], t["size_typed"], t["market"]) == ("dv01", 7500.0, mid_then) and t["edits"][-1]["priced"] == "trade"
+    assert t["nominal"] == bl._round_half_away(7500 * usdtry / (o["legs"][0]["annuity"] * 1e-4) / lot) * lot
+    # another side: another trade - on today's market, its mid now
+    res = svc.edit_trade(b, tid, dict(form, side="RECEIVE", nominal=None, dv01="7.500"))
+    t = svc.store.trade(tid)
+    assert (res["priced"], res["why"]) == ("today", ["yön"]) and t["market"] == pytest.approx(mid_then + 0.002)
+    assert t["cost_bp"] == pytest.approx((mid_then + 0.002 - 0.357) * 1e4) and t["edits"][-1]["why"] == ["yön"]
+
+
 def test_an_outright_is_changed_in_place(desk):
     svc, a, b = desk
     mid, annuity = market(svc, "7Y")
@@ -97,19 +326,19 @@ def test_an_outright_is_changed_in_place(desk):
                                   "cpt": "XYZ", "note": "ilk"})
     assert res["edited"] and res["ids"] == [tid] and res["id"] == tid and res["label"] == "PAY 7Y @ 35,7000%" and svc.gen > gen
     t = listed(svc, a, tid)
-    # priced as a new trade is: the level, the nominal, the counterparty - and its cost against the mid of now
+    # the level, the nominal, the counterparty - its cost against its mid at the trade
     assert (t["rate"], t["level"], t["nominal"], t["cpt"], t["label"]) == (pytest.approx(0.357), pytest.approx(0.357), 600e6, "XYZ", res["label"])
     usdtry = svc.ois_market(None)["usdtry"]
     assert t["dv01"] == pytest.approx(600e6 * annuity * 1e-4 / usdtry) and t["cost_bp"] == pytest.approx((0.357 - mid) * 1e4)
     assert t["cost_usd"] == pytest.approx(t["cost_bp"] * t["dv01"]) and (t["size_mode"], t["size_typed"]) == ("nominal", 600e6)
-    # the same row: its id, day, who entered it and when; who changed it, and what it was
+    # the same row: its id, day, who entered it and when; who changed it, how and what it was
     assert (t["created_by"], t["created_at"], t["trade_date"], t["package"]) == (a, before["created_at"], before["trade_date"], None)
     assert t["updated_by"] == b
     (e,) = t["edits"]
-    assert e["by"] == b and e["at"] >= before["created_at"] and set(e) == {"at", "by", "was"}
+    assert e["by"] == b and e["at"] >= before["created_at"] and set(e) == {"at", "by", "priced", "was"} and e["priced"] == "trade"
     assert e["was"]["level"] == pytest.approx(0.356) and e["was"]["rate"] == pytest.approx(0.356) and e["was"]["cpt"] == "ABC"
     assert (e["was"]["nominal"], e["was"]["dv01"], e["was"]["label"]) == (before["nominal"], before["dv01"], "PAY 7Y @ 35,6000%")
-    assert (e["was"]["size_mode"], e["was"]["size_typed"]) == ("dv01", 5000.0) and not {"note", "tenor", "dir", "role"} & set(e["was"])
+    assert (e["was"]["size_mode"], e["was"]["size_typed"]) == ("dv01", 5000.0) and not {"note", "tenor", "dir", "role", "market"} & set(e["was"])
     # the workbook's sheet, the cost table by tenor and the risk follow
     assert sheet(svc, "HIJKLM", sheet_row(svc, tid)) == [600e6, pytest.approx(t["dv01"]), "B", pytest.approx(0.357), "7Y", "XYZ"]
     data = svc.blotter(a)
@@ -119,7 +348,7 @@ def test_an_outright_is_changed_in_place(desk):
     # the same trade sent again: nothing changes, nothing is written
     again = svc.edit_trade(a, tid, {"kind": "ois", "strategy": "outright", "side": "PAY", "tenor": "7Y", "level": "35,7", "nominal": "600.000.000",
                                     "cpt": "XYZ", "note": "ilk"})
-    assert again["edited"] is False and again["ids"] == [tid]
+    assert again["edited"] is False and again["priced"] is None and again["ids"] == [tid]
     assert listed(svc, a, tid)["edits"] == t["edits"] and listed(svc, a, tid)["updated_by"] == b
 
 
@@ -134,16 +363,18 @@ def test_a_fra_package_is_changed_leg_by_leg(desk):
     res = svc.edit_trade(b, ids[1], {"kind": "ois", "strategy": "fra", "side": "RECEIVE", "start_months": 3, "end_months": 6,
                                      "level": "35,20", "nominal": nominal, "start_rate": ("%.13f" % (start["rate"] * 100)).replace(".", ","),
                                      "cpt": "FRA"})
-    assert res["edited"] and res["ids"] == ids
+    assert res["edited"] and res["ids"] == ids and res["priced"] == "trade"
     legs = svc.store.trade_legs(ids[1])
     assert [x["id"] for x in legs] == ids and {x["package"] for x in legs} == {old[0]["package"]}
     s, e = legs
     assert (s["role"], e["role"]) == ("start", "end") and s["nominal"] == e["nominal"] == nominal      # one nominal, both swaps
     assert s["rate"] == start["rate"]                       # its own rate sent back as it was shown: kept as it was
-    a1, a2 = res["legs"][0]["annuity"], res["legs"][1]["annuity"]
+    a1, a2 = start["annuity"], end["annuity"]                # (the annuities at the trade: the curve it is struck on)
     assert (e["rate"] * a2 - s["rate"] * a1) / (a2 - a1) == pytest.approx(0.352, rel=1e-12)      # the swaps lock in the new level
+    assert (s["dv01"], e["dv01"]) == (pytest.approx(2 * start["dv01"], rel=1e-12), pytest.approx(2 * end["dv01"], rel=1e-12))
     assert s["label"] == e["label"] == "RECEIVE FRA 3M→6M @ 35,2000%" and s["level"] == e["level"] == pytest.approx(0.352)
-    assert s["cost_bp"] == e["cost_bp"] == pytest.approx((res["info"]["market"] - 0.352) * 1e4)
+    assert s["market"] == e["market"] == old[0]["market"] == res["info"]["market"]
+    assert s["cost_bp"] == e["cost_bp"] == pytest.approx((old[0]["market"] - 0.352) * 1e4)
     # every leg keeps the edit - one edit, each leg's own values before
     assert [len(x["edits"]) for x in legs] == [1, 1] and s["edits"][0]["at"] == e["edits"][0]["at"]
     assert "rate" not in s["edits"][0]["was"] and e["edits"][0]["was"]["rate"] == end["rate"]
@@ -158,60 +389,34 @@ def test_a_fra_package_is_changed_leg_by_leg(desk):
     assert cost["6M"]["sell_avg"] == pytest.approx(e["rate"]) and cost["3M"]["buy_avg"] == pytest.approx(s["rate"])
 
 
-def test_a_spread_sized_by_dv01_starts_from_what_was_typed(desk):
-    """A spread / fly sized by DV01 has legs of different nominals: the record keeps the DV01 typed - the edit gives it
-    back and the legs come out the same on the same curve."""
+def test_a_spread_sized_by_dv01_keeps_its_legs(desk):
+    """A spread / fly sized by DV01 has legs of different nominals: its size given back untouched keeps them; the DV01
+    typed again is the trade's own too (kept with it)."""
     svc, a, b = desk
     o = svc.add_ois(a, {"strategy": "spread", "side": "STEEPENER", "short": "8Y", "long": "9Y", "level": "12", "dv01": 3000})
     short, long_ = svc.store.trade_legs(o["ids"][0])
     assert short["nominal"] != long_["nominal"] and (short["size_mode"], short["size_typed"]) == ("dv01", 3000.0)
     pct = lambda x: ("%.13f" % (x * 100)).replace(".", ",")                                          # noqa: E731
-    res = svc.edit_trade(b, o["ids"][0], {"kind": "ois", "strategy": "spread", "side": "STEEPENER", "short": "8Y", "long": "9Y",
-                                          "level": "13", "dv01": "3.000", "short_rate": pct(short["rate"]), "cpt": "SPR"})
-    s, lg = svc.store.trade_legs(o["ids"][0])
-    assert res["edited"] and (s["nominal"], lg["nominal"]) == (short["nominal"], long_["nominal"]) and s["rate"] == short["rate"]
-    assert lg["rate"] == pytest.approx(short["rate"] + 13 / 1e4) and s["cpt"] == lg["cpt"] == "SPR"
-    assert set(s["edits"][0]["was"]) == {"cpt", "label", "level", "cost_bp", "cost_usd"}           # (its leg as it was)
+    form = {"kind": "ois", "strategy": "spread", "side": "STEEPENER", "short": "8Y", "long": "9Y", "level": "13", "short_rate": pct(short["rate"])}
+    for size in ({"dv01": "3.000"}, {"keep_size": True}):
+        res = svc.edit_trade(b, o["ids"][0], dict(form, cpt="SPR", **size))
+        s, lg = svc.store.trade_legs(o["ids"][0])
+        assert (s["nominal"], lg["nominal"], s["dv01"], lg["dv01"]) == (short["nominal"], long_["nominal"], short["dv01"], long_["dv01"])
+        assert s["rate"] == short["rate"] and lg["rate"] == pytest.approx(short["rate"] + 13 / 1e4) and s["cpt"] == lg["cpt"] == "SPR"
+    assert res["edited"] is False                                                   # (the second: nothing left to change)
+    assert set(s["edits"][0]["was"]) == {"cpt", "label", "level", "cost_bp", "cost_usd"} and len(s["edits"]) == 1
 
 
-# ---------------------------------------------------------------------------------------------- forward, bond
-def test_a_forward_is_priced_again_as_a_new_one(desk):
-    svc, a, b = desk
-    f = svc.add_forward(a, {"dir": "B", "amount": "10m", "value_date": VALUE, "basis": "RET_MID", "cpt": "ABC", "note": "fwd"})
-    before = listed(svc, a, f["id"])
-    new = {"pair": "USDTRY", "dir": "S", "amount": "12m", "value_date": "07.06.2027", "basis": "TRY", "manual": "36,5", "cpt": "DEF", "note": "fwd"}
-    q = svc.quote_forward(b, dict(new))                       # what a new trade of it would be
-    res = svc.edit_trade(b, f["id"], dict(new, kind="fwd"))
-    assert res["edited"] and res["ids"] == [f["id"]]
-    t = listed(svc, a, f["id"])
-    assert (t["dir"], t["amount"], t["basis"], t["try_rate"], t["cpt"]) == ("S", 12e6, "TRY", 0.365, "DEF")
-    assert t["value_date"] == float(date_to_serial(dt.date(2027, 6, 7)))
-    assert (t["forward"], t["days"], t["tl"]) == (q["forward"], q["days"], pytest.approx(12e6 * q["forward"]))
-    assert t["dv01"] == pytest.approx(q["dv01"]["usd"]) and t["dv01"] < 0 < f["dv01"]                       # sold: receiver −
-    assert (t["created_by"], t["created_at"], t["updated_by"]) == (a, before["created_at"], b)
-    was = t["edits"][0]["was"]
-    assert (was["dir"], was["amount"], was["basis"], was["cpt"], was["value_date"], was["forward"]) == \
-        ("B", 10e6, "RET_MID", "ABC", f["value_date"], f["forward"]) and was["manual"] is None
-    assert sheet(svc, "ABCD", sheet_row(svc, f["id"])) == ["S", 12e6, 0.365, t["value_date"]]
-    fwd = {x["key"]: x for x in svc.blotter(a)["cost"]["fwd"]}
-    assert fwd[t["value_date"]]["sell"] == 12e6 and f["value_date"] not in fwd                        # the old value date is empty
-    # typed in TRY: the TRY amount stays what is typed, the USD follows from the new forward
-    g = svc.add_forward(a, {"dir": "B", "quote_amount": "520m", "value_date": VALUE, "basis": "FWD", "manual": "52"})
-    svc.edit_trade(a, g["id"], {"kind": "fwd", "dir": "B", "quote_amount": "520m", "value_date": VALUE, "basis": "FWD", "manual": "52,5"})
-    t = listed(svc, a, g["id"])
-    assert (t["typed"], t["typed_amount"], t["tl"], t["forward"]) == ("quote", 520e6, 520e6, 52.5)
-    assert t["amount"] == bl.ccy_round(520e6 / 52.5, "USD") and t["edits"][0]["was"]["amount"] == g["amount"]
-
-
+# ---------------------------------------------------------------------------------------------- bond
 def test_a_bond_is_changed(desk):
     svc, a, b = desk
     x = svc.add_bond(a, {"instrument": "TRT150328T24", "dir": "B", "amount": "50m", "price": "98,25", "note": "tahvil"})
     res = svc.edit_trade(b, x["id"], {"kind": "bond", "instrument": "TRT150328T24", "dir": "S", "amount": "20m", "price": "98,75",
                                       "note": "tahvil"})
-    assert res["edited"] and res["ids"] == [x["id"]]
+    assert res["edited"] and res["ids"] == [x["id"]] and res["priced"] == "trade"
     t = listed(svc, a, x["id"])
     assert (t["amount"], t["price"], t["instrument"]) == (-20e6, 98.75, "TRT150328T24")
-    assert t["dv01"] > 0 > x["dv01"] and t["dv01_tl"] == pytest.approx(-x["dv01_tl"] * 20 / 50)    # sold: payer + (the DİBS table's DV01)
+    assert t["dv01"] > 0 > x["dv01"] and t["dv01_tl"] == pytest.approx(-x["dv01_tl"] * 20 / 50)    # sold: payer + (its DV01 per nominal)
     assert t["edits"][0]["was"] == {"amount": 50e6, "price": 98.25, "dv01": x["dv01"], "dv01_tl": x["dv01_tl"]}
     assert sheet(svc, ["Y", "Z", "AA"], sheet_row(svc, x["id"])) == ["TRT150328T24", -20e6, 98.75]
     (bond,) = [c for c in svc.blotter(a)["cost"]["bond"] if c["key"] == "TRT150328T24"]
@@ -226,6 +431,7 @@ def test_a_trade_keeps_its_last_edits(desk, monkeypatch):
         svc.edit_trade(b, x["id"], {"kind": "bond", "instrument": "LISTEDE YOK", "dir": "B", "amount": "1m", "price": "99", "note": note})
     t = listed(svc, a, x["id"])
     assert t["note"] == "üç" and [e["was"] for e in t["edits"]] == [{"note": "bir"}, {"note": "iki"}]
+    assert {e["priced"] for e in t["edits"]} == {"none"}
 
 
 # ---------------------------------------------------------------------------------------------- what an edit cannot do
@@ -243,6 +449,7 @@ def test_what_an_edit_does_not_change(desk):
             (fwd["id"], {"kind": "ois", "strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "35"},
              "düzenlemede ürün değişmez (FX Forward → OIS)"),
             (out["ids"][0], {"kind": "ois", "strategy": "outright", "side": "PAY", "tenor": "2Y"}, "seviye"),        # checked as a new trade
+            (out["ids"][0], {"kind": "ois", "strategy": "outright", "side": "RECEIVE", "tenor": "2Y", "nominal": "500m"}, "seviye"),
             (fwd["id"], {"kind": "fwd", "dir": "B", "amount": "0", "value_date": VALUE}, "tutar")):
         with pytest.raises(ServiceError) as err:
             svc.edit_trade(b, tid, payload)
@@ -250,11 +457,6 @@ def test_what_an_edit_does_not_change(desk):
         if "değişmez" in words:
             assert str(err.value).endswith("strateji değişiyorsa silip yeniden girin")
     assert svc.store.trades(svc.today_iso()) == before                       # nothing was changed
-    # a trade of another day (priced with today's market: today's trades only), one that is not there, nobody signed in
-    old = svc.store.add_trade("2026-02-03", "ois", {"strategy": "outright", "tenor": "2Y", "level": 0.355, "role": "outright", "dir": "S"}, a)
-    with pytest.raises(ServiceError) as err:
-        svc.edit_trade(b, old, {"kind": "ois", "strategy": "outright", "side": "RECEIVE", "tenor": "2Y", "level": "36"})
-    assert "yalnızca bugünün işlemleri düzenlenebilir" in str(err.value) and "03.02.2026" in str(err.value)
     for tid in (999999, "x", None):
         with pytest.raises(ServiceError) as err:
             svc.edit_trade(b, tid, {"kind": "ois"})
@@ -337,14 +539,21 @@ def test_over_http(desk):
                            headers=hdr).json()
         tid = made["ids"][0]
         body = {"kind": "ois", "strategy": "outright", "side": "RECEIVE", "tenor": "4Y", "level": "36,1", "nominal": "300m"}
+        pv = client.post("/api/blotter/trade/%d/preview" % tid, json=body, headers=hdr)
+        assert pv.status_code == 200 and (pv.json()["priced"], pv.json()["why"], pv.json()["edited"]) == ("today", ["yön"], False)
+        assert next(x for x in client.get("/api/blotter", headers=hdr).json()["trades"] if x["id"] == tid)["dir"] == "B"
         res = client.post("/api/blotter/trade/%d" % tid, json=body, headers=auth(svc, b))
         assert res.status_code == 200 and res.json()["edited"] and res.json()["ids"] == [tid]
         t = next(x for x in client.get("/api/blotter", headers=hdr).json()["trades"] if x["id"] == tid)
         assert t["dir"] == "S" and t["created_by"] == a and t["edits"][0]["by"] == b and t["edits"][0]["was"]["dir"] == "B"
+        fields = client.post("/api/blotter/trade/%d" % tid, json={"kind": "ois", "fields": {"cpt": "HTTP", "note": "not"}}, headers=hdr).json()
+        assert fields["priced"] == "none" and fields["edited"]
         spread = dict(body, strategy="spread", side="FLATTENER", short="1Y", long="4Y", level="25")
         refused = client.post("/api/blotter/trade/%d" % tid, json=spread, headers=hdr)
         assert refused.status_code == 400 and "strateji değişiyorsa silip yeniden girin" in refused.json()["error"]
         assert client.post("/api/blotter/trade/999999", json=body, headers=hdr).status_code == 404
+        assert client.post("/api/blotter/trade/999999/preview", json=body, headers=hdr).status_code == 404
         assert client.post("/api/blotter/trade/%d" % tid, json=body, headers={"Authorization": ""}).status_code == 401
+        assert client.post("/api/blotter/trade/%d/preview" % tid, json=body, headers={"Authorization": ""}).status_code == 401
         assert client.post("/api/blotter/trade/%d" % tid, content=b"[]", headers=dict(hdr, **{"Content-Type": "application/json"})).status_code == 400
         assert client.delete("/api/blotter/trade/%d" % tid, headers=hdr).json()["deleted"] == [tid]          # (deleting is as it was)

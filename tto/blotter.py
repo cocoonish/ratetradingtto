@@ -898,26 +898,154 @@ ROW_KEYS = ("id", "kind", "package", "trade_date", "created_by", "created_at", "
 EDITS_KEPT = 20
 
 
-def _same(a: Any, b: Any) -> bool:
+def same(a: Any, b: Any) -> bool:
     """Two values of a record that are one: equal, or two numbers apart by rounding alone (a rate sent back as the text
-    it was shown as, a leg priced again on the same curve)."""
+    it was shown as, a leg struck again on the same curve)."""
     if isinstance(a, bool) or isinstance(b, bool) or not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
         return a == b
     return a == b or abs(a - b) <= 1e-12 * max(1.0, abs(a), abs(b))
 
 
 def edited(old: Dict[str, Any], rec: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """A stored trade (a row of ``Store.trades``) and its record priced again from the form after an edit: (the record
-    to keep - the new values over the old record, one that moved by rounding alone kept as it was -, what changed:
+    """A stored trade (a row of ``Store.trades``) and what an edit makes of it (``rec``: the values it sets): (the record
+    to keep - those values over the old record, one that moved by rounding alone kept as it was -, what changed:
     ``{key: the value before}``).  The trade's list of its edits (``edits``) stays as it was: the caller adds this one."""
     new = {k: v for k, v in old.items() if k not in ROW_KEYS}
     was: Dict[str, Any] = {}
     for k, v in rec.items():
-        if k in ROW_KEYS or k == "edits" or _same(new.get(k), v):
+        if k in ROW_KEYS or k == "edits" or same(new.get(k), v):
             continue
         was[k] = new.get(k)
         new[k] = v
     return new, was
+
+
+def cost_vs_mid(strategy: str, side: Any, level: Any, mid: Any) -> Optional[float]:
+    """The cost of an OIS trade against a mid, by :func:`ois_legs`'s rule: bp, + worse than mid (paid).  A receiver
+    (RECEIVE, FLATTENER, REC GÖVDE) is worse below mid, a payer above it; ``level`` and ``mid`` are fractions (bp for a
+    spread and a fly).  ``None`` without a mid."""
+    if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in (mid, level)):
+        return None
+    receives = str(side or "").upper().replace("GOVDE", "GÖVDE") in ("RECEIVE", "FLATTENER", "REC GÖVDE")
+    gap = float(mid - level) if receives else float(level - mid)
+    return gap if strategy in ("spread", "fly") else gap * 10000.0
+
+
+def risk_dv01(strategy: str, legs: Sequence[Dict[str, Any]]) -> float:
+    """The DV01 the cost against mid is counted on in money (:func:`ois_legs`'s rule): a FRA's net, a fly's body halved
+    (its rate moves by half the level), else the last leg's."""
+    if strategy == "fra":
+        return abs(legs[-1]["dv01"] - (legs[0]["dv01"] if len(legs) > 1 else 0.0))
+    if strategy == "fly":
+        return legs[1]["dv01"] / 2.0
+    return legs[-1]["dv01"]
+
+
+#: the legs of an OIS strategy in :func:`ois_legs`'s order (a FRA's: :func:`legs_in_order`)
+LEG_ROLES = {"outright": ("outright",), "spread": ("short", "long"), "fly": ("wing1", "body", "wing2"), "mpc": ("mpc",)}
+
+
+def leg_weight(strategy: str, role: Any) -> float:
+    """The weight of a leg's nominal in its package (:func:`ois_legs`): a fly's wings half, any other leg one (a FRA's
+    two legs: one nominal)."""
+    return 0.5 if strategy == "fly" and role in ("wing1", "wing2") else 1.0
+
+
+def legs_in_order(strategy: str, legs: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A stored OIS trade's legs in :func:`ois_legs`'s order of roles (a FRA: start - when it does not start at spot -,
+    end); :class:`TradeError` when they are not that strategy's."""
+    by_role = {lg.get("role"): lg for lg in legs}
+    roles = LEG_ROLES.get(strategy) or (("start", "end") if "start" in by_role else ("end",))
+    if len(by_role) != len(legs) or set(by_role) != set(roles):
+        raise TradeError("işlemin bacakları %s stratejisinin değil" % strategy)
+    return [by_role[r] for r in roles]
+
+
+def ois_instrument(strategy: str, legs: Sequence[Dict[str, Any]]) -> Tuple[Any, ...]:
+    """What an OIS trade is, from its legs as stored: its tenors (outright, spread, fly), its FRA's months, its meeting
+    swap's two days - what an edit compares with :func:`typed_instrument` (the side apart)."""
+    by_role = {lg.get("role"): lg for lg in legs}
+    if strategy == "fra":
+        start = by_role.get("start")
+        return (_months_of(start["tenor"]) if start else 0, _months_of((by_role.get("end") or {}).get("tenor")))
+    if strategy == "mpc":
+        m = legs[0].get("mpc") or {}
+        return (m.get("start"), m.get("end"))
+    return tuple((by_role.get(r) or {}).get("tenor") for r in LEG_ROLES.get(strategy, ()))
+
+
+def typed_instrument(strategy: str, payload: Dict[str, Any]) -> Tuple[Any, ...]:
+    """The same of an OIS trade as the form sends it, read as :func:`ois_legs` reads it."""
+    if strategy == "fra":
+        return tuple(int(payload[k]) if type(payload.get(k)) is float else payload.get(k) for k in ("start_months", "end_months"))
+    if strategy == "mpc":
+        return (payload.get("start"), payload.get("end"))
+    keys = {"outright": ("tenor",), "spread": ("short", "long"), "fly": ("wing1", "body", "wing2")}.get(strategy, ())
+    return tuple(str(payload.get(k) or "").upper().strip() for k in keys)
+
+
+def restrike(strategy: str, legs: Sequence[Dict[str, Any]], level: float, rates: Optional[Dict[str, float]] = None,
+             nominal: Optional[float] = None, dv01: Optional[float] = None, lot: float = 1.0) -> List[Dict[str, Any]]:
+    """An OIS trade's legs at a new ``level`` and size on the curve it was entered on - not today's: every leg keeps its
+    annuity / USDTRY of then in its DV01 per nominal.  The size: a ``nominal`` (TL; a fly's wings half of it) is exact, a
+    ``dv01`` ($/bp) is sized by OIS_MAIN's rule on that curve (a FRA on its forward annuity), neither keeps the legs'
+    nominals - and a leg whose nominal stays keeps its DV01.  ``rates``: a leg's own rate by role ("short", "wing1",
+    "wing2", "start"), else the one it has.  Returns the legs (in :func:`legs_in_order`) with their new ``rate``,
+    ``nominal`` and ``dv01``; :class:`TradeError` when a leg does not say its curve (no nominal)."""
+    legs = legs_in_order(strategy, legs)
+    try:
+        per = [float(lg["dv01"]) / float(lg["nominal"]) for lg in legs]       # annuity · 0,0001 / USDTRY, at the trade
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        per = []
+    if len(per) != len(legs) or not all(math.isfinite(x) and x > 0 for x in per):
+        raise TradeError("işlemin bacaklarında eğrisi kayıtlı değil: silip yeniden girin")
+    if nominal is not None:
+        nominals = [nominal * leg_weight(strategy, lg.get("role")) for lg in legs]
+    elif dv01 is not None:
+        if strategy == "fra":                       # one nominal, sized on the forward annuity: end's − start's
+            one = _round_half_away(dv01 / (per[-1] - (per[0] if len(legs) > 1 else 0.0)) / lot) * lot
+            nominals = [one] * len(legs)
+        else:
+            nominals = [_round_half_away(leg_weight(strategy, lg.get("role")) * dv01 / x / lot) * lot for lg, x in zip(legs, per)]
+    else:
+        nominals = [lg["nominal"] for lg in legs]
+    rates = rates or {}
+
+    def own(role: str, lg: Dict[str, Any]) -> float:
+        v = rates.get(role)
+        return v if type(v) is float else lg["rate"]
+
+    if strategy == "spread":
+        short = own("short", legs[0])
+        new = [short, short + level / 10000.0]
+    elif strategy == "fly":
+        w1, w2 = own("wing1", legs[0]), own("wing2", legs[2])
+        new = [w1, (level / 10000.0 + w1 + w2) / 2.0, w2]
+    elif strategy == "fra" and len(legs) == 2:
+        start = own("start", legs[0])
+        k = per[0] / per[1]                         # A1 / A2: the two spot swaps' annuities at the trade
+        new = [start, level * (1.0 - k) + start * k]
+    else:
+        new = [level] * len(legs)
+    return [dict(lg, rate=r, nominal=n, dv01=lg["dv01"] if n == lg["nominal"] else n * x)
+            for lg, n, x, r in zip(legs, nominals, per, new)]
+
+
+def forward_restruck(t: Dict[str, Any], direction: str, typed: Tuple[str, float]) -> Dict[str, Any]:
+    """A stored forward with another side or amount at its own rates - the forward, the TRY rate, the spot and the
+    discount factors it was priced with: its two amounts and its DV01 again, nothing priced (:func:`forward_trade`'s
+    rules)."""
+    pair = str(t.get("pair") or "USDTRY").upper()
+    if type(t.get("forward")) is not float or type(t.get("days")) is not float:
+        raise TradeError("işlemin kayıtlı kuru yok: silip yeniden girin")
+    amount, counter = forward_amounts(typed, t["forward"], pair[:3])
+    if not amount > 0:
+        raise TradeError("karşı tutar %s tutarına çevrilemeyecek kadar küçük" % pair[:3])
+    usdtry = t.get("usdtry") if type(t.get("usdtry")) is float else (t.get("spot") if pair == "USDTRY" else None)
+    risk = forward_dv01(direction, amount, t["forward"], t["days"], usdtry, t.get("df_try"), t.get("df_usd"),
+                        t.get("try_rate") if pair[3:] == "TRY" else None, t.get("usd_rate"))
+    return {"dir": direction, "amount": amount, "tl": counter, "typed": typed[0], "typed_amount": typed[1],
+            "dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]}
 
 
 def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:

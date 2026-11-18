@@ -1,7 +1,7 @@
 // Günlük İşlemler: trade entry (FX forward / OIS / bond) with live pricing, the shared blotter and the
 // cost of the day's position.  Everything saved here is visible to every user at once.
 import { api, session } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, debounce, copyText, modal } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings, pairOf, parseAmount } from '../format.js';
@@ -31,6 +31,15 @@ const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: ''
 const VS_MID_HINT = '+ = mid\'den iyi (lehine), − = mid\'den kötü (aleyhine)';
 // the boxes of a leg's own rate and the select of that leg's tenor: a rate an edit fills in belongs to its tenor
 const LEG_RATES = [['short_rate', 'short'], ['wing1_rate', 'wing1'], ['wing2_rate', 'wing2'], ['start_rate', 'start_months']];
+// how "Değişikliği kaydet" prices an edit (the server's ``priced``), in the line over the form's quote; 'today' names
+// what changed ("Valör değişti: …")
+const EDIT_PRICED = {
+  today: ' değişti: bugünkü piyasayla yeniden fiyatlanır',
+  trade: { fwd: 'İşlemin kuru, TRY faizi ve spot\'u aynı kalır: tutarlar ve DV01 bunlarla yeniden hesaplanır',
+    ois: 'İşlem anının mid\'i ve eğrisiyle: mid\'e göre değer işlemin kendi mid\'ine göre',
+    bond: 'DV01 işlemin nominal başına DV01\'iyle hesaplanır' },
+  none: 'Yalnızca karşı taraf / not değişir: fiyat ve tutarlar aynı kalır',
+};
 // what the tip of a trade changed after it was entered says it was before (``timeCell``): [key, label, format]
 const EDIT_FIELDS = {
   fwd: [['pair', 'Parite'], ['dir', 'Yön', (v) => (v === 'B' ? 'alış' : 'satış')], ['amount', 'Tutar', (v) => num(v, 0)],
@@ -659,9 +668,11 @@ export class BlotterPage {
 
   /**
    * "Düzenle" on a trade of the list: the form of its product filled with what it was entered with (``editSpec``); its
-   * button says "Değişikliği kaydet" (with "Vazgeç" beside it) and its quote is priced as for a new trade.  Saved, the trade
-   * is priced again as a new one would be and changed in place (``POST /api/blotter/trade/<id>``: the same ids, its time and
-   * who entered it stay); the form as it was before comes back.  The product and an OIS's strategy stay what they are.
+   * button says "Değişikliği kaydet" (with "Vazgeç" beside it) and its quote is what saving would keep (``quoteOf``: the
+   * server's preview), a line over it saying how it is priced (``pricingLine``).  Saved, the trade changes in place
+   * (``POST /api/blotter/trade/<id>``: the same ids, its time and who entered it stay) - what the form changed alone moves:
+   * the counterparty / note, at the trade's own prices, or on today's market for another instrument; the form as it was
+   * before comes back.  The product and an OIS's strategy stay what they are.
    */
   startEdit(t) {
     this.endEdit(true);
@@ -671,7 +682,9 @@ export class BlotterPage {
     const restore = this.formSnapshot(spec.kind);
     const rates = {};
     for (const [k] of LEG_RATES) if (spec[k] !== undefined) rates[k] = String(spec[k]);
-    this.editing = { id: t.id, kind: spec.kind, label: tradeText(spec.kind, legs[0]), at: legs[0].created_at, by: this.who(legs[0]), rates, restore };
+    // (an OIS's size as filled in: given back untouched, it is the trade's - its legs' nominals stay)
+    const size = spec.kind === 'ois' ? { text: String(spec.size || ''), mode: spec.sizeMode } : null;
+    this.editing = { id: t.id, kind: spec.kind, label: tradeText(spec.kind, legs[0]), at: legs[0].created_at, by: this.who(legs[0]), rates, size, restore };
     const done = this.fillForm(spec);
     this.markEditing();
     this.entry.scrollIntoView({ block: 'nearest' });
@@ -686,7 +699,7 @@ export class BlotterPage {
     if (ed) {
       this.editNote.appendChild(h('div', null, h('b', null, 'Düzenleniyor: '), ed.label));
       this.editNote.appendChild(h('div', { class: 'muted' }, 'Girildi: ' + timeOf(ed.at) + ' · ' + ed.by
-        + '. Kaydedince yeni işlem gibi şimdiki piyasayla fiyatlanır ve aynı kayıt değişir; önceki değerler işlemde saklanır.'));
+        + '. Değiştirilmeyen oynamaz: fiyat kutusunun üstündeki satır kaydedince nasıl fiyatlanacağını söyler; aynı kayıt değişir, önceki değerler işlemde saklanır.'));
     }
     this.editNote.classList.toggle('hidden', !ed);
     for (const [k, b] of Object.entries(this.tabBtns)) b.disabled = !!ed && k !== ed.kind;      // (the product stays)
@@ -711,16 +724,69 @@ export class BlotterPage {
     if (restore) this.fillForm(ed.restore);
   }
 
-  /** "Değişikliği kaydet": the trade being edited, priced again from the form as a new one would be, changed in place. */
+  /** "Değişikliği kaydet": the trade being edited changed in place - what the form changed alone moves (the server's rules:
+   * the counterparty / note alone, at the trade's own prices, or on today's market when the instrument changed). */
   async saveEdit(kind, pl, btn) {
     const ed = this.editing;
     btn.disabled = true;
     try {
       const res = await api.post('/api/blotter/trade/' + ed.id, Object.assign({ kind }, pl));
-      toast(res.edited ? 'İşlem güncellendi: ' + tradeText(kind, res) : 'Değişiklik yok: işlem olduğu gibi kaldı', res.edited ? 'ok' : 'warn', 4200);
+      toast(res.edited ? 'İşlem güncellendi: ' + tradeText(kind, res) + (res.priced === 'today' ? ' · bugünkü piyasayla yeniden fiyatlandı' : '')
+        : 'Değişiklik yok: işlem olduğu gibi kaldı', res.edited ? 'ok' : 'warn', 4200);
       if (this.editing === ed) this.endEdit(true);
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { btn.disabled = false; }
+  }
+
+  /** The form's quote: a new trade's (``url``) - or, while a trade of this product is edited, what saving it would make of it
+   * (``…/preview``: the trade as it would be kept, how it is priced).  ``{ q, edit }``: the quote, the edit's answer (or null). */
+  async quoteOf(kind, url, pl) {
+    const ed = this.editing;
+    if (!ed || ed.kind !== kind) return { q: await api.post(url, pl), edit: null };
+    const edit = await api.post('/api/blotter/trade/' + ed.id + '/preview', Object.assign({ kind }, pl));
+    return { q: edit.quote, edit };
+  }
+
+  /** While a trade is edited: how "Değişikliği kaydet" prices it, one line over the quote (``edit``: the preview's answer) -
+   * on today's market (what changed; the line marked), at the trade's own prices, or its counterparty / note alone. */
+  pricingLine(box, edit) {
+    if (!edit || !this.editing) return;
+    const why = (edit.why || []).join(' / ');
+    const text = edit.priced === 'today' ? why.charAt(0).toUpperCase() + why.slice(1) + EDIT_PRICED.today
+      : (edit.priced === 'trade' ? EDIT_PRICED.trade[this.editing.kind] : (edit.priced === 'none' ? EDIT_PRICED.none : 'Değişiklik yok'));
+    box.insertBefore(h('div', { class: 'editprice' + (edit.priced === 'today' ? ' today' : ''), 'data-k': 'edit-pricing' }, text), box.firstChild);
+  }
+
+  /** "Düzenle" on a trade of a day gone by: its counterparty and note alone (all that changes after its day; its prices
+   * and amounts stay) - in a dialog, the day's entry form being closed. */
+  editFields(t) {
+    const legs = t.kind === 'ois' && t.package ? this.data.trades.filter((x) => x.package === t.package) : [t];
+    const m = modal({ title: 'Karşı taraf ve not', width: 460 });
+    m.box.id = 'blotter-fields';
+    const cpt = input('opsiyonel');
+    cpt.id = 'blotter-fields-cpt';
+    cpt.value = t.cpt || '';
+    const note = input('opsiyonel');
+    note.id = 'blotter-fields-note';
+    note.value = t.note || '';
+    m.body.appendChild(h('div', { class: 'pad form' }, h('div', { class: 'muted' }, isoToTr(t.trade_date) + ' · ' + tradeText(t.kind, legs[0])),
+      t.kind === 'bond' ? null : h('div', { class: 'row' }, field('Karşı taraf', cpt)), h('div', { class: 'row' }, field('Not', note)),
+      h('div', { class: 'muted' }, 'Geçmiş günün işleminde yalnızca karşı taraf ve not değişir: fiyat ve tutarlar aynı kalır.')));
+    const save = h('button', { class: 'btn primary', type: 'button', id: 'blotter-fields-save' }, 'Kaydet');
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        const fields = t.kind === 'bond' ? { note: note.value } : { cpt: cpt.value, note: note.value };
+        const res = await api.post('/api/blotter/trade/' + t.id, { kind: t.kind, fields });
+        toast(res.edited ? 'Karşı taraf / not güncellendi' : 'Değişiklik yok', res.edited ? 'ok' : 'warn', 3000);
+        m.close();
+        this.ctx.refreshNow();
+      } catch (err) { errorToast(err); } finally { save.disabled = false; }
+    });
+    for (const el of [cpt, note]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+    m.foot.appendChild(save);
+    (t.kind === 'bond' ? note : cpt).focus();
   }
 
   // ------------------------------------------------------------------ forward form
@@ -788,6 +854,8 @@ export class BlotterPage {
     f.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     f.save.addEventListener('click', () => this.saveFwd());
     f.cancel = this.cancelButton('fwd-edit-cancel');
+    // (while a trade is edited, its counterparty / note alone is an edit of its own: the line over the quote says so)
+    for (const el of [f.cpt, f.note]) el.addEventListener('input', () => { if (this.editing) this.quoteFwd(); });
     for (const el of [f.date, f.manual, f.code, f.spot]) {
       el.addEventListener('input', () => { if (el === f.code) this.layoutFwd(); this.quoteFwd(); });
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveFwd(); });
@@ -903,7 +971,7 @@ export class BlotterPage {
     }
     const ticket = f.ticket;
     try {
-      const q = await api.post('/api/blotter/quote/forward', pl);
+      const { q, edit } = await this.quoteOf('fwd', '/api/blotter/quote/forward', pl);
       if (ticket !== f.ticket || this.dead) return;
       // a value date typed as a shortcut ("3A", "ay sonu", "IMM", "+5"): the date it is, under the box
       f.dateEcho.textContent = q.value_date_typed ? q.value_date_typed + ' → ' + serialDate(q.value_date) : '';
@@ -960,6 +1028,7 @@ export class BlotterPage {
         f.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '8px' } }, q.pair + ' için çalışma kitabında eğri yok: forward yazdığınız kur'
           + (typeof q.spot_market === 'number' ? ' (Bloomberg spotu ' + num(q.spot_market, 4) + ')' : '') + '. İma TRY faizi hesaplanmaz; TRY faizi DV01\'i valöre kadarki TRY iskonto faktörüyle verilir.'));
       }
+      this.pricingLine(f.quote, edit);
     } catch (err) {
       if (ticket !== f.ticket) return;
       clear(f.quote);
@@ -1046,6 +1115,7 @@ export class BlotterPage {
     o.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     o.save.addEventListener('click', () => this.saveOis());
     o.cancel = this.cancelButton('ois-edit-cancel');
+    for (const el of [o.cpt, o.note]) el.addEventListener('input', () => { if (this.editing) this.quoteOis(); });
     for (const el of [o.level, o.size]) {
       el.addEventListener('input', () => this.quoteOis());
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveOis(); });
@@ -1148,6 +1218,9 @@ export class BlotterPage {
     const size = parseAmount(o.size.value);
     o.sizeEcho.textContent = o.size.value.trim() ? (size === null ? 'anlaşılamadı' : num(size, 0) + (o.sizeMode === 'dv01' ? ' $/bp' : ' TL')) : '';
     if (size !== null && size > 0) pl[o.sizeMode] = size;
+    // an edit's size given back as it was filled in: the trade's own (a spread sized by DV01 cannot say its legs' nominals)
+    const ed = this.editing;
+    if (ed && ed.kind === 'ois' && ed.size && o.size.value === ed.size.text && o.sizeMode === ed.size.mode) pl.keep_size = true;
     return pl;
   }
 
@@ -1170,10 +1243,12 @@ export class BlotterPage {
       return;
     }
     try {
-      const q = await api.post('/api/blotter/quote/ois', pl);
+      const { q, edit } = await this.quoteOf('ois', '/api/blotter/quote/ois', pl);
       if (ticket !== o.ticket || this.dead) return;
       const st = q.strategy;
       const bp = st === 'spread' || st === 'fly';
+      // an edit that keeps the instrument counts against the mid at the trade, not today's
+      const midLabel = edit && edit.priced !== 'today' ? 'Mid (işlem anı)' : 'Piyasa mid';
       clear(o.marketHint);
       if (typeof q.info.market === 'number') {
         const use = h('button', { class: 'btn sm ghost', type: 'button' }, 'kullan');
@@ -1181,13 +1256,14 @@ export class BlotterPage {
           o.level.value = bp ? num(q.info.market, 2, false) : num(q.info.market * 100, 4, false);
           this.quoteOis();
         });
-        o.marketHint.appendChild(h('span', null, 'Piyasa mid: ' + this.levelText(q.info.market, st) + ' '));
+        o.marketHint.appendChild(h('span', null, midLabel + ': ' + this.levelText(q.info.market, st) + ' '));
         o.marketHint.appendChild(use);
       }
       clear(o.quote);
       if (!hasLevel) {
         o.quote.appendChild(h('div', { class: 'muted' }, bp ? 'Seviyeyi (bp) yazın; bacaklar ve maliyet otomatik hesaplanır.'
           : 'Oranı yazın; bacaklar ve maliyet otomatik hesaplanır.'));
+        this.pricingLine(o.quote, edit);
         return;
       }
       const tiles = h('div', { class: 'quote' });
@@ -1201,7 +1277,7 @@ export class BlotterPage {
         tiles.appendChild(el);
       }
       tiles.appendChild(tile('İşlem seviyesi', this.levelText(q.level, st)));
-      tiles.appendChild(tile('Piyasa mid', this.levelText(q.info.market, st)));
+      tiles.appendChild(tile(midLabel, this.levelText(q.info.market, st)));
       const od = q.dv01 || {};
       const n1 = tile('Net DV01 ($)', signed(od.net, 0), false, DV01_HINT);
       n1.dataset.k = 'dv01-net';
@@ -1216,6 +1292,7 @@ export class BlotterPage {
       o.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.label));
       o.quote.appendChild(this.copyLine(() => q.label + ' · ' + q.legs.map((lg) => (lg.dir === 'S' ? 'REC ' : 'PAY ') + lg.tenor + ' ' + pct(lg.rate, 4)
         + ' ' + num(lg.nominal, 0) + ' TL (DV01 ' + signed(payerPlus(lg), 0) + ' $)').join(' / ')));
+      this.pricingLine(o.quote, edit);
     } catch (err) {
       if (ticket !== o.ticket) return;
       clear(o.quote);
@@ -1256,6 +1333,7 @@ export class BlotterPage {
     b.quote = h('div', { class: 'quotebox' });
     b.dirSeg.addEventListener('click', () => this.quoteBond());
     for (const el of [b.inst, b.amount]) el.addEventListener('input', () => this.quoteBond());
+    for (const el of [b.price, b.note]) el.addEventListener('input', () => { if (this.editing) this.quoteBond(); });   // (an edit's line)
     for (const el of [b.inst, b.amount, b.price]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveBond(); });
     b.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     b.save.addEventListener('click', () => this.saveBond());
@@ -1277,11 +1355,12 @@ export class BlotterPage {
     if (!inst) { b.quote.appendChild(h('div', { class: 'muted' }, 'Enstrümanı (ISIN) yazın; DİBS RV tablosundaki bir kâğıtsa süre ve DV01 gösterilir.')); return; }
     const ticket = (b.ticket = (b.ticket || 0) + 1);
     try {
-      const q = await api.post('/api/blotter/quote/bond', { instrument: inst, dir: b.dir, amount: parseAmount(b.amount.value) });
+      const { q, edit } = await this.quoteOf('bond', '/api/blotter/quote/bond', this.bondPayload());
       if (ticket !== b.ticket || this.dead) return;
       clear(b.quote);
       if (!q.known) {
         b.quote.appendChild(h('div', { class: 'muted' }, 'Bu enstrüman DİBS RV tablosunda yok: işlem kaydedilir, DV01 hesaplanamaz.'));
+        this.pricingLine(b.quote, edit);
         return;
       }
       const per = q.amount ? '' : ' / 1mn nominal';
@@ -1296,6 +1375,7 @@ export class BlotterPage {
       tiles.appendChild(tile('Vade', typeof q.info.maturity === 'number' ? serialDate(q.info.maturity) : '—'));
       b.quote.appendChild(tiles);
       b.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.info.isin + (q.info.name ? ' · ' + q.info.name : '')));
+      this.pricingLine(b.quote, edit);
     } catch (err) {
       if (ticket !== b.ticket) return;
       clear(b.quote);
@@ -1310,13 +1390,19 @@ export class BlotterPage {
     return h('div', { class: 'copyline' }, b);
   }
 
+  /** What the bond form sends: the instrument, the side, the amount (as read), the price and the note. */
+  bondPayload() {
+    const b = this.bond;
+    return { instrument: b.inst.value.trim(), dir: b.dir, amount: parseAmount(b.amount.value), price: b.price.value.trim(), note: b.note.value.trim() };
+  }
+
   async saveBond() {
     const b = this.bond;
-    const amount = parseAmount(b.amount.value);
-    if (!b.inst.value.trim()) { toast('Enstrüman girin', 'err'); b.inst.focus(); return; }
+    const pl = this.bondPayload();
+    const amount = pl.amount;
+    if (!pl.instrument) { toast('Enstrüman girin', 'err'); b.inst.focus(); return; }
     if (!b.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (amount === null || !(amount > 0)) { toast('Tutar girin', 'err'); b.amount.focus(); return; }
-    const pl = { instrument: b.inst.value.trim(), dir: b.dir, amount, price: b.price.value.trim(), note: b.note.value.trim() };
     if (this.editing && this.editing.kind === 'bond') { await this.saveEdit('bond', pl, b.save); return; }
     b.save.disabled = true;
     try {
@@ -1335,9 +1421,14 @@ export class BlotterPage {
     return this.users[t.created_by] || t.created_by || '';
   }
 
-  /** What can be done to a trade of the list - today's only: "Düzenle" (the form filled with it: ``startEdit``), ✕. */
+  /** What can be done to a trade of the list: today's - "Düzenle" (the form filled with it: ``startEdit``) and ✕; a day
+   * gone by's - "Düzenle" for its counterparty and note alone (``editFields``). */
   actCell(t, what) {
-    if (!this.data.can_enter || t.trade_date !== this.data.today) return { t: '', k: '' };       // today's trades only
+    if (t.trade_date !== this.data.today) {
+      return { t: '', k: '', cls: 'act', act: [{ id: 'edit', label: 'Düzenle', title: 'Karşı taraf / not: geçmiş günün işleminde yalnızca bunlar değişir',
+        fn: () => this.editFields(t) }] };
+    }
+    if (!this.data.can_enter) return { t: '', k: '' };
     return { t: '', k: '', cls: 'act', act: [
       { id: 'edit', label: 'Düzenle', title: 'İşlemi düzenle: form işlemin değerleriyle dolar, "Değişikliği kaydet" aynı kaydı değiştirir',
         fn: () => this.startEdit(t) },
@@ -1357,6 +1448,9 @@ export class BlotterPage {
       .map(([k, label, fmt]) => label + ' ' + shown(was[k], fmt));
     const tip = ['Düzenlendi: ' + timeOf(last.at) + ' · ' + (this.users[last.by] || last.by || '') + (edits.length > 1 ? ' (' + edits.length + '. düzenleme)' : ''),
       'Girildi: ' + timeOf(t.created_at) + ' · ' + this.who(t)];
+    const priced = { today: 'Bugünkü piyasayla yeniden fiyatlandı' + (last.why && last.why.length ? ' (' + last.why.join(', ') + ' değişti)' : ''),
+      trade: 'İşlemin kendi fiyatlarıyla (kur / mid işlem anındaki)', none: 'Yalnızca karşı taraf / not' }[last.priced];
+    if (priced) tip.push(priced);
     if (before.length) tip.push('Önceki: ' + before.join(' · '));
     return Object.assign(cell, { cls: 'edited', tip: tip.join('\n') });
   }

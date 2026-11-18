@@ -706,8 +706,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def edit_trade(request: Request):
-        # "Düzenle": the trade priced again from the form as a new one would be, changed in place (the same ids)
+        # "Düzenle": the trade changed in place (the same ids) - what the form changed alone moves
         return ok(await call(svc().edit_trade, _user(request), int(request.path_params["trade_id"]), await _body(request),
+                             _lang(request)))
+
+    @handler
+    async def edit_preview(request: Request):
+        # what "Değişikliği kaydet" would make of the edit form - how it is priced, the trade as its quote - nothing saved
+        return ok(await call(svc().edit_preview, _user(request), int(request.path_params["trade_id"]), await _body(request),
                              _lang(request)))
 
     @handler
@@ -1250,6 +1256,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
         Route("/api/blotter/trade/{trade_id:int}", edit_trade, methods=["POST"]),
+        Route("/api/blotter/trade/{trade_id:int}/preview", edit_preview, methods=["POST"]),
         Route("/api/blotter/templates", blotter_templates, methods=["GET", "POST"]),
         Route("/api/blotter/templates/{tid:int}", blotter_template, methods=["POST", "DELETE"]),
         Route("/api/blotter/bulk/preview", bulk_preview, methods=["POST"]),

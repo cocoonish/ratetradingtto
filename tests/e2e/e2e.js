@@ -642,6 +642,20 @@ async function clipAfter(page, action) {
     await page.click('.lists .panel:nth-child(1) table.grid td.act button[data-act="edit"]');
     await page.waitForFunction(() => document.querySelector('#blotter-entry-title').textContent === 'İşlemi düzenle');
     const fwdEdit = await fwdForm();
+    // the line over the quote says, before saving, how the edit is priced: nothing changed; the counterparty alone; the value
+    // date - on today's market (marked)
+    const pricingLine = (want) => page.waitForFunction((w) => {
+      const el = document.querySelector('.entry .pad:not(.hidden) [data-k="edit-pricing"]');
+      return el && el.textContent.startsWith(w);
+    }, want, { timeout: 15000 }).then(() => page.evaluate(() => {
+      const el = document.querySelector('.entry .pad:not(.hidden) [data-k="edit-pricing"]');
+      return [el.textContent, el.classList.contains('today')];
+    }));
+    const fwdLines = [await pricingLine('Değişiklik yok')];
+    await page.evaluate(() => { const el = window.tto.state.page.fwd.cpt; el.value = 'E2E KT'; el.dispatchEvent(new Event('input')); });
+    fwdLines.push(await pricingLine('Yalnızca karşı taraf / not değişir'));
+    await page.fill('#fwd-date', '16.12.2026');
+    fwdLines.push(await pricingLine('Valör değişti'));
     await page.click('#fwd-edit-cancel');
     await page.waitForFunction(() => document.querySelector('#blotter-entry-title').textContent === 'Yeni işlem');
     const fwdBack = await fwdForm();
@@ -649,6 +663,9 @@ async function clipAfter(page, action) {
       fwdEdit.amount === '10.000.000' && fwdEdit.date === '15.12.2026' && fwdEdit.basis === 'RET_MID' && fwdEdit.dir === 'B'
       && JSON.stringify(fwdBack) === JSON.stringify(fwdKept) && fwdKept.basis === 'FWD'
       && JSON.stringify((await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades) === JSON.stringify(beforeEdit), [fwdKept, fwdEdit, fwdBack]);
+    check('... the form says before saving how it is priced: "Değişiklik yok", the counterparty alone (prices stay), a new value date on today\'s market (marked)',
+      fwdLines[0][1] === false && fwdLines[1][0] === 'Yalnızca karşı taraf / not değişir: fiyat ve tutarlar aynı kalır' && fwdLines[1][1] === false
+      && fwdLines[2][0] === 'Valör değişti: bugünkü piyasayla yeniden fiyatlanır' && fwdLines[2][1] === true, fwdLines);
     // the spread: its level changed from the page - the same legs (ids), the list, "Mid'e göre" and the cost table follow
     const legsOf = (trades) => trades.filter((t) => t.kind === 'ois' && t.strategy === 'spread');
     const spreadBefore = legsOf(beforeEdit);
@@ -685,6 +702,14 @@ async function clipAfter(page, action) {
       vsTile.map((x) => x.l).join('|') === 'Mid\'e göre (bp)|Mid\'e göre ($)|Mid\'e göre (TL)' && Math.abs(bpOf(vsTile[0].v) - vsNew) < 0.006
       && vsNew > 1 && /^\+/.test(vsTile[0].v) && /costpos/.test(vsTile[0].cls) && /costpos/.test(vsTile[1].cls)
       && Math.abs(trNumber(vsTile[1].v.replace('+', '')) + qNew.info.cost_usd) < 1 && /mid'den iyi \(lehine\)/.test(vsTile[0].tip), [vsTile, qNew.info]);
+    const editPricedLine = await page.evaluate(() => {
+      const el = document.querySelector('.entry .pad:not(.hidden) [data-k="edit-pricing"]');
+      const labels = [...document.querySelectorAll('.entry .pad:not(.hidden) .quotebox .q .l')].map((x) => x.textContent);
+      return [el ? el.textContent : null, el ? el.classList.contains('today') : null, labels.includes('Mid (işlem anı)'), labels.includes('Piyasa mid')];
+    });
+    check('... a level changed, the instrument the same: struck at the trade\'s own mid ("Mid (işlem anı)"), not on today\'s market',
+      editPricedLine[0] === 'İşlem anının mid\'i ve eğrisiyle: mid\'e göre değer işlemin kendi mid\'ine göre' && editPricedLine[1] === false
+      && editPricedLine[2] && !editPricedLine[3], editPricedLine);
     await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
     await page.waitForFunction((x) => document.querySelector('.lists .panel:nth-child(2)').textContent.includes(x)
       && document.querySelector('#blotter-entry-title').textContent === 'Yeni işlem', newText, { timeout: 15000 });
@@ -711,6 +736,18 @@ async function clipAfter(page, action) {
       && Math.abs(bpOf(editList.vs) - vsAfter) < 0.006 && Math.abs(vsAfter - vsNew) < 0.006 && /^\+/.test(editList.vs) && /c-pos/.test(editList.vsCls)
       && Math.abs(trNumber(twoYear[costHead.indexOf('Ort. receive')]) - longLeg.rate * 100) < 6e-5
       && editList.save === 'İşlemi kaydet' && editList.cancel && !editList.fwdTab, { editList, spreadAfter, spreadBefore });
+    // the counterparty alone, in the dialog a day gone by's trade opens with (opened here on today's first forward)
+    const fwd1 = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.find((t) => t.kind === 'fwd');
+    await page.evaluate((id) => window.tto.state.page.editFields(window.tto.state.page.data.trades.find((t) => t.id === id)), fwd1.id);
+    await page.waitForSelector('#blotter-fields-cpt');
+    await page.fill('#blotter-fields-cpt', 'E2E KARŞI');
+    await page.click('#blotter-fields-save');
+    await page.waitForFunction(() => !document.querySelector('#blotter-fields'));
+    const fwd1After = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.find((t) => t.id === fwd1.id);
+    const dealOf = (t) => JSON.stringify([t.forward, t.try_rate, t.spot, t.points, t.amount, t.tl, t.dv01, t.dv01_tl, t.value_date]);
+    check('"Karşı taraf ve not" (the dialog of a day gone by\'s trade): the counterparty changes, the forward\'s prices and amounts stay',
+      fwd1After.cpt === 'E2E KARŞI' && dealOf(fwd1After) === dealOf(fwd1) && fwd1After.edits.length === 1 && fwd1After.edits[0].priced === 'none',
+      [fwd1, fwd1After]);
     // "Mid'e göre" for a PAY and a RECEIVE 67 bp either side of mid (the desk: a PAY under mid is in its favour), in the quote and
     // in the list: + better than mid (green), − worse (red)
     const mid1y = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter/ois-market')).json.tenors.find((r) => r.tenor === '1Y').par;
