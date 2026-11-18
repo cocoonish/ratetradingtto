@@ -7,7 +7,8 @@ Three things live here.
 history (``HistoricalDataRequest``) one year back and kept up to date while the server runs.  Offline it
 holds what the workbook recorded (its ``BDH`` blocks) plus the TLREF fixings that ship with the dashboard.
 Which series are kept is read from the workbook itself: the OIS ticker roots of ``OIS_MAIN``, the offshore
-curve tickers of ``Forward``, the bonds of ``DİBS RV``.
+curve tickers of ``Forward``, the bonds of ``DİBS RV`` - and, of its own, the SOFR fixings that Trades' SOFR swaps
+compound (``SOFR_TICKER``: one value a day, asked once a day).
 
 **Meeting pricing history.**  For every past day the workbook's own solver (``Motor`` "GLOBAL İMA PPK") is
 run again with that day's closes - on a second engine that is fed one day at a time (:class:`MpcMachine`).
