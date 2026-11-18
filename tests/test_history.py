@@ -1576,10 +1576,12 @@ def test_history_api(client, hsvc, monkeypatch):
     assert client.get("/api/history/mpc", params={"days": "çok"}).status_code == 400
     # 59 series of the workbook, 58 of them with a backup ticker; the quant package's own (no backups); and its VİOP
     # page's contracts - the first six the VİOP sheet lists and the 24 expired months before them, close / high / low,
-    # an expired one with its two-digit-year ticker beside
+    # an expired one with its two-digit-year ticker beside; and the SOFR fixings of Trades' SOFR swaps
     viop = [d for d in hsvc.history.snapshot()["defs"] if d.info.get("backfill") == "viop"]
     assert len(viop) == 3 * (6 + 24) and sum(len(d.alts) for d in viop) == 3 * 24
-    assert len(client.get("/api/history/series").json()["series"]) == 117 + len(series_specs()) + len(viop) + 3 * 24
+    series = client.get("/api/history/series").json()["series"]
+    assert len(series) == 117 + len(series_specs()) + len(viop) + 3 * 24 + 1
+    assert [(r["group"], r["label"], r["n"]) for r in series if r["ticker"] == "SOFRRATE Index"] == [("sofr", "SOFR", 0)]
     cal = client.get("/api/calendar").json()
     assert cal["next"] == "2026-12-10" and len(cal["meetings"]) == 95
     dates = [x["date"] for x in cal["meetings"]]
