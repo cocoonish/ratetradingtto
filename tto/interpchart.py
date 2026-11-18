@@ -14,14 +14,15 @@ tenors both ways (:mod:`tto.ppkcurve`: Bootstrap, what Murex marks with, and PPK
 **The discount factors** (the desk, 18.11.2026: "Bu enterpolasyondaki DF farkları da bir grafikte bana gösterilmeli"),
 the chart's third choice, "DF" (:func:`df_view`): day by day from the spot, PPK basamak's discount factor against
 Bootstrap's, ``DF_PPK / DF_Bootstrap − 1`` in bp - Bootstrap's own the line at 0 -, the quoted tenors marked and a table
-of both discount factors and the difference at each of them.  The relative difference, not ``(DF_PPK − DF_Bootstrap)``
-×10⁻⁴: it is what a cash flow on that day is worth more (+) or less (−) on PPK basamak in bp of its value, one scale at
-any maturity (the absolute difference shrinks with the discount factor - ~0.07 at 10Y - and would make a 10Y difference
-look 14 times smaller than the same one at 1M), and ≈ −(the zero rates' difference) × the years.  At a quoted tenor it
-is 0 where both curves have every one of its cash flows at a quoted tenor - a zero-coupon quote (OIS up to 3M, TRYI, XCCY
-1Y), a coupon quote whose coupons fall on quoted tenors (OIS 6M–1Y, XCCY 2Y–5Y) -, small at a coupon quote with coupon
-dates between quotes (OIS from 18M: 15M, 21M … are no quotes - both curves reprice its par rate, splitting its coupons
-otherwise).  Past the last quote both curves only go on, each its own way (offshore after the last XCCY): not drawn.
+of both discount factors and the difference at each of them.  The relative difference, not the absolute one
+(``DF_PPK − DF_Bootstrap`` in 10⁻⁴): it is what a cash flow on that day is worth more (+) or less (−) on PPK basamak in
+bp of its value, one scale at any maturity (the absolute difference shrinks with the discount factor - ~0.07 at 10Y - and
+would make a 10Y difference look 14 times smaller than the same one at 1M), and ≈ −(the zero rates' difference) × the
+years.  At a quoted tenor it is 0 where both curves have every one of its cash flows at a quoted tenor - a zero-coupon
+quote (OIS up to 3M, TRYI, XCCY 1Y), a coupon quote whose coupons fall on quoted tenors (OIS 6M–1Y, XCCY 2Y–5Y) -, small
+at a coupon quote with coupon dates between quotes (OIS from 18M: 15M, 21M … are no quotes - both curves reprice its par
+rate, splitting its coupons otherwise).  Past the last quote both curves only go on, each its own way (offshore after the
+last XCCY): not drawn.
 
 Over 1Y / 3Y / 10Y from the spot, OIS or offshore: the Forward sheet's offshore curve (FX swap implied ≤9M, XCCY 1Y–10Y,
 ln DF linear) against ppkcurve's offshore PPK curve (MPC ima with a flat basis between the offshore quotes), on the
