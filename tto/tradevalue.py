@@ -1923,7 +1923,8 @@ def coupons(trade: Dict[str, Any], mkt: Market, asof: Any = None) -> Dict[str, A
     v = value(trade, mkt, day)
     inputs = v.get("inputs") or {}
     why = v.get("why") if not v.get("ok") else (None if "coupons" in inputs else "kupon takvimi yalnız OIS / SOFR işlemlerinde")
-    src = (mkt.sources if mkt is not None else {}).get("tlref" if prod == "ois" else "sofr") or ""
+    fix = mkt.fixings.get(prod) if mkt is not None else None
+    src = fix.source if fix is not None else ""                 # (where the fixings came from: "tarihçe", "kayıtlı tarihçe")
     return {"ok": why is None, "why": why, "ccy": v.get("ccy"), "asof": day.isoformat(), "legs": inputs.get("coupons") or [],
             "realised": v.get("accrued"), "realised_try": v.get("accrued_try"), "realised_usd": v.get("accrued_usd"),
             "notes": list(inputs.get("notes") or []), "source": src}

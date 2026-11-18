@@ -8,9 +8,10 @@ blotter, its positions, the DV01 risk and the RET flow read the ``trades`` table
 trade names its instrument by ISIN, pair, dates and a meeting's date - never by a row of a page.
 
 The valuation is tto/tradevalue.py's (``market`` once, then ``value`` per trade).  It runs only when asked - "MTM
-yenile", a trade closed - and once a day at the desk's close (``trades_close`` of the desk's settings, 17:30), when the
-value of every open trade is kept (``tradebook_closes``).  A close missed while the dashboard was off is taken at its
-next start, dated the day it was missed; a day is never taken twice.
+yenile", a trade closed, a swap's "Kuponlar" (:meth:`TradeBook.coupons`: its schedule and the coupons it has paid /
+received) - and once a day at the desk's close (``trades_close`` of the desk's settings, 17:30), when the value of every
+open trade is kept (``tradebook_closes``).  A close missed while the dashboard was off is taken at its next start, dated
+the day it was missed; a day is never taken twice.
 
 P&L periods, each split into carry and price effect (:func:`pnl_periods`):
 
@@ -19,8 +20,9 @@ P&L periods, each split into carry and price effect (:func:`pnl_periods`):
 * **Toplam** - against the inception: 0 - the valuation's MTM is what a trade is worth against what it cost (a
   linear trade dealt at its price; an option net of the premium paid or received).
 
-The value at a moment is ``mtm + accrued`` (the cash the trade has paid / received since it started); a trade closed
-in the period counts with its realised value.  The **carry** of a period: each close's carry (``carry_1d``: one day
+The value at a moment is ``mtm + accrued`` (the cash the trade has paid / received since it started: a swap's realised
+coupons - on a payment day the coupon moves from the MTM to it, the value does not jump), a leg's the same with its own;
+a trade closed in the period counts with its realised value.  The **carry** of a period: each close's carry (``carry_1d``: one day
 passing, to the next business day - ``carry_days`` calendar days, 3 over a weekend) spread over its calendar days and
 counted to the next close, and the last close's pro rata to now (before its first close a trade earns at its first
 known carry); the **price effect** is the rest.  Spreads, flies and FRAs are worked out leg by leg too (a FRA's legs
@@ -418,31 +420,48 @@ def carry_days(v: Optional[Dict[str, Any]]) -> float:
     return d if d is not None and d > 0 else 1.0
 
 
-def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False, days: Optional[float] = None) -> Optional[Dict[str, Any]]:
-    """A valuation (or a leg of one) as a point of the P&L: its time, its value (``mtm`` + ``accrued``) and its carry per
-    calendar day (``carry_1d`` over the days it covers: ``days``, else its own) in its currency, TL and USD - ``None``
-    when it has no value."""
+def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False, days: Optional[float] = None,
+             acc: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """A valuation (or a leg of one) as a point of the P&L: its time, its value (``mtm`` + ``accrued``: the swap still to
+    run and the coupons it has realised) and its carry per calendar day (``carry_1d`` over the days it covers: ``days``,
+    else its own) in its currency, TL and USD - ``None`` when it has no value.  ``acc``: a leg's realised coupons when its
+    valuation does not carry them (a close kept before legs did)."""
     if not v or (not leg and not v.get("ok")):
         return None
     mtm = _f(v.get("mtm"))
     if mtm is None:
         return None
-    acc = 0.0 if leg else (_f(v.get("accrued")) or 0.0)
+    acc = _f(v.get("accrued")) if "accrued" in v else acc
+    acc = acc or 0.0
     fx_try, fx_usd = rates(v) if acc else (None, None)
     per = days if days else carry_days(v)
 
-    def plus(x: Optional[float], fx: Optional[float]) -> Optional[float]:
+    def plus(x: Optional[float], fx: Optional[float], given: Optional[float]) -> Optional[float]:
         if x is None:
             return None
         if not acc:
             return x
+        if given is not None:
+            return x + given                                # (the valuation's own conversion of its coupons)
         return x + acc * fx if fx is not None else None
 
     def daily(x: Optional[float]) -> Optional[float]:
         return x / per if x is not None else None
 
-    return {"t": t, "V": {"ccy": mtm + acc, "try": plus(_f(v.get("mtm_try")), fx_try), "usd": plus(_f(v.get("mtm_usd")), fx_usd)},
+    own = "accrued" in v
+    return {"t": t, "V": {"ccy": mtm + acc,
+                          "try": plus(_f(v.get("mtm_try")), fx_try, _f(v.get("accrued_try")) if own else None),
+                          "usd": plus(_f(v.get("mtm_usd")), fx_usd, _f(v.get("accrued_usd")) if own else None)},
             "c": {"ccy": daily(_f(v.get("carry_1d"))), "try": daily(_f(v.get("carry_1d_try"))), "usd": daily(_f(v.get("carry_1d_usd")))}}
+
+
+def realised_by(leg: Optional[Dict[str, Any]], day: str) -> Optional[float]:
+    """A leg's coupons ended by ``day`` (its valuation's ``coupon_flows``: [end, net]) - what a close kept before legs
+    carried their realised coupons is read with; ``None`` when the leg does not list them."""
+    flows = (leg or {}).get("coupon_flows")
+    if not isinstance(flows, list):
+        return None
+    return sum(_f(net) or 0.0 for end, net in flows if str(end) <= day) + 0.0
 
 
 def inception_point(t: _dt.datetime) -> Dict[str, Any]:
@@ -570,7 +589,11 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
             lstate = dict(state)
             for day, v in vals.items():
                 lv = v.get("legs")
-                p = point_of(lv[i], ok[day]["t"], leg=True, days=carry_days(v)) if isinstance(lv, list) and len(lv) == n else None
+                p = None
+                if isinstance(lv, list) and len(lv) == n:
+                    # (a close kept before legs carried their realised coupons: the leg's coupons ended by that day)
+                    acc = realised_by(legs_now[i], day) if isinstance(lv[i], dict) and "accrued" not in lv[i] else None
+                    p = point_of(lv[i], ok[day]["t"], leg=True, days=carry_days(v), acc=acc)
                 if p:
                     lsnaps[day] = p
                 else:
@@ -579,8 +602,9 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
             linc = {"t": inception_t, "V": {k: 0.0 for k in KEYS}, "c": None}
             row = {"label": str(legs_now[i].get("label") or "%d. bacak" % (i + 1)),
                    "mtm": _f(legs_now[i].get("mtm")), "mtm_try": _f(legs_now[i].get("mtm_try")),
-                   "mtm_usd": _f(legs_now[i].get("mtm_usd")), "price_now": _f(legs_now[i].get("price_now")),
-                   "price_text": str(legs_now[i].get("price_text") or "")}
+                   "mtm_usd": _f(legs_now[i].get("mtm_usd")), "accrued": _f(legs_now[i].get("accrued")),
+                   "accrued_try": _f(legs_now[i].get("accrued_try")), "accrued_usd": _f(legs_now[i].get("accrued_usd")),
+                   "price_now": _f(legs_now[i].get("price_now")), "price_text": str(legs_now[i].get("price_text") or "")}
             for name, b, first in plan:
                 row[name] = _one(trade, name, b, first, lend, "bacak değeri yok", lsnaps, lstate, linc, ltl)
             legs_out.append(row)
@@ -893,19 +917,25 @@ class TradeBook(object):
         out: Dict[str, Any] = {"ok": bool(v.get("ok")), "why": v.get("why")}
         if trade is not None:
             out["level_now"] = level_now(trade, v)
-        for k in ("mtm", "mtm_try", "mtm_usd", "carry_1d", "carry_1d_try", "carry_1d_usd", "accrued", "price_now"):
+        for k in ("mtm", "mtm_try", "mtm_usd", "carry_1d", "carry_1d_try", "carry_1d_usd", "accrued", "accrued_try",
+                  "accrued_usd", "price_now"):
             out[k] = _f(v.get(k))
         out["ccy"] = str(v.get("ccy") or "") or None
         out["price_text"] = str(v.get("price_text") or "")
         out["carry_days"] = carry_days(v)                    # (the calendar days ``carry_1d`` covers)
         if greeks and isinstance(v.get("greeks"), dict):
             out["greeks"] = {str(k): _f(x) for k, x in v["greeks"].items() if _f(x) is not None}
+        if isinstance(v.get("coupon_info"), dict):
+            out["coupon_info"] = v["coupon_info"]            # (a swap's coupons in a line: how many ended, the last, the next)
         legs = v.get("legs")
         if isinstance(legs, list):
-            out["legs"] = [{"label": str(lg.get("label") or ""), "mtm": _f(lg.get("mtm")), "mtm_try": _f(lg.get("mtm_try")),
-                            "mtm_usd": _f(lg.get("mtm_usd")), "carry_1d": _f(lg.get("carry_1d")),
+            # (a leg's value is MTM + its realised coupons, as the trade's: the closes keep both)
+            out["legs"] = [{"label": str(lg.get("label") or ""), "ccy": str(lg.get("ccy") or "") or None, "mtm": _f(lg.get("mtm")),
+                            "mtm_try": _f(lg.get("mtm_try")), "mtm_usd": _f(lg.get("mtm_usd")), "carry_1d": _f(lg.get("carry_1d")),
                             "carry_1d_try": _f(lg.get("carry_1d_try")), "carry_1d_usd": _f(lg.get("carry_1d_usd")),
-                            "price_now": _f(lg.get("price_now")), "price_text": str(lg.get("price_text") or "")}
+                            "accrued": _f(lg.get("accrued")), "accrued_try": _f(lg.get("accrued_try")),
+                            "accrued_usd": _f(lg.get("accrued_usd")), "price_now": _f(lg.get("price_now")),
+                            "price_text": str(lg.get("price_text") or "")}
                            for lg in legs if isinstance(lg, dict)]
         return out
 
@@ -2066,6 +2096,25 @@ class TradeBook(object):
         user = self._user(user)
         row = self._visible(user, tid)
         return {"id": row["id"], "entries": self._log_rows(self.store.tb_log(trade=row["id"]), self._names())}
+
+    # ------------------------------------------------------------------ a swap's coupons
+    def coupons(self, user: Optional[str], tid: Any) -> Dict[str, Any]:
+        """"Kuponlar": a TRY OIS / SOFR trade's coupons (tradevalue.coupons) - each leg's schedule by its product's rule,
+        every period with its fixed and floating payment (the float compounded from the history's fixings), net, payment
+        day and whether it is paid; the realised total, which its P&L counts beside the MTM.  Valued when asked (the
+        valuation's market once, on the calculation thread: nothing is asked of Bloomberg) - a closed trade at its close.
+        The desk's trades answer everybody, one's own its owner only (``_visible``)."""
+        user = self._user(user)
+        row = self._visible(user, tid)
+        if row["product"] not in tv.RATES:
+            raise ServiceError("kupon takvimi yalnız OIS / SOFR işlemlerinde")
+        closed = row["status"] == "closed"
+        try:
+            res = self._engine(lambda: tv.coupons(self.for_value(row), tv.market(self.svc), row.get("close_date") if closed else None))
+        except Exception as exc:  # noqa: BLE001 - said, like a valuation that fails
+            res = {"ok": False, "why": "değerleme hatası: %s" % (str(exc)[:200] or type(exc).__name__), "legs": []}
+        word = "PPK" if row.get("product") == "ois" else "FOMC"
+        return dict(res, id=row["id"], text=describe(row, word), status=row["status"], at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     def recent(self, user: Optional[str], scope: Any = "desk", limit: int = 200) -> Dict[str, Any]:
         """The latest changes of a tab (newest first): the desk's trades, or the user's own."""

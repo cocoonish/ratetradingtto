@@ -417,7 +417,7 @@ def test_sofr_accrues_its_own_fixings_compounded_by_hand():
     assert other["accrued"] != r["accrued"] and any("4 günün SOFR fixing'i tarihçede yok" in n for n in other["inputs"]["notes"])
     # the public view of them, and Monday published: nothing estimated, the history's own numbers
     cp = tv.coupons(t, m)
-    assert cp["ok"] and cp["legs"] == table and cp["realised"] == r["accrued"] and cp["source"] == "" and cp["asof"] == "2026-11-03"
+    assert cp["ok"] and cp["legs"] == table and cp["realised"] == r["accrued"] and cp["source"] == "tarihçe" and cp["asof"] == "2026-11-03"
     fx[D(2026, 11, 2)] = 0.0391
     full = tv.Fixings({d.isoformat(): r_ * 100.0 for d, r_ in fx.items()}, 0.0395, SIFMA_LIST, 360.0, "SOFR")
     done = tv.value(t, hand_market(cal={"SIFMA": SIFMA_LIST}, fix_sofr=full))
