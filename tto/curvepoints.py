@@ -23,13 +23,12 @@ a soft removal: the row stays with its note, the curve interpolates across it).
 """
 from __future__ import annotations
 
-import bisect
 import copy
 import datetime as _dt
 import math
 import re
 import threading
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import extras as ex
 from . import ppkcurve as pk
@@ -546,12 +545,14 @@ class CurvePoints(object):
         from .interpchart import meetings
         out = []
         meets = meetings(get)
+        cv = self.svc._try_curves(book, calc)               # (the user's curves: what Fiyatlama and EK_FX read too)
+        mode = self.svc.interp.mode(user)
         for curve in CURVES:
             mine = [r for r in rows if r["curve"] == curve]
             where = pk.Dates(get, curve)
             res = pk.resolve(get, [spec_of(r) for r in mine], curve, where)
-            read = _reader(book, calc, curve)
-            items = [_item(r, p, read, curve) for r, p in zip(mine, res)]
+            read = reading_curve(cv, curve, mode)
+            items = [_item(r, p, read) for r, p in zip(mine, res)]
             shift = 0.0
             if curve == OFF:
                 ois_spot, fx_spot = pk._num(pk.to_num(get(*pk.OIS_SPOT))), where.spot
@@ -648,78 +649,44 @@ def _date_text(serial: Optional[float]) -> str:
     return serial_to_date(serial).strftime("%d.%m.%Y")
 
 
-class _Read(object):
-    """A curve as the workbook reads it in a calculation - its discount factor at a day: OIS Motor's nodes (BOOT_GUN /
-    BOOT_LNDF, ln DF linear between them, the end stretch on beyond), offshore the names OFF_GUN / OFF_LNDF / OFF_SL read
-    as MASA's broken-date block reads them (``LOOKUP``: the node at or before the day, on along its slope)."""
-
-    def __init__(self, days: List[float], lndf: List[Any], slopes: Optional[List[Any]]):
-        self.days, self.lndf, self.slopes = days, lndf, slopes
-
-    def df(self, t: float) -> float:
-        d = self.days
-        if self.slopes is None:
-            i = min(max(_bisect(d, t), 0), len(d) - 2)
-            v0, v1 = self.lndf[i], self.lndf[i + 1]
-            return math.exp(v0 + (v1 - v0) * (t - d[i]) / (d[i + 1] - d[i]))
-        i = max(_bisect(d, t), 0)
-        v, s = self.lndf[i], self.slopes[i]
-        if type(v) is not float or type(s) is not float:
-            return float("nan")
-        return math.exp(v + s * (t - d[i]))
-
-
-def _bisect(days: List[float], t: float) -> int:
-    return bisect.bisect_right(days, t) - 1
-
-
-def _reader(book: Any, calc: Any, curve: str) -> Optional[_Read]:
-    """The curve of ``curve`` as the workbook reads it in ``calc`` (the viewer's setting); None when it cannot be read."""
-    from . import borsaspread as bsp
-    si = book.model.sheet_index
-    try:
-        if curve == OIS:
-            rows = range(pk.BOOT_ROWS[0], pk.BOOT_ROWS[1] + 1)
-            nodes = [(calc.get(si["Motor"], r, pk.BOOT_DAY), calc.get(si["Motor"], r, pk.BOOT_LNDF)) for r in rows]
-            nodes = [(float(d), float(v)) for d, v in nodes if type(d) is float and type(v) is float]
-            return _Read([d for d, _ in nodes], [v for _, v in nodes], None) if len(nodes) >= 2 else None
-        gun, ln, sl = (bsp._named(book, calc, n) for n in ("OFF_GUN", "OFF_LNDF", "OFF_SL"))
-        if not gun or not ln or not sl:
-            return None
-        keep = [(float(d), v, s) for d, v, s in zip(gun, ln, sl) if type(d) is float]
-        return _Read([d for d, _, _ in keep], [v for _, v, _ in keep], [s for _, _, s in keep]) if keep else None
-    except Exception:  # noqa: BLE001 - a curve that cannot be read reads nothing
+def reading_curve(cv: Optional[Dict[str, Any]], curve: str, mode: str) -> Any:
+    """The curve a computed point is read off on a user's interpolation setting (``cv``: their curves,
+    ``Service._try_curves``): Bootstrap - Motor's (OIS) and the offshore curve as its names have it (the desk's list's
+    when it differs); PPK basamak - ppkcurve's PPK curves (a PPK curve that cannot be made: Bootstrap).  The very curves
+    Fiyatlama prices on and EK_FX's 18M is read off (``Service._asw_fx_18m``)."""
+    if not cv:
         return None
+    boot, ppk = ("boot", "ppk") if curve == OIS else ("off_boot", "off_ppk")
+    if mode == "ppk" and cv.get(ppk) is not None:
+        return cv[ppk]
+    return cv.get(boot)
 
 
-def curve_df(book: Any, calc: Any, curve: str, day: float) -> Optional[float]:
-    """The discount factor ``day`` days from a curve's spot (``curve``: "ois" / "off") as the workbook reads that curve in
-    ``calc`` - the user's interpolation setting and the desk's list included: offshore the names OFF_GUN / OFF_LNDF / OFF_SL
-    as MASA's broken-date block reads them, OIS Motor's nodes.  What a computed point is read off (the 18M XCCY: EK_FX's
-    18M takes the offshore curve there).  None when it cannot be read.  Calculation thread."""
-    read = _reader(book, calc, curve)
-    v = read.df(float(day)) if read is not None else None
-    return v if isinstance(v, float) and math.isfinite(v) else None
-
-
-def computed(read: Optional[_Read], p: pk.Resolved, curve: str) -> Dict[str, Optional[float]]:
-    """A computed point on a curve as the workbook reads it: the discount factor at its maturity, its par rate by its
-    convention (its own schedule: an 18M XCCY 6M + 12M) and its zero rate (simple, the curve's day count: ACT/360
-    offshore - the Forward sheet's "Zero Rate" -, ACT/365 OIS)."""
+def computed(read: Any, p: pk.Resolved) -> Dict[str, Optional[float]]:
+    """A computed point read off ``read`` (:func:`reading_curve`): the discount factor at its maturity, its par rate by
+    its convention (its own schedule) and its zero rate (compounded once a year, ACT/365 - EK_FX's).  An XCCY of two
+    coupons - the 18M: 6M then 12M - is ``aswfx.point_18m`` itself, the one function behind EK_FX's 18M; any other XCCY
+    the same pieces (``aswfx.xccy_par``, ``aswfx.zero_rate``), an OIS or FX swap point its own swap (``ppkcurve.par``)."""
+    from . import aswfx
+    none = {"df": None, "par": None, "zero": None}
     if read is None or p.end is None or not p.pays:
-        return {"df": None, "par": None, "zero": None}
+        return none
     try:
-        df = read.df(p.end)
-        par = pk.par(read, p.pays, p.accruals)
-    except (ValueError, ZeroDivisionError, OverflowError):
-        return {"df": None, "par": None, "zero": None}
-    basis = 360.0 if curve == OFF else pk.BASIS
-    ok = isinstance(df, float) and math.isfinite(df) and df > 0
-    return {"df": df if ok else None, "par": par if ok and math.isfinite(par) else None,
-            "zero": (1.0 / df - 1.0) * basis / p.end if ok else None}
+        if p.spec.kind == pk.XCCY_KIND and len(p.pays) == 2:
+            pt = aswfx.point_18m(read, p.pays[0], p.pays[1])
+            return {"df": pt.df, "par": pt.par / 100.0, "zero": pt.zero / 100.0} if pt is not None else none
+        dfs = [read.df(t) for t in p.pays]
+        df = dfs[-1]
+        par = aswfx.xccy_par(p.pays, dfs) if p.spec.kind == pk.XCCY_KIND else pk.par(read, p.pays, p.accruals)
+        zero = aswfx.zero_rate(float(df), float(p.end))
+    except (ArithmeticError, ValueError):
+        return none
+    if not (isinstance(df, float) and math.isfinite(df) and df > 0) or par is None or zero is None:
+        return none
+    return {"df": df, "par": par, "zero": zero / 100.0}
 
 
-def _item(row: Dict[str, Any], p: pk.Resolved, read: Optional[_Read], curve: str) -> Dict[str, Any]:
+def _item(row: Dict[str, Any], p: pk.Resolved, read: Any) -> Dict[str, Any]:
     """A row of the list as Ayarlar shows it."""
     when = row.get("tenor") or (_date_text(date_to_serial(parse_day(row["date"]))) if row.get("date") else "")
     item = {"id": row["id"], "name": _label(row), "when": when, "day": p.end, "date": _date_text(p.serial), "kind": row["kind"],
@@ -741,13 +708,14 @@ def _item(row: Dict[str, Any], p: pk.Resolved, read: Optional[_Read], curve: str
         if not row.get("on"):
             item["error"] = ""                                  # (off: no subscription, nothing asked)
     else:
-        item["source_tip"] = "Eğriden okunur, eğriye bilgi eklemez: %s kuralıyla par ve sıfır kupon faizi" % KIND_TEXT[row["kind"]]
+        item["source_tip"] = ("Eğriden okunur, eğriye bilgi eklemez: %s kuralıyla par, sıfır kupon faizi (yıllık bileşik ACT/365) "
+                              "ve iskonto faktörü" % KIND_TEXT[row["kind"]])
         if row.get("on"):
-            item.update(computed(read, p, curve))
+            item.update(computed(read, p))
             item["value"] = item.pop("par")
     if p.pays and len(p.pays) > 1:
         item["schedule"] = " + ".join("%dg" % int(round(b - a)) for a, b in zip((0.0,) + tuple(p.pays[:-1]), p.pays))
     return item
 
 
-__all__ = ["CurvePoints", "default_rows", "spec_of", "parse_tenor", "tenor_text", "computed", "curve_df"]
+__all__ = ["CurvePoints", "default_rows", "spec_of", "parse_tenor", "tenor_text", "computed", "reading_curve"]

@@ -20,6 +20,7 @@ from tto import curvepoints as cpm
 from tto import extras as ex
 from tto import interp as ip
 from tto import ppkcurve as pk
+from tto import pricing as pr
 from tto.marketdata.base import bdp_key
 from tto.server import create_app
 from tto.service import ServiceError
@@ -43,10 +44,25 @@ def curves(svc, user=None):
     return svc.et.call(lambda: svc._try_curves(book, svc._calc(user, book)))
 
 
-def reader(svc, user, curve):
-    """The curve as the workbook reads it in the user's calculation (curvepoints' own reader)."""
-    book = svc.books["tto"]
-    return svc.et.call(lambda: cpm._reader(book, svc._calc(user, book), curve))
+class _Names(object):
+    """The offshore curve as every page of the workbook reads it in a calculation: the names OFF_GUN / OFF_LNDF / OFF_SL
+    read as MASA's broken-date block reads them (``LOOKUP``: the node at or before a day, on along its slope) - on PPK
+    basamak the PPK node table, on the desk's list the list's."""
+
+    def __init__(self, names):
+        keep = [(float(d), v, s) for d, v, s in zip(names["OFF_GUN"], names["OFF_LNDF"], names["OFF_SL"]) if type(d) is float]
+        self.days, self.lndf, self.slopes = [d for d, _, _ in keep], [v for _, v, _ in keep], [s for _, _, s in keep]
+
+    def df(self, t):
+        import bisect
+        i = max(bisect.bisect_right(self.days, t) - 1, 0)
+        return math.exp(self.lndf[i] + self.slopes[i] * (t - self.days[i]))
+
+
+def reader(svc, user, curve="off"):
+    """The offshore curve as the workbook's readers read it in the user's calculation."""
+    assert curve == "off"
+    return _Names(names_of(svc, user))
 
 
 def names_of(svc, user=None):
@@ -195,35 +211,48 @@ def _on_date(svc, user, days):
         svc.reset_inputs(user, "tto", ["MASA!C171"])
 
 
-def test_the_computed_18m_xccy_is_the_curve_read_at_18m_and_adds_nothing(module_service, desk):
-    """"18M hesaplanacak, gerçek kotasyon girilmeyecek": the default offshore list's 18M XCCY is computed - the
-    offshore curve's discount factor at 18M on the viewer's setting (what EK_FX's 18M takes: the very value MASA's
-    broken-date block reads at that date), its par by the XCCY convention counted back from the maturity (6M + 12M, the
-    short period first) and its zero rate; on PPK basamak its own; on or off, the curves do not move."""
+def _xccy18(svc, user):
+    """Fiyatlama's XCCY 18M (spot start, received): its mids both ways and its schedule."""
+    got = svc.pricing(user, {"asset": "xccy", "start": "", "end": "18M", "side": "RECEIVE", "size_kind": "nominal",
+                             "size": "100m", "price": ""})
+    assert got["label"] == "XCCY 18M" and not got.get("error")
+    return got
+
+
+def test_the_computed_18m_xccy_is_point_18m_and_fiyatlama_s_mid_and_adds_nothing(module_service, desk):
+    """"18M hesaplanacak, gerçek kotasyon girilmeyecek": the default offshore list's 18M XCCY is computed - read off the
+    offshore curve on the viewer's setting (Bootstrap: the curve the names give, PPK basamak: ppkcurve's) by
+    ``aswfx.point_18m`` itself (EK_FX's 18M): the coupons counted back from the maturity, 6M then 12M, on the TRY calendar
+    as Fiyatlama and MASA's broken-date block date them; its par is Fiyatlama's XCCY 18M mid on both methods (the replay
+    day: 39,5879 % / 39,3752 %), its zero EK_FX's (once a year, ACT/365); on Bootstrap its discount factor is what the
+    broken-date block reads at that date.  On or off, the curves do not move."""
+    from tto import aswfx
     svc = module_service
     spot = cell(svc, "Forward!I2")
     book = svc.books["tto"]
     idx = book.model.sheet_index
-    hol = svc.et.call(lambda: pk.holidays(lambda s, r, c: book.engine.shared.get(idx[s], r, c), pk.FX_HOLIDAYS))
-    assert len(hol) > 100                                                   # (USD and TRY)
-    raw = pk.edate(spot, 18)
-    t18 = pk.following(raw, hol) - spot
-    t6 = pk.following(pk.edate(raw, -12), hol) - spot
+    hol = svc.et.call(lambda: pk.holidays(lambda s, r, c: book.engine.shared.get(idx[s], r, c), pk.OIS_HOLIDAYS))
+    t18 = pk.following(pk.edate(spot, 18), hol) - spot
+    t6 = pk.following(pk.edate(spot, 6), hol) - spot
     seen = {}
-    for who in ("boot", "ppk"):
+    for who, method in (("boot", "boot"), ("ppk", "ppk")):
         user = desk[who]
         r = point(svc.curve_points(user), cpm.COMPUTED_18M)
         assert r["day"] == t18 and r["schedule"] == "%dg + %dg" % (t6, t18 - t6)
-        df18 = _on_date(svc, user, t18)
-        assert r["df"] == pytest.approx(df18, rel=1e-14)                                # what the pages read at 18M
-        read = reader(svc, user, "off")
-        df6 = read.df(t6)
-        par = (1.0 - df18) / (t6 / 360.0 * df6 + (t18 - t6) / 360.0 * df18)
-        assert r["value"] == pytest.approx(par, rel=1e-12)
-        assert r["zero"] == pytest.approx((1.0 / df18 - 1.0) * 360.0 / t18, rel=1e-12)
-        assert svc.et.call(lambda: cpm.curve_df(book, svc._calc(user, book), "off", t18)) == pytest.approx(df18, rel=1e-15)
-        seen[who] = (df18, par, r["zero"])
-    assert abs(seen["ppk"][0] - seen["boot"][0]) > 1e-7                    # (between the 1Y and 2Y quotes: the methods part)
+        cv = curves(svc, user)
+        on = cv["off_ppk"] if method == "ppk" else cv["off_boot"]
+        pt = aswfx.point_18m(on, t6, t18)
+        assert (r["df"], r["value"], r["zero"]) == (pt.df, pt.par / 100.0, pt.zero / 100.0)          # (the very function)
+        fx = _xccy18(svc, user)                                  # (both methods there: the user's own first)
+        assert [(x["start"] - spot, x["pay"] - spot) for x in fx["schedule"]] == [(0.0, t6), (t6, t18)]
+        assert fx["method"] == method and fx["mid"][method] == pytest.approx(r["value"], abs=1e-15)
+        assert round(r["value"] * 100, 4) == {"boot": 39.5879, "ppk": 39.3752}[method]
+        seen[method] = r
+    assert fx["mid"]["boot"] == pytest.approx(seen["boot"]["value"], abs=1e-15)          # (the other way beside it)
+    # Bootstrap: the discount factor the broken-date block reads at the 18M date (the names: every page's)
+    assert seen["boot"]["df"] == pytest.approx(_on_date(svc, desk["boot"], t18), rel=1e-14)
+    assert seen["boot"]["zero"] == pytest.approx(aswfx.zero_rate(seen["boot"]["df"], t18) / 100.0, rel=1e-15)
+    assert abs(seen["ppk"]["df"] - seen["boot"]["df"]) > 1e-7          # (between the 1Y and 2Y quotes: the methods part)
     # no information added: off and on again, the curves are the same and nothing of the list is in the workbook
     before = curves(svc)
     admin = desk["admin"]
@@ -233,7 +262,7 @@ def test_the_computed_18m_xccy_is_the_curve_read_at_18m_and_adds_nothing(module_
     assert after["off_boot"].lndf == before["off_boot"].lndf and after["off_ppk"].steps() == before["off_ppk"].steps()
     assert point(svc.curve_points(admin), cpm.COMPUTED_18M)["value"] is None
     svc.set_curve_points(admin, {"action": "on", "id": cpm.COMPUTED_18M})
-    assert point(svc.curve_points(desk["boot"]), cpm.COMPUTED_18M)["df"] == pytest.approx(seen["boot"][0], rel=1e-15)
+    assert point(svc.curve_points(desk["boot"]), cpm.COMPUTED_18M)["df"] == seen["boot"]["df"]
 
 
 # ================================================================================================== a list that differs
@@ -321,6 +350,82 @@ def test_a_point_switched_off_is_interpolated_across(module_service, desk):
     assert pk.par(reader(svc, boot, "off"), q3.pays, q3.accruals) == pytest.approx(q3.rate, abs=1e-12)
     svc.set_curve_points(admin, {"action": "on", "id": "off:XCCY 2Y"})
     assert names_of(svc)["OFF_GUN"] == gun
+
+
+def market(svc, user=None):
+    """Fiyatlama's market of the user's calculation (on Bootstrap, as the service reads it)."""
+    book = svc.books["tto"]
+    idx = book.model.sheet_index
+
+    def run():
+        base = svc.interp.boot_of(book, svc._calc(user, book))
+        return pr.read(lambda s, r, c: base.get(idx[s], r, c))
+    return svc.et.call(run)
+
+
+def _buckets(got):
+    return {r["name"]: r["dv01"] for r in got["buckets"]["rows"] if r["pillar"]}
+
+
+def test_fiyatlama_s_dv01_buckets_are_the_list_s_points(module_service, desk):
+    """Fiyatlama's DV01 buckets on the desk's list: every point that carries a rate and is on - the workbook's quote, a
+    ticker, a typed rate - is a bucket, bumped and the curve built again the list's way; a computed point and the PPK
+    meetings never are.  A 15M OIS paid: on the default list its DV01 is split between the 1Y and 18M buckets (15M is
+    no quote); a typed 15M OIS point is a bucket of its own and takes it all, the buckets sum to the total and to a
+    parallel bump (both methods); switched off, it is gone and every number is as before.  Offshore the same (a 2Y XCCY
+    switched off: no 2Y bucket, the 3Y's 2Y coupon read off the curve)."""
+    svc = module_service
+    admin, u = desk["admin"], desk["boot"]
+    ois = {"asset": "ois", "start": "", "end": "15M", "side": "PAY", "size_kind": "dv01", "size": "1000", "price": ""}
+    before = svc.pricing(u, dict(ois))
+    names0 = list(_buckets(before))
+    assert names0 == [pk.tenor_label(int(m)) for m, _ in sorted(market(svc, u).ois_quotes)]          # (the workbook's)
+    assert "ois_nodes" not in curves(svc, u) and "off_listed" not in curves(svc, u)                     # (the default list)
+    b0 = _buckets(before)
+    assert "15M" not in b0 and b0["1Y"]["boot"] > 200.0 and b0["18M"]["boot"] > 200.0                  # (between 1Y and 18M)
+    res = svc.set_curve_points(admin, {"action": "add", "curve": "ois", "kind": "ois", "when": "15M", "source": "typed",
+                                       "rate": "35,00", "note": "kova"})
+    rid = next(r["id"] for r in rows_of(res, "ois") if r["note"] == "kova")
+    try:
+        got = svc.pricing(u, dict(ois))
+        rows = _buckets(got)
+        assert list(rows) == names0[:6] + ["15M"] + names0[6:]
+        for m in pr.METHODS:                                       # (a quote now: the 15M swap's DV01 is its bucket's)
+            assert rows["15M"][m] > 900.0 and abs(rows["1Y"][m]) < 1e-3 and abs(rows["18M"][m]) < 1e-3, m
+        assert not [n for n in rows if n.startswith(("MPC", "PPK"))]
+        for m in pr.METHODS:
+            assert got["buckets"]["total"][m] == pytest.approx(sum(r[m] for r in rows.values()), abs=1e-9)
+        cv, mk = curves(svc, u), market(svc, u)
+        deal = pr.swap_deal(pr.OIS, ("spot", 0.0), ("m", 15), mk)
+        size = got["size"]["size"]
+        up = [q._replace(rate=q.rate + 1e-4) for q in cv["quotes"]]
+        k = got["mid"]["boot"]
+        base = pk.list_ois_curve(cv["quotes"], cv["ois_nodes"])[1]
+        assert pr.mid(deal, base) == pytest.approx(k, abs=1e-14)                        # (the mid on the list's curve)
+        parallel = (pr.value(deal, pk.list_ois_curve(up, cv["ois_nodes"])[1], 1, size, k) - pr.value(deal, base, 1, size, k)) / mk.usdtry
+        assert parallel == pytest.approx(got["buckets"]["total"]["boot"], rel=5e-3)
+        k = got["mid"]["ppk"]
+        parallel = (pr.value(deal, pk.calibrate(cv["shape"], up)[0], 1, size, k) - pr.value(deal, cv["ppk"], 1, size, k)) / mk.usdtry
+        assert parallel == pytest.approx(got["buckets"]["total"]["ppk"], rel=5e-3)
+    finally:
+        svc.set_curve_points(admin, {"action": "off", "id": rid})
+    again = svc.pricing(u, dict(ois))
+    assert again["buckets"] == before["buckets"] and again["mid"] == before["mid"] and again["size"] == before["size"]
+    # offshore: the 18M is computed (never a bucket); the 2Y XCCY switched off - no 2Y bucket, the rest sum up
+    xccy = {"asset": "xccy", "start": "", "end": "2Y3M", "side": "RECEIVE", "size_kind": "dv01", "size": "1000"}
+    x0 = svc.pricing(u, dict(xccy))
+    assert "XCCY 18M" not in _buckets(x0) and "XCCY 2Y" in _buckets(x0)
+    svc.set_curve_points(admin, {"action": "off", "id": "off:XCCY 2Y"})
+    try:
+        x1 = svc.pricing(u, dict(xccy))
+        xr = _buckets(x1)
+        assert "XCCY 2Y" not in xr and set(xr) == {q.name for q in curves(svc, u)["off_quotes"]}
+        for m in pr.METHODS:
+            assert x1["buckets"]["total"][m] == pytest.approx(sum(r[m] for r in xr.values()), abs=1e-9)
+        assert x1["buckets"]["total"]["boot"] < -800.0 and xr["XCCY 3Y"]["boot"] < -300.0
+    finally:
+        svc.set_curve_points(admin, {"action": "on", "id": "off:XCCY 2Y"})
+    assert svc.pricing(u, dict(xccy))["buckets"] == x0["buckets"]
 
 
 def test_a_user_s_own_quote_reaches_their_curve_on_the_list(module_service, desk):

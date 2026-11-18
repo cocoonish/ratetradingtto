@@ -394,7 +394,10 @@ class Curves(object):
     The mids are read off the curves as the pages have them (Bootstrap: Motor's ``BOOT_GUN`` / ``BOOT_LNDF`` and the
     offshore names; PPK basamak: ppkcurve's); a DV01 is the difference between a bumped curve and the same method's base
     built the same way (Bootstrap: :func:`motor_curve` / :func:`quote_curve` from the quotes - the sheet's curve to the
-    last digit -, PPK: the calibrated curve and :func:`recalibrated`)."""
+    last digit -, PPK: the calibrated curve and :func:`recalibrated`).  A curve whose desk's list of points differs from
+    the default (Ayarlar → Eğri noktaları: ``cv["ois_nodes"]`` / ``cv["off_listed"]``) has the list's points as its
+    pillars - those that carry a rate and are on - and its Bootstrap bumps built the list's way
+    (:func:`tto.ppkcurve.list_ois_curve` / :func:`tto.ppkcurve.bootstrap`)."""
 
     def __init__(self, cv: Dict[str, Any], mk: Market, kept: Optional[Dict[Tuple, Any]] = None):
         self.cv, self.mk = cv, mk
@@ -408,7 +411,11 @@ class Curves(object):
         return self.cv.get(key)
 
     def pillars(self, family: str) -> List[Tuple[str, float]]:
-        """The pillars of a family, in maturity order: (name, its maturity in days) - the quotes the curve is built from."""
+        """The pillars of a family, in maturity order: (name, its maturity in days) - the quotes the curve is built from
+        (the desk's list of points when it differs from the default: its points that carry a rate and are on - no
+        computed point, no PPK meeting)."""
+        if family == ON and self.cv.get("ois_nodes") is not None:
+            return [(q.name, q.end) for q in sorted(self.cv.get("quotes") or [], key=lambda q: q.end)]
         if family == ON:
             node = {int(round(m)): d for m, d in self.mk.nodes}
             return [(pk.tenor_label(int(round(m))), node.get(int(round(m)), m * 30.4375)) for m, _ in sorted(self.mk.ois_quotes)]
@@ -437,15 +444,26 @@ class Curves(object):
     def _source(self, family: str, method: str) -> Tuple:
         """What a family's bump set on a method is made of."""
         cv, mk = self.cv, self.mk
-        if family == ON and method == BOOT:
-            return family, method, mk.ois_quotes, mk.nodes
         quotes = _quotes_key(sorted((cv.get("quotes") if family == ON else cv.get("off_quotes")) or [], key=lambda q: q.end))
+        if family == ON and method == BOOT:
+            if cv.get("ois_nodes") is not None:                  # (the desk's list: its points on Motor's nodes)
+                return family, method, "list", quotes, cv["ois_nodes"]
+            return family, method, mk.ois_quotes, mk.nodes
         if method == BOOT:
-            return family, method, quotes
+            return (family, method, quotes) + (("list",) if family == OFF and cv.get("off_listed") else ())
         return family, method, quotes, _shape_key(cv.get("shape")), cv.get("fx_shift") if family == OFF else None
 
     def _bump(self, family: str, method: str) -> Optional[Tuple[Any, List[Tuple[str, Any]]]]:
         cv, mk = self.cv, self.mk
+        if family == ON and method == BOOT and cv.get("ois_nodes") is not None:
+            # the desk's list of points (tto/curvepoints.py): each point +1 bp, the list's Bootstrap built again
+            # (ppkcurve.list_ois_curve: Motor's method on the points, an off-grid point its own node)
+            nodes = cv["ois_nodes"]
+            qs = sorted(cv.get("quotes") or [], key=lambda q: q.end)
+            if not qs:
+                return None
+            build = lambda x: pk.list_ois_curve(x, nodes)[1]          # noqa: E731
+            return build(qs), [(q.name, build(qs[:i] + [q._replace(rate=q.rate + BP)] + qs[i + 1:])) for i, q in enumerate(qs)]
         if family == ON and method == BOOT:
             qs = sorted(mk.ois_quotes)
             if not qs or not mk.nodes:
@@ -457,8 +475,10 @@ class Curves(object):
         if not quotes:
             return None
         if method == BOOT:
-            base = quote_curve(quotes)
-            return base, [(q.name, quote_curve(quotes[:i] + [q._replace(rate=q.rate + BP)] + quotes[i + 1:]))
+            # (the desk's offshore list: a node at every point, a coupon between nodes read off the curve - ppkcurve's)
+            build = pk.bootstrap if family == OFF and cv.get("off_listed") else quote_curve
+            base = build(quotes)
+            return base, [(q.name, build(quotes[:i] + [q._replace(rate=q.rate + BP)] + quotes[i + 1:]))
                           for i, q in enumerate(quotes)]
         base = cv.get("ppk") if family == ON else cv.get("off_ppk")
         shape = cv.get("shape")
@@ -753,7 +773,9 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
     pillars = curves.pillars(family)
     bucket_rows = []
     if family == ON:
-        bucket_rows += [{"name": b, "pillar": False, "day": None, "dv01": {m: None for m in METHODS}} for b in SHORT_BUCKETS]
+        named = {n for n, _ in pillars}                       # (a point of the desk's list at 1W: its own bucket)
+        bucket_rows += [{"name": b, "pillar": False, "day": None, "dv01": {m: None for m in METHODS}} for b in SHORT_BUCKETS
+                        if b not in named]
     for name, day in pillars:
         got = rows.get(name, {})
         bucket_rows.append({"name": name, "pillar": True, "day": day, "dv01": {m: got.get(m) for m in METHODS}})
