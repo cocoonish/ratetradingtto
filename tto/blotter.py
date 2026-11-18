@@ -30,6 +30,10 @@ TENOR_MONTHS = {"1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9, "1Y": 12, "15M": 15
 OIS_ROW = {"1M": 9, "2M": 10, "3M": 11, "6M": 12, "9M": 13, "1Y": 14, "15M": 15, "18M": 16, "21M": 17, "2Y": 18,
            "3Y": 19, "4Y": 20, "5Y": 21, "6Y": 22, "7Y": 23, "8Y": 24, "9Y": 25, "10Y": 26}
 FWD_BASES = ("RET_BID", "RET_MID", "RET_ASK", "TRY", "FWD", "SP")
+#: the desk's OIS buckets have no 15M and no 21M (the sheet's summary P25:P38, its counterparty × tenor table Q89:Q107):
+#: OIS_MAIN reads those rows between quoted tenors and nothing trades there - a leg there (a 12x15 FRA's end, a 15M
+#: outright) is in the next tenor's bucket, in the sheet and in the cost table by tenor.  The trade keeps its own tenor.
+BUCKET_OF = {"15M": "18M", "21M": "2Y"}
 MPC_ROWS = (84, 99)        # OIS_MAIN 'MPC OIS': A period, B start, C end, D market (bootstrap)
 
 
@@ -47,6 +51,11 @@ def month_label(m: int) -> str:
     if m >= 12 and m % 12 == 0:
         return "%dY" % (m // 12)
     return "%dM" % m
+
+
+def bucket(tenor: str) -> str:
+    """The desk's bucket of an OIS leg's tenor: the tenor itself, but 15M → 18M and 21M → 2Y (``BUCKET_OF``)."""
+    return BUCKET_OF.get(tenor, tenor)
 
 
 # ---------------------------------------------------------------------------------------------- FX forward
@@ -760,7 +769,8 @@ def position_cost(buys: List[Tuple[float, float]], sells: List[Tuple[float, floa
 
 
 def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Position and cost per forward (pair and value date), OIS tenor or meeting-dated period and bond."""
+    """Position and cost per forward (pair and value date), OIS bucket (the leg's tenor, 15M / 21M in the next one:
+    :func:`bucket`) or meeting-dated period and bond."""
     fwd: Dict[Tuple[str, float], Dict[str, List[Tuple[float, float]]]] = {}
     spans: Dict[str, float] = {}
     ois: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
@@ -771,7 +781,7 @@ def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
             d = fwd.setdefault((t.get("pair") or "USDTRY", t["value_date"]), {"B": [], "S": []})
             d[t["dir"]].append((t["amount"], t["forward"]))
         elif k == "ois":
-            d = ois.setdefault(t["tenor"], {"B": [], "S": []})
+            d = ois.setdefault(t["tenor"] if t.get("mpc") else bucket(t["tenor"]), {"B": [], "S": []})
             d[t["dir"]].append((t["dv01"], t["rate"]))
             if t.get("mpc"):
                 spans[t["tenor"]] = t["mpc"].get("start") or 0.0
@@ -1004,7 +1014,8 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
 
     The sheet was made for USDTRY forwards and OIS of a quoted tenor.  A forward of another currency against
     TRY goes in at its USD amount (its TRY rate as it is: the TL cost); a meeting-dated OIS goes in spread over
-    the main tenors (see :func:`mpc_summary_rows`).  Column G holds each forward's DV01 ($)."""
+    the main tenors (see :func:`mpc_summary_rows`); an OIS leg at 15M / 21M in the next tenor's bucket (column L:
+    :func:`bucket` - the sheet's tables have no 15M / 21M).  Column G holds each forward's DV01 ($)."""
     si = book.model.sheet_index[SHEET]
     vals: Dict[Tuple[int, int], Any] = {}
 
@@ -1052,7 +1063,7 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
             put("I", ro, float(t["dv01"]))
             put("J", ro, t["dir"])
             put("K", ro, float(t["rate"]))
-            put("L", ro, t["tenor"])
+            put("L", ro, bucket(t["tenor"]))
             put("M", ro, t.get("cpt") or None)
             ro += 1
         elif k == "bond" and rb <= BOND_ROWS[1]:
