@@ -1,10 +1,10 @@
 """Curve fair value (``tto/quantcurve.py``): Nelson-Siegel-Svensson fits that recover a known curve from OIS par rates
-(the workbook's conventions) and from bond yields (BIST's), the DİBS curve's Nelson-Siegel recovering a planted one with
-the bills in the fit (a bill holds the short end), the model rule (NS whatever the number of bonds) and leave-one-out
-residuals, a bond priced off a known curve being neither rich nor cheap, one planted bond / tenor being the one that
-is, carry and roll on flat and sloped curves, the families' signals on a synthetic history, the read of the DİBS RV
-sheet - and the service and the HTTP API of both new pages ("Eğri Adil Değeri", "Opsiyon") on a seeded two-year
-history."""
+(the workbook's conventions) and from bond yields (BIST's), the DİBS curve's Nelson-Siegel recovering a planted one from
+the fixed-coupon bonds - the bills priced on it, not fitted (a bill does not move the curve: the desk's decision of
+18.11.2026) -, the model rule (NS whatever the number of bonds) and leave-one-out residuals, a bond priced off a known
+curve being neither rich nor cheap, one planted bond / tenor being the one that is, carry and roll on flat and sloped
+curves, the families' signals on a synthetic history, the read of the DİBS RV sheet - and the service and the HTTP API
+of both new pages ("Eğri Adil Değeri", "Opsiyon") on a seeded two-year history."""
 from __future__ import annotations
 
 import datetime as dt
@@ -131,9 +131,11 @@ def test_bond_prices_follow_the_sheets_bist_conventions():
 
 @pytest.mark.parametrize("conv", ["simple", "compound"])
 def test_bonds_priced_off_a_known_curve_are_neither_rich_nor_cheap(conv):
-    """A Svensson curve (the search's ``k`` 4, the OIS family's model) recovered from the bonds and bills priced off it."""
+    """A Svensson curve (the search's ``k`` 4, the OIS family's model) recovered from the fixed-coupon bonds priced off
+    it; the bills, priced off it too and not fitted, are on it."""
     fit_in = priced(TRUE, conv=conv)
-    assert fit_in.n_fit == 14 and {fit_in.bonds[i].kind for i in fit_in.fitted} == {"fixed", "bill"}      # the bills in the fit
+    # the fixed-coupon bonds fitted, the bills not (``FIT_KINDS``)
+    assert fit_in.n_fit == 12 and {fit_in.bonds[i].kind for i in fit_in.fitted} == {"fixed"} and fit_in.n_bills == 2
     found = qc.search(fit_in.make, tau_min=fit_in.shortest, tau_max=fit_in.longest)
     assert max(abs(e) * 1e4 for e in found["resid"]) < 0.01                 # bp
     assert max(abs(a - b) for a, b in zip(found["nss"].beta, TRUE.beta)) < 1e-5
@@ -145,7 +147,7 @@ def test_bonds_priced_off_a_known_curve_are_neither_rich_nor_cheap(conv):
     cheap = priced(TRUE, conv=conv, bump={qx.PLANTED: 25.0})
     res = qc.search(cheap.make, tau_min=cheap.shortest, tau_max=cheap.longest)
     r = {b.isin: e * 1e4 for b, e in zip(cheap.bonds, cheap.evaluate(res["nss"])[0])}
-    # (fourteen bonds fitted: each has some leverage, the Huber fit keeps a few bp of the bump in the curve)
+    # (twelve bonds fitted: each has some leverage, the Huber fit keeps a few bp of the bump in the curve)
     assert abs(r[qx.PLANTED] - 25.0) < 4.0 and max(abs(v) for k, v in r.items() if k != qx.PLANTED) < 2.0
 
 
@@ -156,7 +158,8 @@ TRUE_NS = qc.Nss([0.30, 0.07, -0.06], 1.3, 1.3, qc.NS)
 @pytest.mark.parametrize("conv", ["simple", "compound"])
 def test_the_dibs_curve_is_nelson_siegel_and_recovers_a_planted_one(conv):
     """The DİBS search (``dibs_search``, the quant family's and Genel's) is Nelson-Siegel's: three β and τ1 recovered
-    from the bonds and bills priced off a planted NS curve; nothing rich or cheap; its parameters say NS (no β3, τ2)."""
+    from the fixed-coupon bonds priced off a planted NS curve; nothing rich or cheap (the bills, priced off it and not
+    fitted, neither); its parameters say NS (no β3, τ2)."""
     fit_in = priced(TRUE_NS, conv=conv)
     found = qc.dibs_search(fit_in)
     nss = found["nss"]
@@ -172,23 +175,49 @@ def test_the_dibs_curve_is_nelson_siegel_and_recovers_a_planted_one(conv):
     assert len(again["jac"][0]) == 3
 
 
-def test_the_bills_hold_the_short_end():
-    """The bills are in the fit: a bill's yield moves the curve's short end (fitted to the coupon bonds alone, it would
-    not move at all) - and its own rich / cheap takes only part of the move.  (Least squares here: the robust fit would
-    take one bill 40 bp off the others for an outlier and down-weight it, as it does any bond.)"""
+def test_a_bill_is_priced_on_the_curve_not_fitted():
+    """The bills are not in the fit (``FIT_KINDS``: the fixed-coupon bonds - the desk's decision of 18.11.2026): a bill's
+    yield does not move the curve, its rich / cheap takes the whole move - read off the coupon bonds' curve at the short
+    end -, with its model yield the curve's.  (Fitted too, as before that day, the bill pulled the short end towards it
+    and its rich / cheap took only part of the move; least squares there: the robust fit would take one bill 40 bp off
+    the others for an outlier and down-weight it, as it does any bond.)"""
+    assert qc.FIT_KINDS == ("fixed",)
     base = priced(TRUE_NS)
     bill = next(i for i, b in enumerate(base.bonds) if b.kind == "bill" and base.flows[i][-1][0] < 0.5)
     isin = base.bonds[bill].isin
     moved = priced(TRUE_NS, bump={isin: 40.0})
-    assert bill in moved.fitted and moved.n_fit == len(BONDS)
-    curve = qc.refit(moved.make, TRUE_NS, TRUE_NS.beta, robust=False)["nss"]
+    assert bill not in moved.fitted and moved.n_fit == len(BONDS) - 2 and moved.n_bills == 2
+    curve = qc.refit(moved.make, TRUE_NS, TRUE_NS.beta)["nss"]
     t = base.flows[bill][-1][0]
-    assert (TRUE_NS.zero(t) - curve.zero(t)) * 1e4 < -1.0                 # the short end pulled up by the bill (+40 bp)
-    resid = moved.evaluate(curve)[0][bill] * 1e4
-    assert 0 < resid < 40.0
-    alone = qc.BondFit([(b, v, y, c) for b, v, y, c in zip(moved.bonds, moved.value, moved.y, moved.conv)], ("fixed",))
-    still = qc.refit(alone.make, TRUE_NS, TRUE_NS.beta)["nss"]
-    assert abs(still.zero(t) - TRUE_NS.zero(t)) * 1e4 < 1e-6 and abs(alone.evaluate(still)[0][bill] * 1e4 - 40.0) < 1.0
+    assert abs(curve.zero(t) - TRUE_NS.zero(t)) * 1e4 < 1e-6                    # the short end where the coupon bonds put it
+    assert abs(moved.evaluate(curve)[0][bill] * 1e4 - 40.0) < 1.0               # the bill 40 bp cheap: all of it its own
+    assert abs(moved.model_yields(curve)[bill] - base.y[bill]) * 1e4 < 1e-6     # its model yield: the curve's
+    # (the bills fitted too: the short end pulled up by the bill, its own rich / cheap a part of the 40 bp)
+    both = qc.BondFit([(b, v, y, c) for b, v, y, c in zip(moved.bonds, moved.value, moved.y, moved.conv)], ("fixed", "bill"))
+    assert bill in both.fitted and both.n_fit == len(BONDS) and both.n_bills == 0
+    pulled = qc.refit(both.make, TRUE_NS, TRUE_NS.beta, robust=False)["nss"]
+    assert (TRUE_NS.zero(t) - pulled.zero(t)) * 1e4 < -1.0 and 0 < both.evaluate(pulled)[0][bill] * 1e4 < 40.0
+
+
+def test_the_bills_do_not_make_up_the_dibs_fits_count():
+    """The family's DİBS fit needs ``MIN_BONDS`` fixed-coupon bonds - on the list, then with a yield -: the bills, not
+    fitted, do not count (two bills and five coupon bonds on the list are not enough; six coupon bonds, five of them
+    with a yield, neither)."""
+    def rows(n):
+        return [{"isin": b.isin, "type": "B" if b.kind == "bill" else "S", "name": b.isin, "maturity": b.maturity.isoformat(),
+                 "coupon": b.coupon, "freq": 2.0, "source": "ISL1"} for b in qx.bond_list(TODAY)[:n]]
+
+    few = rows(7)                                                           # the two bills, five coupon bonds
+    assert [r["type"] for r in few].count("B") == 2 and qc.MIN_BONDS == 6
+    live = {"DIBSS:" + r["isin"]: 35.0 for r in few}
+    mons, table = qc.fam_dibs(qf.Ctx(dict(DEFAULTS), TODAY, {}, {}, live=live), {"dibs": few}, None)
+    assert mons == [] and not table["ok"] and table["why"] == "DİBS RV listesinde en az 6 sabit kuponlu kâğıt gerekli"
+    six = rows(8)                                                           # a sixth coupon bond, without a yield
+    mons, table = qc.fam_dibs(qf.Ctx(dict(DEFAULTS), TODAY, {}, {}, live=live), {"dibs": six}, None)
+    assert mons == [] and not table["ok"] and table["why"] == "en az 6 sabit kuponlu kâğıdın getirisi gerekli"
+    live["DIBSS:" + six[-1]["isin"]] = 35.0
+    mons, table = qc.fam_dibs(qf.Ctx(dict(DEFAULTS), TODAY, {}, {}, live=live), {"dibs": six}, None)
+    assert table["ok"] and table["build"](live)["n_fit"] == 6 and table["build"](live)["n_bills"] == 2
 
 
 def test_the_model_is_nelson_siegel_whatever_the_number_of_bonds():
@@ -215,7 +244,7 @@ def test_leave_one_out_is_the_distance_from_a_curve_fitted_without_the_bond():
     fit = qc.refit(cheap.make, nss, nss.beta)
     own = {b.isin: e * 1e4 for b, e in zip(cheap.bonds, cheap.evaluate(fit["nss"])[0])}
     loo = {cheap.bonds[i].isin: e * 1e4 for i, e in zip(cheap.fitted, cheap.loo(fit["nss"]))}
-    assert set(loo) == {b.isin for b in cheap.bonds}
+    assert set(loo) == {b.isin for b in cheap.bonds if b.kind == "fixed"}                  # the fitted bonds' (no bill)
     assert abs(loo[qx.PLANTED] - 30.0) < 0.5 and own[qx.PLANTED] < loo[qx.PLANTED]
     assert max(abs(v) for k, v in loo.items() if k != qx.PLANTED) < 3.0
     assert qc.loo_rmse(cheap, fit["nss"]) == pytest.approx(math.sqrt(sum(v * v for v in loo.values()) / len(loo)), rel=1e-12)
@@ -317,11 +346,14 @@ def test_dibs_family_finds_the_planted_bond_with_carry_and_ranking(fitted):
     planted = rows[qx.PLANTED]
     sd_eq = qx.MISPRICE_SD / math.sqrt(1 - 0.85 ** 2) * 1e4
     assert abs(planted["resid"] - 3 * sd_eq) < 8 and planted["z"] > DEFAULTS["entry_z"]
-    # the fixed-coupon bonds and the bills are fitted (3 bp of noise each), by Nelson-Siegel (the synthetic curve is
-    # Svensson's: its second hump is not in the model); the fit's leave-one-out RMSE beside its RMSE
-    assert d["n_fit"] == len(qx.BONDS) == 14 and d["n_bills"] == 2 and all(r["fitted"] for r in d["rows"])
+    # the fixed-coupon bonds are fitted (3 bp of noise each), by Nelson-Siegel (the synthetic curve is Svensson's: its
+    # second hump is not in the model); the bills are priced on the curve, not fitted (``n_bills``: the bills out of the
+    # fit) - each with a model yield and a rich / cheap, as any bond; the fit's leave-one-out RMSE beside its RMSE
+    assert d["n_fit"] == len(qx.BONDS) - 2 == 12 and d["n_bills"] == 2 and all(r["fitted"] == (r["kind"] == "fixed") for r in d["rows"])
+    assert all(r["weight"] is None and r["model"] is not None and r["resid"] is not None for r in d["rows"] if r["kind"] == "bill")
     assert d["model"] == "NS" and d["params"]["model"] == "NS" and d["params"]["b3"] is None and d["rmse"] < d["loo"] < 3 * d["rmse"]
-    assert max(abs(r["resid"]) for k, r in rows.items() if k != qx.PLANTED and r["fitted"]) < 12      # (the bills among them)
+    # (the bills too: priced off the same synthetic curve, they sit on the coupon bonds' one at the short end)
+    assert max(abs(r["resid"]) for k, r in rows.items() if k != qx.PLANTED) < 12
     assert max(rows.values(), key=lambda r: r["z"] or -9)["isin"] == qx.PLANTED
     sig = {s["id"]: s for s in (qf.make_signal(m, ctx.cfg, "10:00") for m in mons) if s}
     s = sig["dibsfv:" + qx.PLANTED]

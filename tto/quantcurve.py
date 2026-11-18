@@ -36,16 +36,17 @@ level (β0) and slope (β1), DV01-weighted, as the PCA family hedges to PC1 / PC
 linkers stay out), priced as that sheet prices them (BIST): coupons of c/f every round(364/f) days back from the
 maturity, the yield compounded f times a year over the periods left (the first one a fraction of a period), a bill's
 simple yield (100/P − 1)·365/days; the dirty price of the value date (the next week day; a bill priced "ISL0" on its own
-day).  The curve is fitted to the yields of both kinds - the bills hold the short end with prices of their own: each
+day).  The curve is fitted to the fixed-coupon bonds' yields (``FIT_KINDS``, the desk's decision of 18.11.2026): each
 bond's model price Σ CF·DF(t) against its market price, the difference divided by the price's sensitivity to its yield
-(the sum is one of yield errors), and a bond's rich / cheap is its yield − the yield of its model price (bp, in the
-bond's own yield convention): + cheap (buy), − rich (sell).  The DİBS curve is Nelson-Siegel's (``DIBS_MODEL``: β3 held
-at 0, one hump - with a dozen or two bonds Svensson's second hump fits the bonds' own noise, its β run to hundreds of per
-cent and swing day to day; the evidence is at ``DIBS_MODEL``), its τ1 searched on the grid of both τ.  Each fitted
-bond's leave-one-out residual - its distance from the curve fitted again without it, the τ held - says how far the
-curve misses a bond it was not given (``BondFit.loo``; the table's "LOO RMSE").  Beside it the same cash flows on the
-OIS fit: the bond's yield over the OIS curve (bp, the sheet's "Getiri − OIS" read cash flow by cash flow - an
-asset-swap-like spread) next to the sheet's own ASW.
+(the sum is one of yield errors).  The bills are priced on that curve, not fitted to it: a bill's rich / cheap reads the
+curve the coupon bonds give at the short end.  A bond's rich / cheap, fitted or not, is its yield − the yield of its
+model price (bp, in the bond's own yield convention): + cheap (buy), − rich (sell).  The DİBS curve is Nelson-Siegel's
+(``DIBS_MODEL``: β3 held at 0, one hump - with a dozen or two bonds Svensson's second hump fits the bonds' own noise, its
+β run to hundreds of per cent and swing day to day; the evidence is at ``DIBS_MODEL``), its τ1 searched on the grid of
+both τ.  Each fitted bond's leave-one-out residual - its distance from the curve fitted again without it, the τ held -
+says how far the curve misses a bond it was not given (``BondFit.loo``; the table's "LOO RMSE").  Beside it the same
+cash flows on the OIS fit: the bond's yield over the OIS curve (bp, the sheet's "Getiri − OIS" read cash flow by cash
+flow - an asset-swap-like spread) next to the sheet's own ASW.
 
 Live yields come from the DİBS RV sheet (its simple and compound BIST yields); past days from the history's daily
 closes (Bloomberg's ``YLD_YTM_MID``, whose convention is not documented for these bonds): each bond's history is read
@@ -107,16 +108,18 @@ MODEL_TEXT = {NS: "Nelson-Siegel", NSS: "Nelson-Siegel-Svensson"}
 MIN_OIS = 6                     # tenors a day's OIS fit needs
 MIN_BONDS = 6                   # bonds a day's DİBS fit needs
 MIN_DAYS = 30                   # a bond this close to its maturity (days) is left out of the fit
-#: the kinds the DİBS curve is fitted to: the fixed-coupon bonds and the bills (BIST's simple yield, as the sheet prices
-#: them) - the short end is held by prices of its own, not read off the coupon bonds' curve
-FIT_KINDS = ("fixed", "bill")
+#: the kinds the DİBS curve is fitted to: the fixed-coupon bonds (the desk's decision, 18.11.2026).  The bills are priced
+#: on the curve - a model yield and a rich / cheap, as any bond -, not fitted: their rich / cheap reads the curve the
+#: coupon bonds give at the short end (on the recorded day 134 / 221 bp rich; fitted too they read 45 / 150)
+FIT_KINDS = ("fixed",)
 #: the DİBS curve's model: Nelson-Siegel, whatever the number of bonds.  On the evidence (18.11.2026, the recorded day
-#: and histories fitted as the family fits them): with the list's 13 - 15 bonds Svensson's two more parameters were
-#: not better out of sample (leave-one-out RMSE 101 bp against NS's 96, bills in; 85 / 73 the coupon bonds alone), its
-#: β ran to ±900 % and moved 9 - 40 points a day against NS's 0,2 - 0,5, its short end 2 - 3 times as unsteady; on
-#: synthetic lists of 8 - 40 bonds priced off a Svensson curve or an NS one (σ 5 / 25 / 50 bp) NS's LOO was the lower or
-#: equal one in 34 cases of 36 (the two others one draw, 24 bonds at 50 bp, under both curves: noise) - no number of
-#: bonds the list can hold is one where Svensson pays.  (The OIS curve stays Svensson's: 16 tenors, 1 - 3 bp.)
+#: and histories fitted as the family fits them): on the list's 13 coupon bonds Svensson's two more parameters were not
+#: better out of sample (leave-one-out RMSE 85 bp against NS's 73; 101 / 96 with the bills fitted too), its β ran to
+#: ±900 % and moved 9 - 40 points a day against NS's 0,2 - 0,5 (measured with the bills fitted), its short end 2 - 3
+#: times as unsteady; on synthetic lists of 8 - 40 bonds priced off a Svensson curve or an NS one (σ 5 / 25 / 50 bp)
+#: NS's LOO was the lower or equal one in 34 cases of 36 (the two others one draw, 24 bonds at 50 bp, under both curves:
+#: noise) - no number of bonds the list can hold is one where Svensson pays.  (The OIS curve stays Svensson's: 16
+#: tenors, 1 - 3 bp.)
 DIBS_MODEL = NS
 HORIZONS = (("1w", 7), ("1m", 30))
 YEAR = 365.0
@@ -748,6 +751,12 @@ class BondFit(object):
         return len(self.fitted)
 
     @property
+    def n_bills(self) -> int:
+        """The bills priced on the curve and not fitted to it (``FIT_KINDS``: the fixed-coupon bonds alone)."""
+        fit = set(self.fitted)
+        return sum(1 for i, b in enumerate(self.bonds) if b.kind == "bill" and i not in fit)
+
+    @property
     def shortest(self) -> float:
         """The shortest maturity of the fit (years)."""
         return min(self.flows[i][-1][0] for i in self.fitted) if self.fitted else TAU_BOUNDS[0]
@@ -1143,8 +1152,8 @@ def _value_date(day: _dt.date, row: Optional[Dict[str, Any]]) -> _dt.date:
 
 
 def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
-    """The DİBS curve (``DIBS_MODEL``, fitted to the bonds and bills): today's fit, every bond's rich / cheap (monitored),
-    its spread to the OIS fit, carry + roll, and the best bond to receive / pay with."""
+    """The DİBS curve (``DIBS_MODEL``, fitted to the fixed-coupon bonds; the bills priced on it): today's fit, every
+    bond's rich / cheap (monitored), its spread to the OIS fit, carry + roll, and the best bond to receive / pay with."""
     rows = {r["isin"]: r for r in (eng.get("dibs") or [])}
     win = ctx.window()
     bonds: Dict[str, Bond] = {}
@@ -1161,8 +1170,8 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
             b = _bond_of(isin, {}, row)
             if b is not None and b.maturity > ctx.today:
                 bonds[isin] = b
-    if len(bonds) < MIN_BONDS:
-        return [], {"ok": False, "why": "DİBS RV listesinde en az %d sabit kuponlu kâğıt / bono gerekli" % MIN_BONDS, "rows": []}
+    if sum(1 for b in bonds.values() if b.kind in FIT_KINDS) < MIN_BONDS:
+        return [], {"ok": False, "why": "DİBS RV listesinde en az %d sabit kuponlu kâğıt gerekli" % MIN_BONDS, "rows": []}
     for isin in bonds:
         row = rows.get(isin) or {}
         conv[isin] = detect_convention(ctx.last("DIBS:" + isin), _pct(row.get("simple")), _pct(row.get("compound")))
@@ -1186,7 +1195,7 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
     if base is None or base.n_fit < MIN_BONDS:
         base = day_fit(ctx.today, {i: v for i in bonds for v in [_yield_now(ctx, i, conv[i], ctx.live)] if v is not None})
     if base.n_fit < MIN_BONDS:
-        return [], {"ok": False, "why": "en az %d kâğıdın (sabit kuponlu ya da bono) getirisi gerekli" % MIN_BONDS, "rows": []}
+        return [], {"ok": False, "why": "en az %d sabit kuponlu kâğıdın getirisi gerekli" % MIN_BONDS, "rows": []}
     found = dibs_search(base)
     if found is None:
         return [], {"ok": False, "why": "%s uyumu kurulamadı" % MODEL_NAMES[DIBS_MODEL], "rows": []}
@@ -1268,13 +1277,13 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
                                 pkg_name="Paket 1 · DİBS komşularıyla hedge'li (%s seviye β0 ve eğim β1'e nötr)" % model,
                                 info={"inputs": ["DIBSS:" + isin, "DIBSC:" + isin], "conv": conv[isin],
                                       "hedge": [{"key": "DIBS:" + keys[h], "weight": w} for h, w in hedge]},
-                                note="Seri: getirinin DİBS " + model + " uyumundaki (" + MODEL_TEXT[nss0.k] + ": sabit kuponlular ve bonolar) "
-                                     "model getirisinden farkı (bp, kâğıdın kendi getiri kuralıyla): + ise "
-                                     "kâğıt eğriye göre ucuz (al), − ise pahalı (sat). Paket 1: kâğıt ve iki komşusu, DİBS uyumunun seviye ve "
-                                     "eğim faktörlerine nötr DV01 ağırlıklarıyla - eğri kayar ya da dikleşirse paket yerinde kalır, kazancı "
-                                     "kâğıdın eğriye dönmesinden gelir. Nominaller paket DV01'i için (ana bacak; DV01 DİBS RV!AI gibi: mod. "
-                                     "süre × kirli fiyat), yuvarlanmadan - masa 5 mn TL'ye yuvarlar. Carry + roll: kupon tahakkuku − "
-                                     "fonlama, artı eğride yuvarlanma.")
+                                note="Seri: getirinin DİBS " + model + " uyumundaki (" + MODEL_TEXT[nss0.k] + ", sabit kuponlulara; "
+                                     "bonolar eğride fiyatlanır, uydurmaya girmez) model getirisinden farkı (bp, kâğıdın kendi getiri "
+                                     "kuralıyla): + ise kâğıt eğriye göre ucuz (al), − ise pahalı (sat). Paket 1: kâğıt ve iki komşusu, "
+                                     "DİBS uyumunun seviye ve eğim faktörlerine nötr DV01 ağırlıklarıyla - eğri kayar ya da dikleşirse paket "
+                                     "yerinde kalır, kazancı kâğıdın eğriye dönmesinden gelir. Nominaller paket DV01'i için (ana bacak; DV01 "
+                                     "DİBS RV!AI gibi: mod. süre × kirli fiyat), yuvarlanmadan - masa 5 mn TL'ye yuvarlar. Carry + roll: kupon "
+                                     "tahakkuku − fonlama, artı eğride yuvarlanma.")
             if mon is not None:
                 mons.append(mon)
                 by_isin[isin] = mon
@@ -1328,7 +1337,7 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
         longest = max(fl[-1][0] for fl in fit_in.flows)
         grid = [0.1 * i for i in range(1, int(longest * 10) + 2)]
         return {"ok": True, "params": nss.info(fit_in.longest), "rmse": math.sqrt(fit["sse"] / fit_in.n_fit) * 1e4, "n": len(fit_in), "n_fit": fit_in.n_fit,
-                "n_bills": sum(1 for i in fit_in.fitted if fit_in.bonds[i].kind == "bill"), "loo": loo_rmse(fit_in, nss),
+                "n_bills": fit_in.n_bills, "loo": loo_rmse(fit_in, nss),
                 "model": nss.model, "rows": out_rows,
                 "receive": [{k: r[k] for k in pick} for r in receive[:6]], "pay": [{k: r[k] for k in pick} for r in pay[:6]],
                 "days": len(good), "first": good[0] if good else None, "last": good[-1] if good else None, "search_ms": search_ms,

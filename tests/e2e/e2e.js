@@ -3391,8 +3391,8 @@ async function clipAfter(page, action) {
     check('... and an ML line in the list: family "Makine öğrenmesi", the trade "AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)", its group',
       mlLine.family === 'Makine öğrenmesi' && mlLine.trade === 'AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)' && mlLine.group === 'G10 spot' && mlLine.z === '+2,98', mlLine);
     await shot(page, 'quant-ml');
-    // curve fair value: the NSS fits of the OIS quotes and of the DİBS RV list's fixed-coupon bonds and bills (today's
-    // quotes of the workbook; the recorded data has no DİBS history, so no z yet)
+    // curve fair value: the NSS fit of the OIS quotes and the NS fit of the DİBS RV list's fixed-coupon bonds, its bills
+    // priced on it (today's quotes of the workbook; the recorded data has no DİBS history, so no z yet)
     await open(page, 'quant-curve');
     await page.waitForSelector('#quant-curve-ois table.grid', { timeout: 60000 });
     const qcv = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/curve');
