@@ -42,6 +42,7 @@ import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing
 import './pageboxes.js';                          // (the boxes of the dashboard's own pages join the launchpad's kinds)
 import { boxEvent, PopBoxPage, popBoxHash, popBoxItem } from './pagebox.js';
 import { paintMenu, menuChanged, openedPage, pageTabs, editMenu } from './menu.js';
+import { showProgress, openProgress } from './hesap.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
@@ -876,6 +877,8 @@ function applyStatus(status) {
   $('ret-upd').textContent = ups.length ? '↻ ' + (ups.length > 3 ? ups.slice(0, 3).join(', ') + ' +' + (ups.length - 3) : ups.join(', ')) : '';
   $('ret-upd').title = ups.length ? 'RET güncellemesi var: ' + ups.join(', ') + ' – adil değer yayınlanandan farklı. Bakmak ve "Kopyala ve yayınla" için tıklayın.' : '';
   $('foot-ver').textContent = 'port ' + status.port;
+  // a long calculation under way (the quant fit, the ML models, the backtest, the history sync): "Hesap" in the top bar
+  if (status.progress && !POP) showProgress(status.progress);
   if (status.note && !state.noteShown) {
     state.noteShown = true;
     toast(status.note, 'err', 9000);
@@ -1046,6 +1049,7 @@ function boot() {
     toast(on ? 'Değişen hücreler yeniden yanıp sönecek' : 'Yanıp sönme kapatıldı', '', 2200);
   });
   $('mode-badge').addEventListener('click', () => openStatus(state.status).catch(errorToast));
+  $('hesap-ind').addEventListener('click', () => openProgress());
   $('btn-lang').addEventListener('click', () => {
     setLang(settings.lang === 'en' ? 'tr' : 'en');
     store('tto.lang', settings.lang);
@@ -1148,6 +1152,6 @@ const copyCell = (where, ref) => {
 };
 
 window.tto = { findCell: findCellAnywhere, copyCell, selectionText, state, events, refresh: () => runRefresh(), hub, pop: POP,
-  kept: () => [...kept.keys()], drawer: () => drawer, openTrade: (spec) => ctx.openTrade(spec) };
+  kept: () => [...kept.keys()], drawer: () => drawer, openTrade: (spec) => ctx.openTrade(spec), progress: showProgress };
 
 boot();

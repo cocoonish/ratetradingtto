@@ -173,8 +173,11 @@ class SignalsPage extends QuantPage {
     this.btAt = Date.now();
     const d = await api.get('/api/quant/backtest');
     if (this.dead) return;
+    // (one under way: its refits, the month it is on, the time left - tto/progress.py)
+    const job = ((d.progress || {}).jobs || []).find((j) => j.id === 'bt');
+    const at = job ? job.done + ' / ' + job.total + ' yeniden kurma' + (job.step ? ' · ' + job.step : '') + (job.eta ? ' · ' + job.eta : '') : '';
     if (!d.ready) {
-      this.boxes.bt.set([], [], null, d.running ? 'Geri test çalışıyor (ayrı iş parçacığında)…' : 'Geri test henüz yok: günün ilk tam hesabından sonra çalışır.');
+      this.boxes.bt.set([], [], null, d.running ? 'Geri test çalışıyor (ayrı iş parçacığında)' + (at ? ': ' + at : '…') : 'Geri test henüz yok: günün ilk tam hesabından sonra çalışır.');
       return;
     }
     // (a family at its calibrated levels: its out-of-sample record and today's k / m; one that keeps its own: its own trades and why)
@@ -183,7 +186,7 @@ class SignalsPage extends QuantPage {
       T(isNum(r.avg) ? sgn(r.avg, 2) + ' ' + (r.unit || '') : ''), N(isNum(r.avg_try) ? r.avg_try / 1000 : null, 1, { sign: true }), N(r.sharpe, 2, { sign: true }), N(r.max_dd, 1)]);
     this.boxes.bt.set(['Aile / grup', 'Seviyeler (bugün)', 'İşlem', 'İsabet', 'Ort. K/Z σ', 'Ort. K/Z', 'Ort. bin TL', 'Sharpe', 'En büyük düşüş σ'], rows, null, 'Geri testte işlem yok');
     this.btPanel.setTitle('Geri test · ' + isoToTr(d.first) + ' – ' + isoToTr(d.last) + ' · ' + d.n_trades + ' işlem · ' + d.refits + ' yeniden kurma'
-      + (d.at ? ' · ' + d.at.slice(0, 16) : '') + (d.complete ? '' : ' (süre doldu, eksik)') + (d.running ? ' · yeniden çalışıyor' : ''));
+      + (d.at ? ' · ' + d.at.slice(0, 16) : '') + (d.complete ? '' : ' (süre doldu, eksik)') + (d.running ? ' · yeniden çalışıyor' + (at ? ': ' + at : '') : ''));
   }
 
   async loadLog() {

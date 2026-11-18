@@ -155,6 +155,17 @@ async function clipAfter(page, action) {
     check('KPI strip is filled', (await page.locator('.kpi').count()) >= 5);
     check('mode badge says replay data', /KAYITLI/.test(await page.textContent('#mode-text')));
     check('nav lists the pages', (await page.locator('#nav .nav-item').count()) >= 20);
+    // "Hesap" (tto/progress.py): right after the start the history fills the recorded month (its meeting-pricing days)
+    // and the quant worker fits - the top bar says which and how far while one runs (a planted view is checked below)
+    const prog0 = (await api(page, 'ayşe yilmaz', 'GET', '/api/progress')).json || {};
+    if (prog0.busy) {
+      const shown = await page.waitForFunction(() => {
+        const b = document.getElementById('hesap-ind');
+        return b && !b.classList.contains('hidden') ? b.textContent : null;
+      }, null, { timeout: 20000 }).then((x) => x.jsonValue()).catch(() => null);
+      check('"Hesap" in the top bar while a calculation runs (right after the start: the history\'s days, the quant fit) - which and how far',
+        !!shown && /^Hesap(tarihçe|PPK geçmişi|Quant|ML|geri test) \d+/.test(shown), [shown, prog0.text]);
+    } else console.log('  (nothing ran right after the start: "Hesap" is checked on a planted view below)');
     await shot(page, '01-masa');
 
     // ------------------------------------------------------------------ editing an input
@@ -1863,6 +1874,46 @@ async function clipAfter(page, action) {
     // (8 series of the workbook, and 9 of the quant package's that the file recorded too: USDTRY, its swap points, USD OIS
     // 3M - and USD OIS 1M / 6M / 1Y of the VİOP page)
     check('the history of the recorded month is filled in the background', hist.phase === 'idle' && hist.mpc_days === 21 && hist.series === 8 + 9 && !hist.error, hist);
+    // "Hesap" on a view as the server gives it - the fit, the ML models and the backtest at once (planted: the polls and the
+    // status answer it), then the server's own answer
+    const planted = { busy: true, eta_s: 180, eta: '~3 dk', text: 'Quant 14/26 · ML 240/480 · geri test 12/25 · ~3 dk', jobs: [
+      { id: 'quant', name: 'Quant', title: 'Quant tam hesap', unit: 'adım', done: 14, total: 26, step: 'Makine öğrenmesi', since: '10:42:05', elapsed_s: 75,
+        eta_s: 180, eta: '~3 dk', short: 'Quant 14/26' },
+      { id: 'ml', name: 'ML', title: 'Makine öğrenmesi: modeller', unit: 'model', done: 240, total: 480, step: '', since: '10:42:31', elapsed_s: 49,
+        eta_s: 150, eta: '~3 dk', short: 'ML 240/480' },
+      { id: 'bt', name: 'geri test', title: 'Geri test', unit: 'yeniden kurma', done: 12, total: 25, step: 'Mart 2026 · 14.03.2026 kapanışıyla', since: '10:40:00',
+        elapsed_s: 200, eta_s: 170, eta: '~3 dk', short: 'geri test 12/25' }] };
+    await page.route('**/api/progress', (r) => r.fulfill({ json: planted }));
+    await page.route('**/api/status', async (r) => {
+      const res = await r.fetch();
+      const j = await res.json();
+      j.progress = planted;
+      await r.fulfill({ response: res, json: j });
+    });
+    await page.evaluate((v) => window.tto.progress(v), planted);
+    const ind = await page.evaluate(() => {
+      const b = document.getElementById('hesap-ind');
+      return { hidden: b.classList.contains('hidden'), text: (document.getElementById('hesap-text') || {}).textContent, tip: b.title };
+    });
+    check('"Hesap" in the top bar while something runs: each one\'s count and the time left ("Quant 14/26 · ML 240/480 · geri test 12/25 · ~3 dk")',
+      !ind.hidden && ind.text === planted.text && ind.tip.startsWith('Quant tam hesap: 14 / 26 adım · şu an Makine öğrenmesi · 10:42:05\'ten beri · ~3 dk\n'), ind);
+    await page.click('#hesap-ind');
+    await page.waitForSelector('#hesap-list table tbody tr');
+    const hesapRows = await page.$$eval('#hesap-list table tbody tr', (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent)));
+    check('... a click lists each: its step, done / total, since when, how long so far, the time left', JSON.stringify(hesapRows) === JSON.stringify([
+      ['Quant tam hesap', 'Makine öğrenmesi', '14 / 26 adım', '10:42:05', '1 dk 15 sn', '~3 dk'],
+      ['Makine öğrenmesi: modeller', '', '240 / 480 model', '10:42:31', '49 sn', '~3 dk'],
+      ['Geri test', 'Mart 2026 · 14.03.2026 kapanışıyla', '12 / 25 yeniden kurma', '10:40:00', '3 dk 20 sn', '~3 dk']]), hesapRows);
+    await page.keyboard.press('Escape');
+    await page.unroute('**/api/progress');
+    await page.unroute('**/api/status');
+    let hesapGone = false;
+    for (let i = 0; i < 40 && !hesapGone; i++) {
+      const p = (await api(page, 'ayşe yilmaz', 'GET', '/api/progress')).json || {};
+      hesapGone = !p.busy && await page.evaluate(() => document.getElementById('hesap-ind').classList.contains('hidden'));
+      if (!hesapGone) await page.waitForTimeout(1500);
+    }
+    check('... and gone once nothing runs (the server\'s own answer, asked every few seconds while something ran)', hesapGone);
     const rowsOf = (panel) => page.evaluate((p) => [...document.querySelectorAll('.panel[data-panel="' + p + '"] table.grid tr')]
       .map((tr) => [...tr.children].map((td) => td.textContent.trim())), panel);
     const rowOf = (rows, label) => rows.find((r) => r[0] === label || r[0].startsWith(label)) || [];
@@ -2987,6 +3038,17 @@ async function clipAfter(page, action) {
       && await page.locator('#quant-settings select#quant-set-bt_mute').inputValue() === 'kapalı');
     const bt = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/backtest');
     check('the backtest panel and its API are there', bt.status === 200 && await page.locator('#quant-backtest').count() === 1, bt.json);
+    // a quant page while the fit runs (tto/progress.py): its banner and its status say where it is, not a bare "hesaplanıyor"
+    const qprog = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const pv = { busy: true, text: 'Quant 14/26 · ML 240/480 · ~3 dk', jobs: [{ id: 'quant', step: 'Makine öğrenmesi' }, { id: 'ml', step: '' }] };
+      const durum = (st) => q.statusRows(st).find((r) => r[0].t === 'Durum')[1].t;
+      return { line: q.progressText(pv), idle: q.progressText({ busy: false, jobs: [] }), durum: durum({ phase: 'fit', progress: pv }),
+        bare: durum({ phase: 'fit' }), ready: durum({ phase: 'idle' }) };
+    });
+    check('... a quant page while the fit runs says where it is: "hesaplanıyor: Quant 14/26 · ML 240/480 · ~3 dk – şu an Makine öğrenmesi"',
+      qprog.line === ': Quant 14/26 · ML 240/480 · ~3 dk – şu an Makine öğrenmesi' && qprog.idle === ''
+      && qprog.durum === 'hesaplanıyor: Quant 14/26 · ML 240/480 · ~3 dk – şu an Makine öğrenmesi' && qprog.bare === 'hesaplanıyor…' && qprog.ready === 'hazır', qprog);
     // a signal in plain words: the card's sentence (the server writes it from the signal's own numbers), the trade in desk
     // words with the instrument's prices, the money - FX per 1 mn of the base currency split into the forward premium and
     // the spot's move, a rates package in bp and TL - and the list's expected P&L with its unit. The recorded month has too
