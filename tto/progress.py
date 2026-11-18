@@ -272,7 +272,8 @@ class Progress(object):
             total = len(set(job.plan.get("order") or ()) | set(job.marks))
         done = min(job.done, total) if total is not None else job.done
         eta = self.eta(job, now)
+        eta = None if eta is None else int(round(eta))            # (the seconds the job and the top bar's line both say)
         return {"id": job.id, "name": job.name, "title": job.title, "phase": job.phase, "unit": job.unit, "done": done, "total": total,
                 "step": job.label or job.step, "since": job.since.strftime("%H:%M:%S"), "elapsed_s": int(round(now - job.t0)),
-                "eta_s": None if eta is None else int(round(eta)), "eta": eta_text(eta),
+                "eta_s": eta, "eta": eta_text(eta),
                 "short": "%s %d/%d" % (job.name, done, total) if total is not None else "%s %d" % (job.name, done)}

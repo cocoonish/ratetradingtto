@@ -57,6 +57,20 @@ def test_the_time_left_is_said_the_desks_way():
     assert qq.bt_month("2026-03-14") == "Mart 2026 · 14.03.2026 kapanışıyla"
 
 
+def test_a_job_and_the_top_bar_say_the_same_time_left():
+    """(18.11: a backtest's 10,2 s left read "~20 sn" on its job and "~10 sn" on the bar - the job's text came from the
+    seconds before they were rounded) - both say it from the same whole seconds."""
+    clock, store = Clock(), Store()
+    hub = prog.Progress(store, clock)
+    job = hub.begin("bt", "geri test", "Geri test", "yeniden kurma", total=5)
+    for _ in range(3):
+        clock.t += 5.1
+        job.tick()
+    v = hub.view()
+    assert hub.eta(job) == pytest.approx(10.2)
+    assert v["jobs"][0]["eta_s"] == v["eta_s"] == 10 and v["jobs"][0]["eta"] == v["eta"] == "~10 sn" and v["text"].endswith(v["jobs"][0]["eta"])
+
+
 def test_a_job_of_like_units_runs_on_its_own_pace_after_three_and_the_last_runs_before():
     clock, store = Clock(), Store()
     hub = prog.Progress(store, clock)
