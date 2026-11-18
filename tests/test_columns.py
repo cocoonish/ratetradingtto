@@ -165,6 +165,7 @@ def test_the_order_over_http(service):
     assert r.status_code == 200 and r.json() == {"table": "v/forward/B19", "order": ["X", "W"]}
     r = client.post("/api/columns", json={"table": "v/forward/B19", "order": ["W", "X"], "hidden": ["U"]}, headers=h)
     assert r.json() == {"table": "v/forward/B19", "order": ["W", "X"], "hidden": ["U"]}
-    assert client.get("/api/columns", headers=h).json() == {"tables": {"v/forward/B19": ["U"]}, "order": {"v/forward/B19": ["W", "X"]}}
+    assert client.get("/api/columns", headers=h).json() == {"tables": {"v/forward/B19": ["U"]}, "order": {"v/forward/B19": ["W", "X"]},
+                                                            "defaults": DEFAULTS}
     assert client.post("/api/columns", json={"table": "v/forward/B19", "order": "X"}, headers=h).status_code == 400
     assert client.post("/api/columns", json={"table": "v/forward/B19", "order": []}, headers=ANON).status_code == 401

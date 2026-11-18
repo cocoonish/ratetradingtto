@@ -114,8 +114,9 @@ FIT_KINDS = ("fixed", "bill")
 #: and histories fitted as the family fits them): with the list's 13 - 15 bonds Svensson's two more parameters were
 #: not better out of sample (leave-one-out RMSE 101 bp against NS's 96, bills in; 85 / 73 the coupon bonds alone), its
 #: β ran to ±900 % and moved 9 - 40 points a day against NS's 0,2 - 0,5, its short end 2 - 3 times as unsteady; on
-#: synthetic lists of 8 - 40 bonds priced off a Svensson curve NS's LOO was still the lower one (σ 5 - 25 bp) - no
-#: number of bonds the list can hold is one where Svensson pays.  (The OIS curve stays Svensson's: 16 tenors, 1 - 3 bp.)
+#: synthetic lists of 8 - 40 bonds priced off a Svensson curve or an NS one (σ 5 / 25 / 50 bp) NS's LOO was the lower or
+#: equal one in 34 cases of 36 (the two others one draw, 24 bonds at 50 bp, under both curves: noise) - no number of
+#: bonds the list can hold is one where Svensson pays.  (The OIS curve stays Svensson's: 16 tenors, 1 - 3 bp.)
 DIBS_MODEL = NS
 HORIZONS = (("1w", 7), ("1m", 30))
 YEAR = 365.0
