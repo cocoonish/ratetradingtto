@@ -113,6 +113,8 @@ function isoDay(d) {
 }
 
 const DV01_HINT = 'TRY faizi +1 bp olursa kâr / zarar. İşaret her yerde aynı: payer + (faiz artınca kazanır: PAY, vadeli döviz alışı); receiver − (RECEIVE, vadeli döviz satışı, tahvil alışı).';
+const PPK_HINT = 'Piyasa mid = Bootstrap (Murex): bugünkü eğri, Murex\'in MTM\'i. PPK basamak = TLREF toplantılar arasında sabit, '
+  + 'OIS kotalarına aynen oturur: aynı FRA, aynı takvim ve gün sayımı, öbür eğri. İki eğri kotalı vadelerde aynı, aralarında farklı (12x15, 15x18 …).';
 
 export class BlotterPage {
   constructor(host, ctx) {
@@ -929,6 +931,28 @@ export class BlotterPage {
     return (st === 'spread' || st === 'fly') ? num(v, 2) + ' bp' : pct(v, 4);
   }
 
+  /** An FRA's second view (the quote's ``market_ppk``): the mid on the PPK step curve beside the market hint. */
+  ppkHint(q, st) {
+    if (typeof q.info.market_ppk !== 'number') return;
+    const span = h('span', { class: 'muted', id: 'blotter-ppk-hint' }, ' · PPK basamak mid: ' + this.levelText(q.info.market_ppk, st));
+    span.title = PPK_HINT;
+    this.ois.marketHint.appendChild(span);
+  }
+
+  /** Its tiles, after the quote's own: the PPK step mid and the trade against it (+ better than that mid, − worse). */
+  ppkTiles(tiles, q, st) {
+    if (typeof q.info.market_ppk !== 'number') return;
+    const mid = tile('Piyasa mid · PPK basamak', this.levelText(q.info.market_ppk, st), false, PPK_HINT);
+    mid.dataset.k = 'ppk-mid';
+    tiles.appendChild(mid);
+    const vs = typeof q.info.cost_bp_ppk === 'number' ? -q.info.cost_bp_ppk : null;
+    const t = tile("Mid'e göre · PPK (bp)", vs === null ? '—' : signed(vs, 2), false,
+      "İşlem PPK basamak mid'ine göre: + mid'den iyi (lehine), − mid'den kötü (aleyhine)");
+    t.dataset.k = 'ppk-vs-mid';
+    if (vs !== null && vs !== 0) t.classList.add(vs > 0 ? 'costneg' : 'costpos');
+    tiles.appendChild(t);
+  }
+
   async doQuoteOis() {
     const o = this.ois;
     if (!o.quote || this.dead) return;
@@ -957,6 +981,7 @@ export class BlotterPage {
         o.marketHint.appendChild(h('span', null, 'Piyasa mid: ' + this.levelText(q.info.market, st) + ' '));
         o.marketHint.appendChild(use);
       }
+      this.ppkHint(q, st);
       clear(o.quote);
       if (!hasLevel) {
         o.quote.appendChild(h('div', { class: 'muted' }, bp ? 'Seviyeyi (bp) yazın; bacaklar ve maliyet otomatik hesaplanır.'
@@ -978,6 +1003,7 @@ export class BlotterPage {
       n1.dataset.k = 'dv01-net';
       tiles.appendChild(n1);
       if (q.legs.length > 1) tiles.appendChild(tile('Brüt DV01 ($)', typeof od.gross === 'number' ? num(od.gross, 0) : '—', false, 'Bacakların DV01 toplamı (işaretsiz)'));
+      this.ppkTiles(tiles, q, st);
       o.quote.appendChild(tiles);
       const rows = q.legs.map((lg) => [ROLE[lg.role] || lg.role,
         { t: lg.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: lg.dir === 'S' ? 'buy' : 'sell' }, lg.tenor,

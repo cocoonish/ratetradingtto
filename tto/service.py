@@ -25,6 +25,7 @@ from urllib.parse import quote as _quote
 from . import aswfx
 from . import auth
 from . import blotter as bl
+from . import ppkcurve as pk
 from . import bonds as bd
 from . import borsaspread as bsp
 from . import brokerchat as bc
@@ -2035,6 +2036,11 @@ class Service(object):
                     _pick_columns(entry["data"], p["cols"])
                 if p.get("header"):
                     _column_captions(entry["data"], p["header"])
+                if p.get("ppk") == "fra":
+                    # the second view: the same rows on the PPK step curves (out of ``calc`` - a copy's too)
+                    self._fra_ppk_columns(book, calc, entry["data"], loc)
+                elif p.get("ppk") == "broken":
+                    self._broken_ppk_columns(book, calc, entry["data"], loc)
                 if p.get("append") == "asw_fx":
                     self._asw_fx_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "fra_buckets":
@@ -3908,8 +3914,11 @@ class Service(object):
             raise ServiceError(str(exc))
 
     def _ois_curve(self, user: Optional[str], book: Book) -> "bl.OisMarket":
-        """The TRY OIS curve as the user sees it (``user``: a user key, or nobody)."""
-        return bl.OisMarket(book, self._calc(user, book), self._overlay(user, book) if user else None)
+        """The TRY OIS curve as the user sees it (``user``: a user key, or nobody) - its PPK step twin the one kept for
+        the user's calculation (:meth:`_try_curves`)."""
+        calc = self._calc(user, book)
+        return bl.OisMarket(book, calc, self._overlay(user, book) if user else None,
+                            curves=lambda: self._try_curves(book, calc))
 
     def ois_market(self, user: Optional[str]) -> Dict[str, Any]:
         """Mid par rates / annuities per tenor for the trade form."""
@@ -5519,6 +5528,41 @@ class Service(object):
         self.bump()
         return note
 
+    # ================================================================== TRY rates two ways: bootstrap and PPK steps
+    #: how many states of calculations the curves are kept for (a user's, a copy's)
+    TRY_CURVES_KEPT = 16
+
+    def _try_curves(self, book, calc: Calc) -> Optional[Dict[str, Any]]:
+        """The TRY workbook's curves both ways out of ``calc`` (a user's calculation, a copy's layer:
+        :func:`tto.ppkcurve.read`) - the bootstrap as it is, the PPK step curve and its offshore twin calibrated to the
+        quotes.  Made once for a state of the calculation and kept; what making them read counts as read by whatever is
+        being made out of them (``calc.track`` - a page's panel: made again when any of it changes), a kept one's too.
+        ``None`` for a workbook without them."""
+        idx = book.model.sheet_index
+        if not all(s in idx for s in ("Motor", "OIS_MAIN", "Forward")):
+            return None
+        state, level = [book.id, calc.engine.layout, book.engine.input_changes], calc
+        while level is not None:                        # (the calculation and those below it: a change in any)
+            state += [level.serial, level.epoch]
+            level = level.parent
+        kept = self.__dict__.setdefault("_try_curves_kept", {})
+        hit = kept.get(calc.serial)
+        if hit is not None and hit[0] == state:
+            if calc.track is not None:
+                calc.track |= hit[2]
+            return hit[1]
+        outer, calc.track = calc.track, 0
+        try:
+            curves = pk.read(lambda sheet, r, c: calc.get(idx[sheet], r, c))
+            mask = calc.track
+        finally:
+            calc.track = None if outer is None else outer | (calc.track or 0)
+        kept.pop(calc.serial, None)
+        kept[calc.serial] = (state, curves, mask)
+        while len(kept) > self.TRY_CURVES_KEPT:
+            kept.pop(next(iter(kept)))
+        return curves
+
     # ================================================================== ASW against FX swaps
     def _asw_fx_calc(self, book, user: Optional[str]) -> Tuple[Optional[Calc], int]:
         """The ASW sheet's calculation on the FX swap implied curve, over the user's own inputs: every tenor with an FX
@@ -5720,6 +5764,146 @@ class Service(object):
             rows[i].extend([leg_cell(get(src, "M"), get(src, "I"), get(src, "K"), sign, "Başlangıç", start_side),
                             leg_cell(get(src, "N"), get(src, "J"), get(src, "L"), -sign, "Bitiş", end_side)])
         data["c"] = list(data.get("c") or []) + ["Başl. kova", "Bitiş kova"]
+        data["added"] = int(data.get("added") or 0) + 2
+
+    # ------------------------------------------------------------------ the second view: PPK steps
+    #: what the two ways are called on the pages
+    BOOT_TIP = ("Bootstrap (Murex) = bugünkü eğri, Murex'in MTM'i: OIS kotalarının par faizleri aylara göre doğrusal, "
+                "çeyreklik bootstrap, ln DF günlere göre doğrusal (Motor)")
+    PPK_TIP = ("PPK basamak = TLREF toplantılar arasında sabit, kotalara aynen oturur: PPK çözücüsünün ima patikası "
+               "(MPC ima) iki kotalı vade arasında sabit bir O/N kaydırmayla bütün OIS kotalarını kendi konvansiyonlarıyla "
+               "(3 aya kadar tek dönem basit ACT/365, sonra çeyreklik par) aynen fiyatlar. Bootstrap'la kotalı vadelerde "
+               "aynı, aralarında farklı")
+
+    @staticmethod
+    def _shift_text(report: Optional[List[Dict[str, Any]]], loc, what: str = "O/N kaydırma") -> str:
+        """A calibration in a line: the shift of each stretch (bp) and the most the shape missed a quote by."""
+        if not report:
+            return ""
+        miss = max(report, key=lambda x: abs(x["miss_bp"]))
+        return "%s (bp, kotalı vadeye kadar): %s. MPC ima'nın kotalardan kendi farkı en çok %s bp (%s)" % (
+            what, " · ".join("%s %s" % (x["name"], numfmt.format_value(x["shift_bp"], "+0.0;-0.0;0.0", loc)) for x in report),
+            numfmt.format_value(abs(miss["miss_bp"]), "0.0", loc), miss["name"])
+
+    @staticmethod
+    def _cell_format(book, si: int, r: int, c: int) -> str:
+        st = book.model.sheets[si].styles.get(r * COLS + c, 0)
+        return book.model.numfmts[st] if st < len(book.model.numfmts) else "General"
+
+    @staticmethod
+    def _diff_cell(v: float, fmt: str, loc) -> Dict[str, Any]:
+        """A signed difference: + green, − red; one that rounds to 0 is a plain 0."""
+        text = numfmt.format_value(v, fmt, loc)
+        shown = any(ch in "123456789" for ch in text)
+        cell = {"t": ("+" + text if v > 0 else text) if shown else numfmt.format_value(0.0, fmt, loc), "v": v, "k": "n"}
+        if shown:
+            cell["c"] = "pos" if v > 0 else "neg"
+        return cell
+
+    def _fra_ppk_columns(self, book, calc, data: Dict[str, Any], loc) -> None:
+        """OIS · PPK's FRA lists both ways: next to the list's market (Bootstrap - today's curve, Murex's MTM) the FRA on
+        the PPK step curve and the difference (bp) - each row's FRA (the whole list's months, M and N; the 15 best find
+        theirs there by its label) on the quarterly calendar and day count the list's market uses (Motor's: OIS_MAIN!B336),
+        so the difference is the curve's alone.  The market column's header says which way it is."""
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows or "OIS_MAIN" not in book.model.sheet_index:
+            return
+        si = book.model.sheet_index["OIS_MAIN"]
+        get = lambda r, col: calc.get(si, r, col_to_index(col))                       # noqa: E731
+        cv = self._try_curves(book, calc) or {}
+        ppk, grid = cv.get("ppk"), cv.get("grid")
+        months: Dict[str, Tuple[int, Any, Any]] = {}
+        for r in range(self.FRA_ALL[0], self.FRA_ALL[1] + 1):
+            label = get(r, "A")
+            if isinstance(label, str) and label.strip() and label.strip() not in months:
+                months[label.strip()] = (r, get(r, "M"), get(r, "N"))
+        why = "" if ppk is not None else "; ".join(cv.get("errors") or []) or "PPK basamak eğrisi kurulamadı"
+        head = [{"t": "PPK basamak", "k": "s", "b": 1, "f": "hd",
+                 "tip": "%s.\nFRA, listenin piyasasıyla aynı tarihler ve gün sayımıyla (Motor'un çeyreklik takvimi, ACT/365): "
+                        "fark yalnız eğriden.\n%s%s" % (self.PPK_TIP, self._shift_text(cv.get("report"), loc),
+                                                         ("\n" + why) if why else "")},
+                {"t": "PPK − piyasa (bp)", "k": "s", "b": 1, "f": "hd",
+                 "tip": "PPK basamak − Piyasa (Bootstrap), bp. İki yöntem kotalı vadelerde aynı; fark kotalı iki vadenin "
+                        "arasındaki FRA'larda (12x15, 15x18 …) çıkar, kotalı vadeleri birleştirenlerde (12x18, 1Y1Y …) ~0."}]
+        market_col = {self.FRA_ALL_HEAD: "B", self.FRA_TOP_HEAD: "C"}
+        letters = data.get("c") or []
+        for i, r in enumerate(rnums):
+            if r in market_col:
+                col = market_col[r]
+                if col in letters and isinstance(rows[i][letters.index(col)], dict):
+                    cell = rows[i][letters.index(col)]
+                    cell["tip"] = (cell["tip"] + "\n" if cell.get("tip") else "") + self.BOOT_TIP
+                rows[i].extend([dict(c) for c in head])
+                continue
+            src, mcol = None, None
+            if self.FRA_ALL[0] <= r <= self.FRA_ALL[1]:
+                src, mcol = (r, get(r, "M"), get(r, "N")), "B"
+            elif self.FRA_TOP[0] <= r <= self.FRA_TOP[1]:
+                label = get(r, "B")
+                src, mcol = (months.get(label.strip()) if isinstance(label, str) else None), "C"
+            value = None
+            if src is not None and ppk is not None and grid is not None and all(type(x) is float for x in src[1:]):
+                value = pk.fra(ppk, grid, int(src[1]), int(src[2]))
+            market = get(r, mcol) if mcol else None
+            if value is None or type(market) is not float:
+                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
+                continue
+            fmt = self._cell_format(book, si, r, col_to_index(mcol))
+            rows[i].extend([{"t": numfmt.format_value(value, fmt, loc), "v": value, "k": "n",
+                             "tip": "PPK basamak: %s · Bootstrap: %s" % (numfmt.format_value(value, "0.000%", loc),
+                                                                      numfmt.format_value(market, "0.000%", loc))},
+                            self._diff_cell((value - market) * 10000.0, "0.0", loc)])
+        data["c"] = list(letters) + ["PPK basamak", "PPK fark"]
+        data["added"] = int(data.get("added") or 0) + 2
+
+    #: MASA's broken-date block: the rows the PPK curves price, the format of their difference (the block's own "Fark":
+    #: points for the forward rows, bp for the rates) and its scale
+    BROKEN_DIFF = {pk.BROKEN_FWD: 10000.0, pk.BROKEN_POINTS: 1.0, pk.BROKEN_SIMPLE: 10000.0, pk.BROKEN_SIMPLE365: 10000.0,
+                   pk.BROKEN_ON: 10000.0, pk.BROKEN_OIS: 10000.0, pk.BROKEN_XCCY: 10000.0}
+
+    def _broken_ppk_columns(self, book, calc, data: Dict[str, Any], loc) -> None:
+        """MASA's broken-date block (KIRIK VADE & KARŞILIK) both ways: next to its market (column F: the offshore curve,
+        BOOT for OIS) the same rows on the PPK curves and the difference - the forward, simple and O/N rows and XCCY on the
+        PPK-shaped offshore curve (MPC ima + a flat basis between the offshore quotes), OIS on the PPK step curve; with the
+        block's own date, schedules and day counts (:func:`tto.ppkcurve.broken`), so the difference is the curve's alone.
+        A row the block gives no market for gets none either."""
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows or pk.BROKEN_SHEET not in book.model.sheet_index:
+            return
+        si = book.model.sheet_index[pk.BROKEN_SHEET]
+        cv = self._try_curves(book, calc) or {}
+        idx = book.model.sheet_index
+        got = pk.broken(lambda sheet, r, c: calc.get(idx[sheet], r, c), cv.get("ppk"), cv.get("off_ppk")) if cv else {}
+        f_col, h_col = col_to_index("F"), col_to_index("H")
+        why = "; ".join(cv.get("errors") or [])
+        head = [{"t": "PPK basamak", "k": "s", "b": 1, "f": "hd",
+                 "tip": "Aynı satır PPK basamak eğrileriyle. Forward / basit / O/N ve XCCY: PPK biçimli offshore eğri - MPC ima "
+                        "patikası, offshore kotalar (FX swap ima ≤9M, XCCY 1Y–10Y) arasında sabit bir bazla bu kotalara kendi "
+                        "konvansiyonlarıyla (FX swap tek dönem basit ACT/360, XCCY yıllık par ACT/360) aynen oturur. OIS: PPK "
+                        "basamak eğrisi. Tarih, kupon takvimi ve gün sayımı bloğun kendi (yardımcı BK170:CC234): fark yalnız "
+                        "eğriden.\n%s.\n%s\n%s%s" % (self.PPK_TIP, self._shift_text(cv.get("off_report"), loc, "Offshore baz"),
+                                                    self._shift_text(cv.get("report"), loc), ("\n" + why) if why else "")},
+                {"t": "PPK − piyasa", "k": "s", "b": 1, "f": "hd",
+                 "tip": "PPK basamak − Piyasa (mid): forward satırlarında puan, oranlarda bp. Kotalı vadede ~0 (iki eğri de "
+                        "kotaya oturur), kotaların arasında iki yöntemin farkı."}]
+        for i, r in enumerate(rnums):
+            if r == pk.BROKEN_FWD - 1:
+                letters = data.get("c") or []
+                if "F" in letters and isinstance(rows[i][letters.index("F")], dict):
+                    cell = rows[i][letters.index("F")]
+                    cell["tip"] = (cell["tip"] + "\n" if cell.get("tip") else "") + (
+                        "Bootstrap (Murex) = bugünkü eğriler, Murex'in MTM'i: forward / basit / O/N / XCCY offshore eğriden "
+                        "(FX swap ≤9M + XCCY 1Y–10Y, ln DF doğrusal), OIS par BOOT eğrisinden")
+                rows[i].extend([dict(c) for c in head])
+                continue
+            market = calc.get(si, r, f_col) if r in self.BROKEN_DIFF else None
+            value = got.get(r)
+            if value is None or type(market) is not float:
+                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
+                continue
+            rows[i].extend([{"t": numfmt.format_value(value, self._cell_format(book, si, r, f_col), loc), "v": value, "k": "n"},
+                            self._diff_cell((value - market) * self.BROKEN_DIFF[r], self._cell_format(book, si, r, h_col), loc)])
+        data["c"] = list(data.get("c") or []) + ["PPK basamak", "PPK fark"]
         data["added"] = int(data.get("added") or 0) + 2
 
     #: a bond's kind (the desk's list's) from a type letter of a sheet (B / S / T / E: DİBS RV's, the ASW sheet's)
