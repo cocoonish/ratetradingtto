@@ -1,9 +1,12 @@
-// Kullanıcılar (administrators only): the requests waiting for approval, every account, and a new account.
+// Kullanıcılar (administrators only): the requests waiting for approval, every account - who is online, when each was
+// last seen and last signed in (from where: this list only) -, and a new account.
 import { api, session } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, modal } from '../ui.js';
+import { onPresence, STATE_TEXT, lasted } from '../presence.js';
 
 const ROLE = { admin: 'Yönetici', user: 'Kullanıcı' };
 const STATUS = { active: 'Etkin', pending: 'Onay bekliyor', disabled: 'Kapalı' };
+const DOT = { online: '● ', away: '◐ ' };
 
 function panel(title, note) {
   const body = h('div', { class: 'body' });
@@ -17,6 +20,25 @@ function when(stamp) {
   const [d, t] = String(stamp).split(' ');
   const [y, m, day] = d.split('-');
   return day + '.' + m + '.' + y + (t ? ' ' + t.slice(0, 5) : '');
+}
+
+/** "Son görülme": online / away now (how long idle), else when last seen ("—": never signed in). */
+function seenCell(a) {
+  const td = h('td', { class: 'u-seen' });
+  if (a.state === 'online' || a.state === 'away') {
+    td.appendChild(h('span', { class: 'pr-state ' + a.state }, DOT[a.state] + STATE_TEXT[a.state]
+      + (a.state === 'away' && a.idle !== undefined && a.idle !== null ? ' · ' + lasted(a.idle) : '')));
+    td.title = a.last_seen ? 'Bağlı · ' + when(a.last_seen) : '';
+  } else {
+    td.textContent = when(a.last_seen) || '—';
+  }
+  return td;
+}
+
+/** "Son giriş": when, and from which address (this list only). */
+function loginCell(a) {
+  return h('td', { class: 'u-login' }, when(a.last_login) || '—',
+    a.last_login && a.last_login_ip ? h('span', { class: 'muted' }, ' · ' + a.last_login_ip) : null);
 }
 
 /** A password typed twice in a small dialog (the value never shows on the page). */
@@ -56,6 +78,8 @@ export class UsersPage {
     clear(this.host);
     this.root = h('div', { class: 'panels users-page' });
     this.host.appendChild(this.root);
+    // somebody came, went away or left: the two columns follow (in place - a form being typed stays as it is)
+    this.unfollow = onPresence(() => { this.followPresence(); });
     await this.refresh();
   }
 
@@ -64,6 +88,20 @@ export class UsersPage {
     if (this.dead) return;
     this.data = data;
     this.render();
+  }
+
+  async followPresence() {
+    let data;
+    try { data = await api.get('/api/admin/users'); } catch (e) { return; }
+    if (this.dead || !this.root) return;
+    for (const a of data.accounts) {
+      const tr = this.root.querySelector('tr[data-user="' + CSS.escape(a.name) + '"]');
+      if (!tr) continue;
+      const seen = tr.querySelector('td.u-seen');
+      const login = tr.querySelector('td.u-login');
+      if (seen) seen.replaceWith(seenCell(a));
+      if (login) login.replaceWith(loginCell(a));
+    }
   }
 
   async act(action, body, message) {
@@ -122,7 +160,8 @@ export class UsersPage {
       'Yönetici bu sayfayı görür: istekleri onaylar, kullanıcı oluşturur, yönetici yetkisi verir ya da alır, şifre belirler, hesabı '
       + 'kapatır. Son yöneticinin yetkisi alınamaz, hesabı kapatılamaz. Kapatılan ya da şifresi değiştirilen kullanıcının açık '
       + 'oturumları sona erer. "Şifre yok": bu isim önceki sürümde yalnız isimle kullanılmış; kullanıcı aynı isimle hesap ister ya da '
-      + 'burada şifre belirlersiniz.');
+      + 'burada şifre belirlersiniz. Son görülme: dashboard\'un en son açık olduğu an (şu an bağlıysa çevrimiçi / uzakta); son giriş: '
+      + 'şifreyle en son giriş ve geldiği adres - adres yalnızca bu listede görünür.');
     const body = h('tbody');
     for (const a of d.accounts.filter((x) => x.status !== 'pending')) {
       const self = a.name === me;
@@ -151,18 +190,19 @@ export class UsersPage {
           this.act('status', { name: a.name, active: false }, a.display + ' hesabı kapatıldı');
         }));
       }
-      body.appendChild(h('tr', null,
+      body.appendChild(h('tr', { dataset: { user: a.name } },
         h('td', { class: 'l' }, h('b', null, a.display), self ? h('span', { class: 'muted' }, ' (siz)') : null),
         h('td', { class: 'l' }, ...tags),
-        h('td', null, when(a.last_seen)),
+        seenCell(a),
+        loginCell(a),
         h('td', null, when(a.created_at)),
         h('td', null, String(a.inputs)),
         h('td', null, String(a.scenarios)),
         h('td', null, ...acts)));
     }
-    all.body.appendChild(h('table', { class: 'plain' },
+    all.body.appendChild(h('table', { class: 'plain', id: 'users-table' },
       h('thead', null, h('tr', null, h('th', { class: 'l' }, 'İsim'), h('th', { class: 'l' }, 'Rol · durum'), h('th', null, 'Son görülme'),
-        h('th', null, 'Oluşturulma'), h('th', null, 'Kişisel girdi'), h('th', null, 'Senaryo'), h('th', null, ''))), body));
+        h('th', null, 'Son giriş'), h('th', null, 'Oluşturulma'), h('th', null, 'Kişisel girdi'), h('th', null, 'Senaryo'), h('th', null, ''))), body));
     this.root.appendChild(all.el);
 
     // ---- a new account
@@ -181,5 +221,6 @@ export class UsersPage {
 
   destroy() {
     this.dead = true;
+    if (this.unfollow) this.unfollow();
   }
 }

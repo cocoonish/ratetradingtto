@@ -27,6 +27,7 @@ import { loadHiddenColumns } from './columns.js';
 import { SocialPage } from './pages/social.js';
 import { AgendaPage } from './pages/agenda.js';
 import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
+import { startPresence, stopPresence, presenceEvent } from './presence.js';
 import { openRecon, checkBeforeArchive } from './recon.js';
 import { quantPage, quantEvent } from './pages/quant.js';
 import { DibsGenelPage } from './pages/dibsgenel.js';
@@ -187,6 +188,7 @@ async function showLogin(message) {
   session.role = null;
   events.stop();
   stopDesk();
+  stopPresence();
   dropKept();
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   if (drawer) drawer.stop();
@@ -305,6 +307,7 @@ async function enter(me) {
   if (!POP) checkAlarms();                           // (what fired before: not again)
   buildNav();
   events.start();
+  startPresence(POP);                                // (who is online: the chip; this window's input is told)
   if (!POP) {
     startDesk();
     loadHeader().catch(() => {});
@@ -722,7 +725,7 @@ const events = {
     this.chan = new BroadcastChannel('tto-events');
     this.chan.onmessage = (e) => {
       const m = e.data || {};
-      if (typeof m.gen === 'number') { onGen(m.gen); boxEvent(m); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); } }
+      if (typeof m.gen === 'number') { onGen(m.gen); boxEvent(m); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); presenceEvent(m.presence); } }
       else if (m.online === false) setOnline(false);
       else if (m.online === true) { if (!POP) deskReconnected(); onBack(); }
     };
@@ -764,12 +767,13 @@ const events = {
     es.onmessage = (e) => {
       let msg = null;
       try { msg = JSON.parse(e.data); } catch (x) { return; }
-      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant, broker: msg.broker });
+      if (this.chan) this.chan.postMessage({ gen: msg.gen, desk: msg.desk, quant: msg.quant, broker: msg.broker, presence: msg.presence });
       onGen(msg.gen);
       boxEvent(msg);                       // the boxes of the quant pages: the results' version (a window of its own too)
       if (POP) return;
       deskEvent(msg.desk);                 // the chat, the reports, the agenda: their own counters (no new generation)
       quantEvent(msg.quant);               // the quant signals: a new result, a signal alert
+      presenceEvent(msg.presence);         // who is online: the chip's counts, the open list when somebody's state changed
     };
     es.onerror = () => {
       if (this.chan) this.chan.postMessage({ online: false });
