@@ -563,6 +563,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().carry_settings, _user(request)))
 
     @handler
+    async def pricing(request: Request):
+        # Fiyatlama: the user's instrument on the TRY curves both ways - the mid, the DV01 bucket by bucket, the NPV at a
+        # price typed (pricing.py); a POST keeps what was typed with the account
+        if request.method == "POST":
+            return ok(await call(svc().pricing, _user(request), await _body(request)))
+        return ok(await call(svc().pricing, _user(request)))
+
+    @handler
     async def interp_settings(request: Request):
         # Ayarlar → Eğri interpolasyonu: the user's own choice, Bootstrap (Murex) or PPK basamak
         if request.method == "POST":
@@ -1256,6 +1264,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/vol/carry", carry_vol, methods=["GET", "POST"]),
         Route("/api/carry", carry_settings, methods=["GET", "POST"]),
         Route("/api/interp", interp_settings, methods=["GET", "POST"]),
+        Route("/api/pricing", pricing, methods=["GET", "POST"]),
         Route("/api/spreads", spreads),
         Route("/api/broker", broker),
         Route("/api/broker", broker_add, methods=["POST"]),

@@ -26,6 +26,7 @@ from . import aswfx
 from . import auth
 from . import blotter as bl
 from . import ppkcurve as pk
+from . import pricing as pr
 from . import bonds as bd
 from . import borsaspread as bsp
 from . import brokerchat as bc
@@ -1589,6 +1590,11 @@ class Service(object):
                           "custom": True})
             pages.append({"id": "spreads", "title": "Spread Geçmişi", "group": "TRY Faiz", "book": "tto", "sheet": None,
                           "custom": True})
+            # Fiyatlama (pricing.py): an instrument at any start and maturity on the TRY curves both ways - right after
+            # OIS · PPK in the menu
+            at = next((i + 1 for i, p in enumerate(pages) if p["id"] == "ois"), len(pages))
+            pages.insert(at, {"id": "fiyatlama", "title": "Fiyatlama", "group": "TRY Faiz", "book": "tto", "sheet": None,
+                              "custom": True})
             pages.append({"id": "settings", "title": "Ayarlar · Toplantı takvimi", "group": "Araçlar", "book": "tto",
                           "sheet": None, "custom": True})
             # the option market of the currency pairs: one pair in depth, and every pair's vols at a glance
@@ -7531,6 +7537,42 @@ class Service(object):
         else:
             raise ServiceError("eğri şunlardan biri olmalı: %s" % ", ".join(ex.INTERP_CHOICES))
         return self.interp_settings(key)
+
+    # ================================================================== Fiyatlama (pricing.py)
+    #: what a user typed on the pricing page: kept with their account, per asset
+    PRICING_KEY = "pricing."
+
+    def pricing(self, user: Optional[str], payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Fiyatlama: the user's instrument - TRY OIS, FRA, XCCY, FX forward at any start and maturity - on the TRY curves
+        both ways, their own curve setting first: the mid, the DV01 bucket by bucket and, with a price, the NPV
+        (:mod:`tto.pricing`).  ``payload``: what they typed (kept with their account, per asset); none: what they typed
+        last.  Inputs it cannot price come back with ``error`` - the page says it beside them, the inputs kept."""
+        key = self.require_user(user)
+        inputs = pr.clean_inputs(payload, self.store.get(self.PRICING_KEY + key))
+        if payload is not None:
+            self.store.put(self.PRICING_KEY + key, inputs)
+        out = self.et.call(self._pricing, key, inputs)
+        out.update(inputs=inputs, gen=self.gen)
+        return out
+
+    def _pricing(self, user: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        book = self.books.get("tto")
+        cv = None
+        if book is not None:
+            calc = self._calc(user, book)
+            cv = self._try_curves(book, calc)
+        if not cv:
+            return {"available": False, "error": "bu çalışma kitabında TRY eğrileri yok"}
+        method = self.interp.mode(user)
+        out: Dict[str, Any] = {"available": True, "curve": method, "curve_text": pr.METHOD_TEXT[method]}
+        base = self.interp.boot_of(book, calc)               # (the true bootstrap whatever the setting: its quotes, nodes)
+        idx = book.model.sheet_index
+        try:
+            mk = pr.read(lambda sheet, r, c: base.get(idx[sheet], r, c))
+            out.update(pr.price(inputs, pr.Curves(cv, mk, self.__dict__.setdefault("_pricing_kept", {})), method))
+        except pr.PricingError as exc:
+            out["error"] = str(exc)
+        return out
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
