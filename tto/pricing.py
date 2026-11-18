@@ -804,10 +804,12 @@ def notes(deal: Deal, curves: Curves) -> List[str]:
     if pillars and far > pillars[-1][1] + 0.5:
         out.append("Vade eğrinin son kotasından (%s, %s) uzun: ötesi son dilimin eğimiyle uzatılır." % (pillars[-1][0],
                                                                                                     day(pillars[-1][1])))
-    for name, d in pillars:
+    # a swap a few days off a quote's own day (the offshore curve's XCCY quotes on Bloomberg's days, a weekend not rolled;
+    # a maturity typed as a date): its mid is not that quote
+    for name, d in (pillars if deal.asset != FX else ()):
         if 0.5 < abs(far - d) <= 3.5:
-            out.append("Vade %s kotasının gününe (%s) %d gün uzak: eğri o kotayı kendi gününde fiyatlar (offshore'da Bloomberg'ün "
-                       "günü, iş gününe kaydırmadan), bu yüzden mid kotadan biraz farklı." % (name, day(d), abs(far - d)))
+            out.append("Vade %s kotasının gününe (%s) %d gün uzak: eğri o kotayı kendi gününde fiyatlar, bu yüzden mid kotadan "
+                       "biraz farklı." % (name, day(d), abs(far - d)))
     return out
 
 
