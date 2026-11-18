@@ -152,7 +152,7 @@ def test_the_fx_figures_are_the_same_on_dibs_trading_the_card_and_genel(service)
         assert (g["fx_asw"]["v"], g["fx_rc"]["v"]) == (r_fx, t_fx)
         # (not DİBS RV's own FX columns: those are on the offshore ICAP curve, its tab only)
         assert g["fx_asw"]["v"] != rv(s, "BF", row_of(s, isin))
-    # ... told as DİBS ASW tells it, one decimal (the last bond's: −140,1 on the recorded data of a fresh service - the
+    # ... told as DİBS ASW tells it, one decimal (the last bond's: −163,9 on the recorded data of a fresh service - the
     # session's service may have had its sources changed by the tests before this one, so the sheet's own value now)
     assert summary_line(summ, "TRT130928T38")["AA"]["t"] == ("%.1f" % r_fx).replace(".", ",")
 
