@@ -30,10 +30,12 @@ TENOR_MONTHS = {"1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9, "1Y": 12, "15M": 15
 OIS_ROW = {"1M": 9, "2M": 10, "3M": 11, "6M": 12, "9M": 13, "1Y": 14, "15M": 15, "18M": 16, "21M": 17, "2Y": 18,
            "3Y": 19, "4Y": 20, "5Y": 21, "6Y": 22, "7Y": 23, "8Y": 24, "9Y": 25, "10Y": 26}
 FWD_BASES = ("RET_BID", "RET_MID", "RET_ASK", "TRY", "FWD", "SP")
-#: the desk's OIS buckets have no 15M and no 21M (the sheet's summary P25:P38, its counterparty × tenor table Q89:Q107):
-#: OIS_MAIN reads those rows between quoted tenors and nothing trades there - a leg there (a 12x15 FRA's end, a 15M
-#: outright) is in the next tenor's bucket, in the sheet and in the cost table by tenor.  The trade keeps its own tenor.
-BUCKET_OF = {"15M": "18M", "21M": "2Y"}
+#: the desk's OIS buckets in months - the sheet's counterparty × tenor table (Günlük İşlemler Q89:Q107: ON, 1W, 2W and
+#: these; its summary P25:P38 stops at 5Y).  OIS_MAIN reads the tenors between them (15M, 21M, 27M …) between two quotes
+#: and nothing trades there: a leg there (a 12x15 FRA's end, a 15M outright) is in the next bucket up (15M → 18M,
+#: 21M → 2Y, 27M → 3Y …) - in the sheet, in the cost table by tenor and in OIS · PPK's FRA lists.  The trade keeps its
+#: own tenor.
+BUCKET_MONTHS = (1, 2, 3, 6, 9, 12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120)
 MPC_ROWS = (84, 99)        # OIS_MAIN 'MPC OIS': A period, B start, C end, D market (bootstrap)
 
 
@@ -53,9 +55,16 @@ def month_label(m: int) -> str:
     return "%dM" % m
 
 
+def bucket_months(m: int) -> int:
+    """The desk's bucket of a leg ``m`` months out (months): the next bucket up (``BUCKET_MONTHS``; the last beyond it)."""
+    return next((b for b in BUCKET_MONTHS if b >= m), BUCKET_MONTHS[-1])
+
+
 def bucket(tenor: str) -> str:
-    """The desk's bucket of an OIS leg's tenor: the tenor itself, but 15M → 18M and 21M → 2Y (``BUCKET_OF``)."""
-    return BUCKET_OF.get(tenor, tenor)
+    """The desk's bucket of an OIS leg's tenor: the tenor itself when it is one, else the next one up (15M → 18M,
+    21M → 2Y, 27M → 3Y: :data:`BUCKET_MONTHS`); ON / 1W / 2W as they are."""
+    m = _months_of(tenor)
+    return tenor if m is None or m in BUCKET_MONTHS else month_label(bucket_months(m))
 
 
 # ---------------------------------------------------------------------------------------------- FX forward
@@ -769,8 +778,8 @@ def position_cost(buys: List[Tuple[float, float]], sells: List[Tuple[float, floa
 
 
 def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Position and cost per forward (pair and value date), OIS bucket (the leg's tenor, 15M / 21M in the next one:
-    :func:`bucket`) or meeting-dated period and bond."""
+    """Position and cost per forward (pair and value date), OIS bucket (the leg's tenor, one between the desk's buckets
+    in the next one up: :func:`bucket`) or meeting-dated period and bond."""
     fwd: Dict[Tuple[str, float], Dict[str, List[Tuple[float, float]]]] = {}
     spans: Dict[str, float] = {}
     ois: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
@@ -1014,8 +1023,9 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
 
     The sheet was made for USDTRY forwards and OIS of a quoted tenor.  A forward of another currency against
     TRY goes in at its USD amount (its TRY rate as it is: the TL cost); a meeting-dated OIS goes in spread over
-    the main tenors (see :func:`mpc_summary_rows`); an OIS leg at 15M / 21M in the next tenor's bucket (column L:
-    :func:`bucket` - the sheet's tables have no 15M / 21M).  Column G holds each forward's DV01 ($)."""
+    the main tenors (see :func:`mpc_summary_rows`); an OIS leg between the desk's buckets (15M, 21M, 27M …) in the
+    next one up (column L: :func:`bucket` - the sheet's tables have no row for it).  Column G holds each forward's
+    DV01 ($)."""
     si = book.model.sheet_index[SHEET]
     vals: Dict[Tuple[int, int], Any] = {}
 

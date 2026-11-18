@@ -416,6 +416,7 @@ def test_a_leg_between_the_desks_buckets_is_in_the_next_one(desk):
     assert list(cost) == ["1Y", "18M", "2Y"]
     assert cost["18M"]["sell"] == pytest.approx(end["dv01"]) and cost["2Y"]["buy"] == pytest.approx(out["legs"][0]["dv01"])
     assert bl.bucket("15M") == "18M" and bl.bucket("21M") == "2Y" and bl.bucket("18M") == "18M" and bl.bucket("7Y") == "7Y"
+    assert [bl.bucket(t) for t in ("27M", "30M", "33M", "39M", "63M", "ON", "1W")] == ["3Y", "3Y", "3Y", "4Y", "6Y", "ON", "1W"]
 
 
 def test_dv01_is_kept_with_the_trade_and_summed(desk):
