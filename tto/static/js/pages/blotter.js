@@ -1,7 +1,7 @@
 // Günlük İşlemler: trade entry (FX forward / OIS / bond) with live pricing, the shared blotter and the
 // cost of the day's position.  Everything saved here is visible to every user at once.
 import { api, session } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, debounce, copyText } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, debounce, copyText, modal } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings, pairOf, parseAmount } from '../format.js';
@@ -27,10 +27,139 @@ const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat
 // alone what a spec leaves out (a template keeps any subset of the form)
 const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: '', note: '', amount: '' },
   ois: { strategy: 'outright', side: null, level: '', note: '' }, bond: { instrument: '', price: '', note: '', amount: '' } };
+// an OIS trade against mid, as the desk reads it ("Mid'e göre"): the stored cost (+ worse than mid) with its sign turned
+const VS_MID_HINT = '+ = mid\'den iyi (lehine), − = mid\'den kötü (aleyhine)';
+// the boxes of a leg's own rate and the select of that leg's tenor: a rate an edit fills in belongs to its tenor
+const LEG_RATES = [['short_rate', 'short'], ['wing1_rate', 'wing1'], ['wing2_rate', 'wing2'], ['start_rate', 'start_months']];
+// how "Değişikliği kaydet" prices an edit (the server's ``priced``), in the line over the form's quote; 'today' names
+// what changed ("Valör değişti: …")
+const EDIT_PRICED = {
+  today: ' değişti: bugünkü piyasayla yeniden fiyatlanır',
+  trade: { fwd: 'İşlemin kuru, TRY faizi ve spot\'u aynı kalır: tutarlar ve DV01 bunlarla yeniden hesaplanır',
+    ois: 'İşlem anının mid\'i ve eğrisiyle: mid\'e göre değer işlemin kendi mid\'ine göre',
+    bond: 'DV01 işlemin nominal başına DV01\'iyle hesaplanır' },
+  none: 'Yalnızca karşı taraf / not değişir: fiyat ve tutarlar aynı kalır',
+};
+// what the tip of a trade changed after it was entered says it was before (``timeCell``): [key, label, format]
+const EDIT_FIELDS = {
+  fwd: [['pair', 'Parite'], ['dir', 'Yön', (v) => (v === 'B' ? 'alış' : 'satış')], ['amount', 'Tutar', (v) => num(v, 0)],
+    ['typed_amount', 'Yazılan tutar', (v) => num(v, 2)], ['value_date', 'Valör', serialDate], ['basis', 'Fiyatlama', (v) => BASIS_LABEL[v] || v],
+    ['forward', 'Forward', (v) => num(v, 4)], ['points', 'Swap puanı', (v) => num(v, 0)], ['try_rate', 'TRY faizi', (v) => pct(v, 3)],
+    ['cpt', 'Karşı taraf'], ['note', 'Not']],
+  ois: [['label', 'İşlem'], ['tenor', 'Vade'], ['rate', 'Oran', (v) => pct(v, 4)], ['nominal', 'Nominal', (v) => num(v, 0)],
+    ['cpt', 'Karşı taraf'], ['note', 'Not']],
+  bond: [['instrument', 'Enstrüman'], ['amount', 'Tutar', (v) => num(v, 0)], ['price', 'Fiyat', (v) => num(v, 4)], ['note', 'Not']],
+};
 
 /** The DV01 of an OIS leg with the desk's sign: payer is plus, receiver is minus. */
 function payerPlus(leg) {
   return typeof leg.dv01 === 'number' ? (leg.dir === 'S' ? -leg.dv01 : leg.dv01) : null;
+}
+
+/** What an OIS trade is worth against mid from its cost (``cost_bp`` / ``cost_usd`` / ``cost_tl``: + worse than mid -
+ * stored so, old trades read the same): + better than mid (in its favour), − worse.  null when there is none. */
+function vsMid(cost) {
+  return typeof cost === 'number' ? 0 - cost : null;
+}
+
+/** "Mid'e göre" as it is shown (``digits``): signed and its sign's colour - a trade at mid is 0, neither. */
+function vsShown(v, digits) {
+  return typeof v === 'number' ? Number(v.toFixed(digits)) : null;
+}
+
+/** "Mid'e göre" in a list: signed, + green (better than mid), − red. */
+function vsCell(v, digits) {
+  const r = vsShown(v, digits);
+  return r === null ? { t: '', k: '' } : { t: signed(r, digits), v, k: 'n', c: r > 0 ? 'pos' : (r < 0 ? 'neg' : undefined) };
+}
+
+/** The months of a tenor of the lists: "9M" 9, "1Y" 12, "15M" 15 (null for "ON", "1W" …). */
+function monthsOf(tenor) {
+  const m = /^(\d+)([MY])$/.exec(String(tenor || ''));
+  return m ? Number(m[1]) * (m[2] === 'Y' ? 12 : 1) : null;
+}
+
+/** An amount as the form reads it back to the same number: grouped when it is whole ("812.000.000"), else in full. */
+function exactAmount(v) {
+  return typeof v === 'number' ? (Number.isInteger(v) ? num(v, 0) : raw(v)) : '';
+}
+
+/** A rate kept as a fraction, as the form takes it: per cent, in full (0,3445 → "34,45"). */
+function exactRate(v) {
+  return typeof v === 'number' ? raw(v * 100) : '';
+}
+
+/** A trade in words, for the form's note and its toasts: an OIS by its label, a forward / bond by side, amount, price. */
+function tradeText(kind, t) {
+  if (kind === 'ois') return t.label || 'OIS işlemi';
+  if (kind === 'fwd') {
+    const pair = t.pair || 'USDTRY';
+    return pair + ' ' + (t.dir === 'B' ? 'alış ' : 'satış ') + num(t.amount, 0) + ' ' + pair.slice(0, 3) + ' · ' + serialDate(t.value_date)
+      + (typeof t.forward === 'number' ? ' · ' + num(t.forward, 4) : '');
+  }
+  return (t.instrument || '') + ' ' + (t.amount >= 0 ? 'alış ' : 'satış ') + num(Math.abs(t.amount), 0) + ' @ ' + num(t.price, 4);
+}
+
+/**
+ * A trade of the list as the spec of ``fillForm``: what it was entered with, for "Düzenle".  ``legs``: the trade - an OIS
+ * package's legs, oldest first.  A forward: pair, side, the amount in the currency it was typed in, value date, pricing and
+ * its price (a pair without a curve its spot too); an OIS: strategy, side, tenors / months / days, level, the own rate of
+ * every leg the form has a box for (the legs come out as they are unless changed), the size as the legs' nominal - exact
+ * (a spread / fly sized by DV01 has legs of different nominals: the DV01 typed, none for the sheet's); a bond: side,
+ * instrument, amount, price.  The counterparty and the note too.  null when the form cannot hold the trade.
+ */
+function editSpec(legs) {
+  const t = legs[0];
+  if (t.kind === 'fwd') {
+    const pair = t.pair || 'USDTRY';
+    const basis = BASIS_LABEL[t.basis] ? t.basis : 'RET_MID';
+    const spec = { kind: 'fwd', pair, dir: t.dir === 'S' ? 'S' : 'B', date: serialDate(t.value_date), basis, value: '', spot: '',
+      cpt: t.cpt || '', note: t.note || '' };
+    if (t.typed === 'quote' && typeof t.typed_amount === 'number') spec.quote_amount = exactAmount(t.typed_amount);
+    else spec.amount = exactAmount(t.amount);
+    if (MANUAL[basis] && typeof t.manual === 'number') spec.value = basis === 'TRY' ? exactRate(t.manual) : raw(t.manual);
+    if (pair !== 'USDTRY' && pair !== 'EURTRY' && typeof t.spot === 'number') spec.spot = raw(t.spot);
+    return spec;
+  }
+  if (t.kind === 'bond') {
+    return { kind: 'bond', dir: t.amount >= 0 ? 'B' : 'S', instrument: t.instrument || '', amount: exactAmount(Math.abs(t.amount)),
+      price: typeof t.price === 'number' ? raw(t.price) : '', note: t.note || '' };
+  }
+  if (t.kind !== 'ois') return null;
+  const role = {};
+  for (const lg of legs) role[lg.role] = lg;
+  const st = t.strategy || 'outright';
+  const bp = st === 'spread' || st === 'fly';
+  const spec = { kind: 'ois', strategy: st, side: { 'REC GOVDE': 'REC GÖVDE', 'PAY GOVDE': 'PAY GÖVDE' }[t.side] || t.side || null,
+    level: typeof t.level === 'number' ? (bp ? raw(t.level) : exactRate(t.level)) : '', cpt: t.cpt || '', note: t.note || '' };
+  let size = null;
+  if (bp) {
+    const one = st === 'spread' ? role.long : role.body;              // the leg of weight 1
+    const others = st === 'spread' ? [role.short] : [role.wing1, role.wing2];
+    if (!one || others.some((x) => !x)) return null;
+    spec.tenors = st === 'spread' ? [role.short.tenor, role.long.tenor] : [role.wing1.tenor, role.body.tenor, role.wing2.tenor];
+    if (st === 'spread') spec.short_rate = exactRate(role.short.rate);
+    else Object.assign(spec, { wing1_rate: exactRate(role.wing1.rate), wing2_rate: exactRate(role.wing2.rate) });
+    // sized by a nominal: every leg that nominal (a wing half of it); by DV01: as typed (a trade of before: its leg's DV01)
+    const w = st === 'spread' ? 1 : 0.5;
+    const byNominal = t.size_mode ? t.size_mode === 'nominal' : others.every((x) => Math.abs(x.nominal - w * one.nominal) < 0.5);
+    spec.sizeMode = byNominal ? 'nominal' : 'dv01';
+    size = byNominal ? one.nominal : (t.size_mode ? t.size_typed : Math.round(one.dv01));
+  } else {
+    if (st === 'outright') spec.tenors = [t.tenor];
+    else if (st === 'fra') {
+      if (!role.end) return null;
+      spec.months = [role.start ? monthsOf(role.start.tenor) : 0, monthsOf(role.end.tenor)];
+      if (role.start) spec.start_rate = exactRate(role.start.rate);
+    } else if (st === 'mpc') {
+      if (!t.mpc) return null;
+      Object.assign(spec, { start: t.mpc.start, end: t.mpc.end });
+    }
+    spec.sizeMode = 'nominal';
+    size = (role.end || t).nominal;                                    // (a FRA's two legs: one nominal)
+  }
+  spec.size = exactAmount(size);
+  return spec;
 }
 
 /** A number kept in a template, read the same in Turkish and in English: a lone group of three ("17.400", "10,000" -
@@ -131,6 +260,7 @@ export class BlotterPage {
     this.sheetGrids = new Map();
     this.fwd = { dir: 'B', basis: 'RET_MID', pair: 'USDTRY', typed: 'base' };      // typed: the amount typed - 'base' (USD) or 'quote' (TRY)
     this.ois = { strategy: 'outright', side: 'PAY', sizeMode: 'dv01' };
+    this.editing = null;          // the trade the form is changing ("Düzenle"): {id, kind, label, rates, restore}
     this.quoteFwd = debounce(() => this.doQuoteFwd(), 220);
     this.quoteOis = debounce(() => this.doQuoteOis(), 220);
     this.quoteBond = debounce(() => this.doQuoteBond(), 260);
@@ -164,7 +294,8 @@ export class BlotterPage {
     const data = await api.get('/api/blotter', this.query());
     if (this.dead) return;
     const users = Object.keys(this.users);
-    if (data.trades.some((t) => t.created_by && !users.includes(t.created_by))) {
+    const lastBy = (t) => (Array.isArray(t.edits) && t.edits.length ? t.edits[t.edits.length - 1].by : null);
+    if (data.trades.some((t) => (t.created_by && !users.includes(t.created_by)) || (lastBy(t) && !users.includes(lastBy(t))))) {
       const u = await api.get('/api/users');
       for (const x of u.users) this.users[x.name] = x.display;
     }
@@ -244,9 +375,10 @@ export class BlotterPage {
     this.dayNote.className = 'banner hidden';
 
     this.entry = h('div', { class: 'card entry' });
+    this.editing = null;             // (the forms are new: an edit of the page before is gone with them)
     const tabs = h('div', { class: 'tabs' });
     const panes = { fwd: this.buildFwd(), ois: this.buildOis(), bond: this.buildBond() };
-    const tabBtns = {};
+    const tabBtns = (this.tabBtns = {});
     const show = (id) => {
       this.tab = id;
       this.showTab = show;
@@ -269,7 +401,11 @@ export class BlotterPage {
     bulkBtn.addEventListener('click', () => openBulk(this));
     this.tplBar = h('div', { class: 'tplbar', id: 'blotter-templates' });
     this.tplKey = null;
-    this.entry.appendChild(h('header', null, h('h2', null, 'Yeni işlem'), bulkBtn));
+    this.entryTitle = h('h2', { id: 'blotter-entry-title' }, 'Yeni işlem');
+    // "Düzenle": which trade the form is changing, while it does (``markEditing``)
+    this.editNote = h('div', { class: 'editnote hidden', id: 'blotter-edit-note' });
+    this.entry.appendChild(h('header', null, this.entryTitle, bulkBtn));
+    this.entry.appendChild(this.editNote);
     this.entry.appendChild(this.tplBar);
     this.entry.appendChild(tabs);
     for (const k of Object.keys(panes)) this.entry.appendChild(panes[k]);
@@ -340,6 +476,7 @@ export class BlotterPage {
     if (!spec.cpt) delete spec.cpt;                    // (no counterparty in the quote: the one typed stays)
     const said = spec.said || 'İşlem kotadan dolduruldu: tutarı yazıp kaydedin';      // (a Ctrl+K command says its own)
     delete spec.said;
+    this.endEdit(true);                                // a new trade: an edit in progress is left, the trade as it was
     const done = this.fillForm(Object.assign({ dir: null }, PREFILL_CLEARS[spec.kind], spec));
     if (!done) return false;
     toast(said + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
@@ -356,7 +493,8 @@ export class BlotterPage {
    *                cpt, note
    *   kind 'ois':  strategy, side, tenors ([tenor] | [short, long] | [wing1, body, wing2]), months ([start, end] of a FRA),
    *                start / end (a meeting swap's two days, as serials) or mpc ([k1, k2]: places in the list of meetings -
-   *                0 the spot, k the k-th meeting), level, size with sizeMode ('dv01' | 'nominal'), cpt, note
+   *                0 the spot, k the k-th meeting), level, size with sizeMode ('dv01' | 'nominal'), a leg's own rate (%,
+   *                ``LEG_RATES``: short_rate, wing1_rate, wing2_rate, start_rate - a trade being edited), cpt, note
    *   kind 'bond': dir, instrument, amount, price, note
    * Returns null when the spec is no trade of the form, else ``{ warn }``: what could not be filled, in words ('' when all was).
    */
@@ -449,6 +587,7 @@ export class BlotterPage {
         text('size', o.size);
       }
       text('level', o.level);
+      for (const [k] of LEG_RATES) if (o.f[k]) text(k, o.f[k]);
       text('cpt', o.cpt);
       text('note', o.note);
       this.showTab('ois');
@@ -516,6 +655,142 @@ export class BlotterPage {
     return out;
   }
 
+  // ------------------------------------------------------------------ "Düzenle": a trade changed after it was entered
+  /** The form of a product as it stands, every field said - the empty ones too (a spec of ``fillForm``): what an edit gives
+   * back when it ends. */
+  formSnapshot(kind) {
+    const o = this.ois, f = this.fwd;
+    const blank = { fwd: { pair: f.pair === 'OTHER' ? f.code.value : f.pair, dir: f.dir, date: '', value: '', spot: '', cpt: '', note: '', amount: '' },
+      ois: { side: o.side, level: '', size: '', sizeMode: o.sizeMode, cpt: '', note: '' },
+      bond: { dir: this.bond.dir, instrument: '', amount: '', price: '', note: '' } }[kind];
+    const out = Object.assign(blank, this.formSpec(kind));
+    if (kind === 'ois') for (const [k] of LEG_RATES) if (o.f[k] && o.f[k].value.trim()) out[k] = o.f[k].value;
+    return out;
+  }
+
+  /**
+   * "Düzenle" on a trade of the list: the form of its product filled with what it was entered with (``editSpec``); its
+   * button says "Değişikliği kaydet" (with "Vazgeç" beside it) and its quote is what saving would keep (``quoteOf``: the
+   * server's preview), a line over it saying how it is priced (``pricingLine``).  Saved, the trade changes in place
+   * (``POST /api/blotter/trade/<id>``: the same ids, its time and who entered it stay) - what the form changed alone moves:
+   * the counterparty / note, at the trade's own prices, or on today's market for another instrument; the form as it was
+   * before comes back.  The product and an OIS's strategy stay what they are.
+   */
+  startEdit(t) {
+    this.endEdit(true);
+    const legs = t.kind === 'ois' && t.package ? this.data.trades.filter((x) => x.package === t.package) : [t];
+    const spec = editSpec(legs);
+    if (!spec) { toast('Bu işlem formda açılamıyor: silip yeniden girin', 'err'); return; }
+    const restore = this.formSnapshot(spec.kind);
+    const rates = {};
+    for (const [k] of LEG_RATES) if (spec[k] !== undefined) rates[k] = String(spec[k]);
+    // (an OIS's size as filled in: given back untouched, it is the trade's - its legs' nominals stay)
+    const size = spec.kind === 'ois' ? { text: String(spec.size || ''), mode: spec.sizeMode } : null;
+    this.editing = { id: t.id, kind: spec.kind, label: tradeText(spec.kind, legs[0]), at: legs[0].created_at, by: this.who(legs[0]), rates, size, restore };
+    const done = this.fillForm(spec);
+    this.markEditing();
+    this.entry.scrollIntoView({ block: 'nearest' });
+    if (done && done.warn) toast('Düzenleniyor (' + done.warn + ')', 'warn', 6000);
+  }
+
+  /** The form says whether it enters a new trade or changes one (``this.editing``): its title, which trade, its buttons. */
+  markEditing() {
+    const ed = this.editing;
+    this.entryTitle.textContent = ed ? 'İşlemi düzenle' : 'Yeni işlem';
+    clear(this.editNote);
+    if (ed) {
+      this.editNote.appendChild(h('div', null, h('b', null, 'Düzenleniyor: '), ed.label));
+      this.editNote.appendChild(h('div', { class: 'muted' }, 'Girildi: ' + timeOf(ed.at) + ' · ' + ed.by
+        + '. Değiştirilmeyen oynamaz: fiyat kutusunun üstündeki satır kaydedince nasıl fiyatlanacağını söyler; aynı kayıt değişir, önceki değerler işlemde saklanır.'));
+    }
+    this.editNote.classList.toggle('hidden', !ed);
+    for (const [k, b] of Object.entries(this.tabBtns)) b.disabled = !!ed && k !== ed.kind;      // (the product stays)
+    for (const [k, form] of [['fwd', this.fwd], ['ois', this.ois], ['bond', this.bond]]) {
+      const on = !!ed && ed.kind === k;
+      form.save.textContent = on ? 'Değişikliği kaydet' : 'İşlemi kaydet';
+      form.cancel.classList.toggle('hidden', !on);
+    }
+    for (const b of this.ois.stratSeg.children) {              // (so does an OIS's strategy: the server refuses another)
+      b.disabled = !!ed && ed.kind === 'ois' && b.dataset.v !== this.ois.strategy;
+      b.title = b.disabled ? 'Düzenlemede strateji değişmez: strateji değişiyorsa işlemi silip yeniden girin' : '';
+    }
+  }
+
+  /** Out of an edit (saved, "Vazgeç", the form wanted for a new trade): the form back to a new trade - as it was before the
+   * edit when ``restore``. */
+  endEdit(restore) {
+    const ed = this.editing;
+    if (!ed) return;
+    this.editing = null;
+    this.markEditing();
+    if (restore) this.fillForm(ed.restore);
+  }
+
+  /** "Değişikliği kaydet": the trade being edited changed in place - what the form changed alone moves (the server's rules:
+   * the counterparty / note alone, at the trade's own prices, or on today's market when the instrument changed). */
+  async saveEdit(kind, pl, btn) {
+    const ed = this.editing;
+    btn.disabled = true;
+    try {
+      const res = await api.post('/api/blotter/trade/' + ed.id, Object.assign({ kind }, pl));
+      toast(res.edited ? 'İşlem güncellendi: ' + tradeText(kind, res) + (res.priced === 'today' ? ' · bugünkü piyasayla yeniden fiyatlandı' : '')
+        : 'Değişiklik yok: işlem olduğu gibi kaldı', res.edited ? 'ok' : 'warn', 4200);
+      if (this.editing === ed) this.endEdit(true);
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); } finally { btn.disabled = false; }
+  }
+
+  /** The form's quote: a new trade's (``url``) - or, while a trade of this product is edited, what saving it would make of it
+   * (``…/preview``: the trade as it would be kept, how it is priced).  ``{ q, edit }``: the quote, the edit's answer (or null). */
+  async quoteOf(kind, url, pl) {
+    const ed = this.editing;
+    if (!ed || ed.kind !== kind) return { q: await api.post(url, pl), edit: null };
+    const edit = await api.post('/api/blotter/trade/' + ed.id + '/preview', Object.assign({ kind }, pl));
+    return { q: edit.quote, edit };
+  }
+
+  /** While a trade is edited: how "Değişikliği kaydet" prices it, one line over the quote (``edit``: the preview's answer) -
+   * on today's market (what changed; the line marked), at the trade's own prices, or its counterparty / note alone. */
+  pricingLine(box, edit) {
+    if (!edit || !this.editing) return;
+    const why = (edit.why || []).join(' / ');
+    const text = edit.priced === 'today' ? why.charAt(0).toUpperCase() + why.slice(1) + EDIT_PRICED.today
+      : (edit.priced === 'trade' ? EDIT_PRICED.trade[this.editing.kind] : (edit.priced === 'none' ? EDIT_PRICED.none : 'Değişiklik yok'));
+    box.insertBefore(h('div', { class: 'editprice' + (edit.priced === 'today' ? ' today' : ''), 'data-k': 'edit-pricing' }, text), box.firstChild);
+  }
+
+  /** "Düzenle" on a trade of a day gone by: its counterparty and note alone (all that changes after its day; its prices
+   * and amounts stay) - in a dialog, the day's entry form being closed. */
+  editFields(t) {
+    const legs = t.kind === 'ois' && t.package ? this.data.trades.filter((x) => x.package === t.package) : [t];
+    const m = modal({ title: 'Karşı taraf ve not', width: 460 });
+    m.box.id = 'blotter-fields';
+    const cpt = input('opsiyonel');
+    cpt.id = 'blotter-fields-cpt';
+    cpt.value = t.cpt || '';
+    const note = input('opsiyonel');
+    note.id = 'blotter-fields-note';
+    note.value = t.note || '';
+    m.body.appendChild(h('div', { class: 'pad form' }, h('div', { class: 'muted' }, isoToTr(t.trade_date) + ' · ' + tradeText(t.kind, legs[0])),
+      t.kind === 'bond' ? null : h('div', { class: 'row' }, field('Karşı taraf', cpt)), h('div', { class: 'row' }, field('Not', note)),
+      h('div', { class: 'muted' }, 'Geçmiş günün işleminde yalnızca karşı taraf ve not değişir: fiyat ve tutarlar aynı kalır.')));
+    const save = h('button', { class: 'btn primary', type: 'button', id: 'blotter-fields-save' }, 'Kaydet');
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        const fields = t.kind === 'bond' ? { note: note.value } : { cpt: cpt.value, note: note.value };
+        const res = await api.post('/api/blotter/trade/' + t.id, { kind: t.kind, fields });
+        toast(res.edited ? 'Karşı taraf / not güncellendi' : 'Değişiklik yok', res.edited ? 'ok' : 'warn', 3000);
+        m.close();
+        this.ctx.refreshNow();
+      } catch (err) { errorToast(err); } finally { save.disabled = false; }
+    });
+    for (const el of [cpt, note]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'));
+    m.foot.appendChild(save);
+    (t.kind === 'bond' ? note : cpt).focus();
+  }
+
   // ------------------------------------------------------------------ forward form
   buildFwd() {
     const f = this.fwd;
@@ -580,6 +855,9 @@ export class BlotterPage {
     f.quote = h('div', { class: 'quotebox' });
     f.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     f.save.addEventListener('click', () => this.saveFwd());
+    f.cancel = this.cancelButton('fwd-edit-cancel');
+    // (while a trade is edited, its counterparty / note alone is an edit of its own: the line over the quote says so)
+    for (const el of [f.cpt, f.note]) el.addEventListener('input', () => { if (this.editing) this.quoteFwd(); });
     for (const el of [f.date, f.manual, f.code, f.spot]) {
       el.addEventListener('input', () => { if (el === f.code) this.layoutFwd(); this.quoteFwd(); });
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveFwd(); });
@@ -591,10 +869,17 @@ export class BlotterPage {
     pane.appendChild(h('div', { class: 'row' }, field('Fiyatlama', f.basisSeg), f.manualField));
     pane.appendChild(f.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Karşı taraf', f.cpt, '150px'), field('Not', f.note, '240px')));
-    pane.appendChild(h('div', { class: 'row actions' }, f.save));
+    pane.appendChild(h('div', { class: 'row actions' }, f.cancel, f.save));
     this.layoutFwd();
     this.markTyped();
     return pane;
+  }
+
+  /** "Vazgeç" beside a form's save button, while a trade is edited: out of the edit, the trade as it was. */
+  cancelButton(id) {
+    const b = h('button', { class: 'btn hidden', type: 'button', id, title: 'Düzenlemeden çık: işlem olduğu gibi kalır' }, 'Vazgeç');
+    b.addEventListener('click', () => { this.endEdit(true); toast('Düzenleme bırakıldı: işlem olduğu gibi kaldı', 'ok', 2600); });
+    return b;
   }
 
   /** Which of the two amounts was typed (``fwd.typed``): marked on the form - the other one is worked out. */
@@ -688,7 +973,7 @@ export class BlotterPage {
     }
     const ticket = f.ticket;
     try {
-      const q = await api.post('/api/blotter/quote/forward', pl);
+      const { q, edit } = await this.quoteOf('fwd', '/api/blotter/quote/forward', pl);
       if (ticket !== f.ticket || this.dead) return;
       // a value date typed as a shortcut ("3A", "ay sonu", "IMM", "+5"): the date it is, under the box
       f.dateEcho.textContent = q.value_date_typed ? q.value_date_typed + ' → ' + serialDate(q.value_date) : '';
@@ -745,6 +1030,7 @@ export class BlotterPage {
         f.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '8px' } }, q.pair + ' için çalışma kitabında eğri yok: forward yazdığınız kur'
           + (typeof q.spot_market === 'number' ? ' (Bloomberg spotu ' + num(q.spot_market, 4) + ')' : '') + '. İma TRY faizi hesaplanmaz; TRY faizi DV01\'i valöre kadarki TRY iskonto faktörüyle verilir.'));
       }
+      this.pricingLine(f.quote, edit);
     } catch (err) {
       if (ticket !== f.ticket) return;
       clear(f.quote);
@@ -762,6 +1048,7 @@ export class BlotterPage {
     if (!pl.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (amount === null || !(amount > 0)) { toast('Tutar girin (örn. 10m)', 'err'); (quote ? f.quoteAmount : f.amount).focus(); return; }
     if (!pl.value_date) { toast('Valör tarihini girin', 'err'); f.date.focus(); return; }
+    if (this.editing && this.editing.kind === 'fwd') { await this.saveEdit('fwd', pl, f.save); return; }
     f.save.disabled = true;
     try {
       const rec = await api.post('/api/blotter/forward', pl);
@@ -829,6 +1116,8 @@ export class BlotterPage {
     o.quote = h('div', { class: 'quotebox' });
     o.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     o.save.addEventListener('click', () => this.saveOis());
+    o.cancel = this.cancelButton('ois-edit-cancel');
+    for (const el of [o.cpt, o.note]) el.addEventListener('input', () => { if (this.editing) this.quoteOis(); });
     for (const el of [o.level, o.size]) {
       el.addEventListener('input', () => this.quoteOis());
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveOis(); });
@@ -841,7 +1130,7 @@ export class BlotterPage {
     pane.appendChild(o.adv);
     pane.appendChild(o.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Karşı taraf', o.cpt, '150px'), field('Not', o.note, '240px')));
-    pane.appendChild(h('div', { class: 'row actions' }, o.save));
+    pane.appendChild(h('div', { class: 'row actions' }, o.cancel, o.save));
     this.layoutOis();
     return pane;
   }
@@ -905,6 +1194,14 @@ export class BlotterPage {
       o.legsHost.appendChild(field('Bitiş', o.f.end_months, '110px'));
       o.f.start_rate = rate('Başlangıç bacağı oranı (%)');
     }
+    // a leg's own rate an edit filled in is that tenor's: another tenor chosen for the leg, the market's again
+    for (const [k, sel] of LEG_RATES) {
+      if (!o.f[k] || !o.f[sel]) continue;
+      o.f[sel].addEventListener('change', () => {
+        const ed = this.editing;
+        if (ed && ed.rates[k] !== undefined && o.f[k].value === ed.rates[k]) o.f[k].value = '';
+      });
+    }
     const bp = st === 'spread' || st === 'fly';
     o.levelField.firstChild.textContent = bp ? 'Seviye (bp)' : 'Oran (%)';
     o.level.placeholder = bp ? 'örn. -125' : 'örn. 37,25';
@@ -923,6 +1220,9 @@ export class BlotterPage {
     const size = parseAmount(o.size.value);
     o.sizeEcho.textContent = o.size.value.trim() ? (size === null ? 'anlaşılamadı' : num(size, 0) + (o.sizeMode === 'dv01' ? ' $/bp' : ' TL')) : '';
     if (size !== null && size > 0) pl[o.sizeMode] = size;
+    // an edit's size given back as it was filled in: the trade's own (a spread sized by DV01 cannot say its legs' nominals)
+    const ed = this.editing;
+    if (ed && ed.kind === 'ois' && ed.size && o.size.value === ed.size.text && o.sizeMode === ed.size.mode) pl.keep_size = true;
     return pl;
   }
 
@@ -967,10 +1267,12 @@ export class BlotterPage {
       return;
     }
     try {
-      const q = await api.post('/api/blotter/quote/ois', pl);
+      const { q, edit } = await this.quoteOf('ois', '/api/blotter/quote/ois', pl);
       if (ticket !== o.ticket || this.dead) return;
       const st = q.strategy;
       const bp = st === 'spread' || st === 'fly';
+      // an edit that keeps the instrument counts against the mid at the trade, not today's
+      const midLabel = edit && edit.priced !== 'today' ? 'Mid (işlem anı)' : 'Piyasa mid';
       clear(o.marketHint);
       if (typeof q.info.market === 'number') {
         const use = h('button', { class: 'btn sm ghost', type: 'button' }, 'kullan');
@@ -978,7 +1280,7 @@ export class BlotterPage {
           o.level.value = bp ? num(q.info.market, 2, false) : num(q.info.market * 100, 4, false);
           this.quoteOis();
         });
-        o.marketHint.appendChild(h('span', null, 'Piyasa mid: ' + this.levelText(q.info.market, st) + ' '));
+        o.marketHint.appendChild(h('span', null, midLabel + ': ' + this.levelText(q.info.market, st) + ' '));
         o.marketHint.appendChild(use);
       }
       this.ppkHint(q, st);
@@ -986,18 +1288,21 @@ export class BlotterPage {
       if (!hasLevel) {
         o.quote.appendChild(h('div', { class: 'muted' }, bp ? 'Seviyeyi (bp) yazın; bacaklar ve maliyet otomatik hesaplanır.'
           : 'Oranı yazın; bacaklar ve maliyet otomatik hesaplanır.'));
+        this.pricingLine(o.quote, edit);
         return;
       }
       const tiles = h('div', { class: 'quote' });
-      const cost = q.info.cost_bp;
-      const costTile = tile('Maliyet (mid\'e göre)', typeof cost === 'number' ? num(cost, 2) + ' bp' : '—', true,
-        'Pozitif = mid\'den kötü (ödenen), negatif = mid\'den iyi');
-      if (typeof cost === 'number') costTile.classList.add(cost > 0 ? 'costpos' : 'costneg');
-      tiles.appendChild(costTile);
-      tiles.appendChild(tile('Maliyet ($)', typeof q.info.cost_usd === 'number' ? num(q.info.cost_usd, 0) : '—'));
-      tiles.appendChild(tile('Maliyet (TL)', typeof q.info.cost_tl === 'number' ? num(q.info.cost_tl, 0) : '—'));
+      // the trade against mid as the desk reads it: + better than mid (in its favour, green), − worse (red)
+      for (const [key, label, cost, digits, unit] of [['bp', 'Mid\'e göre (bp)', q.info.cost_bp, 2, ' bp'],
+        ['usd', 'Mid\'e göre ($)', q.info.cost_usd, 0, ''], ['tl', 'Mid\'e göre (TL)', q.info.cost_tl, 0, '']]) {
+        const v = vsShown(vsMid(cost), digits);
+        const el = tile(label, v === null ? '—' : signed(v, digits) + unit, key === 'bp', VS_MID_HINT);
+        el.dataset.k = 'vs-mid-' + key;
+        if (v) el.classList.add(v > 0 ? 'costpos' : 'costneg');
+        tiles.appendChild(el);
+      }
       tiles.appendChild(tile('İşlem seviyesi', this.levelText(q.level, st)));
-      tiles.appendChild(tile('Piyasa mid', this.levelText(q.info.market, st)));
+      tiles.appendChild(tile(midLabel, this.levelText(q.info.market, st)));
       const od = q.dv01 || {};
       const n1 = tile('Net DV01 ($)', signed(od.net, 0), false, DV01_HINT);
       n1.dataset.k = 'dv01-net';
@@ -1013,6 +1318,7 @@ export class BlotterPage {
       o.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.label));
       o.quote.appendChild(this.copyLine(() => q.label + ' · ' + q.legs.map((lg) => (lg.dir === 'S' ? 'REC ' : 'PAY ') + lg.tenor + ' ' + pct(lg.rate, 4)
         + ' ' + num(lg.nominal, 0) + ' TL (DV01 ' + signed(payerPlus(lg), 0) + ' $)').join(' / ')));
+      this.pricingLine(o.quote, edit);
     } catch (err) {
       if (ticket !== o.ticket) return;
       clear(o.quote);
@@ -1025,6 +1331,7 @@ export class BlotterPage {
     const pl = this.oisPayload();
     if (!pl.side) { toast('Yönü seçin: ' + SIDES[o.strategy].map((x) => x[1]).join(' ya da '), 'err'); return; }
     if (!pl.level) { toast('Seviye girin', 'err'); o.level.focus(); return; }
+    if (this.editing && this.editing.kind === 'ois') { await this.saveEdit('ois', pl, o.save); return; }
     o.save.disabled = true;
     try {
       const q = await api.post('/api/blotter/ois', pl);
@@ -1052,14 +1359,16 @@ export class BlotterPage {
     b.quote = h('div', { class: 'quotebox' });
     b.dirSeg.addEventListener('click', () => this.quoteBond());
     for (const el of [b.inst, b.amount]) el.addEventListener('input', () => this.quoteBond());
+    for (const el of [b.price, b.note]) el.addEventListener('input', () => { if (this.editing) this.quoteBond(); });   // (an edit's line)
     for (const el of [b.inst, b.amount, b.price]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.saveBond(); });
     b.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
     b.save.addEventListener('click', () => this.saveBond());
+    b.cancel = this.cancelButton('bond-edit-cancel');
     pane.appendChild(h('div', { class: 'row' }, field('Yön', b.dirSeg), field('Enstrüman', b.inst, '200px')));
     pane.appendChild(h('div', { class: 'row' }, field('Tutar', h('div', null, b.amount, b.amountEcho), '190px'), field('Fiyat', b.price, '130px')));
     pane.appendChild(b.quote);
     pane.appendChild(h('div', { class: 'row' }, field('Not', b.note, '330px')));
-    pane.appendChild(h('div', { class: 'row actions' }, b.save));
+    pane.appendChild(h('div', { class: 'row actions' }, b.cancel, b.save));
     return pane;
   }
 
@@ -1072,11 +1381,12 @@ export class BlotterPage {
     if (!inst) { b.quote.appendChild(h('div', { class: 'muted' }, 'Enstrümanı (ISIN) yazın; DİBS RV tablosundaki bir kâğıtsa süre ve DV01 gösterilir.')); return; }
     const ticket = (b.ticket = (b.ticket || 0) + 1);
     try {
-      const q = await api.post('/api/blotter/quote/bond', { instrument: inst, dir: b.dir, amount: parseAmount(b.amount.value) });
+      const { q, edit } = await this.quoteOf('bond', '/api/blotter/quote/bond', this.bondPayload());
       if (ticket !== b.ticket || this.dead) return;
       clear(b.quote);
       if (!q.known) {
         b.quote.appendChild(h('div', { class: 'muted' }, 'Bu enstrüman DİBS RV tablosunda yok: işlem kaydedilir, DV01 hesaplanamaz.'));
+        this.pricingLine(b.quote, edit);
         return;
       }
       const per = q.amount ? '' : ' / 1mn nominal';
@@ -1091,6 +1401,7 @@ export class BlotterPage {
       tiles.appendChild(tile('Vade', typeof q.info.maturity === 'number' ? serialDate(q.info.maturity) : '—'));
       b.quote.appendChild(tiles);
       b.quote.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, q.info.isin + (q.info.name ? ' · ' + q.info.name : '')));
+      this.pricingLine(b.quote, edit);
     } catch (err) {
       if (ticket !== b.ticket) return;
       clear(b.quote);
@@ -1105,15 +1416,23 @@ export class BlotterPage {
     return h('div', { class: 'copyline' }, b);
   }
 
+  /** What the bond form sends: the instrument, the side, the amount (as read), the price and the note. */
+  bondPayload() {
+    const b = this.bond;
+    return { instrument: b.inst.value.trim(), dir: b.dir, amount: parseAmount(b.amount.value), price: b.price.value.trim(), note: b.note.value.trim() };
+  }
+
   async saveBond() {
     const b = this.bond;
-    const amount = parseAmount(b.amount.value);
-    if (!b.inst.value.trim()) { toast('Enstrüman girin', 'err'); b.inst.focus(); return; }
+    const pl = this.bondPayload();
+    const amount = pl.amount;
+    if (!pl.instrument) { toast('Enstrüman girin', 'err'); b.inst.focus(); return; }
     if (!b.dir) { toast('Yönü seçin: alış ya da satış', 'err'); return; }
     if (amount === null || !(amount > 0)) { toast('Tutar girin', 'err'); b.amount.focus(); return; }
+    if (this.editing && this.editing.kind === 'bond') { await this.saveEdit('bond', pl, b.save); return; }
     b.save.disabled = true;
     try {
-      await api.post('/api/blotter/bond', { instrument: b.inst.value.trim(), dir: b.dir, amount, price: b.price.value.trim(), note: b.note.value.trim() });
+      await api.post('/api/blotter/bond', pl);
       toast('Tahvil işlemi kaydedildi', 'ok');
       b.amount.value = '';
       b.amountEcho.textContent = '';
@@ -1128,9 +1447,38 @@ export class BlotterPage {
     return this.users[t.created_by] || t.created_by || '';
   }
 
-  delCell(t, what) {
-    if (!this.data.can_enter || t.trade_date !== this.data.today) return { t: '', k: '' };       // today's trades only
-    return { t: '', k: '', cls: 'act', act: { label: '✕', title: 'İşlemi sil', fn: () => this.remove(t, what) } };
+  /** What can be done to a trade of the list: today's - "Düzenle" (the form filled with it: ``startEdit``) and ✕; a day
+   * gone by's - "Düzenle" for its counterparty and note alone (``editFields``). */
+  actCell(t, what) {
+    if (t.trade_date !== this.data.today) {
+      return { t: '', k: '', cls: 'act', act: [{ id: 'edit', label: 'Düzenle', title: 'Karşı taraf / not: geçmiş günün işleminde yalnızca bunlar değişir',
+        fn: () => this.editFields(t) }] };
+    }
+    if (!this.data.can_enter) return { t: '', k: '' };
+    return { t: '', k: '', cls: 'act', act: [
+      { id: 'edit', label: 'Düzenle', title: 'İşlemi düzenle: form işlemin değerleriyle dolar, "Değişikliği kaydet" aynı kaydı değiştirir',
+        fn: () => this.startEdit(t) },
+      { id: 'del', label: '✕', title: 'İşlemi sil', fn: () => this.remove(t, what) }] };
+  }
+
+  /** When a trade was entered, in a list - marked (✎) when it was changed after that, the change in its tip: when, by
+   * whom, how many times, what it was before the last change. */
+  timeCell(t) {
+    const cell = { t: timeOf(t.created_at), k: 's' };
+    const edits = Array.isArray(t.edits) ? t.edits : [];
+    if (!edits.length) return cell;
+    const last = edits[edits.length - 1];
+    const was = last.was || {};
+    const shown = (v, fmt) => (v === null || v === undefined || v === '' ? '—' : (fmt ? fmt(v) : String(v)));
+    const before = (EDIT_FIELDS[t.kind] || []).filter(([k]) => Object.prototype.hasOwnProperty.call(was, k))
+      .map(([k, label, fmt]) => label + ' ' + shown(was[k], fmt));
+    const tip = ['Düzenlendi: ' + timeOf(last.at) + ' · ' + (this.users[last.by] || last.by || '') + (edits.length > 1 ? ' (' + edits.length + '. düzenleme)' : ''),
+      'Girildi: ' + timeOf(t.created_at) + ' · ' + this.who(t)];
+    const priced = { today: 'Bugünkü piyasayla yeniden fiyatlandı' + (last.why && last.why.length ? ' (' + last.why.join(', ') + ' değişti)' : ''),
+      trade: 'İşlemin kendi fiyatlarıyla (kur / mid işlem anındaki)', none: 'Yalnızca karşı taraf / not' }[last.priced];
+    if (priced) tip.push(priced);
+    if (before.length) tip.push('Önceki: ' + before.join(' · '));
+    return Object.assign(cell, { cls: 'edited', tip: tip.join('\n') });
   }
 
   async remove(t, what) {
@@ -1166,6 +1514,7 @@ export class BlotterPage {
 
   /** One click on a template: the form filled with it, waiting for "İşlemi kaydet" (nothing is saved). */
   applyTemplate(t) {
+    this.endEdit(true);                    // a template is a new trade: an edit in progress is left, the trade as it was
     const done = this.fillForm(t.spec);
     if (!done) { toast('Bu şablon formu dolduramıyor', 'err'); return; }
     toast('Şablon: ' + t.name + ' – form dolduruldu, kontrol edip kaydedin' + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok',
@@ -1193,6 +1542,10 @@ export class BlotterPage {
         + 'Maliyet ve DV01 bu aralıktaki işlemlerin toplamıdır.'
       : 'Geçmiş gün – yalnızca görüntüleme' + (d.snapshot_at ? ' (özet: ' + d.snapshot_at + ')' : ''));
     this.dayNote.classList.toggle('hidden', d.is_today);
+    if (this.editing && !d.trades.some((t) => t.id === this.editing.id)) {      // deleted meanwhile (by anyone)
+      this.endEdit(true);
+      toast('Düzenlenen işlem silindi: düzenleme bırakıldı', 'warn', 5000);
+    }
     this.entry.classList.toggle('hidden', !d.can_enter);
     this.readonlyNote.classList.toggle('hidden', !!d.can_enter);
 
@@ -1222,29 +1575,31 @@ export class BlotterPage {
     const pairOfTrade = (t) => t.pair || 'USDTRY';
     this.setGrid('fwd', dayHead.concat(['Saat', 'Kullanıcı', 'Parite', 'Yön', 'Tutar (döviz)', 'Valör', 'Gün', 'TRY faizi', 'O/N', 'Forward', 'Swap puanı', 'Karşı tutar',
       'DV01 (TL)', 'DV01 ($)', 'Fiyatlama', 'Karşı taraf', 'Not', '']),
-      fw.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), { t: pairOfTrade(t), k: 's', b: 1 },
+      fw.map((t) => day(t).concat([this.timeCell(t), this.who(t), { t: pairOfTrade(t), k: 's', b: 1 },
         { t: t.dir === 'B' ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.dir === 'B' ? 'buy' : 'sell' },
         typedCell(t, 'base'), { t: serialDate(t.value_date), v: t.value_date, k: 'd' }, n(t.days, 0), p(t.try_rate, 3), p(t.on_rate, 2), n(t.forward, 4), n(t.points, 0),
         typedCell(t, 'quote'), dv(t.dv01_tl), dv(t.dv01), BASIS_LABEL[t.basis] || t.basis, t.cpt || '', t.note || '',
-        this.delCell(t, pairOfTrade(t) + ' ' + (t.dir === 'B' ? 'alış ' : 'satış ') + num(t.amount, 0) + ' ' + pairOfTrade(t).slice(0, 3) + ' · ' + serialDate(t.value_date))])),
+        this.actCell(t, pairOfTrade(t) + ' ' + (t.dir === 'B' ? 'alış ' : 'satış ') + num(t.amount, 0) + ' ' + pairOfTrade(t).slice(0, 3) + ' · ' + serialDate(t.value_date))])),
       fw.length ? fw.length + ' işlem' : '');
 
     const os = d.trades.filter((t) => t.kind === 'ois');
     const seenPkg = new Set();
-    this.setGrid('ois', dayHead.concat(['Saat', 'Kullanıcı', 'İşlem', 'Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)', 'Maliyet (bp)', 'Maliyet ($)', 'Karşı taraf', 'Not', '']),
+    // the trade against mid (+ better than mid): the stored cost turned round, on a package's first leg
+    this.setGrid('ois', dayHead.concat(['Saat', 'Kullanıcı', 'İşlem', 'Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)',
+      { t: 'Mid\'e göre (bp)', tip: VS_MID_HINT }, { t: 'Mid\'e göre ($)', tip: VS_MID_HINT }, 'Karşı taraf', 'Not', '']),
       os.map((t) => {
         const first = !t.package || !seenPkg.has(t.package);
         if (t.package) seenPkg.add(t.package);
-        return day(t).concat([timeOf(t.created_at), this.who(t), first ? (t.label || '') : '', ROLE[t.role] || t.role || '',
+        return day(t).concat([this.timeCell(t), this.who(t), first ? (t.label || '') : '', ROLE[t.role] || t.role || '',
           { t: t.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: t.dir === 'S' ? 'buy' : 'sell' }, t.tenor, p(t.rate, 4), n(t.nominal, 0), dv(payerPlus(t)),
-          first ? n(t.cost_bp, 2) : { t: '', k: '' }, first ? n(t.cost_usd, 0) : { t: '', k: '' }, t.cpt || '', first ? (t.note || '') : '',
-          first ? this.delCell(t, t.label || 'OIS işlemi') : { t: '', k: '' }]);
+          first ? vsCell(vsMid(t.cost_bp), 2) : { t: '', k: '' }, first ? vsCell(vsMid(t.cost_usd), 0) : { t: '', k: '' }, t.cpt || '', first ? (t.note || '') : '',
+          first ? this.actCell(t, t.label || 'OIS işlemi') : { t: '', k: '' }]);
       }), os.length ? os.length + ' bacak' : '');
 
     const bd = d.trades.filter((t) => t.kind === 'bond');
     this.setGrid('bond', dayHead.concat(['Saat', 'Kullanıcı', 'Enstrüman', 'Yön', 'Tutar', 'Fiyat', 'DV01 (TL)', 'DV01 ($)', 'Not', '']),
-      bd.map((t) => day(t).concat([timeOf(t.created_at), this.who(t), t.instrument, { t: t.amount >= 0 ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.amount >= 0 ? 'buy' : 'sell' },
-        n(Math.abs(t.amount), 0), n(t.price, 4), dv(t.dv01_tl), dv(t.dv01), t.note || '', this.delCell(t, t.instrument + ' ' + num(Math.abs(t.amount), 0))])),
+      bd.map((t) => day(t).concat([this.timeCell(t), this.who(t), t.instrument, { t: t.amount >= 0 ? 'ALIŞ' : 'SATIŞ', k: 's', cls: t.amount >= 0 ? 'buy' : 'sell' },
+        n(Math.abs(t.amount), 0), n(t.price, 4), dv(t.dv01_tl), dv(t.dv01), t.note || '', this.actCell(t, t.instrument + ' ' + num(Math.abs(t.amount), 0))])),
       bd.length ? bd.length + ' işlem' : '');
 
     const c = d.cost || { fwd: [], ois: [], bond: [] };
