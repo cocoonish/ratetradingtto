@@ -1,5 +1,6 @@
 // The fitted-model pages of the quant package (tto/quantcurve.py, tto/quantopt.py): Eğri Adil Değeri - the
-// Nelson-Siegel-Svensson fits of the TRY OIS curve and of DİBS, each point's rich / cheap with its z, the bonds' carry
+// Nelson-Siegel-Svensson fit of the TRY OIS curve and the Nelson-Siegel one of DİBS, each point's rich / cheap with its
+// z, the bonds' carry
 // + roll and the best bond to receive / pay with - and Opsiyon - the USDTRY / EURUSD vol surface (ATM term structure,
 // 25D / 10D risk reversals and butterflies), its signals, the smile's distribution against the forward next to how
 // often the spot ended that far from it.  Each lists its own signals at the top and draws a picked row's series below
@@ -64,11 +65,11 @@ class FitPage extends QuantPage {
 }
 
 // ------------------------------------------------------------------------------------------------ Eğri Adil Değeri
-/** The fit in a line: its zero rates at round maturities (what the curve says), τ1 / τ2, then the β (few noisy points
- * can drive the β far apart while the curve inside them stays put). */
-const params = (p) => (p ? 'Sıfır (sürekli) ' + Object.entries(p.zero || {}).map(([k, v]) => k + ' ' + fmt(v, 2) + '%').join(' · ')
-  + ' · τ1 ' + fmt(p.tau1, 2) + ' · τ2 ' + fmt(p.tau2, 2) + ' yıl (β0 ' + fmt(p.b0, 1) + ' · β1 ' + sgn(p.b1, 1) + ' · β2 ' + sgn(p.b2, 1)
-  + ' · β3 ' + sgn(p.b3, 1) + ')' : '');
+/** The fit in a line: its model, its zero rates at round maturities (what the curve says), τ1 / τ2, then the β (few
+ * noisy points can drive the β far apart while the curve inside them stays put).  An NS curve has no τ2 nor β3. */
+const params = (p) => (p ? (p.model ? p.model + ' · ' : '') + 'Sıfır (sürekli) ' + Object.entries(p.zero || {}).map(([k, v]) => k + ' ' + fmt(v, 2) + '%').join(' · ')
+  + ' · τ1 ' + fmt(p.tau1, 2) + (isNum(p.tau2) ? ' · τ2 ' + fmt(p.tau2, 2) : '') + ' yıl (β0 ' + fmt(p.b0, 1) + ' · β1 ' + sgn(p.b1, 1)
+  + ' · β2 ' + sgn(p.b2, 1) + (isNum(p.b3) ? ' · β3 ' + sgn(p.b3, 1) : '') + ')' : '');
 
 class CurvePage extends FitPage {
   constructor(host, ctx) { super(host, ctx, 'curve'); this.charts = {}; }
@@ -78,7 +79,7 @@ class CurvePage extends FitPage {
     this.ois = panel('quant-curve-ois', 'TRY OIS · NSS uyumu', { top: this.oisChart });
     this.boxes.ois = new GridBox(this.ois, 'quant/curve/ois', (sid) => this.pick(sid));
     this.bondChart = h('div', { class: 'volchart' });
-    this.bonds = panel('quant-curve-dibs', 'DİBS · NSS uyumu (sabit kuponlu ve bonolar)', { top: this.bondChart });
+    this.bonds = panel('quant-curve-dibs', 'DİBS · NS uyumu (sabit kuponlu ve bonolar)', { top: this.bondChart });
     this.boxes.bonds = new GridBox(this.bonds, 'quant/curve/dibs', (sid) => this.pick(sid));
     this.best = panel('quant-curve-best', 'Receive / pay için en iyi kâğıt');
     this.best.note.textContent = 'Puan = z × (1 aylık carry + roll) ÷ σ (kâğıdın 1 aylık getiri oynaklığı): z ile carry aynı yönü gösterdiğinde artı. '
@@ -125,7 +126,7 @@ class CurvePage extends FitPage {
     this.boxes.bonds.set(['Kâğıt', 'Tip', 'Vade', 'Kupon %', 'Getiri %', 'Kural', 'Model %', 'Fark (bp)', 'z', 'Kesit z', 'Yarı ömür (g)', 'Gün',
       'OIS\'e göre (bp)', 'ASW (Excel)', 'P/U (Excel, bp)', 'Mod. süre', 'C 1H', 'R 1H', 'C 1A', 'R 1A', 'C+R 1A', 'σ 1A (bp)', 'C+R / σ', 'Puan',
       'Fonlama'],
-    rows.map((r) => [T(r.label, { b: 1, tip: r.isin + (!r.fitted ? '\nuyum dışı (bono): eğriye göre ölçülür, eğriyi biçimlendirmez'
+    rows.map((r) => [T(r.label, { b: 1, tip: r.isin + (!r.fitted ? '\nuyum dışı: eğriye göre ölçülür, eğriyi biçimlendirmez'
       : (r.weight < 1 ? '\nuyumda ağırlığı ' + fmt(r.weight, 2) + ' (uzak nokta)' : '')) }), T((KIND[r.kind] || r.kind) + (r.fitted ? '' : ' ·')),
       T(isoToTr(r.maturity)), N(r.coupon, 2), N(r.yield, 3, { tip: r.live ? 'canlı (DİBS RV)' : 'son kapanış' }), T(CONV[r.conv] || r.conv), N(r.model, 3),
       N(r.resid, 1, { sign: true, b: 1, cls: r.fitted && r.weight < 1 ? 'soft' : '' }), Z(r.z, entry), N(r.cs_z, 2, { sign: true, tip: 'Bugünkü farkların kesitine göre' }),
@@ -137,14 +138,16 @@ class CurvePage extends FitPage {
     rows.map((r) => r.sid || null), '—', this.picked);
     const f = d.funding || {};
     this.bonds.note.textContent = 'Sabit kuponlu kâğıtlar ve bonolar (TLREF, FRN ve TÜFE dışarıda), DİBS RV\'nin BIST kuralıyla (kupon c/f, 364/f günde bir; '
-      + 'getiri yılda f kez bileşik, bono basit). Eğri sabit kuponlulara uydurulur (sayfanın kendi ASW uyumu gibi); bonolar (·) ona göre ölçülür, '
-      + 'eğriyi biçimlendirmez. Fark = getiri − model fiyatın getirisi (bp, kâğıdın kendi kuralıyla): + ucuz (al), − pahalı (sat); '
+      + 'getiri yılda f kez bileşik, bono basit). Eğri (' + (d.model === 'NSS' ? 'Nelson-Siegel-Svensson' : 'Nelson-Siegel: tek tümsek - az kâğıtta '
+      + 'NSS\'in ikinci tümseği kâğıtların gürültüsüne uyar') + ') sabit kuponlulara ve bonolara uydurulur: kısa ucu bonoların kendi fiyatları tutar. '
+      + 'Fark = getiri − model fiyatın getirisi (bp, kâğıdın kendi kuralıyla): + ucuz (al), − pahalı (sat); '
       + 'uzaktaki bir kâğıt uyumda ağırlıksızlaşır (Huber), komşularını bükmesin. OIS\'e göre: aynı nakit akışları OIS uyumuyla - getiri farkı (bp); '
       + 'yanında DİBS RV\'nin kendi ASW\'si ve pahalı / ucuzu (ASW\'nin karesel uyumuna göre). '
       + 'Carry (C) ve roll (R), bp (÷ DV01): C = getiri sabitken fiyat + ödenen kupon − fonlanan kirli fiyat; R = eğri yerinde kalırken (kâğıdın '
       + 'eğriye göre farkı sabit) − getiri sabitken fiyat. Fonlama: satırın reposu, yoksa OIS uyumunun vadeye kadarki faizi ('
       + (f.source || '—') + (isNum(f.rate_1m) ? ', 1A ' + fmt(f.rate_1m, 2) + '% sürekli' : '') + '), yoksa TLREF. ' + params(d.params) + ' · RMSE '
-      + fmt(d.rmse, 1) + ' bp, ' + d.n + ' kâğıt, ' + (d.days || 0) + ' gün geçmiş.';
+      + fmt(d.rmse, 1) + ' bp' + (isNum(d.loo) ? ' · LOO RMSE ' + fmt(d.loo, 1) + ' bp (her kâğıt, eğri o olmadan uydurulunca)' : '') + ', '
+      + d.n + ' kâğıt (' + (d.n_bills || 0) + ' bono), ' + (d.days || 0) + ' gün geçmiş.';
     const pick = ['Yön', 'Kâğıt', 'Vade', 'Fark (bp)', 'z', 'C+R 1A (bp)', 'σ 1A (bp)', 'C+R / σ', 'Puan'];
     const best = (side, list) => list.map((r) => [T(side, { b: 1 }), T(r.label, { b: 1 }), T(isoToTr(r.maturity)), N(r.resid, 1, { sign: true }), Z(r.z, entry),
       N(r.total_1m, 1, { sign: true }), N(r.sigma_1m, 1), N(r.cpr, 2, { sign: true }), N(r.score, 2, { sign: true, b: 1 })]);
@@ -154,7 +157,7 @@ class CurvePage extends FitPage {
     const bySpan = rows.slice().sort((a, b) => a.years - b.years);
     this.draw('bonds', this.bondChart, { scatter: true, title: 'DİBS', x_title: 'vade (yıl)', y_title: '%', decimals: 2, aspect: 0.3, auto: 'fit',
       series: [{ name: 'getiri', kind: 'line', color: BLUE, x: bySpan.map((r) => r.years), data: bySpan.map((r) => r.yield), noline: true, labels: bySpan.map((r) => r.label) },
-        { name: 'NSS model', kind: 'line', color: ORANGE, x: bySpan.map((r) => r.years), data: bySpan.map((r) => r.model), marker: false },
+        { name: (d.model || 'NS') + ' model', kind: 'line', color: ORANGE, x: bySpan.map((r) => r.years), data: bySpan.map((r) => r.model), marker: false },
         { name: 'OIS uyumuyla', kind: 'line', color: GREY, dash: true, x: bySpan.map((r) => r.years), data: bySpan.map((r) => r.ois_yield), marker: false }] });
   }
 }
@@ -164,7 +167,7 @@ const QUOTE_PREF = 'tto.quant.quote.isin', SWITCH_PREF = 'tto.quant.switch';
 const SPREADS = [['short_until', 'kısa ≤', 'yıl'], ['short', '', 'bp'], ['mid', '· orta', 'bp'], ['long_from', '· uzun ≥', 'yıl'], ['long', '', 'bp']];
 
 /**
- * Two sections of Eğri Adil Değeri: a two-way quote of any fixed-coupon DİBS from the fair curve (the NSS fair yield
+ * Two sections of Eğri Adil Değeri: a two-way quote of any fixed-coupon DİBS from the fair curve (the NS fair yield
  * and price ± the desk's half spread of the bond's maturity bucket, the market next to it) and a switch A → B (sell A,
  * buy B, DV01-neutral: the pickup against the curve, the carry + roll difference, the z of the switch).  The numbers
  * are the server's (/api/quant/quote, /api/quant/switch) on the latest fit; "Kopyala" copies the line to send.
@@ -270,7 +273,7 @@ class BondQuote {
       return;
     }
     const row = (name, x, b) => [T(name, { b: 1 }), N(x.yield, 3, { b }), N(x.compound, 3), N(x.clean, 3, { b }), N(x.dirty, 3), N(x.dv01, 1)];
-    const rows = [row('Alış (bid)', q.bid, 1), row('Adil (NSS)', q.fair, 0), row('Satış (ask)', q.ask, 1)];
+    const rows = [row('Alış (bid)', q.bid, 1), row('Adil (' + (q.model || 'NS') + ')', q.fair, 0), row('Satış (ask)', q.ask, 1)];
     if (q.market) rows.push(row('Piyasa' + (q.market.live ? ' (canlı)' : ' (son kapanış)'), q.market, 0));
     this.quoteBox.set(['', 'Getiri % (basit)', 'Bileşik %', 'Temiz', 'Kirli', 'DV01 (TL / bp, 1mn)'], rows, null, '—');
     this.quote.setTitle('Adil eğriden kotasyon · ' + q.label + ' (' + q.isin + ')');

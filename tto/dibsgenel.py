@@ -16,19 +16,21 @@ summary; every row keyed by its ISIN), in groups of columns:
 * **FX swap ASW** - the same on the FX swap implied TRY curve (EK_FX: TRYI 1–18M FX swap implied, TRYSAQ 2–10Y XCCY, the
   OIS quote where there is no price; named as the ASW page names it, ``rvfair.FX_CURVE_TEXT``), as DİBS ASW computes its
   "ASW FX" (rvfair's FX side: ASW!R / S / T on that curve, DİBS RV's threshold);
-* **Sıfır kupon eğrisi** - a Nelson-Siegel-Svensson zero curve fitted now to the trading list's fixed coupon bonds
-  (bills measured against it; TLREF floaters, FRNs and CPI linkers out, the reason in the cell): the model yield, cheap
-  / rich (bp, + cheap) and the fair clean price on the curve;
+* **Sıfır kupon eğrisi** - a Nelson-Siegel zero curve fitted now to the trading list's fixed coupon bonds and bills
+  (TLREF floaters, FRNs and CPI linkers out, the reason in the cell): the model yield, cheap / rich (bp, + cheap) and
+  the fair clean price on the curve;
 * Risk (DİBS RV!AG, AI, AJ) · Carry (AO) · Broker (today's Broker Chat board, as on DİBS Trading) · ▸ the bond's card ·
   ★ off the trading list.
 
 Every figure is its source's: a cell of DİBS RV, rvfair's fair values (the same as DİBS Trading's and the card's), the
 live fit.  **The fit is quantcurve's** ("DİBS adil değeri"): the bonds as ``quantcurve.read_engine`` reads DİBS RV (here
-the user's own calculation of it), their simple yields, ``quantcurve.BondFit`` / ``search`` / ``refit`` as
-``quantcurve.fam_dibs`` runs them on today's quotes - the τ searched on the bonds now, then the β with them held; a
-bond's cheap / rich is the fit's residual (its yield − the model yield, bp of the simple yield), the model yield the
-yield − it (the quant page's "Model"), the fair price ``quantcurve.quote_bond``'s clean price.  The τ are searched again
-when the bonds (or the day) change, else only the β follow the yields - as the quant fit does live.
+the user's own calculation of it), their simple yields, ``quantcurve.BondFit`` / ``dibs_search`` / ``refit`` as
+``quantcurve.fam_dibs`` runs them on today's quotes - the model (``quantcurve.DIBS_MODEL``, Nelson-Siegel) and its τ
+searched on the bonds now, then the β with them held; a bond's cheap / rich is the fit's residual (its yield − the
+model yield, bp of the simple yield), the model yield the yield − it (the quant page's "Model"), the fair price
+``quantcurve.quote_bond``'s clean price; the fit's line says its RMSE and its leave-one-out RMSE (``BondFit.loo``).
+The τ are searched again when the bonds (or the day) change, else only the β follow the yields - as the quant fit does
+live.
 
 **The charts**: the yield curve (each bond's compound yield at its years, the fitted curve's par yield - the yield of a
 bond priced at 100 clean on it - and zero rate, compounded once a year, and DİBS RV's OIS par rate at each bond's
@@ -71,12 +73,14 @@ NO_ZERO = {"T": "TLREF'e endeksli: nakit akışları sabit değil, sıfır kupon
            "E": "TÜFE'ye endeksli: reel getiri, nominal sıfır kupon eğrisine karşı ölçülmez"}
 #: the FX swap group's head: the curve named
 FX_GROUP = "FX swap ASW · " + rvfair.FX_CURVE_TEXT
+#: the zero-coupon curve's group: its model named
+ZERO_GROUP = "Sıfır kupon eğrisi (%s)" % qc.MODEL_NAMES[qc.DIBS_MODEL]
 #: the groups' heads' tips
 GROUP_TIPS = {"OIS ASW": "DİBS RV'nin TLREF OIS eğrisine göre hesabı (RV hesap tablosu)",
               FX_GROUP: "DİBS ASW'nin ASW FX hesabı (ASW hesap tablosu). DİBS RV'nin kendi FX sütunları başka bir eğride: FX swap "
-                        "(offshore ICAP eğrisi), yalnız RV hesap tablosunda",
-              "Sıfır kupon eğrisi (NSS)": "Trading listesinin sabit kuponlularına şimdi uydurulan Nelson-Siegel-Svensson sıfır kupon "
-                                          "eğrisi (quant'ın DİBS adil değeri hesabı); bonolar eğriye karşı ölçülür"}
+                        "(offshore ICAP eğrisi), RV hesap tablosunda varsayılan olarak gizli",
+              ZERO_GROUP: "Trading listesinin sabit kuponlularına ve bonolarına şimdi uydurulan %s sıfır kupon eğrisi (quant'ın "
+                          "DİBS adil değeri hesabı)" % qc.MODEL_TEXT[qc.DIBS_MODEL]}
 #: DİBS RV's columns a quote that is no live one makes soft (worked out of its price)
 SOFT = ("ycomp", "ysimple", "ois_asw", "ois_rc", "ois_sig", "fx_asw", "fx_rc", "fx_sig", "z_rc", "z_model")
 GRID_STEP = 0.1                          # years between the points of the curve's lines
@@ -88,8 +92,8 @@ def columns() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
     fx = "DİBS ASW'nin ASW FX hesabı (%s)" % rvfair.FX_CURVE_TEXT
     fair = ("Kâğıdın ASW'si %s ASW eğrisinde (a + b·t + c·t²) dursaydı %s: kirli @spot = PV − eğri ASW × annuity / 100, valöre "
             "fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi BIST bileşik (DİBS Trading ve kâğıt kartındakiyle aynı)")
-    zero = ("Sıfır kupon eğrisi: trading listesinin sabit kuponlularına şimdi uydurulan Nelson-Siegel-Svensson eğrisi (bonolar "
-            "ölçülür, uydurmaya girmez; quant'ın DİBS adil değeri hesabı). ")
+    zero = ("Sıfır kupon eğrisi: trading listesinin sabit kuponlularına ve bonolarına şimdi uydurulan %s eğrisi (quant'ın DİBS "
+            "adil değeri hesabı). " % qc.MODEL_TEXT[qc.DIBS_MODEL])
     return [
         ("Kâğıt", [("bond", "Kâğıt", ""), ("isin", "ISIN", ""), ("due", "Vade", "DİBS RV!E"),
                    ("left", "Kalan (yıl)", "DİBS RV!F: OIS spot'tan vadeye yıl")]),
@@ -112,7 +116,7 @@ def columns() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
           ("fx_sig", "Sinyal", "Pahalı / ucuz DİBS RV'nin eşiğini (Eşik bp) aşınca UCUZ / PAHALI"),
           ("fx_fy", "Adil getiri %", fair % ("DİBS ASW'nin (%s)" % rvfair.FX_CURVE_TEXT, "getirisi")),
           ("fx_fp", "Adil fiyat", fair % ("DİBS ASW'nin (%s)" % rvfair.FX_CURVE_TEXT, "valördeki temiz fiyatı"))]),
-        ("Sıfır kupon eğrisi (NSS)", [("z_model", "Model getiri %", zero + "Model getiri = getiri − pahalı / ucuz (BIST basit getiri kuralıyla)"),
+        (ZERO_GROUP, [("z_model", "Model getiri %", zero + "Model getiri = getiri − pahalı / ucuz (BIST basit getiri kuralıyla)"),
                                       ("z_rc", "Pahalı / ucuz", zero + "Getiri − model getiri (bp, basit getiri; + ucuz: al, − pahalı: sat)"),
                                       ("z_fp", "Adil fiyat", zero + "Nakit akışlarının eğrideki değeri (Σ CF·DF), valördeki temiz fiyat")]),
         ("Risk", [("dur", "Mod. süre", "DİBS RV!AG: modifiye süre"), ("dv01", "DV01 / 1mn", "DİBS RV!AI: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
@@ -164,25 +168,26 @@ def bond_inputs(rows: List[Dict[str, Any]], live: Dict[str, float], today: _dt.d
 
 
 def zero_fit(items: List[Tuple[qc.Bond, _dt.date, float, str]], nss0: Optional[qc.Nss] = None) -> Dict[str, Any]:
-    """The NSS fit of the bonds (``bond_inputs``): the τ searched (unless ``nss0``, an earlier search, gives them), then the
-    β with them held, from the search's - ``quantcurve.fam_dibs``'s fit of today's quotes.  ``{"ok", "nss", "in", "fit",
-    "found", "tau"}`` or ``{"ok": False, "why"}``."""
+    """The zero-coupon fit of the bonds (``bond_inputs``): the model and its τ searched (``quantcurve.dibs_search``, unless
+    ``nss0``, an earlier search, gives them), then the β with them held, from the search's - ``quantcurve.fam_dibs``'s
+    fit of today's quotes - and its leave-one-out RMSE.  ``{"ok", "nss", "in", "fit", "found", "tau", "loo"}`` or
+    ``{"ok": False, "why"}``."""
     fit_in = qc.BondFit(items)
     if fit_in.n_fit < qc.MIN_BONDS:
-        return {"ok": False, "why": "en az %d sabit kuponlu kâğıdın getirisi gerekli (%d var)" % (qc.MIN_BONDS, fit_in.n_fit)}
+        return {"ok": False, "why": "en az %d kâğıdın (sabit kuponlu ya da bono) getirisi gerekli (%d var)" % (qc.MIN_BONDS, fit_in.n_fit)}
     found = None
     if nss0 is None:
-        found = qc.search(fit_in.make, tau_min=fit_in.shortest, tau_max=fit_in.longest)
+        found = qc.dibs_search(fit_in)
         if found is None:
-            return {"ok": False, "why": "NSS uyumu kurulamadı"}
+            return {"ok": False, "why": "%s uyumu kurulamadı" % qc.MODEL_NAMES[qc.DIBS_MODEL]}
         nss0 = found["nss"]
     fit = qc.refit(fit_in.make, nss0, nss0.beta, iters=8)
-    return {"ok": True, "nss": fit["nss"], "in": fit_in, "fit": fit, "found": found, "tau": nss0}
+    return {"ok": True, "nss": fit["nss"], "in": fit_in, "fit": fit, "found": found, "tau": nss0, "loo": qc.loo_rmse(fit_in, fit["nss"])}
 
 
 def fit_rows(res: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Each bond of a fit against the curve, by ISIN: ``yield`` / ``model`` (per cent, simple), ``resid`` (bp, + cheap),
-    ``fitted`` (in the fit: a fixed coupon bond) and its ``weight`` (Huber), the fair quote (``fair``: quote_bond's - the
+    ``fitted`` (in the fit: a fixed coupon bond or a bill) and its ``weight`` (Huber), the fair quote (``fair``: quote_bond's - the
     yield of Σ CF·DF, its clean and dirty price), the value date and the accrued interest."""
     fit_in, fit, nss = res["in"], res["fit"], res["nss"]
     resid = fit_in.evaluate(nss)[0]
@@ -199,14 +204,16 @@ def fit_rows(res: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def fit_summary(res: Dict[str, Any]) -> Dict[str, Any]:
-    """The fit's quality and parameters: RMSE (bp, over the bonds fitted), how many bonds, β (per cent) and τ (years), the
-    curve's zero rates at round maturities."""
+    """The fit's quality and parameters: the model ("NS" / "NSS"), RMSE and leave-one-out RMSE (bp, over the bonds fitted),
+    how many bonds (``n_bills`` of them bills), β (per cent: three of NS, four of NSS) and τ (years: one, two), the curve's
+    zero rates at round maturities."""
     if not res.get("ok"):
         return {"ok": False, "why": res.get("why") or ""}
     fit_in, fit, nss = res["in"], res["fit"], res["nss"]
     info = nss.info(fit_in.longest)
-    return {"ok": True, "rmse": math.sqrt(fit["sse"] / fit_in.n_fit) * 1e4, "n": len(fit_in), "n_fit": fit_in.n_fit,
-            "beta": [info["b0"], info["b1"], info["b2"], info["b3"]], "tau": [nss.tau1, nss.tau2], "zero": info["zero"],
+    return {"ok": True, "model": nss.model, "rmse": math.sqrt(fit["sse"] / fit_in.n_fit) * 1e4, "loo": res.get("loo"),
+            "n": len(fit_in), "n_fit": fit_in.n_fit, "n_bills": sum(1 for i in fit_in.fitted if fit_in.bonds[i].kind == "bill"),
+            "beta": [info["b%d" % j] for j in range(nss.k)], "tau": [nss.tau1, nss.tau2][:nss.k - 2], "zero": info["zero"],
             "shortest": fit_in.shortest, "longest": fit_in.longest,
             "down": sum(1 for w in (fit.get("weights") or []) if w < 1.0)}
 
@@ -492,10 +499,12 @@ class DibsGenel(object):
 
         fit_in = res["in"]
         role = ("uydurmada (ağırlık %s)" % n(x["weight"], "0.00")) if x["fitted"] and x["weight"] is not None and x["weight"] < 1.0 \
-            else ("uydurmada" if x["fitted"] else "bono: uydurmaya girmez, eğriye karşı ölçülür")
-        tip = ("NSS sıfır kupon eğrisi (%d sabit kuponluya uyduruldu, %d kâğıt ölçüldü) · %s · getiri %s (basit) − model %s = %s bp · "
+            else ("uydurmada" if x["fitted"] else "uydurmaya girmez, eğriye karşı ölçülür")
+        bills = sum(1 for i in fit_in.fitted if fit_in.bonds[i].kind == "bill")
+        tip = ("%s sıfır kupon eğrisi (%d kâğıda uyduruldu: %d sabit kuponlu, %d bono) · %s · getiri %s (basit) − model %s = %s bp · "
                "adil fiyat: Σ CF·DF valörde (%s) kirli %s − işlemiş %s = temiz %s · eğride getiri %s (basit)"
-               % (fit_in.n_fit, len(fit_in), role, n(x["yield"] / 100.0, "0.00%"), n(x["model"] / 100.0, "0.00%"), n(x["resid"], "0.0"),
+               % (res["nss"].model, fit_in.n_fit, fit_in.n_fit - bills, bills, role, n(x["yield"] / 100.0, "0.00%"),
+                  n(x["model"] / 100.0, "0.00%"), n(x["resid"], "0.0"),
                   x["value_date"], n(x["fair"]["dirty"], "0.000"), n(x["accrued"], "0.000"), n(x["fair"]["clean"], "0.000"),
                   n(x["fair"]["yield"] / 100.0, "0.00%")))
         return {"z_model": {"t": n(x["model"] / 100.0, "0.00%"), "v": x["model"] / 100.0, "k": "n", "tip": tip},
