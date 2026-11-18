@@ -556,25 +556,27 @@ async function clipAfter(page, action) {
     // for the write in flight (grid.js pendingWrites) and goes after its answer - the scenario's date stands, on the page
     // and in the store (the server applies them in that order: tests/test_scenario_order.py)
     const sent = [];
-    await page.route('**/api/inputs', async (route) => {
+    const pathOf = (r) => new URL(r.url()).pathname;                 // (the page's requests carry ?lang=…)
+    const INPUTS = /\/api\/inputs(\?|$)/;
+    await page.route(INPUTS, async (route) => {
       sent.push('yazı gönderildi');
       await new Promise((r) => setTimeout(r, 2000));
       await route.continue();
     });
-    const onRes = (r) => { if (r.url().endsWith('/api/inputs')) sent.push('yazı yanıtlandı'); };
-    const onReq = (r) => { if (r.url().endsWith('/api/scenarios/load')) sent.push('yükleme gönderildi'); };
+    const onRes = (r) => { if (pathOf(r) === '/api/inputs') sent.push('yazı yanıtlandı'); };
+    const onReq = (r) => { if (pathOf(r) === '/api/scenarios/load') sent.push('yükleme gönderildi'); };
     page.on('response', onRes);
     page.on('request', onReq);
     await typeInto(page, 'Forward!D2', '01.03.2027');
     await page.click('#btn-scen');
     await page.waitForSelector('.modal table.plain .btn.primary');
-    const loaded = page.waitForResponse((r) => r.url().endsWith('/api/scenarios/load'), { timeout: 20000 });
+    const loaded = page.waitForResponse((r) => pathOf(r) === '/api/scenarios/load', { timeout: 20000 });
     await page.click('.modal table.plain .btn.primary');             // Yükle, while the date's write is held
     await loaded;
     await page.keyboard.press('Escape');
     page.off('response', onRes);
     page.off('request', onReq);
-    await page.unroute('**/api/inputs');
+    await page.unroute(INPUTS);
     await waitCell(page, 'Forward!D2', "t.trim() === '15.12.2026'");
     await page.waitForTimeout(500);
     const mineD2 = (((await api(page, 'ayşe yilmaz', 'GET', '/api/my-inputs')).json || {}).inputs || []).find((x) => x.ref === 'Forward!D2');
@@ -1912,8 +1914,9 @@ async function clipAfter(page, action) {
         eta_s: 150, eta: '~3 dk', short: 'ML 240/480' },
       { id: 'bt', name: 'geri test', title: 'Geri test', unit: 'yeniden kurma', done: 12, total: 25, step: 'Mart 2026 · 14.03.2026 kapanışıyla', since: '10:40:00',
         elapsed_s: 200, eta_s: 170, eta: '~3 dk', short: 'geri test 12/25' }] };
-    await page.route('**/api/progress', (r) => r.fulfill({ json: planted }));
-    await page.route('**/api/status', async (r) => {
+    const PROGRESS = /\/api\/progress(\?|$)/, STATUS = /\/api\/status(\?|$)/;      // (the page's requests carry ?lang=…)
+    await page.route(PROGRESS, (r) => r.fulfill({ json: planted }));
+    await page.route(STATUS, async (r) => {
       const res = await r.fetch();
       const j = await res.json();
       j.progress = planted;
@@ -1934,8 +1937,8 @@ async function clipAfter(page, action) {
       ['Makine öğrenmesi: modeller', '', '240 / 480 model', '10:42:31', '49 sn', '~3 dk'],
       ['Geri test', 'Mart 2026 · 14.03.2026 kapanışıyla', '12 / 25 yeniden kurma', '10:40:00', '3 dk 20 sn', '~3 dk']]), hesapRows);
     await page.keyboard.press('Escape');
-    await page.unroute('**/api/progress');
-    await page.unroute('**/api/status');
+    await page.unroute(PROGRESS);
+    await page.unroute(STATUS);
     let hesapGone = false;
     for (let i = 0; i < 40 && !hesapGone; i++) {
       const p = (await api(page, 'ayşe yilmaz', 'GET', '/api/progress')).json || {};
