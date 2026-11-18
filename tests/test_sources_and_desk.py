@@ -4,17 +4,20 @@ board reset / ticked delete / the trades page's entry over a period."""
 from __future__ import annotations
 
 import datetime as dt
+import math
 
 import pytest
 from starlette.testclient import TestClient
 
 from conftest import auth, cell, make_service
+from tto import aswfx
 from tto import extras as ex
 from tto import volcarry as vc
 from tto.history import SeriesDef
 from tto.marketdata.base import bdp_key
 from tto.server import create_app
 from tto.service import ServiceError
+from tto.xl import numfmt
 
 
 @pytest.fixture(scope="module")
@@ -157,13 +160,67 @@ def test_asw_against_the_fx_swap_curve(svc):
     a, b, c = (svc.et.call(calc.get, si, 3, col) for col in (49, 50, 51))              # AW3:AY3 of the FX calculation
     k = curve["x"].index(2.0)
     assert swapped > 0 and curve["data"][k] == pytest.approx(a + b * 2 + c * 4) and curve["data"] != ois["series"][1]["data"]
-    # the FX swap implied curve itself, tenor by tenor beside OIS (a tenor without an FX price is passed over)
+    # the FX swap implied curve itself, tenor by tenor beside OIS: the zero-coupon rates of the two curves the sheet
+    # discounts with as the main lines (EK_FX!K: OIS's in the sheet, the FX curve's in the calculation on it), the
+    # quotes as they are dashed beside them (a tenor without an FX price is passed over)
     line = p["fxline"]["data"]
-    assert line["cats"][:3] == ["1M", "2M", "3M"] and len(line["cats"]) == len(ex.FXC_ROOTS)
-    fx_line, ois_line = line["series"]
-    assert (fx_line["name"], ois_line["name"]) == ("FX swap ima", "OIS")
+    assert line["cats"][:3] == ["1M", "2M", "3M"] and len(line["cats"]) == len(ex.FXC_ROOTS) == len(aswfx.TENORS)
+    assert [x["name"] for x in line["series"]] == ["FX swap ima · sıfır kupon", "OIS · sıfır kupon", "FX swap ima · kota", "OIS · kota"]
+    fx_zero, ois_zero, fx_line, ois_line = line["series"]
+    assert fx_zero["marker"] and ois_zero["marker"] and fx_line["dash"] and ois_line["dash"] and "dash" not in fx_zero
     assert fx_line["data"][0] == pytest.approx(cell(svc, "EK_FX!D6", book="asw")) and "c" in fx_line["data"]
     assert ois_line["data"] == pytest.approx([cell(svc, "EK_FX!E%d" % r, book="asw") for r in range(6, 22)])
+    # each zero rate is its curve's own discount factor at the tenor, DF^(−365/d) − 1 off ASW!BS65:DI65 - on the FX side
+    # the very nodes the ASW FX column prices with, at a priced tenor the discount factor its rate gives by its own convention
+    n, nodes = len(aswfx.TENORS), range(len(aswfx.NODES))
+
+    def run():
+        base = svc._calc(None, book)
+        fi = book.model.sheet_index[ex.FXC_SHEET]
+        return ([base.get(si, aswfx.ROW, aswfx.DAY_COL + i) for i in nodes], [base.get(si, aswfx.ROW, aswfx.LN_COL + i) for i in nodes],
+                [calc.get(si, aswfx.ROW, aswfx.LN_COL + i) for i in nodes], [base.get(si, aswfx.ROW, aswfx.QUOTE_COL + k) for k in range(n)],
+                [base.get(fi, ex.FXC_FIRST + k, 4) for k in range(n)],                                   # EK_FX!D6:D21
+                [calc.get(si, aswfx.ROW, aswfx.QUOTE_COL + k) for k in range(n)])
+    days, ln_ois, ln_fx, ois_q, fx_q, given = svc.et.call(run)
+    tenors = aswfx.to_sheet(ois_q, fx_q, days)
+    for k, t in enumerate(tenors):
+        i = aswfx.node_of(t.months)
+        assert ois_zero["data"][k] == pytest.approx(aswfx.zero_rate(math.exp(ln_ois[i]), days[i]), abs=1e-9), t.months
+        assert fx_zero["data"][k] == pytest.approx(aswfx.zero_rate(math.exp(ln_fx[i]), days[i]), abs=1e-9), t.months
+        if t.kind != aswfx.OIS:
+            assert fx_zero["data"][k] == pytest.approx(aswfx.zero_rate(t.df, days[i]), abs=1e-9), t.months
+    assert all(abs(a - b) > 0.1 for a, b in zip(fx_zero["data"], ois_zero["data"]))
+    # ... and in EK_FX's table: how each rate is read, its days and OIS's zero rate (the sheet's cells), the FX curve's zero
+    # rate and the quote the sheet's curve is given there (the calculation on the FX curve)
+    tab = p["fxc"]["data"]
+    assert tab["c"] == ["A", "B", "C", "D", "E", "F", "I", "J", "K", "FX sıfır", "ASW par"] and tab["added"] == 2
+    assert [x["t"] for x in tab["rows"][tab["r"].index(5)][6:]] == ["FX faizi nasıl okunur", "Gün", "OIS sıfır kupon (%)",
+                                                                       "FX sıfır kupon (%)", "ASW'ye giden par (%)"]
+    for k, t in enumerate(tenors):
+        row = tab["rows"][tab["r"].index(ex.FXC_FIRST + k)]
+        assert row[6]["t"] == aswfx.RULES[t.kind] and row[7]["v"] == days[aswfx.node_of(t.months)]
+        assert (row[8]["v"], row[9]["v"], row[10]["v"]) == (ois_zero["data"][k], fx_zero["data"][k], given[k]) and given[k] == t.par
+
+
+def test_without_an_fx_rate_the_fx_curve_has_no_values(svc):
+    """No tenor priced in EK_FX: no calculation on the FX swap curve - the chart's FX zero-coupon line and the table's FX
+    columns have no values (the OIS lines stand)."""
+    book = svc.books["asw"]
+    spec = next(x for x in svc.view_index["asw"]["panels"] if x["id"] == "fxline")["spec"]
+
+    def run():
+        loc = numfmt.get_locale(svc.settings.locale)
+        R = svc.renderers["asw"]
+        data = R.chart(svc._calc(None, book), spec, loc)
+        ois = [list(x["data"]) for x in data["series"][1:]]
+        svc._fx_series(None, R, spec, data, loc)
+        table = {"rows": [[{"t": "Vade"}], [{"t": "1M"}]], "r": [5, 6], "c": ["A"]}
+        svc._fx_curve_columns(book, None, table, loc)
+        return data, ois, table
+    data, ois, table = svc.et.call(run)
+    assert data["series"][0]["data"] == [None] * len(aswfx.TENORS) and [x["data"] for x in data["series"][1:]] == ois
+    assert [x["t"] for x in table["rows"][0][1:]] == ["FX sıfır kupon (%)", "ASW'ye giden par (%)"]
+    assert [x["t"] for x in table["rows"][1][1:]] == ["", ""]
 
 
 # ---------------------------------------------------------------------------------------------- the Forward page's rates

@@ -75,6 +75,14 @@ def test_the_extra_sheets_are_ordinary_workbook_sheets(svc):
     assert svc.cell_info(None, "borsa", "bu!O9")["formula"] == '=IF(AND(ISNUMBER(H9),ISNUMBER(E9),N(E9)>0),360*((1+H9*E9/360)^(1/E9)-1),"")'
     grid = svc.grid(None, "tto", "EK_FWD", "A3:C5")["data"]
     assert [c["t"] for c in grid["rows"][0]] == ["Vade", "Valör", "Gün"] and grid["rows"][2][0]["t"] == "1M"
+    # EK_FX: how each FX rate is read (by its tenor), the days to the tenor and the zero-coupon rate of the ASW sheet's
+    # curve there - read off the sheet's own nodes (1M: D1 / L1, 2Y: D24 / L24)
+    assert svc.cell_info(None, "asw", "EK_FX!J6")["formula"] == "=ASW!AC$65"
+    assert svc.cell_info(None, "asw", "EK_FX!K6")["formula"] == "=IFERROR((EXP(-ASW!BT$65*365/$J6)-1)*100,NA())"
+    assert svc.cell_info(None, "asw", "EK_FX!K13")["formula"] == "=IFERROR((EXP(-ASW!CC$65*365/$J13)-1)*100,NA())"
+    assert svc.cell_info(None, "asw", "EK_FX!I12")["formula"] == ('=IF(ISNUMBER($D12),"FX swap ima: tek dönem, basit ACT/360",'
+                                                                  '"fiyat yok: OIS kotası, sayfanın kuralıyla")')
+    assert svc.cell_info(None, "asw", "EK_FX!I13")["formula"].startswith('=IF(ISNUMBER($D13),"XCCY: yıllık par, ACT/360",')
 
 
 def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
@@ -96,6 +104,10 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE", "EK_TATIL", "EK_VFRA", "EK_RET"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
+    # the ASW sheet's curve laid out otherwise: EK_FX reads its node days and ln discount factors by their place
+    asw = Model.load(os.path.join(root, "models", "asw.json.gz"))
+    asw.sheet("ASW").consts[parse_a1("BS64")] = "L1"
+    assert extras.apply("asw", asw) == ["EK_FX: ASW!BS64 beklenen başlık değil (L0 yok)"] and "EK_FX" not in asw.sheet_index
     # the TRY workbook with one gold forward typed over by hand: the gold tables stay as they are in the file
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
     viop = tto.sheet("VIOP")

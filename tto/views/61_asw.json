@@ -173,13 +173,25 @@
      "FX ima eğrisi (a+bt+ct²)"
     ]
    },
-   "note": "Yukarıdaki grafiğin aynısı, FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS) ile (EK_FX; OIS kotalarının yerine FX swap ima faizleri): her kâğıt kalan vadesinde tablonun ASW FX ima sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi. DİBS RV'nin ASW FX'i başka bir eğridir: FX swap (offshore ICAP eğrisi)."
+   "note": "Yukarıdaki grafiğin aynısı, FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS) ile (EK_FX; OIS kotalarının yerine FX faizleri - her biri kendi kuralıyla okunur: TRYI tek dönem basit ACT/360, TRYSAQ yıllık ACT/360 par - ve sayfaya, vadesinde aynı iskonto faktörünü veren kendi kuralındaki par faiz olarak girer): her kâğıt kalan vadesinde tablonun ASW FX ima sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi. DİBS RV'nin ASW FX'i başka bir eğridir: FX swap (offshore ICAP eğrisi)."
   },
   {
    "id": "fxc",
    "type": "table",
    "sheet": "EK_FX",
-   "range": "A1:F23",
+   "range": "A1:K23",
+   "cols": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "I",
+    "J",
+    "K"
+   ],
+   "append": "fx_curve",
    "hidden": false,
    "title": "FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS) · ASW'nin ikinci eğrisi (ICPL, sonra BGN)",
    "keep_title": true
@@ -189,9 +201,9 @@
    "type": "chart",
    "sheet": "EK_FX",
    "wide": true,
-   "title": "FX swap ima TRY eğrisi ve OIS  ·  vade vade (%)",
+   "title": "FX swap ima TRY eğrisi ve OIS  ·  sıfır kupon faizi ve kotalar, vade vade (%)",
    "spec": {
-    "title": "FX swap ima TRY eğrisi ve OIS  ·  vade vade (%)",
+    "title": "FX swap ima TRY eğrisi ve OIS  ·  sıfır kupon faizi ve kotalar, vade vade (%)",
     "kind": "line",
     "value_format": "0.00",
     "axis_titles": [
@@ -201,24 +213,41 @@
     "aspect": 0.4,
     "series": [
      {
-      "name": "FX swap ima",
+      "name": "FX swap ima · sıfır kupon",
       "cat": "EK_FX!$A$6:$A$21",
-      "val": "EK_FX!$D$6:$D$21",
+      "val": "EK_FX!$K$6:$K$21",
+      "curve": "fx",
       "kind": "line",
       "color": "C55A11",
       "marker": true
      },
      {
-      "name": "OIS",
+      "name": "OIS · sıfır kupon",
+      "cat": "EK_FX!$A$6:$A$21",
+      "val": "EK_FX!$K$6:$K$21",
+      "kind": "line",
+      "color": "1F3864",
+      "marker": true
+     },
+     {
+      "name": "FX swap ima · kota",
+      "cat": "EK_FX!$A$6:$A$21",
+      "val": "EK_FX!$D$6:$D$21",
+      "kind": "line",
+      "color": "C55A11",
+      "dash": true
+     },
+     {
+      "name": "OIS · kota",
       "cat": "EK_FX!$A$6:$A$21",
       "val": "EK_FX!$E$6:$E$21",
       "kind": "line",
       "color": "1F3864",
-      "marker": true
+      "dash": true
      }
     ]
    },
-   "note": "EK_FX'in eğrisi, FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS): her vadenin FX ima faizi (önce ICPL, yoksa BGN) ve aynı vadenin OIS kotası; fiyatı olmayan vade atlanır (çizgi üzerinden geçer), ASW hesabında orada OIS kotası kalır."
+   "note": "Düz çizgiler iki eğrinin vadedeki sıfır kupon faizi (yıllık bileşik, ACT/365: DF^(−365/gün) − 1; EK_FX tablosunun sıfır kupon sütunları): OIS, ASW sayfasının kendi iskonto faktörlerinden; FX swap ima eğrisi (TRYI 1–18A FX swap ima, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS), aynı düğümlerin ASW FX hesabındaki değerinden - kâğıtlar tam bu eğriyle iskonto edilir. FX faizleri kendi kuralıyla okunur: TRYI tek dönem basit ACT/360 (FX swap'ın kuponu yok), TRYSAQ yıllık ACT/360 par - masanın kendi dosyası da böyle okur (Forward'daki offshore TRY iskonto eğrisi); fiyatı olmayan vadede eğri o vadenin OIS kotasıyla, sayfanın kuralıyla sürer. Kesik çizgiler kotaların kendisi: FX ima faizi (önce ICPL, yoksa BGN; fiyatı olmayan vade atlanır, çizgi üzerinden geçer) ve aynı vadenin OIS kotası."
   },
   {
    "id": "fxh",
