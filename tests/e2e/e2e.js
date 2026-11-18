@@ -633,6 +633,112 @@ async function clipAfter(page, action) {
     const fwdHead = await page.evaluate(() => [...document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr:first-child td')].map((td) => td.textContent));
     check('saved trades carry their DV01, summed above the lists',
       risk.length === 4 && /^risk-total=[+-]\d/.test(risk[0]) && /^risk-fwd=[+-]\d/.test(risk[1]) && fwdHead.includes('DV01 (TL)') && fwdHead.includes('DV01 ($)'), [risk, fwdHead]);
+
+    // "Düzenle": a trade changed after it was entered.  A forward opened and left ("Vazgeç"): nothing changes, the form is back
+    const fwdForm = () => page.evaluate(() => { const f = window.tto.state.page.fwd; return { amount: f.amount.value, date: f.date.value, basis: f.basis,
+      dir: f.dir, manual: f.manual.value, title: document.querySelector('#blotter-entry-title').textContent }; });
+    const fwdKept = await fwdForm();
+    const beforeEdit = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades;
+    await page.click('.lists .panel:nth-child(1) table.grid td.act button[data-act="edit"]');
+    await page.waitForFunction(() => document.querySelector('#blotter-entry-title').textContent === 'İşlemi düzenle');
+    const fwdEdit = await fwdForm();
+    await page.click('#fwd-edit-cancel');
+    await page.waitForFunction(() => document.querySelector('#blotter-entry-title').textContent === 'Yeni işlem');
+    const fwdBack = await fwdForm();
+    check('"Düzenle" on a forward fills its form with the trade (amount, value date, pricing, side); "Vazgeç" gives the form back, the trade as it was',
+      fwdEdit.amount === '10.000.000' && fwdEdit.date === '15.12.2026' && fwdEdit.basis === 'RET_MID' && fwdEdit.dir === 'B'
+      && JSON.stringify(fwdBack) === JSON.stringify(fwdKept) && fwdKept.basis === 'FWD'
+      && JSON.stringify((await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades) === JSON.stringify(beforeEdit), [fwdKept, fwdEdit, fwdBack]);
+    // the spread: its level changed from the page - the same legs (ids), the list, "Mid'e göre" and the cost table follow
+    const legsOf = (trades) => trades.filter((t) => t.kind === 'ois' && t.strategy === 'spread');
+    const spreadBefore = legsOf(beforeEdit);
+    await page.click('.lists .panel:nth-child(2) table.grid td.act button[data-act="edit"]');
+    await page.waitForFunction(() => !document.querySelector('#blotter-edit-note').classList.contains('hidden')
+      && /bp/.test((document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"] .v') || {}).textContent || ''), null, { timeout: 15000 });
+    const editForm = await page.evaluate(() => {
+      const pane = document.querySelector('.entry .pad:not(.hidden)');
+      return { note: document.querySelector('#blotter-edit-note').textContent, save: pane.querySelector('.row.actions .btn.primary').textContent,
+        cancel: !document.querySelector('#ois-edit-cancel').classList.contains('hidden'), level: window.tto.state.page.ois.level.value,
+        fwdTab: document.querySelector('.entry .tabs button:nth-child(1)').disabled,
+        strategies: [...pane.querySelectorAll('.seg button')].filter((b) => ['outright', 'spread', 'fly', 'fra', 'mpc'].includes(b.dataset.v) && !b.disabled).map((b) => b.dataset.v) };
+    });
+    check('"Düzenle" on the spread: the OIS form with its level and its strategy only, "Değişikliği kaydet" and "Vazgeç", the other products closed',
+      /Düzenleniyor: FLATTENER 1Y\/2Y @ 25,00 bp/.test(editForm.note) && editForm.save === 'Değişikliği kaydet' && editForm.cancel && editForm.level === '25'
+      && editForm.fwdTab && JSON.stringify(editForm.strategies) === '["spread"]', editForm);
+    await shot(page, '04a-blotter-edit');
+    // the new level 3 bp from the spread's mid, above it: in a FLATTENER's favour (the replay's 1Y/2Y mid is a round 30 bp - a
+    // level at mid is "0,00", neither green nor red)
+    const spreadMid = (await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/ois', { strategy: 'spread', side: 'FLATTENER', short: '1Y', long: '2Y', level: '25' })).json.info.market;
+    const newLevel = Math.round(spreadMid) + (Math.round(spreadMid) + 3 === 25 ? 4 : 3);
+    const newText = '@ ' + newLevel + ',00 bp';
+    await page.fill('.entry .pad:not(.hidden) input[placeholder="örn. -125"]', String(newLevel));
+    const qNew = (await api(page, 'ayşe yilmaz', 'POST', '/api/blotter/quote/ois', { strategy: 'spread', side: 'FLATTENER', short: '1Y', long: '2Y', level: String(newLevel) })).json;
+    const bpOf = (t) => trNumber(String(t).replace('bp', '').replace('+', ''));
+    await page.waitForFunction((want) => {
+      const v = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"] .v');
+      return v && Math.abs(Number(v.textContent.replace('bp', '').replace('+', '').replace(/\./g, '').replace(',', '.').trim()) - want) < 0.006;
+    }, -qNew.info.cost_bp, { timeout: 15000 });
+    const vsTile = await page.evaluate(() => [...document.querySelectorAll('.entry .pad:not(.hidden) .quotebox .q')].slice(0, 3)
+      .map((q) => ({ l: q.querySelector('.l').textContent, v: q.querySelector('.v').textContent, cls: q.className, tip: q.title })));
+    const vsNew = -qNew.info.cost_bp;
+    check('the quote says "Mid\'e göre": the trade against mid, + better (green), − worse (red) - the cost turned round (bp, $, TL)',
+      vsTile.map((x) => x.l).join('|') === 'Mid\'e göre (bp)|Mid\'e göre ($)|Mid\'e göre (TL)' && Math.abs(bpOf(vsTile[0].v) - vsNew) < 0.006
+      && vsNew > 1 && /^\+/.test(vsTile[0].v) && /costpos/.test(vsTile[0].cls) && /costpos/.test(vsTile[1].cls)
+      && Math.abs(trNumber(vsTile[1].v.replace('+', '')) + qNew.info.cost_usd) < 1 && /mid'den iyi \(lehine\)/.test(vsTile[0].tip), [vsTile, qNew.info]);
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForFunction((x) => document.querySelector('.lists .panel:nth-child(2)').textContent.includes(x)
+      && document.querySelector('#blotter-entry-title').textContent === 'Yeni işlem', newText, { timeout: 15000 });
+    const spreadAfter = legsOf((await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades);
+    const shortLeg = spreadAfter.find((t) => t.role === 'short'), longLeg = spreadAfter.find((t) => t.role === 'long');
+    const editList = await page.evaluate((x) => {
+      const rows = [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')];
+      const head = [...rows[0].children].map((td) => td.textContent);
+      const cells = [...rows.find((tr) => tr.textContent.includes(x)).children];
+      const at = (name) => cells[head.indexOf(name)];
+      const cost = [...document.querySelectorAll('.lists .panel:nth-child(5) table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
+      return { head, timeCls: at('Saat').className, tip: at('Saat').title, vs: at('Mid\'e göre (bp)').textContent, vsCls: at('Mid\'e göre (bp)').className,
+        cost, save: document.querySelector('.entry .pad:not(.hidden) .row.actions .btn.primary').textContent,
+        cancel: document.querySelector('#ois-edit-cancel').classList.contains('hidden'), fwdTab: document.querySelector('.entry .tabs button:nth-child(1)').disabled };
+    }, newText);
+    const costHead = editList.cost[0] || [], twoYear = editList.cost.find((r) => r[0] === '2Y') || [];
+    const vsAfter = -spreadAfter[0].cost_bp;
+    check('... saved: the same legs (ids, entry time) at the new level, the list says it was edited (who, when, what it was), "Mid\'e göre" and the cost table follow',
+      JSON.stringify(spreadAfter.map((t) => [t.id, t.created_at])) === JSON.stringify(spreadBefore.map((t) => [t.id, t.created_at]))
+      && shortLeg.rate === spreadBefore.find((t) => t.role === 'short').rate && Math.abs(longLeg.rate - shortLeg.rate - newLevel / 1e4) < 1e-12
+      && spreadAfter.every((t) => t.edits.length === 1 && t.edits[0].by === 'ayşe yilmaz') && /edited/.test(editList.timeCls)
+      && /^Düzenlendi: \d\d:\d\d · Ayşe Yılmaz/.test(editList.tip) && /Önceki: İşlem FLATTENER 1Y\/2Y @ 25,00 bp/.test(editList.tip)
+      && editList.head.includes('Mid\'e göre (bp)') && editList.head.includes('Mid\'e göre ($)') && !editList.head.includes('Maliyet (bp)')
+      && Math.abs(bpOf(editList.vs) - vsAfter) < 0.006 && Math.abs(vsAfter - vsNew) < 0.006 && /^\+/.test(editList.vs) && /c-pos/.test(editList.vsCls)
+      && Math.abs(trNumber(twoYear[costHead.indexOf('Ort. receive')]) - longLeg.rate * 100) < 6e-5
+      && editList.save === 'İşlemi kaydet' && editList.cancel && !editList.fwdTab, { editList, spreadAfter, spreadBefore });
+    // "Mid'e göre" for a PAY and a RECEIVE 67 bp either side of mid (the desk: a PAY under mid is in its favour), in the quote and
+    // in the list: + better than mid (green), − worse (red)
+    const mid1y = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter/ois-market')).json.tenors.find((r) => r.tenor === '1Y').par;
+    await page.click('.entry .pad:not(.hidden) .seg button[data-v="outright"]');
+    const vsSeen = [];
+    for (const [side, bp, better] of [['PAY', -67, true], ['PAY', 67, false], ['RECEIVE', 67, true], ['RECEIVE', -67, false]]) {
+      const level = ((mid1y + bp / 1e4) * 100).toFixed(4).replace('.', ',');
+      const label = side + ' 1Y @ ' + level + '%';                  // (the quote's own label: its side and level)
+      await page.click(`.entry .pad:not(.hidden) .seg button[data-v="${side}"]`);
+      await page.fill('.entry .pad:not(.hidden) input[placeholder="örn. 37,25"]', level);
+      await page.waitForFunction((l) => document.querySelector('.entry .pad:not(.hidden) .quotebox').textContent.includes(l)
+        && !!document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"]'), label, { timeout: 15000 });
+      const t = await page.evaluate(() => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"]'); return [q.querySelector('.v').textContent, q.className]; });
+      const rows = await page.locator('.lists .panel:nth-child(2) table.grid tr').count();
+      await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+      await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr').length === n + 1, rows, { timeout: 15000 });
+      const row = await page.evaluate((l) => {
+        const trs = [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')];
+        const head = [...trs[0].children].map((td) => td.textContent);
+        const cells = [...trs.find((tr) => tr.textContent.includes(l)).children];
+        return [cells[head.indexOf('Mid\'e göre (bp)')].textContent, cells[head.indexOf('Mid\'e göre (bp)')].className];
+      }, label);
+      vsSeen.push({ side, better, tile: t, row });
+    }
+    check('"Mid\'e göre" on a PAY and a RECEIVE either side of mid: + (green) when better than mid, − (red) when worse - in the quote and in the list',
+      vsSeen.every((x) => Math.abs(Math.abs(bpOf(x.tile[0])) - 67) < 0.011 && Math.abs(bpOf(x.row[0]) - bpOf(x.tile[0])) < 0.006
+        && (x.better ? /^\+/.test(x.tile[0]) && /costpos/.test(x.tile[1]) && /^\+/.test(x.row[0]) && /c-pos/.test(x.row[1])
+          : /^-/.test(x.tile[0]) && /costneg/.test(x.tile[1]) && /^-/.test(x.row[0]) && /c-neg/.test(x.row[1]))), vsSeen);
     // a period instead of a day
     await page.click('.rangebox button:has-text("Son 30 gün")');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ranged, null, { timeout: 20000 });
@@ -677,7 +783,7 @@ async function clipAfter(page, action) {
     // live update: A deletes a trade while B watches the blotter
     await open(pageB, 'blotter');
     page.once('dialog', (d) => d.accept());
-    await page.click('.lists .panel:nth-child(1) table.grid td.act button');
+    await page.click('.lists .panel:nth-child(1) table.grid td.act button[data-act="del"]');
     await page.waitForSelector('.modal .mfoot .btn.primary');
     await page.click('.modal .mfoot .btn.primary');
     await pageB.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 2, null, { timeout: 15000 });

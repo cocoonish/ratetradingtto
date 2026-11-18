@@ -774,10 +774,23 @@ class Store(object):
             return [self.add_trade(trade_date, kind, p, user, package) for kind, p, package in items]
 
     def update_trade(self, trade_id: int, payload: Dict[str, Any], user: Optional[str]) -> bool:
-        with self._lock:
-            cur = self._db.execute("UPDATE trades SET payload=?, updated_by=?, updated_at=? WHERE id=? AND deleted=0",
-                                   (json.dumps(payload, ensure_ascii=False), user, now_iso(), trade_id))
-            return cur.rowcount > 0
+        return bool(self.update_trades([(trade_id, payload)], user))
+
+    def update_trades(self, items: Sequence[Tuple[int, Dict[str, Any]]], user: Optional[str]) -> List[int]:
+        """Trades changed in place - the legs of a package together - in one transaction: the same ids, new payloads,
+        ``updated_by`` / ``updated_at`` set (the day, who entered it and when stay).  All of them, or - when one of them
+        is not there (deleted meanwhile) - none: returns the ids changed (``[]`` then)."""
+        ts = now_iso()
+        try:
+            with self.transaction() as db:
+                for tid, payload in items:
+                    cur = db.execute("UPDATE trades SET payload=?, updated_by=?, updated_at=? WHERE id=? AND deleted=0",
+                                     (json.dumps(payload, ensure_ascii=False), user, ts, tid))
+                    if cur.rowcount != 1:
+                        raise LookupError(tid)              # (the transaction is rolled back)
+        except LookupError:
+            return []
+        return [tid for tid, _ in items]
 
     def delete_trade(self, trade_id: int, user: Optional[str]) -> List[int]:
         """Soft-delete a trade (and the other legs of its package, in the same transaction: a package is never left
@@ -802,14 +815,24 @@ class Store(object):
         else:
             rows = self._q("SELECT * FROM trades WHERE trade_date>=? AND trade_date<=? AND deleted=0 ORDER BY trade_date, id",
                            (trade_date, until))
-        out = []
-        for r in rows:
-            d = json.loads(r["payload"])
-            d.update({"id": r["id"], "kind": r["kind"], "package": r["package"], "trade_date": r["trade_date"],
-                      "created_by": r["created_by"], "created_at": r["created_at"],
-                      "updated_by": r["updated_by"], "updated_at": r["updated_at"]})
-            out.append(d)
-        return out
+        return [self._trade_row(r) for r in rows]
+
+    def trade_legs(self, trade_id: int) -> List[Dict[str, Any]]:
+        """A trade as it is kept: the legs of its package (oldest first) or the trade alone; ``[]`` when there is none."""
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM trades WHERE id=? AND deleted=0", (trade_id,)).fetchall()
+            if rows and rows[0]["package"]:
+                rows = self._db.execute("SELECT * FROM trades WHERE package=? AND deleted=0 ORDER BY id", (rows[0]["package"],)).fetchall()
+        return [self._trade_row(r) for r in rows]
+
+    @staticmethod
+    def _trade_row(r) -> Dict[str, Any]:
+        """A row of ``trades`` as the blotter reads it: the trade's record with the row's own columns."""
+        d = json.loads(r["payload"])
+        d.update({"id": r["id"], "kind": r["kind"], "package": r["package"], "trade_date": r["trade_date"],
+                  "created_by": r["created_by"], "created_at": r["created_at"],
+                  "updated_by": r["updated_by"], "updated_at": r["updated_at"]})
+        return d
 
     # ------------------------------------------------------------------ broker chat
     def add_broker_quotes(self, rows: List[Dict[str, Any]], user: Optional[str]) -> Tuple[List[int], int]:
@@ -894,13 +917,7 @@ class Store(object):
 
     def trade(self, trade_id: int) -> Optional[Dict[str, Any]]:
         rows = self._q("SELECT * FROM trades WHERE id=? AND deleted=0", (trade_id,))
-        if not rows:
-            return None
-        r = rows[0]
-        d = json.loads(r["payload"])
-        d.update({"id": r["id"], "kind": r["kind"], "package": r["package"], "trade_date": r["trade_date"],
-                  "created_by": r["created_by"], "created_at": r["created_at"]})
-        return d
+        return self._trade_row(rows[0]) if rows else None
 
     def trade_dates(self, limit: int = 120) -> List[Dict[str, Any]]:
         rows = self._q("SELECT trade_date, COUNT(*) AS n FROM trades WHERE deleted=0 GROUP BY trade_date "

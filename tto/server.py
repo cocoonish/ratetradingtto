@@ -705,6 +705,12 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().delete_trade, _user(request), int(request.path_params["trade_id"])))
 
     @handler
+    async def edit_trade(request: Request):
+        # "Düzenle": the trade priced again from the form as a new one would be, changed in place (the same ids)
+        return ok(await call(svc().edit_trade, _user(request), int(request.path_params["trade_id"]), await _body(request),
+                             _lang(request)))
+
+    @handler
     async def blotter_templates(request: Request):
         if request.method == "POST":
             data = await _body(request)
@@ -1243,6 +1249,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/quote/bond", quote_bond, methods=["POST"]),
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
+        Route("/api/blotter/trade/{trade_id:int}", edit_trade, methods=["POST"]),
         Route("/api/blotter/templates", blotter_templates, methods=["GET", "POST"]),
         Route("/api/blotter/templates/{tid:int}", blotter_template, methods=["POST", "DELETE"]),
         Route("/api/blotter/bulk/preview", bulk_preview, methods=["POST"]),

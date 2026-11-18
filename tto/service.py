@@ -3962,11 +3962,17 @@ class Service(object):
     def _ois_records(self, user, payload, lang=None) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[str]]:
         """An OIS trade as the form sends it, priced and checked: (its quote, the records of its legs, their package)."""
         book = self._book("tto")
+        p = self._ois_payload(payload, lang)
         try:
-            q = bl.ois_legs(self._ois_curve(user, book), self._ois_payload(payload, lang))
+            q = bl.ois_legs(self._ois_curve(user, book), p)
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         package = uuid.uuid4().hex[:12] if len(q["legs"]) > 1 else None
+        # the size as typed, read as ois_legs reads it - DV01 ($/bp), else a nominal (TL), else none (the sheet's DV01):
+        # what an edit of a spread / fly sized by DV01 starts from (its legs' nominals differ)
+        dv01, nominal = p.get("dv01"), p.get("nominal")
+        sized = ("dv01", dv01) if type(dv01) is float and dv01 > 0 else \
+            ("nominal", nominal) if type(nominal) is float and nominal > 0 else ("dv01", None)
         recs = []
         for lg in q["legs"]:
             rec = {"dir": lg["dir"], "tenor": lg["tenor"], "rate": lg["rate"], "dv01": lg["dv01"],
@@ -3976,6 +3982,7 @@ class Service(object):
                    "market": q["info"].get("market"), "note": str(payload.get("note") or "").strip()[:200]}
             if lg.get("mpc"):
                 rec["mpc"] = lg["mpc"]
+            rec["size_mode"], rec["size_typed"] = sized
             recs.append(rec)
         return q, recs, package
 
@@ -7859,6 +7866,78 @@ class Service(object):
         self.et.call_at(EngineThread.WRITE, self._sync_blotter)
         self.bump()
         return {"deleted": ids}
+
+    def edit_trade(self, user: str, trade_id: Any, payload: Any, lang: Optional[str] = None) -> Dict[str, Any]:
+        """"Düzenle": a trade of today's blotter changed after it was entered - anyone's, by anyone, as a trade is
+        deleted.  ``payload``: what the entry form sends for a new trade of its kind (with ``kind``: the trade's own -
+        another is refused); it is priced exactly as a new trade is, and the trade's rows are changed in place: the same
+        ids (whatever links to them stays linked - the chat's pairs), its day, who entered it and when.  Every leg keeps
+        what the edit changed (``edits``: when, by whom, the values before; the last ``bl.EDITS_KEPT``).  An OIS keeps
+        its strategy and its number of legs - a change of either is refused: delete it and enter it again.  Afterwards
+        the workbook's sheet, the cost tables and whatever reads the blotter follow, as after a trade added.  Returns the
+        trade as priced (an OIS's quote) with its ``ids`` and ``edited`` (false: nothing changed, nothing written)."""
+        user = self.require_user(user)
+        res = self.et.call_at(EngineThread.WRITE, self._edit_trade, user, trade_id, payload, lang)
+        self.bump()
+        return res
+
+    def _edit_trade(self, user, trade_id, payload, lang=None) -> Dict[str, Any]:
+        try:
+            legs = self.store.trade_legs(int(trade_id))
+        except (TypeError, ValueError):
+            legs = []
+        if not legs:
+            raise ServiceError("işlem bulunamadı", 404)
+        first = legs[0]
+        kind = first["kind"]
+        if first["trade_date"] != self.today_iso():       # (priced with today's market: a trade of today only)
+            raise ServiceError("yalnızca bugünün işlemleri düzenlenebilir: bu işlem %s günü girildi"
+                               % _dt.date.fromisoformat(first["trade_date"]).strftime("%d.%m.%Y"))
+        payload = dict(payload) if isinstance(payload, dict) else {}
+        asked = str(payload.pop("kind", None) or kind)
+        if asked != kind:
+            names = {"fwd": "FX Forward", "ois": "OIS", "bond": "Tahvil"}
+            raise ServiceError("düzenlemede ürün değişmez (%s → %s): strateji değişiyorsa silip yeniden girin"
+                               % (names.get(kind, kind), names.get(asked, asked)))
+        if kind == "fwd":
+            book = self._book("tto")
+            try:
+                recs = [bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload, lang))]
+            except bl.TradeError as exc:
+                raise ServiceError(str(exc))
+            out = dict(recs[0])
+        elif kind == "ois":
+            q, recs, _ = self._ois_records(user, payload, lang)
+            names = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "mpc": "MPC"}
+            strategy = str(first.get("strategy") or "outright")
+            if q["strategy"] != strategy:
+                raise ServiceError("düzenlemede strateji değişmez (%s → %s): strateji değişiyorsa silip yeniden girin"
+                                   % (names.get(strategy, strategy), names.get(q["strategy"], q["strategy"])))
+            if len(recs) != len(legs):
+                raise ServiceError("düzenlemede bacak sayısı değişmez (%d → %d%s): strateji değişiyorsa silip yeniden girin"
+                                   % (len(legs), len(recs), "; spot başlangıçlı FRA tek bacaktır" if strategy == "fra" else ""))
+            place = {lg.get("role"): i for i, lg in enumerate(legs)}
+            if len(place) == len(legs) and all(r["role"] in place for r in recs):
+                recs.sort(key=lambda r: place[r["role"]])            # each leg into its own row
+            out = q
+        else:
+            recs = [self._bond_record(user, payload, lang)]
+            out = dict(recs[0])
+        ids = [lg["id"] for lg in legs]
+        out.update({"id": ids[0], "ids": ids, "edited": False})
+        changes = [bl.edited(lg, rec) for lg, rec in zip(legs, recs)]
+        if not any(before for _, before in changes):
+            return out                                      # the same trade: nothing is written
+        at = now_iso()
+        items = []
+        for lg, (new, before) in zip(legs, changes):       # (every leg of a package: one edit, each with its own values)
+            new["edits"] = (list(lg.get("edits") or []) + [{"at": at, "by": user, "was": before}])[-bl.EDITS_KEPT:]
+            items.append((lg["id"], new))
+        if not self.store.update_trades(items, user):
+            raise ServiceError("işlem bulunamadı", 404)    # (deleted meanwhile)
+        self._sync_blotter()
+        out["edited"] = True
+        return out
 
     def trade_prefill(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         """"İşlem gir" on a price cell of a page (its table's ``"trade"`` hint, :mod:`tto.tradehint`):

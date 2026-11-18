@@ -891,6 +891,35 @@ def trade_entries(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda e: e["id"])
 
 
+# ---------------------------------------------------------------------------------------------- a trade edited
+#: the row's own columns of a stored trade (``Store.trades``): not part of its record
+ROW_KEYS = ("id", "kind", "package", "trade_date", "created_by", "created_at", "updated_by", "updated_at")
+#: how many of its edits a trade keeps with itself (``edits``: the last ones)
+EDITS_KEPT = 20
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Two values of a record that are one: equal, or two numbers apart by rounding alone (a rate sent back as the text
+    it was shown as, a leg priced again on the same curve)."""
+    if isinstance(a, bool) or isinstance(b, bool) or not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+        return a == b
+    return a == b or abs(a - b) <= 1e-12 * max(1.0, abs(a), abs(b))
+
+
+def edited(old: Dict[str, Any], rec: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """A stored trade (a row of ``Store.trades``) and its record priced again from the form after an edit: (the record
+    to keep - the new values over the old record, one that moved by rounding alone kept as it was -, what changed:
+    ``{key: the value before}``).  The trade's list of its edits (``edits``) stays as it was: the caller adds this one."""
+    new = {k: v for k, v in old.items() if k not in ROW_KEYS}
+    was: Dict[str, Any] = {}
+    for k, v in rec.items():
+        if k in ROW_KEYS or k == "edits" or _same(new.get(k), v):
+            continue
+        was[k] = new.get(k)
+        new[k] = v
+    return new, was
+
+
 def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:
     """O/N equivalent (360) of a forward trade's TRY rate, as column F of the blotter sheet computes it:
     ``360*((1+rate*days/365)^(1/days)-1)``."""

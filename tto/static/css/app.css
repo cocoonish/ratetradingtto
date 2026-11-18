@@ -583,6 +583,11 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); b
 /* an OIS against mid ("Mid'e göre"): + better than mid (in its favour) green, − worse red */
 .quote .q.costpos .v { color: var(--pos); }
 .quote .q.costneg .v { color: var(--neg); }
+/* "Düzenle": the form says which trade it is changing; the trade changed after it was entered is marked in its list */
+.entry .editnote { padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--note-bg); font-size: 12.5px; }
+.entry .editnote .muted { font-size: 11.5px; margin-top: 2px; }
+.entry .tabs button:disabled, .entry .seg button:disabled { opacity: .4; cursor: not-allowed; }
+table.grid td.edited::after { content: ' ✎'; color: var(--warn); font-size: 10px; }
 /* a forward's two amounts: the one typed is marked (✎), the other is worked out from the forward */
 .form .field.amt .typedmark { display: none; color: var(--accent-ink); font-weight: 650; }
 .form .field.amt.typed .typedmark { display: inline; }
