@@ -896,12 +896,25 @@ function pollStatus() {
   api.get('/api/status').then(applyStatus).catch(() => {});
 }
 
+/** "Eğri: PPK basamak" in the top bar while the user's TRY curves are read the PPK way (Ayarlar → Eğri interpolasyonu):
+ * their own setting - colleagues on Bootstrap see other numbers.  Nothing on Bootstrap (the header says nothing of it). */
+function paintInterp(info) {
+  const b = $('interp-badge');
+  if (!b) return;
+  b.classList.toggle('hidden', !info);
+  if (!info) return;
+  $('interp-text').textContent = info.label || 'Eğri: PPK basamak';
+  b.title = (info.tip || '') + '\nTıklayın: Ayarlar → Eğri interpolasyonu';
+  b.classList.toggle('warn', !info.on);
+}
+
 async function loadHeader() {
   // only when it changed since the strip was drawn (the same strip for everybody without inputs of their own)
   const res = await api.get('/api/header', state.headerGen ? { since: state.headerGen, as: state.headerAs } : null);
   state.headerAs = res.as;
   if (res.unchanged) return;
   state.headerGen = res.gen || 0;
+  paintInterp(res.interp);
   const box = $('kpis');
   const items = res.items || [];
   if (box.children.length !== items.length) {
@@ -1049,6 +1062,7 @@ function boot() {
     toast(on ? 'Değişen hücreler yeniden yanıp sönecek' : 'Yanıp sönme kapatıldı', '', 2200);
   });
   $('mode-badge').addEventListener('click', () => openStatus(state.status).catch(errorToast));
+  $('interp-badge').addEventListener('click', () => ctx.goto('settings', 'interp'));
   $('hesap-ind').addEventListener('click', () => openProgress());
   $('btn-lang').addEventListener('click', () => {
     setLang(settings.lang === 'en' ? 'tr' : 'en');

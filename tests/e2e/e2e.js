@@ -2334,6 +2334,25 @@ async function clipAfter(page, action) {
     await page.fill('#carry-a', '1');
     await page.click('#carry-save');
     await page.waitForFunction(() => /bootstrap/i.test(document.getElementById('carry-info').textContent), null, { timeout: 20000 });
+    // the TRY curves between quoted tenors, one's own setting: on PPK basamak the top bar says so and a forward between two
+    // quotes moves (Masa's broken date: the offshore curve's PPK node table), back on Bootstrap all as it was
+    const curveV = async (ref) => ((await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell || {}).v;
+    const brokenBoot = await curveV('MASA!F173');
+    check('settings: the curve between quoted tenors is Bootstrap (Murex) at first, no mark in the top bar',
+      await page.locator('#interp-mode button.on[data-mode="boot"]').count() === 1 && await page.locator('#interp-badge.hidden').count() === 1
+      && /Bootstrap \(Murex\)/.test(await page.textContent('#interp-status')), await page.textContent('#interp-info'));
+    await page.click('#interp-mode button[data-mode="ppk"]');
+    await page.waitForFunction(() => !document.getElementById('interp-badge').classList.contains('hidden'), null, { timeout: 30000 });
+    const brokenPpk = await curveV('MASA!F173');
+    check('... on PPK basamak the top bar says so, the setting is kept and a forward between quotes moves',
+      /Eğri: PPK basamak/.test(await page.textContent('#interp-badge')) && await page.locator('#interp-mode button.on[data-mode="ppk"]').count() === 1
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/interp')).json.mode === 'ppk'
+      && typeof brokenPpk === 'number' && typeof brokenBoot === 'number' && Math.abs(brokenPpk - brokenBoot) > 1e-3, [brokenBoot, brokenPpk]);
+    await shot(page, '15-settings-interp-ppk');
+    await page.click('#interp-mode button[data-mode="boot"]');
+    await page.waitForFunction(() => document.getElementById('interp-badge').classList.contains('hidden'), null, { timeout: 30000 });
+    check('... back on Bootstrap: the mark goes and the number is as it was', (await curveV('MASA!F173')) === brokenBoot
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/interp')).json.mode === 'boot', await curveV('MASA!F173'));
     // the holidays: a list per currency - TRY of both TRY workbooks, USD and EUR of the FX value dates -, one tab each;
     // the SIFMA holidays and the FOMC meetings beside them
     const holText = await page.inputValue('#holidays-text');

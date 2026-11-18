@@ -149,6 +149,11 @@ a { color: var(--accent-ink); }
 @keyframes led-blink { to { visibility: hidden; } }
 .badge.replay { border-color: rgba(250, 178, 25, .5); color: var(--warn); }
 .badge.replay .led { background: var(--warn); }
+/* "Eğri: PPK basamak": a user whose TRY curves are read the PPK way (their own setting - colleagues see Bootstrap numbers) */
+.badge.interp { border-color: rgba(57, 135, 229, .6); color: var(--accent, #3987e5); cursor: pointer; }
+.badge.interp .led { background: var(--accent, #3987e5); }
+.badge.interp.warn { border-color: rgba(250, 178, 25, .6); color: var(--warn); }
+.badge.interp.warn .led { background: var(--warn); }
 /* "Tablo bul": the tables of every page by name */
 .findbox { position: relative; display: inline-block; }
 .findbox input { width: 250px; }
