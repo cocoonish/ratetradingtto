@@ -478,6 +478,9 @@ REFERENCE = {
     "tto": [
         # holiday lists: TR (Motor → Tatiller), USD and EUR (Ayarlar · Toplantı takvimi)
         "Motor!A361:B523", "EK_TATIL!A5:E264",
+        # how the TRY curves are read between quoted tenors, each user's own (Ayarlar → Eğri interpolasyonu): every
+        # curve reader reads it
+        "EK_INTERP!B2",
         # Bloomberg: the order of the pricing sources, tickers, fields and suffixes, the bonds' sources
         "EK_KAYNAK!B4:E6", "OIS_MAIN!J9:J26", "Forward!AO6:AR26", "VIOP!L1:W1", "VIOP!C16:C35", "VIOP!C43:C52",
         "VIOP!C58:C69", "VIOP!M45:O45", "VIOP!S340", "MASA!C156:C163", "MASA!U155", "MASA!S171", "Motor!O89",

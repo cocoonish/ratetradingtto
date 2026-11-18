@@ -319,59 +319,94 @@ class Interp(object):
             tto_st = self.refresh()
             own_tto = self._own_tto(user, tto_st)
             if book.id == "tto":
-                eng.set_derived(user, own_tto[0] if own_tto else {}, self.svc._overlay(user, book))
+                eng.set_derived(user, own_tto[0] if own_tto is not None else {}, self.svc._overlay(user, book))
                 return
             vals: Dict[Tuple[int, int], Any] = {self.asw_mode_cell: ex.INTERP_PPK}
             asw_st = self._shared.get("asw")
             typed = self.svc._overlay(user, book)
             if own_tto is not None or (asw_st is not None and self._typed_bits(user, book) & asw_st["mask"]):
                 calc = eng.users.get(user) or eng.set_derived(user, vals, typed) or eng.set_user_inputs(user, typed)
-                vals.update(self._own_asw(user, calc, own_tto[1] if own_tto else tto_st["curves"]))
+                src = own_tto if own_tto is not None else (None, tto_st["curves"], ("desk", tto_st["version"]))
+                vals.update(self._own_asw(user, calc, src[1], src[2]))
             else:
                 self._own.pop((user, "asw"), None)
             eng.set_derived(user, vals, typed)
 
-    def _own_tto(self, user: str, tto_st: Dict[str, Any]) -> Optional[Tuple[Dict[Tuple[int, int], Any], Dict[str, Any]]]:
+    def _own_tto(self, user: str, tto_st: Dict[str, Any]) -> Optional[Tuple[Dict[Tuple[int, int], Any], Dict[str, Any], Tuple]]:
         """The user's own PPK cells of the TRY workbook when their own inputs touch what the desk's were made of: made
-        from their calculation with the curve on Bootstrap.  ``None``: the desk's stand for them."""
+        from their calculation with the curve on Bootstrap - with the curves and a tag of this making.  ``None``: the
+        desk's stand for them."""
         book = self.tto
         if not (self._typed_bits(user, book, (self.mode_cell,)) & tto_st["mask"]):
             self._own.pop((user, "tto"), None)
             return None
         eng = book.engine
         base = eng.users.get(user) or eng.set_user_inputs(user, self.svc._overlay(user, book))
-        view = eng.layer((user, BOOT_LAYER), base, {self.mode_cell: ex.INTERP_BOOT})
+        view = eng.layer((user, BOOT_LAYER), base, self.boot_cells(book))
         key = (eng.layout, view.serial, base.serial)
         st = self._own.get((user, "tto"))
         if st is not None and self._fresh(st, key, [(view, st["epoch"], st["mask"])]):
-            return st["values"], st["curves"]
+            return st["values"], st["curves"], st["tag"]
         t0 = time.perf_counter()
         vals, curves, mask = self._tto_values(view)
-        self._own[(user, "tto")] = {"key": key, "epoch": view.epoch, "mask": mask, "values": vals, "curves": curves}
+        tag = (user, view.serial, view.epoch, time.perf_counter())
+        self._own[(user, "tto")] = {"key": key, "epoch": view.epoch, "mask": mask, "values": vals, "curves": curves, "tag": tag}
         self.stats.update(own=self.stats["own"] + 1, own_ms=self.stats["own_ms"] + (time.perf_counter() - t0) * 1000.0)
-        return vals, curves
+        return vals, curves, tag
 
-    def _own_asw(self, user: str, base: Any, curves: Dict[str, Any]) -> Dict[Tuple[int, int], Any]:
-        """The user's own PPK cells of the ASW book: MPC ima as they have it, calibrated to their ASW book's quotes."""
+    def _own_asw(self, user: str, base: Any, curves: Dict[str, Any], tag: Tuple) -> Dict[Tuple[int, int], Any]:
+        """The user's own PPK cells of the ASW book: MPC ima as they have it (``curves``, made as ``tag`` says),
+        calibrated to their ASW book's quotes - made again when either changes."""
         eng = self.asw.engine
-        view = eng.layer((user, BOOT_LAYER), base, {self.asw_mode_cell: ex.INTERP_BOOT})
-        tto_view = self.boot_view(user, self.tto, sync=False)
-        vals, _ = self._asw_values(curves, tto_view, view)
+        view = eng.layer((user, BOOT_LAYER), base, self.boot_cells(self.asw))
+        key = (eng.layout, view.serial, base.serial, tag)
+        st = self._own.get((user, "asw"))
+        if st is not None and self._fresh(st, key, [(view, st["epoch"], st["mask"])]):
+            return st["values"]
+        vals, mask = self._asw_values(curves, self.boot_view(user, self.tto, sync=False), view)
+        self._own[(user, "asw")] = {"key": key, "epoch": view.epoch, "mask": mask, "values": vals}
         return vals
 
     # ------------------------------------------------------------------ calculations on a curve
+    def boot_cells(self, book: Any) -> Dict[Tuple[int, int], Any]:
+        """The input that puts a calculation of ``book`` on Bootstrap whatever its user's choice (a layer's own: a curve
+        of its own - the ASW history against the offshore curve - is bootstrapped from its own quotes)."""
+        if self.tto is not None and book is self.tto:
+            return {self.mode_cell: ex.INTERP_BOOT}
+        if self.asw is not None and book is self.asw:
+            return {self.asw_mode_cell: ex.INTERP_BOOT}
+        return {}
+
+    def boot_of(self, book: Any, calc: Any) -> Any:
+        """``calc`` with the curve on Bootstrap - what the "both ways" views (the FRA lists', Günlük İşlemler's and the
+        broken-date block's PPK columns, ``Service._try_curves``) read their Bootstrap side from: the true bootstrap,
+        whatever its user chose.  Itself when it reads the curve so (the desk's, a Bootstrap user's, a layer put on
+        Bootstrap); else a layer over it, kept with its user's (or its copy's) layers."""
+        cells = self.boot_cells(book)
+        if not cells or calc is None or calc is book.engine.shared:
+            return calc
+        (si, rc), = cells.keys()
+        if calc.get(si, *divmod(rc, COLS)) != ex.INTERP_PPK:
+            return calc
+        eng = book.engine
+        owner = next((u for u, c in eng.users.items() if c is calc), None)
+        if owner is not None:
+            return eng.layer((owner, BOOT_LAYER), calc, cells)
+        key = next((k for k, c in eng.layers.items() if c is calc), None)
+        if isinstance(key, tuple) and key and key[-1] != BOOT_LAYER:
+            return eng.layer(key + (BOOT_LAYER,), calc, cells)        # (a copy's: dropped with it)
+        return calc
+
     def boot_view(self, user: Optional[str], book: Any, sync: bool = True) -> Any:
         """The user's calculation of ``book`` with the curve on Bootstrap whatever their choice - their own inputs
         otherwise as they are (a layer over it on PPK).  Nobody: the desk's."""
         if not user:
             return book.engine.shared
         calc = self.svc._calc(user, book) if sync else (book.engine.users.get(user) or book.engine.shared)
-        if self.tto is None or self.mode(user) != PPK or book.id not in ("tto", "asw") or calc is book.engine.shared:
+        cells = self.boot_cells(book)
+        if not cells or self.mode(user) != PPK or calc is book.engine.shared:
             return calc
-        cell = self.mode_cell if book.id == "tto" else getattr(self, "asw_mode_cell", None)
-        if cell is None:
-            return calc
-        return book.engine.layer((user, BOOT_LAYER), calc, {cell: ex.INTERP_BOOT})
+        return book.engine.layer((user, BOOT_LAYER), calc, cells)
 
     def boot_overlay(self, user: Optional[str], book: Any) -> Dict[Tuple[int, int], Any]:
         """The user's own inputs of ``book`` without their curve choice (what a calculation of its own made over the

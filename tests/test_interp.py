@@ -61,6 +61,31 @@ def users(module_service):
     return names
 
 
+# ================================================================================================== the engine
+def test_a_lazy_if_keeps_the_other_branch_s_cells_out_of_a_value_s_mask_and_worked_out_inputs_go_on_top():
+    """What the switch rests on: IF reads only the branch it takes (a cell on the other branch never enters the value's
+    mask: writing it recomputes nothing), an uncounted shared write is no change of the desk's inputs, and a user's
+    worked-out inputs (``Engine.derived``) stay on top of whatever they type - and go when set to nothing."""
+    from helpers import mini_engine
+    eng = mini_engine({"A1": 0, "A2": 5, "A3": 7, "B1": "=IF(A1=1,A3,A2*2)", "C1": "=B1+1"})
+    a1, a2, a3 = (eng.model.cell_ref("S!%s" % x) for x in ("A1", "A2", "A3"))
+    eng.declare_inputs([a1, a2])
+    eng.declare_inputs([a3], group="ppk")
+    shared = eng.shared
+    assert shared.value("S!C1") == 11.0
+    ev, inputs = shared.evals, eng.input_changes
+    assert eng.set_inputs({a3: 70.0}, counted=False) and shared.evals == ev and eng.input_changes == inputs
+    assert shared.value("S!C1") == 11.0 and shared.evals == ev           # (nothing read A3: nothing to compute)
+    ali = eng.set_user_inputs("ali", {a1: 1.0})
+    assert ali.value("S!C1") == 71.0
+    eng.set_derived("ali", {a3: 8.0}, {a1: 1.0})                           # (his own, worked out for him)
+    assert ali.value("S!C1") == 9.0 and shared.value("S!C1") == 11.0
+    ali = eng.set_user_inputs("ali", {a1: 1.0, a2: 1.0})                  # (he types more: the worked-out value stays)
+    assert ali.value("S!C1") == 9.0 and eng.user("ali").overlay[a3] == 8.0
+    assert eng.set_derived("ali", {}, {a1: 1.0}).value("S!C1") == 71.0
+    assert eng.set_derived("veli", {}, {}) is None and "veli" not in eng.users
+
+
 # ================================================================================================== the workbook
 def test_the_switch_is_in_both_workbooks_and_motor_and_the_offshore_names_follow_it(module_service):
     svc = module_service
@@ -185,9 +210,24 @@ def _fra_row(svc, calc, m1, m2):
     raise AssertionError("no %dx%d in the FRA list" % (m1, m2))
 
 
-def test_the_fra_list_s_market_is_its_own_ppk_column_on_ppk(module_service, users):
-    """OIS · PPK's FRA list: on PPK the market of 12x15 is the list's own "PPK basamak" column (the same quarterly calendar
-    and day count); on Bootstrap they differ (12x15 lies between two quotes) - and the page says which the market is."""
+def _panel_with(page, row, col):
+    """The data of the page's table that holds sheet row ``row`` and column ``col``."""
+    for p in page["panels"]:
+        d = p.get("data") or {}
+        if col in (d.get("c") or []) and row in (d.get("r") or []):
+            return d
+    raise AssertionError("no table with %s%s on the page" % (col, row))
+
+
+def _at(d, row, col):
+    return d["rows"][d["r"].index(row)][d["c"].index(col)]
+
+
+def test_both_ways_views_read_the_true_bootstrap_whatever_the_setting(module_service, users):
+    """OIS · PPK's FRA list: on PPK the market of 12x15 is the PPK curve's (the same quarterly calendar and day count) and
+    the second view beside it is the true Bootstrap (Murex) - the Bootstrap user's market -, the difference PPK −
+    Bootstrap as the Bootstrap user sees it (12x15 lies between two quotes); MASA's broken-date block the same way. The
+    curves those views (and the interpolation chart) are made of read the true bootstrap for a PPK user too."""
     svc = module_service
     ali, banu = _calc(svc, users["ppk"]), _calc(svc, users["boot"])
     cv = _curves(svc)
@@ -195,16 +235,29 @@ def test_the_fra_list_s_market_is_its_own_ppk_column_on_ppk(module_service, user
     r = _fra_row(svc, ali, 12, 15)
     assert _get(svc, ali, "OIS_MAIN!B%d" % r) == pytest.approx(want, abs=1e-12)
     assert abs(_get(svc, banu, "OIS_MAIN!B%d" % r) - want) > 1e-5
-    page = svc.view(users["ppk"], "ois")
-    for p in page["panels"]:
-        d = p.get("data") or {}
-        if "PPK basamak" in (d.get("c") or []) and r in (d.get("r") or []):
-            row = d["rows"][d["r"].index(r)]
-            assert row[d["c"].index("PPK basamak")]["v"] == pytest.approx(row[d["c"].index("B")]["v"], abs=1e-12)
-            assert "PPK basamak" in d["rows"][d["r"].index(svc.FRA_ALL_HEAD)][d["c"].index("B")].get("tip", "")
-            break
-    else:
-        raise AssertionError("the FRA list's PPK column is not on the page")
+    # the cached curves of a PPK user's calculation: the Bootstrap side is the true bootstrap, the Bootstrap user's
+    b = svc.books["tto"]
+    mine, hers = svc.et.call(svc._try_curves, b, ali), svc.et.call(svc._try_curves, b, banu)
+    for days in (100.0, 455.0, 1000.0):
+        assert mine["boot"].ln(days) == pytest.approx(hers["boot"].ln(days), abs=1e-15)
+        assert mine["off_boot"].ln(days) == pytest.approx(hers["off_boot"].ln(days), abs=1e-15)
+    pa, pb = svc.view(users["ppk"], "ois"), svc.view(users["boot"], "ois")
+    da, db = _panel_with(pa, r, "Bootstrap"), _panel_with(pb, r, "PPK basamak")
+    assert "PPK basamak" not in da["c"] and "Bootstrap" not in db["c"]
+    assert _at(da, r, "Bootstrap")["v"] == pytest.approx(_at(db, r, "B")["v"], abs=1e-12)          # Bootstrap side: hers
+    assert _at(da, r, "B")["v"] == pytest.approx(_at(db, r, "PPK basamak")["v"], abs=1e-12)        # PPK side: his market
+    assert _at(da, r, "PPK fark")["v"] == pytest.approx(_at(db, r, "PPK fark")["v"], abs=1e-8)
+    assert abs(_at(da, r, "PPK fark")["v"]) > 1.0                                                  # (bp: the true difference)
+    head = svc.FRA_ALL_HEAD
+    assert "PPK basamak" in _at(da, head, "B").get("tip", "") and _at(da, head, "Bootstrap")["t"] == "Bootstrap (Murex)"
+    assert _at(db, head, "PPK basamak")["t"] == "PPK basamak"
+    # MASA's broken-date block: the forward between quotes, Bootstrap beside his PPK market
+    ma, mb = svc.view(users["ppk"], "masa"), svc.view(users["boot"], "masa")
+    row = pk.BROKEN_FWD
+    ka, kb = _panel_with(ma, row, "Bootstrap"), _panel_with(mb, row, "PPK basamak")
+    assert _at(ka, row, "Bootstrap")["v"] == pytest.approx(_at(kb, row, "F")["v"], rel=1e-12)
+    assert _at(ka, row, "F")["v"] == pytest.approx(_at(kb, row, "PPK basamak")["v"], rel=1e-5)     # (his market: PPK's knots)
+    assert abs(_at(ka, row, "F")["v"] - _at(kb, row, "F")["v"]) > 1e-3
 
 
 def _spot(svc, calc):
@@ -290,6 +343,17 @@ def test_a_ppk_user_s_own_quote_is_repriced_by_their_own_ppk_curve(module_servic
     dfs = [_get(svc, calc, "Motor!G%d" % r) for r in range(91, 99)]
     acc = [days[0] / 365.0] + [(y - x) / 365.0 for x, y in zip(days, days[1:])]
     assert (1.0 - dfs[-1]) / sum(a * d for a, d in zip(acc, dfs)) == pytest.approx(mine, abs=1e-10)
+    # in the ASW book too: the choice mirrored and PPK cells of their own (their MPC ima, the book's quotes), kept while
+    # nothing they were made of changes
+    asw = svc.books["asw"]
+    mine_asw = _calc(svc, can, "asw")
+    own = dict(asw.engine.derived.get(can) or {})
+    assert own.get(svc.interp.asw_mode_cell) == ex.INTERP_PPK and len(own) == 1 + len(svc.interp.asw_cells)
+    assert _get(svc, mine_asw, "EK_INTERP!B3", "asw") == 1.0
+    made = svc.interp.stats["own"]
+    _calc(svc, can, "asw")
+    _calc(svc, can)
+    assert svc.interp.stats["own"] == made and asw.engine.derived.get(can) == own
     # the other PPK user's 2Y is still the desk's quote
     ali = _calc(svc, users["ppk"])
     dfs = [_get(svc, ali, "Motor!G%d" % r) for r in range(91, 99)]
