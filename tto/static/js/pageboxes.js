@@ -19,7 +19,7 @@ import { SignalChart, signalRows, SIGNAL_HEAD, isNum } from './pages/quantbase.j
 import { CONTRACT_HEAD, contractRows, levelsTitle, drawLevels } from './pages/quantviop.js';
 import { FX_SUMMARY_HEAD, fxSummaryRows } from './pages/quantviews.js';
 import { wirpHead, wirpRows } from './pages/quantpath.js';
-import { boardTable } from './pages/broker.js';
+import { boardTable, whoHidden } from './pages/broker.js';
 import { OP, KIND_TEXT, changeText, spark, band, savedDays } from './pages/watch.js';
 
 const mark = (on) => (on ? '✓ ' : '    ');
@@ -304,7 +304,7 @@ class BrokerBoardBox extends PageBox {
   }
 
   paint(d) {
-    const t = boardTable(d, { product: this.item.product || 'all', keys: this.item.keys, brokers: !!this.item.brokers });
+    const t = boardTable(d, { product: this.item.product || 'all', keys: this.item.keys, brokers: !!this.item.brokers, everyHouse: whoHidden() });
     if (!t.lines.length) {
       this.empty(d.board.length ? 'Seçilen ürün / enstrümanlarda kota yok' : 'Henüz kota yok – chat Broker Chat sayfasında yapıştırılır');
     } else {

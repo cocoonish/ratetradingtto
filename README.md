@@ -1063,7 +1063,8 @@ enstrüman içermeyen satır ("selam") metin olarak saklanır; "Metin satırlar�
   ("Tullett · 2 dk"; aynı seviyede iki broker'dan son söyleyen). Sonra söylenen daha kötü bir kota başka bir broker'ın
   daha iyi kotasını artık örtmez. Broker, satırın kaynağıdır (kurum; yoksa gönderen). Bir enstrümanın iki ya da daha çok
   broker'ı ya da bayat kotası varsa altında her broker'ın kendi satırı vardır (`↳ ICAP`: bid, ask, yaşları; başlıktaki
-  "Brokerlar" kutusuyla gizlenir).
+  "Brokerlar" kutusuyla gizlenir). "Bid · kimde" / "Ask · kimde" sütunlarını gizleyen kullanıcıda tek broker'ın da kendi
+  satırı gelir (broker'ın adı tahtada başka hiçbir yerde kalmaz); sütunlar yeniden gösterilince o satırlar kalkar.
   * **Bayat kota en iyi sayılmaz.** Bayat sınırından (varsayılan **10 dakika**; tahtanın başlığındaki "Bayat … dk",
     masa için ortak, 1 – 1440) eski kota broker satırında soluk ve yaşıyla ("bayat · 42 dk") durur, en iyi fiyat olmaz;
     o tarafın yalnız bayat kotası varsa en iyi hücre boş, yanında "bayat" yazar (üzerine gelince kimin, hangi seviye, ne

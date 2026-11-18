@@ -946,6 +946,23 @@ async function clipAfter(page, action) {
       await shot(page, '04d-broker-best');
     }
     await api(page, 'ayşe yilmaz', 'POST', '/api/broker/settings', { stale_minutes: 10 });
+    // a user who hides the "kimde" columns has the name of an instrument's single broker nowhere else: "Brokerlar" gives
+    // that broker its own row too (at once); the columns shown again, the board is as it was
+    const houseRows = () => page.evaluate(() => [...document.querySelectorAll('#broker-board-panel table.grid tr')]
+      .filter((tr) => tr.children[1] && /^↳ /.test(tr.children[1].textContent)).length);
+    const boardCols = (show) => page.evaluate((sh) => document.querySelector('#broker-board-panel table.grid').__grid.columns
+      .change(['Bid · kimde', 'Ask · kimde'], sh), show);
+    const housesBefore = await houseRows();
+    const singles = (await brokerBoard()).filter((r, i, all) => !/^↳ /.test(r[1]) && !/^↳ /.test((all[i + 1] || [])[1] || '') && / · /.test(r[4] || r[6] || '')).length;
+    await boardCols(false);
+    const housesGrew = await page.waitForFunction((n) => [...document.querySelectorAll('#broker-board-panel table.grid tr')]
+      .filter((tr) => tr.children[1] && /^↳ /.test(tr.children[1].textContent)).length === n, housesBefore + singles, { timeout: 15000 }).then(() => true, () => false);
+    const housesHidden = await houseRows();
+    await boardCols(true);
+    const housesBack = await page.waitForFunction((n) => [...document.querySelectorAll('#broker-board-panel table.grid tr')]
+      .filter((tr) => tr.children[1] && /^↳ /.test(tr.children[1].textContent)).length === n, housesBefore, { timeout: 15000 }).then(() => true, () => false);
+    check('"kimde" columns hidden: "Brokerlar" gives each single broker its own row too; shown again, the board is as it was',
+      singles > 0 && housesGrew && housesBack, { housesBefore, singles, housesHidden, after: await houseRows() });
 
     // ------------------------------------------------------------------ blotter: other pairs, swap points, meeting-dated OIS
     console.log('blotter: pairs, swap points, MPC');

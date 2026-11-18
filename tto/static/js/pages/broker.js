@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, debounce, modal } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
-import { toolsOf } from '../columns.js';
+import { toolsOf, hiddenKeys, onHiddenChange } from '../columns.js';
 import { num, isoToTr } from '../format.js';
 import { boxTools } from '../pagebox.js';
 
@@ -326,12 +326,23 @@ const LOG_SORT = {
   implied: (q) => (q.implied ? (typeof q.implied.bid === 'number' ? q.implied.bid : (typeof q.implied.ask === 'number' ? q.implied.ask : q.implied.price)) : null),
 };
 
+/** The board's table (the page's and its boxes': one choice of columns) and the columns that say whose a best price is. */
+export const BOARD_TABLE = 'broker/board';
+const WHO_COLUMNS = ['Bid · kimde', 'Ask · kimde'];
+
+/** True while this user keeps a "kimde" column of the board hidden: a single broker's name is then nowhere else on it. */
+export function whoHidden() {
+  const hid = hiddenKeys(BOARD_TABLE);
+  return WHO_COLUMNS.some((k) => hid.has(k));
+}
+
 /**
  * The board as a table (the page's, and its box's on a launchpad, in the side drawer, in a window of its own): the
  * brokers' best fresh bid and offer, each with its house and age - every house's own quotes under its instrument -, our
  * own quote, the last trade, the model and the differences, what was said last, the implied rate.  ``opts``: {product:
- * 'all' or one, keys: the instruments kept (none: all), brokers: the houses' rows, acts(r): the row's own buttons (the
- * page's)}.  ``same``: a text that stays the same while the rows and their best prices do.
+ * 'all' or one, keys: the instruments kept (none: all), brokers: the houses' rows, everyHouse: a row for a single house
+ * too (while the "kimde" columns are hidden), acts(r): the row's own buttons (the page's)}.  ``same``: a text that stays
+ * the same while the rows and their best prices do.
  */
 export function boardTable(d, opts = {}) {
   const when = (stamp) => {
@@ -372,8 +383,10 @@ export function boardTable(d, opts = {}) {
     ? { t: (typeof r.our_bid === 'number' ? level(r.our_bid, r.unit) : '') + ' / ' + (typeof r.our_ask === 'number' ? level(r.our_ask, r.unit) : ''),
       k: 's', cls: 'ours' + (r.our_stale ? ' stale' : ''), tip: 'Bizim son kotamız · ' + when(r.our_time)
         + (live && typeof r.our_age === 'number' ? ' (' + ageText(r.our_age) + ' önce' + (r.our_stale ? ', bayat' : '') + ')' : '') } : { t: '', k: '' });
-  // every house's own quotes under its instrument: when there are two or more, or one is stale (what the best cells leave out)
-  const houses = (r) => (opts.brokers && ((r.brokers || []).length > 1 || (r.brokers || []).some((b) => b.bid_stale || b.ask_stale)) ? r.brokers : []);
+  // every house's own quotes under its instrument: when there are two or more, or one is stale (what the best cells leave
+  // out) - and a single one too while the "kimde" columns are hidden (its name would be nowhere on the board)
+  const houses = (r) => (opts.brokers && ((r.brokers || []).length > 1 || (opts.everyHouse && (r.brokers || []).length)
+    || (r.brokers || []).some((b) => b.bid_stale || b.ask_stale)) ? r.brokers : []);
   const houseSide = (b, r, side) => (typeof b[side] === 'number' ? { t: level(b[side], r.unit), v: b[side], k: 'n', cls: b[side + '_stale'] ? 'stale' : '',
     tip: b.by + ' ' + name(side) + ' · ' + when(b[side + '_time']) + (b[side + '_stale'] ? ' – bayat, en iyi sayılmaz' : '') } : { t: '', k: '' });
   const houseAge = (b, side) => (typeof b[side] === 'number' ? { t: (b[side + '_stale'] ? 'bayat · ' : '') + age(b[side + '_age'], b[side + '_time']), k: 's',
@@ -487,6 +500,12 @@ export class BrokerPage {
     this.logSort = (() => { try { return JSON.parse(localStorage.getItem('tto.broker.sort') || 'null'); } catch (e) { return null; } })();
     this.pasteParty = pref('tto.broker.party', 'broker');      // whose the lines of a paste are when no name says it
     this.showBrokers = pref('tto.broker.brokers', '1') !== '0'; // board: every house's own quotes under its instrument
+    // a "kimde" column hidden or shown again: the board's houses' rows follow at once (a single house's row comes and goes)
+    onHiddenChange((name) => {
+      if (this.dead) return false;
+      if (name === BOARD_TABLE && this.data && this.board) this.fill();
+      return true;
+    });
     this.seq = 0;
     this.parsed = null;
     this.preview = debounce(() => this.doPreview(), 240);
@@ -650,7 +669,8 @@ export class BrokerPage {
       title: 'Tahtadaki bütün kotaları şu andan itibaren sıfırla – kayıttaki satırlar silinmez; sonra söylenenler tahtaya yeniden gelir' }, 'Tahtayı sıfırla');
     resetBtn.addEventListener('click', () => this.reset(null));
     this.resetInfo = h('span', { class: 'muted resetinfo', id: 'broker-reset-info' });
-    // every house's own quotes under its instrument (when there are two or more, or one is stale)
+    // every house's own quotes under its instrument (when there are two or more, or one is stale; a single one too while
+    // the "kimde" columns are hidden)
     const housesBox = h('input', { type: 'checkbox', id: 'broker-brokers' });
     housesBox.checked = this.showBrokers;
     housesBox.addEventListener('change', () => {
@@ -663,7 +683,8 @@ export class BrokerPage {
       title: 'Bu kadar dakikadan eski broker kotası en iyi fiyat sayılmaz: broker satırında soluk ve yaşıyla durur (masa için ortak)' });
     this.staleInp.addEventListener('change', () => this.setStale(this.staleInp.value));
     this.board = this.panel('board', 'Tahta · en iyi fiyat', [seg,
-      h('label', { class: 'check', title: 'Bir enstrümanın birden çok broker\'ı ya da bayat kotası varsa altında her broker\'ın kendi satırı' }, housesBox, ' Brokerlar'),
+      h('label', { class: 'check', title: 'Bir enstrümanın birden çok broker\'ı ya da bayat kotası varsa altında her broker\'ın kendi satırı; '
+        + '"Bid · kimde" / "Ask · kimde" sütunlarını gizlediyseniz tek broker\'ın da' }, housesBox, ' Brokerlar'),
       h('label', { class: 'check stalebox', title: this.staleInp.title }, 'Bayat', this.staleInp, 'dk'), this.resetInfo, resetBtn],
       'Bid / ask: brokerların taze kotalarının en iyisi (en yüksek bid, en düşük offer; getiride tersi), yanında hangi broker\'da ve kaç dakika önce '
       + 'söylendiği. Bayat sınırından eski kota en iyi sayılmaz: broker satırında soluk ve yaşıyla durur. Geri çekilen, işlemle alınan / verilen '
@@ -762,7 +783,7 @@ export class BrokerPage {
     // ---- board: the brokers' best fresh bid and offer, each with its house and age - every house's own quotes under it
     for (const b of this.productSeg.children) b.classList.toggle('on', b.dataset.v === this.product);
     if (document.activeElement !== this.staleInp) this.staleInp.value = String(d.stale_minutes || 10);
-    const t = boardTable(d, { product: this.product, brokers: this.showBrokers, acts: (r) => [
+    const t = boardTable(d, { product: this.product, brokers: this.showBrokers, everyHouse: whoHidden(), acts: (r) => [
       { t: '', k: '', cls: 'act', act: { label: '≡', title: r.label + ' için söylenenlerin hepsini aşağıda göster', fn: () => this.showOnly(r) } },
       { t: '', k: '', cls: 'act', act: { label: '⟲', title: r.label + ' kotasını sıfırla (şu ana kadar söylenenler tahtadan kalkar)', fn: () => this.reset(r) } }] });
     this.setGrid('board', this.board, t.header, t.lines, d.board.length ? t.shown + ' enstrüman' : '',

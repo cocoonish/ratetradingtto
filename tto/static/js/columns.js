@@ -10,6 +10,17 @@ export const NO_COLUMNS = new Set();
 const kept = new Map();           // table -> Set of the keys of the columns this user hid
 const orders = new Map();         // table -> the keys of its columns in the order this user put them
 const saving = new Map();         // table -> its last save: the saves of one table go one after the other
+const listeners = new Set();      // fn(table) after this user hides or shows a column (false: no longer)
+
+/** The keys of the columns of a table this user hid (a page that writes elsewhere what a hidden column held reads it). */
+export function hiddenKeys(name) {
+  return kept.get(name) || NO_COLUMNS;
+}
+
+/** ``fn(name)`` each time this user hides or shows a column of a table; it returns false when it wants no more. */
+export function onHiddenChange(fn) {
+  listeners.add(fn);
+}
 
 /** The columns this user hid and the orders they chose (on signing in, before the first table is drawn); a table they
  *  never chose for hides what it hides by default (the server's ``defaults``: DİBS RV's own FX swap columns). */
@@ -39,6 +50,9 @@ function post(name, body) {
 function save(name, keys) {
   if (keys.size) kept.set(name, keys); else kept.delete(name);
   post(name, { table: name, hidden: [...keys] });
+  for (const fn of [...listeners]) {
+    try { if (fn(name) === false) listeners.delete(fn); } catch (e) { listeners.delete(fn); }
+  }
 }
 
 function saveOrder(name, keys) {
