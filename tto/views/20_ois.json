@@ -431,6 +431,15 @@
    "hidden": false
   },
   {
+   "id": "interp",
+   "type": "chart",
+   "ppk": "interp",
+   "wide": true,
+   "full": true,
+   "title": "İnterpolasyon · Bootstrap (Murex) ve PPK basamak",
+   "note": "Düz çizgiler O/N forward (bir günlük basit faiz; OIS'te ACT/365, offshore'da ACT/360), kesik çizgiler 3 aylık FRA şeridi (0x3, 3x6 …; her FRA kendi çeyreğinde). Bootstrap (Murex) - bugünkü eğri, Murex'in MTM'i: Motor'un düğümleri (0, 1, 2, 3, 6 … 120 ay) arasında ln DF günlere göre doğrusal, O/N iki düğüm arasında sabit, her düğümde basamaklı. PPK basamak: PPK çözücüsünün ima patikası (MPC ima), iki kotalı vade arasında sabit bir kaydırmayla - TLREF toplantılar arasında sabit, toplantının ertesi iş günü (alttaki çentikler) ve kotalı vadede basamaklanır. İki eğri de aynı kotaları (1M … 10Y; 15M ve 21M kota değil) aynen fiyatlar: kotalı vadede (dikey kesik çizgiler) iskonto faktörleri aynı, iki ucu kotalı vade olan FRA (0x3 … 9x12, 12x18) iki yolda da aynı. Ayrıldıkları yer iki kotanın arası: bootstrap aralığı aylara göre doğrusal par faizlerle, PPK basamak toplantı takvimiyle böler; aralığın bir yanında eksik verdiğini öbür yanında geri alır - kayıtlı günde (03.11.2026) 12x15 −70,7 bp, 15x18 +78,8 bp, 12x18 aynı. Tablo: FRA listelerinin Piyasa'sı ve PPK basamak sütunu, farkı bp. Offshore: Forward'daki offshore eğri (FX swap ≤9M + XCCY) ile aynı MPC ima'nın offshore kotalara sabit bir bazla oturan eğrisi; son offshore kotadan sonrası iki eğride de uzatmadır. Fareyle bir güne gelince o günün O/N'leri, FRA'ları ve farkları; kota ya da toplantı gününde adı."
+  },
+  {
    "id": "chart2",
    "type": "chart",
    "chart": 2
@@ -596,6 +605,7 @@
     "B9",
     "B10",
     "B11",
+    "interp",
     "chart2",
     "chart5"
    ]

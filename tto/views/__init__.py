@@ -27,6 +27,9 @@
   "Z", "P"]``: by letter, one not named is not shown) and take tooltips from the workbook (``"tips": {"W": "AA"}``: the
   text in column AA of a row is the tooltip of the row's cell in column W); ``"ranked": true`` a ranking (the best k trades, the cheapest bonds): a
   launchpad keeps a choice of its rows by their number - the row is a place, whatever fills it today
+* ``{"type": "chart", "ppk": "interp"}``  a chart of the dashboard's own: OIS · PPK's interpolation chart, Bootstrap and
+  PPK basamak (``tto/interpchart.py``: every horizon and curve sent at once, the page's selectors pick one);
+  ``"full": true`` (any panel): it takes the page's whole width
 * ``"copyable": true`` (a table)  a calculator a user may open again as temporary copies ("Geçici kopya aç" in its
   menu; ``tto/copies.py``): "… · kopya 2" right under it, each with inputs of its own, computed for that copy only.  Only
   for a visible table of a sheet's range whose inputs are all personal (``"scope": "user"``) - a table with a shared input

@@ -206,6 +206,16 @@ function smooth(p) {
   return s;
 }
 
+/** A step line through the points: each value holds up to the next point's x, where the line steps to that value. */
+const stepLine = (p) => 'M' + f1(p[0][0]) + ',' + f1(p[0][1]) + p.slice(1).map((q) => ' H' + f1(q[0]) + ' V' + f1(q[1])).join('');
+
+/** The point a step series holds at `x`: its last point at or before it (-1 before the first, after the last, in a gap). */
+function holding(s, x) {
+  let j = -1;
+  for (let i = 0; i < s.x.length; i++) if (isNum(s.x[i]) && s.x[i] <= x) j = i;
+  return j >= 0 && isNum(s.data[j]) && x <= s.x[s.x.length - 1] ? j : -1;
+}
+
 /** Bar from the baseline `y0` to the value end `y1`: square at the baseline, rounded at the value end if asked. */
 function barPath(x, w, y0, y1, round) {
   const r = round ? Math.min(4, w / 2, Math.abs(y1 - y0)) : 0;
@@ -621,7 +631,11 @@ export class Chart {
 
   /**
    * XY (scatter) chart: every series brings its own x values, both axes are value axes (x may show dates).
-   * Series are drawn in data order as lines, markers or both; points may carry a label read from the sheet.
+   * Series are drawn in data order as lines, markers or both; points may carry a label read from the sheet.  A series
+   * with `step` is a step line (each value holds up to the next point; `tips`: what each point is, in the tooltip),
+   * and a chart of steps is read at the pointer's x - every series' value there, the differences `tipdiff` names
+   * ([{a, b, name, scale, digits, unit}]: series a − series b) and the chart's own marks `vmarks` of that x
+   * ([{x, t: a label above the plot, k: 'tick' - a short mark on the axis, not a line over the plot -, color, tip}]).
    */
   renderScatter() {
     const d = this.data;
@@ -645,6 +659,8 @@ export class Chart {
     this.width = W;
     const xa = d.xaxis || {};
     const dates = xa.type === 'date';
+    const steps = series.some((s) => s.step);
+    const marks = (Array.isArray(d.vmarks) ? d.vmarks : []).filter((m) => m && isNum(m.x)).sort((a, b) => a.x - b.x);
 
     let xlo = Infinity, xhi = -Infinity, ylo = Infinity, yhi = -Infinity;
     for (const s of series) {
@@ -657,7 +673,7 @@ export class Chart {
         if (y > yhi) yhi = y;
       });
     }
-    const top = 10, right = 14;
+    const top = marks.some((m) => m.t) ? 22 : 10, right = 14;
     const bottom = 24 + (d.x_title ? 15 : 0);
     const ph = H - top - bottom;
     const ys = valueScale(d, ylo, yhi, ph);
@@ -726,6 +742,26 @@ export class Chart {
       lastRight = x + half;
     }
 
+    // ---- the chart's own marks on the x axis (a curve's quoted tenors, the meeting dates): a light line over the plot,
+    // its label above it (left out where it would touch the one before), or a short tick on the axis - under the series
+    if (marks.length) {
+      const gm = svg('g', { class: 'vmarks' }, root);
+      let labRight = -Infinity;
+      for (const m of marks) {
+        const x = X(m.x);
+        if (x < left - 0.5 || x > W - right + 0.5) continue;
+        const xr = Math.round(x) + 0.5;
+        const tick = m.k === 'tick';
+        const ln = svg('line', { class: tick ? 'vtick' : 'vline', x1: xr, x2: xr, y1: tick ? top + ph - 6 : top, y2: top + ph }, gm);
+        if (m.color) ln.style.stroke = seriesColors([{ color: m.color }])[0];
+        if (!m.t) continue;
+        const half = textWidth(m.t) / 2;
+        if (x - half < labRight + 5 || x + half > W - 1) continue;
+        svg('text', { x: f1(x), y: top - 7, 'text-anchor': 'middle', class: 'vlab' }, gm).textContent = m.t;
+        labRight = x + half;
+      }
+    }
+
     const clipId = 'tto-clip-' + (++clipSeq);
     const cp = svg('clipPath', { id: clipId }, svg('defs', null, root));
     svg('rect', { x: left, y: top, width: pw, height: ph }, cp);
@@ -737,7 +773,7 @@ export class Chart {
       const sx = (i) => X(s.x[i]);
       for (const p of runs(s.data, sx, Y)) {
         if (p.length > 1 && !s.noline) {
-          const l = svg('path', { d: s.smooth ? smooth(p) : straight(p), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round',
+          const l = svg('path', { d: s.step ? stepLine(p) : s.smooth ? smooth(p) : straight(p), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round',
             'stroke-linecap': s.dash ? 'butt' : 'round' }, marksRoot);
           if (s.dash) l.setAttribute('stroke-dasharray', '6 4');
           l.style.stroke = colors[k];
@@ -768,43 +804,84 @@ export class Chart {
       });
     });
 
-    // ---- hover: the nearest point, and what the other series say at the same x
+    // ---- hover: the nearest point, and what the other series say at the same x - on a chart of steps, every series at the
+    // pointer's x (a day on a date axis), with the differences the chart names and its marks of that day
     const cross = svg('line', { class: 'cross', y1: top, y2: top + ph, x1: 0, x2: 0, visibility: 'hidden' }, root);
     const rings = svg('g', null, root);
     const hit = svg('rect', { x: left, y: top, width: pw, height: ph, fill: 'transparent' }, root);
     const tipDigits = Math.min(6, Math.max(digits + 2, d.unit === 'pct' ? 3 : 1));
-    const show = (pt) => {
-      const box = root.getBoundingClientRect();
-      if (!box.width || !points.length) return;
-      const mx = (pt.clientX - box.left) * (W / box.width), my = (pt.clientY - box.top) * (H / box.height);
+    const ring = (x, v, k) => {
+      const cy = Y(v);
+      if (cy >= top && cy <= top + ph) svg('circle', { cx: f1(x), cy: f1(cy), r: 4.5, class: 'ring' }, rings).style.fill = colors[k];
+    };
+    const row = (s, k, j, what) => h('div', { class: 'r' }, h('span', null, swatch(s, colors[k]), label(s, k) + (what ? ' · ' + what : '')),
+      h('b', null, this.fmt(s.data[j], tipDigits)));
+    const near = (s, cx) => {
+      // a series' point at (or right next to) an x on the screen
+      let j = -1, gap = Math.max(1.5, pw * 0.012);
+      s.x.forEach((x, i) => {
+        if (!isNum(x) || !isNum(s.data[i])) return;
+        const dx = Math.abs(X(x) - cx);
+        if (dx <= gap) { gap = dx; j = i; }
+      });
+      return j;
+    };
+    const atPoint = (mx, my) => {
       let best = points[0], bd = Infinity;
       for (const q of points) {
         const dist = (q.x - mx) * (q.x - mx) + (q.y - my) * (q.y - my) * 0.35;      // x counts more than y
         if (dist < bd) { bd = dist; best = q; }
       }
-      cross.setAttribute('x1', f1(best.x));
-      cross.setAttribute('x2', f1(best.x));
-      cross.setAttribute('visibility', 'visible');
-      clear(rings);
-      if (!this.tip) { this.tip = h('div', { class: 'chart-tip' }); document.body.appendChild(this.tip); }
-      clear(this.tip);
       const main = series[best.k];
       const name = main.labels && main.labels[best.i] ? main.labels[best.i] + ' · ' : '';
       this.tip.appendChild(h('div', { class: 't' }, name + xText(main.x[best.i])));
       series.forEach((s, k) => {
-        // this series' point at (or right next to) the same x
-        let j = -1, gap = Math.max(1.5, pw * 0.012);
-        s.x.forEach((x, i) => {
-          if (!isNum(x) || !isNum(s.data[i])) return;
-          const dx = Math.abs(X(x) - best.x);
-          if (dx <= gap) { gap = dx; j = i; }
-        });
-        if (k === best.k) j = best.i;
+        const j = k === best.k ? best.i : near(s, best.x);
         if (j < 0) return;
-        const cy = Y(s.data[j]);
-        if (cy >= top && cy <= top + ph) svg('circle', { cx: f1(X(s.x[j])), cy: f1(cy), r: 4.5, class: 'ring' }, rings).style.fill = colors[k];
-        this.tip.appendChild(h('div', { class: 'r' }, h('span', null, swatch(s, colors[k]), label(s, k)), h('b', null, this.fmt(s.data[j], tipDigits))));
+        ring(X(s.x[j]), s.data[j], k);
+        this.tip.appendChild(row(s, k, j));
       });
+      return best.x;
+    };
+    const atSteps = (mx) => {
+      let xv = xs.lo + ((mx - left) / pw) * (xs.hi - xs.lo);
+      if (dates) xv = Math.round(xv);
+      xv = Math.max(xlo, Math.min(xhi, xv));
+      let snap = 4;                                      // (a mark within a few pixels catches the pointer: its own day)
+      for (const m of marks) {
+        const dist = Math.abs(X(m.x) - mx);
+        if (m.x >= xlo && m.x <= xhi && dist <= snap) { snap = dist; xv = m.x; }
+      }
+      const cx = X(xv);
+      this.tip.appendChild(h('div', { class: 't' }, xText(xv)));
+      const at = series.map((s) => (s.step ? holding(s, xv) : near(s, cx)));
+      series.forEach((s, k) => {
+        const j = at[k];
+        if (j < 0) return;
+        ring(s.step ? cx : X(s.x[j]), s.data[j], k);
+        this.tip.appendChild(row(s, k, j, s.tips && s.tips[j]));
+      });
+      for (const df of Array.isArray(d.tipdiff) ? d.tipdiff : []) {
+        if (!(at[df.a] >= 0) || !(at[df.b] >= 0)) continue;
+        const v = (series[df.a].data[at[df.a]] - series[df.b].data[at[df.b]]) * (isNum(df.scale) ? df.scale : 1);
+        const text = num(v, isNum(df.digits) ? df.digits : 2, false);
+        this.tip.appendChild(h('div', { class: 'r df' }, h('span', null, df.name || ''),
+          h('b', null, (v > 0 && /[1-9]/.test(text) ? '+' : '') + text + (df.unit ? ' ' + df.unit : ''))));
+      }
+      for (const m of marks) if (m.tip && Math.abs(m.x - xv) < 0.5) this.tip.appendChild(h('div', { class: 'r mark' }, h('span', null, m.tip)));
+      return cx;
+    };
+    const show = (pt) => {
+      const box = root.getBoundingClientRect();
+      if (!box.width || !points.length) return;
+      const mx = (pt.clientX - box.left) * (W / box.width), my = (pt.clientY - box.top) * (H / box.height);
+      clear(rings);
+      if (!this.tip) { this.tip = h('div', { class: 'chart-tip' }); document.body.appendChild(this.tip); }
+      clear(this.tip);
+      const cx = steps ? atSteps(mx) : atPoint(mx, my);
+      cross.setAttribute('x1', f1(cx));
+      cross.setAttribute('x2', f1(cx));
+      cross.setAttribute('visibility', 'visible');
       const tr = this.tip.getBoundingClientRect();
       let tx = pt.clientX + 14, ty = pt.clientY + 14;
       if (tx + tr.width > window.innerWidth - 8) tx = pt.clientX - tr.width - 14;

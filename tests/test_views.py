@@ -116,6 +116,8 @@ def test_panels_and_inputs_point_at_real_cells(models, view):
                     for ref in (s["val"], s.get("cat"), s.get("name_ref")):
                         if ref:
                             model.range_ref(ref.replace("$", ""))
+            elif p.get("ppk") == "interp":
+                assert view["id"] == "ois" and p.get("title"), p     # a chart of the dashboard's own (tto/interpchart.py)
             else:
                 assert 0 <= p["chart"] < len(sheet.charts), (view["id"], p)
             continue

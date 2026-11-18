@@ -176,8 +176,9 @@ def test_every_chart_on_the_pages_is_drawable(service):
                 assert "color" not in s or (len(s["color"]) == 6 and int(s["color"], 16) >= 0)
             assert "slot" not in d["series"][0]
     # 14 from the TRY workbook + 2 defined for the USD page + 2 XY charts (ASW) + 2 XY charts of the VİOP history + the
-    # ASW chart again on the FX swap curve and the FX swap implied curve beside OIS (the ASW page)
-    assert seen == 22
+    # ASW chart again on the FX swap curve and the FX swap implied curve beside OIS (the ASW page) + the interpolation chart
+    # of OIS · PPK (an XY chart of steps: tto/interpchart.py)
+    assert seen == 23
 
 
 def test_tlref_path_is_on_a_date_axis_and_the_usd_charts_fit_their_data(service):
