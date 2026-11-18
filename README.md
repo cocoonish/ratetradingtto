@@ -734,7 +734,11 @@ hesaplanır. Geçici kopyaların değerleri senaryoya girmez
     **Girilen döviz** sütunları vardır (önceki kayıtlar dövizle yazılmış sayılır).
 * **OIS** — *Outright / Spread / Fly / FRA / MPC*; büyüklük DV01 ($/bp) ya da nominal (TL). Bacaklar OIS_MAIN'in
   kuralıyla boyutlanır (`ROUND(w·DV01·USDTRY/(Annuity·0,0001)/lot)·lot`, fly kanatları ½). Piyasa mid seviyesi ve
-  **maliyet** (mid'e göre bp, $ ve TL) otomatik hesaplanır.
+  işlemin **mid'e göre** değeri otomatik hesaplanır: **Mid'e göre (bp)**, **($)** ve **(TL)** - **+ mid'den iyi
+  (lehine, yeşil), − mid'den kötü (aleyhine, kırmızı)**. Mid %35,12 iken %34,45'ten PAY edilen FRA **+67,00 bp**'dir
+  (piyasadan ucuza alınmış). Fiyat kutusu, OIS listesinin "Mid'e göre (bp)" / "Mid'e göre ($)" sütunları ve gün sonu
+  arşivinin OIS tablosu aynı işaretle yazar. Kayıtta saklanan maliyet (`cost_bp`, `cost_usd`: + mid'den kötü, ödenen)
+  eskisi gibi durur, ekranda ve dosyada işareti çevrilerek gösterilir: önceki günlerin işlemleri de doğru okunur.
   * **MPC** (toplantı tarihli OIS): başlangıç *Spot* ya da bir toplantının etkin günü (karardan sonraki gün), bitiş
     daha sonraki bir toplantının etkin günü – OIS sayfasındaki "MPC OIS" tablosunun tarihleri. Piyasa seviyesi o
     tablonun "Piyasa (bootstrap)" sütunu (iki toplantı arası tek dönemde aynı sayı; daha uzun aralıkta sayfadaki

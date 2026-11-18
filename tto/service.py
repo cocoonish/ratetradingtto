@@ -90,6 +90,14 @@ def _payer_plus(leg: Dict[str, Any]) -> Optional[float]:
     return d if leg.get("dir") == "B" else -d
 
 
+def _vs_mid(cost: Any) -> Optional[float]:
+    """What an OIS trade is worth against mid ("Mid'e göre": + better than mid, in its favour; − worse) from its stored
+    cost (``cost_bp`` / ``cost_usd``: + worse than mid, paid - kept so, old trades read the same)."""
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    return 0.0 - cost                                   # (0.0 - 0.0 is 0.0, not -0.0)
+
+
 class ServiceError(Exception):
     def __init__(self, message: str, status: int = 400, data: Optional[Dict[str, Any]] = None):
         Exception.__init__(self, message)
@@ -3573,10 +3581,10 @@ class Service(object):
             ois_rows.append(when(t) + [clock(t), who(t), t.get("label") or "", role.get(t.get("role"), t.get("role") or ""),
                                        "RECEIVE" if t["dir"] == "S" else "PAY", t.get("tenor"), t.get("rate"), t.get("nominal"),
                                        _payer_plus(t),
-                                       t.get("cost_bp") if first else None, t.get("cost_usd") if first else None, t.get("cpt") or "",
-                                       t.get("note") or ""])
-        table("OIS", lead + ["Saat", "Kullanıcı", "İşlem", "Bacak", "Yön", "Vade", "Oran", "Nominal (TL)", "DV01 ($)", "Maliyet (bp)",
-                             "Maliyet ($)", "Karşı taraf", "Not"], ois_rows,
+                                       _vs_mid(t.get("cost_bp")) if first else None, _vs_mid(t.get("cost_usd")) if first else None,
+                                       t.get("cpt") or "", t.get("note") or ""])
+        table("OIS", lead + ["Saat", "Kullanıcı", "İşlem", "Bacak", "Yön", "Vade", "Oran", "Nominal (TL)", "DV01 ($)", "Mid'e göre (bp)",
+                             "Mid'e göre ($)", "Karşı taraf", "Not"], ois_rows,
               lead_fmt + [None, None, None, None, None, None, P4, INT, INT, BP, INT, None, None])
         bd = [t for t in trades if t["kind"] == "bond"]
         table("Tahvil", lead + ["Saat", "Kullanıcı", "Enstrüman", "Yön", "Tutar", "Fiyat", "Not", "DV01 (TL)", "DV01 ($)"],

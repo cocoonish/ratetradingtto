@@ -580,8 +580,9 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); b
 .form .datepick { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; padding: 0; border: 0; }
 .quotebox { margin: 2px 0 14px; min-height: 40px; }
 .quotebox .reftable { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
-.quote .q.costpos .v { color: var(--neg); }
-.quote .q.costneg .v { color: var(--pos); }
+/* an OIS against mid ("Mid'e göre"): + better than mid (in its favour) green, − worse red */
+.quote .q.costpos .v { color: var(--pos); }
+.quote .q.costneg .v { color: var(--neg); }
 /* a forward's two amounts: the one typed is marked (✎), the other is worked out from the forward */
 .form .field.amt .typedmark { display: none; color: var(--accent-ink); font-weight: 650; }
 .form .field.amt.typed .typedmark { display: inline; }

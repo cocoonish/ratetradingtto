@@ -27,10 +27,29 @@ const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat
 // alone what a spec leaves out (a template keeps any subset of the form)
 const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: '', note: '', amount: '' },
   ois: { strategy: 'outright', side: null, level: '', note: '' }, bond: { instrument: '', price: '', note: '', amount: '' } };
+// an OIS trade against mid, as the desk reads it ("Mid'e göre"): the stored cost (+ worse than mid) with its sign turned
+const VS_MID_HINT = '+ = mid\'den iyi (lehine), − = mid\'den kötü (aleyhine)';
 
 /** The DV01 of an OIS leg with the desk's sign: payer is plus, receiver is minus. */
 function payerPlus(leg) {
   return typeof leg.dv01 === 'number' ? (leg.dir === 'S' ? -leg.dv01 : leg.dv01) : null;
+}
+
+/** What an OIS trade is worth against mid from its cost (``cost_bp`` / ``cost_usd`` / ``cost_tl``: + worse than mid -
+ * stored so, old trades read the same): + better than mid (in its favour), − worse.  null when there is none. */
+function vsMid(cost) {
+  return typeof cost === 'number' ? 0 - cost : null;
+}
+
+/** "Mid'e göre" as it is shown (``digits``): signed and its sign's colour - a trade at mid is 0, neither. */
+function vsShown(v, digits) {
+  return typeof v === 'number' ? Number(v.toFixed(digits)) : null;
+}
+
+/** "Mid'e göre" in a list: signed, + green (better than mid), − red. */
+function vsCell(v, digits) {
+  const r = vsShown(v, digits);
+  return r === null ? { t: '', k: '' } : { t: signed(r, digits), v, k: 'n', c: r > 0 ? 'pos' : (r < 0 ? 'neg' : undefined) };
 }
 
 /** A number kept in a template, read the same in Turkish and in English: a lone group of three ("17.400", "10,000" -
@@ -964,13 +983,15 @@ export class BlotterPage {
         return;
       }
       const tiles = h('div', { class: 'quote' });
-      const cost = q.info.cost_bp;
-      const costTile = tile('Maliyet (mid\'e göre)', typeof cost === 'number' ? num(cost, 2) + ' bp' : '—', true,
-        'Pozitif = mid\'den kötü (ödenen), negatif = mid\'den iyi');
-      if (typeof cost === 'number') costTile.classList.add(cost > 0 ? 'costpos' : 'costneg');
-      tiles.appendChild(costTile);
-      tiles.appendChild(tile('Maliyet ($)', typeof q.info.cost_usd === 'number' ? num(q.info.cost_usd, 0) : '—'));
-      tiles.appendChild(tile('Maliyet (TL)', typeof q.info.cost_tl === 'number' ? num(q.info.cost_tl, 0) : '—'));
+      // the trade against mid as the desk reads it: + better than mid (in its favour, green), − worse (red)
+      for (const [key, label, cost, digits, unit] of [['bp', 'Mid\'e göre (bp)', q.info.cost_bp, 2, ' bp'],
+        ['usd', 'Mid\'e göre ($)', q.info.cost_usd, 0, ''], ['tl', 'Mid\'e göre (TL)', q.info.cost_tl, 0, '']]) {
+        const v = vsShown(vsMid(cost), digits);
+        const el = tile(label, v === null ? '—' : signed(v, digits) + unit, key === 'bp', VS_MID_HINT);
+        el.dataset.k = 'vs-mid-' + key;
+        if (v) el.classList.add(v > 0 ? 'costpos' : 'costneg');
+        tiles.appendChild(el);
+      }
       tiles.appendChild(tile('İşlem seviyesi', this.levelText(q.level, st)));
       tiles.appendChild(tile('Piyasa mid', this.levelText(q.info.market, st)));
       const od = q.dv01 || {};
@@ -1205,13 +1226,15 @@ export class BlotterPage {
 
     const os = d.trades.filter((t) => t.kind === 'ois');
     const seenPkg = new Set();
-    this.setGrid('ois', dayHead.concat(['Saat', 'Kullanıcı', 'İşlem', 'Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)', 'Maliyet (bp)', 'Maliyet ($)', 'Karşı taraf', 'Not', '']),
+    // the trade against mid (+ better than mid): the stored cost turned round, on a package's first leg
+    this.setGrid('ois', dayHead.concat(['Saat', 'Kullanıcı', 'İşlem', 'Bacak', 'Yön', 'Vade', 'Oran', 'Nominal (TL)', 'DV01 ($)',
+      { t: 'Mid\'e göre (bp)', tip: VS_MID_HINT }, { t: 'Mid\'e göre ($)', tip: VS_MID_HINT }, 'Karşı taraf', 'Not', '']),
       os.map((t) => {
         const first = !t.package || !seenPkg.has(t.package);
         if (t.package) seenPkg.add(t.package);
         return day(t).concat([timeOf(t.created_at), this.who(t), first ? (t.label || '') : '', ROLE[t.role] || t.role || '',
           { t: t.dir === 'S' ? 'RECEIVE' : 'PAY', k: 's', cls: t.dir === 'S' ? 'buy' : 'sell' }, t.tenor, p(t.rate, 4), n(t.nominal, 0), dv(payerPlus(t)),
-          first ? n(t.cost_bp, 2) : { t: '', k: '' }, first ? n(t.cost_usd, 0) : { t: '', k: '' }, t.cpt || '', first ? (t.note || '') : '',
+          first ? vsCell(vsMid(t.cost_bp), 2) : { t: '', k: '' }, first ? vsCell(vsMid(t.cost_usd), 0) : { t: '', k: '' }, t.cpt || '', first ? (t.note || '') : '',
           first ? this.delCell(t, t.label || 'OIS işlemi') : { t: '', k: '' }]);
       }), os.length ? os.length + ' bacak' : '');
 
