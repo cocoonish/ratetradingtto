@@ -2649,8 +2649,8 @@ Matriste yedekten gelen kapanış soluk yazılır.
     New York bir günün SOFR'unu **ertesi iş günü 08:00'de** (İstanbul 16:00, yazın 15:00) yayımlar; tarihçe yeni
     günlerini **16:30'dan sonra bir kez** sorar (açılış o saatten önceyse açılışta da bir kez: kapalı kalınan günler
     gelsin) - 16:30'a kadar dünün fixing'i yoktur, Trades onu son fixing'le tahmin eder ve söyler. İlk doldurma **bir
-    kez, iki yıl** (740 gün, ~520 değer), quant serileriyle aynı sırada (turda en çok 40 seri: masada quant serileri
-    çoktan dolu olduğundan ilk turda). **Bloomberg maliyeti:** 1 seri; ilk gün bir kez ~520 değer; sonra günde 1 yeni
+    kez, iki yıl** (740 gün, ~510 değer), quant serileriyle aynı sırada (turda en çok 40 seri: masada quant serileri
+    çoktan dolu olduğundan ilk turda). **Bloomberg maliyeti:** 1 seri; ilk gün bir kez ~510 değer; sonra günde 1 yeni
     değer - istekler günde en çok 2, her biri son kapanıştan (diğer serilerdeki gibi 3 gün geriden) bugüne, yani günde
     ~4–8 değer. Sayfa yenilemesi, "MTM yenile" ya da Kuponlar penceresi hiçbir istek yapmaz: tarihçeyi okur.
 * **Kayıtlı veri modunda** tarihçe, Excel dosyasının kendi sakladığı `BDH` bloklarıdır (05.10–03.11.2026: OIS

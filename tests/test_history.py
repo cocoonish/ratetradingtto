@@ -1509,7 +1509,7 @@ def test_live_the_sofr_fixings_fill_two_years_once_then_one_day_a_day(tmp_path):
         got = sync(18.0, 2)
         assert len(got) == 1 and max(dict(svc.store.hist_series(sid))) == "2026-11-04"
         assert sync(19.0) == [] and sync(21.0) == []
-        # Bloomberg's cost: two years once (~520 values, in a request of the backfill's turn), then a request of its own
+        # Bloomberg's cost: two years once (~510 values, in a request of the backfill's turn), then a request of its own
         # for a handful of days - at most twice a day
         reqs = asked()
         assert len(reqs) == 4 and [r["options"]["startDate"] for r in reqs].count("20241024") == 1
