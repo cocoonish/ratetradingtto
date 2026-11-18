@@ -225,6 +225,12 @@ a { color: var(--accent-ink); }
 /* what a chart is drawn against (the ASW history: OIS / Offshore / İkisi) */
 .panel > header .chart-pick { flex: none; }
 .panel > header .chart-pick button { white-space: nowrap; }
+/* a chart drawn several ways (the interpolation chart: its horizon, OIS / Offshore): the selectors, its line and table */
+.panel > header .chart-choice { flex: none; display: inline-flex; gap: 6px; }
+.chart-extra { padding: 0 10px 10px; }
+.chart-extra .chart-line { color: var(--ink-2); font-size: 11.5px; margin: 0 4px 6px; }
+.chart-extra .chart-line:empty { display: none; }
+.chart-extra .chart-strip { overflow-x: auto; }
 /* a button with its own small menu beside it ("Kotasyon kopyala ▾") */
 .splitbtn { display: inline-flex; flex: none; }
 .splitbtn > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
@@ -235,6 +241,7 @@ a { color: var(--accent-ink); }
 .panel.wide { flex: 1 1 100%; }
 .panel.chart { flex: 1 1 420px; max-width: 760px; }
 .panel.chart.wide { flex: 1 1 620px; max-width: 1040px; }      /* a chart with many labelled points wants room */
+.panel.chart.full { flex: 1 1 100%; max-width: none; }          /* the page's whole width: a chart with a wide table under it */
 .panel > header { display: flex; align-items: center; gap: 8px; padding: var(--panel-head-pad); border-bottom: 1px solid var(--line); }
 .panel > header h2 { font-size: calc(12.5px - var(--fs-step)); font-weight: 650; margin: 0; flex: 1; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }

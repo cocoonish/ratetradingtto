@@ -1767,6 +1767,68 @@ async function clipAfter(page, action) {
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!F2'] });
     await waitCell(page, 'OIS_MAIN!F30', 't.trim() === ' + JSON.stringify(nom0));
     await shot(page, '09b-ois-parameters-pinned');
+    // the interpolation chart beside the FRA lists: the overnight forward and the 3M FRA strip both ways as step lines
+    // (Bootstrap - Murex's -, PPK basamak), the quoted tenors and the meetings marked, the strip's table under it; 1Y / 3Y /
+    // 10Y and OIS / Offshore redraw it at once, the choice kept in the browser
+    const interp = () => page.evaluate(() => {
+      const p = document.querySelector('.panel[data-panel="interp"]');
+      const svg = p.querySelector('svg.chart');
+      const paths = [...svg.querySelectorAll('path[fill="none"]')];
+      return { keys: [...p.querySelectorAll('.chart-legend .key')].map((k) => k.textContent), full: p.classList.contains('full'),
+        on: [...p.querySelectorAll('#chart-choice-interp button.on')].map((b) => b.textContent),
+        steps: paths.filter((x) => / H[\d.]+ V[\d.]+/.test(x.getAttribute('d'))).length, dashed: svg.querySelectorAll('path[stroke-dasharray]').length,
+        strokes: [...new Set(paths.map((x) => x.style.stroke))], quotes: [...svg.querySelectorAll('text.vlab')].map((t) => t.textContent),
+        lines: svg.querySelectorAll('line.vline').length, ticks: svg.querySelectorAll('line.vtick').length, line: p.querySelector('.chart-line').textContent,
+        rows: [...p.querySelectorAll('.chart-strip table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim())) };
+    });
+    const stripCols = (n) => page.waitForFunction((k) => document.querySelectorAll('.panel[data-panel="interp"] .chart-strip tr:first-child > *').length === k,
+      n, { timeout: 15000 });
+    const i0 = await interp();
+    const b21 = (await api(page, 'ayşe yilmaz', 'GET', '/api/view/ois')).json.panels.find((x) => x.id === 'B21').data;
+    const listFark = (label) => { const r = b21.rows.find((row) => row[0] && row[0].t === label); return r ? r[b21.c.indexOf('PPK fark')].t : null; };
+    check('OIS · PPK: the interpolation chart right after the 15 best FRAs, the page\'s whole width - the overnight forward and the 3M FRA strip both ways as step lines (Bootstrap blue, PPK basamak orange, the strips dashed), 3Y OIS first',
+      bestTab.join(' ') === 'B1 B9 B10 B11 interp chart2 chart5' && i0.full && i0.on.join() === '3Y,OIS'
+      && JSON.stringify(i0.keys) === JSON.stringify(['O/N · Bootstrap (Murex)', 'O/N · PPK basamak', '3A FRA · Bootstrap (Murex)', '3A FRA · PPK basamak'])
+      && i0.steps === 4 && i0.dashed === 2 && i0.strokes.includes('var(--c-blue)') && i0.strokes.includes('var(--c-orange)'), { bestTab, i0 });
+    check('... the quoted tenors as light lines with their names (1M … 3Y: 15M and 21M are no quotes), the meetings as ticks on the axis',
+      i0.lines === 9 && ['6M', '9M', '1Y', '18M', '2Y', '3Y'].every((t) => i0.quotes.includes(t)) && !i0.quotes.includes('15M')
+      && !i0.quotes.includes('21M') && i0.ticks >= 20, [i0.lines, i0.quotes, i0.ticks]);
+    check('... the strip under it, an FRA a column: Bootstrap and PPK basamak (%), PPK − Bootstrap (bp) - the FRA list\'s own "PPK fark" (12x15 = 1Y3M, 15x18 = 15M3M); the same both ways up to 9x12 (both ends quoted)',
+      i0.rows.length === 4 && i0.rows[0].length === 13 && i0.rows[0][1] === '0x3' && i0.rows[0][12] === '33x36'
+      && JSON.stringify(i0.rows.slice(1).map((r) => r[0])) === JSON.stringify(['Bootstrap (Murex)', 'PPK basamak', 'PPK − Bootstrap (bp)'])
+      && i0.rows[3].slice(1, 5).every((t) => t === '0,0') && i0.rows[3][5] === listFark('1Y3M') && i0.rows[3][6] === listFark('15M3M')
+      && /^3Y · OIS · 3A FRA farkı \(PPK basamak − Bootstrap\): en çok /.test(i0.line), { rows: i0.rows, line: i0.line, list: [listFark('1Y3M'), listFark('15M3M')] });
+    await page.click('#chart-choice-interp button[data-pick="1Y"]');
+    await stripCols(5);
+    const i1 = await interp();
+    await page.click('#chart-choice-interp button[data-pick="Offshore"]');
+    await page.waitForFunction(() => /offshore/.test(document.querySelector('.panel[data-panel="interp"] .chart-legend').textContent), null, { timeout: 15000 });
+    const i2 = await interp();
+    await page.click('#chart-choice-interp button[data-pick="10Y"]');
+    await stripCols(41);
+    const i3 = await interp();
+    const keptPick = await page.evaluate(() => localStorage.getItem('tto.pick.ois.interp'));
+    check('... 1Y / 3Y / 10Y and OIS / Offshore redraw it at once: 1Y four FRAs, all the same both ways (3M, 6M, 9M, 1Y are quotes); Offshore the offshore curve both ways (FX swap + XCCY, 3M forwards on ACT/360); 10Y forty quarters; the choice kept in the browser',
+      i1.on.join() === '1Y,OIS' && i1.rows[0].length === 5 && i1.rows[3].slice(1).every((t) => t === '0,0') && /her çeyrekte aynı/.test(i1.line)
+      && i2.on.join() === '1Y,Offshore' && i2.rows[0][0] === '3A forward (ACT/360)' && i2.quotes.includes('1W') && i2.steps === 4
+      && JSON.stringify(i2.keys) === JSON.stringify(['O/N · Bootstrap (offshore)', 'O/N · PPK basamak (offshore)', '3A forward · Bootstrap (offshore)', '3A forward · PPK basamak (offshore)'])
+      && i3.on.join() === '10Y,Offshore' && i3.rows[0].length === 41 && i3.steps === 4 && keptPick === '10Y|Offshore',
+    { i1: [i1.on, i1.rows[3], i1.line], i2: [i2.on, i2.keys, i2.rows[0] && i2.rows[0][0], i2.quotes], i3: [i3.on, i3.rows[0] && i3.rows[0].length], keptPick });
+    await page.click('#chart-choice-interp button[data-pick="3Y"]');
+    await page.click('#chart-choice-interp button[data-pick="OIS"]');
+    await stripCols(13);
+    const isvg = page.locator('.panel[data-panel="interp"] svg.chart');
+    await isvg.scrollIntoViewIfNeeded();
+    const ib = await isvg.boundingBox();
+    await page.mouse.move(ib.x + ib.width * 0.45, ib.y + ib.height * 0.5);
+    await page.waitForSelector('.chart-tip');
+    const itip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent,
+      rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    await page.mouse.move(5, 5);
+    check('... hovering it reads every line at that day: both O/N forwards, both FRAs (named: 12x15 …) and their differences in bp',
+      /^\d\d\.\d\d\.\d{4}$/.test(itip.head) && itip.rows.filter((r) => /%$/.test(r)).length === 4 && itip.rows.filter((r) => / bp$/.test(r)).length === 2
+      && itip.rows.some((r) => /^3A FRA · PPK basamak · \d+x\d+/.test(r)), itip);
+    await shot(page, '09c-ois-interp');
     await open(page, 'forward');
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',

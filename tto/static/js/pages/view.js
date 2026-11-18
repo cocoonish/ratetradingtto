@@ -143,11 +143,12 @@ export class ViewPage {
       // (a note that says what is drawn - the ASW history's offshore days - follows it too)
       if (typeof p.note === 'string' && it.noteEl && p.note !== it.noteEl.textContent) it.noteEl.textContent = p.note;
       if (p.type === 'chart') {
-        it.data = p.data;
+        const data = it.choice && p.choice ? it.choice.take(p.choice) : p.data;      // (drawn several ways: the user's way)
+        it.data = data;
         if (it.pick && p.pick) it.pick.set(p.pick.value);              // (chosen elsewhere too: Parametreler, another tab)
         if (!it.el.isConnected) { it.stale = true; continue; }       // drawn when its tab is opened
-        if (it.chart && p.data) it.chart.update(p.data);
-        if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
+        if (it.chart && data) it.chart.update(data);
+        if (it.tableGrid && data) it.tableGrid.update(chartTable(data), false);
       } else if (it.grid && p.data) {
         if (it.grid.update(p.data, true) === false) { held.add(p.id); continue; }
         it.data = p.data;
@@ -450,7 +451,7 @@ export class ViewPage {
   panel(p) {
     const key = 'tto.col.' + this.id + '.' + p.id;
     const collapsed = pref(key, p.collapsed ? '1' : '0') === '1';
-    const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
+    const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.full ? ' full' : '') + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
       + (p.hidden ? ' aux' : '') + (collapsed ? ' collapsed' : '') + (p.copy ? ' copy' : '') });
     el.dataset.panel = p.id;
     if (p.copy) { el.dataset.copy = p.copy.id; el.dataset.copyOf = p.copy.of; }       // a temporary copy of the table p.copy.of
@@ -500,6 +501,12 @@ export class ViewPage {
       it.pick = this.chartPick(p.id, p.pick);
       head.appendChild(it.pick.el);
     }
+    if (p.type === 'chart' && p.data && p.choice && p.choice.items) {
+      // a chart sent drawn several ways (the interpolation chart: its horizon, OIS / Offshore): the way the user picked
+      it.choice = this.chartChoice(p, it);
+      it.data = it.choice.data();
+      head.appendChild(it.choice.el);
+    }
     head.appendChild(tools);
     el.appendChild(head);
     el.appendChild(body);
@@ -516,7 +523,8 @@ export class ViewPage {
         const tableHost = h('div', { class: 'hidden' });
         body.appendChild(chartHost);
         body.appendChild(tableHost);
-        it.chart = new Chart(chartHost, p.data);
+        if (it.choice) body.appendChild(it.choice.body);            // (the way picked: its line and table under the chart)
+        it.chart = new Chart(chartHost, it.data);
         const tb = h('button', { class: 'iconbtn', type: 'button', title: 'Grafiğin verisini tablo olarak göster' }, 'Tablo');
         tb.addEventListener('click', () => {
           const showTable = tableHost.classList.contains('hidden');
@@ -639,6 +647,67 @@ export class ViewPage {
     }
     paint(value);
     return { el, set: paint };
+  }
+
+  /**
+   * A chart the server sends drawn several ways ({groups: [{id, title, options, default}], items: {"3Y|OIS": {data, strip,
+   * line}}}: the interpolation chart's horizon and OIS / Offshore): small selectors on its header draw the way picked at
+   * once, with its line and its table (``strip``) under the chart.  Each user's own choice, kept in the browser as the
+   * page's tab is.  ``body``: the line and the table, for the panel to place; ``data()``: the chart of the way picked;
+   * ``take(choice)``: every way as it is now (a refresh), the way picked's chart back.
+   */
+  chartChoice(p, it) {
+    const key = 'tto.pick.' + this.id + '.' + p.id;
+    let src = p.choice;
+    const kept = String(pref(key, '')).split('|');
+    const value = src.groups.map((g, k) => (g.options.indexOf(kept[k]) >= 0 ? kept[k] : g.default));
+    const el = h('div', { class: 'chart-choice', id: 'chart-choice-' + p.id });
+    const line = h('div', { class: 'chart-line' });
+    const strip = h('div', { class: 'chart-strip' });
+    const body = h('div', { class: 'chart-extra' }, line, strip);
+    let grid = null;
+    const item = () => src.items[value.join('|')] || src.items[src.groups.map((g) => g.default).join('|')] || {};
+    const extra = () => {
+      const x = item();
+      line.textContent = x.line || '';
+      if (x.strip && grid) grid.update(x.strip, false);
+      else if (x.strip) { grid = new Grid({ data: x.strip, editable: false }); strip.appendChild(grid.el); }
+      strip.classList.toggle('hidden', !x.strip);
+    };
+    const segs = src.groups.map((g, k) => {
+      const seg = h('div', { class: 'seg small chart-pick', role: 'group', title: g.title || '' });
+      seg.dataset.group = g.id;
+      for (const o of g.options) {
+        const b = h('button', { type: 'button' }, o);
+        b.dataset.pick = o;
+        b.addEventListener('click', () => {
+          if (value[k] === o) return;
+          value[k] = o;
+          setPref(key, value.join('|'));
+          paint();
+          extra();
+          it.data = item().data || null;
+          if (it.chart && it.data) it.chart.update(it.data);
+          if (it.tableGrid && it.data) it.tableGrid.update(chartTable(it.data), false);
+        });
+        seg.appendChild(b);
+      }
+      el.appendChild(seg);
+      return seg;
+    });
+    const paint = () => segs.forEach((seg, k) => { for (const b of seg.children) b.classList.toggle('on', b.dataset.pick === value[k]); });
+    paint();
+    extra();
+    return {
+      el,
+      body,
+      data: () => item().data || null,
+      take: (choice) => {
+        if (choice && choice.items) src = choice;
+        extra();
+        return item().data || null;
+      },
+    };
   }
 
   // ------------------------------------------------------------------ temporary copies of a calculator

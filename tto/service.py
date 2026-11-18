@@ -2004,6 +2004,8 @@ class Service(object):
                                 name=p["add"].get("name") or v["id"])     # another page's list: by its name
         if p.get("grow"):
             entry["grow"] = p["grow"]               # more rows than in use: the page shows the filled ones and one more
+        if p.get("full"):
+            entry["full"] = True                    # the page's whole width (a wide chart with a table under it)
         if p.get("card"):
             entry["card"] = p["card"]               # a click on ▸ opens the bond's card
         if p.get("flags"):
@@ -2081,6 +2083,13 @@ class Service(object):
                 hint = th.client(p.get("trade"), v["id"], p.get("id"))
                 if hint:
                     entry["data"]["trade"] = hint   # its prices: right click, "İşlem gir" (trade_prefill)
+            elif p["type"] == "chart" and p.get("ppk") == "interp":
+                # the interpolation chart (OIS · PPK): both ways' overnight forward and 3M FRA strip, every horizon and
+                # curve at once, out of the curves the FRA lists' PPK columns read - the user's own calculation
+                from . import interpchart
+                idx = book.model.sheet_index
+                entry["data"], entry["choice"] = interpchart.panel(
+                    self._try_curves(book, calc), lambda sheet, r, c: calc.get(idx[sheet], r, c), loc)
             elif p["type"] == "chart":
                 spec = p.get("spec")
                 if spec is None:
