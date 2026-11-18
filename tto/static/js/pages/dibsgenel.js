@@ -1,8 +1,9 @@
 // DİBS RV · Genel: the trading list's bonds on one page (tto/dibsgenel.py) - per bond what DİBS RV makes of it against OIS,
 // what DİBS ASW makes of it against the FX swap implied TRY curve, and where it stands against a zero-coupon curve
-// (Nelson-Siegel) fitted to the bonds and bills now; the yield curve; DİBS ASW's two ASW charts, DİBS RV's switch / pair table and DİBS ASW's
-// history as their own pages draw them (/api/panels).  Nothing is typed here: the inputs are the hesap tablosu tabs' -
-// a click on one shown here (a setting, a cell of the switch table) opens it there, selected.
+// (Nelson-Siegel) fitted to the fixed coupon bonds now (the bills priced on it, not fitted); the yield curve; DİBS ASW's
+// two ASW charts, DİBS RV's switch / pair table and DİBS ASW's history as their own pages draw them (/api/panels).
+// Nothing is typed here: the inputs are the hesap tablosu tabs' - a click on one shown here (a setting, a cell of the
+// switch table) opens it there, selected.
 import { api } from '../api.js';
 import { h, clear } from '../ui.js';
 import { Grid } from '../grid.js';
@@ -64,8 +65,9 @@ export class DibsGenelPage {
     this.table = panel('dg-table', 'Trading listesi · OIS ASW, FX swap ASW ve sıfır kupon eğrisi', { wide: true,
       note: 'Kâğıtlar türüne ve vadesine göre. OIS ASW: DİBS RV (RV hesap tablosu). FX swap ASW: DİBS ASW\'nin ASW FX hesabı '
         + '(ASW hesap tablosu; eğrisi grup başlığında). Adil getiri / fiyat: kâğıdın ASW\'si uydurulan ASW eğrisinde dursaydı (DİBS '
-        + 'Trading ve kâğıt kartındakiyle aynı). Sıfır kupon eğrisi: sabit kuponlulara ve bonolara şimdi uydurulan Nelson-Siegel '
-        + 'eğrisi. Hücrenin üzerine gelince hesabı. ▸ kâğıt kartı, ★ trading listesinden çıkarır.' });
+        + 'Trading ve kâğıt kartındakiyle aynı). Sıfır kupon eğrisi: sabit kuponlulara şimdi uydurulan Nelson-Siegel eğrisi; '
+        + 'bonolar eğride fiyatlanır, uydurmaya girmez (pahalı / ucuzları kuponluların eğrisinin kısa ucuna göre). Hücrenin '
+        + 'üzerine gelince hesabı. ▸ kâğıt kartı, ★ trading listesinden çıkarır.' });
     this.yield = panel('dg-yield', 'Getiri eğrisi', { wide: true, chart: true });
     this.aswOis = panel('dg-asw-ois', 'ASW · OIS', { chart: true });
     this.aswFx = panel('dg-asw-fx', 'ASW · FX swap', { chart: true });
@@ -116,11 +118,10 @@ export class DibsGenelPage {
       const zero = Object.entries(f.zero || {}).map(([k, v]) => k + ' ' + pct(v)).join(' · ');
       const bills = f.n_bills || 0;
       this.fitLine.append(h('b', null, 'Sıfır kupon eğrisi (' + (f.model || '') + ', canlı): '),
-        h('span', { title: 'Uydurmanın kalıntılarının karekök ortalaması (sabit kuponlular ve bonolar, basit getiri)' }, 'RMSE ' + num(f.rmse, 1, false) + ' bp'),
-        typeof f.loo === 'number' ? h('span', { title: 'Birini dışarıda bırak: her kâğıt, eğri o olmadan yeniden uydurulunca (τ aynı) eğriden ne kadar uzak - '
+        h('span', { title: 'Uydurmanın kalıntılarının karekök ortalaması (uydurulan sabit kuponlular, basit getiri)' }, 'RMSE ' + num(f.rmse, 1, false) + ' bp'),
+        typeof f.loo === 'number' ? h('span', { title: 'Birini dışarıda bırak: uydurulan her kâğıt, eğri o olmadan yeniden uydurulunca (τ aynı) eğriden ne kadar uzak - '
           + 'eğrinin görmediği bir kâğıdı ne kadar tutturduğu (karekök ortalaması)' }, ' · LOO RMSE ' + num(f.loo, 1, false) + ' bp') : '',
-        ' · ' + f.n_fit + ' kâğıda uyduruldu (' + (f.n_fit - bills) + ' sabit kuponlu, ' + bills + ' bono)'
-        + (f.n > f.n_fit ? ', ' + (f.n - f.n_fit) + ' kâğıt ölçüldü' : '')
+        ' · ' + f.n_fit + ' sabit kuponluya uyduruldu' + (bills ? ', ' + bills + ' bono eğriye göre ölçüldü (uydurmaya girmez)' : '')
         + (f.down ? ' · ' + f.down + ' kâğıdın ağırlığı düşürüldü (Huber)' : '') + ' · ',
         h('span', { title: 'β yüzde, τ yıl; eğrinin kendi faizleri yanında' }, beta + ' · ' + tau),
         zero ? ' · zero ' + zero : '');

@@ -79,7 +79,7 @@ class CurvePage extends FitPage {
     this.ois = panel('quant-curve-ois', 'TRY OIS · NSS uyumu', { top: this.oisChart });
     this.boxes.ois = new GridBox(this.ois, 'quant/curve/ois', (sid) => this.pick(sid));
     this.bondChart = h('div', { class: 'volchart' });
-    this.bonds = panel('quant-curve-dibs', 'DİBS · NS uyumu (sabit kuponlu ve bonolar)', { top: this.bondChart });
+    this.bonds = panel('quant-curve-dibs', 'DİBS · NS uyumu (sabit kuponlulara; bonolar eğride ölçülür)', { top: this.bondChart });
     this.boxes.bonds = new GridBox(this.bonds, 'quant/curve/dibs', (sid) => this.pick(sid));
     this.best = panel('quant-curve-best', 'Receive / pay için en iyi kâğıt');
     this.best.note.textContent = 'Puan = z × (1 aylık carry + roll) ÷ σ (kâğıdın 1 aylık getiri oynaklığı): z ile carry aynı yönü gösterdiğinde artı. '
@@ -129,7 +129,7 @@ class CurvePage extends FitPage {
     rows.map((r) => [T(r.label, { b: 1, tip: r.isin + (!r.fitted ? '\nuyum dışı: eğriye göre ölçülür, eğriyi biçimlendirmez'
       : (r.weight < 1 ? '\nuyumda ağırlığı ' + fmt(r.weight, 2) + ' (uzak nokta)' : '')) }), T((KIND[r.kind] || r.kind) + (r.fitted ? '' : ' ·')),
       T(isoToTr(r.maturity)), N(r.coupon, 2), N(r.yield, 3, { tip: r.live ? 'canlı (DİBS RV)' : 'son kapanış' }), T(CONV[r.conv] || r.conv), N(r.model, 3),
-      N(r.resid, 1, { sign: true, b: 1, cls: r.fitted && r.weight < 1 ? 'soft' : '' }), Z(r.z, entry), N(r.cs_z, 2, { sign: true, tip: 'Bugünkü farkların kesitine göre' }),
+      N(r.resid, 1, { sign: true, b: 1, cls: r.fitted && r.weight < 1 ? 'soft' : '' }), Z(r.z, entry), N(r.cs_z, 2, { sign: true, tip: 'Fark ÷ bugün uydurulan sabit kuponluların farklarının standart sapması (bonolar da ona göre)' }),
       N(r.half_life, 1), N(r.n, 0, { tip: 'Farkın geçmişi: uyumun kurulduğu gün sayısı (tarihçenin DİBS kapanışları)' }),
       N(r.ois_spread, 1, { sign: true }), N(r.wb_asw, 1, { sign: true }),
       N(r.wb_rc, 1, { sign: true, tip: 'DİBS RV\'nin kendi pahalı / ucuzu: ASW\'nin a + b·t + c·t² uyumuna göre (+ ucuz)' }), N(r.mod_dur, 2),
@@ -139,15 +139,16 @@ class CurvePage extends FitPage {
     const f = d.funding || {};
     this.bonds.note.textContent = 'Sabit kuponlu kâğıtlar ve bonolar (TLREF, FRN ve TÜFE dışarıda), DİBS RV\'nin BIST kuralıyla (kupon c/f, 364/f günde bir; '
       + 'getiri yılda f kez bileşik, bono basit). Eğri (' + (d.model === 'NSS' ? 'Nelson-Siegel-Svensson' : 'Nelson-Siegel: tek tümsek - az kâğıtta '
-      + 'NSS\'in ikinci tümseği kâğıtların gürültüsüne uyar') + ') sabit kuponlulara ve bonolara uydurulur: kısa ucu bonoların kendi fiyatları tutar. '
+      + 'NSS\'in ikinci tümseği kâğıtların gürültüsüne uyar') + ') yalnız sabit kuponlulara uydurulur (masanın kararı); bonolar (·) eğride '
+      + 'fiyatlanır, eğriyi biçimlendirmez: pahalı / ucuzları kuponluların eğrisinin kısa ucuna göre. '
       + 'Fark = getiri − model fiyatın getirisi (bp, kâğıdın kendi kuralıyla): + ucuz (al), − pahalı (sat); '
       + 'uzaktaki bir kâğıt uyumda ağırlıksızlaşır (Huber), komşularını bükmesin. OIS\'e göre: aynı nakit akışları OIS uyumuyla - getiri farkı (bp); '
       + 'yanında DİBS RV\'nin kendi ASW\'si ve pahalı / ucuzu (ASW\'nin karesel uyumuna göre). '
       + 'Carry (C) ve roll (R), bp (÷ DV01): C = getiri sabitken fiyat + ödenen kupon − fonlanan kirli fiyat; R = eğri yerinde kalırken (kâğıdın '
       + 'eğriye göre farkı sabit) − getiri sabitken fiyat. Fonlama: satırın reposu, yoksa OIS uyumunun vadeye kadarki faizi ('
       + (f.source || '—') + (isNum(f.rate_1m) ? ', 1A ' + fmt(f.rate_1m, 2) + '% sürekli' : '') + '), yoksa TLREF. ' + params(d.params) + ' · RMSE '
-      + fmt(d.rmse, 1) + ' bp' + (isNum(d.loo) ? ' · LOO RMSE ' + fmt(d.loo, 1) + ' bp (her kâğıt, eğri o olmadan uydurulunca)' : '') + ', '
-      + d.n + ' kâğıt (' + (d.n_bills || 0) + ' bono), ' + (d.days || 0) + ' gün geçmiş.';
+      + fmt(d.rmse, 1) + ' bp' + (isNum(d.loo) ? ' · LOO RMSE ' + fmt(d.loo, 1) + ' bp (uydurulan her kâğıt, eğri o olmadan uydurulunca)' : '') + ', '
+      + d.n + ' kâğıt' + (d.n_bills ? ' (' + d.n_bills + ' bono uyum dışı)' : '') + ', ' + (d.days || 0) + ' gün geçmiş.';
     const pick = ['Yön', 'Kâğıt', 'Vade', 'Fark (bp)', 'z', 'C+R 1A (bp)', 'σ 1A (bp)', 'C+R / σ', 'Puan'];
     const best = (side, list) => list.map((r) => [T(side, { b: 1 }), T(r.label, { b: 1 }), T(isoToTr(r.maturity)), N(r.resid, 1, { sign: true }), Z(r.z, entry),
       N(r.total_1m, 1, { sign: true }), N(r.sigma_1m, 1), N(r.cpr, 2, { sign: true }), N(r.score, 2, { sign: true, b: 1 })]);
