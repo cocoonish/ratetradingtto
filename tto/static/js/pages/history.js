@@ -1152,7 +1152,7 @@ export class SettingsPage {
     const showPpk = this.cpShowPpk.checked;
     clear(this.cpTables);
     for (const c of d.curves) {
-      const table = h('table', { class: 'set-table cp-table', id: 'cp-table-' + c.id });
+      const table = h('table', { class: 'cp-table', id: 'cp-table-' + c.id });      // (not .set-table: the calendar's own)
       table.appendChild(h('thead', null, h('tr', null, ...['Vade / tarih', 'Gün', 'Tür', 'Kaynak', 'Son değer', 'Not', 'Ekleyen · tarih', 'Açık']
         .map((t) => h('th', null, t)))));
       const body = h('tbody');
@@ -1197,7 +1197,7 @@ export class SettingsPage {
       b.addEventListener('click', () => this.editPoint(r, 'rate'));
       valueCell.appendChild(b);
     }
-    const noteCell = h('td', { class: 'cp-note-cell' }, r.note || '');
+    const noteCell = h('td', { class: 'cp-note-cell', title: r.note_tip || '' }, r.note || '');
     if (edit && !r.ppk) {
       const b = h('button', { class: 'iconbtn cp-note', type: 'button', 'data-id': r.id, title: 'Notu değiştir' }, '✎');
       b.addEventListener('click', () => this.editPoint(r, 'note'));

@@ -563,7 +563,7 @@ class CurvePoints(object):
                               "date": _date_text(where.spot + d) if where.spot is not None else "", "kind": "ppk",
                               "kind_text": "PPK toplantısı", "rule": "", "source": "ppk", "source_text": "takvimden",
                               "source_tip": "Motor'un toplantı tablosu (Ayarlar → PPK toplantı takvimi): takvim değişince kendiliğinden",
-                              "value": None, "note": "PPK basamak bu günden basamaklanır (TLREF kararın ertesi iş günü)",
+                              "value": None, "note": "PPK basamak burada basamaklanır", "note_tip": "TLREF kararın ertesi iş gününden (etkin gün) değişir",
                               "on": True, "default": True, "ppk": True, "computed": False, "pillar": False, "error": ""})
             items.sort(key=lambda x: (x["day"] if isinstance(x.get("day"), (int, float)) else 1e9, 0 if x.get("ppk") else 1))
             out.append({"id": curve, "title": CURVE_TEXT[curve], "custom": _differs(rows, curve),
