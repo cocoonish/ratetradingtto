@@ -1008,7 +1008,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     # ------------------------------------------------------------------ Trades (tradebook.py): the desk's and one's own
     # Every call needs a session; a trader's own trades answer only their owner (any other user, an administrator too,
-    # gets the 404 of a trade that does not exist).  Nothing here values a trade but "MTM yenile" and a close.
+    # gets the 404 of a trade that does not exist).  Nothing here values a trade but "MTM yenile", a close and a swap's
+    # "Kuponlar".
     def _trade_lang(request: Request) -> str:
         return _lang(request) or svc().settings.locale
 
@@ -1076,6 +1077,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     @handler
     async def trade_log(request: Request):
         return ok(await call_free(svc().tradebook.log, _user(request), request.path_params["tid"]))
+
+    @handler
+    async def trade_coupons(request: Request):
+        # "Kuponlar": a swap's schedule and the coupons it has paid / received, valued now (one's own trade: its owner only)
+        return ok(await call(svc().tradebook.coupons, _user(request), request.path_params["tid"]))
 
     @handler
     async def trade_action(request: Request):
@@ -1291,6 +1297,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/trades/from-quant", trades_from_quant),
         Route("/api/trades/{tid:int}", trade_one, methods=["POST", "DELETE"]),
         Route("/api/trades/{tid:int}/log", trade_log),
+        Route("/api/trades/{tid:int}/coupons", trade_coupons),
         Route("/api/trades/{tid:int}/{what}", trade_action, methods=["POST"]),
         Route("/api/quant/{what}", quant_get),
         Route("/api/quant/{what}", quant_post, methods=["POST"]),

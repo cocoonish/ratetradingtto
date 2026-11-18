@@ -7,7 +7,8 @@ Three things live here.
 history (``HistoricalDataRequest``) one year back and kept up to date while the server runs.  Offline it
 holds what the workbook recorded (its ``BDH`` blocks) plus the TLREF fixings that ship with the dashboard.
 Which series are kept is read from the workbook itself: the OIS ticker roots of ``OIS_MAIN``, the offshore
-curve tickers of ``Forward``, the bonds of ``DİBS RV``.
+curve tickers of ``Forward``, the bonds of ``DİBS RV`` - and, of its own, the SOFR fixings that Trades' SOFR swaps
+compound (``SOFR_TICKER``: one value a day, asked once a day).
 
 **Meeting pricing history.**  For every past day the workbook's own solver (``Motor`` "GLOBAL İMA PPK") is
 run again with that day's closes - on a second engine that is fed one day at a time (:class:`MpcMachine`).
@@ -54,6 +55,13 @@ DEFAULT_PAST_MEETINGS = ("2025-01-23", "2025-03-06", "2025-04-17", "2025-06-19",
                          "2025-12-11", "2026-01-22", "2026-03-12", "2026-04-22", "2026-06-11", "2026-07-23", "2026-09-10",
                          "2026-10-22")
 DEFAULTS = {"dibs_field": "YLD_YTM_MID", "lookback_days": 370}
+#: the SOFR fixings Trades' SOFR swaps compound (tto/tradevalue.py): the New York Fed publishes a day's fixing the next
+#: business day at 08:00 New York (16:00 Istanbul in winter, 15:00 in summer).  One value a day, two years back once
+#: (its first fill in turn with the quant package's new series, ``BACKFILL_PER_SYNC`` a sync), then its new days once a
+#: day after ``SOFR_AFTER`` (Istanbul) - when yesterday's fixing is out - and once at a start before that hour.
+SOFR_TICKER = "SOFRRATE Index"
+SOFR_LOOKBACK = 740
+SOFR_AFTER = 16.5
 # the order of the Bloomberg pricing sources when the workbook has no source sheet (EK_KAYNAK, see tto.extras)
 SOURCE_DEFAULTS = {"ois": ["GFOF"], "off": ["ICPL"], "xccy": ["ICPL"]}
 SOURCE_ROWS = {"ois": 4, "off": 5, "xccy": 6}           # EK_KAYNAK!B4:E6
@@ -712,6 +720,9 @@ class History(object):
         active = [v.strip() for v in (val("VIOP!%s1" % c) for c in "LMNOPQRSTUVW") if isinstance(v, str) and v.strip()]
         defs.extend(history_defs(fx.source() if fx is not None else "BGN", fx_pair_list(self.store),
                                  viop={"active": active, "today": today} if active else None))
+        # the SOFR fixings of Trades' SOFR swaps (SOFR_TICKER): last in the backfill's turn, asked once a day afterwards
+        defs.append(SeriesDef("sofr", "SOFR", SOFR_TICKER, "PX_LAST",
+                              info={"lookback": SOFR_LOOKBACK, "backfill": True, "tail": "daily", "after": SOFR_AFTER}))
         holidays: List[float] = []
         mi = model.sheet_index.get("Motor")
         if mi is not None:
@@ -1082,9 +1093,10 @@ class History(object):
           wait for the next syncs: ``state["backfill"]``); the ones marked ``"extend"`` (the history's own the quant
           analyses read two years back) fill their own window first, in full, and the older part afterwards that way -
           only the part they miss, a week into what they have (an answer with nothing in it is no answer);
-        * a series marked ``tail: "daily"`` asks its new days once a day - after 07:00, when yesterday's close is final
-          (and once at a start before it).  None is marked so today: the desk keeps the 15-minute sync for every series,
-          the quant package's too;
+        * a series marked ``tail: "daily"`` asks its new days once a day - after 07:00 (or its own hour, ``info["after"]``),
+          when yesterday's close is final (and once at a start before it).  Only the SOFR fixings are marked so
+          (``SOFR_TICKER``: one value a day, out at 08:00 New York - ``SOFR_AFTER``); the desk keeps the 15-minute sync for
+          every other series, the quant package's too;
         * a series marked ``tail: "none"`` (an expired VİOP contract: its history is complete) is asked once in full and
           never for new days; its other tickers (the two-digit year) only after the first came back empty, and an
           empty one again only ``FINAL_RETRY_DAYS`` later;
@@ -1103,18 +1115,19 @@ class History(object):
             self._empty = {sid: today_iso for sid, r in records.items() if r.get("day") == today_iso and sid not in bounds}
         rationed = self.svc.mode == "live"
         hour = self._hour()
-        backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], bool]] = []
-        viop: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], bool]] = []
+        backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], Optional[float]]] = []
+        viop: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], Optional[float]]] = []
         full: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
         tail: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
 
-        def recent(field: str, t: str, b: Tuple[str, str, int], daily: bool) -> None:
-            if daily:
+        def recent(field: str, t: str, b: Tuple[str, str, int], daily: Optional[float]) -> None:
+            # ``daily``: a once-a-day series' hour (its close of yesterday final after it), None for the others
+            if daily is not None:
                 sid = "%s|%s" % (t, field)
                 last = self._tailed.get(sid)
-                if last is not None and last[0] == today_iso and (last[1] or hour < 7.0):
-                    return                                     # asked today already (after 07:00, or it is not 07:00 yet)
-                self._tailed[sid] = (today_iso, hour >= 7.0)
+                if last is not None and last[0] == today_iso and (last[1] or hour < daily):
+                    return                                     # asked today already (after its hour, or it is not that hour yet)
+                self._tailed[sid] = (today_iso, hour >= daily)
             start = min(today, _day(b[1])) - _dt.timedelta(days=self.OVERLAP_DAYS)
             tail.setdefault((field, start, today), []).append(t)
 
@@ -1125,7 +1138,7 @@ class History(object):
 
         for d in snap["defs"]:
             ext = d.info.get("backfill") == "extend"
-            daily = d.info.get("tail") == "daily"
+            daily = float(d.info.get("after") or 7.0) if d.info.get("tail") == "daily" else None
             final = d.info.get("tail") == "none"
             lookback = int(d.info.get("lookback") or 0)
             if final:
@@ -1145,7 +1158,7 @@ class History(object):
                     if last and (today - _day(last)).days < self.FINAL_RETRY_DAYS:
                         continue                               # asked lately, nothing came: a week later
                     if rationed:
-                        viop.append((1 if sid in records else 0, len(viop), d.field, t, today - _dt.timedelta(days=lookback or look), None, False))
+                        viop.append((1 if sid in records else 0, len(viop), d.field, t, today - _dt.timedelta(days=lookback or look), None, None))
                     else:
                         ask(d.field, t, today - _dt.timedelta(days=lookback or look), None)
                     continue
@@ -1167,7 +1180,7 @@ class History(object):
                     backfill.append((1 if sid in records else 0, len(backfill), d.field, t, since, b, daily))
                 elif wanted:
                     ask(d.field, t, since, b)
-                elif b is not None and not (daily and rec.get("day") == today_iso and rec.get("from")):
+                elif b is not None and not (daily is not None and rec.get("day") == today_iso and rec.get("from")):
                     recent(d.field, t, b, daily)               # (a once-a-day series asked in full today has its last close)
         backfill.sort()
         viop.sort()

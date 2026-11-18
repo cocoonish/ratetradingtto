@@ -2041,8 +2041,9 @@ async function clipAfter(page, action) {
       && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak')
       // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five, the G10 universe's
       // own 22 - and its contracts: the six listed and 24 expired months, close / high / low, an expired one with its
-      // two-digit-year ticker beside)
-      && series.length === 118 + 143 + 3 * (6 + 24) + 3 * 24
+      // two-digit-year ticker beside; + the SOFR fixings of Trades' SOFR swaps, none recorded)
+      && series.length === 118 + 143 + 3 * (6 + 24) + 3 * 24 + 1
+      && series.some((r) => r[2] === 'SOFRRATE Index' && r[0] === 'SOFR fixing (Trades)' && r[7] === 'geçmiş yok')
       && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), { tlref: rowOf(series, 'TLREF'), rows: series.length });
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
@@ -4614,6 +4615,18 @@ async function clipAfter(page, action) {
     check('... "MTM yenile": "son yenileme: hh:mm", and each trade shows its value or why it has none; the totals in TL and USD',
       /henüz değerlenmedi/.test(mtmBefore) && valued.length === 2 && valued.every((v) => v.number || v.why.length > 3) && /Toplam/.test(totals)
       && /MTM TL/.test(totals) && /Gerçekleşen USD/.test(totals), { mtmBefore, valued });
+    // "Kupon" beside the MTM; a swap's opens "Kuponlar": the SOFR 5Y dealt today - five yearly periods ahead, paid two SIFMA
+    // days after their ends, nothing realised yet
+    const sofrRow = await page.evaluate(() => ([...document.querySelectorAll('#trades-open tr.trade')].find((x) => /PAY 5Y SOFR 25m/.test(x.textContent)) || {}).dataset.id);
+    await page.click('#trades-open tr[data-id="' + sofrRow + '"] .act-coupons');
+    await page.waitForSelector('#trades-coupons-0', { timeout: 30000 });
+    const cpn = await page.evaluate(() => ({ head: !!document.getElementById('trades-coupon-col'),
+      states: [...document.querySelectorAll('#trades-coupons-0 tr[data-state]')].map((tr) => tr.dataset.state),
+      text: document.getElementById('trades-coupons').textContent }));
+    await page.keyboard.press('Escape');
+    check('... "Kupon" beside the MTM; a swap\'s opens "Kuponlar": the SOFR 5Y\'s five yearly periods ahead (paid 2 SIFMA days on), nothing realised',
+      cpn.head && cpn.states.length === 5 && cpn.states.every((s) => s === 'future') && /2 iş günü sonra \(SIFMA\)/.test(cpn.text)
+      && /Gerçekleşen/.test(cpn.text), cpn);
     // a spread is one line with its package level; ▸ shows each leg; "Bacaklar ayrı satır" lists the legs as rows of their own
     const tradeSpread = await api(page, 'ayşe yilmaz', 'POST', '/api/trades', { scope: 'desk', product: 'ois', structure: 'spread', trade_date: tradesToday,
       settle_date: '+1', side: 'steepener', legs: [{ side: 'receive', end_date: '2Y', notional: '100m', price: '38,50' },

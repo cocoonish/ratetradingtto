@@ -353,6 +353,216 @@ def test_started_sofr_uses_its_fixings_or_says_so():
     assert bare["ok"] and any("SOFR fixingleri tarihçede yok" in n for n in bare["inputs"]["notes"])
 
 
+# ---------------------------------------------------------------------------------------------- coupons
+#: New York's holidays (SIFMA) of the year before the workbook's list starts (it holds 2026 on) - and the list's own
+US_2025 = {D(2025, 10, 13), D(2025, 11, 11), D(2025, 11, 27), D(2025, 12, 25)}
+SIFMA_LIST = {D(2026, 1, 1), D(2026, 1, 19), D(2026, 2, 16), D(2026, 4, 3), D(2026, 5, 25), D(2026, 6, 19), D(2026, 7, 3),
+              D(2026, 9, 7), D(2026, 10, 12), D(2026, 11, 11), D(2026, 11, 26), D(2026, 12, 25), D(2027, 10, 11)}
+
+
+def compound_on(fixings, bdays, a, b, basis, other=None):
+    """Π (1 + r·n/basis) over the given business days in [a, b): each fixing over the calendar days to the next business
+    day (``b`` for the last); a day without a fixing at ``other``."""
+    days = [d for d in bdays if a <= d < b]
+    f = 1.0
+    for i, d in enumerate(days):
+        nxt = days[i + 1] if i + 1 < len(days) else b
+        f *= 1.0 + fixings.get(d, other) * (nxt - d).days / basis
+    return f
+
+
+def sofr_history(last=D(2026, 10, 30)):
+    """SOFR fixings as the history keeps them: New York's business days (no fixing on its holidays) up to ``last`` -
+    Monday 2.11's comes out on Tuesday at 08:00 New York."""
+    days = [d for d in business_days(D(2025, 9, 1), last + dt.timedelta(days=1)) if d not in US_2025 | SIFMA_LIST]
+    return {d: round(0.0430 - 0.00002 * k, 6) for k, d in enumerate(days)}
+
+
+def test_sofr_accrues_its_own_fixings_compounded_by_hand():
+    """A 2Y SOFR payer started 7.10.2025, valued on 3.11.2026: its first year ended on 7.10.2026 - paid two SIFMA days
+    later -, the second runs.  Each fixing over the days to New York's next business day: the holidays of 2025 (not in
+    the workbook's SIFMA list) read off the history - no fixing that day -, Monday's not out yet (the last one, said)."""
+    fx = sofr_history()
+    fix = tv.Fixings({d.isoformat(): r * 100.0 for d, r in fx.items()}, 0.0395, SIFMA_LIST, 360.0, "SOFR", "tarihçe")
+    m = hand_market(cal={"SIFMA": SIFMA_LIST}, fix_sofr=fix)
+    t = {"product": "sofr", "side": "pay", "notional": N, "price": 4.1, "trade_date": "2025-10-03", "settle_date": "2025-10-07",
+         "tenor": "2Y"}
+    r = tv.value(t, m)
+    assert r["ok"], r["why"]
+    start, mid, end = D(2025, 10, 7), D(2026, 10, 7), D(2027, 10, 7)
+    bdays = sorted(fx) + [D(2026, 11, 2)]                                   # (Monday: a business day not in the history yet)
+    i1 = compound_on(fx, bdays, start, mid, 360.0)
+    coupon = -N * (0.041 * (mid - start).days / 360.0 - (i1 - 1.0))          # (pay: the fixed paid, the float received)
+    assert abs(r["accrued"] - coupon) < 1e-6
+    i2 = compound_on(fx, bdays, mid, TODAY, 360.0, other=fx[D(2026, 10, 30)])
+    c = m.curves["sofr"]
+    d_e = c.df(end) / c.df(TODAY)
+    assert abs(r["mtm"] + N * (0.041 * (end - mid).days / 360.0 * d_e - (i2 - d_e))) < 1e-6
+    # the coupons: the ended year paid on 9.10 (Wednesday + 2 SIFMA days), the running one so far, nothing estimated but Monday
+    table = r["inputs"]["coupons"]
+    assert len(table) == 1 and table[0]["label"] == "Pay SOFR 07.10.27" and table[0]["realised"] == r["accrued"]
+    first, now = table[0]["periods"]
+    assert (first["start"], first["end"], first["pay"], first["state"], first["days"]) == ("2025-10-07", "2026-10-07", "2026-10-09", "paid", 365)
+    assert abs(first["fixed"] + N * 0.041 * 365 / 360.0) < 1e-6 and abs(first["float"] - N * (i1 - 1.0)) < 1e-6
+    assert abs(first["net"] - coupon) < 1e-6 and abs(first["float_rate"] - (i1 - 1.0) * 360 / 365 * 100) < 1e-9 and first["estimated"] == []
+    assert (now["state"], now["pay"], now["estimated"]) == ("running", "2027-10-12", ["2026-11-02"])      # (11.10.27: Columbus Day)
+    assert abs(now["float"] - N * (i2 - 1.0)) < 1e-6 and abs(now["fixed"] + N * 0.041 * 27 / 360.0) < 1e-6
+    # what the float was made of: every past day its own fixing but Monday's, which is said - not the holidays
+    assert r["inputs"]["notes"] == ["SOFR 02.11.26 fixing'i henüz yayımlanmadı (New York'ta ertesi iş günü 08:00): "
+                                    "son fixing (30.10.26 %%%s) ile" % tv._plain(fx[D(2026, 10, 30)] * 100.0)]
+    assert r["inputs"]["fixings"] == {"fix": len([d for d in fx if d >= start]), "pending": 1}
+    # the same days had one by one (the holidays as business days at the fixing before them): a different number
+    flat = tv.Fixings({d.isoformat(): r_ * 100.0 for d, r_ in fx.items()}, 0.0395, SIFMA_LIST, 360.0, "SOFR", off=frozenset())
+    other = tv.value(t, hand_market(cal={"SIFMA": SIFMA_LIST}, fix_sofr=flat))
+    assert other["accrued"] != r["accrued"] and any("4 günün SOFR fixing'i tarihçede yok" in n for n in other["inputs"]["notes"])
+    # the public view of them, and Monday published: nothing estimated, the history's own numbers
+    cp = tv.coupons(t, m)
+    assert cp["ok"] and cp["legs"] == table and cp["realised"] == r["accrued"] and cp["source"] == "tarihçe" and cp["asof"] == "2026-11-03"
+    fx[D(2026, 11, 2)] = 0.0391
+    full = tv.Fixings({d.isoformat(): r_ * 100.0 for d, r_ in fx.items()}, 0.0395, SIFMA_LIST, 360.0, "SOFR")
+    done = tv.value(t, hand_market(cal={"SIFMA": SIFMA_LIST}, fix_sofr=full))
+    assert done["inputs"]["notes"] == [] and done["inputs"]["fixings"] == {"fix": len([d for d in fx if d >= start])}
+    assert tv.coupons({"product": "fxspot", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 42.0,
+                       "trade_date": TODAY.isoformat()}, m)["why"] == "kupon takvimi yalnız OIS / SOFR işlemlerinde"
+
+
+def test_the_market_reads_the_sofr_fixings_from_the_history(tmp_path):
+    """``market()`` takes SOFR's fixings from the history's ``SOFRRATE Index`` as TLREF's from ``BISTTREF Index``: a
+    started SOFR swap compounds them and the "no history" note is gone (a day not out yet is named instead)."""
+    from conftest import make_service
+    svc = make_service(tmp_path)
+    try:
+        bare = tv.market(svc)
+        assert any("SOFR fixingleri tarihçede yok" in n for n in bare.notes) and bare.sources["sofr"] == ""
+        today, sifma = bare.today, bare.hol("SIFMA")
+        pending = tv._preceding(today - dt.timedelta(days=1), sifma)        # (the last business day's is not out yet ...
+        last = tv._preceding(pending - dt.timedelta(days=1), sifma)         # ... the one before it is the history's last)
+        days = business_days(today - dt.timedelta(days=200), last + dt.timedelta(days=1), sifma)
+        svc.store.hist_upsert("SOFRRATE Index|PX_LAST", [(d.isoformat(), 4.0 + 0.001 * k) for k, d in enumerate(days)])
+        m = tv.market(svc)
+        fix = m.fixings["sofr"]
+        assert not any("SOFR fixingleri" in n for n in m.notes) and m.sources["sofr"] == "tarihçe" and fix.name == "SOFR"
+        assert fix.points == {d.isoformat(): 4.0 + 0.001 * k for k, d in enumerate(days)} and fix.last == last.isoformat()
+        start = days[-60]
+        t = {"product": "sofr", "side": "receive", "notional": N, "price": 4.0, "trade_date": start.isoformat(),
+             "settle_date": start.isoformat(), "tenor": "1Y"}
+        r = tv.value(t, m)
+        assert r["ok"], r["why"]
+        hand = compound_on({d: 0.04 + 0.00001 * k for k, d in enumerate(days)}, [d for d in days if d >= start] + [pending], start,
+                           today, 360.0, other=0.04 + 0.00001 * (len(days) - 1))
+        now = r["inputs"]["coupons"][0]["periods"][0]
+        assert now["state"] == "running" and abs(now["float"] + N * (hand - 1.0)) < 1e-6 and now["estimated"] == [pending.isoformat()]
+        assert r["inputs"]["notes"] == ["SOFR %s fixing'i henüz yayımlanmadı (New York'ta ertesi iş günü 08:00): son fixing (%s %%%s) ile"
+                                        % (tv._short(pending), tv._short(last), tv._plain(4.0 + 0.001 * (len(days) - 1)))]
+    finally:
+        svc.stop()
+
+
+def test_coupon_schedules_and_payment_days_of_several_tenors():
+    """Every tenor's periods and payment days by its product's rule: TRY OIS one payment up to 3M, then every three
+    months from the start, paid at the period's end; SOFR one payment up to 1Y, then yearly back from the end (the first
+    period short), paid two SIFMA business days after it (over a weekend, a holiday)."""
+    m = hand_market(cal={"SIFMA": SIFMA_LIST, "TRY": {D(2027, 2, 4)}})
+    td = TODAY.isoformat()
+
+    def periods(t):
+        r = tv.coupons(t, m)
+        assert r["ok"], r["why"]
+        return [(p["start"], p["end"], p["pay"]) for p in r["legs"][0]["periods"]]
+
+    # TRY (spot 4.11.2026): 1M and 3M one payment; 6M two, 1Y four, 2Y eight - the end of a period is its payment
+    one = periods(ois(price=40.0, tenor="1M"))
+    assert one == [("2026-11-04", "2026-12-04", "2026-12-04")]
+    assert periods(ois(price=40.0, tenor="3M")) == [("2026-11-04", "2027-02-05", "2027-02-05")]          # (4.2: a holiday)
+    six = periods(ois(price=40.0, tenor="6M"))
+    assert six == [("2026-11-04", "2027-02-05", "2027-02-05"), ("2027-02-05", "2027-05-04", "2027-05-04")]
+    assert len(periods(ois(price=40.0, tenor="1Y"))) == 4 and len(periods(ois(price=40.0, tenor="2Y"))) == 8
+    assert all(a[2] == a[1] for a in periods(ois(price=40.0, tenor="2Y")))
+    # SOFR (spot 5.11.2026): 6M and 1Y one payment; 15M a short first quarter then a year; 18M six months then a year; 2Y,
+    # 3Y yearly - each paid two SIFMA days after its end
+    sofr = lambda ten: {"product": "sofr", "side": "receive", "notional": N, "price": 4.0, "trade_date": td, "tenor": ten}  # noqa: E731
+    assert periods(sofr("6M")) == [("2026-11-05", "2027-05-05", "2027-05-07")]
+    assert periods(sofr("1Y")) == [("2026-11-05", "2027-11-05", "2027-11-09")]                           # (Friday: Tuesday)
+    assert periods(sofr("15M")) == [("2026-11-05", "2027-02-05", "2027-02-09"), ("2027-02-05", "2028-02-07", "2028-02-09")]
+    assert periods(sofr("18M")) == [("2026-11-05", "2027-05-05", "2027-05-07"), ("2027-05-05", "2028-05-05", "2028-05-09")]
+    assert [p[1] for p in periods(sofr("2Y"))] == ["2027-11-05", "2028-11-06"] and len(periods(sofr("3Y"))) == 3
+    # a period ending on the eve of a SIFMA holiday: two business days on, the holiday skipped (Wed 25.11.26 → Mon 30.11.26)
+    broken = periods({"product": "sofr", "side": "receive", "notional": N, "price": 4.0, "trade_date": td, "settle_date": "2026-11-05",
+                      "end_date": "2026-11-25"})
+    assert broken == [("2026-11-05", "2026-11-25", "2026-11-30")]
+    rules = (tv.CONVS["ois"].pay_lag, tv.CONVS["sofr"].pay_lag, tv.CONVS["ois"].rule, tv.CONVS["sofr"].rule)
+    assert rules[:2] == (0, 2) and "3 ayda bir" in rules[2] and "2 iş günü" in rules[3]
+    # nothing has ended on a new trade: no coupon realised, the first payment next
+    r = tv.value(ois(price=40.0, tenor="6M"), m)
+    assert r["accrued"] == 0.0 and r["coupon_info"] == {"n": 0, "last": None, "next": {"end": "2027-02-05", "pay": "2027-02-05"}}
+
+
+def _try_market(day, rate=0.40):
+    """The hand market on ``day`` with TLREF fixed at ``rate`` every business day before it."""
+    days = business_days(D(2026, 5, 4), day)
+    fix = tv.Fixings({d.isoformat(): rate * 100.0 for d in days}, rate, (), 365.0, "TLREF", "tarihçe")
+    return hand_market(today=day, fix_try=fix)
+
+
+def test_a_coupon_paid_moves_from_the_swap_to_the_realised_and_the_value_does_not_jump():
+    """A 6M receiver started 4.8 pays its first quarter on 4.11: valued on 3.11 (the day before), on 4.11 and on 5.11,
+    the market unchanged (flat 40 %, TLREF fixed at it).  The quarter's net goes from the MTM to ``accrued`` (realised) at
+    once; MTM + accrued only earns the day's time value across it - as the day after does -, no jump of the coupon's
+    size; a spread's legs each the same way."""
+    t = ois(price=41.0, trade_date="2026-08-03", settle_date="2026-08-04", tenor="6M")
+    days = (D(2026, 11, 3), D(2026, 11, 4), D(2026, 11, 5))
+    before, on, after = (tv.value(t, _try_market(day), day) for day in days)
+    fixed = business_days(D(2026, 8, 4), D(2026, 11, 4))
+    coupon = N * (0.41 * 92 / 365.0 - (compounded({d: 0.40 for d in fixed}, D(2026, 8, 4), D(2026, 11, 4), 365.0) - 1.0))
+    assert before["accrued"] == 0.0 and abs(on["accrued"] - coupon) < 1e-6 and abs(coupon) > 2e5
+    assert on["coupon_info"]["n"] == 1 and on["coupon_info"]["last"]["state"] == "paid" and abs(on["coupon_info"]["last"]["net"] - coupon) < 1e-6
+    # the value - MTM + realised -: across the payment as on the next day, a day's interest on the value (on the coupon too,
+    # the day before it is paid: then it stands at its face); the MTM alone drops by the coupon
+    value = lambda v: v["mtm"] + v["accrued"]                                                          # noqa: E731
+    across, next_day = value(on) - value(before), value(after) - value(on)
+    assert abs(across) < 0.005 * abs(coupon) and abs(next_day) < 0.005 * abs(coupon)
+    assert abs((across - next_day) - coupon * 0.40 / 365.0) < 0.1 * abs(coupon * 0.40 / 365.0), (across, next_day)
+    assert abs((on["mtm"] - before["mtm"]) + coupon) < 0.005 * abs(coupon)
+    # a spread: each leg its own coupons and realised part, the legs adding up to the package
+    legs = [{"tenor": "6M", "side": "receive", "notional": N, "price": 41.0}, {"tenor": "1Y", "side": "pay", "notional": N / 2, "price": 40.0}]
+    sp = ois(structure="spread", trade_date="2026-08-03", settle_date="2026-08-04", legs=legs)
+    a, b = (tv.value(sp, _try_market(day), day) for day in days[:2])
+    assert [len(x["periods"]) for x in b["inputs"]["coupons"]] == [2, 4] and [x["label"] for x in b["inputs"]["coupons"]] == [
+        lg["label"] for lg in b["legs"]]
+    assert abs(b["accrued"] - sum(lg["accrued"] for lg in b["legs"])) < 1e-9 and all(abs(lg["accrued"]) > 1e5 for lg in b["legs"])
+    assert [len(lg["coupon_flows"]) for lg in b["legs"]] == [1, 1] and b["legs"][0]["coupon_flows"][0][0] == "2026-11-04"
+    assert a["accrued"] == 0.0 and all(lg["accrued"] == 0.0 and lg["coupon_flows"] == [] for lg in a["legs"])
+    for i in range(2):
+        move = value(b["legs"][i]) - value(a["legs"][i])
+        assert abs(move) < 0.005 * abs(b["legs"][i]["accrued"]), (i, move)
+        assert abs(b["legs"][i]["accrued_try"] - b["legs"][i]["accrued"]) < 1e-9 and abs(b["legs"][i]["accrued_usd"] - b["legs"][i]["accrued"] / 42.0) < 1e-9
+
+
+def test_an_old_trade_s_coupons_from_its_own_dates_and_the_days_the_history_lacks_said():
+    """A 1Y receiver dealt long before the history: its coupons are worked out from its own dates; the days before the
+    history's first fixing are estimated at today's TLREF and named, period by period and in the notes."""
+    fix = tv.Fixings({d.isoformat(): 41.0 for d in business_days(D(2026, 3, 2), TODAY)}, 0.40, (), 365.0, "TLREF", "tarihçe")
+    m = hand_market(fix_try=fix)
+    t = ois(price=42.0, trade_date="2025-12-01", settle_date="2025-12-02", tenor="1Y")
+    r = tv.value(t, m)
+    rows = r["inputs"]["coupons"][0]["periods"]
+    assert [(p["end"], p["state"]) for p in rows] == [("2026-03-02", "paid"), ("2026-06-02", "paid"), ("2026-09-02", "paid"),
+                                                      ("2026-12-02", "running")]
+    early = business_days(D(2025, 12, 2), D(2026, 3, 2))
+    assert rows[0]["estimated"] == [d.isoformat() for d in early] and rows[1]["estimated"] == [] == rows[2]["estimated"]
+    hand = compounded({d: 0.40 for d in early}, D(2025, 12, 2), D(2026, 3, 2), 365.0)
+    assert abs(rows[0]["net"] - N * (0.42 * 90 / 365.0 - (hand - 1.0))) < 1e-6
+    assert r["inputs"]["notes"] == ["TLREF fixingleri tarihçede yok: gerçekleşen %d gün bugünkü TLREF ile (eğri değil, yaklaşık) - "
+                                    "02.12.25–27.02.26" % len(early)]
+    assert abs(r["accrued"] - sum(p["net"] for p in rows[:3])) < 1e-6
+    # unwound: the periods after the close are the fixed difference alone, known - the realised part up to the close
+    closed = tv.coupons(dict(t, status="closed", close_price=40.0, close_date="2026-07-15"), m, "2026-07-15")
+    states = [(p["end"], p["state"], p["net"] is not None) for p in closed["legs"][0]["periods"]]
+    assert states == [("2026-03-02", "paid", True), ("2026-06-02", "paid", True), ("2026-09-02", "future", True), ("2026-12-02", "future", True)]
+    last = closed["legs"][0]["periods"][-1]
+    assert last["float"] == 0.0 and abs(last["net"] - N * 0.02 * 91 / 365.0) < 1e-6 and closed["legs"][0]["closed"]["rate"] == 40.0
+
+
 # ---------------------------------------------------------------------------------------------- bonds
 def _bist_accrued(maturity, coupon, value, freq=2):
     """DİBS RV's accrued by hand: c/f × days since the last coupon / the period (round(364/f) days back from the maturity)."""

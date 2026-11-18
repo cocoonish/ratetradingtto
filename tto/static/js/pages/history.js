@@ -1465,7 +1465,7 @@ export class SettingsPage {
       this.daysInp.value = String(st.settings.lookback_days);
       this.fieldInp.dataset.set = '1';
     }
-    const names = { ref: 'TLREF', ois: 'TRY OIS', off: 'Offshore · FX swap ima', xccy: 'Offshore · XCCY', dibs: 'DİBS' };
+    const names = { ref: 'TLREF', ois: 'TRY OIS', off: 'Offshore · FX swap ima', xccy: 'Offshore · XCCY', dibs: 'DİBS', sofr: 'SOFR fixing (Trades)' };
     const rows = [[HD('Grup'), HD('Seri'), HD('Ticker'), HD('Alan'), HD('İlk gün'), HD('Son gün'), HD('Gün'), HD('Durum')]];
     for (const s of this.cov.series) {
       rows.push([TXT(names[s.group] || s.group), TXT(s.label, { cls: 'lab' }), TXT(s.ticker), TXT(s.field), TXT(isoToTr(s.first)), TXT(isoToTr(s.last)), N(s.n, 0),
@@ -1474,6 +1474,7 @@ export class SettingsPage {
     }
     this.seriesPanel.setData({ sheet: '', rows });
     this.seriesPanel.setNote('Seriler Excel dosyasından okunur: OIS ticker kökleri (OIS_MAIN!J9:J26), offshore ticker\'ları (Forward!AO6:AO26), DİBS RV listesi. '
+      + 'SOFR fixing\'i (SOFRRATE Index) Trades\'in SOFR swap\'ları için tutulur: iki yıl bir kez, sonra günde bir kez - New York bir önceki günün fixing\'ini yayımladıktan sonra (16:30). '
       + 'Kaynak sırası yukarıdaki "Veri kaynakları" listesinden gelir (en sonda Excel\'deki ticker – BGN). '
       + 'Yedek yalnızca ana kaynağın kapanışı olmayan günleri doldurur (hareketi ana kaynağın seviyesine eklenerek); ana kaynakta hiç geçmiş yoksa seri yedekten okunur. '
       + 'Bir seride "geçmiş yok" yazıyorsa Bloomberg o ticker / alan için tarihçe vermiyor demektir.');

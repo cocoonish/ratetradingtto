@@ -1369,6 +1369,18 @@ table.plain.trades td.lv.near-stop { box-shadow: inset 3px 0 0 var(--neg); }
 table.plain.trades .tsrc { color: var(--accent-ink); }
 table.plain.trades td.hit-target { color: var(--pos); }
 table.plain.trades td.hit-stop { color: var(--neg); }
+/* a swap's coupons: the list's "Kupon" (realised) and the "Kuponlar" window - a table per leg, the running period so far in
+   italics, the periods ahead quiet */
+table.plain.trades td.cpn { white-space: nowrap; }
+table.plain.trades td.cpn .linkbtn { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+table.plain.trades td.cpn .linkbtn:hover { text-decoration-style: solid; }
+#trades-coupons .cpn-leg { margin: 0 0 14px; }
+#trades-coupons .cpn-leg h3 { margin: 0 0 2px; font-size: 13px; font-weight: 650; }
+#trades-coupons .cpn-leg > .small { margin-bottom: 6px; white-space: normal; }
+table.plain.trades.cpn tr.cpn-running td { font-style: italic; }
+table.plain.trades.cpn tr.cpn-future td { color: var(--ink-3); }
+table.plain.trades.cpn td.net { font-weight: 650; }
+#trades-coupons .cpn-total { font-weight: 650; margin: 2px 0 8px; }
 /* DİBS RV · Genel: the fit's line over the page, the settings it reads (typed in the RV hesap tablosu tab), the tables of
    the hesap tablosu tabs shown read-only */
 .dg-tools .dg-fit { font-size: 12px; color: var(--ink-2); }

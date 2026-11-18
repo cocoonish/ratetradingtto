@@ -2,7 +2,8 @@
 
 Most tests use the book on a database of its own (``_book``): no workbook is loaded, the clock is the test's and the
 valuation is a fake (``stub_valuation``: tto/tradevalue.py's stub, whichever module the branch carries - the
-trades-deger branch's real one replaces the stub) or returns planted numbers (``planted``).
+trades-deger branch's real one replaces the stub) or returns planted numbers (``planted``) - the coupon tests run the
+real valuation on a market of their own (``_rates_market``).
 Then the same over HTTP on the replay service: who reaches what through every route, the form's defaults and DV01, and an
 MPC trade kept by its meeting's date while the calendar moves."""
 import datetime as dt
@@ -146,6 +147,10 @@ def _val(mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None):
                       "carry_1d_try": c * to_try, "carry_1d_usd": c * to_usd, "price_now": None, "price_text": ""}
                      for label, m, c in legs]
     return v
+
+
+#: the real valuation, for the tests that run it (on a market of their own, or the replay service's)
+_REAL = {name: getattr(tv, name) for name in ("check", "value", "coupons", "market")}
 
 
 # the valuation as tto/tradevalue.py's stub has it - installed for every test here, so that these tests read the core the
@@ -641,6 +646,114 @@ def test_a_close_s_carry_covers_the_days_to_the_next_business_day(planted):
     store.close()
 
 
+# ---------------------------------------------------------------------- a swap's coupons: realised + the swap still to run
+def _rates_market(day, rate=0.40):
+    """A TRY market on ``day`` made of the valuation's own objects, the same every day: a flat curve from the OIS spot,
+    TLREF fixed at ``rate`` every week day before ``day`` (from May on), USDTRY 42."""
+    m = tv.Market(day, spots={"USDTRY": 42.0}, usdtry=42.0)
+    m.curves = {"ois": tv.Curve.flat(m.spot_date("ois"), rate, 365.0)}
+    days = [dt.date(2026, 5, 4) + dt.timedelta(days=k) for k in range((day - dt.date(2026, 5, 4)).days)]
+    m.fixings = {"ois": tv.Fixings({d.isoformat(): rate * 100.0 for d in days if d.weekday() < 5}, rate, (), 365.0, "TLREF", "tarihçe")}
+    return m
+
+
+def _real_valuation(monkeypatch, clock):
+    for name in ("check", "value"):
+        monkeypatch.setattr(tv, name, _REAL[name])
+    monkeypatch.setattr(tv, "market", lambda svc: _rates_market(clock().date()))
+
+
+def test_a_coupon_paid_between_two_closes_moves_to_the_realised_and_the_p_and_l_does_not_jump(monkeypatch):
+    """A 6M receiver and a 6M / 1Y spread started 4.8 pay their first quarter on Wednesday 4.11 (the real valuation, on a
+    market that does not move): Tuesday's close, then "MTM yenile" on Wednesday.  Its daily P&L against Tuesday's close
+    is a day's time value, not the coupon - the coupon moved from the MTM to the realised part -, each leg's too; the
+    closes keep the realised part, the legs theirs; a close kept before the legs carried theirs (an earlier version) is
+    read with the coupons the legs had ended by its day."""
+    book, store, clock = _book()
+    _real_valuation(monkeypatch, clock)
+    ali = _user(store, "Ali Veli")
+    clock.set("2026-08-03 10:00")
+    a = book.add(ali, _ois(trade_date="2026-08-03", settle_date="2026-08-04", end_date="6M", price="41"))["id"]
+    legs = [{"side": "receive", "end_date": "6M", "notional": "100m", "price": "41"},
+            {"side": "pay", "end_date": "1Y", "notional": "50m", "price": "40"}]
+    sp = book.add(ali, _ois(structure="spread", trade_date="2026-08-03", settle_date="2026-08-04", legs=legs, end_date="",
+                            notional="", price=""))["id"]
+    for day in ("2026-10-30", "2026-11-02", "2026-11-03"):
+        clock.set(day + " 17:30")
+        assert book.take_close(day)["valued"] == 2
+    clock.set("2026-11-04 12:00")
+    res = book.mtm(ali, "desk")["values"]
+    v, s = res[str(a)], res[str(sp)]
+    tue = store.tb_closes([a])[a]["2026-11-03"]
+    coupon = v["accrued"]
+    assert tue["accrued"] == 0.0 and coupon < -2e5 and v["coupon_info"]["n"] == 1 and abs(v["coupon_info"]["last"]["net"] - coupon) < 1e-6
+    day, week = v["periods"]["day"], v["periods"]["week"]
+    assert day["from"] == "2026-11-03" and abs(day["pnl"]["ccy"]) < 0.005 * abs(coupon)
+    assert week["from"] == "2026-10-30" and abs(week["pnl"]["ccy"]) < 0.02 * abs(coupon)         # (the week: Friday's close on)
+    assert abs(day["pnl"]["ccy"] - (v["mtm"] + coupon - tue["mtm"])) < 1e-6 and abs(day["pnl"]["usd"] - day["pnl"]["ccy"] / 42.0) < 1e-6
+    assert abs(v["mtm"] - tue["mtm"] + coupon) < 0.005 * abs(coupon)                 # (the MTM alone dropped by the coupon)
+    assert abs(v["accrued_usd"] - coupon / 42.0) < 1e-6 and abs(v["periods"]["total"]["pnl"]["ccy"] - (v["mtm"] + coupon)) < 1e-6
+    # the spread: each leg its realised coupon and as continuous a P&L; nothing left over between the legs and the whole
+    lp = s["periods"]["legs"]
+    assert [lg["accrued"] for lg in s["legs"]] == [lg["accrued"] for lg in lp] and all(abs(lg["accrued"]) > 1e5 for lg in lp)
+    assert all(abs(lg["day"]["pnl"]["ccy"]) < 0.005 * abs(lg["accrued"]) for lg in lp), [lg["day"] for lg in lp]
+    assert all(abs(lg["week"]["pnl"]["ccy"]) < 0.02 * abs(lg["accrued"]) for lg in lp), [lg["week"] for lg in lp]
+    assert abs(s["periods"]["residual"]["day"]["pnl"]["ccy"]) < 1e-6 and abs(s["accrued"] - sum(lg["accrued"] for lg in lp)) < 1e-6
+    # Wednesday's close as an earlier version kept it - the legs without their coupons - and Thursday's P&L against it
+    mkt = _rates_market(dt.date(2026, 11, 4))
+    old = []
+    for tid in (a, sp):
+        row = store.tb_get(tid)
+        val = dict(book._keep(book._value(book.for_value(row, as_open=True), mkt, "2026-11-04"), greeks=False), fp=tbm.fingerprint(row))
+        for lg in val.get("legs") or []:
+            for k in ("accrued", "accrued_try", "accrued_usd"):
+                del lg[k]
+        old.append((tid, val))
+    assert store.tb_put_close("2026-11-04", "2026-11-04 17:30", False, old)
+    clock.set("2026-11-05 12:00")
+    s = book.mtm(ali, "desk")["values"][str(sp)]
+    assert s["periods"]["day"]["from"] == "2026-11-04" and abs(s["periods"]["residual"]["day"]["pnl"]["ccy"]) < 1e-6
+    assert all(abs(lg["day"]["pnl"]["ccy"]) < 0.005 * abs(lg["accrued"]) for lg in s["periods"]["legs"])
+    # ... and Thursday's close keeps them: the trade's realised part, each leg's
+    clock.set("2026-11-05 17:30")
+    assert book.take_close("2026-11-05")["valued"] == 2
+    kept = store.tb_closes([a, sp])
+    assert abs(kept[a]["2026-11-05"]["accrued"] - coupon) < 1e-6 and abs(kept[a]["2026-11-05"]["accrued_try"] - coupon) < 1e-6
+    assert [abs(lg["accrued"]) > 1e5 and lg["ccy"] == "TRY" for lg in kept[sp]["2026-11-05"]["legs"]] == [True, True]
+    store.close()
+
+
+def test_a_swap_s_coupons_reach_whoever_sees_the_trade(monkeypatch):
+    """"Kuponlar" (``TradeBook.coupons``): the valuation's coupons of a TRY OIS / SOFR trade - the desk's for everybody,
+    one's own for its owner only (anybody else, an administrator too, gets the 404 of a trade that does not exist); a
+    trade of another product has none; a closed swap's are its close's."""
+    book, store, clock = _book()
+    _real_valuation(monkeypatch, clock)
+    ali, veli, admin = _user(store, "Ali Veli"), _user(store, "Veli Can"), _user(store, "Yönetici", admin=True)
+    clock.set("2026-08-03 10:00")
+    desk = book.add(ali, _ois(trade_date="2026-08-03", settle_date="2026-08-04", end_date="1Y", price="41"))["id"]
+    own = book.add(ali, _ois(scope="personal", trade_date="2026-08-03", settle_date="2026-08-04", end_date="6M", price="41"))["id"]
+    fx = book.add(ali, _fxspot(trade_date="2026-08-03", settle_date="2026-08-04"))["id"]
+    clock.set("2026-11-17 11:00")
+    got = book.coupons(veli, desk)
+    periods = got["legs"][0]["periods"]
+    assert got["ok"] and got["id"] == desk and got["text"] == "RECEIVE 1Y TRY OIS 100m @ %41,00" and got["asof"] == "2026-11-17"
+    assert [(p["end"], p["state"]) for p in periods] == [("2026-11-04", "paid"), ("2027-02-04", "running"), ("2027-05-04", "future"),
+                                                         ("2027-08-04", "future")]
+    assert got["realised"] == periods[0]["net"] and got["legs"][0]["label"] == "Receive OIS 04.08.27" and got["source"] == "tarihçe"
+    for who in (veli, admin):
+        assert _refused(404, book.coupons, who, own).args[0] == "işlem bulunamadı"
+    assert book.coupons(ali, own)["ok"]
+    assert "yalnız OIS / SOFR" in _refused(400, book.coupons, ali, fx).args[0]
+    # closed on 10.11 at 40 %: its coupons as of then - the periods after the close a fixed difference, known
+    book.close(ali, desk, "2026-11-10", "40")
+    shut = book.coupons(veli, desk)
+    assert (shut["status"], shut["asof"]) == ("closed", "2026-11-10") and shut["legs"][0]["closed"] == {"date": "2026-11-10", "rate": 40.0}
+    assert [p["state"] for p in shut["legs"][0]["periods"]] == ["paid", "future", "future", "future"]
+    assert all(p["net"] is not None for p in shut["legs"][0]["periods"])
+    store.close()
+
+
 def test_a_swap_s_side_as_the_valuation_keeps_it(monkeypatch):
     """tradevalue.check keeps an OIS / SOFR side as the blotter's code ("S" receives, "B" pays): the desk's words, a
     package's side and the form read either."""
@@ -880,7 +993,7 @@ def test_every_route_needs_a_session(client):
                          ("GET", "/api/trades/defaults?product=ois"), ("GET", "/api/trades/dv01"), ("POST", "/api/trades/dv01"),
                          ("POST", "/api/trades/mtm"), ("GET", "/api/trades/log"), ("POST", "/api/trades/1"),
                          ("DELETE", "/api/trades/1"), ("GET", "/api/trades/1/log"), ("POST", "/api/trades/1/close"),
-                         ("POST", "/api/trades/1/reopen")):
+                         ("POST", "/api/trades/1/reopen"), ("GET", "/api/trades/1/coupons")):
         res = client.request(method, path, headers=ANON, json={} if method == "POST" else None)
         assert res.status_code == 401, (method, path)
     assert client.get("/static/js/pages/trades.js").status_code == 200
@@ -904,11 +1017,14 @@ def test_a_personal_trade_reaches_its_owner_only_through_every_route(client, mod
             assert all(e["trade"] != tid for e in client.get("/api/trades/log", params={"scope": scope}, headers=who).json()["entries"])
         for method, path, body in (("GET", "/api/trades/%d/log" % tid, None), ("POST", "/api/trades/%d" % tid, raw),
                                    ("POST", "/api/trades/%d/close" % tid, {"close_date": _today(), "close_price": "42"}),
-                                   ("POST", "/api/trades/%d/reopen" % tid, {}), ("DELETE", "/api/trades/%d" % tid, None)):
+                                   ("POST", "/api/trades/%d/reopen" % tid, {}), ("GET", "/api/trades/%d/coupons" % tid, None),
+                                   ("DELETE", "/api/trades/%d" % tid, None)):
             res = client.request(method, path, headers=who, json=body)
             assert res.status_code == 404 and res.json()["error"] == "işlem bulunamadı", (method, path)
-    # the owner reaches it everywhere
+    # the owner reaches it everywhere (an FX trade has no coupons: said)
     assert [e["action"] for e in client.get("/api/trades/%d/log" % tid, headers=owner).json()["entries"]] == ["create"]
+    res = client.get("/api/trades/%d/coupons" % tid, headers=owner)
+    assert res.status_code == 400 and "yalnız OIS / SOFR" in res.json()["error"]
     assert str(tid) in client.post("/api/trades/mtm", json={"scope": "personal"}, headers=owner).json()["values"]
     res = client.post("/api/trades/%d/close" % tid, json={"close_date": _today(), "close_price": "42,30"}, headers=owner)
     assert res.status_code == 200 and res.json()["closing"]["why"] == "değerleme henüz yok"
@@ -939,6 +1055,29 @@ def test_a_desk_trade_over_http(client, module_service):
     assert client.post("/api/trades/%d/close" % tid, json={"close_date": _today(), "close_price": "38,2"}, headers=ali).status_code == 200
     log = client.get("/api/trades/%d/log" % tid, headers=veli).json()["entries"]
     assert [e["action"] for e in log] == ["create", "edit", "close"] and log[1]["user_name"] == "Http Yönetici"
+
+
+def test_a_swap_s_coupons_over_http(client, module_service, monkeypatch):
+    """``GET /api/trades/<id>/coupons`` on the replay service, the real valuation: a SOFR swap dealt today - its schedule by
+    the USD rule (2Y: two yearly periods, paid two SIFMA days after their ends), nothing ended yet; a TRY OIS 1Y - four
+    quarters paid at their ends; one's own reaches its owner only."""
+    for name in ("check", "value", "market"):
+        monkeypatch.setattr(tv, name, _REAL[name])
+    ali, veli = auth(module_service, "Kupon Ali"), auth(module_service, "Kupon Veli")
+    sofr = client.post("/api/trades", json=_http_ois(product="sofr", side="pay", settle_date="+2", end_date="2Y", notional="25m",
+                                                       price="3,85"), headers=ali).json()["id"]
+    got = client.get("/api/trades/%d/coupons" % sofr, headers=veli).json()
+    leg = got["legs"][0]
+    assert got["ok"] and got["ccy"] == "USD" and got["realised"] == 0.0 and got["text"] == "PAY 2Y SOFR 25m @ %3,85"
+    assert len(leg["periods"]) == 2 and all(p["state"] == "future" and p["net"] is None for p in leg["periods"])
+    assert leg["pay_lag"] == 2 and leg["float"] == "SOFR" and "2 iş günü" in leg["rule"]
+    sifma = tv.market(module_service).hol("SIFMA")
+    for p in leg["periods"]:
+        assert p["pay"] == tv._add_bd(dt.date.fromisoformat(p["end"]), 2, sifma).isoformat() and p["fixed"] < 0
+    own = client.post("/api/trades", json=_http_ois(scope="personal", end_date="1Y"), headers=ali).json()["id"]
+    mine = client.get("/api/trades/%d/coupons" % own, headers=ali).json()
+    assert [p["pay"] == p["end"] for p in mine["legs"][0]["periods"]] == [True] * 4 and mine["legs"][0]["pay_lag"] == 0
+    assert client.get("/api/trades/%d/coupons" % own, headers=veli).status_code == 404
 
 
 def test_the_form_s_defaults_and_dv01_over_http(client, module_service):
