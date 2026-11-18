@@ -2,7 +2,8 @@
 
 Most tests use the book on a database of its own (``_book``): no workbook is loaded, the clock is the test's and the
 valuation is a fake (``stub_valuation``: tto/tradevalue.py's stub, whichever module the branch carries - the
-trades-deger branch's real one replaces the stub) or returns planted numbers (``planted``).
+trades-deger branch's real one replaces the stub) or returns planted numbers (``planted``) - the coupon tests run the
+real valuation on a market of their own (``_rates_market``).
 Then the same over HTTP on the replay service: who reaches what through every route, the form's defaults and DV01, and an
 MPC trade kept by its meeting's date while the calendar moves."""
 import datetime as dt
@@ -677,7 +678,7 @@ def test_a_coupon_paid_between_two_closes_moves_to_the_realised_and_the_p_and_l_
             {"side": "pay", "end_date": "1Y", "notional": "50m", "price": "40"}]
     sp = book.add(ali, _ois(structure="spread", trade_date="2026-08-03", settle_date="2026-08-04", legs=legs, end_date="",
                             notional="", price=""))["id"]
-    for day in ("2026-11-02", "2026-11-03"):
+    for day in ("2026-10-30", "2026-11-02", "2026-11-03"):
         clock.set(day + " 17:30")
         assert book.take_close(day)["valued"] == 2
     clock.set("2026-11-04 12:00")
@@ -686,8 +687,9 @@ def test_a_coupon_paid_between_two_closes_moves_to_the_realised_and_the_p_and_l_
     tue = store.tb_closes([a])[a]["2026-11-03"]
     coupon = v["accrued"]
     assert tue["accrued"] == 0.0 and coupon < -2e5 and v["coupon_info"]["n"] == 1 and abs(v["coupon_info"]["last"]["net"] - coupon) < 1e-6
-    day = v["periods"]["day"]
+    day, week = v["periods"]["day"], v["periods"]["week"]
     assert day["from"] == "2026-11-03" and abs(day["pnl"]["ccy"]) < 0.005 * abs(coupon)
+    assert week["from"] == "2026-10-30" and abs(week["pnl"]["ccy"]) < 0.02 * abs(coupon)         # (the week: Friday's close on)
     assert abs(day["pnl"]["ccy"] - (v["mtm"] + coupon - tue["mtm"])) < 1e-6 and abs(day["pnl"]["usd"] - day["pnl"]["ccy"] / 42.0) < 1e-6
     assert abs(v["mtm"] - tue["mtm"] + coupon) < 0.005 * abs(coupon)                 # (the MTM alone dropped by the coupon)
     assert abs(v["accrued_usd"] - coupon / 42.0) < 1e-6 and abs(v["periods"]["total"]["pnl"]["ccy"] - (v["mtm"] + coupon)) < 1e-6
@@ -695,6 +697,7 @@ def test_a_coupon_paid_between_two_closes_moves_to_the_realised_and_the_p_and_l_
     lp = s["periods"]["legs"]
     assert [lg["accrued"] for lg in s["legs"]] == [lg["accrued"] for lg in lp] and all(abs(lg["accrued"]) > 1e5 for lg in lp)
     assert all(abs(lg["day"]["pnl"]["ccy"]) < 0.005 * abs(lg["accrued"]) for lg in lp), [lg["day"] for lg in lp]
+    assert all(abs(lg["week"]["pnl"]["ccy"]) < 0.02 * abs(lg["accrued"]) for lg in lp), [lg["week"] for lg in lp]
     assert abs(s["periods"]["residual"]["day"]["pnl"]["ccy"]) < 1e-6 and abs(s["accrued"] - sum(lg["accrued"] for lg in lp)) < 1e-6
     # Wednesday's close as an earlier version kept it - the legs without their coupons - and Thursday's P&L against it
     mkt = _rates_market(dt.date(2026, 11, 4))
