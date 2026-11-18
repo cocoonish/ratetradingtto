@@ -8,8 +8,10 @@ the funding factor ``DD``); its ASW is ``(PV − dirty @spot) / annuity × 100``
 over the fixed coupon bonds (``CA3:CC3``; ``t`` the years from the OIS spot to maturity, ``FW``).
 
 **FX swap: DİBS ASW's sheet on the FX swap implied TRY curve** - the ASW sheet with the OIS quotes it builds its curve
-from swapped for the rates of EK_FX (TRYI 1–18M FX swap implied, TRYSAQ 2–10Y XCCY; a tenor without a price keeps its OIS
-quote: ``Service._asw_fx_calc``), the calculation behind DİBS ASW's "ASW FX" column and its FX swap chart.  The desk
+from swapped for the rates of EK_FX, each read by its own convention (TRYI 1–18M FX swap implied: one period, simple
+ACT/360; TRYSAQ 2–10Y XCCY: annual ACT/360 par - as the desk's workbook reads them) and given to the sheet as the par
+quote of the sheet's own convention with the same discount factor at the tenor (``aswfx``; a tenor without a price keeps
+its OIS quote: ``Service._asw_fx_calc``), the calculation behind DİBS ASW's "ASW FX" column and its FX swap chart.  The desk
 chose this curve for every FX swap figure a trader reads (DİBS Trading, the card, Genel); DİBS RV's own FX columns
 (``BF:BJ``, on the offshore ICAP curve) stay the workbook's, on the RV sheet only.  Per bond (its row found by ISIN):
 ``P`` the PV on the curve, ``Q`` the annuity, ``O`` the dirty price at the spot (``(L + N) × (1 + TLREF × days / 365)``),

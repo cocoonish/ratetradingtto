@@ -14,7 +14,8 @@ summary; every row keyed by its ISIN), in groups of columns:
 * **OIS ASW** - DİBS RV's ASW / DM (Z), the fitted curve's ASW at the bond's years (rvfair: a + b·t + c·t², AA on a fixed
   coupon bond), cheap / rich (AB), signal (AC), the fair yield and clean price on the curve (rvfair);
 * **FX swap ASW** - the same on the FX swap implied TRY curve (EK_FX: TRYI 1–18M FX swap implied, TRYSAQ 2–10Y XCCY, the
-  OIS quote where there is no price; named as the ASW page names it, ``rvfair.FX_CURVE_TEXT``), as DİBS ASW computes its
+  OIS quote where there is no price; each rate read by its own convention, ``aswfx``; named as the ASW page names it,
+  ``rvfair.FX_CURVE_TEXT``), as DİBS ASW computes its
   "ASW FX" (rvfair's FX side: ASW!R / S / T on that curve, DİBS RV's threshold);
 * **Sıfır kupon eğrisi** - a Nelson-Siegel zero curve fitted now to the trading list's fixed coupon bonds and bills
   (TLREF floaters, FRNs and CPI linkers out, the reason in the cell): the model yield, cheap / rich (bp, + cheap) and

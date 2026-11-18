@@ -45,6 +45,7 @@ import datetime as _dt
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from . import aswfx
 from .xl.model import COLS, Model, Sheet, parse_a1, parse_range
 from .xl.tokenizer import index_to_col, to_template
 from .xl.values import date_to_serial
@@ -1658,39 +1659,55 @@ def _tto_sources(model: Model) -> None:
 # ---------------------------------------------------------------------------------------------- ASW against FX swaps
 FXC_SHEET = "EK_FX"
 FXC_FIRST = 6                     # first tenor row
-# the tenors of the ASW sheet's OIS curve (ASW!C64:R64) and the offshore ticker of each: the FX swap implied yields
-# up to 18 months, the cross currency swaps after
+FXC_ZERO_COL = "K"                # the zero-coupon rate of the ASW sheet's curve at each tenor
+# the tenors of the ASW sheet's OIS curve (ASW!C64:R64, aswfx.TENORS) and the offshore ticker of each: the FX swap
+# implied yields up to 18 months, the cross currency swaps after
 FXC_ROOTS = ("TRYI1M", "TRYI2M", "TRYI3M", "TRYI6M", "TRYI9M", "TRYI12M", "TRYI18M", "TRYSAQ2", "TRYSAQ3", "TRYSAQ4",
              "TRYSAQ5", "TRYSAQ6", "TRYSAQ7", "TRYSAQ8", "TRYSAQ9", "TRYSAQ10")
 
 
 def _asw_fx_check(model: Model) -> None:
-    """The ASW sheet's curve: the OIS quotes of today in C65:R65 (16 tenors) that its discount factors are built from."""
+    """The ASW sheet's curve: the OIS quotes of today in C65:R65 (16 tenors) that its discount factors are built from,
+    the days to its nodes (AB65:BR65, "D0" … "D120") and their ln discount factors (BS65:DI65, "L0" … "L120") as
+    ``aswfx`` reads them."""
     _need_sheets(model, "ASW")
     _need_formula(model, "ASW", "BT65", "$C65")
     for k in range(16):
         col = index_to_col(3 + k)                      # C .. R
         _need_formula(model, "ASW", "%s65" % col, 'BDP(%s$63&" GFOF Curncy","MID")' % col)
+    first, last = aswfx.NODES[0], aswfx.NODES[-1]
+    _need_captions(model, [("ASW", "%s64" % index_to_col(col), text) for col, text in (
+        (aswfx.DAY_COL, "D%d" % first), (aswfx.LN_COL - 1, "D%d" % last), (aswfx.LN_COL, "L%d" % first),
+        (aswfx.LN_COL + len(aswfx.NODES) - 1, "L%d" % last))])
+    _need_formula(model, "ASW", "%s65" % index_to_col(aswfx.LN_COL + aswfx.node_of(6)), "LN((1-$F65/100*DJ65)")
 
 
 def _asw_fx(model: Model) -> None:
     """The TRY curve the FX swaps imply, tenor by tenor where the ASW sheet's OIS curve has its quotes - the
-    second curve of the ASW table: the dashboard prices every bond off it as well (the sheet's own formulas, the
-    OIS quotes of C65:R65 swapped for these) and shows ASW against FX swaps next to ASW against OIS.
+    second curve of the ASW table: the dashboard prices every bond off it as well (the sheet's own formulas, each OIS
+    quote of C65:R65 swapped for the par quote of the sheet's convention that gives the discount factor the FX rate
+    gives by its own: ``aswfx``) and shows ASW against FX swaps next to ASW against OIS.
 
     Each tenor: the ticker root (typed over freely), the first of the two pricing sources that has a price - MID,
-    else the middle of bid and ask -, and the OIS quote of the same tenor."""
+    else the middle of bid and ask -, the OIS quote of the same tenor; how the FX rate is read (by the tenor), the days
+    to the tenor on the sheet's curve and the zero-coupon rate of the curve there (compounded once a year, ACT/365:
+    ``DF^(−365/d) − 1``, from the sheet's ln discount factor) - OIS's here; the same cell in the dashboard's calculation
+    on the FX swap curve is the FX curve's (the page's FX zero rates and chart)."""
     b = SheetBuilder(model, FXC_SHEET)
     b.title("A1", "FX SWAP İMA TRY EĞRİSİ  ·  ASW'nin ikinci eğrisi: offshore TRY faizi (18 aya kadar FX swap ima, sonra XCCY)")
     b.row("A3", ["Kaynaklar (sırayla)"], bold=True)
     b.input("B3", "ICPL")
     b.input("C3", "BGN")
     b.note("D3", "İlk fiyat veren kaynak kullanılır: önce MID, yoksa bid–ask ortası. Ticker kökü sarı hücrede (yalnız kök: TRYI1M, TRYSAQ2 …).")
-    b.head("A5", ["Vade", "Ticker kökü", "Kullanılan ticker", "FX ima (%)", "OIS (%)", "FX − OIS (bp)", "1. kaynak", "2. kaynak"])
+    b.head("A5", ["Vade", "Ticker kökü", "Kullanılan ticker", "FX ima (%)", "OIS (%)", "FX − OIS (bp)", "1. kaynak", "2. kaynak",
+                  "FX faizi nasıl okunur", "Gün", "OIS sıfır kupon (%)"])
     for k, root in enumerate(FXC_ROOTS):
         r = FXC_FIRST + k
         col = index_to_col(3 + k)
-        f = {"r": r, "col": col}
+        months = aswfx.TENORS[k]
+        node = aswfx.node_of(months)
+        f = {"r": r, "col": col, "day": index_to_col(aswfx.DAY_COL + node), "ln": index_to_col(aswfx.LN_COL + node),
+             "rule": aswfx.RULES[aswfx.kind_of(months)], "none": aswfx.RULES[aswfx.OIS]}
         b.set("A%d" % r, "=ASW!%s$64" % col, bold=True, align="center")
         b.input("B%d" % r, root)
 
@@ -1705,10 +1722,18 @@ def _asw_fx(model: Model) -> None:
         b.set("C%d" % r, '=IF(ISNUMBER($G%(r)d),TRIM($B%(r)d)&" "&TRIM($B$3)&" Curncy",IF(ISNUMBER($H%(r)d),TRIM($B%(r)d)&" "&TRIM($C$3)&" Curncy","yok"))' % f)
         b.set("E%d" % r, "=ASW!%s$65" % col, fmt="0.000")
         b.set("F%d" % r, '=IFERROR(($D%(r)d-$E%(r)d)*100,"")' % f, fmt="0.0")
+        b.set("I%d" % r, '=IF(ISNUMBER($D%(r)d),"%(rule)s","%(none)s")' % f)
+        b.set("J%d" % r, "=ASW!%(day)s$65" % f, fmt="0", align="center")
+        b.set("%s%d" % (FXC_ZERO_COL, r), "=IFERROR((EXP(-ASW!%(ln)s$65*365/$J%(r)d)-1)*100,NA())" % f, fmt="0.000")
     b.note("A%d" % (FXC_FIRST + len(FXC_ROOTS) + 1),
-           "ASW tablosundaki 'ASW FX' sütunu: kâğıt, OIS kotaları yerine bu faizlerle kurulan eğriyle (sayfanın kendi iskonto ve annuity formülleriyle) "
-           "fiyatlanır. Fiyatı olmayan vadede OIS kotası kullanılır. FX ima faizleri basit TRY para piyasası faizi, XCCY'ler TRY sabit / USD değişken "
-           "swap faizidir; OIS gibi par faiz olarak kullanılır.")
+           "ASW tablosundaki 'ASW FX' sütunu: kâğıt, sayfanın kendi iskonto ve annuity formülleriyle, OIS kotaları yerine bu faizlerden kurulan "
+           "eğriyle fiyatlanır. Her FX faizi kendi kuralıyla okunur - tür vadeye göredir: 18 aya kadar (TRYI…) FX swap ima, tek dönem basit "
+           "ACT/360 (FX swap'ın kuponu yok); 2 yıldan (TRYSAQ…) XCCY (TRY sabit / USD değişken), yıllık ACT/360 par (önceki yılların iskonto "
+           "faktörleri eğrinin o vadeye kadar kurulan düğümlerinden). Masanın kendi dosyası da bu ticker'ları böyle okur (Forward!AJ123:AN142, "
+           "C123:K134). Sayfaya, vadesinde aynı iskonto faktörünü veren kendi kuralındaki par faiz olarak girer (3 aya kadar tek dönem basit "
+           "ACT/365, sonra çeyreklik ACT/365 par); sayfanın formülleri değişmez. Fiyatı olmayan vadede OIS kotası olduğu gibi kalır. Gün: "
+           "sayfanın eğrisinde spot'tan vadeye gün; OIS sıfır kupon: sayfanın o vadedeki iskonto faktöründen yıllık bileşik ACT/365 faiz "
+           "(DF^(−365/gün) − 1).")
 
 
 # ---------------------------------------------------------------------------------------------- more rows

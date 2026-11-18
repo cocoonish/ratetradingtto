@@ -22,6 +22,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote as _quote
 
+from . import aswfx
 from . import auth
 from . import blotter as bl
 from . import bonds as bd
@@ -403,7 +404,7 @@ class Service(object):
             # the OIS quotes the ASW curve is built from are swapped for the FX swap curve in a calculation of its
             # own (ASW against FX swaps): the engine has to know what depends on them - not inputs of the page
             si = asw.model.sheet_index["ASW"]
-            asw.engine.declare_inputs([(si, parse_a1("%s65" % index_to_col(3 + k))) for k in range(len(ex.FXC_ROOTS))],
+            asw.engine.declare_inputs([(si, aswfx.ROW * COLS + aswfx.QUOTE_COL + k) for k in range(len(aswfx.TENORS))],
                                       group="asw-fx-curve")
         if tto is not None:
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
@@ -2036,6 +2037,8 @@ class Service(object):
                     _column_captions(entry["data"], p["header"])
                 if p.get("append") == "asw_fx":
                     self._asw_fx_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "fx_curve":
+                    self._fx_curve_columns(book, self._asw_fx_calc(book, user)[0], entry["data"], loc)
                 elif p.get("append") == "broker_bonds":
                     self._dibs_broker_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "dibs_live":
@@ -2067,6 +2070,8 @@ class Service(object):
                     entry["note"] = "FX swap ima faizi yok (EK_FX): grafik çizilemedi"
                 elif spec is not None:
                     entry["data"] = R.chart(on, spec, loc)
+                    if any(s.get("curve") == "fx" for s in spec.get("series") or []):
+                        self._fx_series(self._asw_fx_calc(book, user)[0], R, spec, entry["data"], loc)
                     entry["title"] = p.get("title") or entry["data"]["title"]
             elif p["type"] == "custom":
                 entry["component"] = p.get("component")
@@ -5514,10 +5519,15 @@ class Service(object):
 
     # ================================================================== ASW against FX swaps
     def _asw_fx_calc(self, book, user: Optional[str]) -> Tuple[Optional[Calc], int]:
-        """The ASW sheet's calculation on the FX swap curve: the OIS quotes its curve is built from (ASW!C65:R65)
-        swapped for the FX swap implied rates of EK_FX - a tenor without one keeps its OIS quote - over the user's own
-        inputs.  ``None`` when no tenor has an FX rate; with the number swapped.  Made once for what a page shows at a
-        time (the table's ASW FX column and the chart of it read the same one; anything changed since: made again)."""
+        """The ASW sheet's calculation on the FX swap implied curve, over the user's own inputs: every tenor with an FX
+        rate in EK_FX (D6:D21) gets, in the place of the OIS quote its curve is built from (ASW!C65:R65), the par quote
+        of the sheet's own convention that gives the discount factor the rate gives by its own convention there
+        (``aswfx.to_sheet``: up to 18M FX swap implied, one period simple ACT/360; from 2Y XCCY, annual ACT/360 par - as
+        the desk's workbook reads them); a tenor without one keeps its OIS quote, one whose rate gives no such quote is
+        #N/A (the curve stops there, as the sheet's does at a missing quote).  The sheet's formulas are its own.
+        ``None`` when no tenor has an FX rate; with the number that have one.  Made once for what a page shows at a time
+        (the table's ASW FX column, its chart and EK_FX's FX zero rates read the same one; anything changed since: made
+        again)."""
         si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
         base = self._calc(user, book)
         shared = book.engine.shared
@@ -5525,12 +5535,15 @@ class Service(object):
         hit = getattr(self, "_fx_calc_kept", None)
         if hit is not None and hit[0] == key:
             return hit[1], hit[2]
+        n = len(aswfx.TENORS)
+        fx = [base.get(fi, ex.FXC_FIRST + k, col_to_index("D")) for k in range(n)]
+        ois = [base.get(si, aswfx.ROW, aswfx.QUOTE_COL + k) for k in range(n)]
+        days = [base.get(si, aswfx.ROW, aswfx.DAY_COL + i) for i in range(len(aswfx.NODES))]
         ov = dict(self._overlay(user, book)) if user else {}
         swapped = 0
-        for k in range(len(ex.FXC_ROOTS)):
-            v = base.get(fi, ex.FXC_FIRST + k, parse_a1("D1") % COLS)
-            if type(v) is float:
-                ov[(si, parse_a1("%s65" % index_to_col(3 + k)))] = v
+        for k, t in enumerate(aswfx.to_sheet(ois, fx, days)):
+            if t.kind != aswfx.OIS:
+                ov[(si, aswfx.ROW * COLS + aswfx.QUOTE_COL + k)] = t.par if t.par is not None else XlError("#N/A")
                 swapped += 1
         calc = Calc(book.engine, shared, ov) if swapped else None
         self._fx_calc_kept = (key, calc, swapped)
@@ -5550,9 +5563,57 @@ class Service(object):
                          for i, s in enumerate(spec.get("series") or [])]
         return out
 
+    @staticmethod
+    def _fx_series(fx: Optional[Calc], R: Renderer, spec: Dict[str, Any], data: Dict[str, Any], loc) -> None:
+        """The series of a chart marked ``"curve": "fx"`` drawn on the FX swap implied curve: the same cells in the
+        dashboard's calculation on it (``fx``, :meth:`_asw_fx_calc`; EK_FX's zero-coupon rates - the OIS curve's in the
+        sheet - are then the FX curve's, the very discount factors the ASW FX column prices with).  Without it (no FX
+        rate): no values."""
+        picked = [k for k, s in enumerate(spec.get("series") or []) if s.get("curve") == "fx"]
+        n = len(data.get("cats") or [])
+        got = R.chart(fx, dict(spec, series=[spec["series"][k] for k in picked]), loc)["series"] if fx is not None else []
+        for j, k in enumerate(picked):
+            values = got[j]["data"] if j < len(got) else []
+            data["series"][k]["data"] = (list(values) + [None] * n)[:n]
+
+    def _fx_curve_columns(self, book, calc: Optional[Calc], data: Dict[str, Any], loc) -> None:
+        """EK_FX's tenors on the FX swap implied curve, next to the sheet's own columns: the curve's zero-coupon rate (EK_FX's
+        OIS zero-coupon cell, K, in ``calc``, the calculation on the FX swap curve - :meth:`_asw_fx_calc`) and what the ASW
+        sheet's curve is given there (ASW!C65:R65 in it: the FX rate as the par quote of the sheet's convention with the
+        same discount factor, the OIS quote where there is no FX rate).  Without ``calc`` (no FX rate): empty."""
+        if ex.FXC_SHEET not in book.model.sheet_index or "ASW" not in book.model.sheet_index:
+            return
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows:
+            return
+        si, fi = book.model.sheet_index["ASW"], book.model.sheet_index[ex.FXC_SHEET]
+        first, last = ex.FXC_FIRST, ex.FXC_FIRST + len(aswfx.TENORS) - 1
+        zero = col_to_index(ex.FXC_ZERO_COL)
+
+        def pct(v: Any) -> Dict[str, Any]:
+            return {"t": numfmt.format_value(v, "0.000", loc), "v": v, "k": "n"} if type(v) is float else {"t": "", "k": ""}
+
+        for i, r in enumerate(rnums):
+            if r == first - 1:
+                rows[i].extend([{"t": "FX sıfır kupon (%)", "k": "s", "b": 1, "f": "hd",
+                                 "tip": "%s'nin vadedeki sıfır kupon faizi (yıllık bileşik, ACT/365: DF^(−365/gün) − 1): ASW FX hesabının "
+                                        "kâğıtları iskonto ettiği eğri. %s; fiyatı olmayan vadede eğri o vadenin OIS kotasıyla sürer"
+                                        % (self.ASW_FX_CURVE, self.FX_RATES_READ)},
+                                {"t": "ASW'ye giden par (%)", "k": "s", "b": 1, "f": "hd",
+                                 "tip": "ASW sayfasının eğrisinin FX tarafta bu vadede kurulduğu kota (ASW!C65:R65 yerine): FX faizi, sayfanın "
+                                        "kuralında (3 aya kadar tek dönem basit ACT/365, sonra çeyreklik ACT/365 par) vadesinde aynı iskonto "
+                                        "faktörünü veren par faiz; fiyatı olmayan vadede OIS kotası"}])
+            elif first <= r <= last and calc is not None:
+                rows[i].extend([pct(calc.get(fi, r, zero)), pct(calc.get(si, aswfx.ROW, aswfx.QUOTE_COL + r - first))])
+            else:
+                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
+        data["c"] = list(data.get("c") or []) + ["FX sıfır", "ASW par"]
+        data["added"] = int(data.get("added") or 0) + 2
+
     def _asw_fx_columns(self, book, user: Optional[str], data: Dict[str, Any], loc) -> None:
-        """ASW against the FX swap curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
-        it builds its curve from (ASW!C65:R65) swapped for the FX swap implied rates of EK_FX - a tenor without
+        """ASW against the FX swap implied curve next to ASW against OIS: the sheet's own calculation with the OIS quotes
+        it builds its curve from (ASW!C65:R65) swapped for EK_FX's rates, each read by its own convention and given as
+        the par quote of the sheet's convention with the same discount factor (:meth:`_asw_fx_calc`) - a tenor without
         one keeps its OIS quote.  Two columns on the right of the table: ASW FX and FX − OIS, in bp."""
         if ex.FXC_SHEET not in book.model.sheet_index or "ASW" not in book.model.sheet_index:
             return
@@ -5577,8 +5638,8 @@ class Service(object):
         for i, r in enumerate(rnums):
             if r == 6:
                 rows[i].extend([{"t": "ASW FX ima (bp)", "k": "s", "b": 1, "f": "hd",
-                                 "tip": "%s'ne göre ASW (EK_FX: %d / %d vade fiyatlı). DİBS RV'nin ASW FX'i başka bir eğri: %s"
-                                        % (self.ASW_FX_CURVE, swapped, len(ex.FXC_ROOTS), self.RV_FX_CURVE)},
+                                 "tip": "%s'ne göre ASW (EK_FX: %d / %d vade fiyatlı; %s). DİBS RV'nin ASW FX'i başka bir eğri: %s"
+                                        % (self.ASW_FX_CURVE, swapped, len(ex.FXC_ROOTS), self.FX_RATES_READ, self.RV_FX_CURVE)},
                                 {"t": "FX ima − OIS (bp)", "k": "s", "b": 1, "f": "hd",
                                  "tip": "ASW FX ima − ASW OIS (%s; OIS)" % self.ASW_FX_CURVE}])
             elif 7 <= r <= 56 and calc is not None:
@@ -5751,6 +5812,9 @@ class Service(object):
     #: the two FX swap curves, as the pages name them: DİBS RV's (its BF:BJ) and the ASW page's (EK_FX, its "ASW FX")
     RV_FX_CURVE = "FX swap (offshore ICAP eğrisi)"
     ASW_FX_CURVE = rvfair.FX_CURVE_TEXT                 # (one wording, rvfair's: Genel, the summary and the card use it too)
+    #: how the ASW page's curve reads EK_FX's rates (aswfx; the tips of its FX columns)
+    FX_RATES_READ = ("FX faizleri kendi kuralıyla okunur - TRYI (18 aya kadar) tek dönem basit ACT/360, TRYSAQ (2 yıldan) yıllık ACT/360 par, "
+                     "masanın dosyasındaki gibi - ve sayfaya, vadesinde aynı iskonto faktörünü veren kendi kuralındaki par faiz olarak girer")
 
     @classmethod
     def _rv_fx_tips(cls) -> Dict[str, str]:
