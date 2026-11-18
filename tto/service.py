@@ -5974,9 +5974,9 @@ class Service(object):
 
     def _fra_bucket_columns(self, book, calc, data: Dict[str, Any], loc) -> None:
         """Where each FRA of OIS · PPK's lists goes in the desk's buckets, done in its YÖN at its Nominal as Günlük
-        İşlemler books it: two columns, the start leg's and the end leg's - the bucket (a leg between buckets in the next
-        one up, its own tenor beside: "18M ← 15M"; :func:`blotter.bucket`), the DV01 ($, + pay: the blotter's sign) and
-        the leg's rate.  The whole list's own columns: the legs' rates (I, J), DV01s (K, L), months (M, N), YÖN (D); the
+        İşlemler books it: two columns, the start leg's and the end leg's - the bucket (a leg between buckets split between
+        the two around it, linearly in months: "1Y −5.922 $ + 18M −5.922 $"; :func:`blotter.bucket_split`), the DV01 ($,
+        + pay: the blotter's sign) and the leg's rate.  The whole list's own columns: the legs' rates (I, J), DV01s (K, L), months (M, N), YÖN (D); the
         15 best find their FRA there by its label."""
         if "OIS_MAIN" not in book.model.sheet_index:
             return
@@ -5996,23 +5996,24 @@ class Service(object):
             if type(months) is not float or months <= 0 or type(dv01) is not float or type(rate) is not float:
                 return {"t": "", "k": ""}
             m = int(round(months))
-            b = bl.bucket_months(m)
-            name = bl.month_label(b) + ("" if b == m else " ← " + bl.month_label(m))
-            dv = numfmt.format_value(abs(dv01), dv_fmt, loc) + " $"
-            text = "%s %s%s · %%%s" % (name, {1: "+", -1: "−"}.get(sign, ""), dv, numfmt.format_value(rate * 100.0, rate_fmt, loc))
+            parts = bl.bucket_split(m)
+            mark = {1: "+", -1: "−"}.get(sign, "")
+            rate_t = numfmt.format_value(rate * 100.0, rate_fmt, loc)
+            text = " + ".join("%s %s%s $" % (bl.month_label(b), mark, numfmt.format_value(abs(dv01) * w, dv_fmt, loc))
+                              for b, w in parts) + " · %" + rate_t
+            split = "" if len(parts) == 1 else " - %s'de işlem olmaz: iki yanındaki kovaya aylara göre bölünür (%s)" % (
+                bl.month_label(m), ", ".join("%%%s %s" % (numfmt.format_value(w * 100.0, "0", loc), bl.month_label(b)) for b, w in parts))
             cell = {"t": text, "k": "s", "al": "r",
-                    "tip": "%s bacağı (%s): %s kovasına %s · DV01 %s%s · oran %%%s%s" % (
-                        which, bl.month_label(m), bl.month_label(b), side or "yön yok", {1: "+", -1: "−"}.get(sign, ""), dv,
-                        numfmt.format_value(rate * 100.0, rate_fmt, loc),
-                        "" if b == m else " - %s'de işlem olmaz: bir sonraki kova" % bl.month_label(m))}
+                    "tip": "%s bacağı (%s): %s · DV01 %s%s $ · oran %%%s%s" % (
+                        which, bl.month_label(m), side or "yön yok", mark, numfmt.format_value(abs(dv01), dv_fmt, loc), rate_t, split)}
             if sign:
                 cell["c"] = "pos" if sign > 0 else "neg"
             return cell
 
         head = [{"t": "Başlangıç bacağı → kova", "k": "s", "b": 1, "f": "hd",
                  "tip": "Bu FRA YÖN'deki yönde, Nominal'le yapılınca başlangıç bacağının masanın kovasına yazılan DV01'i ($; + pay, − "
-                        "receive - Günlük İşlemler'in işareti) ve oranı. Kovalar arasındaki vade (15M, 21M, 27M …) bir sonraki "
-                        "kovaya yazılır (15M → 18M, 21M → 2Y, 27M → 3Y), Günlük İşlemler'deki gibi."},
+                        "receive - Günlük İşlemler'in işareti) ve oranı. Kovalar arasındaki vade (15M, 21M, 27M …) iki yanındaki "
+                        "kovaya aylara göre bölünür (15M: yarısı 1Y, yarısı 18M; 27M: ¾ 2Y, ¼ 3Y), Günlük İşlemler'deki gibi."},
                 {"t": "Bitiş bacağı → kova", "k": "s", "b": 1, "f": "hd",
                  "tip": "Bitiş bacağının kovası, DV01'i ($; + pay, − receive) ve oranı - aynı kural. RECEIVE FRA: başlangıç pay, "
                         "bitiş receive; PAY FRA tersi; YÖN \"–\" ise işaret yok."}]

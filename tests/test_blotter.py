@@ -384,11 +384,12 @@ def desk(tmp_path):
     svc.stop()
 
 
-def test_a_leg_between_the_desks_buckets_is_in_the_next_one(desk):
-    """(18.11.2026, the desk: a 12x15 FRA "15M bucket'ı arıyor; burada işlem olmadığı için 18M'e bakması lazım") The
-    desk's OIS buckets have no 15M / 21M - the sheet's summary (P25:P38) and its counterparty × tenor table (Q89:Q107):
-    OIS_MAIN reads those rows between quoted tenors.  A 12x15 FRA's 15M leg is in 18M's bucket - in the sheet and in
-    the cost table by tenor -, a 21M outright in 2Y's; the trades keep their own tenors."""
+def test_a_leg_between_the_desks_buckets_is_split_between_the_two_around_it(desk):
+    """(18.11.2026, the desk: a 12x15 FRA "15M bucket'ı arıyor"; then "yarısını 1Y, yarısını 18M bucket'ına atması
+    gerekmiyor muydu") The desk's OIS buckets have no 15M / 21M - the sheet's summary (P25:P38) and its counterparty ×
+    tenor table (Q89:Q107): OIS_MAIN reads those rows between quoted tenors.  A 12x15 FRA's 15M leg goes half to 1Y's
+    bucket, half to 18M's - its nominal and DV01, at its own rate; in the sheet and in the cost table by tenor -, a 21M
+    outright half to 18M, half to 2Y; the trades keep their own tenors."""
     svc, u = desk
     summary = {cell(svc, "Günlük İşlemler!P%d" % r): r for r in range(25, 39)}
     pivot = {cell(svc, "Günlük İşlemler!Q%d" % r): r for r in range(89, 108)}
@@ -398,25 +399,34 @@ def test_a_leg_between_the_desks_buckets_is_in_the_next_one(desk):
                           "dv01": 2000, "cpt": "XYZ"})
     out = svc.add_ois(u, {"strategy": "outright", "side": "PAY", "tenor": "21M", "level": "35,60", "dv01": 1000})
     start, end = fra["legs"]
+    o = out["legs"][0]
     assert (start["tenor"], start["dir"], end["tenor"], end["dir"]) == ("1Y", "B", "15M", "S")
     trades = svc.blotter(u)["trades"]
     assert [t["tenor"] for t in trades] == ["1Y", "15M", "21M"]                         # the trades as entered
-    assert [cell(svc, "Günlük İşlemler!L%d" % r) for r in (3, 4, 5)] == ["1Y", "18M", "2Y"]
     g = lambda col, r: cell(svc, "Günlük İşlemler!%s%d" % (col, r))                  # noqa: E731
-    # the summary: the 15M leg received in 18M's row (T nominal, V DV01), the 21M leg paid in 2Y's (Q, S)
-    assert g("T", summary["18M"]) == pytest.approx(end["nominal"]) and g("V", summary["18M"]) == pytest.approx(end["dv01"])
+    # the sheet's rows: the start leg whole, the 15M leg as two halves (1Y, 18M), the 21M leg as two (18M, 2Y)
+    assert [g("L", r) for r in range(3, 9)] == ["1Y", "1Y", "18M", "18M", "2Y", None]
+    assert [g("I", r) for r in range(3, 8)] == pytest.approx([start["dv01"], end["dv01"] / 2, end["dv01"] / 2, o["dv01"] / 2, o["dv01"] / 2])
+    assert [g("H", r) for r in range(4, 6)] == pytest.approx([end["nominal"] / 2] * 2) and [g("K", r) for r in (4, 5)] == [end["rate"]] * 2
+    # the summary: 1Y pays the start and receives half the 15M leg, 18M receives the other half and pays half the 21M
+    assert g("S", summary["1Y"]) == pytest.approx(start["dv01"]) and g("V", summary["1Y"]) == pytest.approx(end["dv01"] / 2)
+    assert g("T", summary["18M"]) == pytest.approx(end["nominal"] / 2) and g("V", summary["18M"]) == pytest.approx(end["dv01"] / 2)
     assert g("U", summary["18M"]) == pytest.approx(end["rate"])
-    assert g("Q", summary["2Y"]) == pytest.approx(out["legs"][0]["nominal"]) and g("S", summary["2Y"]) == pytest.approx(out["legs"][0]["dv01"])
-    assert g("S", summary["1Y"]) == pytest.approx(start["dv01"])
-    # the counterparty × tenor table: XYZ's 18M line receives the 15M leg's DV01 (T), its 1Y line pays the start's (R)
+    assert g("S", summary["18M"]) == pytest.approx(o["dv01"] / 2) and g("S", summary["2Y"]) == pytest.approx(o["dv01"] / 2)
+    assert g("Q", summary["2Y"]) == pytest.approx(o["nominal"] / 2)
+    # the counterparty × tenor table: XYZ's 1Y line pays the start's DV01 (R) and receives half the 15M's (T), 18M the rest
     assert g("P", 89) == "XYZ"
-    assert g("T", pivot["18M"]) == pytest.approx(end["dv01"]) and g("R", pivot["1Y"]) == pytest.approx(start["dv01"])
+    assert g("R", pivot["1Y"]) == pytest.approx(start["dv01"]) and g("T", pivot["1Y"]) == pytest.approx(end["dv01"] / 2)
+    assert g("T", pivot["18M"]) == pytest.approx(end["dv01"] / 2)
     # the cost table by tenor: 1Y, 18M, 2Y - no 15M / 21M row
     cost = {x["key"]: x for x in svc.blotter(u)["cost"]["ois"]}
     assert list(cost) == ["1Y", "18M", "2Y"]
-    assert cost["18M"]["sell"] == pytest.approx(end["dv01"]) and cost["2Y"]["buy"] == pytest.approx(out["legs"][0]["dv01"])
-    assert bl.bucket("15M") == "18M" and bl.bucket("21M") == "2Y" and bl.bucket("18M") == "18M" and bl.bucket("7Y") == "7Y"
-    assert [bl.bucket(t) for t in ("27M", "30M", "33M", "39M", "63M", "ON", "1W")] == ["3Y", "3Y", "3Y", "4Y", "6Y", "ON", "1W"]
+    assert cost["1Y"]["buy"] == pytest.approx(start["dv01"]) and cost["1Y"]["sell"] == pytest.approx(end["dv01"] / 2)
+    assert cost["18M"]["sell"] == pytest.approx(end["dv01"] / 2) and cost["18M"]["buy"] == pytest.approx(o["dv01"] / 2)
+    assert cost["2Y"]["buy"] == pytest.approx(o["dv01"] / 2)
+    assert bl.buckets("15M") == [("1Y", 0.5), ("18M", 0.5)] and bl.buckets("18M") == [("18M", 1.0)] and bl.buckets("7Y") == [("7Y", 1.0)]
+    assert [bl.buckets(t) for t in ("27M", "33M", "63M", "ON", "1W")] == [[("2Y", 0.75), ("3Y", 0.25)], [("2Y", 0.25), ("3Y", 0.75)],
+                                                                        [("5Y", 0.75), ("6Y", 0.25)], [("ON", 1.0)], [("1W", 1.0)]]
 
 
 def test_dv01_is_kept_with_the_trade_and_summed(desk):

@@ -1,9 +1,12 @@
 """OIS · PPK's FRA lists with the desk's buckets (18.11.2026, the desk: "FRA listesinde de böyle gösterelim, bana hangi
-bucket'lara kaçtan ne DV01 pozisyonu geleceğini de göreyim"): each FRA's start and end leg - the bucket a leg goes to
-in Günlük İşlemler (one between the desk's buckets in the next one up: 15M → 18M, 27M → 3Y), its DV01 ($, + pay) done
+bucket'lara kaçtan ne DV01 pozisyonu geleceğini de göreyim"): each FRA's start and end leg - the buckets a leg goes to
+in Günlük İşlemler (one between the desk's buckets split between the two around it, linearly in months: 15M half 1Y and
+half 18M, 27M ¾ 2Y and ¼ 3Y), its DV01 ($, + pay) done
 in the row's YÖN at its Nominal and its rate; the 15 best the same as their FRA in the whole list; booked from the
 list, Günlük İşlemler puts the legs in those buckets with those DV01s."""
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -30,6 +33,11 @@ def money(v):
     return numfmt.format_value(abs(v), "#,##0", numfmt.TR) + " $"
 
 
+def leg_text(months, sign, dv01, rate):
+    """A leg's cell: each bucket it goes to with its share of the DV01 (15M: half 1Y, half 18M), then the leg's rate."""
+    return " + ".join("%s %s%s" % (bl.month_label(b), sign, money(abs(dv01) * w)) for b, w in bl.bucket_split(months)) + " · %" + pct(rate)
+
+
 def pct(v):
     return numfmt.format_value(v * 100.0, "0.00", numfmt.TR)                    # (as Excel rounds: 34,425 → 34,43)
 
@@ -47,22 +55,18 @@ def test_the_fra_lists_say_where_each_leg_goes(service):
         start, end = rows[r][-2:]
         sign = {"RECEIVE": 1, "PAY": -1}.get(yon, 0)                         # a RECEIVE FRA pays its start leg
         mark = {1: "+", -1: "−", 0: ""}
-        b2 = bl.bucket_months(int(m2))
-        name2 = bl.month_label(b2) + ("" if b2 == int(m2) else " ← " + bl.month_label(int(m2)))
-        assert end == "%s %s%s · %%%s" % (name2, mark[-sign], money(g(service, "L", r)), pct(g(service, "J", r))), (r, end)
+        assert end == leg_text(int(m2), mark[-sign], g(service, "L", r), g(service, "J", r)), (r, end)
         if m1 == 0:
             assert start == ""                                                 # from the spot: one leg
         else:
-            b1 = bl.bucket_months(int(m1))
-            name1 = bl.month_label(b1) + ("" if b1 == int(m1) else " ← " + bl.month_label(int(m1)))
-            assert start == "%s %s%s · %%%s" % (name1, mark[sign], money(g(service, "K", r)), pct(g(service, "I", r))), (r, start)
+            assert start == leg_text(int(m1), mark[sign], g(service, "K", r), g(service, "I", r)), (r, start)
         seen.add((int(m1), int(m2)))
     # the cases the desk named: 12x15's end in 18M, 15x18's both legs in 18M, 24x27's end in 3Y
     label = {(int(g(service, "M", r)), int(g(service, "N", r))): r for r in range(336, 439)}
     assert {(12, 15), (15, 18), (24, 27)} <= seen
-    assert rows[label[(12, 15)]][-1].startswith("18M ← 15M ") and rows[label[(12, 15)]][-2].startswith("1Y ")
-    assert rows[label[(15, 18)]][-2].startswith("18M ← 15M ") and rows[label[(15, 18)]][-1].startswith("18M ")
-    assert rows[label[(24, 27)]][-1].startswith("3Y ← 27M ") and rows[label[(24, 27)]][-2].startswith("2Y ")
+    assert re.match(r"^1Y \S+ \$ \+ 18M \S+ \$ · %", rows[label[(12, 15)]][-1]) and re.match(r"^1Y \S+ \$ · %", rows[label[(12, 15)]][-2])
+    assert re.match(r"^1Y \S+ \$ \+ 18M \S+ \$ · %", rows[label[(15, 18)]][-2]) and re.match(r"^18M \S+ \$ · %", rows[label[(15, 18)]][-1])
+    assert re.match(r"^2Y \S+ \$ \+ 3Y \S+ \$ · %", rows[label[(24, 27)]][-1]) and re.match(r"^2Y \S+ \$ · %", rows[label[(24, 27)]][-2])
     # the 15 best: the same cells as their FRA in the whole list (found by its label)
     top_rows = by_row(top)
     assert top_rows[65][-2:] == ["Başlangıç bacağı → kova", "Bitiş bacağı → kova"]
@@ -93,8 +97,9 @@ def test_booked_from_the_list_the_blotter_puts_the_legs_in_those_buckets(tmp_pat
                               "nominal": nominal})
         start, end = fra["legs"]
         assert start["dv01"] == pytest.approx(g(svc, "K", r), abs=1.0) and end["dv01"] == pytest.approx(g(svc, "L", r), abs=1.0)
-        assert [cell(svc, "Günlük İşlemler!L%d" % k) for k in (3, 4)] == ["1Y", "18M"]
+        assert [cell(svc, "Günlük İşlemler!L%d" % k) for k in (3, 4, 5)] == ["1Y", "1Y", "18M"]
+        assert [cell(svc, "Günlük İşlemler!I%d" % k) for k in (4, 5)] == pytest.approx([end["dv01"] / 2] * 2)
         row = by_row(panels(svc, u)["B21"])[r]
-        assert row[-2].startswith("1Y ") and row[-1].startswith("18M ← 15M ")
+        assert row[-2].startswith("1Y ") and re.match(r"^1Y \S+ \$ \+ 18M \S+ \$ · %", row[-1])
     finally:
         svc.stop()

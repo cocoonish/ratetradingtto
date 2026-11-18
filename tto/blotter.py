@@ -33,9 +33,9 @@ OIS_ROW = {"1M": 9, "2M": 10, "3M": 11, "6M": 12, "9M": 13, "1Y": 14, "15M": 15,
 FWD_BASES = ("RET_BID", "RET_MID", "RET_ASK", "TRY", "FWD", "SP")
 #: the desk's OIS buckets in months - the sheet's counterparty × tenor table (Günlük İşlemler Q89:Q107: ON, 1W, 2W and
 #: these; its summary P25:P38 stops at 5Y).  OIS_MAIN reads the tenors between them (15M, 21M, 27M …) between two quotes
-#: and nothing trades there: a leg there (a 12x15 FRA's end, a 15M outright) is in the next bucket up (15M → 18M,
-#: 21M → 2Y, 27M → 3Y …) - in the sheet, in the cost table by tenor and in OIS · PPK's FRA lists.  The trade keeps its
-#: own tenor.
+#: and nothing trades there: a leg there (a 12x15 FRA's end, a 15M outright) is split between the two buckets around
+#: it, linearly in months (15M: half 1Y, half 18M; 21M: half 18M, half 2Y; 27M: ¾ 2Y, ¼ 3Y …) - its nominal and DV01, at
+#: its own rate - in the sheet, in the cost table by tenor and in OIS · PPK's FRA lists.  The trade keeps its own tenor.
 BUCKET_MONTHS = (1, 2, 3, 6, 9, 12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120)
 MPC_ROWS = (84, 99)        # OIS_MAIN 'MPC OIS': A period, B start, C end, D market (bootstrap)
 
@@ -56,16 +56,25 @@ def month_label(m: int) -> str:
     return "%dM" % m
 
 
-def bucket_months(m: int) -> int:
-    """The desk's bucket of a leg ``m`` months out (months): the next bucket up (``BUCKET_MONTHS``; the last beyond it)."""
-    return next((b for b in BUCKET_MONTHS if b >= m), BUCKET_MONTHS[-1])
+def bucket_split(m: int) -> List[Tuple[int, float]]:
+    """The desk's buckets of a leg ``m`` months out (months) and each one's share: the bucket itself when it is one, else
+    the two around it, linearly in months (15 → 12 and 18 half each; 27 → 24 ¾, 36 ¼: :data:`BUCKET_MONTHS`); the end
+    ones beyond them."""
+    if m <= BUCKET_MONTHS[0] or m >= BUCKET_MONTHS[-1] or m in BUCKET_MONTHS:
+        return [(min(max(m, BUCKET_MONTHS[0]), BUCKET_MONTHS[-1]), 1.0)]
+    hi = next(b for b in BUCKET_MONTHS if b > m)
+    lo = max(b for b in BUCKET_MONTHS if b < m)
+    w = (m - lo) / float(hi - lo)
+    return [(lo, 1.0 - w), (hi, w)]
 
 
-def bucket(tenor: str) -> str:
-    """The desk's bucket of an OIS leg's tenor: the tenor itself when it is one, else the next one up (15M → 18M,
-    21M → 2Y, 27M → 3Y: :data:`BUCKET_MONTHS`); ON / 1W / 2W as they are."""
+def buckets(tenor: str) -> List[Tuple[str, float]]:
+    """An OIS leg's tenor in the desk's buckets, with each one's share: the tenor itself when it is one (ON / 1W / 2W
+    too), else the two around it (15M: [("1Y", 0.5), ("18M", 0.5)] - :func:`bucket_split`)."""
     m = _months_of(tenor)
-    return tenor if m is None or m in BUCKET_MONTHS else month_label(bucket_months(m))
+    if m is None or m in BUCKET_MONTHS:
+        return [(tenor, 1.0)]
+    return [(month_label(b), w) for b, w in bucket_split(m)]
 
 
 # ---------------------------------------------------------------------------------------------- FX forward
@@ -805,8 +814,8 @@ def position_cost(buys: List[Tuple[float, float]], sells: List[Tuple[float, floa
 
 
 def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Position and cost per forward (pair and value date), OIS bucket (the leg's tenor, one between the desk's buckets
-    in the next one up: :func:`bucket`) or meeting-dated period and bond."""
+    """Position and cost per forward (pair and value date), OIS bucket (the leg's tenor; one between the desk's buckets
+    split between the two around it: :func:`buckets`) or meeting-dated period and bond."""
     fwd: Dict[Tuple[str, float], Dict[str, List[Tuple[float, float]]]] = {}
     spans: Dict[str, float] = {}
     ois: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
@@ -817,10 +826,12 @@ def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
             d = fwd.setdefault((t.get("pair") or "USDTRY", t["value_date"]), {"B": [], "S": []})
             d[t["dir"]].append((t["amount"], t["forward"]))
         elif k == "ois":
-            d = ois.setdefault(t["tenor"] if t.get("mpc") else bucket(t["tenor"]), {"B": [], "S": []})
-            d[t["dir"]].append((t["dv01"], t["rate"]))
             if t.get("mpc"):
+                ois.setdefault(t["tenor"], {"B": [], "S": []})[t["dir"]].append((t["dv01"], t["rate"]))
                 spans[t["tenor"]] = t["mpc"].get("start") or 0.0
+            else:
+                for b, w in buckets(t["tenor"]):
+                    ois.setdefault(b, {"B": [], "S": []})[t["dir"]].append((t["dv01"] * w, t["rate"]))
         elif k == "bond":
             d = bonds.setdefault(t["instrument"], {"B": [], "S": []})
             if t["amount"] >= 0:
@@ -1207,9 +1218,9 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
 
     The sheet was made for USDTRY forwards and OIS of a quoted tenor.  A forward of another currency against
     TRY goes in at its USD amount (its TRY rate as it is: the TL cost); a meeting-dated OIS goes in spread over
-    the main tenors (see :func:`mpc_summary_rows`); an OIS leg between the desk's buckets (15M, 21M, 27M …) in the
-    next one up (column L: :func:`bucket` - the sheet's tables have no row for it).  Column G holds each forward's
-    DV01 ($)."""
+    the main tenors (see :func:`mpc_summary_rows`); an OIS leg between the desk's buckets (15M, 21M, 27M …) as two rows,
+    its nominal and DV01 split between the two buckets around it at its own rate (:func:`buckets` - the sheet's tables
+    have no row for its tenor).  Column G holds each forward's DV01 ($)."""
     si = book.model.sheet_index[SHEET]
     vals: Dict[Tuple[int, int], Any] = {}
 
@@ -1253,13 +1264,16 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
             put("G", rf, float(t["dv01"]) if type(t.get("dv01")) is float else None)
             rf += 1
         elif k == "ois" and ro <= OIS_ROWS[1]:
-            put("H", ro, float(t["nominal"]) if t.get("nominal") else None)
-            put("I", ro, float(t["dv01"]))
-            put("J", ro, t["dir"])
-            put("K", ro, float(t["rate"]))
-            put("L", ro, bucket(t["tenor"]))
-            put("M", ro, t.get("cpt") or None)
-            ro += 1
+            for b, w in buckets(t["tenor"]):
+                if ro > OIS_ROWS[1]:
+                    break
+                put("H", ro, float(t["nominal"]) * w if t.get("nominal") else None)
+                put("I", ro, float(t["dv01"]) * w)
+                put("J", ro, t["dir"])
+                put("K", ro, float(t["rate"]))
+                put("L", ro, b)
+                put("M", ro, t.get("cpt") or None)
+                ro += 1
         elif k == "bond" and rb <= BOND_ROWS[1]:
             put("Y", rb, t["instrument"])
             put("Z", rb, float(t["amount"]))
