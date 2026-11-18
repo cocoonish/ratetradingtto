@@ -650,11 +650,12 @@ export class ViewPage {
   }
 
   /**
-   * A chart the server sends drawn several ways ({groups: [{id, title, options, default}], items: {"3Y|OIS": {data, strip,
-   * line}}}: the interpolation chart's horizon and OIS / Offshore): small selectors on its header draw the way picked at
-   * once, with its line and its table (``strip``) under the chart.  Each user's own choice, kept in the browser as the
-   * page's tab is.  ``body``: the line and the table, for the panel to place; ``data()``: the chart of the way picked;
-   * ``take(choice)``: every way as it is now (a refresh), the way picked's chart back.
+   * A chart the server sends drawn several ways ({groups: [{id, title, options, default}], items: {"3Y|OIS|Faiz": {data,
+   * strip, line}}}: the interpolation chart's horizon, OIS / Offshore and rates / discount factors): small selectors on its
+   * header draw the way picked at once, with its line and its table (``strip``) under the chart.  Each user's own choice,
+   * kept in the browser as the page's tab is (a group added later: its default for a choice kept before it).  ``body``:
+   * the line and the table, for the panel to place; ``data()``: the chart of the way picked; ``take(choice)``: every way as
+   * it is now (a refresh), the way picked's chart back.
    */
   chartChoice(p, it) {
     const key = 'tto.pick.' + this.id + '.' + p.id;

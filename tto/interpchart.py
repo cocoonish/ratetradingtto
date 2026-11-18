@@ -11,11 +11,24 @@ tenors both ways (:mod:`tto.ppkcurve`: Bootstrap, what Murex marks with, and PPK
   the chart and in its tooltip;
 * the quoted tenors - where both curves reprice the same quote - as light lines over the plot, the meetings as ticks.
 
+**The discount factors** (the desk, 18.11.2026: "Bu enterpolasyondaki DF farkları da bir grafikte bana gösterilmeli"),
+the chart's third choice, "DF" (:func:`df_view`): day by day from the spot, PPK basamak's discount factor against
+Bootstrap's, ``DF_PPK / DF_Bootstrap − 1`` in bp - Bootstrap's own the line at 0 -, the quoted tenors marked and a table
+of both discount factors and the difference at each of them.  The relative difference, not ``(DF_PPK − DF_Bootstrap)``
+×10⁻⁴: it is what a cash flow on that day is worth more (+) or less (−) on PPK basamak in bp of its value, one scale at
+any maturity (the absolute difference shrinks with the discount factor - ~0.07 at 10Y - and would make a 10Y difference
+look 14 times smaller than the same one at 1M), and ≈ −(the zero rates' difference) × the years.  At a quoted tenor it
+is 0 where both curves have every one of its cash flows at a quoted tenor - a zero-coupon quote (OIS up to 3M, TRYI, XCCY
+1Y), a coupon quote whose coupons fall on quoted tenors (OIS 6M–1Y, XCCY 2Y–5Y) -, small at a coupon quote with coupon
+dates between quotes (OIS from 18M: 15M, 21M … are no quotes - both curves reprice its par rate, splitting its coupons
+otherwise).  Past the last quote both curves only go on, each its own way (offshore after the last XCCY): not drawn.
+
 Over 1Y / 3Y / 10Y from the spot, OIS or offshore: the Forward sheet's offshore curve (FX swap implied ≤9M, XCCY 1Y–10Y,
 ln DF linear) against ppkcurve's offshore PPK curve (MPC ima with a flat basis between the offshore quotes), on the
-offshore quotes' ACT/360.  Every way is made at once - a few hundred points - and the page switches between them
-(:func:`panel`).  Days are calendar days from a curve's spot, x values Excel serials (the chart's date axis), rates
-decimals.  Nothing here changes either curve: both are read as :func:`tto.ppkcurve.read` and the sheet have them.
+offshore quotes' ACT/360.  Every way is made at once - a few hundred points, the discount factors' a point a day - and
+the page switches between them (:func:`panel`).  Days are calendar days from a curve's spot, x values Excel serials (the
+chart's date axis), rates decimals.  Nothing here changes either curve: both are read as :func:`tto.ppkcurve.read` and
+the sheet have them.
 """
 from __future__ import annotations
 
@@ -30,7 +43,9 @@ from .xl.values import serial_to_date, to_num
 #: the curves; the way a page opens with
 HORIZONS: Tuple[Tuple[str, int], ...] = (("1Y", 12), ("3Y", 36), ("10Y", 120))
 CURVES = ("OIS", "Offshore")
-DEFAULT = ("3Y", "OIS")
+#: what each way shows: the rates (the overnight forward and the 3M FRA strip) or the discount factors (:func:`df_view`)
+VIEWS = ("Faiz", "DF")
+DEFAULT = ("3Y", "OIS", "Faiz")
 #: the offshore curve as the Forward sheet has it (OFF_GUN / OFF_LNDF, Forward!AJ123:AN143): AK its nodes' days from the
 #: FX spot, AM their ln DF - the spot first
 OFF_ROWS, OFF_DAY, OFF_LNDF = (124, 143), 37, 39
@@ -160,9 +175,9 @@ def _series(name: str, segments: Sequence[Segment], origin: float, color: str, d
 
 
 # ================================================================================================== one way of drawing it
-def _signed(v: float, loc) -> str:
-    text = numfmt.format_value(v, "0.0", loc)
-    return ("+" + text if v > 0 else text) if any(ch in "123456789" for ch in text) else numfmt.format_value(0.0, "0.0", loc)
+def _signed(v: float, loc, fmt: str = "0.0") -> str:
+    text = numfmt.format_value(v, fmt, loc)
+    return ("+" + text if v > 0 else text) if any(ch in "123456789" for ch in text) else numfmt.format_value(0.0, fmt, loc)
 
 
 def _strip_table(fb: Sequence[Segment], fp: Sequence[Segment], names: Tuple[str, str, str], origin: float, curve: str,
@@ -260,20 +275,150 @@ def view(cv: Dict[str, Any], off_boot: Optional[pk.LogLinear], meets: Sequence[T
             "line": _line(fb, fp, horizon, curve, names, quotes, stop, origin, loc)}
 
 
+# ================================================================================================== the discount factors
+def df_daily(boot, ppk, days: int) -> List[float]:
+    """PPK basamak's discount factor against Bootstrap's, ``(DF_PPK / DF_Bootstrap − 1)`` in bp, on every day from the spot
+    (0) to ``days``."""
+    return [(ppk.df(float(t)) / boot.df(float(t)) - 1.0) * 1e4 for t in range(days + 1)]
+
+
+def _pinned(q: pk.Quote, ends: Sequence[float]) -> bool:
+    """Whether every cash flow of a quote falls on a quoted tenor - a zero-coupon quote, a coupon quote whose coupons are
+    quoted tenors: both curves have the same discount factor there."""
+    return all(any(abs(p - e) < 0.5 for e in ends) for p in q.pays[:-1])
+
+
+def df_view(cv: Dict[str, Any], off_boot: Optional[pk.LogLinear], meets: Sequence[Tuple[float, str, Optional[float]]],
+            spot: Optional[float], horizon: str, curve: str, loc, memo: Optional[Dict[str, List[float]]] = None) -> Dict[str, Any]:
+    """The discount factors of one way (the chart's "DF", see the module's text): ``horizon``, ``curve`` and the rest as
+    :func:`view` takes them.  Day by day from the curve's spot to the horizon - to the last quote, if that comes first: past
+    it both curves only go on -, PPK basamak's ``DF / DF_Bootstrap − 1`` (bp, a point a day; :func:`df_daily`) beside
+    Bootstrap's own, 0; the quoted tenors marked (both discount factors and the difference in their tips), the meetings as
+    ticks; the table under it both discount factors and the difference at each quoted tenor.  ``memo``: the daily
+    differences already worked out, by curve (the shorter horizons are the first days of the longest)."""
+    months = dict(HORIZONS)[horizon]
+    names = NAMES[curve]
+    grid = cv.get("grid")
+    if curve == "OIS":
+        boot, ppk, quotes, shift = cv.get("boot"), cv.get("ppk"), cv.get("quotes") or [], 0.0
+    else:
+        boot, ppk, quotes, shift = off_boot, cv.get("off_ppk"), cv.get("off_quotes") or [], cv.get("fx_shift")
+    data: Dict[str, Any] = {"title": "%s · DF farkı (PPK basamak / Bootstrap − 1) · %s" % (curve, horizon), "kind": "scatter",
+                            "scatter": 1, "cats": [], "series": [], "axis": [], "decimals": 0, "auto": "fit", "aspect": 0.42,
+                            "y_title": "bp", "xaxis": {"type": "date", "format": "mmm yy"}}
+    if boot is None or ppk is None or grid is None or len(grid.days) < months // 3 or spot is None or shift is None \
+            or not quotes:
+        why = "; ".join(cv.get("errors") or []) or "eğri kurulamadı"
+        return {"data": data, "strip": None, "line": "%s · %s · DF: çizilemedi (%s)" % (horizon, curve, why)}
+    origin = spot + shift
+    stop = grid.days[months // 3 - 1] - shift                 # (the curve's days: the calendar's day at the horizon)
+    last = max(q.end for q in quotes)
+    n = int(math.floor(min(stop, last) + 1e-9))
+    memo = {} if memo is None else memo
+    daily = memo.get(curve)
+    if daily is None or len(daily) <= n:
+        daily = memo[curve] = df_daily(boot, ppk, n)
+    diff = [round(v, 2) + 0.0 for v in daily[:n + 1]]       # (as the tooltip shows it - a short page; + 0.0: no −0.0)
+    x0 = int(origin) if float(origin).is_integer() else origin
+    data["series"] = [{"name": "DF · " + names[0], "kind": "scatter", "stacked": False, "x": [x0, x0 + n], "data": [0.0, 0.0],
+                       "step": 1, "color": BOOT_COLOR},
+                      {"name": "DF · " + names[1], "kind": "scatter", "stacked": False, "x": [x0 + t for t in range(n + 1)],
+                       "data": diff, "color": PPK_COLOR}]
+    data["y_title"] = "bp: DF / DF Bootstrap − 1"
+    # (the tooltip: the difference with its sign and unit; Bootstrap's line is the 0 it is measured from)
+    data["tipdiff"] = [{"a": 1, "b": 0, "name": "PPK / Bootstrap − 1", "scale": 1, "digits": 2, "unit": "bp"}]
+    shown = [q for q in sorted(quotes, key=lambda q: q.end) if 0.0 < q.end <= n]
+    ends = [q.end for q in quotes]
+    fmt = lambda v: numfmt.format_value(v, "0.000000", loc)                                  # noqa: E731
+    marks = []
+    for q in shown:
+        b, p = boot.df(q.end), ppk.df(q.end)
+        d = (p / b - 1.0) * 1e4
+        why = ("aynı - nakit akışlarının hepsi kotalı vadede" if _pinned(q, ends) else
+               "kuponlu kota, arada kotasız kupon tarihi: iki eğri par faizi aynen fiyatlar, kuponları başka böler")
+        marks.append({"x": origin + q.end, "t": q.name.split(" ")[-1],
+                      "tip": "%s kotası (%s): DF %s %s · %s %s · fark %s bp (%s)" % (
+                          q.name, _date(origin + q.end), names[0], fmt(b), names[1], fmt(p), _signed(d, loc, "0.00"), why)})
+    marks += [{"x": spot + day, "k": "tick", "color": PPK_COLOR,
+               "tip": "%s toplantısı%s · TLREF %s'den" % (name or "PPK", " " + _date(date) if date else "", _date(spot + day))}
+              for day, name, date in meets if day - shift <= n]
+    data["vmarks"] = sorted(marks, key=lambda m: m["x"])
+    return {"data": data, "strip": _df_table(boot, ppk, shown, ends, names, origin, loc),
+            "line": _df_line(daily[:n + 1], boot, ppk, shown, ends, horizon, curve, origin, last, stop, quotes, loc)}
+
+
+def _df_table(boot, ppk, shown: Sequence[pk.Quote], ends: Sequence[float], names: Tuple[str, str, str], origin: float,
+              loc) -> Dict[str, Any]:
+    """The table under the DF view, a quoted tenor a column: both discount factors and PPK / Bootstrap − 1 (bp; + green,
+    − red)."""
+    hd = {"k": "s", "b": 1, "f": "hd"}
+    head = [dict(hd, t="DF · kotalı vade", tip="İki eğrinin kotalı vadedeki iskonto faktörü ve farkı: nakit akışlarının hepsi "
+                                              "kotalı vadede olan kotada aynı, arada kotasız kupon tarihi olanda küçük")]
+    rows = [[{"t": names[0], "k": "s", "b": 1}], [{"t": names[1], "k": "s", "b": 1}],
+            [{"t": "PPK / Bootstrap − 1 (bp)", "k": "s", "b": 1}]]
+    for q in shown:
+        b, p = boot.df(q.end), ppk.df(q.end)
+        head.append(dict(hd, t=q.name.split(" ")[-1], al="r", tip="%s · %s (%d gün)%s" % (
+            q.name, _date(origin + q.end), int(round(q.end)), "" if _pinned(q, ends) else " · arada kotasız kupon tarihi")))
+        rows[0].append({"t": numfmt.format_value(b, "0.000000", loc), "v": b, "k": "n"})
+        rows[1].append({"t": numfmt.format_value(p, "0.000000", loc), "v": p, "k": "n"})
+        d = (p / b - 1.0) * 1e4
+        cell = {"t": _signed(d, loc, "0.00"), "v": d, "k": "n"}
+        if cell["t"][0] in "+-":
+            cell["c"] = "pos" if d > 0 else "neg"
+        rows[2].append(cell)
+    return {"sheet": "", "rows": [head] + rows}
+
+
+def _df_line(daily: Sequence[float], boot, ppk, shown: Sequence[pk.Quote], ends: Sequence[float], horizon: str, curve: str,
+             origin: float, last: float, stop: float, quotes: Sequence[pk.Quote], loc) -> str:
+    """What the DF view shows, in a line: where PPK basamak's discount factor is furthest above and below Bootstrap's,
+    the quoted tenors where they are the same and the difference at the others - and that past the last quote nothing is
+    drawn."""
+    hi = max(range(len(daily)), key=lambda t: daily[t])
+    lo = min(range(len(daily)), key=lambda t: daily[t])
+    text = "%s · %s · DF farkı (PPK basamak / Bootstrap − 1): en yüksek %s bp (%s), en düşük %s bp (%s)" % (
+        horizon, curve, _signed(daily[hi], loc, "0.00"), _date(origin + hi), _signed(daily[lo], loc, "0.00"), _date(origin + lo))
+    same = [q.name.split(" ")[-1] for q in shown if _pinned(q, ends)]
+    other = [(q.name.split(" ")[-1], (ppk.df(q.end) / boot.df(q.end) - 1.0) * 1e4) for q in shown if not _pinned(q, ends)]
+    if same:
+        text += "; kotalı vadede aynı: " + ", ".join(same)
+    if other:
+        text += "; arada kotasız kuponu olan kotada: " + " · ".join("%s %s" % (lab, _signed(d, loc, "0.00")) for lab, d in other) + " bp"
+    if last < stop:
+        end = max(quotes, key=lambda q: q.end)
+        text += ". Son kota %s (%s): sonrası iki eğride de uzatma, çizilmedi" % (end.name, _date(origin + end.end))
+    return text
+
+
 # ================================================================================================== the panel
 def panel(cv: Optional[Dict[str, Any]], get: Callable[[str, int, int], Any], loc) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """The chart's panel out of the curves (``cv``: :func:`tto.ppkcurve.read`'s, the user's own calculation) and the
     workbook (``get(sheet, row, column)`` through the same calculation): every way at once - ``choice``: the page's
-    selectors (``groups``) and each way by "horizon|curve" (``items``, :func:`view`) - and the chart the page opens with
-    (what a launchpad or the side drawer draws)."""
+    selectors (``groups``) and each way by "horizon|curve|view" (``items``: :func:`view` for "Faiz", :func:`df_view` for
+    "DF") - and the chart the page opens with (what a launchpad or the side drawer draws)."""
     if cv is None:                                         # (a workbook without the TRY curves' sheets: nothing to read)
         cv, off_boot, meets, spot = {"errors": ["TRY eğrileri bu çalışma kitabında yok"]}, None, [], None
     else:
         off_boot, meets, spot = offshore_curve(get), meetings(get), _num(to_num(get(*pk.OIS_SPOT)))
-    items ={"%s|%s" % (h, c): view(cv, off_boot, meets, spot, h, c, loc) for h, _ in HORIZONS for c in CURVES}
+    memo: Dict[str, List[float]] = {}
+    items: Dict[str, Dict[str, Any]] = {}
+    for h, _ in sorted(HORIZONS, key=lambda x: -x[1]):     # (the longest first: the shorter DF views take its first days)
+        for c in CURVES:
+            items["%s|%s|%s" % (h, c, VIEWS[0])] = view(cv, off_boot, meets, spot, h, c, loc)
+            items["%s|%s|%s" % (h, c, VIEWS[1])] = df_view(cv, off_boot, meets, spot, h, c, loc, memo)
     choice = {"groups": [{"id": "ufuk", "title": "Ufuk: spot'tan 1, 3 ya da 10 yıl", "options": [h for h, _ in HORIZONS],
                           "default": DEFAULT[0]},
                          {"id": "egri", "title": "OIS eğrisi (ACT/365) ya da offshore eğri (FX swap ≤9M + XCCY; ACT/360)",
-                          "options": list(CURVES), "default": DEFAULT[1]}],
-              "items": items}
+                          "options": list(CURVES), "default": DEFAULT[1]},
+                         {"id": "gorunum", "title": "Faiz: O/N forward ve 3A FRA şeridi · DF: iskonto faktörü farkı, gün gün "
+                                                    "(PPK basamak / Bootstrap − 1, bp)",
+                          "options": list(VIEWS), "default": DEFAULT[2]}],
+              "items": {k: items[k] for k in sorted(items, key=_item_order)}}
     return items["|".join(DEFAULT)]["data"], choice
+
+
+def _item_order(key: str) -> Tuple[int, int, int]:
+    """The ways in the selectors' order (horizon, curve, view)."""
+    h, c, v = key.split("|")
+    return [x for x, _ in HORIZONS].index(h), CURVES.index(c), VIEWS.index(v)
