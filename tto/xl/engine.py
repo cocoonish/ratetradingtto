@@ -656,16 +656,41 @@ class Calc(object):
     #: stale entries of the groups (cells listed under a mask they no longer have) before they are rebuilt
     STALE_MAX = 20000
 
-    def _seed_overlay(self) -> None:
+    def _seed_overlay(self, changed: Optional[int] = None) -> None:
+        """Put this calculation's own input values in place.
+
+        An array formula declared an input and given an array (an ``XlArray`` for its anchor: its whole result typed
+        over, e.g. a Bloomberg history block with other numbers) writes the array's elements into the cells it covers,
+        as the formula's own result would (:meth:`_spill`); they carry the anchor's bit alone, so they are dropped
+        together - and written again only then: ``changed`` the bits just invalidated (None: a reset, all of them)."""
         eng = self.engine
         self.omask = 0
+        arrays = []
         for (si, rc), v in self.overlay.items():
             bit = eng.input_mask[si].get(rc)
             if bit is None:
                 continue
+            if type(v) is XlArray and self._spills(si, rc):
+                if changed is None or changed & bit:
+                    arrays.append((si, rc, v, bit))
+                top = v.rows[0][0] if v.rows and v.rows[0] else None
+                v = 0.0 if top is None else (float(top) if type(top) is int else top)     # (the anchor: as _eval keeps it)
             self.memo[si][rc] = v
             self._mark(si, rc, bit)
             self.omask |= bit
+        for si, rc, v, bit in arrays:
+            r, c = divmod(rc, COLS)
+            ref = eng.arr[si].get(rc)
+            if ref is not None and (ref[0] != ref[2] or ref[1] != ref[3]):
+                self._spill(si, rc, r, c, v.rows, bit, ref, rc not in eng.model.sheets[si].dyn)
+            else:
+                self._spill(si, rc, r, c, v.rows, bit, None, False)
+
+    def _spills(self, si: int, rc: int) -> bool:
+        """Whether the cell is an array formula whose result covers more cells than its own."""
+        eng = self.engine
+        ref = eng.arr[si].get(rc)
+        return (ref is not None and (ref[0] != ref[2] or ref[1] != ref[3])) or rc in eng.spill_anchors[si]
 
     def set_overlay(self, overlay: Dict[Tuple[int, int], Any]) -> None:
         """Replace this user's private input values."""
@@ -681,13 +706,13 @@ class Calc(object):
                     changed |= bit
         self.overlay = dict(overlay)
         if changed:
-            self._invalidate(changed)
+            self._invalidate(changed)               # (an array of the overlay that changed is written again there)
             # overlay cells removed / changed must be re-seeded
             for (si, rc) in keys:
                 self.memo[si].pop(rc, None)
                 if self.maskd[si].pop(rc, None) is not None:
                     self._stale += 1
-        self._seed_overlay()
+        self._seed_overlay(0)
         if changed:
             for child in self.children:
                 child._invalidate(changed)          # (a layer's values may have read what changed here)
@@ -744,7 +769,7 @@ class Calc(object):
         if self.rcache:
             self.rcache = {k: e for k, e in self.rcache.items() if not (e[2] & changed)}
         if not shared:
-            self._seed_overlay()
+            self._seed_overlay(changed)
 
     # ------------------------------------------------------------------ public API
     def get(self, si: int, r: int, c: int) -> Any:

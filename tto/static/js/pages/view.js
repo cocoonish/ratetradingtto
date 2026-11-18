@@ -140,8 +140,11 @@ export class ViewPage {
         it.titleEl.textContent = p.title;
         it.titleEl.title = p.title;
       }
+      // (a note that says what is drawn - the ASW history's offshore days - follows it too)
+      if (typeof p.note === 'string' && it.noteEl && p.note !== it.noteEl.textContent) it.noteEl.textContent = p.note;
       if (p.type === 'chart') {
         it.data = p.data;
+        if (it.pick && p.pick) it.pick.set(p.pick.value);              // (chosen elsewhere too: Parametreler, another tab)
         if (!it.el.isConnected) { it.stale = true; continue; }       // drawn when its tab is opened
         if (it.chart && p.data) it.chart.update(p.data);
         if (it.tableGrid && p.data) it.tableGrid.update(chartTable(p.data), false);
@@ -492,6 +495,11 @@ export class ViewPage {
       b.addEventListener('click', () => this.ctx.openRet());
       head.appendChild(b);
     }
+    if (p.type === 'chart' && p.pick && !p.copy && this.ctx.setInputs) {
+      // what the chart is drawn against (the ASW history: OIS / Offshore / İkisi) - the user's own cell behind it
+      it.pick = this.chartPick(p.id, p.pick);
+      head.appendChild(it.pick.el);
+    }
     head.appendChild(tools);
     el.appendChild(head);
     el.appendChild(body);
@@ -590,9 +598,47 @@ export class ViewPage {
       x.addEventListener('click', () => this.closeCopy(p));
       tools.appendChild(x);
     }
-    if (p.note) el.appendChild(h('div', { class: 'note' }, p.note));
+    if (p.note) {
+      it.noteEl = h('div', { class: 'note' }, p.note);
+      el.appendChild(it.noteEl);
+    }
     this.items.set(p.id, it);
     return el;
+  }
+
+  /**
+   * A chart's small selector ({ref, book, value, options, default}: the ASW history against OIS / Offshore / İkisi): a
+   * click writes the user's own cell behind it (the same cell Parametreler shows; the default leaves it to the workbook)
+   * and the chart comes back drawn so.  Kept per user, as the page's other choices.
+   */
+  chartPick(pid, pick) {
+    const cell = pick.ref.split('!').pop();
+    const el = h('div', { class: 'seg small chart-pick', id: 'chart-pick-' + pid, role: 'group',
+      title: 'Grafik neye göre çizilsin - sizin seçiminiz (Parametreler\'de ' + cell + ')' });
+    const btns = new Map();
+    let value = pick.value;
+    const paint = (v) => {
+      value = v;
+      for (const [o, b] of btns) b.classList.toggle('on', o === v);
+    };
+    for (const o of pick.options) {
+      const b = h('button', { type: 'button' }, o);
+      b.dataset.pick = o;
+      b.addEventListener('click', async () => {
+        if (o === value) return;
+        const was = value;
+        paint(o);
+        try {
+          if (o === pick.default) await trackWrite(api.post('/api/reset', { book: pick.book, refs: [pick.ref] }));
+          else await this.ctx.setInputs(pick.book, [{ ref: pick.ref, value: o }]);
+          this.ctx.refreshNow();
+        } catch (err) { paint(was); errorToast(err); }
+      });
+      btns.set(o, b);
+      el.appendChild(b);
+    }
+    paint(value);
+    return { el, set: paint };
   }
 
   // ------------------------------------------------------------------ temporary copies of a calculator

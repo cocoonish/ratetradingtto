@@ -52,7 +52,7 @@ from .xl.errors import XlError
 from .xl.model import COLS, a1, parse_a1, parse_range
 from .xl.tokenizer import col_to_index, index_to_col
 from .marketdata.base import INVALID_FIELD, INVALID_SECURITY, NOT_APPLICABLE
-from .xl.values import date_to_serial, serial_to_date
+from .xl.values import XlArray, date_to_serial, serial_to_date
 
 log = logging.getLogger("tto")
 
@@ -272,6 +272,9 @@ class Service(object):
         self._renders: Dict[Tuple, Dict[str, Any]] = {}
         self._private_users: set = set()                 # users with inputs of their own (their pages are theirs)
         self._render_lock = threading.Lock()
+        # the ASW history on the offshore curve: its quote arrays per calculation, past days worked out (_asw_hist_fx)
+        self._hist_fx_kept: Dict[str, Dict[str, Any]] = {}
+        self._hist_fx_rows: Dict[Tuple, Tuple[List[Optional[float]], List[str]]] = {}
         self._warming = False                            # a round of warming up is under way (warm)
         self.warmed = 0                                  # rounds done
         self._inflight: Dict[Tuple, "concurrent.futures.Future"] = {}     # pages / headers being made now
@@ -415,6 +418,11 @@ class Service(object):
             si = asw.model.sheet_index["ASW"]
             asw.engine.declare_inputs([(si, aswfx.ROW * COLS + aswfx.QUOTE_COL + k) for k in range(len(aswfx.TENORS))],
                                       group="asw-fx-curve")
+            if not any(x.startswith(ex.ASW_HIST_NAME + ":") for x in asw.left_out):
+                # ... and so are the history's (ASW against the offshore curve, day by day): its Bloomberg history blocks
+                # as a whole - an array formula given an array writes it into its cells (_asw_hist_fx)
+                anchors = sorted({a for a in aswfx.history_anchors(asw.model.sheets[si]) if a is not None})
+                asw.engine.declare_inputs([(si, a) for a in anchors], group="asw-hist-fx")
         if tto is not None:
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
                 tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
@@ -1422,13 +1430,15 @@ class Service(object):
         gone = []
         names = {name for book in self.books.values() for name in book.engine.users}
         names |= {key[0] for book in self.books.values() for key in book.engine.layers}      # (a copy's: its user)
+        names.discard("")                         # (a layer over everybody's calculation - the ASW history offshore)
         for name in names:
             if self._streams.get(name) or now - self._seen.get(name, -1e9) < limit:
                 continue
             for book in self.books.values():
                 book.engine.drop_user(name)
                 self._overlays.pop((name, book.id), None)
-            self.copies.drop(name)                    # (their temporary copies: made again from what is kept)
+            self.copies.drop(name)                    # (their temporary copies, their ASW history offshore: made again)
+            self._hist_fx_kept.pop(name, None)
             self._forget_renders(name)
             gone.append(name)
         return gone
@@ -2051,6 +2061,8 @@ class Service(object):
                     self._broken_ppk_columns(book, calc, entry["data"], loc)
                 if p.get("append") == "asw_fx":
                     self._asw_fx_columns(book, user, entry["data"], loc)
+                elif p.get("append") == "asw_hist_fx":
+                    self._asw_hist_fx_columns(book, user, R, entry["data"], loc)
                 elif p.get("append") == "fra_buckets":
                     self._fra_bucket_columns(book, calc, entry["data"], loc)
                 elif p.get("append") == "fx_curve":
@@ -2081,7 +2093,13 @@ class Service(object):
                     # sheet's own, with the OIS quotes its curve is built from swapped for the FX swap implied rates
                     on, _ = self._asw_fx_calc(book, user)
                     spec = self._chart_as(spec, p.get("as") or {})
-                if spec is not None and on is None:
+                if spec is not None and p.get("curve") == "hist":
+                    # the ASW history: against OIS (the workbook's chart), the offshore curve or both - the user's choice
+                    entry["data"], entry["pick"], extra = self._asw_hist_chart(book, user, calc, R, spec, loc, p)
+                    entry["title"] = p.get("title") or entry["data"]["title"]
+                    if extra:
+                        entry["note"] = (entry.get("note") or "") + (" " if entry.get("note") else "") + extra
+                elif spec is not None and on is None:
                     entry["data"] = R.chart(calc, dict(spec, series=[]), loc)
                     entry["note"] = "FX swap ima faizi yok (EK_FX): grafik çizilemedi"
                 elif spec is not None:
@@ -5719,6 +5737,237 @@ class Service(object):
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
         data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
         data["added"] = int(data.get("added") or 0) + 2
+
+    # ================================================================== the ASW history against the offshore curve
+    #: a calculation's ASW history on the offshore curve, a layer over it: ``(user, HIST_FX)`` - ``""`` everybody's
+    HIST_FX = "asw-hist-fx"
+    #: past days kept worked out on the offshore curve (aswfx.history_row: a page read finds them again)
+    HIST_ROWS_KEPT = 4000
+
+    def _asw_hist_fx(self, book, user: Optional[str]) -> Tuple[Optional[Calc], Dict[str, Any]]:
+        """The ASW sheet's history on the offshore curve - the desk's "ASW geçmişini offshore'a göre de çiz": the
+        sheet's own formulas, every past day's OIS quotes (``ASW!C66:R325``, its Bloomberg history blocks) swapped for
+        that day's offshore rates as today's are for the "ASW FX" column (:meth:`_asw_fx_calc`): the dashboard's own
+        daily closes (no Bloomberg request), each tenor's series by ``aswfx.history_series`` (TRYI 1–9M FX swap
+        implied, TRYSAQ 1Y and 2–10Y XCCY; ICPL, then BGN), each read by its own convention and given as the par quote
+        of the sheet's convention with the same discount factor; a tenor without one (18M, a day without its close)
+        keeps that day's OIS quote.  A day without any offshore close has no offshore ASW at all (``info["none"]``: the
+        page leaves its point and its cells empty) - as today's ASW FX has none without an FX rate.  Today's row (65)
+        is the ASW FX column's: its quotes as :meth:`_asw_fx_calc` has them.  The blocks are given as a whole (an array
+        for each block's formula, ``aswfx.history_anchors`` - an engine input), in a layer on top of the user's
+        calculation: only what follows the swapped quotes is computed there, and it is kept while the market moves
+        (today's row follows it).
+
+        Returns ``(calc, info)``: ``info["n"]`` / ``["kinds"]`` / ``["day"]`` the tenors offshore on each past row (row
+        -> count / each tenor's kind / its day), ``["days"]`` the past days, ``["offshore"]`` those with an offshore
+        rate, ``["today"]`` the tenors priced in EK_FX now, ``["none"]`` the rows without any (today's: 65).
+        ``(None, info)`` when the workbook has no such history."""
+        info: Dict[str, Any] = {"n": {}, "kinds": {}, "day": {}, "days": 0, "offshore": 0, "today": 0, "none": set()}
+        if "ASW" not in book.model.sheet_index or ex.FXC_SHEET not in book.model.sheet_index \
+                or any(x.startswith(ex.ASW_HIST_NAME + ":") for x in getattr(book, "left_out", ())):
+            return None, info
+        si = book.model.sheet_index["ASW"]
+        eng = book.engine
+        base = self._calc(user, book)
+        pick = (si, parse_a1(ex.ASW_HIST_PICK))
+        if base is not eng.shared and all(cell == pick for cell in self._overlay(user, book)):
+            base = eng.shared             # (the chart's choice alone - read by no formula: everybody's history is theirs)
+        who = (user or "") if base is not eng.shared else ""
+        fx, swapped = self._asw_fx_calc(book, user)
+        q0, q1 = aswfx.ROW * COLS + aswfx.QUOTE_COL, aswfx.ROW * COLS + aswfx.QUOTE_COL + len(aswfx.TENORS)
+        ov = {cell: v for cell, v in (fx.overlay.items() if fx is not None else ()) if cell[0] == si and q0 <= cell[1] < q1}
+        arrays, rows = self._asw_hist_arrays(book, base, who)
+        ov.update(arrays)
+        info.update(rows)
+        info["today"] = swapped
+        info["none"] = {r for r, k in rows["n"].items() if not k} | (set() if swapped else {aswfx.ROW})
+        return eng.layer((who, self.HIST_FX), base, ov), info
+
+    def _asw_hist_arrays(self, book, base: Calc, who: str) -> Tuple[Dict[Tuple[int, int], Any], Dict[str, Any]]:
+        """The ASW history's Bloomberg blocks with the offshore quotes in place, by their formulas' cells: each block as
+        ``base`` (the user's calculation) has it, every past day with an offshore rate given the par quotes
+        (``aswfx.history_row``; one no quote reaches: #N/A - the curve stops there, as the sheet's does at a missing
+        quote); a block with nothing swapped is not given.  Worked out again only when what it read changed (the
+        blocks, the days of the curve's nodes - the masks of what ``base`` gave - and the history's closes and series);
+        a block that comes out the same is the same array (nothing is computed again for it)."""
+        si = book.model.sheet_index["ASW"]
+        series = aswfx.history_series(self.history.snapshot()["defs"])
+        mark = (getattr(self.history, "rev", 0), tuple(s.ids() if s is not None else None for s in series))
+        kept = self._hist_fx_kept.get(who)
+        if kept is not None and kept["mark"] == mark and self._still(kept["meta"], base):
+            return kept["arrays"], kept["info"]
+        saved, base.track = base.track, 0                 # (the masks of what is read: when to work it out again)
+        try:
+            arrays, info = self._asw_hist_build(book, base, si, series, kept["arrays"] if kept is not None else {})
+        finally:
+            mask = base.track or 0
+            base.track = None if saved is None else saved | mask
+        self._hist_fx_kept[who] = {"mark": mark, "meta": (base.serial, base.engine.layout, base.epoch, mask),
+                                   "arrays": arrays, "info": info}
+        return arrays, info
+
+    def _asw_hist_build(self, book, base: Calc, si: int, series: Sequence[Any],
+                        before: Dict[Tuple[int, int], Any]) -> Tuple[Dict[Tuple[int, int], Any], Dict[str, Any]]:
+        n, nodes = len(aswfx.TENORS), len(aswfx.NODES)
+        get = base.get
+        days = [(r, d) for r, d in ((r, get(si, r, aswfx.HIST_DATE_COL)) for r in range(aswfx.HIST_FIRST, aswfx.HIST_LAST + 1))
+                if type(d) is float and 20000 < d < 80000]
+        info: Dict[str, Any] = {"n": {}, "kinds": {}, "day": dict(days), "days": len(days), "offshore": 0}
+        if not days:
+            return {}, info
+        lo, hi = (serial_to_date(x).isoformat() for x in (min(d for _, d in days), max(d for _, d in days)))
+        ids = [i for s in series if s is not None for i in s.ids()]
+        data = self.store.hist_many(ids, lo, hi) if ids else {}
+        closes = [s.merged(data)[1] if s is not None else {} for s in series]
+        swap: Dict[int, List[Any]] = {}                   # row -> what each tenor's cell is given (None: its own)
+        for r, d in days:
+            day = serial_to_date(d).isoformat()
+            fx = [c.get(day) for c in closes]
+            kinds = [aswfx.OIS] * n
+            if any(x is not None for x in fx):
+                pars, kinds = self._asw_hist_row([get(si, r, aswfx.QUOTE_COL + k) for k in range(n)], fx,
+                                                 [get(si, r, aswfx.DAY_COL + i) for i in range(nodes)])
+                swap[r] = [None if kind == aswfx.OIS else (p if p is not None else XlError("#N/A")) for p, kind in zip(pars, kinds)]
+            info["kinds"][r] = kinds
+            info["n"][r] = sum(1 for kind in kinds if kind != aswfx.OIS)
+            info["offshore"] += 1 if info["n"][r] else 0
+        arrays: Dict[Tuple[int, int], Any] = {}
+        eng = book.engine
+        for anchor in sorted({a for a in aswfx.history_anchors(book.model.sheets[si]) if a is not None}):
+            ref = eng.arr[si].get(anchor)
+            if ref is None:
+                continue
+            r1, c1, r2, c2 = ref
+            rows = [[get(si, r, c) for c in range(c1, c2 + 1)] for r in range(r1, r2 + 1)]
+            while rows and all(x is None for x in rows[-1]):
+                rows.pop()                                # (the block's own rows: below them its area is empty)
+            changed = False
+            for i, row in enumerate(rows):
+                put = swap.get(r1 + i)
+                if put is None:
+                    continue
+                for j in range(len(row)):
+                    k = c1 + j - aswfx.QUOTE_COL
+                    if 0 <= k < n and put[k] is not None:
+                        row[j] = put[k]
+                        changed = True
+            if not changed:
+                continue
+            old = before.get((si, anchor))
+            arrays[(si, anchor)] = old if old is not None and old.rows == rows else XlArray(rows)
+        return arrays, info
+
+    def _asw_hist_row(self, ois: List[Any], fx: List[Any], days: List[Any]) -> Tuple[List[Optional[float]], List[str]]:
+        """``aswfx.history_row``, kept: the same day is worked out once."""
+        key = (tuple(x if type(x) is float else None for x in ois), tuple(fx), tuple(x if type(x) is float else None for x in days))
+        hit = self._hist_fx_rows.get(key)
+        if hit is None:
+            if len(self._hist_fx_rows) >= self.HIST_ROWS_KEPT:
+                self._hist_fx_rows.clear()
+            hit = self._hist_fx_rows[key] = aswfx.history_row(ois, fx, days)
+        return hit
+
+    @staticmethod
+    def _asw_hist_choice(book, calc) -> str:
+        """What the user's ASW history chart is drawn against (``ASW!N3``: OIS, Offshore, İkisi; anything else OIS)."""
+        r, c = divmod(parse_a1(ex.ASW_HIST_PICK), COLS)
+        v = calc.get(book.model.sheet_index["ASW"], r, c) if "ASW" in book.model.sheet_index else None
+        return v if isinstance(v, str) and v in ex.ASW_HIST_CHOICES else ex.ASW_HIST_CHOICES[0]
+
+    def _asw_hist_chart(self, book, user: Optional[str], calc, R: Renderer, spec: Dict[str, Any], loc,
+                        p: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+        """The ASW history's chart as the user chose it (:meth:`_asw_hist_choice`): against OIS - the workbook's chart,
+        as before -, against the offshore curve (the same chart on :meth:`_asw_hist_fx`) or both (the offshore
+        series dashed beside the OIS ones).  A day without any offshore close has no offshore point: a gap in the
+        offshore line.  Returns the chart, the choice for the page's selector and a line on the offshore days for the
+        note."""
+        choices = ex.ASW_HIST_CHOICES
+        choice = self._asw_hist_choice(book, calc)
+        pick = {"ref": "ASW!%s" % (p.get("pick") or ex.ASW_HIST_PICK), "book": book.id, "value": choice,
+                "options": list(choices), "default": choices[0]}
+        ois = R.chart(calc, spec, loc)
+        if choice == choices[0]:
+            return ois, pick, ""
+        fxh, info = self._asw_hist_fx(book, user)
+        if fxh is None:
+            return ois, pick, "Offshore eğrisine göre geçmiş bu dosyada kurulamadı: OIS'e göre çizildi."
+        fx = R.chart(fxh, spec, loc)
+        both = choice == choices[2]
+        name = lambda s, k: s.get("name") or "Kâğıt %d" % (k + 1)            # noqa: E731
+        # (the points by their day - the chart's x: a past row's, today's)
+        gaps = {info["day"][r] if r != aswfx.ROW else calc.get(book.model.sheet_index["ASW"], r, aswfx.HIST_DATE_COL)
+                for r in info["none"] if r == aswfx.ROW or r in info["day"]}
+        for k, s in enumerate(fx["series"]):
+            s["name"] = "%s · offshore" % name(s, k)
+            if both:
+                s["dash"] = 1
+            if gaps and "x" in s:
+                s["data"] = [None if x in gaps else v for x, v in zip(s["x"], s["data"])]
+        if both:
+            for k, s in enumerate(ois["series"]):
+                s["name"] = "%s · OIS" % name(s, k)
+            out = dict(ois, series=ois["series"] + fx["series"], title="ASW geçmişi · OIS ve offshore (son nokta canlı)")
+        else:
+            out = dict(fx, title="ASW geçmişi · offshore eğrisine göre (son nokta canlı)")
+        if not info["days"]:
+            line = "Offshore: geçmiş yok (Bloomberg geçmişi boş) - yalnız bugünkü nokta."
+        else:
+            line = ("Offshore faizli gün: %d / %d - offshore kapanışı olmayan gün çizilmez (gün gün kaç vade: geçmiş tablosu); "
+                    "bugün EK_FX'te %d / %d vade fiyatlı." % (info["offshore"], info["days"], info["today"], len(aswfx.TENORS)))
+        return out, pick, line
+
+    @staticmethod
+    def _tenor_label(months: int) -> str:
+        return "%dM" % months if months % 12 else "%dY" % (months // 12)
+
+    def _asw_hist_fx_columns(self, book, user: Optional[str], R: Renderer, data: Dict[str, Any], loc) -> None:
+        """The ASW history table's ASWs on the offshore curve beside the OIS ones (:meth:`_asw_hist_fx`): ASW 1–3 on it,
+        and how many of the curve's 16 tenors were offshore that day (which ones: the cell's tip; today's row: the
+        tenors EK_FX prices now).  A day without any offshore close: no offshore ASW (empty), 0 / 16."""
+        rows, rnums = data.get("rows") or [], data.get("r") or []
+        if not rows or "ASW" not in book.model.sheet_index:
+            return
+        si = book.model.sheet_index["ASW"]
+        fxh, info = self._asw_hist_fx(book, user)
+        n = len(aswfx.TENORS)
+        cols = [col_to_index(c) for c in "XYZ"]
+        how = ("o günün offshore faizleriyle - panonun günlük geçmişinden: 1–9A TRYI FX swap ima, 1Y ve 2–10Y TRYSAQ XCCY; önce "
+               "ICPL, yoksa BGN. %s. 18A ve o gün kapanışı olmayan vade o günün OIS kotasıyla; o gün hiç offshore kapanış "
+               "yoksa boş. Son satır canlı: ASW tablosunun ASW FX ima değeri (%s)" % (self.FX_RATES_READ, self.ASW_FX_CURVE))
+        head = [{"t": "ASW %d offshore" % (k + 1), "k": "s", "b": 1, "f": "hd",
+                 "tip": "Kâğıt %d · ASW, offshore eğrisine göre: sayfanın kendi hesabı, OIS kotaları yerine %s" % (k + 1, how)}
+                for k in range(3)]
+        head.append({"t": "Offshore vade", "k": "s", "b": 1, "f": "hd",
+                     "tip": "O gün eğrinin %d vadesinden kaçı offshore faizden (üzerine gelince hangileri); kalanı o günün OIS "
+                            "kotasıyla. Bugün: EK_FX'te fiyatı olan vadeler" % n})
+        empty = {"t": "", "k": ""}
+        labels = [self._tenor_label(m) for m in aswfx.TENORS]
+        for i, r in enumerate(rnums):
+            if r == aswfx.ROW - 1:
+                rows[i].extend([dict(c) for c in head])
+                continue
+            if fxh is None or not (r == aswfx.ROW or r in info["n"]):
+                rows[i].extend([dict(empty) for _ in range(4)])
+                continue
+            if r in info["none"]:
+                # no offshore close that day (today: no FX rate in EK_FX - the ASW FX column is empty too): no offshore ASW
+                rows[i].extend([dict(empty) for _ in cols] + [{
+                    "t": "0 / %d" % n, "k": "s", "al": "c", "cls": "soft",
+                    "tip": "o gün offshore kapanışı yok" if r != aswfx.ROW else "bugün EK_FX'te FX faizi yok"}])
+                continue
+            cells = [R.cell(fxh, si, r, c, loc) for c in cols]
+            if r == aswfx.ROW:
+                count = {"t": "%d / %d" % (info["today"], n), "k": "s", "al": "c",
+                         "tip": "Bugün: EK_FX'te %d / %d vade fiyatlı (ASW FX ima'nın eğrisi)" % (info["today"], n)}
+            else:
+                kinds = info["kinds"].get(r) or []
+                off = [labels[k] for k, kind in enumerate(kinds) if kind != aswfx.OIS]
+                own = [labels[k] for k, kind in enumerate(kinds) if kind == aswfx.OIS]
+                count = {"t": "%d / %d" % (info["n"][r], n), "k": "s", "al": "c",
+                         "tip": "Offshore: %s · OIS: %s" % (" ".join(off), " ".join(own) or "yok")}
+            rows[i].extend(cells + [count])
+        data["c"] = list(data.get("c") or []) + ["ASW 1 off", "ASW 2 off", "ASW 3 off", "Off vade"]
+        data["added"] = int(data.get("added") or 0) + 4
 
     #: OIS · PPK's FRA lists (OIS_MAIN): the whole list - its header row, its rows - and the 15 best (by their label in it)
     FRA_ALL, FRA_ALL_HEAD, FRA_TOP, FRA_TOP_HEAD = (336, 438), 335, (66, 80), 65

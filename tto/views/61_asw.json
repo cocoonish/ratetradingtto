@@ -43,6 +43,27 @@
    "label": "Geçmiş fiyat alanı"
   },
   {
+   "range": "N3",
+   "scope": "user",
+   "group": "asw-hist-curve",
+   "kind": "list",
+   "label": "Geçmiş grafiği: OIS / Offshore / İkisi (ASW geçmişi OIS'e, offshore eğrisine ya da ikisine göre)",
+   "options": [
+    "OIS",
+    "Offshore",
+    "İkisi"
+   ],
+   "aliases": {
+    "FX": "Offshore",
+    "FX swap": "Offshore",
+    "Off": "Offshore",
+    "İki": "İkisi",
+    "Her ikisi": "İkisi",
+    "Hepsi": "İkisi",
+    "Both": "İkisi"
+   }
+  },
+  {
    "range": "B7:B56",
    "scope": "shared",
    "group": "asw-isin",
@@ -269,15 +290,20 @@
    "id": "chart1",
    "type": "chart",
    "chart": 1,
-   "wide": true
+   "wide": true,
+   "curve": "hist",
+   "pick": "N3",
+   "note": "Geçmiş grafiği (Parametreler'de ya da grafiğin üstünde): OIS - çalışma kitabının grafiği, her gün o günün OIS kotalarıyla; Offshore - aynı hesap, her geçmiş günün OIS kotaları yerine o günün offshore faizleriyle (panonun kendi günlük geçmişi: 1–9A TRYI FX swap ima, 1Y ve 2–10Y TRYSAQ XCCY; önce ICPL, yoksa BGN; her biri kendi kuralıyla okunur ve sayfaya, vadesinde aynı iskonto faktörünü veren kendi kuralındaki par faiz olarak girer - bugünkü ASW FX gibi); İkisi - ikisi birlikte, offshore kesik çizgi. 18A'nın geçmişi tutulmaz: o vade ve o gün kapanışı olmayan vade o günün OIS kotasıyla kalır (geçmiş tablosunda gün gün kaç vadenin offshore olduğu yazar); hiç offshore kapanışı olmayan günün offshore noktası yoktur (çizgide boşluk). Son nokta canlı: OIS'te tablonun ASW'si, offshore'da ASW FX ima'sı."
   },
   {
    "id": "hist",
    "type": "table",
-   "title": "Geçmiş · OIS kotaları, TLREF, fiyat ve ASW (son satır canlı)",
+   "title": "Geçmiş · OIS kotaları, TLREF, fiyat ve ASW (son satır canlı) · sağda offshore eğrisine göre ASW",
    "range": "A62:Z326",
    "collapsed": true,
-   "keep_title": true
+   "keep_title": true,
+   "append": "asw_hist_fx",
+   "note": "Sağdaki sütunlar aynı ASW'ler offshore eğrisiyle: her gün o günün offshore faizleri (panonun günlük geçmişi: 1–9A TRYI FX swap ima, 1Y ve 2–10Y TRYSAQ XCCY; önce ICPL, yoksa BGN) OIS kotalarının yerine, bugünkü ASW FX'teki kuralla; 18A ve o gün kapanışı olmayan vade o günün OIS kotasıyla; o gün hiç offshore kapanış yoksa offshore ASW boş (Offshore vade 0 / 16). Offshore vade: o gün eğrinin 16 vadesinden kaçı offshore faizden (üzerine gelince hangileri). Son satır canlı: offshore sütunlarında ASW tablosunun ASW FX ima değeri."
   },
   {
    "id": "fit",
