@@ -269,7 +269,10 @@ def panel(cv: Optional[Dict[str, Any]], get: Callable[[str, int, int], Any], loc
     if cv is None:                                         # (a workbook without the TRY curves' sheets: nothing to read)
         cv, off_boot, meets, spot = {"errors": ["TRY eğrileri bu çalışma kitabında yok"]}, None, [], None
     else:
-        off_boot, meets, spot = offshore_curve(get), meetings(get), _num(to_num(get(*pk.OIS_SPOT)))
+        # the offshore Bootstrap the curves were read with (Service._try_curves: the names - the desk's list of points'
+        # curve when its list differs from the default), else the Forward sheet's own
+        off_boot = cv["off_boot"] if cv.get("off_boot") is not None else offshore_curve(get)
+        meets, spot = meetings(get), _num(to_num(get(*pk.OIS_SPOT)))
     items ={"%s|%s" % (h, c): view(cv, off_boot, meets, spot, h, c, loc) for h, _ in HORIZONS for c in CURVES}
     choice = {"groups": [{"id": "ufuk", "title": "Ufuk: spot'tan 1, 3 ya da 10 yıl", "options": [h for h, _ in HORIZONS],
                           "default": DEFAULT[0]},

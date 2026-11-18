@@ -429,10 +429,14 @@ class Service(object):
                 anchors = sorted({a for a in aswfx.history_anchors(asw.model.sheets[si]) if a is not None})
                 asw.engine.declare_inputs([(si, a) for a in anchors], group="asw-hist-fx")
         # the TRY curves between their quoted tenors, each user's choice (interp.py): Bootstrap (Murex) or PPK basamak - the
-        # choice (a personal input) and the PPK cells the service fills
+        # choice (a personal input) and the PPK cells the service fills; the desk's list of the points the curves are built
+        # from (curvepoints.py, Ayarlar → Eğri noktaları: on the default list the workbook's own formulas, as before)
+        from .curvepoints import CurvePoints
         from .interp import Interp
+        self.curvepoints = CurvePoints(self)
         self.interp = Interp(self)
         self.interp.declare()
+        self.interp.apply_list()
         if tto is not None:
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
                 tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
@@ -505,6 +509,7 @@ class Service(object):
         self._private_users = set(self.store.users_with_inputs())
         self._sync_universe()
         self.rowkeys.roll()                      # (VİOP's gold contracts: changed while the dashboard was off?)
+        self.interp.refresh_list()               # (a list of points that differs from the default: its curves before any)
         self._sync_blotter()                     # (may compute: a meeting-dated OIS of the day is priced)
 
     def _declare_saved_cells(self) -> None:
@@ -798,6 +803,9 @@ class Service(object):
                 changed = True
             before = b.engine.shared.evals
             b.engine.clock_tick()
+        interp = getattr(self, "interp", None)
+        if interp is not None and interp.listed():
+            interp.refresh_list()                # (the list's curves follow the quotes they are made of)
         return changed or bool(keys)
 
     #: the real-time fields whose change tells that a security traded: its last price, its volume of the day
@@ -1401,6 +1409,9 @@ class Service(object):
 
     def _calc(self, user: Optional[str], book: Book) -> Calc:
         if not user:
+            interp = getattr(self, "interp", None)
+            if interp is not None and book is interp.tto and interp.listed():
+                interp.refresh_list()            # (the desk's list of points: everybody's curve reads its cells)
             return book.engine.shared
         ov = self._overlay(user, book)
         fx = self.formulas
@@ -5636,7 +5647,9 @@ class Service(object):
             return None
         interp = getattr(self, "interp", None)
         base = interp.boot_of(book, calc) if interp is not None else calc
-        state, level = [book.id, calc.engine.layout, book.engine.input_changes], base
+        cp = getattr(self, "curvepoints", None)
+        points = cp.specs() if cp is not None else None          # (the desk's list: a curve that differs is built on it)
+        state, level = [book.id, calc.engine.layout, book.engine.input_changes, cp.rev if cp is not None else 0], base
         while level is not None:                        # (the calculation and those below it: a change in any)
             state += [level.serial, level.epoch]
             level = level.parent
@@ -5648,7 +5661,7 @@ class Service(object):
             return hit[1]
         outer, base.track = base.track, 0
         try:
-            curves = pk.read(lambda sheet, r, c: base.get(idx[sheet], r, c))
+            curves = pk.read(lambda sheet, r, c: base.get(idx[sheet], r, c), points)
             try:
                 curves["off_boot"] = pk.LogLinear(bsp._named(book, base, "OFF_GUN") or [], bsp._named(book, base, "OFF_LNDF") or [])
             except ValueError:
@@ -7531,6 +7544,27 @@ class Service(object):
         else:
             raise ServiceError("eğri şunlardan biri olmalı: %s" % ", ".join(ex.INTERP_CHOICES))
         return self.interp_settings(key)
+
+    # ================================================================== the desk's list of curve points (curvepoints.py)
+    def curve_points(self, user: Optional[str]) -> Dict[str, Any]:
+        """Ayarlar → Eğri noktaları: the desk's list of the points each TRY curve is built from - everyone sees it (a
+        computed point on their own interpolation setting); ``can_edit`` for an administrator."""
+        key = self.require_user(user)
+        if not self.interp.available:
+            return {"available": False}
+        return self.curvepoints.payload(key, admin=self._is_admin(key))
+
+    def set_curve_points(self, user: Optional[str], data: Any) -> Dict[str, Any]:
+        """An administrator's change of the list (it moves everyone's curves; logged) - curvepoints.CurvePoints.change.
+        A ticker point waits for ``confirm`` of its stated cost: the answer then says so (``needs_confirm``, ``cost``) and
+        nothing is saved or asked of Bloomberg."""
+        key = self.require_admin(user)
+        if not self.interp.available:
+            raise ServiceError("bu çalışma kitabında eğri ayarı yok (%s eklenemedi)" % ex.INTERP_SHEET)
+        res = self.curvepoints.change(key, data if isinstance(data, dict) else {})
+        out = self.curvepoints.payload(key, admin=True)
+        out.update(res)
+        return out
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
