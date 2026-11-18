@@ -621,6 +621,14 @@ export function signalRows(list, opts = {}) {
 export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'Trades', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'İsabet', 'Yarı ömür (g)', 'Tutma',
   'Carry / hf', 'Carry % / yıl', 'Rejim', 'Uyum', 'Kapılar', 'Geri test'];
 
+/** Where the quant worker is (tto/progress.py: the status' ``progress`` while the fit or the backtest runs), for a line:
+ *  ": Quant 14/26 · ML 240/480 · ~3 dk – şu an Makine öğrenmesi"; "" when nothing runs. */
+export function progressText(pv) {
+  if (!pv || !pv.busy) return '';
+  const fit = (pv.jobs || []).find((j) => j.id === 'quant');
+  return ': ' + pv.text + (fit && fit.step ? ' – şu an ' + fit.step : '');
+}
+
 /** A status table of the quant worker: what every page shows at the bottom (and the first thing before a result). */
 export function statusRows(st) {
   st = st || {};
@@ -629,7 +637,7 @@ export function statusRows(st) {
     [T('Son canlı yenileme'), T(st.live_at || '—')], [T('Canlı yenilemenin süresi'), N(st.live_ms, 0, { unit: 'ms' })],
     [T('Motor iş parçacığında geçen (son okuma)'), N(st.engine_ms, 1, { unit: 'ms', tip: 'Çalışma kitabından kısa okuma; hesapların kendisi ayrı iş parçacığında' })],
     [T('İzlenen enstrüman'), N(st.monitors, 0)], [T('Geçmişi dolan seri'), N(st.filling || 0, 0, { tip: 'İlk iki yıllık geçmişi henüz gelmemiş seriler (canlıda her tarihçe turunda birkaç seri)' })],
-    [T('Durum'), T(st.phase === 'fit' ? 'hesaplanıyor…' : (st.error ? 'hata: ' + st.error : 'hazır'))]];
+    [T('Durum'), T(st.phase === 'fit' ? 'hesaplanıyor' + (progressText(st.progress) || '…') : (st.error ? 'hata: ' + st.error : 'hazır'))]];
   for (const [k, v] of Object.entries(t)) rows.push([T('  · ' + k), N(v, 0, { unit: 'ms' })]);
   for (const [k, v] of Object.entries(st.errors || {})) rows.push([T('  ! ' + k), T(v, { cls: 'soft' })]);
   return rows;
@@ -733,7 +741,8 @@ export class QuantPage {
       const errs = Object.entries(d.errors || {});
       const filling = st.filling || 0;
       this.banner.classList.toggle('hidden', !!d.ready && !errs.length && !filling);
-      this.banner.textContent = !d.ready ? 'Analizler hesaplanıyor (ayrı iş parçacığında); sonuç gelince sayfa kendiliğinden dolar.'
+      // (before the first result: where the fit is - its steps, the ML models, the time left - as the top bar's "Hesap")
+      this.banner.textContent = !d.ready ? 'Analizler hesaplanıyor (ayrı iş parçacığında)' + progressText(st.progress) + '; sonuç gelince sayfa kendiliğinden dolar.'
         : [filling ? 'Geçmiş doluyor: ' + filling + ' seri henüz iki yıl geriye inmedi (canlıda her tarihçe turunda birkaç seri; '
           + 'Bloomberg\'in günlük veri limiti için). Analizler eldekiyle çalışır.' : ''].concat(errs.map(([k, v]) => k + ': ' + v)).filter(Boolean).join(' · ');
     }

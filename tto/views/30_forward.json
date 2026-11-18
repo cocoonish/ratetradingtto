@@ -99,6 +99,20 @@
    "label": "Forward DV01 'Start' / 'End' (formula defaults: the USDTRY spot date I2 / the value date D2; a tenor typed counts as the formulas say: Start from USDTRY's spot, End from the Start)"
   },
   {
+   "range": "O32",
+   "scope": "user",
+   "group": "forward-dv01-spot",
+   "kind": "number",
+   "label": "Forward DV01 'Spot' (formula default =+F2: the USDTRY spot of the page, Bloomberg mid or the spot typed in F2; boş = formül)"
+  },
+  {
+   "range": "O46",
+   "scope": "user",
+   "group": "forward-dv01-rate",
+   "kind": "number",
+   "label": "Forward DV01 'Rate' (formula default =+E33: the RET mid outright of the value date D2, USDTRY table; boş = formül)"
+  },
+  {
    "range": "B144:B163",
    "scope": "user",
    "group": "forward-10",

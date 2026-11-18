@@ -1,6 +1,15 @@
 // Senaryolar: named snapshots of a user's personal inputs (both workbooks), stored under the user's name.
 import { api, session } from './api.js';
 import { h, clear, modal, toast, errorToast, confirmDialog } from './ui.js';
+import { pendingWrites, trackWrite } from './grid.js';
+
+/** Load a saved scenario after every input write still in flight (a cell just typed - its editor committed first -, a
+ *  block pasted, a reset): the server applies the load after the writes it has (in their queue's order), and waiting
+ *  for their answers makes sure it has them all - the scenario's values stand, never a value typed a moment before. */
+export async function loadScenario(name) {
+  await pendingWrites();
+  return api.post('/api/scenarios/load', { name });
+}
 
 export async function openScenarios(ctx) {
   const m = modal({ title: 'Senaryolarım · ' + (session.display || ''), width: 720 });
@@ -25,7 +34,7 @@ export async function openScenarios(ctx) {
         const del = h('button', { class: 'btn sm danger', type: 'button' }, 'Sil');
         load.addEventListener('click', async () => {
           try {
-            const res = await api.post('/api/scenarios/load', { name: s.name });
+            const res = await loadScenario(s.name);
             toast('"' + s.name + '" yüklendi (' + res.cells + ' hücre)', 'ok');
             ctx.refreshNow();
             await reload();
@@ -64,7 +73,7 @@ export async function openScenarios(ctx) {
         if (!(await confirmDialog('Girdileri sıfırla', 'Tüm kişisel girdileriniz silinir ve dosyadaki değerlere dönülür. Kayıtlı senaryolar silinmez.', 'Sıfırla', true))) return;
         try {
           const books = [...new Set(inp.inputs.map((x) => x.book))];
-          for (const b of books) await api.post('/api/reset', { book: b });
+          for (const b of books) await trackWrite(api.post('/api/reset', { book: b }));
           toast('Girdiler sıfırlandı', 'ok');
           ctx.refreshNow();
           await reload();

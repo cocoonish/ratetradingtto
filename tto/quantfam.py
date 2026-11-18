@@ -169,6 +169,10 @@ class Ctx(object):
     (``viop``), carry + roll per OIS tenor (``carry``: months -> bp a week, receiver), the meeting-pricing history
     (``mpc``) and today's meeting path (``path``)."""
 
+    #: the full fit's progress (``tto.progress.Progress``): a family that counts its own work reports there - the ML
+    #: family its models; ``None`` in a backtest's refit
+    progress = None
+
     def __init__(self, cfg: Dict[str, Any], today: _dt.date, series: Dict[str, Dict[str, float]], meta: Dict[str, Dict[str, Any]],
                  live: Optional[Dict[str, float]] = None, viop: Optional[List[Dict[str, Any]]] = None,
                  carry: Optional[Dict[float, float]] = None, mpc: Optional[Dict[str, Any]] = None, path: Optional[Dict[str, Any]] = None,

@@ -1057,7 +1057,26 @@ class History(object):
             finally:
                 st["phase"] = "idle"
                 st["last_sync"] = _dt.datetime.now().replace(microsecond=0).isoformat(sep=" ")
+                hub = getattr(self.svc, "progress", None)
+                if hub is not None:
+                    hub.end(hub.jobs.get("history"), False)    # (a pass cut short by an error: its progress gone)
             return {"fetched": fetched, "computed": computed, "rev": self.rev}
+
+    def _job(self, phase: str, total: int):
+        """This pass' progress (tto/progress.py: the top bar's "Hesap"): the series fetched / to fetch, then the
+        meeting-pricing days computed / to compute - ``None`` when there is nothing to do."""
+        hub = getattr(self.svc, "progress", None)
+        if hub is None or not total:
+            return None
+        if phase == "fetch":
+            return hub.begin("history", "tarihçe", "Tarihçe: Bloomberg'den kapanışlar", "seri", total=total, phase=phase)
+        return hub.begin("history", "PPK geçmişi", "Tarihçe: PPK fiyatlama geçmişi", "gün", total=total, phase=phase)
+
+    def _job_end(self, job, ok: bool = True) -> None:
+        """A phase done (``ok``: its pace is the next pass' measure)."""
+        hub = getattr(self.svc, "progress", None)
+        if hub is not None and job is not None:
+            hub.end(job, ok)
 
     #: every sync asks a series from its last close on - that close again and the day before it (calendar days back:
     #: a weekend), for the final value of a close stored during its day and a correction - and nothing older; a series
@@ -1195,6 +1214,7 @@ class History(object):
                                   "viop_per_sync": self.VIOP_PER_SYNC if rationed else None}
         prov = self.svc.provider
         changed = 0
+        job = self._job("fetch", sum(len(set(t)) for group in (full, tail) for t in group.values()))
         for group in (full, tail):
             for (field, start, stop), tickers in group.items():
                 tickers = sorted(set(tickers))
@@ -1217,6 +1237,9 @@ class History(object):
                         self._empty[sid] = today_iso
                 if group is full:
                     self.store.put(self.FETCH_KEY, records)     # at once: a sync cut short still counts what it asked
+                if job is not None:
+                    job.tick(len(tickers))
+        self._job_end(job, not self._stop.is_set())
         return changed
 
     def _hour(self) -> float:
@@ -1343,6 +1366,7 @@ class History(object):
         # live: the solver shares the interpreter with the engine that serves the desk, so it rests after every
         # day (history_pace times as long as the day took) - a year of history may take a little longer
         pace = float(getattr(self.svc.settings, "history_pace", 0.0) or 0.0) if self.svc.mode == "live" else 0.0
+        job = self._job("mpc", len(todo))
         for p in todo:
             if self._stop.is_set() or self._kick.is_set():
                 break                                          # asked to stop, or the inputs changed: start over
@@ -1367,6 +1391,9 @@ class History(object):
             self.rev += 1
             if pace > 0 and done < len(todo):
                 self._kick.wait(min(5.0, pace * (time.time() - t0)))
+            if job is not None:
+                job.tick()                                     # (the rest after it too: the pace of a day)
+        self._job_end(job)
         return done
 
     def _het_call(self, fn, *args):

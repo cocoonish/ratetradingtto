@@ -37,7 +37,35 @@ function ownLayout(grid) {
 }
 
 export function configureGrid(opts) {
-  Object.assign(hooks, opts);
+  const own = Object.assign({}, opts);
+  for (const k of ['setInputs', 'paste', 'reset']) {          // (a write through them is counted until answered)
+    const fn = own[k];
+    if (typeof fn === 'function') own[k] = (...args) => trackWrite(fn(...args));
+  }
+  Object.assign(hooks, own);
+}
+
+// ---------------------------------------------------------------------- the writes in flight
+// Every input write sent and not answered yet - a cell typed, a block pasted, a cell reset, a value typed elsewhere
+// (the manual spot): a scenario load waits for them (scenarios.js), so that it lands after the last value typed - the
+// server applies the writes it has in their order (tests/test_scenario_order.py); this makes sure it has them all.
+const inflight = new Set();
+
+/** ``p`` (a write's promise) counted until it settles; returned as it is. */
+export function trackWrite(p) {
+  if (p && typeof p.then === 'function') {
+    inflight.add(p);
+    const done = () => { inflight.delete(p); };
+    p.then(done, done);
+  }
+  return p;
+}
+
+/** Every write sent so far answered - an open cell edit committed first (it is one more): settles once they all did
+ *  (one that failed too: its error is its own toast). */
+export function pendingWrites() {
+  if (editing) commitEdit();
+  return Promise.allSettled([...inflight]).then(() => undefined);
 }
 
 export function currentSelection() {

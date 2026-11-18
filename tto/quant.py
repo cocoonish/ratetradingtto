@@ -45,6 +45,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import fx as fxm
+from . import progress as prog                    # where the fit, the ML models and the backtest are (the top bar's "Hesap")
 from . import quantbt as qbt
 from . import quantcons as qcons                 # Konsensüs: the instruments three or more families agree on (the list's top)
 from . import quantcurve as qcurve
@@ -115,6 +116,14 @@ for _mod in (qp, ql, qv, qtr, qos):             # the implied path's grids and p
     DEFAULTS.update(_mod.DEFAULTS)              # Trend's daily risk, Opsiyon → spot's weekly risk
     LIMITS.update(_mod.LIMITS)
     LABELS.update(_mod.LABELS)
+
+#: the full fit's steps in their order - the ``timing`` keys as :meth:`Quant.compute` and the families write them: what
+#: the progress counts (tto/progress.py) before a fit was ever timed (later fits count by the last one's own order)
+FIT_STEPS = ("pca_fit", "corr", "pca", "rv", "frapath", "macro", "pairs", "viopcal", "momentum", "cycle", "vol", "emcarry", "fwdprem",
+             "model", "curve", "dibsfv", "opt", "imapath", "lead", "viop", "trend", "sira", "ml", "optspot", "dibssw", "levels")
+#: a step on screen ("şu an …"): a family's own name (``quantfam.FAMILIES``), else this
+STEP_NAMES = {"pca_fit": "PCA kurulumu", "vol": "Vol primi ve tahmini", "imapath": "İma patikası ve WIRP", "lead": "Öncü-takipçi",
+              "levels": "Seviyeler (kalibrasyon)"}
 
 #: the history keeps this series this many calendar days back (about two years)
 HISTORY_DAYS = 740
@@ -528,11 +537,15 @@ class Quant(object):
         if base is None:
             return None
         self.state["bt_phase"] = "çalışıyor"
+        hub = getattr(self.svc, "progress", None)
+        job = None
         try:
             cfg = dict(base["cfg"])
             today_iso = base["today"].isoformat()
             series = {k: {d: v for d, v in pts.items() if d < today_iso} for k, pts in base["series"].items()}
             test = sorted({d for k, pts in series.items() if k.startswith(("OIS:", "FX:")) for d in pts})[-days:]
+            if hub is not None:                             # (refits done / all, the month of the one under way)
+                job = hub.begin("bt", "geri test", "Geri test", "yeniden kurma", total=len(range(0, len(test), max(1, step))), budget=budget)
             items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
             mpc = base["mpc"]
 
@@ -553,7 +566,7 @@ class Quant(object):
                 return qf.run_all(ctx, items, None, self.pause)[0] + qu.monitors(ctx, self.pause) + self._bt_more(ctx)
 
             res = qbt.backtest(test, make_ctx, runner, series, cfg, step=step, pause=self.pause, deadline=time.perf_counter() + budget,
-                               as_of=today_iso)
+                               as_of=today_iso, on_refit=None if job is None else lambda n, day: job.at(n, day, bt_month(day)))
             # (the families that walk forward on their own calendar - Carry + momentum's weekly baskets: their fit's trades)
             qu.own_backtests(res, (self._fit or {}).get("tables") or {})
             first, last = res.get("first"), res.get("last")
@@ -564,9 +577,14 @@ class Quant(object):
             self._books = None
             self.store.put(self.BT_KEY, self._bt)
             self.state.update({"bt_at": res["at"], "bt_ms": res["ms"], "bt_error": ""})
+            if job is not None:
+                job.at(res["refits"])
+                hub.end(job)                                # (its refits' time: the next backtest's measure)
             return self._bt
         finally:
             self.state["bt_phase"] = ""
+            if hub is not None:
+                hub.end(job, False)                         # (one that failed: gone, no measure)
 
     @staticmethod
     def _bt_more(ctx: qf.Ctx) -> List[qf.Monitor]:
@@ -611,8 +629,12 @@ class Quant(object):
         """The panel: each family at its calibrated levels - the out-of-sample record (each month's trades at the levels
         chosen before it), the k and m chosen today (``levels``), a row a group -, a family without them at its own."""
         bt = self.backtest_result()
+        prog_bt = self._progress(("bt",))                   # (a backtest under way: its refits, its month, the time left)
         if not bt:
-            return {"ready": False, "running": self._bt_thread is not None and self._bt_thread.is_alive()}
+            out = {"ready": False, "running": self._bt_thread is not None and self._bt_thread.is_alive()}
+            if prog_bt is not None:
+                out["progress"] = prog_bt
+            return out
         books = self.books()
         rows = []
         fams = dict(bt.get("families") or {})
@@ -633,11 +655,14 @@ class Quant(object):
             rows.append(dict({k: v for k, v in st.items() if k != "types"}, family=fam, label=label, type="", levels=why, calibrated=False))
             for ty, s in (st.get("types") or {}).items():
                 rows.append(dict(s, family=fam, label=label, type=ty, levels="", calibrated=False))
-        return _clean({"ready": True, "rows": rows, "trades": list(reversed(bt.get("trades") or []))[:150], "first": bt.get("first"),
-                       "last": bt.get("last"), "years": bt.get("years"), "at": bt.get("at"), "ms": bt.get("ms"), "refits": bt.get("refits"),
-                       "step": bt.get("step"), "days": bt.get("days"), "n_trades": bt.get("n_trades"), "complete": bt.get("complete"),
-                       "running": self._bt_thread is not None and self._bt_thread.is_alive(), "min_trades": qlv.MIN_TRADES,
-                       "window": qlv.WINDOW_MONTHS})
+        out = {"ready": True, "rows": rows, "trades": list(reversed(bt.get("trades") or []))[:150], "first": bt.get("first"),
+               "last": bt.get("last"), "years": bt.get("years"), "at": bt.get("at"), "ms": bt.get("ms"), "refits": bt.get("refits"),
+               "step": bt.get("step"), "days": bt.get("days"), "n_trades": bt.get("n_trades"), "complete": bt.get("complete"),
+               "running": self._bt_thread is not None and self._bt_thread.is_alive(), "min_trades": qlv.MIN_TRADES,
+               "window": qlv.WINDOW_MONTHS}
+        if prog_bt is not None:
+            out["progress"] = prog_bt
+        return _clean(out)
 
     @staticmethod
     def _levels_row(b: qlv.Book, group: Optional[str]) -> str:
@@ -948,12 +973,19 @@ class Quant(object):
             self._force = False
             self.state["phase"] = "fit"
             t0 = time.perf_counter()
+            # its progress (the top bar's "Hesap"): the steps as their times are written; the first fit after a start -
+            # every cache empty - is measured apart from the later ones
+            hub = getattr(self.svc, "progress", None)
+            kind = "warm" if self.state["fits"] else "cold"
+            job = hub.begin("quant", "Quant", "Quant tam hesap", "adım", plan=self._fit_plan(hub, kind), labels=self._step_labels()) \
+                if hub is not None else None
             try:
                 ctx, eng, raw_live = self.snapshot()
+                ctx.progress = hub                                         # (the ML family counts its models there)
                 cfg = ctx.cfg
                 self._last_base = ctx.base
                 items = [it for it in vc.parse_items(cfg["rv_items"]) if it.get("ok")]
-                timing: Dict[str, float] = {}
+                timing: Dict[str, float] = prog.Steps(job)
                 mons, tables = qf.run_all(ctx, items, timing, self.pause)
                 imons, tables["intraday"] = self._intraday_step(ctx, raw_live)
                 mons = mons + imons
@@ -976,9 +1008,29 @@ class Quant(object):
                 ms = (time.perf_counter() - t0) * 1000.0
                 self.state.update({"fit_at": _now().isoformat(sep=" "), "fit_ms": round(ms, 1), "timing": {k: round(v * 1000.0, 1) for k, v in timing.items()},
                                    "error": "", "fits": self.state["fits"] + 1, "live_t": time.time(), "live_at": _now().isoformat(sep=" ")})
+                if job is not None:
+                    hub.end(job, True, kind)                               # (its steps' times: the next fit's measure)
                 return self.status()
             finally:
                 self.state["phase"] = "idle"
+                if hub is not None:
+                    hub.end(job, False)                                    # (a fit that failed: gone, no measure)
+
+    @staticmethod
+    def _fit_plan(hub: prog.Progress, kind: str) -> Dict[str, Any]:
+        """The steps a fit counts: the last fit's of the same kind - their order and when each was done -, else the
+        other kind's order or the code's (``FIT_STEPS``), without a time (no estimate before a fit of the kind ran)."""
+        last = hub.last("quant", kind)
+        if last and last.get("order") and last.get("at"):
+            return {"order": list(last["order"]), "at": list(last["at"]), "total": last.get("total")}
+        other = hub.last("quant", "warm" if kind == "cold" else "cold") or {}
+        return {"order": list(other.get("order") or FIT_STEPS), "at": None, "total": None}
+
+    @staticmethod
+    def _step_labels() -> Dict[str, str]:
+        out = {k: v[0] for k, v in qf.FAMILIES.items()}
+        out.update(STEP_NAMES)
+        return out
 
     def refresh_live(self) -> Dict[str, Any]:
         """The latest point with the live values: every monitor's level now (no fit)."""
@@ -1428,7 +1480,16 @@ class Quant(object):
         if fit is not None:
             st.update({"monitors": len(fit["mons"]), "today": fit["today"], "errors": fit["tables"].get("errors") or {},
                        "filling": sum(1 for c in fit["coverage"] if c.get("state") == "geçmiş doluyor")})
+        pv = self._progress(("quant", "ml", "bt"))
+        if pv is not None:
+            st["progress"] = pv                             # (where the fit / the backtest is: the pages' banner)
         return _clean(st)
+
+    def _progress(self, jobs: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
+        """These jobs' progress while one of them runs (tto/progress.py), else ``None``."""
+        hub = getattr(self.svc, "progress", None)
+        pv = hub.view(jobs) if hub is not None else None
+        return pv if pv and pv["busy"] else None
 
     def view(self, what: str, user: Optional[str], q: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         self.svc.require_user(user)
@@ -1643,3 +1704,8 @@ class Quant(object):
 
 def _txt(v: float) -> str:
     return ("%g" % v).replace(".", ",")
+
+
+def bt_month(day: str) -> str:
+    """A backtest refit on screen: "Mart 2026 · 14.03.2026 kapanışıyla" - its month, the last close it reads."""
+    return "%s · %s.%s.%s kapanışıyla" % (prog.month_text(day), day[8:10], day[5:7], day[:4])

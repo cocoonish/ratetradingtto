@@ -117,9 +117,11 @@ def _path_of(rec: Dict[str, Any], done: bool) -> Dict[str, Any]:
 
 def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Callable[[qf.Ctx], List[qf.Monitor]],
              closes: Dict[str, Dict[str, float]], cfg: Dict[str, Any], step: int = BT_STEP,
-             pause: Optional[Callable[[], None]] = None, deadline: Optional[float] = None, as_of: Optional[str] = None) -> Dict[str, Any]:
+             pause: Optional[Callable[[], None]] = None, deadline: Optional[float] = None, as_of: Optional[str] = None,
+             on_refit: Optional[Callable[[int, str], None]] = None) -> Dict[str, Any]:
     """The walk-forward run over ``days`` (business days, oldest first): ``make_ctx(T)`` gives the context fitted on the
-    closes up to T, ``runner(ctx)`` its monitors, ``closes`` every key's closes (the "live" values of each day).
+    closes up to T, ``runner(ctx)`` its monitors, ``closes`` every key's closes (the "live" values of each day);
+    ``on_refit(refits done, T)`` as a refit begins (the progress: tto/progress.py).
 
     A daily line (``sg["daily"]``: quanttrend's - a line every day) is a daily position: opened on the first day of its
     direction (the window's first day, or the day it turns), held with no target and no time limit until its direction
@@ -153,6 +155,8 @@ def backtest(days: Sequence[str], make_ctx: Callable[[str], qf.Ctx], runner: Cal
         if deadline is not None and time.perf_counter() > deadline:
             stopped = True
             break
+        if on_refit is not None:
+            on_refit(refits, days[i])
         ctx = make_ctx(days[i])
         mons = runner(ctx)
         refits += 1

@@ -5,7 +5,7 @@
 import { openAddIsin, bondCardLinks, bondFlags } from '../bonds.js';
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
-import { Grid, copyGrid, findCell, reviveEditor } from '../grid.js';
+import { Grid, copyGrid, findCell, reviveEditor, trackWrite } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
 import { quoteButton, quoteRowItems, quoteRows } from '../kotasyon.js';
@@ -222,7 +222,7 @@ export class ViewPage {
         'Bu çalışma kitabındaki tüm kişisel girdileriniz silinir ve dosyadaki varsayılan değerlere dönülür. Kayıtlı senaryolarınız etkilenmez.', 'Sıfırla');
       if (!ok) return;
       try {
-        const res = await api.post('/api/reset', { book: this.book });
+        const res = await trackWrite(api.post('/api/reset', { book: this.book }));
         toast((res.reset || 0) + ' girdi sıfırlandı', 'ok');
         this.ctx.refreshNow();
       } catch (err) { errorToast(err); }
@@ -398,7 +398,7 @@ export class ViewPage {
       + ' değer silinir ve hücreler yeniden hesaplanır (' + refs.slice(0, 6).join(', ') + (refs.length > 6 ? ' …' : '') + '). Diğer girdileriniz kalır.', 'Formüllere dön');
     if (!ok) return;
     try {
-      const res = await api.post('/api/reset', { book: this.book, refs });
+      const res = await trackWrite(api.post('/api/reset', { book: this.book, refs }));
       toast((res.reset || 0) + ' hücre formüle döndü', 'ok');
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); }

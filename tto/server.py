@@ -284,6 +284,12 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call_free(svc().status_for, _user(request)))
 
     @handler
+    async def progress(request: Request):
+        # where the long calculations are (progress.py): counters read, nothing computed - the top bar's "Hesap" asks
+        # it every few seconds while one runs
+        return ok(await call_free(svc().progress.view))
+
+    @handler
     async def nav(request: Request):
         return ok({"pages": await call_free(svc().nav, _user(request))})
 
@@ -1176,6 +1182,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/admin/backup/now", admin_backup_now, methods=["POST"]),
         Route("/api/users", users),
         Route("/api/status", status),
+        Route("/api/progress", progress),
         Route("/api/nav", nav),
         Route("/api/bugun", bugun),
         Route("/api/header", header),

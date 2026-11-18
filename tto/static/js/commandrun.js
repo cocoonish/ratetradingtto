@@ -3,6 +3,7 @@
 // user's own), a page or a launchpad opened.  Nothing here saves a trade or publishes a RET: the form's own button does.
 import { api } from './api.js';
 import { toast, confirmDialog } from './ui.js';
+import { loadScenario } from './scenarios.js';
 
 /** The trading list's "+ ISIN ekle" (DİBS RV!A5:A54 - its page's ``add`` definition, tto/views/60_dibs.json). */
 export const TRADING_LIST = { book: 'tto', list: 'DİBS RV!A5:A54', name: 'dibs', catalog: true,
@@ -30,7 +31,7 @@ export async function runCommand(c, ctx) {
   if (c.cmd === 'scenario') {
     if (!(await confirmDialog('Senaryoyu yükle', '"' + c.name + '" senaryosu yüklensin mi? Kişisel girdileriniz bu senaryonunkilerle değişir '
       + '(kayıtlı senaryolarınız kalır).', 'Yükle'))) return;
-    const res = await api.post('/api/scenarios/load', { name: c.name });
+    const res = await loadScenario(c.name);                       // (after the writes still in flight)
     toast('"' + c.name + '" yüklendi (' + res.cells + ' hücre)', 'ok');
     ctx.refreshNow();
     return;

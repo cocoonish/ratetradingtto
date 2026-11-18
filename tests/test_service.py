@@ -572,6 +572,46 @@ def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(servic
     service.reset_inputs(u, "tto")
 
 
+def test_forward_dv01_spot_and_rate_are_inputs_with_their_formula_defaults(service):
+    """The Forward DV01 table (Forward!N31:P49): Spot (O32 = +F2, the page's USDTRY spot) and Rate (O46 = +E33, the RET
+    mid outright of the value date D2) are personal inputs as Start / End are - by default the formulas' values (as
+    before: nothing changes until one is typed); typed, the DV01s follow, for that user alone; emptied, the formula is
+    back.  (Compared with what the sheet says now: other tests type into F2 / E33 / D2 for users of their own.)"""
+    u, w = login(service, "DV01 Elle"), login(service, "DV01 Başkası")
+    try:
+        page = service.view(u, "forward")
+        for ref in ("O32", "O46"):
+            c = _cell_of(page, "B18", ref)
+            assert c["i"] == "u" and c["fx"] == 1 and "m" not in c, ref        # an input its formula fills
+        spot, rate = cell(service, "Forward!O32", u), cell(service, "Forward!O46", u)
+        assert spot == cell(service, "Forward!F2", u) == cell(service, "Forward!O32") and type(spot) is float
+        assert rate == cell(service, "Forward!E33", u) == cell(service, "Forward!O46") and type(rate) is float
+        dv_try, dv_cross = cell(service, "Forward!O48", u), cell(service, "Forward!O49", u)
+        res = service.set_inputs(u, "tto", [{"ref": "Forward!O32", "value": "50,25"}, {"ref": "Forward!O46", "value": "61,5"}])
+        assert res["errors"] == []
+        assert cell(service, "Forward!O32", u) == 50.25 and cell(service, "Forward!O46", u) == 61.5
+        # DV01_TRY = ±amount × rate × T × DF_TRY / 10 000 (B: +), TRY_USD_DV01 = DV01_TRY / spot
+        amount, t, df = cell(service, "Forward!O45", u), cell(service, "Forward!O43", u), cell(service, "Forward!O37", u)
+        sign = -1.0 if cell(service, "Forward!O44", u) == "S" else 1.0
+        assert cell(service, "Forward!O48", u) == pytest.approx(sign * amount * 61.5 * t * df / 10000.0, rel=1e-12) != dv_try
+        assert cell(service, "Forward!O49", u) == pytest.approx(cell(service, "Forward!O48", u) / 50.25, rel=1e-12) != dv_cross
+        page = service.view(u, "forward")
+        for ref in ("O32", "O46"):
+            c = _cell_of(page, "B18", ref)
+            assert (c["i"], c["m"], c["fx"]) == ("u", 1, 1), ref                 # typed over its formula: the user's
+        assert cell(service, "Forward!O32", w) == spot and cell(service, "Forward!O46", w) == rate          # mine alone
+        assert {x["ref"] for x in service.my_inputs(u)["inputs"]} >= {"Forward!O32", "Forward!O46"}
+        # emptied: the formulas again - and they follow what they read (the page's spot typed)
+        service.set_inputs(u, "tto", [{"ref": "Forward!O32", "value": ""}, {"ref": "Forward!O46", "value": ""}])
+        assert cell(service, "Forward!O32", u) == spot and cell(service, "Forward!O46", u) == rate
+        assert cell(service, "Forward!O48", u) == dv_try and cell(service, "Forward!O49", u) == dv_cross
+        assert "m" not in _cell_of(service.view(u, "forward"), "B18", "O46")
+        service.set_inputs(u, "tto", [{"ref": "Forward!F2", "value": "51"}])
+        assert cell(service, "Forward!O32", u) == 51.0 and cell(service, "Forward!O46", u) == cell(service, "Forward!E33", u) != rate
+    finally:
+        service.reset_inputs(u, "tto")
+
+
 def test_pages_come_in_tabs_with_the_calculators_first(service):
     page = service.view(None, "forward")
     assert page["pinned"] == ["B1"]

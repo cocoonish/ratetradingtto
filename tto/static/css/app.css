@@ -925,6 +925,13 @@ svg.spark line.base { stroke: var(--ink-3); stroke-dasharray: 2 3; stroke-width:
 .toast .desk-ack { margin-top: 4px; font-weight: 600; color: var(--pos); }
 .btn.desk-alarm { border-color: rgba(230, 103, 103, .7); color: var(--neg); font-weight: 650; animation: desk-pulse 2s ease-in-out infinite; }
 @keyframes desk-pulse { 50% { box-shadow: 0 0 0 4px rgba(230, 103, 103, .18); } }
+/* "Hesap": a long calculation under way (progress.py) - only while one runs */
+.btn.hesap { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); max-width: 46vw; overflow: hidden; }
+.btn.hesap .hs-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: hs-blink 1.4s ease-in-out infinite; }
+.btn.hesap .hs-lbl { font-weight: 650; color: var(--ink); }
+.btn.hesap .hs-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+@keyframes hs-blink { 50% { opacity: .3; } }
+table.plain.hesap-jobs td { white-space: nowrap; font-variant-numeric: tabular-nums; }
 table.plain.watch tr.open td { background: rgba(230, 103, 103, .08); }
 table.plain.watch td .ack { display: block; font-size: 10.5px; color: var(--pos); font-weight: 600; }
 .desk-settings { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
@@ -1205,7 +1212,7 @@ table.grid td.qgate { font-size: calc(11px - var(--fs-step)); color: var(--ink-3
 /* a window of its own: no menu, no header strip, only what it shows */
 #app.pop { grid-template-columns: minmax(0, 1fr); }
 #app.pop #side, #app.pop #kpis, #app.pop #drawer, #app.pop #btn-fav, #app.pop #favs, #app.pop #findbox, #app.pop #btn-ret,
-#app.pop #btn-scen, #app.pop #btn-drawer, #app.pop #btn-feedback, #app.pop #btn-lang, #app.pop #desk-alarm, #app.pop #btn-user { display: none !important; }
+#app.pop #btn-scen, #app.pop #btn-drawer, #app.pop #btn-feedback, #app.pop #btn-lang, #app.pop #desk-alarm, #app.pop #hesap-ind, #app.pop #btn-user { display: none !important; }
 #app.pop #main { grid-template-rows: auto minmax(0, 1fr) auto; }       /* (no header strip: one row less) */
 #app.pop #content { padding: 10px; }
 /* the launchpad */
