@@ -26,6 +26,12 @@ const FIELD_TEXT = { trade_date: 'İşlem tarihi', settle_date: 'Valör', value_
   target: 'Hedef', stop: 'Stop' };
 const SHOW = [['ccy', 'İşlem dövizi'], ['try', 'TL'], ['usd', 'USD']];
 const UNIT = { try: 'TL', usd: '$' };
+// the products whose valuation realises coupons ("Kupon"), the swaps of them ("Kuponlar": a schedule)
+const COUPONS = ['ois', 'sofr', 'dibs'];
+const SWAPS = ['ois', 'sofr'];
+const COUPON_TIP = 'Gerçekleşen kupon: biten dönemlerin net ödemesi (alınan +, ödenen −). MTM kalan dönemlerin değeridir: MTM + kupon = '
+  + 'toplam K/Z, ödeme gününde K/Z sıçramaz (kupon MTM\'den bu sütuna geçer)';
+const COUPON_STATE = { paid: 'ödendi', due: 'ödenecek', running: 'işliyor (bugüne kadar)', future: 'bekliyor' };
 // a level's distance as the desk reads it (tto/tradebook.py levels_of: positive = still to go)
 const DIST = { bp: [1, ' bp'], pip: [0, ' pip'], '%': [1, '%'], puan: [3, ' puan'] };
 
@@ -72,6 +78,13 @@ function setPref(key, value) {
 function signed(v, digits = 0) {
   if (typeof v !== 'number' || !isFinite(v)) return '—';
   return (v > 0 ? '+' : '') + num(v, digits);
+}
+
+/** A rate in percent as the desk writes it: two decimals at least, four at most (4,10 · 38,125). */
+function rateText(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—';
+  const frac = (v.toFixed(4).split('.')[1] || '').replace(/0+$/, '');
+  return num(v, Math.max(2, frac.length));
 }
 
 /** An amount as the desk types it back into a box: 100m, 2,5m, 500k (the server reads it the same). */
@@ -278,6 +291,8 @@ export class TradesPage {
     this.closedSec = section('trades-closed', 'Kapanan işlemler');
     this.host.appendChild(h('div', { class: 'note muted trades-note' },
       'K/Z: günlük son kapanıştan, haftalık önceki haftanın son kapanışından, toplam işlem tarihinden bu yana; her biri carry (c) + fiyat etkisi (f). '
+      + 'Swap\'ta MTM kalan dönemlerin değeridir; biten dönemlerin net kuponu "Kupon"dadır (MTM + Kupon = toplam K/Z: ödeme gününde K/Z sıçramaz), '
+      + 'dönem dönem "Kuponlar"da. '
       + 'Kapanış kaydı her iş günü masanın Trades kapanış saatinde alınır. Bu işlemler Günlük İşlemler\'e, pozisyona, DV01 riskine ve RET akışına girmez.'));
   }
 
@@ -363,15 +378,19 @@ export class TradesPage {
     const key = this.show;
     const desk = this.scope === 'desk';
     const options = items.some((it) => it.product === 'fxopt');
+    // "Kupon": what a swap's ended periods (a bond's coupons) have realised - beside the MTM of what is still to run
+    this.couponCol = items.some((it) => COUPONS.includes(it.product));
     const t = h('table', { class: 'plain trades', id: 'trades-open' });
     t.appendChild(h('tr', null, h('th', null, ''), h('th', { class: 'l' }, 'Ürün'), h('th', { class: 'l' }, 'İşlem'),
       h('th', null, 'İşlem tarihi'), h('th', null, 'İşlem fiyatı'), h('th', null, 'Güncel'),
       h('th', { class: 'l', title: 'Hedefe ve stopa kalan (faiz bp, FX pip, opsiyon primin %\'si, kâğıt fiyatı puan); işaretli: aralığın dörtte biri kadar yakın ya da geldi' }, 'Hedef / stop'),
-      h('th', null, 'MTM' + (key === 'ccy' ? '' : ' (' + UNIT[key] + ')')), h('th', null, 'Günlük K/Z'), h('th', null, 'Haftalık K/Z'),
+      h('th', { title: 'Swap\'ta kalan dönemlerin bugünkü değeri (biten dönemlerin kuponu "Kupon"da)' }, 'MTM' + (key === 'ccy' ? '' : ' (' + UNIT[key] + ')')),
+      this.couponCol ? h('th', { id: 'trades-coupon-col', title: COUPON_TIP }, 'Kupon' + (key === 'ccy' ? '' : ' (' + UNIT[key] + ')')) : null,
+      h('th', null, 'Günlük K/Z'), h('th', null, 'Haftalık K/Z'),
       h('th', null, 'Toplam K/Z'), options ? h('th', { class: 'l' }, 'Greekler') : null, desk ? h('th', { class: 'l' }, 'Giren') : null,
       h('th', null, '')));
     if (!items.length) {
-      t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '14' },
+      t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: String(this.columns(options, desk)) },
         this.data ? (this.quantOnly ? 'Bu sekmede quant sinyalinden alınmış açık işlem yok.' : (desk ? 'Masanın açık işlemi yok.' : 'Açık kişisel işleminiz yok.')
           + ' "+ Yeni işlem" ile girin.') : 'Yükleniyor…')));
     }
@@ -393,6 +412,38 @@ export class TradesPage {
     if (!v) return null;
     const k = key === 'ccy' ? base : base + '_' + key;
     return typeof v[k] === 'number' ? v[k] : null;
+  }
+
+  /** How many columns the open list has (the optional ones: Kupon, Greekler, Giren). */
+  columns(options, desk) {
+    return 12 + (this.couponCol ? 1 : 0) + (options ? 1 : 0) + (desk ? 1 : 0);
+  }
+
+  /** "Kupon": the coupons a swap (or a leg) has realised - its ended periods' net, + received / − paid; a bond's coupons
+   * received - in the currency shown, with the last and the next in its tip.  MTM + Kupon = the total P&L.  ``link``: a
+   * swap's number (or "takvim" before it is valued) opens its "Kuponlar". */
+  couponCell(it, v, key, link = false) {
+    if (!this.couponCol) return null;
+    const x = this.money(v, key, 'accrued');
+    const open = link && SWAPS.includes(it.product);
+    if (!COUPONS.includes(it.product) || (x === null && !open)) return td('', 'cpn');
+    const tip = [it.product === 'dibs' ? 'Valörden beri alınan / ödenen kuponlar (ve itfa)' : COUPON_TIP];
+    const info = v && v.coupon_info;
+    if (info) {
+      tip.push(info.n ? info.n + ' dönem bitti' : 'henüz biten dönem yok');
+      if (info.last) {
+        tip.push('son: ' + isoToTr(info.last.end) + ' ' + signed(info.last.net) + ' ' + (v.ccy || '') + ' · '
+          + (info.last.state === 'paid' ? 'ödendi ' : 'ödenecek ') + isoToTr(info.last.pay));
+      }
+      if (info.next) tip.push('sıradaki ödeme: ' + isoToTr(info.next.pay));
+    }
+    const text = x === null ? 'takvim' : (x === 0 ? '0' : signed(x));
+    const cls = 'cpn ' + (x === null ? 'muted' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : 'muted')));
+    if (!open) return td(text, cls, tip.join('\n'));
+    tip.push('Tıklayınca "Kuponlar": dönem dönem sabit, değişken, net, ödeme günü');
+    const b = h('button', { type: 'button', class: 'linkbtn act-coupons' }, text);
+    b.addEventListener('click', () => this.showCoupons(it));
+    return h('td', { class: cls, title: tip.join('\n') }, b);
   }
 
   row(it, v, key, options, desk, pkg) {
@@ -418,6 +469,7 @@ export class TradesPage {
       const m = this.money(v, key);
       tr.appendChild(td(m === null ? '' : num(m, 0) + (key === 'ccy' && v && v.ccy ? ' ' + v.ccy : ''), m !== null ? (m > 0 ? 'pos' : (m < 0 ? 'neg' : '')) : null));
     }
+    if (this.couponCol) tr.appendChild(this.couponCell(it, v && v.ok ? v : null, key, true));
     const per = v && v.periods;
     for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(per ? per[name] : null, key));
     if (options) tr.appendChild(td(it.product === 'fxopt' && v ? greeksText(v.greeks) : '', 'l small'));
@@ -464,11 +516,11 @@ export class TradesPage {
     return h('td', { class: 'l lv' + (lv.near ? ' near-' + lv.near : ''), title: tip.join('\n') }, ...bits);
   }
 
-  /** A package's legs under it: each leg's MTM and P&L (and what the legs leave over of the whole). */
+  /** A package's legs under it: each leg's MTM, realised coupons and P&L (and what the legs leave over of the whole). */
   legsOf(t, it, v, key, options, desk) {
     const per = v && v.periods;
     const legs = per && per.legs ? per.legs : null;
-    const span = 14 - (options ? 0 : 1) - (desk ? 0 : 1);
+    const span = this.columns(options, desk);
     if (!legs) {
       for (const lg of it.legs) t.appendChild(h('tr', { class: 'leg' }, td(''), td('', 'l'), td('↳ ' + lg.text, 'l'), h('td', { colspan: String(span - 3) })));
       if (!it.legs.length) t.appendChild(h('tr', { class: 'leg' }, td(''), h('td', { class: 'l muted', colspan: String(span - 1) }, 'Bacak değerleri "MTM yenile"den sonra görünür.')));
@@ -485,6 +537,7 @@ export class TradesPage {
       tr.appendChild(td(''));
       const m = this.money(lg, key);
       tr.appendChild(td(m === null ? '' : num(m, 0)));
+      if (this.couponCol) tr.appendChild(this.couponCell(it, lg, key));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(lg[name], key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(''));
@@ -494,11 +547,11 @@ export class TradesPage {
     const r = per.residual;
     if (r && ['day', 'week', 'total'].some((n) => typeof r[n].pnl[key] === 'number' && Math.abs(r[n].pnl[key]) >= 0.5)) {
       const tr = h('tr', { class: 'leg resid', title: it.structure === 'fra' ? 'FRA tek enstrüman olarak değerlenir; bacaklar katkıdır, kalan bacakların açıklamadığı kısımdır'
-        : 'Bacakların dışında kalan (nakit, yuvarlama)' });
+        : 'Bacakların dışında kalan (yuvarlama)' });
       tr.appendChild(td(''));
       tr.appendChild(td('', 'l'));
       tr.appendChild(td('↳ kalan', 'l muted'));
-      tr.appendChild(h('td', { colspan: '5' }));
+      tr.appendChild(h('td', { colspan: this.couponCol ? '6' : '5' }));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(r[name], key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(''));
@@ -525,6 +578,7 @@ export class TradesPage {
       tr.appendChild(i === 0 ? this.levelsCell(it) : td(''));
       const m = lg ? this.money(lg, key) : null;
       tr.appendChild(td(m === null ? (v && !v.ok ? '—' : '') : num(m, 0), m === null ? 'muted' : null, v && !v.ok ? v.why : null));
+      if (this.couponCol) tr.appendChild(this.couponCell(it, lg, key, true));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(lg ? lg[name] : null, key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(it.created_by_name || '', 'l muted'));
@@ -543,6 +597,11 @@ export class TradesPage {
     if (it.status !== 'closed' && it.can_edit) btn('Düzenle', 'act-edit', 'İşlemi düzenle', () => this.openForm(it));
     if (it.status !== 'closed' && it.can_edit) btn('Kapat', 'act-close', 'Kapanış tarihi ve fiyatıyla kapat: kapanan işlemlere gider', () => this.closeTrade(it));
     if (it.status === 'closed' && it.can_edit) btn('Geri aç', 'act-reopen', 'Kapanışı geri al', () => this.reopen(it));
+    if (SWAPS.includes(it.product) && it.status === 'closed') {
+      // (an open swap's: its "Kupon" cell)
+      btn('Kuponlar', 'act-coupons', 'Kupon takvimi, bacak bacak: her dönemin sabit ve değişken ödemesi (fixinglerin bileşiği), neti, ödeme günü '
+        + 've ödenip ödenmediği - kapanışına göre', () => this.showCoupons(it));
+    }
     btn('Geçmiş', 'act-log', 'Bu işlemde kim, ne zaman, ne yaptı', () => this.showLog(it));
     if (it.can_edit) btn('Sil', 'act-del danger', 'İşlemi sil (kaydı kalır)', () => this.remove(it));
     return cell;
@@ -710,6 +769,66 @@ export class TradesPage {
     }
     if (!entries.length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '5' }, 'Kayıt yok.')));
     return t;
+  }
+
+  /** "Kuponlar": a swap's schedule leg by leg, valued now by the server (a closed swap at its close) - every period's
+   * fixed and floating payment (the float compounded from the history's fixings), net, payment day and state; what has
+   * been realised (paid + due) is the "Kupon" of the list. */
+  async showCoupons(it) {
+    try {
+      const res = await api.get('/api/trades/' + it.id + '/coupons');
+      const m = modal({ title: 'Kuponlar', width: 1040 });
+      const when = res.status === 'closed' ? 'kapanışına göre (' + isoToTr(res.asof) + ')' : isoToTr(res.asof) + ' itibarıyla';
+      m.body.appendChild(h('p', { class: 'muted', style: { marginTop: '0' } }, it.text + ' · ' + when));
+      const box = h('div', { id: 'trades-coupons' });
+      if (!res.ok) box.appendChild(h('p', { class: 'muted why' }, res.why || 'hesaplanamadı'));
+      (res.legs || []).forEach((lg, i) => box.appendChild(this.couponTable(lg, i)));
+      if (res.ok && (res.legs || []).length > 1) {
+        box.appendChild(h('p', { class: 'cpn-total', id: 'trades-coupons-total' }, 'Toplam gerçekleşen: ' + signed(res.realised) + ' ' + (res.ccy || '')
+          + (typeof res.realised_try === 'number' && res.ccy !== 'TRY' ? ' (' + signed(res.realised_try) + ' TL)' : '')));
+      }
+      const notes = (res.notes || []).slice();
+      notes.push('Fixingler: ' + (res.source || 'tarihçede yok') + '. Tutarlar işlemin dövizinde; + alınan, − ödenen. "Gerçekleşen" = biten '
+        + 'dönemlerin neti (ödendi + ödenecek): Trades\'te MTM\'in yanındaki "Kupon", toplam K/Z\'a girer.');
+      for (const n of notes) box.appendChild(h('div', { class: 'note muted trades-note' }, n));
+      m.body.appendChild(box);
+      m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
+    } catch (err) { errorToast(err); }
+  }
+
+  /** One swap's periods: dates, days, payment day, the fixed and floating payments, the float's compounded rate, the net
+   * and its state; a row whose float has days not had by their own fixing says which ("*"). */
+  couponTable(lg, i) {
+    const wrap = h('div', { class: 'cpn-leg', 'data-leg': String(i) });
+    const head = [lg.label, amountText(lg.notional) + ' ' + (lg.ccy || ''), 'sabit %' + rateText(lg.rate) + ' / ' + lg.float];
+    wrap.appendChild(h('h3', null, head.join(' · ')));
+    wrap.appendChild(h('div', { class: 'muted small' }, lg.rule + (lg.closed ? ' · kapanış ' + isoToTr(lg.closed.date) + ' %' + rateText(lg.closed.rate)
+      + ': sonraki dönemlerde yalnız sabit faiz farkı' : '')));
+    const t = h('table', { class: 'plain trades cpn', id: 'trades-coupons-' + i });
+    const cols = ['Dönem', 'Gün', 'Ödeme', 'Sabit', 'Değişken', 'Değişken %', 'Net', 'Durum'];
+    t.appendChild(h('tr', null, ...cols.map((x, k) => h('th', { class: k === 0 || k === 7 ? 'l' : null,
+      title: k === 5 ? 'Dönemin fixinglerinin bileşiği, basit yıllık (işleyen dönemde bugüne kadar)' : null }, x))));
+    const amount = (x, bold) => td(typeof x === 'number' ? signed(x) : '—', (typeof x === 'number' ? (x > 0 ? 'pos' : (x < 0 ? 'neg' : '')) : 'muted')
+      + (bold ? ' net' : ''));
+    for (const p of lg.periods || []) {
+      const est = (p.estimated || []).length;
+      const flt = amount(p.float);
+      if (est) {
+        flt.appendChild(document.createTextNode(' *'));
+        flt.title = est + ' günün fixing\'i tahmini: ' + p.estimated.map(isoToTr).join(', ');
+      }
+      t.appendChild(h('tr', { class: 'cpn-' + p.state, 'data-state': p.state },
+        td(isoToTr(p.start) + ' – ' + isoToTr(p.end), 'l'), td(String(p.days)), td(isoToTr(p.pay)), amount(p.fixed), flt,
+        td(typeof p.float_rate === 'number' ? '%' + num(p.float_rate, 4) : '—', typeof p.float_rate === 'number' ? null : 'muted'),
+        amount(p.net, true), td(p.state === 'future' && typeof p.net === 'number' ? 'bekliyor (kapanışla belli)' : (COUPON_STATE[p.state] || p.state), 'l')));
+    }
+    const parts = [];
+    if (lg.paid) parts.push('ödenen ' + signed(lg.paid));
+    if (lg.due) parts.push('ödenecek ' + signed(lg.due));
+    t.appendChild(h('tr', { class: 'sum' }, td('Gerçekleşen', 'l'), h('td', { colspan: '5' }), amount(lg.realised, true),
+      td(parts.join(' · '), 'l')));
+    wrap.appendChild(t);
+    return wrap;
   }
 
   async showLog(it) {
