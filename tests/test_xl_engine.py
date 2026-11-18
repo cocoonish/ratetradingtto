@@ -403,6 +403,45 @@ def _check_groups(calc):
             assert rc in calc.groups.get(k, {}).get(si, ()), (si, rc)
 
 
+def test_an_array_formula_given_an_array_writes_it_into_its_cells():
+    """An array formula declared an input (a Bloomberg history block's, the ASW history offshore) and given an array in a
+    calculation of its own - a user's, a layer: its result typed over as a whole.  The cells it covers take the elements
+    as the formula's own result writes them (the rows of its area it leaves out: empty), what reads them is computed
+    again there and nobody else's values move; the elements stay while other inputs change (they are not written again)
+    and follow the array when it changes or goes."""
+    from helpers import mini_book
+    from tto.xl.values import XlArray
+    book = mini_book({"A1": 1.0, "A2": 2.0, "A3": 3.0, "A5": 7.0, "C1": "=FILTER(A1:A3,A1:A3>0)", "D1": "=C2*10",
+                      "D2": "=SUM(C1:C3)+A5", "D3": "=COUNT(C1:C3)"}, dynamic=("C1",))
+    eng = book.engine
+    c1, a1, a5 = (eng.model.cell_ref("S!" + a) for a in ("C1", "A1", "A5"))
+    eng.declare_inputs([c1, a1, a5])
+    shared = eng.shared
+    assert [shared.value("S!" + a) for a in ("C2", "D1", "D2", "D3")] == [2.0, 20.0, 13.0, 3.0]
+    block = XlArray([[5.0], [6.0], [8.0]])
+    ali = eng.set_user_inputs("ali", {c1: block})
+    assert [ali.value("S!" + a) for a in ("C1", "C2", "C3", "D1", "D2", "D3")] == [5.0, 6.0, 8.0, 60.0, 26.0, 3.0]
+    assert [shared.value("S!" + a) for a in ("C2", "D1", "D2")] == [2.0, 20.0, 13.0]          # nobody else's
+    _check_groups(ali)
+    # another input of the user's, a shared one: the block's cells are not written again - what reads them follows
+    stores = []
+    real = ali._spill
+    ali._spill = lambda *a, **k: (stores.append(1), real(*a, **k))
+    eng.set_user_inputs("ali", {c1: block, a5: 1.0})
+    eng.set_inputs({a1: 4.0})
+    assert stores == [] and [ali.value("S!" + a) for a in ("C2", "D2")] == [6.0, 20.0]
+    assert [shared.value("S!" + a) for a in ("C1", "D2")] == [4.0, 16.0]
+    # a shorter block: the cells of its area it leaves out are empty, as the formula's own shorter result leaves them
+    eng.set_user_inputs("ali", {c1: XlArray([[9.0], [4.0]]), a5: 1.0})
+    assert stores == [1] and ali.value("S!C3") is None and [ali.value("S!" + a) for a in ("D1", "D2", "D3")] == [40.0, 14.0, 2.0]
+    _check_groups(ali)
+    # a layer over it, with a block of its own; the user's block gone: the formula's result again
+    layer = eng.layer(("ali", "x"), ali, {c1: XlArray([[1.0], [2.0], [3.0]])})
+    assert [layer.value("S!" + a) for a in ("D1", "D2", "D3")] == [20.0, 7.0, 3.0] and ali.value("S!D2") == 14.0
+    eng.set_user_inputs("ali", {a5: 1.0})
+    assert [ali.value("S!" + a) for a in ("C1", "C2", "D2")] == [4.0, 2.0, 10.0] and layer.value("S!D2") == 7.0
+
+
 def test_invalidation_matches_a_calculation_from_scratch_at_random():
     """Shared values, users' own values, values typed over formulas and constants later and the clock, in random order:
     after every step every user's every cell is what a fresh calculation of the same inputs gives (one that knew every
