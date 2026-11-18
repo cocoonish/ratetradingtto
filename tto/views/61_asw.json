@@ -151,7 +151,7 @@
   {
    "id": "tbl",
    "type": "table",
-   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap ima eğrisi (TRYI 1–12A FX swap ima, 18A XCCY eğrisinden, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS)'ne göre ASW",
+   "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap ima eğrisi (TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden; fiyatı yoksa OIS)'ne göre ASW",
    "range": "B6:U56",
    "keep_title": true,
    "append": "asw_fx",
@@ -201,7 +201,7 @@
      "FX ima eğrisi (a+bt+ct²)"
     ]
    },
-   "note": "Yukarıdaki grafiğin aynısı, FX swap ima eğrisi (TRYI 1–12A FX swap ima, 18A XCCY eğrisinden, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS) ile (EK_FX; OIS kotalarının yerine FX faizleri - her biri kendi kuralıyla okunur: TRYI tek dönem basit ACT/360, TRYSAQ yıllık ACT/360 par; 18A kota değil, offshore eğrinin XCCY 1Y–2Y arasındaki iskonto faktörü, Ayarlar'daki eğri interpolasyonunuzla - ve sayfaya, vadesinde aynı iskonto faktörünü veren kendi kuralındaki par faiz olarak girer): her kâğıt kalan vadesinde tablonun ASW FX ima sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi. DİBS RV'nin ASW FX'i başka bir eğridir: FX swap (offshore ICAP eğrisi)."
+   "note": "Yukarıdaki grafiğin aynısı, FX swap ima eğrisi (TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden; fiyatı yoksa OIS) ile (EK_FX; OIS kotalarının yerine FX faizleri - her biri kendi kuralıyla okunur: TRYI tek dönem basit ACT/360, TRYSAQ yıllık ACT/360 par; 18A kota değil, offshore eğrinin XCCY 1Y–2Y arasındaki iskonto faktörü, Ayarlar'daki eğri interpolasyonunuzla - ve sayfaya, vadesinde aynı iskonto faktörünü veren kendi kuralındaki par faiz olarak girer): her kâğıt kalan vadesinde tablonun ASW FX ima sütunundaki değeriyle, kesik çizgi bu ASW'lere aynı kuralla (Eğri / grafik sütunu: boş, 1, 0 ya da x) uydurulan a + b·t + c·t² eğrisi. DİBS RV'nin ASW FX'i başka bir eğridir: FX swap (offshore ICAP eğrisi)."
   },
   {
    "id": "fxc",
@@ -221,7 +221,7 @@
    ],
    "append": "fx_curve",
    "hidden": false,
-   "title": "FX swap ima eğrisi (TRYI 1–12A FX swap ima, 18A XCCY eğrisinden, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS) · ASW'nin ikinci eğrisi (ICPL, sonra BGN)",
+   "title": "FX swap ima eğrisi (TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden; fiyatı yoksa OIS) · ASW'nin ikinci eğrisi (ICPL, sonra BGN)",
    "keep_title": true
   },
   {
@@ -276,7 +276,7 @@
      }
     ]
    },
-   "note": "Düz çizgiler iki eğrinin vadedeki sıfır kupon faizi (yıllık bileşik, ACT/365: DF^(−365/gün) − 1; EK_FX tablosunun sıfır kupon sütunları): OIS, ASW sayfasının kendi iskonto faktörlerinden; FX swap ima eğrisi (TRYI 1–12A FX swap ima, 18A XCCY eğrisinden, TRYSAQ 2–10Y XCCY; fiyatı yoksa OIS), aynı düğümlerin ASW FX hesabındaki değerinden - kâğıtlar tam bu eğriyle iskonto edilir. FX faizleri kendi kuralıyla okunur: TRYI tek dönem basit ACT/360 (FX swap'ın kuponu yok), TRYSAQ yıllık ACT/360 par - masanın kendi dosyası da böyle okur (Forward'daki offshore TRY iskonto eğrisi); 18A kota değil, hesaplanır: offshore eğrinin XCCY 1Y (TRYSAQ1) ile 2Y (TRYSAQ2) arasında 18A'daki iskonto faktörü, Ayarlar'daki eğri interpolasyonunuzla (Bootstrap / PPK basamak); fiyatı olmayan vadede eğri o vadenin OIS kotasıyla, sayfanın kuralıyla sürer. Kesik çizgiler kotaların kendisi: FX ima faizi (önce ICPL, yoksa BGN; fiyatı olmayan vade atlanır, çizgi üzerinden geçer; 18A'da hesaplanan XCCY par - yıllık ACT/360, kuponlar vadeden geriye: 6A, sonra 12A) ve aynı vadenin OIS kotası."
+   "note": "Düz çizgiler iki eğrinin vadedeki sıfır kupon faizi (yıllık bileşik, ACT/365: DF^(−365/gün) − 1; EK_FX tablosunun sıfır kupon sütunları): OIS, ASW sayfasının kendi iskonto faktörlerinden; FX swap ima eğrisi (TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden; fiyatı yoksa OIS), aynı düğümlerin ASW FX hesabındaki değerinden - kâğıtlar tam bu eğriyle iskonto edilir. FX faizleri kendi kuralıyla okunur: TRYI tek dönem basit ACT/360 (FX swap'ın kuponu yok), TRYSAQ yıllık ACT/360 par - masanın kendi dosyası da böyle okur (Forward'daki offshore TRY iskonto eğrisi); 18A kota değil, hesaplanır: offshore eğrinin XCCY 1Y (TRYSAQ1) ile 2Y (TRYSAQ2) arasında 18A'daki iskonto faktörü, Ayarlar'daki eğri interpolasyonunuzla (Bootstrap / PPK basamak); fiyatı olmayan vadede eğri o vadenin OIS kotasıyla, sayfanın kuralıyla sürer. Kesik çizgiler kotaların kendisi: FX ima faizi (önce ICPL, yoksa BGN; fiyatı olmayan vade atlanır, çizgi üzerinden geçer; 18A'da hesaplanan XCCY par - yıllık ACT/360, kuponlar vadeden geriye: 6A, sonra 12A) ve aynı vadenin OIS kotası."
   },
   {
    "id": "fxh",

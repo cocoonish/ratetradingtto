@@ -1,6 +1,7 @@
-"""DİBS ASW's FX swap implied TRY curve (``tto/aswfx.py``): EK_FX's rates read each by its own convention - up to 12M
-FX swap implied (TRYI), one period simple ACT/360; from 2Y cross currency swaps (TRYSAQ), annual ACT/360 par, as the
-desk's workbook reads them (Forward!AJ123:AN142, C123:K134); 18M no quote but computed off the offshore XCCY curve, on
+"""DİBS ASW's FX swap implied TRY curve (``tto/aswfx.py``): EK_FX's rates read each by its own convention - up to 9M
+FX swap implied (TRYI), one period simple ACT/360; from 1Y cross currency swaps (TRYSAQ; 1Y TRYSAQ1, the desk,
+18.11.2026), annual ACT/360 par, as the desk's workbook reads them (Forward!AJ123:AN142, C123:K134); 18M no quote but
+computed off the offshore XCCY curve, on
 each user's curve setting (the desk, 18.11.2026) - and given to the ASW sheet as the par quotes of the sheet's
 own convention with the same discount factor at the tenor.  The sheet's formulas are its own (a replica of them that
 cannot drift: checked against the engine), its OIS side untouched.  The ASW history on the same curve, day by day: each
@@ -35,18 +36,19 @@ def df_on(ln, m):
 
 
 def test_each_rate_is_read_by_its_own_convention():
-    """TRYI (≤ 12M): one period, simple ACT/360 - an FX swap has no coupons; TRYSAQ (≥ 2Y): annual ACT/360 par over its
+    """TRYI (≤ 9M): one period, simple ACT/360 - an FX swap has no coupons; TRYSAQ (≥ 1Y): annual ACT/360 par over its
     yearly coupon dates, their discount factors the curve's as built so far - as the desk's workbook bootstraps its
-    offshore curve (Forward!G125 = 1 / (1 + r·d1/360), G126 = (1 − r·ΣJ) / (1 + r·(d2 − d1)/360), J = G·τ).  The kind
-    goes by the tenor; a tenor without an FX price keeps its OIS quote."""
+    offshore curve (Forward!G125 = 1 / (1 + r·d1/360), G126 = (1 − r·ΣJ) / (1 + r·(d2 − d1)/360), J = G·τ); the 1Y
+    (TRYSAQ1) has one coupon: the FX swap's reading.  The kind goes by the tenor; a tenor without an FX price keeps its
+    OIS quote."""
     got = aswfx.to_sheet(OIS, FX, DAYS)
     assert [t.months for t in got] == list(M)
-    assert [t.kind for t in got] == ["fx", "fx", "fx", "fx", "ois", "fx", "ois", "xccy", "xccy", "ois", "xccy", "ois", "ois",
+    assert [t.kind for t in got] == ["fx", "fx", "fx", "fx", "ois", "xccy", "ois", "xccy", "xccy", "ois", "xccy", "ois", "ois",
                                      "ois", "ois", "ois"]
     by = {t.months: t for t in got}
     for m, r in ((1, 36.0), (2, 36.5), (3, 37.0), (6, 38.0), (12, 38.5)):
         assert by[m].quote == r and by[m].df == pytest.approx(1 / (1 + r / 100 * day(m) / 360), abs=1e-15), m
-    # 2Y and 3Y as the desk's sheet chains them: the 1Y discount factor (the FX swap's here), then each year's
+    # 2Y and 3Y as the desk's sheet chains them: the 1Y discount factor (Forward!G125), then each year's
     g1 = by[12].df
     j1 = g1 * day(12) / 360
     g2 = (1 - 0.42 * j1) / (1 + 0.42 * (day(24) - day(12)) / 360)
@@ -61,7 +63,7 @@ def test_each_rate_is_read_by_its_own_convention():
     for m in (9, 18, 48, 72, 120):
         k = M.index(m)
         assert (by[m].quote, by[m].df, by[m].par) == (OIS[k], None, OIS[k]), m
-    assert (aswfx.kind_of(12), aswfx.kind_of(18), aswfx.kind_of(24)) == ("fx", "curve", "xccy")      # (18M: computed)
+    assert [aswfx.kind_of(m) for m in (9, 12, 18, 24)] == ["fx", "xccy", "curve", "xccy"]      # (18M: computed)
 
 
 def test_the_sheet_is_given_the_par_quote_with_the_same_discount_factor():
@@ -277,10 +279,10 @@ def test_the_fx_calculation_is_the_sheets_own_on_those_quotes(service):
 
 # ---------------------------------------------------------------------------------------------- the history offshore
 def test_the_history_series_of_each_tenor():
-    """A past day's offshore rate of each tenor is the dashboard's own history (tto/history.py), by months: the FX swap
-    implied yield (group "off": TRYI1M … TRYI9M), else the cross currency swap ("xccy": TRYSAQ1 at 1Y, TRYSAQ2 … 10);
-    none at 18M - computed from TRYSAQ1 and TRYSAQ2 (``history_pair``, whatever stands for 1Y) - and an FX swap implied
-    12M, were it kept, before the 1Y cross currency swap."""
+    """A past day's offshore rate of each tenor is the dashboard's own history (tto/history.py), by months and the
+    tenor's kind: the FX swap implied yield (group "off": TRYI1M … TRYI9M) or the cross currency swap ("xccy": TRYSAQ1
+    … 10); none at 18M - computed from TRYSAQ1 and TRYSAQ2 (``history_pair``).  1Y is TRYSAQ1 as today's EK_FX has it
+    (the desk, 18.11.2026), even were an FX swap implied 12M kept."""
     from types import SimpleNamespace as S
     defs = [S(group="ref", months=None, id="TLREF")] + \
         [S(group="off", months=m, id="TRYI%s" % t) for m, t in ((0.01, "ON"), (0.25, "1W"), (1.0, "1M"), (2.0, "2M"), (3.0, "3M"),
@@ -288,7 +290,11 @@ def test_the_history_series_of_each_tenor():
         [S(group="xccy", months=12.0 * y, id="TRYSAQ%d" % y) for y in range(1, 11)] + [S(group="ois", months=18.0, id="TYSO1F")]
     got = [d.id if d is not None else None for d in aswfx.history_series(defs)]
     assert got == ["TRYI1M", "TRYI2M", "TRYI3M", "TRYI6M", "TRYI9M", "TRYSAQ1", None] + ["TRYSAQ%d" % y for y in range(2, 11)]
-    assert aswfx.history_series(defs + [S(group="off", months=12.0, id="TRYI12M")])[M.index(12)].id == "TRYI12M"
+    assert aswfx.history_series(defs + [S(group="off", months=12.0, id="TRYI12M")])[M.index(12)].id == "TRYSAQ1"
+    assert aswfx.history_series([d for d in defs if d.id != "TRYSAQ1"] + [S(group="off", months=12.0, id="TRYI12M")])[
+        M.index(12)] is None                                                                  # (no TRYSAQ1: none)
+    assert aswfx.history_series([d for d in defs if d.id != "TRYI6M"] + [S(group="xccy", months=6.0, id="TRYSAQ6M")])[
+        M.index(6)] is None                                                                   # (each in its kind's group)
     assert [d.id for d in aswfx.history_pair(defs + [S(group="off", months=12.0, id="TRYI12M")])] == ["TRYSAQ1", "TRYSAQ2"]
     assert aswfx.history_series(defs + [S(group="off", months=18.0, id="TRYI18M")])[M.index(18)] is None
     assert aswfx.history_pair([d for d in defs if d.id != "TRYSAQ2"]) is None
@@ -713,6 +719,31 @@ def test_ek_fx_shows_each_users_18m(hist):
         assert row["F"]["v"] == pytest.approx((pt.par - row["E"]["v"]) * 100, abs=1e-9)
         assert row["I"]["t"] == aswfx.RULES[aswfx.CURVE] and row["FX sıfır"]["v"] == pytest.approx(pt.zero, abs=1e-9)
         assert kota["name"] == "FX swap ima · kota" and kota["data"][M.index(18)] == pytest.approx(pt.par, abs=1e-12)
+
+
+def test_ek_fx_reads_the_one_year_xccy_at_1y(hist):
+    """1Y of the FX swap curve is the one year cross currency swap TRYSAQ1 (the desk, 18.11.2026), the offshore 1Y of
+    the desk's Forward sheet and of the ASW history - TRYI12M had no price on either source (1Y stood on its OIS quote).
+    Its kind is XCCY (annual ACT/360 par); with its one coupon the discount factor is the FX swap's reading,
+    1 / (1 + r·d/360), and the sheet's 1Y node has it.  On the recorded day 39,400 (TRYSAQ1 BGN; ICPL has none)."""
+    svc, _, _ = hist
+    user = svc.login("EK_FX 1Y")["user"]
+    k = M.index(12)
+    assert ex.FXC_ROOTS[k] == "TRYSAQ1" and aswfx.kind_of(12) == aswfx.XCCY
+    page = {q["id"]: q for q in svc.view(user, "asw")["panels"]}
+    tab = page["fxc"]["data"]
+    row = dict(zip(tab["c"], tab["rows"][tab["r"].index(ex.FXC_FIRST + k)]))
+    assert (row["A"]["t"], row["B"]["t"], row["C"]["t"]) == ("1Y", "TRYSAQ1", "TRYSAQ1 BGN Curncy")
+    assert row["I"]["t"] == aswfx.RULES[aswfx.XCCY] and row["D"]["v"] == pytest.approx(39.4, abs=1e-9)
+    asw = svc.books["asw"]
+    si = asw.model.sheet_index["ASW"]
+
+    def run():
+        calc, _ = svc._asw_fx_calc(asw, user)
+        return (calc.get(si, aswfx.ROW, aswfx.DAY_COL + aswfx.node_of(12)),
+                calc.get(si, aswfx.ROW, aswfx.LN_COL + aswfx.node_of(12)))
+    d, ln = svc.et.call(run)
+    assert math.exp(ln) == pytest.approx(1 / (1 + row["D"]["v"] / 100 * d / 360), abs=1e-12)
 
 
 def test_a_past_days_18m_comes_from_its_xccy_closes(hist):

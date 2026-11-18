@@ -80,8 +80,12 @@ def test_the_extra_sheets_are_ordinary_workbook_sheets(svc):
     assert svc.cell_info(None, "asw", "EK_FX!J6")["formula"] == "=ASW!AC$65"
     assert svc.cell_info(None, "asw", "EK_FX!K6")["formula"] == "=IFERROR((EXP(-ASW!BT$65*365/$J6)-1)*100,NA())"
     assert svc.cell_info(None, "asw", "EK_FX!K13")["formula"] == "=IFERROR((EXP(-ASW!CC$65*365/$J13)-1)*100,NA())"
-    assert svc.cell_info(None, "asw", "EK_FX!I11")["formula"] == ('=IF(ISNUMBER($D11),"FX swap ima: tek dönem, basit ACT/360",'
+    assert svc.cell_info(None, "asw", "EK_FX!I10")["formula"] == ('=IF(ISNUMBER($D10),"FX swap ima: tek dönem, basit ACT/360",'
                                                                   '"fiyat yok: OIS kotası, sayfanın kuralıyla")')
+    # 1Y: the one year XCCY (TRYSAQ1 - the desk, 18.11.2026), as 2Y on
+    assert svc.cell_info(None, "asw", "EK_FX!I11")["formula"] == ('=IF(ISNUMBER($D11),"XCCY: yıllık par, ACT/360",'
+                                                                  '"fiyat yok: OIS kotası, sayfanın kuralıyla")')
+    assert svc.cell_info(None, "asw", "EK_FX!B11")["base"] == "TRYSAQ1"
     assert svc.cell_info(None, "asw", "EK_FX!I13")["formula"].startswith('=IF(ISNUMBER($D13),"XCCY: yıllık par, ACT/360",')
     # 18M is no quote (the desk, 18.11.2026): no ticker root to type, no Bloomberg call - computed off the offshore XCCY
     # curve by the dashboard, its XCCY par given to D12 in the calculation on the FX swap curve (#N/A in the sheet itself)

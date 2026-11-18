@@ -18,9 +18,11 @@ A bond's discount factor is log-linear in ln DF between the node days.
 **The FX rates' own conventions** - the desk's workbook reads the very same tickers so (its offshore TRY discount curve
 behind DİBS RV's FX swap ASW, Forward!AJ123:AN142 and C123:K134):
 
-* up to 12 months ``TRYI…``, FX swap implied: one period, simple ACT/360 - an FX swap has no coupons:
+* up to 9 months ``TRYI…``, FX swap implied: one period, simple ACT/360 - an FX swap has no coupons:
   ``DF = 1 / (1 + r/100 · d/360)``;
-* from 2 years ``TRYSAQ…``, cross currency swaps: an annual ACT/360 par rate,
+* from 1 year ``TRYSAQ…``, cross currency swaps (1Y ``TRYSAQ1``, the one year XCCY the desk's Forward sheet takes as
+  its offshore 1Y - the desk, 18.11.2026; ``TRYI12M`` had no price on either source, 1Y stood on its OIS quote; with
+  its one coupon the 1Y par gives the FX swap's discount factor above): an annual ACT/360 par rate,
   ``DF_n = (1 − r/100 · Σ τ_k DF_k) / (1 + r/100 · τ_n)`` over its coupon dates - yearly, counted back from the maturity,
   the short period first (:func:`xccy_months`; 12, 24, … months for a whole number of years): their discount factors the
   curve's as built so far (the sheet's own nodes, at or before the tenor quoted before), ``τ`` the days between / 360;
@@ -31,7 +33,8 @@ behind DİBS RV's FX swap ASW, Forward!AJ123:AN142 and C123:K134):
   sheet's curve, ln DF linear between its nodes; PPK basamak, ppkcurve's offshore PPK curve).  Its rate is the 18M XCCY
   par on that curve - annual ACT/360, coupons 6M and then 12M on, counted back from the maturity.
 
-The kind goes by the tenor (≤ 12M FX swap implied, 18M computed, ≥ 2Y XCCY), ``d`` is the sheet's node days of the tenor.
+The kind goes by the tenor (≤ 9M FX swap implied, 18M computed, 1Y and ≥ 2Y XCCY), ``d`` is the sheet's node days of
+the tenor.
 A tenor without an FX price (18M: without the curve's 1Y and 2Y XCCY quotes) keeps its OIS quote as it is.
 
 **To the sheet**, tenor by tenor in order: the discount factor the rate gives by its own convention is the target; up to
@@ -43,9 +46,8 @@ bonds' ASW on that day's OIS closes - ``C66:R325``, Bloomberg history blocks) on
 (``Service._asw_hist_fx``): each past row's quotes swapped the same way for that day's offshore rates.  Those are the
 dashboard's own daily closes (``tto/history.py``, nothing asked of Bloomberg for this), the series of each tenor by
 :func:`history_series`: the FX swap implied yields of the Forward sheet's offshore rows (group ``off``: TRYI1M … TRYI9M)
-at 1M–9M, its cross currency swaps (``xccy``) at 1Y (TRYSAQ1: the history keeps no TRYI12M - the desk's Forward sheet
-takes this very swap as its offshore 12M; at one year an annual ACT/360 par rate is one period simple ACT/360, the FX
-swap's reading) and at 2Y–10Y (TRYSAQ2 … TRYSAQ10, as EK_FX); each the first source with a close (ICPL, then the
+at 1M–9M, its cross currency swaps (``xccy``) at 1Y–10Y (TRYSAQ1 … TRYSAQ10, as EK_FX) - each tenor in its kind's
+group only (an FX swap implied 12M, were one kept, is not the 1Y); each the first source with a close (ICPL, then the
 workbook's BGN ticker; ``SeriesDef.merged``).  18M is computed the same way from that day's TRYSAQ1 and TRYSAQ2 closes
 (:func:`history_pair`; the offshore XCCY curve of the two, bootstrapped as the Forward sheet does and ln DF linear between
 them - Bootstrap: a past day has no PPK curve), when both are there.  A day without a close of a tenor has none: there the
@@ -66,9 +68,10 @@ NODES: Tuple[int, ...] = (0, 1, 2, 3) + tuple(range(6, 121, 3))
 #: today's row of the curve, the columns of the first quote (C), the first node's days (AB, "D0") and ln DF (BS, "L0")
 ROW, QUOTE_COL, DAY_COL = 65, 3, 28
 LN_COL = DAY_COL + len(NODES)
-#: the longest tenor quoted as an FX swap implied yield (TRYI…); the longer ones are cross currency swaps (TRYSAQ…) - 18M
-#: aside: no quote at all, computed off the offshore curve between its 1Y and 2Y XCCY nodes (:func:`point_18m`)
-FX_SWAP_MAX = 12
+#: the longest tenor quoted as an FX swap implied yield (TRYI…); the longer ones are cross currency swaps (TRYSAQ…; 1Y
+#: TRYSAQ1, as the desk's Forward sheet - the desk, 18.11.2026) - 18M aside: no quote at all, computed off the offshore
+#: curve between its 1Y and 2Y XCCY nodes (:func:`point_18m`)
+FX_SWAP_MAX = 9
 #: the tenor computed off the offshore curve and the XCCY nodes it lies between (TRYSAQ1, TRYSAQ2)
 CURVE_TENOR, CURVE_NODES = 18, (12, 24)
 #: a tenor's kind: FX swap implied, cross currency swap, computed off the offshore XCCY curve, no FX price (the OIS quote
@@ -86,9 +89,9 @@ XCCY_BASIS, XCCY_PERIOD = 360.0, 12
 LOW, HIGH, TOLERANCE = -100.0, 1000.0, 1e-12
 #: the history's rows (day by day, oldest first: ``B66:Z325``) and the column of their days
 HIST_FIRST, HIST_LAST, HIST_DATE_COL = 66, 325, 2
-#: the groups of the dashboard's history a tenor's series is looked for in, in this order (tto/history.py): the Forward
-#: sheet's FX swap implied yields (TRYI…), then its cross currency swaps (TRYSAQ…)
-HIST_GROUPS = ("off", "xccy")
+#: the group of the dashboard's history a tenor's series is looked for in, by the tenor's kind (tto/history.py): the
+#: Forward sheet's FX swap implied yields (TRYI…), its cross currency swaps (TRYSAQ…)
+HIST_GROUP = {FX_SWAP: "off", XCCY: "xccy"}
 
 _INDEX = {m: i for i, m in enumerate(NODES)}
 _TENOR_SET = frozenset(TENORS)
@@ -120,8 +123,8 @@ class Point(NamedTuple):
 
 
 def kind_of(months: int) -> str:
-    """The kind of the FX rate of a tenor: an FX swap implied yield up to 12 months, 18M computed off the offshore XCCY
-    curve, a cross currency swap after."""
+    """The kind of the FX rate of a tenor: an FX swap implied yield up to 9 months, 18M computed off the offshore XCCY
+    curve, a cross currency swap from 1Y (TRYSAQ1, TRYSAQ2 …)."""
     if months == CURVE_TENOR:
         return CURVE
     return FX_SWAP if months <= FX_SWAP_MAX else XCCY
@@ -379,21 +382,22 @@ def xccy_curve(quotes: Sequence[Tuple[Any, Any]]) -> Optional[LogLinear]:
 
 # ---------------------------------------------------------------------------------------------- the history
 def history_series(defs: Sequence[Any]) -> List[Optional[Any]]:
-    """The series of the dashboard's history that stands for each tenor (``TENORS``) on a past day: its FX swap implied
-    yield (group ``off``: TRYI1M … TRYI9M), else its cross currency swap (``xccy``: TRYSAQ1 at 1Y, TRYSAQ2 … TRYSAQ10),
-    matched by months; None where the history keeps neither, and at 18M - computed, from the two series of
+    """The series of the dashboard's history that stands for each tenor (``TENORS``) on a past day, by the tenor's kind:
+    its FX swap implied yield (group ``off``: TRYI1M … TRYI9M) or its cross currency swap (``xccy``: TRYSAQ1 …
+    TRYSAQ10), matched by months; None where the history keeps none, and at 18M - computed, from the two series of
     :func:`history_pair` (:func:`history_row`).  ``defs``: the history's series (``History.snapshot()["defs"]``,
     ``SeriesDef``: ``group``, ``months``)."""
     out: List[Optional[Any]] = []
     for m in TENORS:
-        out.append(None if kind_of(m) == CURVE else next(
-            (d for g in HIST_GROUPS for d in defs if d.group == g and type(d.months) is float and abs(d.months - m) < 1e-9), None))
+        group = HIST_GROUP.get(kind_of(m))
+        out.append(None if group is None else next(
+            (d for d in defs if d.group == group and type(d.months) is float and abs(d.months - m) < 1e-9), None))
     return out
 
 
 def history_pair(defs: Sequence[Any]) -> Optional[Tuple[Any, Any]]:
     """The series of the XCCY nodes the 18M point lies between - TRYSAQ1 and TRYSAQ2 (group ``xccy``, 12 and 24 months),
-    whatever stands for 1Y in :func:`history_series`; None without both."""
+    the series of 1Y and 2Y in :func:`history_series`; None without both."""
     got = [next((d for d in defs if d.group == "xccy" and type(d.months) is float and abs(d.months - m) < 1e-9), None)
            for m in CURVE_NODES]
     return (got[0], got[1]) if got[0] is not None and got[1] is not None else None
