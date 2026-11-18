@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import statistics
 
 import pytest
 from starlette.testclient import TestClient
@@ -372,6 +373,24 @@ def test_dibs_family_finds_the_planted_bond_with_carry_and_ranking(fitted):
         for r in lst:
             assert abs(r["score"] - r["z"] * r["total_1m"] / r["sigma_1m"]) < 1e-9
     assert qx.PLANTED in [r["isin"] for r in d["receive"]] + [r["isin"] for r in d["rows"] if r["score"] is not None and r["score"] < 0]
+
+
+def test_the_cross_section_z_is_over_the_fitted_bonds(fitted):
+    """"Kesit z": every row's residual over the dispersion (sample standard deviation) of today's residuals of the bonds
+    in the fit - the fixed-coupon ones -; the bills, priced on the curve and not fitted, are measured against it as any
+    row.  The bills 150 bp rich now (as on the desk's list) leave the coupon bonds' Kesit z as it was - with the bills'
+    residuals in, the dispersion would be several times wider -, theirs is their residual over the coupon bonds' one."""
+    ctx, eng, data, mons, tables, t, timing = fitted
+    bills = [b.isin for b in qx.bond_list(TODAY) if b.kind == "bill"]
+    base = ctx.derive_live(ctx.live)
+    rich = dict(base, **{"DIBSS:" + i: ctx.last("DIBS:" + i) - 1.5 for i in bills})
+    before, after = ({r["isin"]: r for r in tables["dibsfv"]["build"](live)["rows"]} for live in (base, rich))
+    for rows in (before, after):
+        sd = statistics.stdev(r["resid"] for r in rows.values() if r["fitted"])
+        assert all(r["cs_z"] == pytest.approx(r["resid"] / sd, rel=1e-12) for r in rows.values())     # every row, the bills too
+    assert all(after[i]["resid"] < -140 and after[i]["cs_z"] < -5 for i in bills)
+    assert statistics.stdev(r["resid"] for r in after.values()) > 3 * statistics.stdev(r["resid"] for r in after.values() if r["fitted"])
+    assert all(after[i]["cs_z"] == pytest.approx(r["cs_z"], abs=1e-9) for i, r in before.items() if r["fitted"])
 
 
 def test_the_bonds_trade_is_told_leg_by_leg_with_its_size(fitted):

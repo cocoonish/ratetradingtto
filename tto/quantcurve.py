@@ -1304,8 +1304,10 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
         cr = _bond_carry(ctx, s, ois, rows, live)
         ois_nss = ois["nss"](live) if ois and callable(ois.get("nss")) else None
         ois_y = _ois_yields(fit_in, ois_nss)
-        resids = list(s["resid"].values())
-        cs_sd = qm.stdev(resids) if len(resids) >= 3 else None
+        # "Kesit z": a row's residual over the dispersion of today's residuals of the bonds in the fit (the fixed-coupon
+        # ones); the bills, priced on the curve and not fitted, are measured against it as any row
+        cs = [s["resid"][fit_in.bonds[i].isin] for i in fit_in.fitted]
+        cs_sd = qm.stdev(cs) if len(cs) >= 3 else None
         out_rows = []
         for i, b in enumerate(fit_in.bonds):
             isin = b.isin

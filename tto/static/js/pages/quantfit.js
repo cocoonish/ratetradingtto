@@ -129,7 +129,7 @@ class CurvePage extends FitPage {
     rows.map((r) => [T(r.label, { b: 1, tip: r.isin + (!r.fitted ? '\nuyum dışı: eğriye göre ölçülür, eğriyi biçimlendirmez'
       : (r.weight < 1 ? '\nuyumda ağırlığı ' + fmt(r.weight, 2) + ' (uzak nokta)' : '')) }), T((KIND[r.kind] || r.kind) + (r.fitted ? '' : ' ·')),
       T(isoToTr(r.maturity)), N(r.coupon, 2), N(r.yield, 3, { tip: r.live ? 'canlı (DİBS RV)' : 'son kapanış' }), T(CONV[r.conv] || r.conv), N(r.model, 3),
-      N(r.resid, 1, { sign: true, b: 1, cls: r.fitted && r.weight < 1 ? 'soft' : '' }), Z(r.z, entry), N(r.cs_z, 2, { sign: true, tip: 'Bugünkü farkların kesitine göre' }),
+      N(r.resid, 1, { sign: true, b: 1, cls: r.fitted && r.weight < 1 ? 'soft' : '' }), Z(r.z, entry), N(r.cs_z, 2, { sign: true, tip: 'Fark ÷ bugün uydurulan sabit kuponluların farklarının standart sapması (bonolar da ona göre)' }),
       N(r.half_life, 1), N(r.n, 0, { tip: 'Farkın geçmişi: uyumun kurulduğu gün sayısı (tarihçenin DİBS kapanışları)' }),
       N(r.ois_spread, 1, { sign: true }), N(r.wb_asw, 1, { sign: true }),
       N(r.wb_rc, 1, { sign: true, tip: 'DİBS RV\'nin kendi pahalı / ucuzu: ASW\'nin a + b·t + c·t² uyumuna göre (+ ucuz)' }), N(r.mod_dur, 2),
