@@ -13,6 +13,8 @@ The interface - the page calls nothing else:
   calculation and the history: never a Bloomberg request, nobody's personal inputs;
 * :func:`value` - MTM in the trade's currency, TL and USD, carry over one day, cash accrued since the start, the price
   now, the greeks of an option, a package's legs;
+* :func:`coupons` - a rate trade's coupons: each swap's schedule, every period's fixed and floating payment, net,
+  payment day and state;
 * :func:`notional_for_dv01` - the nominal of a DV01, on the desk's 5 mn lot.
 
 **Instruments are named by what they are** - a swap by its dates, a meeting period by the meeting's date, a bond by its
@@ -34,12 +36,18 @@ Per product (each one's market, conventions and the numbers that went in are in 
   dashboard's bootstrapped curve - TRY: ``BOOT_GUN`` / ``BOOT_LNDF`` (Motor!C88:C130 / I88:I130: ln DF linear in days
   from the OIS spot ``SPOTDATE``), USD: the SOFR book's (SOFR_FOMC!K48:M68, its "Zero lineer" interpolation, from its
   T+2 spot); a day before the curve's spot is the overnight away (TLREF ACT/365, SOFR ACT/360).  The float leg is the
-  overnight compounded: the days already fixed from the history's fixings (TLREF: ``BISTTREF Index``; SOFR when the
-  history holds it, else the current fixing - said in ``inputs["notes"]``), the rest from the curve.  Conventions are
-  the workbooks' own: TRY ACT/365, a single payment up to 3 months, then quarterly coupons counted from the start
-  (Motor!B88: ``WORKDAY(EDATE(start, n) − 1, 1, TRY)``); USD ACT/360, single payment up to 1 year, then annual coupons
-  counted back from the end (a short first period, as SOFR_FOMC!AV64), modified following on the SIFMA list.
-  *Accrued* = the net settlement of every period paid by today.  *Carry* = **the day's net accrual** - fixed against
+  overnight compounded: the days already fixed from the history's fixings (TLREF: ``BISTTREF Index``, SOFR:
+  ``SOFRRATE Index`` - history.SOFR_TICKER), each over the days to the index's next business day (inside the history a
+  week day without a fixing was a holiday: the workbooks' lists hold the holidays ahead only), the rest from the curve.
+  A past day the history does not have - before its first fixing (today's then), missing inside it, after its last (not
+  out yet: SOFR comes out the next business day at 08:00 New York; the last fixing then) - is estimated and
+  ``inputs["notes"]`` names the days.  Conventions are the workbooks' own: TRY ACT/365, a single payment up to 3
+  months, then quarterly coupons counted from the start (Motor!B88: ``WORKDAY(EDATE(start, n) − 1, 1, TRY)``), paid at
+  the period's end; USD ACT/360, single payment up to 1 year, then annual coupons counted back from the end (a short
+  first period, as SOFR_FOMC!AV64), modified following on the SIFMA list, paid two SIFMA business days after the
+  period's end (the market's lag; the bootstrap - and the value - discount at the end).  *Accrued* = the net
+  settlement of every period ended by today (realised: paid, or due within the lag); ``inputs["coupons"]`` has each
+  swap's periods (:func:`coupons`), a leg its own ``accrued``.  *Carry* = **the day's net accrual** - fixed against
   today's overnight on the period's compounded notional, sign × N × (K − I × r_ON) × days / basis (nothing before the
   start) - **plus the one-day roll-down**: the trade tomorrow on the curve rolled a day (the same zero rate for the
   same days from its spot, today's overnight fixed) against the trade tomorrow when today's forwards come true (its
@@ -237,20 +245,29 @@ class Conv(object):
     """A rate product's conventions, as its workbook has them."""
 
     __slots__ = ("product", "ccy", "basis", "single", "coupon", "roll", "anchor", "cal", "lag", "float_name", "label",
-                 "meetings_name")
+                 "meetings_name", "pay_lag", "rule")
 
     def __init__(self, product: str, ccy: str, basis: float, single: int, coupon: int, roll: str, anchor: str,
-                 cal: Tuple[str, ...], lag: int, float_name: str, label: str, meetings_name: str):
+                 cal: Tuple[str, ...], lag: int, float_name: str, label: str, meetings_name: str, pay_lag: int = 0,
+                 rule: str = ""):
         self.product, self.ccy, self.basis = product, ccy, basis
         self.single, self.coupon = single, coupon       # months: one payment up to ``single``, then every ``coupon``
         self.roll, self.anchor = roll, anchor           # "following" / "modfol"; coupons counted from "start" / "end"
         self.cal, self.lag = cal, lag                   # holiday lists; the spot lag in business days
         self.float_name, self.label, self.meetings_name = float_name, label, meetings_name
+        self.pay_lag, self.rule = pay_lag, rule         # a period paid this many business days after its end; in words
 
 
-#: TRY OIS (Motor!B88:K130, OIS_MAIN!B2 = WORKDAY(TODAY(),1,TRY)) and USD SOFR OIS (SOFR_FOMC!B5, J49, L64)
-CONVS = {"ois": Conv("ois", "TRY", 365.0, 3, 3, "following", "start", ("TRY",), 1, "TLREF", "OIS", "MPC"),
-         "sofr": Conv("sofr", "USD", 360.0, 12, 12, "modfol", "end", ("SIFMA",), 2, "SOFR", "SOFR", "FOMC")}
+#: TRY OIS (Motor!B88:K130, OIS_MAIN!B2 = WORKDAY(TODAY(),1,TRY)) and USD SOFR OIS (SOFR_FOMC!B5, J49, L64).  A period is
+#: paid: TRY at its end - the workbooks' (Motor's bootstrap discounts each coupon at its period's end; MASA's broken-date
+#: block, "Ödeme" BL193, pays at the end) -; USD two SIFMA business days after it, the SOFR OIS market's payment lag (no
+#: workbook has one: SOFR_FOMC's bootstrap discounts at the period's end, and so does the valuation - the lag dates the
+#: payment, it does not move the value)
+CONVS = {"ois": Conv("ois", "TRY", 365.0, 3, 3, "following", "start", ("TRY",), 1, "TLREF", "OIS", "MPC", 0,
+                     "ACT/365 · 3 aya kadar tek ödeme, sonra başlangıçtan 3 ayda bir kupon · ödeme dönem sonunda"),
+         "sofr": Conv("sofr", "USD", 360.0, 12, 12, "modfol", "end", ("SIFMA",), 2, "SOFR", "SOFR", "FOMC", 2,
+                      "ACT/360 · 1 yıla kadar tek ödeme, sonra yıllık kupon (bitişten geriye, ilk dönem kısa) · "
+                      "ödeme dönem sonundan 2 iş günü sonra (SIFMA)")}
 
 
 def _roll(conv: Conv, d: _dt.date, hol: Any) -> _dt.date:
@@ -400,15 +417,27 @@ class Curve(object):
         return c
 
 
+#: inside the span of an index's fixings, week days without one are its holidays of the past - unless more than this share
+#: of the days is missing: missing data then (history._holidays' rule)
+GAP_SHARE = 0.08
+
+
 class Fixings(object):
     """The overnight index's fixings (``points``: ISO day -> % - the fixing of a day is the rate from it to the next
-    business day) and the latest one (``live``, decimal: today's when it is fixed, else the last).  A day without a
-    fixing takes the one before it; a day of today or later takes ``live``."""
+    business day) and the latest one (``live``, decimal: today's when it is fixed, else the last).
 
-    __slots__ = ("points", "days", "live", "hol", "basis", "name", "source")
+    Its business days are the days it is fixed: inside the span of the fixings a week day without one was a holiday of
+    the index (``off``: the workbooks' lists hold the holidays ahead only - SIFMA's from 2026 on), unless so many are
+    missing (``GAP_SHARE``) that they are missing data; outside the span the week days off the list ``hol``.  A day's
+    rate and how it was had (:meth:`rate`): its fixing ("fix"); today and later ``live`` ("live"); a day after the last
+    fixing - not out yet (SOFR comes out the next business day) or not in the history yet - the last fixing
+    ("pending"); a day missing inside the span the one before it ("prev"); a day before the first fixing ``live``
+    ("none")."""
+
+    __slots__ = ("points", "days", "live", "hol", "basis", "name", "source", "last", "off", "cal")
 
     def __init__(self, points: Optional[Dict[str, float]], live: Optional[float], hol: Any, basis: float, name: str,
-                 source: str = ""):
+                 source: str = "", off: Optional[frozenset] = None, last: Optional[str] = None):
         self.points = {d: float(v) for d, v in (points or {}).items() if _num(v) is not None}
         self.days = sorted(self.points)
         self.live = live
@@ -416,11 +445,32 @@ class Fixings(object):
         self.basis = basis
         self.name = name
         self.source = source
+        self.last = last if last is not None else (self.days[-1] if self.days else None)
+        self.off = off if off is not None else self._holidays()
+        self.cal = self.hol | self.off
+
+    def _holidays(self) -> frozenset:
+        """The week days inside the span of the fixings without one (and off ``hol``): the index's holidays of the
+        past - none when more than ``GAP_SHARE`` of the days are missing."""
+        if len(self.days) < 2:
+            return frozenset()
+        try:
+            d, last = _dt.date.fromisoformat(self.days[0]), _dt.date.fromisoformat(self.days[-1])
+        except ValueError:
+            return frozenset()
+        gaps = []
+        while d < last:
+            if d.weekday() < 5 and d not in self.hol and d.isoformat() not in self.points:
+                gaps.append(d)
+            d += _dt.timedelta(days=1)
+        return frozenset(gaps) if len(gaps) <= GAP_SHARE * len(self.days) else frozenset()
 
     def with_days(self, extra: Dict[_dt.date, float]) -> "Fixings":
+        """The same with ``extra`` days fixed (tomorrow's market: today's overnight come true) - its holidays and last
+        fixing as they were."""
         pts = dict(self.points)
         pts.update({d.isoformat(): r * 100.0 for d, r in extra.items()})
-        return Fixings(pts, self.live, self.hol, self.basis, self.name, self.source)
+        return Fixings(pts, self.live, self.hol, self.basis, self.name, self.source, self.off, self.last)
 
     def rate(self, d: _dt.date, today: _dt.date) -> Tuple[Optional[float], str]:
         iso = d.isoformat()
@@ -430,24 +480,28 @@ class Fixings(object):
             return self.live, "live"
         k = bisect.bisect_left(self.days, iso)
         if k > 0:
-            return self.points[self.days[k - 1]] / 100.0, "prev"
+            return self.points[self.days[k - 1]] / 100.0, ("pending" if self.last is not None and iso > self.last else "prev")
         if self.live is not None:
             return self.live, "none"
         return None, "none"
 
-    def compound(self, a: _dt.date, b: _dt.date, today: _dt.date, tally: Optional[Dict[str, int]] = None) -> Optional[float]:
-        """Π (1 + r × n / basis) over the business days from ``a`` up to ``b`` - each fixing over the days to the next
-        business day (a Friday's over the weekend) -, ``None`` when a day has no rate at all."""
+    def compound(self, a: _dt.date, b: _dt.date, today: _dt.date, tally: Optional[Dict[str, int]] = None,
+                 est: Optional[Dict[str, str]] = None) -> Optional[float]:
+        """Π (1 + r × n / basis) over the index's business days from ``a`` up to ``b`` - each fixing over the days to
+        the next one (a Friday's over the weekend, a holiday's eve's over the holiday) -, ``None`` when a day has no rate
+        at all.  ``tally``: how many days were had how; ``est``: the days not had by their own fixing (ISO day -> how)."""
         f = 1.0
         d = a
         while d < b:
-            nxt = _add_bd(d, 1, self.hol)
+            nxt = _add_bd(d, 1, self.cal)
             n = (min(nxt, b) - d).days
             r, how = self.rate(d, today)
             if r is None:
                 return None
             if tally is not None:
                 tally[how] = tally.get(how, 0) + 1
+            if est is not None and how != "fix":
+                est[d.isoformat()] = how
             f *= 1.0 + r * n / self.basis
             d = nxt
         return f
@@ -1006,9 +1060,14 @@ class _Leg(object):
 
 
 def _swap_pv(mkt: Market, prod: str, leg: _Leg, asof: _dt.date, curve: Optional[Curve] = None,
-             fix: Optional[Fixings] = None, tally: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+             fix: Optional[Fixings] = None, tally: Optional[Dict[str, int]] = None, est: Optional[Dict[str, str]] = None,
+             rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """A fixed-for-overnight swap at ``asof``: MTM (fixed − float, signed), the cash of its settled periods, the
-    annuity of the periods to come (Σ τ × DF, today) and their float leg's value - on ``curve`` (the market's)."""
+    annuity of the periods to come (Σ τ × DF, today) and their float leg's value - on ``curve`` (the market's).
+    ``tally`` / ``est``: how the float leg's past days were had (:meth:`Fixings.compound`); ``rows``: every period of
+    the schedule is added to it - its dates, its payment day, the fixed and float payments (signed: + received, − paid),
+    the float's compounded rate and the days of it not had by their own fixing, its state: "paid" / "due" (ended, paid
+    on its payment day), "running" (the amounts so far), "future" (the fixed payment; an unwound swap's known net)."""
     conv = CONVS[prod]
     hol = mkt.hol(*conv.cal)
     curve = curve or mkt.curves.get(prod)
@@ -1017,49 +1076,78 @@ def _swap_pv(mkt: Market, prod: str, leg: _Leg, asof: _dt.date, curve: Optional[
         raise TradeError("%s eğrisi yok" % conv.label)
     N, K = leg.notional, leg.rate
     closed, Kc = leg.close_date, leg.close_rate
+    s = leg.sign
     dfa = curve.df(asof)
     pv_fix = pv_flt = ann = acc = 0.0
 
-    def grown(x: _dt.date, y: _dt.date) -> float:
+    def grown(x: _dt.date, y: _dt.date, days: Optional[Dict[str, str]] = None) -> float:
         """The overnight compounded from x to y: the fixings up to today, the curve after it."""
         if y <= asof:
-            f = fix.compound(x, y, asof, tally) if fix is not None else None
+            f = fix.compound(x, y, asof, tally, days) if fix is not None else None
         elif x >= asof:
             f = curve.df(x) / curve.df(y)
         else:
-            f0 = fix.compound(x, asof, asof, tally) if fix is not None else None
+            f0 = fix.compound(x, asof, asof, tally, days) if fix is not None else None
             f = f0 * curve.df(asof) / curve.df(y) if f0 is not None else None
         if f is None:
             raise TradeError("%s fixing'i yok (%s)" % (conv.float_name, _short(x)))
         return f
 
-    def unwound(a: _dt.date, b: _dt.date) -> float:
-        """A period's payment once the swap is unwound at ``closed``: the swap's own up to the close, the fixed
+    def flows(a: _dt.date, b: _dt.date, days: Optional[Dict[str, str]]) -> Tuple[float, float, Optional[float]]:
+        """A known period's fixed and float payments (the fixed receiver's view) and the float's rate (simple, decimal):
+        an ended period's; once the swap is unwound at ``closed``, the swap's own up to the close and the fixed
         difference after it (the floats cancel)."""
+        if closed is None or b <= closed:
+            g = grown(a, b, days)
+            return N * K * (b - a).days / conv.basis, N * (g - 1.0), (g - 1.0) * conv.basis / (b - a).days
         if a >= closed:
-            return N * (K - Kc) * (b - a).days / conv.basis
-        return N * (K * (closed - a).days / conv.basis - (grown(a, closed) - 1.0)) + N * (K - Kc) * (b - closed).days / conv.basis
+            return N * (K - Kc) * (b - a).days / conv.basis, 0.0, None
+        g = grown(a, closed, days)
+        return (N * K * (closed - a).days / conv.basis + N * (K - Kc) * (b - closed).days / conv.basis, N * (g - 1.0),
+                (g - 1.0) * conv.basis / (closed - a).days)
+
+    def row(a: _dt.date, b: _dt.date, state: str, fx: Optional[float], fl: Optional[float], rate: Optional[float],
+            days: Optional[Dict[str, str]]) -> None:
+        if rows is None:
+            return
+        pay = _add_bd(b, conv.pay_lag, hol)
+        if state == "ended":
+            state = "paid" if pay <= asof else "due"
+        rows.append({"start": a.isoformat(), "end": b.isoformat(), "pay": pay.isoformat(), "days": (b - a).days,
+                     "state": state, "fixed": s * fx + 0.0 if fx is not None else None,
+                     "float": -s * fl + 0.0 if fl is not None else None,
+                     "net": s * (fx - fl) + 0.0 if fx is not None and fl is not None else None,
+                     "float_rate": rate * 100.0 if rate is not None else None, "estimated": sorted(days or {})})
 
     for a, b in schedule(leg.start, leg.end, conv, hol, leg.months):
         tau = (b - a).days / conv.basis
         after = closed is not None and b > closed
+        days: Optional[Dict[str, str]] = {} if (est is not None or rows is not None) else None
         if b <= asof:
-            acc += unwound(a, b) if after else N * (K * tau - (grown(a, b) - 1.0))
-            continue
-        d_b = curve.df(b) / dfa
-        ann += tau * d_b
-        if after:
-            pv_fix += unwound(a, b) * d_b
-            continue
-        pv_fix += N * K * tau * d_b
-        if a >= asof:
-            pv_flt += N * (curve.df(a) / dfa - d_b)
+            fx, fl, rate = flows(a, b, days)
+            acc += fx - fl
+            row(a, b, "ended", fx, fl, rate, days)
         else:
-            f = fix.compound(a, asof, asof, tally) if fix is not None else None
-            if f is None:
-                raise TradeError("%s fixing'i yok (%s)" % (conv.float_name, _short(a)))
-            pv_flt += N * (f - d_b)
-    s = leg.sign
+            d_b = curve.df(b) / dfa
+            ann += tau * d_b
+            if after:
+                fx, fl, rate = flows(a, b, days)
+                pv_fix += (fx - fl) * d_b
+                row(a, b, "future", fx, fl, rate, days)
+            else:
+                pv_fix += N * K * tau * d_b
+                if a >= asof:
+                    pv_flt += N * (curve.df(a) / dfa - d_b)
+                    row(a, b, "future", N * K * tau, None, None, None)
+                else:
+                    f = fix.compound(a, asof, asof, tally, days) if fix is not None else None
+                    if f is None:
+                        raise TradeError("%s fixing'i yok (%s)" % (conv.float_name, _short(a)))
+                    pv_flt += N * (f - d_b)
+                    so_far = (asof - a).days
+                    row(a, b, "running", N * K * so_far / conv.basis, N * (f - 1.0), (f - 1.0) * conv.basis / so_far, days)
+        if est is not None and days:
+            est.update(days)
     return {"mtm": s * (pv_fix - pv_flt) + 0.0, "accrued": s * acc + 0.0, "annuity": ann, "float": pv_flt,
             "par": pv_flt / (N * ann) if ann > 0 and N else None}
 
@@ -1076,7 +1164,9 @@ def _swap(mkt: Market, prod: str, leg: _Leg, asof: _dt.date) -> Dict[str, Any]:
     conv = CONVS[prod]
     hol = mkt.hol(*conv.cal)
     tally: Dict[str, int] = {}
-    base = _swap_pv(mkt, prod, leg, asof, tally=tally)
+    est: Dict[str, str] = {}
+    rows: List[Dict[str, Any]] = []
+    base = _swap_pv(mkt, prod, leg, asof, tally=tally, est=est, rows=rows)
     curve, fix = mkt.curves[prod], mkt.fixings.get(prod)
     nxt = _add_bd(asof, 1, hol)
     days = (nxt - asof).days
@@ -1099,7 +1189,8 @@ def _swap(mkt: Market, prod: str, leg: _Leg, asof: _dt.date) -> Dict[str, Any]:
     roll = (tomorrow["mtm"] + tomorrow["accrued"]) - (base["mtm"] * growth + base["accrued"])
     dv01 = leg.notional * base["annuity"] * 1e-4
     return {"mtm": base["mtm"], "accrued": base["accrued"], "carry": accrual + roll, "carry_accrual": accrual, "roll": roll,
-            "carry_days": days, "annuity": base["annuity"], "dv01": dv01, "par": base["par"], "tally": tally, "on": on}
+            "carry_days": days, "annuity": base["annuity"], "dv01": dv01, "par": base["par"], "tally": tally, "on": on,
+            "est": est, "rows": rows}
 
 
 def _par_rate(mkt: Market, prod: str, start: _dt.date, end: _dt.date, months: Optional[int] = None) -> Optional[float]:
@@ -1182,12 +1273,18 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         else:
             label = _rate_label(prod, start, end, months, spot)
         price = res["price_now"]
+        # the trade's cash flows are this one swap's (an FRA's too: one forward-starting swap - its legs below are only
+        # where its value comes from)
+        coupons = [_coupon_table(prod, "%s %s" % (side_text(prod, t["side"]).capitalize(), label), t["side"], main, res,
+                                 mkt.fixings.get(prod))]
         total = {"mtm": res["mtm"], "accrued": res["accrued"], "carry": res["carry"], "price_now": price,
-                 "price_text": "%s %s%%" % (label, _tr(price, 2)) if price is not None else label}
+                 "price_text": "%s %s%%" % (label, _tr(price, 2)) if price is not None else label,
+                 "coupon_info": _coupon_info(coupons)}
         inputs.update({"start": _iso(start), "end": _iso(end), "rate": t["price"], "par_now": price, "annuity": res["annuity"],
                        "dv01": res["dv01"], "carry_accrual": res["carry_accrual"], "roll_1d": res["roll"],
                        "carry_days": res["carry_days"], "overnight": res["on"] * 100.0 if res["on"] is not None else None,
-                       "fixings": res["tally"], "notes": _fixing_notes(conv, res["tally"], mkt.fixings.get(prod))})
+                       "fixings": res["tally"], "notes": _fixing_notes(conv, res["est"], mkt.fixings.get(prod)),
+                       "coupons": coupons})
         if structure == "fra" and cd is None:
             # the attribution: the two swaps that replicate it, from the trade's own settlement - to its end the
             # FRA's way, to its start the other way, the same notional and rate
@@ -1242,16 +1339,21 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         text = "%s %s bp (%s sayfasında %s)" % (pkg, _tr(level, 1), conv.label, _tr(sheet, 1))
     else:
         text = "%s %s bp" % (pkg, _tr(level, 1))
+    coupons = []
     for lg, L, r, name, _ in results:
         verb = side_text(prod, lg.get("side")).capitalize()
         out_legs.append(_leg_out(mkt, ccy, "%s %s" % (verb, name), r,
                                  "%s %s%%" % (name, _tr(r["price_now"], 2)) if r["price_now"] is not None else name, prod, lg.get("side")))
+        coupons.append(_coupon_table(prod, "%s %s" % (verb, name), lg.get("side"), L, r, mkt.fixings.get(prod)))
     total = {"mtm": sum(r["mtm"] for _, _, r, _, _ in results), "accrued": sum(r["accrued"] for _, _, r, _, _ in results),
-             "carry": sum(r["carry"] for _, _, r, _, _ in results), "price_now": level, "price_text": text}
+             "carry": sum(r["carry"] for _, _, r, _, _ in results), "price_now": level, "price_text": text,
+             "coupon_info": _coupon_info(coupons)}
     tally: Dict[str, int] = {}
+    est: Dict[str, str] = {}
     for _, _, r, _, _ in results:
         for k, v in r["tally"].items():
             tally[k] = tally.get(k, 0) + v
+        est.update(r["est"])
     inputs.update({"level_bp": level, "traded_bp": traded_level, "sheet_bp": sheet,
                    "traded_sheet_bp": 2.0 * traded_level if structure == "fly" else None,
                    "dv01_net": sum(-r["dv01"] if L.sign > 0 else r["dv01"] for _, L, r, _, _ in results),
@@ -1259,18 +1361,67 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
                    "carry_accrual": sum(r["carry_accrual"] for _, _, r, _, _ in results),
                    "roll_1d": sum(r["roll"] for _, _, r, _, _ in results),
                    "legs_dv01": [r["dv01"] for _, _, r, _, _ in results], "fixings": tally,
-                   "notes": _fixing_notes(conv, tally, mkt.fixings.get(prod))})
+                   "notes": _fixing_notes(conv, est, mkt.fixings.get(prod)), "coupons": coupons})
     return _finish(mkt, t, ccy, total, inputs, out_legs)
 
 
-def _fixing_notes(conv: Conv, tally: Dict[str, int], fix: Optional[Fixings]) -> List[str]:
-    """What the realised part of the float leg was made of, when it was not all fixings."""
+def _coupon_table(prod: str, label: str, side: Any, lg: _Leg, r: Dict[str, Any], fix: Optional[Fixings]) -> Dict[str, Any]:
+    """One swap's coupons (``inputs["coupons"]``): what it is and its rule, every period of its schedule (``_swap_pv``'s
+    rows) and the ended ones' totals - realised (its ``accrued``: what the P&L counts), paid and due."""
+    conv = CONVS[prod]
+    ended = [x for x in r["rows"] if x["state"] in ("paid", "due")]
+    return {"label": label, "side": side, "side_text": side_text(prod, side), "notional": lg.notional,
+            "rate": round(lg.rate * 100.0, 10), "start": _iso(lg.start), "end": _iso(lg.end), "ccy": conv.ccy, "rule": conv.rule,
+            "pay_lag": conv.pay_lag, "float": fix.name if fix is not None and fix.name else conv.float_name,
+            "closed": {"date": _iso(lg.close_date), "rate": round(lg.close_rate * 100.0, 10)} if lg.close_date is not None else None,
+            "periods": r["rows"], "realised": r["accrued"],
+            "paid": sum(x["net"] for x in ended if x["state"] == "paid") + 0.0,
+            "due": sum(x["net"] for x in ended if x["state"] == "due") + 0.0, "estimated": sorted(r["est"])}
+
+
+def _coupon_info(tables: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """A trade's coupons in a line (the list's hint): how many periods have ended, the last of them (its net summed over
+    the legs ending that day, paid or due) and the next payment."""
+    ended = sorted((x for t in tables for x in t["periods"] if x["state"] in ("paid", "due")), key=lambda x: x["end"])
+    ahead = sorted((x for t in tables for x in t["periods"] if x["state"] in ("running", "future")), key=lambda x: x["pay"])
+    last = ended[-1] if ended else None
+    return {"n": len(ended),
+            "last": {"end": last["end"], "pay": last["pay"], "state": last["state"],
+                     "net": sum(x["net"] for x in ended if x["end"] == last["end"]) + 0.0} if last else None,
+            "next": {"end": ahead[0]["end"], "pay": ahead[0]["pay"]} if ahead else None}
+
+
+def _days_text(days: Sequence[str], limit: int = 4) -> str:
+    """Days as the desk reads them: runs of days a weekend apart at most "03.02.25–07.02.25", ``limit`` runs (then …)."""
+    runs: List[List[_dt.date]] = []
+    for d in sorted(_dt.date.fromisoformat(x) for x in days):
+        if runs and (d - runs[-1][1]).days <= 3:
+            runs[-1][1] = d
+        else:
+            runs.append([d, d])
+    parts = [_short(a) if a == b else "%s–%s" % (_short(a), _short(b)) for a, b in runs[:limit]]
+    return ", ".join(parts) + (" …" if len(runs) > limit else "")
+
+
+def _fixing_notes(conv: Conv, est: Dict[str, str], fix: Optional[Fixings]) -> List[str]:
+    """What the realised part of the float leg was made of when it was not all fixings - the days named: before the
+    history's first fixing (today's), missing inside it (the one before), after its last (not out yet: the last)."""
+    name = fix.name if fix is not None and fix.name else conv.float_name
+    by: Dict[str, List[str]] = {}
+    for d, how in est.items():
+        by.setdefault(how, []).append(d)
     out = []
-    if tally.get("none"):
-        out.append("%s fixingleri tarihçede yok: gerçekleşen %d gün bugünkü %s ile (eğri değil, yaklaşık)"
-                   % (conv.float_name, tally["none"], conv.float_name))
-    if tally.get("prev"):
-        out.append("%d günün %s fixing'i yok: önceki fixing'le" % (tally["prev"], conv.float_name))
+    if by.get("none"):
+        out.append("%s fixingleri tarihçede yok: gerçekleşen %d gün bugünkü %s ile (eğri değil, yaklaşık) - %s"
+                   % (name, len(by["none"]), name, _days_text(by["none"])))
+    if by.get("prev"):
+        out.append("%d günün %s fixing'i tarihçede yok: önceki fixing'le (yaklaşık) - %s" % (len(by["prev"]), name, _days_text(by["prev"])))
+    if by.get("pending"):
+        used = ""
+        if fix is not None and fix.last in fix.points:
+            used = " (%s %%%s)" % (_short(_dt.date.fromisoformat(fix.last)), _plain(fix.points[fix.last]))
+        why = "henüz yayımlanmadı (New York'ta ertesi iş günü 08:00)" if conv.product == "sofr" else "tarihçede henüz yok"
+        out.append("%s %s fixing'i %s: son fixing%s ile" % (name, _days_text(by["pending"]), why, used))
     return out
 
 
@@ -1294,20 +1445,32 @@ def side_text(prod: str, side: Any) -> str:
 
 
 def _leg_out(mkt: Market, ccy: str, label: str, r: Dict[str, Any], text: str, prod: str = "", side: Any = None) -> Dict[str, Any]:
+    """A leg as the page reads one: its MTM, carry and realised coupons (``accrued``: a leg's value is MTM + accrued, as
+    the trade's) in its currency, TL and USD - and the coupons as they ended (``coupon_flows``: [end, net] -
+    what a close kept before legs carried their coupons is read with)."""
     m_try, m_usd = _money(mkt, ccy, r["mtm"])
     c_try, c_usd = _money(mkt, ccy, r["carry"])
-    return {"label": label, "side": side, "side_text": side_text(prod, side), "mtm": r["mtm"], "mtm_try": m_try, "mtm_usd": m_usd,
-            "carry_1d": r["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "price_now": r.get("price_now"), "price_text": text}
+    a_try, a_usd = _money(mkt, ccy, r.get("accrued"))
+    out = {"label": label, "side": side, "side_text": side_text(prod, side), "ccy": ccy, "mtm": r["mtm"], "mtm_try": m_try,
+           "mtm_usd": m_usd, "carry_1d": r["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "accrued": r.get("accrued"),
+           "accrued_try": a_try, "accrued_usd": a_usd, "price_now": r.get("price_now"), "price_text": text}
+    if r.get("rows") is not None:
+        out["coupon_flows"] = [[x["end"], x["net"]] for x in r["rows"] if x["state"] in ("paid", "due")]
+    return out
 
 
 def _finish(mkt: Market, t: Dict[str, Any], ccy: str, total: Dict[str, Any], inputs: Dict[str, Any],
             legs: Optional[List[Dict[str, Any]]] = None, greeks: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     m_try, m_usd = _money(mkt, ccy, total["mtm"])
     c_try, c_usd = _money(mkt, ccy, total["carry"])
+    a_try, a_usd = _money(mkt, ccy, total.get("accrued"))
     out = {"ok": True, "why": None, "ccy": ccy, "mtm": total["mtm"], "mtm_try": m_try, "mtm_usd": m_usd,
            "carry_1d": total["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "accrued": total.get("accrued"),
+           "accrued_try": a_try, "accrued_usd": a_usd,
            "price_now": total.get("price_now"), "price_text": total.get("price_text") or "", "greeks": greeks, "inputs": inputs,
            "side": t.get("side"), "side_text": side_text(t.get("product", ""), t.get("side"))}
+    if total.get("coupon_info") is not None:
+        out["coupon_info"] = total["coupon_info"]
     if legs:
         out["legs"] = legs
     return out
@@ -1743,8 +1906,27 @@ def value(trade: Dict[str, Any], mkt: Market, asof: Any = None) -> Dict[str, Any
 def _failed(prod: str, why: str) -> Dict[str, Any]:
     ccy = {"ois": "TRY", "sofr": "USD", "dibs": "TRY"}.get(prod, "")
     return {"ok": False, "why": why, "ccy": ccy, "mtm": None, "mtm_try": None, "mtm_usd": None, "carry_1d": None,
-            "carry_1d_try": None, "carry_1d_usd": None, "accrued": None, "price_now": None, "price_text": "",
-            "greeks": None, "inputs": {}}
+            "carry_1d_try": None, "carry_1d_usd": None, "accrued": None, "accrued_try": None, "accrued_usd": None,
+            "price_now": None, "price_text": "", "greeks": None, "inputs": {}}
+
+
+def coupons(trade: Dict[str, Any], mkt: Market, asof: Any = None) -> Dict[str, Any]:
+    """A rate trade's coupons, as :func:`value` works them out (``inputs["coupons"]``): ``{ok, why, ccy, asof, legs,
+    realised, realised_try, realised_usd, notes, source}``.  ``legs``: each swap whose cash flows the trade is - the
+    trade itself (an outright, a meeting's period, an FRA: one forward-starting swap) or each leg of a spread / fly -
+    with its rule and every period of its schedule: dates, payment day (TRY at the period's end, USD two SIFMA business
+    days on), the fixed and the floating payment (the float compounded over the period from the history's fixings; +
+    received, − paid), the net, its state (paid / due / running - so far - / future) and the days of it not had by their
+    own fixing (``notes`` names them).  ``realised`` is the trade's ``accrued``: what its P&L counts beside the MTM."""
+    day = _day(asof) or (mkt.today if mkt is not None else None) or _dt.date.today()
+    prod = str((trade or {}).get("product") or "").strip().lower() if isinstance(trade, dict) else ""
+    v = value(trade, mkt, day)
+    inputs = v.get("inputs") or {}
+    why = v.get("why") if not v.get("ok") else (None if "coupons" in inputs else "kupon takvimi yalnız OIS / SOFR işlemlerinde")
+    src = (mkt.sources if mkt is not None else {}).get("tlref" if prod == "ois" else "sofr") or ""
+    return {"ok": why is None, "why": why, "ccy": v.get("ccy"), "asof": day.isoformat(), "legs": inputs.get("coupons") or [],
+            "realised": v.get("accrued"), "realised_try": v.get("accrued_try"), "realised_usd": v.get("accrued_usd"),
+            "notes": list(inputs.get("notes") or []), "source": src}
 
 
 # ---------------------------------------------------------------------------------------------- notional for a DV01
