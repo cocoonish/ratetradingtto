@@ -2041,8 +2041,9 @@ async function clipAfter(page, action) {
       && series.some((r) => r[2] === 'TYSOA Curncy' && r[7] === 'yedek kaynak')
       // (+ the quant package's: 22 pairs, the global drivers, the option surfaces, the VİOP page's five, the G10 universe's
       // own 22 - and its contracts: the six listed and 24 expired months, close / high / low, an expired one with its
-      // two-digit-year ticker beside)
-      && series.length === 118 + 143 + 3 * (6 + 24) + 3 * 24
+      // two-digit-year ticker beside; + the SOFR fixings of Trades' SOFR swaps, none recorded)
+      && series.length === 118 + 143 + 3 * (6 + 24) + 3 * 24 + 1
+      && series.some((r) => r[2] === 'SOFRRATE Index' && r[0] === 'SOFR fixing (Trades)' && r[7] === 'geçmiş yok')
       && series.some((r) => r[2] === 'USGG10YR Index' && r[0] === 'Quant'), { tlref: rowOf(series, 'TLREF'), rows: series.length });
     // the order of the pricing sources: for everyone, live pages and history alike
     const srcInputs = (curve) => page.evaluate((c) => [...document.querySelectorAll('#sources-table input[data-curve="' + c + '"]')].map((i) => i.value), curve);
