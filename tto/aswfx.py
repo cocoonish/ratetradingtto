@@ -41,7 +41,9 @@ at 1M–9M, its cross currency swaps (``xccy``) at 1Y (TRYSAQ1: the history keep
 takes this very swap as its offshore 12M; at one year an annual ACT/360 par rate is one period simple ACT/360, the FX
 swap's reading) and at 2Y–10Y (TRYSAQ2 … TRYSAQ10, as EK_FX); each the first source with a close (ICPL, then the
 workbook's BGN ticker; ``SeriesDef.merged``).  18M has no series (no TRYI18M is kept), and a day without a close of a
-tenor has none either: there the day's OIS quote stays, as a tenor without an FX price does today."""
+tenor has none either: there the day's OIS quote stays, as a tenor without an FX price does today.  A day without any
+offshore close has no offshore ASW (the page leaves its point and its cells empty), as today's ASW FX has none without an
+FX rate."""
 from __future__ import annotations
 
 import math

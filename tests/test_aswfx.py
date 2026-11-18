@@ -389,15 +389,15 @@ def test_today_is_the_asw_tables_asw_fx(hist):
     assert row[j + 3]["t"] == "%d / 16" % swapped
 
 
-def test_a_day_or_a_tenor_without_offshore_keeps_ois_and_is_reported(hist):
-    """No offshore close at all on a day: the row keeps its OIS quotes - its ASW on the offshore side is the OIS one - and
-    the table says 0 / 16 offshore; a tenor without a close (9M on another day), and 18M every day, keep that day's OIS
-    quote: 14 / 16, the cell's tip naming them."""
+def test_a_day_without_any_offshore_close_is_left_empty_and_a_missing_tenor_keeps_ois(hist):
+    """No offshore close at all on a day: no offshore ASW that day - its offshore cells are empty, "Offshore vade" says
+    0 / 16 ("o gün offshore kapanışı yok"); the chart leaves a gap there (below).  A tenor without a close (9M on another
+    day), and 18M every day, keep that day's OIS quote - the live rule: 14 / 16, the cell's tip naming them.  Today
+    without any FX rate in EK_FX (the ASW FX column empty too) is such a day as well."""
     svc, days, (none, no9, _) = hist
     _, info, rows = _hist_state(svc)
     r0, r9 = _row_of(days, none), _row_of(days, no9)
-    assert rows[r0]["quotes"] == rows[r0]["ois"] and info["n"][r0] == 0 and info["kinds"][r0] == [aswfx.OIS] * len(M)
-    assert rows[r0]["asw"] == rows[r0]["asw_ois"]
+    assert info["n"][r0] == 0 and info["kinds"][r0] == [aswfx.OIS] * len(M) and info["none"] == {r0}
     assert all(rows[r]["quotes"][M.index(18)] == rows[r]["ois"][M.index(18)] for r in rows)
     k9 = M.index(9)
     assert rows[r9]["quotes"][k9] == rows[r9]["ois"][k9] and info["n"][r9] == 14
@@ -408,20 +408,35 @@ def test_a_day_or_a_tenor_without_offshore_keeps_ois_and_is_reported(hist):
     assert [c["t"] for c in head[-4:]] == ["ASW 1 offshore", "ASW 2 offshore", "ASW 3 offshore", "Offshore vade"]
     count = {r: t["rows"][t["r"].index(r)][-1] for r in (r0, r9, aswfx.HIST_FIRST)}
     assert (count[r0]["t"], count[r9]["t"], count[aswfx.HIST_FIRST]["t"]) == ("0 / 16", "14 / 16", "15 / 16")
-    assert count[r0]["tip"] == "Offshore: yok · OIS: 1M 2M 3M 6M 9M 1Y 18M 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y"
+    assert count[r0]["tip"] == "o gün offshore kapanışı yok" and count[r0]["cls"] == "soft"
     assert count[r9]["tip"] == "Offshore: 1M 2M 3M 6M 1Y 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y · OIS: 9M 18M"
     shown = t["rows"][t["r"].index(r0)]
-    assert [c["t"] for c in shown[-4:-1]] == [c["t"] for c in shown[-7:-4]]             # (ASW 1–3 offshore = OIS)
+    assert [c.get("t") for c in shown[-4:-1]] == ["", "", ""] and not any("v" in c for c in shown[-4:-1])
+    assert any(c.get("v") is not None for c in shown[-7:-4])                            # (the OIS ASWs stand)
+    # today without an FX rate (no tenor priced in EK_FX): no offshore point today either
+    real = svc._asw_fx_calc
+    svc._asw_fx_calc = lambda book, user: (None, 0)
+    try:
+        assert svc.et.call(svc._asw_hist_fx, svc.books["asw"], None)[1]["none"] == {r0, aswfx.ROW}
+        svc.bump()                                                               # (the page made again)
+        today = {p["id"]: p for p in svc.view(None, "asw")["panels"]}["hist"]["data"]
+        today = today["rows"][today["r"].index(aswfx.ROW)]
+        assert [c.get("t") for c in today[-4:]] == ["", "", "", "0 / 16"] and today[-1]["tip"] == "bugün EK_FX'te FX faizi yok"
+    finally:
+        svc._asw_fx_calc = real
+        svc.bump()
 
 
 def test_the_history_chart_for_each_choice(hist):
     """The history chart, drawn as each user chooses (Parametreler's "Geçmiş grafiği", ASW!N3, or the chart's own small
     selector - the same cell): OIS by default - the workbook's chart as it was -, Offshore (the same chart on the offshore
-    calculation, each bond "· offshore") or İkisi (both: the OIS series, then the offshore ones dashed).  One user's
+    calculation, each bond "· offshore") or İkisi (both: the OIS series, then the offshore ones dashed).  A day without
+    any offshore close has no offshore point: a gap in the offshore line - the OIS line goes on through it.  One user's
     choice is theirs; anything but the three is refused.  A user whose only input is the choice reads everybody's
     offshore history (no calculation of their own for it)."""
     from tto.xl import numfmt
-    svc, days, _ = hist
+    from tto.xl.values import date_to_serial
+    svc, days, (none, _, _) = hist
     book = svc.books["asw"]
     spec = book.model.sheets[book.model.sheet_index["ASW"]].charts[1]
 
@@ -437,6 +452,10 @@ def test_the_history_chart_for_each_choice(hist):
 
     ali, veli = (svc.login(n)["user"] for n in ("asw geçmiş ali", "asw geçmiş veli"))
     ois, off = charts(ali)
+    gap = float(date_to_serial(dt.date.fromisoformat(none)))
+    off_data = [[None if x == gap else v for x, v in zip(s["x"], s["data"])] for s in off["series"]]
+    priced = [k for k, s in enumerate(ois["series"]) if type(s["data"][s["x"].index(gap)]) is float]
+    assert priced and all(type(off["series"][k]["data"][off["series"][k]["x"].index(gap)]) is float for k in priced)
     c = chart1(ali)
     assert c["pick"] == {"ref": "ASW!N3", "book": "asw", "value": "OIS", "options": ["OIS", "Offshore", "İkisi"], "default": "OIS"}
     assert c["data"] == ois and c["title"] == "ASW geçmişi (son nokta canlı)" and len(ois["series"]) == 3
@@ -446,14 +465,18 @@ def test_the_history_chart_for_each_choice(hist):
     assert c["pick"]["value"] == "Offshore" and c["title"] == "ASW geçmişi · offshore eğrisine göre (son nokta canlı)"
     assert [s["name"] for s in c["data"]["series"]] == ["%s · offshore" % (s["name"] or "Kâğıt %d" % (k + 1))
                                                         for k, s in enumerate(ois["series"])]
-    assert [s["data"] for s in c["data"]["series"]] == [s["data"] for s in off["series"]] != [s["data"] for s in ois["series"]]
+    assert [s["data"] for s in c["data"]["series"]] == off_data != [s["data"] for s in ois["series"]]
+    for k in priced:                                          # (the gap: that day only, the days around it drawn)
+        x, data = c["data"]["series"][k]["x"], c["data"]["series"][k]["data"]
+        i = x.index(gap)
+        assert data[i] is None and type(data[i - 1]) is float and type(data[i + 1]) is float
     assert "Offshore faizli gün: %d / %d" % (len(days) - 1, len(days)) in c["note"]
     assert chart1(veli)["pick"]["value"] == "OIS" and chart1(veli)["data"] == ois             # (ali's choice is ali's)
     assert (ali, svc.HIST_FX) not in book.engine.layers and ("", svc.HIST_FX) in book.engine.layers
     assert not svc.set_inputs(ali, "asw", [{"ref": "ASW!N3", "value": "ikisi"}])["errors"]
     c = chart1(ali)
     assert c["pick"]["value"] == "İkisi" and len(c["data"]["series"]) == 6
-    assert [s["data"] for s in c["data"]["series"]] == [s["data"] for s in ois["series"] + off["series"]]
+    assert [s["data"] for s in c["data"]["series"]] == [s["data"] for s in ois["series"]] + off_data
     assert [s.get("dash") for s in c["data"]["series"]] == [None] * 3 + [1] * 3
     assert [s["name"] for s in c["data"]["series"][:3]] == ["%s · OIS" % (s["name"] or "Kâğıt %d" % (k + 1))
                                                              for k, s in enumerate(ois["series"])]

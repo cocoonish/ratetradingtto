@@ -5683,15 +5683,18 @@ class Service(object):
         daily closes (no Bloomberg request), each tenor's series by ``aswfx.history_series`` (TRYI 1–9M FX swap
         implied, TRYSAQ 1Y and 2–10Y XCCY; ICPL, then BGN), each read by its own convention and given as the par quote
         of the sheet's convention with the same discount factor; a tenor without one (18M, a day without its close)
-        keeps that day's OIS quote.  Today's row (65) is the ASW FX column's: its quotes as :meth:`_asw_fx_calc` has
-        them.  The blocks are given as a whole (an array for each block's formula, ``aswfx.history_anchors`` - an
-        engine input), in a layer on top of the user's calculation: only what follows the swapped quotes is computed
-        there, and it is kept while the market moves (today's row follows it).
+        keeps that day's OIS quote.  A day without any offshore close has no offshore ASW at all (``info["none"]``: the
+        page leaves its point and its cells empty) - as today's ASW FX has none without an FX rate.  Today's row (65)
+        is the ASW FX column's: its quotes as :meth:`_asw_fx_calc` has them.  The blocks are given as a whole (an array
+        for each block's formula, ``aswfx.history_anchors`` - an engine input), in a layer on top of the user's
+        calculation: only what follows the swapped quotes is computed there, and it is kept while the market moves
+        (today's row follows it).
 
-        Returns ``(calc, info)``: ``info["n"]`` / ``["kinds"]`` the tenors offshore on each past row (row -> count /
-        each tenor's kind), ``["days"]`` the past days, ``["offshore"]`` those with an offshore rate, ``["today"]``
-        the tenors priced in EK_FX now.  ``(None, info)`` when the workbook has no such history."""
-        info: Dict[str, Any] = {"n": {}, "kinds": {}, "days": 0, "offshore": 0, "today": 0}
+        Returns ``(calc, info)``: ``info["n"]`` / ``["kinds"]`` / ``["day"]`` the tenors offshore on each past row (row
+        -> count / each tenor's kind / its day), ``["days"]`` the past days, ``["offshore"]`` those with an offshore
+        rate, ``["today"]`` the tenors priced in EK_FX now, ``["none"]`` the rows without any (today's: 65).
+        ``(None, info)`` when the workbook has no such history."""
+        info: Dict[str, Any] = {"n": {}, "kinds": {}, "day": {}, "days": 0, "offshore": 0, "today": 0, "none": set()}
         if "ASW" not in book.model.sheet_index or ex.FXC_SHEET not in book.model.sheet_index \
                 or any(x.startswith(ex.ASW_HIST_NAME + ":") for x in getattr(book, "left_out", ())):
             return None, info
@@ -5709,6 +5712,7 @@ class Service(object):
         ov.update(arrays)
         info.update(rows)
         info["today"] = swapped
+        info["none"] = {r for r, k in rows["n"].items() if not k} | (set() if swapped else {aswfx.ROW})
         return eng.layer((who, self.HIST_FX), base, ov), info
 
     def _asw_hist_arrays(self, book, base: Calc, who: str) -> Tuple[Dict[Tuple[int, int], Any], Dict[str, Any]]:
@@ -5740,7 +5744,7 @@ class Service(object):
         get = base.get
         days = [(r, d) for r, d in ((r, get(si, r, aswfx.HIST_DATE_COL)) for r in range(aswfx.HIST_FIRST, aswfx.HIST_LAST + 1))
                 if type(d) is float and 20000 < d < 80000]
-        info: Dict[str, Any] = {"n": {}, "kinds": {}, "days": len(days), "offshore": 0}
+        info: Dict[str, Any] = {"n": {}, "kinds": {}, "day": dict(days), "days": len(days), "offshore": 0}
         if not days:
             return {}, info
         lo, hi = (serial_to_date(x).isoformat() for x in (min(d for _, d in days), max(d for _, d in days)))
@@ -5806,8 +5810,9 @@ class Service(object):
                         p: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
         """The ASW history's chart as the user chose it (:meth:`_asw_hist_choice`): against OIS - the workbook's chart,
         as before -, against the offshore curve (the same chart on :meth:`_asw_hist_fx`) or both (the offshore
-        series dashed beside the OIS ones).  Returns the chart, the choice for the page's selector and a line on
-        the offshore days for the note."""
+        series dashed beside the OIS ones).  A day without any offshore close has no offshore point: a gap in the
+        offshore line.  Returns the chart, the choice for the page's selector and a line on the offshore days for the
+        note."""
         choices = ex.ASW_HIST_CHOICES
         choice = self._asw_hist_choice(book, calc)
         pick = {"ref": "ASW!%s" % (p.get("pick") or ex.ASW_HIST_PICK), "book": book.id, "value": choice,
@@ -5821,10 +5826,15 @@ class Service(object):
         fx = R.chart(fxh, spec, loc)
         both = choice == choices[2]
         name = lambda s, k: s.get("name") or "Kâğıt %d" % (k + 1)            # noqa: E731
+        # (the points by their day - the chart's x: a past row's, today's)
+        gaps = {info["day"][r] if r != aswfx.ROW else calc.get(book.model.sheet_index["ASW"], r, aswfx.HIST_DATE_COL)
+                for r in info["none"] if r == aswfx.ROW or r in info["day"]}
         for k, s in enumerate(fx["series"]):
             s["name"] = "%s · offshore" % name(s, k)
             if both:
                 s["dash"] = 1
+            if gaps and "x" in s:
+                s["data"] = [None if x in gaps else v for x, v in zip(s["x"], s["data"])]
         if both:
             for k, s in enumerate(ois["series"]):
                 s["name"] = "%s · OIS" % name(s, k)
@@ -5834,8 +5844,8 @@ class Service(object):
         if not info["days"]:
             line = "Offshore: geçmiş yok (Bloomberg geçmişi boş) - yalnız bugünkü nokta."
         else:
-            line = ("Offshore faizli gün: %d / %d (gün gün kaç vade: geçmiş tablosu); bugün EK_FX'te %d / %d vade fiyatlı."
-                    % (info["offshore"], info["days"], info["today"], len(aswfx.TENORS)))
+            line = ("Offshore faizli gün: %d / %d - offshore kapanışı olmayan gün çizilmez (gün gün kaç vade: geçmiş tablosu); "
+                    "bugün EK_FX'te %d / %d vade fiyatlı." % (info["offshore"], info["days"], info["today"], len(aswfx.TENORS)))
         return out, pick, line
 
     @staticmethod
@@ -5845,7 +5855,7 @@ class Service(object):
     def _asw_hist_fx_columns(self, book, user: Optional[str], R: Renderer, data: Dict[str, Any], loc) -> None:
         """The ASW history table's ASWs on the offshore curve beside the OIS ones (:meth:`_asw_hist_fx`): ASW 1–3 on it,
         and how many of the curve's 16 tenors were offshore that day (which ones: the cell's tip; today's row: the
-        tenors EK_FX prices now)."""
+        tenors EK_FX prices now).  A day without any offshore close: no offshore ASW (empty), 0 / 16."""
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows or "ASW" not in book.model.sheet_index:
             return
@@ -5854,8 +5864,8 @@ class Service(object):
         n = len(aswfx.TENORS)
         cols = [col_to_index(c) for c in "XYZ"]
         how = ("o günün offshore faizleriyle - panonun günlük geçmişinden: 1–9A TRYI FX swap ima, 1Y ve 2–10Y TRYSAQ XCCY; önce "
-               "ICPL, yoksa BGN. %s. 18A ve o gün kapanışı olmayan vade o günün OIS kotasıyla. Son satır canlı: ASW tablosunun "
-               "ASW FX ima değeri (%s)" % (self.FX_RATES_READ, self.ASW_FX_CURVE))
+               "ICPL, yoksa BGN. %s. 18A ve o gün kapanışı olmayan vade o günün OIS kotasıyla; o gün hiç offshore kapanış "
+               "yoksa boş. Son satır canlı: ASW tablosunun ASW FX ima değeri (%s)" % (self.FX_RATES_READ, self.ASW_FX_CURVE))
         head = [{"t": "ASW %d offshore" % (k + 1), "k": "s", "b": 1, "f": "hd",
                  "tip": "Kâğıt %d · ASW, offshore eğrisine göre: sayfanın kendi hesabı, OIS kotaları yerine %s" % (k + 1, how)}
                 for k in range(3)]
@@ -5871,6 +5881,12 @@ class Service(object):
             if fxh is None or not (r == aswfx.ROW or r in info["n"]):
                 rows[i].extend([dict(empty) for _ in range(4)])
                 continue
+            if r in info["none"]:
+                # no offshore close that day (today: no FX rate in EK_FX - the ASW FX column is empty too): no offshore ASW
+                rows[i].extend([dict(empty) for _ in cols] + [{
+                    "t": "0 / %d" % n, "k": "s", "al": "c", "cls": "soft",
+                    "tip": "o gün offshore kapanışı yok" if r != aswfx.ROW else "bugün EK_FX'te FX faizi yok"}])
+                continue
             cells = [R.cell(fxh, si, r, c, loc) for c in cols]
             if r == aswfx.ROW:
                 count = {"t": "%d / %d" % (info["today"], n), "k": "s", "al": "c",
@@ -5880,9 +5896,7 @@ class Service(object):
                 off = [labels[k] for k, kind in enumerate(kinds) if kind != aswfx.OIS]
                 own = [labels[k] for k, kind in enumerate(kinds) if kind == aswfx.OIS]
                 count = {"t": "%d / %d" % (info["n"][r], n), "k": "s", "al": "c",
-                         "tip": "Offshore: %s · OIS: %s" % (" ".join(off) or "yok", " ".join(own) or "yok")}
-                if not info["n"][r]:
-                    count["cls"] = "soft"
+                         "tip": "Offshore: %s · OIS: %s" % (" ".join(off), " ".join(own) or "yok")}
             rows[i].extend(cells + [count])
         data["c"] = list(data.get("c") or []) + ["ASW 1 off", "ASW 2 off", "ASW 3 off", "Off vade"]
         data["added"] = int(data.get("added") or 0) + 4
