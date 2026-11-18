@@ -158,14 +158,32 @@ linear in months:
 - **Read the formula first.** These cells used to be Bloomberg's `SETTLE_DT`. Read the cell's formula before saying
   where a date comes from.
 
-### Coupon conventions, taken from the workbooks (17–18.11.2026)
+### Broken-date TRY OIS: the short period comes first (19.11.2026)
+
+> "İlk olan kısa olan"
+
+The desk was asked where a broken-date TRY OIS puts its short coupon period; Murex puts it first. Coupons are counted
+back from maturity every 3 months, so the first period is the short one. All three places now agree:
+
+| Where | Code |
+|---|---|
+| Trades | `tradevalue.CONVS["ois"]`, anchor `"end"` (it was `"start"`, short period last, until 19.11.2026) |
+| Fiyatlama | `pricing.coupons` |
+| MASA's broken-date block | `MASA!BL193`: `WORKDAY(EDATE(end, −3k) − 1, 1, TRY)` |
+
+A trade entered as a tenor is dated on its own grid from the start (`EDATE(start, m − 3k)`):
+- whole quarters give Motor's own dates (`Motor!B88`), unchanged;
+- 13M gets a 1M first period.
+
+Tests: `tests/test_tradevalue.py` - `test_schedules_of_a_tenor_and_of_a_broken_date`,
+`test_trades_and_fiyatlama_date_a_broken_try_ois_alike`.
+
+### Coupon conventions, taken from the workbooks (17–19.11.2026)
 
 - **TRY OIS:**
   - ACT/365, fixed against TLREF compounded;
-  - one payment up to 3M, then quarterly coupons;
-  - Trades counts the quarters from the start (`Motor!B88`) and pays at period end;
-  - Fiyatlama and MASA's broken-date block count back from maturity, short period first.
-  - Both rules give the same dates for a tenor quoted from spot. For a broken date, check which rule a feature uses.
+  - one payment up to 3M, then quarterly coupons counted back from maturity, the short period first (above);
+  - paid at period end.
 - **SOFR OIS:**
   - ACT/360;
   - one payment up to 1Y, then annual coupons counted back from the end, short period first;

@@ -229,9 +229,37 @@ def test_schedules_of_a_tenor_and_of_a_broken_date():
     # ... a broken end date's back from the end, the first period short
     assert tv.schedule(D(2026, 6, 17), D(2028, 6, 30), usd, ()) == [(D(2026, 6, 17), D(2026, 6, 30)),
                                                                      (D(2026, 6, 30), D(2027, 6, 30)), (D(2027, 6, 30), D(2028, 6, 30))]
-    # TRY: one payment up to 3M, then every 3 months from the start, the last period to the end date
+    # TRY: one payment up to 3M, then every 3 months back from the end, the first period short (the desk, 19.11.2026:
+    # "İlk olan kısa olan" - MASA's broken-date block) ...
     assert tv.schedule(D(2026, 11, 4), D(2027, 2, 4), try_, ()) == [(D(2026, 11, 4), D(2027, 2, 4))]
-    assert tv.schedule(D(2026, 11, 4), D(2027, 4, 20), try_, ()) == [(D(2026, 11, 4), D(2027, 2, 4)), (D(2027, 2, 4), D(2027, 4, 20))]
+    assert tv.schedule(D(2026, 11, 4), D(2027, 4, 20), try_, ()) == [(D(2026, 11, 4), D(2027, 1, 20)), (D(2027, 1, 20), D(2027, 4, 20))]
+    # ... a tenor on its grid from the start: whole quarters Motor's own dates (as before), 13M the 1M period first
+    assert tv.schedule(D(2026, 11, 4), D(2027, 11, 4), try_, (), months=12) == [
+        (D(2026, 11, 4), D(2027, 2, 4)), (D(2027, 2, 4), D(2027, 5, 4)), (D(2027, 5, 4), D(2027, 8, 4)), (D(2027, 8, 4), D(2027, 11, 4))]
+    assert [b for _, b in tv.schedule(D(2026, 11, 4), D(2027, 12, 6), try_, (), months=13)] == [
+        D(2026, 12, 4), D(2027, 3, 4), D(2027, 6, 4), D(2027, 9, 6), D(2027, 12, 6)]
+
+
+def test_trades_and_fiyatlama_date_a_broken_try_ois_alike():
+    """A TRY OIS to a broken date: Trades' periods (``tv.schedule``) end where Fiyatlama's payments are
+    (``pricing.coupons``) - both back from the end, every 3 months, rolled to the next TRY business day, the first period
+    short (the desk, 19.11.2026: "İlk olan kısa olan").  The holidays move some of them (19.05.2027; a Sunday's coupon)."""
+    from tto import pricing as pr
+    from tto.xl.values import date_to_serial, serial_to_date
+    hol = {D(2027, 1, 1), D(2027, 4, 23), D(2027, 5, 19), D(2027, 7, 15), D(2027, 10, 29)}
+    hol_serials = frozenset(float(date_to_serial(d)) for d in hol)
+    start = D(2026, 11, 4)
+    s0 = float(date_to_serial(start))
+    by_hand = {D(2027, 4, 20): [D(2027, 1, 20), D(2027, 4, 20)],
+               D(2027, 8, 19): [D(2026, 11, 19), D(2027, 2, 19), D(2027, 5, 20), D(2027, 8, 19)],
+               D(2028, 1, 19): [D(2027, 1, 19), D(2027, 4, 19), D(2027, 7, 19), D(2027, 10, 19), D(2028, 1, 19)],
+               D(2028, 7, 18): [D(2027, 1, 18), D(2027, 4, 19), D(2027, 7, 19), D(2027, 10, 18), D(2028, 1, 18),
+                                D(2028, 4, 18), D(2028, 7, 18)]}
+    for end, ends in by_hand.items():
+        periods = tv.schedule(start, end, tv.CONVS["ois"], hol)
+        assert [b for _, b in periods] == ends, end
+        assert [serial_to_date(x) for x in pr.coupons(s0, ("d", float(date_to_serial(end))), s0, 3, hol_serials)] == ends, end
+        assert periods[0][0] == start and periods[0][1] - start < periods[1][1] - periods[1][0], end      # (short first)
 
 
 def test_a_swap_closed_inside_a_period():

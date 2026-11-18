@@ -42,8 +42,10 @@ Per product (each one's market, conventions and the numbers that went in are in 
   A past day the history does not have - before its first fixing (today's then), missing inside it, after its last (not
   out yet: SOFR comes out the next business day at 08:00 New York; the last fixing then) - is estimated and
   ``inputs["notes"]`` names the days.  Conventions are the workbooks' own: TRY ACT/365, a single payment up to 3
-  months, then quarterly coupons counted from the start (Motor!B88: ``WORKDAY(EDATE(start, n) − 1, 1, TRY)``), paid at
-  the period's end; USD ACT/360, single payment up to 1 year, then annual coupons counted back from the end (a short
+  months, then quarterly coupons counted back from the end, the first period short (the desk, 19.11.2026: "İlk olan kısa olan" -
+  as MASA's broken-date block, BL193: ``WORKDAY(EDATE(end, −3k) − 1, 1, TRY)``; a trade entered as a tenor on its grid
+  from the start, ``EDATE(start, m − 3k)``: in whole quarters Motor's own dates, Motor!B88), paid at the period's end;
+  USD ACT/360, single payment up to 1 year, then annual coupons counted back from the end (a short
   first period, as SOFR_FOMC!AV64), modified following on the SIFMA list, paid two SIFMA business days after the
   period's end (the market's lag; the bootstrap - and the value - discount at the end).  *Accrued* = the net
   settlement of every period ended by today (realised: paid, or due within the lag); ``inputs["coupons"]`` has each
@@ -263,8 +265,9 @@ class Conv(object):
 #: block, "Ödeme" BL193, pays at the end) -; USD two SIFMA business days after it, the SOFR OIS market's payment lag (no
 #: workbook has one: SOFR_FOMC's bootstrap discounts at the period's end, and so does the valuation - the lag dates the
 #: payment, it does not move the value)
-CONVS = {"ois": Conv("ois", "TRY", 365.0, 3, 3, "following", "start", ("TRY",), 1, "TLREF", "OIS", "MPC", 0,
-                     "ACT/365 · 3 aya kadar tek ödeme, sonra başlangıçtan 3 ayda bir kupon · ödeme dönem sonunda"),
+CONVS = {"ois": Conv("ois", "TRY", 365.0, 3, 3, "following", "end", ("TRY",), 1, "TLREF", "OIS", "MPC", 0,
+                     "ACT/365 · 3 aya kadar tek ödeme, sonra vadeden geriye 3 ayda bir kupon (ilk dönem kısa) · "
+                     "ödeme dönem sonunda"),
          "sofr": Conv("sofr", "USD", 360.0, 12, 12, "modfol", "end", ("SIFMA",), 2, "SOFR", "SOFR", "FOMC", 2,
                       "ACT/360 · 1 yıla kadar tek ödeme, sonra yıllık kupon (bitişten geriye, ilk dönem kısa) · "
                       "ödeme dönem sonundan 2 iş günü sonra (SIFMA)")}
@@ -292,8 +295,11 @@ def tenor_months(tenor: Any) -> Optional[int]:
 
 def schedule(start: _dt.date, end: _dt.date, conv: Conv, hol: Any, months: Optional[int] = None) -> List[Tuple[_dt.date, _dt.date]]:
     """The periods of a fixed-for-overnight swap from ``start`` to ``end`` (payment at each period's end): one up to
-    ``conv.single`` months, else every ``conv.coupon`` months - TRY from the start forward (the last period ends at the
-    end date), USD back from the end (the first one short).  ``months``: the tenor, when the trade was entered as one."""
+    ``conv.single`` months, else every ``conv.coupon`` months - back from the end, the first one short (TRY: the desk,
+    19.11.2026, as MASA's broken-date block; USD: the SOFR book), or from the start forward for a convention anchored
+    there (``conv.anchor == "start"``; none is now).  ``months``: the tenor, when the trade was entered as one - its
+    coupons are then on its own grid from the start, ``EDATE(start, m − coupon·k)`` (a whole number of periods: the
+    same dates both ways)."""
     if not end > start:
         return []
     first = _roll(conv, add_months(start, conv.single), hol)
@@ -310,8 +316,9 @@ def schedule(start: _dt.date, end: _dt.date, conv: Conv, hol: Any, months: Optio
                 dates.append(d)
             k += 1
     else:
-        # a tenor's coupons as the SOFR book dates them (SOFR_FOMC!AV64: EDATE(spot, m − 12k), modified following);
-        # a broken end date's back from the end itself (the first period short)
+        # a tenor's coupons on its grid from the start (SOFR_FOMC!AV64: EDATE(spot, m − 12k), modified following; TRY:
+        # Motor's quarters when m is whole quarters); a broken end date's back from the end itself, the first period
+        # short (TRY: MASA!BL193, WORKDAY(EDATE(end, −3k) − 1, 1, TRY))
         k = 1
         while k < 200:
             raw = add_months(start, months - conv.coupon * k) if months is not None else add_months(end, -conv.coupon * k)

@@ -56,7 +56,8 @@ The desk has two TRY discount curves. **They are not interchangeable** ("OIS ile
 - **18M offshore is computed, never a quote.** It comes off the XCCY curve on the viewer's interpolation setting, with
   coupons of 6M then 12M counted back from maturity.
 - **TRY OIS** is `TYSO…` quotes (GFOF, then the plain ticker), TLREF, ACT/365.
-  - One payment up to 3M, then quarterly.
+  - One payment up to 3M, then quarterly, counted back from maturity: on a broken date the **short period comes first**
+    (Trades, Fiyatlama and `MASA!BL193` alike).
   - Motor's bootstrap (`BOOT_GUN` / `BOOT_LNDF`), counted from `OIS_MAIN!B2` (T+1 on the TRY list).
 - **The ASW sheet has its own OIS curve** (`ASW!C65:R65`): up to 3M simple ACT/365, then quarterly ACT/365 par.
   - **ASW FX** is that sheet rebuilt from EK_FX's offshore rates.

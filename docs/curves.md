@@ -212,8 +212,10 @@ bump and NPV at a typed price.
 
 **TRY OIS:**
 - Discounted on `BOOT_GUN` / `BOOT_LNDF`, or the user's PPK curve (`FOLLOW_CURVE`).
-- ACT/365. One payment up to 3M, then quarterly coupons **counted forward from the start** (`Motor!B88`), paid at
-  period end.
+- ACT/365. One payment up to 3M, then quarterly coupons **counted back from maturity, the short period first**, paid
+  at period end. The desk decided this on 19.11.2026, and it matches Fiyatlama and `MASA!BL193`.
+- A trade entered as a tenor is dated on its grid from the start (`EDATE(start, m − 3k)`): whole quarters give Motor's
+  own dates (`Motor!B88`).
 - The float leg compounds TLREF fixings (`BISTTREF Index`).
 
 **SOFR:**
@@ -273,12 +275,9 @@ side, ask the desk first.
 
 ## Known differences - read before changing
 
-1. **TRY OIS coupon dates.** On a broken date the two features put the short period at opposite ends:
-   - Trades counts quarters **forward from the start** (`Motor!B88`), so the short period is last.
-   - Fiyatlama and MASA's broken-date block count **back from maturity**, so the short period is first.
-
-   Both give the same dates for a tenor quoted from spot. Which rule Murex uses for broken-date TRY OIS is a question
-   for the desk.
+1. **TRY OIS coupon dates: settled.** Until 19.11.2026 Trades put a broken date's short period last. The desk answered
+   "İlk olan kısa olan", so Trades, Fiyatlama and `MASA!BL193` now all count back from maturity with the short period
+   first. `test_trades_and_fiyatlama_date_a_broken_try_ois_alike` holds them together.
 2. **ASW FX and PPK.** The ASW FX sheet curve stays Bootstrap-like for a PPK user; only its 18M follows the setting
    (see above). The plain ASW column follows the setting.
 3. **Fallback A shows in replay only.** The replay file (the desk's Excel saved on 03.11.2026) has `TRYSAQ6–10` as
