@@ -912,12 +912,14 @@ def _constant_read_by(book, cells):
 
 
 def _page_cells(book, page):
+    """The sheet cells a page shows (a table's columns made by the dashboard - its last ``added`` ones - hold no cell)."""
     out = set()
     for p in page["panels"]:
         d = p.get("data") or {}
         if d.get("sheet") in book.model.sheet_index and d.get("r"):
             si = book.model.sheet_index[d["sheet"]]
-            out.update((si, r * COLS + parse_a1(c + "1") % COLS) for r in d["r"] for c in d["c"])
+            cols = d["c"][:len(d["c"]) - int(d.get("added") or 0)]
+            out.update((si, r * COLS + parse_a1(c + "1") % COLS) for r in d["r"] for c in cols)
     return out
 
 
