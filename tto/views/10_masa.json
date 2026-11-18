@@ -451,6 +451,7 @@
    "title": "KIRIK VADE & KARŞILIK  ·  forward ↔ basit ↔ OIS 3M ↔ XCCY yıllık  (piyasa = eğrilerden mid; sarı = girdi)",
    "range": "B170:N185",
    "hidden": false,
+   "ppk": "broken",
    "client_quote": {"pair": "USDTRY", "title": "forward", "start": "Forward!I2", "end": "C171", "days": "E171", "spot": "N171",
                     "outright": "G173", "points": "G174",
                     "try": {"src": "G175", "label": "TRY basit % (ACT/360)", "label_en": "TRY simple rate % (ACT/360)"},

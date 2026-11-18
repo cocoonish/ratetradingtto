@@ -1,15 +1,20 @@
 """TRY rates two ways (18.11.2026; a counterparty told the desk FRA prices can differ "by the interpolation choice"):
 Bootstrap - today's curve, also Murex's MTM - and PPK basamak - TLREF flat between PPK meetings, the PPK solver's implied
 path ("MPC ima") shifted flat between successive quoted maturities so that it reprices the very quotes the bootstrap
-is built from.  ``tto/ppkcurve.py`` on its own."""
+is built from.  ``tto/ppkcurve.py`` on its own; both ways against the workbook (the bootstrap and MPC ima exactly as the
+sheet has them, every quote repriced); and where the desk sees them side by side: OIS · PPK's FRA lists, Günlük
+İşlemler's FRA quote and MASA's broken-date block (KIRIK VADE & KARŞILIK)."""
 from __future__ import annotations
 
+import datetime as dt
 import math
 
 import pytest
 
+from conftest import cell, make_service
 from tto import ppkcurve as pk
 from tto.xl.errors import XlError
+from tto.xl.values import serial_to_date
 
 
 def calendar(days: int, monday: int = 0, holidays=()) -> list:
@@ -139,3 +144,199 @@ def test_calibration_reprices_every_quote_and_keeps_tlref_flat_between_meetings(
     assert pk.calibrate(shape, list(reversed(quotes)))[0].df(500.0) == pytest.approx(ppk.df(500.0), abs=1e-15)
     with pytest.raises(ValueError):
         pk.calibrate(shape, [quotes[0], quotes[0]._replace(name="1M bis", rate=0.5)])
+
+
+# ================================================================================================== the workbook
+def curves(svc, user=None):
+    book = svc.books["tto"]
+    return svc.et.call(lambda: svc._try_curves(book, svc._calc(user, book)))
+
+
+def getter(svc, user=None):
+    book = svc.books["tto"]
+    idx = book.model.sheet_index
+
+    def get(sheet, r, c):
+        return svc.et.call(lambda: svc._calc(user, book).get(idx[sheet], r, c))
+    return get
+
+
+def offshore(svc, user=None):
+    """The offshore curve as the sheet has it (Forward!AK124:AK143 days, AM124:AM143 ln DF)."""
+    return pk.LogLinear([cell(svc, "Forward!AK%d" % r, user) for r in range(124, 144)],
+                        [cell(svc, "Forward!AM%d" % r, user) for r in range(124, 144)])
+
+
+def test_the_bootstrap_and_mpc_ima_are_the_sheets(service):
+    """Bootstrap untouched: read as the sheet has it, the FRA lists' market comes back to the last digit; MPC ima - the
+    PPK steps' shape - is Motor's "DF ima" column and MASA's MPC ima row."""
+    cv = curves(service)
+    assert not cv["errors"]
+    boot, shape, grid = cv["boot"], cv["shape"], cv["grid"]
+    assert len(grid.days) == 40
+    for k, d in enumerate(grid.days):
+        assert boot.df(d) == pytest.approx(cell(service, "Motor!O%d" % (139 + k)), abs=1e-14)        # DF Bootstrap
+        assert shape.df(d) == pytest.approx(cell(service, "Motor!L%d" % (139 + k)), abs=1e-14)       # DF ima (1/G_ima)
+    for r in range(336, 439):
+        m1, m2 = cell(service, "OIS_MAIN!M%d" % r), cell(service, "OIS_MAIN!N%d" % r)
+        assert pk.fra(boot, grid, int(m1), int(m2)) == pytest.approx(cell(service, "OIS_MAIN!B%d" % r), abs=1e-12)
+    k60, m60 = cell(service, "MASA!K60"), cell(service, "MASA!M60")
+    assert pk.forward(shape, k60, m60) == pytest.approx(cell(service, "MASA!C62"), abs=1e-13)        # MPC ima
+    assert pk.forward(boot, k60, m60) == pytest.approx(cell(service, "MASA!C67"), abs=1e-13)         # Bootstrap
+
+
+def test_the_ppk_curves_reprice_every_quote(service):
+    cv = curves(service)
+    quoted = [cell(service, "Motor!B%d" % r) for r in range(306, 322)]                  # the quotes' copy (no 15M / 21M)
+    assert len(cv["quotes"]) == sum(type(q) is float for q in quoted) >= 12
+    for q in cv["quotes"]:
+        assert pk.par(cv["ppk"], q.pays, q.accruals) == pytest.approx(q.rate, abs=1e-12)
+        assert pk.par(cv["boot"], q.pays, q.accruals) == pytest.approx(q.rate, abs=1e-12)          # (the same swaps)
+    assert all(abs(x["after_bp"]) < 1e-6 for x in cv["report"])
+    assert {d for d, _ in cv["ppk"].steps()} <= set(cv["shape"].knots) | {q.end for q in cv["quotes"]}
+    # offshore: the offshore curve and its PPK twin both reprice the offshore quotes by their own conventions
+    off = offshore(service)
+    assert len(cv["off_quotes"]) >= 10
+    for q in cv["off_quotes"]:
+        assert pk.par(cv["off_ppk"], q.pays, q.accruals) == pytest.approx(q.rate, abs=1e-12)
+        assert pk.par(off, q.pays, q.accruals) == pytest.approx(q.rate, abs=1e-10)
+
+
+def test_the_fra_lists_both_ways(service):
+    u = service.login("PPK FRA listesi")["user"]
+    ps = {p["id"]: p for p in service.view(u, "ois")["panels"]}
+    cv = curves(service)
+    tables = {}
+    for pid, head, mcol in (("B21", 335, "B"), ("B11", 65, "C")):
+        d = ps[pid]["data"]
+        assert d["c"][-4:] == ["PPK basamak", "PPK fark", "Başl. kova", "Bitiş kova"] and d["added"] == 4
+        rows = {r: row for r, row in zip(d["r"], d["rows"])}
+        assert [c["t"] for c in rows[head][-4:-2]] == ["PPK basamak", "PPK − piyasa (bp)"]
+        assert "TLREF toplantılar arasında sabit, kotalara aynen oturur" in rows[head][-4]["tip"]
+        assert "Bootstrap (Murex) = bugünkü eğri, Murex'in MTM'i" in rows[head][d["c"].index(mcol)]["tip"]
+        tables[pid] = rows
+    diff = {}
+    for r in range(336, 439):
+        m1, m2, market = (cell(service, "OIS_MAIN!%s%d" % (c, r)) for c in "MNB")
+        want = pk.fra(cv["ppk"], cv["grid"], int(m1), int(m2))
+        value, bp = tables["B21"][r][-4], tables["B21"][r][-3]
+        assert value["v"] == pytest.approx(want, abs=1e-15) and bp["v"] == pytest.approx((want - market) * 1e4, abs=1e-9)
+        diff[(int(m1), int(m2))] = bp["v"]
+    # where the two ways meet: FRAs whose ends are quoted maturities (3M ↔ 1Y) the same, joining 1Y / 18M / 2Y within a
+    # fraction of a bp; between two quotes they part
+    for m in ((0, 3), (3, 6), (6, 9), (9, 12)):
+        assert abs(diff[m]) < 1e-6
+    for m in ((12, 18), (12, 24), (18, 24)):
+        if m in diff:
+            assert abs(diff[m]) < 0.5
+    names = {cell(service, "OIS_MAIN!A%d" % r): r for r in range(336, 439)}
+    checked = 0
+    for r in range(66, 81):
+        label = cell(service, "OIS_MAIN!B%d" % r)
+        if label in names:
+            assert tables["B11"][r][-4]["v"] == tables["B21"][names[label]][-4]["v"]
+            assert tables["B11"][r][-3]["v"] == pytest.approx(tables["B21"][names[label]][-3]["v"], abs=1e-9)
+            checked += 1
+    assert checked >= 10
+
+
+def test_the_fra_quote_both_ways(service):
+    """Günlük İşlemler's FRA quote: the market and the cost as they were (the bootstrap), and beside them the mid on the
+    PPK steps and the cost against it (same sign as the cost: + paid away)."""
+    u = service.login("PPK FRA kotasyonu")["user"]
+    cv = curves(service)
+    names = {cell(service, "OIS_MAIN!A%d" % r): r for r in range(336, 439)}
+    for side, sign in (("RECEIVE", 1.0), ("PAY", -1.0)):
+        q = service.quote_ois(u, {"strategy": "fra", "side": side, "start_months": 12.0, "end_months": 15.0, "level": "35,10"})
+        info, level = q["info"], q["level"]
+        ppk = pk.fra(cv["ppk"], cv["grid"], 12, 15)
+        assert info["market"] == pytest.approx(cell(service, "OIS_MAIN!B%d" % names["1Y3M"]), abs=1e-12)
+        assert info["cost_bp"] == pytest.approx(sign * (info["market"] - level) * 1e4, abs=1e-9)
+        assert info["market_ppk"] == pytest.approx(ppk, abs=1e-15)
+        assert info["cost_bp_ppk"] == pytest.approx(sign * (ppk - level) * 1e4, abs=1e-9)
+    q = service.quote_ois(u, {"strategy": "fra", "side": "PAY", "start_months": 3.0, "end_months": 6.0, "level": "35,10"})
+    assert q["info"]["market_ppk"] == pytest.approx(q["info"]["market"], abs=1e-12)            # between two quotes' ends
+
+
+def b22(svc, user):
+    p = next(p for p in svc.view(user, "masa")["panels"] if p["id"] == "B22")
+    return p, {r: row for r, row in zip(p["data"]["r"], p["data"]["rows"])}
+
+
+SCALE = {173: 1e4, 174: 1.0, 175: 1e4, 176: 1e4, 177: 1e4, 178: 1e4, 179: 1e4}
+
+
+def test_the_broken_date_block_both_ways(service):
+    u = service.login("PPK kırık vade")["user"]
+    p, rows = b22(service, u)
+    assert p["data"]["c"][-2:] == ["PPK basamak", "PPK fark"] and p["data"]["added"] == 2 and p.get("copyable")
+    assert [c["t"] for c in rows[172][-2:]] == ["PPK basamak", "PPK − piyasa"]
+    cv = curves(service, u)
+    get = getter(service, u)
+    # on the curves the block reads itself the same rows are the block's market: a difference is the curve's alone
+    same = pk.broken(get, cv["boot"], offshore(service, u))
+    got = pk.broken(get, cv["ppk"], cv["off_ppk"])
+    assert set(same) == set(got) == set(SCALE)
+    for r, scale in SCALE.items():
+        market = cell(service, "MASA!F%d" % r, u)
+        assert same[r] == pytest.approx(market, rel=1e-13)
+        assert rows[r][-2]["v"] == pytest.approx(got[r], rel=1e-13)
+        assert rows[r][-1]["v"] == pytest.approx((got[r] - market) * scale, abs=1e-6)
+    # at the offshore curve's 1Y quote's day (TRYSAQ1) both ways agree on every offshore row; between quotes they do not
+    s0 = cell(service, "MASA!BL171", u)
+    one_year = next(q.end for q in cv["off_quotes"] if q.name.startswith("XCCY"))
+    for days, equal in ((one_year, True), (one_year + 459.0, False)):
+        text = serial_to_date(s0 + days).strftime("%d.%m.%Y")
+        assert service.set_inputs(u, "tto", [{"ref": "MASA!C171", "value": text}])["errors"] == []
+        _, rows = b22(service, u)
+        for r in (173, 175, 177, 179):
+            market = cell(service, "MASA!F%d" % r, u)
+            assert type(market) is float and type(rows[r][-2]["v"]) is float
+            if equal:
+                assert rows[r][-2]["v"] == pytest.approx(market, rel=1e-12), r
+            else:
+                assert abs(rows[r][-2]["v"] - market) > 1e-7 * abs(market), r
+    # a temporary copy of the block ("Geçici kopya aç") prices both ways at its own date
+    cp = service.copy_action(u, "open", {"view": "masa", "panel": "B22"})["copy"]
+    try:
+        text = serial_to_date(s0 + 400.0).strftime("%d.%m.%Y")
+        assert service.copy_action(u, "inputs", {"copy": cp["id"], "items": [{"ref": "MASA!C171", "value": text}]})["errors"] == []
+        res = service.view(u, "masa")
+        copy = next(p for p in res["panels"] if p["id"] == cp["pid"])
+        crows = {r: row for r, row in zip(copy["data"]["r"], copy["data"]["rows"])}
+        _, rows = b22(service, u)
+        f = copy["data"]["c"].index("F")
+        assert copy["data"]["c"][-2:] == ["PPK basamak", "PPK fark"]
+        for r in (175, 178, 179):
+            assert crows[r][-2]["v"] != rows[r][-2]["v"]                                 # (another date than the table's)
+            assert crows[r][-1]["v"] == pytest.approx((crows[r][-2]["v"] - crows[r][f]["v"]) * 1e4, abs=1e-6)
+    finally:
+        service.copy_action(u, "close", {"copy": cp["id"]})
+        service.reset_inputs(u, "tto")
+
+
+def test_on_the_replay_day(tmp_path):
+    """The day the desk asked on (the replay, 03.11.2026): a 12x15 FRA 70 bp lower on the PPK steps than on the
+    bootstrap - MPC ima's own −70.0 bp before the calibration, −70.7 after -, the 15x18 ~80 bp higher, the 12x18 the
+    same; the calibration shifts within ±11 bp (MPC ima misses no OIS quote by 1 bp); a broken date between two XCCY
+    quotes (spot + 2Y3M) apart, at the 2Y XCCY quote's day the same."""
+    svc = make_service(tmp_path)
+    try:
+        cv = curves(svc)
+        names = {cell(svc, "OIS_MAIN!A%d" % r): r for r in range(336, 439)}
+        fra = lambda c, m1, m2: pk.fra(c, cv["grid"], m1, m2)                            # noqa: E731
+        bp = lambda c, m1, m2, name: (fra(c, m1, m2) - cell(svc, "OIS_MAIN!B%d" % names[name])) * 1e4   # noqa: E731
+        assert -70.5 < bp(cv["shape"], 12, 15, "1Y3M") < -69.5
+        assert -71.5 < bp(cv["ppk"], 12, 15, "1Y3M") < -70.0
+        assert 75.0 < bp(cv["ppk"], 15, 18, "15M3M") < 82.0
+        assert abs(bp(cv["ppk"], 12, 18, "1Y6M")) < 0.1
+        assert max(abs(x["miss_bp"]) for x in cv["report"]) < 1.0
+        assert max(abs(x["shift_bp"]) for x in cv["report"]) < 11.0
+        u = svc.login("PPK replay")["user"]
+        s0 = cell(svc, "MASA!BL171", u)
+        for when, lo, hi in ((dt.date(2029, 2, 5), 0.5, 2.0), (serial_to_date(s0 + 731.0), -1e-9, 1e-9)):
+            assert svc.set_inputs(u, "tto", [{"ref": "MASA!C171", "value": when.strftime("%d.%m.%Y")}])["errors"] == []
+            _, rows = b22(svc, u)
+            assert lo < rows[179][-1]["v"] < hi, (when, rows[179][-1])                   # XCCY, PPK − offshore (bp)
+    finally:
+        svc.stop()

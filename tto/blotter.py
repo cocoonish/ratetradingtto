@@ -11,8 +11,9 @@ import bisect
 import datetime as _dt
 import math
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from . import ppkcurve as pk
 from .xl.engine import Calc
 from .xl.errors import XlError
 from .xl.model import COLS, parse_a1
@@ -327,12 +328,15 @@ def entered_as(t: Dict[str, Any]) -> Tuple[str, Optional[float], str]:
 class OisMarket(object):
     """Par rates and annuities of the TRY OIS curve, read from OIS_MAIN / Motor through the engine."""
 
-    def __init__(self, book, calc, overlay: Optional[Dict[Tuple[int, int], Any]] = None):
+    def __init__(self, book, calc, overlay: Optional[Dict[Tuple[int, int], Any]] = None,
+                 curves: Optional[Callable[[], Optional[Dict[str, Any]]]] = None):
         self.book = book
         self.calc = calc
         self.overlay = dict(overlay or {})      # the user's own inputs, for what is priced with a date typed in
         self._fn_cache: Dict[str, Any] = {}
         self._mpc: Optional[Dict[str, Any]] = None
+        self._curves_of = curves                # the TRY curves both ways as the service keeps them (none: read here)
+        self._curves: Optional[Dict[str, Any]] = None
 
     def value(self, ref: str) -> Any:
         si, rc = self.book.cell(ref)
@@ -414,6 +418,24 @@ class OisMarket(object):
         a1 = self.annuity_months(start)
         start_par = (1.0 - self.df_months(start)) / a1
         return (end_par * a2 - start_par * a1) / (a2 - a1)
+
+    def curves(self) -> Optional[Dict[str, Any]]:
+        """The TRY curves both ways (:func:`tto.ppkcurve.read`): the service's kept ones, or read here once."""
+        if self._curves is None:
+            if self._curves_of is not None:
+                self._curves = self._curves_of() or {}
+            else:
+                idx = self.book.model.sheet_index
+                self._curves = pk.read(lambda sheet, r, c: self.calc.get(idx[sheet], r, c)) if "Motor" in idx else {}
+        return self._curves or None
+
+    def fra_ppk(self, start: int, end: int) -> Optional[float]:
+        """:meth:`fra_months` on the PPK step curve (TLREF flat between PPK meetings, on every OIS quote): the same
+        quarterly calendar and day count, another curve.  ``None`` without one, or off the grid."""
+        cv = self.curves() or {}
+        if cv.get("ppk") is None or cv.get("grid") is None:
+            return None
+        return pk.fra(cv["ppk"], cv["grid"], start, end)
 
     def mpc_dates(self) -> Dict[str, Any]:
         """The OIS spot date and the effective dates of the coming meetings (the day after each decision), as the
@@ -645,6 +667,11 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
             mkt_level = (end_par * a2 - start_par * a1) / fwd_annuity
         label = "%s FRA %s→%s @ %s%%" % (side, "Spot" if m1 == 0 else month_label(m1), month_label(m2), fmt(level * 100.0, 4))
         info = {"market": mkt_level, "cost_bp": ((mkt_level - level) if rec else (level - mkt_level)) * 10000.0}
+        # the second view: the mid on the PPK step curve and the cost against it (same sign as cost_bp: + paid away)
+        ppk = mkt.fra_ppk(m1, m2)
+        if ppk is not None:
+            info["market_ppk"] = ppk
+            info["cost_bp_ppk"] = ((ppk - level) if rec else (level - ppk)) * 10000.0
     elif strategy == "mpc":
         if side not in ("PAY", "RECEIVE"):
             raise TradeError("yön PAY ya da RECEIVE olmalı")
