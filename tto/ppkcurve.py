@@ -16,14 +16,23 @@ choice"; the desk wants to see the rates both ways, side by side:
 The two curves agree at every quoted maturity and differ only in how they split the stretch between two quotes - what
 an FRA or a broken date between them sees.  Days are calendar days from the curve's spot, rates decimals.  :func:`read`
 builds everything from the workbook through a cell getter; the rest knows no workbook.
+
+**The desk's list of points** (Ayarlar → Eğri noktaları, tto/curvepoints.py): the quotes each curve is built from are the
+desk's to choose - the workbook's own (the default list: every number as above), others typed or read from a Bloomberg
+ticker, some switched off.  A curve whose list differs from the default is built on its points (:class:`Spec`,
+:func:`list_curves`), both ways: Bootstrap the desk's own method - OIS as Motor builds it (the points' par rates linear in
+months on its quarterly nodes, bootstrapped; a point off that grid an extra node), offshore a node at every point
+(:func:`bootstrap`, ln DF linear in days, as the Forward sheet's curve) - and PPK basamak calibrated to the very points.
 """
 from __future__ import annotations
 
 import bisect
+import calendar
+import datetime as _dt
 import math
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Sequence, Tuple
 
-from .xl.values import to_num
+from .xl.values import date_to_serial, serial_to_date, to_num
 
 #: the overnight rate's day basis (TLREF: ACT/365, compounded on business days)
 BASIS = 365.0
@@ -35,8 +44,8 @@ TOLERANCE, STEPS = 1e-12, 60
 PATH_ROWS, PATH_DAY, PATH_RATE = (4, 84), 3, 11
 #: Motor's daily calendar: F the cumulative weekend / holiday term Pcum (day 0 … 3700)
 PCUM_ROWS, PCUM_COL = (528, 4228), 6
-#: Motor's bootstrap: C its nodes' days, E their months, I ln DF (BOOT_GUN / BOOT_LNDF)
-BOOT_ROWS, BOOT_DAY, BOOT_MONTH, BOOT_LNDF = (88, 130), 3, 5, 9
+#: Motor's bootstrap: C its nodes' days, D their accruals, E their months, I ln DF (BOOT_GUN / BOOT_LNDF)
+BOOT_ROWS, BOOT_DAY, BOOT_ACCRUAL, BOOT_MONTH, BOOT_LNDF = (88, 130), 3, 4, 5, 9
 #: the copy of the OIS quotes the bootstrap and the PPK solver read: A months, B quote (OIS_MAIN B9:B26 without 15M, 21M)
 QUOTE_ROWS, QUOTE_MONTH, QUOTE_RATE = (306, 321), 1, 2
 #: Motor's quarterly calendar (3M … 120M) the FRA lists price on: F the payment day, D the accrual (ACT/365)
@@ -324,8 +333,363 @@ def offshore_quotes(tryi: Sequence[Tuple[Any, Any, Any]], xccy: Sequence[Tuple[A
     return out
 
 
+# ================================================================================================== the desk's list of points
+#: what a point of the desk's list is (Ayarlar → Eğri noktaları, tto/curvepoints.py), each by its own convention: an OIS
+#: (up to Motor's 3M node one period simple ACT/365, then quarterly ACT/365 par - Motor's grid for its tenors, else
+#: counted back from the maturity as MASA's broken-date block does), an FX swap implied rate (one period, simple
+#: ACT/360) or a cross currency swap (annual ACT/360 par, its coupons counted back from the maturity: the short period
+#: first - "18 ayda 6 ay + 12 ay, sondan başlayıp")
+OIS_KIND, FX_KIND, XCCY_KIND = "ois", "fx", "xccy"
+#: where its rate comes from: the workbook's own quote (the default points), typed by the desk, a Bloomberg ticker (a
+#: percent, EK_INTERP's slot), or none - computed: where the curve is read, never a point it is built on
+BOOK, TYPED, TICKER, COMPUTED = "book", "typed", "ticker", "calc"
+#: the holiday lists a point's dates roll on - (sheet, rows, columns): the TRY list (Motor: OIS) and the FX value dates'
+#: (EK_TATIL B:C, USD and the TRY copy: offshore)
+OIS_HOLIDAYS, FX_HOLIDAYS = ("Motor", (361, 523), (1, 1)), ("EK_TATIL", (5, 264), (2, 3))
+#: a point is solved until its par comes back within this (a rate), in at most ``STEPS`` secant steps
+NODE_TOLERANCE = 1e-14
+
+
+class Spec(NamedTuple):
+    """A point of the desk's list as a curve is built from it (tto/curvepoints.py makes it out of the list's row):
+    ``kind`` (``OIS_KIND`` / ``FX_KIND`` / ``XCCY_KIND``), ``source`` (``BOOK`` / ``TYPED`` / ``TICKER`` / ``COMPUTED``),
+    its maturity - a tenor, ``months`` or ``weeks``, or a ``date`` (an Excel serial) -, ``row`` the workbook's own quote's
+    row (OIS: Motor's quote copy, A306:B321; offshore: the Forward sheet's TRYI row 8 … 16 or TRYSAQ row 125 … 134), ``rate``
+    a typed rate (decimal), ``cell`` a ticker's value ((sheet, row, column): a percent)."""
+    id: str
+    name: str
+    kind: str
+    source: str
+    months: Optional[int] = None
+    weeks: Optional[int] = None
+    date: Optional[float] = None
+    row: Optional[int] = None
+    rate: Optional[float] = None
+    cell: Optional[Tuple[str, int, int]] = None
+
+
+class Resolved(NamedTuple):
+    """A point read off the workbook: its maturity (``end``: days from the curve's spot; ``serial``: the date), its rate
+    (decimal; None for a computed point or a quote without a price) and the swap it is - ``pays`` / ``accruals``; ``error``
+    why it cannot be used ("": it can)."""
+    spec: Spec
+    end: Optional[float]
+    serial: Optional[float]
+    rate: Optional[float]
+    pays: Tuple[float, ...]
+    accruals: Tuple[float, ...]
+    error: str = ""
+
+    @property
+    def quote(self) -> "Quote":
+        return Quote(self.spec.name, self.rate if self.rate is not None else float("nan"), self.pays, self.accruals)
+
+
+def edate(serial: float, months: int) -> float:
+    """EDATE: the same day ``months`` later (the month's last day when it has fewer)."""
+    d = serial_to_date(serial)
+    year, month = divmod(d.year * 12 + d.month - 1 + int(months), 12)
+    return date_to_serial(_dt.date(year, month + 1, min(d.day, calendar.monthrange(year, month + 1)[1])))
+
+
+def following(serial: float, holidays: FrozenSet[float]) -> float:
+    """The first business day on or after ``serial`` (``WORKDAY(serial − 1, 1, holidays)``: Monday to Friday, not a
+    holiday)."""
+    s = float(math.floor(serial))
+    while serial_to_date(s).weekday() >= 5 or s in holidays:
+        s += 1.0
+    return s
+
+
+def holidays(get: Callable[[str, int, int], Any], where: Tuple[str, Tuple[int, int], Tuple[int, int]]) -> FrozenSet[float]:
+    """A holiday list of the workbook as serials (``where``: :data:`OIS_HOLIDAYS`, :data:`FX_HOLIDAYS`)."""
+    sheet, (r1, r2), (c1, c2) = where
+    out = set()
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            v = _num(to_num(get(sheet, r, c)))
+            if v is not None and v > 0:
+                out.add(float(math.floor(v)))
+    return frozenset(out)
+
+
+class Dates(object):
+    """What a curve's points are dated with (``curve``: ``OIS_KIND`` or "off"): its spot (serial: OIS_MAIN!B2 / Forward!I2),
+    its holiday list and - OIS - Motor's node days by month; read once through ``get``."""
+
+    def __init__(self, get: Callable[[str, int, int], Any], curve: str):
+        self.get, self.curve = get, curve
+        self.spot = _num(to_num(get(*(OIS_SPOT if curve == OIS_KIND else FX_SPOT))))
+        self.hol = holidays(get, OIS_HOLIDAYS if curve == OIS_KIND else FX_HOLIDAYS)
+        self.node: Dict[int, float] = {}
+        if curve == OIS_KIND:
+            for r in range(BOOT_ROWS[0], BOOT_ROWS[1] + 1):
+                m, d = _num(get("Motor", r, BOOT_MONTH)), _num(get("Motor", r, BOOT_DAY))
+                if m is not None and d is not None:
+                    self.node[int(round(m))] = d
+
+    def day(self, serial: float) -> float:
+        return serial - self.spot
+
+    def maturity(self, spec: Spec) -> Tuple[Optional[float], Optional[float]]:
+        """(the maturity date as it is quoted - unadjusted, what coupons count back from -, the business day it falls
+        on); a tenor of OIS months on Motor's grid is that node."""
+        s = self.spot
+        if spec.date is not None:
+            return spec.date, following(spec.date, self.hol)
+        if spec.weeks is not None:
+            raw = s + 7.0 * spec.weeks
+            return raw, following(raw, self.hol)
+        if spec.months is not None:
+            raw = edate(s, spec.months)
+            if self.curve == OIS_KIND and spec.months in self.node:
+                return raw, s + self.node[spec.months]
+            return raw, following(raw, self.hol)
+        return None, None
+
+    def counted_back(self, raw: float, end: float, step: int) -> Tuple[float, ...]:
+        """The pay days of a swap to ``end`` (days) counted back from its quoted maturity ``raw`` (serial) every ``step``
+        months, each rolled to a business day, while after the spot: the short period first."""
+        pays = [end]
+        k = 1
+        while True:
+            d = self.day(following(edate(raw, -step * k), self.hol))
+            if d <= 0.0 or k > 400:
+                break
+            if d < pays[0]:
+                pays.insert(0, d)
+            k += 1
+        return tuple(pays)
+
+
+def _accruals(pays: Sequence[float], basis: float) -> Tuple[float, ...]:
+    return tuple((b - a) / basis for a, b in zip((0.0,) + tuple(pays[:-1]), pays))
+
+
+def resolve(get: Callable[[str, int, int], Any], specs: Sequence[Spec], curve: str,
+            where: Optional["Dates"] = None) -> List[Resolved]:
+    """The points of a curve's list (``curve``: ``OIS_KIND`` or ``"off"``) read off the workbook: their maturities, rates
+    and swaps, each by its convention.  A point that cannot be dated or has no price says so in ``error``."""
+    w = where or Dates(get, OIS_KIND if curve == OIS_KIND else "off")
+    out: List[Resolved] = []
+    for sp in specs:
+        out.append(_resolve(get, sp, w))
+    return out
+
+
+def _resolve(get: Callable[[str, int, int], Any], sp: Spec, w: Dates) -> Resolved:
+    if w.spot is None:
+        return Resolved(sp, None, None, None, (), (), "spot tarihi yok")
+    rate: Optional[float] = None
+    if sp.source == BOOK:
+        return _resolve_book(get, sp, w)
+    if sp.source == TYPED:
+        rate = sp.rate
+    elif sp.source == TICKER and sp.cell is not None:
+        v = _num(get(*sp.cell))
+        rate = v / 100.0 if v is not None else None
+    raw, rolled = w.maturity(sp)
+    if raw is None or rolled is None:
+        return Resolved(sp, None, None, rate, (), (), "vade yok")
+    end = w.day(rolled)
+    if end <= 0.0:
+        return Resolved(sp, end, rolled, rate, (), (), "vade spot'tan sonra değil")
+    if sp.kind == FX_KIND:
+        pays: Tuple[float, ...] = (end,)
+        acc = (end / 360.0,)
+    elif sp.kind == XCCY_KIND:
+        pays = w.counted_back(raw, end, 12)
+        acc = _accruals(pays, 360.0)
+    else:
+        three = w.node.get(3)
+        if three is not None and end <= three:
+            pays = (end,)
+        elif sp.months is not None and sp.months % 3 == 0 and all(k in w.node for k in range(3, sp.months + 1, 3)):
+            pays = tuple(w.node[k] for k in range(3, sp.months + 1, 3))              # (Motor's quarterly grid)
+        else:
+            pays = w.counted_back(raw, end, 3)
+        acc = _accruals(pays, BASIS)
+    error = "" if rate is not None or sp.source == COMPUTED else "fiyat yok"
+    return Resolved(sp, end, rolled, rate, pays, acc, error)
+
+
+def _resolve_book(get: Callable[[str, int, int], Any], sp: Spec, w: Dates) -> Resolved:
+    """The workbook's own quote, read as :func:`ois_quotes` / :func:`offshore_quotes` read it: OIS on Motor's node days,
+    TRYI / TRYSAQ on the Forward sheet's days (an XCCY's coupons on the days of the TRYSAQ rows before it)."""
+    r = sp.row
+    if sp.kind == OIS_KIND:
+        m, rate = _num(get("Motor", r, QUOTE_MONTH)), _num(get("Motor", r, QUOTE_RATE))
+        m = int(round(m)) if m is not None else None
+        if m is None or m not in w.node or (m > 3 and not all(k in w.node for k in range(3, m + 1, 3))):
+            return Resolved(sp, None, None, rate, (), (), "Motor'un düğümü yok")
+        pays = (w.node[m],) if m <= 3 else tuple(w.node[k] for k in range(3, m + 1, 3))
+        q = Resolved(sp, pays[-1], w.spot + pays[-1], rate, pays, _accruals(pays, BASIS))
+    else:
+        tryi = sp.kind == FX_KIND
+        day = _num(get("Forward", r, TRYI_DAY if tryi else XCCY_DAY))
+        rate = _num(get("Forward", r, TRYI_RATE if tryi else XCCY_RATE))
+        rate = rate / 100.0 if rate is not None else None
+        if day is None or day <= 0:
+            return Resolved(sp, None, None, rate, (), (), "gün yok")
+        if tryi:
+            pays = (day,)
+        else:
+            before = [_num(get("Forward", k, XCCY_DAY)) for k in range(XCCY_ROWS[0], r)]
+            pays = tuple([d for d in before if d is not None and 0.0 < d < day] + [day])
+        q = Resolved(sp, day, w.spot + day, rate, pays, _accruals(pays, 360.0))
+    return q._replace(error="" if rate is not None else "fiyat yok")
+
+
+def _known(curve: Optional["LogLinear"], t: float) -> float:
+    return curve.df(t) if curve is not None else (1.0 if t == 0.0 else float("nan"))
+
+
+def bootstrap(quotes: Sequence["Quote"], days: Sequence[float] = (0.0,), lndf: Sequence[float] = (0.0,)) -> "LogLinear":
+    """A curve with a node at every quote's maturity, ln DF linear in days between the nodes (the Forward sheet's offshore
+    curve, AJ123:AN143), on top of the nodes given (the spot; Motor's grid): quote by quote in maturity order, each node's
+    discount factor the one its swap is priced back at.  Coupons at known discount factors - on or before the node before
+    it - give it in closed form (``(1 − r·Σ τ·DF) / (1 + r·τ_n)``: the sheet's own XCCY bootstrap); a coupon between that
+    node and the maturity reads the new node, solved for by the secant method.  ``ValueError`` when one cannot be met."""
+    nodes: Dict[float, float] = {float(d): float(v) for d, v in zip(days, lndf)}
+    for q in sorted(quotes, key=lambda x: x.end):
+        if q.end in nodes:
+            raise ValueError("%s: bu günde zaten bir düğüm var" % q.name)
+        nodes[q.end] = _node(nodes, q)
+    ds = sorted(nodes)
+    return LogLinear(ds, [nodes[d] for d in ds])
+
+
+def _node(nodes: Dict[float, float], q: "Quote") -> float:
+    """ln DF at ``q``'s maturity that prices its swap back on ``nodes`` plus that node."""
+    if not (q.rate == q.rate):
+        raise ValueError("%s: oran yok" % q.name)
+    before = max((d for d in nodes if d < q.end), default=0.0)
+    base = LogLinear(sorted(nodes), [nodes[d] for d in sorted(nodes)]) if len(nodes) >= 2 else None
+    if all(p <= before for p in q.pays[:-1]):
+        known = sum(a * _known(base, p) for p, a in zip(q.pays[:-1], q.accruals[:-1]))
+        df = (1.0 - q.rate * known) / (1.0 + q.rate * q.accruals[-1])
+        if not df > 0.0:
+            raise ValueError("%s kotasına oturulamadı" % q.name)
+        return math.log(df)
+
+    def miss(x: float) -> float:
+        c = LogLinear(list(nodes) + [q.end], list(nodes.values()) + [x])
+        return par(c, q.pays, q.accruals) - q.rate
+
+    x0 = base.ln(q.end) if base is not None else -q.rate * q.end / BASIS
+    x1 = x0 - 1e-4
+    f0, f1 = miss(x0), miss(x1)
+    for _ in range(STEPS):
+        if abs(f1) <= NODE_TOLERANCE or f1 == f0:
+            break
+        x0, x1 = x1, x1 - f1 * (x1 - x0) / (f1 - f0)
+        f0, f1 = f1, miss(x1)
+    if not abs(f1) <= TOLERANCE:
+        raise ValueError("%s kotasına oturulamadı" % q.name)
+    return x1
+
+
+def motor_curve(months: Sequence[Any], days: Sequence[Any], accruals: Sequence[Any],
+                points: Sequence[Tuple[float, float]]) -> Tuple[List[Optional[float]], List[float]]:
+    """Motor's bootstrap (Motor!F88:I130) on other quotes: ``points`` ``(months, rate)``, the par rate at each of Motor's
+    nodes (``months`` / ``days`` / ``accruals``: its E, C and D) linear in months between them, flat before the first and
+    after the last (F); then G and H as the sheet has them - the 1M - 3M nodes one period ``1 / (1 + F·D)``, from 6M the
+    quarterly chain ``(1 − F·H_prev) / (1 + F·D)`` from the 3M node's annuity.  Returns the pars (None at the spot) and ln
+    DF at every node."""
+    pts = sorted((float(m), float(r)) for m, r in points)
+    if not pts:
+        raise ValueError("eğride nokta yok")
+    xs = [m for m, _ in pts]
+
+    def par_at(m: float) -> float:
+        if m <= xs[0]:
+            return pts[0][1]
+        if m >= xs[-1]:
+            return pts[-1][1]
+        i = bisect.bisect_right(xs, m) - 1
+        (a0, b0), (a1, b1) = pts[i], pts[i + 1]
+        return b0 + (b1 - b0) * (m - a0) / (a1 - a0)
+
+    pars: List[Optional[float]] = [None]
+    lndf = [0.0]
+    annuity = 0.0
+    for k in range(1, len(months)):
+        m, d = float(months[k]), float(accruals[k])
+        f = par_at(m)
+        if k <= 3:
+            g = 1.0 / (1.0 + f * d)
+            annuity = d * g
+        else:
+            g = (1.0 - f * annuity) / (1.0 + f * d)
+            annuity = annuity + d * g
+        if not g > 0.0:
+            raise ValueError("Motor'un %g aylık düğümü kurulamadı" % m)
+        pars.append(f)
+        lndf.append(math.log(g))
+    return pars, lndf
+
+
+def month_of(day: float, node_months: Sequence[float], node_days: Sequence[float]) -> float:
+    """A maturity's place in months on Motor's grid: a node's own months, between two nodes linear in days (beyond the
+    last one its last stretch goes on) - where a point off the grid sits among the quotes interpolated in months."""
+    i = min(max(bisect.bisect_right(node_days, day) - 1, 0), len(node_days) - 2)
+    d0, d1 = node_days[i], node_days[i + 1]
+    m0, m1 = node_months[i], node_months[i + 1]
+    return m0 + (m1 - m0) * (day - d0) / (d1 - d0)
+
+
+def list_curves(get: Callable[[str, int, int], Any], points: Dict[str, Optional[Sequence[Spec]]]) -> Dict[str, Any]:
+    """The Bootstrap of the curves whose list differs from the default (``points``: ``{"ois": [Spec] | None, "off": …}``,
+    the points a curve is built on; None: the workbook's own - nothing made here):
+
+    * ``ois`` - Motor's method on the points (:func:`motor_curve`): their par rates linear in months on Motor's nodes
+      (``pars``: what Motor!F takes, by its row), bootstrapped; a point off the quarterly grid (a date, 2Y1M) an extra
+      node priced back by its own swap (``boot``: the curve with it, ln DF linear in days);
+    * ``off`` - a node at every point (:func:`bootstrap`).
+
+    Each with its ``quotes`` (the points with a price, as :class:`Quote`) and ``points`` (every point resolved: a point
+    without a price is left out and says so - :attr:`Resolved.error`).  ``errors``: a curve that cannot be built."""
+    out: Dict[str, Any] = {"ois": None, "off": None, "errors": []}
+    errors: List[str] = out["errors"]
+    specs = points.get(OIS_KIND)
+    if specs is not None:
+        rows = range(BOOT_ROWS[0], BOOT_ROWS[1] + 1)
+        months = [_num(get("Motor", r, BOOT_MONTH)) for r in rows]
+        days = [_num(get("Motor", r, BOOT_DAY)) for r in rows]
+        acc = [_num(get("Motor", r, BOOT_ACCRUAL)) for r in rows]
+        res = resolve(get, specs, OIS_KIND)
+        usable = [p for p in res if not p.error and p.rate is not None]
+        if None in months or None in days or None in acc[1:] or not usable:
+            errors.append("OIS listesinin eğrisi kurulamadı (%s)" % ("nokta yok" if not usable else "Motor'un düğümleri eksik"))
+        else:
+            try:
+                node_days = [float(d) for d in days]
+                node_months = [float(m) for m in months]
+                pars, ln = motor_curve(node_months, node_days, acc, [(month_of(p.end, node_months, node_days), p.rate)
+                                                                    for p in usable])
+                on_grid = set(node_days)
+                extra = [p.quote for p in usable if p.end not in on_grid]
+                boot = bootstrap(extra, node_days, ln)
+                out[OIS_KIND] = {"quotes": [p.quote for p in sorted(usable, key=lambda x: x.end)], "points": res,
+                                 "boot": boot, "pars": dict(zip(rows, pars))}
+            except ValueError as exc:
+                errors.append("OIS listesi: %s" % exc)
+    specs = points.get("off")
+    if specs is not None:
+        res = resolve(get, specs, "off")
+        usable = [p for p in res if not p.error and p.rate is not None]
+        try:
+            quotes = [p.quote for p in sorted(usable, key=lambda x: x.end)]
+            if not quotes:
+                raise ValueError("nokta yok")
+            out["off"] = {"quotes": quotes, "points": res, "boot": bootstrap(quotes)}
+        except ValueError as exc:
+            errors.append("offshore listesi: %s" % exc)
+    return out
+
+
 # ================================================================================================== the workbook
-def read(get: Callable[[str, int, int], Any]) -> Dict[str, Any]:
+def read(get: Callable[[str, int, int], Any], points: Optional[Dict[str, Optional[Sequence[Spec]]]] = None) -> Dict[str, Any]:
     """Both ways from the TRY workbook, ``get(sheet, row, column)`` reading its cells (a user's calculation: their own
     inputs count).  Keys, each ``None`` where the workbook gives too little (``errors`` says why):
 
@@ -335,7 +699,12 @@ def read(get: Callable[[str, int, int], Any]) -> Dict[str, Any]:
       report;
     * ``grid`` - Motor's quarterly calendar (:class:`Grid`);
     * ``fx_shift`` - the FX spot − the OIS spot (days); ``off_quotes``, ``off_ppk``, ``off_report`` - the offshore
-      quotes and the shape seen from the FX spot with a flat basis between them, calibrated the same way."""
+      quotes and the shape seen from the FX spot with a flat basis between them, calibrated the same way.
+
+    ``points`` - the desk's list (tto/curvepoints.py): ``{"ois": [Spec] | None, "off": …}``, the points of a curve whose
+    list differs from the default (None, or no ``points``: the workbook's own, read as above).  Such a curve is built on
+    them (:func:`list_curves`): ``boot`` (OIS) and ``off_boot`` (offshore) their Bootstrap, ``quotes`` / ``off_quotes``
+    the points, the PPK curves calibrated to those."""
     def col(sheet: str, rows: Tuple[int, int], c: int) -> List[Any]:
         return [get(sheet, r, c) for r in range(rows[0], rows[1] + 1)]
 
@@ -343,10 +712,18 @@ def read(get: Callable[[str, int, int], Any]) -> Dict[str, Any]:
                                               "off_quotes", "off_ppk", "off_report")}
     errors: List[str] = []
     out["errors"] = errors
-    try:
-        out["boot"] = LogLinear(col("Motor", BOOT_ROWS, BOOT_DAY), col("Motor", BOOT_ROWS, BOOT_LNDF))
-    except ValueError as exc:
-        errors.append("bootstrap: %s" % exc)
+    points = points or {}
+    ois_list, off_list = points.get(OIS_KIND), points.get("off")
+    lc = list_curves(get, points) if (ois_list is not None or off_list is not None) else None
+    if lc is not None:
+        errors.extend(lc["errors"])
+    if ois_list is None:
+        try:
+            out["boot"] = LogLinear(col("Motor", BOOT_ROWS, BOOT_DAY), col("Motor", BOOT_ROWS, BOOT_LNDF))
+        except ValueError as exc:
+            errors.append("bootstrap: %s" % exc)
+    elif lc[OIS_KIND] is not None:
+        out["boot"] = lc[OIS_KIND]["boot"]
     days, acc = col("Motor", GRID_ROWS, GRID_DAY), col("Motor", GRID_ROWS, GRID_ACCRUAL)
     if all(_num(x) is not None for x in days + acc):
         out["grid"] = Grid(tuple(float(x) for x in days), tuple(float(x) for x in acc))
@@ -360,8 +737,11 @@ def read(get: Callable[[str, int, int], Any]) -> Dict[str, Any]:
     except ValueError as exc:
         errors.append("MPC ima: %s" % exc)
         return out
-    quotes = ois_quotes(col("Motor", QUOTE_ROWS, QUOTE_MONTH), col("Motor", QUOTE_ROWS, QUOTE_RATE),
-                        col("Motor", BOOT_ROWS, BOOT_MONTH), col("Motor", BOOT_ROWS, BOOT_DAY))
+    if ois_list is None:
+        quotes = ois_quotes(col("Motor", QUOTE_ROWS, QUOTE_MONTH), col("Motor", QUOTE_ROWS, QUOTE_RATE),
+                            col("Motor", BOOT_ROWS, BOOT_MONTH), col("Motor", BOOT_ROWS, BOOT_DAY))
+    else:
+        quotes = list(lc[OIS_KIND]["quotes"]) if lc[OIS_KIND] is not None else []
     out["quotes"] = quotes
     try:
         out["ppk"], out["report"] = calibrate(shape, quotes) if quotes else (None, None)
@@ -372,11 +752,15 @@ def read(get: Callable[[str, int, int], Any]) -> Dict[str, Any]:
         errors.append("spot tarihi yok (OIS_MAIN!B2 / Forward!I2)")
         return out
     out["fx_shift"] = fx_spot - ois_spot
-    tryi = [(get("Forward", r, TRYI_LABEL), get("Forward", r, TRYI_DAY), get("Forward", r, TRYI_RATE))
-            for r in range(TRYI_ROWS[0], TRYI_ROWS[1] + 1)]
-    xccy = [(get("Forward", r, XCCY_LABEL), get("Forward", r, XCCY_DAY), get("Forward", r, XCCY_RATE))
-            for r in range(XCCY_ROWS[0], XCCY_ROWS[1] + 1)]
-    off = offshore_quotes(tryi, xccy)
+    if off_list is None:
+        tryi = [(get("Forward", r, TRYI_LABEL), get("Forward", r, TRYI_DAY), get("Forward", r, TRYI_RATE))
+                for r in range(TRYI_ROWS[0], TRYI_ROWS[1] + 1)]
+        xccy = [(get("Forward", r, XCCY_LABEL), get("Forward", r, XCCY_DAY), get("Forward", r, XCCY_RATE))
+                for r in range(XCCY_ROWS[0], XCCY_ROWS[1] + 1)]
+        off = offshore_quotes(tryi, xccy)
+    else:
+        off = list(lc["off"]["quotes"]) if lc["off"] is not None else []
+        out["off_boot"] = lc["off"]["boot"] if lc["off"] is not None else None
     out["off_quotes"] = off
     try:
         out["off_ppk"], out["off_report"] = calibrate(shape.rebased(out["fx_shift"]), off) if off else (None, None)
