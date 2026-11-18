@@ -97,8 +97,10 @@ def test_the_switch_is_in_both_workbooks_and_motor_and_the_offshore_names_follow
         assert text.startswith("IF(EK_INTERP!$B$3=1,EK_INTERP!$F$%d," % (r - ex.INTERP_SHIFT)) and "$B$306:$B$321" in text
     from tto.xl.unparse import to_a1
     for name, col in ex.INTERP_OFF_COLS.items():
-        assert to_a1(tto.model.names[name], 1, 1) == "IF(EK_INTERP!$B$4=1,EK_INTERP!$%s$%d:$%s$%d,%s)" % (
-            col, ex.INTERP_OFF_FIRST, col, ex.INTERP_OFF_LAST, ex.INTERP_OFF_RANGES[name])
+        own = ex.LIST_OFF_COLS[name]                    # (the desk's list of points: test_curvepoints.py)
+        assert to_a1(tto.model.names[name], 1, 1) == "IF(EK_INTERP!$B$4=1,EK_INTERP!$%s$%d:$%s$%d,IF(EK_INTERP!$N$6=1," \
+            "EK_INTERP!$%s$%d:$%s$%d,%s))" % (col, ex.INTERP_OFF_FIRST, col, ex.INTERP_OFF_LAST, own, ex.INTERP_OFF_FIRST, own,
+                                             ex.INTERP_OFF_LAST, ex.INTERP_OFF_RANGES[name])
     assert ex.formula_of(asw.model, "ASW", "BZ65").startswith("IF(EK_INTERP!$B$3=1,EK_INTERP!$C$17,LN((1-")
     # the choice: a personal input of the TRY workbook, Bootstrap by default
     d = tto.inputs[tto.cell("EK_INTERP!B2")]
@@ -110,9 +112,10 @@ def _original(svc, calc, sheet, addr):
     """The cell's own formula (what the switch wraps), evaluated in ``calc``."""
     b = svc.books["tto"]
     text = ex.formula_of(b.model, sheet, addr)
-    head = "IF(EK_INTERP!$B$3=1,EK_INTERP!$F$%d," % (int(addr[1:]) - ex.INTERP_SHIFT)
-    assert text.startswith(head)
-    own = text[len(head):-1]
+    k = int(addr[1:]) - ex.INTERP_SHIFT
+    head = "IF(EK_INTERP!$B$3=1,EK_INTERP!$F$%d,IF(EK_INTERP!$N$5=1,EK_INTERP!$N$%d," % (k, k)      # (PPK, then the list)
+    assert text.startswith(head) and text.endswith("))")
+    own = text[len(head):-2]
     r, c = divmod(parse_a1(addr), COLS)
     fn = b.engine.compiler.compile_expression(to_template(own, r, c))
     return svc.et.call(calc_value, calc, fn, b.model.sheet_index[sheet], r, c)
