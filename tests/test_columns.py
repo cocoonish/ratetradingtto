@@ -1,5 +1,6 @@
 """The columns a user hides in the tables: kept with the account on the server, so that everybody looks at the tables
-their own way - on any computer they sign in from.  (Hiding them on the page is the browser test's.)"""
+their own way - on any computer they sign in from; the columns a table hides until its user chooses (DİBS RV's own FX
+swap columns).  (Hiding them on the page is the browser test's.)"""
 import pytest
 from starlette.testclient import TestClient
 

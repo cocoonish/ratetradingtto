@@ -1,8 +1,10 @@
 """Curve fair value (``tto/quantcurve.py``): Nelson-Siegel-Svensson fits that recover a known curve from OIS par rates
-(the workbook's conventions) and from bond yields (BIST's), a bond priced off a known curve being neither rich nor
-cheap, one planted bond / tenor being the one that is, carry and roll on flat and sloped curves, the families'
-signals on a synthetic history, the read of the DİBS RV sheet - and the service and the HTTP API of both new pages
-("Eğri Adil Değeri", "Opsiyon") on a seeded two-year history."""
+(the workbook's conventions) and from bond yields (BIST's), the DİBS curve's Nelson-Siegel recovering a planted one with
+the bills in the fit (a bill holds the short end), the model rule (NS whatever the number of bonds) and leave-one-out
+residuals, a bond priced off a known curve being neither rich nor cheap, one planted bond / tenor being the one that
+is, carry and roll on flat and sloped curves, the families' signals on a synthetic history, the read of the DİBS RV
+sheet - and the service and the HTTP API of both new pages ("Eğri Adil Değeri", "Opsiyon") on a seeded two-year
+history."""
 from __future__ import annotations
 
 import datetime as dt

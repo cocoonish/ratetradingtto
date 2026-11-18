@@ -1,8 +1,9 @@
 """DİBS RV · Genel (``tto/dibsgenel.py``): one menu entry with three tabs (Genel, the RV and the ASW hesap tablosu - the old
 pages' addresses and boxes keep working), the bond table whose every figure is its source's (DİBS RV's cell, rvfair's fair
 value - the same as DİBS Trading's and the card's -, DİBS ASW on the FX swap implied curve, the live fit), the zero-coupon
-fit that is quantcurve's on the same inputs, a bond added in the middle of the trading list followed by its ISIN, the
-charts' points, the tables of the hesap tablosu tabs shown as their pages draw them, and the HTTP endpoint."""
+fit that is quantcurve's on the same inputs (Nelson-Siegel, the bills in) and steady on the trading list's bonds, a bond
+added in the middle of the trading list followed by its ISIN, the charts' points, the tables of the hesap tablosu tabs
+shown as their pages draw them, and the HTTP endpoint."""
 from __future__ import annotations
 
 import datetime as dt
