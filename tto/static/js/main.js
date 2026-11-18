@@ -2,7 +2,7 @@
 import { api, session } from './api.js';
 import { settings, setLang, num, isoToTr } from './format.js';
 import { h, clear, toast, errorToast, debounce, menu, modal, inFormControl } from './ui.js';
-import { configureGrid, clearSelection, findCell, selectionText } from './grid.js';
+import { configureGrid, clearSelection, findCell, selectionText, trackWrite } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
 import { TradesPage } from './pages/trades.js';
@@ -66,7 +66,7 @@ const ctx = {
   gen: () => state.gen,
   /** Bring the page up to date now (a tab opened whose panels were not, while another was). */
   refreshPage: () => { runRefresh(); },
-  setInputs: (book, items) => api.post('/api/inputs', { book, items, adhoc: false, lenient: false }),
+  setInputs: (book, items) => trackWrite(api.post('/api/inputs', { book, items, adhoc: false, lenient: false })),
   displayName: (key) => state.users[key] || key || '',
   openRet: (opts) => openRetEditor(ctx, opts),
   /** "Open the form with these values": a trade to enter, its fields filled from a quote (a matrix row, a chat line, a

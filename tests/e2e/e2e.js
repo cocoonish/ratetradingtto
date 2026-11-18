@@ -552,6 +552,35 @@ async function clipAfter(page, action) {
     check('loading a scenario restores the personal inputs', true);
     const sc = await api(page, 'ayşe yilmaz', 'GET', '/api/scenarios');
     check('scenario is stored under the user', sc.json.scenarios.length === 1 && sc.json.scenarios[0].name === 'E2E senaryo');
+    // a date typed and the scenario loaded at once - the typed value's request held back 2 s on its way: the load waits
+    // for the write in flight (grid.js pendingWrites) and goes after its answer - the scenario's date stands, on the page
+    // and in the store (the server applies them in that order: tests/test_scenario_order.py)
+    const sent = [];
+    await page.route('**/api/inputs', async (route) => {
+      sent.push('yazı gönderildi');
+      await new Promise((r) => setTimeout(r, 2000));
+      await route.continue();
+    });
+    const onRes = (r) => { if (r.url().endsWith('/api/inputs')) sent.push('yazı yanıtlandı'); };
+    const onReq = (r) => { if (r.url().endsWith('/api/scenarios/load')) sent.push('yükleme gönderildi'); };
+    page.on('response', onRes);
+    page.on('request', onReq);
+    await typeInto(page, 'Forward!D2', '01.03.2027');
+    await page.click('#btn-scen');
+    await page.waitForSelector('.modal table.plain .btn.primary');
+    const loaded = page.waitForResponse((r) => r.url().endsWith('/api/scenarios/load'), { timeout: 20000 });
+    await page.click('.modal table.plain .btn.primary');             // Yükle, while the date's write is held
+    await loaded;
+    await page.keyboard.press('Escape');
+    page.off('response', onRes);
+    page.off('request', onReq);
+    await page.unroute('**/api/inputs');
+    await waitCell(page, 'Forward!D2', "t.trim() === '15.12.2026'");
+    await page.waitForTimeout(500);
+    const mineD2 = (((await api(page, 'ayşe yilmaz', 'GET', '/api/my-inputs')).json || {}).inputs || []).find((x) => x.ref === 'Forward!D2');
+    check('a date typed and a scenario loaded at once: the load waits for the write in flight - the scenario\'s date stands, on the page and stored',
+      JSON.stringify(sent) === JSON.stringify(['yazı gönderildi', 'yazı yanıtlandı', 'yükleme gönderildi'])
+      && (await cellText(page, 'Forward!D2')).trim() === '15.12.2026' && !!mineD2 && mineD2.value === 46371, { sent, mineD2 });
 
     // ------------------------------------------------------------------ blotter
     console.log('blotter');
