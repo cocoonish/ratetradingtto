@@ -219,8 +219,8 @@ Senaryolar, kişisel girdiler ve kayıtlar bu hesapla saklanır.
   paylaşır) ya da son **2 dakikada** sunucudan bir şey istemiş - ve sekmelerinden birinde (ayrı penceresi dahil) son
   **15 dakikada** klavye, tıklama, kaydırma ya da fare hareketi olmuş; sayfa bunu sunucuya **dakikada en fazla bir kez**
   söyler, 15 dakikalık aradan sonraki ilk hareket hemen duyulur. **Uzakta**: açık ama 15 dakikadır kullanılmıyor
-  (sayfaların kendiliğinden yenilenmesi kullanım sayılmaz). **Çevrimdışı**: ikisi de değil - **Çıkış** yapan anında
-  (başka bir tarayıcıda açık değilse), tarayıcısını kapatan akışı kapanınca, son isteğinden en geç 2 dakika sonra.
+  (sayfaların kendiliğinden yenilenmesi kullanım sayılmaz). **Çevrimdışı**: ikisi de değil. **Çıkış** yapan anında
+  çevrimdışı olur (başka bir tarayıcıda açık değilse); tarayıcısını kapatan, son isteğinden en geç 2 dakika sonra.
   **Son görülme** kullanıcının en son bağlı olduğu andır (akış açıkken "şimdi"); veritabanına kullanıcı başına
   **dakikada en fazla bir kez**, çıkışta ve dashboard kapanırken hemen yazılır - yeniden başlatmada kaybolmaz. **Son
   giriş** şifreyle en son giriştir (önceki sürümün veritabanında, o zamanki "son görülme" girişte yazıldığı için oradan
