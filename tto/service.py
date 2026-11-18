@@ -229,6 +229,10 @@ class Service(object):
         # nightly backup (ops.py)
         self.ops = Ops(self)
         self.ops.check_database()
+        # where the long calculations are - the quant fit, the ML models, the backtest, the history sync - and the time
+        # left from the last runs (progress.py: the top bar's "Hesap")
+        from .progress import Progress
+        self.progress = Progress(self.store)
         # the desk's alarms: set once, they ring for everyone; the system's own (deskalarms.py)
         from .deskalarms import DeskAlarms
         self.desk_alarms = DeskAlarms(self)
@@ -1455,7 +1459,9 @@ class Service(object):
                 "port": self.settings.port,
                 "streams": len(self._listeners),            # live-update streams open (one per browser)
                 # how fresh the data is, the calculation thread's queue, the last fault a loop survived (ops.py)
-                "ops": self.ops.status(prov)}
+                "ops": self.ops.status(prov),
+                # the long calculations under way (progress.py): the top bar's "Hesap" ({"busy": false, …} when idle)
+                "progress": self.progress.view()}
 
     def status_for(self, user: Optional[str]) -> Dict[str, Any]:
         """:meth:`status` as a signed-in user gets it over HTTP: where the log, the database and its backups live on

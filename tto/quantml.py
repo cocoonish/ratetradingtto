@@ -733,35 +733,55 @@ def _seed(key: str, month: str) -> int:
     return zlib.crc32(("%s|%s" % (key, month)).encode("utf-8"))
 
 
-def walk(key: str, rows: List[Row], today: str, used: Optional[Dict[Tuple, Trees]] = None) -> Dict[str, Any]:
-    """The monthly walk-forward of one line: every month from the first with ``MIN_TRAIN`` rows of known label before
-    it to today's, its model fitted on those rows (or taken from ``_MODELS``) predicting that month's rows.  ``used``
-    collects the models (the fit keeps them).  Returns ``{"preds": {day: p}, "months": [...], "models": {month: Trees},
-    "model": today's month's Trees or None, "fitted": n, "cached": n}``."""
+def plan_walk(key: str, rows: List[Row], today: str) -> Dict[str, Any]:
+    """A line's walk-forward before anything is fitted: every month from the first with ``MIN_TRAIN`` rows of known
+    label before it to today's, with those rows' count and digest - the model's key in ``_MODELS`` (``steps``: ``(month,
+    rows, key)``).  The fit plans every walk first: the models the cache lacks are counted before one is fitted."""
     known = [r for r in rows if r.y is not None]
     months = sorted({_month(r.day) for r in rows} | {_month(today)})
+    digest = hashlib.sha1(repr(MODEL_SIG).encode())
+    steps: List[Tuple[str, int, Tuple]] = []
+    k = 0
+    for M in months:
+        while k < len(known) and known[k].end < M:
+            digest.update(repr((known[k].day, known[k].x, known[k].y)).encode())
+            k += 1
+        if k >= MIN_TRAIN:
+            steps.append((M, k, (key, M, k, digest.hexdigest())))
+    return {"known": known, "steps": steps}
+
+
+def to_fit(plan: Dict[str, Any]) -> int:
+    """The models of a planned walk (``plan_walk``, ``plan_pool``) the cache does not have: the ones it will fit."""
+    return sum(1 for _, _, ck in plan["steps"] if ck not in _MODELS)
+
+
+def walk(key: str, rows: List[Row], today: str, used: Optional[Dict[Tuple, Trees]] = None, plan: Optional[Dict[str, Any]] = None,
+         tick: Optional[Callable[[float], None]] = None) -> Dict[str, Any]:
+    """The monthly walk-forward of one line: every month from the first with ``MIN_TRAIN`` rows of known label before
+    it to today's, its model fitted on those rows (or taken from ``_MODELS``) predicting that month's rows.  ``used``
+    collects the models (the fit keeps them); ``plan``: ``plan_walk``'s, made before; ``tick(seconds)`` after each
+    model fitted (the progress).  Returns ``{"preds": {day: p}, "months": [...], "models": {month: Trees}, "model":
+    today's month's Trees or None, "fitted": n, "cached": n}``."""
+    plan = plan if plan is not None else plan_walk(key, rows, today)
+    known = plan["known"]
     preds: Dict[str, float] = {}
     out_months: List[Dict[str, Any]] = []
     models: Dict[str, Trees] = {}
     model_now = None
     fitted = cached = 0
-    digest = hashlib.sha1(repr(MODEL_SIG).encode())
-    k = 0
     by_month: Dict[str, List[Row]] = {}
     for r in rows:
         by_month.setdefault(_month(r.day), []).append(r)
-    for M in months:
-        while k < len(known) and known[k].end < M:
-            digest.update(repr((known[k].day, known[k].x, known[k].y)).encode())
-            k += 1
-        if k < MIN_TRAIN:
-            continue
-        ck = (key, M, k, digest.hexdigest())
+    for M, k, ck in plan["steps"]:
         model = _MODELS.get(ck)
         if model is None:
+            t1 = time.perf_counter()
             model = Trees.fit([r.x for r in known[:k]], [r.y for r in known[:k]], seed=_seed(key, M))
             fitted += 1
             FITS["n"] += 1
+            if tick is not None:
+                tick(time.perf_counter() - t1)
         else:
             cached += 1
         if used is not None:
@@ -776,17 +796,39 @@ def walk(key: str, rows: List[Row], today: str, used: Optional[Dict[Tuple, Trees
     return {"preds": preds, "months": out_months, "models": models, "model": model_now, "fitted": fitted, "cached": cached}
 
 
-def walk_pool(pid: str, members: Sequence[Tuple[str, List[Row]]], today: str, used: Optional[Dict[Tuple, Trees]] = None) -> Dict[str, Any]:
-    """The monthly walk-forward of a pool (``POOLS``): one model a month on the rows of every line of it whose label
-    was known before the month began - each row's own fifth close after its day, before the month's first day, alike
-    for every line (no line's later close reaches another line's earlier month through the pool) - predicting that
-    month's rows of every line.  Its first month is the first with ``MIN_TRAIN`` days of known label (a line's own
-    start: not ten lines' rows of ten days); its leaves and L2 grow with its lines (``POOL_SCALE``).  Returns ``{"lines":
-    {key: walk()'s result for that line}, "fitted": n, "cached": n, "train": {month: rows}}``."""
+def plan_pool(pid: str, members: Sequence[Tuple[str, List[Row]]], today: str) -> Dict[str, Any]:
+    """A pool's walk-forward before anything is fitted (as ``plan_walk``): its months from the first with ``MIN_TRAIN``
+    days of known label, each with the rows known before it and their digest - the model's key in ``_MODELS``."""
     keys = [k for k, _ in members]
     pos = {k: j for j, k in enumerate(keys)}
     known = sorted(((r.end, r.day, pos[k], k, r) for k, rows in members for r in rows if r.y is not None), key=itemgetter(0, 1, 2))
     months = sorted({_month(r.day) for _, rows in members for r in rows} | {_month(today)})
+    digest = hashlib.sha1(repr((MODEL_SIG, pid, keys)).encode())
+    seen: set = set()
+    steps: List[Tuple[str, int, Tuple]] = []
+    k = 0
+    for M in months:
+        while k < len(known) and known[k][0] < M:
+            _, day, _, key, r = known[k]
+            digest.update(repr((key, day, r.x, r.y)).encode())
+            seen.add(day)
+            k += 1
+        if len(seen) >= MIN_TRAIN:
+            steps.append((M, k, ("pool:" + pid, M, k, digest.hexdigest())))
+    return {"keys": keys, "known": known, "steps": steps}
+
+
+def walk_pool(pid: str, members: Sequence[Tuple[str, List[Row]]], today: str, used: Optional[Dict[Tuple, Trees]] = None,
+              plan: Optional[Dict[str, Any]] = None, tick: Optional[Callable[[float], None]] = None) -> Dict[str, Any]:
+    """The monthly walk-forward of a pool (``POOLS``): one model a month on the rows of every line of it whose label
+    was known before the month began - each row's own fifth close after its day, before the month's first day, alike
+    for every line (no line's later close reaches another line's earlier month through the pool) - predicting that
+    month's rows of every line.  Its first month is the first with ``MIN_TRAIN`` days of known label (a line's own
+    start: not ten lines' rows of ten days); its leaves and L2 grow with its lines (``POOL_SCALE``).  ``plan``:
+    ``plan_pool``'s, made before; ``tick`` as ``walk``'s.  Returns ``{"lines": {key: walk()'s result for that line},
+    "fitted": n, "cached": n, "train": {month: rows}}``."""
+    plan = plan if plan is not None else plan_pool(pid, members, today)
+    keys, known = plan["keys"], plan["known"]
     by_month: Dict[str, Dict[str, List[Row]]] = {}
     for k, rows in members:
         for r in rows:
@@ -796,25 +838,17 @@ def walk_pool(pid: str, members: Sequence[Tuple[str, List[Row]]], today: str, us
     own = {k: {_month(r.day) for r in rows} | {_month(today)} for k, rows in members}
     train: Dict[str, int] = {}
     fitted = cached = 0
-    digest = hashlib.sha1(repr((MODEL_SIG, pid, keys)).encode())
-    seen: set = set()
-    k = 0
-    for M in months:
-        while k < len(known) and known[k][0] < M:
-            _, day, _, key, r = known[k]
-            digest.update(repr((key, day, r.x, r.y)).encode())
-            seen.add(day)
-            k += 1
-        if len(seen) < MIN_TRAIN:
-            continue
-        ck = ("pool:" + pid, M, k, digest.hexdigest())
+    for M, k, ck in plan["steps"]:
         model = _MODELS.get(ck)
         if model is None:
+            t1 = time.perf_counter()
             rows = [t[4] for t in known[:k]]
             model = Trees.fit([r.x for r in rows], [r.y for r in rows], seed=_seed("pool:" + pid, M), min_leaf=int(round(MIN_LEAF * scale)),
                               l2=L2 * scale)
             fitted += 1
             FITS["n"] += 1
+            if tick is not None:
+                tick(time.perf_counter() - t1)
         else:
             cached += 1
         if used is not None:
@@ -1276,39 +1310,68 @@ def _fit(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mo
         except Exception as exc:  # noqa: BLE001 - one line failing is its row's reason, not the family's
             errors[inst.key] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
         time.sleep(0)                                     # (the engine thread gets the interpreter between lines)
-    # the pools: one walk-forward for their lines together (the lines of the universe the registry has)
-    pooled: Dict[str, Dict[str, Any]] = {}
+    # every walk planned first - its months' rows of known label and their digest, the model's key -: the models this
+    # fit has to fit (the ones the cache lacks) are counted before the first is (the progress: "ML 240/480")
+    b = time.perf_counter()
+    pool_plans: List[Tuple[str, List[Tuple[str, List[Row]]], Dict[str, Any]]] = []
     for pid, label, keys in POOLS:
         members = [(i.key, made[i.key][0]) for i in insts if i.key in keys and i.key in made]
         if not members:
             continue
         try:
-            b = time.perf_counter()
-            res = walk_pool(pid, members, ctx.today_iso, used)
-            t_walk += time.perf_counter() - b
-            fitted += res["fitted"]
-            cached += res["cached"]
-            pooled.update(res["lines"])
+            pool_plans.append((pid, members, plan_pool(pid, members, ctx.today_iso)))
         except Exception as exc:  # noqa: BLE001 - the pool failing is its lines' reason
             for k, _ in members:
                 errors[k] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
-        time.sleep(0)
+    in_pool = {k for _, members, _ in pool_plans for k, _ in members}
+    plans: Dict[str, Dict[str, Any]] = {}
     for inst in insts:
-        if inst.key not in made or inst.key in errors:
-            continue
-        rows, pts, ch, carry = made[inst.key]
-        try:
-            wf = pooled.get(inst.key)
-            if wf is None:
+        if inst.key in made and inst.key not in errors and inst.key not in in_pool:
+            try:
+                plans[inst.key] = plan_walk(inst.key, made[inst.key][0], ctx.today_iso)
+            except Exception as exc:  # noqa: BLE001 - one line failing is its row's reason, not the family's
+                errors[inst.key] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+    t_walk += time.perf_counter() - b
+    hub = ctx.progress
+    n_fit = sum(to_fit(p) for _, _, p in pool_plans) + sum(to_fit(p) for p in plans.values())
+    job = hub.begin(FAMILY, "ML", "Makine öğrenmesi: modeller", "model", total=n_fit) if hub is not None and n_fit else None
+    tick = (lambda s: job.tick(1, s)) if job is not None else None
+    ok = False
+    try:
+        # the pools: one walk-forward for their lines together (the lines of the universe the registry has)
+        pooled: Dict[str, Dict[str, Any]] = {}
+        for pid, members, plan in pool_plans:
+            try:
                 b = time.perf_counter()
-                wf = walk(inst.key, rows, ctx.today_iso, used)
+                res = walk_pool(pid, members, ctx.today_iso, used, plan, tick)
                 t_walk += time.perf_counter() - b
-                fitted += wf["fitted"]
-                cached += wf["cached"]
-            lines[inst.key] = Line(inst, inputs, rows, pts, ch, carry, wf, cfg)
-        except Exception as exc:  # noqa: BLE001 - one line failing is its row's reason, not the family's
-            errors[inst.key] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
-        time.sleep(0)
+                fitted += res["fitted"]
+                cached += res["cached"]
+                pooled.update(res["lines"])
+            except Exception as exc:  # noqa: BLE001 - the pool failing is its lines' reason
+                for k, _ in members:
+                    errors[k] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+            time.sleep(0)
+        for inst in insts:
+            if inst.key not in made or inst.key in errors:
+                continue
+            rows, pts, ch, carry = made[inst.key]
+            try:
+                wf = pooled.get(inst.key)
+                if wf is None:
+                    b = time.perf_counter()
+                    wf = walk(inst.key, rows, ctx.today_iso, used, plans.get(inst.key), tick)
+                    t_walk += time.perf_counter() - b
+                    fitted += wf["fitted"]
+                    cached += wf["cached"]
+                lines[inst.key] = Line(inst, inputs, rows, pts, ch, carry, wf, cfg)
+            except Exception as exc:  # noqa: BLE001 - one line failing is its row's reason, not the family's
+                errors[inst.key] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+            time.sleep(0)
+        ok = True
+    finally:
+        if hub is not None:
+            hub.end(job, ok)                              # (the models' own time: the next fit's measure)
     with _MODELS_LOCK:                                    # (keep what this fit used: the next fit of the same data fits nothing)
         _MODELS.clear()
         _MODELS.update(used)
