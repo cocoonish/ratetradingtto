@@ -1820,7 +1820,7 @@ async function clipAfter(page, action) {
     const b21 = (await api(page, 'ayşe yilmaz', 'GET', '/api/view/ois')).json.panels.find((x) => x.id === 'B21').data;
     const listFark = (label) => { const r = b21.rows.find((row) => row[0] && row[0].t === label); return r ? r[b21.c.indexOf('PPK fark')].t : null; };
     check('OIS · PPK: the interpolation chart right after the 15 best FRAs, the page\'s whole width - the overnight forward and the 3M FRA strip both ways as step lines (Bootstrap blue, PPK basamak orange, the strips dashed), 3Y OIS first',
-      bestTab.join(' ') === 'B1 B9 B10 B11 interp chart2 chart5' && i0.full && i0.on.join() === '3Y,OIS'
+      bestTab.join(' ') === 'B1 B9 B10 B11 interp chart2 chart5' && i0.full && i0.on.join() === '3Y,OIS,Faiz'
       && JSON.stringify(i0.keys) === JSON.stringify(['O/N · Bootstrap (Murex)', 'O/N · PPK basamak', '3A FRA · Bootstrap (Murex)', '3A FRA · PPK basamak'])
       && i0.steps === 4 && i0.dashed === 2 && i0.strokes.includes('var(--c-blue)') && i0.strokes.includes('var(--c-orange)'), { bestTab, i0 });
     check('... the quoted tenors as light lines with their names (1M … 3Y: 15M and 21M are no quotes), the meetings as ticks on the axis',
@@ -1842,10 +1842,10 @@ async function clipAfter(page, action) {
     const i3 = await interp();
     const keptPick = await page.evaluate(() => localStorage.getItem('tto.pick.ois.interp'));
     check('... 1Y / 3Y / 10Y and OIS / Offshore redraw it at once: 1Y four FRAs, all the same both ways (3M, 6M, 9M, 1Y are quotes); Offshore the offshore curve both ways (FX swap + XCCY, 3M forwards on ACT/360); 10Y forty quarters; the choice kept in the browser',
-      i1.on.join() === '1Y,OIS' && i1.rows[0].length === 5 && i1.rows[3].slice(1).every((t) => t === '0,0') && /her çeyrekte aynı/.test(i1.line)
-      && i2.on.join() === '1Y,Offshore' && i2.rows[0][0] === '3A forward (ACT/360)' && i2.quotes.includes('1W') && i2.steps === 4
+      i1.on.join() === '1Y,OIS,Faiz' && i1.rows[0].length === 5 && i1.rows[3].slice(1).every((t) => t === '0,0') && /her çeyrekte aynı/.test(i1.line)
+      && i2.on.join() === '1Y,Offshore,Faiz' && i2.rows[0][0] === '3A forward (ACT/360)' && i2.quotes.includes('1W') && i2.steps === 4
       && JSON.stringify(i2.keys) === JSON.stringify(['O/N · Bootstrap (offshore)', 'O/N · PPK basamak (offshore)', '3A forward · Bootstrap (offshore)', '3A forward · PPK basamak (offshore)'])
-      && i3.on.join() === '10Y,Offshore' && i3.rows[0].length === 41 && i3.steps === 4 && keptPick === '10Y|Offshore',
+      && i3.on.join() === '10Y,Offshore,Faiz' && i3.rows[0].length === 41 && i3.steps === 4 && keptPick === '10Y|Offshore|Faiz',
     { i1: [i1.on, i1.rows[3], i1.line], i2: [i2.on, i2.keys, i2.rows[0] && i2.rows[0][0], i2.quotes], i3: [i3.on, i3.rows[0] && i3.rows[0].length], keptPick });
     await page.click('#chart-choice-interp button[data-pick="3Y"]');
     await page.click('#chart-choice-interp button[data-pick="OIS"]');
@@ -1862,6 +1862,30 @@ async function clipAfter(page, action) {
       /^\d\d\.\d\d\.\d{4}$/.test(itip.head) && itip.rows.filter((r) => /%$/.test(r)).length === 4 && itip.rows.filter((r) => / bp$/.test(r)).length === 2
       && itip.rows.some((r) => /^3A FRA · PPK basamak · \d+x\d+/.test(r)), itip);
     await shot(page, '09c-ois-interp');
+    // the discount factors, the chart's third choice ("Bu enterpolasyondaki DF farkları da bir grafikte bana gösterilmeli"):
+    // PPK basamak's DF against Bootstrap's day by day (bp), Bootstrap's own line at 0, the table of both at the quoted tenors
+    await page.click('#chart-choice-interp button[data-pick="DF"]');
+    await page.waitForFunction(() => /^DF · /.test((document.querySelector('.panel[data-panel="interp"] .chart-legend .key') || {}).textContent || ''),
+      null, { timeout: 15000 });
+    await stripCols(10);
+    const i4 = await interp();
+    const dfPick = await page.evaluate(() => localStorage.getItem('tto.pick.ois.interp'));
+    const db = await isvg.boundingBox();
+    await page.mouse.move(db.x + db.width * 0.45, db.y + db.height * 0.5);
+    await page.waitForSelector('.chart-tip');
+    const dtip = await page.evaluate(() => ({ head: document.querySelector('.chart-tip .t').textContent,
+      rows: [...document.querySelectorAll('.chart-tip .r')].map((r) => r.textContent) }));
+    await page.mouse.move(5, 5);
+    check('... "DF" draws the discount factors instead: PPK basamak\'s against Bootstrap\'s (bp) day by day, Bootstrap\'s line at 0, the quoted tenors marked; the table both DFs and the difference at each quoted tenor - the same up to 1Y, apart at 18M, 2Y, 3Y; hovering reads that day\'s difference; the choice kept',
+      i4.on.join() === '3Y,OIS,DF' && JSON.stringify(i4.keys) === JSON.stringify(['DF · Bootstrap (Murex)', 'DF · PPK basamak'])
+      && i4.rows.length === 4 && i4.rows[0][0] === 'DF · kotalı vade' && i4.rows[0].slice(1).join() === '1M,2M,3M,6M,9M,1Y,18M,2Y,3Y'
+      && i4.rows[3].slice(1, 7).every((t) => t === '0,00') && i4.rows[3].slice(7).every((t) => /\d/.test(t) && t !== '0,00')
+      && /^3Y · OIS · DF farkı \(PPK basamak \/ Bootstrap − 1\): en yüksek /.test(i4.line) && i4.lines === 9 && dfPick === '3Y|OIS|DF'
+      && /^\d\d\.\d\d\.\d{4}$/.test(dtip.head) && dtip.rows.some((r) => /^PPK \/ Bootstrap − 1.*\d bp$/.test(r)),
+    { i4: [i4.on, i4.keys, i4.rows, i4.line, i4.lines], dfPick, dtip });
+    await shot(page, '09d-ois-interp-df');
+    await page.click('#chart-choice-interp button[data-pick="Faiz"]');
+    await stripCols(13);
     await open(page, 'forward');
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
@@ -2536,6 +2560,90 @@ async function clipAfter(page, action) {
       && holBack.lists.USD.items.length === 212);
     await waitCell(page, 'Forward!K2', "t === '05.11.2026'");
 
+    // ------------------------------------------------------------------ Fiyatlama: any start and maturity, both curves
+    console.log('pricing');
+    await open(page, 'fiyatlama');
+    await page.waitForSelector('#pr-buckets');
+    const prLabel = () => page.textContent('#pr-label');
+    const prWait = (re) => page.waitForFunction((s) => new RegExp(s).test((document.getElementById('pr-label') || {}).textContent || ''),
+      re, { timeout: 60000 });
+    const prType = async (sel, value) => { await page.fill(sel, value); await page.press(sel, 'Enter'); };
+    const prApi = async (who) => (await api(page, who || 'ayşe yilmaz', 'GET', '/api/pricing')).json;
+    const prPct = (v) => (v * 100).toFixed(4).replace('.', ',') + '%';
+    const prFix = (v, d) => (v > 0 ? '+' : '') + v.toFixed(d).replace('.', ',');
+    const prBuckets = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#pr-buckets tr[data-bucket]')]
+      .map((tr) => [tr.dataset.bucket, [...tr.children].slice(1).map((td) => td.textContent)])));
+    const prMenu = await page.evaluate(() => window.tto.state.pages.filter((p) => p.group === 'TRY Faiz').map((p) => p.id));
+    const prB0 = await prBuckets();
+    check('Fiyatlama: in TRY Faiz right after OIS · PPK; it opens on a TRY OIS 1Y - both curves\' mids, the desk\'s OIS buckets ON … 10Y '
+      + '(ON / 1W / 2W no quote of the curve: –)', prMenu[0] === 'ois' && prMenu[1] === 'fiyatlama' && /^TRY OIS 1Y · PAY/.test(await prLabel())
+      && Object.keys(prB0).join(' ') === 'ON 1W 2W 1M 2M 3M 6M 9M 1Y 18M 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y' && prB0.ON[0] === '–'
+      && prB0['1Y'][0].startsWith('+') && prB0['5Y'][0] === '0,00', { prMenu, prB0 });
+    // a 2Y3M XCCY received: its coupons counted back from the maturity, the short one first (the desk's rule)
+    await page.click('#pr-asset button[data-v="xccy"]');
+    await prWait('^XCCY');
+    await prType('#pr-end', '2Y3M');
+    await prWait('^XCCY 2Y3M');
+    await page.click('#pr-side button[data-v="RECEIVE"]');
+    await prWait('^XCCY 2Y3M · RECEIVE');
+    const prX = await prApi();
+    const prXSched = await page.evaluate(() => [...document.querySelectorAll('#pr-schedule tr')].slice(1, -1)
+      .map((tr) => [...tr.children].map((td) => td.textContent)));
+    const prXb = await prBuckets();
+    check('... a 2Y3M XCCY received: three coupons back from the maturity, the short one first (3M, 12M, 12M; ACT/360), the mid both ways, '
+      + 'the offshore curve\'s buckets (− for the receiver), the far ones 0', prXSched.length === 3
+      && prXSched.map((r) => r[1] + '>' + r[2] + ':' + r[3]).join(' ') === '04.11.2026>04.02.2027:92 04.02.2027>04.02.2028:365 04.02.2028>05.02.2029:367'
+      && (await page.textContent('#pr-mid .v')) === prPct(prX.mid.boot) && (await page.textContent('#pr-mid-other .v')) === prPct(prX.mid.ppk)
+      && Math.abs(prX.mid.boot - 0.4062) < 0.001 && prXb['XCCY 2Y'][0].startsWith('-') && prXb['XCCY 5Y'][0] === '0,00' && prXb['XCCY 5Y'][1] === '0,00'
+      && prX.buckets.total.boot < 0, { prXSched, mid: prX.mid, prXb });
+    await shot(page, '16-fiyatlama-xccy');
+    // a 12x15 FRA typed in one box, then a price: the NPV
+    await page.click('#pr-asset button[data-v="fra"]');
+    await prWait('^FRA');
+    await prType('#pr-start', '12x15');
+    await prWait('^FRA 12x15');
+    await page.waitForFunction(() => document.getElementById('pr-start').value === '12', null, { timeout: 30000 });
+    const prFb = await prBuckets();
+    const prFraBoxes = [await page.inputValue('#pr-start'), await page.inputValue('#pr-end')];
+    const prF = await prApi();
+    const prList = (await api(page, 'ayşe yilmaz', 'GET', '/api/view/ois')).json.panels.find((x) => x.id === 'B21').data;
+    const prListRow = prList.rows.find((row) => row[0] && row[0].t === '1Y3M');
+    const prListMid = prListRow ? prListRow[prList.c.indexOf('B')].v : null;
+    check('... a 12x15 FRA ("12x15" in one box: 12 and 15): on Bootstrap OIS · PPK\'s FRA list\'s 1Y3M, on PPK basamak ~70 bp lower; '
+      + 'a payer\'s risk in 1Y (−) and 18M (+), none after', prFraBoxes.join('x') === '12x15' && Math.abs(prF.mid.boot - prListMid) < 1e-12
+      && (await page.textContent('#pr-mid .v')) === prPct(prF.mid.boot) && (await page.textContent('#pr-mid-other .v')) === prPct(prF.mid.ppk)
+      && (await page.textContent('#pr-diff .v')) === prFix(prF.diff, 2) && prF.diff < -50
+      && prFb['1Y'][0].startsWith('-') && prFb['18M'][0].startsWith('+') && prFb['2Y'][0] === '0,00', { prFraBoxes, mid: prF.mid, prListMid, prFb });
+    await prType('#pr-price', '35');
+    await page.waitForSelector('#pr-npv-tl', { timeout: 60000 });
+    const prN = await prApi();
+    const prNpvText = await page.textContent('#pr-npv-tl .v');
+    check('... a price typed (35 = %35, under mid): the NPV in TL and $, + for a payer under mid (Günlük İşlemler\'s "Mid\'e göre"), '
+      + 'the price − mid in bp', prN.npv && prN.npv.tl.boot > 0 && /^\+/.test(prNpvText) && Math.abs(trNumber(prNpvText) - prN.npv.tl.boot) < 1
+      && Math.abs(trNumber(await page.textContent('#pr-npv-usd .v')) - prN.npv.usd.boot) < 1
+      && (await page.textContent('#pr-dist .v')) === prFix(prN.npv.dist.boot, 2) && prN.npv.dist.boot < 0, { prNpvText, npv: prN.npv });
+    await shot(page, '16b-fiyatlama-fra-npv');
+    // the inputs are the user's own: back on the page as left, another asset as it was left, another user's the defaults
+    await open(page, 'ois');
+    await open(page, 'fiyatlama');
+    await page.waitForSelector('#pr-npv-tl', { timeout: 60000 });
+    const prKept = [await prLabel(), await page.inputValue('#pr-price')];
+    await page.click('#pr-asset button[data-v="xccy"]');
+    await prWait('^XCCY 2Y3M · RECEIVE');
+    const prOther = await prApi('mehmet');
+    check('... the inputs are each user\'s own: back on the page the FRA and its price as left, the XCCY as it was; Mehmet\'s page his own',
+      /^FRA 12x15 · PAY/.test(prKept[0]) && prKept[1] === '35' && prOther.label === 'TRY OIS 1Y', { prKept, prOther: prOther.label });
+    // an FX forward: outright and points both ways
+    await page.click('#pr-asset button[data-v="fx"]');
+    await prWait('^USDTRY 18M');
+    const prFx = await prApi();
+    check('... an 18M USDTRY forward: the outright both ways and the points (Masa\'s broken-date block\'s at its own date)',
+      (await page.textContent('#pr-mid .v')) === prFx.mid.boot.toFixed(4).replace('.', ',') && prFx.mid.boot > prFx.fx.spot
+      && Math.abs(prFx.fx.points.boot - (prFx.mid.boot - prFx.fx.spot) * 1e4) < 1e-6
+      && /^\+/.test(await page.textContent('#pr-dv01 .v')), { mid: prFx.mid, points: prFx.fx.points });
+    await page.click('#pr-asset button[data-v="fra"]');
+    await prWait('^FRA 12x15');
+
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists
     console.log('bonds');
     // (the morning's chat is pasted now: the desk's stale limit a day long while it is read, so its quotes stand fresh)
@@ -2791,7 +2899,7 @@ async function clipAfter(page, action) {
     await shot(page, '12b-dibs-genel');
     check('DİBS RV · Genel: its three tabs, the entry lit, the table in its groups (OIS ASW · FX swap ASW on the FX swap ima eğrisi · sıfır kupon) with every bond of the trading list',
       genelSeen.tabs.join('|') === 'Genel|RV hesap tablosu|ASW hesap tablosu' && genelSeen.on.join() === 'dibs-genel' && genelSeen.lit.join() === 'tahvil.dibsrv'
-      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–18A/.test(g))
+      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–12A FX swap ima, 18A XCCY eğrisinden/.test(g))
       && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp · LOO RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
     { genelSeen, gBonds: gBonds.length });
     check('... its three charts with their points: the yield curve (bonds and OIS), ASW · OIS and ASW · FX swap as DİBS ASW draws them',
