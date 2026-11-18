@@ -27,8 +27,9 @@ def sheets_of(view):
 
 
 #: sheets without a page of their own (the sheet explorer shows them): the order of the pricing sources and the USD /
-#: EUR holiday lists, which are on the settings page
-NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL")}
+#: EUR holiday lists, which are on the settings page - and the curve between quoted tenors (Ayarlar → Eğri
+#: interpolasyonu: the choice and the PPK cells the service fills, in the TRY and the ASW workbook)
+NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL"), ("tto", "EK_INTERP"), ("asw", "EK_INTERP")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):
@@ -479,6 +480,9 @@ REFERENCE = {
     "tto": [
         # holiday lists: TR (Motor → Tatiller), USD and EUR (Ayarlar · Toplantı takvimi)
         "Motor!A361:B523", "EK_TATIL!A5:E264",
+        # how the TRY curves are read between quoted tenors, each user's own (Ayarlar → Eğri interpolasyonu): every
+        # curve reader reads it
+        "EK_INTERP!B2",
         # Bloomberg: the order of the pricing sources, tickers, fields and suffixes, the bonds' sources
         "EK_KAYNAK!B4:E6", "OIS_MAIN!J9:J26", "Forward!AO6:AR26", "VIOP!L1:W1", "VIOP!C16:C35", "VIOP!C43:C52",
         "VIOP!C58:C69", "VIOP!M45:O45", "VIOP!S340", "MASA!C156:C163", "MASA!U155", "MASA!S171", "Motor!O89",

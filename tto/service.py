@@ -428,6 +428,11 @@ class Service(object):
                 # as a whole - an array formula given an array writes it into its cells (_asw_hist_fx)
                 anchors = sorted({a for a in aswfx.history_anchors(asw.model.sheets[si]) if a is not None})
                 asw.engine.declare_inputs([(si, a) for a in anchors], group="asw-hist-fx")
+        # the TRY curves between their quoted tenors, each user's choice (interp.py): Bootstrap (Murex) or PPK basamak - the
+        # choice (a personal input) and the PPK cells the service fills
+        from .interp import Interp
+        self.interp = Interp(self)
+        self.interp.declare()
         if tto is not None:
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
                 tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
@@ -1402,7 +1407,10 @@ class Service(object):
         if fx is not None and fx.pending and user in fx.pending:
             fx.catch_up(user)                    # (back: their inputs' formulas evaluated over what is there now)
             ov = self._overlays.get((user, book.id), ov)
-        if not ov:
+        interp = getattr(self, "interp", None)
+        if interp is not None:
+            interp.sync(user, book)              # (their curve choice: the PPK cells current, theirs where they are their own)
+        if not ov and not book.engine.derived.get(user):
             return book.engine.shared
         if user not in book.engine.users:
             return book.engine.set_user_inputs(user, ov)     # (given back while the user was away: made again)
@@ -1464,6 +1472,7 @@ class Service(object):
                 book.engine.drop_user(name)
                 self._overlays.pop((name, book.id), None)
             self.copies.drop(name)                    # (their temporary copies, their ASW history offshore: made again)
+            self.interp.forget(name)                  # (their own PPK curve: made again)
             self._hist_fx_kept.pop(name, None)
             self._forget_renders(name)
             gone.append(name)
@@ -2330,7 +2339,7 @@ class Service(object):
             if calc is None:
                 part = {"entry": self._header(user, locale), "meta": None, "content": gen, "checked": gen, "at": time.monotonic()}
             else:
-                part = self._made(old, calc, gen, True, lambda: {"items": self._header(user, locale)["items"]})
+                part = self._made(old, calc, gen, True, lambda: {k: v for k, v in self._header(user, locale).items() if k != "gen"})
             rec = {"key": key, "panels": {"#": part}, "order": ["#"], "gen": gen, "book": "tto"}
             self._keep(key, rec)
             return rec
@@ -2367,7 +2376,11 @@ class Service(object):
                     if MANUAL_SPOT["shown_as"] in formula_text(book, si, 2 * COLS + col):
                         item["edit"] = "spot"
                     items.append(item)
-        return {"items": items, "gen": self.gen}
+        out: Dict[str, Any] = {"items": items, "gen": self.gen}
+        badge = self.interp.badge(user, calc)
+        if badge is not None:
+            out["interp"] = badge                   # (a user on PPK basamak: every page says so in the top bar)
+        return out
 
     def manual_spot(self, user: Optional[str]) -> Dict[str, Any]:
         """The manual USDTRY spot: what is typed (``None``: nothing, Bloomberg is used) and what the sheet says
@@ -3885,7 +3898,7 @@ class Service(object):
         p = self._fwd_payload(payload, lang)
         if type(p.get("value_date")) is not float:
             raise ServiceError("valör tarihi gerekli")
-        ov = self._overlay(user_key(user), book) if user else {}
+        ov = self.interp.boot_overlay(user_key(user), book) if user else {}      # (the desk's records: on Bootstrap)
         try:
             q = bl.price_forward(book, ov, p["value_date"], str(p.get("basis", "RET_MID")).upper(),
                                  p.get("manual") if type(p.get("manual")) is float else None, p["pair"],
@@ -3922,7 +3935,7 @@ class Service(object):
     def _add_forward(self, user, payload, lang=None) -> Dict[str, Any]:
         book = self._book("tto")
         try:
-            rec = bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload, lang))
+            rec = bl.forward_trade(book, self.interp.boot_overlay(user, book), self._fwd_payload(payload, lang))
         except bl.TradeError as exc:
             raise ServiceError(str(exc))
         tid = self.store.add_trade(self.today_iso(), "fwd", rec, user)
@@ -3975,10 +3988,11 @@ class Service(object):
             raise ServiceError(str(exc))
 
     def _ois_curve(self, user: Optional[str], book: Book) -> "bl.OisMarket":
-        """The TRY OIS curve as the user sees it (``user``: a user key, or nobody) - its PPK step twin the one kept for
-        the user's calculation (:meth:`_try_curves`)."""
-        calc = self._calc(user, book)
-        return bl.OisMarket(book, calc, self._overlay(user, book) if user else None,
+        """The TRY OIS curve as the user sees it (``user``: a user key, or nobody) on Bootstrap whatever their curve setting
+        - Günlük İşlemler prices and keeps the desk's records on the curve the desk marks with (interp.py) - and its PPK
+        step twin the one kept for that calculation (:meth:`_try_curves`)."""
+        calc = self.interp.boot_view(user, book)
+        return bl.OisMarket(book, calc, self.interp.boot_overlay(user, book) if user else None,
                             curves=lambda: self._try_curves(book, calc))
 
     def ois_market(self, user: Optional[str]) -> Dict[str, Any]:
@@ -4070,7 +4084,7 @@ class Service(object):
     def _bond_risk(self, user: Optional[str], inst: str, amount: Optional[float]) -> Dict[str, Any]:
         """What the DİBS RV table says about the bond, and the DV01 of ``amount`` nominal of it."""
         book = self._book("tto")
-        calc = self._calc(user_key(user) if user else None, book)
+        calc = self.interp.boot_view(user_key(user) if user else None, book)       # (a record of the desk's: Bootstrap)
         info = bl.bond_info(book, calc, inst)
         try:
             usdtry = bl.OisMarket(book, calc).usdtry
@@ -4259,7 +4273,7 @@ class Service(object):
         if kind == "fwd":
             book = self._book("tto")
             try:
-                rec = bl.forward_trade(book, self._overlay(user, book), self._fwd_payload(payload, lang))
+                rec = bl.forward_trade(book, self.interp.boot_overlay(user, book), self._fwd_payload(payload, lang))
             except bl.TradeError as exc:
                 raise ServiceError(str(exc))
             return [("fwd", rec, None)], rec
@@ -5612,30 +5626,40 @@ class Service(object):
     def _try_curves(self, book, calc: Calc) -> Optional[Dict[str, Any]]:
         """The TRY workbook's curves both ways out of ``calc`` (a user's calculation, a copy's layer:
         :func:`tto.ppkcurve.read`) - the bootstrap as it is, the PPK step curve and its offshore twin calibrated to the
-        quotes.  Made once for a state of the calculation and kept; what making them read counts as read by whatever is
-        being made out of them (``calc.track`` - a page's panel: made again when any of it changes), a kept one's too.
-        ``None`` for a workbook without them."""
+        quotes; and ``off_boot``, the offshore curve as it is (its names' nodes, ln DF linear in days).  The Bootstrap side
+        is the true bootstrap whatever the user's curve setting (interp.py: read through ``calc`` with the curve on
+        Bootstrap - on PPK Motor's nodes are PPK's).  Made once for a state of the calculation and kept; what making them
+        read counts as read by whatever is being made out of them (``calc.track`` - a page's panel: made again when any of
+        it changes), a kept one's too.  ``None`` for a workbook without them."""
         idx = book.model.sheet_index
         if not all(s in idx for s in ("Motor", "OIS_MAIN", "Forward")):
             return None
-        state, level = [book.id, calc.engine.layout, book.engine.input_changes], calc
+        interp = getattr(self, "interp", None)
+        base = interp.boot_of(book, calc) if interp is not None else calc
+        state, level = [book.id, calc.engine.layout, book.engine.input_changes], base
         while level is not None:                        # (the calculation and those below it: a change in any)
             state += [level.serial, level.epoch]
             level = level.parent
         kept = self.__dict__.setdefault("_try_curves_kept", {})
-        hit = kept.get(calc.serial)
+        hit = kept.get(base.serial)
         if hit is not None and hit[0] == state:
             if calc.track is not None:
                 calc.track |= hit[2]
             return hit[1]
-        outer, calc.track = calc.track, 0
+        outer, base.track = base.track, 0
         try:
-            curves = pk.read(lambda sheet, r, c: calc.get(idx[sheet], r, c))
-            mask = calc.track
+            curves = pk.read(lambda sheet, r, c: base.get(idx[sheet], r, c))
+            try:
+                curves["off_boot"] = pk.LogLinear(bsp._named(book, base, "OFF_GUN") or [], bsp._named(book, base, "OFF_LNDF") or [])
+            except ValueError:
+                curves["off_boot"] = None
+            mask = base.track
         finally:
-            calc.track = None if outer is None else outer | (calc.track or 0)
-        kept.pop(calc.serial, None)
-        kept[calc.serial] = (state, curves, mask)
+            base.track = None if outer is None else outer | (base.track or 0)
+        if base is not calc and calc.track is not None:
+            calc.track |= mask
+        kept.pop(base.serial, None)
+        kept[base.serial] = (state, curves, mask)
         while len(kept) > self.TRY_CURVES_KEPT:
             kept.pop(next(iter(kept)))
         return curves
@@ -5813,6 +5837,8 @@ class Service(object):
         ov = {cell: v for cell, v in (fx.overlay.items() if fx is not None else ()) if cell[0] == si and q0 <= cell[1] < q1}
         arrays, rows = self._asw_hist_arrays(book, base, who)
         ov.update(arrays)
+        if base is not eng.shared:
+            ov.update(self.interp.boot_cells(book))    # (a PPK user's own: the offshore curve bootstrapped, as the desk's)
         info.update(rows)
         info["today"] = swapped
         info["none"] = {r for r, k in rows["n"].items() if not k} | (set() if swapped else {aswfx.ROW})
@@ -6084,6 +6110,24 @@ class Service(object):
                "(3 aya kadar tek dönem basit ACT/365, sonra çeyreklik par) aynen fiyatlar. Bootstrap'la kotalı vadelerde "
                "aynı, aralarında farklı")
 
+    #: what the market of those lists is for a user on PPK basamak (Ayarlar → Eğri interpolasyonu): PPK's - the second
+    #: view beside it is then the true Bootstrap (Murex)
+    ON_PPK_TIP = ("Eğri ayarınız PPK basamak: piyasa sütunu PPK basamak - Motor'un düğümleri PPK eğrisinde, aralarında ln DF "
+                  "günlere göre doğrusal (çeyreklik takvimdeki FRA'da tam PPK). Yanındaki sütun gerçek Bootstrap (Murex), fark "
+                  "PPK − Bootstrap")
+    ON_PPK_BOOT_TIP = ("Aynı satır gerçek Bootstrap (Murex) eğrisiyle - bugünkü eğri, Murex'in MTM'i: OIS kotalarının par "
+                       "faizleri aylara göre doğrusal, çeyreklik bootstrap, ln DF günlere göre doğrusal (Motor; offshore'da FX swap "
+                       "≤9M + XCCY 1Y–10Y). Eğri ayarınız PPK basamak olduğu için piyasa sütunu PPK basamak; bu sütun masanın / "
+                       "Bootstrap'taki meslektaşlarınızın gördüğü değer")
+
+    def _on_ppk(self, book, calc) -> bool:
+        """Whether ``calc`` reads the TRY curves on PPK basamak (a user's choice, with the PPK curve there)."""
+        interp = getattr(self, "interp", None)
+        if interp is None or not interp.available or book is not interp.tto:
+            return False
+        si, rc = interp.status_cells["on"]
+        return calc.get(si, *divmod(rc, COLS)) == 1.0
+
     @staticmethod
     def _shift_text(report: Optional[List[Dict[str, Any]]], loc, what: str = "O/N kaydırma") -> str:
         """A calibration in a line: the shift of each stretch (bp) and the most the shape missed a quote by."""
@@ -6113,7 +6157,9 @@ class Service(object):
         """OIS · PPK's FRA lists both ways: next to the list's market (Bootstrap - today's curve, Murex's MTM) the FRA on
         the PPK step curve and the difference (bp) - each row's FRA (the whole list's months, M and N; the 15 best find
         theirs there by its label) on the quarterly calendar and day count the list's market uses (Motor's: OIS_MAIN!B336),
-        so the difference is the curve's alone.  The market column's header says which way it is."""
+        so the difference is the curve's alone.  The market column's header says which way it is.  A user on PPK basamak
+        (interp.py): the list's market is PPK's - beside it the true Bootstrap (Murex) then, the difference PPK − Bootstrap
+        as for everybody."""
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows or "OIS_MAIN" not in book.model.sheet_index:
             return
@@ -6121,19 +6167,30 @@ class Service(object):
         get = lambda r, col: calc.get(si, r, col_to_index(col))                       # noqa: E731
         cv = self._try_curves(book, calc) or {}
         ppk, grid = cv.get("ppk"), cv.get("grid")
+        on_ppk = self._on_ppk(book, calc)
+        other = cv.get("boot") if on_ppk else ppk          # (the second view: the way the market is not)
         months: Dict[str, Tuple[int, Any, Any]] = {}
         for r in range(self.FRA_ALL[0], self.FRA_ALL[1] + 1):
             label = get(r, "A")
             if isinstance(label, str) and label.strip() and label.strip() not in months:
                 months[label.strip()] = (r, get(r, "M"), get(r, "N"))
         why = "" if ppk is not None else "; ".join(cv.get("errors") or []) or "PPK basamak eğrisi kurulamadı"
-        head = [{"t": "PPK basamak", "k": "s", "b": 1, "f": "hd",
-                 "tip": "%s.\nFRA, listenin piyasasıyla aynı tarihler ve gün sayımıyla (Motor'un çeyreklik takvimi, ACT/365): "
-                        "fark yalnız eğriden.\n%s%s" % (self.PPK_TIP, self._shift_text(cv.get("report"), loc),
-                                                         ("\n" + why) if why else "")},
-                {"t": "PPK − piyasa (bp)", "k": "s", "b": 1, "f": "hd",
-                 "tip": "PPK basamak − Piyasa (Bootstrap), bp. İki yöntem kotalı vadelerde aynı; fark kotalı iki vadenin "
-                        "arasındaki FRA'larda (12x15, 15x18 …) çıkar, kotalı vadeleri birleştirenlerde (12x18, 1Y1Y …) ~0."}]
+        if on_ppk:
+            head = [{"t": "Bootstrap (Murex)", "k": "s", "b": 1, "f": "hd",
+                     "tip": "%s.\nFRA, listenin piyasasıyla aynı tarihler ve gün sayımıyla (Motor'un çeyreklik takvimi, ACT/365): "
+                            "fark yalnız eğriden." % self.ON_PPK_BOOT_TIP},
+                    {"t": "PPK − Bootstrap (bp)", "k": "s", "b": 1, "f": "hd",
+                     "tip": "Piyasa (PPK basamak: ayarınız) − Bootstrap (Murex), bp. İki yöntem kotalı vadelerde aynı; fark kotalı "
+                            "iki vadenin arasındaki FRA'larda (12x15, 15x18 …) çıkar, kotalı vadeleri birleştirenlerde (12x18, "
+                            "1Y1Y …) ~0.\n%s%s" % (self._shift_text(cv.get("report"), loc), ("\n" + why) if why else "")}]
+        else:
+            head = [{"t": "PPK basamak", "k": "s", "b": 1, "f": "hd",
+                     "tip": "%s.\nFRA, listenin piyasasıyla aynı tarihler ve gün sayımıyla (Motor'un çeyreklik takvimi, ACT/365): "
+                            "fark yalnız eğriden.\n%s%s" % (self.PPK_TIP, self._shift_text(cv.get("report"), loc),
+                                                             ("\n" + why) if why else "")},
+                    {"t": "PPK − piyasa (bp)", "k": "s", "b": 1, "f": "hd",
+                     "tip": "PPK basamak − Piyasa (Bootstrap), bp. İki yöntem kotalı vadelerde aynı; fark kotalı iki vadenin "
+                            "arasındaki FRA'larda (12x15, 15x18 …) çıkar, kotalı vadeleri birleştirenlerde (12x18, 1Y1Y …) ~0."}]
         market_col = {self.FRA_ALL_HEAD: "B", self.FRA_TOP_HEAD: "C"}
         letters = data.get("c") or []
         for i, r in enumerate(rnums):
@@ -6141,7 +6198,7 @@ class Service(object):
                 col = market_col[r]
                 if col in letters and isinstance(rows[i][letters.index(col)], dict):
                     cell = rows[i][letters.index(col)]
-                    cell["tip"] = (cell["tip"] + "\n" if cell.get("tip") else "") + self.BOOT_TIP
+                    cell["tip"] = (cell["tip"] + "\n" if cell.get("tip") else "") + (self.ON_PPK_TIP if on_ppk else self.BOOT_TIP)
                 rows[i].extend([dict(c) for c in head])
                 continue
             src, mcol = None, None
@@ -6151,18 +6208,20 @@ class Service(object):
                 label = get(r, "B")
                 src, mcol = (months.get(label.strip()) if isinstance(label, str) else None), "C"
             value = None
-            if src is not None and ppk is not None and grid is not None and all(type(x) is float for x in src[1:]):
-                value = pk.fra(ppk, grid, int(src[1]), int(src[2]))
+            if src is not None and ppk is not None and other is not None and grid is not None \
+                    and all(type(x) is float for x in src[1:]):
+                value = pk.fra(other, grid, int(src[1]), int(src[2]))
             market = get(r, mcol) if mcol else None
             if value is None or type(market) is not float:
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
                 continue
             fmt = self._cell_format(book, si, r, col_to_index(mcol))
+            way_ppk, way_boot = (market, value) if on_ppk else (value, market)
             rows[i].extend([{"t": numfmt.format_value(value, fmt, loc), "v": value, "k": "n",
-                             "tip": "PPK basamak: %s · Bootstrap: %s" % (numfmt.format_value(value, "0.000%", loc),
-                                                                      numfmt.format_value(market, "0.000%", loc))},
-                            self._diff_cell((value - market) * 10000.0, "0.0", loc)])
-        data["c"] = list(letters) + ["PPK basamak", "PPK fark"]
+                             "tip": "PPK basamak: %s · Bootstrap: %s" % (numfmt.format_value(way_ppk, "0.000%", loc),
+                                                                      numfmt.format_value(way_boot, "0.000%", loc))},
+                            self._diff_cell((way_ppk - way_boot) * 10000.0, "0.0", loc)])
+        data["c"] = list(letters) + (["Bootstrap", "PPK fark"] if on_ppk else ["PPK basamak", "PPK fark"])
         data["added"] = int(data.get("added") or 0) + 2
 
     #: MASA's broken-date block: the rows the PPK curves price, the format of their difference (the block's own "Fark":
@@ -6175,32 +6234,50 @@ class Service(object):
         BOOT for OIS) the same rows on the PPK curves and the difference - the forward, simple and O/N rows and XCCY on the
         PPK-shaped offshore curve (MPC ima + a flat basis between the offshore quotes), OIS on the PPK step curve; with the
         block's own date, schedules and day counts (:func:`tto.ppkcurve.broken`), so the difference is the curve's alone.
-        A row the block gives no market for gets none either."""
+        A row the block gives no market for gets none either.  A user on PPK basamak (interp.py): the block's market is
+        PPK's - beside it the same rows on the true Bootstrap curves then, the difference PPK − Bootstrap as for everybody."""
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows or pk.BROKEN_SHEET not in book.model.sheet_index:
             return
         si = book.model.sheet_index[pk.BROKEN_SHEET]
         cv = self._try_curves(book, calc) or {}
         idx = book.model.sheet_index
-        got = pk.broken(lambda sheet, r, c: calc.get(idx[sheet], r, c), cv.get("ppk"), cv.get("off_ppk")) if cv else {}
+        on_ppk = self._on_ppk(book, calc)
+        if on_ppk:
+            base = self.interp.boot_of(book, calc)
+            got = pk.broken(lambda sheet, r, c: base.get(idx[sheet], r, c), cv.get("boot"), cv.get("off_boot")) if cv else {}
+        else:
+            got = pk.broken(lambda sheet, r, c: calc.get(idx[sheet], r, c), cv.get("ppk"), cv.get("off_ppk")) if cv else {}
         f_col, h_col = col_to_index("F"), col_to_index("H")
         why = "; ".join(cv.get("errors") or [])
-        head = [{"t": "PPK basamak", "k": "s", "b": 1, "f": "hd",
-                 "tip": "Aynı satır PPK basamak eğrileriyle. Forward / basit / O/N ve XCCY: PPK biçimli offshore eğri - MPC ima "
-                        "patikası, offshore kotalar (FX swap ima ≤9M, XCCY 1Y–10Y) arasında sabit bir bazla bu kotalara kendi "
-                        "konvansiyonlarıyla (FX swap tek dönem basit ACT/360, XCCY yıllık par ACT/360) aynen oturur. OIS: PPK "
-                        "basamak eğrisi. Tarih, kupon takvimi ve gün sayımı bloğun kendi (yardımcı BK170:CC234): fark yalnız "
-                        "eğriden.\n%s.\n%s\n%s%s" % (self.PPK_TIP, self._shift_text(cv.get("off_report"), loc, "Offshore baz"),
-                                                    self._shift_text(cv.get("report"), loc), ("\n" + why) if why else "")},
-                {"t": "PPK − piyasa", "k": "s", "b": 1, "f": "hd",
-                 "tip": "PPK basamak − Piyasa (mid): forward satırlarında puan, oranlarda bp. Kotalı vadede ~0 (iki eğri de "
-                        "kotaya oturur), kotaların arasında iki yöntemin farkı."}]
+        if on_ppk:
+            head = [{"t": "Bootstrap (Murex)", "k": "s", "b": 1, "f": "hd",
+                     "tip": "%s. Forward / basit / O/N / XCCY offshore eğriden (FX swap ≤9M + XCCY 1Y–10Y, ln DF doğrusal), OIS par "
+                            "Motor'un Bootstrap düğümlerinden; tarih, kupon takvimi ve gün sayımı bloğun kendi (yardımcı "
+                            "BK170:CC234): fark yalnız eğriden.%s" % (self.ON_PPK_BOOT_TIP, ("\n" + why) if why else "")},
+                    {"t": "PPK − Bootstrap", "k": "s", "b": 1, "f": "hd",
+                     "tip": "Piyasa (PPK basamak: ayarınız) − Bootstrap (Murex): forward satırlarında puan, oranlarda bp. Kotalı "
+                            "vadede ~0 (iki eğri de kotaya oturur), kotaların arasında iki yöntemin farkı."}]
+        else:
+            head = [{"t": "PPK basamak", "k": "s", "b": 1, "f": "hd",
+                     "tip": "Aynı satır PPK basamak eğrileriyle. Forward / basit / O/N ve XCCY: PPK biçimli offshore eğri - MPC ima "
+                            "patikası, offshore kotalar (FX swap ima ≤9M, XCCY 1Y–10Y) arasında sabit bir bazla bu kotalara kendi "
+                            "konvansiyonlarıyla (FX swap tek dönem basit ACT/360, XCCY yıllık par ACT/360) aynen oturur. OIS: PPK "
+                            "basamak eğrisi. Tarih, kupon takvimi ve gün sayımı bloğun kendi (yardımcı BK170:CC234): fark yalnız "
+                            "eğriden.\n%s.\n%s\n%s%s" % (self.PPK_TIP, self._shift_text(cv.get("off_report"), loc, "Offshore baz"),
+                                                        self._shift_text(cv.get("report"), loc), ("\n" + why) if why else "")},
+                    {"t": "PPK − piyasa", "k": "s", "b": 1, "f": "hd",
+                     "tip": "PPK basamak − Piyasa (mid): forward satırlarında puan, oranlarda bp. Kotalı vadede ~0 (iki eğri de "
+                            "kotaya oturur), kotaların arasında iki yöntemin farkı."}]
         for i, r in enumerate(rnums):
             if r == pk.BROKEN_FWD - 1:
                 letters = data.get("c") or []
                 if "F" in letters and isinstance(rows[i][letters.index("F")], dict):
                     cell = rows[i][letters.index("F")]
                     cell["tip"] = (cell["tip"] + "\n" if cell.get("tip") else "") + (
+                        "Eğri ayarınız PPK basamak: piyasa PPK basamak - forward / basit / O/N / XCCY PPK biçimli offshore "
+                        "eğrinin düğüm tablosundan (her toplantı basamağında ve kotada düğüm), OIS par Motor'un PPK düğümlerinden "
+                        "(çeyrek içinde ln DF doğrusal); yanındaki sütun gerçek Bootstrap (Murex)" if on_ppk else
                         "Bootstrap (Murex) = bugünkü eğriler, Murex'in MTM'i: forward / basit / O/N / XCCY offshore eğriden "
                         "(FX swap ≤9M + XCCY 1Y–10Y, ln DF doğrusal), OIS par BOOT eğrisinden")
                 rows[i].extend([dict(c) for c in head])
@@ -6210,9 +6287,10 @@ class Service(object):
             if value is None or type(market) is not float:
                 rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
                 continue
+            diff = (market - value) if on_ppk else (value - market)          # (PPK − Bootstrap either way)
             rows[i].extend([{"t": numfmt.format_value(value, self._cell_format(book, si, r, f_col), loc), "v": value, "k": "n"},
-                            self._diff_cell((value - market) * self.BROKEN_DIFF[r], self._cell_format(book, si, r, h_col), loc)])
-        data["c"] = list(data.get("c") or []) + ["PPK basamak", "PPK fark"]
+                            self._diff_cell(diff * self.BROKEN_DIFF[r], self._cell_format(book, si, r, h_col), loc)])
+        data["c"] = list(data.get("c") or []) + (["Bootstrap", "PPK fark"] if on_ppk else ["PPK basamak", "PPK fark"])
         data["added"] = int(data.get("added") or 0) + 2
 
     #: a bond's kind (the desk's list's) from a type letter of a sheet (B / S / T / E: DİBS RV's, the ASW sheet's)
@@ -7430,6 +7508,30 @@ class Service(object):
             raise ServiceError("; ".join(res["errors"]))
         return self.carry_settings(user)
 
+    # ================================================================== the curve between quoted tenors (interp.py)
+    def interp_settings(self, user: Optional[str]) -> Dict[str, Any]:
+        """Ayarlar → Eğri interpolasyonu: the user's choice (Bootstrap (Murex) / PPK basamak), what each is, whether the PPK
+        curve could be made."""
+        key = self.require_user(user)
+        return self.et.call(self.interp.settings, key)
+
+    def set_interp(self, user: Optional[str], mode: Any) -> Dict[str, Any]:
+        """The user's choice set: PPK basamak their own input, Bootstrap (the default) none - their pages back to
+        everybody's when they have no other input of their own."""
+        key = self.require_user(user)
+        if not self.interp.available:
+            raise ServiceError("bu çalışma kitabında eğri ayarı yok (%s eklenemedi)" % ex.INTERP_SHEET)
+        text = " ".join(str(mode or "").split()).lower()
+        if text in ("ppk", "ppk basamak", ex.INTERP_PPK.lower()):
+            res = self.set_inputs(key, "tto", [{"ref": self.interp.mode_ref, "value": ex.INTERP_PPK}])
+            if res.get("errors"):
+                raise ServiceError("; ".join(res["errors"]))
+        elif text in ("boot", "bootstrap", "murex", ex.INTERP_BOOT.lower()):
+            self.reset_inputs(key, "tto", [self.interp.mode_ref])
+        else:
+            raise ServiceError("eğri şunlardan biri olmalı: %s" % ", ".join(ex.INTERP_CHOICES))
+        return self.interp_settings(key)
+
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
         bp) and its two horizons."""
@@ -8454,7 +8556,7 @@ class Service(object):
             priced_today()
             book = self._book("tto")
             try:
-                rec = bl.forward_trade(book, self._overlay(user, book), p)
+                rec = bl.forward_trade(book, self.interp.boot_overlay(user, book), p)
             except bl.TradeError as exc:
                 raise ServiceError(str(exc))
             return {"priced": "today", "why": why, "recs": [rec], "quote": dict(self._quote_forward(user, payload, lang), dir=rec["dir"])}

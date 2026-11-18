@@ -315,7 +315,13 @@ export async function openWatchDialog(ctx, { subject = null, label = '', hint = 
   m.foot.appendChild(watchBtn);
   m.foot.appendChild(alarmBtn);
   if (fixed) { toExpr.classList.add('hidden'); await changed(); } else draw();
-  if (focus === 'alarm') { const box = amode === 'move' ? size : (amode === 'z' ? zlevel : level); box.focus(); box.select(); }
+  // the alarm's box takes the focus, its value selected - unless the user is on another field of the window by now: the
+  // value of now may come after they started typing there (their keys stay where they type them)
+  if (focus === 'alarm') {
+    const box = amode === 'move' ? size : (amode === 'z' ? zlevel : level);
+    const at = document.activeElement;
+    if (!at || at === box || !m.box.contains(at)) { box.focus(); box.select(); }
+  }
 }
 
 /** "Alarm kur…" on a cell (right click) or on a watched item. */

@@ -863,20 +863,23 @@ export class SettingsPage {
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
-    const [cal, cov, src, carry, hol] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
-      api.get('/api/carry').catch(() => ({ available: false })), api.get('/api/holidays').catch(() => ({ available: false }))]);
+    const [cal, cov, src, carry, hol, interp] = await Promise.all([api.get('/api/calendar'), api.get('/api/history/series'), api.get('/api/sources'),
+      api.get('/api/carry').catch(() => ({ available: false })), api.get('/api/holidays').catch(() => ({ available: false })),
+      api.get('/api/interp').catch(() => ({ available: false }))]);
     if (this.dead) return;
     this.cal = cal;
     this.cov = cov;
     this.src = src;
     this.carry = carry;
     this.hol = hol;
+    this.interp = interp;
     this.holCcy = 'TRY';
     this.holEdits = {};                    // currency -> the list as typed and not saved yet (kept while another is shown)
     this.rows = cal.meetings.map((m) => ({ date: m.date, was: m.date }));
     this.dirty = false;
     clear(this.host);
     this.build();
+    this.renderInterp();
     this.renderCarry();
     this.renderSources(true);
     this.renderCalendar();
@@ -923,6 +926,21 @@ export class SettingsPage {
   }
 
   build() {
+    // ---- the TRY curves between their quoted tenors: Bootstrap (Murex) or PPK basamak - one's own choice
+    this.interpPanel = panel('Eğri interpolasyonu · kotalı vadeler arası (kişisel)', { wide: true, id: 'interp' });
+    this.interpSeg = h('div', { class: 'seg', id: 'interp-mode', role: 'group', 'aria-label': 'Eğri interpolasyonu' });
+    this.interpInfo = h('div', { class: 'set-info', id: 'interp-info' });
+    this.interpPanel.body.appendChild(h('div', { class: 'set-body' }, this.interpInfo,
+      h('div', { class: 'carry-actions' }, h('div', { class: 'field' }, h('label', null, 'Eğri'), this.interpSeg))));
+    this.interpPanel.setNote('Kotalı vadelerde iki yöntem aynıdır; fark aralarındadır (FRA, kırık tarih, çeyrek arası). PPK basamak seçilince '
+      + 'bütün sayfalar (OIS, Masa, Forward, DV01, DİBS RV / ASW, Carry …), offshore eğri ve Trades\'in MTM / kupon / K/Z\'si bu eğriyle '
+      + 'hesaplanır; üst şeritte "Eğri: PPK basamak" yazar. Motor\'un düğümleri (1-3 ay, sonra çeyreklik) PPK eğrisinde, aralarında ln DF '
+      + 'günlere göre doğrusal: çeyrek içindeki bir tarih her toplantı basamağını değil iki düğümü görür - günlük tam PPK değerleri PPK '
+      + 'sütunlarında (OIS · PPK FRA listeleri, Masa kırık vade, Günlük İşlemler FRA). Offshore eğride her toplantıda düğüm vardır. '
+      + 'Bootstrap\'ta kalanlar: Günlük İşlemler ve masanın kayıtları, MTM yenile / kapanış kayıtlarının Bootstrap\'ı (ikisi de alınır), '
+      + 'hedef / stop alarmları, quant, tarihçe, başkalarının ekranları. Ayar yalnız sizin için geçerlidir; "Girdilerimi sıfırla" '
+      + 'Bootstrap\'a döndürür.');
+
     // ---- the carry: which TLREF path, over which horizons
     this.carryPanel = panel('Carry · TLREF patikası ve ufuklar', { wide: true, id: 'carry' });
     this.carryPath = h('select', { class: 'inp', id: 'carry-path' });
@@ -1070,8 +1088,42 @@ export class SettingsPage {
         h('div', { class: 'field' }, h('label', null, 'Geriye bakış (gün)'), this.daysInp),
         saveSet, h('span', { class: 'grow' }), sync, redo)));
     this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el, this.calPanel.el, this.holPanel.el,
-      this.histPanel.el, this.seriesPanel.el));
+    this.host.appendChild(h('div', { class: 'panels' }, this.interpPanel.el, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el, this.calPanel.el,
+      this.holPanel.el, this.histPanel.el, this.seriesPanel.el));
+  }
+
+  renderInterp() {
+    const d = this.interp;
+    if (!d || !d.available) {
+      this.interpPanel.el.classList.add('hidden');
+      return;
+    }
+    clear(this.interpSeg);
+    for (const c of d.choices) {
+      const b = h('button', { type: 'button', class: c.id === d.mode ? 'on' : '', title: c.about, 'data-mode': c.id },
+        c.label + (c.id === d.default ? ' (varsayılan)' : ''));
+      b.addEventListener('click', () => this.saveInterp(c.id));
+      this.interpSeg.appendChild(b);
+    }
+    const st = d.stats || {};
+    clear(this.interpInfo).append(h('span', null, 'Şu an: ', h('b', { id: 'interp-status' }, d.status || '')),
+      d.mode === 'ppk' && st.last_ms !== null && st.last_ms !== undefined
+        ? h('span', { class: 'muted' }, 'PPK eğrisi son ' + (st.at || '') + ' hesaplandı (' + st.last_ms + ' ms) · PPK\'daki kullanıcı: ' + (st.users || 0))
+        : null);
+  }
+
+  async saveInterp(mode) {
+    if (this.interp && this.interp.mode === mode) return;
+    for (const b of this.interpSeg.children) b.disabled = true;
+    try {
+      this.interp = await api.post('/api/interp', { mode });
+      this.renderInterp();
+      toast(mode === 'ppk' ? 'Eğri: PPK basamak – sayfalar ve Trades bu eğriyle (yalnız sizde)' : 'Eğri: Bootstrap (Murex)', 'ok', 3600);
+      if (this.ctx.refreshNow) this.ctx.refreshNow();
+    } catch (err) {
+      errorToast(err);
+      this.renderInterp();
+    }
   }
 
   renderCarry() {

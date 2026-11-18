@@ -250,6 +250,8 @@ export class TradesPage {
       title: 'Bu sekmedeki bütün işlemleri şimdi değerle (MTM, günlük / haftalık / toplam K/Z). Sürekli canlı değildir: yalnızca tıklayınca hesaplanır.' }, 'MTM yenile');
     this.mtmBtn.addEventListener('click', () => this.runMtm());
     this.mtmAt = h('span', { class: 'muted', id: 'trades-mtm-at' });
+    // the curve the values are on: the viewer's setting (Ayarlar → Eğri interpolasyonu) - "MTM yenile" keeps both
+    this.mtmCurve = h('span', { class: 'chip', id: 'trades-mtm-curve' });
     const show = h('select', { class: 'inp', id: 'trades-ccy', title: 'İşlem satırlarının gösterildiği döviz (toplamlar her zaman TL ve USD)' });
     for (const [v, label] of SHOW) show.appendChild(h('option', { value: v }, label));
     show.value = this.show;
@@ -272,12 +274,14 @@ export class TradesPage {
     });
     this.closeInfo = h('span', { class: 'muted', id: 'trades-close-info' });
     this.host.appendChild(this.tabs);
-    this.host.appendChild(h('div', { class: 'page-tools' }, add, this.mtmBtn, this.mtmAt,
+    this.host.appendChild(h('div', { class: 'page-tools' }, add, this.mtmBtn, this.mtmAt, this.mtmCurve,
       h('span', { class: 'muted' }, 'Gösterim'), show,
       h('label', { class: 'check', title: 'Spread, fly ve FRA\'ların bacakları kendi satırlarında: vadelere göre outright pozisyon' }, legs, ' Bacaklar ayrı satır'),
       this.quantBtn, log, h('span', { class: 'grow' }), this.closeInfo));
     this.stale = h('div', { class: 'banner hidden', id: 'trades-stale' });
     this.host.appendChild(this.stale);
+    this.curveNote = h('div', { class: 'banner hidden', id: 'trades-curve-note' });
+    this.host.appendChild(this.curveNote);
     const section = (id, title) => {
       const count = h('span', { class: 'muted' });
       const body = h('div', { class: 'body' });
@@ -316,6 +320,15 @@ export class TradesPage {
     this.mtmAt.textContent = mtm ? 'son yenileme: ' + mtm.at.slice(11, 16) + (mtm.by_name ? ' (' + mtm.by_name + ')' : '') : 'henüz değerlenmedi';
     this.stale.classList.toggle('hidden', !(mtm && mtm.stale));
     this.stale.textContent = 'Son yenilemeden sonra işlemler değişti: güncel değerler için "MTM yenile".';
+    // which curve the numbers are on: the snapshot's (kept on both: the viewer's own), else the viewer's setting
+    const curveText = (mtm && mtm.curve_text) || (d && d.curve_text) || '';
+    this.mtmCurve.textContent = curveText ? 'Eğri: ' + curveText : '';
+    this.mtmCurve.classList.toggle('hidden', !curveText);
+    this.mtmCurve.title = 'MTM, kupon ve K/Z bu eğriyle (Ayarlar → Eğri interpolasyonu, sizin ayarınız). "MTM yenile" ve kapanış kaydı '
+      + 'iki eğride de alınır; herkes kendi ayarınınkini görür. Hedef / stop alarmları Bootstrap (Murex) ile.';
+    const note = (mtm && mtm.curve_note) || '';
+    this.curveNote.textContent = note;
+    this.curveNote.classList.toggle('hidden', !note);
     if (d && d.close) {
       const last = d.close.last;
       this.closeInfo.textContent = 'Kapanış kaydı her iş günü ' + d.close.time + (last ? ' · son: ' + isoToTr(last.day) + (last.late ? ' (geç alındı)' : '') : ' · henüz yok');
@@ -779,7 +792,8 @@ export class TradesPage {
       const res = await api.get('/api/trades/' + it.id + '/coupons');
       const m = modal({ title: 'Kuponlar', width: 1040 });
       const when = res.status === 'closed' ? 'kapanışına göre (' + isoToTr(res.asof) + ')' : isoToTr(res.asof) + ' itibarıyla';
-      m.body.appendChild(h('p', { class: 'muted', style: { marginTop: '0' } }, it.text + ' · ' + when));
+      m.body.appendChild(h('p', { class: 'muted', style: { marginTop: '0' } }, it.text + ' · ' + when
+        + (res.curve_text ? ' · eğri: ' + res.curve_text : '')));
       const box = h('div', { id: 'trades-coupons' });
       if (!res.ok) box.appendChild(h('p', { class: 'muted why' }, res.why || 'hesaplanamadı'));
       (res.legs || []).forEach((lg, i) => box.appendChild(this.couponTable(lg, i)));

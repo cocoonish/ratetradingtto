@@ -563,6 +563,14 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().carry_settings, _user(request)))
 
     @handler
+    async def interp_settings(request: Request):
+        # Ayarlar → Eğri interpolasyonu: the user's own choice, Bootstrap (Murex) or PPK basamak
+        if request.method == "POST":
+            data = await _body(request)
+            return ok(await call(svc().set_interp, _user(request), data.get("mode")))
+        return ok(await call(svc().interp_settings, _user(request)))
+
+    @handler
     async def spreads(request: Request):
         return ok(await call(svc().spreads, _user(request)))
 
@@ -1247,6 +1255,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/vol", vol, methods=["POST"]),
         Route("/api/vol/carry", carry_vol, methods=["GET", "POST"]),
         Route("/api/carry", carry_settings, methods=["GET", "POST"]),
+        Route("/api/interp", interp_settings, methods=["GET", "POST"]),
         Route("/api/spreads", spreads),
         Route("/api/broker", broker),
         Route("/api/broker", broker_add, methods=["POST"]),

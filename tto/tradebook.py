@@ -93,6 +93,16 @@ LEVELS_EVERY = 10.0
 ALARM_NOTE = {"target": "hedefe geldi", "stop": "stopa geldi"}
 SOURCE_MAX = 120
 KEYS = ("ccy", "try", "usd")
+#: **The one switch of Trades and the curve setting** (Ayarlar → Eğri interpolasyonu, tto/interp.py): True - the desk's
+#: decision of 18.11.2026, "Trades MTM de anahtara bağlansın" - each user sees the trades valued on their own curve
+#: setting (MTM, carry, coupons and "Kuponlar", P&L): Bootstrap (Murex) or PPK basamak.  False: everybody's on Bootstrap
+#: whatever their setting.  Either way the snapshots the desk shares - "MTM yenile" and the daily close - are kept on both
+#: curves (each viewer reads theirs; one kept before both were - Bootstrap only - shows as Bootstrap and says so), and what
+#: runs for nobody stays on Bootstrap: the targets' and stops' levels and alarms, the DV01 sizing of the form, the quant's
+#: bookings.
+FOLLOW_CURVE = True
+CURVES = ("boot", "ppk")
+CURVE_TEXT = {"boot": "Bootstrap (Murex)", "ppk": "PPK basamak"}
 _FRA = re.compile(r"^\s*(\d{1,3})\s*[xX×*]\s*(\d{1,3})\s*$")
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PAIR = re.compile(r"[^A-Za-z]")
@@ -462,6 +472,22 @@ def realised_by(leg: Optional[Dict[str, Any]], day: str) -> Optional[float]:
     if not isinstance(flows, list):
         return None
     return sum(_f(net) or 0.0 for end, net in flows if str(end) <= day) + 0.0
+
+
+def on_curve(v: Optional[Dict[str, Any]], curve: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """A kept valuation (a close, a closed trade's value) on ``curve``: on PPK basamak its twin kept beside it (``v["ppk"]``,
+    with the original's fingerprint and times); without one - kept before both curves were, or when the PPK curve could
+    not be made - the Bootstrap one.  And whether it is on the curve asked for."""
+    if curve != "ppk" or not isinstance(v, dict):
+        return v, True
+    twin = v.get("ppk")
+    if not isinstance(twin, dict):
+        return v, False
+    out = dict(twin)
+    for k in ("fp", "closed_at", "valued_at"):
+        if k in v and k not in out:
+            out[k] = v[k]
+    return out, True
 
 
 def inception_point(t: _dt.datetime) -> Dict[str, Any]:
@@ -886,6 +912,34 @@ class TradeBook(object):
         if nudge is not None:
             nudge()
 
+    # ------------------------------------------------------------------ the curve
+    def curve_of(self, user: Optional[str]) -> str:
+        """The curve the user sees the trades on (``FOLLOW_CURVE``): their setting, else Bootstrap."""
+        interp = getattr(self.svc, "interp", None)
+        if not FOLLOW_CURVE or not user or interp is None or not getattr(interp, "available", False):
+            return "boot"
+        return interp.mode(user)
+
+    def _curves(self) -> Tuple[str, ...]:
+        """The curves a snapshot the desk shares is kept on: both, where the workbook has the switch."""
+        interp = getattr(self.svc, "interp", None)
+        return CURVES if interp is not None and getattr(interp, "available", False) else ("boot",)
+
+    def _markets(self) -> Dict[str, Any]:
+        """The valuation's market on each curve a snapshot is kept on (calculation thread) - a PPK curve that cannot be
+        made is left out (its snapshot then is the Bootstrap one: said where it is shown)."""
+        out = {"boot": tv.market(self.svc)}
+        for c in self._curves():
+            if c == "boot":
+                continue
+            try:
+                mkt = tv.market(self.svc, c)
+            except Exception:  # noqa: BLE001 - a curve that cannot be read now: the Bootstrap snapshot stands for it (said)
+                continue
+            if getattr(mkt, "curve", "boot") == c:
+                out[c] = mkt
+        return out
+
     # ------------------------------------------------------------------ the engine
     def _engine(self, fn: Callable, *args: Any) -> Any:
         """On the calculation thread (what reads the engine's values must): the valuation's market and values."""
@@ -1022,10 +1076,13 @@ class TradeBook(object):
                     if r["status"] == "open" or (r.get("close_date") or "") > day]
 
             def run() -> List[Tuple[int, Dict[str, Any]]]:
-                mkt = tv.market(self.svc)
+                # (kept on both curves: each viewer's P&L periods count from the close of their own curve)
+                mkts = self._markets()
                 out = []
                 for r in rows:
-                    v = self._keep(self._value(self.for_value(r, as_open=True), mkt, day), greeks=False)
+                    v = self._keep(self._value(self.for_value(r, as_open=True), mkts["boot"], day), greeks=False)
+                    if "ppk" in mkts:
+                        v["ppk"] = self._keep(self._value(self.for_value(r, as_open=True), mkts["ppk"], day), greeks=False)
                     v["fp"] = fingerprint(r)
                     out.append((r["id"], v))
                 return out
@@ -1804,16 +1861,18 @@ class TradeBook(object):
         tab (nothing is valued here)."""
         user = self._user(user)
         scope = self._scope(scope)
+        curve = self.curve_of(user)
         rows = self.store.tb_list(scope, None if scope == "desk" else user)
         names = self._names()
         admin = self._admin(user)
         items = [self._item(r, user, admin, names) for r in rows]
-        # a closed trade's realised P&L is kept with its close value once worked out (it never changes after)
+        # a closed trade's realised P&L is kept with its close value once worked out (it never changes after) - on the
+        # viewer's curve (one valued before both curves were: the Bootstrap one)
         closed_rows = [r for r in rows if r["status"] == "closed"]
-        todo = [r for r in closed_rows if "realized" not in (r.get("closing") or {})]
-        realized = self._results(todo, {}, self.now(), only_closed=True) if todo else {}
+        todo = [r for r in closed_rows if "realized" not in (on_curve(r.get("closing") or {}, curve)[0] or {})]
+        realized = self._results(todo, {}, self.now(), only_closed=True, curve=curve) if todo else {}
         for r in closed_rows:
-            c = r.get("closing") or {}
+            c = on_curve(r.get("closing") or {}, curve)[0] or {}
             if "realized" in c:
                 realized[r["id"]] = {"ok": bool(c.get("ok")), "why": c.get("why"), "periods": {"total": c["realized"]}}
         for it in items:
@@ -1821,12 +1880,13 @@ class TradeBook(object):
                 it["realized"] = realized.get(it["id"])
         with self._lock:
             mtm = self._mtm.get((scope, "" if scope == "desk" else user))
-            mtm = dict(mtm) if mtm else None
+            mtm = self.snapshot_for(mtm, user) if mtm else None
         if mtm:
             mtm["by_name"] = names.get(mtm.get("by") or "", mtm.get("by"))
         return {"scope": scope, "today": self._today().isoformat(), "me": user, "admin": admin, "close": self.close_info(),
                 "open": [it for it in items if it["status"] != "closed"], "closed": [it for it in items if it["status"] == "closed"],
-                "mtm": mtm, "products": PRODUCT_TEXT, "structures": STRUCTURE_TEXT}
+                "mtm": mtm, "products": PRODUCT_TEXT, "structures": STRUCTURE_TEXT,
+                "curve": curve, "curve_text": CURVE_TEXT[curve]}             # (the viewer's: what the values are on)
 
     def _close_days(self) -> Tuple[Dict[str, _dt.datetime], Optional[str], Optional[str]]:
         """The closes taken: day -> its close moment; the last one; the last one of the week before."""
@@ -1857,8 +1917,9 @@ class TradeBook(object):
         return at
 
     def _results(self, rows: Sequence[Dict[str, Any]], vals: Dict[int, Dict[str, Any]], now: _dt.datetime,
-                 only_closed: bool = False) -> Dict[int, Dict[str, Any]]:
-        """Each trade's valuation (now, or a closed one's realised) with its P&L periods."""
+                 only_closed: bool = False, curve: str = "boot") -> Dict[int, Dict[str, Any]]:
+        """Each trade's valuation (now, or a closed one's realised) with its P&L periods - on ``curve``: the closes and a
+        closed trade's value kept on it (one kept before both curves were: the Bootstrap one, counted in ``older``)."""
         if not rows:
             return {}
         at, last, week = self._close_days()
@@ -1870,18 +1931,26 @@ class TradeBook(object):
             closed = r["status"] == "closed"
             if only_closed and not closed:
                 continue
+            older = 0
             if closed:
-                v = r.get("closing") or {"ok": False, "why": "kapanış değeri henüz hesaplanmadı (MTM yenile)"}
+                v, same = on_curve(r.get("closing") or {"ok": False, "why": "kapanış değeri henüz hesaplanmadı (MTM yenile)"}, curve)
+                older += 0 if same else 1
                 end_t = self._closed_at(r)
             else:
                 v = vals.get(r["id"]) or {"ok": False, "why": "değer yok"}
                 end_t = now
-            mine = sorted(((d, at[d], s) for d, s in (snaps.get(r["id"]) or {}).items() if d in at), key=lambda x: x[0])
-            if closed:
-                mine = [x for x in mine if x[0] < r["close_date"]]
+            mine = []
+            for d, s in (snaps.get(r["id"]) or {}).items():
+                if d in at and (not closed or d < r["close_date"]):
+                    s, same = on_curve(s, curve)
+                    older += 0 if same else 1
+                    mine.append((d, at[d], s))
+            mine.sort(key=lambda x: x[0])
             inc_t = _dt.datetime.combine(_dt.date.fromisoformat(r["trade_date"]), ctime)
             res = dict(self._keep(v, trade=None if closed else r))
             res["periods"] = pnl_periods(r, v, end_t, mine, inc_t, today, last, week)
+            if older:
+                res["older"] = older                         # (kept on Bootstrap only: before both curves were kept)
             out[r["id"]] = res
         return out
 
@@ -1896,40 +1965,68 @@ class TradeBook(object):
         closed_rows = [r for r in rows if r["status"] == "closed"]
         todo = [r for r in closed_rows if not (r.get("closing") or {}).get("ok")]
 
-        def run() -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[str, Any]]]:
-            mkt = tv.market(self.svc)
-            now_vals = {r["id"]: self._value(self.for_value(r), mkt) for r in open_rows}
-            closings = {r["id"]: self._value(self.for_value(r), mkt, r["close_date"]) for r in todo}
-            return now_vals, closings
+        def run() -> Dict[str, Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[str, Any]]]]:
+            # (the tab is shared: valued on both curves, each viewer reads the one of their own setting)
+            out = {}
+            for c, mkt in self._markets().items():
+                out[c] = ({r["id"]: self._value(self.for_value(r), mkt) for r in open_rows},
+                          {r["id"]: self._value(self.for_value(r), mkt, r["close_date"]) for r in todo})
+            return out
 
-        now_vals, closings = self._engine(run) if (open_rows or todo) else ({}, {})
+        got = self._engine(run) if (open_rows or todo) else {c: ({}, {}) for c in self._curves()}
         for r in todo:
-            r["closing"] = dict(self._keep(closings[r["id"]]), closed_at=(r.get("closing") or {}).get("closed_at"),
-                                valued_at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
+            closing = dict(self._keep(got["boot"][1][r["id"]]), closed_at=(r.get("closing") or {}).get("closed_at"),
+                           valued_at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
+            if "ppk" in got and r["id"] in got["ppk"][1]:
+                closing["ppk"] = self._keep(got["ppk"][1][r["id"]])
+            r["closing"] = closing
             self._keep_realized([r])
             payload = {k: v for k, v in r.items() if k not in self.store.TB_COLS}
             self.store.tb_set_payload(r["id"], payload)
         now = self.now()
-        open_res = self._results(open_rows, now_vals, now)
-        closed_res = self._results(closed_rows, {}, now, only_closed=True)
-        # each open trade's target and stop against this valuation (and the distances the rows show until the next one)
         at = now.strftime("%H:%M:%S")
-        for r in open_rows:
-            res = open_res.get(r["id"])
-            lv = levels_of(r, res.get("level_now"), "%s (MTM)" % at) if res is not None else None
-            if lv is not None:
-                res["levels"] = lv
-                with self._lock:
-                    self._levels[r["id"]] = (res.get("level_now"), at, "MTM")
-        at, last, week = self._close_days()
-        out = {"scope": scope, "at": now.strftime("%Y-%m-%d %H:%M:%S"), "by": user, "stale": False,
-               "last_close": last, "week_close": week,
-               "values": {str(k): v for k, v in open_res.items()}, "closed": {str(k): v for k, v in closed_res.items()},
-               "totals": totals(open_rows, open_res, closed_rows, closed_res)}
+        _, last, week = self._close_days()
+        out: Dict[str, Any] = {"scope": scope, "at": now.strftime("%Y-%m-%d %H:%M:%S"), "by": user, "stale": False,
+                               "last_close": last, "week_close": week, "curves": {}}
+        for c, (now_vals, _) in got.items():
+            open_res = self._results(open_rows, now_vals, now, curve=c)
+            closed_res = self._results(closed_rows, {}, now, only_closed=True, curve=c)
+            # each open trade's target and stop against this valuation (and the distances the rows show until the next
+            # one) - the alarms' on Bootstrap, as their own round values them
+            for r in open_rows:
+                res = open_res.get(r["id"])
+                lv = levels_of(r, res.get("level_now"), "%s (MTM)" % at) if res is not None else None
+                if lv is not None:
+                    res["levels"] = lv
+                    if c == "boot":
+                        with self._lock:
+                            self._levels[r["id"]] = (res.get("level_now"), at, "MTM")
+            out["curves"][c] = {"values": {str(k): v for k, v in open_res.items()},
+                                "closed": {str(k): v for k, v in closed_res.items()},
+                                "totals": totals(open_rows, open_res, closed_rows, closed_res),
+                                "older": sum(int(x.get("older") or 0) for x in list(open_res.values()) + list(closed_res.values()))}
         with self._lock:
             self._mtm[(scope, "" if scope == "desk" else user)] = out
         names = self._names()
-        return dict(out, by_name=names.get(user, user))
+        return dict(self.snapshot_for(out, user), by_name=names.get(user, user))
+
+    def snapshot_for(self, snap: Dict[str, Any], user: Optional[str]) -> Dict[str, Any]:
+        """An "MTM yenile" of a tab as ``user`` reads it: on their curve (``curve`` / ``curve_text``) - a snapshot without it
+        (kept before both curves were, or when the PPK curve could not be made) on Bootstrap, saying so
+        (``curve_note``); and whether the P&L counts from closes kept on Bootstrap only."""
+        want = self.curve_of(user)
+        have = snap.get("curves") or {}
+        use = want if want in have else "boot"
+        out = {k: v for k, v in snap.items() if k != "curves"}
+        out.update({k: v for k, v in (have.get(use) or {}).items() if k != "older"})
+        out["curve"], out["curve_text"] = use, CURVE_TEXT[use]
+        if use != want:
+            out["curve_note"] = ("Bu MTM %s eğrisiyle alınmış (o an PPK basamak eğrisi yoktu): ayarınızdaki %s için "
+                                 "\"MTM yenile\"" % (CURVE_TEXT[use], CURVE_TEXT[want]))
+        elif use == "ppk" and (have.get(use) or {}).get("older"):
+            out["curve_note"] = ("Günlük / haftalık K/Z'nin bir kısmı PPK basamak'tan önce yalnız Bootstrap (Murex) ile alınmış "
+                                 "kapanışlardan: o kapanışlarla eğri farkı K/Z'ye karışır (sonraki kapanışlar iki eğride de alınır)")
+        return out
 
     # ------------------------------------------------------------------ changes
     def check(self, user: Optional[str], raw: Any, lang: str = "tr") -> Dict[str, Any]:
@@ -2032,12 +2129,19 @@ class TradeBook(object):
                              {"text": text, "close_date": day.isoformat(), "close_price": price,
                               "close_price_text": price_text(row, price)})
         closed = dict(row, **payload, status="closed")
+
+        def run() -> Dict[str, Dict[str, Any]]:
+            # (its value at the close on both curves: whoever looks reads theirs)
+            return {c: self._value(self.for_value(closed), mkt, day.isoformat()) for c, mkt in self._markets().items()}
+
         try:
-            v = self._engine(lambda: self._value(self.for_value(closed), tv.market(self.svc), day.isoformat()))
+            got = self._engine(run)
         except Exception as exc:  # noqa: BLE001 - the close stands; "MTM yenile" values it again
-            v = {"ok": False, "why": "değerleme hatası: %s" % str(exc)[:200]}
-        payload["closing"] = dict(self._keep(v), closed_at=payload["closing"]["closed_at"],
+            got = {"boot": {"ok": False, "why": "değerleme hatası: %s" % str(exc)[:200]}}
+        payload["closing"] = dict(self._keep(got["boot"]), closed_at=payload["closing"]["closed_at"],
                                   valued_at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
+        if "ppk" in got:
+            payload["closing"]["ppk"] = self._keep(got["ppk"])
         self._keep_realized([dict(closed, closing=payload["closing"])], payload["closing"])
         self.store.tb_set_payload(row["id"], payload)
         self._changed(row["scope"], row["owner"])
@@ -2054,6 +2158,11 @@ class TradeBook(object):
         res = self._results(valued, {}, self.now(), only_closed=True)
         for r in valued:
             (into if into is not None else r["closing"])["realized"] = res[r["id"]]["periods"]["total"]
+        twins = [r for r in valued if isinstance(r["closing"].get("ppk"), dict) and r["closing"]["ppk"].get("ok")]
+        if twins:
+            res = self._results(twins, {}, self.now(), only_closed=True, curve="ppk")       # (its PPK basamak twin's too)
+            for r in twins:
+                (into if into is not None else r["closing"])["ppk"]["realized"] = res[r["id"]]["periods"]["total"]
 
     def reopen(self, user: Optional[str], tid: Any) -> Dict[str, Any]:
         """A closed trade back among the open ones (its close taken back)."""
@@ -2109,12 +2218,21 @@ class TradeBook(object):
         if row["product"] not in tv.RATES:
             raise ServiceError("kupon takvimi yalnız OIS / SOFR işlemlerinde")
         closed = row["status"] == "closed"
+        curve = self.curve_of(user)
+        used = {"curve": "boot"}
+
+        def run() -> Dict[str, Any]:
+            mkt = tv.market(self.svc, curve) if curve != "boot" else tv.market(self.svc)      # (the viewer's curve)
+            used["curve"] = getattr(mkt, "curve", "boot")
+            return tv.coupons(self.for_value(row), mkt, row.get("close_date") if closed else None)
+
         try:
-            res = self._engine(lambda: tv.coupons(self.for_value(row), tv.market(self.svc), row.get("close_date") if closed else None))
+            res = self._engine(run)
         except Exception as exc:  # noqa: BLE001 - said, like a valuation that fails
             res = {"ok": False, "why": "değerleme hatası: %s" % (str(exc)[:200] or type(exc).__name__), "legs": []}
         word = "PPK" if row.get("product") == "ois" else "FOMC"
-        return dict(res, id=row["id"], text=describe(row, word), status=row["status"], at=self.now().strftime("%Y-%m-%d %H:%M:%S"))
+        return dict(res, id=row["id"], text=describe(row, word), status=row["status"], at=self.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    curve=used["curve"], curve_text=CURVE_TEXT[used["curve"]])
 
     def recent(self, user: Optional[str], scope: Any = "desk", limit: int = 200) -> Dict[str, Any]:
         """The latest changes of a tab (newest first): the desk's trades, or the user's own."""
