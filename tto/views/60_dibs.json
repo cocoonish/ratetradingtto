@@ -150,6 +150,7 @@
    "title": "DİBS göreli değer tablosu",
    "range": "A4:BJ54",
    "hidden": false,
+   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ.",
    "action": "add-isin",
    "add": {
     "list": "A5:A54",

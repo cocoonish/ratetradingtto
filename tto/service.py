@@ -3129,12 +3129,23 @@ class Service(object):
     MAX_HIDDEN_COLUMNS = 400
     MAX_COLUMN_BYTES = 256 * 1024                       # all of one user's choices together (a few KB in practice)
     _columns_lock = threading.Lock()
+    #: the columns a table hides until its user chooses otherwise ("Sütunlar" shows them, and that choice is kept):
+    #: DİBS RV's own FX swap columns (BF:BJ, on the offshore ICAP curve of the Forward sheet) - the desk reads a bond's
+    #: FX swap side on DİBS ASW's FX swap implied curve (EK_FX: DİBS RV · Genel's "FX swap ASW", DİBS Trading, the card),
+    #: and the TRY workbook cannot work it out itself: it holds the quotes (Forward!AO6:AO26, VİOP!C58:C69), not DİBS
+    #: ASW's curve made of them nor its source order (ICPL, then BGN; MID first)
+    DEFAULT_HIDDEN_COLUMNS: Dict[str, Tuple[str, ...]] = {"v/dibs/B3": ("BF", "BG", "BH", "BI", "BJ")}
 
     def columns(self, user: Optional[str]) -> Dict[str, Any]:
         """The columns this user hid, table by table: ``{"tables": {"v/dibs/B5": ["B", "K"], ...}}`` - and, when they
-        put the columns of a table in an order of their own, ``"order": {"v/dibs/B5": ["C", "A", "B", ...]}``."""
+        put the columns of a table in an order of their own, ``"order": {"v/dibs/B5": ["C", "A", "B", ...]}``; the
+        tables they never chose for with what those hide by default (``DEFAULT_HIDDEN_COLUMNS``): ``"defaults"``."""
         key = self.require_user(user)
-        out: Dict[str, Any] = {"tables": self.store.get("cols." + key) or {}}
+        tables = self.store.get("cols." + key) or {}
+        out: Dict[str, Any] = {"tables": tables}
+        defaults = {t: list(c) for t, c in self.DEFAULT_HIDDEN_COLUMNS.items() if t not in tables}
+        if defaults:
+            out["defaults"] = defaults
         order = self.store.get("colorder." + key) or {}
         if order:
             out["order"] = order
@@ -3170,7 +3181,8 @@ class Service(object):
         return {"table": table, "order": cols}
 
     def set_columns(self, user: Optional[str], table: Any, hidden: Any) -> Dict[str, Any]:
-        """Hide these columns of one table from this user (an empty list shows every column again)."""
+        """Hide these columns of one table from this user (an empty list shows every column again - kept as such for a
+        table that hides some by default, ``DEFAULT_HIDDEN_COLUMNS``)."""
         key = self.require_user(user)
         if not isinstance(table, str) or not table.strip() or len(table) > 160:
             raise ServiceError("tablo adı geçersiz")
@@ -3181,7 +3193,7 @@ class Service(object):
             raise ServiceError("bir tabloda en fazla %d sütun gizlenebilir" % self.MAX_HIDDEN_COLUMNS)
         with self._columns_lock:
             saved = self.store.get("cols." + key) or {}
-            if cols:
+            if cols or table in self.DEFAULT_HIDDEN_COLUMNS:
                 saved[table] = cols
             else:
                 saved.pop(table, None)
