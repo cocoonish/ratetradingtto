@@ -2899,7 +2899,7 @@ async function clipAfter(page, action) {
     await shot(page, '12b-dibs-genel');
     check('DİBS RV · Genel: its three tabs, the entry lit, the table in its groups (OIS ASW · FX swap ASW on the FX swap ima eğrisi · sıfır kupon) with every bond of the trading list',
       genelSeen.tabs.join('|') === 'Genel|RV hesap tablosu|ASW hesap tablosu' && genelSeen.on.join() === 'dibs-genel' && genelSeen.lit.join() === 'tahvil.dibsrv'
-      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–12A FX swap ima, 18A XCCY eğrisinden/.test(g))
+      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden/.test(g))
       && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp · LOO RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
     { genelSeen, gBonds: gBonds.length });
     check('... its three charts with their points: the yield curve (bonds and OIS), ASW · OIS and ASW · FX swap as DİBS ASW draws them',

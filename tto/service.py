@@ -6599,7 +6599,7 @@ class Service(object):
     RV_FX_CURVE = "FX swap (offshore ICAP eğrisi)"
     ASW_FX_CURVE = rvfair.FX_CURVE_TEXT                 # (one wording, rvfair's: Genel, the summary and the card use it too)
     #: how the ASW page's curve reads EK_FX's rates (aswfx; the tips of its FX columns)
-    FX_RATES_READ = ("FX faizleri kendi kuralıyla okunur - TRYI (12 aya kadar) tek dönem basit ACT/360, TRYSAQ (2 yıldan) yıllık ACT/360 par, "
+    FX_RATES_READ = ("FX faizleri kendi kuralıyla okunur - TRYI (9 aya kadar) tek dönem basit ACT/360, TRYSAQ (1 yıldan) yıllık ACT/360 par, "
                      "masanın dosyasındaki gibi; 18A kota değil, hesaplanır: offshore eğrinin XCCY 1Y–2Y arasında 18A iskonto faktörü, "
                      "Ayarlar'daki eğri interpolasyonunuzla (Bootstrap / PPK basamak) - ve sayfaya, vadesinde aynı iskonto faktörünü "
                      "veren kendi kuralındaki par faiz olarak girer")

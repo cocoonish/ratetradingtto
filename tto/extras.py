@@ -1661,9 +1661,11 @@ FXC_SHEET = "EK_FX"
 FXC_FIRST = 6                     # first tenor row
 FXC_ZERO_COL = "K"                # the zero-coupon rate of the ASW sheet's curve at each tenor
 # the tenors of the ASW sheet's OIS curve (ASW!C64:R64, aswfx.TENORS) and the offshore ticker of each: the FX swap
-# implied yields up to 12 months, the cross currency swaps after - 18M none: computed off the offshore XCCY curve (the
-# desk, 18.11.2026: "TRYI18M gerçek bir kotasyon değil ... 18M hesaplanacak"; aswfx.point_18m, Service._asw_fx_18m)
-FXC_ROOTS = ("TRYI1M", "TRYI2M", "TRYI3M", "TRYI6M", "TRYI9M", "TRYI12M", None, "TRYSAQ2", "TRYSAQ3", "TRYSAQ4",
+# implied yields up to 9 months, the cross currency swaps from 1Y (TRYSAQ1: the one year XCCY, the desk's Forward
+# sheet's offshore 1Y - the desk, 18.11.2026; TRYI12M had no price) - 18M none: computed off the offshore XCCY curve
+# (the desk, 18.11.2026: "TRYI18M gerçek bir kotasyon değil ... 18M hesaplanacak"; aswfx.point_18m,
+# Service._asw_fx_18m)
+FXC_ROOTS = ("TRYI1M", "TRYI2M", "TRYI3M", "TRYI6M", "TRYI9M", "TRYSAQ1", None, "TRYSAQ2", "TRYSAQ3", "TRYSAQ4",
              "TRYSAQ5", "TRYSAQ6", "TRYSAQ7", "TRYSAQ8", "TRYSAQ9", "TRYSAQ10")
 #: EK_FX's row of the computed tenor (18M): its cell the computed XCCY par is given in, in the calculation on the FX swap
 #: curve (Service._asw_fx_calc; in the sheet itself #N/A - it is no quote)
@@ -1698,8 +1700,8 @@ def _asw_fx(model: Model) -> None:
     ``DF^(−365/d) − 1``, from the sheet's ln discount factor) - OIS's here; the same cell in the dashboard's calculation
     on the FX swap curve is the FX curve's (the page's FX zero rates and chart)."""
     b = SheetBuilder(model, FXC_SHEET)
-    b.title("A1", "FX SWAP İMA TRY EĞRİSİ  ·  ASW'nin ikinci eğrisi: offshore TRY faizi (12 aya kadar FX swap ima, 18A XCCY "
-                  "eğrisinden hesaplanan, sonra XCCY)")
+    b.title("A1", "FX SWAP İMA TRY EĞRİSİ  ·  ASW'nin ikinci eğrisi: offshore TRY faizi (9 aya kadar FX swap ima, 1Y'den "
+                  "XCCY, 18A XCCY eğrisinden hesaplanan)")
     b.row("A3", ["Kaynaklar (sırayla)"], bold=True)
     b.input("B3", "ICPL")
     b.input("C3", "BGN")
@@ -1742,8 +1744,9 @@ def _asw_fx(model: Model) -> None:
         b.set("%s%d" % (FXC_ZERO_COL, r), "=IFERROR((EXP(-ASW!%(ln)s$65*365/$J%(r)d)-1)*100,NA())" % f, fmt="0.000")
     b.note("A%d" % (FXC_FIRST + len(FXC_ROOTS) + 1),
            "ASW tablosundaki 'ASW FX' sütunu: kâğıt, sayfanın kendi iskonto ve annuity formülleriyle, OIS kotaları yerine bu faizlerden kurulan "
-           "eğriyle fiyatlanır. Her FX faizi kendi kuralıyla okunur - tür vadeye göredir: 12 aya kadar (TRYI…) FX swap ima, tek dönem basit "
-           "ACT/360 (FX swap'ın kuponu yok); 2 yıldan (TRYSAQ…) XCCY (TRY sabit / USD değişken), yıllık ACT/360 par (önceki yılların iskonto "
+           "eğriyle fiyatlanır. Her FX faizi kendi kuralıyla okunur - tür vadeye göredir: 9 aya kadar (TRYI…) FX swap ima, tek dönem basit "
+           "ACT/360 (FX swap'ın kuponu yok); 1 yıldan (TRYSAQ…; 1Y TRYSAQ1, tek kupon) XCCY (TRY sabit / USD değişken), "
+           "yıllık ACT/360 par (önceki yılların iskonto "
            "faktörleri eğrinin o vadeye kadar kurulan düğümlerinden). Masanın kendi dosyası da bu ticker'ları böyle okur (Forward!AJ123:AN142, "
            "C123:K134). 18A kota değildir, hesaplanır: offshore eğrinin XCCY 1Y (TRYSAQ1) ile 2Y (TRYSAQ2) arasında 18A'daki iskonto faktörü - "
            "Ayarlar'daki eğri interpolasyonunuzla (Bootstrap: Forward'daki offshore eğri, ln DF günlere göre doğrusal; PPK basamak: offshore "
