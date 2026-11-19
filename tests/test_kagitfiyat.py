@@ -530,7 +530,7 @@ def test_the_page_is_first_in_the_tahvil_menu(svc):
     nav = svc.nav(svc.login("Kâğıt Menü")["user"])
     tahvil = [p for p in nav if p["group"] == "Tahvil"]
     assert tahvil[0]["id"] == "kagit-fiyat" and tahvil[0]["title"] == "Kâğıt Fiyatlama" and tahvil[0]["custom"]
-    assert [p["id"] for p in tahvil][1:3] == ["kagitlar", "dibslive"]
+    assert [p["id"] for p in tahvil][1:4] == ["fiyat-yukleme", "kagitlar", "dibslive"]            # (Kâğıt Fiyat Yükleme next)
     assert kf.menu([{"id": "usd", "title": "USD", "group": "USD"}]) == [{"id": "usd", "title": "USD", "group": "USD"}]
 
 

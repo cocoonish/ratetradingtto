@@ -3130,6 +3130,67 @@ async function clipAfter(page, action) {
     check('... and ✕ takes it off the list, for everyone', unlisted
       && !(await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.some((b) => b.isin === 'TRT080931T14'));
 
+    // ------------------------------------------------------------------ Kâğıt Fiyat Yükleme: the list, an auction text, Hesapla, an edit, Kaydet (txt)
+    console.log('kagit fiyat yukleme');
+    await open(page, 'fiyat-yukleme');
+    await page.waitForSelector('#fy-list-table');
+    const fyMenu = await page.evaluate(() => window.tto.state.pages.filter((p) => p.group === 'Tahvil').map((p) => p.id).slice(0, 2));
+    await page.fill('#fy-add-text', 'TRB100227T13\nTRT130127T11');
+    await page.click('#fy-add');
+    await page.waitForFunction(() => document.querySelectorAll('#fy-list-table tr.fy-item').length === 2, null, { timeout: 20000 }).catch(() => {});
+    const fyList = await page.evaluate(() => [...document.querySelectorAll('#fy-list-table tr.fy-item')].map((tr) => [...tr.children].slice(0, 5).map((td) => td.textContent).join('|')));
+    check('Kâğıt Fiyat Yükleme: right after Kâğıt Fiyatlama in Tahvil; two bonds added as a pasted list, each with its description and maturity',
+      fyMenu.join() === 'kagit-fiyat,fiyat-yukleme' && fyList.join(' / ') === 'TRB100227T13|10.02.27 Bono|TURKTB 0 02/10/27|10.02.2027|Bono / '
+        + 'TRT130127T11|13.01.27 TLREF|TURKGB Float 01/13/27|13.01.2027|TLREF', { fyMenu, fyList });
+    await page.click('#fy-mode-ihale');
+    await page.fill('#fy-text', 'Auction prices:\n10/02/2027zc.t1   31.700\n13/01/27 TLREF.t1   100.500\n08/05/2030 cpi.t1   95.000\n** Min 50 mio, Increment 1 mio');
+    await page.click('#fy-hesapla');
+    await page.waitForSelector('#fy-table tr.fy-row', { timeout: 30000 }).catch(() => {});
+    const fyRead = () => page.evaluate(() => {
+      const row = (isin) => {
+        const tr = document.querySelector('#fy-table tr.fy-row[data-isin="' + isin + '"]');
+        if (!tr) return {};
+        const v = (c) => (tr.querySelector('input.' + c) || {}).value;
+        const t = (c) => (tr.querySelector('td.' + c) || {}).textContent;
+        return { by: v('fy-bid-y'), ay: v('fy-ask-y'), bp: v('fy-bid-p'), ap: v('fy-ask-p'), t0y: t('fy-t0-y'), t0p: t('fy-t0-p'), write: t('fy-write'),
+          edited: tr.classList.contains('fy-edited') };
+      };
+      const pre = document.getElementById('fy-txt') || {};
+      return { bill: row('TRB100227T13'), tlref: row('TRT130127T11'), sum: (document.getElementById('fy-parse-sum') || {}).textContent || '',
+        pick: document.querySelectorAll('#fy-pick-4 option').length, txt: pre.textContent || '', saved: (pre.dataset || {}).saved };
+    });
+    const fy1 = await fyRead();
+    check('... the auction text read (2 lines recognised, the CPI line with two bonds that day offered the bonds near it to name), '
+      + 'Hesapla: the bill at its auction yield ± 5 bp (written by its yields), the TLREF floater at the auction\'s price ± 0,05 (by its prices)',
+      /^2 satır tanındı · 1 satır tanınamadı · 2 satır yok sayıldı/.test(fy1.sum) && fy1.pick >= 3
+      && fy1.bill.t0y === '31,700' && fy1.bill.by === '31,750' && fy1.bill.ay === '31,650' && fy1.bill.write === 'getiri'
+      && fy1.tlref.t0p === '100,500' && fy1.tlref.bp === '100,450' && fy1.tlref.ap === '100,550' && fy1.tlref.by === '' && fy1.tlref.write === 'fiyat'
+      && fy1.txt === 'TRB100227T13,0,0,31.750,31.650\r\nTRT130127T11,100.450,100.550,0,0\r\n' && fy1.saved === '0', fy1);
+    // an edit: the bill's bid yield 31,800 - its price follows (the server's conversion), the preview too
+    const fyConv = (await api(page, 'ayşe yilmaz', 'POST', '/api/fiyat-yukleme/cevir', { isin: 'TRB100227T13', field: 'yield', value: 31.8 })).json || {};
+    const fyBidY = '#fy-table tr.fy-row[data-isin="TRB100227T13"] input.fy-bid-y';
+    await page.fill(fyBidY, '31,800');
+    await page.press(fyBidY, 'Tab');
+    await page.waitForFunction((want) => { const inp = document.querySelector('#fy-table tr.fy-row[data-isin="TRB100227T13"] input.fy-bid-p');
+      return inp && inp.value === want; }, (fyConv.price || 0).toFixed(3).replace('.', ','), { timeout: 20000 }).catch(() => {});
+    const fy2 = await fyRead();
+    const fyWant = 'TRB100227T13,0,0,31.800,31.650\r\nTRT130127T11,100.450,100.550,0,0\r\n';
+    check('... a cell edited (the bill\'s bid yield 31,800): its price follows by the server\'s conversion, the file\'s preview too',
+      fy2.bill.by === '31,800' && fy2.bill.bp === (fyConv.price || 0).toFixed(3).replace('.', ',') && fy2.bill.edited && fy2.txt === fyWant, { fy2, fyConv });
+    const [fyFile] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click('#fy-kaydet')]);
+    const fyText = require('fs').readFileSync(await fyFile.path(), 'latin1');
+    await page.waitForFunction(() => (document.getElementById('fy-txt') || { dataset: {} }).dataset.saved === '1', null, { timeout: 20000 }).catch(() => {});
+    const fy3 = await fyRead();
+    check('... Kaydet (txt) downloads dibs_fiyat_20261103.txt: ISIN,fiyatbid,fiyatask,yieldbid,yieldask - the bill by its yields (as edited), '
+      + 'the floater by its prices, the others 0, three decimals, CRLF; the page shows the same lines',
+      fyFile.suggestedFilename() === 'dibs_fiyat_20261103.txt' && fyText === fyWant && fy3.txt === fyWant && fy3.saved === '1', { name: fyFile.suggestedFilename(), fyText, fy3 });
+    // a Eurobond: its own default yield spreads (2 bp each); offline its facts cannot come from Bloomberg - refused, and why
+    const fyEuro = (await api(page, 'ayşe yilmaz', 'POST', '/api/fiyat-yukleme/ekle', { isins: 'XS2987654329' })).json || {};
+    const fyEuroDefs = await page.evaluate(() => ['euro-bid', 'euro-ask'].map((k) => (document.getElementById('fy-def-' + k) || {}).value));
+    check('... a Eurobond\'s own default yield spreads (2,0 / 2,0 bp); added offline it is refused with the reason (its facts come from Bloomberg)',
+      fyEuroDefs.join() === '2,0,2,0' && (fyEuro.added || []).length === 0 && /Eurobond'un bilgileri .*Bloomberg'den gelir/.test(((fyEuro.refused || [])[0] || {}).text || ''),
+      { fyEuroDefs, fyEuro: fyEuro.refused });
+
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');
     await open(page, 'watch');

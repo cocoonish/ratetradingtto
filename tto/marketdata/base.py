@@ -221,6 +221,14 @@ class Provider(object):
         daily hit limit is reached, or the answer did not come in time."""
         return None
 
+    def reference(self, securities: Sequence[str], fields: Sequence[str],
+                  timeout: float = 30.0) -> Optional[Dict[str, Dict[str, Any]]]:
+        """A one-off reference request outside of any formula (Kâğıt Fiyat Yükleme's last trades): ``{security: {FIELD:
+        value}}`` - a field or security Bloomberg could not give answered as its "#N/A ..." text.  Asked afresh on every
+        call and never kept: no subscription, no refresh.  None when this provider cannot ask (replay), the daily hit
+        limit is reached, or the answer did not come in time.  Blocks - never call it on the calculation thread."""
+        return None
+
     # ------------------------------------------------------------------ dispatch
     def call(self, calc, name: str, si: int, r: int, c: int, args: Sequence[Any]) -> Any:
         if name == "BDP":

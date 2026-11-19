@@ -94,7 +94,28 @@ anything itself with `--mode replay`. Agents work in replay and on the fake term
 - intraday bars (`quantviop.fetch_bars`, live only): a whole past day of one security per request, each asked once, at
   most `BAR_PER_REFRESH = 4` requests a refresh;
 - a bond added to the desk's list (`Service.bond_list_add` → `_bond_facts`): the `bonds.FACTS` fields of each new
-  ISIN.
+  ISIN;
+- **Kâğıt Fiyat Yükleme's BBG mode** (`tto/fiyatyukleme.py`, approved by the desk on 20.11.2026): on **Hesapla** only, one
+  reference request of `LAST_PRICE` and `LAST_TRADE_DATE` for the bonds of the user's list that are **not** on DİBS RV's
+  trading list - **2 hits a bond a Hesapla**, the answer kept **5 minutes** (`CACHE_SECONDS`: clicking again does not
+  spend again). Never polled, streamed or refreshed: it goes through `Provider.reference` (below), not `get_bdp` (which
+  would subscribe to `LAST_PRICE` and refresh `LAST_TRADE_DATE` every minute). The trading list's bonds read DİBS RV's
+  own `LAST_PRICE` / `LAST_TRADE_DATE` cells (already asked for: no new cost). Replay asks nothing.
+- **Kâğıt Fiyat Yükleme's Eurobonds** (the desk, 20.11.2026; priced from Bloomberg in either mode):
+  - **once a new ISIN**, its facts: `NAME`, `SECURITY_DES`, `CRNCY`, `CPN`, `CPN_TYP`, `CPN_FREQ`, `DAY_CNT_DES`, `MATURITY`,
+    `FIRST_CPN_DT`, `PENULTIMATE_CPN_DT`, `INT_ACC_DT`, `DAYS_TO_SETTLE` - 12 hits once, then kept desk-wide
+    (kv `fiyatyukleme.eurobonds`), never asked again;
+  - **on each Hesapla**, every Eurobond of the list: `PX_MID` and `YLD_YTM_MID` - **2 hits a Eurobond a Hesapla** (the
+    cost the desk approved for BBG requests) - plus `PX_BID` / `PX_ASK` (2 more) only for a bond whose `PX_MID` is empty;
+    kept 5 minutes like the other BBG requests. Never polled, streamed or refreshed (`Provider.reference`, counted by
+    `--max-hits`). The security is named by DİBS RV!N2's style (`"<ISIN> ISIN"` → `/isin/<ISIN>`), at its default pricing
+    source. Replay asks nothing (a Eurobond cannot be added or priced there).
+
+**One-off reference requests** (`Provider.reference(securities, fields, timeout)`; `BloombergProvider.reference`, through the
+helper process as `("ref", …)`): one `ReferenceDataRequest` per 100 securities, securities × fields hits counted like every
+request (`--max-hits`: none is sent once the day's count is at the cap), on keys of their own (`("REF", security, FIELD,
+call)`) that no workbook cell shares; nothing is kept, subscribed to, refreshed or asked again after a time-out. Like
+`intraday_bars` it blocks: never call it on the engine thread.
 
 ## Pricing sources
 

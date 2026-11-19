@@ -346,6 +346,10 @@ class Service(object):
         # Kâğıt Fiyatlama (kagitfiyat.py): one fair level per bond, a quote around it, the good levels and how it was built
         from .kagitfiyat import KagitFiyat
         self.kagitfiyat = KagitFiyat(self)
+        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): each user's bonds priced from the morning's auction or Bloomberg's last
+        # trade, the spreads on them, saved as the desk's upload file
+        from .fiyatyukleme import FiyatYukleme
+        self.fiyatyukleme = FiyatYukleme(self)
         # Bugün (bugun.py): the morning screen - what wants attention, read from what the service holds
         from .bugun import Bugun
         self.bugun = Bugun(self)
@@ -1633,6 +1637,9 @@ class Service(object):
         # Kâğıt Fiyatlama (kagitfiyat.py): the first entry of the Tahvil menu
         from . import kagitfiyat
         pages = kagitfiyat.menu(pages)
+        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): right after Kâğıt Fiyatlama
+        from . import fiyatyukleme
+        pages = fiyatyukleme.menu(pages)
         # DİBS RV: one entry of the menu - Genel (dibsgenel.py) and the two sheets, DİBS RV and DİBS ASW, as its tabs
         from . import dibsgenel
         return dibsgenel.menu(pages)
@@ -7856,6 +7863,38 @@ class Service(object):
             return self.kagitfiyat.set_widths(user, body or {})
         except KagitError as exc:
             raise ServiceError(str(exc))
+
+    # ================================================================== Kâğıt Fiyat Yükleme (fiyatyukleme.py)
+    def fiyat_yukleme(self, user: Optional[str], what: str, body: Optional[Dict[str, Any]] = None) -> Any:
+        """Kâğıt Fiyat Yükleme (:mod:`tto.fiyatyukleme`): ``what`` - "state" (the user's list, settings, the desk's labels),
+        "ekle" / "cikar" (the list), "ayar" (mode, default and per bond spreads), "tanit" (the desk names an auction
+        label's bond), "hesapla" (İhale / BBG), "cevir" (an edited cell's other half), "kaydet" (the file), "dosya" (a
+        saved file again: bytes and name).  A request it cannot answer is a 400 with the reason in Turkish."""
+        from .fiyatyukleme import FiyatError
+        fy = self.fiyatyukleme
+        b = body if isinstance(body, dict) else {}
+        try:
+            if what == "state":
+                return fy.state(user)
+            if what == "ekle":
+                return fy.add(user, b.get("isins") if "isins" in b else b.get("isin"))
+            if what == "cikar":
+                return fy.remove(user, b.get("isin"))
+            if what == "ayar":
+                return fy.set_options(user, b)
+            if what == "tanit":
+                return fy.name_label(user, b.get("label"), b.get("isin"))
+            if what == "hesapla":
+                return fy.calculate(user, b)
+            if what == "cevir":
+                return fy.convert(user, b)
+            if what == "kaydet":
+                return fy.save_file(user, b)
+            if what == "dosya":
+                return fy.saved_file(user, b.get("gun"))
+        except FiyatError as exc:
+            raise ServiceError(str(exc))
+        raise ServiceError("bilinmeyen işlem: %s" % what, 404)
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in

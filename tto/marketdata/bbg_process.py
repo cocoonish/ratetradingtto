@@ -14,10 +14,12 @@ dashboard talks to it over two pipes:
     dashboard  -- ("lookup", [(key, refresh, real-time field), ...]) ------>  helper
                -- ("history", id, items, start, end, timeout) ------------->
                -- ("bars", id, security, start, end, interval, event, timeout) ->
+               -- ("ref", id, securities, fields, timeout) ------------------>
                -- ("stop",) ------------------------------------------------>
                <-- ("values", [(key, value), ...], lookups seen, status) ---   every 0.1 s when something changed
                <-- ("history", id, result) ----------------------------------
                <-- ("bars", id, result) -------------------------------------
+               <-- ("ref", id, result) --------------------------------------
 
 :class:`IsolatedBloombergProvider` is the dashboard's side.  It answers the engine from its own copy of the
 values (never blocking), so a burst of ticks reaches the engine as "the latest value of each item", however
@@ -95,6 +97,17 @@ def _bars(prov: BloombergProvider, send, rid: int, security: str, start: str, en
         pass
 
 
+def _ref(prov: BloombergProvider, send, rid: int, securities, fields, timeout: float) -> None:
+    try:
+        res = prov.reference(securities, fields, timeout=timeout)
+    except Exception:  # noqa: BLE001 - the caller gets "nothing came"
+        res = None
+    try:
+        send(("ref", rid, res))
+    except Exception:  # noqa: BLE001 - the dashboard is gone
+        pass
+
+
 def _send_values(send, batch, seen: int, status: Dict[str, Any]) -> None:
     try:
         send(("values", batch, seen, status))
@@ -168,6 +181,9 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
                         elif kind == "bars":
                             threading.Thread(target=_bars, args=(prov, send) + tuple(msg[1:]),
                                              name="tto-bbg-bars", daemon=True).start()
+                        elif kind == "ref":
+                            threading.Thread(target=_ref, args=(prov, send) + tuple(msg[1:]),
+                                             name="tto-bbg-ref", daemon=True).start()
                         if not inbox.poll(0):
                             break
                 status = prov.status()                     # before the values: "nothing pending" then means
@@ -448,6 +464,27 @@ class IsolatedBloombergProvider(BloombergProvider):
             with self._lock:
                 self._waiters.pop(rid, None)
 
+    def reference(self, securities, fields, timeout: float = 30.0):
+        """As :meth:`BloombergProvider.reference`, asked of the helper (which counts the hits and keeps the daily
+        limit); None too when there is no helper or it ends meanwhile."""
+        secs = [str(s) for s in securities if str(s or "").strip()]
+        flds = [str(f) for f in fields if str(f or "").strip()]
+        if not secs or not flds:
+            return {}
+        waiter: List[Any] = [threading.Event(), None]
+        with self._lock:
+            self._rid += 1
+            rid = self._rid
+            self._waiters[rid] = waiter
+        try:
+            if not self._post(("ref", rid, secs, flds, float(timeout))):
+                return None
+            waiter[0].wait(float(timeout) + 15.0)
+            return waiter[1]
+        finally:
+            with self._lock:
+                self._waiters.pop(rid, None)
+
     def revalidate(self) -> int:
         return 0                             # the helper does this on its own when the day changes
 
@@ -531,7 +568,7 @@ class IsolatedBloombergProvider(BloombergProvider):
                 kind = msg[0]
                 if kind == "values":
                     self._apply(msg[1], msg[2], msg[3])
-                elif kind in ("history", "bars"):
+                elif kind in ("history", "bars", "ref"):
                     with self._lock:
                         waiter = self._waiters.get(msg[1])
                     if waiter is not None:

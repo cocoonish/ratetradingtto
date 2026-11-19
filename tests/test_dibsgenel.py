@@ -62,9 +62,10 @@ def test_dibs_rv_is_one_menu_entry_with_three_tabs(service):
     assert [(p["id"], p["tab"], p["menu_title"]) for p in entry] == [("dibs-genel", "Genel", "DİBS RV"), ("dibs", "RV hesap tablosu", "DİBS RV"),
                                                                     ("asw", "ASW hesap tablosu", "DİBS RV")]
     # one entry, where the two pages stood (between DİBS Trading and Manuel Tahvil); the pages keep their titles and addresses
-    # (Kâğıt Fiyatlama, kagitfiyat.py, is the menu's first entry since 19.11.2026)
+    # (Kâğıt Fiyatlama, kagitfiyat.py, is the menu's first entry since 19.11.2026; Kâğıt Fiyat Yükleme, fiyatyukleme.py, the
+    # second since 20.11.2026)
     ids = [p["id"] for p in tahvil]
-    assert ids == ["kagit-fiyat", "kagitlar", "dibslive", "dibs-genel", "dibs", "asw", "manuel", "ihale", "bulk"]
+    assert ids == ["kagit-fiyat", "fiyat-yukleme", "kagitlar", "dibslive", "dibs-genel", "dibs", "asw", "manuel", "ihale", "bulk"]
     by = {p["id"]: p for p in tahvil}
     assert by["dibs"]["title"] == "DİBS RV" and by["asw"]["title"] == "DİBS ASW" and by["dibs-genel"]["title"] == "DİBS RV · Genel"
     assert by["dibs-genel"]["custom"] and by["dibs"]["sheet"] == "DİBS RV" and by["asw"]["book"] == "asw" and by["dibs"]["tables"]
