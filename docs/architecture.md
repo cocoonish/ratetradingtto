@@ -58,7 +58,7 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
 4. Custom pages (no view JSON) are listed in `Service.nav`:
    - bugun, watch / heat, blotter, broker, trades;
    - eod, mpc, vol, spreads, settings;
-   - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel;
+   - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel, kagit-fiyat;
    - the quant pages.
 
 **JSON answers are gzip-compressed** for a client that takes gzip:
@@ -191,7 +191,7 @@ docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption`), `bonds` (catalog) |
-| Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
+| Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
 | Ops | `ops` (log, backups, freshness), `progress` |
 
@@ -226,6 +226,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state |
 | `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
+| `kagitfiyat.widths`, `kagitfiyat.log` | `kagitfiyat` (the quote's width by maturity bucket, set by administrators; its changes) |
 
 **The history's tables are kept in memory too** (`hist_values`, `watch_closes`, `mpc_days`, `mpc_values`):
 - **Read once**, when the store opens (the desk's ~175 000 closes: ~0.5 s, ~14 MB), before any other thread uses it.
@@ -287,6 +288,27 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
 - **Where its numbers come from.** Prices: `tradevalue.market` (request-free; cached 5 s, `MARKET_SECONDS`). K/Z: the
   tab's last "MTM yenile" as `tradebook.listing` returns it. Stops: `tradevalue.value` of each open trade on that market
   (Bootstrap, as the stop alarms), off the engine thread.
+
+### Kâğıt Fiyatlama
+
+`tto/kagitfiyat.py` (page `kagit-fiyat`, the first entry of the Tahvil menu; `pages/kagitfiyat.js`; the bond card's block
+`kagitblock.js`; the desk's decision and its numbers in
+[desk-decisions.md](desk-decisions.md#kâğıt-fiyatlama-19112026), its curves in [curves.md](curves.md#fair-values)).
+
+- **Endpoints** (`Service.kagit_fiyat` / `kagit_fiyat_widths`; a `KagitError` is a 400 with the Turkish reason):
+  - `GET /api/kagit-fiyat` - every bond of the trading list: fair, quote, good levels, σ, backtest, market, context and the
+    "how" line; `?isin=` one bond (the card's block; one off the trading list: 400);
+  - `POST /api/kagit-fiyat/genislik` `{"widths": {"1y": 10, "3y": …}}` - administrators only (403 otherwise).
+- **Threads.** `_read` (engine thread, short): DİBS RV's rows, the yields now (`quantcurve.read_engine`), each row's
+  price ↔ yield inputs (P, CU, CW, DR, the cash flows), Bloomberg's bid / ask, the Broker Chat board, the TRY OIS
+  Bootstrap. Everything else on the request thread:
+  - the closes' part (`closes`): the bonds' and OIS tenors' closes from the store's memory (`hist_many`,
+    `Service._swaption_closes`), each past day's neighbours' curve (a leave-one-out refit per coupon bond) and OIS curve,
+    then each bond's spreads, σ and backtest. Kept per history revision (and bonds, OIS calendar); each day's curves kept
+    by what they are made of, so a new close builds that day only. The first build of a year of closes takes ~6 s (desk
+    copy of 17.11: 246 days); a thread (`KagitFiyat.warm`, the dashboard's own server only - not with `--no-history` or
+    in tests) builds it a minute after the start and again whenever the history changed;
+  - the quotes now (`now_fit`): one leave-one-out refit per coupon bond on DİBS RV's yields, kept per yields.
 
 ## Row keys
 

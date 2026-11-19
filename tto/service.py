@@ -343,6 +343,9 @@ class Service(object):
         # DİBS RV · Genel (dibsgenel.py): the trading list's bonds on DİBS RV, DİBS ASW and a zero-coupon curve fitted live
         from .dibsgenel import DibsGenel
         self.dibsgenel = DibsGenel(self)
+        # Kâğıt Fiyatlama (kagitfiyat.py): one fair level per bond, a quote around it, the good levels and how it was built
+        from .kagitfiyat import KagitFiyat
+        self.kagitfiyat = KagitFiyat(self)
         # Bugün (bugun.py): the morning screen - what wants attention, read from what the service holds
         from .bugun import Bugun
         self.bugun = Bugun(self)
@@ -644,6 +647,9 @@ class Service(object):
             self.quant.start()
             self.warm()
             threading.Thread(target=self._build_ref_indexes, name="tto-refs", daemon=True).start()
+            if getattr(self.settings, "history", True):
+                # Kâğıt Fiyatlama's closes (a year of curves) made ahead, and again when the history changes
+                threading.Thread(target=self.kagitfiyat.warm, name="tto-kagit", daemon=True).start()
 
     # ------------------------------------------------------------------ warming up
     def warm(self) -> bool:
@@ -1624,6 +1630,9 @@ class Service(object):
         # the desk's own corner (desk.py): the traders' chat and the agenda - pages of the desk, apart from any workbook
         pages.append({"id": "social", "title": "Sosyal", "group": "Masa", "book": None, "sheet": None, "custom": True})
         pages.append({"id": "agenda", "title": "Ajanda", "group": "Masa", "book": None, "sheet": None, "custom": True})
+        # Kâğıt Fiyatlama (kagitfiyat.py): the first entry of the Tahvil menu
+        from . import kagitfiyat
+        pages = kagitfiyat.menu(pages)
         # DİBS RV: one entry of the menu - Genel (dibsgenel.py) and the two sheets, DİBS RV and DİBS ASW, as its tabs
         from . import dibsgenel
         return dibsgenel.menu(pages)
@@ -7826,6 +7835,27 @@ class Service(object):
                 while len(kept) > self.SWAPTION_KEPT:
                     kept.pop(next(iter(kept)))
         return dict(hit, info=info)
+
+    # ================================================================== Kâğıt Fiyatlama (kagitfiyat.py)
+    def kagit_fiyat(self, user: Optional[str], query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Kâğıt Fiyatlama: every fixed coupon bond and bill of the trading list - the fair yield (the neighbours' curve
+        and OIS, each plus the bond's spread at the last close, weighted by maturity), the quote, the good levels, the
+        market against them and how the price was built (:mod:`tto.kagitfiyat`); ``query["isin"]``: that bond alone
+        (the card's block).  A request it cannot answer is a 400 with the reason in Turkish."""
+        from .kagitfiyat import KagitError
+        q = query or {}
+        try:
+            return self.kagitfiyat.view(user, q["isin"] if "isin" in q else None)
+        except KagitError as exc:
+            raise ServiceError(str(exc))
+
+    def kagit_fiyat_widths(self, user: Optional[str], body: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """The quote's width by maturity bucket - administrators only, every change logged."""
+        from .kagitfiyat import KagitError
+        try:
+            return self.kagitfiyat.set_widths(user, body or {})
+        except KagitError as exc:
+            raise ServiceError(str(exc))
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in

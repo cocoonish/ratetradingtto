@@ -907,6 +907,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().dibsgenel.view, _user(request), _lang(request)))
 
     @handler
+    async def kagit_fiyat(request: Request):
+        # Kâğıt Fiyatlama (kagitfiyat.py): every bond's fair, quote, good levels and how it was priced (?isin=: one bond)
+        return ok(await call(svc().kagit_fiyat, _user(request), dict(request.query_params)))
+
+    @handler
+    async def kagit_fiyat_widths(request: Request):
+        # the quote's width by maturity bucket: administrators only
+        return ok(await call(svc().kagit_fiyat_widths, _user(request), await _body(request)))
+
+    @handler
     async def watch_catalog(request: Request):
         return ok(await call(svc().watch_catalog, _user(request)))
 
@@ -1406,6 +1416,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/heat", heat),
         Route("/api/heat/ref", heat_ref, methods=["POST"]),
         Route("/api/dibs/genel", dibs_genel),
+        Route("/api/kagit-fiyat", kagit_fiyat, methods=["GET"]),
+        Route("/api/kagit-fiyat/genislik", kagit_fiyat_widths, methods=["POST"]),
         Route("/api/watch/{what}", watch_action, methods=["POST"]),
         Route("/api/alarms/fired", alarms_fired),
         Route("/api/alarms/{what}", alarm_action, methods=["POST"]),

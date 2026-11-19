@@ -418,6 +418,68 @@ whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, bo
   `GET /api/prop`, `GET /api/prop/size`, `GET /api/prop/risk`, `GET` / `POST /api/prop/limit`,
   `tto/static/js/prop.js`. Tests: `tests/test_prop.py`, the browser test's Prop checks.
 
+### Kâğıt fiyatlama (19.11.2026)
+
+> "Özellikle kâğıt tarafı zayıf geldi" - "Hangi seviyelerin iyi olduğunu ve fiyatlamayı nasıl yapacağımı net söylemiyor"
+>
+> (asked what a bond's price should start from) "Bunu sen bul. En çok neyi takip ediyor"
+
+- **What the bonds follow** (measured on the desk's own history: a copy of its database of 17.11.2026, 16 DİBS - 14
+  fixed coupon, 2 bills -, 10.11.2025–16.11.2026; daily yield changes, R², OIS / offshore / the Nelson-Siegel curve fitted
+  to the other bonds, leave one out):
+
+  | Maturity | OIS | Offshore | Neighbours' curve |
+  |---|---|---|---|
+  | ≤ 1Y | .21 | .21 | .14 |
+  | 1–3Y | .50 | .39 | .73 |
+  | 3–5Y | .54 | .40 | .82 |
+  | 5Y+ | .47 | .27 | .81 |
+
+  Next-day pricing error of fair = base + the bond's spread to it at the previous close (sd): neighbours 23 bp at 1–3Y,
+  16 at 3–5Y, 16 at 5Y+; OIS 37 bp at ≤ 1Y. 20- or 60-day median spreads were 35–140 % worse (the spreads drift).
+  Offshore was never the best base (the bonds move about half as much, β ≈ 0.45), so it is no base here.
+- **The method** (`tto/kagitfiyat.py`, page "Kâğıt Fiyatlama", the first entry of the Tahvil menu, and the same block on
+  the bond card):
+  - fair yield = each base now + the bond's spread to it at the last close before today, weighted by the bond's years to
+    maturity; a base that cannot be had gives its share to the other (said under the bond);
+  - the bases: the neighbours' curve (quantcurve's live Nelson-Siegel fit, DİBS RV · Genel's, refitted without the bond;
+    its τ searched on the last close and held) and the TRY OIS Bootstrap zero rate at the bond's maturity (a past day's
+    on Motor's bootstrap of its closes);
+  - one basis: BIST compound yields against zero rates compounded once a year; shown as compound and simple yields and as
+    the clean price at DİBS RV's value date;
+  - the quote: fair ± half the bucket's width; the good levels: Al at a yield ≥ fair + 2σ, Sat ≤ fair − 2σ, ±1σ noise;
+    σ the bond's own next-day error over its last 60 closes, floored at its bucket's; the backtest: of the closes beyond
+    ±2σ, how many had the gap to fair narrowed by the 5th close after (the gap measured with the signal's own spreads,
+    against its bases), and the average bp;
+  - the market: the Broker Chat board's best fresh bid / offer and DİBS RV's live Bloomberg bid / ask, in σ from fair, AL
+    on an offer ≥ fair + 2σ, SAT on a bid ≤ fair − 2σ; the context: the spread to the neighbours' curve now against its
+    20-day median;
+  - TLREF floaters, FRNs and CPI linkers are not priced (their reason shown).
+- **The defaults the desk may change** (named constants in `tto/kagitfiyat.py`):
+  - weights `WEIGHTS`: ≤ 1Y 75 % OIS + 25 % neighbours; 1–5Y 100 % neighbours; over 5Y 75 % neighbours + 25 % OIS;
+  - buckets `BUCKETS`: ≤ 1Y, 1–3Y, 3–5Y, 5Y+ (a bucket's upper bound inclusive);
+  - σ floors `SIGMA_FLOOR`: 37 / 23 / 16 / 16 bp; `SIGMA_WINDOW` 60 closes, `SIGMA_MIN` 20 errors before σ is measured;
+  - the good levels `BAND` 2σ, noise `NOISE` 1σ; the backtest's horizon `REVERT` 5 closes; the context's median
+    `MEDIAN_DAYS` 20;
+  - the quote's width `WIDTH_DEFAULT`: 10 bp in total in every bucket. **Administrators** change it on the page (kv
+    `kagitfiyat.widths`, logged in `kagitfiyat.log`), as RET's width.
+- **Conventions settled while building it** (the spec did not say; ask before changing):
+  - the width is in bp of the compound yield, bid to ask (bid = fair + width / 2), any value 0–200 bp to one decimal (not
+    RET's multiple of 5);
+  - "the last close" is the last day before today's market day with the bond's close; today's own close (the history
+    keeps today's running value) never counts;
+  - a past day's OIS base needs every quoted OIS tenor's close that day (as the analysis); without it that day has the
+    neighbours alone;
+  - a bond with no price on DİBS RV still gets a fair: its neighbours' curve now (the curve of all the others) plus its
+    last close's spread; its price then comes from the bond's own cash flows (quantcurve's BIST rules) at DİBS RV's value
+    date;
+  - the history's yields are read in the convention of the sheet's yield they are nearest (quantcurve's
+    `detect_convention`, as the quant fit reads them);
+  - the backtest counts every close beyond ±2σ (overlapping signals of one episode count each), σ as known that day.
+- Code: `tto/kagitfiyat.py`, `Service.kagit_fiyat` / `kagit_fiyat_widths`, `GET /api/kagit-fiyat` (`?isin=`: one bond, the
+  card's), `POST /api/kagit-fiyat/genislik`, `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`. Tests:
+  `tests/test_kagitfiyat.py`, the browser test's Kâğıt Fiyatlama checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

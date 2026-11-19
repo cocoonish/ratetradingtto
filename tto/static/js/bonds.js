@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { h, clear, modal, toast, errorToast, confirmDialog } from './ui.js';
 import { isoToTr, num } from './format.js';
+import { kagitBlock } from './kagitblock.js';
 
 const KIND_ORDER = ['all', 'fixed', 'float', 'frn', 'cpi', 'bill', 'zero'];
 const KIND_TEXT = { all: 'Tümü', fixed: 'Sabit', float: 'TLREF', frn: 'FRN', cpi: 'TÜFE', bill: 'Bono', zero: 'Kuponsuz' };
@@ -171,6 +172,13 @@ export async function openBondCard(ctx, isin) {
     .filter(Boolean).join(' · ');
   m.body.appendChild(h('p', { class: 'facts' }, facts || 'Masanın DİBS listesinde olmayan bir kâğıt'));
   const section = (title, el) => { m.body.appendChild(h('h3', null, title)); m.body.appendChild(el); };
+  // Kâğıt Fiyatlama's block (its page's figures for this bond): asked apart, so the card opens at once
+  const kf = h('div', { id: 'kf-card-host' }, h('p', { class: 'muted' }, 'hesaplanıyor…'));
+  section('Kâğıt fiyatlama', kf);
+  api.get('/api/kagit-fiyat?isin=' + encodeURIComponent(d.isin)).then((k) => {
+    const row = (k && k.rows || [])[0];
+    clear(kf).appendChild(row ? kagitBlock(row, k.rules) : h('p', { class: 'muted' }, (k && k.why) || 'Kâğıt fiyatlanmadı'));
+  }).catch((err) => { clear(kf).appendChild(h('p', { class: 'muted', id: 'kf-card-why' }, (err && err.message) || 'Kâğıt fiyatlanmadı')); });
   // ``left``: the columns of text (the others are numbers, right-aligned)
   const table = (heads, rows, cls, left = [0]) => {
     const t = h('table', { class: 'plain ' + (cls || '') });
