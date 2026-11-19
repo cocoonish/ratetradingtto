@@ -571,6 +571,12 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().pricing, _user(request)))
 
     @handler
+    async def swaption(request: Request):
+        # Swaption: a TRY OIS swaption on the viewer's curve - its forward, the realized vols, payer / receiver / straddle
+        # and their greeks (swaption.py); to look at only: the inputs come with the request, nothing is stored
+        return ok(await call(svc().swaption, _user(request), dict(request.query_params)))
+
+    @handler
     async def interp_settings(request: Request):
         # Ayarlar → Eğri interpolasyonu: the user's own choice, Bootstrap (Murex) or PPK basamak
         if request.method == "POST":
@@ -1274,6 +1280,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/interp", interp_settings, methods=["GET", "POST"]),
         Route("/api/curve-points", curve_points, methods=["GET", "POST"]),
         Route("/api/pricing", pricing, methods=["GET", "POST"]),
+        Route("/api/swaption", swaption, methods=["GET"]),
         Route("/api/spreads", spreads),
         Route("/api/broker", broker),
         Route("/api/broker", broker_add, methods=["POST"]),
