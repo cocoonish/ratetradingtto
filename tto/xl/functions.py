@@ -10,14 +10,21 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter as _Counter
+from functools import reduce as _reduce
+from itertools import chain as _chain_it
+from operator import add as _op_add, mul as _op_mul
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import numfmt
 from .errors import E_CALC, E_DIV0, E_NA, E_NAME, E_NUM, E_REF, E_VALUE, XlError
-from .values import (XlArray, XlRange, as_rows, compare, date_to_serial, deref, first, fmt_general, intersect,
-                     is_multi, num_eq, parse_number_text, serial_to_date, to_bool, to_num, to_text)
+from .values import (_ONLY_FLOAT, XlArray, XlRange, as_rows, compare, date_to_serial, deref, first, fmt_general,
+                     intersect, is_multi, num_eq, parse_number_text, serial_to_date, to_bool, to_num, to_text)
 
 _float = float
+_chain = _chain_it.from_iterable
+_NUMBER_OR_BLANK = {float, type(None)}           # (COUNTIF's fast paths: what a range holds)
+_TEXT_OR_BLANK = {str, type(None)}
 
 
 class _Err(Exception):
@@ -212,6 +219,38 @@ def F_SUMPRODUCT(*args):
     for m in mats[1:]:
         if len(m) != nr or (len(m[0]) if m else 0) != nc:
             return E_VALUE
+    total = _sumproduct_numbers(mats, nr, nc)
+    if total is not None:
+        return total
+    return _sumproduct_general(mats, nr, nc)
+
+
+def _sumproduct_numbers(mats, nr: int, nc: int) -> Optional[float]:
+    """SUMPRODUCT's fast path: one array, or columns / rows, of numbers only.  The products and their sum come in the
+    general path's order (``p = 1.0 * x * y …``, and ``1.0 * x`` is ``x``), in C loops: ``functools.reduce`` adds one
+    product at a time (``sum()`` would not do: it compensates since Python 3.12).  ``None``: anything else, for the
+    general path."""
+    if len(mats) == 1:
+        cols = [mats[0][0] if nr == 1 else list(_chain(mats[0]))]     # (every element, as the general path reads)
+    elif nc == 1:
+        cols = [[r[0] for r in m] for m in mats]                       # (row[0] of each row, as it reads)
+    elif nr == 1:
+        cols = [m[0] for m in mats]
+    else:
+        return None
+    for xs in cols:
+        if set(map(type, xs)) != _ONLY_FLOAT:
+            return None
+    if len(cols) == 1:
+        return _reduce(_op_add, cols[0], 0.0)
+    prods = map(_op_mul, cols[0], cols[1])
+    for xs in cols[2:]:
+        prods = map(_op_mul, prods, xs)
+    return _reduce(_op_add, prods, 0.0)
+
+
+def _sumproduct_general(mats, nr: int, nc: int) -> Any:
+    """SUMPRODUCT of every kind of array (non-numbers count 0, the first error is the answer)."""
     total = 0.0
     if len(mats) == 1:
         for row in mats[0]:
@@ -578,6 +617,49 @@ def _criteria_mask(pairs: Sequence[Any]) -> Any:
 
 
 def F_COUNTIF(rng, crit):
+    if type(crit) is XlError:
+        return crit
+    c = _number_criterion(crit)
+    if c is None:
+        return _countif_general(rng, crit)
+    # fast path: make_criteria's number test - a number equal to it, or a text that reads as it (an empty text never
+    # does: parse_number_text("") is None)
+    vals = _flat(rng)
+    kinds = set(map(type, vals))
+    if kinds <= _NUMBER_OR_BLANK and c == c:
+        return _float(vals.count(c))           # (C loop: list.count's "is or ==" is == for numbers when c is no NaN)
+    if kinds <= _TEXT_OR_BLANK:
+        n = 0
+        for s, k in _Counter(vals).items():    # (each distinct text read once)
+            if s and parse_number_text(s) == c:
+                n += k
+        return _float(n)
+    n = 0
+    F = _float
+    for v in vals:
+        tv = type(v)
+        if tv is F:
+            if v == c:
+                n += 1
+        elif tv is str and v and parse_number_text(v) == c:
+            n += 1
+    return _float(n)
+
+
+def _number_criterion(crit: Any) -> Optional[float]:
+    """The number of a COUNTIF criterion that is a plain number (a blank one: 0) - make_criteria's ``eq_num`` - else
+    ``None``: text, logicals, errors, and a range or array (whose first cell make_criteria reads) take the general
+    path."""
+    if crit is None:
+        return 0.0
+    t = type(crit)
+    if t is _float or t is int:
+        return _float(crit)
+    return None
+
+
+def _countif_general(rng, crit):
+    """COUNTIF with any criterion (make_criteria's predicate on every value)."""
     if type(crit) is XlError:
         return crit
     pred = make_criteria(crit)
@@ -1060,6 +1142,31 @@ def _matrix(v) -> Any:
 
 
 def F_MMULT(a, b):
+    A, B = as_rows(a), as_rows(b)
+    if not (_number_block(A) and _number_block(B)):
+        return _mmult_general(a, b)
+    # fast path: two rectangles of numbers - each element a sum over t of A[i][t] * B[t][j], added in the general
+    # path's order (t = 0, 1 …) one product at a time, in C loops (functools.reduce; not sum(), see SUMPRODUCT)
+    k = len(A[0])
+    if k != len(B):
+        return E_VALUE
+    cols = list(zip(*B))
+    return XlArray([[_reduce(_op_add, map(_op_mul, ai, cj), 0.0) for cj in cols] for ai in A])
+
+
+def _number_block(rows) -> bool:
+    """A non-empty rectangle of numbers only (MMULT's fast path)."""
+    if not rows:
+        return False
+    nc = len(rows[0])
+    for r in rows:
+        if len(r) != nc or set(map(type, r)) != _ONLY_FLOAT:
+            return False
+    return True
+
+
+def _mmult_general(a, b):
+    """MMULT of any arrays: #VALUE! for a non-number or shapes that do not fit, an error inside is the answer."""
     try:
         A, B = _matrix(a), _matrix(b)
     except _Err as e:

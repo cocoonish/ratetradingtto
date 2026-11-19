@@ -5,6 +5,7 @@ import asyncio
 import json
 import mimetypes
 import os
+import zlib
 from typing import Any, Callable, Dict, Optional
 
 from starlette.applications import Starlette
@@ -51,6 +52,60 @@ class _Json(JSONResponse):
             return super().render(content)
         except ValueError:
             return super().render(_finite(content))
+
+
+#: JSON answers from this many bytes up go gzip-compressed to a client that takes gzip (``Accept-Encoding``); a smaller
+#: one would hardly shrink
+GZIP_MIN = 1024
+#: zlib's level for them (1 fastest .. 9 smallest): on the desk's OIS, Sinyaller and Trend answers (0.8-1.1 MB, 19.11)
+#: level 6 makes them 7-8 times smaller, within 2 % of level 9 and a little faster; level 1 leaves them a third bigger
+GZIP_LEVEL = 6
+#: from this size up the compression runs in a worker thread (zlib lets go of the interpreter lock; a megabyte takes
+#: tens of milliseconds), so the event loop - the live stream, the other answers - goes on meanwhile
+GZIP_THREAD_MIN = 128 * 1024
+
+
+def accepts_gzip(header: Optional[str]) -> bool:
+    """An ``Accept-Encoding`` header names gzip (or x-gzip) without ``q=0``."""
+    for part in (header or "").split(","):
+        coding, _, params = part.partition(";")
+        if coding.strip().lower() not in ("gzip", "x-gzip"):
+            continue
+        q = 1.0
+        for param in params.split(";"):
+            name, _, value = param.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    q = float(value)
+                except ValueError:
+                    q = 0.0
+        return q > 0.0
+    return False
+
+
+def gzip_bytes(body: bytes) -> bytes:
+    """``body`` in the gzip format (zlib's window bits 31; the same bytes every time - no file name, no time)."""
+    c = zlib.compressobj(GZIP_LEVEL, zlib.DEFLATED, 31)
+    return c.compress(body) + c.flush()
+
+
+async def compress_json(request: Request, resp: Response) -> Response:
+    """A JSON answer as the client can take it: gzip-compressed from GZIP_MIN bytes up when the request accepts gzip,
+    as it is otherwise; ``Vary: Accept-Encoding`` either way.  Only JSON answers come here (``handler``): the live
+    stream, files and downloads are sent as they are."""
+    if not isinstance(resp, JSONResponse):
+        return resp
+    resp.headers.add_vary_header("Accept-Encoding")
+    body = resp.body
+    if len(body) < GZIP_MIN or "content-encoding" in resp.headers:
+        return resp
+    if not accepts_gzip(request.headers.get("accept-encoding")):
+        return resp
+    packed = await run_in_threadpool(gzip_bytes, body) if len(body) >= GZIP_THREAD_MIN else gzip_bytes(body)
+    resp.body = packed
+    resp.headers["content-encoding"] = "gzip"
+    resp.headers["content-length"] = str(len(packed))
+    return resp
 
 
 class _Static(StaticFiles):
@@ -195,15 +250,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
     def handler(fn):
         async def wrapped(request: Request):
             try:
-                return await fn(request)
+                resp = await fn(request)
             except ServiceError as exc:
-                return JSONResponse(dict(getattr(exc, "data", None) or {}, error=str(exc)), status_code=exc.status)
+                resp = JSONResponse(dict(getattr(exc, "data", None) or {}, error=str(exc)), status_code=exc.status)
             except Exception as exc:  # noqa: BLE001 - never leak a traceback to the browser (it goes to the log)
                 s = state["service"]
                 if s is not None:
                     s.ops.failure("%s %s" % (request.method, request.url.path), exc)
-                return JSONResponse({"error": "sunucu hatası: %s" % (str(exc)[:300] or type(exc).__name__)},
+                resp = JSONResponse({"error": "sunucu hatası: %s" % (str(exc)[:300] or type(exc).__name__)},
                                     status_code=500)
+            return await compress_json(request, resp)          # (gzip for a big JSON answer, when the client takes it)
         return wrapped
 
     # ------------------------------------------------------------------ pages
