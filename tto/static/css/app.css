@@ -205,6 +205,49 @@ a { color: var(--accent-ink); }
 .pr-dot.offline { color: var(--ink-3); }
 .presence-pop .pr-note { font-size: 11px; line-height: 1.45; margin: 8px 4px 0; }
 #app.pop #presence-chip { display: none !important; }
+/* "Prop" (prop.js): the top bar's position-size calculator and prop risk, in a panel under its button */
+.btn.prop-btn[aria-expanded="true"] { border-color: var(--accent); background: var(--accent-soft); }
+#app.pop #prop-btn { display: none !important; }
+.prop-pop { position: fixed; z-index: 85; width: min(660px, 96vw); max-height: 84vh; overflow: auto; background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); padding: 8px 12px 12px; }
+.prop-pop .spacer { flex: 1; }
+.prop-pop .pp-head { display: flex; align-items: center; gap: 4px; padding: 2px 0 8px; }
+.prop-pop .pp-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+.prop-pop .pp-field { display: flex; align-items: center; gap: 8px; }
+.prop-pop .pp-field .lbl { width: 46px; flex: none; color: var(--ink-3); font-size: 11.5px; }
+.prop-pop .pp-field .inp { width: 112px; text-align: right; font-variant-numeric: tabular-nums; }
+.prop-pop .pp-field #prop-pair { text-align: left; text-transform: uppercase; }
+.prop-pop .pp-field .seg button, .prop-pop .pp-rhead .seg button { padding: 3px 9px; font-size: 12px; }
+.prop-pop .pp-mid { font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.prop-pop .errtxt { margin-top: 8px; }
+.prop-pop .errtxt:empty { display: none; }
+.prop-pop .pp-out { margin: 10px 0 4px; padding: 8px 10px; border-radius: 8px; background: var(--sub-bg); line-height: 1.65;
+  font-variant-numeric: tabular-nums; }
+.prop-pop .pp-out:empty { display: none; }
+.prop-pop .pp-dir { font-weight: 700; }
+.prop-pop .pp-dir.long { color: var(--pos); }
+.prop-pop .pp-dir.short { color: var(--neg); }
+.prop-pop .pp-dir .muted { font-weight: 400; }
+.prop-pop .neg { color: var(--neg); }
+.prop-pop .pos { color: var(--pos); }
+.prop-pop .pp-risk { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+.prop-pop .pp-rhead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.prop-pop .pp-line { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.prop-pop .pp-kpi { flex: 1; padding: 5px 10px; border-right: 1px solid var(--line); }
+.prop-pop .pp-kpi:last-child { border-right: 0; }
+.prop-pop .pp-kpi .l { color: var(--ink-3); font-size: 10.5px; }
+.prop-pop .pp-kpi .v { font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.prop-pop .pp-pnl { margin: 6px 2px; font-size: 11.5px; }
+.prop-pop table.pp-table { width: 100%; margin-top: 6px; }
+.prop-pop table.pp-table td, .prop-pop table.pp-table th { font-variant-numeric: tabular-nums; }
+.prop-pop table.pp-table td:not(.l) { white-space: nowrap; }
+.prop-pop .pp-empty { margin: 6px 2px; }
+.prop-pop .pp-nostop { margin-top: 8px; font-size: 12px; }
+.prop-pop .pp-nostop ul { margin: 4px 0 0; padding-left: 18px; }
+.prop-pop .pp-limit { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.prop-pop .pp-limit .inp { width: 112px; text-align: right; }
+.prop-pop .pp-limit select.inp { width: auto; text-align: left; }
+.prop-pop .pp-note { margin-top: 8px; font-size: 11px; line-height: 1.45; }
 
 #kpis { display: flex; gap: 0; padding: 0 6px; border-bottom: 1px solid var(--line); background: var(--surface); overflow-x: auto; min-height: 44px; }
 .kpi { padding: 6px 14px 7px 10px; border-right: 1px solid var(--line); white-space: nowrap; }

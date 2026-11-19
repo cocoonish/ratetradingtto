@@ -1210,6 +1210,32 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             return ok(await call(book.reopen, _user(request), tid))
         raise ServiceError("bilinmeyen işlem: %s" % what, 404)
 
+    # ------------------------------------------------------------------ Prop (prop.py): the top bar's calculator and risk
+    # To look at only - nothing is booked or sent; the daily loss limit is the user's own (nobody else reads or sets it).
+    @handler
+    async def prop_state(request: Request):
+        # the panel opens: the desk's FX pairs that have a price (their mids), the user's limit
+        return ok(await call(svc().prop_state, _user(request)))
+
+    @handler
+    async def prop_size(request: Request):
+        # ?pair=&stop=&loss=&ccy=TRY|USD[&entry=]: the size rounded down to 1M and the real loss at it
+        q = dict(request.query_params)
+        q.pop("lang", None)
+        return ok(await call(svc().prop_size, _user(request), q, _trade_lang(request)))
+
+    @handler
+    async def prop_risk(request: Request):
+        # ?scope=personal|desk: the loss at the stops, the tab's "Günlük" K/Z, the limit, the room left
+        return ok(await call(svc().prop_risk, _user(request), request.query_params.get("scope")))
+
+    @handler
+    async def prop_limit(request: Request):
+        if request.method == "GET":
+            return ok(await call_free(svc().prop_limit, _user(request)))
+        data = await _body(request)
+        return ok(await call_free(svc().prop_set_limit, _user(request), data.get("amount"), data.get("ccy"), _trade_lang(request)))
+
     # ------------------------------------------------------------------ quant signals (quant.py)
     @handler
     async def quant_get(request: Request):
@@ -1424,6 +1450,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/trades/{tid:int}/log", trade_log),
         Route("/api/trades/{tid:int}/coupons", trade_coupons),
         Route("/api/trades/{tid:int}/{what}", trade_action, methods=["POST"]),
+        Route("/api/prop", prop_state),
+        Route("/api/prop/size", prop_size),
+        Route("/api/prop/risk", prop_risk),
+        Route("/api/prop/limit", prop_limit, methods=["GET", "POST"]),
         Route("/api/quant/{what}", quant_get),
         Route("/api/quant/{what}", quant_post, methods=["POST"]),
         Mount("/static", app=_Static(directory=STATIC), name="static"),

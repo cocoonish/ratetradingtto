@@ -46,6 +46,7 @@ import './pageboxes.js';                          // (the boxes of the dashboard
 import { boxEvent, PopBoxPage, popBoxHash, popBoxItem } from './pagebox.js';
 import { paintMenu, menuChanged, openedPage, pageTabs, editMenu } from './menu.js';
 import { showProgress, openProgress } from './hesap.js';
+import { setupProp, stopProp } from './prop.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
@@ -191,6 +192,7 @@ async function showLogin(message) {
   events.stop();
   stopDesk();
   stopPresence();
+  stopProp();                                          // (the Prop panel: closed, what was typed forgotten)
   dropKept();
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   if (drawer) drawer.stop();
@@ -1072,6 +1074,7 @@ function boot() {
   $('mode-badge').addEventListener('click', () => openStatus(state.status).catch(errorToast));
   $('interp-badge').addEventListener('click', () => ctx.goto('settings', 'interp'));
   $('hesap-ind').addEventListener('click', () => openProgress());
+  if (!POP) setupProp();                            // "Prop": the calculator and the prop risk, on every page
   $('btn-lang').addEventListener('click', () => {
     setLang(settings.lang === 'en' ? 'tr' : 'en');
     store('tto.lang', settings.lang);

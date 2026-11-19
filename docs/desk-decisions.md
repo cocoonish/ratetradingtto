@@ -364,6 +364,60 @@ whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, bo
   `GET /api/swaption`, `tto/static/js/pages/swaption.js`. Tests: `tests/test_swaption.py`, the browser test's
   Swaption checks.
 
+### Prop panel (19.11.2026)
+
+> "Bir de prop trade calculation kısmı açalım, bunu üstteki panele koyabiliriz. Pariteyi, stopumu, ve potansiyel loss'umu
+> koyduktan sonra 1M'e yuvarlanmış şekilde bana gerçek potansiyel lossumu ve size'i söylesin."
+
+- **Their answers.**
+  - The size is rounded **down** to 1M, so the real loss never goes above the loss typed.
+  - The loss is typed in **TRY or USD, chosen each time**.
+  - They also chose the **prop risk** in the same panel: the loss if every stop is hit, today's K/Z, a daily loss
+    limit and the room left.
+- **The calculator.** A pair of the desk's FX lists that has a price, the stop, the loss, the entry (the live mid unless
+  typed). Stop below the entry: long; above: short; equal: refused. The loss goes into the pair's quote currency at
+  today's rates; `size = loss / |entry − stop|`, rounded down to 1M of the base currency. Shown: the direction, the
+  distance (price, %, pips; kuruş for a TL pair), the size, the real loss at it (the loss's currency and TL, with the
+  other one beside), the loss of 1M and, with a limit, the share of today's room the trade uses. Worked example:
+  USDTRY 44,35 → stop 44,55, 500k TL: short, 2,5M raw, **2M USD, 400.000 TL**, 200.000 TL a million.
+- **The risk.** Room = limit − max(0, −today's K/Z) − loss at the stops: a gain gives no room. "Limit · Bugün K/Z ·
+  Stoplar · Kalan", in the panel's currency.
+- **Conventions settled while building it** (the spec did not say; ask before changing):
+  - **Prices** are the valuation's market snapshot (`tradevalue.market`): the Forward sheet's USDTRY and EURTRY, the
+    quant package's FX series (its last live refresh, else the last close), crosses through USD - and the cross of two
+    TL prices (EURUSD = EURTRY / USDTRY) when there is no other. No Bloomberg request. The pairs offered are the quant
+    setting's list and the Spot / FX board's; one without a price is refused ("canlı fiyat yok").
+  - **Rounding down** forgives float noise of 1e-9 (44,55 − 44,35 is 0,19999999999999574: 400k is 2M, not 1M).
+  - **Under 1M** the size is 0 and the panel says what 1M would lose.
+  - **One currency switch.** The loss's TRY / USD switch is the panel's: the risk is shown in it too. It starts on TRY
+    each time the panel is built; the Kişisel / Masa switch is remembered (localStorage).
+  - **Stop levels from the market now, on Bootstrap** (Murex), as the stop alarms read them, each in the trade's own
+    level unit (`tradebook.level_spec`), with its valuation's sensitivity:
+    - FX spot: base amount × the rate's distance (exact);
+    - TRY OIS / SOFR outright, PPK period, FRA: DV01 (notional × annuity × 1 bp, the sensitivity to its own par rate) ×
+      the bp;
+    - spread / fly: the level's DV01 = half the sum of the legs' DV01s (the long leg's / the body's when DV01-weighted
+      as the desk sizes them) × the level's bp;
+    - DİBS by yield: DİBS RV's DV01 (TL a bp of 1 mn, of the simple yield) × the bp; by price: nominal × the price
+      distance / 100 (exact);
+    - **FX option: not "delta × spot distance".** Trades keeps an option's stop as a **premium amount** (what it would
+      fetch now: `level_spec`), not a spot level, so the loss at its stop is that premium's own distance (exact). The
+      delta only translates the stop into the spot where the premium would reach it, labelled "yaklaşık (delta)".
+  - **A stop already passed** adds nothing to Stoplar: what lies beyond it is already lost - it is in the MTM and so in
+    the K/Z - and is shown beside the trade ("geçildi · ötesi …").
+  - **No stop**: listed apart ("stopsuz") with the DV01, the size (signed) or the delta (approximate); not in Stoplar.
+    A trade that cannot be valued is listed with the reason and counted as unknown (left out of the sum, said).
+  - **Today's K/Z** is the tab's "Günlük" of its last "MTM yenile", on the viewer's curve - exactly the Trades page's
+    total. Nothing is valued automatically for it (Trades' design: values on "MTM yenile"); with no "MTM yenile" today
+    there is no K/Z and no room, and the panel offers the same "MTM yenile" button.
+  - **The limit** is the user's own (`prop.limit:<user>`), any amount above 0, in TRY or USD; empty removes it, and
+    then the line has no Limit and no Kalan (only Bugün K/Z · Stoplar). Its other currency, the K/Z's and the stops'
+    are converted at today's USDTRY.
+  - The risk is read when the panel opens, on its buttons, and every minute while it is open.
+- Code: `tto/prop.py`, `Service.prop_state` / `prop_size` / `prop_risk` / `prop_limit` / `prop_set_limit`,
+  `GET /api/prop`, `GET /api/prop/size`, `GET /api/prop/risk`, `GET` / `POST /api/prop/limit`,
+  `tto/static/js/prop.js`. Tests: `tests/test_prop.py`, the browser test's Prop checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

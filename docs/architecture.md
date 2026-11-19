@@ -191,7 +191,7 @@ docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption`), `bonds` (catalog) |
-| Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `volcarry` |
+| Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
 | Ops | `ops` (log, backups, freshness), `progress` |
 
@@ -224,6 +224,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `watch.items`, `watch.alarms`, `watch.open:<day>`, `watch.fired:<day>` | `watch` (`meetings` also moves them) |
 | `migrated.*` | one-time migrations |
 | `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state |
+| `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
 
 **The history's tables are kept in memory too** (`hist_values`, `watch_closes`, `mpc_days`, `mpc_values`):
@@ -266,6 +267,26 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 Two kinds of panel key add the dashboard's own columns:
 - the `ppk` key: PPK columns beside Bootstrap (`_fra_ppk_columns`, `_broken_ppk_columns`);
 - the `append` keys (aswfx, rvfair, borsaspread, dibs_live, universe …): see `Service._panel`.
+
+### The top bar's own panels
+
+The top bar (`#top` in `tto/static/index.html`) is the same on every page; besides the page's title it carries popovers
+that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hesap.js`), the curve mark (`paintInterp` in
+`main.js`) and **Prop**.
+
+- **Prop** (`tto/prop.py`, `tto/static/js/prop.js`; the desk's decision in
+  [desk-decisions.md](desk-decisions.md#prop-panel-19112026)): a position-size calculator and the prop risk of a Trades
+  tab, to look at only. `#prop-btn` opens `#prop-panel` under it; `stopProp` clears it at sign-out; a window of its own
+  has no button.
+- **Endpoints** (`Service.prop_*`, each needs a session; a `PropError` is a 400 with the Turkish reason):
+  - `GET /api/prop` - the desk's FX pairs that have a price (`quant.fx_pair_list`, then the Spot / FX board's), each with
+    its mid, and the user's limit;
+  - `GET /api/prop/size?pair=&stop=&loss=&ccy=TRY|USD[&entry=]` - the calculator (`prop.size`);
+  - `GET /api/prop/risk?scope=personal|desk` - the loss at every stop, the tab's "Günlük" K/Z, the limit, the room;
+  - `GET` / `POST /api/prop/limit` - the user's own daily loss limit (`prop.limit:<user>` in kv).
+- **Where its numbers come from.** Prices: `tradevalue.market` (request-free; cached 5 s, `MARKET_SECONDS`). K/Z: the
+  tab's last "MTM yenile" as `tradebook.listing` returns it. Stops: `tradevalue.value` of each open trade on that market
+  (Bootstrap, as the stop alarms), off the engine thread.
 
 ## Row keys
 

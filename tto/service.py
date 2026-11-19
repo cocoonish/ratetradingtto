@@ -322,6 +322,9 @@ class Service(object):
         # (tradebook.py; their own tables - nothing of the desk's reads them)
         from .tradebook import TradeBook
         self.tradebook = TradeBook(self)
+        # Prop (prop.py): the top bar's position-size calculator and prop risk - to look at only, over Trades' tabs
+        from .prop import Prop
+        self.prop = Prop(self)
         try:
             # the İzleme alarms of the trades' targets and stops as the trades are now - once at the start (a restart, a
             # restored database, a trade deleted elsewhere): never one twice
@@ -7854,6 +7857,37 @@ class Service(object):
                          "a": number(cell("C%d" % r)), "b": number(cell("D%d" % r))})
             r += 1
         return {"rows": rows, "horizons": self._carry_horizons(book, calc), "path": self._carry_path(book, calc)}
+
+    # ================================================================== Prop (prop.py): the top bar's calculator and risk
+    # To look at only: nothing is booked or sent; what cannot be worked out is a 400 with the reason in Turkish.
+    def _prop(self, fn: Callable, *args: Any) -> Dict[str, Any]:
+        from .prop import PropError
+        try:
+            return fn(*args)
+        except PropError as exc:
+            raise ServiceError(str(exc))
+
+    def prop_state(self, user: Optional[str]) -> Dict[str, Any]:
+        """What the Prop panel opens with: the desk's FX pairs that have a price (each with its mid), the user's limit."""
+        return self._prop(self.prop.state, user)
+
+    def prop_size(self, user: Optional[str], query: Optional[Dict[str, Any]] = None, lang: Optional[str] = None) -> Dict[str, Any]:
+        """The calculator: ``pair``, ``stop``, ``loss`` (500k, 1mn), ``ccy`` (TRY / USD), ``entry`` (empty: the live mid) ->
+        the direction, the size rounded down to 1M and the real loss at it (:func:`tto.prop.size`)."""
+        return self._prop(self.prop.calc, user, query or {}, lang or self.settings.locale)
+
+    def prop_risk(self, user: Optional[str], scope: Any = None) -> Dict[str, Any]:
+        """The prop risk of a Trades tab (Kişisel by default, or Masa): the loss if every stop is hit, the tab's "Günlük"
+        K/Z, the user's daily loss limit and the room left (:meth:`tto.prop.Prop.risk`)."""
+        return self._prop(self.prop.risk, user, scope)
+
+    def prop_limit(self, user: Optional[str]) -> Dict[str, Any]:
+        key = self.require_user(user)
+        return {"limit": self.prop.limit(key)}
+
+    def prop_set_limit(self, user: Optional[str], amount: Any, ccy: Any, lang: Optional[str] = None) -> Dict[str, Any]:
+        """The user's own daily loss limit (TRY or USD; empty: none) - nobody else sees or changes it."""
+        return self._prop(self.prop.set_limit, user, amount, ccy, lang or self.settings.locale)
 
     # ================================================================== broker chat
     def _broker_day(self, date: Optional[str]) -> str:
