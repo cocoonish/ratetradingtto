@@ -3019,43 +3019,93 @@ async function clipAfter(page, action) {
     await page.waitForSelector('#kf-table tr.kf-row', { timeout: 60000 });
     const kfApi = (await api(page, 'ayşe yilmaz', 'GET', '/api/kagit-fiyat')).json;
     const kfFmt = (v) => v.toFixed(2).replace('.', ',');
-    const kfSeen = await page.evaluate(() => {
-      const row = (isin) => { const tr = document.querySelector('#kf-table tr.kf-row[data-isin="' + isin + '"]'); return tr ? [...tr.children].map((td) => td.textContent) : []; };
+    // (each cell read by its class: the table's columns are grouped - fair, Öngörülen, OIS'e göre, FX swap'a göre, the quote…)
+    const kfRead = () => page.evaluate(() => {
+      const row = (isin) => { const tr = document.querySelector('#kf-table tr.kf-row[data-isin="' + isin + '"]');
+        if (!tr) return {};
+        const out = { all: [...tr.children].map((td) => td.textContent) };
+        for (const k of ['fair', 'bid', 'ask', 'buy', 'sell', 'sigma', 'hit', 'proj', 'proj-simple', 'proj-price', 'proj-bp', 'proj-pnl', 'proj-model',
+          'ois-y', 'ois-p', 'fx-y', 'fx-p']) {
+          const td = tr.querySelector('td.kf-' + k);
+          out[k] = td ? td.textContent : null;
+          if (td && k === 'proj') out.projTip = td.title || '';
+        }
+        out.simple = (tr.children[5] || {}).textContent;
+        return out;
+      };
       const how = (isin) => (document.querySelector('#kf-table tr.kf-how[data-isin="' + isin + '"]') || {}).textContent || '';
       return { menu: window.tto.state.pages.filter((p) => p.group === 'Tahvil').map((p) => p.id), fixed: row('TRT150328T24'),
         tlref: row('TRT090130T12'), how: how('TRT150328T24'), rows: document.querySelectorAll('#kf-table tr.kf-row').length,
         priced: document.querySelectorAll('#kf-table tr.kf-row:not(.kf-off)').length, info: document.getElementById('kf-info').textContent,
-        width: (document.getElementById('kf-width-3y') || {}).tagName || '' };
+        width: (document.getElementById('kf-width-3y') || {}).tagName || '',
+        groups: [...document.querySelectorAll('#kf-table tr.kf-groups th')].map((th) => th.textContent),
+        ufuk: [...document.querySelectorAll('#kf-ufuk button')].map((b) => b.id + (b.classList.contains('on') ? '*' : '')) };
     });
+    const kfSeen = await kfRead();
     const kfF = kfApi.rows.find((r) => r.isin === 'TRT150328T24') || {};
     check('Kâğıt Fiyatlama: first in Tahvil; every bond of the trading list - a fixed coupon bond with its fair (compound, simple, price), '
       + 'its quote (bid / ask, 10 bp wide), the good levels (Al ≥ fair + 2σ, Sat ≤ fair − 2σ: the buy level\'s price under fair\'s), σ '
       + 'its 1–3Y floor (the history short), no backtest yet, and how it was priced; a TLREF floater says why it is not',
       kfSeen.menu[0] === 'kagit-fiyat' && kfSeen.rows === kfApi.rows.length && kfApi.rows.length >= 18 && kfSeen.priced >= 12
-      && kfF.priced && kfSeen.fixed[4] === kfFmt(kfF.fair.yield) && kfSeen.fixed[5] === kfFmt(kfF.fair.simple)
-      && kfSeen.fixed[7] === kfFmt(kfF.quote.bid.yield) && kfSeen.fixed[8] === kfFmt(kfF.quote.ask.yield) && kfF.quote.width === 10
-      && kfSeen.fixed[10] === kfFmt(kfF.levels.buy.yield) && kfSeen.fixed[11] === kfFmt(kfF.levels.sell.yield)
+      && kfF.priced && kfSeen.fixed.fair === kfFmt(kfF.fair.yield) && kfSeen.fixed.simple === kfFmt(kfF.fair.simple)
+      && kfSeen.fixed.bid === kfFmt(kfF.quote.bid.yield) && kfSeen.fixed.ask === kfFmt(kfF.quote.ask.yield) && kfF.quote.width === 10
+      && kfSeen.fixed.buy === kfFmt(kfF.levels.buy.yield) && kfSeen.fixed.sell === kfFmt(kfF.levels.sell.yield)
       && kfF.levels.buy.yield > kfF.fair.yield && kfF.fair.yield > kfF.levels.sell.yield && kfF.levels.buy.clean < kfF.fair.clean
-      && kfSeen.fixed[12] === '23*' && kfF.sigma.short && kfSeen.fixed[13] === 'isabet – (0)'
-      && kfSeen.how === 'Nasıl fiyatlandı: ' + kfF.line && /^Komşu eğri \d+,\d\d \+ 28\.08 kapanışındaki fark [+−]?\d+ bp = \d+,\d\d · %100 → adil \d+,\d\d · fiyat \d+,\d{3} \(valör 04\.11\)$/.test(kfF.line)
-      && /TLREF'e endeksli/.test(kfSeen.tlref.join(' ')) && /Geçmiş: 3 kapanış \(26\.08\.2026 – 28\.08\.2026\)/.test(kfSeen.info) && kfSeen.width === 'INPUT',
+      && kfSeen.fixed.sigma === '23*' && kfF.sigma.short && kfSeen.fixed.hit === 'isabet – (0)'
+      && kfSeen.how.startsWith('Nasıl fiyatlandı: ' + kfF.line) && /^Komşu eğri \d+,\d\d \+ 28\.08 kapanışındaki fark [+−]?\d+ bp = \d+,\d\d · %100 → adil \d+,\d\d · fiyat \d+,\d{3} \(valör 04\.11\)$/.test(kfF.line)
+      && /TLREF'e endeksli/.test((kfSeen.tlref.all || []).join(' ')) && /Geçmiş: 3 kapanış \(26\.08\.2026 – 28\.08\.2026\)/.test(kfSeen.info) && kfSeen.width === 'INPUT',
     { kfSeen, line: kfF.line, why: kfF.why });
+    // Öngörülen (1 ay by default) and the two ASW curves' fair values, as DİBS Trading shows them
+    const kfP = (hz) => ((kfF.proj || {}).h || {})[String(hz)] || {};
+    const kfAsw = (k, i) => { const a = (kfF.asw || {})[k] || {}; return isFinite(a.yield) ? (i ? a.price.toFixed(3).replace('.', ',') : kfFmt(a.yield)) : '–'; };
+    check('... Öngörülen at 1 ay (the default: the best record): its yield (compound / simple), the price at the horizon\'s value date, the bp '
+      + 'and K/Z, the model - here M2 in M4\'s place (three closes: the AR(1) cannot be measured), said, with the record -; and the '
+      + '"OIS\'e göre" / "FX swap\'a göre" fair yield and price',
+      kfSeen.groups.some((g) => /^Öngörülen · 1 ay$/.test(g)) && kfSeen.groups.includes("OIS'e göre") && kfSeen.groups.includes("FX swap'a göre")
+      && kfSeen.ufuk.join() === 'kf-ufuk-5,kf-ufuk-10,kf-ufuk-20*' && kfApi.projection.default === 20
+      && kfSeen.fixed.proj === kfFmt(kfP(20).yield) && kfSeen.fixed['proj-simple'] === kfFmt(kfP(20).simple)
+      && kfSeen.fixed['proj-price'] === kfP(20).clean.toFixed(3).replace('.', ',') && kfP(20).rule === 'M4' && kfP(20).model === 'M2'
+      && /^M4 kurulamadı/.test(kfP(20).why) && kfSeen.fixed['proj-model'] === 'eğri+fark sabit' && kfSeen.fixed.projTip.includes('geri test')
+      && kfSeen.how.includes('Öngörülen: ' + kfP(20).line) && kfSeen.fixed['ois-y'] === kfAsw('ois', 0) && kfSeen.fixed['ois-p'] === kfAsw('ois', 1)
+      && kfSeen.fixed['fx-y'] === kfAsw('fx', 0) && kfSeen.fixed['fx-p'] === kfAsw('fx', 1) && kfSeen.fixed['ois-y'] !== '–',
+    { fixed: kfSeen.fixed, groups: kfSeen.groups, ufuk: kfSeen.ufuk, p20: kfP(20), asw: kfF.asw });
+    // the switch: 1 hafta - another value date, another projection (the table drawn again from the same answer)
+    await page.click('#kf-ufuk-5');
+    await page.waitForFunction((want) => { const td = document.querySelector('#kf-table tr.kf-row[data-isin="TRT150328T24"] td.kf-proj');
+      return td && td.textContent === want; }, kfFmt(kfP(5).yield), { timeout: 20000 }).catch(() => {});
+    const kfSeen5 = await kfRead();
+    check('... the horizon switch (1 hafta / 2 hafta / 1 ay) changes the projection: 1 hafta shows its own yield and price',
+      kfSeen5.ufuk.join() === 'kf-ufuk-5*,kf-ufuk-10,kf-ufuk-20' && kfSeen5.groups.some((g) => /^Öngörülen · 1 hafta$/.test(g))
+      && kfSeen5.fixed.proj === kfFmt(kfP(5).yield) && kfSeen5.fixed['proj-price'] === kfP(5).clean.toFixed(3).replace('.', ',')
+      && kfP(5).value_date < kfP(20).value_date && kfSeen5.fixed['proj-price'] !== kfSeen.fixed['proj-price'],
+    { p5: kfSeen5.fixed, ufuk: kfSeen5.ufuk });
     await shot(page, '12c-kagit-fiyat');
-    // the bond's card: the same block
+    // the bond's card: the same block (Öngörülen at the horizon chosen on the page)
     await page.click('#kf-table tr.kf-row[data-isin="TRT150328T24"] td.cardlink');
     await page.waitForSelector('.modal.bondcard #kf-card #kf-card-how', { timeout: 30000 }).catch(() => {});
-    const kfCard = await page.evaluate(() => Object.fromEntries(['fair', 'how', 'buy', 'quote']
+    const kfCardRead = () => page.evaluate(() => Object.fromEntries(['fair', 'how', 'buy', 'quote', 'proj', 'proj-price', 'proj-model', 'ois', 'fx', 'proj-how']
       .map((k) => [k, (document.getElementById('kf-card-' + k) || {}).textContent || ''])));
+    const kfCard = await kfCardRead();
     check('... the bond\'s card has the same block: fair (compound / simple), the quote, the good levels and how it was priced',
       kfCard.fair.includes(kfFmt(kfF.fair.yield) + ' / ' + kfFmt(kfF.fair.simple)) && kfCard.how === 'Nasıl fiyatlandı: ' + kfF.line
       && kfCard.buy.includes(kfFmt(kfF.levels.buy.yield)) && kfCard.quote.includes(kfFmt(kfF.quote.bid.yield) + ' / ' + kfFmt(kfF.quote.ask.yield)), kfCard);
+    await page.click('.modal.bondcard #kf-card-ufuk-20').catch(() => {});
+    await page.waitForFunction((want) => ((document.getElementById('kf-card-proj') || {}).textContent || '').includes(want),
+      kfFmt(kfP(20).yield) + ' / ' + kfFmt(kfP(20).simple), { timeout: 20000 }).catch(() => {});
+    const kfCard20 = await kfCardRead();
+    check('... and Öngörülen (at 1 hafta, the page\'s choice; its own switch to 1 ay), the model and record, and OIS\'e göre / FX swap\'a göre',
+      kfCard.proj.includes(kfFmt(kfP(5).yield) + ' / ' + kfFmt(kfP(5).simple)) && kfCard20.proj.includes(kfFmt(kfP(20).yield) + ' / ' + kfFmt(kfP(20).simple))
+      && kfCard20['proj-price'].includes(kfP(20).clean.toFixed(3).replace('.', ',')) && /eğri ve fark değişmezse/.test(kfCard20['proj-model'])
+      && kfCard20['proj-how'].includes('geri test') && kfCard20.ois.includes(kfAsw('ois', 0) + ' / ' + kfAsw('ois', 1))
+      && kfCard20.fx.includes(kfAsw('fx', 0)),
+    { kfCard, kfCard20 });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
     // an administrator's width (1–3Y 12 bp): the quote follows; back to 10
     await page.fill('#kf-width-3y', '12');
     await page.click('#kf-widths-save');
-    await page.waitForFunction(() => { const tr = document.querySelector('#kf-table tr.kf-row[data-isin="TRT150328T24"]');
-      return tr && /12,0 bp/.test(tr.children[9].title || '') && !!document.getElementById('kf-log'); }, null, { timeout: 30000 }).catch(() => {});
+    await page.waitForFunction(() => { const td = document.querySelector('#kf-table tr.kf-row[data-isin="TRT150328T24"] td.kf-quote-px');
+      return td && /12,0 bp/.test(td.title || '') && !!document.getElementById('kf-log'); }, null, { timeout: 30000 }).catch(() => {});
     const kfWide = ((await api(page, 'ayşe yilmaz', 'GET', '/api/kagit-fiyat?isin=TRT150328T24')).json.rows || [])[0] || {};
     const kfLog = await page.evaluate(() => (document.getElementById('kf-log') || {}).textContent || '');
     check('... an administrator sets a bucket\'s width (1–3Y 12 bp): the quote is that wide, logged',

@@ -44,6 +44,18 @@ neighbours' curve now against its 20-day median.
 
 TLREF floaters, FRNs and CPI linkers are not priced here; their row says why.
 
+**Öngörülen** (the desk, the same evening: "Bu adil fiyat bir süre sonra ulaşmasını tahmin ettiğimiz fiyat gibi de olmalı.
+Bir adil fiyat, bir de öngörülen fiyat olacak yani, OIS ve FX swap curve'üne göre fiyatları da ayrıca gösterilsin"): the
+yield and price the bond is expected to reach 5, 10 or 20 closes on (``HORIZONS``; the page's switch), by the model the
+desk's history chose for its bucket and the horizon (``PROJECTION``, measured out of sample - docs/desk-decisions.md):
+M0 no change, M1 the spread to the neighbours' curve back toward its mean (AR(1)), M2 the roll-down alone ("eğri ve fark
+değişmezse"), M3 both, M4 M3 plus β × the OIS forward's move (``project``).  The rule fixed before measuring (``choose``):
+the lowest RMSE where it beats no change by 5 %; else M2, and the page says no model beat no change there.  Its price is
+the clean price at the horizon's value date; its record shown beside it (``record_text``).
+
+**OIS'e göre / FX swap'a göre**: DİBS Trading's fair yield and price of the bond on DİBS RV's OIS ASW curve and on DİBS
+ASW's FX swap one - ``rvfair``'s, with the trading summary's own cells (``asw_side``), not worked out again.
+
 **Threads.**  What the sheets have now is read on the engine thread (``_read``, short); the closes' part (each past
 day's curves, the spreads, σ, the backtest) off it, from the store's memory (``Store.hist_many``), kept per revision of
 the history and each day's curves per what they are made of - a new close builds that day again, not the year."""
@@ -100,6 +112,51 @@ KEY_WIDTHS, KEY_LOG = "kagitfiyat.widths", "kagitfiyat.log"
 LOG_MAX = 50
 BP = 1e4
 
+#: Öngörülen - the horizons a projection is made for (closes: TRY business days) and their captions on the switch
+HORIZONS: Tuple[Tuple[int, str], ...] = ((5, "1 hafta"), (10, "2 hafta"), (20, "1 ay"))
+#: the models measured on the desk's history (``project``); each on the bond's spread to the neighbours' curve
+M0, M1, M2, M3, M4 = "M0", "M1", "M2", "M3", "M4"
+MODEL_TEXT = {M0: "değişmez", M1: "fark ortalamasına döner", M2: "eğri ve fark değişmezse",
+              M3: "fark ortalamasına döner + vade kısalır", M4: "fark ortalamasına döner + vade kısalır + OIS forward'ı"}
+AR_WINDOWS = (60, 120)                # the closes an AR(1) / β is fitted on (rolling)
+AR_MIN = 20                           # pairs of consecutive closes an AR(1) / β needs in its window
+MOVE_MIN = 5.0                        # bp: a projection "says the yield moves" (the hit rate's calls) from this far on
+BEAT = 0.05                           # a model is used where its RMSE beats no change (M0) by this share or more
+
+
+def _rec(model: str, window: int, rmse: float, m0: float, hit: Optional[float], calls: int, n: int, beat: bool, best: str,
+         gain: float, m2: Tuple[float, Optional[float], int]) -> Dict[str, Any]:
+    return {"model": model, "window": window, "rmse": rmse, "m0": m0, "hit": hit, "calls": calls, "n": n, "beat": beat,
+            "best": best, "gain": gain, "m2": {"rmse": m2[0], "hit": m2[1], "calls": m2[2]}}
+
+
+#: Öngörülen's model by bucket and horizon and its record - measured on the desk's history (a backup copy of its
+#: database of 19.11.2026: 16 DİBS, 14 fixed coupon and 2 bills, 10.11.2025–16.11.2026; every forecast out of sample,
+#: its parameters from the bond's closes up to the forecast day; one sample for every model: from a bond's 120th close
+#: on; docs/desk-decisions.md).  The rule, fixed before measuring: the model with the lowest RMSE where it beats no change
+#: (M0) by ``BEAT`` or more (``beat``); where none does, M2 - "eğri ve fark değişmezse" - and the page says so.  Each:
+#: the model and its window (closes), its RMSE and M0's (bp of the compound yield), the hit rate of its calls (a move of
+#: ``MOVE_MIN`` or more said: did the yield go that way), the calls, the forecasts, the best model and its gain over M0
+#: (%), and M2's own RMSE / hit rate / calls (shown when a bond cannot have the model now)
+PROJECTION: Dict[str, Dict[int, Dict[str, Any]]] = {
+    "1y": {5: _rec(M2, 0, 84.4, 86.1, 0.689, 151, 235, False, "M2", 1.9, (84.4, 0.689, 151)),
+           10: _rec(M2, 0, 120.1, 123.6, 0.672, 183, 216, False, "M2", 2.8, (120.1, 0.672, 183)),
+           20: _rec(M4, 120, 165.8, 179.0, 0.706, 177, 181, True, "M4/120", 7.4, (169.9, 0.732, 168))},
+    "3y": {5: _rec(M2, 0, 86.7, 86.6, 0.125, 8, 322, False, "M4/60", 0.4, (86.7, 0.125, 8)),
+           10: _rec(M2, 0, 120.1, 120.0, 0.536, 97, 312, False, "M4/60", 1.4, (120.1, 0.536, 97)),
+           20: _rec(M4, 60, 149.0, 163.8, 0.637, 259, 276, True, "M4/60", 9.0, (165.8, 0.498, 221))},
+    "5y": {5: _rec(M2, 0, 77.6, 77.5, 0.0, 2, 315, False, "M4/60", -0.0, (77.6, 0.0, 2)),
+           10: _rec(M2, 0, 101.4, 101.4, 0.408, 142, 308, False, "M2", -0.0, (101.4, 0.408, 142)),
+           20: _rec(M2, 0, 133.4, 132.2, 0.477, 279, 279, False, "M2", -0.9, (133.4, 0.477, 279))},
+    "5y+": {5: _rec(M2, 0, 70.9, 71.0, None, 0, 362, False, "M2", 0.1, (70.9, None, 0)),
+            10: _rec(M2, 0, 94.5, 94.7, None, 0, 349, False, "M2", 0.3, (94.5, None, 0)),
+            20: _rec(M2, 0, 121.6, 122.0, 0.5, 38, 323, False, "M2", 0.3, (121.6, 0.5, 38))},
+}
+#: the horizon the page opens on: the best gain over M0, pooled over the buckets (each its own model): 1 ay +4,6 %
+#: (1 hafta +0,4 %, 2 hafta +0,7 %)
+DEFAULT_H = 20
+RECORD_TEXT = "masanın geçmişi 10.11.2025–16.11.2026, 16 kâğıt, örnek dışı"
+
 
 class KagitError(ValueError):
     """A request the page cannot answer: the reason, in Turkish (the service's 400)."""
@@ -154,19 +211,32 @@ def to_compound(bond: qc.Bond, y: float, value: _dt.date, conv: str) -> float:
 
 
 # ---------------------------------------------------------------------------------------------- the neighbours' curve
-def _price_on(fit_in: qc.BondFit, j: int, nss: qc.Nss) -> float:
-    return sum(cf * nss.df(t) for t, cf in fit_in.flows[j])
+def yield_on(b: qc.Bond, nss: qc.Nss, value: _dt.date, conv: str, guess: Optional[float]) -> Optional[float]:
+    """The bond's compound yield on a curve at a value date: its cash flows after that date discounted on the curve (their
+    times counted from it), the yield of that price read in ``conv`` and compounded."""
+    flows, _ = b.flows(value)
+    if not flows:
+        return None
+    pm = sum(cf * nss.df((d - value).days / qc.YEAR) for d, cf in flows)
+    ym = b.yield_of(pm, value, conv, guess)
+    if ym is None or not math.isfinite(ym):
+        return None
+    return to_compound(b, ym, value, conv)
 
 
 def neighbours(items: Sequence[Tuple[qc.Bond, _dt.date, float, str]], nss0: qc.Nss,
-               extra: Sequence[Tuple[qc.Bond, _dt.date]] = ()) -> Dict[str, Any]:
+               extra: Sequence[Tuple[qc.Bond, _dt.date]] = (),
+               ahead: Optional[Dict[str, Dict[int, _dt.date]]] = None) -> Dict[str, Any]:
     """Each bond against the curve of the others: the Nelson-Siegel curve of the fixed coupon bonds of ``items`` (bond,
     value date, yield, its convention) - quantcurve's fit, the model and τ of ``nss0`` held, the β from it - fitted again
     without the bond (leave one out), the bond's model yield on it compounded (``nbr``: ISIN -> decimal).  A bill (never
     in the fit) and the bonds of ``extra`` (bond, value date: no yield of their own) on the curve of all of them.  Too few
-    coupon bonds to leave one out: ``{"nbr": {}, "why"}``."""
+    coupon bonds to leave one out: ``{"nbr": {}, "why"}``.
+
+    ``ahead`` (ISIN -> {horizon: a later value date}): the roll-down - the bond's yield on the same curve at that value
+    date, the curve unchanged and the bond that much shorter (``roll``: ISIN -> {horizon: decimal})."""
     fit_in = qc.BondFit(items)
-    out: Dict[str, Any] = {"nbr": {}, "n_fit": fit_in.n_fit, "n": len(fit_in)}
+    out: Dict[str, Any] = {"nbr": {}, "n_fit": fit_in.n_fit, "n": len(fit_in), "roll": {}}
     if fit_in.n_fit < qc.MIN_BONDS + 1:
         out["why"] = "en az %d sabit kuponlu kâğıdın getirisi gerekli (%d var)" % (qc.MIN_BONDS + 1, fit_in.n_fit)
         return out
@@ -174,29 +244,32 @@ def neighbours(items: Sequence[Tuple[qc.Bond, _dt.date, float, str]], nss0: qc.N
     nss = full["nss"]
     out["nss"] = nss
     fitted = set(fit_in.fitted)
+
+    def on(b: qc.Bond, curve: qc.Nss, value: _dt.date, conv: str, guess: Optional[float]) -> None:
+        y = yield_on(b, curve, value, conv, guess)
+        if y is None:
+            return
+        out["nbr"][b.isin] = y
+        for h, later in ((ahead or {}).get(b.isin) or {}).items():
+            if (b.maturity - later).days >= 1:
+                got = yield_on(b, curve, later, conv, guess)
+                if got is not None:
+                    out["roll"].setdefault(b.isin, {})[h] = got
+
     for j, b in enumerate(fit_in.bonds):
+        curve = nss
         if j in fitted:
             idx = [i for i in fit_in.fitted if i != j]
 
             def make(t1: float, t2: float, idx: List[int] = idx) -> Tuple[Any, Any]:
                 return fit_in._fn(idx, t1, t2), (lambda k=qc.NSS: list(nss.beta[:k]))
 
-            pm = _price_on(fit_in, j, qc.refit(make, nss, nss.beta, iters=8)["nss"])
-        else:
-            pm = _price_on(fit_in, j, nss)
-        ym = b.yield_of(pm, fit_in.value[j], fit_in.conv[j], fit_in.y[j])
-        if ym is not None and math.isfinite(ym):
-            out["nbr"][b.isin] = to_compound(b, ym, fit_in.value[j], fit_in.conv[j])
+            curve = qc.refit(make, nss, nss.beta, iters=8)["nss"]
+        on(b, curve, fit_in.value[j], fit_in.conv[j], fit_in.y[j])
     for b, value in extra:
         if b.isin in out["nbr"] or (b.maturity - value).days < qc.MIN_DAYS:
             continue
-        flows, _ = b.flows(value)
-        if not flows:
-            continue
-        pm = sum(cf * nss.df((d - value).days / qc.YEAR) for d, cf in flows)
-        ym = b.yield_of(pm, value, "compound", nss.zero(max((b.maturity - value).days / qc.YEAR, 0.01)))
-        if ym is not None and math.isfinite(ym):
-            out["nbr"][b.isin] = ym
+        on(b, nss, value, "compound", nss.zero(max((b.maturity - value).days / qc.YEAR, 0.01)))
     return out
 
 
@@ -281,7 +354,128 @@ def bond_closes(recs: Sequence[Dict[str, Any]], pos: Dict[str, int], bucket_now:
     spreads = [(r["y"] - r[NBR]) * BP for r in recs if r.get(NBR) is not None][-MEDIAN_DAYS:]
     if spreads:
         out["median"] = {"bp": statistics.median(spreads), "n": len(spreads)}
+    # Öngörülen's parameters: each window's AR(1) of the spread and β on OIS, from the last closes
+    out["windows"] = {w: fit_window(recs, pos, len(recs) - 1, w) for w in AR_WINDOWS}
     return out
+
+
+# ---------------------------------------------------------------------------------------------- Öngörülen: the models
+def ar1(spreads: Sequence[float], linked: Sequence[bool]) -> Optional[Tuple[float, float]]:
+    """The AR(1) of a bond's spread over a window of its closes: μ the window's mean, φ the OLS slope of s[k+1] − μ on
+    s[k] − μ over the pairs of consecutive closes (``linked[k]``: close k+1 is the history's next day after close k), held
+    within [0, 1] (1: no reversion, 0: all of it at once).  None with fewer than ``AR_MIN`` pairs."""
+    n = len(spreads)
+    if n < 2:
+        return None
+    mu = sum(spreads) / n
+    num = den = 0.0
+    pairs = 0
+    for k in range(n - 1):
+        if not linked[k]:
+            continue
+        a, b = spreads[k] - mu, spreads[k + 1] - mu
+        num += a * b
+        den += a * a
+        pairs += 1
+    if pairs < AR_MIN or den <= 0:
+        return None
+    return mu, min(1.0, max(0.0, num / den))
+
+
+def beta_of(dy: Sequence[float], dx: Sequence[float]) -> Optional[float]:
+    """The OLS slope of a bond's daily yield changes ``dy`` on its OIS base's ``dx`` (pairs of consecutive closes); None
+    with fewer than ``AR_MIN`` of them."""
+    n = len(dy)
+    if n < AR_MIN or n != len(dx):
+        return None
+    mx, my = sum(dx) / n, sum(dy) / n
+    sxx = sum((x - mx) ** 2 for x in dx)
+    if sxx <= 0:
+        return None
+    return sum((x - mx) * (y - my) for x, y in zip(dx, dy)) / sxx
+
+
+def fit_window(recs: Sequence[Dict[str, Any]], pos: Dict[str, int], end: int, w: int) -> Dict[str, Any]:
+    """A model's parameters from a bond's last ``w`` closes up to ``recs[end]`` (included; out of sample for anything
+    after it): ``ar`` the AR(1) of its spread to the neighbours' curve (:func:`ar1`), ``beta`` its yield's daily changes
+    on its OIS base's (:func:`beta_of`), ``n`` the closes in the window."""
+    win = list(recs[max(0, end - w + 1):end + 1])
+    sp = [r for r in win if r.get(NBR) is not None]
+    linked = [pos.get(b["day"], -9) - pos.get(a["day"], -9) == 1 for a, b in zip(sp, sp[1:])]
+    dy, dx = [], []
+    for a, b in zip(win, win[1:]):
+        if pos.get(b["day"], -9) - pos.get(a["day"], -9) == 1 and a.get(OIS) is not None and b.get(OIS) is not None:
+            dy.append(b["y"] - a["y"])
+            dx.append(b[OIS] - a[OIS])
+    return {"ar": ar1([r["y"] - r[NBR] for r in sp], linked), "beta": beta_of(dy, dx), "n": len(win)}
+
+
+def ois_move(curve: Any, spot: float, mat: float, days: float) -> Optional[float]:
+    """The market-implied move of the OIS base ``days`` (calendar) ahead: the OIS forward zero rate from then to the
+    maturity ``mat`` (serial) less today's zero rate for the same remaining life (what an unchanged curve gives it then -
+    the roll-down the other models have already), both compounded once a year (ACT/365)."""
+    t, h = mat - spot, float(days)
+    if curve is None or h < 0 or t - h <= 0:
+        return None
+    df_h, df_t, df_r = curve.df(h), curve.df(t), curve.df(t - h)
+    if df_h <= 0 or df_t <= 0 or df_r <= 0:
+        return None
+    return (df_h / df_t) ** (365.0 / (t - h)) - df_r ** (-365.0 / (t - h))
+
+
+def project(model: str, h: int, y: float, nbr: Optional[float], roll: Optional[float], ar: Optional[Tuple[float, float]],
+            beta: Optional[float], move: Optional[float]) -> Optional[float]:
+    """The compound yield (decimal) ``model`` says the bond reaches ``h`` closes on, from its yield ``y`` now and its
+    spread to the neighbours' curve now ``s = y − nbr``:
+
+    * M0 no change: ``y``;
+    * M1 the spread back toward its mean: ``nbr + μ + (s − μ)·φ^h``;
+    * M2 the roll-down only: ``roll + s`` (``roll``: the curve now at the bond's maturity less h - :func:`neighbours`'
+      ``roll``);
+    * M3 M1 with the roll-down: ``roll + μ + (s − μ)·φ^h``;
+    * M4 M3 plus the OIS forward's move: ``+ β × move`` (:func:`ois_move`).
+
+    None when the model lacks a part."""
+    if model == M0:
+        return y
+    if nbr is None:
+        return None
+    s = y - nbr
+    if model == M2:
+        return roll + s if roll is not None else None
+    if ar is None:
+        return None
+    mu, phi = ar
+    spread = mu + (s - mu) * phi ** h
+    if model == M1:
+        return nbr + spread
+    if roll is None:
+        return None
+    if model == M3:
+        return roll + spread
+    if model == M4 and beta is not None and move is not None:
+        return roll + spread + beta * move
+    return None
+
+
+def choose(rmse: Dict[str, float], m0: float) -> Tuple[str, bool]:
+    """The rule the measurement fixed before it ran (``PROJECTION``): of the models' out-of-sample RMSEs at a bucket and
+    horizon (name -> bp; M0's ``m0`` apart), the lowest - used where it beats no change by ``BEAT`` or more (True); where
+    none does, M2, shown as "eğri ve fark değişmezse" (False)."""
+    best = min(rmse, key=lambda k: (rmse[k], k))
+    if m0 > 0 and 1.0 - rmse[best] / m0 >= BEAT - 1e-12:
+        return best, True
+    return M2, False
+
+
+def workday(day: _dt.date, n: int, hol: frozenset) -> _dt.date:
+    """The ``n``-th TRY business day after ``day`` (week days not in ``hol``, the holidays as serials)."""
+    from .xl.values import date_to_serial
+    while n > 0:
+        day += _dt.timedelta(days=1)
+        if day.weekday() < 5 and float(date_to_serial(day)) not in hol:
+            n -= 1
+    return day
 
 
 # ---------------------------------------------------------------------------------------------- DİBS RV's own price <-> yield
@@ -363,6 +557,63 @@ def previous_weekday(d: _dt.date) -> _dt.date:
     return d
 
 
+def _gain(rmse: float, m0: float) -> str:
+    """An RMSE against no change's: "değişmezse'ye göre %9,0 daha iyi" / "… %0,9 daha kötü"."""
+    g = round((1.0 - rmse / m0) * 100.0, 1) if m0 else 0.0
+    return "değişmezse'ye göre %%%s daha %s" % (_n(abs(g), 1), "kötü" if g < 0 else "iyi")
+
+
+def _hit(hit: Optional[float], calls: int) -> str:
+    return "yön isabeti %%%d (%d)" % (int(round(hit * 100)), calls) if hit is not None else "yön isabeti – (%d)" % calls
+
+
+def record_text(rec: Dict[str, Any], used: str) -> str:
+    """The record of the model shown, in a line: "geri test: RMSE 149 bp, değişmezse'ye göre %9,0 daha iyi, yön isabeti %64
+    (259)".  Where no model beat no change by ``BEAT`` it says so first, then M2's own record; M2 shown in the place of a
+    model the bond cannot have now: M2's own record."""
+    if used == rec["model"] and rec["beat"]:
+        return "geri test: RMSE %d bp, %s, %s" % (int(round(rec["rmse"])), _gain(rec["rmse"], rec["m0"]), _hit(rec["hit"], rec["calls"]))
+    m2 = rec["m2"]
+    own = "RMSE %d bp (değişmez %d bp), %s" % (int(round(m2["rmse"])), int(round(rec["m0"])), _hit(m2["hit"], m2["calls"]))
+    if not rec["beat"]:
+        return "geri test: hiçbir model değişmezse'yi %%%d yenemedi (en iyisi %s, %s%%%s) · eğri ve fark değişmezse: %s" % (
+            int(round(BEAT * 100)), rec["best"], "−" if rec["gain"] < 0 else "+", _n(abs(rec["gain"]), 1), own)
+    return "geri test (eğri ve fark değişmezse): " + own
+
+
+def _tl(v: float) -> str:
+    """A signed TL amount with the thousands dotted: "+12.345", "−980"."""
+    r = int(round(v))
+    return ("+" if r >= 0 else "−") + "{:,}".format(abs(r)).replace(",", ".")
+
+
+def proj_line(e: Dict[str, Any], p: Dict[str, Any]) -> str:
+    """How a projection was made, in a line ("1 ay (valör 18.12) · eğri ve fark değişmezse: komşu eğri 37,62, vade kısalınca
+    −12 bp · fark +8 bp sabit → 37,58 (ekrandan −12 bp) · fiyat 98,452 · K/Z +1.234 TL / 1 mn").  ``e``: a horizon's entry,
+    ``p``: the bond's projection."""
+    spread = (p["y"] - p["nbr"]) * 100.0
+    bits = ["%s (valör %s) · %s%s" % (e["text"], _day(e["value_date"]), "" if e["model"] == M2 else e["model"] + " ", e["model_text"])]
+    curve = "komşu eğri %s" % _n(p["nbr"], 2)
+    if e.get("roll") is not None:
+        curve += ", vade kısalınca %s bp" % _bp(e["roll"])
+    bits.append(curve)
+    if e.get("ar"):
+        a = e["ar"]
+        bits.append("fark %s bp, son %d kapanışta ortalaması %s bp, φ %s → %d kapanışta %s bp" % (
+            _bp(spread), a.get("n") or 0, _bp(a["mu"]), _n(a["phi"], 2), e["h"], _bp(a["to"])))
+    else:
+        bits.append("fark %s bp sabit" % _bp(spread))
+    if e.get("ois"):
+        o = e["ois"]
+        bits.append("β %s × OIS forward'ı %s bp = %s bp" % (_n(o["beta"], 2), _bp(o["move"]), _bp(o["bp"])))
+    tail = "%s (%s %s bp)" % (_n(e["yield"], 2), "ekrandan" if p["from"] == "ekran" else "şimdiden", _bp(e["bp"]))
+    if e.get("clean") is not None:
+        tail += " · fiyat %s" % _n(e["clean"], 3)
+    if e.get("pnl") is not None:
+        tail += " · K/Z %s TL / 1 mn" % _tl(e["pnl"])
+    return ": ".join([bits[0], " · ".join(bits[1:])]) + " → " + tail
+
+
 def how_line(parts: Sequence[Dict[str, Any]], fair: float, clean: Optional[float], value: Optional[str], today: _dt.date) -> str:
     """How a fair was built, in a line: each base, the spread at the last close, the weights, the fair and the price
     ("Komşu eğri 37,62 + dünkü fark +8 bp = 37,70 · OIS 38,10 − 42 bp = 37,68 · %75 / %25 → adil 37,69 · fiyat 98,452
@@ -382,6 +633,17 @@ def how_line(parts: Sequence[Dict[str, Any]], fair: float, clean: Optional[float
     if clean is not None:
         tail += " · fiyat %s" % _n(clean, 3) + (" (valör %s)" % _day(value) if value else "")
     return " · ".join(bits) + " · %s → %s" % (weights, tail)
+
+
+def asw_side(f: Dict[str, Any], cells: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """A bond on one of the fitted ASW curves as DİBS Trading shows it ("OIS'e göre" / "FX swap'a göre": ``rvfair.fair``'s
+    side and the trading summary's two cells of it, ``Service._fair_cells``): the fair yield (%) and clean price, the
+    cells' text, soft where the curve is read outside the bonds fitted, how it was made (the tip) - or why there is none."""
+    y, p = cells
+    if "yield" not in f:
+        return {"why": y.get("tip") or f.get("why") or "", "t": [y.get("t", "–"), p.get("t", "–")]}
+    return {"yield": f["yield"] * 100.0, "price": f["price"], "t": [y["t"], p["t"]], "soft": "soft" in (y.get("cls") or ""),
+            "bill": bool(f.get("bill")), "tip": y.get("tip") or ""}
 
 
 # ---------------------------------------------------------------------------------------------- the service's part
@@ -472,14 +734,20 @@ class KagitFiyat(object):
         if isin is not None and not any(line["isin"] == code for line in got["lines"]):
             raise KagitError("kâğıt trading listesinde değil: %s" % (code or str(isin).strip() or "—"))
         panel = self.closes(got)
-        now = self.now_fit(got, panel)
+        hdays = self.horizon_days(got)
+        now = self.now_fit(got, panel, hdays)
         widths = self.widths()
         bonds = self._bonds(got)
         rows = []
         for line in got["lines"]:
             if code is not None and line["isin"] != code:
                 continue
-            rows.append(self._row(line, got, panel, now, widths, bonds))
+            row = self._row(line, got, panel, now, widths, bonds)
+            row["asw"] = line.get("asw") or {}
+            bond = bonds.get(line["isin"])
+            if row["priced"] and bond is not None:
+                row["proj"] = self._projection(line, bond, got, panel["stats"].get(line["isin"]) or {}, now, hdays)
+            rows.append(row)
         order = {k: i for i, (k, _) in enumerate(KINDS)}
         rows.sort(key=lambda r: (order.get(r["kind"], 9), r.get("maturity") or "9999", r["isin"]))
         hist = {k: panel.get(k) for k in ("first", "last", "days", "tau", "tau_day", "ms", "ois_days", "why", "built")}
@@ -489,6 +757,8 @@ class KagitFiyat(object):
                 "rules": {"weights": WEIGHTS, "floor": SIGMA_FLOOR, "buckets": [{"key": k, "text": t, "top": top} for k, t, top in BUCKETS],
                           "band": BAND, "noise": NOISE, "revert": REVERT, "window": SIGMA_WINDOW, "min": SIGMA_MIN,
                           "median": MEDIAN_DAYS},
+                "projection": {"default": DEFAULT_H, "horizons": [{"h": h, "text": t, "day": hdays[h].isoformat()} for h, t in HORIZONS],
+                               "models": MODEL_TEXT, "table": PROJECTION, "source": RECORD_TEXT, "beat": BEAT, "move_min": MOVE_MIN},
                 "today": got["today"].isoformat(), "time": _dt.datetime.now().strftime("%H:%M:%S"), "gen": got["gen"],
                 "ms": round((time.perf_counter() - t0) * 1000.0, 1)}
 
@@ -562,6 +832,18 @@ class KagitFiyat(object):
                           "bid_text": bid if isinstance(bid, str) else "", "ask_text": ask if isinstance(ask, str) else "",
                           "quote": {k: q[k] for k in ("bid", "ask", "stale", "status", "tip")},
                           "board": said.get(code)})
+        if user:
+            # "OIS'e göre" / "FX swap'a göre": what DİBS Trading shows of each bond on the two fitted ASW curves - rvfair's
+            # fair yield and clean price, with the trading summary's own cells (their text and how each is made)
+            from .xl import numfmt
+            loc = numfmt.get_locale(svc.settings.locale)
+            fx = svc._fx_curve(user)
+            fits = rvfair.read_fits(calc, si, fx)
+            for line in lines:
+                r = line["row"]
+                f = rvfair.fair(calc, si, r, fits, fx)
+                valor, own = raw("P", r), raw("T", r)
+                line["asw"] = {side: asw_side(f[side], svc._fair_cells(f[side], side, fits, valor, own, loc)) for side in ("ois", "fx")}
         return {"lines": lines, "quant": eng.get("dibs") or [], "live": qc.live_values(eng), "today": svc.history.today(),
                 "mk": mk, "boot": boot, "gen": svc.gen}
 
@@ -708,19 +990,30 @@ class KagitFiyat(object):
         return out
 
     # ------------------------------------------------------------------ the quotes now
-    def now_fit(self, got: Dict[str, Any], panel: Dict[str, Any]) -> Dict[str, Any]:
+    def horizon_days(self, got: Dict[str, Any]) -> Dict[int, _dt.date]:
+        """Öngörülen's horizons as days: today + 5 / 10 / 20 TRY business days (the workbook's TRY holidays, as the
+        history dates the past days)."""
+        mk = got["mk"]
+        hol = self.svc._swaption_closes(mk)[2] if mk is not None else frozenset()
+        return {h: workday(got["today"], h, hol) for h, _ in HORIZONS}
+
+    def now_fit(self, got: Dict[str, Any], panel: Dict[str, Any], hdays: Optional[Dict[int, _dt.date]] = None) -> Dict[str, Any]:
         """The neighbours' curve at each bond now (``neighbours`` on DİBS RV's yields now, the history's τ held - or
-        searched on them when the history has none), kept per what it is made of."""
+        searched on them when the history has none), and each bond's roll-down on it to the value date of each of
+        ``hdays`` (the horizons), kept per what it is made of."""
         from .dibsgenel import bond_inputs
         today = got["today"]
         items, _ = bond_inputs(got["quant"], got["live"], today)
         have = {b.isin for b, _, _, _ in items}
         rows = {r["isin"]: r for r in got["quant"]}
-        extra = [(b, qc._value_date(today, rows.get(code))) for code, b in sorted(self._bonds(got).items()) if code not in have]
+        bonds = self._bonds(got)
+        extra = [(b, qc._value_date(today, rows.get(code))) for code, b in sorted(bonds.items()) if code not in have]
+        ahead = {code: {h: qc._value_date(d, rows.get(code)) for h, d in (hdays or {}).items()} for code in bonds}
         nss0 = panel.get("nss0")
         tau_from = "geçmiş" if nss0 is not None else "şimdi"
         key = (tuple((b.isin, v.isoformat(), y, c) for b, v, y, c in items), tuple((b.isin, v.isoformat()) for b, v in extra),
-               (nss0.tau1, nss0.tau2, tuple(nss0.beta)) if nss0 is not None else None)
+               (nss0.tau1, nss0.tau2, tuple(nss0.beta)) if nss0 is not None else None,
+               tuple(sorted((code, tuple(sorted((h, d.isoformat()) for h, d in x.items()))) for code, x in ahead.items())))
         with self._now_lock:
             for k, res in self._now:
                 if k == key:
@@ -740,7 +1033,7 @@ class KagitFiyat(object):
             res = {"ok": False, "nbr": {}, "why": "komşu eğri kurulamadı: en az %d sabit kuponlu kâğıdın getirisi gerekli" % (qc.MIN_BONDS + 1),
                    "n_fit": qc.BondFit(items).n_fit, "n": len(items), "tau_from": tau_from}
         else:
-            res = neighbours(items, nss0, extra)
+            res = neighbours(items, nss0, extra, ahead)
             res["ok"] = "why" not in res
             res["tau_from"] = tau_from
             res.pop("nss", None)
@@ -757,6 +1050,88 @@ class KagitFiyat(object):
             days = float((bond.maturity - value).days)
         acc = line["acc"] if line["flows"] or kind == "bill" else (qc.accrued(bond, value) if bond is not None and value else line["acc"])
         return Pricer(kind, value, days, line["freq"], line["flows"], acc, bond, line["guess"])
+
+    @staticmethod
+    def pricer_at(line: Dict[str, Any], bond: qc.Bond, value: _dt.date) -> Pricer:
+        """The bond priced at a later value date (a horizon's): its own cash flows then, by BIST's rules (quantcurve's
+        ``Bond``, as DİBS RV prices a bond it has no row of), the accrued interest then."""
+        if line["kind"] == "B":
+            return Pricer("bill", value, float((bond.maturity - value).days), line["freq"], [], 0.0, bond, line["guess"])
+        return Pricer("fixed", value, None, line["freq"], [], qc.accrued(bond, value), bond, line["guess"])
+
+    def _projection(self, line: Dict[str, Any], bond: qc.Bond, got: Dict[str, Any], st: Dict[str, Any], now: Dict[str, Any],
+                    hdays: Dict[int, _dt.date]) -> Dict[str, Any]:
+        """Öngörülen: the yield and price each horizon's model (``PROJECTION``, the bond's bucket now) says the bond
+        reaches - from its yield now (DİBS RV!T; without one, the neighbours' curve now plus the spread at the last close),
+        the neighbours' curve now and its roll-down to the horizon's value date (``now_fit``), the model's window of the
+        closes (``bond_closes``' ``windows``) and the OIS Bootstrap's forwards (``ois_move``).  A model the bond cannot
+        have now gives way to M2, said.  ``{"from", "y", "h": {horizon: ...}}`` or ``{"why"}``."""
+        from .xl.values import date_to_serial
+        today = got["today"]
+        code = line["isin"]
+        bucket = bucket_of((bond.maturity - today).days / qc.YEAR)
+        nbr = (now.get("nbr") or {}).get(code)
+        roll = (now.get("roll") or {}).get(code) or {}
+        if nbr is None:
+            return {"why": "komşu eğri şimdi kurulamadı" + (": " + now["why"] if now.get("why") else "")}
+        last = st.get("last") or {}
+        y0, start = line["compound"], "ekran"
+        if y0 is None:
+            sp = (last.get("spread") or {}).get(NBR)
+            if sp is None:
+                return {"why": "kâğıdın şimdiki getirisi yok ve son kapanışta komşu eğriye farkı yok"}
+            y0, start = nbr + sp, "kapanış"
+        mk, boot = got["mk"], got["boot"]
+        mat = float(date_to_serial(bond.maturity))
+        windows = st.get("windows") or {}
+        rows = {r["isin"]: r for r in got["quant"]}
+        out: Dict[str, Any] = {"from": start, "y": y0 * 100.0, "nbr": nbr * 100.0, "h": {}}
+        for h, text in HORIZONS:
+            rec = PROJECTION[bucket][h]
+            day = hdays[h]
+            value = qc._value_date(day, rows.get(code))
+            move = ois_move(boot, mk.ois_spot, mat, (day - today).days) if mk is not None and boot is not None else None
+            model, w = rec["model"], rec["window"]
+            p = windows.get(w) or {}
+            y = project(model, h, y0, nbr, roll.get(h), p.get("ar"), p.get("beta"), move)
+            why = None
+            if y is None and model != M2:
+                why = self._why_not(model, w, p, move, roll.get(h))
+                model, w, p = M2, 0, {}
+                y = project(M2, h, y0, nbr, roll.get(h), None, None, None)
+            entry: Dict[str, Any] = {"h": h, "text": text, "day": day.isoformat(), "value_date": value.isoformat(), "bucket": bucket,
+                                     "model": model, "model_text": MODEL_TEXT[model], "window": w, "rule": rec["model"],
+                                     "beat": rec["beat"], "record": record_text(rec, model), "why": why}
+            if y is None:
+                entry["why"] = "kâğıdın vadesi ufuktan önce" if (bond.maturity - value).days < 1 else "eğride vadesi kısalınca getirisi bulunamadı"
+                out["h"][str(h)] = entry
+                continue
+            pricer = self.pricer_at(line, bond, value)
+            c, c0, s = pricer.clean(y), pricer.clean(y0), pricer.simple(y)
+            entry.update({"yield": y * 100.0, "simple": s * 100.0 if s is not None else None, "clean": c,
+                          "bp": (y - y0) * BP, "pnl": (c - c0) * 1e4 if c is not None and c0 is not None else None,
+                          "roll": (roll[h] - nbr) * BP if roll.get(h) is not None else None})
+            if p.get("ar") is not None:
+                entry["ar"] = {"mu": p["ar"][0] * BP, "phi": p["ar"][1], "n": p.get("n"), "to": (p["ar"][0] + (y0 - nbr - p["ar"][0]) * p["ar"][1] ** h) * BP}
+            if model == M4:
+                entry["ois"] = {"beta": p["beta"], "move": move * BP, "bp": p["beta"] * move * BP}
+            entry["line"] = proj_line(entry, out)
+            out["h"][str(h)] = entry
+        return out
+
+    @staticmethod
+    def _why_not(model: str, w: int, p: Dict[str, Any], move: Optional[float], roll: Optional[float]) -> str:
+        """Why a bond cannot have its bucket's model now (M2 shown in its place)."""
+        if roll is None:
+            return "%s kurulamadı: eğride vadesi kısalınca getirisi yok" % model
+        if p.get("ar") is None:
+            return "%s kurulamadı: son %d kapanışta farkın ortalamaya dönüşü ölçülemedi (en az %d ardışık kapanış gerekir; %d kapanış var)" % (
+                model, w, AR_MIN + 1, p.get("n") or 0)
+        if model == M4 and p.get("beta") is None:
+            return "%s kurulamadı: son %d kapanışta OIS'le birlikte hareketi (β) ölçülemedi (OIS kapanışı az)" % (model, w)
+        if model == M4 and move is None:
+            return "%s kurulamadı: OIS Bootstrap eğrisi şimdi yok" % model
+        return "%s kurulamadı" % model
 
     def _row(self, line: Dict[str, Any], got: Dict[str, Any], panel: Dict[str, Any], now: Dict[str, Any],
              widths: Dict[str, Any], bonds: Dict[str, qc.Bond]) -> Dict[str, Any]:
