@@ -4,12 +4,21 @@ A write of several steps (a package of trades deleted, a broker chat pasted, an 
 transaction: it lands whole or not at all.  Every commit is on the disk before it returns (``synchronous=FULL``):
 a trade entered a moment before a power cut is kept.  :meth:`Store.backup_to` makes an online copy (SQLite's backup
 API, consistent while the dashboard keeps writing); :func:`restore` puts one back in place.
+
+The history's tables - the daily closes (``hist_values``), the watch's own closes (``watch_closes``) and the meeting
+pricing (``mpc_days`` / ``mpc_values``) - are kept in memory as well: read once when the file is opened, changed by
+every write of the store after it is committed, and read from memory only.  Python's sqlite3 gives the interpreter
+up on every row it reads; while a long calculation holds it (the quant fit, the backtest, the history sync) each row
+waited for it again (~5 ms): the heat map's closes held the calculation thread for half a minute.
 """
 from __future__ import annotations
 
+import bisect
 import contextlib
 import datetime as _dt
+import itertools
 import json
+import math
 import os
 import pathlib
 import pickle
@@ -193,16 +202,160 @@ def restore(backup: str, db_path: str) -> Dict[str, Any]:
     return {"restored": db_path, "from": backup, "kept": kept if moved else None}
 
 
+class _Daily(object):
+    """A table of ``(key, day, value)`` rows in memory - ``hist_values`` (key: the series), ``watch_closes`` (the
+    subject): key -> (its days ascending, their values).  Read under the store's ``_mem`` lock; changed only after a
+    write of the file is committed (:meth:`Store._later`)."""
+
+    def __init__(self) -> None:
+        self.by: Dict[str, Tuple[List[str], List[Any]]] = {}
+        self._days: Dict[str, str] = {}               # one string per day for every key (~530 days, ~175 000 closes)
+
+    def load(self, rows: Iterator[Tuple[str, str, Any]]) -> None:
+        """The table as read from the file, ordered by key and day."""
+        self.by = {}
+        for key, group in itertools.groupby(rows, key=lambda r: r[0]):
+            days: List[str] = []
+            vals: List[Any] = []
+            for _, day, v in group:
+                days.append(self._days.setdefault(day, day))
+                vals.append(v)
+            self.by[key] = (days, vals)
+
+    def span(self, key: str, start: str, end: str) -> Tuple[List[str], List[Any]]:
+        """The days of ``key`` from ``start`` to ``end`` (both included, as ``day>=? AND day<=?``) and their values."""
+        got = self.by.get(key)
+        if got is None:
+            return [], []
+        days, vals = got
+        i, j = bisect.bisect_left(days, start), bisect.bisect_right(days, end)
+        return days[i:j], vals[i:j]
+
+    def put(self, key: str, rows: Sequence[Tuple[str, Any]]) -> None:
+        """Rows written, in their order (an upsert: a day the key has takes the new value).  A key or a day that is not
+        text (SQLite would have turned it into some) raises: the store then reads the table again from the file."""
+        if not rows:
+            return
+        if type(key) is not str or any(type(day) is not str for day, _ in rows):
+            raise TypeError("not text: %r" % (key,))
+        days, vals = self.by.setdefault(key, ([], []))
+        for day, v in rows:
+            k = bisect.bisect_left(days, day)
+            if k < len(days) and days[k] == day:
+                vals[k] = v
+            else:
+                days.insert(k, self._days.setdefault(day, day))
+                vals.insert(k, v)
+
+    def drop(self, key: Optional[str] = None) -> None:
+        if key is None:
+            self.by = {}
+        else:
+            self.by.pop(key, None)
+
+    def rename(self, old: str, new: str) -> None:
+        """``UPDATE OR REPLACE ... SET key=new WHERE key=old``: the old key's rows go under the new one, in place of its
+        rows of the same days."""
+        if old == new or old not in self.by:
+            return
+        days, vals = self.by.pop(old)
+        self.put(new, list(zip(days, vals)))
+
+
+_UNSURE = object()
+
+
+def _zero_back() -> float:
+    """What this SQLite gives back of -0.0 written to a REAL column (0.0 as of 3.35: a whole number is kept as an integer)."""
+    db = sqlite3.connect(":memory:")
+    try:
+        db.execute("CREATE TABLE t (v REAL)")
+        db.execute("INSERT INTO t VALUES (?)", (-0.0,))
+        return float(db.execute("SELECT v FROM t").fetchone()[0])
+    finally:
+        db.close()
+
+
+_NEG_ZERO = _zero_back()
+
+
+def _affinity(declared: str) -> str:
+    """SQLite's affinity of a column of this declared type (the rules of its "Datatypes" page)."""
+    t = (declared or "").upper()
+    if "INT" in t:
+        return "INTEGER"
+    if "CHAR" in t or "CLOB" in t or "TEXT" in t:
+        return "TEXT"
+    if not t or "BLOB" in t:
+        return "BLOB"
+    if "REAL" in t or "FLOA" in t or "DOUB" in t:
+        return "REAL"
+    return "NUMERIC"
+
+
+def _stored(value: Any, affinity: str) -> Any:
+    """What SQLite gives back of ``value`` written to a column of this affinity, for the plain values the store writes:
+    a NaN is kept as NULL and -0.0 as this SQLite keeps it (``_NEG_ZERO``) in a REAL column, an integer there as a
+    float.  ``_UNSURE`` for anything else (a float in an INTEGER column, a number in a TEXT one ...): such a row is read
+    back from the file instead."""
+    if value is None:
+        return None
+    t = type(value)
+    if t is bool:
+        value, t = int(value), int
+    if affinity == "TEXT":
+        return value if t is str else _UNSURE
+    if affinity == "INTEGER":
+        return value if t is int and -2 ** 63 <= value < 2 ** 63 else _UNSURE
+    if affinity == "REAL":
+        if t is int and -2 ** 53 <= value <= 2 ** 53:
+            return float(value)
+        if t is float:
+            if value != value:
+                return None
+            return _NEG_ZERO if value == 0.0 and math.copysign(1.0, value) < 0 else value
+    return _UNSURE
+
+
+#: the columns of ``mpc_values`` as its readers get them
+_MPC_VALUE_COLS = ("day", "meeting", "step", "level", "cum", "sigma", "front")
+#: ... and the columns :meth:`Store.mpc_save` writes of ``mpc_days`` (all of them)
+_MPC_DAY_COLS = ("day", "basis", "spot", "tlref", "base", "decision", "quotes", "status", "note", "computed_at", "control",
+                 "tolerance", "carried", "cleaned")
+
+
+def _put_day(days: List[str], day: str) -> None:
+    k = bisect.bisect_left(days, day)
+    if k == len(days) or days[k] != day:
+        days.insert(k, day)
+
+
+def _drop_day(days: List[str], day: str) -> None:
+    k = bisect.bisect_left(days, day)
+    if k < len(days) and days[k] == day:
+        del days[k]
+
+
 class Store(object):
     def __init__(self, path: str):
         if path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self.path = path
         self._lock = threading.RLock()
-        # what the history pages and the settings page poll, kept until the history is written to (a GROUP BY over
-        # every close each time made the status poll a full scan)
+        # the history's tables in memory (the module's docstring): their own lock - a reader never waits for the file,
+        # nor for another thread's query
+        self._mem = threading.RLock()
+        self._hist = _Daily()                                       # hist_values
+        self._own = _Daily()                                        # watch_closes
+        self._mpc_all: Dict[str, Dict[str, Any]] = {}               # mpc_days: day -> its row
+        self._mpc_days: List[str] = []                              # ... its days, ascending
+        self._mpc_rows: Dict[str, List[Tuple[Any, ...]]] = {}       # mpc_values: day -> its rows (by meeting)
+        self._mpc_value_days: List[str] = []                        # ... its days, ascending
+        self._kinds: Dict[str, Dict[str, str]] = {}                 # table -> column -> affinity (mpc_days / mpc_values)
+        self._pending: List[Tuple[Callable[..., None], tuple]] = []  # changes waiting for their transaction's commit
+        self._memory = False                                        # the tables are in memory (not when the file is damaged)
+        # what the history pages and the settings page poll, kept until the closes change
         self._bounds: Optional[Dict[str, Tuple[str, str, int]]] = None
-        self._mpc_all: Optional[Dict[str, Dict[str, Any]]] = None
         # told after every write of the inputs: (the user - None for the shared inputs, "*" for every user -, whether
         # formulas were written); the inputs' formulas (inputformula.py) follow what any writer did to their cells
         self.on_inputs: Optional[Any] = None
@@ -222,6 +375,55 @@ class Store(object):
                     # until then "last seen" was written at a sign-in only: it is the last sign-in of every account that
                     # signed in after it was made (one made and never signed in keeps its creation time there)
                     self._db.execute("UPDATE users SET last_login = last_seen WHERE last_seen > created_at")
+            self._load_memory()
+
+    def _load_memory(self) -> None:
+        """The history's tables into memory: once, as the file is opened - before any other thread uses the store (the
+        desk's ~175 000 closes in ~0.5 s; read while a calculation ran, row by row, they would take minutes).  A
+        damaged file still opens (its check says so, loud: ``ops.check_database``): its history is read from the file
+        then, as before."""
+        hist, own = _Daily(), _Daily()
+        try:
+            cur = self._db.cursor()
+            cur.row_factory = None                                  # (plain tuples: the fastest read)
+            hist.load(cur.execute("SELECT series, day, value FROM hist_values ORDER BY series, day"))
+            own.load(cur.execute("SELECT subject, day, value FROM watch_closes ORDER BY subject, day"))
+            kinds = {t: {r[1]: _affinity(r[2]) for r in cur.execute("PRAGMA table_info(%s)" % t)}
+                     for t in ("mpc_days", "mpc_values")}
+            cur.row_factory = sqlite3.Row
+            days = {r["day"]: dict(r) for r in cur.execute("SELECT * FROM mpc_days ORDER BY day")}
+            cur.row_factory = None
+            rows = {day: list(group) for day, group in itertools.groupby(
+                cur.execute("SELECT %s FROM mpc_values ORDER BY day, meeting" % ", ".join(_MPC_VALUE_COLS)), key=lambda r: r[0])}
+        except sqlite3.DatabaseError:
+            self._memory = False
+            return
+        with self._mem:
+            self._hist, self._own, self._kinds = hist, own, kinds
+            self._mpc_all, self._mpc_days = days, list(days)
+            self._mpc_rows, self._mpc_value_days = rows, list(rows)
+            self._bounds = None
+            self._memory = True
+
+    def _later(self, fn: Callable[..., None], *args: Any) -> None:
+        """A change of the tables in memory, after a write of the file (the caller holds ``_lock``): now - or, inside a
+        transaction, when it is committed (a rollback takes it back with the write)."""
+        if not self._memory:
+            return
+        if self._db.in_transaction:
+            self._pending.append((fn, args))
+            return
+        self._apply([(fn, args)])
+
+    def _apply(self, changes: List[Tuple[Callable[..., None], tuple]]) -> None:
+        """Changes of the tables in memory, in order.  One that fails (a value of a kind no writer gives) has the copy read
+        again from the file: it never goes on differing from it."""
+        with self._mem:
+            try:
+                for fn, args in changes:
+                    fn(*args)
+            except Exception:  # noqa: BLE001 - the write itself is committed: only the copy is in question
+                self._load_memory()
 
     def _add_columns(self, table: str, columns) -> List[str]:
         """Columns that came after a table was first created (a database of an earlier version keeps its rows): the
@@ -253,7 +455,11 @@ class Store(object):
             except BaseException:
                 if self._db.in_transaction:
                     self._db.execute("ROLLBACK")
+                del self._pending[:]                    # (the tables in memory: what the rollback took back)
                 raise
+            done, self._pending = self._pending, []
+            if done:
+                self._apply(done)
 
     # ------------------------------------------------------------------ the file itself: its check, its copy
     def quick_check(self, limit: int = 20) -> List[str]:
@@ -1252,6 +1458,11 @@ class Store(object):
         with self.transaction() as db:
             db.executemany("UPDATE OR REPLACE watch_closes SET subject=? WHERE subject=?",
                            [(new, old) for old, new in renames.items()])
+            self._later(self._own_renamed, list(renames.items()))
+
+    def _own_renamed(self, renames: List[Tuple[str, str]]) -> None:
+        for old, new in renames:
+            self._own.rename(old, new)
 
     # ------------------------------------------------------------------ daily history of market series
     def hist_upsert(self, series: str, rows: List[Tuple[str, float]]) -> int:
@@ -1264,7 +1475,6 @@ class Store(object):
                 (series, min(d for d, _ in rows), max(d for d, _ in rows))).fetchall()}
             fresh = [(series, d, float(v)) for d, v in rows if have.get(d) != float(v)]
             if fresh:
-                self._bounds = None
                 self._db.execute("BEGIN")
                 try:
                     self._db.executemany("INSERT INTO hist_values (series, day, value) VALUES (?,?,?) "
@@ -1273,96 +1483,173 @@ class Store(object):
                 except Exception:
                     self._db.execute("ROLLBACK")
                     raise
+                self._later(self._hist_put, series, [(d, _stored(v, "REAL")) for _, d, v in fresh])
             return len(fresh)
 
+    def _hist_put(self, series: str, rows: List[Tuple[str, float]]) -> None:
+        self._hist.put(series, rows)
+        self._bounds = None
+
     def hist_series(self, series: str, start: Optional[str] = None, end: Optional[str] = None) -> List[Tuple[str, float]]:
-        rows = self._q("SELECT day, value FROM hist_values WHERE series=? AND day>=? AND day<=? ORDER BY day",
-                       (series, start or "0000", end or "9999"))
-        return [(r["day"], r["value"]) for r in rows]
+        """``[(day, value), ...]`` of one series, by day (from memory)."""
+        if not self._memory:
+            return [(r["day"], r["value"]) for r in self._q("SELECT day, value FROM hist_values WHERE series=? AND day>=? "
+                                                            "AND day<=? ORDER BY day", (series, start or "0000", end or "9999"))]
+        with self._mem:
+            days, vals = self._hist.span(series, start or "0000", end or "9999")
+            return list(zip(days, vals))
 
     def hist_many(self, series: List[str], start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, float]]:
-        """``{series: {day: value}}`` for several series at once."""
-        out: Dict[str, Dict[str, float]] = {s: {} for s in series}
-        for i in range(0, len(series), 400):
-            chunk = series[i:i + 400]
-            marks = ",".join("?" for _ in chunk)
-            for r in self._q("SELECT series, day, value FROM hist_values WHERE series IN (%s) AND day>=? AND day<=?" % marks,
-                             tuple(chunk) + (start or "0000", end or "9999")):
-                out[r["series"]][r["day"]] = r["value"]
+        """``{series: {day: value}}`` for several series at once (from memory; each series' days ascending)."""
+        if not self._memory:
+            return self._file_daily("hist_values", "series", series, start, end)
+        lo, hi = start or "0000", end or "9999"
+        with self._mem:
+            return {s: dict(zip(*self._hist.span(s, lo, hi))) for s in series}
+
+    def _file_daily(self, table: str, key: str, keys: List[str], start: Optional[str],
+                    end: Optional[str]) -> Dict[str, Dict[str, float]]:
+        """``hist_many`` / ``closes`` read from the file, row by row (a damaged file only: see :meth:`_load_memory`)."""
+        out: Dict[str, Dict[str, float]] = {k: {} for k in keys}
+        for i in range(0, len(keys), 400):
+            chunk = keys[i:i + 400]
+            for r in self._q("SELECT %s, day, value FROM %s WHERE %s IN (%s) AND day>=? AND day<=?" % (
+                    key, table, key, ",".join("?" for _ in chunk)), tuple(chunk) + (start or "0000", end or "9999")):
+                out[r[key]][r["day"]] = r["value"]
         return out
 
     def hist_bounds(self) -> Dict[str, Tuple[str, str, int]]:
         """``{series: (first day, last day, count)}`` (kept until the closes change)."""
-        with self._lock:
+        if not self._memory:
+            return {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
+                "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+        with self._mem:
             if self._bounds is None:
-                self._bounds = {r["series"]: (r["a"], r["b"], r["n"]) for r in self._q(
-                    "SELECT series, MIN(day) AS a, MAX(day) AS b, COUNT(*) AS n FROM hist_values GROUP BY series")}
+                self._bounds = {s: (days[0], days[-1], len(days)) for s, (days, _) in sorted(self._hist.by.items()) if days}
             return dict(self._bounds)
 
     def hist_delete(self, series: Optional[str] = None) -> None:
         with self._lock:
-            self._bounds = None
             if series is None:
                 self._db.execute("DELETE FROM hist_values")
             else:
                 self._db.execute("DELETE FROM hist_values WHERE series=?", (series,))
+            self._later(self._hist_dropped, series)
+
+    def _hist_dropped(self, series: Optional[str]) -> None:
+        self._hist.drop(series)
+        self._bounds = None
 
     # ------------------------------------------------------------------ what was priced for the MPC meetings, per day
     def mpc_save(self, day: str, basis: str, meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
         """Replace one day: ``rows`` = ``[{"meeting", "step", "level", "cum", "sigma", "front"}, ...]``."""
+        values = [(day, r["meeting"], r.get("step"), r.get("level"), r.get("cum"), r.get("sigma"), 1 if r.get("front") else 0)
+                  for r in rows]
+        head = (day, basis, meta.get("spot"), meta.get("tlref"), meta.get("base"), 1 if meta.get("decision") else 0,
+                meta.get("quotes"), meta.get("status"), meta.get("note"), now_iso(), meta.get("control"),
+                meta.get("tolerance"), meta.get("carried"), meta.get("cleaned"))
         with self._lock:
-            self._mpc_all = None
             self._db.execute("BEGIN")
             try:
                 self._db.execute("DELETE FROM mpc_values WHERE day=?", (day,))
                 self._db.executemany(
-                    "INSERT INTO mpc_values (day, meeting, step, level, cum, sigma, front) VALUES (?,?,?,?,?,?,?)",
-                    [(day, r["meeting"], r.get("step"), r.get("level"), r.get("cum"), r.get("sigma"), 1 if r.get("front") else 0)
-                     for r in rows])
+                    "INSERT INTO mpc_values (day, meeting, step, level, cum, sigma, front) VALUES (?,?,?,?,?,?,?)", values)
                 self._db.execute(
                     "INSERT INTO mpc_days (day, basis, spot, tlref, base, decision, quotes, status, note, computed_at, "
                     "control, tolerance, carried, cleaned) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(day) DO UPDATE SET basis=excluded.basis, spot=excluded.spot, tlref=excluded.tlref, "
                     "base=excluded.base, decision=excluded.decision, quotes=excluded.quotes, status=excluded.status, "
                     "note=excluded.note, computed_at=excluded.computed_at, control=excluded.control, "
-                    "tolerance=excluded.tolerance, carried=excluded.carried, cleaned=excluded.cleaned",
-                    (day, basis, meta.get("spot"), meta.get("tlref"), meta.get("base"), 1 if meta.get("decision") else 0,
-                     meta.get("quotes"), meta.get("status"), meta.get("note"), now_iso(), meta.get("control"),
-                     meta.get("tolerance"), meta.get("carried"), meta.get("cleaned")))
+                    "tolerance=excluded.tolerance, carried=excluded.carried, cleaned=excluded.cleaned", head)
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+            if self._memory:
+                self._later(self._mpc_put, *self._mpc_stored(day, head, values))
+
+    def _mpc_stored(self, day: Any, head: Tuple[Any, ...], values: List[Tuple[Any, ...]]
+                    ) -> Tuple[str, Dict[str, Any], List[Tuple[Any, ...]]]:
+        """A day just saved as the file holds it: ``(day, its mpc_days row, its mpc_values rows by meeting)`` - worked
+        out from what was written (:func:`_stored`), read back when a value is not one of the plain kinds."""
+        kinds = self._kinds.get("mpc_days") or {}
+        named = dict(zip(_MPC_DAY_COLS, head))
+        row: Optional[Dict[str, Any]] = None
+        if set(kinds) == set(_MPC_DAY_COLS):
+            row = {c: _stored(named[c], a) for c, a in kinds.items()}       # (the table's own column order: SELECT *)
+            if any(v is _UNSURE for v in row.values()):
+                row = None
+        if row is None:
+            row = dict(self._db.execute("SELECT * FROM mpc_days WHERE day=?", (day,)).fetchone())
+        affinities = [(self._kinds.get("mpc_values") or {}).get(c, "") for c in _MPC_VALUE_COLS]
+        got: Optional[List[Tuple[Any, ...]]] = [tuple(_stored(x, a) for x, a in zip(t, affinities)) for t in values]
+        if any(x is _UNSURE for t in got or () for x in t):
+            cur = self._db.cursor()
+            cur.row_factory = None
+            got = cur.execute("SELECT %s FROM mpc_values WHERE day=? ORDER BY meeting" % ", ".join(_MPC_VALUE_COLS),
+                              (day,)).fetchall()
+        else:
+            got.sort(key=lambda t: t[1])
+        return row["day"], row, got
+
+    def _mpc_put(self, day: str, row: Dict[str, Any], rows: List[Tuple[Any, ...]]) -> None:
+        self._mpc_all[day] = row
+        _put_day(self._mpc_days, day)
+        if rows:
+            self._mpc_rows[day] = rows
+            _put_day(self._mpc_value_days, day)
+        elif self._mpc_rows.pop(day, None) is not None:
+            _drop_day(self._mpc_value_days, day)
 
     def mpc_days(self, start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
-        if start is None and end is None:
-            with self._lock:                         # every day: kept until a day is computed again
-                if self._mpc_all is None:
-                    self._mpc_all = {r["day"]: dict(r) for r in self._q("SELECT * FROM mpc_days ORDER BY day")}
-                return {k: dict(v) for k, v in self._mpc_all.items()}
-        rows = self._q("SELECT * FROM mpc_days WHERE day>=? AND day<=? ORDER BY day", (start or "0000", end or "9999"))
-        return {r["day"]: dict(r) for r in rows}
+        """``{day: its row}``, by day (from memory)."""
+        if not self._memory:
+            rows = self._q("SELECT * FROM mpc_days ORDER BY day") if start is None and end is None else self._q(
+                "SELECT * FROM mpc_days WHERE day>=? AND day<=? ORDER BY day", (start or "0000", end or "9999"))
+            return {r["day"]: dict(r) for r in rows}
+        with self._mem:
+            days = self._mpc_days
+            if start is not None or end is not None:
+                days = days[bisect.bisect_left(days, start or "0000"):bisect.bisect_right(days, end or "9999")]
+            return {d: dict(self._mpc_all[d]) for d in days}
 
     def mpc_values(self, start: Optional[str] = None, end: Optional[str] = None,
                    meetings: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        sql = "SELECT day, meeting, step, level, cum, sigma, front FROM mpc_values WHERE day>=? AND day<=?"
-        args: Tuple = (start or "0000", end or "9999")
-        if meetings is not None:
-            if not meetings:
-                return []
-            sql += " AND meeting IN (%s)" % ",".join("?" for _ in meetings)
-            args += tuple(meetings)
-        return [dict(r) for r in self._q(sql + " ORDER BY day, meeting", args)]
+        """The rows of the days from ``start`` to ``end`` (of these ``meetings`` only), by day and meeting (from memory)."""
+        if meetings is not None and not meetings:
+            return []
+        if not self._memory:
+            sql = "SELECT %s FROM mpc_values WHERE day>=? AND day<=?" % ", ".join(_MPC_VALUE_COLS)
+            if meetings is not None:
+                sql += " AND meeting IN (%s)" % ",".join("?" for _ in meetings)
+            args = (start or "0000", end or "9999") + tuple(meetings or ())
+            return [dict(r) for r in self._q(sql + " ORDER BY day, meeting", args)]
+        want = None if meetings is None else set(meetings)
+        with self._mem:
+            days = self._mpc_value_days
+            days = days[bisect.bisect_left(days, start or "0000"):bisect.bisect_right(days, end or "9999")]
+            return [dict(zip(_MPC_VALUE_COLS, t)) for d in days for t in self._mpc_rows[d] if want is None or t[1] in want]
 
     def mpc_delete(self, days: Optional[List[str]] = None) -> None:
-        with self._lock:
-            self._mpc_all = None
+        with self.transaction():                                     # (both tables, or neither)
             if days is None:
                 self._db.execute("DELETE FROM mpc_values")
                 self._db.execute("DELETE FROM mpc_days")
             else:
+                days = list(days)
                 self._db.executemany("DELETE FROM mpc_values WHERE day=?", [(d,) for d in days])
                 self._db.executemany("DELETE FROM mpc_days WHERE day=?", [(d,) for d in days])
+            self._later(self._mpc_dropped, days)
+
+    def _mpc_dropped(self, days: Optional[List[str]]) -> None:
+        if days is None:
+            self._mpc_all, self._mpc_days, self._mpc_rows, self._mpc_value_days = {}, [], {}, []
+            return
+        for d in days:
+            if self._mpc_all.pop(d, None) is not None:
+                _drop_day(self._mpc_days, d)
+            if self._mpc_rows.pop(d, None) is not None:
+                _drop_day(self._mpc_value_days, d)
 
     # ------------------------------------------------------------------ Bloomberg's answers of the day
     def bbg_answers(self, day: str) -> List[Tuple[Tuple, Any, float]]:
@@ -1397,28 +1684,30 @@ class Store(object):
         expression)."""
         if not rows:
             return 0
+        written = [(k, d, float(v)) for k, d, v in rows]
         with self._lock:
             self._db.execute("BEGIN")
             try:
                 self._db.executemany("INSERT INTO watch_closes (subject, day, value) VALUES (?,?,?) "
-                                     "ON CONFLICT(subject, day) DO UPDATE SET value=excluded.value",
-                                     [(k, d, float(v)) for k, d, v in rows])
+                                     "ON CONFLICT(subject, day) DO UPDATE SET value=excluded.value", written)
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+            self._later(self._own_put, written)
         return len(rows)
 
+    def _own_put(self, written: List[Tuple[str, str, float]]) -> None:
+        for key, group in itertools.groupby(written, key=lambda r: r[0]):
+            self._own.put(key, [(d, _stored(v, "REAL")) for _, d, v in group])
+
     def closes(self, subjects: List[str], start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Dict[str, float]]:
-        """``{subject key: {day: value}}``."""
-        out: Dict[str, Dict[str, float]] = {s: {} for s in subjects}
-        for i in range(0, len(subjects), 400):
-            chunk = subjects[i:i + 400]
-            marks = ",".join("?" for _ in chunk)
-            for r in self._q("SELECT subject, day, value FROM watch_closes WHERE subject IN (%s) AND day>=? AND day<=?" % marks,
-                             tuple(chunk) + (start or "0000", end or "9999")):
-                out[r["subject"]][r["day"]] = r["value"]
-        return out
+        """``{subject key: {day: value}}`` (from memory; each subject's days ascending)."""
+        if not self._memory:
+            return self._file_daily("watch_closes", "subject", subjects, start, end)
+        lo, hi = start or "0000", end or "9999"
+        with self._mem:
+            return {s: dict(zip(*self._own.span(s, lo, hi))) for s in subjects}
 
     # ------------------------------------------------------------------ misc key/value
     def get(self, key: str, default: Any = None) -> Any:

@@ -143,6 +143,8 @@ priority:
   - It is a priority queue: WRITE 0, HEADER 1, VIEW 2, BACKGROUND 3.
   - `s.et.call(fn)` runs inline if already on it, otherwise it blocks.
   - HTTP handlers never touch an engine directly.
+  - A job on it never reads the history from SQLite: the store answers those reads from memory (see Store below). A
+    query of many rows on it would hold every page and the alarm checks while a long calculation runs elsewhere.
 - **The market loop** applies changed market keys on the engine thread. It then bumps `gen` and notifies listeners at
   most once a second (`service.py:768-798, 900-929`).
 
@@ -223,6 +225,20 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `migrated.*` | one-time migrations |
 | `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
+
+**The history's tables are kept in memory too** (`hist_values`, `watch_closes`, `mpc_days`, `mpc_values`):
+- **Read once**, when the store opens (the desk's ~175 000 closes: ~0.5 s, ~14 MB), before any other thread uses it.
+- **Every write of the store changes the copy** after its commit; inside a `transaction()` at its commit, and a rollback
+  drops it. A value is kept as SQLite gives it back (in a REAL column an integer as a float, NaN as NULL, -0.0 as the
+  library keeps it: 0.0 in 3.35); anything else is read back from the file.
+- **Write these tables only through the store's methods**: a statement of your own would leave the copy behind.
+- **Their reads never touch SQLite** (`hist_many`, `hist_series`, `hist_bounds`, `closes`, `mpc_days`, `mpc_values`)
+  and take the copy's own lock (`_mem`), not the connection's.
+- **Why:** Python's sqlite3 gives up the interpreter on every row it reads. While the quant fit, the backtest or the
+  history sync holds it, each row waits ~5 ms: Eğri Hareketi (`Watch.heat`, on the engine thread) took 30–90 s, and the
+  alarm checks and the quant's engine read queued behind it.
+- **A damaged file** whose history cannot be read at the start still opens (`ops.check_database` says so); its history
+  is then read from the file, as before.
 
 ## Pages
 
