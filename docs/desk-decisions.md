@@ -476,6 +476,10 @@ whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, bo
   - the history's yields are read in the convention of the sheet's yield they are nearest (quantcurve's
     `detect_convention`, as the quant fit reads them);
   - the backtest counts every close beyond ±2σ (overlapping signals of one episode count each), σ as known that day.
+- **What the record says so far** (the desk copy of 17.11, one year, small samples): the backtest's hit rate was about
+  40–50 % (e.g. 50 % of 16 at 1–3Y, 40 % of 5 at 5Y+). So the ±2σ levels mark "unusual against fair now", not a
+  proven reversion signal - say so when asked, and don't tune the band on this sample. The fair level itself held
+  with a next-day error of about 16–23 bp over 1Y.
 - Code: `tto/kagitfiyat.py`, `Service.kagit_fiyat` / `kagit_fiyat_widths`, `GET /api/kagit-fiyat` (`?isin=`: one bond, the
   card's), `POST /api/kagit-fiyat/genislik`, `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`. Tests:
   `tests/test_kagitfiyat.py`, the browser test's Kâğıt Fiyatlama checks.
