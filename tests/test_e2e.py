@@ -16,6 +16,31 @@ from tto.config import FORBIDDEN_PORTS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 E2E_PASSWORD = "e2e-sifre-1"
+#: the days of the bonds' closes put in for Kâğıt Fiyatlama: long before the recorded month (03.11.2026), outside every
+#: window the other checks read (the end-of-day matrix's 22 week days, "DİBS geçmişi yok")
+SEED_DAYS = ("2026-08-26", "2026-08-27", "2026-08-28")
+
+
+def _seed_bond_closes(store) -> int:
+    """Three days of closes for the trading list's fixed coupon bonds and bills - the recorded file has no bond history,
+    and Kâğıt Fiyatlama's fair needs a bond's spread at a past close: the replay sheet's own BIST compound yield
+    (DİBS RV!T, as saved) a few bp apart day to day, under the series the history keeps for the bond (DİBS RV!BT's
+    security, ``YLD_YTM_MID``).  How many series were put in."""
+    from tto.xl.model import Model, parse_a1
+    sheet = Model.load(os.path.join(ROOT, "models", "tto.json.gz")).sheet("DİBS RV")
+
+    def get(ref):
+        rc = parse_a1(ref)
+        return sheet.consts.get(rc, sheet.cached.get(rc))
+
+    n = 0
+    for r in range(5, 55):
+        kind, sec, y = get("D%d" % r), get("BT%d" % r), get("T%d" % r)
+        if kind not in ("S", "B") or not isinstance(sec, str) or not sec.strip() or type(y) is not float:
+            continue
+        store.hist_upsert("%s|YLD_YTM_MID" % sec.strip(), [(d, round(y * 100.0 + 0.02 * (k - 1), 6)) for k, d in enumerate(SEED_DAYS)])
+        n += 1
+    return n
 
 
 def _free_port():
@@ -58,8 +83,10 @@ def test_dashboard_in_a_real_browser(tmp_path):
     store = Store(str(tmp_path / "data" / "tto.db"))
     for name, role in (("Ayşe Yılmaz", "admin"), ("Mehmet", "user"), ("Zeynep", "user")):
         store.create_account(name, hash_password(E2E_PASSWORD), role=role)
+    seeded = _seed_bond_closes(store)
     store.close()
     env["TTO_E2E_PASSWORD"] = E2E_PASSWORD
+    env["TTO_E2E_SEEDED"] = str(seeded)                 # (the history's count of series grows by these)
     server = subprocess.Popen([sys.executable, "-m", "tto", "--mode", "replay", "--host", "127.0.0.1", "--port", str(port),
                                "--data-dir", str(tmp_path / "data")], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:

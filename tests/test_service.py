@@ -29,13 +29,14 @@ def test_status_and_navigation(service):
     # (the quant pages in the order of their four menu entries: Sinyaller, Faiz, FX, VİOP - see menu.js)
     # (Fiyatlama first: right after OIS · PPK in TRY Faiz - pricing.py - and Swaption right after it - swaption.py; DİBS RV ·
     # Genel next: the Tahvil menu entry with tabs puts it before its workbook tabs - dibsgenel.py; Bugün, the morning screen,
-    # first of the desk's own pages: right under Masa in the menu - bugun.py)
-    assert custom == ["fiyatlama", "swaption", "dibs-genel", "bugun", "watch", "heat", "blotter", "broker", "trades", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
+    # first of the desk's own pages: right under Masa in the menu - bugun.py; Kâğıt Fiyatlama the Tahvil menu's first entry -
+    # kagitfiyat.py)
+    assert custom == ["fiyatlama", "swaption", "kagit-fiyat", "dibs-genel", "bugun", "watch", "heat", "blotter", "broker", "trades", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
                       "quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira", "quant-ml",
                       "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-dibssw", "quant-path", "quant-wirp", "quant-lead",
                       "quant-fx", "quant-macro", "quant-opt", "quant-optspot",
                       "quant-viop", "social", "agenda"]
-    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 38
+    assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 39
 
 
 @pytest.mark.parametrize("view_id", VIEW_IDS)

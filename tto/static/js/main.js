@@ -33,6 +33,7 @@ import { startPresence, stopPresence, presenceEvent } from './presence.js';
 import { openRecon, checkBeforeArchive } from './recon.js';
 import { quantPage, quantEvent } from './pages/quant.js';
 import { DibsGenelPage } from './pages/dibsgenel.js';
+import { KagitFiyatPage } from './pages/kagitfiyat.js';
 import { BugunPage } from './pages/bugun.js';
 import { parseCommand, fold } from './commands.js';
 import { runCommand, fillTradesForm, waitFor, TRADING_LIST } from './commandrun.js';
@@ -474,6 +475,7 @@ async function openPage(id, panel, sub) {
   else if (id === 'agenda') page = new AgendaPage(host, ctx);
   else if (id === 'quant' || id.startsWith('quant-')) page = quantPage(id, host, ctx);
   else if (id === 'dibs-genel') page = new DibsGenelPage(host, ctx);
+  else if (id === 'kagit-fiyat') page = new KagitFiyatPage(host, ctx);
   else if (id === 'bugun') page = new BugunPage(host, ctx);
   else page = new ViewPage(host, id, ctx);
   state.page = page;

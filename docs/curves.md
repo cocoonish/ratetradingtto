@@ -46,7 +46,8 @@ Notes on the offshore curve:
   - Fiyatlama's OIS and FRA;
   - Swaption: Fiyatlama's forward-start OIS on the viewer's setting, the other curve's forward beside it; its realized
     vol from the history's closes, each past day on its own Motor bootstrap (Bootstrap);
-  - RET's "OIS" base.
+  - RET's "OIS" base;
+  - Kâğıt Fiyatlama's "OIS" base (below).
 - **Offshore TRY:**
   - MASA's broken-date block (FX forward, XCCY and O/N rows);
   - DİBS RV's own FX swap ASW (`BF:BJ`, "offshore ICAP");
@@ -163,6 +164,7 @@ The setting is Ayarlar → "Eğri interpolasyonu", per user:
 - alarms, quant, history and any calculation without a user;
 - ASW history rows;
 - `retfair` (the desk calculation);
+- `kagitfiyat` (Kâğıt Fiyatlama's OIS base, now and on past days);
 - ASW FX's sheet curve (only its 18M follows);
 - the Bootstrap side of every two-way view (`Service._try_curves` reads the real Bootstrap).
 
@@ -258,6 +260,12 @@ bump and NPV at a typed price.
 | `rvfair` FX side | ASW FX, the ASW sheet on EK_FX's quotes. Fitted the same way at `ASW!AW3:AY3`. The dirty price at spot is carried with TLREF (`(L + N)·(1 + TLREF·days/365)`), as the sheet's formula does. |
 | `dibsgenel` | OIS ASW and FX ASW through `rvfair`, plus an independent Nelson–Siegel zero curve of the bonds (`quantcurve`, `FIT_KINDS = ("fixed",)`). |
 | `retfair` | Base OIS mid, VİOP mid, offshore mid or a blend; the default is OIS. Desk calculation, so no PPK. In a scenario view, the offshore and VİOP bases move by the OIS scenario's change. |
+| `kagitfiyat` | Kâğıt Fiyatlama: two bases, each plus the bond's spread to it at the last close, weighted by maturity - the **neighbours' curve** (`quantcurve`'s Nelson-Siegel of the trading list's other fixed coupon bonds, leave one out) and **TRY OIS**: the Bootstrap's zero rate at the bond's maturity from the OIS spot, compounded once a year. Now: the workbook's Bootstrap (`Service._try_curves`' `boot`, the true one whatever the viewer's setting); a past day: Motor's bootstrap of that day's closes (`swaption.day_curve`). Desk calculation: Bootstrap only, no PPK. |
+
+**Kâğıt Fiyatlama has no offshore base.** On the desk's history the bonds moved about half as much as the offshore curve
+(β ≈ 0.45) and offshore was never the best base at any maturity (desk-decisions, "Kâğıt fiyatlama"). This is about that
+page only: the ASW FX fair values (`rvfair`'s FX side, DİBS Trading's "FX swap'a göre", Genel, the card) stay as they are,
+and the card shows both.
 
 ## Spot and value dates
 
