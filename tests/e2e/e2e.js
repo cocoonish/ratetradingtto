@@ -2644,6 +2644,83 @@ async function clipAfter(page, action) {
     await page.click('#pr-asset button[data-v="fra"]');
     await prWait('^FRA 12x15');
 
+    // ------------------------------------------------------------------ Swaption: a TRY OIS swaption, to look at only
+    console.log('swaption');
+    await open(page, 'swaption');
+    await page.waitForSelector('#swpt-options');
+    const swptMenu = await page.evaluate(() => window.tto.state.pages.filter((p) => p.group === 'TRY Faiz').map((p) => p.id));
+    const swptApi = async (q) => (await api(page, 'ayşe yilmaz', 'GET', '/api/swaption?' + new URLSearchParams(q).toString())).json;
+    const swptLabel = (re) => page.waitForFunction((s) => new RegExp(s).test((document.getElementById('swpt-label') || {}).textContent || ''),
+      re, { timeout: 60000 });
+    const swptSource = (re) => page.waitForFunction((s) => new RegExp(s).test((document.querySelector('#swpt-vol-source .v') || {}).textContent || ''),
+      re, { timeout: 60000 });
+    const swptPct = (v) => (v * 100).toFixed(4).replace('.', ',') + '%';
+    const swptTile = (id) => page.textContent('#' + id + ' .v');
+    const swptReal = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#swpt-realized tr[data-window]')]
+      .map((tr) => [tr.dataset.window, [...tr.children].map((td) => td.textContent)])));
+    await page.click('#swpt-expiry-presets button[data-v="1Y"]');
+    await page.click('#swpt-tenor-presets button[data-v="2Y"]');
+    await swptLabel('^1Y × 2Y');
+    const swpt0 = await swptApi({ expiry: '1Y', tenor: '2Y' });
+    const swptR0 = await swptReal();
+    const swptDates = await page.textContent('#swpt-dates');
+    check('Swaption: in TRY Faiz right after Fiyatlama; 1Y × 2Y on Fiyatlama\'s TRY OIS 1Y × 3Y - the forward on both curves (yours first), '
+      + 'the expiry 03.11.2027 (the business day before the start), 250 business days; the realized table\'s four windows say why there is '
+      + 'no vol: the recorded closes stop at 1Y (18M, 2Y, 3Y missing)', swptMenu.slice(0, 3).join() === 'ois,fiyatlama,swaption'
+      && swpt0.underlying === 'TRY OIS 1Y × 3Y' && (await swptTile('swpt-fwd')) === swptPct(swpt0.forward.boot)
+      && (await swptTile('swpt-fwd-other')) === swptPct(swpt0.forward.ppk) && /opsiyon vadesi 03\.11\.2027/.test(swptDates) && /250 iş günü/.test(swptDates)
+      && Object.keys(swptR0).join() === '20,60,120,250' && Object.values(swptR0).every((r) => r[2] === '–')
+      && /18M, 2Y, 3Y/.test(await page.textContent('#swpt-novol')) && /18M, 2Y, 3Y/.test(await page.textContent('#swpt-realized-note')),
+    { swptMenu, und: swpt0.underlying, swptDates, swptR0 });
+    // a vol typed in bp/day: the other two units follow, every greek is filled, the payer's breakeven is K + its running premium
+    await page.fill('#swpt-vol-day', '5');
+    await page.press('#swpt-vol-day', 'Enter');
+    await swptSource('yazılan');
+    const swpt1 = await swptApi({ expiry: '1Y', tenor: '2Y', vol: '5', vol_unit: 'day' });
+    const swptOpts = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#swpt-options tr[data-row]')]
+      .map((tr) => [tr.dataset.row, [...tr.children].slice(1).map((td) => td.textContent)])));
+    const swptYear = trNumber(await swptTile('swpt-vol-year-out'));
+    check('... a vol typed in bp/day (5): bp/year = 5 · √252 and % Black beside it; payer / receiver / straddle with premium, delta, gamma, '
+      + 'vega (normal and Black) and theta; the payer\'s breakeven = K + its running premium', Math.abs(swptYear - 5 * Math.sqrt(252)) < 0.06
+      && Math.abs(swpt1.vol.year - 5 * Math.sqrt(252)) < 1e-9 && (await swptTile('swpt-vol-black-out')) === (swpt1.vol.black * 100).toFixed(2).replace('.', ',') + '%'
+      && ['tl', 'delta_tl', 'gamma_tl', 'vega_tl', 'vega_black_tl', 'theta_tl'].every((k) => swptOpts[k] && swptOpts[k].length === 3 && swptOpts[k].every((t) => /\d/.test(t)))
+      && /^\+/.test(swptOpts.delta_tl[0]) && /^-/.test(swptOpts.delta_tl[1]) && /^-/.test(swptOpts.theta_tl[2])
+      && Math.abs(swpt1.options.payer.breakeven - (swpt1.strike + swpt1.options.payer.running_bp * 1e-4)) < 1e-12
+      && (await page.textContent('#swpt-be-payer')) === swptPct(swpt1.options.payer.breakeven),
+    { swptYear, vol: swpt1.vol, swptOpts, be: swpt1.options.payer.breakeven });
+    await shot(page, '16c-swaption');
+    // the recorded month's closes reach 1Y: a 3M × 9M forward has realized vols, and the 60 changes' (the 21 there are) prices
+    await page.click('#swpt-vol-reset');
+    await swptSource('gerçekleşen');
+    await page.fill('#swpt-expiry', '3M');
+    await page.press('#swpt-expiry', 'Enter');
+    await swptLabel('^3M × 2Y');
+    await page.fill('#swpt-tenor', '9M');
+    await page.press('#swpt-tenor', 'Enter');
+    await swptLabel('^3M × 9M');
+    const swpt2 = await swptApi({ expiry: '3M', tenor: '9M' });
+    const swptR2 = await swptReal();
+    check('... 3M × 9M (TRY OIS 3M × 1Y): realized vols from the recorded month - 20 changes full, 60 / 120 / 250 the 21 there are (*), '
+      + 'bp/year = bp/day · √252; the 60\'s is the vol used, and its payer\'s breakeven K + p', swpt2.underlying === 'TRY OIS 3M × 1Y'
+      && swptR2['20'][1] === '20' && swptR2['60'][1] === '21*' && swptR2['250'][1] === '21*'
+      && Math.abs(trNumber(swptR2['20'][2]) - swpt2.realized.rows[0].day) < 0.006
+      && Math.abs(trNumber(swptR2['60'][3]) - swpt2.realized.rows[1].day * Math.sqrt(252)) < 0.06
+      && swpt2.vol.source === 'realized' && swpt2.vol.n === 21 && swpt2.vol.day === swpt2.realized.rows[1].day
+      && trNumber(await swptTile('swpt-vol-day-out')) === Number(swpt2.vol.day.toFixed(2))
+      && (await page.textContent('#swpt-be-payer')) === swptPct(swpt2.options.payer.breakeven), { swptR2, vol: swpt2.vol });
+    // beyond 10Y: refused in Turkish beside the inputs, the tenors too long for the expiry dimmed
+    await page.click('#swpt-expiry-presets button[data-v="5Y"]');
+    await swptLabel('^5Y × 9M');
+    const swptFar = await page.evaluate(() => [...document.querySelectorAll('#swpt-tenor-presets button.swpt-far')].map((b) => b.dataset.v).join());
+    await page.click('#swpt-tenor-presets button[data-v="7Y"]');
+    await page.waitForFunction(() => /10 yıl/.test(document.getElementById('swpt-error').textContent), null, { timeout: 30000 });
+    check('... 5Y × 7Y: refused in Turkish (the TRY OIS curve ends at 10Y), 7Y and 10Y dimmed for a 5Y expiry, the last numbers kept dimmed',
+      swptFar === '7Y,10Y' && /TRY OIS eğrisi 10Y'de biter/.test(await page.textContent('#swpt-error'))
+      && await page.evaluate(() => document.getElementById('swpt-result').classList.contains('stale'))
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/swaption?expiry=5Y&tenor=7Y')).status === 400, { swptFar });
+    await page.click('#swpt-tenor-presets button[data-v="5Y"]');
+    await swptLabel('^5Y × 5Y');
+
     // ------------------------------------------------------------------ bonds: the chat, the screen, the lists
     console.log('bonds');
     // (the morning's chat is pasted now: the desk's stale limit a day long while it is read, so its quotes stand fresh)

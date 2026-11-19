@@ -58,7 +58,7 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
 4. Custom pages (no view JSON) are listed in `Service.nav`:
    - bugun, watch / heat, blotter, broker, trades;
    - eod, mpc, vol, spreads, settings;
-   - fiyatlama, fx, fxvol, social, agenda, dibs-genel;
+   - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel;
    - the quant pages.
 
 **A typed input** goes `POST /api/inputs` → `Service.set_inputs` → `_set_inputs` on the engine thread at WRITE
@@ -141,7 +141,7 @@ docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 |---|---|
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
-| Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `bonds` (catalog) |
+| Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption`), `bonds` (catalog) |
 | Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
 | Ops | `ops` (log, backups, freshness), `progress` |

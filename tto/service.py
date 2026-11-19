@@ -19,7 +19,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 from urllib.parse import quote as _quote
 
 from . import aswfx
@@ -37,6 +37,7 @@ from . import layout as lay
 from . import quotes as qt
 from . import rvfair
 from . import shortcuts
+from . import swaption as sw
 from . import tradehint as th
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
@@ -1607,6 +1608,9 @@ class Service(object):
             at = next((i + 1 for i, p in enumerate(pages) if p["id"] == "ois"), len(pages))
             pages.insert(at, {"id": "fiyatlama", "title": "Fiyatlama", "group": "TRY Faiz", "book": "tto", "sheet": None,
                               "custom": True})
+            # Swaption (swaption.py): a TRY OIS swaption to look at, its underlying Fiyatlama's - right after Fiyatlama
+            pages.insert(at + 1, {"id": "swaption", "title": "Swaption", "group": "TRY Faiz", "book": "tto", "sheet": None,
+                                  "custom": True})
             pages.append({"id": "settings", "title": "Ayarlar · Toplantı takvimi", "group": "Araçlar", "book": "tto",
                           "sheet": None, "custom": True})
             # the option market of the currency pairs: one pair in depth, and every pair's vols at a glance
@@ -7736,6 +7740,89 @@ class Service(object):
         except pr.PricingError as exc:
             out["error"] = str(exc)
         return out
+
+    # ================================================================== Swaption (swaption.py)
+    #: forward histories kept, by expiry × tenor and what they are made of (a page refresh builds none again)
+    SWAPTION_KEPT = 32
+
+    def swaption(self, user: Optional[str], query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Swaption: a TRY OIS swaption, to look at only - the underlying (Fiyatlama's forward-start TRY OIS) on the
+        viewer's curve with the other beside it, the realized vols of its forward from the history's closes, payer,
+        receiver and straddle with their greeks at the vol used - realized over 60 changes, or one typed in bp/day,
+        bp/year or % Black (:mod:`tto.swaption`).  ``query``: the page's inputs (nothing is stored); inputs it cannot
+        read - an expiry + tenor beyond 10Y among them - are a 400 with the reason in Turkish."""
+        key = self.require_user(user)
+        try:
+            inputs = sw.read_inputs(query or {})
+        except sw.SwaptionError as exc:
+            raise ServiceError(str(exc))
+        got = self.et.call(self._swaption_market, key)
+        if "error" in got:
+            return {"available": False, "error": got["error"]}
+        hist = self._swaption_history(inputs["expiry_m"], inputs["tenor_m"], got["mk"])
+        try:
+            out = sw.price(inputs, got["cv"], got["mk"], got["method"], got["today"], hist)
+        except (sw.SwaptionError, pr.PricingError) as exc:
+            raise ServiceError(str(exc))
+        out.update(available=True, history=hist["info"], gen=self.gen)
+        return out
+
+    def _swaption_market(self, user: str) -> Dict[str, Any]:
+        """The user's TRY curves both ways (:meth:`_try_curves`), what pricing reads beside them (their Bootstrap
+        calculation: :func:`tto.pricing.read`), their curve setting and the market day (the workbook's TODAY())."""
+        book = self.books.get("tto")
+        if book is None:
+            return {"error": "bu çalışma kitabında TRY eğrileri yok"}
+        calc = self._calc(user, book)
+        cv = self._try_curves(book, calc)
+        if not cv:
+            return {"error": "bu çalışma kitabında TRY eğrileri yok"}
+        base = self.interp.boot_of(book, calc)               # (the true bootstrap whatever the setting: its quotes, nodes)
+        idx = book.model.sheet_index
+        try:
+            mk = pr.read(lambda sheet, r, c: base.get(idx[sheet], r, c))
+        except pr.PricingError as exc:
+            return {"error": str(exc)}
+        return {"cv": cv, "mk": mk, "method": self.interp.mode(user), "today": book.engine.clock.today()}
+
+    def _swaption_closes(self, mk: pr.Market) -> Tuple[Tuple, Dict[float, Dict[str, float]], FrozenSet[float], Dict[str, Any]]:
+        """The TRY OIS closes the history keeps (``_vol_curves``: months -> {ISO day: %}), the TRY holidays the past
+        days are dated with - the workbook's list and the week days without a TLREF fixing (the history's own rule,
+        ``History._holidays``: the list holds the holidays ahead only) - and what the closes cover; first what they were
+        read for.  Read once per revision of the history and of the TRY holiday list (``mk``'s)."""
+        mark = (self.history.rev, hash(mk.holidays["TRY"]))
+        hit = getattr(self, "_swaption_read", None)
+        if hit is not None and hit[0] == mark:
+            return hit
+        curves, months, info = self._vol_curves()
+        closes = {float(months["OIS"][t]): s for t, s in curves["OIS"].items() if s and (months["OIS"].get(t) or 0) >= 1}
+        snap = self.history.snapshot()
+        ref = next((d for d in snap["defs"] if d.group == "ref"), None)
+        tlref: Dict[str, float] = {}
+        if ref is not None:
+            start = (snap["today"] - _dt.timedelta(days=600)).isoformat()
+            tlref = ref.pick(self.store.hist_many(ref.ids(), start))[1]
+        serials, _ = self.history._holidays(snap, tlref)
+        out = (mark, closes, frozenset(float(x) for x in serials), {"first": info["first"], "last": info["last"],
+                                                                   "days": info["days"], "source": info["source"]})
+        self._swaption_read = out
+        return out
+
+    def _swaption_history(self, expiry_m: int, tenor_m: int, mk: pr.Market) -> Dict[str, Any]:
+        """The forward's history for an expiry × tenor (:func:`tto.swaption.forward_history`), kept until the history,
+        Motor's grid or the holidays change; each day's curve kept apart, for every expiry × tenor.  Made on the
+        request's thread, not the calculation thread (pure arithmetic on the closes): one request at a time."""
+        with self.__dict__.setdefault("_swaption_lock", threading.Lock()):
+            mark, closes, hol, info = self._swaption_closes(mk)
+            key = (expiry_m, tenor_m, mark, tuple(mk.nodes), tuple(m for m, _ in mk.ois_quotes), hash(hol))
+            kept = self.__dict__.setdefault("_swaption_kept", {})
+            hit = kept.get(key)
+            if hit is None:
+                hit = sw.forward_history(closes, expiry_m, tenor_m, mk, hol, self.__dict__.setdefault("_swaption_days", {}))
+                kept[key] = hit
+                while len(kept) > self.SWAPTION_KEPT:
+                    kept.pop(next(iter(kept)))
+        return dict(hit, info=info)
 
     def _carry_table(self, user: Optional[str], kind: str) -> Dict[str, Any]:
         """The rows of the C & R sheet's fly / spread table (label, market, carry + roll over horizon A and B in
