@@ -242,7 +242,7 @@ export class SwaptionPage {
     box.appendChild(tile('Dayanak DV01 (TL/bp)', dash(num(d.dv01, 0)), { id: 'swpt-dv01', title: 'N · A · 0,0001 (payer +). Nominal ' + num(d.notional, 0) + ' TL' }));
     const v = d.vol || {};
     const src = v.source === 'typed' ? 'yazılan (' + ({ day: 'bp/gün', year: 'bp/yıl', black: '% Black' })[v.unit] + ')'
-      : 'gerçekleşen ' + v.window + ' değişim' + (isNum(v.n) && !v.full ? ' (' + v.n + ' var)' : '');
+      : 'gerçekleşen ' + v.window + (isNum(v.n) && !v.full ? ' (' + v.n + ' var)' : '');
     box.appendChild(tile('Vol · bp/gün', volText.day(v.day), { id: 'swpt-vol-day-out', title: 'Kullanılan vol: ' + src }));
     box.appendChild(tile('Vol · bp/yıl', volText.year(v.year), { id: 'swpt-vol-year-out', title: 'bp/gün · √252' }));
     box.appendChild(tile('Vol · % Black', volText.black(v.black), { id: 'swpt-vol-black-out', title: 'Aynı payer primini veren lognormal vol' }));

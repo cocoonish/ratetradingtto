@@ -1550,6 +1550,7 @@ table.plain.bugun tr.near-target td:first-child { box-shadow: inset 3px 0 0 var(
 .swaption .swpt-error { padding: 0 12px 10px; }
 .swaption .swpt-error:empty { display: none; }
 .swaption .swpt-head { margin-bottom: 10px; font-size: 13px; }
+.swaption .swpt-tiles .q.big { grid-column: span 1; }
 .swaption #swpt-result.stale { opacity: .45; transition: opacity .12s; }
 .swaption #swpt-options-panel { flex: 1 1 520px; }
 .swaption #swpt-range-panel { flex: 0 1 260px; }
