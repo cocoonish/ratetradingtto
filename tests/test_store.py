@@ -355,7 +355,8 @@ def test_the_check_finds_a_damaged_file(tmp_path):
     assert s.quick_check() == []
     s.close()
     damage(path)
-    s = Store(path)
+    s = Store(path)                         # it opens (the history it cannot read into memory is read from the file)
+    assert s._memory is False
     found = s.quick_check()
     assert found and found != ["ok"]
     with pytest.raises(sqlite3.DatabaseError):                        # ... and a backup of it is refused, not kept
@@ -569,8 +570,9 @@ def test_restoring_from_either_folder(tmp_path, capsys):
 
 
 def test_what_the_history_polls_is_kept_until_the_history_changes(store, monkeypatch):
-    """The settings page polls the history's status: the first and last day and the count of every series (a GROUP BY
-    over every close) and the computed MPC days are kept until closes or days are written, not read each time."""
+    """The settings page polls the history's status: the first and last day and the count of every series and the
+    computed MPC days come from memory (the file is not asked: a GROUP BY over every close each time was a full scan)
+    and follow every write."""
     store.hist_upsert("A Index|PX_LAST", [("2026-01-02", 1.0), ("2026-01-05", 2.0)])
     store.mpc_save("2026-01-05", "close", {"status": "OK"}, [])
     asked = []
@@ -579,7 +581,7 @@ def test_what_the_history_polls_is_kept_until_the_history_changes(store, monkeyp
     for _ in range(3):
         assert store.hist_bounds() == {"A Index|PX_LAST": ("2026-01-02", "2026-01-05", 2)}
         assert list(store.mpc_days()) == ["2026-01-05"]
-    assert len(asked) == 2                                     # once each
+    assert asked == []
     store.hist_upsert("A Index|PX_LAST", [("2026-01-06", 3.0)])
     store.mpc_save("2026-01-06", "close", {"status": "OK"}, [])
     assert store.hist_bounds()["A Index|PX_LAST"] == ("2026-01-02", "2026-01-06", 3)
@@ -590,6 +592,90 @@ def test_what_the_history_polls_is_kept_until_the_history_changes(store, monkeyp
     bounds = store.hist_bounds()
     bounds["x"] = 1                                            # (a copy: what is kept is not changed by a caller)
     assert store.hist_bounds() == {}
+
+
+def test_the_history_is_read_from_memory_and_follows_every_write(tmp_path, monkeypatch):
+    """The history's tables - the closes, the watch's own closes, the meeting pricing - are read from the file once, as
+    it is opened, and answered from memory after that: SQLite gave the interpreter up on every row it read, and while
+    the quant or the backtest ran each row waited for it again (a heat map's closes held the calculation thread for
+    half a minute).  Every write is seen at once and exactly as the file holds it (a -0.0 as SQLite keeps it, a whole
+    number as a float, a NaN as nothing) - one inside a transaction once it is committed."""
+    import store_sql as q
+
+    path = str(tmp_path / "tto.db")
+    st = Store(path)
+    st.hist_upsert("A|PX_LAST", [("2026-11-02", 35.5), ("2026-11-03", -0.0), ("2026-11-04", 36)])
+    st.hist_upsert("B|PX_LAST", [("2026-10-30", float("inf")), ("2026-11-03", 1e-300)])
+    st.hist_upsert("A|PX_LAST", [("2026-11-03", 35.25), ("2026-11-01", 35.0)])        # one changed, one before the others
+    with pytest.raises(sqlite3.IntegrityError):
+        st.hist_upsert("A|PX_LAST", [("2026-11-05", float("nan"))])                      # refused: nothing kept
+    st.close_upsert([("cell|tto|X1", "2026-11-03", 2), ("viop|ticker=A", "2026-11-03", -0.0), ("cell|tto|X1", "2026-11-03", 7.25),
+                     ("cell|tto|X2", "2026-11-02", 1.5), ("cell|tto|X2", "2026-11-03", 1.75)])
+    rows = [{"meeting": "2026-12-11", "step": -0.0, "level": 0.37, "cum": None, "sigma": float("nan"), "front": True},
+            {"meeting": "2026-12-10", "step": -150.25, "level": 1, "cum": 2.5, "sigma": 3.0}]
+    st.mpc_save("2026-11-03", "b1", {"spot": "2026-11-04", "tlref": 39, "decision": True, "quotes": 18, "status": "OK",
+                                     "control": -0.0, "carried": 2, "cleaned": ""}, rows)
+
+    class Odd(float):                    # a value of no plain kind (as numpy's would be): the day is read back from the file
+        pass
+
+    st.mpc_save("2026-11-04", "b2", {"spot": "2026-11-05", "tlref": Odd(39.5), "quotes": 17, "status": "OK"},
+                [dict(r, step=Odd(-1.0)) for r in rows])
+    import datetime as _dt
+    st.hist_upsert("D|PX_LAST", [(_dt.date(2026, 11, 2), 4.5)])       # a day that is no text: the copy is read again
+    windows = [(None, None), ("2026-11-02", None), (None, "2026-11-03"), ("2026-11-03", "2026-11-03"), ("", ""),
+               ("2027-01-01", "2027-12-31")]
+    series = ["A|PX_LAST", "B|PX_LAST", "C|PX_LAST", "A|PX_LAST", "D|PX_LAST"]
+    subjects = ["cell|tto|X1", "viop|ticker=A", "cell|tto|X2", "cell|tto|X3"]
+
+    def reads(s, sql=False):
+        r = q if sql else None
+
+        def ask(name, *args):
+            return getattr(r, name)(s, *args) if sql else getattr(s, name)(*args)
+
+        out = [ask("hist_bounds"), ask("mpc_values", None, None, ["2026-12-10"]), ask("mpc_values", None, None, [])]
+        for a, b in windows:
+            out += [ask("hist_many", series, a, b), ask("hist_series", "A|PX_LAST", a, b), ask("closes", subjects, a, b),
+                    ask("mpc_days", a, b), ask("mpc_values", a, b)]
+        return out
+
+    q.same(reads(st), reads(st, sql=True))
+    assert st.hist_many(["A|PX_LAST"])["A|PX_LAST"] == {"2026-11-01": 35.0, "2026-11-02": 35.5, "2026-11-03": 35.25, "2026-11-04": 36.0}
+    assert st.mpc_values("2026-11-04", "2026-11-04")[0]["step"] == -1.0 and st.mpc_days()["2026-11-04"]["tlref"] == 39.5
+    # ... and never from the file: no statement on these tables, whatever is read
+    with monkeypatch.context() as m:
+        seen = q.spy(m, st)
+        reads(st)
+        assert seen.history() == []
+    # a write inside a transaction is seen once it is committed: a rollback takes it back with the file's
+    with pytest.raises(RuntimeError):
+        with st.transaction():
+            st.rename_closes({"cell|tto|X1": "cell|tto|X9"})
+            st.hist_delete("B|PX_LAST")
+            st.mpc_delete(["2026-11-03"])
+            raise RuntimeError("vazgeçildi")
+    q.same(reads(st), reads(st, sql=True))
+    assert "B|PX_LAST" in st.hist_bounds() and "2026-11-03" in st.mpc_days()
+    with st.transaction():
+        # a chain, as UPDATE OR REPLACE runs it: X1's closes go to X2 (in place of X2's of the same day), then X2's to X3
+        st.rename_closes({"cell|tto|X1": "cell|tto|X2", "cell|tto|X2": "cell|tto|X3"})
+        st.hist_delete("B|PX_LAST")
+    q.same(reads(st), reads(st, sql=True))
+    assert st.closes(["cell|tto|X1", "cell|tto|X2", "cell|tto|X3"]) == {
+        "cell|tto|X1": {}, "cell|tto|X2": {}, "cell|tto|X3": {"2026-11-02": 1.5, "2026-11-03": 7.25}}
+    st.mpc_save("2026-11-04", "b3", {"status": "HATA", "note": "çözülemedi"}, [])        # a day without its rows
+    st.mpc_delete(["2026-11-03", "1999-01-01"])
+    q.same(reads(st), reads(st, sql=True))
+    kept = reads(st)
+    st.close()
+    back = Store(path)                                          # opened again: read from the file
+    q.same(reads(back), kept)
+    back.hist_delete()
+    back.mpc_delete()
+    q.same(reads(back), reads(back, sql=True))
+    assert back.hist_bounds() == {} and back.mpc_days() == {} and back.hist_many(["A|PX_LAST"]) == {"A|PX_LAST": {}}
+    back.close()
 
 
 def test_bloombergs_answers_of_the_day_are_kept_and_the_days_before_go(store):

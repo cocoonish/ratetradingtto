@@ -690,6 +690,50 @@ def test_a_day_the_market_is_shut(svc, monkeypatch):
         assert two["chg"] is None and type(two["now"]) is float      # no close kept for it: read as it is, no change
 
 
+def test_the_heat_map_reads_its_closes_from_memory(svc, monkeypatch):
+    """Eğri Hareketi is made on the calculation thread: its closes - the market history's and the watch's own - come
+    from the store's memory, never from SQLite (read there row by row while the quant fit or the backtest held the
+    interpreter, one map held the calculation thread for half a minute, and the alarm checks waited behind it).  The
+    watch list's z-scores and the alarm checks the same.  A new close is seen at the next load; the map is the one
+    made from the file's rows."""
+    import store_sql as q
+
+    monkeypatch.setattr(svc.watch, "shut_day", lambda today: None)
+    u = svc.login("Isı Bellekten")["user"]
+    one = {"kind": "ois", "tenor": "1Y"}
+    days = seed(svc, "ois", "1Y", [35.30 + 0.01 * i for i in range(25)])
+    seed(svc, "ois", "6M", [36.0 + 0.01 * i for i in range(25)])
+    viop = {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"}
+    svc.store.close_upsert([(svc.watch.key(viop), d, 200.0 + i) for i, d in enumerate(days[-22:])])
+    svc.watch_add(u, subject=one)
+    svc.alarm_add(u, subject=one, mode="z", op=">=", level="9", days=20)
+    with monkeypatch.context() as m:
+        seen = q.spy(m, svc.store)
+        first = svc.heat_view(u, "close")
+        z = {i["label"]: i for i in svc.watch_view(u, days=20)["items"]}["OIS 1Y"]["z"]
+        tick(svc)
+        assert seen.reads("tto-engine") == [] and seen.reads() == []
+    assert z["n"] == 20 and z["source"] == "tarihçe"
+    cols = [c["id"] for c in first["panels"][0]["cols"]]
+
+    def point(h):
+        return {r["name"]: r["cells"] for r in h["panels"][0]["rows"]}["OIS"][cols.index("1Y")]
+
+    assert (point(first)["base_day"], point(first)["base"]) == (days[-1], pytest.approx(35.54))
+    # a new close (the history's sync writes it and moves its revision): seen at the next load
+    svc.store.hist_upsert(svc.et.call(svc.watch._hist_defs)[("ois", "1Y")].id, [(days[-1], 35.10)])
+    svc.history.rev += 1
+    again = svc.heat_view(u, "close")
+    assert point(again)["base"] == 35.10 and point(again)["chg"] == pytest.approx((point(again)["now"] - 35.10) * 100)
+    # ... the same map as one made from the file's rows (the closes the watch kept read again)
+    q.from_sql(monkeypatch, svc.store)
+    svc.history.rev += 1
+    made = svc.heat_view(u, "close")
+    for h in (again, made):
+        h.pop("time")
+    q.same(again, made)
+
+
 # ====================================================================================== the desk's alarms (deskalarms.py)
 def move_market(s, ref, value):
     """The market's value of a cell (everyone's, not anyone's scenario)."""

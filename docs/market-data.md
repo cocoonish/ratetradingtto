@@ -157,6 +157,10 @@ only after 16:30. Its first two years come once, last in the 40-a-sync turn.
 - "Tarihçeyi güncelle" forces it.
 - It writes the same `hist_values` table, but keeps separate records.
 
+**The store keeps the closes in memory too** (`hist_values`, `watch_closes`, `mpc_days`, `mpc_values`): write them only
+through its methods (`hist_upsert`, `hist_delete`, `close_upsert`, `rename_closes`, `mpc_save`, `mpc_delete`), never with
+SQL of your own (see [architecture.md](architecture.md#store-ttostorepy)).
+
 ## Desk database
 
 To know what the desk really has - which series have closes, which inputs or overrides exist - read a **copy** of the

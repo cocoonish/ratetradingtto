@@ -734,6 +734,30 @@ def test_end_of_day_matrix(hsvc):
         hsvc.history.matrix("dün")
 
 
+def test_the_history_pages_read_their_rows_from_memory(hsvc, monkeypatch):
+    """Gün Sonu Matrisi, PPK Fiyatlama Geçmişi, a row's closes, the status the settings page polls and Vol · Carry read the
+    closes and the meeting pricing from the store's memory: no statement on those tables while they are made (SQLite,
+    read row by row while the quant or the backtest held the interpreter, took seconds) - and they are the pages made
+    from the file's rows."""
+    import store_sql as q
+
+    sid = next(d.id for d in hsvc.history.snapshot()["defs"] if d.group == "ois" and d.label == "1M")
+
+    def pages():
+        hsvc._vol_cache = None                    # (Vol · Carry keeps its closes per revision of the history: read again)
+        return {"matrix": hsvc.history.matrix(), "past": hsvc.history.matrix("2026-10-23"), "mpc": hsvc.history.mpc(),
+                "closes": hsvc.history.closes(sid), "status": hsvc.history.status(),
+                "vol": hsvc.vol(None, "1y, 2y, 3m6m, 1y2y, 2y5y10y", 20)}
+
+    with monkeypatch.context() as m:
+        seen = q.spy(m, hsvc.store)
+        mine = pages()
+        assert seen.reads() == []
+    assert mine["mpc"]["meetings"] and mine["matrix"]["mpc"] and mine["closes"]["points"]
+    q.from_sql(monkeypatch, hsvc.store)
+    q.same(mine, pages())
+
+
 def test_history_settings(hsvc):
     h = hsvc.history
     assert h.settings() == {"dibs_field": "YLD_YTM_MID", "lookback_days": 370}
