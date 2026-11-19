@@ -44,6 +44,8 @@ Notes on the offshore curve:
   - the OIS mid of Borsa Swap;
   - Trades' OIS MTM;
   - Fiyatlama's OIS and FRA;
+  - Swaption: Fiyatlama's forward-start OIS on the viewer's setting, the other curve's forward beside it; its realized
+    vol from the history's closes, each past day on its own Motor bootstrap (Bootstrap);
   - RET's "OIS" base.
 - **Offshore TRY:**
   - MASA's broken-date block (FX forward, XCCY and O/N rows);
@@ -169,6 +171,7 @@ The setting is Ayarlar → "Eğri interpolasyonu", per user:
 - MASA's broken date (`_broken_ppk_columns`);
 - the blotter's PPK figures;
 - Fiyatlama;
+- Swaption (`tto/swaption.py`: the forward and annuity both ways, the option on the viewer's curve);
 - the interpolation chart (`tto/interpchart.py`).
 
 **A new curve-dependent feature** must decide which of the three groups above it belongs to, and test both modes.

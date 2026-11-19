@@ -320,6 +320,50 @@ whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, bo
 - Code: `tradevalue` (`carry_1d` = `carry_accrual` + `roll_1d`, `carry_parts`), `tradebook` (the P&L's `carry` /
   `price`).
 
+### Swaption page (19.11.2026)
+
+> "Önce bir swaption sekmesi yapmanı istiyorum. Try ois için hesaplayacağız. Vadeyi seçtiğimde günlük, yıllık bps vol ve
+> % black vol çıkacak. Ben buraya vol girdiğimde bana delta gamma vega hesaplayacak, veya rate opsiyonlarında ne
+> greek'i varsa, bu vole göre implied rate vade sonunda ne olacak onu gösterecek, breakeven rate'i hesaplayacak. Bu
+> sadece görmek için olacak henüz buradan herhangi bir işlem yapılmayacak"
+
+- **View only.** No booking, no trade buttons, nothing stored on the server; the page keeps its last inputs in the
+  browser (localStorage). Nothing is keyed by cell or row, so the PPK calendar's row moves do not reach it.
+- **The desk's two answers:**
+  - *The vol shown on picking expiry × tenor* is **realized, from our own closes**: the forward swap rate's daily bp
+    changes over 20 / 60 / 120 / 250 changes, as the Realized Vol · Carry page (sample standard deviation; annual =
+    daily × √252). No new Bloomberg request.
+  - *Dating* is **like Fiyatlama**: the underlying OIS starts <expiry> after today's OIS spot (`OIS_MAIN!B2`, T+1 on
+    the TRY list), the forward-start OIS Fiyatlama prices for that start and maturity, with its coupons
+    (`pricing.coupons`); the option expires on the TRY business day before the start.
+- **The integrator's defaults** (said on the page's notes and in README; the desk may change any of them):
+  1. Model: normal (Bachelier) on the forward swap rate F with the annuity A; payer = call on F, receiver = put,
+     straddle both. % Black = the lognormal vol giving the same payer premium (solved); a typed % Black vol becomes σN
+     the same way.
+  2. Vol time: T = TRY business days from the market day to the expiry / 252, so bp/year = bp/day × √252 exactly and
+     the daily bp vol is the daily breakeven move; the discounting stays in the annuity (the curve's ACT/365).
+  3. Default vol: realized over 60 changes; a vol typed in any unit (bp/day, bp/year, % Black) overrides it, and the
+     page shows all three units of the vol used.
+  4. Curve: the viewer's interpolation setting first, the other curve's forward beside it, as Fiyatlama; the realized
+     vol's history on Bootstrap, as every shared history calculation.
+  5. Strike ATM (K = F) unless one is typed (%); notional 100 mn TL unless typed (`100m`, `2,5mn`).
+  6. Outputs for payer, receiver and straddle, the buyer's view: premium (bp upfront A·p, bp running p, TL N·A·p),
+     delta (TL per bp, %), gamma (the delta's change for 1 bp), vega (1 bp of normal vol, 1 % of Black vol), theta (TL
+     a business day, same F, σN, A), the underlying's DV01 (N·A·1e-4).
+  7. The rate at expiry: F, F ± σN√T, F ± 2σN√T (normal). Breakevens at expiry: payer K + p, receiver K − p, straddle
+     K ± (p_payer + p_receiver), p the running premium.
+- **Conventions settled while building it** (the spec did not say; ask before changing):
+  - "Matures <tenor> after that start" is dated as Fiyatlama dates a forward start: both ends are tenors from the OIS
+    spot, so 1Y × 2Y is Fiyatlama's "TRY OIS 1Y × 3Y" on Motor's quarterly calendar - not `EDATE(start, tenor)`, which
+    can be a day off when the start rolls.
+  - Expiry and tenor are typed in months / years only (no weeks, no dates); expiry + tenor ≤ 10Y.
+  - A past day counts when every OIS tenor its forward needs closed that day (up to the quote at or beyond the Motor
+    node its maturity reads); past TRY holidays are the history's (Motor's list and week days without a TLREF fixing).
+  - The realized table's % Black is at today's F and the strike in use.
+- Code: `tto/swaption.py`, `Service.swaption` (`_swaption_market`, `_swaption_closes`, `_swaption_history`),
+  `GET /api/swaption`, `tto/static/js/pages/swaption.js`. Tests: `tests/test_swaption.py`, the browser test's
+  Swaption checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`
