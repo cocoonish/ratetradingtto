@@ -399,3 +399,87 @@ def test_a_session_is_looked_up_once_a_minute_and_a_sign_out_ends_it_at_once(cli
     assert len(looked) == 1
     assert client.post("/api/logout", headers=h).status_code == 200
     assert client.get("/api/status", headers=h).status_code == 401
+
+
+# ---------------------------------------------------------------------- gzip-compressed JSON answers (hiz-dizi)
+def _raw(client, url, encoding):
+    """The answer's bytes as they travel (not decoded) and its headers."""
+    with client.stream("GET", url, headers={"Accept-Encoding": encoding}) as res:
+        return res.status_code, res.headers, b"".join(res.iter_raw())
+
+
+def test_big_json_answers_go_gzipped_to_a_client_that_takes_gzip(client):
+    import gzip
+    import json
+    from tto.server import GZIP_MIN
+    for url in ("/api/nav", "/api/view/ois"):
+        code, head, plain = _raw(client, url, "identity")
+        assert code == 200 and "content-encoding" not in head and len(plain) >= GZIP_MIN
+        assert "accept-encoding" in head["vary"].lower()
+        code, head, packed = _raw(client, url, "gzip, deflate, br")
+        assert code == 200 and head["content-encoding"] == "gzip" and "accept-encoding" in head["vary"].lower()
+        assert int(head["content-length"]) == len(packed) < len(plain) // 3
+        if url == "/api/nav":                                           # (the same answer twice: the very same bytes)
+            assert gzip.decompress(packed) == plain
+        moving = ("gen", "ms")                                          # (a page made again in between: its generation)
+        a, b = json.loads(gzip.decompress(packed)), json.loads(plain)
+        assert {k: v for k, v in a.items() if k not in moving} == {k: v for k, v in b.items() if k not in moving}
+        c = client.get(url).json()                                      # (a client decodes it by itself)
+        assert {k: v for k, v in c.items() if k not in moving} == {k: v for k, v in b.items() if k not in moving}
+
+
+def test_small_answers_and_clients_without_gzip_get_plain_json(client):
+    from tto.server import GZIP_MIN
+    code, head, body = _raw(client, "/api/progress", "gzip")
+    assert code == 200 and "content-encoding" not in head and len(body) < GZIP_MIN    # below the threshold
+    for encoding in ("identity", "deflate, br", "gzip;q=0", "GZIP; Q=0.0, identity", ""):
+        code, head, body = _raw(client, "/api/nav", encoding)
+        assert code == 200 and "content-encoding" not in head and body.startswith(b"{"), encoding
+    code, head, body = _raw(client, "/api/nav", "br;q=1.0, GZIP;q=0.5")
+    assert head["content-encoding"] == "gzip"
+    code, head, body = _raw(client, "/api/view/yok-boyle-sayfa", "gzip")                 # an error answer is JSON too
+    assert code == 404 and "content-encoding" not in head and b"error" in body
+
+
+def test_accept_encoding_is_read_with_its_q_values():
+    from tto.server import accepts_gzip
+    yes = ("gzip", "gzip, deflate", "deflate, gzip;q=0.5", "x-gzip", " GZip ;q=1", "br, gzip;q=0.001")
+    no = (None, "", "identity", "deflate, br", "gzip;q=0", "gzip; q=0.000", "gzip;q=abc", "*", "gzipx")
+    assert all(accepts_gzip(h) for h in yes) and not any(accepts_gzip(h) for h in no)
+
+
+def test_the_live_stream_is_never_compressed(client, module_service, monkeypatch):
+    """/api/events (server-sent events) is sent as it is, even to a client that takes gzip: a compressed stream would
+    hold its messages back.  (The stream is made to end after its second message here.)"""
+    from starlette.requests import Request
+
+    async def gone(self):
+        return True
+
+    real = module_service.add_listener
+
+    def add_listener(fn):
+        real(fn)
+        fn(module_service.gen)                                          # a generation at once, then the client is gone
+
+    monkeypatch.setattr(Request, "is_disconnected", gone)
+    monkeypatch.setattr(module_service, "add_listener", add_listener)
+    code, head, body = _raw(client, "/api/events", "gzip, deflate, br")
+    assert code == 200 and head["content-type"].startswith("text/event-stream")
+    assert "content-encoding" not in head and body.startswith(b"data: ") and body.count(b"data: ") == 2
+
+
+def test_compression_leaves_anything_but_json_answers_alone():
+    import asyncio
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse, Response, StreamingResponse
+    from tto.server import compress_json
+    req = Request({"type": "http", "method": "GET", "path": "/", "headers": [(b"accept-encoding", b"gzip")]})
+
+    async def gen():
+        yield "data: x\n\n"
+
+    for resp in (StreamingResponse(gen(), media_type="text/event-stream"), PlainTextResponse("x" * 5000),
+                 Response(b"x" * 5000, media_type="application/json")):       # (a download that is JSON)
+        out = asyncio.run(compress_json(req, resp))
+        assert out is resp and "content-encoding" not in out.headers and "vary" not in out.headers

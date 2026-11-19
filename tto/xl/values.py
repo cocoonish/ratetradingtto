@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
+import operator as _op
 import re
 from typing import Any, Callable, List, Optional
 
@@ -280,8 +281,21 @@ def as_rows(v: Any) -> List[List[Any]]:
 
 
 def broadcast2(fn: Callable[[Any, Any], Any], a: Any, b: Any) -> Any:
-    """Apply a scalar binary operator element-wise with Excel's array broadcasting rules."""
+    """Apply a scalar binary operator element-wise with Excel's array broadcasting rules.
+
+    Shapes that line up - the same shape, or a single row, column or value against the other - take the fast path
+    (:func:`_broadcast_fast`); anything else (a smaller array padded with ``#N/A``, an empty one) the general path
+    :func:`_broadcast_rows`.  Both give the same values, bit for bit.
+    """
     ra, rb = as_rows(a), as_rows(b)
+    out = _broadcast_fast(fn, ra, rb)
+    if out is not None:
+        return XlArray(out)
+    return _broadcast_rows(fn, ra, rb)
+
+
+def _broadcast_rows(fn: Callable[[Any, Any], Any], ra: List[List[Any]], rb: List[List[Any]]) -> Any:
+    """The general path of :func:`broadcast2` (every shape): ``fn`` called on each pair of elements."""
     na, ma = len(ra), (len(ra[0]) if ra else 0)
     nb, mb = len(rb), (len(rb[0]) if rb else 0)
     nr = na if na > nb else nb
@@ -322,6 +336,47 @@ def broadcast2(fn: Callable[[Any, Any], Any], a: Any, b: Any) -> Any:
             row.append(fn(x, y))
         out.append(row)
     return XlArray(out)
+
+
+def _broadcast_fast(fn: Callable[[Any, Any], Any], ra: List[List[Any]],
+                    rb: List[List[Any]]) -> Optional[List[List[Any]]]:
+    """The rows of :func:`broadcast2` when the shapes line up (in each direction the same size, or 1 on one side), or
+    ``None`` (the general path).  A whole column, or each row, goes through one call of the operator's kernel
+    (:data:`_KERNELS`), which reads the elements the general path reads, in the same order."""
+    na, nb = len(ra), len(rb)
+    if not na or not nb:
+        return None
+    ma, mb = len(ra[0]), len(rb[0])
+    if not ma or not mb:
+        return None
+    nr = na if na > nb else nb
+    nc = ma if ma > mb else mb
+    if (na != nr and na != 1) or (nb != nr and nb != 1) or (ma != nc and ma != 1) or (mb != nc and mb != 1):
+        return None
+    kern = _KERNELS.get(fn, _k_call)
+    if nc == 1:
+        # columns (and single values): one kernel call for the whole column
+        xs = [r[0] for r in ra] if na == nr else [ra[0][0]] * nr
+        ys = [r[0] for r in rb] if nb == nr else [rb[0][0]] * nr
+        return [[v] for v in kern(fn, xs, ys)]
+    out = []
+    for i in range(nr):
+        rowa = ra[0] if na == 1 else ra[i]
+        rowb = rb[0] if nb == 1 else rb[i]
+        if ma == nc:
+            if len(rowa) != nc:
+                return None                       # a ragged row: the general path's way (an IndexError)
+            xs = rowa
+        else:
+            xs = [rowa[0]] * nc
+        if mb == nc:
+            if len(rowb) != nc:
+                return None
+            ys = rowb
+        else:
+            ys = [rowb[0]] * nc
+        out.append(kern(fn, xs, ys))
+    return out
 
 
 def map1(fn: Callable[[Any], Any], a: Any) -> Any:
@@ -651,6 +706,107 @@ def _ge(a, b):
     if type(c) is XlError:
         return c
     return c >= 0
+
+
+# --------------------------------------------------------------------------- fast element-wise kernels
+# ``kernel(fn, xs, ys)`` (two lists of the same length) -> ``[fn(x, y) for x, y in zip(xs, ys)]``, value for value and
+# bit for bit, with the common cases worked out without calling ``fn``:
+# * arithmetic: numbers, blanks and logicals (blank -> 0, TRUE -> 1, FALSE -> 0, as to_num makes them) - the same IEEE
+#   operation ``fn`` ends in; any other value (text, an error ...) goes to ``fn``, which coerces a number it is handed
+#   to itself again;
+# * comparisons: two numbers (compare's num_eq, then <); anything else goes to ``fn``.
+_ONLY_FLOAT = {_float}
+_NUMERIC = {_float, bool}
+
+
+def _k_call(fn, xs, ys):
+    return [fn(x, y) for x, y in zip(xs, ys)]
+
+
+def _as_numbers(xs: List[Any]) -> Optional[List[Any]]:
+    """``xs`` as numbers when it holds numbers and logicals only (TRUE -> 1.0, FALSE -> 0.0), else ``None``."""
+    kinds = set(map(type, xs))
+    if kinds == _ONLY_FLOAT:
+        return xs
+    if kinds <= _NUMERIC:
+        return list(map(_float, xs))
+    return None
+
+
+def _arith_kernel(op, div: bool = False):
+    """The kernel of ``+ - * /`` (``op``: operator.add / sub / mul / truediv; ``div``: x / 0 is #DIV/0!)."""
+
+    def kernel(fn, xs, ys):
+        fx = _as_numbers(xs)
+        fy = None if fx is None else _as_numbers(ys)
+        if fy is not None and not (div and 0.0 in fy):
+            return list(map(op, fx, fy))                  # (C loops: numbers and logicals only)
+        F = _float
+        out = []
+        add = out.append
+        for x, y in zip(xs, ys):
+            if type(x) is not F:
+                if x is None:
+                    x = 0.0
+                elif type(x) is bool:
+                    x = 1.0 if x else 0.0
+                else:
+                    add(fn(x, y))
+                    continue
+            if type(y) is not F:
+                if y is None:
+                    y = 0.0
+                elif type(y) is bool:
+                    y = 1.0 if y else 0.0
+                else:
+                    add(fn(x, y))
+                    continue
+            add(E_DIV0 if div and y == 0.0 else op(x, y))
+        return out
+
+    return kernel
+
+
+# compare(x, y) of two numbers is 0 when num_eq(x, y), else -1 when x < y, else 1 (a NaN included)
+def _k_eq(fn, xs, ys):
+    F = _float
+    eq = num_eq
+    return [eq(x, y) if type(x) is F and type(y) is F else fn(x, y) for x, y in zip(xs, ys)]
+
+
+def _k_ne(fn, xs, ys):
+    F = _float
+    eq = num_eq
+    return [(not eq(x, y)) if type(x) is F and type(y) is F else fn(x, y) for x, y in zip(xs, ys)]
+
+
+def _k_lt(fn, xs, ys):
+    F = _float
+    eq = num_eq
+    return [(x < y and not eq(x, y)) if type(x) is F and type(y) is F else fn(x, y) for x, y in zip(xs, ys)]
+
+
+def _k_gt(fn, xs, ys):
+    F = _float
+    eq = num_eq
+    return [(not (x < y or eq(x, y))) if type(x) is F and type(y) is F else fn(x, y) for x, y in zip(xs, ys)]
+
+
+def _k_le(fn, xs, ys):
+    F = _float
+    eq = num_eq
+    return [(x < y or eq(x, y)) if type(x) is F and type(y) is F else fn(x, y) for x, y in zip(xs, ys)]
+
+
+def _k_ge(fn, xs, ys):
+    F = _float
+    eq = num_eq
+    return [(not x < y or eq(x, y)) if type(x) is F and type(y) is F else fn(x, y) for x, y in zip(xs, ys)]
+
+
+_KERNELS = {_add: _arith_kernel(_op.add), _sub: _arith_kernel(_op.sub), _mul: _arith_kernel(_op.mul),
+            _div: _arith_kernel(_op.truediv, div=True),
+            _eq: _k_eq, _ne: _k_ne, _lt: _k_lt, _gt: _k_gt, _le: _k_le, _ge: _k_ge}
 
 
 def EQ(a, b):

@@ -61,6 +61,18 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
    - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel;
    - the quant pages.
 
+**JSON answers are gzip-compressed** for a client that takes gzip:
+- **Where:** `handler` (`tto/server.py`) passes every answer through `compress_json`. Only a `JSONResponse` is touched:
+  gzip at zlib level 6 from `GZIP_MIN` (1 KB) up, in a worker thread from `GZIP_THREAD_MIN` (128 KB) up, and
+  `Vary: Accept-Encoding` on every JSON answer.
+- **When:** `Accept-Encoding` names gzip (or x-gzip) without `q=0` (`accepts_gzip`).
+- **Never:** the live stream `/api/events` (a `StreamingResponse`, not wrapped by `handler`), static files, downloads
+  and images go as they are.
+- **Why not Starlette's `GZipMiddleware`:** the three vendored sets differ. 0.44.0 (py38) compresses the event stream
+  too (it would hold the live messages back); 0.49.3 excludes only `text/event-stream`; 1.7.0 excludes a list of types
+  and compresses in threads. All three use level 9 and read any "gzip" in the header, `q=0` included.
+- **Sizes** (desk copy of 17.11, 19.11): OIS 775 KB → 115 KB, Sinyaller 1.08 MB → 139 KB, Trend 787 KB → 107 KB.
+
 **A typed input** goes `POST /api/inputs` → `Service.set_inputs` → `_set_inputs` on the engine thread at WRITE
 priority:
 - **Parsing:** `inputs.parse_input`; date shortcuts go through `shortcuts.date_shortcut`.
@@ -92,6 +104,25 @@ priority:
   - **Derived inputs** (values worked out for a user, such as the PPK mirror) live in `engine.derived` and join only
     through `engine.set_user_inputs`. A `Calc(engine, shared, overlay)` built by hand does not see them (see
     [curves.md](curves.md#asw-fx-the-asw-sheet-repriced-on-offshore-rates)).
+- **Array arithmetic has fast paths** (`tto/xl/values.py`, `tto/xl/functions.py`). Each keeps its general path, the
+  code it had before, for everything else:
+
+  | What | Fast path | General path |
+  |---|---|---|
+  | element-wise operators in array mode (`broadcast2`: `(A>=x)*(A<y)*B`, SUMPRODUCT's arguments) | `_broadcast_fast`, when the shapes line up: one kernel per operator (`_KERNELS`) per column or row. Numbers, blanks and logicals are worked inline (C loops when there are no blanks); text, errors and other values go to the scalar operator. | `_broadcast_rows` (any shape, `#N/A` padding) |
+  | SUMPRODUCT | `_sumproduct_numbers`: one array, or columns / rows, of numbers only | `_sumproduct_general` |
+  | COUNTIF | a number (or blank) criterion, counted inline | `_countif_general` (`make_criteria`) |
+  | MMULT | `_number_block`: rectangles of numbers only | `_mmult_general` |
+
+  - **Results are identical to the bit.** Every element gets the same IEEE operation, and sums keep their
+    left-to-right order (`functools.reduce` over `operator.add`; never `sum()`, which compensates since Python 3.12).
+  - **How this was checked:** after a cold sweep of every page on the desk copy of 17.11, all 234 311 values the
+    shared calculations held were equal to f3434d1's, bit for bit (19.11). `tests/test_xl_fastpaths.py` compares each
+    fast path with its general path.
+  - **What it saved** (cold, replay, desk copy, medians of 4 on a loaded machine, 19.11): DV01 2.11 → 0.87 s, Günlük
+    İşlemler 1.46 → 0.52 s, the header strip 1.98 → 1.43 s (most of the rest of the strip is compiling formulas). Per
+    call on the workbook's own ranges, the four functions and the operators ran 1.5-4.7x faster.
+  - TRANSPOSE has no fast path: its own time was negligible; its cost was its argument's array arithmetic.
 - **One engine thread** (`EngineThread`) runs all engine work.
   - It is a priority queue: WRITE 0, HEADER 1, VIEW 2, BACKGROUND 3.
   - `s.et.call(fn)` runs inline if already on it, otherwise it blocks.
