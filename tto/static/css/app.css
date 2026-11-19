@@ -1538,3 +1538,25 @@ table.plain.bugun tr.near-target td:first-child { box-shadow: inset 3px 0 0 var(
 .pricing .pr-notes { padding: 4px 14px 10px; color: var(--ink-2); font-size: 12px; line-height: 1.5; max-height: none; }
 .pricing .pr-notes p { margin: 6px 0; }
 .pricing .pr-notes .pr-warn { color: var(--warn); font-weight: 600; }
+/* Swaption (swaption.js): the form over the numbers - tiles, payer / receiver / straddle, the rate at expiry, the realized vols */
+.swaption .swpt-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; padding: 12px; }
+.swaption .swpt-pair { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.swaption .swpt-pair .inp { width: 92px; }
+.swaption #swpt-strike, .swaption #swpt-notional { width: 110px; text-align: right; }
+.swaption .swpt-vols { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.swaption .swpt-vol { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--ink-2); }
+.swaption .swpt-vol .inp { width: 84px; text-align: right; }
+.swaption .seg button.swpt-far { opacity: .45; }
+.swaption .swpt-error { padding: 0 12px 10px; }
+.swaption .swpt-error:empty { display: none; }
+.swaption .swpt-head { margin-bottom: 10px; font-size: 13px; }
+.swaption #swpt-result.stale { opacity: .45; transition: opacity .12s; }
+.swaption #swpt-options-panel { flex: 1 1 520px; }
+.swaption #swpt-range-panel { flex: 0 1 260px; }
+.swaption #swpt-realized-panel, .swaption #swpt-schedule-panel { flex: 1 1 560px; }
+.swaption table.plain tr.soft td { color: var(--ink-3); }
+.swaption table.plain tr.swpt-used td { font-weight: 650; background: var(--accent-soft); }
+.swaption .swpt-notes { padding: 4px 14px 10px; color: var(--ink-2); font-size: 12px; line-height: 1.5; max-height: none; }
+.swaption .swpt-notes p { margin: 6px 0; }
+.swaption .swpt-notes .swpt-view { color: var(--ink); font-weight: 600; }
+.swaption .swpt-notes .swpt-warn { color: var(--warn); font-weight: 600; }
