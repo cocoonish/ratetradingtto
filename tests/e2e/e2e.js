@@ -5337,6 +5337,89 @@ async function clipAfter(page, action) {
       quantView.rows === 1 && /^Trend1 \(0 \/ 1\)10/.test(quantView.fam), quantView);
     await shot(page, 'trades');
 
+    // ------------------------------------------------------------------ Prop: the top bar's calculator and prop risk
+    console.log('prop');
+    const propOn = {};
+    for (const id of ['masa', 'ois']) {
+      await open(page, id);
+      propOn[id] = await page.evaluate(() => { const b = document.getElementById('prop-btn'); return !!b && b.offsetParent !== null && b.textContent === 'Prop'; });
+    }
+    check('Prop: the "Prop" button is in the top bar on every page (Masa, OIS · PPK)', propOn.masa && propOn.ois, propOn);
+    // the desk's worked example: USDTRY, entry 44,35, stop 44,55, a loss of 500k TL -> SHORT, 2M USD, a real loss of 400.000 TL
+    await page.click('#prop-btn');
+    await page.waitForSelector('#prop-panel:not(.hidden)');
+    await page.waitForFunction(() => document.querySelectorAll('#prop-pairs option').length > 0, null, { timeout: 20000 });
+    await page.fill('#prop-pair', 'usdtry');
+    await page.fill('#prop-entry', '44,35');
+    await page.fill('#prop-stop', '44,55');
+    await page.fill('#prop-loss', '500k');
+    await page.waitForFunction(() => /2M USD/.test((document.getElementById('prop-size') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => null);
+    const propCalc = await page.evaluate(() => ({ dir: (document.getElementById('prop-dir') || {}).textContent || '',
+      size: (document.getElementById('prop-size') || {}).textContent || '', real: (document.getElementById('prop-real') || {}).textContent || '',
+      per: (document.getElementById('prop-per1m') || {}).textContent || '', mid: document.getElementById('prop-mid').textContent,
+      pairs: [...document.querySelectorAll('#prop-pairs option')].map((o) => o.value) }));
+    check('... USDTRY 44,35 → stop 44,55, 500k TL: SHORT, 2M USD (2,50M rounded down), a real loss of 400.000 TRY, 200.000 TRY a million; the live mid beside the entry',
+      /^SHORT · SAT/.test(propCalc.dir) && /mesafe 0,2000/.test(propCalc.dir) && /Büyüklük 2M USD \(ham 2,50M/.test(propCalc.size)
+      && /Gerçek kayıp 400\.000 TRY/.test(propCalc.real) && /1M başına 200\.000 TRY/.test(propCalc.per) && /^canlı \d/.test(propCalc.mid)
+      && propCalc.pairs[0] === 'USDTRY', propCalc);
+    // a stop on the entry: the reason, under the inputs
+    await page.fill('#prop-stop', '44,35');
+    await page.waitForFunction(() => /stop girişe eşit olamaz/.test(document.getElementById('prop-err').textContent), null, { timeout: 20000 }).catch(() => null);
+    const propErr = await page.textContent('#prop-err');
+    check('... a stop on the entry is refused with the reason (the direction comes from the stop)', /stop girişe eşit olamaz/.test(propErr), propErr);
+    await page.fill('#prop-stop', '44,55');
+    await page.waitForFunction(() => /2M USD/.test((document.getElementById('prop-size') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => null);
+    // the risk of one's own tab: today's K/Z from "MTM yenile", a limit, the room left = limit − today's loss − the stops.
+    // (The tab's two trades are dated the replay's day and were entered after today's close, if one was taken: their
+    // "Günlük" is unknown, as the Trades page shows it - a USDTRY short dealt today has its own, from its inception.)
+    const propShort = await api(page, 'ayşe yilmaz', 'POST', '/api/trades', { scope: 'personal', product: 'fxspot', pair: 'USDTRY',
+      trade_date: tradesToday, settle_date: '+1', side: 'S', notional: '2m', price: '50,00', stop: '50,60' });
+    await page.click('#prop-scope button[data-v="personal"]');
+    await page.waitForSelector('#prop-mtm', { timeout: 20000 });
+    await page.click('#prop-mtm');
+    await page.waitForFunction(() => /son MTM yenilemesi \d\d:\d\d/.test(document.getElementById('prop-pnl-note').textContent), null, { timeout: 30000 }).catch(() => null);
+    const noLimitLine = await page.textContent('#prop-line');
+    await page.fill('#prop-limit', '50mn');
+    await page.selectOption('#prop-limit-ccy', 'TRY');
+    await page.click('#prop-limit-save');
+    // (no limit: no "Kalan" - it comes with the limit saved)
+    await page.waitForFunction(() => /^-?[\d.]+ TRY$/.test(((document.querySelector('#prop-room-v .v') || {}).textContent || '').trim()), null, { timeout: 20000 }).catch(() => null);
+    const propRisk = (await api(page, 'ayşe yilmaz', 'GET', '/api/prop/risk?scope=personal')).json || {};
+    const propShown = await page.evaluate(() => ({ line: document.getElementById('prop-line').textContent,
+      room: ((document.querySelector('#prop-room-v .v') || {}).textContent || '').trim(), share: (document.getElementById('prop-share') || {}).textContent || '',
+      stops: [...document.querySelectorAll('#prop-stops tr[data-state]')].map((tr) => tr.dataset.state + ' ' + tr.cells[0].textContent) }));
+    const roomTry = propRisk.room ? propRisk.room.try : null;
+    const expectRoom = propRisk.limit && propRisk.pnl && typeof propRisk.pnl.try === 'number'
+      ? 50e6 - Math.max(0, -propRisk.pnl.try) - propRisk.stops.try : null;
+    const pageDay = ((((await api(page, 'ayşe yilmaz', 'GET', '/api/trades?scope=personal')).json || {}).mtm || {}).totals || {}).all || {};
+    const pageMissing = (pageDay.missing || {})['day.pnl.try'] || 0;
+    check('... no limit: "Bugün K/Z · Stoplar" alone; a limit of 50mn TRY: "Limit · Bugün K/Z · Stoplar · Kalan", the room = limit − today\'s loss − the loss '
+      + 'at the stops (the 2Y OIS\'s stop 37,85 and the short\'s 50,60); the K/Z is the Trades page\'s "Günlük" (its unknown ones said: *); the calculator '
+      + 'says the share of the room the trade would use',
+      propShort.status === 200 && /^Bugün K\/Z.*Stoplar/.test(noLimitLine) && !/Limit|Kalan/.test(noLimitLine) && /Limit50\.000\.000 TRY/.test(propShown.line) && /Bugün K\/Z[+-]?[\d.]+ TRY/.test(propShown.line)
+      && /Stoplar[\d.]+ TRY/.test(propShown.line) && propRisk.pnl.try === pageDay['day.pnl.try'] && propRisk.pnl.missing === pageMissing
+      && /TRY \*/.test(propShown.line) === pageMissing > 0 && propRisk.stops.count === 2
+      && typeof roomTry === 'number' && Math.abs(roomTry - expectRoom) < 1 && Math.abs(trNumber(propShown.room.replace(' TRY', '')) - roomTry) <= 1
+      && propShown.stops.some((s) => /^open RECEIVE 2Y TRY OIS 360m/.test(s)) && propShown.stops.some((s) => /^open SATIŞ USDTRY 2m/.test(s))
+      && /kalan/.test(propShown.share), { propShort: propShort.status, noLimitLine, propShown, room: roomTry, expectRoom, pnl: propRisk.pnl,
+        stops: propRisk.stops, pageDay: pageDay['day.pnl.try'], pageMissing });
+    // Masa: the desk's tab, remembered by this browser; the limit is one's own - another user has none
+    await page.click('#prop-scope button[data-v="desk"]');
+    await page.waitForFunction(() => /Masa sekmesi|Masa sekmesinde/.test(document.getElementById('prop-panel').textContent), null, { timeout: 20000 }).catch(() => null);
+    await page.keyboard.press('Escape');
+    const propClosed = await page.evaluate(() => document.getElementById('prop-panel').classList.contains('hidden'));
+    await page.click('#prop-btn');
+    await page.waitForSelector('#prop-panel:not(.hidden)');
+    const keptScope = await page.evaluate(() => ({ on: (document.querySelector('#prop-scope button.on') || {}).dataset, stored: localStorage.getItem('tto.prop.scope'),
+      stop: document.getElementById('prop-stop').value }));
+    const otherLimit = (await api(page, 'mehmet', 'GET', '/api/prop/limit')).json;
+    check('... Esc closes it; it opens again on Masa (this browser remembers the tab) with what was typed; Mehmet has no limit (Ayşe\'s is her own)',
+      propClosed && keptScope.on && keptScope.on.v === 'desk' && keptScope.stored === 'desk' && keptScope.stop === '44,55'
+      && otherLimit && otherLimit.limit === null, { propClosed, keptScope, otherLimit });
+    await page.click('#prop-scope button[data-v="personal"]');
+    await page.keyboard.press('Escape');
+    await shot(page, 'prop');
+
     // ------------------------------------------------------------------ each user's own menu
     console.log('own menu');
     await page.click('#btn-user');
