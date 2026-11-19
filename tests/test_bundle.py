@@ -326,3 +326,50 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
     # the next version over a folder in use: the program is replaced, the data stay
     code, out = run(copy, "--no-run", cwd=str(tmp_path))
     assert code == 0 and "0 dosya yazıldı" in out and "data klasörüne" in out
+
+
+def test_run_bat_is_plain_and_names_nobody_s_folder():
+    """``run.bat`` as cmd reads it: ASCII (the console's code page), CRLF line ends, and no user's folder written in it -
+    Anaconda's place is found from ``%USERPROFILE%`` and the usual folders (``TTO_CONDA`` for another)."""
+    data = read(os.path.join(ROOT, "run.bat"))
+    data.decode("ascii")
+    assert b"\r\n" in data and data.count(b"\n") == data.count(b"\r\n") and b"\x07" not in data
+    text = data.decode("ascii")
+    assert "C:\\Users" not in text and "%USERPROFILE%\\Anaconda3" in text and "TTO_CONDA" in text
+    assert text.index("activate.bat") < text.index("python -c")          # (Anaconda opened before Python is looked for)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="run.bat is the Windows starter")
+def test_run_bat_opens_anaconda_first_as_anaconda_prompt_does(tmp_path):
+    """The desk's machine has no command window and Python only through Anaconda Prompt (19.11.2026: "Normal cmd'ye
+    erişim olmadığı için anaconda prompt ile runlıyorum, bat'ı da bunun gibi değiştirelim" - their other starters call
+    Anaconda's ``Scripts\\activate.bat`` with its folder, then ``python``).  On a PATH with no Python: a fake Anaconda
+    whose ``activate.bat`` puts one on it - named by ``TTO_CONDA``, or in ``%USERPROFILE%\\Anaconda3`` - and run.bat
+    starts the dashboard with it ("python -m tto" and what it was given, from its own folder); none: it says so and
+    stops."""
+    pydir = os.path.dirname(sys.executable)
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")     # (cmd, never a Python - nor py)
+
+    def fake_conda(root):
+        write(os.path.join(root, "Scripts", "activate.bat"),
+              '@echo off\r\necho ACT %%~1\r\nset "PATH=%s;%%PATH%%"\r\n' % pydir)
+
+    def start(**env):
+        base = {k: v for k, v in os.environ.items() if k.upper() not in ("PATH", "TTO_CONDA", "USERPROFILE", "LOCALAPPDATA",
+                                                                        "PROGRAMDATA", "PYTHONPATH", "CONDA_PREFIX")}
+        base.update(PATH=system, USERPROFILE=str(tmp_path / "home"), LOCALAPPDATA=str(tmp_path / "local"),
+                    ProgramData=str(tmp_path / "all"), PYTHONIOENCODING="utf-8")
+        base.update(env)
+        res = subprocess.run(["cmd", "/c", os.path.join(ROOT, "run.bat"), "--help"], cwd=str(tmp_path), env=base,
+                             stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+        return res.returncode, (res.stdout + res.stderr).decode("utf-8", "replace")
+
+    code, out = start()
+    assert code == 1 and "Python bulunamadi" in out and "TTO_CONDA" in out
+    fake_conda(str(tmp_path / "elsewhere"))
+    code, out = start(TTO_CONDA=str(tmp_path / "elsewhere"))
+    assert "Anaconda: %s" % (tmp_path / "elsewhere") in out and "ACT %s" % (tmp_path / "elsewhere") in out, out
+    assert "TTO masa dashboard" in out and "--port" in out, out                          # (python -m tto --help, from the repo)
+    fake_conda(str(tmp_path / "home" / "Anaconda3"))
+    code, out = start()
+    assert "ACT %s" % (tmp_path / "home" / "Anaconda3") in out and "TTO masa dashboard" in out, out

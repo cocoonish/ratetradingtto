@@ -27,6 +27,15 @@ passing, to the next business day - ``carry_days`` calendar days, 3 over a weeke
 counted to the next close, and the last close's pro rata to now (before its first close a trade earns at its first
 known carry); the **price effect** is the rest.  Spreads, flies and FRAs are worked out leg by leg too (a FRA's legs
 are the attribution of its single value: what they leave over is shown).
+
+**The funding** (FX spot and DİBS - the desk, 19.11.2026: their K/Z is the price move + the carry): the part of the
+carry their value does not hold - an FX spot position's roll at the two currencies' overnight rates, a bond's dirty
+price funded at TLREF (``funding_1d``, tto/tradevalue.py) - is cash paid or earned beside it, so a period's P&L adds it,
+counted from the closes as the carry is (:func:`funding_between`): P&L = value change + funding, its carry part the
+carry, its price effect the price move alone.  Since inception it is the "Fonlama" of the list: MTM + coupons +
+funding = the total P&L.  A close kept before funding was: an FX spot's whole carry is its funding; a bond's days take
+the first funding known after them (none known: none - a bond closed before 19.11.2026 keeps its P&L).  A closed
+trade's realised P&L is kept under :data:`REALIZED_RULE`: one kept under an earlier rule is worked out again.
 """
 from __future__ import annotations
 
@@ -93,6 +102,12 @@ LEVELS_EVERY = 10.0
 ALARM_NOTE = {"target": "hedefe geldi", "stop": "stopa geldi"}
 SOURCE_MAX = 120
 KEYS = ("ccy", "try", "usd")
+#: the products whose P&L adds the funding their value does not hold (the desk, 19.11.2026: spot and DİBS K/Z = the
+#: price move + the carry) - the others' value holds all of their carry
+FUNDED = ("fxspot", "dibs")
+#: the rule a closed trade's kept realised P&L was worked out under (``closing["realized"]["rule"]``): 2 - the funding
+#: counted (19.11.2026); one kept under an earlier rule (none) is worked out again
+REALIZED_RULE = 2
 #: **The one switch of Trades and the curve setting** (Ayarlar → Eğri interpolasyonu, tto/interp.py): True - the desk's
 #: decision of 18.11.2026, "Trades MTM de anahtara bağlansın" - each user sees the trades valued on their own curve
 #: setting (MTM, carry, coupons and "Kuponlar", P&L): Bootstrap (Murex) or PPK basamak.  False: everybody's on Bootstrap
@@ -431,11 +446,12 @@ def carry_days(v: Optional[Dict[str, Any]]) -> float:
 
 
 def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False, days: Optional[float] = None,
-             acc: Optional[float] = None) -> Optional[Dict[str, Any]]:
+             acc: Optional[float] = None, product: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """A valuation (or a leg of one) as a point of the P&L: its time, its value (``mtm`` + ``accrued``: the swap still to
-    run and the coupons it has realised) and its carry per calendar day (``carry_1d`` over the days it covers: ``days``,
-    else its own) in its currency, TL and USD - ``None`` when it has no value.  ``acc``: a leg's realised coupons when its
-    valuation does not carry them (a close kept before legs did)."""
+    run and the coupons it has realised), its carry per calendar day (``carry_1d`` over the days it covers: ``days``,
+    else its own) and its funding the same way (``f``: ``funding_1d`` - a :data:`FUNDED` product's; ``None`` where a bond's
+    close was kept before funding was; 0 for the others) in its currency, TL and USD - ``None`` when it has no value.
+    ``acc``: a leg's realised coupons when its valuation does not carry them (a close kept before legs did)."""
     if not v or (not leg and not v.get("ok")):
         return None
     mtm = _f(v.get("mtm"))
@@ -458,11 +474,20 @@ def point_of(v: Optional[Dict[str, Any]], t: _dt.datetime, leg: bool = False, da
     def daily(x: Optional[float]) -> Optional[float]:
         return x / per if x is not None else None
 
+    def funding(suffix: str) -> Optional[float]:
+        if product not in FUNDED or leg:
+            return 0.0                                      # (its value holds all of its carry)
+        x = _f(v.get("funding_1d" + suffix))
+        if x is None and product == "fxspot":
+            x = _f(v.get("carry_1d" + suffix))              # (a close kept before funding was: an FX spot's carry is all roll)
+        return daily(x)
+
     own = "accrued" in v
     return {"t": t, "V": {"ccy": mtm + acc,
                           "try": plus(_f(v.get("mtm_try")), fx_try, _f(v.get("accrued_try")) if own else None),
                           "usd": plus(_f(v.get("mtm_usd")), fx_usd, _f(v.get("accrued_usd")) if own else None)},
-            "c": {"ccy": daily(_f(v.get("carry_1d"))), "try": daily(_f(v.get("carry_1d_try"))), "usd": daily(_f(v.get("carry_1d_usd")))}}
+            "c": {"ccy": daily(_f(v.get("carry_1d"))), "try": daily(_f(v.get("carry_1d_try"))), "usd": daily(_f(v.get("carry_1d_usd")))},
+            "f": {"ccy": funding(""), "try": funding("_try"), "usd": funding("_usd")}}
 
 
 def realised_by(leg: Optional[Dict[str, Any]], day: str) -> Optional[float]:
@@ -488,6 +513,15 @@ def on_curve(v: Optional[Dict[str, Any]], curve: str) -> Tuple[Optional[Dict[str
         if k in v and k not in out:
             out[k] = v[k]
     return out, True
+
+
+def kept_realized(trade: Dict[str, Any], closing: Optional[Dict[str, Any]]) -> bool:
+    """Whether a closed trade's close value (on a curve) keeps its realised P&L under today's rule: a product that adds
+    funding (:data:`FUNDED`) needs one worked out under :data:`REALIZED_RULE` - kept before, it is worked out again."""
+    real = (closing or {}).get("realized")
+    if not isinstance(real, dict):
+        return False
+    return trade.get("product") not in FUNDED or real.get("rule") == REALIZED_RULE
 
 
 def inception_point(t: _dt.datetime) -> Dict[str, Any]:
@@ -517,6 +551,32 @@ def carry_between(points: Sequence[Dict[str, Any]], a: _dt.datetime, b: _dt.date
     return total
 
 
+def funding_between(points: Sequence[Dict[str, Any]], a: _dt.datetime, b: _dt.datetime, key: str) -> Optional[float]:
+    """The funding paid or earned from ``a`` to ``b`` beside the value (an FX spot position's roll, a bond's funding at
+    TLREF): as :func:`carry_between`, each point's per calendar day (``f``) - a point without one (a bond's close kept
+    before funding was) at the first one after it that has one; none known: none (the trade's P&L as it was before)."""
+    if b <= a:
+        return 0.0
+    pts = sorted(points, key=lambda p: p["t"])
+    if not pts:
+        return None
+    rates: List[Optional[float]] = [(p.get("f") or {}).get(key) for p in pts]
+    later: Optional[float] = None
+    for i in range(len(rates) - 1, -1, -1):
+        if rates[i] is None:
+            rates[i] = later
+        else:
+            later = rates[i]
+    total = 0.0
+    for i, p in enumerate(pts):
+        lo = a if i == 0 else max(a, p["t"])
+        hi = b if i == len(pts) - 1 else min(b, pts[i + 1]["t"])
+        if hi <= lo:
+            continue
+        total += (rates[i] or 0.0) * (hi - lo).total_seconds() / 86400.0
+    return total
+
+
 def _empty(why: Optional[str], base: Optional[str], frm: Optional[str]) -> Dict[str, Any]:
     none = {k: None for k in KEYS}
     return {"pnl": dict(none), "carry": dict(none), "price": dict(none), "from": frm, "basis": base, "why": why, "out": False}
@@ -529,7 +589,8 @@ def _span(start: Dict[str, Any], end: Dict[str, Any], timeline: Sequence[Dict[st
         a, b = start["V"][k], end["V"][k]
         if a is None or b is None:
             continue
-        pnl = b - a
+        # (FX spot and DİBS: plus the funding paid over the period beside the value - 0 for the others)
+        pnl = b - a + (funding_between(timeline, start["t"], end["t"], k) or 0.0)
         carry = carry_between(timeline, start["t"], end["t"], k)
         out["pnl"][k] = pnl
         out["carry"][k] = carry
@@ -584,9 +645,11 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
     ``end_val``: its valuation now (an open trade) or when it was closed (its realised value), at ``end_t``;
     ``snaps``: its close values ``(day, close moment, values)`` - those kept under another fingerprint are of the
     trade before a change and are not used; ``inception_t``: when it starts (its trade date's close); ``last_close`` /
-    ``week_close``: the day of the last close and of the last close of the week before (``None``: none taken)."""
+    ``week_close``: the day of the last close and of the last close of the week before (``None``: none taken).
+    ``funding`` (FX spot and DİBS): the funding since inception - what the P&L counts beside the value."""
     fp = fingerprint(trade)
-    end = point_of(end_val, end_t)
+    product = trade.get("product")
+    end = point_of(end_val, end_t, product=product)
     end_why = (end_val or {}).get("why") if end is None else None
     ok: Dict[str, Dict[str, Any]] = {}
     vals: Dict[str, Dict[str, Any]] = {}
@@ -595,7 +658,7 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
         if v.get("fp") != fp:
             state[day] = "changed"
             continue
-        p = point_of(v, at)
+        p = point_of(v, at, product=product)
         state[day] = "ok" if p else "bad"
         if p:
             ok[day], vals[day] = p, v
@@ -603,6 +666,8 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
     inc = inception_point(inception_t)
     plan = (("day", last_close, today), ("week", week_close, monday_of(today)), ("total", None, today))
     out: Dict[str, Any] = {name: _one(trade, name, b, first, end, end_why, ok, state, inc, timeline) for name, b, first in plan}
+    if product in FUNDED:
+        out["funding"] = {k: (funding_between(timeline, inc["t"], end["t"], k) if end else None) for k in KEYS}
     # the legs: each a series of its own (the same number of legs at both ends), its inception 0
     legs_now = (end_val or {}).get("legs") if end else None
     if isinstance(legs_now, list) and legs_now:
@@ -630,6 +695,9 @@ def pnl_periods(trade: Dict[str, Any], end_val: Optional[Dict[str, Any]], end_t:
                    "mtm": _f(legs_now[i].get("mtm")), "mtm_try": _f(legs_now[i].get("mtm_try")),
                    "mtm_usd": _f(legs_now[i].get("mtm_usd")), "accrued": _f(legs_now[i].get("accrued")),
                    "accrued_try": _f(legs_now[i].get("accrued_try")), "accrued_usd": _f(legs_now[i].get("accrued_usd")),
+                   "running": _f(legs_now[i].get("running")), "running_try": _f(legs_now[i].get("running_try")),
+                   "running_usd": _f(legs_now[i].get("running_usd")), "carry_1d": _f(legs_now[i].get("carry_1d")),
+                   "carry_1d_try": _f(legs_now[i].get("carry_1d_try")), "carry_1d_usd": _f(legs_now[i].get("carry_1d_usd")),
                    "price_now": _f(legs_now[i].get("price_now")), "price_text": str(legs_now[i].get("price_text") or "")}
             for name, b, first in plan:
                 row[name] = _one(trade, name, b, first, lend, "bacak değeri yok", lsnaps, lstate, linc, ltl)
@@ -703,6 +771,70 @@ def totals(open_rows: Sequence[Dict[str, Any]], open_vals: Dict[int, Dict[str, A
         periods(p, v, ("total",), "realized")
     order = [p for p in tv.PRODUCTS if p in by] + [p for p in by if p not in tv.PRODUCTS]
     return {"products": [dict(by[p], product=p, label=PRODUCT_TEXT.get(p, p)) for p in order], "all": every}
+
+
+def dv01_table(open_rows: Sequence[Dict[str, Any]], open_vals: Dict[int, Dict[str, Any]]) -> Dict[str, Any]:
+    """The tab's DV01 table, as Günlük İşlemler's "OIS · vade özeti" (O22:W39): its open trades' swaps on the tenors
+    (``risk``, tradevalue.RISK_TENORS) - per tenor the nominal paid and received, their rates (nominal-weighted), their
+    DV01 ($ for +1 bp, unsigned), the net DV01 (paid − received: payer +) and the net position's rate ((R·S − U·V) /
+    (S − V), as the sheet's W column: both sides there) -, TRY OIS (``try``, nominals in TL) and SOFR (``usd``, in USD)
+    apart, each with its totals (``None``: none of it); and ``bar`` ($ for +1 bp, payer +): the TRY OIS net, the bonds
+    (DİBS RV's DV01 at their maturities - one bought: −), the two together (``total``) and SOFR's net (USD rates, apart).
+    ``unknown``: the open swaps and bonds without a value (left out)."""
+    def blank() -> Dict[str, float]:
+        return {"pay_n": 0.0, "pay_nr": 0.0, "pay_dv01": 0.0, "rec_n": 0.0, "rec_nr": 0.0, "rec_dv01": 0.0}
+
+    books = {c: {t: blank() for t in tv.RISK_TENORS} for c in ("TRY", "USD")}
+    seen = {"TRY": False, "USD": False}
+    bond = 0.0
+    unknown = 0
+    for r in open_rows:
+        if r["product"] not in ("ois", "sofr", "dibs"):
+            continue
+        v = open_vals.get(r["id"]) or {}
+        if not v.get("ok"):
+            unknown += 1
+            continue
+        for x in v.get("risk") or []:
+            dv = _f(x.get("dv01_usd"))
+            if dv is None:
+                continue
+            if x.get("kind") == "bond":
+                bond += dv if x.get("dir") == "B" else -dv
+                continue
+            b = books.get(str(x.get("curve") or ""), {}).get(str(x.get("tenor") or ""))
+            if b is None:
+                continue
+            seen[x["curve"]] = True
+            n = _f(x.get("nominal")) or 0.0
+            side = "pay" if x.get("dir") == "B" else "rec"
+            b[side + "_n"] += n
+            b[side + "_nr"] += n * (_f(x.get("rate")) or 0.0)
+            b[side + "_dv01"] += dv
+
+    def line(tenor: str, b: Dict[str, float], rates: bool = True) -> Dict[str, Any]:
+        pr = b["pay_nr"] / b["pay_n"] if rates and b["pay_n"] else None
+        rr = b["rec_nr"] / b["rec_n"] if rates and b["rec_n"] else None
+        s, u = b["pay_dv01"], b["rec_dv01"]
+        net_rate = (pr * s - rr * u) / (s - u) if pr is not None and rr is not None and s * u != 0.0 and s != u else None
+        return {"tenor": tenor, "pay_nominal": b["pay_n"], "pay_rate": pr, "pay_dv01": s, "rec_nominal": b["rec_n"],
+                "rec_rate": rr, "rec_dv01": u, "net_dv01": s - u, "net_rate": net_rate}
+
+    out: Dict[str, Any] = {"tenors": list(tv.RISK_TENORS), "unknown": unknown}
+    nets = {}
+    for c, key in (("TRY", "try"), ("USD", "usd")):
+        tot = blank()
+        rows = []
+        for tenor in tv.RISK_TENORS:
+            b = books[c][tenor]
+            for k in tot:
+                tot[k] += b[k]
+            rows.append(line(tenor, b))
+        total = line("Toplam", tot, rates=False)            # (the sheet's total row: no rates)
+        nets[c] = total["net_dv01"]
+        out[key] = {"rows": rows, "total": total} if seen[c] else None
+    out["bar"] = {"ois": nets["TRY"], "bond": bond, "total": nets["TRY"] + bond, "sofr": nets["USD"]}
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- reading a form
@@ -971,12 +1103,27 @@ class TradeBook(object):
         out: Dict[str, Any] = {"ok": bool(v.get("ok")), "why": v.get("why")}
         if trade is not None:
             out["level_now"] = level_now(trade, v)
+        # (``funding_1d``: what the P&L of FX spot and DİBS counts beside the value - the closes keep it; ``running``: a
+        # swap's period under way so far, the list's "Biriken")
         for k in ("mtm", "mtm_try", "mtm_usd", "carry_1d", "carry_1d_try", "carry_1d_usd", "accrued", "accrued_try",
-                  "accrued_usd", "price_now"):
+                  "accrued_usd", "funding_1d", "funding_1d_try", "funding_1d_usd", "running", "running_try", "running_usd",
+                  "price_now"):
             out[k] = _f(v.get(k))
         out["ccy"] = str(v.get("ccy") or "") or None
         out["price_text"] = str(v.get("price_text") or "")
         out["carry_days"] = carry_days(v)                    # (the calendar days ``carry_1d`` covers)
+        if isinstance(v.get("carry_parts"), list):
+            # (what the carry is made of, in the trade's currency - "Carry (1g)"'s tip - and the rates that went in)
+            out["carry_parts"] = [[str(p[0]), _f(p[1])] for p in v["carry_parts"]
+                                  if isinstance(p, (list, tuple)) and len(p) == 2 and _f(p[1]) is not None]
+        if v.get("carry_note"):
+            out["carry_note"] = str(v["carry_note"])
+        if trade is not None and isinstance(v.get("risk"), list):
+            # (an open trade's DV01 on the tenors - what the tab's DV01 table adds up; the closes do not keep it)
+            out["risk"] = [{"kind": str(x.get("kind") or ""), "tenor": str(x.get("tenor") or ""), "dir": str(x.get("dir") or ""),
+                            "curve": str(x.get("curve") or ""), "nominal": _f(x.get("nominal")), "rate": _f(x.get("rate")),
+                            "dv01": _f(x.get("dv01")), "dv01_usd": _f(x.get("dv01_usd")), "dv01_try": _f(x.get("dv01_try"))}
+                           for x in v["risk"] if isinstance(x, dict)]
         if greeks and isinstance(v.get("greeks"), dict):
             out["greeks"] = {str(k): _f(x) for k, x in v["greeks"].items() if _f(x) is not None}
         if isinstance(v.get("coupon_info"), dict):
@@ -988,8 +1135,9 @@ class TradeBook(object):
                             "mtm_try": _f(lg.get("mtm_try")), "mtm_usd": _f(lg.get("mtm_usd")), "carry_1d": _f(lg.get("carry_1d")),
                             "carry_1d_try": _f(lg.get("carry_1d_try")), "carry_1d_usd": _f(lg.get("carry_1d_usd")),
                             "accrued": _f(lg.get("accrued")), "accrued_try": _f(lg.get("accrued_try")),
-                            "accrued_usd": _f(lg.get("accrued_usd")), "price_now": _f(lg.get("price_now")),
-                            "price_text": str(lg.get("price_text") or "")}
+                            "accrued_usd": _f(lg.get("accrued_usd")), "running": _f(lg.get("running")),
+                            "running_try": _f(lg.get("running_try")), "running_usd": _f(lg.get("running_usd")),
+                            "price_now": _f(lg.get("price_now")), "price_text": str(lg.get("price_text") or "")}
                            for lg in legs if isinstance(lg, dict)]
         return out
 
@@ -1867,13 +2015,14 @@ class TradeBook(object):
         admin = self._admin(user)
         items = [self._item(r, user, admin, names) for r in rows]
         # a closed trade's realised P&L is kept with its close value once worked out (it never changes after) - on the
-        # viewer's curve (one valued before both curves were: the Bootstrap one)
+        # viewer's curve (one valued before both curves were: the Bootstrap one); one kept under an earlier rule is worked
+        # out here until "MTM yenile" keeps it again
         closed_rows = [r for r in rows if r["status"] == "closed"]
-        todo = [r for r in closed_rows if "realized" not in (on_curve(r.get("closing") or {}, curve)[0] or {})]
+        todo = [r for r in closed_rows if not kept_realized(r, on_curve(r.get("closing") or {}, curve)[0])]
         realized = self._results(todo, {}, self.now(), only_closed=True, curve=curve) if todo else {}
         for r in closed_rows:
             c = on_curve(r.get("closing") or {}, curve)[0] or {}
-            if "realized" in c:
+            if kept_realized(r, c):
                 realized[r["id"]] = {"ok": bool(c.get("ok")), "why": c.get("why"), "periods": {"total": c["realized"]}}
         for it in items:
             if it["status"] == "closed":
@@ -1983,6 +2132,14 @@ class TradeBook(object):
             self._keep_realized([r])
             payload = {k: v for k, v in r.items() if k not in self.store.TB_COLS}
             self.store.tb_set_payload(r["id"], payload)
+        # a realised P&L kept under an earlier rule (an FX spot or a bond closed before its funding was counted): worked out
+        # again from its closes and kept (its close value stays)
+        done = {r["id"] for r in todo}
+        for r in closed_rows:
+            if (r["id"] not in done and r["product"] in FUNDED and (r.get("closing") or {}).get("ok")
+                    and not kept_realized(r, r["closing"])):
+                self._keep_realized([r])
+                self.store.tb_set_payload(r["id"], {k: v for k, v in r.items() if k not in self.store.TB_COLS})
         now = self.now()
         at = now.strftime("%H:%M:%S")
         _, last, week = self._close_days()
@@ -2004,6 +2161,7 @@ class TradeBook(object):
             out["curves"][c] = {"values": {str(k): v for k, v in open_res.items()},
                                 "closed": {str(k): v for k, v in closed_res.items()},
                                 "totals": totals(open_rows, open_res, closed_rows, closed_res),
+                                "dv01": dv01_table(open_rows, open_res),
                                 "older": sum(int(x.get("older") or 0) for x in list(open_res.values()) + list(closed_res.values()))}
         with self._lock:
             self._mtm[(scope, "" if scope == "desk" else user)] = out
@@ -2157,12 +2315,13 @@ class TradeBook(object):
             return
         res = self._results(valued, {}, self.now(), only_closed=True)
         for r in valued:
-            (into if into is not None else r["closing"])["realized"] = res[r["id"]]["periods"]["total"]
+            (into if into is not None else r["closing"])["realized"] = dict(res[r["id"]]["periods"]["total"], rule=REALIZED_RULE)
         twins = [r for r in valued if isinstance(r["closing"].get("ppk"), dict) and r["closing"]["ppk"].get("ok")]
         if twins:
             res = self._results(twins, {}, self.now(), only_closed=True, curve="ppk")       # (its PPK basamak twin's too)
             for r in twins:
-                (into if into is not None else r["closing"])["ppk"]["realized"] = res[r["id"]]["periods"]["total"]
+                (into if into is not None else r["closing"])["ppk"]["realized"] = dict(res[r["id"]]["periods"]["total"],
+                                                                                         rule=REALIZED_RULE)
 
     def reopen(self, user: Optional[str], tid: Any) -> Dict[str, Any]:
         """A closed trade back among the open ones (its close taken back)."""

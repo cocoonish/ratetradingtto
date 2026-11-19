@@ -37,7 +37,7 @@ Line numbers are as of commit 7a53dfe. Search for the name if a line has moved.
 
 | Step | What happens | Where |
 |---|---|---|
-| Launch | `run.bat` / `run.sh` → `python -m tto`. Subcommands: `import-workbook`, `check-bloomberg`, `yonetici`, `check-fx`, `yedekten-don`. | `tto/__main__.py:280-291` |
+| Launch | `run.bat` (opens Anaconda first when it finds one: `Scripts\activate.bat`, `TTO_CONDA`) / `run.sh` → `python -m tto`. Subcommands: `import-workbook`, `check-bloomberg`, `yonetici`, `check-fx`, `yedekten-don`. | `tto/__main__.py:280-291` |
 | Run | `bundled.enable()` → logging → `create_app` → `uvicorn.run` | `__main__.py:130-153` |
 | Mode | `--mode auto` (default), `live` or `replay`, or env `TTO_MODE`. Auto falls back to replay when Bloomberg is unreachable and sets only `mode_note`. | `service.py:367-380` |
 | Host / port | Default `0.0.0.0:1057` (env `TTO_HOST`, `TTO_PORT`). Ports 5000 and 5001 are refused in code. | `config.py:8-9,108-115` |

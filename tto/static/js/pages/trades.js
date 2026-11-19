@@ -32,6 +32,14 @@ const SWAPS = ['ois', 'sofr'];
 const COUPON_TIP = 'Gerçekleşen kupon: biten dönemlerin net ödemesi (alınan +, ödenen −). MTM kalan dönemlerin değeridir: MTM + kupon = '
   + 'toplam K/Z, ödeme gününde K/Z sıçramaz (kupon MTM\'den bu sütuna geçer)';
 const COUPON_STATE = { paid: 'ödendi', due: 'ödenecek', running: 'işliyor (bugüne kadar)', future: 'bekliyor' };
+// the products whose K/Z adds the funding beside the value (the desk, 19.11.2026: spot and DİBS K/Z = price move + carry)
+const FUNDED = ['fxspot', 'dibs'];
+const RUNNING_TIP = 'Biriken: işleyen kupon döneminin bugüne kadarki neti (sabit − fixinglerin bileşiği; alınan +, ödenen −). '
+  + 'MTM\'in içindedir; dönem bitince "Kupon"a geçer.';
+const FUNDING_TIP = 'Fonlama: valörden bu yana pozisyonu taşımanın maliyeti / getirisi - FX spot\'ta her gün bir sonraki spot valörüne iki '
+  + 'paranın O/N faiziyle, DİBS\'te kirli fiyatın TLREF ile fonlanması. MTM\'de yoktur, K/Z\'a girer: MTM + Kupon + Fonlama = toplam K/Z '
+  + '(K/Z\'ın "c"si carry, "f"si yalnız fiyat hareketi).';
+const CARRY_TIP = 'Carry (1g): piyasa aynı kalırsa bir sonraki iş gününe (hafta sonunda 3 takvim günü) kazandırdığı (+) / kaybettirdiği (−).';
 // a level's distance as the desk reads it (tto/tradebook.py levels_of: positive = still to go)
 const DIST = { bp: [1, ' bp'], pip: [0, ' pip'], '%': [1, '%'], puan: [3, ' puan'] };
 
@@ -292,11 +300,14 @@ export class TradesPage {
     this.quantSec = section('trades-quant-sec', 'Quant\'tan · aile aile');
     this.openSec = section('trades-open', 'Açık işlemler');
     this.totalSec = section('trades-totals', 'Toplamlar (TL · USD)');
+    this.riskSec = section('trades-dv01', 'DV01 · vade (faiz +1 bp, $ · payer +)');
     this.closedSec = section('trades-closed', 'Kapanan işlemler');
     this.host.appendChild(h('div', { class: 'note muted trades-note' },
       'K/Z: günlük son kapanıştan, haftalık önceki haftanın son kapanışından, toplam işlem tarihinden bu yana; her biri carry (c) + fiyat etkisi (f). '
       + 'Swap\'ta MTM kalan dönemlerin değeridir; biten dönemlerin net kuponu "Kupon"dadır (MTM + Kupon = toplam K/Z: ödeme gününde K/Z sıçramaz), '
-      + 'dönem dönem "Kuponlar"da. '
+      + 'dönem dönem "Kuponlar"da; işleyen dönemin bugüne kadarki kuponu "Biriken"de (MTM\'in içinde). '
+      + 'FX spot ve DİBS\'te pozisyonu taşımanın fonlaması (iki paranın O/N faiz farkı; kirli fiyatın TLREF ile fonlanması) K/Z\'a girer: '
+      + '"Fonlama" valörden bu yana toplamı, MTM + Kupon + Fonlama = toplam K/Z. "Carry (1g)": piyasa aynı kalırsa bir sonraki iş gününün carry\'si. '
       + 'Kapanış kaydı her iş günü masanın Trades kapanış saatinde alınır. Bu işlemler Günlük İşlemler\'e, pozisyona, DV01 riskine ve RET akışına girmez.'));
   }
 
@@ -336,6 +347,7 @@ export class TradesPage {
     this.paintQuant();
     this.paintOpen();
     this.paintTotals();
+    this.paintRisk();
     this.paintClosed();
   }
 
@@ -391,14 +403,22 @@ export class TradesPage {
     const key = this.show;
     const desk = this.scope === 'desk';
     const options = items.some((it) => it.product === 'fxopt');
-    // "Kupon": what a swap's ended periods (a bond's coupons) have realised - beside the MTM of what is still to run
+    // "Kupon": what a swap's ended periods (a bond's coupons) have realised - beside the MTM of what is still to run;
+    // "Biriken": a swap's period under way so far (inside the MTM); "Fonlama": an FX spot's / a bond's funding since
+    // inception (beside the MTM: in the K/Z); "Carry (1g)": a day more with the market unchanged
     this.couponCol = items.some((it) => COUPONS.includes(it.product));
+    this.runningCol = items.some((it) => SWAPS.includes(it.product));
+    this.fundingCol = items.some((it) => FUNDED.includes(it.product));
+    const unit = key === 'ccy' ? '' : ' (' + UNIT[key] + ')';
     const t = h('table', { class: 'plain trades', id: 'trades-open' });
     t.appendChild(h('tr', null, h('th', null, ''), h('th', { class: 'l' }, 'Ürün'), h('th', { class: 'l' }, 'İşlem'),
       h('th', null, 'İşlem tarihi'), h('th', null, 'İşlem fiyatı'), h('th', null, 'Güncel'),
       h('th', { class: 'l', title: 'Hedefe ve stopa kalan (faiz bp, FX pip, opsiyon primin %\'si, kâğıt fiyatı puan); işaretli: aralığın dörtte biri kadar yakın ya da geldi' }, 'Hedef / stop'),
-      h('th', { title: 'Swap\'ta kalan dönemlerin bugünkü değeri (biten dönemlerin kuponu "Kupon"da)' }, 'MTM' + (key === 'ccy' ? '' : ' (' + UNIT[key] + ')')),
-      this.couponCol ? h('th', { id: 'trades-coupon-col', title: COUPON_TIP }, 'Kupon' + (key === 'ccy' ? '' : ' (' + UNIT[key] + ')')) : null,
+      h('th', { title: 'Swap\'ta kalan dönemlerin bugünkü değeri (biten dönemlerin kuponu "Kupon"da; işleyen dönemin bugüne kadarki kuponu içinde: "Biriken")' }, 'MTM' + unit),
+      this.runningCol ? h('th', { id: 'trades-running-col', title: RUNNING_TIP }, 'Biriken' + unit) : null,
+      this.couponCol ? h('th', { id: 'trades-coupon-col', title: COUPON_TIP }, 'Kupon' + unit) : null,
+      this.fundingCol ? h('th', { id: 'trades-funding-col', title: FUNDING_TIP }, 'Fonlama' + unit) : null,
+      h('th', { id: 'trades-carry-col', title: CARRY_TIP }, 'Carry (1g)' + unit),
       h('th', null, 'Günlük K/Z'), h('th', null, 'Haftalık K/Z'),
       h('th', null, 'Toplam K/Z'), options ? h('th', { class: 'l' }, 'Greekler') : null, desk ? h('th', { class: 'l' }, 'Giren') : null,
       h('th', null, '')));
@@ -427,9 +447,38 @@ export class TradesPage {
     return typeof v[k] === 'number' ? v[k] : null;
   }
 
-  /** How many columns the open list has (the optional ones: Kupon, Greekler, Giren). */
+  /** How many columns the open list has (the optional ones: Biriken, Kupon, Fonlama, Greekler, Giren). */
   columns(options, desk) {
-    return 12 + (this.couponCol ? 1 : 0) + (options ? 1 : 0) + (desk ? 1 : 0);
+    return 13 + (this.couponCol ? 1 : 0) + (this.runningCol ? 1 : 0) + (this.fundingCol ? 1 : 0) + (options ? 1 : 0) + (desk ? 1 : 0);
+  }
+
+  /** "Biriken": a swap's (or a leg's) period under way, its net so far in the currency shown - inside the MTM. */
+  runningCell(it, v, key) {
+    const x = SWAPS.includes(it.product) ? this.money(v, key, 'running') : null;
+    if (x === null) return td('', 'run');
+    return td(x === 0 ? '0' : signed(x), 'run ' + (x > 0 ? 'pos' : (x < 0 ? 'neg' : 'muted')), RUNNING_TIP);
+  }
+
+  /** "Fonlama": an FX spot's or a bond's funding since inception (``periods.funding``) - its K/Z counts it beside the MTM. */
+  fundingCell(it, per, key) {
+    const f = FUNDED.includes(it.product) && per && per.funding ? per.funding[key] : null;
+    if (typeof f !== 'number') return td('', 'fund');
+    return td(f === 0 ? '0' : signed(f), 'fund ' + (f > 0 ? 'pos' : (f < 0 ? 'neg' : 'muted')), FUNDING_TIP);
+  }
+
+  /** "Carry (1g)": what a day more earns with the market unchanged (a trade's or a leg's), its parts and rates in the tip. */
+  carryCell(it, v, key) {
+    const x = this.money(v, key, 'carry_1d');
+    if (x === null) return td('', 'c1d');
+    const tip = [CARRY_TIP];
+    if (typeof v.carry_days === 'number' && v.carry_days !== 1) tip.push(num(v.carry_days, 0) + ' takvim günü');
+    const parts = (v.carry_parts || []).filter((p) => typeof p[1] === 'number');
+    if (parts.length && !(parts.length === 1 && parts[0][0] === 'theta')) {
+      tip.push(parts.map((p) => p[0] + ' ' + signed(p[1])).join(' · ') + (v.ccy ? ' ' + v.ccy : ''));
+    }
+    if (v.carry_note) tip.push(v.carry_note);
+    if (FUNDED.includes(it.product)) tip.push('Fonlama kısmı K/Z\'a gün gün "Fonlama" olarak girer.');
+    return td(x === 0 ? '0' : signed(x), 'c1d ' + (x > 0 ? 'pos' : (x < 0 ? 'neg' : 'muted')), tip.join('\n'));
   }
 
   /** "Kupon": the coupons a swap (or a leg) has realised - its ended periods' net, + received / − paid; a bond's coupons
@@ -482,8 +531,12 @@ export class TradesPage {
       const m = this.money(v, key);
       tr.appendChild(td(m === null ? '' : num(m, 0) + (key === 'ccy' && v && v.ccy ? ' ' + v.ccy : ''), m !== null ? (m > 0 ? 'pos' : (m < 0 ? 'neg' : '')) : null));
     }
-    if (this.couponCol) tr.appendChild(this.couponCell(it, v && v.ok ? v : null, key, true));
+    const val = v && v.ok ? v : null;
     const per = v && v.periods;
+    if (this.runningCol) tr.appendChild(this.runningCell(it, val, key));
+    if (this.couponCol) tr.appendChild(this.couponCell(it, val, key, true));
+    if (this.fundingCol) tr.appendChild(this.fundingCell(it, per, key));
+    tr.appendChild(this.carryCell(it, val, key));
     for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(per ? per[name] : null, key));
     if (options) tr.appendChild(td(it.product === 'fxopt' && v ? greeksText(v.greeks) : '', 'l small'));
     if (desk) tr.appendChild(td(it.created_by_name || '', 'l muted'));
@@ -550,7 +603,10 @@ export class TradesPage {
       tr.appendChild(td(''));
       const m = this.money(lg, key);
       tr.appendChild(td(m === null ? '' : num(m, 0)));
+      if (this.runningCol) tr.appendChild(this.runningCell(it, lg, key));
       if (this.couponCol) tr.appendChild(this.couponCell(it, lg, key));
+      if (this.fundingCol) tr.appendChild(td(''));
+      tr.appendChild(this.carryCell(it, lg, key));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(lg[name], key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(''));
@@ -564,7 +620,8 @@ export class TradesPage {
       tr.appendChild(td(''));
       tr.appendChild(td('', 'l'));
       tr.appendChild(td('↳ kalan', 'l muted'));
-      tr.appendChild(h('td', { colspan: this.couponCol ? '6' : '5' }));
+      // (from the trade date to "Carry (1g)": the optional Biriken / Kupon / Fonlama with them)
+      tr.appendChild(h('td', { colspan: String(6 + (this.runningCol ? 1 : 0) + (this.couponCol ? 1 : 0) + (this.fundingCol ? 1 : 0)) }));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(r[name], key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(''));
@@ -591,7 +648,10 @@ export class TradesPage {
       tr.appendChild(i === 0 ? this.levelsCell(it) : td(''));
       const m = lg ? this.money(lg, key) : null;
       tr.appendChild(td(m === null ? (v && !v.ok ? '—' : '') : num(m, 0), m === null ? 'muted' : null, v && !v.ok ? v.why : null));
+      if (this.runningCol) tr.appendChild(this.runningCell(it, lg, key));
       if (this.couponCol) tr.appendChild(this.couponCell(it, lg, key, true));
+      if (this.fundingCol) tr.appendChild(td(''));
+      tr.appendChild(this.carryCell(it, lg, key));
       for (const name of ['day', 'week', 'total']) tr.appendChild(pnlCell(lg ? lg[name] : null, key));
       if (options) tr.appendChild(td(''));
       if (desk) tr.appendChild(td(it.created_by_name || '', 'l muted'));
@@ -658,6 +718,65 @@ export class TradesPage {
     t.appendChild(line('Toplam', mtm.totals.all, 'sum'));
     sec.count.textContent = '* değerlenemeyen işlem toplama girmedi';
     sec.body.appendChild(t);
+  }
+
+  // ------------------------------------------------------------------ DV01 by tenor
+  /** "DV01 · vade": the tab's open trades as Günlük İşlemler's "OIS · vade özeti" (O22:W39) has the day's - the net DV01,
+   * per tenor the paid and received nominal, rate and DV01 ($ for +1 bp), the net position's rate - TRY OIS and SOFR
+   * apart; above them the bar: TRY OIS net, bonds, their total, SOFR (tto/tradebook.py dv01_table).  From the last "MTM
+   * yenile"; ON to 5Y always, 6Y on when they hold something. */
+  paintRisk() {
+    const sec = this.riskSec;
+    clear(sec.body);
+    const mtm = this.values();
+    const r = mtm && mtm.dv01;
+    if (!r) {
+      sec.count.textContent = '';
+      sec.body.appendChild(h('div', { class: 'muted' }, 'DV01 tablosu "MTM yenile" ile hesaplanır.'));
+      return;
+    }
+    sec.count.textContent = 'açık işlemler · ' + mtm.at.slice(11, 16);
+    const bar = r.bar || {};
+    const tileOf = (label, v, k, big, tip) => {
+      const el = h('div', { class: 'q' + (big ? ' big' : '') + (typeof v === 'number' && v !== 0 ? (v > 0 ? ' pos' : ' neg') : ''),
+        'data-k': 'dv01-' + k, title: tip }, h('div', { class: 'l' }, label), h('div', { class: 'v' }, signed(v)));
+      return el;
+    };
+    const tip = 'TRY faizi +1 bp olursa kâr / zarar ($). İşaret Günlük İşlemler\'deki gibi: payer + (PAY), receiver − (RECEIVE, tahvil alışı).';
+    const riskBar = h('div', { class: 'riskbar', id: 'trades-dv01-bar' }, h('div', { class: 'l', title: tip }, 'DV01 · TRY faizi +1 bp ($) · payer +'),
+      tileOf('Toplam', bar.total, 'total', true, tip), tileOf('OIS (net)', bar.ois, 'ois', false, tip),
+      tileOf('Tahvil', bar.bond, 'bond', false, tip + ' Tahvil: DİBS RV\'nin DV01\'i, vadesinde.'));
+    if (r.usd) riskBar.appendChild(tileOf('SOFR (USD faizi, net)', bar.sofr, 'sofr', false, 'USD faizi +1 bp olursa kâr / zarar ($), payer +: TRY toplamına girmez.'));
+    if (r.unknown) riskBar.appendChild(h('div', { class: 'muted warn' }, r.unknown + ' işlemin değeri yok: toplama girmedi'));
+    sec.body.appendChild(riskBar);
+    const table = (book, id, title, unit) => {
+      const t = h('table', { class: 'plain trades dv01', id });
+      t.appendChild(h('tr', null, h('th', { class: 'l', colspan: '9' }, title)));
+      t.appendChild(h('tr', null, h('th', null, ''), h('th', null, ''), h('th', { colspan: '3' }, 'Pay'), h('th', { colspan: '3' }, 'Receive'),
+        h('th', null, 'Net')));
+      t.appendChild(h('tr', null, ...['Net DV01 ($)', 'Vade', 'Tutar (' + unit + ')', 'Faiz', 'DV01 ($)', 'Tutar (' + unit + ')', 'Faiz', 'DV01 ($)', 'Faiz']
+        .map((x, i) => h('th', { class: i === 1 ? 'l' : null }, x))));
+      const amt = (v) => td(typeof v === 'number' && v !== 0 ? num(v, 0) : '0', typeof v === 'number' && v !== 0 ? null : 'muted');
+      const rate = (v) => td(typeof v === 'number' ? '%' + num(v, 4) : '');
+      const line = (x, cls) => h('tr', { class: cls || null, 'data-tenor': x.tenor },
+        td(signed(x.net_dv01), x.net_dv01 > 0 ? 'pos' : (x.net_dv01 < 0 ? 'neg' : 'muted')), td(x.tenor, 'l'),
+        amt(x.pay_nominal), rate(x.pay_rate), amt(x.pay_dv01), amt(x.rec_nominal), rate(x.rec_rate), amt(x.rec_dv01), rate(x.net_rate));
+      const long = new Set(['6Y', '7Y', '8Y', '9Y', '10Y']);
+      for (const x of book.rows) {
+        if (long.has(x.tenor) && !x.pay_dv01 && !x.rec_dv01) continue;
+        t.appendChild(line(x));
+      }
+      t.appendChild(line(book.total, 'sum'));
+      return t;
+    };
+    if (r.try) sec.body.appendChild(table(r.try, 'trades-dv01-try', 'TRY OIS · vade', 'TL'));
+    if (r.usd) sec.body.appendChild(table(r.usd, 'trades-dv01-usd', 'SOFR · vade', '$'));
+    if (!r.try && !r.usd) sec.body.appendChild(h('div', { class: 'muted' }, 'Bu sekmede açık swap yok.'));
+    sec.body.appendChild(h('div', { class: 'note muted trades-note' }, 'Günlük İşlemler\'in "OIS · vade özeti" gibi, sekmenin açık işlemleri (son MTM yenile). '
+      + 'Swap bitişinde: bugün spot\'tan vadeyle girilen kendi vadesinde (15M: ½ 1Y + ½ 18M), tarihle girilen ya da başlamış olan bitiş tarihinin '
+      + 'iki yanındaki vadeye gün oranında; ileri başlangıçlı (FRA, PPK dönemi, ileri bacak) spot\'tan bitişine swap ile ters yönde başlangıcına swap, '
+      + 'DV01\'leri toplamı işleminki olan tek nominalle (Günlük İşlemler\'in PPK işlemi kuralı). Faiz tutarla ağırlıklı; Net faiz iki taraf da varken '
+      + '(R·S − U·V) / (S − V). Tahvil yalnız üstteki toplamda (DİBS RV\'nin DV01\'i, aldığınız kâğıt −); SOFR USD faizidir, TRY toplamına girmez.'));
   }
 
   // ------------------------------------------------------------------ closed trades

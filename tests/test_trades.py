@@ -127,8 +127,8 @@ class _Planted(object):
         self.values = {}
         self.calls = []
 
-    def set(self, tid, asof, mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None):
-        self.values[(tid, asof)] = _val(mtm, carry, ccy, accrued, legs, fx, days)
+    def set(self, tid, asof, mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None, funding=None):
+        self.values[(tid, asof)] = _val(mtm, carry, ccy, accrued, legs, fx, days, funding)
 
     def __call__(self, trade, mkt, asof=None):
         self.calls.append((trade.get("id"), asof, dict(trade)))
@@ -136,12 +136,15 @@ class _Planted(object):
         return dict(hit) if hit else {"ok": False, "why": "planlanmadı"}
 
 
-def _val(mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None):
-    """A valuation in TL (or USD) at USDTRY ``fx``; ``days``: the calendar days its ``carry_1d`` covers (inputs)."""
+def _val(mtm, carry, ccy="TRY", accrued=None, legs=None, fx=40.0, days=None, funding=None):
+    """A valuation in TL (or USD) at USDTRY ``fx``; ``days``: the calendar days its ``carry_1d`` covers (inputs);
+    ``funding``: its ``funding_1d`` (none: a valuation of before it was)."""
     to_try, to_usd = (1.0, 1.0 / fx) if ccy == "TRY" else (fx, 1.0)
     v = {"ok": True, "why": None, "ccy": ccy, "mtm": mtm, "mtm_try": mtm * to_try, "mtm_usd": mtm * to_usd,
          "carry_1d": carry, "carry_1d_try": carry * to_try, "carry_1d_usd": carry * to_usd, "accrued": accrued,
          "price_now": 38.0, "price_text": "%38,00", "greeks": None, "inputs": {"carry_days": days} if days else {}}
+    if funding is not None:
+        v.update(funding_1d=funding, funding_1d_try=funding * to_try, funding_1d_usd=funding * to_usd)
     if legs is not None:
         v["legs"] = [{"label": label, "mtm": m, "mtm_try": m * to_try, "mtm_usd": m * to_usd, "carry_1d": c,
                       "carry_1d_try": c * to_try, "carry_1d_usd": c * to_usd, "price_now": None, "price_text": ""}
@@ -500,7 +503,8 @@ def test_daily_weekly_and_total_p_and_l_split_into_carry_and_price_effect(plante
     """An OIS dealt on Wednesday, its closes Wed / Thu / Fri / Mon, valued on Tuesday 11:30: the day against Monday's
     close, the week against Friday's (over the weekend: three days of Friday's carry), the total against its inception;
     the cash it received since (``accrued``) counts.  An FX spot dealt on Thursday and closed on Monday: its realised P&L,
-    in the week's total but not in the day's."""
+    in the week's total but not in the day's - its price move plus its funding (the desk, 19.11.2026: spot K/Z = price
+    move + carry; a valuation without ``funding_1d`` - a close kept before it was -: an FX spot's carry is all roll)."""
     book, store, clock = _book()
     ali = _user(store, "Ali Veli")
     clock.set("2026-11-11 10:00")
@@ -532,23 +536,28 @@ def test_daily_weekly_and_total_p_and_l_split_into_carry_and_price_effect(plante
     assert _near(week["pnl"]["ccy"], 60.0) and _near(week["carry"]["ccy"], 45.0) and _near(week["price"]["ccy"], 15.0)  # 12 × 3 + 9
     assert _near(total["pnl"]["ccy"], 210.0) and _near(total["carry"]["ccy"], 65.0) and _near(total["price"]["ccy"], 145.0)
     assert _near(day["pnl"]["try"], 20.0) and _near(day["pnl"]["usd"], 0.5) and _near(week["carry"]["usd"], 45.0 / 40)
-    # the closed one: its realised P&L (closed at 16:00 on Monday: two days and 22,5 hours of Friday's carry)
+    # the closed one: its realised P&L (closed at 16:00 on Monday: two days and 22,5 hours of Friday's carry) - the price
+    # move (300) plus its funding, the carry itself: the price effect is the price move alone
     q = res["closed"][str(b)]["periods"]
-    assert _near(q["total"]["pnl"]["ccy"], 300.0) and _near(q["total"]["carry"]["ccy"], 5.0 + 5.0 * 2.9375)
-    assert q["day"]["out"] and _near(q["week"]["pnl"]["ccy"], 220.0) and _near(q["week"]["carry"]["ccy"], 5.0 * 2.9375)
+    fund = 5.0 + 5.0 * 2.9375
+    assert _near(q["total"]["pnl"]["ccy"], 300.0 + fund) and _near(q["total"]["carry"]["ccy"], fund)
+    assert _near(q["total"]["price"]["ccy"], 300.0) and _near(q["funding"]["ccy"], fund) and "funding" not in p
+    assert q["day"]["out"] and _near(q["week"]["pnl"]["ccy"], 220.0 + 5.0 * 2.9375) and _near(q["week"]["carry"]["ccy"], 5.0 * 2.9375)
+    assert _near(q["week"]["price"]["ccy"], 220.0)
     tot = res["totals"]
     every = tot["all"]
     assert (every["count"], every["closed"]) == (1, 1)
-    assert _near(every["day.pnl.try"], 20.0) and _near(every["week.pnl.try"], 280.0) and _near(every["total.pnl.try"], 210.0)
-    assert _near(every["realized.pnl.try"], 300.0) and _near(every["mtm.try"], 205.0) and _near(every["mtm.usd"], 205.0 / 40)
+    assert _near(every["day.pnl.try"], 20.0) and _near(every["week.pnl.try"], 60.0 + 220.0 + 5.0 * 2.9375) and _near(every["total.pnl.try"], 210.0)
+    assert _near(every["realized.pnl.try"], 300.0 + fund) and _near(every["mtm.try"], 205.0) and _near(every["mtm.usd"], 205.0 / 40)
     assert [x["product"] for x in tot["products"]] == ["ois", "fxspot"]
     assert _near(tot["products"][1]["week.carry.try"], 5.0 * 2.9375) and "day.pnl.try" not in tot["products"][1]
     # the list shows the closed trade's realised P&L without valuing anything: kept with its close value once worked out
-    assert _near(store.tb_get(b)["closing"]["realized"]["pnl"]["ccy"], 300.0)
-    assert _near(store.tb_get(b)["closing"]["realized"]["carry"]["ccy"], 5.0 + 5.0 * 2.9375)
+    # (under today's rule)
+    kept = store.tb_get(b)["closing"]["realized"]
+    assert _near(kept["pnl"]["ccy"], 300.0 + fund) and _near(kept["carry"]["ccy"], fund) and kept["rule"] == tbm.REALIZED_RULE
     planted.calls.clear()
     listed = book.listing(ali, "desk")
-    assert planted.calls == [] and _near(listed["closed"][0]["realized"]["periods"]["total"]["pnl"]["try"], 300.0)
+    assert planted.calls == [] and _near(listed["closed"][0]["realized"]["periods"]["total"]["pnl"]["try"], 300.0 + fund)
     assert listed["mtm"]["values"][str(a)]["mtm"] == 205.0 and listed["mtm"]["at"] == "2026-11-17 11:30:00"
     store.close()
 
@@ -643,6 +652,150 @@ def test_a_close_s_carry_covers_the_days_to_the_next_business_day(planted):
     assert p["week"]["from"] == "2026-11-13" and _near(p["week"]["carry"]["ccy"], 30.0 + 10.0 * 0.75)
     assert _near(p["week"]["pnl"]["ccy"], 50.0) and _near(p["day"]["carry"]["ccy"], 7.5)
     assert store.tb_closes([a])[a]["2026-11-13"]["carry_days"] == 3
+    store.close()
+
+
+def test_spot_and_dibs_k_z_count_their_funding_beside_the_value(planted):
+    """The desk, 19.11.2026: spot and DİBS K/Z = the price move + the carry.  A bond and an FX spot dealt on Wednesday,
+    closes Wed / Thu / Fri (three days) / Mon, valued on Tuesday 11:30: each period's P&L is the value's change plus the
+    funding paid over it beside the value (``funding_1d``, counted from the closes as the carry is), its carry part the
+    carry, its price effect the price move alone - the bond's own accrual is in its dirty price, so at an unchanged yield
+    its price effect is nil.  Wednesday's close was kept before funding was: the bond's day takes Thursday's funding,
+    the spot's its carry (all roll).  Since inception the funding is "Fonlama" (``periods.funding``): MTM + coupons +
+    funding = the total; the closes keep it."""
+    book, store, clock = _book()
+    ali = _user(store, "Ali Veli")
+    clock.set("2026-11-11 10:00")
+    d = book.add(ali, {"scope": "desk", "product": "dibs", "isin": _listed_isin(), "trade_date": "2026-11-11",
+                       "settle_date": "2026-11-12", "side": "B", "notional": "10m", "price": "98,75"})["id"]
+    s = book.add(ali, _fxspot(trade_date="2026-11-11", settle_date="2026-11-12"))["id"]
+    # the bond: its dirty price earns 50 a day at an unchanged yield, its funding costs 20 (carry 30); the spot: a roll of
+    # −10 a day, its price up 100 on Thursday
+    planted.set(d, "2026-11-11", 0.0, 30.0)                                       # (kept before funding was)
+    planted.set(d, "2026-11-12", 50.0, 30.0, funding=-20.0)
+    planted.set(d, "2026-11-13", 100.0, 90.0, days=3, funding=-60.0)
+    planted.set(d, "2026-11-16", 250.0, 30.0, funding=-20.0)
+    planted.set(s, "2026-11-11", 0.0, -10.0)                                      # (kept before funding was)
+    planted.set(s, "2026-11-12", 100.0, -10.0, funding=-10.0)
+    planted.set(s, "2026-11-13", 100.0, -30.0, days=3, funding=-30.0)
+    planted.set(s, "2026-11-16", 100.0, -10.0, funding=-10.0)
+    for day in ("2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16"):
+        assert book.take_close(day)
+    assert store.tb_closes([d])[d]["2026-11-12"]["funding_1d"] == -20.0 and store.tb_closes([d])[d]["2026-11-11"]["funding_1d"] is None
+    clock.set("2026-11-17 11:30")
+    planted.set(d, None, 287.5, 30.0, funding=-20.0)
+    planted.set(s, None, 150.0, -10.0, funding=-10.0)
+    res = book.mtm(ali, "desk")["values"]
+    b = res[str(d)]["periods"]
+    # the day: 18 hours of Monday's - funding −15, carry 22,5; the dirty price's 37,5 less the funding, nothing else
+    assert _near(b["day"]["pnl"]["ccy"], 37.5 - 15.0) and _near(b["day"]["carry"]["ccy"], 22.5) and _near(b["day"]["price"]["ccy"], 0.0)
+    # the week from Friday's close: three days of Friday's (−20 a day) and Monday's 18 hours
+    assert _near(b["week"]["pnl"]["ccy"], 187.5 - 75.0) and _near(b["week"]["carry"]["ccy"], 112.5) and _near(b["week"]["price"]["ccy"], 0.0)
+    # the total: Wednesday's day at Thursday's funding (−20), Thursday's −20, Friday's −60, Monday's −15
+    assert _near(b["funding"]["ccy"], -115.0) and _near(b["total"]["pnl"]["ccy"], 287.5 - 115.0)
+    assert _near(b["total"]["carry"]["ccy"], 172.5) and _near(b["total"]["price"]["ccy"], 0.0)
+    assert _near(b["funding"]["usd"], -115.0 / 40) and _near(b["total"]["pnl"]["try"], 172.5)
+    x = res[str(s)]["periods"]
+    # the spot: its price move is the price effect, its roll the carry - both in the K/Z
+    assert _near(x["day"]["pnl"]["ccy"], 50.0 - 7.5) and _near(x["day"]["carry"]["ccy"], -7.5) and _near(x["day"]["price"]["ccy"], 50.0)
+    assert _near(x["funding"]["ccy"], -10.0 - 10.0 - 30.0 - 7.5) and _near(x["total"]["pnl"]["ccy"], 150.0 - 57.5)
+    assert _near(x["total"]["price"]["ccy"], 150.0) and _near(x["total"]["carry"]["ccy"], -57.5)
+    # the totals add them up the same way
+    every = book.mtm(ali, "desk")["totals"]["all"]
+    assert _near(every["total.pnl.try"], 172.5 + 92.5) and _near(every["total.price.try"], 150.0)
+    store.close()
+
+
+def test_a_realised_p_and_l_kept_before_funding_counted_is_worked_out_again(planted):
+    """A spot and a bond closed with their realised P&L kept under the rule before funding counted (no ``rule``): the
+    list works them out again from their closes - the spot's with its roll, the bond's as it was (no funding known in
+    its closes) - and "MTM yenile" keeps them; an OIS's kept one is left as it is."""
+    book, store, clock = _book()
+    ali = _user(store, "Ali Veli")
+    clock.set("2026-11-12 10:00")
+    s = book.add(ali, _fxspot(trade_date="2026-11-12", settle_date="2026-11-13"))["id"]
+    d = book.add(ali, {"scope": "desk", "product": "dibs", "isin": _listed_isin(), "trade_date": "2026-11-12",
+                       "settle_date": "2026-11-13", "side": "B", "notional": "10m", "price": "98,75"})["id"]
+    o = book.add(ali, _ois(trade_date="2026-11-12", settle_date="2026-11-13"))["id"]
+    for tid, mtm in ((s, 50.0), (d, 10.0), (o, 7.0)):
+        planted.set(tid, "2026-11-12", mtm, 5.0)
+        planted.set(tid, "2026-11-13", mtm + 30.0, 5.0)
+        planted.set(tid, "2026-11-16", 300.0, 0.0)
+    for day in ("2026-11-12", "2026-11-13"):
+        assert book.take_close(day)
+    clock.set("2026-11-16 16:00")
+    for tid in (s, d, o):
+        book.close(ali, tid, "2026-11-16", "43,00" if tid == s else ("100" if tid == d else "38"))
+    fund = 5.0 + 5.0 * 2.9375
+    # kept as the rule before would have: no funding, no rule
+    for tid in (s, d, o):
+        row = store.tb_get(tid)
+        payload = {k: v for k, v in row.items() if k not in store.TB_COLS}
+        payload["closing"]["realized"].pop("rule")
+        if tid == s:
+            payload["closing"]["realized"]["pnl"] = {"ccy": 300.0, "try": 300.0, "usd": 7.5}
+        if tid == o:
+            payload["closing"]["realized"]["pnl"] = {"ccy": 299.0, "try": 299.0, "usd": 7.475}     # (left as it is)
+        store.tb_set_payload(tid, payload)
+    clock.set("2026-11-17 11:30")
+    listed = {it["id"]: it["realized"]["periods"]["total"] for it in book.listing(ali, "desk")["closed"]}
+    assert _near(listed[s]["pnl"]["ccy"], 300.0 + fund) and _near(listed[s]["price"]["ccy"], 300.0)
+    assert _near(listed[d]["pnl"]["ccy"], 300.0) and _near(listed[o]["pnl"]["ccy"], 299.0)
+    assert "rule" not in store.tb_get(s)["closing"]["realized"]                   # (the list values nothing, keeps nothing)
+    book.mtm(ali, "desk")
+    kept = {tid: store.tb_get(tid)["closing"]["realized"] for tid in (s, d, o)}
+    assert kept[s]["rule"] == kept[d]["rule"] == tbm.REALIZED_RULE and "rule" not in kept[o]
+    assert _near(kept[s]["pnl"]["ccy"], 300.0 + fund) and _near(kept[d]["pnl"]["ccy"], 300.0) and _near(kept[o]["pnl"]["ccy"], 299.0)
+    store.close()
+
+
+def test_the_dv01_table_adds_up_the_tab_s_open_swaps_and_bonds(planted):
+    """Trades' DV01 table, as Günlük İşlemler's "OIS · vade özeti" (O22:W39): the tab's open trades' DV01 on the tenors
+    (their valuations' ``risk``) - per tenor the nominal paid and received, their rates nominal-weighted, their DV01 ($),
+    the net (payer +) and the net position's rate (R·S − U·V) / (S − V), the totals without rates; TRY OIS and SOFR
+    apart; the bar: the TRY net, the bonds (one bought: −), their total, SOFR; a swap without a value counted as
+    unknown, FX not in it.  "MTM yenile" keeps it with the tab's refresh: the list reads it without valuing anything."""
+    book, store, clock = _book()
+    ali = _user(store, "Ali Veli")
+    a = book.add(ali, _ois())["id"]
+    b = book.add(ali, _ois(side="pay", end_date="15M"))["id"]
+    c = book.add(ali, _ois(product="sofr", side="pay", end_date="5Y", settle_date="2026-11-19", notional="25m", price="3,85"))["id"]
+    d = book.add(ali, {"scope": "desk", "product": "dibs", "isin": _listed_isin(), "trade_date": TODAY, "settle_date": "2026-11-18",
+                       "side": "B", "notional": "10m", "price": "98,75"})["id"]
+    e = book.add(ali, _fxspot())["id"]
+    book.add(ali, _ois(side="pay", end_date="3Y"))                 # (not valued: counted as unknown)
+
+    def val(rows, ccy="TRY"):
+        v = _val(0.0, 1.0, ccy)
+        v["risk"] = [{"kind": k, "tenor": t, "dir": s, "nominal": n, "rate": r, "dv01": dv * 40.0, "dv01_try": dv * 40.0,
+                      "dv01_usd": dv, "curve": cv} for k, t, s, n, r, dv, cv in rows]
+        return v
+
+    clock.set("2026-11-17 11:30")
+    planted.values[(a, None)] = val([("swap", "2Y", "S", 100e6, 38.5, 300.0, "TRY")])
+    planted.values[(b, None)] = val([("swap", "1Y", "B", 50e6, 39.0, 100.0, "TRY"), ("swap", "18M", "B", 50e6, 39.0, 120.0, "TRY"),
+                                     ("swap", "2Y", "B", 20e6, 38.0, 60.0, "TRY")])
+    planted.values[(c, None)] = val([("swap", "5Y", "B", 25e6, 3.85, 11000.0, "USD")], "USD")
+    planted.values[(d, None)] = val([("bond", "3Y", "S", 10e6, None, 50.0, "TRY")])
+    planted.values[(e, None)] = val([])
+    t = book.mtm(ali, "desk")["dv01"]
+    assert [x["tenor"] for x in t["try"]["rows"]] == list(tv.RISK_TENORS) and t["unknown"] == 1
+    rows = {x["tenor"]: x for x in t["try"]["rows"]}
+    two = rows["2Y"]
+    assert (two["pay_nominal"], two["pay_rate"], two["pay_dv01"], two["rec_nominal"], two["rec_rate"], two["rec_dv01"]) == (
+        20e6, 38.0, 60.0, 100e6, 38.5, 300.0)
+    assert two["net_dv01"] == -240.0 and _near(two["net_rate"], (38.0 * 60.0 - 38.5 * 300.0) / (60.0 - 300.0))
+    assert rows["1Y"]["net_dv01"] == 100.0 and rows["1Y"]["net_rate"] is None and rows["3Y"]["net_dv01"] == 0.0   # (one side only; the bond not in it)
+    tot = t["try"]["total"]
+    assert (tot["pay_dv01"], tot["rec_dv01"], tot["net_dv01"], tot["pay_rate"], tot["net_rate"]) == (280.0, 300.0, -20.0, None, None)
+    assert t["usd"]["total"]["net_dv01"] == 11000.0 and t["usd"]["rows"][-6]["tenor"] == "5Y" and t["usd"]["rows"][-6]["pay_nominal"] == 25e6
+    assert t["bar"] == {"ois": -20.0, "bond": -50.0, "total": -70.0, "sofr": 11000.0}
+    listed = book.listing(ali, "desk")
+    assert listed["mtm"]["dv01"]["bar"]["total"] == -70.0 and "risk" in listed["mtm"]["values"][str(a)]
+    # the closes do not keep it
+    planted.values[(a, "2026-11-17")] = val([("swap", "2Y", "S", 100e6, 38.5, 300.0, "TRY")])
+    assert book.take_close("2026-11-17")
+    assert "risk" not in store.tb_closes([a])[a]["2026-11-17"]
     store.close()
 
 

@@ -16,7 +16,7 @@ python tto_kur.py
 
    ya da `.txt`'yi indirdiyseniz `python tto_kur.txt`. Yanına `ratetradingtto` klasörünü açar ve dashboard'u başlatmayı
    sorar. (Başka bir klasöre: `python tto_kur.py D:\tto`.)
-3. Sonraki açılışlarda `ratetradingtto` klasöründeki `run.bat`'a çift tıklayın; tarayıcıdan `http://localhost:1057`.
+3. Sonraki açılışlarda `ratetradingtto` klasöründeki `run.bat`'a çift tıklayın (Anaconda varsa önce onu açar: komut penceresi gerekmez); tarayıcıdan `http://localhost:1057`.
 
 **Güncelleme:** yeni `tto_kur.py`'yi (ya da `tto_kur.txt`'yi) indirip aynı yerde yeniden çalıştırın. Değişen dosyalar
 yenilenir, artık olmayanlar silinir; `data` klasörüne (kullanıcılar, senaryolar, RET geçmişi, işlem defteri, tarihçe) ve

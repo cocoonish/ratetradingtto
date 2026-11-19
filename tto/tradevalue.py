@@ -20,14 +20,30 @@ The interface - the page calls nothing else:
 **Instruments are named by what they are** - a swap by its dates, a meeting period by the meeting's date, a bond by its
 ISIN, FX by its pair - never by a row: a calendar edit, a roll or a new bond in a list moves nothing.
 
-**MTM + accrued = the trade's whole value change.**  ``mtm`` is what the position is worth now against what it cost
-(the market value of the cash flows still to come; for a bond and FX the price difference); ``accrued`` is the cash
-the trade has paid or received since it started that MTM no longer holds (a swap's settled periods, a bond's coupons).
-A period's P&L is the change of the two together.
+**MTM + accrued (+ the funding) = the trade's whole value change.**  ``mtm`` is what the position is worth now against
+what it cost (the market value of the cash flows still to come; for a bond and FX the price difference); ``accrued`` is
+the cash the trade has paid or received since it started that MTM no longer holds (a swap's settled periods, a bond's
+coupons).  A period's P&L is the change of the two together - an FX spot position's and a bond's plus the funding paid
+over it (below: tto/tradebook.py adds it day by day from the closes).
 
 **Carry** (``carry_1d``) is what one day passing earns with the market unchanged, over the period to the next business
 day of the trade's calendar (d calendar days: 1, 3 over a weekend - as TLREF accrues Friday's fixing over the
-weekend); ``inputs["carry_days"]`` says how many.
+weekend); ``inputs["carry_days"]`` says how many.  ``carry_parts`` names its parts (``[label, amount]`` in the trade's
+currency), ``carry_note`` the rates that went in (FX: the overnight rates; DİBS: TLREF).
+
+**Funding** (``funding_1d``, in the trade's currency, TL and USD) is the part of the carry the trade's value does not
+hold: the cash holding the position a day more costs or earns beside it - an FX spot position rolled to the next spot
+date at the two currencies' overnight rates (all of its carry), a bond's dirty price funded at TLREF.  0 for the swaps
+and the options (their value holds all of their carry); ``None`` for a closed trade (nothing left to carry).  The desk,
+19.11.2026: spot and DİBS K/Z = the price move + the carry - so Trades counts the funding in their P&L.
+
+**Running** (``running``, a swap's): the coupon of the period under way so far - its fixed to today less its float
+compounded to today, signed (+ received) -, part of the MTM until the period ends and it moves to ``accrued``.
+
+**Risk** (``risk``, a swap's and a bond's): its DV01 on the tenors of Trades' DV01 table (:data:`RISK_TENORS`, as
+Günlük İşlemler's "OIS · vade özeti"), ``[{kind, tenor, dir, nominal, rate, dv01, dv01_try, dv01_usd, curve}]`` -
+a swap at its end date (one starting later: the spot swap to its end and the opposite one to its start, as Günlük
+İşlemler takes a meeting-dated swap), a bond at its maturity, each split between the tenors around it by days.
 
 Per product (each one's market, conventions and the numbers that went in are in ``inputs``):
 
@@ -54,7 +70,8 @@ Per product (each one's market, conventions and the numbers that went in are in 
   start) - **plus the one-day roll-down**: the trade tomorrow on the curve rolled a day (the same zero rate for the
   same days from its spot, today's overnight fixed) against the trade tomorrow when today's forwards come true (its
   value grown a day at the curve's overnight): what the curve keeping its shape earns - nothing on a flat curve.  Both
-  parts are in ``inputs`` (``carry_accrual``, ``roll_1d``).  A spread and a fly are the sums of their legs (level: long
+  parts are in ``inputs`` (``carry_accrual``, ``roll_1d``) and ``carry_parts``.  *Running* = the period under way's
+  net so far (the "running" row of its coupons; a package's legs summed).  A spread and a fly are the sums of their legs (level: long
   − short; the fly's body − ½ each wing beside the OIS sheet's 2·body − wings); an FRA is valued as one
   forward-starting swap, its two replicating swaps (to its end, and the opposite way to its start, from the trade's
   own settlement, same notional and rate) as the attribution - whatever they do not reproduce is ``inputs["residual"]``.
@@ -70,11 +87,12 @@ Per product (each one's market, conventions and the numbers that went in are in 
   (approximate); a CPI-linked bond is not valued (no index ratio).  *Accrued* = the coupons (and the redemption) paid
   since settlement.  *Carry* = at an unchanged simple yield, the next value date's dirty price plus a coupon paid in
   between, less today's dirty price funded at TLREF over the days between (a floater: its coupon's accrual less the
-  funding).
+  funding).  *Funding* = that funding part alone, −sign × N / 100 × dirty × TLREF × days / 365: the rest of the
+  carry is the bond's own, which its dirty price (the MTM) earns.
 * **fxspot** - *MTM* = (spot now − trade rate) × base amount, in the quote currency (``manual_price``: the spot when the
   dashboard has none); *carry* = rolling the position from its spot date to the next one at the two currencies'
   overnight rates (the Forward sheet's: TRY offshore O/N, SOFR, €STR; else the pair's forward curve):
-  −base × (F − S).  No accrued.
+  −base × (F − S).  *Funding* = all of the carry: the spot MTM holds none of it.  No accrued.
 * **fxopt** - Garman-Kohlhagen on the forward to delivery, discounted in the quote currency (the vol clock: days to
   expiry / 365); the vol at the strike from the dashboard's smile (USDTRY / EURUSD: the Opsiyon page's SVI fit with the
   pair's delta conventions; G10: the quant universe's ATM / 25D RR / 25D BF through Vanna-Volga, ``fxvol``), the
@@ -1208,9 +1226,77 @@ def _swap(mkt: Market, prod: str, leg: _Leg, asof: _dt.date) -> Dict[str, Any]:
     growth = curve.df(asof) / curve.df(nxt)
     roll = (tomorrow["mtm"] + tomorrow["accrued"]) - (base["mtm"] * growth + base["accrued"])
     dv01 = leg.notional * base["annuity"] * 1e-4
+    # the period under way: its net so far (inside the MTM until it ends)
+    running = sum(x["net"] for x in rows if x["state"] == "running" and x["net"] is not None) + 0.0
     return {"mtm": base["mtm"], "accrued": base["accrued"], "carry": accrual + roll, "carry_accrual": accrual, "roll": roll,
             "carry_days": days, "annuity": base["annuity"], "dv01": dv01, "par": base["par"], "tally": tally, "on": on,
-            "est": est, "rows": rows}
+            "est": est, "rows": rows, "running": running}
+
+
+#: the tenors of Trades' DV01 table: Günlük İşlemler's "OIS · vade özeti" (O22:W39, to 5Y) and on to 10Y - the desk's
+#: buckets (blotter.BUCKET_MONTHS) with ON, 1W and 2W
+RISK_TENORS = ("ON", "1W", "2W", "1M", "2M", "3M", "6M", "9M", "1Y", "18M", "2Y", "3Y", "4Y", "5Y", "6Y", "7Y", "8Y", "9Y",
+               "10Y")
+
+
+def risk_tenor_end(spot: _dt.date, tenor: str, conv: Conv, hol: Any) -> _dt.date:
+    """The end of a spot swap of one of :data:`RISK_TENORS` by the product's rule (:func:`tenor_end`; ON: a day on)."""
+    if tenor == "ON":
+        return _roll(conv, spot + _dt.timedelta(days=1), hol)
+    return tenor_end(spot, tenor, conv, hol) or spot
+
+
+def risk_split(when: _dt.date, spot: _dt.date, conv: Conv, hol: Any) -> List[Tuple[str, float]]:
+    """A date on :data:`RISK_TENORS`, from ``spot``: a tenor's own end all on it, else the two tenors around it by days,
+    all on the first / last tenor before / beyond them - as Günlük İşlemler spreads a forward and a meeting-dated swap
+    (blotter.split_weights)."""
+    from .blotter import split_weights
+    nodes = [float((risk_tenor_end(spot, x, conv, hol) - spot).days) for x in RISK_TENORS]
+    return [(RISK_TENORS[i], w) for i, w in split_weights(float((when - spot).days), nodes) if w > 0.0]
+
+
+def risk_months(months: int) -> List[Tuple[str, float]]:
+    """A spot swap entered as a tenor on :data:`RISK_TENORS`: its tenor when it is one, else the two around it linearly
+    in months (the desk, 18.11.2026: 15M = ½ 1Y + ½ 18M - blotter.bucket_split)."""
+    from .blotter import bucket_split
+    return [(tenor_label(b), w) for b, w in bucket_split(int(months)) if w > 0.0]
+
+
+def _risk_legs(mkt: Market, prod: str, leg: _Leg, dv01: Optional[float]) -> List[Dict[str, Any]]:
+    """A swap's DV01 on the tenors of Trades' DV01 table, as Günlük İşlemler takes a meeting-dated swap
+    (blotter.mpc_summary_rows): one that starts at the spot or before it - the swap left to run - at its end date; one
+    that starts later (a FRA, a meeting's period, a forward leg) as the spot swap to its end and the opposite one to its
+    start, on the one nominal that makes their DV01s add up to its own (the rate of the one to the start the curve's,
+    the one to the end's what makes the two together its rate).  Each split between the tenors around its date by days
+    (:func:`risk_split`) - a spot swap entered as a tenor on its tenor (:func:`risk_months`).  ``[{kind, tenor, dir ("B"
+    pays, "S" receives), nominal, rate (%), dv01}]`` - in the trade's currency per bp, unsigned; none for a swap unwound
+    or ended."""
+    if leg.close_date is not None or not dv01:
+        return []
+    spot = mkt.spot_date(prod)
+    conv = CONVS[prod]
+    hol = mkt.hol(*conv.cal)
+    side = "S" if leg.sign > 0 else "B"
+    parts = [(leg.end, side, dv01, leg.rate, leg.notional)]
+    if leg.months and leg.start == spot:
+        return [{"kind": "swap", "tenor": tenor, "dir": side, "nominal": leg.notional * w, "rate": leg.rate * 100.0,
+                 "dv01": dv01 * w} for tenor, w in risk_months(leg.months)]
+    if leg.start > spot:
+        try:
+            e = _swap_pv(mkt, prod, _Leg(spot, leg.end, 0.0, 1.0, 1.0), mkt.today)
+            s = _swap_pv(mkt, prod, _Leg(spot, leg.start, 0.0, 1.0, 1.0), mkt.today)
+        except TradeError:
+            e = s = None
+        if e is not None and s is not None and s["par"] is not None and e["annuity"] > s["annuity"] > 0.0:
+            a_e, a_s, r_s = e["annuity"], s["annuity"], s["par"]
+            k = dv01 / ((a_e - a_s) * 1e-4)                   # (the one nominal: k·(A_E − A_S)·1bp = its DV01)
+            parts = [(leg.end, side, k * a_e * 1e-4, (leg.rate * (a_e - a_s) + r_s * a_s) / a_e, k),
+                     (leg.start, "B" if side == "S" else "S", k * a_s * 1e-4, r_s, k)]
+    out = []
+    for when, d, dv, rate, n in parts:
+        for tenor, w in risk_split(when, spot, conv, hol):
+            out.append({"kind": "swap", "tenor": tenor, "dir": d, "nominal": n * w, "rate": rate * 100.0, "dv01": dv * w})
+    return out
 
 
 def _par_rate(mkt: Market, prod: str, start: _dt.date, end: _dt.date, months: Optional[int] = None) -> Optional[float]:
@@ -1299,7 +1385,9 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
                                  mkt.fixings.get(prod))]
         total = {"mtm": res["mtm"], "accrued": res["accrued"], "carry": res["carry"], "price_now": price,
                  "price_text": "%s %s%%" % (label, _tr(price, 2)) if price is not None else label,
-                 "coupon_info": _coupon_info(coupons)}
+                 "coupon_info": _coupon_info(coupons), "funding": 0.0, "running": res["running"],
+                 "carry_parts": [["tahakkuk", res["carry_accrual"]], ["roll-down", res["roll"]]],
+                 "risk": _risk_legs(mkt, prod, main, res["dv01"])}
         inputs.update({"start": _iso(start), "end": _iso(end), "rate": t["price"], "par_now": price, "annuity": res["annuity"],
                        "dv01": res["dv01"], "carry_accrual": res["carry_accrual"], "roll_1d": res["roll"],
                        "carry_days": res["carry_days"], "overnight": res["on"] * 100.0 if res["on"] is not None else None,
@@ -1367,7 +1455,11 @@ def _value_rates(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         coupons.append(_coupon_table(prod, "%s %s" % (verb, name), lg.get("side"), L, r, mkt.fixings.get(prod)))
     total = {"mtm": sum(r["mtm"] for _, _, r, _, _ in results), "accrued": sum(r["accrued"] for _, _, r, _, _ in results),
              "carry": sum(r["carry"] for _, _, r, _, _ in results), "price_now": level, "price_text": text,
-             "coupon_info": _coupon_info(coupons)}
+             "coupon_info": _coupon_info(coupons), "funding": 0.0,
+             "running": sum(r["running"] for _, _, r, _, _ in results) + 0.0,
+             "carry_parts": [["tahakkuk", sum(r["carry_accrual"] for _, _, r, _, _ in results) + 0.0],
+                             ["roll-down", sum(r["roll"] for _, _, r, _, _ in results) + 0.0]],
+             "risk": [x for _, L, r, _, _ in results for x in _risk_legs(mkt, prod, L, r["dv01"])]}
     tally: Dict[str, int] = {}
     est: Dict[str, str] = {}
     for _, _, r, _, _ in results:
@@ -1471,9 +1563,11 @@ def _leg_out(mkt: Market, ccy: str, label: str, r: Dict[str, Any], text: str, pr
     m_try, m_usd = _money(mkt, ccy, r["mtm"])
     c_try, c_usd = _money(mkt, ccy, r["carry"])
     a_try, a_usd = _money(mkt, ccy, r.get("accrued"))
+    g_try, g_usd = _money(mkt, ccy, r.get("running"))
     out = {"label": label, "side": side, "side_text": side_text(prod, side), "ccy": ccy, "mtm": r["mtm"], "mtm_try": m_try,
            "mtm_usd": m_usd, "carry_1d": r["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "accrued": r.get("accrued"),
-           "accrued_try": a_try, "accrued_usd": a_usd, "price_now": r.get("price_now"), "price_text": text}
+           "accrued_try": a_try, "accrued_usd": a_usd, "running": r.get("running"), "running_try": g_try, "running_usd": g_usd,
+           "price_now": r.get("price_now"), "price_text": text}
     if r.get("rows") is not None:
         out["coupon_flows"] = [[x["end"], x["net"]] for x in r["rows"] if x["state"] in ("paid", "due")]
     return out
@@ -1484,13 +1578,26 @@ def _finish(mkt: Market, t: Dict[str, Any], ccy: str, total: Dict[str, Any], inp
     m_try, m_usd = _money(mkt, ccy, total["mtm"])
     c_try, c_usd = _money(mkt, ccy, total["carry"])
     a_try, a_usd = _money(mkt, ccy, total.get("accrued"))
+    f_try, f_usd = _money(mkt, ccy, total.get("funding"))
+    g_try, g_usd = _money(mkt, ccy, total.get("running"))
     out = {"ok": True, "why": None, "ccy": ccy, "mtm": total["mtm"], "mtm_try": m_try, "mtm_usd": m_usd,
            "carry_1d": total["carry"], "carry_1d_try": c_try, "carry_1d_usd": c_usd, "accrued": total.get("accrued"),
            "accrued_try": a_try, "accrued_usd": a_usd,
+           "funding_1d": total.get("funding"), "funding_1d_try": f_try, "funding_1d_usd": f_usd,
+           "running": total.get("running"), "running_try": g_try, "running_usd": g_usd,
            "price_now": total.get("price_now"), "price_text": total.get("price_text") or "", "greeks": greeks, "inputs": inputs,
            "side": t.get("side"), "side_text": side_text(t.get("product", ""), t.get("side"))}
     if total.get("coupon_info") is not None:
         out["coupon_info"] = total["coupon_info"]
+    if total.get("carry_parts"):
+        out["carry_parts"] = [[str(k), float(v)] for k, v in total["carry_parts"] if v is not None]
+    if total.get("carry_note"):
+        out["carry_note"] = total["carry_note"]
+    if total.get("risk"):
+        # (its DV01 on the tenors of Trades' DV01 table, in its currency, TL and USD; ``curve``: the rates it moves with)
+        tp, up = mkt.try_per(ccy), mkt.usd_per(ccy)
+        out["risk"] = [dict(x, curve=ccy, dv01_try=x["dv01"] * tp if tp else None, dv01_usd=x["dv01"] * up if up else None)
+                       for x in total["risk"]]
     if legs:
         out["legs"] = legs
     return out
@@ -1611,17 +1718,21 @@ def _value_dibs(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, Any
     if tl is None and mkt.curves.get("ois") is not None:
         tl = mkt.curves["ois"].on
     carry = 0.0
+    # the funding part of it: what the MTM (the dirty price) does not earn - none left to fund once closed
+    funding: Optional[float] = None if closed else 0.0
     y_simple = None
     if not matured and not closed:
         if floater:
             per_day = bond.coupon / bond.freq / bond.period
             carry = sign * N / 100.0 * (per_day * d - dirty1 * (tl or 0.0) * d / 365.0)
+            funding = -sign * N / 100.0 * dirty1 * (tl or 0.0) * d / 365.0 + 0.0
         else:
             y_simple = row.get("simple") if where == "DİBS RV" and row.get("simple") is not None else bond.yield_of(dirty1, v1, "simple")
             if y_simple is not None:
                 p1 = bond.price(y_simple, v1, "simple")[0]
                 p2 = bond.price(y_simple, v2, "simple")[0] if v2 < bond.maturity else 0.0
                 carry = sign * N / 100.0 * (p2 + _coupons(bond, v1, v2) - p1 * (1.0 + (tl or 0.0) * d / 365.0))
+                funding = -sign * N / 100.0 * p1 * (tl or 0.0) * d / 365.0 + 0.0
     dv01_mn = row.get("dv01_mn") if where == "DİBS RV" else None
     if dv01_mn is None and not matured and not floater:
         dv01_mn = qc.desk_dv01(bond, v1, dirty1)
@@ -1635,7 +1746,16 @@ def _value_dibs(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, Any
         except (ValueError, ZeroDivisionError, OverflowError):
             y_trade = None
     total = {"mtm": mtm, "accrued": accrued, "carry": carry, "price_now": None if matured else clean1,
-             "price_text": "%s %s" % (isin, _tr(clean1, 3)) if not matured else "%s itfa" % isin}
+             "price_text": "%s %s" % (isin, _tr(clean1, 3)) if not matured else "%s itfa" % isin, "funding": funding}
+    if funding and tl is not None:
+        total["carry_parts"] = [["kâğıt", carry - funding], ["fonlama", funding]]
+        total["carry_note"] = "TLREF %%%s" % _tr(tl * 100.0, 2)
+    if dv01_mn and not matured and not closed:
+        # (its DV01 at its maturity on the tenors of Trades' DV01 table - a bond bought gains when rates fall, as a
+        # receiver: "S"; DİBS RV's DV01 per 1 mn, unsigned)
+        total["risk"] = [{"kind": "bond", "tenor": tenor, "dir": "S" if sign > 0 else "B", "nominal": N * w, "rate": None,
+                          "dv01": N / 1e6 * dv01_mn * w}
+                         for tenor, w in risk_split(bond.maturity, mkt.spot_date("ois"), CONVS["ois"], hol)]
     inputs = {"source": where, "clean_now": clean1, "accrued_now": ai1, "dirty_now": dirty1, "value_date": _iso(v1),
               "clean_paid": clean0, "accrued_paid": ai0, "dirty_paid": dirty0, "settle_date": _iso(s0), "coupons_paid": paid,
               "kind": kind, "coupon": bond.coupon, "freq": bond.freq, "maturity": _iso(bond.maturity), "yield_now": y_simple * 100.0 if y_simple is not None else None,
@@ -1678,7 +1798,12 @@ def _value_fxspot(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, A
     carry = -sign * N * (F1 - S) if F1 is not None else 0.0
     dec = next((p.decimals for p in fxm.PAIRS if p.code == pair), 4)
     nxt = _add_bd(asof, 1, mkt.pair_hol(pair))
-    total = {"mtm": mtm, "accrued": None, "carry": carry, "price_now": S, "price_text": "%s %s" % (pair, _tr(S, dec))}
+    # (its funding: all of its carry - the roll is cash the spot MTM does not hold; none left once closed)
+    total = {"mtm": mtm, "accrued": None, "carry": carry, "price_now": S, "price_text": "%s %s" % (pair, _tr(S, dec)),
+             "funding": None if closed else carry}
+    if not closed and F1 is not None:
+        total["carry_parts"] = [["fonlama", carry]]
+        total["carry_note"] = how
     inputs = {"spot": S, "spot_source": where, "base_amount": N, "rate": K, "spot_date": _iso(sd), "next_spot_date": _iso(sd1),
               "forward_next": F1, "forward_how": how, "carry_days": (nxt - asof).days}
     if F1 is None and not closed:
@@ -1829,7 +1954,7 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         pccy = (t.get("premium_ccy") or quote).upper()
         opened, shut = _in_quote(mkt, float(t["price"]), pccy, pair, S), _in_quote(mkt, float(t["close_price"]), pccy, pair, S)
         total = {"mtm": sign * (shut - opened), "accrued": None, "carry": 0.0, "price_now": None,
-                 "price_text": "%s %s %s kapandı" % (pair, _plain(K), "call" if call else "put")}
+                 "price_text": "%s %s %s kapandı" % (pair, _plain(K), "call" if call else "put"), "funding": 0.0}
         return _finish(mkt, t, quote, total, {"premium": t["price"], "close_premium": t["close_price"], "premium_ccy": pccy})
     notes: List[str] = []
     expired = expiry <= asof
@@ -1886,7 +2011,8 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
     tenor = t.get("tenor")
     when = _tenor_tr(tenor) if tenor else _short(expiry)
     text = "%s %s %s %s vol %s" % (pair, when, _plain(K), "call" if call else "put", _tr(vol_pts, 1))
-    total = {"mtm": mtm, "accrued": None, "carry": carry, "price_now": vol_pts, "price_text": text}
+    total = {"mtm": mtm, "accrued": None, "carry": carry, "price_now": vol_pts, "price_text": text, "funding": 0.0,
+             "carry_parts": [["theta", carry]]}
     inputs = {"spot": S, "forward": F, "forward_how": f_how, "df_quote": df_q, "df_base": df_b, "discount_how": q_how,
               "vol": vol_pts, "vol_how": vinfo, "T": T, "expiry": _iso(expiry), "delivery": _iso(delivery), "base_amount": N,
               "value": value_q, "premium": prem, "premium_ccy": pccy, "premium_quote": prem_q, "unit_price": g["price"],
@@ -1899,8 +2025,9 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
 # ---------------------------------------------------------------------------------------------- value
 def value(trade: Dict[str, Any], mkt: Market, asof: Any = None) -> Dict[str, Any]:
     """A trade's value now (see the module text): ``{ok, why, ccy, mtm, mtm_try, mtm_usd, carry_1d, carry_1d_try,
-    carry_1d_usd, accrued, price_now, price_text, greeks, inputs}`` and ``legs`` for a package.  Never raises: a trade
-    that cannot be valued is ``ok`` False with the reason in ``why``."""
+    carry_1d_usd, accrued, accrued_try, accrued_usd, funding_1d, funding_1d_try, funding_1d_usd, running, running_try,
+    running_usd, price_now, price_text, greeks, inputs}``, ``carry_parts`` / ``carry_note`` when it has them and ``legs``
+    for a package.  Never raises: a trade that cannot be valued is ``ok`` False with the reason in ``why``."""
     day = _day(asof) or (mkt.today if mkt is not None else None) or _dt.date.today()
     prod = str((trade or {}).get("product") or "").strip().lower() if isinstance(trade, dict) else ""
     try:
@@ -1927,7 +2054,8 @@ def _failed(prod: str, why: str) -> Dict[str, Any]:
     ccy = {"ois": "TRY", "sofr": "USD", "dibs": "TRY"}.get(prod, "")
     return {"ok": False, "why": why, "ccy": ccy, "mtm": None, "mtm_try": None, "mtm_usd": None, "carry_1d": None,
             "carry_1d_try": None, "carry_1d_usd": None, "accrued": None, "accrued_try": None, "accrued_usd": None,
-            "price_now": None, "price_text": "", "greeks": None, "inputs": {}}
+            "funding_1d": None, "funding_1d_try": None, "funding_1d_usd": None, "running": None, "running_try": None,
+            "running_usd": None, "price_now": None, "price_text": "", "greeks": None, "inputs": {}}
 
 
 def coupons(trade: Dict[str, Any], mkt: Market, asof: Any = None) -> Dict[str, Any]:

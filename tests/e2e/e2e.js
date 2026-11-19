@@ -5145,6 +5145,33 @@ async function clipAfter(page, action) {
     check('... "MTM yenile": "son yenileme: hh:mm", and each trade shows its value or why it has none; the totals in TL and USD',
       /henüz değerlenmedi/.test(mtmBefore) && valued.length === 2 && valued.every((v) => v.number || v.why.length > 3) && /Toplam/.test(totals)
       && /MTM TL/.test(totals) && /Gerçekleşen USD/.test(totals), { mtmBefore, valued });
+    // "Biriken" (a swap's period under way so far) and "Carry (1g)" (a day more, the market unchanged) beside the MTM;
+    // "Fonlama" only with an FX spot or a bond
+    const cols = await page.evaluate(() => ({ running: !!document.getElementById('trades-running-col'), carry: !!document.getElementById('trades-carry-col'),
+      funding: !!document.getElementById('trades-funding-col'),
+      carries: [...document.querySelectorAll('#trades-open tr.trade td.c1d')].map((td) => td.textContent.trim()) }));
+    check('... "Biriken" and "Carry (1g)" beside the MTM; no "Fonlama" without an FX spot or a bond',
+      cols.running && cols.carry && !cols.funding && cols.carries.length === 2 && cols.carries.some((x) => /^[+-]?\d/.test(x)), cols);
+    // "DV01 · vade", as Günlük İşlemler's "OIS · vade özeti": the RECEIVE 2Y TRY OIS 100m in 2Y's receive (net −), the
+    // PAY 5Y SOFR in SOFR's 5Y pay (net +); the bar with TRY and SOFR apart
+    const ladder = await page.evaluate(() => {
+      const row = (id, tenor) => { const tr = document.querySelector('#' + id + ' tr[data-tenor="' + tenor + '"]'); return tr ? [...tr.cells].map((c) => c.textContent.trim()) : null; };
+      return { bar: (document.getElementById('trades-dv01-bar') || {}).textContent || '', try2y: row('trades-dv01-try', '2Y'), usd5y: row('trades-dv01-usd', '5Y'),
+        tenors: [...document.querySelectorAll('#trades-dv01-try tr[data-tenor]')].map((tr) => tr.dataset.tenor) };
+    });
+    check('... "DV01 · vade" as Günlük İşlemler\'s "OIS · vade özeti": RECEIVE 2Y 100m in 2Y\'s receive (net −), PAY 5Y SOFR in SOFR\'s 5Y pay; the bar, TRY and SOFR apart',
+      /DV01 · TRY faizi \+1 bp/.test(ladder.bar) && /SOFR/.test(ladder.bar) && !!ladder.try2y && /^-\d/.test(ladder.try2y[0]) && ladder.try2y[5] === '100.000.000'
+      && /^\d/.test(ladder.try2y[7]) && ladder.try2y[7] !== '0' && !!ladder.usd5y && /^\+\d/.test(ladder.usd5y[0]) && /^\d/.test(ladder.usd5y[4])
+      && ladder.usd5y[4] !== '0' && ladder.tenors[0] === 'ON' && ladder.tenors.includes('5Y') && ladder.tenors[ladder.tenors.length - 1] === 'Toplam', ladder);
+    // the personal FX spot: its roll is its funding, in its K/Z beside the MTM (the desk, 19.11.2026: spot K/Z = price move + carry)
+    const ownMtm = await api(page, 'ayşe yilmaz', 'POST', '/api/trades/mtm', { scope: 'personal' });
+    const ownVal = (((ownMtm.json || {}).values) || {})[ownId] || {};
+    const ownPer = ownVal.periods || {};
+    check('... a personal FX spot\'s roll is its funding ("Fonlama"): MTM + Fonlama = its total K/Z, whose carry is the funding',
+      ownMtm.status === 200 && ownVal.ok && ownVal.funding_1d === ownVal.carry_1d && ownVal.funding_1d < 0 && !!ownPer.funding && ownPer.funding.ccy < 0
+      && Math.abs(ownPer.total.pnl.ccy - (ownVal.mtm + ownPer.funding.ccy)) < 1 && Math.abs(ownPer.total.carry.ccy - ownPer.funding.ccy) < 1,
+      { status: ownMtm.status, ok: ownVal.ok, why: ownVal.why, mtm: ownVal.mtm, f: ownVal.funding_1d, c: ownVal.carry_1d, funding: ownPer.funding,
+        total: ownPer.total });
     // "Kupon" beside the MTM; a swap's opens "Kuponlar": the SOFR 5Y dealt today - five yearly periods ahead, paid two SIFMA
     // days after their ends, nothing realised yet
     const sofrRow = await page.evaluate(() => ([...document.querySelectorAll('#trades-open tr.trade')].find((x) => /PAY 5Y SOFR 25m/.test(x.textContent)) || {}).dataset.id);

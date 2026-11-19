@@ -1457,7 +1457,10 @@ table.plain.trades td.hit-target { color: var(--pos); }
 table.plain.trades td.hit-stop { color: var(--neg); }
 /* a swap's coupons: the list's "Kupon" (realised) and the "Kuponlar" window - a table per leg, the running period so far in
    italics, the periods ahead quiet */
-table.plain.trades td.cpn { white-space: nowrap; }
+table.plain.trades td.cpn, table.plain.trades td.run, table.plain.trades td.fund, table.plain.trades td.c1d { white-space: nowrap; }
+#trades-dv01-bar { margin-bottom: 10px; }
+table.plain.trades.dv01 { margin-top: 10px; }
+table.plain.trades.dv01 td { white-space: nowrap; font-variant-numeric: tabular-nums; }
 table.plain.trades td.cpn .linkbtn { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
 table.plain.trades td.cpn .linkbtn:hover { text-decoration-style: solid; }
 #trades-coupons .cpn-leg { margin: 0 0 14px; }

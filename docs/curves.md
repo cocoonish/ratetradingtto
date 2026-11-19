@@ -196,6 +196,11 @@ The desk's list of points each curve is built from, one list for OIS and one for
   - 27M → ¾ 2Y + ¼ 3Y;
   - 63M → ¾ 5Y + ¼ 6Y.
 - Offshore and forward legs use the Forward sheet's own buckets (`blotter.split_weights`).
+- Trades' DV01 table (`tradevalue.RISK_TENORS`, `tradebook.dv01_table`) uses both rules:
+  - a spot swap entered as a tenor goes through `bucket_split`;
+  - a dated, started or forward-starting swap, and a bond, goes through `split_weights` at its date, by days, against
+    tenor ends rolled as the swaps' are (`tradevalue.risk_split`). A forward-starting swap is first turned into two spot
+    swaps as Günlük İşlemler does a meeting-dated one (`blotter.mpc_summary_rows`).
 
 ## Fiyatlama (`tto/pricing.py`)
 
@@ -226,6 +231,13 @@ bump and NPV at a typed price.
 **FX:**
 - Discounted on the offshore curve.
 - Without it, a USDTRY forward falls back to forward points, then to USD / EUR OIS. TRY OIS is never substituted.
+
+**Carry and funding in the P&L** (desk decision 19.11.2026, [desk-decisions.md](desk-decisions.md)):
+- An FX spot's carry is the roll to the next spot date at the Forward sheet's O/N rates: TRY **offshore** O/N (ICAP,
+  `Forward!AC123`), SOFR, €STR. All of it is funding (`funding_1d`), so spot K/Z includes it. TLREF never stands in.
+- A bond's funding is its dirty price at TLREF (the fixing, else the OIS curve's O/N); the rest of its carry is the
+  bond's own, already in its dirty price.
+- Swaps and options carry no funding: their value holds all of their carry.
 
 ## Fair values
 

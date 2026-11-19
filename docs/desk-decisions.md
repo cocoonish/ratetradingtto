@@ -240,6 +240,49 @@ Tests: `tests/test_tradevalue.py` - `test_schedules_of_a_tenor_and_of_a_broken_d
   - "Mid'e göre" is + in the trader's favour;
   - editing a trade re-prices only what changed.
 
+### Trades: spot and DİBS K/Z include their carry (19.11.2026)
+
+> "Trades kısmında carry de hesaplıyoruz değil mi? Veya OIS SOFR trade'lerinin biriken kuponunu" -
+> "Spot trade'lerindeki carry'den de bahsediyorum"
+
+Until then an FX spot trade's K/Z was only the spot move, and a bond's had no funding: their carry (the roll at the two
+currencies' O/N rates; the dirty price funded at TLREF) showed only as the "c" of the K/Z, and "f" cancelled it. Asked
+whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, both.
+
+- **The rule.** K/Z = the price move + the carry since the value date: the funding the value does not hold
+  (`funding_1d`: an FX spot's whole carry; a bond's TLREF funding of its dirty price) is added day by day from the
+  closes, as the carry is counted. `c` is the carry, `f` the price move alone. A closed trade keeps its carry up to its
+  close.
+- **The list.** "Fonlama" is the funding since inception (MTM + Kupon + Fonlama = total K/Z); "Biriken" a swap's period
+  under way so far (inside the MTM); "Carry (1g)" the next business day's carry, its parts in the tip.
+- **Before 19.11.2026.** A close kept before funding was: an FX spot's carry is all funding; a bond's days take the
+  first funding known after them, and a bond closed before then keeps its K/Z. A realised K/Z kept under the old rule
+  is worked out again (`tradebook.REALIZED_RULE`).
+- Code: `tradevalue` (`funding_1d`, `running`, `carry_parts`), `tradebook` (`funding_between`, `FUNDED`). Tests:
+  `tests/test_trades.py` - `test_spot_and_dibs_k_z_count_their_funding_beside_the_value`,
+  `test_a_realised_p_and_l_kept_before_funding_counted_is_worked_out_again`.
+
+### Trades: a DV01 table like Günlük İşlemler's (19.11.2026)
+
+> "Trades kısmına da günlük işlemler kısmındaki gibi dv01 tablosu eklemek istiyorum"
+
+- **What it copies.** Günlük İşlemler's "OIS · vade özeti" (`Günlük İşlemler!O22:W39`): Net DV01 (`S − V`, payer +),
+  the tenor, Pay and Receive nominal / rate (nominal-weighted) / DV01 ($), and the net rate `(R·S − U·V)/(S − V)` when
+  both sides are there; the total row has no rates. Plus a bar like the blotter's ("DV01 · TRY faizi +1 bp ($) ·
+  payer +"): TRY OIS net, bonds, their total, and SOFR apart.
+- **Whose trades.** The tab's open trades (desk or personal) at the last "MTM yenile"; SOFR in its own table (USD
+  rates); bonds only in the bar (DİBS RV's DV01 at maturity, a bond bought −); FX not in it.
+- **Tenors.** ON, 1W, 2W, 1M, 2M, 3M, 6M, 9M, 1Y, 18M, 2Y, 3Y, 4Y, 5Y as the sheet, then 6Y–10Y (the desk's buckets).
+  - A spot swap entered as a tenor sits on its tenor; 15M splits ½ 1Y + ½ 18M (the 18.11 bucket rule).
+  - A dated or started swap sits at its end date, split between the two tenors around it by days. The tenor ends are
+    rolled to business days as the swaps' are.
+  - A forward-starting swap (FRA, PPK period, forward leg) is split as Günlük İşlemler splits a meeting-dated swap
+    (`blotter.mpc_summary_rows`): the spot swap to its end its way, the spot swap to its start the other way, on one
+    nominal whose two DV01s add up to its own.
+- Code: `tradevalue.risk_split` / `risk_months` / `_risk_legs` (`risk` of a valuation), `tradebook.dv01_table`.
+  Tests: `test_dv01_on_the_tenors_as_gunluk_islemler_takes_a_trade` (test_tradevalue),
+  `test_the_dv01_table_adds_up_the_tab_s_open_swaps_and_bonds` (test_trades).
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

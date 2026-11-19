@@ -352,12 +352,20 @@ def test_started_ois_uses_the_fixings():
     # carry: fixed against today's overnight on the compounded notional (1 day: Tuesday → Wednesday); no roll on a flat curve
     assert abs(r["inputs"]["carry_accrual"] - N * (0.41 - i_real * 0.40) / 365.0) < 1e-6
     assert abs(r["inputs"]["roll_1d"]) < 1e-4 and abs(r["carry_1d"] - r["inputs"]["carry_accrual"]) < 1e-4
+    assert r["carry_parts"] == [["tahakkuk", r["inputs"]["carry_accrual"]], ["roll-down", r["inputs"]["roll_1d"]]]
+    # the period under way so far ("Biriken"): its fixed to today less the fixings compounded - inside the MTM; a swap's
+    # value holds all of its carry: no funding
+    so_far = (TODAY - start).days
+    assert abs(r["running"] - N * (0.41 * so_far / 365.0 - (i_real - 1.0))) < 1e-6 and r["funding_1d"] == 0.0
+    run_row = [x for x in r["inputs"]["coupons"][0]["periods"] if x["state"] == "running"]
+    assert len(run_row) == 1 and abs(run_row[0]["net"] - r["running"]) < 1e-9 and r["running_try"] == r["running"]
+    assert flat["running"] > r["running"]                     # (its fixings below 45 %: it has received more)
     # a period paid: its net settlement is accrued, not MTM
     t2 = ois(price=41.0, trade_date="2026-09-01", settle_date="2026-09-02", end_date="2026-10-02")
     fx2 = {d: 0.42 for d in business_days(D(2026, 9, 2), D(2026, 10, 2))}
     m2 = hand_market(fix_try=tv.Fixings({d.isoformat(): 42.0 for d in fx2}, 0.40, (), 365.0, "TLREF"))
     r2 = tv.value(t2, m2)
-    assert r2["mtm"] == 0.0
+    assert r2["mtm"] == 0.0 and r2["running"] == 0.0
     assert abs(r2["accrued"] - N * (0.41 * 30 / 365.0 - (compounded(fx2, D(2026, 9, 2), D(2026, 10, 2), 365.0) - 1.0))) < 1e-6
 
 
@@ -558,6 +566,10 @@ def test_a_coupon_paid_moves_from_the_swap_to_the_realised_and_the_value_does_no
     assert [len(x["periods"]) for x in b["inputs"]["coupons"]] == [2, 4] and [x["label"] for x in b["inputs"]["coupons"]] == [
         lg["label"] for lg in b["legs"]]
     assert abs(b["accrued"] - sum(lg["accrued"] for lg in b["legs"])) < 1e-9 and all(abs(lg["accrued"]) > 1e5 for lg in b["legs"])
+    # the periods under way so far: each leg's own, the package their sum (the 6M's second quarter has just begun, the
+    # 1Y's too)
+    assert abs(b["running"] - sum(lg["running"] for lg in b["legs"])) < 1e-9 and all(lg["running"] is not None for lg in b["legs"])
+    assert abs(a["running"] - sum(lg["running"] for lg in a["legs"])) < 1e-9 and abs(a["legs"][0]["running"]) > 1e5
     assert [len(lg["coupon_flows"]) for lg in b["legs"]] == [1, 1] and b["legs"][0]["coupon_flows"][0][0] == "2026-11-04"
     assert a["accrued"] == 0.0 and all(lg["accrued"] == 0.0 and lg["coupon_flows"] == [] for lg in a["legs"])
     for i in range(2):
@@ -653,6 +665,12 @@ def test_fx_spot_pnl_and_conversion():
     # carry: rolling the position a day at the overnight rates (TRY offshore O/N 30 %, USD 4 %)
     f1 = 42.0 * (1 + 0.30 / 360) / (1 + 0.04 / 360)
     assert abs(r["carry_1d"] + 1e6 * (f1 - 42.0)) < 1e-6 and r["inputs"]["carry_days"] == 1
+    # ... all of it funding: the spot MTM holds none of the roll - the K/Z counts it beside (the desk, 19.11.2026)
+    assert r["funding_1d"] == r["carry_1d"] < 0 and r["funding_1d_try"] == r["carry_1d_try"] and r["funding_1d_usd"] == r["carry_1d_usd"]
+    assert r["carry_parts"] == [["fonlama", r["carry_1d"]]] and r["carry_note"] == "O/N faizleri (USD 4,00, TRY 30,00)"
+    assert r["running"] is None and r["accrued"] is None
+    short = tv.value({"product": "fxspot", "pair": "USDTRY", "side": "S", "notional": 1e6, "price": 41.0, "trade_date": TODAY.isoformat()}, m)
+    assert abs(short["funding_1d"] + r["funding_1d"]) < 1e-9 and short["funding_1d"] > 0          # (short USD: earns it)
 
 
 def test_option_garman_kohlhagen_and_put_call_parity():
@@ -749,6 +767,7 @@ def test_carry_per_product_by_hand():
     # OIS / SOFR not started yet on a flat curve: nothing accrues, nothing rolls
     r = tv.value(ois(price=40.0, tenor="2Y"), m)
     assert r["inputs"]["carry_accrual"] == 0.0 and abs(r["carry_1d"]) < 1e-6
+    assert r["funding_1d"] == 0.0 and r["running"] == 0.0                # (nothing under way yet; a swap needs no funding)
     # ... on a sloped curve the roll-down: the trade on the curve rolled a day against the forwards realised
     m.curves["ois"] = bootstrap(m.spot_date("ois"), QUOTES)
     r = tv.value(ois(price=QUOTES[12] * 100, tenor="1Y"), m)
@@ -760,6 +779,13 @@ def test_carry_per_product_by_hand():
     y = (100 / 92.22 - 1) * 365 / days
     p2 = 100 / (1 + y * (days - 1) / 365)
     assert abs(r["carry_1d"] - 10e6 / 100 * (p2 - 92.22 * (1 + 0.40 / 365))) < 1e-6
+    # ... its funding part alone - what the dirty price (the MTM) does not earn: the K/Z counts it beside the MTM (the desk,
+    # 19.11.2026: DİBS K/Z = price move + carry); the rest is the bill's own
+    assert abs(r["funding_1d"] + 10e6 / 100 * 92.22 * 0.40 / 365) < 1e-6 and r["funding_1d_try"] == r["funding_1d"]
+    assert [k for k, _ in r["carry_parts"]] == ["kâğıt", "fonlama"] and abs(r["carry_parts"][0][1] - 10e6 / 100 * (p2 - 92.22)) < 1e-6
+    assert r["carry_parts"][1][1] == r["funding_1d"] and r["carry_note"] == "TLREF %40,00" and r["running"] is None
+    sold = tv.value({"product": "dibs", "isin": "TRB100227T13", "side": "S", "notional": 10e6, "price": 92.22, "trade_date": TODAY.isoformat()}, m)
+    assert abs(sold["funding_1d"] + r["funding_1d"]) < 1e-9 and sold["funding_1d"] > 0               # (short: lends the cash)
     # the coupon bond: the BIST price at its simple yield a value date on, less funding
     r = tv.value({"product": "dibs", "isin": "TRT150328T24", "side": "B", "notional": 10e6, "price": 100.1125,
                   "trade_date": TODAY.isoformat()}, m)
@@ -769,6 +795,7 @@ def test_carry_per_product_by_hand():
     dirty = 100.1125 + _bist_accrued(D(2028, 3, 15), 36.8, v1)
     ys = b.yield_of(dirty, v1, "simple")
     assert abs(r["carry_1d"] - 10e6 / 100 * (b.price(ys, v2, "simple")[0] - dirty * (1 + 0.40 / 365))) < 1e-6
+    assert abs(r["funding_1d"] + 10e6 / 100 * dirty * 0.40 / 365) < 1e-6
     # FX option: theta over the day - the same spot, vol and rates a day later
     t = {"product": "fxopt", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 0.0, "trade_date": TODAY.isoformat(),
          "call_put": "call", "strike": 44.0, "expiry": "2027-02-03", "manual_price": 15.0}
@@ -778,6 +805,60 @@ def test_carry_per_product_by_hand():
     rq, rb = -math.log(i["df_quote"]) / tq, -math.log(i["df_base"]) / tq
     later = 1e6 * tv.gk(42.0, 44.0, i["T"] - 1 / 365.0, 0.15, math.exp(-rq * (tq - 1)), math.exp(-rb * (tq - 1)), True)
     assert abs(r["carry_1d"] - (later - i["value"])) < 1e-6 and r["greeks"]["theta"] == r["carry_1d"]
+    assert r["funding_1d"] == 0.0 and r["carry_parts"] == [["theta", r["carry_1d"]]]      # (its value holds its theta)
+
+
+def test_dv01_on_the_tenors_as_gunluk_islemler_takes_a_trade():
+    """``risk``: a trade's DV01 on the tenors of Trades' DV01 table (Günlük İşlemler's "OIS · vade özeti") - a spot swap
+    entered as a tenor on its tenor (15M: ½ 1Y + ½ 18M, the desk's buckets), a dated one at its end between the two
+    tenors around it by days, a FRA as the spot swap to its end and the opposite one to its start on the one nominal
+    that makes their DV01s add up to its own (blotter.mpc_summary_rows), a spread leg by leg, SOFR on its own curve, a
+    bond at its maturity (bought: "S", as a receiver); none for a closed trade or an FX one."""
+    m = hand_market()
+    m.curves["ois"] = bootstrap(m.spot_date("ois"), QUOTES)
+    spot = m.spot_date("ois")
+    td = TODAY.isoformat()
+
+    def risk(t):
+        r = tv.value(t, m)
+        assert r["ok"], r["why"]
+        return r, [(x["tenor"], x["dir"], x["nominal"], x["dv01"]) for x in r["risk"]]
+
+    r, rows = risk(ois(price=36.0, tenor="2Y", settle_date=spot.isoformat()))
+    assert rows == [("2Y", "S", N, r["inputs"]["dv01"])] and r["risk"][0]["rate"] == 36.0 and r["risk"][0]["curve"] == "TRY"
+    assert abs(r["risk"][0]["dv01_usd"] - r["inputs"]["dv01"] / 42.0) < 1e-9 and r["risk"][0]["dv01_try"] == r["inputs"]["dv01"]
+    r, rows = risk(ois(side="pay", price=36.5, tenor="15M", settle_date=spot.isoformat()))
+    assert [(a, b, c) for a, b, c, _ in rows] == [("1Y", "B", N / 2), ("18M", "B", N / 2)]
+    assert abs(sum(x[3] for x in rows) - r["inputs"]["dv01"]) < 1e-9
+    # a broken date: between the two tenors around it by days (the tenors' ends rolled as the swaps' are)
+    end = D(2028, 1, 19)
+    r, rows = risk(ois(price=36.0, end_date=end.isoformat(), settle_date=spot.isoformat()))
+    hol = m.hol("TRY")
+    e1, e2 = (tv.risk_tenor_end(spot, x, tv.CONVS["ois"], hol) for x in ("1Y", "18M"))
+    w = (end - e1).days / float((e2 - e1).days)
+    assert [x[0] for x in rows] == ["1Y", "18M"] and abs(rows[1][3] / r["inputs"]["dv01"] - w) < 1e-12
+    assert abs(rows[0][2] + rows[1][2] - N) < 1e-6
+    # a FRA: the spot swap to its end the FRA's way, the one to its start the other way, one nominal - their DV01s add
+    # up to its own; the start's rate the curve's, the end's what makes the two its rate
+    r, rows = risk(ois(structure="fra", fra="3x6", side="pay", price=37.0))
+    (t6, d6, n6, v6), (t3, d3, n3, v3) = rows
+    assert (t6, d6, t3, d3) == ("6M", "B", "3M", "S") and abs(n6 - n3) < 1e-6 and abs((v6 - v3) - r["inputs"]["dv01"]) < 1e-6
+    par3 = tv._par_rate(m, "ois", spot, tv.risk_tenor_end(spot, "3M", tv.CONVS["ois"], hol)) * 100.0
+    assert abs(r["risk"][1]["rate"] - par3) < 1e-9 and abs(r["risk"][0]["rate"] * v6 / n6 - (37.0 * (v6 - v3) / n6 + par3 * v3 / n6)) < 1e-6
+    # a spread: each leg on its own tenor, its own side
+    legs = [{"tenor": "2Y", "side": "receive", "notional": N, "price": 36.0}, {"tenor": "5Y", "side": "pay", "notional": N / 2, "price": 35.0}]
+    r, rows = risk(ois(structure="spread", legs=legs, settle_date=spot.isoformat()))
+    assert [(a, b) for a, b, _, _ in rows] == [("2Y", "S"), ("5Y", "B")] and [x[3] for x in rows] == r["inputs"]["legs_dv01"]
+    # SOFR on its own curve (USD); a bond at its maturity, bought: "S"
+    r, rows = risk({"product": "sofr", "side": "pay", "notional": N, "price": 4.0, "tenor": "5Y", "trade_date": td,
+                    "settle_date": m.spot_date("sofr").isoformat()})
+    assert rows == [("5Y", "B", N, r["inputs"]["dv01"])] and r["risk"][0]["curve"] == "USD" and r["risk"][0]["dv01_usd"] == r["inputs"]["dv01"]
+    r, rows = risk({"product": "dibs", "isin": "TRB100227T13", "side": "B", "notional": 10e6, "price": 92.22, "trade_date": td})
+    assert {x[1] for x in rows} == {"S"} and abs(sum(x[3] for x in rows) - r["inputs"]["dv01"]) < 1e-9
+    assert [x[0] for x in rows] == ["3M"] or [x[0] for x in rows] == ["3M", "6M"]          # (10.2.2027: just past 3M)
+    # nothing to put: a closed swap, FX
+    assert "risk" not in tv.value(ois(price=36.0, tenor="2Y", status="closed", close_price=35.0, close_date=td), m)
+    assert "risk" not in tv.value({"product": "fxspot", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 42.0, "trade_date": td}, m)
 
 
 def test_carry_over_a_weekend_and_a_holiday():
@@ -814,7 +895,9 @@ def test_results_are_plain_json():
         assert r["ok"], (t, r["why"])
         back = json.loads(json.dumps(r, allow_nan=False))
         assert back["mtm"] == r["mtm"] and set(back) >= {"ok", "why", "ccy", "mtm", "mtm_try", "mtm_usd", "carry_1d", "carry_1d_try",
-                                                         "carry_1d_usd", "accrued", "price_now", "price_text", "greeks", "inputs"}
+                                                         "carry_1d_usd", "accrued", "funding_1d", "funding_1d_try", "funding_1d_usd",
+                                                         "running", "running_try", "running_usd", "carry_parts", "price_now",
+                                                         "price_text", "greeks", "inputs"}
     assert tv.value({"product": "ois"}, m)["ok"] is False and tv.value(None, m)["ok"] is False
 
 
@@ -825,14 +908,15 @@ def test_closed_trades_keep_what_the_close_locked_in():
     t = ois(price=40.0, tenor="2Y")
     a = tv.value(t, m)["inputs"]["annuity"]
     r = tv.value(dict(t, status="closed", close_price=38.0, close_date=td), m)
-    assert abs(r["mtm"] - N * 0.02 * a) < 1e-6 and r["carry_1d"] == 0.0
-    # FX spot and a bond at their close price, whatever the market does since
+    assert abs(r["mtm"] - N * 0.02 * a) < 1e-6 and r["carry_1d"] == 0.0 and r["funding_1d"] == 0.0
+    # FX spot and a bond at their close price, whatever the market does since - nothing left to fund
     r = tv.value({"product": "fxspot", "pair": "EURUSD", "side": "B", "notional": 1e6, "price": 1.10, "trade_date": td,
                   "status": "closed", "close_price": 1.12, "close_date": td}, m)
-    assert abs(r["mtm"] - 20000.0) < 1e-6 and r["carry_1d"] == 0.0
+    assert abs(r["mtm"] - 20000.0) < 1e-6 and r["carry_1d"] == 0.0 and r["funding_1d"] is None and "carry_parts" not in r
     r = tv.value({"product": "dibs", "isin": "TRT150328T24", "side": "B", "notional": 10e6, "price": 99.0, "trade_date": td,
                   "status": "closed", "close_price": 100.0, "close_date": td}, m)
     assert abs(r["mtm"] - 10e6 / 100 * 1.0) < 1e-6 and r["carry_1d"] == 0.0 and r["inputs"]["source"] == "kapanış fiyatı"
+    assert r["funding_1d"] is None and "carry_parts" not in r
     # an option sold back: the close premium against the opening one
     r = tv.value({"product": "fxopt", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 100000.0, "trade_date": td,
                   "call_put": "call", "strike": 45.0, "expiry": "2027-02-03", "status": "closed", "close_price": 150000.0,
