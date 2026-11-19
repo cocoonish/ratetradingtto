@@ -480,6 +480,55 @@ whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, bo
   40–50 % (e.g. 50 % of 16 at 1–3Y, 40 % of 5 at 5Y+). So the ±2σ levels mark "unusual against fair now", not a
   proven reversion signal - say so when asked, and don't tune the band on this sample. The fair level itself held
   with a next-day error of about 16–23 bp over 1Y.
+- **Öngörülen and the two ASW curves** (asked the same evening, after seeing the page):
+
+  > "Bu adil fiyat bir süre sonra ulaşmasını tahmin ettiğimiz fiyat gibi de olmalı. Bir adil fiyat, bir de öngörülen fiyat
+  > olacak yani, OIS ve FX swap curve'üne göre fiyatları da ayrıca gösterilsin"
+
+  - **Adil** stays as it is (where the bond should trade now). **Öngörülen**: the yield and price we expect it to reach
+    after a while. **OIS'e göre / FX swap'a göre**: shown apart, exactly DİBS Trading's columns of those names
+    (`rvfair.fair` and the trading summary's own cells, `Service._fair_cells`: the same values, tips and reasons).
+  - **Measured first, on the desk's history** (a backup copy of its database of 19.11.2026: the same 16 DİBS, bases and
+    basis as above; 256 closes, 10.11.2025–16.11.2026). Horizons H = 5, 10, 20 closes. Models, each on the bond's
+    spread to the neighbours' curve `s = y − nbr` (`kagitfiyat.project`): M0 no change; M1 `nbr + μ + (s − μ)·φ^H` (AR(1),
+    μ and φ from a rolling 60 or 120 closes, φ held within [0, 1]); M2 the roll-down only, `roll + s` (`roll`: the bond's
+    yield on the same curve at the horizon's value date); M3 M1 with the roll-down; M4 M3 `+ β × (OIS forward zero from the
+    horizon to maturity − today's OIS zero for the same remaining life)`, β the bond's daily yield changes on its OIS
+    zero's, rolling. Every forecast out of sample (its parameters from the closes up to the forecast day); one sample for
+    all models (from a bond's 120th close on: 181–362 forecasts per cell). RMSE in bp of the compound yield:
+
+    | | 1 hafta (H 5) | 2 hafta (H 10) | 1 ay (H 20) |
+    |---|---|---|---|
+    | ≤ 1Y | M2 84 vs M0 86 (+1,9 %) | M2 120 vs 124 (+2,8 %) | **M4/120 166 vs 179 (+7,4 %), hit 71 % (177)** |
+    | 1–3Y | M4/60 86 vs 87 (+0,4 %) | M4/60 118 vs 120 (+1,4 %) | **M4/60 149 vs 164 (+9,0 %), hit 64 % (259)** |
+    | 3–5Y | M4/60 78 vs 78 (0,0 %) | M2 101 vs 101 (0,0 %) | M2 133 vs 132 (−0,9 %) |
+    | 5Y+ | M2 71 vs 71 (+0,1 %) | M2 95 vs 95 (+0,3 %) | M2 122 vs 122 (+0,3 %) |
+
+    (each cell: the best model but M0, its RMSE against M0's, the gain; hit: of its calls of a move ≥ 5 bp, the share
+    the yield went that way). The spread's own reversion (M1, M3) was worse than no change almost everywhere (−1 to
+    −18 %); the OIS forward's drift (M4) is what helped, at 1 ay and short maturities.
+  - **The rule, fixed before measuring** (`kagitfiyat.choose`): per bucket and horizon the lowest out-of-sample RMSE if it
+    beats M0 by 5 % or more; else M2 shown as "eğri ve fark değişmezse", saying plainly that no model beat no change
+    there. **Chosen** (`PROJECTION`): ≤ 1Y and 1–3Y at 1 ay M4 (windows 120 and 60); everywhere else M2, said. **The
+    page opens on 1 ay** (`DEFAULT_H`): the best gain over M0 pooled over the buckets (+4,6 %; 1 hafta +0,4 %, 2 hafta
+    +0,7 %). All three horizons stay on the switch.
+  - **The honest record**: a week's error is 70–90 bp, a month's 120–180 bp, and only short bonds at a month beat no
+    change - by 7–9 % on half a year of overlapping forecasts (about six independent months), when the PPK path the OIS
+    curve priced largely came true (in the last quarter the gain was larger, +12–18 %). The τ of the neighbours' curve
+    was searched on the last close and held (as the page does): a slight look-ahead in the curve's shape. So Öngörülen is
+    "the likeliest level on this evidence", not a call; say so when asked, and don't tune it on this sample.
+  - **The page** (`KagitFiyat._projection`): from the yield now (DİBS RV!T; without one, the neighbours' curve now plus
+    the last close's spread), the neighbours' curve now and its roll-down to each horizon's value date (`neighbours`'
+    `ahead`), the window's AR(1) and β of the bond's closes (`fit_window`, kept per history revision) and today's OIS
+    Bootstrap (`ois_move`); the projected yield in compound and simple, its clean price at the horizon's value date (the
+    bond's own cash flows then, BIST's rules - at today's value date the same price as DİBS RV's), the change in bp and
+    the K/Z of 1 mn nominal (the two yields' prices on that date; no carry, no funding), the model and its record
+    ("geri test: RMSE x bp, değişmezse'ye göre %y daha iyi, yön isabeti %z (n)"; `record_text`).
+  - **Conventions settled while building it** (ask before changing): the horizon's day is today + H TRY business days
+    (the history's holidays), its value date by the bond's source (ISL0 the same day, else the next week day); a window
+    shorter than its length (a newer bond) uses the closes there are, from 21 consecutive ones on, and the line says how
+    many; a bond whose closes cannot give the model's AR(1) or β, or with no OIS curve now, shows M2 in its place with
+    the reason and M2's own record; the switch's choice is kept per browser, the card follows the page's.
 - Code: `tto/kagitfiyat.py`, `Service.kagit_fiyat` / `kagit_fiyat_widths`, `GET /api/kagit-fiyat` (`?isin=`: one bond, the
   card's), `POST /api/kagit-fiyat/genislik`, `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`. Tests:
   `tests/test_kagitfiyat.py`, the browser test's Kâğıt Fiyatlama checks.

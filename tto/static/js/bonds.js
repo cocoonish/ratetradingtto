@@ -177,7 +177,7 @@ export async function openBondCard(ctx, isin) {
   section('Kâğıt fiyatlama', kf);
   api.get('/api/kagit-fiyat?isin=' + encodeURIComponent(d.isin)).then((k) => {
     const row = (k && k.rows || [])[0];
-    clear(kf).appendChild(row ? kagitBlock(row, k.rules) : h('p', { class: 'muted' }, (k && k.why) || 'Kâğıt fiyatlanmadı'));
+    clear(kf).appendChild(row ? kagitBlock(row, k.rules, k.projection) : h('p', { class: 'muted' }, (k && k.why) || 'Kâğıt fiyatlanmadı'));
   }).catch((err) => { clear(kf).appendChild(h('p', { class: 'muted', id: 'kf-card-why' }, (err && err.message) || 'Kâğıt fiyatlanmadı')); });
   // ``left``: the columns of text (the others are numbers, right-aligned)
   const table = (heads, rows, cls, left = [0]) => {

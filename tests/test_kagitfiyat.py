@@ -179,6 +179,131 @@ def test_how_the_price_was_built_in_a_line():
     assert kf.how_line(parts[:1], 37.70, None, None, dt.date(2026, 11, 24)).startswith("Komşu eğri 37,62 + 19.11 kapanışındaki fark +8 bp")
 
 
+# ================================================================================================== Öngörülen: the models
+def test_each_projection_model_on_known_numbers():
+    """The desk: "Bu adil fiyat bir süre sonra ulaşmasını tahmin ettiğimiz fiyat gibi de olmalı".  Each model's arithmetic
+    (decimal compound yields): the bond at 36,00 %, the neighbours' curve 35,50 % (a +50 bp spread), the curve 10 closes on
+    at the bond's shorter maturity 35,30 %, the spread's AR(1) mean +20 bp and φ 0,9, β 0,8 on an OIS forward 40 bp
+    under the zero rate."""
+    y, nbr, roll, ar, beta, move = 0.36, 0.355, 0.353, (0.002, 0.9), 0.8, -0.004
+    to = 0.002 + 0.003 * 0.9 ** 10                                       # (the spread 10 closes on: μ + (s − μ)·φ^10)
+    assert kf.project(kf.M0, 10, y, nbr, roll, ar, beta, move) == y                                    # no change
+    assert kf.project(kf.M1, 10, y, nbr, roll, ar, beta, move) == pytest.approx(0.355 + to, abs=1e-15)  # back toward its mean
+    assert kf.project(kf.M2, 10, y, nbr, roll, ar, beta, move) == pytest.approx(0.353 + 0.005, abs=1e-15)  # roll-down alone
+    assert kf.project(kf.M3, 10, y, nbr, roll, ar, beta, move) == pytest.approx(0.353 + to, abs=1e-15)
+    assert kf.project(kf.M4, 10, y, nbr, roll, ar, beta, move) == pytest.approx(0.353 + to - 0.8 * 0.004, abs=1e-15)
+    # a model without one of its parts makes none: M2 the roll-down, M1 / M3 the AR(1), M4 β and the OIS move
+    assert kf.project(kf.M2, 10, y, nbr, None, ar, beta, move) is None and kf.project(kf.M1, 10, y, nbr, roll, None, beta, move) is None
+    assert kf.project(kf.M4, 10, y, nbr, roll, ar, None, move) is None and kf.project(kf.M4, 10, y, nbr, roll, ar, beta, None) is None
+    assert kf.project(kf.M3, 10, y, None, roll, ar, beta, move) is None and kf.project(kf.M0, 10, y, None, None, None, None, None) == y
+
+
+def test_the_ar1_the_beta_and_their_window():
+    rng = random.Random(5)
+    s = [0.0]
+    for _ in range(40):
+        s.append(0.7 * s[-1] + rng.gauss(0, 1))
+    mu = sum(s) / len(s)
+    num = sum((s[k] - mu) * (s[k + 1] - mu) for k in range(40))
+    den = sum((s[k] - mu) ** 2 for k in range(40))
+    got = kf.ar1(s, [True] * 40)
+    assert got[0] == pytest.approx(mu, abs=1e-15) and got[1] == pytest.approx(num / den, abs=1e-15) and 0.4 < got[1] < 0.95
+    # two closes not one day apart on the history's axis are no pair
+    gap = [k != 10 for k in range(40)]
+    assert kf.ar1(s, gap)[1] == pytest.approx((num - (s[10] - mu) * (s[11] - mu)) / (den - (s[10] - mu) ** 2), abs=1e-15)
+    # φ held within [0, 1]: a spread flipping sign each day → 0, one growing away → 1; too few pairs or no variation: none
+    assert kf.ar1([(-1.0) ** k for k in range(30)], [True] * 29)[1] == 0.0
+    assert kf.ar1([1.1 ** k for k in range(30)], [True] * 29)[1] == 1.0
+    assert kf.ar1(s[:20], [True] * 19) is None and kf.ar1([1.0] * 30, [True] * 29) is None
+    # β: the yield's daily changes on its OIS base's
+    dx = [rng.gauss(0, 10) for _ in range(30)]
+    assert kf.beta_of([0.8 * x + 0.1 for x in dx], dx) == pytest.approx(0.8, abs=1e-12) and kf.beta_of(dx[:19], dx[:19]) is None
+    # the window: the bond's last w closes up to the forecast's (included) - nothing after it
+    days = ["d%03d" % i for i in range(50)]
+    pos = {x: i for i, x in enumerate(days)}
+    ois = [0.30 + rng.gauss(0, 0.001) for _ in days]
+    recs = [{"day": x, "y": 0.35 + s[i % 41] / 1e4 + 0.9 * (ois[i] - 0.30), kf.NBR: 0.35, kf.OIS: ois[i]} for i, x in enumerate(days)]
+    p = kf.fit_window(recs, pos, 35, 30)
+    win = recs[6:36]
+    assert p["n"] == 30 and p["ar"] == kf.ar1([r["y"] - r[kf.NBR] for r in win], [True] * 29)
+    assert p["beta"] == pytest.approx(kf.beta_of([b["y"] - a["y"] for a, b in zip(win, win[1:])],
+                                                 [b[kf.OIS] - a[kf.OIS] for a, b in zip(win, win[1:])]), abs=1e-15)
+    later = [dict(r, y=r["y"] + 0.05) if i > 35 else r for i, r in enumerate(recs)]          # (closes after it: no matter)
+    assert kf.fit_window(later, pos, 35, 30) == p
+
+
+class _Curve(object):
+    """A discount curve of annual zero rates ``z(t)`` (t days)."""
+
+    def __init__(self, z):
+        self.z = z
+
+    def df(self, t):
+        return (1.0 + self.z(t)) ** (-t / 365.0)
+
+
+def test_the_ois_forwards_move():
+    """M4's market-implied move of the base: the OIS forward zero rate from the horizon to the maturity less today's zero
+    rate for the same remaining life - none on a flat curve, down where the curve falls (cuts priced), up where it rises."""
+    assert kf.ois_move(_Curve(lambda t: 0.40), 100.0, 465.0, 28.0) == pytest.approx(0.0, abs=1e-12)
+    falling = _Curve(lambda t: 0.42 - 0.02 * t / 365.0)
+    fwd = (falling.df(28.0) / falling.df(365.0)) ** (365.0 / 337.0) - 1.0
+    down = kf.ois_move(falling, 0.0, 365.0, 28.0)
+    assert down == pytest.approx(fwd - (0.42 - 0.02 * 337.0 / 365.0), abs=1e-12) and down < 0
+    assert kf.ois_move(_Curve(lambda t: 0.30 + 0.02 * t / 365.0), 0.0, 730.0, 28.0) > 0
+    assert kf.ois_move(falling, 0.0, 20.0, 28.0) is None and kf.ois_move(None, 0.0, 365.0, 28.0) is None
+
+
+def test_the_roll_down_is_the_bonds_yield_on_the_same_curve_later():
+    """M2's "the curve unchanged, the bond shorter": the bond's cash flows from the horizon's value date on the very curve
+    its base is read on now - for a coupon bond the curve of the others, for a bill the curve of all."""
+    value = dt.date(2026, 11, 4)
+    items = _bonds(value)
+    nss0 = qc.dibs_search(qc.BondFit(items))["nss"]
+    later = value + dt.timedelta(days=28)
+    got = kf.neighbours(items, nss0, ahead={b.isin: {20: later} for b, _, _, _ in items})
+    assert got["nbr"] == kf.neighbours(items, nss0)["nbr"] and set(got["roll"]) == set(got["nbr"])
+    fit_in = qc.BondFit([x for x in items if x[0].isin != "TRT04"])
+    nss = qc.refit(fit_in.make, nss0, nss0.beta, iters=8)["nss"]
+    b4 = items[4][0]
+    flows, _ = b4.flows(later)
+    ys = b4.yield_of(sum(cf * nss.df((d - later).days / 365.0) for d, cf in flows), later, "simple", items[4][2])
+    assert got["roll"]["TRT04"][20] == pytest.approx((1 + ys / 2) ** 2 - 1, abs=1e-8)
+    bill = items[-1][0]
+    t = (bill.maturity - later).days / 365.0
+    yb = bill.yield_of(100.0 * got["nss"].df(t), later, "simple")
+    assert got["roll"]["TRB01"][20] == pytest.approx((1 + yb * t) ** (1 / t) - 1, abs=1e-10)
+    # the horizon's days: TRY business days (a holiday skipped)
+    assert kf.workday(dt.date(2026, 11, 3), 5, frozenset()) == dt.date(2026, 11, 10)
+    assert kf.workday(dt.date(2026, 11, 3), 5, frozenset({serial(dt.date(2026, 11, 6))})) == dt.date(2026, 11, 11)
+
+
+def test_the_decision_rule_falls_back_to_m2_where_nothing_beats_no_change():
+    """The rule fixed before measuring: per bucket and horizon the lowest out-of-sample RMSE, if it beats no change (M0) by
+    5 % or more; else M2, shown as "eğri ve fark değişmezse" with the plain record that no model beat no change."""
+    assert kf.choose({"M1/60": 95.0, "M2": 99.0, "M4/120": 97.0}, 100.0) == ("M1/60", True)            # 5 % better: used
+    assert kf.choose({"M1/60": 95.2, "M2": 99.0, "M4/120": 97.0}, 100.0) == (kf.M2, False)             # 4,8 %: not enough
+    assert kf.choose({"M2": 101.0, "M3/60": 104.0}, 100.0) == (kf.M2, False)
+    # the table the desk's history gave: a model used beat M0 by 5 % (and M2); elsewhere M2, said
+    used = []
+    for bucket, by_h in kf.PROJECTION.items():
+        assert set(by_h) == {5, 10, 20}
+        for h, rec in by_h.items():
+            if rec["beat"]:
+                assert rec["model"] in (kf.M1, kf.M3, kf.M4, kf.M2) and rec["window"] in kf.AR_WINDOWS + (0,)
+                assert 1 - rec["rmse"] / rec["m0"] >= kf.BEAT and rec["rmse"] <= rec["m2"]["rmse"]
+                used.append((bucket, h, rec["model"], rec["window"]))
+            else:
+                assert rec["model"] == kf.M2 and rec["gain"] < kf.BEAT * 100 and rec["rmse"] == rec["m2"]["rmse"]
+                assert kf.record_text(rec, kf.M2).startswith("geri test: hiçbir model değişmezse'yi %5 yenemedi (en iyisi ")
+    assert used == [("1y", 20, kf.M4, 120), ("3y", 20, kf.M4, 60)] and kf.DEFAULT_H == 20
+    rec = kf.PROJECTION["3y"][20]
+    assert kf.record_text(rec, kf.M4) == "geri test: RMSE 149 bp, değişmezse'ye göre %9,0 daha iyi, yön isabeti %64 (259)"
+    assert kf.record_text(rec, kf.M2) == "geri test (eğri ve fark değişmezse): RMSE 166 bp (değişmez 164 bp), yön isabeti %50 (221)"
+    assert kf.record_text(kf.PROJECTION["5y"][20], kf.M2) == ("geri test: hiçbir model değişmezse'yi %5 yenemedi (en iyisi M2, −%0,9) · "
+                                                            "eğri ve fark değişmezse: RMSE 133 bp (değişmez 132 bp), yön isabeti %48 (279)")
+
+
 # ================================================================================================== on the replay day
 @pytest.fixture(scope="module")
 def svc(module_service):
@@ -409,6 +534,154 @@ def test_the_page_is_first_in_the_tahvil_menu(svc):
     assert kf.menu([{"id": "usd", "title": "USD", "group": "USD"}]) == [{"id": "usd", "title": "USD", "group": "USD"}]
 
 
+def test_the_projection_and_the_horizon_switch(svc, seeded):
+    """Öngörülen of a bill (≤ 1Y), a 1–3Y and a 5Y+ bond over the made-up history: at each horizon its bucket's model of
+    the measured table (M4 at 1 ay for ≤ 1Y and 1–3Y, else M2 "eğri ve fark değişmezse"), worked out again here from its
+    parts - DİBS RV's yield now, the neighbours' curve now and its roll-down to the horizon's value date, the window's AR(1)
+    and β of the closes, the OIS Bootstrap's forwards; the three horizons each their own (the switch's), 1 ay the
+    default."""
+    u = svc.login("Kâğıt Öngörü")["user"]
+    d = svc.kagit_fiyat(u)
+    pj = d["projection"]
+    today, mk = seeded["today"], seeded["mk"]
+    _, _, hol, _ = svc._swaption_closes(mk)
+    hdays = {h: kf.workday(today, h, hol) for h in (5, 10, 20)}
+    assert pj["default"] == 20 and [(x["h"], x["text"], x["day"]) for x in pj["horizons"]] == \
+        [(5, "1 hafta", hdays[5].isoformat()), (10, "2 hafta", hdays[10].isoformat()), (20, "1 ay", hdays[20].isoformat())]
+    assert pj["table"]["3y"][20]["model"] == kf.M4 and pj["models"][kf.M2] == "eğri ve fark değişmezse"
+    rows = {r["isin"]: r for r in d["rows"]}
+    kfo = svc.kagitfiyat
+    got = svc.et.call(kfo._read, u)
+    lines = {x["isin"]: x for x in got["lines"]}
+    quant = {x["isin"]: x for x in got["quant"]}
+    panel = kfo._panel[1]
+    now = kfo.now_fit(got, panel, kfo.horizon_days(got))
+    pos = {x: i for i, x in enumerate(seeded["days"])}
+    book = svc.books["tto"]
+    boot = svc.et.call(lambda: svc._try_curves(book, svc._calc(u, book)))["boot"]
+    seen = {}
+    for isin in (BILL, FIXED, LONG):
+        r, line = rows[isin], lines[isin]
+        bond = qc._bond_of(isin, {}, quant[isin])
+        p = r["proj"]
+        y0, nbr, roll = line["compound"], now["nbr"][isin], now["roll"][isin]
+        assert p["from"] == "ekran" and p["y"] == pytest.approx(y0 * 100, abs=1e-12) and p["nbr"] == pytest.approx(nbr * 100, abs=1e-12)
+        st = panel["stats"][isin]
+        recs = panel["recs"][isin]
+        for w in kf.AR_WINDOWS:                                               # (the windows: of the closes before today)
+            assert st["windows"][w] == kf.fit_window(recs, pos, len(recs) - 1, w)
+        for h in (5, 10, 20):
+            e = p["h"][str(h)]
+            rec = kf.PROJECTION[r["bucket"]][h]
+            assert e["model"] == e["rule"] == rec["model"] and e["window"] == rec["window"] and e["why"] is None, (isin, h, e.get("why"))
+            assert e["day"] == hdays[h].isoformat() and e["value_date"] == qc._value_date(hdays[h], quant[isin]).isoformat()
+            w = st["windows"].get(rec["window"]) or {}
+            move = kf.ois_move(boot, mk.ois_spot, serial(bond.maturity), (hdays[h] - today).days)
+            want = kf.project(rec["model"], h, y0, nbr, roll[h], w.get("ar"), w.get("beta"), move)
+            assert e["yield"] == pytest.approx(want * 100, abs=1e-9) and e["bp"] == pytest.approx((want - y0) * 1e4, abs=1e-7)
+            assert e["record"] == kf.record_text(rec, rec["model"]) and e["line"].startswith(e["text"] + " (valör ")
+            if rec["model"] == kf.M2:
+                assert e["yield"] == pytest.approx((roll[h] + y0 - nbr) * 100, abs=1e-9) and "fark" in e["line"] and not e["beat"]
+            else:
+                assert e["beat"] and e["ois"]["bp"] == pytest.approx(w["beta"] * move * 1e4, abs=1e-9) and "β" in e["line"]
+            seen[(isin, h)] = e
+        assert r["bucket"] == {BILL: "1y", FIXED: "3y", LONG: "5y+"}[isin]
+    # the switch: each horizon is its own - a later value date, another yield and price
+    for isin in (BILL, FIXED, LONG):
+        e5, e10, e20 = (seen[(isin, h)] for h in (5, 10, 20))
+        assert e5["value_date"] < e10["value_date"] < e20["value_date"]
+        assert len({round(e["yield"], 9) for e in (e5, e10, e20)}) == 3 and len({round(e["clean"], 9) for e in (e5, e10, e20)}) == 3
+    assert seen[(FIXED, 20)]["model"] == kf.M4 and seen[(FIXED, 5)]["model"] == kf.M2
+
+
+def test_the_projected_price_at_the_horizons_value_date(svc, seeded):
+    """The projected yield's clean price on the day the horizon settles - a bill from its days then, a coupon bond from its
+    cash flows then less the accrued interest then (BIST's rules: as DİBS RV prices today, the same price at today's value
+    date) -, its simple yield then, and the K/Z of 1 mn nominal: the price at the projected yield less the price at today's
+    yield, both on that date."""
+    u = svc.login("Kâğıt Ufuk Fiyatı")["user"]
+    rows = rows_of(svc, u)
+    kfo = svc.kagitfiyat
+    got = svc.et.call(kfo._read, u)
+    lines = {x["isin"]: x for x in got["lines"]}
+    quant = {x["isin"]: x for x in got["quant"]}
+    for isin in (BILL, FIXED, LONG):
+        line = lines[isin]
+        bond = qc._bond_of(isin, {}, quant[isin])
+        y0 = line["compound"]
+        # (the bond's own cash flows price as DİBS RV's at its value date)
+        now = kfo.pricer_at(line, bond, line["value"])
+        assert now.clean(y0) == pytest.approx(cell(svc, "DİBS RV!O%d" % line["row"]), abs=1e-6), isin
+        for h in (5, 10, 20):
+            e = rows[isin]["proj"]["h"][str(h)]
+            vd = dt.date.fromisoformat(e["value_date"])
+            y = e["yield"] / 100.0
+            if bond.kind == "bill":
+                days = (bond.maturity - vd).days
+                assert e["clean"] == pytest.approx(100.0 / (1 + y) ** (days / 365.0), abs=1e-9)
+                assert e["simple"] == pytest.approx(((1 + y) ** (days / 365.0) - 1) / (days / 365.0) * 100, abs=1e-9)
+                c0 = 100.0 / (1 + y0) ** (days / 365.0)
+            else:
+                assert e["clean"] == pytest.approx(bond.price(y, vd, "compound")[0] - qc.accrued(bond, vd), abs=1e-9)
+                assert e["simple"] == pytest.approx(2 * ((1 + y) ** 0.5 - 1) * 100, abs=1e-9)
+                c0 = bond.price(y0, vd, "compound")[0] - qc.accrued(bond, vd)
+            assert e["pnl"] == pytest.approx((e["clean"] - c0) * 1e4, abs=1e-6)
+            assert (e["pnl"] > 0) == (e["bp"] < 0) or abs(e["bp"]) < 1e-9                # (a lower yield: a long earns)
+
+
+def test_a_bond_that_cannot_have_its_model_now_shows_m2_and_why(svc, seeded, monkeypatch):
+    """M4 needs the window's AR(1) and β: a bond whose closes cannot give them (here: too few) shows M2 in its place, says
+    why, and M2's own record."""
+    u = svc.login("Kâğıt Kısa Geçmiş")["user"]
+    real = kf.fit_window
+    monkeypatch.setattr(kf, "fit_window", lambda recs, pos, end, w: dict(real(recs, pos, end, w), ar=None))
+    svc.history.rev += 1                                                      # (the closes' part built again)
+    try:
+        e = rows_of(svc, u)[FIXED]["proj"]["h"]["20"]
+    finally:
+        monkeypatch.undo()
+        svc.history.rev += 1
+    assert e["rule"] == kf.M4 and e["model"] == kf.M2 and e["window"] == 0 and e["beat"]
+    assert e["why"].startswith("M4 kurulamadı: son 60 kapanışta farkın ortalamaya dönüşü ölçülemedi")
+    assert e["record"] == "geri test (eğri ve fark değişmezse): RMSE 166 bp (değişmez 164 bp), yön isabeti %50 (221)"
+
+
+def test_ois_and_fx_swap_are_the_values_dibs_trading_shows(svc, seeded):
+    """"OIS ve FX swap curve'üne göre fiyatları da ayrıca gösterilsin": each bond's fair yield and clean price on DİBS RV's
+    fitted OIS ASW curve and on DİBS ASW's FX swap one - rvfair's, exactly the cells of DİBS Trading's "OIS'e göre" and
+    "FX swap'a göre" groups (their text, and their reason where there is none)."""
+    from tto import rvfair
+    u = svc.login("Kâğıt ASW")["user"]
+    rows = rows_of(svc, u)
+    d = next(p for p in svc.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]
+    book = svc.books["tto"]
+    si = book.model.sheet_index["DİBS RV"]
+
+    def fair_of(r):
+        calc = svc._calc(u, book)
+        fx = svc._fx_curve(u)
+        return rvfair.fair(calc, si, r, rvfair.read_fits(calc, si, fx), fx)
+
+    got = svc.et.call(svc.kagitfiyat._read, u)
+    lines = {x["isin"]: x for x in got["lines"]}
+    n = 0
+    for isin in (BILL, FIXED, LONG, TLREF, "TRT081128T15"):
+        line = next(row for row in d["rows"] if len(row) > 2 and row[2].get("t") == isin)
+        at = {col: line[d["c"].index(col)] for col in ("Y", "Z", "AB", "AC")}
+        f = svc.et.call(fair_of, lines[isin]["row"])
+        for side, (yc, pc) in (("ois", ("Y", "Z")), ("fx", ("AB", "AC"))):
+            a = rows[isin]["asw"][side]
+            assert a["t"] == [at[yc]["t"], at[pc]["t"]], (isin, side)
+            if at[yc]["t"] == "–":
+                assert a["why"] == at[yc]["tip"] and "yield" not in f[side]
+            else:
+                assert a["yield"] == pytest.approx(f[side]["yield"] * 100, abs=1e-12) == pytest.approx(at[yc]["v"] * 100, abs=1e-12)
+                assert a["price"] == pytest.approx(f[side]["price"], abs=1e-12) == pytest.approx(at[pc]["v"], abs=1e-12)
+                assert a["tip"] == at[yc]["tip"] and a["soft"] == ("soft" in (at[yc].get("cls") or ""))
+                n += 1
+    assert n >= 5 and "TLREF'e endeksli" in rows[TLREF]["asw"]["ois"]["why"]
+
+
 # ================================================================================================== over HTTP (last: the client stops the service)
 def test_the_routes(svc, seeded):
     with TestClient(create_app(svc)) as c:
@@ -417,6 +690,12 @@ def test_the_routes(svc, seeded):
         assert got.status_code == 200 and got.json()["ok"] and any(r["priced"] for r in got.json()["rows"])
         one = c.get("/api/kagit-fiyat", headers=h, params={"isin": BILL})
         assert one.status_code == 200 and [r["isin"] for r in one.json()["rows"]] == [BILL]
+        # Öngörülen at the three horizons (the switch's, 1 ay first shown) and DİBS Trading's two ASW curves' fair values
+        pj = one.json()["projection"]
+        bill = one.json()["rows"][0]
+        assert pj["default"] == 20 and [x["h"] for x in pj["horizons"]] == [5, 10, 20] and pj["table"]["1y"]["20"]["model"] == "M4"
+        assert sorted(bill["proj"]["h"]) == ["10", "20", "5"] and bill["proj"]["h"]["20"]["model"] == "M4"
+        assert set(bill["asw"]) == {"ois", "fx"} and all("yield" in bill["asw"][k] or bill["asw"][k]["why"] for k in ("ois", "fx"))
         bad = c.get("/api/kagit-fiyat", headers=h, params={"isin": "XYZ"})
         assert bad.status_code == 400 and "trading listesinde değil" in bad.json()["error"]
         assert c.get("/api/kagit-fiyat", headers=ANON).status_code == 401

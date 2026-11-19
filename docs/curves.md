@@ -264,8 +264,14 @@ bump and NPV at a typed price.
 
 **Kâğıt Fiyatlama has no offshore base.** On the desk's history the bonds moved about half as much as the offshore curve
 (β ≈ 0.45) and offshore was never the best base at any maturity (desk-decisions, "Kâğıt fiyatlama"). This is about that
-page only: the ASW FX fair values (`rvfair`'s FX side, DİBS Trading's "FX swap'a göre", Genel, the card) stay as they are,
-and the card shows both.
+page's fair only: the ASW FX fair values (`rvfair`'s FX side, DİBS Trading's "FX swap'a göre", Genel, the card) stay as
+they are, and the page shows them beside its fair ("OIS'e göre" / "FX swap'a göre": `rvfair`'s, not recomputed).
+
+**Öngörülen's OIS move** (M4, `kagitfiyat.ois_move`): on the TRY OIS Bootstrap (now: the workbook's; in the measurement:
+each day's Motor bootstrap of its closes), the forward zero rate from the horizon (today + H TRY business days, counted
+from the OIS spot in calendar days) to the bond's maturity less today's zero rate for the same remaining life, both
+compounded once a year (ACT/365) - the base's move beyond the roll-down the other models already have. OIS only; no
+offshore, no PPK.
 
 ## Spot and value dates
 

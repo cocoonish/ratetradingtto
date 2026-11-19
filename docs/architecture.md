@@ -296,19 +296,27 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
 [desk-decisions.md](desk-decisions.md#kâğıt-fiyatlama-19112026), its curves in [curves.md](curves.md#fair-values)).
 
 - **Endpoints** (`Service.kagit_fiyat` / `kagit_fiyat_widths`; a `KagitError` is a 400 with the Turkish reason):
-  - `GET /api/kagit-fiyat` - every bond of the trading list: fair, quote, good levels, σ, backtest, market, context and the
-    "how" line; `?isin=` one bond (the card's block; one off the trading list: 400);
+  - `GET /api/kagit-fiyat` - every bond of the trading list: fair, Öngörülen (`proj`: each horizon - 5 / 10 / 20 closes -
+    its yield, price at the horizon's value date, bp, K/Z, model, record, line; `projection`: the horizons, the default,
+    the measured table), the two ASW curves' fair values (`asw`: DİBS Trading's "OIS'e göre" / "FX swap'a göre"), quote,
+    good levels, σ, backtest, market, context and the "how" line; `?isin=` one bond (the card's block; one off the
+    trading list: 400). The horizon switch is the client's (all three come in one answer);
   - `POST /api/kagit-fiyat/genislik` `{"widths": {"1y": 10, "3y": …}}` - administrators only (403 otherwise).
 - **Threads.** `_read` (engine thread, short): DİBS RV's rows, the yields now (`quantcurve.read_engine`), each row's
   price ↔ yield inputs (P, CU, CW, DR, the cash flows), Bloomberg's bid / ask, the Broker Chat board, the TRY OIS
-  Bootstrap. Everything else on the request thread:
+  Bootstrap, and each row's fair values on the two ASW curves (`rvfair.fair` + `Service._fair_cells`, as DİBS Trading).
+  Everything else on the request thread:
   - the closes' part (`closes`): the bonds' and OIS tenors' closes from the store's memory (`hist_many`,
     `Service._swaption_closes`), each past day's neighbours' curve (a leave-one-out refit per coupon bond) and OIS curve,
-    then each bond's spreads, σ and backtest. Kept per history revision (and bonds, OIS calendar); each day's curves kept
+    then each bond's spreads, σ, backtest and Öngörülen's windows (`fit_window`: the spread's AR(1) and β on OIS over the
+    last 60 / 120 closes). Kept per history revision (and bonds, OIS calendar); each day's curves kept
     by what they are made of, so a new close builds that day only. The first build of a year of closes takes ~6 s (desk
     copy of 17.11: 246 days); a thread (`KagitFiyat.warm`, the dashboard's own server only - not with `--no-history` or
     in tests) builds it a minute after the start and again whenever the history changed;
-  - the quotes now (`now_fit`): one leave-one-out refit per coupon bond on DİBS RV's yields, kept per yields.
+  - the quotes now (`now_fit`): one leave-one-out refit per coupon bond on DİBS RV's yields, and each bond's roll-down
+    on its curve to each horizon's value date (`neighbours`' `ahead`), kept per yields and horizon days;
+  - Öngörülen (`_projection`): the model of the bond's bucket and the horizon (`PROJECTION`, measured on the desk's history
+    - desk-decisions), from the above and the OIS Bootstrap's forwards (`ois_move`); arithmetic only.
 
 ## Row keys
 
