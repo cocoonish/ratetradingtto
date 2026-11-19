@@ -16,6 +16,9 @@ from tto.marketdata.base import bdp_key
 from tto.server import create_app
 from tto.store import Store, user_key
 from tto.xl.errors import E_CALC, E_DIV0
+from tto.xl.model import COLS
+from tto.xl.parser import parse_template
+from tto.xl.tokenizer import to_template
 from tto.xl.values import date_to_serial
 
 
@@ -74,6 +77,31 @@ def test_a_personal_formula_follows_its_source(module_service):
         assert cell(svc, "MASA!C171", u) == day(2027, 3, 15)
     finally:
         svc.reset_inputs(u, "tto")
+
+
+def test_one_formula_typed_by_two_users_is_parsed_once(module_service):
+    """=C60+7 typed by two users is one template, parsed once (tto/xl/parser.py keeps its AST): each still gets the
+    value of their own C60, followed when it is typed again; the kept AST is what a parse afresh gives."""
+    svc = module_service
+    a, b = login(svc, "Formül Ortak A"), login(svc, "Formül Ortak B")
+    try:
+        put(svc, a, "MASA!C60", "01.12.2026")
+        put(svc, b, "MASA!C60", "15.01.2027")
+        for u in (a, b):
+            res = put(svc, u, "MASA!C171", "=C60+7")
+            assert res["errors"] == [] and res["applied"] == 1
+        assert cell(svc, "MASA!C171", a) == day(2026, 12, 8)
+        assert cell(svc, "MASA!C171", b) == day(2027, 1, 22)
+        r, c = divmod(svc.books["tto"].cell("MASA!C171")[1], COLS)
+        tpl = to_template(calc_mod.normalise("=C60+7"), r, c)
+        assert parse_template(tpl) is parse_template(tpl)
+        assert parse_template(tpl) == parse_template.__wrapped__(tpl)
+        put(svc, a, "MASA!C60", "05.01.2027")
+        assert cell(svc, "MASA!C171", a) == day(2027, 1, 12)
+        assert cell(svc, "MASA!C171", b) == day(2027, 1, 22)
+    finally:
+        svc.reset_inputs(a, "tto")
+        svc.reset_inputs(b, "tto")
 
 
 def test_a_reference_without_a_sheet_is_the_inputs_own(module_service):
