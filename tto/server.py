@@ -917,6 +917,26 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().kagit_fiyat_widths, _user(request), await _body(request)))
 
     @handler
+    async def fiyat_yukleme(request: Request):
+        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): the user's list, spreads and mode, the desk's labels, today's files
+        return ok(await call(svc().fiyat_yukleme, _user(request), "state"))
+
+    @handler
+    async def fiyat_yukleme_action(request: Request):
+        # ekle / cikar / ayar / tanit / hesapla / cevir / kaydet (Service.fiyat_yukleme)
+        what = request.path_params["what"]
+        if what in ("state", "dosya"):
+            raise ServiceError("bilinmeyen işlem: %s" % what, 404)
+        return ok(await call(svc().fiyat_yukleme, _user(request), what, await _body(request)))
+
+    @handler
+    async def fiyat_yukleme_file(request: Request):
+        # the user's last saved file of the day again (?gun=YYYY-MM-DD: another day's): ASCII, CRLF
+        raw, name = await call(svc().fiyat_yukleme, _user(request), "dosya", {"gun": request.query_params.get("gun")})
+        return Response(raw, media_type="text/plain; charset=us-ascii",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
+    @handler
     async def watch_catalog(request: Request):
         return ok(await call(svc().watch_catalog, _user(request)))
 
@@ -1418,6 +1438,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/dibs/genel", dibs_genel),
         Route("/api/kagit-fiyat", kagit_fiyat, methods=["GET"]),
         Route("/api/kagit-fiyat/genislik", kagit_fiyat_widths, methods=["POST"]),
+        Route("/api/fiyat-yukleme", fiyat_yukleme, methods=["GET"]),
+        Route("/api/fiyat-yukleme/dosya", fiyat_yukleme_file, methods=["GET"]),
+        Route("/api/fiyat-yukleme/{what}", fiyat_yukleme_action, methods=["POST"]),
         Route("/api/watch/{what}", watch_action, methods=["POST"]),
         Route("/api/alarms/fired", alarms_fired),
         Route("/api/alarms/{what}", alarm_action, methods=["POST"]),

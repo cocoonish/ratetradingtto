@@ -16,6 +16,8 @@ daily closes outside of any formula               ``HistoricalDataRequest``, 50 
 (:meth:`BloombergProvider.history`)               afresh on every call
 intraday bars outside of any formula              ``IntradayBarRequest``: one security per request (Bloomberg
 (:meth:`BloombergProvider.intraday_bars`)         takes one), one hit each, times sent in UTC
+one-off reference data outside of any formula     ``ReferenceDataRequest`` on keys of its own, securities × fields
+(:meth:`BloombergProvider.reference`)             hits, nothing kept, subscribed to or refreshed
 
 Nothing here blocks the calculation engine: a value that is not known yet is returned as
 ``#N/A Requesting Data...`` (exactly what Excel shows) and the cells that used it are recalculated as soon
@@ -531,6 +533,48 @@ class BloombergProvider(Provider):
             return None                                  # not in time, or Bloomberg could not answer it now
         return value
 
+    def reference(self, securities, fields, timeout: float = 30.0) -> Optional[Dict[str, Dict[str, Any]]]:
+        """A one-off ``ReferenceDataRequest`` outside of any formula (what the call returns:
+        :meth:`Provider.reference`): securities × fields hits, counted as every request is (``max_hits_per_day``), in
+        one request per 100 securities.  Its keys are its own (``("REF", security, FIELD, call)``): a workbook cell
+        asking the same field never shares, loses or refreshes them, and nothing is subscribed to or asked again -
+        an answer that comes after the call gave up is dropped.  None once the day's hits have reached the limit or
+        when the answer did not come in time.  Blocks - never call it on the calculation thread."""
+        secs = list(dict.fromkeys(str(s).strip() for s in securities if str(s or "").strip()))
+        flds = list(dict.fromkeys(str(f).strip().upper() for f in fields if str(f or "").strip()))
+        if not secs or not flds:
+            return {}
+        with self._lock:
+            if self.limit_reached or (self.max_hits_per_day and self.hits >= self.max_hits_per_day):
+                return None                              # the daily data limit: not one request more
+            self._cid += 1                               # keys of its own: two calls never share an answer
+            call = self._cid
+        keys = {(s, f): ("REF", s, f, call) for s in secs for f in flds}
+        with self._lock:                                 # (queued at once: the worker sends the call as one request)
+            for k in keys.values():
+                self._lookup(k, 0.0)                     # (refresh 0: never asked again)
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self._stop.is_set():
+            with self._lock:
+                if all(self._items.get(k) is not None and self._items[k].state == "ok" for k in keys.values()):
+                    break
+            time.sleep(0.05)
+        out: Dict[str, Dict[str, Any]] = {}
+        done = True
+        with self._lock:
+            # forgotten either way, with a request still on its way (as a bar call's)
+            for (s, f), k in keys.items():
+                it = self._items.pop(k, None)
+                value = self._values.pop(k, None)
+                self._changed.discard(k)
+                if it is None or it.state != "ok":
+                    done = False
+                else:
+                    out.setdefault(s, {})[f] = value
+            for cid in [c for c, r in self._requests.items() if r.kind == "REF" and r.keys and r.keys[0][3] == call]:
+                del self._requests[cid]
+        return out if done else None
+
     def status(self) -> Dict[str, Any]:
         with self._lock:
             return {"mode": "live", "connected": self.connected, "host": "%s:%d" % (self.host, self.port),
@@ -756,10 +800,13 @@ class BloombergProvider(Provider):
         bds: Dict[Tuple, List[Tuple]] = {}
         bdh: Dict[Tuple, List[Tuple]] = {}
         bars: List[Tuple] = []
+        refs: Dict[Any, List[Tuple]] = {}
         index: Dict[Tuple, Tuple] = {}
         for k in keys:
             kind = k[0]
-            if kind == "BDP":
+            if kind == "REF":
+                refs.setdefault(k[3], []).append(k)      # (one call's keys: :meth:`reference`)
+            elif kind == "BDP":
                 bdp.setdefault(k[3], {}).setdefault(k[1], set()).add(k[2])
                 index[(k[3], k[1], k[2])] = k
             elif kind == "BDS":
@@ -788,6 +835,15 @@ class BloombergProvider(Provider):
                 self._history(ks[i:i + 50], field, start, end, options)
         for k in bars:
             self._bars(k)
+        for ks in refs.values():
+            by_sec: Dict[str, List[Tuple]] = {}
+            for k in ks:
+                by_sec.setdefault(k[1], []).append(k)
+            secs = list(by_sec)
+            fields = sorted({k[2] for k in ks})
+            for i in range(0, len(secs), 100):
+                chunk = secs[i:i + 100]
+                self._reference(chunk, fields, (), "REF", {s: by_sec[s] for s in chunk})
 
     def _count(self, n: int) -> bool:
         self.hits += n
@@ -889,6 +945,9 @@ class BloombergProvider(Provider):
                 for k in req.keys:
                     it = self._items.get(k)
                     if it is not None and it.state == "sent":
+                        if k[0] == "REF":
+                            self._set(k, NA_NA)          # a one-off request is not sent again: "nothing came"
+                            continue
                         it.state = "queued"
                         self._queue.append(k)
 

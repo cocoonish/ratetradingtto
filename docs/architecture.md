@@ -58,7 +58,7 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
 4. Custom pages (no view JSON) are listed in `Service.nav`:
    - bugun, watch / heat, blotter, broker, trades;
    - eod, mpc, vol, spreads, settings;
-   - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel, kagit-fiyat;
+   - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel, kagit-fiyat, fiyat-yukleme;
    - the quant pages.
 
 **JSON answers are gzip-compressed** for a client that takes gzip:
@@ -191,7 +191,7 @@ docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption`), `bonds` (catalog) |
-| Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
+| Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
 | Ops | `ops` (log, backups, freshness), `progress` |
 
@@ -227,6 +227,9 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
 | `kagitfiyat.widths`, `kagitfiyat.log` | `kagitfiyat` (the quote's width by maturity bucket, set by administrators; its changes) |
+| `fiyatyukleme.list:<user>`, `fiyatyukleme.saved:<user>` | `fiyatyukleme` (a user's bonds by ISIN with their own spreads, the defaults, the mode, the last auction text; the user's saved files of the last days) |
+| `fiyatyukleme.labels`, `fiyatyukleme.auctions` | `fiyatyukleme` (desk-wide: an auction label's bond, named once; each bond's auction values by day and .t1 / .t2) |
+| `fiyatyukleme.eurobonds` | `fiyatyukleme` (desk-wide: each Eurobond's Bloomberg facts, asked once an ISIN - never in `bonds.desk`) |
 
 **The history's tables are kept in memory too** (`hist_values`, `watch_closes`, `mpc_days`, `mpc_values`):
 - **Read once**, when the store opens (the desk's ~175 000 closes: ~0.5 s, ~14 MB), before any other thread uses it.
@@ -317,6 +320,35 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
     on its curve to each horizon's value date (`neighbours`' `ahead`), kept per yields and horizon days;
   - Öngörülen (`_projection`): the model of the bond's bucket and the horizon (`PROJECTION`, measured on the desk's history
     - desk-decisions), from the above and the OIS Bootstrap's forwards (`ois_move`); arithmetic only.
+
+### Kâğıt Fiyat Yükleme
+
+`tto/fiyatyukleme.py` (page `fiyat-yukleme`, right after Kâğıt Fiyatlama in the Tahvil menu; `pages/fiyatyukleme.js`; the
+desk's decision and the conventions in [desk-decisions.md](desk-decisions.md#kâğıt-fiyat-yükleme-20112026), its Bloomberg
+cost in [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy)).
+
+- **Endpoints** (`Service.fiyat_yukleme(user, what, body)`; each needs a session; a `FiyatError` is a 400 with the Turkish
+  reason):
+  - `GET /api/fiyat-yukleme` - the user's list (each bond's description, maturity, kind, spreads), mode, defaults, last
+    auction text, the desk's labels, today's saved files;
+  - `POST /api/fiyat-yukleme/ekle` `{"isins": "…"}` / `cikar` `{"isin"}` - the list (a bond off the catalog through
+    `Service.bond_list_add`; refused in replay);
+  - `POST /api/fiyat-yukleme/ayar` `{"mode"?, "defaults"?, "spreads"?: {isin: {bid, ask}}}`;
+  - `POST /api/fiyat-yukleme/tanit` `{"label", "isin"}` - the desk names an auction label's bond (an empty ISIN forgets it);
+  - `POST /api/fiyat-yukleme/hesapla` `{"mode": "ihale" | "bbg", "text"}` - every bond at t0 (İhale keeps the day's auction
+    values desk-wide); `POST /api/fiyat-yukleme/cevir` `{"isin", "field", "value"}` - an edited cell's other half;
+  - `POST /api/fiyat-yukleme/kaydet` `{"rows": [...]}` - the file's lines (kept per user and day); `GET
+    /api/fiyat-yukleme/dosya[?gun=]` - the day's last file again (an attachment: ASCII, CRLF).
+- **Threads.** Everything on the request thread but two short engine calls in BBG mode: `_read` (DİBS RV's `AS` / `I` / `BS`
+  / `S` of the list's bonds on it, quantcurve's `read_engine` rows for the bond curve now, Tüm Kâğıtlar's sources) and,
+  only when a bond falls back to OIS, `_read_ois` (Motor's market and the Bootstrap, as Kâğıt Fiyatlama reads them). The
+  Bloomberg request (`Provider.reference`) blocks the request thread, never the engine's. The bond curve now is DİBS RV ·
+  Genel's fit (`DibsGenel.fit`, kept there); a past day's is refitted from the history's closes (store memory) with its τ
+  held, kept per what it is made of.
+- **Eurobonds** (kind `euro`): records of their own (`FiyatYukleme.record` → kv `fiyatyukleme.eurobonds`), split off in
+  `calculate` and priced by `_euro` in either mode; `Street` is the street-convention price ↔ yield (Excel's PRICE / YIELD),
+  `anchored` ties it to Bloomberg's mid. `POST /api/fiyat-yukleme/cevir` takes a Eurobond's `settle` and `anchor` (the row's,
+  from Hesapla).
 
 ## Row keys
 

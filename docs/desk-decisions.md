@@ -533,6 +533,109 @@ whether spot and DİBS K/Z should include the carry, the desk chose "1": yes, bo
   card's), `POST /api/kagit-fiyat/genislik`, `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`. Tests:
   `tests/test_kagitfiyat.py`, the browser test's Kâğıt Fiyatlama checks.
 
+### Kâğıt fiyat yükleme (20.11.2026)
+
+> "Bir de kağıt fiyat yükleme sekmesi açmamız gerekli. Bu sekmede BBG/İhale olarak iki seçim olacak. Her sabah ihale
+> fiyatları yükleyeceğim, buna göre belirttiğim yield spreadine göre fiyatları alıp t0 yieldına spreadleri koyarak
+> fiyatları belirleyecek. Tüm kağıtlar olmayacak, buraya tek tek veya liste halinde kağıtları ekleyebilmeliyim.
+> Kağıtların descriptionı, vadesi de bana gösterilmeli. Fiyatı veya yieldı manuel olarak editleyebilmeliyim. Fiyatlar
+> belirlendikten sonra sistem bunları ISIN,fiyatbid,fiyatask,yieldbid,yieldask olarak düzenleyecek ve her birini bir
+> satıra yazacak. Bunu da bir txt dosyası olarak kaydedebileceğim. Zero coupon kağıtlar yield ile, diğerleri fiyat ile
+> yazılacak, ve hangisi yazıldıysa diğerleri 0 yazılacak. Örneğin ISIN,100.200,100.400,0,0 olarak. İhaleden kağıt
+> tanınamadıysa kağıdı tanıtabiliriz, bir kez tanıttıktan sonra da onu hep tanıyacak. Liste de ben çıkarana kadar
+> eklenenler hep kalacak. Eğer bbg olarak seçim yaparsam, bbg last trade'i mid alacak. Eğer son trade bugün değilse, son
+> ihale fiyatından itibaren curve'deki genel harekete göre fiyat basacak. Önce hesapla demeliyiz, daha sonra fiyatları
+> ve yieldları göndermeden kontrol edip öyle kaydedeceğiz."
+
+The four answers the same night:
+- spreads: "İki tarafa da ayrı ayrı koyacağım, hepsine aynı spread başta ayarlanabilir, daha sonra tek tek
+  değiştirebilmeliyim listeden";
+- TLREF / TÜFE: a price spread;
+- bill yields (the auction list and the txt): simple (basit);
+- BBG mode: ask Bloomberg for the bonds off DİBS RV's trading list (`LAST_PRICE` + `LAST_TRADE_DATE`, 2 hits a bond a
+  Hesapla) - approved.
+
+The auction text pasted every morning: lines `<dd/mm/yy(yy)>[zc| TLREF| cpi].t1|.t2  <value>`, other lines ignored ("Auction
+prices:", "** Min 50 mio, Increment 1 mio", "Auction starts in a minute..."). A bill's / zero coupon's value is its simple
+yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from the paste day.
+
+- **What it does** (`tto/fiyatyukleme.py`, page "Kâğıt Fiyat Yükleme", the Tahvil menu's entry right after Kâğıt Fiyatlama):
+  - each user's own list (kv `fiyatyukleme.list:<user>`), a bond until its owner takes it off; a bond off the desk's catalog
+    comes in by `Service.bond_list_add` (Bloomberg's facts once a new ISIN, it joins Tüm Kâğıtlar) - not in replay;
+  - spreads: yield-quoted (fixed coupon, bill, zero) bid yield = t0 + bid bp, ask yield = t0 − ask bp; price-quoted (TLREF,
+    FRN, TÜFE) bid price = t0 − bid, ask price = t0 + ask; one default each, a row's own on either side;
+  - İhale: each line matched by maturity and tag (no tag: the fixed coupon bond, else the bill / zero of that day); an
+    unrecognised one named once - desk-wide, for good (kv `fiyatyukleme.labels`); .t1 used, .t2 only without one; the
+    day's values kept per ISIN (kv `fiyatyukleme.auctions`: day, label, value, .t1 / .t2);
+  - BBG: the trading list's own `LAST_PRICE` / `LAST_TRADE_DATE` (DİBS RV!AS / I); others one reference request on
+    Hesapla; a trade of today is the mid; else the last auction moved with the bond curve, TRY OIS without it;
+  - Kaydet: the desk's line format, the saves of the day kept per user (kv `fiyatyukleme.saved:<user>`).
+- **Conventions settled while building it** (the spec did not say; ask before changing):
+  - **t0** is today's own value date: today, or the next TRY business day when today is not one (Motor's holiday list,
+    as DİBS RV's value dates). T+1 / T+2: `WORKDAY(today, 1 | 2, TRY)`.
+  - **Yields** are BIST's simple yields (the auction sheet's, DİBS RV!S): bill / zero `(100/P − 1)·365/days`; fixed coupon
+    the rate that discounts its coupons at (1 + y/f) a period - quantcurve's `Bond` (coupons every round(364/f) days back
+    from the maturity, semi-annual for every fixed coupon DİBS) and `quantcurve.accrued` (c/f × the share of the period
+    gone). A yield-quoted bond's t0 is the same simple yield as at the line's value date; a price-quoted bond's t0 is the
+    auction's (or the trade's) clean price as it is.
+  - **Default spreads** until a user sets theirs: 5 bp / 5 bp (yield-quoted), 0,05 / 0,05 (price-quoted); a spread within
+    ±500 bp / ±10 price points.
+  - **The desk's labels** are keyed by the label's date and tag ("10/02/2027 zc": dd/mm/yy and dd/mm/yyyy alike) and are
+    the desk's: anyone may name or forget one (as the bond list: "everyone edits it"); who and when are kept.
+  - **The stored auction values**: all recognised lines (the first line per bond and value date); the same day pasted
+    again replaces that day's; 30 kept per bond. "The last auction price" is the latest day's .t1, its .t2 without one.
+  - **BBG's request**: securities named as Tüm Kâğıtlar names them (`EK_EVREN!U`: bills / zeros on `C2`, default ISL0,
+    the rest on `E2`, default ISL1; DİBS RV!N2's identifier style); a trade's value date ISL0 the trade day, else the next
+    TRY business day (DİBS RV!DC's rule). One request a Hesapla for all such bonds, the answers kept 5 minutes; no answer
+    (the limit, a time-out, replay): said on the page, the rows fall back to the stale path.
+  - **A bill's last trade** is read as a price (Bloomberg quotes TRY bills in price on ISL0: DİBS RV!AS 92,147 for a
+    99-day bill); as a yield only when the price reading gives a yield outside −5 % … 100 % and the figure is a sane yield,
+    or - both sane - when the yield reading is nearer the bill's own (DİBS RV!S, else its last auction). Said on the row.
+  - **"Curve'deki genel hareket"**: the bond's model yield at t0 on the Nelson-Siegel fit now (DİBS RV · Genel's, on the
+    trading list's yields) minus the same bond, the same cash flows from t0, on the same model with its τ held refitted to
+    the auction day's closes (the history's; the last day before it with enough coupon bonds when that day has none) - the
+    curve's move, not the bond's roll-down; an auction of today: no move. On the made-up closes of the tests, a 50 bp
+    parallel move of the coupon bonds' yields moves a coupon bond ~50 bp and a bill or zero (the short end, which the
+    coupon bonds do not reach) less, ~35–40 bp. Without that fit: the TRY OIS Bootstrap zero rate's change at the bond's
+    maturity (Motor's bootstrap of that day's closes against the workbook's now, over the same days), added to the bond's
+    compound yield and read back as the change of its simple yield - said on the row. Neither: the auction yield as it is,
+    with a warning on the row.
+  - **The file**: rows without the figures they are written with are left out and named; a crossed quote (bid better than
+    ask) is written and named. The name carries the calculation's day (replay: 03.11.2026).
+- **Eurobonds** (the same night):
+
+  > "Eklenecek listede eurobondlar da olacak. Bunlar direkt bbgden fiyatlanacak. Bunlarda last trade yok direkt midden ve
+  > spreadden gideceğiz"
+
+  Asked whether their spreads are in price or yield, the desk first said price points, then corrected it: "Eurobondlar
+  da yield spreadi". So:
+  - a Eurobond (a USD / EUR Turkish sovereign: `US900123…`, `XS…`) comes onto the list by its ISIN; its facts are asked of
+    Bloomberg **once an ISIN** and kept desk-wide (kv `fiyatyukleme.eurobonds`: description, currency, coupon, `CPN_FREQ`,
+    `DAY_CNT_DES`, maturity, first / penultimate coupon dates, accrual start, `DAYS_TO_SETTLE`). It never goes into the
+    DİBS catalog ("foreign-currency bonds are not taken"). A TR ISIN Bloomberg says is in a foreign currency comes in the
+    same way. Without Bloomberg (replay) it cannot come in: the reason is shown;
+  - **always Bloomberg, whatever the İhale / BBG switch**: mid = `PX_MID` (else (`PX_BID` + `PX_ASK`)/2, said) and
+    Bloomberg's mid yield `YLD_YTM_MID` - never an auction or a last trade;
+  - bid yield = mid yield + bid spread, ask yield = mid yield − ask spread, in bp, negatives allowed; **its own default
+    pair** (2 bp / 2 bp until the user sets theirs: much tighter than DİBS), per bond in the list, remembered;
+  - each side's clean price by the street convention (`fiyatyukleme.Street`: Excel's PRICE / YIELD - 30/360 US or ISMA's
+    30E/360 or ACT/ACT by `DAY_CNT_DES`, `CPN_FREQ` coupons a year back from the maturity, simple interest in the last
+    period), **anchored to Bloomberg**: price(y) = convention(y) + (PX_MID − convention(mid yield)). The mid is then
+    Bloomberg's to the digit, and a convention that differs moves the sides by its curvature only. The anchor is in the
+    row's tooltip and flagged beyond 0,05 price points. An edited yield or price of a Eurobond goes through the same
+    anchored conversion at the same settlement;
+  - in the txt: clean prices, yields 0 (`ISIN,99.875,100.125,0,0`).
+  - **Conventions settled** (ask before changing): the settlement Bloomberg's mid is for is today + the bond's
+    `DAYS_TO_SETTLE` business days (asked once with its facts; without it T+2, said) on its currency's calendar - USD the
+    Fed's, EUR TARGET2 (the desk's lists, EK_TATIL); `DAY_CNT_DES` not given: a USD bond 30/360, any other ACT/ACT, said; a
+    short first coupon accrues from the accrual start; an irregular last period is not modelled (the anchor absorbs it);
+    `YLD_YTM_MID` empty: the mid yield from the price by the convention (anchor 0, said); no price but a yield: the price
+    from the yield (anchor 0, said); floaters, perpetuals and TL bonds are refused with their reason.
+- Code: `tto/fiyatyukleme.py`, `Service.fiyat_yukleme`, `GET /api/fiyat-yukleme`, `POST /api/fiyat-yukleme/{ekle, cikar,
+  ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
+  `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_fiyatyukleme.py`, the browser test's Kâğıt Fiyat Yükleme
+  checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

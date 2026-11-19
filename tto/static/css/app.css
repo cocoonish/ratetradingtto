@@ -1632,3 +1632,29 @@ table.plain.kf th.kf-sep, table.plain.kf td.kf-sep { border-left: 1px solid var(
 .kf-ufuk button { padding: 3px 10px; }
 .kf-card-ufuk { margin: 4px 0 8px; }
 .kf-card-ufuk .k { color: var(--ink-2); font-size: 12px; }
+/* Kâğıt Fiyat Yükleme (fiyatyukleme.js): the auction text, the list with its spreads, the editable prices, the file */
+.fy-panel .body { padding: 8px 10px; }
+.fy-text { width: 100%; min-height: 130px; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+.fy-add { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.fy-add textarea { flex: 1; min-height: 34px; resize: vertical; font-family: var(--mono); font-size: 12px; }
+.fy-defs { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+.fy-defs .inp, table.plain.fy .inp { width: 84px; text-align: right; padding: 3px 6px; font-variant-numeric: tabular-nums; }
+table.plain.fy td.l, table.plain.fy th.l { text-align: left; }
+table.plain.fy td.b { font-weight: 650; }
+table.plain.fy td.fy-name { color: var(--ink-2); }
+table.plain.fy td.fy-del, table.plain.fy td.fy-label-del { cursor: pointer; color: var(--ink-3); text-align: center; width: 1%; }
+table.plain.fy td.fy-del:hover, table.plain.fy td.fy-label-del:hover { color: var(--neg); }
+table.plain.fy th.fy-sep, table.plain.fy td.fy-sep { border-left: 1px solid var(--line); }
+table.plain.fy tr.fy-off td { color: var(--ink-3); }
+table.plain.fy tr.fy-edited td .inp { border-color: var(--accent); }
+table.plain.fy tr.fy-warn td.fy-how { color: var(--warn); }
+table.plain.fy td.fy-how { white-space: normal; min-width: 260px; font-size: 11.5px; color: var(--ink-2); }
+table.plain.fy tr.fy-bad td { color: var(--neg); }
+table.plain.fy tr.fy-unused td { color: var(--ink-3); }
+table.plain.fy td.fy-state { white-space: normal; }
+table.plain.fy td.fy-state select.inp { width: auto; max-width: 340px; text-align: left; }
+table.plain.fy td.fy-state input.inp { width: 130px; text-align: left; }
+.fy-parse-sum, .fy-result-info, .fy-file-name { margin: 6px 0; font-size: 12px; }
+.fy-ignored, .fy-saves { margin-top: 6px; font-size: 11.5px; }
+.fy-txt { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; margin: 6px 0; min-height: 40px; white-space: pre; overflow-x: auto; }
