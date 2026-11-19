@@ -14,15 +14,38 @@ AST nodes are plain tuples (first item = node kind):
 
 Operator precedence follows Excel: reference ``:`` > unary minus > ``%`` > ``^`` (left assoc.) >
 ``* /`` > ``+ -`` > ``&`` > comparisons.
+
+A template is parsed once per process (:func:`parse_template` keeps its AST) and that one AST goes to every caller,
+so an AST is read only: build a new tree rather than change one (``tto.calc._clip`` does).
 """
 from __future__ import annotations
 
-from typing import Any, List, Tuple
+import functools
+from typing import Any, Dict, List, Tuple
 
 from .tokenizer import FormulaSyntaxError, Token, parse_ref_token, tokenize_template
 
 _CMP = ("=", "<>", "<", ">", "<=", ">=")
 _PREFIXES = ("_XLFN.", "_XLWS.", "_XLL.", "_XLUDF.")
+#: ASTs kept, the most recently used: the four workbooks with the dashboard's own sheets have ~21 000 templates (all
+#: of them kept: ~36 MB), the rest is room for the formulas users type
+PARSED_KEPT = 32768
+#: leaves kept to be shared (the workbooks have ~8 000 different ones); started again when full
+LEAVES_KEPT = 65536
+_LEAVES: Dict[tuple, tuple] = {}
+
+
+def _leaf(node: tuple) -> tuple:
+    """The tuple already made for an equal leaf - a reference, a number, a text, a name: most nodes of an AST are
+    leaves, and the kept ASTs share them (``R[0]C[-1]``, the cell to the left, is one tuple in all of them).  A leaf
+    holds no list, so sharing it changes nothing (equal leaves hold the same values: a number token has no sign, so no
+    -0.0 meets a 0.0); two threads making the same leaf at once may each keep their own."""
+    got = _LEAVES.get(node)
+    if got is None:
+        if len(_LEAVES) >= LEAVES_KEPT:
+            _LEAVES.clear()
+        _LEAVES[node] = got = node
+    return got
 
 
 def normalise_function_name(raw: str) -> Tuple[str, bool]:
@@ -156,22 +179,22 @@ class _Parser(object):
     def primary(self):
         kind, text = self.take()
         if kind == "num":
-            return ("num", float(text))
+            return _leaf(("num", float(text)))
         if kind == "str":
-            return ("str", text[1:-1].replace('""', '"'))
+            return _leaf(("str", text[1:-1].replace('""', '"')))
         if kind == "err":
-            return ("err", text)
+            return _leaf(("err", text))
         if kind == "ref":
             sheet, rk, payload = parse_ref_token(text)
             if rk == "cell":
-                return ("cell", sheet) + tuple(payload)
+                return _leaf(("cell", sheet) + tuple(payload))
             if rk == "range":
-                return ("range", sheet) + tuple(payload)
+                return _leaf(("range", sheet) + tuple(payload))
             if rk == "cols":
-                return ("cols", sheet) + tuple(payload)
+                return _leaf(("cols", sheet) + tuple(payload))
             if rk == "rows":
-                return ("rows", sheet) + tuple(payload)
-            return ("name", normalise_name(payload), sheet)
+                return _leaf(("rows", sheet) + tuple(payload))
+            return _leaf(("name", normalise_name(payload), sheet))
         if kind == "func":
             name, addin = normalise_function_name(text[:-1])
             args: List[Any] = []
@@ -201,7 +224,7 @@ class _Parser(object):
                 return ("bool", True)
             if up == "FALSE":
                 return ("bool", False)
-            return ("name", normalise_name(text), None)
+            return _leaf(("name", normalise_name(text), None))
         if kind == "op":
             if text == "(":
                 node = self.expr()
@@ -242,8 +265,14 @@ class _Parser(object):
         raise FormulaSyntaxError("unexpected token %r in %r" % (text, self.source))
 
 
+@functools.lru_cache(maxsize=PARSED_KEPT)
 def parse_template(template: str):
-    """Parse a formula template (see :func:`tto.xl.tokenizer.to_template`) into an AST."""
+    """Parse a formula template (see :func:`tto.xl.tokenizer.to_template`) into an AST.
+
+    Once per process: the AST is kept (:data:`PARSED_KEPT`, the most recently used) and the same one is returned to
+    every caller - books, the engine's compilers, the reverse reference index, the dashboard's own sheets, date cells,
+    users' formulas -, so it must not be changed.  Threads may ask at once (a template two of them parse at the same
+    time is parsed twice; only a whole AST is kept).  A template that does not parse raises each time it is asked."""
     return _Parser(tokenize_template(template), template).parse()
 
 

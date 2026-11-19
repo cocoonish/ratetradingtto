@@ -84,6 +84,22 @@ priority:
 - **Evaluation is lazy and pull-based.** Every input, market key and the clock owns a dependency bit, and cached values
   carry a mask. A user's `Calc` reuses shared values whose mask does not touch that user's inputs (`xl/engine.py`
   docstring).
+- **Templates are parsed once per process.** Cells filled from one formula share a template (`xl/tokenizer.to_template`,
+  relative R1C1); the four books with the dashboard's own sheets have ~21 000.
+  - `xl/parser.parse_template` keeps each template's AST (`functools.lru_cache`, `PARSED_KEPT` = 32 768, the most
+    recently used; ~36 MB for all the books' templates) and gives the same AST to every caller: the books' spill scan,
+    `formula_has_addin` / `formula_requests`, the compilers, the reverse reference index (`xl/refs.py`), `datecells`,
+    `extras.formula_of`, `borsaspread`, replay's snapshot, users' formulas (`calc`, `inputformula`). Up to the reverse
+    reference index, a start used to parse ~104 000 times; now 21 113 parses and 83 167 hits (19.11.2026, a copy of
+    the desk database, replay, medians of 3 starts: service build 15.8 → 11.9 s, first page 19.6 → 15.1 s, warm-up's
+    end 40.2 → 26.0 s, reverse reference index 17.8 → 10.3 s).
+  - **An AST is read only.** Never append to a `func` node's argument list or an `array`'s rows: build a new tree
+    (`calc._clip`). `tests/test_xl_parse.py` compares every kept AST with a fresh parse after a service has run.
+  - Leaves (references, numbers, texts, names) are one shared tuple across ASTs (`parser._leaf`, `LEAVES_KEPT`).
+  - Threads (the engine thread, `tto-refs`, request threads) may parse at once: a duplicate parse is harmless and only
+    a whole AST is kept. A template that does not parse raises each time; nothing is kept for it.
+  - `extras.SheetBuilder._template` is not cached: its (formula, row, column) calls are all different (the dashboard's
+    sheets write each row's formula text, ~32 000 texts for ~2 000 templates). Its cost is `to_template` itself.
 - **`Service._calc(user, book)`**:
   - no user → the shared `Calc`;
   - otherwise it loads the user's typed inputs (`_overlay`), catches up input formulas, and syncs the curve choice
