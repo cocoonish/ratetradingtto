@@ -8,7 +8,7 @@ The dashboard has **two TRY discount curves** and they are not interchangeable:
 The desk: "OIS ile ayrı bunlar, OIS farklı". A third object, **the ASW sheet's own curve**, is an OIS curve that the
 ASW FX feature rebuilds from offshore rates. Always say which of the three you mean.
 
-Line numbers below are as of commit 7a53dfe. Search for the name if a line has moved. The desk's decisions behind
+Line numbers below are as of commit a5e7ea7. Search for the name if a line has moved. The desk's decisions behind
 this are in [desk-decisions.md](desk-decisions.md).
 
 ---
@@ -18,12 +18,12 @@ this are in [desk-decisions.md](desk-decisions.md).
 | | TRY OIS | Offshore TRY | ASW sheet's own curve (book `asw`) |
 |---|---|---|---|
 | **Instruments** | OIS 1M…10Y quotes. 15M and 21M are interpolated, not quoted. 1W / 2W are apart (`OIS_MAIN!AU13:AU14`). | `TRYI…` FX swap implied, 1W…9M. `TRYSAQ1…10` XCCY, 1Y…10Y. 1Y is `TRYSAQ1`. | 16 OIS tenors, `aswfx.TENORS`: 1M 2M 3M 6M 9M 1Y 18M 2Y…10Y. |
-| **Tickers** | Roots in `OIS_MAIN!J9:J26` (`TYSO…`). Source order from `EK_KAYNAK` row 4: GFOF, then the plain ticker. MID, else PX_LAST. | Roots in `Forward!AO6:AO16` (`TRYI`) and `AO17:AO26` (`TRYSAQ1…10`). Source order from `EK_KAYNAK` rows 5–6: ICPL, then the workbook's BGN ticker. A row never mixes sources: it needs both bid and ask. | Roots in `ASW!C63:R63` (a shared input). Quotes in `C65:R65` = `BDP(root&" GFOF Curncy","MID")`. |
+| **Tickers** | Roots in `OIS_MAIN!J9:J26` (`TYSO…`). Source order from `EK_KAYNAK` row 4: GFOF, then the plain ticker. MID, else PX_LAST. | Roots in `Forward!AO6:AO16` (`TRYI`) and `AO17:AO26` (`TRYSAQ1…10`). Source order from `EK_KAYNAK` rows 5–6: ICPL, then the workbook's BGN ticker. A row never mixes sources: it needs both bid and ask. | Roots in `ASW!C63:R63` (a shared input). Quotes in `C65:R65`, the workbook's own chain: GFOF MID, else GFOF PX_LAST, else the plain ticker's PX_LAST. EK_KAYNAK does not reach them. |
 | **Convention** | Up to 3M: one period, simple ACT/365. Then quarterly ACT/365 par. | `TRYI`: one period, simple ACT/360, `DF = 1/(1 + r·d/360)`. `TRYSAQ`: annual ACT/360 par, bootstrapped as `DF_n = (1 − r·Σ τ·DF)/(1 + r·τ_n)`. The 1Y has one coupon, so it reads like the FX swap. | Up to 3M: one period, simple ACT/365. Then quarterly ACT/365 par. A quarter between two quoted tenors takes the quote linear in months. |
-| **Built in** | `Motor!C88:I130`, 43 nodes: spot, 1M, 2M, 3M, then quarterly to 120M. Names `BOOT_GUN` (days, Motor C) and `BOOT_LNDF` (ln DF, Motor I). Quote copy at `Motor!A306:B321`. | `Forward!AJ123:AN143`: AJ label, AK days from the FX spot, AL rate, AM ln DF, AN slope. A node at every quote. Names `OFF_GUN` / `OFF_LNDF` / `OFF_SL` (`Forward!AK124:AN143`). Quotes: `TRYI` rows 8–16, XCCY rows 125–134 (C label, D bid, E mid, F ask, K days). | Days `AB65:BR65` ("D0…D120"), ln DF `BS65:DI65` ("L0…L120"), annuities `DJ65:EW65`. Same 43-node grid. |
+| **Built in** | `Motor!C88:I130`, 43 nodes: spot, 1M, 2M, 3M, then quarterly to 120M. Names `BOOT_GUN` (days, Motor C) and `BOOT_LNDF` (ln DF, Motor I). Quote copy at `Motor!A306:B321`. | `Forward!AJ123:AN143`: AJ label, AK days, AL rate, AM ln DF, AN slope. AK is Bloomberg's `DAYS_TO_MTY` of each ticker (`Forward!G8:G21`, through `K125:K134` for XCCY); only `K130:K134` (6Y–10Y) fall back, when Bloomberg has none, to `WORKDAY(EDATE(I2, m) − 1, 1, TRY+USD) − I2`. A node at every quote. Names `OFF_GUN` / `OFF_LNDF` / `OFF_SL` (`Forward!AK124:AN143`). Quotes: `TRYI` rows 8–16, XCCY rows 125–134 (C label, D bid, E mid, F ask, K days). | Days `AB65:BR65` ("D0…D120"), ln DF `BS65:DI65` ("L0…L120"), annuities `DJ65:EW65`. Same 43-node grid. |
 | **Between nodes** | Par rates linear in months on Motor's grid, then ln DF linear in days. | ln DF linear in days. Past the last node, the last slope continues. | ln DF linear between nodes. |
-| **Spot** | `OIS_MAIN!B2 = WORKDAY(TODAY(),1,TRY)`. TRY list only. | `Forward!I2 = WORKDAY(TODAY(),1,TRY+USD)`, the USDTRY spot. | `ASW!T65`. |
-| **O/N** | TLREF (`Forward!AD123`, "TLREF, 365 → 360"). | Offshore O/N mid, ICAP (`Forward!AC123`). | - |
+| **Spot** | `OIS_MAIN!B2 = WORKDAY(TODAY(),1,TRY)`. TRY list only. | `Forward!I2 = WORKDAY(TODAY(),1,TRY+USD)`, the USDTRY spot. | `ASW!T65` = `ASW!C4`: Bloomberg's `SETTLE_DT` of `TRY Curncy` (USDTRY), else `WORKDAY(TODAY(),1,TATIL)`. Not `OIS_MAIN!B2`. |
+| **O/N** | TLREF, `OIS_MAIN!J2` (ACT/365). `Forward!AD123` restates it on ACT/360 ("TLREF, 365 → 360"). | Offshore O/N mid, ICAP (`Forward!AC123`). | - |
 
 Notes on the offshore curve:
 - The Forward sheet's "12M" offshore row (`Forward!I17/K17`) is patched to read `TRYSAQ1`'s bid / ask. `TRYI12M` has
@@ -130,7 +130,7 @@ DİBS RV's own FX swap ASW columns (`BF:BJ`, book `tto`) discount on the Forward
 not ASW FX:
 - the TRY workbook cannot build EK_FX's curve;
 - they are hidden by default (`Service.DEFAULT_HIDDEN_COLUMNS`, `"v/dibs/B3"`);
-- `Service` labels which curve each FX column is on (about `service.py:6598`).
+- `Service` labels which curve each FX column is on (about `service.py:6601`).
 
 Two FX ASW numbers for the same bond is expected. Do not "fix" one to equal the other.
 
@@ -190,12 +190,16 @@ The desk's list of points each curve is built from, one list for OIS and one for
 ## Buckets (DV01 and FRA legs)
 
 - `blotter.BUCKET_MONTHS = (1, 2, 3, 6, 9, 12, 18, 24, 36, …, 120)`.
-- `blotter.bucket_split(m)` splits an OIS leg between its two neighbouring buckets, linear in months:
+- `blotter.bucket_split(m)` splits an OIS leg **entered as a tenor** between its two neighbouring buckets, linear in
+  months:
   - 15M → ½ 1Y + ½ 18M;
   - 21M → ½ 18M + ½ 2Y;
   - 27M → ¾ 2Y + ¼ 3Y;
   - 63M → ¾ 5Y + ¼ 6Y.
-- Offshore and forward legs use the Forward sheet's own buckets (`blotter.split_weights`).
+- `blotter.split_weights` splits by days between the two nodes around a date:
+  - FX forwards (kind `fwd`) on the Forward sheet's own buckets (`Günlük İşlemler!O6:O19`: the RET tenors' days,
+    `Forward!U33:U47` without TN);
+  - a meeting-dated OIS swap, first turned into two spot swaps, on the summary's tenors (`blotter.mpc_summary_rows`).
 - Trades' DV01 table (`tradevalue.RISK_TENORS`, `tradebook.dv01_table`) uses both rules:
   - a spot swap entered as a tenor goes through `bucket_split`;
   - a dated, started or forward-starting swap, and a bond, goes through `split_weights` at its date, by days, against
@@ -229,8 +233,12 @@ bump and NPV at a typed price.
 - Modified following on SIFMA, paid two SIFMA days later.
 
 **FX:**
-- Discounted on the offshore curve.
-- Without it, a USDTRY forward falls back to forward points, then to USD / EUR OIS. TRY OIS is never substituted.
+- Discounted on the offshore curve. Trades has no FX forward product (`tradevalue.PRODUCTS`): its USDTRY forwards are
+  an option's forward and the spot roll's fallback (`Market.forward`), the offshore curve with the USD OIS.
+- Without the offshore curve (or the USD OIS), a USDTRY forward has no value ("forward yok"). Trades keeps no USDTRY
+  forward points (`tradevalue.market` skips them), and the OIS step needs both currencies' OIS (`Market.rates`: USD and
+  EUR only). TRY OIS is never substituted. Forward points, then USD / EUR OIS or a cross through USD, are other pairs'
+  fallbacks.
 
 **Carry and funding in the P&L** (desk decision 19.11.2026, [desk-decisions.md](desk-decisions.md)):
 - An FX spot's carry is the roll to the next spot date at the Forward sheet's O/N rates: TRY **offshore** O/N (ICAP,
@@ -255,21 +263,27 @@ bump and NPV at a typed price.
 | USDTRY | T+1, `Forward!I2` | TRY+USD |
 | EURTRY | T+2, `Forward!K2` | TRY+EUR, no USD rule |
 | EURUSD value dates | - | USD+EUR |
-| TRY OIS / money market / bonds / VİOP | `OIS_MAIN!B2` (T+1) | TRY only |
+| TRY OIS / money market / bonds; VİOP's OIS FRAs | `OIS_MAIN!B2` (T+1) | TRY only |
+| VİOP's implied TRY rates | `VIOP!K3`: Bloomberg's `SETTLE_DT` of `USDTRY Curncy` (`VIOP!M8`; days `M10 = M9 − M8`) | Bloomberg's dates |
+| The ASW sheet's curve | `ASW!C4` → `T65`: Bloomberg's `SETTLE_DT` of `TRY Curncy`, else `WORKDAY(TODAY(),1,TATIL)` | the ASW book's `TATIL` |
 
 - The rules live in `extras.FX_SPOTS`, `pair_calendar` and `_tto_ois_spot`.
-- Bloomberg's `SETTLE_DT` stays beside each spot as "Bloomberg valörü" (`Forward!J2`, `L2`; on OIS_MAIN too). It is
-  shown, not used.
+- Beside `Forward!I2`, `K2` and `OIS_MAIN!B2`, Bloomberg's `SETTLE_DT` is only shown, as "Bloomberg valörü"
+  (`Forward!J2`, `L2`, `OIS_MAIN!L2`). Three dates still use it, and no addition patches them: `VIOP!K3` (VİOP's
+  implied rates), `ASW!C4` → `T65` (the ASW sheet's curve and the shift of ASW FX's 18M) and the gold spot date
+  (`EK_XAU!B9`, when none is typed).
 - The cells counted from the USDTRY spot: `MASA!P94:P99`, `MASA!C171`, `Forward!B200:B205`, `Forward!K130:K134`.
-- `fx_shift` = FX spot − OIS spot. It moves the offshore curve onto the OIS curve's (or the ASW sheet's) day count
-  (`ppkcurve`).
+- `fx_shift` (`ppkcurve.read`) = FX spot − OIS spot, in days. It puts the OIS side's MPC path on the offshore curve's
+  days (`StepCurve.rebased`: the offshore PPK curve, and its bumps in Fiyatlama) and the offshore curve on Motor's
+  quarterly calendar in the interpolation chart. ASW FX's 18M uses a shift of its own, `ASW!T65 − Forward!I2`
+  (`Service._asw_fx_18m`).
 
 ---
 
 ## Where OIS and offshore meet
 
-This is the complete list as of 7a53dfe. **Do not add to it.** If a feature seems to need an OIS number on the offshore
-side, ask the desk first.
+This is the complete list as of 19.11.2026. **Do not add to it.** If a feature seems to need an OIS number on the
+offshore side, ask the desk first.
 
 | # | Where | What happens |
 |---|---|---|
@@ -280,9 +294,12 @@ side, ask the desk first.
 | E | `rvfair` FX side | The dirty price at spot is carried with TLREF. This is the ASW sheet's own formula. |
 | F | `ppkcurve` offshore PPK | The offshore PPK curve takes the OIS-implied MPC path's **shape**. Its level comes from the offshore quotes (a flat basis between them). |
 | G | `retfair` scenarios | The offshore and VİOP bases move by the OIS scenario's change, `market + (scenario − reference)`. |
+| H | EK_FWD, "FORWARD KOTASYON" (`extras._tto_forward`) | USDTRY forward quotes priced as OIS + spread: the chosen OIS curve's rate (MASA's own discount factors, default "MPC ima") plus a typed spread or the market's (offshore ICAP implied − OIS). The desk's pricing design, not a fallback. |
+| I | `retfair` "karma" base | A blend of the OIS, VİOP and offshore mids: a tenor's own weights, else the administrators' default, 50 / 25 / 25 to start with (`retfair.DEFAULTS["blend"]`). A desk design, not a fallback. |
 
 **Not fallbacks** (each curve keeps its own):
-- `borsaspread` and `tradevalue` use a separate O/N per curve (offshore ICAP `Forward!AC123`, TLREF `AD123`).
+- The O/N: `borsaspread` (and `retfair` through it) uses offshore ICAP `Forward!AC123` and TLREF `Forward!AD123`
+  (365 → 360); `tradevalue` uses offshore `AC123` and TLREF `OIS_MAIN!J2` (ACT/365).
 - Trades' USDTRY forward never takes TRY OIS.
 
 ## Known differences - read before changing

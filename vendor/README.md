@@ -15,7 +15,8 @@ okuyabilir. Hiçbir dosya açılmaz, hiçbir yere bir şey kopyalanmaz, yönetic
 | `py39` | 3.9 | 0.49.3 | 0.39.0 | 4.12.1 | h11 0.16.0, click 8.1.8, idna 3.20, typing_extensions 4.16.0, exceptiongroup 1.3.1, colorama 0.4.6 |
 | `py38` | 3.8 | 0.44.0 | 0.33.0 | 4.5.2 | h11 0.16.0, click 8.1.8, idna 3.15, sniffio 1.3.1, typing_extensions 4.13.2, exceptiongroup 1.3.1, colorama 0.4.6 |
 
-`py310` test paketinin koştuğu sürümlerdir. `py39` ve `py38`, o Python sürümlerini destekleyen son sürümlerdir
+`py310` Python 3.10 ve üstü içindir; bu bilgisayardaki testler Python 3.9.5 ile koştuğundan `py39` setini sınar,
+`py310` setini sınamaz. `py39` ve `py38`, o Python sürümlerini destekleyen son sürümlerdir
 (Python 3.8 ve 3.9 artık güncelleme almıyor; mümkünse 3.10 ya da üstünü kullanın).
 
 **Kaynak ve doğrulama.** Dosyalar PyPI'dan indirilmiş, değiştirilmemiş wheel'lerdir; `SHA256SUMS` her birinin

@@ -278,8 +278,11 @@ def test_the_file_in_the_repository_is_current_and_gives_a_running_dashboard(tmp
     assert code == 0 and "TTO masa dashboard" in out and "--port" in out
 
     port = _free_port()
+    # "--backup-copy-dir" "": an unpacked install (no .git, its own data/) sends its backups' second copy to the desk's
+    # D:\tto-yedek by default, and after 17:30 it takes the day's backup at once - never from a test
     server = subprocess.Popen([sys.executable, "-S", "-m", "tto", "--mode", "replay", "--host", "127.0.0.1", "--port", str(port),
-                               "--no-history"], cwd=target, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                               "--no-history", "--backup-copy-dir", ""], cwd=target, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
     url = "http://127.0.0.1:%d" % port
 
     session = {}

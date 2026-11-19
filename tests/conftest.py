@@ -13,6 +13,12 @@ for p in (ROOT, HERE, os.path.join(ROOT, "tools")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# No test writes a second backup copy, above all not to the desk's D:\tto-yedek: a copy of the install a test unpacks
+# (no .git, its own data/) defaults to it (config.backup_copy_default), and started after 17:30 it takes the day's
+# backup at once, replacing the desk's copy of that day.  Every process a test starts inherits this; the tests of that
+# default delete it first (test_backup, test_store).
+os.environ["TTO_BACKUP_COPY_DIR"] = ""
+
 from tto.config import Settings  # noqa: E402
 from tto.service import Service  # noqa: E402
 

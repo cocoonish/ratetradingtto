@@ -5,10 +5,10 @@
 etmiyorsa bu dosya yeter; internetten bir şey indirmez, bir şey kurmaz, yalnızca kendi içindekini bir klasöre açar.
 Gereken tek şey Python 3.8 ya da üstüdür.
 
-1. Bu klasörde `tto_kur.py` → sağ üstte **Download raw file** (⬇). Dosya yaklaşık 5,6 MB'tır; GitHub içeriğini
+1. Bu klasörde `tto_kur.py` → sağ üstte **Download raw file** (⬇). Dosya yaklaşık 7 MB'tır; GitHub içeriğini
    göstermeyebilir ama indirme düğmesi çalışır. **Aynı dosya `tto_kur.txt` olarak da burada:** ağınız `.py` indirmeye
    izin vermiyorsa onu indirin, içerik birebir aynıdır.
-2. İndirdiğiniz klasörde bir komut penceresinde:
+2. İndirdiğiniz klasörde Anaconda Prompt'ta (ya da bir komut penceresinde):
 
 ```bash
 python tto_kur.py
@@ -18,7 +18,8 @@ python tto_kur.py
    sorar. (Başka bir klasöre: `python tto_kur.py D:\tto`.)
 3. Sonraki açılışlarda `ratetradingtto` klasöründeki `run.bat`'a çift tıklayın (Anaconda varsa önce onu açar: komut penceresi gerekmez); tarayıcıdan `http://localhost:1057`.
 
-**Güncelleme:** yeni `tto_kur.py`'yi (ya da `tto_kur.txt`'yi) indirip aynı yerde yeniden çalıştırın. Değişen dosyalar
+**Güncelleme:** yeni `tto_kur.py`'yi (ya da `tto_kur.txt`'yi) indirip aynı yerde - `ratetradingtto` klasörünün yanında,
+içinde değil (içinde çalışırsa iç içe ikinci bir kurulum açar) - yeniden çalıştırın. Değişen dosyalar
 yenilenir, artık olmayanlar silinir; `data` klasörüne (kullanıcılar, senaryolar, RET geçmişi, işlem defteri, tarihçe) ve
 `vendor/local`'a dokunulmaz.
 

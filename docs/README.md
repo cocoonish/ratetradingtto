@@ -1,7 +1,9 @@
 # Developer notes
 
 These notes are for the people and Claude sessions who change the code. The user manual is the Turkish `README.md` at
-the root. `CLAUDE.md` at the root is the short version, and every Claude session in this repository loads it.
+the root. `CLAUDE.md` at the root is the short version; a Claude session whose folder is in this repository loads it.
+Sessions usually start in the install folder, which is no repository: there the `CLAUDE.md` one level up (in the
+folder that holds the install and the clones, outside every repository) points here.
 
 | File | Read it before you touch… |
 |---|---|

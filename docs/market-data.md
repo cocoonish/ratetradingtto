@@ -10,7 +10,7 @@ Before adding any ticker, field, history series or request loop:
 Never restart a live dashboard over and over, and ask before a heavy BDH. Bloomberg data, screenshots of it and logs
 never go into the repository or to an external service.
 
-Line numbers are as of commit 7a53dfe.
+Line numbers are as of commit a5e7ea7.
 
 ---
 
@@ -21,18 +21,26 @@ Line numbers are as of commit 7a53dfe.
 | **live** | blpapi on `localhost:8194`, services `//blp/refdata` and `//blp/mktdata`. It runs in a helper process (`marketdata/bbg_process.py`) unless `--bbg-inprocess` is given. |
 | **replay** | The values saved in the workbook (`marketdata/replay.py`, `snapshot_from_model`). See [Replay](#replay). |
 | **auto** (default) | Live if Bloomberg connects, otherwise replay. The fallback is silent apart from `mode_note`. |
-| tests | Replay, plus fake terminals: `tests/fake_blpapi.py` (via env `TTO_BLPAPI_MODULE`), `fake_blpapi_live.py` (env `TTO_FAKE_BBG`), `fake_blpapi_broken.py` |
+| tests | Replay (`tests/conftest.py`: `Settings(mode="replay")`), plus fake terminals: `tests/fake_blpapi.py`, handed in-process (`BloombergProvider(blpapi_module=fake_blpapi.module(server))`); `fake_blpapi_live.py`, imported by name through env `TTO_BLPAPI_MODULE` and set up by env `TTO_FAKE_BBG`; `fake_blpapi_broken.py`, a `blpapi` that fails to import (`blpapi_name`) |
 
-There is no Bloomberg on development machines other than the desk's. Agents work in replay and on the fake terminal
-only.
+**This computer has Bloomberg too.** The home computer the sessions run on has a terminal, as the desk's office
+computer does. `--mode auto` (the default, env `TTO_MODE`) goes live whenever Bloomberg connects, so a session starts
+anything itself with `--mode replay`. Agents work in replay and on the fake terminals only.
 
 ## Replay
 
 **Where replay values come from.**
-- Every cell that is a single add-in call and has a value Excel saved is pinned to that value. This applies to books
-  `tto` and `sofr` (`books.py`, `xl/engine.py:1272-1286`).
-- `asw` and `borsa` read `tto/data/replay_asw.json` and `replay_borsa.json`.
-- Past closes come from `tto/data/replay_history.json`.
+- **Pinned cells.** In books `tto` and `sofr` (`books.BOOKS`: the files that recorded their Bloomberg values), every
+  formula cell that calls an add-in anywhere in its formula and has a value Excel saved is pinned to that value, with
+  the cells its array spilled into (`xl/engine.py:1240-1286`, `formula_has_addin` / `cached_pins`). This covers the
+  cells the dashboard patched too: `OIS_MAIN!B9`'s source chain shows the saved value whatever EK_KAYNAK says.
+- **Provider answers.** Each `tto` cell that is exactly one add-in call with a saved value also becomes an answer of the
+  replay provider (`snapshot_from_model`, `Service._setup`). The other books read these: EK_FX's `TRYI` / `TRYSAQ`
+  prices (the BGN bid and ask the Forward sheet saved) and `ASW!C4`'s `SETTLE_DT` come from them.
+- `asw` and `borsa` recorded nothing themselves. They are calculated on those answers plus `tto/data/replay_asw.json`
+  and `replay_borsa.json`. `replay_usd.json` adds USD OIS mids for the USD · FOMC page.
+- Past closes: the `BDH` blocks the `tto` file saved, then `tto/data/replay_history.json` for the days they lack
+  (`ReplayProvider.history`: the file's own wins).
 - A key without a recorded answer is `#N/A` (`ReplayProvider.missing` counts them).
 
 **The replay day is 03.11.2026.**
@@ -48,7 +56,7 @@ only.
 
 | Request | Cost and refresh |
 |---|---|
-| Quote fields (BID, ASK, MID, PX_LAST …) | One reference request for the first value, then a subscription. Streaming is free. |
+| Quote fields (BID, ASK, MID, PX_LAST …) | One reference request for the first value, then a subscription. Streaming is free. A field the stream does not deliver (a failed subscription, or nothing 30 s after it started: `SILENT_AFTER`) is polled by request instead: after `--price-poll` (120 s), then at twice the interval while the answer stays the same, up to 30 min (60 min for an empty field). With `--no-stream` every quote field is polled so. A quote field with overrides is an ordinary BDP (next row). |
 | Other BDP | securities × fields. Refreshed every 6 h (static fields), 60 s (derived) or 30 min (the rest). |
 | BDH | One hit per security, whatever the date span. Refreshed every 15 min if it ends today, else every 6 h. |
 | Intraday bars | 1 per request |
@@ -80,9 +88,13 @@ only.
 - FX series (`fx.py`);
 - the quant FX pair setting;
 - a new source code in EK_KAYNAK. That is a new ticker for each tenor row of that curve's list: OIS 18 rows, offshore
-  11, XCCY 10. The new history series also come in their first full range in one sync;
+  11, XCCY 10. The new history series also come in their first window in one sync (see Rationing below);
 - EK_FX roots and sources;
-- a ticker point in Ayarlar → Eğri noktaları. Its cost is confirmed before saving.
+- a ticker point in Ayarlar → Eğri noktaları. Its cost is confirmed before saving;
+- intraday bars (`quantviop.fetch_bars`, live only): a whole past day of one security per request, each asked once, at
+  most `BAR_PER_REFRESH = 4` requests a refresh;
+- a bond added to the desk's list (`Service.bond_list_add` → `_bond_facts`): the `bonds.FACTS` fields of each new
+  ISIN.
 
 ## Pricing sources
 
@@ -96,11 +108,15 @@ curve in `B4:E6`, tried left to right. The workbook's own ticker (BGN) always co
 | XCCY | ICPL | bid and ask from one source | `Forward!D125:D134` / `F125:F134`, and `I17` / `K17` (the "12M" row is `TRYSAQ1`) |
 
 - When nothing is live (replay), the choice falls to the workbook's ticker, and its saved value shows.
-- The history uses the same lists (`history.SOURCE_DEFAULTS`). A backup source fills only the days the main source
-  lacks, laid onto the main source's level.
+- The history uses the same lists: `history.source_lists` reads `EK_KAYNAK!B4:E6` (`history.SOURCE_DEFAULTS` only
+  when the workbook has no EK_KAYNAK). After the list come the workbook's own tickers: for OIS the root plus
+  `MASA!S171` ("Curncy" when empty), for offshore and XCCY `Forward!AO6:AO26`. A backup source fills only the days the
+  main source lacks, laid onto the main source's level.
 - Changing a list kicks the history (`set_sources` → `hist.kick()`).
 - **EK_FX** (book `asw`) has its own two source cells, `B3` = ICPL and `C3` = BGN. It takes MID, else the middle of bid
   and ask.
+- **EK_KAYNAK does not reach book `asw`.** The ASW sheet's OIS quotes (`ASW!C65:R65`, roots `C63:R63`) keep the
+  workbook's own chain: GFOF MID, else GFOF PX_LAST, else the plain ticker's PX_LAST.
 
 ## History (`tto/history.py`)
 
@@ -116,16 +132,23 @@ curve in `B4:E6`, tried left to right. The workbook's own ticker (BGN) always co
 - **Series with no history:** asked once a day.
 - **A timed-out full-range request:** still counts as asked for that day.
 
-**Rationing (live only):**
-- new series fill `BACKFILL_PER_SYNC = 40` per sync (the user approved: "Önerini yap");
-- VİOP contracts fill `VIOP_PER_SYNC = 15` per sync;
-- expired VİOP contracts are asked once in full and retried after 7 days;
-- a new series in an "extend" group that has no closes yet is **not** rationed: its first full range comes at once.
+**Rationing (live only; replay asks everything at once):**
+- `BACKFILL_PER_SYNC = 40` a sync covers only the series marked `backfill`: the quant package's series and
+  `SOFRRATE Index` (the user approved: "Önerini yap"). The older part of the history's own series (below) waits in the
+  same turn;
+- VİOP contracts (`backfill: "viop"`) fill `VIOP_PER_SYNC = 15` a sync, beside those 40;
+- an expired VİOP contract is asked once in full and never for new days. One that came back empty is asked again only
+  after 7 days (`FINAL_RETRY_DAYS`);
+- every other new series - the history's own groups `ref | ois | off | xccy | dibs`, marked "extend" by
+  `quant.extend_for_quant` - gets its first window (`lookback_days`, the history setting) in full in one sync. The older
+  part, up to two years (`quant.HISTORY_DAYS`), then comes in the 40-a-sync turn.
 
-**The cost of tails:** every sync asks the new days of every series that has closes. That is about (series with
-closes) × 96 BDH hits a day.
+**The cost of tails:** every sync asks the new days of every series that has closes, except `SOFRRATE Index` (once a
+day) and expired VİOP contracts (never). That is about (series with closes) × 96 BDH hits a day.
 
-**`SOFRRATE Index`:** asked once a day after 16:30, never at startup ("1 kalsın").
+**`SOFRRATE Index`:** its new days are asked once a day, after 16:30 (`SOFR_AFTER`): a start before 16:30 does not ask,
+and a restart the same day does not ask again ("1 kalsın"). A manual update (`History.request_sync`) asks again, still
+only after 16:30. Its first two years come once, last in the 40-a-sync turn.
 
 **`tto/fx.py` keeps its own older rule.**
 - It runs live only.

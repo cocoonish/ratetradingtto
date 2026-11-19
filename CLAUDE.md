@@ -8,8 +8,9 @@ signals.
 - It loads the desk's Excel workbooks, imported as `models/*.json.gz`, into its own formula engine (`tto/xl`).
 - It adds sheets of its own (`tto/extras.py`, `EK_*`) and calculates each user's view on top of the shared one.
 - It serves pages from `tto/views/*.json` and `tto/static`.
-- Live data comes from Bloomberg on the desk. Everywhere else - tests, agents, checks - it runs in **replay** mode on
-  the values saved in the workbook.
+- Live data comes from Bloomberg. Tests, agents and checks use **replay** mode: the values saved in the workbook.
+  **Start anything yourself with `--mode replay`.** The default `auto` goes live whenever Bloomberg answers, and the
+  computer the sessions run on has Bloomberg too.
 
 `README.md` is the user manual, in Turkish.
 
@@ -33,9 +34,13 @@ signals.
 - **The user's running system**: never touch these:
   - the user's dashboard (`0.0.0.0:1057`), `127.0.0.1:1058`, the preview at `127.0.0.1:1079`;
   - the install folder (`../ratetradingtto`, beside the clones) and its `data/`. Read its database only through a SQLite
-    backup copy (`docs/market-data.md#desk-database`);
+    backup copy (`docs/market-data.md#desk-database`). Never start the app there: it opens the live `data/tto.db`;
   - `D:\tto-test`, `D:\tto-yedek`, `../ratetradingtto-git`;
   - other sessions' worktrees.
+- **Backup copies**: a copy of the install you start (no `.git`, its own `data/`) sends its backups' second copy to
+  `D:\tto-yedek` by default (`config.backup_copy_default`), and after 17:30 it takes the day's backup at once. Start such
+  a copy only with `--mode replay --backup-copy-dir "" --data-dir <scratch>`. Tests set `TTO_BACKUP_COPY_DIR=""`
+  (`tests/conftest.py`).
 - **Passwords**: never write the opening password of `BBG_Borsa_Swap.xlsx` anywhere - not in code, tests, docs, logs
   or messages. Never write or repeat any password.
 - **Bloomberg data, screenshots of it and logs**: never put them in the repository or send them to an external service.
@@ -51,7 +56,9 @@ The desk has two TRY discount curves. **They are not interchangeable** ("OIS ile
 - **Offshore TRY** is FX swap implied `TRYI…` (1W–9M, one period simple ACT/360) plus XCCY `TRYSAQ1…10` (1Y–10Y,
   annual ACT/360 par).
   - 1Y is always `TRYSAQ1`. 6Y–10Y are `TRYSAQ6…10`.
-  - It lives at `Forward!AJ123:AN143` (`OFF_GUN` / `OFF_LNDF`), counted from the USDTRY spot `Forward!I2`.
+  - It lives at `Forward!AJ123:AN143` (`OFF_GUN` / `OFF_LNDF`). Its node days are Bloomberg's `DAYS_TO_MTY` of each
+    ticker (`Forward!G8:G21`; only 6Y–10Y, `K130:K134`, fall back to counting from `Forward!I2`), read as days from the
+    USDTRY spot `Forward!I2`.
   - **Never take an offshore rate from OIS.** The only places they meet are listed in `docs/curves.md`; do not add one.
 - **18M offshore is computed, never a quote.** It comes off the XCCY curve on the viewer's interpolation setting, with
   coupons of 6M then 12M counted back from maturity.
@@ -75,7 +82,9 @@ The desk has two TRY discount curves. **They are not interchangeable** ("OIS ile
 - **Spot dates:**
   - USDTRY is T+1 on TRY+USD (`Forward!I2`); EURTRY is T+2 on TRY+EUR (`Forward!K2`);
   - TRY dates use the TRY list only;
-  - Bloomberg's `SETTLE_DT` is shown beside them ("Bloomberg valörü"), not used.
+  - Bloomberg's `SETTLE_DT` is shown beside them ("Bloomberg valörü"). Three dates still use it: `VIOP!K3` (VİOP's
+    implied-rate days), `ASW!C4` (→ `ASW!T65`, the ASW sheet's spot) and the gold spot date `EK_XAU!B9` when none is
+    typed (`docs/curves.md`, spot dates).
 
 ## Stating facts
 
@@ -94,17 +103,22 @@ cell, row or position must follow its row (`tto/meetings.py`, `tto/rowkeys.py`) 
 
 ## Working here
 
+- **Where sessions start.** Sessions usually start in the install folder, which is not this repository
+  (`../CLAUDE.md`, outside every repository, points here). Work in your clone, and run every command below from the
+  clone's root: the install folder has `tto/` and `tools/` too, so a relative command run there acts on the live install.
 - **Roles.** The main session merges, runs the full suite and pushes `entegrasyon:main`, once all side sessions are
-  done. Side sessions work on their own branch in their own worktree, and report the branch tip.
+  done. Side sessions work on their own branch in their own folder beside the clones, and report the branch tip.
 - **The installer.** Everything must install from GitHub's single `kurulum/tto_kur.txt` (`tools/make_bundle.py`). The
   integrator rebuilds it after any change to `tto/`, `models/`, `vendor/`, `tools/`, `README.md`, `requirements.txt` or
-  `run.*`. `docs/` and this file are not in it.
-- **One push a day.** One push carries all of the day's new requests: each update means an install and a restart at the
-  office.
-- **Tests.** Use the clean venv:
+  `run.*`. `docs/`, `tests/` and this file are not in it.
+- **One push for the day's requests.** One push carries all of the day's new requests: each new installer means an
+  install and a restart at the office. A push that leaves `kurulum/` unchanged needs no install.
+- **Python.** The code must start on Python 3.8 (the installer and `tto/__main__.py` refuse older; `vendor/` has a
+  py38 set). The tests run on 3.9.5, so they don't catch syntax newer than 3.8.
+- **Tests.** Use the clean venv, from the clone's root:
 
   ```
-  env -u PYTHONPATH PYTHONIOENCODING=utf-8 /d/tto-genis-test/venv/Scripts/python -m pytest <files> -q -rfEs -p no:cacheprovider --basetemp=<scratch>/bt-<name>
+  env -u PYTHONPATH PYTHONIOENCODING=utf-8 /d/tto-genis-test/venv/Scripts/python -m pytest <files> -q -rfEs -p no:cacheprovider --no-header -o faulthandler_timeout=900 --basetemp=<scratch>/bt-<name>
   ```
 
   Run only the files your change touches; the integrator runs everything. The browser test and its pitfalls are in

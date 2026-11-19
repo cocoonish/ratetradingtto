@@ -10,7 +10,7 @@
 Market data comes from Bloomberg live, or from the values saved in the workbook (replay); see
 [market-data.md](market-data.md).
 
-Line numbers are as of commit 7a53dfe. Search for the name if a line has moved.
+Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
 
 ---
 
@@ -25,7 +25,7 @@ Line numbers are as of commit 7a53dfe. Search for the name if a line has moved.
 | `tto/marketdata/` | Bloomberg (live, helper process), replay, the provider base | yes |
 | `tto/data/` | replay extras (`replay_usd/asw/borsa/history.json`), catalogs | yes |
 | `models/*.json.gz` | the imported workbooks - **what runs** | yes |
-| `workbooks/` | the source `.xlsx` / `.xlsm`, read only by `python -m tto import-workbook`. `BBG_Borsa_Swap.xlsx` is encrypted: never write its password anywhere. | no |
+| `workbooks/` | the source `.xlsx` / `.xlsm`, read only by the import (`python -m tto import-workbook`, `tools/import_workbook.py`). `BBG_Borsa_Swap.xlsx` is encrypted: never write its password anywhere - the user runs its import (the password on their own command line, or `TTO_WORKBOOK_PASSWORD`). | no |
 | `vendor/` | bundled wheels (`tto/bundled.py` falls back to them). `vendor/local` is never bundled. | yes |
 | `tools/` | `make_bundle.py`, `bundle_stub.py` | yes |
 | `kurulum/` | the single-file installer `tto_kur.py` and the identical `tto_kur.txt` | (it is the bundle) |
@@ -139,7 +139,7 @@ docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 | Group | Modules |
 |---|---|
-| Core | `config`, `__main__`, `server` (HTTP), `service` (about 8 600 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
+| Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `bonds` (catalog) |
 | Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `volcarry` |
@@ -151,7 +151,7 @@ docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 | Table(s) | Owner |
 |---|---|
 | `users`, `sessions` | auth, presence |
-| `user_inputs`, `shared_inputs`, `scenarios` | `Service._set_inputs`, scenarios. `meetings.py` and `rowkeys.py` move them (`move_values`). |
+| `user_inputs`, `shared_inputs`, `scenarios` | `Service._set_inputs`, scenarios. `rowkeys.py` moves them (`Store.move_values`); `meetings.change` rewrites them in one `store.transaction()`. |
 | `trades`, `blotter_snapshots`, `trade_templates` | **Günlük İşlemler** (the blotter), despite the name |
 | `tradebook*` | the **Trades** page |
 | `hist_values`, `mpc_days`, `mpc_values` | `history.py`; `fx.py` also writes `hist_values` |
@@ -172,7 +172,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `hist.settings`, `hist.fetch`, `mpc.archive`, `mpc.autoroll` | `history` |
 | `bbg.hits` | service (the day's Bloomberg hit count) |
 | `quant.*` | quant modules |
-| `watch.items`, `watch.alarms`, `watch.open:<user>`, `watch.fired:<user>` | `watch` (`meetings` also moves them) |
+| `watch.items`, `watch.alarms`, `watch.open:<day>`, `watch.fired:<day>` | `watch` (`meetings` also moves them) |
 | `migrated.*` | one-time migrations |
 | `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
@@ -237,5 +237,3 @@ new feature that stores anything by cell, row or position must use one of them *
   `tto/data/replay_*.json`.
 - **`--data-dir`'s help says "./data"**, but the default is the install's `data/` folder, and `TTO_DATA_DIR` comes
   first.
-- **README's sofr file isn't in `workbooks/`.** README names `USD_SOFR_FOMC.xlsx`; the `sofr` book exists only as
-  `models/sofr.json.gz`.

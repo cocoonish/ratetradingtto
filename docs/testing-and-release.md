@@ -2,8 +2,9 @@
 
 ## Who does what
 
-**The main session (the integrator)** keeps the integration clone `ratetradingtto-entegrasyon` on branch `entegrasyon`,
-with the other clones wired in as local remotes. When every side session has finished, it:
+**The main session (the integrator)** keeps the integration clone `ratetradingtto-entegrasyon` on branch `entegrasyon`.
+Side branches reach it as local branches (worktrees cut from `entegrasyon`) or through local remotes (the older
+separate clones, `git remote -v`). When every side session has finished, it:
 1. merges their branches;
 2. runs the full suite;
 3. updates README's counts;
@@ -12,7 +13,9 @@ with the other clones wired in as local remotes. When every side session has fin
 6. checks the install;
 7. pushes `entegrasyon:main`.
 
-**Side sessions and agents** work in their own worktree (`../ratetradingtto-<branch>`) on their own branch.
+**Side sessions and agents** work in their own folder beside the clones (`../ratetradingtto-<branch>`: a worktree cut
+from `entegrasyon`, or a separate clone) on their own branch. Sessions start in the install folder, which is not a
+repository: go to your own folder and work there, never in the install.
 - **Git:** commit only there. Never merge, push, rebase or switch branches.
 - **Shared files** (README, `main.js`, `server.py`, `service.py`, `tests/e2e/e2e.js`): touch only your own section.
 - **Leave alone:** README's global counts and `kurulum/`.
@@ -24,10 +27,13 @@ with the other clones wired in as local remotes. When every side session has fin
 - End the message with the `Co-Authored-By:` trailer the session was given.
 - **Never force-push.**
 
-## Test environment (the desk machine)
+## Test environment (the home computer, where the sessions run)
 
-Use the clean venv `D:\tto-genis-test\venv`. It was made from `requirements-dev.txt`, with no system packages; installing
-anything needs the user's OK. Run from a clone, never from the install folder:
+This computer has Bloomberg too; the dashboard normally runs on the office computer, which has Anaconda Prompt and no
+command window (`docs/desk-decisions.md`, Process).
+
+Use the clean venv `D:\tto-genis-test\venv` (Python 3.9.5). It was made from `requirements-dev.txt`, with no system
+packages; installing anything needs the user's OK. Run from a clone's root, never from the install folder:
 
 ```bash
 env -u PYTHONPATH PYTHONIOENCODING=utf-8 /d/tto-genis-test/venv/Scripts/python -m pytest <files> -q -rfEs -p no:cacheprovider --no-header -o faulthandler_timeout=900 --basetemp=<scratch>/agents/<branch>/bt-<branch>-<n>
@@ -38,9 +44,14 @@ env -u PYTHONPATH PYTHONIOENCODING=utf-8 /d/tto-genis-test/venv/Scripts/python -
 - **Expected skips:**
   - `test_blpapi_real` (no blpapi in the venv; not collected);
   - the encrypted-workbook test (msoffcrypto-tool is not installed).
-- **The full suite** (integrator) takes about 45 min. It runs as two weight-balanced groups side by side, each with its
-  own `--basetemp`, with the browser test apart. Heavy files: `test_service` (about 14 min alone), `test_bloomberg`
-  and `test_history` (about 5), `test_bonds` and `test_dates` (about 4).
+- **The full suite** (integrator) runs as two weight-balanced groups side by side, each with its own `--basetemp`, with
+  the browser test apart. On 19.11.2026 the groups took 44 and 49 min wall time (1189 and 1101 tests), the browser
+  test about 6 min. Heavy files: `test_service` (about 14 min alone), `test_bloomberg` and `test_history` (about 5),
+  `test_bonds` and `test_dates` (about 4).
+- **Backup copies:** `tests/conftest.py` sets `TTO_BACKUP_COPY_DIR=""` for every process a test starts. An unpacked
+  install would otherwise send its backups' second copy to the desk's `D:\tto-yedek` (`config.backup_copy_default`),
+  and after 17:30 it takes the day's backup at once. Keep that line, and start any install copy yourself with
+  `--backup-copy-dir ""`.
 - **Fixtures** (`tests/conftest.py`):
   - `service` is **session-scoped**: every file in a run shares it, and earlier files change its sources, lists and
     inputs. Don't pin a literal that such a change moves. Compare with what the sheet says now, or build your own with
@@ -103,7 +114,9 @@ This is a requirement.
 - **Version:** 10 hex digits of a digest of the contents.
 - **Freshness:** `test_bundle`'s freshness test fails whenever a bundled file changed after the build. Rebuild in the
   last commit (the integrator's job).
-- **Updating an install:** run the file in or next to the install folder.
+- **Updating an install:** run the file next to the install folder - it unpacks into `<the file's folder>/ratetradingtto` -
+  or name the folder: `python tto_kur.txt <install folder>`. Run from inside the install folder, it makes a second
+  install nested in it. At the office the user runs it from Anaconda Prompt.
   - The manifest `.tto_kur.json` holds the version and the file hashes.
   - Changed files are replaced atomically.
   - A file that was in the old manifest but is not in the new bundle is deleted.
@@ -127,6 +140,8 @@ This is a requirement.
    - Copy the database through SQLite's backup.
    - The update over the copy must keep every table and account.
    - A fresh install from the `.txt` must start, and its pages must open.
+   - Start every copy with `--mode replay --backup-copy-dir "" --data-dir <its own data>`: an installed copy otherwise
+     sends its backups to `D:\tto-yedek`.
    - Use a free port such as 1083 - never 1057, 1058, 1079, 5000 or 5001.
 8. **Push and confirm.**
    - Push: `git push origin entegrasyon:main`, fast-forward only.
