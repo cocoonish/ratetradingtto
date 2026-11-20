@@ -5445,7 +5445,7 @@ python -m pytest tests
 ```
 
 Bloomberg ve ağ gerekmez (19.11.2026'da oturumların çalıştığı bilgisayarda iki grup yan yana ~50 dk, tarayıcı testi
-~6 dk). 2447 test (gerçek `blpapi` kuruluysa 7 tane daha):
+~6 dk). 2452 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|
