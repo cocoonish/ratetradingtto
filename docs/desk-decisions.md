@@ -676,6 +676,69 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
   `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_fiyatyukleme.py`, the browser test's Kâğıt Fiyat Yükleme
   checks.
 
+### Kâğıt fiyatlama: eğri fiyatı - a price for the bonds that have none (20.11.2026)
+
+> "Kağıt fiyatlama kısmını çok anlayamadım, curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl"
+
+Its main job is a **curve price for bonds that have no price of their own**. The desk's two answers:
+
+- **(a) the whole catalog:** every fixed coupon bond, bill and zero coupon bond of the desk's bond list, not only DİBS RV's
+  trading list;
+- **(b) Kâğıt Fiyat Yükleme** uses that curve price, labelled **"eğri fiyatı"**, when a bond would otherwise get no price.
+
+**The rules** (`tto/kagitfiyat.py`: `_universe`, `_curve_row`, `curve_quotes`):
+
+- **The main table** of Kâğıt Fiyatlama, one row a bond, kind by kind, by maturity: **Kâğıt / ISIN / Vade · Piyasa ·
+  Eğri · Fiyat · Fark · ▸**.
+  - The bonds: the desk's list (Tüm Kâğıtlar: the catalog less the bonds taken off and the matured ones) - its fixed
+    coupon bonds, bills and zero coupon bonds - and the trading list's.
+  - **Piyasa**: today's market price, its compound yield (DİBS RV's own price ↔ yield on the trading list; the bond's
+    cash flows by BIST's rules otherwise) and source. The middle of a two-sided quote (a side where no order stands is
+    "–"), else today's last trade, else "—". The trading list's from DİBS RV (bid `K`, ask `L`, last `AS` / `I`); the
+    others from Tüm Kâğıtlar (`EK_EVREN` `I`, `J`, `K`, `L`): cells the pages already ask for, no new Bloomberg request.
+  - **Eğri**: the Nelson-Siegel curve fitted now to the bonds with prices (Kâğıt Fiyatlama's live fit, the same as
+    before) at the bond's own cash flows from its value date; a bond in the fit is read on the fit without it (leave one
+    out), a bill / zero and a bond off the fit on the curve of all of them.
+  - **Fiyat**, with its label: the market price ("**piyasa**"); else the curve + the bond's last known spread to the
+    curve ("**eğri + son fark <dd.mm>**": the desk's history showed the last spread the best predictor); else the curve
+    ("**eğri**"). As compound and simple yield and a clean price at the bond's value date.
+  - **Fark**: market − curve (bp), when there is a market price.
+  - **▸ details**: everything the page showed before (adil, kota, iyi seviyeler, σ, isabet, öngörülen, OIS'e / FX swap'a
+    göre, the "nasıl fiyatlandı" lines), the same cells and numbers, closed by default; a bond off the trading list has
+    none (said).
+  - **TLREF floaters, TÜFE linkers, FRNs**: left out of the table, counted in one line under it with the reason ("kuponları
+    değişken ya da reel: nominal eğriye göre fiyatlanmaz"; they are on Tüm Kâğıtlar).
+  - On top, a short line: "Fiyatı olmayan kâğıtlara eğriden fiyat: …".
+- **The bond card's block** has the curve price line first ("Eğri fiyatı: …"); the rest as before. A bond of the desk's list
+  off the trading list: that line alone.
+- **Kâğıt Fiyat Yükleme's fallback** (`FiyatYukleme._curve_fallback`), in İhale and BBG mode: a yield-quoted row (fixed
+  coupon, bill, zero coupon) that would get no price - no trade and no auction kept, or missing from today's auction
+  text - gets the curve price: the "Fiyat" column's answer without the market (the curve + the bond's last known spread,
+  else the curve). Its simple yield at its value date is taken as t0's, as an auction line's is; its spreads then apply as
+  for any yield-quoted bond. The row says "eğri fiyatı" with the how line, so the desk sees it before saving.
+  Price-quoted bonds and Eurobonds are unchanged; fixed prices still win.
+
+**Conventions settled while building it** (ask before changing):
+
+- "The last known spread" of a trading list bond is Kâğıt Fiyatlama's spread to the neighbours' curve at its last close
+  before today. A bond off the list has one only when the history kept its series - a bond once on the list, named as DİBS
+  RV named it ("<ISIN> @<source> ISIN", "<ISIN> ISIN") - measured at its last close on that day's curve of the trading
+  list's closes (not in that fit), its convention the trading list's bonds' of its kind. The desk copy of 17.11 has no
+  such series: there, a bond off the list is "eğri".
+- A bond with a market price still has the upload's curve price (the curve + its last spread): the upload never takes
+  the market from here.
+- A bond off the trading list is dated as Tüm Kâğıtlar dates it: bills and zero coupon bonds on its source `C2` (ISL0: the
+  same day), the others on `E2` (ISL1: the next week day).
+- A fixed coupon bond of the catalog without a coupon gets a row with no price and why ("kuponu bilinmiyor").
+- A bill or zero coupon bond read on the coupon bonds' curve reads its short end: on the desk copy the traded bills were
+  136–255 bp under it, so a zero coupon bond off the list with no closes ("eğri") is likely priced cheap (a high yield) -
+  the table shows the bills' own Fark beside it.
+
+Code: `tto/kagitfiyat.py` (`market_of`, `_universe`, `_curve_row`, `_off_closes`, `_off_spreads`, `curve_quotes`),
+`tto/fiyatyukleme.py` (`_curve_fallback`), `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`
+(`curveLine`), `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_kagitfiyat.py`, `tests/test_fiyatyukleme.py`, the
+browser test's Kâğıt Fiyatlama and Kâğıt Fiyat Yükleme checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

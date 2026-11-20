@@ -25,6 +25,9 @@ from tto.service import ServiceError
 from tto.xl.values import date_to_serial
 
 FIXED, BILL, LONG, TLREF = "TRT150328T24", "TRB100227T13", "TRT050935T13", "TRT090130T12"
+#: Eğri fiyatı: a fixed coupon bond of the desk's list off the trading list (no price on any sheet in replay), a zero coupon
+#: one, the trading list's bond the sheet has no price of
+OFF, OFF2, ZERO, NO_PRICE = "TRT240227T17", "TRT090627T12", "TRT060127T10", "TRT081128T15"
 
 
 def serial(d: dt.date) -> float:
@@ -390,6 +393,76 @@ def test_without_closes_the_page_says_why(svc):
     assert "TLREF'e endeksli" in rows[TLREF]["why"]
 
 
+# -------------------------------------------------------------------------------- Eğri fiyatı (the desk, 20.11.2026)
+def test_market_of_a_two_sided_quote_or_todays_last_trade():
+    today = dt.date(2026, 11, 3)
+    assert kf.market_of(100.1, 100.125, 99.0, today, today) == (pytest.approx(100.1125), "bid / ask ortası")
+    assert kf.market_of(100.1, "–", 100.2, today, today) == (100.2, "son işlem (bugün)")             # one side: no quote
+    assert kf.market_of(None, None, 100.2, dt.date(2026, 11, 2), today) is None                     # yesterday's trade: none
+    assert kf.market_of("", "", "", None, today) is None
+
+
+def live_fit(svc, user):
+    """What the page reads now: the sheets, the closes' part, the fit of the quotes now (its curve of all of them)."""
+    k = svc.kagitfiyat
+    got = svc.et.call(k._read, user)
+    panel = k.closes(got)
+    return got, panel, k.now_fit(got, panel, k.horizon_days(got))
+
+
+def test_every_bond_of_the_desks_list_gets_a_curve_price(svc):
+    """(the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl") Every fixed coupon bond,
+    bill and zero coupon bond of the desk's list has a row - the trading list's priced on DİBS RV's quotes ("piyasa", the
+    middle of bid / ask, its yield DİBS RV's own), the others off the curve ("eğri": no market in replay, no closes): the
+    Nelson-Siegel fitted now to the bonds with prices, at the bond's own cash flows from its value date; a bond in the fit
+    on the fit without it (leave one out); market − curve in bp; the floaters left out and counted, with why."""
+    from tto import bonds as bd
+    u = svc.login("Eğri Katalog")["user"]
+    d = svc.kagit_fiyat(u)
+    rows = {r["isin"]: r for r in d["curve_rows"]}
+    cat = {b["isin"] for b in bd.listed(dt.date(2026, 11, 3)) if b["kind"] in kf.CURVE_KINDS}
+    assert set(rows) == cat and len(cat) >= 29 and OFF in rows and ZERO in rows and FIXED in rows
+    assert [r["kind"] for r in d["curve_rows"]] == sorted((r["kind"] for r in d["curve_rows"]), key="BS".index)
+    got, panel, now = live_fit(svc, u)
+    # a bond off the trading list: the curve alone, at its own cash flows (value date T+1, the bonds' source) on the curve of all
+    o = rows[OFF]
+    b = qc._bond_of(OFF, {}, None)
+    value = dt.date(2026, 11, 4)
+    y = kf.yield_on(b, now["full"], value, "compound", 0.35)
+    assert o["market"] is None and not o["listed"] and o["value_date"] == "2026-11-04" and o["diff"] is None
+    assert o["price"]["label"] == kf.EGRI and o["price"]["kind"] == "curve" and o["curve"]["loo"] is False
+    assert o["curve"]["yield"] == pytest.approx(y * 100.0, abs=1e-9) and o["price"]["yield"] == o["curve"]["yield"]
+    assert o["price"]["clean"] == pytest.approx(kf.Pricer("fixed", value, None, 2.0, [], qc.accrued(b, value), b).clean(y), abs=1e-9)
+    assert o["alt"] == o["price"] and "kâğıt uydurmada değil" in o["price"]["how"] and "geçmiş kapanışı yok" in o["price"]["how"]
+    # a zero coupon bond off the list: its value date the bills' (ISL0, today), priced as a bill
+    z = rows[ZERO]
+    zb = qc._bond_of(ZERO, {}, None)
+    assert z["value_date"] == "2026-11-03" and z["kind"] == "B" and z["price"]["label"] == kf.EGRI
+    assert z["price"]["clean"] == pytest.approx(100.0 / (1 + z["price"]["yield"] / 100) ** ((zb.maturity - dt.date(2026, 11, 3)).days / 365.0), abs=1e-9)
+    # a bond of the trading list with a quote: the market's (DİBS RV's bid / ask middle, its compound yield the sheet's own);
+    # its curve on the fit without it (leave one out), not the curve of all of them; market − curve
+    f = rows[FIXED]
+    r = next(x for x in got["lines"] if x["isin"] == FIXED)
+    assert f["listed"] and f["price"]["label"] == kf.PIYASA and f["market"]["clean"] == pytest.approx((r["bid"] + r["ask"]) / 2.0, abs=1e-12)
+    assert f["market"]["yield"] == pytest.approx(cell(svc, "DİBS RV!T%d" % r["row"]) * 100.0, abs=1e-9) and "DİBS RV bid / ask ortası" in f["market"]["source"]
+    assert f["curve"]["loo"] and f["curve"]["yield"] == pytest.approx(now["nbr"][FIXED] * 100.0, abs=1e-12)
+    fb = qc._bond_of(FIXED, {}, next(q for q in got["quant"] if q["isin"] == FIXED))
+    whole = kf.yield_on(fb, now["full"], qc._value_date(dt.date(2026, 11, 3), next(q for q in got["quant"] if q["isin"] == FIXED)), "simple", 0.36)
+    assert abs(f["curve"]["yield"] - whole * 100.0) > 0.001                                     # (the fit with it is another curve)
+    assert f["diff"] == pytest.approx((f["market"]["yield"] - f["curve"]["yield"]) * 100.0, abs=1e-9)
+    assert f["alt"]["label"] == kf.EGRI and f["alt"]["yield"] == f["curve"]["yield"]          # (the upload's: never the market)
+    # the trading list's bond the sheet has no price of: the curve (no closes yet)
+    assert rows[NO_PRICE]["market"] is None and rows[NO_PRICE]["price"]["label"] == kf.EGRI
+    # the floaters: not in the table, counted with why
+    assert not any(r["cat_kind"] in ("float", "cpi", "frn") for r in d["curve_rows"]) and TLREF not in rows
+    want = {k: sum(1 for x in bd.listed(dt.date(2026, 11, 3)) if x["kind"] == k) for k, _ in kf.OTHER_KINDS}
+    assert {x["kind"]: x["n"] for x in d["others"]} == {k: n for k, n in want.items() if n} and "nominal eğriye göre" in d["others_why"]
+    assert d["counts"]["market"] >= 14 and d["counts"]["curve"] >= 14 and d["counts"]["spread"] == 0
+    # a fixed coupon bond of the catalog without a coupon: its row, no price, why
+    nocpn = [x for x in d["curve_rows"] if x["price"] is None]
+    assert all("kuponu bilinmiyor" in x["why"] for x in nocpn if x["cat_kind"] == "fixed")
+
+
 def test_the_spread_is_taken_at_the_last_close_and_fair_is_base_plus_spread(svc, seeded):
     u = svc.login("Kâğıt Fiyat")["user"]
     d = svc.kagit_fiyat(u)
@@ -498,9 +571,63 @@ def test_one_bond_for_the_card_and_a_reason_for_another(svc, seeded):
     u = svc.login("Kâğıt Kart")["user"]
     one = svc.kagit_fiyat(u, {"isin": "trt150328t24"})
     assert [r["isin"] for r in one["rows"]] == [FIXED] and one["rows"][0]["priced"]
+    assert [r["isin"] for r in one["curve_rows"]] == [FIXED]                    # (and its curve price: the card's line)
     with pytest.raises(ServiceError) as err:
         svc.kagit_fiyat(u, {"isin": "TRT010199T11"})
-    assert err.value.status == 400 and "trading listesinde değil: TRT010199T11" in str(err.value)
+    assert err.value.status == 400 and "masanın listesinde yok: TRT010199T11" in str(err.value)
+    # a bond of the desk's list off the trading list: no old row, its curve row (the card's "Eğri fiyatı")
+    off = svc.kagit_fiyat(u, {"isin": OFF})
+    assert off["rows"] == [] and [r["isin"] for r in off["curve_rows"]] == [OFF] and off["curve_rows"][0]["price"]["label"] == kf.EGRI
+    # a TLREF floater of the catalog off the trading list: no curve price, why
+    fl = svc.kagit_fiyat(u, {"isin": "TRT130127T11"})
+    assert fl["rows"] == [] and fl["curve_rows"] == [] and "nominal eğriye göre fiyatlanmaz" in fl["why"]
+
+
+def test_without_a_market_the_curve_plus_the_last_known_spread(svc, seeded):
+    """With the made-up history: a bond with no market price - the trading list's one the sheet has no price of, and a bond
+    off the list whose series the history kept (a bond once on the list) - is priced at the curve + its spread to the
+    curve at its last close ("eğri + son fark <day>": the desk's history found the last spread the best predictor): the
+    trading list's as Kâğıt Fiyatlama's closes measure it (the neighbours' curve, left out), the other's on that day's curve
+    of the trading list's closes; a bond with a market keeps it (the upload's price the curve + its spread); a bond with no
+    closes the curve alone."""
+    u = svc.login("Eğri Son Fark")["user"]
+    last = seeded["days"][-1]
+    k = svc.kagitfiyat
+    svc.kagit_fiyat(u)                                   # (the made-up history's curves built and kept, day by day)
+    b = qc._bond_of(OFF2, {}, None)
+    vd = qc._value_date(dt.date.fromisoformat(last), {"source": "ISL1"})
+    curve_then = kf.yield_on(b, k._days[last][1]["nss"], vd, "compound", 0.35)
+    # its series as DİBS RV named it ("<ISIN> @ISL1 ISIN"), 30 bp over that day's curve (read as the trading list's fixed
+    # coupon bonds' closes are: compound)
+    series = "%s @ISL1 ISIN|YLD_YTM_MID" % OFF2
+    svc.store.hist_upsert(series, [(seeded["days"][-2], 40.0), (last, (curve_then + 0.0030) * 100.0)])
+    svc.history.rev += 1
+    try:
+        d = svc.kagit_fiyat(u)
+        rows = {r["isin"]: r for r in d["curve_rows"]}
+        got, panel, now = live_fit(svc, u)
+        o = rows[OFF2]
+        assert o["price"]["label"] == "%s %s.%s" % (kf.EGRI_FARK, last[8:10], last[5:7]) and o["price"]["kind"] == "spread" and not o["listed"]
+        assert o["price"]["spread"] == pytest.approx(30.0, abs=1e-6) and o["price"]["day"] == last
+        assert o["price"]["yield"] == pytest.approx(o["curve"]["yield"] + 0.30, abs=1e-9) and "+ son fark +30 bp" in o["price"]["how"]
+        # the trading list's bond with no price: its spread to the neighbours' curve at its last close (Kâğıt Fiyatlama's)
+        n = rows[NO_PRICE]
+        st = panel["stats"][NO_PRICE]["last"]
+        assert n["price"]["kind"] == "spread" and n["price"]["day"] == last == st["day"] and n["market"] is None
+        assert n["price"]["yield"] == pytest.approx((now["nbr"][NO_PRICE] + st["spread"][kf.NBR]) * 100.0, abs=1e-9)
+        # with a market: the market's; its curve price for the upload the curve + its last spread
+        f = rows[FIXED]
+        assert f["price"]["label"] == kf.PIYASA and f["alt"]["kind"] == "spread"
+        assert f["alt"]["yield"] == pytest.approx(f["curve"]["yield"] + panel["stats"][FIXED]["last"]["spread"][kf.NBR] * 100.0, abs=1e-9)
+        # no closes: the curve alone
+        assert rows[OFF]["price"]["label"] == kf.EGRI and d["counts"]["spread"] >= 2
+        # the upload's quotes: the same (never the market)
+        q = k.curve_quotes(u, [OFF2, FIXED, OFF, "TRT130127T11"])
+        assert set(q) == {OFF2, FIXED, OFF} and q[OFF2]["yield"] == o["price"]["yield"] and q[FIXED]["yield"] == f["alt"]["yield"]
+        assert q[OFF]["label"] == kf.EGRI and q[OFF2]["simple"] == pytest.approx(o["price"]["simple"], abs=1e-12)
+    finally:
+        svc.store.hist_delete(series)
+        svc.history.rev += 1
 
 
 def test_the_widths_are_the_administrators(svc, seeded):
@@ -697,7 +824,13 @@ def test_the_routes(svc, seeded):
         assert sorted(bill["proj"]["h"]) == ["10", "20", "5"] and bill["proj"]["h"]["20"]["model"] == "M4"
         assert set(bill["asw"]) == {"ois", "fx"} and all("yield" in bill["asw"][k] or bill["asw"][k]["why"] for k in ("ois", "fx"))
         bad = c.get("/api/kagit-fiyat", headers=h, params={"isin": "XYZ"})
-        assert bad.status_code == 400 and "trading listesinde değil" in bad.json()["error"]
+        assert bad.status_code == 400 and "masanın listesinde yok" in bad.json()["error"]
+        # the main table over HTTP: every fixed coupon bond, bill and zero coupon bond of the desk's list, a label each
+        body = got.json()
+        assert len(body["curve_rows"]) >= 29 and {(r.get("price") or {}).get("label") for r in body["curve_rows"]} >= {kf.PIYASA, kf.EGRI}
+        assert body["others"] and sum(body["counts"].values()) == sum(1 for r in body["curve_rows"] if r.get("price"))
+        off = c.get("/api/kagit-fiyat", headers=h, params={"isin": OFF}).json()
+        assert off["curve_rows"][0]["isin"] == OFF and off["rows"] == []
         assert c.get("/api/kagit-fiyat", headers=ANON).status_code == 401
         assert c.post("/api/kagit-fiyat/genislik", headers=h, json={"widths": {"3y": 12}}).status_code == 403
         assert c.post("/api/kagit-fiyat/genislik", headers=ANON, json={"widths": {"3y": 12}}).status_code == 401

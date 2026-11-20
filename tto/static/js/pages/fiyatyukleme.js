@@ -394,6 +394,7 @@ export class FiyatYuklemePage {
         + (e.sides ? ', ' + e.sides + ' kâğıtta PX_MID boş: bid / ask\'ın ortası' : ''));
     }
     if (res.fixed) parts.push(res.fixed + ' sabit fiyat (hesaplanmadı, Bloomberg\'e sorulmadı)');
+    if (res.curve) parts.push(res.curve + ' kâğıt eğri fiyatıyla (başka fiyatı yoktu: Kâğıt Fiyatlama\'nın eğrisi, kaydetmeden önce kontrol edin)');
     body.appendChild(h('div', { class: 'muted fy-result-info', id: 'fy-result-info' }, parts.join(' · ')));
     const t = h('table', { class: 'plain fy', id: 'fy-table' });
     t.appendChild(h('tr', null, ...[['Kâğıt', 'l'], ['ISIN', 'l'], ['Açıklama', 'l'], ['Vade', ''], ['t0 / mid getiri %', ''], ['t0 / mid fiyat', ''], ['Bid getiri %', 'fy-sep'],
@@ -404,8 +405,8 @@ export class FiyatYuklemePage {
   }
 
   rowEl(r) {
-    const tr = h('tr', { class: 'fy-row' + (r.priced ? '' : ' fy-off') + (r.edited ? ' fy-edited' : '') + (r.note ? ' fy-warn' : '') + (r.fixed ? ' fy-fixed' : ''),
-      dataset: { isin: r.isin } });
+    const tr = h('tr', { class: 'fy-row' + (r.priced ? '' : ' fy-off') + (r.edited ? ' fy-edited' : '') + (r.note ? ' fy-warn' : '') + (r.fixed ? ' fy-fixed' : '')
+      + (r.curve ? ' fy-curve' : ''), dataset: { isin: r.isin } });
     const t0 = r.t0 || {};
     const fixedTip = 'Sabit fiyat: buradaki değişiklik yalnız bu Hesapla için; kayıtlı sabit değer değişmez (Sabit fiyat bölümünden değiştirin)';
     const cells = SIDES.map(([side, field, cls]) => {
@@ -432,7 +433,10 @@ export class FiyatYuklemePage {
       : 't0 (' + day(r.value_date) + ')';
     tr.append(h('td', { class: 'l b' }, r.label || ''), h('td', { class: 'l' }, r.isin), h('td', { class: 'l fy-name' }, r.name || ''), h('td', null, day(r.maturity)),
       h('td', { class: 'fy-t0-y', title: midTip }, n3(t0.yield)), h('td', { class: 'fy-t0-p', title: midTip }, n3(t0.price)), ...cells,
-      h('td', { class: 'l fy-write' }, r.write === 'yield' ? 'getiri' : 'fiyat'), act, h('td', { class: 'l fy-how', title: how }, how));
+      h('td', { class: 'l fy-write' }, r.write === 'yield' ? 'getiri' : 'fiyat'), act,
+      // a bond priced off the curve (no trade, no auction): said first, so the desk sees it before saving
+      h('td', { class: 'l fy-how', title: how }, r.curve ? h('b', { class: 'fy-curve-mark', title: 'Başka fiyatı yoktu: Kâğıt Fiyatlama\'nın eğri fiyatı ('
+        + r.curve.label + ') ve satırın spreadleri' }, 'eğri fiyatı') : '', r.curve ? ' · ' : '', how));
     return tr;
   }
 

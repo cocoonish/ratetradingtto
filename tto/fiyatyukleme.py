@@ -1293,8 +1293,44 @@ class FiyatYukleme(object):
                     row["how"] = "İhale %s.t%d %s (valör %s) → %s" % (ln["label"], ln["tn"], _n(ln["value"], 3), tr_day(vd), how)
             out_rows.append(row)
         ok = [ln for ln in lines if ln.get("isin") and not ln.get("why")]
-        return {"rows": out_rows, "parse": {"lines": lines, "ignored": got["ignored"], "recognised": len(ok),
-                                            "unrecognised": sum(1 for ln in lines if ln.get("why")), "stored": len(firsts)}}
+        curve = self._curve_fallback(key, rows, out_rows, t0)
+        return {"rows": out_rows, "curve": curve, "parse": {"lines": lines, "ignored": got["ignored"], "recognised": len(ok),
+                                                            "unrecognised": sum(1 for ln in lines if ln.get("why")), "stored": len(firsts)}}
+
+    def _curve_fallback(self, key: str, pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]], out_rows: List[Dict[str, Any]],
+                        t0: _dt.date) -> int:
+        """Eğri fiyatı (the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl"): a yield-quoted
+        bond (fixed coupon, bill, zero coupon) that would get no price - no trade and no auction kept, or missing from today's
+        auction text - gets its curve price, Kâğıt Fiyatlama's "Fiyat" when it is not the market's (``KagitFiyat.curve_quotes``:
+        the curve + the bond's last known spread to it, else the curve), its simple yield at its value date taken as t0's (as
+        an auction line's is) and the row's spreads on it as on any yield-quoted bond; marked "eğri fiyatı" with how, so the
+        desk sees it before saving.  Price-quoted bonds, Eurobonds and fixed prices are not here.  How many rows."""
+        todo = [(row, rec) for row, (_, rec) in zip(out_rows, pairs)
+                if not row.get("priced") and rec.get("kind") in YIELD_KINDS and self._why_not(rec) is None]
+        if not todo:
+            return 0
+        try:
+            quotes = self.svc.kagitfiyat.curve_quotes(key, [rec["isin"] for _, rec in todo])
+        except Exception as exc:  # noqa: BLE001 - the rows keep their own reason; the curve's is said beside it
+            for row, _ in todo:
+                row["note"] = " · ".join([x for x in (row.get("note"), "eğri fiyatı bulunamadı: %s" % str(exc)[:120]) if x])
+            return 0
+        n = 0
+        for row, rec in todo:
+            q = quotes.get(rec["isin"])
+            if q is None or q.get("simple") is None:
+                continue
+            why = row.pop("why", None) or "fiyatı yok"
+            self._price(row, rec, t0, q["simple"] / 100.0, None)
+            if not row["priced"]:
+                row["why"] = why
+                continue
+            row["source"] = "eğri"
+            row["curve"] = {"label": q["label"], "yield": q["yield"], "simple": q["simple"], "clean": q["clean"], "value_date": q["value_date"]}
+            row["how"] = "eğri fiyatı (%s): %s → %s → t0 basit getirisi %%%s (valöründeki getiri)" % (
+                q["label"], why, q["how"], _n(q["simple"], 3))
+            n += 1
+        return n
 
     @staticmethod
     def _from_auction(rec: Dict[str, Any], value: float, vd: _dt.date) -> Tuple[Optional[float], Optional[float], str]:
@@ -1453,8 +1489,9 @@ class FiyatYukleme(object):
             if notes:
                 row["note"] = " · ".join(notes + ([row["note"]] if row.get("note") else []))
             out_rows.append(row)
-        return {"rows": out_rows, "bbg": {"asked": asked, "hits": asked * len(BBG_FIELDS), "cached": len(answers) - asked,
-                                          "why": why_none, "trading": len(got["rv"]), "off": len(set(secs.values()))}}
+        curve = self._curve_fallback(key, rows, out_rows, t0)
+        return {"rows": out_rows, "curve": curve, "bbg": {"asked": asked, "hits": asked * len(BBG_FIELDS), "cached": len(answers) - asked,
+                                                          "why": why_none, "trading": len(got["rv"]), "off": len(set(secs.values()))}}
 
     def _from_trade(self, rec: Dict[str, Any], last: float, vd: _dt.date, ref: Optional[float],
                     auctions: Optional[List[Dict[str, Any]]]) -> Tuple[Optional[float], Optional[float], str]:

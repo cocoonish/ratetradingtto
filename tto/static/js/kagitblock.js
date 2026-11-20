@@ -119,12 +119,29 @@ export function aswTip(side, name) {
   return side.why ? side.why : name + ' (DİBS Trading ile aynı): ' + (side.tip || '');
 }
 
-/** The block of one bond (the card's; ``row``: an answer's row of /api/kagit-fiyat, ``projection``: its "projection"). */
-export function kagitBlock(row, rules, projection) {
+/** The curve price of a bond in a line (the main table's Piyasa / Eğri / Fiyat): the answer and its label first. */
+export function curveLine(c) {
+  const p = c.price;
+  const line = h('p', { class: 'kf-curve-line', id: 'kf-card-curve', title: p ? (p.how || '') : (c.why || '') }, h('b', null, 'Eğri fiyatı: '));
+  if (!p) {
+    line.appendChild(h('span', { class: 'muted' }, c.why || 'fiyatı yok'));
+    return line;
+  }
+  line.append(h('b', null, yld(p.yield) + ' · ' + px(p.clean)), ' (' + p.label + ', valör ' + day(c.value_date) + ')',
+    h('span', { class: 'muted' }, ' · piyasa ' + (c.market ? yld(c.market.yield) + ' · ' + px(c.market.clean) : '—')
+      + ' · eğri ' + (c.curve ? yld(c.curve.yield) + ' · ' + px(c.curve.clean) : '—') + (isNum(c.diff) ? ' · fark ' + bp(c.diff) + ' bp' : '')));
+  return line;
+}
+
+/** The block of one bond (the card's; ``row``: an answer's row of /api/kagit-fiyat - none for a bond off the trading list -,
+ * ``projection``: its "projection", ``curve``: its row of the main table, the curve price). */
+export function kagitBlock(row, rules, projection, curve) {
   const box = h('div', { class: 'kf-block', id: 'kf-card' });
   const draw = (hz) => {
     clear(box);
-    fillBlock(box, row, rules, projection, hz, draw);
+    if (curve) box.appendChild(curveLine(curve));
+    if (row) fillBlock(box, row, rules, projection, hz, draw);
+    else box.appendChild(h('p', { class: 'muted', id: 'kf-card-why' }, 'Adil, kota, iyi seviyeler ve öngörülen yalnız trading listesindeki kâğıtlar için'));
   };
   draw(horizonOf(projection));
   return box;

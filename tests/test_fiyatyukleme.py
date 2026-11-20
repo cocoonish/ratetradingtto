@@ -361,8 +361,11 @@ def test_ihale_on_the_replay_day_and_the_values_kept(svc):
     # TLREF / TÜFE: the auction's clean price is t0's, price spreads
     assert rows[TLREF]["t0"] == {"yield": None, "price": 100.5} and rows[TLREF]["bid"]["price"] == pytest.approx(100.45)
     assert rows[CPI]["ask"]["price"] == pytest.approx(91.95) and "t0 fiyatı olarak" in rows[CPI]["how"]
-    # a bond of the list not in the text: no price, why
-    assert not rows["TRT150328T24"]["priced"] and rows["TRT150328T24"]["why"] == "bugünkü ihale listesinde yok"
+    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026), said
+    c = rows["TRT150328T24"]
+    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri" and "why" not in c
+    assert c["how"].startswith("eğri fiyatı (eğri): bugünkü ihale listesinde yok → eğri %") and res["curve"] == 1
+    assert c["t0"]["yield"] == pytest.approx(c["curve"]["simple"]) and c["bid"]["yield"] == pytest.approx(c["curve"]["simple"] + 0.05)
     # the day's values, desk-wide, per ISIN (date, label, value, .t1 / .t2)
     kept = svc.store.get(fy.KEY_AUCTIONS)
     assert [(a["day"], a["label"], a["value"], a["tn"], a["value_date"]) for a in kept[FIXED]] == [
@@ -417,20 +420,22 @@ def test_kaydet_writes_the_desks_file_and_keeps_it_for_today(svc):
              "ask_yield": r["ask"]["yield"]} for r in res["rows"]]
     out = call(svc, u, "kaydet", {"rows": rows})
     f = next(r for r in res["rows"] if r["isin"] == FIXED)
-    assert out["name"] == "dibs_fiyat_20261103.txt"
+    c = next(r for r in res["rows"] if r["isin"] == "TRT150328T24")                  # (not in the text: its curve price)
+    assert out["name"] == "dibs_fiyat_20261103.txt" and c["source"] == "eğri"
     assert out["lines"] == ["TRB100227T13,0,0,31.750,31.650", "TRT060127T10,0,0,31.550,31.450",
                             "TRT100227T13,%.3f,%.3f,0,0" % (f["bid"]["price"], f["ask"]["price"]),
+                            "TRT150328T24,%.3f,%.3f,0,0" % (c["bid"]["price"], c["ask"]["price"]),
                             "TRT130127T11,100.450,100.550,0,0", "TRT020529T18,91.850,91.950,0,0"]
     assert out["text"] == "".join(x + "\r\n" for x in out["lines"])
-    assert out["left_out"] == [{"isin": "TRT150328T24", "label": "15.03.28", "why": "yazılacak fiyat yok"}] and out["crossed"] == []
+    assert out["left_out"] == [] and out["crossed"] == []
     # an edited cell (the bill's bid yield) is written as edited; a crossed quote is named, not refused
     rows[0]["bid_yield"], rows[0]["ask_yield"] = 31.6, 31.7
     out2 = call(svc, u, "kaydet", {"rows": rows})
     assert out2["lines"][0] == "TRB100227T13,0,0,31.600,31.700" and out2["crossed"] == [BILL]
     # the day's last file again: ASCII, CRLF; the saves kept per user and day
     raw, name = call(svc, u, "dosya")
-    assert name == "dibs_fiyat_20261103.txt" and raw == out2["text"].encode("ascii") and raw.count(b"\r\n") == 5
-    assert [x["n"] for x in call(svc, u, "state")["saved"]] == [5, 5]
+    assert name == "dibs_fiyat_20261103.txt" and raw == out2["text"].encode("ascii") and raw.count(b"\r\n") == 6
+    assert [x["n"] for x in call(svc, u, "state")["saved"]] == [6, 6]
     kept = svc.store.get(fy.KEY_SAVED % u)
     assert list(kept) == ["2026-11-03"] and len(kept["2026-11-03"]) == 2
     with pytest.raises(ServiceError) as e:
@@ -505,6 +510,50 @@ def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
     call(svc, u, "sabit-sil", {"isin": EURO1})
     # a crossed quote is kept, and said
     assert call(svc, u, "sabit", {"isin": CPI, "bid": "92,5", "ask": "92"})["crossed"] is True
+
+
+def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc):
+    """(the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl") A yield-quoted bond that
+    would get no price - missing from today's auction text (İhale), no trade and no auction kept (BBG) - gets Kâğıt
+    Fiyatlama's curve price (its "Fiyat" when not the market's: here the curve alone, no closes), its simple yield at its
+    value date as t0's, the row's own spreads on it, marked "eğri fiyatı" with how; a price-quoted bond does not (no price,
+    why); a fixed price still wins; the file takes the curve rows as any yield-quoted ones."""
+    u = svc.login("Yükleme Eğri")["user"]
+    off, zero2, fixed_one = "TRT090627T12", "TRT210427T18", "TRT110827T16"
+    kept = svc.store.get(fy.KEY_AUCTIONS) or {}
+    book = {k: v for k, v in kept.items() if k not in (off, zero2, TLREF)}
+    svc.store.put(fy.KEY_AUCTIONS, book)
+    try:
+        call(svc, u, "ekle", {"isins": " ".join((off, zero2, fixed_one, TLREF))})
+        call(svc, u, "ayar", {"spreads": {off: {"bid": "7", "ask": "3"}}})
+        call(svc, u, "sabit", {"isin": fixed_one, "bid": "88,5", "ask": "88,9"})
+        quotes = svc.kagitfiyat.curve_quotes(u, [off, zero2])
+        assert quotes[off]["label"] == quotes[zero2]["label"] == "eğri" and quotes[zero2]["value_date"] == "2026-11-03"
+        for mode in ("ihale", "bbg"):
+            res = call(svc, u, "hesapla", {"mode": mode, "text": "06/01/2027.t1   31.500\n"})
+            rows = {r["isin"]: r for r in res["rows"]}
+            for code in (off, zero2):
+                r, q = rows[code], quotes[code]
+                assert r["priced"] and r["source"] == "eğri" and r["curve"]["label"] == q["label"] and "why" not in r, (mode, code, r)
+                assert r["t0"]["yield"] == pytest.approx(q["simple"]) and r["how"].startswith("eğri fiyatı (eğri): "), (mode, r["how"])
+            o = rows[off]
+            assert ("bugünkü ihale listesinde yok" if mode == "ihale" else "kayıtlı ihale fiyatı yok") in o["how"]
+            assert o["bid"]["yield"] == pytest.approx(quotes[off]["simple"] + 0.07) and o["ask"]["yield"] == pytest.approx(quotes[off]["simple"] - 0.03)
+            bond = fy.bond_of(bd.by_isin(off))
+            assert o["bid"]["price"] == pytest.approx(fy.price_of(bond, (quotes[off]["simple"] + 0.07) / 100.0, REPLAY_DAY))
+            z = rows[zero2]
+            assert z["write"] == "yield" and z["bid"]["yield"] == pytest.approx(quotes[zero2]["simple"] + 0.05)
+            # a price-quoted bond: no curve price - no price, why
+            assert not rows[TLREF]["priced"] and rows[TLREF].get("source") != "eğri" and rows[TLREF]["why"], mode
+            # a fixed price wins over the curve
+            assert rows[fixed_one]["fixed"] and rows[fixed_one]["source"] == "sabit" and rows[fixed_one]["bid"]["price"] == 88.5
+            assert res["curve"] == 2, mode
+        out = call(svc, u, "kaydet", {"rows": [{"isin": r["isin"], "bid_price": r["bid"]["price"], "ask_price": r["ask"]["price"],
+                                               "bid_yield": r["bid"]["yield"], "ask_yield": r["ask"]["yield"]} for r in res["rows"]]})
+        assert "%s,%.3f,%.3f,0,0" % (off, o["bid"]["price"], o["ask"]["price"]) in out["lines"]
+        assert "%s,0,0,%.3f,%.3f" % (zero2, z["bid"]["yield"], z["ask"]["yield"]) in out["lines"]
+    finally:
+        svc.store.put(fy.KEY_AUCTIONS, dict(svc.store.get(fy.KEY_AUCTIONS) or {}, **{k: v for k, v in kept.items() if k in (off, zero2, TLREF)}))
 
 
 def test_fixed_bonds_go_as_they_are_in_both_modes_over_the_computed(svc):
@@ -716,8 +765,10 @@ def test_bbg_in_replay_the_trading_list_from_dibs_rv_the_rest_from_the_last_auct
     ot = rows[old_trade]
     tday = fy.date_said(rv[old_trade]["date"])
     assert ot["priced"] and ot["source"] == "bbg+eğri" and ("DİBS RV son işlem %s" % fy.tr_day(tday)) in ot["how"], ot
-    # neither a trade (nothing asked in replay) nor an auction: no price, why
-    assert not rows[no_auction]["priced"] and "kayıtlı ihale fiyatı yok" in rows[no_auction]["why"]
+    # neither a trade (nothing asked in replay) nor an auction: its curve price (Kâğıt Fiyatlama's), why said in its how
+    na = rows[no_auction]
+    assert na["priced"] and na["source"] == "eğri" and "kayıtlı ihale fiyatı yok" in na["how"] and na["how"].startswith("eğri fiyatı (")
+    assert "Bloomberg yok" in na["note"] and res["curve"] >= 1
     # off the list, no Bloomberg: the last auction + the bond curve's move since that day's close (the coupon bonds' closes 50 bp
     # higher then: the curve's short end, where no coupon bond is, moves less - test_the_curves_move_measured_directly)
     z = rows[ZERO]

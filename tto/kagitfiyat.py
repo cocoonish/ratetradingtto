@@ -56,6 +56,16 @@ the clean price at the horizon's value date; its record shown beside it (``recor
 **OIS'e göre / FX swap'a göre**: DİBS Trading's fair yield and price of the bond on DİBS RV's OIS ASW curve and on DİBS
 ASW's FX swap one - ``rvfair``'s, with the trading summary's own cells (``asw_side``), not worked out again.
 
+**Eğri fiyatı - the main table** (the desk, 20.11.2026: "Kağıt fiyatlama kısmını çok anlayamadım, curve'e göre fiyatı
+olmayanların da fiyatını bulmak içindi asıl"): every fixed coupon bond, bill and zero coupon bond of the desk's list (and
+the trading list's), not only the trading list (``_universe``): today's market price - a two-sided quote's middle, else
+today's last trade (``market_of``; DİBS RV's for the trading list, Tüm Kâğıtlar's for the rest) -, the curve (the
+Nelson-Siegel of the quotes now, at the bond's own cash flows; the fit without the bond for a bond in it) and the answer
+with its label (``_curve_row``): "piyasa", else "eğri + son fark <day>" (the curve + the bond's spread to it at its last
+close - a bond off the list: when the history kept its series, ``_off_closes`` / ``_off_spreads``), else "eğri".  Kâğıt
+Fiyat Yükleme takes the answer without the market for a row that would get no price (``curve_quotes``).  The trading
+list's rows above are the main table's details (▸), unchanged; floaters, CPI linkers and FRNs are counted, not priced.
+
 **Threads.**  What the sheets have now is read on the engine thread (``_read``, short); the closes' part (each past
 day's curves, the spreads, σ, the backtest) off it, from the store's memory (``Store.hist_many``), kept per revision of
 the history and each day's curves per what they are made of - a new close builds that day again, not the year."""
@@ -111,6 +121,16 @@ NOT_PRICED = {"T": "TLREF'e endeksli: kuponu TLREF'le değişir, getiri eğrisin
 KEY_WIDTHS, KEY_LOG = "kagitfiyat.widths", "kagitfiyat.log"
 LOG_MAX = 50
 BP = 1e4
+
+#: Eğri fiyatı (the desk, 20.11.2026: "Kağıt fiyatlama kısmını çok anlayamadım, curve'e göre fiyatı olmayanların da fiyatını
+#: bulmak içindi asıl"): the kinds of the desk's bond list priced off the curve - fixed coupon bonds, bills, zero coupon bonds
+CURVE_KINDS = ("fixed", "bill", "zero")
+#: the labels of a bond's price (the main table's "Fiyat"): its market's; the curve plus its last known spread to the curve
+#: (the desk's history: the bond's last spread is the best predictor); the curve alone
+PIYASA, EGRI_FARK, EGRI = "piyasa", "eğri + son fark", "eğri"
+#: the catalog's kinds not priced off a nominal curve (one line under the table, with their counts)
+OTHER_KINDS = (("float", "TLREF'e endeksli"), ("cpi", "TÜFE'ye endeksli"), ("frn", "FRN"))
+OTHERS_WHY = "kuponları değişken ya da reel: nominal eğriye göre fiyatlanmaz"
 
 #: Öngörülen - the horizons a projection is made for (closes: TRY business days) and their captions on the switch
 HORIZONS: Tuple[Tuple[int, str], ...] = ((5, "1 hafta"), (10, "2 hafta"), (20, "1 ay"))
@@ -196,6 +216,18 @@ def zero_rate(curve: Any, spot: float, mat: float) -> Optional[float]:
         return None
     df = curve.df(t)
     return df ** (-365.0 / t) - 1.0 if df > 0 else None
+
+
+def market_of(bid: Any, ask: Any, last: Any, day: Optional[_dt.date], today: _dt.date) -> Optional[Tuple[float, str]]:
+    """Today's market clean price of a bond and what it is: the middle of a two-sided quote (both sides a price - a side
+    where no order stands is "–" on DİBS RV and Tüm Kâğıtlar), else today's last trade; else none."""
+    b = bid if type(bid) is float and bid > 0 else None
+    a = ask if type(ask) is float and ask > 0 else None
+    if b is not None and a is not None:
+        return (b + a) / 2.0, "bid / ask ortası"
+    if type(last) is float and last > 0 and day == today:
+        return last, "son işlem (bugün)"
+    return None
 
 
 def to_compound(bond: qc.Bond, y: float, value: _dt.date, conv: str) -> float:
@@ -730,14 +762,23 @@ class KagitFiyat(object):
         got = svc.et.call(self._read, key)
         if got is None:
             return {"ok": False, "why": "DİBS RV sayfası yok", "gen": svc.gen}
+        from . import bonds as bd
         code = rvfair.isin_of(isin) if isin is not None else None
-        if isin is not None and not any(line["isin"] == code for line in got["lines"]):
-            raise KagitError("kâğıt trading listesinde değil: %s" % (code or str(isin).strip() or "—"))
+        bonds = self._bonds(got)
+        uni = self._universe(got, bonds, [code] if code else ())
+        why = None
+        if code is not None and not any(line["isin"] == code for line in got["lines"]) and not any(u["isin"] == code for u in uni):
+            rec = bd.by_isin(code) if code else None
+            if rec is None:
+                raise KagitError("kâğıt masanın listesinde yok: %s" % (code or str(isin).strip() or "—"))
+            why = "%s: %s" % (bd.KINDS.get(rec.get("kind"), rec.get("kind") or "türü bilinmiyor"), OTHERS_WHY)
         panel = self.closes(got)
         hdays = self.horizon_days(got)
         now = self.now_fit(got, panel, hdays)
         widths = self.widths()
-        bonds = self._bonds(got)
+        curve_rows = [self._curve_row(u, got, panel, now) for u in uni if code is None or u["isin"] == code]
+        order_c = {k: i for i, (k, _) in enumerate(KINDS)}
+        curve_rows.sort(key=lambda r: (order_c.get(r["kind"], 9), r.get("maturity") or "9999", r["isin"]))
         rows = []
         for line in got["lines"]:
             if code is not None and line["isin"] != code:
@@ -751,7 +792,11 @@ class KagitFiyat(object):
         order = {k: i for i, (k, _) in enumerate(KINDS)}
         rows.sort(key=lambda r: (order.get(r["kind"], 9), r.get("maturity") or "9999", r["isin"]))
         hist = {k: panel.get(k) for k in ("first", "last", "days", "tau", "tau_day", "ms", "ois_days", "why", "built")}
-        return {"ok": True, "rows": rows, "kinds": [{"kind": k, "title": t} for k, t in KINDS], "widths": widths,
+        listed = bd.listed(got["today"])
+        others = [{"kind": k, "text": t, "n": sum(1 for b in listed if b.get("kind") == k)} for k, t in OTHER_KINDS]
+        counts = {lab: sum(1 for r in curve_rows if (r.get("price") or {}).get("kind") == lab) for lab in ("market", "spread", "curve")}
+        return {"ok": True, "rows": rows, "curve_rows": curve_rows, "others": [x for x in others if x["n"]], "others_why": OTHERS_WHY,
+                "counts": counts, "why": why, "kinds": [{"kind": k, "title": t} for k, t in KINDS], "widths": widths,
                 "admin": svc._is_admin(key), "log": self.log() if svc._is_admin(key) else [], "history": hist,
                 "fit": {k: now.get(k) for k in ("ok", "why", "n_fit", "n", "tau_from")},
                 "rules": {"weights": WEIGHTS, "floor": SIGMA_FLOOR, "buckets": [{"key": k, "text": t, "top": top} for k, t, top in BUCKETS],
@@ -831,7 +876,21 @@ class KagitFiyat(object):
                           "bid": bid if type(bid) is float else None, "ask": ask if type(ask) is float else None,
                           "bid_text": bid if isinstance(bid, str) else "", "ask_text": ask if isinstance(ask, str) else "",
                           "quote": {k: q[k] for k in ("bid", "ask", "stale", "status", "tip")},
-                          "board": said.get(code)})
+                          "board": said.get(code), "last": raw("AS", r), "last_day": raw("I", r), "source": raw("BS", r)})
+        # Tüm Kâğıtlar (EK_EVREN): every bond of the desk's list - the bid / ask / last trade it already asks Bloomberg for (a
+        # bond of the trading list: DİBS RV's), its value date's source by kind (C2: bills and zero coupon, E2: the rest)
+        uni: Dict[str, Dict[str, Any]] = {}
+        srcs = ("ISL0", "ISL1")
+        usi = index.get(ex.UNI_SHEET)
+        if usi is not None:
+            got_src = [raw(c, 2, usi) for c in ("C", "E")]
+            srcs = tuple((s.strip().upper() if isinstance(s, str) and s.strip() else d) for s, d in zip(got_src, srcs))
+            for r in range(ex.UNI_FIRST, ex.UNI_LAST + 1):
+                code = rvfair.isin_of(raw("A", r, usi))
+                if code and code not in uni:
+                    uni[code] = {"bid": raw("I", r, usi), "ask": raw("J", r, usi), "last": raw("K", r, usi), "last_day": raw("L", r, usi),
+                                 "source": raw("R", r, usi)}
+        n2 = raw("N", 2)
         if user:
             # "OIS'e göre" / "FX swap'a göre": what DİBS Trading shows of each bond on the two fitted ASW curves - rvfair's
             # fair yield and clean price, with the trading summary's own cells (their text and how each is made)
@@ -845,7 +904,8 @@ class KagitFiyat(object):
                 valor, own = raw("P", r), raw("T", r)
                 line["asw"] = {side: asw_side(f[side], svc._fair_cells(f[side], side, fits, valor, own, loc)) for side in ("ois", "fx")}
         return {"lines": lines, "quant": eng.get("dibs") or [], "live": qc.live_values(eng), "today": svc.history.today(),
-                "mk": mk, "boot": boot, "gen": svc.gen}
+                "mk": mk, "boot": boot, "gen": svc.gen, "uni": uni, "src": srcs,
+                "how": n2.strip() if isinstance(n2, str) and n2.strip() else "ISIN"}
 
     # ------------------------------------------------------------------ the closes' part (off the engine thread)
     def _bonds(self, got: Dict[str, Any]) -> Dict[str, qc.Bond]:
@@ -894,17 +954,79 @@ class KagitFiyat(object):
             quote_months = tuple(sorted(float(m) for m, _ in mk.ois_quotes))
         static = tuple(sorted((code, b.kind, b.maturity.isoformat(), b.coupon, b.freq, str(rows.get(code, {}).get("source") or ""),
                                conv.get(code, "simple")) for code, b in bonds.items()))
-        mark = (svc.history.rev, before, static, node_months, quote_months, hash(hol), tuple(sorted(defs)))
+        # the desk's other bonds (off the trading list) whose closes the history kept - a bond once on the list
+        off = self._off_closes(got, bonds, conv, start, before)
+        mark = (svc.history.rev, before, static, node_months, quote_months, hash(hol), tuple(sorted(defs)),
+                tuple(sorted((code, x[2]) for code, x in off.items())))
         with self._lock:
             hit = self._panel
             if hit is not None and hit[0] == mark:
                 return hit[1]
             t0 = time.perf_counter()
             res = self._build(bonds, rows, conv, closes, ois, node_months, quote_months, hol, today)
+            res["off"] = self._off_spreads(off)
             res["ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
             res["built"] = _dt.datetime.now().strftime("%H:%M:%S")
             self._panel = (mark, res)
             return res
+
+    def _off_closes(self, got: Dict[str, Any], bonds: Dict[str, qc.Bond], conv: Dict[str, str], start: str, before: str
+                    ) -> Dict[str, Tuple[qc.Bond, Dict[str, Any], str, str, float]]:
+        """The bonds of the desk's list off the trading list that have closes in the history (a bond once on the list: its
+        series as DİBS RV named it - "<ISIN> @<source> <ISIN>" and the plain "<ISIN> ISIN", the history's yield field): ISIN
+        -> (its bond, the row it is read with - its source -, its last close's day before today, its convention, the close
+        %).  The convention is the trading list's bonds' of its kind (most of them; quantcurve's ``detect_convention`` -
+        there is no yield of its own on a sheet to tell it)."""
+        from . import bonds as bd
+        from .history import SeriesDef
+        svc = self.svc
+        field = str(svc.history.settings().get("dibs_field") or "YLD_YTM_MID")
+        bounds = svc.store.hist_bounds()
+        how = got.get("how") or "ISIN"
+        src = got.get("src") or ("ISL0", "ISL1")
+        kinds: Dict[str, List[str]] = {}
+        for code, b in bonds.items():
+            kinds.setdefault(b.kind, []).append(conv.get(code, "simple"))
+        out: Dict[str, Tuple[qc.Bond, Dict[str, Any], str, str, float]] = {}
+        for rec in bd.listed(got["today"]):
+            code = rec["isin"]
+            if code in bonds or rec.get("kind") not in CURVE_KINDS:
+                continue
+            s = src[0] if rec.get("kind") in ("bill", "zero") else src[1]
+            main = "/isin/%s@%s" % (code, s) if how.lower() == "/isin/" else "%s @%s %s" % (code, s, how)
+            plain = "%s %s" % (code, how)
+            if not any("%s|%s" % (t, field) in bounds for t in (main, plain)):
+                continue
+            b = qc._bond_of(code, {}, None)
+            if b is None:
+                continue
+            d = SeriesDef("dibs", code, main, field, [plain])
+            points = {k: v for k, v in d.pick(svc.store.hist_many(d.ids(), start))[1].items() if k < before}
+            if not points:
+                continue
+            day = max(points)
+            votes = kinds.get(b.kind) or []
+            c = max(set(votes), key=votes.count) if votes else "simple"
+            out[code] = (b, {"source": s}, day, c, points[day])
+        return out
+
+    def _off_spreads(self, off: Dict[str, Tuple[qc.Bond, Dict[str, Any], str, str, float]]) -> Dict[str, Dict[str, Any]]:
+        """Each such bond's spread to the curve at its last close: its close (compounded) − its yield on that day's curve of
+        the trading list's bonds (the day's fit, kept with the day: the bond read on it, as a bond off the list is now)."""
+        out: Dict[str, Dict[str, Any]] = {}
+        for code, (b, row, day, conv, close) in off.items():
+            hit = self._days.get(day)
+            nss = (hit[1].get("nss") if hit is not None else None)
+            if nss is None:
+                continue
+            value = qc._value_date(_dt.date.fromisoformat(day), row)
+            if (b.maturity - value).days < qc.MIN_DAYS:
+                continue
+            y = to_compound(b, close / 100.0, value, conv)
+            curve = yield_on(b, nss, value, "compound", y)
+            if curve is not None:
+                out[code] = {"day": day, "spread": y - curve, "y": y, "curve": curve, "conv": conv}
+        return out
 
     def _build(self, bonds: Dict[str, qc.Bond], rows: Dict[str, Dict[str, Any]], conv: Dict[str, str],
                closes: Dict[str, Dict[str, float]], ois: Dict[float, Dict[str, float]], node_months: Sequence[float],
@@ -959,9 +1081,11 @@ class KagitFiyat(object):
             if hit is not None and hit[0] == sig:
                 res = hit[1]
             else:
-                res = {"nbr": {}, "ois": {}}
+                res = {"nbr": {}, "ois": {}, "nss": None}
                 if nss0 is not None:
-                    res["nbr"] = neighbours(items, nss0)["nbr"]
+                    nb = neighbours(items, nss0)
+                    res["nbr"] = nb["nbr"]
+                    res["nss"] = nb.get("nss")              # (the day's curve of all of them: a bond off the list is read on it)
                 if full:
                     try:
                         spot, curve = sw.day_curve(float(date_to_serial(_dt.date.fromisoformat(iso))), quotes, node_months, hol)
@@ -1036,7 +1160,7 @@ class KagitFiyat(object):
             res = neighbours(items, nss0, extra, ahead)
             res["ok"] = "why" not in res
             res["tau_from"] = tau_from
-            res.pop("nss", None)
+            res["full"] = res.pop("nss", None)             # (the curve of all of them now: the desk's other bonds are read on it)
         with self._now_lock:
             self._now = [x for x in self._now if x[0] != key][-(NOW_KEPT - 1):] + [(key, res)]
         return res
@@ -1258,4 +1382,148 @@ class KagitFiyat(object):
             if type(px) is not float or (type(size) is float and size <= 0):
                 continue                                  # (no order stands on that side: "–" on DİBS RV)
             add("bbg", side, pricer.yield_of(px), px, size=size if type(size) is float else None)
+        return out
+
+    # ------------------------------------------------------------------ Eğri fiyatı: every bond of the desk's list
+    def _universe(self, got: Dict[str, Any], bonds: Dict[str, qc.Bond], extra: Sequence[str] = ()) -> List[Dict[str, Any]]:
+        """The bonds the main table prices: every fixed coupon bond, bill and zero coupon bond of the desk's list (Tüm
+        Kâğıtlar: the catalog less the bonds taken off and the matured ones), the trading list's own and the catalog's of
+        ``extra`` (ISINs asked for: the upload's) - each with its bond (the trading list's as DİBS RV has it, the others' from
+        the catalog, by BIST's rules), its value date (DİBS RV's; else Tüm Kâğıtlar's source by kind) and its DİBS RV row."""
+        from . import bonds as bd
+        today = got["today"]
+        lines = {x["isin"]: x for x in got["lines"] if x["kind"] in ("S", "B")}
+        rows = {r["isin"]: r for r in got["quant"]}
+        src = got.get("src") or ("ISL0", "ISL1")
+        recs = [r for r in bd.listed(today) if r.get("kind") in CURVE_KINDS]
+        seen = {r["isin"] for r in recs}
+        for code, line in lines.items():
+            if code not in seen:
+                recs.append(bd.by_isin(code) or {"isin": code, "kind": "bill" if line["kind"] == "B" else "fixed", "name": line["label"],
+                                                 "maturity": line["maturity"].isoformat() if line["maturity"] else None})
+                seen.add(code)
+        for code in extra:
+            rec = bd.by_isin(code) if code not in seen else None
+            if rec is not None and rec.get("kind") in CURVE_KINDS:
+                recs.append(rec)
+                seen.add(code)
+        out = []
+        for rec in recs:
+            code, kind = rec["isin"], rec.get("kind")
+            line = lines.get(code)
+            if line is not None and bonds.get(code) is not None:
+                bond = bonds[code]
+                value = line["value"] or qc._value_date(today, rows.get(code))
+            else:
+                bond = qc._bond_of(code, {}, None)
+                value = qc._value_date(today, {"source": src[0] if kind in ("bill", "zero") else src[1]})
+            if bond is not None and bond.maturity <= today:
+                continue
+            out.append({"isin": code, "rec": rec, "line": line, "listed": line is not None, "kind": "B" if kind in ("bill", "zero") else "S",
+                        "cat_kind": kind, "bond": bond, "value": value})
+        return out
+
+    def _curve_row(self, u: Dict[str, Any], got: Dict[str, Any], panel: Dict[str, Any], now: Dict[str, Any]) -> Dict[str, Any]:
+        """A bond of the main table: its market price today (Piyasa: DİBS RV's bid / ask / last for the trading list, Tüm
+        Kâğıtlar's for the rest), the curve at its own cash flows (Eğri: the Nelson-Siegel fitted now to the bonds with
+        prices; a bond in the fit read on the fit without it), and the answer (Fiyat): the market's ("piyasa"), else the
+        curve + the bond's last known spread to it ("eğri + son fark <day>"), else the curve ("eğri") - each as a compound
+        and simple yield and a clean price at its value date; ``alt`` the answer without the market (the upload's), the
+        market − the curve (bp), how."""
+        from . import bonds as bd
+        from .fiyatyukleme import date_said
+        today = got["today"]
+        code, bond, line, rec, value = u["isin"], u["bond"], u["line"], u["rec"], u["value"]
+        mat = bond.maturity if bond is not None else (_dt.date.fromisoformat(rec["maturity"]) if rec.get("maturity") else None)
+        label = line["label"] if line is not None else (bd.short_label(rec) if rec.get("maturity") else code)
+        out: Dict[str, Any] = {"isin": code, "label": label, "name": rec.get("name") or "", "kind": u["kind"], "cat_kind": u["cat_kind"],
+                               "maturity": mat.isoformat() if mat else None, "years": (mat - today).days / qc.YEAR if mat else None,
+                               "listed": u["listed"], "value_date": value.isoformat() if value else None,
+                               "market": None, "curve": None, "price": None, "alt": None, "diff": None}
+        if bond is None:
+            out["why"] = "kuponu bilinmiyor: eğride fiyatlanamaz" if u["cat_kind"] == "fixed" else "vadesi bilinmiyor"
+            return out
+        pricer = self._pricer(line, bond, today) if line is not None else \
+            self.pricer_at({"kind": u["kind"], "freq": float(bond.freq), "guess": 0.3}, bond, value)
+
+        def level(yc: float) -> Dict[str, Any]:
+            s, c = pricer.simple(yc), pricer.clean(yc)
+            return {"yield": yc * 100.0, "simple": s * 100.0 if s is not None else None, "clean": c}
+
+        vtext = "valör %s" % _day(out["value_date"]) if out["value_date"] else ""
+        # Piyasa: today's two-sided quote's middle, else today's last trade - the cells the pages already ask for
+        q = line if line is not None else ((got.get("uni") or {}).get(code) or {})
+        m = market_of(q.get("bid"), q.get("ask"), q.get("last"), date_said(q.get("last_day")), today)
+        if m is not None:
+            ym = pricer.yield_of(m[0])
+            if ym is not None and math.isfinite(ym):
+                out["market"] = dict(level(ym), clean=m[0], source="%s %s" % ("DİBS RV" if line is not None else "Tüm Kâğıtlar", m[1]))
+        # Eğri: the bond's cash flows on the curve now (the trading list's: as Kâğıt Fiyatlama's neighbours' curve has it)
+        in_fit = line is not None and bond.kind == "fixed" and ("DIBSS:" + code) in (got.get("live") or {})
+        yc = (now.get("nbr") or {}).get(code)
+        full = now.get("full")
+        if yc is None and full is not None and (bond.maturity - value).days >= qc.MIN_DAYS:
+            yc = yield_on(bond, full, value, "compound", full.zero(max((bond.maturity - value).days / qc.YEAR, 0.01)))
+        fit_text = "Nelson-Siegel, %d sabit kuponluya şimdi uydurulan%s" % (
+            now.get("n_fit") or 0, "; kâğıt dışarıda bırakılarak" if in_fit else ("; bono / kuponsuz eğride okunur" if bond.kind == "bill"
+                                                                                  else "; kâğıt uydurmada değil"))
+        if yc is None:
+            out["curve_why"] = (("eğri kurulamadı: " + now["why"]) if now.get("why") else
+                                ("vadesine %d günden az kaldı" % qc.MIN_DAYS if (bond.maturity - value).days < qc.MIN_DAYS else "eğride getirisi bulunamadı"))
+        else:
+            out["curve"] = dict(level(yc), loo=in_fit, fit=fit_text)
+        # the last known spread to the curve: the trading list's at its last close (Kâğıt Fiyatlama's closes), another bond's
+        # at its own last close when the history kept it
+        sp = day = None
+        if line is not None:
+            last = ((panel.get("stats") or {}).get(code) or {}).get("last") or {}
+            sp, day = (last.get("spread") or {}).get(NBR), last.get("day")
+        else:
+            o = (panel.get("off") or {}).get(code)
+            if o is not None:
+                sp, day = o["spread"], o["day"]
+        if yc is not None:
+            if sp is not None:
+                y = yc + sp
+                alt = dict(level(y), kind="spread", label="%s %s" % (EGRI_FARK, _day(day)), day=day, spread=sp * BP)
+                alt["how"] = "eğri %%%s (%s) + son fark %s bp (%s kapanışı) = %%%s · temiz %s (%s)" % (
+                    _n(yc * 100.0, 2), fit_text, _bp(sp * BP), _day(day), _n(y * 100.0, 2), _n(alt["clean"], 3) if alt["clean"] is not None else "–", vtext)
+            else:
+                alt = dict(level(yc), kind="curve", label=EGRI)
+                nope = "geçmiş kapanışı yok" if not (panel.get("stats") or {}).get(code) else "son kapanışta eğri kurulamadı"
+                alt["how"] = "eğri %%%s (%s) · temiz %s (%s) · son fark eklenmedi: %s" % (
+                    _n(yc * 100.0, 2), fit_text, _n(alt["clean"], 3) if alt["clean"] is not None else "–", vtext, nope)
+            out["alt"] = alt
+        if out["market"] is not None:
+            mk = out["market"]
+            out["price"] = dict(mk, kind="market", label=PIYASA)
+            if out["curve"] is not None:
+                out["diff"] = (mk["yield"] - out["curve"]["yield"]) * 100.0
+            out["price"]["how"] = "piyasa: %s %s → %%%s (%s)%s" % (mk["source"], _n(mk["clean"], 3), _n(mk["yield"], 2), vtext,
+                                                                  " · eğri %%%s, fark %s bp" % (_n(out["curve"]["yield"], 2), _bp(out["diff"]))
+                                                                  if out["diff"] is not None else "")
+        elif out["alt"] is not None:
+            out["price"] = dict(out["alt"])
+        else:
+            out["why"] = out.get("curve_why") or "fiyatı yok"
+        return out
+
+    def curve_quotes(self, user: Optional[str], isins: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+        """Eğri fiyatı for Kâğıt Fiyat Yükleme's rows that would get no price: each of ``isins`` - a fixed coupon bond, bill
+        or zero coupon bond of the catalog - as the main table prices it without the market (its "Fiyat" when that is not
+        "piyasa": the curve + the bond's last known spread, else the curve): ISIN -> ``{"kind", "label", "yield",
+        "simple", "clean", "value_date", "how"}`` (per cent: compound and BIST simple at the bond's value date)."""
+        key = self.svc.require_user(user)
+        got = self.svc.et.call(self._read, key)
+        if got is None:
+            return {}
+        panel = self.closes(got)
+        now = self.now_fit(got, panel, self.horizon_days(got))
+        want = {rvfair.isin_of(x) for x in isins}
+        out: Dict[str, Dict[str, Any]] = {}
+        for u in self._universe(got, self._bonds(got), sorted(want)):
+            if u["isin"] in want:
+                row = self._curve_row(u, got, panel, now)
+                if row.get("alt") is not None:
+                    out[u["isin"]] = dict(row["alt"], value_date=row["value_date"])
         return out
