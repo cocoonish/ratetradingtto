@@ -152,6 +152,9 @@ CLOSE_AT = _dt.time(17, 35)
 #: the catalog's kinds not priced off a nominal curve (one line under the table, with their counts)
 OTHER_KINDS = (("float", "TLREF'e endeksli"), ("cpi", "TÜFE'ye endeksli"), ("frn", "FRN"))
 OTHERS_WHY = "kuponları değişken ya da reel: nominal eğriye göre fiyatlanmaz"
+#: the main table's Öngörülen / OIS'e / FX swap'a göre of a bond off the trading list: "—", said why
+COLS_WHY = ("Öngörülen ve OIS'e / FX swap'a göre yalnız trading listesindeki kâğıtlar için: bu kâğıdın günlük kapanışları ve DİBS RV "
+            "satırı (OIS / FX swap ASW'si) yok - Tüm Kâğıtlar'da ☆ ile eklenir")
 
 #: Öngörülen - the horizons a projection is made for (closes: TRY business days) and their captions on the switch
 HORIZONS: Tuple[Tuple[int, str], ...] = ((5, "1 hafta"), (10, "2 hafta"), (20, "1 ay"))
@@ -980,6 +983,12 @@ class KagitFiyat(object):
             rows.append(row)
         order = {k: i for i, (k, _) in enumerate(KINDS)}
         rows.sort(key=lambda r: (order.get(r["kind"], 9), r.get("maturity") or "9999", r["isin"]))
+        # the main table's Öngörülen / OIS'e / FX swap'a göre: a bond of the trading list shows its details' values (its
+        # row's ``proj`` and ``asw``, in this answer); any other "—", said why
+        have = {row["isin"] for row in rows}
+        for r in curve_rows:
+            if r["isin"] not in have:
+                r["cols_why"] = COLS_WHY
         hist = {k: panel.get(k) for k in ("first", "last", "days", "tau", "tau_day", "ms", "ois_days", "why", "built")}
         listed = bd.listed(got["today"])
         others = [{"kind": k, "text": t, "n": sum(1 for b in listed if b.get("kind") == k)} for k, t in OTHER_KINDS]
