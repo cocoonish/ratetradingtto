@@ -101,6 +101,9 @@ ORDER = ("bill", "zero", "fixed", "float", "frn", "cpi", EURO)
 #: the Eurobonds' facts (desk-wide: asked of Bloomberg once an ISIN)
 KEY_LIST, KEY_SAVED = "fiyatyukleme.list:%s", "fiyatyukleme.saved:%s"
 KEY_LABELS, KEY_AUCTIONS, KEY_EURO = "fiyatyukleme.labels", "fiyatyukleme.auctions", "fiyatyukleme.eurobonds"
+#: the last trade Bloomberg answered for a bond off the trading list (BBG mode), kept per ISIN beyond the answers'
+#: ``CACHE_SECONDS`` - a point of Kâğıt Fiyatlama's last known spread (``KagitFiyat._points``)
+KEY_TRADES = "fiyatyukleme.trades"
 #: a Eurobond's facts (once an ISIN), its mid (2 hits a bond a Hesapla) and the sides asked only when the mid is empty
 EURO_FACTS = ("NAME", "SECURITY_DES", "CRNCY", "CPN", "CPN_TYP", "CPN_FREQ", "DAY_CNT_DES", "MATURITY", "FIRST_CPN_DT",
               "PENULTIMATE_CPN_DT", "INT_ACC_DT", "DAYS_TO_SETTLE")
@@ -1302,7 +1305,8 @@ class FiyatYukleme(object):
         """Eğri fiyatı (the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl"): a yield-quoted
         bond (fixed coupon, bill, zero coupon) that would get no price - no trade and no auction kept, or missing from today's
         auction text - gets its curve price, Kâğıt Fiyatlama's "Fiyat" when it is not the market's (``KagitFiyat.curve_quotes``:
-        its bucket's base + its own last spread to it; else a fixed coupon bond's curve, a bill's or zero coupon bond's base +
+        its bucket's base + its own last spread to it at its most recent point - a trade, an auction, a close: "eğri fiyatı
+        (son fark, ihale 20.11)" -; else a fixed coupon bond's curve, a bill's or zero coupon bond's base +
         the median spread of today's market-priced bills and zero coupon bonds of its bucket, or the base alone), its simple
         yield at its value date taken as t0's (as an auction line's is) and the row's spreads on it as on any yield-quoted
         bond; marked "eğri fiyatı (son fark)" / "eğri fiyatı (akran farkı)" / "eğri fiyatı" with how - its typical error in
@@ -1438,6 +1442,33 @@ class FiyatYukleme(object):
                 self._asked.pop(s, None)
         return out, len(todo), None
 
+    def keep_trades(self, answers: Dict[str, Dict[str, Any]], secs: Dict[str, str]) -> int:
+        """Bloomberg's answers of the last trade (LAST_PRICE, LAST_TRADE_DATE: ISIN -> answer) kept per ISIN in the store
+        (``KEY_TRADES``: the day, the price, the source its value date follows) - beyond the answers' ``CACHE_SECONDS``, a
+        point of Kâğıt Fiyatlama's last known spread; a later trade replaces an earlier one.  How many changed."""
+        from .store import now_iso
+        found = {}
+        for code, ans in answers.items():
+            price, day = ans.get("LAST_PRICE"), date_said(ans.get("LAST_TRADE_DATE"))
+            if type(price) is float and price > 0 and day is not None:
+                sec = secs.get(code, "")
+                found[code] = (day.isoformat(), price, sec.split("@")[1].split()[0].upper() if "@" in sec else "")
+        if not found:
+            return 0
+        n = 0
+        with self._lock:
+            book = self.svc.store.get(KEY_TRADES)
+            book = dict(book) if isinstance(book, dict) else {}
+            for code, (day, price, source) in found.items():
+                old = book.get(code) or {}
+                if (old.get("day") or "") > day or (old.get("day") == day and old.get("price") == price):
+                    continue
+                book[code] = {"day": day, "price": price, "source": source, "at": now_iso()}
+                n += 1
+            if n:
+                self.svc.store.put(KEY_TRADES, book)
+        return n
+
     def _bbg(self, key: str, st: Dict[str, Any], rows: List[Tuple[Dict[str, Any], Dict[str, Any]]], today: _dt.date, t0: _dt.date,
              hol: frozenset) -> Dict[str, Any]:
         svc = self.svc
@@ -1446,6 +1477,7 @@ class FiyatYukleme(object):
         secs = {rec["isin"]: self.security(rec["isin"], rec.get("kind"), got["src"], got["how"])
                 for _, rec in rows if rec["isin"] not in got["rv"] and rec.get("kind")}
         answers, asked, why_none = self.ask_bloomberg(sorted(set(secs.values())), BBG_FIELDS)
+        self.keep_trades({code: answers[sec] for code, sec in secs.items() if sec in answers}, secs)
         book = self.auctions()
         ctx: Dict[str, Any] = {"got": got, "today": today, "t0": t0, "hol": hol}
         out_rows = []
