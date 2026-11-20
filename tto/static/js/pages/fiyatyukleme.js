@@ -73,11 +73,15 @@ export class FiyatYuklemePage {
       + 'Fiyatla kote edilenler (TLREF, FRN, TÜFE): bid fiyat = t0 − bid spread, ask fiyat = t0 + ask spread (fiyat puanı). Eurobond (USD / EUR, ISIN\'iyle '
       + 'eklenir): mod ne olursa olsun Bloomberg\'in mid\'inden; bid getiri = mid + bid spread, ask getiri = mid − ask spread (bp, kendi varsayılanı), fiyatlar '
       + 'Bloomberg\'in mid\'ine çapalı sokak kuralıyla. Satırın spread\'i boşsa varsayılan; eksi değer olur (skew).');
+    this.sabit = panel('fy-sabit', 'Sabit fiyat', 'Bu kâğıtlar hesaplanmadan, girildiği gibi yüklenir ve siz değiştirene ya da çıkarana kadar kalır. Değerler dosyaya '
+      + 'yazıldığı birimde girilir: bono ve kuponsuz getiri (%, basit), diğerleri (sabit kuponlu, TLREF, TÜFE, FRN, Eurobond) temiz fiyat. Listede de olan bir '
+      + 'kâğıtta sabit fiyat geçerlidir. Hesaplanan bir satırı "Sabitle" ile buraya alabilirsiniz.');
     this.result_ = panel('fy-result', 'Fiyatlar · t0', 'Getiriler BIST basit getiri (%), fiyatlar t0 valöründe temiz. Her hücre düzenlenebilir: getiri değişince fiyatı, '
-      + 'fiyat değişince getirisi aynı kurallarla yeniden hesaplanır. Dosyaya: bono / kuponsuz getiriyle, diğerleri fiyatla yazılır.');
+      + 'fiyat değişince getirisi aynı kurallarla yeniden hesaplanır. Dosyaya: bono / kuponsuz getiriyle, diğerleri fiyatla yazılır. Sabit fiyatlı satırdaki '
+      + 'değişiklik yalnız bu Hesapla içindir.');
     this.file = panel('fy-file', 'Dosya (Kaydet\'te yazılacak satırlar)');
     this.labels = panel('fy-labels', 'Tanıtılan ihale etiketleri (masanın)');
-    panels.append(this.ihale.el, this.list.el, this.result_.el, this.file.el, this.labels.el);
+    panels.append(this.ihale.el, this.list.el, this.sabit.el, this.result_.el, this.file.el, this.labels.el);
     this.host.appendChild(panels);
   }
 
@@ -93,6 +97,7 @@ export class FiyatYuklemePage {
   drawAll() {
     this.drawMode();
     this.drawList();
+    this.drawSabit();
     this.drawResult();
     this.drawFile();
     this.drawLabels();
@@ -208,6 +213,68 @@ export class FiyatYuklemePage {
     } catch (err) { errorToast(err); }
   }
 
+  // ------------------------------------------------------------------ fixed prices ("Sabit fiyat")
+  drawSabit() {
+    const st = this.state || {};
+    const body = clear(this.sabit.body);
+    const isin = h('input', { class: 'inp', id: 'fy-sabit-isin', placeholder: 'ISIN', size: '14', spellcheck: 'false' });
+    const bid = h('input', { class: 'inp', id: 'fy-sabit-bid', placeholder: 'bid', size: '8', inputmode: 'decimal' });
+    const ask = h('input', { class: 'inp', id: 'fy-sabit-ask', placeholder: 'ask', size: '8', inputmode: 'decimal' });
+    const go = h('button', { class: 'btn', type: 'button', id: 'fy-sabit-ekle' }, 'Ekle / değiştir');
+    go.addEventListener('click', () => this.saveFixed(isin.value.trim(), bid.value, ask.value));
+    body.appendChild(h('div', { class: 'fy-defs fy-sabit-form' }, h('span', { class: 'muted' }, 'Kâğıt'), isin, h('span', { class: 'muted' }, 'Bid'), bid,
+      h('span', { class: 'muted' }, 'Ask'), ask, go, h('span', { class: 'muted' }, 'bono / kuponsuz: getiri %, diğerleri: temiz fiyat')));
+    const t = h('table', { class: 'plain fy', id: 'fy-sabit-table' });
+    t.appendChild(h('tr', null, ...[['ISIN', 'l'], ['Kâğıt', 'l'], ['Açıklama', 'l'], ['Vade', ''], ['Tür', 'l'], ['Birim', 'l'], ['Bid', ''], ['Ask', ''],
+      ['Girildi', 'l'], ['', '']].map(([x, c]) => h('th', { class: c || null }, x))));
+    for (const r of st.fixed || []) {
+      const tr = h('tr', { class: 'fy-sabit-item', dataset: { isin: r.isin } });
+      const bi = h('input', { class: 'inp fy-sabit-bid', value: n3(r.bid), size: '8', inputmode: 'decimal' });
+      const ai = h('input', { class: 'inp fy-sabit-ask', value: n3(r.ask), size: '8', inputmode: 'decimal' });
+      for (const inp of [bi, ai]) inp.addEventListener('change', () => this.saveFixed(r.isin, bi.value, ai.value));
+      const del = h('td', { class: 'act fy-sabit-del', title: 'Sabit fiyatı kaldır: ' + r.isin }, '×');
+      del.addEventListener('click', () => this.removeFixed(r.isin));
+      tr.append(h('td', { class: 'l' }, r.isin), h('td', { class: 'l b', title: r.listed ? 'Listede de var: sabit fiyat geçerli' : null }, (r.label || '') + (r.listed ? ' *' : '')),
+        h('td', { class: 'l fy-name' }, r.name || ''), h('td', null, day(r.maturity)), h('td', { class: 'l' }, (r.kind_text || '') + (r.kind === 'euro' ? ' · ' + (r.ccy || '') : '')),
+        h('td', { class: 'l muted fy-sabit-unit' }, r.unit === 'yield' ? 'getiri %' : 'temiz fiyat'), h('td', null, bi), h('td', null, ai),
+        h('td', { class: 'l muted' }, (r.at || '').slice(0, 16)), del);
+      t.appendChild(tr);
+    }
+    if (!(st.fixed || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '10' }, 'Sabit fiyatlı kâğıt yok')));
+    body.appendChild(t);
+  }
+
+  async saveFixed(isin, bidText, askText) {
+    const read = (v) => (typeof v === 'number' ? v : parseNumber(String(v || ''), true));
+    const bid = read(bidText), ask = read(askText);
+    if (!isin) { toast('ISIN yazın', 'err'); return; }
+    if (!isNum(bid) || !isNum(ask)) { toast('Bid ve ask\'i sayı olarak girin', 'err'); return; }
+    try {
+      const got = await api.post('/api/fiyat-yukleme/sabit', { isin, bid, ask });
+      this.state = got;
+      this.drawSabit();
+      this.markStale();
+      toast(isin + ': sabit fiyat kaydedildi', 'ok');
+      if (got.crossed) toast(isin + ': bid ask\'ten iyi (ters kotasyon)', 'err', 6000);
+    } catch (err) { errorToast(err); this.drawSabit(); }
+  }
+
+  async removeFixed(isin) {
+    try {
+      this.state = await api.post('/api/fiyat-yukleme/sabit-sil', { isin });
+      this.drawSabit();
+      this.markStale();
+    } catch (err) { errorToast(err); }
+  }
+
+  /** "Sabitle": a computed row's bid / ask as they are now (edited or not), in the file's unit, stored as its fixed figures. */
+  async fixRow(r) {
+    const b = r.bid || {}, a = r.ask || {};
+    const bid = r.write === 'yield' ? b.yield : b.price, ask = r.write === 'yield' ? a.yield : a.price;
+    if (!isNum(bid) || !isNum(ask)) { toast('Sabitlenecek bid / ask yok', 'err'); return; }
+    await this.saveFixed(r.isin, bid, ask);
+  }
+
   markStale() {
     const info = document.getElementById('fy-result-info');
     if (this.result && info) info.textContent = 'Spread değişti: yeniden Hesapla';
@@ -300,31 +367,46 @@ export class FiyatYuklemePage {
       parts.push(e.why ? 'Eurobond: ' + e.why : 'Eurobond mid\'i: ' + e.asked + ' soruldu (' + e.hits + ' hit), ' + e.cached + ' son 5 dakikadan'
         + (e.sides ? ', ' + e.sides + ' kâğıtta PX_MID boş: bid / ask\'ın ortası' : ''));
     }
+    if (res.fixed) parts.push(res.fixed + ' sabit fiyat (hesaplanmadı, Bloomberg\'e sorulmadı)');
     body.appendChild(h('div', { class: 'muted fy-result-info', id: 'fy-result-info' }, parts.join(' · ')));
     const t = h('table', { class: 'plain fy', id: 'fy-table' });
     t.appendChild(h('tr', null, ...[['Kâğıt', 'l'], ['ISIN', 'l'], ['Açıklama', 'l'], ['Vade', ''], ['t0 / mid getiri %', ''], ['t0 / mid fiyat', ''], ['Bid getiri %', 'fy-sep'],
-      ['Ask getiri %', ''], ['Bid fiyat', 'fy-sep'], ['Ask fiyat', ''], ['Dosyaya', 'l'], ['Nasıl', 'l']].map(([x, c]) => h('th', { class: c || null }, x))));
+      ['Ask getiri %', ''], ['Bid fiyat', 'fy-sep'], ['Ask fiyat', ''], ['Dosyaya', 'l'], ['', ''], ['Nasıl', 'l']].map(([x, c]) => h('th', { class: c || null }, x))));
     for (const r of res.rows || []) t.appendChild(this.rowEl(r));
-    if (!(res.rows || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '12' }, 'Liste boş')));
+    if (!(res.rows || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '13' }, 'Liste boş')));
     body.appendChild(t);
   }
 
   rowEl(r) {
-    const tr = h('tr', { class: 'fy-row' + (r.priced ? '' : ' fy-off') + (r.edited ? ' fy-edited' : '') + (r.note ? ' fy-warn' : ''), dataset: { isin: r.isin } });
+    const tr = h('tr', { class: 'fy-row' + (r.priced ? '' : ' fy-off') + (r.edited ? ' fy-edited' : '') + (r.note ? ' fy-warn' : '') + (r.fixed ? ' fy-fixed' : ''),
+      dataset: { isin: r.isin } });
     const t0 = r.t0 || {};
+    const fixedTip = 'Sabit fiyat: buradaki değişiklik yalnız bu Hesapla için; kayıtlı sabit değer değişmez (Sabit fiyat bölümünden değiştirin)';
     const cells = SIDES.map(([side, field, cls]) => {
       const v = (r[side] || {})[field];
       const off = field === 'yield' && r.quoted !== 'yield';
       const inp = h('input', { class: 'inp ' + cls, value: off ? '' : n3(v), size: '8', inputmode: 'decimal', disabled: off,
-        placeholder: off ? '–' : '', title: off ? 'Fiyatla kote edilir: getirisi yok' : (field === 'yield' ? 'Getiri değişince fiyatı yeniden hesaplanır' : 'Fiyat değişince getirisi yeniden hesaplanır') });
+        placeholder: off ? '–' : '', title: off ? 'Fiyatla kote edilir: getirisi yok' : (r.fixed ? fixedTip + '. ' : '')
+          + (field === 'yield' ? 'Getiri değişince fiyatı yeniden hesaplanır' : 'Fiyat değişince getirisi yeniden hesaplanır') });
       if (!off) inp.addEventListener('change', () => this.edit(r, side, field, inp));
       return h('td', { class: field === 'yield' && side === 'bid' || field === 'price' && side === 'bid' ? 'fy-sep' : null }, inp);
     });
+    // a fixed row says so; a computed one can be fixed as it is now ("Sabitle")
+    let act;
+    if (r.fixed) {
+      act = h('td', { class: 'l fy-sabit-mark', title: fixedTip }, 'sabit fiyat');
+    } else {
+      const btn = h('button', { class: 'btn sm fy-sabitle', type: 'button', title: 'Bu satırın şimdiki bid / ask\'ini (düzenlendiyse düzenlenmiş hâlini) sabit fiyat olarak kaydet',
+        disabled: !r.priced }, 'Sabitle');
+      btn.addEventListener('click', () => this.fixRow(r));
+      act = h('td', null, btn);
+    }
     const how = [r.how || '', r.why ? (r.how ? ' · ' : '') + r.why : '', r.note ? ' · ' + r.note : ''].join('');
-    const midTip = r.kind === 'euro' ? 'Bloomberg\'in mid\'i (valör ' + day(r.settle) + '); çapa farkı ' + (isNum(r.anchor) ? num(r.anchor, 3, false) : '–') : 't0 (' + day(r.value_date) + ')';
+    const midTip = r.kind === 'euro' && !r.fixed ? 'Bloomberg\'in mid\'i (valör ' + day(r.settle) + '); çapa farkı ' + (isNum(r.anchor) ? num(r.anchor, 3, false) : '–')
+      : 't0 (' + day(r.value_date) + ')';
     tr.append(h('td', { class: 'l b' }, r.label || ''), h('td', { class: 'l' }, r.isin), h('td', { class: 'l fy-name' }, r.name || ''), h('td', null, day(r.maturity)),
       h('td', { class: 'fy-t0-y', title: midTip }, n3(t0.yield)), h('td', { class: 'fy-t0-p', title: midTip }, n3(t0.price)), ...cells,
-      h('td', { class: 'l fy-write' }, r.write === 'yield' ? 'getiri' : 'fiyat'), h('td', { class: 'l fy-how', title: how }, how));
+      h('td', { class: 'l fy-write' }, r.write === 'yield' ? 'getiri' : 'fiyat'), act, h('td', { class: 'l fy-how', title: how }, how));
     return tr;
   }
 

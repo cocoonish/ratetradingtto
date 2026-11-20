@@ -51,6 +51,12 @@ Excel's PRICE / YIELD, 30/360 or ACT/ACT by DAY_CNT_DES) anchored to Bloomberg -
 price at the mid yield), so the mid is Bloomberg's to the digit and the anchor (shown, flagged beyond 0,05) moves the sides
 by the convention's curvature only.  In the txt: clean prices, yields 0.
 
+**Sabit fiyat** (the desk, 20.11.2026: "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu şekilde yüklenecek diye
+girip bırakabilmeliyim"): a bond's bid and ask typed once in the unit the txt writes it in (a bill's / zero's simple
+yields, any other's clean prices; ``set_fixed``), kept with the user's list until changed or taken off.  On Hesapla, in
+either mode, it is a row as it is (``_fixed_row``: its other unit for information only), never computed and never asked of
+Bloomberg; in the list too, the fixed figures win.  An edit of its cells is that Hesapla's alone.
+
 **Kaydet** (``txt``): one line a bond, ``ISIN,pricebid,priceask,yieldbid,yieldask``: bills and zero coupons with their
 simple yields (%), the prices 0; the rest with clean prices, the yields 0 - three decimals, a dot, CRLF, ASCII
 (``dibs_fiyat_YYYYMMDD.txt``); each user's saves of the day kept (``KEY_SAVED``) for a second download."""
@@ -287,6 +293,11 @@ def brief(b: Dict[str, Any]) -> Dict[str, Any]:
                 "kind_text": "Eurobond", "ccy": b.get("ccy") or "", "maturity": b.get("maturity")}
     return {"isin": b["isin"], "label": bd.short_label(b), "name": b.get("name") or "", "kind": b.get("kind"),
             "kind_text": bd.KINDS.get(b.get("kind") or "", "tür bekleniyor"), "ccy": "TRY", "maturity": b.get("maturity")}
+
+
+def row_order(r: Dict[str, Any]) -> Tuple[int, str, str]:
+    """The page's order of bonds: by kind (``ORDER``), then maturity."""
+    return (ORDER.index(r["kind"]) if r.get("kind") in ORDER else 9, r.get("maturity") or "9999", r.get("isin") or "")
 
 
 def match(lines: List[Dict[str, Any]], labels: Dict[str, Dict[str, Any]], pool: Sequence[Dict[str, Any]]) -> None:
@@ -665,8 +676,10 @@ class FiyatYukleme(object):
         d = st.get("defaults") if isinstance(st.get("defaults"), dict) else {}
         defaults = {k: float(d[k]) if isinstance(d.get(k), (int, float)) else v for k, v in DEFAULTS.items()}
         bonds = [b for b in (st.get("bonds") or []) if isinstance(b, dict) and b.get("isin")]
+        fixed = [f for f in (st.get("fixed") or []) if isinstance(f, dict) and f.get("isin") and isinstance(f.get("bid"), (int, float))
+                 and isinstance(f.get("ask"), (int, float))]
         return {"bonds": bonds, "defaults": defaults, "mode": st.get("mode") if st.get("mode") in MODES else "ihale",
-                "text": st.get("text") if isinstance(st.get("text"), str) else ""}
+                "text": st.get("text") if isinstance(st.get("text"), str) else "", "fixed": fixed}
 
     def _save(self, key: str, st: Dict[str, Any]) -> None:
         self.svc.store.put(KEY_LIST % key, st)
@@ -718,9 +731,21 @@ class FiyatYukleme(object):
             rows.append(dict(brief(rec), quoted=quoted_of(rec.get("kind")), write="yield" if rec.get("kind") in WRITE_YIELD else "price",
                              spread=self.spreads_of(e, rec.get("kind"), st["defaults"])))
         return {"mode": st["mode"], "modes": [{"id": m, "text": MODE_TEXT[m]} for m in MODES], "defaults": st["defaults"],
-                "text": st["text"], "list": rows, "labels": self.label_rows(), "saved": self.saved_today(key, today),
-                "today": today.isoformat(), "t0": t0.isoformat(), "live": self.svc.mode == "live", "limits": LIMITS,
-                "file": file_name(today), "gen": self.svc.gen}
+                "text": st["text"], "list": rows, "fixed": self.fixed_rows(st), "labels": self.label_rows(),
+                "saved": self.saved_today(key, today), "today": today.isoformat(), "t0": t0.isoformat(),
+                "live": self.svc.mode == "live", "limits": LIMITS, "file": file_name(today), "gen": self.svc.gen}
+
+    def fixed_rows(self, st: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The user's fixed bonds as the page lists them: the bond (as the list shows it), the unit its two figures are in
+        (the txt's: a bill's / zero's yields, any other's clean prices), the figures, when they were set, in the list too."""
+        listed = {b["isin"] for b in st["bonds"]}
+        out = []
+        for f in st["fixed"]:
+            rec = self.record(f["isin"])
+            out.append(dict(brief(rec), unit="yield" if rec.get("kind") in WRITE_YIELD else "price", bid=f["bid"], ask=f["ask"],
+                            at=f.get("at") or "", listed=f["isin"] in listed))
+        out.sort(key=lambda r: row_order(r))
+        return out
 
     def label_rows(self) -> List[Dict[str, Any]]:
         out = []
@@ -744,28 +769,7 @@ class FiyatYukleme(object):
         if not codes:
             raise FiyatError("eklenecek ISIN yok")
         today, _, _ = self._today()
-        refused: List[Dict[str, Any]] = []
-        euro = self.euro_store()
-        unknown = [c for c in codes if not (bd.by_isin(c) or {}).get("kind") and c not in euro]
-        if unknown:
-            if svc.mode != "live":
-                for c in unknown:
-                    refused.append({"isin": c, "text": "türü Bloomberg'den bekleniyor: Bloomberg olmadan eklenemez" if bd.by_isin(c)
-                                    else "kâğıt kataloğunda yok: Bloomberg olmadan eklenemez (kayıtlı veriyle çalışıyor)" if c.startswith("TR")
-                                    else "Eurobond'un bilgileri (vade, kupon, gün sayımı) Bloomberg'den gelir: kayıtlı veriyle çalışırken "
-                                         "eklenemez"})
-            else:
-                other = [c for c in unknown if not c.startswith("TR")]
-                tr = [c for c in unknown if c.startswith("TR")]
-                if tr:
-                    got = svc.bond_list_add(key, tr)
-                    for r in got.get("refused") or []:
-                        if str(r.get("why") or "").startswith("fx:"):
-                            other.append(r["isin"])                 # a TR bond in a foreign currency: a Eurobond here
-                        else:
-                            refused.append({"isin": r["isin"], "text": r["text"]})
-                if other:
-                    refused += self._add_eurobonds(key, other)
+        refused = self._admit(key, codes)
         gone = {r["isin"] for r in refused}
         added, skipped = [], []
         with self._lock:
@@ -790,6 +794,91 @@ class FiyatYukleme(object):
             if added:
                 self._save(key, st)
         return dict(self.state(key), added=added, skipped=skipped, refused=refused)
+
+    def _admit(self, key: str, codes: List[str]) -> List[Dict[str, Any]]:
+        """The ISINs the dashboard does not know yet, made known (the list's and the fixed prices' one route): a Turkish one
+        through the desk's (``Service.bond_list_add``), any other - and a TR one Bloomberg says is in a foreign currency -
+        as a Eurobond (its facts asked once).  Without Bloomberg neither; the ones refused, with why."""
+        svc = self.svc
+        refused: List[Dict[str, Any]] = []
+        euro = self.euro_store()
+        unknown = [c for c in codes if not (bd.by_isin(c) or {}).get("kind") and c not in euro]
+        if not unknown:
+            return refused
+        if svc.mode != "live":
+            for c in unknown:
+                refused.append({"isin": c, "text": "türü Bloomberg'den bekleniyor: Bloomberg olmadan eklenemez" if bd.by_isin(c)
+                                else "kâğıt kataloğunda yok: Bloomberg olmadan eklenemez (kayıtlı veriyle çalışıyor)" if c.startswith("TR")
+                                else "Eurobond'un bilgileri (vade, kupon, gün sayımı) Bloomberg'den gelir: kayıtlı veriyle çalışırken "
+                                     "eklenemez"})
+            return refused
+        other = [c for c in unknown if not c.startswith("TR")]
+        tr = [c for c in unknown if c.startswith("TR")]
+        if tr:
+            got = svc.bond_list_add(key, tr)
+            for r in got.get("refused") or []:
+                if str(r.get("why") or "").startswith("fx:"):
+                    other.append(r["isin"])                         # a TR bond in a foreign currency: a Eurobond here
+                else:
+                    refused.append({"isin": r["isin"], "text": r["text"]})
+        if other:
+            refused += self._add_eurobonds(key, other)
+        return refused
+
+    # ------------------------------------------------------------------ fixed prices ("Sabit fiyat")
+    def set_fixed(self, user: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
+        """A bond's fixed bid and ask (the desk, 20.11.2026: "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu
+        şekilde yüklenecek diye girip bırakabilmeliyim"): ``{"isin", "bid", "ask"}`` in the unit the txt writes it in - a
+        bill's / zero's simple yields (%), any other's clean prices -, the page's number reading (a Turkish comma too).  The
+        bond comes in by the list's route; set again, its figures change; they stay until changed or taken off."""
+        from .store import now_iso
+        svc = self.svc
+        key = svc.require_user(user)
+        body = body if isinstance(body, dict) else {}
+        codes = svc._isins([body.get("isin")])
+        if len(codes) != 1:
+            raise FiyatError("tek bir ISIN girin")
+        code = codes[0]
+        bid, ask = num(body.get("bid")), num(body.get("ask"))
+        if bid is None or ask is None:
+            raise FiyatError("bid ve ask'i sayı olarak girin")
+        refused = self._admit(key, [code])
+        if refused:
+            raise FiyatError("%s: %s" % (code, refused[0]["text"]))
+        rec = self.record(code)
+        if not rec.get("kind"):
+            raise FiyatError("%s: türü Bloomberg'den bekleniyor" % code)
+        today, _, _ = self._today()
+        if rec.get("maturity") and rec["maturity"] < today.isoformat():
+            raise FiyatError("%s: vadesi geçmiş" % code)
+        in_yield = rec.get("kind") in WRITE_YIELD
+        lo, hi = (-50.0, 500.0) if in_yield else (0.0, 1000.0)
+        for v in (bid, ask):
+            if not (lo < v < hi):
+                raise FiyatError("%s %s olarak girilir: %s ile %s arasında olmalı" % (
+                    bd.short_label(rec) if rec.get("kind") != EURO else brief(rec)["label"], "getiri (%)" if in_yield else "temiz fiyat",
+                    _n(lo, 0), _n(hi, 0)))
+        with self._lock:
+            st = self._load(key)
+            left = [f for f in st["fixed"] if f["isin"] != code]
+            if len(left) == len(st["fixed"]) and len(left) >= LIST_MAX:
+                raise FiyatError("sabit fiyat listesi dolu (%d kâğıt)" % LIST_MAX)
+            st["fixed"] = left + [{"isin": code, "bid": round(bid, 6), "ask": round(ask, 6), "at": now_iso()}]
+            self._save(key, st)
+        crossed = bid < ask if in_yield else bid > ask
+        return dict(self.state(key), fixed_set=code, crossed=crossed)
+
+    def remove_fixed(self, user: Optional[str], isin: Any) -> Dict[str, Any]:
+        key = self.svc.require_user(user)
+        code = "".join(str(isin or "").split()).upper()
+        with self._lock:
+            st = self._load(key)
+            left = [f for f in st["fixed"] if f["isin"] != code]
+            if len(left) == len(st["fixed"]):
+                raise FiyatError("sabit fiyatı yok: %s" % (code or "(boş)"))
+            st["fixed"] = left
+            self._save(key, st)
+        return dict(self.state(key), fixed_removed=code)
 
     def _add_eurobonds(self, key: str, codes: List[str]) -> List[Dict[str, Any]]:
         """Eurobonds' facts (``EURO_FACTS``), asked of Bloomberg once - one request for all of them, then kept desk-wide
@@ -913,20 +1002,73 @@ class FiyatYukleme(object):
             self._save(key, st)
         today, t0, hol = self._today()
         rows = self._rows(st)
+        # fixed bonds: as they are, whatever the mode - not computed, no Bloomberg asked for them (in the list too: fixed wins)
+        fixed = {f["isin"]: f for f in st["fixed"]}
+        listed = {e["isin"] for e, _ in rows}
+        rows = [(e, rec) for e, rec in rows if e["isin"] not in fixed]
         # Eurobonds: Bloomberg's mid whatever the switch says - never an auction or a last trade
         euro = [(e, rec) for e, rec in rows if rec.get("kind") == EURO]
         rows = [(e, rec) for e, rec in rows if rec.get("kind") != EURO]
         if mode == "ihale":
             if not st["text"].strip():
-                raise FiyatError("İhale fiyatlarını yapıştırın")
-            res = self._ihale(key, st, rows, today, t0, hol)
-        else:
+                if rows or not (euro or fixed):
+                    raise FiyatError("İhale fiyatlarını yapıştırın")
+                res: Dict[str, Any] = {"rows": []}                  # (nothing here needs the auction)
+            else:
+                res = self._ihale(key, st, rows, today, t0, hol)
+        elif rows:
             res = self._bbg(key, st, rows, today, t0, hol)
+        else:
+            res = {"rows": [], "bbg": {"asked": 0, "hits": 0, "cached": 0, "why": None, "trading": 0, "off": 0}}
         if euro:
             more, res["euro"] = self._euro(st, euro, today)
             res["rows"] = res["rows"] + more
+        if fixed:
+            res["rows"] = sorted(res["rows"] + [self._fixed_row(f, self.record(f["isin"]), st, t0, today, f["isin"] in listed)
+                                                for f in fixed.values()], key=row_order)
+            res["fixed"] = len(fixed)
         res.update(mode=mode, today=today.isoformat(), t0=t0.isoformat(), file=file_name(today), time=_dt.datetime.now().strftime("%H:%M:%S"))
         return res
+
+    def _fixed_row(self, f: Dict[str, Any], rec: Dict[str, Any], st: Dict[str, Any], t0: _dt.date, today: _dt.date,
+                   listed: bool) -> Dict[str, Any]:
+        """A fixed bond's row as stored: its two figures in the txt's unit, written as they are; the other unit for
+        information only, by the page's own conversions - a bill's / zero's price at t0 from the fixed yield, a fixed coupon
+        bond's yield at t0 from the fixed price, a Eurobond's by the street convention at its settlement (Bloomberg not
+        asked: no anchor); a TLREF / TÜFE / FRN bond has no yield.  No auction, no Bloomberg, no curve."""
+        kind = rec.get("kind")
+        row = self._row(f, rec, st, t0)
+        bid, ask = float(f["bid"]), float(f["ask"])
+
+        def pair(written: float, other: Optional[float], in_yield: bool) -> Dict[str, Optional[float]]:
+            return {"yield": written, "price": other} if in_yield else {"price": written, "yield": other}
+
+        if kind in WRITE_YIELD:
+            bond = bond_of(rec)
+            conv = [price_of(bond, v / 100.0, t0) if bond is not None else None for v in (bid, ask)]
+            info = "fiyatlar bilgi için: sabit getiriden t0'da (%s)" % tr_day(t0)
+        elif kind == EURO:
+            settle, _ = self.euro_settle(rec, today)
+            bond = street_of(rec)
+            ys = [bond.yield_of(v, settle) for v in (bid, ask)]
+            conv = [y * 100.0 if y is not None else None for y in ys]
+            row.update(settle=settle.isoformat(), anchor=0.0, value_date=settle.isoformat())
+            info = "getiriler bilgi için: sokak kuralıyla valör %s'de (Bloomberg'e sorulmadı, çapasız)" % tr_day(settle)
+        elif kind == "fixed":
+            bond = bond_of(rec)
+            ys = [yield_of(bond, v, t0) if bond is not None else None for v in (bid, ask)]
+            conv = [y * 100.0 if y is not None else None for y in ys]
+            info = "getiriler bilgi için: sabit fiyattan t0'da (%s)" % tr_day(t0)
+        else:
+            conv = [None, None]
+            info = "fiyatla kote edilir: getirisi yok"
+        in_yield = kind in WRITE_YIELD
+        row.update(bid=pair(bid, conv[0], in_yield), ask=pair(ask, conv[1], in_yield), priced=True, source="sabit", fixed=True,
+                   fixed_at=f.get("at") or "")
+        row["how"] = "Sabit fiyat (%s girildi): dosyaya olduğu gibi yazılır; %s" % (str(f.get("at") or "")[:16], info)
+        if listed:
+            row["note"] = "listede de var: sabit fiyat geçerli (hesaplanmadı)"
+        return row
 
     def _row(self, e: Dict[str, Any], rec: Dict[str, Any], st: Dict[str, Any], t0: _dt.date) -> Dict[str, Any]:
         kind = rec.get("kind")
@@ -1561,7 +1703,7 @@ class FiyatYukleme(object):
         if not isinstance(given, list) or not given:
             raise FiyatError("kaydedilecek satır yok")
         st = self._load(key)
-        mine = {b["isin"] for b in st["bonds"]}
+        mine = {b["isin"] for b in st["bonds"]} | {f["isin"] for f in st["fixed"]}          # (the list and the fixed bonds)
         lines, left, crossed = [], [], []
         seen = set()
         for r in given:

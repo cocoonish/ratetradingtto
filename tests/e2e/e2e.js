@@ -3190,6 +3190,24 @@ async function clipAfter(page, action) {
     check('... a Eurobond\'s own default yield spreads (2,0 / 2,0 bp); added offline it is refused with the reason (its facts come from Bloomberg)',
       fyEuroDefs.join() === '2,0,2,0' && (fyEuro.added || []).length === 0 && /Eurobond'un bilgileri .*Bloomberg'den gelir/.test(((fyEuro.refused || [])[0] || {}).text || ''),
       { fyEuroDefs, fyEuro: fyEuro.refused });
+    // Sabit fiyat: a bond typed with its fixed bid / ask (a fixed coupon bond: clean prices, a Turkish comma) goes as it is
+    await page.fill('#fy-sabit-isin', 'TRT100227T13');
+    await page.fill('#fy-sabit-bid', '99,250');
+    await page.fill('#fy-sabit-ask', '99,750');
+    await page.click('#fy-sabit-ekle');
+    await page.waitForSelector('#fy-sabit-table tr.fy-sabit-item[data-isin="TRT100227T13"]', { timeout: 20000 }).catch(() => {});
+    await page.click('#fy-hesapla');
+    await page.waitForSelector('#fy-table tr.fy-row.fy-fixed[data-isin="TRT100227T13"]', { timeout: 30000 }).catch(() => {});
+    const [fyFile2] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click('#fy-kaydet')]);
+    const fyText2 = require('fs').readFileSync(await fyFile2.path(), 'latin1');
+    const fySabit = await page.evaluate(() => ({
+      unit: (document.querySelector('#fy-sabit-table tr.fy-sabit-item[data-isin="TRT100227T13"] td.fy-sabit-unit') || {}).textContent,
+      mark: (document.querySelector('#fy-table tr.fy-row[data-isin="TRT100227T13"] td.fy-sabit-mark') || {}).textContent,
+      sabitle: document.querySelectorAll('#fy-table tr.fy-row:not(.fy-fixed) button.fy-sabitle').length }));
+    const fyWant2 = 'TRB100227T13,0,0,31.750,31.650\r\nTRT100227T13,99.250,99.750,0,0\r\nTRT130127T11,100.450,100.550,0,0\r\n';
+    check('... Sabit fiyat: a bond typed with its fixed bid / ask (clean prices) is in the table as it is ("sabit fiyat"; the computed rows '
+      + 'have "Sabitle"), and Kaydet writes its line as typed', fySabit.unit === 'temiz fiyat' && fySabit.mark === 'sabit fiyat'
+      && fySabit.sabitle === 2 && fyText2 === fyWant2, { fySabit, fyText2 });
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');

@@ -634,8 +634,27 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
     short first coupon accrues from the accrual start; an irregular last period is not modelled (the anchor absorbs it);
     `YLD_YTM_MID` empty: the mid yield from the price by the convention (anchor 0, said); no price but a yield: the price
     from the yield (anchor 0, said); floaters, perpetuals and TL bonds are refused with their reason.
+- **Sabit fiyat** (20.11.2026, at the desk in the morning):
+
+  > "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu şekilde yüklenecek diye girip bırakabilmeliyim"
+
+  - a "Sabit fiyat" section: a bond (DİBS or Eurobond, by the list's own route) with its fixed bid and ask, typed in the
+    unit the txt writes it in - a bill's / zero coupon's simple yields (%), any other's clean prices (fixed coupon,
+    TLREF, TÜFE, FRN, Eurobond) -, the page's number reading (a Turkish comma too). Kept with the user's list
+    (`fiyatyukleme.list:<user>`, `fixed`) until changed or taken off;
+  - on Hesapla, in either mode, each fixed bond is a row as it is, marked "sabit fiyat": never computed, never asked of
+    Bloomberg (a fixed bond off the trading list costs nothing in BBG mode). In the list too: the fixed figures win, said
+    on the row. Its other unit is shown for information only - a bill's price at t0 from the fixed yield, a fixed coupon
+    bond's yield at t0 from the fixed price, a Eurobond's yield by the street convention at its settlement (not anchored:
+    Bloomberg is not asked); a TLREF / TÜFE / FRN bond has none;
+  - its cells stay editable, but an edit is that Hesapla's (and that file's) alone: the stored figures stay (said in the
+    tooltip). "Sabitle" on a computed row stores its bid / ask as they are (edited or not) as that bond's fixed figures;
+  - Kaydet writes a fixed bond's figures as they are, in the same line format, the other unit 0.
+  - **Conventions settled** (ask before changing): a yield between −50 % and 500 %, a price between 0 and 1000; a crossed
+    pair (bid better than ask) is kept and said; the fixed bonds join the list's order (kind, then maturity); İhale mode
+    needs no auction text when only fixed bonds or Eurobonds are to be priced.
 - Code: `tto/fiyatyukleme.py`, `Service.fiyat_yukleme`, `GET /api/fiyat-yukleme`, `POST /api/fiyat-yukleme/{ekle, cikar,
-  ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
+  sabit, sabit-sil, ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
   `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_fiyatyukleme.py`, the browser test's Kâğıt Fiyat Yükleme
   checks.
 

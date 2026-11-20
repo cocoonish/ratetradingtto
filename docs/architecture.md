@@ -227,7 +227,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
 | `kagitfiyat.widths`, `kagitfiyat.log` | `kagitfiyat` (the quote's width by maturity bucket, set by administrators; its changes) |
-| `fiyatyukleme.list:<user>`, `fiyatyukleme.saved:<user>` | `fiyatyukleme` (a user's bonds by ISIN with their own spreads, the defaults, the mode, the last auction text; the user's saved files of the last days) |
+| `fiyatyukleme.list:<user>`, `fiyatyukleme.saved:<user>` | `fiyatyukleme` (a user's bonds by ISIN with their own spreads, the defaults, the mode, the last auction text, the fixed bonds with their bid / ask; the user's saved files of the last days) |
 | `fiyatyukleme.labels`, `fiyatyukleme.auctions` | `fiyatyukleme` (desk-wide: an auction label's bond, named once; each bond's auction values by day and .t1 / .t2) |
 | `fiyatyukleme.eurobonds` | `fiyatyukleme` (desk-wide: each Eurobond's Bloomberg facts, asked once an ISIN - never in `bonds.desk`) |
 
@@ -333,6 +333,9 @@ cost in [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy
     auction text, the desk's labels, today's saved files;
   - `POST /api/fiyat-yukleme/ekle` `{"isins": "…"}` / `cikar` `{"isin"}` - the list (a bond off the catalog through
     `Service.bond_list_add`; refused in replay);
+  - `POST /api/fiyat-yukleme/sabit` `{"isin", "bid", "ask"}` / `sabit-sil` `{"isin"}` - a bond's fixed bid / ask in the
+    txt's unit (set or change / take off; the bond by the list's route): kept in the user's list state (`fixed`), on
+    Hesapla a row as it is (`_fixed_row`), never computed or asked of Bloomberg;
   - `POST /api/fiyat-yukleme/ayar` `{"mode"?, "defaults"?, "spreads"?: {isin: {bid, ask}}}`;
   - `POST /api/fiyat-yukleme/tanit` `{"label", "isin"}` - the desk names an auction label's bond (an empty ISIN forgets it);
   - `POST /api/fiyat-yukleme/hesapla` `{"mode": "ihale" | "bbg", "text"}` - every bond at t0 (İhale keeps the day's auction
