@@ -1682,3 +1682,8 @@ table.plain.kf.kf-old { background: var(--surface); }
 table.plain.fy td.fy-how b.fy-curve-mark { color: var(--warn); }
 table.plain.kf tr.kf-detail .kf-detail-wrap { max-width: calc(100vw - 330px); overflow-x: auto; }
 table.plain.kf td.kf-px-label.kf-lab-peer { color: var(--accent-ink); }
+/* the main table's Öngörülen / OIS'e / FX swap'a göre: yield over price, compact */
+table.plain.kf td.kf-2l { text-align: right; white-space: nowrap; line-height: 1.2; }
+table.plain.kf td.kf-2l .kf-2l-p { font-size: 11px; color: var(--ink-3); }
+table.plain.kf td.kf-m-proj-model { white-space: nowrap; font-size: 11px; }
+table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }

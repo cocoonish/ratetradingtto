@@ -3060,17 +3060,29 @@ async function clipAfter(page, action) {
       const row = (isin) => { const tr = document.querySelector('#kf-table tr.kf-row[data-isin="' + isin + '"]');
         if (!tr) return {};
         const out = { all: [...tr.children].map((td) => td.textContent) };
-        for (const k of ['fair', 'bid', 'ask', 'buy', 'sell', 'sigma', 'hit', 'proj', 'proj-simple', 'proj-price', 'proj-bp', 'proj-pnl', 'proj-model',
-          'ois-y', 'ois-p', 'fx-y', 'fx-p']) {
+        for (const k of ['fair', 'bid', 'ask', 'buy', 'sell', 'sigma', 'hit', 'proj', 'ois-y', 'fx-y']) {
           const td = tr.querySelector('td.kf-' + k);
           out[k] = td ? td.textContent : null;
-          if (td && k === 'proj') out.projTip = td.title || '';
         }
         out.simple = (tr.children[5] || {}).textContent;
         return out;
       };
+      // the main table's Öngörülen (yield over price, the model) and OIS'e / FX swap'a göre (yield over price)
+      const cols = (isin) => { const tr = document.querySelector('#kf-table tr.kf-main[data-isin="' + isin + '"]');
+        if (!tr) return {};
+        const out = {};
+        for (const k of ['proj', 'ois', 'fx']) {
+          const td = tr.querySelector('td.kf-m-' + k);
+          const y = td && td.querySelector('.kf-2l-y'), p = td && td.querySelector('.kf-2l-p');
+          Object.assign(out, { [k]: y ? y.textContent : (td || {}).textContent, [k + 'P']: p ? p.textContent : null, [k + 'Tip']: (td || {}).title || '' });
+        }
+        out.model = (tr.querySelector('td.kf-m-proj-model') || {}).textContent;
+        return out;
+      };
       const how = (isin) => (document.querySelector('#kf-table tr.kf-how[data-isin="' + isin + '"]') || {}).textContent || '';
       return { menu: window.tto.state.pages.filter((p) => p.group === 'Tahvil').map((p) => p.id), fixed: row('TRT150328T24'),
+        cols: cols('TRT150328T24'), colsOff: cols('TRT240227T17'),
+        mainGroups: [...document.querySelectorAll('#kf-table tr.kf-main-groups th')].map((th) => th.textContent),
         others: (document.getElementById('kf-others') || {}).textContent || '', how: how('TRT150328T24'), rows: document.querySelectorAll('#kf-table tr.kf-row').length,
         priced: document.querySelectorAll('#kf-table tr.kf-row:not(.kf-off)').length, info: document.getElementById('kf-info').textContent,
         width: (document.getElementById('kf-width-3y') || {}).tagName || '',
@@ -3096,27 +3108,31 @@ async function clipAfter(page, action) {
     // Öngörülen (1 ay by default) and the two ASW curves' fair values, as DİBS Trading shows them
     const kfP = (hz) => ((kfF.proj || {}).h || {})[String(hz)] || {};
     const kfAsw = (k, i) => { const a = (kfF.asw || {})[k] || {}; return isFinite(a.yield) ? (i ? a.price.toFixed(3).replace('.', ',') : kfFmt(a.yield)) : '–'; };
-    check('... Öngörülen at 1 ay (the default: the best record): its yield (compound / simple), the price at the horizon\'s value date, the bp '
-      + 'and K/Z, the model - here M2 in M4\'s place (three closes: the AR(1) cannot be measured), said, with the record -; and the '
-      + '"OIS\'e göre" / "FX swap\'a göre" fair yield and price',
-      kfSeen.groups.some((g) => /^Öngörülen · 1 ay$/.test(g)) && kfSeen.groups.includes("OIS'e göre") && kfSeen.groups.includes("FX swap'a göre")
+    // (a main-table column: yield over price as the details' values; none: "—" alone)
+    const kfAswCol = (c, k) => (kfAsw(k, 0) === '–' ? c[k] === '—' && c[k + 'P'] === null : c[k] === kfAsw(k, 0) && c[k + 'P'] === kfAsw(k, 1));
+    check('... the main table\'s Öngörülen at 1 ay (the default: the best record): yield over the price at the horizon\'s value date, the '
+      + 'model - here M2 in M4\'s place (three closes: the AR(1) cannot be measured), said, with Δ, K/Z and the record in its tooltip -; '
+      + '"OIS\'e göre" / "FX swap\'a göre" yield over price - the details\' values; a bond off the trading list "—", said why; the details '
+      + 'keep the fair and the how lines, no more these columns',
+      kfSeen.mainGroups.some((g) => /^Öngörülen · 1 ay$/.test(g)) && kfSeen.mainGroups.includes("OIS'e göre") && kfSeen.mainGroups.includes("FX swap'a göre")
       && kfSeen.ufuk.join() === 'kf-ufuk-5,kf-ufuk-10,kf-ufuk-20*' && kfApi.projection.default === 20
-      && kfSeen.fixed.proj === kfFmt(kfP(20).yield) && kfSeen.fixed['proj-simple'] === kfFmt(kfP(20).simple)
-      && kfSeen.fixed['proj-price'] === kfP(20).clean.toFixed(3).replace('.', ',') && kfP(20).rule === 'M4' && kfP(20).model === 'M2'
-      && /^M4 kurulamadı/.test(kfP(20).why) && kfSeen.fixed['proj-model'] === 'eğri+fark sabit' && kfSeen.fixed.projTip.includes('geri test')
-      && kfSeen.how.includes('Öngörülen: ' + kfP(20).line) && kfSeen.fixed['ois-y'] === kfAsw('ois', 0) && kfSeen.fixed['ois-p'] === kfAsw('ois', 1)
-      && kfSeen.fixed['fx-y'] === kfAsw('fx', 0) && kfSeen.fixed['fx-p'] === kfAsw('fx', 1) && kfSeen.fixed['ois-y'] !== '–',
-    { fixed: kfSeen.fixed, groups: kfSeen.groups, ufuk: kfSeen.ufuk, p20: kfP(20), asw: kfF.asw });
+      && kfSeen.cols.proj === kfFmt(kfP(20).yield) && kfSeen.cols.projP === kfP(20).clean.toFixed(3).replace('.', ',')
+      && kfP(20).rule === 'M4' && kfP(20).model === 'M2' && /^M4 kurulamadı/.test(kfP(20).why) && kfSeen.cols.model === 'eğri+fark sabit'
+      && kfSeen.cols.projTip.includes('geri test') && kfSeen.cols.projTip.includes('K/Z') && kfSeen.cols.projTip.includes('basit ' + kfFmt(kfP(20).simple))
+      && kfSeen.how.includes('Öngörülen: ' + kfP(20).line) && kfAswCol(kfSeen.cols, 'ois') && kfAswCol(kfSeen.cols, 'fx') && kfSeen.cols.ois !== '—'
+      && kfSeen.colsOff.proj === '—' && kfSeen.colsOff.ois === '—' && kfSeen.colsOff.fx === '—' && /yalnız trading listesindeki/.test(kfSeen.colsOff.projTip)
+      && kfSeen.fixed.proj === null && kfSeen.fixed['ois-y'] === null && !kfSeen.groups.some((g) => /^Öngörülen/.test(g)),
+    { cols: kfSeen.cols, off: kfSeen.colsOff, groups: kfSeen.mainGroups, ufuk: kfSeen.ufuk, p20: kfP(20), asw: kfF.asw });
     // the switch: 1 hafta - another value date, another projection (the table drawn again from the same answer)
     await page.click('#kf-ufuk-5');
-    await page.waitForFunction((want) => { const td = document.querySelector('#kf-table tr.kf-row[data-isin="TRT150328T24"] td.kf-proj');
+    await page.waitForFunction((want) => { const td = document.querySelector('#kf-table tr.kf-main[data-isin="TRT150328T24"] td.kf-m-proj .kf-2l-y');
       return td && td.textContent === want; }, kfFmt(kfP(5).yield), { timeout: 20000 }).catch(() => {});
     const kfSeen5 = await kfRead();
-    check('... the horizon switch (1 hafta / 2 hafta / 1 ay) changes the projection: 1 hafta shows its own yield and price',
-      kfSeen5.ufuk.join() === 'kf-ufuk-5*,kf-ufuk-10,kf-ufuk-20' && kfSeen5.groups.some((g) => /^Öngörülen · 1 hafta$/.test(g))
-      && kfSeen5.fixed.proj === kfFmt(kfP(5).yield) && kfSeen5.fixed['proj-price'] === kfP(5).clean.toFixed(3).replace('.', ',')
-      && kfP(5).value_date < kfP(20).value_date && kfSeen5.fixed['proj-price'] !== kfSeen.fixed['proj-price'],
-    { p5: kfSeen5.fixed, ufuk: kfSeen5.ufuk });
+    check('... the horizon switch (1 hafta / 2 hafta / 1 ay) changes the Öngörülen column at once: 1 hafta shows its own yield and price',
+      kfSeen5.ufuk.join() === 'kf-ufuk-5*,kf-ufuk-10,kf-ufuk-20' && kfSeen5.mainGroups.some((g) => /^Öngörülen · 1 hafta$/.test(g))
+      && kfSeen5.cols.proj === kfFmt(kfP(5).yield) && kfSeen5.cols.projP === kfP(5).clean.toFixed(3).replace('.', ',')
+      && kfP(5).value_date < kfP(20).value_date && kfSeen5.cols.projP !== kfSeen.cols.projP,
+    { p5: kfSeen5.cols, ufuk: kfSeen5.ufuk });
     await shot(page, '12c-kagit-fiyat');
     // the bond's card: the same block (Öngörülen at the horizon chosen on the page)
     await page.click('#kf-table tr.kf-row[data-isin="TRT150328T24"] td.cardlink');

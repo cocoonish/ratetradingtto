@@ -312,7 +312,8 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
     typical error) and the "tipik hata" text in `how`; `_curve_rows` first builds every row, then checks the rules on the
     market-priced rows (`validate` → `error_bands`: arithmetic on the rows' leave-one-out curve, no extra fit), then the
     peers, then each answer; `alt` the answer without the market (`tag`: the upload's mark), `diff` market − Eğri;
-    `counts`, `others`: the floaters counted)
+    `counts`, `others`: the floaters counted; the main table's Öngörülen / OIS'e / FX swap'a göre columns are drawn from
+    the bond's details row of the same answer - `proj`, `asw` -, and a row without one carries `cols_why`: "—", said why)
     and `rows`, the trading list's details as before: fair, Öngörülen (`proj`: each horizon - 5 / 10 / 20 closes -
     its yield, price at the horizon's value date, bp, K/Z, model, record, line; `projection`: the horizons, the default,
     the measured table), the two ASW curves' fair values (`asw`: DİBS Trading's "OIS'e göre" / "FX swap'a göre"), quote,

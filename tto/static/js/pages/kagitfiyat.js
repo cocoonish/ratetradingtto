@@ -12,11 +12,11 @@ import { bondCardLinks } from '../bonds.js';
 import { isNum, yld, px, bp, sig, day, hitText, hitTip, sigmaTip, quoteText, marketTip, horizonOf, horizonSwitch, projAt, projTip, tl,
   modelShort, aswTip } from '../kagitblock.js';
 
-const COLS = 28;                                       // the details' table's columns (the how-line and a reason span them)
-const WHY_SPAN = 9;                                    // a bond not priced: its reason over the fair and the projection…
+const COLS = 18;                                       // the details' table's columns (the how-line and a reason span them)
+const WHY_SPAN = 3;                                    // a bond not priced: its reason over the fair…
 const REST_SPAN = 11;                                  // …and nothing over the quote, the levels, the market and the context
 const ASW = [['ois', "OIS'e göre"], ['fx', "FX swap'a göre"]];
-const MAIN_COLS = 14;                                  // the main table's columns (a bond's details span them)
+const MAIN_COLS = 18;                                  // the main table's columns (a bond's details span them)
 const HEAD_LINE = 'Fiyatı olmayan kâğıtlara eğriden fiyat: masanın listesindeki her sabit kuponlu, bono ve kuponsuz kâğıt. Fiyat: bugün '
   + 'piyasa fiyatı varsa o (piyasa: iki taraflı kotanın ortası ya da bugünkü son işlem); yoksa vade kovasının tabanı + kâğıdın son kapanışta '
   + 'tabana farkı (eğri + son fark: masanın geçmişinde en iyi tahmin). Kendi geçmişi de yoksa: sabit kuponlu Nelson-Siegel eğrisinden (eğri); '
@@ -25,8 +25,9 @@ const HEAD_LINE = 'Fiyatı olmayan kâğıtlara eğriden fiyat: masanın listesi
   + 'Nelson-Siegel, 5 yıl üstü %75 Nelson-Siegel + %25 OIS. Nelson-Siegel fiyatı olan kâğıtlara şimdi uydurulur, kâğıdın kendi nakit '
   + 'akışlarında (uydurmadaki kâğıt kendisi dışarıda). Eğri sütunu: sabit kuponluda Nelson-Siegel, bono / kuponsuzda taban. Her eğri '
   + 'fiyatının tipik hatası nasıl satırında: o kural bugün piyasa fiyatlı aynı kova ve türdeki kâğıtlara, her biri kendisi dışarıda '
-  + 'uygulanınca piyasadan sapmanın medyanı (2\'den az kâğıtta ölçülemedi). Getiriler BIST bileşik, fiyat valörde temiz. ▸ ayrıntılar: '
-  + 'adil, kota, iyi seviyeler, σ, geri test, öngörülen, OIS\'e / FX swap\'a göre.';
+  + 'uygulanınca piyasadan sapmanın medyanı (2\'den az kâğıtta ölçülemedi). Öngörülen (seçilen ufukta) ve OIS\'e / FX swap\'a göre '
+  + 'trading listesindeki kâğıtlar için tabloda. Getiriler BIST bileşik, fiyat valörde temiz. ▸ ayrıntılar: adil, kota, iyi seviyeler, σ, '
+  + 'geri test, piyasa, nasıl fiyatlandı.';
 
 function panel(id, title, note) {
   const body = h('div', { class: 'body' });
@@ -59,7 +60,7 @@ export class KagitFiyatPage {
     this.rules = h('div', { class: 'chips kf-rules', id: 'kf-rules' });
     this.host.appendChild(this.rules);
     const panels = h('div', { class: 'panels' });
-    this.table = panel('kf-panel', 'Masanın kâğıtları · piyasa, eğri, fiyat (▸ ayrıntılar: adil, öngörülen, OIS ve FX swap\'a göre, kotan, iyi seviyeler)',
+    this.table = panel('kf-panel', 'Masanın kâğıtları · piyasa, eğri, fiyat, öngörülen, OIS ve FX swap\'a göre (▸ ayrıntılar: adil, kotan, iyi seviyeler)',
       'Ayrıntılar (▸): Adil getiri: tabanlar (komşu eğri: trading listesinin diğer sabit kuponlularına uydurulan Nelson-Siegel eğrisi, kâğıt dışarıda; OIS: '
       + 'TRY OIS Bootstrap sıfır faizi vadede) + kâğıdın son kapanıştaki farkı, vadeye göre ağırlıklı. Öngörülen: seçilen ufukta (1 hafta / 2 hafta / '
       + '1 ay) ulaşması beklenen getiri ve fiyat - kovanın ve ufkun masanın geçmişinde seçilen modeliyle; hiçbir model "değişmez"i yenemediyse eğri ve '
@@ -154,9 +155,18 @@ export class KagitFiyatPage {
         + 'faizi + %25 Nelson-Siegel, 1–5 yıl Nelson-Siegel, 5 yıl üstü %75 Nelson-Siegel + %25 OIS)'),
       g('Fiyat', 3, 'Cevap: piyasa fiyatı varsa o; yoksa vade kovasının tabanı + kâğıdın son kapanışta tabana farkı (son fark); kendi geçmişi '
         + 'yoksa sabit kuponluda eğri, bono / kuponsuzda taban + aynı kovada bugün piyasa fiyatlı bono / kuponsuzların tabana farklarının medyanı '
-        + '(akran farkı; akran yoksa taban). Üzerine gelince nasıl kurulduğu ve tipik hatası'), g('Fark', 1), g('', 1)));
+        + '(akran farkı; akran yoksa taban). Üzerine gelince nasıl kurulduğu ve tipik hatası'), g('Fark', 1),
+      // Öngörülen and the two ASW curves' fair values (the desk, 20.11.2026: "Göster"): the details' values, yield over price
+      g('Öngörülen · ' + (((d.projection || {}).horizons || []).find((x) => x.h === this.hz) || {}).text, 2, 'Seçilen ufukta (Öngörülen ufku) '
+        + 'ulaşması beklenen getiri ve ufkun valöründeki temiz fiyatı; kovanın ve ufkun modeli masanın geçmişinde örnek dışı seçildi. Üzerine '
+        + 'gelince Δ, K/Z, hesap ve geri test. Yalnız trading listesindeki kâğıtlar (günlük kapanışları var)'),
+      g("OIS'e göre", 1, "DİBS Trading'in \"OIS'e göre\" sütunları: kâğıdın ASW'si DİBS RV'nin OIS ASW eğrisinde dursaydı getirisi ve valördeki "
+        + 'temiz fiyatı (rvfair)'),
+      g("FX swap'a göre", 1, "DİBS Trading'in \"FX swap'a göre\" sütunları: kâğıdın ASW FX'i DİBS ASW'nin FX swap ima eğrisindeki ASW eğrisinde "
+        + 'dursaydı getirisi ve valördeki temiz fiyatı (rvfair)'), g('', 1)));
     const heads = [['', ''], ['Kâğıt', 'l'], ['ISIN', 'l'], ['Vade', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Kaynak', 'l'],
-      ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Nereden', 'l'], ['bp', 'kf-sep'], ['Kart', '']];
+      ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Nereden', 'l'], ['bp', 'kf-sep'],
+      ['Getiri % · temiz', 'kf-sep'], ['Model', ''], ['Getiri % · temiz', 'kf-sep'], ['Getiri % · temiz', 'kf-sep'], ['Kart', '']];
     t.appendChild(h('tr', { class: 'kf-main-heads' }, ...heads.map(([x, c]) => h('th', { class: c || null }, x))));
     const rows = d.curve_rows || [];
     const old = {};
@@ -180,7 +190,7 @@ export class KagitFiyatPage {
     const tr = h('tr', { class: 'kf-main' + (r.price ? '' : ' kf-off') });
     tr.dataset.isin = r.isin;
     const isOpen = this.open.has(r.isin);
-    const toggle = h('td', { class: 'act kf-toggle', title: 'Ayrıntılar: adil, kota, iyi seviyeler, σ, öngörülen, OIS / FX swap\'a göre' }, isOpen ? '▾' : '▸');
+    const toggle = h('td', { class: 'act kf-toggle', title: 'Ayrıntılar: adil, kota, iyi seviyeler, σ, isabet, piyasa, nasıl fiyatlandı' }, isOpen ? '▾' : '▸');
     const m = r.market, cv = r.curve, p = r.price;
     const mTip = m ? m.source + ': temiz ' + px(m.clean) + ' → getiri ' + yld(m.yield) + ' (bileşik), ' + yld(m.simple) + ' (basit) · valör ' + day(r.value_date)
       : 'Bugün piyasa fiyatı yok (iki taraflı kota da bugünkü işlem de yok)';
@@ -195,6 +205,7 @@ export class KagitFiyatPage {
       cell(p ? yld(p.yield) : '—', { cls: 'b kf-px-y kf-sep', tip: pTip }), cell(p ? px(p.clean) : '—', { cls: 'b kf-px-p', tip: pTip }),
       cell(p ? p.label : (r.why || 'fiyatı yok'), { cls: 'l kf-px-label kf-lab-' + (p ? p.kind : 'none'), tip: pTip }),
       cell(isNum(r.diff) ? bp(r.diff) : '', { cls: 'kf-diff kf-sep', tip: 'Piyasa − Eğri sütunu (bp, bileşik getiri)' }),
+      ...this.mainCols(r, oldRow, d),
       cell('kart', { cls: 'act cardlink', tip: 'Kâğıt kartı: ' + r.isin }));
     t.appendChild(tr);
     const det = h('tr', { class: 'kf-detail' + (isOpen ? '' : ' kf-closed') });
@@ -213,27 +224,48 @@ export class KagitFiyatPage {
     });
   }
 
-  /** A bond's details: the row the page showed before the main table (the fair, Öngörülen, OIS'e / FX swap'a göre, the
-   * quote, the levels, the market, the context) and how it was priced - the same cells, the same numbers. */
+  /** The main table's Öngörülen (at the horizon chosen: yield over price, the model) and OIS'e / FX swap'a göre (yield
+   * over price): the bond's details' values (``oldRow``: its ``proj`` and ``asw`` - DİBS Trading's), "—" with why for a
+   * bond off the trading list (``r.cols_why``) or without them. */
+  mainCols(r, oldRow, d) {
+    const two = (y, p, cls, tip) => h('td', { class: 'kf-2l kf-sep ' + cls, title: tip || null },
+      h('div', { class: 'kf-2l-y' }, y), h('div', { class: 'kf-2l-p' }, p));
+    const none = (cls, tip) => cell('—', { cls: 'soft kf-sep ' + cls, tip });
+    if (!oldRow) {
+      const why = r.cols_why || 'Öngörülen ve OIS\'e / FX swap\'a göre yalnız trading listesindeki kâğıtlar için';
+      return [none('kf-m-proj', why), cell('—', { cls: 'soft kf-m-proj-model', tip: why }), none('kf-m-ois', why), none('kf-m-fx', why)];
+    }
+    const out = [];
+    const e = projAt(oldRow, this.hz);
+    const p = oldRow.proj || {};
+    if (e && isNum(e.yield)) {
+      const hzText = (((d.projection || {}).horizons || []).find((x) => x.h === this.hz) || {}).text || '';
+      const tip = hzText + ' (valör ' + day(e.value_date) + '): getiri ' + yld(e.yield) + ' (basit ' + yld(e.simple) + '), temiz ' + px(e.clean)
+        + ' · Δ ' + bp(e.bp) + ' bp · K/Z ' + tl(e.pnl) + ' TL / 1 mn\n' + projTip(e, p);
+      out.push(two(yld(e.yield), px(e.clean), 'kf-m-proj', tip),
+        cell(modelShort(e), { cls: 'kf-m-proj-model' + (e.beat && !e.why ? '' : ' soft'), tip }));
+    } else {
+      const why = (e && e.why) || p.why || oldRow.why || 'Öngörülen yok';
+      out.push(none('kf-m-proj', why), cell('—', { cls: 'soft kf-m-proj-model', tip: why }));
+    }
+    for (const [key, name] of ASW) {
+      const a = (oldRow.asw || {})[key];
+      if (!a || a.why || !isNum(a.yield)) out.push(none('kf-m-' + key, a ? aswTip(a, name) : name + ': yok'));
+      else out.push(two(yld(a.yield), px(a.price), 'kf-m-' + key + (a.soft ? ' soft' : ''), aswTip(a, name)));
+    }
+    return out;
+  }
+
+  /** A bond's details: the row the page showed before the main table (the fair, the quote, the levels, the market, the
+   * context) and how it was priced - the same cells, the same numbers; Öngörülen and OIS'e / FX swap'a göre are the
+   * main table's columns now (their how line stays here). */
   oldTable(r, d) {
     const t = h('table', { class: 'plain kf kf-old' });
     const g = (text, span, tip, id) => h('th', { class: 'kf-g kf-sep', colspan: String(span), title: tip || null, id: id || null }, text);
-    const pj = d.projection || {};
-    const hzText = ((pj.horizons || []).find((x) => x.h === this.hz) || {}).text || '';
     t.appendChild(h('tr', { class: 'kf-groups' }, g('Kâğıt', 4), g('Adil getiri', 3, 'Tabanlar + son kapanıştaki fark, vadeye göre ağırlıklı'),
-      g('Öngörülen · ' + hzText, 6, 'Bir süre sonra (seçilen ufukta) ulaşması beklenen getiri ve fiyat: kovanın ve ufkun modeli masanın geçmişinde '
-        + 'örnek dışı seçildi (' + (pj.source || '') + '); "değişmez"i en az %' + Math.round((pj.beat || 0.05) * 100) + ' yenen yoksa eğri ve fark '
-        + 'değişmezse. Fiyat ufkun valöründe temiz; Δ şimdiki getiriden (bp); K/Z 1 mn nominal alışın bu değişimden (taşıma / fonlama hariç). '
-        + 'Üzerine gelince model, hesap ve geri test.'),
-      g("OIS'e göre", 2, "DİBS Trading'in \"OIS'e göre\" sütunları: kâğıdın ASW'si DİBS RV'nin OIS ASW eğrisinde (a + b·t + c·t²) dursaydı getirisi ve "
-        + 'valördeki temiz fiyatı (rvfair)'),
-      g("FX swap'a göre", 2, "DİBS Trading'in \"FX swap'a göre\" sütunları: kâğıdın ASW FX'i DİBS ASW'nin FX swap ima eğrisindeki ASW eğrisinde "
-        + 'dursaydı getirisi ve valördeki temiz fiyatı (rvfair)'),
       g('Kotan', 3, 'Adil ± genişliğin yarısı (bileşik getiri)'), g('İyi seviyeler', 4, 'Al: adil + 2σ ya da üstü · Sat: adil − 2σ ya da altı'),
       g('Piyasa şimdi', 3, 'Adilden σ cinsinden; AL: offer adil + 2σ ya da üstünde, SAT: bid adil − 2σ ya da altında'), g('Bağlam', 1)));
     const heads = [['Kâğıt', 'l'], ['', ''], ['Vade', ''], ['Kalan', ''], ['Bileşik %', 'kf-sep'], ['Basit %', ''], ['Temiz', ''],
-      ['Bileşik %', 'kf-sep'], ['Basit %', ''], ['Temiz', ''], ['Δ bp', ''], ['K/Z 1 mn', ''], ['Model', ''],
-      ['Adil getiri %', 'kf-sep'], ['Adil fiyat', ''], ['Adil getiri %', 'kf-sep'], ['Adil fiyat', ''],
       ['Bid %', 'kf-sep'], ['Ask %', ''], ['Bid / ask temiz', ''], ['Al ≥ %', 'kf-sep'], ['Sat ≤ %', ''], ['σ bp', ''], ['Geri test', ''],
       ['Ekran', 'kf-sep'], ['Broker bid / offer', ''], ['BBG bid / ask', ''], ['Fark · medyan', 'kf-sep']];
     t.appendChild(h('tr', { class: 'kf-heads' }, ...heads.map(([x, c]) => h('th', { class: c || null }, x))));
@@ -246,19 +278,8 @@ export class KagitFiyatPage {
     tr.dataset.isin = r.isin;
     tr.append(cell(r.label || r.isin, { cls: 'l b', tip: r.isin }), cell('▸', { cls: 'act cardlink', tip: 'Kâğıt kartı: ' + r.isin }),
       cell(day(r.maturity)), cell(isNum(r.years) ? num(r.years, 2, false) : '', { tip: r.bucket_text ? 'Kova ' + r.bucket_text : '' }));
-    // "OIS'e göre" / "FX swap'a göre": DİBS Trading's two cells of each curve (the same values; soft outside the bonds fitted)
-    const aswCells = () => ASW.flatMap(([key, name]) => {
-      const a = (r.asw || {})[key];
-      if (!a || a.why || !isNum(a.yield)) {
-        const tip = a ? aswTip(a, name) : name + ': yok';
-        return [cell('–', { cls: 'soft kf-sep kf-' + key + '-y', tip }), cell('–', { cls: 'soft kf-' + key + '-p', tip })];
-      }
-      const tip = aswTip(a, name);
-      return [cell(yld(a.yield), { cls: 'kf-sep kf-' + key + '-y' + (a.soft ? ' soft' : ''), tip }),
-        cell(px(a.price), { cls: 'kf-' + key + '-p' + (a.soft ? ' soft' : ''), tip })];
-    });
     if (!r.priced) {
-      tr.append(cell(r.why || '', { cls: 'l muted kf-why kf-sep', span: WHY_SPAN }), ...aswCells(), cell('', { span: REST_SPAN }));
+      tr.append(cell(r.why || '', { cls: 'l muted kf-why kf-sep', span: WHY_SPAN }), cell('', { span: REST_SPAN }));
       t.appendChild(tr);
       return;
     }
@@ -276,27 +297,10 @@ export class KagitFiyatPage {
       return td;
     };
     const ctx = r.context || {};
-    // Öngörülen at the horizon chosen
+    // (Öngörülen at the horizon chosen: the main table's column; its how line below)
     const e = projAt(r, this.hz);
-    const p = r.proj || {};
-    let projCells;
-    if (e && isNum(e.yield)) {
-      const tip = projTip(e, p);
-      const tone = (v) => (isNum(v) && Math.round(v) !== 0 ? (v > 0 ? ' pos' : ' neg') : '');
-      projCells = [cell(yld(e.yield), { cls: 'kf-proj kf-sep', tip }),
-        cell(yld(e.simple), { cls: 'kf-proj-simple', tip: 'BIST basit getiri (ufkun valöründe, ' + day(e.value_date) + ')' }),
-        cell(px(e.clean), { cls: 'kf-proj-price', tip: 'Öngörülen getirinin ufkun valöründeki (' + day(e.value_date) + ') temiz fiyatı' }),
-        cell(bp(e.bp), { cls: 'kf-proj-bp' + tone(-e.bp), tip: (p.from === 'ekran' ? 'Ekran getirisinden' : 'Şimdiki getiriden (komşu eğri + son kapanış farkı)')
-          + ' öngörülene, bileşik getiri bp' }),
-        cell(tl(e.pnl), { cls: 'kf-proj-pnl' + tone(e.pnl), tip: '1 mn nominal alışın öngörülen getiri değişiminden K/Z\'si (TL): ufkun valöründe iki getirinin '
-          + 'temiz fiyat farkı × 10.000; taşıma ve fonlama dahil değil' }),
-        cell(modelShort(e), { cls: 'kf-proj-model' + (e.beat && !e.why ? '' : ' soft'), tip })];
-    } else {
-      projCells = [cell('–', { cls: 'soft kf-proj kf-sep', tip: (e && e.why) || p.why || 'Öngörülen yok', span: 6 })];
-    }
     tr.append(cell(yld(f.yield), { cls: 'b kf-fair kf-sep', tip: r.line }), cell(yld(f.simple), { tip: 'BIST basit getiri' }),
       cell(px(f.clean), { cls: 'kf-price', tip: 'Valör ' + day(r.value_date) + ' (DİBS RV)' }),
-      ...projCells, ...aswCells(),
       cell(yld(q.bid.yield), { cls: 'kf-bid kf-sep', tip: 'Adil + ' + num(q.width / 2, 1, false) + ' bp · temiz ' + px(q.bid.clean) }),
       cell(yld(q.ask.yield), { cls: 'kf-ask', tip: 'Adil − ' + num(q.width / 2, 1, false) + ' bp · temiz ' + px(q.ask.clean) }),
       cell(px(q.bid.clean) + ' / ' + px(q.ask.clean), { cls: 'kf-quote-px', tip: 'Genişlik ' + num(q.width, 1, false) + ' bp (' + (r.bucket_text || '') + ')' }),

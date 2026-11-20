@@ -1167,6 +1167,42 @@ def test_ois_and_fx_swap_are_the_values_dibs_trading_shows(svc, seeded):
     assert n >= 5 and "TLREF'e endeksli" in rows[TLREF]["asw"]["ois"]["why"]
 
 
+def test_the_main_tables_projection_and_asw_columns(svc, seeded):
+    """(the desk, 20.11.2026, asked whether the projected prices should be visible columns again: "Göster") The main
+    table's Öngörülen, OIS'e göre and FX swap'a göre: a bond of the trading list shows its details' values - in the same
+    answer, its row's projection at every horizon and rvfair's fair values on the two ASW curves, DİBS Trading's -; a bond
+    off the trading list "—", said why (no daily closes, no DİBS RV row)."""
+    from tto import rvfair
+    u = svc.login("Kâğıt Kolon")["user"]
+    d = svc.kagit_fiyat(u)
+    main = {r["isin"]: r for r in d["curve_rows"]}
+    det = {r["isin"]: r for r in d["rows"]}
+    # every row of the main table: its details' values in the answer, or why there are none
+    assert all(("cols_why" in r) == (c not in det) for c, r in main.items()) and len(set(main) & set(det)) >= 15
+    assert main[OFF]["cols_why"] == kf.COLS_WHY and "yalnız trading listesindeki" in kf.COLS_WHY and "günlük kapanış" in kf.COLS_WHY
+    f = det[FIXED]
+    assert "cols_why" not in main[FIXED] and sorted(f["proj"]["h"]) == ["10", "20", "5"]
+    assert all(isinstance(f["proj"]["h"][h]["yield"], float) and isinstance(f["proj"]["h"][h]["clean"], float) for h in ("5", "10", "20"))
+    # OIS'e / FX swap'a göre: rvfair's, as DİBS Trading shows them
+    book = svc.books["tto"]
+    si = book.model.sheet_index["DİBS RV"]
+    line = next(x for x in svc.et.call(svc.kagitfiyat._read, u)["lines"] if x["isin"] == FIXED)
+
+    def fair_of(r):
+        calc = svc._calc(u, book)
+        fx = svc._fx_curve(u)
+        return rvfair.fair(calc, si, r, rvfair.read_fits(calc, si, fx), fx)
+
+    fv = svc.et.call(fair_of, line["row"])
+    assert "yield" in fv["ois"]
+    for side in ("ois", "fx"):
+        if "yield" in fv[side]:
+            assert f["asw"][side]["yield"] == pytest.approx(fv[side]["yield"] * 100.0, abs=1e-12)
+            assert f["asw"][side]["price"] == pytest.approx(fv[side]["price"], abs=1e-12)
+    # the card's answer of a bond off the list: the same reason
+    assert svc.kagit_fiyat(u, {"isin": OFF})["curve_rows"][0]["cols_why"] == kf.COLS_WHY
+
+
 # ================================================================================================== over HTTP (last: the client stops the service)
 def test_the_routes(svc, seeded):
     with TestClient(create_app(svc)) as c:
