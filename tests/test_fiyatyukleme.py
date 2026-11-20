@@ -463,6 +463,162 @@ def test_an_edited_cells_other_half(svc):
     assert "sayı" in str(e.value)
 
 
+# ================================================================================================== Sabit fiyat
+def fixed_of(svc, user):
+    return {r["isin"]: r for r in call(svc, user, "state")["fixed"]}
+
+
+def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
+    """(the desk, 20.11.2026: "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu şekilde yüklenecek diye girip
+    bırakabilmeliyim") A bond's fixed bid / ask, typed in the unit the txt writes it in (a bill's yields, the others'
+    clean prices, a Turkish comma read), kept per user until changed or taken off."""
+    u = svc.login("Sabit Fiyat")["user"]
+    other = svc.login("Sabit Fiyat İki")["user"]
+    call(svc, u, "sabit", {"isin": BILL, "bid": "31,40", "ask": "31,30"})
+    call(svc, u, "sabit", {"isin": FIXED, "bid": "99,250", "ask": 99.75})
+    call(svc, u, "sabit", {"isin": TLREF, "bid": "100,25", "ask": "100,75"})
+    got = call(svc, u, "sabit", {"isin": CPI, "bid": "91", "ask": "92"})
+    f = {r["isin"]: r for r in got["fixed"]}
+    assert [r["isin"] for r in got["fixed"]] == [BILL, FIXED, TLREF, CPI]                # (by kind, then maturity)
+    assert (f[BILL]["unit"], f[BILL]["bid"], f[BILL]["ask"]) == ("yield", 31.4, 31.3)      # a bill: its simple yields
+    assert all(f[c]["unit"] == "price" for c in (FIXED, TLREF, CPI)) and (f[FIXED]["bid"], f[FIXED]["ask"]) == (99.25, 99.75)
+    assert f[FIXED]["name"] == "TURKGB 32.6 02/10/27" and f[FIXED]["maturity"] == "2027-02-10" and not f[FIXED]["listed"]
+    # changed: the same bond again; taken off; another user has none; kept (a new instance of the module: the store's)
+    call(svc, u, "sabit", {"isin": BILL, "bid": "31,5", "ask": "31,35"})
+    assert (fixed_of(svc, u)[BILL]["bid"], fixed_of(svc, u)[BILL]["ask"], len(fixed_of(svc, u))) == (31.5, 31.35, 4)
+    assert call(svc, u, "sabit-sil", {"isin": TLREF})["fixed_removed"] == TLREF and TLREF not in fixed_of(svc, u)
+    with pytest.raises(ServiceError) as e:
+        call(svc, u, "sabit-sil", {"isin": TLREF})
+    assert "sabit fiyatı yok" in str(e.value)
+    assert fixed_of(svc, other) == {}
+    assert [r["isin"] for r in fy.FiyatYukleme(svc).state(u)["fixed"]] == [BILL, FIXED, CPI]
+    # what cannot be fixed: no figures, a price out of reach
+    with pytest.raises(ServiceError) as e:
+        call(svc, u, "sabit", {"isin": FIXED, "bid": "", "ask": "99"})
+    assert "sayı olarak" in str(e.value)
+    with pytest.raises(ServiceError) as e:
+        call(svc, u, "sabit", {"isin": FIXED, "bid": "0", "ask": "99"})
+    assert "temiz fiyat olarak girilir" in str(e.value)
+    # no catalog and no Bloomberg needed: a Eurobond whose facts are not held here is fixed all the same (in price)
+    e1 = {r["isin"]: r for r in call(svc, u, "sabit", {"isin": EURO1, "bid": "99", "ask": "100"})["fixed"]}[EURO1]
+    assert (e1["unit"], e1["name"], e1["maturity"], e1["line"]) == ("price", "", None, "%s,99.000,100.000,0,0" % EURO1)
+    call(svc, u, "sabit-sil", {"isin": EURO1})
+    # a crossed quote is kept, and said
+    assert call(svc, u, "sabit", {"isin": CPI, "bid": "92,5", "ask": "92"})["crossed"] is True
+
+
+def test_fixed_bonds_go_as_they_are_in_both_modes_over_the_computed(svc):
+    u = svc.login("Sabit Hesap")["user"]
+    call(svc, u, "ekle", {"isins": "%s %s %s" % (ZERO, FIXED, TLREF)})
+    call(svc, u, "sabit", {"isin": FIXED, "bid": "99,25", "ask": "99,75"})               # in the list too: fixed wins
+    call(svc, u, "sabit", {"isin": BILL, "bid": "31,4", "ask": "31,3"})                  # fixed only
+    call(svc, u, "sabit", {"isin": CPI, "bid": "91", "ask": "92"})
+    t0 = REPLAY_DAY
+    for mode in ("ihale", "bbg"):
+        res = call(svc, u, "hesapla", {"mode": mode, "text": SAMPLE})
+        rows = {r["isin"]: r for r in res["rows"]}
+        assert [r["isin"] for r in res["rows"]] == [BILL, ZERO, FIXED, TLREF, CPI] and res["fixed"] == 3, mode
+        f = rows[FIXED]
+        bond = fy.bond_of(bd.by_isin(FIXED))
+        assert f["fixed"] and f["source"] == "sabit" and (f["bid"]["price"], f["ask"]["price"]) == (99.25, 99.75), mode
+        assert f["bid"]["yield"] == pytest.approx(fy.yield_of(bond, 99.25, t0) * 100.0) and f["note"].startswith("listede de var")
+        b = rows[BILL]
+        assert (b["bid"]["yield"], b["ask"]["yield"]) == (31.4, 31.3) and "note" not in b
+        assert b["bid"]["price"] == pytest.approx(fy.price_of(fy.bond_of(bd.by_isin(BILL)), 0.314, t0))
+        assert rows[CPI]["bid"] == {"price": 91.0, "yield": None} and "sabit fiyat" in rows[CPI]["how"].lower()
+        assert not rows[ZERO].get("fixed") and rows[ZERO]["source"] in ("ihale", "ihale+eğri", None)       # (computed as before)
+    # the txt: the fixed ones as they are, the others as computed
+    res = call(svc, u, "hesapla", {"mode": "ihale", "text": SAMPLE})
+    rows = [{"isin": r["isin"], "bid_price": r["bid"]["price"], "ask_price": r["ask"]["price"], "bid_yield": r["bid"]["yield"],
+             "ask_yield": r["ask"]["yield"]} for r in res["rows"]]
+    out = call(svc, u, "kaydet", {"rows": rows})
+    assert out["lines"] == ["TRB100227T13,0,0,31.400,31.300", "TRT060127T10,0,0,31.550,31.450", "TRT100227T13,99.250,99.750,0,0",
+                            "TRT130127T11,100.450,100.550,0,0", "TRT020529T18,91.000,92.000,0,0"]
+    # an edit of a fixed row is that file's alone: the stored figures stay
+    conv = call(svc, u, "cevir", {"isin": FIXED, "field": "yield", "value": "33"})
+    rows[2]["bid_price"], rows[2]["bid_yield"] = conv["price"], 33.0
+    assert call(svc, u, "kaydet", {"rows": rows})["lines"][2] == "TRT100227T13,%.3f,99.750,0,0" % conv["price"]
+    assert (fixed_of(svc, u)[FIXED]["bid"], fixed_of(svc, u)[FIXED]["ask"]) == (99.25, 99.75)
+    # "Sabitle": a computed row's figures as they are (the zero's yields) become its fixed ones
+    z = next(r for r in res["rows"] if r["isin"] == ZERO)
+    call(svc, u, "sabit", {"isin": ZERO, "bid": z["bid"]["yield"], "ask": z["ask"]["yield"]})
+    res = call(svc, u, "hesapla", {"mode": "bbg"})
+    z2 = {r["isin"]: r for r in res["rows"]}[ZERO]
+    assert z2["fixed"] and (z2["bid"]["yield"], z2["ask"]["yield"]) == (pytest.approx(31.55), pytest.approx(31.45))
+    # only fixed bonds (or Eurobonds) in İhale mode: nothing needs the text
+    only = svc.login("Sabit Yalnız")["user"]
+    call(svc, only, "sabit", {"isin": TLREF, "bid": "100", "ask": "101"})
+    res = call(svc, only, "hesapla", {"mode": "ihale", "text": ""})
+    assert [(r["isin"], r["fixed"]) for r in res["rows"]] == [(TLREF, True)] and "parse" not in res
+
+
+#: the desk's sheet (20.11.2026): FX-denominated DİBS - its lower block, the one copied (ISIN | Bid | | Offer), and the upper one
+#: (ISIN | Bid | Bid Yield | Offer | T1 Yield | Stok), as Excel copies them (tabs)
+LOWER = "USD\nTRT191127F19\t99.483\t\t99.726\nTRT030327F17\t99.951\t\t100.152\nEUR\nTRT030227F18\t100.105\t\t100.310\n"
+UPPER_CF = "TRT191127F19\t99.482\t4.74\t99.725\n"
+UPPER_CH = "TRT191127F19\t99.482\t4.74\t99.725\t4.49%\t42,000\n"
+
+
+def test_fixed_prices_pasted_from_excel_are_read_cell_by_cell():
+    """(the desk: "Sabitlemeyi de tablo olarak atacağım excelden kopyalayıp [...] Burada bid ve offer'ı ve ISIN'i
+    kopyalayacağım") The ISIN the first cell like one, the bid the first number after it, the offer the next number
+    within ±10 % of the bid - the empty column, a yield (4.74, 4.49%), a stock (42,000) skipped."""
+    def unit(isin):
+        return "yield" if isin.startswith("TRB") else "price"
+    got = fy.parse_fixed(LOWER, unit)
+    assert [(r["isin"], r["bid"], r["ask"]) for r in got["rows"]] == [("TRT191127F19", 99.483, 99.726), ("TRT030327F17", 99.951, 100.152),
+                                                                     ("TRT030227F18", 100.105, 100.31)]
+    assert got["bad"] == [] and [x["text"] for x in got["ignored"]] == ["USD", "EUR"]
+    for text in (UPPER_CF, UPPER_CH):                                                   # C:F and C:H of the upper block
+        assert [(r["isin"], r["bid"], r["ask"]) for r in fy.parse_fixed(text, unit)["rows"]] == [("TRT191127F19", 99.482, 99.725)]
+    # Turkish decimals; spaces instead of tabs; a cell with both marks (the last is the decimal)
+    assert [(r["bid"], r["ask"]) for r in fy.parse_fixed("TRT191127F19\t99,483\t\t99,726", unit)["rows"]] == [(99.483, 99.726)]
+    assert [(r["bid"], r["ask"]) for r in fy.parse_fixed("TRT191127F19    99.483    99.726", unit)["rows"]] == [(99.483, 99.726)]
+    assert [fy.cell_num(x) for x in ("99.483", "99,483", "1.234,5", "42,000.5", "4.49%", "", "abc")] == [99.483, 99.483, 1234.5, 42000.5,
+                                                                                                         4.49, None, None]
+    # a line that cannot be read says why; a bill's offer is a lower yield
+    bad = fy.parse_fixed("TRT191127F19\t99.483\nTRT191127F19\t99.726\t\t99.483\nX123\t1\t2\nTRT191127F18\t99\t99.5\n"
+                         "TRB150727T13\t31.1\t31.2\nTRB150727T13\t31.2\t31.1\n", unit)
+    assert [(b["n"], b["why"]) for b in bad["bad"]] == [
+        (1, "offer yok: bid'in ±%10'u içinde ikinci sayı yok"), (2, "offer bid'den küçük"), (3, "ISIN yok"),
+        (4, "ISIN'in kontrol hanesi tutmuyor: TRT191127F18"), (5, "offer getirisi bid'inkinden büyük")]
+    assert [(r["n"], r["bid"], r["ask"]) for r in bad["rows"]] == [(6, 31.2, 31.1)]
+
+
+def test_fixed_prices_pasted_need_no_catalog_and_go_to_the_file(svc):
+    """Only the ISIN, bid and offer: an FX-denominated DİBS (not in the catalog, by the desk's rule) is "döviz DİBS", its
+    maturity read from its ISIN (TRT191127F19: 19.11.2027), in price; a "TRB…" one a bill, in yield; a catalog bond its
+    own.  Pasted again: updated."""
+    u = svc.login("Sabit Yapıştır")["user"]
+    bill = _valid("TRB150727T1")
+    got = call(svc, u, "sabit-yapistir", {"text": LOWER + "%s\t31,2\t\t31,1\n%s\t30.9\t30.8\nbozuk satır\t1\n" % (bill, ZERO)})
+    p = got["pasted"]
+    assert sorted(p["added"]) == sorted(["TRT191127F19", "TRT030327F17", "TRT030227F18", bill, ZERO]) and p["updated"] == []
+    assert [b["why"] for b in p["bad"]] == ["ISIN yok"] and p["ignored"] == 2
+    f = {r["isin"]: r for r in got["fixed"]}
+    assert (f["TRT191127F19"]["name"], f["TRT191127F19"]["maturity"], f["TRT191127F19"]["unit"], f["TRT191127F19"]["kind_text"]) == (
+        "döviz DİBS", "2027-11-19", "price", "Döviz DİBS")
+    assert f["TRT030227F18"]["maturity"] == "2027-02-03" and f["TRT030327F17"]["maturity"] == "2027-03-03"
+    assert (f[bill]["unit"], f[bill]["maturity"], f[ZERO]["unit"], f[ZERO]["name"]) == ("yield", "2027-07-15", "yield", "TURKGB 0 01/06/27")
+    assert f["TRT191127F19"]["line"] == "TRT191127F19,99.483,99.726,0,0" and f["TRT030327F17"]["line"] == "TRT030327F17,99.951,100.152,0,0"
+    assert f[bill]["line"] == "%s,0,0,31.200,31.100" % bill
+    # pasted again (the upper block's C:H this time): updated, not doubled
+    again = call(svc, u, "sabit-yapistir", {"text": UPPER_CH})
+    assert again["pasted"]["updated"] == ["TRT191127F19"] and again["pasted"]["added"] == [] and len(again["fixed"]) == 5
+    assert {r["isin"]: r for r in again["fixed"]}["TRT191127F19"]["line"] == "TRT191127F19,99.482,99.725,0,0"
+    # Hesapla (no auction text: only fixed bonds) and the file
+    res = call(svc, u, "hesapla", {"mode": "ihale", "text": ""})
+    rows = {r["isin"]: r for r in res["rows"]}
+    assert rows["TRT191127F19"]["fixed"] and "kataloğunda değil" in rows["TRT191127F19"]["how"] and rows[bill]["bid"]["price"] > 0
+    out = call(svc, u, "kaydet", {"rows": [{"isin": r["isin"], "bid_price": r["bid"]["price"], "ask_price": r["ask"]["price"],
+                                           "bid_yield": r["bid"]["yield"], "ask_yield": r["ask"]["yield"]} for r in res["rows"]]})
+    assert "TRT191127F19,99.482,99.725,0,0" in out["lines"] and "TRT030327F17,99.951,100.152,0,0" in out["lines"]
+    assert "%s,0,0,31.200,31.100" % bill in out["lines"] and "TRT060127T10,0,0,30.900,30.800" in out["lines"]
+    with pytest.raises(ServiceError) as e:
+        call(svc, u, "sabit-yapistir", {"text": "  "})
+    assert "yapıştırın" in str(e.value)
+
+
 # ================================================================================================== BBG
 def trading(svc, user):
     """The bonds of DİBS RV's trading list as the page reads them (ISIN -> its row's last trade)."""
@@ -813,6 +969,26 @@ def test_a_eurobond_is_priced_from_bloombergs_mid_whatever_the_switch(live):
     assert out["lines"] == ["%s,%.3f,%.3f,0,0" % (EURO1, e1["bid"]["price"], e1["ask"]["price"])]
 
 
+def test_a_fixed_bond_costs_no_bloomberg_request(live):
+    """A fixed bond off the trading list (a zero, a Eurobond): no LAST_PRICE / PX_MID asked in BBG mode - it is not computed."""
+    s, provider = live
+    u = s.login("Sabit Canlı")["user"]
+    call(s, u, "ekle", {"isins": EURO1})                                                # (its facts: once, kept)
+    call(s, u, "sabit", {"isin": ZERO, "bid": "31,6", "ask": "31,4"})
+    call(s, u, "sabit", {"isin": EURO1, "bid": "104,1", "ask": "104,4"})              # in the list too: fixed wins
+    s.fiyatyukleme._asked = {}
+    n0 = len(provider.calls)
+    res = call(s, u, "hesapla", {"mode": "bbg"})
+    assert provider.calls[n0:] == [] and res["bbg"]["asked"] == 0 and "euro" not in res
+    rows = {r["isin"]: r for r in res["rows"]}
+    assert rows[ZERO]["fixed"] and (rows[ZERO]["bid"]["yield"], rows[ZERO]["ask"]["yield"]) == (31.6, 31.4)
+    e = rows[EURO1]
+    assert e["fixed"] and (e["bid"]["price"], e["ask"]["price"]) == (104.1, 104.4) and e["anchor"] == 0.0 and e["settle"] == "2026-11-04"
+    bond = fy.street_of(s.fiyatyukleme.record(EURO1))
+    assert e["bid"]["yield"] == pytest.approx(bond.yield_of(104.1, dt.date(2026, 11, 4)) * 100.0) and "çapasız" in e["how"]
+    assert call(s, u, "kaydet", {"rows": [{"isin": EURO1, "bid_price": 104.1, "ask_price": 104.4}]})["lines"] == ["%s,104.100,104.400,0,0" % EURO1]
+
+
 # ------------------------------------------------------------------ the provider's one-off request
 def test_a_one_off_reference_request_is_counted_and_kept_nowhere():
     srv = fake_blpapi.Server()
@@ -882,3 +1058,15 @@ def test_the_routes(svc):
         assert got.status_code == 200 and got.content == saved["text"].encode("ascii") and b"\r\n" in got.content
         assert got.headers["content-disposition"] == 'attachment; filename="dibs_fiyat_20261103.txt"'
         assert c.get("/static/js/pages/fiyatyukleme.js").status_code == 200
+        # Sabit fiyat: a session needed; a Turkish reason for what cannot be kept
+        assert c.post("/api/fiyat-yukleme/sabit", headers=ANON, json={"isin": FIXED, "bid": "99", "ask": "100"}).status_code == 401
+        assert c.post("/api/fiyat-yukleme/sabit-sil", headers=ANON, json={"isin": FIXED}).status_code == 401
+        bad = c.post("/api/fiyat-yukleme/sabit", headers=h, json={"isin": FIXED, "bid": "abc", "ask": "100"})
+        assert bad.status_code == 400 and bad.json()["error"] == "bid ve ask'i sayı olarak girin"
+        bad = c.post("/api/fiyat-yukleme/sabit-sil", headers=h, json={"isin": FIXED})
+        assert bad.status_code == 400 and bad.json()["error"] == "sabit fiyatı yok: %s" % FIXED
+        assert c.post("/api/fiyat-yukleme/sabit-yapistir", headers=ANON, json={"text": LOWER}).status_code == 401
+        bad = c.post("/api/fiyat-yukleme/sabit-yapistir", headers=h, json={"text": ""})
+        assert bad.status_code == 400 and bad.json()["error"] == "Excel'den ISIN, bid ve offer'ı kopyalayıp yapıştırın"
+        ok = c.post("/api/fiyat-yukleme/sabit", headers=h, json={"isin": FIXED, "bid": "99,1", "ask": "99,9"})
+        assert ok.status_code == 200 and ok.json()["fixed"][0]["bid"] == 99.1 and ok.json()["fixed"][0]["listed"]

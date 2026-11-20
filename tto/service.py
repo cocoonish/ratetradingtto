@@ -7867,7 +7867,9 @@ class Service(object):
     # ================================================================== Kâğıt Fiyat Yükleme (fiyatyukleme.py)
     def fiyat_yukleme(self, user: Optional[str], what: str, body: Optional[Dict[str, Any]] = None) -> Any:
         """Kâğıt Fiyat Yükleme (:mod:`tto.fiyatyukleme`): ``what`` - "state" (the user's list, settings, the desk's labels),
-        "ekle" / "cikar" (the list), "ayar" (mode, default and per bond spreads), "tanit" (the desk names an auction
+        "ekle" / "cikar" (the list), "sabit" / "sabit-sil" (a bond's fixed bid and ask: set or change / take off),
+        "sabit-yapistir" (fixed prices pasted from Excel), "ayar"
+        (mode, default and per bond spreads), "tanit" (the desk names an auction
         label's bond), "hesapla" (İhale / BBG), "cevir" (an edited cell's other half), "kaydet" (the file), "dosya" (a
         saved file again: bytes and name).  A request it cannot answer is a 400 with the reason in Turkish."""
         from .fiyatyukleme import FiyatError
@@ -7880,6 +7882,12 @@ class Service(object):
                 return fy.add(user, b.get("isins") if "isins" in b else b.get("isin"))
             if what == "cikar":
                 return fy.remove(user, b.get("isin"))
+            if what == "sabit":
+                return fy.set_fixed(user, b)
+            if what == "sabit-sil":
+                return fy.remove_fixed(user, b.get("isin"))
+            if what == "sabit-yapistir":
+                return fy.paste_fixed(user, b.get("text"))
             if what == "ayar":
                 return fy.set_options(user, b)
             if what == "tanit":

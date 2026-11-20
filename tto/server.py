@@ -923,7 +923,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def fiyat_yukleme_action(request: Request):
-        # ekle / cikar / ayar / tanit / hesapla / cevir / kaydet (Service.fiyat_yukleme)
+        # ekle / cikar / sabit / sabit-sil / sabit-yapistir / ayar / tanit / hesapla / cevir / kaydet (Service.fiyat_yukleme)
         what = request.path_params["what"]
         if what in ("state", "dosya"):
             raise ServiceError("bilinmeyen işlem: %s" % what, 404)
