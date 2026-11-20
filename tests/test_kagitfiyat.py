@@ -402,6 +402,81 @@ def test_market_of_a_two_sided_quote_or_todays_last_trade():
     assert kf.market_of("", "", "", None, today) is None
 
 
+def test_the_bucket_base_and_the_peers_median():
+    """A bond with no price: its bucket's base with the fair model's weights - ≤1Y 75 % OIS + 25 % the curve, 1–5Y the
+    curve, 5Y+ 75 % the curve + 25 % OIS (OIS missing: the curve alone) - and its peers' median spread to their bases, the
+    bond itself left out; no peer: none."""
+    assert kf.base_of("1y", 0.36, 0.42) == (pytest.approx(0.75 * 0.42 + 0.25 * 0.36), {kf.OIS: 0.75, kf.NBR: 0.25})
+    assert kf.base_of("3y", 0.39, 0.40) == (0.39, {kf.NBR: 1.0}) and kf.base_of("5y", 0.38, None) == (0.38, {kf.NBR: 1.0})
+    assert kf.base_of("5y+", 0.36, 0.32) == (pytest.approx(0.75 * 0.36 + 0.25 * 0.32), {kf.NBR: 0.75, kf.OIS: 0.25})
+    assert kf.base_of("1y", 0.36, None) == (0.36, {kf.NBR: 1.0}) and kf.base_of("3y", None, 0.4) == (None, {})
+    assert [kf.base_text(kf.base_of(b, 0.3, 0.3)[1]) for b in ("1y", "3y", "5y+")] == ["OIS %75 + eğri %25", "eğri", "eğri %75 + OIS %25"]
+    peers = [("A", -0.0190), ("B", -0.0150), ("C", -0.0300)]
+    assert kf.peer_spread(peers) == (pytest.approx(-0.0190), 3)
+    assert kf.peer_spread(peers, "A") == (pytest.approx(-0.0225), 2)          # (itself out: the median of the two others)
+    assert kf.peer_spread([("A", 0.01)], "A") == (None, 0) and kf.peer_spread([]) == (None, 0)
+    # no peer priced in its bucket: the base alone ("eğri"), with the warning
+    row = {"isin": "X", "bucket": "5y+", "kind": "B", "market": None, "_own": {"why": "geçmiş kapanışı yok"}, "_vtext": "valör 04.11",
+           "_level": lambda y: {"yield": y * 100.0, "simple": None, "clean": 90.0},
+           "curve": {"yield": 35.0, "ns": 35.0, "ois": None, "base": "eğri", "fit": "Nelson-Siegel", "weights": {kf.NBR: 1.0}}}
+    kf.KagitFiyat._answer(row, {("5y+", "S"): [("Y", -0.01)]})
+    assert row["price"]["label"] == kf.EGRI and row["price"]["yield"] == pytest.approx(35.0) and row["alt"]["tag"] is None
+    assert "piyasa fiyatlı bono / kuponsuz akran yok" in row["price"]["how"]
+    # with peers: the base + their median, said with how many
+    row2 = dict(row, _own={"why": "geçmiş kapanışı yok"}, kind="S", isin="X2")
+    kf.KagitFiyat._answer(row2, {("5y+", "S"): [("Y", -0.0100), ("Z", -0.0300), ("X2", 0.5)]})
+    assert row2["price"]["label"] == kf.EGRI_AKRAN and row2["price"]["yield"] == pytest.approx(35.0 - 2.0) and row2["alt"]["tag"] == "akran farkı"
+    assert "akran farkı −200 bp (2 sabit kuponlu" in row2["price"]["how"] and row2["alt"]["peers"] == 2
+    # with its own last spread: that, whatever its peers ("eğri + son fark <day>"); with a market: the market's, the rest kept
+    # for the upload
+    row3 = dict(row2, _own={"y": 0.3540, "day": "2026-11-02", "spread": 0.0040, "weights": {kf.NBR: 1.0}})
+    kf.KagitFiyat._answer(row3, {("5y+", "S"): [("Y", -0.0100), ("Z", -0.0300)]})
+    assert row3["price"]["label"] == "eğri + son fark 02.11" and row3["alt"]["tag"] == "son fark" and row3["price"]["yield"] == pytest.approx(35.4)
+    assert "+ son fark +40 bp (02.11 kapanışı)" in row3["price"]["how"]
+    row4 = dict(row2, market={"yield": 36.0, "simple": None, "clean": 89.0, "source": "DİBS RV bid / ask ortası"})
+    kf.KagitFiyat._answer(row4, {("5y+", "S"): [("Y", -0.0100), ("Z", -0.0300)]})
+    assert row4["price"]["label"] == kf.PIYASA and row4["diff"] == pytest.approx(100.0) and row4["alt"]["label"] == kf.EGRI_AKRAN
+
+
+def test_the_validation_leaves_the_bond_out_of_the_fit_and_of_its_peers():
+    """Each market-priced bond priced as if it had no price: its own quote moves neither its curve (the fit without it) nor
+    its peers' median (it is not one of them); 'before' is the curve alone, 'after' the base + the peers' median."""
+    value = dt.date(2026, 11, 4)
+    items = _bonds(value)
+    nss0 = qc.dibs_search(qc.BondFit(items))["nss"]
+
+    def cands(its):
+        out = []
+        for b, v, y, c in its:
+            yc = kf.to_compound(b, y, v, c)
+            out.append({"isin": b.isin, "bond": b, "value": v, "market": yc, "ois": yc + 0.01, "group": "B" if b.kind == "bill" else "S",
+                        "bucket": kf.bucket_of((b.maturity - v).days / 365.0)})
+        return out
+
+    res = kf.validate(items, nss0, cands(items))
+    x = "TRT03"                                                                   # (2,6 years: three peers in its bucket)
+    assert res[x]["peers"] == sum(1 for c in cands(items) if c["bucket"] == res[x]["bucket"] and c["group"] == "S") - 1
+    moved = [(b, v, y + (0.004 if b.isin == x else 0.0), c) for b, v, y, c in items]
+    again = kf.validate(moved, nss0, cands(moved))
+    assert again[x]["before"] == pytest.approx(res[x]["before"], abs=1e-9) and again[x]["after"] == pytest.approx(res[x]["after"], abs=1e-9)
+    assert again[x]["market"] - res[x]["market"] > 0.003                         # (only its error moves: its market did)
+    assert again[x]["err_after"] == pytest.approx(res[x]["err_after"] - (again[x]["market"] - res[x]["market"]) * 1e4, abs=1e-5)
+    # its peers' predictions had it in their curves and among their peers: theirs move
+    peer = next(c["isin"] for c in cands(items) if c["isin"] != x and c["bucket"] == res[x]["bucket"] and c["group"] == "S")
+    assert abs(again[peer]["after"] - res[peer]["after"]) > 1e-6
+    # 'before' the curve without the bond; its error the market's distance from it
+    fit_in = qc.BondFit(items)
+    j = next(i for i in fit_in.fitted if fit_in.bonds[i].isin == x)
+    idx = [i for i in fit_in.fitted if i != j]
+    full = qc.refit(fit_in.make, nss0, nss0.beta, iters=8)["nss"]
+    loo = qc.refit(lambda t1, t2: (fit_in._fn(idx, t1, t2), lambda k=qc.NSS: list(full.beta[:k])), full, full.beta, iters=8)["nss"]
+    b = next(b for b, _, _, _ in items if b.isin == x)
+    assert res[x]["before"] == pytest.approx(kf.yield_on(b, loo, value, "compound", 0.4), abs=1e-9)
+    assert res[x]["err_before"] == pytest.approx((res[x]["before"] - res[x]["market"]) * 1e4, abs=1e-9)
+    table = kf.validation_table(res)
+    assert sum(r["n"] for r in table) == len(res) and all(r["before"]["max"] >= r["before"]["median"] for r in table)
+
+
 def live_fit(svc, user):
     """What the page reads now: the sheets, the closes' part, the fit of the quotes now (its curve of all of them)."""
     k = svc.kagitfiyat
@@ -413,9 +488,11 @@ def live_fit(svc, user):
 def test_every_bond_of_the_desks_list_gets_a_curve_price(svc):
     """(the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl") Every fixed coupon bond,
     bill and zero coupon bond of the desk's list has a row - the trading list's priced on DİBS RV's quotes ("piyasa", the
-    middle of bid / ask, its yield DİBS RV's own), the others off the curve ("eğri": no market in replay, no closes): the
-    Nelson-Siegel fitted now to the bonds with prices, at the bond's own cash flows from its value date; a bond in the fit
-    on the fit without it (leave one out); market − curve in bp; the floaters left out and counted, with why."""
+    middle of bid / ask, its yield DİBS RV's own), the others (no market in replay, no closes) at their bucket's base - the
+    Nelson-Siegel fitted now to the bonds with prices, at the bond's own cash flows from its value date (a bond in the fit on
+    the fit without it), with the OIS zero rate at its maturity by the fair model's weights - + the median spread to their
+    bases of today's market-priced bonds of the same bucket and kind group ("eğri + akran farkı"; none: the base alone,
+    "eğri", said); market − base in bp; the floaters left out and counted, with why."""
     from tto import bonds as bd
     u = svc.login("Eğri Katalog")["user"]
     d = svc.kagit_fiyat(u)
@@ -424,20 +501,37 @@ def test_every_bond_of_the_desks_list_gets_a_curve_price(svc):
     assert set(rows) == cat and len(cat) >= 29 and OFF in rows and ZERO in rows and FIXED in rows
     assert [r["kind"] for r in d["curve_rows"]] == sorted((r["kind"] for r in d["curve_rows"]), key="BS".index)
     got, panel, now = live_fit(svc, u)
-    # a bond off the trading list: the curve alone, at its own cash flows (value date T+1, the bonds' source) on the curve of all
+    # the peers: today's market-priced bonds and their spreads to their bases, by bucket and kind group
+    peers = {}
+    for r in d["curve_rows"]:
+        if r["market"] is not None and r["curve"] is not None:
+            peers.setdefault((r["bucket"], r["kind"]), []).append((r["isin"], (r["market"]["yield"] - r["curve"]["yield"]) / 100.0))
+    # a bond off the trading list (≤ 1Y): its base 75 % OIS + 25 % the curve - the curve at its own cash flows (value date
+    # T+1, the bonds' source) on the curve of all, OIS the Bootstrap's zero rate at its maturity - + its peers' median
     o = rows[OFF]
     b = qc._bond_of(OFF, {}, None)
     value = dt.date(2026, 11, 4)
-    y = kf.yield_on(b, now["full"], value, "compound", 0.35)
-    assert o["market"] is None and not o["listed"] and o["value_date"] == "2026-11-04" and o["diff"] is None
-    assert o["price"]["label"] == kf.EGRI and o["price"]["kind"] == "curve" and o["curve"]["loo"] is False
-    assert o["curve"]["yield"] == pytest.approx(y * 100.0, abs=1e-9) and o["price"]["yield"] == o["curve"]["yield"]
+    ns = kf.yield_on(b, now["full"], value, "compound", 0.35)
+    ois = kf.zero_rate(got["boot"], got["mk"].ois_spot, serial(b.maturity))
+    assert o["market"] is None and not o["listed"] and o["value_date"] == "2026-11-04" and o["diff"] is None and o["bucket"] == "1y"
+    assert o["curve"]["ns"] == pytest.approx(ns * 100.0, abs=1e-9) and o["curve"]["ois"] == pytest.approx(ois * 100.0, abs=1e-12)
+    assert o["curve"]["yield"] == pytest.approx((0.75 * ois + 0.25 * ns) * 100.0, abs=1e-9) and o["curve"]["base"] == "OIS %75 + eğri %25"
+    mine = peers[("1y", "S")]
+    med = statistics.median(s for _, s in mine)
+    assert len(mine) >= 2 and o["price"]["label"] == kf.EGRI_AKRAN and o["price"]["kind"] == "peer" and o["curve"]["loo"] is False
+    assert o["price"]["peers"] == len(mine) and o["price"]["spread"] == pytest.approx(med * 1e4, abs=1e-9)
+    assert o["price"]["yield"] == pytest.approx(o["curve"]["yield"] + med * 100.0, abs=1e-9)
+    y = o["price"]["yield"] / 100.0
     assert o["price"]["clean"] == pytest.approx(kf.Pricer("fixed", value, None, 2.0, [], qc.accrued(b, value), b).clean(y), abs=1e-9)
     assert o["alt"] == o["price"] and "kâğıt uydurmada değil" in o["price"]["how"] and "geçmiş kapanışı yok" in o["price"]["how"]
-    # a zero coupon bond off the list: its value date the bills' (ISL0, today), priced as a bill
+    assert "akran farkı %s bp (%d sabit kuponlu" % (kf._bp(med * 1e4), len(mine)) in o["price"]["how"]
+    # a zero coupon bond off the list: its value date the bills' (ISL0, today), priced as a bill, its peers the bills
     z = rows[ZERO]
     zb = qc._bond_of(ZERO, {}, None)
-    assert z["value_date"] == "2026-11-03" and z["kind"] == "B" and z["price"]["label"] == kf.EGRI
+    bills = peers[("1y", "B")]
+    assert z["value_date"] == "2026-11-03" and z["kind"] == "B" and z["price"]["label"] == kf.EGRI_AKRAN and z["price"]["peers"] == len(bills)
+    assert z["price"]["yield"] == pytest.approx(z["curve"]["yield"] + statistics.median(s for _, s in bills) * 100.0, abs=1e-9)
+    assert "bono / kuponsuz" in z["price"]["how"] and BILL in {c for c, _ in bills}
     assert z["price"]["clean"] == pytest.approx(100.0 / (1 + z["price"]["yield"] / 100) ** ((zb.maturity - dt.date(2026, 11, 3)).days / 365.0), abs=1e-9)
     # a bond of the trading list with a quote: the market's (DİBS RV's bid / ask middle, its compound yield the sheet's own);
     # its curve on the fit without it (leave one out), not the curve of all of them; market − curve
@@ -450,14 +544,30 @@ def test_every_bond_of_the_desks_list_gets_a_curve_price(svc):
     whole = kf.yield_on(fb, now["full"], qc._value_date(dt.date(2026, 11, 3), next(q for q in got["quant"] if q["isin"] == FIXED)), "simple", 0.36)
     assert abs(f["curve"]["yield"] - whole * 100.0) > 0.001                                     # (the fit with it is another curve)
     assert f["diff"] == pytest.approx((f["market"]["yield"] - f["curve"]["yield"]) * 100.0, abs=1e-9)
-    assert f["alt"]["label"] == kf.EGRI and f["alt"]["yield"] == f["curve"]["yield"]          # (the upload's: never the market)
-    # the trading list's bond the sheet has no price of: the curve (no closes yet)
-    assert rows[NO_PRICE]["market"] is None and rows[NO_PRICE]["price"]["label"] == kf.EGRI
+    assert f["bucket"] == "3y" and f["curve"]["base"] == "eğri" and f["curve"]["weights"] == {kf.NBR: 1.0}       # (1–5Y: the curve alone)
+    # the upload's: never the market - its base + its peers' median, itself not among them
+    others = [s for c, s in peers[("3y", "S")] if c != FIXED]
+    assert f["alt"]["label"] == kf.EGRI_AKRAN and f["alt"]["peers"] == len(others) >= 1
+    assert f["alt"]["yield"] == pytest.approx(f["curve"]["yield"] + statistics.median(others) * 100.0, abs=1e-9)
+    # the trading list's bond the sheet has no price of: no closes yet - its peers'
+    assert rows[NO_PRICE]["market"] is None and rows[NO_PRICE]["price"]["label"] == kf.EGRI_AKRAN
+    # every bond without a market: its peers' where its bucket and kind group has a market-priced bond other than itself,
+    # else its base alone, with the warning
+    for r in d["curve_rows"]:
+        if r["price"] is not None and r["market"] is None:
+            has = [c for c, _ in peers.get((r["bucket"], r["kind"]), []) if c != r["isin"]]
+            assert r["price"]["label"] == (kf.EGRI_AKRAN if has else kf.EGRI), r["isin"]
+            assert has or "akran yok - taban tek başına" in r["price"]["how"]
     # the floaters: not in the table, counted with why
     assert not any(r["cat_kind"] in ("float", "cpi", "frn") for r in d["curve_rows"]) and TLREF not in rows
     want = {k: sum(1 for x in bd.listed(dt.date(2026, 11, 3)) if x["kind"] == k) for k, _ in kf.OTHER_KINDS}
     assert {x["kind"]: x["n"] for x in d["others"]} == {k: n for k, n in want.items() if n} and "nominal eğriye göre" in d["others_why"]
-    assert d["counts"]["market"] >= 14 and d["counts"]["curve"] >= 14 and d["counts"]["spread"] == 0
+    assert d["counts"]["market"] >= 14 and d["counts"]["peer"] >= 10 and d["counts"]["peer"] + d["counts"]["curve"] >= 14
+    assert d["counts"]["spread"] == 0
+    # the rule checked on the quotes now (the validation's helper): every market-priced bond, as if it had none
+    v = svc.kagitfiyat.validation(u)
+    assert set(v["bonds"]) == {r["isin"] for r in d["curve_rows"] if r["market"] is not None and r["bucket"]}
+    assert sum(t["n"] for t in v["table"]) == len(v["bonds"]) and all(x["err_before"] is not None for x in v["bonds"].values())
     # a fixed coupon bond of the catalog without a coupon: its row, no price, why
     nocpn = [x for x in d["curve_rows"] if x["price"] is None]
     assert all("kuponu bilinmiyor" in x["why"] for x in nocpn if x["cat_kind"] == "fixed")
@@ -577,7 +687,9 @@ def test_one_bond_for_the_card_and_a_reason_for_another(svc, seeded):
     assert err.value.status == 400 and "masanın listesinde yok: TRT010199T11" in str(err.value)
     # a bond of the desk's list off the trading list: no old row, its curve row (the card's "Eğri fiyatı")
     off = svc.kagit_fiyat(u, {"isin": OFF})
-    assert off["rows"] == [] and [r["isin"] for r in off["curve_rows"]] == [OFF] and off["curve_rows"][0]["price"]["label"] == kf.EGRI
+    assert off["rows"] == [] and [r["isin"] for r in off["curve_rows"]] == [OFF] and off["curve_rows"][0]["price"]["label"] == kf.EGRI_AKRAN
+    # (its peers the whole list's, as on the main table: the same price)
+    assert off["curve_rows"][0]["price"] == next(r for r in svc.kagit_fiyat(u)["curve_rows"] if r["isin"] == OFF)["price"]
     # a TLREF floater of the catalog off the trading list: no curve price, why
     fl = svc.kagit_fiyat(u, {"isin": "TRT130127T11"})
     assert fl["rows"] == [] and fl["curve_rows"] == [] and "nominal eğriye göre fiyatlanmaz" in fl["why"]
@@ -586,10 +698,11 @@ def test_one_bond_for_the_card_and_a_reason_for_another(svc, seeded):
 def test_without_a_market_the_curve_plus_the_last_known_spread(svc, seeded):
     """With the made-up history: a bond with no market price - the trading list's one the sheet has no price of, and a bond
     off the list whose series the history kept (a bond once on the list) - is priced at the curve + its spread to the
-    curve at its last close ("eğri + son fark <day>": the desk's history found the last spread the best predictor): the
-    trading list's as Kâğıt Fiyatlama's closes measure it (the neighbours' curve, left out), the other's on that day's curve
-    of the trading list's closes; a bond with a market keeps it (the upload's price the curve + its spread); a bond with no
-    closes the curve alone."""
+    base at its last close ("eğri + son fark <day>": the desk's history found the last spread the best predictor; the base
+    its bucket's, as the fair model blends it): the trading list's as Kâğıt Fiyatlama's closes measure it (the neighbours'
+    curve, left out - for a bond of the trading list the fair of its details), the other's on that day's curve of the
+    trading list's closes and that day's OIS; a bond with a market keeps it (the upload's price the base + its spread); a
+    bond with no closes of its own its peers' ("eğri + akran farkı")."""
     u = svc.login("Eğri Son Fark")["user"]
     last = seeded["days"][-1]
     k = svc.kagitfiyat
@@ -608,8 +721,15 @@ def test_without_a_market_the_curve_plus_the_last_known_spread(svc, seeded):
         got, panel, now = live_fit(svc, u)
         o = rows[OFF2]
         assert o["price"]["label"] == "%s %s.%s" % (kf.EGRI_FARK, last[8:10], last[5:7]) and o["price"]["kind"] == "spread" and not o["listed"]
-        assert o["price"]["spread"] == pytest.approx(30.0, abs=1e-6) and o["price"]["day"] == last
-        assert o["price"]["yield"] == pytest.approx(o["curve"]["yield"] + 0.30, abs=1e-9) and "+ son fark +30 bp" in o["price"]["how"]
+        # (≤ 1Y: its spread to that day's base - 75 % that day's OIS zero rate at its maturity, Motor's bootstrap of that day's
+        # closes, + 25 % the curve -, on today's base)
+        spot, oc = k._days[last][1]["ois_curve"]
+        z_then = kf.zero_rate(oc, spot, serial(b.maturity))
+        want = 0.75 * (curve_then + 0.0030 - z_then) + 0.25 * 0.0030
+        assert o["bucket"] == "1y" and o["curve"]["base"] == "OIS %75 + eğri %25" and o["price"]["tag"] == "son fark"
+        assert o["price"]["spread"] == pytest.approx(want * 1e4, abs=1e-6) and o["price"]["day"] == last
+        assert o["price"]["yield"] == pytest.approx(o["curve"]["yield"] + want * 100.0, abs=1e-9)
+        assert "+ son fark %s bp" % kf._bp(want * 1e4) in o["price"]["how"]
         # the trading list's bond with no price: its spread to the neighbours' curve at its last close (Kâğıt Fiyatlama's)
         n = rows[NO_PRICE]
         st = panel["stats"][NO_PRICE]["last"]
@@ -619,12 +739,19 @@ def test_without_a_market_the_curve_plus_the_last_known_spread(svc, seeded):
         f = rows[FIXED]
         assert f["price"]["label"] == kf.PIYASA and f["alt"]["kind"] == "spread"
         assert f["alt"]["yield"] == pytest.approx(f["curve"]["yield"] + panel["stats"][FIXED]["last"]["spread"][kf.NBR] * 100.0, abs=1e-9)
-        # no closes: the curve alone
-        assert rows[OFF]["price"]["label"] == kf.EGRI and d["counts"]["spread"] >= 2
-        # the upload's quotes: the same (never the market)
+        # a ≤ 1Y bond of the trading list: its last spreads to each base by the bucket's weights - its fair in the details
+        old = {r["isin"]: r for r in d["rows"]}
+        bl, st = rows[BILL], panel["stats"][BILL]["last"]["spread"]
+        assert bl["alt"]["kind"] == "spread" and bl["alt"]["yield"] == pytest.approx(
+            0.75 * (bl["curve"]["ois"] + st[kf.OIS] * 100.0) + 0.25 * (bl["curve"]["ns"] + st[kf.NBR] * 100.0), abs=1e-9)
+        assert bl["alt"]["yield"] == pytest.approx(old[BILL]["fair"]["yield"], abs=1e-9) and f["alt"]["yield"] == pytest.approx(old[FIXED]["fair"]["yield"], abs=1e-9)
+        # no closes of its own: its peers'
+        assert rows[OFF]["price"]["label"] == kf.EGRI_AKRAN and d["counts"]["spread"] >= 2
+        # the upload's quotes: the same (never the market), with their short names
         q = k.curve_quotes(u, [OFF2, FIXED, OFF, "TRT130127T11"])
         assert set(q) == {OFF2, FIXED, OFF} and q[OFF2]["yield"] == o["price"]["yield"] and q[FIXED]["yield"] == f["alt"]["yield"]
-        assert q[OFF]["label"] == kf.EGRI and q[OFF2]["simple"] == pytest.approx(o["price"]["simple"], abs=1e-12)
+        assert q[OFF]["label"] == kf.EGRI_AKRAN and q[OFF2]["simple"] == pytest.approx(o["price"]["simple"], abs=1e-12)
+        assert (q[OFF]["tag"], q[OFF2]["tag"], q[FIXED]["tag"]) == ("akran farkı", "son fark", "son fark")
     finally:
         svc.store.hist_delete(series)
         svc.history.rev += 1
@@ -827,7 +954,7 @@ def test_the_routes(svc, seeded):
         assert bad.status_code == 400 and "masanın listesinde yok" in bad.json()["error"]
         # the main table over HTTP: every fixed coupon bond, bill and zero coupon bond of the desk's list, a label each
         body = got.json()
-        assert len(body["curve_rows"]) >= 29 and {(r.get("price") or {}).get("label") for r in body["curve_rows"]} >= {kf.PIYASA, kf.EGRI}
+        assert len(body["curve_rows"]) >= 29 and {(r.get("price") or {}).get("label") for r in body["curve_rows"]} >= {kf.PIYASA, kf.EGRI_AKRAN}
         assert body["others"] and sum(body["counts"].values()) == sum(1 for r in body["curve_rows"] if r.get("price"))
         off = c.get("/api/kagit-fiyat", headers=h, params={"isin": OFF}).json()
         assert off["curve_rows"][0]["isin"] == OFF and off["rows"] == []

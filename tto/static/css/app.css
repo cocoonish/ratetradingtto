@@ -1681,3 +1681,4 @@ table.plain.kf.kf-old { background: var(--surface); }
 .kf-block .kf-curve-line { margin: 0 0 8px; line-height: 1.5; }
 table.plain.fy td.fy-how b.fy-curve-mark { color: var(--warn); }
 table.plain.kf tr.kf-detail .kf-detail-wrap { max-width: calc(100vw - 330px); overflow-x: auto; }
+table.plain.kf td.kf-px-label.kf-lab-peer { color: var(--accent-ink); }

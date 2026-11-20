@@ -3034,14 +3034,16 @@ async function clipAfter(page, action) {
     const kfC = (isin) => (kfApi.curve_rows || []).find((r) => r.isin === isin) || {};
     const kfCF = kfC('TRT150328T24'), kfCO = kfC('TRT240227T17');
     check('Kâğıt Fiyatlama: the main table - every fixed coupon bond, bill and zero coupon bond of the desk\'s list (off the trading list too), '
-      + 'Piyasa / Eğri / Fiyat with its label: the trading list\'s bond at its market ("piyasa", market − curve in bp), a bond off it priced off '
-      + 'the curve ("eğri"); the floaters counted under it; the details closed',
+      + 'Piyasa / Eğri / Fiyat with its label: the trading list\'s bond at its market ("piyasa", market − base in bp), a bond off it (≤ 1Y, no '
+      + 'history) at its bucket\'s base (OIS %75 + eğri %25) + its market-priced peers\' median spread ("eğri + akran farkı"); the floaters '
+      + 'counted under it; the details closed',
       kfMain.n === (kfApi.curve_rows || []).length && kfMain.n >= 29 && /^Fiyatı olmayan kâğıtlara eğriden fiyat:/.test(kfMain.head)
       && kfMain.fixed.label === 'piyasa' && kfMain.fixed.px === kfFmt(kfCF.price.yield) && kfMain.fixed.mkt === kfFmt(kfCF.market.yield)
       && kfMain.fixed.crv === kfFmt(kfCF.curve.yield) && /DİBS RV bid \/ ask ortası/.test(kfMain.fixed.src) && /^[+−]?\d+$/.test(kfMain.fixed.diff)
-      && kfMain.off.label === 'eğri' && kfMain.off.mkt === '—' && kfMain.off.px === kfFmt(kfCO.curve.yield) && kfMain.off.px === kfMain.off.crv
+      && kfMain.off.label === 'eğri + akran farkı' && kfMain.off.mkt === '—' && kfMain.off.px === kfFmt(kfCO.price.yield) && kfMain.off.crv === kfFmt(kfCO.curve.yield)
+      && kfCO.curve.base === 'OIS %75 + eğri %25' && kfCO.price.peers >= 2 && Math.abs(kfCO.price.yield - kfCO.curve.yield - kfCO.price.spread / 100) < 1e-9
       && kfMain.off.pxp === kfCO.price.clean.toFixed(3).replace('.', ',') && /TLREF'e endeksli \d+/.test(kfMain.others) && kfMain.open === 0
-      && kfMain.fixed.toggle === '▸', { kfMain, fixed: kfCF.price, off: kfCO.price });
+      && /eğri \+ akran farkı \d+/.test(kfMain.others) && kfMain.fixed.toggle === '▸', { kfMain, fixed: kfCF.price, off: kfCO.price, curve: kfCO.curve });
     // ▸ opens a bond's details: the row the page showed before, unchanged (the checks below read it)
     await page.click('#kf-table tr.kf-main[data-isin="TRT150328T24"] td.kf-toggle');
     await page.waitForSelector('#kf-table tr.kf-row[data-isin="TRT150328T24"]', { timeout: 20000 }).catch(() => {});
@@ -3274,8 +3276,9 @@ async function clipAfter(page, action) {
     }
     const fyS = (fyCurveQ.alt || {}).simple;
     check('... a bond with no price of its own (not in the auction text; in BBG no trade and no auction kept) gets Kâğıt Fiyatlama\'s curve price, '
-      + 'marked "eğri fiyatı" with how, its spreads on it (± 5 bp) - in İhale and in BBG mode',
-      typeof fyS === 'number' && (fyCurveQ.alt || {}).label === 'eğri' && ['ihale', 'bbg'].every((m) => fyCurve[m].curve && fyCurve[m].mark === 'eğri fiyatı'
+      + 'marked "eğri fiyatı (akran farkı)" with how, its spreads on it (± 5 bp) - in İhale and in BBG mode',
+      typeof fyS === 'number' && (fyCurveQ.alt || {}).label === 'eğri + akran farkı'
+      && ['ihale', 'bbg'].every((m) => fyCurve[m].curve && fyCurve[m].mark === 'eğri fiyatı (akran farkı)' && /akran farkı [+−]\d+ bp/.test(fyCurve[m].how)
         && fyCurve[m].t0y === fyN3(fyS) && fyCurve[m].by === fyN3(fyS + 0.05) && fyCurve[m].ay === fyN3(fyS - 0.05))
       && /bugünkü ihale listesinde yok/.test(fyCurve.ihale.how) && /kayıtlı ihale fiyatı yok/.test(fyCurve.bbg.how), { fyCurve, fyS });
 

@@ -129,7 +129,8 @@ export function curveLine(c) {
   }
   line.append(h('b', null, yld(p.yield) + ' · ' + px(p.clean)), ' (' + p.label + ', valör ' + day(c.value_date) + ')',
     h('span', { class: 'muted' }, ' · piyasa ' + (c.market ? yld(c.market.yield) + ' · ' + px(c.market.clean) : '—')
-      + ' · eğri ' + (c.curve ? yld(c.curve.yield) + ' · ' + px(c.curve.clean) : '—') + (isNum(c.diff) ? ' · fark ' + bp(c.diff) + ' bp' : '')));
+      + ' · eğri ' + (c.curve ? (c.curve.base && c.curve.base !== 'eğri' ? '(' + c.curve.base + ') ' : '') + yld(c.curve.yield) + ' · ' + px(c.curve.clean) : '—')
+      + (isNum(c.diff) ? ' · fark ' + bp(c.diff) + ' bp' : '')));
   return line;
 }
 

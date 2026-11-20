@@ -361,10 +361,12 @@ def test_ihale_on_the_replay_day_and_the_values_kept(svc):
     # TLREF / TÜFE: the auction's clean price is t0's, price spreads
     assert rows[TLREF]["t0"] == {"yield": None, "price": 100.5} and rows[TLREF]["bid"]["price"] == pytest.approx(100.45)
     assert rows[CPI]["ask"]["price"] == pytest.approx(91.95) and "t0 fiyatı olarak" in rows[CPI]["how"]
-    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026), said
+    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026: no closes,
+    # its base + its peers' median spread), said
     c = rows["TRT150328T24"]
-    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri" and "why" not in c
-    assert c["how"].startswith("eğri fiyatı (eğri): bugünkü ihale listesinde yok → eğri %") and res["curve"] == 1
+    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri + akran farkı" and "why" not in c
+    assert c["curve"]["mark"] == "eğri fiyatı (akran farkı)" and res["curve"] == 1
+    assert c["how"].startswith("eğri fiyatı (akran farkı): bugünkü ihale listesinde yok → eğri %") and "+ akran farkı " in c["how"]
     assert c["t0"]["yield"] == pytest.approx(c["curve"]["simple"]) and c["bid"]["yield"] == pytest.approx(c["curve"]["simple"] + 0.05)
     # the day's values, desk-wide, per ISIN (date, label, value, .t1 / .t2)
     kept = svc.store.get(fy.KEY_AUCTIONS)
@@ -512,12 +514,13 @@ def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
     assert call(svc, u, "sabit", {"isin": CPI, "bid": "92,5", "ask": "92"})["crossed"] is True
 
 
-def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc):
+def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc, monkeypatch):
     """(the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl") A yield-quoted bond that
     would get no price - missing from today's auction text (İhale), no trade and no auction kept (BBG) - gets Kâğıt
-    Fiyatlama's curve price (its "Fiyat" when not the market's: here the curve alone, no closes), its simple yield at its
-    value date as t0's, the row's own spreads on it, marked "eğri fiyatı" with how; a price-quoted bond does not (no price,
-    why); a fixed price still wins; the file takes the curve rows as any yield-quoted ones."""
+    Fiyatlama's curve price (its "Fiyat" when not the market's: here, no closes, its bucket's base + the median spread of
+    its market-priced peers), its simple yield at its value date as t0's, the row's own spreads on it, marked "eğri fiyatı
+    (akran farkı)" - "(son fark)" on its own last spread, "eğri fiyatı" on the base alone - with how; a price-quoted bond
+    does not (no price, why); a fixed price still wins; the file takes the curve rows as any yield-quoted ones."""
     u = svc.login("Yükleme Eğri")["user"]
     off, zero2, fixed_one = "TRT090627T12", "TRT210427T18", "TRT110827T16"
     kept = svc.store.get(fy.KEY_AUCTIONS) or {}
@@ -528,14 +531,16 @@ def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc):
         call(svc, u, "ayar", {"spreads": {off: {"bid": "7", "ask": "3"}}})
         call(svc, u, "sabit", {"isin": fixed_one, "bid": "88,5", "ask": "88,9"})
         quotes = svc.kagitfiyat.curve_quotes(u, [off, zero2])
-        assert quotes[off]["label"] == quotes[zero2]["label"] == "eğri" and quotes[zero2]["value_date"] == "2026-11-03"
+        assert quotes[off]["label"] == quotes[zero2]["label"] == "eğri + akran farkı" and quotes[zero2]["value_date"] == "2026-11-03"
+        assert quotes[off]["tag"] == quotes[zero2]["tag"] == "akran farkı" and "sabit kuponlu" in quotes[off]["how"] and "bono / kuponsuz" in quotes[zero2]["how"]
         for mode in ("ihale", "bbg"):
             res = call(svc, u, "hesapla", {"mode": mode, "text": "06/01/2027.t1   31.500\n"})
             rows = {r["isin"]: r for r in res["rows"]}
             for code in (off, zero2):
                 r, q = rows[code], quotes[code]
                 assert r["priced"] and r["source"] == "eğri" and r["curve"]["label"] == q["label"] and "why" not in r, (mode, code, r)
-                assert r["t0"]["yield"] == pytest.approx(q["simple"]) and r["how"].startswith("eğri fiyatı (eğri): "), (mode, r["how"])
+                assert r["t0"]["yield"] == pytest.approx(q["simple"]) and r["curve"]["mark"] == "eğri fiyatı (akran farkı)", (mode, r["curve"])
+                assert r["how"].startswith("eğri fiyatı (akran farkı): ") and q["how"] in r["how"], (mode, r["how"])
             o = rows[off]
             assert ("bugünkü ihale listesinde yok" if mode == "ihale" else "kayıtlı ihale fiyatı yok") in o["how"]
             assert o["bid"]["yield"] == pytest.approx(quotes[off]["simple"] + 0.07) and o["ask"]["yield"] == pytest.approx(quotes[off]["simple"] - 0.03)
@@ -552,6 +557,13 @@ def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc):
                                                "bid_yield": r["bid"]["yield"], "ask_yield": r["ask"]["yield"]} for r in res["rows"]]})
         assert "%s,%.3f,%.3f,0,0" % (off, o["bid"]["price"], o["ask"]["price"]) in out["lines"]
         assert "%s,0,0,%.3f,%.3f" % (zero2, z["bid"]["yield"], z["ask"]["yield"]) in out["lines"]
+        # the mark says which: "(son fark)" a bond's own last spread, none the bucket's base alone (no peer priced)
+        real = svc.kagitfiyat.curve_quotes
+        monkeypatch.setattr(svc.kagitfiyat, "curve_quotes", lambda key, isins: {
+            k: dict(v, tag={off: "son fark", zero2: None}[k]) for k, v in real(key, isins).items()})
+        rows = {r["isin"]: r for r in call(svc, u, "hesapla", {"mode": "ihale", "text": "06/01/2027.t1   31.500\n"})["rows"]}
+        assert rows[off]["curve"]["mark"] == "eğri fiyatı (son fark)" and rows[off]["how"].startswith("eğri fiyatı (son fark): ")
+        assert rows[zero2]["curve"]["mark"] == "eğri fiyatı" and rows[zero2]["how"].startswith("eğri fiyatı: ")
     finally:
         svc.store.put(fy.KEY_AUCTIONS, dict(svc.store.get(fy.KEY_AUCTIONS) or {}, **{k: v for k, v in kept.items() if k in (off, zero2, TLREF)}))
 

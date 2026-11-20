@@ -436,7 +436,7 @@ export class FiyatYuklemePage {
       h('td', { class: 'l fy-write' }, r.write === 'yield' ? 'getiri' : 'fiyat'), act,
       // a bond priced off the curve (no trade, no auction): said first, so the desk sees it before saving
       h('td', { class: 'l fy-how', title: how }, r.curve ? h('b', { class: 'fy-curve-mark', title: 'Başka fiyatı yoktu: Kâğıt Fiyatlama\'nın eğri fiyatı ('
-        + r.curve.label + ') ve satırın spreadleri' }, 'eğri fiyatı') : '', r.curve ? ' · ' : '', how));
+        + r.curve.label + ') ve satırın spreadleri' }, r.curve.mark || 'eğri fiyatı') : '', r.curve ? ' · ' : '', how));
     return tr;
   }
 
