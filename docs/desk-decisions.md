@@ -737,7 +737,8 @@ Its main job is a **curve price for bonds that have no price of their own**. The
 
 **Conventions settled while building it** (ask before changing):
 
-- "The last known spread" of a trading list bond is Kâğıt Fiyatlama's spread to each base at its last close before today
+- (Since the next section: the last known spread is the most recent point of every source - a trade, an auction, a close.)
+  "The last known spread" of a trading list bond is Kâğıt Fiyatlama's spread to each base at its last close before today
   (the neighbours' curve, OIS), blended by the bucket's weights. A bond off the list has one only when the history kept
   its series - a bond once on the list, named as DİBS RV named it ("<ISIN> @<source> ISIN", "<ISIN> ISIN") - measured at
   its last close on that day's curve of the trading list's closes (not in that fit) and that day's OIS zero rate at its
@@ -788,6 +789,71 @@ Code: `tto/kagitfiyat.py` (`market_of`, `base_of`, `peer_spread`, `validate`, `e
 `tto/fiyatyukleme.py` (`_curve_fallback`), `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`
 (`curveLine`), `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_kagitfiyat.py`, `tests/test_fiyatyukleme.py`, the
 browser test's Kâğıt Fiyatlama and Kâğıt Fiyat Yükleme checks.
+
+### Kâğıt fiyatlama: son fark from every source (20.11.2026)
+
+> "Fiyatı olmayanı eğriden fiyatlarken eğriye göre önceden ne kadar pahalı ucuz olduğuna da bakmamız gerekli. Buna da
+> bakıyor muyuz" - and then: "Aynı şey fiyatlama kısmı için de geçerli"
+
+They mean Kâğıt Fiyatlama and the upload's pricing. Before this, "eğri + son fark" used only the history's stored closes
+(DİBS RV's trading list plus series it kept): on the desk copy only 1 of 14 unpriced bonds had one.
+
+**The rule** (`tto/kagitfiyat.py`: `_points`, `pick_point`, `_own`; one function for every use):
+
+- **A bond's points**, none of them a new Bloomberg request - each its yield at its value date and its spread to each
+  base (the bucket base's parts: the Nelson-Siegel curve and the OIS zero rate) on that point's day:
+  1. **close** - the history's last close (as before);
+  2. **auction** - the last auction value Kâğıt Fiyat Yükleme keeps per ISIN (`fiyatyukleme.KEY_AUCTIONS`): a bill's or
+     zero coupon bond's value is its simple yield at the line's value date, a fixed coupon bond's a clean price there
+     (`auction_yield`);
+  3. **trade** - Bloomberg's last trade: DİBS RV's `LAST_PRICE` / `LAST_TRADE_DATE` for the trading list, Tüm Kâğıtlar's
+     for the rest (the cells the pages already read), and the answers Kâğıt Fiyat Yükleme gets in BBG mode, now kept per
+     ISIN (`fiyatyukleme.KEY_TRADES`, `FiyatYukleme.keep_trades`: a later trade replaces an earlier one) beyond the
+     5-minute cache; the price read at the trade's value date (ISL0 the same day, else the next week day) as the upload
+     reads it (`trade_yield`: a bill's figure that can only be a yield is one);
+  4. **close kept** - from now on, the daily close of every fixed coupon bond, bill and zero coupon bond of the desk's
+     list (`KagitFiyat.record_closes`, kv `kagitfiyat.closes`, the last 120 days per ISIN): the Piyasa column's price -
+     the middle of a two-sided quote, else the day's last trade; DİBS RV for the trading list, Tüm Kâğıtlar for the rest
+     -, its compound yield and value date. Taken once a day after 17:35 on a business day, or when the workbook's day has
+     turned with the day before not kept (its prices then are still that day's last), by the warm thread - live mode only;
+     no Bloomberg request. The history's own daily-close machinery asks Bloomberg (BDH), so it does not fit: kv instead.
+- **The spread**: the point's yield − the base on its day - that day's close curve (the history's Nelson-Siegel fit of
+  the trading list's closes, kept with the day; a bond of the trading list on the fit without it, as its closes are
+  measured) and that day's OIS zero rate at its maturity. A point of **today** (today's auction, today's trade) is
+  measured on the curve now, said - its price is then its own yield. A day without a close curve: the point is not
+  measured, said.
+- **The most recent point wins**; the same day a trade, then an auction, then a close (the history's, then the one kept) -
+  the how line says which was taken and what else that day had.
+- **The price** = the bucket's base now + that spread (blended by the bucket's weights, as the fair model blends them).
+  Label: "eğri + son fark (ihale 20.11, bugün)", "(son işlem 14.11, 4 iş günü önce)", "(kapanış 19.11, 1 iş günü önce)" -
+  the source, the day, its age in TRY business days; the typical error as before (that rule's, measured on today's
+  market-priced bonds from their points before today).
+- **Everywhere**: the Fiyat column, the bond card's line, Kâğıt Fiyat Yükleme's fallback ("eğri fiyatı (son fark, ihale
+  20.11)"), the fair (Adil) of the details and Öngörülen's start without a yield now - all through `_points`.
+  - **The fair takes the most recent point before today.** A trade or auction of today would make the fair that trade's
+    own yield (on the curve now the base cancels); the fair stays the forecast its σ and backtest measure ("today's base
+    + the last spread before today"). One argument (`pick_point(points, before)`) changes it if the desk wants today's.
+  - The BBG and İhale paths that already move a trade or an auction with the curve stay as they are (the same idea).
+
+**On the desk copy** (replay day 03.11.2026): of the 14 bonds with no price, 1 has a son fark - TRT081128T15, now from DİBS
+RV's last trade of 02.11 (the same day as its last close: the trade taken). No more come from the new sources there: the
+auction store is empty in that copy, Tüm Kâğıtlar's last-trade cells of the bonds off the trading list are empty in that
+file, and no Bloomberg answer or daily close was kept yet - those fill from now on. DİBS RV's last trades: 15 of today, 3
+of 02.11, 1 of 26.10 (older than that bond's last close: the close taken). The fair moves on 3 bonds (their 02.11 trade
+taken over the 02.11 close): TRT050527T33, TRT131027T36, TRT081128T15.
+
+**Validation** (the same leave-one-out check, `KagitFiyat.validation`): the market-priced bonds whose son fark now comes
+from a trade point before today - TRT050527T33 and TRT131027T36, both 02.11 - priced at today's base + that spread,
+against today's market: +0,2 and +11,2 bp (median 5,7, max 11,2); the same two from their 02.11 close: −0,4 and +10,9
+(median 5,6, max 10,9). Too few to tell the sources apart: the trade and the close of the same day sit within half a bp.
+The 13 others (son fark from the close): median 16,2, max 111,9 bp. The auction source is tested on seeded data
+(`tests/test_kagitfiyat.py`).
+
+Code: `tto/kagitfiyat.py` (`business_days`, `pick_point`, `point_label`, `auction_yield`, `trade_yield`, `_sources`,
+`_points`, `_own`, `_curve_rows`, `_row`, `_projection`, `record_closes`, `warm`), `tto/fiyatyukleme.py` (`KEY_TRADES`,
+`keep_trades`). Tests: `tests/test_kagitfiyat.py` (the order and ties, the yields at value dates, every source on the
+made-up history, today's auction on the curve now, the daily close recorder), `tests/test_fiyatyukleme.py` (the kept
+Bloomberg trades and the fallback's label).
 
 ## Process
 

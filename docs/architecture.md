@@ -305,7 +305,8 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
     Nelson-Siegel now at the bond's cash flows, leave one out for a bond in the fit, and the OIS Bootstrap's zero rate at
     its maturity by the fair model's weights), `curve` the Eğri column - a fixed coupon bond's Nelson-Siegel, a bill's or
     zero coupon bond's base; `ns`, `ois`, `weights`, `base` its make-up -, `price` the answer with its label - "piyasa",
-    "eğri + son fark <day>" (any kind with history), else by kind: a fixed coupon bond "eğri" (the curve), a bill / zero
+    "eğri + son fark (<source> <day>, <age>)" (any kind with a point: `src`, `day`, `age`), else by kind: a fixed coupon
+    bond "eğri" (the curve), a bill / zero
     "eğri + akran farkı" (`peers`, `spread`: the median of today's market-priced bills' and zero coupon bonds' spreads to
     their bases in its bucket, the bond left out) or "eğri" (the base alone) -, each with `err` (`bp`, `n`: its rule's
     typical error) and the "tipik hata" text in `how`; `_curve_rows` first builds every row, then checks the rules on the
@@ -343,6 +344,16 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
     of them (`full`), on which a bond off the trading list is read (`_curve_row`); a bond off the list whose series the
     history kept (`_off_closes`: "<ISIN> @<source> ISIN" / "<ISIN> ISIN") has its last spreads measured on its day's
     curve and that day's OIS zero rate (`_off_spreads`; each day's OIS curve kept with the day, `ois_curve`);
+  - a bond's last known spread (`_points` → `pick_point` → `_own`; the one function the Fiyat column, the card, the
+    upload's fallback, the fair and Öngörülen's start use): its points - the history's last close, the last auction the
+    upload kept (`fiyatyukleme.KEY_AUCTIONS`), the last trade (DİBS RV's / Tüm Kâğıtlar's `AS`·`I` / `K`·`L` cells, the
+    upload's Bloomberg answers kept in `fiyatyukleme.KEY_TRADES`), the last daily close kept (`kagitfiyat.closes`) - read
+    once per answer (`_sources`: three kv reads), each measured against its day's curve kept in `_days` (today's against
+    the bases now); the most recent wins, the same day trade > auction > close; the fair takes the most recent before
+    today (`view` passes it to `_row` / `_projection`). Arithmetic only: no fit, no Bloomberg request;
+  - the daily close recorder (`record_closes`): the warm thread, live mode only, every `WARM_EVERY` - after `CLOSE_AT`
+    on a business day once, or at the workbook's day turn for the day before; Piyasa's price, yield and value date of
+    every bond with one, kept per ISIN (`CLOSES_KEPT` days) in kv `kagitfiyat.closes`;
   - Öngörülen (`_projection`): the model of the bond's bucket and the horizon (`PROJECTION`, measured on the desk's history
     - desk-decisions), from the above and the OIS Bootstrap's forwards (`ois_move`); arithmetic only.
 
@@ -371,7 +382,9 @@ cost in [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy
 - **Threads.** Everything on the request thread but two short engine calls in BBG mode: `_read` (DİBS RV's `AS` / `I` / `BS`
   / `S` of the list's bonds on it, quantcurve's `read_engine` rows for the bond curve now, Tüm Kâğıtlar's sources) and,
   only when a bond falls back to OIS, `_read_ois` (Motor's market and the Bootstrap, as Kâğıt Fiyatlama reads them). The
-  Bloomberg request (`Provider.reference`) blocks the request thread, never the engine's. The bond curve now is DİBS RV ·
+  Bloomberg request (`Provider.reference`) blocks the request thread, never the engine's; each last trade it answers is
+  kept per ISIN (`keep_trades` → kv `fiyatyukleme.trades`: day, price, source; a later trade replaces it) for Kâğıt
+  Fiyatlama's last known spread. The bond curve now is DİBS RV ·
   Genel's fit (`DibsGenel.fit`, kept there); a past day's is refitted from the history's closes (store memory) with its τ
   held, kept per what it is made of.
 - **Eğri fiyatı** (20.11.2026): in either mode, a yield-quoted row (fixed coupon, bill, zero coupon) left with no price

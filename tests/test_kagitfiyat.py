@@ -451,16 +451,63 @@ def test_the_rule_by_kind_and_its_typical_error():
     assert z["price"]["err"] == {"bp": None, "n": 0}
     assert z["price"]["how"].endswith("tipik hata ölçülemedi (bu kuralla bugün ölçülen piyasa fiyatlı 5Y+ bono / kuponsuz kâğıt: 0; en az 2 gerekli)")
     # its own history: its base + its own last spread, whatever its kind (that rule's typical error here on 1 bond: none)
-    o = _row("S2", "S", "1y", 0.36, 0.40, w1, own={"y": 0.3700, "day": "2026-11-02", "spread": -0.0300, "weights": w1})
+    point = {"src": "trade", "day": "2026-11-02", "age": 1, "y": 0.3650, "what": "DİBS RV 99,500 (valör 03.11; temiz fiyat)"}
+    o = _row("S2", "S", "1y", 0.36, 0.40, w1, own={"y": 0.3700, "day": "2026-11-02", "spread": -0.0300, "weights": w1, "point": point,
+                                                   "ties": ["kapanış"]})
     kf.KagitFiyat._answer(o, {}, bands)
-    assert o["price"]["label"] == "eğri + son fark 02.11" and o["price"]["yield"] == pytest.approx(37.0) and o["alt"]["tag"] == "son fark"
-    assert "OIS %75 + eğri %25 %40,00" in o["price"]["how"] and "+ son fark −300 bp (02.11 kapanışı) = %37,00" in o["price"]["how"]
+    assert o["price"]["label"] == "eğri + son fark (son işlem 02.11, 1 iş günü önce)" and o["price"]["yield"] == pytest.approx(37.0)
+    assert o["alt"]["tag"] == "son fark, son işlem 02.11" and o["alt"]["src"] == "trade" and o["alt"]["age"] == 1
+    assert "OIS %75 + eğri %25 %40,00" in o["price"]["how"] and ("+ son fark −300 bp (son işlem 02.11, 1 iş günü önce: DİBS RV 99,500 "
+                                                                  "(valör 03.11; temiz fiyat) → %36,50, o günün kapanış eğrisine göre; "
+                                                                  "aynı gün kapanış da var, son işlem seçildi) = %37,00") in o["price"]["how"]
     assert o["price"]["err"] == {"bp": None, "n": 1} and "tipik hata ölçülemedi" in o["price"]["how"]
     # a market: the market's, Fark against the Eğri column (a fixed coupon bond's curve); the rest kept for the upload
     m = _row("S3", "S", "1y", 0.36, 0.40, w1, market={"yield": 37.0, "simple": None, "clean": 63.0, "source": "DİBS RV bid / ask ortası"})
     kf.KagitFiyat._answer(m, {}, bands)
     assert m["price"]["label"] == kf.PIYASA and m["diff"] == pytest.approx(100.0) and m["alt"]["label"] == kf.EGRI
     assert m["price"]["how"].endswith("(valör 04.11) · eğri %36,00, fark +100 bp") and "tipik hata" not in m["price"]["how"]
+
+
+def test_the_most_recent_point_and_the_same_days_order():
+    """A bond's last known spread comes from its most recent point; on the same day a trade before an auction before a
+    close (the history's, then the one kept); a point needs a spread to a base to count; its age in TRY business days."""
+    def p(src, day, spread=True):
+        return {"src": src, "day": day, "spread": {kf.NBR: 0.01} if spread else {}}
+
+    pts = [p("close", "2026-11-02"), p("auction", "2026-10-30"), p("kept", "2026-11-02"), p("trade", "2026-10-28")]
+    assert kf.pick_point(pts)["src"] == "close"                                     # (the latest day; the history's close first)
+    assert kf.pick_point(pts + [p("auction", "2026-11-02")])["src"] == "auction"
+    assert kf.pick_point(pts + [p("auction", "2026-11-02"), p("trade", "2026-11-02")])["src"] == "trade"
+    assert kf.pick_point(pts + [p("trade", "2026-11-03", spread=False)])["day"] == "2026-11-02"      # (not measured: not a point)
+    assert kf.pick_point(pts + [p("auction", "2026-11-03")], "2026-11-03")["day"] == "2026-11-02"   # (before today: the fair's)
+    assert kf.pick_point([]) is None and kf.pick_point([p("kept", "2026-11-03")], "2026-11-03") is None
+    hol = frozenset({serial(dt.date(2026, 10, 29))})
+    assert kf.business_days(dt.date(2026, 10, 27), dt.date(2026, 11, 2), hol) == 3      # (28, 30 October, 2 November)
+    assert kf.business_days(dt.date(2026, 11, 3), dt.date(2026, 11, 3), hol) == 0 and kf.age_text(0) == "bugün"
+    assert kf.point_label({"src": "auction", "day": "2026-11-20", "age": 0}) == "eğri + son fark (ihale 20.11, bugün)"
+    assert kf.point_label({"src": "kept", "day": "2026-11-19", "age": 1}) == "eğri + son fark (kapanış 19.11, 1 iş günü önce)"
+
+
+def test_a_points_yield_at_its_value_date():
+    """A point's yield (BIST compound) at its value date, the repo's conventions: an auction value - a bill's simple
+    yield, a fixed coupon bond's clean price -; a last trade's price - a fixed coupon bond's clean price, a bill's price
+    (Bloomberg's TRY bills are quoted in price; a figure that can only be a yield read as one)."""
+    vd = dt.date(2026, 11, 4)
+    bill = qc.Bond("TRB1", "", "bill", vd + dt.timedelta(days=200))
+    t = 200 / 365.0
+    assert kf.auction_yield(bill, "B", 31.5, vd) == pytest.approx((1 + 0.315 * t) ** (1 / t) - 1, abs=1e-15)
+    fixed = qc.Bond("TRT1", "", "fixed", dt.date(2028, 3, 15), 30.0, 2)
+    s = fixed.yield_of(99.5 + qc.accrued(fixed, vd), vd, "simple", 0.3)
+    assert kf.auction_yield(fixed, "S", 99.5, vd) == pytest.approx((1 + s / 2) ** 2 - 1, abs=1e-12)
+    assert kf.trade_yield(fixed, "S", 99.5, vd) == (pytest.approx((1 + s / 2) ** 2 - 1, abs=1e-12), "temiz fiyat")
+    y, how = kf.trade_yield(bill, "B", 85.0, vd)
+    assert how == "fiyat" and y == pytest.approx((100 / 85.0) ** (1 / t) - 1, abs=1e-12)
+    y, how = kf.trade_yield(bill, "B", 31.4, vd)                                    # (as a price 399 %: a yield's figure)
+    assert how.startswith("getiri olarak okundu") and y == pytest.approx((1 + 0.314 * t) ** (1 / t) - 1, abs=1e-12)
+    assert kf.trade_yield(bill, "B", 85.0, bill.maturity)[0] is None and kf.auction_yield(bill, "B", 31.5, bill.maturity) is None
+    # the value dates: a trade's its source's (ISL0 the same day, else the next week day), an auction's the line's own
+    assert qc._value_date(dt.date(2026, 10, 30), {"source": "ISL1"}) == dt.date(2026, 11, 2)
+    assert qc._value_date(dt.date(2026, 10, 30), {"source": "ISL0"}) == dt.date(2026, 10, 30)
 
 
 def test_the_validation_prices_each_bond_without_its_own_quote():
@@ -577,8 +624,11 @@ def test_every_bond_of_the_desks_list_gets_a_curve_price(svc):
     assert abs(f["curve"]["yield"] - whole * 100.0) > 0.001                                     # (the fit with it is another curve)
     assert f["diff"] == pytest.approx((f["market"]["yield"] - f["curve"]["yield"]) * 100.0, abs=1e-9)
     assert f["bucket"] == "3y" and f["base"]["text"] == "eğri" and f["curve"]["weights"] == {kf.NBR: 1.0}       # (1–5Y: the curve alone)
-    # the upload's: never the market - the curve alone (no closes yet), its typical error the 1–3Y fixed coupon bonds'
-    assert f["alt"]["label"] == kf.EGRI and f["alt"]["yield"] == f["curve"]["yield"] and f["alt"]["err"]["n"] == len(errs("3y", "S")) >= 2
+    # the upload's: never the market - its most recent point, DİBS RV's last trade today, on the curve now (the trade's own
+    # yield); without closes its typical error is not measured
+    y_f = kf.trade_yield(fb, "S", r["last"], dt.date(2026, 11, 4))[0]
+    assert f["alt"]["label"] == "eğri + son fark (son işlem 03.11, bugün)" and f["alt"]["yield"] == pytest.approx(y_f * 100.0, abs=1e-9)
+    assert f["alt"]["err"] == {"bp": None, "n": 0} and "tipik hata ölçülemedi" in f["alt"]["how"]
     # the trading list's bond the sheet has no price of: no closes yet - the curve
     assert rows[NO_PRICE]["market"] is None and rows[NO_PRICE]["price"]["label"] == kf.EGRI
     # every bond without a market: a fixed coupon bond the curve; a bill or zero coupon bond its peers' where its bucket has
@@ -732,12 +782,14 @@ def test_one_bond_for_the_card_and_a_reason_for_another(svc, seeded):
 
 def test_without_a_market_the_curve_plus_the_last_known_spread(svc, seeded):
     """With the made-up history: a bond with no market price - the trading list's one the sheet has no price of, and a bond
-    off the list whose series the history kept (a bond once on the list) - is priced at the curve + its spread to the
-    base at its last close ("eğri + son fark <day>": the desk's history found the last spread the best predictor; the base
-    its bucket's, as the fair model blends it): the trading list's as Kâğıt Fiyatlama's closes measure it (the neighbours'
-    curve, left out - for a bond of the trading list the fair of its details), the other's on that day's curve of the
-    trading list's closes and that day's OIS; a bond with a market keeps it (the upload's price the base + its spread); a
-    bond with no closes of its own its peers' ("eğri + akran farkı")."""
+    off the list whose series the history kept (a bond once on the list) - is priced at its bucket's base now + its
+    spread to that base at its most recent point ("eğri + son fark (<source> <day>, <age>)": the desk's history found the
+    last spread the best predictor): the history's last close - the trading list's as Kâğıt Fiyatlama's closes measure
+    it, the other's on that day's curve and OIS - or, newer or the same day, its last trade (DİBS RV's: the same day a
+    trade before a close, said); the fair of its details from the same point.  A bond with a market keeps it, its curve
+    price for the upload from its most recent point - today's trade, on the curve now -; its fair from its point before
+    today.  A bond with no point at all: by its kind."""
+    from tto.fiyatyukleme import date_said
     u = svc.login("Eğri Son Fark")["user"]
     last = seeded["days"][-1]
     k = svc.kagitfiyat
@@ -753,50 +805,187 @@ def test_without_a_market_the_curve_plus_the_last_known_spread(svc, seeded):
     try:
         d = svc.kagit_fiyat(u)
         rows = {r["isin"]: r for r in d["curve_rows"]}
+        old = {r["isin"]: r for r in d["rows"]}
         got, panel, now = live_fit(svc, u)
         o = rows[OFF2]
-        assert o["price"]["label"] == "%s %s.%s" % (kf.EGRI_FARK, last[8:10], last[5:7]) and o["price"]["kind"] == "spread" and not o["listed"]
+        assert o["price"]["label"] == "eğri + son fark (kapanış %s.%s, 1 iş günü önce)" % (last[8:10], last[5:7])
+        assert o["price"]["kind"] == "spread" and o["price"]["src"] == "close" and not o["listed"]
         # (≤ 1Y: its spread to that day's base - 75 % that day's OIS zero rate at its maturity, Motor's bootstrap of that day's
         # closes, + 25 % the curve -, on today's base)
         spot, oc = k._days[last][1]["ois_curve"]
         z_then = kf.zero_rate(oc, spot, serial(b.maturity))
         want = 0.75 * (curve_then + 0.0030 - z_then) + 0.25 * 0.0030
-        assert o["bucket"] == "1y" and o["base"]["text"] == "OIS %75 + eğri %25" and o["price"]["tag"] == "son fark"
+        assert o["bucket"] == "1y" and o["base"]["text"] == "OIS %75 + eğri %25" and o["price"]["tag"] == "son fark, kapanış %s.%s" % (last[8:10], last[5:7])
         assert o["curve"]["base"] == "eğri" and o["curve"]["yield"] == o["curve"]["ns"]                # (Eğri: the curve)
         assert o["price"]["spread"] == pytest.approx(want * 1e4, abs=1e-6) and o["price"]["day"] == last
         assert o["price"]["yield"] == pytest.approx(o["base"]["yield"] + want * 100.0, abs=1e-9)
-        assert "+ son fark %s bp" % kf._bp(want * 1e4) in o["price"]["how"]
-        # the trading list's bond with no price: its spread to the neighbours' curve at its last close (Kâğıt Fiyatlama's)
+        assert "+ son fark %s bp (kapanış" % kf._bp(want * 1e4) in o["price"]["how"] and "o günün kapanış eğrisine göre" in o["price"]["how"]
+        # the trading list's bond with no price: its last close and DİBS RV's last trade the same day - the trade, said; its
+        # yield at its value date against that day's neighbours' curve (the bond left out, as its closes are measured)
         n = rows[NO_PRICE]
-        st = panel["stats"][NO_PRICE]["last"]
-        assert n["price"]["kind"] == "spread" and n["price"]["day"] == last == st["day"] and n["market"] is None
-        assert n["price"]["yield"] == pytest.approx((now["nbr"][NO_PRICE] + st["spread"][kf.NBR]) * 100.0, abs=1e-9)
-        # with a market: the market's; its curve price for the upload the curve + its last spread
-        f = rows[FIXED]
-        assert f["price"]["label"] == kf.PIYASA and f["alt"]["kind"] == "spread"
-        assert f["alt"]["yield"] == pytest.approx(f["curve"]["yield"] + panel["stats"][FIXED]["last"]["spread"][kf.NBR] * 100.0, abs=1e-9)
-        # a ≤ 1Y bond of the trading list: its last spreads to each base by the bucket's weights - its fair in the details
-        old = {r["isin"]: r for r in d["rows"]}
+        line = next(x for x in got["lines"] if x["isin"] == NO_PRICE)
+        nb = qc._bond_of(NO_PRICE, {}, next(q for q in got["quant"] if q["isin"] == NO_PRICE))
+        assert date_said(line["last_day"]).isoformat() == last == panel["stats"][NO_PRICE]["last"]["day"]
+        y_t = kf.trade_yield(nb, "S", line["last"], qc._value_date(dt.date.fromisoformat(last), {"source": "ISL1"}))[0]
+        assert n["market"] is None and n["price"]["kind"] == "spread" and n["price"]["src"] == "trade" and n["price"]["day"] == last
+        assert n["price"]["yield"] == pytest.approx((now["nbr"][NO_PRICE] + y_t - k._days[last][1]["nbr"][NO_PRICE]) * 100.0, abs=1e-9)
+        assert n["price"]["label"] == "eğri + son fark (son işlem %s.%s, 1 iş günü önce)" % (last[8:10], last[5:7])
+        assert "aynı gün kapanış da var, son işlem seçildi" in n["price"]["how"] and "DİBS RV 93,200" in n["price"]["how"]
+        # its fair (the details) from the same point: the one function
+        assert old[NO_PRICE]["fair"]["yield"] == pytest.approx(n["price"]["yield"], abs=1e-9)
+        assert old[NO_PRICE]["point"]["src"] == "trade" and "dünkü son işlemdeki fark" in old[NO_PRICE]["line"]
+        # with a market: the market's; its curve price for the upload from its most recent point - today's trade, on the
+        # curve now (its yield itself) -; its fair from its point before today (its last close, as before)
+        f, fline = rows[FIXED], next(x for x in got["lines"] if x["isin"] == FIXED)
+        fb = qc._bond_of(FIXED, {}, next(q for q in got["quant"] if q["isin"] == FIXED))
+        y_f = kf.trade_yield(fb, "S", fline["last"], dt.date(2026, 11, 4))[0]
+        assert f["price"]["label"] == kf.PIYASA and f["alt"]["label"] == "eğri + son fark (son işlem 03.11, bugün)"
+        assert f["alt"]["yield"] == pytest.approx(y_f * 100.0, abs=1e-9) and "şimdiki eğriye göre (bugünkü nokta)" in f["alt"]["how"]
+        assert old[FIXED]["fair"]["yield"] == pytest.approx(f["curve"]["yield"] + panel["stats"][FIXED]["last"]["spread"][kf.NBR] * 100.0, abs=1e-9)
+        assert old[FIXED]["point"]["src"] == "close"
+        # a ≤ 1Y bond of the trading list: its fair from its last spreads to each base by the bucket's weights; its curve
+        # price today's trade (a bill's price at its value date, the same day)
         bl, st = rows[BILL], panel["stats"][BILL]["last"]["spread"]
-        assert bl["alt"]["kind"] == "spread" and bl["alt"]["yield"] == pytest.approx(
+        assert old[BILL]["fair"]["yield"] == pytest.approx(
             0.75 * (bl["curve"]["ois"] + st[kf.OIS] * 100.0) + 0.25 * (bl["curve"]["ns"] + st[kf.NBR] * 100.0), abs=1e-9)
-        assert bl["alt"]["yield"] == pytest.approx(old[BILL]["fair"]["yield"], abs=1e-9) and f["alt"]["yield"] == pytest.approx(old[FIXED]["fair"]["yield"], abs=1e-9)
-        # no closes of its own: a fixed coupon bond the curve alone, a zero coupon bond its peers'
+        bline = next(x for x in got["lines"] if x["isin"] == BILL)
+        bb = qc._bond_of(BILL, {}, next(q for q in got["quant"] if q["isin"] == BILL))
+        assert bl["alt"]["src"] == "trade" and bl["alt"]["yield"] == pytest.approx(kf.trade_yield(bb, "B", bline["last"], dt.date(2026, 11, 3))[0] * 100.0, abs=1e-9)
+        # no point at all: a fixed coupon bond the curve alone, a zero coupon bond its peers'
         assert rows[OFF]["price"]["label"] == kf.EGRI and rows[ZERO]["price"]["label"] == kf.EGRI_AKRAN and d["counts"]["spread"] >= 2
-        # the own last spread's typical error: that rule on the market-priced bonds of the bucket and kind with closes
-        # (its base now + its spread at the last close, against today's market)
-        sp = [abs(r["alt"]["yield"] - r["market"]["yield"]) * 100.0 for r in d["curve_rows"]
-              if r["market"] is not None and r["alt"] is not None and r["alt"]["kind"] == "spread" and r["bucket"] == "3y" and r["kind"] == "S"]
+        # the own last spread's typical error: that rule on the market-priced bonds of the bucket and kind, each from its
+        # point before today (here its last close: its fair) against today's market
+        sp = [abs(old[c]["fair"]["yield"] - r["market"]["yield"]) * 100.0 for c, r in rows.items()
+              if r["market"] is not None and r["base"] is not None and r["bucket"] == "3y" and r["kind"] == "S"]
         assert len(sp) >= 2 and n["price"]["err"] == {"bp": pytest.approx(statistics.median(sp), abs=1e-6), "n": len(sp)}
         assert "tipik hata ±%d bp" % round(statistics.median(sp)) in n["price"]["how"]
         # the upload's quotes: the same (never the market), with their short names
         q = k.curve_quotes(u, [OFF2, FIXED, OFF, "TRT130127T11"])
         assert set(q) == {OFF2, FIXED, OFF} and q[OFF2]["yield"] == o["price"]["yield"] and q[FIXED]["yield"] == f["alt"]["yield"]
         assert q[OFF]["label"] == kf.EGRI and q[OFF2]["simple"] == pytest.approx(o["price"]["simple"], abs=1e-12)
-        assert (q[OFF]["tag"], q[OFF2]["tag"], q[FIXED]["tag"]) == (None, "son fark", "son fark") and q[OFF]["err"] == rows[OFF]["price"]["err"]
+        assert (q[OFF]["tag"], q[OFF2]["tag"], q[FIXED]["tag"]) == (None, "son fark, kapanış %s.%s" % (last[8:10], last[5:7]), "son fark, son işlem 03.11")
+        assert q[OFF]["err"] == rows[OFF]["price"]["err"]
     finally:
         svc.store.hist_delete(series)
         svc.history.rev += 1
+
+
+def _put(svc, key, isin, value):
+    book = dict(svc.store.get(key) or {})
+    book[isin] = value
+    svc.store.put(key, book)
+
+
+def test_the_last_known_spread_from_every_source(svc, seeded):
+    """(the desk, 20.11.2026: "Fiyatı olmayanı eğriden fiyatlarken eğriye göre önceden ne kadar pahalı ucuz olduğuna da
+    bakmamız gerekli") A bond's last known spread from the most recent of its points, none a new Bloomberg request: an
+    auction Kâğıt Fiyat Yükleme kept - today's measured on the curve now (said), an earlier one on that day's close curve -,
+    a last trade (the upload's Bloomberg answer kept), a daily close kept; the same day a trade before an auction (said);
+    an older point loses to a newer one.  The price: the bucket's base now + that spread, labelled with the source, the
+    day and its age; the upload's fallback says the same."""
+    from tto import fiyatyukleme as fy
+    u = svc.login("Son Fark Kaynak")["user"]
+    last = seeded["days"][-1]
+    k = svc.kagitfiyat
+    svc.kagit_fiyat(u)
+    keys = (fy.KEY_AUCTIONS, fy.KEY_TRADES, kf.KEY_CLOSES)
+    saved = {key: svc.store.get(key) for key in keys}
+    TIE = "TRT110827T16"
+    dd = "%s.%s" % (last[8:10], last[5:7])
+    try:
+        auction = {"label": "x", "tn": 1, "by": "test", "at": "x"}
+        _put(svc, fy.KEY_AUCTIONS, OFF, [dict(auction, day="2026-11-03", value=99.0, value_date="2026-11-04")])     # (today's)
+        _put(svc, fy.KEY_AUCTIONS, OFF2, [dict(auction, day=last, value=99.5, value_date="2026-11-03")])
+        _put(svc, fy.KEY_AUCTIONS, ZERO, [dict(auction, day=seeded["days"][-5], value=33.0, value_date=seeded["days"][-5])])
+        _put(svc, fy.KEY_AUCTIONS, TIE, [dict(auction, day=last, value=96.0, value_date="2026-11-03")])
+        _put(svc, fy.KEY_TRADES, TIE, {"day": last, "price": 95.0, "source": "ISL1", "at": "x"})
+        svc.store.put(kf.KEY_CLOSES, {"days": [last], "bonds": {ZERO: [[last, 97.0, 0.36, last, "Tüm Kâğıtlar bid / ask ortası"]]}})
+        d = svc.kagit_fiyat(u)
+        rows = {r["isin"]: r for r in d["curve_rows"]}
+        then = k._days[last][1]
+        spot, oc = then["ois_curve"]
+
+        def on_base(r, y, bond, vd):
+            """base now + (y − that day's base), by the bucket's weights (≤ 1Y: 75 % OIS + 25 % the curve)."""
+            ns_then = kf.yield_on(bond, then["nss"], vd, "compound", y)
+            z_then = kf.zero_rate(oc, spot, serial(bond.maturity))
+            return 0.75 * (r["curve"]["ois"] / 100.0 + y - z_then) + 0.25 * (r["curve"]["ns"] / 100.0 + y - ns_then)
+
+        # today's auction: on the curve now - the price is the auction's own yield
+        a = rows[OFF]
+        y_a = kf.auction_yield(qc._bond_of(OFF, {}, None), "S", 99.0, dt.date(2026, 11, 4))
+        assert a["price"]["label"] == "eğri + son fark (ihale 03.11, bugün)" and a["price"]["src"] == "auction" and a["price"]["age"] == 0
+        assert a["price"]["yield"] == pytest.approx(y_a * 100.0, abs=1e-9) and "şimdiki eğriye göre (bugünkü nokta)" in a["price"]["how"]
+        assert "ihale x.t1 99,000 (valör 04.11)" in a["price"]["how"]
+        # an earlier day's auction: on that day's close curve and OIS
+        b2 = rows[OFF2]
+        bond2 = qc._bond_of(OFF2, {}, None)
+        y2 = kf.auction_yield(bond2, "S", 99.5, dt.date(2026, 11, 3))
+        assert b2["price"]["label"] == "eğri + son fark (ihale %s, 1 iş günü önce)" % dd
+        assert b2["price"]["yield"] == pytest.approx(on_base(b2, y2, bond2, dt.date(2026, 11, 3)) * 100.0, abs=1e-9)
+        # a daily close kept, newer than its auction: the close
+        z = rows[ZERO]
+        zb = qc._bond_of(ZERO, {}, None)
+        assert z["price"]["label"] == "eğri + son fark (kapanış %s, 1 iş günü önce)" % dd and z["price"]["src"] == "kept"
+        assert z["price"]["yield"] == pytest.approx(on_base(z, 0.36, zb, dt.date.fromisoformat(last)) * 100.0, abs=1e-9)
+        # a trade (the upload's Bloomberg answer kept) and an auction the same day: the trade, said
+        t = rows[TIE]
+        tb = qc._bond_of(TIE, {}, None)
+        y_t = kf.trade_yield(tb, "S", 95.0, dt.date(2026, 11, 3))[0]
+        assert t["price"]["label"] == "eğri + son fark (son işlem %s, 1 iş günü önce)" % dd and "Bloomberg 95,000" in t["price"]["how"]
+        assert t["price"]["yield"] == pytest.approx(on_base(t, y_t, tb, dt.date(2026, 11, 3)) * 100.0, abs=1e-9)
+        assert "aynı gün ihale da var, son işlem seçildi" in t["price"]["how"]
+        assert d["counts"]["spread"] >= 5
+        # the upload's fallback: the same price, its mark naming the point
+        svc.fiyat_yukleme(u, "ekle", {"isins": "%s %s" % (OFF, TIE)})
+        res = svc.fiyat_yukleme(u, "hesapla", {"mode": "ihale", "text": "10/02/2027.t1   99.500\n"})
+        up = {r["isin"]: r for r in res["rows"]}
+        assert up[OFF]["curve"]["mark"] == "eğri fiyatı (son fark, ihale 03.11)" and up[OFF]["curve"]["yield"] == pytest.approx(a["price"]["yield"], abs=1e-9)
+        assert up[TIE]["curve"]["mark"] == "eğri fiyatı (son fark, son işlem %s)" % dd and up[TIE]["how"].startswith("eğri fiyatı (son fark, son işlem")
+    finally:
+        for key, v in saved.items():
+            svc.store.put(key, v if v is not None else {})
+
+
+def test_the_daily_close_is_kept_once_a_day_without_bloomberg(svc, monkeypatch):
+    """Every bond of the desk's list with a price today keeps its daily close - Piyasa's price (DİBS RV's bid / ask
+    middle for the trading list, Tüm Kâğıtlar's for the rest), its yield and value date - once a day after 17:35 on a
+    business day, or when the workbook's day turns with the day before not kept (its prices then are still its last);
+    nothing is asked of Bloomberg."""
+    k = svc.kagitfiyat
+    saved = svc.store.get(kf.KEY_CLOSES)
+    asked = []
+    for name in ("reference", "bdh", "bdp", "history"):
+        if hasattr(svc.provider, name):
+            monkeypatch.setattr(svc.provider, name, lambda *a, _n=name, **kw: asked.append(_n))
+    seen = k._rec_seen
+    try:
+        svc.store.put(kf.KEY_CLOSES, {})
+        k._rec_seen = None
+        got = svc.et.call(k._read, None)
+        assert got["today"] == dt.date(2026, 11, 3)
+        assert k.record_closes(dt.datetime(2026, 11, 3, 17, 0), got) is None                # (before the close: nothing)
+        assert k.record_closes(dt.datetime(2026, 11, 3, 17, 40), got) == "2026-11-03"
+        assert k.record_closes(dt.datetime(2026, 11, 3, 18, 30), got) is None               # (once a day)
+        kept = svc.store.get(kf.KEY_CLOSES)
+        rows = {r["isin"]: r for r in svc.kagit_fiyat(svc.login("Kapanış Kaydı")["user"])["curve_rows"]}
+        assert set(kept["bonds"]) == {c for c, r in rows.items() if r["market"] is not None} and kept["days"] == ["2026-11-03"]
+        day, clean, y, vd, how = kept["bonds"][FIXED][-1]
+        f = rows[FIXED]
+        assert (day, clean, vd, how) == ("2026-11-03", f["market"]["clean"], f["value_date"], "DİBS RV bid / ask ortası")
+        assert y * 100.0 == pytest.approx(f["market"]["yield"], abs=1e-9)
+        # (a weekend: none)
+        assert k.record_closes(dt.datetime(2026, 11, 7, 18, 0), dict(got, today=dt.date(2026, 11, 7))) is None
+        # the day turns with the day before not kept: today's prices kept as its close, at its value date
+        svc.store.put(kf.KEY_CLOSES, {})
+        k._rec_seen = dt.date(2026, 11, 2)
+        assert k.record_closes(dt.datetime(2026, 11, 3, 9, 0), got) == "2026-11-02"
+        b = svc.store.get(kf.KEY_CLOSES)["bonds"][FIXED][-1]
+        assert b[0] == "2026-11-02" and b[1] == f["market"]["clean"] and b[3] == "2026-11-03"
+        assert asked == []
+    finally:
+        k._rec_seen = seen
+        svc.store.put(kf.KEY_CLOSES, saved if saved is not None else {})
 
 
 def test_the_widths_are_the_administrators(svc, seeded):

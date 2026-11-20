@@ -361,12 +361,13 @@ def test_ihale_on_the_replay_day_and_the_values_kept(svc):
     # TLREF / TÜFE: the auction's clean price is t0's, price spreads
     assert rows[TLREF]["t0"] == {"yield": None, "price": 100.5} and rows[TLREF]["bid"]["price"] == pytest.approx(100.45)
     assert rows[CPI]["ask"]["price"] == pytest.approx(91.95) and "t0 fiyatı olarak" in rows[CPI]["how"]
-    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026: a fixed
-    # coupon bond with no closes, the curve alone), said with its typical error
+    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026): its base
+    # now + its spread at its most recent point, DİBS RV's last trade today (on the curve now), said with its typical error
     c = rows["TRT150328T24"]
-    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri" and "why" not in c
-    assert c["curve"]["mark"] == "eğri fiyatı" and res["curve"] == 1 and c["curve"]["err"]["n"] >= 2
-    assert c["how"].startswith("eğri fiyatı: bugünkü ihale listesinde yok → eğri %") and "tipik hata ±" in c["how"]
+    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri + son fark (son işlem 03.11, bugün)" and "why" not in c
+    assert c["curve"]["mark"] == "eğri fiyatı (son fark, son işlem 03.11)" and res["curve"] == 1
+    assert c["how"].startswith("eğri fiyatı (son fark, son işlem 03.11): bugünkü ihale listesinde yok → eğri %") and "tipik hata" in c["how"]
+    assert "DİBS RV 100,200 (valör 04.11; temiz fiyat)" in c["how"] and "şimdiki eğriye göre (bugünkü nokta)" in c["how"]
     assert c["t0"]["yield"] == pytest.approx(c["curve"]["simple"]) and c["bid"]["yield"] == pytest.approx(c["curve"]["simple"] + 0.05)
     # the day's values, desk-wide, per ISIN (date, label, value, .t1 / .t2)
     kept = svc.store.get(fy.KEY_AUCTIONS)
@@ -800,6 +801,45 @@ def test_bbg_in_replay_the_trading_list_from_dibs_rv_the_rest_from_the_last_auct
     # price-quoted: the last auction's price as it is
     t = rows[TLREF]
     assert t["t0"] == {"yield": None, "price": 100.25} and t["bid"]["price"] == pytest.approx(100.20) and "son ihale fiyatı" in t["note"]
+
+
+def test_bloombergs_last_trades_are_kept_per_isin_for_the_curve_price(svc, closes, monkeypatch):
+    """BBG mode: each Bloomberg answer of a bond's last trade (LAST_PRICE, LAST_TRADE_DATE) kept per ISIN in the store,
+    beyond the 5 minutes the answer itself is kept - a later trade replaces it, an earlier one does not -; Kâğıt
+    Fiyatlama's last known spread takes it: the bond missing from an auction text is priced at its bucket's base now +
+    its spread at that trade, on that day's close curve ("eğri fiyatı (son fark, son işlem <day>)")."""
+    from tto import kagitfiyat as kf
+    u = svc.login("Yükleme Son İşlem")["user"]
+    rv = trading(svc, u)
+    code = "TRT110827T16"
+    assert code not in rv and bd.by_isin(code)["kind"] == "fixed"
+    tday = closes["nbr"]
+    said = {"day": tday}
+    fyk = svc.fiyatyukleme
+    monkeypatch.setattr(fyk, "ask_bloomberg", lambda secs, fields=fy.BBG_FIELDS: (
+        {s: {"LAST_PRICE": 96.5, "LAST_TRADE_DATE": said["day"].strftime("%d.%m.%Y")} for s in secs}, len(secs), None))
+    saved = svc.store.get(fy.KEY_TRADES)
+    try:
+        call(svc, u, "ekle", {"isins": code})
+        res = call(svc, u, "hesapla", {"mode": "bbg"})
+        row = next(r for r in res["rows"] if r["isin"] == code)
+        assert row["source"] == "bbg+eğri"                                     # (BBG mode: that trade moved with the curve, as before)
+        kept = svc.store.get(fy.KEY_TRADES)[code]
+        assert (kept["day"], kept["price"], kept["source"]) == (tday.isoformat(), 96.5, "ISL1")
+        said["day"] = tday - dt.timedelta(days=7)                               # (an earlier trade does not replace it)
+        call(svc, u, "hesapla", {"mode": "bbg"})
+        assert svc.store.get(fy.KEY_TRADES)[code]["day"] == tday.isoformat()
+        # missing from an auction text: Kâğıt Fiyatlama's price from that trade - its base now + its spread that day
+        res = call(svc, u, "hesapla", {"mode": "ihale", "text": "06/01/2027.t1   31.500\n"})
+        c = next(r for r in res["rows"] if r["isin"] == code)
+        dd = tday.strftime("%d.%m")
+        assert c["curve"]["mark"] == "eğri fiyatı (son fark, son işlem %s)" % dd and c["curve"]["label"].startswith("eğri + son fark (son işlem %s, " % dd)
+        assert "Bloomberg 96,500" in c["how"] and "o günün kapanış eğrisine göre" in c["how"]
+        q = svc.kagitfiyat.curve_quotes(u, [code])[code]
+        assert q["src"] == "trade" and q["day"] == tday.isoformat() and q["yield"] == c["curve"]["yield"]
+        assert q["age"] == kf.business_days(tday, REPLAY_DAY, svc._swaption_closes(market(svc))[2])
+    finally:
+        svc.store.put(fy.KEY_TRADES, saved if saved is not None else {})
 
 
 def test_bbg_the_newer_of_the_last_trade_and_the_last_auction_is_the_reference(svc, closes):
