@@ -301,13 +301,17 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
 - **Endpoints** (`Service.kagit_fiyat` / `kagit_fiyat_widths`; a `KagitError` is a 400 with the Turkish reason):
   - `GET /api/kagit-fiyat` - `curve_rows` (the main table since 20.11.2026, Eğri fiyatı: every fixed coupon bond, bill
     and zero coupon bond of the desk's list - `bonds.listed` - and of the trading list: `market` today's price - DİBS RV's
-    bid / ask middle or today's last trade, Tüm Kâğıtlar's for the rest -, `curve` the bucket's base - `base_of`: the
+    bid / ask middle or today's last trade, Tüm Kâğıtlar's for the rest -, `base` the bucket's base (`base_of`: the
     Nelson-Siegel now at the bond's cash flows, leave one out for a bond in the fit, and the OIS Bootstrap's zero rate at
-    its maturity by the fair model's weights; `ns`, `ois`, `weights`, `base` its make-up -, `price` the answer with its
-    label - "piyasa", "eğri + son fark <day>", "eğri + akran farkı" (`peers`, `spread`: the median of today's
-    market-priced bonds' spreads to their bases, same bucket and kind group, the bond left out: `_curve_rows` first builds
-    every row, then the peers, then each answer), "eğri" -, `alt` the answer without the market (`tag`: the upload's
-    mark), `diff` market − base; `counts`, `others`: the floaters counted)
+    its maturity by the fair model's weights), `curve` the Eğri column - a fixed coupon bond's Nelson-Siegel, a bill's or
+    zero coupon bond's base; `ns`, `ois`, `weights`, `base` its make-up -, `price` the answer with its label - "piyasa",
+    "eğri + son fark <day>" (any kind with history), else by kind: a fixed coupon bond "eğri" (the curve), a bill / zero
+    "eğri + akran farkı" (`peers`, `spread`: the median of today's market-priced bills' and zero coupon bonds' spreads to
+    their bases in its bucket, the bond left out) or "eğri" (the base alone) -, each with `err` (`bp`, `n`: its rule's
+    typical error) and the "tipik hata" text in `how`; `_curve_rows` first builds every row, then checks the rules on the
+    market-priced rows (`validate` → `error_bands`: arithmetic on the rows' leave-one-out curve, no extra fit), then the
+    peers, then each answer; `alt` the answer without the market (`tag`: the upload's mark), `diff` market − Eğri;
+    `counts`, `others`: the floaters counted)
     and `rows`, the trading list's details as before: fair, Öngörülen (`proj`: each horizon - 5 / 10 / 20 closes -
     its yield, price at the horizon's value date, bp, K/Z, model, record, line; `projection`: the horizons, the default,
     the measured table), the two ASW curves' fair values (`asw`: DİBS Trading's "OIS'e göre" / "FX swap'a göre"), quote,
@@ -315,11 +319,13 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
     desk's list off the trading list: its curve row alone; a floater of the catalog: `why`; an ISIN the desk does not
     have: 400). The horizon switch is the client's (all three come in one answer);
   - `KagitFiyat.curve_quotes(user, isins)` - Kâğıt Fiyat Yükleme's fallback: each bond's `alt` (the base + its own last
-    spread, else + its peers' median spread, else the base), its simple yield at its value date;
-  - `KagitFiyat.validation(user)` - the rule checked on the quotes now (`validate`, `validation_table`): every
-    market-priced bond priced as if it had no price and no history, leave one out (out of the fit and of its peers; each
-    peer's curve refitted without both), errors per bucket and kind group, before (the curve alone) and after; no route
-    (a check run on a database copy, numbers in desk-decisions);
+    spread; else a fixed coupon bond's curve, a bill's base + its peers' median spread or the base), its simple yield at
+    its value date, its typical error;
+  - `KagitFiyat.validation(user)` - the rules checked on the quotes now, the same check the typical errors come from
+    (`validate`, `validation_table`, `error_bands`): every market-priced bond priced as if it had no price, leave one
+    out (its curve the fit without it, out of its peers), errors per rule, bucket and kind group - the curve alone, the
+    rule in use without history, its own last spread; no route (a check run on a database copy, numbers in
+    desk-decisions);
   - `POST /api/kagit-fiyat/genislik` `{"widths": {"1y": 10, "3y": …}}` - administrators only (403 otherwise).
 - **Threads.** `_read` (engine thread, short): DİBS RV's rows, the yields now (`quantcurve.read_engine`), each row's
   price ↔ yield inputs (P, CU, CW, DR, the cash flows), Bloomberg's bid / ask, the Broker Chat board, the TRY OIS
@@ -372,8 +378,8 @@ cost in [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy
   (`_curve_fallback`) takes Kâğıt Fiyatlama's curve price (`KagitFiyat.curve_quotes`: its engine read, its closes' part and
   fit of the quotes now, all kept there - no curve code here): its simple yield at its value date as t0's, the row's
   spreads on it; `source` "eğri", `curve` its label, `mark` ("eğri fiyatı (son fark)" / "eğri fiyatı (akran farkı)" /
-  "eğri fiyatı") and figures, `how` "<mark>: <why no price> → <how>"; the answer's `curve` counts them. Price-quoted
-  bonds, Eurobonds and fixed rows never reach it.
+  "eğri fiyatı"), figures and `err`, `how` "<mark>: <why no price> → <how, its typical error in it>"; the answer's
+  `curve` counts them. Price-quoted bonds, Eurobonds and fixed rows never reach it.
 - **Eurobonds** (kind `euro`): records of their own (`FiyatYukleme.record` → kv `fiyatyukleme.eurobonds`), split off in
   `calculate` and priced by `_euro` in either mode; `Street` is the street-convention price ↔ yield (Excel's PRICE / YIELD),
   `anchored` ties it to Bloomberg's mid. `POST /api/fiyat-yukleme/cevir` takes a Eurobond's `settle` and `anchor` (the row's,

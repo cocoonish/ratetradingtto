@@ -1302,11 +1302,12 @@ class FiyatYukleme(object):
         """Eğri fiyatı (the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl"): a yield-quoted
         bond (fixed coupon, bill, zero coupon) that would get no price - no trade and no auction kept, or missing from today's
         auction text - gets its curve price, Kâğıt Fiyatlama's "Fiyat" when it is not the market's (``KagitFiyat.curve_quotes``:
-        its bucket's base + its own last spread to it, else + the median spread of today's market-priced bonds of its bucket
-        and kind group, else the base alone), its simple yield at its value date taken as t0's (as an auction line's is) and
-        the row's spreads on it as on any yield-quoted bond; marked "eğri fiyatı (son fark)" / "eğri fiyatı (akran farkı)" /
-        "eğri fiyatı" with how, so the desk sees it before saving.  Price-quoted bonds, Eurobonds and fixed prices are not
-        here.  How many rows."""
+        its bucket's base + its own last spread to it; else a fixed coupon bond's curve, a bill's or zero coupon bond's base +
+        the median spread of today's market-priced bills and zero coupon bonds of its bucket, or the base alone), its simple
+        yield at its value date taken as t0's (as an auction line's is) and the row's spreads on it as on any yield-quoted
+        bond; marked "eğri fiyatı (son fark)" / "eğri fiyatı (akran farkı)" / "eğri fiyatı" with how - its typical error in
+        it -, so the desk sees it before saving.  Price-quoted bonds, Eurobonds and fixed prices are not here.  How many
+        rows."""
         todo = [(row, rec) for row, (_, rec) in zip(out_rows, pairs)
                 if not row.get("priced") and rec.get("kind") in YIELD_KINDS and self._why_not(rec) is None]
         if not todo:
@@ -1332,7 +1333,7 @@ class FiyatYukleme(object):
             mark = "eğri fiyatı (%s)" % q["tag"] if q.get("tag") else "eğri fiyatı"
             row["source"] = "eğri"
             row["curve"] = {"label": q["label"], "mark": mark, "yield": q["yield"], "simple": q["simple"], "clean": q["clean"],
-                            "value_date": q["value_date"]}
+                            "err": q.get("err"), "value_date": q["value_date"]}
             row["how"] = "%s: %s → %s → t0 basit getirisi %%%s (valöründeki getiri)" % (mark, why, q["how"], _n(q["simple"], 3))
             n += 1
         return n

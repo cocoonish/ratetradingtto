@@ -696,21 +696,28 @@ Its main job is a **curve price for bonds that have no price of their own**. The
     cash flows by BIST's rules otherwise) and source. The middle of a two-sided quote (a side where no order stands is
     "–"), else today's last trade, else "—". The trading list's from DİBS RV (bid `K`, ask `L`, last `AS` / `I`); the
     others from Tüm Kâğıtlar (`EK_EVREN` `I`, `J`, `K`, `L`): cells the pages already ask for, no new Bloomberg request.
-  - **Eğri**: the bond's **bucket base**, with the fair model's weights (`WEIGHTS`, `base_of`): ≤ 1Y 75 % the TRY OIS
-    zero rate (the Bootstrap, at the bond's maturity) + 25 % the Nelson-Siegel curve; 1–5Y the curve; 5Y+ 75 % the curve
-    + 25 % OIS (a base that cannot be had gives its share to the other). The curve: the Nelson-Siegel fitted now to the
-    bonds with prices (Kâğıt Fiyatlama's live fit, the same as before) at the bond's own cash flows from its value date; a
-    bond in the fit is read on the fit without it (leave one out), a bill / zero and a bond off the fit on the curve of all
-    of them.
-  - **Fiyat**, with its label: the market price ("**piyasa**"); else the base + the bond's own last spread to that base
-    ("**eğri + son fark <dd.mm>**": the desk's history showed the last spread the best predictor; for a bond of the
-    trading list this is its adil in the details); else - no history of its own - the base + the median spread to their
-    bases of today's market-priced bonds of the same bucket and kind group, the bond itself left out ("**eğri + akran
-    farkı**"; bills and zero coupon bonds one group, fixed coupon bonds another; the how line names the peers' number and
-    the median, e.g. "OIS %75 + eğri %25 … + akran farkı −613 bp (2 bono / kuponsuz …)"); else - no peer priced - the base
-    alone ("**eğri**", with the warning that no peer was priced). As compound and simple yield and a clean price at the
-    bond's value date.
-  - **Fark**: market − base (bp), when there is a market price.
+  - **The curve**: the Nelson-Siegel fitted now to the bonds with prices (Kâğıt Fiyatlama's live fit, the same as before)
+    at the bond's own cash flows from its value date; a bond in the fit is read on the fit without it (leave one out), a
+    bill / zero and a bond off the fit on the curve of all of them. **The bucket base**, with the fair model's weights
+    (`WEIGHTS`, `base_of`): ≤ 1Y 75 % the TRY OIS zero rate (the Bootstrap, at the bond's maturity) + 25 % the curve;
+    1–5Y the curve; 5Y+ 75 % the curve + 25 % OIS (a base that cannot be had gives its share to the other).
+  - **Eğri** (the column): a fixed coupon bond's curve; a bill's or zero coupon bond's bucket base.
+  - **Fiyat**, with its label: the market price ("**piyasa**"); else the base + the bond's own last spread to that base,
+    whatever its kind ("**eğri + son fark <dd.mm>**": the desk's history showed the last spread the best predictor; for a
+    bond of the trading list this is its adil in the details); else - no history of its own - **by its kind**:
+    - a fixed coupon bond: the curve alone ("**eğri**");
+    - a bill or zero coupon bond: the base + the median spread to their bases of today's market-priced bills and zero
+      coupon bonds of its bucket, the bond itself left out ("**eğri + akran farkı**"; the how line names the peers' number
+      and the median, e.g. "OIS %75 + eğri %25 … + akran farkı −613 bp (2 bono / kuponsuz …)"); none priced: the base
+      alone ("**eğri**", with the warning that no peer was priced).
+
+    As compound and simple yield and a clean price at the bond's value date.
+  - **Tipik hata** on every curve-priced row (`validate`, `error_bands`, `error_text`): "tipik hata ±X bp", X the median
+    absolute error of the row's rule on today's market-priced bonds of its bucket and kind group, each priced without its
+    own quote (the curve on the fit without it; a bill off the other bills; "son fark": today's base + its spread at the
+    last close). Measured live on every page answer (arithmetic on the rows: no extra fit); on fewer than 2 bonds
+    "tipik hata ölçülemedi". In the how line, so in the Fiyat cell's tooltip, the card's line and the upload's row.
+  - **Fark**: market − Eğri (bp), when there is a market price.
   - **▸ details**: everything the page showed before (adil, kota, iyi seviyeler, σ, isabet, öngörülen, OIS'e / FX swap'a
     göre, the "nasıl fiyatlandı" lines), the same cells and numbers, closed by default; a bond off the trading list has
     none (said).
@@ -721,11 +728,12 @@ Its main job is a **curve price for bonds that have no price of their own**. The
   off the trading list: that line alone.
 - **Kâğıt Fiyat Yükleme's fallback** (`FiyatYukleme._curve_fallback`), in İhale and BBG mode: a yield-quoted row (fixed
   coupon, bill, zero coupon) that would get no price - no trade and no auction kept, or missing from today's auction
-  text - gets the curve price: the "Fiyat" column's answer without the market (the base + the bond's own last spread,
-  else + its peers' median spread, else the base). Its simple yield at its value date is taken as t0's, as an auction
-  line's is; its spreads then apply as for any yield-quoted bond. The row says which - "**eğri fiyatı (son fark)**",
-  "**eğri fiyatı (akran farkı)**", or "**eğri fiyatı**" on the base alone - with the how line, so the desk sees it before
-  saving. Price-quoted bonds and Eurobonds are unchanged; fixed prices still win.
+  text - gets the curve price: the "Fiyat" column's answer without the market (the base + the bond's own last spread;
+  else a fixed coupon bond's curve, a bill's base + its peers' median spread, or the base). Its simple yield at its value
+  date is taken as t0's, as an auction line's is; its spreads then apply as for any yield-quoted bond. The row says
+  which - "**eğri fiyatı (son fark)**", "**eğri fiyatı (akran farkı)**", or "**eğri fiyatı**" (a fixed coupon bond's
+  curve, a bill's base alone) - with the how line and its typical error, so the desk sees it before saving. Price-quoted
+  bonds and Eurobonds are unchanged; fixed prices still win.
 
 **Conventions settled while building it** (ask before changing):
 
@@ -734,42 +742,48 @@ Its main job is a **curve price for bonds that have no price of their own**. The
   its series - a bond once on the list, named as DİBS RV named it ("<ISIN> @<source> ISIN", "<ISIN> ISIN") - measured at
   its last close on that day's curve of the trading list's closes (not in that fit) and that day's OIS zero rate at its
   maturity (Motor's bootstrap of that day's closes), its convention the trading list's bonds' of its kind. The desk copy
-  has no such series: there, a bond off the list takes its peers' spread.
-- The peers are today's market-priced bonds only (the main table's Piyasa), their spreads to their own bases now; their
-  history is not used.
-- A bond with a market price still has the upload's curve price (the base + its last spread, else its peers'): the
+  has no such series: there, a bond off the list is priced by its kind.
+- The peers are today's market-priced bills and zero coupon bonds only (the main table's Piyasa), their spreads to their
+  own bases now; their history is not used. Fixed coupon bonds have no peers.
+- A bond with a market price still has the upload's curve price (the base + its last spread, else its kind's rule): the
   upload never takes the market from here.
 - A bond off the trading list is dated as Tüm Kâğıtlar dates it: bills and zero coupon bonds on its source `C2` (ISL0: the
   same day), the others on `E2` (ISL1: the next week day).
 - A fixed coupon bond of the catalog without a coupon gets a row with no price and why ("kuponu bilinmiyor").
 
-**The bills fix: bucket base + peer spread** (the coordinator, 20.11.2026, on the bias flagged at the first build: a bill
-or zero coupon bond with no history was read on the coupon bonds' curve alone - its short end - and came out 136–255 bp
-too high in yield, a price the upload would have published). The rule above: the bucket base with the fair model's
-constants, the bond's own last spread to it when it has one, else its peers' median spread. **Validated** on the desk
-copy (replay day 03.11.2026; `KagitFiyat.validation` / `validate`): every market-priced bond priced as if it had no price
-and no history, leave one out - itself out of the Nelson-Siegel fit and out of its peers, each peer's curve also fitted
-without it and without the peer. Absolute error against its market yield (compound), bp, median / max:
+**How the rule by kind was decided** (the coordinator, 20.11.2026). The first build read every bond with no price and no
+history on the coupon bonds' curve alone: bills and zero coupon bonds came out 136–255 bp too high in yield (the curve's
+short end), a price the upload would have published. A bucket base + peer spread rule was then built for every kind and
+validated; it fixed the bills and made every fixed coupon bucket worse. The validation decided it: **bills and zero coupon
+bonds take the bucket base + their peers' spread, fixed coupon bonds the pure leave-one-out curve**; "eğri + son fark"
+stays for any bond with history. No other tuning.
 
-| Bucket, kind | Bonds | Before: the curve alone | After: base + peers' median |
-|---|---|---|---|
-| ≤ 1Y, bills / zero coupon | 2 | 196 / 256 | 43 / 43 |
-| ≤ 1Y, fixed coupon | 4 | 76 / 104 | 206 / 242 |
-| 1–3Y, fixed coupon | 3 | 23 / 39 | 27 / 51 |
-| 3–5Y, fixed coupon | 3 | 96 / 139 | 126 / 195 |
-| 5Y+, fixed coupon | 3 | 56 / 165 | 131 / 177 |
+**Validation** on the desk copy (replay day 03.11.2026; `KagitFiyat.validation`, the same check the page runs live for the
+typical errors): every market-priced bond priced as if it had no price and no history - itself out of the Nelson-Siegel
+fit and out of its peers. Absolute error against its market yield (compound), bp, median / max:
 
-- **Bills: fixed.** 196 / 256 bp → 43 / 43 bp (each bill's one peer is the other bill: TRB100227T13 +136 → −43, TRB170327T15
-  +255 → +43). The bills trade about 600 bp under their OIS-heavy base (−592, −635 bp), so the median carries it.
-- **Fixed coupon bonds: not fixed - worse.** ≤ 1Y 76 / 104 → 206 / 242, 3–5Y 96 / 139 → 126 / 195, 5Y+ 56 / 165 →
-  131 / 177; 1–3Y about the same (23 / 39 → 27 / 51). Their peers are 2–3 bonds whose spreads to the base are far apart:
-  ≤ 1Y −153, −168, −366, −407 bp (the Feb / May 2027 bonds near −400, the Jul / Oct 2027 ones near −160); 3–5Y −96 … +139;
-  5Y+ −125 … +118. The median of so few, so spread out, misses by more than the curve alone did.
-- Per the coordinator's instruction ("If they don't, say so plainly rather than tune") the rule was **not tuned**; the
-  numbers are as they came out. A fixed coupon bond with no price and no history (on the desk copy: the ones off the
-  trading list) is therefore priced with an error that is, on this sample, larger than the curve alone gave.
+| Bucket, kind | Bonds | Rule in use | Before: the curve alone | Final |
+|---|---|---|---|---|
+| ≤ 1Y, bills / zero coupon | 2 | base + peers' median | 196 / 256 | 43 / 43 |
+| ≤ 1Y, fixed coupon | 4 | the curve | 76 / 104 | 76 / 104 |
+| 1–3Y, fixed coupon | 3 | the curve | 23 / 39 | 23 / 39 |
+| 3–5Y, fixed coupon | 3 | the curve | 96 / 139 | 96 / 139 |
+| 5Y+, fixed coupon | 3 | the curve | 56 / 165 | 56 / 165 |
 
-Code: `tto/kagitfiyat.py` (`market_of`, `base_of`, `peer_spread`, `validate`, `validation_table`, `_universe`,
+- **Bills:** 196 / 256 → 43 / 43 bp (each bill's one peer is the other bill: TRB100227T13 +136 → −43, TRB170327T15 +255
+  → +43). The bills trade about 600 bp under their OIS-heavy base (−592, −635 bp), so the median carries it.
+- **Fixed coupon bonds:** the peer rule tried on them was worse in every bucket - ≤ 1Y 206 / 242, 1–3Y 27 / 51, 3–5Y
+  126 / 195, 5Y+ 131 / 177 (each peer's curve also fitted without the bond and the peer). Their peers were 2–3 bonds whose
+  spreads to the base were far apart (≤ 1Y −153, −168, −366, −407 bp; 3–5Y −96 … +139; 5Y+ −125 … +118). They keep the
+  curve alone; its error stands as above (≤ 1Y and 3–5Y near 100 bp: the typical error says so on each row).
+- **"Son fark"** (a bond with its own history: today's base + its spread at the last close, against today's market), the
+  same day: ≤ 1Y bills 35 / 50 (2), ≤ 1Y fixed coupon 18 / 112 (4), 1–3Y 5 / 11 (3), 3–5Y 21 / 25 (3), 5Y+ 14 / 16 (3).
+- On the desk copy the main table's answers: piyasa 15, eğri + son fark 1, eğri + akran farkı 2, eğri 11. E.g.
+  TRT060127T10 (zero coupon, no history): OIS %75 + eğri %25 40,80 + akran farkı −613 bp (2) = 34,66 · tipik hata ±43 bp;
+  TRT240227T17 (fixed, off the list): eğri 36,32 · tipik hata ±76 bp; TRT081128T15 (trading list, no price): eğri 39,90 +
+  son fark −49 bp = 39,41 · tipik hata ±5 bp.
+
+Code: `tto/kagitfiyat.py` (`market_of`, `base_of`, `peer_spread`, `validate`, `error_bands`, `error_text`, `validation_table`, `_universe`,
 `_curve_rows`, `_curve_row`, `_answer`, `validation`, `_off_closes`, `_off_spreads`, `curve_quotes`),
 `tto/fiyatyukleme.py` (`_curve_fallback`), `tto/static/js/pages/kagitfiyat.js`, `tto/static/js/kagitblock.js`
 (`curveLine`), `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_kagitfiyat.py`, `tests/test_fiyatyukleme.py`, the

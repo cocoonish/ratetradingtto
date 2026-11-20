@@ -361,12 +361,12 @@ def test_ihale_on_the_replay_day_and_the_values_kept(svc):
     # TLREF / TÜFE: the auction's clean price is t0's, price spreads
     assert rows[TLREF]["t0"] == {"yield": None, "price": 100.5} and rows[TLREF]["bid"]["price"] == pytest.approx(100.45)
     assert rows[CPI]["ask"]["price"] == pytest.approx(91.95) and "t0 fiyatı olarak" in rows[CPI]["how"]
-    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026: no closes,
-    # its base + its peers' median spread), said
+    # a bond of the list not in the text: no price of its own - its curve price (Kâğıt Fiyatlama's, 20.11.2026: a fixed
+    # coupon bond with no closes, the curve alone), said with its typical error
     c = rows["TRT150328T24"]
-    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri + akran farkı" and "why" not in c
-    assert c["curve"]["mark"] == "eğri fiyatı (akran farkı)" and res["curve"] == 1
-    assert c["how"].startswith("eğri fiyatı (akran farkı): bugünkü ihale listesinde yok → eğri %") and "+ akran farkı " in c["how"]
+    assert c["priced"] and c["source"] == "eğri" and c["curve"]["label"] == "eğri" and "why" not in c
+    assert c["curve"]["mark"] == "eğri fiyatı" and res["curve"] == 1 and c["curve"]["err"]["n"] >= 2
+    assert c["how"].startswith("eğri fiyatı: bugünkü ihale listesinde yok → eğri %") and "tipik hata ±" in c["how"]
     assert c["t0"]["yield"] == pytest.approx(c["curve"]["simple"]) and c["bid"]["yield"] == pytest.approx(c["curve"]["simple"] + 0.05)
     # the day's values, desk-wide, per ISIN (date, label, value, .t1 / .t2)
     kept = svc.store.get(fy.KEY_AUCTIONS)
@@ -517,10 +517,11 @@ def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
 def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc, monkeypatch):
     """(the desk, 20.11.2026: "curve'e göre fiyatı olmayanların da fiyatını bulmak içindi asıl") A yield-quoted bond that
     would get no price - missing from today's auction text (İhale), no trade and no auction kept (BBG) - gets Kâğıt
-    Fiyatlama's curve price (its "Fiyat" when not the market's: here, no closes, its bucket's base + the median spread of
-    its market-priced peers), its simple yield at its value date as t0's, the row's own spreads on it, marked "eğri fiyatı
-    (akran farkı)" - "(son fark)" on its own last spread, "eğri fiyatı" on the base alone - with how; a price-quoted bond
-    does not (no price, why); a fixed price still wins; the file takes the curve rows as any yield-quoted ones."""
+    Fiyatlama's curve price (its "Fiyat" when not the market's: here, no closes, a fixed coupon bond's curve alone, a zero
+    coupon bond's bucket base + the median spread of the market-priced bills), its simple yield at its value date as t0's,
+    the row's own spreads on it, marked "eğri fiyatı" / "eğri fiyatı (akran farkı)" - "(son fark)" on its own last spread -
+    with how and its typical error; a price-quoted bond does not (no price, why); a fixed price still wins; the file takes
+    the curve rows as any yield-quoted ones."""
     u = svc.login("Yükleme Eğri")["user"]
     off, zero2, fixed_one = "TRT090627T12", "TRT210427T18", "TRT110827T16"
     kept = svc.store.get(fy.KEY_AUCTIONS) or {}
@@ -531,16 +532,18 @@ def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc, monkeypatc
         call(svc, u, "ayar", {"spreads": {off: {"bid": "7", "ask": "3"}}})
         call(svc, u, "sabit", {"isin": fixed_one, "bid": "88,5", "ask": "88,9"})
         quotes = svc.kagitfiyat.curve_quotes(u, [off, zero2])
-        assert quotes[off]["label"] == quotes[zero2]["label"] == "eğri + akran farkı" and quotes[zero2]["value_date"] == "2026-11-03"
-        assert quotes[off]["tag"] == quotes[zero2]["tag"] == "akran farkı" and "sabit kuponlu" in quotes[off]["how"] and "bono / kuponsuz" in quotes[zero2]["how"]
+        assert (quotes[off]["label"], quotes[zero2]["label"]) == ("eğri", "eğri + akran farkı") and quotes[zero2]["value_date"] == "2026-11-03"
+        assert (quotes[off]["tag"], quotes[zero2]["tag"]) == (None, "akran farkı") and "bono / kuponsuz" in quotes[zero2]["how"]
+        assert all("tipik hata ±" in quotes[k]["how"] for k in (off, zero2))
+        marks = {off: "eğri fiyatı", zero2: "eğri fiyatı (akran farkı)"}
         for mode in ("ihale", "bbg"):
             res = call(svc, u, "hesapla", {"mode": mode, "text": "06/01/2027.t1   31.500\n"})
             rows = {r["isin"]: r for r in res["rows"]}
             for code in (off, zero2):
                 r, q = rows[code], quotes[code]
                 assert r["priced"] and r["source"] == "eğri" and r["curve"]["label"] == q["label"] and "why" not in r, (mode, code, r)
-                assert r["t0"]["yield"] == pytest.approx(q["simple"]) and r["curve"]["mark"] == "eğri fiyatı (akran farkı)", (mode, r["curve"])
-                assert r["how"].startswith("eğri fiyatı (akran farkı): ") and q["how"] in r["how"], (mode, r["how"])
+                assert r["t0"]["yield"] == pytest.approx(q["simple"]) and r["curve"]["mark"] == marks[code], (mode, r["curve"])
+                assert r["how"].startswith(marks[code] + ": ") and q["how"] in r["how"] and r["curve"]["err"] == q["err"], (mode, r["how"])
             o = rows[off]
             assert ("bugünkü ihale listesinde yok" if mode == "ihale" else "kayıtlı ihale fiyatı yok") in o["how"]
             assert o["bid"]["yield"] == pytest.approx(quotes[off]["simple"] + 0.07) and o["ask"]["yield"] == pytest.approx(quotes[off]["simple"] - 0.03)
@@ -779,7 +782,8 @@ def test_bbg_in_replay_the_trading_list_from_dibs_rv_the_rest_from_the_last_auct
     assert ot["priced"] and ot["source"] == "bbg+eğri" and ("DİBS RV son işlem %s" % fy.tr_day(tday)) in ot["how"], ot
     # neither a trade (nothing asked in replay) nor an auction: its curve price (Kâğıt Fiyatlama's), why said in its how
     na = rows[no_auction]
-    assert na["priced"] and na["source"] == "eğri" and "kayıtlı ihale fiyatı yok" in na["how"] and na["how"].startswith("eğri fiyatı (")
+    assert na["priced"] and na["source"] == "eğri" and "kayıtlı ihale fiyatı yok" in na["how"] and na["how"].startswith("eğri fiyatı: ")
+    assert "tipik hata" in na["how"]                                    # (a fixed coupon bond, no closes: the curve alone)
     assert "Bloomberg yok" in na["note"] and res["curve"] >= 1
     # off the list, no Bloomberg: the last auction + the bond curve's move since that day's close (the coupon bonds' closes 50 bp
     # higher then: the curve's short end, where no coupon bond is, moves less - test_the_curves_move_measured_directly)

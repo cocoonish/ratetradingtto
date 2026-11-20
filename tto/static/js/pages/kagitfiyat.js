@@ -18,12 +18,15 @@ const REST_SPAN = 11;                                  // …and nothing over th
 const ASW = [['ois', "OIS'e göre"], ['fx', "FX swap'a göre"]];
 const MAIN_COLS = 14;                                  // the main table's columns (a bond's details span them)
 const HEAD_LINE = 'Fiyatı olmayan kâğıtlara eğriden fiyat: masanın listesindeki her sabit kuponlu, bono ve kuponsuz kâğıt. Fiyat: bugün '
-  + 'piyasa fiyatı varsa o (piyasa: iki taraflı kotanın ortası ya da bugünkü son işlem); yoksa eğri + kâğıdın son kapanıştaki eğriye farkı '
-  + '(eğri + son fark: masanın geçmişinde en iyi tahmin); geçmişi yoksa eğri + aynı vade kovasında bugün piyasa fiyatlı akranlarının (bono / '
-  + 'kuponsuz bir arada, sabit kuponlu ayrı) eğriye farklarının medyanı (eğri + akran farkı); akranı da yoksa eğri. Eğri, vade kovasına göre: '
-  + '1 yıla kadar %75 OIS sıfır faizi + %25 Nelson-Siegel, 1–5 yıl Nelson-Siegel, 5 yıl üstü %75 Nelson-Siegel + %25 OIS (adil getirinin '
-  + 'ağırlıkları); Nelson-Siegel fiyatı olan kâğıtlara şimdi uydurulur, kâğıdın kendi nakit akışlarında (uydurmadaki kâğıt kendisi dışarıda). '
-  + 'Getiriler BIST bileşik, fiyat valörde temiz. ▸ ayrıntılar: adil, kota, iyi seviyeler, σ, geri test, öngörülen, OIS\'e / FX swap\'a göre.';
+  + 'piyasa fiyatı varsa o (piyasa: iki taraflı kotanın ortası ya da bugünkü son işlem); yoksa vade kovasının tabanı + kâğıdın son kapanışta '
+  + 'tabana farkı (eğri + son fark: masanın geçmişinde en iyi tahmin). Kendi geçmişi de yoksa: sabit kuponlu Nelson-Siegel eğrisinden (eğri); '
+  + 'bono ve kuponsuz taban + aynı kovada bugün piyasa fiyatlı bono / kuponsuzların tabana farklarının medyanı (eğri + akran farkı; akran '
+  + 'yoksa taban). Taban, kovaya göre (adil getirinin ağırlıkları): 1 yıla kadar %75 OIS sıfır faizi + %25 Nelson-Siegel, 1–5 yıl '
+  + 'Nelson-Siegel, 5 yıl üstü %75 Nelson-Siegel + %25 OIS. Nelson-Siegel fiyatı olan kâğıtlara şimdi uydurulur, kâğıdın kendi nakit '
+  + 'akışlarında (uydurmadaki kâğıt kendisi dışarıda). Eğri sütunu: sabit kuponluda Nelson-Siegel, bono / kuponsuzda taban. Her eğri '
+  + 'fiyatının tipik hatası nasıl satırında: o kural bugün piyasa fiyatlı aynı kova ve türdeki kâğıtlara, her biri kendisi dışarıda '
+  + 'uygulanınca piyasadan sapmanın medyanı (2\'den az kâğıtta ölçülemedi). Getiriler BIST bileşik, fiyat valörde temiz. ▸ ayrıntılar: '
+  + 'adil, kota, iyi seviyeler, σ, geri test, öngörülen, OIS\'e / FX swap\'a göre.';
 
 function panel(id, title, note) {
   const body = h('div', { class: 'body' });
@@ -146,12 +149,12 @@ export class KagitFiyatPage {
     const g = (text, span, tip) => h('th', { class: 'kf-g kf-sep', colspan: String(span), title: tip || null }, text);
     t.appendChild(h('tr', { class: 'kf-main-groups' }, g('Kâğıt', 4), g('Piyasa', 3, 'Bugünkü piyasa fiyatı: iki taraflı kotanın ortası ya da bugünkü son '
         + 'işlem (trading listesi: DİBS RV; diğerleri: Tüm Kâğıtlar) - getirisi ve temiz fiyatı'),
-      g('Eğri', 2, 'Vade kovasının tabanı (adil getirinin ağırlıkları): 1 yıla kadar %75 OIS sıfır faizi + %25 Nelson-Siegel, 1–5 yıl Nelson-Siegel, '
-        + '5 yıl üstü %75 Nelson-Siegel + %25 OIS. Nelson-Siegel fiyatı olan kâğıtlara şimdi uydurulur, kâğıdın kendi nakit akışlarında (uydurmadaki '
-        + 'kâğıt için kendisi dışarıda bırakılarak)'),
-      g('Fiyat', 3, 'Cevap: piyasa fiyatı varsa o; yoksa eğri + kâğıdın son kapanıştaki eğriye farkı (son fark); geçmişi yoksa eğri + aynı vade '
-        + 'kovasında bugün piyasa fiyatlı akranlarının eğriye farklarının medyanı (akran farkı; bono / kuponsuz bir arada, sabit kuponlu ayrı); '
-        + 'akranı da yoksa eğri'), g('Fark', 1), g('', 1)));
+      g('Eğri', 2, 'Sabit kuponlu: fiyatı olan kâğıtlara şimdi uydurulan Nelson-Siegel eğrisi, kâğıdın kendi nakit akışlarında (uydurmadaki kâğıt '
+        + 'için kendisi dışarıda bırakılarak). Bono / kuponsuz: vade kovasının tabanı (adil getirinin ağırlıkları: 1 yıla kadar %75 OIS sıfır '
+        + 'faizi + %25 Nelson-Siegel, 1–5 yıl Nelson-Siegel, 5 yıl üstü %75 Nelson-Siegel + %25 OIS)'),
+      g('Fiyat', 3, 'Cevap: piyasa fiyatı varsa o; yoksa vade kovasının tabanı + kâğıdın son kapanışta tabana farkı (son fark); kendi geçmişi '
+        + 'yoksa sabit kuponluda eğri, bono / kuponsuzda taban + aynı kovada bugün piyasa fiyatlı bono / kuponsuzların tabana farklarının medyanı '
+        + '(akran farkı; akran yoksa taban). Üzerine gelince nasıl kurulduğu ve tipik hatası'), g('Fark', 1), g('', 1)));
     const heads = [['', ''], ['Kâğıt', 'l'], ['ISIN', 'l'], ['Vade', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Kaynak', 'l'],
       ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Nereden', 'l'], ['bp', 'kf-sep'], ['Kart', '']];
     t.appendChild(h('tr', { class: 'kf-main-heads' }, ...heads.map(([x, c]) => h('th', { class: c || null }, x))));
@@ -181,7 +184,7 @@ export class KagitFiyatPage {
     const m = r.market, cv = r.curve, p = r.price;
     const mTip = m ? m.source + ': temiz ' + px(m.clean) + ' → getiri ' + yld(m.yield) + ' (bileşik), ' + yld(m.simple) + ' (basit) · valör ' + day(r.value_date)
       : 'Bugün piyasa fiyatı yok (iki taraflı kota da bugünkü işlem de yok)';
-    const cTip = cv ? 'Eğri (' + cv.base + (cv.base !== 'eğri' ? ': Nelson-Siegel ' + yld(cv.ns) + (isNum(cv.ois) ? ', OIS ' + yld(cv.ois) : '') : '') + '): '
+    const cTip = cv ? 'Eğri (' + (cv.base !== 'eğri' ? 'taban ' + cv.base + ': Nelson-Siegel ' + yld(cv.ns) + (isNum(cv.ois) ? ', OIS ' + yld(cv.ois) : '') : 'Nelson-Siegel') + '): '
       + cv.fit + ' · getiri ' + yld(cv.yield) + ' (bileşik), ' + yld(cv.simple) + ' (basit) · temiz ' + px(cv.clean)
       + ' (valör ' + day(r.value_date) + ')' : (r.curve_why || 'eğri yok');
     const pTip = p ? (p.how || '') : (r.why || 'fiyatı yok');
@@ -191,7 +194,7 @@ export class KagitFiyatPage {
       cell(cv ? yld(cv.yield) : '—', { cls: 'kf-crv-y kf-sep' + (cv ? '' : ' soft'), tip: cTip }), cell(cv ? px(cv.clean) : '—', { cls: 'kf-crv-p' + (cv ? '' : ' soft'), tip: cTip }),
       cell(p ? yld(p.yield) : '—', { cls: 'b kf-px-y kf-sep', tip: pTip }), cell(p ? px(p.clean) : '—', { cls: 'b kf-px-p', tip: pTip }),
       cell(p ? p.label : (r.why || 'fiyatı yok'), { cls: 'l kf-px-label kf-lab-' + (p ? p.kind : 'none'), tip: pTip }),
-      cell(isNum(r.diff) ? bp(r.diff) : '', { cls: 'kf-diff kf-sep', tip: 'Piyasa − eğri (bp, bileşik getiri)' }),
+      cell(isNum(r.diff) ? bp(r.diff) : '', { cls: 'kf-diff kf-sep', tip: 'Piyasa − Eğri sütunu (bp, bileşik getiri)' }),
       cell('kart', { cls: 'act cardlink', tip: 'Kâğıt kartı: ' + r.isin }));
     t.appendChild(tr);
     const det = h('tr', { class: 'kf-detail' + (isOpen ? '' : ' kf-closed') });
