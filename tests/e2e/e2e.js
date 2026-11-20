@@ -3440,6 +3440,55 @@ async function clipAfter(page, action) {
       && mutedLine && mutedLine.by_name === 'Ayşe Yılmaz' && /^kendisi için 15 dk susturdu/.test(mutedLine.text), [forMehmet.open, forAyse.open, silent, mutedLine]);
     await page.locator('#watch-desk').scrollIntoViewIfNeeded();
     await shot(page, 'masa-alarmlari');
+    // the alarm's sound (the desk, 20.11.2026: "Yeni sinyal gelince de ötüyordu makine, bugün görmedim"): Chrome / Edge play
+    // nothing on a tab nobody has clicked yet, and a sound context made then stays silent for good. A fresh tab of the same
+    // session (nothing evaluated on it before the ring: that would count as a click) - its sound contexts and toasts told by
+    // the page itself on its console
+    const sesPage = await ctxA.newPage();
+    const sesLog = [];
+    sesPage.on('console', (m) => sesLog.push(m.text()));
+    await sesPage.addInitScript(() => {
+      const Real = window.AudioContext;
+      if (Real) {
+        window.AudioContext = class extends Real {
+          constructor(...a) { super(...a); console.log('tto-ses:yeni:' + this.state); setTimeout(() => console.log('tto-ses:sonra:' + this.state), 500); }
+        };
+      }
+      document.addEventListener('DOMContentLoaded', () => {
+        const box = document.getElementById('toasts');
+        if (box) {
+          new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1) console.log('tto-ses:toast:' + n.textContent); })))
+            .observe(box, { childList: true });
+        }
+      });
+    });
+    const sesFirstLook = sesPage.waitForResponse((r) => r.url().includes('/api/alarms/fired'), { timeout: 30000 });
+    await sesPage.goto(BASE + '/#/watch');
+    await sesFirstLook;
+    await sesPage.waitForTimeout(1500);
+    const sesSaw = async (re) => {
+      for (let i = 0; i < 80 && !sesLog.some((x) => re.test(x)); i++) await sesPage.waitForTimeout(250);
+      return sesLog.some((x) => re.test(x));
+    };
+    const sesAlarm = async (tenor) => (await api(page, 'ayşe yilmaz', 'POST', '/api/alarms/add',
+      { subject: { kind: 'ois', tenor }, op: '>=', level: '1', desk: true, label: 'Ses ' + tenor })).json.alarm;
+    const sesA1 = await sesAlarm('2Y');
+    const sesRang1 = await sesSaw(/^tto-ses:toast:.*MASA ALARMI · Ses 2Y/);
+    const sesHint = await sesSaw(/^tto-ses:toast:🔇 Bu sekmede alarm sesi kapalı: .*sayfaya bir kez tıklayın/);
+    const sesBefore = sesLog.filter((x) => x.startsWith('tto-ses:yeni:')).length;
+    await sesPage.click('#page-title');
+    const sesA2 = await sesAlarm('5Y');
+    const sesRang2 = await sesSaw(/^tto-ses:toast:.*MASA ALARMI · Ses 5Y/);
+    await sesSaw(/^tto-ses:sonra:/);
+    const sesMade = sesLog.filter((x) => x.startsWith('tto-ses:yeni:'));
+    const sesLater = sesLog.filter((x) => x.startsWith('tto-ses:sonra:'));
+    check('Alarm sesi: a fresh tab nobody has clicked yet - the desk alarm rings (its toast) with "🔇 Bu sekmede alarm sesi kapalı … sayfaya '
+      + 'bir kez tıklayın" once and makes no sound context (made then, it would stay silent for good); after one click the next alarm '
+      + 'rings with one context, running',
+      sesRang1 && sesHint && sesBefore === 0 && sesRang2 && sesMade.length === 1 && sesLater.length === 1 && sesLater[0] === 'tto-ses:sonra:running'
+      && sesLog.filter((x) => x.includes('🔇')).length === 1, sesLog.filter((x) => x.startsWith('tto-ses:')));
+    for (const a of [sesA1, sesA2]) if (a && a.id) await api(page, 'ayşe yilmaz', 'POST', '/api/alarms/remove', { id: a.id, desk: true });
+    await sesPage.close();
 
     // ------------------------------------------------------------------ the heat map of the curves
     console.log('heat map');

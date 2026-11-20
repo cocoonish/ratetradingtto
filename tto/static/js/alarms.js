@@ -356,10 +356,25 @@ export function askPermission() {
 }
 
 let audio = null;
-/** A short two-note tone (the alarms', the agenda's recurring items'). */
+let silentSaid = false;
+/** A short two-note tone (the alarms', the agenda's recurring items').  Chrome / Edge play no sound on a page nobody has
+ * clicked or typed on yet (the autoplay rule): an AudioContext made then starts "suspended" and stays silent for the
+ * page's whole life, even after a click (the desk, 20.11.2026: "Yeni sinyal gelince de ötüyordu makine, bugün görmedim" -
+ * the context was made at the first ring of a tab not yet clicked).  So before the page's first click or key no context
+ * is made and the page says once why it is silent; after it, the context is made - or resumed - when a tone is due. */
 export function tone() {
   try {
+    const ua = navigator.userActivation;
+    if (ua && !ua.hasBeenActive) {
+      if (!silentSaid) {
+        silentSaid = true;
+        toast('🔇 Bu sekmede alarm sesi kapalı: tarayıcı, sayfaya bir kez tıklanana kadar ses çaldırmıyor - ses için sayfaya bir kez tıklayın',
+          'warn', 15000);
+      }
+      return;
+    }
     audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume().catch(() => {});
     const t0 = audio.currentTime;
     for (const [at, f] of [[0, 880], [0.18, 1175]]) {
       const o = audio.createOscillator();
