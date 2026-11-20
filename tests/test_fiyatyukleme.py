@@ -555,8 +555,12 @@ def test_bbg_in_replay_the_trading_list_from_dibs_rv_the_rest_from_the_last_auct
     days = (mat - REPLAY_DAY).days if str(rv[today_trade]["source"]).upper() == "ISL0" else (mat - dt.date(2026, 11, 4)).days
     assert r["source"] == "bbg" and r["t0"]["yield"] == pytest.approx((100.0 / last - 1.0) * 365.0 / days * 100.0)
     assert "DİBS RV son işlem 03.11.2026" in r["how"] and "fiyat" in r["how"] and "note" not in r
-    # a trade that is not today's and no auction kept: no price, why
-    assert not rows[old_trade]["priced"] and "kayıtlı ihale fiyatı yok" in rows[old_trade]["why"] and "son işlem" in rows[old_trade]["why"]
+    # a trade that is not today's and no auction kept: that trade, moved with the curve since its day (the desk, 20.11.2026:
+    # "dün işlem olmasına rağmen son işlem dün diyor ve göstermiyor")
+    ot = rows[old_trade]
+    tday = fy.date_said(rv[old_trade]["date"])
+    assert ot["priced"] and ot["source"] == "bbg+eğri" and ("DİBS RV son işlem %s" % fy.tr_day(tday)) in ot["how"], ot
+    # neither a trade (nothing asked in replay) nor an auction: no price, why
     assert not rows[no_auction]["priced"] and "kayıtlı ihale fiyatı yok" in rows[no_auction]["why"]
     # off the list, no Bloomberg: the last auction + the bond curve's move since that day's close (the coupon bonds' closes 50 bp
     # higher then: the curve's short end, where no coupon bond is, moves less - test_the_curves_move_measured_directly)
@@ -573,6 +577,32 @@ def test_bbg_in_replay_the_trading_list_from_dibs_rv_the_rest_from_the_last_auct
     # price-quoted: the last auction's price as it is
     t = rows[TLREF]
     assert t["t0"] == {"yield": None, "price": 100.25} and t["bid"]["price"] == pytest.approx(100.20) and "son ihale fiyatı" in t["note"]
+
+
+def test_bbg_the_newer_of_the_last_trade_and_the_last_auction_is_the_reference(svc, closes):
+    """(the desk, 20.11.2026: "dün işlem olmasına rağmen son işlem dün diyor ve göstermiyor") A last trade not of today:
+    a trade newer than every auction kept is the reference, moved with the curve since its day; an auction kept on the
+    trade's day or later stays the reference ("son trade bugün değilse, son ihale fiyatından itibaren")."""
+    u = svc.login("Yükleme Yenisi")["user"]
+    rv = trading(svc, u)
+    code = next(c for c, r in rv.items() if fy.date_said(r["date"]) not in (None, REPLAY_DAY) and bd.by_isin(c)["kind"] == "fixed")
+    tday = fy.date_said(rv[code]["date"])
+    call(svc, u, "ekle", {"isins": code})
+
+    def row():
+        return {x["isin"]: x for x in call(svc, u, "hesapla", {"mode": "bbg"})["rows"]}[code]
+
+    try:
+        put_auction(svc, code, tday - dt.timedelta(days=7), 99.0, "x")              # an older auction: the trade wins
+        r = row()
+        assert r["source"] == "bbg+eğri" and ("son işlem %s" % fy.tr_day(tday)) in r["how"] and "son ihale" not in r["how"], r
+        put_auction(svc, code, tday, 99.0, "x")                                       # an auction on the trade's day: the auction
+        r = row()
+        assert r["source"] == "ihale+eğri" and ("son ihale %s" % fy.tr_day(tday)) in r["how"], r
+    finally:
+        book = svc.store.get(fy.KEY_AUCTIONS) or {}
+        book.pop(code, None)
+        svc.store.put(fy.KEY_AUCTIONS, book)
 
 
 def test_the_curves_move_measured_directly(svc, closes):
@@ -668,8 +698,10 @@ def test_bbg_asks_bloomberg_only_for_bonds_off_the_trading_list_once_in_five_min
     z = rows[ZERO]
     assert z["source"] == "bbg" and z["t0"]["yield"] == pytest.approx((100.0 / 94.75 - 1.0) * 365.0 / 64 * 100.0)
     assert z["t0"]["price"] == pytest.approx(94.75) and "Bloomberg son işlem 03.11.2026 94,750" in z["how"]
-    # yesterday's trade of a price-quoted bond and no auction kept here: no price, why
-    assert not rows[TLREF]["priced"] and "son işlem 02.11.2026 ve kayıtlı ihale fiyatı yok" == rows[TLREF]["why"]
+    # yesterday's trade of a price-quoted bond and no auction kept here: that trade's price (the desk, 20.11.2026)
+    t = rows[TLREF]
+    assert t["priced"] and t["source"] == "bbg" and t["t0"] == {"yield": None, "price": 100.4}, t
+    assert "Bloomberg son işlem 02.11.2026 100,400" in t["how"] and t["note"] == "fiyatla kote edilir: son işlem fiyatı"
     # within 5 minutes: not asked again
     res = call(s, u, "hesapla", {"mode": "bbg"})
     assert len(provider.calls) == 1 and (res["bbg"]["asked"], res["bbg"]["cached"]) == (0, 2)

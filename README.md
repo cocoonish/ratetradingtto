@@ -3308,11 +3308,15 @@ gönderilmez; dosya tarayıcıya iner.
   * Son işlem **bugünse**: sabit kuponluda temiz fiyat (valöründeki getirisi t0'da aynen), bonoda fiyat → basit getiri,
     fiyatla kote edilende fiyat. Bloomberg bononun son işlemini getiri olarak verirse (fiyat sayılınca getirisi akla
     yatmıyorsa, ya da kâğıdın kendi getirisine o okuma daha yakınsa) getiri olarak okunur ve satır söyler.
-  * Son işlem **bugün değilse**: son ihale getirisi + o ihale gününün kapanışından bu yana **tahvil eğrisinin hareketi**
+  * Son işlem **bugün değilse**, referans son işlem ile kayıtlı son ihaleden **daha yeni olanıdır**: işlem tarihinde ya da
+    sonra kaydedilmiş bir ihale varsa ihale; işlem bütün ihalelerden yeniyse (ya da hiç ihale yoksa) o işlem, kendi
+    valöründe okunur (masa, 20.11.2026: "dün işlem olmasına rağmen son işlem dün diyor ve göstermiyor" - sabah piyasa
+    açılmadan dünkü son işlem + gecenin hareketi). Fiyatla kote edilende o referansın fiyatı olduğu gibi. Getiriyle:
+  * referansın getirisi + o günün kapanışından bu yana **tahvil eğrisinin hareketi**
     (trading listesinin getirilerine uydurulan Nelson-Siegel eğrisi, DİBS RV · Genel'inki: şimdiki eğri ile o günün
     kapanışlarına aynı τ'yla uydurulan eğri arasındaki fark, kâğıdın t0'dan nakit akışlarıyla). Eğri kurulamazsa TRY OIS
-    Bootstrap sıfır faizinin kâğıdın vadesindeki değişimi; satır söyler. İhale bugünse hareket yoktur. Fiyatla kote
-    edilende son ihale fiyatı. Kayıtlı ihale de yoksa fiyat yoktur, satır nedenini söyler.
+    Bootstrap sıfır faizinin kâğıdın vadesindeki değişimi; satır söyler. İhale bugünse hareket yoktur. Ne işlem ne
+    kayıtlı ihale varsa fiyat yoktur, satır nedenini söyler.
   * Kayıtlı veride (replay) Bloomberg yoktur: trading listesindekiler DİBS RV'nin kayıtlı son işleminden, diğerleri son
     ihale + eğri hareketinden (satır söyler).
 * **Eurobond** (masanın aynı geceki eki: "Eklenecek listede eurobondlar da olacak. Bunlar direkt bbgden fiyatlanacak.
@@ -5324,7 +5328,7 @@ python -m pytest tests
 ```
 
 Bloomberg ve ağ gerekmez (19.11.2026'da oturumların çalıştığı bilgisayarda iki grup yan yana ~50 dk, tarayıcı testi
-~6 dk). 2435 test (gerçek `blpapi` kuruluysa 7 tane daha):
+~6 dk). 2436 test (gerçek `blpapi` kuruluysa 7 tane daha):
 
 | Dosya | Kapsam |
 |---|---|

@@ -568,7 +568,10 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
     unrecognised one named once - desk-wide, for good (kv `fiyatyukleme.labels`); .t1 used, .t2 only without one; the
     day's values kept per ISIN (kv `fiyatyukleme.auctions`: day, label, value, .t1 / .t2);
   - BBG: the trading list's own `LAST_PRICE` / `LAST_TRADE_DATE` (DİBS RV!AS / I); others one reference request on
-    Hesapla; a trade of today is the mid; else the last auction moved with the bond curve, TRY OIS without it;
+    Hesapla; a trade of today is the mid; else the newer of the last trade and the last auction kept (an auction on
+    the trade's day or later wins) moved with the bond curve since its day, TRY OIS without it. Changed on
+    20.11.2026 after the first morning at the desk: "dün işlem olmasına rağmen son işlem dün diyor ve göstermiyor" -
+    before, a trade not of today with no auction kept gave no price;
   - Kaydet: the desk's line format, the saves of the day kept per user (kv `fiyatyukleme.saved:<user>`).
 - **Conventions settled while building it** (the spec did not say; ask before changing):
   - **t0** is today's own value date: today, or the next TRY business day when today is not one (Motor's holiday list,

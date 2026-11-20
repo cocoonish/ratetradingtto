@@ -33,10 +33,13 @@ is.  Every day's lines are kept per ISIN (``KEY_AUCTIONS``): BBG mode's "last au
 (``AS`` / ``I``: already asked for, no new cost); any other: one reference request of LAST_PRICE and LAST_TRADE_DATE
 (2 hits a bond, only on Hesapla, kept ``CACHE_SECONDS``: :meth:`~tto.marketdata.base.Provider.reference`).  A last
 trade of today is the mid (a coupon bond's a clean price, a bill's a price turned into its simple yield - or a yield,
-``bill_last``).  Otherwise the last auction moved with the bond curve (``move``): its simple yield + (the Nelson-Siegel
-fit of the trading list's yields now − the same fit on the auction day's close, both at the bond's cash flows from t0);
-without that fit the TRY OIS Bootstrap zero rate's change at the bond's maturity, said on the row; a price-quoted bond
-keeps the auction's price; nothing stored and no trade today: no price, the row says why.
+``bill_last``).  Otherwise the newest of the last trade and the last auction kept, moved with the bond curve since its
+day's close (``move``): its simple yield + (the Nelson-Siegel fit of the trading list's yields now − the same fit on
+that day's close, both at the bond's cash flows from t0); without that fit the TRY OIS Bootstrap zero rate's change at
+the bond's maturity, said on the row.  An auction kept on the trade's day or later is the reference ("son trade bugün
+değilse, son ihale fiyatından itibaren"); a trade newer than any auction kept is (the desk, 20.11.2026: "dün işlem
+olmasına rağmen son işlem dün diyor ve göstermiyor" - before the market opens, yesterday's last trade plus the night's
+move).  A price-quoted bond keeps that reference's price; neither a trade nor an auction: no price, the row says why.
 
 **Eurobonds** (the same night: "Eklenecek listede eurobondlar da olacak. Bunlar direkt bbgden fiyatlanacak. Bunlarda last
 trade yok direkt midden ve spreadden gideceğiz" - "Eurobondlar da yield spreadi"): a USD / EUR Turkish sovereign comes onto
@@ -1154,7 +1157,13 @@ class FiyatYukleme(object):
                 said = ("son işlem %s" % tr_day(day)) if day else "bugün işlem yok"
                 if where == "" and rv is None:
                     said = "son işlem sorulamadı"
-                self._stale(row, rec, book.get(code), ctx, said)
+                a = last_auction(book.get(code))
+                aday = _dt.date.fromisoformat(a["day"]) if a is not None else None
+                if last is not None and day is not None and day < today and (aday is None or day > aday):
+                    # a last trade newer than any auction kept: it is the reference, moved with the curve since its day
+                    self._stale_trade(row, rec, last, day, source, where, ref, book.get(code), ctx)
+                else:
+                    self._stale(row, rec, book.get(code), ctx, said)
             if notes:
                 row["note"] = " · ".join(notes + ([row["note"]] if row.get("note") else []))
             out_rows.append(row)
@@ -1210,6 +1219,33 @@ class FiyatYukleme(object):
         row["source"] = "ihale+eğri"
         row["move_bp"] = delta * BP if delta is not None else None
         row["how"] = "%s (getiri %%%s) %s → t0 getirisi %%%s" % (head, _n(t0y * 100.0, 3), text, _n((t0y + (delta or 0.0)) * 100.0, 3))
+        if warn:
+            row["note"] = warn
+
+    def _stale_trade(self, row: Dict[str, Any], rec: Dict[str, Any], last: float, day: _dt.date, source: str, where: str,
+                     ref: Optional[float], auctions: Optional[List[Dict[str, Any]]], ctx: Dict[str, Any]) -> None:
+        """No trade today, but a last trade newer than any auction kept (the desk, 20.11.2026: "dün işlem olmasına rağmen
+        son işlem dün diyor ve göstermiyor"): that trade read at its own value date as today's would be
+        (``_from_trade``), its yield moved with the bond curve since that day's close (``move``) - before the market
+        opens, yesterday's last trade plus the night's move.  A price-quoted bond keeps the trade's price."""
+        hol, t0 = ctx["hol"], ctx["t0"]
+        vd = day if source == "ISL0" else workday(day, 1, hol)
+        t0y, t0p, how = self._from_trade(rec, last, vd, ref, auctions)
+        if t0y is None and t0p is None:
+            row["why"] = how
+            return
+        head = "%s son işlem %s %s (valör %s)" % (where or "Bloomberg", tr_day(day), _n(last, 3), tr_day(vd))
+        if t0y is None:
+            self._price(row, rec, t0, None, t0p)
+            row["source"] = "bbg"
+            row["how"] = head + " → " + how
+            row["note"] = "fiyatla kote edilir: son işlem fiyatı"
+            return
+        delta, text, warn = self.move(bond_of(rec), day, t0y, ctx, "son işlem getirisi")
+        self._price(row, rec, t0, t0y + (delta or 0.0), None)
+        row["source"] = "bbg+eğri"
+        row["move_bp"] = delta * BP if delta is not None else None
+        row["how"] = "%s → %s %s → t0 getirisi %%%s" % (head, how, text, _n((t0y + (delta or 0.0)) * 100.0, 3))
         if warn:
             row["note"] = warn
 
@@ -1305,8 +1341,10 @@ class FiyatYukleme(object):
             row["note"] = " · ".join(notes)
 
     # ------------------------------------------------------------------ the curve's move since an auction
-    def move(self, bond: qc.Bond, aday: _dt.date, level: float, ctx: Dict[str, Any]) -> Tuple[Optional[float], str, Optional[str]]:
-        """The bond curve's change at the bond since the auction day's close (decimal, the bond's simple yield):
+    def move(self, bond: qc.Bond, aday: _dt.date, level: float, ctx: Dict[str, Any],
+             what: str = "son ihale getirisi") -> Tuple[Optional[float], str, Optional[str]]:
+        """The bond curve's change at the bond since the reference's day's close - the last auction's, or the last trade's
+        (``what``, said when nothing can be measured) - (decimal, the bond's simple yield):
         the Nelson-Siegel fit of the trading list's yields now (DİBS RV · Genel's) − the same fit (its τ held) of that
         day's closes, the bond's cash flows from t0 on both - the curve's move, not the bond's roll-down; an auction of
         today: none.  Without the fit: the TRY OIS Bootstrap zero rate's change at the bond's maturity, as the change of
@@ -1335,7 +1373,7 @@ class FiyatYukleme(object):
         if d is not None:
             return d, "+ TRY OIS sıfır faiz değişimi %s bp (%s kapanışından şimdiye)" % (_bp(d * BP), tr_day(aday)), \
                 "Nelson-Siegel eğrisi yok (%s): TRY OIS değişimi kullanıldı" % why
-        return None, "(eğri hareketi ölçülemedi)", "eğri hareketi ölçülemedi (%s; OIS de yok): son ihale getirisi olduğu gibi" % why
+        return None, "(eğri hareketi ölçülemedi)", "eğri hareketi ölçülemedi (%s; OIS de yok): %s olduğu gibi" % (why, what)
 
     def _bond_closes(self, got: Dict[str, Any], today: _dt.date) -> Dict[str, Any]:
         """The trading list's bonds' closes before today (the history's, from the store's memory) and the convention each
