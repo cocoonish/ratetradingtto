@@ -638,7 +638,7 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
 
   > "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu şekilde yüklenecek diye girip bırakabilmeliyim"
 
-  - a "Sabit fiyat" section: a bond (DİBS or Eurobond, by the list's own route) with its fixed bid and ask, typed in the
+  - a "Sabit fiyat" section: a bond (any ISIN - no catalog or Bloomberg needed, below) with its fixed bid and ask, typed in the
     unit the txt writes it in - a bill's / zero coupon's simple yields (%), any other's clean prices (fixed coupon,
     TLREF, TÜFE, FRN, Eurobond) -, the page's number reading (a Turkish comma too). Kept with the user's list
     (`fiyatyukleme.list:<user>`, `fixed`) until changed or taken off;
@@ -651,10 +651,28 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
     tooltip). "Sabitle" on a computed row stores its bid / ask as they are (edited or not) as that bond's fixed figures;
   - Kaydet writes a fixed bond's figures as they are, in the same line format, the other unit 0.
   - **Conventions settled** (ask before changing): a yield between −50 % and 500 %, a price between 0 and 1000; a crossed
-    pair (bid better than ask) is kept and said; the fixed bonds join the list's order (kind, then maturity); İhale mode
-    needs no auction text when only fixed bonds or Eurobonds are to be priced.
+    pair (bid better than ask) typed or edited in the table is kept and said; the fixed bonds join the list's order (kind,
+    then maturity); İhale mode needs no auction text when only fixed bonds or Eurobonds are to be priced.
+  - **Pasted from Excel** (the same day, with a photo of their sheet: FX-denominated domestic DİBS such as `TRT191127F19`,
+    grouped USD / EUR):
+
+    > "Sabitlemeyi de tablo olarak atacağım excelden kopyalayıp, bu da ayrıca tablo olarak gözükmeli ve ben de rahat
+    > görebilmeliyim. Burada bid ve offer'ı ve ISIN'i kopyalayacağım"
+
+    - a box for Excel's rows and **Ekle / Güncelle** (`fiyatyukleme.parse_fixed`): one bond a line, the cells split by tabs
+      (else runs of spaces); the ISIN the first cell like one, the bid the first number after it, the offer the next
+      number within ±10 % of the bid - so the sheet's lower block (ISIN | Bid | | Offer) and its upper one (ISIN | Bid |
+      Bid Yield | Offer | T1 Yield | Stok) read alike; a dot or a Turkish comma as the decimal mark, the last one when a
+      cell has both; a line with neither an ISIN nor a number (a header, "USD") ignored; one that cannot be read shown with
+      why (no offer, an offer on the wrong side of the bid, a bad check digit) and not kept; a bond fixed already updated;
+    - **no catalog and no Bloomberg** for a fixed row: only the ISIN and the two figures. The description is the catalog's
+      name, else a Eurobond's facts if held, else "döviz DİBS" for `TRT…F…`, else blank; the maturity the catalog's, else
+      read from a Turkish ISIN (TR, the type letter, DDMMYY: `TRT191127F19` → 19.11.2027); the unit a bill's / zero's
+      yields (the catalog's kind, or a `TRB…` ISIN), everything else clean prices - shown on the row;
+    - their own table, "Sabit fiyatlar": ISIN, description, maturity, unit, bid, offer (three decimals, edited in place),
+      the file line each gives, × - apart from the computed list.
 - Code: `tto/fiyatyukleme.py`, `Service.fiyat_yukleme`, `GET /api/fiyat-yukleme`, `POST /api/fiyat-yukleme/{ekle, cikar,
-  sabit, sabit-sil, ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
+  sabit, sabit-sil, sabit-yapistir, ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
   `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_fiyatyukleme.py`, the browser test's Kâğıt Fiyat Yükleme
   checks.
 

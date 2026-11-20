@@ -1658,5 +1658,11 @@ table.plain.fy td.fy-state input.inp { width: 130px; text-align: left; }
 .fy-ignored, .fy-saves { margin-top: 6px; font-size: 11.5px; }
 table.plain.fy tr.fy-fixed td { background: var(--accent-soft); }
 table.plain.fy td.fy-sabit-mark { font-weight: 650; white-space: nowrap; }
+.fy-sabit-text { flex: 1; min-height: 70px; resize: vertical; font-family: var(--mono); font-size: 12px; }
+.fy-sabit-rapor { margin: 4px 0 8px; font-size: 12px; }
+.fy-sabit-bad { color: var(--neg); }
+table.plain.fy.fy-sabit-tbl { font-size: calc(13px - var(--fs-step)); }
+table.plain.fy.fy-sabit-tbl td.fy-sabit-line { font-family: var(--mono); white-space: nowrap; }
+table.plain.fy.fy-sabit-tbl .inp { width: 96px; }
 .fy-txt { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
   padding: 8px 10px; margin: 6px 0; min-height: 40px; white-space: pre; overflow-x: auto; }

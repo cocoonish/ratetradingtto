@@ -3190,24 +3190,31 @@ async function clipAfter(page, action) {
     check('... a Eurobond\'s own default yield spreads (2,0 / 2,0 bp); added offline it is refused with the reason (its facts come from Bloomberg)',
       fyEuroDefs.join() === '2,0,2,0' && (fyEuro.added || []).length === 0 && /Eurobond'un bilgileri .*Bloomberg'den gelir/.test(((fyEuro.refused || [])[0] || {}).text || ''),
       { fyEuroDefs, fyEuro: fyEuro.refused });
-    // Sabit fiyat: a bond typed with its fixed bid / ask (a fixed coupon bond: clean prices, a Turkish comma) goes as it is
-    await page.fill('#fy-sabit-isin', 'TRT100227T13');
-    await page.fill('#fy-sabit-bid', '99,250');
-    await page.fill('#fy-sabit-ask', '99,750');
-    await page.click('#fy-sabit-ekle');
-    await page.waitForSelector('#fy-sabit-table tr.fy-sabit-item[data-isin="TRT100227T13"]', { timeout: 20000 }).catch(() => {});
+    // Sabit fiyatlar: two rows pasted from Excel (ISIN | Bid | | Offer; FX DİBS, not in the catalog; a Turkish comma in one) -
+    // their own table (the file line each gives), then as they are in Hesapla and in the file
+    await page.fill('#fy-sabit-text', 'TRT191127F19\t99.483\t\t99.726\nTRT030327F17\t99,951\t\t100,152');
+    await page.click('#fy-sabit-yapistir');
+    await page.waitForFunction(() => document.querySelectorAll('#fy-sabit-table tr.fy-sabit-item').length === 2, null, { timeout: 20000 }).catch(() => {});
+    const fySabitTbl = await page.evaluate(() => [...document.querySelectorAll('#fy-sabit-table tr.fy-sabit-item')].map((tr) => [tr.dataset.isin,
+      (tr.querySelector('td.fy-name') || {}).textContent, tr.children[2].textContent, (tr.querySelector('td.fy-sabit-unit') || {}).textContent,
+      (tr.querySelector('input.fy-sabit-bid') || {}).value, (tr.querySelector('input.fy-sabit-ask') || {}).value,
+      (tr.querySelector('td.fy-sabit-line') || {}).textContent].join('|')));
+    const fyRapor = await page.evaluate(() => (document.getElementById('fy-sabit-rapor') || {}).textContent || '');
+    check('... Sabit fiyatlar: two rows pasted from Excel make their own table - the description ("döviz DİBS"), the maturity read from the '
+      + 'ISIN, the unit, bid / offer in 3 decimals and the file line each gives',
+      fySabitTbl.join(' / ') === 'TRT030327F17|döviz DİBS|03.03.2027|temiz fiyat|99,951|100,152|TRT030327F17,99.951,100.152,0,0 / '
+        + 'TRT191127F19|döviz DİBS|19.11.2027|temiz fiyat|99,483|99,726|TRT191127F19,99.483,99.726,0,0' && /^2 kâğıt eklendi · 0 güncellendi · 0 satır/.test(fyRapor),
+      { fySabitTbl, fyRapor });
     await page.click('#fy-hesapla');
-    await page.waitForSelector('#fy-table tr.fy-row.fy-fixed[data-isin="TRT100227T13"]', { timeout: 30000 }).catch(() => {});
+    await page.waitForSelector('#fy-table tr.fy-row.fy-fixed[data-isin="TRT191127F19"]', { timeout: 30000 }).catch(() => {});
     const [fyFile2] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click('#fy-kaydet')]);
     const fyText2 = require('fs').readFileSync(await fyFile2.path(), 'latin1');
     const fySabit = await page.evaluate(() => ({
-      unit: (document.querySelector('#fy-sabit-table tr.fy-sabit-item[data-isin="TRT100227T13"] td.fy-sabit-unit') || {}).textContent,
-      mark: (document.querySelector('#fy-table tr.fy-row[data-isin="TRT100227T13"] td.fy-sabit-mark') || {}).textContent,
+      marks: [...document.querySelectorAll('#fy-table tr.fy-row.fy-fixed td.fy-sabit-mark')].map((td) => td.textContent),
       sabitle: document.querySelectorAll('#fy-table tr.fy-row:not(.fy-fixed) button.fy-sabitle').length }));
-    const fyWant2 = 'TRB100227T13,0,0,31.750,31.650\r\nTRT100227T13,99.250,99.750,0,0\r\nTRT130127T11,100.450,100.550,0,0\r\n';
-    check('... Sabit fiyat: a bond typed with its fixed bid / ask (clean prices) is in the table as it is ("sabit fiyat"; the computed rows '
-      + 'have "Sabitle"), and Kaydet writes its line as typed', fySabit.unit === 'temiz fiyat' && fySabit.mark === 'sabit fiyat'
-      && fySabit.sabitle === 2 && fyText2 === fyWant2, { fySabit, fyText2 });
+    const fyWant2 = 'TRB100227T13,0,0,31.750,31.650\r\nTRT130127T11,100.450,100.550,0,0\r\nTRT030327F17,99.951,100.152,0,0\r\nTRT191127F19,99.483,99.726,0,0\r\n';
+    check('... and in Hesapla as they are ("sabit fiyat"; the computed rows have "Sabitle"); Kaydet writes their lines as pasted',
+      fySabit.marks.join() === 'sabit fiyat,sabit fiyat' && fySabit.sabitle === 2 && fyText2 === fyWant2, { fySabit, fyText2 });
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');

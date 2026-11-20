@@ -492,16 +492,17 @@ def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
     assert "sabit fiyatı yok" in str(e.value)
     assert fixed_of(svc, other) == {}
     assert [r["isin"] for r in fy.FiyatYukleme(svc).state(u)["fixed"]] == [BILL, FIXED, CPI]
-    # what cannot be fixed: no figures, a price out of reach, a bond the dashboard cannot know offline
+    # what cannot be fixed: no figures, a price out of reach
     with pytest.raises(ServiceError) as e:
         call(svc, u, "sabit", {"isin": FIXED, "bid": "", "ask": "99"})
     assert "sayı olarak" in str(e.value)
     with pytest.raises(ServiceError) as e:
         call(svc, u, "sabit", {"isin": FIXED, "bid": "0", "ask": "99"})
     assert "temiz fiyat olarak girilir" in str(e.value)
-    with pytest.raises(ServiceError) as e:
-        call(svc, u, "sabit", {"isin": EURO1, "bid": "99", "ask": "100"})
-    assert "Bloomberg'den gelir" in str(e.value)
+    # no catalog and no Bloomberg needed: a Eurobond whose facts are not held here is fixed all the same (in price)
+    e1 = {r["isin"]: r for r in call(svc, u, "sabit", {"isin": EURO1, "bid": "99", "ask": "100"})["fixed"]}[EURO1]
+    assert (e1["unit"], e1["name"], e1["maturity"], e1["line"]) == ("price", "", None, "%s,99.000,100.000,0,0" % EURO1)
+    call(svc, u, "sabit-sil", {"isin": EURO1})
     # a crossed quote is kept, and said
     assert call(svc, u, "sabit", {"isin": CPI, "bid": "92,5", "ask": "92"})["crossed"] is True
 
@@ -549,6 +550,73 @@ def test_fixed_bonds_go_as_they_are_in_both_modes_over_the_computed(svc):
     call(svc, only, "sabit", {"isin": TLREF, "bid": "100", "ask": "101"})
     res = call(svc, only, "hesapla", {"mode": "ihale", "text": ""})
     assert [(r["isin"], r["fixed"]) for r in res["rows"]] == [(TLREF, True)] and "parse" not in res
+
+
+#: the desk's sheet (20.11.2026): FX-denominated DİBS - its lower block, the one copied (ISIN | Bid | | Offer), and the upper one
+#: (ISIN | Bid | Bid Yield | Offer | T1 Yield | Stok), as Excel copies them (tabs)
+LOWER = "USD\nTRT191127F19\t99.483\t\t99.726\nTRT030327F17\t99.951\t\t100.152\nEUR\nTRT030227F18\t100.105\t\t100.310\n"
+UPPER_CF = "TRT191127F19\t99.482\t4.74\t99.725\n"
+UPPER_CH = "TRT191127F19\t99.482\t4.74\t99.725\t4.49%\t42,000\n"
+
+
+def test_fixed_prices_pasted_from_excel_are_read_cell_by_cell():
+    """(the desk: "Sabitlemeyi de tablo olarak atacağım excelden kopyalayıp [...] Burada bid ve offer'ı ve ISIN'i
+    kopyalayacağım") The ISIN the first cell like one, the bid the first number after it, the offer the next number
+    within ±10 % of the bid - the empty column, a yield (4.74, 4.49%), a stock (42,000) skipped."""
+    def unit(isin):
+        return "yield" if isin.startswith("TRB") else "price"
+    got = fy.parse_fixed(LOWER, unit)
+    assert [(r["isin"], r["bid"], r["ask"]) for r in got["rows"]] == [("TRT191127F19", 99.483, 99.726), ("TRT030327F17", 99.951, 100.152),
+                                                                     ("TRT030227F18", 100.105, 100.31)]
+    assert got["bad"] == [] and [x["text"] for x in got["ignored"]] == ["USD", "EUR"]
+    for text in (UPPER_CF, UPPER_CH):                                                   # C:F and C:H of the upper block
+        assert [(r["isin"], r["bid"], r["ask"]) for r in fy.parse_fixed(text, unit)["rows"]] == [("TRT191127F19", 99.482, 99.725)]
+    # Turkish decimals; spaces instead of tabs; a cell with both marks (the last is the decimal)
+    assert [(r["bid"], r["ask"]) for r in fy.parse_fixed("TRT191127F19\t99,483\t\t99,726", unit)["rows"]] == [(99.483, 99.726)]
+    assert [(r["bid"], r["ask"]) for r in fy.parse_fixed("TRT191127F19    99.483    99.726", unit)["rows"]] == [(99.483, 99.726)]
+    assert [fy.cell_num(x) for x in ("99.483", "99,483", "1.234,5", "42,000.5", "4.49%", "", "abc")] == [99.483, 99.483, 1234.5, 42000.5,
+                                                                                                         4.49, None, None]
+    # a line that cannot be read says why; a bill's offer is a lower yield
+    bad = fy.parse_fixed("TRT191127F19\t99.483\nTRT191127F19\t99.726\t\t99.483\nX123\t1\t2\nTRT191127F18\t99\t99.5\n"
+                         "TRB150727T13\t31.1\t31.2\nTRB150727T13\t31.2\t31.1\n", unit)
+    assert [(b["n"], b["why"]) for b in bad["bad"]] == [
+        (1, "offer yok: bid'in ±%10'u içinde ikinci sayı yok"), (2, "offer bid'den küçük"), (3, "ISIN yok"),
+        (4, "ISIN'in kontrol hanesi tutmuyor: TRT191127F18"), (5, "offer getirisi bid'inkinden büyük")]
+    assert [(r["n"], r["bid"], r["ask"]) for r in bad["rows"]] == [(6, 31.2, 31.1)]
+
+
+def test_fixed_prices_pasted_need_no_catalog_and_go_to_the_file(svc):
+    """Only the ISIN, bid and offer: an FX-denominated DİBS (not in the catalog, by the desk's rule) is "döviz DİBS", its
+    maturity read from its ISIN (TRT191127F19: 19.11.2027), in price; a "TRB…" one a bill, in yield; a catalog bond its
+    own.  Pasted again: updated."""
+    u = svc.login("Sabit Yapıştır")["user"]
+    bill = _valid("TRB150727T1")
+    got = call(svc, u, "sabit-yapistir", {"text": LOWER + "%s\t31,2\t\t31,1\n%s\t30.9\t30.8\nbozuk satır\t1\n" % (bill, ZERO)})
+    p = got["pasted"]
+    assert sorted(p["added"]) == sorted(["TRT191127F19", "TRT030327F17", "TRT030227F18", bill, ZERO]) and p["updated"] == []
+    assert [b["why"] for b in p["bad"]] == ["ISIN yok"] and p["ignored"] == 2
+    f = {r["isin"]: r for r in got["fixed"]}
+    assert (f["TRT191127F19"]["name"], f["TRT191127F19"]["maturity"], f["TRT191127F19"]["unit"], f["TRT191127F19"]["kind_text"]) == (
+        "döviz DİBS", "2027-11-19", "price", "Döviz DİBS")
+    assert f["TRT030227F18"]["maturity"] == "2027-02-03" and f["TRT030327F17"]["maturity"] == "2027-03-03"
+    assert (f[bill]["unit"], f[bill]["maturity"], f[ZERO]["unit"], f[ZERO]["name"]) == ("yield", "2027-07-15", "yield", "TURKGB 0 01/06/27")
+    assert f["TRT191127F19"]["line"] == "TRT191127F19,99.483,99.726,0,0" and f["TRT030327F17"]["line"] == "TRT030327F17,99.951,100.152,0,0"
+    assert f[bill]["line"] == "%s,0,0,31.200,31.100" % bill
+    # pasted again (the upper block's C:H this time): updated, not doubled
+    again = call(svc, u, "sabit-yapistir", {"text": UPPER_CH})
+    assert again["pasted"]["updated"] == ["TRT191127F19"] and again["pasted"]["added"] == [] and len(again["fixed"]) == 5
+    assert {r["isin"]: r for r in again["fixed"]}["TRT191127F19"]["line"] == "TRT191127F19,99.482,99.725,0,0"
+    # Hesapla (no auction text: only fixed bonds) and the file
+    res = call(svc, u, "hesapla", {"mode": "ihale", "text": ""})
+    rows = {r["isin"]: r for r in res["rows"]}
+    assert rows["TRT191127F19"]["fixed"] and "kataloğunda değil" in rows["TRT191127F19"]["how"] and rows[bill]["bid"]["price"] > 0
+    out = call(svc, u, "kaydet", {"rows": [{"isin": r["isin"], "bid_price": r["bid"]["price"], "ask_price": r["ask"]["price"],
+                                           "bid_yield": r["bid"]["yield"], "ask_yield": r["ask"]["yield"]} for r in res["rows"]]})
+    assert "TRT191127F19,99.482,99.725,0,0" in out["lines"] and "TRT030327F17,99.951,100.152,0,0" in out["lines"]
+    assert "%s,0,0,31.200,31.100" % bill in out["lines"] and "TRT060127T10,0,0,30.900,30.800" in out["lines"]
+    with pytest.raises(ServiceError) as e:
+        call(svc, u, "sabit-yapistir", {"text": "  "})
+    assert "yapıştırın" in str(e.value)
 
 
 # ================================================================================================== BBG
@@ -997,5 +1065,8 @@ def test_the_routes(svc):
         assert bad.status_code == 400 and bad.json()["error"] == "bid ve ask'i sayı olarak girin"
         bad = c.post("/api/fiyat-yukleme/sabit-sil", headers=h, json={"isin": FIXED})
         assert bad.status_code == 400 and bad.json()["error"] == "sabit fiyatı yok: %s" % FIXED
+        assert c.post("/api/fiyat-yukleme/sabit-yapistir", headers=ANON, json={"text": LOWER}).status_code == 401
+        bad = c.post("/api/fiyat-yukleme/sabit-yapistir", headers=h, json={"text": ""})
+        assert bad.status_code == 400 and bad.json()["error"] == "Excel'den ISIN, bid ve offer'ı kopyalayıp yapıştırın"
         ok = c.post("/api/fiyat-yukleme/sabit", headers=h, json={"isin": FIXED, "bid": "99,1", "ask": "99,9"})
         assert ok.status_code == 200 and ok.json()["fixed"][0]["bid"] == 99.1 and ok.json()["fixed"][0]["listed"]

@@ -333,9 +333,10 @@ cost in [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy
     auction text, the desk's labels, today's saved files;
   - `POST /api/fiyat-yukleme/ekle` `{"isins": "…"}` / `cikar` `{"isin"}` - the list (a bond off the catalog through
     `Service.bond_list_add`; refused in replay);
-  - `POST /api/fiyat-yukleme/sabit` `{"isin", "bid", "ask"}` / `sabit-sil` `{"isin"}` - a bond's fixed bid / ask in the
-    txt's unit (set or change / take off; the bond by the list's route): kept in the user's list state (`fixed`), on
-    Hesapla a row as it is (`_fixed_row`), never computed or asked of Bloomberg;
+  - `POST /api/fiyat-yukleme/sabit` `{"isin", "bid", "ask"}` / `sabit-sil` `{"isin"}` / `sabit-yapistir` `{"text"}` - a
+    bond's fixed bid / ask in the txt's unit (set or change / take off / Excel's rows pasted, `parse_fixed`): kept in the
+    user's list state (`fixed`); the bond needs no catalog (`fixed_record`: the catalog's, a Eurobond's facts if held, else
+    what its ISIN says); on Hesapla a row as it is (`_fixed_row`), never computed or asked of Bloomberg;
   - `POST /api/fiyat-yukleme/ayar` `{"mode"?, "defaults"?, "spreads"?: {isin: {bid, ask}}}`;
   - `POST /api/fiyat-yukleme/tanit` `{"label", "isin"}` - the desk names an auction label's bond (an empty ISIN forgets it);
   - `POST /api/fiyat-yukleme/hesapla` `{"mode": "ihale" | "bbg", "text"}` - every bond at t0 (İhale keeps the day's auction
