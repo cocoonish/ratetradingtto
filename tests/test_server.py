@@ -211,7 +211,11 @@ def test_blotter_risk_period_and_bond_quote_over_http(client, user):
     start = (today - dt.timedelta(days=30)).isoformat()
     per = client.get("/api/blotter?date=%s&to=%s" % (start, today.isoformat())).json()
     assert per["ranged"] and per["date"] == start and per["to"] == today.isoformat() and not per["is_today"]
-    assert [t["id"] for t in per["trades"]] == [t["id"] for t in data["trades"]] and per["sheet"] == []
+    assert [t["id"] for t in per["trades"]] == [t["id"] for t in data["trades"]]
+    # a period's summary tables (the desk, 23.11.2026: "daha fazla tarihe bakarken bugündeki alttaki tablo gelmiyor"): the
+    # sheet's four tables over the period's trades, said what they cover - no longer none
+    assert [s["id"] for s in per["sheet"]] == ["fwd", "ois", "bond", "cpt"] and all(s.get("data") for s in per["sheet"])
+    assert per["sheet_scope"].startswith("Aralık ")
     assert client.get("/api/blotter?date=%s&to=bozuk" % start).status_code == 400
     res = client.get("/api/blotter/export?date=%s&to=%s" % (start, today.isoformat()))
     assert res.status_code == 200 and res.content[:2] == b"PK"
