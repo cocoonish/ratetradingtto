@@ -406,11 +406,123 @@ def test_eurtry_points_typed_by_hand_give_their_spread_over_ois(svc):
     assert cell(svc, "EK_FWD!K%d" % (EUR_ROWS[0] + back), u) == ""
 
 
+# ============================================================================== the way back from a rate: FAİZ → SPREAD
+def _rate_back_check(svc, u, rows, off):
+    """Rates typed into the FAİZ → SPREAD table of a matrix (``rows``, the table ``off`` rows below): its spread over
+    the matrix's OIS and the matrix's own formulas with the typed rate; the spread found, typed into the matrix, gives
+    the same points and forward (1e-9)."""
+    typed = {}
+    for i, r in enumerate(rows):
+        ois = cell(svc, "EK_FWD!L%d" % r, u)
+        typed["EK_FWD!D%d" % (r + off)] = round(ois - 1.234 - 0.1 * i, 4)
+        typed["EK_FWD!E%d" % (r + off)] = round(ois - 0.567 + 0.05 * i, 4)
+    put(svc, u, typed)
+    found = {}
+    for r in rows:
+        k = r + off
+        days, ois, sb, sa, maj, retb, reta = (cell(svc, "EK_FWD!%s%d" % (c, r), u) for c in "CLFGORS")
+        tb, ta = cell(svc, "EK_FWD!D%d" % k, u), cell(svc, "EK_FWD!E%d" % k, u)
+        assert [cell(svc, "EK_FWD!%s%d" % (c, k), u) for c in "ABC"] == [cell(svc, "EK_FWD!%s%d" % (c, r), u) for c in "ABC"]
+        assert cell(svc, "EK_FWD!F%d" % k, u) == ois
+        assert cell(svc, "EK_FWD!G%d" % k, u) == pytest.approx((tb - ois) * 100, abs=1e-9)
+        assert cell(svc, "EK_FWD!H%d" % k, u) == pytest.approx((ta - ois) * 100, abs=1e-9)
+        fb = sb * (1 + tb / 100 * days / 360) / (1 + maj / 100 * days / 360)
+        fa = sa * (1 + ta / 100 * days / 360) / (1 + maj / 100 * days / 360)
+        assert cell(svc, "EK_FWD!K%d" % k, u) == pytest.approx(fb, rel=1e-13) and cell(svc, "EK_FWD!L%d" % k, u) == pytest.approx(fa, rel=1e-13)
+        assert cell(svc, "EK_FWD!I%d" % k, u) == pytest.approx((fb - sb) * 10000, abs=1e-8)
+        assert cell(svc, "EK_FWD!J%d" % k, u) == pytest.approx((fa - sa) * 10000, abs=1e-8)
+        assert cell(svc, "EK_FWD!M%d" % k, u) == pytest.approx((fb - sb) * 10000 / days, abs=1e-9)
+        assert [cell(svc, "EK_FWD!%s%d" % (c, k), u) for c in "OP"] == [retb, reta]
+        ret_pts = (sb * (1 + retb / 100 * days / 360) / (1 + maj / 100 * days / 360) - sb) * 10000
+        assert cell(svc, "EK_FWD!Q%d" % k, u) == pytest.approx((fb - sb) * 10000 - ret_pts, abs=1e-8)
+        found["EK_FWD!D%d" % r] = cell(svc, "EK_FWD!G%d" % k, u)
+        found["EK_FWD!E%d" % r] = cell(svc, "EK_FWD!H%d" % k, u)
+    # the spreads found, typed into the matrix: the same points and forwards
+    put(svc, u, found)
+    for r in rows:
+        k = r + off
+        for m, t in (("H", "I"), ("I", "J"), ("J", "K"), ("K", "L"), ("M", "D"), ("N", "E")):
+            assert cell(svc, "EK_FWD!%s%d" % (m, r), u) == pytest.approx(cell(svc, "EK_FWD!%s%d" % (t, k), u), abs=1e-9), (m, r)
+    # a row without a rate stays empty
+    put(svc, u, {"EK_FWD!D%d" % (rows[0] + off): ""})
+    assert [cell(svc, "EK_FWD!%s%d" % (c, rows[0] + off), u) for c in "GIKMQ"] == ["", "", "", "", ""]
+
+
+def test_a_rate_typed_gives_its_spread_and_the_matrix_the_same_points(svc):
+    """(the desk, 23.11.2026: "Spread ile forward kotasyonlarını bulduğumuz yere faizi girdiğimde de spreadi ve
+    rate'leri vermesi lazım") USDTRY: a TRY bid / ask % typed for each of the matrix's dates -> its spread over OIS, the
+    points, the forward, P/gün and the RET comparison, the matrix's own formulas; typed back as the matrix's spreads,
+    the same points."""
+    u = svc.login("Fwd faiz")["user"]
+    put(svc, u, {"EK_FWD!B2": "S1"})
+    _rate_back_check(svc, u, FWD_ROWS, extras.FWD_RATE)
+    assert FWD_ROWS[0] + extras.FWD_RATE == 133
+
+
+def test_an_eurtry_rate_typed_gives_its_spread_on_its_own_day_count(svc):
+    """EURTRY: the same, on the EURTRY matrix - its spot, the EUR rate and the days from the EURTRY spot date."""
+    u = svc.login("EUR faiz")["user"]
+    _rate_back_check(svc, u, EUR_ROWS, extras.FWD_EUR_RATE)
+    r = EUR_ROWS[2]
+    assert cell(svc, "EK_FWD!C%d" % (r + extras.FWD_EUR_RATE), u) == cell(svc, "EK_FWD!B%d" % r, u) - cell(svc, "EK_FWD!G%d" % (EUR_ALL - 2), u)
+    assert EUR_ROWS[0] + extras.FWD_EUR_RATE == 147
+
+
+def test_the_new_inputs_stand_where_no_input_ever_stood(svc):
+    """Users' typed values are kept by cell: the rate tables' and the bulk outrights' inputs are on cells no layout ever
+    had an input on (none retired, none another table's)."""
+    from tto.views import load_views
+    view = next(v for v in load_views() if v["id"] == "forward")
+    new = {"EK_FWD!D133:E142", "EK_FWD!D147:E156", "EK_BULK!R5:R104", "EK_BULK!T5:T104"}
+    have = [i["range"] for i in view["inputs"] if "range" in i]
+    assert new <= set(have)
+
+    def cells(rng):
+        sh, a = rng.split("!") if "!" in rng else ("Forward", rng)
+        a1, _, a2 = a.partition(":")
+        (r1, c1), (r2, c2) = divmod(parse_a1(a1), COLS), divmod(parse_a1(a2 or a1), COLS)
+        return {(sh, r, c) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)}
+
+    mine = set().union(*(cells(x) for x in new))
+    others = set().union(*(cells(x) for x in have if x not in new))
+    retired = set().union(*(cells(x) for x in extras.RETIRED_INPUTS["tto"]))
+    assert not mine & others and not mine & retired
+
+
+def test_a_bulk_rows_outright_gives_back_its_rate(svc):
+    """(the desk, 23.11.2026: "Toplu fiyatlama kısmında da forward rate'lerden faizi de toplu olarak bulabilmeliyim") The
+    bulk table's own USDTRY / EURTRY forwards (N / P) pasted into the new columns read back the TRY rate they were priced
+    with - the manual one (L) or, without it, RET mid (G): the same spot, USD / EUR rate and days."""
+    u = svc.login("Toplu ters")["user"]
+    first = extras.BULK_FIRST
+    put(svc, u, {"EK_BULK!B%d" % first: "15.01.2027", "EK_BULK!B%d" % (first + 1): "15.04.2027", "EK_BULK!L%d" % first: "41,25"})
+    rows = (first, first + 1)
+    pasted = {}
+    for r in rows:
+        pasted["EK_BULK!R%d" % r] = cell(svc, "EK_BULK!N%d" % r, u)
+        pasted["EK_BULK!T%d" % r] = cell(svc, "EK_BULK!P%d" % r, u)
+    put(svc, u, pasted)
+    want = {first: 41.25, first + 1: cell(svc, "EK_BULK!G%d" % (first + 1), u)}
+    for r in rows:
+        assert isinstance(want[r], float)
+        assert cell(svc, "EK_BULK!S%d" % r, u) == pytest.approx(want[r], abs=1e-9)
+        assert cell(svc, "EK_BULK!U%d" % r, u) == pytest.approx(want[r], abs=1e-9)
+    # the EURTRY one on its own days: a different day count from the USDTRY one's for the same date
+    assert cell(svc, "EK_BULK!C%d" % first, u) != cell(svc, "EK_BULK!B%d" % first, u) - cell(svc, "Forward!K2", u)
+    # an outright of one's own: its rate; a row without an outright stays empty
+    put(svc, u, {"EK_BULK!R%d" % first: cell(svc, "EK_BULK!N%d" % first, u) + 0.05})
+    assert cell(svc, "EK_BULK!S%d" % first, u) > 41.25
+    put(svc, u, {"EK_BULK!T%d" % first: ""})
+    assert cell(svc, "EK_BULK!U%d" % first, u) == ""
+    view = next(p for p in svc.view(u, "forward")["panels"] if p["id"] == "BK1")
+    assert view["range"] == "B1:U106" and view["grow"]["key"] == "B"
+
+
 def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
     page = svc.view(None, "forward")
     panels = {p["id"]: p for p in page["panels"]}
     tab = next(s for s in page["sections"] if s["id"] == "kot")
-    assert tab["title"] == "Kotasyon" and tab["panels"] == ["EKF1", "EKF5", "EKF2", "EKF6"]
+    assert tab["title"] == "Kotasyon" and tab["panels"] == ["EKF1", "EKF5", "EKF2", "EKF8", "EKF6", "EKF9"]
     assert panels["EKF5"]["title"].startswith("FORWARD KOTASYON  ·  EURTRY, OIS + spread")
     assert panels["EKF6"]["title"].startswith("PUAN → OIS SPREAD  ·  EURTRY")
     rows = panels["EKF5"]["data"]["rows"]
@@ -420,6 +532,10 @@ def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
     assert len(inputs) == 1 + 1 + 4 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, spreads and spot, dates, per date
     assert inputs[0][1] == list(extras.FWD_CURVES)
     assert len([c for row in panels["EKF6"]["data"]["rows"] for c in row if c.get("i")]) == 20
+    # each way back by a rate, right after its way back by points: 20 inputs (TRY bid / ask % of the 10 dates)
+    for pid, name in (("EKF8", "FAİZ → SPREAD  ·  elle verilen"), ("EKF9", "FAİZ → SPREAD  ·  EURTRY")):
+        assert panels[pid]["title"].startswith(name)
+        assert len([c for row in panels[pid]["data"]["rows"] for c in row if c.get("i")]) == 20
     assert "EKF7" not in panels and "EKF7" in {p["id"] for p in svc.view(None, "forward", True)["panels"]}
 
 

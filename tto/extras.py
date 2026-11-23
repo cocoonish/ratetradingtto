@@ -594,6 +594,9 @@ FWD_SHEET = "EK_FWD"
 FWD_ALL = 4                              # the "Tümü" row: general spreads (bid, ask) and the spot quotes
 FWD_ROWS = (5, 14)                       # 1M, 2M, 3M, 6M, 9M, 12M and four free dates
 FWD_BACK = 15                            # rows of the "points -> spread" table = rows of the matrix + 15
+#: rows of the "rate -> spread" table = rows of the matrix + these (USDTRY 133..142, EURTRY 147..156: below the EURTRY
+#: matrix's way back, where no input ever stood - a value a user typed is kept by its cell, see ``RETIRED_INPUTS``)
+FWD_RATE, FWD_EUR_RATE = 128, 43
 #: curve names of the selector, in the order of the helper columns AE:AK
 FWD_CURVES = ("MPC ima", "S1", "S2", "S3", "Ağırlıklı", "Bootstrap", "TLREF sabit")
 #: desk-sheet cells that hold the discount factor spot -> end date of each curve (their number of days is $M$60)
@@ -741,6 +744,45 @@ def _tto_forward(model: Model) -> None:
         b.set("N%d" % k, '=IFERROR(IF($C%(r)d="","",$S%(s)d),"")' % f, fmt="0.00")
     b.note("A%d" % (r2 + FWD_BACK + 1), "Tarihler üstteki matristen gelir. İma TRY % = ((fwd/spot)·(1+USD·g/360) − 1)·360/g; spread = İma TRY − OIS "
                                         "(bp). Bulunan spread'i üstteki matrise yazınca aynı puan çıkar.")
+    _rate_back(b, (r1, r2), FWD_RATE, "USDTRY", "USD", months)
+
+
+def _rate_back(b: "SheetBuilder", rows: Tuple[int, int], off: int, pair: str, major: str, months: Dict[int, int]) -> None:
+    """The way to the spread (the desk, 23.11.2026: "Spread ile forward kotasyonlarını bulduğumuz yere faizi girdiğimde de
+    spreadi ve rate'leri vermesi lazım"): TRY bid / ask % typed by hand for the matrix's dates (``rows``; this table
+    ``off`` rows below them) -> their spread over the matrix's OIS (bp), the points, the forward, P/gün and the RET
+    comparison - the matrix's own formulas, the typed rate in place of OIS + spread: the spread found here, typed into
+    the matrix, gives the same points.  USDTRY and EURTRY alike (spot, major's rate and days are the matrix row's)."""
+    r1, r2 = rows
+    t = r1 + off - 2
+    b.title("A%d" % t, "FAİZ → SPREAD  ·  %selle verilen TRY faizinin OIS'e göre spread'i, puanı ve forward'ı"
+            % ("" if pair == "USDTRY" else pair + "  ·  "))
+    b.head("A%d" % (t + 1), ["Vade", "Valör", "Gün", "TRY bid %", "TRY ask %", "OIS %", "Spread bid (bp)", "Spread ask (bp)", "Puan bid",
+                             "Puan ask", "Fwd bid", "Fwd ask", "P/gün bid", "P/gün ask", "RET bid %", "RET ask %", "Bid − RET", "Ask − RET"])
+    for r in range(r1, r2 + 1):
+        k = r + off
+        b.set("A%d" % k, "=$A%d" % r, bold=r in months, align="center", color=None if r in months else NOTE_COLOR)
+        b.set("B%d" % k, '=IF($B%d="","",$B%d)' % (r, r), fmt=DATE)
+        b.set("C%d" % k, "=$C%d" % r, fmt=INT0)
+        b.input("D%d" % k, None, fmt="0.00")
+        b.input("E%d" % k, None, fmt="0.00")
+        b.set("F%d" % k, '=IFERROR(IF($C%d="","",$L%d),"")' % (k, r), fmt="0.00")
+        # each side: the typed rate (D bid, E ask) on the matrix's spot of that side (F / G), its major rate (O) and days (C)
+        for rate, spot, sp, pts, fwd, pday, ret, diff in (("D", "F", "G", "I", "K", "M", "R", "Q"), ("E", "G", "H", "J", "L", "N", "S", "R")):
+            f = {"k": k, "r": r, "x": rate, "s": spot, "p": pts, "w": fwd, "t": ret}
+            f["h"] = 'OR($C%(k)d="",NOT(ISNUMBER($%(x)s%(k)d)))' % f
+            b.set("%s%d" % (sp, k), '=IFERROR(IF(%(h)s,"",($%(x)s%(k)d-$F%(k)d)*100),"")' % f, fmt="0", bold=True)
+            b.set("%s%d" % (fwd, k), '=IFERROR(IF(%(h)s,"",$%(s)s%(r)d*(1+$%(x)s%(k)d/100*$C%(r)d/360)/(1+$O%(r)d/100*$C%(r)d/360)),"")' % f,
+                  fmt=NUM4)
+            b.set("%s%d" % (pts, k), '=IFERROR(IF($%(w)s%(k)d="","",($%(w)s%(k)d-$%(s)s%(r)d)*10000),"")' % f, fmt=INT0, bold=True)
+            b.set("%s%d" % (pday, k), '=IFERROR(IF($%(p)s%(k)d="","",$%(p)s%(k)d/$C%(r)d),"")' % f, fmt="#,##0.0")
+            b.set("%s%d" % (diff, k), ('=IFERROR(IF($%(p)s%(k)d="","",$%(p)s%(k)d-($%(s)s%(r)d*(1+$%(t)s%(r)d/100*$C%(r)d/360)/'
+                                       '(1+$O%(r)d/100*$C%(r)d/360)-$%(s)s%(r)d)*10000),"")') % f, fmt=INT0)
+        b.set("O%d" % k, '=IFERROR(IF($C%d="","",$R%d),"")' % (k, r), fmt="0.00")
+        b.set("P%d" % k, '=IFERROR(IF($C%d="","",$S%d),"")' % (k, r), fmt="0.00")
+    b.note("A%d" % (r2 + off + 1), "Tarihler üstteki matristen gelir. TRY bid / ask %%'yi yazın: spread = TRY − OIS (bp); puan, forward, P/gün ve "
+                                   "RET farkı matrisin aynı formülleriyle, OIS + spread yerine yazdığınız faizle (spot, %s faizi ve gün matrisin "
+                                   "satırından). Bulunan spread'i matrise yazınca aynı puan çıkar." % major)
 
 
 XAU_SHEET = "EK_XAU"
@@ -1525,6 +1567,7 @@ def _tto_fwd_eur(model: Model) -> None:
         b.set("N%d" % k, '=IFERROR(IF($C%(r)d="","",$S%(s)d),"")' % f, fmt="0.00")
     b.note("A%d" % (r2 + FWD_BACK + 1), "Tarihler üstteki EURTRY matrisinden gelir. İma TRY % = ((fwd/spot)·(1+EUR·g/360) − 1)·360/g; spread = "
                                         "İma TRY − OIS (bp). Bulunan spread'i üstteki matrise yazınca aynı puan çıkar.")
+    _rate_back(b, (r1, r2), FWD_EUR_RATE, "EURTRY", "EUR", months)
 
 
 # ---------------------------------------------------------------------------------------------- sources
@@ -1835,6 +1878,12 @@ def _bulk_forward_check(model: Model) -> None:
     for col in BULK_COLS:
         _need_formula(model, "Forward", "%s144" % col)
     _need_formula(model, "Forward", "N144", "ISNUMBER(L144),L144,G144")
+    # the outrights the way back (R..U) inverts: USDTRY on $F$2, USD % (J) and the days (C); EURTRY on $G$2, EUR % (K) and
+    # the days from the EURTRY spot date
+    _need_formula(model, "Forward", "N144", "$F$2*(1+")
+    _need_formula(model, "Forward", "N144", "/(1+J144/100*$C144/360)")
+    _need_formula(model, "Forward", "P144", "$G$2*(1+")
+    _need_formula(model, "Forward", "P144", "/(1+K144/100*($B144-$K$2)/360)")
 
 
 def _tto_bulk_forward(model: Model) -> None:
@@ -1850,16 +1899,30 @@ def _tto_bulk_forward(model: Model) -> None:
     for col in BULK_COLS:
         text = formula_of(model, "Forward", "%s144" % col)
         templates[col] = _ABSOLUTE.sub(lambda m: "Forward!" + m.group(0), text)       # the curves stay on the Forward sheet
+    # the way back (the desk, 23.11.2026: "Toplu fiyatlama kısmında da forward rate'lerden faizi de toplu olarak
+    # bulabilmeliyim"): an outright typed or pasted -> the TRY rate it implies, N's / P's own formula solved for the TRY
+    # rate - the same spot, USD / EUR % and days
+    b.head("R4", ["USDTRY fwd (elle)", "İma TRY %", "EURTRY fwd (elle)", "İma TRY %"])
+    eur_days = "($B%(r)d-Forward!$K$2)"
     for k in range(BULK_ROWS):
         r = BULK_FIRST + k
+        f = {"r": r}
         b.input("B%d" % r, None, fmt=DATE)
         b.input("L%d" % r, None, fmt="0.0000")
         for col in BULK_COLS:
             body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
             b.set("%s%d" % (col, r), "=" + body, like=None, fmt=_BULK_FMT.get(col, NUM4))
+        b.input("R%d" % r, None, fmt=NUM4)
+        b.set("S%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($R%(r)d))),"",(($R%(r)d/Forward!$F$2)*(1+$J%(r)d/100*$C%(r)d/360)-1)'
+                          '*360/$C%(r)d*100),"")') % f, fmt="0.0000", bold=True)
+        b.input("T%d" % r, None, fmt=NUM4)
+        b.set("U%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($T%(r)d))),"",(($T%(r)d/Forward!$G$2)*(1+$K%(r)d/100*' + eur_days
+                          + '/360)-1)*360/' + eur_days + '*100),"")') % f, fmt="0.0000", bold=True)
     b.note("B%d" % (BULK_FIRST + BULK_ROWS + 1),
            "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. "
-           "Valör ve manuel TRY faizi boş başlar; yazdıklarınız sizin kalır (Excel'den bir sütun da yapıştırabilirsiniz).")
+           "Valör ve manuel TRY faizi boş başlar; yazdıklarınız sizin kalır (Excel'den bir sütun da yapıştırabilirsiniz). "
+           "Elle forward (USDTRY / EURTRY) yazın ya da yapıştırın: yanındaki İma TRY %, USDTRY / EURTRY fwd'nin tersi - aynı spot, USD / EUR "
+           "faizi ve gün.")
 
 
 _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", "H": "0.000", "J": "0.000", "K": "0.000",

@@ -995,6 +995,20 @@
    "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; boş başlar)"
   },
   {
+   "range": "EK_BULK!R5:R104",
+   "scope": "user",
+   "group": "bulk100-usd-fwd",
+   "kind": "number",
+   "label": "toplu forward 'USDTRY fwd (elle)' — an outright typed or pasted, to read the TRY rate it implies (boş başlar)"
+  },
+  {
+   "range": "EK_BULK!T5:T104",
+   "scope": "user",
+   "group": "bulk100-eur-fwd",
+   "kind": "number",
+   "label": "toplu forward 'EURTRY fwd (elle)' — an outright typed or pasted, to read the TRY rate it implies (boş başlar)"
+  },
+  {
    "range": "EK_FWD!B2",
    "scope": "user",
    "group": "ekfwd-curve",
@@ -1090,6 +1104,20 @@
    "group": "ekfwd-eur-points",
    "kind": "number",
    "label": "EURTRY elle puan bid / ask — swap points typed by hand, to read their spread over OIS"
+  },
+  {
+   "range": "EK_FWD!D133:E142",
+   "scope": "user",
+   "group": "ekfwd-rates",
+   "kind": "number",
+   "label": "TRY bid / ask % typed by hand for the USDTRY matrix's dates, to read their spread over OIS, points and forward"
+  },
+  {
+   "range": "EK_FWD!D147:E156",
+   "scope": "user",
+   "group": "ekfwd-eur-rates",
+   "kind": "number",
+   "label": "TRY bid / ask % typed by hand for the EURTRY matrix's dates, to read their spread over OIS, points and forward"
   }
  ],
  "panels": [
@@ -1442,6 +1470,15 @@
    "title": "PUAN → OIS SPREAD  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
   },
   {
+   "id": "EKF8",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A131:R143",
+   "hidden": false,
+   "wide": true,
+   "title": "FAİZ → SPREAD  ·  elle verilen TRY faizinin OIS'e göre spread'i, puanı ve forward'ı"
+  },
+  {
    "id": "EKF5",
    "type": "table",
    "sheet": "EK_FWD",
@@ -1537,6 +1574,15 @@
    "hidden": false,
    "wide": true,
    "title": "PUAN → OIS SPREAD  ·  EURTRY  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
+  },
+  {
+   "id": "EKF9",
+   "type": "table",
+   "sheet": "EK_FWD",
+   "range": "A145:R157",
+   "hidden": false,
+   "wide": true,
+   "title": "FAİZ → SPREAD  ·  EURTRY  ·  elle verilen TRY faizinin OIS'e göre spread'i, puanı ve forward'ı"
   },
   {
    "id": "EKF3",
@@ -1662,7 +1708,7 @@
    "id": "BK1",
    "type": "table",
    "sheet": "EK_BULK",
-   "range": "B1:Q106",
+   "range": "B1:U106",
    "hidden": false,
    "wide": true,
    "title": "TOPLU FORWARD FİYATLAMA · 100 valöre kadar",
@@ -2125,9 +2171,11 @@
     "EKF1",
     "EKF5",
     "EKF2",
-    "EKF6"
+    "EKF8",
+    "EKF6",
+    "EKF9"
    ],
-   "note": "Forward kotasyonu OIS + spread'ten (USDTRY ve EURTRY; bid ve ask spread'i ayrı, eğri ve spread kaynağı seçilir) ve tersi: elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i. Genel spread Masa'daki tarih arası faiz spread'inden (MASA!I60) gelir; üzerine yazılabilir."
+   "note": "Forward kotasyonu OIS + spread'ten (USDTRY ve EURTRY; bid ve ask spread'i ayrı, eğri ve spread kaynağı seçilir) ve tersi: elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i; elle verilen TRY faizinin spread'i, puanı ve forward'ı. Genel spread Masa'daki tarih arası faiz spread'inden (MASA!I60) gelir; üzerine yazılabilir."
   },
   {
    "id": "ret",
