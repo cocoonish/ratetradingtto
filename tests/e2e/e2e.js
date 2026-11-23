@@ -2222,6 +2222,82 @@ async function clipAfter(page, action) {
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: targetRow });
     await waitCell(page, 'VIOP!Z331', 't.trim() === ""');
 
+    // ------------------------------------------------------------------ Masa: TOPLU TARİH ARASI FAİZ; VİOP Target: a far price
+    console.log('Masa: bulk date-to-date rates; VİOP target: a far price');
+    const cellV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
+    await open(page, 'masa');
+    await tab(page, 'rates');
+    await page.waitForFunction(() => { const it = window.tto.state.page.items.get('TAF'); return !!(it && it.grid && it.grid.data); }, null, { timeout: 20000 });
+    const tafRows = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="TAF"] table.grid tbody > tr')]
+      .filter((tr) => !tr.classList.contains('grow-hidden')).length);
+    const taf0 = await tafRows(), ratesTab = await panelsOnPage(page);
+    // two pairs copied in Excel - start | end | spread, the second one's spread left empty (the general spread) - pasted on
+    // the first row
+    await page.evaluate(async () => {
+      const g = window.tto.state.page.items.get('TAF').grid;
+      const mod = await import('/static/js/grid.js');
+      const i = g.data.r.indexOf(5), j = g.data.c.indexOf('B');
+      await mod.pasteText(g, { grid: g, top: i, left: j, bottom: i, right: j }, '15.12.2026\t15.03.2027\t-100\r\n04.01.2027\t05.07.2027\t\r\n');
+    });
+    await waitCell(page, 'EK_TARIH!M6', 't.trim() !== ""');
+    const bulkRow = async (r) => {
+      const out = { v: {}, t: {} };
+      for (const c of 'EFGHIJKLM') {
+        out.v[c] = await cellV('EK_TARIH!' + c + r);
+        out.t[c] = (await cellText(page, 'EK_TARIH!' + c + r)).trim();
+      }
+      return out;
+    };
+    const pastedRows = { 5: await bulkRow(5), 6: await bulkRow(6) };
+    const taf1 = await tafRows();
+    // the desk block (TARİH ARASI FAİZ, the same tab) with the same dates and spread: each curve's ACT/360 rate (D62:D68)
+    // and MPC ima + spread (F62)
+    const sameAsBlock = [];
+    for (const [r, start, end, spread] of [[6, '04.01.2027', '05.07.2027', null], [5, '15.12.2026', '15.03.2027', '-100']]) {
+      const items = [{ ref: 'MASA!C60', value: start }, { ref: 'MASA!E60', value: end }];
+      if (spread !== null) items.push({ ref: 'MASA!I60', value: spread });
+      await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items });
+      await waitCell(page, 'MASA!E60', 't.trim() === ' + JSON.stringify(end));
+      await fresh(page);
+      const want = { v: { E: await cellV('MASA!G60'), M: await cellV('MASA!F62') }, t: { M: (await cellText(page, 'MASA!F62')).trim() } };
+      for (const [k, c] of [...'FGHIJKL'].entries()) {
+        want.v[c] = await cellV('MASA!D' + (62 + k));
+        want.t[c] = (await cellText(page, 'MASA!D' + (62 + k))).trim();
+      }
+      const got = pastedRows[r];
+      sameAsBlock.push({ r, ok: [...'EFGHIJKLM'].every((c) => typeof got.v[c] === 'number' && Math.abs(got.v[c] - want.v[c]) < 1e-12)
+        && [...'FGHIJKLM'].every((c) => got.t[c] === want.t[c] && /%$/.test(got.t[c])), got, want });
+    }
+    check('Masa → Faiz · PPK: TOPLU TARİH ARASI FAİZ right after TARİH ARASI FAİZ, its empty rows out of the way; two pairs pasted from Excel '
+      + 'fill two rows', ratesTab.slice(0, 2).join(' ') === 'B9 TAF' && taf0 < 10 && taf1 === taf0 + 2, { ratesTab, taf0, taf1 });
+    check('... each pasted row is the desk block for the same dates and spread: days, every curve\'s ACT/360 rate and MPC ima + spread '
+      + '(to 1e-12, and as shown)', sameAsBlock.every((x) => x.ok), sameAsBlock);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['MASA!C60', 'MASA!E60', 'MASA!I60', 'EK_TARIH!B5', 'EK_TARIH!C5',
+      'EK_TARIH!D5', 'EK_TARIH!B6', 'EK_TARIH!C6', 'EK_TARIH!D6'] });
+    await waitCell(page, 'EK_TARIH!M5', 't.trim() === ""');
+    // VİOP Target: a row's own far limit price typed back with the type "Fiyat" gives its rate
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'VIOP!L332', value: 'Spot' },
+      { ref: 'VIOP!M332', value: '31.12.2026' }, { ref: 'VIOP!N332', value: 'SHORT' }, { ref: 'VIOP!O332', value: 'FRA+bp' },
+      { ref: 'VIOP!P332', value: '-150' }] });
+    await open(page, 'viop');
+    await tab(page, 'main');
+    await waitCell(page, 'VIOP!S332', 't.trim() !== ""');
+    const asFra = { rate: await cellV('VIOP!Q332'), far: await cellV('VIOP!S332'), text: (await cellText(page, 'VIOP!Q332')).trim() };
+    await pick('VIOP!O332', 'Fiyat');
+    await waitCell(page, 'VIOP!O332', 't.trim() === "Fiyat"');
+    const typedFar = String(asFra.far).replace('.', ',');
+    await typeInto(page, 'VIOP!P332', typedFar);
+    await waitCell(page, 'VIOP!P332', 't.trim() !== "-150"');
+    await waitCell(page, 'VIOP!Q332', 't.trim() !== ""');
+    const asPrice = { rate: await cellV('VIOP!Q332'), far: await cellV('VIOP!S332'), text: (await cellText(page, 'VIOP!Q332')).trim(),
+      shown: (await cellText(page, 'VIOP!P332')).trim(), tip: await titleOf('VIOP!Q332'), curve: (await cellText(page, 'VIOP!Z332')).trim() };
+    check('VİOP Target: type "Fiyat" and the row\'s own far limit price - the implied TRY rate is the row\'s rate (1e-9), the far limit the price, '
+      + 'and it says so', Math.abs(asPrice.rate - asFra.rate) < 1e-9 && asPrice.text === asFra.text && Math.abs(asPrice.far - asFra.far) < 1e-9
+      && /^\d\d,\d{4,}/.test(asPrice.shown) && asPrice.curve === '' && asPrice.tip.startsWith('Hedef faiz = uzak kontrat fiyatı '),
+      { asFra, asPrice, typedFar });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!L332', 'VIOP!M332', 'VIOP!N332', 'VIOP!O332', 'VIOP!P332'] });
+    await waitCell(page, 'VIOP!Q332', 't.trim() === ""');
+
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
       const num = (ref) => { const td = window.tto.findCell(ref); return td ? Number(td.textContent.replace('%', '').replace(/\./g, '').replace(',', '.')) : NaN; };

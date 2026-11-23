@@ -7,6 +7,7 @@ the workbook computes elsewhere - each curve's rate between two dates is the des
 "Tarih arası faiz", rows 62-68) - or with Excel's own values of the file's target rows."""
 import datetime as dt
 import os
+import re
 
 import pytest
 
@@ -399,3 +400,90 @@ def test_a_contract_that_rolls_off_leaves_its_rows_marked_and_the_others_on_thei
         assert cell(s, "VIOP!W330", u) == "OIS FRA · " + S2                                 # (only the row still priced)
     finally:
         s.stop()
+
+
+# ============================================================================== a far price as the target (Hedef tipi "Fiyat")
+#: rows of every kind: (row, near, far, side, type, value, FRA curve)
+PRICED = ((331, "Spot", "31.12.2026", "SHORT", "FRA+bp", "-150", None), (332, "31.12.2026", "26.02.2027", "LONG", "FRA+bp", "-220", S2),
+          (333, "Spot", "30.11.2026", "LONG", "Faiz %", "34", None), (334, "Spot", "26.02.2027", "SHORT", "FXswap+bp", "25", None))
+
+
+def test_a_rows_own_far_price_typed_back_gives_its_rate(svc):
+    """The type Fiyat goes the other way: the far contract's price typed in "Hedef değer" and the TRY rate it implies as
+    the target rate - the exact inverse of the far limit price.  Each row's own far limit price, typed back with type
+    Fiyat, gives its target rate (to 1e-9; here to the last few bits), and the row around it is the same: the near and far
+    limits, the spread price, the market, target − market, the DV01, the days.  OIS FRA is the bootstrapped curve's, as on
+    a Faiz % row: the FRA's curve does nothing there (its cell stays empty)."""
+    u = svc.login("Fiyat hedefi ters")["user"]
+    try:
+        put(svc, u, dict(STEPS, **{k: v for r, near, far, side, kind, value, curve in PRICED
+                                   for k, v in target(r, near, far, side, kind, value, curve).items()}))
+        before = {(r, c): cell(svc, "VIOP!%s%d" % (c, r), u) for r, *_ in PRICED for c in "QRSTUVWXY"}
+        assert all(isinstance(v, float) for v in before.values()), before
+        put(svc, u, {k: v for r, *_ in PRICED for k, v in (("VIOP!O%d" % r, "Fiyat"), ("VIOP!P%d" % r, before[(r, "S")]))})
+        for r, near, far, side, kind, value, curve in PRICED:
+            q = cell(svc, "VIOP!Q%d" % r, u)
+            assert abs(q - before[(r, "Q")]) < 1e-9 and q == pytest.approx(before[(r, "Q")], rel=1e-12), (r, kind)
+            for c in "RUXY":
+                assert cell(svc, "VIOP!%s%d" % (c, r), u) == before[(r, c)], (r, c)
+            assert cell(svc, "VIOP!S%d" % r, u) == pytest.approx(before[(r, "S")], rel=1e-14)       # the price again
+            assert cell(svc, "VIOP!T%d" % r, u) == pytest.approx(before[(r, "T")], rel=1e-9)
+            assert cell(svc, "VIOP!V%d" % r, u) == pytest.approx(before[(r, "V")], abs=1e-5)         # bp
+            # OIS FRA: the bootstrapped curve's (the sheet's own), whatever the row's FRA curve was
+            assert cell(svc, "VIOP!W%d" % r, u) == cell(svc, "EK_VFRA!P%d" % helper_row(r), u)
+            assert cell(svc, "VIOP!Z%d" % r, u) == ("" if curve is None else curve)
+        assert cell(svc, "VIOP!W332", u) != before[(332, "W")]                     # (it was S2's)
+        # the choice does nothing on a Fiyat row; it says so where it is made, and the target rate says where it comes from
+        q331 = cell(svc, "VIOP!Q331", u)
+        put(svc, u, {"VIOP!Z331": S3})
+        assert cell(svc, "VIOP!Q331", u) == q331 and cell(svc, "VIOP!W331", u) == before[(331, "W")]
+        cells = page_cells(svc, u, "viop", "B33", 331)
+        assert cells["Z"]["tip"] == "Hedef tipi Fiyat: FRA eğrisi bu satırda etkisiz (yalnız FRA+bp satırında geçerli)"
+        assert re.match(r"^\d\d,\d{4,}$", cells["P"]["t"]), cells["P"]                # the price with its decimals
+        tip = cells["Q"]["tip"]
+        assert tip.startswith("Hedef faiz = uzak kontrat fiyatı %s" % cells["P"]["t"][:5]) and " → ima TRY faizi (yakın limit " in tip
+        assert tip.endswith(", %d gün, ACT/360)" % before[(331, "Y")])
+        assert cell(svc, "MASA!S121", u).startswith("Fiyat %d" % int(before[(331, "S")]))
+        assert cell(svc, "MASA!T121", u) == cell(svc, "VIOP!Q331", u)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_a_price_typed_as_the_desk_types_it(svc):
+    """"Fiyat" is an item of the type's list; the price is typed with a comma (51,10) and shown with its decimals - a bp
+    value as before.  The rate is the inverse of the far limit formula, worked by hand; a price that is not above zero
+    gives no rate (and nothing built on it)."""
+    u = svc.login("Fiyat hedefi yazım")["user"]
+    try:
+        assert svc.cell_info(u, "tto", "VIOP!O331")["cell"]["o"] == ["FRA+bp", "FXswap+bp", "Faiz %", "Fiyat"]
+        put(svc, u, dict(target(331, "Spot", "31.12.2026", "SHORT", "fiyat", "51,10"), **target(332, "Spot", "31.12.2026")))
+        assert cell(svc, "VIOP!O331", u) == "Fiyat" and cell(svc, "VIOP!P331", u) == 51.1
+        assert page_cells(svc, u, "viop", "B33", 331)["P"]["t"] == "51,1" and page_cells(svc, u, "viop", "B33", 332)["P"]["t"] == "-150"
+        near, days = cell(svc, "VIOP!R331", u), cell(svc, "VIOP!Y331", u)
+        # the USD leg between the two contracts, as the sheet's rows 98 / 101 have it
+        cols = {cell(svc, "VIOP!%s97" % c, u): c for c in "LMNOPQRSTUVWX"}
+        usd = lambda leg: (cell(svc, "VIOP!%s101" % cols[leg], u), cell(svc, "VIOP!%s98" % cols[leg], u))     # noqa: E731
+        (uf, df), (un, dn) = usd("31.12.2026"), usd("Spot")
+        carry = (1 + uf * df / 360) / (1 + un * dn / 360)
+        assert near == cell(svc, "VIOP!%s100" % cols["Spot"], u) and days == df - dn
+        assert cell(svc, "VIOP!Q331", u) == pytest.approx((51.1 / near * carry - 1) * 360 / days, rel=1e-12)
+        assert cell(svc, "VIOP!S331", u) == pytest.approx(51.1, rel=1e-14)
+        for bad in ("0", "-51,1"):
+            put(svc, u, {"VIOP!P331": bad})
+            assert [cell(svc, "VIOP!%s331" % c, u) for c in "QRSTV"] == [""] * 5, bad
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_the_type_is_left_out_when_the_far_limit_is_priced_otherwise():
+    """Fiyat is the inverse of the far limit price: a workbook whose far limit is priced otherwise keeps its own target
+    rate and list (the FRA's curve stays)."""
+    path = os.path.join(ROOT, "models", "tto.json.gz")
+    tto = Model.load(path)
+    ex.SheetBuilder(tto, "VIOP").patch("S333", "=" + ex.formula_of(tto, "VIOP", "S333").replace("/360)/", "/365)/"))
+    assert ex.apply("tto", tto) == ["VİOP hedef fiyatı: VIOP!S333 beklenen formül değil (%s yok)" % ex.viop_far_limit(333)]
+    assert "Fiyat" not in ex.formula_of(tto, "VIOP", "Q331") and "EK_VFRA!$U$10" in ex.formula_of(tto, "VIOP", "Q331")
+    assert {"sqref": "O331:O338", "type": "list", "formula1": '"FRA+bp,FXswap+bp,Faiz %"'} in tto.sheet("VIOP").validations
+    tto = Model.load(path)                                                                # the list written otherwise
+    next(v for v in tto.sheet("VIOP").validations if v["sqref"] == "O331:O338")["formula1"] = '"FRA+bp,Faiz %"'
+    assert ex.apply("tto", tto) == ["VİOP hedef fiyatı: VIOP!O331:O338 hedef tipi listesi beklenen değil"]
