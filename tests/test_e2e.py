@@ -43,6 +43,18 @@ def _seed_bond_closes(store) -> int:
     return n
 
 
+def _seed_past_trade(store, user: str) -> str:
+    """A TRY OIS of a day gone by for Günlük İşlemler's "Benzerini gir" / "Ters işlem" (PAY 1Y, 150 mn, its record as the
+    form keeps one): 45 days back - out of "Son 30 gün", which the other checks count.  Its day."""
+    import datetime
+    day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
+    store.add_trade(day, "ois", {"dir": "B", "tenor": "1Y", "rate": 0.38, "dv01": 3500.0, "nominal": 150e6, "cpt": "E2E ESKİ",
+                                 "role": "outright", "strategy": "outright", "label": "PAY 1Y @ 38,0000%", "level": 0.38, "side": "PAY",
+                                 "cost_bp": 0.0, "cost_usd": 0.0, "market": 0.38, "note": "e2e geçmiş", "size_mode": "nominal",
+                                 "size_typed": 150e6}, user)
+    return day
+
+
 def _free_port():
     for _ in range(50):
         s = socket.socket()
@@ -79,11 +91,12 @@ def test_dashboard_in_a_real_browser(tmp_path):
     shots.mkdir()
     # the scenario's accounts (the dashboard opens with a name and a password; Ayşe Yılmaz is the administrator)
     from tto.auth import hash_password
-    from tto.store import Store
+    from tto.store import Store, user_key
     store = Store(str(tmp_path / "data" / "tto.db"))
     for name, role in (("Ayşe Yılmaz", "admin"), ("Mehmet", "user"), ("Zeynep", "user")):
         store.create_account(name, hash_password(E2E_PASSWORD), role=role)
     seeded = _seed_bond_closes(store)
+    env["TTO_E2E_PAST_DAY"] = _seed_past_trade(store, user_key("Ayşe Yılmaz"))
     store.close()
     env["TTO_E2E_PASSWORD"] = E2E_PASSWORD
     env["TTO_E2E_SEEDED"] = str(seeded)                 # (the history's count of series grows by these)

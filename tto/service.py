@@ -3518,6 +3518,8 @@ class Service(object):
                                "cost": bl.summarise(trades), "risk": bl.risk_summary(trades),
                                "dates": self.store.trade_dates(), "gen": self.gen, "tenors": bl.OIS_TENORS}
         out.update(self._templates(user))              # what the entry form can be filled from (Şablonlar)
+        if out["can_enter"]:
+            self._blotter_copies(book, trades)         # "Benzerini gir" / "Ters işlem" of every trade listed
         loc = numfmt.get_locale(locale or self.settings.locale)
         if ranged:
             out["sheet"] = []                          # the workbook's summary tables belong to a single day
@@ -3550,6 +3552,39 @@ class Service(object):
             out["sheet"] = snap.get("sheet") if snap else []
             out["snapshot_at"] = snap.get("snapshot_at") if snap else None
         return out
+
+    def _blotter_copies(self, book, trades: List[Dict[str, Any]]) -> None:
+        """"Benzerini gir" / "Ters işlem" of each trade listed (``copy`` on a trade, an OIS package's first leg listed):
+        what the entry form is filled with (:func:`blotter.copy_specs`) - from today's spot dates (the OIS spot
+        ``OIS_MAIN!B2``, a pair's spot date) and the TRY holidays (Motor's), read as Fiyatlama reads them; nothing priced,
+        nothing stored."""
+        calc = book.engine.shared
+        idx = book.model.sheet_index
+        try:
+            mk = pr.read(lambda sheet, r, c: calc.get(idx[sheet], r, c))
+        except pr.PricingError:
+            return
+        spots: Dict[str, Optional[float]] = {"USDTRY": mk.fx_spot, "EURTRY": mk.eur_spot}
+
+        def fx_spot(pair: str) -> Optional[float]:
+            if pair not in spots:
+                got = self._pair_spot(pair) if self._own_spot(pair) else mk.fx_spot
+                spots[pair] = got if type(got) is float else None
+            return spots[pair]
+
+        cal = {"today": self.today_iso(), "ois_spot": mk.ois_spot, "holidays": mk.holidays["TRY"], "fx_spot": fx_spot}
+        packages: Dict[str, List[Dict[str, Any]]] = {}
+        for t in trades:
+            if t.get("kind") == "ois" and t.get("package"):
+                packages.setdefault(t["package"], []).append(t)
+        seen = set()
+        for t in trades:
+            pkg = t.get("package") if t.get("kind") == "ois" else None
+            if pkg in seen:
+                continue
+            if pkg:
+                seen.add(pkg)
+            t["copy"] = bl.copy_specs(sorted(packages[pkg], key=lambda x: x["id"]) if pkg else [t], cal)
 
     @staticmethod
     def _blotter_cells(book, calc) -> List[List[Any]]:
@@ -4001,6 +4036,11 @@ class Service(object):
                 p[k] = None
             else:
                 p[k] = float(v)
+        for k, at in (("start_months", "start_date"), ("end_months", "end_date")):
+            # a FRA between dates of its own ("Ters işlem" of a day gone by's FRA): an end typed as a date, dd.mm.yyyy
+            day = bl.tenor_date_of(p.get(k)) if isinstance(p.get(k), str) else None
+            if day is not None:
+                p[k], p[at] = None, day
         for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate",
                   "start_months", "end_months"):
             v = p.get(k)
