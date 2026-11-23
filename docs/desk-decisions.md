@@ -877,6 +877,20 @@ form from that trade, either as a new trade or with the side reversed, for repea
 - Code: `blotter.copy_specs` (the listing's `copy`, `Service._blotter_copies`), `blotter.js` `copyFrom`. Tests:
   `tests/test_blotter_copy.py`, the browser test's block.
 
+### Günlük İşlemler: a period's summary tables (23.11.2026)
+
+> "Bir de günlük işlemlerde daha fazla tarihe bakarken bugündeki alttaki tablo gelmiyor, onu da düzelt."
+
+- **What was missing.** In a period (Aralık) the workbook's own summary tables under the lists (forward buckets, OIS
+  summary, Bonds, CPT × tenor) were left out - the sheet holds today's trades only. The cost tables were there.
+- **Now.** A period - and a day gone by without its end-of-day archive - shows the same tables, the sheet's own
+  formulas with its lists filled with the trades shown, in an engine layer of its own over the shared calculation (the
+  sheet stays today's; the last four periods kept, a refresh evaluates only what changed). Said over them: what they
+  cover, buckets and days counted from today, each trade with its own amounts, rates and DV01; trades the lists have no
+  row for are counted. A day gone by with its archive shows its archive, as before.
+- Code: `Service._blotter` / `_blotter_panels` / `_blotter_layer` / `_blotter_scope`, `blotter.sheet_values(left_out)`.
+  Tests: `test_a_period_shows_the_sheets_tables_over_its_trades` (test_blotter), the browser test.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

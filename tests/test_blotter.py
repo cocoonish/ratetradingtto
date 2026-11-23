@@ -472,7 +472,8 @@ def test_a_period_lists_the_trades_of_every_day_in_it(desk):
     assert not one["ranged"] and one["to"] == days[1] and len(one["trades"]) == 2 and not one["is_today"]
     per = svc.blotter(u, days[0], None, days[2])
     assert per["ranged"] and (per["date"], per["to"]) == (days[0], days[2]) and per["days"] == 3 and not per["is_today"]
-    assert [t["trade_date"] for t in per["trades"]] == [days[0], days[1], days[1], days[2]] and per["sheet"] == []
+    assert [t["trade_date"] for t in per["trades"]] == [days[0], days[1], days[1], days[2]]
+    assert [p["id"] for p in per["sheet"]] == ["fwd", "ois", "bond", "cpt"] and "4 işlemin hepsi birlikte" in per["sheet_scope"]
     # cost and risk are those of the whole period: 1 + 3 mn bought, 2 mn sold at the same forward
     (bucket,) = per["cost"]["fwd"]
     assert (bucket["buy"], bucket["sell"], bucket["net"]) == (4e6, 2e6, 2e6)
@@ -486,6 +487,70 @@ def test_a_period_lists_the_trades_of_every_day_in_it(desk):
     with pytest.raises(ServiceError):
         svc.blotter(u, days[0], None, "yarın")
     assert svc.store.trades(days[1], days[1]) == svc.store.trades(days[1]) and len(svc.store.trades(days[0], days[1])) == 3
+
+
+def test_a_period_shows_the_sheets_tables_over_its_trades(desk):
+    """(23.11.2026, the desk: "daha fazla tarihe bakarken bugündeki alttaki tablo gelmiyor") A period - and a day gone by
+    without its archive - shows the workbook's own summary tables too: the sheet's formulas with its lists filled with the
+    trades shown, in a calculation of its own (the sheet keeps today's), said over them; a day archived keeps its archive;
+    the cost tables take the period's trades by pair / value date, tenor and instrument."""
+    svc, u = desk
+    today = dt.date.today()
+    days = [(today - dt.timedelta(days=k)).isoformat() for k in (9, 4)]
+    keep = lambda q: {k: v for k, v in svc.store.trade(q["ids"][0]).items() if k not in (     # noqa: E731
+        "id", "kind", "package", "trade_date", "created_by", "created_at", "updated_by", "updated_at")}
+    p1 = svc.add_ois(u, {"strategy": "outright", "side": "PAY", "tenor": "1Y", "level": "37", "dv01": 1000, "cpt": "AAA"})
+    r1 = svc.add_ois(u, {"strategy": "outright", "side": "RECEIVE", "tenor": "1Y", "level": "36", "dv01": 400, "cpt": "BBB"})
+    f1 = svc.add_forward(u, {"dir": "B", "amount": "3m", "value_date": "07.06.2027", "basis": "RET_MID"})
+    b1 = svc.add_bond(u, {"instrument": "TRT150328T24", "dir": "B", "amount": "5m", "price": "100"})
+    old = [(days[0], "ois", keep(p1)), (days[1], "ois", keep(r1)), (days[1], "fwd", {k: v for k, v in f1.items() if k != "id"}),
+           (days[1], "bond", {k: v for k, v in b1.items() if k != "id"})]
+    for q in (r1, f1, b1):
+        svc.delete_trade(u, q["ids"][0] if "ids" in q else q["id"])                    # today: the PAY 1Y alone
+    for day, kind, rec in old:
+        svc.store.add_trade(day, kind, rec, u)
+    summary = {cell(svc, "Günlük İşlemler!P%d" % r): r for r in range(25, 39)}
+    row = summary["1Y"]
+    today_sheet = [cell(svc, "Günlük İşlemler!%s%d" % (c, row)) for c in "SV"]
+    assert today_sheet[0] == pytest.approx(p1["legs"][0]["dv01"])                # (the sheet: today's PAY alone)
+
+    def at(panel, r, col):
+        d = panel["data"]
+        c = d["rows"][d["r"].index(r)][d["c"].index(col)]
+        return c.get("v", c.get("t"))
+
+    per = svc.blotter(u, days[0], None, today.isoformat())
+    tables = {p["id"]: p for p in per["sheet"]}
+    assert set(tables) == {"fwd", "ois", "bond", "cpt"} and all("data" in p for p in per["sheet"])
+    # the OIS summary over the period: 1Y pays the PAY of 9 days ago and today's, receives the RECEIVE of 4 days ago
+    assert at(tables["ois"], row, "S") == pytest.approx(2 * p1["legs"][0]["dv01"])
+    assert at(tables["ois"], row, "V") == pytest.approx(r1["legs"][0]["dv01"])
+    assert "Aralık %s" % dt.date.fromisoformat(days[0]).strftime("%d.%m.%Y") in per["sheet_scope"] and "5 işlemin hepsi" in per["sheet_scope"]
+    # ... the bond and the counterparties of the period are in their tables; the sheet itself is still today's
+    assert any(c.get("t") == "TRT150328T24" for r in tables["bond"]["data"]["rows"] for c in r)
+    pivot = {at(tables["cpt"], r, "P") for r in tables["cpt"]["data"]["r"]}
+    assert {"AAA", "BBB"} <= pivot
+    assert [cell(svc, "Günlük İşlemler!%s%d" % (c, row)) for c in "SV"] == today_sheet
+    # the cost tables: the period's trades by pair and value date, tenor, instrument
+    cost = per["cost"]
+    assert [(x["pair"], x["key"], x["buy"]) for x in cost["fwd"]] == [("USDTRY", f1["value_date"], 3e6)]
+    (one_y,) = [x for x in cost["ois"] if x["key"] == "1Y"]
+    assert one_y["buy"] == pytest.approx(2 * p1["legs"][0]["dv01"]) and one_y["sell"] == pytest.approx(r1["legs"][0]["dv01"])
+    assert [x["key"] for x in cost["bond"]] == ["TRT150328T24"]
+    # a day gone by without its archive: its own trades the same way, said so; a day archived: its archive as it was
+    one = svc.blotter(u, days[1])
+    assert at({p["id"]: p for p in one["sheet"]}["ois"], row, "V") == pytest.approx(r1["legs"][0]["dv01"])
+    assert "gün sonu arşivi yok - günün 3 işlemiyle" in one["sheet_scope"] and one["snapshot_at"] is None
+    svc.store.save_blotter_snapshot(days[0], {"sheet": [{"id": "ois", "title": "arşiv", "error": "x"}], "cells": []})
+    kept = svc.blotter(u, days[0])
+    assert kept["sheet"] == [{"id": "ois", "title": "arşiv", "error": "x"}] and "sheet_scope" not in kept and kept["snapshot_at"]
+    assert "sheet_scope" not in svc.blotter(u) and svc.blotter(u, "2019-01-01", None, "2019-01-31")["sheet"] == []
+    # more trades than the sheet's lists hold: said, by kind
+    left = {}
+    fwd = dict(f1, kind="fwd")
+    bl.sheet_values(svc.books["tto"], [fwd] * (bl.FWD_ROWS[1] - bl.FWD_ROWS[0] + 3), left)
+    assert left == {"fwd": 2}
+    assert "sığmayan" in svc._blotter_scope(days[0], days[1], True, [fwd] * 5, left)
 
 
 def test_the_desks_chat_trades_are_reconciled_with_the_blotter(desk):

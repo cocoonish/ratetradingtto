@@ -897,6 +897,44 @@ async function clipAfter(page, action) {
       await page.waitForFunction((n) => { const d = window.tto.state.page.data; return d && d.is_today && d.trades.length === n; }, before.length, { timeout: 20000 });
     }
 
+    // ------------------------------------------------------------------ a period's summary tables (islem-kopya, the desk:
+    // "daha fazla tarihe bakarken bugündeki alttaki tablo gelmiyor") - the workbook's own tables over the trades shown
+    {
+      const ME = 'ayşe yilmaz';
+      const pastDay = process.env.TTO_E2E_PAST_DAY;
+      const today = await page.evaluate(() => window.tto.state.page.data.today);
+      const payDv01 = (sheet, tenor) => {               // the OIS summary's "Pay DV01" (S) of a tenor
+        const d = (sheet.find((p) => p.id === 'ois') || {}).data;
+        if (!d) return null;
+        const i = d.rows.findIndex((r) => r[d.c.indexOf('P')] && r[d.c.indexOf('P')].t === tenor);
+        return i < 0 ? null : d.rows[i][d.c.indexOf('S')].v;
+      };
+      const todaySheet = (await api(page, ME, 'GET', '/api/blotter')).json.sheet;
+      await page.evaluate(([a, z]) => window.tto.state.page.show(a, z), [pastDay, today]);
+      await page.waitForFunction((a) => { const d = window.tto.state.page.data; return d && d.ranged && d.date === a; }, pastDay, { timeout: 20000 });
+      await page.waitForFunction(() => !document.querySelector('#blotter-sheet-scope').classList.contains('hidden')
+        && document.querySelectorAll('#content .panels .panel table.grid').length >= 4, null, { timeout: 20000 });
+      const per = (await api(page, ME, 'GET', '/api/blotter?date=' + pastDay + '&to=' + today)).json;
+      const shown = await page.evaluate(() => ({ scope: document.querySelector('#blotter-sheet-scope').textContent,
+        title: !document.querySelector('#blotter-sheet-note').parentElement.classList.contains('hidden'),
+        panels: [...document.querySelectorAll('#content .panels .panel h2')].map((x) => x.textContent),
+        cost: [...document.querySelectorAll('.lists .panel:nth-child(5) table.grid tr')].map((tr) => tr.children[0].textContent) }));
+      check('a period shows the workbook\'s summary tables under the lists, over its trades: the OIS summary\'s 1Y pays the day gone by\'s 1Y (3.500 $) beside today\'s, said over them',
+        shown.title && shown.panels.length === 4 && /^Aralık /.test(shown.scope) && shown.scope.includes(per.trades.length + ' işlemin hepsi')
+        && Math.abs(payDv01(per.sheet, '1Y') - payDv01(todaySheet, '1Y') - 3500) < 1e-6 && shown.cost.includes('1Y'), [shown, payDv01(per.sheet, '1Y'), payDv01(todaySheet, '1Y')]);
+      // a day gone by on its own, with no archive (it was never today here): its own trade's tables, said so
+      await page.evaluate((a) => window.tto.state.page.show(a, null), pastDay);
+      await page.waitForFunction((a) => { const d = window.tto.state.page.data; return d && !d.ranged && d.date === a; }, pastDay, { timeout: 20000 });
+      const one = (await api(page, ME, 'GET', '/api/blotter?date=' + pastDay)).json;
+      const oneScope = await page.evaluate(() => document.querySelector('#blotter-sheet-scope').textContent);
+      check('... a day gone by without its archive: the tables of its own trades (1Y pays 3.500 $), "gün sonu arşivi yok" said',
+        payDv01(one.sheet, '1Y') === 3500 && /gün sonu arşivi yok - günün 1 işlemiyle/.test(oneScope), [oneScope, payDv01(one.sheet, '1Y')]);
+      await page.click('#blotter-today');
+      await page.waitForFunction(() => { const d = window.tto.state.page.data; return d && d.is_today; }, null, { timeout: 20000 });
+      check('... today again: the sheet\'s own tables, nothing said over them',
+        await page.evaluate(() => document.querySelector('#blotter-sheet-scope').classList.contains('hidden')));
+    }
+
     // ------------------------------------------------------------------ second user: shared vs personal
     console.log('second user');
     const ctxB = await browser.newContext({ viewport: { width: 1600, height: 1000 } });

@@ -468,7 +468,10 @@ export class BlotterPage {
     // what the workbook's own sheet cannot hold is said next to its tables
     this.sheetNote = h('span', { class: 'sheetnote hidden', id: 'blotter-sheet-note' });
     this.sheetTitle.appendChild(this.sheetNote);
+    // a period's (or a day gone by's without its archive): the same tables over the trades shown - said what they cover
+    this.sheetScope = h('div', { class: 'banner hidden', id: 'blotter-sheet-scope' });
     this.host.appendChild(this.sheetTitle);
+    this.host.appendChild(this.sheetScope);
     this.host.appendChild(this.sheetWrap);
     this.showTab = show;
     show(this.tab);
@@ -1739,7 +1742,10 @@ export class BlotterPage {
     this.sheetNote.textContent = parts.length ? 'Tablolarda: ' + parts.join(' · ') + '.' : '';
     this.sheetNote.classList.toggle('hidden', !parts.length || !sheet.length);
     this.sheetTitle.classList.toggle('hidden', !sheet.length);
-    this.sheetLink.classList.toggle('hidden', !sheet.length);
+    this.sheetScope.textContent = d.sheet_scope || '';
+    this.sheetScope.classList.toggle('hidden', !d.sheet_scope || !sheet.length);
+    // (the sheet explorer shows the sheet itself - today's: not a period's tables)
+    this.sheetLink.classList.toggle('hidden', !sheet.length || !!d.sheet_scope);
     if (this.position) this.position.refresh();
   }
 }

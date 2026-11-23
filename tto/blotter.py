@@ -1555,14 +1555,15 @@ def forward_dv01_buckets(book, calc, trades: List[Dict[str, Any]]) -> Dict[int, 
     return {r: (a, b) for r, (a, b) in out.items()}
 
 
-def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], Any]:
+def sheet_values(book, trades: List[Dict[str, Any]], left_out: Optional[Dict[str, int]] = None) -> Dict[Tuple[int, int], Any]:
     """Cell values of the three input lists of the 'Günlük İşlemler' sheet for the given trades.
 
     The sheet was made for USDTRY forwards and OIS of a quoted tenor.  A forward of another currency against
     TRY goes in at its USD amount (its TRY rate as it is: the TL cost); a meeting-dated OIS goes in spread over
     the main tenors (see :func:`mpc_summary_rows`); an OIS leg between the desk's buckets (15M, 21M, 27M …) as two rows,
     its nominal and DV01 split between the two buckets around it at its own rate (:func:`buckets` - the sheet's tables
-    have no row for its tenor).  Column G holds each forward's DV01 ($)."""
+    have no row for its tenor).  Column G holds each forward's DV01 ($).  ``left_out`` (a dict): counts by kind the
+    trades the lists had no row left for (:data:`FWD_ROWS`, :data:`OIS_ROWS`, :data:`BOND_ROWS`)."""
     si = book.model.sheet_index[SHEET]
     vals: Dict[Tuple[int, int], Any] = {}
 
@@ -1584,6 +1585,8 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
         k = t.get("kind")
         if k == "fwd" and not in_summary(t):
             continue                                        # no TRY leg: nothing for the TRY tables
+        if left_out is not None and {"fwd": rf > FWD_ROWS[1], "ois": ro > OIS_ROWS[1], "bond": rb > BOND_ROWS[1]}.get(k):
+            left_out[k] = left_out.get(k, 0) + 1
         if k == "ois" and t.get("mpc"):
             if mkt is None:
                 mkt = OisMarket(book, book.engine.shared)
