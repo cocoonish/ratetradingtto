@@ -106,10 +106,26 @@ anything itself with `--mode replay`. Agents work in replay and on the fake term
     `FIRST_CPN_DT`, `PENULTIMATE_CPN_DT`, `INT_ACC_DT`, `DAYS_TO_SETTLE` - 12 hits once, then kept desk-wide
     (kv `fiyatyukleme.eurobonds`), never asked again;
   - **on each Hesapla**, every Eurobond of the list: `PX_MID` and `YLD_YTM_MID` - **2 hits a Eurobond a Hesapla** (the
-    cost the desk approved for BBG requests) - plus `PX_BID` / `PX_ASK` (2 more) only for a bond whose `PX_MID` is empty;
+    cost the desk approved for BBG requests) - plus `PX_BID` / `PX_ASK` (2 more) only for a bond whose `PX_MID` is empty
+    or that is set to Bid/Ask (below; one request for both);
     kept 5 minutes like the other BBG requests. Never polled, streamed or refreshed (`Provider.reference`, counted by
     `--max-hits`). The security is named by DİBS RV!N2's style (`"<ISIN> ISIN"` → `/isin/<ISIN>`), at its default pricing
     source. Replay asks nothing (a Eurobond cannot be added or priced there).
+- **Kâğıt Fiyat Yükleme's Bid/Ask choice** (`tto/fiyatyukleme.py`, `SIDE_FIELDS`; **approved by the desk on 23.11.2026**): a
+  bond of the user's list set to **Bid/Ask** starts its two sides from Bloomberg's bid and ask; the default, **Mid, asks
+  nothing new**.
+  - **On Hesapla** only, `PX_BID` and `PX_ASK` of the bonds set to Bid/Ask that are **not** on DİBS RV's trading list: one
+    reference request for the off-list DİBS (BBG mode; named as for their last trade, whose request is apart) and one for
+    the Eurobonds (either mode; the same request as an empty mid's sides). **2 hits a bond a Hesapla**, the answer kept
+    **5 minutes** (`CACHE_SECONDS`). Never polled, streamed or refreshed (`Provider.reference`, counted by `--max-hits`).
+  - No size fields are asked (`BID_SIZE` / `ASK_SIZE`): a DİBS whose bid equals its ask is read as no order standing
+    (Bloomberg gives the last trade on both sides) and is priced from the mid.
+  - The trading list's bonds read DİBS RV's own bid / ask (`K` / `L`, from `PX_BID` / `PX_ASK` and the sizes `XR` / `XS`
+    the sheet already asks for): **no new cost**.
+  - What the desk was told: "PX_BID and PX_ASK, 2 hits per bond per Hesapla, only for an off-list DİBS or a Eurobond set to
+    Bid/Ask; DİBS RV bonds use what the dashboard already receives; answers reused for 5 minutes; e.g. 10 such bonds and 10
+    Hesapla a day comes to at most 200 hits a day". Their answer, 23.11.2026: "Ok".
+  - Replay asks nothing (the off-list bonds' sides fall back to the mid and say why).
 
 **One-off reference requests** (`Provider.reference(securities, fields, timeout)`; `BloombergProvider.reference`, through the
 helper process as `("ref", …)`): one `ReferenceDataRequest` per 100 securities, securities × fields hits counted like every

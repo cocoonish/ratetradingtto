@@ -3564,6 +3564,49 @@ async function clipAfter(page, action) {
       && ['ihale', 'bbg'].every((m) => fyCurve[m].curve && fyCurve[m].mark === 'eğri fiyatı' && /tipik hata ±\d+ bp/.test(fyCurve[m].how)
         && fyCurve[m].t0y === fyN3(fyS) && fyCurve[m].by === fyN3(fyS + 0.05) && fyCurve[m].ay === fyN3(fyS - 0.05))
       && /bugünkü ihale listesinde yok/.test(fyCurve.ihale.how) && /kayıtlı ihale fiyatı yok/.test(fyCurve.bbg.how), { fyCurve, fyS });
+    // Mid or Bid/Ask (the desk, 23.11.2026: "... bid'i ve ask'i mid'den mi, bid/asktan mı almasını istediğimi de seçebilmeliyim.
+    // Default mid"): a DİBS RV bond switched to Bid/Ask - its sides from DİBS RV's bid / ask (100,100 / 100,125), the spreads each
+    // on its own side; the bill switched too, its bid equal to its ask: from the mid, said; kept with the list; "Tümü" sets all
+    await page.fill('#fy-add-text', 'TRT150328T24');
+    await page.click('#fy-add');
+    const fyBaseSel = (isin) => '#fy-list-table tr.fy-item[data-isin="' + isin + '"] select.fy-base';
+    await page.waitForSelector(fyBaseSel('TRT150328T24'), { timeout: 20000 }).catch(() => {});
+    const fyBases = () => page.evaluate(() => [...document.querySelectorAll('#fy-list-table tr.fy-item')].map((tr) => tr.dataset.isin + ':'
+      + (tr.querySelector('select.fy-base') || {}).value).join(' '));
+    const fyBase0 = await fyBases();
+    const fyAyar = () => page.waitForResponse((r) => pathOf(r) === '/api/fiyat-yukleme/ayar', { timeout: 20000 }).catch(() => null);
+    for (const isin of ['TRT150328T24', 'TRB100227T13']) await Promise.all([fyAyar(), page.selectOption(fyBaseSel(isin), 'bidask')]);
+    const fyKept = (((await api(page, 'ayşe yilmaz', 'GET', '/api/fiyat-yukleme')).json || {}).list || []).map((r) => r.isin + ':' + r.base).join(' ');
+    await page.click('#fy-hesapla');
+    await page.waitForFunction(() => /^Bid\/Ask: DİBS RV/.test(((document.querySelector('#fy-table tr.fy-row[data-isin="TRT150328T24"] td.fy-how') || {})
+      .textContent) || ''), null, { timeout: 30000 }).catch(() => {});
+    const fyBA = await page.evaluate(() => {
+      const row = (isin) => {
+        const tr = document.querySelector('#fy-table tr.fy-row[data-isin="' + isin + '"]');
+        if (!tr) return {};
+        const v = (c) => (tr.querySelector('input.' + c) || {}).value;
+        return { bp: v('fy-bid-p'), ap: v('fy-ask-p'), by: v('fy-bid-y'), ay: v('fy-ask-y'), how: (tr.querySelector('td.fy-how') || {}).textContent || '',
+          warn: tr.classList.contains('fy-warn') };
+      };
+      return { two: row('TRT150328T24'), bill: row('TRB100227T13'), info: (document.getElementById('fy-result-info') || {}).textContent || '' };
+    });
+    const fyNum = (s) => Number(String(s || '').replace(/\./g, '').replace(',', '.'));
+    check('... Mid / Bid/Ask per bond (Mid until set, kept with the list by ISIN): a DİBS RV bond on Bid/Ask starts each side from DİBS RV\'s '
+      + 'bid / ask (100,100 / 100,125), the 5 bp spreads on each side; the bill, its bid equal to its ask, from the mid and the row says why',
+      fyBase0 === 'TRB100227T13:mid TRT240227T17:mid TRT150328T24:mid TRT130127T11:mid'
+      && fyKept === 'TRB100227T13:bidask TRT240227T17:mid TRT150328T24:bidask TRT130127T11:mid'
+      && fyBA.two.how.startsWith('Bid/Ask: DİBS RV bid 100,100 / ask 100,125 (valör 04.11.2026)')
+      && fyNum(fyBA.two.bp) < 100.1 && fyNum(fyBA.two.bp) > 99.9 && fyNum(fyBA.two.ap) > 100.125 && fyNum(fyBA.two.ap) < 100.325
+      && fyNum(fyBA.two.by) > fyNum(fyBA.two.ay) + 0.1 && fyBA.bill.warn && /Bid\/Ask seçili; bid = ask \(92,220\): canlı emir yok/.test(fyBA.bill.how)
+      && /Bid\/Ask 2 kâğıt \(1 bid \/ ask'tan, 1 mid'den: satırda neden\)/.test(fyBA.info), { fyBase0, fyKept, fyBA });
+    await Promise.all([fyAyar(), page.selectOption('#fy-base-all', 'mid')]);
+    await page.waitForFunction(() => [...document.querySelectorAll('#fy-list-table select.fy-base')].every((s) => s.value === 'mid'), null, { timeout: 20000 }).catch(() => {});
+    const fyAll = await fyBases();
+    const fyAllKept = (((await api(page, 'ayşe yilmaz', 'GET', '/api/fiyat-yukleme')).json || {}).list || []).every((r) => r.base === 'mid');
+    check('... and "Tümü" sets every bond of the list back to Mid at once (on the page and kept)',
+      fyAll === 'TRB100227T13:mid TRT240227T17:mid TRT150328T24:mid TRT130127T11:mid' && fyAllKept
+      && /Mid \/ Bid\/Ask değişti: yeniden Hesapla/.test(await page.evaluate(() => (document.getElementById('fy-result-info') || {}).textContent || '')),
+      { fyAll, fyAllKept });
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');

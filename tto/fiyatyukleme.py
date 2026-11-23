@@ -51,6 +51,18 @@ Excel's PRICE / YIELD, 30/360 or ACT/ACT by DAY_CNT_DES) anchored to Bloomberg -
 price at the mid yield), so the mid is Bloomberg's to the digit and the anchor (shown, flagged beyond 0,05) moves the sides
 by the convention's curvature only.  In the txt: clean prices, yields 0.
 
+**Mid or Bid/Ask** (the desk, 23.11.2026: "Kağıt fiyat yükleme listesinde bloomberg'te kağıt kağıt bid'i ve ask'i mid'den
+mi, bid/asktan mı almasını istediğimi de seçebilmeliyim. Default mid"): each bond of a user's list, kept with it by its ISIN
+(``base_of``) - "mid", the default: both sides from the mid, as above; "bidask": the bid side from Bloomberg's bid, the ask
+side from its ask, the desk's spreads on each on its own side as they go on the mid (``quote``; at 0 the screen's own).  A
+bond of DİBS RV's trading list: the sheet's bid / ask (``K`` / ``L``: Bloomberg's figure, "–" where the order sizes ``XR`` /
+``XS`` say no order stands - already asked for, no new cost); any other DİBS (BBG mode) and a Eurobond (either mode):
+PX_BID and PX_ASK asked on Hesapla (``SIDE_FIELDS``: 2 hits a bond, kept ``CACHE_SECONDS``; the desk's OK of 23.11.2026),
+only for a bond set to Bid/Ask.  Each side is read as the last trade is (``_from_trade``: at its value date, the same yield
+at t0; a price-quoted bond's price as it is); a Eurobond's sides' yields by the street convention anchored as its mid is.
+No live order ("–"), a side missing, or a DİBS whose bid equals its ask (no order stands: Bloomberg gives the last trade on
+both sides): the row from the mid, and it says why.
+
 **Sabit fiyat** (the desk, 20.11.2026: "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu şekilde yüklenecek diye
 girip bırakabilmeliyim"): a bond's bid and ask in the unit the txt writes it in (a bill's / zero's simple yields, any
 other's clean prices), typed (``set_fixed``) or pasted from Excel ("Sabitlemeyi de tablo olarak atacağım excelden
@@ -104,11 +116,16 @@ KEY_LABELS, KEY_AUCTIONS, KEY_EURO = "fiyatyukleme.labels", "fiyatyukleme.auctio
 #: the last trade Bloomberg answered for a bond off the trading list (BBG mode), kept per ISIN beyond the answers'
 #: ``CACHE_SECONDS`` - a point of Kâğıt Fiyatlama's last known spread (``KagitFiyat._points``)
 KEY_TRADES = "fiyatyukleme.trades"
-#: a Eurobond's facts (once an ISIN), its mid (2 hits a bond a Hesapla) and the sides asked only when the mid is empty
+#: a Eurobond's facts (once an ISIN) and its mid (2 hits a bond a Hesapla)
 EURO_FACTS = ("NAME", "SECURITY_DES", "CRNCY", "CPN", "CPN_TYP", "CPN_FREQ", "DAY_CNT_DES", "MATURITY", "FIRST_CPN_DT",
               "PENULTIMATE_CPN_DT", "INT_ACC_DT", "DAYS_TO_SETTLE")
 EURO_MID = ("PX_MID", "YLD_YTM_MID")
-EURO_SIDES = ("PX_BID", "PX_ASK")
+#: a bond's two sides (2 hits a bond a Hesapla): a Eurobond's when its PX_MID is empty, and those of a bond set to Bid/Ask
+#: that DİBS RV does not quote (an off-list DİBS, a Eurobond - the desk's OK of 23.11.2026)
+SIDE_FIELDS = ("PX_BID", "PX_ASK")
+#: where a bond's two sides start (the desk, 23.11.2026: "... mid'den mi, bid/asktan mı ... Default mid")
+BASES = ("mid", "bidask")
+BASE_TEXT = {"mid": "Mid", "bidask": "Bid/Ask"}
 EURO_LAG = 2                               # business days to settle when Bloomberg does not say (DAYS_TO_SETTLE)
 ANCHOR_WARN = 0.05                         # price points: the street convention this far from Bloomberg's mid is flagged
 LIST_MAX = 200                             # bonds on a user's list
@@ -533,6 +550,16 @@ def quote(kind: str, bond: Optional[qc.Bond], t0: _dt.date, t0_yield: Optional[f
     return {"bid_yield": None, "ask_yield": None, "bid_price": t0_price - bid, "ask_price": t0_price + ask}
 
 
+def base_of(entry: Dict[str, Any]) -> str:
+    """Where a list entry's two sides start: "bidask" when its owner set it so, else "mid" (the default)."""
+    return "bidask" if entry.get("base") == "bidask" else "mid"
+
+
+def same_sides(bid: float, ask: float) -> bool:
+    """A DİBS's bid equal to its ask: no order stands - Bloomberg gives the last trade on both sides."""
+    return abs(bid - ask) < 1e-9
+
+
 # ---------------------------------------------------------------------------------------------- Eurobonds: the street convention
 def edate(d: _dt.date, months: int) -> _dt.date:
     """``EDATE``: the same day ``months`` on, the month's last day where that month is shorter."""
@@ -808,16 +835,17 @@ class FiyatYukleme(object):
         return out
 
     def state(self, user: Optional[str]) -> Dict[str, Any]:
-        """``GET /api/fiyat-yukleme``: the user's list (each bond's description, maturity, kind, spreads), the mode, the
-        defaults, the last pasted text, the desk's labels, today's saved files."""
+        """``GET /api/fiyat-yukleme``: the user's list (each bond's description, maturity, kind, spreads, Mid or Bid/Ask),
+        the mode, the defaults, the last pasted text, the desk's labels, today's saved files."""
         key = self.svc.require_user(user)
         st = self._load(key)
         today, t0, _ = self._today()
         rows = []
         for e, rec in self._rows(st):
             rows.append(dict(brief(rec), quoted=quoted_of(rec.get("kind")), write="yield" if rec.get("kind") in WRITE_YIELD else "price",
-                             spread=self.spreads_of(e, rec.get("kind"), st["defaults"])))
-        return {"mode": st["mode"], "modes": [{"id": m, "text": MODE_TEXT[m]} for m in MODES], "defaults": st["defaults"],
+                             spread=self.spreads_of(e, rec.get("kind"), st["defaults"]), base=base_of(e)))
+        return {"mode": st["mode"], "modes": [{"id": m, "text": MODE_TEXT[m]} for m in MODES],
+                "bases": [{"id": b, "text": BASE_TEXT[b]} for b in BASES], "defaults": st["defaults"],
                 "text": st["text"], "list": rows, "fixed": self.fixed_rows(st), "labels": self.label_rows(),
                 "saved": self.saved_today(key, today), "today": today.isoformat(), "t0": t0.isoformat(),
                 "live": self.svc.mode == "live", "limits": LIMITS, "file": file_name(today), "gen": self.svc.gen}
@@ -1071,11 +1099,36 @@ class FiyatYukleme(object):
 
     def set_options(self, user: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
         """The user's settings: ``{"mode"?, "defaults"?: {yield_bid, yield_ask, price_bid, price_ask}, "spreads"?: {isin:
-        {"bid", "ask"} - a side left empty uses the default}}``."""
+        {"bid", "ask"} - a side left empty uses the default}, "bases"?: {isin: "mid" | "bidask"}, "base_all"?: "mid" |
+        "bidask" - every bond of the list ("Tümü")}``.  A bond's Mid / Bid/Ask is kept with it by its ISIN (Mid: the key
+        dropped, the entry as it was)."""
         key = self.svc.require_user(user)
         body = body if isinstance(body, dict) else {}
+
+        def base(v: Any) -> str:
+            if v not in BASES:
+                raise FiyatError("Mid ya da Bid/Ask olmalı: %s" % (v if isinstance(v, str) and v else "(boş)"))
+            return v
+
+        def put_base(entry: Dict[str, Any], v: str) -> None:
+            if v == "bidask":
+                entry["base"] = v
+            else:
+                entry.pop("base", None)
+
         with self._lock:
             st = self._load(key)
+            if "base_all" in body:
+                v = base(body["base_all"])
+                for b in st["bonds"]:
+                    put_base(b, v)
+            if isinstance(body.get("bases"), dict):
+                mine = {b["isin"]: b for b in st["bonds"]}
+                for isin, v in body["bases"].items():
+                    code = "".join(str(isin or "").split()).upper()
+                    if code not in mine:
+                        raise FiyatError("kâğıt listede değil: %s" % code)
+                    put_base(mine[code], base(v))
             if "mode" in body:
                 if body["mode"] not in MODES:
                     raise FiyatError("mod BBG ya da İhale olmalı")
@@ -1152,7 +1205,7 @@ class FiyatYukleme(object):
         fixed = {f["isin"]: f for f in st["fixed"]}
         listed = {e["isin"] for e, _ in rows}
         rows = [(e, rec) for e, rec in rows if e["isin"] not in fixed]
-        # Eurobonds: Bloomberg's mid whatever the switch says - never an auction or a last trade
+        # Eurobonds: Bloomberg's mid (or its bid / ask: Bid/Ask) whatever the switch says - never an auction or a last trade
         euro = [(e, rec) for e, rec in rows if rec.get("kind") == EURO]
         rows = [(e, rec) for e, rec in rows if rec.get("kind") != EURO]
         if mode == "ihale":
@@ -1361,8 +1414,9 @@ class FiyatYukleme(object):
     # ------------------------------------------------------------------ BBG
     def _read(self, user: str, isins: Sequence[str]) -> Dict[str, Any]:
         """(engine thread) DİBS RV's last trade of the list's bonds that are on it (``AS`` LAST_PRICE, ``I``
-        LAST_TRADE_DATE, ``BS`` the source, ``S`` the simple yield in use), the trading list's bonds now for the bond curve
-        (quantcurve's ``read_engine``), and how a bond off the list is named to Bloomberg (Tüm Kâğıtlar's sources
+        LAST_TRADE_DATE, ``BS`` the source, ``S`` the simple yield in use) and its bid / ask (``K`` / ``L``: Bloomberg's
+        figure, "–" where the order sizes ``XR`` / ``XS`` say no order stands), the trading list's bonds now for the bond
+        curve (quantcurve's ``read_engine``), and how a bond off the list is named to Bloomberg (Tüm Kâğıtlar's sources
         ``EK_EVREN!C2`` / ``E2``, DİBS RV!N2)."""
         from . import extras as ex
         from . import rvfair
@@ -1383,7 +1437,8 @@ class FiyatYukleme(object):
         for r in range(rvfair.FIRST, rvfair.LAST + 1):
             code = rvfair.isin_of(raw("A", r))
             if code and code in want and code not in out["rv"]:
-                out["rv"][code] = {"row": r, "last": raw("AS", r), "date": raw("I", r), "source": raw("BS", r), "simple": raw("S", r)}
+                out["rv"][code] = {"row": r, "last": raw("AS", r), "date": raw("I", r), "source": raw("BS", r), "simple": raw("S", r),
+                                   "bid": raw("K", r), "ask": raw("L", r)}
         eng: Dict[str, Any] = {}
 
         def reader(sheet: str):
@@ -1413,8 +1468,9 @@ class FiyatYukleme(object):
                       ) -> Tuple[Dict[str, Dict[str, Any]], int, Optional[str]]:
         """``fields`` of each security in one one-off request (``Provider.reference``: securities × fields hits, counted by
         ``--max-hits``) - the last trade of bonds off the trading list (LAST_PRICE, LAST_TRADE_DATE), a Eurobond's mid
-        (PX_MID, YLD_YTM_MID) or its sides (PX_BID, PX_ASK) -, from an answer of the last ``CACHE_SECONDS`` where there is
-        one; ``(answers by security, securities asked now, why none came)``."""
+        (PX_MID, YLD_YTM_MID), a bond's sides (PX_BID, PX_ASK: a Eurobond's empty mid, a bond set to Bid/Ask) -, from an
+        answer of the last ``CACHE_SECONDS`` where there is one; ``(answers by security, securities asked now, why none
+        came)``."""
         now = time.time()
         what = tuple(fields)
         out: Dict[str, Dict[str, Any]] = {}
@@ -1478,9 +1534,14 @@ class FiyatYukleme(object):
                 for _, rec in rows if rec["isin"] not in got["rv"] and rec.get("kind")}
         answers, asked, why_none = self.ask_bloomberg(sorted(set(secs.values())), BBG_FIELDS)
         self.keep_trades({code: answers[sec] for code, sec in secs.items() if sec in answers}, secs)
+        # Bid/Ask (the desk, 23.11.2026): PX_BID / PX_ASK only of the bonds set so that DİBS RV does not quote (2 hits a bond)
+        bidask = {e["isin"] for e, rec in rows if base_of(e) == "bidask" and self._why_not(rec) is None}
+        side_secs = sorted({secs[c] for c in bidask if c in secs})
+        sides, asked_s, why_s = self.ask_bloomberg(side_secs, SIDE_FIELDS) if side_secs else ({}, 0, None)
         book = self.auctions()
         ctx: Dict[str, Any] = {"got": got, "today": today, "t0": t0, "hol": hol}
         out_rows = []
+        from_sides = 0
         for e, rec in rows:
             row = self._row(e, rec, st, t0)
             why = self._why_not(rec)
@@ -1502,6 +1563,20 @@ class FiyatYukleme(object):
                 ref = None
             last = last if type(last) is float and last > 0 else None
             notes = []
+            if code in bidask:
+                # the bid side from Bloomberg's bid, the ask from its ask - else (no live order, bid = ask, none) the mid, said
+                row["base"] = "bidask"
+                if rv is not None:
+                    bid, ask, no = self.rv_sides(rv)
+                else:
+                    bid, ask, no = self.bbg_sides(sides.get(secs.get(code, "")), why_s if why_s != why_none else None)
+                vd = today if source == "ISL0" else workday(today, 1, hol)
+                no = no or self._from_sides(row, rec, bid, ask, vd, ref, book.get(code), "DİBS RV" if rv is not None else "Bloomberg", t0)
+                if not no:
+                    from_sides += 1
+                    out_rows.append(row)
+                    continue
+                notes.append("Bid/Ask seçili; %s: mid'den" % no)
             if rv is None and why_none:
                 notes.append(why_none)
             if last is not None and day == today:
@@ -1528,8 +1603,78 @@ class FiyatYukleme(object):
                 row["note"] = " · ".join(notes + ([row["note"]] if row.get("note") else []))
             out_rows.append(row)
         curve = self._curve_fallback(key, rows, out_rows, t0)
-        return {"rows": out_rows, "curve": curve, "bbg": {"asked": asked, "hits": asked * len(BBG_FIELDS), "cached": len(answers) - asked,
-                                                          "why": why_none, "trading": len(got["rv"]), "off": len(set(secs.values()))}}
+        bbg = {"asked": asked, "hits": asked * len(BBG_FIELDS) + asked_s * len(SIDE_FIELDS), "cached": len(answers) - asked,
+               "why": why_none, "trading": len(got["rv"]), "off": len(set(secs.values()))}
+        if bidask:
+            # (the bonds set to Bid/Ask, those priced from their sides, the sides asked now / from the last 5 minutes)
+            bbg["bidask"] = {"n": len(bidask), "from_sides": from_sides, "asked": asked_s, "cached": len(sides) - asked_s, "why": why_s}
+        return {"rows": out_rows, "curve": curve, "bbg": bbg}
+
+    @staticmethod
+    def _sides_of(bid: Any, ask: Any, where: str) -> Tuple[Optional[float], Optional[float], str]:
+        """Bloomberg's bid and ask of a DİBS as figures - or why they are no quote: a side missing, or the bid equal to the
+        ask (no order stands: Bloomberg gives the last trade on both sides)."""
+        b, a = (v if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None for v in (bid, ask))
+        if b is None or a is None:
+            return None, None, "%s'de %s yok" % (where, "bid / ask" if b is None and a is None else "bid" if b is None else "ask")
+        if same_sides(b, a):
+            return None, None, "bid = ask (%s): canlı emir yok, Bloomberg iki tarafa da son fiyatı veriyor" % _n(b, 3)
+        return float(b), float(a), ""
+
+    @classmethod
+    def rv_sides(cls, rv: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], str]:
+        """A DİBS RV bond's bid and ask as the sheet shows them (``K`` / ``L``), or why they are no quote: "–" (its order
+        sizes say no order stands), none, the bid equal to the ask."""
+        from .extras import NO_QUOTE
+        dash = [s for s in ("bid", "ask") if rv.get(s) == NO_QUOTE]
+        if dash:
+            return None, None, "DİBS RV'de canlı emir yok (%s –)" % " ve ".join(dash)
+        return cls._sides_of(rv.get("bid"), rv.get("ask"), "DİBS RV")
+
+    @classmethod
+    def bbg_sides(cls, ans: Optional[Dict[str, Any]], why: Optional[str]) -> Tuple[Optional[float], Optional[float], str]:
+        """An off-list DİBS's PX_BID / PX_ASK as Bloomberg answered (``ans``; None: not answered, ``why``), or why they are
+        no quote."""
+        if ans is None:
+            return None, None, "bid / ask sorulamadı" + (" (%s)" % why if why else "")
+        return cls._sides_of(ans.get("PX_BID"), ans.get("PX_ASK"), "Bloomberg")
+
+    def _from_sides(self, row: Dict[str, Any], rec: Dict[str, Any], bid: float, ask: float, vd: _dt.date, ref: Optional[float],
+                    auctions: Optional[List[Dict[str, Any]]], where: str, t0: _dt.date) -> str:
+        """A Bid/Ask row from Bloomberg's bid and ask (in place): each side read as the last trade is (``_from_trade``: at
+        its value date ``vd``, the same yield at t0 - a bill's price as its simple yield -; a price-quoted bond's price as
+        it is), the desk's spreads on each on its own side (``quote``: at 0 the screen's own), t0 the middle of the two.
+        "" when done; else why not, the row untouched (it is then priced from the mid)."""
+        reads = []
+        for side, v in (("bid", bid), ("ask", ask)):
+            y, p, how = self._from_trade(rec, v, vd, ref, auctions)
+            if y is None and p is None:
+                return "%s okunamadı (%s)" % (side, _n(v, 3))
+            reads.append((y, p, how))
+        (by, bp, bh), (ay, ap, ah) = reads
+        kind = rec["kind"]
+        bond = bond_of(rec)
+        sp = row["spread"]
+        qb, qa = quote(kind, bond, t0, by, bp, sp["bid"], sp["ask"]), quote(kind, bond, t0, ay, ap, sp["bid"], sp["ask"])
+        sides = ({"yield": qb["bid_yield"], "price": qb["bid_price"]}, {"yield": qa["ask_yield"], "price": qa["ask_price"]})
+        if not all(s["yield" if kind in WRITE_YIELD else "price"] is not None for s in sides):
+            return "bid / ask'tan fiyat çıkmadı"
+        if by is not None and ay is not None:
+            mid = (by + ay) / 2.0
+            row["t0"] = {"yield": mid * 100.0, "price": price_of(bond, mid, t0) if bond is not None else None}
+        else:
+            row["t0"] = {"yield": None, "price": (bp + ap) / 2.0}
+        row["bid"], row["ask"] = sides
+        row["priced"] = True
+        row["source"] = "bbg-bidask"
+        head = "Bid/Ask: %s bid %s / ask %s" % (where, _n(bid, 3), _n(ask, 3))
+        if by is None:
+            row["how"] = head + " → t0 fiyatları olarak (fiyatla kote edilir); spread'ler kendi tarafına"
+        else:
+            read = ["%s getiri olarak okundu" % s for s, h in (("bid", bh), ("ask", ah)) if "getiri olarak okundu" in h]
+            row["how"] = "%s (valör %s) → basit getiri %%%s / %%%s%s, t0'da aynı getiri; spread'ler kendi tarafına" % (
+                head, tr_day(vd), _n(by * 100.0, 3), _n(ay * 100.0, 3), (" (%s)" % ", ".join(read)) if read else "")
+        return ""
 
     def _from_trade(self, rec: Dict[str, Any], last: float, vd: _dt.date, ref: Optional[float],
                     auctions: Optional[List[Dict[str, Any]]]) -> Tuple[Optional[float], Optional[float], str]:
@@ -1614,26 +1759,34 @@ class FiyatYukleme(object):
     def _euro(self, st: Dict[str, Any], rows: List[Tuple[Dict[str, Any], Dict[str, Any]]], today: _dt.date
               ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Every Eurobond of the list from Bloomberg's mid ("Bunlarda last trade yok direkt midden ve spreadden
-        gideceğiz"): PX_MID and YLD_YTM_MID (2 hits a bond), PX_BID / PX_ASK only for a bond whose PX_MID is empty (2 more),
-        each kept ``CACHE_SECONDS``; the sides by the yield spreads, their prices by the street convention anchored to the
-        mid (``_price_euro``)."""
+        gideceğiz"): PX_MID and YLD_YTM_MID (2 hits a bond), PX_BID / PX_ASK only for a bond whose PX_MID is empty or that
+        is set to Bid/Ask (2 more, one request), each kept ``CACHE_SECONDS``; the sides by the yield spreads - on the mid, or
+        on Bloomberg's bid and ask (Bid/Ask) -, their prices by the street convention anchored to the mid
+        (``_price_euro``)."""
         svc = self.svc
         secs = {rec["isin"]: svc._bbg_security(rec["isin"]) for _, rec in rows}
         names = sorted(set(secs.values()))
         mids, asked, why = self.ask_bloomberg(names, EURO_MID)
         empty = [s for s in names if s in mids and not (type(mids[s].get("PX_MID")) is float and mids[s]["PX_MID"] > 0)]
-        sides, asked2, why2 = self.ask_bloomberg(empty, EURO_SIDES) if empty else ({}, 0, None)
+        bidask = [e["isin"] for e, _ in rows if base_of(e) == "bidask"]
+        want = sorted(set(empty) | {secs[c] for c in bidask if secs[c] in mids})
+        sides, asked2, why2 = self.ask_bloomberg(want, SIDE_FIELDS) if want else ({}, 0, None)
         out = []
         for e, rec in rows:
             row = self._row(e, rec, st, today)
             ans = mids.get(secs[rec["isin"]])
+            if base_of(e) == "bidask":
+                row["base"] = "bidask"
             if ans is None:
                 row["why"] = "Eurobond yalnız Bloomberg'in mid'inden fiyatlanır: " + (why or "cevap yok")
             else:
-                self._price_euro(row, rec, ans, sides.get(secs[rec["isin"]]) or {}, today)
+                self._price_euro(row, rec, ans, sides.get(secs[rec["isin"]]) or {}, today, base_of(e) == "bidask", why2)
             out.append(row)
-        return out, {"asked": asked, "hits": len(EURO_MID) * asked + len(EURO_SIDES) * asked2, "cached": len(mids) - asked,
-                     "sides": len(empty), "why": why or why2}
+        res = {"asked": asked, "hits": len(EURO_MID) * asked + len(SIDE_FIELDS) * asked2, "cached": len(mids) - asked,
+               "sides": len(empty), "why": why or why2}
+        if bidask:
+            res["bidask"] = {"n": len(bidask), "from_sides": sum(1 for r in out if r.get("source") == "bbg-bidask")}
+        return out, res
 
     def euro_settle(self, rec: Dict[str, Any], today: _dt.date) -> Tuple[_dt.date, str]:
         """The settlement Bloomberg's mid is for: today + the bond's own lag (Bloomberg's DAYS_TO_SETTLE, asked with its
@@ -1652,10 +1805,14 @@ class FiyatYukleme(object):
                                           "Bloomberg DAYS_TO_SETTLE" if isinstance(lag, int) else "varsayılan: Bloomberg DAYS_TO_SETTLE vermedi")
         return day, how
 
-    def _price_euro(self, row: Dict[str, Any], rec: Dict[str, Any], mid: Dict[str, Any], sides: Dict[str, Any], today: _dt.date) -> None:
+    def _price_euro(self, row: Dict[str, Any], rec: Dict[str, Any], mid: Dict[str, Any], sides: Dict[str, Any], today: _dt.date,
+                    bidask: bool = False, why_sides: Optional[str] = None) -> None:
         """A Eurobond's row (in place): mid = PX_MID (else (PX_BID + PX_ASK)/2, said) and YLD_YTM_MID; bid yield = mid +
         bid bp, ask yield = mid − ask bp; each side's clean price by the street convention at Bloomberg's settlement plus
-        the anchor (PX_MID − the convention's price at the mid yield: shown, flagged beyond ``ANCHOR_WARN``)."""
+        the anchor (PX_MID − the convention's price at the mid yield: shown, flagged beyond ``ANCHOR_WARN``).  Set to
+        Bid/Ask (``bidask``): the bid yield = the yield of PX_BID + bid bp, the ask yield = the yield of PX_ASK − ask bp,
+        those yields by the same anchored convention (the convention's yield of the price − the anchor: at 0 bp the sides
+        are Bloomberg's own); without both sides (``why_sides``: why none came) from the mid, said."""
         def px(v: Any) -> Optional[float]:
             return v if type(v) is float and v > 0 else None
 
@@ -1684,17 +1841,37 @@ class FiyatYukleme(object):
             row["why"] = "vadesi geçmiş ya da Bloomberg'in mid'i sokak kuralıyla okunamadı"
             return
         sp = row["spread"]
-        by, ay = y + sp["bid"] / BP, y - sp["ask"] / BP
+        start = None                                     # Bid/Ask: Bloomberg's bid and ask, and their yields
+        if bidask:
+            pb0, pa0 = px(sides.get("PX_BID")), px(sides.get("PX_ASK"))
+            if pb0 is None or pa0 is None:
+                no = ("bid / ask sorulamadı (%s)" % why_sides) if why_sides and not sides else "Bloomberg'de %s yok" % (
+                    "bid / ask" if pb0 is None and pa0 is None else "bid" if pb0 is None else "ask")
+            else:
+                yb0, ya0 = bond.yield_of(pb0 - anchor, settle, y), bond.yield_of(pa0 - anchor, settle, y)
+                no = "bid / ask sokak kuralıyla okunamadı" if yb0 is None or ya0 is None else ""
+                if not no:
+                    start = (pb0, pa0, yb0, ya0)
+            if no:
+                notes.append("Bid/Ask seçili; %s: mid'den" % no)
+        yb, ya = (start[2], start[3]) if start else (y, y)
+        by, ay = yb + sp["bid"] / BP, ya - sp["ask"] / BP
         pb, pa = bond.clean(by, settle), bond.clean(ay, settle)
         row["t0"] = {"yield": y * 100.0, "price": price}
         row["bid"] = {"yield": by * 100.0, "price": pb + anchor if pb is not None else None}
         row["ask"] = {"yield": ay * 100.0, "price": pa + anchor if pa is not None else None}
         row["priced"] = row["bid"]["price"] is not None and row["ask"]["price"] is not None
-        row.update(source="bbg-mid", value_date=settle.isoformat(), settle=settle.isoformat(), anchor=anchor)
-        row["how"] = ("Bloomberg mid %s %s, YLD_YTM_MID %%%s (valör %s: %s) → getiriler ± spread; fiyatlar sokak kuralıyla (%s, yılda %d "
-                      "kupon), Bloomberg'in mid'ine çapalı: çapa farkı %s fiyat puanı") % (
-            used, _n(price, 3), _n(y * 100.0, 3), tr_day(settle), settle_how, rec.get("basis_text") or rec.get("basis"), bond.f,
-            ("%+.3f" % anchor).replace(".", ","))
+        row.update(source="bbg-bidask" if start else "bbg-mid", value_date=settle.isoformat(), settle=settle.isoformat(), anchor=anchor)
+        conv = "%s, yılda %d kupon" % (rec.get("basis_text") or rec.get("basis"), bond.f)
+        if start:
+            row["how"] = ("Bid/Ask: Bloomberg bid %s / ask %s → getirileri %%%s / %%%s sokak kuralıyla (%s; valör %s: %s), Bloomberg'in "
+                          "mid'ine çapalı (%s %s, YLD_YTM_MID %%%s: çapa farkı %s fiyat puanı) → spread'ler kendi tarafına") % (
+                _n(start[0], 3), _n(start[1], 3), _n(start[2] * 100.0, 3), _n(start[3] * 100.0, 3), conv, tr_day(settle), settle_how, used,
+                _n(price, 3), _n(y * 100.0, 3), ("%+.3f" % anchor).replace(".", ","))
+        else:
+            row["how"] = ("Bloomberg mid %s %s, YLD_YTM_MID %%%s (valör %s: %s) → getiriler ± spread; fiyatlar sokak kuralıyla (%s), "
+                          "Bloomberg'in mid'ine çapalı: çapa farkı %s fiyat puanı") % (
+                used, _n(price, 3), _n(y * 100.0, 3), tr_day(settle), settle_how, conv, ("%+.3f" % anchor).replace(".", ","))
         if abs(anchor) > ANCHOR_WARN:
             notes.append("sokak kuralı Bloomberg'in mid'inden %s fiyat puanı farklı (> 0,05): gün sayımını / kupon takvimini kontrol edin"
                          % _n(abs(anchor), 3))

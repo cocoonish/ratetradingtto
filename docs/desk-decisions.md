@@ -672,6 +672,29 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
       yields (the catalog's kind, or a `TRB…` ISIN), everything else clean prices - shown on the row;
     - their own table, "Sabit fiyatlar": ISIN, description, maturity, unit, bid, offer (three decimals, edited in place),
       the file line each gives, × - apart from the computed list.
+- **Mid or Bid/Ask** (23.11.2026):
+
+  > "Kağıt fiyat yükleme listesinde bloomberg'te kağıt kağıt bid'i ve ask'i mid'den mi, bid/asktan mı almasını istediğimi
+  > de seçebilmeliyim. Default mid"
+
+  - per bond in the list (kv `fiyatyukleme.list:<user>`, the entry's `base`, kept by ISIN): **Mid** (the default: as
+    before) or **Bid/Ask** - the bid side starts from Bloomberg's bid, the ask side from its ask, the desk's spreads on
+    each on its own side (yield spreads for yield-quoted bonds, price spreads for price-quoted ones); at 0 the screen's
+    figures. "Tümü" sets every bond of the list at once;
+  - a bond of DİBS RV's trading list: the sheet's bid / ask (`K` / `L`), no new Bloomberg cost; "–" (its order sizes say
+    no order stands): from the mid, said on the row;
+  - any other DİBS (BBG mode) and a Eurobond (either mode): `PX_BID` / `PX_ASK` asked on Hesapla, only for the bonds set
+    to Bid/Ask - 2 hits a bond a Hesapla, kept 5 minutes. **The desk approved the cost on 23.11.2026** ("Ok"; the request
+    and its cost: [market-data.md](market-data.md)). No size fields are asked;
+  - a DİBS whose bid equals its ask has no standing order (Bloomberg gives the last trade on both sides): from the mid,
+    said; a side missing likewise.
+  - **Conventions settled** (ask before changing): each side is read as the last trade is - its price at its source's
+    value date (ISL0 today, else T+1) → its simple yield, the same yield at t0 (a bill's figure read as `bill_last` reads
+    a last trade); a price-quoted bond's price as it is. The t0 / mid column of a DİBS row on Bid/Ask is the
+    middle of its two sides; a Eurobond's stays Bloomberg's mid, and its sides' yields come from the street convention
+    anchored as the mid is (the convention's yield of the price less the anchor), so at 0 bp the sides are Bloomberg's to
+    the digit. In İhale mode a DİBS comes from the auction (the choice is BBG's); a Eurobond follows its choice in both
+    modes. Mid back again leaves the stored entry as it was.
 - Code: `tto/fiyatyukleme.py`, `Service.fiyat_yukleme`, `GET /api/fiyat-yukleme`, `POST /api/fiyat-yukleme/{ekle, cikar,
   sabit, sabit-sil, sabit-yapistir, ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
   `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_fiyatyukleme.py`, the browser test's Kâğıt Fiyat Yükleme
