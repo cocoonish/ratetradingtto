@@ -878,10 +878,12 @@ async function clipAfter(page, action) {
       check('"Ters işlem" on it: RECEIVE to its own maturity (a broken date, 1Y from that day\'s spot), the same nominal, no level',
         oRev.strategy === 'outright' && oRev.side === 'RECEIVE' && JSON.stringify(oRev.tenors) === JSON.stringify([end]) && yearOn >= 1 && yearOn <= 6
         && trNumber(oRev.size) === 150e6 && oRev.level === '' && /kırık vade/.test(oRev.note), [oRev, end, yearOn]);
-      // priced on today's market: its mid used, the leg the broken date - then saved: a new trade, the old one as it was
-      await page.evaluate(() => window.tto.state.page.ois.marketHint.querySelector('button').click());
-      await page.waitForFunction((e) => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox'); return q && q.textContent.includes(e) && !!q.querySelector('[data-k="vs-mid-bp"]'); },
-        end, { timeout: 15000 });
+      // priced on today's market: at its mid, the leg the broken date - then saved: a new trade, the old one as it was
+      const brokenMid = (await api(page, ME, 'POST', '/api/blotter/quote/ois', { strategy: 'outright', side: 'RECEIVE', tenor: end, level: '0' })).json.info.market;
+      const midText = (brokenMid * 100).toFixed(4).replace('.', ',');
+      await page.fill('.entry .pad:not(.hidden) input[placeholder="örn. 37,25"]', midText);
+      await page.waitForFunction((l) => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox'); return q && q.textContent.includes(l) && !!q.querySelector('[data-k="vs-mid-bp"]'); },
+        'RECEIVE ' + end + ' @ ' + midText + '%', { timeout: 15000 });
       const vsMidText = await page.evaluate(() => document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"] .v').textContent);
       await saveForm(ranged.length + 1);
       const oNew = (await listedNow()).filter((t) => t.kind === 'ois').sort((x, y) => y.id - x.id)[0];

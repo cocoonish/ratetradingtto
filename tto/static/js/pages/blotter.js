@@ -574,6 +574,7 @@ export class BlotterPage {
       (f.typed === 'quote' ? f.quoteAmount : f.amount).focus();
     } else if (spec.kind === 'ois') {
       const o = this.ois;
+      clear(o.marketHint);                 // (the mid of the trade on the form before: its "kullan" is not this one's)
       if (has('strategy')) {
         o.strategy = STRATEGIES.some((x) => x[0] === spec.strategy) ? spec.strategy : 'outright';
         o.stratSeg.set(o.strategy);
