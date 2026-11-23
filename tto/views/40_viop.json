@@ -153,7 +153,7 @@
    "scope": "user",
    "group": "viop-20",
    "kind": "text",
-   "label": "Target 'Hedef tipi'"
+   "label": "Target 'Hedef tipi' (FRA+bp, FXswap+bp, Faiz %, Fiyat - the far contract's price, its implied TRY rate the target rate)"
   },
   {
    "range": "Z331:Z338",
@@ -167,7 +167,7 @@
    "scope": "user",
    "group": "viop-21",
    "kind": "number",
-   "label": "Target 'Hedef değer'"
+   "label": "Target 'Hedef değer' (bp; Faiz %: the rate; Fiyat: the far contract's price, 51,10)"
   },
   {
    "range": "M340",
@@ -417,7 +417,7 @@
    "cols": ["K", "L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"],
    "tips": {"W": "AA", "Q": "AB", "Z": "AC"},
    "hidden": false,
-   "note": "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden – Bootstrap (piyasa) ya da OIS · PPK'daki senaryolar S1 / S2 / S3 (adları SENARYOLAR tablosundan). FXswap+bp ve Faiz % satırlarında etkisiz. Hücrenin üzerine gelince OIS FRA ve Hedef faiz eğrilerini yazar.",
+   "note": "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden – Bootstrap (piyasa) ya da OIS · PPK'daki senaryolar S1 / S2 / S3 (adları SENARYOLAR tablosundan). FXswap+bp, Faiz % ve Fiyat satırlarında etkisiz. Hedef tipi Fiyat: Hedef değer uzak kontratın fiyatıdır (51,10), Hedef faiz o fiyatın ima ettiği TRY faizi (tablonun kendi hesabının tersi: yakın limit, iki kontratın günleri, USD faizi). Hücrenin üzerine gelince OIS FRA ve Hedef faiz eğrilerini yazar.",
    "client_quote": {"pair": "VİOP USDTRY", "title": "spread", "rows": "331:338", "days": "Y",
                     "start": {"src": "L", "label": "Yakın", "label_en": "Near"}, "end": {"src": "M", "label": "Uzak", "label_en": "Far"},
                     "side": {"src": "N", "label": "Yön (uzak USD)", "label_en": "Side (far USD)"},

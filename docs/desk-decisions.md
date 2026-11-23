@@ -855,6 +855,33 @@ Code: `tto/kagitfiyat.py` (`business_days`, `pick_point`, `point_label`, `auctio
 made-up history, today's auction on the curve now, the daily close recorder), `tests/test_fiyatyukleme.py` (the kept
 Bloomberg trades and the fallback's label).
 
+### Toplu tarih arası faiz and VİOP Fiyat hedefi (23.11.2026)
+
+Offered to the desk and approved (the offers as they were relayed, in English):
+
+> "MASA's TARİH ARASI FAİZ takes one start/end pair at a time. Paste many date pairs, like TOPLU FORWARD, and each row
+> shows the MPC ima, Ağırlıklı and Bootstrap rates, plus your spread."
+
+> "The Target table goes from a rate to the far limit price only. Type a far price, e.g. 51,10, and see the implied TRY
+> rate, its gap to the market and the OIS FRA."
+
+**Choices made while building them** (said in README; ask the desk before changing):
+- **Toplu tarih arası faiz** (`EK_TARIH`): the block's own formulas, row by row - a row with the block's start, end and
+  spread gives its numbers. A blank start is the OIS spot (the block's own `C60` default). A blank spread is a **general
+  spread at the top**, not 0: it starts from the desk's one OIS spread `MASA!I60`, as the forward quote matrix's does.
+  All seven curves are shown (not only MPC ima, Ağırlıklı, Bootstrap), ACT/360 by default; a selector shows ACT/365 or
+  O/N (360). The rate + spread column is the chosen curve's (default MPC ima) and always ACT/360, as the block's
+  "Dönem + spread (360)". Date shortcuts count on the TRY calendar from the OIS spot (the block's own date cells count on
+  USDTRY, because the forward-forward reads them too).
+- **Fiyat** (VİOP Target): the near limit by the row's side, as the sheet takes it (SHORT: the near contract's ask, LONG:
+  its bid); the rate is the exact inverse of the sheet's far limit price. OIS FRA stays the bootstrapped curve's, as on a
+  Faiz % row (the FRA's curve does nothing there). A price that is not above zero gives no rate. "Hedef değer" shows a
+  price's decimals (the file's integer format became General).
+
+Code: `tto/extras.py` (`_tto_tarih`, `_tarih_formulas`; `_tto_viop_price`, `viop_price_rate`, `VFRA_OTHER_TYPES`),
+`tto/views/10_masa.json` (TAF, TAFH). Tests: `tests/test_toplufaiz.py`, `tests/test_viopfra.py` (the Fiyat section), the
+browser test's checks after "VİOP target: the FRA's curve".
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

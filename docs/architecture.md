@@ -161,6 +161,8 @@ priority:
   - `_need_captions`.
 - **The builder's tools.**
   - `SheetBuilder` writes values, formulas and styles.
+  - `fill_down(addr, last)` is Excel's fill down: the cell's template (references relative to the row move with it),
+    constant and look copied to the rows below - one template, no formula text parsed again (EK_TARIH's 100 rows).
   - `patch(addr, formula)` replaces a workbook cell's formula.
   - `recorded(addr, value)` gives a new Bloomberg cell the file's saved value, for replay.
 
@@ -176,7 +178,8 @@ priority:
 | EK_EVREN | tto | Tüm Kâğıtlar (the service writes its rows) |
 | EK_CARRY | tto | carry along a chosen TLREF path |
 | EK_IHALE | tto | Treasury auction bid pricing |
-| EK_VFRA | tto | VİOP target FRA |
+| EK_TARIH | tto | TOPLU TARİH ARASI FAİZ: MASA's date-to-date block (`MASA!B59:N70`) for 100 start / end pairs, the block's formulas carried to each row (`_tarih_formulas`); on the Masa page right after the block |
+| EK_VFRA | tto | VİOP target FRA. The target type "Fiyat" (a far price → its implied rate, the inverse of `VIOP!S331`) is an addition of its own, "VİOP hedef fiyatı" (`_tto_viop_price`), applied just before: it patches the target rate `VIOP!Q331:Q338` and the type list |
 | EK_RET | tto | RET tenors on the OIS scenario curves |
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
 | EK_FX | asw | the offshore rates ASW FX is built on |

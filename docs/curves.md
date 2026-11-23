@@ -154,7 +154,8 @@ The setting is Ayarlar → "Eğri interpolasyonu", per user:
 - A PPK curve that cannot be built falls back to Bootstrap, and the sheet and the badge say so.
 
 **What a PPK user's setting changes** (`tto/interp.py`, extras' `INTERP_SHEET` section):
-- Motor's node pars (`F89:F130`), so everything that reads `BOOT_*` follows: OIS pages, Masa, VİOP, DİBS RV.
+- Motor's node pars (`F89:F130`), so everything that reads `BOOT_*` follows: OIS pages, Masa (its date-to-date block's
+  Bootstrap row, and EK_TARIH's, which reuses the block's formulas), VİOP, DİBS RV.
 - The offshore names `OFF_GUN` / `OFF_LNDF` / `OFF_SL`, which then read `EK_INTERP!I:K`.
 - ASW row 65's ln DF.
 - Trades' MTM, carry, coupons and P&L (`tradebook.FOLLOW_CURVE = True`). Desk close snapshots are kept on both curves.
@@ -280,7 +281,7 @@ offshore, no PPK.
 | USDTRY | T+1, `Forward!I2` | TRY+USD |
 | EURTRY | T+2, `Forward!K2` | TRY+EUR, no USD rule |
 | EURUSD value dates | - | USD+EUR |
-| TRY OIS / money market / bonds; VİOP's OIS FRAs | `OIS_MAIN!B2` (T+1) | TRY only |
+| TRY OIS / money market / bonds; VİOP's OIS FRAs; MASA's date-to-date block and EK_TARIH's rows | `OIS_MAIN!B2` (T+1) | TRY only |
 | VİOP's implied TRY rates | `VIOP!K3`: Bloomberg's `SETTLE_DT` of `USDTRY Curncy` (`VIOP!M8`; days `M10 = M9 − M8`) | Bloomberg's dates |
 | The ASW sheet's curve | `ASW!C4` → `T65`: Bloomberg's `SETTLE_DT` of `TRY Curncy`, else `WORKDAY(TODAY(),1,TATIL)` | the ASW book's `TATIL` |
 

@@ -30,6 +30,50 @@
    "label": "Spread (bp) — the desk's OIS spread: added to ACT/360 simple rates here, and the default of the forward quote matrix's spread (EK_FWD!D4:E4), Forward!P58 / O27 and OIS_MAIN!F122"
   },
   {
+   "range": "EK_TARIH!C2",
+   "scope": "user",
+   "group": "tarih-curve",
+   "kind": "list",
+   "label": "Eğri (+ spread) — the curve of the bulk date-to-date table's last column, its ACT/360 rate + spread (MPC ima / S1 / S2 / S3 / Ağırlıklı / Bootstrap / TLREF sabit)"
+  },
+  {
+   "range": "EK_TARIH!E2",
+   "scope": "user",
+   "group": "tarih-basis",
+   "kind": "list",
+   "label": "Gün esası — the basis of the bulk date-to-date table's curve columns (ACT/360, ACT/365, O/N (360): the date-to-date block's D, C, E)"
+  },
+  {
+   "range": "EK_TARIH!G2",
+   "scope": "user",
+   "group": "tarih-spread",
+   "kind": "number",
+   "label": "Genel spread (bp) — the bulk date-to-date table's spread of a row without one (formula default: MASA!I60)"
+  },
+  {
+   "range": "EK_TARIH!B5:B104",
+   "scope": "user",
+   "group": "tarih-start",
+   "kind": "date",
+   "label": "Başlangıç — start dates of the bulk date-to-date table (formula default: the OIS spot once the row's end is typed)",
+   "tenor": {"pair": "TRY"}
+  },
+  {
+   "range": "EK_TARIH!C5:C104",
+   "scope": "user",
+   "group": "tarih-end",
+   "kind": "date",
+   "label": "Bitiş — end dates of the bulk date-to-date table (100 rows, empty to start with)",
+   "tenor": {"pair": "TRY", "from": "B"}
+  },
+  {
+   "range": "EK_TARIH!D5:D104",
+   "scope": "user",
+   "group": "tarih-rowspread",
+   "kind": "number",
+   "label": "Spread (bp) per row of the bulk date-to-date table (formula default: the general spread)"
+  },
+  {
    "range": "P94:P99",
    "scope": "user",
    "group": "masa-3",
@@ -249,6 +293,24 @@
    "title": "TARİH ARASI FAİZ  ·  OIS: MPC ima / senaryolar / bootstrap ve spread'li  (sarı hücreler girdi)",
    "range": "B59:N70",
    "hidden": false
+  },
+  {
+   "id": "TAF",
+   "type": "table",
+   "sheet": "EK_TARIH",
+   "range": "B1:M107",
+   "hidden": false,
+   "wide": true,
+   "title": "TOPLU TARİH ARASI FAİZ · 100 tarih çiftine kadar",
+   "grow": {"key": "B", "first": 5, "extra": 1, "last": 104}
+  },
+  {
+   "id": "TAFH",
+   "type": "table",
+   "sheet": "EK_TARIH",
+   "range": "O1:AP104",
+   "hidden": true,
+   "title": "Yardımcı · TOPLU TARİH ARASI FAİZ (gün, iskonto faktörleri, ACT/360 faiz ve + spread, satır satır)"
   },
   {
    "id": "B10D",
@@ -552,6 +614,7 @@
    "title": "Faiz · PPK",
    "panels": [
     "B9",
+    "TAF",
     "B13",
     "B21",
     "chart4",

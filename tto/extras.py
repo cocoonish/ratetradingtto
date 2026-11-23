@@ -161,6 +161,26 @@ class SheetBuilder(object):
         self.sheet.consts.pop(rc, None)
         self.sheet.fml[rc] = self._template(formula, r, c)
 
+    def fill_down(self, addr: str, last: int) -> None:
+        """Excel's fill down: the cell's formula (its references relative to the row move with it), constant and look,
+        copied to every row below it down to ``last`` - one template for all of them, no text to read again."""
+        rc0 = parse_a1(addr)
+        r0, c = divmod(rc0, COLS)
+        sh = self.sheet
+        for r in range(r0 + 1, last + 1):
+            rc = r * COLS + c
+            sh.consts.pop(rc, None)
+            sh.fml.pop(rc, None)
+            if rc0 in sh.fml:
+                sh.fml[rc] = sh.fml[rc0]
+            elif rc0 in sh.consts:
+                sh.consts[rc] = sh.consts[rc0]
+            if rc0 in sh.styles:
+                sh.styles[rc] = sh.styles[rc0]
+            else:
+                sh.styles.pop(rc, None)
+        sh.max_row = max(sh.max_row, last)
+
 
 def formula_of(model: Model, sheet: str, addr: str) -> str:
     """The A1 text (without ``=``) of an existing formula cell - to reuse a workbook formula elsewhere."""
@@ -3077,6 +3097,272 @@ def _tto_viop_roll(model: Model) -> None:
             b.patch(addr, viop_ticker(root, key, step, k))
 
 
+# ---------------------------------------------------------------------------------------------- bulk date-to-date rates
+#: The desk sheet's "Tarih arası faiz" block (MASA!B59:N70) prices one start / end pair on the TRY OIS curves: the days
+#: from the OIS spot to the start and the end (K60 / M60), each curve's discount factors at the two dates (H / I of rows
+#: 62-68: MPC ima, S1-S3, Bootstrap, TLREF sabit; Ağırlıklı is S1-S3 weighted with the OIS sheet's probabilities) and the
+#: period's rate ACT/365 (C), ACT/360 (D), O/N (E) and ACT/360 + the spread (F).  ``EK_TARIH`` ("TOPLU TARİH ARASI FAİZ",
+#: the desk page's Faiz · PPK tab, right after the block) prices up to 100 pairs at once with the block's own formulas
+#: carried to each row (``transplant``): a row with the block's start, end and spread gives the block's numbers, on the
+#: viewer's curve setting as the block (its Bootstrap row reads Motor's nodes).  Per row: Başlangıç (blank: the OIS spot,
+#: the block's own default), Bitiş, Spread (bp; blank: the general spread at the top, which starts from the desk's one OIS
+#: spread MASA!I60 as the forward quote matrix's does).  Out: Gün, each curve's period rate in the basis chosen at the top
+#: (ACT/360 - the desk's quote - by default, ACT/365 or O/N) and the chosen curve's ACT/360 rate + spread (the block's
+#: "Dönem + spread (360)").  The rows start empty, the page shows the filled ones and one more, and a block pasted from
+#: Excel (start | end | spread) lands row by row, as on EK_BULK.
+TARIH_SHEET = "EK_TARIH"
+TARIH_FIRST, TARIH_ROWS = 5, 100
+TARIH_LAST = TARIH_FIRST + TARIH_ROWS - 1
+#: the block's curves: the code the selector lists, the curve's row on MASA (Ağırlıklı's has no discount factors)
+TARIH_CURVES = (("MPC ima", 62), ("S1", 63), ("S2", 64), ("S3", 65), ("Ağırlıklı", 66), ("Bootstrap", 67), ("TLREF sabit", 68))
+TARIH_WEIGHTED = 66
+TARIH_BASES = ("ACT/360", "ACT/365", "O/N (360)")             # the block's D, C and E
+TARIH_CURVE, TARIH_BASIS, TARIH_SPREAD = "C2", "E2", "G2"      # the choices at the top (personal inputs)
+TARIH_RATES = "FGHIJKL"                                         # each curve's period rate, in TARIH_CURVES' order
+TARIH_PLUS = "M"                                                # the chosen curve's ACT/360 rate + spread
+TARIH_HELP = "O"                                                # the helpers from here on (a table the page keeps hidden)
+TARIH_PICKED = "O2"                                             # the chosen curve's number (1 = MPC ima … 7)
+
+
+def _tarih_layout() -> Dict[Any, str]:
+    """The helper columns: ``"ks"`` / ``"ke"`` the days from the OIS spot to the start / end (the block's K60 / M60),
+    ``("df", code, 0 | 1)`` a curve's discount factor at the start / end (H / I), ``("d", code)`` its ACT/360 rate (D),
+    ``("f", code)`` its ACT/360 rate + spread (F)."""
+    k = _col(TARIH_HELP)
+    out: Dict[Any, str] = {"ks": index_to_col(k), "ke": index_to_col(k + 1)}
+    k += 2
+    for code, row in TARIH_CURVES:
+        if row != TARIH_WEIGHTED:
+            out[("df", code, 0)], out[("df", code, 1)] = index_to_col(k), index_to_col(k + 1)
+            k += 2
+    for what in ("d", "f"):
+        for code, _ in TARIH_CURVES:
+            out[(what, code)] = index_to_col(k)
+            k += 1
+    return out
+
+
+def _tarih_formulas(model: Model, r: int) -> Dict[Any, str]:
+    """The block's formulas carried to row ``r`` of EK_TARIH (texts without ``=``): ``"E"`` the days (G60), the helpers of
+    :func:`_tarih_layout`, ``("c" | "e", code)`` a curve's ACT/365 / O/N rate (C / E) and ``("w", "d")`` Ağırlıklı over
+    the row's shown S1-S3 rates (the block's C66 / D66 / E66: the same weighted average in each basis).  An error when a
+    formula is not the one expected: each must hold the references named, and nothing of the block but the cells swapped
+    for the row's (``transplant``)."""
+    lay = _tarih_layout()
+
+    def take(addr: str, needs: Sequence[str], swap: Dict[str, str]) -> str:
+        text = _need_formula(model, "MASA", addr)
+        for part in needs:
+            if part not in text:
+                raise ValueError("MASA!%s beklenen formül değil (%s yok)" % (addr, part))
+        # every cell swapped in one pass: one by one, row 60's "$C60" would be taken for the block's C60 next
+        keys = re.compile(r"(?<![A-Za-z$])(?:%s)(?![0-9])" % "|".join(re.escape(k) for k in sorted(swap, key=len, reverse=True)))
+        return transplant(keys.sub(lambda m: swap[m.group(0)], text), {new: new for new in swap.values()})
+
+    out: Dict[Any, str] = {"E": take("G60", ("E60-C60",), {"E60": "$C%d" % r, "C60": "$B%d" % r}),
+                           lay["ks"]: take("K60", ("C60-OIS_MAIN!$B$2",), {"C60": "$B%d" % r}),
+                           lay["ke"]: take("M60", ("E60-OIS_MAIN!$B$2",), {"E60": "$C%d" % r})}
+    days = "$E%d" % r
+    scenarios = [code for code, k in TARIH_CURVES if code.startswith("S")]
+
+    def weighted(cells: Sequence[str]) -> str:
+        # the block's SUMPRODUCT of the probabilities and a column of three rates, written out over a row's three cells
+        # (a row against the column would not multiply): the same products added in the same order
+        return ('IFERROR((OIS_MAIN!$Q$3*%s+OIS_MAIN!$Q$4*%s+OIS_MAIN!$Q$5*%s)/SUM(OIS_MAIN!$Q$3:$Q$5),"")'
+                % tuple("$%s%d" % (c, r) for c in cells))
+
+    for code, k in TARIH_CURVES:
+        if k == TARIH_WEIGHTED:
+            # Ağırlıklı: the S1-S3 rates (rows 63-65 of the block) weighted with the OIS sheet's probabilities, in C, D, E, F
+            # (checked to be just that, then written out over the row's cells)
+            for col in "CDEF":
+                take("%s%d" % (col, k), ("(SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,%s63:%s65)/SUM(OIS_MAIN!$Q$3:$Q$5))" % (col, col),),
+                     {"%s63" % col: "$X1", "%s65" % col: "$X3"})
+            out[("d", code)] = weighted([lay[("d", s)] for s in scenarios])
+            out[("f", code)] = weighted([lay[("f", s)] for s in scenarios])
+            out[("w", "d")] = weighted(TARIH_RATES[1:4])                   # over the row's shown S1-S3, in their basis
+            continue
+        start, end = "$%s%d" % (lay[("df", code, 0)], r), "$%s%d" % (lay[("df", code, 1)], r)
+        out[lay[("df", code, 0)]] = take("H%d" % k, ("$K$60",), {"$K$60": "$%s%d" % (lay["ks"], r)})
+        out[lay[("df", code, 1)]] = take("I%d" % k, ("$M$60",), {"$M$60": "$%s%d" % (lay["ke"], r)})
+        for col in "CDE":
+            out[(col.lower(), code)] = take("%s%d" % (col, k), ("H%d/I%d" % (k, k), "$G$60"),
+                                            {"H%d" % k: start, "I%d" % k: end, "$G$60": days})
+        out[("f", code)] = take("F%d" % k, ("D%d+$I$60/10000" % k,), {"D%d" % k: "$%s%d" % (lay[("d", code)], r), "$I$60": "$D%d" % r})
+    return out
+
+
+def _tarih_check(model: Model) -> None:
+    _need_sheets(model, "MASA", "OIS_MAIN", "Motor")
+    if TARIH_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % TARIH_SHEET)
+    _need_captions(model, (("MASA", "B60", "Başlangıç"), ("MASA", "D60", "Bitiş"), ("MASA", "H60", "Spread (bp)"),
+                           ("MASA", "C61", "Dönem ACT/365"), ("MASA", "D61", "Dönem ACT/360"), ("MASA", "E61", "Dönem O/N (360)"),
+                           ("MASA", "F61", "Dönem + spread (360)"), ("MASA", "H61", "DF başlangıç"), ("MASA", "I61", "DF bitiş"))
+                    + tuple(("MASA", "B%d" % k, code) for code, k in TARIH_CURVES if not code.startswith("S")))
+    for code, k in TARIH_CURVES:
+        if code.startswith("S"):                                   # the scenarios' rows: "S1 – " & their name
+            _need_formula(model, "MASA", "B%d" % k, '"%s – "' % code)
+    _tarih_formulas(model, TARIH_FIRST)
+
+
+def _tto_tarih(model: Model) -> None:
+    """The bulk date-to-date rates (``EK_TARIH``): the choices at the top, 100 rows of the desk sheet's block, the helpers."""
+    b = SheetBuilder(model, TARIH_SHEET)
+    lay = _tarih_layout()
+    codes = [code for code, _ in TARIH_CURVES]
+    b.title("B1", "TOPLU TARİH ARASI FAİZ  ·  100 tarih çiftine kadar (başlangıç boşsa OIS spot, spread boşsa genel spread; "
+                  "Excel'den başlangıç | bitiş | spread yapıştırılabilir)")
+    b.set("B2", "Eğri (+ spread)", bold=True, align="right")
+    b.input(TARIH_CURVE, codes[0], align="center")
+    b.dropdown(TARIH_CURVE, codes)
+    b.set("D2", "Gün esası", bold=True, align="right")
+    b.input(TARIH_BASIS, TARIH_BASES[0], align="center")
+    b.dropdown(TARIH_BASIS, TARIH_BASES)
+    b.set("F2", "Genel spread (bp)", bold=True, align="right")
+    b.input(TARIH_SPREAD, "=" + OIS_SPREAD, fmt="0", align="center")      # the desk's one OIS spread, typed over: one's own
+    b.set("H2", "OIS spot", bold=True, align="right")
+    b.set("I2", "=OIS_MAIN!$B$2", fmt=DATE)
+    # the curves' columns are named as the block names its rows (S1 – Baz …: the scenario's name from SENARYOLAR)
+    picked = "$%s$%s" % (TARIH_PICKED[0], TARIH_PICKED[1:])
+    b.head("B4", ["Başlangıç", "Bitiş", "Spread (bp)", "Gün"] + ["=MASA!$B$%d" % k for _, k in TARIH_CURVES]
+           + ['=INDEX($%s$4:$%s$4,%s)&" + spread (360)"' % (TARIH_RATES[0], TARIH_RATES[-1], picked)])
+    d0, d1 = lay[("d", codes[0])], lay[("d", codes[-1])]
+    f0, f1 = lay[("f", codes[0])], lay[("f", codes[-1])]
+    b.note("%s3" % TARIH_HELP, "Yardımcı: OIS spot'tan başlangıç / bitiş günü, eğrilerin iskonto faktörleri (MASA H / I), ACT/360 faiz "
+                               "(MASA D) ve + spread (MASA F), satır satır")
+    b.set(TARIH_PICKED, '=IFERROR(MATCH($%s$%s,$%s$4:$%s$4,0),1)' % (TARIH_CURVE[0], TARIH_CURVE[1:], d0, d1), fmt="0")
+    b.head("%s4" % TARIH_HELP, ["Gün spot→başl.", "Gün spot→bitiş"]
+           + ["DF %s %s" % (end, code) for code, k in TARIH_CURVES if k != TARIH_WEIGHTED for end in ("başl.", "bitiş")]
+           + codes + ["%s + spread" % code for code in codes])
+    basis = "$%s$%s" % (TARIH_BASIS[0], TARIH_BASIS[1:])
+    # the first row, then filled down: every row's formulas are the first's with the row's own cells
+    r = TARIH_FIRST
+    fml = _tarih_formulas(model, r)
+    blank = 'IF($E%d="","",' % r                                            # a row without its two dates shows nothing
+    b.input("B%d" % r, '=IF(ISNUMBER($C%d),OIS_MAIN!$B$2,"")' % r, fmt=DATE)
+    b.input("C%d" % r, None, fmt=DATE)
+    b.input("D%d" % r, '=IF(ISNUMBER($C%d),$%s$%s,"")' % (r, TARIH_SPREAD[0], TARIH_SPREAD[1:]), fmt="0")
+    b.set("E%d" % r, '=IF(AND(ISNUMBER($B%d),ISNUMBER($C%d)),%s,"")' % (r, r, fml["E"]), fmt=INT0)
+    b.set("%s%d" % (lay["ks"], r), '=IF(ISNUMBER($B%d),%s,"")' % (r, fml[lay["ks"]]), fmt=INT0)
+    b.set("%s%d" % (lay["ke"], r), '=IF(ISNUMBER($C%d),%s,"")' % (r, fml[lay["ke"]]), fmt=INT0)
+    for i, (code, k) in enumerate(TARIH_CURVES):
+        shown = "%s%d" % (TARIH_RATES[i], r)
+        if k == TARIH_WEIGHTED:
+            b.set(shown, "=" + blank + fml[("w", "d")] + ")", fmt="0.00%")
+        else:
+            for end in (0, 1):
+                col = lay[("df", code, end)]
+                b.set("%s%d" % (col, r), "=" + blank + fml[col] + ")", fmt="0.000000000")
+            # the period's rate in the basis chosen: ACT/360 (the block's D, the helper), ACT/365 (C) or O/N (E)
+            b.set(shown, '=%sIF(%s="%s",%s,IF(%s="%s",%s,$%s%d)))' % (blank, basis, TARIH_BASES[1], fml[("c", code)], basis,
+                                                                    TARIH_BASES[2], fml[("e", code)], lay[("d", code)], r),
+                  fmt="0.00%")
+        b.set("%s%d" % (lay[("d", code)], r), "=" + blank + fml[("d", code)] + ")", fmt="0.0000%")
+        b.set("%s%d" % (lay[("f", code)], r), "=" + blank + fml[("f", code)] + ")", fmt="0.0000%")
+    b.set("%s%d" % (TARIH_PLUS, r), "=%sINDEX($%s%d:$%s%d,%s))" % (blank, f0, r, f1, r, picked), fmt="0.00%")
+    for c in list(range(_col("B"), _col(TARIH_PLUS) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)):
+        b.fill_down("%s%d" % (index_to_col(c), r), TARIH_LAST)
+    b.note("B%d" % (TARIH_LAST + 2), "Masa'daki TARİH ARASI FAİZ bloğunun formülleri, satır satır: eğrilerin OIS spot'tan başlangıç ve "
+                                     "bitişe iskonto faktörleri (MASA!H62:I68), dönem faizi (DF başl. / DF bitiş − 1)·360/gün - ACT/365'te "
+                                     "·365, O/N'de 360·((DF başl. / DF bitiş)^(1/gün) − 1) -, Ağırlıklı = S1–S3, OIS · PPK olasılıklarıyla. "
+                                     "Aynı tarih ve spread'le blokla aynı sayıyı verir.")
+    b.note("B%d" % (TARIH_LAST + 3), "Başlangıç boşsa OIS spot valörü; spread boşsa genel spread (Masa'daki tek OIS spread'inden, MASA!I60; "
+                                     "üzerine yazılabilir). Son sütun seçilen eğrinin ACT/360 basit faizi + spread (bloğun 'Dönem + spread "
+                                     "(360)'ı), gün esası ne olursa olsun. Yazdıklarınız sizin kalır; satırlar boş başlar.")
+
+
+# ---------------------------------------------------------------------------------------------- VİOP target: a far price
+#: The target table of the VİOP sheet (VIOP!K330:Y338) goes from a target rate to the far contract's limit price: "Hedef
+#: tipi" FRA+bp (OIS FRA + bp), FXswap+bp (the FX swap implied rate + bp) or Faiz % (a rate typed), "Hedef değer" its
+#: value, "Hedef faiz (360)" (Q) the rate, "Uzak limit fiyatı" (S) = near limit · (1 + rate · days / 360) / USD carry -
+#: the near limit the near contract's ask on a SHORT row, its bid on a LONG one (R), the days between the two contracts
+#: (row 98), the USD carry (1 + USD far · days far / 360) / (1 + USD near · days near / 360) (row 101).  One more type
+#: goes the other way: **Fiyat**, the far contract's price typed in "Hedef değer" (51,10).  Its target rate is the rate
+#: that price implies, ((price / near limit) · USD carry − 1) · 360 / days - the exact inverse of the sheet's own far limit
+#: price, in the table's own convention - and the rest of the row follows it as for the other types: the far limit (the
+#: price again), the spread price, target − market, the DV01; OIS FRA stays the bootstrapped curve's, as on a Faiz % row
+#: (EK_VFRA).  A price that is not above zero gives no rate.  The type's drop-down gets the item, and "Hedef değer" shows a
+#: price's decimals (the file's integer format becomes General; a bp value looks as before).
+VPRICE_NAME = "VİOP hedef fiyatı"
+VPRICE_TYPE = "Fiyat"
+VPRICE_TYPES = ("FRA+bp", "FXswap+bp", "Faiz %")              # the workbook's list of target types (VIOP!O331:O338)
+VPRICE_INT = '_-* #,##0_-;\\-* #,##0_-;_-* "-"??_-;_-@_-'      # the file's number format of "Hedef değer"
+
+
+def viop_near_limit(r: int) -> str:
+    """The near limit of target row ``r`` as the sheet takes it (VIOP!R331 …): the near contract's ask on a SHORT row,
+    its bid otherwise."""
+    return ('IF($N%(r)d="SHORT",INDEX($L$100:$X$100,MATCH($L%(r)d,$L$97:$X$97,0)),INDEX($L$99:$X$99,MATCH($L%(r)d,$L$97:$X$97,0)))'
+            % {"r": r})
+
+
+def viop_target_days(r: int) -> str:
+    """The days between the row's two contracts (row 98: each contract's days from the VİOP spot)."""
+    return "(INDEX($L$98:$X$98,MATCH($M%(r)d,$L$97:$X$97,0))-INDEX($L$98:$X$98,MATCH($L%(r)d,$L$97:$X$97,0)))" % {"r": r}
+
+
+def viop_usd_carry(r: int) -> str:
+    """The USD leg between the row's two contracts: (1 + USD far · days far / 360) / (1 + USD near · days near / 360)."""
+    return ("((1+INDEX($L$101:$X$101,MATCH($M%(r)d,$L$97:$X$97,0))*INDEX($L$98:$X$98,MATCH($M%(r)d,$L$97:$X$97,0))/360)"
+            "/(1+INDEX($L$101:$X$101,MATCH($L%(r)d,$L$97:$X$97,0))*INDEX($L$98:$X$98,MATCH($L%(r)d,$L$97:$X$97,0))/360))"
+            % {"r": r})
+
+
+def viop_far_limit(r: int) -> str:
+    """The sheet's own far limit price of target row ``r`` (VIOP!S331 …): near limit · (1 + target rate · days / 360) /
+    USD carry."""
+    return "%s*(1+$Q%d*%s/360)/%s" % (viop_near_limit(r), r, viop_target_days(r), viop_usd_carry(r))
+
+
+def viop_price_rate(r: int) -> str:
+    """Its inverse: the target rate the far price typed in "Hedef değer" implies, ((price / near limit) · USD carry − 1)
+    · 360 / days."""
+    return "(($P%d/%s)*%s-1)*360/%s" % (r, viop_near_limit(r), viop_usd_carry(r), viop_target_days(r))
+
+
+def _vprice_anchors(r: int) -> Tuple[str, str]:
+    """Where the type's branch goes in the target rate (VIOP!Q331 …): right after Faiz %'s - ``IF($O="Faiz %",$P/100,
+    IF($O="FXswap+bp",FX,FRA)+$P/10000)`` - and the end of the other two."""
+    return ('IF($O%(r)d="Faiz %%",$P%(r)d/100,IF($O%(r)d="FXswap+bp",' % {"r": r}, "+$P%d/10000)" % r)
+
+
+def _viop_price_check(model: Model) -> None:
+    _need_sheets(model, "VIOP")
+    _need_captions(model, (("VIOP", "O330", "Hedef tipi"), ("VIOP", "P330", "Hedef değer"), ("VIOP", "Q330", "Hedef faiz (360)"),
+                           ("VIOP", "R330", "Near limit"), ("VIOP", "S330", "Uzak limit fiyatı")))
+    for r in range(VFRA_ROWS[0], VFRA_ROWS[1] + 1):
+        _need_formula(model, "VIOP", "R%d" % r, viop_near_limit(r))
+        _need_formula(model, "VIOP", "S%d" % r, viop_far_limit(r))             # what the type's rate is the inverse of
+        q = _need_formula(model, "VIOP", "Q%d" % r, '$P%d<>""),' % r)          # (a row needs its value)
+        typed, rest = _vprice_anchors(r)
+        if q.count(typed) != 1 or q.count(rest) != 1 or q.count(rest + ',""),"")') != 1 or q.index(typed) > q.index(rest):
+            raise ValueError("VIOP!Q%d beklenen hedef faiz formülü değil (hedef tipleri)" % r)
+        if VPRICE_TYPE in q:
+            raise ValueError("VIOP!Q%d zaten %s tipini okuyor" % (r, VPRICE_TYPE))
+    lists = [v for v in model.sheet("VIOP").validations if v.get("sqref") == "O%d:O%d" % VFRA_ROWS]
+    if len(lists) != 1 or lists[0].get("type") != "list" or lists[0].get("formula1") != '"%s"' % ",".join(VPRICE_TYPES):
+        raise ValueError("VIOP!O%d:O%d hedef tipi listesi beklenen değil" % VFRA_ROWS)
+
+
+def _tto_viop_price(model: Model) -> None:
+    """The target type "Fiyat": its item in the list, its branch in the target rate, a price's decimals in "Hedef değer"."""
+    v = SheetBuilder(model, "VIOP")
+    for r in range(VFRA_ROWS[0], VFRA_ROWS[1] + 1):
+        typed, rest = _vprice_anchors(r)
+        price = 'IF($O%d="%s",IF(N($P%d)>0,%s,""),' % (r, VPRICE_TYPE, r, viop_price_rate(r))
+        v.patch("Q%d" % r, "=" + formula_of(model, "VIOP", "Q%d" % r).replace(typed, typed.replace(",IF(", "," + price + "IF(", 1))
+                .replace(rest, rest + ")"))
+        rc = parse_a1("P%d" % r)
+        xf = v.sheet.styles.get(rc, 0)
+        if model.numfmts[xf] == VPRICE_INT:                                   # (a format the file no longer has: left alone)
+            _, bold, color, fill, align = model.xfs[xf][:5]
+            v.sheet.styles[rc] = v._xf("General", bool(bold), color, fill, align)
+    for item in v.sheet.validations:
+        if item.get("sqref") == "O%d:O%d" % VFRA_ROWS:
+            item["formula1"] = '"%s"' % ",".join(VPRICE_TYPES + (VPRICE_TYPE,))
+
+
 # ---------------------------------------------------------------------------------------------- VİOP target: the FRA's curve
 #: The target table of the VİOP sheet (VIOP!K330:Y338) prices an "FRA+bp" target off the OIS FRA between the row's near and
 #: far contract - always the bootstrapped market curve (the sheet's row 104: Motor's log discount factors BOOT_LNDF, linear
@@ -3088,9 +3374,10 @@ def _tto_viop_roll(model: Model) -> None:
 #: is renamed in the list - and the formulas read a choice by its code (S1 / S2 / S3; anything else is the bootstrapped
 #: curve), so a choice made before a rename keeps its scenario.  OIS FRA takes the row's curve and the target rate of an
 #: FRA row is built from it: the far limit price, the spread price and target − market follow.  The workbook prices a row
-#: as FRA+bp unless its type is FXswap+bp or Faiz % (a blank type too); a row of those two keeps the bootstrapped curve
-#: whatever is chosen.  The OIS FRA column names its curve (its caption: one curve for every row or "per row"), and its
-#: cells, the target rate and the choice say theirs in their tooltips (``"tips"`` of the page: columns AA:AC beside it).
+#: as FRA+bp unless its type is FXswap+bp or Faiz % (a blank type too); a row of those two - and of the dashboard's
+#: Fiyat (a far price typed, above) - keeps the bootstrapped curve whatever is chosen.  The OIS FRA column names its curve
+#: (its caption: one curve for every row or "per row"), and its cells, the target rate and the choice say theirs in their
+#: tooltips (``"tips"`` of the page: columns AA:AC beside it).
 #: A row that cannot be priced shows no numbers and says why in its tooltips and on the desk strip ("Geçersiz"): a contract
 #: kept by its date that rolled off the list (the workbook leaves that row empty already), or a period that does not end
 #: after the OIS spot date (the far contract's expiry day, where the sheet's own FRA was 0 and the target −1,5 %): OIS FRA,
@@ -3105,7 +3392,12 @@ VFRA_SCENARIOS = (("S1", 3, "I63"), ("S2", 4, "I64"), ("S3", 5, "I65"))
 VFRA_CHOICE = "Z"                         # the choice (the page shows it right after "Hedef tipi")
 VFRA_TIPS = {"W": "AA", "Q": "AB", "Z": "AC"}       # the tooltip of OIS FRA, of the target rate and of the choice
 VFRA_MASA = 210                           # the desk sheet's target strip: MASA row = VİOP row − 210 (121 … 128)
-VFRA_OTHER_TYPES = ("Faiz %", "FXswap+bp")
+VFRA_OTHER_TYPES = ("Faiz %", "FXswap+bp", VPRICE_TYPE)     # the types whose target rate does not read the FRA
+
+
+def vfra_other(cell: str) -> str:
+    """Whether target type ``cell`` is one of ``VFRA_OTHER_TYPES`` (an Excel condition)."""
+    return "OR(%s)" % ",".join('%s="%s"' % (cell, t) for t in VFRA_OTHER_TYPES)
 
 
 def viop_target_fra(r: int) -> str:
@@ -3160,8 +3452,8 @@ def _tto_viop_fra(model: Model) -> None:
         b.set("C%d" % r, "=OIS_MAIN!$Q$%d" % row, fmt="0%", align="center")
     b.note("A7", "Bu liste VİOP Target tablosundaki 'FRA eğrisi'nin açılır listesidir (VIOP!Z331:Z338). Senaryo adları OIS · PPK'daki "
                  "SENARYOLAR tablosundan gelir: orada değişince burada da değişir; formüller seçimi koduyla (S1 / S2 / S3) okur. "
-                 "Seçim FRA+bp satırında (boş hedef tipi de FRA+bp sayılır) OIS FRA'yı ve hedef faizi belirler; FXswap+bp ve "
-                 "Faiz % satırlarında etkisizdir (Bootstrap).")
+                 "Seçim FRA+bp satırında (boş hedef tipi de FRA+bp sayılır) OIS FRA'yı ve hedef faizi belirler; FXswap+bp, "
+                 "Faiz % ve Fiyat satırlarında etkisizdir (Bootstrap).")
     # ---- one helper row per target row: the choice, the dates, each curve's discount factors and FRA
     h0 = VFRA_FIRST
     b.head("A%d" % (h0 - 1), ["Satır", "Seçim", "Seçim no", "Etkin no", "Etkin eğri", "Yakın", "Uzak", "Gün yakın", "Gün uzak"]
@@ -3170,14 +3462,14 @@ def _tto_viop_fra(model: Model) -> None:
     dfs = {code: formula_of(model, "MASA", src) for code, _, src in VFRA_SCENARIOS}
     on_viop = {"$L$104:$X$104": "VIOP!$L$104:$X$104", "$L$103:$X$103": "VIOP!$L$103:$X$103", "$L$97:$X$97": "VIOP!$L$97:$X$97"}
     for i, (r, h, _) in enumerate(_vfra_rows()):
-        f = {"r": r, "h": h, "o1": VFRA_OTHER_TYPES[0], "o2": VFRA_OTHER_TYPES[1]}
+        f = {"r": r, "h": h}
         b.set("A%d" % h, float(i + 1), fmt="0", align="center")
         b.set("B%d" % h, '=IF(VIOP!$Z%(r)d="","",VIOP!$Z%(r)d)' % f)
         # the choice by its code (a name renamed since keeps its scenario); anything else: the bootstrapped curve
         b.set("C%d" % h, '=IF(LEFT(VIOP!$Z%(r)d,2)="S1",2,IF(LEFT(VIOP!$Z%(r)d,2)="S2",3,IF(LEFT(VIOP!$Z%(r)d,2)="S3",4,1)))' % f,
               fmt="0", align="center")
         # the curve the row is priced off: the choice in an FRA row, the bootstrapped curve in a row of another type
-        b.set("D%d" % h, '=IF(OR(VIOP!$O%(r)d="%(o1)s",VIOP!$O%(r)d="%(o2)s"),1,$C%(h)d)' % f, fmt="0", align="center")
+        b.set("D%d" % h, '=IF(%s,1,$C%d)' % (vfra_other("VIOP!$O%d" % r), h), fmt="0", align="center")
         b.set("E%d" % h, "=INDEX($A$3:$A$6,$D%(h)d)" % f)
         # the contracts' dates as the sheet's own FRA takes them (row 103), and their days from the OIS spot date as the
         # curves count them (from 0: the sheet's row 104 does the same with MAX(0, …))
@@ -3209,7 +3501,7 @@ def _tto_viop_fra(model: Model) -> None:
     b.note("A%d" % (last + 2), "DF = MASA 'Tarih arası faiz' bloğunun S1 / S2 / S3 iskonto faktörü (Motor'un PPK patikası), OIS spot'tan "
                                "yakın ve uzak kontrat tarihine; FRA = (DF yakın / DF uzak − 1) · 360 / gün (ACT/360 basit). FRA Bootstrap "
                                "VİOP sayfasının kendi OIS FRA formülüdür (satır 104: BOOT_LNDF).")
-    b.note("A%d" % (last + 3), "Etkin no: 1 = Bootstrap, 2–4 = S1–S3; FXswap+bp ve Faiz % satırında 1. OIS FRA (VIOP!W) etkin eğrinin FRA'sı, "
+    b.note("A%d" % (last + 3), "Etkin no: 1 = Bootstrap, 2–4 = S1–S3; FXswap+bp, Faiz % ve Fiyat satırında 1. OIS FRA (VIOP!W) etkin eğrinin FRA'sı, "
                                "FRA+bp hedef faizi (VIOP!Q) OIS FRA + hedef değer (bp). Durum dolu (geçersiz) satırda OIS FRA ve hedef faiz "
                                "boştur; limitler, spread fiyatı ve hedef − piyasa da onlarla boş kalır.")
 
@@ -3224,18 +3516,19 @@ def _tto_viop_fra(model: Model) -> None:
     tip_w, tip_q, tip_z = VFRA_TIPS["W"], VFRA_TIPS["Q"], VFRA_TIPS["Z"]
     head = VFRA_ROWS[0] - 1
     v.set("%s%d" % (tip_w, head), "OIS FRA: yakın → uzak kontrat, ACT/360 basit, satırın FRA eğrisinden - Bootstrap (piyasa) = kotalardan "
-                                  "kurulan piyasa eğrisi, S1–S3 = OIS · PPK senaryoları. FXswap+bp ve Faiz % satırlarında Bootstrap.")
+                                  "kurulan piyasa eğrisi, S1–S3 = OIS · PPK senaryoları. FXswap+bp, Faiz % ve Fiyat satırlarında "
+                                  "Bootstrap.")
     v.set("%s%d" % (tip_q, head), "Hedef faiz: FRA+bp = OIS FRA (satırın FRA eğrisi) + hedef değer (bp); FXswap+bp = FX swap ima + bp; "
-                                  "Faiz % = yazılan faiz. Uzak limit, spread fiyatı ve hedef − piyasa bundan.")
+                                  "Faiz % = yazılan faiz; Fiyat = yazılan uzak kontrat fiyatının ima ettiği faiz. Uzak limit, spread "
+                                  "fiyatı ve hedef − piyasa bundan.")
     v.set("%s%d" % (tip_z, head), "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden - Bootstrap (piyasa) ya da OIS · "
-                                  "PPK'daki senaryolar (adları SENARYOLAR tablosundan). FXswap+bp ve Faiz % satırlarında etkisiz. "
+                                  "PPK'daki senaryolar (adları SENARYOLAR tablosundan). FXswap+bp, Faiz % ve Fiyat satırlarında etkisiz. "
                                   "Delete: varsayılana döner.")
     for r, h, m in _vfra_rows():
-        f = {"r": r, "h": h, "e": e, "list": VFRA_LIST.split(":")[0], "o1": VFRA_OTHER_TYPES[0], "o2": VFRA_OTHER_TYPES[1]}
+        f = {"r": r, "h": h, "e": e, "list": VFRA_LIST.split(":")[0], "other": vfra_other("$O%d" % r), "price": VPRICE_TYPE}
         fra = viop_target_fra(r)
         # the default: the bootstrapped curve, shown once the row has its two contracts and is priced as an FRA
-        v.set("%s%d" % (c, r), '=IF(AND($L%(r)d<>"",$M%(r)d<>"",$O%(r)d<>"%(o1)s",$O%(r)d<>"%(o2)s"),%(list)s,"")' % f,
-              like="O%d" % r)
+        v.set("%s%d" % (c, r), '=IF(AND($L%(r)d<>"",$M%(r)d<>"",NOT(%(other)s)),%(list)s,"")' % f, like="O%d" % r)
         # a row that cannot be priced shows no OIS FRA and no target rate - nor the limits, the spread price and target −
         # market built on it (the sheet's own FRA was 0 and the target −1,5 % on the far contract's expiry day); why it
         # cannot be priced is in its tooltips and on the desk strip
@@ -3249,8 +3542,12 @@ def _tto_viop_fra(model: Model) -> None:
                                     'ISNUMBER(%(e)s!$P$%(h)d))," ("&%(e)s!$A$3&": "&TEXT(%(e)s!$P$%(h)d,"0.00%%")&")","")'
                                     '&IF(AND(%(e)s!$C$%(h)d>1,%(e)s!$D$%(h)d=1)," - seçilen FRA eğrisi ("&%(e)s!$B$%(h)d&") yalnız FRA+bp '
                                     'satırında geçerli",""),""))') % f)
-        v.set("%s%d" % (tip_q, r), ('=' + bad + 'IF(AND(ISNUMBER($Q%(r)d),$O%(r)d<>"%(o1)s",$O%(r)d<>"%(o2)s"),"Hedef faiz = OIS FRA ("'
-                                    '&%(e)s!$E$%(h)d&")"&IF($P%(r)d<0," − "," + ")&TEXT(ABS($P%(r)d),"General")&" bp",""))') % f)
+        # (a far price typed: the rate it implies, from what)
+        v.set("%s%d" % (tip_q, r), ('=' + bad + 'IF(AND(ISNUMBER($Q%(r)d),NOT(%(other)s)),"Hedef faiz = OIS FRA ("'
+                                    '&%(e)s!$E$%(h)d&")"&IF($P%(r)d<0," − "," + ")&TEXT(ABS($P%(r)d),"General")&" bp",'
+                                    'IF(AND(ISNUMBER($Q%(r)d),$O%(r)d="%(price)s"),"Hedef faiz = uzak kontrat fiyatı "&TEXT($P%(r)d,'
+                                    '"General")&" → ima TRY faizi (yakın limit "&TEXT($R%(r)d,"0.0000")&", "&TEXT($Y%(r)d,"0")&" gün, '
+                                    'ACT/360)","")))') % f)
         # (a scenario renamed since it was chosen: the choice keeps its old text, as an Excel list does, and its scenario)
         v.set("%s%d" % (tip_z, r), ('=' + bad + 'IF(AND(%(e)s!$C$%(h)d>1,%(e)s!$D$%(h)d=1),"Hedef tipi "&$O%(r)d&": FRA eğrisi bu '
                                     'satırda etkisiz (yalnız FRA+bp satırında geçerli)",IF(AND(%(e)s!$C$%(h)d>1,ISNA(MATCH($%(c)s%(r)d,'
@@ -3664,7 +3961,10 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
-            (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread), (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
+            (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread),
+            # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
+            (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
+            (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
 }
