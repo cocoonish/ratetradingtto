@@ -2885,6 +2885,29 @@ async function clipAfter(page, action) {
     check('Toplu fiyatlama: two outrights pasted (the table\'s own USDTRY and EURTRY forwards) read back their implied TRY rate - the RET mid they were priced with',
       [5, 6].every((r) => Math.abs(bulkBack['S' + r] - bulkBack['G' + r]) < 0.01 && Math.abs(bulkBack['U' + r] - bulkBack['G' + r]) < 0.01)
       && bulkN.every((t) => /\d,\d{4}$/.test(t)), { bulkN, bulkP, bulkBack });
+    // points -> rate (proposal #2): FORWARD STARTING SWAP's own "Manuel" FS points typed back read its TRY fwd-fwd %; ÇAPRAZ
+    // FORWARD's own manual USDTRY forward typed back reads its TRY rate
+    await typeInto(page, 'Forward!C167', '08.12.2026');
+    await typeInto(page, 'Forward!C168', '08.03.2027');
+    await typeInto(page, 'Forward!C169', '40,5');
+    await waitCell(page, 'Forward!I179', 't.trim() !== ""');
+    const fsPts = (await cellText(page, 'Forward!I179')).trim();
+    await typeInto(page, 'Forward!I181', fsPts);
+    await waitCell(page, 'Forward!E181', 't.trim() !== ""');
+    const fsBack = { rate: trNumber(await cellText(page, 'Forward!E181')), ois: (await cellText(page, 'Forward!P181')).trim() };
+    await (await cellHandle(page, 'Forward!C197')).click();          // (a drop-down cell: Enter opens its list)
+    await page.keyboard.press('Enter');
+    await page.click('.menu button:text-is("USD")');
+    await waitCell(page, 'Forward!C197', 't.trim() === "USD"');
+    await typeInto(page, 'Forward!F200', '41');
+    await waitCell(page, 'Forward!Q200', 't.trim() !== ""');
+    const crossFwd = (await cellText(page, 'Forward!Q200')).trim();
+    await typeInto(page, 'Forward!R200', crossFwd);
+    await waitCell(page, 'Forward!S200', 't.trim() !== ""');
+    const crossBack = trNumber(await cellText(page, 'Forward!S200'));
+    check('Forward starting swap: its own FS points typed back ("Elle puan → faiz") read its TRY fwd-fwd % and the bp over OIS mid; '
+      + 'Çapraz forward: its own USDTRY forward typed back reads its TRY rate',
+      Math.abs(fsBack.rate - 40.5) < 0.006 && /^[+−-]?\d/.test(fsBack.ois) && Math.abs(crossBack - 41) < 0.001, { fsPts, fsBack, crossFwd, crossBack });
     // DİBS Canlı: the value dates side by side, the day's tape, the bond's card
     await open(page, 'dibslive');
     await page.waitForSelector('.panel[data-panel="L1"] table.grid');

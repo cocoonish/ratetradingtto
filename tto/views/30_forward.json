@@ -206,6 +206,27 @@
    "label": "ÇAPRAZ 'Manuel TRY %'"
   },
   {
+   "range": "I181",
+   "scope": "user",
+   "group": "fs-back-usd",
+   "kind": "number",
+   "label": "FSS 'Elle puan → faiz (USDTRY)': FS swap points typed (a broker's / client's), to read the TRY fwd-fwd % they imply"
+  },
+  {
+   "range": "O182",
+   "scope": "user",
+   "group": "fs-back-eur",
+   "kind": "number",
+   "label": "FSS 'Elle puan → faiz (EURTRY)': EURTRY FS swap points typed, to read the TRY fwd-fwd % they imply"
+  },
+  {
+   "range": "R200:R214",
+   "scope": "user",
+   "group": "cross-back",
+   "kind": "number",
+   "label": "ÇAPRAZ 'XXXTRY fwd (elle)': a forward typed, to read the TRY rate it implies (the foreign leg held)"
+  },
+  {
    "range": "AH10",
    "scope": "user",
    "group": "forward-21",
@@ -1732,15 +1753,17 @@
    "copyable": true,
    "type": "table",
    "title": "FORWARD STARTING SWAP",
-   "range": "B166:O180",
-   "hidden": false
+   "range": "B166:R182",
+   "hidden": false,
+   "note": "Elle puan → faiz: bir broker'ın ya da müşterinin verdiği FS swap puanını yazın (USDTRY: I181, EURTRY: O182) - ima ettiği TRY fwd-fwd %, Manuel satırının formülünün tersiyle (aynı near / far valör, near outright RET mid'den, aynı USD / EUR fwd-fwd %: C170 / C171 ya da eğri); yanında OIS mid, offshore mid ve RET mid'e göre bp."
   },
   {
    "id": "B36",
    "type": "table",
    "title": "ÇAPRAZ FORWARD",
-   "range": "B196:Q217",
-   "hidden": false
+   "range": "B196:T217",
+   "hidden": false,
+   "note": "XXXTRY fwd (elle): bir forward yazın - ima ettiği TRY faizi, döviz bacağı sabit tutularak (manuel forward'ın formülünün tersi: USD / EUR'da o dövizin OIS faizi ve günü; başka dövizde Bloomberg'in USDXXX forward'ının ortası); yanında RET mid'e göre bp."
   },
   {
    "id": "B14",

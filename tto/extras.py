@@ -1929,6 +1929,91 @@ _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", 
              "N": NUM4, "O": INT0, "P": NUM4, "Q": INT0}
 
 
+# ---------------------------------------------------------------------------------------------- Forward: points -> rate
+FS_BACK_USD, FS_BACK_EUR = 181, 182    # FORWARD STARTING SWAP's way back: an FS points value typed -> the TRY fwd-fwd %
+FS_BACK_BP = (("P", "E175", "bp − OIS mid"), ("Q", "E174", "bp − offshore mid"), ("R", "E177", "bp − RET mid"))
+CROSS_ROWS = (200, 214)                # ÇAPRAZ FORWARD's value dates; its way back in R (typed), S (TRY %), T (bp − RET mid)
+#: the cells the ways back take on the Forward sheet: empty in the workbook (``_fwd_back_check``), no input ever stood there
+FWD_BACK_CELLS = (["%s%d" % (c, r) for r in (FS_BACK_USD, FS_BACK_EUR) for c in "BCDEFGHIJKLMNOPQR"]
+                  + ["%s173" % c for c, _, _ in FS_BACK_BP]
+                  + ["%s%d" % (c, r) for r in range(CROSS_ROWS[0] - 1, CROSS_ROWS[1] + 1) for c in "RST"])
+_CCY = 'IF($C$197="","USD",UPPER(TRIM($C$197)))'           # ÇAPRAZ FORWARD's currency, as its own formulas read it
+
+
+def _fwd_back_check(model: Model) -> None:
+    """FORWARD STARTING SWAP's "Manuel" row and ÇAPRAZ FORWARD's manual forward (Q), whose formulas the ways back solve
+    for the TRY rate; the cells they take are empty in the workbook."""
+    _need_sheets(model, "Forward")
+    for addr, text in (("C179", "C177"), ("G179", "G177"), ("L179", "L177"), ("F179", "IF(ISNUMBER($C$170),$C$170,F177)"),
+                       ("K179", "IF(ISNUMBER($C$171),$C$171,K177)"), ("H179", "G179*(1+E179/100*$H$167/360)/(1+F179/100*$H$167/360)"),
+                       ("I179", "(H179-G179)*10000"), ("O179", "(N179-L179)*10000"),
+                       ("N179", "L179*(1+E179/100*MAX(0,$G$168-$F$168)/360)/(1+K179/100*MAX(0,$G$168-$F$168)/360)"),
+                       ("D179", "((1+C179/100*$F$167/360)*(1+$C$169/100*$H$167/360)-1)*360/$G$167*100"),
+                       ("E174", "360/$H$167*100"), ("E175", "360/$H$167*100"), ("E177", "360/$H$167*100"), ("J179", "I179/$H$167")):
+        _need_formula(model, "Forward", addr, text)
+    for r in CROSS_ROWS:
+        for text in ("$F$2*(1+$F%d/100*$C%d/360)/(1+$G%d/100*$C%d/360)" % (r, r, r, r),
+                     "$G$2*(1+$F%d/100*($B%d-$K$2)/360)/(1+$H%d/100*($B%d-$K$2)/360)" % (r, r, r, r), ")/AVERAGE(K%d,L%d)" % (r, r)):
+            _need_formula(model, "Forward", "Q%d" % r, text)
+    sh = model.sheet("Forward")
+    for addr in FWD_BACK_CELLS:
+        if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+            raise ValueError("Forward!%s boş değil" % addr)
+
+
+def _tto_fwd_back(model: Model) -> None:
+    """Points and outrights the other way round on the Forward sheet (the desk, 23.11.2026, proposal #2 approved: a points
+    value a broker or a client gives -> the TRY rate it implies).
+
+    * FORWARD STARTING SWAP: an FS swap points value typed -> the TRY fwd-fwd %: the "Manuel" row's own formula solved for
+      the TRY rate - the same near / far, the near outright from RET mid, the same USD (USDTRY, row 181) or EUR (EURTRY,
+      row 182) fwd-fwd % (typed in C170 / C171, else the curve's); beside it its bp over OIS mid, offshore mid and RET
+      mid (E175, E174, E177).
+    * ÇAPRAZ FORWARD: a XXXTRY forward typed -> the TRY rate it implies, the foreign leg held: the manual forward's (Q)
+      formula solved for the TRY rate - USD / EUR: their OIS % and days; another currency: Bloomberg's USDXXX forward
+      (the mid of K / L), the USDTRY leg then on the USD %."""
+    b = SheetBuilder(model, "Forward")
+    for col, _, head in FS_BACK_BP:
+        b.set("%s173" % col, head, like="O173")
+    for r, label, pts, leg in ((FS_BACK_USD, "Elle puan → faiz (USDTRY)", "I", "usd"), (FS_BACK_EUR, "Elle puan → faiz (EURTRY)", "O", "eur")):
+        f = {"r": r, "p": pts}
+        ok = 'AND($F$169="OK",ISNUMBER($%(p)s$%(r)d))' % f
+        b.set("B%d" % r, label, like="B179", bold=True)
+        b.input("%s%d" % (pts, r), None, fmt="#,##0.0")
+        b.set("C%d" % r, '=IF(%s,C177,"")' % ok, like="C179")
+        if leg == "usd":
+            # far outright = near outright + points; TRY fwd-fwd % = ((far / near)·(1 + USD·d/360) − 1)·360/d (d: the period)
+            b.set("G%d" % r, '=IF(%s,G177,"")' % ok, like="G179")
+            b.set("H%d" % r, '=IF(%s,G%d+I%d/10000,"")' % (ok, r, r), like="H179")
+            b.set("F%d" % r, '=IF(%s,IF(ISNUMBER($C$170),$C$170,F177),"")' % ok, like="F179")
+            b.set("E%d" % r, '=IFERROR(IF(%s,((H%d/G%d)*(1+F%d/100*$H$167/360)-1)*360/$H$167*100,""),"")' % (ok, r, r, r), like="E179",
+                  bold=True)
+            b.set("J%d" % r, '=IF(%s,I%d/$H$167,"")' % (ok, r), like="J179")
+        else:
+            eur = "MAX(0,$G$168-$F$168)"                    # the period on the EURTRY spot dates, as N179 counts it
+            b.set("L%d" % r, '=IF(%s,L177,"")' % ok, like="L179")
+            b.set("N%d" % r, '=IF(%s,L%d+O%d/10000,"")' % (ok, r, r), like="N179")
+            b.set("K%d" % r, '=IF(%s,IF(ISNUMBER($C$171),$C$171,K177),"")' % ok, like="K179")
+            b.set("E%d" % r, '=IFERROR(IF(%s,((N%d/L%d)*(1+K%d/100*%s/360)-1)*360/%s*100,""),"")' % (ok, r, r, r, eur, eur), like="E179",
+                  bold=True)
+        b.set("D%d" % r, '=IFERROR(IF(%s,((1+C%d/100*$F$167/360)*(1+E%d/100*$H$167/360)-1)*360/$G$167*100,""),"")' % (ok, r, r), like="D179")
+        for col, ref, _ in FS_BACK_BP:
+            b.set("%s%d" % (col, r), '=IFERROR(IF(AND(ISNUMBER(E%d),ISNUMBER(%s)),(E%d-%s)*100,""),"")' % (r, ref, r, ref), fmt="0.0")
+    # ÇAPRAZ FORWARD: a XXXTRY forward typed -> the TRY rate it implies (the foreign leg held)
+    r1, r2 = CROSS_ROWS
+    b.set("R%d" % (r1 - 1), '=%s&"TRY fwd (elle)"' % _CCY, like="Q%d" % (r1 - 1))
+    b.set("S%d" % (r1 - 1), "İma TRY %", like="Q%d" % (r1 - 1))
+    b.set("T%d" % (r1 - 1), "− RET mid (bp)", like="Q%d" % (r1 - 1))
+    for r in range(r1, r2 + 1):
+        f = {"r": r, "c": _CCY}
+        usd = "((%(x)s/$F$2)*(1+$G%(r)d/100*$C%(r)d/360)-1)*360/$C%(r)d*100"
+        b.input("R%d" % r, None, fmt=NUM4)
+        b.set("S%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($R%(r)d))),"",IF(%(c)s="USD",' + usd % {"x": "$R%(r)d", "r": r}
+                          + ',IF(%(c)s="EUR",(($R%(r)d/$G$2)*(1+$H%(r)d/100*($B%(r)d-$K$2)/360)-1)*360/($B%(r)d-$K$2)*100,'
+                          + usd % {"x": "$R%(r)d*AVERAGE($K%(r)d,$L%(r)d)", "r": r} + '))),"")') % f, fmt="0.0000", bold=True)
+        b.set("T%d" % r, '=IFERROR(IF($S%(r)d="","",($S%(r)d-AVERAGE($D%(r)d,$E%(r)d))*100),"")' % f, fmt="0.0")
+
+
 # ---------------------------------------------------------------------------------------------- live quotes
 #: Is a bid / ask of Borsa İstanbul a live quote?  When no order stands, Bloomberg's ``PX_BID`` / ``PX_ASK`` of the
 #: exchange's sources (ISL0 / ISL1 / ISLN) still give a price - the last trade, for a bill the last trade's yield on
@@ -3719,6 +3804,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("EK_FWD EURTRY", _fwd_eur_check, _tto_fwd_eur),
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
+            ("Forward puandan faize", _fwd_back_check, _tto_fwd_back),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
             ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),

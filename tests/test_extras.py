@@ -108,7 +108,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_TATIL", "FX valörleri", "OIS spot valörü", "EK_FWD", "EK_XAU", "EK_VIOP",
                                                    "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
-                                                   "Bulk Bond satırları", "EK_BULK", "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
+                                                   "Bulk Bond satırları", "EK_BULK", "Forward puandan faize", "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
@@ -473,7 +473,7 @@ def test_the_new_inputs_stand_where_no_input_ever_stood(svc):
     had an input on (none retired, none another table's)."""
     from tto.views import load_views
     view = next(v for v in load_views() if v["id"] == "forward")
-    new = {"EK_FWD!D133:E142", "EK_FWD!D147:E156", "EK_BULK!R5:R104", "EK_BULK!T5:T104"}
+    new = {"EK_FWD!D133:E142", "EK_FWD!D147:E156", "EK_BULK!R5:R104", "EK_BULK!T5:T104", "I181", "O182", "R200:R214"}
     have = [i["range"] for i in view["inputs"] if "range" in i]
     assert new <= set(have)
 
@@ -516,6 +516,58 @@ def test_a_bulk_rows_outright_gives_back_its_rate(svc):
     assert cell(svc, "EK_BULK!U%d" % first, u) == ""
     view = next(p for p in svc.view(u, "forward")["panels"] if p["id"] == "BK1")
     assert view["range"] == "B1:U106" and view["grow"]["key"] == "B"
+
+
+def test_fs_points_typed_give_back_the_manual_rate(svc):
+    """(proposal #2, approved: "1-2-3-4 yap") FORWARD STARTING SWAP: the "Manuel" row's own FS points typed back give its
+    TRY fwd-fwd % - USDTRY and EURTRY, on the same near / far and USD / EUR fwd-fwd % -, with its bp over OIS mid,
+    offshore mid and RET mid beside it."""
+    u = svc.login("FS ters")["user"]
+    put(svc, u, {"Forward!C167": "08.12.2026", "Forward!C168": "08.03.2027", "Forward!C169": "40,5"})
+    assert cell(svc, "Forward!F169", u) == "OK"
+    for usd in (None, "4,1"):                               # the USD fwd-fwd % of the curve, then one typed
+        put(svc, u, {"Forward!C170": usd or ""})
+        pts, pts_eur = cell(svc, "Forward!I179", u), cell(svc, "Forward!O179", u)
+        assert isinstance(pts, float) and isinstance(pts_eur, float)
+        put(svc, u, {"Forward!I181": pts, "Forward!O182": pts_eur})
+        for r in (extras.FS_BACK_USD, extras.FS_BACK_EUR):
+            e = cell(svc, "Forward!E%d" % r, u)
+            assert e == pytest.approx(40.5, abs=1e-9), (usd, r)
+            for col, ref, _ in extras.FS_BACK_BP:
+                assert cell(svc, "Forward!%s%d" % (col, r), u) == pytest.approx((e - cell(svc, "Forward!" + ref, u)) * 100, abs=1e-9)
+            assert cell(svc, "Forward!D%d" % r, u) == pytest.approx(cell(svc, "Forward!D179", u), abs=1e-9)   # (the far TRY %)
+        assert cell(svc, "Forward!H181", u) == pytest.approx(cell(svc, "Forward!H179", u), rel=1e-12)
+        assert cell(svc, "Forward!N182", u) == pytest.approx(cell(svc, "Forward!N179", u), rel=1e-12)
+        assert cell(svc, "Forward!F181", u) == cell(svc, "Forward!F179", u) and cell(svc, "Forward!J181", u) == pytest.approx(cell(svc, "Forward!J179", u))
+    # points of one's own: more points, a higher TRY rate; none: empty
+    put(svc, u, {"Forward!I181": cell(svc, "Forward!I179", u) + 100})
+    assert cell(svc, "Forward!E181", u) > 40.5
+    put(svc, u, {"Forward!I181": ""})
+    assert cell(svc, "Forward!E181", u) == "" and cell(svc, "Forward!P181", u) == ""
+
+
+def test_a_cross_forward_typed_gives_back_its_rate(svc):
+    """ÇAPRAZ FORWARD: a XXXTRY forward typed -> the TRY rate it implies, the foreign leg held - the manual forward's (Q)
+    own value typed back gives its manual TRY % (USD; EUR on its own days); another currency holds Bloomberg's USDXXX
+    forward (none in the recorded file: no rate rather than a wrong one)."""
+    u = svc.login("Çapraz ters")["user"]
+    r1 = extras.CROSS_ROWS[0]
+    for ccy in ("USD", "EUR"):
+        put(svc, u, {"Forward!C197": ccy, "Forward!F%d" % r1: "41", "Forward!F%d" % (r1 + 3): "39,25"})
+        typed = {"Forward!R%d" % r: cell(svc, "Forward!Q%d" % r, u) for r in (r1, r1 + 3)}
+        assert all(isinstance(v, float) for v in typed.values())
+        put(svc, u, typed)
+        for r, rate in ((r1, 41.0), (r1 + 3, 39.25)):
+            assert cell(svc, "Forward!S%d" % r, u) == pytest.approx(rate, abs=1e-9), ccy
+            ret_mid = (cell(svc, "Forward!D%d" % r, u) + cell(svc, "Forward!E%d" % r, u)) / 2
+            assert cell(svc, "Forward!T%d" % r, u) == pytest.approx((rate - ret_mid) * 100, abs=1e-9)
+        assert cell(svc, "Forward!R%d" % (r1 - 1), u) == ccy + "TRY fwd (elle)"
+    put(svc, u, {"Forward!C197": "CHF"})
+    assert cell(svc, "Forward!S%d" % r1, u) == ""
+    model = svc.books["tto"].model
+    assert "$R%d*AVERAGE($K%d,$L%d)" % (r1, r1, r1) in extras.formula_of(model, "Forward", "S%d" % r1)
+    put(svc, u, {"Forward!R%d" % r1: ""})
+    assert cell(svc, "Forward!S%d" % r1, u) == ""
 
 
 def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
