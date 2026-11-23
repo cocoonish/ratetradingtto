@@ -77,6 +77,26 @@ def buckets(tenor: str) -> List[Tuple[str, float]]:
     return [(month_label(b), w) for b, w in bucket_split(m)]
 
 
+#: an OIS leg that ends on a date of its own (a broken date): named by that date, as the lists and the form show it
+_DATE_TENOR = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
+
+
+def date_tenor(serial: float) -> str:
+    """A broken-date leg's name: its end day, dd.mm.yyyy."""
+    return serial_to_date(serial).strftime("%d.%m.%Y")
+
+
+def tenor_date_of(tenor: Any) -> Optional[float]:
+    """The end (serial) of a leg named by its date ("04.11.2027": :func:`date_tenor`); ``None`` for a tenor of the lists."""
+    m = _DATE_TENOR.match(str(tenor or "").strip())
+    if not m:
+        return None
+    try:
+        return float(date_to_serial(_dt.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))))
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------------------------- FX forward
 def pair_of(text: Any) -> str:
     """The currency pair of a forward as typed: "EURTRY", "eur/try"; a currency alone ("gbp") is against TRY."""
@@ -346,6 +366,8 @@ class OisMarket(object):
         self._mpc: Optional[Dict[str, Any]] = None
         self._curves_of = curves                # the TRY curves both ways as the service keeps them (none: read here)
         self._curves: Optional[Dict[str, Any]] = None
+        self._pricing: Any = None               # Fiyatlama's market (tto/pricing.py): the OIS spot, the TRY holidays
+        self._broken: Dict[float, Dict[str, float]] = {}
 
     def value(self, ref: str) -> Any:
         si, rc = self.book.cell(ref)
@@ -376,7 +398,47 @@ class OisMarket(object):
         v = self.value("OIS_MAIN!F2")
         return v if type(v) is float and v > 0 else 1000.0
 
+    def pricing_market(self) -> Any:
+        """Fiyatlama's market (:func:`tto.pricing.read`) out of this calculation: the OIS spot, Motor's TRY holidays."""
+        if self._pricing is None:
+            from . import pricing as pr          # (pricing imports this module)
+            idx = self.book.model.sheet_index
+            try:
+                self._pricing = pr.read(lambda sheet, r, c: self.calc.get(idx[sheet], r, c))
+            except pr.PricingError as exc:
+                raise TradeError(str(exc))
+        return self._pricing
+
+    def broken(self, end: float) -> Dict[str, float]:
+        """A TRY OIS from the OIS spot to a date of its own - a broken date - priced as Fiyatlama prices one (the existing
+        broken-date handling, :func:`tto.pricing.swap_deal`): one payment up to 3M, else quarterly coupons counted back
+        from the maturity, the short period first (MASA!BL193: ``WORKDAY(EDATE(end, −3k) − 1, 1, TRY)``; the desk,
+        19.11.2026), ACT/365, on the true Bootstrap (Motor's ``BOOT_GUN`` / ``BOOT_LNDF``, the desk's records' curve).
+        ``{"start", "end"}`` (the end rolled to a business day), ``"par"``, ``"annuity"`` (Σ τ·DF per unit nominal, as
+        Motor's column I) and ``"df"`` at the end."""
+        key = float(end)
+        got = self._broken.get(key)
+        if got is None:
+            from . import pricing as pr
+            boot = (self.curves() or {}).get("boot")
+            if boot is None:
+                raise TradeError("kırık vade fiyatlanamadı: Bootstrap eğrisi yok")
+            try:
+                deal = pr.swap_deal(pr.OIS, ("spot", 0.0), ("d", key), self.pricing_market())
+            except pr.PricingError as exc:
+                raise TradeError("kırık vade %s: %s" % (date_tenor(key), exc))
+            got = {"start": deal.start, "end": deal.end, "par": pr.mid(deal, boot), "annuity": pr.annuity(deal, boot),
+                   "df": boot.df(deal.end - deal.spot)}
+            self._broken[key] = got
+        return got
+
     def par(self, tenor: str) -> Optional[float]:
+        end = tenor_date_of(tenor)
+        if end is not None:                     # a broken date (dd.mm.yyyy)
+            try:
+                return self.broken(end)["par"]
+            except TradeError:
+                return None
         row = OIS_ROW.get(tenor)
         if row is not None:
             v = self.value("OIS_MAIN!B%d" % row)
@@ -393,7 +455,10 @@ class OisMarket(object):
         return None
 
     def annuity(self, tenor: str) -> float:
-        """PV of 1 bp-year of fixed leg per unit nominal (Motor!I for quoted tenors)."""
+        """PV of 1 bp-year of fixed leg per unit nominal (Motor!I for quoted tenors; a broken date: :meth:`broken`)."""
+        end = tenor_date_of(tenor)
+        if end is not None:
+            return self.broken(end)["annuity"]
         row = OIS_ROW.get(tenor)
         if row is not None:
             return _num(self.value("Motor!I%d" % (316 + row)), "annuity " + tenor)
@@ -590,9 +655,22 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     def tenor_of(key: str) -> str:
         t = str(payload.get(key) or "").upper().strip()
-        if t not in OIS_TENORS:
+        if t in OIS_TENORS:
+            return t
+        end = tenor_date_of(t)
+        if end is None:
             raise TradeError("geçersiz vade: %r" % t)
-        return t
+        return date_tenor(mkt.broken(end)["end"])          # a broken date: the business day it ends on
+
+    def before(a: str, b: str) -> bool:
+        """Whether leg ``a`` ends before leg ``b`` (a tenor of the lists, or a broken date)."""
+        if a in OIS_TENORS and b in OIS_TENORS:
+            return OIS_TENORS.index(a) < OIS_TENORS.index(b)
+        spot = mkt.value("OIS_MAIN!B2")
+        if type(spot) is not float:
+            raise TradeError("OIS spot tarihi yok")
+        end = lambda t: tenor_date_of(t) if t not in OIS_TENORS else tenor_end(spot, t)      # noqa: E731
+        return end(a) < end(b)
 
     def market(t: str) -> float:
         p = mkt.par(t)
@@ -614,7 +692,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         if side not in ("FLATTENER", "STEEPENER"):
             raise TradeError("yön FLATTENER ya da STEEPENER olmalı")
         ts, tl = tenor_of("short"), tenor_of("long")
-        if OIS_TENORS.index(ts) >= OIS_TENORS.index(tl):
+        if not before(ts, tl):
             raise TradeError("kısa vade uzun vadeden önce olmalı")
         rs = payload.get("short_rate")
         rs = rs if type(rs) is float else market(ts)
@@ -629,7 +707,7 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         if side not in ("REC GÖVDE", "PAY GÖVDE", "REC GOVDE", "PAY GOVDE"):
             raise TradeError("yön REC GÖVDE ya da PAY GÖVDE olmalı")
         t1, tb, t2 = tenor_of("wing1"), tenor_of("body"), tenor_of("wing2")
-        if not (OIS_TENORS.index(t1) < OIS_TENORS.index(tb) < OIS_TENORS.index(t2)):
+        if not (before(t1, tb) and before(tb, t2)):
             raise TradeError("vadeler kanat < gövde < kanat sırasında olmalı")
         r1 = payload.get("wing1_rate")
         r1 = r1 if type(r1) is float else market(t1)
@@ -643,6 +721,41 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         label = "%s %s/%s/%s @ %s bp" % ("REC GÖVDE" if rec_body else "PAY GÖVDE", t1, tb, t2, fmt(level, 2))
         mkt_level = (2.0 * market(tb) - market(t1) - market(t2)) * 10000.0
         info = {"market": mkt_level, "cost_bp": (mkt_level - level) if rec_body else (level - mkt_level)}
+    elif strategy == "fra" and (type(payload.get("start_date")) is float or type(payload.get("end_date")) is float):
+        # a FRA between two dates of its own (a day gone by's FRA reversed: its own start and end) - the two spot swaps
+        # to its dates as broken dates (:meth:`OisMarket.broken`), one nominal on the forward annuity; from the spot
+        # (start Spot) the swap to its end alone
+        if side not in ("PAY", "RECEIVE"):
+            raise TradeError("yön PAY ya da RECEIVE olmalı")
+        d1, d2 = payload.get("start_date"), payload.get("end_date")
+        if type(d2) is not float:
+            raise TradeError("FRA'nın bitiş tarihi gerekli")
+        if type(d1) is not float and payload.get("start_months") not in (None, 0.0):
+            raise TradeError("FRA'nın iki ucu da ay ya da ikisi de tarih olmalı (başlangıç Spot olabilir)")
+        e = mkt.broken(d2)
+        s = mkt.broken(d1) if type(d1) is float else None
+        if s is not None and s["end"] >= e["end"]:
+            raise TradeError("FRA'nın bitişi başlangıcından sonra olmalı")
+        a1, a2 = (s["annuity"] if s else 0.0), e["annuity"]
+        fwd_annuity = a2 - a1
+        if fwd_annuity <= 0:
+            raise TradeError("forward annuity hesaplanamadı")
+        nominal = mkt.nominal(dv01, fwd_annuity, 1.0) if dv01 is not None else float(nominal_in)
+        rec = side == "RECEIVE"
+        n2 = date_tenor(e["end"])
+        if s is None:
+            n1 = "Spot"
+            leg(n2, rec, level, 1.0, "end", annuity=a2, nominal=nominal)
+            mkt_level = e["par"]
+        else:
+            n1 = date_tenor(s["end"])
+            q = payload.get("start_rate")
+            q = q if type(q) is float else s["par"]
+            leg(n1, not rec, q, 1.0, "start", annuity=a1, nominal=nominal)
+            leg(n2, rec, (level * fwd_annuity + q * a1) / a2, 1.0, "end", annuity=a2, nominal=nominal)
+            mkt_level = (e["par"] * a2 - s["par"] * a1) / fwd_annuity
+        label = "%s FRA %s→%s @ %s%%" % (side, n1, n2, fmt(level * 100.0, 4))
+        info = {"market": mkt_level, "cost_bp": ((mkt_level - level) if rec else (level - mkt_level)) * 10000.0}
     elif strategy == "fra":
         if side not in ("PAY", "RECEIVE"):
             raise TradeError("yön PAY ya da RECEIVE olmalı")
@@ -830,6 +943,9 @@ def summarise(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
                 ois.setdefault(t["tenor"], {"B": [], "S": []})[t["dir"]].append((t["dv01"], t["rate"]))
                 spans[t["tenor"]] = t["mpc"].get("start") or 0.0
             else:
+                end = tenor_date_of(t["tenor"])
+                if end is not None:
+                    spans[t["tenor"]] = end                  # (a broken date: its own row, in the order of its day)
                 for b, w in buckets(t["tenor"]):
                     ois.setdefault(b, {"B": [], "S": []})[t["dir"]].append((t["dv01"] * w, t["rate"]))
         elif k == "bond":
@@ -1005,7 +1121,8 @@ def ois_instrument(strategy: str, legs: Sequence[Dict[str, Any]]) -> Tuple[Any, 
     by_role = {lg.get("role"): lg for lg in legs}
     if strategy == "fra":
         start = by_role.get("start")
-        return (_months_of(start["tenor"]) if start else 0, _months_of((by_role.get("end") or {}).get("tenor")))
+        point = lambda t: t if tenor_date_of(t) is not None else _months_of(t)            # noqa: E731 (a date: its name)
+        return (point(start["tenor"]) if start else 0, point((by_role.get("end") or {}).get("tenor")))
     if strategy == "mpc":
         m = legs[0].get("mpc") or {}
         return (m.get("start"), m.get("end"))
@@ -1015,7 +1132,13 @@ def ois_instrument(strategy: str, legs: Sequence[Dict[str, Any]]) -> Tuple[Any, 
 def typed_instrument(strategy: str, payload: Dict[str, Any]) -> Tuple[Any, ...]:
     """The same of an OIS trade as the form sends it, read as :func:`ois_legs` reads it."""
     if strategy == "fra":
-        return tuple(int(payload[k]) if type(payload.get(k)) is float else payload.get(k) for k in ("start_months", "end_months"))
+        out: List[Any] = []
+        for m, d in (("start_months", "start_date"), ("end_months", "end_date")):
+            if type(payload.get(d)) is float:                    # (a FRA between dates: each by its day's name)
+                out.append(date_tenor(payload[d]))
+            else:
+                out.append(int(payload[m]) if type(payload.get(m)) is float else payload.get(m))
+        return tuple(out)
     if strategy == "mpc":
         return (payload.get("start"), payload.get("end"))
     keys = {"outright": ("tenor",), "spread": ("short", "long"), "fly": ("wing1", "body", "wing2")}.get(strategy, ())
@@ -1084,6 +1207,225 @@ def forward_restruck(t: Dict[str, Any], direction: str, typed: Tuple[str, float]
                         t.get("try_rate") if pair[3:] == "TRY" else None, t.get("usd_rate"))
     return {"dir": direction, "amount": amount, "tl": counter, "typed": typed[0], "typed_amount": typed[1],
             "dv01_tl": risk["tl"], "dv01": risk["usd"], "usd_dv01": risk["usd_leg"]}
+
+
+# ---------------------------------------------------------------------------------------------- a trade copied
+#: "Benzerini gir" (the trade again: its terms, a new trade) and "Ters işlem" (the trade that offsets it) - the desk,
+#: 23.11.2026: "one click fills the entry form from that trade, either as a new trade or with the side reversed, for
+#: repeats and unwinds"
+COPY_MODES = ("benzer", "ters")
+_OIS_FLIP = {"PAY": "RECEIVE", "RECEIVE": "PAY", "STEEPENER": "FLATTENER", "FLATTENER": "STEEPENER",
+             "REC GÖVDE": "PAY GÖVDE", "PAY GÖVDE": "REC GÖVDE"}
+
+
+def _serial(iso: str) -> float:
+    return float(date_to_serial(_dt.date.fromisoformat(iso)))
+
+
+def leg_end(trade_date: str, tenor: Any, holidays: Any) -> Optional[float]:
+    """The day an OIS leg of the blotter ends: a broken date its own; a tenor of the lists from the OIS spot of the day
+    it was entered (``WORKDAY(day, 1, TRY)``) on the workbook's calendar - months as Motor's (``WORKDAY(EDATE(spot, m)
+    − 1, 1, TRY)``: :func:`tto.pricing.tenor_date`), ON / 1W / 2W one / seven / fourteen days on, to a business day."""
+    from . import pricing as pr
+    end = tenor_date_of(tenor)
+    if end is not None:
+        return end
+    spot = pr.roll(_serial(trade_date) + 1.0, holidays)
+    m = _months_of(tenor)
+    if m is not None:
+        return pr.tenor_date(spot, m, holidays)
+    days = {"ON": 1.0, "1W": 7.0, "2W": 14.0}.get(str(tenor or ""))
+    return pr.roll(spot + days, holidays) if days is not None else None
+
+
+def fwd_tenor(t: Dict[str, Any]) -> Optional[str]:
+    """The tenor a forward's value date is from its own spot date (``value_date − days``): "3M" when it is a whole number
+    of months on (rolled to a business day: up to four days after the date), "2W" for whole weeks; ``None`` for a date of
+    its own."""
+    vd, days = t.get("value_date"), t.get("days")
+    if type(vd) is not float or type(days) is not float or days <= 0:
+        return None
+    from .history import add_months
+    spot = serial_to_date(vd - days)
+    for m in range(1, 121):
+        d = float(date_to_serial(add_months(spot, m)))
+        if 0.0 <= vd - d <= 4.0:
+            return "%dM" % m
+        if d > vd:
+            break
+    if days in (7.0, 14.0, 21.0):
+        return "%dW" % int(days // 7)
+    return None
+
+
+def copy_specs(legs: Sequence[Dict[str, Any]], cal: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """What "Benzerini gir" and "Ters işlem" fill the entry form with from a trade (``legs``: an OIS package's legs, any
+    other trade alone), by mode (:data:`COPY_MODES`): ``{"spec"}`` - the form's spec (``blotter.js`` ``fillForm``: its
+    amounts and sizes as numbers, the page writes them in the user's format) - with ``how`` (what moved, in words), or
+    ``{"why"}`` when that one makes no sense for the trade.  Nothing is saved; the form prices it on today's market as a
+    new trade: no price, rate or level of the trade comes along.
+
+    * **Benzerini gir**: the trade's terms - product, structure, side, size (as it was typed: a forward's amount in its
+      currency, an OIS's nominal or DV01), counterparty, note -, its instrument as it was entered: a tenor from today's
+      spot, a date its date; a day gone by's forward its tenor again from today's spot (:func:`fwd_tenor`), a meeting
+      swap whose start has passed from today's spot.
+    * **Ters işlem**: the other side, the same size (a forward's first-currency amount, an OIS's nominal - a spread / fly
+      sized by DV01 that DV01 -, a bond's nominal), the same end - value date, maturity, ISIN, meeting -; a start that
+      has passed is today's spot: a day gone by's TRY OIS is a broken date to its own maturity (each leg of a package,
+      a FRA started a spot swap to its end).  A trade that has run off has no offset.
+
+    ``cal``: ``today`` (ISO), ``ois_spot`` (today's OIS spot, serial), ``holidays`` (TRY, serials), ``fx_spot(pair)``
+    (today's spot date of a pair)."""
+    t = legs[0]
+    kind = t.get("kind")
+    past = t.get("trade_date") != cal["today"]
+    if kind == "fwd":
+        return {m: _copy_fwd(t, m, past, cal) for m in COPY_MODES}
+    if kind == "bond":
+        return {m: _copy_bond(t, m) for m in COPY_MODES}
+    if kind == "ois":
+        out = {}
+        for m in COPY_MODES:
+            try:
+                out[m] = _copy_ois(legs, m, past, cal)
+            except (TradeError, KeyError, TypeError, ValueError) as exc:
+                out[m] = {"why": "formda açılamıyor: %s" % (str(exc) or type(exc).__name__)}
+        return out
+    return {m: {"why": "bu ürün formda yok"} for m in COPY_MODES}
+
+
+def _copy_fwd(t: Dict[str, Any], mode: str, past: bool, cal: Dict[str, Any]) -> Dict[str, Any]:
+    pair = str(t.get("pair") or "USDTRY").upper()
+    vd = t.get("value_date")
+    if type(vd) is not float or t.get("dir") not in ("B", "S"):
+        return {"why": "işlemin valörü ya da yönü yok"}
+    spot = cal["fx_spot"](pair)
+    spec: Dict[str, Any] = {"kind": "fwd", "pair": pair, "dir": t["dir"], "basis": t.get("basis") if t.get("basis") in FWD_BASES else "RET_MID",
+                            "value": "", "spot": "", "cpt": t.get("cpt") or "", "note": t.get("note") or ""}
+    if mode == "ters":
+        if type(spot) is float and vd <= spot:
+            return {"why": "valörü geldi (%s): kapatılacak forward kalmadı" % date_tenor(vd)}
+        spec.update(dir="S" if t["dir"] == "B" else "B", amount=t.get("amount"), date=date_tenor(vd))
+        how = "Ters yön, aynı %s tutarı ve valör (%s)" % (pair[:3], date_tenor(vd))
+        if t.get("typed") == "quote":
+            how += " - karşı parada girilmişti: %s tutarı tam kapansın diye dövizde" % pair[:3]
+        return {"spec": spec, "how": how}
+    side, amount, ccy = entered_as(t)
+    spec["quote_amount" if side == "quote" else "amount"] = amount
+    if not past:
+        spec["date"] = date_tenor(vd)
+        return {"spec": spec, "how": "Aynı valör (%s), bugünkü piyasayla" % date_tenor(vd)}
+    tenor = fwd_tenor(t)
+    if tenor is not None:
+        spec["date"] = tenor
+        return {"spec": spec, "how": "Spot'u geçti: aynı vade (%s) bugünkü spot'tan" % tenor}
+    days = t.get("days") if type(t.get("days")) is float else None
+    if type(spot) is float and days:
+        spec["date"] = date_tenor(spot + days)
+        return {"spec": spec, "how": "Spot'u geçti: aynı gün sayısı (%d) bugünkü spot'tan" % days}
+    spec["date"] = date_tenor(vd)
+    return {"spec": spec, "how": "Aynı valör (%s)" % date_tenor(vd)}
+
+
+def _copy_bond(t: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    amount = t.get("amount")
+    if type(amount) is not float or not t.get("instrument"):
+        return {"why": "işlemin kâğıdı ya da tutarı yok"}
+    buy = amount >= 0
+    if mode == "ters":
+        buy = not buy
+    spec = {"kind": "bond", "dir": "B" if buy else "S", "instrument": t["instrument"], "amount": abs(amount), "price": "",
+            "note": t.get("note") or ""}
+    return {"spec": spec, "how": ("Ters yön, aynı kâğıt ve nominal" if mode == "ters" else "Aynı kâğıt, yön ve nominal")
+            + ": fiyatı yazın"}
+
+
+def _ois_size(strategy: str, role: Dict[str, Dict[str, Any]], t: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+    """An OIS trade's size as the form takes it (``editSpec``'s rule): a spread / fly by the nominal of its leg of weight
+    one when every leg has that nominal (a fly's wings half), else by the DV01 it was typed with (none: the sheet's); any
+    other strategy by its nominal - exact."""
+    if strategy in ("spread", "fly"):
+        one = role["long"] if strategy == "spread" else role["body"]
+        others = [role["short"]] if strategy == "spread" else [role["wing1"], role["wing2"]]
+        w = 1.0 if strategy == "spread" else 0.5
+        by_nominal = t.get("size_mode") == "nominal" if t.get("size_mode") else \
+            all(abs(x["nominal"] - w * one["nominal"]) < 0.5 for x in others)
+        if by_nominal:
+            return "nominal", one["nominal"]
+        typed = t.get("size_typed") if t.get("size_mode") else float(round(one["dv01"]))
+        return "dv01", typed if type(typed) is float else None
+    return "nominal", (role.get("end") or t)["nominal"]
+
+
+def _copy_ois(legs: Sequence[Dict[str, Any]], mode: str, past: bool, cal: Dict[str, Any]) -> Dict[str, Any]:
+    t = legs[0]
+    role = {lg.get("role"): lg for lg in legs}
+    st = str(t.get("strategy") or "outright")
+    side = str(t.get("side") or "").upper().replace("GOVDE", "GÖVDE")
+    if side not in _OIS_FLIP:
+        return {"why": "işlemin yönü yok"}
+    spot = cal["ois_spot"]
+    if type(spot) is not float:
+        return {"why": "OIS spot tarihi yok"}
+    hol = cal["holidays"]
+    ters = mode == "ters"
+    spec: Dict[str, Any] = {"kind": "ois", "strategy": st, "side": _OIS_FLIP[side] if ters else side, "level": "",
+                            "cpt": t.get("cpt") or "", "note": t.get("note") or ""}
+    spec["sizeMode"], spec["size"] = _ois_size(st, role, t)
+    if spec["size"] is None:
+        del spec["size"]                                       # (the sheet's DV01, as it was entered)
+    ran_off = "vadesi geldi (%s): kapatılacak swap kalmadı"
+    if st == "mpc":
+        m = t.get("mpc") or {}
+        s, e = m.get("start"), m.get("end")
+        if type(s) is not float or type(e) is not float:
+            return {"why": "işlemin tarihleri yok"}
+        if e <= spot:
+            return {"why": "dönemi bitti (%s)" % date_tenor(e)}
+        spec.update(start=max(s, spot), end=e)
+        how = "Aynı toplantı tarihleri" if s >= spot else "Başlangıcı geçti: bugünkü spot'tan (%s) aynı bitişe (%s)" % (
+            date_tenor(spot), date_tenor(e))
+        return {"spec": spec, "how": how + (", ters yön" if ters else "")}
+    if st == "fra":
+        start, end = role.get("start"), role.get("end")
+        if end is None:
+            return {"why": "işlemin bitiş bacağı yok"}
+        point = lambda lg: lg["tenor"] if tenor_date_of(lg["tenor"]) is not None else _months_of(lg["tenor"])     # noqa: E731
+        months = [point(start) if start else 0, point(end)]
+        if not ters or not past:
+            spec["months"] = months
+            return {"spec": spec, "how": "Aynı FRA" + (" bugünkü spot'tan" if past else "") + (", ters yön" if ters else "")}
+        e = leg_end(t["trade_date"], end["tenor"], hol)
+        s = leg_end(t["trade_date"], start["tenor"], hol) if start else None
+        if e is None or e <= spot:
+            return {"why": ran_off % date_tenor(e) if e is not None else "işlemin vadesi okunamadı"}
+        if s is None or s <= spot:
+            spec["months"] = [0, date_tenor(e)]
+            return {"spec": spec, "how": "Başlangıcı geçti: bugünkü spot'tan (%s) FRA'nın bitişine (%s) kırık vade, ters yön"
+                    % (date_tenor(spot), date_tenor(e))}
+        spec["months"] = [date_tenor(s), date_tenor(e)]
+        return {"spec": spec, "how": "Aynı tarihler (%s → %s), ters yön" % (date_tenor(s), date_tenor(e))}
+    order = LEG_ROLES.get(st)
+    if not order or any(r not in role for r in order):
+        return {"why": "işlemin bacakları %s stratejisinin değil" % st}
+    tenors = [role[r]["tenor"] for r in order]
+    if not ters or not past:
+        for x in tenors:                                       # (a broken date of its own: still to come)
+            end = tenor_date_of(x)
+            if end is not None and end <= spot:
+                return {"why": "vadesi geldi (%s)" % x}
+        spec["tenors"] = tenors
+        return {"spec": spec, "how": ("Aynı vade" if len(tenors) == 1 else "Aynı vadeler") + (" bugünkü spot'tan" if past else "")
+                + (", ters yön" if ters else "")}
+    # a day gone by's: each leg from today's spot to its own maturity - broken dates
+    ends = [leg_end(t["trade_date"], x, hol) for x in tenors]
+    if any(e is None for e in ends):
+        return {"why": "işlemin vadesi okunamadı"}
+    if any(e <= spot for e in ends):
+        return {"why": ran_off % date_tenor(min(ends))}
+    spec["tenors"] = [date_tenor(e) for e in ends]
+    return {"spec": spec, "how": "Başlangıcı geçti: bugünkü spot'tan (%s) işlemin vadesine kırık vade (%s), ters yön"
+            % (date_tenor(spot), " / ".join(spec["tenors"]))}
 
 
 def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:
@@ -1213,14 +1555,15 @@ def forward_dv01_buckets(book, calc, trades: List[Dict[str, Any]]) -> Dict[int, 
     return {r: (a, b) for r, (a, b) in out.items()}
 
 
-def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], Any]:
+def sheet_values(book, trades: List[Dict[str, Any]], left_out: Optional[Dict[str, int]] = None) -> Dict[Tuple[int, int], Any]:
     """Cell values of the three input lists of the 'Günlük İşlemler' sheet for the given trades.
 
     The sheet was made for USDTRY forwards and OIS of a quoted tenor.  A forward of another currency against
     TRY goes in at its USD amount (its TRY rate as it is: the TL cost); a meeting-dated OIS goes in spread over
     the main tenors (see :func:`mpc_summary_rows`); an OIS leg between the desk's buckets (15M, 21M, 27M …) as two rows,
     its nominal and DV01 split between the two buckets around it at its own rate (:func:`buckets` - the sheet's tables
-    have no row for its tenor).  Column G holds each forward's DV01 ($)."""
+    have no row for its tenor).  Column G holds each forward's DV01 ($).  ``left_out`` (a dict): counts by kind the
+    trades the lists had no row left for (:data:`FWD_ROWS`, :data:`OIS_ROWS`, :data:`BOND_ROWS`)."""
     si = book.model.sheet_index[SHEET]
     vals: Dict[Tuple[int, int], Any] = {}
 
@@ -1242,6 +1585,8 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
         k = t.get("kind")
         if k == "fwd" and not in_summary(t):
             continue                                        # no TRY leg: nothing for the TRY tables
+        if left_out is not None and {"fwd": rf > FWD_ROWS[1], "ois": ro > OIS_ROWS[1], "bond": rb > BOND_ROWS[1]}.get(k):
+            left_out[k] = left_out.get(k, 0) + 1
         if k == "ois" and t.get("mpc"):
             if mkt is None:
                 mkt = OisMarket(book, book.engine.shared)
@@ -1264,7 +1609,18 @@ def sheet_values(book, trades: List[Dict[str, Any]]) -> Dict[Tuple[int, int], An
             put("G", rf, float(t["dv01"]) if type(t.get("dv01")) is float else None)
             rf += 1
         elif k == "ois" and ro <= OIS_ROWS[1]:
-            for b, w in buckets(t["tenor"]):
+            parts = buckets(t["tenor"])
+            end = tenor_date_of(t["tenor"])
+            if end is not None:
+                # a broken date (a spot swap to a day of its own): the two main tenors around its end, by days - as a
+                # meeting-dated swap from the spot (:func:`mpc_summary_rows`)
+                if mkt is None:
+                    mkt = OisMarket(book, book.engine.shared)
+                spot = mkt.value("OIS_MAIN!B2")
+                if type(spot) is float:
+                    nodes = [tenor_end(spot, x) for x in SUMMARY_TENORS]
+                    parts = [(SUMMARY_TENORS[i], w) for i, w in split_weights(end, nodes)]
+            for b, w in parts:
                 if ro > OIS_ROWS[1]:
                     break
                 put("H", ro, float(t["nominal"]) * w if t.get("nominal") else None)

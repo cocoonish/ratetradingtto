@@ -79,6 +79,24 @@ function monthsOf(tenor) {
   return m ? Number(m[1]) * (m[2] === 'Y' ? 12 : 1) : null;
 }
 
+/** A leg that ends on a date of its own - a broken date, named by its day ("04.11.2027"; the server's ``date_tenor``). */
+function isDateText(v) {
+  return typeof v === 'string' && /^\d{2}\.\d{2}\.\d{4}$/.test(v);
+}
+
+/** Where a FRA leg ends, as the form's FRA takes it: its months, or its day when it is a broken date. */
+function legPoint(tenor) {
+  return isDateText(tenor) ? tenor : monthsOf(tenor);
+}
+
+// a trade's row actions that fill the form from it (the server's ``copy``: blotter.copy_specs): [mode, data-act, label, tip]
+const COPY_ACTS = [
+  ['benzer', 'copy', 'Benzerini gir', 'Benzerini gir: form bu işlemin koşullarıyla yeni işlem olarak dolar (ürün, yapı, yön, büyüklük, vade, '
+    + 'karşı taraf, not; başlangıcı geçmişse aynı vade bugünkü spot\'tan). Bugünkü piyasayla fiyatlanır; kaydedene kadar hiçbir şey saklanmaz.'],
+  ['ters', 'reverse', 'Ters işlem', 'Ters işlem: form bu işlemi kapatan işlemle dolar - ters yön, aynı büyüklük, aynı bitiş (vade, valör, ISIN, '
+    + 'toplantı); başlangıcı geçmişse bugünkü spot\'tan (TRY OIS: işlemin vadesine kırık vade). Bugünkü piyasayla fiyatlanır; kaydedene kadar hiçbir şey saklanmaz.'],
+];
+
 /** An amount as the form reads it back to the same number: grouped when it is whole ("812.000.000"), else in full. */
 function exactAmount(v) {
   return typeof v === 'number' ? (Number.isInteger(v) ? num(v, 0) : raw(v)) : '';
@@ -149,7 +167,7 @@ function editSpec(legs) {
     if (st === 'outright') spec.tenors = [t.tenor];
     else if (st === 'fra') {
       if (!role.end) return null;
-      spec.months = [role.start ? monthsOf(role.start.tenor) : 0, monthsOf(role.end.tenor)];
+      spec.months = [role.start ? legPoint(role.start.tenor) : 0, legPoint(role.end.tenor)];
       if (role.start) spec.start_rate = exactRate(role.start.rate);
     } else if (st === 'mpc') {
       if (!t.mpc) return null;
@@ -261,6 +279,7 @@ export class BlotterPage {
     this.fwd = { dir: 'B', basis: 'RET_MID', pair: 'USDTRY', typed: 'base' };      // typed: the amount typed - 'base' (USD) or 'quote' (TRY)
     this.ois = { strategy: 'outright', side: 'PAY', sizeMode: 'dv01' };
     this.editing = null;          // the trade the form is changing ("Düzenle"): {id, kind, label, rates, restore}
+    this.copied = null;           // what the form was filled from ("Benzerini gir" / "Ters işlem"): {kind, head, how}
     this.quoteFwd = debounce(() => this.doQuoteFwd(), 220);
     this.quoteOis = debounce(() => this.doQuoteOis(), 220);
     this.quoteBond = debounce(() => this.doQuoteBond(), 260);
@@ -386,6 +405,7 @@ export class BlotterPage {
         panes[k].classList.toggle('hidden', k !== id);
         tabBtns[k].classList.toggle('on', k === id);
       }
+      this.copyNote.classList.toggle('hidden', !this.copied || this.copied.kind !== id);     // (the line belongs to its product)
       if (id === 'fwd') this.quoteFwd(); else if (id === 'ois') this.quoteOis(); else this.quoteBond();
     };
     for (const [id, label] of [['fwd', 'FX Forward'], ['ois', 'OIS'], ['bond', 'Tahvil']]) {
@@ -404,8 +424,12 @@ export class BlotterPage {
     this.entryTitle = h('h2', { id: 'blotter-entry-title' }, 'Yeni işlem');
     // "Düzenle": which trade the form is changing, while it does (``markEditing``)
     this.editNote = h('div', { class: 'editnote hidden', id: 'blotter-edit-note' });
+    // "Benzerini gir" / "Ters işlem": which trade the form was filled from (``markCopied``), until it is saved
+    this.copyNote = h('div', { class: 'editnote hidden', id: 'blotter-copy-note' });
+    this.copied = null;
     this.entry.appendChild(h('header', null, this.entryTitle, bulkBtn));
     this.entry.appendChild(this.editNote);
+    this.entry.appendChild(this.copyNote);
     this.entry.appendChild(this.tplBar);
     this.entry.appendChild(tabs);
     for (const k of Object.keys(panes)) this.entry.appendChild(panes[k]);
@@ -444,7 +468,10 @@ export class BlotterPage {
     // what the workbook's own sheet cannot hold is said next to its tables
     this.sheetNote = h('span', { class: 'sheetnote hidden', id: 'blotter-sheet-note' });
     this.sheetTitle.appendChild(this.sheetNote);
+    // a period's (or a day gone by's without its archive): the same tables over the trades shown - said what they cover
+    this.sheetScope = h('div', { class: 'banner hidden', id: 'blotter-sheet-scope' });
     this.host.appendChild(this.sheetTitle);
+    this.host.appendChild(this.sheetScope);
     this.host.appendChild(this.sheetWrap);
     this.showTab = show;
     show(this.tab);
@@ -477,6 +504,7 @@ export class BlotterPage {
     const said = spec.said || 'İşlem kotadan dolduruldu: tutarı yazıp kaydedin';      // (a Ctrl+K command says its own)
     delete spec.said;
     this.endEdit(true);                                // a new trade: an edit in progress is left, the trade as it was
+    this.markCopied(null);
     const done = this.fillForm(Object.assign({ dir: null }, PREFILL_CLEARS[spec.kind], spec));
     if (!done) return false;
     toast(said + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
@@ -549,6 +577,7 @@ export class BlotterPage {
       (f.typed === 'quote' ? f.quoteAmount : f.amount).focus();
     } else if (spec.kind === 'ois') {
       const o = this.ois;
+      clear(o.marketHint);                 // (the mid of the trade on the form before: its "kullan" is not this one's)
       if (has('strategy')) {
         o.strategy = STRATEGIES.some((x) => x[0] === spec.strategy) ? spec.strategy : 'outright';
         o.stratSeg.set(o.strategy);
@@ -561,11 +590,14 @@ export class BlotterPage {
       else if (has('side')) o.sideSeg.set(o.side);
       if (!sideKnown) { o.side = null; o.sideSeg.set(null); }      // (not known: left to the user)
       const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy] || [];
-      if (has('tenors')) legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i]));
+      // (a leg to a date of its own - a broken date: an option of its own, as a FRA month off the grid)
+      const broken = (v) => (isDateText(v) ? v + ' · kırık vade' : undefined);
+      if (has('tenors')) legs.forEach((k, i) => pick(o.f[k], (spec.tenors || [])[i], broken((spec.tenors || [])[i])));
       if (o.strategy === 'fra' && spec.months && spec.months.length === 2) {
         const label = (m) => (m === 0 ? 'Spot' : (m % 12 === 0 ? (m / 12) + 'Y' : m + 'M'));
         spec.months.forEach((m, i) => {
           if (typeof m === 'number' && Number.isInteger(m) && m >= 0) pick(o.f[i ? 'end_months' : 'start_months'], m, label(m));
+          else if (isDateText(m)) pick(o.f[i ? 'end_months' : 'start_months'], m, broken(m));
           else missing.push(String(m));
         });
       }
@@ -633,7 +665,7 @@ export class BlotterPage {
       put('side', o.side);
       const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy];
       if (legs) out.tenors = legs.map((k) => o.f[k].value);
-      if (o.strategy === 'fra') out.months = [Number(o.f.start_months.value), Number(o.f.end_months.value)];
+      if (o.strategy === 'fra') out.months = [o.f.start_months.value, o.f.end_months.value].map((v) => (isDateText(v) ? v : Number(v)));
       if (o.strategy === 'mpc') {
         const m = (this.market && this.market.mpc) || { dates: [] };
         const place = (v) => (Number(v) === m.spot ? 0 : 1 + m.dates.findIndex((d) => d.date === Number(v)));
@@ -678,6 +710,7 @@ export class BlotterPage {
    */
   startEdit(t) {
     this.endEdit(true);
+    this.markCopied(null);
     const legs = t.kind === 'ois' && t.package ? this.data.trades.filter((x) => x.package === t.package) : [t];
     const spec = editSpec(legs);
     if (!spec) { toast('Bu işlem formda açılamıyor: silip yeniden girin', 'err'); return; }
@@ -757,6 +790,57 @@ export class BlotterPage {
     const text = edit.priced === 'today' ? why.charAt(0).toUpperCase() + why.slice(1) + EDIT_PRICED.today
       : (edit.priced === 'trade' ? EDIT_PRICED.trade[this.editing.kind] : (edit.priced === 'none' ? EDIT_PRICED.none : 'Değişiklik yok'));
     box.insertBefore(h('div', { class: 'editprice' + (edit.priced === 'today' ? ' today' : ''), 'data-k': 'edit-pricing' }, text), box.firstChild);
+  }
+
+  // ------------------------------------------------------------------ "Benzerini gir" / "Ters işlem": a trade copied
+  /**
+   * "Benzerini gir" (the trade again, a new one) or "Ters işlem" (the trade that offsets it) on a trade of the list -
+   * today's or a day gone by's, wherever the form is open: the form of its product filled with what the server made of it
+   * (``t.copy[mode]``, :func:`blotter.copy_specs`: the spec of ``fillForm`` - amounts and sizes as numbers, written here in
+   * the user's format -, ``how`` it was made), as a new trade: an edit in progress is left.  No price, rate or level comes
+   * along: the form prices it on today's market as any new trade; a line over the form says what it was filled from.
+   * Nothing is saved until "İşlemi kaydet".
+   */
+  copyFrom(t, mode, what) {
+    const c = (t.copy || {})[mode];
+    if (!c || !c.spec) { toast((c && c.why) || 'Bu işlem formda açılamıyor', 'err'); return; }
+    this.endEdit(true);
+    const spec = Object.assign({}, c.spec);
+    for (const k of ['amount', 'quote_amount', 'size']) if (typeof spec[k] === 'number') spec[k] = exactAmount(spec[k]);
+    const done = this.fillForm(spec);
+    if (!done) { toast('Bu işlem formda açılamıyor', 'err'); return; }
+    const head = (mode === 'ters' ? 'Ters işlem: ' : 'Benzeri: ') + what + (t.trade_date !== this.data.today ? ' (' + isoToTr(t.trade_date) + ')' : '');
+    this.markCopied({ kind: spec.kind, mode, head, how: c.how || '' });
+    this.entry.scrollIntoView({ block: 'nearest' });
+    toast(head + ' – form dolduruldu: fiyatı kontrol edip kaydedin' + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok',
+      done.warn ? 7000 : 3500);
+  }
+
+  /** The line over the form: which trade it was filled from ("Benzeri: …" / "Ters işlem: …") and how - until that trade
+   * is saved or the form is filled from something else (null: none). */
+  markCopied(c) {
+    if (!this.copyNote) return;
+    this.copied = c;
+    clear(this.copyNote);
+    if (c) {
+      this.copyNote.appendChild(h('div', { 'data-k': 'copy-head' }, h('b', null, c.head)));
+      this.copyNote.appendChild(h('div', { class: 'muted', 'data-k': 'copy-how' }, (c.how ? c.how + '. ' : '')
+        + 'Bugünkü piyasayla fiyatlanır; "İşlemi kaydet"e basılana kadar hiçbir şey saklanmaz.'));
+    }
+    this.copyNote.classList.toggle('hidden', !c || c.kind !== this.tab);
+  }
+
+  /** "Benzerini gir" / "Ters işlem" of a trade (the server's ``copy``, on a listing where the form is open): a button
+   * each - none where one makes no sense for the trade, the cell's tip saying why. */
+  copyActs(t, what) {
+    const out = { act: [], why: [] };
+    if (!t.copy || !this.data.can_enter) return out;
+    for (const [mode, id, label, title] of COPY_ACTS) {
+      const c = t.copy[mode] || {};
+      if (c.spec) out.act.push({ id, label, title, fn: () => this.copyFrom(t, mode, what) });
+      else out.why.push(label + ' yok: ' + (c.why || 'formda açılamıyor'));
+    }
+    return out;
   }
 
   /** "Düzenle" on a trade of a day gone by: its counterparty and note alone (all that changes after its day; its prices
@@ -1058,6 +1142,7 @@ export class BlotterPage {
       f.amountEcho.textContent = '';
       f.quoteEcho.textContent = '';
       f.note.value = '';
+      if (this.copied && this.copied.kind === 'fwd') this.markCopied(null);       // (the copy is saved: a trade of its own)
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { f.save.disabled = false; }
   }
@@ -1214,7 +1299,8 @@ export class BlotterPage {
     for (const k of Object.keys(o.f)) {
       const el = o.f[k];
       const v = el.value.trim();
-      if (k === 'start_months' || k === 'end_months' || k === 'start' || k === 'end') pl[k] = Number(v);
+      if (k === 'start_months' || k === 'end_months') pl[k] = isDateText(v) ? v : Number(v);     // (a FRA's broken date: its day)
+      else if (k === 'start' || k === 'end') pl[k] = Number(v);
       else if (v) pl[k] = v;
     }
     const size = parseAmount(o.size.value);
@@ -1338,6 +1424,7 @@ export class BlotterPage {
       toast(q.label + ' kaydedildi (' + q.legs.length + ' bacak)', 'ok', 4200);
       o.level.value = '';
       o.note.value = '';
+      if (this.copied && this.copied.kind === 'ois') this.markCopied(null);
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { o.save.disabled = false; }
   }
@@ -1437,6 +1524,7 @@ export class BlotterPage {
       b.amount.value = '';
       b.amountEcho.textContent = '';
       b.note.value = '';
+      if (this.copied && this.copied.kind === 'bond') this.markCopied(null);
       this.quoteBond();
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); } finally { b.save.disabled = false; }
@@ -1448,17 +1536,21 @@ export class BlotterPage {
   }
 
   /** What can be done to a trade of the list: today's - "Düzenle" (the form filled with it: ``startEdit``) and ✕; a day
-   * gone by's - "Düzenle" for its counterparty and note alone (``editFields``). */
+   * gone by's - "Düzenle" for its counterparty and note alone (``editFields``); wherever the form is open, every trade's
+   * "Benzerini gir" and "Ters işlem" (``copyFrom``; one that makes no sense for the trade left out, the cell's tip says
+   * why). */
   actCell(t, what) {
+    const copy = this.copyActs(t, what);
+    const tip = copy.why.length ? copy.why.join('\n') : undefined;
     if (t.trade_date !== this.data.today) {
-      return { t: '', k: '', cls: 'act', act: [{ id: 'edit', label: 'Düzenle', title: 'Karşı taraf / not: geçmiş günün işleminde yalnızca bunlar değişir',
-        fn: () => this.editFields(t) }] };
+      return { t: '', k: '', cls: 'act', tip, act: [{ id: 'edit', label: 'Düzenle', title: 'Karşı taraf / not: geçmiş günün işleminde yalnızca bunlar değişir',
+        fn: () => this.editFields(t) }].concat(copy.act) };
     }
     if (!this.data.can_enter) return { t: '', k: '' };
-    return { t: '', k: '', cls: 'act', act: [
+    return { t: '', k: '', cls: 'act', tip, act: [
       { id: 'edit', label: 'Düzenle', title: 'İşlemi düzenle: form işlemin değerleriyle dolar, "Değişikliği kaydet" aynı kaydı değiştirir',
         fn: () => this.startEdit(t) },
-      { id: 'del', label: '✕', title: 'İşlemi sil', fn: () => this.remove(t, what) }] };
+      { id: 'del', label: '✕', title: 'İşlemi sil', fn: () => this.remove(t, what) }].concat(copy.act) };
   }
 
   /** When a trade was entered, in a list - marked (✎) when it was changed after that, the change in its tip: when, by
@@ -1515,6 +1607,7 @@ export class BlotterPage {
   /** One click on a template: the form filled with it, waiting for "İşlemi kaydet" (nothing is saved). */
   applyTemplate(t) {
     this.endEdit(true);                    // a template is a new trade: an edit in progress is left, the trade as it was
+    this.markCopied(null);
     const done = this.fillForm(t.spec);
     if (!done) { toast('Bu şablon formu dolduramıyor', 'err'); return; }
     toast('Şablon: ' + t.name + ' – form dolduruldu, kontrol edip kaydedin' + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok',
@@ -1649,7 +1742,10 @@ export class BlotterPage {
     this.sheetNote.textContent = parts.length ? 'Tablolarda: ' + parts.join(' · ') + '.' : '';
     this.sheetNote.classList.toggle('hidden', !parts.length || !sheet.length);
     this.sheetTitle.classList.toggle('hidden', !sheet.length);
-    this.sheetLink.classList.toggle('hidden', !sheet.length);
+    this.sheetScope.textContent = d.sheet_scope || '';
+    this.sheetScope.classList.toggle('hidden', !d.sheet_scope || !sheet.length);
+    // (the sheet explorer shows the sheet itself - today's: not a period's tables)
+    this.sheetLink.classList.toggle('hidden', !sheet.length || !!d.sheet_scope);
     if (this.position) this.position.refresh();
   }
 }

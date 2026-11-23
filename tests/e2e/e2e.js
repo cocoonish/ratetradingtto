@@ -797,6 +797,144 @@ async function clipAfter(page, action) {
     check('"Bugün" returns to the day and its entry form', await page.locator('.entry.hidden').count() === 0 && await page.locator('.lists td.act button').count() >= 2);
     await shot(page, '04-blotter');
 
+    // ------------------------------------------------------------------ "Benzerini gir" / "Ters işlem" (islem-kopya)
+    // a trade's row actions fill the form from it - a new trade, never an edit; nothing is kept until "İşlemi kaydet".  What
+    // this block saves it deletes again: the counts the checks below read stay as they were.
+    {
+      const ME = 'ayşe yilmaz';
+      const serialText = (s) => { const d = new Date(Date.UTC(1899, 11, 30) + s * 86400000); return String(d.getUTCDate()).padStart(2, '0') + '.' + String(d.getUTCMonth() + 1).padStart(2, '0') + '.' + d.getUTCFullYear(); };
+      const listedNow = async (q) => (await api(page, ME, 'GET', '/api/blotter' + (q || ''))).json.trades;
+      const copyShown = (head) => page.waitForFunction((h) => { const el = document.querySelector('#blotter-copy-note'); return el && !el.classList.contains('hidden') && el.textContent.startsWith(h); }, head, { timeout: 15000 });
+      const fwdNow = () => page.evaluate(() => { const p = window.tto.state.page, f = p.fwd; return { title: document.querySelector('#blotter-entry-title').textContent,
+        note: document.querySelector('#blotter-copy-note').textContent, editing: !!p.editing, tab: p.tab, dir: f.dir, pair: f.pair, amount: f.amount.value, typed: f.typed,
+        date: f.date.value, basis: f.basis, manual: f.manual.value, cpt: f.cpt.value }; });
+      const oisNow = () => page.evaluate(() => { const p = window.tto.state.page, o = p.ois; return { title: document.querySelector('#blotter-entry-title').textContent,
+        note: document.querySelector('#blotter-copy-note').textContent, editing: !!p.editing, tab: p.tab, strategy: o.strategy, side: o.side, level: o.level.value,
+        size: o.size.value, sizeMode: o.sizeMode, tenors: ['tenor', 'short', 'long'].filter((k) => o.f[k]).map((k) => o.f[k].value), cpt: o.cpt.value, note2: o.note.value }; });
+      const saveForm = async (n) => {
+        await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+        await page.waitForFunction((x) => window.tto.state.page.data.trades.length === x, n, { timeout: 15000 });
+      };
+      const before = await listedNow();
+      const f0 = before.find((t) => t.kind === 'fwd');                 // (the forward list's first row)
+      // a forward of today: "Benzerini gir" - its pair, side, amount as typed, value date, pricing, counterparty; no edit
+      await page.click('.lists .panel:nth-child(1) table.grid td.act button[data-act="copy"]');
+      await copyShown('Benzeri: ');
+      const fSame = await fwdNow();
+      check('"Benzerini gir" on today\'s forward fills the form as a new trade (not an edit): its pair, side, amount, value date, pricing, counterparty',
+        fSame.title === 'Yeni işlem' && !fSame.editing && fSame.tab === 'fwd' && fSame.dir === f0.dir && fSame.pair === (f0.pair || 'USDTRY')
+        && trNumber(fSame.amount) === f0.amount && fSame.date === serialText(f0.value_date) && fSame.basis === f0.basis && fSame.cpt === (f0.cpt || '')
+        && /Aynı valör/.test(fSame.note), [fSame, f0]);
+      await saveForm(before.length + 1);
+      const fNew = (await listedNow()).filter((t) => t.kind === 'fwd').sort((x, y) => y.id - x.id)[0];
+      const noteGone = await page.evaluate(() => document.querySelector('#blotter-copy-note').classList.contains('hidden'));
+      check('... saved: a new trade with the same terms (pair, side, amount, value date, pricing, counterparty), the line over the form gone',
+        fNew.id > f0.id && fNew.dir === f0.dir && fNew.amount === f0.amount && fNew.value_date === f0.value_date && fNew.basis === f0.basis
+        && (fNew.pair || 'USDTRY') === (f0.pair || 'USDTRY') && fNew.cpt === (f0.cpt || '') && noteGone, [fNew, f0]);
+      await api(page, ME, 'DELETE', '/api/blotter/trade/' + fNew.id);
+      await page.waitForFunction((x) => window.tto.state.page.data.trades.length === x, before.length, { timeout: 15000 });
+      // "Ters işlem": the other side, the same amount and value date
+      await page.click('.lists .panel:nth-child(1) table.grid td.act button[data-act="reverse"]');
+      await copyShown('Ters işlem: ');
+      const fRev = await fwdNow();
+      await saveForm(before.length + 1);
+      const fBack = (await listedNow()).filter((t) => t.kind === 'fwd').sort((x, y) => y.id - x.id)[0];
+      check('"Ters işlem" on the forward: the other side, the same amount and value date - saved as a new trade',
+        !fRev.editing && fRev.dir === (f0.dir === 'B' ? 'S' : 'B') && trNumber(fRev.amount) === f0.amount && fRev.date === serialText(f0.value_date)
+        && fBack.dir === fRev.dir && fBack.amount === f0.amount && fBack.value_date === f0.value_date && fBack.id !== f0.id, [fRev, fBack, f0]);
+      await api(page, ME, 'DELETE', '/api/blotter/trade/' + fBack.id);
+      await page.waitForFunction((x) => window.tto.state.page.data.trades.length === x, before.length, { timeout: 15000 });
+      // the spread of today: "Ters işlem" - the other side, its tenors; no level (today's market: the mid offered)
+      await page.evaluate(() => { const tr = [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')].find((x) => /FLATTENER 1Y\/2Y/.test(x.textContent));
+        tr.querySelector('td.act button[data-act="reverse"]').click(); });
+      await copyShown('Ters işlem: FLATTENER 1Y/2Y');
+      await page.waitForFunction(() => /Piyasa mid/.test(window.tto.state.page.ois.marketHint.textContent), null, { timeout: 15000 });
+      const sRev = await oisNow();
+      check('"Ters işlem" on today\'s spread: STEEPENER on the same tenors, no level - the form offers today\'s mid',
+        sRev.strategy === 'spread' && sRev.side === 'STEEPENER' && JSON.stringify(sRev.tenors) === '["1Y","2Y"]' && sRev.level === '' && !sRev.editing, sRev);
+      // a day gone by's OIS (tests/test_e2e.py: PAY 1Y, 45 days back), listed in a period up to today - the form open
+      const pastDay = process.env.TTO_E2E_PAST_DAY;
+      const today = await page.evaluate(() => window.tto.state.page.data.today);
+      await page.evaluate(([a, z]) => window.tto.state.page.show(a, z), [pastDay, today]);
+      await page.waitForFunction((a) => { const d = window.tto.state.page.data; return d && d.ranged && d.date === a && d.can_enter; }, pastDay, { timeout: 20000 });
+      const ranged = await listedNow('?date=' + pastDay + '&to=' + today);
+      const old = ranged.find((t) => t.note === 'e2e geçmiş');
+      const clickOld = (act) => page.evaluate(([a]) => { const tr = [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')].find((x) => x.textContent.includes('e2e geçmiş'));
+        tr.querySelector('td.act button[data-act="' + a + '"]').click(); }, [act]);
+      await clickOld('copy');
+      await copyShown('Benzeri: PAY 1Y @ 38,0000%');
+      const oSame = await oisNow();
+      check('"Benzerini gir" on a day gone by\'s 1Y: the same tenor from today\'s spot - PAY 1Y, its nominal, counterparty and note',
+        oSame.strategy === 'outright' && oSame.side === 'PAY' && JSON.stringify(oSame.tenors) === '["1Y"]' && oSame.sizeMode === 'nominal'
+        && trNumber(oSame.size) === 150e6 && oSame.cpt === 'E2E ESKİ' && oSame.note2 === 'e2e geçmiş' && oSame.note.includes('(' + pastDay.split('-').reverse().join('.') + ')'), oSame);
+      await clickOld('reverse');
+      await copyShown('Ters işlem: PAY 1Y @ 38,0000%');
+      await page.waitForFunction(() => !!window.tto.state.page.ois.marketHint.querySelector('button'), null, { timeout: 15000 });
+      const oRev = await oisNow();
+      const end = old.copy.ters.spec.tenors[0];
+      const [dd, mm, yyyy] = end.split('.').map(Number);
+      const [py, pm, pd] = pastDay.split('-').map(Number);
+      const yearOn = (Date.UTC(yyyy, mm - 1, dd) - Date.UTC(py + 1, pm - 1, pd)) / 86400000;            // (its spot, then a business day)
+      check('"Ters işlem" on it: RECEIVE to its own maturity (a broken date, 1Y from that day\'s spot), the same nominal, no level',
+        oRev.strategy === 'outright' && oRev.side === 'RECEIVE' && JSON.stringify(oRev.tenors) === JSON.stringify([end]) && yearOn >= 1 && yearOn <= 6
+        && trNumber(oRev.size) === 150e6 && oRev.level === '' && /kırık vade/.test(oRev.note), [oRev, end, yearOn]);
+      // priced on today's market: at its mid, the leg the broken date - then saved: a new trade, the old one as it was
+      const brokenMid = (await api(page, ME, 'POST', '/api/blotter/quote/ois', { strategy: 'outright', side: 'RECEIVE', tenor: end, level: '0' })).json.info.market;
+      const midText = (brokenMid * 100).toFixed(4).replace('.', ',');
+      await page.fill('.entry .pad:not(.hidden) input[placeholder="örn. 37,25"]', midText);
+      await page.waitForFunction((l) => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox'); return q && q.textContent.includes(l) && !!q.querySelector('[data-k="vs-mid-bp"]'); },
+        'RECEIVE ' + end + ' @ ' + midText + '%', { timeout: 15000 });
+      const vsMidText = await page.evaluate(() => document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"] .v').textContent);
+      await saveForm(ranged.length + 1);
+      const oNew = (await listedNow()).filter((t) => t.kind === 'ois').sort((x, y) => y.id - x.id)[0];
+      const oldAfter = (await listedNow('?date=' + pastDay + '&to=' + today)).find((t) => t.id === old.id);
+      const strip = (t) => JSON.stringify(Object.keys(t).filter((k) => k !== 'copy').sort().map((k) => [k, t[k]]));
+      check('... at today\'s mid ("Mid\'e göre" 0) saved as today\'s trade: RECEIVE to that date, the same nominal - the day gone by\'s trade unchanged',
+        oNew.tenor === end && oNew.dir === 'S' && oNew.nominal === 150e6 && oNew.trade_date === today && /^[-+]?0,00/.test(vsMidText)
+        && strip(oldAfter) === strip(old), [oNew, vsMidText]);
+      await api(page, ME, 'DELETE', '/api/blotter/trade/' + oNew.id);
+      await page.click('#blotter-today');
+      await page.waitForFunction((n) => { const d = window.tto.state.page.data; return d && d.is_today && d.trades.length === n; }, before.length, { timeout: 20000 });
+    }
+
+    // ------------------------------------------------------------------ a period's summary tables (islem-kopya, the desk:
+    // "daha fazla tarihe bakarken bugündeki alttaki tablo gelmiyor") - the workbook's own tables over the trades shown
+    {
+      const ME = 'ayşe yilmaz';
+      const pastDay = process.env.TTO_E2E_PAST_DAY;
+      const today = await page.evaluate(() => window.tto.state.page.data.today);
+      const payDv01 = (sheet, tenor) => {               // the OIS summary's "Pay DV01" (S) of a tenor
+        const d = (sheet.find((p) => p.id === 'ois') || {}).data;
+        if (!d) return null;
+        const i = d.rows.findIndex((r) => r[d.c.indexOf('P')] && r[d.c.indexOf('P')].t === tenor);
+        return i < 0 ? null : d.rows[i][d.c.indexOf('S')].v;
+      };
+      const todaySheet = (await api(page, ME, 'GET', '/api/blotter')).json.sheet;
+      await page.evaluate(([a, z]) => window.tto.state.page.show(a, z), [pastDay, today]);
+      await page.waitForFunction((a) => { const d = window.tto.state.page.data; return d && d.ranged && d.date === a; }, pastDay, { timeout: 20000 });
+      await page.waitForFunction(() => !document.querySelector('#blotter-sheet-scope').classList.contains('hidden')
+        && document.querySelectorAll('#content .panels .panel table.grid').length >= 4, null, { timeout: 20000 });
+      const per = (await api(page, ME, 'GET', '/api/blotter?date=' + pastDay + '&to=' + today)).json;
+      const shown = await page.evaluate(() => ({ scope: document.querySelector('#blotter-sheet-scope').textContent,
+        title: !document.querySelector('#blotter-sheet-note').parentElement.classList.contains('hidden'),
+        panels: [...document.querySelectorAll('#content .panels .panel h2')].map((x) => x.textContent),
+        cost: [...document.querySelectorAll('.lists .panel:nth-child(5) table.grid tr')].map((tr) => tr.children[0].textContent) }));
+      check('a period shows the workbook\'s summary tables under the lists, over its trades: the OIS summary\'s 1Y pays the day gone by\'s 1Y (3.500 $) beside today\'s, said over them',
+        shown.title && shown.panels.length === 4 && /^Aralık /.test(shown.scope) && shown.scope.includes(per.trades.length + ' işlemin hepsi')
+        && Math.abs(payDv01(per.sheet, '1Y') - payDv01(todaySheet, '1Y') - 3500) < 1e-6 && shown.cost.includes('1Y'), [shown, payDv01(per.sheet, '1Y'), payDv01(todaySheet, '1Y')]);
+      // a day gone by on its own, with no archive (it was never today here): its own trade's tables, said so
+      await page.evaluate((a) => window.tto.state.page.show(a, null), pastDay);
+      await page.waitForFunction((a) => { const d = window.tto.state.page.data; return d && !d.ranged && d.date === a; }, pastDay, { timeout: 20000 });
+      const one = (await api(page, ME, 'GET', '/api/blotter?date=' + pastDay)).json;
+      const oneScope = await page.evaluate(() => document.querySelector('#blotter-sheet-scope').textContent);
+      check('... a day gone by without its archive: the tables of its own trades (1Y pays 3.500 $), "gün sonu arşivi yok" said',
+        payDv01(one.sheet, '1Y') === 3500 && /gün sonu arşivi yok - günün 1 işlemiyle/.test(oneScope), [oneScope, payDv01(one.sheet, '1Y')]);
+      await page.click('#blotter-today');
+      await page.waitForFunction(() => { const d = window.tto.state.page.data; return d && d.is_today; }, null, { timeout: 20000 });
+      check('... today again: the sheet\'s own tables, nothing said over them',
+        await page.evaluate(() => document.querySelector('#blotter-sheet-scope').classList.contains('hidden')));
+    }
+
     // ------------------------------------------------------------------ second user: shared vs personal
     console.log('second user');
     const ctxB = await browser.newContext({ viewport: { width: 1600, height: 1000 } });

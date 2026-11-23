@@ -180,6 +180,7 @@ back from maturity every 3 months, so the first period is the short one. All thr
 | Trades | `tradevalue.CONVS["ois"]`, anchor `"end"` (it was `"start"`, short period last, until 19.11.2026) |
 | Fiyatlama | `pricing.coupons` |
 | MASA's broken-date block | `MASA!BL193`: `WORKDAY(EDATE(end, −3k) − 1, 1, TRY)` |
+| Günlük İşlemler (a leg to a date of its own: "Ters işlem" of a past day's OIS, 23.11.2026) | `blotter.OisMarket.broken` → `pricing.swap_deal` (Fiyatlama's, on the true Bootstrap) |
 
 A trade entered as a tenor is dated on its own grid from the start (`EDATE(start, m − 3k)`):
 - whole quarters give Motor's own dates (`Motor!B88`), unchanged;
@@ -854,6 +855,41 @@ Code: `tto/kagitfiyat.py` (`business_days`, `pick_point`, `point_label`, `auctio
 `keep_trades`). Tests: `tests/test_kagitfiyat.py` (the order and ties, the yields at value dates, every source on the
 made-up history, today's auction on the curve now, the daily close recorder), `tests/test_fiyatyukleme.py` (the kept
 Bloomberg trades and the fallback's label).
+
+### Günlük İşlemler: "Benzerini gir" and "Ters işlem" (23.11.2026)
+
+Proposed to the desk and approved (as relayed): "A trade row has only Düzenle and ✕. Proposal: one click fills the entry
+form from that trade, either as a new trade or with the side reversed, for repeats and unwinds."
+
+- **Where.** Two row actions on every trade, today's and past days', wherever the form is open (today, a period up to
+  today). Both fill the form as a new trade (never an edit); nothing is saved until "İşlemi kaydet". A line over the form
+  says what it was filled from.
+- **No price comes along.** The form prices the copy on today's market as any new trade (the OIS mid offered, RET
+  priced by itself, a typed price typed again).
+- **Benzerini gir**: the trade's terms - product, structure, side, size as typed, counterparty, note - and its instrument
+  as entered; a past day's: the same tenor from today's spot (a forward's tenor read back from its own spot: whole months
+  or weeks, else the same days).
+- **Ters işlem**: the other side, the same size (a forward's first-currency amount, so the position closes exactly; an
+  OIS's nominal, a spread / fly sized by DV01 that DV01), the same end. A start that has passed is today's spot: a past
+  day's TRY OIS is a **broken date to its own maturity** (Fiyatlama's broken-date pricing: quarterly back from maturity,
+  short period first - the table above), each leg of a package; a FRA not started keeps its two dates, one started runs
+  from today's spot to its end. A trade that has run off has no offset: its button is left out, the cell's tip says why.
+- Code: `blotter.copy_specs` (the listing's `copy`, `Service._blotter_copies`), `blotter.js` `copyFrom`. Tests:
+  `tests/test_blotter_copy.py`, the browser test's block.
+
+### Günlük İşlemler: a period's summary tables (23.11.2026)
+
+> "Bir de günlük işlemlerde daha fazla tarihe bakarken bugündeki alttaki tablo gelmiyor, onu da düzelt."
+
+- **What was missing.** In a period (Aralık) the workbook's own summary tables under the lists (forward buckets, OIS
+  summary, Bonds, CPT × tenor) were left out - the sheet holds today's trades only. The cost tables were there.
+- **Now.** A period - and a day gone by without its end-of-day archive - shows the same tables, the sheet's own
+  formulas with its lists filled with the trades shown, in an engine layer of its own over the shared calculation (the
+  sheet stays today's; the last four periods kept, a refresh evaluates only what changed). Said over them: what they
+  cover, buckets and days counted from today, each trade with its own amounts, rates and DV01; trades the lists have no
+  row for are counted. A day gone by with its archive shows its archive, as before.
+- Code: `Service._blotter` / `_blotter_panels` / `_blotter_layer` / `_blotter_scope`, `blotter.sheet_values(left_out)`.
+  Tests: `test_a_period_shows_the_sheets_tables_over_its_trades` (test_blotter), the browser test.
 
 ## Process
 

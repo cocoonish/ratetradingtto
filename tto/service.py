@@ -3518,25 +3518,14 @@ class Service(object):
                                "cost": bl.summarise(trades), "risk": bl.risk_summary(trades),
                                "dates": self.store.trade_dates(), "gen": self.gen, "tenors": bl.OIS_TENORS}
         out.update(self._templates(user))              # what the entry form can be filled from (Şablonlar)
+        if out["can_enter"]:
+            self._blotter_copies(book, trades)         # "Benzerini gir" / "Ters işlem" of every trade listed
         loc = numfmt.get_locale(locale or self.settings.locale)
         if ranged:
-            out["sheet"] = []                          # the workbook's summary tables belong to a single day
             out["days"] = len({t["trade_date"] for t in trades})
-        elif date == today:
-            R = self.renderers[book.id]
+        if date == today and not ranged:
             calc = book.engine.shared
-            sheet_panels = []
-            for pid, title, rng in (("fwd", "Forward · vade kovaları (USD karşılığı, TL maliyeti, DV01)", "P1:W20"),
-                                    ("ois", "OIS · vade özeti (MPC işlemleri ana vadelere dağıtılmış)", "O22:W39"),
-                                    ("bond", "Bonds", "P41:V84"), ("cpt", "OIS — CPT x VADE (DV01 USD)", "P87:V349")):
-                try:
-                    data = R.table(calc, bl.SHEET, rng, loc, None)
-                    _lift_title(data)
-                    if pid == "fwd":
-                        _add_dv01_columns(data, bl.forward_dv01_buckets(book, calc, trades), loc)
-                    sheet_panels.append({"id": pid, "title": title, "range": rng, "data": data})
-                except Exception as exc:  # noqa: BLE001
-                    sheet_panels.append({"id": pid, "title": title, "error": str(exc)[:200]})
+            sheet_panels = self._blotter_panels(book, calc, trades, loc)
             out["sheet"] = sheet_panels
             # the day's archive: the summary tables as shown and the whole sheet as values (what the workbook's
             # end-of-day macro saved); written only when something changed
@@ -3545,11 +3534,109 @@ class Service(object):
             if self._snapshot_mark.get(date) != mark:
                 self.store.save_blotter_snapshot(date, snap)
                 self._snapshot_mark = {date: mark}
-        else:
-            snap = self.store.blotter_snapshot(date)
-            out["sheet"] = snap.get("sheet") if snap else []
+            return out
+        snap = None if ranged else self.store.blotter_snapshot(date)
+        if not ranged:
             out["snapshot_at"] = snap.get("snapshot_at") if snap else None
+        if snap:
+            out["sheet"] = snap.get("sheet") or []     # a day gone by: its archive, as the tables were that day
+        elif not trades:
+            out["sheet"] = []
+        else:
+            # a period, or a day gone by with no archive: the same tables over the trades shown - the sheet's own
+            # formulas with its lists filled with them, in a calculation of its own (the sheet itself keeps today's)
+            left: Dict[str, int] = {}
+            calc = self._blotter_layer(book, (date, date_to), bl.sheet_values(book, trades, left))
+            out["sheet"] = self._blotter_panels(book, calc, trades, loc)
+            out["sheet_scope"] = self._blotter_scope(date, date_to, ranged, trades, left)
         return out
+
+    #: the summary tables of the last periods (and days gone by) asked for, each kept as a layer of the engine
+    BLOTTER_LAYERS = 4
+
+    def _blotter_layer(self, book, key: Tuple[str, str], overlay: Dict[Tuple[int, int], Any]) -> Calc:
+        """The calculation of a period's summary tables: a layer of the engine over the shared one with the blotter
+        lists filled with the period's trades (``overlay``) - kept, so a refresh evaluates only what changed (the
+        market, a trade); the last :data:`BLOTTER_LAYERS` periods asked for are kept, an older one dropped."""
+        eng = book.engine
+        kept = self.__dict__.setdefault("_blotter_layers", [])
+        name = ("", "blotter-tables") + tuple(key)
+        if name in kept:
+            kept.remove(name)
+        kept.append(name)
+        while len(kept) > self.BLOTTER_LAYERS:
+            eng.drop_layer(kept.pop(0))
+        return eng.layer(name, eng.shared, overlay)
+
+    #: the workbook's own summary tables of the blotter sheet the page shows: id, title, range
+    BLOTTER_TABLES = (("fwd", "Forward · vade kovaları (USD karşılığı, TL maliyeti, DV01)", "P1:W20"),
+                      ("ois", "OIS · vade özeti (MPC işlemleri ana vadelere dağıtılmış)", "O22:W39"),
+                      ("bond", "Bonds", "P41:V84"), ("cpt", "OIS — CPT x VADE (DV01 USD)", "P87:V349"))
+
+    def _blotter_panels(self, book, calc, trades: List[Dict[str, Any]], loc) -> List[Dict[str, Any]]:
+        """The blotter sheet's summary tables (:data:`BLOTTER_TABLES`) as ``calc`` has them - the shared calculation
+        (today's trades: the sheet) or one with the lists filled with other trades - the forward buckets' DV01 beside."""
+        R = self.renderers[book.id]
+        panels = []
+        for pid, title, rng in self.BLOTTER_TABLES:
+            try:
+                data = R.table(calc, bl.SHEET, rng, loc, None)
+                _lift_title(data)
+                if pid == "fwd":
+                    _add_dv01_columns(data, bl.forward_dv01_buckets(book, calc, trades), loc)
+                panels.append({"id": pid, "title": title, "range": rng, "data": data})
+            except Exception as exc:  # noqa: BLE001
+                panels.append({"id": pid, "title": title, "error": str(exc)[:200]})
+        return panels
+
+    @staticmethod
+    def _blotter_scope(date: str, date_to: str, ranged: bool, trades: List[Dict[str, Any]], left: Dict[str, int]) -> str:
+        """What the summary tables of a period (or of a day gone by without its archive) cover, said over them."""
+        day = lambda iso: _dt.date.fromisoformat(iso).strftime("%d.%m.%Y")          # noqa: E731
+        what = ("Aralık %s – %s: %d işlemin hepsi birlikte" % (day(date), day(date_to), len(trades)) if ranged else
+                "%s: gün sonu arşivi yok - günün %d işlemiyle" % (day(date), len(trades)))
+        text = what + ", Excel sayfasının kendi formülleriyle hesaplandı (sayfanın kendisi bugünün işlemlerini tutar); " \
+                      "vade kovaları ve gün sayıları bugüne göre, işlemlerin kendi tutar, faiz ve DV01'leriyle"
+        names = {"fwd": "forward", "ois": "OIS bacağı", "bond": "tahvil"}
+        rows = {"fwd": bl.FWD_ROWS, "ois": bl.OIS_ROWS, "bond": bl.BOND_ROWS}
+        over = ["%d %s" % (n, names[k]) for k, n in sorted(left.items()) if n]
+        if over:
+            text += ". Sayfanın listelerine sığmayan (en fazla %s): %s - maliyet tabloları hepsini sayar" % (
+                " / ".join("%d %s" % (rows[k][1] - rows[k][0] + 1, names[k]) for k in ("fwd", "ois", "bond")), ", ".join(over))
+        return text
+
+    def _blotter_copies(self, book, trades: List[Dict[str, Any]]) -> None:
+        """"Benzerini gir" / "Ters işlem" of each trade listed (``copy`` on a trade, an OIS package's first leg listed):
+        what the entry form is filled with (:func:`blotter.copy_specs`) - from today's spot dates (the OIS spot
+        ``OIS_MAIN!B2``, a pair's spot date) and the TRY holidays (Motor's), read as Fiyatlama reads them; nothing priced,
+        nothing stored."""
+        calc = book.engine.shared
+        idx = book.model.sheet_index
+        try:
+            mk = pr.read(lambda sheet, r, c: calc.get(idx[sheet], r, c))
+        except pr.PricingError:
+            return
+        spots: Dict[str, Optional[float]] = {"USDTRY": mk.fx_spot, "EURTRY": mk.eur_spot}
+
+        def fx_spot(pair: str) -> Optional[float]:
+            if pair not in spots:
+                got = self._pair_spot(pair) if self._own_spot(pair) else mk.fx_spot
+                spots[pair] = got if type(got) is float else None
+            return spots[pair]
+
+        cal = {"today": self.today_iso(), "ois_spot": mk.ois_spot, "holidays": mk.holidays["TRY"], "fx_spot": fx_spot}
+        packages: Dict[str, List[Dict[str, Any]]] = {}
+        for t in trades:
+            if t.get("kind") == "ois" and t.get("package"):
+                packages.setdefault(t["package"], []).append(t)
+        seen = set()
+        for t in trades:
+            pkg = t.get("package") if t.get("kind") == "ois" else None
+            if pkg in seen:
+                continue
+            if pkg:
+                seen.add(pkg)
+            t["copy"] = bl.copy_specs(sorted(packages[pkg], key=lambda x: x["id"]) if pkg else [t], cal)
 
     @staticmethod
     def _blotter_cells(book, calc) -> List[List[Any]]:
@@ -4001,6 +4088,11 @@ class Service(object):
                 p[k] = None
             else:
                 p[k] = float(v)
+        for k, at in (("start_months", "start_date"), ("end_months", "end_date")):
+            # a FRA between dates of its own ("Ters işlem" of a day gone by's FRA): an end typed as a date, dd.mm.yyyy
+            day = bl.tenor_date_of(p.get(k)) if isinstance(p.get(k), str) else None
+            if day is not None:
+                p[k], p[at] = None, day
         for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate",
                   "start_months", "end_months"):
             v = p.get(k)
