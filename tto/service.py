@@ -7869,7 +7869,7 @@ class Service(object):
         """Kâğıt Fiyat Yükleme (:mod:`tto.fiyatyukleme`): ``what`` - "state" (the user's list, settings, the desk's labels),
         "ekle" / "cikar" (the list), "sabit" / "sabit-sil" (a bond's fixed bid and ask: set or change / take off),
         "sabit-yapistir" (fixed prices pasted from Excel), "ayar"
-        (mode, default and per bond spreads), "tanit" (the desk names an auction
+        (mode, default and per bond spreads, a bond's Mid / Bid/Ask), "tanit" (the desk names an auction
         label's bond), "hesapla" (İhale / BBG), "cevir" (an edited cell's other half), "kaydet" (the file), "dosya" (a
         saved file again: bytes and name).  A request it cannot answer is a 400 with the reason in Turkish."""
         from .fiyatyukleme import FiyatError

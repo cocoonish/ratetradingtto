@@ -1,5 +1,6 @@
 // Kâğıt Fiyat Yükleme (tto/fiyatyukleme.py): the desk's daily price upload.  The user's own list of bonds (ISIN, the
-// catalog's description, maturity) with a bid and an ask spread each - or the defaults -, BBG / İhale, the morning's
+// catalog's description, maturity) with a bid and an ask spread each - or the defaults - and where its sides start in
+// Bloomberg's prices (Mid, or Bid/Ask: Bloomberg's bid and ask, the spreads each on its own side), BBG / İhale, the morning's
 // auction text pasted, Hesapla: every bond at t0 (today's value date) with its two sides, every cell editable (a yield
 // edited gives its price and the other way round, by the server's BIST conventions), Kaydet (txt): the desk's file
 // "ISIN,pricebid,priceask,yieldbid,yieldask" (bills and zero coupons by their yields, the rest by their prices, the
@@ -14,6 +15,12 @@ const n3 = (v) => (isNum(v) ? num(v, 3, false) : '');
 const day = (iso) => (iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '');
 const f3 = (v) => v.toFixed(3);                       // the file's figures: three decimals, a dot
 const SIDES = [['bid', 'yield', 'fy-bid-y'], ['ask', 'yield', 'fy-ask-y'], ['bid', 'price', 'fy-bid-p'], ['ask', 'price', 'fy-ask-p']];
+// where a bond's two sides start in Bloomberg's prices (the desk, 23.11.2026: "... mid'den mi, bid/asktan mı ... Default mid")
+const BASES = [['mid', 'Mid'], ['bidask', 'Bid/Ask']];
+const BASE_TIP = 'Mid (varsayılan): iki taraf da mid\'den, spread\'ler iki yanına. Bid/Ask: bid tarafı Bloomberg\'in bid\'inden, ask tarafı '
+  + 'ask\'inden; spread\'ler her biri kendi tarafına (0 ise ekrandaki fiyat). DİBS RV\'deki kâğıt DİBS RV\'nin bid / ask\'ını kullanır (yeni '
+  + 'maliyet yok); diğer DİBS ve Eurobond için Hesapla\'da Bloomberg\'e PX_BID / PX_ASK sorulur (kâğıt başına 2 hit, 5 dakika saklanır). '
+  + 'Canlı emir yoksa (–), bid = ask ise ya da taraf yoksa satır mid\'den fiyatlanır ve söyler. DİBS\'te BBG modunda, Eurobond\'da her modda.';
 
 function panel(id, title, note) {
   const body = h('div', { class: 'body' });
@@ -72,7 +79,9 @@ export class FiyatYuklemePage {
       'Liste sizin: siz çıkarana kadar kalır. Getiriyle kote edilenler (sabit kuponlu, bono, kuponsuz): bid getiri = t0 + bid spread, ask getiri = t0 − ask spread (bp). '
       + 'Fiyatla kote edilenler (TLREF, FRN, TÜFE): bid fiyat = t0 − bid spread, ask fiyat = t0 + ask spread (fiyat puanı). Eurobond (USD / EUR, ISIN\'iyle '
       + 'eklenir): mod ne olursa olsun Bloomberg\'in mid\'inden; bid getiri = mid + bid spread, ask getiri = mid − ask spread (bp, kendi varsayılanı), fiyatlar '
-      + 'Bloomberg\'in mid\'ine çapalı sokak kuralıyla. Satırın spread\'i boşsa varsayılan; eksi değer olur (skew).');
+      + 'Bloomberg\'in mid\'ine çapalı sokak kuralıyla. Satırın spread\'i boşsa varsayılan; eksi değer olur (skew). BBG\'den: Mid (varsayılan) '
+      + 'ya da Bid/Ask - bid tarafı Bloomberg\'in bid\'inden, ask tarafı ask\'inden, spread\'ler kendi tarafına (DİBS RV dışındaki kâğıtta '
+      + 'Hesapla başına 2 hit); Tümü hepsini birden değiştirir.');
     this.sabit = panel('fy-sabit', 'Sabit fiyatlar', 'Bu kâğıtlar hesaplanmadan, girildiği gibi yüklenir ve siz değiştirene ya da çıkarana kadar kalır. Yalnız ISIN, '
       + 'bid ve offer gerekir (katalogda olmayan döviz DİBS de olur; vadesi ISIN\'den okunur). Değerler dosyaya yazıldığı birimde: bono ve kuponsuz getiri '
       + '(%, basit), diğerleri temiz fiyat. Aynı ISIN yeniden yapıştırılınca güncellenir. Listede de olan bir kâğıtta sabit fiyat geçerlidir. Hesaplanan bir '
@@ -147,8 +156,12 @@ export class FiyatYuklemePage {
     defs.appendChild(defSave);
     body.appendChild(defs);
     const t = h('table', { class: 'plain fy', id: 'fy-list-table' });
-    t.appendChild(h('tr', null, ...[['ISIN', 'l'], ['Kâğıt', 'l'], ['Açıklama', 'l'], ['Vade', ''], ['Tür', 'l'], ['Bid spread', ''], ['Ask spread', ''], ['Birim', 'l'], ['', '']]
-      .map(([x, c]) => h('th', { class: c || null }, x))));
+    // Mid or Bid/Ask, each bond's own; "Tümü" sets every bond of the list at once
+    const all = h('select', { class: 'inp fy-base-all', id: 'fy-base-all', title: 'Listedeki bütün kâğıtları birden Mid ya da Bid/Ask yap' },
+      h('option', { value: '' }, 'Tümü…'), ...BASES.map(([v, x]) => h('option', { value: v }, x)));
+    all.addEventListener('change', () => { if (all.value) this.saveBase(null, all.value); });
+    t.appendChild(h('tr', null, ...[['ISIN', 'l'], ['Kâğıt', 'l'], ['Açıklama', 'l'], ['Vade', ''], ['Tür', 'l'], ['Bid spread', ''], ['Ask spread', ''], ['Birim', 'l']]
+      .map(([x, c]) => h('th', { class: c || null }, x)), h('th', { class: 'l fy-base-head', title: BASE_TIP }, 'BBG\'den ', all), h('th', null, '')));
     for (const r of st.list || []) {
       const tr = h('tr', { class: 'fy-item', dataset: { isin: r.isin } });
       const sp = r.spread || {};
@@ -161,12 +174,16 @@ export class FiyatYuklemePage {
       };
       const del = h('td', { class: 'act fy-del', title: 'Listeden çıkar: ' + r.isin }, '×');
       del.addEventListener('click', () => this.removeBond(r.isin));
+      const base = h('select', { class: 'inp fy-base', title: BASE_TIP },
+        ...BASES.map(([v, x]) => h('option', { value: v, selected: (r.base || 'mid') === v }, x)));
+      base.addEventListener('change', () => this.saveBase(r.isin, base.value));
       tr.append(h('td', { class: 'l' }, r.isin), h('td', { class: 'l b' }, r.label || ''), h('td', { class: 'l fy-name' }, r.name || ''),
         h('td', null, day(r.maturity)), h('td', { class: 'l fy-kind' }, (r.kind_text || '') + (r.kind === 'euro' ? ' · ' + (r.ccy || '') : '')),
-        spIn('bid'), spIn('ask'), h('td', { class: 'l muted' }, sp.unit === 'bp' ? (r.kind === 'euro' ? 'bp (BBG getirisi)' : 'bp (getiri)') : 'fiyat'), del);
+        spIn('bid'), spIn('ask'), h('td', { class: 'l muted' }, sp.unit === 'bp' ? (r.kind === 'euro' ? 'bp (BBG getirisi)' : 'bp (getiri)') : 'fiyat'),
+        h('td', { class: 'l' }, base), del);
       t.appendChild(tr);
     }
-    if (!(st.list || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '9' }, 'Liste boş: yukarıya ISIN yazıp Ekle')));
+    if (!(st.list || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '10' }, 'Liste boş: yukarıya ISIN yazıp Ekle')));
     body.appendChild(t);
   }
 
@@ -200,6 +217,15 @@ export class FiyatYuklemePage {
       this.state = await api.post('/api/fiyat-yukleme/ayar', { spreads: { [isin]: { [side]: value.trim() } } });
       this.drawList();
       this.markStale();
+    } catch (err) { errorToast(err); this.drawList(); }
+  }
+
+  /** A bond's Mid / Bid/Ask (``isin`` null: "Tümü", every bond of the list), kept with the list by its ISIN. */
+  async saveBase(isin, base) {
+    try {
+      this.state = await api.post('/api/fiyat-yukleme/ayar', isin ? { bases: { [isin]: base } } : { base_all: base });
+      this.drawList();
+      this.markStale('Mid / Bid/Ask değişti: yeniden Hesapla');
     } catch (err) { errorToast(err); this.drawList(); }
   }
 
@@ -301,9 +327,9 @@ export class FiyatYuklemePage {
     await this.saveFixed(r.isin, bid, ask);
   }
 
-  markStale() {
+  markStale(text) {
     const info = document.getElementById('fy-result-info');
-    if (this.result && info) info.textContent = 'Spread değişti: yeniden Hesapla';
+    if (this.result && info) info.textContent = text || 'Spread değişti: yeniden Hesapla';
   }
 
   // ------------------------------------------------------------------ Hesapla
@@ -379,19 +405,26 @@ export class FiyatYuklemePage {
     const res = this.result;
     if (!res) {
       body.appendChild(h('div', { class: 'empty', id: 'fy-empty' }, 'Hesapla\'ya basın: listedeki kâğıtlar ' + ((this.state || {}).mode === 'bbg'
-        ? 'Bloomberg\'in son işleminden (DİBS RV; listede olmayanlar için tek seferlik istek, kâğıt başına 2 hit)' : 'yapıştırılan ihale fiyatlarından') + ' t0\'da fiyatlanır.'));
+        ? 'Bloomberg\'in son işleminden (DİBS RV; listede olmayanlar için tek seferlik istek, kâğıt başına 2 hit; Bid/Ask seçilenler bid / ask\'ından, '
+          + 'DİBS RV dışındakilere 2 hit daha)' : 'yapıştırılan ihale fiyatlarından') + ' t0\'da fiyatlanır.'));
       return;
     }
+    // Bid/Ask: the bonds set so, how many were priced from their sides (the others from the mid: their rows say why)
+    const sidesText = (x) => 'Bid/Ask ' + x.n + ' kâğıt (' + x.from_sides + ' bid / ask\'tan' + (x.n > x.from_sides ? ', ' + (x.n - x.from_sides)
+      + ' mid\'den: satırda neden' : '') + ')';
     const parts = [(res.mode === 'bbg' ? 'BBG' : 'İhale') + ' · t0 ' + day(res.t0) + ' · ' + (res.time || '')];
     if (res.bbg) {
-      const b = res.bbg;
-      parts.push(b.why ? 'Bloomberg: ' + b.why : 'Bloomberg\'e ' + b.asked + ' kâğıt soruldu (' + b.hits + ' hit), ' + b.cached + ' son 5 dakikadan');
+      const b = res.bbg, ba = b.bidask;
+      parts.push(b.why ? 'Bloomberg: ' + b.why : 'Bloomberg\'e ' + b.asked + ' kâğıt soruldu' + (ba && ba.asked ? ', ' + ba.asked + ' kâğıdın bid / ask\'ı' : '')
+        + ' (' + b.hits + ' hit), ' + b.cached + ' son 5 dakikadan');
       parts.push('DİBS RV\'den ' + b.trading);
+      if (ba) parts.push(sidesText(ba) + (ba.why && ba.why !== b.why ? ': bid / ask sorulamadı (' + ba.why + ')' : ''));
     }
     if (res.euro) {
       const e = res.euro;
       parts.push(e.why ? 'Eurobond: ' + e.why : 'Eurobond mid\'i: ' + e.asked + ' soruldu (' + e.hits + ' hit), ' + e.cached + ' son 5 dakikadan'
         + (e.sides ? ', ' + e.sides + ' kâğıtta PX_MID boş: bid / ask\'ın ortası' : ''));
+      if (e.bidask) parts.push('Eurobond ' + sidesText(e.bidask));
     }
     if (res.fixed) parts.push(res.fixed + ' sabit fiyat (hesaplanmadı, Bloomberg\'e sorulmadı)');
     if (res.curve) parts.push(res.curve + ' kâğıt eğri fiyatıyla (başka fiyatı yoktu: Kâğıt Fiyatlama\'nın eğrisi, kaydetmeden önce kontrol edin)');

@@ -7,8 +7,11 @@ price spreads for TLREF / TÜFE), a bill's last trade read as a price or a yield
 the replay day: each user's list kept, İhale's Hesapla and the auction values kept desk-wide, the file and its second
 download, an edited cell's other half; BBG: the trading list's last trade from DİBS RV without a request, a bond off it
 asked once (2 hits) and not again for 5 minutes, a trade that is not today's moved from the last auction with the bond
-curve (Nelson-Siegel, the closes made up) or - without that - TRY OIS, said on the row; the provider's one-off request
-counted and kept nowhere (in process and through the helper); and the HTTP routes (last: the client stops the service)."""
+curve (Nelson-Siegel, the closes made up) or - without that - TRY OIS, said on the row; Mid or Bid/Ask (23.11.2026): each
+user's, kept by ISIN across a list change, "Tümü", Mid as before, a DİBS RV bond's sides from the sheet, an off-list DİBS's
+and a Eurobond's from PX_BID / PX_ASK asked only for them (the hits counted), no live order or bid = ask from the mid; the
+provider's one-off request counted and kept nowhere (in process and through the helper); and the HTTP routes (last: the
+client stops the service)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -868,6 +871,91 @@ def test_bbg_the_newer_of_the_last_trade_and_the_last_auction_is_the_reference(s
         svc.store.put(fy.KEY_AUCTIONS, book)
 
 
+# ------------------------------------------------------------------ Mid or Bid/Ask (the desk, 23.11.2026)
+def test_mid_or_bid_ask_is_each_users_kept_by_isin_across_a_list_change(svc):
+    """(the desk, 23.11.2026: "Kağıt fiyat yükleme listesinde bloomberg'te kağıt kağıt bid'i ve ask'i mid'den mi, bid/asktan mı
+    almasını istediğimi de seçebilmeliyim. Default mid") Each bond's choice is its owner's, kept with the list by its ISIN:
+    Mid until set; bonds coming in before it (its row moves) or going leave it as it is; "Tümü" sets every bond; Mid again
+    leaves the list's entry as it was before any choice."""
+    u = svc.login("Yükleme Taraf")["user"]
+    other = svc.login("Yükleme Taraf Başka")["user"]
+    bond = "TRT150328T24"
+    st = call(svc, u, "ekle", {"isins": "%s %s" % (FIXED, bond)})
+    before = [dict(b) for b in svc.store.get(fy.KEY_LIST % u)["bonds"]]
+    assert [(r["isin"], r["base"]) for r in st["list"]] == [(FIXED, "mid"), (bond, "mid")]
+    assert st["bases"] == [{"id": "mid", "text": "Mid"}, {"id": "bidask", "text": "Bid/Ask"}]
+    st = call(svc, u, "ayar", {"bases": {bond.lower(): "bidask"}})
+    assert [(r["isin"], r["base"]) for r in st["list"]] == [(FIXED, "mid"), (bond, "bidask")]
+    assert [(r["isin"], r["base"]) for r in call(svc, other, "ekle", {"isins": bond})["list"]] == [(bond, "mid")]   # (another user's own)
+    # the list changes: bonds sorting before it come in (its row moves down), one goes - the choice stays with its ISIN
+    st = call(svc, u, "ekle", {"isins": "%s %s" % (ZERO, BILL)})
+    assert [(r["isin"], r["base"]) for r in st["list"]] == [(BILL, "mid"), (ZERO, "mid"), (FIXED, "mid"), (bond, "bidask")]
+    st = call(svc, u, "cikar", {"isin": FIXED})
+    assert [(r["isin"], r["base"]) for r in st["list"]] == [(BILL, "mid"), (ZERO, "mid"), (bond, "bidask")]
+    assert [(r["isin"], r["base"]) for r in fy.FiyatYukleme(svc).state(u)["list"]][-1] == (bond, "bidask")     # (the store's)
+    # "Tümü": every bond at once, either way; Mid again: the entry as before any choice
+    assert {r["base"] for r in call(svc, u, "ayar", {"base_all": "bidask"})["list"]} == {"bidask"}
+    assert {r["base"] for r in call(svc, u, "ayar", {"base_all": "mid"})["list"]} == {"mid"}
+    kept = svc.store.get(fy.KEY_LIST % u)["bonds"]
+    assert all("base" not in b for b in kept) and [b for b in kept if b["isin"] == bond] == [b for b in before if b["isin"] == bond]
+    for body, said in (({"bases": {bond: "bid"}}, "Mid ya da Bid/Ask olmalı: bid"), ({"base_all": ""}, "Mid ya da Bid/Ask olmalı: (boş)"),
+                       ({"bases": {FIXED: "bidask"}}, "kâğıt listede değil: %s" % FIXED)):
+        with pytest.raises(ServiceError) as e:
+            call(svc, u, "ayar", body)
+        assert str(e.value) == said
+
+
+def test_bid_ask_on_the_trading_list_from_dibs_rvs_own_bid_and_ask(svc):
+    """Bid/Ask, a bond of DİBS RV's trading list: its sides from the sheet's bid / ask (K / L - nothing asked of Bloomberg),
+    each read as the last trade is (a coupon bond's price at its value date -> its simple yield, the same at t0; a TLREF's
+    price as it is), the spreads each on its own side - at 0 the screen's own; a bill whose bid equals its ask (no order
+    stands: the last trade on both sides) from the mid as Mid prices it, said on the row; the summary counts them."""
+    u = svc.login("Yükleme Bid Ask")["user"]
+    rv = trading(svc, u)
+
+    def quoted(r):
+        return all(isinstance(r[s], float) and r[s] > 0 for s in ("bid", "ask"))
+
+    two = next(c for c, r in rv.items() if bd.by_isin(c)["kind"] == "fixed" and quoted(r) and r["bid"] < r["ask"])
+    tl = next(c for c, r in rv.items() if bd.by_isin(c)["kind"] in ("float", "frn") and quoted(r) and r["bid"] < r["ask"])
+    same = next(c for c, r in rv.items() if bd.by_isin(c)["kind"] == "bill" and quoted(r) and r["bid"] == r["ask"])
+    call(svc, u, "ekle", {"isins": " ".join((two, tl, same))})
+    called = []
+    svc.provider.reference = lambda *a, **k: called.append(a) or {}                # (DİBS RV's own figures: never asked)
+    try:
+        mid = {r["isin"]: r for r in call(svc, u, "hesapla", {"mode": "bbg"})["rows"]}
+        call(svc, u, "ayar", {"base_all": "bidask"})
+        res = call(svc, u, "hesapla", {"mode": "bbg"})
+        call(svc, u, "ayar", {"spreads": {two: {"bid": "0", "ask": "0"}, tl: {"bid": "0", "ask": "0"}}})
+        at0 = {r["isin"]: r for r in call(svc, u, "hesapla", {"mode": "bbg"})["rows"]}
+    finally:
+        del svc.provider.reference
+    assert called == [] and res["bbg"]["hits"] == 0
+    assert res["bbg"]["bidask"] == {"n": 3, "from_sides": 2, "asked": 0, "cached": 0, "why": None}
+    rows = {r["isin"]: r for r in res["rows"]}
+    # a coupon bond (ISL1: value T+1): each side's price -> its simple yield at that value date, the same at t0, ± 5 bp
+    vd = fy.workday(REPLAY_DAY, 1, frozenset(svc.holiday_dates(("TRY",))))
+    bond = fy.bond_of(bd.by_isin(two))
+    yb, ya = fy.yield_of(bond, rv[two]["bid"], vd), fy.yield_of(bond, rv[two]["ask"], vd)
+    r = rows[two]
+    assert (r["source"], r["base"], r["priced"]) == ("bbg-bidask", "bidask", True) and "note" not in r
+    assert r["bid"]["yield"] == pytest.approx(yb * 100.0 + 0.05, abs=1e-12) and r["ask"]["yield"] == pytest.approx(ya * 100.0 - 0.05, abs=1e-12)
+    assert r["bid"]["price"] == pytest.approx(fy.price_of(bond, yb + 5e-4, REPLAY_DAY), abs=1e-12)
+    assert r["ask"]["price"] == pytest.approx(fy.price_of(bond, ya - 5e-4, REPLAY_DAY), abs=1e-12)
+    assert r["t0"]["yield"] == pytest.approx((yb + ya) * 50.0, abs=1e-12) and r["bid"]["price"] < rv[two]["bid"] < rv[two]["ask"] < r["ask"]["price"]
+    assert r["how"].startswith("Bid/Ask: DİBS RV bid %s / ask %s (valör %s) → basit getiri" % (fy._n(rv[two]["bid"]), fy._n(rv[two]["ask"]), fy.tr_day(vd)))
+    # at 0: the screen's own - the coupon bond's yields at its value date, the floater's prices to the digit
+    assert at0[two]["bid"]["yield"] == pytest.approx(yb * 100.0, abs=1e-12) and at0[two]["ask"]["yield"] == pytest.approx(ya * 100.0, abs=1e-12)
+    t = rows[tl]
+    assert t["source"] == "bbg-bidask" and t["bid"]["price"] == pytest.approx(rv[tl]["bid"] - 0.05) and t["ask"]["price"] == pytest.approx(rv[tl]["ask"] + 0.05)
+    assert (at0[tl]["bid"]["price"], at0[tl]["ask"]["price"]) == (rv[tl]["bid"], rv[tl]["ask"])
+    assert at0[tl]["t0"] == {"yield": None, "price": pytest.approx((rv[tl]["bid"] + rv[tl]["ask"]) / 2.0)} and at0[tl]["how"].endswith("spread'ler kendi tarafına")
+    # bid = ask: no order stands - the row from the mid, as Mid prices it, and it says so
+    s = rows[same]
+    assert s["note"] == "Bid/Ask seçili; bid = ask (%s): canlı emir yok, Bloomberg iki tarafa da son fiyatı veriyor: mid'den" % fy._n(rv[same]["bid"])
+    assert s["base"] == "bidask" and {k: v for k, v in s.items() if k not in ("base", "note")} == mid[same] and "note" not in mid[same]
+
+
 def test_the_curves_move_measured_directly(svc, closes):
     """The move on its own: the Nelson-Siegel fit of the trading list's yields now (DİBS RV · Genel's) minus the same fit -
     its τ held - of the auction day's closes, each bond's cash flows from t0 on both curves.  The closes were made 50 bp
@@ -1094,6 +1182,131 @@ def test_a_fixed_bond_costs_no_bloomberg_request(live):
     bond = fy.street_of(s.fiyatyukleme.record(EURO1))
     assert e["bid"]["yield"] == pytest.approx(bond.yield_of(104.1, dt.date(2026, 11, 4)) * 100.0) and "çapasız" in e["how"]
     assert call(s, u, "kaydet", {"rows": [{"isin": EURO1, "bid_price": 104.1, "ask_price": 104.4}]})["lines"] == ["%s,104.100,104.400,0,0" % EURO1]
+
+
+def test_mid_is_the_default_and_prices_and_asks_as_before(live):
+    """Mid, every bond's default: nothing new asked (the others' last trade, a Eurobond's mid and an empty mid's sides, as
+    before; the trading list's bonds from DİBS RV), no new field on a row or in the summary; a list switched to Bid/Ask and
+    back to Mid ("Tümü") is stored as it was and prices to the digit as it did."""
+    s, provider = live
+    u = s.login("Yükleme Mid")["user"]
+    fyk = s.fiyatyukleme
+    call(s, u, "ekle", {"isins": "%s %s %s %s %s" % (ZERO, TLREF, "TRT150328T24", EURO1, EURO2)})
+    entries = [dict(b) for b in s.store.get(fy.KEY_LIST % u)["bonds"]]
+
+    def run():
+        fyk._asked = {}
+        n = len(provider.calls)
+        res = call(s, u, "hesapla", {"mode": "bbg"})
+        res.pop("time")
+        return res, provider.calls[n:]
+
+    res, calls = run()
+    assert calls == [(["TRT060127T10 @ISL0 ISIN", "TRT130127T11 @ISL1 ISIN"], ["LAST_PRICE", "LAST_TRADE_DATE"]),
+                     (sorted(x + " ISIN" for x in (EURO1, EURO2)), ["PX_MID", "YLD_YTM_MID"]), ([EURO2 + " ISIN"], ["PX_BID", "PX_ASK"])]
+    assert (res["bbg"]["hits"], res["euro"]["hits"]) == (4, 6) and "bidask" not in res["bbg"] and "bidask" not in res["euro"]
+    assert len(res["rows"]) == 5 and not any("base" in r for r in res["rows"])
+    call(s, u, "ayar", {"base_all": "bidask"})
+    call(s, u, "ayar", {"base_all": "mid"})
+    assert s.store.get(fy.KEY_LIST % u)["bonds"] == entries
+    again, calls2 = run()
+    assert calls2 == calls and again == res
+
+
+def test_bid_ask_off_the_trading_list_asks_px_bid_and_px_ask_only_for_those(live):
+    """Bid/Ask on a connected Bloomberg: an off-list DİBS's sides from PX_BID / PX_ASK, asked on Hesapla only for the bonds
+    set so, in one request of their own (2 hits a bond, in the summary's hits; kept 5 minutes like the others), each side
+    read as the last trade is, the spreads each on its own side - at 0 the screen's prices; a bond whose bid equals its ask
+    (no order stands) and a DİBS RV bond whose order sizes say no order stands ("–") from the mid as Mid prices them, said."""
+    s, provider = live
+    u = s.login("Yükleme Bid Ask Canlı")["user"]
+    zsec, tsec, on_list = "TRT060127T10 @ISL0 ISIN", "TRT130127T11 @ISL1 ISIN", "TRT150328T24"
+    saved = {k: provider.answers[k] for k in (zsec, tsec)}
+    provider.answers[zsec] = dict(saved[zsec], PX_BID=94.70, PX_ASK=94.80)
+    provider.answers[tsec] = dict(saved[tsec], PX_BID=100.35, PX_ASK=100.35)          # (bid = ask: the last trade on both sides)
+    fyk = s.fiyatyukleme
+    try:
+        call(s, u, "ekle", {"isins": "%s %s %s" % (ZERO, TLREF, on_list)})
+        fyk._asked = {}
+        n0 = len(provider.calls)
+        mid = {r["isin"]: r for r in call(s, u, "hesapla", {"mode": "bbg"})["rows"]}
+        assert provider.calls[n0:] == [([zsec, tsec], ["LAST_PRICE", "LAST_TRADE_DATE"])]                      # (Mid: as before)
+        call(s, u, "ayar", {"base_all": "bidask"})
+        n1 = len(provider.calls)
+        res = call(s, u, "hesapla", {"mode": "bbg"})
+        # the last trades from the last 5 minutes; the sides of the two off the list in a request of their own: 2 hits each
+        assert provider.calls[n1:] == [([zsec, tsec], ["PX_BID", "PX_ASK"])]
+        assert (res["bbg"]["asked"], res["bbg"]["hits"], res["bbg"]["cached"]) == (0, 4, 2)
+        assert res["bbg"]["bidask"] == {"n": 3, "from_sides": 1, "asked": 2, "cached": 0, "why": None}
+        rows = {r["isin"]: r for r in res["rows"]}
+        # the zero (ISL0: value today, t0): each side's price -> its simple yield, ± 5 bp
+        z = rows[ZERO]
+        yb, ya = (100.0 / 94.70 - 1.0) * 365.0 / 64, (100.0 / 94.80 - 1.0) * 365.0 / 64
+        assert (z["source"], z["base"]) == ("bbg-bidask", "bidask") and "note" not in z
+        assert z["bid"]["yield"] == pytest.approx(yb * 100.0 + 0.05) and z["ask"]["yield"] == pytest.approx(ya * 100.0 - 0.05)
+        assert z["how"].startswith("Bid/Ask: Bloomberg bid 94,700 / ask 94,800 (valör 03.11.2026) → basit getiri")
+        # bid = ask, and DİBS RV's "–": from the mid, as Mid prices them, said first on the row
+        for code, why in ((TLREF, "bid = ask (100,350): canlı emir yok, Bloomberg iki tarafa da son fiyatı veriyor"),
+                          (on_list, "DİBS RV'de canlı emir yok (bid ve ask –)")):
+            r, m = rows[code], mid[code]
+            assert r["note"] == " · ".join(["Bid/Ask seçili; %s: mid'den" % why] + ([m["note"]] if m.get("note") else [])), r
+            assert {k: v for k, v in r.items() if k not in ("base", "note")} == {k: v for k, v in m.items() if k != "note"}
+        # within 5 minutes: nothing asked again
+        res = call(s, u, "hesapla", {"mode": "bbg"})
+        assert len(provider.calls) == n1 + 1 and res["bbg"]["hits"] == 0 and res["bbg"]["bidask"]["cached"] == 2
+        # at 0 spreads: the screen's own prices
+        call(s, u, "ayar", {"spreads": {ZERO: {"bid": "0", "ask": "0"}}})
+        z0 = {r["isin"]: r for r in call(s, u, "hesapla", {"mode": "bbg"})["rows"]}[ZERO]
+        assert z0["bid"]["price"] == pytest.approx(94.70, abs=1e-9) and z0["ask"]["price"] == pytest.approx(94.80, abs=1e-9)
+    finally:
+        provider.answers.update(saved)
+
+
+def test_a_eurobond_set_to_bid_ask_starts_its_sides_from_px_bid_and_px_ask(live):
+    """A Eurobond set to Bid/Ask (either mode: priced from Bloomberg whatever the switch says): PX_BID / PX_ASK asked with an
+    empty mid's in one request (2 hits a bond, in the Eurobonds' hits), each side's yield by the street convention anchored
+    as the mid is (the convention's yield of the price − the anchor), the yield spreads each on its own side - at 0 bp
+    Bloomberg's prices to the digit; one without sides on Bloomberg from the mid, said."""
+    s, provider = live
+    u = s.login("Yükleme Eurobond Bid Ask")["user"]
+    esec = EURO1 + " ISIN"
+    saved = provider.answers[esec]
+    provider.answers[esec] = dict(saved, PX_BID=E1_MID - 0.25, PX_ASK=E1_MID + 0.25)
+    fyk = s.fiyatyukleme
+    try:
+        call(s, u, "ekle", {"isins": "%s %s %s" % (EURO1, EURO2, EURO3)})
+        call(s, u, "ayar", {"bases": {EURO1: "bidask", EURO3: "bidask"}})
+        fyk._asked = {}
+        n0 = len(provider.calls)
+        res = call(s, u, "hesapla", {"mode": "ihale", "text": SAMPLE})
+        names = sorted(x + " ISIN" for x in (EURO1, EURO2, EURO3))
+        # the mids (2 hits each); the sides of the one whose PX_MID is empty and of the two set to Bid/Ask, one request
+        assert provider.calls[n0:] == [(names, ["PX_MID", "YLD_YTM_MID"]), (names, ["PX_BID", "PX_ASK"])]
+        assert res["euro"] == {"asked": 3, "hits": 12, "cached": 0, "sides": 1, "why": None, "bidask": {"n": 2, "from_sides": 1}}
+        rows = {r["isin"]: r for r in res["rows"]}
+        e1 = rows[EURO1]
+        bond = fy.street_of(fyk.record(EURO1))
+        settle = dt.date(2026, 11, 4)
+        anchor = E1_MID - bond.clean(0.0685, settle)
+        yb, ya = bond.yield_of(E1_MID - 0.25 - anchor, settle), bond.yield_of(E1_MID + 0.25 - anchor, settle)
+        assert (e1["source"], e1["base"]) == ("bbg-bidask", "bidask") and e1["anchor"] == pytest.approx(anchor, abs=1e-12)
+        assert e1["t0"] == {"yield": pytest.approx(6.85), "price": E1_MID} and "note" not in e1           # (the mid: Bloomberg's)
+        assert e1["bid"]["yield"] == pytest.approx(yb * 100.0 + 0.02, abs=1e-9) and e1["ask"]["yield"] == pytest.approx(ya * 100.0 - 0.02, abs=1e-9)
+        assert e1["bid"]["price"] == pytest.approx(bond.clean(yb + 2e-4, settle) + anchor, abs=1e-9)
+        assert e1["ask"]["price"] == pytest.approx(bond.clean(ya - 2e-4, settle) + anchor, abs=1e-9)
+        assert e1["how"].startswith("Bid/Ask: Bloomberg bid %s / ask %s → getirileri" % (fy._n(E1_MID - 0.25), fy._n(E1_MID + 0.25)))
+        # none on Bloomberg: from the mid, said; Mid's row as before
+        e3 = rows[EURO3]
+        assert e3["source"] == "bbg-mid" and e3["note"].startswith("Bid/Ask seçili; Bloomberg'de bid / ask yok: mid'den · sokak kuralı")
+        assert e3["bid"]["yield"] == pytest.approx(6.02) and rows[EURO2]["source"] == "bbg-mid" and "base" not in rows[EURO2]
+        # at 0 bp: Bloomberg's bid and ask to the digit (BBG mode the same, from the answers of the last 5 minutes)
+        call(s, u, "ayar", {"spreads": {EURO1: {"bid": "0", "ask": "0"}}})
+        n1 = len(provider.calls)
+        e1z = {r["isin"]: r for r in call(s, u, "hesapla", {"mode": "bbg"})["rows"]}[EURO1]
+        assert len(provider.calls) == n1 and e1z["source"] == "bbg-bidask"
+        assert e1z["bid"]["price"] == pytest.approx(E1_MID - 0.25, abs=1e-9) and e1z["ask"]["price"] == pytest.approx(E1_MID + 0.25, abs=1e-9)
+    finally:
+        provider.answers[esec] = saved
 
 
 # ------------------------------------------------------------------ the provider's one-off request
